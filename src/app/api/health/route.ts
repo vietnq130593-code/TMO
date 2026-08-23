@@ -18,11 +18,17 @@ import { getNvidiaModels, getProviderDiagnostics, getDailyQuotaStatus } from '@/
 export const dynamic = 'force-dynamic'
 
 // Timeout helper: race a promise against a deadline, return fallback on timeout/error
+// FIX: the timer is now cleared once settled — previously every call left a pending
+// 8-10s setTimeout alive (5 timers per health poll), and the losing promise kept
+// running (wasted Qdrant/Aura/Supabase work after the race was decided).
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
-  ])
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms)
+  })
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
 }
 
 // LLM health check (lightweight — just checks env var availability, no API calls)

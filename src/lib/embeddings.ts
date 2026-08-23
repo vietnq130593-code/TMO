@@ -213,14 +213,20 @@ async function evictSqliteCache(): Promise<void> {
 }
 
 // Run eviction every 30 minutes
-let evictionTimer: ReturnType<typeof setInterval> | null = null
+// FIX (timer leak on hot reload): guard was module-scope — every re-evaluation of
+// this module started a NEW 30-min interval while the old one kept running.
+// globalThis guard keeps exactly one interval across reloads.
+const globalForEmbeddings = globalThis as unknown as {
+  __embeddingEvictionTimer?: ReturnType<typeof setInterval>
+}
 function startEvictionTimer(): void {
-  if (evictionTimer) return
-  evictionTimer = setInterval(() => {
+  if (globalForEmbeddings.__embeddingEvictionTimer) return
+  const timer = setInterval(() => {
     evictSqliteCache().catch(() => {})
   }, 30 * 60 * 1000) // 30 minutes
+  globalForEmbeddings.__embeddingEvictionTimer = timer
   // Don't prevent process exit
-  if (evictionTimer.unref) evictionTimer.unref()
+  if (timer.unref) timer.unref()
 }
 startEvictionTimer()
 

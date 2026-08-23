@@ -69,7 +69,7 @@ interface StatsCacheEntry {
   data: Record<string, unknown>
   timestamp: number
 }
-const STATS_CACHE_TTL = 5 * 1000 // 5 seconds — fast updates so Entities/Relationships show during extraction
+const STATS_CACHE_TTL = 30 * 1000 // 30 seconds — FIX: was 5s while the frontend polls every 10s, so every other poll re-ran the FULL recompute (~8 Aura cloud round trips + 3 full-table SQLite scans). 30s keeps the UI fresh enough while cutting Aura/SQLite load ~3x.
 
 function getStatsCache(): StatsCacheEntry | null {
   const cache = globalThis.__statsCache as StatsCacheEntry | undefined
@@ -1093,8 +1093,10 @@ export async function GET(request: NextRequest) {
             const dist: Record<string, number> = {}
             // Always get SQLite distribution (most up-to-date)
             try {
-              const entities = await db.localEntity.findMany({ select: { entityType: true } })
-              for (const e of entities) dist[e.entityType] = (dist[e.entityType] || 0) + 1
+              // FIX (perf): was findMany() loading ALL 55k+ rows into JS just to count types.
+              // groupBy computes the distribution inside SQLite.
+              const groups = await db.localEntity.groupBy({ by: ['entityType'], _count: { _all: true } })
+              for (const g of groups) dist[g.entityType] = (dist[g.entityType] || 0) + g._count._all
             } catch { /* ignore */ }
             // Also try Neo4j (may have historical data from previous syncs)
             try {
@@ -1115,9 +1117,10 @@ export async function GET(request: NextRequest) {
           (async () => {
             const dist: Record<string, number> = {}
             try {
-              const entities = await db.localEntity.findMany({ select: { domain: true } })
-              for (const e of entities) {
-                if (e.domain) dist[e.domain] = (dist[e.domain] || 0) + 1
+              // FIX (perf): groupBy instead of loading all rows into JS
+              const groups = await db.localEntity.groupBy({ by: ['domain'], _count: { _all: true } })
+              for (const g of groups) {
+                if (g.domain) dist[g.domain] = (dist[g.domain] || 0) + g._count._all
               }
             } catch { /* ignore */ }
             try {
@@ -1137,8 +1140,9 @@ export async function GET(request: NextRequest) {
           (async () => {
             const dist: Record<string, number> = {}
             try {
-              const rels = await db.localRelationship.findMany({ select: { relationshipType: true } })
-              for (const r of rels) dist[r.relationshipType] = (dist[r.relationshipType] || 0) + 1
+              // FIX (perf): groupBy instead of loading all relationship rows into JS
+              const groups = await db.localRelationship.groupBy({ by: ['relationshipType'], _count: { _all: true } })
+              for (const g of groups) dist[g.relationshipType] = (dist[g.relationshipType] || 0) + g._count._all
             } catch { /* ignore */ }
             try {
               const result = await readCypher<{ relType: string; count: unknown }>(

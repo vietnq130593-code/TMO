@@ -3098,9 +3098,12 @@ function TokenStreamProvider({ children }: { children: React.ReactNode }) {
     connect()
 
     // POLLING FALLBACK: If SSE is not delivering updates (Next.js dev server
-    // may buffer SSE events), poll every 10s as a safety net. When SSE is
-    // working, the polling is redundant but harmless.
+    // may buffer SSE events), poll every 10s as a safety net.
+    // FIX (perf): skip the poll while SSE is delivering — the sseActive flag was
+    // maintained but never consulted, so BOTH streams ran in parallel forever
+    // (double data traffic for the same token stats).
     pollTimer = setInterval(async () => {
+      if (sseActive) return // SSE is healthy — no need to poll
       try {
         const res = await fetch('/api/token-usage')
         if (res.ok) {
@@ -13264,7 +13267,22 @@ export default function Home() {
             }
           }
         }
-        setDocuments(docs)
+        // FIX (perf): this runs every 3s during processing. Setting a fresh array
+        // reference every tick re-rendered the whole Home + document list subtree
+        // even when nothing changed. Skip the state update when the visible fields
+        // are identical (same ids + statuses + percent + coverage presence).
+        setDocuments(prev => {
+          const changed =
+            prev.length !== docs.length ||
+            docs.some((d, i) => {
+              const p = prev[i]
+              return !p || p.id !== d.id || p.status !== d.status ||
+                p.processing_percent !== d.processing_percent ||
+                p.error_message !== d.error_message ||
+                (!d.chunk_coverage) !== (!p.chunk_coverage)
+            })
+          return changed ? docs : prev
+        })
         setDocTotal(data.total || 0)
         if (data.statusBreakdown) setDocStatusBreakdown(data.statusBreakdown)
         if (page !== undefined) setDocPage(page)
@@ -14090,7 +14108,10 @@ export default function Home() {
       try {
         const saved = localStorage.getItem('graphrag-active-tab')
         if (saved && saved !== 'chat') {
-          const validTab = ['chat', 'explorer', 'documents', 'analytics', 'token'].includes(saved) ? saved : 'analytics'
+          // FIX: 'autolearn' was missing from the whitelist — reloading while on the
+          // Auto-Learn tab silently dumped the user onto Analytics and overwrote the
+          // saved tab, permanently losing it.
+          const validTab = ['chat', 'explorer', 'documents', 'analytics', 'token', 'autolearn'].includes(saved) ? saved : 'analytics'
           setActiveTab(validTab)
           if (validTab !== saved) localStorage.setItem('graphrag-active-tab', validTab)
           // Trigger data loading for the restored tab
@@ -14132,6 +14153,11 @@ export default function Home() {
   // Auto-refresh: periodically refresh stats and health for real-time data display
   useEffect(() => {
     const refreshInterval = setInterval(() => {
+      // FIX (perf): skip while the browser tab is hidden — this interval hits
+      // /api/query?action=stats (Neo4j Aura cloud round trips) + /api/health every
+      // 10s, even with the tab in the background. Polling resumes automatically
+      // when the tab becomes visible again (interval keeps running, just no-ops).
+      if (typeof document !== 'undefined' && document.hidden) return
       fetchStats()
       fetchHealth()
       fetchEmbeddingStatus()
@@ -14143,6 +14169,9 @@ export default function Home() {
   useEffect(() => {
     if (extractingDocIds.size > 0) {
       const interval = setInterval(() => {
+        // FIX (perf): same visibility gate as above — avoid stacking Neo4j cloud
+        // calls (10s poll + 5s poll = 3 stats calls per 10s) while the tab is hidden.
+        if (typeof document !== 'undefined' && document.hidden) return
         fetchStats()
       }, 5000)
       return () => clearInterval(interval)

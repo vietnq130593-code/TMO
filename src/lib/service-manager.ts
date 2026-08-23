@@ -49,8 +49,15 @@ let isShuttingDown = false
  */
 export async function startAllServices(configs: ServiceConfig[]): Promise<void> {
   // Register graceful shutdown handlers
-  process.on('SIGTERM', shutdownAll)
-  process.on('SIGINT', shutdownAll)
+  // FIX (listener leak on hot reload): previously every call to startAllServices
+  // added 2 MORE process listeners (each call = new module evaluation in dev).
+  // Guarded via globalThis so exactly one registration survives.
+  const globalForSvcMgr = globalThis as unknown as { __svcMgrShutdownRegistered?: boolean }
+  if (!globalForSvcMgr.__svcMgrShutdownRegistered) {
+    globalForSvcMgr.__svcMgrShutdownRegistered = true
+    process.on('SIGTERM', shutdownAll)
+    process.on('SIGINT', shutdownAll)
+  }
 
   // Separate independent and dependent services
   const independent = configs.filter(c => !c.dependsOn)
@@ -163,6 +170,16 @@ async function startService(config: ServiceConfig): Promise<ChildProcess> {
     state.status = 'crashed'
     state.lastError = `Health check failed after ${healthTimeout}ms`
     console.error(`[service-manager] ${config.name} health check failed`)
+    // FIX (orphaned child): kill the spawned process on failed health check.
+    // Previously it stayed alive holding its port while callers retried — the
+    // retry then spawned a second instance that collided on the same port
+    // (EADDRINUSE crash loops, as seen with openclaw-gateway).
+    try {
+      proc.kill()
+    } catch { /* already dead */ }
+    activeProcesses.delete(proc)
+    state.process = null
+    state.pid = null
     throw new Error(`Service ${config.name} failed to start`)
   }
 

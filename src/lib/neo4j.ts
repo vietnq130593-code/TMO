@@ -256,13 +256,14 @@ export async function getNeo4jDriver(): Promise<Neo4jDriver | null> {
       return null
     }
 
+    let driver: import('neo4j-driver').Driver | null = null
     try {
       const neo4j = await import('neo4j-driver')
 
       const isLocalDesktop = uri.startsWith('bolt://') || uri.startsWith('neo4j://')
       const timeout = isLocalDesktop ? 10000 : 30000
 
-      const driver = neo4j.default.driver(uri, neo4j.default.auth.basic(user, password), {
+      driver = neo4j.default.driver(uri, neo4j.default.auth.basic(user, password), {
         maxConnectionPoolSize: isLocalDesktop ? 10 : 5,
         connectionAcquisitionTimeout: timeout,
         connectionTimeout: timeout,
@@ -284,7 +285,12 @@ export async function getNeo4jDriver(): Promise<Neo4jDriver | null> {
       return driver
     } catch (err) {
       console.error('[Neo4j] Failed to connect:', err instanceof Error ? err.message : String(err))
-      driverInitPromise = null
+      // FIX (resource leak): close the driver when connectivity verification fails.
+      // Previously it was abandoned (connection pool + sockets leaked). During an
+      // AuraDB outage every request leaked one driver.
+      if (driver) {
+        await driver.close().catch(() => {})
+      }
       return null
     } finally {
       // Clear mutex after completion (success or failure) so future calls can retry
@@ -415,7 +421,20 @@ export function toNative(val: unknown): unknown {
 
 // ==================== HEALTH CHECK ====================
 
-export async function checkNeo4jHealth(): Promise<{
+/**
+ * Health-check result cache (globalThis — survives dev hot reload).
+ *
+ * The /api/health endpoint is polled every 10s per browser tab, and the health
+ * check runs up to 5 sequential Cypher queries against AuraDB (cloud!). At
+ * 200-500ms per round trip that was ~30 cloud queries/minute/tab, including a
+ * FULL node label scan. This cache cuts that to ~3 re-computes/minute.
+ */
+const globalForNeo4jHealth = globalThis as unknown as {
+  __neo4jHealthCache?: { data: Neo4jHealthResult; ts: number }
+}
+const NEO4J_HEALTH_CACHE_TTL_MS = 20_000 // 20s — halves Aura load at 10s poll intervals
+
+type Neo4jHealthResult = {
   connected: boolean
   uri?: string
   nodeCount?: number
@@ -423,7 +442,22 @@ export async function checkNeo4jHealth(): Promise<{
   labels?: string[]
   entityCounts?: Record<string, number>
   error?: string
-}> {
+}
+
+export async function checkNeo4jHealth(): Promise<Neo4jHealthResult> {
+  // Cache hit? (both success and failure results — prevents hammering Aura
+  // during an outage too). Force-refresh happens naturally after TTL expiry.
+  const cached = globalForNeo4jHealth.__neo4jHealthCache
+  if (cached && Date.now() - cached.ts < NEO4J_HEALTH_CACHE_TTL_MS) {
+    return cached.data
+  }
+
+  const data = await checkNeo4jHealthUncached()
+  globalForNeo4jHealth.__neo4jHealthCache = { data, ts: Date.now() }
+  return data
+}
+
+async function checkNeo4jHealthUncached(): Promise<Neo4jHealthResult> {
   try {
     const uri = process.env.NEO4J_URI
     const user = process.env.NEO4J_USER
@@ -2367,26 +2401,30 @@ export async function getGraphStats(): Promise<{
  *   2. NEO4J_URI is configured
  *   3. A driver has been successfully created at least once
  */
-let healthCheckInterval: ReturnType<typeof setInterval> | null = null
+// FIX (timer leak on hot reload): the guard variables were module-scope, so every
+// re-evaluation of neo4j.ts during dev hot-reload started a NEW 60s interval while
+// the old one kept running forever (N reloads → N timers each pinging AuraDB every
+// 60s). Storing the guard on globalThis keeps a single interval across reloads.
+const globalForNeo4jMonitor = globalThis as unknown as {
+  __neo4jHealthCheckInterval?: ReturnType<typeof setInterval>
+  __neo4jHealthCheckStarted?: boolean
+  __neo4jMonitorStarted?: boolean
+}
 const HEALTH_CHECK_INTERVAL_MS = 60_000 // 60 seconds
-let healthCheckStarted = false
 
 export function startNeo4jHealthMonitor(): void {
-  if (healthCheckStarted) return
-  healthCheckStarted = true
+  if (globalForNeo4jMonitor.__neo4jHealthCheckStarted) return
+  globalForNeo4jMonitor.__neo4jHealthCheckStarted = true
 
   // Lazy start: only begin the interval after the driver is first created
-  const originalGetDriver = getNeo4jDriver
-  let monitorStarted = false
-
   const tryStart = () => {
-    if (monitorStarted) return
+    if (globalForNeo4jMonitor.__neo4jMonitorStarted) return
     if (!process.env.NEO4J_URI) return
 
-    monitorStarted = true
+    globalForNeo4jMonitor.__neo4jMonitorStarted = true
     console.log('[Neo4j] Background health monitor started (60s interval)')
 
-    healthCheckInterval = setInterval(async () => {
+    const interval = setInterval(async () => {
       if (!globalForNeo4j.neo4jDriver) return // No driver to check
 
       try {
@@ -2405,9 +2443,11 @@ export function startNeo4jHealthMonitor(): void {
       }
     }, HEALTH_CHECK_INTERVAL_MS)
 
+    globalForNeo4jMonitor.__neo4jHealthCheckInterval = interval
+
     // Don't let the interval prevent process exit
-    if (healthCheckInterval && typeof healthCheckInterval === 'object' && 'unref' in healthCheckInterval) {
-      healthCheckInterval.unref()
+    if (typeof interval === 'object' && 'unref' in interval) {
+      interval.unref()
     }
   }
 

@@ -53,15 +53,26 @@ function checkRateLimit(key: string): { allowed: boolean; retryAfter?: number } 
   return { allowed: true }
 }
 
-// Simple cleanup to prevent memory leaks
-setInterval(() => {
-  const now = Date.now()
-  for (const [key, entry] of rateLimitMap) {
-    if (now > entry.resetTime) {
-      rateLimitMap.delete(key)
+// Cleanup to prevent memory leaks.
+// FIX (timer leak on hot reload): the interval was created at module scope on
+// every re-evaluation, never cleared and not unref'd — intervals (and their
+// rateLimitMap closures) piled up during dev. globalThis guard + unref keeps
+// exactly one cleanup interval alive.
+const globalForBridgeRoute = globalThis as unknown as {
+  __bridgeRateLimitCleanup?: ReturnType<typeof setInterval>
+}
+if (!globalForBridgeRoute.__bridgeRateLimitCleanup) {
+  const cleanupTimer = setInterval(() => {
+    const now = Date.now()
+    for (const [key, entry] of rateLimitMap) {
+      if (now > entry.resetTime) {
+        rateLimitMap.delete(key)
+      }
     }
-  }
-}, RATE_LIMIT_WINDOW * 2)
+  }, RATE_LIMIT_WINDOW * 2)
+  if (typeof cleanupTimer === 'object' && 'unref' in cleanupTimer) cleanupTimer.unref()
+  globalForBridgeRoute.__bridgeRateLimitCleanup = cleanupTimer
+}
 
 // ==================== AUTH ====================
 function isAuthenticated(request: NextRequest): boolean {
@@ -72,11 +83,13 @@ function isAuthenticated(request: NextRequest): boolean {
     return true
   }
 
-  // Check for session-based auth (if applicable)
+  // Bearer token auth — FIX (security): previously ANY non-empty Bearer token was
+  // accepted ("return token.length > 0" placeholder), letting arbitrary callers
+  // through to exec/bash/write_file tools. Now the token must match OPENCLAW_API_KEY.
   const authHeader = request.headers.get('authorization')
   if (authHeader?.startsWith('Bearer ')) {
     const token = authHeader.slice(7)
-    return token.length > 0 // Placeholder: implement proper token validation
+    return !!validApiKey && token === validApiKey
   }
 
   // In development, allow requests without API key

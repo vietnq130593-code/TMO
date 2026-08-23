@@ -14,7 +14,7 @@
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
     "setup": "prisma generate && prisma db push",
-    "e2e": "bash scripts/e2e-test.sh"
+    "repair:neo4j": "bun scripts/repair-neo4j-documents.ts"
   },
   "dependencies": {
     "3d-force-graph": "^1.80.0",

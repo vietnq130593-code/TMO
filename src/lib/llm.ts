@@ -757,11 +757,16 @@ export async function flushTokenData(): Promise<void> {
 // Ensure token data is persisted before the process exits.
 // Without this, in-memory data is lost on dev server restart/hot-reload.
 
-let shutdownHandlersRegistered = false
+// FIX (listener leak on hot reload): the guard was module-scope, so every
+// re-evaluation of llm.ts during dev hot-reload registered 3 MORE process
+// listeners (SIGINT/SIGTERM/beforeExit) referencing dead module state —
+// Node emits MaxListenersExceededWarning after ~10 reloads. The globalThis
+// guard keeps exactly one registration alive across reloads.
+const globalForTokenShutdown = globalThis as unknown as { __tokenShutdownRegistered?: boolean }
 
 export function registerTokenShutdownHandlers(): void {
-  if (shutdownHandlersRegistered) return
-  shutdownHandlersRegistered = true
+  if (globalForTokenShutdown.__tokenShutdownRegistered) return
+  globalForTokenShutdown.__tokenShutdownRegistered = true
 
   const flushAndExit = async (signal: string) => {
     console.log(`[TokenTracker] Received ${signal}, flushing token data...`)
@@ -1155,6 +1160,13 @@ export function releaseKey(docId: string): void {
     if (idx >= 0) {
       ka.docIds.splice(idx, 1)
       console.log(`[KeyPool] Key ${ka.keyIndex} released by doc ${docId.slice(0, 8)}... (${ka.docIds.length}/${MAX_DOCS_PER_KEY} docs remaining)`)
+      // FIX (unbounded table growth): doc-specific JobQueue rows
+      // (`key-N-doc-XXXXXXXX`) were write-only — never deleted when the
+      // document finished, so the table grew forever. Delete the row for
+      // this doc (fire-and-forget, best effort).
+      try {
+        db.jobQueue.delete({ where: { id: `key-${ka.keyIndex}-doc-${docId.slice(0, 8)}` } }).catch(() => {})
+      } catch { /* ignore — best effort cleanup */ }
       if (ka.docIds.length === 0) {
         ka.failureCount = 0
       }

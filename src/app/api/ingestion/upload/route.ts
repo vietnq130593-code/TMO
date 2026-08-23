@@ -277,6 +277,14 @@ export async function GET(request: NextRequest) {
           }
 
           // Parse docId from R2 key: "pdfs/<docId>_<filename>"
+          // FIX (perf): was O(N²) — for each R2 object it linearly scanned ALL Qdrant
+          // metadata entries ([...qdrantMeta.values()].find(...)). With 500 PDFs that's
+          // up to 250k comparisons per request, and this route is polled every 3-5s
+          // during processing. A key→meta lookup Map makes it O(N).
+          const qdrantMetaByR2Key = new Map<string, Record<string, unknown>>()
+          for (const m of qdrantMeta.values()) {
+            if (m.r2_key) qdrantMetaByR2Key.set(String(m.r2_key), m)
+          }
           const allDocs = r2List.objects.map(obj => {
             const basename = obj.key.split('/').pop() || obj.key
             const underscoreIdx = basename.indexOf('_')
@@ -284,8 +292,7 @@ export async function GET(request: NextRequest) {
             const filename = underscoreIdx > 0 ? basename.substring(underscoreIdx + 1) : basename
             const r2Key = obj.key
             // Find Qdrant metadata by matching r2_key or docId
-            const meta = qdrantMeta.get(docId) ||
-              [...qdrantMeta.values()].find((m) => (m.r2_key as string) === r2Key) || {}
+            const meta = qdrantMeta.get(docId) || qdrantMetaByR2Key.get(r2Key) || {}
 
             return {
               id: docId,

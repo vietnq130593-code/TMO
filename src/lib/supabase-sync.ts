@@ -57,6 +57,49 @@ export interface FullSyncResult {
   durationMs: number
 }
 
+// ==================== PAGINATED PUSH HELPERS ====================
+
+/**
+ * FIX (silent backup data loss): the three big buffer tables
+ * (LocalEntity / LocalRelationship / LocalResolvedEntity) previously used
+ * `findMany({ take: 5000 })` with NO pagination loop — with 55k+ entities an
+ * arbitrary 5000-row subset was pushed and a restore would silently resurrect
+ * only that subset. This helper walks ALL rows with cursor pagination and
+ * chunks the upserts (large single POSTs risk Supabase gateway 413s).
+ */
+const PUSH_PAGE_SIZE = 2000
+const UPSERT_CHUNK_SIZE = 1000
+
+async function pushTablePaginated<T extends { id: string }>(
+  client: SupabaseClient,
+  tableName: string,
+  fetchPage: (cursorId: string | null) => Promise<T[]>,
+  mapRow: (row: T) => Record<string, unknown>,
+  errors: string[]
+): Promise<number> {
+  let pushed = 0
+  let cursorId: string | null = null
+  // Safety cap: 500 pages × 2000 rows = 1M rows max per table
+  for (let page = 0; page < 500; page++) {
+    const rows = await fetchPage(cursorId)
+    if (rows.length === 0) break
+    for (let i = 0; i < rows.length; i += UPSERT_CHUNK_SIZE) {
+      const chunk = rows.slice(i, i + UPSERT_CHUNK_SIZE)
+      const { error } = await client
+        .from(tableName)
+        .upsert(chunk.map(mapRow), { onConflict: 'id' })
+      if (error) {
+        errors.push(`${tableName} (chunk @${cursorId ?? 'start'}+${i}): ${error.message}`)
+      } else {
+        pushed += chunk.length
+      }
+    }
+    if (rows.length < PUSH_PAGE_SIZE) break
+    cursorId = rows[rows.length - 1].id
+  }
+  return pushed
+}
+
 // ==================== PUSH (SQLite → Supabase) ====================
 
 /**
@@ -399,9 +442,16 @@ export async function pushToSupabase(): Promise<FullSyncResult> {
 
   // 16. LocalEntity — extracted entities buffer (mirrors Neo4j after sync)
   try {
-    const entities = await db.localEntity.findMany({ take: 5000 })
-    const { error } = await client.from('local_entities_backup').upsert(
-      entities.map(e => ({
+    const pushErrors: string[] = []
+    const pushed = await pushTablePaginated(
+      client,
+      'local_entities_backup',
+      (cursorId) => db.localEntity.findMany({
+        take: PUSH_PAGE_SIZE,
+        orderBy: { id: 'asc' },
+        ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+      }),
+      (e) => ({
         id: e.id,
         document_id: e.documentId,
         chunk_id: e.chunkId,
@@ -416,18 +466,25 @@ export async function pushToSupabase(): Promise<FullSyncResult> {
         synced: e.synced,
         created_at: e.createdAt?.toISOString(),
         updated_at: e.updatedAt?.toISOString(),
-      })),
-      { onConflict: 'id' }
+      }),
+      pushErrors
     )
-    results.push({ table: 'LocalEntity', pushed: entities.length, pulled: 0, errors: error ? [error.message] : [] })
-    totalPushed += entities.length
+    results.push({ table: 'LocalEntity', pushed, pulled: 0, errors: pushErrors.slice(-3) })
+    totalPushed += pushed
   } catch (e) { results.push({ table: 'LocalEntity', pushed: 0, pulled: 0, errors: [String(e)] }) }
 
   // 17. LocalRelationship — extracted relationships buffer
   try {
-    const rels = await db.localRelationship.findMany({ take: 5000 })
-    const { error } = await client.from('local_relationships_backup').upsert(
-      rels.map(r => ({
+    const relErrors: string[] = []
+    const pushed = await pushTablePaginated(
+      client,
+      'local_relationships_backup',
+      (cursorId) => db.localRelationship.findMany({
+        take: PUSH_PAGE_SIZE,
+        orderBy: { id: 'asc' },
+        ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+      }),
+      (r) => ({
         id: r.id,
         document_id: r.documentId,
         source_entity_id: r.sourceEntityId,
@@ -441,18 +498,25 @@ export async function pushToSupabase(): Promise<FullSyncResult> {
         synced: r.synced,
         created_at: r.createdAt?.toISOString(),
         updated_at: r.updatedAt?.toISOString(),
-      })),
-      { onConflict: 'id' }
+      }),
+      relErrors
     )
-    results.push({ table: 'LocalRelationship', pushed: rels.length, pulled: 0, errors: error ? [error.message] : [] })
-    totalPushed += rels.length
+    results.push({ table: 'LocalRelationship', pushed, pulled: 0, errors: relErrors.slice(-3) })
+    totalPushed += pushed
   } catch (e) { results.push({ table: 'LocalRelationship', pushed: 0, pulled: 0, errors: [String(e)] }) }
 
   // 18. LocalResolvedEntity — canonical merged entities (post-resolution)
   try {
-    const resolved = await db.localResolvedEntity.findMany({ take: 5000 })
-    const { error } = await client.from('local_resolved_entities_backup').upsert(
-      resolved.map(r => ({
+    const resErrors: string[] = []
+    const pushed = await pushTablePaginated(
+      client,
+      'local_resolved_entities_backup',
+      (cursorId) => db.localResolvedEntity.findMany({
+        take: PUSH_PAGE_SIZE,
+        orderBy: { id: 'asc' },
+        ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+      }),
+      (r) => ({
         id: r.id,
         document_id: r.documentId,
         canonical_name: r.canonicalName,
@@ -465,11 +529,11 @@ export async function pushToSupabase(): Promise<FullSyncResult> {
         synced: r.synced,
         created_at: r.createdAt?.toISOString(),
         updated_at: r.updatedAt?.toISOString(),
-      })),
-      { onConflict: 'id' }
+      }),
+      resErrors
     )
-    results.push({ table: 'LocalResolvedEntity', pushed: resolved.length, pulled: 0, errors: error ? [error.message] : [] })
-    totalPushed += resolved.length
+    results.push({ table: 'LocalResolvedEntity', pushed, pulled: 0, errors: resErrors.slice(-3) })
+    totalPushed += pushed
   } catch (e) { results.push({ table: 'LocalResolvedEntity', pushed: 0, pulled: 0, errors: [String(e)] }) }
 
   const durationMs = Date.now() - startTime
