@@ -31,7 +31,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { callLLM, callLLMSlot, acquireKey, releaseKey, flushTokenCount, MAX_KEYS, MAX_DOCS_PER_KEY, MAX_TOTAL_CONCURRENT, getFreeKeyCount, getActiveDocCount, getActiveDocIds, markDocPaused, clearDocPaused, isDocPaused, recoverKeys, persistKeyAssignments, getOverallAvailability, getProviderAvailability } from '@/lib/llm'
 import { generateEmbeddingBatch, getEmbeddingDimension } from '@/lib/embeddings'
-import { getNeo4jDriver, safeSession, executeCypher, readCypher } from '@/lib/neo4j'
+import { getNeo4jDriver, safeSession, executeCypher, readCypher, upsertDocumentNode } from '@/lib/neo4j'
 import { upsertDocument, getDocument, listDocuments, updateDocumentStatus, deleteDocument, upsertChunks, getChunksByDocument, getChunkCount, deleteChunksByDocument } from '@/lib/qdrant'
 import type { DocumentPayload, ChunkPayload } from '@/lib/qdrant'
 import { db } from '@/lib/db'
@@ -1630,7 +1630,7 @@ async function writeEntitiesToNeo4j(
       try {
         const orphanResult = await session.executeWrite(tx =>
           tx.run(
-            `MATCH (n) WHERE n.entity_type IS NOT NULL AND NOT (n)<-[:CONTAINS]-(:Document)
+            `MATCH (n) WHERE n.entity_type IS NOT NULL AND n.entity_type <> 'Document' AND NOT (n)<-[:CONTAINS]-(:Document)
              WITH n LIMIT 1000 DETACH DELETE n RETURN count(n) AS deleted`
           )
         )
@@ -3014,6 +3014,26 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
             }))
           console.log(`[Process] Neo4j: loaded ${sqliteEntities.length} entities + ${sqliteRels.length} rels from SQLite`)
         }
+
+        // ======================================================================
+        // CRITICAL FIX (data-loss bug): Create/update the Document node BEFORE
+        // writeEntitiesToNeo4j. Its Step 6 creates CONTAINS rels via
+        //   MATCH (d:Document {id: $documentId}), (e {id: eid}) MERGE (d)-[:CONTAINS]->(e)
+        // If the Document node doesn't exist, MATCH silently returns nothing →
+        // no CONTAINS created → Step 7 orphan cleanup (LIMIT 1000 DETACH DELETE)
+        // then treats ALL entities as orphans and deletes up to 1000 of them
+        // on EVERY fresh document processing (ongoing graph bleed).
+        // ======================================================================
+        const docNowIso = new Date().toISOString()
+        await upsertDocumentNode({
+          id: documentId,
+          title: (document.title as string) || documentId,
+          domain: (document.domain as string) || domain || 'mixed',
+          status: (document.status as string) || 'extracted',
+          page_count: (document.page_count as number) || undefined,
+          created_at: (document.created_at as string) || docNowIso,
+          updated_at: docNowIso,
+        })
 
         // FIX: Pass skipDeletion=isResuming to avoid destroying all Neo4j data on re-extract.
         // When re-extracting, we use MERGE for incremental updates instead of delete-all-then-recreate.

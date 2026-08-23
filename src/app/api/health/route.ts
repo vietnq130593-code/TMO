@@ -58,7 +58,10 @@ export async function GET() {
 
   try {
     // Ensure Qdrant collections are created
-    await ensureQdrantInitialized()
+    // FIX: wrap in withTimeout — the Qdrant client has a 60s timeout, so if Qdrant is
+    // unreachable this await could hang the health endpoint for 60s+, which keeps the
+    // frontend status bar stuck at "Đang kiểm tra kết nối..." (no per-request timeout there).
+    await withTimeout(ensureQdrantInitialized(), 8000, undefined)
 
     // Run health checks in parallel with individual timeouts
     const [qdrant, neo4j, r2, supabase] = await Promise.all([

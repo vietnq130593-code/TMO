@@ -2807,12 +2807,34 @@ function Neo4jVerification() {
 
 // ==================== CONNECTION STATUS (FOOTER) ====================
 
-function ConnectionStatus({ health, lastChecked, onRefresh, refreshing }: {
+function ConnectionStatus({ health, lastChecked, onRefresh, refreshing, error }: {
   health: HealthResponse | null
   lastChecked: Date | null
   onRefresh: () => void
   refreshing: boolean
+  error?: string | null
 }) {
+  // FIX: show a real error state instead of spinning "Đang kiểm tra kết nối..."
+  // forever when the health check fails (network error, timeout, HTTP 500...).
+  // The 10s auto-poll keeps retrying in the background; the user can also retry manually.
+  if (!health && error) {
+    return (
+      <footer className="connection-status-bar flex-shrink-0">
+        <div className="flex items-center justify-center gap-2 text-[10px] py-1.5 px-4">
+          <XCircle className="h-3 w-3 text-red-400" />
+          <span className="text-red-400">Không kiểm tra được trạng thái: {error}</span>
+          <button
+            onClick={onRefresh}
+            className="ml-1 underline underline-offset-2 hover:text-red-300 cursor-pointer"
+            aria-label="Thử lại"
+          >
+            Thử lại
+          </button>
+        </div>
+      </footer>
+    )
+  }
+
   if (!health) {
     return (
       <footer className="connection-status-bar flex-shrink-0">
@@ -12908,6 +12930,9 @@ export default function Home() {
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [healthLastChecked, setHealthLastChecked] = useState<Date | null>(null)
   const [healthRefreshing, setHealthRefreshing] = useState(false)
+  /** Last health check error — when set, the status bar shows a retryable error
+   *  instead of spinning "Đang kiểm tra kết nối..." forever. */
+  const [healthError, setHealthError] = useState<string | null>(null)
   const [documents, setDocuments] = useState<DocumentRecord[]>([])
   /** Ref to always have latest documents in async closures (avoids stale closure issues)
    *  Also used by fetchDocuments to guard against empty-list overwrite during polling. */
@@ -13140,11 +13165,18 @@ export default function Home() {
 
   const fetchHealth = useCallback(async () => {
     setHealthRefreshing(true)
+    // FIX: add a per-request timeout + real error handling. Previously errors were
+    // swallowed by `catch {}` and non-200 responses were ignored, so when /api/health
+    // failed (server busy, Qdrant down, network hiccup) the status bar stayed stuck
+    // at "Đang kiểm tra kết nối..." forever with no feedback and no visible retry state.
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 20000)
     try {
-      const res = await fetch('/api/health')
+      const res = await fetch('/api/health', { signal: controller.signal })
       if (res.ok) {
         const data = await res.json()
         setHealth(data)
+        setHealthError(null)
         setHealthLastChecked(new Date())
         // Notify user about daily quota exhaustion
         if (data.dailyQuotaStatus) {
@@ -13160,8 +13192,18 @@ export default function Home() {
             })
           }
         }
+      } else {
+        // Non-200 response (e.g. 500) — surface it instead of silently keeping the spinner
+        setHealthError(`Lỗi HTTP ${res.status}`)
       }
-    } catch {}
+    } catch (err) {
+      const msg = err instanceof DOMException && err.name === 'AbortError'
+        ? 'Hết thời gian chờ (20s)'
+        : 'Không kết nối được server'
+      setHealthError(msg)
+    } finally {
+      clearTimeout(timeoutId)
+    }
     setHealthRefreshing(false)
   }, [])
 
@@ -14068,9 +14110,9 @@ export default function Home() {
       const load = async () => {
         await Promise.allSettled([
           fetch('/api/health')
-            .then(res => res.ok ? res.json() : Promise.reject('health error'))
-            .then(data => { setHealth(data); setHealthLastChecked(new Date()) })
-            .catch(() => {}),
+            .then(res => res.ok ? res.json() : Promise.reject(`health error (HTTP ${res.status})`))
+            .then(data => { setHealth(data); setHealthError(null); setHealthLastChecked(new Date()) })
+            .catch((e) => { setHealthError(String(e).includes('health error') ? String(e).replace('health error ', '') : 'Không kết nối được server') }),
           // Use fetchDocuments for initial doc load so pagination state is properly initialized
           fetchDocuments(),
           fetch('/api/query?action=embed-status')
@@ -14582,6 +14624,7 @@ export default function Home() {
         lastChecked={healthLastChecked}
         onRefresh={fetchHealth}
         refreshing={healthRefreshing}
+        error={healthError}
       />
     </div>
   )
