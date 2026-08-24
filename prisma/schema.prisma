@@ -980,3 +980,101 @@ model WorkflowSession {
 
   @@index([status, updatedAt])
 }
+
+/// Aggregated failure pattern detected from ExecutionMetrics history (Layer 9.2).
+
+// ==================== Phase 6 SMOLAB Prop 2 — Layer 9 Prisma models ====================
+// Spec: docs/SMOLAB_LEARNING_PROPOSALS.md Phase 1 Proposal 2.
+// These 3 models are referenced by src/lib/learning/* but were missing → silent
+// TypeError caught + swallowed → "phantom wired" Layer 9 (looks like it learns
+// but persists NOTHING). Field shapes match src/lib/learning/types.ts + the
+// actual db.*.create() callsites in metrics-collector.ts + strategy-adapter.ts.
+
+/// Real-time metrics captured during workflow execution (Layer 9.1a).
+/// Written by src/lib/learning/metrics-collector.ts:126 (flush()).
+/// Read by src/lib/learning/historical-feedback.ts:17 (analyzeHistoricalFeedback).
+model ExecutionMetrics {
+  id                  String   @id @default(cuid())
+  /// Workflow session ID for correlation
+  sessionId           String
+  /// Plan ID (from master-orchestrator orchestration plan)
+  planId              String
+  /// Routing mode: 'A' | 'B' | 'C' (used as proxy for task complexity)
+  routingMode         String
+  /// Tier: 1 | 2 | 3 (complexity tier)
+  tier                Int
+  /// Total steps in the workflow
+  totalSteps          Int
+  /// How many steps completed successfully
+  completedSteps      Int
+  /// How many steps failed
+  failedSteps         Int
+  /// Total tokens consumed (input + output, all LLM calls in workflow)
+  totalTokensUsed     Int
+  /// Token budget for the workflow (cap)
+  totalTokensBudgeted Int
+  /// Wall-clock time in ms
+  totalTimeSpent      Int
+  /// JSON map of error_type → count (e.g. {"type_error": 5, "runtime": 2})
+  errorsByType        String
+  /// 0.0-1.0 — completedSteps / totalSteps ratio
+  stepSuccessRate     Float
+  /// actual / budgeted (≤1.0 = good, >1.0 = over budget)
+  tokenEfficiency     Float
+  /// When this metrics record was created
+  createdAt           DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([routingMode])
+  @@index([createdAt])
+}
+
+/// Failure pattern detected from ExecutionMetrics history (Layer 9.2).
+/// Written by src/lib/learning/strategy-adapter.ts:234 (persistFailurePattern).
+model FailurePattern {
+  id              String   @id @default(cuid())
+  /// Workflow session ID ('unknown' if not set by caller — see strategy-adapter.ts:230)
+  sessionId       String
+  /// Pattern type: 'repeated_error' | 'approach_exhausted' | 'resource_limit' | 'timeout'
+  type            String
+  /// Number of occurrences
+  count           Int      @default(1)
+  /// JSON array of strategies already tried (e.g. ["surgical", "refactoring"])
+  strategiesTried String
+  /// Suggested next strategy to try
+  nextStrategy    String
+  /// JSON context: { taskType, routingMode, stepType }
+  context         String
+  /// Whether this pattern has been applied/resolved
+  resolved        Boolean  @default(false)
+
+  @@index([sessionId])
+  @@index([type])
+  @@index([resolved])
+}
+
+/// Audit log of strategy adaptations applied (Layer 9.2).
+/// Written by src/lib/learning/strategy-adapter.ts:268 (persistAdaptationLog).
+model StrategyAdaptationLog {
+  id              String   @id @default(cuid())
+  /// Workflow session ID
+  sessionId       String
+  /// Failure pattern ID that triggered this adaptation (nullable for spontaneous adaptations)
+  patternId       String?
+  /// Strategy that was active before adaptation
+  fromStrategy    String
+  /// Strategy that was applied
+  toStrategy      String
+  /// Reason for the adaptation
+  reason          String
+  /// Confidence score (0.0-1.0) — how sure the adapter was about this switch
+  confidence      Float
+  /// null = pending, true = succeeded, false = failed
+  successful      Boolean?
+  /// ISO timestamp
+  createdAt       DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([patternId])
+  @@index([createdAt])
+}

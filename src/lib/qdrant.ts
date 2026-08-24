@@ -797,9 +797,11 @@ export async function searchSimilar(
     const limit = options?.limit || 20
     const minScore = options?.minScore || 0.5
 
+    // Phase 6 SMOLAB Prop 4 — qdrant.search() removed in @qdrant/js-client-rest v1.19.0.
+    // Migrated to qdrant.query() (Universally Query API). Response shape: { points: ScoredPoint[] }.
     const results = await withQdrantRetry(async () =>
-      qdrant.search(COLLECTION_CHUNKS, {
-        vector: queryVector,
+      qdrant.query(COLLECTION_CHUNKS, {
+        query: queryVector,
         filter,
         limit,
         with_payload: true,
@@ -808,7 +810,7 @@ export async function searchSimilar(
     )
 
     lastQdrantError = null
-    return results.map(r => ({
+    return results.points.map(r => ({
       id: String(r.id),
       score: r.score,
       payload: r.payload as unknown as ChunkPayload,
@@ -856,9 +858,10 @@ export async function hybridSearch(
 
     const filter = must.length > 0 ? { must } : undefined
 
+    // Phase 6 SMOLAB Prop 4 — qdrant.search() → qdrant.query() migration.
     const results = await withQdrantRetry(async () =>
-      qdrant.search(COLLECTION_CHUNKS, {
-        vector: queryVector,
+      qdrant.query(COLLECTION_CHUNKS, {
+        query: queryVector,
         filter,
         limit: options?.limit || 20,
         with_payload: true,
@@ -867,7 +870,7 @@ export async function hybridSearch(
     )
 
     lastQdrantError = null
-    return results.map(r => ({
+    return results.points.map(r => ({
       id: String(r.id),
       score: r.score,
       payload: r.payload as unknown as ChunkPayload,

@@ -27,6 +27,7 @@
 import { generateEmbedding, getEmbeddingDimension } from '@/lib/embeddings'
 import { callLLM, addTokensUsedByAgent } from '@/lib/llm'
 import { db } from '@/lib/db'
+import { chunkText } from '@/lib/chunking'
 
 // ==================== TYPES ====================
 
@@ -84,13 +85,16 @@ const AUTO_LEARN_DOC_PREFIX = 'auto-learn'
 export async function autoLearnFromAnswer(input: AutoLearnInput): Promise<boolean> {
   const startTime = Date.now()
 
-  // 1. Check confidence thresholds
-  if (input.confidence < AUTO_LEARN_MIN_CONFIDENCE) {
-    console.log(`[AutoLearn] Skipped: confidence ${input.confidence.toFixed(2)} < ${AUTO_LEARN_MIN_CONFIDENCE} (too unreliable)`)
-    return false
-  }
-  if (input.confidence >= AUTO_LEARN_MAX_CONFIDENCE) {
-    console.log(`[AutoLearn] Skipped: confidence ${input.confidence.toFixed(2)} >= ${AUTO_LEARN_MAX_CONFIDENCE} (KB already had enough)`)
+  // Phase 6 SMOLAB P0.2 — REVERSED auto-learn gate.
+  // Old logic (reversed): learn when confidence in [0.5, 0.85) — the "unverified
+  // middle band". This created a self-reinforcing hallucination loop because the
+  // LLM output wasn't actually confirmed by KB retrieval.
+  // New logic: ONLY learn when confidence is HIGH (>= MAX = 0.85) — meaning KB
+  // strongly confirmed the answer is correct from existing knowledge, so it's
+  // safe to memorize for future fast-path retrieval.
+  // Below MAX = unverified LLM output → do NOT memorize (skip silently).
+  if (input.confidence < AUTO_LEARN_MAX_CONFIDENCE) {
+    console.log(`[AutoLearn] Skipped: confidence ${input.confidence.toFixed(2)} < ${AUTO_LEARN_MAX_CONFIDENCE} (KB did not strongly confirm — learning would memorize unverified LLM output)`)
     return false
   }
 
@@ -121,9 +125,14 @@ export async function autoLearnFromAnswer(input: AutoLearnInput): Promise<boolea
     //    Pass agentId/agentName so extraction tokens are tracked per-agent
     const extraction = await extractKnowledgeFromAnswer(input.answer, input.query, input.agentId, input.agentName)
 
-    // 4. Generate embedding for the answer
-    const textToEmbed = input.answer.slice(0, MAX_EMBEDDING_TEXT_LENGTH)
+    // 4. Generate embedding for the answer (Phase 6 SMOLAB P0.3: use recursive chunker
+    //    instead of naive slice(0, 2000). Long answers get split into multiple chunks
+    //    → better recall (no semantic content lost beyond char 2000).
+    //    If chunker returns multiple chunks, embed the first (semantic density highest).
+    const chunks = chunkText(input.answer, 400, 50)
+    const textToEmbed = chunks.length > 0 ? chunks[0].text : input.answer.slice(0, MAX_EMBEDDING_TEXT_LENGTH)
     const embResult = await generateEmbedding(textToEmbed)
+    // Phase 6 SMOLAB P0.1: empty vector signal (all providers failed, no pseudo-hash)
     const chunkSaved = embResult.vector.length === getEmbeddingDimension()
 
     // 5. Save chunk to Qdrant (vector + text)
@@ -516,10 +525,14 @@ export async function getAutoLearnStats(): Promise<{
 /**
  * Check if auto-learn should be triggered for a given query result.
  * This is the gate-keeper function that the chat route calls.
+ *
+ * Phase 6 SMOLAB P0.2 — gate logic REVERSED. Now only learns when
+ * confidence >= AUTO_LEARN_MAX_CONFIDENCE (KB strongly confirmed answer).
+ * Below that = unverified LLM output → skip to avoid hallucination loop.
  */
 export function shouldAutoLearn(confidence: number, hasAgent: boolean): boolean {
   // Only auto-learn when:
   // 1. There's an agent (no auto-learn for anonymous/gateway requests)
-  // 2. Confidence is in the learning zone (not too low, not too high)
-  return hasAgent && confidence >= AUTO_LEARN_MIN_CONFIDENCE && confidence < AUTO_LEARN_MAX_CONFIDENCE
+  // 2. Confidence is HIGH enough that KB strongly confirmed the answer (P0.2 reversed gate)
+  return hasAgent && confidence >= AUTO_LEARN_MAX_CONFIDENCE
 }

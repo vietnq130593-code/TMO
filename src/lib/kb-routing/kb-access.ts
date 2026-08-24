@@ -112,17 +112,24 @@ export async function searchUserKB(
 async function searchChunks(query: string, topK: number): Promise<UserKBResult['chunks']> {
   try {
     const { vector } = await generateQueryEmbedding(query)
-    const results = await qdrant.search(COLLECTION_CHUNKS, {
-      vector,
+    // Phase 6 SMOLAB P0.1: empty vector = all providers failed, no pseudo-hash.
+    // Skip Qdrant search entirely → falls back to entity/memory search only.
+    if (!vector || vector.length === 0) {
+      console.warn('[KB-Access] Query embedding unavailable — skipping vector search (no pseudo-hash fallback)')
+      return []
+    }
+    // Phase 6 SMOLAB Prop 4 — qdrant.search() removed in v1.19.0. Use qdrant.query().
+    const results = await qdrant.query(COLLECTION_CHUNKS, {
+      query: vector,
       limit: topK,
       with_payload: true,
       score_threshold: 0.3,
     })
-    return results.map(r => ({
+    return results.points.map(r => ({
       id: String(r.id),
-      text: (r.payload?.text as string) || '',
+      text: (r.payload?.text as string) || (r.payload?.content as string) || '',
       score: r.score,
-      documentId: r.payload?.documentId as string | undefined,
+      documentId: r.payload?.documentId as string | undefined || r.payload?.document_id as string | undefined,
       source: r.payload?.source as string | undefined,
     }))
   } catch (err) {

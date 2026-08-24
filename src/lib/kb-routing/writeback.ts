@@ -207,17 +207,35 @@ export async function writebackToKB(params: {
   // === WRITE 1: Qdrant chunks (embed entity descriptions) ===
   if (filteredEntities.length > 0) {
     try {
-      const chunksToWrite = filteredEntities.map(e => {
+      const chunksToWrite = filteredEntities.map((e, i) => {
         const text = `${e.name} (${e.type}): ${e.description}`
-        // We'll embed these in parallel — but upsertChunks expects pre-computed vectors
-        // So we'll embed here
-        return { id: '', vector: [] as number[], payload: { text, documentId, source: 'auto-learn', entityName: e.name, entityType: e.type, confidence: e.confidence } }
+        // Phase 6 SMOLAB Prop 3 — construct payload matching ChunkPayload interface
+        // (qdrant.ts:587-602). Old code used camelCase keys (documentId, text, etc.)
+        // which failed the type check at upsertChunks(). Now uses snake_case keys.
+        return {
+          id: '',
+          vector: [] as number[],
+          payload: {
+            document_id: documentId,
+            chunk_index: i,
+            content: text,
+            domain: 'auto-learn',
+            created_at: now,
+            // Auto-learn metadata (optional fields on ChunkPayload)
+            auto_learned: true,
+            agent_name: agentName || 'unknown',
+            original_query: query.slice(0, 200),
+            confidence: e.confidence,
+            llm_provider: 'auto-learn',
+            llm_model: 'auto-learn',
+          } as import('@/lib/qdrant').ChunkPayload,
+        }
       })
 
       // Generate embeddings for all chunks
       const embeddedChunks = await Promise.all(
         chunksToWrite.map(async (c, i) => {
-          const { vector } = await generateEmbedding(c.payload.text)
+          const { vector } = await generateEmbedding(c.payload.content)
           return {
             id: crypto.randomUUID(),
             vector,
@@ -226,10 +244,16 @@ export async function writebackToKB(params: {
         })
       )
 
-      const success = await upsertChunks(embeddedChunks)
-      if (success) {
-        chunksWritten = embeddedChunks.length
-        console.log(`[Writeback] Wrote ${chunksWritten} chunks to Qdrant`)
+      // Phase 6 SMOLAB P0.1 — filter out chunks with empty vectors (all providers failed)
+      const validChunks = embeddedChunks.filter(c => c.vector.length > 0)
+      if (validChunks.length === 0) {
+        console.warn('[Writeback] All chunk embeddings failed — skipping Qdrant write (no pseudo-hash fallback)')
+      } else {
+        const success = await upsertChunks(validChunks)
+        if (success) {
+          chunksWritten = validChunks.length
+          console.log(`[Writeback] Wrote ${chunksWritten} chunks to Qdrant`)
+        }
       }
     } catch (err) {
       console.warn('[Writeback] Qdrant write failed:', err instanceof Error ? err.message : String(err))
@@ -253,7 +277,7 @@ export async function writebackToKB(params: {
         updated_at: now,
       }))
 
-      await upsertEntitiesBatch(entityNodes)
+      await upsertEntitiesBatch(entityNodes, documentId)
       entitiesWritten = entityNodes.length
       console.log(`[Writeback] Wrote ${entitiesWritten} entities to Neo4j`)
     } catch (err) {
@@ -276,7 +300,7 @@ export async function writebackToKB(params: {
         created_at: now,
       }))
 
-      await upsertRelationshipsBatch(edges)
+      await upsertRelationshipsBatch(edges, documentId)
       relationshipsWritten = edges.length
       console.log(`[Writeback] Wrote ${relationshipsWritten} relationships to Neo4j`)
     } catch (err) {

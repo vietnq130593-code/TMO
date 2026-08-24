@@ -230,9 +230,19 @@ function startEvictionTimer(): void {
 }
 startEvictionTimer()
 
-/** Compute the SHA-256 hash for a text string — used as cache key */
+/**
+ * Normalize text before hashing for cache key — improves cache hit rate by
+ * treating "Hello World", "hello  world", " Hello world " as the same key.
+ * Phase 6 SMOLAB P0.4 — cache key normalization.
+ */
+function normalizeKey(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+/** Compute the SHA-256 hash for a text string — used as cache key.
+ *  Applies normalizeKey() first so case/whitespace variations hit the same cache entry. */
 function hashText(text: string): string {
-  return createHash('sha256').update(text).digest('hex')
+  return createHash('sha256').update(normalizeKey(text)).digest('hex')
 }
 
 // ==================== NVIDIA EMBEDDING AVAILABILITY CACHE ====================
@@ -512,19 +522,18 @@ function generatePseudoEmbedding(text: string, dimension: number = EMBEDDING_DIM
 // ==================== PUBLIC API ====================
 
 /**
- * Generate embedding for a text — fallback chain: NVIDIA → OpenRouter → Pseudo-hash
+ * Generate embedding for a text — fallback chain: NVIDIA → OpenRouter → EMPTY VECTOR (NO pseudo-hash)
+ *
+ * Phase 6 SMOLAB P0.1 — pseudo-hash fallback REMOVED. When all providers fail,
+ * returns { vector: [], model: 'none' } so callers can length-check and skip
+ * Qdrant writes instead of polluting the vector index with garbage hash vectors.
  *
  * Caching: L1 (memory, 1h TTL) → L2 (SQLite, 7d TTL) → API call → save to both L1 + L2
  *
  * @param text - The text to embed
- * @param usePseudo - If true, skip APIs and use pseudo-hash directly
- * @returns EmbeddingResult with vector and model name
+ * @returns EmbeddingResult with vector (empty if all providers failed) and model name
  */
-export async function generateEmbedding(text: string, usePseudo?: boolean): Promise<EmbeddingResult> {
-  if (usePseudo) {
-    return { vector: generatePseudoEmbedding(text), model: 'pseudo-hash-2048' }
-  }
-
+export async function generateEmbedding(text: string): Promise<EmbeddingResult> {
   const inputType: 'query' | 'passage' = 'passage'
   const textHash = hashText(text)
   const l1CacheKey = `passage:${textHash.slice(0, 32)}`
@@ -562,9 +571,12 @@ export async function generateEmbedding(text: string, usePseudo?: boolean): Prom
     return { vector: orVector, model: OPENROUTER_EMBEDDING_MODEL }
   }
 
-  // Pseudo-hash fallback (LAST RESORT) — not cached (deterministic, no API cost)
-  console.log('[Embedding] All providers failed, falling back to pseudo-embedding')
-  return { vector: generatePseudoEmbedding(text), model: 'pseudo-hash-2048' }
+  // Phase 6 SMOLAB P0.1 — NO pseudo-hash fallback. Silent garbage vectors were
+  // corrupting Qdrant (cosine ~0 between any two random texts because SHA-256
+  // hash spreads bits uniformly). Now: return empty vector + 'none' model so
+  // callers can length-check and skip Qdrant write without polluting the index.
+  console.error('[Embedding] ALL providers failed — returning empty vector (no pseudo-hash fallback). Caller should skip Qdrant write.')
+  return { vector: [] as number[], model: 'none' }
 }
 
 /**
@@ -619,9 +631,10 @@ export async function generateQueryEmbedding(query: string): Promise<EmbeddingRe
     return { vector: orVector, model: OPENROUTER_EMBEDDING_MODEL }
   }
 
-  // Pseudo-hash fallback (LAST RESORT) — not cached
-  console.log('[Embedding] All providers failed for query, falling back to pseudo-embedding')
-  return { vector: generatePseudoEmbedding(query), model: 'pseudo-hash-2048' }
+  // Phase 6 SMOLAB P0.1 — NO pseudo-hash fallback for queries either.
+  // Empty vector signals caller to skip vector search and fall back to entity/memory search only.
+  console.error('[Embedding] ALL providers failed for query — returning empty vector (no pseudo-hash fallback). Caller should skip vector search.')
+  return { vector: [] as number[], model: 'none' }
 }
 
 /**
