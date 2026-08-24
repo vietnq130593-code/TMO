@@ -14,7 +14,7 @@
  * is rejected. Destructive operations support `dry_run`.
  */
 
-import { exec } from 'child_process'
+import { exec, spawn } from 'child_process'
 import { promisify } from 'util'
 import path from 'path'
 import fs from 'fs/promises'
@@ -921,5 +921,243 @@ export async function gatewayTool(args: { name: string; args?: Record<string, un
       success: false,
       error: `gateway-bridge unreachable (port 18791): ${err instanceof Error ? err.message : String(err)}. Ensure the app is running — gateway-bridge is auto-spawned.`,
     }
+  }
+}
+
+// ==================== v2.1 Phase 1a: SHELL + TODO + (quality gate is in workflow-engine) ====================
+
+/**
+ * shell — Sandboxed bash with timeout + working-dir lock + structured receipt.
+ *
+ * Replaces 5 of v1's specialized tools (install_package, read_logs, lint,
+ * type_check, db_query, env_update) — Claude Code/Z.ai Code pattern.
+ *
+ * Security:
+ * - Refuse `sudo`, `rm -rf /`, fork bombs (`:(){ :|:& };:`), `dd of=/dev/`
+ * - Working dir locked to OPENCODE_WORKSPACE (default process.cwd())
+ * - 5min default timeout, max 10min, SIGTERM then SIGKILL after 5s grace
+ * - stdout/stderr truncated to 30KB with `cursor` for next call
+ * - Shell metacharacters ALLOWED (|, &&, ;, >) — needed for `npm run build && npm test`
+ *
+ * Feature flag: ENABLE_SHELL_TOOL (off by default per D11 principle)
+ *
+ * Returns (D2 structured receipt):
+ *   { success, exit_code, stdout, stderr, duration_ms, truncated, cursor, cwd }
+ */
+export async function shell(args: {
+  command: string
+  cwd?: string
+  timeout_ms?: number
+  env?: Record<string, string>
+  stdin?: string
+}): Promise<unknown> {
+  if (!args.command || typeof args.command !== 'string') {
+    return { success: false, error: 'command is required (string)' }
+  }
+
+  const command = args.command
+  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const cwd = args.cwd ? path.resolve(root, args.cwd) : root
+  // Guard: refuse cwd outside workspace root
+  if (cwd !== root && !cwd.startsWith(root + path.sep)) {
+    return { success: false, error: `cwd escapes workspace root: ${args.cwd}` }
+  }
+
+  // Guard: refuse dangerous commands
+  const dangerousPatterns = [
+    { pattern: /\bsudo\b/, reason: 'sudo is forbidden' },
+    { pattern: /\brm\s+-rf\s+\/(\s|$)/, reason: 'rm -rf / is forbidden (refusing to nuke root)' },
+    { pattern: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;/, reason: 'fork bomb detected' },
+    { pattern: /\bdd\s+.*of=\/dev\//, reason: 'dd to /dev/ is forbidden' },
+    { pattern: /\bmkfs\b/, reason: 'mkfs is forbidden' },
+    { pattern: />\s*\/dev\/sd[a-z]/, reason: 'write to raw disk forbidden' },
+  ]
+  for (const { pattern, reason } of dangerousPatterns) {
+    if (pattern.test(command)) {
+      return { success: false, error: `Command refused: ${reason}` }
+    }
+  }
+
+  // Timeout: 5min default, 10min max
+  const timeoutMs = Math.min(Math.max(args.timeout_ms ?? 300_000, 1_000), 600_000)
+
+  // Truncation budget
+  const MAX_OUT = 30_000 // 30KB per stream
+
+  return new Promise((resolve) => {
+    const startedAt = Date.now()
+    let stdoutBuf = ''
+    let stderrBuf = ''
+    let killed = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let killTimer: ReturnType<typeof setTimeout> | null = null
+
+    // Use spawn with shell:true to allow metacharacters (|, &&, ;, >)
+    const child = spawn(command, {
+      cwd,
+      shell: true,
+      env: { ...process.env, ...(args.env || {}) },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+
+    // Feed stdin if provided
+    if (args.stdin && child.stdin) {
+      child.stdin.write(args.stdin)
+      child.stdin.end()
+    } else if (child.stdin) {
+      child.stdin.end()
+    }
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (stdoutBuf.length < MAX_OUT) {
+        stdoutBuf += chunk.toString('utf-8').slice(0, MAX_OUT - stdoutBuf.length)
+      }
+    })
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (stderrBuf.length < MAX_OUT) {
+        stderrBuf += chunk.toString('utf-8').slice(0, MAX_OUT - stderrBuf.length)
+      }
+    })
+
+    child.on('error', (err: Error) => {
+      if (timer) clearTimeout(timer)
+      resolve({
+        success: false,
+        exit_code: -1,
+        stdout: stdoutBuf,
+        stderr: stderrBuf + `\n[spawn error: ${err.message}]`,
+        duration_ms: Date.now() - startedAt,
+        truncated: false,
+        cwd,
+      })
+    })
+
+    child.on('close', (code: number | null) => {
+      if (timer) clearTimeout(timer)
+      if (killTimer) clearTimeout(killTimer)
+      const durationMs = Date.now() - startedAt
+      const stdoutTruncated = stdoutBuf.length >= MAX_OUT
+      const stderrTruncated = stderrBuf.length >= MAX_OUT
+      resolve({
+        success: code === 0,
+        exit_code: code ?? -1,
+        stdout: stdoutBuf,
+        stderr: stderrBuf,
+        duration_ms: durationMs,
+        truncated: stdoutTruncated || stderrTruncated,
+        cursor: stdoutTruncated ? MAX_OUT : undefined,
+        cwd,
+        killed,
+      })
+    })
+
+    // Timeout: SIGTERM, then SIGKILL after 5s grace
+    timer = setTimeout(() => {
+      killed = true
+      try { child.kill('SIGTERM') } catch {}
+      killTimer = setTimeout(() => {
+        try { child.kill('SIGKILL') } catch {}
+      }, 5_000)
+    }, timeoutMs)
+  })
+}
+
+/**
+ * todoWrite — Claude Code-style in-flight task list (batch upsert).
+ *
+ * Wraps the existing createTask/updateTask functions with a simpler API
+ * aligned to Claude Code's TodoWrite:
+ *   - Pass an array of todos (with optional id for update, no id for create)
+ *   - Returns the full ordered list after write
+ *
+ * Note on sessionId: the existing in-memory store is global (per-process).
+ * SessionId scoping is reserved for Phase 5.6 (SQLite-backed session resume
+ * with WorkflowSession table). For Phase 1a, sessionId is accepted but
+ * currently unused — it is reserved for forward compatibility.
+ *
+ * Feature flag: ENABLE_TODO_TOOL (off by default per D11)
+ */
+export async function todoWrite(args: {
+  sessionId?: string
+  todos: Array<{
+    id?: string
+    content: string
+    status?: 'pending' | 'in_progress' | 'blocked' | 'completed' | 'failed'
+    priority?: 'low' | 'medium' | 'high'
+    parentId?: string
+  }>
+}): Promise<unknown> {
+  if (!Array.isArray(args.todos) || args.todos.length === 0) {
+    return { success: false, error: 'todos[] is required (non-empty array)' }
+  }
+
+  const upserted: Array<{ id: string; content: string; status: string; priority: string }> = []
+
+  for (const t of args.todos) {
+    if (!t.content || typeof t.content !== 'string') {
+      return { success: false, error: 'Each todo needs a `content` string' }
+    }
+
+    // Update existing
+    if (t.id) {
+      const result = await updateTask({
+        task_id: t.id,
+        status: t.status,
+        notes: t.content, // store content in notes for existing tasks
+      })
+      if (result && typeof result === 'object' && 'task' in (result as any)) {
+        const task = (result as any).task
+        upserted.push({
+          id: task.id,
+          content: task.notes || task.title || t.content,
+          status: task.status,
+          priority: task.priority,
+        })
+      }
+    } else {
+      // Create new — use content as both title (truncated) and spec
+      const title = t.content.length > 80 ? t.content.slice(0, 77) + '...' : t.content
+      const result = await createTask({
+        title,
+        spec: t.content,
+        priority: t.priority || 'medium',
+      })
+      if (result && typeof result === 'object' && 'task' in (result as any)) {
+        const task = (result as any).task
+        upserted.push({
+          id: task.id,
+          content: t.content,
+          status: task.status,
+          priority: task.priority,
+        })
+      }
+    }
+  }
+
+  return {
+    success: true,
+    sessionId: args.sessionId || 'default',
+    upserted: upserted.length,
+    todos: upserted,
+  }
+}
+
+/**
+ * todoRead — Return current task list with status breakdown.
+ *
+ * Wraps the existing getPlan() with a simpler Claude Code-style API.
+ * Accepts sessionId for forward compatibility (Phase 5.6 SQLite-backed
+ * session scoping); currently returns all tasks in the in-memory store.
+ *
+ * Feature flag: ENABLE_TODO_TOOL (off by default per D11)
+ */
+export async function todoRead(args: {
+  sessionId?: string
+}): Promise<unknown> {
+  const plan = await getPlan()
+  return {
+    success: true,
+    sessionId: args.sessionId || 'default',
+    ...(plan as Record<string, unknown>),
   }
 }

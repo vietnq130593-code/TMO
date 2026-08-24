@@ -43,6 +43,89 @@ import {
 import {
   executeTool,
 } from './tool-executor'
+import { flagMode } from '@/lib/feature-flags'
+import { exec } from 'child_process'
+import { promisify } from 'util'
+
+const execAsync = promisify(exec)
+
+// ==================== v2.1 Phase 1a.3: QUALITY GATE ====================
+//
+// Enforced before workflow_done emit. Runs `bun run lint` + `tsc --noEmit`,
+// parses errors, and emits 'completed_with_errors' status if errors found
+// in strict mode. In 'warn' mode, workflow still 'completed' but with
+// warning payload.
+//
+// Feature flag: ENABLE_QUALITY_GATE (off | warn | strict), default 'off'
+// See: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Part 4 Phase 1a.3
+//
+interface QualityReport {
+  mode: 'off' | 'warn' | 'strict'
+  lintErrors: number
+  tscErrors: number
+  lintSample?: string[]
+  tscSample?: string[]
+  durationMs: number
+}
+
+async function enforceQualityGate(): Promise<QualityReport> {
+  const mode = flagMode('ENABLE_QUALITY_GATE', ['off', 'warn', 'strict']) as 'off' | 'warn' | 'strict'
+  const startedAt = Date.now()
+
+  if (mode === 'off') {
+    return { mode, lintErrors: 0, tscErrors: 0, durationMs: 0 }
+  }
+
+  // Run lint + tsc in parallel (each capped at 60s to avoid blocking workflow)
+  const lintResult = await runShellSafe('bun run lint', 60_000)
+  const tscResult = await runShellSafe('tsc --noEmit', 60_000)
+
+  const lintErrors = parseLintErrors(lintResult.stderr + lintResult.stdout)
+  const tscErrors = parseTscErrors(tscResult.stderr + tscResult.stdout)
+
+  return {
+    mode,
+    lintErrors: lintErrors.count,
+    tscErrors: tscErrors.count,
+    lintSample: lintErrors.sample,
+    tscSample: tscErrors.sample,
+    durationMs: Date.now() - startedAt,
+  }
+}
+
+async function runShellSafe(command: string, timeoutMs: number): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  try {
+    const { stdout, stderr } = await execAsync(command, {
+      cwd: process.env.OPENCODE_WORKSPACE || process.cwd(),
+      timeout: timeoutMs,
+      maxBuffer: 1024 * 1024,
+    })
+    return { stdout: stdout || '', stderr: stderr || '', exitCode: 0 }
+  } catch (err: any) {
+    return {
+      stdout: err?.stdout || '',
+      stderr: err?.stderr || err?.message || String(err),
+      exitCode: err?.code ?? 1,
+    }
+  }
+}
+
+function parseLintErrors(output: string): { count: number; sample: string[] } {
+  // ESLint default output: "<file>:<line>:<col>: <severity> <rule> <message>"
+  // Or compact: "  <N> errors (M fixable)"
+  const errorLines = output.split('\n').filter(l => /error|Error/.test(l) && !l.includes('0 errors'))
+  const countMatch = output.match(/(\d+)\s+errors?/)
+  const count = countMatch ? parseInt(countMatch[1], 10) : errorLines.length
+  const sample = errorLines.slice(0, 5).map(l => l.slice(0, 200))
+  return { count, sample }
+}
+
+function parseTscErrors(output: string): { count: number; sample: string[] } {
+  // TSC output: "<file>(<line>,<col>): error TS<code>: <message>"
+  const tscErrors = output.split('\n').filter(l => /: error TS\d+:/.test(l))
+  const sample = tscErrors.slice(0, 5).map(l => l.slice(0, 200))
+  return { count: tscErrors.length, sample }
+}
 
 // ==================== CONSTANTS ====================
 
@@ -675,10 +758,29 @@ async function runPipeline(
 
   // ===== WORKFLOW DONE =====
   const totalDuration = Date.now() - workflowStartTime
-  await completeSession(sessionId, 'completed', totalDuration, completedAgents)
 
-  emit({ type: 'workflow_done', totalDuration, sessionId, status: 'completed' })
-  console.log(`[Workflow] Completed in ${totalDuration}ms. Agents: ${completedAgents.join(' → ')}`)
+  // v2.1 Phase 1a.3 — Quality gate (lint + tsc) before marking workflow complete.
+  // Mode 'off' (default): skip entirely. 'warn': surface in payload but still 'completed'.
+  // 'strict': if errors found, status becomes 'completed_with_errors'.
+  const quality = await enforceQualityGate()
+  let finalStatus: 'completed' | 'completed_with_errors' = 'completed'
+  if (quality.mode === 'strict' && (quality.lintErrors > 0 || quality.tscErrors > 0)) {
+    finalStatus = 'completed_with_errors'
+    console.warn(`[Workflow] Quality gate FAILED (strict mode): lint=${quality.lintErrors} tsc=${quality.tscErrors} (${quality.durationMs}ms) — marking as completed_with_errors`)
+  } else if (quality.mode === 'warn' && (quality.lintErrors > 0 || quality.tscErrors > 0)) {
+    console.warn(`[Workflow] Quality gate warnings: lint=${quality.lintErrors} tsc=${quality.tscErrors} (${quality.durationMs}ms) — workflow still completed (warn mode)`)
+  }
+
+  await completeSession(sessionId, finalStatus, totalDuration, completedAgents)
+
+  emit({
+    type: 'workflow_done',
+    totalDuration,
+    sessionId,
+    status: finalStatus,
+    quality: quality.mode === 'off' ? undefined : quality,
+  })
+  console.log(`[Workflow] Completed in ${totalDuration}ms. Agents: ${completedAgents.join(' → ')} (quality: ${quality.mode})`)
 }
 
 // ==================== AGENT STEP RUNNER (ReAct Loop) ====================

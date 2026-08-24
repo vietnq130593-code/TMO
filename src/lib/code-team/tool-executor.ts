@@ -34,7 +34,12 @@ import {
   runBg, readOutput, killProcess,
   managePackages,
   gatewayTool,
+  // v2.1 Phase 1a — new primitives
+  shell as executeShellFn,
+  todoWrite as executeTodoWriteFn,
+  todoRead as executeTodoReadFn,
 } from './dev-tools'
+import { isFlagEnabled } from '@/lib/feature-flags'
 
 // ==================== Z-AI-SDK LAZY INITIALIZATION ====================
 //
@@ -661,6 +666,37 @@ export async function executeTool(
       // ===== P2: gateway proxy (36 tools) =====
       case 'gateway_tool':
         result = await gatewayTool(args as any)
+        break
+      // ===== v2.1 Phase 1a — Claude Code/Z.ai Code parity primitives =====
+      case 'shell':
+        if (!isFlagEnabled('ENABLE_SHELL_TOOL')) {
+          return {
+            success: false,
+            result: 'shell tool is disabled (set ENABLE_SHELL_TOOL=true in .env to enable). See docs/FULLSTACK_CAPABILITY_PLAN_V2.md Part 12.',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeShellFn(args as any)
+        break
+      case 'todo_write':
+        if (!isFlagEnabled('ENABLE_TODO_TOOL')) {
+          return {
+            success: false,
+            result: 'todo_write tool is disabled (set ENABLE_TODO_TOOL=true in .env to enable). See docs/FULLSTACK_CAPABILITY_PLAN_V2.md Part 12.',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeTodoWriteFn(args as any)
+        break
+      case 'todo_read':
+        if (!isFlagEnabled('ENABLE_TODO_TOOL')) {
+          return {
+            success: false,
+            result: 'todo_read tool is disabled (set ENABLE_TODO_TOOL=true in .env to enable). See docs/FULLSTACK_CAPABILITY_PLAN_V2.md Part 12.',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeTodoReadFn(args as any)
         break
       default:
         return {
