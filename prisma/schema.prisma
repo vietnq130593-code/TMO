@@ -942,3 +942,41 @@ model ToolMetric {
   @@index([timestamp])
   @@index([success])
 }
+
+/// Phase 5.6 — Session Resume (spec Appendix C, docs/FULLSTACK_CAPABILITY_PLAN_V2.md
+/// lines 723-779).
+///
+/// Persistent workflow state for context-overflow recovery + concurrent lock.
+/// When an agent detects context overflow, it pauses the session, serializes its
+/// state (currentStep, todoIds, last 5 tool receipts) into `state` (JSON TEXT),
+/// and a new agent session can later POST /api/workflow/resume?sessionId=X to
+/// re-inject the original task + todo list + last 5 tool receipts + current step.
+///
+/// Concurrent lock semantics (Appendix C.3):
+///   - status='active' acts as the "lock held" marker.
+///   - If 2 agents try to resume the same session → second gets 409 Conflict.
+///   - Lock released on completion, failure, or 30-min timeout
+///     (resumeWorkflowSession treats active+updatedAt<now-30min as expired lock).
+///
+/// Cleanup (Appendix C.5):
+///   - >30 days with status='completed' → status='archived' (no real cold storage)
+///   - >7 days with status='paused'    → console.warn (alert user)
+///   - Max 100 active sessions per user → log warning (no FIFO eviction in sandbox)
+model WorkflowSession {
+  id              String   @id @default(cuid())
+  /// TL | CORTEX | BOLT | SENTINEL | CATALYST (which agent owned the session)
+  agentRole       String
+  /// Original user request (so the resuming agent can re-read the task)
+  taskDescription String
+  /// JSON-serialized WorkflowState: { currentStep, todoIds, lastToolReceipts, ... }
+  /// SQLite has no JSONB — TEXT column stores the JSON string (Appendix C.1 line 741).
+  state           String
+  /// active | paused | completed | failed | archived
+  status          String   @default("active")
+  /// Incremented each time the agent pauses due to context overflow (Appendix C.4)
+  contextOverflowCount Int @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status, updatedAt])
+}

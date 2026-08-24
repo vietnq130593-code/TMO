@@ -20,6 +20,7 @@ import type {
   DelegationStrategy,
 } from './types'
 import type { AgentPosition } from '@/lib/code-team/types'
+import { isFlagEnabled } from '@/lib/feature-flags'
 
 // ==================== CONSTANTS ====================
 
@@ -387,15 +388,27 @@ function buildSingleAgentTask(
 /**
  * Execute a sub-agent task.
  *
- * ⚠️  PLACEHOLDER: This is a stub implementation. In production, this should
- *    integrate with the workflow engine to actually execute the task.
+ * v2.1 Phase 5.2 — when ENABLE_REAL_DELEGATE is true, this dispatches a REAL
+ * sub-agent LLM call (with optional single tool call + synthesis). When the
+ * flag is false, the legacy placeholder behavior (100ms sleep + fake success)
+ * is preserved so existing callers/orchestrations/tests don't break.
  *
- *    To integrate:
- *      1. Import the workflow engine or agent runner
- *      2. Call the appropriate function with task.assignedAgent and task.input
- *      3. Return the actual result
+ * Real path strategy (kept simple per spec — no full ReAct loop):
+ *   1. Resolve the agent for task.assignedAgent (DB config or hardcoded defaults)
+ *   2. First LLM call — sub-agent produces either a direct response OR a
+ *      single tool_call (parsed from text via the `tool_call: name({...})`
+ *      convention used throughout the codebase).
+ *   3. If a tool_call is detected: execute it via executeTool() and capture
+ *      the receipt (success/result + extract any file paths).
+ *   4. Final synthesis LLM call (only when step 3 ran) — feed the tool result
+ *      back to the sub-agent and ask for a concise final summary.
+ *   5. Return DelegatedTaskResult with the sub-agent's actual output + the
+ *      files created/modified by the tool call (if any).
  *
- *    For now, this simulates successful execution for testing purposes.
+ * Dynamic import is used for callLLMForAgent + executeTool + resolveAgent to
+ * avoid a static circular dependency between orchestration ↔ code-team modules
+ * (code-team/tool-executor in turn imports many things; loading lazily keeps
+ * the orchestrator module lightweight when the flag is off).
  */
 async function executeSubAgent(
   task: DelegatedTask,
@@ -406,18 +419,325 @@ async function executeSubAgent(
     throw new Error('Task was cancelled')
   }
 
-  // Simulate work (placeholder — replace with actual sub-agent execution)
-  await new Promise((resolve) => setTimeout(resolve, 100))
-
-  return {
-    taskId: task.id,
-    agentPosition: task.assignedAgent,
-    success: true,
-    output: `Task completed by ${task.assignedAgent}`,
-    duration: 100,
-    tokensUsed: 0,
-    errors: [],
-    filesCreated: [],
-    filesModified: [],
+  // Phase 5.2 — flag-off: legacy placeholder (100ms sleep + fake success).
+  if (!isFlagEnabled('ENABLE_REAL_DELEGATE')) {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    return {
+      taskId: task.id,
+      agentPosition: task.assignedAgent,
+      success: true,
+      output: `Task completed by ${task.assignedAgent}`,
+      duration: 100,
+      tokensUsed: 0,
+      errors: [],
+      filesCreated: [],
+      filesModified: [],
+    }
   }
+
+  // Phase 5.2 — flag-on: real sub-agent execution path.
+  const startTime = Date.now()
+  try {
+    // Lazy-import to avoid static circular deps + to skip the cost when flag is off.
+    const { callLLMForAgent } = await import('@/lib/llm')
+    const { executeTool } = await import('@/lib/code-team/tool-executor')
+    const { resolveAgent } = await import('@/lib/code-team/agent-resolver')
+
+    // 1. Resolve the sub-agent's config (provider/model/system prompt/tools).
+    const agent = await resolveAgent(task.assignedAgent as string)
+    if (agent.source === 'missing') {
+      throw new Error(`Agent ${task.assignedAgent} not resolvable (source=missing)`)
+    }
+
+    // 2. First LLM call — sub-agent produces a response or one tool_call.
+    const delegationPrompt = buildDelegationPrompt(task)
+    const firstResult = await callLLMForAgent(
+      delegationPrompt,
+      { provider: agent.provider, model: agent.model },
+      agent.instruction || `You are ${agent.name}. Complete the delegated task concisely.`,
+      {
+        agentId: task.assignedAgent,
+        agentName: agent.name,
+        temperature: agent.temperature,
+        maxTokens: agent.maxTokens,
+      }
+    )
+
+    if (!firstResult || (!firstResult.content && !(firstResult.tool_calls?.length))) {
+      throw new Error(`LLM call failed for sub-agent ${task.assignedAgent}: ${firstResult?.error || 'no content'}`)
+    }
+
+    // 3. Parse tool_call intent from the LLM response.
+    //    Native function-calling tool_calls take priority; otherwise regex-parse
+    //    the text for the `tool_call: name({...})` convention.
+    let toolName: string | null = null
+    let toolArgs: Record<string, unknown> = {}
+
+    if (firstResult.tool_calls && firstResult.tool_calls.length > 0) {
+      const tc = firstResult.tool_calls[0]
+      toolName = tc.function.name
+      try {
+        toolArgs = JSON.parse(tc.function.arguments)
+      } catch {
+        // Malformed args — skip the tool call entirely
+        console.warn(`[Delegator] Sub-agent ${task.assignedAgent} emitted tool_call ${toolName} but args failed JSON.parse — skipping tool call.`)
+        toolName = null
+      }
+    } else if (firstResult.content) {
+      const parsed = parseSingleToolCall(firstResult.content)
+      if (parsed) {
+        toolName = parsed.name
+        toolArgs = parsed.args
+      }
+    }
+
+    const filesCreated: string[] = []
+    const filesModified: string[] = []
+    let finalOutput = firstResult.content || ''
+    let tokensUsed = firstResult.tokensUsed || 0
+
+    // 4. Execute the tool call (if any) and capture file receipts.
+    if (toolName) {
+      console.log(`[Delegator] Sub-agent ${task.assignedAgent} calling tool ${toolName}`)
+      const toolResult = await executeTool(toolName, toolArgs)
+      tokensUsed += 0 // executeTool doesn't return tokensUsed; we don't have a clean per-tool token metric
+
+      // Best-effort file extraction from the tool receipt
+      extractFilePaths(toolResult.result).forEach((p) => {
+        if (!filesCreated.includes(p) && !filesModified.includes(p)) {
+          filesModified.push(p) // safe default — most agent tools modify rather than create
+        }
+      })
+
+      // 5. Final synthesis LLM call — feed tool result back to the sub-agent
+      //    for a concise final summary. Skip if the tool failed (no useful
+      //    observation to synthesize) or if the first response already contained
+      //    a clean final answer with no tool intent.
+      if (toolResult.success) {
+        const synthesisPrompt = buildSynthesisPrompt(task, firstResult.content, toolName, toolResult.result)
+        const synthResult = await callLLMForAgent(
+          synthesisPrompt,
+          { provider: agent.provider, model: agent.model },
+          agent.instruction || `You are ${agent.name}. Be concise.`,
+          {
+            agentId: task.assignedAgent,
+            agentName: agent.name,
+            temperature: agent.temperature,
+            maxTokens: Math.min(agent.maxTokens, 2048),
+          }
+        )
+        if (synthResult?.content) {
+          finalOutput = synthResult.content
+          tokensUsed += synthResult.tokensUsed || 0
+        }
+      } else {
+        finalOutput += `\n\n[Tool ${toolName} failed — see error in errors array]`
+      }
+    }
+
+    return {
+      taskId: task.id,
+      agentPosition: task.assignedAgent,
+      success: true,
+      output: finalOutput || `Task completed by ${task.assignedAgent}`,
+      duration: Date.now() - startTime,
+      tokensUsed,
+      errors: [],
+      filesCreated,
+      filesModified,
+    }
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    console.error(`[Delegator] Sub-agent ${task.assignedAgent} failed:`, errorMsg)
+    return {
+      taskId: task.id,
+      agentPosition: task.assignedAgent,
+      success: false,
+      output: '',
+      duration: Date.now() - startTime,
+      tokensUsed: 0,
+      errors: [{
+        id: `err-${Date.now()}`,
+        timestamp: new Date(),
+        errorType: 'runtime',
+        severity: 'high',
+        message: errorMsg,
+        rootCause: 'Sub-agent LLM execution failed',
+        fixStrategy: 'surgical',
+        fixApplied: false,
+        fixDescription: '',
+        loopDetected: false,
+        loopCount: 0,
+      }],
+      filesCreated: [],
+      filesModified: [],
+    }
+  }
+}
+
+// ==================== v2.1 Phase 5.2 — DELEGATION PROMPT HELPERS ====================
+
+/**
+ * Build the delegation prompt for the first LLM call.
+ * Combines task.description, task.input, task.context, and task.expectedOutput
+ * into a single prompt that asks the sub-agent to either produce a direct
+ * response or emit one tool_call to gather information it needs.
+ *
+ * Kept minimal — the sub-agent's system prompt (from agent resolution) provides
+ * the persona and tooling conventions.
+ */
+function buildDelegationPrompt(task: DelegatedTask): string {
+  const parts: string[] = [
+    `You are delegated a sub-task by the orchestrator.`,
+    ``,
+    `**Task ID:** ${task.id}`,
+    `**Task type:** ${task.taskType}`,
+    `**Description:** ${task.description}`,
+    ``,
+    `**Input / request:**`,
+    task.input || '(none)',
+    ``,
+  ]
+  if (task.context) {
+    parts.push(`**Context:**`, task.context, ``)
+  }
+  if (task.expectedOutput) {
+    parts.push(`**Expected output:** ${task.expectedOutput}`, ``)
+  }
+  parts.push(
+    `**Instructions:**`,
+    `- Either produce the final answer directly, OR emit exactly ONE tool_call if you need to inspect or modify the workspace.`,
+    `- Tool call format (if needed): tool_call: <name>({ ...args })`,
+    `- Be concise. Maximum 200 words for the final response.`,
+    `- Do NOT emit more than one tool_call. If multiple tools are needed, pick the most informative one.`,
+    ``
+  )
+  return parts.join('\n')
+}
+
+/**
+ * Build the synthesis prompt for the second LLM call (only when a tool was called).
+ * Feeds the original response + tool result back to the sub-agent and asks for
+ * a concise final summary.
+ */
+function buildSynthesisPrompt(
+  task: DelegatedTask,
+  firstResponse: string,
+  toolName: string,
+  toolResult: unknown
+): string {
+  const toolResultStr = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult).slice(0, 4000)
+  return [
+    `You called tool ${toolName} for task: ${task.description}.`,
+    ``,
+    `**Your initial response:**`,
+    firstResponse.slice(0, 2000),
+    ``,
+    `**Tool result:**`,
+    toolResultStr,
+    ``,
+    `**Instructions:** Synthesize a concise final answer (max 150 words) that incorporates the tool result. No more tool calls needed.`,
+  ].join('\n')
+}
+
+/**
+ * Parse a single tool_call from the LLM text output.
+ * Recognizes the `tool_call: <name>({ ...args })` convention used throughout
+ * the codebase (regex-only — does not handle native function-calling tool_calls,
+ * which are handled separately by the caller).
+ *
+ * Returns the first matched tool call, or null if no tool call is found.
+ */
+function parseSingleToolCall(
+  output: string
+): { name: string; args: Record<string, unknown> } | null {
+  // Pattern: tool_call: name({...})
+  const match = output.match(/tool_call:\s*(\w+)\s*\(\s*\{/)
+  if (!match) return null
+
+  const toolName = match[1]
+  // Find the opening brace and extract balanced JSON
+  const braceStart = output.indexOf('{', match.index! + match[0].length - 1)
+  if (braceStart === -1) return null
+
+  // Simple balanced JSON extraction (handles one level of nested braces)
+  let depth = 0
+  let inString = false
+  let escape = false
+  let endIdx = -1
+  for (let i = braceStart; i < output.length; i++) {
+    const ch = output[i]
+    if (escape) {
+      escape = false
+      continue
+    }
+    if (ch === '\\') {
+      escape = true
+      continue
+    }
+    if (ch === '"') {
+      inString = !inString
+      continue
+    }
+    if (inString) continue
+    if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) {
+        endIdx = i
+        break
+      }
+    }
+  }
+  if (endIdx === -1) return null
+
+  const jsonStr = output.slice(braceStart, endIdx + 1)
+  try {
+    const args = JSON.parse(jsonStr)
+    if (typeof args === 'object' && args !== null && !Array.isArray(args)) {
+      return { name: toolName, args }
+    }
+  } catch {
+    // Malformed JSON — no tool call extracted
+  }
+  return null
+}
+
+/**
+ * Best-effort extract file paths from a tool receipt.
+ * Tool receipts have varying shapes — this looks for common keys like
+ * `file`, `filePath`, `path`, `files`, `created`, `modified`, `paths`.
+ * Returns a de-duplicated list of absolute or workspace-relative paths.
+ */
+function extractFilePaths(result: unknown): string[] {
+  if (!result || typeof result !== 'object') return []
+  const paths: string[] = []
+  const r = result as Record<string, unknown>
+
+  const pushIfString = (v: unknown) => {
+    if (typeof v === 'string' && v.length > 0 && !paths.includes(v)) {
+      paths.push(v)
+    }
+  }
+  const pushIfArray = (v: unknown) => {
+    if (Array.isArray(v)) {
+      for (const item of v) pushIfString(item)
+    }
+  }
+
+  // Single-path keys
+  for (const key of ['file', 'filePath', 'path', 'newPath', 'oldPath']) {
+    pushIfString(r[key])
+  }
+  // Array-of-paths keys
+  for (const key of ['files', 'paths', 'created', 'modified', 'touched', 'filesCreated', 'filesModified']) {
+    pushIfArray(r[key])
+  }
+  // Nested `result` envelope (some tools wrap)
+  if (r.result && typeof r.result === 'object') {
+    for (const p of extractFilePaths(r.result)) {
+      if (!paths.includes(p)) paths.push(p)
+    }
+  }
+  return paths
 }

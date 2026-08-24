@@ -22,6 +22,7 @@ import { existsSync } from 'fs'
 // Phase 1a.2 — DB-backed Todo store (replaces globalThis.__devTasks)
 // Both Code Team agents AND independent agents share this table; sessionId scopes each list.
 import { db } from '@/lib/db'
+import { isFlagEnabled } from '@/lib/feature-flags'
 
 const execAsync = promisify(exec)
 // Phase 3 audit fix (Task 9): execFileAsync passes argv as an array — bypasses
@@ -960,10 +961,32 @@ function nextTaskId(): string {
  * decompose_task — break a goal into a DAG of subtasks.
  * NOTE: this is an LLM-assisted decomposition; the LLM is prompted to return
  * a JSON array of tasks with dependencies, which we persist in the task store.
+ *
+ * v2.1 Phase 5.5 — when ENABLE_MASTER_ORCHESTRATOR is true, this delegates to
+ * the FULL thinking/decomposer.ts implementation (Layer 2.1 Problem Decomposition),
+ * which expects an IntentResult + MentalModel from Layer 1 intake. We build
+ * minimal versions of both (parseIntent + buildMentalModel), call the full
+ * decomposer, and persist the resulting DecompositionPlan into our DevTask store.
+ *
+ * When the flag is false, the legacy simplified LLM call is preserved so
+ * existing callers/orchestrations don't break.
+ *
+ * Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 5.5 (lines 322-326).
  */
 export async function decomposeTask(args: { goal: string; context?: string }): Promise<unknown> {
   if (!args.goal) return { error: 'goal is required' }
 
+  // ===== v2.1 Phase 5.5 — full thinking/decomposer.ts path =====
+  if (isFlagEnabled('ENABLE_MASTER_ORCHESTRATOR')) {
+    try {
+      return await decomposeTaskViaThinkingLayer(args.goal, args.context)
+    } catch (err) {
+      // Graceful fallback to the simplified path — never break the caller
+      console.warn('[dev-tools:decomposeTask] thinking layer failed, falling back to simplified LLM call:', err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  // ===== Legacy simplified LLM path (default when flag=false) =====
   const { callLLM } = await import('@/lib/llm')
   const prompt = `Decompose this goal into 3-7 concrete subtasks. Return a JSON array (no markdown fence).
 Each task: { "title": short, "spec": 1-2 sentence acceptance criteria, "assignee": "TL"|"G1"|"G2-A"|"G2-B"|"G3", "priority": "low"|"medium"|"high", "deps": [task indices 0-based] }
@@ -1013,6 +1036,122 @@ JSON:`
   }
 
   return { success: true, goal: args.goal, tasksCreated: created.length, tasks: created }
+}
+
+/**
+ * v2.1 Phase 5.5 — full thinking/decomposer.ts path.
+ *
+ * Builds a minimal IntentResult (via parseIntent from Layer 1 intake) and a
+ * minimal MentalModel (via buildMentalModel, cached per-project), then calls
+ * decomposeTask() from src/lib/thinking/decomposer.ts — the full implementation
+ * that classifies sub-task types, runs LLM/heuristic generation, performs
+ * topological sort, identifies critical path, and resolves circular dependencies.
+ *
+ * The resulting DecompositionPlan.SubTask[] is converted into DevTask objects
+ * and persisted in the global task store, mirroring the legacy simplified path's
+ * persistence shape so existing callers (create_task, update_task, get_plan)
+ * work unchanged.
+ *
+ * Dynamic imports avoid a static circular dep: dev-tools.ts is imported by
+ * code-team/tool-executor.ts which is imported by orchestration/agent-delegator.ts
+ * — statically pulling thinking/decomposer (which imports intake which imports
+ * db etc.) risks subtle ordering issues; lazy loading is safer and zero-cost
+ * when the flag is off.
+ */
+async function decomposeTaskViaThinkingLayer(goal: string, context?: string): Promise<unknown> {
+  const { parseIntent, buildMentalModel } = await import('@/lib/intake')
+  const { decomposeTask: thinkingDecomposeTask } = await import('@/lib/thinking/decomposer')
+
+  // 1. Build minimal IntentResult — parseIntent runs the intent parser (LLM if
+  //    useLLM=true default; falls back to keyword-based classification on error).
+  //    The conversationHistory param is unused for now — parseIntent only uses it
+  //    for LLM-based taskType classification context.
+  const intent = await parseIntent(goal, undefined, { useLLM: true }).catch(() => ({
+    taskType: 'create' as const,
+    summary: goal.slice(0, 200),
+    constraints: {},
+    ambiguities: [],
+    implicitRequirements: [],
+    confidence: 0.5,
+  }))
+
+  // 2. Build minimal MentalModel — buildMentalModel scans the workspace
+  //    structure (cached per-project for CACHE_TTL_MS). On failure, return a
+  //    minimal stub with empty structure fields so the decomposer can still run
+  //    (its heuristic generator only reads mentalModel.structure.X.length).
+  const projectRoot = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const mentalModel = await buildMentalModel(projectRoot).catch(() => ({
+    structure: { pages: [], components: [], libs: [], apis: [], configs: [] },
+    dependencies: { nodes: new Map(), entryPoints: [] },
+    patterns: [],
+    conventions: {
+      componentNaming: 'PascalCase' as const,
+      functionNaming: 'camelCase' as const,
+      fileNaming: 'kebab-case' as const,
+      importOrder: [],
+    },
+    readAt: new Date(),
+  }))
+
+  // 3. Call the full thinking/decomposer.ts implementation
+  const plan = await thinkingDecomposeTask(goal, intent, mentalModel, { useLLM: true })
+
+  // 4. Persist the DecompositionPlan.SubTask[] into the global DevTask store,
+  //    mirroring the legacy simplified path's shape so downstream callers
+  //    (create_task, update_task, get_plan) work unchanged.
+  const store = getTaskStore()
+  const created: DevTask[] = []
+
+  // Map SubTask.dependencies (UUID-style IDs from the decomposer) → our T### IDs
+  const idMap = new Map<string, string>()
+  for (let i = 0; i < plan.subTasks.length; i++) {
+    idMap.set(plan.subTasks[i].id, nextTaskId())
+  }
+
+  const now = new Date().toISOString()
+  for (const st of plan.subTasks) {
+    const id = idMap.get(st.id)!
+    const task: DevTask = {
+      id,
+      title: st.name,
+      spec: st.description || st.goal,
+      assignee: st.assignedAgent || (st.type === 'frontend' ? 'G2-B' : 'G2-A'),
+      priority: st.estimatedComplexity === 'simple' ? 'low' : st.estimatedComplexity === 'complex' ? 'high' : 'medium',
+      deps: (st.dependencies || []).map((depId) => idMap.get(depId) || depId),
+      status: 'pending',
+      notes: JSON.stringify({
+        type: st.type,
+        goal: st.goal,
+        expectedOutput: st.expectedOutput,
+        verificationCriteria: st.verificationCriteria,
+        estimatedTokens: st.estimatedTokens,
+        filesToRead: st.filesToRead,
+        filesToWrite: st.filesToWrite,
+        risks: st.risks,
+      }),
+      createdAt: now,
+      updatedAt: now,
+    }
+    store.set(id, task)
+    created.push(task)
+  }
+
+  return {
+    success: true,
+    goal,
+    tasksCreated: created.length,
+    tasks: created,
+    // Phase 5.5 — pass through the full DecompositionPlan metadata for callers
+    // that want it (critical path, dependency graph, total estimated tokens/time).
+    plan: {
+      totalEstimatedTokens: plan.totalEstimatedTokens,
+      totalEstimatedTime: plan.totalEstimatedTime,
+      criticalPath: plan.criticalPath,
+      risks: plan.risks,
+      circularWarnings: plan.circularWarnings,
+      topologicalOrder: plan.dependencyGraph.topologicalOrder,
+    },
+  }
 }
 
 export async function createTask(args: {

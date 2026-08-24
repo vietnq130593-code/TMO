@@ -37,6 +37,7 @@ import {
   persistAdaptationLog,
 } from '@/lib/learning'
 import type { AggregatedMetrics, FailurePattern } from '@/lib/learning'
+import { isFlagEnabled } from '@/lib/feature-flags'
 
 // ==================== DEFAULT CONFIGURATION ====================
 
@@ -105,12 +106,32 @@ export function createMasterOrchestrator(
 
 /**
  * Start the main orchestration loop.
+ *
+ * v2.1 Phase 5.1 — gated by ENABLE_MASTER_ORCHESTRATOR feature flag:
+ *   - flag=false (default): return early with status='skipped' — the legacy
+ *     placeholder loop is preserved so existing orchestrations/tests don't
+ *     break (callers can treat skipped as a no-op).
+ *   - flag=true: run the real loop, dispatching each pipeline step to
+ *     runAgentStep() in code-team/workflow-engine.ts (see executeStep below).
  */
 async function startOrchestration(
   request: OrchestrationRequest,
   config: OrchestrationConfig
 ): Promise<OrchestrationResult> {
   const startTime = Date.now()
+
+  // Phase 5.1 — short-circuit when the flag is off (preserves placeholder behavior).
+  if (!isFlagEnabled('ENABLE_MASTER_ORCHESTRATOR')) {
+    console.log(`[Orchestrator] ENABLE_MASTER_ORCHESTRATOR=false — skipping orchestration for session ${request.sessionId}`)
+    return {
+      status: 'skipped',
+      totalDuration: 0,
+      stepsCompleted: 0,
+      stepsTotal: 0,
+      errors: [],
+      summary: 'master-orchestrator disabled (ENABLE_MASTER_ORCHESTRATOR=false)',
+    }
+  }
 
   // Initialize state
   const state: OrchestrationState = {
@@ -472,20 +493,61 @@ function buildPipeline(mode: string, tier: number): PipelineStep[] {
 }
 
 /**
- * Execute a single pipeline step (placeholder).
+ * Execute a single pipeline step.
+ *
+ * v2.1 Phase 5.1 — wires to a real agent step via runAgentStep() in
+ * code-team/workflow-engine.ts when ENABLE_MASTER_ORCHESTRATOR is true.
+ * Falls back to the legacy placeholder behavior (50ms sleep + success) when
+ * the flag is false — though startOrchestration short-circuits earlier so
+ * executeStep is never reached in that case, we keep the defensive check
+ * here in case a caller invokes executeStep directly.
+ *
+ * Dynamic import is used to avoid a static circular dependency between
+ * orchestration ↔ code-team modules.
  */
 async function executeStep(
   step: PipelineStep,
   sessionId: string
 ): Promise<{ success: boolean; error?: string }> {
-  // TODO: Replace with actual step execution
-  // This is a placeholder that simulates successful execution
   console.log(`[Orchestrator] Executing step: ${step.position}/${step.step}`)
 
-  // Simulate work
-  await new Promise((resolve) => setTimeout(resolve, 50))
+  // Defensive: if the flag is off, fall back to placeholder (preserves old behavior).
+  if (!isFlagEnabled('ENABLE_MASTER_ORCHESTRATOR')) {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    return { success: true }
+  }
 
-  return { success: true }
+  try {
+    // Dynamic import — avoids loading workflow-engine (and its heavy deps) when
+    // the flag is off, and breaks any potential circular static-dep cycle.
+    const { runAgentStep, createMinimalWorkflowContext, noopSSEEmitter } =
+      await import('@/lib/code-team/workflow-engine')
+
+    const ctx = await createMinimalWorkflowContext()
+    const emit = noopSSEEmitter()
+
+    const result = await runAgentStep({
+      position: step.position,
+      step: step.step,
+      // Use the step description as the prompt — the orchestrator's pipeline
+      // is intentionally lighter than the full runWorkflow context, so we feed
+      // the agent just the step description. (In a future iteration, we can
+      // plumb a richer prompt from the orchestration state/context.)
+      prompt: step.description || `Execute ${step.position}/${step.step}`,
+      sessionId,
+      emit,
+      ctx,
+    })
+
+    if (!result || !result.content) {
+      return { success: false, error: 'runAgentStep returned empty content' }
+    }
+    return { success: true }
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err)
+    console.error(`[Orchestrator] executeStep failed for ${step.position}/${step.step}:`, errorMsg)
+    return { success: false, error: errorMsg }
+  }
 }
 
 /**
@@ -493,7 +555,7 @@ async function executeStep(
  */
 function buildResult(
   state: OrchestrationState,
-  status: 'completed' | 'failed' | 'escalated' | 'aborted',
+  status: 'completed' | 'failed' | 'escalated' | 'aborted' | 'skipped',
   duration: number
 ): OrchestrationResult {
   return {

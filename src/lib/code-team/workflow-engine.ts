@@ -70,6 +70,17 @@ import {
   autoRestoreOnVerifyFailure,
 } from '@/lib/workspace/neo4j-checkpoint'
 import { getFsCheckpoint, autoRestoreFsOnVerifyFailure } from '@/lib/workspace/fs-checkpoint'
+// v2.1 Phase 5.6 — Session Resume (spec Appendix C, lines 723-779)
+// Detection + pause + state serialization; the actual resume is a manual API call
+// to POST /api/workflow/resume?sessionId=X. Feature-flagged so the import is safe
+// when ENABLE_SESSION_RESUME is off (every public fn returns a no-op).
+import {
+  detectContextOverflow,
+  estimateTokens,
+  pauseWorkflowSession,
+  saveWorkflowSession,
+  type WorkflowState,
+} from '@/lib/orchestration/session-resume'
 
 /** Operations that trigger auto-checkpoint BEFORE they execute. */
 const RISKY_OPS = new Set<string>([
@@ -300,6 +311,14 @@ const AGENT_STEP_TIMEOUT_MS = 120_000 // 2 minutes per LLM call in agent step
 /** Shorter timeout for TL checkpoint verification calls — these are brief decisions, not long code generation. */
 const CHECKPOINT_VERIFY_TIMEOUT_MS = 30_000 // 30 seconds for checkpoint verify
 
+// v2.1 Phase 5.6 — Context overflow threshold (Appendix C.4 step 1).
+// 80k tokens triggers a session pause + resume handoff so a new agent can
+// re-inject the original task + last 5 tool receipts + current step.
+// Configurable via CONTEXT_OVERFLOW_THRESHOLD env var.
+const CONTEXT_OVERFLOW_THRESHOLD =
+  parseInt(process.env.CONTEXT_OVERFLOW_THRESHOLD || '80000', 10) || 80000
+
+
 // ==================== TYPES ====================
 
 /** SSE emitter function — sends events to client */
@@ -490,8 +509,11 @@ async function loadEnabledSkills(): Promise<string> {
  * @param emit - SSE emitter function for sending events to client
  * @param abortSignal - Optional AbortSignal to cancel workflow when client disconnects
  */
-/** Per-workflow run context — avoids module-level state for concurrent safety */
-interface WorkflowContext {
+/** Per-workflow run context — avoids module-level state for concurrent safety
+ *
+ *  v2.1 Phase 5.1 — exported so master-orchestrator.ts can construct a minimal
+ *  context when wiring `executeStep()` to `runAgentStep()` (see createMinimalWorkflowContext). */
+export interface WorkflowContext {
   resolvedAgentsCache: Map<string, ResolvedAgent>
   /** Cached skills injection string — loaded once per workflow run to avoid repeated DB queries */
   skillsContext?: string
@@ -1013,7 +1035,9 @@ async function runPipeline(
  *
  * @returns Agent's final output content and duration
  */
-async function runAgentStep(params: {
+// v2.1 Phase 5.1 — exported so master-orchestrator.ts can dispatch a real agent
+// step when ENABLE_MASTER_ORCHESTRATOR=true (see executeStep in master-orchestrator.ts).
+export async function runAgentStep(params: {
   position: AgentPosition
   step: string
   prompt: string
@@ -1347,6 +1371,64 @@ async function runAgentStep(params: {
         }),
         tool_call_id: tc.id,
       })
+    }
+
+    // ===== v2.1 Phase 5.6 — Context overflow detection (Appendix C.4) =====
+    // Strategy: after every tool iteration, estimate the conversation's
+    // token count. If it exceeds CONTEXT_OVERFLOW_THRESHOLD (80k default)
+    // AND ENABLE_SESSION_RESUME is on, build a WorkflowState snapshot,
+    // pause the session (status='paused' + contextOverflowCount++), and
+    // break the ReAct loop with a sentinel marker so the parent workflow
+    // can detect the overflow and (in a later phase) call the resume
+    // endpoint. For now the marker is logged + appended to finalContent;
+    // auto-resume is a manual API call per spec ("DON'T wire the resume
+    // side into the parent workflow auto-resume yet").
+    const currentTokens = estimateTokens(messages)
+    if (
+      detectContextOverflow(currentTokens, CONTEXT_OVERFLOW_THRESHOLD) &&
+      isFlagEnabled('ENABLE_SESSION_RESUME')
+    ) {
+      console.warn(`[Workflow] ${agent.name} (${position}) context overflow detected: ~${currentTokens} tokens > ${CONTEXT_OVERFLOW_THRESHOLD} threshold — pausing session ${sessionId} for resume handoff`)
+      // Build the serialized state — keep the last 5 tool receipts to comply
+      // with Appendix C.4 step 5 ("re-inject: ... last 5 tool receipts").
+      const lastFiveReceipts = toolCallsLog.slice(-5).map((entry) => ({
+        tool: entry.tool,
+        args: entry.args,
+        result: entry.result,
+        timestamp: new Date().toISOString(),
+      }))
+      const overflowState: WorkflowState = {
+        currentStep: `${agent.name} (${position}) — ${step}`,
+        todoIds: [], // populated by the consumer from the Todo table at resume time
+        lastToolReceipts: lastFiveReceipts,
+        overflowTokenCount: currentTokens,
+        overflowIteration: iterations,
+      }
+      // Persist the latest state BEFORE pausing so the resuming agent sees
+      // the most recent tool receipts (save → pause, atomic order).
+      try {
+        await saveWorkflowSession(
+          sessionId,
+          position,
+          step, // taskDescription placeholder — caller can update via save on next call
+          overflowState,
+          'active',
+        )
+        await pauseWorkflowSession(sessionId, 'context overflow')
+      } catch (persistErr) {
+        // Never crash the workflow because state persistence failed — log + continue.
+        console.error(`[Workflow] Phase 5.6 state persist failed (non-blocking): ${persistErr instanceof Error ? persistErr.message : String(persistErr)}`)
+      }
+      // Sentinel marker — parent workflow detects this and (Phase 5+ future)
+      // auto-calls POST /api/workflow/resume?sessionId=<sessionId>.
+      finalContent += `\n\n[CONTEXT_OVERFLOW:session=${sessionId}] Conversation reached ~${currentTokens} tokens (> ${CONTEXT_OVERFLOW_THRESHOLD} threshold). State persisted; call POST /api/workflow/resume?sessionId=${sessionId} to continue.`
+      emit({
+        type: 'error',
+        agent: agent.name,
+        position,
+        message: `Context overflow (~${currentTokens} tokens) — session ${sessionId} paused for resume handoff`,
+      })
+      break
     }
 
     // If G2-B reached max iterations, break
@@ -1711,4 +1793,56 @@ function formatMessagesForLLM(
   }
 
   return prompt.trim()
+}
+
+// ==================== v2.1 Phase 5.1 — Helpers for master-orchestrator wiring ====================
+//
+// Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 5.1 (lines 305-314)
+//       master-orchestrator.ts executeStep() needs to call runAgentStep() —
+//       but runAgentStep requires a WorkflowContext + SSEEmitter, both of which
+//       are normally constructed inside runWorkflow() and not exposed.
+//
+// These helpers let master-orchestrator construct minimal versions:
+//   - createMinimalWorkflowContext: builds an empty ctx (no resolved agents cache,
+//     no skills injection) — agents are resolved on-demand inside runAgentStep.
+//   - noopSSEEmitter: a no-op emit function that silently drops SSE events —
+//     suitable when the orchestrator is run outside of a workflow UI stream.
+//
+// Both are exported alongside runAgentStep so orchestration can dispatch real
+// agent steps without spinning up a full workflow run.
+
+/**
+ * Build a minimal WorkflowContext for use outside of runWorkflow (e.g. when
+ * master-orchestrator.executeStep dispatches a single agent step in isolation).
+ *
+ * - resolvedAgentsCache starts empty; runAgentStep will lazy-resolve on first call.
+ * - skillsContext is loaded once (best-effort, swallow errors). Pass `skipSkills: true`
+ *   to skip the DB query entirely (useful for smoke tests or background tasks).
+ */
+export async function createMinimalWorkflowContext(opts?: {
+  skipSkills?: boolean
+}): Promise<WorkflowContext> {
+  const ctx: WorkflowContext = {
+    resolvedAgentsCache: new Map(),
+  }
+  if (!opts?.skipSkills) {
+    try {
+      ctx.skillsContext = await loadEnabledSkills()
+    } catch {
+      // Never break orchestration because skills injection fails
+      ctx.skillsContext = ''
+    }
+  }
+  return ctx
+}
+
+/**
+ * Return a no-op SSEEmitter that silently drops all events.
+ * Use when running agent steps outside of a UI-bound workflow stream (e.g.
+ * master-orchestrator.executeStep in isolation, smoke tests, background tasks).
+ */
+export function noopSSEEmitter(): SSEEmitter {
+  return (_event: WorkflowEvent) => {
+    // Intentionally empty — drop the event silently
+  }
 }

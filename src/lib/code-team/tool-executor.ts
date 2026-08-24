@@ -1521,6 +1521,64 @@ export async function executeTool(
         }
         break
       }
+      // ===== v2.1 Phase 5.2 — delegate tool (sub-agent dispatch) =====
+      // Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 5.2 (lines 315-320).
+      // Real sub-agent delegation path goes through src/lib/orchestration/agent-delegator.ts.
+      // Gated by ENABLE_REAL_DELEGATE: when false, the tool returns a "disabled" message
+      // so legacy callers don't accidentally fire real LLM calls. When true, the
+      // delegator runs the real LLM path (1 LLM call + optional 1 tool_call + 1 synthesis).
+      case 'delegate': {
+        if (!isFlagEnabled('ENABLE_REAL_DELEGATE')) {
+          return {
+            success: false,
+            result: 'delegate tool is disabled (set ENABLE_REAL_DELEGATE=true in .env to enable). See docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 5.2.',
+            duration: Date.now() - startTime,
+          }
+        }
+        // Build the DelegatedTask from args. Required: assignedAgent, description.
+        // Optional: id, parentSessionId, taskType, input, expectedOutput, context, timeout, priority.
+        // Dynamic import avoids a static circular dep: orchestration/agent-delegator
+        // imports from code-team/agent-resolver + code-team/tool-executor (this file),
+        // so a static import here would close the cycle.
+        try {
+          const { createAgentDelegator } = await import('@/lib/orchestration/agent-delegator')
+          const sessionId = typeof args.sessionId === 'string' ? args.sessionId : `delegate-${Date.now()}`
+          const assignedAgent = typeof args.assignedAgent === 'string' ? args.assignedAgent : 'G2-A'
+          const taskId = typeof args.id === 'string' ? args.id : `delegate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+          const delegator = createAgentDelegator(sessionId)
+          const task = {
+            id: taskId,
+            parentSessionId: sessionId,
+            assignedAgent: assignedAgent as 'TL' | 'G1' | 'G2-A' | 'G2-B' | 'G3',
+            taskType: typeof args.taskType === 'string' ? args.taskType : 'delegated',
+            description: typeof args.description === 'string' ? args.description : '(no description)',
+            input: typeof args.input === 'string' ? args.input : '',
+            expectedOutput: typeof args.expectedOutput === 'string' ? args.expectedOutput : '',
+            context: typeof args.context === 'string' ? args.context : '',
+            timeout: typeof args.timeout === 'number' ? args.timeout : 120_000,
+            priority: typeof args.priority === 'number' ? args.priority : 0,
+          }
+          const delegateResult = await delegator.delegate(task)
+          result = {
+            success: delegateResult.success,
+            taskId: delegateResult.taskId,
+            agentPosition: delegateResult.agentPosition,
+            output: delegateResult.output,
+            duration: delegateResult.duration,
+            tokensUsed: delegateResult.tokensUsed,
+            filesCreated: delegateResult.filesCreated,
+            filesModified: delegateResult.filesModified,
+            errors: delegateResult.errors.map((e) => ({ message: e.message, severity: e.severity })),
+          }
+        } catch (err) {
+          return {
+            success: false,
+            result: `delegate failed: ${err instanceof Error ? err.message : String(err)}`,
+            duration: Date.now() - startTime,
+          }
+        }
+        break
+      }
       default:
         return {
           success: false,
