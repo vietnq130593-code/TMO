@@ -72,6 +72,68 @@ const MAX_EMBEDDING_TEXT_LENGTH = 2000
 /** Virtual document ID prefix for auto-learned knowledge */
 const AUTO_LEARN_DOC_PREFIX = 'auto-learn'
 
+// Phase 2 SMOLAB Proposal 4.4 — Cold-start + conservative thresholds.
+// Read once at module load (cheap; env rarely changes during a session).
+const COLD_START_INSIGHT_THRESHOLD = parseInt(process.env.COLD_START_INSIGHT_THRESHOLD || '100', 10)
+const CONSERVATIVE_INSIGHT_THRESHOLD = parseInt(process.env.CONSERVATIVE_INSIGHT_THRESHOLD || '500', 10)
+const CONSERVATIVE_CONFIDENCE_MIN = parseFloat(process.env.CONSERVATIVE_CONFIDENCE_MIN || '0.7')
+
+/**
+ * Phase 2 SMOLAB Proposal 4.4 — Cold-start gate.
+ *
+ * On a fresh install (KB nearly empty), auto-learn would otherwise fill the
+ * KB with unverified LLM output in the first few hours because Pre-Phase 1
+ * P0.2's "only learn when confidence HIGH" gate is satisfied whenever the
+ * LLM is confidently wrong. Cold-start + conservative bands add an extra
+ * population-based gate:
+ *
+ *   insightCount <  COLD_START_INSIGHT_THRESHOLD (100)  → never learn
+ *   insightCount <  CONSERVATIVE_INSIGHT_THRESHOLD (500) → require confidence >= CONSERVATIVE_CONFIDENCE_MIN (0.7)
+ *   otherwise                                            → fall through to P0.2 normal gate (≥ 0.85)
+ *
+ * Note: P0.2's gate (confidence >= 0.85) is the FINAL gate even after this
+ * passes — this function only adds *extra* restrictions for low-population
+ * regimes, it does NOT relax P0.2.
+ *
+ * Returns `{ allow: false, reason }` if cold-start/conservative bands reject,
+ * `{ allow: true }` if caller should proceed to P0.2 gate.
+ */
+async function shouldAutoLearnConsideringColdStart(
+  agentId: string,
+  confidence: number
+): Promise<{ allow: boolean; reason?: string }> {
+  // Population check — single cheap COUNT query, cached by SQLite page cache
+  // after first call. Counts ALL agents' insights (not just this agent's)
+  // because cold-start is a property of the entire KB, not per-agent.
+  let insightCount = 0
+  try {
+    insightCount = await db.agentInsight.count()
+  } catch (err) {
+    // DB error → fail-open (let P0.2 gate decide). Don't crash auto-learn
+    // because of a transient DB issue; the population gate is best-effort.
+    console.warn('[AutoLearn] Cold-start count failed, skipping population gate:', err instanceof Error ? err.message : String(err))
+    return { allow: true }
+  }
+
+  if (insightCount < COLD_START_INSIGHT_THRESHOLD) {
+    return {
+      allow: false,
+      reason: `cold start (insightCount=${insightCount} < ${COLD_START_INSIGHT_THRESHOLD})`,
+    }
+  }
+
+  if (insightCount < CONSERVATIVE_INSIGHT_THRESHOLD) {
+    if (confidence < CONSERVATIVE_CONFIDENCE_MIN) {
+      return {
+        allow: false,
+        reason: `conservative band (insightCount=${insightCount} < ${CONSERVATIVE_INSIGHT_THRESHOLD}) requires confidence >= ${CONSERVATIVE_CONFIDENCE_MIN}, got ${confidence.toFixed(2)}`,
+      }
+    }
+  }
+
+  return { allow: true }
+}
+
 // ==================== MAIN FUNCTION ====================
 
 /**
@@ -84,6 +146,17 @@ const AUTO_LEARN_DOC_PREFIX = 'auto-learn'
  */
 export async function autoLearnFromAnswer(input: AutoLearnInput): Promise<boolean> {
   const startTime = Date.now()
+
+  // Phase 2 SMOLAB Proposal 4.4 — Cold-start + conservative band check.
+  // Cheap population-based gate BEFORE the P0.2 confidence gate. On fresh
+  // install (< 100 insights) → never learn. Conservative band (100-499) →
+  // require confidence >= 0.7. This is an ADDITIONAL restriction; does NOT
+  // relax P0.2's gate below.
+  const coldStart = await shouldAutoLearnConsideringColdStart(input.agentId, input.confidence)
+  if (!coldStart.allow) {
+    console.log(`[AutoLearn] Skipped: ${coldStart.reason}`)
+    return false
+  }
 
   // Phase 6 SMOLAB P0.2 — REVERSED auto-learn gate.
   // Old logic (reversed): learn when confidence in [0.5, 0.85) — the "unverified

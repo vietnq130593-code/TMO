@@ -66,6 +66,15 @@ export interface EntityNode {
   chunk_id?: string
   created_at: string
   updated_at: string
+  /**
+   * Embedding vector for semantic entity resolution (Phase 2 SMOLAB Prop 2.5).
+   * Stored on the Neo4j node itself so that subsequent writebacks can find
+   * similar entities via vector.similarity.cosine() scalar function or via
+   * the db.index.vector.queryNodes procedure (one vector index per label,
+   * created by initializeNeo4jSchema). Optional — backfill script fills
+   * existing nodes; new entities from writeback carry embeddings in real-time.
+   */
+  embedding?: number[]
 }
 
 /** Relationship edge payload — all properties written to Neo4j */
@@ -647,6 +656,26 @@ export async function initializeNeo4jSchema(): Promise<{
     `CREATE FULLTEXT INDEX entity_name_search IF NOT EXISTS FOR (n:Concept|Algorithm|Language|Tool|System|Technique|Vulnerability|Principle|Domain|Document|Person) ON EACH [n.name]`
   )
 
+  // Phase 2 SMOLAB Prop 2.5 — Vector indexes for embedding-based entity resolution.
+  // One per label (Neo4j 5.x vector indexes are per-label, not multi-label).
+  // Aura tier confirmed supports VECTOR indexes (Neo4j 5.27-aura Enterprise),
+  // CREATE VECTOR INDEX succeeds, db.index.vector.queryNodes procedure registered,
+  // vector.similarity.cosine scalar function registered.
+  //
+  // NOTE: Aura 5.27-aura rejects `CREATE VECTOR INDEX IF NOT EXISTS name ...`
+  // with SyntaxError ("expected 'FOR'"). The `IF NOT EXISTS` clause is parsed
+  // differently on Aura — workaround is to use plain `CREATE VECTOR INDEX name`
+  // and rely on the existing catch block's "already exists" substring match to
+  // treat duplicate-create as success (idempotent behavior).
+  // Vector dim sourced from EMBEDDING_DIMENSION constant in qdrant.ts (2048).
+  for (const label of ENTITY_LABELS) {
+    indexQueries.push(
+      `CREATE VECTOR INDEX entity_embedding_${label.toLowerCase()}
+       FOR (n:${label}) ON (n.embedding)
+       OPTIONS { indexConfig: { \`vector.dimensions\`: 2048, \`vector.similarity_function\`: 'cosine' } }`
+    )
+  }
+
   let constraints = 0
   let indexes = 0
 
@@ -872,14 +901,16 @@ export async function upsertEntitiesBatch(
                                n.domain = e.domain, n.description = e.description,
                                n.confidence = e.confidence, n.confidence_score = e.confidence,
                                n.source = e.source, n.occurrence_count = 1,
-                               n.created_at = e.createdAt, n.updated_at = $updatedAt
+                               n.created_at = e.createdAt, n.updated_at = $updatedAt,
+                               n.embedding = CASE WHEN e.embedding IS NOT NULL THEN e.embedding ELSE n.embedding END
                  ON MATCH SET  n.name = e.name, n.entity_name = e.name, n.entity_type = e.entityType,
                                n.domain = CASE WHEN e.domain <> '' THEN e.domain ELSE n.domain END,
                                n.description = CASE WHEN e.description <> '' AND size(e.description) > size(COALESCE(n.description, '')) THEN e.description ELSE n.description END,
                                n.confidence = CASE WHEN e.confidence > COALESCE(n.confidence, 0) THEN e.confidence ELSE n.confidence END,
                                n.confidence_score = CASE WHEN e.confidence > COALESCE(n.confidence_score, 0) THEN e.confidence ELSE n.confidence_score END,
                                n.occurrence_count = COALESCE(n.occurrence_count, 1) + 1,
-                               n.updated_at = $updatedAt`,
+                               n.updated_at = $updatedAt,
+                               n.embedding = CASE WHEN e.embedding IS NOT NULL THEN e.embedding ELSE n.embedding END`,
                 {
                   entities: batch.map(e => ({
                     id: e.id,
@@ -891,6 +922,10 @@ export async function upsertEntitiesBatch(
                     documentId: e.documentId,
                     source: e.source || 'llm',
                     createdAt: e.created_at || now,
+                    // Phase 2 SMOLAB Prop 2.5 — pass embedding through to Neo4j
+                    // for embedding-based entity resolution. Undefined/null is OK —
+                    // the CASE WHEN guard skips the assignment (preserves existing).
+                    embedding: e.embedding ?? null,
                   })),
                   updatedAt: now,
                 }

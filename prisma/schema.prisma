@@ -1078,3 +1078,26 @@ model StrategyAdaptationLog {
   @@index([patternId])
   @@index([createdAt])
 }
+
+// Phase 2 SMOLAB Proposal 6 — Atomic writeback saga tracking.
+// Each multi-store writeback stamps a batchId; this model tracks step
+// completion across Qdrant + Neo4j + SQLite. Failed batches get retried
+// by /api/storage/reconcile-writebacks.
+model PendingWriteback {
+  id           String   @id @default(cuid())
+  batchId      String   @unique
+  agentId      String?
+  sessionId    String?
+  documentId   String
+  payload      String   // JSON plan: {query, step2Content, step1Result, agentId, ...}
+  steps        String   @default("[]") // JSON array: [{step, status, attempts, lastError}]
+  status       String   @default("pending") // pending | completed | partial | failed
+  failedStep   String?  // e.g. "qdrant" | "neo4j_entities" | "neo4j_relationships" | "memory" | "insight" | "log"
+  attempts     Int      @default(0)
+  maxAttempts  Int      @default(3)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([status])
+  @@index([agentId])
+}

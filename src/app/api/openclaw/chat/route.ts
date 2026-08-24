@@ -29,7 +29,10 @@ import { getStandaloneAgentTools } from '@/lib/standalone-agents'
 // Phase A: Smart KB Routing — Intent Classifier
 // Phase C: Smart KB Writeback — replaces autoLearnFromAnswer with confidence-filtered writeback
 // Phase B: Smart KB Pre-Search — search Qdrant+Neo4j before building system prompt
-import { classifyIntent, writebackToKB, searchUserKB } from '@/lib/kb-routing'
+// Phase 2 SMOLAB Prop 6 — writebackToKBTransactionally wraps writebackToKB with
+// PendingWriteback saga tracking (batchId + per-step status + reconcile endpoint).
+import { classifyIntent, searchUserKB } from '@/lib/kb-routing'
+import { writebackToKBTransactionally } from '@/lib/kb-routing/transactional-writeback'
 
 export const dynamic = 'force-dynamic'
 
@@ -735,15 +738,19 @@ export async function POST(request: NextRequest) {
         // writebackToKB extracts entities/relationships with confidence filter (> 0.5),
         // writes to Qdrant + Neo4j + AgentMemory. Falls back to autoLearnFromAnswer if it fails.
         // Phase B: uses kbSearchResult (pre-searched) instead of empty step1Result
+        // Phase 2 SMOLAB Prop 6 — uses writebackToKBTransactionally (PendingWriteback saga
+        // tracking via batchId). Each writeback is now reconcilable via POST /api/storage/reconcile-writebacks.
         const hasAgent = !!(agentProfileId && agentProvider && agentModel)
         if (hasAgent && !isTrivialExchange(lastUserContent, content)) {
-          writebackToKB({
+          writebackToKBTransactionally({
             query: lastUserContent,
             step2Result: { used: true, content, supplemented: true, source: 'model-knowledge' },
             step1Result: kbSearchResult || { chunks: [], entities: [], memories: recalledMemories, confidence: 0, source: 'user-kb' },
             agentId: agentProfileId!,
             agentName: agentProfileName || 'unknown',
             sessionId,
+          }).then(({ batchId, result }) => {
+            console.log(`[Writeback] ReAct batchId=${batchId} entities=${result.entitiesWritten} rels=${result.relationshipsWritten} chunks=${result.chunksWritten} memory=${result.memoryStored}`)
           }).catch(err => {
             console.error('[Writeback] Failed, falling back to autoLearn:', err instanceof Error ? err.message : String(err))
             // Fallback: old auto-learn path (writes to SQLite buffer)
@@ -965,16 +972,19 @@ export async function POST(request: NextRequest) {
         // Phase C: Smart KB Writeback — replaces autoLearnFromAnswer
         // Same as ReAct path: writeback with confidence filter, fallback to autoLearnFromAnswer
         // Phase B: uses kbSearchResult (pre-searched) instead of empty step1Result
+        // Phase 2 SMOLAB Prop 6 — uses writebackToKBTransactionally (PendingWriteback saga).
         const queryConfidence = data.confidence ?? 0
         const hasAgent = !!(agentProfileId && agentProvider && agentModel)
         if (hasAgent && !isTrivialExchange(lastUserContent, content)) {
-          writebackToKB({
+          writebackToKBTransactionally({
             query: lastUserContent,
             step2Result: { used: true, content, supplemented: true, source: 'model-knowledge' },
             step1Result: kbSearchResult || { chunks: [], entities: [], memories: recalledMemories, confidence: queryConfidence, source: 'user-kb' },
             agentId: agentProfileId!,
             agentName: agentProfileName || 'unknown',
             sessionId,
+          }).then(({ batchId, result }) => {
+            console.log(`[Writeback] fallback batchId=${batchId} entities=${result.entitiesWritten} rels=${result.relationshipsWritten} chunks=${result.chunksWritten} memory=${result.memoryStored}`)
           }).catch(err => {
             console.error('[Writeback] Failed (fallback path), falling back to autoLearn:', err instanceof Error ? err.message : String(err))
             if (shouldAutoLearn(queryConfidence, hasAgent)) {

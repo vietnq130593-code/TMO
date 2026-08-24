@@ -20,6 +20,7 @@ import { upsertEntitiesBatch, upsertRelationshipsBatch, type EntityNode, type Re
 import { storeMemory } from '@/lib/agent-memory'
 import { generateEmbedding } from '@/lib/embeddings'
 import { callLLM } from '@/lib/llm'
+import { resolveEntityByNameAndEmbedding } from '@/lib/ingestion/entity-resolver'
 import type { UserKBResult, ModelKnowledgeResult } from './kb-access'
 
 // ==================== CONFIG ====================
@@ -277,9 +278,23 @@ export async function writebackToKB(params: {
         updated_at: now,
       }))
 
-      await upsertEntitiesBatch(entityNodes, documentId)
-      entitiesWritten = entityNodes.length
-      console.log(`[Writeback] Wrote ${entitiesWritten} entities to Neo4j`)
+      // Phase 2 SMOLAB Prop 2.5 — Embedding-based entity resolution BEFORE the
+      // Neo4j upsert. For each entity, generate embedding + query Neo4j for
+      // nearest same-label entity via vector.similarity.cosine(). If match
+      // found (raw cosine > 0.85 → Neo4j normalized score > 0.925): replace
+      // the auto-generated id with the existing Neo4j node id so MERGE in
+      // upsertEntitiesBatch increments occurrence_count instead of duplicating
+      // the node. New entities are persisted with the embedding attached so
+      // subsequent writebacks can find them via vector search.
+      // Fail-safe: per-entity try/catch inside the helper — if embedding
+      // resolution fails (NVIDIA down, Neo4j unreachable), the entity is
+      // persisted as-is (no embedding) and the next writeback can still find
+      // it via the existing Levenshtein fuzzy match path during PDF ingest.
+      const resolvedEntityNodes = await resolveEntitiesForWriteback(entityNodes)
+
+      await upsertEntitiesBatch(resolvedEntityNodes, documentId)
+      entitiesWritten = resolvedEntityNodes.length
+      console.log(`[Writeback] Wrote ${entitiesWritten} entities to Neo4j (after embedding resolution)`)
     } catch (err) {
       console.warn('[Writeback] Neo4j entity write failed:', err instanceof Error ? err.message : String(err))
     }
@@ -457,4 +472,87 @@ async function extractWithConfidence(
     console.warn('[Writeback] Extraction LLM call failed:', err instanceof Error ? err.message : String(err))
     return null
   }
+}
+
+// ==================== EMBEDDING-BASED ENTITY RESOLUTION (Prop 2.5) ====================
+
+/**
+ * Resolve entities against the existing Neo4j knowledge graph by embedding similarity
+ * BEFORE the upsertEntitiesBatch call. For each input entity node:
+ *   - Generate embedding from `${name}: ${description}` (skip if all providers fail).
+ *   - Query Neo4j for nearest same-label entity via vector.similarity.cosine().
+ *   - If match found (raw cosine > 0.85 → Neo4j normalized score > 0.925):
+ *     replace the entity id with the existing Neo4j node id so the MERGE in
+ *     upsertEntitiesBatch increments occurrence_count instead of creating a
+ *     duplicate node.
+ *   - If no match: keep the auto-generated id, attach the embedding to the
+ *     EntityNode so upsertEntitiesBatch writes n.embedding on the node.
+ *
+ * Concurrency-limited to 3 parallel embedding API calls (out of caution for
+ * NVIDIA 160 RPM shared budget — writeback batches max at 10 entities, so
+ * even fully-parallel would be ~10 calls × 1 writeback per chat = trivial).
+ *
+ * Failure isolation: per-entity try/catch — one bad apple doesn't poison the
+ * whole batch. Failures fall through to "create new node" with no embedding.
+ */
+export async function resolveEntitiesForWriteback(
+  entityNodes: EntityNode[]
+): Promise<EntityNode[]> {
+  if (entityNodes.length === 0) return entityNodes
+
+  const resolved: EntityNode[] = new Array(entityNodes.length)
+
+  // Process in chunks of 3 to stay well under NVIDIA's 160 RPM budget
+  const CONCURRENCY = 3
+  for (let i = 0; i < entityNodes.length; i += CONCURRENCY) {
+    const chunk = entityNodes.slice(i, i + CONCURRENCY)
+    const chunkResults = await Promise.all(
+      chunk.map(async (node) => {
+        try {
+          const result = await resolveEntityByNameAndEmbedding({
+            name: node.name,
+            description: node.description,
+            type: node.entity_type,
+          })
+
+          if (result.method === 'embedding' && !result.isNew && result.matched) {
+            console.log(
+              `[Writeback] Entity "${node.name}" → merged into existing ${node.entity_type} "${result.matched.name}" (id=${result.matched.id.slice(0, 8)}, score=${result.matched.score.toFixed(3)})`
+            )
+          } else if (result.method === 'embedding' && result.isNew) {
+            console.log(
+              `[Writeback] Entity "${node.name}" → NEW ${node.entity_type} (id=${result.id.slice(0, 8)}, embedding dim=${result.embedding.length})`
+            )
+          } else {
+            console.warn(
+              `[Writeback] Entity "${node.name}" → embedding generation failed, persisting without embedding`
+            )
+          }
+
+          // Replace the auto-generated id with the resolved id (merge or new)
+          // and attach the embedding vector to the EntityNode payload so
+          // upsertEntitiesBatch writes n.embedding on the Neo4j node.
+          const embedding: number[] | undefined =
+            result.embedding.length > 0 ? result.embedding : undefined
+          return {
+            ...node,
+            id: result.id,
+            embedding,
+          } as EntityNode
+        } catch (err) {
+          // Per-entity isolation: log + fall through with the original node
+          console.warn(
+            `[Writeback] Embedding resolution failed for entity "${node.name}":`,
+            err instanceof Error ? err.message : String(err)
+          )
+          return node
+        }
+      })
+    )
+    for (let k = 0; k < chunkResults.length; k++) {
+      resolved[i + k] = chunkResults[k] as EntityNode
+    }
+  }
+
+  return resolved
 }

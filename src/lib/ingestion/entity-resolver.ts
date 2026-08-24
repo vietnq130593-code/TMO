@@ -6,9 +6,26 @@
  * Step 3: LLM-based match for ambiguous cases (optional, high cost)
  * 
  * Merge strategy: combine properties (union), max confidence score, increment occurrence_count
+ *
+ * Phase 2 SMOLAB Prop 2.5 — Embedding-based entity resolution (NEW):
+ *   Secondary path used by writeback.ts when persisting LLM-extracted entities.
+ *   resolveEntityByNameAndEmbedding() generates a 2048-dim embedding from
+ *   `${name}: ${description}` then queries Neo4j for nearest entities via
+ *   vector.similarity.cosine() scalar function (linear scan per label) OR via
+ *   db.index.vector.queryNodes() procedure (uses HNSW vector index when available).
+ *   Match threshold: raw cosine > 0.85 → Neo4j-normalized score > 0.925
+ *   (Neo4j's vector.similarity.cosine() returns (1 + raw_cosine) / 2 ∈ [0, 1]).
+ *
+ *   The pre-existing Levenshtein-based resolveEntities() is KEPT — it is still
+ *   used during PDF ingestion (fast pre-filter, no API call). The embedding-based
+ *   resolver is the secondary path for writeback (single LLM-extracted entity at
+ *   a time, can afford the embedding API call).
  */
 
+import { randomUUID } from 'crypto'
 import type { DocumentDomain } from './pdf-parser'
+import { generateEmbedding } from '@/lib/embeddings'
+import { readCypher, ENTITY_LABELS, type EntityLabel } from '@/lib/neo4j'
 
 // ==================== INPUT TYPE ====================
 
@@ -311,4 +328,136 @@ export function updateRelationshipReferences(
     source: mergeMap.get(rel.source.toLowerCase().trim()) || rel.source,
     target: mergeMap.get(rel.target.toLowerCase().trim()) || rel.target,
   }))
+}
+
+// ==================== EMBEDDING-BASED ENTITY RESOLUTION (Prop 2.5) ====================
+
+/**
+ * Threshold for embedding-based entity merge.
+ *
+ * Raw cosine similarity between two entity embedding vectors must exceed this
+ * for them to be considered the same entity. Tuned to 0.85 per Prop 2.5 spec
+ * (matches the pre-existing Levenshtein fuzzy threshold for parity).
+ *
+ * Note: Neo4j's vector.similarity.cosine() scalar function returns the normalized
+ * form (1 + raw_cosine) / 2 ∈ [0, 1]. So when querying, we compare the Neo4j
+ * returned score against NEO4J_NORMALIZED_THRESHOLD = 0.925 (= (1 + 0.85) / 2).
+ */
+export const ENTITY_EMBEDDING_RAW_COSINE_THRESHOLD = 0.85
+export const ENTITY_EMBEDDING_NEO4J_SCORE_THRESHOLD = (1 + ENTITY_EMBEDDING_RAW_COSINE_THRESHOLD) / 2 // 0.925
+
+/** Top-K nearest candidates to fetch from Neo4j before applying the score threshold. */
+const ENTITY_EMBEDDING_TOP_K = 5
+
+export interface ResolveByEmbeddingInput {
+  name: string
+  description: string
+  /** Entity type label — must be in ENTITY_LABELS. Falls back to 'Concept' if invalid. */
+  type: string
+}
+
+export interface ResolveByEmbeddingResult {
+  /** Resolved entity ID. Either an existing Neo4j node id (match) or a fresh UUID (new). */
+  id: string
+  /** True if no match was found and a new id was generated; false if merged into existing. */
+  isNew: boolean
+  /** Embedding vector for the entity. Empty array if all embedding providers failed. */
+  embedding: number[]
+  /** Method used for resolution — 'embedding' or 'none' (when embedding gen failed). */
+  method: 'embedding' | 'none'
+  /** Matched candidate details (only present when isNew=false). */
+  matched?: { id: string; name: string; score: number }
+}
+
+/**
+ * Resolve an entity by name + description using embedding similarity.
+ *
+ * Flow:
+ *   1. Generate embedding for `${name}: ${description}` via generateEmbedding().
+ *   2. Length-check (P0.1 — skip if all providers failed, returns empty array).
+ *   3. Query Neo4j for the nearest entity of the same label using
+ *      vector.similarity.cosine() scalar function. This is a linear scan but
+ *      Neo4j entity nodes per label are typically <10K so it's fast enough.
+ *      The db.index.vector.queryNodes procedure (HNSW-accelerated) is the
+ *      alternative — but it requires the index to be ONLINE which is async
+ *      after CREATE VECTOR INDEX. The scalar function works without an index.
+ *   4. If top candidate score > NEO4J_NORMALIZED_THRESHOLD → merge (return its id).
+ *   5. Else → return new UUID (caller will create the node with the embedding).
+ *
+ * Failures (embedding API down, Neo4j unreachable) → returns isNew=true with
+ * empty embedding array. The caller's writeback pipeline skips the embedding
+ * write (matches P0.1 contract from Phase 6 SMOLAB).
+ */
+export async function resolveEntityByNameAndEmbedding(
+  entity: ResolveByEmbeddingInput
+): Promise<ResolveByEmbeddingResult> {
+  // Step 1: Generate embedding for entity name + description
+  const text = `${entity.name}: ${entity.description}`.trim()
+  const { vector, model } = await generateEmbedding(text)
+
+  // Step 2: P0.1 — skip if embedding generation failed (no pseudo-hash fallback)
+  if (vector.length === 0 || model === 'none') {
+    return {
+      id: randomUUID(),
+      isNew: true,
+      embedding: [] as number[],
+      method: 'none',
+    }
+  }
+
+  // Step 3: Sanitize label — must be in ENTITY_LABELS (Neo4j schema constraint)
+  const label: EntityLabel = (ENTITY_LABELS as readonly string[]).includes(entity.type)
+    ? (entity.type as EntityLabel)
+    : 'Concept'
+
+  // Step 4: Query Neo4j for nearest entities of the same label.
+  // vector.similarity.cosine() returns the normalized (1 + raw_cos) / 2 ∈ [0, 1].
+  // We compare against NEO4J_SCORE_THRESHOLD (= 0.925 for raw_cos 0.85).
+  //
+  // LIMIT requires an integer — JS numbers are doubles so 5 becomes 5.0 in transit.
+  // Wrapping in toInteger() coerces to the integer form Neo4j expects.
+  let candidates: Array<{ id: string; name: string; score: number }> = []
+  try {
+    candidates = await readCypher<{ id: string; name: string; score: number }>(
+      `MATCH (n:${label})
+       WHERE n.embedding IS NOT NULL
+       WITH n, vector.similarity.cosine(n.embedding, $vec) AS score
+       WHERE score >= $threshold
+       RETURN n.id AS id, n.name AS name, score
+       ORDER BY score DESC
+       LIMIT toInteger($limit)`,
+      {
+        vec: vector,
+        threshold: ENTITY_EMBEDDING_NEO4J_SCORE_THRESHOLD,
+        limit: ENTITY_EMBEDDING_TOP_K,
+      }
+    )
+  } catch (err) {
+    // Neo4j connection issues / transient errors — fall through to "new entity"
+    // path so writeback proceeds (entity will be created with the embedding
+    // already in payload, so next query will find it via vector search).
+    console.warn(
+      `[EntityResolver] vector.similarity.cosine query failed for label=${label}:`,
+      err instanceof Error ? err.message : String(err)
+    )
+  }
+
+  // Step 5: Merge into top candidate if found, else return new id
+  if (candidates.length > 0) {
+    const top = candidates[0]
+    return {
+      id: top.id,
+      isNew: false,
+      embedding: vector,
+      method: 'embedding',
+      matched: { id: top.id, name: top.name, score: top.score },
+    }
+  }
+
+  return {
+    id: randomUUID(),
+    isNew: true,
+    embedding: vector,
+    method: 'embedding',
+  }
 }

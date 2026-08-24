@@ -81,6 +81,15 @@ import {
   saveWorkflowSession,
   type WorkflowState,
 } from '@/lib/orchestration/session-resume'
+// Phase 2 SMOLAB Proposal 7 — Layer 9 MetricsCollector.
+// Production code path (runWorkflow) hooks Layer 9 so ExecutionMetrics
+// actually persists to SQLite. Before this, master-orchestrator had Layer 9
+// wired but only runs when ENABLE_MASTER_ORCHESTRATOR=true (currently false)
+// → metrics were "phantom wired": code called db.executionMetrics.create()
+// (added in Phase 6 Prop 2) but the production path never invoked it.
+// Fire-and-forget pattern: any flush error is caught + logged, never
+// crashes the workflow (metrics are best-effort side-effects).
+import { createMetricsCollector, type MetricsCollector } from '@/lib/learning'
 
 /** Operations that trigger auto-checkpoint BEFORE they execute. */
 const RISKY_OPS = new Set<string>([
@@ -570,6 +579,29 @@ export async function runWorkflow(
   console.log(`[Workflow] Starting workflow for session ${sessionId}: "${userRequest.slice(0, 100)}" (continueOnDisconnect: ${continueOnDisconnect})`)
   safeEmit({ type: 'workflow_start', sessionId })
 
+  // Phase 2 SMOLAB Proposal 7 — Initialize Layer 9 MetricsCollector.
+  // Phantom-wired before: master-orchestrator had Layer 9 but wasn't the
+  // production path (ENABLE_MASTER_ORCHESTRATOR=false). Now runWorkflow
+  // (the real path) creates + flushes metrics so ExecutionMetrics actually
+  // persists to SQLite via the Prisma model added in Phase 6 Prop 2.
+  // Declared outside try{} so the catch block can flush even on early
+  // catastrophic failure (TL resolution error, etc.).
+  // routingMode/tier: use pre-computed routing from request if available
+  // (Path A from TL Assessment API). For normal flow (Path B), TL analyze
+  // produces routing AFTER workflow_start emit — but we don't want to block
+  // metrics initialization on that, so we use safe defaults ('A'/1) and
+  // the metrics still capture total runtime + step counts correctly. The
+  // routing info is also stored in WorkflowSession row via upsertSession
+  // (line 738); ExecutionMetrics is a side-effect audit trail, not the
+  // source of truth for routing decisions.
+  const metricsCollector: MetricsCollector = createMetricsCollector(
+    sessionId,
+    sessionId, // planId = sessionId for now (no separate plan table)
+    request.routing?.mode ?? 'A', // routingMode (A/B/C from TL assessment)
+    request.routing?.tier ?? 1,   // tier (1/2/3 from TL assessment)
+    100000 // Default token budget — placeholder, real budget computed later
+  )
+
   try {
     // ===== STEP 0: Resolve TL agent (Agent Resolution Layer — C1 Fix) =====
     // Resolve TL first — needed for routing analysis
@@ -583,6 +615,11 @@ export async function runWorkflow(
       const errorMsg = 'Không tìm thấy agent TL (APEX). Workflow cần ít nhất agent TL để chạy.'
       console.error(`[Workflow] ${errorMsg}`)
       safeEmit({ type: 'error', agent: 'SYSTEM', message: errorMsg })
+      // Phase 2 SMOLAB Proposal 7 — flush Layer 9 metrics even on early abort
+      // (fire-and-forget; never crash the workflow here).
+      await metricsCollector.flush().catch((mErr) => {
+        console.error('[Workflow] Layer 9 flush failed (TL missing path):', mErr)
+      })
       await completeSession(sessionId, 'failed')
       return
     }
@@ -629,7 +666,7 @@ export async function runWorkflow(
       })
 
       // Skip TL analyze — go straight to pipeline
-      await runPipeline(preComputedRouting, sessionId, userRequest, safeEmit, startTime, isAborted, ctx)
+      await runPipeline(preComputedRouting, sessionId, userRequest, safeEmit, startTime, isAborted, ctx, metricsCollector)
       return
     }
 
@@ -707,7 +744,7 @@ export async function runWorkflow(
         partsDefinition: fallbackDecision.parts,
       })
 
-      await runPipeline(fallbackDecision, sessionId, userRequest, safeEmit, startTime, isAborted, ctx)
+      await runPipeline(fallbackDecision, sessionId, userRequest, safeEmit, startTime, isAborted, ctx, metricsCollector)
       return
     }
 
@@ -746,8 +783,13 @@ export async function runWorkflow(
     })
 
     // ===== STEP 2: Run pipeline based on routing =====
-    await runPipeline(routingDecision, sessionId, userRequest, safeEmit, startTime, isAborted, ctx)
+    await runPipeline(routingDecision, sessionId, userRequest, safeEmit, startTime, isAborted, ctx, metricsCollector)
   } catch (err) {
+    // Phase 2 SMOLAB Proposal 7 — flush Layer 9 metrics on any catastrophic
+    // failure (fire-and-forget; never crash the workflow here).
+    await metricsCollector.flush().catch((mErr) => {
+      console.error('[Workflow] Layer 9 flush failed (catch path):', mErr)
+    })
     const errorMsg = err instanceof Error ? err.message : String(err)
     console.error(`[Workflow] Fatal error:`, errorMsg)
     safeEmit({ type: 'error', agent: 'SYSTEM', message: errorMsg })
@@ -773,6 +815,11 @@ async function runPipeline(
   workflowStartTime: number,
   isAborted: () => boolean,
   ctx: WorkflowContext,
+  // Phase 2 SMOLAB Proposal 7 — Layer 9 MetricsCollector.
+  // Passed from runWorkflow so flush() can be called at all early-exit
+  // points (escalate, abort, completed) — fire-and-forget, never
+  // blocks the workflow.
+  metricsCollector: MetricsCollector,
 ): Promise<void> {
   const pipeline = getPipeline(routingDecision.mode, routingDecision.tier)
   let spec = routingDecision.spec || userRequest // Spec gốc cho toàn bộ pipeline
@@ -820,6 +867,10 @@ async function runPipeline(
     // Check if workflow was aborted (client disconnected)
     if (isAborted()) {
       console.log(`[Workflow] Aborted at step ${i} (${step.position}/${step.step}) — client disconnected`)
+      // Phase 2 SMOLAB Proposal 7 — flush Layer 9 metrics before early-exit.
+      await metricsCollector.flush().catch((mErr) => {
+        console.error('[Workflow] Layer 9 flush failed (abort path):', mErr)
+      })
       await completeSession(sessionId, 'failed', Date.now() - workflowStartTime, completedAgents)
       return
     }
@@ -863,6 +914,11 @@ async function runPipeline(
       description: step.description,
     })
 
+    // Phase 2 SMOLAB Proposal 7 — Record step start for Layer 9 metrics.
+    // stepId format matches master-orchestrator.ts:239 (`${position}-${step}`).
+    const stepId = `${step.position}-${step.step}`
+    metricsCollector.recordStepStart(stepId, step.step, step.position)
+
     const agentResult = await runAgentStep({
       position: step.position,
       step: step.step,
@@ -881,6 +937,44 @@ async function runPipeline(
     // Write a minimal worklog marking the step as failed so subsequent agents have context
     const isFailedStep = agentResult.content.startsWith('Error:')
     const parsedWorklog = parseWorklogFromOutput(agentResult.content)
+
+    // Phase 2 SMOLAB Proposal 7 — Record step completion/error for Layer 9.
+    // If isFailedStep, also push an ErrorRecord into the step's error log so
+    // errorsByType aggregation in getCurrentMetrics() captures the failure.
+    // tokensUsed=0 placeholder (real tracking would require plumbing LLM
+    // token counts through runAgentStep — deferred per spec: "Don't add
+    // recordTokenUsage calls"). timeSpent from agentResult.duration (ms).
+    if (isFailedStep) {
+      metricsCollector.recordStepError(stepId, {
+        id: `err-${sessionId}-${stepId}-${Date.now()}`,
+        timestamp: new Date(),
+        errorType: 'runtime',
+        severity: 'high',
+        message: agentResult.content.slice(0, 500),
+        rootCause: 'Agent step returned Error: prefix',
+        fixStrategy: 'surgical',
+        fixApplied: false,
+        loopDetected: false,
+        loopCount: 0,
+      })
+    }
+    metricsCollector.recordStepComplete(
+      stepId,
+      {
+        success: !isFailedStep,
+        filesCreated: [],
+        filesModified: [],
+        summary: isFailedStep
+          ? `Step ${stepId} failed`
+          : (parsedWorklog?.summary || `Step ${stepId} executed`).slice(0, 500),
+        outputForNext: isFailedStep
+          ? agentResult.content.slice(0, 2000)
+          : (parsedWorklog?.outputForNext || agentResult.content.slice(0, 2000)),
+      },
+      0, // tokensUsed — placeholder (see comment above)
+      agentResult.duration, // timeSpent (ms)
+    )
+
     const worklogEntry: WorklogEntry = {
       sessionId,
       agentName: agentDef.name,
@@ -952,6 +1046,11 @@ async function runPipeline(
 
         // Still complete the session as failed
         const totalDuration = Date.now() - workflowStartTime
+        // Phase 2 SMOLAB Proposal 7 — flush Layer 9 metrics before early-exit
+        // (escalate path). Fire-and-forget; never block the workflow.
+        await metricsCollector.flush().catch((mErr) => {
+          console.error('[Workflow] Layer 9 flush failed (escalate path):', mErr)
+        })
         await completeSession(sessionId, 'failed', totalDuration)
         emit({ type: 'workflow_done', totalDuration, sessionId, status: 'escalated' })
         return
@@ -1012,6 +1111,15 @@ async function runPipeline(
   }
 
   await completeSession(sessionId, finalStatus, totalDuration, completedAgents)
+
+  // Phase 2 SMOLAB Proposal 7 — flush Layer 9 metrics before workflow_done emit.
+  // This is the SUCCESS path: every step recordStart/recordComplete has been
+  // called inside the for-loop above. flush() persists ExecutionMetrics row
+  // to SQLite (Prisma model added in Phase 6 Prop 2). Fire-and-forget pattern:
+  // failure here does NOT change the workflow outcome (already completed).
+  await metricsCollector.flush().catch((mErr) => {
+    console.error('[Workflow] Layer 9 flush failed (success path):', mErr)
+  })
 
   emit({
     type: 'workflow_done',

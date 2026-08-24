@@ -5164,6 +5164,60 @@ function LearningTabContent() {
   const [newOrder, setNewOrder] = useState('')
   const [newOrderPriority, setNewOrderPriority] = useState(0)
 
+  // Phase 2 SMOLAB Proposal 6 — Writeback Audit (PendingWriteback saga tracker)
+  const [writebackAudit, setWritebackAudit] = useState<{
+    counts: { pending: number; partial: number; failed: number; completed: number; total: number }
+    recent: Array<{
+      batchId: string
+      documentId: string
+      status: string
+      failedStep: string | null
+      attempts: number
+      createdAt: string
+      updatedAt: string
+    }>
+  } | null>(null)
+  const [reconciling, setReconciling] = useState(false)
+
+  // Phase 2 SMOLAB Proposal 8 — Layer 9 Adaptation Intelligence (ExecutionMetrics
+  // + FailurePattern + StrategyAdaptationLog + ML quality placeholders).
+  const [layer9Metrics, setLayer9Metrics] = useState<{
+    aggregated: {
+      totalRuns: number
+      totalCompletedSteps: number
+      totalFailedSteps: number
+      totalTokensUsed: number
+      overallSuccessRate: number
+      overallTokenEfficiency: number
+    }
+    byRoutingMode: Record<string, { count: number; avgSuccess: number; avgTokens: number; avgTime: number }>
+    successRateTrend: Array<{ runId: string; successRate: number; timestamp: string }>
+    recentPatterns: Array<{
+      id: string
+      sessionId: string
+      type: string
+      count: number
+      nextStrategy: string
+      resolved: boolean
+      createdAt: string
+    }>
+    recentAdaptations: Array<{
+      id: string
+      sessionId: string
+      fromStrategy: string
+      toStrategy: string
+      reason: string
+      confidence: number
+      successful: boolean | null
+      createdAt: string
+    }>
+    mlQuality: {
+      embeddingCacheHitRate: number | null
+      pseudoHashVectorCount: number
+      autoLearnVerificationRate: number | null
+    }
+  } | null>(null)
+
   // Fetch data on mount
   useEffect(() => {
     const fetchData = async () => {
@@ -5219,6 +5273,73 @@ function LearningTabContent() {
     }
     fetchEntities()
   }, [])
+
+  // Phase 2 SMOLAB Proposal 6 — Fetch writeback audit (60s auto-refresh)
+  useEffect(() => {
+    let cancelled = false
+    const fetchWritebackAudit = async () => {
+      try {
+        const res = await fetch('/api/storage/reconcile-writebacks')
+        if (res.ok && !cancelled) {
+          const data = await res.json()
+          if (!cancelled) setWritebackAudit(data)
+        }
+      } catch (err) {
+        console.warn('[Writeback Audit] fetch failed:', err)
+      }
+    }
+    fetchWritebackAudit()
+    const interval = setInterval(fetchWritebackAudit, 60000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [])
+
+  // Phase 2 SMOLAB Proposal 8 — Fetch Layer 9 metrics (30s auto-refresh)
+  useEffect(() => {
+    let cancelled = false
+    const fetchLayer9 = async () => {
+      try {
+        const res = await fetch('/api/openclaw/learning/layer9-metrics')
+        if (res.ok && !cancelled) {
+          const data = await res.json()
+          if (!cancelled) setLayer9Metrics(data)
+        }
+      } catch (err) {
+        console.warn('[Layer9 Metrics] fetch failed:', err)
+      }
+    }
+    fetchLayer9()
+    const interval = setInterval(fetchLayer9, 30000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [])
+
+  // Reconcile now — POST endpoint that re-attempts pending/partial/failed batches
+  const handleReconcileWritebacks = async () => {
+    setReconciling(true)
+    try {
+      const res = await fetch('/api/storage/reconcile-writebacks?limit=20', { method: 'POST' })
+      const data = await res.json()
+      if (res.ok && data.ok) {
+        toast({
+          title: 'Reconcile hoàn tất',
+          description: `Đã xử lý ${data.processed} batch (OK: ${data.completed}, thất bại: ${data.stillFailed})`,
+        })
+        // Refresh audit immediately
+        const auditRes = await fetch('/api/storage/reconcile-writebacks')
+        if (auditRes.ok) setWritebackAudit(await auditRes.json())
+      } else {
+        toast({ title: 'Reconcile lỗi', description: data.error || 'Thất bại', variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: 'Lỗi kết nối reconcile', variant: 'destructive' })
+    }
+    setReconciling(false)
+  }
 
   // Teach agent
   const handleTeach = async () => {
@@ -5488,6 +5609,272 @@ function LearningTabContent() {
               </div>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* ===== 1b. WRITEBACK AUDIT (Phase 2 SMOLAB Proposal 6) ===== */}
+      <div className="nc-wrap nc-amber">
+        <div className="nc-panel nc-sm nc-border-amber p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Layers className="h-4 w-4 text-amber-400" />
+              <span className="text-sm font-semibold text-stone-100">Writeback Audit</span>
+              <Badge className="text-[9px] h-4 px-1.5 bg-amber-950/50 text-amber-400 border-amber-400/35">
+                {writebackAudit?.counts?.total ?? 0} batch
+              </Badge>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={reconciling}
+              onClick={handleReconcileWritebacks}
+              className="h-6 px-2 text-[10px] bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 hover:text-amber-200 border border-amber-500/25"
+            >
+              {reconciling ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+              Reconcile now
+            </Button>
+          </div>
+
+          {/* 4 stat tiles: pending / partial / failed / completed */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+            <div className="p-2 bg-slate-950/50 border border-amber-500/15 rounded-lg text-center">
+              <Clock className="h-3.5 w-3.5 mx-auto text-amber-400 mb-0.5" />
+              <p className="text-base font-bold text-stone-100 tabular-nums">{writebackAudit?.counts?.pending ?? '—'}</p>
+              <p className="text-[9px] text-stone-400 uppercase">Pending</p>
+            </div>
+            <div className="p-2 bg-slate-950/50 border border-amber-500/15 rounded-lg text-center">
+              <AlertTriangle className="h-3.5 w-3.5 mx-auto text-orange-400 mb-0.5" />
+              <p className="text-base font-bold text-stone-100 tabular-nums">{writebackAudit?.counts?.partial ?? '—'}</p>
+              <p className="text-[9px] text-stone-400 uppercase">Partial</p>
+            </div>
+            <div className="p-2 bg-slate-950/50 border border-amber-500/15 rounded-lg text-center">
+              <XCircle className="h-3.5 w-3.5 mx-auto text-red-400 mb-0.5" />
+              <p className="text-base font-bold text-stone-100 tabular-nums">{writebackAudit?.counts?.failed ?? '—'}</p>
+              <p className="text-[9px] text-stone-400 uppercase">Failed</p>
+            </div>
+            <div className="p-2 bg-slate-950/50 border border-amber-500/15 rounded-lg text-center">
+              <CheckCircle2 className="h-3.5 w-3.5 mx-auto text-emerald-400 mb-0.5" />
+              <p className="text-base font-bold text-stone-100 tabular-nums">{writebackAudit?.counts?.completed ?? '—'}</p>
+              <p className="text-[9px] text-stone-400 uppercase">Completed</p>
+            </div>
+          </div>
+
+          {/* Recent batches (last 5) */}
+          {(writebackAudit?.recent?.length ?? 0) > 0 && (
+            <div className="p-2 bg-slate-950/50 border border-amber-500/10 rounded-lg">
+              <span className="text-[10px] text-stone-400 uppercase mb-1.5 block">Recent batches</span>
+              <div className="space-y-1 max-h-40 overflow-y-auto pr-1" style={{ scrollbarWidth: 'thin' }}>
+                {writebackAudit?.recent.slice(0, 5).map(b => {
+                  const statusColor =
+                    b.status === 'completed' ? 'text-emerald-400 bg-emerald-950/30 border-emerald-400/30'
+                    : b.status === 'failed' ? 'text-red-400 bg-red-950/30 border-red-400/30'
+                    : b.status === 'partial' ? 'text-orange-400 bg-orange-950/30 border-orange-400/30'
+                    : 'text-amber-400 bg-amber-950/30 border-amber-400/30'
+                  return (
+                    <div key={b.batchId} className={`flex items-center gap-2 p-1.5 border rounded-md ${statusColor}`}>
+                      <span className="text-[9px] font-mono text-stone-400 truncate flex-1">
+                        {b.batchId.slice(0, 8)}
+                      </span>
+                      <span className="text-[9px] uppercase font-semibold">{b.status}</span>
+                      {b.failedStep && (
+                        <span className="text-[8px] text-red-400/80" title={b.failedStep}>
+                          {b.failedStep}
+                        </span>
+                      )}
+                      <Badge className="text-[8px] h-3.5 px-1 bg-slate-900/60 text-stone-300 border-slate-700">
+                        ×{b.attempts}
+                      </Badge>
+                      <span className="text-[8px] text-stone-500">{formatTime(b.createdAt)}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+          {(writebackAudit?.recent?.length ?? 0) === 0 && (
+            <div className="text-[10px] text-stone-500 italic text-center py-2">
+              Chưa có writeback batch nào — chat với agent để kích hoạt auto-learn writeback.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ===== 1c. LAYER 9 — ADAPTATION INTELLIGENCE (Phase 2 SMOLAB Proposal 8) ===== */}
+      <div className="nc-wrap nc-emerald">
+        <div className="nc-panel nc-sm nc-border-emerald p-4">
+          {/* Header row */}
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Brain className="h-4 w-4 text-emerald-400" />
+              <span className="text-sm font-semibold text-stone-100">Layer 9 — Adaptation Intelligence</span>
+              <Badge className="text-[9px] h-4 px-1.5 bg-emerald-950/50 text-emerald-400 border-emerald-400/35">
+                {layer9Metrics?.aggregated?.totalRuns ?? 0} runs
+              </Badge>
+            </div>
+          </div>
+
+          {/* 4 stat tiles: Total Runs / Success Rate / Token Efficiency / Tokens Used */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+            <div className="p-2 bg-slate-950/50 border border-emerald-500/15 rounded-lg text-center">
+              <Activity className="h-3.5 w-3.5 mx-auto text-emerald-400 mb-0.5" />
+              <p className="text-base font-bold text-stone-100 tabular-nums">{layer9Metrics?.aggregated?.totalRuns ?? 0}</p>
+              <p className="text-[9px] text-stone-400 uppercase">Total Runs</p>
+            </div>
+            <div className="p-2 bg-slate-950/50 border border-emerald-500/15 rounded-lg text-center">
+              <CheckCircle2 className="h-3.5 w-3.5 mx-auto text-emerald-400 mb-0.5" />
+              <p className="text-base font-bold text-stone-100 tabular-nums">
+                {((layer9Metrics?.aggregated?.overallSuccessRate ?? 0) * 100).toFixed(1)}%
+              </p>
+              <p className="text-[9px] text-stone-400 uppercase">Success Rate</p>
+            </div>
+            <div className="p-2 bg-slate-950/50 border border-cyan-500/15 rounded-lg text-center">
+              <Zap className="h-3.5 w-3.5 mx-auto text-cyan-400 mb-0.5" />
+              <p className="text-base font-bold text-stone-100 tabular-nums">
+                {(layer9Metrics?.aggregated?.overallTokenEfficiency ?? 0).toFixed(2)}
+              </p>
+              <p className="text-[9px] text-stone-400 uppercase">Token Efficiency</p>
+            </div>
+            <div className="p-2 bg-slate-950/50 border border-cyan-500/15 rounded-lg text-center">
+              <Cpu className="h-3.5 w-3.5 mx-auto text-cyan-400 mb-0.5" />
+              <p className="text-base font-bold text-stone-100 tabular-nums">
+                {(layer9Metrics?.aggregated?.totalTokensUsed ?? 0).toLocaleString()}
+              </p>
+              <p className="text-[9px] text-stone-400 uppercase">Tokens Used</p>
+            </div>
+          </div>
+
+          {/* Success Rate Trend — inline SVG sparkline (no external dep) */}
+          <div className="p-2 bg-slate-950/50 border border-emerald-500/10 rounded-lg mb-3">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] text-stone-400 uppercase flex items-center gap-1">
+                <TrendingUp className="h-3 w-3 text-emerald-400" /> Success Rate Trend (last 10 runs)
+              </span>
+              <span className="text-[9px] text-emerald-400/70 font-mono">
+                {layer9Metrics?.successRateTrend?.length ?? 0}/10
+              </span>
+            </div>
+            {(layer9Metrics?.successRateTrend?.length ?? 0) >= 2 ? (
+              <svg viewBox="0 0 100 30" className="w-full h-8" preserveAspectRatio="none">
+                <polyline
+                  fill="none"
+                  stroke="rgb(52 211 153)"
+                  strokeWidth="1.5"
+                  vectorEffect="non-scaling-stroke"
+                  points={
+                    layer9Metrics!.successRateTrend
+                      .map((p, i) => {
+                        const n = layer9Metrics!.successRateTrend.length
+                        const x = n > 1 ? (i / (n - 1)) * 100 : 0
+                        const y = 30 - (p.successRate * 30)
+                        return `${x.toFixed(2)},${y.toFixed(2)}`
+                      })
+                      .join(' ')
+                  }
+                />
+              </svg>
+            ) : (
+              <div className="text-[10px] text-stone-500 italic text-center py-2">
+                Not enough data yet — needs at least 2 workflow runs.
+              </div>
+            )}
+          </div>
+
+          {/* 2-column grid: Recent Failure Patterns + Recent Adaptations */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+            {/* Recent Failure Patterns */}
+            <div className="p-2 bg-slate-950/50 border border-emerald-500/10 rounded-lg">
+              <span className="text-[10px] text-stone-400 uppercase mb-1.5 block">Recent Failure Patterns</span>
+              {(layer9Metrics?.recentPatterns?.length ?? 0) > 0 ? (
+                <div className="space-y-1 max-h-40 overflow-y-auto pr-1" style={{ scrollbarWidth: 'thin' }}>
+                  {layer9Metrics?.recentPatterns.slice(0, 5).map(p => (
+                    <div key={p.id} className="flex items-center gap-1.5 p-1.5 border rounded-md border-orange-400/25 bg-orange-950/20">
+                      <Badge className="text-[8px] h-3.5 px-1 bg-orange-950/60 text-orange-400 border-orange-400/40 truncate max-w-[80px]">
+                        {p.type}
+                      </Badge>
+                      <span className="text-[9px] text-stone-300">×{p.count}</span>
+                      <span className="text-[8px] text-cyan-400/80 truncate flex-1" title={p.nextStrategy}>
+                        → {p.nextStrategy}
+                      </span>
+                      {p.resolved && <CheckCircle2 className="h-2.5 w-2.5 text-emerald-400 flex-shrink-0" />}
+                      <span className="text-[8px] text-stone-500">
+                        {p.createdAt ? formatTime(p.createdAt) : '—'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[10px] text-stone-500 italic text-center py-2">
+                  No failure patterns detected — workflows healthy.
+                </div>
+              )}
+            </div>
+
+            {/* Recent Adaptations */}
+            <div className="p-2 bg-slate-950/50 border border-cyan-500/10 rounded-lg">
+              <span className="text-[10px] text-stone-400 uppercase mb-1.5 block">Recent Adaptations</span>
+              {(layer9Metrics?.recentAdaptations?.length ?? 0) > 0 ? (
+                <div className="space-y-1 max-h-40 overflow-y-auto pr-1" style={{ scrollbarWidth: 'thin' }}>
+                  {layer9Metrics?.recentAdaptations.slice(0, 5).map(a => (
+                    <div key={a.id} className="flex items-center gap-1.5 p-1.5 border rounded-md border-cyan-400/25 bg-cyan-950/20">
+                      <span className="text-[8px] font-mono text-stone-300 truncate max-w-[60px]" title={a.fromStrategy}>
+                        {a.fromStrategy}
+                      </span>
+                      <ArrowRight className="h-2.5 w-2.5 text-cyan-400 flex-shrink-0" />
+                      <span className="text-[8px] font-mono text-emerald-400 truncate max-w-[60px]" title={a.toStrategy}>
+                        {a.toStrategy}
+                      </span>
+                      <span className="text-[8px] text-stone-400 truncate flex-1" title={a.reason}>
+                        {a.reason}
+                      </span>
+                      <Badge className="text-[8px] h-3.5 px-1 bg-cyan-950/60 text-cyan-300 border-cyan-400/40">
+                        {(a.confidence * 100).toFixed(0)}%
+                      </Badge>
+                      <span className="text-[8px] text-stone-500">{formatTime(a.createdAt)}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[10px] text-stone-500 italic text-center py-2">
+                  No adaptations triggered.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ML Quality subpanel (Phase 4 will populate TBDs) */}
+          <div className="p-2 bg-slate-950/50 border border-emerald-500/10 rounded-lg">
+            <span className="text-[10px] text-stone-400 uppercase mb-1.5 block">ML Quality</span>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="flex items-center gap-1.5 text-[10px]">
+                <CheckCircle2 className="h-3 w-3 text-emerald-400 flex-shrink-0" />
+                <span className="text-stone-300">Pseudo-hash vectors:</span>
+                <span className="font-mono text-emerald-400 font-semibold">
+                  {layer9Metrics?.mlQuality?.pseudoHashVectorCount ?? 0}
+                </span>
+                <span className="text-emerald-400">✓</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-[10px]">
+                <Activity className="h-3 w-3 text-stone-500 flex-shrink-0" />
+                <span className="text-stone-300">Embedding cache hit:</span>
+                <span className="font-mono text-stone-400 italic">
+                  {layer9Metrics?.mlQuality?.embeddingCacheHitRate == null
+                    ? 'TBD'
+                    : `${((layer9Metrics.mlQuality.embeddingCacheHitRate as number) * 100).toFixed(0)}%`}
+                  <span className="text-stone-500 ml-1">(Phase 4)</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 text-[10px]">
+                <Activity className="h-3 w-3 text-stone-500 flex-shrink-0" />
+                <span className="text-stone-300">Auto-learn verified:</span>
+                <span className="font-mono text-stone-400 italic">
+                  {layer9Metrics?.mlQuality?.autoLearnVerificationRate == null
+                    ? 'TBD'
+                    : `${((layer9Metrics.mlQuality.autoLearnVerificationRate as number) * 100).toFixed(0)}%`}
+                  <span className="text-stone-500 ml-1">(Phase 4)</span>
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
