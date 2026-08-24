@@ -38,6 +38,8 @@ import {
   shell as executeShellFn,
   todoWrite as executeTodoWriteFn,
   todoRead as executeTodoReadFn,
+  // v2.1 Phase 2.1 — Claude Code parity file_read
+  fileRead as executeFileReadFn,
 } from './dev-tools'
 import { isFlagEnabled, flagMode } from '@/lib/feature-flags'
 
@@ -285,11 +287,29 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   },
 
   // ==================== P0: DEV TOOLS ====================
+  // Phase 2.1 — file_read: Claude Code parity tool (line numbers + offset + limit + truncation cursor)
+  file_read: {
+    type: 'function',
+    function: {
+      name: 'file_read',
+      description: 'Đọc file text với line numbers (cat -n style), offset + limit để đọc trang, và truncation cursor để tiếp tục file lớn. Auto-detect binary (NULL byte) và từ chối. ƯU TIÊN tool này cho mọi nhu cầu đọc file code/log/json.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Đường dẫn file relative từ workspace root (không absolute)' },
+          offset: { type: 'number', description: 'Line number bắt đầu đọc (1-based, default 1). Bỏ qua để đọc từ đầu.' },
+          limit: { type: 'number', description: 'Số dòng tối đa trả về (default 2000). Nếu file nhiều hơn, return nextOffset để tiếp tục.' },
+          line_numbers: { type: 'boolean', description: 'true = prefix mỗi dòng với số dòng (default true). false = chỉ content.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
   file_edit: {
     type: 'function',
     function: {
       name: 'file_edit',
-      description: 'Sửa file bằng exact string replace (an toàn hơn write). Lỗi nếu 0 match hoặc >1 match (dùng replace_all:true để thay tất cả). Có thể batch nhiều edits (atomic). ƯU TIÊN dùng tool này để sửa bug thay vì ghi đè cả file.',
+      description: 'Sửa file bằng exact string replace (an toàn hơn write). Lỗi nếu 0 match hoặc >1 match (dùng replace_all:true để thay tất cả). Hỗ trợ match_count guard (số lần match kỳ vọng) + dry_run (preview không write). Có thể batch nhiều edits (atomic).',
       parameters: {
         type: 'object',
         properties: {
@@ -297,6 +317,8 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           old_str: { type: 'string', description: 'Chuỗi cần tìm (phải match chính xác, kể cả indentation)' },
           new_str: { type: 'string', description: 'Chuỗi thay thế' },
           replace_all: { type: 'boolean', description: 'true = thay mọi occurrence; mặc định lỗi nếu >1 match' },
+          match_count: { type: 'number', description: 'Assert số lần match kỳ vọng (fail nếu khác). Giúp tránh edit sai file' },
+          dry_run: { type: 'boolean', description: 'true = chỉ trả diff preview, không write filesystem' },
           edits: {
             type: 'array',
             items: { type: 'object', properties: { old_str: { type: 'string' }, new_str: { type: 'string' } } },
@@ -304,6 +326,36 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           },
         },
         required: ['path'],
+      },
+    },
+  },
+  // Phase 2.3 — file_multi_edit: explicit batch tool (Claude Code convention)
+  // Internally routes to fileEdit({ path, edits }). Exposed as separate tool so LLM can
+  // semantically distinguish "I want one edit" vs "I want N atomic edits".
+  file_multi_edit: {
+    type: 'function',
+    function: {
+      name: 'file_multi_edit',
+      description: 'Sửa nhiều đoạn trong 1 file cùng lúc (atomic — hoặc tất cả apply hoặc không gì cả). Ưu tiên dùng tool này khi cần sửa >=2 đoạn trong cùng file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Đường dẫn file relative từ workspace root' },
+          edits: {
+            type: 'array',
+            description: 'Danh sách edits (atomic — all-or-nothing). Mỗi edit phải match chính xác 1 lần.',
+            items: {
+              type: 'object',
+              properties: {
+                old_str: { type: 'string', description: 'Chuỗi cần tìm (exact match)' },
+                new_str: { type: 'string', description: 'Chuỗi thay thế' },
+              },
+              required: ['old_str', 'new_str'],
+            },
+          },
+          dry_run: { type: 'boolean', description: 'true = preview diff không write' },
+        },
+        required: ['path', 'edits'],
       },
     },
   },
@@ -375,13 +427,15 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'git_commit',
-      description: 'Commit các file đã stage (hoặc paths cụ thể) với message. KHÔNG push. Dùng file tạm cho message để tránh shell escaping. Nếu all:true → git add -A trước.',
+      description: 'Commit các file đã stage (hoặc stage scoped paths rồi commit). KHÔNG push remote. all=true REQUIRES paths[] — KHÔNG dùng `git add -A` (spec violation). Pre-flight check `git status --porcelain` để tránh lỗi "nothing to commit". Structured receipt: {commitHash, branch, filesChanged[]}.',
       parameters: {
         type: 'object',
         properties: {
           message: { type: 'string', description: 'Commit message (bắt buộc, không rỗng)' },
-          paths: { type: 'array', items: { type: 'string' }, description: 'Paths cụ thể để commit (relative)' },
-          all: { type: 'boolean', description: 'true = stage trước rồi commit (git add -A hoặc chỉ paths)' },
+          paths: { type: 'array', items: { type: 'string' }, description: 'Paths relative cần commit. BẮT BUỘC nếu all=true.' },
+          all: { type: 'boolean', description: 'true = stage paths trước rồi commit. KHÔNG dùng `git add -A` — phải có paths.' },
+          dry_run: { type: 'boolean', description: 'true = stage paths, show diff sẽ commit, KHÔNG commit. Preview trước khi thật.' },
+          no_verify: { type: 'boolean', description: 'true = pass --no-verify (skip pre-commit hooks). Dùng ít — hooks có thể kiểm tra code quality.' },
         },
         required: ['message'],
       },
@@ -822,24 +876,98 @@ export async function executeTool(
         result = await executeJina(args)
         break
       // ===== P0: dev tools =====
-      case 'file_edit':
+      // Phase 2 — each case checks both the master ENABLE_FILE_OPS flag AND its per-tool flag.
+      // Per spec line 217: "each tool ENABLE_<TOOL> off by default, flip per acceptance test".
+      // We default to true here for backward compat — operators can flip individual tools off.
+      case 'file_read': {
+        if (!isFlagEnabled('ENABLE_FILE_OPS') || !isFlagEnabled('ENABLE_FILE_READ')) {
+          return {
+            success: false,
+            result: 'file_read tool is disabled (set ENABLE_FILE_OPS=true + ENABLE_FILE_READ=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeFileReadFn(args as any)
+        break
+      }
+      case 'file_edit': {
+        if (!isFlagEnabled('ENABLE_FILE_OPS') || !isFlagEnabled('ENABLE_FILE_EDIT')) {
+          return {
+            success: false,
+            result: 'file_edit tool is disabled (set ENABLE_FILE_OPS=true + ENABLE_FILE_EDIT=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
         result = await fileEdit(args as any)
         break
-      case 'file_delete':
+      }
+      case 'file_multi_edit': {
+        if (!isFlagEnabled('ENABLE_FILE_OPS') || !isFlagEnabled('ENABLE_FILE_MULTI_EDIT')) {
+          return {
+            success: false,
+            result: 'file_multi_edit tool is disabled (set ENABLE_FILE_OPS=true + ENABLE_FILE_MULTI_EDIT=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
+        // Routes to fileEdit with edits[] (atomic batch — all-or-nothing)
+        result = await fileEdit(args as any)
+        break
+      }
+      case 'file_delete': {
+        if (!isFlagEnabled('ENABLE_FILE_OPS') || !isFlagEnabled('ENABLE_FILE_DELETE')) {
+          return {
+            success: false,
+            result: 'file_delete tool is disabled (set ENABLE_FILE_OPS=true + ENABLE_FILE_DELETE=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
         result = await fileDelete(args as any)
         break
-      case 'file_list':
+      }
+      case 'file_list': {
+        if (!isFlagEnabled('ENABLE_FILE_OPS') || !isFlagEnabled('ENABLE_FILE_LIST')) {
+          return {
+            success: false,
+            result: 'file_list tool is disabled (set ENABLE_FILE_OPS=true + ENABLE_FILE_LIST=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
         result = await fileList(args as any)
         break
-      case 'grep':
+      }
+      case 'grep': {
+        if (!isFlagEnabled('ENABLE_FILE_OPS') || !isFlagEnabled('ENABLE_FILE_GREP')) {
+          return {
+            success: false,
+            result: 'grep tool is disabled (set ENABLE_FILE_OPS=true + ENABLE_FILE_GREP=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
         result = await grep(args as any)
         break
-      case 'run_tests':
+      }
+      case 'run_tests': {
+        if (!isFlagEnabled('ENABLE_RUN_TESTS')) {
+          return {
+            success: false,
+            result: 'run_tests tool is disabled (set ENABLE_RUN_TESTS=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
         result = await runTests(args as any)
         break
-      case 'git_commit':
+      }
+      case 'git_commit': {
+        if (!isFlagEnabled('ENABLE_GIT_COMMIT')) {
+          return {
+            success: false,
+            result: 'git_commit tool is disabled (set ENABLE_GIT_COMMIT=true in .env to enable). Standing rule: KHÔNG push remote.',
+            duration: Date.now() - startTime,
+          }
+        }
         result = await gitCommit(args as any)
         break
+      }
       // ===== P1: diagnostics + planning + synthesis + processes + packages =====
       case 'get_diagnostics':
         result = await getDiagnostics(args as any)

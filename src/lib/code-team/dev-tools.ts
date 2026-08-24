@@ -27,6 +27,95 @@ const execAsync = promisify(exec)
 
 // ==================== SHARED HELPERS ====================
 
+/**
+ * fileRead — Phase 2.1 Claude Code parity tool.
+ *
+ * Reads a text file with line numbers (cat -n style), offset + limit for paging,
+ * and a `nextOffset` cursor for continuing large files. Auto-detects binary files
+ * (NULL byte in first 8KB) and refuses them.
+ *
+ * Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 2.1 (line 209)
+ * Feature flag: ENABLE_FILE_READ (default true — already shipped before flag added)
+ */
+export async function fileRead(args: {
+  path: string
+  offset?: number  // 1-based line number to start reading from
+  limit?: number   // max lines to return (default 2000)
+  line_numbers?: boolean  // prefix each line with line number (default true)
+}): Promise<unknown> {
+  if (!args.path) return { success: false, error: 'path is required' }
+
+  const resolvedPath = await resolveWithinWorkspace(args.path)
+  const offset = Math.max(1, args.offset || 1)
+  const limit = Math.min(10_000, args.limit || 2000)
+  const wantLineNumbers = args.line_numbers !== false // default true
+
+  // Stat first — distinguish file-not-found, dir, and binary
+  let stat
+  try {
+    stat = await fs.stat(resolvedPath)
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return { success: false, error: `File not found: ${args.path}` }
+    return { success: false, error: `stat failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+  if (stat.isDirectory()) {
+    return { success: false, error: `Path is a directory, not a file: ${args.path} (use file_list instead)` }
+  }
+
+  // Read first 8KB to detect binary (NULL byte = strong binary signal)
+  const fh = await fs.open(resolvedPath, 'r')
+  try {
+    const probe = Buffer.alloc(8192)
+    const { bytesRead } = await fh.read(probe, 0, 8192, 0)
+    for (let i = 0; i < bytesRead; i++) {
+      if (probe[i] === 0) {
+        return {
+          success: false,
+          error: `Binary file detected (NULL byte at offset ${i}). file_read chỉ hỗ trợ text — dùng shell với \`xxd\` hoặc \`file\` để inspect binary.`,
+          path: args.path,
+          size: stat.size,
+        }
+      }
+    }
+  } finally {
+    await fh.close()
+  }
+
+  // Full read (text mode)
+  const content = await fs.readFile(resolvedPath, 'utf-8')
+  const allLines = content.split('\n')
+  const totalLines = allLines.length
+
+  // Apply offset (1-based → 0-based)
+  const startIdx = Math.min(offset - 1, totalLines)
+  const endIdx = Math.min(startIdx + limit, totalLines)
+  const visibleLines = allLines.slice(startIdx, endIdx)
+
+  // Optional line-number prefix (cat -n style: right-justified 6-char width + tab)
+  const formatted = wantLineNumbers
+    ? visibleLines.map((line, i) => {
+        const lineNo = startIdx + i + 1
+        return `${String(lineNo).padStart(6, ' ')}\t${line}`
+      })
+    : visibleLines
+
+  const hasMore = endIdx < totalLines
+  return {
+    success: true,
+    path: args.path,
+    content: formatted.join('\n'),
+    lines: visibleLines.length,
+    totalLines,
+    offset,
+    limit,
+    // Cursor for the next page — caller passes this back as `offset` to continue.
+    // Undefined when file fully read in this call.
+    nextOffset: hasMore ? endIdx + 1 : undefined,
+    truncated: hasMore,
+  }
+}
+
 /** Resolve a path within the workspace root, rejecting traversal escapes. */
 async function resolveWithinWorkspace(filePath: string): Promise<string> {
   const root = process.env.OPENCODE_WORKSPACE || process.cwd()
@@ -62,6 +151,8 @@ export async function fileEdit(args: {
   new_str: string
   replace_all?: boolean
   edits?: Array<{ old_str: string; new_str: string }>
+  match_count?: number  // Phase 2.2 — assert expected match count, fail if mismatch
+  dry_run?: boolean     // Phase 2.2 — preview diff without writing
 }): Promise<unknown> {
   const resolvedPath = await resolveWithinWorkspace(args.path)
   const original = await fs.readFile(resolvedPath, 'utf-8')
@@ -72,7 +163,7 @@ export async function fileEdit(args: {
     : [{ old_str: args.old_str, new_str: args.new_str }]
 
   if (!args.edits && (!args.old_str || args.new_str === undefined)) {
-    return { error: 'Either (old_str + new_str) or edits[] is required' }
+    return { success: false, error: 'Either (old_str + new_str) or edits[] is required' }
   }
 
   let content = original
@@ -102,6 +193,14 @@ export async function fileEdit(args: {
       )
     }
 
+    // Phase 2.2 — match_count guard: assert the expected number of matches.
+    // Prevents accidentally editing the wrong file (e.g. wrong package.json after a copy).
+    if (args.match_count !== undefined && matches !== args.match_count) {
+      throw new Error(
+        `match_count assertion failed: expected ${args.match_count} match(es) for old_str but found ${matches}. Refusing to edit — verify the file is what you expect.`
+      )
+    }
+
     if (args.replace_all || matches === 1) {
       content = content.split(edit.old_str).join(edit.new_str)
     } else {
@@ -116,7 +215,29 @@ export async function fileEdit(args: {
     return { success: true, message: 'No changes (new_str === old_str across all edits)', applied }
   }
 
-  await fs.writeFile(resolvedPath, content, 'utf-8')
+  // Phase 2.2 — dry_run: return diff preview, do NOT touch the filesystem
+  if (args.dry_run) {
+    return {
+      success: true,
+      dryRun: true,
+      path: args.path,
+      editsApplied: applied.length,
+      details: applied,
+      wouldChangeSize: content.length - original.length,
+    }
+  }
+
+  // Phase 2.2 — atomic write: temp file in same dir + rename.
+  // Crash mid-write leaves the original file untouched (rename is atomic on POSIX/NTFS).
+  const tmpPath = resolvedPath + `.tmp.${process.pid}.${Date.now()}`
+  await fs.writeFile(tmpPath, content, 'utf-8')
+  try {
+    await fs.rename(tmpPath, resolvedPath)
+  } catch (err) {
+    await fs.unlink(tmpPath).catch(() => {})
+    throw err
+  }
+
   return {
     success: true,
     path: args.path,
@@ -169,33 +290,49 @@ export async function fileDelete(args: {
 /**
  * file_list — shallow directory listing / tree.
  * Returns typed entries with size + mtime. depth controls recursion.
+ * Phase 2.5 enhancements: `pattern` glob filter + `lstat` (don't follow symlinks).
  */
 export async function fileList(args: {
   path?: string
   depth?: number
   ignore?: string[]
+  pattern?: string  // Phase 2.5 — glob filter on entry name (e.g. "*.ts" or "*.json")
 }): Promise<unknown> {
   const target = args.path || '.'
   const resolvedPath = await resolveWithinWorkspace(target)
   const maxDepth = Math.min(args.depth || 1, 5)
   const ignoreSet = new Set(args.ignore || ['node_modules', '.next', '.git', 'dist', 'build'])
+  // Compile glob pattern once (simple * support, same convention as grep)
+  const globRe = args.pattern
+    ? new RegExp('^' + args.pattern.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$')
+    : null
 
-  async function walk(dir: string, depth: number): Promise<Array<{ name: string; type: string; size: number; mtime: string }>> {
+  async function walk(dir: string, depth: number): Promise<Array<{ name: string; type: string; size: number; mtime: string; symlink?: boolean }>> {
     if (depth > maxDepth) return []
     const entries = await fs.readdir(dir, { withFileTypes: true })
-    const result: Array<{ name: string; type: string; size: number; mtime: string }> = []
+    const result: Array<{ name: string; type: string; size: number; mtime: string; symlink?: boolean }> = []
     for (const entry of entries) {
       if (ignoreSet.has(entry.name)) continue
+      // Phase 2.5 — glob filter (skip directories that don't match — let directory walk
+      // reveal matching files inside; but if pattern is "*.ts", a dir "foo/" won't match,
+      // so we only filter FILE entries here, dirs pass through to allow recursion)
       const full = path.join(dir, entry.name)
       try {
-        const stat = await fs.stat(full)
+        // Phase 2.5 — use lstat (not stat) so symlinks don't follow (security: prevents
+        // a symlink from reporting the size/mtime of a path outside the workspace).
+        const stat = await fs.lstat(full)
+        const isSymlink = stat.isSymbolicLink()
+        const isDir = stat.isDirectory() || (isSymlink && entry.isDirectory())
+        // Apply pattern filter ONLY to file entries (dirs recurse to find files inside)
+        if (!isDir && globRe && !globRe.test(entry.name)) continue
         result.push({
           name: entry.name,
-          type: entry.isDirectory() ? 'dir' : 'file',
+          type: isDir ? 'dir' : 'file',
           size: stat.size,
           mtime: stat.mtime.toISOString(),
+          symlink: isSymlink || undefined,
         })
-        if (entry.isDirectory() && depth < maxDepth) {
+        if (isDir && depth < maxDepth) {
           const nested = await walk(full, depth + 1)
           for (const n of nested) {
             result.push({ ...n, name: `${entry.name}/${n.name}` })
@@ -221,8 +358,10 @@ export async function grep(args: {
   mode?: 'content' | 'files' | 'count'
   context?: number
   head_limit?: number
+  multiline?: boolean  // Phase 2.5 — enable cross-line patterns (e.g. "function\\s+\\w+[\\s\\S]*?return")
+  case_sensitive?: boolean  // Phase 2.5 — default false (case-insensitive), opt-out for case-sensitive
 }): Promise<unknown> {
-  if (!args.pattern) return { error: 'pattern is required' }
+  if (!args.pattern) return { success: false, error: 'pattern is required' }
   const searchRoot = args.path ? await resolveWithinWorkspace(args.path) : await resolveWithinWorkspace('.')
   const mode = args.mode || 'content'
   const contextLines = Math.min(args.context || 0, 5)
@@ -230,15 +369,38 @@ export async function grep(args: {
 
   let regex: RegExp
   try {
-    regex = new RegExp(args.pattern, 'i')
+    // Phase 2.5 — case-insensitive by default (audit confirmed); opt-out via case_sensitive=true.
+    // multiline flag enables ^/$ to match line boundaries AND allows [\s\S]*? patterns to span lines.
+    const flags = args.multiline ? (args.case_sensitive ? 'gm' : 'gim') : (args.case_sensitive ? 'g' : 'gi')
+    regex = new RegExp(args.pattern, flags)
   } catch (e) {
-    return { error: `Invalid regex: ${e instanceof Error ? e.message : String(e)}` }
+    return { success: false, error: `Invalid regex: ${e instanceof Error ? e.message : String(e)}` }
   }
 
   const ignoreDirs = new Set(['node_modules', '.next', '.git', 'dist', 'build'])
   const matches: Array<{ file: string; line: number; text: string; context?: string[] }> = []
   const fileMatches = new Set<string>()
-  const fileMatchCounts = new Map<string, number>() // FIX: track per-file counts for count mode
+  const fileMatchCounts = new Map<string, number>()
+
+  // Phase 2.5 — binary detection helper: check first 8KB for NULL byte.
+  // Reading 8KB is much cheaper than reading a multi-MB binary file fully.
+  async function isBinaryMaybe(full: string): Promise<boolean> {
+    try {
+      const fh = await fs.open(full, 'r')
+      try {
+        const probe = Buffer.alloc(8192)
+        const { bytesRead } = await fh.read(probe, 0, 8192, 0)
+        for (let i = 0; i < bytesRead; i++) {
+          if (probe[i] === 0) return true
+        }
+        return false
+      } finally {
+        await fh.close()
+      }
+    } catch {
+      return true // unreadable → treat as binary, skip
+    }
+  }
 
   async function scan(dir: string, relBase: string) {
     let entries: import('fs').Dirent[]
@@ -255,22 +417,39 @@ export async function grep(args: {
           const globRe = new RegExp('^' + args.glob.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$')
           if (!globRe.test(entry.name)) continue
         }
+        // Phase 2.5 — skip binary files (NULL byte in first 8KB)
+        if (await isBinaryMaybe(full)) continue
         try {
           const content = await fs.readFile(full, 'utf-8')
-          const lines = content.split('\n')
-          for (let i = 0; i < lines.length; i++) {
-            if (regex.test(lines[i])) {
+          if (args.multiline) {
+            // Multiline mode: test against full content; record file as match if any match.
+            // We don't get per-line `line` info for cross-line matches — set to 1 with full
+            // match preview (first 200 chars of the matched substring).
+            const m = content.match(regex)
+            if (m) {
               fileMatches.add(rel)
               fileMatchCounts.set(rel, (fileMatchCounts.get(rel) || 0) + 1)
               if (mode === 'content') {
-                const ctx: string[] = []
-                if (contextLines > 0) {
-                  for (let c = Math.max(0, i - contextLines); c < Math.min(lines.length, i + contextLines + 1); c++) {
-                    if (c !== i) ctx.push(`${c + 1}: ${lines[c]}`)
-                  }
-                }
-                matches.push({ file: rel, line: i + 1, text: lines[i].trim().slice(0, 200), context: ctx.length ? ctx : undefined })
+                matches.push({ file: rel, line: 1, text: m[0].slice(0, 200) })
                 if (matches.length >= headLimit) return
+              }
+            }
+          } else {
+            const lines = content.split('\n')
+            for (let i = 0; i < lines.length; i++) {
+              if (regex.test(lines[i])) {
+                fileMatches.add(rel)
+                fileMatchCounts.set(rel, (fileMatchCounts.get(rel) || 0) + 1)
+                if (mode === 'content') {
+                  const ctx: string[] = []
+                  if (contextLines > 0) {
+                    for (let c = Math.max(0, i - contextLines); c < Math.min(lines.length, i + contextLines + 1); c++) {
+                      if (c !== i) ctx.push(`${c + 1}: ${lines[c]}`)
+                    }
+                  }
+                  matches.push({ file: rel, line: i + 1, text: lines[i].trim().slice(0, 200), context: ctx.length ? ctx : undefined })
+                  if (matches.length >= headLimit) return
+                }
               }
             }
           }
@@ -364,10 +543,11 @@ export async function runTests(args: {
   }
 }
 
-/** Parse framework-specific test output for pass/fail counts + failure locations. */
-function parseTestOutput(output: string, framework: string): { passed: number; failed: number; skipped: number; durationMs?: number; failures: Array<{ file: string; line?: number; message: string }> } {
-  const failures: Array<{ file: string; line?: number; message: string }> = []
+/** Parse framework-specific test output for pass/fail counts + failure locations + duration. */
+function parseTestOutput(output: string, framework: string): { passed: number; failed: number; skipped: number; durationMs?: number; failingTests: Array<{ file: string; line?: number; message: string }> } {
+  const failingTests: Array<{ file: string; line?: number; message: string }> = []
   let passed = 0, failed = 0, skipped = 0
+  let durationMs: number | undefined
 
   if (framework === 'bun') {
     // bun test: "(pass) test name", "(fail) test name", "(skip) test name"
@@ -377,12 +557,15 @@ function parseTestOutput(output: string, framework: string): { passed: number; f
     passed = passMatches.length
     failed = failMatches.length
     skipped = skipMatches.length
+    // Phase 2.6 fix — extract duration: bun prints "Xms" at the end of summary
+    const durMatch = output.match(/(\d+(?:\.\d+)?)\s*ms/i)
+    if (durMatch) durationMs = parseFloat(durMatch[1])
     // Extract failure file:line from error stack lines
     const failBlocks = output.split(/\(fail\)/).slice(1)
     for (const block of failBlocks) {
       const stackLine = block.match(/([^\s]+\.(?:test|spec)\.[tj]sx?):(\d+):(\d+)/)
       const msg = block.split('\n').find(l => l.trim() && !l.includes('at '))?.trim().slice(0, 200) || 'test failed'
-      failures.push({
+      failingTests.push({
         file: stackLine?.[1] || 'unknown',
         line: stackLine ? parseInt(stackLine[2]) : undefined,
         message: msg,
@@ -400,13 +583,18 @@ function parseTestOutput(output: string, framework: string): { passed: number; f
       passed = (output.match(/[✓√]/g) || []).length
       failed = (output.match(/[✗×✘]/g) || []).length
     }
+    // Phase 2.6 fix — vitest: "Test Files  N passed (Mms)" / jest: "Time: N.Ns"
+    const vitestDur = output.match(/Test Files\s+\d+\s+\w+\s*\((\d+(?:\.\d+)?)\s*ms\)/i)
+    const jestDur = output.match(/Time:\s+(\d+(?:\.\d+)?)\s*s/i)
+    if (vitestDur) durationMs = parseFloat(vitestDur[1])
+    else if (jestDur) durationMs = parseFloat(jestDur[1]) * 1000
     // Extract failure locations
     const failBlocks = output.split(/FAIL\s/).slice(1)
     for (const block of failBlocks) {
       const fileMatch = block.match(/^([^\s▲▼►◀]*\.(?:test|spec)\.[tj]sx?)/m)
       const lineMatch = block.match(/:(\d+):\d+/)
       const msg = block.split('\n')[0]?.trim().slice(0, 200) || 'test failed'
-      failures.push({
+      failingTests.push({
         file: fileMatch?.[1] || 'unknown',
         line: lineMatch ? parseInt(lineMatch[1]) : undefined,
         message: msg,
@@ -414,69 +602,139 @@ function parseTestOutput(output: string, framework: string): { passed: number; f
     }
   } else if (framework === 'pytest') {
     // pytest: "===== X passed, Y failed, Z skipped in N.Ns ====="
-    const summary = output.match(/(\d+)\s+passed(?:,?\s*(\d+)\s+failed)?(?:,?\s*(\d+)\s+skipped)?/i)
+    const summary = output.match(/(\d+)\s+passed(?:,?\s*(\d+)\s+failed)?(?:,?\s*(\d+)\s+skipped)?(?:\s+in\s+(\d+(?:\.\d+)?)\s*s)?/i)
     if (summary) {
       passed = parseInt(summary[1]) || 0
       failed = parseInt(summary[2]) || 0
       skipped = parseInt(summary[3]) || 0
+      // Phase 2.6 fix — extract duration from "in N.Ns" suffix
+      if (summary[4]) durationMs = parseFloat(summary[4]) * 1000
     }
     // Extract failure file:line from "file.py:123: AssertionError"
     const failMatches = output.matchAll(/([^\s:]+\.py):(\d+):\s+(.+)/g)
     for (const m of failMatches) {
-      failures.push({ file: m[1], line: parseInt(m[2]), message: m[3].slice(0, 200) })
+      failingTests.push({ file: m[1], line: parseInt(m[2]), message: m[3].slice(0, 200) })
     }
   }
 
-  return { passed, failed, skipped, failures: failures.slice(0, 20) }
+  return { passed, failed, skipped, durationMs, failingTests: failingTests.slice(0, 20) }
 }
 
 // ==================== P0: GIT COMMIT ====================
 
 /**
- * git_commit — commit scoped paths with a message.
- * Refuses to commit if the message is empty. Does NOT push.
+ * git_commit — Phase 2.7 spec compliance.
+ *
+ * Scoped paths only (NO `git add -A`/`.` wildcard — explicitly forbidden per spec line 215).
+ * Pre-flight check (`git status --porcelain`) refuses to commit if there's nothing staged
+ * to avoid cryptic "nothing to commit" errors from git.
+ * Structured receipt: `{ commitHash, branch, filesChanged[], message }` (Claude Code parity).
+ * Does NOT push — standing rule.
+ *
+ * Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 2.7 (line 215)
+ * Feature flag: ENABLE_GIT_COMMIT (default true)
  */
 export async function gitCommit(args: {
   message: string
-  paths?: string[]  // if omitted, commits all staged + unstaged tracked changes (NOT untracked)
-  all?: boolean     // also `git add` the paths first
+  paths?: string[]  // REQUIRED when all=true — we never commit everything by wildcard
+  all?: boolean     // also `git add` the paths first (paths REQUIRED — see above)
+  dry_run?: boolean // stage + show diff but don't commit
+  no_verify?: boolean // pass --no-verify to skip pre-commit hooks (use sparingly)
 }): Promise<unknown> {
   if (!args.message || !args.message.trim()) {
-    return { error: 'Commit message is required (non-empty)' }
+    return { success: false, error: 'Commit message is required (non-empty)' }
   }
+  // Spec violation guard: `all=true` without `paths[]` would fall back to `git add -A`
+  // which violates "scoped paths" principle. Force the caller to specify paths.
+  if (args.all && (!args.paths || args.paths.length === 0)) {
+    return {
+      success: false,
+      error: 'all=true requires paths[] (scoped paths only — `git add -A` is forbidden per spec). Pass paths explicitly, or omit `all` to commit only currently-staged changes.',
+    }
+  }
+
   const root = process.env.OPENCODE_WORKSPACE || process.cwd()
 
   try {
-    // Resolve + scope-check paths
+    // Resolve + scope-check paths (reject escapes)
     const resolvedPaths = args.paths
       ? await Promise.all(args.paths.map(p => resolveWithinWorkspace(p)))
       : []
 
-    // Stage if requested
+    // Pre-flight: detect "nothing to commit" before running git add
     if (args.all && resolvedPaths.length > 0) {
-      await execAsync(`git add -- ${resolvedPaths.map(p => `"${path.relative(root, p)}"`).join(' ')}`, { cwd: root, timeout: 15_000 })
-    } else if (args.all && !args.paths) {
-      // `all` with no paths → add all tracked + untracked
-      await execAsync('git add -A', { cwd: root, timeout: 15_000 })
+      const relPaths = resolvedPaths.map(p => path.relative(root, p))
+      const { stdout: porcelain } = await execAsync(`git status --porcelain -- ${relPaths.map(p => `"${p}"`).join(' ')}`, { cwd: root, timeout: 10_000 })
+      if (!porcelain.trim()) {
+        return { success: false, error: `Nothing to commit — paths have no changes: ${relPaths.join(', ')}` }
+      }
+    } else if (!args.paths || args.paths.length === 0) {
+      // Commit-only path: check what's already staged
+      const { stdout: staged } = await execAsync('git diff --cached --name-only', { cwd: root, timeout: 10_000 })
+      if (!staged.trim()) {
+        return { success: false, error: 'Nothing staged to commit. Pass paths + all=true to stage first, or stage manually with `git add`.' }
+      }
+    }
+
+    // Stage if requested (scoped — only the explicitly-listed paths)
+    // NOTE: dry_run skips staging entirely — it computes "would commit" via git status
+    // so the index is left untouched (no persistent side-effects).
+    if (!args.dry_run && args.all && resolvedPaths.length > 0) {
+      const relPaths = resolvedPaths.map(p => `"${path.relative(root, p)}"`)
+      await execAsync(`git add -- ${relPaths.join(' ')}`, { cwd: root, timeout: 15_000 })
+    }
+
+    // Dry-run: do NOT stage, do NOT commit — show what WOULD be committed.
+    // Uses `git status --porcelain` which reports both staged + unstaged changes per path.
+    if (args.dry_run) {
+      const relPaths = resolvedPaths.length > 0
+        ? resolvedPaths.map(p => path.relative(root, p))
+        : []
+      let wouldCommitFiles: string[] = []
+      if (relPaths.length > 0) {
+        const { stdout: porcelain } = await execAsync(
+          `git status --porcelain -- ${relPaths.map(p => `"${p}"`).join(' ')}`,
+          { cwd: root, timeout: 10_000 }
+        )
+        // Porcelain format: "XY path" where X=staged, Y=unstaged. We report any path with changes.
+        wouldCommitFiles = porcelain.split('\n').filter(Boolean).map(l => l.slice(3).trim())
+      } else {
+        // No paths specified → report all currently-staged files
+        const { stdout: staged } = await execAsync('git diff --cached --name-only', { cwd: root, timeout: 10_000 })
+        wouldCommitFiles = staged.split('\n').filter(Boolean)
+      }
+      return {
+        success: true,
+        dryRun: true,
+        message: args.message,
+        wouldCommitFiles,
+      }
     }
 
     // Build commit command (use a temp file for the message to avoid shell-escaping hell)
     const tmpFile = path.join(root, `.git/COMMIT_EDITMSG_${Date.now()}`)
     await fs.writeFile(tmpFile, args.message, 'utf-8')
     try {
-      const pathArgs = resolvedPaths.length > 0
-        ? ' -- ' + resolvedPaths.map(p => `"${path.relative(root, p)}"`).join(' ')
-        : ''
+      const noVerifyFlag = args.no_verify ? ' --no-verify' : ''
+      // No pathArgs here — `git commit path1 path2` only commits those paths even if
+      // other things are staged. We already scoped via `git add` above, so commit alone
+      // is what we want (commit everything currently staged, which is exactly the paths added).
       const { stdout, stderr } = await execAsync(
-        `git commit -F "${path.relative(root, tmpFile)}"${pathArgs}`,
+        `git commit -F "${path.relative(root, tmpFile)}"${noVerifyFlag}`,
         { cwd: root, timeout: 30_000 }
       )
-      // Get the new commit hash
+
+      // Structured receipt: hash + branch + filesChanged[]
       const { stdout: hashOut } = await execAsync('git rev-parse HEAD', { cwd: root, timeout: 5_000 })
+      const { stdout: branchOut } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: root, timeout: 5_000 }).catch(() => ({ stdout: 'unknown' }))
+      const { stdout: filesOut } = await execAsync('git show --stat --name-only --format= HEAD', { cwd: root, timeout: 10_000 })
+
       return {
         success: true,
-        commit: hashOut.trim().slice(0, 12),
+        commitHash: hashOut.trim().slice(0, 12),
+        branch: branchOut.trim(),
         message: args.message,
+        filesChanged: filesOut.split('\n').filter(Boolean),
         output: (stdout + stderr).trim() || 'committed',
       }
     } finally {

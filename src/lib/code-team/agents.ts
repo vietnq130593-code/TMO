@@ -49,7 +49,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'TL',
     avatar: '👑',
-    tools: ['opencode', 'knowledge_search', 'tavily', 'serper', 'jina', 'file_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch'],
+    tools: ['opencode', 'knowledge_search', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch'],
   },
   {
     name: 'CORTEX',
@@ -64,7 +64,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'G1',
     avatar: '🧠',
-    tools: ['knowledge_search', 'knowledge_graph', 'tavily', 'serper', 'jina', 'file_list', 'grep', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch'],
+    tools: ['knowledge_search', 'knowledge_graph', 'tavily', 'serper', 'jina', 'file_read', 'file_list', 'grep', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch'],
   },
   {
     name: 'BOLT',
@@ -79,7 +79,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'G2-A',
     avatar: '⚡',
-    tools: ['opencode', 'knowledge_search', 'file_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'get_diagnostics', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch'],
+    tools: ['opencode', 'knowledge_search', 'file_read', 'file_edit', 'file_multi_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'get_diagnostics', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch'],
   },
   {
     name: 'SENTINEL',
@@ -94,7 +94,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'G2-B',
     avatar: '🛡️',
-    tools: ['opencode', 'knowledge_search', 'file_edit', 'file_list', 'grep', 'get_diagnostics', 'run_tests', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_edit'],
+    tools: ['opencode', 'knowledge_search', 'file_read', 'file_edit', 'file_list', 'grep', 'get_diagnostics', 'run_tests', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_edit'],
   },
   {
     name: 'CATALYST',
@@ -109,7 +109,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'G3',
     avatar: '🔧',
-    tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'file_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch'],
+    tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'file_read', 'file_edit', 'file_multi_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch'],
   },
 ]
 

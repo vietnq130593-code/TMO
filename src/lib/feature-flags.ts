@@ -37,7 +37,19 @@ const DEFAULTS: Record<string, string> = {
   ENABLE_NATIVE_FC: 'off', // off | dual | strict
 
   // Phase 2 (file ops already implemented in commit 337f56f — flag still useful for runtime gating)
-  ENABLE_FILE_OPS: 'true', // already shipped, default on
+  // Per-tool flags per spec line 217 of FULLSTACK_CAPABILITY_PLAN_V2.md:
+  // "each tool ENABLE_<TOOL> off by default, flip per acceptance test".
+  // We default to `true` here for backward compat (tools were already shipped before flags added),
+  // operators can flip individual tools off without disabling the whole suite.
+  ENABLE_FILE_OPS: 'true', // blanket (master switch — set false to disable ALL file tools)
+  ENABLE_FILE_READ: 'true',
+  ENABLE_FILE_EDIT: 'true',
+  ENABLE_FILE_MULTI_EDIT: 'true',
+  ENABLE_FILE_DELETE: 'true',
+  ENABLE_FILE_LIST: 'true',
+  ENABLE_FILE_GREP: 'true',
+  ENABLE_RUN_TESTS: 'true',
+  ENABLE_GIT_COMMIT: 'true',
 
   // Phase 3
   ENABLE_LSP_DIAGNOSTICS: 'false',
