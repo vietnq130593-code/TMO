@@ -13,8 +13,66 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getAllCustomTools } from '@/lib/custom-tool-registry'
-import { GATEWAY_TOOL_REGISTRY, SESSION_CONTEXT_TOOLS, HTTP_ACCESSIBLE_TOOLS } from '@/lib/openclaw'
 import { tavilyKeyPool, jinaKeyPool, serperKeyPool } from '@/lib/service-key-pool'
+
+// FIX (P2 broken import): the route previously imported GATEWAY_TOOL_REGISTRY,
+// SESSION_CONTEXT_TOOLS, HTTP_ACCESSIBLE_TOOLS from '@/lib/openclaw' — but those
+// exports NEVER existed in openclaw.ts (verified across all git history). The
+// route failed at runtime with a module-resolution error. Defined inline below
+// from the 36-tool catalog in mini-services/gateway-bridge/index.ts.
+
+const SESSION_CONTEXT_TOOLS = new Set([
+  'x_search', 'exec', 'read', 'write', 'edit', 'apply_patch', 'code_execution',
+  'process', 'sessions_spawn', 'sessions_send', 'cron', 'heartbeat_respond',
+  'gateway', 'nodes', 'update_plan', 'image', 'image_generate', 'music_generate', 'video_generate',
+])
+
+const HTTP_ACCESSIBLE_TOOLS = new Set([
+  'web_search', 'web_fetch', 'memory_search', 'memory_get', 'browser', 'canvas',
+  'sessions_list', 'sessions_history', 'session_status', 'sessions_yield',
+  'agents_list', 'message', 'tts', 'skill_workshop', 'create_goal', 'get_goal', 'update_goal',
+])
+
+const GATEWAY_TOOL_REGISTRY = [
+  // HTTP-accessible tools
+  { name: 'web_search', category: 'Web', description: 'AI-optimized web search' },
+  { name: 'web_fetch', category: 'Web', description: 'Fetch + extract content from a URL' },
+  { name: 'memory_search', category: 'Memory', description: 'Search agent memories' },
+  { name: 'memory_get', category: 'Memory', description: 'Get a specific memory by ID' },
+  { name: 'browser', category: 'Web', description: 'Headless browser automation' },
+  { name: 'canvas', category: 'UI', description: 'Render canvas/image' },
+  { name: 'sessions_list', category: 'Session', description: 'List gateway sessions' },
+  { name: 'sessions_history', category: 'Session', description: 'Get session history' },
+  { name: 'session_status', category: 'Session', description: 'Get session status' },
+  { name: 'sessions_yield', category: 'Session', description: 'Yield session control' },
+  { name: 'agents_list', category: 'Agent', description: 'List available agents' },
+  { name: 'message', category: 'Agent', description: 'Send a message to an agent/session' },
+  { name: 'tts', category: 'AI', description: 'Text-to-speech synthesis' },
+  { name: 'skill_workshop', category: 'Skill', description: 'Skill marketplace workshop' },
+  { name: 'create_goal', category: 'Planning', description: 'Create a new goal/task' },
+  { name: 'get_goal', category: 'Planning', description: 'Get a goal/task by ID' },
+  { name: 'update_goal', category: 'Planning', description: 'Update goal/task status' },
+  // Session-context / bridge-only tools
+  { name: 'x_search', category: 'Web', description: 'Search X (Twitter)' },
+  { name: 'exec', category: 'Code', description: 'Execute shell command (session context)' },
+  { name: 'read', category: 'File', description: 'Read file (session context)' },
+  { name: 'write', category: 'File', description: 'Write file (session context)' },
+  { name: 'edit', category: 'File', description: 'Edit file (session context)' },
+  { name: 'apply_patch', category: 'File', description: 'Apply unified diff patch (session context)' },
+  { name: 'code_execution', category: 'Code', description: 'Execute code in sandbox (session context)' },
+  { name: 'process', category: 'Code', description: 'Manage processes (session context)' },
+  { name: 'sessions_spawn', category: 'Session', description: 'Spawn a new session (session context)' },
+  { name: 'sessions_send', category: 'Session', description: 'Send message to a session (session context)' },
+  { name: 'cron', category: 'Automation', description: 'Manage cron jobs (session context)' },
+  { name: 'heartbeat_respond', category: 'Automation', description: 'Respond to heartbeat (session context)' },
+  { name: 'gateway', category: 'Gateway', description: 'Gateway introspection (session context)' },
+  { name: 'nodes', category: 'Gateway', description: 'List gateway nodes (session context)' },
+  { name: 'update_plan', category: 'Planning', description: 'Update execution plan (session context)' },
+  { name: 'image', category: 'AI', description: 'Process image (session context)' },
+  { name: 'image_generate', category: 'AI', description: 'Generate image (session context)' },
+  { name: 'music_generate', category: 'AI', description: 'Generate music (session context)' },
+  { name: 'video_generate', category: 'AI', description: 'Generate video (session context)' },
+]
 
 export const dynamic = 'force-dynamic'
 
@@ -92,6 +150,27 @@ const LOCAL_TOOLS = [
     apiKeyEnv: 'JINA_API_KEY_1..2',
     hasApiKey: jinaKeyPool.hasKeys(),
   },
+  // ===== P0: dev tools (file ops + tests + git) =====
+  { name: 'file_edit', category: 'File', description: 'Sửa file bằng exact string replace (atomic, error trên 0/>1 match). Ưu tiên dùng thay vì ghi đè cả file.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'file_delete', category: 'File', description: 'Xóa file/thư mục (có dry_run + guard chống xóa root).', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'file_list', category: 'File', description: 'List thư mục (tree depth 1-5, tự bỏ node_modules/.next/.git).', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'grep', category: 'Search', description: 'Tìm nội dung file bằng regex (content/files/count modes).', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'run_tests', category: 'Test', description: 'Chạy test suite (autodetect bun/vitest/jest/pytest, 5min timeout, parse pass/fail).', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'git_commit', category: 'Git', description: 'Commit scoped paths (không push). Dùng temp file cho message.', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  // ===== P1: diagnostics + planning + synthesis + processes + packages =====
+  { name: 'get_diagnostics', category: 'Code', description: 'Type-check + lint diagnostics (tsc, file:line:col).', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'decompose_task', category: 'Planning', description: 'Phân tách goal thành 3-7 subtasks DAG (LLM-assisted).', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'create_task', category: 'Planning', description: 'Tạo task trong task store (assignee/priority/deps).', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'update_task', category: 'Planning', description: 'Cập nhật status/notes của task.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'get_plan', category: 'Planning', description: 'Đọc task board + status breakdown.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'summarize', category: 'Synthesis', description: 'Tóm tắt file/text (LLM-assisted, purpose/points/risks).', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'synthesize', category: 'Synthesis', description: 'Tổng hợp nhiều sources thành 1 báo cáo (conflicts + open questions).', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'run_bg', category: 'Process', description: 'Chạy command nền (dev server/watcher), trả processId.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'read_output', category: 'Process', description: 'Poll output của background process (incremental).', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'kill_process', category: 'Process', description: 'Kill background process by ID hoặc port.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'manage_packages', category: 'Package', description: 'bun add/remove/install/update (2min timeout).', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  // ===== P2: gateway proxy =====
+  { name: 'gateway_tool', category: 'Gateway', description: 'Proxy tới 1 trong 36 gateway-bridge tools (web_search, exec, read, write, browser...).', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: '', hasApiKey: true },
 ]
 
 export async function GET(request: NextRequest) {
@@ -154,8 +233,20 @@ export async function GET(request: NextRequest) {
     // Get from in-memory registry for fast access
     const customToolEntries = getAllCustomTools()
 
-    // Also query DB for any tools not yet in memory (e.g., disabled ones)
-    const dbCustomTools = await db.customTool.findMany()
+    // Also query DB for any tools not yet in memory (e.g., disabled ones).
+    // FIX: the CustomTool Prisma model is not in schema.prisma — db.customTool
+    // is undefined. Wrapped in try/catch so the route degrades gracefully
+    // (returns the in-memory registry's custom tools + local + gateway tools
+    // instead of 500-ing the whole endpoint). When the model is added later,
+    // this branch will just start working.
+    let dbCustomTools: Array<{ name: string }> = []
+    try {
+      if ((db as any).customTool) {
+        dbCustomTools = await (db as any).customTool.findMany()
+      }
+    } catch (err) {
+      console.warn('[Tools] customTool DB query skipped (model not in schema):', err instanceof Error ? err.message : String(err))
+    }
     const dbToolMap = new Map(dbCustomTools.map(t => [t.name, t]))
 
     // Merge: prefer in-memory entries, add DB-only entries

@@ -26,6 +26,15 @@
 
 import { getAgentTools } from './agents'
 import { tavilyKeyPool, jinaKeyPool, serperKeyPool } from '@/lib/service-key-pool'
+import {
+  fileEdit, fileDelete, fileList, grep,
+  runTests, gitCommit,
+  getDiagnostics, decomposeTask, createTask, updateTask, getPlan,
+  summarize, synthesize,
+  runBg, readOutput, killProcess,
+  managePackages,
+  gatewayTool,
+} from './dev-tools'
 
 // ==================== Z-AI-SDK LAZY INITIALIZATION ====================
 //
@@ -243,6 +252,289 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       },
     },
   },
+
+  // ==================== P0: DEV TOOLS ====================
+  file_edit: {
+    type: 'function',
+    function: {
+      name: 'file_edit',
+      description: 'Sửa file bằng exact string replace (an toàn hơn write). Lỗi nếu 0 match hoặc >1 match (dùng replace_all:true để thay tất cả). Có thể batch nhiều edits (atomic). ƯU TIÊN dùng tool này để sửa bug thay vì ghi đè cả file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Đường dẫn file relative từ workspace root' },
+          old_str: { type: 'string', description: 'Chuỗi cần tìm (phải match chính xác, kể cả indentation)' },
+          new_str: { type: 'string', description: 'Chuỗi thay thế' },
+          replace_all: { type: 'boolean', description: 'true = thay mọi occurrence; mặc định lỗi nếu >1 match' },
+          edits: {
+            type: 'array',
+            items: { type: 'object', properties: { old_str: { type: 'string' }, new_str: { type: 'string' } } },
+            description: 'Batch nhiều edits (atomic — all-or-nothing). Bỏ qua old_str/new_str nếu dùng edits.',
+          },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  file_delete: {
+    type: 'function',
+    function: {
+      name: 'file_delete',
+      description: 'Xóa file hoặc thư mục. Bắt buộc có recursive:true để xóa thư mục. Hỗ trợ dry_run:true để xem sẽ xóa gì mà không thực sự xóa. Không bao giờ xóa workspace root.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Đường dẫn relative cần xóa' },
+          recursive: { type: 'boolean', description: 'Bắt buộc nếu xóa thư mục' },
+          dry_run: { type: 'boolean', description: 'true = chỉ trả về sẽ xóa gì, không touch filesystem' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  file_list: {
+    type: 'function',
+    function: {
+      name: 'file_list',
+      description: 'Liệt kê nội dung thư mục (shallow hoặc tree). Tự bỏ node_modules/.next/.git/dist/build. Trả về name/type/size/mtime.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Thư mục cần list (mặc định workspace root)' },
+          depth: { type: 'number', description: 'Độ sâu tối đa (1-5, mặc định 1)' },
+          ignore: { type: 'array', items: { type: 'string' }, description: 'Tên thư mục/file bỏ qua' },
+        },
+      },
+    },
+  },
+  grep: {
+    type: 'function',
+    function: {
+      name: 'grep',
+      description: 'Tìm nội dung file bằng regex (JS regex, case-insensitive). mode: content/files/count. Tự bỏ node_modules/.next/.git. Dùng để tìm lỗi, tìm usage, recon trước khi sửa.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: { type: 'string', description: 'Regex pattern (JS syntax)' },
+          path: { type: 'string', description: 'Thư mục/file cần search (mặc định root)' },
+          glob: { type: 'string', description: 'Filter filename glob (vd "*.test.ts")' },
+          mode: { type: 'string', enum: ['content', 'files', 'count'], description: 'content = trả matches, files = chỉ filenames, count = đếm' },
+          context: { type: 'number', description: 'Số dòng context trước/sau match (0-5)' },
+          head_limit: { type: 'number', description: 'Giới hạn số matches (mặc định 100, max 500)' },
+        },
+        required: ['pattern'],
+      },
+    },
+  },
+  run_tests: {
+    type: 'function',
+    function: {
+      name: 'run_tests',
+      description: 'Chạy test suite (autodetect framework: bun test / vitest / jest / pytest). Timeout 5 phút. Parse pass/fail/skip + failure locations (file:line). Dùng CI=true để tắt watch mode.',
+      parameters: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: 'File test hoặc test name pattern (optional)' },
+          coverage: { type: 'boolean', description: 'true = chạy với coverage' },
+        },
+      },
+    },
+  },
+  git_commit: {
+    type: 'function',
+    function: {
+      name: 'git_commit',
+      description: 'Commit các file đã stage (hoặc paths cụ thể) với message. KHÔNG push. Dùng file tạm cho message để tránh shell escaping. Nếu all:true → git add -A trước.',
+      parameters: {
+        type: 'object',
+        properties: {
+          message: { type: 'string', description: 'Commit message (bắt buộc, không rỗng)' },
+          paths: { type: 'array', items: { type: 'string' }, description: 'Paths cụ thể để commit (relative)' },
+          all: { type: 'boolean', description: 'true = stage trước rồi commit (git add -A hoặc chỉ paths)' },
+        },
+        required: ['message'],
+      },
+    },
+  },
+
+  // ==================== P1: DIAGNOSTICS + PLANNING + SYNTHESIS ====================
+  get_diagnostics: {
+    type: 'function',
+    function: {
+      name: 'get_diagnostics',
+      description: 'Type-check + lint diagnostics (tsc --noEmit) cho file hoặc toàn workspace. Parse errors với file:line:col + code. Thử opencode-server /lsp/diagnostics trước.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File cụ thể (optional — nếu omit, check toàn workspace)' },
+        },
+      },
+    },
+  },
+  decompose_task: {
+    type: 'function',
+    function: {
+      name: 'decompose_task',
+      description: 'Phân tích goal thành 3-7 subtasks (DAG với dependencies). LLM-assisted, trả JSON array. Lưu vào task store (in-memory). Trả về tasks với IDs để assign cho agents.',
+      parameters: {
+        type: 'object',
+        properties: {
+          goal: { type: 'string', description: 'Mục tiêu cần phân tách' },
+          context: { type: 'string', description: 'Context bổ sung (optional)' },
+        },
+        required: ['goal'],
+      },
+    },
+  },
+  create_task: {
+    type: 'function',
+    function: {
+      name: 'create_task',
+      description: 'Tạo 1 task trong task store với assignee/priority/deps. Status mặc định pending.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          spec: { type: 'string', description: 'Acceptance criteria (1-2 câu)' },
+          assignee: { type: 'string', description: 'TL/G1/G2-A/G2-B/G3' },
+          priority: { type: 'string', enum: ['low', 'medium', 'high'] },
+          deps: { type: 'array', items: { type: 'string' }, description: 'Task IDs mà task này phụ thuộc' },
+        },
+        required: ['title', 'spec'],
+      },
+    },
+  },
+  update_task: {
+    type: 'function',
+    function: {
+      name: 'update_task',
+      description: 'Cập nhật status/notes của task. Enforce ≤1 in_progress per agent là gợi ý chứ không bắt buộc.',
+      parameters: {
+        type: 'object',
+        properties: {
+          task_id: { type: 'string', description: 'Task ID (vd T001)' },
+          status: { type: 'string', enum: ['pending', 'in_progress', 'blocked', 'completed', 'failed'] },
+          notes: { type: 'string' },
+        },
+        required: ['task_id'],
+      },
+    },
+  },
+  get_plan: {
+    type: 'function',
+    function: {
+      name: 'get_plan',
+      description: 'Đọc task board: tất cả tasks + status breakdown + dependencies. Dùng cho TL routing.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  summarize: {
+    type: 'function',
+    function: {
+      name: 'summarize',
+      description: 'Tóm tắt nội dung 1+ file hoặc text. LLM-assisted, trả purpose/key points/risks/TODOs. Dùng cho recon trước khi sửa hoặc cho handoff giữa agents.',
+      parameters: {
+        type: 'object',
+        properties: {
+          paths: { type: 'array', items: { type: 'string' }, description: 'File paths relative (vd ["src/lib/llm.ts"])' },
+          content: { type: 'string', description: 'Hoặc inline content trực tiếp' },
+          focus: { type: 'string', description: 'Tập trung vào điểm nào (vd "public API surface")' },
+        },
+      },
+    },
+  },
+  synthesize: {
+    type: 'function',
+    function: {
+      name: 'synthesize',
+      description: 'Tổng hợp nhiều sources (file paths hoặc inline text) thành 1 báo cáo cho 1 goal cụ thể. Nhận diện conflicts + open questions. Dùng khi G1/G3 cần gộp findings từ nhiều nguồn.',
+      parameters: {
+        type: 'object',
+        properties: {
+          sources: { type: 'array', items: { type: 'string' }, description: 'Sources — mỗi item là file path hoặc inline text' },
+          goal: { type: 'string', description: 'Câu hỏi/mục tiêu tổng hợp' },
+        },
+        required: ['sources', 'goal'],
+      },
+    },
+  },
+  run_bg: {
+    type: 'function',
+    function: {
+      name: 'run_bg',
+      description: 'Chạy command nền (long-running: dev server, watcher, build...). Trả processId để poll bằng read_output. KHÔNG block — trả về ngay. Tự kill khi cần bằng kill_process.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Command chạy nền (vd "bun run dev")' },
+          cwd: { type: 'string', description: 'Working directory (optional)' },
+        },
+        required: ['command'],
+      },
+    },
+  },
+  read_output: {
+    type: 'function',
+    function: {
+      name: 'read_output',
+      description: 'Poll output của background process (started bằng run_bg). Trả new stdout+stderr + ended flag + bytesRead. Pass list:true để xem tất cả processes đang chạy.',
+      parameters: {
+        type: 'object',
+        properties: {
+          process_id: { type: 'string', description: 'Process ID (từ run_bg response)' },
+          list: { type: 'boolean', description: 'true = list tất cả processes, không cần process_id' },
+          since_offset: { type: 'number', description: 'Byte offset để đọc từ (từ bytesRead trước) — incremental' },
+        },
+      },
+    },
+  },
+  kill_process: {
+    type: 'function',
+    function: {
+      name: 'kill_process',
+      description: 'Kill background process by process_id hoặc by port (SIGTERM). Dọn dẹp khi task xong.',
+      parameters: {
+        type: 'object',
+        properties: {
+          process_id: { type: 'string' },
+          port: { type: 'number', description: 'Tìm+kill process đang giữ port' },
+        },
+      },
+    },
+  },
+  manage_packages: {
+    type: 'function',
+    function: {
+      name: 'manage_packages',
+      description: 'Cài/gỡ/cập nhật packages (bun add/remove/install/update). Timeout 2 phút. Dùng khi task cần thêm dependency.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['add', 'remove', 'install', 'update'] },
+          packages: { type: 'array', items: { type: 'string' }, description: 'Package names (required for add/remove)' },
+          dev: { type: 'boolean', description: 'true = dev dependency (chỉ cho add)' },
+        },
+        required: ['action'],
+      },
+    },
+  },
+
+  // ==================== P2: GATEWAY PROXY (36 tools) ====================
+  gateway_tool: {
+    type: 'function',
+    function: {
+      name: 'gateway_tool',
+      description: 'Proxy tới 1 trong 36 gateway-bridge tools (port 18791). 17 HTTP tools: web_search, web_fetch, memory_search, memory_get, browser, canvas, sessions_list, sessions_history, session_status, sessions_yield, agents_list, message, tts, skill_workshop, create_goal, get_goal, update_goal. 19 bridge-only: x_search, exec, read, write, edit, apply_patch, code_execution, process, sessions_spawn, sessions_send, cron, heartbeat_respond, gateway, nodes, update_plan, image, image_generate, music_generate, video_generate.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Tên gateway tool (vd "web_search", "exec", "read")' },
+          args: { type: 'object', description: 'Arguments cho tool đó (khác nhau theo tool)', additionalProperties: true },
+        },
+        required: ['name'],
+      },
+    },
+  },
 }
 
 /**
@@ -313,6 +605,63 @@ export async function executeTool(
       case 'jina':
         result = await executeJina(args)
         break
+      // ===== P0: dev tools =====
+      case 'file_edit':
+        result = await fileEdit(args as any)
+        break
+      case 'file_delete':
+        result = await fileDelete(args as any)
+        break
+      case 'file_list':
+        result = await fileList(args as any)
+        break
+      case 'grep':
+        result = await grep(args as any)
+        break
+      case 'run_tests':
+        result = await runTests(args as any)
+        break
+      case 'git_commit':
+        result = await gitCommit(args as any)
+        break
+      // ===== P1: diagnostics + planning + synthesis + processes + packages =====
+      case 'get_diagnostics':
+        result = await getDiagnostics(args as any)
+        break
+      case 'decompose_task':
+        result = await decomposeTask(args as any)
+        break
+      case 'create_task':
+        result = await createTask(args as any)
+        break
+      case 'update_task':
+        result = await updateTask(args as any)
+        break
+      case 'get_plan':
+        result = await getPlan()
+        break
+      case 'summarize':
+        result = await summarize(args as any)
+        break
+      case 'synthesize':
+        result = await synthesize(args as any)
+        break
+      case 'run_bg':
+        result = await runBg(args as any)
+        break
+      case 'read_output':
+        result = await readOutput(args as any)
+        break
+      case 'kill_process':
+        result = await killProcess(args as any)
+        break
+      case 'manage_packages':
+        result = await managePackages(args as any)
+        break
+      // ===== P2: gateway proxy (36 tools) =====
+      case 'gateway_tool':
+        result = await gatewayTool(args as any)
+        break
       default:
         return {
           success: false,
@@ -351,22 +700,29 @@ async function executeOpenCode(args: Record<string, unknown>): Promise<unknown> 
   const content = args.content as string | undefined
   const command = args.command as string | undefined
 
-  // Try OpenCode server first
-  try {
-    const opencodeUrl = process.env.OPENCODE_SERVER_URL || 'http://localhost:18790'
-    const res = await fetch(`${opencodeUrl}/api/execute`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, path, content, command }),
-      signal: AbortSignal.timeout(30000),
-    })
-
-    if (res.ok) {
-      const data = await res.json()
-      return data
+  // Try OpenCode server first (for bash commands only — the server's /execute
+  // endpoint accepts {command} and runs it in the workspace).
+  // FIX (P2 bug): the original code posted to /api/execute but the Hono server
+  // exposes /execute (no /api prefix). The 404 made this branch ALWAYS fail
+  // silently and fall through to the local implementation. The fix below only
+  // attempts the server for the bash action (which the server actually supports)
+  // and uses the correct path.
+  if (action === 'bash' && command) {
+    try {
+      const opencodeUrl = process.env.OPENCODE_SERVER_URL || 'http://localhost:18790'
+      const res = await fetch(`${opencodeUrl}/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command }),
+        signal: AbortSignal.timeout(30000),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        return data
+      }
+    } catch {
+      // opencode-server not available / timeout — fall through to local exec
     }
-  } catch {
-    // OpenCode server not available, fall through to direct implementation
   }
 
   // Fallback: Use the project's own API for file operations
