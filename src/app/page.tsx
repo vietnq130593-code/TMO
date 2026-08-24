@@ -8801,8 +8801,11 @@ function SkillsTabContent() {
 
           {clawhubResults && clawhubResults.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-96 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
-              {clawhubResults.map(skill => (
-                <div key={skill.slug} className="nc-wrap nc-violet-soft cursor-pointer hover:ring-1 hover:ring-violet-400/50 transition-all" onClick={() => fetchSkillContent(skill.slug, skill.authorHandle)}>
+              {clawhubResults.map((skill, idx) => {
+                // ClawHub slugs are unique per-author, not globally — compose key to avoid duplicate React keys
+                const reactKey = `${skill.slug}::${skill.authorHandle || skill.author || `idx-${idx}`}`
+                return (
+                <div key={reactKey} className="nc-wrap nc-violet-soft cursor-pointer hover:ring-1 hover:ring-violet-400/50 transition-all" onClick={() => fetchSkillContent(skill.slug, skill.authorHandle)}>
                   <div className="nc-panel nc-sm nc-border-violet-soft p-3">
                     <div className="flex items-start justify-between mb-1">
                       <div className="flex items-center gap-2 min-w-0">
@@ -8842,7 +8845,8 @@ function SkillsTabContent() {
                     </div>
                   </div>
                 </div>
-              ))}
+                )
+              })}
             </div>
           ) : (
             <div className="text-center py-4 text-slate-500 text-sm">
@@ -8884,8 +8888,8 @@ function SkillsTabContent() {
             </p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {installedSkills.map(skill => (
-                <div key={skill.id} className="nc-wrap nc-violet-soft">
+              {installedSkills.map((skill, idx) => (
+                <div key={skill.id || `${skill.slug}::idx-${idx}`} className="nc-wrap nc-violet-soft">
                   <div className="nc-panel nc-sm nc-border-violet-soft p-3">
                     <div className="flex items-start justify-between mb-2">
                       <div className="flex-1 min-w-0">
