@@ -19,6 +19,9 @@ import { promisify } from 'util'
 import path from 'path'
 import fs from 'fs/promises'
 import { existsSync } from 'fs'
+// Phase 1a.2 — DB-backed Todo store (replaces globalThis.__devTasks)
+// Both Code Team agents AND independent agents share this table; sessionId scopes each list.
+import { db } from '@/lib/db'
 
 const execAsync = promisify(exec)
 
@@ -1077,87 +1080,172 @@ export async function shell(args: {
  *
  * Feature flag: ENABLE_TODO_TOOL (off by default per D11)
  */
+/** Phase 1a.2 — todo_write (DB-backed, replaces globalThis.__devTasks)
+ *
+ * Both Code Team pipeline agents (workflow-engine runAgentStep) AND independent
+ * agents invoked via /api/openclaw/chat (which calls executeTool directly) reach
+ * this function. The sessionId scopes each conversation's todo list independently.
+ *
+ * Semantics (Claude Code-compatible):
+ *   - If `id` provided  → update existing todo by primary key (404 if not found)
+ *   - If `idempotencyKey` provided and exists → return existing (no duplicate)
+ *   - Otherwise → create new
+ *   - Max 200 todos per session (guard against runaway agents)
+ *
+ * Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Part 4 Phase 1a.2
+ * Feature flag: ENABLE_TODO_TOOL (off by default per D11)
+ */
 export async function todoWrite(args: {
   sessionId?: string
+  agentRole?: string
   todos: Array<{
     id?: string
     content: string
     status?: 'pending' | 'in_progress' | 'blocked' | 'completed' | 'failed'
     priority?: 'low' | 'medium' | 'high'
     parentId?: string
+    idempotencyKey?: string
   }>
 }): Promise<unknown> {
   if (!Array.isArray(args.todos) || args.todos.length === 0) {
     return { success: false, error: 'todos[] is required (non-empty array)' }
   }
 
+  const sessionId = args.sessionId || 'default'
+  const agentRole = args.agentRole || null
+
+  // Guard against runaway agents trying to create thousands of todos
+  const MAX_TODOS_PER_SESSION = 200
+  const existingCount = await db.todo.count({ where: { sessionId } })
+  const newCount = args.todos.filter(t => !t.id && !t.idempotencyKey).length
+  if (existingCount + newCount > MAX_TODOS_PER_SESSION) {
+    return {
+      success: false,
+      error: `Todo list cap exceeded: ${existingCount} existing + ${newCount} new > ${MAX_TODOS_PER_SESSION} max per session. Mark some todos as completed or remove stale ones first.`,
+    }
+  }
+
+  const VALID_STATUS = new Set(['pending', 'in_progress', 'blocked', 'completed', 'failed'])
+  const VALID_PRIORITY = new Set(['low', 'medium', 'high'])
   const upserted: Array<{ id: string; content: string; status: string; priority: string }> = []
 
   for (const t of args.todos) {
     if (!t.content || typeof t.content !== 'string') {
       return { success: false, error: 'Each todo needs a `content` string' }
     }
+    if (t.status && !VALID_STATUS.has(t.status)) {
+      return { success: false, error: `Invalid status: ${t.status}. Allowed: ${[...VALID_STATUS].join('|')}` }
+    }
+    if (t.priority && !VALID_PRIORITY.has(t.priority)) {
+      return { success: false, error: `Invalid priority: ${t.priority}. Allowed: ${[...VALID_PRIORITY].join('|')}` }
+    }
 
-    // Update existing
+    // Update existing by ID
     if (t.id) {
-      const result = await updateTask({
-        task_id: t.id,
-        status: t.status,
-        notes: t.content, // store content in notes for existing tasks
-      })
-      if (result && typeof result === 'object' && 'task' in (result as any)) {
-        const task = (result as any).task
-        upserted.push({
-          id: task.id,
-          content: task.notes || task.title || t.content,
-          status: task.status,
-          priority: task.priority,
-        })
-      }
-    } else {
-      // Create new — use content as both title (truncated) and spec
-      const title = t.content.length > 80 ? t.content.slice(0, 77) + '...' : t.content
-      const result = await createTask({
-        title,
-        spec: t.content,
-        priority: t.priority || 'medium',
-      })
-      if (result && typeof result === 'object' && 'task' in (result as any)) {
-        const task = (result as any).task
-        upserted.push({
-          id: task.id,
+      const updated = await db.todo.update({
+        where: { id: t.id },
+        data: {
           content: t.content,
-          status: task.status,
-          priority: task.priority,
+          status: t.status || undefined,
+          priority: t.priority || undefined,
+          parentId: t.parentId || undefined,
+        },
+      }).catch(() => null)
+      if (!updated) {
+        return { success: false, error: `Todo not found: ${t.id}` }
+      }
+      upserted.push({
+        id: updated.id,
+        content: updated.content,
+        status: updated.status,
+        priority: updated.priority,
+      })
+      continue
+    }
+
+    // Idempotent create by idempotencyKey
+    if (t.idempotencyKey) {
+      const existing = await db.todo.findFirst({
+        where: { sessionId, idempotencyKey: t.idempotencyKey },
+      })
+      if (existing) {
+        upserted.push({
+          id: existing.id,
+          content: existing.content,
+          status: existing.status,
+          priority: existing.priority,
         })
+        continue
       }
     }
+
+    // Create new
+    const created = await db.todo.create({
+      data: {
+        sessionId,
+        agentRole,
+        content: t.content,
+        status: t.status || 'pending',
+        priority: t.priority || 'medium',
+        parentId: t.parentId || null,
+        idempotencyKey: t.idempotencyKey || null,
+      },
+    })
+    upserted.push({
+      id: created.id,
+      content: created.content,
+      status: created.status,
+      priority: created.priority,
+    })
   }
 
   return {
     success: true,
-    sessionId: args.sessionId || 'default',
+    sessionId,
     upserted: upserted.length,
     todos: upserted,
   }
 }
 
-/**
- * todoRead — Return current task list with status breakdown.
+/** Phase 1a.2 — todo_read (DB-backed)
  *
- * Wraps the existing getPlan() with a simpler Claude Code-style API.
- * Accepts sessionId for forward compatibility (Phase 5.6 SQLite-backed
- * session scoping); currently returns all tasks in the in-memory store.
+ * Returns the current todo list for the given session, ordered by position
+ * then createdAt. Also returns a status breakdown summary for quick stats.
  *
  * Feature flag: ENABLE_TODO_TOOL (off by default per D11)
  */
 export async function todoRead(args: {
   sessionId?: string
+  agentRole?: string
 }): Promise<unknown> {
-  const plan = await getPlan()
+  const sessionId = args.sessionId || 'default'
+  const where = args.agentRole
+    ? { sessionId, agentRole: args.agentRole }
+    : { sessionId }
+
+  const todos = await db.todo.findMany({
+    where,
+    orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+  })
+
+  const byStatus: Record<string, number> = {}
+  for (const t of todos) {
+    byStatus[t.status] = (byStatus[t.status] || 0) + 1
+  }
+
   return {
     success: true,
-    sessionId: args.sessionId || 'default',
-    ...(plan as Record<string, unknown>),
+    sessionId,
+    total: todos.length,
+    byStatus,
+    todos: todos.map(t => ({
+      id: t.id,
+      content: t.content,
+      status: t.status,
+      priority: t.priority,
+      parentId: t.parentId,
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+    })),
   }
 }

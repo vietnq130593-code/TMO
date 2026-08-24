@@ -752,3 +752,38 @@ model MemoryAccessLog {
   @@index([agentId])
   @@index([createdAt])
 }
+
+/// Phase 1a.2 — Todo list items (DB-backed replacement for globalThis.__devTasks).
+/// Used by `todo_write` / `todo_read` tools (see dev-tools.ts).
+/// Both Code Team agents (TL|G1|G2-A|G2-B|G3 in agentRole) AND independent agents
+/// (agentRole=null) share this table — sessionId scopes each conversation.
+/// Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Part 4 Phase 1a.2
+model Todo {
+  id             String   @id @default(cuid())
+  /// Session scope — every chat conversation gets its own todo list.
+  /// Default "default" for legacy callers without a sessionId.
+  sessionId      String   @default("default")
+  /// Agent position (TL|G1|G2-A|G2-B|G3) for Code Team, or null for independent agents
+  /// invoked via /api/openclaw/chat (which calls executeTool directly).
+  agentRole      String?
+  /// The todo item content (human-readable text the agent wants to track)
+  content        String
+  /// allowed: pending | in_progress | blocked | completed | failed
+  status         String   @default("pending")
+  /// allowed: low | medium | high
+  priority       String   @default("medium")
+  /// Optional parent todo ID for nested task breakdown (G1 decompose_task style)
+  parentId       String?
+  /// Stable ordering for display (auto-assigned if not provided)
+  position       Int      @default(0)
+  /// Optional client-supplied idempotency key — when set, repeat calls with
+  /// same key return the existing todo instead of creating a duplicate.
+  idempotencyKey String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([sessionId])
+  @@index([sessionId, agentRole])
+  @@index([parentId])
+  @@index([idempotencyKey])
+}

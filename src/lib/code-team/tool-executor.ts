@@ -83,6 +83,32 @@ async function getZAI(): Promise<any> {
   return zaiInitPromise
 }
 
+/** Phase 1a/1b fix — Race an async operation against a timeout.
+ *
+ * Wraps z-ai-sdk `functions.invoke()` calls (and similar) so a hung SDK
+ * cannot stall the entire workflow. Without this, executeTavily/Serper/Jina/
+ * WebSearch/WebFetch could hang forever if z-ai-sdk internal state goes bad.
+ *
+ * Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Part 4 Phase 1b.1
+ */
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} timeout after ${timeoutMs}ms`))
+    }, timeoutMs)
+  })
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 // ==================== TOOL DEFINITIONS (OpenAI function calling format) ====================
 // Each agent receives tools according to its permissions from agents.ts
 
@@ -567,11 +593,12 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'todo_write',
-      description: 'Claude Code-style in-flight task list (batch upsert). Truyền mảng todos (có id=update, không id=create). Trả về danh sách đầy đủ sau khi write. Dùng cho agent tự track multi-step work.',
+      description: 'Claude Code-style in-flight task list (batch upsert, DB-backed). Truyền mảng todos (có id=update, không id=create, có idempotencyKey=idempotent). Trả về danh sách đầy đủ sau khi write. Dùng cho agent tự track multi-step work. Persisted trong SQLite — sống sót qua server restart.',
       parameters: {
         type: 'object',
         properties: {
-          sessionId: { type: 'string', description: 'Session scope (reserved Phase 5.6 — hiện tại global in-memory)' },
+          sessionId: { type: 'string', description: 'Session scope — mỗi conversation có list riêng. Bỏ trống → "default".' },
+          agentRole: { type: 'string', description: 'Agent position (TL|G1|G2-A|G2-B|G3) cho Code Team, hoặc null cho independent agent. Bỏ trống → null.' },
           todos: {
             type: 'array',
             description: 'Danh sách todo (full rewrite — Claude Code semantics)',
@@ -583,6 +610,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
                 status: { type: 'string', enum: ['pending', 'in_progress', 'blocked', 'completed', 'failed'] },
                 priority: { type: 'string', enum: ['low', 'medium', 'high'] },
                 parentId: { type: 'string', description: 'Parent task ID (cho subtask / DAG)' },
+                idempotencyKey: { type: 'string', description: 'Optional — khi set, repeat calls với cùng key trả về existing todo (no duplicate)' },
               },
               required: ['content'],
             },
@@ -596,11 +624,12 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'todo_read',
-      description: 'Đọc task list hiện tại với status breakdown (pending/in_progress/completed/...). Dùng để agent review progress trước khi quyết định next step.',
+      description: 'Đọc task list hiện tại (DB-backed) với status breakdown (pending/in_progress/completed/...). Dùng để agent review progress trước khi quyết định next step.',
       parameters: {
         type: 'object',
         properties: {
-          sessionId: { type: 'string', description: 'Session scope (reserved Phase 5.6)' },
+          sessionId: { type: 'string', description: 'Session scope (bỏ trống → "default")' },
+          agentRole: { type: 'string', description: 'Filter theo agent position (TL|G1|G2-A|G2-B|G3). Bỏ trống → trả về tất cả agent trong session.' },
         },
         required: [],
       },
@@ -974,8 +1003,9 @@ async function executeOpenCode(args: Record<string, unknown>): Promise<unknown> 
         const data = await res.json()
         return data
       }
-    } catch {
+    } catch (err) {
       // opencode-server not available / timeout — fall through to local exec
+      console.warn(`[ToolExecutor] opencode-server ${action} failed (${err instanceof Error ? err.message : String(err)}) — falling back to local exec`)
     }
   }
 
@@ -1439,7 +1469,11 @@ async function executeTavily(args: Record<string, unknown>): Promise<unknown> {
   try {
     const zai = await getZAI()
     if (zai) {
-      const results = await zai.functions.invoke('web_search', { query, num: 5 })
+      const results = await withTimeout(
+        zai.functions.invoke('web_search', { query, num: 5 }),
+        30_000,
+        'z-ai-sdk web_search (tavily fallback)',
+      )
       if (Array.isArray(results) && results.length > 0) {
         return {
           answer: null,
@@ -1530,7 +1564,11 @@ async function executeSerper(args: Record<string, unknown>): Promise<unknown> {
   try {
     const zai = await getZAI()
     if (zai) {
-      const results = await zai.functions.invoke('web_search', { query, num: 5 })
+      const results = await withTimeout(
+        zai.functions.invoke('web_search', { query, num: 5 }),
+        30_000,
+        'z-ai-sdk web_search (serper fallback)',
+      )
       if (Array.isArray(results) && results.length > 0) {
         return {
           organic: results.map((r: any) => ({
@@ -1631,7 +1669,11 @@ async function executeJina(args: Record<string, unknown>): Promise<unknown> {
   try {
     const zai = await getZAI()
     if (zai) {
-      const result = await zai.functions.invoke('page_reader', { url })
+      const result = await withTimeout(
+        zai.functions.invoke('page_reader', { url }),
+        30_000,
+        'z-ai-sdk page_reader (jina fallback)',
+      )
       if (result?.data?.html) {
         // Convert HTML to clean text
         const text = result.data.html
@@ -1738,7 +1780,11 @@ async function executeWebSearch(args: Record<string, unknown>): Promise<unknown>
   try {
     const zai = await getZAI()
     if (zai) {
-      const results = await zai.functions.invoke('web_search', { query, num: maxResults })
+      const results = await withTimeout(
+        zai.functions.invoke('web_search', { query, num: maxResults }),
+        30_000,
+        'z-ai-sdk web_search (unified)',
+      )
       if (Array.isArray(results) && results.length > 0) {
         return {
           query,
@@ -1814,7 +1860,11 @@ async function executeWebFetch(args: Record<string, unknown>): Promise<unknown> 
   try {
     const zai = await getZAI()
     if (zai) {
-      const result = await zai.functions.invoke('page_reader', { url })
+      const result = await withTimeout(
+        zai.functions.invoke('page_reader', { url }),
+        30_000,
+        'z-ai-sdk page_reader (unified web_fetch)',
+      )
       if (result?.data?.html) {
         let text = result.data.html
         if (format === 'text' || format === 'markdown') {
@@ -1999,10 +2049,30 @@ export async function processToolCalls(
 
   for (const tc of toolCalls) {
     let args: Record<string, unknown> = {}
+    let parseError: string | null = null
     try {
       args = JSON.parse(tc.function.arguments)
-    } catch {
-      args = { _parseError: tc.function.arguments }
+    } catch (err) {
+      parseError = err instanceof Error ? err.message : String(err)
+      console.warn(`[ToolExecutor] tool_call ${tc.function.name} args JSON.parse failed — ${parseError}. Raw (first 200 chars): ${tc.function.arguments.slice(0, 200)}`)
+    }
+
+    // If parse failed, return a direct error result for THIS tool_call
+    // instead of passing `_parseError` to executeTool (which would just say "Unknown tool").
+    // The LLM sees the parse failure as a tool result and can recover on the next turn.
+    // NOTE: ToolExecutionResult interface uses `result: unknown` (string for errors),
+    // matching the existing executeTool pattern — there is no separate `error` field.
+    if (parseError) {
+      results.push({
+        toolCallId: tc.id,
+        toolName: tc.function.name,
+        result: {
+          success: false,
+          result: `arguments JSON.parse failed: ${parseError}. Raw arguments (first 500 chars): ${tc.function.arguments.slice(0, 500)}`,
+          duration: 0,
+        },
+      })
+      continue
     }
 
     console.log(`[ToolExecutor] Executing: ${tc.function.name}(${JSON.stringify(args).slice(0, 200)})`)

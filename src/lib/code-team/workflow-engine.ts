@@ -78,13 +78,18 @@ async function enforceQualityGate(): Promise<QualityReport> {
   }
 
   // Run lint + tsc in parallel (each capped at 60s to avoid blocking workflow)
-  const lintResult = await runShellSafe('bun run lint', 60_000)
-  const tscResult = await runShellSafe('tsc --noEmit', 60_000)
+  // Phase 1a.3 fix: use `bunx tsc` (not bare `tsc`) so the binary resolves on a fresh
+  // sandbox without a global TypeScript install. Also run the two in parallel via Promise.all
+  // (the prior sequential `await ×2` doubled latency for no good reason).
+  const [lintResult, tscResult] = await Promise.all([
+    runShellSafe('bun run lint', 60_000),
+    runShellSafe('bunx tsc --noEmit', 60_000),
+  ])
 
   const lintErrors = parseLintErrors(lintResult.stderr + lintResult.stdout)
   const tscErrors = parseTscErrors(tscResult.stderr + tscResult.stdout)
 
-  return {
+  const report: QualityReport = {
     mode,
     lintErrors: lintErrors.count,
     tscErrors: tscErrors.count,
@@ -92,6 +97,22 @@ async function enforceQualityGate(): Promise<QualityReport> {
     tscSample: tscErrors.sample,
     durationMs: Date.now() - startedAt,
   }
+
+  // Strict mode: any quality errors halt the workflow so they can be fixed
+  // before reaching git_commit / deploy. Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md
+  // Part 4 Phase 1a.3 (warn | strict | off). In `warn` we log + continue; in `strict`
+  // we throw so the upstream workflow engine catches and reports the failure.
+  if (mode === 'strict' && (report.lintErrors > 0 || report.tscErrors > 0)) {
+    const samples = [
+      ...(report.lintSample || []).map(s => `lint: ${s}`),
+      ...(report.tscSample || []).map(s => `tsc: ${s}`),
+    ].slice(0, 5)
+    throw new Error(
+      `Quality gate strict mode failed: ${report.lintErrors} lint errors, ${report.tscErrors} tsc errors. Samples:\n${samples.join('\n')}`,
+    )
+  }
+
+  return report
 }
 
 async function runShellSafe(command: string, timeoutMs: number): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -973,6 +994,20 @@ async function runAgentStep(params: {
         })
       }
       console.log(`[Workflow] ${agent.name} native tool_calls: ${result.tool_calls.length} (parsed ${toolCalls.length})`)
+
+      // Phase 1c.3 fix — Dual-mode safety: if the model emitted native tool_calls but
+      // EVERY one failed JSON.parse (rare — usually means malformed arguments),
+      // fall back to regex parsing of the content text. This keeps the workflow
+      // moving instead of silently ending the agent step with 0 tool calls.
+      // Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Part 4 Phase 1c.3 + Part 10.4.
+      if (fcMode === 'dual' && toolCalls.length === 0 && result.content) {
+        const regexCalls = parseToolCallsFromOutput(result.content)
+        if (regexCalls.length > 0) {
+          regexFallbackCount += regexCalls.length
+          console.warn(`[Workflow] ${agent.name} regex fallback used — native tool_calls were present but ALL ${result.tool_calls.length} failed JSON.parse; recovered ${regexCalls.length} from text. Fallback rate so far: ${regexFallbackCount}/${regexFallbackCount + nativeToolCallCount}`)
+          toolCalls = regexCalls
+        }
+      }
     } else if (fcMode === 'dual') {
       // ━━━ Regex fallback path (dual mode only) ━━━
       // Model didn't emit native tool_calls despite receiving tools param.
