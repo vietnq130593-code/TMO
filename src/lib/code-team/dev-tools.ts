@@ -1583,3 +1583,679 @@ export async function todoRead(args: {
     })),
   }
 }
+
+// ==================== PHASE 3: CODE INTELLIGENCE + MCP ====================
+//
+// Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3 (lines 223-242)
+//   3.1 lsp_diagnostics  — alias to getDiagnostics (separate tool name per spec)
+//   3.2 browser_screenshot — Playwright (lazy import) chromium
+//   3.3 lint + type_check — structured ESLint JSON + tsc output parsers
+//   3.4 test_coverage   — bun test --coverage parser
+//   3.5 db_query        — Prisma $queryRawUnsafe + READ-ONLY guard
+//
+// All new tools gate behind per-tool feature flags (default false per spec Part 12).
+// Pattern matches existing P0/P1 tools in this file (resolveWithinWorkspace,
+// truncateOutput, try/catch with helpful error messages, Vietnamese descriptions).
+// =====================================================================
+
+/**
+ * browser_screenshot — Phase 3.2 tool.
+ *
+ * Launches a headless chromium (via Playwright) and returns a base64 PNG of
+ * the requested URL. Returns base64 (preferred for agent consumption) — no
+ * filesystem cleanup headaches.
+ *
+ * Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3.2 (line 229)
+ * Feature flag: ENABLE_BROWSER_SCREENSHOT (default false)
+ */
+export async function browserScreenshot(args: {
+  url: string
+  full_page?: boolean
+  viewport_width?: number
+  viewport_height?: number
+  wait_until?: 'load' | 'domcontentloaded' | 'networkidle'
+  wait_ms?: number
+  selector?: string
+}): Promise<unknown> {
+  if (!args.url) {
+    return { success: false, error: 'url is required' }
+  }
+
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(args.url)
+  } catch {
+    return { success: false, error: `Invalid URL: ${args.url}` }
+  }
+  if (!/^https?:$/.test(parsedUrl.protocol)) {
+    return { success: false, error: `Only http/https URLs are allowed (got ${parsedUrl.protocol})` }
+  }
+
+  const viewportWidth = Math.max(320, Math.min(4096, args.viewport_width || 1280))
+  const viewportHeight = Math.max(240, Math.min(4096, args.viewport_height || 720))
+  const waitUntil = args.wait_until || 'load'
+  const waitMs = Math.max(0, Math.min(60_000, args.wait_ms || 0))
+  const fullPage = args.full_page === true
+  const selector = args.selector
+
+  // Lazy import — keeps `bun install` time low if Playwright never used.
+  let chromium: any
+  try {
+    const pw = await import('playwright')
+    chromium = pw.chromium
+  } catch (err: any) {
+    return {
+      success: false,
+      error: `Playwright not available: ${err?.message || String(err)}. Run \`bun add playwright\` + \`bunx playwright install chromium\`.`,
+    }
+  }
+
+  const startedAt = Date.now()
+  let browser: any = null
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    })
+    const context = await browser.newContext({
+      viewport: { width: viewportWidth, height: viewportHeight },
+      userAgent: 'TMO-CodeTeam-Playwright/1.0 (+https://localhost)',
+    })
+    const page = await context.newPage()
+
+    // Default 30s navigation timeout
+    page.setDefaultNavigationTimeout(30_000)
+    page.setDefaultTimeout(30_000)
+
+    try {
+      await page.goto(parsedUrl.toString(), { waitUntil, timeout: 30_000 })
+    } catch (err: any) {
+      return {
+        success: false,
+        error: `Navigation failed: ${err?.message || String(err)}`,
+        url: args.url,
+        durationMs: Date.now() - startedAt,
+      }
+    }
+
+    if (waitMs > 0) {
+      try {
+        await page.waitForTimeout(waitMs)
+      } catch { /* best-effort wait */ }
+    }
+
+    let base64: string
+    let width = viewportWidth
+    let height = viewportHeight
+
+    if (selector) {
+      // Element screenshot — clip to the locator's bounding box
+      let locator
+      try {
+        locator = page.locator(selector).first()
+        await locator.waitFor({ state: 'visible', timeout: 15_000 })
+      } catch (err: any) {
+        return {
+          success: false,
+          error: `Selector not found / not visible: ${selector} — ${err?.message || String(err)}`,
+          url: args.url,
+          durationMs: Date.now() - startedAt,
+        }
+      }
+      const buf = await locator.screenshot({ type: 'png' })
+      base64 = buf.toString('base64')
+      try {
+        const box = await locator.boundingBox()
+        if (box) {
+          width = Math.round(box.width)
+          height = Math.round(box.height)
+        }
+      } catch { /* fall back to viewport dims */ }
+    } else {
+      const buf = await page.screenshot({ type: 'png', fullPage })
+      base64 = buf.toString('base64')
+      if (fullPage) {
+        // Try to capture the actual full-page height (best-effort)
+        try {
+          height = await page.evaluate(() => Math.max(
+            document.body.scrollHeight,
+            document.documentElement.scrollHeight,
+            document.body.offsetHeight,
+            document.documentElement.offsetHeight,
+          ))
+        } catch { /* keep viewport height */ }
+      }
+    }
+
+    return {
+      success: true,
+      url: args.url,
+      base64,
+      width,
+      height,
+      viewport: { width: viewportWidth, height: viewportHeight },
+      fullPage,
+      selector: selector || null,
+      capturedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAt,
+    }
+  } catch (err: any) {
+    return {
+      success: false,
+      error: `browser_screenshot failed: ${err?.message || String(err)}`,
+      url: args.url,
+      durationMs: Date.now() - startedAt,
+    }
+  } finally {
+    if (browser) {
+      try { await browser.close() } catch { /* ignore */ }
+    }
+  }
+}
+
+/**
+ * lint — Phase 3.3 tool.
+ *
+ * Runs ESLint with `--format json` and parses structured output. Caps result
+ * list at `max_results` (default 100) to avoid blowing the LLM context budget.
+ *
+ * Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3.3 (line 230)
+ * Feature flag: ENABLE_LINT (default false)
+ */
+export async function lint(args: {
+  path?: string
+  fix?: boolean
+  max_results?: number
+}): Promise<unknown> {
+  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const maxResults = Math.max(1, Math.min(1000, args.max_results || 100))
+  const target = args.path || '.'
+
+  // Resolve target within workspace (security: no traversal escapes)
+  let targetPath = root
+  if (args.path) {
+    try {
+      targetPath = await resolveWithinWorkspace(args.path)
+    } catch (err: any) {
+      return { success: false, error: `Path rejected: ${err?.message || String(err)}` }
+    }
+  }
+
+  // Build ESLint command with JSON formatter
+  const fixFlag = args.fix === true ? '--fix' : ''
+  const cmd = `bunx eslint --format json ${fixFlag} --no-error-on-unmatched-pattern "${targetPath}"`.replace(/\s+/g, ' ').trim()
+
+  const startedAt = Date.now()
+  let stdout = ''
+  let stderr = ''
+  let exitCode = 0
+
+  try {
+    const out = await execAsync(cmd, {
+      cwd: root,
+      timeout: 120_000,
+      maxBuffer: 10 * 1024 * 1024,
+    })
+    stdout = out.stdout || ''
+    stderr = out.stderr || ''
+  } catch (err: any) {
+    // ESLint exits non-zero on lint errors — output is still JSON in stdout
+    stdout = err.stdout || ''
+    stderr = err.stderr || ''
+    exitCode = err.code ?? 1
+  }
+
+  // Parse JSON output
+  // eslint --format json emits an array of per-file result objects
+  let parsed: Array<{
+    filePath: string
+    messages: Array<{
+      ruleId: string | null
+      severity: number  // 1=warning, 2=error
+      message: string
+      line: number | undefined
+      column: number | undefined
+      nodeType: string | undefined
+    }>
+    errorCount: number
+    warningCount: number
+    fixableErrorCount: number
+    fixableWarningCount: number
+  }> = []
+  let parseError = ''
+  try {
+    // stdout may have leading warnings before the JSON array — extract first `[`
+    const jsonStart = stdout.indexOf('[')
+    if (jsonStart >= 0) {
+      parsed = JSON.parse(stdout.slice(jsonStart))
+    } else if (stdout.trim().startsWith('[')) {
+      parsed = JSON.parse(stdout)
+    } else {
+      // No JSON output — likely config error
+      parseError = 'No JSON output (ESLint config missing or invalid target)'
+    }
+  } catch (err: any) {
+    parseError = `Failed to parse ESLint JSON output: ${err?.message || String(err)}`
+  }
+
+  // Flatten results into a single sorted array
+  let totalErrors = 0
+  let totalWarnings = 0
+  const flat: Array<{
+    file: string
+    line: number | undefined
+    column: number | undefined
+    severity: 'error' | 'warning'
+    ruleId: string | null
+    message: string
+  }> = []
+
+  for (const r of parsed) {
+    totalErrors += r.errorCount || 0
+    totalWarnings += r.warningCount || 0
+    for (const m of r.messages) {
+      flat.push({
+        file: r.filePath,
+        line: m.line,
+        column: m.column,
+        severity: m.severity === 2 ? 'error' : 'warning',
+        ruleId: m.ruleId,
+        message: (m.message || '').slice(0, 300),
+      })
+    }
+  }
+
+  // Sort: errors first, then warnings; then by file:line
+  flat.sort((a, b) => {
+    if (a.severity !== b.severity) return a.severity === 'error' ? -1 : 1
+    if (a.file !== b.file) return a.file < b.file ? -1 : 1
+    return (a.line || 0) - (b.line || 0)
+  })
+
+  const truncated = flat.length > maxResults
+  const trimmed = flat.slice(0, maxResults)
+
+  return {
+    success: totalErrors === 0,
+    errorCount: totalErrors,
+    warningCount: totalWarnings,
+    fixableErrorCount: parsed.reduce((s, r) => s + (r.fixableErrorCount || 0), 0),
+    fixableWarningCount: parsed.reduce((s, r) => s + (r.fixableWarningCount || 0), 0),
+    results: trimmed,
+    truncated,
+    totalCount: flat.length,
+    durationMs: Date.now() - startedAt,
+    exitCode,
+    parseError: parseError || undefined,
+    raw: (stdout + stderr).slice(0, 5000),
+  }
+}
+
+/**
+ * type_check — Phase 3.3 tool.
+ *
+ * Runs `tsc --noEmit` and parses output via existing parseTscOutput().
+ * Returns per-file error list with TS codes — structured for agent consumption.
+ *
+ * Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3.3 (line 230)
+ * Feature flag: ENABLE_TYPE_CHECK (default false)
+ */
+export async function typeCheck(args: { path?: string }): Promise<unknown> {
+  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const startedAt = Date.now()
+
+  let stdout = ''
+  let stderr = ''
+  let exitCode = 0
+
+  // tsc has no flag for a single file path with project tsconfig — we run
+  // the whole project (--noEmit) which honours include/exclude in tsconfig.json.
+  // For path-specific filtering we post-filter the parsed results.
+  const cmd = 'bunx tsc --noEmit'
+
+  try {
+    const out = await execAsync(cmd, {
+      cwd: root,
+      timeout: 180_000,
+      maxBuffer: 10 * 1024 * 1024,
+    })
+    stdout = out.stdout || ''
+    stderr = out.stderr || ''
+  } catch (err: any) {
+    // tsc exits non-zero on errors — output (errors) is in stdout/stderr
+    stdout = err.stdout || ''
+    stderr = err.stderr || ''
+    exitCode = err.code ?? 1
+  }
+
+  const output = stdout + stderr
+  let diags = parseTscOutput(output)
+
+  // Optional path filter — keep only diagnostics whose file path matches
+  if (args.path) {
+    const want = args.path.replace(/\/+$/, '')
+    diags = diags.filter(d =>
+      d.file === want ||
+      d.file.endsWith('/' + want) ||
+      d.file.endsWith(want)
+    )
+  }
+
+  return {
+    success: diags.length === 0,
+    errorCount: diags.length,
+    results: diags.map(d => ({
+      file: d.file,
+      line: d.line,
+      col: d.col,
+      severity: d.severity,
+      code: d.code,
+      message: d.message,
+    })),
+    durationMs: Date.now() - startedAt,
+    exitCode,
+    raw: output.slice(0, 5000),
+  }
+}
+
+/**
+ * test_coverage — Phase 3.4 tool.
+ *
+ * Runs `bun test --coverage` and parses the per-file coverage table that Bun
+ * prints to stdout. Returns total + per-file coverage percentages and the
+ * uncovered line ranges for each file.
+ *
+ * Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3.4 (line 231)
+ * Feature flag: ENABLE_TEST_COVERAGE (default false)
+ */
+export async function testCoverage(args: {
+  target?: string
+  reporter?: 'text' | 'json'
+}): Promise<unknown> {
+  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const startedAt = Date.now()
+  const target = args.target || ''
+  const wantJson = args.reporter === 'json'
+
+  // bun test --coverage prints a table to stdout. --coverage-reporter=json
+  // is NOT a stable Bun flag in all versions, so we parse the text table
+  // regardless of `reporter` for now (json reporter is best-effort: pass the
+  // flag through, fall back to text parsing).
+  const reporterFlag = wantJson ? '--coverage-reporter=json' : ''
+  const cmd = `bun test --coverage ${reporterFlag} ${target ? `"${target}"` : ''}`.replace(/\s+/g, ' ').trim()
+
+  let stdout = ''
+  let stderr = ''
+  let exitCode = 0
+
+  try {
+    const out = await execAsync(cmd, {
+      cwd: root,
+      timeout: 300_000,  // 5 min — same as runTests
+      maxBuffer: 10 * 1024 * 1024,
+    })
+    stdout = out.stdout || ''
+    stderr = out.stderr || ''
+  } catch (err: any) {
+    stdout = err.stdout || ''
+    stderr = err.stderr || ''
+    exitCode = err.code ?? 1
+  }
+
+  const output = stdout + stderr
+  const durationMs = Date.now() - startedAt
+
+  // Try JSON parse first (when --coverage-reporter=json actually emits JSON)
+  if (wantJson) {
+    try {
+      const jsonStart = output.indexOf('{')
+      if (jsonStart >= 0) {
+        // Find the matching closing brace (best-effort — slice to last `}`)
+        const jsonEnd = output.lastIndexOf('}')
+        if (jsonEnd > jsonStart) {
+          const slice = output.slice(jsonStart, jsonEnd + 1)
+          const data = JSON.parse(slice)
+          return {
+            success: true,
+            source: 'json',
+            totalCoverage: {
+              functions: typeof data.functions === 'number' ? data.functions : null,
+              lines: typeof data.lines === 'number' ? data.lines : null,
+              branches: typeof data.branches === 'number' ? data.branches : null,
+            },
+            files: Array.isArray(data.files) ? data.files : [],
+            durationMs,
+            exitCode,
+            raw: output.slice(0, 5000),
+          }
+        }
+      }
+    } catch {
+      // fall through to text parsing
+    }
+  }
+
+  // Text table parser — Bun's default coverage output looks like:
+  //   file                         | % func   | % lines  | uncovered
+  //   ----------------------------+----------+----------+------------------
+  //   src/lib/foo.ts               | 100.00 % |  85.71 % | 12-14, 20
+  //   ...
+  //   ----------------------------+----------+----------+------------------
+  //   all files                    |  90.00 % |  78.50 % |
+  const lines = output.split('\n')
+  const files: Array<{
+    path: string
+    functions: number | null
+    lines: number | null
+    branches: number | null
+    uncoveredLines: Array<number[]>
+  }> = []
+
+  let totalFunc: number | null = null
+  let totalLines: number | null = null
+  let totalBranches: number | null = null
+
+  // Match: <file> | NN.NN % | NN.NN % | NN.NN % | <uncovered>
+  // Bun prints at minimum % funcs + % lines (no branches column if unsupported).
+  const rowRegex = /^(.+?)\s*\|\s*(\d+(?:\.\d+)?)\s*%\s*\|\s*(\d+(?:\.\d+)?)\s*%\s*(?:\|\s*(\d+(?:\.\d+)?)\s*%)?\s*(?:\|\s*(.*?))?$/
+
+  for (const line of lines) {
+    const m = line.match(rowRegex)
+    if (!m) continue
+    const filePath = m[1].trim()
+    if (!filePath || filePath.startsWith('-')) continue
+    if (filePath.toLowerCase().includes('all files') || filePath.toLowerCase() === 'all files') {
+      totalFunc = parseFloat(m[2])
+      totalLines = parseFloat(m[3])
+      totalBranches = m[4] ? parseFloat(m[4]) : null
+      continue
+    }
+    // Filter out separator/header noise — only keep paths that look like files
+    if (!/[\\/]/.test(filePath) && !/\.(ts|js|tsx|jsx|py)$/.test(filePath)) {
+      continue
+    }
+    const uncoveredStr = (m[5] || '').trim()
+    const uncoveredLines = parseUncoveredLines(uncoveredStr)
+    files.push({
+      path: filePath,
+      functions: parseFloat(m[2]),
+      lines: parseFloat(m[3]),
+      branches: m[4] ? parseFloat(m[4]) : null,
+      uncoveredLines,
+    })
+  }
+
+  // If no total row was found, compute aggregate from per-file (rough — Bun's
+  // aggregate uses statement-weighted averaging, which we can't replicate here)
+  if (totalFunc === null && files.length > 0) {
+    totalFunc = files.reduce((s, f) => s + (f.functions || 0), 0) / files.length
+    totalLines = files.reduce((s, f) => s + (f.lines || 0), 0) / files.length
+    const branchFiles = files.filter(f => f.branches !== null)
+    totalBranches = branchFiles.length > 0
+      ? branchFiles.reduce((s, f) => s + (f.branches || 0), 0) / branchFiles.length
+      : null
+  }
+
+  // Detect test failures (Bun prints "X pass", "Y fail" summary)
+  const failMatch = output.match(/(\d+)\s+fail/i)
+  const testFailures = failMatch ? parseInt(failMatch[1]) : 0
+
+  return {
+    success: true,
+    source: 'text',
+    totalCoverage: {
+      functions: totalFunc,
+      lines: totalLines,
+      branches: totalBranches,
+    },
+    files,
+    testFailures,
+    durationMs,
+    exitCode,
+    raw: output.slice(0, 5000),
+  }
+}
+
+/** Parse Bun's uncovered-line notation: "12-14, 20, 25-30" → [[12,14],[20,20],[25,30]] */
+function parseUncoveredLines(s: string): Array<number[]> {
+  if (!s) return []
+  const ranges: Array<number[]> = []
+  for (const part of s.split(',')) {
+    const trimmed = part.trim()
+    if (!trimmed) continue
+    const rangeMatch = trimmed.match(/^(\d+)\s*[-–]\s*(\d+)$/)
+    if (rangeMatch) {
+      ranges.push([parseInt(rangeMatch[1]), parseInt(rangeMatch[2])])
+      continue
+    }
+    const singleMatch = trimmed.match(/^(\d+)$/)
+    if (singleMatch) {
+      const n = parseInt(singleMatch[1])
+      ranges.push([n, n])
+    }
+  }
+  return ranges
+}
+
+/**
+ * db_query — Phase 3.5 tool.
+ *
+ * Read-only Prisma $queryRawUnsafe wrapper. Strict SQL validation rejects
+ * any write/DDL operation, multi-statement injection, and forbidden pragmas.
+ *
+ * Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3.5 (line 232)
+ * Feature flag: ENABLE_DB_QUERY (default false)
+ *
+ * SECURITY-CRITICAL: never relax this guard without a separate audit. The
+ * whole point of this tool is to let agents inspect the SQLite buffer layer
+ * without ever being able to mutate it.
+ */
+export async function dbQuery(args: {
+  sql: string
+  params?: any[]
+  limit?: number
+}): Promise<unknown> {
+  if (!args.sql || typeof args.sql !== 'string') {
+    return { success: false, error: 'sql (string) is required' }
+  }
+
+  const rawSql = args.sql
+  const params = Array.isArray(args.params) ? args.params : []
+  const requestedLimit = args.limit !== undefined
+    ? Math.max(1, Math.min(1000, Math.floor(args.limit)))
+    : 100
+  const hardMax = 1000
+
+  // ---------- READ-ONLY GUARD ----------
+  // Strip comments (-- line comments, /* block comments */)
+  const stripped = rawSql
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\n]*/g, ' ')
+    .trim()
+
+  const upper = stripped.toUpperCase()
+
+  // Reject multi-statement: `;` followed by non-whitespace
+  if (/;\s*\S/.test(stripped)) {
+    return {
+      success: false,
+      error: 'SQL rejected by read-only guard: multi-statement queries are not allowed',
+      sql: rawSql.slice(0, 500),
+    }
+  }
+
+  // Forbidden write keywords — anywhere in the (comment-stripped) SQL.
+  // Exception: `PRAGMA query_plan` (read-only EXPLAIN-style) is allowed.
+  const writeKeywords = [
+    'INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'TRUNCATE',
+    'CREATE', 'GRANT', 'REVOKE', 'ATTACH', 'DETACH',
+  ]
+  for (const kw of writeKeywords) {
+    // Word-boundary match to avoid false positives (e.g. column name containing "update")
+    const re = new RegExp(`\\b${kw}\\b`)
+    if (re.test(upper)) {
+      return {
+        success: false,
+        error: `SQL rejected by read-only guard: write keyword "${kw}" is not allowed`,
+        sql: rawSql.slice(0, 500),
+      }
+    }
+  }
+
+  // PRAGMA — only `PRAGMA <table>(<info>)` and `PRAGMA query_plan` are read-only
+  // For simplicity here: reject ALL pragmas except `query_plan`.
+  if (/\bPRAGMA\b/.test(upper) && !/\bQUERY_PLAN\b/.test(upper)) {
+    return {
+      success: false,
+      error: 'SQL rejected by read-only guard: PRAGMA statements are not allowed (except PRAGMA query_plan)',
+      sql: rawSql.slice(0, 500),
+    }
+  }
+
+  // sqlite_master writes are guarded by the write-keyword check above — reads OK.
+
+  // Apply LIMIT by wrapping the query. Only safe-wrap SELECT statements
+  // (everything else should have been rejected above). Bun/SQLite accept
+  // `SELECT * FROM (<original>) sub LIMIT N` for any SELECT, including those
+  // with ORDER BY / LIMIT / OFFSET already (the inner LIMIT just gets
+  // overridden by the outer one).
+  let execSql = rawSql.trim().replace(/;+\s*$/, '')
+  let wrapped = false
+  if (/^\s*SELECT\b/i.test(execSql) && requestedLimit < hardMax) {
+    execSql = `SELECT * FROM (${execSql}) sub LIMIT ${requestedLimit}`
+    wrapped = true
+  }
+
+  const startedAt = Date.now()
+  try {
+    // Prisma's $queryRawUnsafe accepts the SQL string + positional params.
+    // Type-cast to any[] because $queryRawUnsafe is variadic.
+    const rows = await (db as any).$queryRawUnsafe(execSql, ...params)
+    // Prisma returns BigInt for INTEGER columns when using raw queries —
+    // JSON.stringify would throw on BigInt. Convert to Number where possible.
+    const safeRows = JSON.parse(JSON.stringify(rows, (_k, v) =>
+      typeof v === 'bigint' ? Number(v) : v
+    )) as unknown[]
+
+    const rowCount = Array.isArray(safeRows) ? safeRows.length : 0
+    const truncated = rowCount >= requestedLimit
+
+    return {
+      success: true,
+      rows: safeRows,
+      rowCount,
+      truncated,
+      limit: requestedLimit,
+      wrapped,
+      durationMs: Date.now() - startedAt,
+      sql: execSql,
+    }
+  } catch (err: any) {
+    return {
+      success: false,
+      error: `db_query failed: ${err?.message || String(err)}`,
+      sql: rawSql.slice(0, 500),
+      durationMs: Date.now() - startedAt,
+    }
+  }
+}

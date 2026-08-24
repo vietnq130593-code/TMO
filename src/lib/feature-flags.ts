@@ -8,7 +8,7 @@
  *   Phase 1b: ENABLE_WEB_UNIFIED, ENABLE_GATEWAY_TOOLS
  *   Phase 1c: ENABLE_NATIVE_FC
  *   Phase 2:   ENABLE_FILE_*
- *   Phase 3:   ENABLE_LSP_*, ENABLE_BROWSER_*, ENABLE_MCP_CALL
+ *   Phase 3:   ENABLE_LSP_*, ENABLE_BROWSER_*, ENABLE_LINT, ENABLE_TYPE_CHECK, ENABLE_TEST_COVERAGE, ENABLE_DB_QUERY, ENABLE_MCP_CALL
  *   Phase 4:   ENABLE_AUTO_*, ENABLE_PLAN_MODE, ENABLE_CRON_TOOL
  *   Phase 5:   ENABLE_MASTER_ORCHESTRATOR, ENABLE_SESSION_RESUME
  *
@@ -51,9 +51,14 @@ const DEFAULTS: Record<string, string> = {
   ENABLE_RUN_TESTS: 'true',
   ENABLE_GIT_COMMIT: 'true',
 
-  // Phase 3
+  // Phase 3 (NEW in Task 8 — code intelligence + MCP; all default false per spec
+  // Part 12 "new tools default false" — flip to true in .env after smoke test passes)
   ENABLE_LSP_DIAGNOSTICS: 'false',
   ENABLE_BROWSER_SCREENSHOT: 'false',
+  ENABLE_LINT: 'false',
+  ENABLE_TYPE_CHECK: 'false',
+  ENABLE_TEST_COVERAGE: 'false',
+  ENABLE_DB_QUERY: 'false',
   ENABLE_MCP_CALL: 'false',
 
   // Phase 4

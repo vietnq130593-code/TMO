@@ -40,7 +40,15 @@ import {
   todoRead as executeTodoReadFn,
   // v2.1 Phase 2.1 — Claude Code parity file_read
   fileRead as executeFileReadFn,
+  // v2.1 Phase 3 — code intelligence + MCP (spec lines 223-242)
+  browserScreenshot as executeBrowserScreenshotFn,
+  lint as executeLintFn,
+  typeCheck as executeTypeCheckFn,
+  testCoverage as executeTestCoverageFn,
+  dbQuery as executeDbQueryFn,
 } from './dev-tools'
+// v2.1 Phase 3.6 — MCP bridge (separate module)
+import { mcpCall as executeMcpCallFn } from '@/lib/mcp/mcp-bridge'
 import { isFlagEnabled, flagMode } from '@/lib/feature-flags'
 
 // ==================== Z-AI-SDK LAZY INITIALIZATION ====================
@@ -454,6 +462,122 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
         properties: {
           path: { type: 'string', description: 'File cụ thể (optional — nếu omit, check toàn workspace)' },
         },
+      },
+    },
+  },
+  // ==================== v2.1 Phase 3 — Code Intelligence + MCP (spec lines 223-242) ====================
+  // 3.1 — alias of getDiagnostics but exposed under a separate tool name per
+  // spec. Phase 3 wire-up: separate `lsp_diagnostics` tool definition + case.
+  lsp_diagnostics: {
+    type: 'function',
+    function: {
+      name: 'lsp_diagnostics',
+      description: 'LSP diagnostics (tsc --noEmit + opencode-server /lsp/diagnostics). Phase 3 code intelligence — trả file:line:col + TSxxxx code. Giống get_diagnostics nhưng tên tool tách biệt theo spec line 228.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File cụ thể (optional — nếu omit, check toàn workspace)' },
+        },
+      },
+    },
+  },
+  // 3.2 — Playwright headless chromium screenshot, returns base64 PNG.
+  browser_screenshot: {
+    type: 'function',
+    function: {
+      name: 'browser_screenshot',
+      description: 'Chụp screenshot URL (Playwright headless chromium). Trả base64 PNG cho agent consumption. Tùy chọn: full_page, viewport, wait_until, wait_ms, selector (chỉ chụp element).',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'URL http(s) cần chụp (bắt buộc)' },
+          full_page: { type: 'boolean', description: 'true = chụp toàn page (scroll), false = chỉ viewport (default)' },
+          viewport_width: { type: 'number', description: 'Viewport width (default 1280, clamp 320-4096)' },
+          viewport_height: { type: 'number', description: 'Viewport height (default 720, clamp 240-4096)' },
+          wait_until: { type: 'string', enum: ['load', 'domcontentloaded', 'networkidle'], description: 'Playwright waitUntil event (default load)' },
+          wait_ms: { type: 'number', description: 'Đợi thêm ms sau khi navigate (max 60s, default 0)' },
+          selector: { type: 'string', description: 'CSS selector — nếu set, chỉ chụp element đó (15s wait visible)' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  // 3.3a — ESLint structured parser.
+  lint: {
+    type: 'function',
+    function: {
+      name: 'lint',
+      description: 'Chạy ESLint với --format json, parse kết quả có cấu trúc. Trả {errorCount, warningCount, results:[{file,line,column,severity,ruleId,message}], fixableErrorCount}. Cap max_results (default 100) để tránh tràn context.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File/thư mục cần lint (optional, default ".")' },
+          fix: { type: 'boolean', description: 'true = chạy với --fix (auto-fixable rules)' },
+          max_results: { type: 'number', description: 'Số lượng kết quả tối đa trả về (default 100, max 1000)' },
+        },
+      },
+    },
+  },
+  // 3.3b — tsc --noEmit parser (uses existing parseTscOutput).
+  type_check: {
+    type: 'function',
+    function: {
+      name: 'type_check',
+      description: 'Chạy tsc --noEmit, parse errors với file:line:col + TSxxxx code. Tùy chọn path filter để chỉ xem errors của file cụ thể. Trả {errorCount, results, raw (5KB)}',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Filter result theo file path (optional — vẫn check toàn project)' },
+        },
+      },
+    },
+  },
+  // 3.4 — bun test --coverage parser.
+  test_coverage: {
+    type: 'function',
+    function: {
+      name: 'test_coverage',
+      description: 'Chạy bun test --coverage, parse bảng coverage text (hoặc JSON nếu reporter=json). Trả {totalCoverage:{functions,lines,branches}, files:[{path,functions,lines,branches,uncoveredLines:[[start,end],...]}], testFailures, durationMs}.',
+      parameters: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: 'Test file/pattern target (optional, default toàn test suite)' },
+          reporter: { type: 'string', enum: ['text', 'json'], description: 'Bun coverage reporter (default text)' },
+        },
+      },
+    },
+  },
+  // 3.5 — Prisma $queryRawUnsafe + read-only guard.
+  db_query: {
+    type: 'function',
+    function: {
+      name: 'db_query',
+      description: 'Read-only SQL query against SQLite buffer layer (Prisma $queryRawUnsafe). STRICT READ-ONLY GUARD: reject INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/CREATE/GRANT/REVOKE/ATTACH/DETACH + multi-statement + PRAGMA (except query_plan). Trả {rows, rowCount, truncated, sql}.',
+      parameters: {
+        type: 'object',
+        properties: {
+          sql: { type: 'string', description: 'SQL SELECT query (read-only — write keywords rejected)' },
+          params: { type: 'array', items: {}, description: 'Positional bind params (optional)' },
+          limit: { type: 'number', description: 'Max rows trả về (default 100, max 1000) — wrap query trong sub LIMIT' },
+        },
+        required: ['sql'],
+      },
+    },
+  },
+  // 3.6 — MCP bridge call (stub: 4 built-in servers with mock impl).
+  mcp_call: {
+    type: 'function',
+    function: {
+      name: 'mcp_call',
+      description: 'Gọi tool trên MCP server (filesystem/github/postgres/puppeteer + discovered từ env MCP_SERVERS hoặc ~/.config/mcp/servers.json). First-use permission prompt (D10): trả requiresPermission=true lần đầu, agent phải gọi /api/openclaw/permissions grant. Phase 3 stub — mock impl, real subprocess deferred Phase 5.',
+      parameters: {
+        type: 'object',
+        properties: {
+          server: { type: 'string', description: 'MCP server ID (filesystem/github/postgres/puppeteer/...)' },
+          tool: { type: 'string', description: 'Tool name trên server (vd create_pr, read_file, query...)' },
+          args: { type: 'object', description: 'Tool args (schema phụ thuộc server+tool)' },
+        },
+        required: ['server', 'tool'],
       },
     },
   },
@@ -973,6 +1097,91 @@ export async function executeTool(
       case 'get_diagnostics':
         result = await getDiagnostics(args as any)
         break
+      // ===== v2.1 Phase 3 — code intelligence + MCP (spec lines 223-242) =====
+      // 3.1 lsp_diagnostics — alias of getDiagnostics (separate tool name per spec line 228)
+      case 'lsp_diagnostics': {
+        if (!isFlagEnabled('ENABLE_LSP_DIAGNOSTICS')) {
+          return {
+            success: false,
+            result: 'lsp_diagnostics tool is disabled (set ENABLE_LSP_DIAGNOSTICS=true in .env to enable). See docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3.1.',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await getDiagnostics(args as any)
+        break
+      }
+      // 3.2 browser_screenshot — Playwright headless chromium → base64 PNG
+      case 'browser_screenshot': {
+        if (!isFlagEnabled('ENABLE_BROWSER_SCREENSHOT')) {
+          return {
+            success: false,
+            result: 'browser_screenshot tool is disabled (set ENABLE_BROWSER_SCREENSHOT=true in .env to enable). See docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3.2.',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeBrowserScreenshotFn(args as any)
+        break
+      }
+      // 3.3a lint — ESLint --format json parser
+      case 'lint': {
+        if (!isFlagEnabled('ENABLE_LINT')) {
+          return {
+            success: false,
+            result: 'lint tool is disabled (set ENABLE_LINT=true in .env to enable). See docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3.3.',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeLintFn(args as any)
+        break
+      }
+      // 3.3b type_check — tsc --noEmit parser
+      case 'type_check': {
+        if (!isFlagEnabled('ENABLE_TYPE_CHECK')) {
+          return {
+            success: false,
+            result: 'type_check tool is disabled (set ENABLE_TYPE_CHECK=true in .env to enable). See docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3.3.',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeTypeCheckFn(args as any)
+        break
+      }
+      // 3.4 test_coverage — bun test --coverage parser
+      case 'test_coverage': {
+        if (!isFlagEnabled('ENABLE_TEST_COVERAGE')) {
+          return {
+            success: false,
+            result: 'test_coverage tool is disabled (set ENABLE_TEST_COVERAGE=true in .env to enable). See docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3.4.',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeTestCoverageFn(args as any)
+        break
+      }
+      // 3.5 db_query — Prisma $queryRawUnsafe + read-only guard
+      case 'db_query': {
+        if (!isFlagEnabled('ENABLE_DB_QUERY')) {
+          return {
+            success: false,
+            result: 'db_query tool is disabled (set ENABLE_DB_QUERY=true in .env to enable). See docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3.5.',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeDbQueryFn(args as any)
+        break
+      }
+      // 3.6 mcp_call — MCP bridge (filesystem/github/postgres/puppeteer + discovered)
+      case 'mcp_call': {
+        if (!isFlagEnabled('ENABLE_MCP_CALL')) {
+          return {
+            success: false,
+            result: 'mcp_call tool is disabled (set ENABLE_MCP_CALL=true in .env to enable). See docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3.6.',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeMcpCallFn(args as any)
+        break
+      }
       case 'decompose_task':
         result = await decomposeTask(args as any)
         break

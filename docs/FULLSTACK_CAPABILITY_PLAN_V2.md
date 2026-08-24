@@ -547,6 +547,14 @@ Every `executeTool()` call logs row. Queryable for:
 
 All flags in `.env` (off by default for safe rollout):
 
+> **Amendment (Task 7-b, post Phase 2 audit)**: The "off by default" rule is
+> the spec's safe-rollout policy. In practice, tools that were ALREADY shipped
+> before their per-tool flag was added retain `default=true` to avoid breaking
+> existing deployments — flagged as `# default=true (shipped before flag added)`
+> in `feature-flags.ts` and `.env.example`. New tools added in the same commit
+> as their flag default to `false` per spec. Standing rule: **shipped tools →
+> true; new tools → false**, ratified per Task 7-b user approval (2026-08-24).
+
 ```bash
 # Phase 1a
 ENABLE_SHELL_TOOL=false

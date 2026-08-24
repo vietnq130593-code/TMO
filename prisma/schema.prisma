@@ -787,3 +787,30 @@ model Todo {
   @@index([parentId])
   @@index([idempotencyKey])
 }
+
+/// Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Part 11.1 (Phase 3 — observability)
+/// Logs every executeTool() call: success/exitCode/durationMs/errorTag for
+/// per-tool error budget tracking + P50/P95/P99 latency monitoring.
+model ToolMetric {
+  id          String   @id @default(cuid())
+  /// Tool name (shell, file_edit, run_tests, git_commit, lsp_diagnostics, ...)
+  toolName    String
+  /// Session ID for correlation with chat sessions
+  sessionId   String
+  /// Agent role: TL | CORTEX | BOLT | SENTINEL | CATALYST | INDEPENDENT
+  agentRole   String
+  /// true if tool succeeded, false otherwise
+  success     Boolean
+  /// Exit code (for shell/test runners); null for non-exit-code tools
+  exitCode    Int?
+  /// Wall-clock duration in ms
+  durationMs  Int
+  /// Categorized error tag (e.g. 'timeout', 'parse_error', 'permission')
+  errorTag    String?
+  timestamp   DateTime @default(now())
+
+  @@index([toolName])
+  @@index([sessionId])
+  @@index([timestamp])
+  @@index([success])
+}
