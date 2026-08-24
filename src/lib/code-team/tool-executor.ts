@@ -1379,20 +1379,50 @@ export async function executeTool(
         const planId = `plan_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 
         try {
-          const existing = await db.codeTeamSession.findUnique({ where: { sessionId } })
-          if (existing) {
+          // Phase 4 audit fix (Task 11, P1-3): previously this block used
+          // `if (existing)` to guard the update — but if the CodeTeamSession
+          // row didn't exist (e.g. agent called exit_plan_mode outside a
+          // workflow, or session row was never created), the plan was
+          // silently dropped while the tool still returned planId+approved:false
+          // as if persisted. The plan-mode API then 404s on approve/reject.
+          //
+          // Fix: upsert to guarantee the row exists with safe defaults, then
+          // read-modify-write the partsDefinition JSON array. The create
+          // branch carries the plan inline so it's persisted atomically; the
+          // update branch does the read-push-write for existing sessions.
+          const entry = {
+            planId,
+            type: 'pending_plan' as const,
+            plan,
+            filesToModify,
+            riskLevel,
+            status: 'pending' as const,
+            createdAt: new Date().toISOString(),
+          }
+
+          const existing = await db.codeTeamSession.findUnique({
+            where: { sessionId },
+            select: { partsDefinition: true },
+          })
+          if (!existing) {
+            // Create the session row with the plan as the first entry.
+            // Safe defaults: routingMode 'C' (manual), tier 1, score 3 (minimal).
+            // currentStep 'plan_pending' surfaces the pause state in the UI.
+            await db.codeTeamSession.create({
+              data: {
+                sessionId,
+                routingMode: 'C',
+                tier: 1,
+                score: 3,
+                currentStep: 'plan_pending',
+                partsDefinition: JSON.stringify([entry]),
+              },
+            })
+          } else {
             let partsRaw: unknown[]
             try { partsRaw = JSON.parse(existing.partsDefinition || '[]') } catch { partsRaw = [] }
             if (!Array.isArray(partsRaw)) partsRaw = []
-            partsRaw.push({
-              planId,
-              type: 'pending_plan',
-              plan,
-              filesToModify,
-              riskLevel,
-              status: 'pending',
-              createdAt: new Date().toISOString(),
-            })
+            partsRaw.push(entry)
             await db.codeTeamSession.update({
               where: { sessionId },
               data: { partsDefinition: JSON.stringify(partsRaw) },

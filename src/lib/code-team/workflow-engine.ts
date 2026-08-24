@@ -69,7 +69,7 @@ import {
   autoCheckpointBeforeRiskyOp,
   autoRestoreOnVerifyFailure,
 } from '@/lib/workspace/neo4j-checkpoint'
-import { getFsCheckpoint } from '@/lib/workspace/fs-checkpoint'
+import { getFsCheckpoint, autoRestoreFsOnVerifyFailure } from '@/lib/workspace/fs-checkpoint'
 
 /** Operations that trigger auto-checkpoint BEFORE they execute. */
 const RISKY_OPS = new Set<string>([
@@ -914,9 +914,18 @@ async function runPipeline(
         // Spec line 253: "When TL checkpoint verify returns 'PIVOT' or 'ESCALATE'
         // or a verify error occurs, auto-restore the latest checkpoint for that session."
         // Honor ENABLE_AUTO_RESTORE flag (off | warn | strict).
+        // Phase 4 audit fix (Task 11, P1-2): also restore the fs-checkpoint
+        // (files), not just Neo4j. The auto-checkpoint before risky ops takes
+        // BOTH Neo4j + fs snapshots; restore must be symmetric or the fs
+        // snapshot is dead weight.
         await autoRestoreOnVerifyFailure({
           sessionId,
           reason: `ESCALATE sau ${step.position}: ${verifyResult.reasoning}`,
+        })
+        await autoRestoreFsOnVerifyFailure({
+          sessionId,
+          reason: `ESCALATE sau ${step.position}: ${verifyResult.reasoning}`,
+          workspaceRoot: getWorkspaceRoot(),
         })
 
         // Still complete the session as failed
@@ -931,9 +940,15 @@ async function runPipeline(
         // ===== v2.1 Phase 4.2 — Auto-restore on verify failure (PIVOT case) =====
         // PIVOT means the direction needs to change → restore the latest checkpoint
         // so the agent doesn't continue building on a wrong foundation.
+        // Phase 4 audit fix (Task 11, P1-2): also restore fs-checkpoint (files).
         await autoRestoreOnVerifyFailure({
           sessionId,
           reason: `PIVOT sau ${step.position}: ${verifyResult.reasoning}`,
+        })
+        await autoRestoreFsOnVerifyFailure({
+          sessionId,
+          reason: `PIVOT sau ${step.position}: ${verifyResult.reasoning}`,
+          workspaceRoot: getWorkspaceRoot(),
         })
 
         emit({

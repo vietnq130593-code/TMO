@@ -277,6 +277,99 @@ export class FsCheckpoint {
       return null;
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Restore latest checkpoint for a session (Phase 4.2 companion)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Find the most recent checkpoint for the given session and restore it.
+   *
+   * Phase 4 audit fix (Task 11, P1-2): the auto-checkpoint before risky ops
+   * takes BOTH a Neo4j differential checkpoint AND an fs-checkpoint (see
+   * workflow-engine.ts line ~1262). But the original Phase 4 auto-restore
+   * path only called autoRestoreOnVerifyFailure() (Neo4j) — the fs snapshot
+   * was taken but never restored on verify failure, defeating the purpose.
+   *
+   * This companion mirrors autoRestoreOnVerifyFailure's signature so the
+   * workflow engine can call both side-by-side:
+   *   await autoRestoreOnVerifyFailure({ sessionId, reason })        // Neo4j
+   *   await autoRestoreFsOnVerifyFailure({ sessionId, reason, workspaceRoot })  // fs
+   *
+   * Returns { triggered, checkpointId?, result? } mirroring the Neo4j helper.
+   */
+  async restoreLatestForSession(sessionId: string): Promise<RestoreResult & { checkpointId?: string }> {
+    const checkpoints = await this.listCheckpoints(sessionId);
+    if (checkpoints.length === 0) {
+      return {
+        success: false,
+        error: `No fs-checkpoints found for session ${sessionId}`,
+        restoredFiles: [],
+        failedFiles: [],
+      };
+    }
+    const latest = checkpoints[0]; // listCheckpoints sorts newest-first
+    const result = await this.restoreCheckpoint(latest.id);
+    return { ...result, checkpointId: latest.id };
+  }
+}
+
+// ============================================
+// Phase 4.2 — autoRestoreFsOnVerifyFailure (companion to Neo4j auto-restore)
+// ============================================
+
+/**
+ * Restore the latest fs-checkpoint for a session on verify failure.
+ *
+ * Gated by ENABLE_AUTO_RESTORE flag (off | warn | strict), mirroring the
+ * Neo4j autoRestoreOnVerifyFailure in neo4j-checkpoint.ts:
+ *   - 'off'    → skip entirely
+ *   - 'warn'   → console.warn only (no actual restore)
+ *   - 'strict' → actually restore the latest fs-checkpoint
+ *
+ * Errors are swallowed (console.error) so a filesystem restore failure never
+ * blocks the workflow — the Neo4j restore (if strict) already ran.
+ */
+export async function autoRestoreFsOnVerifyFailure(input: {
+  sessionId: string
+  reason: string
+  workspaceRoot: string
+}): Promise<{ triggered: boolean; mode: 'off' | 'warn' | 'strict'; checkpointId?: string; restoredFiles?: string[] }> {
+  // Lazy import flagMode to avoid a circular dep at module-load time
+  const { flagMode } = await import('@/lib/feature-flags')
+  const mode = flagMode('ENABLE_AUTO_RESTORE', ['off', 'warn', 'strict']) as 'off' | 'warn' | 'strict'
+
+  if (mode === 'off') {
+    return { triggered: false, mode: 'off' }
+  }
+
+  if (mode === 'warn') {
+    console.warn(
+      `[FsCheckpoint] AUTO_RESTORE=warn — verify failure in session ${input.sessionId}: ${input.reason} (no fs restore performed; flip ENABLE_AUTO_RESTORE=strict to enable actual restore)`,
+    )
+    return { triggered: false, mode: 'warn' }
+  }
+
+  // strict mode → actually restore
+  try {
+    const fsc = getFsCheckpoint(input.workspaceRoot)
+    const result = await fsc.restoreLatestForSession(input.sessionId)
+    if (!result.success && result.error && result.error.includes('No fs-checkpoints found')) {
+      console.warn(
+        `[FsCheckpoint] AUTO_RESTORE=strict but no fs-checkpoints found for session ${input.sessionId} — nothing to restore`,
+      )
+      return { triggered: false, mode: 'strict' }
+    }
+    console.log(
+      `[FsCheckpoint] AUTO_RESTORE=strict — restored ${result.restoredFiles.length} file(s) (checkpoint ${result.checkpointId}) for session ${input.sessionId} — reason: ${input.reason}`,
+    )
+    return { triggered: true, mode: 'strict', checkpointId: result.checkpointId, restoredFiles: result.restoredFiles }
+  } catch (err) {
+    console.error(
+      `[FsCheckpoint] AUTO_RESTORE=strict FAILED for session ${input.sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+    )
+    return { triggered: false, mode: 'strict' }
+  }
 }
 
 // ============================================

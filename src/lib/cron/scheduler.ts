@@ -263,6 +263,16 @@ export async function createCronJob(input: CreateCronJobInput): Promise<CreateCr
     }
   }
 
+  // Phase 4 audit fix (Task 11, P2-2): tz is accepted but parseCronNextRun
+  // uses the server's local tz (it `void tz`s the parameter). Surface a
+  // console.warn so users know their cron expr fires at server-local time,
+  // not their specified IANA tz. A proper fix needs a tz library (Phase 5).
+  if (input.schedule.tz) {
+    console.warn(
+      `[CronScheduler] schedule specifies tz="${input.schedule.tz}" but the current implementation uses server-local time. The tz field is stored for future use (Phase 5 will wire a real IANA tz library). Verify the cron expression fires at the intended time.`,
+    )
+  }
+
   // Compute next run
   const nextRun = computeNextRun(input.schedule)
   if (!nextRun) {

@@ -348,12 +348,30 @@ export async function restoreNeo4jCheckpoint(input: {
         // Strip internal _id/_labels before re-applying
         const { _id, _labels, ...props } = node
         void _id; void _labels
-        // Build prop SET clause + bind params
-        const propKeys = Object.keys(props).filter(k => k !== 'id')
-        const propPairs = propKeys.map(k => `n.${k} = $${k}`).join(', ')
+        // Phase 4 audit fix (Task 11, P2-3): sanitize property keys before
+        // interpolating into Cypher. Neo4j property names used inline as
+        // `n.${k}` and param names `$${k}` must match ^[a-zA-Z_][a-zA-Z0-9_]*$.
+        // A snapshot node with a property named e.g. "my prop" (space) or
+        // "data-size" (hyphen) would produce invalid Cypher `n.my prop = $my prop`
+        // → syntax error (caught per-node below, graceful). Filter to valid
+        // identifiers and backtick-escape in the SET clause for extra safety.
+        const validKeyRe = /^[a-zA-Z_][a-zA-Z0-9_]*$/
+        const validProps: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(props)) {
+          if (k === 'id') continue // id is the MERGE key, handled separately
+          if (!validKeyRe.test(k)) {
+            console.warn(`[Neo4jCheckpoint] restore: skipping property with invalid name "${k}" (must match ${validKeyRe})`)
+            continue
+          }
+          validProps[k] = v
+        }
+        const propKeys = Object.keys(validProps)
+        // Backtick-escape the property name in the SET clause (Cypher allows
+        // backticks around any identifier). Param name stays raw (already valid).
+        const propPairs = propKeys.map(k => `n.\`${k}\` = $${k}`).join(', ')
         const cypher = `MERGE (n${labelClause} {id: $id})
           ${propPairs ? `SET ${propPairs}, n.updated_at = $now` : 'SET n.updated_at = $now'}`
-        await executeCypher(cypher, { ...props, id, now: new Date().toISOString() })
+        await executeCypher(cypher, { ...validProps, id, now: new Date().toISOString() })
         restoredNodes++
       } catch (err) {
         lastErr = err instanceof Error ? err.message : String(err)
@@ -372,11 +390,23 @@ export async function restoreNeo4jCheckpoint(input: {
         const { _id, _type, _source, _target, ...props } = rel
         void _id; void _type; void _source; void _target
         const safeType = type.replace(/[^a-zA-Z0-9_]/g, '').toUpperCase() || 'RELATED_TO'
-        const propPairs = Object.keys(props).map(k => `r.${k} = $${k}`).join(', ')
+        // Phase 4 audit fix (Task 11, P2-3): sanitize rel property keys too
+        // (same as node restore above). Skip keys that aren't valid Neo4j
+        // identifiers; backtick-escape the valid ones in the SET clause.
+        const validKeyRe = /^[a-zA-Z_][a-zA-Z0-9_]*$/
+        const validRelProps: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(props)) {
+          if (!validKeyRe.test(k)) {
+            console.warn(`[Neo4jCheckpoint] restore: skipping rel property with invalid name "${k}"`)
+            continue
+          }
+          validRelProps[k] = v
+        }
+        const propPairs = Object.keys(validRelProps).map(k => `r.\`${k}\` = $${k}`).join(', ')
         const cypher = `MATCH (a {id: $source}), (b {id: $target})
           MERGE (a)-[r:${safeType}]->(b)
           ${propPairs ? `SET ${propPairs}` : ''}`
-        await executeCypher(cypher, { ...props, source, target })
+        await executeCypher(cypher, { ...validRelProps, source, target })
         restoredRels++
       } catch (err) {
         lastErr = err instanceof Error ? err.message : String(err)

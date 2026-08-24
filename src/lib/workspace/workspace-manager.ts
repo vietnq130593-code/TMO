@@ -15,6 +15,36 @@ import type {
 // WorkspaceManager
 // ============================================
 
+// ---------------------------------------------------------------------------
+// Path containment helper — prevents path traversal in PendingEdits
+// ---------------------------------------------------------------------------
+// Phase 4 audit fix (Task 11, P1-1): createPendingEdit + applyPendingEdit
+// previously used path.join(root, filePath) WITHOUT checking that the resolved
+// path stays inside the workspace root. A malicious or confused agent could
+// supply filePath='../../etc/passwd' → createPendingEdit would read the file
+// into the `before` field (info disclosure via GET) and applyPendingEdit
+// would write arbitrary content to arbitrary paths (arbitrary file write).
+//
+// This helper resolves both root + relative path to absolute form and rejects
+// any path that escapes the workspace root. The check uses path.relative():
+// if the resolved path's relative form starts with '..' it is outside root.
+function resolveSafePath(rootPath: string, relPath: string): string {
+  const resolvedRoot = path.resolve(rootPath);
+  const joined = path.join(resolvedRoot, relPath);
+  const resolved = path.resolve(joined);
+  const rel = path.relative(resolvedRoot, resolved);
+  // Empty rel means the path IS the root (allowed). '..' prefix means escape.
+  // On Windows, a path on a different drive would produce rel like 'C:\...' which
+  // also fails the check (does not start with a separator-free relative segment).
+  if (rel === '') return resolved; // the root itself
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(
+      `Path traversal rejected: filePath "${relPath}" resolves outside workspace root "${resolvedRoot}"`,
+    );
+  }
+  return resolved;
+}
+
 export class WorkspaceManager {
   // ---------------------------------------------------------------------------
   // Active workspace cache (TTL 10s)
@@ -242,8 +272,17 @@ export class WorkspaceManager {
       operation = 'edit', riskLevel = 'low', reviewerId,
     } = params;
 
-    // Resolve absolute path
-    const absPath = path.join(workspaceRootPath, filePath);
+    // Resolve absolute path — Phase 4 audit fix (P1-1): reject path traversal.
+    // A malicious filePath like '../../etc/passwd' would resolve outside the
+    // workspace root; resolveSafePath throws before any filesystem read happens.
+    let absPath: string;
+    try {
+      absPath = resolveSafePath(workspaceRootPath, filePath);
+    } catch (err) {
+      throw new Error(
+        `createPendingEdit rejected filePath: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
     // Read old content (empty string if file doesn't exist)
     let oldContent = "";
@@ -373,7 +412,22 @@ export class WorkspaceManager {
     }
 
     const activeWs = await this.getActiveWorkspace();
-    const absPath = path.join(activeWs.rootPath, edit.filePath);
+    // Phase 4 audit fix (P1-1): reject path traversal before any write.
+    // applyPendingEdit writes to disk; without containment, a malicious
+    // filePath could write arbitrary content to arbitrary paths.
+    let absPath: string;
+    try {
+      absPath = resolveSafePath(activeWs.rootPath, edit.filePath);
+    } catch (err) {
+      // Mark as failed (legacy status) + rethrow
+      await db.pendingEdit.update({
+        where: { id },
+        data: { status: "failed", resolvedAt: new Date() },
+      });
+      throw new Error(
+        `applyPendingEdit rejected filePath: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
     try {
       const op = edit.operation || "edit";
