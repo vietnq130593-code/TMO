@@ -1826,6 +1826,12 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
     let domain = (document.domain || 'mixed') as DocumentDomain
 
     let savedChunks: Array<{ id: string; chunk_index: number; content: string; domain: string | null }>
+    // Set when the resume path had to REBUILD chunks from the PDF (Qdrant lost
+    // its chunk points while SQLite still has entities — e.g. sandbox reset).
+    // Effects: skip LLM extraction entirely (entities already in buffer), bypass
+    // early-exit Guard #2, and force embedding regeneration (rebuilt chunks carry
+    // placeholder zero vectors).
+    let rebuiltChunksFromPdf = false
 
     if (isResuming) {
       // RESUME MODE: Skip download/parse/chunk — chunks already exist in DB
@@ -1868,8 +1874,75 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       await updateDocProgress(documentId, { steps })
 
       const existingChunks = await fetchAllChunksForDoc(documentId)
-      if (!existingChunks || existingChunks.length === 0) throw new Error('Failed to fetch existing chunks for resume')
-      savedChunks = existingChunks
+      if (!existingChunks || existingChunks.length === 0) {
+        // FIX (reset trap): SQLite still has entities for this document, but Qdrant
+        // lost its chunks (e.g. sandbox reset wiped local Qdrant while the SQLite
+        // backup was restored). Previously this threw 'Failed to fetch existing
+        // chunks for resume' and marked the document 'error' forever. Instead,
+        // rebuild the chunks from the PDF (re-parse + re-chunk, NO LLM re-extraction
+        // — the extraction step below skips chunks that already have entities in
+        // SQLite, and embeddings/Neo4j steps run cheaply from the buffer).
+        if (!hasExistingEntities) {
+          throw new Error('Failed to fetch existing chunks for resume (no entities in buffer either)')
+        }
+        console.log(`[Process] Resume: Qdrant chunks lost but SQLite entities exist — rebuilding chunks from PDF (no LLM re-extraction)`)
+        rebuiltChunksFromPdf = true
+
+        // --- Re-download PDF (local filesystem first, then R2 cloud backup) ---
+        if (!document.file_path) throw new Error('Document has no file_path for chunk rebuild')
+        let rebuildBuffer: Buffer | null = null
+        try {
+          rebuildBuffer = await downloadFromFilesystem(document.file_path as string)
+          if (!rebuildBuffer && isR2Configured()) {
+            const r2Key = (document as { r2_key?: string }).r2_key
+              || `pdfs/${documentId}_${(document.title || '').replace(/[^a-zA-Z0-9._-]/g, '_')}.pdf`
+            console.log(`[Process] Chunk rebuild: local file missing — pulling from R2: ${r2Key}`)
+            const r2Result = await downloadFileFromR2(r2Key, document.file_path as string)
+            if (r2Result.success) {
+              rebuildBuffer = await readFile(document.file_path as string)
+            }
+          }
+          if (!rebuildBuffer) throw new Error('PDF not found on filesystem and R2 restore failed')
+        } catch (dlErr) {
+          throw new Error(`Chunk rebuild failed — could not obtain PDF: ${dlErr instanceof Error ? dlErr.message : String(dlErr)}`)
+        }
+
+        // --- Re-parse + re-chunk (same logic as fresh path) ---
+        const { text: rebuildText } = await extractPDFText(rebuildBuffer)
+        if (!rebuildText || rebuildText.trim().length === 0) {
+          throw new Error('Chunk rebuild failed: PDF parsing returned no text')
+        }
+        const rebuildChunks = chunkText(rebuildText, domain)
+        if (rebuildChunks.length === 0) throw new Error('Chunk rebuild failed: chunking returned no chunks')
+
+        // --- Upsert chunks to Qdrant with placeholder vectors (embeddings come later) ---
+        const rebuildPoints = rebuildChunks.map(chunk => ({
+          id: randomUUID(),
+          vector: new Array(EMBEDDING_DIMENSION).fill(0),
+          payload: {
+            document_id: documentId,
+            chunk_index: chunk.chunkIndex,
+            content: sanitizeForDB(chunk.content),
+            heading_path: sanitizeForDB(chunk.headingPath),
+            token_count: chunk.tokenCount,
+            domain: chunk.domain,
+            created_at: new Date().toISOString(),
+          } as ChunkPayload,
+        }))
+        const rebuildUpserted = await upsertChunks(rebuildPoints)
+        if (!rebuildUpserted) throw new Error('Chunk rebuild failed: Qdrant upsert error')
+
+        if (rebuildPoints.length > 500) {
+          await new Promise(resolve => setTimeout(resolve, 2000)) // let Qdrant index
+        }
+        const rebuiltChunks = await fetchAllChunksForDoc(documentId)
+        if (!rebuiltChunks || rebuiltChunks.length === 0) throw new Error('Chunk rebuild failed: fetch after insert empty')
+        savedChunks = rebuiltChunks
+        steps = markStepCompleted(steps, 'chunk', `${savedChunks.length} chunks (rebuilt from PDF)`)
+        await updateDocProgress(documentId, { steps })
+      } else {
+        savedChunks = existingChunks
+      }
 
       // Auto-classify domain if "mixed" — use a sample of existing chunk content
       // This ensures resumed documents also get proper domain classification
@@ -1997,6 +2070,14 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
     // Skip chunks that already have extracted entities (resume from partial)
     let chunksToProcess = savedChunks
     if (isResuming) {
+      if (rebuiltChunksFromPdf) {
+        // Rebuilt chunks got NEW UUIDs that cannot match the old entity chunkIds —
+        // the filter below would miss everything and re-run the FULL LLM extraction
+        // (creating duplicates). The entities already live in the SQLite buffer, so
+        // skip extraction entirely and continue with resolve/Neo4j/embeddings.
+        chunksToProcess = []
+        console.log(`[Process] Chunk rebuild mode: skipping LLM extraction (${savedChunks.length} chunks rebuilt, entities preserved in buffer)`)
+      } else {
       // PAGINATED: Fetch ALL entity chunk_ids to avoid the 1000-row limit.
       // Without pagination, only the first 1000 entities are returned,
       // causing the pipeline to miss already-processed chunks and create duplicates.
@@ -2008,13 +2089,14 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       const processedChunkIds = new Set(existingEntityChunks.map(e => e.chunkId).filter(id => id && id.trim()))
       chunksToProcess = savedChunks.filter(c => !processedChunkIds.has(c.id))
       console.log(`[Process] Resuming from partial: ${savedChunks.length} total chunks, ${processedChunkIds.size} already processed, ${chunksToProcess.length} remaining`)
+      }
     }
 
     // EARLY-EXIT GUARD #2: If ALL chunks are already processed AND all post-extraction steps
     // (resolve, neo4j, embeddings) are completed, mark as 'indexed' and return immediately.
     // This prevents the auto-chain from looping endlessly when reconciliation keeps resetting
     // the status to 'partial' even though all work is actually done.
-    if (chunksToProcess.length === 0 && isResuming) {
+    if (chunksToProcess.length === 0 && isResuming && !rebuiltChunksFromPdf) {
       const existingSteps = document.processing_steps as ProcessingStepRecord[] | null
       const allStepsDone = existingSteps && Array.isArray(existingSteps) &&
         existingSteps.length === PIPELINE_STEPS.length &&
@@ -2525,10 +2607,15 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       if (!hasResolvedEntities) console.log(`[Process] Resolve step marked completed but no resolved entities found — re-running`)
     }
 
-    if (embeddingsCompleted) {
+    if (embeddingsCompleted && !rebuiltChunksFromPdf) {
       const embChunkCount = await getChunkCount(documentId)
       hasEmbeddingsData = embChunkCount > 0
       if (!hasEmbeddingsData) console.log(`[Process] Embeddings step marked completed but no embeddings found — re-running`)
+    } else if (rebuiltChunksFromPdf) {
+      // Chunk rebuild mode: the "embeddings completed" step status is stale (from
+      // reconcile/pre-reset) — the rebuilt chunks only have placeholder zero vectors.
+      hasEmbeddingsData = false
+      console.log(`[Process] Chunk rebuild mode: forcing embedding regeneration for ${savedChunks.length} rebuilt chunks`)
     }
 
     // Step 7: Load ALL entities from DB for resolution
@@ -3132,7 +3219,7 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       await updateDocProgress(documentId, { steps })
 
       let chunksNeedingEmbeddings = savedChunks
-      if (isResuming) {
+      if (isResuming && !rebuiltChunksFromPdf) {
         // Find chunks that already have embeddings (Qdrant chunks with non-zero vectors)
         const embeddedChunkIds = new Set<string>()
         const allChunksForEmb = await getChunksByDocument(documentId, { limit: 10000 })
@@ -3163,6 +3250,20 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
     // (Intermediate batches already return early with 'partial' status above)
     await updateDocProgress(documentId, { status: 'indexed' })
     invalidateDocumentCache()
+
+    // FIX (backup gap): auto-push extraction results to Supabase after successful
+    // indexing. Previously pushToSupabase only ran when manually triggered (or
+    // piggybacked on agent-memory saves) — so extraction results (Document status,
+    // LocalEntity/LocalRelationship/LocalResolvedEntity) were NOT backed up to the
+    // cloud automatically after each document completed. Fire-and-forget: backup
+    // must never block or fail the pipeline response.
+    try {
+      const { pushToSupabase } = await import('@/lib/supabase-sync')
+      void pushToSupabase().catch((pushErr) => {
+        console.warn('[Process] Supabase auto-backup failed (non-fatal):', pushErr instanceof Error ? pushErr.message : String(pushErr))
+      })
+      console.log('[Process] Supabase auto-backup triggered (fire-and-forget)')
+    } catch { /* dynamic import failure — non-fatal */ }
 
     // Clear userPaused flag since the document is now fully indexed
     clearDocPaused(documentId)

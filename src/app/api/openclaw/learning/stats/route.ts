@@ -13,7 +13,14 @@ export const dynamic = 'force-dynamic'
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const agentId = searchParams.get('agentId') || 'default'
+    // FIX (agentId mismatch): aggregate across ALL agents unless an explicit
+    // agentId is given (writers store under real agentProfileId cuids — the old
+    // 'default' filter hid every auto-recorded event).
+    const agentIdParam = searchParams.get('agentId')
+    const agentId = agentIdParam && agentIdParam !== 'all' && agentIdParam !== 'default'
+      ? agentIdParam
+      : undefined
+    const agentFilter = agentId ? { agentId } : {}
     const days = parseInt(searchParams.get('days') || '30')
 
     const since = new Date()
@@ -32,22 +39,22 @@ export async function GET(request: NextRequest) {
       recentInsights,
       recentCorrections,
     ] = await Promise.all([
-      db.agentInsight.count({ where: { agentId } }),
-      db.agentCorrection.count({ where: { agentId } }),
-      db.agentPreference.count({ where: { agentId } }),
-      db.standingOrder.count({ where: { agentId } }),
+      db.agentInsight.count({ where: agentFilter }),
+      db.agentCorrection.count({ where: agentFilter }),
+      db.agentPreference.count({ where: agentFilter }),
+      db.standingOrder.count({ where: agentFilter }),
       db.learningLog.findMany({
-        where: { agentId, eventType: 'feedback' },
+        where: { ...agentFilter, eventType: 'feedback' },
         select: { content: true },
       }),
-      db.agentCorrection.count({ where: { agentId, applied: true } }),
+      db.agentCorrection.count({ where: { ...agentFilter, applied: true } }),
       db.agentInsight.findMany({
-        where: { agentId, createdAt: { gte: since } },
+        where: { ...agentFilter, createdAt: { gte: since } },
         orderBy: { createdAt: 'desc' },
         select: { id: true, content: true, type: true, confidence: true, source: true, createdAt: true },
       }),
       db.agentCorrection.findMany({
-        where: { agentId, createdAt: { gte: since } },
+        where: { ...agentFilter, createdAt: { gte: since } },
         orderBy: { createdAt: 'desc' },
         select: { id: true, wrongAnswer: true, correctAnswer: true, applied: true, createdAt: true },
       }),
@@ -99,20 +106,20 @@ export async function GET(request: NextRequest) {
     // Insight types distribution
     const insightTypes = await db.agentInsight.groupBy({
       by: ['type'],
-      where: { agentId },
+      where: agentFilter,
       _count: { type: true },
     })
 
     // Insight sources distribution
     const insightSources = await db.agentInsight.groupBy({
       by: ['source'],
-      where: { agentId },
+      where: agentFilter,
       _count: { source: true },
     })
 
     // Recent standing orders
     const standingOrders = await db.standingOrder.findMany({
-      where: { agentId, enabled: true },
+      where: { ...agentFilter, enabled: true },
       orderBy: { priority: 'desc' },
     })
 

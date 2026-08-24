@@ -20,7 +20,7 @@
 
 import { db } from '@/lib/db'
 import { qdrant } from '@/lib/qdrant'
-import { generateEmbedding, generateQueryEmbedding, getEmbeddingDimension } from '@/lib/embeddings'
+import { generateEmbedding, generateQueryEmbedding, getEmbeddingDimension, generateEmbeddingBatch } from '@/lib/embeddings'
 import { callLLM } from '@/lib/llm'
 
 // ==================== CONSTANTS ====================
@@ -960,6 +960,125 @@ export async function getSessionMessages(sessionId: string): Promise<Array<{
   }
 }
 
+// ==================== QDRANT VECTOR BACKFILL ====================
+
+/**
+ * FIX (memories unrecallable after reset): restoreMemoriesFromCloud brings back
+ * the SQLite rows (including qdrantPointId), but the local Qdrant instance is
+ * ephemeral — after a sandbox reset the agent_memory collection is EMPTY while
+ * recallMemories() searches Qdrant-first. All restored memories were therefore
+ * invisible to semantic recall until new ones happened to be stored.
+ *
+ * This backfill re-embeds every ACTIVE memory whose Qdrant point is missing
+ * (null qdrantPointId, or point no longer exists in the collection) and upserts
+ * it back into agent_memory, updating the SQLite row with the new point ID.
+ *
+ * Idempotent: guarded once per process; re-runs are cheap (existing points are
+ * skipped via a scroll of current point IDs).
+ */
+export async function backfillMemoryVectors(): Promise<number> {
+  const globalForBackfill = globalThis as unknown as { __memoryVectorsBackfilled?: boolean }
+  if (globalForBackfill.__memoryVectorsBackfilled) return 0
+  globalForBackfill.__memoryVectorsBackfilled = true
+
+  try {
+    await ensureAgentMemoryCollection()
+
+    // 1. All active memories (WARM tier — the ones recall searches for)
+    const memories = await db.agentMemory.findMany({
+      where: { isActive: true },
+      select: {
+        id: true, agentId: true, agentName: true, category: true, content: true,
+        context: true, importance: true, source: true, tags: true, sessionId: true,
+        qdrantPointId: true, createdAt: true,
+      },
+      take: 2000,
+    })
+    if (memories.length === 0) {
+      console.log('[AgentMemory] Vector backfill: no active memories — nothing to do')
+      return 0
+    }
+
+    // 2. Which Qdrant points currently exist in the collection?
+    const existingPointIds = new Set<string>()
+    try {
+      let offset: string | number | undefined = undefined
+      do {
+        const res = await qdrant.scroll(COLLECTION_AGENT_MEMORY, {
+          limit: 100,
+          offset,
+          with_payload: false,
+          with_vector: false,
+        })
+        for (const p of res.points) existingPointIds.add(String(p.id))
+        offset = res.next_page_offset
+      } while (offset)
+    } catch {
+      // Collection may be empty/unreachable — treat as no existing points
+    }
+
+    // 3. Memories missing from Qdrant
+    const missing = memories.filter(m => !m.qdrantPointId || !existingPointIds.has(m.qdrantPointId))
+    if (missing.length === 0) {
+      console.log(`[AgentMemory] Vector backfill: all ${memories.length} memories already in Qdrant — skipping`)
+      return 0
+    }
+
+    console.log(`[AgentMemory] Backfilling ${missing.length}/${memories.length} memory vectors to Qdrant...`)
+
+    // 4. Batch embed + upsert (small batches; failures skip individual memories)
+    let backfilled = 0
+    const BATCH = 20
+    for (let i = 0; i < missing.length; i += BATCH) {
+      const batch = missing.slice(i, i + BATCH)
+      try {
+        const embeddings = await generateEmbeddingBatch(batch.map(m => m.content))
+        for (let j = 0; j < batch.length; j++) {
+          const m = batch[j]
+          const emb = embeddings[j]
+          if (!emb?.vector || emb.vector.length === 0) continue
+          try {
+            const pointId = crypto.randomUUID()
+            await qdrant.upsert(COLLECTION_AGENT_MEMORY, {
+              points: [{
+                id: pointId,
+                vector: emb.vector,
+                payload: {
+                  memoryId: m.id,
+                  agentId: m.agentId,
+                  agentName: m.agentName ?? undefined,
+                  category: m.category,
+                  content: m.content,
+                  context: m.context ?? undefined,
+                  importance: m.importance,
+                  source: m.source,
+                  tags: m.tags ?? undefined,
+                  sessionId: m.sessionId ?? undefined,
+                  createdAt: m.createdAt.toISOString(),
+                } as AgentMemoryPayload,
+              }],
+            })
+            await db.agentMemory.update({ where: { id: m.id }, data: { qdrantPointId: pointId } })
+            backfilled++
+          } catch {
+            // Individual point failure — skip, keep going
+          }
+        }
+      } catch (batchErr) {
+        console.warn('[AgentMemory] Backfill batch embedding failed:', batchErr instanceof Error ? batchErr.message : String(batchErr))
+      }
+    }
+
+    console.log(`[AgentMemory] Vector backfill complete: ${backfilled}/${missing.length} memories re-embedded`)
+    return backfilled
+  } catch (err) {
+    // Reset flag so a later call can retry
+    globalForBackfill.__memoryVectorsBackfilled = false
+    console.warn('[AgentMemory] Vector backfill failed (non-critical):', err instanceof Error ? err.message : String(err))
+    return 0
+  }
+}
+
 // ==================== CLOUD RESTORE (Supabase → SQLite) ====================
 
 /**
@@ -1002,6 +1121,12 @@ export async function restoreMemoriesFromCloud(): Promise<number> {
       `${archiveResult?.pulled || 0} archives, ${logResult?.pulled || 0} access logs ` +
       `(${result.durationMs}ms)`
     )
+
+    // FIX (unrecallable memories): rebuilt SQLite rows still point at Qdrant point
+    // IDs that no longer exist in the local (ephemeral) collection. Re-embed the
+    // restored memories so semantic recall works again immediately. Fire-and-forget
+    // — never blocks the caller (chat first-load).
+    void backfillMemoryVectors().catch(() => { /* non-critical */ })
 
     return restored
   } catch (err) {

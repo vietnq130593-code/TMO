@@ -20,7 +20,16 @@ export async function GET(request: NextRequest) {
     const type = searchParams.get('type') || undefined
     const from = searchParams.get('from') || undefined
     const to = searchParams.get('to') || undefined
-    const agentId = searchParams.get('agentId') || 'default'
+    // FIX (agentId mismatch): writers (chat writeback, auto-learn, feedback) store
+    // rows under the real agentProfileId (cuid) — filtering by 'default' by default
+    // made every auto-recorded event invisible in the timeline. Now a missing or
+    // 'default'/'all' agentId means NO filter (aggregate across all agents); an
+    // explicit agentId still filters to that agent.
+    const agentIdParam = searchParams.get('agentId')
+    const agentId = agentIdParam && agentIdParam !== 'all' && agentIdParam !== 'default'
+      ? agentIdParam
+      : undefined // undefined = aggregate all agents
+    const agentFilter = agentId ? { agentId } : {}
     const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 200)
     const offset = parseInt(searchParams.get('offset') || '0')
 
@@ -42,7 +51,7 @@ export async function GET(request: NextRequest) {
 
     // 1. Fetch AgentInsight entries (PRIMARY source for insights)
     if (!type || type === 'insight') {
-      const insightWhere: Record<string, unknown> = { agentId }
+      const insightWhere: Record<string, unknown> = { ...agentFilter }
       if (hasDateFilter) insightWhere.createdAt = dateFilter
 
       const insights = await db.agentInsight.findMany({
@@ -65,7 +74,7 @@ export async function GET(request: NextRequest) {
 
     // 2. Fetch AgentCorrection entries (PRIMARY source for corrections)
     if (!type || type === 'correction') {
-      const correctionWhere: Record<string, unknown> = { agentId }
+      const correctionWhere: Record<string, unknown> = { ...agentFilter }
       if (hasDateFilter) correctionWhere.createdAt = dateFilter
 
       const corrections = await db.agentCorrection.findMany({
@@ -88,7 +97,7 @@ export async function GET(request: NextRequest) {
 
     // 3. Fetch AgentPreference entries (PRIMARY source for preferences)
     if (!type || type === 'preference') {
-      const prefWhere: Record<string, unknown> = { agentId }
+      const prefWhere: Record<string, unknown> = { ...agentFilter }
       if (hasDateFilter) prefWhere.createdAt = dateFilter
 
       const preferences = await db.agentPreference.findMany({
@@ -116,7 +125,7 @@ export async function GET(request: NextRequest) {
 
     let logTotal = 0
     if (logEventTypes.length > 0) {
-      const logWhere: Record<string, unknown> = { agentId, eventType: { in: logEventTypes } }
+      const logWhere: Record<string, unknown> = { ...agentFilter, eventType: { in: logEventTypes } }
       if (hasDateFilter) logWhere.createdAt = dateFilter
 
       const [logEvents, logCount] = await Promise.all([

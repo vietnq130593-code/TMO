@@ -92,8 +92,12 @@
   },
   "trustedDependencies": [
     "@google/genai",
+    "@prisma/client",
+    "@prisma/engines",
     "openclaw",
+    "prisma",
     "protobufjs",
+    "sharp",
     "tree-sitter-bash",
     "unrs-resolver"
   ]

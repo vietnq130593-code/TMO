@@ -451,12 +451,48 @@ export async function DELETE(request: NextRequest) {
       // non-critical
     }
 
+    // FIX (ghost entities): also clean up the knowledge graph + SQLite entity
+    // buffers for this document. Previously deletion left: (a) the Neo4j Document
+    // node + its CONTAINS edges + doc-specific relationships (the purpose-built
+    // deleteDocumentGraph was dead code with zero callers), and (b) all
+    // LocalEntity/LocalRelationship/LocalResolvedEntity rows in SQLite — which
+    // then kept being re-pushed to Supabase backups. Deleted documents kept
+    // matching graph queries. deleteDocumentGraph is cross-document safe (only
+    // removes orphaned global nodes not referenced by other docs).
+    let deletedFromNeo4j = false
+    let graphCleanup = { nodesDeleted: 0, relsDeleted: 0 }
+    try {
+      const { deleteDocumentGraph } = await import('@/lib/neo4j')
+      graphCleanup = await deleteDocumentGraph(documentId)
+      deletedFromNeo4j = graphCleanup.nodesDeleted > 0 || graphCleanup.relsDeleted > 0
+      console.log(`[Upload] Neo4j graph cleanup for ${documentId.slice(0, 8)}...: ${graphCleanup.nodesDeleted} nodes, ${graphCleanup.relsDeleted} rels`)
+    } catch (err) {
+      console.warn(`[Upload] Neo4j cleanup failed (non-critical):`, err instanceof Error ? err.message : String(err))
+    }
+
+    // SQLite entity buffers for this document
+    let deletedSqliteEntities = 0
+    try {
+      const delRels = await db.localRelationship.deleteMany({ where: { documentId } })
+      const delEnts = await db.localEntity.deleteMany({ where: { documentId } })
+      const delResolved = await db.localResolvedEntity.deleteMany({ where: { documentId } })
+      deletedSqliteEntities = delRels.count + delEnts.count + delResolved.count
+      if (deletedSqliteEntities > 0) {
+        console.log(`[Upload] SQLite buffer cleanup for ${documentId.slice(0, 8)}...: ${deletedSqliteEntities} rows`)
+      }
+    } catch (err) {
+      console.warn(`[Upload] SQLite entity cleanup failed (non-critical):`, err instanceof Error ? err.message : String(err))
+    }
+
     return NextResponse.json({
       success: deletedFromQdrant || deletedFromSqlite,
       deletedFromFs,
       deletedFromQdrant,
       deletedFromSqlite,
       deletedFromR2,
+      deletedFromNeo4j,
+      graphCleanup,
+      deletedSqliteEntities,
       documentId,
     })
   } catch (err) {

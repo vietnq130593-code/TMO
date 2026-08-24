@@ -305,6 +305,46 @@ export async function writebackToKB(params: {
     }
   }
 
+  // === WRITE 4: AgentInsight + LearningLog (Learning tab visibility) ===
+  // FIX (empty Learning tab): writeback replaced autoLearnFromAnswer, but nothing
+  // wrote to AgentInsight/LearningLog anymore — the Learning tab timeline only
+  // got data from manual teaching and 👍/👎 feedback. Record each successful
+  // writeback as an insight + log so the Learning timeline reflects real chat
+  // activity. Two cheap SQLite writes — NO extra LLM call.
+  if (filteredEntities.length > 0 || filteredRelationships.length > 0) {
+    try {
+      const insightContent = `[KB writeback] ${filteredEntities.length} entities, ${filteredRelationships.length} relationships — query: "${query.slice(0, 120)}"`
+      await db.agentInsight.create({
+        data: {
+          agentId: agentId || 'default',
+          content: insightContent,
+          source: 'auto',
+          type: 'factual',
+          confidence: 0.6,
+        },
+      })
+      await db.learningLog.create({
+        data: {
+          agentId: agentId || 'default',
+          sessionId: sessionId || null,
+          eventType: 'pattern',
+          content: JSON.stringify({
+            kind: 'kb-writeback',
+            entitiesWritten: filteredEntities.length,
+            relationshipsWritten: filteredRelationships.length,
+            chunksWritten,
+            query: query.slice(0, 300),
+            agentName: agentName || 'unknown',
+          }),
+          metadata: JSON.stringify({ source: 'writeback' }),
+        },
+      })
+      console.log(`[Writeback] Recorded AgentInsight + LearningLog (Learning tab)`)
+    } catch (err) {
+      console.warn('[Writeback] Learning record failed:', err instanceof Error ? err.message : String(err))
+    }
+  }
+
   return {
     skipped: false,
     entitiesWritten,
