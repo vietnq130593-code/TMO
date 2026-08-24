@@ -497,6 +497,19 @@ async function executeSubAgent(
     let tokensUsed = firstResult.tokensUsed || 0
 
     // 4. Execute the tool call (if any) and capture file receipts.
+    //    Defense-in-depth (Task 12-AUDIT P2): reject toolName not in the
+    //    sub-agent's allowlist. Without this, a prompt-injected LLM could
+    //    call a tool the sub-agent isn't entitled to (e.g., a BOLT-only tool
+    //    invoked from CORTEX). Mirrors the same guard that workflow-engine's
+    //    parseToolCallsFromOutput should have — that's a separate concern;
+    //    here we at least lock down the more-autonomous delegate path.
+    if (toolName) {
+      if (!Array.isArray(agent.tools) || !agent.tools.includes(toolName)) {
+        console.warn(`[Delegator] Sub-agent ${task.assignedAgent} attempted out-of-allowlist tool '${toolName}' (allowed: ${(agent.tools || []).join(',') || '<none>'}) — skipping tool call.`)
+        finalOutput += `\n\n[Delegator] Refused tool '${toolName}' — not in this sub-agent's allowlist.`
+        toolName = null
+      }
+    }
     if (toolName) {
       console.log(`[Delegator] Sub-agent ${task.assignedAgent} calling tool ${toolName}`)
       const toolResult = await executeTool(toolName, toolArgs)
