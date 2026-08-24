@@ -39,7 +39,7 @@ import {
   todoWrite as executeTodoWriteFn,
   todoRead as executeTodoReadFn,
 } from './dev-tools'
-import { isFlagEnabled } from '@/lib/feature-flags'
+import { isFlagEnabled, flagMode } from '@/lib/feature-flags'
 
 // ==================== Z-AI-SDK LAZY INITIALIZATION ====================
 //
@@ -540,6 +540,188 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       },
     },
   },
+
+  // ==================== v2.1 Phase 1a: SHELL + TODO (Claude Code parity) ====================
+  // NOTE: switch case + flag gate were added in Phase 1a but ALL_TOOL_DEFINITIONS
+  // entries were missing — this regression is fixed in Phase 1b so the LLM can
+  // actually see the schema and call these tools.
+  shell: {
+    type: 'function',
+    function: {
+      name: 'shell',
+      description: 'Sandboxed bash với timeout 5min (max 10min) + working-dir lock. Cho phép metacharacters (|, &&, ;, >). Refuse sudo/rm -rf //fork bomb/dd of=/dev//mkfs. Trả về D2 structured receipt {success, exit_code, stdout, stderr, duration_ms, truncated, cursor, cwd}. Thay thế 5 v1 tools (install_package, read_logs, lint, type_check, db_query).',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Shell command. Ví dụ: "bun add bcrypt", "bun run lint", "tsc --noEmit", "git status"' },
+          cwd: { type: 'string', description: 'Working directory relative to OPENCODE_WORKSPACE (default: workspace root)' },
+          timeout_ms: { type: 'number', description: 'Timeout ms (default 300000=5min, max 600000=10min). SIGTERM then SIGKILL after 5s grace.' },
+          env: { type: 'object', description: 'Extra env vars (key-value)', additionalProperties: { type: 'string' } },
+          stdin: { type: 'string', description: 'Stdin input cho command (vd password prompt)' },
+        },
+        required: ['command'],
+      },
+    },
+  },
+  todo_write: {
+    type: 'function',
+    function: {
+      name: 'todo_write',
+      description: 'Claude Code-style in-flight task list (batch upsert). Truyền mảng todos (có id=update, không id=create). Trả về danh sách đầy đủ sau khi write. Dùng cho agent tự track multi-step work.',
+      parameters: {
+        type: 'object',
+        properties: {
+          sessionId: { type: 'string', description: 'Session scope (reserved Phase 5.6 — hiện tại global in-memory)' },
+          todos: {
+            type: 'array',
+            description: 'Danh sách todo (full rewrite — Claude Code semantics)',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'ID nếu update existing; bỏ trống nếu create mới' },
+                content: { type: 'string', description: 'Nội dung task (string)' },
+                status: { type: 'string', enum: ['pending', 'in_progress', 'blocked', 'completed', 'failed'] },
+                priority: { type: 'string', enum: ['low', 'medium', 'high'] },
+                parentId: { type: 'string', description: 'Parent task ID (cho subtask / DAG)' },
+              },
+              required: ['content'],
+            },
+          },
+        },
+        required: ['todos'],
+      },
+    },
+  },
+  todo_read: {
+    type: 'function',
+    function: {
+      name: 'todo_read',
+      description: 'Đọc task list hiện tại với status breakdown (pending/in_progress/completed/...). Dùng để agent review progress trước khi quyết định next step.',
+      parameters: {
+        type: 'object',
+        properties: {
+          sessionId: { type: 'string', description: 'Session scope (reserved Phase 5.6)' },
+        },
+        required: [],
+      },
+    },
+  },
+
+  // ==================== v2.1 Phase 1b.1: UNIFIED WEB (consolidate tavily/serper/jina) ====================
+  // Phase 1b.1 — single unified web interface (Claude Code / Z.ai Code parity).
+  // Routes to best-available provider; falls back to z-ai-web-dev-sdk.
+  // Old tavily/serper/jina tools remain accessible for backward compatibility.
+  web_search: {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: 'Unified web search — routes tới provider tốt nhất (Tavily khi có key, Serper fallback, z-ai-sdk cuối cùng). Trả về results[] thống nhất {title, url, snippet/score}. Dùng khi cần research docs, best practices, thông tin mới.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Câu hỏi tìm kiếm' },
+          max_results: { type: 'number', description: 'Số kết quả tối đa (default 5, max 20)' },
+          depth: { type: 'string', enum: ['basic', 'advanced'], description: 'basic=nhanh, advanced=sâu (Tavily search_depth). Default basic.' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  web_fetch: {
+    type: 'function',
+    function: {
+      name: 'web_fetch',
+      description: 'Unified web page reader — routes Jina (r.jina.ai) khi có key, fallback z-ai-sdk page_reader. Trả về {url, title, content, length, truncated, source}. Dùng để đọc bài blog, docs, RFC, hoặc page snippet.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'URL page cần đọc (phải có http:// hoặc https://)' },
+          format: { type: 'string', enum: ['text', 'html', 'markdown'], description: 'Output format (default text — clean text)' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+
+  // ==================== v2.1 Phase 1b.2: P0 GATEWAY TOOLS (first-class) ====================
+  // Phase 1b.2 — expose 5 P0 gateway tools as first-class (not via gateway_tool
+  // generic proxy). Each is a thin wrapper around gatewayTool({name, args}).
+  // Gated by ENABLE_GATEWAY_TOOLS=phase-1b (off by default per D11).
+  gateway_exec: {
+    type: 'function',
+    function: {
+      name: 'gateway_exec',
+      description: 'Execute shell command qua Gateway bridge (session-context, port 18791). Alternative to `shell` khi cần gateway-side session tracking. Trả về {success, output, exitCode}.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Shell command' },
+          cwd: { type: 'string', description: 'Working directory (optional)' },
+        },
+        required: ['command'],
+      },
+    },
+  },
+  gateway_read: {
+    type: 'function',
+    function: {
+      name: 'gateway_read',
+      description: 'Read file qua Gateway bridge (session-context). Trả về {success, content, length}. Alternative to opencode read khi cần gateway-side session tracking.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path (relative to workspace)' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  gateway_write: {
+    type: 'function',
+    function: {
+      name: 'gateway_write',
+      description: 'Write file qua Gateway bridge (session-context). Trả về {success, bytes}. Alternative to opencode write.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path (relative to workspace)' },
+          content: { type: 'string', description: 'File content' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+  },
+  gateway_edit: {
+    type: 'function',
+    function: {
+      name: 'gateway_edit',
+      description: 'Edit file bằng exact string replace qua Gateway bridge (session-context). Trả về {success, replacements}. Alternative to file_edit.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path' },
+          old: { type: 'string', description: 'String cần replace (phải match duy nhất)' },
+          new: { type: 'string', description: 'String thay thế' },
+        },
+        required: ['path', 'old', 'new'],
+      },
+    },
+  },
+  gateway_apply_patch: {
+    type: 'function',
+    function: {
+      name: 'gateway_apply_patch',
+      description: 'Apply unified diff patch qua Gateway bridge (session-context). Trả về {success, applied_lines}. Dùng khi cần apply multi-hunk patch.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path' },
+          patch: { type: 'string', description: 'Unified diff patch content (--- /dev/null\n+++ file\n@@ ...)' },
+        },
+        required: ['path', 'patch'],
+      },
+    },
+  },
 }
 
 /**
@@ -697,6 +879,42 @@ export async function executeTool(
           }
         }
         result = await executeTodoReadFn(args as any)
+        break
+      // ===== v2.1 Phase 1b.1: Unified web (consolidate tavily/serper/jina) =====
+      case 'web_search':
+        if (!isFlagEnabled('ENABLE_WEB_UNIFIED')) {
+          return {
+            success: false,
+            result: 'web_search tool is disabled (set ENABLE_WEB_UNIFIED=true in .env to enable). Tip: tavily/serper tools remain available without the flag.',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeWebSearch(args)
+        break
+      case 'web_fetch':
+        if (!isFlagEnabled('ENABLE_WEB_UNIFIED')) {
+          return {
+            success: false,
+            result: 'web_fetch tool is disabled (set ENABLE_WEB_UNIFIED=true in .env to enable). Tip: jina tool remains available without the flag.',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeWebFetch(args)
+        break
+      // ===== v2.1 Phase 1b.2: P0 first-class gateway tools (proxy via gateway-bridge) =====
+      case 'gateway_exec':
+      case 'gateway_read':
+      case 'gateway_write':
+      case 'gateway_edit':
+      case 'gateway_apply_patch':
+        if (flagMode('ENABLE_GATEWAY_TOOLS', ['off', 'phase-1b', 'full']) === 'off') {
+          return {
+            success: false,
+            result: `${toolName} is disabled (set ENABLE_GATEWAY_TOOLS=phase-1b in .env to enable). Tip: gateway_tool (generic proxy) remains available without the flag.`,
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeP0GatewayTool(toolName, args)
         break
       default:
         return {
@@ -1450,6 +1668,252 @@ async function executeJina(args: Record<string, unknown>): Promise<unknown> {
     hint: !jinaKeyPool.hasKeys() ? 'Add JINA_API_KEY_1..2 to .env' : `All ${jinaKeyPool.getTotalCount()} keys failed (${jinaKeyPool.getAvailableCount()} available)`,
     poolStatus: jinaKeyPool.getSummary(),
   }
+}
+
+// ==================== v2.1 Phase 1b.1: UNIFIED WEB (consolidate tavily/serper/jina) ====================
+
+/**
+ * web_search — Unified web search interface (Claude Code / Z.ai Code parity).
+ *
+ * Routing strategy (best-available provider):
+ *   1. Tavily (when TAVILY_API_KEY_* configured) — AI-optimized, returns answer + content
+ *   2. Serper (when SERPER_API_KEY_* configured) — Google SERP, returns organic + KG
+ *   3. z-ai-web-dev-sdk web_search fallback (sandbox only)
+ *
+ * Output is normalized to a stable schema:
+ *   { query, results: [{title, url, snippet, score?}], source, total }
+ *
+ * Feature flag: ENABLE_WEB_UNIFIED (off by default per D11).
+ * Old `tavily`/`serper` tools remain callable without the flag for backward compat.
+ */
+async function executeWebSearch(args: Record<string, unknown>): Promise<unknown> {
+  const query = args.query as string
+  if (!query) return { error: 'query is required' }
+
+  const maxResults = Math.min(Math.max(Number(args.max_results) || 5, 1), 20)
+  const depth = args.depth === 'advanced' ? 'advanced' : 'basic'
+
+  // Strategy 1: Tavily (preferred — has answer + content snippets)
+  if (tavilyKeyPool.hasKeys()) {
+    const tavilyResult = await executeTavily({ query, search_depth: depth })
+    if (tavilyResult && typeof tavilyResult === 'object' && 'results' in tavilyResult) {
+      const tr = tavilyResult as { results?: Array<Record<string, unknown>>; answer?: string | null; source?: string }
+      return {
+        query,
+        source: tr.source || 'tavily',
+        answer: tr.answer || null,
+        total: tr.results?.length || 0,
+        results: (tr.results || []).slice(0, maxResults).map(r => ({
+          title: r.title,
+          url: r.url,
+          snippet: r.content || r.snippet || '',
+          score: r.score ?? null,
+        })),
+      }
+    }
+  }
+
+  // Strategy 2: Serper (Google SERP)
+  if (serperKeyPool.hasKeys()) {
+    const serperResult = await executeSerper({ query, num: maxResults })
+    if (serperResult && typeof serperResult === 'object' && 'organic' in serperResult) {
+      const sr = serperResult as { organic?: Array<Record<string, unknown>>; knowledgeGraph?: unknown; source?: string }
+      return {
+        query,
+        source: sr.source || 'serper',
+        knowledgeGraph: sr.knowledgeGraph || null,
+        total: sr.organic?.length || 0,
+        results: (sr.organic || []).slice(0, maxResults).map(r => ({
+          title: r.title,
+          url: r.link,
+          snippet: r.snippet || '',
+          score: null,
+        })),
+      }
+    }
+  }
+
+  // Strategy 3: z-ai-sdk web_search (sandbox fallback) — invoke directly to skip
+  // the tavilyKeyPool.hasKeys() gate that executeTavily already failed above.
+  try {
+    const zai = await getZAI()
+    if (zai) {
+      const results = await zai.functions.invoke('web_search', { query, num: maxResults })
+      if (Array.isArray(results) && results.length > 0) {
+        return {
+          query,
+          source: 'z-ai-sdk-web_search',
+          total: results.length,
+          results: results.map((r: any) => ({
+            title: r.name || r.title,
+            url: r.url,
+            snippet: r.snippet || r.content || '',
+            score: r.rank ?? null,
+          })),
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[ToolExecutor] web_search z-ai-sdk fallback failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  return {
+    query,
+    error: 'All web search providers failed (no tavily/serper keys configured + z-ai-sdk unavailable).',
+    hint: 'Set TAVILY_API_KEY_1..4 or SERPER_API_KEY_1..4 in .env, or run inside z.ai sandbox for SDK fallback.',
+    tavilyKeys: tavilyKeyPool.getAvailableCount(),
+    serperKeys: serperKeyPool.getAvailableCount(),
+  }
+}
+
+/**
+ * web_fetch — Unified web page reader (Claude Code / Z.ai Code parity).
+ *
+ * Routing strategy:
+ *   1. Jina (r.jina.ai) when JINA_API_KEY_* configured — clean text/markdown
+ *   2. z-ai-sdk page_reader fallback (sandbox only)
+ *
+ * Output normalized to:
+ *   { url, title, content, length, truncated, source }
+ *
+ * Feature flag: ENABLE_WEB_UNIFIED (off by default per D11).
+ * Old `jina` tool remains callable without the flag for backward compat.
+ */
+async function executeWebFetch(args: Record<string, unknown>): Promise<unknown> {
+  const url = args.url as string
+  if (!url) return { error: 'url is required' }
+
+  // Validate URL
+  try {
+    new URL(url)
+  } catch {
+    return { error: `Invalid URL: ${url}` }
+  }
+
+  const format = args.format === 'html' ? 'html' : args.format === 'markdown' ? 'markdown' : 'text'
+
+  // Strategy 1: Jina (preferred — returns clean text by default)
+  if (jinaKeyPool.hasKeys()) {
+    const jinaResult = await executeJina({ url })
+    if (jinaResult && typeof jinaResult === 'object' && 'content' in jinaResult) {
+      const jr = jinaResult as { content?: string; length?: number; truncated?: boolean; source?: string }
+      // Jina always returns text; for html/markdown format, return as-is (consumer can convert)
+      return {
+        url,
+        title: null, // Jina text mode doesn't return title
+        content: jr.content || '',
+        length: jr.length || 0,
+        truncated: jr.truncated || false,
+        format,
+        source: jr.source || 'jina',
+      }
+    }
+  }
+
+  // Strategy 2: z-ai-sdk page_reader (returns title + html; we convert to text)
+  try {
+    const zai = await getZAI()
+    if (zai) {
+      const result = await zai.functions.invoke('page_reader', { url })
+      if (result?.data?.html) {
+        let text = result.data.html
+        if (format === 'text' || format === 'markdown') {
+          // Strip tags for text/markdown output
+          text = text
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/\s+/g, ' ')
+            .trim()
+        }
+        const maxChars = 30000
+        const truncated = text.length > maxChars
+        const content = truncated ? text.slice(0, maxChars) + '\n\n... [TRUNCATED — page too long]' : text
+        return {
+          url,
+          title: result.data.title || null,
+          content,
+          length: text.length,
+          truncated,
+          format,
+          source: 'z-ai-sdk-page_reader',
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[ToolExecutor] web_fetch z-ai-sdk fallback failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  return {
+    url,
+    error: 'All web fetch providers failed (no jina keys + z-ai-sdk unavailable).',
+    hint: 'Set JINA_API_KEY_1..2 in .env, or run inside z.ai sandbox for SDK fallback.',
+    jinaKeys: jinaKeyPool.getAvailableCount(),
+  }
+}
+
+// ==================== v2.1 Phase 1b.2: P0 GATEWAY TOOLS (first-class wrappers) ====================
+
+/**
+ * P0 Gateway tools — thin first-class wrappers around gatewayTool() proxy.
+ *
+ * Each maps a clean tool name → gateway-bridge tool name:
+ *   gateway_exec       → 'exec'
+ *   gateway_read       → 'read'
+ *   gateway_write      → 'write'
+ *   gateway_edit       → 'edit'
+ *   gateway_apply_patch → 'apply_patch'
+ *
+ * Rationale: giving these 5 P0 tools first-class schemas (vs. generic gateway_tool)
+ * lets the LLM emit structured calls directly with proper parameters, instead of
+ * wrapping args inside another {name, args} object. Cleaner reasoning + fewer
+ * JSON parse failures.
+ *
+ * Feature flag: ENABLE_GATEWAY_TOOLS=phase-1b (off by default per D11).
+ * The generic gateway_tool proxy remains available without the flag.
+ */
+const P0_GATEWAY_TOOL_MAP: Record<string, string> = {
+  gateway_exec: 'exec',
+  gateway_read: 'read',
+  gateway_write: 'write',
+  gateway_edit: 'edit',
+  gateway_apply_patch: 'apply_patch',
+}
+
+async function executeP0GatewayTool(
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const gwName = P0_GATEWAY_TOOL_MAP[toolName]
+  if (!gwName) {
+    return { success: false, error: `Not a P0 gateway tool: ${toolName}` }
+  }
+
+  // Map first-class args → gateway-bridge args (which vary per tool)
+  const gwArgs: Record<string, unknown> = {}
+  if (toolName === 'gateway_exec') {
+    if (args.command) gwArgs.command = args.command
+    if (args.cwd) gwArgs.cwd = args.cwd
+  } else if (toolName === 'gateway_read') {
+    if (args.path) gwArgs.path = args.path
+  } else if (toolName === 'gateway_write') {
+    if (args.path) gwArgs.path = args.path
+    if (args.content) gwArgs.content = args.content
+  } else if (toolName === 'gateway_edit') {
+    if (args.path) gwArgs.path = args.path
+    if (args.old) gwArgs.old = args.old
+    if (args.new) gwArgs.new = args.new
+  } else if (toolName === 'gateway_apply_patch') {
+    if (args.path) gwArgs.path = args.path
+    if (args.patch) gwArgs.patch = args.patch
+  }
+
+  // Delegate to the existing gatewayTool proxy (which hits gateway-bridge:18791)
+  return gatewayTool({ name: gwName, args: gwArgs })
 }
 
 // ==================== SKILL STATUS CHECK ====================

@@ -171,6 +171,19 @@ const LOCAL_TOOLS = [
   { name: 'manage_packages', category: 'Package', description: 'bun add/remove/install/update (2min timeout).', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: '', hasApiKey: true },
   // ===== P2: gateway proxy =====
   { name: 'gateway_tool', category: 'Gateway', description: 'Proxy tới 1 trong 36 gateway-bridge tools (web_search, exec, read, write, browser...).', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  // ===== v2.1 Phase 1a: shell + todo (Claude Code parity) =====
+  { name: 'shell', category: 'Shell', description: 'Sandboxed bash (5min timeout, allow metacharacters, refuse sudo/rm -rf /). Flag: ENABLE_SHELL_TOOL.', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: 'ENABLE_SHELL_TOOL', hasApiKey: true },
+  { name: 'todo_write', category: 'Planning', description: 'Claude Code-style batch upsert task list. Flag: ENABLE_TODO_TOOL.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: 'ENABLE_TODO_TOOL', hasApiKey: true },
+  { name: 'todo_read', category: 'Planning', description: 'Đọc task list với status breakdown. Flag: ENABLE_TODO_TOOL.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: 'ENABLE_TODO_TOOL', hasApiKey: true },
+  // ===== v2.1 Phase 1b.1: unified web (consolidate tavily/serper/jina) =====
+  { name: 'web_search', category: 'Web', description: 'Unified web search (Tavily→Serper→z-ai-sdk). Flag: ENABLE_WEB_UNIFIED.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: 'ENABLE_WEB_UNIFIED', hasApiKey: true },
+  { name: 'web_fetch', category: 'Web', description: 'Unified web page reader (Jina→z-ai-sdk). Flag: ENABLE_WEB_UNIFIED.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: 'ENABLE_WEB_UNIFIED', hasApiKey: true },
+  // ===== v2.1 Phase 1b.2: P0 first-class gateway tools (proxy via 18791) =====
+  { name: 'gateway_exec', category: 'Gateway', description: 'Execute shell command qua Gateway bridge. Flag: ENABLE_GATEWAY_TOOLS=phase-1b.', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: 'ENABLE_GATEWAY_TOOLS', hasApiKey: true },
+  { name: 'gateway_read', category: 'File', description: 'Read file qua Gateway bridge. Flag: ENABLE_GATEWAY_TOOLS=phase-1b.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: 'ENABLE_GATEWAY_TOOLS', hasApiKey: true },
+  { name: 'gateway_write', category: 'File', description: 'Write file qua Gateway bridge. Flag: ENABLE_GATEWAY_TOOLS=phase-1b.', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: 'ENABLE_GATEWAY_TOOLS', hasApiKey: true },
+  { name: 'gateway_edit', category: 'File', description: 'Edit file (exact string replace) qua Gateway bridge. Flag: ENABLE_GATEWAY_TOOLS=phase-1b.', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: 'ENABLE_GATEWAY_TOOLS', hasApiKey: true },
+  { name: 'gateway_apply_patch', category: 'File', description: 'Apply unified diff patch qua Gateway bridge. Flag: ENABLE_GATEWAY_TOOLS=phase-1b.', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: 'ENABLE_GATEWAY_TOOLS', hasApiKey: true },
 ]
 
 export async function GET(request: NextRequest) {
