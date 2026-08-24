@@ -14,7 +14,7 @@
  * is rejected. Destructive operations support `dry_run`.
  */
 
-import { exec, spawn } from 'child_process'
+import { exec, execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import path from 'path'
 import fs from 'fs/promises'
@@ -24,6 +24,12 @@ import { existsSync } from 'fs'
 import { db } from '@/lib/db'
 
 const execAsync = promisify(exec)
+// Phase 3 audit fix (Task 9): execFileAsync passes argv as an array — bypasses
+// the system shell entirely, eliminating shell-injection via user-supplied path
+// arguments (e.g., `lint({path: 'foo"; rm -rf /tmp; echo "bar'})`). All tool
+// functions that interpolate an agent-supplied path into a runner command MUST
+// use execFileAsync (not execAsync) — see lint/testCoverage/runTests below.
+const execFileAsync = promisify(execFile)
 
 // ==================== SHARED HELPERS ====================
 
@@ -565,32 +571,57 @@ export async function runTests(args: {
   try { pkgJson = JSON.parse(await fs.readFile(pkgJsonPath, 'utf-8')) } catch {}
   const deps = { ...(pkgJson?.dependencies || {}), ...(pkgJson?.devDependencies || {}) }
 
+  // Build argv array (no shell — Phase 3 audit fix for shell-injection via args.target)
+  let argv: string[]
   if (hasBunLock) {
     framework = 'bun'
-    command = `bun test${args.target ? ` ${args.target}` : ''}${args.coverage ? ' --coverage' : ''}`
+    argv = ['test']
+    if (args.target) argv.push(args.target)
+    if (args.coverage) argv.push('--coverage')
+    command = `bun ${argv.join(' ')}`
   } else if (deps.vitest || deps['@vitest/ui']) {
     framework = 'vitest'
-    command = `npx vitest run${args.target ? ` ${args.target}` : ''}${args.coverage ? ' --coverage' : ''}`
+    argv = ['vitest', 'run']
+    if (args.target) argv.push(args.target)
+    if (args.coverage) argv.push('--coverage')
+    command = `npx ${argv.join(' ')}`
   } else if (deps.jest) {
     framework = 'jest'
-    command = `npx jest${args.target ? ` ${args.target}` : ''}${args.coverage ? ' --coverage' : ''}`
+    argv = ['jest']
+    if (args.target) argv.push(args.target)
+    if (args.coverage) argv.push('--coverage')
+    command = `npx ${argv.join(' ')}`
   } else if (hasPyproject) {
     framework = 'pytest'
-    command = `pytest${args.target ? ` ${args.target}` : ''}${args.coverage ? ' --cov' : ''}`
+    argv = ['pytest']
+    if (args.target) argv.push(args.target)
+    if (args.coverage) argv.push('--cov')
+    command = argv.join(' ')
   } else {
     // Default to bun (the project's primary runtime)
     framework = 'bun'
-    command = `bun test${args.target ? ` ${args.target}` : ''}`
+    argv = ['test']
+    if (args.target) argv.push(args.target)
+    command = `bun ${argv.join(' ')}`
   }
 
   console.log(`[run_tests] Detected framework: ${framework} → ${command}`)
 
   try {
-    const { stdout, stderr } = await execAsync(command, {
+    // execFileAsync bypasses shell — no shell-injection risk from args.target.
+    // The first element of argv is the executable name (lookup via PATH).
+    const runner = framework === 'pytest' ? 'pytest'
+      : framework === 'bun' ? 'bun'
+      : 'npx'
+    const runnerArgs = framework === 'pytest' ? argv.slice(1)
+      : framework === 'bun' ? argv.slice(1)
+      : argv
+    const { stdout, stderr } = await execFileAsync(runner, runnerArgs, {
       cwd: root,
       timeout: 5 * 60 * 1000, // 5 minutes
       maxBuffer: 5 * 1024 * 1024, // 5MB
       env: { ...process.env, CI: 'true' }, // CI=true disables watch mode + colors
+      shell: false, // explicit: never invoke shell
     })
     const combined = stdout + '\n' + stderr
     const parsed = parseTestOutput(combined, framework)
@@ -1781,9 +1812,11 @@ export async function lint(args: {
     }
   }
 
-  // Build ESLint command with JSON formatter
-  const fixFlag = args.fix === true ? '--fix' : ''
-  const cmd = `bunx eslint --format json ${fixFlag} --no-error-on-unmatched-pattern "${targetPath}"`.replace(/\s+/g, ' ').trim()
+  // Build ESLint argv (no shell — Phase 3 audit fix for shell-injection via path arg)
+  // execFileAsync passes argv as array, bypassing shell parsing entirely.
+  const argv = ['eslint', '--format', 'json']
+  if (args.fix === true) argv.push('--fix')
+  argv.push('--no-error-on-unmatched-pattern', targetPath)
 
   const startedAt = Date.now()
   let stdout = ''
@@ -1791,10 +1824,11 @@ export async function lint(args: {
   let exitCode = 0
 
   try {
-    const out = await execAsync(cmd, {
+    const out = await execFileAsync('bunx', argv, {
       cwd: root,
       timeout: 120_000,
       maxBuffer: 10 * 1024 * 1024,
+      shell: false, // explicit: never invoke shell — path arg safe
     })
     stdout = out.stdout || ''
     stderr = out.stderr || ''
@@ -1981,18 +2015,22 @@ export async function testCoverage(args: {
   // is NOT a stable Bun flag in all versions, so we parse the text table
   // regardless of `reporter` for now (json reporter is best-effort: pass the
   // flag through, fall back to text parsing).
-  const reporterFlag = wantJson ? '--coverage-reporter=json' : ''
-  const cmd = `bun test --coverage ${reporterFlag} ${target ? `"${target}"` : ''}`.replace(/\s+/g, ' ').trim()
+  //
+  // Build argv (no shell — Phase 3 audit fix for shell-injection via target arg)
+  const argv = ['test', '--coverage']
+  if (wantJson) argv.push('--coverage-reporter=json')
+  if (target) argv.push(target)
 
   let stdout = ''
   let stderr = ''
   let exitCode = 0
 
   try {
-    const out = await execAsync(cmd, {
+    const out = await execFileAsync('bun', argv, {
       cwd: root,
       timeout: 300_000,  // 5 min — same as runTests
       maxBuffer: 10 * 1024 * 1024,
+      shell: false, // explicit: never invoke shell — target arg safe
     })
     stdout = out.stdout || ''
     stderr = out.stderr || ''
