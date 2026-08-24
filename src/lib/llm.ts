@@ -76,6 +76,39 @@ export interface LLMResult {
   model: string
   error?: string
   tokensUsed?: number /// Total tokens (prompt + completion) from API response
+  /** Native function-calling tool_calls from the API response.
+   *  Populated only when the caller passes `tools` in LLMCallOptions
+   *  AND the model emits a tool_calls array. Empty/undefined otherwise. */
+  tool_calls?: LLMToolCall[]
+  /** OpenAI-style finish_reason: 'stop' | 'tool_calls' | 'length' | 'content_filter' | null
+   *  Useful for Phase 1c dual-mode logic (workflow-engine.ts). */
+  finish_reason?: string | null
+}
+
+/** OpenAI-style tool/function schema passed to the LLM via the `tools` API param.
+ *  Matches the shape of ToolDefinition in code-team/tool-executor.ts —
+ *  re-declared here to avoid circular imports (llm.ts is a leaf dependency). */
+export interface LLMTool {
+  type: 'function'
+  function: {
+    name: string
+    description: string
+    parameters: {
+      type: 'object'
+      properties: Record<string, unknown>
+      required: string[]
+    }
+  }
+}
+
+/** Parsed tool_call from LLM API response. */
+export interface LLMToolCall {
+  id: string                 /// server-assigned id (e.g. "call_abc123")
+  type: 'function'
+  function: {
+    name: string             /// tool name
+    arguments: string       /// JSON string — caller must JSON.parse
+  }
 }
 
 export interface LLMCallOptions {
@@ -83,6 +116,13 @@ export interface LLMCallOptions {
   maxTokens?: number
   agentId?: string      /// AgentProfile.id — for per-agent token tracking
   agentName?: string    /// Agent name — denormalized for quick display
+  /** Phase 1c: Native function-calling tool schemas.
+   *  When provided, the NIM API call includes `tools` + `tool_choice`.
+   *  When undefined, the request body is unchanged (backward compatible). */
+  tools?: LLMTool[]
+  /** 'auto' (default when tools provided) | 'none' | 'required' | specific function selector.
+   *  Ignored when `tools` is undefined. */
+  tool_choice?: 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } }
 }
 
 // ==================== CONSTANTS ====================
@@ -1740,6 +1780,9 @@ async function tryProviderWithSlotKey(
   agentId?: string,         // For per-agent token tracking
   agentName?: string,       // For per-agent token tracking
   isFallback: boolean = false, // When true, don't increment failureCount on errors — prevents cascade exhaustion
+  // Phase 1c: native function calling params
+  tools?: LLMTool[],
+  tool_choice?: 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } },
 ): Promise<LLMResult | null> {
   const providerName = pool.providerName
 
@@ -1778,6 +1821,21 @@ async function tryProviderWithSlotKey(
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), timeoutMs)
 
+      // Phase 1c: build request body conditionally — only include `tools`/`tool_choice`
+      // when caller provided them. This preserves backward compat for non-FC callers
+      // (chat, health, classification, extraction). NIM endpoint accepts OpenAI-style
+      // tools param — verified for kimi-k3, glm-5.2, deepseek-v4-flash, minimax-m3.
+      const body: Record<string, unknown> = {
+        model,
+        messages,
+        max_tokens: maxTokens ?? 4096,
+        temperature: temperature ?? 0.1,
+      }
+      if (tools && tools.length > 0) {
+        body.tools = tools
+        body.tool_choice = tool_choice ?? 'auto'
+      }
+
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -1785,7 +1843,7 @@ async function tryProviderWithSlotKey(
           Authorization: `Bearer ${keyInfo.key}`,
           ...extraHeaders,
         },
-        body: JSON.stringify({ model, messages, max_tokens: maxTokens ?? 4096, temperature: temperature ?? 0.1 }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       })
       clearTimeout(timer)
@@ -1830,14 +1888,28 @@ async function tryProviderWithSlotKey(
 
       if (response.ok) {
         const data = await response.json() as {
-          choices: Array<{ message: { content: string } }>
+          choices: Array<{
+            message: {
+              content: string
+              tool_calls?: Array<{
+                id: string
+                type: 'function'
+                function: { name: string; arguments: string }
+              }>
+            }
+            finish_reason?: string | null
+          }>
           usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
         }
-        const content = data.choices?.[0]?.message?.content
+        const choice = data.choices?.[0]
+        const content = choice?.message?.content
+        const nativeToolCalls = choice?.message?.tool_calls
+        const finishReason = choice?.finish_reason ?? null
         const totalTokens = data.usage?.total_tokens ?? ((data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0))
-        if (content) {
+        if (content || (nativeToolCalls && nativeToolCalls.length > 0)) {
           const keyLabel = slotIndex >= 0 ? `key#${slotIndex}` : 'key (rr)'
-          console.log(`[LLM] Key ${slotIndex} ${providerName} ${keyLabel} model ${model} ✓ (${totalTokens} tokens)`)
+          const tcCount = nativeToolCalls?.length ?? 0
+          console.log(`[LLM] Key ${slotIndex} ${providerName} ${keyLabel} model ${model} ✓ (${totalTokens} tokens, ${tcCount} tool_calls, finish=${finishReason || 'none'})`)
           // Pass tokensUsed to markSuccess so per-key token tracking works
           pool.markSuccess(keyInfo.key, totalTokens)
           // Use the ACTUAL key index for per-slot token tracking, not the requested slotIndex.
@@ -1852,7 +1924,14 @@ async function tryProviderWithSlotKey(
             const outputTokens = data.usage?.completion_tokens ?? 0
             addTokensUsedByAgent(totalTokens, inputTokens, outputTokens, providerName.toLowerCase(), model, agentId, agentName)
           }
-          return { content, provider: providerName.toLowerCase(), model, tokensUsed: totalTokens }
+          return {
+            content: content ?? '',  // NIM may return empty content when finish_reason='tool_calls'
+            provider: providerName.toLowerCase(),
+            model,
+            tokensUsed: totalTokens,
+            tool_calls: nativeToolCalls && nativeToolCalls.length > 0 ? nativeToolCalls : undefined,
+            finish_reason: finishReason,
+          }
         }
       }
 
@@ -1911,6 +1990,7 @@ async function tryNvidiaSlot(slotIndex: number, prompt: string, systemPrompt: st
     agentId,
     agentName,
     isFallback,
+    // Phase 1c: extraction path does not use native FC — left undefined intentionally
   )
 }
 
@@ -2186,6 +2266,10 @@ async function callLLMWithSpecificProvider(
     options?.maxTokens ?? 4096,
     options?.agentId,
     options?.agentName,
+    false, // not fallback
+    // Phase 1c: forward native FC params from options
+    options?.tools,
+    options?.tool_choice,
   )
 
   return result
@@ -2215,9 +2299,14 @@ export async function callLLMForAgent(
   const { provider, model } = agentConfig
 
   // Step 1: Try agent's configured provider+model
+  // Phase 1c fix: when native FC is enabled, models may return empty content
+  // with finish_reason='tool_calls'. The success check must consider tool_calls
+  // too — otherwise valid tool_calls responses would be treated as failure
+  // and unnecessarily fall back to the global pool (which drops the tools param).
   const agentResult = await callLLMWithSpecificProvider(prompt, provider, model, systemPrompt, options)
-  if (agentResult?.content) {
-    console.log(`[LLM] Agent used configured provider: ${provider}/${model} ✓`)
+  if (agentResult && (agentResult.content || (agentResult.tool_calls && agentResult.tool_calls.length > 0))) {
+    const tcCount = agentResult.tool_calls?.length ?? 0
+    console.log(`[LLM] Agent used configured provider: ${provider}/${model} ✓ (${tcCount} tool_calls)`)
     return agentResult
   }
 

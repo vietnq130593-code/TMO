@@ -18,10 +18,11 @@
  * SSE events are emitted to client for real-time rendering.
  */
 
-import { callLLMForAgent, type LLMResult } from '@/lib/llm'
+import { callLLMForAgent, type LLMResult, type LLMTool } from '@/lib/llm'
 import { db } from '@/lib/db'
 import { getAgentTools } from './agents'
-import { getAgentPrompt } from './prompts'
+import { getAgentPrompt, buildToolSchemasSection } from './prompts'
+import { getToolDefinitionsForPosition } from './tool-executor'
 import {
   resolveAgent,
   resolveAllAgents,
@@ -817,6 +818,21 @@ async function runAgentStep(params: {
     systemPrompt += ctx.skillsContext
   }
 
+  // ━━━ Phase 1c: Native Function Calling setup ━━━
+  // Mode: 'off' (regex only) | 'dual' (native preferred, regex fallback) | 'strict' (native only)
+  // When dual/strict: append tool schemas to system prompt (defense in depth) AND pass
+  // tool definitions via LLMCallOptions.tools so NIM API includes them in the request.
+  const fcMode = flagMode('ENABLE_NATIVE_FC', ['off', 'dual', 'strict']) as 'off' | 'dual' | 'strict'
+  let nativeTools: LLMTool[] | undefined
+  if (fcMode !== 'off') {
+    const toolDefs = getToolDefinitionsForPosition(position)
+    if (toolDefs.length > 0) {
+      // ToolDefinition matches LLMTool shape exactly (both OpenAI-compatible)
+      nativeTools = toolDefs as unknown as LLMTool[]
+      systemPrompt += buildToolSchemasSection(toolDefs)
+    }
+  }
+
   // Build initial messages array for multi-turn conversation with tool calls
   const messages: Array<{
     role: 'system' | 'user' | 'assistant' | 'tool'
@@ -835,9 +851,12 @@ async function runAgentStep(params: {
   let finalContent = ''
   let iterations = 0
   let totalToolCalls = 0
+  // Phase 1c metrics: track native vs fallback success rate for dual-mode validation
+  let nativeToolCallCount = 0
+  let regexFallbackCount = 0
   const toolCallsLog: Array<{ tool: string; args: Record<string, unknown>; result: string; duration: number; success: boolean }> = []
 
-  console.log(`[Workflow] Running agent: ${agent.name} (${position}) — ${step} [tools: ${tools.join(', ')}]`)
+  console.log(`[Workflow] Running agent: ${agent.name} (${position}) — ${step} [tools: ${tools.join(', ')}] [fc: ${fcMode}${nativeTools ? ` (${nativeTools.length} schemas)` : ''}]`)
 
   while (iterations < maxIterations) {
     iterations++
@@ -848,6 +867,10 @@ async function runAgentStep(params: {
 
     // Call LLM for this agent — with timeout to prevent infinite hangs
     // Edge case #1: LLM timeout → emit error event, break ReAct loop
+    //
+    // Phase 1c: when fcMode is 'dual' or 'strict', pass tools/tool_choice via options.
+    // tryProviderWithSlotKey will include them in the NIM API request body.
+    // The response will contain result.tool_calls (parsed by tryProviderWithSlotKey).
     const llmCallPromise = callLLMForAgent(
       formattedPrompt,
       { provider: agent.provider, model: agent.model },
@@ -857,6 +880,9 @@ async function runAgentStep(params: {
         agentName: agent.name,
         temperature: agent.temperature,
         maxTokens: agent.maxTokens,
+        ...(nativeTools && nativeTools.length > 0
+          ? { tools: nativeTools, tool_choice: 'auto' as const }
+          : {}),
       }
     )
 
@@ -915,10 +941,57 @@ async function runAgentStep(params: {
       iteration: iterations,
     })
 
-    // Check if LLM output contains tool calls
-    // Since callLLMForAgent doesn't natively support function calling response,
-    // we parse tool calls from the output text using the format agents are instructed to use
-    const toolCalls = parseToolCallsFromOutput(result.content)
+    // ━━━ Phase 1c: Tool call extraction — dual-mode ━━━
+    // Strategy (per docs/FULLSTACK_CAPABILITY_PLAN_V2.md Part 4 Phase 1c.3):
+    //   - 'off'    → regex only (current behavior, fully backward compatible)
+    //   - 'dual'   → native tool_calls preferred; if empty, fall back to regex parsing
+    //               and log a warning so success rate can be tracked per Part 10.4
+    //   - 'strict' → native only; if empty, treat as "agent done" (no fallback)
+    //
+    // Native tool_calls come back from tryProviderWithSlotKey as result.tool_calls
+    // (parsed from OpenAI-style response). Regex fallback parses the legacy
+    // `tool_call: name({...})` text format from the LLM content.
+    let toolCalls: Array<{ id: string; name: string; args: Record<string, unknown> }> = []
+
+    if (result.tool_calls && result.tool_calls.length > 0) {
+      // ━━━ Native function calling path ━━━
+      // Convert LLMToolCall[] (string arguments) → workflow's internal shape
+      // (parsed args object). Skip any tool_call whose arguments fail JSON.parse.
+      nativeToolCallCount += result.tool_calls.length
+      for (const tc of result.tool_calls) {
+        let parsedArgs: Record<string, unknown> = {}
+        try {
+          parsedArgs = JSON.parse(tc.function.arguments)
+        } catch (parseErr) {
+          console.warn(`[Workflow] ${agent.name} native tool_call ${tc.function.name} args JSON.parse failed — skipping. Raw: ${tc.function.arguments.slice(0, 200)}`)
+          continue
+        }
+        toolCalls.push({
+          id: tc.id || `native_${Date.now()}_${toolCalls.length}`,
+          name: tc.function.name,
+          args: parsedArgs,
+        })
+      }
+      console.log(`[Workflow] ${agent.name} native tool_calls: ${result.tool_calls.length} (parsed ${toolCalls.length})`)
+    } else if (fcMode === 'dual') {
+      // ━━━ Regex fallback path (dual mode only) ━━━
+      // Model didn't emit native tool_calls despite receiving tools param.
+      // Fall back to parsing the text output for `tool_call: name({...})` patterns.
+      // This is expected during early dual-mode validation — once success rate ≥95%,
+      // switch to strict mode (Part 14.3 A/B testing plan).
+      const regexCalls = parseToolCallsFromOutput(result.content)
+      if (regexCalls.length > 0) {
+        regexFallbackCount += regexCalls.length
+        console.warn(`[Workflow] ${agent.name} regex fallback used — ${regexCalls.length} tool calls parsed from text (native tool_calls empty, fcMode=dual). Fallback rate so far: ${regexFallbackCount}/${regexFallbackCount + nativeToolCallCount}`)
+      }
+      toolCalls = regexCalls
+    } else if (fcMode === 'strict') {
+      // Native only, no fallback. Empty tool_calls means agent is done.
+      console.log(`[Workflow] ${agent.name} strict mode — no native tool_calls → treating as agent done`)
+    } else {
+      // ━━━ Regex path (fcMode='off') — current behavior, fully preserved ━━━
+      toolCalls = parseToolCallsFromOutput(result.content)
+    }
 
     if (toolCalls.length === 0) {
       // No tool calls → agent step complete
@@ -1008,8 +1081,11 @@ async function runAgentStep(params: {
     }
   }
 
-  // Log summary
-  console.log(`[Workflow] ${agent.name} done: ${iterations} iterations, ${totalToolCalls} tool calls, ${Date.now() - stepStartTime}ms`)
+  // Log summary — includes Phase 1c dual-mode metrics for A/B validation
+  const fcMetrics = fcMode === 'off'
+    ? 'fc: off'
+    : `fc: ${fcMode} (native=${nativeToolCallCount}, regex_fallback=${regexFallbackCount})`
+  console.log(`[Workflow] ${agent.name} done: ${iterations} iterations, ${totalToolCalls} tool calls, ${Date.now() - stepStartTime}ms [${fcMetrics}]`)
 
   return { content: finalContent, duration: Date.now() - stepStartTime }
 }

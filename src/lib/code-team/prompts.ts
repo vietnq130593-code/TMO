@@ -25,6 +25,72 @@ export function getAgentPrompt(position: string): string {
   }
 }
 
+// ===== Phase 1c.2: NATIVE FUNCTION CALLING — Tool Schema Section =====
+//
+// When ENABLE_NATIVE_FC is 'dual' or 'strict', workflow-engine.ts appends this
+// section to the agent's system prompt AND passes the same ToolDefinition[]
+// to callLLMForAgent via the `tools` LLMCallOptions field. The LLM then:
+//   1. Sees tool schemas as text in the system prompt (defense in depth)
+//   2. Receives tool schemas via OpenAI-style `tools` API param
+//   3. Emits `tool_calls` array in the API response (parsed by tryProviderWithSlotKey)
+//
+// Why both? Some models (notably minimax-m3) need explicit text instructions
+// to call tools reliably; others (kimi-k3) work fine via the API param alone.
+// Defense in depth = higher success rate during dual-mode validation.
+//
+// Format: OpenAI-compatible JSON. The LLM is told to prefer native tool_calls
+// over the legacy `tool_call: name({...})` text format, but dual-mode parsing
+// in workflow-engine.ts still catches both as a fallback.
+//
+// NOTE: This function takes a ToolDefinition[] parameter rather than importing
+// from tool-executor.ts itself, to avoid circular imports
+// (prompts → tool-executor → agents → prompts). The caller (workflow-engine.ts)
+// already imports both modules.
+
+/** Minimal ToolDefinition shape (matches tool-executor.ts ToolDefinition). */
+export interface ToolSchemaLike {
+  type: 'function'
+  function: {
+    name: string
+    description: string
+    parameters: {
+      type: 'object'
+      properties: Record<string, unknown>
+      required: string[]
+    }
+  }
+}
+
+/**
+ * Build a system prompt section that documents available tools as JSON schemas.
+ * Used in Phase 1c dual/strict mode — appended to the base agent prompt.
+ *
+ * @param tools Tool definitions for the agent (from getToolDefinitionsForPosition)
+ * @returns Text section with tool schemas, or empty string if no tools
+ */
+export function buildToolSchemasSection(tools: ToolSchemaLike[]): string {
+  if (tools.length === 0) return ''
+
+  const toolSchemasJson = tools.map(t => JSON.stringify(t, null, 2)).join(',\n')
+
+  return `
+
+━━━ TOOL SCHEMAS (Native Function Calling) ━━━
+Bạn có ${tools.length} tools available. Gọi tool qua native function calling (model sẽ emit tool_calls).
+KHÔNG cần viết tool_call text trong output — model sẽ emit structured tool_calls.
+
+Tool definitions (OpenAI format):
+[
+${toolSchemasJson}
+]
+
+Quy tắc:
+1. Khi cần tool → emit tool_calls (model sẽ handle). KHÔNG viết "tool_call: name({...})" text.
+2. Khi KHÔNG cần tool → trả text bình thường.
+3. Args phải match JSON schema chính xác — không thêm trường không có trong schema.
+4. Tool calls có thể song song — emit nhiều tool_calls trong 1 response khi độc lập.`
+}
+
 // ===== TL (APEX) — Nhìn & Điều hướng =====
 // Workflow doc reference: "CHI TIẾT TL — CƠ CHẾ CỦA KIMI K2.6"
 
