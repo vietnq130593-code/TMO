@@ -1,0 +1,47 @@
+{
+  "_comment": "Snapshot for file_list tool receipt shape (Phase 2.5a). pattern glob + fs.lstat symlink-safe.",
+  "_spec_ref": "docs/FULLSTACK_CAPABILITY_PLAN_V2.md line 213 + docs/tool-smoke-tests.md file_list section",
+  "_feature_flag": "ENABLE_FILE_OPS=true + ENABLE_FILE_LIST=true",
+  "_source_file": "src/lib/code-team/dev-tools.ts:367-... (fileList)",
+  "_executor": "src/lib/code-team/tool-executor.ts:927-936 (case 'file_list')",
+  "shallow_list": {
+    "input": { "path": "src", "depth": 1 },
+    "output": {
+      "success": true,
+      "entries": [
+        { "name": "app", "type": "directory", "size": 0, "mtime": 1735900000000 },
+        { "name": "lib", "type": "directory", "size": 0, "mtime": 1735900000000 }
+      ]
+    }
+  },
+  "pattern_glob_filter": {
+    "input": { "path": "src/lib", "pattern": "*.ts", "depth": 1 },
+    "output": {
+      "success": true,
+      "entries": [
+        { "name": "db.ts", "type": "file", "size": 312, "mtime": 1735900000000 },
+        { "name": "llm.ts", "type": "file", "size": 5400, "mtime": 1735900000000 }
+      ],
+      "_note": "Non-.ts files filtered out"
+    }
+  },
+  "default_ignore_set": {
+    "input": { "path": ".", "depth": 2 },
+    "output": {
+      "success": true,
+      "entries": [/* excludes node_modules, .next, .git, dist, build */],
+      "_note": "Default ignore set built into fileList implementation"
+    }
+  },
+  "symlink_lstat_detection": {
+    "setup": "link.ts is a symlink → target.ts",
+    "input": { "path": ".", "depth": 1, "pattern": "*.ts" },
+    "output": {
+      "success": true,
+      "entries": [
+        { "name": "link.ts", "type": "symlink", "symlinkTarget": "target.ts" }
+      ],
+      "_note": "fs.lstat (not stat) — symlink NOT followed during recursive walk"
+    }
+  }
+}

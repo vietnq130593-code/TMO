@@ -1,0 +1,51 @@
+{
+  "_comment": "Snapshot for run_tests tool receipt shape (Phase 2.6). Framework-aware autodetect + durationMs + failingTests.",
+  "_spec_ref": "docs/FULLSTACK_CAPABILITY_PLAN_V2.md line 214 + docs/tool-smoke-tests.md run_tests section",
+  "_feature_flag": "ENABLE_RUN_TESTS=true",
+  "_source_file": "src/lib/code-team/dev-tools.ts:475-621 (runTests + parseTestOutput)",
+  "_executor": "src/lib/code-team/tool-executor.ts:949-958 (case 'run_tests')",
+  "bun_autodetect_happy_path": {
+    "input": { "target": "src/lib/code-team" },
+    "output": {
+      "success": true,
+      "framework": "bun",
+      "passed": 12,
+      "failed": 0,
+      "skipped": 0,
+      "durationMs": 850,
+      "failingTests": [],
+      "_note": "Bun autodetect via bun.lock presence; durationMs extracted from 'X pass Y fail (Zms)'"
+    }
+  },
+  "vitest_autodetect": {
+    "setup": "package.json has vitest in devDeps",
+    "input": { "target": "src" },
+    "output": {
+      "success": true,
+      "framework": "vitest",
+      "passed": 8,
+      "failed": 1,
+      "skipped": 0,
+      "durationMs": 1200,
+      "failingTests": [
+        { "file": "src/foo.test.ts", "line": 12, "message": "Expected 2, got 3" }
+      ],
+      "_note": "durationMs from 'Test Files N (Mms)' pattern"
+    }
+  },
+  "no_tests_found": {
+    "input": { "target": "src/app" },
+    "output": {
+      "success": true,
+      "framework": "bun",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "durationMs": 50,
+      "failingTests": []
+    }
+  },
+  "field_name_compliance": {
+    "_note": "Result uses 'failingTests' (Claude Code convention), NOT 'failures'. Backward-compat alias 'failures' may also exist."
+  }
+}

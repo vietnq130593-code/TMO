@@ -1,0 +1,36 @@
+{
+  "_comment": "Snapshot for shell tool receipt shape (Phase 1a — shipped before Phase 2 audit).",
+  "_spec_ref": "docs/FULLSTACK_CAPABILITY_PLAN_V2.md line 482 + Part 1a spec (shell primitive)",
+  "_feature_flag": "ENABLE_SHELL=true",
+  "_source_file": "src/lib/code-team/dev-tools.ts (shell)",
+  "_executor": "src/lib/code-team/tool-executor.ts (case 'shell')",
+  "happy_path": {
+    "input": { "command": "echo hello", "timeout_ms": 5000 },
+    "output": {
+      "success": true,
+      "exit_code": 0,
+      "stdout": "hello\n",
+      "stderr": "",
+      "durationMs": 12
+    }
+  },
+  "failure_case": {
+    "input": { "command": "exit 1", "timeout_ms": 5000 },
+    "output": {
+      "success": false,
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "",
+      "durationMs": 8
+    }
+  },
+  "timeout_case": {
+    "input": { "command": "sleep 10", "timeout_ms": 1000 },
+    "output": {
+      "success": false,
+      "error": "Command timed out after 1000ms",
+      "exit_code": null,
+      "durationMs": 1000
+    }
+  }
+}

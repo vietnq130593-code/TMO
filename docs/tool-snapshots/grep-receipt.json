@@ -1,0 +1,58 @@
+{
+  "_comment": "Snapshot for grep tool receipt shape (Phase 2.5b). Native Node.js, multiline + binary detection.",
+  "_spec_ref": "docs/FULLSTACK_CAPABILITY_PLAN_V2.md line 213 + docs/tool-smoke-tests.md grep section",
+  "_feature_flag": "ENABLE_FILE_OPS=true + ENABLE_FILE_GREP=true",
+  "_source_file": "src/lib/code-team/dev-tools.ts:354-465 (grep)",
+  "_executor": "src/lib/code-team/tool-executor.ts:938-947 (case 'grep')",
+  "content_mode_happy_path": {
+    "input": { "path": "src", "pattern": "executeTool", "mode": "content", "context": 0 },
+    "output": {
+      "success": true,
+      "matches": [
+        { "file": "src/lib/code-team/tool-executor.ts", "line": 825, "content": "  async function executeTool(args) {" }
+      ],
+      "totalMatches": 5
+    }
+  },
+  "files_mode": {
+    "input": { "path": "src", "pattern": "executeTool", "mode": "files" },
+    "output": {
+      "success": true,
+      "files": ["src/lib/code-team/tool-executor.ts"],
+      "_note": "P2 issue: spec uses 'files_with_matches' — current uses 'files'. Functionality identical. Alias TBD."
+    }
+  },
+  "count_mode": {
+    "input": { "path": "src", "pattern": "executeTool", "mode": "count" },
+    "output": {
+      "success": true,
+      "counts": { "src/lib/code-team/tool-executor.ts": 5 },
+      "totalMatches": 5
+    }
+  },
+  "multiline_mode": {
+    "input": { "path": "src", "pattern": "function\\s+\\w+\\([^)]*\\)\\s*\\{", "mode": "files", "multiline": true },
+    "output": {
+      "success": true,
+      "files": [/* matches multi-line function signatures */],
+      "_note": "Regex flags 'gim' — multiline + case-insensitive"
+    }
+  },
+  "case_sensitive_opt_out": {
+    "input": { "path": "src", "pattern": "ExecuteTool", "mode": "files", "case_sensitive": true },
+    "output": {
+      "success": true,
+      "files": [],
+      "totalMatches": 0,
+      "_note": "Default case-insensitive; opt-out via case_sensitive:true"
+    }
+  },
+  "binary_skip": {
+    "input": { "path": "public", "pattern": ".*", "mode": "files" },
+    "output": {
+      "success": true,
+      "files": [/* only text files — binary files (NULL byte in first 8KB) skipped silently */],
+      "_note": "Binary detection: read first 8KB, check for NULL byte"
+    }
+  }
+}

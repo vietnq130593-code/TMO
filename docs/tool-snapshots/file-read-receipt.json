@@ -1,0 +1,52 @@
+{
+  "_comment": "Snapshot for file_read tool receipt shape (Phase 2.1). Reference for agents — NOT an automated test.",
+  "_spec_ref": "docs/FULLSTACK_CAPABILITY_PLAN_V2.md line 209 + docs/tool-smoke-tests.md file_read section",
+  "_feature_flag": "ENABLE_FILE_OPS=true + ENABLE_FILE_READ=true",
+  "_source_file": "src/lib/code-team/dev-tools.ts:40-117",
+  "_executor": "src/lib/code-team/tool-executor.ts:882-891 (case 'file_read')",
+  "happy_path": {
+    "input": { "path": "package.json", "offset": 1, "limit": 2000, "line_numbers": true },
+    "output": {
+      "success": true,
+      "lines": [
+        { "number": 1, "content": "{" },
+        { "number": 2, "content": "  \"name\": \"theopusflashlite\"," }
+      ],
+      "content": "     1\t{\n     2\t  \"name\": \"theopusflashlite\",\n",
+      "truncated": false,
+      "totalLines": 38,
+      "binary": false,
+      "nextOffset": null
+    }
+  },
+  "truncated_pagination": {
+    "input": { "path": "src/lib/code-team/dev-tools.ts", "offset": 1, "limit": 50, "line_numbers": true },
+    "output": {
+      "success": true,
+      "lines": [/* 50 line objects */],
+      "content": "     1\t/**\n     2\t * Dev Tools...\n",
+      "truncated": true,
+      "totalLines": 1510,
+      "binary": false,
+      "nextOffset": 51,
+      "_note": "Call again with offset=51 to continue"
+    }
+  },
+  "binary_rejection": {
+    "input": { "path": "public/logo.svg" },
+    "output": {
+      "success": false,
+      "error": "Binary file — cannot read as text",
+      "binary": true,
+      "_note": "Detected via NULL byte in first 8KB"
+    }
+  },
+  "traversal_rejection": {
+    "input": { "path": "../etc/passwd" },
+    "output": {
+      "success": false,
+      "error": "Path escapes workspace root",
+      "_note": "resolveWithinWorkspace guard"
+    }
+  }
+}

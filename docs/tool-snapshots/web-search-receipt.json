@@ -1,0 +1,33 @@
+{
+  "_comment": "Snapshot for web_search tool receipt shape (Phase 1b — shipped before Phase 2 audit). Unified provider response.",
+  "_spec_ref": "docs/FULLSTACK_CAPABILITY_PLAN_V2.md line 484 + Part 1b spec (gateway tools)",
+  "_feature_flag": "ENABLE_WEB_SEARCH=true",
+  "_source_file": "src/lib/code-team/tool-executor.ts (web_search case)",
+  "_executor": "src/lib/code-team/tool-executor.ts (case 'web_search' — unified provider: tavily/serper/jina/z-ai-sdk)",
+  "happy_path": {
+    "input": { "query": "Next.js 16 features", "max_results": 5 },
+    "output": {
+      "success": true,
+      "provider": "tavily",
+      "results": [
+        {
+          "title": "Next.js 16 Documentation",
+          "url": "https://nextjs.org/docs",
+          "snippet": "Next.js 16 introduces App Router improvements..."
+        }
+      ],
+      "totalResults": 5,
+      "_note": "Unified shape across providers — same fields regardless of which provider wins the fallback chain"
+    }
+  },
+  "provider_fallback_chain": {
+    "_note": "Provider chain: direct TAVILY_API_KEY → direct SERPER_API_KEY → direct JINA_API_KEY → z-ai-sdk → error with helpful hint"
+  },
+  "failure_case": {
+    "input": { "query": "", "max_results": 5 },
+    "output": {
+      "success": false,
+      "error": "Query is required"
+    }
+  }
+}

@@ -363,13 +363,14 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'file_delete',
-      description: 'Xóa file hoặc thư mục. Bắt buộc có recursive:true để xóa thư mục. Hỗ trợ dry_run:true để xem sẽ xóa gì mà không thực sự xóa. Không bao giờ xóa workspace root.',
+      description: 'Xóa file hoặc thư mục. Bắt buộc có recursive:true để xóa thư mục. Hỗ trợ dry_run:true để xem sẽ xóa gì (kèm số file đếm được) mà không thực sự xóa. Symlink được phát hiện qua fs.lstat — chỉ xóa link chứ không xóa target (an toàn). force:true để xóa cả readonly files (default false). Không bao giờ xóa workspace root.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'Đường dẫn relative cần xóa' },
           recursive: { type: 'boolean', description: 'Bắt buộc nếu xóa thư mục' },
-          dry_run: { type: 'boolean', description: 'true = chỉ trả về sẽ xóa gì, không touch filesystem' },
+          dry_run: { type: 'boolean', description: 'true = chỉ trả về sẽ xóa gì + fileCount, không touch filesystem' },
+          force: { type: 'boolean', description: 'true = fs.rm với force (xóa cả readonly files). Default false — phải explicit để tránh footgun.' },
         },
         required: ['path'],
       },
@@ -1139,8 +1140,33 @@ async function executeOpenCode(args: Record<string, unknown>): Promise<unknown> 
 
   // Fallback: Use the project's own API for file operations
   switch (action) {
-    case 'read':
-      return await executeFileRead(path || '')
+    case 'read': {
+      // Route through Phase 2.1 `fileRead` to ensure consistent behavior
+      // (line numbers, offset/limit, binary detection, repo-root guard).
+      // Legacy `executeFileRead` is deprecated; this adapter reshapes the
+      // new `fileRead` return value into the legacy {success,content?} shape
+      // expected by historical callers of `opencode action='read'`.
+      // See: docs/tool-smoke-tests.md file_read section for new tool shape.
+      const result = await executeFileReadFn({
+        path: path || '',
+        offset: 1,
+        limit: 2000,
+        line_numbers: true,
+      })
+      if (typeof result === 'object' && result !== null && 'error' in result) {
+        return { success: false, error: String((result as { error: unknown }).error) }
+      }
+      const r = result as { lines?: unknown[]; content?: string; truncated?: boolean; nextOffset?: number }
+      // Prefer pre-rendered content if present; otherwise join lines.
+      const out =
+        typeof r.content === 'string'
+          ? r.content
+          : Array.isArray(r.lines)
+            ? (r.lines as Array<{ content?: string }>).map((l) => l.content ?? '').join('\n')
+            : ''
+      const note = r.truncated ? `\n\n... [TRUNCATED — nextOffset=${r.nextOffset ?? 'n/a'}, call file_read with offset=${r.nextOffset ?? 'next'} to continue]` : ''
+      return { success: true, content: out + note }
+    }
     case 'write':
       return await executeFileWrite(path || '', content || '')
     case 'bash':
@@ -1156,35 +1182,23 @@ async function executeOpenCode(args: Record<string, unknown>): Promise<unknown> 
  * Read a file from the project directory.
  * Security: Only allows reading files within the project root.
  * Uses path.resolve + startsWith check to prevent path traversal.
+ *
+ * @deprecated Phase 2.1 — superseded by `fileRead()` in dev-tools.ts which
+ * adds line numbers, offset/limit pagination, binary detection, and a
+ * `nextOffset` cursor. The `opencode action='read'` switch above now routes
+ * through `fileRead()` so all callers get the new behavior automatically.
+ * This stub remains only as an explicit deprecation marker.
  */
 async function executeFileRead(filePath: string): Promise<{ success: boolean; content?: string; error?: string }> {
-  if (!filePath) return { success: false, error: 'Path is required' }
-
-  try {
-    const pathModule = await import('path')
-    const projectRoot = process.cwd()
-    const resolvedPath = pathModule.resolve(projectRoot, filePath)
-
-    // Security: Prevent path traversal — resolved path must be within project root
-    if (!resolvedPath.startsWith(projectRoot + pathModule.sep) && resolvedPath !== projectRoot) {
-      return { success: false, error: `Access denied: path escapes project root` }
-    }
-
-    const fs = await import('fs/promises')
-    const content = await fs.readFile(resolvedPath, 'utf-8')
-
-    // Limit output to prevent overwhelming LLM context
-    const maxChars = 50000
-    const truncated = content.length > maxChars
-    const output = truncated ? content.slice(0, maxChars) + '\n\n... [TRUNCATED — file too large]' : content
-
-    return { success: true, content: output }
-  } catch (err) {
-    return {
-      success: false,
-      error: `Failed to read ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
-    }
+  // Pass-through to the new tool — see opencode case 'read' above.
+  const result = await executeFileReadFn({ path: filePath, offset: 1, limit: 2000, line_numbers: true })
+  if (typeof result === 'object' && result !== null && 'error' in result) {
+    return { success: false, error: String((result as { error: unknown }).error) }
   }
+  const r = result as { content?: string; lines?: Array<{ content?: string }>; truncated?: boolean; nextOffset?: number }
+  const out = typeof r.content === 'string' ? r.content : Array.isArray(r.lines) ? r.lines.map((l) => l.content ?? '').join('\n') : ''
+  const note = r.truncated ? `\n\n... [TRUNCATED — use file_read with offset=${r.nextOffset ?? 'next'} to continue]` : ''
+  return { success: true, content: out + note }
 }
 
 /**

@@ -256,6 +256,7 @@ export async function fileDelete(args: {
   path: string
   recursive?: boolean
   dry_run?: boolean
+  force?: boolean
 }): Promise<unknown> {
   const resolvedPath = await resolveWithinWorkspace(args.path)
   const root = process.env.OPENCODE_WORKSPACE || process.cwd()
@@ -263,28 +264,103 @@ export async function fileDelete(args: {
     return { error: 'Refusing to delete the workspace root' }
   }
 
-  if (!existsSync(resolvedPath)) {
+  // lstat (not stat) — does NOT follow symlinks; symlinked dirs reported as
+  // 'symlink' rather than the target's type. Without this, a symlinked dir
+  // pointing outside the workspace could trigger fs.rm({recursive:true}) on
+  // the TARGET directory (security escape). Phase 2 audit P1 #1.
+  let lstat: Awaited<ReturnType<typeof fs.lstat>>
+  try {
+    lstat = await fs.lstat(resolvedPath)
+  } catch {
     return { success: false, error: `Path does not exist: ${args.path}` }
   }
 
-  const stat = await fs.stat(resolvedPath)
-  const isDir = stat.isDirectory()
+  const isSymlink = lstat.isSymbolicLink()
+  const isDir = lstat.isDirectory()
 
-  if (isDir && !args.recursive) {
+  // Symlink target read is for dry_run preview only — never followed during
+  // actual delete (we use fs.unlink on the link itself, not fs.rm on target).
+  let symlinkTarget: string | undefined
+  if (isSymlink) {
+    try {
+      symlinkTarget = await fs.readlink(resolvedPath)
+    } catch {
+      symlinkTarget = '<unreadable>'
+    }
+  }
+
+  if (isDir && !args.recursive && !isSymlink) {
     return { error: 'Path is a directory — pass recursive:true to delete it' }
   }
 
+  // dry_run preview — count files inside dir when applicable (audit P1 suggestion)
   if (args.dry_run) {
-    return { success: true, dryRun: true, wouldDelete: args.path, type: isDir ? 'directory' : 'file' }
+    let wouldDeleteCount = 1
+    if (isDir && !isSymlink) {
+      try {
+        const countResult = await countFilesRecursive(resolvedPath)
+        wouldDeleteCount = countResult
+      } catch {
+        wouldDeleteCount = -1
+      }
+    }
+    return {
+      success: true,
+      dryRun: true,
+      wouldDelete: args.path,
+      type: isSymlink ? 'symlink' : isDir ? 'directory' : 'file',
+      ...(symlinkTarget ? { symlinkTarget } : {}),
+      ...(isDir && !isSymlink ? { fileCount: wouldDeleteCount } : {}),
+    }
+  }
+
+  if (isSymlink) {
+    // fs.unlink on the link itself — removes the link, NOT the target.
+    // This is the safe path: even if the symlink points outside the workspace,
+    // we only delete the link entry inside the workspace.
+    await fs.unlink(resolvedPath)
+    return { success: true, deleted: args.path, type: 'symlink', ...(symlinkTarget ? { symlinkTarget } : {}) }
   }
 
   if (isDir) {
-    await fs.rm(resolvedPath, { recursive: true, force: true })
+    // force:true required to actually delete readonly files inside the dir;
+    // default false — caller must opt-in to bypass fs.rm's readonly refusal.
+    await fs.rm(resolvedPath, { recursive: true, force: args.force === true })
   } else {
     await fs.unlink(resolvedPath)
   }
 
   return { success: true, deleted: args.path, type: isDir ? 'directory' : 'file' }
+}
+
+/**
+ * countFilesRecursive — walk a directory and count all entries (files +
+ * subdirs, recursively). Used by file_delete dry_run preview so the user
+ * knows "would delete N files" before confirming.
+ *
+ * Returns 0 on empty dir, throws on inaccessible (rethrows caller to handle).
+ */
+async function countFilesRecursive(dirPath: string): Promise<number> {
+  let count = 0
+  const stack: string[] = [dirPath]
+  while (stack.length > 0) {
+    const current = stack.pop()!
+    let entries: Awaited<ReturnType<typeof fs.readdir>>
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true })
+    } catch {
+      // Skip unreadable subdir — partial count is acceptable for dry_run preview.
+      continue
+    }
+    for (const entry of entries) {
+      count++
+      // lstat check — don't follow symlinks during count (avoid escape / loops)
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        stack.push(path.join(current, entry.name))
+      }
+    }
+  }
+  return count
 }
 
 /**

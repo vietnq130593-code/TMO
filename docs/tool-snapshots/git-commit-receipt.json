@@ -1,0 +1,63 @@
+{
+  "_comment": "Snapshot for git_commit tool receipt shape (Phase 2.7). Scoped paths + structured receipt + dry_run + no_verify.",
+  "_spec_ref": "docs/FULLSTACK_CAPABILITY_PLAN_V2.md line 215 + docs/tool-smoke-tests.md git_commit section",
+  "_feature_flag": "ENABLE_GIT_COMMIT=true",
+  "_source_file": "src/lib/code-team/dev-tools.ts:637-751 (gitCommit)",
+  "_executor": "src/lib/code-team/tool-executor.ts:960-970 (case 'git_commit')",
+  "happy_path_with_paths": {
+    "input": { "paths": ["src/lib/code-team/dev-tools.ts"], "message": "fix: P1 symlink security in file_delete" },
+    "output": {
+      "success": true,
+      "commitHash": "a3f4e2b9c8d1",
+      "branch": "main",
+      "filesChanged": ["src/lib/code-team/dev-tools.ts"],
+      "message": "fix: P1 symlink security in file_delete",
+      "_note": "Structured receipt per spec — commitHash (12-char short SHA) + branch (via git rev-parse --abbrev-ref HEAD) + filesChanged[] (via git show --stat --name-only HEAD)"
+    }
+  },
+  "all_true_with_paths_explicit_allowed": {
+    "input": { "all": true, "paths": ["src/lib/code-team/dev-tools.ts"], "message": "test" },
+    "output": {
+      "success": true,
+      "commitHash": "...",
+      "branch": "main",
+      "filesChanged": ["src/lib/code-team/dev-tools.ts"],
+      "_note": "paths[] takes precedence — staged explicitly, no blanket git add -A"
+    }
+  },
+  "all_true_NO_paths_spec_violation_rejected": {
+    "input": { "all": true, "message": "test" },
+    "output": {
+      "success": false,
+      "error": "all=true requires explicit paths OR git add -A is forbidden by spec — pass paths[] explicitly",
+      "_note": "P0 spec violation: NO blanket git add -A. Forces caller to be explicit."
+    }
+  },
+  "nothing_to_commit_preflight": {
+    "setup": "clean working tree",
+    "input": { "paths": ["src/lib/code-team/dev-tools.ts"], "message": "test" },
+    "output": {
+      "success": false,
+      "error": "nothing to commit — working tree clean",
+      "_note": "Pre-flight check via 'git status --porcelain' — short-circuits before invoking git commit"
+    }
+  },
+  "dry_run_no_side_effect": {
+    "input": { "paths": ["src/lib/code-team/dev-tools.ts"], "message": "test", "dry_run": true },
+    "output": {
+      "success": true,
+      "dryRun": true,
+      "wouldCommitFiles": ["src/lib/code-team/dev-tools.ts"],
+      "stagedPreview": " src/lib/code-team/dev-tools.ts | 12 ++++++------\n 1 file changed, 6 insertions(+), 6 deletions(-)",
+      "_note": "Computed via 'git status --porcelain' (NOT git add --dry-run — original dry_run had side-effect bug, fixed in Task 6-c). Working tree porcelain UNCHANGED after call."
+    }
+  },
+  "no_verify_flag": {
+    "input": { "paths": ["..."], "message": "test", "no_verify": true },
+    "output": {
+      "success": true,
+      "commitHash": "...",
+      "_note": "git commit --no-verify — skips husky/lefthook pre-commit hooks"
+    }
+  }
+}
