@@ -220,6 +220,119 @@ class SmolabTaskWorker {
     return this.queue.length
   }
 
+  /**
+   * Phase 3 SMOLAB Proposal 9 — Crash recovery.
+   *
+   * Called on worker startup (via src/instrumentation-node.ts). Queries DB for
+   * tasks orphaned in 'pending' or 'running' status (likely from a previous
+   * process crash / PM2 restart). Re-enqueues each into the in-memory queue and
+   * bumps the `attempts` counter; tasks past `maxAttempts` are marked as
+   * 'failed' instead of being re-enqueued (no infinite-retry).
+   *
+   * IMPORTANT — Architectural limitation:
+   * The worker's TaskInput.execute is a closure (function reference captured at
+   * enqueue time — see /api/smolab/chat/route.ts lines 110-195). When the
+   * process crashes, that closure is lost — only the SmolabTask DB row (with
+   * metadata fields type/sessionId/agentProfileId/teamName/inputSummary)
+   * survives. A recovered task therefore cannot truly resume its original
+   * work. Each recovered task is re-enqueued with a stub `execute` that
+   * immediately throws an informative error; executeTask catches that error
+   * and marks the task as 'failed' via the normal failure path. This prevents
+   * orphaned 'pending' rows from piling up across restarts while being honest
+   * about what recovery can achieve. A future task-handler-registry refactor
+   * (Phase 4+ roadmap) could lift this limitation by serializing a handler id
+   * + payload instead of a closure.
+   *
+   * @returns {{ recovered: number; markedFailed: number }} counts for logging.
+   */
+  async recoverPending(): Promise<{ recovered: number; markedFailed: number }> {
+    let recovered = 0
+    let markedFailed = 0
+
+    try {
+      const pendingTasks = await db.smolabTask.findMany({
+        where: {
+          // 'pending' = enqueued but never started; 'running' = crashed mid-execution
+          status: { in: ['pending', 'running'] },
+        },
+        orderBy: { createdAt: 'asc' },
+        take: 100, // Safety cap — don't re-enqueue 10k tasks at once
+      })
+
+      if (pendingTasks.length === 0) {
+        console.log('[SmolabTaskWorker] Crash recovery: no pending/running tasks to recover')
+        return { recovered: 0, markedFailed: 0 }
+      }
+
+      for (const task of pendingTasks) {
+        const attempts = task.attempts ?? 0
+        const maxAttempts = task.maxAttempts ?? 3
+
+        // Safety ceiling — don't infinite-retry crashed tasks
+        if (attempts >= maxAttempts) {
+          await db.smolabTask.update({
+            where: { id: task.id },
+            data: {
+              status: 'failed',
+              error: `[Crash Recovery] Exceeded maxAttempts (${maxAttempts}) — task was pending/running across ${attempts} process restarts and could not complete. Marked failed to prevent infinite retry.`,
+              completedAt: new Date(),
+            },
+          }).catch((e) => {
+            console.error(
+              `[SmolabTaskWorker] Failed to mark task ${task.id} as failed during recovery:`,
+              e instanceof Error ? e.message : String(e)
+            )
+          })
+          markedFailed++
+          continue
+        }
+
+        // Bump attempts + reset to 'pending' (in case it was 'running' at crash time)
+        await db.smolabTask.update({
+          where: { id: task.id },
+          data: {
+            status: 'pending',
+            attempts: attempts + 1,
+          },
+        }).catch((e) => {
+          console.error(
+            `[SmolabTaskWorker] Failed to bump attempts for ${task.id}:`,
+            e instanceof Error ? e.message : String(e)
+          )
+        })
+
+        // Re-enqueue into in-memory queue with stub execute (closure lost — see method JSDoc)
+        const stubInput: TaskInput = {
+          type: task.type as SmolabTaskType,
+          sessionId: task.sessionId,
+          agentProfileId: task.agentProfileId || undefined,
+          teamName: task.teamName || undefined,
+          inputSummary: task.inputSummary || '',
+          execute: async (_signal: AbortSignal) => {
+            throw new Error(
+              `[Crash Recovery] Task ${task.id} (type=${task.type}) recovered from process restart, but the original execute closure is unavailable — closure-based tasks cannot be resumed across process restarts. Input summary: "${task.inputSummary || '(none)'}". To make this task resumable, refactor the worker to use a task-handler-registry pattern (Phase 4+ roadmap).`
+            )
+          },
+        }
+        this.queue.push({ taskId: task.id, input: stubInput })
+        recovered++
+      }
+
+      // Kick off processing so the re-enqueued stub tasks fail-fast
+      if (recovered > 0) {
+        this.processQueue()
+      }
+
+      console.log(
+        `[SmolabTaskWorker] Crash recovery complete: ${recovered} tasks re-enqueued (will fail-fast: closure unavailable), ${markedFailed} marked failed (exceeded maxAttempts)`
+      )
+      return { recovered, markedFailed }
+    } catch (err) {
+      console.error('[SmolabTaskWorker] Crash recovery failed:', err instanceof Error ? err.message : String(err))
+      return { recovered: 0, markedFailed: 0 }
+    }
+  }
+
   /** Get all running tasks info (for debug/status) */
   getRunningTasks(): Array<{ id: string; sessionId: string; type: string; startedAt: Date }> {
     return Array.from(this.running.values()).map(t => ({

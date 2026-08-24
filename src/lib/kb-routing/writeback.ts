@@ -18,7 +18,7 @@ import { qdrant, COLLECTION_CHUNKS } from '@/lib/qdrant'
 import { upsertChunks } from '@/lib/qdrant'
 import { upsertEntitiesBatch, upsertRelationshipsBatch, type EntityNode, type RelationshipEdge } from '@/lib/neo4j'
 import { storeMemory } from '@/lib/agent-memory'
-import { generateEmbedding } from '@/lib/embeddings'
+import { generateEmbedding, getCurrentEmbeddingModelVersion } from '@/lib/embeddings'
 import { callLLM } from '@/lib/llm'
 import { resolveEntityByNameAndEmbedding } from '@/lib/ingestion/entity-resolver'
 import type { UserKBResult, ModelKnowledgeResult } from './kb-access'
@@ -208,10 +208,16 @@ export async function writebackToKB(params: {
   // === WRITE 1: Qdrant chunks (embed entity descriptions) ===
   if (filteredEntities.length > 0) {
     try {
+      // Phase 3 SMOLAB Prop 4.1 — query the active embedding model version ONCE
+      // before the Promise.all map (so it's 1 DB query, not N). The helper
+      // caches the result for 5 min in embeddings.ts, so subsequent writeback
+      // calls within 5 min don't re-query the DB at all.
+      const embeddingModelVersion = await getCurrentEmbeddingModelVersion()
+
       const chunksToWrite = filteredEntities.map((e, i) => {
         const text = `${e.name} (${e.type}): ${e.description}`
         // Phase 6 SMOLAB Prop 3 — construct payload matching ChunkPayload interface
-        // (qdrant.ts:587-602). Old code used camelCase keys (documentId, text, etc.)
+        // (qdrant.ts:587-606). Old code used camelCase keys (documentId, text, etc.)
         // which failed the type check at upsertChunks(). Now uses snake_case keys.
         return {
           id: '',
@@ -229,6 +235,8 @@ export async function writebackToKB(params: {
             confidence: e.confidence,
             llm_provider: 'auto-learn',
             llm_model: 'auto-learn',
+            // Phase 3 SMOLAB Prop 4.1 — model version tag for drift detection
+            embedding_model_version: embeddingModelVersion,
           } as import('@/lib/qdrant').ChunkPayload,
         }
       })

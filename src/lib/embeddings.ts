@@ -700,6 +700,66 @@ export function getEmbeddingDimension(): number {
   return EMBEDDING_DIMENSION
 }
 
+// ==================== PHASE 3 SMOLAB PROP 4.1 — MODEL VERSION TRACKING ====================
+
+/**
+ * Phase 3 SMOLAB Prop 4.1 — current embedding model version tag.
+ * Format: `${modelName}@${versionTag}` where versionTag is the active
+ * EmbeddingModelVersion row's versionTag (queried lazily + cached for 5 min).
+ *
+ * Used by:
+ *   - auto-learn.ts saveChunkToQdrant() — stamped on every chunk payload.
+ *   - kb-routing/writeback.ts WRITE 1 — stamped on every chunk payload.
+ *   - kb-routing/kb-access.ts checkModelDrift() — compared against sampled
+ *     Qdrant payloads to detect silent NVIDIA model updates that invalidate
+ *     existing vectors (same text → different vector → cosine sim drops from
+ *     1.0 to ~0.6 → retrieval recall degrades silently with no alert).
+ *
+ * Fallback: when no EmbeddingModelVersion row exists (DB not seeded yet),
+ * returns `${NVIDIA_EMBED_MODEL || 'unknown'}@unknown` so drift check still
+ * has a tag to compare against — and will flag all pre-Prop 4.1 chunks (which
+ * lack the `embedding_model_version` payload field entirely).
+ */
+let _cachedVersion: { tag: string; expiresAt: number } | null = null
+
+export async function getCurrentEmbeddingModelVersion(): Promise<string> {
+  // Cache for 5 min — avoid hitting DB on every chunk upsert (auto-learn
+  // batches can upsert 10+ chunks in one call → 10× DB queries without cache).
+  if (_cachedVersion && Date.now() < _cachedVersion.expiresAt) {
+    return _cachedVersion.tag
+  }
+
+  try {
+    const { db } = await import('@/lib/db')
+    const active = await db.embeddingModelVersion.findFirst({
+      where: { deprecatedAt: null },
+      orderBy: { activeSince: 'desc' },
+    })
+
+    if (active) {
+      _cachedVersion = {
+        tag: `${active.modelName}@${active.versionTag}`,
+        expiresAt: Date.now() + 5 * 60 * 1000, // 5 min cache
+      }
+      return _cachedVersion.tag
+    }
+  } catch (err) {
+    console.warn('[Embeddings] Failed to query active model version:', err instanceof Error ? err.message : String(err))
+  }
+
+  // Fallback: env vars only (no DB row yet — seed-embedding-model-version.ts not run).
+  // Returned tag uses '@unknown' so drift check flags pre-Prop 4.1 chunks.
+  const fallback = `${process.env.NVIDIA_EMBED_MODEL || 'unknown'}@unknown`
+  return fallback
+}
+
+/** Phase 3 SMOLAB Prop 4.1 — invalidate the cached version. Test helper.
+ *  Call this in tests after inserting/deprecating EmbeddingModelVersion rows
+ *  to force the next getCurrentEmbeddingModelVersion() call to re-query the DB. */
+export function _invalidateEmbeddingModelVersionCache(): void {
+  _cachedVersion = null
+}
+
 /** Get embedding provider availability status */
 export function getEmbeddingAvailability(): {
   nvidia: { available: boolean; retryAfter?: string; model: string }

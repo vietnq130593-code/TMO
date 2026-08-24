@@ -14,7 +14,7 @@
 import { qdrant, COLLECTION_CHUNKS } from '@/lib/qdrant'
 import { searchEntities, type EntityNode } from '@/lib/neo4j'
 import { recallMemories, ensureAgentMemoryCollection } from '@/lib/agent-memory'
-import { generateQueryEmbedding } from '@/lib/embeddings'
+import { generateQueryEmbedding, getCurrentEmbeddingModelVersion } from '@/lib/embeddings'
 import { callLLM } from '@/lib/llm'
 
 // ==================== CONFIG ====================
@@ -69,6 +69,76 @@ export interface KBAccessResult {
 // ==================== STEP 1: USER KB SEARCH ====================
 
 /**
+ * Phase 3 SMOLAB Prop 4.1 — Drift check.
+ * Samples 10 random Qdrant points + compares their embedding_model_version
+ * payload against the current active version. If any mismatch → log warning +
+ * return drifted=true so callers can show a "KB needs re-embed" alert.
+ *
+ * Non-blocking: never throws, never blocks searchUserKB. Drift is for
+ * monitoring, not for blocking the query. If Qdrant is down or empty, returns
+ * drifted=false (fail-open) so normal search proceeds + logs its own errors.
+ *
+ * Returns:
+ *   - drifted=false, sampledCount=0   → empty KB OR drift check failed (fail-open)
+ *   - drifted=false, sampledCount=N    → all sampled chunks match current version (or pre-4.1 chunks missing the field — backfill needed)
+ *   - drifted=true, sampledCount=N     → at least one sampled chunk uses an older version (NVIDIA silently updated weights)
+ */
+async function checkModelDrift(): Promise<{
+  drifted: boolean
+  sampledCount: number
+  oldestVersion?: string
+  currentVersion?: string
+}> {
+  try {
+    const currentVersion = await getCurrentEmbeddingModelVersion()
+
+    // Use scroll (NOT search — Phase 6 Prop 4 migrated search→query, but
+    // scroll is separate and is the correct API for "give me N random points
+    // with payload, no vector similarity required").
+    const sample = await qdrant.scroll(COLLECTION_CHUNKS, {
+      limit: 10,
+      with_payload: true,
+      with_vector: false,
+    })
+
+    if (!sample?.points || sample.points.length === 0) {
+      return { drifted: false, sampledCount: 0 } // empty KB
+    }
+
+    const versions = sample.points
+      .map(p => (p.payload as Record<string, unknown> | null)?.embedding_model_version as string | undefined)
+      .filter((v): v is string => Boolean(v))
+
+    if (versions.length === 0) {
+      // Pre-Prop 4.1 chunks (no version field) → not drift but flag for backfill
+      console.warn(
+        '[KB-Access] Sampled chunks have no embedding_model_version field — run scripts/reembed-all.ts to backfill'
+      )
+      return { drifted: false, sampledCount: sample.points.length, currentVersion }
+    }
+
+    const hasOldVersion = versions.some(v => v !== currentVersion)
+    if (hasOldVersion) {
+      const oldest = versions.find(v => v !== currentVersion)
+      console.warn(
+        `[KB-Access] Embedding model drift detected — some vectors use old version (oldest: ${oldest}, current: ${currentVersion})`
+      )
+      return {
+        drifted: true,
+        sampledCount: sample.points.length,
+        oldestVersion: oldest,
+        currentVersion,
+      }
+    }
+
+    return { drifted: false, sampledCount: sample.points.length, currentVersion }
+  } catch (err) {
+    console.warn('[KB-Access] Drift check failed:', err instanceof Error ? err.message : String(err))
+    return { drifted: false, sampledCount: 0 } // fail-open
+  }
+}
+
+/**
  * Search all 3 user KB sources:
  *   1. Qdrant vector search (theopus_chunks collection)
  *   2. Neo4j graph entity search
@@ -84,6 +154,19 @@ export async function searchUserKB(
   const topK = options.topK ?? 5
   const minImportance = options.minImportance ?? 0.3
   const startTime = Date.now()
+
+  // Phase 3 SMOLAB Prop 4.1 — drift check (fire-and-forget before the parallel
+  // searches, but we don't await it — we don't want to block the query on the
+  // drift check. If drift is detected, it logs a warning + the sampled chunks
+  // info appears in dev.log. The query proceeds against the (possibly degraded)
+  // vectors. Callers can read dev.log to discover drift, or a future endpoint
+  // can expose drift status to the UI.)
+  checkModelDrift().catch((err) => {
+    console.warn(
+      '[KB-Access] checkModelDrift() threw uncaught error (non-blocking):',
+      err instanceof Error ? err.message : String(err)
+    )
+  })
 
   // Run 3 searches in parallel for speed
   const [chunksResult, entitiesResult, memoriesResult] = await Promise.allSettled([

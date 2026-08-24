@@ -599,6 +599,10 @@ export interface ChunkPayload {
   confidence?: number
   llm_provider?: string
   llm_model?: string
+  /** Phase 3 SMOLAB Prop 4.1 — embedding model version tag (e.g. 'nvidia/llama-nemotron-embed-1b-v2@2025-08-24').
+   *  Set on every chunk insert. Used by checkModelDrift() in kb-access.ts to detect
+   *  silent model updates that invalidate existing vectors. */
+  embedding_model_version?: string
 }
 
 /**

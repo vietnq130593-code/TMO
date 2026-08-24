@@ -7,15 +7,17 @@
  * When sandbox resets: pull from Supabase → restore all data
  * On every write: push to Supabase (non-blocking)
  *
- * Tables synced:
- *   1. AgentProfile (6 agents + model config)
- *   2. AgentSkill (3 bundled skills)
- *   3. AgentMemory (episodic memories)
- *   4. AgentSession (chat sessions)
- *   5. ChatMessage (chat messages)
- *   6. DailyTokenByProviderModel (token usage)
- *   7. MCPBridgeConfig (9 tool configs)
- *   8. KnowledgeAccessPolicy (1 policy)
+ * Tables synced (24 total = 23 backup + sync_log):
+ *   Non-learning (18): AgentProfile, AgentSkill, AgentMemory, MemoryArchive,
+ *     MemoryAccessLog, AgentSession, ChatMessage, DailyTokenByProviderModel,
+ *     MCPBridgeConfig, KnowledgeAccessPolicy, UserProfile, AgentPreference,
+ *     AgentCorrection, Document, LocalEntity, LocalRelationship, LocalResolvedEntity
+ *   Learning (8):
+ *     - AgentInsight, LocalEntity, LocalRelationship, LocalResolvedEntity
+ *       (synced before Phase 3 SMOLAB Prop 10)
+ *     - LearningLog, AutoLearnRecord (Phase 3 SMOLAB Prop 10 — original Prisma models)
+ *     - ExecutionMetrics, FailurePattern, StrategyAdaptationLog
+ *       (Phase 3 SMOLAB Prop 10 — Prisma models added by Phase 6 Prop 2)
  */
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
@@ -535,6 +537,123 @@ export async function pushToSupabase(): Promise<FullSyncResult> {
     results.push({ table: 'LocalResolvedEntity', pushed, pulled: 0, errors: resErrors.slice(-3) })
     totalPushed += pushed
   } catch (e) { results.push({ table: 'LocalResolvedEntity', pushed: 0, pulled: 0, errors: [String(e)] }) }
+
+  // 19. LearningLog — learning event log (Phase 3 SMOLAB Prop 10 — sync 5 missing learning tables)
+  try {
+    const logs = await db.learningLog.findMany({ take: 5000, orderBy: { createdAt: 'desc' } })
+    const { error } = await client.from('learning_log_backup').upsert(
+      logs.map(l => ({
+        id: l.id,
+        session_id: l.sessionId,
+        agent_id: l.agentId,
+        event_type: l.eventType,
+        content: l.content,
+        metadata: l.metadata,
+        created_at: l.createdAt?.toISOString(),
+      })),
+      { onConflict: 'id' }
+    )
+    results.push({ table: 'LearningLog', pushed: logs.length, pulled: 0, errors: error ? [error.message] : [] })
+    totalPushed += logs.length
+  } catch (e) { results.push({ table: 'LearningLog', pushed: 0, pulled: 0, errors: [String(e)] }) }
+
+  // 20. AutoLearnRecord — auto-learned knowledge audits (Phase 3 SMOLAB Prop 10)
+  try {
+    const records = await db.autoLearnRecord.findMany({ take: 5000, orderBy: { createdAt: 'desc' } })
+    const { error } = await client.from('auto_learn_record_backup').upsert(
+      records.map(r => ({
+        id: r.id,
+        agent_id: r.agentId,
+        agent_name: r.agentName,
+        query: r.query,
+        answer_preview: r.answerPreview,
+        confidence: r.confidence,
+        provider: r.provider,
+        model: r.model,
+        entities_count: r.entitiesCount,
+        relationships_count: r.relationshipsCount,
+        chunk_saved: r.chunkSaved,
+        neo4j_synced: r.neo4jSynced,
+        qdrant_point_id: r.qdrantPointId,
+        document_id: r.documentId,
+        status: r.status,
+        error_message: r.errorMessage,
+        created_at: r.createdAt?.toISOString(),
+      })),
+      { onConflict: 'id' }
+    )
+    results.push({ table: 'AutoLearnRecord', pushed: records.length, pulled: 0, errors: error ? [error.message] : [] })
+    totalPushed += records.length
+  } catch (e) { results.push({ table: 'AutoLearnRecord', pushed: 0, pulled: 0, errors: [String(e)] }) }
+
+  // 21. ExecutionMetrics — Layer 9 workflow run metrics (Phase 3 SMOLAB Prop 10; Phase 6 Prop 2 added model)
+  try {
+    const metrics = await db.executionMetrics.findMany({ take: 5000, orderBy: { createdAt: 'desc' } })
+    const { error } = await client.from('execution_metrics_backup').upsert(
+      metrics.map(m => ({
+        id: m.id,
+        session_id: m.sessionId,
+        plan_id: m.planId,
+        routing_mode: m.routingMode,
+        tier: m.tier,
+        total_steps: m.totalSteps,
+        completed_steps: m.completedSteps,
+        failed_steps: m.failedSteps,
+        total_tokens_used: m.totalTokensUsed,
+        total_tokens_budgeted: m.totalTokensBudgeted,
+        total_time_spent: m.totalTimeSpent,
+        errors_by_type: m.errorsByType,
+        step_success_rate: m.stepSuccessRate,
+        token_efficiency: m.tokenEfficiency,
+        created_at: m.createdAt?.toISOString(),
+      })),
+      { onConflict: 'id' }
+    )
+    results.push({ table: 'ExecutionMetrics', pushed: metrics.length, pulled: 0, errors: error ? [error.message] : [] })
+    totalPushed += metrics.length
+  } catch (e) { results.push({ table: 'ExecutionMetrics', pushed: 0, pulled: 0, errors: [String(e)] }) }
+
+  // 22. FailurePattern — Layer 9.2 failure pattern detection (Phase 3 SMOLAB Prop 10; Phase 6 Prop 2 added model)
+  //     NOTE: FailurePattern has NO createdAt field — push does not serialize a timestamp.
+  try {
+    const patterns = await db.failurePattern.findMany({ take: 5000 })
+    const { error } = await client.from('failure_pattern_backup').upsert(
+      patterns.map(p => ({
+        id: p.id,
+        session_id: p.sessionId,
+        type: p.type,
+        count: p.count,
+        strategies_tried: p.strategiesTried,
+        next_strategy: p.nextStrategy,
+        context: p.context,
+        resolved: p.resolved,
+      })),
+      { onConflict: 'id' }
+    )
+    results.push({ table: 'FailurePattern', pushed: patterns.length, pulled: 0, errors: error ? [error.message] : [] })
+    totalPushed += patterns.length
+  } catch (e) { results.push({ table: 'FailurePattern', pushed: 0, pulled: 0, errors: [String(e)] }) }
+
+  // 23. StrategyAdaptationLog — Layer 9.2 adaptation audit (Phase 3 SMOLAB Prop 10; Phase 6 Prop 2 added model)
+  try {
+    const adaptations = await db.strategyAdaptationLog.findMany({ take: 5000, orderBy: { createdAt: 'desc' } })
+    const { error } = await client.from('strategy_adaptation_log_backup').upsert(
+      adaptations.map(a => ({
+        id: a.id,
+        session_id: a.sessionId,
+        pattern_id: a.patternId,
+        from_strategy: a.fromStrategy,
+        to_strategy: a.toStrategy,
+        reason: a.reason,
+        confidence: a.confidence,
+        successful: a.successful,
+        created_at: a.createdAt?.toISOString(),
+      })),
+      { onConflict: 'id' }
+    )
+    results.push({ table: 'StrategyAdaptationLog', pushed: adaptations.length, pulled: 0, errors: error ? [error.message] : [] })
+    totalPushed += adaptations.length
+  } catch (e) { results.push({ table: 'StrategyAdaptationLog', pushed: 0, pulled: 0, errors: [String(e)] }) }
 
   const durationMs = Date.now() - startTime
   console.log(`[Supabase] Push complete: ${totalPushed} records in ${durationMs}ms`)
@@ -1165,6 +1284,178 @@ export async function pullFromSupabase(): Promise<FullSyncResult> {
     }
   } catch (e) { results.push({ table: 'LocalResolvedEntity', pushed: 0, pulled: 0, errors: [String(e)] }) }
 
+  // 16. LearningLog — restore learning event log (Phase 3 SMOLAB Prop 10)
+  try {
+    const { data, error } = await client.from('learning_log_backup').select('*').limit(5000)
+    if (!error && data && data.length > 0) {
+      let pulled = 0
+      for (const l of data) {
+        try {
+          await db.learningLog.upsert({
+            where: { id: l.id },
+            create: {
+              id: l.id,
+              sessionId: l.session_id ?? null,
+              agentId: l.agent_id || 'default',
+              eventType: l.event_type,
+              content: l.content,
+              metadata: l.metadata ?? null,
+              createdAt: l.created_at ? new Date(l.created_at) : new Date(),
+            },
+            update: {},
+          })
+          pulled++
+        } catch { /* skip conflict */ }
+      }
+      results.push({ table: 'LearningLog', pushed: 0, pulled, errors: [] })
+      totalPulled += pulled
+    } else {
+      results.push({ table: 'LearningLog', pushed: 0, pulled: 0, errors: error ? [error.message] : [] })
+    }
+  } catch (e) { results.push({ table: 'LearningLog', pushed: 0, pulled: 0, errors: [String(e)] }) }
+
+  // 17. AutoLearnRecord — restore auto-learn audits (Phase 3 SMOLAB Prop 10)
+  try {
+    const { data, error } = await client.from('auto_learn_record_backup').select('*').limit(5000)
+    if (!error && data && data.length > 0) {
+      let pulled = 0
+      for (const r of data) {
+        try {
+          await db.autoLearnRecord.upsert({
+            where: { id: r.id },
+            create: {
+              id: r.id,
+              agentId: r.agent_id,
+              agentName: r.agent_name,
+              query: r.query,
+              answerPreview: r.answer_preview,
+              confidence: r.confidence ?? 0.5,
+              provider: r.provider,
+              model: r.model,
+              entitiesCount: r.entities_count ?? 0,
+              relationshipsCount: r.relationships_count ?? 0,
+              chunkSaved: r.chunk_saved ?? false,
+              neo4jSynced: r.neo4j_synced ?? false,
+              qdrantPointId: r.qdrant_point_id ?? null,
+              documentId: r.document_id ?? null,
+              status: r.status || 'pending',
+              errorMessage: r.error_message ?? null,
+              createdAt: r.created_at ? new Date(r.created_at) : new Date(),
+            },
+            update: {},
+          })
+          pulled++
+        } catch { /* skip conflict */ }
+      }
+      results.push({ table: 'AutoLearnRecord', pushed: 0, pulled, errors: [] })
+      totalPulled += pulled
+    } else {
+      results.push({ table: 'AutoLearnRecord', pushed: 0, pulled: 0, errors: error ? [error.message] : [] })
+    }
+  } catch (e) { results.push({ table: 'AutoLearnRecord', pushed: 0, pulled: 0, errors: [String(e)] }) }
+
+  // 18. ExecutionMetrics — restore Layer 9 metrics (Phase 3 SMOLAB Prop 10)
+  try {
+    const { data, error } = await client.from('execution_metrics_backup').select('*').limit(5000)
+    if (!error && data && data.length > 0) {
+      let pulled = 0
+      for (const m of data) {
+        try {
+          await db.executionMetrics.upsert({
+            where: { id: m.id },
+            create: {
+              id: m.id,
+              sessionId: m.session_id,
+              planId: m.plan_id,
+              routingMode: m.routing_mode,
+              tier: m.tier ?? 1,
+              totalSteps: m.total_steps ?? 0,
+              completedSteps: m.completed_steps ?? 0,
+              failedSteps: m.failed_steps ?? 0,
+              totalTokensUsed: m.total_tokens_used ?? 0,
+              totalTokensBudgeted: m.total_tokens_budgeted ?? 0,
+              totalTimeSpent: m.total_time_spent ?? 0,
+              errorsByType: m.errors_by_type || '{}',
+              stepSuccessRate: m.step_success_rate ?? 0,
+              tokenEfficiency: m.token_efficiency ?? 0,
+              createdAt: m.created_at ? new Date(m.created_at) : new Date(),
+            },
+            update: {},
+          })
+          pulled++
+        } catch { /* skip conflict */ }
+      }
+      results.push({ table: 'ExecutionMetrics', pushed: 0, pulled, errors: [] })
+      totalPulled += pulled
+    } else {
+      results.push({ table: 'ExecutionMetrics', pushed: 0, pulled: 0, errors: error ? [error.message] : [] })
+    }
+  } catch (e) { results.push({ table: 'ExecutionMetrics', pushed: 0, pulled: 0, errors: [String(e)] }) }
+
+  // 19. FailurePattern — restore Layer 9.2 failure patterns (Phase 3 SMOLAB Prop 10)
+  //     NOTE: FailurePattern has NO createdAt field — pull does not set it.
+  try {
+    const { data, error } = await client.from('failure_pattern_backup').select('*').limit(5000)
+    if (!error && data && data.length > 0) {
+      let pulled = 0
+      for (const p of data) {
+        try {
+          await db.failurePattern.upsert({
+            where: { id: p.id },
+            create: {
+              id: p.id,
+              sessionId: p.session_id,
+              type: p.type,
+              count: p.count ?? 1,
+              strategiesTried: p.strategies_tried || '[]',
+              nextStrategy: p.next_strategy,
+              context: p.context || '{}',
+              resolved: p.resolved ?? false,
+            },
+            update: {},
+          })
+          pulled++
+        } catch { /* skip conflict */ }
+      }
+      results.push({ table: 'FailurePattern', pushed: 0, pulled, errors: [] })
+      totalPulled += pulled
+    } else {
+      results.push({ table: 'FailurePattern', pushed: 0, pulled: 0, errors: error ? [error.message] : [] })
+    }
+  } catch (e) { results.push({ table: 'FailurePattern', pushed: 0, pulled: 0, errors: [String(e)] }) }
+
+  // 20. StrategyAdaptationLog — restore Layer 9.2 adaptation audits (Phase 3 SMOLAB Prop 10)
+  try {
+    const { data, error } = await client.from('strategy_adaptation_log_backup').select('*').limit(5000)
+    if (!error && data && data.length > 0) {
+      let pulled = 0
+      for (const a of data) {
+        try {
+          await db.strategyAdaptationLog.upsert({
+            where: { id: a.id },
+            create: {
+              id: a.id,
+              sessionId: a.session_id,
+              patternId: a.pattern_id ?? null,
+              fromStrategy: a.from_strategy,
+              toStrategy: a.to_strategy,
+              reason: a.reason,
+              confidence: a.confidence ?? 0.5,
+              successful: a.successful ?? null,
+              createdAt: a.created_at ? new Date(a.created_at) : new Date(),
+            },
+            update: {},
+          })
+          pulled++
+        } catch { /* skip conflict */ }
+      }
+      results.push({ table: 'StrategyAdaptationLog', pushed: 0, pulled, errors: [] })
+      totalPulled += pulled
+    } else {
+      results.push({ table: 'StrategyAdaptationLog', pushed: 0, pulled: 0, errors: error ? [error.message] : [] })
+    }
+  } catch (e) { results.push({ table: 'StrategyAdaptationLog', pushed: 0, pulled: 0, errors: [String(e)] }) }
+
   const durationMs = Date.now() - startTime
   console.log(`[Supabase] Pull complete: ${totalPulled} records in ${durationMs}ms`)
   return { results, totalPushed: 0, totalPulled, durationMs }
@@ -1192,7 +1483,7 @@ export async function checkSupabaseHealth(): Promise<{
     return {
       configured: true,
       connected: !error,
-      tableCount: 13, // 12 backup tables + sync_log (memory + chat + config + personal data)
+      tableCount: 24, // 18 prior backup tables + 5 learning tables (Phase 3 SMOLAB Prop 10) + sync_log
       error: error?.message,
     }
   } catch (e) {

@@ -89,3 +89,31 @@ startAllServices(buildServices(resolve))
     console.error('[instrumentation] Failed to start some services:', err)
     // Don't block Next.js startup — app can still work with fallback
   })
+
+// Phase 3 SMOLAB Proposal 9 — Recover orphaned Smolab tasks on startup.
+//
+// When PM2 restarts the app (or the process crashes), SmolabTaskWorker
+// initializes a fresh in-memory queue. DB rows left in status='pending' or
+// 'running' from the previous process would otherwise stay orphaned forever
+// (the worker never picks them up). recoverPending() scans the DB, bumps the
+// `attempts` counter, and re-enqueues them into the new worker's queue so
+// they fail-fast through the normal executeTask path (closures are lost
+// across restarts — see JSDoc in background-task-worker.ts:recoverPending).
+//
+// Fire-and-forget: do NOT block Next.js startup on recovery. The worker is a
+// singleton (smolabWorker exported from @/lib/smolab/background-task-worker),
+// so importing it here just grabs the existing instance.
+import('@/lib/smolab/background-task-worker')
+  .then(({ smolabWorker }) => smolabWorker.recoverPending())
+  .then(({ recovered, markedFailed }) => {
+    console.log(
+      `[instrumentation] SmolabTaskWorker crash recovery done: ${recovered} re-enqueued, ${markedFailed} marked failed`
+    )
+  })
+  .catch((err) => {
+    console.error(
+      '[instrumentation] SmolabTaskWorker recoverPending failed:',
+      err instanceof Error ? err.message : String(err)
+    )
+    // Don't block Next.js startup — worker still functions for new tasks
+  })

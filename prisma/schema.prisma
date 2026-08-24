@@ -740,6 +740,14 @@ model SmolabTask {
   completedAt     DateTime?
   updatedAt       DateTime @updatedAt
 
+  /// Phase 3 SMOLAB Prop 9 — Durable queue crash-recovery counters.
+  /// `attempts` is incremented on each crash recovery (process restart while
+  /// task is still pending/running). When `attempts >= maxAttempts` the
+  /// recoverPending() pass marks the task as 'failed' instead of re-enqueuing
+  /// (don't infinite-retry orphaned tasks).
+  attempts        Int      @default(0) /// # of crash-recovery attempts (0 = never recovered)
+  maxAttempts     Int      @default(3) /// ceiling — after this many recovery attempts, mark failed
+
   // Relations — Cascade: khi session bị xóa, tất cả tasks của session đó cũng bị xóa
   session         AgentSession  @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade, onUpdate: Cascade)
 
@@ -1100,4 +1108,21 @@ model PendingWriteback {
 
   @@index([status])
   @@index([agentId])
+}
+
+// Phase 3 SMOLAB Proposal 4.1 — Embedding model version tracking.
+// Tracks every embedding model version used. Active version is the latest
+// row where deprecatedAt IS NULL. When NVIDIA silently updates a model,
+// a new row is inserted + old row's deprecatedAt set. Drift check in
+// kb-access.ts queries Qdrant payloads and compares against active version.
+model EmbeddingModelVersion {
+  id            String    @id @default(cuid())
+  modelName     String    // e.g. 'nvidia/llama-nemotron-embed-1b-v2'
+  versionTag    String    // e.g. '2025-08-24' or commit hash
+  config        String    @default("{}") // JSON: { dimensions: 2048, similarity: 'cosine' }
+  activeSince   DateTime  @default(now())
+  deprecatedAt  DateTime?
+
+  @@unique([modelName, versionTag])
+  @@index([modelName])
 }

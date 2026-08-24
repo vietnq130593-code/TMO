@@ -24,7 +24,7 @@
  *   If confidence < 0.5 → answer is too unreliable, don't learn garbage.
  */
 
-import { generateEmbedding, getEmbeddingDimension } from '@/lib/embeddings'
+import { generateEmbedding, getEmbeddingDimension, getCurrentEmbeddingModelVersion } from '@/lib/embeddings'
 import { callLLM, addTokensUsedByAgent } from '@/lib/llm'
 import { db } from '@/lib/db'
 import { chunkText } from '@/lib/chunking'
@@ -497,6 +497,11 @@ async function saveChunkToQdrant(params: {
     const { upsertChunks } = await import('@/lib/qdrant')
     const pointId = `al-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
+    // Phase 3 SMOLAB Prop 4.1 — stamp the active embedding model version on the
+    // chunk payload. Lazy-cached 5 min in embeddings.ts, so 1 DB query per batch
+    // (not per chunk). Falls back to `${NVIDIA_EMBED_MODEL}@unknown` if no DB row.
+    const embeddingModelVersion = await getCurrentEmbeddingModelVersion()
+
     const success = await upsertChunks([{
       id: pointId,
       vector: params.vector,
@@ -515,6 +520,7 @@ async function saveChunkToQdrant(params: {
         confidence: params.confidence,
         llm_provider: params.provider,
         llm_model: params.model,
+        embedding_model_version: embeddingModelVersion,
       },
     }])
 
