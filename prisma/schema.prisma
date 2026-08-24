@@ -1126,3 +1126,74 @@ model EmbeddingModelVersion {
   @@unique([modelName, versionTag])
   @@index([modelName])
 }
+
+// Phase 4 SMOLAB Proposal 11' — Eval harness models.
+// EvalCase: golden test question + expected answer. Mix of LLM-generated
+// (constraint-diverse) + human-curated (from manual AgentInsights) + negative
+// (out-of-domain — system must say "I don't know", NOT hallucinate).
+model EvalCase {
+  id               String   @id @default(cuid())
+  question         String
+  expectedAnswer   String
+  expectedEntities String   @default("[]")  // JSON: [{name, type}]
+  category         String   // programming | algorithm | ml | security | linux | negative | mixed
+  difficulty       String   @default("medium")  // easy | medium | hard
+  source           String   @default("llm_generated")  // llm_generated | human_curated | negative
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+
+  @@index([category, active])
+}
+
+// EvalResult: per-case result within a run. faithfulnessScores stores all 3
+// judge scores (variance estimate); faithfulnessMedian is the robust aggregate.
+model EvalResult {
+  id                        String   @id @default(cuid())
+  runId                     String
+  caseId                    String
+  answer                    String
+  retrievedChunks           Int      @default(0)
+  expectedEntitiesInAnswer  Int      @default(0)
+  expectedEntitiesRetrieved Int      @default(0)
+  recallAt5                 Float    @default(0)
+  faithfulnessMedian        Float    @default(0)
+  faithfulnessScores        String   @default("[]")  // JSON [s1, s2, s3]
+  extractionF1              Float    @default(0)
+  hallucinationDetected     Boolean  @default(false)
+  rawConfidence             Float    @default(0)  // Prop 3.5 — Step-1 KB confidence (calibration training X)
+  latencyMs                 Int      @default(0)
+  createdAt                 DateTime @default(now())
+
+  @@index([runId])
+  @@index([caseId])
+}
+
+// EvalRun: one eval execution (may be background/async — completedAt null while running).
+model EvalRun {
+  id              String    @id @default(cuid())
+  status          String    @default("running")  // running | completed | failed
+  caseCount       Int       @default(0)
+  processedCount  Int       @default(0)
+  avgRecallAt5    Float     @default(0)
+  avgFaithfulness Float     @default(0)
+  avgF1           Float     @default(0)
+  avgLatencyMs    Int       @default(0)
+  hallucinationCount Int   @default(0)
+  errorMessage    String?
+  startedAt       DateTime  @default(now())
+  completedAt     DateTime?
+
+  @@index([startedAt])
+}
+
+// Phase 4 SMOLAB Proposal 3.5 — Confidence calibration model.
+// Logistic regression: calibrated = sigmoid(intercept + coef * rawConfidence).
+// Trained by scripts/train-calibration.ts from EvalResult data. Applied in
+// kb-access.ts calculateConfidence (later task) — falls back to raw when absent.
+model CalibrationModel {
+  id         String   @id @default("default")
+  intercept  Float    @default(0)
+  coef       Float    @default(1)
+  trainedAt  DateTime @updatedAt
+  sampleSize Int      @default(0)
+}

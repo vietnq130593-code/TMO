@@ -123,6 +123,12 @@ export interface LLMCallOptions {
   /** 'auto' (default when tools provided) | 'none' | 'required' | specific function selector.
    *  Ignored when `tools` is undefined. */
   tool_choice?: 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } }
+  /** Phase 4 SMOLAB Prop 11' — explicit model override (e.g. 'openai/gpt-oss-120b').
+   *  When provided, callLLM() calls ONLY this NVIDIA NIM model (round-robin across
+   *  all 4 keys) instead of the rotating chat pool. No rotation fallback — if the
+   *  model fails, the error result is returned (callers decide how to fail-open).
+   *  Backward compatible: undefined (default) = current rotation behavior. */
+  model?: string
 }
 
 // ==================== CONSTANTS ====================
@@ -2189,6 +2195,22 @@ export async function callLLM(
   const aId = options?.agentId
   const aName = options?.agentName
   console.log(`[LLM] (NVIDIA) Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
+
+  // Phase 4 SMOLAB Prop 11' — explicit model override: try ONLY the requested
+  // model (all 4 keys, round-robin). Used by the eval harness (judges must not
+  // silently fall back to a rotated model — that would reintroduce circular bias
+  // between the answer generator and the judges). No pool-rotation fallback.
+  if (options?.model) {
+    const specific = await callLLMWithSpecificProvider(prompt, 'nvidia', options.model, systemPrompt, options)
+    if (specific) return specific
+    console.log(`[LLM] Model override "${options.model}" failed for task "${taskLabel}" — returning error (no rotation fallback)`)
+    return {
+      content: '',
+      provider: 'none',
+      model: options.model,
+      error: `NVIDIA NIM model "${options.model}" failed`,
+    }
+  }
 
   // Try NVIDIA only (single provider)
   const result = await tryNvidia(prompt, systemPrompt, temp, maxTok, aId, aName)

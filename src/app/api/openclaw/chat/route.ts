@@ -32,6 +32,8 @@ import { getStandaloneAgentTools } from '@/lib/standalone-agents'
 // Phase 2 SMOLAB Prop 6 — writebackToKBTransactionally wraps writebackToKB with
 // PendingWriteback saga tracking (batchId + per-step status + reconcile endpoint).
 import { classifyIntent, searchUserKB } from '@/lib/kb-routing'
+import { rewriteQuery } from '@/lib/kb-routing/query-rewriter'
+import { isFlagEnabled } from '@/lib/feature-flags'
 import { writebackToKBTransactionally } from '@/lib/kb-routing/transactional-writeback'
 
 export const dynamic = 'force-dynamic'
@@ -559,7 +561,30 @@ export async function POST(request: NextRequest) {
 
     if (intent === 'factual' && lastUserContent) {
       try {
-        kbSearchResult = await searchUserKB(lastUserContent, agentProfileId || undefined, { topK: 5 })
+        // Phase 4 SMOLAB Task C — Prop 3.9: query rewrite + HyDE (flag-gated).
+        // Rewrites the latest query to be self-contained (pronoun resolution via
+        // the last 2 prior turns) + generates a HyDE hypothetical answer whose
+        // embedding becomes the dense search vector. Returns null on ANY failure
+        // → we fall back to the plain query (retrieval never breaks).
+        let hydeEmbedding: number[] | undefined
+        let effectiveQuery = lastUserContent
+        if (isFlagEnabled('ENABLE_QUERY_REWRITE')) {
+          // Prior turns BEFORE the latest user message (the query itself is NOT context)
+          const lastUserIdx = messages.map((m: { role: string }) => m.role === 'user').lastIndexOf(true)
+          const recentHistory = messages
+            .slice(0, lastUserIdx === -1 ? messages.length : lastUserIdx)
+            .filter((m: { role: string; content?: string }) =>
+              (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+            .slice(-2)
+            .map((m: { role: string; content: string }) => ({ role: m.role, content: m.content }))
+          const rewrite = await rewriteQuery(lastUserContent, recentHistory)
+          if (rewrite) {
+            hydeEmbedding = rewrite.hydeEmbedding.length > 0 ? rewrite.hydeEmbedding : undefined
+            effectiveQuery = rewrite.rewrittenQuery || lastUserContent
+            console.log(`[Chat] Query rewrite: "${lastUserContent.slice(0, 50)}" → "${effectiveQuery.slice(0, 50)}" (HyDE ${rewrite.cacheHit ? 'cache-hit' : `${rewrite.durationMs}ms`})`)
+          }
+        }
+        kbSearchResult = await searchUserKB(effectiveQuery, agentProfileId || undefined, { topK: 5, embeddingOverride: hydeEmbedding })
         console.log(`[OpenClaw Chat] KB pre-search: ${kbSearchResult.chunks.length} chunks, ${kbSearchResult.entities.length} entities, confidence=${kbSearchResult.confidence.toFixed(2)}`)
 
         // Build dynamic KB context from search results

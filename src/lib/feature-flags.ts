@@ -11,6 +11,9 @@
  *   Phase 3:   ENABLE_LSP_*, ENABLE_BROWSER_*, ENABLE_LINT, ENABLE_TYPE_CHECK, ENABLE_TEST_COVERAGE, ENABLE_DB_QUERY, ENABLE_MCP_CALL
  *   Phase 4:   ENABLE_AUTO_*, ENABLE_PLAN_MODE, ENABLE_CRON_TOOL
  *   Phase 5:   ENABLE_MASTER_ORCHESTRATOR, ENABLE_SESSION_RESUME
+ *   Phase 4 SMOLAB (retrieval quality suite): ENABLE_HYBRID_SEARCH,
+ *               ENABLE_MMR, ENABLE_RERANKER, ENABLE_SEMANTIC_ENTITY_SEARCH
+ *   Phase 4 SMOLAB (Task C — query understanding): ENABLE_QUERY_REWRITE
  *
  * Usage:
  *   import { isFlagEnabled, flagMode } from '@/lib/feature-flags'
@@ -73,6 +76,24 @@ const DEFAULTS: Record<string, string> = {
   ENABLE_MASTER_ORCHESTRATOR: 'false',
   ENABLE_REAL_DELEGATE: 'false',
   ENABLE_SESSION_RESUME: 'false',
+
+  // Phase 4 SMOLAB — Retrieval quality suite (kb-access.ts searchChunks pipeline +
+  // searchEntitiesForUser). Hybrid BM25+RRF, MMR and semantic entity search ship ON
+  // by default: they are pure in-process upgrades with graceful degradation (no
+  // external services, no collection migration, lexical/vector fallbacks intact).
+  // The cross-encoder reranker ships OFF — it needs a local rerank service
+  // (see src/lib/kb-routing/reranker.ts header for hosting instructions).
+  ENABLE_HYBRID_SEARCH: 'true', // Prop 3.7 — in-process BM25+RRF fusion over dense candidates
+  ENABLE_MMR: 'true', // Prop 3.8 — MMR diversity rerank (uses pre-fetched Qdrant vectors)
+  ENABLE_RERANKER: 'false', // Prop 3.6 — external cross-encoder reranker client (requires RERANKER_ENDPOINT service)
+  ENABLE_SEMANTIC_ENTITY_SEARCH: 'true', // Prop 3.11 — vector entity search with lexical fallback
+
+  // Phase 4 SMOLAB Task C — Prop 3.9: query rewrite + HyDE before the KB pre-search
+  // in the chat route (src/app/api/openclaw/chat/route.ts). Costs up to 3 LLM calls
+  // (+1-2s latency per query) — mitigated by a 200-entry/10-min in-memory cache in
+  // src/lib/kb-routing/query-rewriter.ts. Default OFF: opt-in for latency-sensitive
+  // deployments; flip to true once retrieval quality matters more than p95 latency.
+  ENABLE_QUERY_REWRITE: 'false',
 }
 
 /**

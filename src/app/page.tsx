@@ -22,7 +22,7 @@ import {
   Play as PlayIcon, Square, ScrollText, ArrowRight as ArrowRightIcon, Cpu as CpuIcon, Cable as CableIcon,
   GitCommit, History, Minimize2, ExternalLink as ExternalLinkIcon, GripHorizontal, ArrowDownToLine,
   Wifi, WifiOff,
-  Flame, Archive, Snowflake, Thermometer
+  Flame, Archive, Snowflake, Thermometer, FlaskConical
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -5096,6 +5096,41 @@ function MemoryTabContent() {
 
 // ==================== LEARNING TAB CONTENT ====================
 
+// Phase 4 SMOLAB Proposal 11' — Eval harness types (Evaluation Results card)
+interface EvalRunSummary {
+  id: string
+  status: string
+  caseCount: number
+  processedCount: number
+  avgRecallAt5?: number
+  avgFaithfulness?: number
+  avgF1?: number
+  avgLatencyMs?: number
+  hallucinationCount?: number
+  errorMessage?: string | null
+  startedAt: string
+  completedAt?: string | null
+}
+
+interface EvalCaseResult {
+  id: string
+  question: string
+  category: string
+  recallAt5: number
+  faithfulnessMedian: number
+  faithfulnessScores: number[]
+  extractionF1: number
+  hallucinationDetected: boolean
+  retrievedChunks: number
+  rawConfidence: number
+  latencyMs: number
+}
+
+interface EvalResultsPayload {
+  run: EvalRunSummary | null
+  results: EvalCaseResult[]
+}
+
 function LearningTabContent() {
   // Timeline data
   const [timeline, setTimeline] = useState<{
@@ -5218,6 +5253,13 @@ function LearningTabContent() {
     }
   } | null>(null)
 
+  // Phase 4 SMOLAB Proposal 11' — Eval harness (latest run status + results)
+  const [evalLatestRun, setEvalLatestRun] = useState<EvalRunSummary | null>(null)
+  const [evalData, setEvalData] = useState<EvalResultsPayload | null>(null)
+  const [evalStarting, setEvalStarting] = useState(false)
+  // Bump to force an immediate re-poll (e.g. right after starting a run).
+  const [evalRefresh, setEvalRefresh] = useState(0)
+
   // Fetch data on mount
   useEffect(() => {
     const fetchData = async () => {
@@ -5317,6 +5359,74 @@ function LearningTabContent() {
       clearInterval(interval)
     }
   }, [])
+
+  // Phase 4 SMOLAB Proposal 11' — Fetch eval run status + results.
+  // Polls every 10s while a run is in progress, every 60s otherwise.
+  // /api/eval/run (no param) → latest 10 runs (live status source).
+  // /api/eval/results (no param) → latest COMPLETED run + per-case results.
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const poll = async () => {
+      let running = false
+      try {
+        const [runsRes, resultsRes] = await Promise.all([
+          fetch('/api/eval/run'),
+          fetch('/api/eval/results'),
+        ])
+        if (runsRes.ok && !cancelled) {
+          const data = (await runsRes.json()) as { runs?: EvalRunSummary[] }
+          const latest = Array.isArray(data.runs) && data.runs.length > 0 ? data.runs[0] : null
+          if (!cancelled) setEvalLatestRun(latest)
+          running = latest?.status === 'running'
+        }
+        if (resultsRes.ok && !cancelled) {
+          const data = (await resultsRes.json()) as EvalResultsPayload
+          if (!cancelled) setEvalData(data)
+        }
+      } catch (err) {
+        console.warn('[Eval Results] fetch failed:', err)
+      }
+      if (cancelled) return
+      // 10s cadence while a run is in progress, 60s otherwise.
+      timer = setTimeout(poll, running ? 10_000 : 60_000)
+    }
+
+    poll()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [evalRefresh])
+
+  // Phase 4 SMOLAB Proposal 11' — Start a background eval run (10 cases).
+  // POST /api/eval/run returns immediately (fire-and-forget runner); the
+  // poll effect above picks up the running status + refreshes every 10s.
+  const handleRunEval = async () => {
+    setEvalStarting(true)
+    try {
+      const res = await fetch('/api/eval/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseLimit: 10 }),
+      })
+      const data = (await res.json()) as { runId?: string; caseCount?: number; error?: string }
+      if (res.ok && data.runId) {
+        toast({
+          title: 'Eval started',
+          description: `Run ${data.runId.slice(0, 8)} — ${data.caseCount ?? 10} cases × 4 LLM calls (chạy nền)`,
+        })
+        // Force an immediate re-poll so the running badge shows up right away.
+        setEvalRefresh((n) => n + 1)
+      } else {
+        toast({ title: 'Eval start failed', description: data.error || 'Unknown error', variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: 'Lỗi kết nối eval', variant: 'destructive' })
+    }
+    setEvalStarting(false)
+  }
 
   // Reconcile now — POST endpoint that re-attempts pending/partial/failed batches
   const handleReconcileWritebacks = async () => {
@@ -5875,6 +5985,156 @@ function LearningTabContent() {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* ===== 1d. EVALUATION RESULTS (Phase 4 SMOLAB Proposal 11' — eval harness) ===== */}
+      <div className="nc-wrap nc-cyan">
+        <div className="nc-panel nc-sm nc-border-cyan p-4">
+          {/* Header row: icon + title + latest run status badge + Run Eval button */}
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <FlaskConical className="h-4 w-4 text-cyan-400" />
+              <span className="text-sm font-semibold text-stone-100">Evaluation Results</span>
+              {evalLatestRun && (
+                <Badge
+                  className={
+                    evalLatestRun.status === 'completed'
+                      ? 'text-[9px] h-4 px-1.5 bg-emerald-950/50 text-emerald-400 border-emerald-400/35'
+                      : evalLatestRun.status === 'failed'
+                        ? 'text-[9px] h-4 px-1.5 bg-red-950/50 text-red-400 border-red-400/35'
+                        : 'text-[9px] h-4 px-1.5 bg-amber-950/50 text-amber-400 border-amber-400/35'
+                  }
+                >
+                  {evalLatestRun.status}
+                </Badge>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={evalStarting || evalLatestRun?.status === 'running'}
+              onClick={handleRunEval}
+              className="h-6 px-2 text-[10px] bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25 hover:text-cyan-200 border border-cyan-500/25"
+            >
+              {evalStarting || evalLatestRun?.status === 'running' ? (
+                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+              ) : (
+                <Play className="h-3 w-3 mr-1" />
+              )}
+              Run Eval
+            </Button>
+          </div>
+
+          {/* Live progress line while a run is in progress */}
+          {evalLatestRun?.status === 'running' && (
+            <div className="p-2 bg-slate-950/50 border border-cyan-500/15 rounded-lg mb-3 flex items-center gap-2">
+              <Loader2 className="h-3 w-3 text-cyan-400 animate-spin flex-shrink-0" />
+              <span className="text-[10px] text-stone-300 truncate">
+                Running — {evalLatestRun.processedCount}/{evalLatestRun.caseCount} cases processed
+                {evalData?.run ? ` (đang hiển thị kết quả run hoàn thành trước đó)` : ''}
+              </span>
+            </div>
+          )}
+
+          {/* Failed-run banner */}
+          {evalLatestRun?.status === 'failed' && (
+            <div className="p-2 bg-red-950/20 border border-red-400/25 rounded-lg mb-3 flex items-center gap-2">
+              <AlertTriangle className="h-3 w-3 text-red-400 flex-shrink-0" />
+              <span className="text-[10px] text-red-300 truncate" title={evalLatestRun.errorMessage ?? ''}>
+                Run failed: {evalLatestRun.errorMessage || 'unknown error'}
+              </span>
+            </div>
+          )}
+
+          {/* Latest completed run: 5 stat tiles + meta + per-case list */}
+          {evalData?.run ? (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-2">
+                <div className="p-2 bg-slate-950/50 border border-cyan-500/15 rounded-lg text-center">
+                  <Target className="h-3.5 w-3.5 mx-auto text-cyan-400 mb-0.5" />
+                  <p className="text-base font-bold text-stone-100 tabular-nums">
+                    {((evalData.run.avgRecallAt5 ?? 0) * 100).toFixed(1)}%
+                  </p>
+                  <p className="text-[9px] text-stone-400 uppercase">Recall@5</p>
+                </div>
+                <div className="p-2 bg-slate-950/50 border border-cyan-500/15 rounded-lg text-center">
+                  <CheckCircle2 className="h-3.5 w-3.5 mx-auto text-cyan-400 mb-0.5" />
+                  <p className="text-base font-bold text-stone-100 tabular-nums">
+                    {((evalData.run.avgFaithfulness ?? 0) * 100).toFixed(1)}%
+                  </p>
+                  <p className="text-[9px] text-stone-400 uppercase">Faithfulness</p>
+                </div>
+                <div className="p-2 bg-slate-950/50 border border-cyan-500/15 rounded-lg text-center">
+                  <GitBranch className="h-3.5 w-3.5 mx-auto text-cyan-400 mb-0.5" />
+                  <p className="text-base font-bold text-stone-100 tabular-nums">
+                    {((evalData.run.avgF1 ?? 0) * 100).toFixed(1)}%
+                  </p>
+                  <p className="text-[9px] text-stone-400 uppercase">Entity F1</p>
+                </div>
+                <div className="p-2 bg-slate-950/50 border border-cyan-500/15 rounded-lg text-center">
+                  <AlertTriangle className={`h-3.5 w-3.5 mx-auto mb-0.5 ${(evalData.run.hallucinationCount ?? 0) > 0 ? 'text-red-400' : 'text-emerald-400'}`} />
+                  <p className={`text-base font-bold tabular-nums ${(evalData.run.hallucinationCount ?? 0) > 0 ? 'text-red-400' : 'text-stone-100'}`}>
+                    {evalData.run.hallucinationCount ?? 0}
+                  </p>
+                  <p className="text-[9px] text-stone-400 uppercase">Hallucinations</p>
+                </div>
+                <div className="p-2 bg-slate-950/50 border border-cyan-500/15 rounded-lg text-center">
+                  <Clock className="h-3.5 w-3.5 mx-auto text-cyan-400 mb-0.5" />
+                  <p className="text-base font-bold text-stone-100 tabular-nums">
+                    {((evalData.run.avgLatencyMs ?? 0) / 1000).toFixed(1)}s
+                  </p>
+                  <p className="text-[9px] text-stone-400 uppercase">Avg Latency</p>
+                </div>
+              </div>
+
+              {/* Run meta line */}
+              <div className="flex items-center gap-3 mb-2 text-[9px] text-stone-500 flex-wrap">
+                <span>Run {evalData.run.id.slice(0, 8)}</span>
+                <span>Started: {formatDate(evalData.run.startedAt)} {formatTime(evalData.run.startedAt)}</span>
+                {evalData.run.completedAt && <span>Completed: {formatTime(evalData.run.completedAt)}</span>}
+                <span>
+                  {evalData.run.processedCount}/{evalData.run.caseCount} cases
+                </span>
+                <span>{evalData.results.length} results</span>
+              </div>
+
+              {/* Last 5 per-case results */}
+              {evalData.results.length > 0 && (
+                <div className="p-2 bg-slate-950/50 border border-cyan-500/10 rounded-lg">
+                  <span className="text-[10px] text-stone-400 uppercase mb-1.5 block">Recent cases (last 5)</span>
+                  <div className="space-y-1 max-h-40 overflow-y-auto pr-1" style={{ scrollbarWidth: 'thin' }}>
+                    {evalData.results.slice(-5).reverse().map((r) => (
+                      <div key={r.id} className="flex items-center gap-1.5 p-1.5 border rounded-md border-cyan-400/20 bg-cyan-950/10">
+                        <span className="text-[9px] text-stone-300 truncate flex-1" title={r.question}>
+                          {r.question}
+                        </span>
+                        <Badge className="text-[8px] h-3.5 px-1 bg-slate-900/60 text-stone-400 border-slate-700 truncate max-w-[70px]">
+                          {r.category}
+                        </Badge>
+                        <span
+                          className="text-[9px] text-cyan-400 font-mono flex-shrink-0"
+                          title={`judges: ${r.faithfulnessScores?.join(', ') ?? '—'}`}
+                        >
+                          F:{r.faithfulnessMedian.toFixed(2)}
+                        </span>
+                        <span className="text-[9px] text-emerald-400 font-mono flex-shrink-0">
+                          R:{(r.recallAt5 * 100).toFixed(0)}%
+                        </span>
+                        {r.hallucinationDetected && (
+                          <AlertTriangle className="h-2.5 w-2.5 text-red-400 flex-shrink-0" />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : evalLatestRun?.status !== 'running' ? (
+            <div className="text-[10px] text-stone-500 italic text-center py-2">
+              No eval runs yet — click Run Eval to start (uses ~10 cases × 4 LLM calls).
+            </div>
+          ) : null}
         </div>
       </div>
 
