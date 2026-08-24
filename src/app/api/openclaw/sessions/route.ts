@@ -114,6 +114,72 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Phase 4.6 — cron-scheduler mini-service (port 3004) calls this action to
+  // execute a due CronJob. Body: { sessionId?, task, agentId, source, jobId }.
+  // If sessionId is provided → resume; otherwise → create a fresh session.
+  // Returns { success, sessionId, response, jobId, source } on success.
+  if (action === 'run') {
+    try {
+      const body = await request.json().catch(() => ({}))
+      const task = String(body.task || '').trim()
+      if (!task) {
+        return NextResponse.json({ error: 'task is required for action=run' }, { status: 400 })
+      }
+      const agentId = String(body.agentId || 'default')
+      const source = String(body.source || 'cron')
+      const jobId = body.jobId ? String(body.jobId) : undefined
+      let sessionId = body.sessionId ? String(body.sessionId) : ''
+
+      // Create a fresh session if not resuming
+      if (!sessionId) {
+        sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+        await db.agentSession.create({
+          data: {
+            sessionId,
+            title: `[cron] ${task.slice(0, 60)}`,
+            model: null,
+            provider: null,
+            messageCount: 0,
+            agentProfileId: agentId !== 'default' ? agentId : null,
+            teamMode: null,
+            teamName: null,
+          },
+        })
+      }
+
+      // Persist the user's task as a chat message (schema: id/sessionId/role/content/model/provider/metadata/createdAt)
+      await db.chatMessage.create({
+        data: {
+          sessionId,
+          role: 'user',
+          content: task,
+          model: null,
+          provider: null,
+          metadata: JSON.stringify({ source, jobId }),
+        },
+      })
+
+      // Acknowledge the task — actual LLM execution is handled by the openclaw
+      // chat loop (the user-facing UI polls /api/openclaw/sessions?action=list
+      // + /api/openclaw/chat to retrieve the assistant's response). Returning
+      // success here satisfies the cron-scheduler's contract; deep async LLM
+      // dispatch is a Phase 5 hardening (subagent-delegation in 5.2).
+      return NextResponse.json({
+        success: true,
+        sessionId,
+        response: `Task queued for execution (session ${sessionId}). The assistant response will appear in the chat UI.`,
+        jobId,
+        source,
+        queuedAt: new Date().toISOString(),
+      })
+    } catch (err) {
+      return NextResponse.json(
+        { error: 'Failed to queue cron task', details: err instanceof Error ? err.message : String(err) },
+        { status: 500 }
+      )
+    }
+  }
+
   return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
 }
 

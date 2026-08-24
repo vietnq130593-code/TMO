@@ -347,8 +347,136 @@ model CronJob {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
+  // Phase 4.6 — Z.ai Code parity cron tool (spec v2.1 lines 263-281)
+  // All fields have defaults so existing rows (from cron-tool v1) don't break.
+  // kind: 'one_time' (epoch-ms expr) | 'cron' (cron expression) | 'fixed_rate' (interval)
+  kind        String   @default("cron")
+  /// epoch-ms (one_time) | cron expression | interval string (fixed_rate)
+  expr        String   @default("")
+  /// IANA timezone, e.g. 'Etc/GMT-7'
+  tz          String?
+  /// Agent task description (mirror of taskPrompt for the new tool surface)
+  task        String   @default("")
+  /// Resume an existing session instead of starting fresh
+  sessionId   String?
+  retryCount  Int      @default(0)
+  maxRetries  Int      @default(3)
+  lastError   String?
+  /// Dedup hash (sha256 of {schedule, task, sessionId}) — refuse duplicate schedules
+  jobHash     String?
+  /// 'active' | 'paused' | 'completed' | 'failed'
+  status      String   @default("active")
+
   @@index([agentId])
   @@index([enabled])
+  @@index([status])
+  @@index([nextRunAt])
+  @@index([jobHash])
+}
+
+/// Phase 4.4 — PendingEdits human review integration.
+/// Spec v2.1 lines 252 (4.4): "Wire PendingEdits into workflow".
+/// Replaces an in-memory concept with a persistent DB record so user can approve/
+/// reject via /api/openclaw/pending-edits. Field names follow the spec exactly;
+/// legacy field names (oldContent/newContent/agentName/resolvedAt) are kept as
+/// backward-compat aliases so the existing workspace-manager.ts methods that the
+/// /api/workspace + /api/code-team/checkpoints routes depend on continue to work.
+/// Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 4.4
+model PendingEdit {
+  id          String   @id @default(cuid())
+  sessionId   String
+  filePath    String
+  /// 'edit' | 'delete' | 'multi_edit' | 'create' — Phase 4.4 spec
+  operation   String   @default("edit")
+  /// Original content snapshot (for edit/delete) — spec name
+  before      String?
+  /// New content (for edit/create) — spec name
+  after       String?
+  /// Unified diff string for UI display
+  diff        String?
+  /// 'low' | 'medium' | 'high' — Phase 4.4 spec
+  riskLevel   String   @default("low")
+  /// 'pending' | 'approved' | 'rejected' | 'applied' — spec lifecycle
+  status      String   @default("pending")
+  /// Who approved/rejected (user ID or agent name acting as reviewer)
+  reviewerId  String?
+  reviewedAt  DateTime?
+  appliedAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  // ===== Legacy backward-compat aliases (workspace-manager.ts v1 schema) =====
+  // These mirror `before`/`after`/reviewer fields so the existing methods on
+  // /api/workspace + /api/code-team/checkpoints continue to compile + work.
+  oldContent  String   @default("")
+  newContent  String   @default("")
+  agentName   String   @default("")
+  resolvedAt  DateTime?
+
+  @@index([sessionId])
+  @@index([status])
+  @@map("pending_edits")
+}
+
+/// Phase 4.1 — Neo4j differential checkpoint storage.
+/// Spec v2.1 lines 252 (4.1): "Store diff in SQLite table Neo4jCheckpointDiff".
+/// Stores only nodes/rels updated since the last checkpoint (differential strategy).
+/// Full export only on explicit checkpoint_create({ full: true }) or daily cron.
+/// Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 4.1
+model Neo4jCheckpointDiff {
+  id         String   @id @default(cuid())
+  sessionId  String
+  label      String   @default("")
+  /// true if this is a full export, false if differential
+  full       Boolean  @default(false)
+  /// JSON-stringified array of node objects
+  nodesJson  String
+  /// JSON-stringified array of relationship objects
+  relsJson   String
+  nodeCount  Int      @default(0)
+  relCount   Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([createdAt])
+  @@map("neo4j_checkpoint_diffs")
+}
+
+/// Workspace — folder tracked as the active scope for code agent operations.
+/// Referenced by WorkspaceManager since Phase 1; re-added to schema in Phase 4
+/// (4.4 PendingEdits integration) to fix the runtime "db.workspace is undefined"
+/// error that surfaced once /api/workspace route started being exercised.
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  rootPath  String   @unique
+  isActive  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+/// FsCheckpoint — DB record shadowing the on-disk .code-team-checkpoints/
+/// snapshots (filesystem layout managed by src/lib/workspace/fs-checkpoint.ts).
+/// Referenced by WorkspaceManager.createCheckpoint/listCheckpoints since Phase 1.
+model FsCheckpoint {
+  id          String   @id @default(cuid())
+  sessionId   String
+  workspaceId String
+  commitHash  String
+  label       String
+  createdAt   DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([workspaceId])
+}
+
+/// AgentModelOverride — per-agent provider/model override (used by WorkspaceManager).
+model AgentModelOverride {
+  agentName String   @unique
+  provider  String
+  model     String
+  updatedAt DateTime @updatedAt
 }
 
 /// Webhooks — inbound/outbound webhook configurations

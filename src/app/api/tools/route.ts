@@ -192,6 +192,10 @@ const LOCAL_TOOLS = [
   { name: 'test_coverage', category: 'Test', description: 'bun test --coverage parser. Trả {totalCoverage:{functions,lines,branches}, files:[{path,coverage,uncoveredLines}], testFailures}. Flag: ENABLE_TEST_COVERAGE.', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: 'ENABLE_TEST_COVERAGE', hasApiKey: true },
   { name: 'db_query', category: 'Database', description: 'Read-only SQL query (Prisma $queryRawUnsafe). STRICT READ-ONLY GUARD reject write keywords + multi-statement + PRAGMA. Trả {rows, rowCount, truncated, sql}. Flag: ENABLE_DB_QUERY.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: 'ENABLE_DB_QUERY', hasApiKey: true },
   { name: 'mcp_call', category: 'MCP', description: 'MCP bridge call (filesystem/github/postgres/puppeteer + auto-discovered). First-use permission prompt (D10 pattern). Phase 3 stub — mock impl, real subprocess deferred Phase 5. Flag: ENABLE_MCP_CALL.', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: 'ENABLE_MCP_CALL', hasApiKey: true },
+  // ===== v2.1 Phase 4.5 — exit_plan_mode (NEW — Claude Code parity) =====
+  { name: 'exit_plan_mode', category: 'Planning', description: 'Phase 4.5 — Claude Code parity. Agent emits plan + target files + risk assessment; workflow pauses for user approval (via /api/openclaw/plan-mode). Available to TL (APEX) + G3 (CATALYST) only. Flag: ENABLE_PLAN_MODE.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: 'ENABLE_PLAN_MODE', hasApiKey: true },
+  // ===== v2.1 Phase 4.6 — cron (NEW — Z.ai Code parity) =====
+  { name: 'cron', category: 'Schedule', description: 'Phase 4.6 — Z.ai Code parity. Schedule recurring/one-time agent tasks. Action: create|list|delete|run. Schedule kinds: one_time|cron|fixed_rate. Dedup via jobHash. Retries max 3 with exponential backoff. Available to TL (APEX) + G3 (CATALYST) only. Mini-service cron-scheduler (port 3004) executes due jobs. Flag: ENABLE_CRON_TOOL.', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: 'ENABLE_CRON_TOOL', hasApiKey: true },
 ]
 
 export async function GET(request: NextRequest) {

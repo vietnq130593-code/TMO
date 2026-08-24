@@ -50,6 +50,16 @@ import {
 // v2.1 Phase 3.6 — MCP bridge (separate module)
 import { mcpCall as executeMcpCallFn } from '@/lib/mcp/mcp-bridge'
 import { isFlagEnabled, flagMode } from '@/lib/feature-flags'
+// v2.1 Phase 4.6 — Cron scheduler (separate module)
+import {
+  createCronJob as createCronJobFn,
+  listCronJobs as listCronJobsFn,
+  deleteCronJob as deleteCronJobFn,
+  runCronJob as runCronJobFn,
+  type CronSchedule,
+} from '@/lib/cron/scheduler'
+// v2.1 Phase 4.5 — exit_plan_mode persistence (uses db.codeTeamSession metadata)
+import { db } from '@/lib/db'
 
 // ==================== Z-AI-SDK LAZY INITIALIZATION ====================
 //
@@ -930,6 +940,71 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       },
     },
   },
+
+  // ==================== v2.1 Phase 4.5 — exit_plan_mode (NEW — Claude Code parity) ====================
+  // Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 4.5 (lines 252-263)
+  // Behavior: agent emits plan + target files + risk assessment → workflow pauses →
+  // user approves/rejects/modifies via /api/openclaw/plan-mode → workflow resumes.
+  // Used by TL (APEX) and G3 (CATALYST) — only positions that plan.
+  exit_plan_mode: {
+    type: 'function',
+    function: {
+      name: 'exit_plan_mode',
+      description: 'Phase 4.5 — Claude Code parity. Agent emits plan + target files + risk assessment. Workflow pauses, surfaces to UI for user approval. User approves/rejects/modifies. Agent resumes with approved scope. Use this BEFORE making file edits if changes are uncertain or risky. Available to TL (APEX) and G3 (CATALYST) only — these are the positions that plan.',
+      parameters: {
+        type: 'object',
+        properties: {
+          plan: { type: 'string', description: 'Plan description (Vietnamese or English)' },
+          filesToModify: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Relative paths of files to be modified',
+          },
+          riskLevel: {
+            type: 'string',
+            enum: ['low', 'medium', 'high'],
+            description: 'Risk assessment',
+          },
+        },
+        required: ['plan', 'filesToModify', 'riskLevel'],
+      },
+    },
+  },
+
+  // ==================== v2.1 Phase 4.6 — cron (NEW — Z.ai Code parity) ====================
+  // Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 4.6 (lines 263-281)
+  // Behavior: schedule recurring or one-time agent tasks via the cron-scheduler
+  // mini-service (port 3004). Actions: create | list | delete | run.
+  // Schedule kinds: one_time (epoch-ms), cron (5-field cron expression), fixed_rate (interval).
+  // Dedup: jobId hash (sha256 of schedule+task+sessionId) — refuse duplicates.
+  // Retries: max 3 with exponential backoff (2^n seconds). Available to TL + G3 only.
+  cron: {
+    type: 'function',
+    function: {
+      name: 'cron',
+      description: 'Phase 4.6 — Z.ai Code parity. Schedule recurring or one-time agent tasks. Action: create | list | delete | run. Schedule kinds: one_time (epoch-ms expr), cron (cron expression), fixed_rate (interval string). Timezone optional. Retries max 3 with exponential backoff. Dedup: jobId hash, refuse duplicate schedules. Available to TL (APEX) and G3 (CATALYST) only — the planner positions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['create', 'list', 'delete', 'run'], description: 'create=list+register a new job; list=query all jobs; delete=soft-delete (status=paused); run=manual trigger (for testing)' },
+          jobId: { type: 'string', description: 'For delete/run actions — required' },
+          schedule: {
+            type: 'object',
+            description: 'Required for create action',
+            properties: {
+              kind: { type: 'string', enum: ['one_time', 'cron', 'fixed_rate'], description: 'one_time=run once at epoch-ms; cron=5-field cron expression; fixed_rate=interval string' },
+              expr: { type: 'string', description: 'epoch-ms (one_time) | cron expression | interval (e.g. 30s/5m/1h/1d/1w)' },
+              tz: { type: 'string', description: 'IANA timezone, e.g., Etc/GMT-7 (optional — server tz used if omitted)' },
+            },
+            required: ['kind', 'expr'],
+          },
+          task: { type: 'string', description: 'Agent task description (for create action)' },
+          sessionId: { type: 'string', description: 'Resume existing session (optional, for create action)' },
+        },
+        required: ['action'],
+      },
+    },
+  },
 }
 
 /**
@@ -1283,6 +1358,139 @@ export async function executeTool(
         }
         result = await executeP0GatewayTool(toolName, args)
         break
+      // ===== v2.1 Phase 4.5 — exit_plan_mode (NEW — Claude Code parity) =====
+      // Agent emits plan + target files + risk assessment → workflow pauses for
+      // user approval. We persist the pending plan to CodeTeamSession.partsDefinition
+      // (repurposed as a JSON blob carrier) so /api/openclaw/plan-mode can read it.
+      // Returns { approved:false, _hint:'.../?action=approve' } immediately so
+      // the ReAct loop knows the workflow is paused.
+      case 'exit_plan_mode': {
+        if (!isFlagEnabled('ENABLE_PLAN_MODE')) {
+          return {
+            success: false,
+            result: 'exit_plan_mode tool is disabled (set ENABLE_PLAN_MODE=true in .env to enable). See docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 4.5.',
+            duration: Date.now() - startTime,
+          }
+        }
+        const plan = String(args.plan || '')
+        const filesToModify = Array.isArray(args.filesToModify) ? args.filesToModify.map(String) : []
+        const riskLevel = (['low', 'medium', 'high'].includes(String(args.riskLevel)) ? String(args.riskLevel) : 'medium') as 'low' | 'medium' | 'high'
+        const sessionId = String(args.sessionId || 'default')
+        const planId = `plan_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+
+        try {
+          const existing = await db.codeTeamSession.findUnique({ where: { sessionId } })
+          if (existing) {
+            let partsRaw: unknown[]
+            try { partsRaw = JSON.parse(existing.partsDefinition || '[]') } catch { partsRaw = [] }
+            if (!Array.isArray(partsRaw)) partsRaw = []
+            partsRaw.push({
+              planId,
+              type: 'pending_plan',
+              plan,
+              filesToModify,
+              riskLevel,
+              status: 'pending',
+              createdAt: new Date().toISOString(),
+            })
+            await db.codeTeamSession.update({
+              where: { sessionId },
+              data: { partsDefinition: JSON.stringify(partsRaw) },
+            })
+          }
+        } catch (err) {
+          console.warn(`[ToolExecutor] exit_plan_mode persist failed (non-blocking): ${err instanceof Error ? err.message : String(err)}`)
+        }
+
+        result = {
+          planId,
+          approved: false,
+          modifications: undefined,
+          status: 'pending',
+          _hint: 'Plan surfaced for review. Call POST /api/openclaw/plan-mode?action=approve (body: {planId, sessionId}) to approve, ?action=reject to reject, ?action=modify (body: {planId, modifications, sessionId}) to modify.',
+        }
+        break
+      }
+      // ===== v2.1 Phase 4.6 — cron (NEW — Z.ai Code parity) =====
+      // Action: create | list | delete | run. Delegates to src/lib/cron/scheduler.ts.
+      // The cron-scheduler mini-service (port 3004) tick loop queries for due jobs.
+      case 'cron': {
+        if (!isFlagEnabled('ENABLE_CRON_TOOL')) {
+          return {
+            success: false,
+            result: 'cron tool is disabled (set ENABLE_CRON_TOOL=true in .env to enable). See docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 4.6.',
+            duration: Date.now() - startTime,
+          }
+        }
+        const action = String(args.action || '')
+        if (action === 'create') {
+          const schedule = args.schedule as CronSchedule | undefined
+          const task = String(args.task || '')
+          if (!schedule || !schedule.kind || !schedule.expr) {
+            return {
+              success: false,
+              result: 'cron create requires { schedule: { kind, expr }, task }',
+              duration: Date.now() - startTime,
+            }
+          }
+          if (!task) {
+            return {
+              success: false,
+              result: 'cron create requires non-empty task description',
+              duration: Date.now() - startTime,
+            }
+          }
+          try {
+            const created = await createCronJobFn({
+              schedule,
+              task,
+              sessionId: args.sessionId ? String(args.sessionId) : undefined,
+            })
+            result = {
+              success: true,
+              jobId: created.jobId,
+              nextRun: created.nextRun?.toISOString() ?? null,
+              dryRun: created.dryRun,
+              jobHash: created.jobHash,
+              duplicate: created.duplicate,
+              _hint: created.duplicate
+                ? 'Duplicate schedule (jobHash already exists) — returned existing jobId without re-registering.'
+                : 'Job registered. cron-scheduler mini-service (port 3004) will execute on nextRunAt.',
+            }
+          } catch (err) {
+            return {
+              success: false,
+              result: `cron create failed: ${err instanceof Error ? err.message : String(err)}`,
+              duration: Date.now() - startTime,
+            }
+          }
+        } else if (action === 'list') {
+          const list = await listCronJobsFn({
+            status: typeof args.status === 'string' ? (args.status as 'active' | 'paused' | 'completed' | 'failed') : undefined,
+            sessionId: args.sessionId ? String(args.sessionId) : undefined,
+          })
+          result = { success: true, jobs: list, count: list.length }
+        } else if (action === 'delete') {
+          if (!args.jobId) {
+            return { success: false, result: 'cron delete requires jobId', duration: Date.now() - startTime }
+          }
+          const del = await deleteCronJobFn(String(args.jobId))
+          result = { success: del.success, jobId: args.jobId, error: del.error }
+        } else if (action === 'run') {
+          if (!args.jobId) {
+            return { success: false, result: 'cron run requires jobId', duration: Date.now() - startTime }
+          }
+          const runResult = await runCronJobFn(String(args.jobId))
+          result = { success: runResult.success, jobId: args.jobId, result: runResult.result, error: runResult.error }
+        } else {
+          return {
+            success: false,
+            result: `cron action "${action}" not recognized — must be one of: create, list, delete, run`,
+            duration: Date.now() - startTime,
+          }
+        }
+        break
+      }
       default:
         return {
           success: false,

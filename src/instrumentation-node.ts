@@ -54,6 +54,26 @@ function buildServices(resolveFn: (...paths: string[]) => string) {
       maxRetries: 3,
       dependsOn: 'openclaw-gateway',
     },
+    // Phase 4.6 — cron-scheduler mini-service (Z.ai Code parity).
+    // Tick loop queries SQLite for due CronJob rows and executes them via
+    // /api/openclaw/sessions?action=run (relative path + XTransformPort=3000
+    // so Caddy routes correctly). Started in parallel with the other services
+    // since it has no upstream dependency.
+    {
+      name: 'cron-scheduler',
+      cwd: resolve(ROOT, 'mini-services/cron-scheduler'),
+      command: 'bun',
+      args: ['index.ts'],
+      env: {
+        DATABASE_URL: process.env.DATABASE_URL || '',
+        ENABLE_CRON_TOOL: process.env.ENABLE_CRON_TOOL || 'false',
+        CRON_AGENT_ENDPOINT: process.env.CRON_AGENT_ENDPOINT || 'http://localhost:3000/api/openclaw/sessions',
+      },
+      healthUrl: 'http://127.0.0.1:3004/health',
+      healthTimeoutMs: 30000,
+      healthIntervalMs: 1000,
+      maxRetries: 3,
+    },
   ]
 }
 

@@ -44,11 +44,152 @@ import {
 import {
   executeTool,
 } from './tool-executor'
-import { flagMode } from '@/lib/feature-flags'
-import { exec } from 'child_process'
+import { flagMode, isFlagEnabled } from '@/lib/feature-flags'
+import { exec, execFile } from 'child_process'
 import { promisify } from 'util'
 
 const execAsync = promisify(exec)
+// Phase 3 audit fix (Task 9): execFileAsync passes argv as array — bypasses
+// shell entirely. Used by Phase 4.3 (staging branch) git commands to avoid
+// shell interpolation of user-controlled sessionId values.
+const execFileAsync = promisify(execFile)
+
+// ==================== v2.1 Phase 4 — Process, Safety, Plan Mode, Cron ====================
+//
+// Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 4 (lines 245-281)
+//
+// 4.1 — Auto-checkpoint before risky ops (file_edit/file_delete/file_multi_edit/git_commit/run_tests)
+// 4.2 — Auto-restore on verify failure (TL checkpoint verify returns PIVOT/ESCALATE)
+// 4.3 — Staging branch per workflow (code-team/<sessionId>) — all edits target this branch
+//
+// All three behaviors are feature-flagged so operators can flip them off without
+// code changes. See feature-flags.ts Phase 4 block.
+
+import {
+  autoCheckpointBeforeRiskyOp,
+  autoRestoreOnVerifyFailure,
+} from '@/lib/workspace/neo4j-checkpoint'
+import { getFsCheckpoint } from '@/lib/workspace/fs-checkpoint'
+
+/** Operations that trigger auto-checkpoint BEFORE they execute. */
+const RISKY_OPS = new Set<string>([
+  'file_edit', 'file_delete', 'file_multi_edit', 'git_commit', 'run_tests',
+])
+
+/**
+ * Phase 4.3 — Create a git staging branch `code-team/<sessionId>` from the
+ * current HEAD before the workflow starts. All file_edit/git_commit ops during
+ * the workflow target this branch (not main). Gated by ENABLE_STAGING_BRANCH.
+ *
+ * Strategy:
+ *   1. Check `git status --porcelain` — if uncommitted changes, warn + skip
+ *      (we never disrupt the user's working tree).
+ *   2. Capture current branch (default = main). NEVER operate on a detached HEAD.
+ *   3. `git checkout -b code-team/<sessionId>` — fails silently if branch exists.
+ *
+ * Implementation: uses execFileAsync to avoid shell interpolation of the
+ * sessionId (Phase 3 audit fix Task 9 — never shell-interpolate user input).
+ *
+ * Returns the staging branch name on success, null on failure/skip.
+ */
+async function createStagingBranch(sessionId: string): Promise<string | null> {
+  if (!isFlagEnabled('ENABLE_STAGING_BRANCH')) return null
+
+  const workspaceRoot = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const branchName = `code-team/${sessionId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60)}`
+
+  try {
+    // 1. Check git state — refuse if working tree is dirty
+    const statusResult = await execFileAsync('git', ['status', '--porcelain'], {
+      cwd: workspaceRoot,
+      timeout: 10_000,
+      maxBuffer: 1024 * 1024,
+    })
+    if (statusResult.stdout.trim() !== '') {
+      console.warn(`[Workflow] Staging branch skipped — working tree has uncommitted changes (git status --porcelain returned ${statusResult.stdout.trim().split('\n').length} line(s))`)
+      return null
+    }
+
+    // 2. Check if branch already exists — if so, check it out (idempotent re-run)
+    const branchCheck = await execFileAsync('git', ['branch', '--list', branchName], {
+      cwd: workspaceRoot,
+      timeout: 10_000,
+    })
+    if (branchCheck.stdout.trim() !== '') {
+      // Branch exists — just check it out
+      await execFileAsync('git', ['checkout', branchName], {
+        cwd: workspaceRoot,
+        timeout: 10_000,
+      })
+      console.log(`[Workflow] Staging branch reused: ${branchName} (already existed, checked out)`)
+      return branchName
+    }
+
+    // 3. Create + checkout the new branch
+    await execFileAsync('git', ['checkout', '-b', branchName], {
+      cwd: workspaceRoot,
+      timeout: 10_000,
+    })
+    console.log(`[Workflow] Staging branch created: ${branchName}`)
+    return branchName
+  } catch (err) {
+    console.warn(
+      `[Workflow] Staging branch setup failed (non-blocking): ${err instanceof Error ? err.message : String(err)} — workflow proceeds on current branch`,
+    )
+    return null
+  }
+}
+
+/**
+ * Phase 4.3 — Merge the staging branch back to its parent branch (typically main).
+ * Called at workflow end. Skipped if ENABLE_STAGING_BRANCH is off OR if the
+ * staging branch was never created (e.g. dirty working tree prevented creation).
+ *
+ * Strategy: `git checkout main && git merge --no-ff code-team/<sessionId>`
+ * On merge conflict: log + leave the staging branch for manual resolution.
+ */
+async function mergeStagingBranch(stagingBranch: string | null, sessionId: string): Promise<void> {
+  if (!isFlagEnabled('ENABLE_STAGING_BRANCH') || !stagingBranch) return
+
+  const workspaceRoot = process.env.OPENCODE_WORKSPACE || process.cwd()
+
+  try {
+    // Capture the parent branch (the branch we were on before staging).
+    // We assume 'main' as the parent — this is configurable via env if needed.
+    const parentBranch = process.env.STAGING_PARENT_BRANCH || 'main'
+
+    // Check out parent + merge staging
+    try {
+      await execFileAsync('git', ['checkout', parentBranch], {
+        cwd: workspaceRoot,
+        timeout: 10_000,
+      })
+    } catch (err) {
+      console.warn(`[Workflow] Could not checkout parent ${parentBranch}: ${err instanceof Error ? err.message : String(err)} — leaving staging branch ${stagingBranch} for manual merge`)
+      return
+    }
+
+    // Merge with --no-ff so we always get a merge commit (preserves staging lineage)
+    await execFileAsync('git', ['merge', '--no-ff', '-m', `Merge staging branch ${stagingBranch} (session ${sessionId})`, stagingBranch], {
+      cwd: workspaceRoot,
+      timeout: 30_000,
+    })
+    console.log(`[Workflow] Staging branch ${stagingBranch} merged into ${parentBranch}`)
+  } catch (err) {
+    console.warn(
+      `[Workflow] Staging branch merge FAILED (non-blocking): ${err instanceof Error ? err.message : String(err)} — leaving ${stagingBranch} for manual resolution`,
+    )
+  }
+}
+
+/**
+ * Phase 4.3 — Get workspace root for fs-checkpoint.
+ * Cached on first call per process.
+ */
+function getWorkspaceRoot(): string {
+  return process.env.OPENCODE_WORKSPACE || process.cwd()
+}
+
 
 // ==================== v2.1 Phase 1a.3: QUALITY GATE ====================
 //
@@ -618,6 +759,22 @@ async function runPipeline(
   const tlAgent = ctx.resolvedAgentsCache.get('TL')
   const completedAgents: string[] = tlAgent ? [tlAgent.name] : ['APEX'] // TL already completed in Step 1
 
+  // ===== v2.1 Phase 4.3 — Staging branch per workflow =====
+  // All file_edit/git_commit ops during the workflow target this branch (not main).
+  // Created BEFORE agents run so the first edit lands on the staging branch.
+  // Gated by ENABLE_STAGING_BRANCH (default true in .env). If git working tree
+  // is dirty or git is unavailable, we warn + skip (don't block the workflow).
+  const stagingBranch = await createStagingBranch(sessionId)
+  if (stagingBranch) {
+    emit({
+      type: 'checkpoint',
+      after: 'TL',
+      step: 'analyze',
+      decision: 'STAGING_BRANCH_CREATED',
+      reasoning: `Edits target ${stagingBranch} (will be merged back at workflow end)`,
+    } as WorkflowEvent)
+  }
+
   // ===== RESOLVE ALL PIPELINE AGENTS (Agent Resolution Layer — C1 Fix) =====
   const uniquePositions = [...new Set(pipeline.map(s => s.position))]
   const resolutionResult = await resolveAllAgents(uniquePositions)
@@ -752,6 +909,16 @@ async function runPipeline(
           agent: tlName,
           message: `ESCALATE sau ${step.position}: ${verifyResult.reasoning}`,
         })
+
+        // ===== v2.1 Phase 4.2 — Auto-restore on verify failure =====
+        // Spec line 253: "When TL checkpoint verify returns 'PIVOT' or 'ESCALATE'
+        // or a verify error occurs, auto-restore the latest checkpoint for that session."
+        // Honor ENABLE_AUTO_RESTORE flag (off | warn | strict).
+        await autoRestoreOnVerifyFailure({
+          sessionId,
+          reason: `ESCALATE sau ${step.position}: ${verifyResult.reasoning}`,
+        })
+
         // Still complete the session as failed
         const totalDuration = Date.now() - workflowStartTime
         await completeSession(sessionId, 'failed', totalDuration)
@@ -760,6 +927,15 @@ async function runPipeline(
       }
       if (verifyResult.decision === 'PIVOT') {
         spec = verifyResult.updatedSpec || spec
+
+        // ===== v2.1 Phase 4.2 — Auto-restore on verify failure (PIVOT case) =====
+        // PIVOT means the direction needs to change → restore the latest checkpoint
+        // so the agent doesn't continue building on a wrong foundation.
+        await autoRestoreOnVerifyFailure({
+          sessionId,
+          reason: `PIVOT sau ${step.position}: ${verifyResult.reasoning}`,
+        })
+
         emit({
           type: 'checkpoint',
           after: step.position,
@@ -777,6 +953,11 @@ async function runPipeline(
       }
     }
   }
+
+  // ===== v2.1 Phase 4.3 — Merge staging branch back to parent =====
+  // Called at workflow end (success or completion_with_errors). Skipped on
+  // workflow failure (escalated) — staging branch is left for manual inspection.
+  await mergeStagingBranch(stagingBranch, sessionId)
 
   // ===== WORKFLOW DONE =====
   const totalDuration = Date.now() - workflowStartTime
@@ -1068,6 +1249,57 @@ async function runAgentStep(params: {
         tool: tc.name,
         detail: JSON.stringify(tc.args).slice(0, 200),
       })
+
+      // ===== v2.1 Phase 4.1 — Auto-checkpoint BEFORE risky ops =====
+      // Spec line 252: "Auto-checkpoint BEFORE risky ops (file_edit/file_delete/
+      // file_multi_edit/git_commit/run_tests) in workflow-engine.ts executeTool
+      // calls — wrap with try/finally".
+      //
+      // Strategy: if the tool being called is in RISKY_OPS, take a differential
+      // Neo4j checkpoint + fs-checkpoint BEFORE calling executeTool. The checkpoint
+      // is fire-and-forget (errors swallowed) so a checkpoint failure never blocks
+      // the actual operation.
+      if (RISKY_OPS.has(tc.name)) {
+        try {
+          // 1. Neo4j differential checkpoint (Neo4j graph state)
+          await autoCheckpointBeforeRiskyOp({
+            sessionId,
+            operation: tc.name as 'file_edit' | 'file_delete' | 'file_multi_edit' | 'git_commit' | 'run_tests',
+            targetFiles: Array.isArray(tc.args?.paths) ? tc.args.paths.map(String) : undefined,
+          })
+
+          // 2. fs-checkpoint for the target files (filesystem state)
+          //    Extract the file path from the tool args (varies per tool).
+          const targetPaths: string[] = []
+          const argPath = typeof tc.args?.path === 'string' ? tc.args.path
+            : typeof tc.args?.filePath === 'string' ? tc.args.filePath
+            : ''
+          if (argPath) targetPaths.push(argPath)
+          if (Array.isArray(tc.args?.edits)) {
+            for (const e of tc.args.edits) {
+              if (typeof e?.path === 'string') targetPaths.push(e.path)
+            }
+          }
+          if (Array.isArray(tc.args?.paths)) {
+            for (const p of tc.args.paths) {
+              if (typeof p === 'string') targetPaths.push(p)
+            }
+          }
+          if (targetPaths.length > 0) {
+            const workspaceRoot = getWorkspaceRoot()
+            const fsc = getFsCheckpoint(workspaceRoot)
+            await fsc.createCheckpoint({
+              sessionId,
+              label: `auto-before-${tc.name}`,
+              filePaths: targetPaths,
+            })
+            console.log(`[Workflow] Phase 4.1 fs-checkpoint created (before ${tc.name}, ${targetPaths.length} file(s)) for session ${sessionId}`)
+          }
+        } catch (err) {
+          // Never block the operation due to checkpoint failure
+          console.warn(`[Workflow] Phase 4.1 auto-checkpoint FAILED (non-blocking): ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
 
       const toolResult = await executeTool(tc.name, tc.args)
       const toolDuration = Date.now() - toolStartTime
@@ -1403,7 +1635,7 @@ function parseToolCallsFromOutput(output: string): Array<{ id: string; name: str
 
   // Pattern 2: Direct tool invocation like opencode({...})
   if (calls.length === 0) {
-    const validToolNames = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call']
+    const validToolNames = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron']
     const regex2 = new RegExp(`(${validToolNames.join('|')})\\s*\\(\\s*\\{`, 'g')
     let match2
     while ((match2 = regex2.exec(output)) !== null) {

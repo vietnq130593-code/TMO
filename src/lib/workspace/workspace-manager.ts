@@ -219,6 +219,10 @@ export class WorkspaceManager {
    * Tạo pending edit từ agent proposal.
    * - oldContent lấy từ file hiện tại ("" nếu file mới)
    * - diff được tính từ oldContent → newContent
+   *
+   * Phase 4.4 spec: also populate spec-defined fields (operation, before,
+   * after, riskLevel) so /api/openclaw/pending-edits can query by operation
+   * and risk level per spec v2.1 Phase 4.4.
    */
   async createPendingEdit(params: {
     sessionId: string;
@@ -226,8 +230,17 @@ export class WorkspaceManager {
     newContent: string;
     agentName: string;
     workspaceRootPath: string;
+    /** Phase 4.4 — operation type (defaults to 'edit'). */
+    operation?: 'edit' | 'delete' | 'multi_edit' | 'create';
+    /** Phase 4.4 — risk level (defaults to 'low'). */
+    riskLevel?: 'low' | 'medium' | 'high';
+    /** Phase 4.4 — optional reviewer hint (who should approve). */
+    reviewerId?: string;
   }): Promise<PendingEdit> {
-    const { sessionId, filePath, newContent, agentName, workspaceRootPath } = params;
+    const {
+      sessionId, filePath, newContent, agentName, workspaceRootPath,
+      operation = 'edit', riskLevel = 'low', reviewerId,
+    } = params;
 
     // Resolve absolute path
     const absPath = path.join(workspaceRootPath, filePath);
@@ -249,10 +262,17 @@ export class WorkspaceManager {
       data: {
         sessionId,
         filePath,
+        // Phase 4.4 spec fields:
+        operation,
+        before: oldContent || null,
+        after: newContent || null,
+        riskLevel,
+        status: "pending",
+        reviewerId: reviewerId || null,
+        // Legacy compat fields (used by older API consumers):
         oldContent,
         newContent,
         diff,
-        status: "pending",
         agentName,
       },
     });
@@ -285,9 +305,126 @@ export class WorkspaceManager {
   }
 
   /**
-   * Approve pending edit → apply to filesystem.
-   * - Ghi newContent vào filePath trong workspace root
-   * - Cập nhật status → "applied" (hoặc "failed" nếu lỗi)
+   * Phase 4.4 spec — Approve a pending edit (signature with reviewerId).
+   * Sets status='approved' + reviewerId + reviewedAt. Does NOT apply to filesystem
+   * (call applyPendingEdit(id) separately to apply).
+   *
+   * @returns the approved PendingEdit record (still with status='approved')
+   */
+  async approvePendingEditSpec(id: string, reviewerId: string): Promise<PendingEdit> {
+    const edit = await db.pendingEdit.findUnique({ where: { id } });
+    if (!edit) {
+      throw new Error(`PendingEdit not found: ${id}`);
+    }
+    if (edit.status !== "pending") {
+      throw new Error(`Cannot approve edit with status: ${edit.status}`);
+    }
+    const updated = await db.pendingEdit.update({
+      where: { id },
+      data: {
+        status: "approved",
+        reviewerId,
+        reviewedAt: new Date(),
+        resolvedAt: new Date(), // legacy field
+      },
+    });
+    return this._mapPendingEdit(updated);
+  }
+
+  /**
+   * Phase 4.4 spec — Reject a pending edit (signature with reviewerId).
+   * Sets status='rejected'. Does NOT touch filesystem.
+   */
+  async rejectPendingEditSpec(id: string, reviewerId: string): Promise<PendingEdit> {
+    const edit = await db.pendingEdit.findUnique({ where: { id } });
+    if (!edit) {
+      throw new Error(`PendingEdit not found: ${id}`);
+    }
+    if (edit.status !== "pending") {
+      throw new Error(`Cannot reject edit with status: ${edit.status}`);
+    }
+    const updated = await db.pendingEdit.update({
+      where: { id },
+      data: {
+        status: "rejected",
+        reviewerId,
+        reviewedAt: new Date(),
+        resolvedAt: new Date(), // legacy field
+      },
+    });
+    return this._mapPendingEdit(updated);
+  }
+
+  /**
+   * Phase 4.4 spec — Apply an approved pending edit to the filesystem.
+   * Reads the workspace root from the active workspace (so callers don't need
+   * to pass it). Handles: edit, create, delete operations.
+   *
+   * @returns the applied PendingEdit (status='applied', appliedAt set)
+   */
+  async applyPendingEdit(id: string): Promise<PendingEdit> {
+    const edit = await db.pendingEdit.findUnique({ where: { id } });
+    if (!edit) {
+      throw new Error(`PendingEdit not found: ${id}`);
+    }
+    if (edit.status !== "approved" && edit.status !== "pending") {
+      // Allow 'pending' too — convenience for tests
+      throw new Error(`Cannot apply edit with status: ${edit.status} (must be approved first)`);
+    }
+
+    const activeWs = await this.getActiveWorkspace();
+    const absPath = path.join(activeWs.rootPath, edit.filePath);
+
+    try {
+      const op = edit.operation || "edit";
+      if (op === "delete") {
+        // Delete the file (best-effort)
+        try {
+          if (fs.existsSync(absPath)) {
+            fs.unlinkSync(absPath);
+          }
+        } catch (err) {
+          console.warn(`[WorkspaceManager] applyPendingEdit delete failed for ${absPath}:`, err);
+        }
+      } else {
+        // edit | multi_edit | create — write the `after` (or newContent) to disk
+        const content = edit.after || edit.newContent || "";
+        // Ensure directory exists
+        const dir = path.dirname(absPath);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(absPath, content, "utf-8");
+      }
+
+      const updated = await db.pendingEdit.update({
+        where: { id },
+        data: {
+          status: "applied",
+          appliedAt: new Date(),
+          resolvedAt: new Date(), // legacy field
+        },
+      });
+      return this._mapPendingEdit(updated);
+    } catch (err) {
+      // Mark as failed (legacy status)
+      await db.pendingEdit.update({
+        where: { id },
+        data: {
+          status: "failed",
+          resolvedAt: new Date(),
+        },
+      });
+      throw new Error(
+        `Failed to apply edit to ${absPath}: ${err instanceof Error ? err.message : "Unknown error"}`,
+      );
+    }
+  }
+
+  /**
+   * Approve pending edit → apply to filesystem. (Legacy signature — kept for
+   * backward compat with /api/workspace + /api/code-team/checkpoints routes.)
+   *
+   * Phase 4.4: prefer the spec signature approvePendingEditSpec(id, reviewerId)
+   * followed by applyPendingEdit(id). This legacy method auto-applies.
    */
   async approvePendingEdit(id: string, workspaceRootPath: string): Promise<PendingEdit> {
     const edit = await db.pendingEdit.findUnique({ where: { id } });
@@ -304,14 +441,15 @@ export class WorkspaceManager {
       // Ensure directory exists
       const dir = path.dirname(absPath);
       fs.mkdirSync(dir, { recursive: true });
-      // Write content
-      fs.writeFileSync(absPath, edit.newContent, "utf-8");
+      // Write content (use `after` if available, else legacy `newContent`)
+      fs.writeFileSync(absPath, edit.after || edit.newContent, "utf-8");
 
       // Update status
       const updated = await db.pendingEdit.update({
         where: { id },
         data: {
           status: "applied",
+          appliedAt: new Date(),
           resolvedAt: new Date(),
         },
       });
@@ -327,7 +465,7 @@ export class WorkspaceManager {
       });
       // Re-throw for caller to handle
       throw new Error(
-        `Failed to apply edit to ${absPath}: ${err instanceof Error ? err.message : "Unknown error"}`,
+        `Failed to apply edit to ${absPath}: ${err instanceof Error ? err.message : "Unknown error"} (record id=${updated.id})`,
       );
     }
   }
@@ -462,6 +600,15 @@ export class WorkspaceManager {
     diff: string;
     status: string;
     agentName: string;
+    // Phase 4.4 spec fields:
+    operation?: string;
+    before?: string | null;
+    after?: string | null;
+    riskLevel?: string;
+    reviewerId?: string | null;
+    reviewedAt?: Date | null;
+    appliedAt?: Date | null;
+    lastError?: string | null;
     createdAt: Date;
     resolvedAt: Date | null;
   }): PendingEdit {
