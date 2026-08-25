@@ -65,11 +65,29 @@ try {
 // ============================================
 const app = new Hono()
 
-app.use('*', cors({
-  origin: '*',
-  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
-}))
+// ============================================
+// Phase 1: CORS bind specific origin + token auth + OPTIONS preflight
+// (replaces cors({origin:'*'}) — C3 fix)
+// ============================================
+const ALLOWED_ORIGINS = (process.env.OPENCODE_CORS_ORIGINS || 'http://localhost:3000').split(',').map(s => s.trim()).filter(Boolean)
+
+app.use('*', async (c, next) => {
+  const origin = c.req.header('Origin')
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    c.header('Access-Control-Allow-Origin', origin)
+    c.header('Vary', 'Origin')
+    c.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,PATCH,OPTIONS')
+    c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-TMO-API-Token')
+    c.header('Access-Control-Max-Age', '86400')
+  }
+  if (c.req.method === 'OPTIONS') return c.body('', 204)
+  // Phase 1: mọi request phải có X-TMO-API-Token (C1 fix)
+  const token = c.req.header('X-TMO-API-Token')
+  const expected = process.env.TMO_API_TOKEN
+  if (!expected) return c.json({ error: 'TMO_API_TOKEN not configured' }, 503)
+  if (token !== expected) return c.json({ error: 'Unauthorized' }, 401)
+  return next()
+})
 
 // HEALTH CHECK
 app.get('/health', (c) => {
@@ -232,9 +250,26 @@ app.post('/execute', async (c) => {
   const { command, sessionId } = body
   if (!command) return c.json({ error: 'command is required' }, 400)
 
-  const DANGEROUS = ['rm -rf /', 'mkfs', 'dd if=', ':(){:|:&};:']
-  for (const d of DANGEROUS) {
-    if (command.toLowerCase().includes(d)) return c.json({ error: 'Command blocked' }, 403)
+  // Phase 1: expanded dangerous-pattern blocklist — exact-token + wildcard match (C4 fix)
+  const DANGEROUS_PATTERNS = [
+    'rm -rf /', 'rm -rf ~', 'rm -rf /home', 'rm -rf /usr', 'rm -rf /var',
+    'rm -rf /opt', 'rm -rf /etc', 'rm -rf /boot', 'rm -rf /sys', 'rm -rf /proc',
+    'mkfs', 'dd if=', 'dd of=/dev/',
+    ':(){:|:&};:', ':(){ :|:& };:',
+    'chmod 777', 'chmod -R 777',
+    'find / -delete', 'find / -exec',
+    '>/dev/sda',
+    'shutdown', 'reboot', 'halt', 'init 0', 'init 6',
+  ]
+  const DANGEROUS_WILDCARD = ['curl *| *sh', 'wget *| *sh', 'curl *| *bash', 'wget *| *bash', 'curl * | sh', 'wget * | sh']
+  const fullCmdLower = command.toLowerCase()
+  const tokens = command.split(/\s+/).map(t => t.toLowerCase())
+  for (const p of DANGEROUS_PATTERNS) {
+    if (tokens.includes(p) || fullCmdLower.includes(p)) return c.json({ error: `Blocked dangerous pattern: ${p}` }, 403)
+  }
+  for (const w of DANGEROUS_WILDCARD) {
+    const regex = new RegExp('^' + w.replace(/\*/g, '.*').replace(/\|/g, '\\|') + '$')
+    if (regex.test(fullCmdLower)) return c.json({ error: `Blocked dangerous pattern: ${w}` }, 403)
   }
 
   try {

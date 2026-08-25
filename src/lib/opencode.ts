@@ -15,9 +15,16 @@ const OPENCODE_URL = process.env.OPENCODE_SERVER_URL || 'http://127.0.0.1:18790'
 export async function opencodeFetch(path: string, options?: RequestInit): Promise<Response> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 15000) // 15s default timeout
+  // Phase 1: inject X-TMO-API-Token — opencode-server requires it for EVERY request.
+  // Without this, service-manager health checks get 401 → restart loop.
+  const headers = new Headers(options?.headers)
+  if (!headers.has('X-TMO-API-Token') && process.env.TMO_API_TOKEN) {
+    headers.set('X-TMO-API-Token', process.env.TMO_API_TOKEN)
+  }
   try {
     const res = await fetch(`${OPENCODE_URL}${path}`, {
       ...options,
+      headers,
       signal: controller.signal,
     })
     return res

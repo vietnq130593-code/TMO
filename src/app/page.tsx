@@ -13653,6 +13653,22 @@ export default function Home() {
     mq.addEventListener('change', handler)
     return () => mq.removeEventListener('change', handler)
   }, [])
+
+  // Phase 2 fix: set tmo_api_token HttpOnly cookie ngay khi page mount.
+  // Cookie được tự gửi kèm mọi request /api/workspace + /api/opencode/*
+  // → middleware chấp nhận (cookie path) — không cần token trong localStorage.
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/auth/setup', { credentials: 'same-origin' })
+      .then(r => r.json())
+      .then(data => {
+        if (!cancelled && data?.ok) {
+          // Cookie đã set — các request tiếp theo tự mang theo.
+        }
+      })
+      .catch(err => console.warn('[auth/setup] cookie setup failed:', err))
+    return () => { cancelled = true }
+  }, [])
   const [gitPulling, setGitPulling] = useState(false)
   const [gitPullDialogOpen, setGitPullDialogOpen] = useState(false)
   const [gitPullRepoUrl, setGitPullRepoUrl] = useState('')
