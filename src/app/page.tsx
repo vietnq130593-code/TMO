@@ -57,7 +57,10 @@ import {
   AGENT_COLORS,
   POSITION_COLORS,
 } from '@/lib/agent-constants'
-import { CodeEditor, type OpenFile } from '@/components/code-editor/CodeEditor'
+import { CodeEditor, detectLanguage, type OpenFile } from '@/components/code-editor/CodeEditor'
+import { DiffViewer } from '@/components/code-editor/DiffViewer'
+import { PendingEditModal } from '@/components/code-editor/PendingEditModal'
+import { SearchPanel } from '@/components/code-editor/SearchPanel'
 
 // ==================== TYPES ====================
 
@@ -10814,6 +10817,11 @@ function CodeTabContent() {
 
   // Diff Viewer toggle
   const [diffViewActive, setDiffViewActive] = useState(false)
+  // Phase 9: PendingEdit review (AI edit-before-write approval queue)
+  const [pendingEdits, setPendingEdits] = useState<Array<Record<string, unknown>>>([])
+  const [showPendingModal, setShowPendingModal] = useState(false)
+  // Phase 10: workspace-wide search panel (ripgrep-backed)
+  const [showSearchPanel, setShowSearchPanel] = useState(false)
 
   // Local File Explorer state
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(() => {
@@ -10986,6 +10994,77 @@ function CodeTabContent() {
       setTreeLoading(false)
     }
   }, [workspaceRoot])
+
+  // Phase 9: fetch AI edits waiting for review (before/after + approve/reject/apply lifecycle).
+  // NOTE: no synchronous setState here — this is also called directly from an
+  // effect (30s poll) and react-hooks/set-state-in-effect must stay quiet.
+  const loadPendingEdits = useCallback(async () => {
+    try {
+      const res = await authedFetch('/api/openclaw/pending-edits?status=pending')
+      const d = await res.json().catch(() => ({ ok: false }))
+      if (d.ok) setPendingEdits(Array.isArray(d.edits) ? d.edits : [])
+    } catch { /* offline — keep current list */ }
+  }, [])
+
+  // Phase 9: initial load + 30s poll. CodeTabContent only mounts while the
+  // Code tab is visible, so being mounted IS the visibility gate. The initial
+  // fetch goes through a 0ms timeout so no setState runs synchronously in the
+  // effect body (react-hooks/set-state-in-effect stays at baseline).
+  useEffect(() => {
+    const initial = setTimeout(() => { void loadPendingEdits() }, 0)
+    const timer = setInterval(() => { void loadPendingEdits() }, 30000)
+    return () => { clearTimeout(initial); clearInterval(timer) }
+  }, [loadPendingEdits])
+
+  // Phase 10: rename/move a file or directory (prompt for the new path)
+  const handleRenameFile = useCallback(async (filePath: string, name: string) => {
+    if (!workspaceRoot) return
+    const newPath = window.prompt('Đường dẫn mới:', filePath)
+    if (!newPath || !newPath.trim() || newPath.trim() === filePath) return
+    try {
+      const res = await authedFetch('/api/opencode/files/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldPath: filePath, newPath: newPath.trim(), root: workspaceRoot }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        toast({ title: 'Đã đổi tên', description: `${name} → ${String(newPath.split('/').pop())}` })
+        // keep open tabs pointing at the new path
+        const next = openFilesRef.current.map(f => (f.path === filePath ? { ...f, path: data.newPath || newPath.trim() } : f))
+        setOpenFiles(next)
+        loadFileTree()
+      } else {
+        toast({ title: 'Lỗi đổi tên', description: data.error, variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: 'Lỗi', description: 'Network error', variant: 'destructive' })
+    }
+  }, [workspaceRoot, loadFileTree])
+
+  // Phase 10: delete a file or directory (confirm first; server has path-escape guard)
+  const handleDeleteFile = useCallback(async (filePath: string, name: string) => {
+    if (!workspaceRoot) return
+    if (!window.confirm(`Xóa ${name}?`)) return
+    try {
+      const res = await authedFetch('/api/opencode/files/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath, root: workspaceRoot }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        toast({ title: 'Đã xóa', description: name })
+        const idx = openFilesRef.current.findIndex(f => f.path === filePath)
+        if (idx >= 0) handleCloseFile(idx)
+        loadFileTree()
+      } else {
+        toast({ title: 'Lỗi xóa file', description: data.error, variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: 'Lỗi', description: 'Network error', variant: 'destructive' })
+    }
+  }, [workspaceRoot, handleCloseFile, loadFileTree])
 
   // Create new file handler
   const handleCreateFile = useCallback(async () => {
@@ -11880,6 +11959,7 @@ function CodeTabContent() {
         switch (tool) {
           case 'file_edit': case 'file_multi_edit': {
             void loadFileTree()
+            void loadPendingEdits()
             if (absPath) { void handleFileSelect(absPath, { refresh: true }); toast({ title: `✅ AI đã sửa ${fileName}` }) }
             break
           }
@@ -11898,7 +11978,7 @@ function CodeTabContent() {
         }
       }
     } catch (err) { console.warn('[ai-tool-event]', err) }
-  }, [workspaceRoot, handleFileSelect, loadFileTree, openAiPreview])
+  }, [workspaceRoot, handleFileSelect, loadFileTree, loadPendingEdits, openAiPreview])
 
   // Phase 7: subscribe CodeTabContent to AI tool events dispatched by the
   // chat submit handler's workflow SSE reader.
@@ -12050,7 +12130,7 @@ function CodeTabContent() {
           <div key={node.path}>
             <button
               onClick={() => isDir ? toggleDir(node.path) : handleFileSelect(node.path)}
-              className={`w-full flex items-center gap-1.5 px-2 py-1 text-[11px] hover:bg-emerald-500/10 transition-colors rounded-sm ${
+              className={`group relative w-full flex items-center gap-1.5 px-2 py-1 text-[11px] hover:bg-emerald-500/10 transition-colors rounded-sm ${
                 isSelected ? 'bg-emerald-500/20 text-emerald-300' : 'text-stone-300'
               }`}
               style={{ paddingLeft: `${depth * 12 + 8}px` }}
@@ -12066,9 +12146,19 @@ function CodeTabContent() {
                 <FileCode className={`h-3.5 w-3.5 ${iconColor} flex-shrink-0`} />
               )}
               <span className="truncate">{node.name}</span>
-              {!isDir && node.size !== undefined && (
-                <span className="ml-auto text-[9px] text-stone-600 flex-shrink-0">
-                  {node.size < 1024 ? `${node.size}B` : node.size < 1024 * 1024 ? `${(node.size / 1024).toFixed(1)}K` : `${(node.size / 1024 / 1024).toFixed(1)}M`}
+              {!isDir && (
+                <span className="ml-auto flex items-center flex-shrink-0">
+                  {node.size !== undefined && (
+                    <span className="text-[9px] text-stone-600">
+                      {node.size < 1024 ? `${node.size}B` : node.size < 1024 * 1024 ? `${(node.size / 1024).toFixed(1)}K` : `${(node.size / 1024 / 1024).toFixed(1)}M`}
+                    </span>
+                  )}
+                  <span role="button" title="Đổi tên" className="opacity-0 group-hover:opacity-100 text-stone-500 hover:text-emerald-300 px-1" onClick={(e) => { e.stopPropagation(); void handleRenameFile(node.path, node.name) }}>
+                    <Pencil className="h-2.5 w-2.5" />
+                  </span>
+                  <span role="button" title="Xóa" className="opacity-0 group-hover:opacity-100 text-stone-500 hover:text-red-400 px-1" onClick={(e) => { e.stopPropagation(); void handleDeleteFile(node.path, node.name) }}>
+                    <Trash2 className="h-2.5 w-2.5" />
+                  </span>
                 </span>
               )}
             </button>
@@ -12076,7 +12166,7 @@ function CodeTabContent() {
           </div>
         )
       })
-  }, [expandedDirs, selectedFile, fileSearch, toggleDir, handleFileSelect])
+  }, [expandedDirs, selectedFile, fileSearch, toggleDir, handleFileSelect, handleRenameFile, handleDeleteFile])
 
   // Session status badge
   const statusBadge = useCallback((status: string) => {
@@ -12166,6 +12256,15 @@ function CodeTabContent() {
                   <Button
                     size="sm"
                     variant="outline"
+                    className={`h-7 w-7 p-0 border-emerald-400/50 ${showSearchPanel ? 'text-emerald-300 bg-emerald-500/20' : 'text-emerald-400 hover:bg-emerald-500/10'}`}
+                    onClick={() => setShowSearchPanel(!showSearchPanel)}
+                    title="Tìm kiếm trong workspace (rg)"
+                  >
+                    <Search className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
                     className="h-7 w-7 p-0 border-emerald-400/50 text-emerald-400 hover:bg-emerald-500/10"
                     onClick={() => { setShowNewFolderInput(true); setNewFolderName('') }}
                     title="Tạo thư mục mới"
@@ -12215,6 +12314,20 @@ function CodeTabContent() {
               />
               <Button size="sm" className="h-7 px-2 text-[10px] bg-emerald-600 hover:bg-emerald-500 text-white" onClick={handleCreateFolder}>Tạo</Button>
               <Button size="sm" variant="ghost" className="h-7 px-2 text-[10px] text-stone-400" onClick={() => setShowNewFolderInput(false)}>Hủy</Button>
+            </div>
+          )}
+
+          {/* Phase 10: workspace-wide search panel (ripgrep) */}
+          {showSearchPanel && (
+            <div className="border-b border-emerald-500/10 bg-slate-950/95 p-2" style={{ maxHeight: '300px' }}>
+              <SearchPanel
+                root={workspaceRoot || undefined}
+                onResultClick={(path, _line) => {
+                  void handleFileSelect(path.startsWith('/') ? path : `${workspaceRoot}/${path}`)
+                  setShowSearchPanel(false)
+                }}
+                onClose={() => setShowSearchPanel(false)}
+              />
             </div>
           )}
 
@@ -12426,6 +12539,15 @@ function CodeTabContent() {
                         >
                           <FileCode className="h-3 w-3 mr-0.5" /> Diff
                         </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-5 text-[8px] px-1.5 text-stone-500 hover:text-emerald-300"
+                          onClick={() => { setShowPendingModal(true); void loadPendingEdits() }}
+                          title="Xem các AI edit chờ duyệt"
+                        >
+                          📝 Pending{pendingEdits.length > 0 ? ` (${pendingEdits.length})` : ''}
+                        </Button>
                         {editedContent !== null && (
                           <Button
                             size="sm"
@@ -12449,15 +12571,31 @@ function CodeTabContent() {
                         )}
                       </div>
                     </div>
-                    {/* Phase 8: Monaco multi-tab editor (locally vendored /monaco-vs, no CDN) */}
-                    <CodeEditor
-                      openFiles={openFiles}
-                      activeFileIndex={activeFileIndex}
-                      onActiveChange={setActiveFileIndex}
-                      onContentChange={handleContentChange}
-                      onSave={(idx) => void handleSaveFile(idx)}
-                      onClose={handleCloseFile}
-                    />
+                    {/* Phase 9: session diff view (buffer vs original). Phase 8 Monaco multi-tab editor otherwise (locally vendored /monaco-vs, no CDN). */}
+                    {diffViewActive && activeOpenFile ? (
+                      <div className="flex-1 min-h-0 flex flex-col">
+                        <div className="flex items-center justify-between px-3 py-1.5 bg-slate-950/90 border-b border-emerald-500/10">
+                          <span className="text-[10px] font-mono text-emerald-300">Diff: {activeOpenFile.path.split('/').pop()}</span>
+                          <span className="text-[9px] text-stone-500">{activeOpenFile.isDirty ? 'thay đổi chưa lưu (so với nội dung gốc)' : 'không có thay đổi trong session'}</span>
+                        </div>
+                        <div className="flex-1 min-h-0">
+                          <DiffViewer
+                            originalContent={activeOpenFile.originalContent}
+                            modifiedContent={activeOpenFile.content}
+                            language={detectLanguage(activeOpenFile.path)}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <CodeEditor
+                        openFiles={openFiles}
+                        activeFileIndex={activeFileIndex}
+                        onActiveChange={setActiveFileIndex}
+                        onContentChange={handleContentChange}
+                        onSave={(idx) => void handleSaveFile(idx)}
+                        onClose={handleCloseFile}
+                      />
+                    )}
                   </>
                 ) : (
                   <div className="flex flex-col items-center justify-center h-full text-stone-500">
@@ -13361,6 +13499,14 @@ function CodeTabContent() {
         </div>
       </div>
 
+      {/* Phase 9: PendingEdit review modal (portal dialog) */}
+      {showPendingModal && (
+        <PendingEditModal
+          edits={pendingEdits}
+          onRefresh={() => { void loadPendingEdits() }}
+          onClose={() => setShowPendingModal(false)}
+        />
+      )}
     </div>
   )
 }
