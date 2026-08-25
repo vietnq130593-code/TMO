@@ -12226,14 +12226,14 @@ function CodeTabContent() {
   ]
 
   // Model options — NVIDIA NIM only
+  // Audit fix 2026-08-25: previous list had 6/7 models that are DEAD on NVIDIA NIM
+  // (404: deepseek-v4-pro, kimi-k2.6, glm-5.1, minimax-m2.7, qwen3.5-397b; llama-3.3-70b
+  // intentionally dropped for quality). Replaced with models verified working today.
   const MODEL_OPTIONS = [
-    { value: 'deepseek-ai/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
-    { value: 'moonshotai/kimi-k2.6', label: 'Kimi K2.6' },
-    { value: 'z-ai/glm-5.1', label: 'GLM 5.1' },
-    { value: 'minimaxai/minimax-m2.7', label: 'MiniMax M2.7' },
-    { value: 'qwen/qwen3.5-397b-a17b', label: 'Qwen3.5 397B' },
-    { value: 'meta/llama-3.3-70b-instruct', label: 'Llama 3.3 70B' },
-    { value: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B' },
+    { value: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B (nhanh, ổn định)' },
+    { value: 'moonshotai/kimi-k3', label: 'Kimi K3 (reasoning — chậm hơn)' },
+    { value: 'minimaxai/minimax-m3', label: 'MiniMax M3' },
+    { value: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'Nemotron 3 Ultra 550B' },
   ]
 
   return (
