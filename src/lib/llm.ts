@@ -2014,7 +2014,13 @@ async function tryNvidiaSlot(slotIndex: number, prompt: string, systemPrompt: st
     {},
     30000, // 30s rate limit cooldown — shorter to recover faster from temporary rate limits
     temperature ?? 0.1,
-    maxTokens ?? 4096,
+    // EXTRACTION MAX_TOKENS FIX 2026-08-27: bumped 4096 → 16384.
+    // nemotron-3-ultra-550b là reasoning model — sinh chain-of-thought trước khi
+    // xuất JSON. Với 4096 tokens, CoT ngốn 3000-3800 tokens → JSON bị cắt giữa
+    // chừng → parseLLMResponse trả null → 0 entities → document "thành công" với
+    // kết quả rỗng (triệu chứng "dừng sau vài nghìn token" trên UI).
+    // 16384 tokens cho phép CoT + JSON mà không bị truncation.
+    maxTokens ?? 16384,
     agentId,
     agentName,
     isFallback,

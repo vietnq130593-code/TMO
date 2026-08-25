@@ -934,6 +934,13 @@ CRITICAL RULES:
 - Prefer extracting FEWER entities with RICHER relationships over MANY entities with FEW or NO relationships.
 - Aim for a 1:1 or higher ratio of relationships to entities. Each entity should be connected to the knowledge graph.
 
+CRITICAL OUTPUT FORMAT (FIX 2026-08-27 — suppress chain-of-thought):
+- Output ONLY valid JSON. No other text, no markdown fences, no explanation.
+- Do NOT include any chain-of-thought, reasoning, or analysis before/after the JSON.
+- The very FIRST character of your response MUST be '{'.
+- The very LAST character of your response MUST be '}'.
+- If you need to think internally, do it silently — never emit that thinking in the response.
+
 Output ONLY valid JSON: { "entities": [{ "name": "", "type": "", "description": "", "properties": {} }], "relationships": [{ "source": "", "target": "", "type": "", "description": "" }], "domain": "..." }`
 }
 
@@ -943,6 +950,37 @@ function parseLLMResponse(text: string): { entities: Array<{ name: string; type:
     const codeBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/)
     if (codeBlockMatch) try { rawJson = JSON.parse(codeBlockMatch[1].trim()) } catch { /* ignore */ }
     if (!rawJson) { const jsonMatch = text.match(/\{[\s\S]*\}/); if (jsonMatch) try { rawJson = JSON.parse(jsonMatch[0]) } catch { /* ignore */ } }
+
+    // TRUNCATION RECOVERY (FIX 2026-08-27): nemotron-3-ultra-550b là reasoning
+    // model — khi max_tokens cắt giữa chừng, JSON không có `}` kết thúc và cả 2
+    // regex trên đều fail. Thử close braces còn thiếu để recover ít nhất các
+    // entities/relationships đã emit trước khi bị cắt.
+    if (!rawJson) {
+      const start = text.indexOf('{')
+      if (start >= 0) {
+        let partial = text.slice(start).trim()
+        // Cắt token cuối chưa hoàn chỉnh (sau dấu phẩy hoặc giữa string/value)
+        // Bỏ phần cuối sau dấu phẩy cuối cùng để tránh lỗi "Unexpected token"
+        partial = partial.replace(/,\s*$/, '')
+        // Cắt đứt một string value đang mở — bỏ `"` cuối nếu số lượng quote lẻ
+        const quoteCount = (partial.match(/"/g) || []).length
+        if (quoteCount % 2 === 1) partial += '"'
+        // Đếm số brace/bracket chưa đóng và auto-close
+        const openBrace = (partial.match(/{/g) || []).length
+        const closeBrace = (partial.match(/}/g) || []).length
+        const openBracket = (partial.match(/\[/g) || []).length
+        const closeBracket = (partial.match(/\]/g) || []).length
+        partial += ']'.repeat(Math.max(0, openBracket - closeBracket))
+        partial += '}'.repeat(Math.max(0, openBrace - closeBrace))
+        try {
+          rawJson = JSON.parse(partial)
+          console.log(`[Parse] Recovered truncated JSON: added ${Math.max(0, openBracket - closeBracket)} ']' + ${Math.max(0, openBrace - closeBrace)} '}' (original length=${text.length})`)
+        } catch (recoverErr) {
+          // JSON vẫn lỗi — ghi log ngắn để chẩn đoán thay vì nuốt im lặng
+          console.warn(`[Parse] JSON truncation recovery failed: ${recoverErr instanceof Error ? recoverErr.message : String(recoverErr)}. Preview: ${partial.slice(0, 300)}...`)
+        }
+      }
+    }
     if (!rawJson || typeof rawJson !== 'object') return null
     const parsed = rawJson as Record<string, unknown>
 
@@ -1010,13 +1048,34 @@ async function extractFromChunk(chunkContent: string, domain: DocumentDomain, ch
   let model = 'unknown'
   try {
     // Use key-based LLM call for extraction (each doc uses its own dedicated API key)
+    // EXTRACTION MAX_TOKENS FIX 2026-08-27: truyền { maxTokens: 16384 } rõ ràng
+    // để phòng ngược — nếu default trong llm.ts bị đổi về 4096 thì extract
+    // vẫn dùng 16384, tránh JSON bị cắt giữa chừng.
     const result = slotIndex >= 0
-      ? await callLLMSlot(slotIndex, userPrompt, systemPrompt, 'extraction')
-      : await callLLM(userPrompt, systemPrompt, 'extraction')
+      ? await callLLMSlot(slotIndex, userPrompt, systemPrompt, 'extraction', { maxTokens: 16384 })
+      : await callLLM(userPrompt, systemPrompt, 'extraction', { maxTokens: 16384 })
     provider = result.provider; model = result.model
-    if (!result.content) return { entities: [], relationships: [], provider, model }
+
+    // FINISH_REASON='length' WARNING (FIX 2026-08-27): model reasoning bị cắt
+    // max_tokens — JSON chắc chắn chưa hoàn chỉnh, parse sẽ fail hoặc recover
+    // không đầy đủ. Log để chẩn đoán gốc rễ của “dừng sớm sau vài nghìn token”.
+    if (result.finish_reason === 'length') {
+      console.warn(`[Extract] Chunk ${chunkIndex}: finish_reason=length — model output bị cắt tại max_tokens (provider=${provider}/${model}). JSON có thể truncated.`)
+    }
+
+    // EMPTY CONTENT WARNING (FIX 2026-08-27): trước đây trả im lặng 0 entities
+    // mà không log — che giấu rate-limit/auth failures. Giờ log rõ để chẩn đoán.
+    if (!result.content) {
+      console.warn(`[Extract] Chunk ${chunkIndex}: LLM trả content rỗng (provider=${provider}/${model}, finish_reason=${result.finish_reason || 'none'}). Có thể rate-limit/auth error.`)
+      return { entities: [], relationships: [], provider, model }
+    }
+
     const parsed = parseLLMResponse(result.content)
-    if (!parsed) { confidenceScore = 0.3; return { entities: [], relationships: [], provider, model } }
+    if (!parsed) {
+      console.warn(`[Extract] Chunk ${chunkIndex}: parseLLMResponse trả null — JSON không parse được (content length=${result.content.length}, finish_reason=${result.finish_reason || 'none'}). Preview: ${result.content.slice(0, 200)}...`)
+      confidenceScore = 0.3
+      return { entities: [], relationships: [], provider, model }
+    }
     const entities: ExtractedEntity[] = (parsed.entities || []).filter(e => e.name && e.name.trim()).map(e => ({
       name: e.name.trim(), type: normalizeEntityType(e.type || ''), description: (e.description || '').trim(),
       properties: (e.properties && typeof e.properties === 'object' && !Array.isArray(e.properties) ? e.properties : {}) as Record<string, string | number | boolean>,
