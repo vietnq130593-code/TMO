@@ -189,7 +189,13 @@ function getRotatedModels(provider: string, models: string[]): string[] {
   if (models === NVIDIA_EXTRACTION_MODELS) {
     return models // Always [nemotron-550b, gpt-oss-120b]
   }
-  // Non-extraction models: rotate as before
+  // AGENT/CHAT models (MODEL POLICY 2026-08-25): no rotation — kimi-k3 is the
+  // DEFAULT for every agent; the others are sequential failover backups
+  // (not load-balanced), so the order must stay fixed.
+  if (models === NVIDIA_AGENT_MODELS) {
+    return models // Always [kimi-k3, gpt-oss-120b, deepseek, minimax]
+  }
+  // Legacy lists: rotate as before
   const offset = modelRotationCounters[provider] % models.length
   modelRotationCounters[provider]++
   if (offset === 0) return models // No rotation needed
@@ -210,6 +216,18 @@ function getRotatedModels(provider: string, models: string[]): string[] {
 const NVIDIA_EXTRACTION_MODELS = [
   'nvidia/nemotron-3-ultra-550b-a55b',
   'openai/gpt-oss-120b',
+]
+
+/** NVIDIA NIM AGENT/CHAT models — MODEL POLICY 2026-08-25 (user request):
+ *  kimi-k3 là MẶC ĐỊNH cho tất cả agents; các lõi khác là BACKUP theo thứ tự
+ *  (gpt-oss-120b → deepseek-v4-flash → minimax-m3) — chỉ dùng khi kimi-k3
+ *  fail/rate-limit. Không rotation round-robin (backup = failover, không phải
+ *  load-balance) — see getRotatedModels(). */
+const NVIDIA_AGENT_MODELS = [
+  'moonshotai/kimi-k3',
+  'openai/gpt-oss-120b',
+  'deepseek-ai/deepseek-v4-flash-0731',
+  'minimaxai/minimax-m3',
 ]
 
 /** NVIDIA NIM ALL models (2 extraction + 3 agent/chat)
@@ -2002,13 +2020,15 @@ async function tryNvidiaSlot(slotIndex: number, prompt: string, systemPrompt: st
 
 // ==================== LEGACY PROVIDER TRY FUNCTIONS (for callLLM) ====================
 
-/** Try NVIDIA NIM — 4 keys × 4 docs, no daily cap (legacy round-robin) */
+/** Try NVIDIA NIM — 4 keys × 4 docs, no daily cap (legacy round-robin)
+ *  MODEL POLICY 2026-08-25: chat/agent path dùng NVIDIA_AGENT_MODELS —
+ *  kimi-k3 mặc định, các lõi khác failover backup (không rotation). */
 async function tryNvidia(prompt: string, systemPrompt: string | undefined, temperature?: number, maxTokens?: number, agentId?: string, agentName?: string): Promise<LLMResult | null> {
   return tryProviderWithSlotKey(
     -1,
     nvidiaPool,
     'https://integrate.api.nvidia.com/v1/chat/completions',
-    NVIDIA_MODELS,
+    NVIDIA_AGENT_MODELS,
     prompt,
     systemPrompt,
     60000,

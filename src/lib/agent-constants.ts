@@ -42,11 +42,13 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string }
     // Extraction cores (2 lõi trích xuất tài liệu)
     { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b' },
     { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b' },
-    // Agent/Chat cores (kimi-k3 là primary, 3 lõi còn lại là fallback)
-    { id: 'moonshotai/kimi-k3', label: 'kimi-k3' },
-    { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (chat)' },
-    { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash' },
-    { id: 'minimaxai/minimax-m3', label: 'minimax-m3' },
+    // Agent/Chat cores — MODEL POLICY 2026-08-25: kimi-k3 là mặc định cho
+    // TẤT CẢ agents (user policy); deepseek/minimax là backup (global-pool
+    // fallback). gpt-oss-120b dùng chung cho extraction + chat backup (không
+    // liệt kê 2 lần). glm-5.2 đã bị xóa (NIM end-of-life 2026-08-21).
+    { id: 'moonshotai/kimi-k3', label: 'kimi-k3 (mặc định)' },
+    { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash (backup)' },
+    { id: 'minimaxai/minimax-m3', label: 'minimax-m3 (backup)' },
   ],
 }
 

@@ -36,6 +36,11 @@ export interface CodeTeamAgentDef {
 // ===== 5 AGENTS HARDCODED =====
 
 export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
+  // ===== MODEL POLICY (user request 2026-08-25) =====
+  // TẤT CẢ agents mặc định kimi-k3 (moonshotai/kimi-k3).
+  // Các lõi khác (gpt-oss-120b, minimax-m3, deepseek-v4-flash) là BACKUP —
+  // tự kích hoạt qua callLLMForAgent global-pool fallback khi kimi-k3 fail/
+  // rate-limit (xem llm.ts callLLMForAgent Step 2).
   {
     name: 'APEX',
     description: 'TL — Nhìn & Điều hướng. Phân tích yêu cầu, chọn routing, code UI (Fast Track), verify kết quả.',
@@ -58,7 +63,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'programming',
     capable: 'Thiết kế kiến trúc, DB schema, API design, component tree, state management, security architecture',
     provider: 'nvidia',
-    model: 'deepseek-ai/deepseek-v4-flash-0731',
+    model: 'moonshotai/kimi-k3',
     temperature: 0.4,
     maxTokens: 8192,
     team: 'code',
@@ -88,7 +93,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'security',
     capable: 'Code review, tìm bugs, kiểm tra security, fix bugs, iterative refinement',
     provider: 'nvidia',
-    model: 'openai/gpt-oss-120b',
+    model: 'moonshotai/kimi-k3',
     temperature: 0.2,
     maxTokens: 8192,
     team: 'code',
@@ -103,7 +108,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'programming',
     capable: 'Tối ưu performance, refactor code, scalability, best practices, UI+Backend integration',
     provider: 'nvidia',
-    model: 'minimaxai/minimax-m3',
+    model: 'moonshotai/kimi-k3',
     temperature: 0.3,
     maxTokens: 8192,
     team: 'code',

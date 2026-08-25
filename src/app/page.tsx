@@ -8607,7 +8607,8 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                             className={`w-full text-left px-3 py-1.5 text-xs hover:bg-cyan-500/10 transition-colors ${selectedAgentId === agent.id ? 'text-cyan-400' : 'text-stone-300'}`}
                           >
                             {agent.avatar} {agent.name}
-                            <span className="text-stone-500 ml-1">({agent.provider})</span>
+                            {/* Audit fix 2026-08-25: hiển thị MODEL (không chỉ provider) — user cần biết lõi nào đang chọn */}
+                            <span className="text-stone-500 ml-1">({(agent.model || '').split('/').pop() || agent.provider})</span>
                           </button>
                         ))}
                         {agentsLoadError && (
@@ -8751,6 +8752,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                           className={`w-full text-left px-3 py-2 text-xs hover:bg-amber-500/10 transition-colors ${selectedTeam === 'code' ? 'text-amber-400' : 'text-stone-300'}`}
                         >
                           💻 Code
+                          <span className="text-stone-500 ml-1">({smolabAgents.filter((a: any) => a.team === 'code' && a.enabled).length} agents)</span>
                           <div className="flex gap-1 mt-1">
                             {smolabAgents.filter((a: any) => a.team === 'code' && a.enabled).map((a: any) => (
                               <span key={a.id} className="text-[9px] text-stone-500">{a.avatar} {a.position}</span>
@@ -8762,6 +8764,11 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                           className={`w-full text-left px-3 py-2 text-xs hover:bg-amber-500/10 transition-colors ${selectedTeam === 'research' ? 'text-amber-400' : 'text-stone-300'}`}
                         >
                           🔬 Research
+                          <span className="text-stone-500 ml-1">({smolabAgents.filter((a: any) => a.team === 'research' && a.enabled).length} agents)</span>
+                          {/* Audit fix 2026-08-25: cảnh báo team trống ngay trong dropdown — tránh chọn team không có agent rồi chat vô ích */}
+                          {smolabAgents.filter((a: any) => a.team === 'research' && a.enabled).length === 0 && (
+                            <div className="text-[9px] text-amber-500/80 mt-0.5">⚠️ Chưa có agent — tạo trong tab Agents</div>
+                          )}
                           <div className="flex gap-1 mt-1">
                             {smolabAgents.filter((a: any) => a.team === 'research' && a.enabled).map((a: any) => (
                               <span key={a.id} className="text-[9px] text-stone-500">{a.avatar} {a.position}</span>
