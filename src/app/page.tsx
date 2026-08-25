@@ -5197,6 +5197,12 @@ interface EvalRunSummary {
   processedCount: number
   avgRecallAt5?: number
   avgFaithfulness?: number
+  // Task 4 (2026-08-25): coverage split — "did the system attempt an answer"
+  // vs faithfulness's "was the attempted answer correct".
+  avgCoverage?: number
+  avgCondFaithfulness?: number
+  answeredCount?: number
+  refusalCount?: number
   avgF1?: number
   avgLatencyMs?: number
   hallucinationCount?: number
@@ -6140,10 +6146,19 @@ function LearningTabContent() {
             </div>
           )}
 
-          {/* Latest completed run: 5 stat tiles + meta + per-case list */}
+          {/* Latest completed run: 6 stat tiles + meta + per-case list */}
           {evalData?.run ? (
             <>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 mb-2">
+                {/* Task 4: Coverage — fraction of cases the system attempted to
+                    answer (negative cases count refusing as correct "answering"). */}
+                <div className="p-2 bg-slate-950/50 border border-cyan-500/15 rounded-lg text-center">
+                  <Layers className="h-3.5 w-3.5 mx-auto text-cyan-400 mb-0.5" />
+                  <p className="text-base font-bold text-stone-100 tabular-nums">
+                    {((evalData.run.avgCoverage ?? 0) * 100).toFixed(0)}%
+                  </p>
+                  <p className="text-[9px] text-stone-400 uppercase">Coverage</p>
+                </div>
                 <div className="p-2 bg-slate-950/50 border border-cyan-500/15 rounded-lg text-center">
                   <Target className="h-3.5 w-3.5 mx-auto text-cyan-400 mb-0.5" />
                   <p className="text-base font-bold text-stone-100 tabular-nums">
@@ -6151,12 +6166,18 @@ function LearningTabContent() {
                   </p>
                   <p className="text-[9px] text-stone-400 uppercase">Recall@5</p>
                 </div>
+                {/* Task 4: conditional faithfulness — among ANSWERED cases only
+                    (the honest "was the attempted answer right" number). */}
                 <div className="p-2 bg-slate-950/50 border border-cyan-500/15 rounded-lg text-center">
                   <CheckCircle2 className="h-3.5 w-3.5 mx-auto text-cyan-400 mb-0.5" />
                   <p className="text-base font-bold text-stone-100 tabular-nums">
-                    {((evalData.run.avgFaithfulness ?? 0) * 100).toFixed(1)}%
+                    {(evalData.run.avgCondFaithfulness ?? 0) > 0
+                      ? `${((evalData.run.avgCondFaithfulness ?? 0) * 100).toFixed(1)}%`
+                      : '—'}
                   </p>
-                  <p className="text-[9px] text-stone-400 uppercase">Faithfulness</p>
+                  <p className="text-[9px] text-stone-400 uppercase" title="Faithfulness among answered cases only (avg across all cases in parentheses)">
+                    Faith·ans ({((evalData.run.avgFaithfulness ?? 0) * 100).toFixed(0)}%)
+                  </p>
                 </div>
                 <div className="p-2 bg-slate-950/50 border border-cyan-500/15 rounded-lg text-center">
                   <GitBranch className="h-3.5 w-3.5 mx-auto text-cyan-400 mb-0.5" />
@@ -6179,6 +6200,13 @@ function LearningTabContent() {
                   </p>
                   <p className="text-[9px] text-stone-400 uppercase">Avg Latency</p>
                 </div>
+              </div>
+
+              {/* Task 4: answered/refused split line */}
+              <div className="flex items-center gap-3 mb-2 text-[9px] text-stone-500 flex-wrap">
+                <span className="text-emerald-400">{evalData.run.answeredCount ?? 0} answered</span>
+                <span className="text-stone-500">·</span>
+                <span className="text-amber-400">{evalData.run.refusalCount ?? 0} refused (correct for out-of-domain)</span>
               </div>
 
               {/* Run meta line */}

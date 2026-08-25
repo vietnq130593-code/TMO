@@ -28,8 +28,16 @@ const ANSWER_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b'
 /** Pace-limit between cases (ms) — gentle on the shared 4-key NVIDIA budget. */
 const CASE_PACE_MS = 300
 
-/** Max chars of each retrieved chunk embedded into the answer prompt. */
-const CHUNK_PROMPT_TRUNCATE = 500
+/** Max chars of each retrieved chunk embedded into the answer prompt.
+ *  Task 13B (2026-08-25): raised 500 → 2000. At 500 the answer model saw
+ *  fragments too thin to ground an answer on — the Dijkstra case refused
+ *  despite 5 healthy chunks (top-1 denseCos 0.55) because the truncated
+ *  context didn't visibly discuss the question. Measured on this KB
+ *  (500-point Qdrant sample): chunk content runs min 601 / median ~2055 /
+ *  mean ~2100 / max ~2606 chars, so 2000 keeps ~95% of a typical chunk
+ *  (vs ~25% at 500) and holds the top-5 context at ~10k chars — well within
+ *  the answer model's context window. */
+const CHUNK_PROMPT_TRUNCATE = 2000
 
 /** Refusal markers — a negative case answer containing one of these is NOT a hallucination. */
 const REFUSAL_MARKER_RE = /i don'?t know|không (biết|chắc)|no (information|data)|insufficient/i
@@ -54,7 +62,19 @@ function parseExpectedEntities(json: string): ExpectedEntity[] {
   }
 }
 
-/** Build the Step-2 answer prompt: question + top-5 retrieved chunks with scores. */
+/**
+ * Build the Step-2 answer prompt: question + top-5 retrieved chunks with scores.
+ *
+ * ML evaluation fix (Task 2, 2026-08-25): the old prompt's single
+ * "if context is irrelevant, refuse" instruction made the answer model
+ * refuse even when retrieval returned high-scoring, genuinely relevant
+ * chunks (observed: Dijkstra query with 5 chunks at dense cosine ~0.31+
+ * still refused). The prompt now grades the refusal decision explicitly:
+ * strong evidence (chunks present + question overlaps chunk vocabulary)
+ * → answer from context; weak/no evidence → refuse. Refusal remains the
+ * correct behavior for empty context and for negative (out-of-domain)
+ * eval cases.
+ */
 function buildAnswerPrompt(question: string, chunks: Array<{ text: string; score: number }>): string {
   const context =
     chunks.length === 0
@@ -63,9 +83,15 @@ function buildAnswerPrompt(question: string, chunks: Array<{ text: string; score
           .slice(0, 5)
           .map((c, i) => `[${i + 1}] (score ${c.score.toFixed(3)}) ${c.text.slice(0, CHUNK_PROMPT_TRUNCATE)}`)
           .join('\n\n')
+  const hasChunks = chunks.length > 0
   return (
-    `Answer the question using the retrieved context. If context is empty or irrelevant, say "I don't know based on the available knowledge base." ` +
-    `Do not invent facts that are not supported by the context.\n\n` +
+    `Answer the question using the retrieved context below.\n\n` +
+    `Decision rules (follow in order):\n` +
+    `1. If the context is empty, or nothing in it relates to the question topic, say exactly: "I don't know based on the available knowledge base."\n` +
+    (hasChunks
+      ? `2. If one or more context chunks clearly discuss the question's topic — even partially — answer using those chunks. Cite what the chunks say; it is fine if the answer is incomplete. Do NOT refuse just because the coverage is partial. When the context contains passages on the topic, you MUST attempt an answer drawing only on those passages.\n`
+      : `2. (n/a — context is empty)\n`) +
+    `3. Never invent facts not present in the context. Partial, grounded answers are preferred over refusal when relevant evidence exists.\n\n` +
     `Question: ${question}\n\nContext:\n${context}`
   )
 }
@@ -159,6 +185,10 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
     let sumLatency = 0
     let hallucinationCount = 0
     let processed = 0
+    // Task 4: coverage + conditional faithfulness trackers.
+    let answeredCount = 0
+    let refusalCount = 0
+    let sumAnsweredFaithfulness = 0
 
     for (const evalCase of cases) {
       const t0 = Date.now()
@@ -226,6 +256,14 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
       // Negative case: hallucination = answer does NOT contain a refusal marker.
       const hallucinationDetected = isNegativeCase && !REFUSAL_MARKER_RE.test(answer)
 
+      // Task 4 (2026-08-25): coverage — did the system ATTEMPT an answer?
+      // answered = non-empty answer that is NOT a refusal. For negative cases
+      // the semantics invert: refusal IS the correct "answer" → coverage = 1
+      // when the system correctly refused.
+      const isRefusal = REFUSAL_MARKER_RE.test(answer) || answer.trim().length === 0
+      const answered = isNegativeCase ? isRefusal : !isRefusal
+      const coverage = answered ? 1 : 0
+
       // Faithfulness via 3 cross-family judges (median is the robust aggregate).
       const verdict = await judgeAnswer(evalCase.question, evalCase.expectedAnswer, answer, isNegativeCase)
 
@@ -244,6 +282,8 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
           faithfulnessScores: JSON.stringify(verdict.scores),
           extractionF1,
           hallucinationDetected,
+          coverage,
+          answered,
           rawConfidence: kb.confidence, // Prop 3.5 — calibration training X
           latencyMs,
         },
@@ -256,9 +296,16 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
       sumF1 += extractionF1
       sumLatency += latencyMs
       if (hallucinationDetected) hallucinationCount++
+      if (answered) {
+        answeredCount++
+        sumAnsweredFaithfulness += verdict.median
+      } else {
+        refusalCount++
+      }
 
       console.log(
-        `[EvalRunner] Case ${processed}/${cases.length} (${evalCase.category}): recall@5=${recallAt5.toFixed(2)}, ` +
+        `[EvalRunner] Case ${processed}/${cases.length} (${evalCase.category}): coverage=${answered ? 'ANSWERED' : 'refused'}, ` +
+        `recall@5=${recallAt5.toFixed(2)}, ` +
         `faithfulness=${verdict.median.toFixed(2)} [${verdict.scores.map((s) => (s < 0 ? 'fail' : s.toFixed(2))).join(', ')}], ` +
         `f1=${extractionF1.toFixed(2)}, hallucination=${hallucinationDetected}, ${latencyMs}ms — "${evalCase.question.slice(0, 60)}"`
       )
@@ -277,14 +324,21 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
         processedCount: processed,
         avgRecallAt5: processed > 0 ? sumRecall / processed : 0,
         avgFaithfulness: processed > 0 ? sumFaithfulness / processed : 0,
+        avgCoverage: processed > 0 ? answeredCount / processed : 0,
+        avgCondFaithfulness: answeredCount > 0 ? sumAnsweredFaithfulness / answeredCount : 0,
+        answeredCount,
+        refusalCount,
         avgF1: processed > 0 ? sumF1 / processed : 0,
         avgLatencyMs: processed > 0 ? Math.round(sumLatency / processed) : 0,
         hallucinationCount,
       },
     })
     console.log(
-      `[EvalRunner] Run ${runId} completed: ${processed} cases, avgRecall@5=${(processed > 0 ? sumRecall / processed : 0).toFixed(3)}, ` +
-      `avgFaithfulness=${(processed > 0 ? sumFaithfulness / processed : 0).toFixed(3)}, avgF1=${(processed > 0 ? sumF1 / processed : 0).toFixed(3)}, ` +
+      `[EvalRunner] Run ${runId} completed: ${processed} cases, coverage=${answeredCount}/${processed}, ` +
+      `avgRecall@5=${(processed > 0 ? sumRecall / processed : 0).toFixed(3)}, ` +
+      `avgFaithfulness=${(processed > 0 ? sumFaithfulness / processed : 0).toFixed(3)}, ` +
+      `condFaithfulness(answered)=${(answeredCount > 0 ? sumAnsweredFaithfulness / answeredCount : 0).toFixed(3)}, ` +
+      `avgF1=${(processed > 0 ? sumF1 / processed : 0).toFixed(3)}, ` +
       `hallucinations=${hallucinationCount}`
     )
   } catch (err) {

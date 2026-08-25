@@ -74,6 +74,11 @@ export interface UserKBResult {
     score: number
     documentId?: string
     source?: string
+    /** Task 6 (2026-08-25): original dense cosine from Qdrant, preserved
+     *  through hybrid/MMM fusion. The .score field is the normalized fused
+     *  RANK score (top-1 = 1.000 by construction) — use denseScore when you
+     *  need true semantic similarity. */
+    denseScore?: number
   }>
   entities: Array<{
     id: string
@@ -253,6 +258,8 @@ interface PipelineCandidate {
   documentId?: string
   source?: string
   vector?: number[]
+  /** Task 6: original dense cosine, threaded through hybrid fusion. */
+  denseScore?: number
 }
 
 async function searchChunks(
@@ -318,14 +325,21 @@ async function searchChunks(
 
     // ---- Prop 3.7: hybrid BM25+RRF fusion (order + normalized fused score) ----
     if (denseCount > 1 && isFlagEnabled('ENABLE_HYBRID_SEARCH')) {
-      const fused = hybridFuse(query, candidates.map(c => ({ id: c.id, text: c.text, score: c.score })))
+      const fused = hybridFuse(query, candidates.map(c => ({ id: c.id, text: c.text, score: c.score, denseScore: c.score })))
       // hybridFuse returns fresh objects (fused order + normalized rrf score) —
-      // merge back so documentId/source/vector metadata survives.
+      // merge back so documentId/source/vector metadata + denseScore survives.
       const byId = new Map(candidates.map(c => [c.id, c]))
       candidates = fused
         .map(f => {
           const orig = byId.get(f.id)
-          return orig ? { ...orig, score: f.score } : null
+          if (!orig) return null
+          // Conditional spread: exactOptionalPropertyTypes rejects an explicit
+          // `denseScore: undefined` on an optional field.
+          return {
+            ...orig,
+            score: f.score,
+            ...(f.denseScore !== undefined ? { denseScore: f.denseScore } : {}),
+          }
         })
         .filter((c): c is PipelineCandidate => c !== null)
       hybridApplied = true
@@ -352,15 +366,24 @@ async function searchChunks(
 
     // ---- Slice topK + strip vectors (no vector field leak in the public shape) ----
     const final = candidates.slice(0, topK)
+    // Task 6 (2026-08-25): log BOTH scores for the top result — the fused rank
+    // score (normalized, top-1 pins at 1.000 by construction) AND the original
+    // dense cosine. Prevents the "score saturation" misreads observed during
+    // the ML evaluation (displayed 1.000 vs true cosine ~0.31).
+    const topFused = final[0]?.score
+    const topDense = final[0]?.denseScore ?? topFused
     console.log(
-      `[KB-Access] Chunk pipeline: dense=${denseCount} → hybrid=${hybridApplied ? 'Y' : 'N'} → mmr=${mmrApplied ? 'Y' : 'N'} → rerank=${rerankApplied ? 'Y' : 'N'} → final=${final.length} (${Date.now() - pipelineStart}ms)`
+      `[KB-Access] Chunk pipeline: dense=${denseCount} → hybrid=${hybridApplied ? 'Y' : 'N'} → mmr=${mmrApplied ? 'Y' : 'N'} → rerank=${rerankApplied ? 'Y' : 'N'} → final=${final.length}` +
+      (final.length > 0 ? ` | top-1 fused=${topFused?.toFixed(3)} denseCos=${topDense?.toFixed(3)}` : '') +
+      ` (${Date.now() - pipelineStart}ms)`
     )
-    return final.map(({ id, text, score, documentId, source }) => ({
+    return final.map(({ id, text, score, documentId, source, denseScore }) => ({
       id,
       text,
       score,
       documentId,
       source,
+      denseScore,
     }))
   } catch (err) {
     console.warn('[KB-Access] Chunk search failed:', err instanceof Error ? err.message : String(err))

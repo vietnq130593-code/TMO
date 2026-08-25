@@ -1160,6 +1160,15 @@ model EvalResult {
   faithfulnessScores        String   @default("[]")  // JSON [s1, s2, s3]
   extractionF1              Float    @default(0)
   hallucinationDetected     Boolean  @default(false)
+  // ML evaluation fix (Task 4, 2026-08-25): coverage separates "did the system
+  // attempt an answer" from faithfulness's "was the attempted answer correct".
+  // Old faithfulness conflated both — refusals on in-domain questions scored
+  // 0 faithfulness even though refusing is the RIGHT call for an empty KB.
+  //   coverage = 1: answered (non-refusal) | 0: refused
+  //   conditionalFaithfulness = faithfulnessMedian for ANSWERED cases only
+  //   (negative cases: refusal IS the correct "answer" → coverage = 1 when refused)
+  coverage                  Float    @default(0)
+  answered                  Boolean  @default(false)
   rawConfidence             Float    @default(0)  // Prop 3.5 — Step-1 KB confidence (calibration training X)
   latencyMs                 Int      @default(0)
   createdAt                 DateTime @default(now())
@@ -1176,6 +1185,13 @@ model EvalRun {
   processedCount  Int       @default(0)
   avgRecallAt5    Float     @default(0)
   avgFaithfulness Float     @default(0)
+  // Task 4 (2026-08-25): avgCoverage = fraction of cases the system attempted
+  // to answer (non-refusal). avgCondFaithfulness = faithfulness among ANSWERED
+  // cases only — the honest "was the attempted answer right" number.
+  avgCoverage     Float     @default(0)
+  avgCondFaithfulness Float  @default(0)
+  answeredCount   Int       @default(0)
+  refusalCount    Int       @default(0)
   avgF1           Float     @default(0)
   avgLatencyMs    Int       @default(0)
   hallucinationCount Int   @default(0)

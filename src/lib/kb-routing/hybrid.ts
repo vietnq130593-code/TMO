@@ -35,6 +35,11 @@ export interface HybridCandidate {
   text: string
   /** Dense similarity score from the vector search (higher = better). */
   score: number
+  /** Task 6 (2026-08-25): ORIGINAL dense cosine — preserved through fusion so
+   *  callers can surface true similarity alongside the normalized RRF rank
+   *  score (which pins top-1 at exactly 1.000 and gets misread as saturation).
+   *  Optional for backward compat — absent = same as score. */
+  denseScore?: number
 }
 
 /** BM25 parameters (standard defaults). */
@@ -138,6 +143,10 @@ export function hybridFuse(query: string, candidates: HybridCandidate[]): Hybrid
     id: f.candidate.id,
     text: f.candidate.text,
     score: f.fusedScore,
+    // Task 6: carry the original dense cosine through so logs / UI can show
+    // "rank score (fused) 1.000 | true cosine 0.311" instead of misleading
+    // saturated-looking 1.000s.
+    denseScore: f.candidate.denseScore ?? f.denseScore,
   }))
 }
 

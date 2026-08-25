@@ -87,9 +87,19 @@ const CONSERVATIVE_CONFIDENCE_MIN = parseFloat(process.env.CONSERVATIVE_CONFIDEN
  * LLM is confidently wrong. Cold-start + conservative bands add an extra
  * population-based gate:
  *
- *   insightCount <  COLD_START_INSIGHT_THRESHOLD (100)  → never learn
- *   insightCount <  CONSERVATIVE_INSIGHT_THRESHOLD (500) → require confidence >= CONSERVATIVE_CONFIDENCE_MIN (0.7)
- *   otherwise                                            → fall through to P0.2 normal gate (≥ 0.85)
+ *   knowledgeCount <  COLD_START_INSIGHT_THRESHOLD (100)  → never learn
+ *   knowledgeCount <  CONSERVATIVE_INSIGHT_THRESHOLD (500) → require confidence >= CONSERVATIVE_CONFIDENCE_MIN (0.7)
+ *   otherwise                                              → fall through to P0.2 normal gate (≥ 0.85)
+ *
+ * ML evaluation fix (Task 3, 2026-08-25): the population metric now counts
+ * INGESTED knowledge — Documents + LocalEntity + AgentInsight — not just
+ * AgentInsight. Counting insights alone created a deadlock: insights come
+ * from auto-learn, auto-learn needs 100 insights → the flywheel can never
+ * start on a freshly-restored KB that has 17 documents + 1000 entities of
+ * genuine human-curated seed knowledge. Ingested documents are actually a
+ * STRONGER trust signal than insights (human-approved source material vs
+ * LLM-generated). Entities are weighted 0.25 (they're derived from the
+ * documents — counting them at 1.0 would double-count).
  *
  * Note: P0.2's gate (confidence >= 0.85) is the FINAL gate even after this
  * passes — this function only adds *extra* restrictions for low-population
@@ -102,12 +112,21 @@ async function shouldAutoLearnConsideringColdStart(
   agentId: string,
   confidence: number
 ): Promise<{ allow: boolean; reason?: string }> {
-  // Population check — single cheap COUNT query, cached by SQLite page cache
-  // after first call. Counts ALL agents' insights (not just this agent's)
-  // because cold-start is a property of the entire KB, not per-agent.
-  let insightCount = 0
+  // Population check — 3 cheap COUNT queries, cached by SQLite page cache
+  // after first call. Counts across ALL agents because cold-start is a
+  // property of the entire KB, not per-agent.
+  let knowledgeCount = 0
   try {
-    insightCount = await db.agentInsight.count()
+    const [docCount, entityCount, insightCount] = await Promise.all([
+      db.document.count(),
+      db.localEntity.count(),
+      db.agentInsight.count(),
+    ])
+    // Documents count full (human-approved source material). Entities are
+    // derived from documents → weight 0.25 to avoid double-counting. Insights
+    // count full (manual teachings carry human trust; auto ones already
+    // passed the 0.85 confidence gate when written).
+    knowledgeCount = docCount + Math.floor(entityCount * 0.25) + insightCount
   } catch (err) {
     // DB error → fail-open (let P0.2 gate decide). Don't crash auto-learn
     // because of a transient DB issue; the population gate is best-effort.
@@ -115,18 +134,18 @@ async function shouldAutoLearnConsideringColdStart(
     return { allow: true }
   }
 
-  if (insightCount < COLD_START_INSIGHT_THRESHOLD) {
+  if (knowledgeCount < COLD_START_INSIGHT_THRESHOLD) {
     return {
       allow: false,
-      reason: `cold start (insightCount=${insightCount} < ${COLD_START_INSIGHT_THRESHOLD})`,
+      reason: `cold start (knowledgeCount=${knowledgeCount} < ${COLD_START_INSIGHT_THRESHOLD} — docs+entities*0.25+insights)`,
     }
   }
 
-  if (insightCount < CONSERVATIVE_INSIGHT_THRESHOLD) {
+  if (knowledgeCount < CONSERVATIVE_INSIGHT_THRESHOLD) {
     if (confidence < CONSERVATIVE_CONFIDENCE_MIN) {
       return {
         allow: false,
-        reason: `conservative band (insightCount=${insightCount} < ${CONSERVATIVE_INSIGHT_THRESHOLD}) requires confidence >= ${CONSERVATIVE_CONFIDENCE_MIN}, got ${confidence.toFixed(2)}`,
+        reason: `conservative band (knowledgeCount=${knowledgeCount} < ${CONSERVATIVE_INSIGHT_THRESHOLD}) requires confidence >= ${CONSERVATIVE_CONFIDENCE_MIN}, got ${confidence.toFixed(2)}`,
       }
     }
   }
