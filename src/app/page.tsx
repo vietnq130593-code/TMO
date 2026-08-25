@@ -8595,22 +8595,54 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                       <ChevronDown className="h-3 w-3 text-stone-400 flex-shrink-0 ml-1" />
                     </button>
                     {showAgentSelect && (
-                      <div data-dropdown-menu onClick={(e) => e.stopPropagation()} className="absolute top-full left-0 right-0 mt-1 z-50 bg-slate-950/95 border border-cyan-400/50 max-h-48 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
-                        {smolabAgents.filter((a: any) => a.enabled && !a.team).map((agent: any) => (
-                          <button key={agent.id}
-                            onClick={() => {
-                              setSelectedAgentId(agent.id)
-                              setShowAgentSelect(false)
-                              setSelectedModel(agent.model)
-                              // useEffect on selectedAgentId will handle messages/session reset + session fetch
-                            }}
-                            className={`w-full text-left px-3 py-1.5 text-xs hover:bg-cyan-500/10 transition-colors ${selectedAgentId === agent.id ? 'text-cyan-400' : 'text-stone-300'}`}
-                          >
-                            {agent.avatar} {agent.name}
-                            {/* Audit fix 2026-08-25: hiển thị MODEL (không chỉ provider) — user cần biết lõi nào đang chọn */}
-                            <span className="text-stone-500 ml-1">({(agent.model || '').split('/').pop() || agent.provider})</span>
-                          </button>
-                        ))}
+                      <div data-dropdown-menu onClick={(e) => e.stopPropagation()} className="absolute top-full left-0 right-0 mt-1 z-50 bg-slate-950/95 border border-cyan-400/50 max-h-64 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
+                        {/* Đề xuất 1 (2026-08-25): Single mode liệt kê TẤT CẢ agents — nhóm theo
+                            "Độc lập" / "💻 Team Code" / "🔬 Team Research" — để user chat 1-1 với
+                            bất kỳ agent nào (BOLT, CORTEX...) cho task nhỏ nhanh, không cần
+                            khởi động workflow multi-agent. Chat flow đã generic theo selectedAgentId. */}
+                        {(() => {
+                          const enabledAgents = smolabAgents.filter((a: any) => a.enabled)
+                          const standalone = enabledAgents.filter((a: any) => !a.team)
+                          const codeTeam = enabledAgents.filter((a: any) => a.team === 'code')
+                          const researchTeam = enabledAgents.filter((a: any) => a.team === 'research')
+                          const renderAgent = (agent: any, suffix?: string) => (
+                            <button key={agent.id}
+                              onClick={() => {
+                                setSelectedAgentId(agent.id)
+                                setShowAgentSelect(false)
+                                setSelectedModel(agent.model)
+                                // useEffect on selectedAgentId will handle messages/session reset + session fetch
+                              }}
+                              className={`w-full text-left px-3 py-1.5 text-xs hover:bg-cyan-500/10 transition-colors ${selectedAgentId === agent.id ? 'text-cyan-400' : 'text-stone-300'}`}
+                            >
+                              {agent.avatar} {agent.name}
+                              <span className="text-stone-500 ml-1">({(agent.model || '').split('/').pop() || agent.provider})</span>
+                              {suffix && <span className="text-stone-600 ml-1">{suffix}</span>}
+                            </button>
+                          )
+                          return (
+                            <>
+                              {standalone.length > 0 && (
+                                <>
+                                  <div className="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-cyan-500/70 border-b border-cyan-400/20">Độc lập</div>
+                                  {standalone.map((a: any) => renderAgent(a))}
+                                </>
+                              )}
+                              {codeTeam.length > 0 && (
+                                <>
+                                  <div className="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-amber-500/70 border-b border-amber-400/20 border-t border-t-amber-400/10 mt-1">💻 Team Code — chat 1-1</div>
+                                  {codeTeam.map((a: any) => renderAgent(a, a.position ? `• ${a.position}` : undefined))}
+                                </>
+                              )}
+                              {researchTeam.length > 0 && (
+                                <>
+                                  <div className="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-violet-400/70 border-b border-violet-400/20 border-t border-t-violet-400/10 mt-1">🔬 Team Research — chat 1-1</div>
+                                  {researchTeam.map((a: any) => renderAgent(a, a.position ? `• ${a.position}` : undefined))}
+                                </>
+                              )}
+                            </>
+                          )
+                        })()}
                         {agentsLoadError && (
                           <div className="px-3 py-2 text-xs text-red-400">
                             <AlertTriangle className="h-3 w-3 inline mr-1" />
@@ -8618,8 +8650,8 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                             <button onClick={() => { fetch('/api/agents?enabled=true').then(r => r.ok ? r.json() : Promise.reject()).then(d => setSmolabAgents(d.agents || [])).catch(() => {}) }} className="ml-2 text-cyan-400 hover:underline">Thử lại</button>
                           </div>
                         )}
-                        {!agentsLoadError && smolabAgents.filter((a: any) => a.enabled && !a.team).length === 0 && (
-                          <div className="px-3 py-2 text-xs text-stone-500">Chưa có Agent nào không thuộc team. Tạo Agent trong tab Agents hoặc chọn chế độ Team.</div>
+                        {!agentsLoadError && smolabAgents.filter((a: any) => a.enabled).length === 0 && (
+                          <div className="px-3 py-2 text-xs text-stone-500">Chưa có Agent nào. Tạo Agent trong tab Agents.</div>
                         )}
                       </div>
                     )}
@@ -13871,6 +13903,13 @@ function AgentsModule() {
         <Badge variant="outline" className="text-[9px] h-4.5 px-1.5 bg-slate-950/50 text-stone-300 border-stone-500/55 truncate max-w-[140px]">
           {agent.model}
         </Badge>
+        {/* Đề xuất 3 (2026-08-25): badge "mặc định/backup" trực quan hóa MODEL POLICY —
+            kimi-k3 = lõi mặc định (emerald), lõi khác = backup (slate). */}
+        {agent.model === 'moonshotai/kimi-k3' ? (
+          <Badge variant="outline" className="text-[8px] h-4 px-1.5 bg-emerald-950/50 text-emerald-300 border-emerald-500/55 font-semibold">⭐ mặc định</Badge>
+        ) : (
+          <Badge variant="outline" className="text-[8px] h-4 px-1.5 bg-slate-950/50 text-stone-500 border-stone-600/55">↩️ backup</Badge>
+        )}
       </div>
 
       {/* Stats */}
