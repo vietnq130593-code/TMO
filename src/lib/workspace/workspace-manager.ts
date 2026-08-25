@@ -738,3 +738,21 @@ export function getWorkspaceManager(): WorkspaceManager {
   }
   return _instance;
 }
+
+/**
+ * Phase 6 (rebuild) — Convenience accessor: rootPath of the ACTIVE workspace.
+ * Never throws — returns null when the workspace layer is unavailable
+ * (DB down, no active record and auto-create failed, ...).
+ *
+ * Used by code-team tool executor (start_preview/stop_preview) and the
+ * workspace-root resolver so AI tools operate on the USER's active workspace
+ * instead of the TMO process cwd.
+ */
+export async function getActiveWorkspaceRoot(): Promise<string | null> {
+  try {
+    const ws = await getWorkspaceManager().getActiveWorkspace();
+    return ws?.rootPath ?? null;
+  } catch {
+    return null;
+  }
+}

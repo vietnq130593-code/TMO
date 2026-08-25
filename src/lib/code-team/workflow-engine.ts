@@ -45,6 +45,8 @@ import {
   executeTool,
 } from './tool-executor'
 import { flagMode, isFlagEnabled } from '@/lib/feature-flags'
+// Phase 6/7 (rebuild) — workspace root follows the USER's ACTIVE workspace
+import { resolveWorkspaceRoot } from './workspace-root'
 import { exec, execFile } from 'child_process'
 import { promisify } from 'util'
 
@@ -115,7 +117,7 @@ const RISKY_OPS = new Set<string>([
 async function createStagingBranch(sessionId: string): Promise<string | null> {
   if (!isFlagEnabled('ENABLE_STAGING_BRANCH')) return null
 
-  const workspaceRoot = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const workspaceRoot = await resolveWorkspaceRoot()
   const branchName = `code-team/${sessionId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60)}`
 
   try {
@@ -171,7 +173,7 @@ async function createStagingBranch(sessionId: string): Promise<string | null> {
 async function mergeStagingBranch(stagingBranch: string | null, sessionId: string): Promise<void> {
   if (!isFlagEnabled('ENABLE_STAGING_BRANCH') || !stagingBranch) return
 
-  const workspaceRoot = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const workspaceRoot = await resolveWorkspaceRoot()
 
   try {
     // Capture the parent branch (the branch we were on before staging).
@@ -204,10 +206,11 @@ async function mergeStagingBranch(stagingBranch: string | null, sessionId: strin
 
 /**
  * Phase 4.3 — Get workspace root for fs-checkpoint.
- * Cached on first call per process.
+ * Phase 6/7 (rebuild) — now async + resolves the USER's ACTIVE workspace
+ * (WorkspaceManager → SQLite) via workspace-root.ts, with a 5s cache.
  */
-function getWorkspaceRoot(): string {
-  return process.env.OPENCODE_WORKSPACE || process.cwd()
+async function getWorkspaceRoot(): Promise<string> {
+  return resolveWorkspaceRoot()
 }
 
 
@@ -279,7 +282,7 @@ async function enforceQualityGate(): Promise<QualityReport> {
 async function runShellSafe(command: string, timeoutMs: number): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   try {
     const { stdout, stderr } = await execAsync(command, {
-      cwd: process.env.OPENCODE_WORKSPACE || process.cwd(),
+      cwd: await resolveWorkspaceRoot(),
       timeout: timeoutMs,
       maxBuffer: 1024 * 1024,
     })
@@ -1041,7 +1044,7 @@ async function runPipeline(
         await autoRestoreFsOnVerifyFailure({
           sessionId,
           reason: `ESCALATE sau ${step.position}: ${verifyResult.reasoning}`,
-          workspaceRoot: getWorkspaceRoot(),
+          workspaceRoot: await getWorkspaceRoot(),
         })
 
         // Still complete the session as failed
@@ -1069,7 +1072,7 @@ async function runPipeline(
         await autoRestoreFsOnVerifyFailure({
           sessionId,
           reason: `PIVOT sau ${step.position}: ${verifyResult.reasoning}`,
-          workspaceRoot: getWorkspaceRoot(),
+          workspaceRoot: await getWorkspaceRoot(),
         })
 
         emit({
@@ -1433,7 +1436,7 @@ export async function runAgentStep(params: {
             }
           }
           if (targetPaths.length > 0) {
-            const workspaceRoot = getWorkspaceRoot()
+            const workspaceRoot = await getWorkspaceRoot()
             const fsc = getFsCheckpoint(workspaceRoot)
             await fsc.createCheckpoint({
               sessionId,
@@ -1840,7 +1843,7 @@ function parseToolCallsFromOutput(output: string): Array<{ id: string; name: str
 
   // Pattern 2: Direct tool invocation like opencode({...})
   if (calls.length === 0) {
-    const validToolNames = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron']
+    const validToolNames = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview']
     const regex2 = new RegExp(`(${validToolNames.join('|')})\\s*\\(\\s*\\{`, 'g')
     let match2
     while ((match2 = regex2.exec(output)) !== null) {

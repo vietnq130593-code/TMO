@@ -3883,6 +3883,94 @@ const SMOLAB_SUGGESTIONS = [
   'Các kỹ thuật bảo mật phổ biến',
 ]
 
+// ==================== PHASE 7: AI TOOL EVENT BRIDGE (module helpers) ====================
+//
+// The code-team workflow SSE stream (/api/code-team/workflow) emits
+//   data: {"type":"tool_call"|"tool_result","agent":"APEX","position":"TL",
+//          "tool":"<name>","detail":"<escaped-JSON-string>","result":"OK"|"Error","duration":N}
+// The REAL data lives in `detail` (a JSON string, truncated at 200/500 chars);
+// `result` is only 'OK'|'Error'. file tools put the path in detail.path, shell
+// the command in detail.command, opencode the action in detail.action.
+//
+// The stream reader (chat submit handler) re-dispatches every tool_call/
+// tool_result as this window CustomEvent; CodeTabContent listens and reacts
+// (auto-open file in editor, echo AI commands in the terminal, auto-open the
+// Preview panel when the AI starts a dev server...).
+
+const AI_TOOL_EVENT_NAME = 'tmo-ai-tool-event'
+
+/** Basic JSON string unescape (\n \t \" \\ \/ \uXXXX) for regex-extracted values. */
+function unescapeJsonString(s: string): string {
+  try {
+    return s.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+      .replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r')
+      .replace(/\\"/g, '"').replace(/\\\//g, '/').replace(/\\\\/g, '\\')
+  } catch {
+    return s
+  }
+}
+
+/** Regex-extract a JSON string field from a (possibly truncated) raw JSON string. */
+function extractJsonStringField(raw: unknown, field: string): string | null {
+  try {
+    const s = String(raw ?? '')
+    const m = s.match(new RegExp('"' + field + '"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"'))
+    return m ? unescapeJsonString(m[1]) : null
+  } catch {
+    return null
+  }
+}
+
+/** Regex-extract a JSON number field from a (possibly truncated) raw JSON string. */
+function extractJsonNumberField(raw: unknown, field: string): number | null {
+  try {
+    const s = String(raw ?? '')
+    const m = s.match(new RegExp('"' + field + '"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)'))
+    return m ? Number(m[1]) : null
+  } catch {
+    return null
+  }
+}
+
+/** Basename of a path (works for both / and \ separators). */
+function pathFileName(p: unknown): string {
+  const s = typeof p === 'string' ? p : ''
+  if (!s) return 'file'
+  const parts = s.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] || s
+}
+
+/** Human-friendly chat bubble for an AI tool call (rich Vietnamese labels). */
+function formatToolBubble(tool: string, detail?: string): string {
+  try {
+    const raw = typeof detail === 'string' ? detail : ''
+    if (tool === 'file_read') {
+      const p = extractJsonStringField(raw, 'path') || extractJsonStringField(raw, 'filePath') || extractJsonStringField(raw, 'file_path')
+      return p ? `📖 Đang đọc ${pathFileName(p)}` : '📖 Đang đọc file'
+    }
+    if (tool === 'file_edit' || tool === 'file_multi_edit') {
+      const p = extractJsonStringField(raw, 'path') || extractJsonStringField(raw, 'filePath') || extractJsonStringField(raw, 'file_path')
+      const editCount = (raw.match(/"old_string"/g) || []).length
+        || (raw.match(/"new_string"/g) || []).length
+        || (tool === 'file_edit' ? 1 : 0)
+      const n = editCount > 1 ? ` (${editCount} edits)` : ''
+      return p ? `✏️ Đang sửa ${pathFileName(p)}${n}` : `✏️ Đang sửa file${n}`
+    }
+    if (tool === 'shell' || tool === 'gateway_exec') {
+      const cmd = extractJsonStringField(raw, 'command')
+      if (cmd) return `▶️ ${cmd.slice(0, 60)}${cmd.length > 60 ? '…' : ''}`
+    }
+    if (tool === 'start_preview') {
+      const port = extractJsonNumberField(raw, 'port')
+      return port ? `▶️ Start preview (port ${port})` : '▶️ Start preview'
+    }
+    if (tool === 'stop_preview') return '⏹️ Stop preview'
+    return `🔧 ${tool}`
+  } catch {
+    return `🔧 ${tool}`
+  }
+}
+
 // ==================== KNOWLEDGE TAB CONTENT ====================
 
 function KnowledgeTabContent() {
@@ -7833,6 +7921,22 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
 
           const eventType = event.type as string
 
+          // Phase 7: re-dispatch AI tool events on the window so CodeTabContent
+          // can react (auto-open file / terminal echo / preview auto-open).
+          // Defensive — NEVER break the SSE loop.
+          if (eventType === 'tool_call' || eventType === 'tool_result') {
+            try {
+              window.dispatchEvent(new CustomEvent(AI_TOOL_EVENT_NAME, {
+                detail: {
+                  type: eventType,
+                  tool: event.tool,
+                  detail: typeof event.detail === 'string' ? event.detail : undefined,
+                  result: typeof event.result === 'string' ? event.result : undefined,
+                },
+              }))
+            } catch { /* never break the stream */ }
+          }
+
           switch (eventType) {
             case 'workflow_start': {
               // Update the start indicator message
@@ -7897,7 +8001,8 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
               const toolMsg: SmolabMessage = {
                 id: crypto.randomUUID(),
                 role: 'assistant',
-                content: `🔧 ${toolName}`,
+                // Phase 7: rich bubble — 📖 file / ✏️ edit / ▶️ command
+                content: formatToolBubble(toolName, toolDetail),
                 timestamp: new Date(),
                 isTeamMessage: true,
                 agentName: toolAgentName,
@@ -7910,7 +8015,9 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
             }
 
             case 'tool_result': {
-              // Optionally update tool_call message with result info
+              // Handled by the Phase 7 window event bridge above
+              // (AI_TOOL_EVENT_NAME) — CodeTabContent refreshes the file tree /
+              // editor / preview panel from there.
               break
             }
 
@@ -8886,7 +8993,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                         )}
                         {msg.toolCallInfo && (
                           <div className="mt-2 p-2 rounded-lg bg-slate-950/50 border border-stone-700/50 text-[9px] text-stone-400">
-                            🔧 {msg.toolCallInfo.tool}: {msg.toolCallInfo.detail?.slice(0, 150)}
+                            {formatToolBubble(msg.toolCallInfo.tool, msg.toolCallInfo.detail)}
                           </div>
                         )}
                         {msg.durationMs && (
@@ -10629,6 +10736,8 @@ function CodeTabContent() {
   const terminalEvtRef = useRef<EventSource | null>(null)
   const terminalBufferRef = useRef<string>('')
   const terminalPrevRootRef = useRef<string | null>(null)
+  // Phase 7: scroll anchor for the terminal output panel (AI command echo)
+  const terminalViewRef = useRef<HTMLDivElement | null>(null)
 
   // File Explorer resize
   const [fileExplorerHeight, setFileExplorerHeight] = useState(400)
@@ -11145,14 +11254,17 @@ function CodeTabContent() {
     }
   }, [])
 
-  const handleFileSelect = useCallback(async (path: string) => {
+  const handleFileSelect = useCallback(async (path: string, opts?: { refresh?: boolean }) => {
+    // Phase 7: opts.refresh — force a fresh fetch (the AI edited the file on
+    // disk; bust any cache so the editor shows the new content).
     setSelectedFile(path)
     setEditedContent(null) // Reset edit state when selecting new file
     setFileLoading(true)
     try {
-      const url = workspaceRoot
+      const baseUrl = workspaceRoot
         ? `/api/opencode/files/read?path=${encodeURIComponent(path)}&root=${encodeURIComponent(workspaceRoot)}`
         : `/api/opencode/files/read?path=${encodeURIComponent(path)}`
+      const url = opts?.refresh ? `${baseUrl}&_=${Date.now()}` : baseUrl
       const res = await authedFetch(url)
       const data = await res.json()
       if (data.content !== undefined) {
@@ -11598,6 +11710,126 @@ function CodeTabContent() {
       setPreviewDetecting(false)
     }
   }, [showPreview, workspaceRoot, startPreviewLogStream])
+
+  // ==================== PHASE 7: AI-DRIVEN PREVIEW + TOOL EVENT HANDLING ====================
+
+  /** openAiPreview — mirror of the handlePreviewToggle ON branch, but the AI
+   *  already started the dev server (start_preview tool) on a KNOWN port, so
+   *  we skip detect/auto-start and wire the panel directly: SSE log stream +
+   *  port-ready poll (remount iframe once the server accepts connections). */
+  const openAiPreview = useCallback((port: number, root?: string) => {
+    if (!port || port <= 0) return
+    const previewRoot = (typeof root === 'string' && root) || workspaceRoot || ''
+    setShowPreview(true)
+    setPreviewDetecting(false)
+    setPreviewAutoStarting(false)
+    setPreviewAutoStartAttempted(true)
+    setPreviewPort(port)
+    setPreviewLogs([])
+    // Tail the dev-server log (closes any previous stream first)
+    if (previewRoot) startPreviewLogStream(previewRoot)
+    // Port-ready poll — timing-race fix (same as handlePreviewToggle)
+    void (async () => {
+      for (let i = 0; i < 24; i++) {
+        await new Promise(r => setTimeout(r, 500))
+        try {
+          await fetch(`http://127.0.0.1:${port}`, { mode: 'no-cors', signal: AbortSignal.timeout(800) })
+          setPreviewIframeKey(prev => prev + 1)
+          return
+        } catch { /* not ready yet — keep polling */ }
+      }
+    })()
+    toast({ title: '🚀 AI đã start preview', description: `Port ${port}` })
+  }, [workspaceRoot, startPreviewLogStream])
+
+  /** handleAIToolEvent — react to AI tool calls streamed from the code-team
+   *  workflow (via the 'tmo-ai-tool-event' window CustomEvent dispatched by
+   *  the chat submit handler's SSE reader):
+   *    tool_call  file_read/file_edit*    → open the file in the editor + toast
+   *    tool_call  shell / opencode(bash)  → echo `$ [AI] cmd` in the Terminal
+   *    tool_result file_edit* (OK)        → refresh tree + reload file + toast ✅
+   *    tool_result file_delete (OK)       → refresh tree + toast 🗑️
+   *    tool_result start_preview (OK)     → openAiPreview(port, root)
+   *    tool_result stop_preview  (OK)     → tear the preview panel down
+   *  Fully defensive — any parsing failure is swallowed (never break the UI). */
+  const handleAIToolEvent = useCallback((ev: {type?: string; tool?: string; detail?: string; result?: string}) => {
+    try {
+      if (!ev || (ev.type !== 'tool_call' && ev.type !== 'tool_result')) return
+      const tool = typeof ev.tool === 'string' ? ev.tool : ''
+      if (!tool) return
+      let detail: Record<string, unknown> | null = null
+      try { detail = ev.detail ? JSON.parse(ev.detail) : null } catch { /* truncated */ }
+      const rawDetail = typeof ev.detail === 'string' ? ev.detail : ''
+      const argPath = typeof detail?.path === 'string' ? detail.path
+        : typeof detail?.filePath === 'string' ? detail.filePath
+        : typeof detail?.file_path === 'string' ? detail.file_path : null
+      const deletedPath = typeof detail?.deleted === 'string' ? detail.deleted : null
+      const pathFromDetail = argPath || deletedPath || extractJsonStringField(rawDetail, 'path') || extractJsonStringField(rawDetail, 'deleted')
+      const resolveAbs = (p?: string | null): string | null => {
+        if (typeof p !== 'string' || !p) return null
+        if (p.startsWith('/')) return p
+        return workspaceRoot ? `${workspaceRoot.replace(/\/+$/, '')}/${p}` : p
+      }
+      const absPath = resolveAbs(pathFromDetail)
+      const fileName = pathFileName(absPath || pathFromDetail)
+      if (ev.type === 'tool_call') {
+        switch (tool) {
+          case 'file_read': if (absPath) { void handleFileSelect(absPath); toast({ title: `📖 AI đang đọc ${fileName}` }) } break
+          case 'file_edit': case 'file_multi_edit': if (absPath) { void handleFileSelect(absPath); toast({ title: `✏️ AI đang sửa ${fileName}` }) } break
+          case 'shell': {
+            const cmd = (typeof detail?.command === 'string' ? detail.command : null) || extractJsonStringField(rawDetail, 'command') || rawDetail
+            setTerminalOutput(prev => [...prev, `$ [AI] ${String(cmd).slice(0, 120)}`])
+            try { terminalViewRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' }) } catch { /* ignore */ }
+            toast({ title: '▶️ AI chạy lệnh', description: String(cmd).slice(0, 60) })
+            break
+          }
+          case 'opencode': {
+            const action = (typeof detail?.action === 'string' ? detail.action : null) || extractJsonStringField(rawDetail, 'action')
+            if ((action === 'read' || action === 'write') && absPath) {
+              void handleFileSelect(absPath)
+              toast({ title: action === 'read' ? `📖 AI đang đọc ${fileName}` : `✏️ AI đang sửa ${fileName}` })
+            } else if (action === 'bash') {
+              const cmd = (typeof detail?.command === 'string' ? detail.command : null) || extractJsonStringField(rawDetail, 'command') || rawDetail
+              setTerminalOutput(prev => [...prev, `$ [AI] ${String(cmd).slice(0, 120)}`])
+              try { terminalViewRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' }) } catch { /* ignore */ }
+              toast({ title: '▶️ AI chạy lệnh', description: String(cmd).slice(0, 60) })
+            }
+            break
+          }
+        }
+      } else if (ev.result !== 'Error') {
+        switch (tool) {
+          case 'file_edit': case 'file_multi_edit': {
+            void loadFileTree()
+            if (absPath) { void handleFileSelect(absPath, { refresh: true }); toast({ title: `✅ AI đã sửa ${fileName}` }) }
+            break
+          }
+          case 'file_delete': { void loadFileTree(); toast({ title: `🗑️ AI đã xóa ${fileName || 'file'}` }); break }
+          case 'start_preview': {
+            const port = typeof detail?.port === 'number' ? detail.port : extractJsonNumberField(rawDetail, 'port') || 0
+            if (port > 0) openAiPreview(port, typeof detail?.root === 'string' ? detail.root : undefined)
+            break
+          }
+          case 'stop_preview': {
+            previewEventSrcRef.current?.close(); previewEventSrcRef.current = null
+            setPreviewLogs([]); setShowPreview(false); setPreviewPort(null)
+            toast({ title: '⏹️ AI đã stop preview' })
+            break
+          }
+        }
+      }
+    } catch (err) { console.warn('[ai-tool-event]', err) }
+  }, [workspaceRoot, handleFileSelect, loadFileTree, openAiPreview])
+
+  // Phase 7: subscribe CodeTabContent to AI tool events dispatched by the
+  // chat submit handler's workflow SSE reader.
+  useEffect(() => {
+    const listener = (e: Event) => {
+      try { handleAIToolEvent((e as CustomEvent).detail) } catch { /* ignore */ }
+    }
+    window.addEventListener(AI_TOOL_EVENT_NAME, listener)
+    return () => { window.removeEventListener(AI_TOOL_EVENT_NAME, listener) }
+  }, [handleAIToolEvent])
 
   // Refresh iframe (for auto-refresh after file changes)
   const handlePreviewRefresh = useCallback(() => {
@@ -12391,7 +12623,7 @@ function CodeTabContent() {
             </div>
           </div>
 
-          <div className={`bg-slate-950/80 rounded-lg border border-emerald-500/10 p-3 overflow-y-auto font-mono text-[11px]`} style={{ scrollbarWidth: 'thin', height: `${terminalHeight}px` }}>
+          <div ref={terminalViewRef} className={`bg-slate-950/80 rounded-lg border border-emerald-500/10 p-3 overflow-y-auto font-mono text-[11px]`} style={{ scrollbarWidth: 'thin', height: `${terminalHeight}px` }}>
             {terminalOutput.length > 0 ? (
               terminalOutput.map((line, i) => (
                 <div key={i} className={`${line.startsWith('$') ? 'text-emerald-400' : line.startsWith('Error') || line.startsWith('✗') ? 'text-red-400' : line.startsWith('✓') ? 'text-emerald-300' : line.startsWith('[local-exec]') ? 'text-stone-600 text-[9px]' : 'text-stone-400'}`}>

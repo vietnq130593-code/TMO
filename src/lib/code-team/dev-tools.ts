@@ -23,6 +23,9 @@ import { existsSync } from 'fs'
 // Both Code Team agents AND independent agents share this table; sessionId scopes each list.
 import { db } from '@/lib/db'
 import { isFlagEnabled } from '@/lib/feature-flags'
+// Phase 6/7 (rebuild) — workspace root now follows the USER's ACTIVE workspace
+// (SQLite Workspace table) instead of process.cwd(); 5s cache.
+import { resolveWorkspaceRoot } from './workspace-root'
 
 const execAsync = promisify(exec)
 // Phase 3 audit fix (Task 9): execFileAsync passes argv as an array — bypasses
@@ -125,7 +128,7 @@ export async function fileRead(args: {
 
 /** Resolve a path within the workspace root, rejecting traversal escapes. */
 async function resolveWithinWorkspace(filePath: string): Promise<string> {
-  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const root = await resolveWorkspaceRoot()
   const resolved = path.resolve(root, filePath)
   // Allow the root itself OR anything nested under it
   if (resolved !== root && !resolved.startsWith(root + path.sep)) {
@@ -266,7 +269,7 @@ export async function fileDelete(args: {
   force?: boolean
 }): Promise<unknown> {
   const resolvedPath = await resolveWithinWorkspace(args.path)
-  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const root = await resolveWorkspaceRoot()
   if (resolvedPath === root) {
     return { error: 'Refusing to delete the workspace root' }
   }
@@ -559,7 +562,7 @@ export async function runTests(args: {
   target?: string  // path to test file or test-name pattern
   coverage?: boolean
 }): Promise<unknown> {
-  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const root = await resolveWorkspaceRoot()
 
   // Detect framework
   let framework: 'bun' | 'vitest' | 'jest' | 'pytest'
@@ -761,7 +764,7 @@ export async function gitCommit(args: {
     }
   }
 
-  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const root = await resolveWorkspaceRoot()
 
   try {
     // Resolve + scope-check paths (reject escapes)
@@ -866,7 +869,7 @@ export async function gitCommit(args: {
  * falls back to running `tsc --noEmit` locally and parsing the output.
  */
 export async function getDiagnostics(args: { path?: string }): Promise<unknown> {
-  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const root = await resolveWorkspaceRoot()
   const opencodeUrl = process.env.OPENCODE_SERVER_URL || 'http://127.0.0.1:18790'
 
   // Try opencode-server first
@@ -1079,7 +1082,7 @@ async function decomposeTaskViaThinkingLayer(goal: string, context?: string): Pr
   //    structure (cached per-project for CACHE_TTL_MS). On failure, return a
   //    minimal stub with empty structure fields so the decomposer can still run
   //    (its heuristic generator only reads mentalModel.structure.X.length).
-  const projectRoot = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const projectRoot = await resolveWorkspaceRoot()
   const mentalModel = await buildMentalModel(projectRoot).catch(() => ({
     structure: { pages: [], components: [], libs: [], apis: [], configs: [] },
     dependencies: { nodes: new Map(), entryPoints: [] },
@@ -1279,7 +1282,7 @@ ${parts.join('\n\n')}`,
 export async function runBg(args: { command: string; cwd?: string }): Promise<unknown> {
   if (!args.command) return { error: 'command is required' }
   const { processManager } = await import('@/lib/execution/process-manager')
-  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const root = await resolveWorkspaceRoot()
   const cwd = args.cwd ? await resolveWithinWorkspace(args.cwd) : root
   const info = await processManager.startProcess({
     command: args.command,
@@ -1354,7 +1357,7 @@ export async function managePackages(args: {
   packages?: string[]
   dev?: boolean
 }): Promise<unknown> {
-  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const root = await resolveWorkspaceRoot()
   const action = args.action
   const pkgs = args.packages || []
 
@@ -1463,7 +1466,7 @@ export async function shell(args: {
   }
 
   const command = args.command
-  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const root = await resolveWorkspaceRoot()
   const cwd = args.cwd ? path.resolve(root, args.cwd) : root
   // Guard: refuse cwd outside workspace root
   if (cwd !== root && !cwd.startsWith(root + path.sep)) {
@@ -1937,7 +1940,7 @@ export async function lint(args: {
   fix?: boolean
   max_results?: number
 }): Promise<unknown> {
-  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const root = await resolveWorkspaceRoot()
   const maxResults = Math.max(1, Math.min(1000, args.max_results || 100))
   const target = args.path || '.'
 
@@ -2074,7 +2077,7 @@ export async function lint(args: {
  * Feature flag: ENABLE_TYPE_CHECK (default false)
  */
 export async function typeCheck(args: { path?: string }): Promise<unknown> {
-  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const root = await resolveWorkspaceRoot()
   const startedAt = Date.now()
 
   let stdout = ''
@@ -2145,7 +2148,7 @@ export async function testCoverage(args: {
   target?: string
   reporter?: 'text' | 'json'
 }): Promise<unknown> {
-  const root = process.env.OPENCODE_WORKSPACE || process.cwd()
+  const root = await resolveWorkspaceRoot()
   const startedAt = Date.now()
   const target = args.target || ''
   const wantJson = args.reporter === 'json'

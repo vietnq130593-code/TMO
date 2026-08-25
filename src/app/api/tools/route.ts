@@ -169,6 +169,9 @@ const LOCAL_TOOLS = [
   { name: 'read_output', category: 'Process', description: 'Poll output của background process (incremental).', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
   { name: 'kill_process', category: 'Process', description: 'Kill background process by ID hoặc port.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
   { name: 'manage_packages', category: 'Package', description: 'bun add/remove/install/update (2min timeout).', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  // ===== Phase 6 (rebuild): AI preview tools =====
+  { name: 'start_preview', category: 'Preview', description: 'Start dev server cho active workspace (auto-detect framework, free port 3005+, per-root log + SSE stream). UI tự mở Preview panel.', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'stop_preview', category: 'Preview', description: 'Stop dev server đang chạy cho 1 workspace root (idempotent — nothing-running vẫn success).', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
   // ===== P2: gateway proxy =====
   { name: 'gateway_tool', category: 'Gateway', description: 'Proxy tới 1 trong 36 gateway-bridge tools (web_search, exec, read, write, browser...).', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: '', hasApiKey: true },
   // ===== v2.1 Phase 1a: shell + todo (Claude Code parity) =====

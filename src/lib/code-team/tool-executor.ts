@@ -50,6 +50,8 @@ import {
 // v2.1 Phase 3.6 — MCP bridge (separate module)
 import { mcpCall as executeMcpCallFn } from '@/lib/mcp/mcp-bridge'
 import { isFlagEnabled, flagMode } from '@/lib/feature-flags'
+// Phase 6 (rebuild) — start_preview/stop_preview operate on the USER's ACTIVE workspace
+import { getActiveWorkspaceRoot } from '@/lib/workspace/workspace-manager'
 // v2.1 Phase 4.6 — Cron scheduler (separate module)
 import {
   createCronJob as createCronJobFn,
@@ -738,6 +740,41 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       },
     },
   },
+  // ===== Phase 6 (rebuild): AI preview tools — start/stop the dev server of
+  // the user's active workspace. The UI listens for the tool_result and
+  // auto-opens the Preview panel (see page.tsx 'tmo-ai-tool-event').
+  // NOTE: start_preview result JSON puts `port` FIRST — the workflow engine
+  // truncates tool detail to 500 chars and the UI needs the port.
+  start_preview: {
+    type: 'function',
+    function: {
+      name: 'start_preview',
+      description: 'Start the dev server for the current workspace and display it in the Preview panel. Auto-detects framework and picks the first free port starting from 3005. Use after making code changes so the user sees the result.',
+      parameters: {
+        type: 'object',
+        properties: {
+          root: { type: 'string', description: 'Workspace root directory (default: active workspace)' },
+          port: { type: 'number', description: 'Preferred port (server still auto-picks a free one in 3005-3099)' },
+          command: { type: 'string', description: 'Custom dev command (default: <pkg-manager> run dev)' },
+        },
+        required: [],
+      },
+    },
+  },
+  stop_preview: {
+    type: 'function',
+    function: {
+      name: 'stop_preview',
+      description: 'Stop the running dev server for a workspace root.',
+      parameters: {
+        type: 'object',
+        properties: {
+          root: { type: 'string', description: 'Workspace root directory (default: active workspace)' },
+        },
+        required: [],
+      },
+    },
+  },
 
   // ==================== P2: GATEWAY PROXY (36 tools) ====================
   gateway_tool: {
@@ -1287,6 +1324,99 @@ export async function executeTool(
       case 'manage_packages':
         result = await managePackages(args as any)
         break
+      // ===== Phase 6 (rebuild): AI preview tools — proxy to the Phase 3
+      // /api/opencode/preview/{start,stop} routes (port collision safe,
+      // per-root log file, SSE stream) so the UI can auto-open the Preview. =====
+      case 'start_preview': {
+        const previewRoot = typeof args.root === 'string' && args.root
+          ? args.root
+          : (await getActiveWorkspaceRoot()) || process.cwd()
+        try {
+          const res = await fetch('http://127.0.0.1:3000/api/opencode/preview/start', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-tmo-api-token': process.env.TMO_API_TOKEN || '',
+            },
+            body: JSON.stringify({
+              root: previewRoot,
+              ...(typeof args.command === 'string' && args.command ? { command: args.command } : {}),
+            }),
+            signal: AbortSignal.timeout(30_000),
+          })
+          const data = await res.json().catch(() => null) as Record<string, unknown> | null
+          if (!res.ok || !data || (data.status !== 'started' && data.status !== 'already_running')) {
+            result = {
+              success: false,
+              error: `start_preview failed (HTTP ${res.status})`,
+              detail: data ? JSON.stringify(data).slice(0, 400) : 'no response body',
+            }
+            break
+          }
+          const startedPort = typeof data.port === 'number' ? data.port : null
+          const pid = typeof data.pid === 'number' ? data.pid : null
+          // `port` FIRST — detail is truncated at 500 chars upstream and the
+          // UI (tmo-ai-tool-event listener) regex-extracts the port to open
+          // the Preview panel.
+          result = {
+            success: true,
+            port: startedPort,
+            summary: `Dev server started on port ${startedPort} for ${previewRoot} (pid ${pid})`,
+            pid,
+            command: typeof data.command === 'string' ? data.command : undefined,
+            logFile: typeof data.logFile === 'string' ? data.logFile : undefined,
+            startedAt: typeof data.startedAt === 'number' ? data.startedAt : undefined,
+            root: previewRoot,
+            status: data.status,
+          }
+        } catch (err) {
+          result = {
+            success: false,
+            error: `start_preview request failed: ${err instanceof Error ? err.message : String(err)}`,
+          }
+        }
+        break
+      }
+      case 'stop_preview': {
+        const stopRoot = typeof args.root === 'string' && args.root
+          ? args.root
+          : (await getActiveWorkspaceRoot()) || process.cwd()
+        try {
+          const res = await fetch('http://127.0.0.1:3000/api/opencode/preview/stop', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-tmo-api-token': process.env.TMO_API_TOKEN || '',
+            },
+            body: JSON.stringify({ root: stopRoot }),
+            signal: AbortSignal.timeout(15_000),
+          })
+          const data = await res.json().catch(() => null) as Record<string, unknown> | null
+          if (!res.ok || !data) {
+            result = {
+              success: false,
+              error: `stop_preview failed (HTTP ${res.status})`,
+            }
+            break
+          }
+          // Idempotent: always success — note whether something was actually stopped
+          result = {
+            success: true,
+            summary: data.stopped
+              ? `Dev server stopped for ${stopRoot} (pid ${data.pid})`
+              : `No running dev server for ${stopRoot} — nothing to stop`,
+            stopped: Boolean(data.stopped),
+            pid: typeof data.pid === 'number' ? data.pid : undefined,
+            root: stopRoot,
+          }
+        } catch (err) {
+          result = {
+            success: false,
+            error: `stop_preview request failed: ${err instanceof Error ? err.message : String(err)}`,
+          }
+        }
+        break
+      }
       // ===== P2: gateway proxy (36 tools) =====
       case 'gateway_tool':
         result = await gatewayTool(args as any)

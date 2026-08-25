@@ -128,6 +128,28 @@ const LOCAL_TOOLS = [
     apiKeyEnv: '(none)',
     hasApiKey: true,
   },
+  {
+    name: 'start_preview',
+    category: 'Preview',
+    description: 'Start dev server cho active workspace (auto-detect framework, free port 3005+, log SSE). UI tự mở Preview panel khi tool chạy.',
+    source: 'bundled',
+    dangerous: true,
+    implemented: true,
+    hasSkillGuide: false,
+    apiKeyEnv: '',
+    hasApiKey: true,
+  },
+  {
+    name: 'stop_preview',
+    category: 'Preview',
+    description: 'Stop dev server đang chạy cho 1 workspace root (idempotent).',
+    source: 'bundled',
+    dangerous: false,
+    implemented: true,
+    hasSkillGuide: false,
+    apiKeyEnv: '',
+    hasApiKey: true,
+  },
 ]
 
 export async function GET(request: NextRequest) {
