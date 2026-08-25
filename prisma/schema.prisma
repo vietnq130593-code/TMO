@@ -1213,3 +1213,76 @@ model CalibrationModel {
   trainedAt  DateTime @updatedAt
   sampleSize Int      @default(0)
 }
+
+// ===== RED TEAM ENGINE (Blueprint 2026-08-25) =====
+
+/// RedTeamCase: một "vũ khí" trong kho tấn công. Khác EvalCase ở 2 điểm:
+/// (1) có attackVector phân loại chiến thuật, (2) có origin truy vết được —
+/// generated (sinh từ LLM), mutated (biến thể từ failure thật), hoặc curated
+/// (viết tay). Failure đã biết → mutated cases kiểm tra phòng thủ còn vỡ không.
+model RedTeamCase {
+  id            String   @id @default(cuid())
+  question      String
+  /// Chiến thuật tấn công: hallucination_boundary | knowledge_poison |
+  /// ambiguity_trap | injection_probe | domain_confusion | failure_mutation
+  attackVector  String
+  /// Mô tả cách attack TẠO RA case (prompt dùng, failure gốc nếu mutated)
+  generationNote String  @default("")
+  /// generated | mutated | curated
+  origin        String   @default("generated")
+  /// Model sinh case (vd kimi-k3) — truy vết tránh self-attack bias:
+  /// model sinh case không được là model bị case đó nhắm vào
+  generatedBy   String?
+  ///active: sẵn sàng dùng | retired: đã bị phòng thủ hóa giải (giữ làm regression test)
+  status        String   @default("active")
+  /// Số lần case này VỠ qua phòng thủ (hệ thống trả lời sai). Tăng dần = tấn công mạnh
+  breachCount   Int      @default(0)
+  lastBreachAt  DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([attackVector, status])
+  @@index([origin])
+}
+
+/// RedTeamRun: một đợt tấn công. 1-1 map với EvalRun (dùng chung runner)
+/// nhưng tách bảng để không lẫn metrics học-tốt với metrics bị-tấn-công.
+model RedTeamRun {
+  id              String    @id @default(cuid())
+  status          String    @default("running") // running | completed | failed
+  caseCount       Int       @default(0)
+  processedCount  Int       @default(0)
+  /// Số case tấn công THÀNH CÔNG (hệ thống trả lời sai/bịa) — càng thấp càng tốt
+  breachCount     Int       @default(0)
+  /// Số case phòng thủ thành công (refuse đúng / trả lời đúng)
+  defendedCount   Int       @default(0)
+  /// Phân loại breach theo vector — cho biết loại tấn công nào hiệu quả nhất
+  breachesByVector String   @default("{}") // JSON: {hallucination_boundary: 2, ...}
+  avgLatencyMs    Int       @default(0)
+  errorMessage    String?
+  startedAt       DateTime  @default(now())
+  completedAt     DateTime?
+
+  @@index([startedAt])
+}
+
+/// RedTeamResult: kết quả từng case trong run.
+model RedTeamResult {
+  id                String   @id @default(cuid())
+  runId             String
+  caseId            String
+  /// Câu trả lời của hệ thống khi bị tấn công
+  answer            String
+  /// TRUE = tấn công thành công (phòng thủ vỡ). FALSE = phòng thủ đứng
+  breached          Boolean  @default(false)
+  /// Phán quyết của adversarial judge + defense judge
+  attackVerdict     String   @default("{}")  // JSON {score, reasoning}
+  defenseVerdict    String   @default("{}")  // JSON {score, reasoning}
+  /// Có chunk nào bị dụ trả lời không (đo sức đề kháng retrieval)
+  retrievedChunks   Int      @default(0)
+  latencyMs         Int      @default(0)
+  createdAt         DateTime @default(now())
+
+  @@index([runId])
+  @@index([caseId])
+}

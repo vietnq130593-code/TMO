@@ -221,6 +221,7 @@
 .nc-violet {}
 .nc-emerald {}
 .nc-teal {}
+.nc-rose {} /* RED TEAM Security card — adversarial self-testing (Blueprint 2026-08-25) */
 .nc-cyan-soft {}
 .nc-violet-soft {}
 
@@ -256,6 +257,7 @@
 .nc-panel.nc-border-violet  { border: 1px solid rgba(139, 92, 246, 0.7); }
 .nc-panel.nc-border-emerald { border: 1px solid rgba(16, 185, 129, 0.7); }
 .nc-panel.nc-border-teal    { border: 1px solid rgba(20, 184, 166, 0.7); }
+.nc-panel.nc-border-rose    { border: 1px solid rgba(244, 63, 94, 0.7); } /* RED TEAM Security */
 
 /* Subtle border variants */
 .nc-panel.nc-border-cyan-soft   { border: 1px solid rgba(6, 182, 212, 0.5); }

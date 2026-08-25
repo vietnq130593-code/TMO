@@ -22,7 +22,7 @@ import {
   Play as PlayIcon, Square, ScrollText, ArrowRight as ArrowRightIcon, Cpu as CpuIcon, Cable as CableIcon,
   GitCommit, History, Minimize2, ExternalLink as ExternalLinkIcon, GripHorizontal, ArrowDownToLine,
   Wifi, WifiOff,
-  Flame, Archive, Snowflake, Thermometer, FlaskConical
+  Flame, Archive, Snowflake, Thermometer, FlaskConical, ShieldAlert, Swords
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -5230,6 +5230,51 @@ interface EvalResultsPayload {
   results: EvalCaseResult[]
 }
 
+// RED TEAM ENGINE (Blueprint 2026-08-25) — adversarial self-testing types.
+interface RedTeamRunSummary {
+  id: string
+  status: string
+  caseCount: number
+  processedCount: number
+  breachCount: number
+  defendedCount: number
+  breachesByVector: string // JSON string
+  avgLatencyMs: number
+  errorMessage?: string | null
+  startedAt: string
+  completedAt?: string | null
+}
+
+interface RedTeamCaseResult {
+  id: string
+  question: string
+  attackVector: string
+  breached: boolean
+  attackVerdict: { score?: number; reasoning?: string; failureMode?: string; verdict?: string }
+  defenseVerdict: { score?: number; reasoning?: string }
+  retrievedChunks: number
+  latencyMs: number
+}
+
+interface RedTeamResultsPayload {
+  run: RedTeamRunSummary | null
+  results: RedTeamCaseResult[]
+}
+
+interface RedTeamCasesPayload {
+  counts: { total: number; active: number; retired: number }
+}
+
+/** RED TEAM — short display labels for the 6 attack vectors (blueprint §3.1). */
+const REDTEAM_VECTOR_LABELS: Record<string, string> = {
+  hallucination_boundary: 'Ranh giới',
+  knowledge_poison: 'Đầu độc',
+  ambiguity_trap: 'Mơ hồ',
+  injection_probe: 'Injection',
+  domain_confusion: 'Lẫn domain',
+  failure_mutation: 'Đột biến',
+}
+
 function LearningTabContent() {
   // Timeline data
   const [timeline, setTimeline] = useState<{
@@ -5358,6 +5403,14 @@ function LearningTabContent() {
   const [evalStarting, setEvalStarting] = useState(false)
   // Bump to force an immediate re-poll (e.g. right after starting a run).
   const [evalRefresh, setEvalRefresh] = useState(0)
+
+  // RED TEAM ENGINE — adversarial self-testing state (mirrors eval card).
+  const [redteamLatestRun, setRedteamLatestRun] = useState<RedTeamRunSummary | null>(null)
+  const [redteamData, setRedteamData] = useState<RedTeamResultsPayload | null>(null)
+  const [redteamCounts, setRedteamCounts] = useState<RedTeamCasesPayload['counts'] | null>(null)
+  const [redteamAttacking, setRedteamAttacking] = useState(false)
+  const [redteamForging, setRedteamForging] = useState(false)
+  const [redteamRefresh, setRedteamRefresh] = useState(0)
 
   // Fetch data on mount
   useEffect(() => {
@@ -5499,6 +5552,52 @@ function LearningTabContent() {
     }
   }, [evalRefresh])
 
+  // RED TEAM ENGINE — Fetch attack run status + results + weapon counts.
+  // Same polling pattern as the eval card: 10s while a wave is running,
+  // 60s otherwise. /api/redteam/run (no param) → latest 10 runs (live
+  // status). /api/redteam/results (no param) → latest COMPLETED wave.
+  // /api/redteam/cases → weapon inventory counts (active/retired).
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const poll = async () => {
+      let running = false
+      try {
+        const [runsRes, resultsRes, casesRes] = await Promise.all([
+          fetch('/api/redteam/run'),
+          fetch('/api/redteam/results'),
+          fetch('/api/redteam/cases'),
+        ])
+        if (runsRes.ok && !cancelled) {
+          const data = (await runsRes.json()) as { runs?: RedTeamRunSummary[] }
+          const latest = Array.isArray(data.runs) && data.runs.length > 0 ? data.runs[0] : null
+          if (!cancelled) setRedteamLatestRun(latest)
+          running = latest?.status === 'running'
+        }
+        if (resultsRes.ok && !cancelled) {
+          const data = (await resultsRes.json()) as RedTeamResultsPayload
+          if (!cancelled) setRedteamData(data)
+        }
+        if (casesRes.ok && !cancelled) {
+          const data = (await casesRes.json()) as RedTeamCasesPayload
+          if (!cancelled) setRedteamCounts(data.counts)
+        }
+      } catch (err) {
+        console.warn('[RedTeam] fetch failed:', err)
+      }
+      if (cancelled) return
+      // 10s cadence while a wave is in progress, 60s otherwise.
+      timer = setTimeout(poll, running ? 10_000 : 60_000)
+    }
+
+    poll()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [redteamRefresh])
+
   // Phase 4 SMOLAB Proposal 11' — Start a background eval run (10 cases).
   // POST /api/eval/run returns immediately (fire-and-forget runner); the
   // poll effect above picks up the running status + refreshes every 10s.
@@ -5525,6 +5624,60 @@ function LearningTabContent() {
       toast({ title: 'Lỗi kết nối eval', variant: 'destructive' })
     }
     setEvalStarting(false)
+  }
+
+  // RED TEAM ENGINE — Launch an attack wave (15 cases, fire-and-forget).
+  // POST /api/redteam/run returns immediately; the poll effect above picks up
+  // the running status. Each case = retrieval + answer + 2 judges (~60-90s).
+  const handleRedTeamAttack = async () => {
+    setRedteamAttacking(true)
+    try {
+      const res = await fetch('/api/redteam/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseLimit: 15 }),
+      })
+      const data = (await res.json()) as { runId?: string; caseCount?: number; error?: string }
+      if (res.ok && data.runId) {
+        toast({
+          title: 'Đợt tấn công đã triển khai',
+          description: `Run ${data.runId.slice(0, 8)} — ${data.caseCount ?? 15} vũ khí × 4 LLM calls (chạy nền, mỗi case ~60-90s)`,
+        })
+        setRedteamRefresh((n) => n + 1)
+      } else {
+        toast({ title: 'Triển khai tấn công thất bại', description: data.error || 'Unknown error', variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: 'Lỗi kết nối Red Team', variant: 'destructive' })
+    }
+    setRedteamAttacking(false)
+  }
+
+  // RED TEAM ENGINE — Forge new weapons (generate adversarial cases).
+  // POST /api/redteam/generate-cases is synchronous (~10-60s: 1 generator
+  // call per vector + 1 quality-gate call per candidate).
+  const handleRedTeamForge = async () => {
+    setRedteamForging(true)
+    try {
+      const res = await fetch('/api/redteam/generate-cases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const data = (await res.json()) as { inserted?: number; skipped?: number; error?: string }
+      if (res.ok) {
+        toast({
+          title: 'Đã rèn vũ khí mới',
+          description: `Sinh ${data.inserted ?? 0} case adversarial (${data.skipped ?? 0} bị loại/trùng)`,
+        })
+        setRedteamRefresh((n) => n + 1)
+      } else {
+        toast({ title: 'Sinh vũ khí thất bại', description: data.error || 'Unknown error', variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: 'Lỗi kết nối generator', variant: 'destructive' })
+    }
+    setRedteamForging(false)
   }
 
   // Reconcile now — POST endpoint that re-attempts pending/partial/failed batches
@@ -5717,6 +5870,21 @@ function LearningTabContent() {
         const fbType = (e.metadata?.feedbackType as string) || (e.metadata?.type as string) || ''
         return fbType === feedbackFilter
       })
+
+  // RED TEAM — derived display values (latest COMPLETED wave).
+  const rtRun = redteamData?.run ?? null
+  const rtBreaches = rtRun?.breachCount ?? 0
+  const rtDefended = rtRun?.defendedCount ?? 0
+  const rtDecided = rtBreaches + rtDefended
+  const rtWinRate = rtDecided > 0 ? rtDefended / rtDecided : null
+  let rtBreachesByVector: Record<string, number> = {}
+  try {
+    rtBreachesByVector = rtRun ? (JSON.parse(rtRun.breachesByVector || '{}') as Record<string, number>) : {}
+  } catch {
+    rtBreachesByVector = {}
+  }
+  const rtVectorMax = Math.max(1, ...Object.values(rtBreachesByVector))
+  const rtRecentBreaches = (redteamData?.results ?? []).filter((r) => r.breached).slice(-5).reverse()
 
   return (
     <div className="space-y-4">
@@ -6254,6 +6422,181 @@ function LearningTabContent() {
           ) : evalLatestRun?.status !== 'running' ? (
             <div className="text-[10px] text-stone-500 italic text-center py-2">
               No eval runs yet — click Run Eval to start (uses ~10 cases × 4 LLM calls).
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {/* ===== 1e. RED TEAM SECURITY (Blueprint 2026-08-25 — adversarial self-testing) ===== */}
+      <div className="nc-wrap nc-rose">
+        <div className="nc-panel nc-sm nc-border-rose p-4">
+          {/* Header row: icon + title + latest wave status badge + action buttons */}
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="h-4 w-4 text-rose-400" />
+              <span className="text-sm font-semibold text-stone-100">Red Team Security</span>
+              {redteamLatestRun && (
+                <Badge
+                  className={
+                    redteamLatestRun.status === 'completed'
+                      ? 'text-[9px] h-4 px-1.5 bg-emerald-950/50 text-emerald-400 border-emerald-400/35'
+                      : redteamLatestRun.status === 'failed'
+                        ? 'text-[9px] h-4 px-1.5 bg-red-950/50 text-red-400 border-red-400/35'
+                        : 'text-[9px] h-4 px-1.5 bg-amber-950/50 text-amber-400 border-amber-400/35'
+                  }
+                >
+                  {redteamLatestRun.status}
+                </Badge>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={redteamAttacking || redteamLatestRun?.status === 'running'}
+                onClick={handleRedTeamAttack}
+                className="h-6 px-2 text-[10px] bg-rose-500/15 text-rose-300 hover:bg-rose-500/25 hover:text-rose-200 border border-rose-500/25"
+              >
+                {redteamAttacking || redteamLatestRun?.status === 'running' ? (
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                ) : (
+                  <Swords className="h-3 w-3 mr-1" />
+                )}
+                Triển khai tấn công
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={redteamForging}
+                onClick={handleRedTeamForge}
+                className="h-6 px-2 text-[10px] bg-rose-500/10 text-stone-300 hover:bg-rose-500/20 hover:text-rose-200 border border-rose-500/20"
+              >
+                {redteamForging ? (
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3 w-3 mr-1" />
+                )}
+                Sinh vũ khí
+              </Button>
+            </div>
+          </div>
+
+          {/* Live progress line while a wave is in progress */}
+          {redteamLatestRun?.status === 'running' && (
+            <div className="p-2 bg-slate-950/50 border border-rose-500/15 rounded-lg mb-3 flex items-center gap-2">
+              <Loader2 className="h-3 w-3 text-rose-400 animate-spin flex-shrink-0" />
+              <span className="text-[10px] text-stone-300 truncate">
+                Đang tấn công — {redteamLatestRun.processedCount}/{redteamLatestRun.caseCount} vũ khí đã bắn
+                {rtRun ? ' (đang hiển thị kết quả đợt hoàn thành trước đó)' : ''}
+              </span>
+            </div>
+          )}
+
+          {/* Failed-run banner */}
+          {redteamLatestRun?.status === 'failed' && (
+            <div className="p-2 bg-red-950/20 border border-red-400/25 rounded-lg mb-3 flex items-center gap-2">
+              <AlertTriangle className="h-3 w-3 text-red-400 flex-shrink-0" />
+              <span className="text-[10px] text-red-300 truncate" title={redteamLatestRun.errorMessage ?? ''}>
+                Đợt tấn công lỗi: {redteamLatestRun.errorMessage || 'unknown error'}
+              </span>
+            </div>
+          )}
+
+          {/* Latest completed wave: 5 stat tiles + vector bars + breach list */}
+          {rtRun ? (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 mb-2">
+                <div className="p-2 bg-slate-950/50 border border-rose-500/15 rounded-lg text-center">
+                  <AlertTriangle className="h-3.5 w-3.5 mx-auto text-rose-400 mb-0.5" />
+                  <p className="text-base font-bold text-stone-100 tabular-nums">{rtBreaches}</p>
+                  <p className="text-[9px] text-stone-400 uppercase" title="Số lần tấn công thắng hệ thống — bằng chứng đội an ninh đang làm việc">Breaches</p>
+                </div>
+                <div className="p-2 bg-slate-950/50 border border-rose-500/15 rounded-lg text-center">
+                  <Shield className="h-3.5 w-3.5 mx-auto text-emerald-400 mb-0.5" />
+                  <p className="text-base font-bold text-stone-100 tabular-nums">{rtDefended}</p>
+                  <p className="text-[9px] text-stone-400 uppercase">Defended</p>
+                </div>
+                <div className="p-2 bg-slate-950/50 border border-rose-500/15 rounded-lg text-center">
+                  <Target className="h-3.5 w-3.5 mx-auto text-emerald-400 mb-0.5" />
+                  <p className="text-base font-bold text-stone-100 tabular-nums">
+                    {rtWinRate != null ? `${(rtWinRate * 100).toFixed(0)}%` : '—'}
+                  </p>
+                  <p className="text-[9px] text-stone-400 uppercase">Win-rate</p>
+                </div>
+                <div className="p-2 bg-slate-950/50 border border-rose-500/15 rounded-lg text-center">
+                  <Swords className="h-3.5 w-3.5 mx-auto text-rose-400 mb-0.5" />
+                  <p className="text-base font-bold text-stone-100 tabular-nums">{redteamCounts?.active ?? '—'}</p>
+                  <p className="text-[9px] text-stone-400 uppercase">Active Weapons</p>
+                </div>
+                <div className="p-2 bg-slate-950/50 border border-rose-500/15 rounded-lg text-center">
+                  <CheckCircle2 className="h-3.5 w-3.5 mx-auto text-stone-400 mb-0.5" />
+                  <p className="text-base font-bold text-stone-100 tabular-nums">{redteamCounts?.retired ?? '—'}</p>
+                  <p className="text-[9px] text-stone-400 uppercase" title="Vũ khí bị phòng thủ hóa giải ≥5 lần liên tiếp — thành regression test">Retired</p>
+                </div>
+              </div>
+
+              {/* Copy principle: breach = information (security exercise working), NOT system failure. */}
+              <div className="flex items-center gap-3 mb-2 text-[9px] text-stone-500 flex-wrap">
+                <span>Run {rtRun.id.slice(0, 8)}</span>
+                <span>{rtRun.processedCount}/{rtRun.caseCount} cases</span>
+                <span className="text-stone-400">
+                  Breach = phát hiện của hoạt động an ninh (điều tốt) — hệ thống đang được chủ động săn lỗi trước khi gặp user
+                </span>
+              </div>
+
+              {/* breachesByVector mini-bars (pure divs — no chart lib) */}
+              {Object.keys(rtBreachesByVector).length > 0 && (
+                <div className="p-2 bg-slate-950/50 border border-rose-500/10 rounded-lg mb-2">
+                  <span className="text-[10px] text-stone-400 uppercase mb-1.5 block">Breaches theo vector tấn công</span>
+                  <div className="space-y-1">
+                    {Object.entries(rtBreachesByVector)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([vector, count]) => (
+                        <div key={vector} className="flex items-center gap-2">
+                          <span className="text-[9px] text-stone-400 w-20 truncate flex-shrink-0" title={vector}>
+                            {REDTEAM_VECTOR_LABELS[vector] ?? vector}
+                          </span>
+                          <div className="flex-1 h-2.5 bg-slate-900/70 rounded-sm overflow-hidden">
+                            <div
+                              className="h-full bg-rose-500/60 rounded-sm"
+                              style={{ width: `${Math.max(6, (count / rtVectorMax) * 100)}%` }}
+                            />
+                          </div>
+                          <span className="text-[9px] text-rose-400 font-mono w-4 text-right flex-shrink-0">{count}</span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Last 5 breaches: vector badge + failureMode + question */}
+              {rtRecentBreaches.length > 0 && (
+                <div className="p-2 bg-slate-950/50 border border-rose-500/10 rounded-lg">
+                  <span className="text-[10px] text-stone-400 uppercase mb-1.5 block">Breaches mới nhất (5)</span>
+                  <div className="space-y-1 max-h-40 overflow-y-auto pr-1" style={{ scrollbarWidth: 'thin' }}>
+                    {rtRecentBreaches.map((r) => (
+                      <div key={r.id} className="flex items-center gap-1.5 p-1.5 border rounded-md border-rose-400/20 bg-rose-950/10">
+                        <span className="text-[9px] text-stone-300 truncate flex-1" title={r.question}>
+                          {r.question}
+                        </span>
+                        <Badge className="text-[8px] h-3.5 px-1 bg-rose-950/50 text-rose-300 border-rose-400/35 truncate max-w-[64px]">
+                          {REDTEAM_VECTOR_LABELS[r.attackVector] ?? r.attackVector}
+                        </Badge>
+                        <span
+                          className="text-[8px] text-amber-400 font-mono flex-shrink-0 truncate max-w-[80px]"
+                          title={r.attackVerdict?.reasoning ?? ''}
+                        >
+                          {r.attackVerdict?.failureMode ?? '—'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : redteamLatestRun?.status !== 'running' ? (
+            <div className="text-[10px] text-stone-500 italic text-center py-2">
+              Chưa có đợt tấn công nào — Red Team săn failure modes trước khi chúng gặp user.
             </div>
           ) : null}
         </div>
