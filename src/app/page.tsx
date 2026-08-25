@@ -57,6 +57,7 @@ import {
   AGENT_COLORS,
   POSITION_COLORS,
 } from '@/lib/agent-constants'
+import { CodeEditor, type OpenFile } from '@/components/code-editor/CodeEditor'
 
 // ==================== TYPES ====================
 
@@ -10699,8 +10700,24 @@ function CodeTabContent() {
   const [fileTree, setFileTree] = useState<FileNode[]>([])
   const [treeLoading, setTreeLoading] = useState(false)
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set(['src']))
-  const [selectedFile, setSelectedFile] = useState<string | null>(null)
-  const [fileContent, setFileContent] = useState<{ path: string; content: string; language: string; lines: number; size: number } | null>(null)
+  // Phase 8 — Monaco multi-tab state. selectedFile/fileContent/editedContent
+  // are now COMPAT DERIVED values (same names, see below) so existing call
+  // sites (file-tree highlight, header badges, save/revert buttons) keep working.
+  const [openFiles, setOpenFiles] = useState<OpenFile[]>([])
+  const [activeFileIndex, setActiveFileIndex] = useState(0)
+  const openFilesRef = useRef<OpenFile[]>([])
+  useEffect(() => { openFilesRef.current = openFiles })
+  const activeOpenFile = openFiles[Math.min(Math.max(activeFileIndex, 0), Math.max(openFiles.length - 1, 0))]
+  const selectedFile = activeOpenFile?.path ?? null
+  const fileContent: { path: string; content: string; language: string; lines: number; size: number } | null = activeOpenFile
+    ? {
+        path: activeOpenFile.path,
+        content: activeOpenFile.content,
+        language: activeOpenFile.language || 'plaintext',
+        lines: activeOpenFile.lines ?? activeOpenFile.content.split('\n').length,
+        size: activeOpenFile.size ?? activeOpenFile.content.length,
+      }
+    : null
   const [fileLoading, setFileLoading] = useState(false)
   const [fileSearch, setFileSearch] = useState('')
 
@@ -10807,7 +10824,8 @@ function CodeTabContent() {
   const [folderPickerPath, setFolderPickerPath] = useState('/home/z')
   const [folderPickerItems, setFolderPickerItems] = useState<Array<{ name: string; path: string; type: 'directory' | 'file' }>>([])
   const [folderPickerLoading, setFolderPickerLoading] = useState(false)
-  const [editedContent, setEditedContent] = useState<string | null>(null)
+  // Phase 8 compat: dirty-content of the ACTIVE tab (null = không có chỉnh sửa chưa lưu)
+  const editedContent = activeOpenFile?.isDirty ? activeOpenFile.content : null
   const [isSaving, setIsSaving] = useState(false)
   const [showNewFileInput, setShowNewFileInput] = useState(false)
   const [newFileName, setNewFileName] = useState('')
@@ -10830,8 +10848,8 @@ function CodeTabContent() {
     setWorkspaceRoot(folderPath)
     if (typeof window !== 'undefined') localStorage.setItem('smolab_layout_opencode_root', folderPath)
     setFileTree([])
-    setSelectedFile(null)
-    setFileContent(null)
+    setOpenFiles([])
+    setActiveFileIndex(0)
     setShowFolderPicker(false)
     toast({ title: `Đã chọn workspace: ${folderPath}` })
     try {
@@ -10889,25 +10907,37 @@ function CodeTabContent() {
     }
   }, [])
 
-  // Save file handler
-  const handleSaveFile = useCallback(async () => {
-    if (!selectedFile || editedContent === null) return
+  // Save file handler (Phase 8: multi-tab aware — saves openFiles[idx])
+  const handleSaveFile = useCallback(async (idx?: number) => {
+    const targetIdx = typeof idx === 'number' ? idx : activeFileIndex
+    const target = openFiles[targetIdx]
+    if (!target) return
     setIsSaving(true)
     try {
       const res = await authedFetch('/api/opencode/files/write', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: selectedFile, content: editedContent }),
+        body: JSON.stringify({ path: target.path, content: target.content }),
       })
       const data = await res.json()
       if (data.success) {
-        toast({ title: 'Đã lưu file', description: selectedFile })
-        setEditedContent(null)
-        // Reload file content to sync
+        toast({ title: 'Đã lưu file', description: target.path.split('/').pop() || target.path })
+        // originalContent = what was actually saved; if the user typed more
+        // while the request was in flight, the tab correctly stays dirty.
+        setOpenFiles(prev => prev.map((f, i) => (i === targetIdx
+          ? { ...f, originalContent: target.content, isDirty: f.content !== target.content }
+          : f)))
+        // Metadata refresh (language/lines/size) — best-effort, same GET as handleFileSelect
         if (workspaceRoot) {
-          const readRes = await authedFetch(`/api/opencode/files/read?path=${encodeURIComponent(selectedFile)}&root=${encodeURIComponent(workspaceRoot)}`)
-          const readData = await readRes.json()
-          if (readData.content !== undefined) setFileContent(readData)
+          try {
+            const readRes = await authedFetch(`/api/opencode/files/read?path=${encodeURIComponent(target.path)}&root=${encodeURIComponent(workspaceRoot)}`)
+            const readData = await readRes.json()
+            if (readData.content !== undefined) {
+              setOpenFiles(prev => prev.map((f, i) => (i === targetIdx
+                ? { ...f, language: readData.language ?? f.language, lines: readData.lines ?? f.lines, size: readData.size ?? f.size }
+                : f)))
+            }
+          } catch {}
         }
       } else {
         toast({ title: 'Lỗi lưu file', description: data.error || 'Unknown error', variant: 'destructive' })
@@ -10917,7 +10947,29 @@ function CodeTabContent() {
     } finally {
       setIsSaving(false)
     }
-  }, [selectedFile, editedContent, workspaceRoot])
+  }, [activeFileIndex, openFiles, workspaceRoot])
+
+  // Phase 8: Monaco multi-tab handlers
+  const handleContentChange = useCallback((idx: number, content: string) => {
+    setOpenFiles(prev => prev.map((f, i) => (i === idx ? { ...f, content, isDirty: content !== f.originalContent } : f)))
+  }, [])
+
+  const handleCloseFile = useCallback((idx: number) => {
+    if (idx < 0 || idx >= openFiles.length) return
+    const nextLength = openFiles.length - 1
+    setOpenFiles(prev => prev.filter((_, i) => i !== idx))
+    setActiveFileIndex(cur => {
+      if (cur > idx) return cur - 1
+      if (cur === idx) return Math.max(Math.min(cur, nextLength - 1), 0)
+      return cur
+    })
+  }, [openFiles])
+
+  // Phase 8: revert active (or given) tab back to its original content
+  const handleRevertFile = useCallback((idx?: number) => {
+    const targetIdx = typeof idx === 'number' ? idx : activeFileIndex
+    setOpenFiles(prev => prev.map((f, i) => (i === targetIdx ? { ...f, content: f.originalContent, isDirty: false } : f)))
+  }, [activeFileIndex])
 
   const loadFileTree = useCallback(async () => {
     setTreeLoading(true)
@@ -11255,10 +11307,30 @@ function CodeTabContent() {
   }, [])
 
   const handleFileSelect = useCallback(async (path: string, opts?: { refresh?: boolean }) => {
+    // Phase 8: multi-tab aware. Name + signature preserved (Phase 7 AI-tool
+    // bridge + file tree click depend on it).
     // Phase 7: opts.refresh — force a fresh fetch (the AI edited the file on
     // disk; bust any cache so the editor shows the new content).
-    setSelectedFile(path)
-    setEditedContent(null) // Reset edit state when selecting new file
+    const loadDiagnostics = async () => {
+      try {
+        const diagRes = await authedFetch('/api/opencode/lsp/diagnostics', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filePath: path }),
+        })
+        const diagData = await diagRes.json()
+        setDiagnostics(diagData.diagnostics || [])
+      } catch {}
+    }
+    const existingIdx = openFilesRef.current.findIndex(f => f.path === path)
+    if (existingIdx >= 0) {
+      setActiveFileIndex(existingIdx)
+      if (!opts?.refresh) {
+        // Tab already open — just activate it + reload diagnostics
+        await loadDiagnostics()
+        return
+      }
+    }
     setFileLoading(true)
     try {
       const baseUrl = workspaceRoot
@@ -11268,20 +11340,27 @@ function CodeTabContent() {
       const res = await authedFetch(url)
       const data = await res.json()
       if (data.content !== undefined) {
-        setFileContent(data)
+        const entry: OpenFile = {
+          path,
+          content: data.content,
+          originalContent: data.content,
+          isDirty: false,
+          language: data.language,
+          lines: data.lines,
+          size: data.size,
+        }
+        if (existingIdx >= 0) {
+          // refresh: replace content in the existing tab
+          setOpenFiles(prev => prev.map((f, i) => (i === existingIdx ? entry : f)))
+        } else {
+          // new file: append tab + activate (ref is pre-append → its length IS the new index)
+          setOpenFiles(prev => [...prev, entry])
+          setActiveFileIndex(Math.max(openFilesRef.current.length, 0))
+        }
         // Load diagnostics for this file
-        const diagRes = await authedFetch('/api/opencode/lsp/diagnostics', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filePath: path }),
-        })
-        const diagData = await diagRes.json()
-        setDiagnostics(diagData.diagnostics || [])
-      } else {
-        setFileContent(null)
+        await loadDiagnostics()
       }
     } catch {
-      setFileContent(null)
     } finally {
       setFileLoading(false)
     }
@@ -12351,7 +12430,7 @@ function CodeTabContent() {
                           <Button
                             size="sm"
                             className="h-5 text-[8px] px-2 bg-emerald-600 hover:bg-emerald-500 text-white"
-                            onClick={handleSaveFile}
+                            onClick={() => void handleSaveFile(activeFileIndex)}
                             disabled={isSaving}
                           >
                             {isSaving ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <><CheckCircle2 className="h-2.5 w-2.5 mr-0.5" /> Lưu</>}
@@ -12362,7 +12441,7 @@ function CodeTabContent() {
                             size="sm"
                             variant="ghost"
                             className="h-5 text-[8px] px-1.5 text-stone-500 hover:text-red-400"
-                            onClick={() => setEditedContent(null)}
+                            onClick={() => handleRevertFile(activeFileIndex)}
                             title="Hủy chỉnh sửa"
                           >
                             <X className="h-3 w-3" />
@@ -12370,36 +12449,15 @@ function CodeTabContent() {
                         )}
                       </div>
                     </div>
-                    {/* Editable code area */}
-                    <div className="flex-1 relative">
-                      <textarea
-                        value={editedContent !== null ? editedContent : fileContent.content}
-                        onChange={e => setEditedContent(e.target.value)}
-                        className="absolute inset-0 w-full h-full bg-transparent text-[11px] leading-relaxed font-mono p-3 pl-14 text-stone-300 resize-none focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
-                        spellCheck={false}
-                        style={{ tabSize: 2 }}
-                      />
-                      {/* Line numbers overlay (non-interactive) */}
-                      <pre className="p-3 text-[11px] leading-relaxed font-mono overflow-x-auto pointer-events-none select-none">
-                        <code>
-                          {fileContent.content.split('\n').map((line, i) => {
-                            const lineNum = i + 1
-                            const hasDiag = diagnostics.some(d => d.line === lineNum)
-                            const isAdded = diffViewActive && (line.startsWith('+') || line.startsWith('import ') && i < 10)
-                            const isRemoved = diffViewActive && (line.startsWith('-') || line.trim().startsWith('// TODO') || line.trim().startsWith('// FIXME') || line.trim().startsWith('// HACK'))
-                            return (
-                              <div key={i} className={`flex ${hasDiag ? 'bg-red-500/10' : isAdded ? 'bg-emerald-500/10' : isRemoved ? 'bg-red-500/10' : ''}`} style={{ minHeight: '1.5em' }}>
-                                <span className="w-10 flex-shrink-0 text-right pr-3 text-stone-600">{lineNum}</span>
-                                {diffViewActive && isAdded && <span className="text-emerald-400 flex-shrink-0 mr-1">+</span>}
-                                {diffViewActive && isRemoved && <span className="text-red-400 flex-shrink-0 mr-1">-</span>}
-                                {diffViewActive && !isAdded && !isRemoved && <span className="w-2.5 flex-shrink-0 mr-1" />}
-                                <span className={`flex-1 invisible`}>{line}</span>
-                              </div>
-                            )
-                          })}
-                        </code>
-                      </pre>
-                    </div>
+                    {/* Phase 8: Monaco multi-tab editor (locally vendored /monaco-vs, no CDN) */}
+                    <CodeEditor
+                      openFiles={openFiles}
+                      activeFileIndex={activeFileIndex}
+                      onActiveChange={setActiveFileIndex}
+                      onContentChange={handleContentChange}
+                      onSave={(idx) => void handleSaveFile(idx)}
+                      onClose={handleCloseFile}
+                    />
                   </>
                 ) : (
                   <div className="flex flex-col items-center justify-center h-full text-stone-500">
