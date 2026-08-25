@@ -25,8 +25,9 @@
 // likely per-key rate limiting; a second attempt usually lands on a healthy
 // key).
 //
-// The answer-generation model (system-under-test) is nvidia/nemotron-3-ultra-550b-a55b
-// (see runner.ts) — different from ALL judges.
+// The answer-generation model (system-under-test) is deepseek-ai/deepseek-v4-flash-0731
+// (see runner.ts) — different from ALL judges. nemotron-550b is extraction-ONLY
+// (user directive 2026-08-25) and must not appear in eval or chat paths.
 //
 // Failure semantics: each judge call is wrapped in try/catch. A failed judge
 // gets score = -1 and is EXCLUDED from the median. 2+ failures → median is the

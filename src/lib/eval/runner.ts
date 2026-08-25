@@ -4,7 +4,9 @@
 //   Step 1 — retrieval via searchUserKB() (the REAL production retrieval path,
 //            Qdrant chunks + Neo4j entities + memories + confidence score).
 //   Step 2 — answer generation via the system-under-test model
-//            (nvidia/nemotron-3-ultra-550b-a55b — DIFFERENT from all judges).
+//            (deepseek-ai/deepseek-v4-flash-0731 — a chat-core model that is
+//            DIFFERENT from all judges; nemotron-550b is extraction-ONLY per
+//            user directive 2026-08-25 and must not be used for eval answers).
 //   Step 3 — scoring: recall@5 + entity extraction F1 + hallucination check +
 //            faithfulness via 3 cross-family judges (judges.ts).
 //
@@ -21,9 +23,15 @@ import { callLLM } from '@/lib/llm'
 import { searchUserKB } from '@/lib/kb-routing/kb-access'
 import { judgeAnswer } from './judges'
 
-/** System-under-test answer generator — the app's main extraction model.
- *  MUST be different from all judge models (see judges.ts) to avoid circular bias. */
-const ANSWER_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b'
+/** System-under-test answer generator — a dedicated Agent/Chat core.
+ *  MUST be different from all judge models (see judges.ts) to avoid circular
+ *  bias. deepseek-v4-flash is the only chat core not used by any judge
+ *  (judges: gpt-oss-120b + kimi-k3 + minimax-m3).
+ *  User directive 2026-08-25: nemotron-3-ultra-550b is extraction-ONLY —
+ *  it must NOT be used for eval answers or any non-extraction task.
+ *  NOTE: deepseek-v4-flash is the slowest core (~27s/call) — eval runs take
+ *  longer but run in background so it doesn't matter. */
+const ANSWER_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
 
 /** Pace-limit between cases (ms) — gentle on the shared 4-key NVIDIA budget. */
 const CASE_PACE_MS = 300

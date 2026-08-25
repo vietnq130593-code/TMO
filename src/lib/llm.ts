@@ -5,9 +5,11 @@
  *   NVIDIA NIM (4 keys × 4 docs = 16 max concurrent, auto mode)
  *
  * Architecture: NVIDIA NIM ONLY (no Mistral, Cerebras, OpenRouter)
- *   - 2 extraction cores: nemotron-3-ultra-550b, gpt-oss-120b
- *   - 4 agent/chat cores: kimi-k3 (primary), gpt-oss-120b, deepseek-v4-flash-0731, minimax-m3 (fallbacks)
- *   - glm-5.2 REMOVED 2026-08-25: NVIDIA NIM end-of-life 2026-08-21
+ *   - 1 extraction core: nemotron-3-ultra-550b (DUY NHẤT — user directive 2026-08-25,
+ *     lõi này chỉ dùng cho trích xuất dữ liệu, không dùng cho tác vụ khác)
+ *   - 4 agent/chat cores: gpt-oss-120b, kimi-k3, deepseek-v4-flash-0731, minimax-m3
+ *   - glm-5.2 REMOVED 2026-08-25: NVIDIA NIM end-of-life 2026-08-21 (HTTP 410)
+ *   - gpt-oss-120b chuyển từ extraction sang agent/chat (user directive 2026-08-25)
  *   - Deprecated (404): kimi-k2.6, glm-5.1, minimax-m2.7, deepseek-v4-pro, qwen3.5-397b
  *
  * Key assignment (AUTO mode, least-loaded-first):
@@ -178,16 +180,15 @@ const modelRotationCounters: Record<string, number> = {
 /** Get a rotated copy of a model list for a provider.
  *  The starting model changes each call so all models get used.
  *
- *  NOTE: For EXTRACTION models, rotation is DISABLED (user Option C — 2026-08-21).
- *  nemotron-3-ultra-550b is ALWAYS tried first because it produces higher-quality
- *  extraction. gpt-oss-120b is only used as fallback when nemotron returns 429/timeout.
- *  This trades ~15x slower response time for better extraction quality.
+ *  NOTE: For EXTRACTION models, rotation is DISABLED (user Option C — 2026-08-21,
+ *  reaffirmed as single-core directive 2026-08-25).
+ *  nemotron-3-ultra-550b is the ONLY extraction core.
  */
 function getRotatedModels(provider: string, models: string[]): string[] {
-  // EXTRACTION models: no rotation — always try primary (nemotron-550b) first
+  // EXTRACTION models: no rotation — the single nemotron-550b core
   // Compare by reference — if it's the extraction list, skip rotation
   if (models === NVIDIA_EXTRACTION_MODELS) {
-    return models // Always [nemotron-550b, gpt-oss-120b]
+    return models // Always [nemotron-550b]
   }
   // AGENT/CHAT models (MODEL POLICY 2026-08-25): no rotation — kimi-k3 is the
   // DEFAULT for every agent; the others are sequential failover backups
@@ -202,27 +203,32 @@ function getRotatedModels(provider: string, models: string[]): string[] {
   return [...models.slice(offset), ...models.slice(0, offset)]
 }
 
-/** NVIDIA NIM EXTRACTION models (4 keys × 4 docs, no daily cap)
- *  CHÍNH SÁCH: NVIDIA NIM chỉ sử dụng 2 lõi này cho trích xuất tài liệu.
- *  Các lõi khác (gpt-oss-120b, deepseek-v4-flash, minimax-m3) chỉ dùng cho agent/chat.
+/** NVIDIA NIM EXTRACTION model (lõi DUY NHẤT — user directive 2026-08-25)
+ *  CHÍNH SÁCH: nemotron-3-ultra-550b là lõi trích xuất DUY NHẤT và chỉ dùng
+ *  cho trích xuất dữ liệu — KHÔNG dùng cho chat/agent/eval hay tác vụ khác.
  *
  *  nvidia/nemotron-3-ultra-550b-a55b: 550B MoE (55B active), mạnh nhất ✓ VERIFIED 2026-08-21
- *  openai/gpt-oss-120b: 120B MoE, fallback khi 550b bị rate-limit ✓ VERIFIED 2026-08-21
  *
+ *  Đã bỏ: openai/gpt-oss-120b (chuyển sang Agent/Chat — user directive 2026-08-25)
  *  Đã bỏ: llama-3.1-nemotron-ultra-253b-v1 (404 NOT FOUND — deprecated 2026-08-21)
  *  Đã bỏ: nemotron-4-340b-instruct (404 NOT FOUND — deprecated 2026-08-21)
- *  Đã bỏ: meta/llama-3.3-70b-instruct (vẫn hoạt động nhưng chất lượng trích xuất kém hơn 550b)
+ *  Đã bỏ: meta/llama-3.3-70b-instruct (chất lượng trích xuất kém hơn 550b)
  */
 const NVIDIA_EXTRACTION_MODELS = [
   'nvidia/nemotron-3-ultra-550b-a55b',
-  'openai/gpt-oss-120b',
 ]
 
 /** NVIDIA NIM AGENT/CHAT models — MODEL POLICY 2026-08-25 (user request):
  *  kimi-k3 là MẶC ĐỊNH cho tất cả agents; các lõi khác là BACKUP theo thứ tự
  *  (gpt-oss-120b → deepseek-v4-flash → minimax-m3) — chỉ dùng khi kimi-k3
  *  fail/rate-limit. Không rotation round-robin (backup = failover, không phải
- *  load-balance) — see getRotatedModels(). */
+ *  load-balance) — see getRotatedModels().
+ *
+ *  Model-directive merge 2026-08-25 (later user request, same day): gpt-oss-120b
+ *  chuyển từ extraction sang làm backup #1 của chat; nemotron-3-ultra-550b bị
+ *  LOẠI hoàn toàn khỏi chat/agent — lõi đó CHỈ dùng cho trích xuất dữ liệu.
+ *  Danh sách 4 lõi chat giữ nguyên thứ tự failover kimi-k3-first.
+ *  Verified 2026-08-25: kimi-k3 ~16s | gpt-oss-120b ~0.4s | deepseek ~27s | minimax ~0.3s */
 const NVIDIA_AGENT_MODELS = [
   'moonshotai/kimi-k3',
   'openai/gpt-oss-120b',
@@ -230,21 +236,15 @@ const NVIDIA_AGENT_MODELS = [
   'minimaxai/minimax-m3',
 ]
 
-/** NVIDIA NIM ALL models (2 extraction + 3 agent/chat)
- *  Model IDs verified 2026-08-21 via actual completion calls against integrate.api.nvidia.com
- *  Deprecated (404): kimi-k2.6, glm-5.1, minimax-m2.7, deepseek-v4-pro, qwen3.5-397b
+/**
+ * NVIDIA_MODELS (merged directive 2026-08-25): = NVIDIA_AGENT_MODELS (4 lõi chat).
+ * nemotron-3-ultra-550b KHÔNG thuộc danh sách này — lõi extraction duy nhất.
+ * Deprecated (404): kimi-k2.6, glm-5.1, minimax-m2.7, deepseek-v4-pro, qwen3.5-397b
  */
-const NVIDIA_MODELS = [
-  // Extraction models (2 lõi trích xuất tài liệu)
-  'nvidia/nemotron-3-ultra-550b-a55b',
-  'openai/gpt-oss-120b',
-  // Agent/Chat models (kimi-k3 primary + 3 fallbacks — verified working 2026-08-21)
-  'moonshotai/kimi-k3',
-  'deepseek-ai/deepseek-v4-flash-0731',
-  'minimaxai/minimax-m3',
-]
-
-/** NVIDIA NIM ALL models (2 extraction + 3 agent/chat) */
+// Alias of NVIDIA_AGENT_MODELS — same 4 chat cores, same failover order.
+// (Kept as a separate export because getNvidiaModels() + the pool log line
+// reference NVIDIA_MODELS.)
+const NVIDIA_MODELS = [...NVIDIA_AGENT_MODELS]
 
 // ==================== DAILY TOKEN TRACKING ====================
 
@@ -1746,7 +1746,7 @@ const nvidiaPool = new ProviderKeyPool('NVIDIA', [
 ])
 
 console.log(`[LLM] Provider pool: NVIDIA=${nvidiaPool.keyCount} keys (${NVIDIA_MODELS.length} models) — SINGLE PROVIDER`)
-console.log(`[LLM] NVIDIA: 2 extraction cores + 4 agent/chat cores = 6 models, 4 keys × 4 docs = 16 max concurrent`)
+console.log(`[LLM] NVIDIA: 1 extraction core (nemotron-550b, extraction ONLY) + 4 agent/chat cores = 5 models, 4 keys × 4 docs = 16 max concurrent`)
 
 // ==================== BACKPRESSURE — PROVIDER AVAILABILITY ====================
 
@@ -2130,7 +2130,7 @@ export function getProviderDiagnostics(): Record<string, {
 /**
  * Key-based LLM call for document processing — NVIDIA NIM ONLY.
  *
- * Single provider: NVIDIA NIM with 2 extraction cores.
+ * Single provider: NVIDIA NIM với 1 lõi trích xuất duy nhất (nemotron-3-ultra-550b).
  * Falls back to round-robin key selection if the assigned key is unavailable.
  *
  * @param slotIndex - The key index (0-3) assigned to this document

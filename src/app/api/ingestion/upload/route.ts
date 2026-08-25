@@ -29,6 +29,55 @@ export const dynamic = 'force-dynamic'
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/tmp/theopus-uploads'
 
+// ==================== DOC LIST CACHE (perf — 2026-08-25) ====================
+// The GET list is polled every 3s while documents are processing. Each uncached
+// call hits 3 stores: R2 list (network → Cloudflare), Qdrant scroll (empty
+// collection after restores), SQLite findMany. The doc LIST identity (which
+// files exist) only changes on upload/delete — so the expensive parts (R2 +
+// Qdrant) are cached 10s, while STATUSES are re-read from SQLite on every
+// request (cheap: ~17 rows) so processing progress never looks stale.
+// Bust: POST (upload) + DELETE invalidate immediately.
+interface CachedDocList {
+  documents: Array<Record<string, unknown>> // WITHOUT live statuses (overlaid per request)
+  total: number
+  expiresAt: number
+}
+let docListCache: CachedDocList | null = null
+const DOC_LIST_CACHE_TTL_MS = 10_000
+
+function invalidateDocListCache(): void {
+  docListCache = null
+}
+
+/** Overlay fresh SQLite statuses onto the cached doc list + recompute breakdown. */
+async function overlaySqliteStatuses(
+  docs: Array<Record<string, unknown>>
+): Promise<{ documents: Array<Record<string, unknown>>; statusBreakdown: Record<string, number> }> {
+  const statusBreakdown: Record<string, number> = {}
+  try {
+    const rows = await db.document.findMany({ select: { id: true, title: true, status: true, processingPercent: true, errorMessage: true } })
+    const byId = new Map(rows.map(r => [r.id, r]))
+    const byTitle = new Map(rows.filter(r => r.title).map(r => [r.title as string, r]))
+    for (const doc of docs) {
+      const row = byId.get(String(doc.id)) || byTitle.get(String(doc.title))
+      if (row) {
+        doc.status = row.status
+        doc.processing_percent = row.processingPercent
+        doc.error_message = row.errorMessage
+      }
+      const s = String(doc.status || 'uploaded')
+      statusBreakdown[s] = (statusBreakdown[s] || 0) + 1
+    }
+  } catch {
+    // DB read failed — use cached statuses as-is
+    for (const doc of docs) {
+      const s = String(doc.status || 'uploaded')
+      statusBreakdown[s] = (statusBreakdown[s] || 0) + 1
+    }
+  }
+  return { documents: docs, statusBreakdown }
+}
+
 // ==================== ENSURE UPLOAD DIR EXISTS ====================
 
 async function ensureUploadDir(): Promise<void> {
@@ -190,6 +239,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Upload changed the doc list — invalidate the GET cache so the new file
+    // appears immediately (perf 2026-08-25).
+    invalidateDocListCache()
+
     return NextResponse.json({
       documents: uploadedDocs,
       errors: errors.length > 0 ? errors : undefined,
@@ -240,16 +293,72 @@ export async function GET(request: NextRequest) {
     }
 
     // List documents — R2 is the PRIMARY source.
-    // Strategy: list all R2 PDFs (canonical), then enrich with Qdrant metadata
-    // where available. This ensures documents uploaded to R2 always show in the
-    // UI even if Qdrant metadata was lost (sandbox reset, fresh Qdrant, etc.).
+    // Strategy: list all R2 PDFs (canonical), then enrich with SQLite Document
+    // rows (AUTHORITATIVE status — the extraction pipeline writes here and it
+    // survives Qdrant metadata loss, e.g. after a chunks-only R2 restore) +
+    // Qdrant metadata where available. Docs present in SQLite but missing from
+    // R2 are appended so the list never hides processed documents.
     // Fallback: if R2 not configured, fall back to Qdrant-only scroll (legacy).
     try {
       const limit = Math.min(pageSize, 100) // cap at 100 per page
       const offset = (page - 1) * limit
 
+      // --- Load SQLite Document rows (authoritative statuses) ---
+      // Doc-count fix (2026-08-25): the UI's "Hoàn thành" tile reads
+      // statusBreakdown from this endpoint, but the response never included
+      // it → processedCount always 0 ("0/N" tile). SQLite is now the primary
+      // status source; Qdrant metadata (often lost on restore) is fallback.
+      const sqliteDocs = new Map<string, {
+        title: string
+        status: string
+        domain: string
+        pageCount: number | null
+        processingPercent: number
+        errorMessage: string | null
+        filePath: string
+        createdAt: Date
+        updatedAt: Date
+      }>()
+      const sqliteByTitle = new Map<string, string>() // title → id (for R2 filename matching)
+      try {
+        const rows = await db.document.findMany()
+        for (const r of rows) {
+          sqliteDocs.set(r.id, {
+            title: r.title,
+            status: r.status,
+            domain: r.domain,
+            pageCount: r.pageCount,
+            processingPercent: r.processingPercent,
+            errorMessage: r.errorMessage,
+            filePath: r.filePath,
+            createdAt: r.createdAt,
+            updatedAt: r.updatedAt,
+          })
+          if (r.title) sqliteByTitle.set(r.title, r.id)
+        }
+      } catch (dbErr) {
+        console.warn('[Upload] SQLite document load failed (non-fatal):', dbErr instanceof Error ? dbErr.message : String(dbErr))
+      }
+
       // --- PRIMARY: list from R2 ---
       if (isR2Configured()) {
+        // Cache check (perf 2026-08-25): the 3s processing poll hits this route
+        // repeatedly; serve the 10s-TTL cached LIST (R2+Qdrant parts) when fresh,
+        // with live SQLite statuses overlaid so progress never looks stale.
+        if (docListCache && Date.now() < docListCache.expiresAt) {
+          const fresh = await overlaySqliteStatuses([...docListCache.documents])
+          const hasMore = docListCache.total > offset + limit
+          return NextResponse.json({
+            documents: fresh.documents.slice(offset, offset + limit),
+            total: docListCache.total,
+            page,
+            pageSize: limit,
+            hasMore,
+            lite,
+            source: 'r2-cache',
+            statusBreakdown: fresh.statusBreakdown,
+          })
+        }
         const r2List = await listR2Objects('pdfs/', 500)
         if (!r2List.success) {
           console.error('[Upload] R2 list failed:', r2List.error)
@@ -285,32 +394,83 @@ export async function GET(request: NextRequest) {
           for (const m of qdrantMeta.values()) {
             if (m.r2_key) qdrantMetaByR2Key.set(String(m.r2_key), m)
           }
-          const allDocs = r2List.objects.map(obj => {
+          const matchedSqliteIds = new Set<string>()
+          const allDocs: Array<Record<string, unknown>> = r2List.objects.map(obj => {
             const basename = obj.key.split('/').pop() || obj.key
             const underscoreIdx = basename.indexOf('_')
             const docId = underscoreIdx > 0 ? basename.substring(0, underscoreIdx) : basename.replace(/\.pdf$/i, '')
             const filename = underscoreIdx > 0 ? basename.substring(underscoreIdx + 1) : basename
             const r2Key = obj.key
-            // Find Qdrant metadata by matching r2_key or docId
-            const meta = qdrantMeta.get(docId) || qdrantMetaByR2Key.get(r2Key) || {}
+            // Enrichment precedence: SQLite (authoritative) → Qdrant → defaults.
+            // Try id match first; fall back to title match (R2 filename → SQLite title).
+            let matchedSqliteId: string | undefined
+            if (sqliteDocs.has(docId)) {
+              matchedSqliteId = docId
+            } else if (sqliteByTitle.has(filename)) {
+              matchedSqliteId = sqliteByTitle.get(filename)!
+            }
+            const sqlDoc = matchedSqliteId ? sqliteDocs.get(matchedSqliteId) : undefined
+            if (matchedSqliteId) matchedSqliteIds.add(matchedSqliteId)
+            const qMeta = qdrantMeta.get(docId) || qdrantMetaByR2Key.get(r2Key) || {}
 
             return {
               id: docId,
-              title: (meta.title as string) || filename.replace(/\.pdf$/i, ''),
-              file_path: (meta.file_path as string) || `${UPLOAD_DIR}/${basename}`,
-              domain: (meta.domain as string) || 'mixed',
-              page_count: (meta.page_count as number) ?? null,
-              status: (meta.status as string) || 'uploaded',
-              error_message: (meta.error_message as string) ?? null,
-              processing_steps: (meta.processing_steps as unknown[]) || [],
-              processing_percent: (meta.processing_percent as number) ?? 0,
-              created_at: (meta.created_at as string) || obj.lastModified.toISOString(),
-              updated_at: (meta.updated_at as string) || obj.lastModified.toISOString(),
-              r2_key: r2Key,
-              r2_size: obj.size,
+              title: sqlDoc?.title || (qMeta.title as string) || filename.replace(/\.pdf$/i, ''),
+              file_path: sqlDoc?.filePath || (qMeta.file_path as string) || `${UPLOAD_DIR}/${basename}`,
+              domain: sqlDoc?.domain || (qMeta.domain as string) || 'mixed',
+              page_count: sqlDoc?.pageCount ?? (qMeta.page_count as number | undefined) ?? null,
+              status: sqlDoc?.status || (qMeta.status as string) || 'uploaded',
+              error_message: sqlDoc?.errorMessage ?? (qMeta.error_message as string | undefined) ?? null,
+              processing_steps: (qMeta.processing_steps as unknown[]) || [],
+              processing_percent: sqlDoc?.processingPercent ?? (qMeta.processing_percent as number | undefined) ?? 0,
+              created_at: sqlDoc?.createdAt?.toISOString() || (qMeta.created_at as string) || obj.lastModified.toISOString(),
+              updated_at: sqlDoc?.updatedAt?.toISOString() || (qMeta.updated_at as string) || obj.lastModified.toISOString(),
+              r2_key: r2Key as string | null,
+              r2_size: (obj.size ?? null) as number | null,
               // chunk_coverage intentionally omitted (lite mode)
             }
           })
+
+          // Append SQLite docs that have NO R2 object (processed locally but
+          // R2 upload failed / was skipped) — otherwise completed work is invisible.
+          for (const [id, d] of sqliteDocs) {
+            if (matchedSqliteIds.has(id)) continue
+            allDocs.push({
+              id,
+              title: d.title,
+              file_path: d.filePath,
+              domain: d.domain,
+              page_count: d.pageCount,
+              status: d.status,
+              error_message: d.errorMessage,
+              processing_steps: [],
+              processing_percent: d.processingPercent,
+              created_at: d.createdAt.toISOString(),
+              updated_at: d.updatedAt.toISOString(),
+              r2_key: null as string | null,
+              r2_size: null as number | null,
+            })
+          }
+
+          // Sort newest-first (R2 docs use lastModified; SQLite-appended use createdAt)
+          allDocs.sort((a, b) => new Date(b.created_at as string).getTime() - new Date(a.created_at as string).getTime())
+
+          // Status breakdown across ALL docs (not just the current page) —
+          // the UI's "Hoàn thành N" line + the Tài liệu tile (completed/total)
+          // read this. Doc-count fix 2026-08-25.
+          const statusBreakdown: Record<string, number> = {}
+          for (const doc of allDocs) {
+            const s = String(doc.status || 'uploaded')
+            statusBreakdown[s] = (statusBreakdown[s] || 0) + 1
+          }
+
+          // Cache the full list (TTL) — the 3s processing poll then serves from
+          // memory (R2+Qdrant parts) with fresh SQLite statuses overlaid.
+          docListCache = {
+            documents: [...allDocs] as Array<Record<string, unknown>>,
+            total: allDocs.length,
+            expiresAt: Date.now() + DOC_LIST_CACHE_TTL_MS,
+          }
 
           // Pagination
           const hasMore = allDocs.length > offset + limit
@@ -324,6 +484,7 @@ export async function GET(request: NextRequest) {
             hasMore,
             lite,
             source: 'r2',
+            statusBreakdown,
           })
         }
       }
@@ -494,6 +655,8 @@ export async function DELETE(request: NextRequest) {
       graphCleanup,
       deletedSqliteEntities,
       documentId,
+      // Deletion changed the doc list — invalidate the GET cache (perf 2026-08-25)
+      cacheInvalidated: (invalidateDocListCache(), true),
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)

@@ -3236,8 +3236,9 @@ interface TokenUsageData {
 }
 
 /** NVIDIA NIM model configuration — Single Provider Architecture
- *  2 extraction cores + 4 agent/chat cores (kimi-k3 primary + 3 fallbacks)
- *  Verified 2026-08-21 via actual completion calls against integrate.api.nvidia.com */
+ *  1 extraction core (nemotron-550b — DUÝ NHẤT, chỉ dùng cho trích xuất dữ liệu)
+ *  + 4 agent/chat cores (user directive 2026-08-25)
+ *  Verified 2026-08-25 via actual completion calls against integrate.api.nvidia.com */
 const NVIDIA_CORE_CONFIG = {
   extraction: {
     label: 'Trích xuất',
@@ -3247,7 +3248,6 @@ const NVIDIA_CORE_CONFIG = {
     barColor: '#22d3ee',
     models: [
       { key: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b' },
-      { key: 'openai/gpt-oss-120b', label: 'gpt-oss-120b' },
     ],
   },
   agent: {
@@ -3257,8 +3257,8 @@ const NVIDIA_CORE_CONFIG = {
     headerBg: 'bg-amber-950/60',
     barColor: '#f59e0b',
     models: [
+      { key: 'openai/gpt-oss-120b', label: 'gpt-oss-120b' },
       { key: 'moonshotai/kimi-k3', label: 'kimi-k3' },
-      { key: 'z-ai/glm-5.2', label: 'glm-5.2' },
       { key: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash' },
       { key: 'minimaxai/minimax-m3', label: 'minimax-m3' },
     ],
@@ -12232,15 +12232,14 @@ function CodeTabContent() {
     { label: 'Optimize', icon: Zap, prompt: 'Optimize this code for better performance' },
   ]
 
-  // Model options — NVIDIA NIM only
-  // Audit fix 2026-08-25: previous list had 6/7 models that are DEAD on NVIDIA NIM
-  // (404: deepseek-v4-pro, kimi-k2.6, glm-5.1, minimax-m2.7, qwen3.5-397b; llama-3.3-70b
-  // intentionally dropped for quality). Replaced with models verified working today.
+  // Model options — NVIDIA NIM only (user directive 2026-08-25: Agents/Chat chỉ dùng
+  // 4 lõi sau; nemotron-3-ultra-550b KHÔNG nằm trong danh sách — lõi đó chỉ dành
+  // cho trích xuất dữ liệu)
   const MODEL_OPTIONS = [
     { value: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B (nhanh, ổn định)' },
     { value: 'moonshotai/kimi-k3', label: 'Kimi K3 (reasoning — chậm hơn)' },
-    { value: 'minimaxai/minimax-m3', label: 'MiniMax M3' },
-    { value: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'Nemotron 3 Ultra 550B' },
+    { value: 'deepseek-ai/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash (chậm nhất)' },
+    { value: 'minimaxai/minimax-m3', label: 'MiniMax M3 (nhanh)' },
   ]
 
   return (
