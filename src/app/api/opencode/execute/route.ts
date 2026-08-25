@@ -28,8 +28,8 @@ export async function POST(request: Request) {
     // Local fallback: execute directly via child_process
     try {
       const output = execSync(command, {
-        timeout: 30000,
-        maxBuffer: 1024 * 1024, // 1MB
+        timeout: 600000, // 10 minutes
+        maxBuffer: 1024 * 1024 * 10, // 10MB
         encoding: 'utf-8',
         cwd: cwd || process.cwd(),
         env: { ...process.env, FORCE_COLOR: '0' },

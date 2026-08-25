@@ -10624,6 +10624,11 @@ function CodeTabContent() {
   const [terminalRunning, setTerminalRunning] = useState(false)
   const [terminalHeight, setTerminalHeight] = useState(192)
   const terminalDragRef = useRef<{ startY: number; startH: number } | null>(null)
+  // Phase 4: persistent interactive shell (bash -i) session + SSE stream refs
+  const terminalSessionIdRef = useRef<string | null>(null)
+  const terminalEvtRef = useRef<EventSource | null>(null)
+  const terminalBufferRef = useRef<string>('')
+  const terminalPrevRootRef = useRef<string | null>(null)
 
   // File Explorer resize
   const [fileExplorerHeight, setFileExplorerHeight] = useState(400)
@@ -11232,12 +11237,158 @@ function CodeTabContent() {
     }
   }, [loadSessions])
 
+  // Phase 4: append a raw SSE chunk as complete lines (partial line stays buffered)
+  const appendTerminalChunk = useCallback((chunk: string) => {
+    const clean = chunk.replace(/\r/g, '')
+    terminalBufferRef.current += clean
+    const lines = terminalBufferRef.current.split('\n')
+    terminalBufferRef.current = lines.pop() ?? ''
+    if (lines.length > 0) {
+      setTerminalOutput(prev => [...prev, ...lines].slice(-500))
+    }
+  }, [])
+
+  // Phase 4: handle one SSE frame from the terminal stream
+  const handleTerminalFrame = useCallback((parsed: { type?: string; data?: string; code?: number | null } | null) => {
+    if (!parsed) return
+    if (parsed.type === 'init') {
+      // Replay: replace the panel with the server-side cumulative output
+      terminalBufferRef.current = ''
+      setTerminalOutput([])
+      if (parsed.data) appendTerminalChunk(String(parsed.data))
+    } else if (parsed.type === 'chunk' && parsed.data) {
+      appendTerminalChunk(String(parsed.data))
+    } else if (parsed.type === 'exit') {
+      // Shell died — close SSE + clear ref so the next command spawns a fresh shell
+      try { terminalEvtRef.current?.close() } catch { /* ignore */ }
+      terminalEvtRef.current = null
+      terminalSessionIdRef.current = null
+      const rest = terminalBufferRef.current
+      terminalBufferRef.current = ''
+      setTerminalOutput(prev => [...prev, ...(rest ? [rest] : []), `[exit ${parsed.code ?? 'null'}]`].slice(-500))
+    }
+  }, [appendTerminalChunk])
+
+  // Phase 4: lazily create the persistent shell session + open its SSE stream.
+  // Waits for the FIRST init frame (≤2s) before returning so the local `$ cmd`
+  // echo isn't immediately wiped by the init replay.
+  const ensureTerminalSession = useCallback(async (): Promise<string | null> => {
+    if (terminalSessionIdRef.current) return terminalSessionIdRef.current
+    try {
+      const res = await authedFetch('/api/opencode/terminal/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd: workspaceRoot || undefined }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data?.sessionId) throw new Error(data?.error || 'start failed')
+      const sid: string = data.sessionId
+      terminalSessionIdRef.current = sid
+
+      // Open the SSE stream; resolve once the init frame lands (or 2s timeout)
+      await new Promise<void>(resolve => {
+        let settled = false
+        const finish = (): void => { if (!settled) { settled = true; resolve() } }
+        const timer = setTimeout(finish, 2000)
+        try {
+          // EventSource cannot set headers — auth relies on the HttpOnly
+          // tmo_api_token cookie set by /api/auth/setup on mount.
+          const es = new EventSource(`/api/opencode/terminal/stream?sessionId=${encodeURIComponent(sid)}`)
+          terminalEvtRef.current = es
+          es.onmessage = (ev: MessageEvent<string>) => {
+            let parsed: { type?: string; data?: string; code?: number | null } | null = null
+            try { parsed = JSON.parse(ev.data) } catch { return }
+            if (!settled && parsed?.type === 'init') {
+              clearTimeout(timer)
+              finish()
+            }
+            handleTerminalFrame(parsed)
+          }
+          es.onerror = () => {
+            // auto-reconnect handles transient drops; just stop waiting
+            clearTimeout(timer)
+            finish()
+          }
+        } catch {
+          clearTimeout(timer)
+          finish()
+        }
+      })
+      return sid
+    } catch (err) {
+      console.error('Terminal session start failed:', err)
+      terminalSessionIdRef.current = null
+      return null
+    }
+  }, [workspaceRoot, handleTerminalFrame])
+
+  // Phase 4: workspace changed — tear down the terminal session (SSE + shell)
+  // so the next command spawns a fresh shell in the NEW cwd.
+  useEffect(() => {
+    const prevRoot = terminalPrevRootRef.current
+    terminalPrevRootRef.current = workspaceRoot
+    if (prevRoot === workspaceRoot) return
+    const oldSid = terminalSessionIdRef.current
+    if (!oldSid) return
+    terminalSessionIdRef.current = null
+    try { terminalEvtRef.current?.close() } catch { /* ignore */ }
+    terminalEvtRef.current = null
+    void authedFetch('/api/opencode/terminal/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: oldSid }),
+    }).catch(() => { /* best-effort */ })
+  }, [workspaceRoot])
+
+  // Phase 4: unmount — stop listening (server session reaped by idle cleanup)
+  useEffect(() => {
+    return () => {
+      try { terminalEvtRef.current?.close() } catch { /* ignore */ }
+      terminalEvtRef.current = null
+    }
+  }, [])
+
+  // Phase 4: kill the shell session now; it is lazily re-created on next command
+  const handleTerminalRestart = useCallback(() => {
+    const oldSid = terminalSessionIdRef.current
+    terminalSessionIdRef.current = null
+    try { terminalEvtRef.current?.close() } catch { /* ignore */ }
+    terminalEvtRef.current = null
+    if (oldSid) {
+      void authedFetch('/api/opencode/terminal/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: oldSid }),
+      }).catch(() => { /* best-effort */ })
+    }
+    setTerminalOutput(prev => [...prev, '[terminal restarted]'])
+    toast({ title: 'Terminal đã dừng', description: 'Shell mới sẽ khởi động ở lệnh kế tiếp' })
+  }, [])
+
   const handleExecuteCommand = useCallback(async () => {
     if (!terminalCommand.trim()) return
     setTerminalRunning(true)
     const cmd = terminalCommand
     setTerminalCommand('')
+    // Phase 4: persistent shell — cwd/env/background jobs survive between commands
+    const sid = await ensureTerminalSession()
     setTerminalOutput(prev => [...prev, `$ ${cmd}`])
+    if (sid) {
+      try {
+        const res = await authedFetch('/api/opencode/terminal/input', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: sid, data: `${cmd}\n` }),
+        })
+        if (res.ok) {
+          const data = await res.json()
+          if (data?.ok) {
+            return // output streams in via SSE (terminalEvtRef)
+          }
+        }
+      } catch { /* fall through to legacy one-shot execute */ }
+    }
+    // Legacy fallback: one-shot /api/opencode/execute
     try {
       const res = await authedFetch('/api/opencode/execute', {
         method: 'POST',
@@ -11260,7 +11411,7 @@ function CodeTabContent() {
     } finally {
       setTerminalRunning(false)
     }
-  }, [terminalCommand, workspaceRoot])
+  }, [terminalCommand, workspaceRoot, ensureTerminalSession])
 
   // Phase 3: subscribe to the dev-server log SSE stream for a workspace root
   const startPreviewLogStream = useCallback((root: string) => {
@@ -12211,6 +12362,16 @@ function CodeTabContent() {
               )}
             </div>
             <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 text-[9px] text-stone-500 hover:text-stone-300 gap-1"
+                title="Dừng shell hiện tại — shell mới sẽ khởi động ở lệnh kế tiếp"
+                onClick={handleTerminalRestart}
+              >
+                <RotateCcw className="h-3 w-3" />
+                Khởi động lại
+              </Button>
               <Button
                 size="sm"
                 variant="ghost"

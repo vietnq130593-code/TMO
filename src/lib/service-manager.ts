@@ -261,7 +261,13 @@ async function waitForHealth(
 
   while (Date.now() - startTime < timeoutMs) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(intervalMs) })
+      // Phase 1 companion fix: opencode-server requires X-TMO-API-Token on
+      // EVERY request (incl. /health). Without the header the probe gets 401
+      // → "health check failed" → kill/restart loop → service gives up.
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(intervalMs),
+        headers: process.env.TMO_API_TOKEN ? { 'X-TMO-API-Token': process.env.TMO_API_TOKEN } : {},
+      })
       if (res.ok) {
         return true
       }
