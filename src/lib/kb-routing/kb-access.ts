@@ -47,14 +47,31 @@ export const CONFIDENCE_THRESHOLD = 0.5
 /**
  * Prop 3.11 — Semantic entity search score threshold.
  *
- * Neo4j vector indexes return NORMALIZED cosine similarity
+ * Neo4j db.index.vector.queryNodes returns NORMALIZED cosine similarity
  * (1 + raw_cosine) / 2 ∈ [0, 1] — NOT the raw cosine Qdrant uses.
- * 0.7 normalized ≈ 0.4 raw cosine. Deliberately looser than the chunk
- * threshold (0.3 raw cosine) because entity matches are name+description
- * level (short texts embed noisier than full chunks) and the lexical search
- * runs in parallel anyway — low-precision semantic hits are harmless.
+ * (Verified empirically 2026-08-25, Task 13E: the queryNodes score matched
+ * (1+cos)/2 computed in JS on the stored embeddings to 4 decimals — e.g.
+ * score 0.6249 for raw cosine 0.2498.)
+ *
+ * Task 13E (2026-08-25): retuned 0.7 → 0.58. Measured score distribution on
+ * this KB (llama-nemotron-embed-1b-v2, name+description embeddings vs query
+ * embedding — different label spaces, so raw cosines run low):
+ *   - unrelated queries (e.g. "recipe for chocolate cake"): 0.54–0.55
+ *     normalized ≈ raw cosine 0.08–0.10
+ *   - genuinely-related entities (Dijkstra query → graph concepts,
+ *     Task 13D eval-question max 0.644): 0.61–0.64 ≈ raw 0.22–0.29
+ *   - direct topical match (ML query → "Neural networks"): 0.72 ≈ raw 0.43
+ * The old 0.7 exceeded every observed related-entity score except the single
+ * best-case direct hit → the semantic layer returned 0 rows for ALL queries
+ * despite a 1006/1006 embedding backfill. 0.58 sits in the empirical
+ * separation gap (unrelated ≤ 0.548 < 0.58 ≤ related ≥ 0.612) ≈ raw cosine
+ * 0.16 — it blocks unrelated hits while passing related ones with ~0.03
+ * margin on both sides. Deliberately looser than the chunk threshold (raw
+ * 0.3) because entity matches are name+description level (short texts embed
+ * noisier than full chunks) and the lexical search runs in parallel anyway —
+ * low-precision semantic hits are harmless.
  */
-const ENTITY_SEMANTIC_THRESHOLD = 0.7
+const ENTITY_SEMANTIC_THRESHOLD = 0.58
 
 /** Prop 3.11 — Vector neighbors to fetch per entity label (8 labels → up to 24 raw hits before merge). */
 const ENTITY_SEMANTIC_TOP_PER_LABEL = 3
@@ -498,7 +515,7 @@ async function searchEntitiesForUser(agentId: string, query: string, topK: numbe
 
     // Merge: semantic results first (already score-sorted), then lexical results
     // not already included (fixed score 0.5 — below every semantic hit above the
-    // 0.7 threshold, above nothing; ordering-only signal). Dedupe by lowercased
+    // ENTITY_SEMANTIC_THRESHOLD, above nothing; ordering-only signal). Dedupe by lowercased
     // name. Cap at topK.
     const merged: UserKBResult['entities'] = []
     const seen = new Set<string>()

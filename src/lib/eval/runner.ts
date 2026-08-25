@@ -45,6 +45,12 @@ const REFUSAL_MARKER_RE = /i don'?t know|không (biết|chắc)|no (information|
 /** Default number of cases per run when the caller doesn't specify. */
 const DEFAULT_CASE_LIMIT = 10
 
+/** Task 13E: system agent for eval retrieval — kb-access gates entity search
+ *  + memory recall on agentId; without one the eval never exercised the
+ *  (freshly backfilled) semantic entity layer. 'default' is the conventional
+ *  system agent id used across the codebase. */
+const EVAL_AGENT_ID = 'default'
+
 interface ExpectedEntity {
   name: string
   type?: string
@@ -60,6 +66,17 @@ function parseExpectedEntities(json: string): ExpectedEntity[] {
   } catch {
     return []
   }
+}
+
+/** Task 13E: normalize text for entity matching — curly quotes (U+2018/2019)
+ *  and dashes from PDF extraction break exact substring matches against
+ *  LLM-generated straight-quote expected entities. */
+function normalizeForEntityMatch(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u02BC]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2013\u2014]/g, '-')
 }
 
 /**
@@ -197,7 +214,10 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
       // ---- Step 1: retrieval (production path) ----
       let kb: { chunks: Array<{ text: string; score: number }>; confidence: number }
       try {
-        const result = await searchUserKB(evalCase.question)
+        // Task 13E: pass EVAL_AGENT_ID — searchUserKB gates entity search +
+        // memory recall on agentId; without it every eval case measured a
+        // KB with the (backfilled) semantic entity layer silently disabled.
+        const result = await searchUserKB(evalCase.question, EVAL_AGENT_ID)
         kb = { chunks: result.chunks, confidence: result.confidence }
       } catch (err) {
         console.warn(`[EvalRunner] searchUserKB failed for case ${evalCase.id}: ${err instanceof Error ? err.message : String(err)}`)
@@ -229,17 +249,18 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
 
       // ---- Step 3: scoring ----
       const expectedEntities = parseExpectedEntities(evalCase.expectedEntities)
-      const answerLower = answer.toLowerCase()
 
-      // Entity hit in top-5 retrieved chunks (case-insensitive substring).
+      // Entity hit in top-5 retrieved chunks (normalized substring — Task 13E:
+      // PDF-extracted chunk text uses curly quotes/dashes that must be
+      // normalized before matching straight-quote expected entities).
       const top5 = kb.chunks.slice(0, 5)
       const expectedEntitiesRetrieved = expectedEntities.filter((e) =>
-        top5.some((c) => c.text.toLowerCase().includes(e.name.toLowerCase()))
+        top5.some((c) => normalizeForEntityMatch(c.text).includes(normalizeForEntityMatch(e.name)))
       ).length
 
-      // Entity hit in the generated answer.
+      // Entity hit in the generated answer (same normalization).
       const expectedEntitiesInAnswer = expectedEntities.filter((e) =>
-        answerLower.includes(e.name.toLowerCase())
+        normalizeForEntityMatch(answer).includes(normalizeForEntityMatch(e.name))
       ).length
 
       // recall@5: fraction of expected entities retrieved in the top-5 chunks.
