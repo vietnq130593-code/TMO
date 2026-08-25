@@ -7,7 +7,8 @@
  * Port: 18790
  */
 
-import { spawn, ChildProcess } from 'child_process'
+import { spawn, execSync, ChildProcess } from 'child_process'
+import { createServer } from 'net'
 import { resolve } from 'path'
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'fs'
 
@@ -25,6 +26,30 @@ function isProcessRunning(pid: number): boolean {
   } catch {
     return false
   }
+}
+
+/** Audit fix 2026-08-25: EADDRINUSE crash loop on every PM2 restart.
+ *  killExisting() kills the old PID, but the OS may hold port 18790 a beat
+ *  longer (SIGTERM teardown + TIME_WAIT). Probe the port and WAIT until it is
+ *  actually free (max 5s) before spawning the replacement server. */
+function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolvePromise) => {
+    const tester = createServer()
+    tester.once('error', () => resolvePromise(false))
+    tester.once('listening', () => {
+      tester.close(() => resolvePromise(true))
+    })
+    tester.listen({ port, host: '127.0.0.1' })
+  })
+}
+
+async function waitForPortFree(port: number, maxWaitMs = 5000): Promise<void> {
+  const start = Date.now()
+  while (Date.now() - start < maxWaitMs) {
+    if (await isPortFree(port)) return
+    await new Promise(r => setTimeout(r, 200))
+  }
+  console.warn(`[opencode-manager] Port ${port} still busy after ${maxWaitMs}ms — spawning anyway`)
 }
 
 function killExisting(): void {
@@ -45,9 +70,37 @@ function killExisting(): void {
   }
 }
 
-function startServer(): void {
+/** Audit fix 2026-08-25 (part 2): orphaned server may hold port 18790 with a
+ *  PID that is NOT in the PID file (e.g. PM2 SIGKILL'd the previous manager
+ *  before its shutdown hook unlinked the file). Kill by PORT via lsof. */
+function killPortHolders(port: number): void {
+  try {
+    const out = execSync(`lsof -ti :${port} 2>/dev/null || true`, { encoding: 'utf-8', timeout: 3000 })
+    const pids = out.split('\n').map(s => s.trim()).filter(s => /^\d+$/.test(s))
+    for (const pidStr of pids) {
+      const pid = parseInt(pidStr, 10)
+      if (pid === process.pid) continue // never kill ourselves
+      try {
+        console.log(`[opencode-manager] Killing port ${port} holder PID ${pid}...`)
+        process.kill(pid, 'SIGKILL')
+      } catch { /* already dead */ }
+    }
+    if (pids.length > 0) {
+      // give the OS a beat to release the sockets
+      const start = Date.now()
+      while (Date.now() - start < 1000) { /* brief settle */ }
+    }
+  } catch { /* lsof unavailable or failed — non-fatal */ }
+}
+
+async function startServer(): Promise<void> {
   killExisting()
-  
+  // Audit fix part 2: kill orphaned port holders (PID not in PID file)
+  if (!(await isPortFree(PORT))) {
+    killPortHolders(PORT)
+  }
+  await waitForPortFree(PORT)
+
   console.log(`[opencode-manager] Starting OpenCode server on port ${PORT}...`)
   
   serverProcess = spawn('bun', [SERVER_SCRIPT], {

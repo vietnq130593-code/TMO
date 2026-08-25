@@ -3,7 +3,7 @@
  *
  * Architecture: NVIDIA NIM ONLY (single provider)
  *   - 2 extraction cores: nemotron-3-ultra-550b (primary), gpt-oss-120b (fallback)
- *   - 5 agent/chat cores: glm-5.2, deepseek-v4-flash-0731, minimax-m3
+ *   - glm-5.2 removed 2026-08-25 (NIM end-of-life)
  *   - NOT using: kimi-k2.6 (deprecated 404), glm-5.1 (deprecated), minimax-m2.7 (deprecated),
  *     qwen3.5-397b (not on NIM), deepseek-v4-pro (not on NIM)
  *   - NOT using: Mistral, Cerebras, OpenRouter (removed)
@@ -44,7 +44,7 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string }
     { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b' },
     // Agent/Chat cores (kimi-k3 là primary, 3 lõi còn lại là fallback)
     { id: 'moonshotai/kimi-k3', label: 'kimi-k3' },
-    { id: 'z-ai/glm-5.2', label: 'glm-5.2' },
+    { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (chat)' },
     { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash' },
     { id: 'minimaxai/minimax-m3', label: 'minimax-m3' },
   ],

@@ -6,7 +6,8 @@
  *
  * Architecture: NVIDIA NIM ONLY (no Mistral, Cerebras, OpenRouter)
  *   - 2 extraction cores: nemotron-3-ultra-550b, gpt-oss-120b
- *   - 4 agent/chat cores: kimi-k3 (primary), glm-5.2, deepseek-v4-flash-0731, minimax-m3 (fallbacks)
+ *   - 4 agent/chat cores: kimi-k3 (primary), gpt-oss-120b, deepseek-v4-flash-0731, minimax-m3 (fallbacks)
+ *   - glm-5.2 REMOVED 2026-08-25: NVIDIA NIM end-of-life 2026-08-21
  *   - Deprecated (404): kimi-k2.6, glm-5.1, minimax-m2.7, deepseek-v4-pro, qwen3.5-397b
  *
  * Key assignment (AUTO mode, least-loaded-first):
@@ -197,7 +198,7 @@ function getRotatedModels(provider: string, models: string[]): string[] {
 
 /** NVIDIA NIM EXTRACTION models (4 keys × 4 docs, no daily cap)
  *  CHÍNH SÁCH: NVIDIA NIM chỉ sử dụng 2 lõi này cho trích xuất tài liệu.
- *  Các lõi khác (glm-5.2, deepseek-v4-flash, minimax-m3) chỉ dùng cho agent/chat.
+ *  Các lõi khác (gpt-oss-120b, deepseek-v4-flash, minimax-m3) chỉ dùng cho agent/chat.
  *
  *  nvidia/nemotron-3-ultra-550b-a55b: 550B MoE (55B active), mạnh nhất ✓ VERIFIED 2026-08-21
  *  openai/gpt-oss-120b: 120B MoE, fallback khi 550b bị rate-limit ✓ VERIFIED 2026-08-21
@@ -221,7 +222,6 @@ const NVIDIA_MODELS = [
   'openai/gpt-oss-120b',
   // Agent/Chat models (kimi-k3 primary + 3 fallbacks — verified working 2026-08-21)
   'moonshotai/kimi-k3',
-  'z-ai/glm-5.2',
   'deepseek-ai/deepseek-v4-flash-0731',
   'minimaxai/minimax-m3',
 ]

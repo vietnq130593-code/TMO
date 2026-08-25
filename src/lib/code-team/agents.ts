@@ -88,7 +88,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'security',
     capable: 'Code review, tìm bugs, kiểm tra security, fix bugs, iterative refinement',
     provider: 'nvidia',
-    model: 'z-ai/glm-5.2',
+    model: 'openai/gpt-oss-120b',
     temperature: 0.2,
     maxTokens: 8192,
     team: 'code',
