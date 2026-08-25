@@ -25,9 +25,36 @@
  */
 
 import { createServer } from 'http'
+import { execSync } from 'child_process'
 
 const PORT = 3004
 const TICK_INTERVAL_MS = 30_000
+
+/** Root-cause fix (2026-08-25 post-deploy audit): an orphaned previous
+ *  instance of this service (from a killed app process) can still hold port
+ *  3004 — the new instance then dies with "Failed to start server. Is port
+ *  3004 in use?" and the service-manager gives up after 3 retries. Kill any
+ *  orphaned port holders before binding. */
+function killPortHolders(port: number): void {
+  try {
+    const out = execSync(`lsof -ti :${port} 2>/dev/null || true`, { encoding: 'utf-8', timeout: 3000 })
+    const pids = out.split('\n').map(s => s.trim()).filter(s => /^\d+$/.test(s))
+    for (const pidStr of pids) {
+      const pid = parseInt(pidStr, 10)
+      if (pid === process.pid) continue // never kill ourselves
+      try {
+        console.log(`[cron-scheduler] Killing orphaned port ${port} holder PID ${pid}...`)
+        process.kill(pid, 'SIGKILL')
+      } catch { /* already dead */ }
+    }
+    if (pids.length > 0) {
+      const start = Date.now()
+      while (Date.now() - start < 1000) { /* brief settle for socket release */ }
+    }
+  } catch { /* lsof unavailable — non-fatal */ }
+}
+
+killPortHolders(PORT)
 
 // Read the same DATABASE_URL as the parent app (set in .env / instrumentation).
 const DATABASE_URL = process.env.DATABASE_URL

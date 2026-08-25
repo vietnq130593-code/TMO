@@ -347,6 +347,7 @@ export interface WorkflowEvent {
     | 'tool_result'
     | 'checkpoint'
     | 'iteration'
+    | 'clarification_resolved'
     | 'workflow_done'
     | 'error'
   [key: string]: unknown
@@ -2090,6 +2091,71 @@ function formatMessagesForLLM(
 //
 // Both are exported alongside runAgentStep so orchestration can dispatch real
 // agent steps without spinning up a full workflow run.
+
+/**
+ * Resume a workflow that was paused awaiting user clarification.
+ *
+ * POST /api/code-team/clarify calls this. It reconstructs the original request
+ * from the session's persisted chat history (ChatMessage rows), appends the
+ * user's clarification answer as fresh context, and re-runs the pipeline under
+ * the SAME sessionId (worklog + CodeTeamSession rows continue in place).
+ *
+ * Post-deploy audit fix (2026-08-25): this function was referenced by the
+ * clarify API route since Phase 1-6 but never implemented — the named export
+ * didn't exist, so the route 500'd on import. Now it exists.
+ */
+export async function resumeWorkflow(
+  sessionId: string,
+  clarificationResponse: {
+    requestId: string
+    selectedOption: string
+    updatedContext?: string
+  },
+  emit: SSEEmitter,
+  abortSignal?: AbortSignal,
+  config?: WorkflowConfig
+): Promise<void> {
+  // Reconstruct chat history for this session (persisted by the chat API).
+  const history = await db.chatMessage.findMany({
+    where: { sessionId },
+    orderBy: { createdAt: 'asc' },
+    take: 50,
+    select: { role: true, content: true },
+  })
+
+  const lastUser = [...history].reverse().find(m => m.role === 'user')
+  if (!lastUser) {
+    throw new Error(
+      `Cannot resume workflow "${sessionId}": no prior user message found in chat history`
+    )
+  }
+
+  const messages = [
+    ...history.map(m => ({ role: m.role, content: m.content })),
+    {
+      role: 'user',
+      content: `Clarification (request ${clarificationResponse.requestId}): ${clarificationResponse.selectedOption}`,
+    },
+  ]
+
+  emit({
+    type: 'clarification_resolved',
+    requestId: clarificationResponse.requestId,
+    selectedOption: clarificationResponse.selectedOption,
+    updatedContext: clarificationResponse.updatedContext ?? '',
+  })
+
+  console.log(
+    `[Workflow] Resuming session ${sessionId} after clarification ${clarificationResponse.requestId}: "${clarificationResponse.selectedOption.slice(0, 80)}"`
+  )
+
+  await runWorkflow(
+    { sessionId, userRequest: lastUser.content, messages },
+    emit,
+    abortSignal,
+    config
+  )
+}
 
 /**
  * Build a minimal WorkflowContext for use outside of runWorkflow (e.g. when

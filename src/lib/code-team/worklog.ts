@@ -486,10 +486,15 @@ export async function upsertSession(data: {
 /**
  * Mark session as completed or failed.
  * Also clears currentAgent and optionally updates completedAgents.
+ *
+ * 'completed_with_errors' (strict quality-gate outcome from runWorkflow) is
+ * accepted since the DB column is a free-form string and the status API
+ * surfaces it verbatim — callers get an honest terminal state instead of a
+ * type error forcing a silent downgrade to 'completed'.
  */
 export async function completeSession(
   sessionId: string,
-  status: 'completed' | 'failed',
+  status: 'completed' | 'completed_with_errors' | 'failed',
   totalDuration?: number,
   completedAgents?: string[],
 ): Promise<void> {

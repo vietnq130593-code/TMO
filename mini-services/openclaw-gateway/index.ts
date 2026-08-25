@@ -15,12 +15,13 @@
 
 import { spawn, ChildProcess } from "child_process";
 import { resolve, dirname } from "path";
-import { writeFileSync, readFileSync, unlinkSync, existsSync } from "fs";
+import fs, { writeFileSync, readFileSync, unlinkSync, existsSync } from "fs";
 
 const GATEWAY_PORT = 18789;
 const GATEWAY_AUTH = "none";
 const GATEWAY_BIND = "loopback";
 const PID_FILE = resolve(__dirname, ".gateway.pid");
+const MANAGER_PID_FILE = resolve(__dirname, ".manager.pid");
 
 // ==================== MEMORY GUARD ====================
 // Prevents the "spawn storm" crash-loop: when system RAM is nearly full,
@@ -32,7 +33,6 @@ const MEMORY_CHECK_INTERVAL_MS = 10_000; // re-check every 10s when waiting
 
 function getSystemMemoryUsagePercent(): number {
   try {
-    const fs = require("fs");
     const meminfo = fs.readFileSync("/proc/meminfo", "utf-8");
     const total = parseInt(meminfo.match(/^MemTotal:\s+(\d+)/m)?.[1] || "0", 10) * 1024;
     const available = parseInt(meminfo.match(/^MemAvailable:\s+(\d+)/m)?.[1] || "0", 10) * 1024;
@@ -67,6 +67,36 @@ function isProcessRunning(pid: number): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Root-cause fix (2026-08-25 post-deploy audit): MANAGER TAKEOVER.
+ *  When two manager instances coexist (old orphan from a killed app instance
+ *  + fresh one), each kills the other's gateway child via the shared
+ *  .gateway.pid file and respawns its own — an endless SIGTERM ping-pong
+ *  (observed 407+ kill cycles on the opencode-server sibling).
+ *  Fix: a new manager first SIGTERMs the OLD MANAGER process itself (which
+ *  gracefully reaps its own gateway child), waits for it to die, then claims
+ *  the singleton lock. Exactly one manager survives — the newest. */
+function killExistingManager(): void {
+  if (!existsSync(MANAGER_PID_FILE)) return;
+  try {
+    const pid = parseInt(readFileSync(MANAGER_PID_FILE, "utf-8").trim(), 10);
+    if (!isNaN(pid) && pid !== process.pid && isProcessRunning(pid)) {
+      console.log(`[openclaw-gateway] Takeover: stopping previous manager (PID ${pid})...`);
+      try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
+      const start = Date.now();
+      while (isProcessRunning(pid) && Date.now() - start < 8000) {
+        // busy wait — manager's own shutdown handler kills its gateway child
+      }
+      if (isProcessRunning(pid)) {
+        console.log(`[openclaw-gateway] Takeover: force killing previous manager (PID ${pid})`);
+        try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+      }
+    }
+    unlinkSync(MANAGER_PID_FILE);
+  } catch {
+    // Ignore errors reading manager PID file
   }
 }
 
@@ -106,8 +136,13 @@ function killExistingGateway(): void {
 }
 
 function startGateway(): void {
+  // Root-cause fix: kill the previous MANAGER first (prevents respawn ping-pong)
+  killExistingManager();
   // Kill any existing gateway from a previous run/hot-reload
   killExistingGateway();
+
+  // Singleton claim: only after the previous manager is dead do we take the lock.
+  try { writeFileSync(MANAGER_PID_FILE, String(process.pid)); } catch { /* non-fatal */ }
 
   console.log(
     `[openclaw-gateway] Starting OpenClaw gateway on port ${GATEWAY_PORT}...`
@@ -184,6 +219,18 @@ function cleanup(): void {
   gatewayProcess = null;
 }
 
+function cleanupManagerLock(): void {
+  // Only remove the lock if WE own it (a newer manager may have claimed it).
+  try {
+    if (existsSync(MANAGER_PID_FILE)) {
+      const pid = parseInt(readFileSync(MANAGER_PID_FILE, "utf-8").trim(), 10);
+      if (isNaN(pid) || pid === process.pid) unlinkSync(MANAGER_PID_FILE);
+    }
+  } catch {
+    // Ignore
+  }
+}
+
 function shutdown(): void {
   if (isShuttingDown) return;
   isShuttingDown = true;
@@ -210,6 +257,9 @@ function shutdown(): void {
 // Handle process signals for graceful shutdown
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
+
+// Final safety net: never leave a stale manager lock behind on exit.
+process.on("exit", cleanupManagerLock);
 
 // Start the gateway
 startGateway();

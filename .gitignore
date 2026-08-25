@@ -131,3 +131,7 @@ preview-*.png
 
 # Supabase CLI temp artifacts (from supabase link)
 supabase/.temp/
+# Mini-service manager singleton locks (2026-08-25 audit fix)
+mini-services/*/.manager.pid
+mini-services/*/.pid
+mini-services/*/.gateway.pid

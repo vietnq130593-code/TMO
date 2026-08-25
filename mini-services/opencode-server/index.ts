@@ -14,6 +14,7 @@ import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'fs'
 
 const PORT = 18790
 const PID_FILE = resolve(__dirname, '.pid')
+const MANAGER_PID_FILE = resolve(__dirname, '.manager.pid')
 const SERVER_SCRIPT = resolve(__dirname, 'server.ts')
 
 let serverProcess: ChildProcess | null = null
@@ -50,6 +51,33 @@ async function waitForPortFree(port: number, maxWaitMs = 5000): Promise<void> {
     await new Promise(r => setTimeout(r, 200))
   }
   console.warn(`[opencode-manager] Port ${port} still busy after ${maxWaitMs}ms — spawning anyway`)
+}
+
+/** Root-cause fix (2026-08-25 post-deploy audit): MANAGER TAKEOVER.
+ *  Symptom: 407 SIGTERM kills / endless respawn ping-pong. Two manager
+ *  instances (old orphan + new) both ran startServer(); each killed the
+ *  OTHER manager's server child via the shared .pid file, and the victim's
+ *  manager respawned it — forever.
+ *  Fix: before touching the server, a new manager SIGTERMs the OLD MANAGER
+ *  process itself (which gracefully reaps its own server child), waits for
+ *  it to die, then proceeds. Exactly one manager survives — the newest. */
+function killExistingManager(): void {
+  if (!existsSync(MANAGER_PID_FILE)) return
+  try {
+    const pid = parseInt(readFileSync(MANAGER_PID_FILE, 'utf-8').trim(), 10)
+    if (!isNaN(pid) && pid !== process.pid && isProcessRunning(pid)) {
+      console.log(`[opencode-manager] Takeover: stopping previous manager (PID ${pid})...`)
+      try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
+      const start = Date.now()
+      while (isProcessRunning(pid) && Date.now() - start < 8000) { /* busy wait */ }
+      if (isProcessRunning(pid)) {
+        console.log(`[opencode-manager] Takeover: force killing previous manager (PID ${pid})`)
+        try { process.kill(pid, 'SIGKILL') } catch { /* already dead */ }
+        // also reap any server child it left behind via port holders below
+      }
+    }
+    unlinkSync(MANAGER_PID_FILE)
+  } catch { /* ignore */ }
 }
 
 function killExisting(): void {
@@ -94,12 +122,16 @@ function killPortHolders(port: number): void {
 }
 
 async function startServer(): Promise<void> {
+  killExistingManager()
   killExisting()
   // Audit fix part 2: kill orphaned port holders (PID not in PID file)
   if (!(await isPortFree(PORT))) {
     killPortHolders(PORT)
   }
   await waitForPortFree(PORT)
+
+  // Singleton claim: only after the previous manager is dead do we take the lock.
+  try { writeFileSync(MANAGER_PID_FILE, String(process.pid)) } catch { /* non-fatal */ }
 
   console.log(`[opencode-manager] Starting OpenCode server on port ${PORT}...`)
   
@@ -154,6 +186,16 @@ function cleanup(): void {
   serverProcess = null
 }
 
+function cleanupManagerLock(): void {
+  // Only remove the lock if WE own it (a newer manager may have claimed it).
+  try {
+    if (existsSync(MANAGER_PID_FILE)) {
+      const pid = parseInt(readFileSync(MANAGER_PID_FILE, 'utf-8').trim(), 10)
+      if (isNaN(pid) || pid === process.pid) unlinkSync(MANAGER_PID_FILE)
+    }
+  } catch { /* ignore */ }
+}
+
 function shutdown(): void {
   if (isShuttingDown) return
   isShuttingDown = true
@@ -176,5 +218,8 @@ function shutdown(): void {
 
 process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
+
+// Final safety net: never leave a stale manager lock behind on exit.
+process.on('exit', cleanupManagerLock)
 
 startServer()
