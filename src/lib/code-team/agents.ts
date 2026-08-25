@@ -36,11 +36,12 @@ export interface CodeTeamAgentDef {
 // ===== 5 AGENTS HARDCODED =====
 
 export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
-  // ===== MODEL POLICY (user request 2026-08-25) =====
-  // TẤT CẢ agents mặc định kimi-k3 (moonshotai/kimi-k3).
-  // Các lõi khác (gpt-oss-120b, minimax-m3, deepseek-v4-flash) là BACKUP —
-  // tự kích hoạt qua callLLMForAgent global-pool fallback khi kimi-k3 fail/
-  // rate-limit (xem llm.ts callLLMForAgent Step 2).
+  // ===== MODEL POLICY (updated 2026-08-27) =====
+  // TẤT CẢ agents (kể cả agents độc lập) mặc định kimi-k3 (moonshotai/kimi-k3).
+  // Các lõi khác (deepseek-v4-flash → minimax-m3) là BACKUP — tự kích hoạt qua
+  // callLLMForAgent global-pool fallback khi kimi-k3 fail/rate-limit (xem llm.ts
+  // callLLMForAgent Step 2). gpt-oss-120b đã bị bỏ khỏi Agent/Chat (user
+  // directive 2026-08-27); GLM 5.2/5.3 không dùng được trên NIM (410/404).
   {
     name: 'APEX',
     description: 'TL — Nhìn & Điều hướng. Phân tích yêu cầu, chọn routing, code UI (Fast Track), verify kết quả.',

@@ -4,8 +4,10 @@
  * Architecture: NVIDIA NIM ONLY (single provider)
  *   - 1 extraction core: nemotron-3-ultra-550b (DUY NHẤT — user directive 2026-08-25;
  *     chỉ dùng cho trích xuất dữ liệu, không dùng cho tác vụ khác)
- *   - 4 agent/chat cores: gpt-oss-120b, kimi-k3, deepseek-v4-flash, minimax-m3
+ *   - 3 agent/chat cores: kimi-k3, deepseek-v4-flash, minimax-m3
+ *     (user directive 2026-08-27: bỏ gpt-oss-120b khỏi Agent/Chat)
  *   - glm-5.2 removed 2026-08-25 (NIM end-of-life — HTTP 410)
+ *   - glm-5.3 KHÔNG tồn tại trên NIM (verified 2026-08-27 — 404, catalog không có GLM)
  *   - NOT using: kimi-k2.6 (deprecated 404), glm-5.1 (deprecated), minimax-m2.7 (deprecated),
  *     qwen3.5-397b (not on NIM), deepseek-v4-pro (not on NIM)
  *   - NOT using: Mistral, Cerebras, OpenRouter (removed)
@@ -33,26 +35,27 @@ export const EXTRACTION_MODELS: Record<string, Array<{ id: string; label: string
 }
 
 /** ALL models — NVIDIA NIM ONLY
- *  1 lõi trích xuất + 4 lõi Agent/Chat (user directive 2026-08-25:
- *  nemotron-550b chỉ dành cho extraction; Agents/Chat chỉ dùng 4 lõi dưới đây)
+ *  1 lõi trích xuất + 3 lõi Agent/Chat (user directive 2026-08-27:
+ *  nemotron-550b chỉ dành cho extraction; Agents/Chat chỉ dùng 3 lõi dưới đây —
+ *  gpt-oss-120b đã bị bỏ, GLM 5.2/5.3 không dùng được trên NIM)
  *  Verified 2026-08-25 via actual completion calls against integrate.api.nvidia.com
  *  Deprecated (404): kimi-k2.6, glm-5.1, minimax-m2.7, deepseek-v4-pro, qwen3.5-397b
  *  Deprecated (404): llama-3.1-nemotron-ultra-253b-v1, nemotron-4-340b-instruct
- *  Deprecated (410): z-ai/glm-5.2
+ *  Deprecated (410): z-ai/glm-5.2 | glm-5.3: không tồn tại (verified 2026-08-27)
  */
 export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string }>> = {
   nvidia: [
     // Extraction core (1 lõi — chỉ trích xuất dữ liệu)
     { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b' },
-    // Agent/Chat cores — 4 lõi (merged directives 2026-08-25):
-    // kimi-k3 là MẶC ĐỊNH cho tất cả agents (MODEL POLICY); gpt-oss-120b là
-    // backup #1 (chuyển từ extraction sang — extraction giờ chỉ dùng nemotron);
-    // deepseek/minimax là backup xa hơn. nemotron KHÔNG nằm ở đây — extraction-only.
-    // glm-5.2 đã bị xóa (NIM end-of-life 2026-08-21 — HTTP 410).
+    // Agent/Chat cores — 3 lõi (user directive 2026-08-27: bỏ gpt-oss-120b;
+    // dự định thay bằng GLM 5.2 nhưng NIM end-of-life HTTP 410, GLM 5.3 không
+    // tồn tại — verified 2026-08-27):
+    // kimi-k3 là MẶC ĐỊNH cho tất cả agents (kể cả agents độc lập) theo MODEL
+    // POLICY; deepseek là backup #1, minimax là backup #2 (failover qua global
+    // pool — callLLMForAgent). nemotron KHÔNG nằm ở đây — extraction-only.
     { id: 'moonshotai/kimi-k3', label: 'kimi-k3 (mặc định)' },
-    { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (backup #1)' },
-    { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash (backup)' },
-    { id: 'minimaxai/minimax-m3', label: 'minimax-m3 (backup)' },
+    { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash (backup #1)' },
+    { id: 'minimaxai/minimax-m3', label: 'minimax-m3 (backup #2)' },
   ],
 }
 

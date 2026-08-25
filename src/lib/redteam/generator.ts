@@ -3,9 +3,15 @@
 //
 // Generates adversarial questions across 6 attack vectors against the
 // network-science/ML KB, using a DEDICATED generator model (gpt-oss-120b —
-// a chat core, NOT nemotron-550b which is extraction-only per user directive
-// 2026-08-25). Model role separation (blueprint anti-bias decision):
+// NOT nemotron-550b which is extraction-only per user directive 2026-08-25).
+// Model role separation (blueprint anti-bias decision):
 //   generator = gpt-oss-120b ≠ answer model (deepseek) ≠ judges (kimi/minimax).
+//
+// NOTE 2026-08-27 (model policy update): gpt-oss-120b bị bỏ khỏi danh sách
+// Agent/Chat theo user directive, NHƯNG vẫn giữ nguyên vai trò generator nội
+// bộ ở đây (model còn sống trên NIM ~0.4s/call; role separation theo blueprint
+// là yêu cầu kiến trúc — generator ≠ SUT ≠ judges). Danh sách Agent/Chat giờ
+// là [kimi-k3, deepseek-v4-flash, minimax-m3] — xem llm.ts NVIDIA_AGENT_MODELS.
 //
 // Quality gate (blueprint §Phase 2.3): every generated candidate runs through
 // a quick LLM adversarial-ness check ("Is this genuinely adversarial for a

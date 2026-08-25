@@ -3237,7 +3237,8 @@ interface TokenUsageData {
 
 /** NVIDIA NIM model configuration — Single Provider Architecture
  *  1 extraction core (nemotron-550b — DUÝ NHẤT, chỉ dùng cho trích xuất dữ liệu)
- *  + 4 agent/chat cores (user directive 2026-08-25)
+ *  + 3 agent/chat cores (user directive 2026-08-27: bỏ gpt-oss-120b;
+ *  GLM 5.2 đã chết HTTP 410, GLM 5.3 không tồn tại trên NIM)
  *  Verified 2026-08-25 via actual completion calls against integrate.api.nvidia.com */
 const NVIDIA_CORE_CONFIG = {
   extraction: {
@@ -3257,10 +3258,9 @@ const NVIDIA_CORE_CONFIG = {
     headerBg: 'bg-amber-950/60',
     barColor: '#f59e0b',
     models: [
-      { key: 'openai/gpt-oss-120b', label: 'gpt-oss-120b' },
-      { key: 'moonshotai/kimi-k3', label: 'kimi-k3' },
-      { key: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash' },
-      { key: 'minimaxai/minimax-m3', label: 'minimax-m3' },
+      { key: 'moonshotai/kimi-k3', label: 'kimi-k3 (mặc định)' },
+      { key: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash (backup #1)' },
+      { key: 'minimaxai/minimax-m3', label: 'minimax-m3 (backup #2)' },
     ],
   },
 } as const
@@ -3848,15 +3848,13 @@ const SMOLAB_MODEL_GROUPS = [
     provider: 'NVIDIA',
     icon: '🎮',
     models: [
-      // 2 extraction cores
-      { id: 'meta/llama-3.3-70b-instruct', label: 'Llama 3.3 70B' },
-      { id: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B' },
-      // 5 agent/chat cores
-      { id: 'deepseek-ai/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
-      { id: 'moonshotai/kimi-k2.6', label: 'Kimi K2.6' },
-      { id: 'z-ai/glm-5.1', label: 'GLM 5.1' },
-      { id: 'minimaxai/minimax-m2.7', label: 'MiniMax M2.7' },
-      { id: 'qwen/qwen3.5-397b-a17b', label: 'Qwen3.5 397B' },
+      // 1 extraction core
+      { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b' },
+      // 3 agent/chat cores (user directive 2026-08-27 — gpt-oss-120b đã bỏ,
+      // GLM 5.2/5.3 không dùng được trên NIM: 410 Gone / 404)
+      { id: 'moonshotai/kimi-k3', label: 'Kimi K3' },
+      { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash' },
+      { id: 'minimaxai/minimax-m3', label: 'MiniMax M3' },
     ],
   },
 ]
@@ -7470,7 +7468,9 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
   const [messages, setMessages] = useState<SmolabMessage[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [selectedModel, setSelectedModel] = useState('nvidia/llama-3.1-nemotron-70b-instruct')
+  // MODEL POLICY 2026-08-27: kimi-k3 là mặc định (agents độc lập + chat);
+  // deepseek → minimax là failover backup (GLM 5.2/5.3 không dùng được trên NIM)
+  const [selectedModel, setSelectedModel] = useState('moonshotai/kimi-k3')
   const [activeSmolabTab, setActiveSmolabTab] = useState('knowledge')
   const [gatewayOnline, setGatewayOnline] = useState(false)
   const [sessions, setSessions] = useState<SmolabSession[]>([])
@@ -11142,7 +11142,9 @@ function CodeTabContent() {
   }>>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [newSessionPrompt, setNewSessionPrompt] = useState('')
-  const [newSessionModel, setNewSessionModel] = useState('deepseek/deepseek-chat')
+  // MODEL POLICY 2026-08-27: kimi-k3 mặc định ('deepseek/deepseek-chat' là ID
+  // provider đã chết — single-provider NVIDIA architecture)
+  const [newSessionModel, setNewSessionModel] = useState('moonshotai/kimi-k3')
   const [creatingSession, setCreatingSession] = useState(false)
 
   // MCP Bridge
@@ -12607,14 +12609,14 @@ function CodeTabContent() {
     { label: 'Optimize', icon: Zap, prompt: 'Optimize this code for better performance' },
   ]
 
-  // Model options — NVIDIA NIM only (user directive 2026-08-25: Agents/Chat chỉ dùng
-  // 4 lõi sau; nemotron-3-ultra-550b KHÔNG nằm trong danh sách — lõi đó chỉ dành
-  // cho trích xuất dữ liệu)
+  // Model options — NVIDIA NIM only (user directive 2026-08-27: Agents/Chat chỉ
+  // dùng 3 lõi sau; nemotron-3-ultra-550b KHÔNG nằm trong danh sách — lõi đó chỉ
+  // dành cho trích xuất dữ liệu; gpt-oss-120b đã bỏ; GLM 5.2/5.3 không dùng được
+  // trên NIM — 410 Gone / 404)
   const MODEL_OPTIONS = [
-    { value: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B (nhanh, ổn định)' },
-    { value: 'moonshotai/kimi-k3', label: 'Kimi K3 (reasoning — chậm hơn)' },
-    { value: 'deepseek-ai/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash (chậm nhất)' },
-    { value: 'minimaxai/minimax-m3', label: 'MiniMax M3 (nhanh)' },
+    { value: 'moonshotai/kimi-k3', label: 'Kimi K3 (mặc định — reasoning)' },
+    { value: 'deepseek-ai/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash (backup #1)' },
+    { value: 'minimaxai/minimax-m3', label: 'MiniMax M3 (backup #2 — nhanh)' },
   ]
 
   return (
