@@ -23,6 +23,17 @@ import type {
  * hoặc khi historical data không đủ để đưa ra quyết định.
  */
 const DEFAULT_RULES: AdaptationRule[] = [
+  // Red Team Engine Phase 4 (2026-08-25): adversarial breach beats operational
+  // rules in priority — security before performance. Fires when the SAME attack
+  // vector breaches >= 2 times (count from FailurePattern rows of type
+  // 'redteam_breach' with the same taskType prefix 'redteam:<vector>').
+  // Recommend tightening the KB confidence/refusal threshold for 24h —
+  // defense in depth while humans review the disputed queue.
+  {
+    condition: (pattern) => pattern.type === 'redteam_breach' && pattern.count >= 2,
+    strategy: 'tighten_refusal_threshold',
+    priority: 110,
+  },
   {
     condition: (pattern) => pattern.type === 'repeated_error' && pattern.count >= 3,
     strategy: 'change_fix_approach',
@@ -206,6 +217,13 @@ export function applyAdaptation(
     case 'escalate_to_user':
       updatedConfig['escalate'] = true
       updatedConfig['escalationReason'] = decision.reason
+      break
+    // Red Team Phase 4: siết ngưỡng từ chối KB (CONFIDENCE_THRESHOLD +0.1
+    // trong 24h — tự hoàn tác). Defense in depth cho vector đang bị breach.
+    case 'tighten_refusal_threshold':
+      updatedConfig['confidenceThresholdDelta'] = 0.1
+      updatedConfig['confidenceThresholdTtlHours'] = 24
+      updatedConfig['reason'] = decision.reason
       break
   }
 

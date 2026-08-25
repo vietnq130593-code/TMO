@@ -65,7 +65,15 @@ export interface AggregatedMetrics {
 // ==================== FAILURE PATTERN ====================
 
 /** Loại pattern thất bại */
-export type FailurePatternType = 'repeated_error' | 'approach_exhausted' | 'resource_limit' | 'timeout'
+export type FailurePatternType =
+  | 'repeated_error'
+  | 'approach_exhausted'
+  | 'resource_limit'
+  | 'timeout'
+  // Red Team Engine Phase 4 (2026-08-25): adversarial self-testing breach —
+  // failure mode được xác nhận bởi cặp judge đối đầu (không phải lỗi thật
+  // gặp user). Nguồn: src/lib/redteam/runner.ts persistRedTeamBreachPattern.
+  | 'redteam_breach'
 
 /** Pattern thất bại được phát hiện */
 export interface FailurePattern {
@@ -94,6 +102,9 @@ export type AdaptationStrategy =
   | 'compress_context' // Compress/summarize thay vì đọc thêm
   | 'reduce_scope' // Giảm scope khi token/time vượt budget
   | 'escalate_to_user' // Hỏi user khi đã thử ≥3 cách
+  // Red Team Phase 4 (2026-08-25): siết ngưỡng từ chối tạm 24h khi 1 attack
+  // vector breach >= 2 lần — defense in depth chờ human review disputed queue
+  | 'tighten_refusal_threshold'
 
 /** Rule để quyết định khi nào áp dụng strategy nào */
 export interface AdaptationRule {
