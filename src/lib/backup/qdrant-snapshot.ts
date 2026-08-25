@@ -354,9 +354,11 @@ export async function restoreQdrantFromR2(
   )
 
   // 3. Upload to Qdrant — this triggers a restore.
-  //    Qdrant expects multipart/form-data with field name "snapshot" containing
-  //    the binary file content. Use a synthetic FormData-like multipart body
-  //    since we want to avoid FormData runtime quirks across Node/Bun.
+  //    Qdrant 1.19 restore-from-upload endpoint is POST /collections/{name}/snapshots/upload
+  //    (multipart/form-data, field "snapshot" = binary tar). The older
+  //    PUT /collections/{name}/snapshots/{name} form returns 404 on 1.19.
+  //    Use a synthetic FormData-like multipart body since we want to avoid
+  //    FormData runtime quirks across Node/Bun.
   const boundary = `----theopus-restore-${Date.now()}`
   const filename = r2Key.split('/').pop() || 'snapshot.tar'
   const partHeader =
@@ -370,14 +372,11 @@ export async function restoreQdrantFromR2(
     Buffer.from(partFooter, 'utf8'),
   ])
 
-  // Use a unique snapshot name (so we don't collide with any local snapshot
-  // that might already exist with the same name).
-  const restoreSnapshotName = `restore-${Date.now()}.tar`
-  const uploadUrl = `${baseUrl}/collections/${encodeURIComponent(collection)}/snapshots/${encodeURIComponent(restoreSnapshotName)}`
-  console.log(`[QdrantRestore] PUT ${uploadUrl} (${body.length} bytes multipart)`)
+  const uploadUrl = `${baseUrl}/collections/${encodeURIComponent(collection)}/snapshots/upload`
+  console.log(`[QdrantRestore] POST ${uploadUrl} (${body.length} bytes multipart)`)
 
   const uploadRes = await fetch(uploadUrl, {
-    method: 'PUT',
+    method: 'POST',
     headers: {
       ...authHeaders(),
       'Content-Type': `multipart/form-data; boundary=${boundary}`,
@@ -407,11 +406,21 @@ export async function restoreQdrantFromR2(
     `[QdrantRestore] Post-restore point count: ${postCount} (was ${preCount} pre-restore)`
   )
 
-  // 5. Cleanup: delete the restore snapshot from Qdrant local storage
+  // 5. Cleanup: list + delete any snapshots the upload left in Qdrant local storage
+  //    (the /snapshots/upload recover flow may register the uploaded tar as a
+  //    collection snapshot — remove it so it doesn't waste disk).
   try {
-    const delUrl = `${baseUrl}/collections/${encodeURIComponent(collection)}/snapshots/${encodeURIComponent(restoreSnapshotName)}`
-    await fetch(delUrl, { method: 'DELETE', headers: authHeaders() })
-    console.log(`[QdrantRestore] Cleaned up restore snapshot: ${restoreSnapshotName}`)
+    const listUrl = `${baseUrl}/collections/${encodeURIComponent(collection)}/snapshots`
+    const listRes = await fetch(listUrl, { headers: authHeaders() })
+    if (listRes.ok) {
+      const listData = (await listRes.json()) as { result?: Array<{ name?: string }> }
+      for (const snap of listData.result ?? []) {
+        if (!snap.name) continue
+        const delUrl = `${baseUrl}/collections/${encodeURIComponent(collection)}/snapshots/${encodeURIComponent(snap.name)}`
+        await fetch(delUrl, { method: 'DELETE', headers: authHeaders() })
+        console.log(`[QdrantRestore] Cleaned up local snapshot: ${snap.name}`)
+      }
+    }
   } catch {
     // non-fatal
   }
@@ -420,7 +429,7 @@ export async function restoreQdrantFromR2(
     restoredPoints: postCount,
     sizeBytes,
     r2Key,
-    snapshotName: restoreSnapshotName,
+    snapshotName: filename,
   }
 }
 
