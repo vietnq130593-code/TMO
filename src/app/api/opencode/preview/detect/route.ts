@@ -5,6 +5,12 @@ import { existsSync } from 'fs'
 
 export const dynamic = 'force-dynamic'
 
+// Phase 3: TMO itself runs on PORT (default 3000) — ports 3000..3004 are
+// reserved for the app. NEVER suggest/detect them as preview ports (the old
+// bug: preview "detected" TMO's own port 3000 and iframed TMO itself).
+const TMO_PORT = parseInt(process.env.PORT || '3000', 10)
+const TMO_RESERVED = [TMO_PORT, TMO_PORT + 1, TMO_PORT + 2, TMO_PORT + 3, TMO_PORT + 4]
+
 /**
  * GET /api/opencode/preview/detect?root=xxx
  * Smart detection of dev server configuration:
@@ -168,31 +174,35 @@ export async function GET(request: Request) {
 
   // Framework-specific default ports
   if (result.framework === 'Next.js') {
-    portCandidates.push(3000, 3001, 3002, 3003)
+    portCandidates.push(3005, 3006, 3007, 3008)
   } else if (result.framework === 'Vite') {
     portCandidates.push(5173, 5174, 5175)
   } else if (result.framework === 'Angular') {
     portCandidates.push(4200)
   } else if (result.framework === 'Nuxt') {
-    portCandidates.push(3000, 3001)
+    portCandidates.push(3005, 3006)
   } else if (result.framework === 'Astro') {
     portCandidates.push(4321, 4322)
   } else if (result.framework === 'Gatsby') {
     portCandidates.push(8000)
   } else if (result.framework === 'Remix') {
-    portCandidates.push(3000, 3001)
+    portCandidates.push(3005, 3006)
   } else if (result.framework === 'SvelteKit') {
     portCandidates.push(5173, 5174)
   } else {
-    portCandidates.push(3000, 3001, 5173, 5174, 8080, 4000, 4200, 8000, 4173, 8888)
+    portCandidates.push(3005, 3006, 3007, 3008, 5173, 5174, 8080, 4000, 4200, 8000, 4173, 8888)
   }
 
   // Remove duplicates
   const uniquePorts = [...new Set(portCandidates)]
 
+  // Phase 3: filter TMO's reserved ports (self-collision guard) — this also
+  // covers a configuredPort that happens to fall inside 3000-3004.
+  const scannedPorts = uniquePorts.filter((p) => !TMO_RESERVED.includes(p))
+
   // Scan each port
   const detectedPorts: Array<{ port: number; status: number }> = []
-  for (const port of uniquePorts) {
+  for (const port of scannedPorts) {
     try {
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), 1500)

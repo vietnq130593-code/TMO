@@ -76,8 +76,32 @@ export async function POST(request: NextRequest) {
       rootPath: body.rootPath.trim(),
     };
 
-    const workspace = await wm.createWorkspace(input);
-    return Response.json({ ok: true, data: workspace }, { status: 201 });
+    // Phase 2: pre-check conflict BEFORE create (idempotent folder-picker sync)
+    const existing = await wm.getWorkspaceByPath(input.rootPath);
+    if (existing) {
+      return Response.json(
+        { ok: false, conflict: true, data: existing },
+        { status: 409 },
+      );
+    }
+
+    try {
+      const workspace = await wm.createWorkspace(input);
+      return Response.json({ ok: true, data: workspace }, { status: 201 });
+    } catch (createErr) {
+      // P2002 = Prisma unique-constraint violation (rootPath race between
+      // the pre-check above and INSERT). Fall back to 409 + existing record.
+      if ((createErr as { code?: string })?.code === "P2002") {
+        const raced = await wm.getWorkspaceByPath(input.rootPath);
+        if (raced) {
+          return Response.json(
+            { ok: false, conflict: true, data: raced },
+            { status: 409 },
+          );
+        }
+      }
+      throw createErr;
+    }
   } catch (err) {
     return Response.json(
       {

@@ -42,6 +42,7 @@ import { Tooltip as StatusTooltip, TooltipTrigger as StatusTooltipTrigger, Toolt
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { format } from 'date-fns'
 import { toast } from '@/hooks/use-toast'
+import { authedFetch } from '@/lib/api-auth'
 import { toast as sonnerToast } from 'sonner'
 import {
   AVATAR_OPTIONS,
@@ -10639,6 +10640,9 @@ function CodeTabContent() {
   const [previewAutoStartAttempted, setPreviewAutoStartAttempted] = useState(false)
   const [previewIframeKey, setPreviewIframeKey] = useState(0)
   const previewAutoStartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Phase 3: SSE log stream for the running preview dev server
+  const previewEventSrcRef = useRef<EventSource | null>(null)
+  const [previewLogs, setPreviewLogs] = useState<string[]>([])
 
   // LSP Diagnostics
   const [diagnostics, setDiagnostics] = useState<Array<{
@@ -10706,11 +10710,59 @@ function CodeTabContent() {
     }
   }, [workspaceRoot])
 
+  // Phase 2: folder picker commit — set local workspace + sync to DB as ACTIVE
+  // workspace (POST /api/workspace; 409 conflict → PATCH existing → active).
+  const handleWorkspaceSelect = useCallback(async (folderPath: string) => {
+    setWorkspaceRoot(folderPath)
+    if (typeof window !== 'undefined') localStorage.setItem('smolab_layout_opencode_root', folderPath)
+    setFileTree([])
+    setSelectedFile(null)
+    setFileContent(null)
+    setShowFolderPicker(false)
+    toast({ title: `Đã chọn workspace: ${folderPath}` })
+    try {
+      const folderName = folderPath.split('/').pop() || folderPath
+      const createRes = await authedFetch('/api/workspace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: folderName, rootPath: folderPath }),
+      })
+      if (createRes.ok) {
+        const created = await createRes.json()
+        const id = created?.data?.id // response shape: {ok, data} — workspace lives in .data
+        if (id) {
+          await authedFetch('/api/workspace', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id }),
+          })
+        }
+        toast({ title: 'Đã đăng ký workspace active trong DB' })
+      } else if (createRes.status === 409) {
+        const existing = await createRes.json()
+        const id = existing?.data?.id
+        if (id) {
+          await authedFetch('/api/workspace', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id }),
+          })
+        }
+        toast({ title: 'Workspace đã tồn tại, đã set active' })
+      } else {
+        console.error('Workspace register failed:', await createRes.text())
+        toast({ title: 'Lỗi đăng ký workspace (xem console)', variant: 'destructive' })
+      }
+    } catch (err) {
+      console.error('Workspace register exception:', err)
+    }
+  }, [])
+
   // Load folder picker contents
   const loadFolderPicker = useCallback(async (path: string) => {
     setFolderPickerLoading(true)
     try {
-      const res = await fetch(`/api/opencode/files/browse?path=${encodeURIComponent(path)}&mode=all`)
+      const res = await authedFetch(`/api/opencode/files/browse?path=${encodeURIComponent(path)}&mode=all`)
       const data = await res.json()
       if (data.items) {
         setFolderPickerPath(data.currentPath)
@@ -10728,7 +10780,7 @@ function CodeTabContent() {
     if (!selectedFile || editedContent === null) return
     setIsSaving(true)
     try {
-      const res = await fetch('/api/opencode/files/write', {
+      const res = await authedFetch('/api/opencode/files/write', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: selectedFile, content: editedContent }),
@@ -10739,7 +10791,7 @@ function CodeTabContent() {
         setEditedContent(null)
         // Reload file content to sync
         if (workspaceRoot) {
-          const readRes = await fetch(`/api/opencode/files/read?path=${encodeURIComponent(selectedFile)}&root=${encodeURIComponent(workspaceRoot)}`)
+          const readRes = await authedFetch(`/api/opencode/files/read?path=${encodeURIComponent(selectedFile)}&root=${encodeURIComponent(workspaceRoot)}`)
           const readData = await readRes.json()
           if (readData.content !== undefined) setFileContent(readData)
         }
@@ -10759,7 +10811,7 @@ function CodeTabContent() {
       const url = workspaceRoot
         ? `/api/opencode/files/tree?root=${encodeURIComponent(workspaceRoot)}&depth=3`
         : '/api/opencode/files/tree?depth=3'
-      const res = await fetch(url)
+      const res = await authedFetch(url)
       const data = await res.json()
       setFileTree(data.tree || [])
     } catch {
@@ -10775,7 +10827,7 @@ function CodeTabContent() {
     const trimmed = newFileName.trim()
     const fullPath = trimmed.startsWith('/') ? trimmed : `${workspaceRoot}/${trimmed}`
     try {
-      const res = await fetch('/api/opencode/files/write', {
+      const res = await authedFetch('/api/opencode/files/write', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: fullPath, content: '' }),
@@ -10800,7 +10852,7 @@ function CodeTabContent() {
     const trimmed = newFolderName.trim()
     const fullPath = trimmed.startsWith('/') ? trimmed : `${workspaceRoot}/${trimmed}`
     try {
-      const res = await fetch('/api/opencode/files/mkdir', {
+      const res = await authedFetch('/api/opencode/files/mkdir', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: fullPath }),
@@ -10822,7 +10874,7 @@ function CodeTabContent() {
   const loadStatus = useCallback(async () => {
     setStatusLoading(true)
     try {
-      const res = await fetch('/api/opencode/status')
+      const res = await authedFetch('/api/opencode/status')
       const data = await res.json()
       setServerOnline(data.online)
       setServerInfo(data.serverInfo)
@@ -10836,7 +10888,7 @@ function CodeTabContent() {
   const loadSessions = useCallback(async () => {
     setSessionsLoading(true)
     try {
-      const res = await fetch('/api/opencode/sessions')
+      const res = await authedFetch('/api/opencode/sessions')
       const data = await res.json()
       setSessions(data.sessions || [])
     } catch {
@@ -10848,7 +10900,7 @@ function CodeTabContent() {
 
   const loadMcpStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/opencode/mcp/status')
+      const res = await authedFetch('/api/opencode/mcp/status')
       const data = await res.json()
       setMcpStatus(data)
     } catch {
@@ -10859,7 +10911,7 @@ function CodeTabContent() {
   const loadTerminal = useCallback(async () => {
     setTerminalLoading(true)
     try {
-      const res = await fetch('/api/opencode/terminal')
+      const res = await authedFetch('/api/opencode/terminal')
       const data = await res.json()
       if (data.output && Array.isArray(data.output)) {
         setTerminalOutput(data.output)
@@ -10881,7 +10933,7 @@ function CodeTabContent() {
 
   const loadDiagnostics = useCallback(async () => {
     try {
-      const res = await fetch('/api/opencode/lsp/diagnostics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+      const res = await authedFetch('/api/opencode/lsp/diagnostics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
       const data = await res.json()
       setDiagnostics(data.diagnostics || [])
     } catch {
@@ -10892,7 +10944,7 @@ function CodeTabContent() {
   const loadGitStatus = useCallback(async () => {
     setGitLoading(true)
     try {
-      const res = await fetch('/api/opencode/git/status')
+      const res = await authedFetch('/api/opencode/git/status')
       const data = await res.json()
       setGitStatus({
         branch: data.branch || '',
@@ -10915,7 +10967,7 @@ function CodeTabContent() {
   const loadGitDiff = useCallback(async (staged: boolean = false) => {
     setGitLoading(true)
     try {
-      const res = await fetch(`/api/opencode/git/diff?staged=${staged}`)
+      const res = await authedFetch(`/api/opencode/git/diff?staged=${staged}`)
       const data = await res.json()
       setGitDiff(data.diff || '')
       setGitDiffStats({
@@ -10935,7 +10987,7 @@ function CodeTabContent() {
     setTimelineLoading(true)
     setSelectedTimelineSession(sessionId)
     try {
-      const res = await fetch(`/api/opencode/sessions/${encodeURIComponent(sessionId)}/timeline`)
+      const res = await authedFetch(`/api/opencode/sessions/${encodeURIComponent(sessionId)}/timeline`)
       const data = await res.json()
       setTimelineData({ timeline: data.timeline || [] })
     } catch {
@@ -10949,7 +11001,7 @@ function CodeTabContent() {
     setKbContextLoading(true)
     try {
       const url = query ? `/api/opencode/knowledge/enrich?query=${encodeURIComponent(query)}` : '/api/opencode/knowledge/enrich'
-      const res = await fetch(url)
+      const res = await authedFetch(url)
       const data = await res.json()
       // The API returns { enrichment: { entities, documents, corrections, insights, enrichmentScore } }
       const enrichment = data.enrichment || data
@@ -11034,7 +11086,7 @@ function CodeTabContent() {
   const handleServerAction = useCallback(async (action: 'restart' | 'stop' | 'start') => {
     setServerActionLoading(true)
     try {
-      const res = await fetch('/api/opencode/server', {
+      const res = await authedFetch('/api/opencode/server', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action }),
@@ -11052,7 +11104,7 @@ function CodeTabContent() {
   const handleViewLogs = useCallback(async () => {
     try {
       // Try fetching server logs from the dedicated logs endpoint
-      const res = await fetch('/api/opencode/terminal')
+      const res = await authedFetch('/api/opencode/terminal')
       const data = await res.json()
       const logs: string[] = []
       // Collect server output lines
@@ -11065,7 +11117,7 @@ function CodeTabContent() {
       }
       // Also try to get server process logs
       try {
-        const statusRes = await fetch('/api/opencode/status')
+        const statusRes = await authedFetch('/api/opencode/status')
         const statusData = await statusRes.json()
         if (statusData.online) {
           logs.push(`[${new Date().toISOString()}] Server Status: Online`)
@@ -11096,12 +11148,12 @@ function CodeTabContent() {
       const url = workspaceRoot
         ? `/api/opencode/files/read?path=${encodeURIComponent(path)}&root=${encodeURIComponent(workspaceRoot)}`
         : `/api/opencode/files/read?path=${encodeURIComponent(path)}`
-      const res = await fetch(url)
+      const res = await authedFetch(url)
       const data = await res.json()
       if (data.content !== undefined) {
         setFileContent(data)
         // Load diagnostics for this file
-        const diagRes = await fetch('/api/opencode/lsp/diagnostics', {
+        const diagRes = await authedFetch('/api/opencode/lsp/diagnostics', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ filePath: path }),
@@ -11122,7 +11174,7 @@ function CodeTabContent() {
     if (!newSessionPrompt.trim()) return
     setCreatingSession(true)
     try {
-      const res = await fetch('/api/opencode/sessions', {
+      const res = await authedFetch('/api/opencode/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: newSessionPrompt, model: newSessionModel }),
@@ -11144,7 +11196,7 @@ function CodeTabContent() {
 
   const handleDeleteSession = useCallback(async (sessionId: string) => {
     try {
-      await fetch(`/api/opencode/sessions?sessionId=${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+      await authedFetch(`/api/opencode/sessions?sessionId=${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
       toast({ title: 'Session deleted' })
       loadSessions()
     } catch {
@@ -11154,7 +11206,7 @@ function CodeTabContent() {
 
   const handlePauseSession = useCallback(async (sessionId: string) => {
     try {
-      await fetch('/api/opencode/sessions/pause', {
+      await authedFetch('/api/opencode/sessions/pause', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId }),
@@ -11168,7 +11220,7 @@ function CodeTabContent() {
 
   const handleResumeSession = useCallback(async (sessionId: string) => {
     try {
-      await fetch('/api/opencode/sessions/resume', {
+      await authedFetch('/api/opencode/sessions/resume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId }),
@@ -11187,7 +11239,7 @@ function CodeTabContent() {
     setTerminalCommand('')
     setTerminalOutput(prev => [...prev, `$ ${cmd}`])
     try {
-      const res = await fetch('/api/opencode/execute', {
+      const res = await authedFetch('/api/opencode/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command: cmd, cwd: workspaceRoot || undefined }),
@@ -11210,14 +11262,67 @@ function CodeTabContent() {
     }
   }, [terminalCommand, workspaceRoot])
 
+  // Phase 3: subscribe to the dev-server log SSE stream for a workspace root
+  const startPreviewLogStream = useCallback((root: string) => {
+    try { previewEventSrcRef.current?.close() } catch { /* ignore */ }
+    previewEventSrcRef.current = null
+    setPreviewLogs([])
+    try {
+      // EventSource cannot set headers — auth relies on the HttpOnly
+      // tmo_api_token cookie set by /api/auth/setup on mount.
+      const es = new EventSource(`/api/opencode/preview/stream?root=${encodeURIComponent(root)}`)
+      previewEventSrcRef.current = es
+      es.onmessage = (ev: MessageEvent<string>) => {
+        try {
+          const parsed = JSON.parse(ev.data) as { type?: string; data?: string }
+          if (parsed?.type === 'init') {
+            const lines = String(parsed.data || '').split('\n').filter(Boolean)
+            setPreviewLogs(lines)
+          } else if (parsed?.type === 'chunk' && parsed.data) {
+            const lines = String(parsed.data).split('\n').filter(Boolean)
+            if (lines.length > 0) setPreviewLogs(prev => [...prev, ...lines].slice(-200))
+          }
+        } catch { /* malformed frame — ignore */ }
+      }
+    } catch (err) {
+      console.error('Preview log stream error:', err)
+    }
+  }, [])
+
+  // Close the preview SSE stream when the tab unmounts
+  useEffect(() => {
+    return () => {
+      try { previewEventSrcRef.current?.close() } catch { /* ignore */ }
+      previewEventSrcRef.current = null
+    }
+  }, [])
+
   // Smart Preview: detect framework, find port, auto-start dev server, auto-refresh
   const handlePreviewToggle = useCallback(async () => {
     if (showPreview) {
+      // OFF — tear everything down (SSE, logs, detached dev-server process)
       setShowPreview(false)
+      setPreviewPort(null)
       // Clean up auto-start timer
       if (previewAutoStartTimerRef.current) {
         clearTimeout(previewAutoStartTimerRef.current)
         previewAutoStartTimerRef.current = null
+      }
+      // Close SSE log stream + clear captured logs
+      try { previewEventSrcRef.current?.close() } catch { /* ignore */ }
+      previewEventSrcRef.current = null
+      setPreviewLogs([])
+      // Kill the detached dev-server process group for this workspace
+      if (workspaceRoot) {
+        try {
+          await authedFetch('/api/opencode/preview/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ root: workspaceRoot }),
+          })
+        } catch (err) {
+          console.error('Preview stop failed:', err)
+        }
       }
       return
     }
@@ -11230,10 +11335,11 @@ function CodeTabContent() {
     setPreviewFramework(null)
     setPreviewFrameworkIcon('📦')
     setPreviewDevCommand(null)
+    setPreviewLogs([])
 
     try {
       // Step 1: Smart detect — framework, configured port, running ports
-      const detectRes = await fetch(`/api/opencode/preview/detect?root=${encodeURIComponent(workspaceRoot)}`)
+      const detectRes = await authedFetch(`/api/opencode/preview/detect?root=${encodeURIComponent(workspaceRoot)}`)
       if (detectRes.ok) {
         const detectData = await detectRes.json()
 
@@ -11249,6 +11355,7 @@ function CodeTabContent() {
         // Step 2: If port already detected, use it immediately
         if (detectData.detectedPort) {
           setPreviewPort(detectData.detectedPort)
+          startPreviewLogStream(workspaceRoot)
           setPreviewDetecting(false)
           return
         }
@@ -11259,7 +11366,7 @@ function CodeTabContent() {
           setPreviewAutoStartAttempted(true)
 
           try {
-            const startRes = await fetch('/api/opencode/preview/start', {
+            const startRes = await authedFetch('/api/opencode/preview/start', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -11270,8 +11377,28 @@ function CodeTabContent() {
 
             if (startRes.ok) {
               const startData = await startRes.json()
-              if (startData.status === 'started' || startData.status === 'already_running') {
-                // Dev server starting — poll for port with retries
+              const startedPort: number | null = startData?.port ?? null
+
+              if (startedPort) {
+                // Phase 3: start route picked a free port (>= 3005) for us
+                setPreviewPort(startedPort)
+                // Tail the dev-server log via SSE
+                startPreviewLogStream(workspaceRoot)
+                // Port-ready poll: remount the iframe only once the dev server
+                // actually accepts connections (timing-race fix — no manual
+                // refresh needed)
+                void (async () => {
+                  for (let i = 0; i < 24; i++) {
+                    await new Promise(r => setTimeout(r, 500))
+                    try {
+                      await fetch(`http://127.0.0.1:${startedPort}`, { mode: 'no-cors', signal: AbortSignal.timeout(800) })
+                      setPreviewIframeKey(prev => prev + 1)
+                      return
+                    } catch { /* not ready yet — keep polling */ }
+                  }
+                })()
+              } else if (startData.status === 'started' || startData.status === 'already_running') {
+                // Legacy path (no port reported) — poll for port with retries
                 const maxRetries = 15
                 const retryDelay = 2000 // 2s between retries
                 let found = false
@@ -11279,7 +11406,7 @@ function CodeTabContent() {
                 for (let i = 0; i < maxRetries; i++) {
                   await new Promise(r => setTimeout(r, retryDelay))
                   // Re-detect to find the newly started port
-                  const reDetectRes = await fetch(`/api/opencode/preview/detect?root=${encodeURIComponent(workspaceRoot)}`)
+                  const reDetectRes = await authedFetch(`/api/opencode/preview/detect?root=${encodeURIComponent(workspaceRoot)}`)
                   if (reDetectRes.ok) {
                     const reDetectData = await reDetectRes.json()
                     if (reDetectData.detectedPort) {
@@ -11305,7 +11432,8 @@ function CodeTabContent() {
       }
     } catch {
       // Detection failed — fallback: try basic port scan
-      const ports = [3000, 3001, 3002, 5173, 5174, 8080, 4000, 4200, 8000, 4173]
+      // Phase 3: skip TMO's own reserved ports 3000-3004 (self-collision)
+      const ports = [3005, 3006, 3007, 3008, 5173, 5174, 8080, 4000, 4200, 8000, 4173]
       for (const port of ports) {
         try {
           const checkRes = await fetch(`http://127.0.0.1:${port}`, { method: 'HEAD', signal: AbortSignal.timeout(1500) })
@@ -11318,7 +11446,7 @@ function CodeTabContent() {
     } finally {
       setPreviewDetecting(false)
     }
-  }, [showPreview, workspaceRoot])
+  }, [showPreview, workspaceRoot, startPreviewLogStream])
 
   // Refresh iframe (for auto-refresh after file changes)
   const handlePreviewRefresh = useCallback(() => {
@@ -11334,7 +11462,7 @@ function CodeTabContent() {
     setPreviewAutoStarting(false)
 
     try {
-      const detectRes = await fetch(`/api/opencode/preview/detect?root=${encodeURIComponent(workspaceRoot)}`)
+      const detectRes = await authedFetch(`/api/opencode/preview/detect?root=${encodeURIComponent(workspaceRoot)}`)
       if (detectRes.ok) {
         const detectData = await detectRes.json()
         if (detectData.framework) {
@@ -11351,7 +11479,7 @@ function CodeTabContent() {
           setPreviewAutoStarting(true)
           setPreviewAutoStartAttempted(true)
           try {
-            const startRes = await fetch('/api/opencode/preview/start', {
+            const startRes = await authedFetch('/api/opencode/preview/start', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ root: workspaceRoot, script: detectData.devScript || 'dev' }),
@@ -11361,7 +11489,7 @@ function CodeTabContent() {
               if (startData.status === 'started' || startData.status === 'already_running') {
                 for (let i = 0; i < 15; i++) {
                   await new Promise(r => setTimeout(r, 2000))
-                  const reDetectRes = await fetch(`/api/opencode/preview/detect?root=${encodeURIComponent(workspaceRoot)}`)
+                  const reDetectRes = await authedFetch(`/api/opencode/preview/detect?root=${encodeURIComponent(workspaceRoot)}`)
                   if (reDetectRes.ok) {
                     const reDetectData = await reDetectRes.json()
                     if (reDetectData.detectedPort) {
@@ -11397,7 +11525,7 @@ function CodeTabContent() {
   const handleMcpToggle = useCallback(async (direction: 'outbound' | 'inbound', toolName: string, enabled: boolean) => {
     setMcpToggling(`${direction}:${toolName}`)
     try {
-      const res = await fetch('/api/opencode/mcp/toggle', {
+      const res = await authedFetch('/api/opencode/mcp/toggle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ direction, toolName, enabled }),
@@ -11419,7 +11547,7 @@ function CodeTabContent() {
   const handleMcpSync = useCallback(async () => {
     setMcpSyncing(true)
     try {
-      const res = await fetch('/api/opencode/mcp/sync', { method: 'POST' })
+      const res = await authedFetch('/api/opencode/mcp/sync', { method: 'POST' })
       const data = await res.json()
       if (data.success) {
         toast({ title: 'MCP Bridge đã đồng bộ', description: `Outbound: ${data.sync?.outboundSynced || 0}, Inbound: ${data.sync?.inboundSynced || 0}, Skills: ${data.sync?.skillsRegistered || 0}` })
@@ -11705,14 +11833,21 @@ function CodeTabContent() {
                     <p className="text-[10px] text-stone-600 mt-2">Chờ dev server sẵn sàng (tối đa 30s)</p>
                   </div>
                 ) : previewPort ? (
-                  /* ✅ App loaded — show iframe */
-                  <iframe
-                    key={previewIframeKey}
-                    src={`http://127.0.0.1:${previewPort}`}
-                    className="w-full h-full border-0 bg-white"
-                    title="App Preview"
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-                  />
+                  /* ✅ App loaded — show iframe + dev-server log tail (Phase 3) */
+                  <div className="flex flex-col h-full min-h-0">
+                    <iframe
+                      key={previewIframeKey}
+                      src={`http://127.0.0.1:${previewPort}`}
+                      className="w-full flex-1 min-h-0 border-0 bg-white"
+                      title="App Preview"
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                    />
+                    {previewLogs.length > 0 && (
+                      <pre className="m-0 max-h-[88px] overflow-auto px-2 py-1 bg-slate-950 border-t border-emerald-500/10 text-[9px] leading-relaxed font-mono text-stone-500 whitespace-pre-wrap">
+                        {previewLogs.slice(-15).join('\n')}
+                      </pre>
+                    )}
+                  </div>
                 ) : (
                   /* No app found — show helpful empty state */
                   <div className="flex flex-col items-center justify-center h-full text-stone-500 p-6 text-center">
@@ -12011,12 +12146,7 @@ function CodeTabContent() {
                       }}
                       onDoubleClick={() => {
                         if (item.type === 'directory') {
-                          setWorkspaceRoot(item.path)
-                          setFileTree([])
-                          setSelectedFile(null)
-                          setFileContent(null)
-                          setShowFolderPicker(false)
-                          toast({ title: 'Đã chọn thư mục', description: item.path })
+                          void handleWorkspaceSelect(item.path)
                         }
                       }}
                     >
@@ -12057,14 +12187,7 @@ function CodeTabContent() {
                 <Button
                   size="sm"
                   className="h-8 px-4 text-[11px] bg-emerald-600 hover:bg-emerald-500 text-white gap-1.5"
-                  onClick={() => {
-                    setWorkspaceRoot(folderPickerPath)
-                    setFileTree([])
-                    setSelectedFile(null)
-                    setFileContent(null)
-                    setShowFolderPicker(false)
-                    toast({ title: 'Đã chọn thư mục', description: folderPickerPath })
-                  }}
+                  onClick={() => { void handleWorkspaceSelect(folderPickerPath) }}
                 >
                   <FolderOpen className="h-3.5 w-3.5" /> Chọn thư mục này
                 </Button>
@@ -12409,7 +12532,7 @@ function CodeTabContent() {
               className="h-6 text-[9px] ml-auto border-stone-600 text-stone-400 hover:bg-stone-500/10"
               onClick={async () => {
                 try {
-                  const res = await fetch('/api/opencode/mcp/register', { method: 'POST' })
+                  const res = await authedFetch('/api/opencode/mcp/register', { method: 'POST' })
                   const data = await res.json()
                   toast({ title: 'MCP Tools đã đăng ký', description: `${data.registered || 0} mới, ${data.updated || 0} cập nhật` })
                   loadMcpStatus()
