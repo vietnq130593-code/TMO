@@ -18,6 +18,24 @@ Theopusflashlite is an end-to-end AI platform that combines:
 
 ---
 
+## Upgrade v2 — Smolab Code Module (2026-08-25)
+
+Module Smolab > Code đã được nâng cấp toàn diện (11 phases, chi tiết: `docs/upgrade/`):
+
+- **Auth**: `TMO_API_TOKEN` middleware bảo vệ `/api/opencode/**` + `/api/workspace/**` (header / Bearer / HttpOnly cookie); CORS khóa origin; blocklist lệnh nguy hiểm (exact-token + wildcard).
+- **Workspace sync**: folder picker đăng ký active workspace vào DB — AI tools thao tác đúng thư mục user chọn (không còn `process.cwd()`).
+- **Preview**: port 3005+ (hết bug self-collision 3000), `/preview/stop` kill process group, SSE log stream, iframe tự refresh khi server sẵn sàng.
+- **Terminal**: persistent `bash -i` session + SSE stream + stdin — chạy được install/build/dev-server (hết giới hạn 30s/1MB).
+- **Monaco editor**: multi-tab + Ctrl+S + dirty indicator + revert, vendored local (0 CDN).
+- **AI tools mới**: `start_preview` / `stop_preview` (TL, G2-A, G3) — AI tự khởi động/dừng dev server.
+- **UI AI transparency**: auto-open file khi AI đọc/sửa, rich bubbles (📖 ✏️ ▶️), auto-open preview khi AI start.
+- **Diff & review**: Monaco DiffEditor (session + git HEAD), PendingEdit review modal (Duyệt/Từ chối/Apply).
+- **Search**: ripgrep search-across-files click-to-open; file rename/delete trên tree.
+
+Verify: `bash scripts/integration-test.sh` → 20/20 ALL GREEN.
+
+---
+
 ## Architecture
 
 ```
