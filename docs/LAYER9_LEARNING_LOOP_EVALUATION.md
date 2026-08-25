@@ -4,7 +4,7 @@
 > **Ngày**: 2026-08-25
 > **Phạm vi**: `src/lib/learning/` (Layer 9) + mọi điểm chạm trong production path
 > **Phương pháp**: Mọi claim đều được verify trực tiếp từ code + DB, kèm lệnh tái lập ở Phụ lục A. Không đánh giá theo tài liệu thiết kế — tài liệu nói gì không quan trọng bằng code chạy gì.
-> **Trạng thái file**: Đã qua 2 vòng red-team tự thân (xem mục 9) — 12 phát hiện được vá, gồm 4 lỗi thực (vị trí bằng chứng, cú pháp lệnh, ước lượng effort, khoảng dòng lệnh demo).
+> **Trạng thái file**: Đã qua 2 vòng red-team tự thân (xem mục 9) — 12 phát hiện được vá, gồm 4 lỗi thực. **Bản nâng cấp 2026-08-25 (v2)**: bổ sung mục 3.6 (Red Team là một primitive còn thiếu) + hạng mục P2.4 — làm sống lại exploration cho Layer 9 bằng adversarial self-testing. Chi tiết triển khai kỹ thuật đầy đủ trong file đồng hành `docs/REDTEAM_TECHNICAL_BLUEPRINT.md`.
 
 ---
 
@@ -115,6 +115,26 @@ Trong toàn app, thứ duy nhất thực sự là *learned parameter* là **Cali
 
 Chiến lược một khi "thắng" không bao giờ bị thách thức lại. Không có cơ chế ε-greedy hay UCB-style exploration — hệ sẽ kẹt trong local optimum của chính sách khởi tạo (viết tay).
 
+### 3.6 — Red Team: primitive còn thiếu (bổ sung v2)
+
+Vấn đề 3.5 có một cách giải riêng của ngành: **red team** — đội tấn công giả định, chủ động săn failure modes thay vì chờ chúng tự xảy ra. Kiểm tra thực tế: app KHÔNG có module nào tên red team (`rg -in "red.?team"` → trống), nhưng có sẵn 3 *mảnh* rời của nguyên lý:
+
+| Mảnh | Vị trí | Vai red-team |
+|---|---|---|
+| 10 negative eval cases | `EvalCase category='negative'` | Đã là đội đỏ thu nhỏ: bắn câu out-of-domain đo hallucination (kết quả 0/10 — phòng thủ tốt) |
+| 3 judges chéo model family | `judges.ts` | Chống hệ tự chấm mình (circular bias) — tinh thần adversarial |
+| Layer 9 failure detection | `strategy-adapter.ts` | *Ý định* là đội đỏ vận hành — nhưng đang phantom (mục 2) |
+
+Ba tầng red-team trong hệ AI — app đang có tầng nào?
+
+```
+Tầng 1: RED-TEAM CON TẠO     (tác giả ↔ phản biện khi viết)          ← quy trình làm việc, không phải tính năng
+Tầng 2: RED-TEAM TRONG EVAL  (tập tấn công cố định, chạy khi được gọi) ← app CÓ (negative cases + judges) — nhưng thụ động
+Tầng 3: RED-TEAM LIÊN TỤC    (hệ chủ động tự săn điểm yếu mỗi ngày)    ← app KHÔNG có
+```
+
+**Ý nghĩa với Layer 9**: tầng 3 chính là lời giải cho 3 vấn đề cùng lúc — (a) nguồn dữ liệu sống cho FailurePattern vốn đang trống (mục 2[2]), (b) exploration bị 0 (3.5), (c) sự phụ thuộc chờ-đợi-lỗi trong detector (2[3]). Thay vì chờ lỗi thật (đắt, hiếm, nguy hiểm), red-team **sản xuất lỗi một cách có kiểm soát**. Thiết kế chi tiết: xem `docs/REDTEAM_TECHNICAL_BLUEPRINT.md`.
+
 ---
 
 ## 4. NHỮNG GÌ ĐƯỢC GIỮ LẠI (đánh giá công bằng)
@@ -151,6 +171,7 @@ Chiến lược một khi "thắng" không bao giờ bị thách thức lại. K
 | 2.1 | Cầu nối Prop 11' → Layer 9: sau mỗi eval run, ghi ExecutionMetrics row bổ sung với recall@5/condFaithfulness (cần migration thêm 2 field — sửa luôn spec-vs-reality gap 3.1) | migration + ~60 dòng | Layer 9 dashboard hiển thị trend chất lượng, không chỉ vận hành |
 | 2.2 | Recency-weighted aggregation: trọng số exp(-λ·age) cho historical feedback; ngưỡng cứng thay bằng phân vị từ phân phối thực tế | ~80 dòng | Metrics cũ 2 tuần có trọng số < 20% metrics tuần này |
 | 2.3 | Đánh giá định kỳ lại vòng lặp (review cadence): sau mỗi 20 workflow runs, chạy 1 eval mini (5 cases) đối chiếu — phát hiện "learning hóa hại" (regression) | ~40 dòng | Có cơ chế dừng/kéo dài cửa sổ learning khi regression |
+| 2.4 | **Red Team Engine (tầng 3)**: adversarial self-testing liên tục — sinh chaos cases + adversarial judge chuyên phá pipeline, failure modes phát hiện được ghi thẳng vào FailurePattern (xóa dependency chờ-lỗi-thật của đoạn [3]). Xem blueprint đồng hành | ~1 session (blueprint riêng) | RedTeamRun có row; FailurePattern nhận được ít nhất 1 pattern từ nguồn red-team |
 
 ### P3 — DỌN KIẾN TRÚC (effort: quyết định, không phải code)
 
@@ -202,6 +223,7 @@ File này được review đối kháng sau khi viết lần đầu. Các phát 
 10. **Vị trí bằng chứng lệch sau rebase**: file workflow-engine.ts đã bị dịch dòng bởi các commit rebase của session song song — mọi số dòng trích dẫn trong file này là snapshot tại thời điểm đánh giá và CẦN RE-VERIFY bằng lệnh Phụ lục A trước khi dùng để sửa code. Bản đầu không cảnh báo điều này; nay ghi rõ.
 11. **Bổ sung trigger trực tiếp cho P0.1**: bản đầu chỉ hướng dẫn qua UI; red-team xác định `POST /api/code-team/workflow` import `runWorkflow` trực tiếp — đường API ngắn và dễ reproduce hơn cho acceptance test.
 12. **Lỗi khoảng dòng lệnh kiểm chứng — ĐÃ SỬA SAU RED-TEAM VÒNG 2**: lệnh sed demo "token bị vứt trong ReAct" dùng khoảng `1226,1250` — chạy thực tế trả về RỖNG (các tham chiếu `result.content` nằm ở 1240-1290). Đã sửa khoảng dòng trong Phụ lục A và xác nhận chạy ra được. Bài học vận hành: vòng red-team thứ nhất validate nội dung, vòng thứ hai phải RUN lệnh — lệnh đúng nội dung nhưng sai tham số vẫn là lệnh hỏng. Thêm nữa: `grep -c` exit code 1 khi count=0 — các lệnh Phụ lục phải chạy TÁCH BIỆT, không nối `&&` (đã ghi chú dạng danh sách lệnh riêng).
+13. **Bổ sung v2 — Red Team như primitive thiếu (từ thảo luận với user)**: user hỏi "red team ở đâu trong app" → verify: không tồn tại như tính năng, chỉ 3 mảnh rời nguyên lý. Phân tích 3 tầng cho thấy tầng 3 (liên tục) giải quyết đồng thời 3 vấn đề của Layer 9. Đã thêm mục 3.6 + P2.4 + file blueprint đồng hành. Quyết định thiết kế: red-team GHÉP vào eval harness hiện có (tái sử dụng judges + runner) thay vì dựng hệ mới — effort 1 session thay vì 3.
 
 ---
 
