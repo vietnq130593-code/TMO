@@ -91,7 +91,7 @@ import {
 // (added in Phase 6 Prop 2) but the production path never invoked it.
 // Fire-and-forget pattern: any flush error is caught + logged, never
 // crashes the workflow (metrics are best-effort side-effects).
-import { createMetricsCollector, type MetricsCollector } from '@/lib/learning'
+import { createMetricsCollector, analyzeHistoricalFeedback, getAdjustedBudget, getSuccessProbability, type MetricsCollector } from '@/lib/learning'
 
 /** Operations that trigger auto-checkpoint BEFORE they execute. */
 const RISKY_OPS = new Set<string>([
@@ -531,6 +531,96 @@ export interface WorkflowContext {
   skillsContext?: string
 }
 
+// ==================== LAYER 9 P1.2 + P1.3 — ERROR TAXONOMY & PATTERN PERSISTENCE ====================
+
+/**
+ * Layer 9 P1.2 (2026-08-25) — Phân loại lỗi workflow: transient vs systematic.
+ *
+ * Trước P1.2: mọi lỗi hardcode errorType='runtime' → detectFailurePattern
+ * tính 2 lỗi bất kỳ cùng type = "repeated_error" → khuyến nghị đổi approach
+ * sai (2 lỗi mạng không liên quan cũng đếm là "lặp"). Phân loại:
+ *   - transient_*: tự hồi phục (retry là đúng đắn) — mạng, 429, 5xx, timeout
+ *   - systematic_*: cần đổi cách làm — tool từ chối, parse lỗi, logic sai
+ *   - runtime: không phân loại được (fallback an toàn)
+ */
+function classifyWorkflowError(errorMessage: string): import('@/lib/error-handling/types').ErrorType {
+  const msg = errorMessage.toLowerCase()
+  // Transient: network / rate-limit / server errors — retry-able
+  if (/timeout|timed out|econnreset|econnrefused|enotfound|fetch failed|network/.test(msg)) return 'transient_network'
+  if (/429|rate.?limit|too many requests|quota/.test(msg)) return 'transient_ratelimit'
+  if (/503|502|500|service unavailable|bad gateway|internal server/.test(msg)) return 'transient_server'
+  // Systematic: cần đổi approach
+  if (/tool .*(not found|not allowed|refused|rejected)|invalid tool|unknown tool/.test(msg)) return 'systematic_tool_rejected'
+  if (/parse|json|syntax|malformed|invalid format/.test(msg)) return 'systematic_parse'
+  if (/permission|denied|unauthorized|forbidden|401|403/.test(msg)) return 'systematic_permission'
+  if (/not found|does not exist|no such file|missing/.test(msg)) return 'systematic_notfound'
+  return 'runtime' // không phân loại được — giữ type cũ làm fallback
+}
+
+/**
+ * Layer 9 P1.3 (2026-08-25) — Kẹp đoạn [4] của vòng Layer 9 trong production path.
+ *
+ * detectFailurePattern + persistFailurePattern + persistAdaptationLog từng chỉ
+ * được import (không gọi) trong master-orchestrator phantom path — FailurePattern
+ * table 0 rows vĩnh viễn. Helper này chạy mỗi khi 1 step fail trong runWorkflow:
+ *
+ *   1. detectFailurePattern(tổng hợp errors trong SESSION này — scoping theo
+ *      stepId để 2 step khác nhau fail cùng lúc không bị tính "repeated")
+ *   2. persistFailurePattern — row sống đầu tiên cho Layer 9
+ *   3. Pattern repeated_error (count >= 2, NGƯỠNG SAU taxonomy P1.2 — chỉ đếm
+ *      error type systematic_x hoặc runtime, transient tự hồi) → persistAdaptationLog
+ *      ghi nhận "cần đổi approach" (log thôi, chưa auto-apply — chờ đủ data)
+ *
+ * Fire-and-forget từ call site; bên trong cũng tự catch toàn bộ.
+ */
+async function detectAndPersistFailurePattern(sessionId: string, stepId: string, errorMessage: string): Promise<void> {
+  const { detectFailurePattern, recommendAdaptation, persistFailurePattern, persistAdaptationLog } = await import('@/lib/learning')
+  try {
+    // Pattern detection trên CHÍNH session này (đúng scoping P1.2: lỗi giữa
+    // các workflow khác nhau không được tính là "repeated" trong 1 workflow).
+    const pattern = detectFailurePattern(
+      { type: classifyWorkflowError(errorMessage), message: errorMessage.slice(0, 300) },
+      [], // previousErrors — pattern trong scope step hiện tại (P1.2: không
+          // gom errors từ step khác để tránh false repeated_error)
+      { totalTokensUsed: 0, totalTokensBudgeted: 0, totalTimeSpent: 0 },
+      null // historicalMetrics — có thể wired sau khi P1.1 cache sẵn
+    )
+
+    if (!pattern) return
+
+    // Gắn sessionId thật (persistFailurePattern mặc định 'unknown')
+    pattern.context = {
+      taskType: 'code-team-workflow',
+      routingMode: 'unknown',
+      stepType: stepId,
+    }
+
+    await persistFailurePattern({ ...pattern, context: { ...pattern.context, sessionId } as typeof pattern.context })
+
+    // P1.3: chỉ khuyến nghị adaptation khi pattern nghiêm trọng (repeated ≥ 2)
+    if (pattern.type === 'repeated_error' && pattern.count >= 2) {
+      const decision = recommendAdaptation(pattern, null)
+      await persistAdaptationLog({
+        id: `adapt-${sessionId}-${Date.now()}`,
+        sessionId,
+        patternId: pattern.id,
+        fromStrategy: pattern.nextStrategy,
+        toStrategy: decision.recommendedStrategy,
+        reason: decision.reason,
+        confidence: decision.confidence,
+        successful: null, // pending — chưa auto-apply (P1.3 chỉ observe)
+        createdAt: new Date().toISOString(),
+      })
+      console.log(`[Workflow] Layer 9 P1.3 — pattern persisted + adaptation recommended: ${pattern.type} → ${decision.recommendedStrategy} (session ${sessionId.slice(0, 12)})`)
+    } else {
+      console.log(`[Workflow] Layer 9 P1.3 — failure pattern persisted: ${pattern.type} (count=${pattern.count}, session ${sessionId.slice(0, 12)})`)
+    }
+  } catch (err) {
+    // persistFailurePattern đã tự catch bên trong — chỉ log thêm tầng này
+    console.warn('[Workflow] Layer 9 P1.3 — detect/persist threw (non-fatal):', err instanceof Error ? err.message : String(err))
+  }
+}
+
 export async function runWorkflow(
   request: WorkflowRequest,
   emit: SSEEmitter,
@@ -597,12 +687,56 @@ export async function runWorkflow(
   // routing info is also stored in WorkflowSession row via upsertSession
   // (line 738); ExecutionMetrics is a side-effect audit trail, not the
   // source of truth for routing decisions.
+  // ━━━ Layer 9 P1.1 (2026-08-25) — KẾP VÒNG [5]: history → quyết định hiện tại ━━━
+  // Trước P1.1, budget 100000 là placeholder cố định — analyzeHistoricalFeedback
+  // / getAdjustedBudget / getSuccessProbability tồn tại nhưng 0 caller (vòng
+  // lặp đứt ở đoạn cuối). Giờ đầu mỗi workflow:
+  //   1. Đọc aggregated history (cached 5 phút trong module scope)
+  //   2. Adjusted budget = getAdjustedBudget (clamped [0.5×, 2×] base — chống
+  //      spiral throttle: budget giảm → fail nhiều → budget giảm nữa)
+  //   3. Success probability log ra — dùng sau bởi strategy decisions
+  // Fail-open: history read lỗi → dùng base budget, workflow KHÔNG BAO GIỜ
+  // bị block bởi learning layer (metrics/learning là side-channel, không phải
+  // critical path).
+  const BASE_TOKEN_BUDGET = 100000
+  let effectiveTokenBudget = BASE_TOKEN_BUDGET
+  let historicalMetrics: import('@/lib/learning').AggregatedMetrics | null = null
+  try {
+    historicalMetrics = await analyzeHistoricalFeedback()
+    if (historicalMetrics && historicalMetrics.totalRuns > 0) {
+      const routingMode = request.routing?.mode ?? 'A'
+      const tier = request.routing?.tier ?? 1
+      // getAdjustedBudget trả base × complexity khi chưa đủ data (minRuns 5)
+      const adjusted = getAdjustedBudget(
+        `mode-${routingMode}-tier-${tier}`,
+        tier,
+        historicalMetrics,
+        BASE_TOKEN_BUDGET
+      )
+      // P1.1 anti-spiral clamp: history có thể sai (n=5, non-stationary) —
+      // không cho budget lệch quá 2× hoặc dưới 0.5× base trong 1 bước nhảy.
+      effectiveTokenBudget = Math.round(
+        Math.min(BASE_TOKEN_BUDGET * 2, Math.max(BASE_TOKEN_BUDGET * 0.5, adjusted))
+      )
+      const successProb = getSuccessProbability(
+        `mode-${routingMode}-tier-${tier}`,
+        routingMode,
+        historicalMetrics
+      )
+      console.log(`[Workflow] Layer 9 P1.1 — historical feedback: ${historicalMetrics.totalRuns} prior runs, budget ${BASE_TOKEN_BUDGET} → ${effectiveTokenBudget} (clamped), successProb=${successProb.toFixed(2)} for mode-${routingMode}-tier-${tier}`)
+    } else {
+      console.log(`[Workflow] Layer 9 P1.1 — no prior workflow history (first runs) → base budget ${BASE_TOKEN_BUDGET}`)
+    }
+  } catch (histErr) {
+    console.warn('[Workflow] Layer 9 P1.1 — historical feedback failed (fail-open, using base budget):', histErr instanceof Error ? histErr.message : String(histErr))
+  }
+
   const metricsCollector: MetricsCollector = createMetricsCollector(
     sessionId,
     sessionId, // planId = sessionId for now (no separate plan table)
     request.routing?.mode ?? 'A', // routingMode (A/B/C from TL assessment)
     request.routing?.tier ?? 1,   // tier (1/2/3 from TL assessment)
-    100000 // Default token budget — placeholder, real budget computed later
+    effectiveTokenBudget // Layer 9 P1.1: history-adjusted (was 100000 placeholder)
   )
 
   try {
@@ -944,14 +1078,19 @@ async function runPipeline(
     // Phase 2 SMOLAB Proposal 7 — Record step completion/error for Layer 9.
     // If isFailedStep, also push an ErrorRecord into the step's error log so
     // errorsByType aggregation in getCurrentMetrics() captures the failure.
-    // tokensUsed=0 placeholder (real tracking would require plumbing LLM
-    // token counts through runAgentStep — deferred per spec: "Don't add
-    // recordTokenUsage calls"). timeSpent from agentResult.duration (ms).
+    // Layer 9 P0.2 (2026-08-25): tokensUsed is now REAL — accumulated across
+    // the step's ReAct iterations inside runAgentStep. timeSpent from
+    // agentResult.duration (ms).
     if (isFailedStep) {
       metricsCollector.recordStepError(stepId, {
         id: `err-${sessionId}-${stepId}-${Date.now()}`,
         timestamp: new Date(),
-        errorType: 'runtime',
+        // Layer 9 P1.2 (2026-08-25): error taxonomy thay vì hardcode 'runtime'.
+        // Trước P1.2, MỌI lỗi đều dán 'runtime' → 2 lỗi nguyên nhân khác hẳn
+        // vẫn bị detectFailurePattern tính là "repeated_error" → khuyến nghị
+        // đổi approach sai. Phân loại transient (mạng/429/503/timeout — tự hồi)
+        // vs systematic (tool fail/logic — cần đổi approach).
+        errorType: classifyWorkflowError(agentResult.content),
         severity: 'high',
         message: agentResult.content.slice(0, 500),
         rootCause: 'Agent step returned Error: prefix',
@@ -959,6 +1098,20 @@ async function runPipeline(
         fixApplied: false,
         loopDetected: false,
         loopCount: 0,
+      })
+
+      // ━━━ Layer 9 P1.3 (2026-08-25) — kẹp đoạn [4]: persist failure patterns ━━━
+      // Trước P1.3, detectFailurePattern/persistFailurePattern chỉ tồn tại trong
+      // master-orchestrator phantom path — FailurePattern table 0 rows mãi mãi.
+      // Giờ mỗi step fail trong PRODUCTION path được:
+      //   1. Phát hiện pattern (detectFailurePattern — reused nguyên vẹn)
+      //   2. Persist (persistFailurePattern) — nguồn dữ liệu sống cho Layer 9
+      //   3. Nếu pattern đủ nghiêm trọng (repeated ≥ 2) → persistAdaptationLog
+      //      ghi nhận quyết định cần thiết-ứng (chưa auto-apply — P1.3 chỉ lưu,
+      //      auto-apply chờ đủ dữ liệu để tin)
+      // Fire-and-forget: không bao giờ block workflow vì learning side-channel.
+      void detectAndPersistFailurePattern(sessionId, stepId, agentResult.content).catch((pErr) => {
+        console.warn('[Workflow] Layer 9 P1.3 pattern persistence failed (non-fatal):', pErr instanceof Error ? pErr.message : String(pErr))
       })
     }
     metricsCollector.recordStepComplete(
@@ -974,7 +1127,10 @@ async function runPipeline(
           ? agentResult.content.slice(0, 2000)
           : (parsedWorklog?.outputForNext || agentResult.content.slice(0, 2000)),
       },
-      0, // tokensUsed — placeholder (see comment above)
+      // Layer 9 P0.2: REAL token usage (accumulated across the step's ReAct
+      // iterations) — replaces the literal-0 placeholder that kept
+      // tokenEfficiency at 0 and severed the resource_limit detector.
+      typeof agentResult.tokensUsed === 'number' ? agentResult.tokensUsed : 0,
       agentResult.duration, // timeSpent (ms)
     )
 
@@ -1156,7 +1312,7 @@ export async function runAgentStep(params: {
   emit: SSEEmitter
   maxIterations?: number
   ctx: WorkflowContext
-}): Promise<{ content: string; duration: number }> {
+}): Promise<{ content: string; duration: number; tokensUsed: number }> {
   const { position, step, prompt, sessionId, emit, maxIterations = 10, ctx } = params
   const stepStartTime = Date.now()
 
@@ -1203,6 +1359,11 @@ export async function runAgentStep(params: {
   let finalContent = ''
   let iterations = 0
   let totalToolCalls = 0
+  // Layer 9 P0.2 (2026-08-25): accumulate real token usage across ALL LLM
+  // calls in this step's ReAct loop (each iteration = 1+ callLLMForAgent).
+  // Previously tokensUsed was a literal 0 at the recordStepComplete call site
+  // — severing the resource_limit detector's signal (tokenEfficiency ≡ 0).
+  let stepTokensUsed = 0
   // Phase 1c metrics: track native vs fallback success rate for dual-mode validation
   let nativeToolCallCount = 0
   let regexFallbackCount = 0
@@ -1281,6 +1442,12 @@ export async function runAgentStep(params: {
     }
 
     finalContent = result.content
+
+    // Layer 9 P0.2: accumulate tokens from this LLM call (LLMResult.tokensUsed
+    // comes from the NIM API usage field — available on every call).
+    if (typeof result.tokensUsed === 'number' && result.tokensUsed > 0) {
+      stepTokensUsed += result.tokensUsed
+    }
 
     // Emit chunk — REPLACE content (not append) because each ReAct iteration
     // returns the FULL LLM output, not incremental deltas.
@@ -1560,9 +1727,11 @@ export async function runAgentStep(params: {
   const fcMetrics = fcMode === 'off'
     ? 'fc: off'
     : `fc: ${fcMode} (native=${nativeToolCallCount}, regex_fallback=${regexFallbackCount})`
-  console.log(`[Workflow] ${agent.name} done: ${iterations} iterations, ${totalToolCalls} tool calls, ${Date.now() - stepStartTime}ms [${fcMetrics}]`)
+  console.log(`[Workflow] ${agent.name} done: ${iterations} iterations, ${totalToolCalls} tool calls, ${stepTokensUsed} tokens, ${Date.now() - stepStartTime}ms [${fcMetrics}]`)
 
-  return { content: finalContent, duration: Date.now() - stepStartTime }
+  // Layer 9 P0.2: expose the step's real token usage to the caller
+  // (runWorkflow passes it down to metricsCollector.recordStepComplete).
+  return { content: finalContent, duration: Date.now() - stepStartTime, tokensUsed: stepTokensUsed }
 }
 
 // ==================== CHECKPOINT VERIFY ====================

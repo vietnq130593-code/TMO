@@ -18,6 +18,17 @@ export type ErrorType =
   | 'api'          // 404, 500, timeout
   | 'network'      // CORS, connection refused
   | 'unknown'      // Không thể phân loại
+  // ━━━ Layer 9 P1.2 (2026-08-25) — fine-grained workflow error taxonomy ━━━
+  // Phân biệt transient (tự hồi — retry là đúng) vs systematic (cần đổi
+  // approach). Cho detectFailurePattern đếm repeated_error CHÍNH XÁC: 2 lỗi
+  // network khác nguyên nhân không còn bị gộp chung 'runtime'.
+  | 'transient_network'      // timeout / econnreset / fetch failed — retry-able
+  | 'transient_ratelimit'   // 429 / rate limit / quota — retry sau cooldown
+  | 'transient_server'      // 5xx / service unavailable — retry-able
+  | 'systematic_tool_rejected' // tool từ chối/không tồn tại — đổi approach
+  | 'systematic_parse'      // JSON/syntax/format — đổi prompt hoặc parser
+  | 'systematic_permission' // 401/403/denied — đổi config
+  | 'systematic_notfound'   // file/resource không tồn tại — đổi path/logic
 
 /** Mức độ nghiêm trọng của lỗi */
 export type ErrorSeverity = 'critical' | 'high' | 'medium' | 'low'

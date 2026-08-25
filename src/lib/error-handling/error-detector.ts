@@ -128,6 +128,14 @@ const SEVERITY_MAP: Record<ErrorType, ErrorSeverity> = {
   api: 'high',
   network: 'high',
   unknown: 'high',
+  // Layer 9 P1.2 taxonomy — transient nhẹ hơn (tự hồi), systematic theo mức
+  'transient_network': 'medium',
+  'transient_ratelimit': 'low',
+  'transient_server': 'medium',
+  'systematic_tool_rejected': 'high',
+  'systematic_parse': 'high',
+  'systematic_permission': 'critical',
+  'systematic_notfound': 'medium',
 }
 
 // ==================== FILE/LINE EXTRACTION ====================
