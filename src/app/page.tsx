@@ -23,7 +23,7 @@ import {
   GitCommit, History, Minimize2, ExternalLink as ExternalLinkIcon, GripHorizontal, ArrowDownToLine,
   Wifi, WifiOff,
   Flame, Archive, Snowflake, Thermometer, FlaskConical, ShieldAlert, Swords,
-  CloudDownload, CircleHelp
+  CloudDownload, CircleHelp, ClipboardList, Circle, CircleDot as CircleDotIcon
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -11461,6 +11461,20 @@ function CodeTabContent() {
   const [mcpSyncing, setMcpSyncing] = useState(false)
   const [mcpToggling, setMcpToggling] = useState<string | null>(null)
 
+  // ===== Agent Tasks (Todo Progress) — user request 2026-08-29 =====
+  // Long-running task tracking: agent ghi todo qua tool todo_write (independent
+  // agents ReAct loop) hoặc auto-upsert mỗi agent step (Team Code workflow).
+  // Panel poll GET /api/todos 3s/lần + hiển thị progress bar + trạng thái từng bước
+  // + agent activity feed (tool_call events từ window bridge).
+  const [todoSessions, setTodoSessions] = useState<Array<{
+    sessionId: string; total: number; lastUpdatedAt: string;
+    summary: { total: number; byStatus: Record<string, number>; completedPct: number };
+    todos?: Array<{ id: string; agentRole: string | null; content: string; status: string; priority: string; parentId: string | null; createdAt: string; updatedAt: string }>;
+  }>>([])
+  const [activeTodoSession, setActiveTodoSession] = useState<string | null>(null)
+  const [todoPanelOpen, setTodoPanelOpen] = useState(true)
+  const [agentActivity, setAgentActivity] = useState<Array<{ id: string; tool: string; detail: string; ts: number }>>([])
+
   // Terminal
   const [terminalOutput, setTerminalOutput] = useState<string[]>([])
   const [terminalLoading, setTerminalLoading] = useState(false)
@@ -12076,6 +12090,86 @@ function CodeTabContent() {
       })()
     }, 0)
     return () => clearTimeout(t)
+  }, [])
+
+  // ===== Agent Tasks polling (user request 2026-08-29) =====
+  // Poll GET /api/todos mỗi 3s (gate theo tab visible — không burn CPU khi ẩn).
+  // activeTodoSession: session user đang chọn xem; mặc định = session gần nhất
+  // có todo. Detail todos được fetch riêng cho session được chọn.
+  const activeTodoSessionRef = useRef<string | null>(null)
+  useEffect(() => { activeTodoSessionRef.current = activeTodoSession })
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      if (document.hidden) return
+      try {
+        const selected = activeTodoSessionRef.current
+        const url = selected
+          ? `/api/todos?sessionId=${encodeURIComponent(selected)}`
+          : '/api/todos'
+        const res = await authedFetch(url)
+        if (!res.ok || cancelled) return
+        const d = await res.json().catch(() => null) as {
+          ok?: boolean
+          sessions?: Array<{
+            sessionId: string; total: number; lastUpdatedAt: string;
+            summary: { total: number; byStatus: Record<string, number>; completedPct: number };
+            todos?: Array<{ id: string; agentRole: string | null; content: string; status: string; priority: string; parentId: string | null; createdAt: string; updatedAt: string }>;
+          }>
+          sessionId?: string
+          summary?: { total: number; byStatus: Record<string, number>; completedPct: number }
+          todos?: Array<{ id: string; agentRole: string | null; content: string; status: string; priority: string; parentId: string | null; createdAt: string; updatedAt: string }>
+        } | null
+        if (!d?.ok || cancelled) return
+        if (selected && d.sessionId) {
+          // Chi tiết 1 session — wrap về cùng shape overview
+          setTodoSessions(prev => {
+            const others = prev.filter(s => s.sessionId !== d.sessionId)
+            return [{
+              sessionId: d.sessionId!,
+              total: d.summary?.total ?? 0,
+              lastUpdatedAt: new Date().toISOString(),
+              summary: d.summary ?? { total: 0, byStatus: {}, completedPct: 0 },
+              todos: d.todos,
+            }, ...others]
+          })
+        } else if (d.sessions) {
+          // Overview — merge giữ detail cũ cho session không có todos trong response
+          setTodoSessions(prev => d.sessions!.map(s => ({
+            ...s,
+            todos: s.todos ?? prev.find(p => p.sessionId === s.sessionId)?.todos,
+          })))
+        }
+      } catch { /* offline — retry ở interval sau */ }
+    }
+    poll()
+    const interval = setInterval(poll, 3000)
+    const onVisible = () => { if (!document.hidden) poll() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [])
+
+  // Agent activity feed — capture tool_call events từ window bridge (Phase 7)
+  // để hiển thị "agent đang làm gì" trong panel Agent Tasks.
+  useEffect(() => {
+    const listener = (e: Event) => {
+      try {
+        const d = (e as CustomEvent).detail as { type?: string; tool?: string; detail?: string } | undefined
+        if (!d || d.type !== 'tool_call' || !d.tool) return
+        setAgentActivity(prev => [...prev.slice(-4), {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          tool: d.tool!,
+          detail: typeof d.detail === 'string' ? d.detail.slice(0, 160) : '',
+          ts: Date.now(),
+        }])
+      } catch { /* ignore */ }
+    }
+    window.addEventListener(AI_TOOL_EVENT_NAME, listener)
+    return () => { window.removeEventListener(AI_TOOL_EVENT_NAME, listener) }
   }, [])
 
   // Reload file tree when workspace root changes
@@ -13626,6 +13720,162 @@ function CodeTabContent() {
           </div>
         </div>
       )}
+
+      {/* ===== Section 1.5: Agent Tasks (Todo Progress — long-running) ===== */}
+      {(() => {
+        // Session đang hiển thị: user chọn HOẶC session gần nhất có todo
+        const current = todoSessions.find(s => s.sessionId === activeTodoSession) || todoSessions[0] || null
+        const todos = current?.todos ?? []
+        const summary = current?.summary ?? { total: 0, byStatus: {}, completedPct: 0 }
+        const hasAnyWork = todoSessions.length > 0 || agentActivity.length > 0
+        const inProgress = (summary.byStatus['in_progress'] || 0) + (summary.byStatus['pending'] || 0)
+        const statusIcon = (st: string) => st === 'completed' ? '✅' : st === 'in_progress' ? '⏳' : st === 'failed' ? '❌' : st === 'blocked' ? '⚠️' : '○'
+        const statusColor = (st: string) => st === 'completed' ? 'text-emerald-400' : st === 'in_progress' ? 'text-amber-300' : st === 'failed' ? 'text-red-400' : st === 'blocked' ? 'text-orange-400' : 'text-stone-500'
+        const prioColor = (p: string) => p === 'high' ? 'bg-red-500/70' : p === 'medium' ? 'bg-amber-500/70' : 'bg-stone-500/70'
+        // Nested: todo có parentId → render indented dưới parent
+        const rootTodos = todos.filter(t => !t.parentId)
+        const childOf = (pid: string) => todos.filter(t => t.parentId === pid)
+        return (
+          <div className="nc-wrap nc-emerald">
+            <div className="nc-panel nc-sm nc-border-emerald p-4">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-2">
+                <button
+                  className="flex items-center gap-2 hover:bg-emerald-500/10 rounded px-1 py-0.5 transition-colors cursor-pointer"
+                  onClick={() => setTodoPanelOpen(!todoPanelOpen)}
+                  title={todoPanelOpen ? 'Thu gọn' : 'Mở rộng'}
+                >
+                  <ClipboardList className="h-4 w-4 text-emerald-400" />
+                  <span className="text-sm font-semibold text-stone-100">Agent Tasks</span>
+                  {hasAnyWork && inProgress > 0 && (
+                    <Badge className="text-[8px] bg-amber-950/60 text-amber-300 border border-amber-400/40 animate-pulse">
+                      {inProgress} đang chạy
+                    </Badge>
+                  )}
+                  {current && (
+                    <span className="text-[10px] text-stone-500">
+                      {summary.completedPct}% hoàn thành · {current.sessionId.length > 14 ? current.sessionId.slice(0, 14) + '…' : current.sessionId}
+                    </span>
+                  )}
+                  <ChevronDown className={`h-3 w-3 text-stone-500 transition-transform ${todoPanelOpen ? '' : '-rotate-90'}`} />
+                </button>
+                <div className="flex items-center gap-1.5">
+                  {todoSessions.length > 1 && (
+                    <select
+                      className="h-6 bg-slate-900 border border-emerald-400/30 rounded text-[9px] text-stone-300 px-1 max-w-[160px]"
+                      value={activeTodoSession || current?.sessionId || ''}
+                      onChange={(e) => setActiveTodoSession(e.target.value || null)}
+                      title="Chọn session để xem tiến độ"
+                      aria-label="Chọn session Agent Tasks"
+                    >
+                      {todoSessions.map(s => (
+                        <option key={s.sessionId} value={s.sessionId}>
+                          {s.sessionId.length > 18 ? s.sessionId.slice(0, 18) + '…' : s.sessionId} ({s.summary.completedPct}%)
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {current && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-[9px] text-stone-500 hover:text-red-400"
+                      title="Xóa todo list của session này"
+                      onClick={() => {
+                        authedFetch(`/api/todos?sessionId=${encodeURIComponent(current.sessionId)}`, { method: 'DELETE' })
+                          .then(() => { setTodoSessions(prev => prev.filter(s => s.sessionId !== current.sessionId)); setActiveTodoSession(null) })
+                          .catch(() => toast({ title: 'Lỗi xóa todo', variant: 'destructive' }))
+                      }}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {todoPanelOpen && (
+                <>
+                  {/* Progress bar */}
+                  {current && todos.length > 0 ? (
+                    <div className="mb-2">
+                      <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden" role="progressbar" aria-valuenow={summary.completedPct} aria-valuemin={0} aria-valuemax={100}>
+                        <div
+                          className={`h-full transition-all duration-500 ${summary.completedPct === 100 ? 'bg-emerald-500' : 'bg-gradient-to-r from-emerald-500 to-amber-400'}`}
+                          style={{ width: `${summary.completedPct}%` }}
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 mt-1 text-[9px] text-stone-500">
+                        <span>✅ {summary.byStatus['completed'] || 0}</span>
+                        <span>⏳ {summary.byStatus['in_progress'] || 0}</span>
+                        <span>○ {summary.byStatus['pending'] || 0}</span>
+                        {(summary.byStatus['blocked'] || 0) > 0 && <span className="text-orange-400">⚠️ {summary.byStatus['blocked']}</span>}
+                        {(summary.byStatus['failed'] || 0) > 0 && <span className="text-red-400">❌ {summary.byStatus['failed']}</span>}
+                        <span className="ml-auto">{todos.length} bước</span>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Todo list */}
+                  {todos.length > 0 ? (
+                    <div className="max-h-64 overflow-y-auto space-y-0.5 pr-1" style={{ scrollbarWidth: 'thin' }} aria-label="Danh sách bước agent đang thực hiện">
+                      {rootTodos.map(t => (
+                        <div key={t.id}>
+                          <div className="flex items-start gap-2 px-2 py-1 rounded hover:bg-emerald-500/5 transition-colors">
+                            <span className={`text-[11px] leading-4 flex-shrink-0 ${statusColor(t.status)} ${t.status === 'in_progress' ? 'animate-pulse' : ''}`}>
+                              {t.status === 'pending' ? <Circle className="h-3 w-3" /> : statusIcon(t.status)}
+                            </span>
+                            <span className={`text-[11px] leading-4 flex-1 ${t.status === 'completed' ? 'text-stone-500 line-through' : 'text-stone-200'}`}>
+                              {t.content}
+                            </span>
+                            {t.agentRole && (
+                              <Badge className="text-[7px] bg-slate-800 text-stone-400 flex-shrink-0">{t.agentRole}</Badge>
+                            )}
+                            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ${prioColor(t.priority)}`} title={`priority: ${t.priority}`} />
+                          </div>
+                          {childOf(t.id).map(c => (
+                            <div key={c.id} className="flex items-start gap-2 px-2 py-0.5 pl-7 rounded hover:bg-emerald-500/5 transition-colors">
+                              <span className={`text-[10px] leading-4 flex-shrink-0 ${statusColor(c.status)} ${c.status === 'in_progress' ? 'animate-pulse' : ''}`}>
+                                {c.status === 'pending' ? <Circle className="h-2.5 w-2.5" /> : statusIcon(c.status)}
+                              </span>
+                              <span className={`text-[10px] leading-4 flex-1 ${c.status === 'completed' ? 'text-stone-600 line-through' : 'text-stone-400'}`}>
+                                {c.content}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-stone-500 px-1 py-2">
+                      {hasAnyWork ? 'Session này chưa có todo chi tiết.' : 'Chưa có task nào. Giao việc phức tạp cho agent (chat Smolab hoặc Team Code) — agent sẽ tự chia nhỏ thành các bước và tiến độ hiển thị ở đây.'}
+                    </p>
+                  )}
+
+                  {/* Agent activity feed — "agent đang làm gì" ngay lúc này */}
+                  {agentActivity.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-emerald-400/15">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <Activity className="h-3 w-3 text-emerald-400" />
+                        <span className="text-[10px] font-medium text-stone-300">Hoạt động agent (trực tiếp)</span>
+                      </div>
+                      <div className="space-y-0.5">
+                        {agentActivity.slice().reverse().map(a => (
+                          <div key={a.id} className="flex items-center gap-2 text-[9px] text-stone-500 px-1">
+                            <CircleDotIcon className="h-2 w-2 text-emerald-500/70 flex-shrink-0" />
+                            <span className="font-mono text-emerald-400/80 flex-shrink-0">{a.tool}</span>
+                            <span className="truncate">{a.detail || '…'}</span>
+                            <span className="ml-auto flex-shrink-0 text-stone-600">{new Date(a.ts).toLocaleTimeString('vi-VN')}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ===== Section 2: Terminal ===== */}
       <div className="nc-wrap nc-emerald">

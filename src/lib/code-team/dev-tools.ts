@@ -1741,6 +1741,200 @@ export async function todoRead(args: {
   }
 }
 
+// ==================== DYNAMIC SKILL + MCP ENUMERATION (user request 2026-08-29) ====================
+//
+// "Agents có khả năng liệt kê skills động chưa, có tự scan được skill registry
+// không" + "MCP servers... Agents có tự enumerate được không".
+// Trước đây skills chỉ được inject TĨNH vào system prompt (bị truncate 16K
+// chars) — agent không tự liệt kê/tra cứu được runtime. 3 tool dưới cho agent
+// khả năng scan registry bất cứ lúc nào trong ReAct loop.
+
+/**
+ * Parse front-matter (name/description) từ nội dung SKILL.md dạng text —
+ * không pull thêm dependency front-matter parser.
+ */
+function parseSkillFrontMatter(md: string): { name?: string; description?: string } {
+  const out: { name?: string; description?: string } = {}
+  const fmMatch = md.match(/^---\n([\s\S]*?)\n---/)
+  if (fmMatch) {
+    const nameM = fmMatch[1].match(/^name:\s*(.+)$/m)
+    const descM = fmMatch[1].match(/^description:\s*(.+)$/m)
+    if (nameM) out.name = nameM[1].trim()
+    if (descM) out.description = descM[1].trim()
+  }
+  return out
+}
+
+/**
+ * list_skills — scan skill registry ĐỘNG từ 3 nguồn:
+ *   1. DB AgentSkill (enabled) — skill do user tạo/quản lý qua UI
+ *   2. Filesystem skills/<slug>/SKILL.md — 60+ clawhub skills cài sẵn
+ *   3. 5 dịch vụ API key-pool (tavily/serper/jina/web_search/page_reader)
+ * Trả danh sách gọn (tên + mô tả ngắn) để agent quyết định dùng skill nào,
+ * sau đó read_skill({slug}) để đọc nội dung đầy đủ.
+ */
+export async function listSkills(args: { source?: 'db' | 'filesystem' | 'services' | 'all' }): Promise<unknown> {
+  const source = args?.source || 'all'
+  const result: Record<string, unknown> = { success: true, source }
+
+  // 1. DB skills
+  if (source === 'all' || source === 'db') {
+    try {
+      const skills = await db.agentSkill.findMany({
+        where: { enabled: true },
+        select: { name: true, slug: true, source: true, content: true },
+        orderBy: { name: 'asc' },
+      })
+      result.dbSkills = skills.map(s => ({
+        slug: s.slug,
+        name: s.name,
+        source: s.source,
+        description: (parseSkillFrontMatter(s.content).description || s.content.slice(0, 120)).replace(/\n/g, ' '),
+        chars: s.content.length,
+      }))
+      result.dbSkillCount = skills.length
+    } catch (err) {
+      result.dbSkills = []
+      result.dbSkillError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  // 2. Filesystem skills (clawhub — 60+ skills)
+  if (source === 'all' || source === 'filesystem') {
+    try {
+      const skillsDir = path.join(process.cwd(), 'skills')
+      const dirs = await fs.readdir(skillsDir)
+      const fsSkills: Array<{ slug: string; name: string; description: string }> = []
+      for (const d of dirs.sort()) {
+        try {
+          const md = await fs.readFile(path.join(skillsDir, d, 'SKILL.md'), 'utf-8')
+          const fm = parseSkillFrontMatter(md)
+          fsSkills.push({
+            slug: d,
+            name: fm.name || d,
+            description: (fm.description || '').slice(0, 160),
+          })
+        } catch { /* không phải skill dir */ }
+      }
+      result.filesystemSkills = fsSkills
+      result.filesystemSkillCount = fsSkills.length
+    } catch (err) {
+      result.filesystemSkills = []
+      result.filesystemSkillError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  // 3. API-key services (5 skill nền tảng)
+  if (source === 'all' || source === 'services') {
+    try {
+      const { tavilyKeyPool, serperKeyPool, jinaKeyPool } = await import('@/lib/service-key-pool')
+      result.services = [
+        { slug: 'tavily', name: 'Tavily', kind: 'web search', keysAvailable: `${tavilyKeyPool.getAvailableCount()}/${tavilyKeyPool.getTotalCount()}`, fallback: 'z-ai-sdk web_search' },
+        { slug: 'serper', name: 'Serper', kind: 'google search', keysAvailable: `${serperKeyPool.getAvailableCount()}/${serperKeyPool.getTotalCount()}`, fallback: 'z-ai-sdk web_search' },
+        { slug: 'jina', name: 'Jina Reader', kind: 'page reader', keysAvailable: `${jinaKeyPool.getAvailableCount()}/${jinaKeyPool.getTotalCount()}`, fallback: 'z-ai-sdk page_reader' },
+        { slug: 'web_search', name: 'Web Search SDK', kind: 'web search', keysAvailable: 'unlimited (sdk)', fallback: null },
+        { slug: 'page_reader', name: 'Page Reader SDK', kind: 'page reader', keysAvailable: 'unlimited (sdk)', fallback: null },
+      ]
+    } catch (err) {
+      result.servicesError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  // Guide ngắn cho agent
+  result._usage = 'Gọi read_skill({"slug":"<slug>"}) để đọc nội dung đầy đủ 1 skill trước khi dùng nó.'
+  return result
+}
+
+/**
+ * read_skill — đọc nội dung đầy đủ của 1 skill theo slug.
+ * Thứ tự tra cứu: DB AgentSkill (enabled) → filesystem skills/<slug>/SKILL.md.
+ * Truncate 30K chars để không phá context window.
+ */
+export async function readSkill(args: { slug: string }): Promise<unknown> {
+  if (!args?.slug || typeof args.slug !== 'string') {
+    return { success: false, error: 'slug là bắt buộc — gọi list_skills({}) để xem danh sách' }
+  }
+  const slug = args.slug.trim()
+  const MAX_CHARS = 30_000
+
+  // DB trước (skill user tạo có nội dung tùy biến)
+  try {
+    const dbSkill = await db.agentSkill.findFirst({
+      where: { OR: [{ slug }, { name: slug }], enabled: true },
+      select: { name: true, slug: true, source: true, content: true },
+    })
+    if (dbSkill) {
+      return {
+        success: true,
+        source: `db:${dbSkill.source}`,
+        slug: dbSkill.slug,
+        name: dbSkill.name,
+        content: dbSkill.content.slice(0, MAX_CHARS),
+        truncated: dbSkill.content.length > MAX_CHARS || undefined,
+      }
+    }
+  } catch { /* fallthrough */ }
+
+  // Filesystem
+  try {
+    const md = await fs.readFile(path.join(process.cwd(), 'skills', slug, 'SKILL.md'), 'utf-8')
+    const fm = parseSkillFrontMatter(md)
+    return {
+      success: true,
+      source: 'filesystem',
+      slug,
+      name: fm.name || slug,
+      content: md.slice(0, MAX_CHARS),
+      truncated: md.length > MAX_CHARS || undefined,
+    }
+  } catch {
+    return { success: false, error: `Không tìm thấy skill "${slug}" — gọi list_skills({}) để xem danh sách slug hợp lệ` }
+  }
+}
+
+/**
+ * mcp_list_servers — agents TỰ ENUMERATE MCP servers runtime.
+ * Gộp: built-in MCP servers (mcp-bridge) + bridge inbound/outbound tools
+ * (OpenClaw↔OpenCode) + trạng thái feature flag mcp_call.
+ */
+export async function mcpListServers(): Promise<unknown> {
+  try {
+    const { listAvailableServers } = await import('@/lib/mcp/mcp-bridge')
+    const servers = await listAvailableServers()
+    const mcpCallEnabled = isFlagEnabled('ENABLE_MCP_CALL')
+
+    // Bridge status (best-effort — server có thể offline)
+    let bridge: unknown = null
+    try {
+      const configs = await db.mCPBridgeConfig.findMany()
+      bridge = {
+        note: 'MCP Bridge OpenClaw ↔ OpenCode (tool sharing)',
+        outbound: configs.filter(c => c.direction === 'outbound' && c.enabled).map(c => c.toolName),
+        inbound: configs.filter(c => c.direction === 'inbound' && c.enabled).map(c => c.toolName),
+      }
+    } catch { /* ignore */ }
+
+    return {
+      success: true,
+      mcpCallEnabled,
+      servers: servers.map(s => ({
+        id: s.id,
+        displayName: s.displayName,
+        description: s.description,
+        permissionRequired: s.permissionRequired,
+        toolCount: s.tools.length,
+        tools: s.tools.map(t => t.name),
+      })),
+      bridge,
+      _usage: mcpCallEnabled
+        ? 'Gọi mcp_call({"server":"<id>","tool":"<tên>","args":{...}}) để dùng. Server chưa được duyệt sẽ trả requiresPermission.'
+        : 'mcp_call đang TẮT (ENABLE_MCP_CALL=false) — chỉ liệt kê được, chưa gọi được.',
+    }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 // ==================== PHASE 3: CODE INTELLIGENCE + MCP ====================
 //
 // Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3 (lines 223-242)

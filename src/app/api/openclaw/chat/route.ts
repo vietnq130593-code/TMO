@@ -650,6 +650,18 @@ export async function POST(request: NextRequest) {
       systemPrompt += `\n\n${workspaceCtx.text}`
     }
 
+    // RUNTIME CAPABILITY REPORT (user request 2026-08-29): agents phải BIẾT tool nào
+    // thực sự hoạt động — probe thật (fs/shell/qdrant/neo4j/web/skills/mcp/todo)
+    // chạy ngay trước cuộc hội thoại, kết quả verified inject vào system prompt.
+    // Fail-open: probe lỗi → block rút gọn, KHÔNG chặn chat.
+    try {
+      const { buildCapabilityPromptBlock } = await import('@/lib/agent-capabilities')
+      const capabilityBlock = await buildCapabilityPromptBlock()
+      systemPrompt += `\n${capabilityBlock}`
+    } catch (capErr) {
+      console.warn('[OpenClaw Chat] Capability probe failed (fail-open):', capErr instanceof Error ? capErr.message : String(capErr))
+    }
+
     if (agentInstruction && typeof agentInstruction === 'string' && agentInstruction.trim()) {
       systemPrompt = agentInstruction.trim() + '\n\n--- Base System Prompt ---\n' + systemPrompt
     }

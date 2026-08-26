@@ -141,6 +141,11 @@ export async function PATCH(request: NextRequest) {
     const { invalidateWorkspaceContextCache } = await import("@/lib/workspace/workspace-context");
     invalidateWorkspaceContextCache();
 
+    // 2026-08-29: invalidate capability probe cache — capability report chứa
+    // workspace root + trạng thái filesystem, đổi workspace → probe lại ngay.
+    const { invalidateCapabilityCache } = await import("@/lib/agent-capabilities");
+    invalidateCapabilityCache();
+
     return Response.json({ ok: true, data: workspace });
   } catch (err) {
     return Response.json(

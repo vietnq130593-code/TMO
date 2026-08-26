@@ -174,6 +174,14 @@ LEARNING & MEMORY
       'run_tests',
       'git_commit',
       'get_diagnostics',
+      // Long-running task tracking + dynamic skill/MCP enumeration (2026-08-29):
+      // todo_write/todo_read — agent tự chia nhỏ task phức tạp, UI hiển thị panel
+      // "Agent Tasks"; list_skills/read_skill/mcp_list_servers — scan registry runtime.
+      'todo_write',
+      'todo_read',
+      'list_skills',
+      'read_skill',
+      'mcp_list_servers',
     ],
   },
 ]

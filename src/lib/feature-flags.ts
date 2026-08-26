@@ -33,7 +33,10 @@ const DEFAULTS: Record<string, string> = {
   // KHÔNG chặn sudo/rm -rf /, KHÔNG khóa cwd trong workspace root — user tự chịu
   // trách nhiệm. Chỉ giữ timeout 5-10 phút + output truncation.
   ENABLE_SHELL_TOOL: 'true',
-  ENABLE_TODO_TOOL: 'false',
+  // ENABLE_TODO_TOOL mặc định true (user request 2026-08-29): agent phải tự chia nhỏ
+  // được task phức tạp + UI "Agent Tasks" hiển thị tiến độ long-running task.
+  // Tools đã DB-backed (SQLite Todo model) + có API GET /api/todos cho UI polling.
+  ENABLE_TODO_TOOL: 'true',
   ENABLE_QUALITY_GATE: 'off', // off | warn | strict
 
   // Phase 1b
@@ -66,7 +69,11 @@ const DEFAULTS: Record<string, string> = {
   ENABLE_TYPE_CHECK: 'false',
   ENABLE_TEST_COVERAGE: 'false',
   ENABLE_DB_QUERY: 'false',
-  ENABLE_MCP_CALL: 'false',
+  // ENABLE_MCP_CALL mặc định true (user request 2026-08-29): agents phải tự
+  // enumerate được MCP servers (mcp_list_servers) và gọi mcp_call. Bridge có
+  // permission prompt per-server nên gọi server chưa duyệt chỉ trả
+  // requiresPermission — an toàn khi bật mặc định.
+  ENABLE_MCP_CALL: 'true',
 
   // Phase 4
   ENABLE_AUTO_CHECKPOINT: 'false',

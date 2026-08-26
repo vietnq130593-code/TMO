@@ -1342,6 +1342,43 @@ export async function runAgentStep(params: {
     console.warn('[Workflow] workspace context inject failed (non-blocking):', err instanceof Error ? err.message : String(err))
   }
 
+  // 2026-08-29 — RUNTIME CAPABILITY REPORT cho Team Code (parity với chat route):
+  // probe thật fs/shell/kb/web/skills/mcp/todo → inject danh sách tool verified
+  // working vào system prompt để agent biết CHÍNH XÁC cái gì dùng được.
+  try {
+    const { buildCapabilityPromptBlock } = await import('@/lib/agent-capabilities')
+    systemPrompt += `\n${await buildCapabilityPromptBlock()}`
+  } catch (err) {
+    console.warn('[Workflow] capability probe failed (non-blocking):', err instanceof Error ? err.message : String(err))
+  }
+
+  // 2026-08-29 — AUTO-TODO TRACKING (long-running task progress): mỗi agent step
+  // tự upsert 1 todo (idempotencyKey = sessionId:position:step) vào DB → UI panel
+  // "Agent Tasks" trong tab Code hiển thị tiến độ workflow theo thời gian thực.
+  // Fail-open: todo lỗi KHÔNG bao giờ làm hỏng workflow.
+  const stepTodoKey = `${sessionId}:${position}:${step}`
+  const stepTodoContent = `[${position}] ${step} — ${agent.name}`
+  const upsertStepTodo = async (status: 'in_progress' | 'completed' | 'failed') => {
+    try {
+      const existing = await db.todo.findFirst({ where: { sessionId, idempotencyKey: stepTodoKey } })
+      if (existing) {
+        await db.todo.update({ where: { id: existing.id }, data: { status } })
+      } else {
+        await db.todo.create({
+          data: {
+            sessionId,
+            agentRole: position,
+            content: stepTodoContent,
+            status,
+            priority: 'medium',
+            idempotencyKey: stepTodoKey,
+          },
+        })
+      }
+    } catch { /* non-blocking */ }
+  }
+  await upsertStepTodo('in_progress')
+
   // ━━━ Phase 1c: Native Function Calling setup ━━━
   // Mode: 'off' (regex only) | 'dual' (native preferred, regex fallback) | 'strict' (native only)
   // When dual/strict: append tool schemas to system prompt (defense in depth) AND pass
@@ -1745,6 +1782,10 @@ export async function runAgentStep(params: {
     : `fc: ${fcMode} (native=${nativeToolCallCount}, regex_fallback=${regexFallbackCount})`
   console.log(`[Workflow] ${agent.name} done: ${iterations} iterations, ${totalToolCalls} tool calls, ${stepTokensUsed} tokens, ${Date.now() - stepStartTime}ms [${fcMetrics}]`)
 
+  // 2026-08-29 — AUTO-TODO TRACKING: đánh dấu step todo hoàn thành/thất bại.
+  // finalContent bắt đầu bằng "Error:" = LLM fail hoàn toàn (branch break ở trên).
+  await upsertStepTodo(finalContent.startsWith('Error:') ? 'failed' : 'completed')
+
   // Layer 9 P0.2: expose the step's real token usage to the caller
   // (runWorkflow passes it down to metricsCollector.recordStepComplete).
   return { content: finalContent, duration: Date.now() - stepStartTime, tokensUsed: stepTokensUsed }
@@ -2028,7 +2069,7 @@ function parseToolCallsFromOutput(output: string): Array<{ id: string; name: str
 
   // Pattern 2: Direct tool invocation like opencode({...})
   if (calls.length === 0) {
-    const validToolNames = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview']
+    const validToolNames = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'list_skills', 'read_skill', 'mcp_list_servers', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview']
     const regex2 = new RegExp(`(${validToolNames.join('|')})\\s*\\(\\s*\\{`, 'g')
     let match2
     while ((match2 = regex2.exec(output)) !== null) {

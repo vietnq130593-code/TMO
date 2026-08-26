@@ -47,6 +47,10 @@ import {
   typeCheck as executeTypeCheckFn,
   testCoverage as executeTestCoverageFn,
   dbQuery as executeDbQueryFn,
+  // Dynamic skill + MCP enumeration (user request 2026-08-29)
+  listSkills as executeListSkillsFn,
+  readSkill as executeReadSkillFn,
+  mcpListServers as executeMcpListServersFn,
 } from './dev-tools'
 // v2.1 Phase 3.6 — MCP bridge (separate module)
 import { mcpCall as executeMcpCallFn } from '@/lib/mcp/mcp-bridge'
@@ -862,6 +866,43 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       },
     },
   },
+  // ===== Dynamic skill + MCP enumeration (user request 2026-08-29) =====
+  list_skills: {
+    type: 'function',
+    function: {
+      name: 'list_skills',
+      description: 'Liệt kê ĐỘNG skill registry runtime: DB skills (user tạo) + 60+ clawhub skills trên đĩa (skills/<slug>/SKILL.md) + 5 dịch vụ web (tavily/serper/jina/sdk). Trả tên + mô tả ngắn + slug. Sau đó gọi read_skill({"slug":"<slug>"}) để đọc hướng dẫn đầy đủ trước khi dùng skill.',
+      parameters: {
+        type: 'object',
+        properties: {
+          source: { type: 'string', enum: ['all', 'db', 'filesystem', 'services'], description: 'Nguồn cần scan (mặc định all)' },
+        },
+        required: [],
+      },
+    },
+  },
+  read_skill: {
+    type: 'function',
+    function: {
+      name: 'read_skill',
+      description: 'Đọc nội dung đầy đủ của 1 skill theo slug (tra cứu DB AgentSkill → filesystem skills/<slug>/SKILL.md). Trả về front-matter (name/description) + toàn bộ hướng dẫn.',
+      parameters: {
+        type: 'object',
+        properties: {
+          slug: { type: 'string', description: 'Slug của skill (lấy từ list_skills)' },
+        },
+        required: ['slug'],
+      },
+    },
+  },
+  mcp_list_servers: {
+    type: 'function',
+    function: {
+      name: 'mcp_list_servers',
+      description: 'Enumerate MCP servers runtime: built-in servers (filesystem/github/postgres/puppeteer) + tools mỗi server + MCP Bridge OpenClaw↔OpenCode (outbound/inbound) + trạng thái mcp_call.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
 
   // ==================== v2.1 Phase 1b.1: UNIFIED WEB (consolidate tavily/serper/jina) ====================
   // Phase 1b.1 — single unified web interface (Claude Code / Z.ai Code parity).
@@ -1454,6 +1495,16 @@ export async function executeTool(
           }
         }
         result = await executeTodoReadFn(args as any)
+        break
+      // ===== Dynamic skill + MCP enumeration (user request 2026-08-29) =====
+      case 'list_skills':
+        result = await executeListSkillsFn(args as any)
+        break
+      case 'read_skill':
+        result = await executeReadSkillFn(args as { slug: string })
+        break
+      case 'mcp_list_servers':
+        result = await executeMcpListServersFn()
         break
       // ===== v2.1 Phase 1b.1: Unified web (consolidate tavily/serper/jina) =====
       case 'web_search':
