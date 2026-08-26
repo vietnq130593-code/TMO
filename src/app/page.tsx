@@ -11595,8 +11595,20 @@ function CodeTabContent() {
         }
         toast({ title: 'Workspace đã tồn tại, đã set active' })
       } else {
-        console.error('Workspace register failed:', await createRes.text())
-        toast({ title: 'Lỗi đăng ký workspace (xem console)', variant: 'destructive' })
+        // FIX 2026-08-28: parse error từ server để hiển thị nguyên nhân thật
+        // (trước đây chỉ toast generic "xem console" — khó chẩn đoán từ phía user).
+        const errText = await createRes.text()
+        console.error('Workspace register failed:', errText)
+        let hint = 'Lỗi đăng ký workspace (xem console)'
+        try {
+          const parsed = JSON.parse(errText) as { error?: string }
+          if (parsed?.error?.includes('TMO_API_TOKEN')) {
+            hint = 'Thiếu TMO_API_TOKEN — thêm TMO_API_TOKEN=<random hex> vào .env rồi restart app'
+          } else if (parsed?.error) {
+            hint = `Lỗi đăng ký workspace: ${parsed.error}`
+          }
+        } catch { /* body không phải JSON — giữ hint mặc định */ }
+        toast({ title: hint, variant: 'destructive' })
       }
     } catch (err) {
       console.error('Workspace register exception:', err)

@@ -6,6 +6,8 @@
  * Used by API routes (server-side only).
  */
 
+import { ensureTmoApiToken } from './tmo-token'
+
 const OPENCODE_URL = process.env.OPENCODE_SERVER_URL || 'http://127.0.0.1:18790'
 
 // ============================================
@@ -17,9 +19,12 @@ export async function opencodeFetch(path: string, options?: RequestInit): Promis
   const timeout = setTimeout(() => controller.abort(), 15000) // 15s default timeout
   // Phase 1: inject X-TMO-API-Token — opencode-server requires it for EVERY request.
   // Without this, service-manager health checks get 401 → restart loop.
+  // FIX 2026-08-28: ensureTmoApiToken() — tự sinh + persist token khi .env thiếu
+  // (máy local pull code nhưng .env gitignored). Cached nên không tốn fs mỗi call.
   const headers = new Headers(options?.headers)
-  if (!headers.has('X-TMO-API-Token') && process.env.TMO_API_TOKEN) {
-    headers.set('X-TMO-API-Token', process.env.TMO_API_TOKEN)
+  if (!headers.has('X-TMO-API-Token')) {
+    const token = ensureTmoApiToken() ?? process.env.TMO_API_TOKEN
+    if (token) headers.set('X-TMO-API-Token', token)
   }
   try {
     const res = await fetch(`${OPENCODE_URL}${path}`, {

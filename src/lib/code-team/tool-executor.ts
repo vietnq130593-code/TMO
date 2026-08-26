@@ -26,6 +26,7 @@
 
 import { getAgentTools } from './agents'
 import { tavilyKeyPool, jinaKeyPool, serperKeyPool } from '@/lib/service-key-pool'
+import { ensureTmoApiToken } from '@/lib/tmo-token'
 import {
   fileEdit, fileDelete, fileList, grep,
   runTests, gitCommit,
@@ -1336,7 +1337,8 @@ export async function executeTool(
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'x-tmo-api-token': process.env.TMO_API_TOKEN || '',
+              // FIX 2026-08-28: ensureTmoApiToken() — tự provision khi .env thiếu
+              'x-tmo-api-token': ensureTmoApiToken() ?? process.env.TMO_API_TOKEN ?? '',
             },
             body: JSON.stringify({
               root: previewRoot,
@@ -1386,7 +1388,8 @@ export async function executeTool(
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'x-tmo-api-token': process.env.TMO_API_TOKEN || '',
+              // FIX 2026-08-28: ensureTmoApiToken() — tự provision khi .env thiếu
+              'x-tmo-api-token': ensureTmoApiToken() ?? process.env.TMO_API_TOKEN ?? '',
             },
             body: JSON.stringify({ root: stopRoot }),
             signal: AbortSignal.timeout(15_000),

@@ -135,3 +135,6 @@ supabase/.temp/
 mini-services/*/.manager.pid
 mini-services/*/.pid
 mini-services/*/.gateway.pid
+
+# Auto-provisioned TMO API token (secret — generated at startup, never commit)
+.tmo-api-token

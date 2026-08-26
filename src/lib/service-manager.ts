@@ -9,6 +9,7 @@
 
 import { spawn, ChildProcess } from 'child_process'
 import { resolve } from 'path'
+import { ensureTmoApiToken } from './tmo-token'
 
 // ==================== TYPES ====================
 
@@ -264,9 +265,12 @@ async function waitForHealth(
       // Phase 1 companion fix: opencode-server requires X-TMO-API-Token on
       // EVERY request (incl. /health). Without the header the probe gets 401
       // → "health check failed" → kill/restart loop → service gives up.
+      // FIX 2026-08-28: ensureTmoApiToken() — tự sinh + persist token khi .env
+      // thiếu (máy local pull code nhưng .env gitignored).
+      const apiToken = ensureTmoApiToken() ?? process.env.TMO_API_TOKEN
       const res = await fetch(url, {
         signal: AbortSignal.timeout(intervalMs),
-        headers: process.env.TMO_API_TOKEN ? { 'X-TMO-API-Token': process.env.TMO_API_TOKEN } : {},
+        headers: apiToken ? { 'X-TMO-API-Token': apiToken } : {},
       })
       if (res.ok) {
         return true

@@ -12,6 +12,23 @@
 
 import { startAllServices } from './lib/service-manager'
 import { resolve } from 'path'
+import { ensureTmoApiToken } from './lib/tmo-token'
+
+// FIX 2026-08-28: đảm bảo TMO_API_TOKEN tồn tại TRƯỚC KHI spawn mini-services.
+// opencode-server validate X-TMO-API-Token trên MỌI request (kể cả /health) —
+// thiếu token → 503 + health check fail → kill/restart loop. Token được resolve
+// đồng bộ (env ưu tiên, fallback tự sinh + persist file .tmo-api-token) và
+// gán vào process.env để các child process (mini-services) inherit.
+try {
+  const token = ensureTmoApiToken()
+  console.log(
+    token
+      ? '[instrumentation] TMO_API_TOKEN ready'
+      : '[instrumentation] WARNING: TMO_API_TOKEN unavailable (env + file provisioning failed) — mini-services may 503'
+  )
+} catch (err) {
+  console.error('[instrumentation] ensureTmoApiToken failed:', err)
+}
 
 function buildServices(resolveFn: (...paths: string[]) => string) {
   const ROOT = resolveFn(process.cwd())
