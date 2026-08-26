@@ -152,11 +152,6 @@ export const MAX_TOTAL_CONCURRENT = MAX_KEYS * MAX_DOCS_PER_KEY
 const PROVIDER_COUNT = 1
 const PROVIDER_NAMES = ['NVIDIA'] as const
 
-/** Key assignment mode — no more slot mode.
- *  Each of the 4 API keys can handle up to 4 documents concurrently.
- *  Auto mode: documents are assigned to the key with the fewest active docs.
- *  Max concurrent: 4 keys × 4 docs = 16 documents. */
-export const KEY_ASSIGNMENT_MODE = 'auto' as const
 
 // ==================== PROVIDER ROTATION (simplified — single provider) ====================
 
@@ -2378,11 +2373,6 @@ export async function callLLMForAgent(
 
 export function getNvidiaModels(): string[] { return [...NVIDIA_MODELS] }
 
-export function getProviderStatus(): Record<string, { keys: number; available: number; keyDetails: Array<{ index: number; available: boolean; rateLimited: boolean; exhausted: boolean; failureCount: number }> }> {
-  return {
-    nvidia: { keys: nvidiaPool.keyCount, available: nvidiaPool.availableCount, keyDetails: nvidiaPool.getKeyStatus() },
-  }
-}
 
 // ==================== DAILY QUOTA STATUS EXPORT ====================
 

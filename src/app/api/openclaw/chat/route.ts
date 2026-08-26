@@ -254,7 +254,7 @@ Quy tắc:
 // Lightweight static system prompt context (no DB queries)
 const STATIC_KB_CONTEXT = `SQLite Models: JobQueue, DailyTokenUsage, DailyTokenByProvider, DailyTokenByProviderSlot, DailyTokenByProviderModel, LocalEntity, LocalRelationship, LocalResolvedEntity, AgentProfile, AgentSession, LearningLog, AgentInsight, AgentCorrection, AgentPreference, AgentSkill, ToolPermission, KnowledgeAccessPolicy, CronJob, Webhook, StandingOrder, TaskExecution, ChannelConfig, OpenCodeSession, MCPBridgeConfig
 Neo4j: Entity nodes with properties (name, type, domain, description), Relationship edges
-Qdrant: theopus_documents, theopus_chunks (1536-dim vectors, nvidia/llama-nemotron-embed-1b-v2)`
+Qdrant: theopus_documents, theopus_chunks (1536-dim vectors, nvidia/nemotron-3-embed-1b)`
 
 // ============================================
 // CODE QUERY DETECTION — Intelligent Routing

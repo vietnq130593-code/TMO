@@ -47,42 +47,6 @@ export const qdrant =
 
 if (process.env.NODE_ENV !== 'production') globalForQdrant.qdrant = qdrant
 
-// ==================== CONNECTION LIVENESS ====================
-
-/**
- * Timestamp of the last successful Qdrant operation.
- * Used to detect prolonged outages — if this is more than 60s old,
- * the next operation should do a lightweight ping first to fail fast.
- */
-let lastQdrantSuccessTime = 0
-
-/**
- * Check if Qdrant is reachable with a lightweight ping.
- * This is faster than a full health check and can be called before
- * expensive operations to fail fast when Qdrant is down.
- *
- * Caches the result for 30 seconds to avoid excessive pinging.
- */
-let qdrantLivenessCache = { alive: true, timestamp: 0 }
-const LIVENESS_CACHE_TTL = 30_000 // 30 seconds
-
-export async function isQdrantAlive(): Promise<boolean> {
-  const now = Date.now()
-  if (now - qdrantLivenessCache.timestamp < LIVENESS_CACHE_TTL) {
-    return qdrantLivenessCache.alive
-  }
-
-  try {
-    await qdrant.getCollections()
-    qdrantLivenessCache = { alive: true, timestamp: now }
-    lastQdrantSuccessTime = now
-    return true
-  } catch {
-    qdrantLivenessCache = { alive: false, timestamp: now }
-    return false
-  }
-}
-
 // ==================== ERROR DETECTION & RETRY ====================
 
 /**
@@ -147,9 +111,6 @@ async function withQdrantRetry<T>(
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const result = await fn()
-      // Update liveness cache on success
-      lastQdrantSuccessTime = Date.now()
-      qdrantLivenessCache = { alive: true, timestamp: Date.now() }
       return result
     } catch (error: any) {
       lastError = error
@@ -599,7 +560,7 @@ export interface ChunkPayload {
   confidence?: number
   llm_provider?: string
   llm_model?: string
-  /** Phase 3 SMOLAB Prop 4.1 — embedding model version tag (e.g. 'nvidia/llama-nemotron-embed-1b-v2@2025-08-24').
+  /** Phase 3 SMOLAB Prop 4.1 — embedding model version tag (e.g. 'nvidia/nemotron-3-embed-1b@2025-08-24').
    *  Set on every chunk insert. Used by checkModelDrift() in kb-access.ts to detect
    *  silent model updates that invalidate existing vectors. */
   embedding_model_version?: string

@@ -141,27 +141,6 @@ export async function uploadToR2(
   }
 }
 
-/**
- * Upload a local file to R2.
- * Reads file from disk, uploads buffer to R2.
- *
- * @param localPath - Absolute path to local file
- * @param r2Key - R2 key to store under
- * @param contentType - MIME type
- */
-export async function uploadFileToR2(
-  localPath: string,
-  r2Key: string,
-  contentType: string = 'application/pdf'
-): Promise<R2UploadResult> {
-  try {
-    const buffer = await fs.readFile(localPath)
-    return await uploadToR2(r2Key, buffer, contentType)
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return { success: false, key: r2Key, size: 0, error: msg }
-  }
-}
 
 // ==================== DOWNLOAD ====================
 
@@ -265,25 +244,6 @@ export async function deleteFromR2(key: string): Promise<{ success: boolean; err
 
 // ==================== CHECK EXISTENCE ====================
 
-/**
- * Check if an object exists in R2 (HEAD request — no body download).
- */
-export async function existsInR2(key: string): Promise<boolean> {
-  const client = getS3Client()
-  if (!client) return false
-
-  try {
-    await client.send(
-      new HeadObjectCommand({
-        Bucket: R2_BUCKET_NAME,
-        Key: key,
-      })
-    )
-    return true
-  } catch {
-    return false
-  }
-}
 
 // ==================== LIST ====================
 
@@ -328,55 +288,6 @@ export async function listR2Objects(
 
 // ==================== PRE-SIGNED URLS ====================
 
-/**
- * Generate a pre-signed URL for direct upload (client → R2, bypassing our server).
- * Useful for large files (> 50 MB) where server-side upload would time out.
- *
- * @param key - S3 key
- * @param expiresIn - URL validity (default 1 hour)
- */
-export async function presignUploadUrl(
-  key: string,
-  expiresIn: number = 3600
-): Promise<{ url: string; key: string } | null> {
-  const client = getS3Client()
-  if (!client) return null
-
-  try {
-    const url = await getSignedUrl(
-      client,
-      new PutObjectCommand({ Bucket: R2_BUCKET_NAME, Key: key }),
-      { expiresIn }
-    )
-    return { url, key }
-  } catch (err) {
-    console.error('[R2] Presign failed:', err instanceof Error ? err.message : String(err))
-    return null
-  }
-}
-
-/**
- * Generate a pre-signed URL for download (R2 → client, bypassing our server).
- */
-export async function presignDownloadUrl(
-  key: string,
-  expiresIn: number = 3600
-): Promise<string | null> {
-  const client = getS3Client()
-  if (!client) return null
-
-  try {
-    const url = await getSignedUrl(
-      client,
-      new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: key }),
-      { expiresIn }
-    )
-    return url
-  } catch (err) {
-    console.error('[R2] Presign download failed:', err instanceof Error ? err.message : String(err))
-    return null
-  }
-}
 
 // ==================== CONVENIENCE: PDF STORAGE ====================
 

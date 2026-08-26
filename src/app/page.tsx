@@ -29,7 +29,6 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
-import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -179,20 +178,6 @@ const ENTITY_TYPE_COLORS: Record<string, string> = {
   Domain: '#a855f7',
   Document: '#0ea5e9',
   Person: '#d946ef',
-}
-
-const ENTITY_TYPE_BG_COLORS: Record<string, string> = {
-  Concept: 'bg-emerald-950/50 text-emerald-400',
-  Algorithm: 'bg-amber-950/50 text-amber-400',
-  Language: 'bg-rose-950/50 text-rose-400',
-  Tool: 'bg-cyan-950/50 text-cyan-400',
-  System: 'bg-orange-950/50 text-orange-400',
-  Technique: 'bg-violet-950/50 text-violet-400',
-  Vulnerability: 'bg-red-950/50 text-red-400',
-  Principle: 'bg-slate-800/50 text-slate-400',
-  Domain: 'bg-purple-950/50 text-purple-400',
-  Document: 'bg-sky-950/50 text-sky-400',
-  Person: 'bg-fuchsia-950/50 text-fuchsia-400',
 }
 
 // ==================== STATUS HELPERS ====================
@@ -4797,7 +4782,6 @@ function MemoryTabContent() {
         setAgentsLoading(false)
       }
     })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ---------- Load tier stats when agent changes ----------
@@ -12592,8 +12576,13 @@ function CodeTabContent() {
     })
   }, [])
 
-  // File tree rendering
-  const renderFileTree = useCallback((nodes: FileNode[], depth: number = 0): React.ReactNode => {
+  // File tree rendering.
+  // Declared as a function (hoisted) instead of a `useCallback` const — the body
+  // recurses into itself, and referencing a `const` before its initializer
+  // finishes trips the compiler's TDZ analysis ("Cannot access variable before
+  // it is declared"). It is invoked directly during render, so memoizing it
+  // bought nothing anyway.
+  function renderFileTree(nodes: FileNode[], depth: number = 0): React.ReactNode {
     const search = fileSearch.toLowerCase()
     return nodes
       .filter(n => !search || n.name.toLowerCase().includes(search) || n.path.toLowerCase().includes(search))
@@ -12645,7 +12634,7 @@ function CodeTabContent() {
           </div>
         )
       })
-  }, [expandedDirs, selectedFile, fileSearch, toggleDir, handleFileSelect, handleRenameFile, handleDeleteFile])
+  }
 
   // Session status badge
   const statusBadge = useCallback((status: string) => {
@@ -13989,27 +13978,6 @@ function CodeTabContent() {
   )
 }
 
-function ComingSoonPlaceholder({ icon: Icon, label, description, color }: { icon: React.ComponentType<{ className?: string }>; label: string; description: string; color: string }) {
-  const colorMap: Record<string, string> = {
-    cyan: 'text-cyan-400 border-cyan-400/35',
-    amber: 'text-amber-400 border-amber-400/35',
-    violet: 'text-violet-400 border-violet-400/35',
-    orange: 'text-orange-400 border-orange-400/35',
-    teal: 'text-teal-400 border-teal-400/35',
-  }
-  const cls = colorMap[color] || colorMap.cyan
-  return (
-    <div className="flex flex-col items-center justify-center h-full text-center py-16">
-      <div className={`p-5 border ${cls} mb-5`}>
-        <Icon className="h-10 w-10" />
-      </div>
-      <h3 className="text-lg font-bold text-stone-200 mb-2" style={{ fontFamily: "'Cormorant Infant', 'Georgia', serif" }}>{label}</h3>
-      <p className="text-xs text-stone-400 max-w-sm">{description}</p>
-      <Badge className="mt-4 text-[10px] bg-amber-950/50 text-amber-400 border border-amber-400/35">Sắp ra mắt</Badge>
-    </div>
-  )
-}
-
 // ==================== AGENTS MODULE ====================
 
 function AgentsModule() {
@@ -14280,9 +14248,12 @@ function AgentsModule() {
     [agents]
   )
 
-  // Agent card renderer
-  const AgentCard = ({ agent, accentColor }: { agent: any; accentColor: string }) => (
+  // Agent card renderer — plain render function (see renderTeamSection note:
+  // defining this as a component would remount every card on each parent render).
+  // `key` is applied to the returned root element so array children stay keyed.
+  const renderAgentCard = (agent: any, accentColor: string, key?: string) => (
     <div
+      key={key}
       className={`p-3.5 rounded-xl bg-slate-950/50 border ${accentColor} hover:border-opacity-60 transition-all group`}
     >
       {/* Top: Avatar + Name + Position */}
@@ -14364,8 +14335,14 @@ function AgentsModule() {
     </div>
   )
 
-  // Team section renderer — 3-per-row grid layout
-  const TeamSection = ({ teamKey, label, icon, iconBg, agents: teamAgents, borderColor, accentBg }: {
+  // Team section renderer — 3-per-row grid layout.
+  // PERF FIX: this is a plain render FUNCTION (not a component created during render).
+  // Defining it as `const TeamSection = (...) => <div>...` and using <TeamSection/>
+  // created a NEW component type on every AgentsModule render, forcing React to
+  // unmount/remount the whole team subtree (losing AgentCard internal state and
+  // wasting DOM work) on every state change. Calling it as a function keeps the
+  // output inline in the parent's element tree.
+  const renderTeamSection = ({ teamKey, label, icon, iconBg, agents: teamAgents, borderColor, accentBg }: {
     teamKey: string; label: string; icon: React.ReactNode; iconBg: string
     agents: any[]; borderColor: string; accentBg: string
   }) => (
@@ -14399,9 +14376,7 @@ function AgentsModule() {
       {/* 3-per-row grid */}
       {teamAgents.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {teamAgents.map((agent: any) => (
-            <AgentCard key={agent.id} agent={agent} accentColor={borderColor} />
-          ))}
+          {teamAgents.map((agent: any) => renderAgentCard(agent, borderColor, agent.id))}
         </div>
       )}
     </div>
@@ -14479,15 +14454,15 @@ function AgentsModule() {
           {!loading && agents.length > 0 && (
             <div className="space-y-6">
               {/* ═══ Team Code ═══ */}
-              <TeamSection
-                teamKey="code"
-                label="💻 Team Code"
-                icon={<Code2 className="h-4 w-4 text-white" />}
-                iconBg="bg-gradient-to-br from-amber-500 to-orange-600"
-                agents={codeAgents}
-                borderColor="border-amber-400/35"
-                accentBg="bg-amber-950/50 text-amber-400 border border-amber-500/55"
-              />
+              {renderTeamSection({
+                teamKey: 'code',
+                label: '💻 Team Code',
+                icon: <Code2 className="h-4 w-4 text-white" />,
+                iconBg: 'bg-gradient-to-br from-amber-500 to-orange-600',
+                agents: codeAgents,
+                borderColor: 'border-amber-400/35',
+                accentBg: 'bg-amber-950/50 text-amber-400 border border-amber-500/55',
+              })}
 
               {/* Divider */}
               <div className="flex items-center gap-3">
@@ -14501,15 +14476,15 @@ function AgentsModule() {
               </div>
 
               {/* ═══ Team Research ═══ */}
-              <TeamSection
-                teamKey="research"
-                label="🔬 Team Research"
-                icon={<GraduationCap className="h-4 w-4 text-white" />}
-                iconBg="bg-gradient-to-br from-cyan-500 to-teal-600"
-                agents={researchAgents}
-                borderColor="border-cyan-400/35"
-                accentBg="bg-cyan-950/50 text-cyan-400 border border-cyan-500/55"
-              />
+              {renderTeamSection({
+                teamKey: 'research',
+                label: '🔬 Team Research',
+                icon: <GraduationCap className="h-4 w-4 text-white" />,
+                iconBg: 'bg-gradient-to-br from-cyan-500 to-teal-600',
+                agents: researchAgents,
+                borderColor: 'border-cyan-400/35',
+                accentBg: 'bg-cyan-950/50 text-cyan-400 border border-cyan-500/55',
+              })}
 
               {/* Unaffiliated Agents */}
               {unaffiliatedAgents.length > 0 && (
@@ -14533,9 +14508,7 @@ function AgentsModule() {
                       <Badge className="text-[10px] bg-slate-950/50 text-stone-400 border border-stone-500/55">{unaffiliatedAgents.length}</Badge>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                      {unaffiliatedAgents.map((agent: any) => (
-                        <AgentCard key={agent.id} agent={agent} accentColor="border-stone-500/45" />
-                      ))}
+                      {unaffiliatedAgents.map((agent: any) => renderAgentCard(agent, 'border-stone-500/45', agent.id))}
                     </div>
                   </div>
                 </>
@@ -15620,8 +15593,15 @@ export default function Home() {
     setProcessingAll(true)
     // Clear all paused states — user is starting batch processing
     setPausedDocIds(new Set())
-    // Start polling for status updates during batch processing
-    const pollInterval = setInterval(() => { fetchDocuments(false, undefined, { lite: true }) }, 3000)
+    // UI-refresh poller (3s, lite mode, skipped while the tab is hidden).
+    // PERF FIX: this used to run alongside TWO more fetch streams inside waitAll()
+    // (a duplicate fetchDocuments every 5s + a direct /api/ingestion/upload fetch
+    // every 5s) — 3 overlapping pollers hitting the same endpoint. waitAll now
+    // only polls the status check; the UI refresh stays here.
+    const pollInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      fetchDocuments(false, undefined, { lite: true })
+    }, 3000)
     try {
       // Use async mode to prevent HTTP timeout
       const res = await fetch('/api/ingestion/process', {
@@ -15655,7 +15635,8 @@ export default function Home() {
             const waitAll = async () => {
               while (Date.now() - startTime < maxWaitMs) {
                 await new Promise(resolve => setTimeout(resolve, 5000))
-                fetchDocuments(false, undefined, { lite: true })
+                // PERF FIX: fetchDocuments() removed here — the 3s pollInterval above
+                // already refreshes the UI; only the authoritative status check remains.
                 const docsRes = await fetch('/api/ingestion/upload?lite=true')
                 if (docsRes.ok) {
                   const docsData = await docsRes.json()
@@ -15694,7 +15675,8 @@ export default function Home() {
       const waitAll = async () => {
         while (Date.now() - startTime < maxWaitMs) {
           await new Promise(resolve => setTimeout(resolve, 5000))
-          fetchDocuments(false, undefined, { lite: true })
+          // PERF FIX: fetchDocuments() removed here — the 3s pollInterval above
+          // already refreshes the UI; only the authoritative status check remains.
           // Check if any documents are still processing
           const docsRes = await fetch('/api/ingestion/upload?lite=true')
           if (docsRes.ok) {

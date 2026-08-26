@@ -4,7 +4,7 @@
  * Connects OpenClaw Agents to the local Knowledge Base (Qdrant + Neo4j + SQLite).
  * Provides search, graph query, and write capabilities for agents.
  *
- * Uses NVIDIA llama-nemotron-embed-1b-v2 (2048-dim) for embedding queries.
+ * Uses NVIDIA nemotron-3-embed-1b (2048-dim) for embedding queries.
  */
 
 import { db } from '@/lib/db'
@@ -170,7 +170,7 @@ export async function generateSystemPromptContext(): Promise<string> {
     } catch {
       parts.push('Neo4j: Not connected')
       parts.push(`Qdrant Collections: theopus_documents, theopus_chunks (2048-dim vectors)`)
-      parts.push(`Embedding Model: nvidia/llama-nemotron-embed-1b-v2 (2048-dim)`)
+      parts.push(`Embedding Model: nvidia/nemotron-3-embed-1b (2048-dim)`)
       return parts.join('\n')
     }
     try {
@@ -194,7 +194,7 @@ export async function generateSystemPromptContext(): Promise<string> {
 
   // Qdrant info
   parts.push(`Qdrant Collections: theopus_documents, theopus_chunks (2048-dim vectors)`)
-  parts.push(`Embedding Model: nvidia/llama-nemotron-embed-1b-v2 (2048-dim)`)
+  parts.push(`Embedding Model: nvidia/nemotron-3-embed-1b (2048-dim)`)
 
   return parts.join('\n')
 }
@@ -209,7 +209,7 @@ export async function getSchemaInfo() {
   } = {
     prisma: { models: ['JobQueue', 'DailyTokenUsage', 'DailyTokenByProvider', 'DailyTokenByProviderSlot', 'DailyTokenByProviderModel', 'LocalEntity', 'LocalRelationship', 'LocalResolvedEntity', 'AgentProfile', 'AgentSession', 'LearningLog', 'AgentInsight', 'AgentCorrection', 'AgentPreference', 'AgentSkill', 'ToolPermission', 'KnowledgeAccessPolicy', 'CronJob', 'Webhook', 'StandingOrder', 'TaskExecution', 'ChannelConfig', 'OpenCodeSession', 'MCPBridgeConfig'] },
     neo4j: { labels: [], relationshipTypes: [], nodeCount: 0, relationshipCount: 0 },
-    qdrant: { collections: [{ name: 'theopus_documents', vectorSize: 2048 }, { name: 'theopus_chunks', vectorSize: 2048 }], embeddingModel: 'nvidia/llama-nemotron-embed-1b-v2' },
+    qdrant: { collections: [{ name: 'theopus_documents', vectorSize: 2048 }, { name: 'theopus_chunks', vectorSize: 2048 }], embeddingModel: 'nvidia/nemotron-3-embed-1b' },
   }
 
   try {

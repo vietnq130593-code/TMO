@@ -176,19 +176,3 @@ export function chunkText(
 export function chunkTexts(text: string, chunkSize?: number, overlap?: number): string[] {
   return chunkText(text, chunkSize, overlap).map(c => c.text)
 }
-
-/**
- * Get chunk count without actually chunking (cheap preview)
- */
-export function estimateChunkCount(text: string, chunkSize: number = DEFAULT_CHUNK_SIZE): number {
-  if (!text || text.length === 0) return 0
-  return Math.max(1, Math.ceil(text.length / chunkSize))
-}
-
-// ==================== EXPORT CONFIG ====================
-
-export const CHUNKING_CONFIG = {
-  defaultChunkSize: DEFAULT_CHUNK_SIZE,
-  defaultOverlap: DEFAULT_CHUNK_OVERLAP,
-  minChunkSize: MIN_CHUNK_SIZE,
-}

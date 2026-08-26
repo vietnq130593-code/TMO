@@ -130,13 +130,3 @@ export function flagMode(name: string, allowed: string[]): string {
   return allowed[0]
 }
 
-/**
- * Read a numeric flag with safe bounds.
- * Useful for rate limits, timeouts, thresholds.
- */
-export function flagNumber(name: string, defaultVal: number, min = 0, max = Number.POSITIVE_INFINITY): number {
-  const v = flagValue(name)
-  const n = Number(v)
-  if (!Number.isFinite(n)) return defaultVal
-  return Math.max(min, Math.min(max, n))
-}

@@ -54,7 +54,7 @@ export const CONFIDENCE_THRESHOLD = 0.5
  * score 0.6249 for raw cosine 0.2498.)
  *
  * Task 13E (2026-08-25): retuned 0.7 → 0.58. Measured score distribution on
- * this KB (llama-nemotron-embed-1b-v2, name+description embeddings vs query
+ * this KB (nemotron-3-embed-1b, name+description embeddings vs query
  * embedding — different label spaces, so raw cosines run low):
  *   - unrelated queries (e.g. "recipe for chocolate cake"): 0.54–0.55
  *     normalized ≈ raw cosine 0.08–0.10
