@@ -1190,6 +1190,80 @@ function resolveEntities(entities: ExtractedEntity[]): { resolved: ResolvedEntit
 
 // ==================== DOCUMENT PROGRESS HELPERS ====================
 
+/** FIX #10: Verify Neo4j holds (nearly) all of this doc's relationships.
+ *  Returns:
+ *   - 'complete': nothing to write (SQLite 0 rels) OR Neo4j has ≥50% of SQLite's rels
+ *   - 'missing':  SQLite has rels but Neo4j has 0 (write failed silently)
+ *   - 'partial':  Neo4j has far fewer rels than SQLite (< 50%) — partial write,
+ *                 e.g. 9 rels in Neo4j vs 500 in SQLite from a crashed batch
+ *   - 'unknown':  the COUNT query itself failed — caller should be conservative
+ *
+ *  Why 50% and not an exact match? A successful write lands ~90%+ of SQLite
+ *  rels in Neo4j (dedup/resolve drops a few — e.g. 730 SQLite → 711 Neo4j).
+ *  50% catches catastrophic partial writes without false-positives on dedup.
+ *  Re-running the Neo4j step is always safe — writes use MERGE (no duplicates). */
+async function verifyNeo4jRelCoverage(documentId: string): Promise<'complete' | 'missing' | 'partial' | 'unknown'> {
+  try {
+    const sqliteRelCount = await db.localRelationship.count({ where: { documentId } })
+    if (sqliteRelCount === 0) return 'complete' // extraction produced no relationships — nothing to write
+    const neo4jCountResult = await readCypher<{ cnt: number }>(
+      `MATCH ()-[r]->() WHERE r.documentId = $documentId AND type(r) <> 'CONTAINS' RETURN count(r) AS cnt`,
+      { documentId }
+    )
+    const neo4jRelCount = neo4jCountResult[0]?.cnt ?? 0
+    if (neo4jRelCount === 0) return 'missing'
+    if (neo4jRelCount * 2 < sqliteRelCount) return 'partial'
+    return 'complete'
+  } catch {
+    return 'unknown'
+  }
+}
+
+/** FIX #9 (BUG B): Ensure the SQLite Document row exists before updating it.
+ *  Docs restored from R2 via the POST handler's R2 fallback got a Qdrant record
+ *  but NO SQLite row — every subsequent db.document.update() failed with
+ *  "No record was found for an update", so the doc's status/progress was never
+ *  persisted to SQLite (doc list flips back to 'uploaded', stats miss the doc).
+ *  This helper creates the missing row from the Qdrant payload (source of truth). */
+async function ensureSqliteDocumentRow(documentId: string): Promise<boolean> {
+  try {
+    const existing = await db.document.findUnique({ where: { id: documentId }, select: { id: true } })
+    if (existing) return true // row already exists
+
+    const docPayload = await getDocument(documentId)
+    if (!docPayload) return false // nothing to source from — give up quietly
+
+    // title is @unique in the schema. R2-restored docs use "<docId>_<filename>"
+    // as the title (naturally unique). For any other path, fall back to
+    // "<title>-<docId8>" if the plain title is already taken by another doc.
+    let title = (docPayload.title as string) || `document-${documentId.slice(0, 8)}`
+    const titleTaken = await db.document.findUnique({ where: { title }, select: { id: true } })
+    if (titleTaken && titleTaken.id !== documentId) {
+      title = `${title}-${documentId.slice(0, 8)}`
+    }
+
+    await db.document.create({
+      data: {
+        id: documentId,
+        title,
+        filePath: (docPayload.file_path as string) || '',
+        domain: (docPayload.domain as string) || 'mixed',
+        pageCount: (docPayload.page_count as number | null) ?? null,
+        status: (docPayload.status as string) || 'uploaded',
+        errorMessage: (docPayload.error_message as string | null) ?? null,
+        processingSteps: JSON.stringify(docPayload.processing_steps || []),
+        processingPercent: (docPayload.processing_percent as number) || 0,
+        createdAt: docPayload.created_at ? new Date(docPayload.created_at) : new Date(),
+      },
+    })
+    console.log(`[Process] FIX #9: Created missing SQLite Document row for ${documentId.slice(0, 8)}... (title="${title.slice(0, 40)}", status=${docPayload.status})`)
+    return true
+  } catch (err) {
+    console.warn(`[Process] FIX #9: Failed to create SQLite Document row for ${documentId.slice(0, 8)}...:`, err instanceof Error ? err.message : String(err))
+    return false
+  }
+}
+
 async function updateDocProgress(
   documentId: string,
   updates: {
@@ -1264,8 +1338,29 @@ async function updateDocProgress(
       await db.document.update({ where: { id: documentId }, data: sqliteData })
     }
   } catch (sqliteErr) {
-    // Non-fatal — Qdrant is the source of truth, SQLite is a cache
-    console.warn(`[Process] SQLite sync failed for ${documentId.slice(0, 8)}:`, sqliteErr instanceof Error ? sqliteErr.message : String(sqliteErr))
+    // FIX #9 (BUG B): the row may not exist yet (doc restored from R2 via the POST
+    // fallback path created only a Qdrant record). Create it from the Qdrant
+    // payload, then retry the update once — status/progress now persists.
+    const created = await ensureSqliteDocumentRow(documentId)
+    if (created) {
+      try {
+        const sqliteData: Record<string, unknown> = {}
+        if (qdrantUpdates.status) sqliteData.status = qdrantUpdates.status
+        if (qdrantUpdates.error_message !== undefined) sqliteData.errorMessage = qdrantUpdates.error_message as string | null
+        if (qdrantUpdates.processing_steps) sqliteData.processingSteps = JSON.stringify(qdrantUpdates.processing_steps)
+        if (qdrantUpdates.processing_percent !== undefined) sqliteData.processingPercent = qdrantUpdates.processing_percent as number
+        if (qdrantUpdates.page_count) sqliteData.pageCount = qdrantUpdates.page_count as number
+        if (qdrantUpdates.domain) sqliteData.domain = qdrantUpdates.domain as string
+        if (Object.keys(sqliteData).length > 0) {
+          await db.document.update({ where: { id: documentId }, data: sqliteData })
+        }
+      } catch (retryErr) {
+        console.warn(`[Process] SQLite sync retry failed for ${documentId.slice(0, 8)}:`, retryErr instanceof Error ? retryErr.message : String(retryErr))
+      }
+    } else {
+      // Non-fatal — Qdrant is the source of truth, SQLite is a cache
+      console.warn(`[Process] SQLite sync failed for ${documentId.slice(0, 8)}:`, sqliteErr instanceof Error ? sqliteErr.message : String(sqliteErr))
+    }
   }
 }
 
@@ -2053,30 +2148,21 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
         hasResolved = resolvedCount > 0
       } catch {}
 
-      // FIX #7: Re-verify Neo4j has semantic relationships for this document.
+      // FIX #7 + FIX #10: Re-verify Neo4j has semantic relationships for this document.
+      // FIX #10 strengthens the check: not just COUNT > 0, but coverage vs SQLite —
+      // a partial write (e.g. 9 rels in Neo4j vs 500 in SQLite) is ALSO treated as
+      // stale so the pipeline re-writes the missing data.
       let hasNeo4jDataVerified = false
-      try {
-        const sqliteRelCount = await db.localRelationship.count({ where: { documentId } })
-        if (sqliteRelCount === 0) {
-          // No relationships in SQLite — Neo4j is "complete" in the trivial sense.
-          // (Extraction produced no relationships; re-running won't help — that's
-          // an extraction issue, not a Neo4j issue.)
-          hasNeo4jDataVerified = true
-        } else {
-          const neo4jCountResult = await readCypher<{ cnt: number }>(
-            `MATCH ()-[r]->() WHERE r.documentId = $documentId AND type(r) <> 'CONTAINS' RETURN count(r) AS cnt`,
-            { documentId }
-          )
-          const neo4jRelCount = neo4jCountResult[0]?.cnt ?? 0
-          hasNeo4jDataVerified = neo4jRelCount > 0
-          if (neo4jRelCount === 0) {
-            console.warn(`[Process] FIX #7: Document ${documentId.slice(0, 8)}... marked 'indexed' with all steps completed, but SQLite has ${sqliteRelCount} relationships while Neo4j has 0 — stale 'completed' status. Pipeline will proceed to re-write Neo4j.`)
-          }
-        }
-      } catch (verifyErr) {
+      const neo4jCoverage = await verifyNeo4jRelCoverage(documentId)
+      if (neo4jCoverage === 'complete') {
+        hasNeo4jDataVerified = true
+      } else if (neo4jCoverage === 'missing') {
+        console.warn(`[Process] FIX #7: Document ${documentId.slice(0, 8)}... marked 'indexed' with all steps completed, but SQLite has relationships while Neo4j has 0 — stale 'completed' status. Pipeline will proceed to re-write Neo4j.`)
+      } else if (neo4jCoverage === 'partial') {
+        console.warn(`[Process] FIX #10: Document ${documentId.slice(0, 8)}... marked 'indexed', but Neo4j holds far fewer relationships than SQLite (partial write from a crashed batch) — pipeline will proceed to re-write the missing Neo4j data.`)
+      } else {
         // Neo4j verification failed — be conservative and DON'T early-exit.
-        hasNeo4jDataVerified = false
-        console.warn(`[Process] FIX #7: Neo4j COUNT verification failed for 'indexed' doc ${documentId.slice(0, 8)}...: ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)} — pipeline will proceed.`)
+        console.warn(`[Process] FIX #7: Neo4j COUNT verification failed for 'indexed' doc ${documentId.slice(0, 8)}... — pipeline will proceed.`)
       }
 
       if (hasEmbeddings && hasResolved && hasNeo4jDataVerified) {
@@ -2422,33 +2508,28 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
         existingSteps.every(s => s.status === 'completed')
 
       if (allStepsDone) {
-        // FIX #7: Re-verify Neo4j actually has data — don't trust the step status alone.
-        // If SQLite has relationships for this doc but Neo4j has 0 semantic edges, the
-        // neo4j step's 'completed' status is stale (from a pre-Fix-#3 buggy run) and we
-        // must NOT early-exit. Letting the pipeline continue lets the post-extraction
+        // FIX #7 + FIX #10: Re-verify Neo4j actually has data — don't trust the step
+        // status alone. If SQLite has relationships for this doc but Neo4j has 0
+        // semantic edges (missing) or far fewer than expected (partial write from a
+        // crashed batch), the neo4j step's 'completed' status is stale and we must
+        // NOT early-exit. Letting the pipeline continue lets the post-extraction
         // neo4j step (gated by Fix #4's hasNeo4jData) re-write the missing data.
         let neo4jVerifiedComplete = true
-        try {
-          const sqliteRelCount = await db.localRelationship.count({ where: { documentId } })
-          if (sqliteRelCount > 0) {
-            const neo4jCountResult = await readCypher<{ cnt: number }>(
-              `MATCH ()-[r]->() WHERE r.documentId = $documentId AND type(r) <> 'CONTAINS' RETURN count(r) AS cnt`,
-              { documentId }
-            )
-            const neo4jRelCount = neo4jCountResult[0]?.cnt ?? 0
-            if (neo4jRelCount === 0) {
-              // Stale 'completed' status — Neo4j write actually failed silently before.
-              neo4jVerifiedComplete = false
-              console.warn(`[Process] FIX #7: Document ${documentId.slice(0, 8)}... has ${sqliteRelCount} relationships in SQLite but 0 in Neo4j — stale 'completed' step status detected. Blocking EARLY-EXIT GUARD #2 so the Neo4j step re-runs (chunks already extracted, will skip extraction).`)
-            } else {
-              console.log(`[Process] FIX #7: Document ${documentId.slice(0, 8)}... verified — ${neo4jRelCount} Neo4j relationships present, early-exit is safe.`)
-            }
-          }
-        } catch (verifyErr) {
+        const coverage = await verifyNeo4jRelCoverage(documentId)
+        if (coverage === 'missing') {
+          // Stale 'completed' status — Neo4j write actually failed silently before.
+          neo4jVerifiedComplete = false
+          console.warn(`[Process] FIX #7: Document ${documentId.slice(0, 8)}... has relationships in SQLite but 0 in Neo4j — stale 'completed' step status detected. Blocking EARLY-EXIT GUARD #2 so the Neo4j step re-runs (chunks already extracted, will skip extraction).`)
+        } else if (coverage === 'partial') {
+          neo4jVerifiedComplete = false
+          console.warn(`[Process] FIX #10: Document ${documentId.slice(0, 8)}... has far fewer relationships in Neo4j than in SQLite (partial write) — blocking EARLY-EXIT GUARD #2 so the Neo4j step re-writes the missing data.`)
+        } else if (coverage === 'unknown') {
           // Neo4j COUNT query failed — be conservative and BLOCK early-exit so the
           // pipeline proceeds. The post-extraction Neo4j step will retry the write.
           neo4jVerifiedComplete = false
-          console.warn(`[Process] FIX #7: Neo4j COUNT verification failed for doc ${documentId.slice(0, 8)}...: ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)} — blocking early-exit to be safe.`)
+          console.warn(`[Process] FIX #7: Neo4j COUNT verification failed for doc ${documentId.slice(0, 8)}... — blocking early-exit to be safe.`)
+        } else {
+          console.log(`[Process] FIX #7: Document ${documentId.slice(0, 8)}... verified — Neo4j relationship coverage matches SQLite, early-exit is safe.`)
         }
 
         if (neo4jVerifiedComplete) {
@@ -2961,38 +3042,28 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
     let hasNeo4jData = neo4jCompleted
     let hasEmbeddingsData = embeddingsCompleted
 
-    // FIX #4: Re-verify hasNeo4jData against actual Neo4j data — mirroring the
-    // resolve + embeddings COUNT() checks below. Previously this just copied
+    // FIX #4 + FIX #10: Re-verify hasNeo4jData against actual Neo4j data — mirroring the
+    // resolve + embeddings COUNT() checks. Previously this just copied
     // the step status: once the neo4j step was wrongly marked 'completed' (via
     // Fix #3's old fall-through on non-timeout errors), hasNeo4jData stayed true
     // forever and the Neo4j write was skipped on EVERY subsequent re-run. Now we
     // count semantic relationship edges (excluding CONTAINS doc→entity links)
     // stored in Neo4j for this document, and compare with the SQLite buffer.
-    // If SQLite has relationships but Neo4j has 0 → the write failed silently →
-    // force re-run. If both are 0 → the issue is upstream (extraction), don't
-    // loop on Neo4j. If the COUNT query itself fails → force re-run to be safe.
+    // FIX #10 strengthens the comparison: 'missing' (SQLite rels > 0, Neo4j = 0)
+    // AND 'partial' (Neo4j < 50% of SQLite — e.g. 9 rels written of 500 before a
+    // crash) both force a re-run. 'unknown' (COUNT query failed) also forces a
+    // re-run to be safe. The re-write is idempotent (MERGE, no duplicates).
     if (neo4jCompleted) {
-      try {
-        const neo4jCountResult = await readCypher<{ cnt: number }>(
-          `MATCH ()-[r]->() WHERE r.documentId = $documentId AND type(r) <> 'CONTAINS' RETURN count(r) AS cnt`,
-          { documentId }
-        )
-        const neo4jRelCount = neo4jCountResult[0]?.cnt ?? 0
-        const sqliteRelCount = await db.localRelationship.count({ where: { documentId } })
-        if (sqliteRelCount > 0 && neo4jRelCount === 0) {
-          hasNeo4jData = false
-          console.warn(`[Process] Neo4j step marked completed but 0 semantic relationships in Neo4j while SQLite has ${sqliteRelCount} — re-running Neo4j step (Fix #4 caught a stale 'completed' status)`)
-        } else if (neo4jRelCount > 0) {
-          hasNeo4jData = true
-        } else {
-          // Both 0 — Neo4j is "complete" in the sense there's nothing to write.
-          // Missing relationships are an extraction issue (Fix #1), not Neo4j.
-          hasNeo4jData = true
-          console.log(`[Process] Neo4j step: 0 relationships in both Neo4j and SQLite (consistent — extraction produced no relationships for this doc)`)
-        }
-      } catch (countErr) {
-        console.warn(`[Process] Neo4j COUNT verification failed for doc ${documentId.slice(0, 8)}...: ${countErr instanceof Error ? countErr.message : String(countErr)} — forcing re-run to be safe (not trusting stale 'completed' status)`)
+      const coverage = await verifyNeo4jRelCoverage(documentId)
+      if (coverage === 'missing') {
         hasNeo4jData = false
+        console.warn(`[Process] Neo4j step marked completed but 0 semantic relationships in Neo4j while SQLite has some — re-running Neo4j step (Fix #4 caught a stale 'completed' status)`)
+      } else if (coverage === 'partial') {
+        hasNeo4jData = false
+        console.warn(`[Process] Fix #10: Neo4j step marked completed but Neo4j holds far fewer relationships than SQLite (partial write from a crashed batch) — re-running Neo4j step to write the missing data`)
+      } else if (coverage === 'unknown') {
+        hasNeo4jData = false
+        console.warn(`[Process] Neo4j COUNT verification failed for doc ${documentId.slice(0, 8)}... — forcing re-run to be safe (not trusting stale 'completed' status)`)
       }
     }
 
@@ -4136,6 +4207,10 @@ export async function POST(request: NextRequest) {
       // This prevents double auto-chain when the frontend triggers a new POST
       // while the backend auto-chain is still running for the same document.
       const activeDocIds: string[] = []
+      // FIX #9 (BUG C): track WHY each doc was skipped so the response (and the
+      // frontend toast) can tell the user the real reason instead of the
+      // misleading "All documents are already being processed".
+      const skippedDocs: Array<{ id: string; reason: string }> = []
       for (const docId of documentIds) {
         const docPayload = await getDocument(docId)
         if (!docPayload) {
@@ -4170,6 +4245,7 @@ export async function POST(request: NextRequest) {
                 currentDoc.updated_at > new Date(Date.now() - 2 * 60 * 1000).toISOString()
               if (isActivelyExtractingCheck) {
                 console.log(`[Process] Skipping doc ${docId} — already being actively extracted`)
+                skippedDocs.push({ id: docId, reason: 'already_extracting' })
                 continue
               }
               // Process this doc normally — re-enter the loop logic below
@@ -4244,6 +4320,11 @@ export async function POST(request: NextRequest) {
                     updated_at: r2Obj.lastModified.toISOString(),
                   }
                   await upsertDocument(docId, newPayload as DocumentPayload)
+                  // FIX #9 (BUG B): also create the SQLite Document row NOW — previously
+                  // this path only created the Qdrant record, so every later
+                  // db.document.update() failed ("No record was found for an update")
+                  // and the doc's status never persisted to SQLite.
+                  await ensureSqliteDocumentRow(docId)
                   // Re-read from Qdrant
                   const retryPayload = await getDocument(docId)
                   if (retryPayload) {
@@ -4271,6 +4352,7 @@ export async function POST(request: NextRequest) {
           }
 
           console.warn(`[Process] Document ${docId} not found in Qdrant, SQLite, or R2 — skipping`)
+          skippedDocs.push({ id: docId, reason: 'not_found' })
           continue
         }
         const currentDoc = qdrantDocToRecord(docPayload, docId)
@@ -4281,6 +4363,7 @@ export async function POST(request: NextRequest) {
 
         if (isActivelyExtracting) {
           console.log(`[Process] Skipping doc ${docId} — already being actively extracted (updated_at=${currentDoc.updated_at})`)
+          skippedDocs.push({ id: docId, reason: 'already_extracting' })
           continue
         }
 
@@ -4335,12 +4418,23 @@ export async function POST(request: NextRequest) {
       }
 
       if (activeDocIds.length === 0) {
+        // FIX #9 (BUG C): report the REAL reason nothing was started. Previously
+        // this always said "All documents are already being processed" even when
+        // the docs were simply not found anywhere (Qdrant/SQLite/R2) — a silent
+        // no-op that looked like "nothing changed" to the user.
+        const notFound = skippedDocs.filter(s => s.reason === 'not_found').length
+        const alreadyRunning = skippedDocs.filter(s => s.reason === 'already_extracting').length
         return NextResponse.json({
-          message: 'All documents are already being processed',
+          message: notFound > 0
+            ? `Không tìm thấy ${notFound} tài liệu trong Qdrant/SQLite/R2 — không thể xử lý`
+            : alreadyRunning > 0
+              ? `${alreadyRunning} tài liệu đang được xử lý (backend auto-chain đang chạy)`
+              : 'All documents are already being processed',
           documentIds: [],
           async: true,
           autoChain: true,
           skipped: true,
+          skippedDocs,
         })
       }
 

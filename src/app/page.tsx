@@ -15410,6 +15410,22 @@ export default function Home() {
       const data = await res.json()
       if (data.error) throw new Error(data.error)
 
+      // FIX #9 (BUG C): when the backend skipped ALL requested docs (not found
+      // anywhere, or already being extracted by the backend auto-chain), the old
+      // code still showed the generic "Đang xử lý tài liệu" toast — a silent
+      // no-op that looked like "nothing changed" to the user. Surface the real
+      // reason from the response instead.
+      if (data.skipped === true && (!data.documentIds || data.documentIds.length === 0)) {
+        sonnerToast.warning('Không bắt đầu xử lý', {
+          description: data.message || 'Tài liệu bị bỏ qua — có thể đang được xử lý ở backend hoặc không tìm thấy dữ liệu.',
+          duration: 8000,
+        })
+        setProcessingIds(prev => { const next = new Set(prev); next.delete(documentId); return next })
+        setExtractingDocIds(prev => { const next = new Set(prev); next.delete(documentId); return next })
+        fetchDocuments() // refresh list — status may have changed server-side
+        return
+      }
+
       // Async mode: the pipeline is now running in the background with auto-chain
       // The backend will automatically continue extraction when a batch times out.
       // Progress will be tracked via polling (progressPoll interval)
