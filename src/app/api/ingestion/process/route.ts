@@ -2031,6 +2031,13 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
     // AND has embeddings AND resolved entities, return immediately without re-processing.
     // This prevents the pipeline from unnecessarily re-running when reconciliation or
     // auto-chain triggers a re-process of an already-complete document.
+    //
+    // FIX #7: Also verify Neo4j actually has data for this document. The old guard trusted
+    // the neo4j step's 'completed' status — but pre-Fix-#3 buggy runs marked the step
+    // 'completed' even when Neo4j writes failed silently. Without this verification, a
+    // stale 'indexed' doc with no Neo4j data would silently no-op on every "Tiếp tục"
+    // click. By comparing SQLite relationships vs Neo4j semantic-edge count, we detect
+    // stale step status and let the pipeline proceed to re-write Neo4j (Fix #4 will gate).
     if (document.status === 'indexed' && document.processing_steps &&
         Array.isArray(document.processing_steps) &&
         document.processing_steps.length > 0 &&
@@ -2046,8 +2053,34 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
         hasResolved = resolvedCount > 0
       } catch {}
 
-      if (hasEmbeddings && hasResolved) {
-        console.log(`[Process] Document ${documentId} is already fully indexed — skipping (embeddings=${hasEmbeddings}, resolved=${hasResolved})`)
+      // FIX #7: Re-verify Neo4j has semantic relationships for this document.
+      let hasNeo4jDataVerified = false
+      try {
+        const sqliteRelCount = await db.localRelationship.count({ where: { documentId } })
+        if (sqliteRelCount === 0) {
+          // No relationships in SQLite — Neo4j is "complete" in the trivial sense.
+          // (Extraction produced no relationships; re-running won't help — that's
+          // an extraction issue, not a Neo4j issue.)
+          hasNeo4jDataVerified = true
+        } else {
+          const neo4jCountResult = await readCypher<{ cnt: number }>(
+            `MATCH ()-[r]->() WHERE r.documentId = $documentId AND type(r) <> 'CONTAINS' RETURN count(r) AS cnt`,
+            { documentId }
+          )
+          const neo4jRelCount = neo4jCountResult[0]?.cnt ?? 0
+          hasNeo4jDataVerified = neo4jRelCount > 0
+          if (neo4jRelCount === 0) {
+            console.warn(`[Process] FIX #7: Document ${documentId.slice(0, 8)}... marked 'indexed' with all steps completed, but SQLite has ${sqliteRelCount} relationships while Neo4j has 0 — stale 'completed' status. Pipeline will proceed to re-write Neo4j.`)
+          }
+        }
+      } catch (verifyErr) {
+        // Neo4j verification failed — be conservative and DON'T early-exit.
+        hasNeo4jDataVerified = false
+        console.warn(`[Process] FIX #7: Neo4j COUNT verification failed for 'indexed' doc ${documentId.slice(0, 8)}...: ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)} — pipeline will proceed.`)
+      }
+
+      if (hasEmbeddings && hasResolved && hasNeo4jDataVerified) {
+        console.log(`[Process] Document ${documentId} is already fully indexed — skipping (embeddings=${hasEmbeddings}, resolved=${hasResolved}, neo4j=verified)`)
         return {
           documentId, totalPages: document.page_count || 0, totalChunks: 0, totalTokens: 0,
           totalEntities: 0, totalRelationships: 0, resolvedEntities: 0, duplicatesFound: 0,
@@ -2057,7 +2090,7 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
           status: 'indexed' as const, neo4jNodes: 0, neo4jRelationships: 0,
         }
       } else {
-        console.log(`[Process] Document ${documentId} marked 'indexed' with all steps completed, but missing data (embeddings=${hasEmbeddings}, resolved=${hasResolved}) — re-processing`)
+        console.log(`[Process] Document ${documentId} marked 'indexed' with all steps completed, but missing data (embeddings=${hasEmbeddings}, resolved=${hasResolved}, neo4j=${hasNeo4jDataVerified ? 'verified' : 'missing'}) — re-processing`)
       }
     }
 
@@ -2374,6 +2407,14 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
     // (resolve, neo4j, embeddings) are completed, mark as 'indexed' and return immediately.
     // This prevents the auto-chain from looping endlessly when reconciliation keeps resetting
     // the status to 'partial' even though all work is actually done.
+    //
+    // FIX #7: Previously this guard TRUSTED the step status — if the neo4j step was marked
+    // 'completed' (from a buggy pre-Fix-#3 run that marked 'completed' even on non-timeout
+    // errors), the guard fired prematurely and the pipeline returned WITHOUT writing to Neo4j.
+    // Now we re-verify against actual Neo4j data: if SQLite has relationships but Neo4j has 0
+    // semantic edges for this document, the early-exit is BLOCKED so the pipeline proceeds to
+    // the Neo4j write step (which Fix #4 will properly gate via hasNeo4jData). This closes the
+    // last loop hole where "Tiếp tục" on a stale 'indexed' doc silently no-op'd.
     if (chunksToProcess.length === 0 && isResuming && !rebuiltChunksFromPdf) {
       const existingSteps = document.processing_steps as ProcessingStepRecord[] | null
       const allStepsDone = existingSteps && Array.isArray(existingSteps) &&
@@ -2381,19 +2422,53 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
         existingSteps.every(s => s.status === 'completed')
 
       if (allStepsDone) {
-        console.log(`[Process] All chunks processed and all steps completed — marking as 'indexed' immediately`)
-        await updateDocProgress(documentId, { status: 'indexed', steps: existingSteps })
-        invalidateDocumentCache()
-        // SQLite is permanent storage — preserve entities and relationships for this document
-        console.log(`[Process] Document ${documentId.slice(0, 8)}... already indexed — SQLite data preserved (permanent storage)`)
-        return {
-          documentId, totalPages: document.page_count || 0, totalChunks: savedChunks.length, totalTokens: 0,
-          totalEntities: 0, totalRelationships: 0, resolvedEntities: 0, duplicatesFound: 0,
-          resolutionStats: { totalInput: 0, afterExactMatch: 0, afterFuzzyMatch: 0, finalCount: 0 },
-          successfulChunks: 0, failedChunks: 0, wasTimedOut: false, warning: undefined,
-          embeddingsSaved: 0, provider: 'unknown', model: 'unknown', durationMs: Date.now() - startTime,
-          status: 'indexed' as const, neo4jNodes: 0, neo4jRelationships: 0,
+        // FIX #7: Re-verify Neo4j actually has data — don't trust the step status alone.
+        // If SQLite has relationships for this doc but Neo4j has 0 semantic edges, the
+        // neo4j step's 'completed' status is stale (from a pre-Fix-#3 buggy run) and we
+        // must NOT early-exit. Letting the pipeline continue lets the post-extraction
+        // neo4j step (gated by Fix #4's hasNeo4jData) re-write the missing data.
+        let neo4jVerifiedComplete = true
+        try {
+          const sqliteRelCount = await db.localRelationship.count({ where: { documentId } })
+          if (sqliteRelCount > 0) {
+            const neo4jCountResult = await readCypher<{ cnt: number }>(
+              `MATCH ()-[r]->() WHERE r.documentId = $documentId AND type(r) <> 'CONTAINS' RETURN count(r) AS cnt`,
+              { documentId }
+            )
+            const neo4jRelCount = neo4jCountResult[0]?.cnt ?? 0
+            if (neo4jRelCount === 0) {
+              // Stale 'completed' status — Neo4j write actually failed silently before.
+              neo4jVerifiedComplete = false
+              console.warn(`[Process] FIX #7: Document ${documentId.slice(0, 8)}... has ${sqliteRelCount} relationships in SQLite but 0 in Neo4j — stale 'completed' step status detected. Blocking EARLY-EXIT GUARD #2 so the Neo4j step re-runs (chunks already extracted, will skip extraction).`)
+            } else {
+              console.log(`[Process] FIX #7: Document ${documentId.slice(0, 8)}... verified — ${neo4jRelCount} Neo4j relationships present, early-exit is safe.`)
+            }
+          }
+        } catch (verifyErr) {
+          // Neo4j COUNT query failed — be conservative and BLOCK early-exit so the
+          // pipeline proceeds. The post-extraction Neo4j step will retry the write.
+          neo4jVerifiedComplete = false
+          console.warn(`[Process] FIX #7: Neo4j COUNT verification failed for doc ${documentId.slice(0, 8)}...: ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)} — blocking early-exit to be safe.`)
         }
+
+        if (neo4jVerifiedComplete) {
+          console.log(`[Process] All chunks processed and all steps completed — marking as 'indexed' immediately`)
+          await updateDocProgress(documentId, { status: 'indexed', steps: existingSteps })
+          invalidateDocumentCache()
+          // SQLite is permanent storage — preserve entities and relationships for this document
+          console.log(`[Process] Document ${documentId.slice(0, 8)}... already indexed — SQLite data preserved (permanent storage)`)
+          return {
+            documentId, totalPages: document.page_count || 0, totalChunks: savedChunks.length, totalTokens: 0,
+            totalEntities: 0, totalRelationships: 0, resolvedEntities: 0, duplicatesFound: 0,
+            resolutionStats: { totalInput: 0, afterExactMatch: 0, afterFuzzyMatch: 0, finalCount: 0 },
+            successfulChunks: 0, failedChunks: 0, wasTimedOut: false, warning: undefined,
+            embeddingsSaved: 0, provider: 'unknown', model: 'unknown', durationMs: Date.now() - startTime,
+            status: 'indexed' as const, neo4jNodes: 0, neo4jRelationships: 0,
+          }
+        }
+        // else: fall through — pipeline will skip extraction (chunksToProcess=0) and
+        // proceed to resolve/neo4j/embeddings steps. Fix #4 will detect hasNeo4jData=false
+        // (SQLite rels > 0, Neo4j rels = 0) and re-run the Neo4j write.
       }
     }
 
