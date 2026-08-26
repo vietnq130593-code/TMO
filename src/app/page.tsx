@@ -11425,13 +11425,15 @@ function CodeTabContent() {
   useEffect(() => { openFilesRef.current = openFiles })
   const activeOpenFile = openFiles[Math.min(Math.max(activeFileIndex, 0), Math.max(openFiles.length - 1, 0))]
   const selectedFile = activeOpenFile?.path ?? null
-  const fileContent: { path: string; content: string; language: string; lines: number; size: number } | null = activeOpenFile
+  const fileContent: { path: string; content: string; language: string; lines: number; size: number; isBinary?: boolean; truncated?: boolean } | null = activeOpenFile
     ? {
         path: activeOpenFile.path,
         content: activeOpenFile.content,
         language: activeOpenFile.language || 'plaintext',
         lines: activeOpenFile.lines ?? activeOpenFile.content.split('\n').length,
         size: activeOpenFile.size ?? activeOpenFile.content.length,
+        isBinary: activeOpenFile.isBinary,
+        truncated: activeOpenFile.truncated,
       }
     : null
   const [fileLoading, setFileLoading] = useState(false)
@@ -11649,6 +11651,17 @@ function CodeTabContent() {
     const targetIdx = typeof idx === 'number' ? idx : activeFileIndex
     const target = openFiles[targetIdx]
     if (!target) return
+    // FIX 2026-08-29 (defense in depth): tab binary/truncated KHÔNG BAO GIỜ được
+    // ghi xuống disk — content rỗng (binary) hoặc bị cắt (>2MB) sẽ PHÁ HỦY file gốc.
+    // Monaco readOnly đã chặn edit nhưng chặn thêm ở tầng save cho chắc.
+    if (target.isBinary) {
+      toast({ title: 'Không thể lưu', description: 'File nhị phân không chỉnh sửa được qua editor', variant: 'destructive' })
+      return
+    }
+    if (target.truncated) {
+      toast({ title: 'Không thể lưu', description: 'File lớn đang ở chế độ read-only (chỉ hiển thị 2MB đầu) — lưu sẽ mất phần còn lại', variant: 'destructive' })
+      return
+    }
     setIsSaving(true)
     try {
       const res = await authedFetch('/api/opencode/files/write', {
@@ -12214,6 +12227,13 @@ function CodeTabContent() {
           language: data.language,
           lines: data.lines,
           size: data.size,
+          // FIX 2026-08-29: binary (VD qdrant.exe) → placeholder + hex preview;
+          // text >2MB → truncated read-only tab. Trước đây 2 trường hợp này là
+          // toast lỗi đỏ (413 File too large) — symptom user báo trên Windows.
+          isBinary: data.isBinary || undefined,
+          hexPreview: data.hexPreview,
+          truncated: data.truncated || undefined,
+          totalSize: data.totalSize,
         }
         if (existingIdx >= 0) {
           // refresh: replace content in the existing tab
@@ -12223,8 +12243,10 @@ function CodeTabContent() {
           setOpenFiles(prev => [...prev, entry])
           setActiveFileIndex(Math.max(openFilesRef.current.length, 0))
         }
-        // Load diagnostics for this file
-        await loadDiagnostics()
+        // Load diagnostics for this file (binary file không cần LSP)
+        if (!data.isBinary) {
+          await loadDiagnostics()
+        }
       } else {
         // FIX 2026-08-28: read fail (404/413/...) — trước đây im lặng hoàn toàn,
         // user bấm file không thấy gì (không editor, không lỗi). Giờ hiện toast
@@ -13341,20 +13363,33 @@ function CodeTabContent() {
                     <div className="sticky top-0 z-10 flex items-center justify-between px-3 py-1.5 bg-slate-950/90 border-b border-emerald-500/10">
                       <span className="text-[10px] text-stone-400 font-mono truncate max-w-[50%]">{fileContent.path}</span>
                       <div className="flex items-center gap-1.5">
-                        <Badge className="text-[8px] bg-slate-800 text-stone-400">{fileContent.language}</Badge>
-                        <Badge className="text-[8px] bg-slate-800 text-stone-400">{fileContent.lines} dòng</Badge>
+                        {fileContent.isBinary ? (
+                          <Badge className="text-[8px] bg-purple-950/60 text-purple-300 border border-purple-500/30">Binary</Badge>
+                        ) : (
+                          <Badge className="text-[8px] bg-slate-800 text-stone-400">{fileContent.language}</Badge>
+                        )}
+                        {fileContent.isBinary ? (
+                          <Badge className="text-[8px] bg-slate-800 text-stone-400">{fileContent.size ? `${(fileContent.size / 1024 / 1024).toFixed(2)} MB` : ''}</Badge>
+                        ) : (
+                          <Badge className="text-[8px] bg-slate-800 text-stone-400">{fileContent.lines} dòng</Badge>
+                        )}
+                        {fileContent.truncated && (
+                          <Badge className="text-[8px] bg-amber-950/50 text-amber-400 border border-amber-400/50">2MB đầu · read-only</Badge>
+                        )}
                         {editedContent !== null && (
                           <Badge className="text-[8px] bg-amber-900/50 text-amber-400 border border-amber-400/50 animate-pulse">Đã chỉnh sửa</Badge>
                         )}
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className={`h-5 text-[8px] px-1.5 ${diffViewActive ? 'text-emerald-400 bg-emerald-500/20' : 'text-stone-500 hover:text-stone-300'}`}
-                          onClick={() => setDiffViewActive(!diffViewActive)}
-                          title="Xem Diff"
-                        >
-                          <FileCode className="h-3 w-3 mr-0.5" /> Diff
-                        </Button>
+                        {!fileContent.isBinary && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className={`h-5 text-[8px] px-1.5 ${diffViewActive ? 'text-emerald-400 bg-emerald-500/20' : 'text-stone-500 hover:text-stone-300'}`}
+                            onClick={() => setDiffViewActive(!diffViewActive)}
+                            title="Xem Diff"
+                          >
+                            <FileCode className="h-3 w-3 mr-0.5" /> Diff
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           variant="ghost"
@@ -13391,7 +13426,7 @@ function CodeTabContent() {
                     {diffViewActive && activeOpenFile ? (
                       <div className="flex-1 min-h-0 flex flex-col">
                         <div className="flex items-center justify-between px-3 py-1.5 bg-slate-950/90 border-b border-emerald-500/10">
-                          <span className="text-[10px] font-mono text-emerald-300">Diff: {activeOpenFile.path.split('/').pop()}</span>
+                          <span className="text-[10px] font-mono text-emerald-300">Diff: {baseNameOf(activeOpenFile.path)}</span>
                           <span className="text-[9px] text-stone-500">{activeOpenFile.isDirty ? 'thay đổi chưa lưu (so với nội dung gốc)' : 'không có thay đổi trong session'}</span>
                         </div>
                         <div className="flex-1 min-h-0">

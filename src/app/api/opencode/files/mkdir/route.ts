@@ -21,13 +21,9 @@ export async function POST(request: Request) {
 
     const resolvedPath = resolve(dirPath)
 
-    // Security: prevent creating dirs in critical system paths
-    const BLOCKED_PREFIXES = ['/usr', '/bin', '/sbin', '/etc', '/boot', '/dev', '/proc', '/sys', '/root']
-    for (const prefix of BLOCKED_PREFIXES) {
-      if (resolvedPath.startsWith(prefix)) {
-        return NextResponse.json({ error: `Access denied: cannot create directory in ${prefix}` }, { status: 403 })
-      }
-    }
+    // FIX 2026-08-29: gỡ BLOCKED_PREFIXES (/usr, /etc...) — shell tool đã không còn
+    // chặn lệnh nào (user yêu cầu bỏ hạn chế) nên chặn riêng route tạo thư mục là
+    // vô nghĩa (mkdir /x qua shell vẫn chạy được). Nhất quán: không chặn đường dẫn.
 
     if (existsSync(resolvedPath)) {
       const stats = await stat(resolvedPath)
