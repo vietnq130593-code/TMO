@@ -453,12 +453,20 @@ type Neo4jHealthResult = {
   error?: string
 }
 
-export async function checkNeo4jHealth(): Promise<Neo4jHealthResult> {
+// FIX #8 (display bug): accept optional `force` flag to bypass the 20s cache.
+// Without this, the dashboard's Neo4j info panel stays stale for up to 20s
+// after a "Tiếp tục" completes — even when fetchHealth() is called in the
+// .finally() block, the server returns the cached count from before the
+// pipeline ran, so the user sees "no change" in nodes/rels counts.
+export async function checkNeo4jHealth(force: boolean = false): Promise<Neo4jHealthResult> {
   // Cache hit? (both success and failure results — prevents hammering Aura
-  // during an outage too). Force-refresh happens naturally after TTL expiry.
-  const cached = globalForNeo4jHealth.__neo4jHealthCache
-  if (cached && Date.now() - cached.ts < NEO4J_HEALTH_CACHE_TTL_MS) {
-    return cached.data
+  // during an outage too). Force-refresh happens naturally after TTL expiry
+  // OR when the caller passes force=true (e.g. right after a pipeline run).
+  if (!force) {
+    const cached = globalForNeo4jHealth.__neo4jHealthCache
+    if (cached && Date.now() - cached.ts < NEO4J_HEALTH_CACHE_TTL_MS) {
+      return cached.data
+    }
   }
 
   const data = await checkNeo4jHealthUncached()

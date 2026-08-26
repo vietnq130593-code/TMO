@@ -7,7 +7,7 @@
  * All health checks run in parallel with individual timeouts.
  */
 
-import { NextResponse } from 'next/server'
+import { NextResponse, NextRequest } from 'next/server'
 import { checkQdrantHealth, initializeCollections } from '@/lib/qdrant'
 import { checkNeo4jHealth } from '@/lib/neo4j'
 import { checkR2Health } from '@/lib/r2-storage'
@@ -59,8 +59,15 @@ async function ensureQdrantInitialized() {
   }
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const startTime = Date.now()
+
+  // FIX #8 (display bug): allow callers to bypass the Neo4j health cache by
+  // passing ?force=true. The frontend calls /api/health?force=true right
+  // after a "Tiếp tục" pipeline finishes, so the dashboard's Neo4j info panel
+  // immediately reflects the freshly-written nodes/relationships instead of
+  // being stuck on the 20s cached value from before the pipeline ran.
+  const forceRefresh = request.nextUrl.searchParams.get('force') === 'true'
 
   try {
     // Ensure Qdrant collections are created
@@ -72,7 +79,7 @@ export async function GET() {
     // Run health checks in parallel with individual timeouts
     const [qdrant, neo4j, r2, supabase] = await Promise.all([
       withTimeout(checkQdrantHealth(), 8000, { connected: false, error: 'Qdrant check timed out' }),
-      withTimeout(checkNeo4jHealth(), 10000, { connected: false, error: 'Neo4j check timed out (10s)' }),
+      withTimeout(checkNeo4jHealth(forceRefresh), 10000, { connected: false, error: 'Neo4j check timed out (10s)' }),
       withTimeout(checkR2Health(), 8000, { configured: false, connected: false, bucket: '' }),
       withTimeout(checkSupabaseHealth(), 8000, { configured: false, connected: false, tableCount: 0 }),
     ])

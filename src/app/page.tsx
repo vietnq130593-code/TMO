@@ -2146,10 +2146,13 @@ interface AnalyticsData {
   embeddingStatus: EmbeddingStatus | null
   loading: boolean
   dbStats: DBStats | null
+  // FIX #8 (display bug): pass parent's health down so Neo4jVerification can
+  // react to fetchHealth() updates instead of having its own stale internal state.
+  health?: HealthResponse | null
 }
 
 function AnalyticsSection({ data, onRefreshStats }: { data: AnalyticsData; onRefreshStats?: () => void }) {
-  const { documents, embeddingStatus, loading, dbStats } = data
+  const { documents, embeddingStatus, loading, dbStats, health } = data
   const [reconcileLoading, setReconcileLoading] = useState(false)
   const [reconcileResult, setReconcileResult] = useState<{ removed: number; merged: number } | null>(null)
 
@@ -2635,7 +2638,7 @@ function AnalyticsSection({ data, onRefreshStats }: { data: AnalyticsData; onRef
                 <Network className="h-4 w-4 text-violet-400" />
                 <span className="text-xs font-semibold text-violet-400">Neo4j (Graph)</span>
               </div>
-              <Neo4jVerification />
+              <Neo4jVerification health={health} />
             </div>
 
             {/* Vector Tier */}
@@ -2702,34 +2705,72 @@ function AnalyticsSection({ data, onRefreshStats }: { data: AnalyticsData; onRef
 
 // ==================== NEO4J VERIFICATION COMPONENT ====================
 
-function Neo4jVerification() {
-  const [neo4jData, setNeo4jData] = useState<{ nodeCount: number; relationshipCount: number; labels: string[]; connected: boolean } | null>(null)
+function Neo4jVerification({ health }: { health?: HealthResponse | null }) {
+  // Local fallback state — used when parent's `health` prop hasn't loaded yet
+  // (e.g. user just switched to the analytics tab and fetchHealth() hasn't
+  // returned). Once parent's health arrives, we prefer it over localData.
+  const [localData, setLocalData] = useState<{ nodeCount: number; relationshipCount: number; labels: string[]; connected: boolean } | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [cleaning, setCleaning] = useState(false)
 
-  const checkNeo4j = useCallback(async () => {
+  // FIX #8 (display bug): accept a `force` flag to bypass the 20s Neo4j health cache.
+  // Used by the "Làm mới" button and after cleanup so the panel shows fresh counts
+  // immediately after a "Tiếp tục" pipeline writes new nodes/relationships to Neo4j.
+  const checkNeo4j = useCallback(async (force: boolean = false) => {
     try {
-      const res = await fetch('/api/health')
+      const res = await fetch('/api/health' + (force ? '?force=true' : ''))
       if (!res.ok) throw new Error('Health API không khả dụng')
       const data = await res.json()
       const neo4j = data.services?.neo4j
       if (neo4j?.connected) {
-        setNeo4jData({
+        setLocalData({
           connected: true,
           nodeCount: neo4j.nodeCount ?? 0,
           relationshipCount: neo4j.relationshipCount ?? 0,
           labels: neo4j.labels ?? [],
         })
       } else {
-        setNeo4jData({ connected: false, nodeCount: 0, relationshipCount: 0, labels: [] })
+        setLocalData({ connected: false, nodeCount: 0, relationshipCount: 0, labels: [] })
       }
     } catch {
-      setNeo4jData({ connected: false, nodeCount: 0, relationshipCount: 0, labels: [] })
+      setLocalData({ connected: false, nodeCount: 0, relationshipCount: 0, labels: [] })
     }
     setLoading(false)
   }, [])
 
+  // Fetch once on mount (covers the initial load before parent's health arrives).
   useEffect(() => { checkNeo4j() }, [checkNeo4j])
+
+  // FIX #8: auto-refresh every 30s. 30s > 20s cache TTL → each call returns fresh
+  // data without forcing (no extra Aura load). This catches writes that happen
+  // while the analytics tab is open but the user isn't actively pressing buttons.
+  useEffect(() => {
+    const interval = setInterval(() => { checkNeo4j() }, 30000)
+    return () => clearInterval(interval)
+  }, [checkNeo4j])
+
+  // FIX #8: prefer parent's `health` prop (which updates every 10s via fetchHealth()
+  // and immediately with force=true after a pipeline finishes — see handleProcessDoc
+  // .finally() block). This is the primary fix: without it, the panel only updates
+  // on its own 30s interval and the user sees "no change" right after Tiếp tục.
+  const neo4jHealth = health?.services?.neo4j
+  const neo4jData = neo4jHealth?.connected
+    ? {
+        connected: true,
+        nodeCount: neo4jHealth.nodeCount ?? 0,
+        relationshipCount: neo4jHealth.relationshipCount ?? 0,
+        labels: neo4jHealth.labels ?? [],
+      }
+    : neo4jHealth // parent's health loaded but Neo4j not connected
+      ? { connected: false, nodeCount: 0, relationshipCount: 0, labels: [] }
+      : localData // parent's health not yet loaded — fall back to local fetch
+
+  const handleRefreshNeo4j = useCallback(async () => {
+    setRefreshing(true)
+    await checkNeo4j(true) // force=true — bypass 20s cache for immediate refresh
+    setRefreshing(false)
+  }, [checkNeo4j])
 
   const handleCleanNeo4j = useCallback(async () => {
     if (!confirm('Xóa toàn bộ dữ liệu Neo4j và đồng bộ lại? Điều này sẽ xóa tất cả nodes và relationships hiện có.')) return
@@ -2739,7 +2780,7 @@ function Neo4jVerification() {
       const data = await res.json()
       if (data.success) {
         alert(`Đã dọn dẹp Neo4j: ${data.before.relationships}→${data.after.relationships} relationships, ${data.documentsReset} tài liệu cần đồng bộ lại`)
-        await checkNeo4j()
+        await checkNeo4j(true) // force=true — bypass cache after cleanup
       } else {
         alert(`Lỗi: ${data.error}`)
       }
@@ -2749,7 +2790,7 @@ function Neo4jVerification() {
     setCleaning(false)
   }, [checkNeo4j])
 
-  if (loading) {
+  if (loading && !neo4jData) {
     return (
       <div className="space-y-1.5 text-xs">
         <div className="flex justify-between"><span className="text-muted-foreground">Kết nối:</span><Loader2 className="h-3 w-3 animate-spin text-muted-foreground" /></div>
@@ -2760,7 +2801,21 @@ function Neo4jVerification() {
   }
 
   if (!neo4jData?.connected) {
-    return <div className="mt-2 flex items-center gap-1 text-[10px] text-red-400"><XCircle className="h-3 w-3" /> Không kết nối được Neo4j</div>
+    return (
+      <div className="space-y-1.5 text-xs">
+        <div className="mt-2 flex items-center gap-1 text-[10px] text-red-400"><XCircle className="h-3 w-3" /> Không kết nối được Neo4j</div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-full h-6 text-[10px] mt-1 border-cyan-400/35 hover:bg-cyan-900/40 hover:text-cyan-300 hover:border-cyan-300"
+          onClick={handleRefreshNeo4j}
+          disabled={refreshing}
+        >
+          {refreshing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+          Làm mới
+        </Button>
+      </div>
+    )
   }
 
   // Detect abnormal rels/nodes ratio (normal is ~2-5x, buggy was ~41x)
@@ -2792,6 +2847,18 @@ function Neo4jVerification() {
           {neo4jData.labels.length > 8 && <Badge className="text-[8px] h-3.5 px-1 bg-stone-950/50 text-stone-400">+{neo4jData.labels.length - 8}</Badge>}
         </div>
       )}
+      {/* FIX #8: "Làm mới" button — bypasses 20s cache with ?force=true so the
+          user can manually refresh after a Tiếp tục/processing pipeline. */}
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full h-6 text-[10px] mt-1 border-cyan-400/35 hover:bg-cyan-900/40 hover:text-cyan-300 hover:border-cyan-300"
+        onClick={handleRefreshNeo4j}
+        disabled={refreshing}
+      >
+        {refreshing ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+        Làm mới
+      </Button>
       <Button
         variant="outline"
         size="sm"
@@ -14971,16 +15038,20 @@ export default function Home() {
     if (wallpaperInputRef.current) wallpaperInputRef.current.value = ''
   }, [])
 
-  const fetchHealth = useCallback(async () => {
+  const fetchHealth = useCallback(async (force: boolean = false) => {
     setHealthRefreshing(true)
     // FIX: add a per-request timeout + real error handling. Previously errors were
     // swallowed by `catch {}` and non-200 responses were ignored, so when /api/health
     // failed (server busy, Qdrant down, network hiccup) the status bar stayed stuck
     // at "Đang kiểm tra kết nối..." forever with no feedback and no visible retry state.
+    // FIX #8: when force=true, append ?force=true so the server bypasses its 20s
+    // Neo4j health cache — used right after a "Tiếp tục" pipeline finishes so the
+    // Neo4j nodes/rels counts in the dashboard refresh immediately instead of being
+    // stuck on the pre-pipeline cached value.
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 20000)
     try {
-      const res = await fetch('/api/health', { signal: controller.signal })
+      const res = await fetch('/api/health' + (force ? '?force=true' : ''), { signal: controller.signal })
       if (res.ok) {
         const data = await res.json()
         setHealth(data)
@@ -15214,9 +15285,12 @@ export default function Home() {
     try { const res = await fetch('/api/query?action=embed-status'); if (res.ok) { const data = await res.json(); setEmbeddingStatus(data) } } catch {}
   }, [])
 
-  const fetchStats = useCallback(async () => {
+  const fetchStats = useCallback(async (force: boolean = false) => {
     try {
-      const res = await fetch('/api/query?action=stats')
+      // FIX #8: when force=true, append &force=true so the server bypasses its
+      // 30s stats cache. Used right after a "Tiếp tục" pipeline finishes so the
+      // Entities/Relationships cards refresh immediately.
+      const res = await fetch('/api/query?action=stats' + (force ? '&force=true' : ''))
       if (res.ok) {
         const data = await res.json()
         setEntityTotal(data.totalEntities || 0)
@@ -15430,6 +15504,7 @@ export default function Home() {
       const pollBatchUntilDone = async (docId: string): Promise<'done' | 'partial' | 'error' | 'unknown'> => {
         let partialConfirmCount = 0
         let consecutiveFetchFailures = 0
+        let pollIteration = 0
         const MAX_FETCH_FAILURES = 10  // Bail after 10 consecutive failures (~30s-5min depending on backoff)
 
         while (Date.now() - totalStartTime < maxTotalWaitMs) {
@@ -15461,6 +15536,15 @@ export default function Home() {
             // Only update stats (lightweight) — auto-poll useEffect already calls fetchDocuments()
             // Removing fetchDocuments() here eliminates the duplicate reconciliation requests (2× per 3s → 1×)
             fetchStats()
+
+            // FIX #8 (display bug): every 5th iteration (~15s), also refresh health
+            // so the Neo4j info panel + footer status bar reflect nodes/rels written
+            // by the in-progress pipeline. Without this, the panel only updates once
+            // on mount and the user sees "no change" while the pipeline is writing.
+            if (pollIteration > 0 && pollIteration % 5 === 0) {
+              fetchHealth()
+            }
+            pollIteration++
 
             if (['indexed', 'extracted', 'partial', 'error'].includes(doc.status)) {
               if (doc.status === 'error') {
@@ -15498,7 +15582,11 @@ export default function Home() {
       // Wait for completion (with auto-continue) in the background
       void waitForCompletionAndAutoContinue().finally(() => {
         setProcessingIds(prev => { const next = new Set(prev); next.delete(documentId); return next })
-        fetchDocuments(); fetchEmbeddingStatus(); fetchHealth(); fetchStats()
+        fetchDocuments(); fetchEmbeddingStatus()
+        // FIX #8 (display bug): force-refresh health + stats after pipeline finishes
+        // so the Neo4j nodes/rels counts in the dashboard reflect the freshly-written
+        // data immediately, bypassing the 20s health cache and 30s stats cache.
+        fetchHealth(true); fetchStats(true)
       })
 
     } catch (err) {
@@ -16194,6 +16282,10 @@ export default function Home() {
                       embeddingStatus,
                       loading,
                       dbStats,
+                      // FIX #8: pass parent's health so Neo4jVerification auto-updates
+                      // when fetchHealth() polls (every 10s) or fires force=true after a
+                      // pipeline finishes (see handleProcessDoc .finally() block).
+                      health,
                     }} onRefreshStats={() => fetchStats()} />
                   </TabsContent>
 
