@@ -129,6 +129,13 @@ export async function PATCH(request: NextRequest) {
     }
 
     const workspace = await wm.setActiveWorkspace(body.id);
+
+    // FIX 2026-08-28: user vừa đổi active workspace → invalidate cache root của
+    // code-team tools (file_read/shell/... resolve theo active workspace) để tool
+    // calls tiếp theo dùng root MỚI ngay lập tức (không chờ TTL 5s).
+    const { invalidateWorkspaceRootCache } = await import("@/lib/code-team/workspace-root");
+    invalidateWorkspaceRootCache();
+
     return Response.json({ ok: true, data: workspace });
   } catch (err) {
     return Response.json(

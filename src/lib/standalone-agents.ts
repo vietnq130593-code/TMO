@@ -162,6 +162,18 @@ LEARNING & MEMORY
       'knowledge_search',
       'knowledge_graph',
       'knowledge_write',
+      // Workspace dev tools (user request 2026-08-28): agent phải truy cập được
+      // thư mục root user đã chọn — đọc/liệt kê/sửa file, grep, chạy shell.
+      // Tools resolve path theo ACTIVE workspace (workspace-root.ts) + guards.
+      'file_read',
+      'file_list',
+      'file_edit',
+      'file_multi_edit',
+      'grep',
+      'shell',
+      'run_tests',
+      'git_commit',
+      'get_diagnostics',
     ],
   },
 ]

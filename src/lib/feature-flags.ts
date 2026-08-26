@@ -28,7 +28,10 @@
 
 const DEFAULTS: Record<string, string> = {
   // Phase 1a
-  ENABLE_SHELL_TOOL: 'false',
+  // ENABLE_SHELL_TOOL mặc định true (user request 2026-08-28): agent phải chạy được
+  // lệnh shell/terminal trong workspace user chọn. Tool đã có guards an toàn
+  // (chặn sudo/rm -rf /, cwd bị khóa trong workspace root, timeout 5-10 phút).
+  ENABLE_SHELL_TOOL: 'true',
   ENABLE_TODO_TOOL: 'false',
   ENABLE_QUALITY_GATE: 'off', // off | warn | strict
 

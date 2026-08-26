@@ -35,11 +35,88 @@ import { classifyIntent, searchUserKB } from '@/lib/kb-routing'
 import { rewriteQuery } from '@/lib/kb-routing/query-rewriter'
 import { isFlagEnabled } from '@/lib/feature-flags'
 import { writebackToKBTransactionally } from '@/lib/kb-routing/transactional-writeback'
+import { getActiveWorkspaceRoot } from '@/lib/workspace/workspace-manager'
 
 export const dynamic = 'force-dynamic'
 
 // Module-level counter for periodic memory decay (Bug 3 fix)
 let memoryDecayCounter = 0
+
+// ============================================
+// WORKSPACE CONTEXT BUILDER (user request 2026-08-28)
+// "Khi tôi chọn một thư mục nghĩa là tôi muốn agents có thể truy cập, nắm được
+//  nội dung thư mục gốc, có các thư mục nào, file nào và có thể triển khai viết
+//  code và chạy các lệnh shell/terminal."
+// → Inject root path + cấu trúc cấp 1 + hướng dẫn tool calls vào system prompt
+//   để agent TRẢ LỜI ĐƯỢC câu hỏi về workspace và THỰC THI được file/shell ops
+//   (code-team tools đã resolve theo active workspace — xem workspace-root.ts).
+// ============================================
+
+/** Cache nhẹ 10s — system prompt được build mỗi request, tránh scan thư mục liên tục */
+let workspaceCtxCache: { text: string; root: string | null; at: number } | null = null
+const WORKSPACE_CTX_TTL_MS = 10_000
+
+async function buildWorkspaceContext(): Promise<{ text: string; root: string | null }> {
+  const now = Date.now()
+  if (workspaceCtxCache && now - workspaceCtxCache.at < WORKSPACE_CTX_TTL_MS) {
+    return { text: workspaceCtxCache.text, root: workspaceCtxCache.root }
+  }
+
+  let root: string | null = null
+  try {
+    root = await getActiveWorkspaceRoot()
+  } catch {
+    root = null
+  }
+  if (!root) {
+    workspaceCtxCache = { text: '', root: null, at: now }
+    return { text: '', root: null }
+  }
+
+  // Scan cấu trúc cấp 1 (skip hidden + node_modules để gọn prompt)
+  let listing: string[] = []
+  try {
+    const { readdirSync, statSync } = await import('fs')
+    const { join } = await import('path')
+    const entries = readdirSync(root)
+      .filter(name => !name.startsWith('.') && name !== 'node_modules')
+      .sort()
+      .slice(0, 40)
+    listing = entries.map(name => {
+      try {
+        return statSync(join(root!, name)).isDirectory() ? `${name}/` : name
+      } catch {
+        return name
+      }
+    })
+  } catch {
+    listing = []
+  }
+
+  const shellEnabled = isFlagEnabled('ENABLE_SHELL_TOOL')
+  const shellHint = shellEnabled
+    ? '  - tool_call: shell({"command": "npm run build"})  — chạy lệnh shell/terminal ngay trong root (đã chặn sudo/rm -rf /)'
+    : '  - shell: HIỆN TẮT — bật ENABLE_SHELL_TOOL=true trong .env rồi restart app'
+
+  const text = `--- Active Workspace (thư mục user đã chọn) ---
+Workspace root: ${root}
+Cấu trúc cấp 1 (${listing.length} mục${listing.length >= 40 ? ', đã giới hạn 40' : ''}):
+${listing.length > 0 ? listing.join('\n') : '(thư mục trống hoặc không đọc được)'}
+
+HƯỚNG DẪN làm việc với workspace:
+- Khi user hỏi về "thư mục hiện tại / thư mục gốc / root / project này" → chính là: ${root}
+- Khi user yêu cầu xem cấu trúc, đọc/hiệu chỉnh file, chạy lệnh → EMIT TOOL CALL đúng format:
+  - tool_call: file_list({"path": "."})  — liệt kê thư mục (path relative với root)
+  - tool_call: file_read({"path": "src/app/page.tsx"})  — đọc nội dung file
+  - tool_call: file_edit({"path": "...", "old_string": "...", "new_string": "..."})  — sửa file
+  - tool_call: grep({"pattern": "từ_khoá", "path": "src"})  — tìm kiếm text trong code
+${shellHint}
+- Tool gọi với path RELATIVE với root (hoặc absolute path nằm trong root). Tool tự resolve theo root — KHÔNG cần đoán đường dẫn tuyệt đối.
+- Sau khi có kết quả tool, TÓM TẮT cho user bằng tiếng Việt (cấu trúc cây, nội dung file, output lệnh...).`
+
+  workspaceCtxCache = { text, root, at: now }
+  return { text, root }
+}
 
 /**
  * Check if a chat exchange is too trivial to warrant memory extraction.
@@ -351,6 +428,12 @@ async function routeToOpenCode(
       relatedEntities: enrichment.entities,
     })
 
+    // WORKSPACE CONTEXT (user request 2026-08-28): code session cũng cần biết root
+    const workspaceCtxForOC = await buildWorkspaceContext()
+    const workspaceAwarePrompt = workspaceCtxForOC.text
+      ? enrichedSystemPrompt + `\n\n${workspaceCtxForOC.text}`
+      : enrichedSystemPrompt
+
     // Try to create an OpenCode session with the prompt + enriched context
     const session = await createOpenCodeSession({
       prompt: userMessage,
@@ -406,7 +489,7 @@ async function routeToOpenCode(
 
     // Return a response indicating the session was created with KB enrichment
     return NextResponse.json({
-      content: `🔧 **Đã tạo Knowledge-Aware OpenCode Session** — "${userMessage.slice(0, 80)}${userMessage.length > 80 ? '...' : ''}"\n\nSession đã được gửi đến OpenCode Server với Knowledge Base context. Agent sẽ:\n1. 📖 Đọc file liên quan\n2. 🔍 Tìm kiếm Knowledge Base qua MCP Bridge\n3. 📝 Kiểm tra corrections từ sessions trước\n4. ✏️ Phân tích và thực hiện chỉnh sửa\n5. 🔧 Chạy LSP diagnostics để kiểm tra\n6. 💡 Tự động capture insights mới vào KB${enrichmentInfo}\n📋 **Session ID**: ${session.sessionId || session.id}\n💻 Xem tiến trình trong tab **Code** → Active Sessions\n\n🤖 _Agent đang xử lý... Xem real-time progress tại Code Tab_`,
+      content: `🔧 **Đã tạo Knowledge-Aware OpenCode Session** — "${userMessage.slice(0, 80)}${userMessage.length > 80 ? '...' : ''}"${workspaceCtxForOC.root ? `\n\n📁 **Workspace root**: \`${workspaceCtxForOC.root}\`` : ''}\n\nSession đã được gửi đến OpenCode Server với Knowledge Base context. Agent sẽ:\n1. 📖 Đọc file liên quan${workspaceCtxForOC.root ? ` trong workspace \`${workspaceCtxForOC.root}\`` : ''}\n2. 🔍 Tìm kiếm Knowledge Base qua MCP Bridge\n3. 📝 Kiểm tra corrections từ sessions trước\n4. ✏️ Phân tích và thực hiện chỉnh sửa\n5. 🔧 Chạy LSP diagnostics để kiểm tra\n6. 💡 Tự động capture insights mới vào KB${enrichmentInfo}\n📋 **Session ID**: ${session.sessionId || session.id}\n💻 Xem tiến trình trong tab **Code** → Active Sessions\n\n🤖 _Agent đang xử lý... Xem real-time progress tại Code Tab_`,
       model: model || 'opencode',
       provider: 'opencode',
       sessionId: sessionId || `session-${Date.now()}`,
@@ -421,7 +504,7 @@ async function routeToOpenCode(
         insightsFound: enrichment.insights.length,
         codeConfidence,
       },
-      systemPromptLength: enrichedSystemPrompt.length,
+      systemPromptLength: workspaceAwarePrompt.length,
     })
   } catch (err) {
     console.warn('[OpenClaw Chat] OpenCode routing error:', err instanceof Error ? err.message : String(err))
@@ -476,6 +559,14 @@ export async function POST(request: NextRequest) {
     }
 
     // CASUAL intent: skip everything — return fast response without hitting LLM or KB
+    // FIX 2026-08-28: câu hỏi về workspace/thư mục dự án KHÔNG phải casual —
+    // chúng cần workspace context trong system prompt để agent trả lời đúng.
+    // Nếu classifyIntent nhầm thành casual → đổi sang factual để đi full flow.
+    if (intent === 'casual' && /(thư mục|workspace|root|project|folder|directory|file|tệp)/i.test(lastUserContent)) {
+      intent = 'factual'
+      intentSource = 'workspace-keyword-override'
+      console.log('[OpenClaw Chat] Workspace keyword detected — casual → factual')
+    }
     if (intent === 'casual') {
       const casualResponse = generateCasualResponse(lastUserContent, agentProfileName)
 
@@ -502,7 +593,15 @@ export async function POST(request: NextRequest) {
 
     // PROCEDURAL intent: route to OpenCode (keep existing isCodeQuery logic as backup)
     // classifyIntent may catch procedural queries that isCodeQuery misses
-    if (intent === 'procedural' || isCodeQuery(lastUserContent)) {
+    //
+    // FIX 2026-08-28: KHÔNG short-circuit khi user đang chat với agent có
+    // provider/model riêng (Omega...) — ReAct loop bên dưới THỰC THI tool thật
+    // (file_read/file_list/grep/shell theo active workspace), trong khi
+    // routeToOpenCode chỉ tạo session STUB trên opencode-server (record prompt,
+    // không xử lý) → user nhận canned response thay vì agent làm việc thật.
+    // OpenCode routing giờ chỉ là fallback cho chat KHÔNG có agent config.
+    const hasAgentProviderModel = !!(agentProvider && agentModel)
+    if ((intent === 'procedural' || isCodeQuery(lastUserContent)) && !hasAgentProviderModel) {
       const opencodeResponse = await routeToOpenCode(lastUserContent, model, sessionId, messages, agentProfileId, teamMode, teamName)
       if (opencodeResponse) {
         return opencodeResponse
@@ -612,6 +711,14 @@ export async function POST(request: NextRequest) {
     const kbContextForPrompt = dynamicKBContext || STATIC_KB_CONTEXT
     let systemPrompt = DEFAULT_SYSTEM_PROMPT + `\n\n--- Knowledge Base Context ---\n${kbContextForPrompt}`
 
+    // WORKSPACE CONTEXT (user request 2026-08-28): root + cấu trúc cấp 1 + tool hướng dẫn.
+    // Giúp agent TRẢ LỜI được "thư mục gốc hiện tại là gì / có file gì" và EMIT tool calls
+    // (file_read/file_list/grep/shell) resolve theo active workspace (workspace-root.ts).
+    const workspaceCtx = await buildWorkspaceContext()
+    if (workspaceCtx.text) {
+      systemPrompt += `\n\n${workspaceCtx.text}`
+    }
+
     if (agentInstruction && typeof agentInstruction === 'string' && agentInstruction.trim()) {
       systemPrompt = agentInstruction.trim() + '\n\n--- Base System Prompt ---\n' + systemPrompt
     }
@@ -700,7 +807,9 @@ export async function POST(request: NextRequest) {
     // If the query is code-related, try routing to OpenCode first
     // NOTE: Phase A already handles this via classifyIntent() above (intent === 'procedural')
     // This is a safety net for when classifyIntent defaults to 'factual' but isCodeQuery still matches
-    if (intent !== 'procedural' && isCodeQuery(lastUserContent)) {
+    // FIX 2026-08-28: same guard as Phase A — agent có provider/model → ReAct loop xử lý
+    // (thực thi tool thật trong workspace) thay vì canned OpenCode session.
+    if (intent !== 'procedural' && isCodeQuery(lastUserContent) && !hasAgentProviderModel) {
       const opencodeResponse = await routeToOpenCode(lastUserContent, model, sessionId, messages, agentProfileId, teamMode, teamName)
       if (opencodeResponse) {
         return opencodeResponse
@@ -712,7 +821,7 @@ export async function POST(request: NextRequest) {
     // Phase 3+: Agent with configured provider/model → use ReAct loop for tool execution
     // This enables agents like Omega to actually USE their declared tools (opencode, knowledge_search, tavily, etc.)
     // instead of just having them in prompts. Falls back to /api/query if the ReAct loop fails.
-    const hasAgentProviderModel = agentProvider && agentModel
+    // (hasAgentProviderModel declared earlier — Phase A procedural guard)
 
     if (hasAgentProviderModel) {
       console.log(`[OpenClaw Chat] ReAct loop: Agent using own provider/model (${agentProvider}/${agentModel})`)

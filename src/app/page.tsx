@@ -62,6 +62,18 @@ import { DiffViewer } from '@/components/code-editor/DiffViewer'
 import { PendingEditModal } from '@/components/code-editor/PendingEditModal'
 import { SearchPanel } from '@/components/code-editor/SearchPanel'
 
+// ==================== HELPERS ====================
+
+/**
+ * FIX 2026-08-28 (Windows cross-platform): rút tên file/thư mục cuối từ path
+ * bất kể separator. `path.split('/').pop()` sai trên Windows (backslash) →
+ * folderName/badge hiện nguyên path thay vì tên. Chấp nhận cả "/" và "\".
+ */
+function baseNameOf(p: string): string {
+  const parts = (p || '').split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] || p
+}
+
 // ==================== TYPES ====================
 
 interface HealthResponse {
@@ -11566,7 +11578,7 @@ function CodeTabContent() {
     setShowFolderPicker(false)
     toast({ title: `Đã chọn workspace: ${folderPath}` })
     try {
-      const folderName = folderPath.split('/').pop() || folderPath
+      const folderName = baseNameOf(folderPath) // FIX Windows: split('/') sai với backslash
       const createRes = await authedFetch('/api/workspace', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -11646,7 +11658,7 @@ function CodeTabContent() {
       })
       const data = await res.json()
       if (data.success) {
-        toast({ title: 'Đã lưu file', description: target.path.split('/').pop() || target.path })
+        toast({ title: 'Đã lưu file', description: baseNameOf(target.path) || target.path })
         // originalContent = what was actually saved; if the user typed more
         // while the request was in flight, the tab correctly stays dirty.
         setOpenFiles(prev => prev.map((f, i) => (i === targetIdx
@@ -12189,8 +12201,21 @@ function CodeTabContent() {
         }
         // Load diagnostics for this file
         await loadDiagnostics()
+      } else {
+        // FIX 2026-08-28: read fail (404/413/...) — trước đây im lặng hoàn toàn,
+        // user bấm file không thấy gì (không editor, không lỗi). Giờ hiện toast
+        // với error từ server để chẩn đoán được (VD Windows path bug, file >1MB...).
+        console.error('[FileSelect] read failed:', path, data)
+        toast({
+          title: 'Không đọc được file',
+          description: `${data?.error || `HTTP ${res.status}`} — ${path.split(/[\\/]/).pop()}`,
+          variant: 'destructive',
+        })
       }
-    } catch {
+    } catch (err) {
+      // FIX 2026-08-28: network/parse exception cũng hiện lỗi (trước đây swallow)
+      console.error('[FileSelect] exception:', err)
+      toast({ title: 'Lỗi tải file', description: String(err instanceof Error ? err.message : err), variant: 'destructive' })
     } finally {
       setFileLoading(false)
     }
@@ -13005,7 +13030,7 @@ function CodeTabContent() {
             </Button>
             {workspaceRoot && (
               <Badge className="text-[8px] bg-emerald-950/50 text-emerald-400 border border-emerald-400/35 max-w-[200px] truncate" title={workspaceRoot}>
-                📁 {workspaceRoot.split('/').pop() || workspaceRoot}
+                📁 {baseNameOf(workspaceRoot) || workspaceRoot}
               </Badge>
             )}
             <div className="ml-auto flex items-center gap-1.5">
@@ -13224,7 +13249,7 @@ function CodeTabContent() {
                       <>
                         <p className="text-[11px] font-medium text-stone-400">Chưa có ứng dụng để preview</p>
                         <p className="text-[10px] text-stone-600 mt-1.5 max-w-[280px]">
-                          Thư mục <span className="text-emerald-400 font-mono">{workspaceRoot.split('/').pop()}</span> chưa có dev server đang chạy.
+                          Thư mục <span className="text-emerald-400 font-mono">{baseNameOf(workspaceRoot)}</span> chưa có dev server đang chạy.
                         </p>
                         <p className="text-[10px] text-stone-600 mt-1">
                           Chạy <span className="text-emerald-400 font-mono">npm run dev</span> hoặc <span className="text-emerald-400 font-mono">bun dev</span> trong Terminal, sau đó bấm Thử lại.
@@ -13552,7 +13577,7 @@ function CodeTabContent() {
               <span className="text-sm font-semibold text-stone-100">Terminal</span>
               {workspaceRoot && (
                 <Badge className="text-[8px] bg-emerald-950/50 text-emerald-400 border border-emerald-400/35 max-w-[180px] truncate" title={workspaceRoot}>
-                  📂 {workspaceRoot.split('/').pop() || workspaceRoot}
+                  📂 {baseNameOf(workspaceRoot) || workspaceRoot}
                 </Badge>
               )}
             </div>

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { readFileContent } from '@/lib/opencode'
 import { readFile, stat } from 'fs/promises'
-import { join, resolve, extname } from 'path'
+import { join, resolve, extname, isAbsolute } from 'path'
 import { existsSync } from 'fs'
 
 export const dynamic = 'force-dynamic'
@@ -24,7 +24,11 @@ export async function GET(request: Request) {
 
   // Custom root mode — read from any local path
   if (customRoot) {
-    const resolvedPath = filePath.startsWith('/') ? resolve(filePath) : resolve(join(customRoot, filePath))
+    // FIX 2026-08-28 (Windows): file tree trên Windows trả về path kiểu "C:\\Users\\...\\file.ts"
+    // (backslash + drive letter). Kiểm tra `startsWith('/')` là Unix-only → luôn FALSE trên
+    // Windows → rơi vào join(customRoot, <absolute-path>) → path kép sai ("C:\\proj\\C:\\proj\\f.ts")
+    // → 404 → editor KHÔNG HIỆN nội dung file (symptom user báo). isAbsolute() xử lý cả 2 OS.
+    const resolvedPath = isAbsolute(filePath) ? resolve(filePath) : resolve(join(customRoot, filePath))
 
     // Security: prevent reading critical system files
     const BLOCKED_PATHS = ['/etc/shadow', '/etc/passwd', '/root/.ssh', '/root/.gnupg']
