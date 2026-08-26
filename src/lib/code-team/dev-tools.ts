@@ -1437,19 +1437,20 @@ export async function gatewayTool(args: { name: string; args?: Record<string, un
 // ==================== v2.1 Phase 1a: SHELL + TODO + (quality gate is in workflow-engine) ====================
 
 /**
- * shell — Sandboxed bash with timeout + working-dir lock + structured receipt.
+ * shell — Bash with timeout + structured receipt.
  *
  * Replaces 5 of v1's specialized tools (install_package, read_logs, lint,
  * type_check, db_query, env_update) — Claude Code/Z.ai Code pattern.
  *
- * Security:
- * - Refuse `sudo`, `rm -rf /`, fork bombs (`:(){ :|:& };:`), `dd of=/dev/`
- * - Working dir locked to OPENCODE_WORKSPACE (default process.cwd())
+ * Update 2026-08-29 (user request): KHÔNG chặn sudo/rm -rf /, KHÔNG khóa cwd
+ * trong workspace root — user tự chịu trách nhiệm. cwd mặc định vẫn là
+ * workspace root (tiện dụng), nhưng absolute cwd ở đâu cũng được.
+ *
  * - 5min default timeout, max 10min, SIGTERM then SIGKILL after 5s grace
  * - stdout/stderr truncated to 30KB with `cursor` for next call
  * - Shell metacharacters ALLOWED (|, &&, ;, >) — needed for `npm run build && npm test`
  *
- * Feature flag: ENABLE_SHELL_TOOL (off by default per D11 principle)
+ * Feature flag: ENABLE_SHELL_TOOL
  *
  * Returns (D2 structured receipt):
  *   { success, exit_code, stdout, stderr, duration_ms, truncated, cursor, cwd }
@@ -1466,27 +1467,10 @@ export async function shell(args: {
   }
 
   const command = args.command
+  // cwd: mặc định workspace root (tiện cho relative paths); absolute path ở đâu
+  // cũng được (user request 2026-08-29 — không khóa cwd trong root).
   const root = await resolveWorkspaceRoot()
-  const cwd = args.cwd ? path.resolve(root, args.cwd) : root
-  // Guard: refuse cwd outside workspace root
-  if (cwd !== root && !cwd.startsWith(root + path.sep)) {
-    return { success: false, error: `cwd escapes workspace root: ${args.cwd}` }
-  }
-
-  // Guard: refuse dangerous commands
-  const dangerousPatterns = [
-    { pattern: /\bsudo\b/, reason: 'sudo is forbidden' },
-    { pattern: /\brm\s+-rf\s+\/(\s|$)/, reason: 'rm -rf / is forbidden (refusing to nuke root)' },
-    { pattern: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;/, reason: 'fork bomb detected' },
-    { pattern: /\bdd\s+.*of=\/dev\//, reason: 'dd to /dev/ is forbidden' },
-    { pattern: /\bmkfs\b/, reason: 'mkfs is forbidden' },
-    { pattern: />\s*\/dev\/sd[a-z]/, reason: 'write to raw disk forbidden' },
-  ]
-  for (const { pattern, reason } of dangerousPatterns) {
-    if (pattern.test(command)) {
-      return { success: false, error: `Command refused: ${reason}` }
-    }
-  }
+  const cwd = args.cwd ? path.resolve(args.cwd) : root
 
   // Timeout: 5min default, 10min max
   const timeoutMs = Math.min(Math.max(args.timeout_ms ?? 300_000, 1_000), 600_000)

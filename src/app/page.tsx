@@ -12041,6 +12041,30 @@ function CodeTabContent() {
     return () => clearInterval(interval)
   }, [loadStatus, loadFileTree, loadSessions, loadMcpStatus, loadTerminal, loadDiagnostics, loadGitStatus, loadKbContext])
 
+  // 2026-08-29 — Sync active workspace TỪ DB khi localStorage trống (máy mới /
+  // browser mới / cleared storage). Trước đây UI chỉ đọc localStorage → desync
+  // với backend (agents dùng active workspace trong DB, UI thì rỗng).
+  // KHÔNG override nếu localStorage đã có giá trị (tôn trọng lựa chọn local).
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const localRoot = (() => { try { return localStorage.getItem('smolab_layout_opencode_root') } catch { return null } })()
+      if (localRoot) return // localStorage có sẵn → đã được set ở state init
+      ;(async () => {
+        try {
+          const res = await authedFetch('/api/workspace')
+          if (!res.ok) return
+          const d = await res.json().catch(() => null) as { ok?: boolean; data?: { active?: { rootPath?: string } | null } } | null
+          const dbRoot = d?.data?.active?.rootPath
+          if (d?.ok && dbRoot) {
+            setWorkspaceRoot(dbRoot)
+            console.log('[Code] Restored workspace from DB active workspace:', dbRoot)
+          }
+        } catch { /* offline — keep empty state */ }
+      })()
+    }, 0)
+    return () => clearTimeout(t)
+  }, [])
+
   // Reload file tree when workspace root changes
   useEffect(() => {
     if (workspaceRoot) {

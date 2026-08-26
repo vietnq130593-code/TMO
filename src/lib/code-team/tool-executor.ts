@@ -802,12 +802,12 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'shell',
-      description: 'Sandboxed bash với timeout 5min (max 10min) + working-dir lock. Cho phép metacharacters (|, &&, ;, >). Refuse sudo/rm -rf //fork bomb/dd of=/dev//mkfs. Trả về D2 structured receipt {success, exit_code, stdout, stderr, duration_ms, truncated, cursor, cwd}. Thay thế 5 v1 tools (install_package, read_logs, lint, type_check, db_query).',
+      description: 'Bash với timeout 5min (max 10min). Cho phép metacharacters (|, &&, ;, >). cwd mặc định = workspace root, có thể truyền cwd absolute ở bất kỳ đâu. Trả về D2 structured receipt {success, exit_code, stdout, stderr, duration_ms, truncated, cursor, cwd}. Thay thế 5 v1 tools (install_package, read_logs, lint, type_check, db_query).',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string', description: 'Shell command. Ví dụ: "bun add bcrypt", "bun run lint", "tsc --noEmit", "git status"' },
-          cwd: { type: 'string', description: 'Working directory relative to OPENCODE_WORKSPACE (default: workspace root)' },
+          cwd: { type: 'string', description: 'Working directory (mặc định: workspace root). Relative → resolve theo workspace root; absolute → dùng nguyên (chạy ở bất kỳ đâu).' },
           timeout_ms: { type: 'number', description: 'Timeout ms (default 300000=5min, max 600000=10min). SIGTERM then SIGKILL after 5s grace.' },
           env: { type: 'object', description: 'Extra env vars (key-value)', additionalProperties: { type: 'string' } },
           stdin: { type: 'string', description: 'Stdin input cho command (vd password prompt)' },
@@ -1878,93 +1878,28 @@ async function executeFileWrite(filePath: string, content: string): Promise<{ su
 }
 
 /**
- * Execute a bash command safely.
- * Security: Only allows pre-approved commands.
+ * Execute a bash command (legacy v1 path — opencode action='bash').
+ *
+ * 2026-08-29 (user request): delegate toàn bộ sang v2 shell() trong dev-tools.ts
+ * — KHÔNG còn command whitelist, KHÔNG chặn sudo/rm -rf /, KHÔNG chặn shell
+ * metacharacters. cwd = workspace root (active), timeout 5min. Kết quả map về
+ * shape legacy {success, output?, error?}.
  */
 async function executeBash(command: string): Promise<{ success: boolean; output?: string; error?: string }> {
   if (!command) return { success: false, error: 'Command is required' }
 
-  // Security: Whitelist of allowed commands
-  // NOTE: 'node' is excluded because `node -e "..."` can execute arbitrary code.
-  //       'cat'/'head'/'tail'/'grep' are excluded — use opencode read instead.
-  //       'npx'/'bunx' are excluded — can download+execute arbitrary npm packages.
-  const allowedPrefixes = [
-    'npm run',
-    'npm test',
-    'npm lint',
-    'bun run',
-    'bun test',
-    'bun lint',
-    'tsc',
-    'eslint',
-    'prettier',
-    'echo',
-    'ls',
-    'wc',
-    'rg',       // ripgrep — search only
-    'which',
-    'pwd',
-    'prisma',
-    'git status',
-    'git diff',
-    'git log',
-  ]
-
-  // Block dangerous flags that could allow code execution or file access
-  const dangerousFlags = ['-e ', '--eval ', '-r ', '--require ', '-p ', '--print ']
-  const normalizedCmd = command.trim()
-  const isAllowed = allowedPrefixes.some(prefix => normalizedCmd.startsWith(prefix))
-  const usesDangerousFlag = dangerousFlags.some(flag => normalizedCmd.includes(flag))
-
-  // Security: Block shell metacharacters that enable command chaining/injection
-  // These allow bypassing the whitelist by chaining additional commands:
-  //   "npm run build; rm -rf /"   →  ;  chains commands
-  //   "git status && cat /etc/p"  →  && chains on success
-  //   "echo hi | bash"            →  |  pipes output
-  //   "tsc || rm -rf /"           →  || chains on failure
-  //   "echo $(cat /etc/passwd)"   →  $() command substitution
-  //   "echo `cat /etc/passwd`"    →  backtick command substitution
-  //   "echo hi > /etc/passwd"     →  >  redirect write
-  //   "echo hi >> /etc/passwd"    →  >> redirect append
-  const shellMetacharacters = /(;|&&|\|\||\||`|\$\(|\$\{|>|>>)/
-  const usesShellMetacharacters = shellMetacharacters.test(normalizedCmd)
-
-  if (!isAllowed || usesDangerousFlag || usesShellMetacharacters) {
-    return {
-      success: false,
-      error: `Command not allowed: "${normalizedCmd.slice(0, 100)}". ${!isAllowed ? 'Prefix not in whitelist.' : ''} ${usesDangerousFlag ? 'Dangerous flag detected.' : ''} ${usesShellMetacharacters ? 'Shell metacharacter (;, &&, ||, |, `, $(), >, >>) detected — command chaining is forbidden.' : ''}`,
-    }
+  const receipt = await executeShellFn({ command }) as {
+    success?: boolean
+    exit_code?: number
+    stdout?: string
+    stderr?: string
+    duration_ms?: number
   }
-
-  try {
-    const { exec } = await import('child_process')
-    const { promisify } = await import('util')
-    const execAsync = promisify(exec)
-
-    const { stdout, stderr } = await execAsync(normalizedCmd, {
-      cwd: process.cwd(),
-      timeout: 30000,
-      maxBuffer: 1024 * 1024, // 1MB
-    })
-
-    const output = [
-      stdout ? `STDOUT:\n${stdout}` : '',
-      stderr ? `STDERR:\n${stderr}` : '',
-    ].filter(Boolean).join('\n')
-
-    return { success: true, output: output || '(no output)' }
-  } catch (err) {
-    const error = err as { stdout?: string; stderr?: string; message?: string }
-    const output = [
-      error.stdout ? `STDOUT:\n${error.stdout}` : '',
-      error.stderr ? `STDERR:\n${error.stderr}` : '',
-    ].filter(Boolean).join('\n')
-
-    return {
-      success: false,
-      output: output || undefined,
-      error: `Command failed: ${error.message}`,
-    }
+  const output = [receipt.stdout, receipt.stderr].filter(Boolean).join('\n').trim()
+  return {
+    success: receipt.success === true,
+    output: output || undefined,
+    error: receipt.success === true ? undefined : (receipt.stderr?.trim() || `exit_code=${receipt.exit_code ?? 'unknown'}`),
   }
 }
 

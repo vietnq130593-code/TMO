@@ -47,6 +47,9 @@ import {
 import { flagMode, isFlagEnabled } from '@/lib/feature-flags'
 // Phase 6/7 (rebuild) — workspace root follows the USER's ACTIVE workspace
 import { resolveWorkspaceRoot } from './workspace-root'
+// 2026-08-29 — Team Code agents cũng cần biết workspace root + cấu trúc cấp 1
+// (user request: mọi agents + team code đều nắm được thư mục đã chọn).
+import { buildWorkspaceContext } from '@/lib/workspace/workspace-context'
 import { exec, execFile } from 'child_process'
 import { promisify } from 'util'
 
@@ -1327,6 +1330,18 @@ export async function runAgentStep(params: {
     systemPrompt += ctx.skillsContext
   }
 
+  // 2026-08-29 — WORKSPACE CONTEXT cho Team Code (parity với /api/openclaw/chat):
+  // root path + cấu trúc cấp 1 + hướng dẫn tool_call format. Trước đây chỉ
+  // agents độc lập (chat route) được inject — team Code bị bỏ sót.
+  try {
+    const wsCtx = await buildWorkspaceContext()
+    if (wsCtx.text) {
+      systemPrompt += `\n\n${wsCtx.text}`
+    }
+  } catch (err) {
+    console.warn('[Workflow] workspace context inject failed (non-blocking):', err instanceof Error ? err.message : String(err))
+  }
+
   // ━━━ Phase 1c: Native Function Calling setup ━━━
   // Mode: 'off' (regex only) | 'dual' (native preferred, regex fallback) | 'strict' (native only)
   // When dual/strict: append tool schemas to system prompt (defense in depth) AND pass
@@ -2013,7 +2028,7 @@ function parseToolCallsFromOutput(output: string): Array<{ id: string; name: str
 
   // Pattern 2: Direct tool invocation like opencode({...})
   if (calls.length === 0) {
-    const validToolNames = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview']
+    const validToolNames = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview']
     const regex2 = new RegExp(`(${validToolNames.join('|')})\\s*\\(\\s*\\{`, 'g')
     let match2
     while ((match2 = regex2.exec(output)) !== null) {

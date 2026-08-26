@@ -175,7 +175,7 @@ const LOCAL_TOOLS = [
   // ===== P2: gateway proxy =====
   { name: 'gateway_tool', category: 'Gateway', description: 'Proxy tới 1 trong 36 gateway-bridge tools (web_search, exec, read, write, browser...).', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: '', hasApiKey: true },
   // ===== v2.1 Phase 1a: shell + todo (Claude Code parity) =====
-  { name: 'shell', category: 'Shell', description: 'Sandboxed bash (5min timeout, allow metacharacters, refuse sudo/rm -rf /). Flag: ENABLE_SHELL_TOOL.', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: 'ENABLE_SHELL_TOOL', hasApiKey: true },
+  { name: 'shell', category: 'Shell', description: 'Bash (5min timeout, allow metacharacters; cwd mặc định workspace root, absolute OK; không chặn lệnh). Flag: ENABLE_SHELL_TOOL.', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: 'ENABLE_SHELL_TOOL', hasApiKey: true },
   { name: 'todo_write', category: 'Planning', description: 'Claude Code-style batch upsert task list. Flag: ENABLE_TODO_TOOL.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: 'ENABLE_TODO_TOOL', hasApiKey: true },
   { name: 'todo_read', category: 'Planning', description: 'Đọc task list với status breakdown. Flag: ENABLE_TODO_TOOL.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: 'ENABLE_TODO_TOOL', hasApiKey: true },
   // ===== v2.1 Phase 1b.1: unified web (consolidate tavily/serper/jina) =====

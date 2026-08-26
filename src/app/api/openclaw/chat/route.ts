@@ -35,7 +35,7 @@ import { classifyIntent, searchUserKB } from '@/lib/kb-routing'
 import { rewriteQuery } from '@/lib/kb-routing/query-rewriter'
 import { isFlagEnabled } from '@/lib/feature-flags'
 import { writebackToKBTransactionally } from '@/lib/kb-routing/transactional-writeback'
-import { getActiveWorkspaceRoot } from '@/lib/workspace/workspace-manager'
+import { buildWorkspaceContext } from '@/lib/workspace/workspace-context'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,80 +43,11 @@ export const dynamic = 'force-dynamic'
 let memoryDecayCounter = 0
 
 // ============================================
-// WORKSPACE CONTEXT BUILDER (user request 2026-08-28)
-// "Khi tôi chọn một thư mục nghĩa là tôi muốn agents có thể truy cập, nắm được
-//  nội dung thư mục gốc, có các thư mục nào, file nào và có thể triển khai viết
-//  code và chạy các lệnh shell/terminal."
-// → Inject root path + cấu trúc cấp 1 + hướng dẫn tool calls vào system prompt
-//   để agent TRẢ LỜI ĐƯỢC câu hỏi về workspace và THỰC THI được file/shell ops
-//   (code-team tools đã resolve theo active workspace — xem workspace-root.ts).
+// WORKSPACE CONTEXT — đã chuyển sang module chia sẻ
+// src/lib/workspace/workspace-context.ts (2026-08-29) để MỌI agents dùng chung:
+//   - /api/openclaw/chat (agents độc lập + team Research + user-created)
+//   - code-team/workflow-engine runAgentStep (Team Code: TL/G1/G2-A/G2-B/G3)
 // ============================================
-
-/** Cache nhẹ 10s — system prompt được build mỗi request, tránh scan thư mục liên tục */
-let workspaceCtxCache: { text: string; root: string | null; at: number } | null = null
-const WORKSPACE_CTX_TTL_MS = 10_000
-
-async function buildWorkspaceContext(): Promise<{ text: string; root: string | null }> {
-  const now = Date.now()
-  if (workspaceCtxCache && now - workspaceCtxCache.at < WORKSPACE_CTX_TTL_MS) {
-    return { text: workspaceCtxCache.text, root: workspaceCtxCache.root }
-  }
-
-  let root: string | null = null
-  try {
-    root = await getActiveWorkspaceRoot()
-  } catch {
-    root = null
-  }
-  if (!root) {
-    workspaceCtxCache = { text: '', root: null, at: now }
-    return { text: '', root: null }
-  }
-
-  // Scan cấu trúc cấp 1 (skip hidden + node_modules để gọn prompt)
-  let listing: string[] = []
-  try {
-    const { readdirSync, statSync } = await import('fs')
-    const { join } = await import('path')
-    const entries = readdirSync(root)
-      .filter(name => !name.startsWith('.') && name !== 'node_modules')
-      .sort()
-      .slice(0, 40)
-    listing = entries.map(name => {
-      try {
-        return statSync(join(root!, name)).isDirectory() ? `${name}/` : name
-      } catch {
-        return name
-      }
-    })
-  } catch {
-    listing = []
-  }
-
-  const shellEnabled = isFlagEnabled('ENABLE_SHELL_TOOL')
-  const shellHint = shellEnabled
-    ? '  - tool_call: shell({"command": "npm run build"})  — chạy lệnh shell/terminal ngay trong root (đã chặn sudo/rm -rf /)'
-    : '  - shell: HIỆN TẮT — bật ENABLE_SHELL_TOOL=true trong .env rồi restart app'
-
-  const text = `--- Active Workspace (thư mục user đã chọn) ---
-Workspace root: ${root}
-Cấu trúc cấp 1 (${listing.length} mục${listing.length >= 40 ? ', đã giới hạn 40' : ''}):
-${listing.length > 0 ? listing.join('\n') : '(thư mục trống hoặc không đọc được)'}
-
-HƯỚNG DẪN làm việc với workspace:
-- Khi user hỏi về "thư mục hiện tại / thư mục gốc / root / project này" → chính là: ${root}
-- Khi user yêu cầu xem cấu trúc, đọc/hiệu chỉnh file, chạy lệnh → EMIT TOOL CALL đúng format:
-  - tool_call: file_list({"path": "."})  — liệt kê thư mục (path relative với root)
-  - tool_call: file_read({"path": "src/app/page.tsx"})  — đọc nội dung file
-  - tool_call: file_edit({"path": "...", "old_string": "...", "new_string": "..."})  — sửa file
-  - tool_call: grep({"pattern": "từ_khoá", "path": "src"})  — tìm kiếm text trong code
-${shellHint}
-- Tool gọi với path RELATIVE với root (hoặc absolute path nằm trong root). Tool tự resolve theo root — KHÔNG cần đoán đường dẫn tuyệt đối.
-- Sau khi có kết quả tool, TÓM TẮT cho user bằng tiếng Việt (cấu trúc cây, nội dung file, output lệnh...).`
-
-  workspaceCtxCache = { text, root, at: now }
-  return { text, root }
-}
 
 /**
  * Check if a chat exchange is too trivial to warrant memory extraction.

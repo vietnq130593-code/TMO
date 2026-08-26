@@ -136,6 +136,11 @@ export async function PATCH(request: NextRequest) {
     const { invalidateWorkspaceRootCache } = await import("@/lib/code-team/workspace-root");
     invalidateWorkspaceRootCache();
 
+    // 2026-08-29: invalidate cả workspace-context cache (system prompt của MỌI
+    // agents + team Code) để agent biết root mới ngay (không chờ TTL 10s).
+    const { invalidateWorkspaceContextCache } = await import("@/lib/workspace/workspace-context");
+    invalidateWorkspaceContextCache();
+
     return Response.json({ ok: true, data: workspace });
   } catch (err) {
     return Response.json(
