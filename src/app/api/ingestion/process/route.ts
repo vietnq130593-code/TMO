@@ -36,7 +36,7 @@ import { upsertDocument, getDocument, listDocuments, updateDocumentStatus, delet
 import type { DocumentPayload, ChunkPayload } from '@/lib/qdrant'
 import { db } from '@/lib/db'
 import { invalidateDocumentCache } from '@/lib/doc-cache'
-import { downloadFileFromR2, isR2Configured } from '@/lib/r2-storage'
+import { downloadFileFromR2, isR2Configured, listR2Objects } from '@/lib/r2-storage'
 import { resolveEntities as resolveEntitiesLib, type ResolvedEntity as ResolvedEntityLib, type DuplicatePair as DuplicatePairLib } from '@/lib/ingestion/entity-resolver'
 import { randomUUID } from 'crypto'
 import { readFile } from 'fs/promises'
@@ -1828,6 +1828,140 @@ async function generateAndSaveEmbeddings(chunks: Array<{ id: string; content: st
 
 // ==================== MAIN PIPELINE ====================
 
+/**
+ * FIX #6: Restore Qdrant + SQLite document metadata from R2 cloud backup.
+ *
+ * Handles the case where a document exists in R2 (the canonical PDF backup)
+ * but has no Qdrant metadata point and no SQLite Document row. This happens
+ * when:
+ *   - PDFs were uploaded to R2 from another instance (e.g. cloud sync) and the
+ *     Qdrant/SQLite metadata was never replicated locally.
+ *   - Sandbox reset wiped local state but R2 persisted (cloud survives resets).
+ *   - User imported a corpus of PDFs directly into R2 without going through
+ *     the upload endpoint.
+ *
+ * Without this fix, POST /api/ingestion/process fails with "Document not found"
+ * for any R2-only PDF — even though GET /api/ingestion/upload lists it (the
+ * list endpoint reads from R2 directly). The user clicks "Xử lý" on a
+ * legitimately uploaded PDF and nothing happens — no Neo4j nodes, no rels,
+ * no error visible in the UI (the error only appears in server logs).
+ *
+ * After restore: Qdrant has a 'uploaded'-status doc with r2_key set. The
+ * pipeline's Step 2 (Download PDF) will then auto-pull the PDF bytes from
+ * R2 when the local file is missing — so the rest of the pipeline (parse,
+ * chunk, extract, resolve, neo4j, embeddings) runs normally.
+ *
+ * Returns true on successful restore, false if the doc is not in R2 either.
+ */
+async function restoreDocumentMetadataFromR2(documentId: string): Promise<boolean> {
+  try {
+    if (!isR2Configured()) {
+      console.warn(`[Process] FIX #6: R2 not configured — cannot restore metadata for doc ${documentId.slice(0, 8)}...`)
+      return false
+    }
+
+    // List all R2 PDFs and find the one matching this docId.
+    // R2 key format: "pdfs/<docId>_<filename>.pdf"  (or "pdfs/<docId>.pdf" edge case)
+    const r2List = await listR2Objects('pdfs/', 500)
+    if (!r2List.success || r2List.objects.length === 0) {
+      console.warn(`[Process] FIX #6: R2 list empty or failed (${r2List.error || 'no objects'}) — cannot restore doc ${documentId.slice(0, 8)}...`)
+      return false
+    }
+
+    const match = r2List.objects.find(o => {
+      const basename = o.key.split('/').pop() || o.key
+      const underscoreIdx = basename.indexOf('_')
+      const id = underscoreIdx > 0
+        ? basename.substring(0, underscoreIdx)
+        : basename.replace(/\.pdf$/i, '')
+      return id === documentId
+    })
+
+    if (!match) {
+      console.warn(`[Process] FIX #6: No R2 object matches docId ${documentId.slice(0, 8)}... (scanned ${r2List.objects.length} R2 objects)`)
+      return false
+    }
+
+    // Parse filename from the R2 key.
+    const basename = match.key.split('/').pop() || match.key
+    const underscoreIdx = basename.indexOf('_')
+    const filename = underscoreIdx > 0 ? basename.substring(underscoreIdx + 1) : basename
+    const title = filename.replace(/\.pdf$/i, '')
+    const localPath = `${UPLOAD_DIR}/${basename}`
+    const createdAt = match.lastModified ? match.lastModified.toISOString() : new Date().toISOString()
+    const updatedAt = new Date().toISOString()
+
+    // Build payload — status='uploaded' so the pipeline treats this as a fresh doc.
+    // The processing_steps array is empty (no work done yet); the pipeline will
+    // populate it as each step runs. r2_key is critical: Step 2 uses it to
+    // auto-download the PDF bytes from R2 when the local file is missing.
+    const payload: DocumentPayload = {
+      title,
+      file_path: localPath,
+      domain: 'mixed',
+      page_count: undefined,
+      status: 'uploaded',
+      error_message: undefined,
+      processing_steps: [],
+      processing_percent: 0,
+      created_at: createdAt,
+      updated_at: updatedAt,
+      // r2_key is not part of the strict DocumentPayload type but qdrantDocToRecord
+      // reads it via Record<string, unknown> — preserve it so Step 2 can download.
+      ...({ r2_key: match.key, r2_uploaded: true } as Record<string, unknown>),
+    } as DocumentPayload
+
+    // Upsert Qdrant document metadata.
+    await upsertDocument(documentId, payload)
+    console.log(`[Process] FIX #6: Upserted Qdrant metadata for doc ${documentId.slice(0, 8)}... (title="${title}", r2_key="${match.key}", size=${match.size} bytes)`)
+
+    // Upsert SQLite Document row (mirror of reconcile route.ts).
+    try {
+      await db.document.upsert({
+        where: { id: documentId },
+        create: {
+          id: documentId,
+          title,
+          filePath: localPath,
+          domain: 'mixed',
+          status: 'uploaded',
+          userPaused: false,
+          processingSteps: '[]',
+          processingPercent: 0,
+          createdAt: new Date(createdAt),
+          updatedAt: new Date(updatedAt),
+        },
+        update: {
+          title,
+          filePath: localPath,
+          domain: 'mixed',
+          status: 'uploaded',
+          errorMessage: null,
+          userPaused: false,
+          processingSteps: '[]',
+          processingPercent: 0,
+          updatedAt: new Date(updatedAt),
+        },
+      })
+      console.log(`[Process] FIX #6: Upserted SQLite Document row for doc ${documentId.slice(0, 8)}...`)
+    } catch (dbErr) {
+      // SQLite failure is non-fatal — Qdrant is the canonical source for the
+      // pipeline. The SQLite row will be created later by updateDocProgress.
+      console.warn(`[Process] FIX #6: SQLite upsert failed for ${documentId.slice(0, 8)}... (non-fatal):`, dbErr instanceof Error ? dbErr.message : String(dbErr))
+    }
+
+    // Invalidate any cached document list so GET /api/ingestion/upload reflects
+    // the new Qdrant point immediately (otherwise the cache may serve the
+    // pre-restore view for up to the cache TTL).
+    try { invalidateDocumentCache() } catch { /* non-fatal */ }
+
+    return true
+  } catch (err) {
+    console.error(`[Process] FIX #6: Restore from R2 failed for doc ${documentId.slice(0, 8)}...:`, err instanceof Error ? err.message : String(err))
+    return false
+  }
+}
+
 async function runIngestionPipeline(documentId: string, slotIndex: number = -1): Promise<Record<string, unknown>> {
   const startTime = Date.now()
   let lastProvider = 'unknown'
@@ -1868,7 +2002,29 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       await new Promise(r => setTimeout(r, (attempt + 1) * 500)) // 500ms, 1000ms, 1500ms
       docPayload = await getDocument(documentId)
     }
-    if (!docPayload) throw new Error(`Document not found: ${documentId} (after 3 retries)`)
+    // FIX #6: If still not in Qdrant after retries, attempt to restore metadata
+    // from R2 cloud backup. This handles PDFs that exist in R2 (the canonical
+    // cloud backup) but have no Qdrant/SQLite metadata — e.g., uploaded to R2
+    // from another instance, or local state was wiped during sandbox reset
+    // while R2 persisted. Without this, POST /api/ingestion/process silently
+    // returns "Document not found" for legitimately uploaded PDFs — the UI
+    // shows the doc (because GET /api/ingestion/upload reads R2 directly) but
+    // processing it never starts, so Neo4j nodes + rels never increase.
+    if (!docPayload) {
+      console.log(`[Process] Document ${documentId.slice(0, 8)}... not found in Qdrant after 3 retries — attempting restore from R2 (FIX #6)`)
+      const restored = await restoreDocumentMetadataFromR2(documentId)
+      if (restored) {
+        // Restore created the Qdrant point — fetch it now so the pipeline
+        // proceeds normally (Step 2 will auto-download the PDF from R2).
+        docPayload = await getDocument(documentId)
+        if (docPayload) {
+          console.log(`[Process] FIX #6: Successfully restored metadata for doc ${documentId.slice(0, 8)}... from R2 — pipeline continuing with fresh 'uploaded' status`)
+        } else {
+          console.error(`[Process] FIX #6: Restore reported success but getDocument() still returned null — Qdrant may be lagging. Will throw "Document not found".`)
+        }
+      }
+    }
+    if (!docPayload) throw new Error(`Document not found: ${documentId} (after 3 retries + R2 restore attempt — verify the docId is correct and that R2 has a matching PDF)`)
     const document = qdrantDocToRecord(docPayload, documentId)
 
     // EARLY-EXIT GUARD #1: If the document is already fully indexed with ALL steps completed,
