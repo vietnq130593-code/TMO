@@ -2010,7 +2010,10 @@ async function tryNvidiaSlot(slotIndex: number, prompt: string, systemPrompt: st
     NVIDIA_EXTRACTION_MODELS,
     prompt,
     systemPrompt,
-    120000, // 120s timeout (increased from 60s — user Option C: nemotron-550b is ~9s/call, allow longer)
+    300000, // 300s timeout — nemotron-3-ultra-550b is a 550B reasoning model that
+            // emits chain-of-thought before JSON; complex extraction prompts can
+            // exceed 120s. 300s gives the model time to either complete or hit the
+            // max_tokens limit (→ truncation, handled by process route Fix #1).
     {},
     30000, // 30s rate limit cooldown — shorter to recover faster from temporary rate limits
     temperature ?? 0.1,

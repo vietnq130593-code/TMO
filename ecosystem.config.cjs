@@ -6,22 +6,22 @@
 // own internal `service-manager.ts`, so we intentionally do NOT also manage
 // them here (that would double-spawn and fight over ports 18789/18790/18791).
 //
-// Qdrant (vector DB) IS managed here because it is needed by the Knowledge Base
-// module (Database > Tài liệu) — without it the document list is always empty.
-// Binary downloaded to /home/z/qdrant/qdrant (v1.19.0).
+// Qdrant (vector DB) binary is installed at /home/z/qdrant/qdrant (v1.13.0).
+// It is needed by the Knowledge Base module (Database > Tài liệu) — without it
+// document ingestion/embeddings cannot run. Managed here so it auto-starts
+// alongside the UI. Storage in /home/z/tmo-app/qdrant-storage.
 //
 // Neo4j (AuraDB cloud) is NOT managed here — it is a managed cloud service.
 // Once AuraDB credentials are configured in .env, the app connects automatically.
 //
 // Usage:
 //   pm2 start ecosystem.config.cjs        # launch Qdrant + UI together
-//   pm2 status                             # see running processes
-//   pm2 logs theopusflashlite              # tail the UI logs
-//   pm2 logs qdrant                        # tail Qdrant logs
-//   pm2 restart theopusflashlite           # restart the UI
-//   pm2 restart qdrant                     # restart Qdrant
-//   pm2 delete all                         # stop everything
-//   pm2 save                               # persist process list
+//   pm2 status                            # see running processes
+//   pm2 logs theopusflashlite             # tail the UI logs
+//   pm2 logs qdrant                       # tail Qdrant logs
+//   pm2 restart theopusflashlite         # restart the UI
+//   pm2 delete all                        # stop everything
+//   pm2 save                              # persist process list
 //
 // The main app's stdout+stderr are written to /home/z/my-project/dev.log
 // (appended via merge_logs, never truncated on restart) so the sandbox
@@ -37,10 +37,10 @@ module.exports = {
         NODE_ENV: 'development',
         NEXT_TELEMETRY_DISABLED: '1',
         PORT: '3000',
-        // Explicit absolute DB path so the app always uses the SQLite database
-        // that was initialized by `bun run db:push`, regardless of the shell
-        // environment that launched PM2.
-        DATABASE_URL: 'file:/home/z/my-project/db/custom.db',
+        // Explicit absolute DB path so the app always uses the TMO SQLite
+        // database (separate from the sandbox's own project DB), regardless
+        // of the shell environment that launched PM2.
+        DATABASE_URL: 'file:/home/z/tmo-app/db/custom.db',
       },
       watch: false,
       autorestart: true,
@@ -56,7 +56,7 @@ module.exports = {
       kill_timeout: 8000,
     },
     {
-      // Qdrant vector database — stores document chunks + 1536-dim embeddings.
+      // Qdrant vector database — stores document chunks + embeddings.
       // Port: 6333 (REST) + 6334 (gRPC). Storage in /home/z/tmo-app/qdrant-storage.
       name: 'qdrant',
       script: '/home/z/qdrant/qdrant',
@@ -74,5 +74,5 @@ module.exports = {
       merge_logs: true,
       kill_timeout: 5000,
     },
-],
+  ],
 };

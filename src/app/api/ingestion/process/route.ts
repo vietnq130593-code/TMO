@@ -944,9 +944,11 @@ CRITICAL OUTPUT FORMAT (FIX 2026-08-27 — suppress chain-of-thought):
 Output ONLY valid JSON: { "entities": [{ "name": "", "type": "", "description": "", "properties": {} }], "relationships": [{ "source": "", "target": "", "type": "", "description": "" }], "domain": "..." }`
 }
 
-function parseLLMResponse(text: string): { entities: Array<{ name: string; type: string; description: string; properties: Record<string, unknown> }>; relationships: Array<{ source: string; target: string; type: string; description: string }>; domain: string } | null {
+function parseLLMResponse(text: string): { entities: Array<{ name: string; type: string; description: string; properties: Record<string, unknown> }>; relationships: Array<{ source: string; target: string; type: string; description: string }>; domain: string; truncatedBeforeRelationships?: boolean } | null {
   try {
     let rawJson: unknown = null
+    // FIX #1: track when truncation recovery was used → detect truncated-before-relationships
+    let recoveryUsed = false
     const codeBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/)
     if (codeBlockMatch) try { rawJson = JSON.parse(codeBlockMatch[1].trim()) } catch { /* ignore */ }
     if (!rawJson) { const jsonMatch = text.match(/\{[\s\S]*\}/); if (jsonMatch) try { rawJson = JSON.parse(jsonMatch[0]) } catch { /* ignore */ } }
@@ -974,6 +976,7 @@ function parseLLMResponse(text: string): { entities: Array<{ name: string; type:
         partial += '}'.repeat(Math.max(0, openBrace - closeBrace))
         try {
           rawJson = JSON.parse(partial)
+          recoveryUsed = true
           console.log(`[Parse] Recovered truncated JSON: added ${Math.max(0, openBracket - closeBracket)} ']' + ${Math.max(0, openBrace - closeBrace)} '}' (original length=${text.length})`)
         } catch (recoverErr) {
           // JSON vẫn lỗi — ghi log ngắn để chẩn đoán thay vì nuốt im lặng
@@ -1022,7 +1025,16 @@ function parseLLMResponse(text: string): { entities: Array<{ name: string; type:
         }
       }
     }
-    return { entities: normalizedEntities, relationships: normalizedRelationships, domain: typeof parsed.domain === 'string' ? parsed.domain : '' }
+    // FIX #1: detect truncation-before-relationships — the model output was cut at
+    // max_tokens BEFORE it could emit the relationships array. The truncation
+    // recovery "succeeded" (valid JSON) but silently produced relationships: [].
+    // This is the root cause of Neo4j node count rising while relationship count
+    // stays flat. The caller retries with a relationships-only prompt (Fix #1b).
+    const truncatedBeforeRelationships = recoveryUsed && normalizedEntities.length > 0 && normalizedRelationships.length === 0
+    if (truncatedBeforeRelationships) {
+      console.warn(`[Parse] TRUNCATION-BEFORE-RELATIONSHIPS detected: recovered JSON has ${normalizedEntities.length} entities but 0 relationships (recoveryUsed=true). Caller will retry relationships-only extraction.`)
+    }
+    return { entities: normalizedEntities, relationships: normalizedRelationships, domain: typeof parsed.domain === 'string' ? parsed.domain : '', truncatedBeforeRelationships }
   } catch { return null }
 }
 
@@ -1081,10 +1093,61 @@ async function extractFromChunk(chunkContent: string, domain: DocumentDomain, ch
       properties: (e.properties && typeof e.properties === 'object' && !Array.isArray(e.properties) ? e.properties : {}) as Record<string, string | number | boolean>,
       confidenceScore, source: `${provider}/${model}`, domain,
     }))
-    const relationships: ExtractedRelationship[] = (parsed.relationships || []).filter(r => r.source && r.target && r.source.trim() && r.target.trim()).map(r => ({
+    let relationships: ExtractedRelationship[] = (parsed.relationships || []).filter(r => r.source && r.target && r.source.trim() && r.target.trim()).map(r => ({
       source: r.source.trim(), target: r.target.trim(), type: normalizeRelationshipType(r.type || ''),
       description: (r.description || '').trim(), confidenceScore, source_provider: `${provider}/${model}`,
     }))
+
+    // FIX #1b: If the JSON was truncated BEFORE relationships were emitted, the
+    // relationships array is empty even though entities exist. Retry the LLM call
+    // ONCE with a focused "relationships-only" prompt (listing the extracted
+    // entities) to recover the lost relationship data. This is the primary fix
+    // for the "entities increase but relationships stay flat" symptom.
+    if (parsed.truncatedBeforeRelationships && entities.length > 0 && relationships.length === 0) {
+      try {
+        const entityList = entities.map((e, i) => `${i + 1}. ${e.name} (${e.type})`).join('\n')
+        const retrySystem = `You are a relationship extractor. The previous extraction was truncated before relationships were emitted. Given the entities below, output ONLY a JSON array of relationships. Format: [{"source":"<exact entity name>","target":"<exact entity name>","type":"<RELATIONSHIP_TYPE>","description":"<short>"}]. Source and target MUST exactly match entity names from the list. Output ONLY the JSON array — no code fences, no explanation, no surrounding object.`
+        const retryUser = `Entities extracted from chunk ${chunkIndex}:\n${entityList}\n\n--- Chunk text ---\n${chunkContent}`
+        const retryResult = slotIndex >= 0
+          ? await callLLMSlot(slotIndex, retryUser, retrySystem, 'extraction', { maxTokens: 8192 })
+          : await callLLM(retryUser, retrySystem, 'extraction', { maxTokens: 8192 })
+        if (retryResult.content) {
+          // Parse the retry response — it's a bare JSON array (not the full object)
+          const arrMatch = retryResult.content.match(/\[[\s\S]*\]/)
+          if (arrMatch) {
+            try {
+              const parsedArr = JSON.parse(arrMatch[0])
+              if (Array.isArray(parsedArr)) {
+                const retryRels: ExtractedRelationship[] = parsedArr
+                  .filter((r: Record<string, unknown>) => r && typeof r === 'object' && r.source && r.target)
+                  .map((r: Record<string, unknown>) => ({
+                    source: String(r.source).trim(),
+                    target: String(r.target).trim(),
+                    type: normalizeRelationshipType(String(r.type || r.relationship_type || r.relation || 'RELATED_TO')),
+                    description: String(r.description || '').trim(),
+                    confidenceScore, source_provider: `${provider}/${model}`,
+                  }))
+                  .filter((r: ExtractedRelationship) => r.source && r.target) as ExtractedRelationship[]
+                if (retryRels.length > 0) {
+                  console.log(`[Extract] Chunk ${chunkIndex}: truncation retry recovered ${retryRels.length} relationships (original parse had 0)`)
+                  relationships = retryRels
+                } else {
+                  console.warn(`[Extract] Chunk ${chunkIndex}: truncation retry returned 0 parseable relationships (retry content length=${retryResult.content.length})`)
+                }
+              }
+            } catch (retryParseErr) {
+              console.warn(`[Extract] Chunk ${chunkIndex}: truncation retry JSON parse failed:`, retryParseErr instanceof Error ? retryParseErr.message : String(retryParseErr))
+            }
+          } else {
+            console.warn(`[Extract] Chunk ${chunkIndex}: truncation retry produced no JSON array match (content preview: ${retryResult.content.slice(0, 200)}...)`)
+          }
+        } else {
+          console.warn(`[Extract] Chunk ${chunkIndex}: truncation retry returned empty content`)
+        }
+      } catch (retryErr) {
+        console.warn(`[Extract] Chunk ${chunkIndex}: truncation retry LLM call failed:`, retryErr instanceof Error ? retryErr.message : String(retryErr))
+      }
+    }
 
     // ORPHAN PREVENTION: Filter out entities that don't appear in any relationship.
     // The LLM prompt requires every entity to have a relationship, but LLMs don't always comply.
@@ -2260,6 +2323,15 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
         failedChunks++
       } else {
         successfulChunks++
+        // FIX #2: When entities exist but relationships are empty, the chunk is
+        // counted as "successful" but the relationship-save block below is
+        // silently skipped (relationships.length === 0 guard). This hides the
+        // data loss — most often caused by JSON truncation (Fix #1) not
+        // recovered by the retry (Fix #1b). Log a warning so the operator can
+        // see why Neo4j node count rises but relationship count stays flat.
+        if (extractionResult.entities.length > 0 && extractionResult.relationships.length === 0) {
+          console.warn(`[Process] Chunk ${chunk.chunk_index}: ${extractionResult.entities.length} entities but 0 relationships — relationship-save block will be SKIPPED. Likely JSON truncation not recovered by Fix #1b retry.`)
+        }
       }
       lastProvider = extractionResult.provider; lastModel = extractionResult.model
       chunksCompleted++
@@ -2657,6 +2729,41 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
     let hasResolvedEntities = resolveCompleted
     let hasNeo4jData = neo4jCompleted
     let hasEmbeddingsData = embeddingsCompleted
+
+    // FIX #4: Re-verify hasNeo4jData against actual Neo4j data — mirroring the
+    // resolve + embeddings COUNT() checks below. Previously this just copied
+    // the step status: once the neo4j step was wrongly marked 'completed' (via
+    // Fix #3's old fall-through on non-timeout errors), hasNeo4jData stayed true
+    // forever and the Neo4j write was skipped on EVERY subsequent re-run. Now we
+    // count semantic relationship edges (excluding CONTAINS doc→entity links)
+    // stored in Neo4j for this document, and compare with the SQLite buffer.
+    // If SQLite has relationships but Neo4j has 0 → the write failed silently →
+    // force re-run. If both are 0 → the issue is upstream (extraction), don't
+    // loop on Neo4j. If the COUNT query itself fails → force re-run to be safe.
+    if (neo4jCompleted) {
+      try {
+        const neo4jCountResult = await readCypher<{ cnt: number }>(
+          `MATCH ()-[r]->() WHERE r.documentId = $documentId AND type(r) <> 'CONTAINS' RETURN count(r) AS cnt`,
+          { documentId }
+        )
+        const neo4jRelCount = neo4jCountResult[0]?.cnt ?? 0
+        const sqliteRelCount = await db.localRelationship.count({ where: { documentId } })
+        if (sqliteRelCount > 0 && neo4jRelCount === 0) {
+          hasNeo4jData = false
+          console.warn(`[Process] Neo4j step marked completed but 0 semantic relationships in Neo4j while SQLite has ${sqliteRelCount} — re-running Neo4j step (Fix #4 caught a stale 'completed' status)`)
+        } else if (neo4jRelCount > 0) {
+          hasNeo4jData = true
+        } else {
+          // Both 0 — Neo4j is "complete" in the sense there's nothing to write.
+          // Missing relationships are an extraction issue (Fix #1), not Neo4j.
+          hasNeo4jData = true
+          console.log(`[Process] Neo4j step: 0 relationships in both Neo4j and SQLite (consistent — extraction produced no relationships for this doc)`)
+        }
+      } catch (countErr) {
+        console.warn(`[Process] Neo4j COUNT verification failed for doc ${documentId.slice(0, 8)}...: ${countErr instanceof Error ? countErr.message : String(countErr)} — forcing re-run to be safe (not trusting stale 'completed' status)`)
+        hasNeo4jData = false
+      }
+    }
 
     if (resolveCompleted) {
       const resolvedCount = await db.localResolvedEntity.count({
@@ -3205,8 +3312,49 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
             status: 'partial' as const, neo4jNodes, neo4jRelationships,
           }
         }
-        console.error(`[Process] Neo4j write error:`, neo4jErr instanceof Error ? neo4jErr.message : String(neo4jErr))
+        // FIX #3: NON-TIMEOUT Neo4j error (auth, connection, syntax, etc.).
+        // Previously this fell through to markStepCompleted() below — marking the
+        // step 'completed' with 0 nodes/0 edges. Combined with Fix #4 (hasNeo4jData
+        // not re-verifying with COUNT), this made Neo4j get skipped FOREVER on
+        // every subsequent re-run. Now: mark the step as 'error' (total failure)
+        // or 'partial' (some data written) and return early, so the document
+        // stays retryable instead of being wrongly marked 'completed'.
+        const neo4jErrMsg = neo4jErr instanceof Error ? neo4jErr.message : String(neo4jErr)
+        console.error(`[Process] Neo4j write FAILED (non-timeout) for document ${documentId}: ${neo4jErrMsg}`)
+        if (neo4jNodes === 0 && neo4jRelationships === 0) {
+          // Total failure — mark 'error' so the pipeline can retry (and Fix #4
+          // will also catch it if it ever gets wrongly marked 'completed' again).
+          steps = markStepError(steps, 'neo4j', `Neo4j write failed: ${neo4jErrMsg.slice(0, 150)}`)
+          await updateDocProgress(documentId, { status: 'error', steps, errorMessage: `Neo4j write failed: ${neo4jErrMsg}` })
+          return {
+            documentId, totalPages: document.page_count || 0, totalChunks: savedChunks.length, totalTokens: 0,
+            totalEntities: finalEntityCount || 0, totalRelationships: finalRelCount || 0,
+            resolvedEntities: pipelineResolvedCount, duplicatesFound: pipelineDuplicatesFound,
+            resolutionStats: pipelineResolutionStats,
+            successfulChunks, failedChunks, wasTimedOut: false,
+            warning: `Neo4j write failed: ${neo4jErrMsg}`,
+            embeddingsSaved: 0,
+            provider: lastProvider, model: lastModel, durationMs: Date.now() - startTime, status: 'error' as const,
+            neo4jNodes, neo4jRelationships,
+          }
+        }
+        // Partial data written despite the error — mark 'partial' (retryable) and return early.
+        // Do NOT continue to embeddings because Neo4j data is incomplete.
+        steps = markStepCompleted(steps, 'neo4j', `${neo4jNodes} nodes, ${neo4jRelationships} edges (partial — non-timeout error)`)
+        await updateDocProgress(documentId, { status: 'partial', steps })
+        return {
+          documentId, totalPages: document.page_count || 0, totalChunks: savedChunks.length, totalTokens: 0,
+          totalEntities: finalEntityCount || 0, totalRelationships: finalRelCount || 0,
+          resolvedEntities: pipelineResolvedCount, duplicatesFound: pipelineDuplicatesFound,
+          resolutionStats: pipelineResolutionStats,
+          successfulChunks, failedChunks, wasTimedOut: false,
+          warning: `Neo4j write partial: ${neo4jErrMsg}`,
+          embeddingsSaved: 0,
+          provider: lastProvider, model: lastModel, durationMs: Date.now() - startTime, status: 'partial' as const,
+          neo4jNodes, neo4jRelationships,
+        }
       }
+      // Reaching here means the Neo4j write SUCCEEDED (no error thrown) — safe to mark completed
       steps = markStepCompleted(steps, 'neo4j', `${neo4jNodes} nodes, ${neo4jRelationships} edges`)
       await updateDocProgress(documentId, { steps })
 
