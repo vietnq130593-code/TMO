@@ -22,7 +22,8 @@ import {
   Play as PlayIcon, Square, ScrollText, ArrowRight as ArrowRightIcon, Cpu as CpuIcon, Cable as CableIcon,
   GitCommit, History, Minimize2, ExternalLink as ExternalLinkIcon, GripHorizontal, ArrowDownToLine,
   Wifi, WifiOff,
-  Flame, Archive, Snowflake, Thermometer, FlaskConical, ShieldAlert, Swords
+  Flame, Archive, Snowflake, Thermometer, FlaskConical, ShieldAlert, Swords,
+  CloudDownload, CircleHelp
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -1141,7 +1142,8 @@ function ChatSection() {
                   )}
                 </div>
               )}
-              <p className="text-xs whitespace-pre-wrap leading-relaxed text-stone-300">{msg.content}</p>
+              {/* Chat font +2px (text-xs 12px → text-sm 14px) per user request 2026-08-27 */}
+              <p className="text-sm whitespace-pre-wrap leading-relaxed text-stone-300">{msg.content}</p>
               {msg.queryResult && (
                 <div className="mt-2 pt-2 border-t border-cyan-400/35">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -5394,7 +5396,7 @@ function LearningTabContent() {
 
   // Phase 2 SMOLAB Proposal 6 — Writeback Audit (PendingWriteback saga tracker)
   const [writebackAudit, setWritebackAudit] = useState<{
-    counts: { pending: number; partial: number; failed: number; completed: number; total: number }
+    counts: { pending: number; partial: number; failed: number; completed: number; needs_review: number; rejected: number; total: number }
     recent: Array<{
       batchId: string
       documentId: string
@@ -5406,6 +5408,18 @@ function LearningTabContent() {
     }>
   } | null>(null)
   const [reconciling, setReconciling] = useState(false)
+
+  // USER REQUEST 2026-08-27 — Gray-zone review (tri thức chờ phê duyệt) + cloud sync
+  const [reviewItems, setReviewItems] = useState<Array<{
+    batchId: string
+    query: string
+    agentName?: string
+    createdAt: string
+    entities: Array<{ name: string; type: string; description: string; confidence: number }>
+    relationships: Array<{ source: string; target: string; type: string; description: string; confidence: number }>
+  }>>([])
+  const [reviewActionLoading, setReviewActionLoading] = useState<string | null>(null)
+  const [cloudSyncLoading, setCloudSyncLoading] = useState(false)
 
   // Phase 2 SMOLAB Proposal 8 — Layer 9 Adaptation Intelligence (ExecutionMetrics
   // + FailurePattern + StrategyAdaptationLog + ML quality placeholders).
@@ -5538,6 +5552,86 @@ function LearningTabContent() {
       clearInterval(interval)
     }
   }, [])
+
+  // USER REQUEST 2026-08-27 — Fetch gray-zone review items (tri thức chờ phê duyệt).
+  // Items có confidence 0.3-0.5: Agent không chắc → hỏi user trước khi ghi vào KB.
+  useEffect(() => {
+    let cancelled = false
+    const fetchReviewItems = async () => {
+      try {
+        const res = await fetch('/api/storage/writeback-review?limit=20')
+        if (res.ok) {
+          const data = await res.json()
+          if (!cancelled && data.ok) setReviewItems(Array.isArray(data.items) ? data.items : [])
+        }
+      } catch (err) {
+        console.warn('[Review Items] fetch failed:', err)
+      }
+    }
+    fetchReviewItems()
+    const interval = setInterval(fetchReviewItems, 30000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [])
+
+  // USER REQUEST 2026-08-27 — Phê duyệt / từ chối tri thức vùng xám
+  const handleReviewAction = async (batchId: string, action: 'approve' | 'reject') => {
+    setReviewActionLoading(batchId)
+    try {
+      const res = await fetch('/api/storage/writeback-review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batchId, action }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        toast({
+          title: action === 'approve' ? '✅ Đã ghi vào Knowledge Base' : '🗑️ Đã bỏ tri thức này',
+          description: action === 'approve'
+            ? `Đã ghi ${data.entitiesWritten ?? 0} entities + ${data.relationshipsWritten ?? 0} relationships`
+            : 'Tri thức bị từ chối sẽ không được lưu vào KB',
+          duration: 4000,
+        })
+        // Refresh lists
+        setReviewItems(prev => prev.filter(r => r.batchId !== batchId))
+        try {
+          const auditRes = await fetch('/api/storage/reconcile-writebacks')
+          if (auditRes.ok) setWritebackAudit(await auditRes.json())
+        } catch { /* best-effort */ }
+      } else {
+        toast({ title: 'Lỗi xử lý', description: data.error || 'Không xác định', variant: 'destructive' })
+      }
+    } catch (err) {
+      console.error('[Review] Action failed:', err)
+      toast({ title: 'Lỗi kết nối', variant: 'destructive' })
+    }
+    setReviewActionLoading(null)
+  }
+
+  // USER REQUEST 2026-08-27 — Đồng bộ Memory/Knowledge từ Supabase Cloud về local
+  // (chat ở sandbox → memory push lên cloud → máy local pull về bằng nút này)
+  const handleCloudPull = async () => {
+    setCloudSyncLoading(true)
+    try {
+      const res = await fetch('/api/storage/supabase-sync?action=pull', { method: 'POST' })
+      const data = await res.json()
+      if (data.success) {
+        toast({
+          title: '☁️ Đã đồng bộ từ Cloud',
+          description: `Pull ${data.totalPulled ?? 0} records từ Supabase (push ${data.totalPushed ?? 0})`,
+          duration: 4000,
+        })
+      } else {
+        toast({ title: 'Đồng bộ Cloud thất bại', description: data.error || 'Supabase chưa cấu hình?', variant: 'destructive' })
+      }
+    } catch (err) {
+      console.error('[CloudSync] Pull failed:', err)
+      toast({ title: 'Lỗi kết nối Supabase', variant: 'destructive' })
+    }
+    setCloudSyncLoading(false)
+  }
 
   // Phase 2 SMOLAB Proposal 8 — Fetch Layer 9 metrics (30s auto-refresh)
   useEffect(() => {
@@ -5944,6 +6038,20 @@ function LearningTabContent() {
           <div className="flex items-center gap-2 mb-3">
             <GraduationCap className="h-4 w-4 text-amber-400" />
             <span className="text-sm font-semibold text-stone-100">Thống kê Học tập</span>
+            <div className="ml-auto">
+              {/* USER REQUEST 2026-08-27 — pull Memory/KB từ Supabase Cloud về máy local */}
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={cloudSyncLoading}
+                onClick={handleCloudPull}
+                className="h-6 px-2 text-[10px] bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25 hover:text-cyan-200 border border-cyan-500/25"
+                title="Pull toàn bộ Memory / Chat / Knowledge từ Supabase Cloud về máy này (chat ở sandbox cũng được load về)"
+              >
+                {cloudSyncLoading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <CloudDownload className="h-3 w-3 mr-1" />}
+                Đồng bộ từ Cloud
+              </Button>
+            </div>
           </div>
 
           {/* Stat cards */}
@@ -6038,6 +6146,96 @@ function LearningTabContent() {
         </div>
       </div>
 
+      {/* ===== 1a-2. KIẾN THỨC CHỜ PHÊ DUYỆT (USER REQUEST 2026-08-27) ===== */}
+      <div className="nc-wrap nc-violet">
+        <div className="nc-panel nc-sm nc-border-violet p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <CircleHelp className="h-4 w-4 text-violet-400" />
+            <span className="text-sm font-semibold text-stone-100">Kiến thức chờ phê duyệt</span>
+            <Badge className="text-[9px] h-4 px-1.5 bg-violet-950/50 text-violet-400 border-violet-400/35">
+              {reviewItems.length} batch
+            </Badge>
+          </div>
+          <p className="text-[10px] text-stone-400 mb-3 leading-relaxed">
+            Agent <span className="text-violet-300 font-medium">không chắc chắn</span> về những tri thức dưới đây (confidence 0.3–0.5) nên xếp hàng chờ bạn quyết định.
+            Tri thức đủ tin cậy (confidence &gt; 0.5) đã được <span className="text-emerald-300 font-medium">tự động ghi</span> vào Knowledge Base theo mặc định.
+          </p>
+
+          {reviewItems.length === 0 ? (
+            <div className="text-[10px] text-stone-500 italic text-center py-3 border border-dashed border-violet-500/20 rounded-lg">
+              Không có tri thức nào chờ phê duyệt — Agent tự tin về các kiến thức đã học gần đây.
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-96 overflow-y-auto pr-1" style={{ scrollbarWidth: 'thin' }}>
+              {reviewItems.map(item => (
+                <div key={item.batchId} className="p-2.5 bg-slate-950/50 border border-violet-500/20 rounded-lg">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <MessageSquare className="h-3 w-3 text-violet-400 flex-shrink-0" />
+                    <span className="text-[10px] text-stone-300 truncate flex-1" title={item.query}>
+                      "{item.query.length > 80 ? item.query.slice(0, 80) + '…' : item.query}"
+                    </span>
+                    {item.agentName && (
+                      <Badge className="text-[8px] h-3.5 px-1 bg-violet-950/50 text-violet-400 border-violet-400/30">{item.agentName}</Badge>
+                    )}
+                    <span className="text-[8px] text-stone-500 flex-shrink-0">{formatTime(item.createdAt)}</span>
+                  </div>
+
+                  {/* Entities */}
+                  {item.entities.length > 0 && (
+                    <div className="mb-1.5">
+                      <span className="text-[8px] text-stone-500 uppercase">Entities ({item.entities.length})</span>
+                      <div className="flex flex-wrap gap-1 mt-0.5">
+                        {item.entities.map((e, i) => (
+                          <Badge key={i} className="text-[8px] h-3.5 px-1 bg-slate-900/60 text-stone-300 border-slate-700 max-w-full" title={`${e.type}: ${e.description} (conf ${e.confidence.toFixed(2)})`}>
+                            {e.name} <span className="text-violet-400">{(e.confidence * 100).toFixed(0)}%</span>
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Relationships */}
+                  {item.relationships.length > 0 && (
+                    <div className="mb-2">
+                      <span className="text-[8px] text-stone-500 uppercase">Relationships ({item.relationships.length})</span>
+                      <div className="flex flex-wrap gap-1 mt-0.5">
+                        {item.relationships.map((r, i) => (
+                          <Badge key={i} className="text-[8px] h-3.5 px-1 bg-slate-900/60 text-stone-300 border-slate-700 max-w-full" title={`${r.description} (conf ${r.confidence.toFixed(2)})`}>
+                            {r.source} → {r.target} <span className="text-violet-400">{(r.confidence * 100).toFixed(0)}%</span>
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      disabled={reviewActionLoading === item.batchId}
+                      onClick={() => handleReviewAction(item.batchId, 'approve')}
+                      className="h-6 px-2.5 text-[10px] bg-emerald-600 hover:bg-emerald-500 text-white gap-1"
+                    >
+                      {reviewActionLoading === item.batchId ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                      Phê duyệt → ghi vào KB
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={reviewActionLoading === item.batchId}
+                      onClick={() => handleReviewAction(item.batchId, 'reject')}
+                      className="h-6 px-2.5 text-[10px] border-red-400/40 text-red-400 hover:bg-red-500/10 hover:text-red-300 gap-1"
+                    >
+                      <XCircle className="h-3 w-3" />
+                      Từ chối
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* ===== 1b. WRITEBACK AUDIT (Phase 2 SMOLAB Proposal 6) ===== */}
       <div className="nc-wrap nc-amber">
         <div className="nc-panel nc-sm nc-border-amber p-4">
@@ -6061,12 +6259,17 @@ function LearningTabContent() {
             </Button>
           </div>
 
-          {/* 4 stat tiles: pending / partial / failed / completed */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+          {/* 6 stat tiles: pending / needs_review / partial / failed / rejected / completed */}
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-3">
             <div className="p-2 bg-slate-950/50 border border-amber-500/15 rounded-lg text-center">
               <Clock className="h-3.5 w-3.5 mx-auto text-amber-400 mb-0.5" />
               <p className="text-base font-bold text-stone-100 tabular-nums">{writebackAudit?.counts?.pending ?? '—'}</p>
               <p className="text-[9px] text-stone-400 uppercase">Pending</p>
+            </div>
+            <div className="p-2 bg-slate-950/50 border border-violet-500/25 rounded-lg text-center">
+              <CircleHelp className="h-3.5 w-3.5 mx-auto text-violet-400 mb-0.5" />
+              <p className="text-base font-bold text-stone-100 tabular-nums">{writebackAudit?.counts?.needs_review ?? '—'}</p>
+              <p className="text-[9px] text-stone-400 uppercase">Chờ duyệt</p>
             </div>
             <div className="p-2 bg-slate-950/50 border border-amber-500/15 rounded-lg text-center">
               <AlertTriangle className="h-3.5 w-3.5 mx-auto text-orange-400 mb-0.5" />
@@ -6077,6 +6280,11 @@ function LearningTabContent() {
               <XCircle className="h-3.5 w-3.5 mx-auto text-red-400 mb-0.5" />
               <p className="text-base font-bold text-stone-100 tabular-nums">{writebackAudit?.counts?.failed ?? '—'}</p>
               <p className="text-[9px] text-stone-400 uppercase">Failed</p>
+            </div>
+            <div className="p-2 bg-slate-950/50 border border-amber-500/15 rounded-lg text-center">
+              <Trash2 className="h-3.5 w-3.5 mx-auto text-stone-500 mb-0.5" />
+              <p className="text-base font-bold text-stone-100 tabular-nums">{writebackAudit?.counts?.rejected ?? 0}</p>
+              <p className="text-[9px] text-stone-400 uppercase">Rejected</p>
             </div>
             <div className="p-2 bg-slate-950/50 border border-amber-500/15 rounded-lg text-center">
               <CheckCircle2 className="h-3.5 w-3.5 mx-auto text-emerald-400 mb-0.5" />
@@ -6095,6 +6303,8 @@ function LearningTabContent() {
                     b.status === 'completed' ? 'text-emerald-400 bg-emerald-950/30 border-emerald-400/30'
                     : b.status === 'failed' ? 'text-red-400 bg-red-950/30 border-red-400/30'
                     : b.status === 'partial' ? 'text-orange-400 bg-orange-950/30 border-orange-400/30'
+                    : b.status === 'needs_review' ? 'text-violet-400 bg-violet-950/30 border-violet-400/30'
+                    : b.status === 'rejected' ? 'text-stone-500 bg-stone-950/30 border-stone-700/30'
                     : 'text-amber-400 bg-amber-950/30 border-amber-400/30'
                   return (
                     <div key={b.batchId} className={`flex items-center gap-2 p-1.5 border rounded-md ${statusColor}`}>
@@ -7916,7 +8126,21 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
       })
-      .then(data => {
+      .then(async data => {
+        // FIX (user request 2026-08-27): restore feedback (👍/👎) state từ
+        // LearningLog — trước đây feedback chỉ nằm trong state React nên bị
+        // reset khi reload/switch session, trông như hệ thống không ghi nhận.
+        let feedbackMap: Record<string, 'positive' | 'negative'> = {}
+        try {
+          const fbRes = await fetch(`/api/openclaw/feedback?sessionId=${encodeURIComponent(currentSessionId)}`)
+          if (fbRes.ok) {
+            const fbData = await fbRes.json()
+            if (fbData?.feedback && typeof fbData.feedback === 'object') {
+              feedbackMap = fbData.feedback as Record<string, 'positive' | 'negative'>
+            }
+          }
+        } catch { /* feedback restore là best-effort */ }
+
         if (data.messages && Array.isArray(data.messages) && data.messages.length > 0) {
           const loaded: SmolabMessage[] = data.messages.map((m: {
             id: string
@@ -7949,6 +8173,8 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
               agentName: parsedMeta?.agentName as string | undefined,
               agentPosition: parsedMeta?.agentPosition as string | undefined,
               isTeamMessage: parsedMeta?.isTeamMessage as boolean | undefined,
+              // Khôi phục trạng thái like/dislike đã ghi nhận trước đó
+              feedback: (feedbackMap[m.id] as 'positive' | 'negative') ?? null,
             }
           })
           setMessages(loaded)
@@ -8784,7 +9010,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     setFeedbackLoading(messageId)
     try {
       const userMsg = messages.find(m => m.role === 'user' && messages.indexOf(m) < messages.findIndex(m2 => m2.id === messageId))
-      await fetch('/api/openclaw/feedback', {
+      const res = await fetch('/api/openclaw/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -8795,9 +9021,18 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
           agentResponse: msgContent,
         }),
       })
+      // FIX (user request 2026-08-27): kiểm tra res.ok — trước đây lỗi 500 vẫn hiện
+      // toast "Cảm ơn phản hồi!" khiến feedback trông như chỉ là giao diện.
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData?.error || `HTTP ${res.status}`)
+      }
       setMessages(prev => prev.map(m => m.id === messageId ? { ...m, feedback: type } : m))
       toast({ title: type === 'positive' ? '👍 Cảm ơn phản hồi!' : '👎 Đã ghi nhận góp ý', description: type === 'positive' ? 'Phản hồi giúp Agent cải thiện' : 'Agent sẽ học từ góp ý này', duration: 2000 })
-    } catch {}
+    } catch (err) {
+      console.error('[Feedback] Lỗi ghi nhận phản hồi:', err)
+      toast({ title: 'Không ghi nhận được phản hồi', description: err instanceof Error ? err.message : 'Lỗi hệ thống — thử lại sau.', variant: 'destructive', duration: 4000 })
+    }
     setFeedbackLoading(null)
   }, [messages, currentSessionId])
 
@@ -9452,9 +9687,9 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                             </div>
                           </div>
                         ) : msg.suggestionRejected ? (
-                          <p className="text-xs text-stone-400 italic">{msg.content}</p>
+                          <p className="text-sm text-stone-400 italic">{msg.content}</p>
                         ) : (
-                          <p className="text-xs whitespace-pre-wrap leading-relaxed text-stone-200">{msg.content}</p>
+                          <p className="text-sm whitespace-pre-wrap leading-relaxed text-stone-200">{msg.content}</p>
                         )}
                         {msg.toolCallInfo && (
                           <div className="mt-2 p-2 rounded-lg bg-slate-950/50 border border-stone-700/50 text-[9px] text-stone-400">
@@ -9467,7 +9702,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                       </div>
                     ) : msg.role === 'user' ? (
                       <div className="max-w-[85%] p-2.5 bg-gradient-to-r from-cyan-600/80 to-teal-700/80 text-white">
-                        <p className="text-xs whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                        <p className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                       </div>
                     ) : (
                     <div className={`max-w-[85%] p-2.5 ${
@@ -9514,9 +9749,9 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                         </div>
                       )}
 
-                      {/* Content */}
+                      {/* Content — chat font +2px (user request 2026-08-27) */}
                       {msg.role !== 'tool_call' && (
-                        <p className="text-xs whitespace-pre-wrap leading-relaxed text-stone-300">{msg.content}</p>
+                        <p className="text-sm whitespace-pre-wrap leading-relaxed text-stone-300">{msg.content}</p>
                       )}
 
                       {/* Sources */}
@@ -9571,11 +9806,16 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                       )}
 
                       {/* Feedback buttons for assistant messages */}
+                      {/* FIX (user request 2026-08-27): dùng `!= null` (loose equality) —
+                          msg.feedback là UNDEFINED trên message mới tạo (field optional),
+                          và `undefined !== null` là TRUE → nút bị disable VĨNH VIỄN,
+                          user không bao giờ bấm được (triệu chứng "chỉ có giao diện").
+                          `undefined != null` là FALSE → nút enable đúng. */}
                       {msg.role === 'assistant' && (
                         <div className="flex items-center gap-1 mt-2 pt-1.5 border-t border-cyan-400/25">
                           <button
                             onClick={() => handleFeedback(msg.id, 'positive', msg.content)}
-                            disabled={feedbackLoading === msg.id || msg.feedback !== null}
+                            disabled={feedbackLoading === msg.id || msg.feedback != null}
                             className={`p-1 transition-colors ${msg.feedback === 'positive' ? 'text-emerald-400' : 'text-stone-500 hover:text-emerald-400'}`}
                             title="Hữu ích"
                           >
@@ -9583,7 +9823,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                           </button>
                           <button
                             onClick={() => handleFeedback(msg.id, 'negative', msg.content)}
-                            disabled={feedbackLoading === msg.id || msg.feedback !== null}
+                            disabled={feedbackLoading === msg.id || msg.feedback != null}
                             className={`p-1 transition-colors ${msg.feedback === 'negative' ? 'text-red-400' : 'text-stone-500 hover:text-red-400'}`}
                             title="Cần cải thiện"
                           >
@@ -11295,6 +11535,8 @@ function CodeTabContent() {
   const [folderPickerPath, setFolderPickerPath] = useState('/home/z')
   const [folderPickerItems, setFolderPickerItems] = useState<Array<{ name: string; path: string; type: 'directory' | 'file' }>>([])
   const [folderPickerLoading, setFolderPickerLoading] = useState(false)
+  // Native OS folder dialog (user request 2026-08-27 — chọn thư mục qua dialog Windows/macOS/Linux)
+  const [nativeFolderLoading, setNativeFolderLoading] = useState(false)
   // Phase 8 compat: dirty-content of the ACTIVE tab (null = không có chỉnh sửa chưa lưu)
   const editedContent = activeOpenFile?.isDirty ? activeOpenFile.content : null
   const [isSaving, setIsSaving] = useState(false)
@@ -11457,6 +11699,40 @@ function CodeTabContent() {
       setTreeLoading(false)
     }
   }, [workspaceRoot])
+
+  // Native OS folder picker (user request 2026-08-27): mở dialog Windows/macOS/Linux
+  // thật trên máy chạy server → trả về absolute path → set workspace giống tree picker.
+  // Sandbox/headless không có display → fallback về tree picker trong app.
+  // (Đặt SAU loadFolderPicker/loadFileTree để tránh TDZ trong deps array.)
+  const handleNativeFolderPick = useCallback(async () => {
+    if (nativeFolderLoading) return
+    setNativeFolderLoading(true)
+    try {
+      const res = await authedFetch('/api/opencode/native-folder', { method: 'POST' })
+      const data = await res.json()
+      if (data.supported && data.path) {
+        await handleWorkspaceSelect(data.path)
+        loadFileTree()
+      } else if (data.canceled) {
+        // User đóng dialog — im lặng, không báo lỗi
+      } else if (!data.supported) {
+        toast({
+          title: 'Dialog hệ thống không khả dụng',
+          description: `${data.reason || 'Máy chủ không có giao diện đồ hoạ'} — mở trình duyệt thư mục trong app thay thế.`,
+          duration: 5000,
+        })
+        // Fallback: mở tree picker trong app
+        setFolderPickerPath(workspaceRoot || '/home/z')
+        loadFolderPicker(workspaceRoot || '/home/z')
+        setShowFolderPicker(true)
+      }
+    } catch (err) {
+      console.error('[NativeFolder] Exception:', err)
+      toast({ title: 'Lỗi mở dialog hệ thống', variant: 'destructive' })
+    } finally {
+      setNativeFolderLoading(false)
+    }
+  }, [nativeFolderLoading, handleWorkspaceSelect, loadFolderPicker, workspaceRoot, loadFileTree])
 
   // Phase 9: fetch AI edits waiting for review (before/after + approve/reject/apply lifecycle).
   // NOTE: no synchronous setState here — this is also called directly from an
@@ -12694,6 +12970,18 @@ function CodeTabContent() {
               <FolderTree className="h-4 w-4 text-emerald-400" />
               <span className="text-sm font-semibold text-stone-100">File Explorer</span>
             </button>
+            {/* Native OS folder dialog (user request 2026-08-27) — dialog Windows/macOS/Linux thật */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-[10px] gap-1 border-emerald-400/50 text-emerald-400 hover:bg-emerald-500/10"
+              onClick={handleNativeFolderPick}
+              disabled={nativeFolderLoading}
+              title="Mở hộp thoại chọn thư mục của hệ điều hành (Windows Explorer / macOS Finder / Linux)"
+            >
+              {nativeFolderLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <FolderOpen className="h-3 w-3" />}
+              Chọn thư mục (Dialog hệ thống)
+            </Button>
             <Button
               size="sm"
               variant="outline"

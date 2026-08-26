@@ -3,6 +3,11 @@
  *
  * POST — Save feedback to LearningLog table
  * Body: { type: 'positive' | 'negative', sessionId, messageId, content, agentResponse, correction?, reason? }
+ *
+ * GET  ?sessionId=xxx — Restore feedback state for a chat session (user request
+ *       2026-08-27: like/dislike phải "ghi nhận thật" — không reset sau reload).
+ *       Trả về map messageId → 'positive' | 'negative' từ LearningLog để UI
+ *       khôi phục trạng thái nút like/dislike khi load lại session.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -10,6 +15,47 @@ import { db } from '@/lib/db'
 import { storeMemory } from '@/lib/agent-memory'
 
 export const dynamic = 'force-dynamic'
+
+export async function GET(request: NextRequest) {
+  try {
+    const sessionId = request.nextUrl.searchParams.get('sessionId')
+    if (!sessionId) {
+      return NextResponse.json({ error: 'sessionId is required' }, { status: 400 })
+    }
+
+    const logs = await db.learningLog.findMany({
+      where: { eventType: 'feedback', sessionId },
+      orderBy: { createdAt: 'desc' },
+      select: { content: true, createdAt: true },
+    })
+
+    // content JSON: { type, messageId, userContent, agentResponse, ... }
+    // Newest-first ordering + "first write wins" (không cho đổi ý qua reload)
+    const feedbackByMessage: Record<string, 'positive' | 'negative'> = {}
+    let parsedCount = 0
+    for (const log of logs) {
+      try {
+        const parsed = JSON.parse(log.content) as {
+          type?: string
+          messageId?: string
+        }
+        if (parsed?.messageId && (parsed.type === 'positive' || parsed.type === 'negative')) {
+          if (!(parsed.messageId in feedbackByMessage)) {
+            feedbackByMessage[parsed.messageId] = parsed.type
+            parsedCount++
+          }
+        }
+      } catch { /* skip malformed rows */ }
+    }
+
+    return NextResponse.json({ sessionId, count: parsedCount, feedback: feedbackByMessage })
+  } catch (err) {
+    return NextResponse.json(
+      { error: 'Failed to load feedback', details: err instanceof Error ? err.message : String(err) },
+      { status: 500 }
+    )
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {

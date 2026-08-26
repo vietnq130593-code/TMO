@@ -33,6 +33,16 @@ import type { UserKBResult, ModelKnowledgeResult } from './kb-access'
 export const WRITEBACK_CONFIDENCE_THRESHOLD = 0.5
 
 /**
+ * Gray-zone lower bound (user request 2026-08-27: "chỉ khi không chắc chắn nên
+ * hay không thì mới phải cần hỏi tôi"). Items with confidence in
+ * (ASK_MIN, WRITEBACK_CONFIDENCE_THRESHOLD] là những tri thức Agent KHÔNG CHẮC
+ * — thay vì bỏ mặc như trước đây, chúng được xếp vào hàng chờ PHÊ DUYỆT để
+ * user quyết định (tab Auto-Learn → "Kiến thức chờ phê duyệt").
+ * Mặc định mọi tri thức thiếu (conf > 0.5) vẫn tự ghi vào KB.
+ */
+export const WRITEBACK_ASK_MIN_CONFIDENCE = 0.3
+
+/**
  * Maximum entities to writeback per query (safety cap to avoid KB bloat).
  */
 const MAX_WRITEBACK_ENTITIES = 10
@@ -40,7 +50,7 @@ const MAX_WRITEBACK_RELATIONSHIPS = 15
 
 // ==================== TYPES ====================
 
-interface ExtractedEntityWithConfidence {
+export interface ExtractedEntityWithConfidence {
   name: string
   type: string
   description: string
@@ -48,7 +58,7 @@ interface ExtractedEntityWithConfidence {
   source: string  // 'model-knowledge'
 }
 
-interface ExtractedRelationshipWithConfidence {
+export interface ExtractedRelationshipWithConfidence {
   source: string
   target: string
   type: string
@@ -63,6 +73,11 @@ export interface WritebackResult {
   relationshipsWritten: number
   chunksWritten: number
   memoryStored: boolean
+  /** Tri thức vùng xám (0.3 < conf ≤ 0.5) — chờ user phê duyệt, KHÔNG tự ghi */
+  grayZone?: {
+    entities: ExtractedEntityWithConfidence[]
+    relationships: ExtractedRelationshipWithConfidence[]
+  }
 }
 
 // ==================== EXTRACTION PROMPT ====================
@@ -174,7 +189,10 @@ export async function writebackToKB(params: {
     }
   }
 
-  // Filter: only keep entities/relationships with confidence > threshold
+  // Partition (user request 2026-08-27):
+  //   conf > 0.5               → auto-write vào KB (mặc định: tri thức thiếu thì cập nhật)
+  //   0.3 < conf ≤ 0.5         → gray-zone: xếp hàng chờ PHÊ DUYỆT (Agent không chắc → hỏi user)
+  //   conf ≤ 0.3               → speculation → bỏ (không học rác)
   const filteredEntities = extracted.entities
     .filter(e => e.confidence > WRITEBACK_CONFIDENCE_THRESHOLD)
     .slice(0, MAX_WRITEBACK_ENTITIES)
@@ -183,9 +201,18 @@ export async function writebackToKB(params: {
     .filter(r => r.confidence > WRITEBACK_CONFIDENCE_THRESHOLD)
     .slice(0, MAX_WRITEBACK_RELATIONSHIPS)
 
-  console.log(`[Writeback] Extracted: ${extracted.entities.length} entities, ${extracted.relationships.length} relationships. After filter (> ${WRITEBACK_CONFIDENCE_THRESHOLD}): ${filteredEntities.length} entities, ${filteredRelationships.length} relationships`)
+  const grayEntities = extracted.entities
+    .filter(e => e.confidence > WRITEBACK_ASK_MIN_CONFIDENCE && e.confidence <= WRITEBACK_CONFIDENCE_THRESHOLD)
+    .slice(0, MAX_WRITEBACK_ENTITIES)
+
+  const grayRelationships = extracted.relationships
+    .filter(r => r.confidence > WRITEBACK_ASK_MIN_CONFIDENCE && r.confidence <= WRITEBACK_CONFIDENCE_THRESHOLD)
+    .slice(0, MAX_WRITEBACK_RELATIONSHIPS)
+
+  console.log(`[Writeback] Extracted: ${extracted.entities.length} entities, ${extracted.relationships.length} relationships. Auto-write (> ${WRITEBACK_CONFIDENCE_THRESHOLD}): ${filteredEntities.length} entities, ${filteredRelationships.length} relationships. Gray-zone (${WRITEBACK_ASK_MIN_CONFIDENCE}-${WRITEBACK_CONFIDENCE_THRESHOLD}] cần phê duyệt: ${grayEntities.length} entities, ${grayRelationships.length} relationships.`)
 
   if (filteredEntities.length === 0 && filteredRelationships.length === 0) {
+    // Không có gì auto-write — nhưng gray-zone items VẪN trả về để wrapper queue phê duyệt
     return {
       skipped: true,
       reason: `No entities/relationships passed confidence threshold ${WRITEBACK_CONFIDENCE_THRESHOLD}`,
@@ -193,20 +220,84 @@ export async function writebackToKB(params: {
       relationshipsWritten: 0,
       chunksWritten: 0,
       memoryStored: false,
+      grayZone: (grayEntities.length > 0 || grayRelationships.length > 0)
+        ? { entities: grayEntities, relationships: grayRelationships }
+        : undefined,
     }
   }
 
   // Generate synthetic document ID for this writeback batch
   const documentId = `auto-learn:${Date.now()}`
-  const now = new Date().toISOString()
 
+  // WRITE 1 + 2 + 4 (Qdrant chunks + Neo4j entities/rels + Learning records)
+  const writeCounts = await writeKnowledgeToStores(documentId, query, filteredEntities, filteredRelationships, {
+    agentId,
+    agentName,
+    sessionId,
+    sourceTag: 'auto-learn',
+  })
+
+  let memoryStored = false
+
+  // === WRITE 3: AgentMemory (episodic) ===
+  if (agentId && step2Result.content) {
+    try {
+      await storeMemory({
+        agentId,
+        agentName: agentName || 'unknown',
+        sessionId,
+        category: 'insight',
+        content: `[Auto-learned from model knowledge] ${step2Result.content.slice(0, 500)}`,
+        context: query,
+        importance: 0.5,  // Medium — auto-learned, not user-confirmed
+        source: 'auto-learn',
+        tags: ['writeback', 'model-knowledge'],
+      })
+      memoryStored = true
+      console.log(`[Writeback] Stored AgentMemory`)
+    } catch (err) {
+      console.warn('[Writeback] AgentMemory write failed:', err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  // === WRITE 4: moved into writeKnowledgeToStores (shared with review-approve path) ===
+
+  return {
+    skipped: false,
+    entitiesWritten: writeCounts.entitiesWritten,
+    relationshipsWritten: writeCounts.relationshipsWritten,
+    chunksWritten: writeCounts.chunksWritten,
+    memoryStored,
+    grayZone: (grayEntities.length > 0 || grayRelationships.length > 0)
+      ? { entities: grayEntities, relationships: grayRelationships }
+      : undefined,
+  }
+}
+
+// ==================== SHARED STORE WRITES (WRITE 1 + 2 + 4) ====================
+
+/**
+ * Ghi entities/relationships vào 3 store (Qdrant chunks + Neo4j graph +
+ * AgentInsight/LearningLog audit). Được dùng bởi:
+ *   1. writebackToKB — auto-write các item conf > 0.5 (mặc định)
+ *   2. applyReviewedWriteback — ghi các item gray-zone SAU KHI user phê duyệt
+ * (user request 2026-08-27)
+ */
+async function writeKnowledgeToStores(
+  documentId: string,
+  query: string,
+  entities: ExtractedEntityWithConfidence[],
+  relationships: ExtractedRelationshipWithConfidence[],
+  ctx: { agentId?: string; agentName?: string; sessionId?: string; sourceTag: string }
+): Promise<{ chunksWritten: number; entitiesWritten: number; relationshipsWritten: number }> {
+  const now = new Date().toISOString()
+  const { agentId, agentName, sessionId, sourceTag } = ctx
   let entitiesWritten = 0
   let relationshipsWritten = 0
   let chunksWritten = 0
-  let memoryStored = false
 
   // === WRITE 1: Qdrant chunks (embed entity descriptions) ===
-  if (filteredEntities.length > 0) {
+  if (entities.length > 0) {
     try {
       // Phase 3 SMOLAB Prop 4.1 — query the active embedding model version ONCE
       // before the Promise.all map (so it's 1 DB query, not N). The helper
@@ -214,7 +305,7 @@ export async function writebackToKB(params: {
       // calls within 5 min don't re-query the DB at all.
       const embeddingModelVersion = await getCurrentEmbeddingModelVersion()
 
-      const chunksToWrite = filteredEntities.map((e, i) => {
+      const chunksToWrite = entities.map((e, i) => {
         const text = `${e.name} (${e.type}): ${e.description}`
         // Phase 6 SMOLAB Prop 3 — construct payload matching ChunkPayload interface
         // (qdrant.ts:587-606). Old code used camelCase keys (documentId, text, etc.)
@@ -233,8 +324,8 @@ export async function writebackToKB(params: {
             agent_name: agentName || 'unknown',
             original_query: query.slice(0, 200),
             confidence: e.confidence,
-            llm_provider: 'auto-learn',
-            llm_model: 'auto-learn',
+            llm_provider: sourceTag,
+            llm_model: sourceTag,
             // Phase 3 SMOLAB Prop 4.1 — model version tag for drift detection
             embedding_model_version: embeddingModelVersion,
           } as import('@/lib/qdrant').ChunkPayload,
@@ -243,7 +334,7 @@ export async function writebackToKB(params: {
 
       // Generate embeddings for all chunks
       const embeddedChunks = await Promise.all(
-        chunksToWrite.map(async (c, i) => {
+        chunksToWrite.map(async (c) => {
           const { vector } = await generateEmbedding(c.payload.content)
           return {
             id: crypto.randomUUID(),
@@ -270,17 +361,17 @@ export async function writebackToKB(params: {
   }
 
   // === WRITE 2: Neo4j entities + relationships ===
-  if (filteredEntities.length > 0) {
+  if (entities.length > 0) {
     try {
-      const entityNodes: EntityNode[] = filteredEntities.map((e, i) => ({
-        id: `auto-learn-${Date.now()}-${i}`,
+      const entityNodes: EntityNode[] = entities.map((e, i) => ({
+        id: `${sourceTag}-${Date.now()}-${i}`,
         name: e.name,
         entity_type: e.type as EntityNode['entity_type'],
         domain: 'mixed',
         description: e.description,
         confidence: e.confidence,  // Lower confidence for auto-learned
         documentId,
-        source: 'auto-learn',
+        source: sourceTag,
         chunk_id: '',
         created_at: now,
         updated_at: now,
@@ -308,18 +399,18 @@ export async function writebackToKB(params: {
     }
   }
 
-  if (filteredRelationships.length > 0) {
+  if (relationships.length > 0) {
     try {
       // Build edge payloads — note: sourceId/targetId must match existing entity IDs
       // For writeback, we link by entity name (Neo4j MERGE on name)
-      const edges: RelationshipEdge[] = filteredRelationships.map((r, i) => ({
-        sourceId: `auto-learn-by-name:${r.source}`,
-        targetId: `auto-learn-by-name:${r.target}`,
+      const edges: RelationshipEdge[] = relationships.map((r) => ({
+        sourceId: `${sourceTag}-by-name:${r.source}`,
+        targetId: `${sourceTag}-by-name:${r.target}`,
         relationship_type: r.type,
         description: r.description,
         confidence: r.confidence,
         documentId,
-        source: 'auto-learn',
+        source: sourceTag,
         created_at: now,
       }))
 
@@ -331,36 +422,15 @@ export async function writebackToKB(params: {
     }
   }
 
-  // === WRITE 3: AgentMemory (episodic) ===
-  if (agentId && step2Result.content) {
-    try {
-      await storeMemory({
-        agentId,
-        agentName: agentName || 'unknown',
-        sessionId,
-        category: 'insight',
-        content: `[Auto-learned from model knowledge] ${step2Result.content.slice(0, 500)}`,
-        context: query,
-        importance: 0.5,  // Medium — auto-learned, not user-confirmed
-        source: 'auto-learn',
-        tags: ['writeback', 'model-knowledge'],
-      })
-      memoryStored = true
-      console.log(`[Writeback] Stored AgentMemory`)
-    } catch (err) {
-      console.warn('[Writeback] AgentMemory write failed:', err instanceof Error ? err.message : String(err))
-    }
-  }
-
   // === WRITE 4: AgentInsight + LearningLog (Learning tab visibility) ===
   // FIX (empty Learning tab): writeback replaced autoLearnFromAnswer, but nothing
   // wrote to AgentInsight/LearningLog anymore — the Learning tab timeline only
   // got data from manual teaching and 👍/👎 feedback. Record each successful
   // writeback as an insight + log so the Learning timeline reflects real chat
   // activity. Two cheap SQLite writes — NO extra LLM call.
-  if (filteredEntities.length > 0 || filteredRelationships.length > 0) {
+  if (entities.length > 0 || relationships.length > 0) {
     try {
-      const insightContent = `[KB writeback] ${filteredEntities.length} entities, ${filteredRelationships.length} relationships — query: "${query.slice(0, 120)}"`
+      const insightContent = `[KB writeback] ${entities.length} entities, ${relationships.length} relationships — query: "${query.slice(0, 120)}"`
       await db.agentInsight.create({
         data: {
           agentId: agentId || 'default',
@@ -377,8 +447,8 @@ export async function writebackToKB(params: {
           eventType: 'pattern',
           content: JSON.stringify({
             kind: 'kb-writeback',
-            entitiesWritten: filteredEntities.length,
-            relationshipsWritten: filteredRelationships.length,
+            entitiesWritten: entities.length,
+            relationshipsWritten: relationships.length,
             chunksWritten,
             query: query.slice(0, 300),
             agentName: agentName || 'unknown',
@@ -392,13 +462,35 @@ export async function writebackToKB(params: {
     }
   }
 
-  return {
-    skipped: false,
-    entitiesWritten,
-    relationshipsWritten,
-    chunksWritten,
-    memoryStored,
-  }
+  return { chunksWritten, entitiesWritten, relationshipsWritten }
+}
+
+// ==================== REVIEW-APPROVED WRITEBACK (gray-zone) ====================
+
+/**
+ * Ghi các tri thức gray-zone (0.3 < conf ≤ 0.5) mà user đã PHÊ DUYỆT vào KB.
+ * Dùng cùng writeKnowledgeToStores như auto-write — ghi Qdrant + Neo4j + audit.
+ * (user request 2026-08-27: "chỉ khi không chắc chắn nên hay không thì mới
+ * phải cần hỏi tôi" — phê duyệt xong là ghi như thường.)
+ */
+export async function applyReviewedWriteback(params: {
+  batchId: string
+  query: string
+  entities: ExtractedEntityWithConfidence[]
+  relationships: ExtractedRelationshipWithConfidence[]
+  agentId?: string
+  agentName?: string
+  sessionId?: string
+}): Promise<{ entitiesWritten: number; relationshipsWritten: number; chunksWritten: number }> {
+  const documentId = `review-approved:${params.batchId.slice(0, 8)}:${Date.now()}`
+  console.log(`[Writeback-Review] Applying approved batch ${params.batchId.slice(0, 8)}: ${params.entities.length} entities, ${params.relationships.length} relationships`)
+  const counts = await writeKnowledgeToStores(documentId, params.query, params.entities, params.relationships, {
+    agentId: params.agentId,
+    agentName: params.agentName,
+    sessionId: params.sessionId,
+    sourceTag: 'review-approved',
+  })
+  return counts
 }
 
 // ==================== LLM EXTRACTION WITH CONFIDENCE ====================

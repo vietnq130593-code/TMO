@@ -60,11 +60,22 @@ interface ExtractedKnowledge {
 
 // ==================== CONSTANTS ====================
 
-/** Minimum confidence to trigger auto-learn (below this = too unreliable) */
-const AUTO_LEARN_MIN_CONFIDENCE = 0.5
+/**
+ * Minimum confidence to trigger auto-learn (below this = too unreliable).
+ * User directive 2026-08-27: "mặc định những gì thuộc về tri thức mà knowledge
+ * base thiếu sót thì đều nên cập nhật vào" → hạ gate để học mọi tri thức
+ * đủ tin cậy (band [0.5, 1.0] thay vì chỉ >= 0.85 như Phase 6 cũ).
+ * Band [0.5, 0.85) = KB thiếu thông tin, LLM tự bổ sung → HỌC (đúng yêu cầu).
+ * Band >= 0.85 = KB đã có → ghi lại fast-path (giữ hành vi Phase 6).
+ */
+const AUTO_LEARN_MIN_CONFIDENCE = parseFloat(process.env.AUTO_LEARN_MIN_CONFIDENCE || '0.5')
 
-/** Maximum confidence to trigger auto-learn (above this = KB already had enough) */
-const AUTO_LEARN_MAX_CONFIDENCE = 0.85
+/**
+ * Maximum confidence to trigger auto-learn (above this = KB already had enough).
+ * Giữ lại để tham khảo/tuỳ chỉnh — hiện không dùng để chặn học (AUTO_LEARN_MIN
+ * là gate duy nhất sau user directive 2026-08-27). Export để test/CLI dùng.
+ */
+export const AUTO_LEARN_MAX_CONFIDENCE = parseFloat(process.env.AUTO_LEARN_MAX_CONFIDENCE || '0.85')
 
 /** Maximum answer length to embed (avoid huge embeddings) */
 const MAX_EMBEDDING_TEXT_LENGTH = 2000
@@ -74,8 +85,14 @@ const AUTO_LEARN_DOC_PREFIX = 'auto-learn'
 
 // Phase 2 SMOLAB Proposal 4.4 — Cold-start + conservative thresholds.
 // Read once at module load (cheap; env rarely changes during a session).
-const COLD_START_INSIGHT_THRESHOLD = parseInt(process.env.COLD_START_INSIGHT_THRESHOLD || '100', 10)
-const CONSERVATIVE_INSIGHT_THRESHOLD = parseInt(process.env.CONSERVATIVE_INSIGHT_THRESHOLD || '500', 10)
+//
+// USER DIRECTIVE 2026-08-27: "mặc định những gì thuộc về tri thức mà knowledge
+// base thiếu sót thì đều nên cập nhật vào" → cold-start/conservative gates
+// mặc định TẮT (0). Muốn bật lại chế độ thận trọng (KB nhỏ → không học):
+// đặt AUTO_LEARN_COLD_START_THRESHOLD=100 và/hoặc
+// AUTO_LEARN_CONSERVATIVE_THRESHOLD=500 trong .env.
+const COLD_START_INSIGHT_THRESHOLD = parseInt(process.env.AUTO_LEARN_COLD_START_THRESHOLD || '0', 10)
+const CONSERVATIVE_INSIGHT_THRESHOLD = parseInt(process.env.AUTO_LEARN_CONSERVATIVE_THRESHOLD || '0', 10)
 const CONSERVATIVE_CONFIDENCE_MIN = parseFloat(process.env.CONSERVATIVE_CONFIDENCE_MIN || '0.7')
 
 /**
@@ -167,26 +184,24 @@ export async function autoLearnFromAnswer(input: AutoLearnInput): Promise<boolea
   const startTime = Date.now()
 
   // Phase 2 SMOLAB Proposal 4.4 — Cold-start + conservative band check.
-  // Cheap population-based gate BEFORE the P0.2 confidence gate. On fresh
-  // install (< 100 insights) → never learn. Conservative band (100-499) →
-  // require confidence >= 0.7. This is an ADDITIONAL restriction; does NOT
-  // relax P0.2's gate below.
+  // MẶC ĐỊNH TẮT (threshold = 0) theo user directive 2026-08-27. Chỉ hoạt động
+  // khi bật lại qua env AUTO_LEARN_COLD_START_THRESHOLD / AUTO_LEARN_CONSERVATIVE_THRESHOLD.
   const coldStart = await shouldAutoLearnConsideringColdStart(input.agentId, input.confidence)
   if (!coldStart.allow) {
     console.log(`[AutoLearn] Skipped: ${coldStart.reason}`)
     return false
   }
 
-  // Phase 6 SMOLAB P0.2 — REVERSED auto-learn gate.
-  // Old logic (reversed): learn when confidence in [0.5, 0.85) — the "unverified
-  // middle band". This created a self-reinforcing hallucination loop because the
-  // LLM output wasn't actually confirmed by KB retrieval.
-  // New logic: ONLY learn when confidence is HIGH (>= MAX = 0.85) — meaning KB
-  // strongly confirmed the answer is correct from existing knowledge, so it's
-  // safe to memorize for future fast-path retrieval.
-  // Below MAX = unverified LLM output → do NOT memorize (skip silently).
-  if (input.confidence < AUTO_LEARN_MAX_CONFIDENCE) {
-    console.log(`[AutoLearn] Skipped: confidence ${input.confidence.toFixed(2)} < ${AUTO_LEARN_MAX_CONFIDENCE} (KB did not strongly confirm — learning would memorize unverified LLM output)`)
+  // USER DIRECTIVE 2026-08-27 — reverting Phase 6 SMOLAB P0.2 reversed gate.
+  // Phase 6 cũ: CHỈ học khi conf >= 0.85 (KB đã xác nhận mạnh) → KB không bao
+  // giờ nhận tri thức MỚI từ hội thoại. User yêu cầu ngược lại: tri thức KB
+  // đang thiếu (conf thấp — LLM tự bổ sung) đều nên được cập nhật vào KB.
+  // Logic mới: học mọi câu trả lời đủ tin cậy (conf >= 0.5):
+  //   [0.5, 0.85) = KB thiếu → HỌC tri thức mới (điền khoảng trống)
+  //   >= 0.85    = KB đã có → ghi fast-path (MERGE/resolve tự khử trùng)
+  // Dưới 0.5 = quá mơ hồ → bỏ (không học rác).
+  if (input.confidence < AUTO_LEARN_MIN_CONFIDENCE) {
+    console.log(`[AutoLearn] Skipped: confidence ${input.confidence.toFixed(2)} < ${AUTO_LEARN_MIN_CONFIDENCE} (answer too unreliable to learn)`)
     return false
   }
 
@@ -624,13 +639,15 @@ export async function getAutoLearnStats(): Promise<{
  * Check if auto-learn should be triggered for a given query result.
  * This is the gate-keeper function that the chat route calls.
  *
- * Phase 6 SMOLAB P0.2 — gate logic REVERSED. Now only learns when
- * confidence >= AUTO_LEARN_MAX_CONFIDENCE (KB strongly confirmed answer).
- * Below that = unverified LLM output → skip to avoid hallucination loop.
+ * USER DIRECTIVE 2026-08-27 — học mọi tri thức đủ tin cậy (conf >= 0.5):
+ * band [0.5, 0.85) là "KB thiếu thông tin, LLM tự bổ sung" → Agent TỰ CẬP NHẬT
+ * vào KB theo mặc định; >= 0.85 là fast-path (giữ hành vi Phase 6).
+ * Tri thức mơ hồ 0.3-0.5 trong writeback path được xếp hàng chờ phê duyệt
+ * (xem WRITEBACK_ASK_MIN_CONFIDENCE trong kb-routing/writeback.ts).
  */
 export function shouldAutoLearn(confidence: number, hasAgent: boolean): boolean {
-  // Only auto-learn when:
-  // 1. There's an agent (no auto-learn for anonymous/gateway requests)
-  // 2. Confidence is HIGH enough that KB strongly confirmed the answer (P0.2 reversed gate)
-  return hasAgent && confidence >= AUTO_LEARN_MAX_CONFIDENCE
+  // USER DIRECTIVE 2026-08-27: học mọi tri thức đủ tin cậy (>= 0.5) thay vì
+  // chỉ >= 0.85 (P0.2 reversed gate cũ). Band [0.5, 0.85) chính là khoảng
+  // "KB thiếu thông tin, LLM tự bổ sung" — thứ user muốn Agent tự cập nhật.
+  return hasAgent && confidence >= AUTO_LEARN_MIN_CONFIDENCE
 }

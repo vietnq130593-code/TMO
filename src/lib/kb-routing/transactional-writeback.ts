@@ -131,6 +131,40 @@ export async function writebackToKBTransactionally(params: {
     }
   }
 
+  // ===== Gray-zone queue (user request 2026-08-27) =====
+  // Tri thức có confidence 0.3-0.5 (Agent "không chắc") → PendingWriteback
+  // status 'needs_review' — hiển thị trong tab Auto-Learn để user phê duyệt.
+  // Mặc định: tri thức thiếu (conf > 0.5) đã được auto-write ở trên.
+  if (result.grayZone && (result.grayZone.entities.length > 0 || result.grayZone.relationships.length > 0)) {
+    try {
+      const reviewBatchId = randomUUID()
+      await db.pendingWriteback.create({
+        data: {
+          batchId: reviewBatchId,
+          agentId: params.agentId || null,
+          sessionId: params.sessionId || null,
+          documentId: `review:${Date.now()}`,
+          payload: JSON.stringify({
+            kind: 'needs_review',
+            query: params.query,
+            agentName: params.agentName,
+            agentId: params.agentId,
+            sessionId: params.sessionId,
+            grayEntities: result.grayZone.entities,
+            grayRelationships: result.grayZone.relationships,
+          }),
+          steps: JSON.stringify(DEFAULT_STEPS),
+          status: 'needs_review',
+        },
+      })
+      console.log(
+        `[Writeback] Queued ${result.grayZone.entities.length} entities + ${result.grayZone.relationships.length} relationships for USER REVIEW (confidence 0.3-0.5, batchId=${reviewBatchId.slice(0, 8)})`
+      )
+    } catch (reviewErr) {
+      console.warn('[Writeback] Failed to queue gray-zone items for review:', reviewErr instanceof Error ? reviewErr.message : String(reviewErr))
+    }
+  }
+
   // Update step statuses based on result. WritebackResult doesn't carry
   // per-step failure info, so we infer from counts. This is best-effort
   // — the actual failure was already logged inside writebackToKB.
@@ -311,6 +345,8 @@ export async function getPendingWritebackAudit(): Promise<{
     partial: number
     failed: number
     completed: number
+    needs_review: number
+    rejected: number
     total: number
   }
   recent: Array<{
@@ -323,11 +359,13 @@ export async function getPendingWritebackAudit(): Promise<{
     updatedAt: string
   }>
 }> {
-  const [pending, partial, failed, completed] = await Promise.all([
+  const [pending, partial, failed, completed, needsReview, rejected] = await Promise.all([
     db.pendingWriteback.count({ where: { status: 'pending' } }),
     db.pendingWriteback.count({ where: { status: 'partial' } }),
     db.pendingWriteback.count({ where: { status: 'failed' } }),
     db.pendingWriteback.count({ where: { status: 'completed' } }),
+    db.pendingWriteback.count({ where: { status: 'needs_review' } }),
+    db.pendingWriteback.count({ where: { status: 'rejected' } }),
   ])
 
   const recentRows = await db.pendingWriteback.findMany({
@@ -350,7 +388,9 @@ export async function getPendingWritebackAudit(): Promise<{
       partial,
       failed,
       completed,
-      total: pending + partial + failed + completed,
+      needs_review: needsReview,
+      rejected,
+      total: pending + partial + failed + completed + needsReview + rejected,
     },
     recent: recentRows.map(r => ({
       batchId: r.batchId,
@@ -361,5 +401,129 @@ export async function getPendingWritebackAudit(): Promise<{
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
     })),
+  }
+}
+
+// ==================== GRAY-ZONE REVIEW (user request 2026-08-27) ====================
+
+/** Item parse từ PendingWriteback.payload của batch needs_review */
+export interface ReviewItem {
+  batchId: string
+  query: string
+  agentName?: string
+  agentId?: string
+  sessionId?: string
+  createdAt: string
+  entities: Array<{ name: string; type: string; description: string; confidence: number; source?: string }>
+  relationships: Array<{ source: string; target: string; type: string; description: string; confidence: number }>
+}
+
+/**
+ * Liệt kê các batch needs_review (tri thức vùng xám 0.3-0.5 chờ user phê duyệt).
+ */
+export async function getPendingReviewItems(limit = 20): Promise<ReviewItem[]> {
+  const rows = await db.pendingWriteback.findMany({
+    where: { status: 'needs_review' },
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+  })
+
+  const items: ReviewItem[] = []
+  for (const r of rows) {
+    try {
+      const p = JSON.parse(r.payload) as {
+        query?: string
+        agentName?: string
+        agentId?: string
+        sessionId?: string
+        grayEntities?: Array<{ name: string; type: string; description: string; confidence: number; source?: string }>
+        grayRelationships?: Array<{ source: string; target: string; type: string; description: string; confidence: number }>
+      }
+      items.push({
+        batchId: r.batchId,
+        query: p.query || '',
+        agentName: p.agentName,
+        agentId: p.agentId,
+        sessionId: p.sessionId,
+        createdAt: r.createdAt.toISOString(),
+        entities: Array.isArray(p.grayEntities) ? p.grayEntities : [],
+        relationships: Array.isArray(p.grayRelationships) ? p.grayRelationships : [],
+      })
+    } catch {
+      // Malformed payload — skip batch (không crash toàn bộ list)
+    }
+  }
+  return items
+}
+
+/**
+ * Phê duyệt / từ chối một batch needs_review.
+ *   approve → applyReviewedWriteback ghi tri thức vào KB (Qdrant + Neo4j + audit)
+ *             → đánh dấu batch 'completed'
+ *   reject  → đánh dấu batch 'rejected' (tri thức bị bỏ, không ghi vào KB)
+ */
+export async function reviewWriteback(
+  batchId: string,
+  action: 'approve' | 'reject'
+): Promise<{ ok: boolean; entitiesWritten?: number; relationshipsWritten?: number; error?: string }> {
+  const row = await db.pendingWriteback.findFirst({ where: { batchId, status: 'needs_review' } })
+  if (!row) {
+    return { ok: false, error: `Batch ${batchId.slice(0, 8)} không tồn tại hoặc không ở trạng thái needs_review` }
+  }
+
+  if (action === 'reject') {
+    await db.pendingWriteback.update({
+      where: { id: row.id },
+      data: { status: 'rejected', failedStep: null },
+    })
+    console.log(`[Writeback-Review] Batch ${batchId.slice(0, 8)} REJECTED by user — dropped ${'gray items'}`)
+    return { ok: true }
+  }
+
+  // Approve
+  try {
+    const p = JSON.parse(row.payload) as {
+      query?: string
+      agentName?: string
+      agentId?: string
+      sessionId?: string
+      grayEntities?: Array<{ name: string; type: string; description: string; confidence: number; source?: string }>
+      grayRelationships?: Array<{ source: string; target: string; type: string; description: string; confidence: number }>
+    }
+    const entities = (p.grayEntities || []).map(e => ({ ...e, source: e.source || 'model-knowledge' }))
+    const relationships = p.grayRelationships || []
+
+    if (entities.length === 0 && relationships.length === 0) {
+      await db.pendingWriteback.update({ where: { id: row.id }, data: { status: 'completed' } })
+      return { ok: true, entitiesWritten: 0, relationshipsWritten: 0 }
+    }
+
+    const { applyReviewedWriteback } = await import('./writeback')
+    const counts = await applyReviewedWriteback({
+      batchId,
+      query: p.query || '',
+      entities,
+      relationships,
+      agentId: p.agentId,
+      agentName: p.agentName,
+      sessionId: p.sessionId,
+    })
+
+    await db.pendingWriteback.update({
+      where: { id: row.id },
+      data: {
+        status: 'completed',
+        attempts: { increment: 1 },
+      },
+    })
+    return { ok: true, entitiesWritten: counts.entitiesWritten, relationshipsWritten: counts.relationshipsWritten }
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    console.error(`[Writeback-Review] Approve failed for ${batchId.slice(0, 8)}:`, errMsg)
+    await db.pendingWriteback.update({
+      where: { id: row.id },
+      data: { status: 'failed', failedStep: 'review_apply', attempts: { increment: 1 } },
+    }).catch(() => {})
+    return { ok: false, error: errMsg }
   }
 }
