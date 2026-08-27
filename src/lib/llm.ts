@@ -2122,7 +2122,7 @@ async function tryProviderWithSlotKey(
   models: string[],
   prompt: string,
   systemPrompt: string | undefined,
-  timeoutMs: number = parseInt(process.env.LLM_TIMEOUT_MS || '240000', 10),
+  timeoutMs: number = parseInt(process.env.LLM_TIMEOUT_MS || '1800000', 10), // 30 min default — no aggressive timeout during extraction
   extraHeaders: Record<string, string> = {},
   rateLimitCooldownMs: number = 60000,
   temperature: number = 0.1,

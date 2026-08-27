@@ -324,7 +324,7 @@ function parseTscErrors(output: string): { count: number; sample: string[] } {
 /** Timeout for each LLM call inside an agent step (ReAct loop).
  *  If the LLM hangs beyond this, the step is aborted with an error,
  *  and the workflow continues to the next pipeline step (graceful degradation). */
-const AGENT_STEP_TIMEOUT_MS = 120_000 // 2 minutes per LLM call in agent step
+const AGENT_STEP_TIMEOUT_MS = 240_000 // 4 minutes per LLM call — TL recon with large tool results needs more time (kimi-k3 can take 120s+ on 30K-token contexts)
 
 /** Shorter timeout for TL checkpoint verification calls — these are brief decisions, not long code generation. */
 const CHECKPOINT_VERIFY_TIMEOUT_MS = 30_000 // 30 seconds for checkpoint verify
@@ -830,7 +830,7 @@ export async function runWorkflow(
     const tlResult = await runAgentStep({
       position: 'TL',
       step: 'analyze',
-      prompt: buildTLPrompt(userRequest, messages),
+      prompt: await buildTLPrompt(userRequest, messages),
       sessionId,
       emit: safeEmit,
       ctx,
@@ -894,6 +894,19 @@ export async function runWorkflow(
 
     console.log(`[Workflow] Routing: Mode ${routingDecision.mode}, Tier ${routingDecision.tier}, Score ${routingDecision.score}`)
     console.log(`[Workflow] Reasoning: ${routingDecision.reasoning}`)
+    if (routingDecision.targetFiles?.length) {
+      console.log(`[Workflow] Target files (${routingDecision.targetFiles.length}): ${routingDecision.targetFiles.join(', ')}`)
+    }
+    if (routingDecision.filesInspected?.length) {
+      console.log(`[Workflow] Files inspected during recon (${routingDecision.filesInspected.length}): ${routingDecision.filesInspected.join(', ')}`)
+    }
+    if (routingDecision.riskLevel) {
+      console.log(`[Workflow] Risk level: ${routingDecision.riskLevel}`)
+    }
+    if (routingDecision.executionPlan?.length) {
+      console.log(`[Workflow] Execution plan: ${routingDecision.executionPlan.length} steps`)
+      routingDecision.executionPlan.forEach(s => console.log(`  Step ${s.step}: ${s.description} [${s.agent}, risk=${s.risk}] → ${s.targetFiles.join(', ')}`))
+    }
 
     // Write TL worklog
     const tlWorklogEntry: WorklogEntry = {
@@ -1084,8 +1097,11 @@ async function runPipeline(
       ctx,
       // G2-B max 3 vòng iteration (workflow doc: "max 3 vòng iteration")
       // TL self-verify (Mode A) max 3 vòng iterate (workflow doc: "tối đa 3 vòng")
+      // TL analyze (routing) max 6 — enough for 3 recon iterations + 2-3 JSON production iterations
       // Others max 10
-      maxIterations: (step.position === 'G2-B' || (step.position === 'TL' && step.step === 'verify')) ? 3 : 10,
+      maxIterations: (step.position === 'G2-B' || (step.position === 'TL' && step.step === 'verify')) ? 3
+        : (step.position === 'TL' && step.step === 'analyze') ? 6
+        : 10,
     })
 
     // Parse worklog from agent output
@@ -1826,6 +1842,19 @@ export async function runAgentStep(params: {
       break
     }
 
+    // ===== Recon budget enforcement for TL/analyze =====
+    // When TL is in the analyze (routing) step and has done 5+ iterations of
+    // recon (file reading), inject a system message forcing it to produce the
+    // routing JSON now. Without this, TL can spend all 10 iterations reading
+    // files and never emit the routing decision — falling back to defaults.
+    if (position === 'TL' && step === 'analyze' && iterations >= 3 && toolCalls.length > 0) {
+      console.log(`[Workflow] ${agent.name} recon budget: ${iterations} iterations done — injecting "produce routing now" message`)
+      messages.push({
+        role: 'user',
+        content: `⚠️ RECON BUDGET: Bạn đã đọc đủ code (iteration ${iterations}/${maxIterations}). NGAY BÂY GIỜ, hãy emit routing JSON với format:\n\`\`\`json\n{\n  "mode": "A|B|C",\n  "tier": 1|2|3,\n  "score": <3-9>,\n  "reasoning": "<giải thích dựa trên code đã đọc>",\n  "targetFiles": ["<files cần sửa>"],\n  "filesInspected": ["<files đã đọc>"],\n  "riskLevel": "low|medium|high",\n  "executionPlan": [{"step":1,"description":"...","targetFiles":["..."],"agent":"G1|G2-A|G2-B|G3|TL","risk":"low|medium|high"}],\n  "parts": [{"name":"...","type":"visual|backend","description":"...","dependency":[]}],\n  "spec": "<spec chi tiết>"\n}\n\`\`\`\nKHÔNG gọi tool thêm — chỉ output JSON.`,
+      })
+    }
+
     // If G2-B reached max iterations, break
     if (position === 'G2-B' && iterations >= maxIterations) {
       finalContent += `\n\n⚠️ Đạt max ${maxIterations} vòng iteration. Bugs còn lại ghi cho G3.`
@@ -1997,14 +2026,65 @@ Output JSON trong markdown code block:
  * Build the initial prompt for TL's routing analysis.
  * Includes chat history + current request.
  */
-function buildTLPrompt(userRequest: string, messages: Array<{ role: string; content: string }>): string {
+async function buildTLPrompt(userRequest: string, messages: Array<{ role: string; content: string }>): Promise<string> {
   // Include last 10 messages for context
   const history = messages
     .slice(-10)
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
     .join('\n')
 
-  return `Chat history:\n${history}\n\nYêu cầu hiện tại: ${userRequest}\n\nPhân tích routing decision. Output JSON trong markdown code block với format:\n\`\`\`json\n{\n  "mode": "A|B|C",\n  "tier": 1|2|3,\n  "score": <3-9>,\n  "reasoning": "<giải thích>",\n  "parts": [\n    { "name": "<tên part>", "type": "visual|backend", "description": "<mô tả>", "dependency": [] }\n  ],\n  "spec": "<chi tiết spec cho từng part>"\n}\n\`\`\``
+  // Inject workspace context so TL knows the project structure before recon
+  let workspaceContext = ''
+  try {
+    const { buildWorkspaceContext } = await import('./workspace-context')
+    workspaceContext = await buildWorkspaceContext()
+  } catch {
+    // Fallback: minimal context if workspace-context module unavailable
+    workspaceContext = `Workspace root: ${process.env.OPENCODE_WORKSPACE || process.cwd()}`
+  }
+
+  return `${workspaceContext}
+
+━━━ NHIỆM VỤ ━━━
+Chat history:
+${history}
+
+Yêu cầu hiện tại: ${userRequest}
+
+━━━ QUY TRÌNH THỰC HIỆN (LÀM THEO THỨ TỰ) ━━━
+
+BƯỚC 1 — RECON (TRINH SÁT CODEBASE):
+Đọc codebase để hiểu context thực tế trước khi routing. Dùng tools theo thứ tự:
+  a) file_list({"path": ".", "depth": 2}) — xem cấu trúc thư mục
+  b) grep({"pattern": "<từ khóa liên quan>", "path": "src", "mode": "files"}) — tìm file liên quan đến task
+  c) file_read({"path": "<file quan trọng>", "limit": 100}) — đọc nội dung file cần sửa (TỐI ĐA 100 dòng)
+  d) Lặp lại b-c tối đa 2-3 lần — ĐỦ hiểu rồi thì emit JSON
+
+  ⚠️ BẮT BUỘC: Nếu task có thể là Mode B (backend) hoặc Mode C (hybrid) hoặc tier ≥ 2, PHẢI đọc ít nhất 1-2 file trước khi emit routing JSON. Không được routing "mù" (chỉ dựa trên text của user).
+  ⚠️ GIỚI HẠN: Tổng số file_read ≤ 3. Đọc quá nhiều → context quá lớn → LLM timeout → không emit được JSON. Đọc ĐỦ → emit JSON NGAY.
+
+BƯỚC 2 — ROUTING DECISION:
+Sau khi recon xong, output JSON trong markdown code block với format:
+\`\`\`json
+{
+  "mode": "A|B|C",
+  "tier": 1|2|3,
+  "score": <3-9>,
+  "reasoning": "<giải thích — bao gồm phát hiện khi đọc code>",
+  "targetFiles": ["src/path/to/file1.ts", "src/path/to/file2.tsx"],
+  "filesInspected": ["src/path/to/inspected1.ts"],
+  "riskLevel": "low|medium|high",
+  "executionPlan": [
+    { "step": 1, "description": "<mô tả>", "targetFiles": ["<file>"], "agent": "G1|G2-A|G2-B|G3|TL", "risk": "low|medium|high" }
+  ],
+  "parts": [
+    { "name": "<tên part>", "type": "visual|backend", "description": "<mô tả>", "dependency": [] }
+  ],
+  "spec": "<chi tiết spec — dựa trên code thực tế đã đọc>"
+}
+\`\`\`
+
+Bắt đầu với BƯỚC 1 (RECON) ngay — gọi file_list hoặc grep trước.`
 }
 
 /**
@@ -2018,21 +2098,7 @@ function parseRoutingDecision(output: string): RoutingDecision | null {
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[1])
       if (parsed.mode && parsed.tier && parsed.score !== undefined) {
-        return {
-          mode: ['A', 'B', 'C'].includes(parsed.mode) ? parsed.mode : 'B',
-          tier: [1, 2, 3].includes(parsed.tier) ? parsed.tier : 2,
-          score: typeof parsed.score === 'number' ? Math.min(9, Math.max(3, parsed.score)) : 5,
-          reasoning: parsed.reasoning || '',
-          parts: Array.isArray(parsed.parts)
-            ? parsed.parts.map((p: Record<string, unknown>) => ({
-                name: String(p.name || 'main'),
-                type: (p.type === 'visual' ? 'visual' : 'backend') as 'visual' | 'backend',
-                description: String(p.description || ''),
-                dependency: Array.isArray(p.dependency) ? p.dependency.map(String) : [],
-              }))
-            : [{ name: 'main', type: 'backend' as const, description: 'Main task', dependency: [] }],
-          spec: parsed.spec || '',
-        }
+        return buildRoutingDecision(parsed)
       }
     }
 
@@ -2041,21 +2107,7 @@ function parseRoutingDecision(output: string): RoutingDecision | null {
     if (rawMatch) {
       const parsed = JSON.parse(rawMatch)
       if (parsed.mode && parsed.tier) {
-        return {
-          mode: ['A', 'B', 'C'].includes(parsed.mode) ? parsed.mode : 'B',
-          tier: [1, 2, 3].includes(parsed.tier) ? parsed.tier : 2,
-          score: typeof parsed.score === 'number' ? Math.min(9, Math.max(3, parsed.score)) : 5,
-          reasoning: parsed.reasoning || '',
-          parts: Array.isArray(parsed.parts)
-            ? parsed.parts.map((p: Record<string, unknown>) => ({
-                name: String(p.name || 'main'),
-                type: (p.type === 'visual' ? 'visual' : 'backend') as 'visual' | 'backend',
-                description: String(p.description || ''),
-                dependency: Array.isArray(p.dependency) ? p.dependency.map(String) : [],
-              }))
-            : [{ name: 'main', type: 'backend' as const, description: 'Main task', dependency: [] }],
-          spec: parsed.spec || '',
-        }
+        return buildRoutingDecision(parsed)
       }
     }
   } catch (err) {
@@ -2063,6 +2115,46 @@ function parseRoutingDecision(output: string): RoutingDecision | null {
   }
 
   return null
+}
+
+/**
+ * Build a RoutingDecision from a parsed LLM JSON object, extracting the new
+ * recon-aware fields (targetFiles, filesInspected, riskLevel, executionPlan)
+ * introduced in the multi-file-read + planning enhancement.
+ */
+function buildRoutingDecision(parsed: Record<string, any>): RoutingDecision {
+  const validRiskLevels = ['low', 'medium', 'high']
+  const validAgents = ['TL', 'G1', 'G2-A', 'G2-B', 'G3']
+  return {
+    mode: ['A', 'B', 'C'].includes(parsed.mode) ? parsed.mode : 'B',
+    tier: [1, 2, 3].includes(parsed.tier) ? parsed.tier : 2,
+    score: typeof parsed.score === 'number' ? Math.min(9, Math.max(3, parsed.score)) : 5,
+    reasoning: parsed.reasoning || '',
+    parts: Array.isArray(parsed.parts)
+      ? parsed.parts.map((p: Record<string, unknown>) => ({
+          name: String(p.name || 'main'),
+          type: (p.type === 'visual' ? 'visual' : 'backend') as 'visual' | 'backend',
+          description: String(p.description || ''),
+          dependency: Array.isArray(p.dependency) ? p.dependency.map(String) : [],
+        }))
+      : [{ name: 'main', type: 'backend' as const, description: 'Main task', dependency: [] }],
+    spec: parsed.spec || '',
+    // New recon-aware fields (optional — populated when TL does file recon before routing)
+    targetFiles: Array.isArray(parsed.targetFiles) ? parsed.targetFiles.map(String) : undefined,
+    filesInspected: Array.isArray(parsed.filesInspected) ? parsed.filesInspected.map(String) : undefined,
+    riskLevel: validRiskLevels.includes(parsed.riskLevel) ? parsed.riskLevel : undefined,
+    executionPlan: Array.isArray(parsed.executionPlan)
+      ? parsed.executionPlan
+          .filter((s: Record<string, unknown>) => s && typeof s === 'object')
+          .map((s: Record<string, any>, i: number) => ({
+            step: typeof s.step === 'number' ? s.step : i + 1,
+            description: String(s.description || ''),
+            targetFiles: Array.isArray(s.targetFiles) ? s.targetFiles.map(String) : [],
+            agent: validAgents.includes(s.agent) ? s.agent : 'G1',
+            risk: validRiskLevels.includes(s.risk) ? s.risk : 'medium',
+          }))
+      : undefined,
+  }
 }
 
 /**

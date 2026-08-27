@@ -73,6 +73,23 @@ export interface RoutingDecision {
   reasoning: string
   parts: PartDefinition[]
   spec?: string /// Detailed spec for each part (from TL routing analysis)
+  /// Files the TL identified as needing modification (populated after recon phase)
+  targetFiles?: string[]
+  /// Files the TL inspected during recon (for audit / context tracking)
+  filesInspected?: string[]
+  /// Risk level assessed by TL after reading the code
+  riskLevel?: 'low' | 'medium' | 'high'
+  /// Structured execution plan with ordered steps (populated after recon)
+  executionPlan?: ExecutionPlanStep[]
+}
+
+/// A single step in the TL's execution plan — produced after recon (file reading)
+export interface ExecutionPlanStep {
+  step: number
+  description: string
+  targetFiles: string[]
+  agent: 'TL' | 'G1' | 'G2-A' | 'G2-B' | 'G3'
+  risk: 'low' | 'medium' | 'high'
 }
 
 export interface PartDefinition {

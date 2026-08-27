@@ -151,7 +151,7 @@ QUAN TRỌNG:
 export async function assessRequest(
   userMessage: string,
   chatHistory: Array<{ role: string; content: string }> = [],
-  timeoutMs: number = 5000,
+  timeoutMs: number = 15000,
 ): Promise<TLAssessment> {
   // Check cache first
   const cached = getCachedAssessment(userMessage)

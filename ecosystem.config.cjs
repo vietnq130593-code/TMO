@@ -18,7 +18,6 @@
 //   pm2 start ecosystem.config.cjs        # launch Qdrant + UI together
 //   pm2 status                            # see running processes
 //   pm2 logs theopusflashlite             # tail the UI logs
-//   pm2 logs qdrant                       # tail Qdrant logs
 //   pm2 restart theopusflashlite         # restart the UI
 //   pm2 delete all                        # stop everything
 //   pm2 save                              # persist process list
@@ -26,12 +25,22 @@
 // The main app's stdout+stderr are written to /home/z/my-project/dev.log
 // (appended via merge_logs, never truncated on restart) so the sandbox
 // monitoring pipeline keeps working exactly as before.
+//
+// NOTE: Qdrant v1.13.2 binary is installed at /home/z/qdrant/qdrant. Managed
+// here so it auto-starts alongside the UI and stays alive. Storage in
+// /home/z/tmo-app/qdrant-storage.
 module.exports = {
   apps: [
     {
       name: 'theopusflashlite',
-      script: 'bun',
-      args: 'run dev',
+      // Run the Next.js CLI directly (instead of `bun run dev`) so PM2 owns the
+      // actual Next.js process and its `next-server` child. With `bun run dev`
+      // there is an extra bun wrapper layer; a SIGKILL of the bun parent can
+      // orphan the next-server grandchild which then holds port 3000 and causes
+      // EADDRINUSE crash-loops on PM2 restart. Running next directly lets PM2
+      // kill the whole process tree cleanly on restart/stop.
+      script: 'node_modules/next/dist/bin/next',
+      args: 'dev -p 3000',
       cwd: '/home/z/tmo-app',
       env: {
         NODE_ENV: 'development',

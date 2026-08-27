@@ -10321,13 +10321,16 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                             <div className="flex gap-2">
                               <button
                                 onClick={() => {
-                                  // Accept: trigger workflow with pre-computed routing
+                                  // Accept: trigger workflow — let TL do full recon + routing analysis
+                                  // (NOT passing pre-computed routing so TL reads files first via Path B)
                                   const userMessages = messages.filter(m => m.role === 'user')
                                   const lastUserMsg = userMessages[userMessages.length - 1]
                                   if (lastUserMsg) {
                                     // Remove the suggestion card, keep the user message
                                     setMessages(prev => prev.filter(m => m.id !== msg.id))
-                                    startWorkflow(lastUserMsg.content, msg.assessmentRouting, { skipUserMsg: true })
+                                    // Pass undefined routing → workflow engine runs TL analyze (Path B)
+                                    // where TL uses file_list/grep/file_read to inspect codebase before routing
+                                    startWorkflow(lastUserMsg.content, undefined, { skipUserMsg: true })
                                   }
                                 }}
                                 className="px-3 py-1.5 text-[10px] bg-amber-500/20 text-amber-300 rounded border border-amber-500/30 hover:bg-amber-500/30 transition-colors font-medium"
@@ -16867,7 +16870,7 @@ export default function Home() {
       // Keep polling until the document is fully processed.
       // When extraction times out (partial), we auto-trigger the next batch.
       // This loop continues until: indexed/extracted (done), error, or max time exceeded.
-      const maxTotalWaitMs = 120 * 60 * 1000 // 2 hours max for very large documents
+      const maxTotalWaitMs = Number.MAX_SAFE_INTEGER // No timeout — extraction runs until completion regardless of duration
       const totalStartTime = Date.now()
       let batchCount = 0
 
@@ -16937,9 +16940,8 @@ export default function Home() {
             break
           }
         }
-        // Max wait exceeded
+        // Loop exited (safety cleanup — with MAX_SAFE_INTEGER this only runs if the loop breaks internally)
         setExtractingDocIds(prev => { const next = new Set(prev); next.delete(documentId); return next })
-        sonnerToast.error('Hết thời gian chờ', { description: 'Quá trình trích xuất đã kéo dài quá 2 giờ.', duration: 8000 })
       }
 
       /** Poll a single batch until it reaches a terminal state (partial/indexed/extracted/error).
@@ -17085,7 +17087,7 @@ export default function Home() {
               duration: 5000,
             })
             // Continue with the same polling logic
-            const maxWaitMs = 60 * 60 * 1000
+            const maxWaitMs = Number.MAX_SAFE_INTEGER // No timeout — extraction runs until completion
             const startTime = Date.now()
             const waitAll = async () => {
               while (Date.now() - startTime < maxWaitMs) {
@@ -17125,7 +17127,7 @@ export default function Home() {
 
       // Poll until all documents are done (check every 5s)
       // Stop when no documents are in processing state; partial docs show "Tiếp tục" button
-      const maxWaitMs = 60 * 60 * 1000
+      const maxWaitMs = Number.MAX_SAFE_INTEGER // No timeout — extraction runs until completion
       const startTime = Date.now()
       const waitAll = async () => {
         while (Date.now() - startTime < maxWaitMs) {

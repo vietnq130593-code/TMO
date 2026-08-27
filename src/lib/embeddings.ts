@@ -346,7 +346,7 @@ async function generateEmbeddingNVIDIA(text: string, inputType: 'query' | 'passa
     const key = keys[i]
     try {
       const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 15000) // 15s timeout
+      const timer = setTimeout(() => controller.abort(), 300000) // 5 min — embedding generation must not time out
 
       const response = await fetch(NVIDIA_EMBED_ENDPOINT, {
         method: 'POST',
@@ -440,7 +440,7 @@ async function generateEmbeddingOpenRouter(text: string): Promise<number[] | nul
   for (const key of keys) {
     try {
       const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 15000) // 15s timeout
+      const timer = setTimeout(() => controller.abort(), 300000) // 5 min — embedding generation must not time out
 
       const response = await fetch('https://openrouter.ai/api/v1/embeddings', {
         method: 'POST',

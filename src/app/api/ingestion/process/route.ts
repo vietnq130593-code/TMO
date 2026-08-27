@@ -66,7 +66,7 @@ export const maxDuration = 600 // 10 minutes — allows multiple extraction batc
  *
  *  For a 445-chunk document at ~5s/chunk: 500s timeout → ~100 chunks/batch → ~5 batches total
  */
-const EXTRACTION_TIMEOUT_MS = 500_000
+const EXTRACTION_TIMEOUT_MS = Number.MAX_SAFE_INTEGER // No artificial timeout — extraction runs until completion regardless of duration
 
 /** Number of chunks to process per batch before checking timeout.
  *  After each batch, progress is saved to DB so partial results are preserved.
@@ -2917,13 +2917,6 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
           break
         }
 
-        // TIMEOUT CHECK
-        if (Date.now() - extractionStartTime > EXTRACTION_TIMEOUT_MS) {
-          console.warn(`[Process] Extraction timeout after ${alreadyProcessedCount + chunksCompleted}/${savedChunks.length} chunks (${Date.now() - startTime}ms elapsed)`)
-          shouldStop = true
-          wasTimedOut = true
-          break
-        }
 
         // BACKPRESSURE CHECK: When provider availability is critically low (<25%),
         // pause chunk dispatch to prevent cascading key exhaustion. Without this,

@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const { message, chatHistory = [], timeoutMs = 5000 } = body
+  const { message, chatHistory = [], timeoutMs = 15000 } = body
 
   // Validate required fields
   if (!message || typeof message !== 'string') {
