@@ -493,7 +493,10 @@ export async function POST(request: NextRequest) {
     // FIX 2026-08-28: câu hỏi về workspace/thư mục dự án KHÔNG phải casual —
     // chúng cần workspace context trong system prompt để agent trả lời đúng.
     // Nếu classifyIntent nhầm thành casual → đổi sang factual để đi full flow.
-    if (intent === 'casual' && /(thư mục|workspace|root|project|folder|directory|file|tệp)/i.test(lastUserContent)) {
+    // FIX RESET-2026-08-30: thêm từ khóa về năng lực bản thân agent (skill/tool/
+    // mcp/todo/công cụ) — "bạn có tool gì?" phải đi agent/capability path chứ
+    // không phải casual canned response.
+    if (intent === 'casual' && /(thư mục|workspace|root|project|folder|directory|file|tệp|skill|công cụ|tool|mcp|todo|kỹ năng)/i.test(lastUserContent)) {
       intent = 'factual'
       intentSource = 'workspace-keyword-override'
       console.log('[OpenClaw Chat] Workspace keyword detected — casual → factual')

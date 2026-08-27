@@ -214,6 +214,38 @@ export async function recallMemories(params: RecallParams): Promise<RecalledMemo
     // Step 1: Embed the query using NVIDIA NIM
     const { vector: queryVector } = await generateQueryEmbedding(query)
 
+    // FIX RESET-2026-08-30: khi mọi embedding provider chết (placeholder keys sau
+    // sandbox reset) → empty vector → Qdrant query vô nghĩa → recall luôn rỗng
+    // → vòng lặp learn→perceive ĐỨT (memory lưu được nhưng không bao giờ hồi tái).
+    // Fallback: keyword search trực tiếp trên SQLite AgentMemory (degraded mode —
+    // không semantic nhưng giữ memory loop sống tới khi user cấu hình lại keys).
+    if (!queryVector || queryVector.length === 0) {
+      const keywords = query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(w => w.length > 2).slice(0, 6)
+      if (keywords.length === 0) return []
+      const memories = await db.agentMemory.findMany({
+        where: {
+          agentId,
+          isActive: true,
+          ...(category ? { category } : {}),
+          ...(minImportance > 0 ? { importance: { gte: minImportance } } : {}),
+          OR: keywords.map(w => ({ content: { contains: w } })),
+        },
+        orderBy: [{ importance: 'desc' }, { createdAt: 'desc' }],
+        take: topK,
+      })
+      if (memories.length > 0) {
+        console.log(`[AgentMemory] Embedding unavailable — keyword fallback recalled ${memories.length} memories (degraded mode)`)
+      }
+      return memories.map(m => ({
+        id: m.id,
+        content: m.content,
+        category: m.category,
+        importance: m.importance,
+        relevance: 0.5, // không có similarity thật — fixed moderate score
+        context: m.context,
+      }))
+    }
+
     // Step 2: Build Qdrant filter
     const must: Array<Record<string, unknown>> = [
       { key: 'agentId', match: { value: agentId } },
@@ -231,22 +263,25 @@ export async function recallMemories(params: RecallParams): Promise<RecalledMemo
     }
 
     // Step 3: Search Qdrant
-    const results = await qdrant.search(COLLECTION_AGENT_MEMORY, {
-      vector: queryVector,
+    // FIX RESET-2026-08-30: qdrant.search() bị remove ở @qdrant/js-client-rest
+    // v1.19.0 → migrate sang qdrant.query() (Universally Query API).
+    // Response shape: { points: ScoredPoint[] }.
+    const results = await qdrant.query(COLLECTION_AGENT_MEMORY, {
+      query: queryVector,
       filter: { must },
       limit: topK,
       with_payload: true,
       score_threshold: DEFAULT_MIN_SCORE,
     })
 
-    if (results.length === 0) {
+    if (!results?.points || results.points.length === 0) {
       return []
     }
 
     // Step 4: Process results — update access stats and log
     const recalled: RecalledMemory[] = []
 
-    for (const result of results) {
+    for (const result of results.points) {
       const payload = result.payload as unknown as AgentMemoryPayload
       const memoryId = payload?.memoryId
 
@@ -338,9 +373,10 @@ export async function storeMemory(params: StoreMemoryParams): Promise<StoreMemor
       const { vector, model: embeddingModel } = await generateEmbedding(content)
 
       // Search Qdrant for very similar memories (similarity > 0.92)
+      // FIX RESET-2026-08-30: qdrant.search() removed v1.19.0 → qdrant.query()
       try {
-        const similar = await qdrant.search(COLLECTION_AGENT_MEMORY, {
-          vector,
+        const similarRes = await qdrant.query(COLLECTION_AGENT_MEMORY, {
+          query: vector,
           filter: {
             must: [
               { key: 'agentId', match: { value: agentId } },
@@ -351,10 +387,11 @@ export async function storeMemory(params: StoreMemoryParams): Promise<StoreMemor
           score_threshold: 0.92, // very similar
           with_payload: true,
         })
+        const similar = similarRes?.points ?? []
 
         if (similar.length > 0) {
           // Found a very similar memory — merge instead of duplicate
-          const existingPayload = similar[0].payload as AgentMemoryPayload
+          const existingPayload = similar[0].payload as unknown as AgentMemoryPayload
           const existingMemoryId = existingPayload?.memoryId
           if (existingMemoryId) {
             const existingMem = await db.agentMemory.findUnique({
@@ -493,7 +530,7 @@ export async function storeMemory(params: StoreMemoryParams): Promise<StoreMemor
             {
               id: qdrantPointId,
               vector,
-              payload,
+              payload: payload as unknown as Record<string, unknown>,
             },
           ],
         })
@@ -1011,7 +1048,7 @@ export async function backfillMemoryVectors(): Promise<number> {
           with_vector: false,
         })
         for (const p of res.points) existingPointIds.add(String(p.id))
-        offset = res.next_page_offset
+        offset = (res.next_page_offset as string | number | undefined) ?? undefined
       } while (offset)
     } catch {
       // Collection may be empty/unreachable — treat as no existing points
@@ -1055,7 +1092,7 @@ export async function backfillMemoryVectors(): Promise<number> {
                   tags: m.tags ?? undefined,
                   sessionId: m.sessionId ?? undefined,
                   createdAt: m.createdAt.toISOString(),
-                } as AgentMemoryPayload,
+                } as unknown as Record<string, unknown>,
               }],
             })
             await db.agentMemory.update({ where: { id: m.id }, data: { qdrantPointId: pointId } })

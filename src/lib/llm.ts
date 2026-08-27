@@ -2204,10 +2204,92 @@ export async function callLLMSlot(
   }
 }
 
+// ==================== Z-AI SDK FALLBACK (sandbox self-heal, 2026-08-30) ====================
+
+/**
+ * FIX RESET-2026-08-30: sau khi sandbox reset, NVIDIA keys trong .env là placeholder
+ * → HTTP 401 → TOÀN BỘ agent chat/ReAct/classification chết ("Xin lỗi, tôi không tìm
+ * thấy thông tin..."). z-ai-web-dev-sdk chạy trong sandbox KHÔNG cần key → dùng làm
+ * fallback cuối chuỗi khi NVIDIA pool cạn (401/quota/hết key). ReAct loop parse
+ * tool_call từ TEXT nên SDK text-only vẫn thực thi tool đầy đủ.
+ *
+ * Ưu tiên vẫn là NVIDIA (nhanh, model reasoning); SDK chỉ chạy khi NVIDIA fail toàn bộ.
+ */
+let zaiSdkModule: { chat: { completions: { create: (p: unknown) => Promise<unknown> } } } | null = null
+let zaiSdkInitPromise: Promise<typeof zaiSdkModule> | null = null
+
+async function getZaiSdk() {
+  if (zaiSdkModule) return zaiSdkModule
+  if (!zaiSdkInitPromise) {
+    zaiSdkInitPromise = (async () => {
+      try {
+        const mod = await import('z-ai-web-dev-sdk')
+        const ZAI = (mod as unknown as { default: { create: () => Promise<unknown> } }).default
+        const inst = (await ZAI.create()) as NonNullable<typeof zaiSdkModule>
+        zaiSdkModule = inst
+        return inst
+      } catch (err) {
+        console.warn('[LLM] z-ai-sdk init failed:', err instanceof Error ? err.message : String(err))
+        return null
+      }
+    })()
+  }
+  return zaiSdkInitPromise.then(r => r)
+}
+
+async function tryZaiSdk(
+  prompt: string,
+  systemPrompt: string | undefined,
+  taskLabel: string,
+  options?: LLMCallOptions
+): Promise<LLMResult | null> {
+  try {
+    const sdk = await getZaiSdk()
+    if (!sdk) return null
+    const messages = [
+      ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+      { role: 'user', content: prompt },
+    ]
+    const res = (await sdk.chat.completions.create({
+      messages,
+      ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+      ...(options?.maxTokens ? { max_tokens: options.maxTokens } : {}),
+    })) as {
+      choices?: Array<{ message?: { content?: string } }>
+      model?: string
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+    }
+    const content = res?.choices?.[0]?.message?.content ?? ''
+    if (!content) return null
+    const model = res?.model || 'zai-sdk-default'
+    console.log(`[LLM] z-ai-sdk fallback OK for task "${taskLabel}" (NVIDIA exhausted) — ${content.length} chars`)
+    const totalTokens = res?.usage?.total_tokens ?? 0
+    if (totalTokens > 0) {
+      if (options?.agentId) {
+        addTokensUsedByAgent(
+          totalTokens,
+          res?.usage?.prompt_tokens ?? 0,
+          res?.usage?.completion_tokens ?? 0,
+          'zai-sdk',
+          model,
+          options.agentId,
+          options.agentName || 'unknown'
+        )
+      } else {
+        addTokensUsed(totalTokens, 'zai-sdk', undefined, model)
+      }
+    }
+    return { content, provider: 'zai-sdk', model, tokensUsed: totalTokens || undefined }
+  } catch (err) {
+    console.warn(`[LLM] z-ai-sdk fallback failed for "${taskLabel}":`, err instanceof Error ? err.message : String(err))
+    return null
+  }
+}
+
 // ==================== LEGACY CALL (for chat, health, etc.) ====================
 
 /**
- * Legacy LLM call — NVIDIA NIM ONLY.
+ * Legacy LLM call — NVIDIA NIM first, z-ai-sdk as last-resort fallback.
  * Uses round-robin key selection (keyIndex=-1).
  * Use this for non-extraction tasks (chat queries, classification, health checks).
  */
@@ -2244,13 +2326,18 @@ export async function callLLM(
   const result = await tryNvidia(prompt, systemPrompt, temp, maxTok, aId, aName)
   if (result?.content) return result
 
-  console.log(`[LLM] NVIDIA failed for task "${taskLabel}"`)
+  console.log(`[LLM] NVIDIA failed for task "${taskLabel}" — trying z-ai-sdk fallback`)
+
+  // FIX RESET-2026-08-30: NVIDIA pool exhausted (missing/placeholder keys, quota,
+  // outage) → z-ai-sdk (no key needed in sandbox) thay vì trả error trống.
+  const sdkResult = await tryZaiSdk(prompt, systemPrompt, taskLabel, options)
+  if (sdkResult?.content) return sdkResult
 
   return {
     content: '',
     provider: 'none',
     model: 'none',
-    error: 'NVIDIA NIM failed',
+    error: 'NVIDIA NIM failed (z-ai-sdk fallback also failed)',
   }
 }
 

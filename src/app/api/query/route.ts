@@ -577,6 +577,29 @@ async function generateAnswer(
   // If KB has no data AND there's no agent with own provider/model → return "no data" message
   // If KB has no data BUT agent has own provider/model → let the agent use its own knowledge
   if (!hasKBContext && !agentConfig) {
+    // FIX RESET-2026-08-30: câu hỏi về NĂNG LỰC bản thân agent (skill/tool/mcp/
+    // todo/filesystem...) KHÔNG nằm trong KB — trước đây trả "Xin lỗi, tôi không
+    // tìm thấy thông tin...". Giờ probe năng lực runtime THẬT và trả báo cáo ngắn.
+    if (/(skill|kỹ năng|công cụ|tool|mcp|todo|năng lực|capabilit)/i.test(query)) {
+      try {
+        const { probeCapabilities } = await import('@/lib/agent-capabilities')
+        const report = await probeCapabilities()
+        const lines = report.capabilities.map(c =>
+          `- ${c.group}: ${c.status === 'ok' ? '✅' : c.status === 'degraded' ? '⚠️' : '❌'} ${c.tools.join(', ')}${c.detail ? ` (${c.detail.slice(0, 100)})` : ''}`
+        )
+        const skillsLine = report.skills.filesystem > 0 ? `\n- Skills: ${report.skills.filesystem} trên đĩa + ${report.skills.dbEnabled} trong DB — gọi list_skills để liệt kê đầy đủ` : ''
+        const mcpLine = report.mcp.servers > 0 ? `\n- MCP: ${report.mcp.servers} server — gọi mcp_list_servers để xem chi tiết` : ''
+        return {
+          answer: `Đây là năng lực runtime thực tế của tôi (đã xác nhận lúc ${new Date(report.probedAt).toLocaleTimeString('vi-VN')}):\n${lines.join('\n')}${skillsLine}${mcpLine}\n\nGợi ý: chat với agent có provider riêng (Omega) để tôi tự gọi list_skills / mcp_list_servers / todo_read trả lời chi tiết.`,
+          reasoning: 'Self-capability question answered by runtime probe (KB has no such data).',
+          confidence: 0.95,
+          provider: 'capability-probe',
+          model: 'runtime-verified',
+        }
+      } catch {
+        // probe fail → fall through to default "no data" message
+      }
+    }
     return { answer: 'Xin lỗi, tôi không tìm thấy thông tin liên quan trong Knowledge Base để trả lời câu hỏi này.', reasoning: 'No relevant context found and no agent LLM configured.', confidence: 0.1, provider: 'none', model: 'none' }
   }
 
