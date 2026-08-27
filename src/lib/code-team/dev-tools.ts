@@ -1670,6 +1670,36 @@ export async function todoWrite(args: {
       }
     }
 
+    // FIX 2026-08-27 (user bug report): dedup theo (sessionId, content).
+    // Agents không biết DB row IDs — khi gọi todo_write lần 2 với cùng nội dung
+    // (VD: đánh dấu "Đọc file X" → completed), code cũ tạo ROW MỚI → panel
+    // "Agent Tasks" hiển thị 8 rows trùng lặp: 4 pending gốc + 4 completed mới,
+    // và badge "4 đang chạy" không bao giờ tắt. Giờ: nếu đã có row cùng content
+    // trong session → UPDATE row đó thay vì create.
+    const existingByContent = await db.todo.findFirst({
+      where: { sessionId, content: t.content },
+      orderBy: { createdAt: 'asc' },
+    })
+    if (existingByContent) {
+      const updated = await db.todo.update({
+        where: { id: existingByContent.id },
+        data: {
+          status: t.status || existingByContent.status,
+          priority: t.priority || existingByContent.priority,
+          parentId: t.parentId || existingByContent.parentId,
+        },
+      }).catch(() => null)
+      if (updated) {
+        upserted.push({
+          id: updated.id,
+          content: updated.content,
+          status: updated.status,
+          priority: updated.priority,
+        })
+        continue
+      }
+    }
+
     // Create new
     const created = await db.todo.create({
       data: {

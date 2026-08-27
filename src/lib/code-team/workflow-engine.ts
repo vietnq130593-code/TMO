@@ -1672,7 +1672,8 @@ export async function runAgentStep(params: {
         }
       }
 
-      const toolResult = await executeTool(tc.name, tc.args)
+      // Agent context cho Agent Activity Log (Terminal echo — user request 2026-08-27)
+      const toolResult = await executeTool(tc.name, tc.args, { agentName: agent.name, sessionId })
       const toolDuration = Date.now() - toolStartTime
 
       toolCallsLog.push({

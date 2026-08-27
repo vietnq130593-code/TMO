@@ -27,6 +27,8 @@
 import { getAgentTools } from './agents'
 import { tavilyKeyPool, jinaKeyPool, serperKeyPool } from '@/lib/service-key-pool'
 import { ensureTmoApiToken } from '@/lib/tmo-token'
+// Agent Activity Log — mọi tool call được echo vào ô Terminal (user request 2026-08-27)
+import { recordAgentActivity } from '@/lib/agent-activity-log'
 import {
   fileEdit, fileDelete, fileList, grep,
   runTests, gitCommit,
@@ -1121,13 +1123,33 @@ export interface ToolExecutionResult {
  *
  * @param toolName - Name of the tool to execute
  * @param args - Arguments from LLM's tool_call
+ * @param context - Agent context (tên agent + sessionId) — dùng để ghi
+ *                 Agent Activity Log hiển thị trong ô Terminal (user request
+ *                 2026-08-27: Terminal phải thấy rõ agent đang chạy gì).
  * @returns Execution result with success status
  */
 export async function executeTool(
   toolName: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  context?: { agentName?: string; sessionId?: string | null }
 ): Promise<ToolExecutionResult> {
   const startTime = Date.now()
+
+  // Mỗi tool call đều được ghi vào Agent Activity Log (ring buffer in-memory)
+  // → GET /api/agent-activity → Terminal UI poll 2.5s và echo `$ [AI] ...`.
+  // Fail-open: record lỗi không được phép làm hỏng tool execution.
+  const recordActivity = (success: boolean) => {
+    try {
+      recordAgentActivity({
+        agentName: context?.agentName,
+        tool: toolName,
+        detail: summarizeToolCall(toolName, args),
+        success,
+        durationMs: Date.now() - startTime,
+        sessionId: context?.sessionId ?? null,
+      })
+    } catch { /* ignore — display-only */ }
+  }
 
   try {
     let result: unknown
@@ -1764,6 +1786,7 @@ export async function executeTool(
         break
       }
       default:
+        recordActivity(false)
         return {
           success: false,
           result: `Unknown tool: ${toolName}`,
@@ -1771,6 +1794,7 @@ export async function executeTool(
         }
     }
 
+    recordActivity(true)
     return {
       success: true,
       result,
@@ -1779,10 +1803,56 @@ export async function executeTool(
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err)
     console.error(`[ToolExecutor] Error executing ${toolName}:`, errorMsg)
+    recordActivity(false)
     return {
       success: false,
       result: `Tool error: ${errorMsg}`,
       duration: Date.now() - startTime,
+    }
+  }
+}
+
+/**
+ * Tóm tắt ngắn gọn tool call cho Agent Activity Log / Terminal echo.
+ * shell → lệnh; file_* → path; opencode → action + path/command; ...
+ */
+function summarizeToolCall(toolName: string, args: Record<string, unknown>): string {
+  const s = (v: unknown) => (typeof v === 'string' ? v : '')
+  switch (toolName) {
+    case 'shell':
+    case 'run_bg':
+      return s(args.command)
+    case 'file_read':
+    case 'file_edit':
+    case 'file_delete':
+      return s(args.path)
+    case 'file_multi_edit':
+      return s(args.path) || `${Array.isArray(args.edits) ? args.edits.length : '?'} edits`
+    case 'file_list':
+      return s(args.path) || s(args.pattern) || '.'
+    case 'grep':
+      return s(args.pattern)
+    case 'opencode': {
+      const action = s(args.action)
+      const target = s(args.path) || s(args.command) || ''
+      return action ? `${action} ${target}`.trim() : target
+    }
+    case 'run_tests':
+      return s(args.path) || 'auto-detect'
+    case 'git_commit':
+      return s(args.message).slice(0, 120)
+    case 'todo_write':
+      return `${Array.isArray(args.todos) ? args.todos.length : '?'} bước`
+    case 'knowledge_search':
+    case 'tavily':
+    case 'serper':
+    case 'web_search':
+      return s(args.query)
+    case 'jina':
+    case 'web_fetch':
+      return s(args.url)
+    default: {
+      try { return JSON.stringify(args).slice(0, 150) } catch { return '' }
     }
   }
 }

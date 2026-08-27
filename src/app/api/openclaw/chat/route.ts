@@ -129,6 +129,8 @@ async function runAgentReActLoop(params: {
   agentMaxTokens?: number
   agentTools?: string[]
   maxIterations?: number
+  /** Chat sessionId — truyền vào executeTool để Agent Activity Log/Terminal echo gắn đúng session */
+  agentSessionId?: string | null
 }): Promise<{ content: string; iterations: number; toolCallsExecuted: number }> {
   const {
     systemPrompt,
@@ -142,6 +144,7 @@ async function runAgentReActLoop(params: {
     agentMaxTokens,
     agentTools = [],
     maxIterations = 5,
+    agentSessionId = null,
   } = params
 
   // Build messages array for multi-turn conversation
@@ -220,7 +223,16 @@ async function runAgentReActLoop(params: {
 
       console.log(`[ReAct] Executing: ${tc.name}(${JSON.stringify(tc.args).slice(0, 200)})`)
 
-      const toolResult = await executeTool(tc.name, tc.args)
+      // FIX 2026-08-27: inject chat sessionId vào todo_write — trước đây todos
+      // của MỌI phiên chat đổ dồn vào session "default", panel Agent Tasks không
+      // phân biệt được phiên nào. Giờ mỗi chat có todo list riêng (dropdown
+      // session trong panel hoạt động đúng).
+      const toolArgs: Record<string, unknown> = { ...tc.args }
+      if (tc.name === 'todo_write' && agentSessionId && !toolArgs.sessionId) {
+        toolArgs.sessionId = agentSessionId
+      }
+
+      const toolResult = await executeTool(tc.name, toolArgs, { agentName, sessionId: agentSessionId })
 
       // Add tool result to conversation
       messages.push({
@@ -787,10 +799,29 @@ export async function POST(request: NextRequest) {
           agentTemperature,
           agentMaxTokens,
           agentTools,
-          maxIterations: 5,
+          // 8 vòng: plan (1) + 4-5 hành động + update todo + báo cáo cuối.
+          // Trước đây 5 vòng bị cut ngay trước bước tổng kết (task thành công
+          // nhưng thiếu báo cáo cuối — "Đạt max 5 vòng iteration").
+          maxIterations: 8,
+          agentSessionId: sessionId || null,
         })
 
         const content = reactResult.content
+
+        // FIX 2026-08-27 (user bug report "4 task đã chạy xong nhưng vẫn báo có 4
+        // task đang chạy"): LLM thường quên gọi todo_write lần cuối để đóng các
+        // bước (đánh dấu in_progress rồi báo cáo luôn). Auto-close mọi todo còn
+        // in_progress/pending của session này khi ReAct loop đã kết thúc —
+        // agent đã trả lời xong thì không còn gì "đang chạy".
+        if (sessionId) {
+          try {
+            const closed = await db.todo.updateMany({
+              where: { sessionId, status: { in: ['in_progress', 'pending'] } },
+              data: { status: 'completed' },
+            })
+            if (closed.count > 0) console.log(`[ReAct] Auto-closed ${closed.count} stale todo(s) in session ${sessionId}`)
+          } catch { /* non-blocking — todo hiển thị chỉ là UI progress */ }
+        }
 
         // Track session
         if (sessionId) {

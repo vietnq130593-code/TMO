@@ -11948,19 +11948,22 @@ function CodeTabContent() {
     try {
       const res = await authedFetch('/api/opencode/terminal')
       const data = await res.json()
-      if (data.output && Array.isArray(data.output)) {
+      // FIX 2026-08-27: KHÔNG wipe terminal khi server không có output —
+      // trước đây `setTerminalOutput([])` xóa luôn các dòng Agent Activity
+      // echo (`$ [AI·Omega] ...`) do poll effect ghi vào ngay trước đó
+      // (race on mount). Chỉ overwrite khi thực sự có PTY output để restore.
+      if (data.output && Array.isArray(data.output) && data.output.length > 0) {
         setTerminalOutput(data.output)
       } else if (data.terminals) {
         const allLines: string[] = []
         for (const lines of Object.values(data.terminals) as string[][]) {
           allLines.push(...lines)
         }
-        setTerminalOutput(allLines)
-      } else {
-        setTerminalOutput([])
+        if (allLines.length > 0) setTerminalOutput(allLines)
       }
+      // else: giữ nguyên nội dung hiện tại (AI echo lines / user lines)
     } catch {
-      setTerminalOutput([])
+      // offline — KHÔNG wipe (giữ AI echo lines)
     } finally {
       setTerminalLoading(false)
     }
@@ -12144,6 +12147,79 @@ function CodeTabContent() {
     }
     poll()
     const interval = setInterval(poll, 3000)
+    const onVisible = () => { if (!document.hidden) poll() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [])
+
+  // ===== Agent Activity → Terminal echo (user request 2026-08-27) =====
+  // Poll GET /api/agent-activity (server-side ring buffer ghi bởi executeTool)
+  // mỗi 2.5s và echo lệnh shell/tool của agents vào ô Terminal. Trước đây
+  // terminal echo chỉ xảy ra với SSE event (chế độ Team Code) — single-agent
+  // chat (stream:false) thì Terminal trống rỗng dù agent chạy shell thật.
+  // Lần mount đầu (since=0) hiện tối đa 30 entry gần nhất = lịch sử agent.
+  const agentActivityTsRef = useRef<number>(0)
+  const seenAgentActRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      if (document.hidden) return
+      try {
+        const res = await authedFetch(`/api/agent-activity?since=${agentActivityTsRef.current}&limit=30`)
+        if (!res.ok || cancelled) return
+        const d = await res.json().catch(() => null) as {
+          ok?: boolean
+          entries?: Array<{ id: string; ts: number; agentName?: string; tool: string; detail?: string; success?: boolean; durationMs?: number }>
+        } | null
+        if (!d?.ok || !Array.isArray(d.entries) || d.entries.length === 0 || cancelled) return
+
+        const lines: string[] = []
+        let maxTs = agentActivityTsRef.current
+        for (const e of d.entries) {
+          if (!e || typeof e.id !== 'string' || seenAgentActRef.current.has(e.id)) continue
+          seenAgentActRef.current.add(e.id)
+          if (typeof e.ts === 'number' && e.ts > maxTs) maxTs = e.ts
+          if (seenAgentActRef.current.size > 500) {
+            // Giữ Set nhỏ — xóa nửa cũ
+            seenAgentActRef.current = new Set(Array.from(seenAgentActRef.current).slice(-250))
+          }
+          const who = e.agentName ? `AI·${e.agentName}` : 'AI'
+          const dur = typeof e.durationMs === 'number'
+            ? (e.durationMs >= 1000 ? `${(e.durationMs / 1000).toFixed(1)}s` : `${e.durationMs}ms`)
+            : ''
+          const cmd = String(e.detail || '').replace(/\s+/g, ' ').trim()
+          if (e.tool === 'shell' || e.tool === 'run_bg') {
+            lines.push(`$ [${who}] ${cmd.slice(0, 160)}`)
+            lines.push(e.success
+              ? `✓ [${who}] xong${dur ? ` · ${dur}` : ''}`
+              : `✗ [${who}] LỖI${dur ? ` · ${dur}` : ''}`)
+          } else if (e.tool === 'opencode' && /bash|exec/i.test(cmd)) {
+            lines.push(`$ [${who}] ${cmd.slice(0, 160)}`)
+            lines.push(e.success ? `✓ [${who}] xong${dur ? ` · ${dur}` : ''}` : `✗ [${who}] LỖI${dur ? ` · ${dur}` : ''}`)
+          } else if (e.tool === 'read_output' || e.tool === 'kill_process' || e.tool === 'run_tests' || e.tool === 'git_commit') {
+            const icon = e.tool === 'run_tests' ? '🧪' : e.tool === 'git_commit' ? '📦' : e.tool === 'kill_process' ? '⛔' : '📄'
+            lines.push(`[AI] ${icon} ${e.tool} ${cmd.slice(0, 110)}`.trim())
+          } else if (e.tool === 'file_edit' || e.tool === 'file_multi_edit' || e.tool === 'file_delete') {
+            const icon = e.tool === 'file_delete' ? '🗑️' : '✏️'
+            lines.push(`[AI] ${icon} ${e.tool === 'file_multi_edit' ? 'file_multi_edit' : e.tool} ${cmd.slice(0, 110)}`)
+          }
+        }
+        agentActivityTsRef.current = maxTs
+        if (lines.length > 0) {
+          setTerminalOutput(prev => {
+            const next = [...prev, ...lines]
+            return next.length > 600 ? next.slice(-600) : next
+          })
+          try { terminalViewRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' }) } catch { /* ignore */ }
+        }
+      } catch { /* offline — retry ở interval sau */ }
+    }
+    poll()
+    const interval = setInterval(poll, 2500)
     const onVisible = () => { if (!document.hidden) poll() }
     document.addEventListener('visibilitychange', onVisible)
     return () => {
@@ -13923,7 +13999,7 @@ function CodeTabContent() {
           <div ref={terminalViewRef} className={`bg-slate-950/80 rounded-lg border border-emerald-500/10 p-3 overflow-y-auto font-mono text-[11px]`} style={{ scrollbarWidth: 'thin', height: `${terminalHeight}px` }}>
             {terminalOutput.length > 0 ? (
               terminalOutput.map((line, i) => (
-                <div key={i} className={`${line.startsWith('$') ? 'text-emerald-400' : line.startsWith('Error') || line.startsWith('✗') ? 'text-red-400' : line.startsWith('✓') ? 'text-emerald-300' : line.startsWith('[local-exec]') ? 'text-stone-600 text-[9px]' : 'text-stone-400'}`}>
+                <div key={i} className={`${line.startsWith('$') ? 'text-emerald-400' : line.startsWith('Error') || line.startsWith('✗') ? 'text-red-400' : line.startsWith('✓') ? 'text-emerald-300' : line.startsWith('[AI') ? 'text-cyan-400/80' : line.startsWith('[local-exec]') ? 'text-stone-600 text-[9px]' : 'text-stone-400'}`}>
                   {line}
                 </div>
               ))
