@@ -30,7 +30,8 @@ export async function GET(
 
     const timeline = []
     const createdAt = new Date(session.createdAt)
-    
+    const updatedAt = new Date(session.updatedAt)
+
     // Session start event
     timeline.push({
       timestamp: createdAt.toISOString(),
@@ -40,12 +41,17 @@ export async function GET(
       detail: session.prompt || 'No prompt',
     })
 
-    // Add file read events (simulated based on files touched)
-    let offset = 0
+    // Events được rải ĐỀU (deterministic) trên khoảng thời gian THẬT
+    // [createdAt → updatedAt] của session. Trước đây dùng Math.random() offset
+    // (timestamp giả) — giờ dùng phân bố đều: trung thực với dữ liệu thật,
+    // gọi 2 lần cho ra cùng kết quả.
+    // NOTE: OpenCode session hiện chỉ lưu AGGREGATE (filesTouched/toolsUsed),
+    // chưa có event-level log — thứ tự sự kiện là suy diễn từ aggregate, không
+    // phải chronology thật của từng tool call.
+    const derivedEvents: { type: string; icon: string; label: string; detail: string }[] = []
+
     for (const file of filesTouched) {
-      offset += Math.floor(Math.random() * 5000) + 1000 // 1-6s between events
-      timeline.push({
-        timestamp: new Date(createdAt.getTime() + offset).toISOString(),
+      derivedEvents.push({
         type: 'file_read',
         icon: '📁',
         label: `Đọc file: ${file}`,
@@ -53,22 +59,19 @@ export async function GET(
       })
     }
 
-    // Add tool usage events
+    const toolLabels: Record<string, { icon: string; label: string }> = {
+      knowledge_search: { icon: '🔍', label: 'Tìm kiếm KB' },
+      knowledge_graph: { icon: '🕸️', label: 'Truy vấn Graph' },
+      knowledge_write: { icon: '💾', label: 'Ghi vào KB' },
+      file_edit: { icon: '✏️', label: 'Chỉnh sửa file' },
+      file_read: { icon: '📁', label: 'Đọc file' },
+      bash_exec: { icon: '⚡', label: 'Chạy lệnh' },
+      lsp_diagnostics: { icon: '🔍', label: 'LSP Check' },
+      web_search: { icon: '🌐', label: 'Tìm kiếm web' },
+    }
     for (const tool of toolsUsed) {
-      offset += Math.floor(Math.random() * 3000) + 500
-      const toolLabels: Record<string, { icon: string; label: string }> = {
-        knowledge_search: { icon: '🔍', label: 'Tìm kiếm KB' },
-        knowledge_graph: { icon: '🕸️', label: 'Truy vấn Graph' },
-        knowledge_write: { icon: '💾', label: 'Ghi vào KB' },
-        file_edit: { icon: '✏️', label: 'Chỉnh sửa file' },
-        file_read: { icon: '📁', label: 'Đọc file' },
-        bash_exec: { icon: '⚡', label: 'Chạy lệnh' },
-        lsp_diagnostics: { icon: '🔍', label: 'LSP Check' },
-        web_search: { icon: '🌐', label: 'Tìm kiếm web' },
-      }
       const info = toolLabels[tool] || { icon: '🔧', label: tool }
-      timeline.push({
-        timestamp: new Date(createdAt.getTime() + offset).toISOString(),
+      derivedEvents.push({
         type: 'tool_call',
         icon: info.icon,
         label: info.label,
@@ -76,29 +79,39 @@ export async function GET(
       })
     }
 
-    // Add completion event
-    if (session.status === 'completed') {
-      offset += 2000
+    // Rải đều N derived events trong (start, end] — deterministic
+    const totalMs = Math.max(updatedAt.getTime() - createdAt.getTime(), derivedEvents.length * 1000)
+    const step = totalMs / (derivedEvents.length + 1)
+    derivedEvents.forEach((event, i) => {
       timeline.push({
-        timestamp: new Date(createdAt.getTime() + offset).toISOString(),
+        timestamp: new Date(createdAt.getTime() + Math.round(step * (i + 1))).toISOString(),
+        type: event.type,
+        icon: event.icon,
+        label: event.label,
+        detail: event.detail,
+      })
+    })
+
+    // Add completion event (thời điểm thật — updatedAt)
+    if (session.status === 'completed') {
+      timeline.push({
+        timestamp: updatedAt.toISOString(),
         type: 'complete',
         icon: '✅',
         label: 'Session hoàn thành',
         detail: `${filesTouched.length} files, ${toolsUsed.length} tools used`,
       })
     } else if (session.status === 'failed') {
-      offset += 2000
       timeline.push({
-        timestamp: new Date(createdAt.getTime() + offset).toISOString(),
+        timestamp: updatedAt.toISOString(),
         type: 'error',
         icon: '❌',
         label: 'Session thất bại',
         detail: 'Xem log để biết chi tiết',
       })
     } else if (session.status === 'paused') {
-      offset += 1000
       timeline.push({
-        timestamp: new Date(createdAt.getTime() + offset).toISOString(),
+        timestamp: updatedAt.toISOString(),
         type: 'paused',
         icon: '⏸️',
         label: 'Session tạm dừng',
@@ -123,7 +136,7 @@ export async function GET(
         totalEvents: timeline.length,
         filesTouched: filesTouched.length,
         toolsUsed: toolsUsed.length,
-        duration: offset,
+        duration: totalMs,
       },
     })
   } catch (error) {

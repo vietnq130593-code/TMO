@@ -71,6 +71,13 @@ export async function buildWorkspaceContext(): Promise<WorkspaceContext> {
     ? '  - tool_call: shell({"command": "npm run build"})  — chạy lệnh shell/terminal (mặc định cwd = workspace root; có thể truyền "cwd" khác)'
     : '  - shell: HIỆN TẮT — bật ENABLE_SHELL_TOOL=true trong .env rồi restart app'
 
+  const gitEnabled = isFlagEnabled('ENABLE_GIT_COMMIT')
+  const gitHint = gitEnabled
+    ? `  - tool_call: git_commit({"message": "...", "paths": ["..."], "all": true})  — commit thay đổi (scoped paths)
+  - tool_call: git_push({"branch": "main"})  — PUSH code lên remote khi user yêu cầu (token đã lưu sẵn — không cần hỏi)
+  - tool_call: git_pull({"branch": "main"})  — PULL code mới nhất từ remote khi user yêu cầu (ff-only an toàn; dry_run:true để xem trước; force:true chỉ khi user yêu cầu)`
+    : '  - git tools: HIỆN TẮT — bật ENABLE_GIT_COMMIT=true trong .env rồi restart app'
+
   const text = `--- Active Workspace (thư mục user đã chọn) ---
 Workspace root: ${root}
 Cấu trúc cấp 1 (${listing.length} mục${listing.length >= 40 ? ', đã giới hạn 40' : ''}):
@@ -84,6 +91,7 @@ HƯỚNG DẪN làm việc với workspace:
   - tool_call: file_edit({"path": "...", "old_string": "...", "new_string": "..."})  — sửa file
   - tool_call: grep({"pattern": "từ_khoá", "path": "src"})  — tìm kiếm text trong code
 ${shellHint}
+${gitHint}
 - Tool gọi với path RELATIVE với root (hoặc absolute path nằm trong root). Tool tự resolve theo root — KHÔNG cần đoán đường dẫn tuyệt đối.
 - Sau khi có kết quả tool, TÓM TẮT cho user bằng tiếng Việt (cấu trúc cây, nội dung file, output lệnh...).`
 

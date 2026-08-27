@@ -15565,7 +15565,9 @@ export default function Home() {
   const [gitPullLoading, setGitPullLoading] = useState(false)
   const [gitPullConfirmOpen, setGitPullConfirmOpen] = useState(false)
   const [gitPullDryRunResult, setGitPullDryRunResult] = useState<{files: string[], schemaChanged: boolean, depsChanged?: boolean} | null>(null)
-  const [gitPullDefaultConfig, setGitPullDefaultConfig] = useState<{currentRemote: string | null, currentBranch: string | null, currentCommit: string | null, repoUrl: string | null, hasToken: boolean, isGitRepo?: boolean} | null>(null)
+  const [gitPullDefaultConfig, setGitPullDefaultConfig] = useState<{currentRemote: string | null, currentBranch: string | null, currentCommit: string | null, repoUrl: string | null, hasToken: boolean, isGitRepo?: boolean, savedToken?: string | null, savedTokenPreview?: string | null, hasSavedToken?: boolean, savedAt?: string | null} | null>(null)
+  // Default repo khi không có git remote (user request 2026-08-29)
+  const GIT_PULL_DEFAULT_REPO = 'https://github.com/nguyenquocviety2c-code/TMO'
 
   /** Validate repo URL format on the client side */
   const validateGitPullUrl = useCallback((url: string): string | null => {
@@ -15586,14 +15588,15 @@ export default function Home() {
       const res = await fetch('/api/git-pull')
       const data = await res.json()
       setGitPullDefaultConfig(data)
-      if (data.repoUrl) {
-        setGitPullRepoUrl(data.repoUrl)
-      }
-      if (data.currentBranch) {
-        setGitPullBranch(data.currentBranch)
-      } else {
-        setGitPullBranch('main')
-      }
+      // Repo URL: git remote hiện tại > default repo TMO (user request 2026-08-29
+      // — dialog luôn có địa chỉ mặc định điền sẵn)
+      setGitPullRepoUrl(data.repoUrl || data.defaultRepoUrl || GIT_PULL_DEFAULT_REPO)
+      // API Token: token đã lưu → điền sẵn (user request 2026-08-29 — token
+      // nhập lần trước được tự động lưu server-side và pre-fill lần sau)
+      setGitPullApiToken(data.savedToken || '')
+      // Branch: LUÔN mặc định 'main' (user request 2026-08-29). Nhánh hiện tại
+      // vẫn hiển thị trong ô thông tin "Phiên bản hiện tại" phía dưới.
+      setGitPullBranch('main')
     } catch {}
   }, [])
 
@@ -15614,7 +15617,7 @@ export default function Home() {
       })
       const data = await res.json()
       if (data.success) {
-        setGitPullDryRunResult({ files: data.changedFiles || [], schemaChanged: data.schemaChanged || false })
+        setGitPullDryRunResult({ files: data.changedFiles || [], schemaChanged: data.schemaChanged || false, depsChanged: data.depsChanged || false })
       } else {
         toast({ title: 'Lỗi kiểm tra', description: data.error || 'Lỗi không xác định', variant: 'destructive', duration: 8000 })
       }
@@ -15664,6 +15667,23 @@ export default function Home() {
       setGitPullLoading(false)
     }
   }, [gitPullRepoUrl, gitPullApiToken, gitPullBranch, validateGitPullUrl, toast])
+
+  /** Xóa token đã lưu (nút "Xóa token đã lưu" trong dialog) */
+  const handleGitPullForgetToken = useCallback(async () => {
+    try {
+      const res = await fetch('/api/git-pull', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ forgetToken: true })
+      })
+      const data = await res.json()
+      setGitPullApiToken('')
+      setGitPullDefaultConfig(prev => prev ? { ...prev, hasSavedToken: false, savedToken: undefined, savedTokenPreview: null } : prev)
+      toast({ title: data.success ? 'Đã xóa token' : 'Lỗi', description: data.message || 'Token đã lưu đã được xóa khỏi server.', duration: 4000 })
+    } catch {
+      toast({ title: 'Lỗi', description: 'Không thể kết nối đến server.', variant: 'destructive', duration: 4000 })
+    }
+  }, [toast])
 
   // Restore persisted active module AFTER mount to avoid hydration mismatch.
   const moduleRestoredRef = useRef(false)
@@ -17102,7 +17122,18 @@ export default function Home() {
 
             {/* API Token */}
             <div className="space-y-1">
-              <label className="text-xs font-medium text-stone-300">API Token (GitHub PAT)</label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-stone-300">API Token (GitHub PAT)</label>
+                {gitPullDefaultConfig?.hasSavedToken && (
+                  <button
+                    onClick={handleGitPullForgetToken}
+                    className="text-[10px] text-red-400 hover:text-red-300 underline underline-offset-2 transition-colors"
+                    title="Xóa token đã lưu khỏi server (db/.github-token.json)"
+                  >
+                    Xóa token đã lưu
+                  </button>
+                )}
+              </div>
               <input
                 type="password"
                 value={gitPullApiToken}
@@ -17111,9 +17142,21 @@ export default function Home() {
                 className="w-full rounded-md border border-cyan-400/30 bg-slate-900 px-3 py-2 text-xs text-white placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-cyan-400"
               />
               {gitPullApiToken ? (
-                <p className="text-[10px] text-emerald-400">✓ Token đã được cung cấp</p>
+                gitPullApiToken === gitPullDefaultConfig?.savedToken ? (
+                  <p className="text-[10px] text-emerald-400">
+                    ✓ Token đã lưu sẵn ({gitPullDefaultConfig?.savedTokenPreview || '****'}) — tự động điền từ lần nhập trước. Nhập token khác nếu muốn thay thế.
+                  </p>
+                ) : (
+                  <p className="text-[10px] text-cyan-400">
+                    Token mới — sẽ tự động lưu thay cho token cũ sau khi pull/kiểm tra.
+                  </p>
+                )
+              ) : gitPullDefaultConfig?.hasSavedToken ? (
+                <p className="text-[10px] text-emerald-400">
+                  ✓ Đã có token lưu sẵn ({gitPullDefaultConfig?.savedTokenPreview || '****'}) — server sẽ tự dùng, để trống vẫn pull được.
+                </p>
               ) : (
-                <p className="text-[10px] text-amber-400/70">⚠️ Cần API Token để truy cập private repo</p>
+                <p className="text-[10px] text-amber-400/70">⚠️ Cần API Token để truy cập private repo — nhập 1 lần, tự động lưu để điền sẵn lần sau</p>
               )}
             </div>
 

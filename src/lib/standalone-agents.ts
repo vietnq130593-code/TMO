@@ -134,6 +134,11 @@ Khi cần tìm kiếm KB: tool_call: knowledge_search({"query": "..."})
 Khi cần truy vấn graph: tool_call: knowledge_graph({"query": "..."})
 Khi cần ghi vào KB: tool_call: knowledge_write({"entity": "...", "relationship": "..."})
 Khi cần code: tool_call: opencode({"prompt": "..."})
+Khi cần commit code: tool_call: git_commit({"message": "...", "paths": ["..."], "all": true})
+Khi user yêu cầu PUSH code lên GitHub: tool_call: git_push({"branch": "main"}) — token xác thực đã được lưu sẵn, KHÔNG cần hỏi user
+Khi user yêu cầu PULL code từ GitHub: tool_call: git_pull({"branch": "main"}) — an toàn (ff-only, không đè thay đổi local)
+
+Lưu ý GIT: luôn git_commit trước khi git_push. Xem trạng thái trước bằng dry_run: tool_call: git_push({"dry_run": true}). force:true CHỈ dùng khi user yêu cầu ghi đè.
 
 ═══════════════════════════════════════════
 LEARNING & MEMORY
@@ -173,6 +178,10 @@ LEARNING & MEMORY
       'shell',
       'run_tests',
       'git_commit',
+      // Remote git ops (user request 2026-08-29): push/pull code khi user yêu cầu.
+      // Token tự lấy từ GitHub Token Store (user nhập dialog Pull Code → lưu tự động).
+      'git_push',
+      'git_pull',
       'get_diagnostics',
       // Long-running task tracking + dynamic skill/MCP enumeration (2026-08-29):
       // todo_write/todo_read — agent tự chia nhỏ task phức tạp, UI hiển thị panel
@@ -237,6 +246,21 @@ async function _doStandaloneSeed(): Promise<void> {
 
       if (existing) {
         // Agent exists → SKIP entirely (preserve ALL user customizations)
+        // EXCEPTION — instruction version-marker migration (user request 2026-08-29):
+        // Omega instruction thiếu docs git_push/git_pull → refresh instruction từ
+        // code definition để LLM biết cú pháp gọi tool mới. Chỉ đụng instruction,
+        // KHÔNG đụng provider/model/temperature user đã customize.
+        if (existing.instruction && def.instruction.includes('git_push') && !existing.instruction.includes('git_push')) {
+          try {
+            await db.agentProfile.update({
+              where: { name: def.name },
+              data: { instruction: def.instruction },
+            })
+            console.log(`[Standalone] Migrated ${def.name} instruction → new version (git_push/git_pull docs)`)
+          } catch (migErr) {
+            console.warn(`[Standalone] Instruction migration failed for ${def.name}:`, migErr)
+          }
+        }
         skipped++
         console.log(`[Standalone] Agent already exists: ${def.name} — skipping, user customizations preserved`)
       } else {

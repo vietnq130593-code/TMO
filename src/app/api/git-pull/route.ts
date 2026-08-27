@@ -2,14 +2,17 @@
  * Git Pull API — Pull latest code from GitHub repository
  *
  * GET  /api/git-pull — Return current git config (remote URL, branch, commit)
+ *                      + saved GitHub token (pre-fill dialog) + default repo URL
  * POST /api/git-pull — Execute git pull with custom remote URL and token
+ *                      Token nhập vào được TỰ ĐỘNG LƯU (ghi đè token cũ nếu khác)
+ *                      body: { repoUrl?, apiToken?, branch?, dryRun?, forgetToken? }
  *
  * Strategy: AGGRESSIVE CHECKOUT — overwrite all files except database data.
  *   - Fetch remote → list changed files → checkout each non-protected file from FETCH_HEAD
  *   - Protected dirs (db/, upload/, qdrant-storage/, agent-ctx/) are NEVER touched
  *   - .env is smart-merged: local values preserved, new keys from remote added
  *   - No "would be overwritten" errors — we force-checkout each file individually
- *   - Token safety: never stores token in .git/config
+ *   - Token safety: never stores token in .git/config (saved token lives in db/.github-token.json)
  *   - Shell-safe: uses execFile to avoid shell injection
  *   - Mutex: prevents concurrent pull operations
  */
@@ -19,10 +22,14 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rmSync, cpSync } from 'fs'
 import { join } from 'path'
+import { getSavedGithubTokenInfo, saveGithubToken, clearSavedGithubToken, getSavedGithubToken } from '@/lib/github-token-store'
 
 const execFileAsync = promisify(execFile)
 
 export const dynamic = 'force-dynamic'
+
+/** Repo mặc định khi không có git remote nào cấu hình (user request 2026-08-29) */
+const DEFAULT_REPO_URL = 'https://github.com/nguyenquocviety2c-code/TMO'
 
 /** Protected directories that must never be affected by a git pull — database data lives here */
 const PROTECTED_DIRS = ['db/', 'upload/', 'qdrant-storage/', 'agent-ctx/']
@@ -324,13 +331,17 @@ export async function GET() {
     }
 
     if (!isGitRepo) {
+      // Không phải git repo — vẫn trả default repo URL + saved token để dialog điền sẵn
+      const tokenInfo = getSavedGithubTokenInfo()
       return NextResponse.json({
         currentRemote: null,
         currentBranch: null,
         currentCommit: null,
-        repoUrl: null,
+        repoUrl: DEFAULT_REPO_URL,
+        defaultRepoUrl: DEFAULT_REPO_URL,
         hasToken: false,
         isGitRepo: false,
+        ...tokenInfo,
       })
     }
 
@@ -365,14 +376,20 @@ export async function GET() {
       }
     }
 
-    // SECURITY: Never send raw token to client
+    // SECURITY: Never send raw token to client — saved token (user nhập qua dialog)
+    // được trả RAW để pre-fill theo yêu cầu user 2026-08-29; token embedded trong
+    // remote URL thì vẫn KHÔNG bao giờ trả raw (chỉ hasToken flag).
+    const tokenInfo = getSavedGithubTokenInfo()
+
     return NextResponse.json({
       currentRemote: parsed ? parsed.cleanUrl : (currentRemote || null),
       currentBranch: currentBranch || null,
       currentCommit: currentCommit || null,
       repoUrl: parsed ? parsed.cleanUrl : null,
+      defaultRepoUrl: (parsed ? parsed.cleanUrl : null) || DEFAULT_REPO_URL,
       hasToken: parsed ? !!parsed.embeddedToken : false,
       isGitRepo: true,
+      ...tokenInfo,
     })
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err)
@@ -402,15 +419,43 @@ export async function POST(request: NextRequest) {
       apiToken: bodyApiToken,
       branch: bodyBranch = 'main',
       dryRun = false,
+      forgetToken = false,
     }: {
       repoUrl?: string
       apiToken?: string
       branch?: string
       dryRun?: boolean
+      forgetToken?: boolean
     } = body
+
+    // ── Token management (user request 2026-08-29) ──
+    // forgetToken=true → xóa token đã lưu, KHÔNG pull (dùng cho nút "Xóa token")
+    if (forgetToken) {
+      const cleared = clearSavedGithubToken()
+      return NextResponse.json({
+        success: true,
+        forgotToken: true,
+        message: cleared ? 'Đã xóa token đã lưu' : 'Không có token nào được lưu',
+      })
+    }
 
     const branch = sanitizeBranch(bodyBranch)
     const effectiveToken = bodyApiToken ? sanitizeToken(bodyApiToken) : ''
+
+    // Auto-save token: nhập token mới → lưu lại (ghi đè token cũ nếu khác),
+    // để lần sau dialog tự điền sẵn. Không lưu khi dry-run? Vẫn lưu — user
+    // "Kiểm tra trước" với token là ý định dùng token đó.
+    if (effectiveToken) {
+      const savedBefore = getSavedGithubTokenInfo()
+      if (savedBefore.savedToken !== effectiveToken) {
+        try {
+          const { preview } = saveGithubToken(effectiveToken)
+          console.log(`[GitPull] Auto-saved GitHub token (${preview}) — sẽ điền sẵn lần sau`)
+        } catch (saveErr) {
+          console.warn('[GitPull] Failed to auto-save token:', saveErr instanceof Error ? saveErr.message : String(saveErr))
+        }
+      }
+    }
 
     // ── Resolve current remote config ──
     let currentRemote = ''
@@ -440,7 +485,12 @@ export async function POST(request: NextRequest) {
       console.log(`[GitPull] Converted SSH URL to HTTPS: ${effectiveRepoUrl}`)
     }
 
-    let finalToken = effectiveToken || parsedRepo.embeddedToken || (parsedCurrent?.embeddedToken ?? '') || ''
+    // Token resolution precedence: token user nhập > token embedded trong URL
+    // input > token embedded trong remote hiện tại > TOKEN ĐÃ LƯU (tự điền sẵn)
+    let finalToken = effectiveToken || parsedRepo.embeddedToken || (parsedCurrent?.embeddedToken ?? '') || getSavedGithubToken() || ''
+    if (!effectiveToken && !parsedRepo.embeddedToken && !parsedCurrent?.embeddedToken && finalToken) {
+      console.log('[GitPull] No token in request — using SAVED token from db/.github-token.json')
+    }
     if (parsedRepo.embeddedToken) {
       effectiveRepoUrl = parsedRepo.cleanUrl
     }

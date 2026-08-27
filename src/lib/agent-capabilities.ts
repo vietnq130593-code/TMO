@@ -264,9 +264,11 @@ export async function probeCapabilities(): Promise<CapabilityReport> {
     },
     {
       group: 'tests/git/diagnostics',
-      tools: ['run_tests', 'git_commit', 'get_diagnostics'],
+      tools: ['run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics'],
       status: fsProbe.root ? 'ok' : 'unavailable',
-      detail: fsProbe.root ? `chạy trong workspace root (${fsProbe.root})` : 'cần workspace',
+      detail: fsProbe.root
+        ? `chạy trong workspace root (${fsProbe.root}). git_push/git_pull: push-pull remote khi user yêu cầu — token tự lấy từ GitHub Token Store (token user nhập dialog Pull Code được lưu tự động)`
+        : 'cần workspace',
     },
   ]
 

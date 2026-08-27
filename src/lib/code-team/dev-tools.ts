@@ -861,6 +861,415 @@ export async function gitCommit(args: {
   }
 }
 
+// ==================== P0.5: GIT PUSH / GIT PULL (remote ops) ====================
+//
+// User request 2026-08-29: agents (độc lập lẫn team) phải push/pull code được
+// khi user yêu cầu. Token xác thực lấy từ GitHub Token Store (db/.github-token.json
+// — token user nhập trong dialog "Pull Code từ GitHub" được tự động lưu) hoặc
+// token embedded trong remote URL. Token KHÔNG BAO GIỜ ghi vào .git/config —
+// push/fetch bằng URL one-shot rồi vứt bỏ.
+//
+// Feature flag: ENABLE_GIT_COMMIT (chung cho mọi git tool — operators tắt 1
+// flag là tắt cả commit/push/pull).
+
+/** Strip token từ URL https://token@host/... để log/return an toàn */
+function stripTokenFromGitUrl(url: string): string {
+  return url.replace(/^(https?:\/\/)[^@]+@/, '$1')
+}
+
+/** Xây URL kèm token để authenticate (one-shot, không lưu lại) */
+function buildAuthedGitUrl(remoteUrl: string, token: string): string {
+  const cleaned = remoteUrl.trim()
+  if (/^git@/.test(cleaned) || /^file:\/\//.test(cleaned) || /^\/\//.test(cleaned)) {
+    return cleaned // SSH / local path — không nhúng token
+  }
+  const stripped = cleaned.replace(/^(https?:\/\/)[^@]+@/, '$1')
+  return token ? stripped.replace(/^(https?:\/\/)/, `$1${token}@`) : stripped
+}
+
+/** Trích token embedded từ remote URL (nếu có) */
+function extractEmbeddedToken(remoteUrl: string): string | null {
+  const m = remoteUrl.match(/^https?:\/\/([^@]+)@/)
+  return m ? m[1] : null
+}
+
+interface RemoteGitStatus {
+  isGitRepo: boolean
+  branch: string
+  remoteUrl: string // cleaned (không token)
+  ahead: number
+  behind: number
+  uncommitted: string[]
+  headCommit: string
+}
+
+/** Thăm dò trạng thái git của workspace root — dùng chung cho push/pull */
+async function probeWorkspaceGit(root: string): Promise<RemoteGitStatus> {
+  let isGitRepo = false
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, timeout: 5_000 })
+    isGitRepo = stdout.trim() === 'true'
+  } catch { isGitRepo = false }
+  if (!isGitRepo) {
+    return { isGitRepo: false, branch: '', remoteUrl: '', ahead: 0, behind: 0, uncommitted: [], headCommit: '' }
+  }
+
+  const branchOut = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, timeout: 5_000 })
+    .then(r => r.stdout.trim()).catch(() => '')
+  const headOut = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, timeout: 5_000 })
+    .then(r => r.stdout.trim()).catch(() => '')
+  const remoteOut = await execFileAsync('git', ['remote', 'get-url', 'origin'], { cwd: root, timeout: 5_000 })
+    .then(r => r.stdout.trim()).catch(() => '')
+
+  let ahead = 0
+  let behind = 0
+  if (remoteOut) {
+    // So HEAD với upstream tracking branch (nếu có)
+    const counts = await execFileAsync('git', ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'], { cwd: root, timeout: 5_000 })
+      .then(r => r.stdout.trim()).catch(() => '')
+    const parts = counts.split(/\s+/).map(n => parseInt(n, 10))
+    if (parts.length === 2 && !Number.isNaN(parts[0]) && !Number.isNaN(parts[1])) {
+      ahead = parts[0] || 0
+      behind = parts[1] || 0
+    }
+  }
+
+  const statusOut = await execFileAsync('git', ['status', '--porcelain'], { cwd: root, timeout: 5_000 })
+    .then(r => r.stdout).catch(() => '')
+  const uncommitted = statusOut.split('\n').map(l => l.trim()).filter(Boolean)
+
+  return {
+    isGitRepo: true,
+    branch: branchOut,
+    remoteUrl: stripTokenFromGitUrl(remoteOut),
+    ahead,
+    behind,
+    uncommitted,
+    headCommit: headOut,
+  }
+}
+
+/**
+ * gitPush — push commits local của ACTIVE WORKSPACE lên remote.
+ *
+ * Flow:
+ *   1. Probe workspace git status (repo? branch? remote? ahead?)
+ *   2. Resolve token: embedded trong remote URL > token đã lưu trong token store
+ *      (token user nhập dialog Pull Code) > env GITHUB_TOKEN (nếu có)
+ *   3. Push bằng URL one-shot kèm token — KHÔNG ghi token vào .git/config
+ *
+ * Args:
+ *   branch       — branch cần push (default: branch hiện tại)
+ *   remote       — tên remote (default: origin)
+ *   force        — --force-with-lease (chỉ khi user/agent yêu cầu tường minh)
+ *   set_upstream — --set-upstream (lần push đầu của branch mới)
+ *   dry_run      — chỉ báo trạng thái, KHÔNG push
+ */
+export async function gitPush(args: {
+  branch?: string
+  remote?: string
+  force?: boolean
+  set_upstream?: boolean
+  dry_run?: boolean
+}): Promise<unknown> {
+  const root = await resolveWorkspaceRoot()
+  const status = await probeWorkspaceGit(root)
+
+  if (!status.isGitRepo) {
+    return {
+      success: false,
+      error: `Workspace (${root}) KHÔNG phải git repository. Hãy yêu cầu user đăng ký workspace là git repo, hoặc tự khởi tạo: shell({"command": "git init && git remote add origin <url>"}) — rồi commit (git_commit) trước khi push.`,
+    }
+  }
+  if (!status.remoteUrl) {
+    return {
+      success: false,
+      error: `Git repo (${root}) chưa có remote 'origin'. Hãy thêm remote: shell({"command": "git remote add origin https://github.com/user/repo.git"}) — rồi push lại.`,
+      branch: status.branch,
+      headCommit: status.headCommit,
+    }
+  }
+
+  const branch = (args.branch || '').trim() || status.branch
+  const remoteName = (args.remote || 'origin').replace(/[^a-zA-Z0-9\-_\/\.]/g, '') || 'origin'
+
+  // Dry-run: báo trạng thái, không push
+  if (args.dry_run) {
+    return {
+      success: true,
+      dryRun: true,
+      branch,
+      remote: status.remoteUrl,
+      ahead: status.ahead,
+      behind: status.behind,
+      uncommittedCount: status.uncommitted.length,
+      uncommitted: status.uncommitted.slice(0, 20),
+      message: status.ahead > 0
+        ? `${status.ahead} commit sẵn sàng push lên ${status.remoteUrl} (branch ${branch})`
+        : 'Không có commit nào ahead của upstream — không cần push',
+    }
+  }
+
+  if (status.ahead === 0 && status.uncommitted.length === 0) {
+    // Có thể chưa có upstream tracking — vẫn thử push (branch mới)
+    const hasUpstream = await execFileAsync('git', ['config', `branch.${branch}.remote`], { cwd: root, timeout: 5_000 })
+      .then(r => !!r.stdout.trim()).catch(() => false)
+    if (hasUpstream) {
+      return {
+        success: true,
+        pushed: false,
+        upToDate: true,
+        branch,
+        remote: status.remoteUrl,
+        message: 'Không có gì để push — branch đã đồng bộ với remote',
+      }
+    }
+  }
+
+  // Resolve authentication token: embedded > saved store > env
+  const embedded = extractEmbeddedToken(status.remoteUrl)
+  const { getSavedGithubToken } = await import('@/lib/github-token-store')
+  const savedToken = getSavedGithubToken()
+  const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || ''
+  const token = embedded || savedToken || envToken || ''
+
+  const authedUrl = buildAuthedGitUrl(status.remoteUrl, token)
+  const pushArgs = ['push', authedUrl, branch]
+  if (args.force) pushArgs.push('--force-with-lease')
+  if (args.set_upstream) pushArgs.push('--set-upstream')
+
+  console.log(`[gitPush] Pushing ${branch} → ${stripTokenFromGitUrl(status.remoteUrl)} (token: ${token ? 'yes' : 'no'})`)
+
+  try {
+    const { stdout, stderr } = await execFileAsync('git', pushArgs, { cwd: root, timeout: 120_000 })
+    const afterOut = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, timeout: 5_000 })
+      .then(r => r.stdout.trim()).catch(() => status.headCommit)
+
+    // Bảo vệ: nếu push qua URL one-shot, đảm bảo remote 'origin' config KHÔNG chứa token
+    const remoteNow = await execFileAsync('git', ['remote', 'get-url', remoteName], { cwd: root, timeout: 5_000 })
+      .then(r => r.stdout.trim()).catch(() => '')
+    if (remoteNow && extractEmbeddedToken(remoteNow)) {
+      await execFileAsync('git', ['remote', 'set-url', remoteName, stripTokenFromGitUrl(remoteNow)], { cwd: root, timeout: 5_000 }).catch(() => {})
+      console.log('[gitPush] Cleaned embedded token from .git/config (safety)')
+    }
+
+    return {
+      success: true,
+      pushed: true,
+      branch,
+      remote: status.remoteUrl,
+      beforeCommit: status.headCommit,
+      afterCommit: afterOut,
+      commitsPushed: status.ahead || 'unknown',
+      authenticated: !!token,
+      output: (stdout + stderr).trim().slice(0, 2000),
+    }
+  } catch (err: any) {
+    const { stdout, stderr } = err
+    const raw = ((stdout || '') + (stderr || '')).trim()
+    const output = token ? raw.split(token).join('****') : raw // mask token trong output
+
+    let hint = ''
+    if (/Authentication failed|could not read Username|403/.test(raw)) {
+      hint = 'Xác thực thất bại — chưa có token hợp lệ. Hãy nhờ user nhập GitHub PAT trong dialog "Pull Code từ GitHub" (token được lưu tự động, git_push sẽ dùng lại), hoặc set env GITHUB_TOKEN.'
+    } else if (/non-fast-forward|fetch first|rejected/.test(raw) && !args.force) {
+      hint = 'Remote có commit mới hơn — hãy git_pull trước rồi push lại, hoặc dùng force:true (--force-with-lease) nếu chắc chắn ghi đè.'
+    } else if (/Repository not found|does not appear to be a repository/i.test(raw)) {
+      hint = `Không tìm thấy repository ${status.remoteUrl} — kiểm tra URL remote và quyền truy cập của token.`
+    }
+
+    return {
+      success: false,
+      error: `git push failed: ${err.message}`,
+      hint,
+      branch,
+      remote: status.remoteUrl,
+      output: output.slice(0, 2000),
+    }
+  }
+}
+
+/**
+ * gitPull — pull code từ remote về ACTIVE WORKSPACE (an toàn cho thay đổi local).
+ *
+ * Flow:
+ *   1. Probe workspace git status
+ *   2. Fetch từ remote (URL one-shot kèm token nếu có)
+ *   3. Merge fast-forward-only: KHÔNG đụng uncommitted changes, KHÔNG tạo
+ *      merge commit. Nếu local diverge → trả lỗi kèm hướng dẫn (agent có thể
+ *      git_commit local trước, hoặc force:true để hard-reset theo remote).
+ *   4. force:true → git reset --hard FETCH_HEAD (PHÁ HỦY local changes — opt-in tường minh)
+ *
+ * Args:
+ *   branch — branch cần pull (default: branch hiện tại)
+ *   remote — tên remote (default: origin)
+ *   force  — hard-reset về FETCH_HEAD, discard mọi thay đổi local
+ *   dry_run — fetch + báo cáo khác biệt, KHÔNG apply
+ */
+export async function gitPullWorkspace(args: {
+  branch?: string
+  remote?: string
+  force?: boolean
+  dry_run?: boolean
+}): Promise<unknown> {
+  const root = await resolveWorkspaceRoot()
+  const status = await probeWorkspaceGit(root)
+
+  if (!status.isGitRepo) {
+    return {
+      success: false,
+      error: `Workspace (${root}) KHÔNG phải git repository. Hãy yêu cầu user đăng ký workspace là git repo, hoặc tự khởi tạo: shell({"command": "git init && git remote add origin <url>"}) — rồi pull lại.`,
+    }
+  }
+
+  // Remote URL: dùng remoteName config nếu có, fallback origin
+  const remoteName = (args.remote || 'origin').replace(/[^a-zA-Z0-9\-_\/\.]/g, '') || 'origin'
+  let remoteUrl = status.remoteUrl
+  if (remoteName !== 'origin' && status.isGitRepo) {
+    remoteUrl = stripTokenFromGitUrl(
+      await execFileAsync('git', ['remote', 'get-url', remoteName], { cwd: root, timeout: 5_000 })
+        .then(r => r.stdout.trim()).catch(() => '')
+    )
+  }
+  if (!remoteUrl) {
+    return {
+      success: false,
+      error: `Git repo (${root}) chưa có remote '${remoteName}'. Hãy thêm: shell({"command": "git remote add origin https://github.com/user/repo.git"})`,
+      branch: status.branch,
+    }
+  }
+
+  const branch = (args.branch || '').trim() || status.branch
+
+  // Resolve token như gitPush
+  const embedded = extractEmbeddedToken(remoteUrl)
+  const { getSavedGithubToken } = await import('@/lib/github-token-store')
+  const savedToken = getSavedGithubToken()
+  const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || ''
+  const token = embedded || savedToken || envToken || ''
+
+  const authedUrl = buildAuthedGitUrl(remoteUrl, token)
+
+  // 1. Fetch
+  try {
+    await execFileAsync('git', ['fetch', authedUrl, branch], { cwd: root, timeout: 120_000 })
+  } catch (err: any) {
+    const raw = ((err.stdout || '') + (err.stderr || '')).trim()
+    const output = token ? raw.split(token).join('****') : raw
+    let hint = ''
+    if (/Authentication failed|could not read Username|403/.test(raw)) {
+      hint = 'Xác thực thất bại — chưa có token hợp lệ. Hãy nhờ user nhập GitHub PAT trong dialog "Pull Code từ GitHub" (token được lưu tự động).'
+    } else if (/Repository not found|does not appear to exist/i.test(raw)) {
+      hint = `Không tìm thấy repository — kiểm tra URL remote: ${remoteUrl}`
+    }
+    return { success: false, error: `git fetch failed: ${err.message}`, hint, remote: remoteUrl, branch, output: output.slice(0, 2000) }
+  }
+
+  // 2. So sánh HEAD vs FETCH_HEAD
+  const countOut = await execFileAsync('git', ['rev-list', '--left-right', '--count', 'HEAD...FETCH_HEAD'], { cwd: root, timeout: 5_000 })
+    .then(r => r.stdout.trim()).catch(() => '')
+  const parts = countOut.split(/\s+/).map(n => parseInt(n, 10))
+  const aheadLocal = parts[0] || 0
+  const behindRemote = parts[1] || 0
+  const fetchHeadShort = await execFileAsync('git', ['rev-parse', '--short', 'FETCH_HEAD'], { cwd: root, timeout: 5_000 })
+    .then(r => r.stdout.trim()).catch(() => '')
+
+  // Files sẽ thay đổi (cho dry-run report)
+  const diffFiles = await execFileAsync('git', ['diff', '--name-only', 'HEAD..FETCH_HEAD'], { cwd: root, timeout: 10_000 })
+    .then(r => r.stdout.split('\n').map(l => l.trim()).filter(Boolean)).catch(() => [] as string[])
+
+  if (args.dry_run) {
+    return {
+      success: true,
+      dryRun: true,
+      branch,
+      remote: remoteUrl,
+      headCommit: status.headCommit,
+      fetchHead: fetchHeadShort,
+      ahead: aheadLocal,
+      behind: behindRemote,
+      filesToChange: diffFiles.slice(0, 50),
+      uncommittedCount: status.uncommitted.length,
+      message: behindRemote > 0
+        ? `${behindRemote} commit mới trên remote (${diffFiles.length} file sẽ thay đổi)`
+        : 'Đã là phiên bản mới nhất',
+    }
+  }
+
+  if (behindRemote === 0 && !args.force) {
+    return {
+      success: true,
+      upToDate: true,
+      branch,
+      remote: remoteUrl,
+      headCommit: status.headCommit,
+      message: 'Đã là phiên bản mới nhất — không có gì để pull',
+    }
+  }
+
+  // 3. Apply: force → hard reset; mặc định → ff-only merge
+  if (args.force) {
+    try {
+      await execFileAsync('git', ['reset', '--hard', 'FETCH_HEAD'], { cwd: root, timeout: 30_000 })
+      const after = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, timeout: 5_000 })
+        .then(r => r.stdout.trim()).catch(() => '')
+      return {
+        success: true,
+        forced: true,
+        branch,
+        remote: remoteUrl,
+        beforeCommit: status.headCommit,
+        afterCommit: after,
+        filesChanged: diffFiles.slice(0, 100),
+        message: `Hard-reset ${branch} về ${after} theo remote (local changes đã bị discard)`,
+      }
+    } catch (err: any) {
+      return { success: false, error: `git reset --hard failed: ${err.message}`, branch, remote: remoteUrl }
+    }
+  }
+
+  try {
+    // Cảnh báo uncommitted changes có thể cản trở checkout
+    const blockingFiles = status.uncommitted
+      .map(l => l.replace(/^..\s+/, '').replace(/^"|"$/g, ''))
+      .filter(f => diffFiles.includes(f))
+
+    await execFileAsync('git', ['merge', '--ff-only', 'FETCH_HEAD'], { cwd: root, timeout: 60_000 })
+    const after = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, timeout: 5_000 })
+      .then(r => r.stdout.trim()).catch(() => '')
+
+    return {
+      success: true,
+      branch,
+      remote: remoteUrl,
+      beforeCommit: status.headCommit,
+      afterCommit: after,
+      filesChanged: diffFiles.slice(0, 100),
+      localCommitsPreserved: aheadLocal,
+      message: `Fast-forward ${status.headCommit} → ${after} (${diffFiles.length} file cập nhật)`,
+      ...(blockingFiles.length > 0 ? { note: `Có ${blockingFiles.length} file vừa được pull cũng đang modified local — check git status` } : {}),
+    }
+  } catch (err: any) {
+    const raw = ((err.stdout || '') + (err.stderr || '')).trim()
+    const output = token ? raw.split(token).join('****') : raw
+    let hint = ''
+    if (/Not possible to fast-forward|divergent branches/i.test(raw)) {
+      hint = `Local diverge với remote (local ahead ${aheadLocal}). Hãy git_commit thay đổi local trước rồi thử lại, hoặc dùng force:true để hard-reset theo remote (DISCARD local).`
+    } else if (/would be overwritten|local changes/i.test(raw)) {
+      hint = 'Có uncommitted changes cản trở merge — hãy git_commit/stash trước, hoặc force:true để discard.'
+    }
+    return {
+      success: false,
+      error: `git pull (ff-only) failed: ${err.message}`,
+      hint,
+      branch,
+      remote: remoteUrl,
+      uncommittedCount: status.uncommitted.length,
+      output: output.slice(0, 2000),
+    }
+  }
+}
+
 // ==================== P1: GET DIAGNOSTICS (LSP / tsc) ====================
 
 /**

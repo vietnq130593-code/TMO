@@ -31,7 +31,7 @@ import { ensureTmoApiToken } from '@/lib/tmo-token'
 import { recordAgentActivity } from '@/lib/agent-activity-log'
 import {
   fileEdit, fileDelete, fileList, grep,
-  runTests, gitCommit,
+  runTests, gitCommit, gitPush, gitPullWorkspace,
   getDiagnostics, decomposeTask, createTask, updateTask, getPlan,
   summarize, synthesize,
   runBg, readOutput, killProcess,
@@ -466,6 +466,42 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           no_verify: { type: 'boolean', description: 'true = pass --no-verify (skip pre-commit hooks). Dùng ít — hooks có thể kiểm tra code quality.' },
         },
         required: ['message'],
+      },
+    },
+  },
+  // P0.5 — Remote git ops (user request 2026-08-29): agents push/pull code khi
+  // user yêu cầu. Token tự lấy từ GitHub Token Store (token user nhập dialog
+  // "Pull Code từ GitHub" được lưu tự động) — KHÔNG ghi token vào .git/config.
+  git_push: {
+    type: 'function',
+    function: {
+      name: 'git_push',
+      description: 'Push commits local của ACTIVE WORKSPACE lên remote (origin). Token xác thực tự động lấy từ token đã lưu (user nhập trong dialog Pull Code) — KHÔNG cần hỏi user lại. Trước khi push: đảm bảo đã git_commit mọi thay đổi. dry_run=true để xem trạng thái (ahead/behind/uncommitted) mà không push. Chỉ dùng force:true khi user yêu cầu ghi đè.',
+      parameters: {
+        type: 'object',
+        properties: {
+          branch: { type: 'string', description: 'Branch cần push (default: branch hiện tại)' },
+          remote: { type: 'string', description: 'Tên remote (default: origin)' },
+          force: { type: 'boolean', description: 'true = --force-with-lease. CHỈ khi user yêu cầu tường minh.' },
+          set_upstream: { type: 'boolean', description: 'true = --set-upstream (push lần đầu branch mới)' },
+          dry_run: { type: 'boolean', description: 'true = chỉ báo ahead/behind/uncommitted, KHÔNG push' },
+        },
+      },
+    },
+  },
+  git_pull: {
+    type: 'function',
+    function: {
+      name: 'git_pull',
+      description: 'Pull code mới nhất từ remote (origin) về ACTIVE WORKSPACE. An toàn: merge fast-forward-only — KHÔNG discard thay đổi local chưa commit, KHÔNG tạo merge commit. dry_run=true để xem có bao nhiêu commit/file mới trên remote. force:true = hard-reset theo remote (DISCARD local — chỉ khi user yêu cầu). Token xác thực tự động từ token đã lưu.',
+      parameters: {
+        type: 'object',
+        properties: {
+          branch: { type: 'string', description: 'Branch cần pull (default: branch hiện tại)' },
+          remote: { type: 'string', description: 'Tên remote (default: origin)' },
+          force: { type: 'boolean', description: 'true = hard-reset về phiên bản remote, DISCARD mọi thay đổi local. NGUY HIỂM — chỉ khi user yêu cầu.' },
+          dry_run: { type: 'boolean', description: 'true = fetch + báo cáo khác biệt, KHÔNG apply' },
+        },
       },
     },
   },
@@ -1269,6 +1305,30 @@ export async function executeTool(
         result = await gitCommit(args as any)
         break
       }
+      // P0.5 — remote git ops (user request 2026-08-29): push/pull active workspace.
+      // Cùng feature flag ENABLE_GIT_COMMIT (mọi git tools tắt cùng nhau).
+      case 'git_push': {
+        if (!isFlagEnabled('ENABLE_GIT_COMMIT')) {
+          return {
+            success: false,
+            result: 'git_push tool is disabled (set ENABLE_GIT_COMMIT=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await gitPush(args as any)
+        break
+      }
+      case 'git_pull': {
+        if (!isFlagEnabled('ENABLE_GIT_COMMIT')) {
+          return {
+            success: false,
+            result: 'git_pull tool is disabled (set ENABLE_GIT_COMMIT=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await gitPullWorkspace(args as any)
+        break
+      }
       // ===== P1: diagnostics + planning + synthesis + processes + packages =====
       case 'get_diagnostics':
         result = await getDiagnostics(args as any)
@@ -1841,6 +1901,10 @@ function summarizeToolCall(toolName: string, args: Record<string, unknown>): str
       return s(args.path) || 'auto-detect'
     case 'git_commit':
       return s(args.message).slice(0, 120)
+    case 'git_push':
+      return `${s(args.branch) || 'HEAD'} → remote${args.force ? ' (force)' : ''}`
+    case 'git_pull':
+      return `${s(args.branch) || 'HEAD'} ← remote${args.force ? ' (force)' : ''}`
     case 'todo_write':
       return `${Array.isArray(args.todos) ? args.todos.length : '?'} bước`
     case 'knowledge_search':
