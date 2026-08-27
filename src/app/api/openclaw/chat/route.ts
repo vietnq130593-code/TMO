@@ -20,15 +20,20 @@ import { isOpenCodeOnline, createOpenCodeSession, opencodeFetch } from '@/lib/op
 import { enrichCodeContext, isCodeQuery as isCodeQueryAdvanced, detectCodeConfidence } from '@/lib/opencode-knowledge-context'
 import { generateOpenCodeSystemPrompt } from '@/lib/opencode-system-prompt'
 import { db } from '@/lib/db'
-import { addTokensUsed, addTokensUsedByAgent, callLLMForAgent } from '@/lib/llm'
+import { addTokensUsed, addTokensUsedByAgent } from '@/lib/llm'
 import { autoLearnFromAnswer, shouldAutoLearn } from '@/lib/auto-learn'
 import { recallMemories, extractMemoriesFromConversation, saveChatMessages, getUserProfile, ensureAgentMemoryCollection, decayMemories } from '@/lib/agent-memory'
-import { executeTool } from '@/lib/code-team/tool-executor'
-import { parseToolCallsFromOutput, formatMessagesForLLM } from '@/lib/tool-calls'
 import { getStandaloneAgentTools } from '@/lib/standalone-agents'
 // Agent Run Tracker — Thought Process + Todos + Progress realtime trong chat
 // (user request 2026-08-31: mọi agents hiển thị tư duy/tiến trình như Claude Code)
-import { startAgentRun, endAgentRun, recordAgentThought, getAgentRuns, isSessionCancelled } from '@/lib/agent-run-tracker'
+// 2026-09-01: start/end/thought/cancel đã chuyển vào agent-goal-loop.ts (run
+// của toàn bộ goal loop); route chỉ còn đọc run summary qua getAgentRuns.
+import { getAgentRuns } from '@/lib/agent-run-tracker'
+// GOAL-DRIVEN LONG-HORIZON LOOP (user request 2026-09-01): thay thế ReAct loop cũ —
+// vòng lặp mục tiêu dài hạn: Xác định vấn đề → Triển khai → Kiểm định → Đánh giá
+// hoàn thành → (chưa: Chẩn đoán lỗi + Lập kế hoạch lại → lặp) → Hoàn thành.
+// Xem docs/DANH_GIA_REACT_LOOP_VS_CLAUDE_CODE.md + src/lib/agent-goal-loop.ts
+import { runGoalDrivenLoop } from '@/lib/agent-goal-loop'
 // Phase A: Smart KB Routing — Intent Classifier
 // Phase C: Smart KB Writeback — replaces autoLearnFromAnswer with confidence-filtered writeback
 // Phase B: Smart KB Pre-Search — search Qdrant+Neo4j before building system prompt
@@ -104,225 +109,18 @@ function generateCasualResponse(userMsg: string, agentName?: string): string {
 }
 
 // ============================================
-// ReAct LOOP — Standalone Agent Tool Execution
+// ReAct LOOP — đã NÂNG CẤP thành GOAL-DRIVEN LOOP (2026-09-01)
 // ============================================
-
-/**
- * Run a ReAct (Reason-Act-Observe) loop for an agent with tool execution.
- *
- * This enables standalone agents like Omega to actually USE their declared tools
- * (opencode, knowledge_search, tavily, etc.) instead of just having them in prompts.
- *
- * Flow:
- * 1. Call LLM with system prompt + user message
- * 2. Parse tool_call patterns from LLM output
- * 3. If tool calls found → execute → feed results back → repeat
- * 4. If no tool calls → return final answer
- * 5. Max 5 iterations to prevent infinite loops
- */
-async function runAgentReActLoop(params: {
-  systemPrompt: string
-  userMessage: string
-  chatHistory: Array<{ role: string; content: string }>
-  agentProvider: string
-  agentModel: string
-  agentId: string
-  agentName: string
-  agentTemperature?: number
-  agentMaxTokens?: number
-  agentTools?: string[]
-  maxIterations?: number
-  /** Chat sessionId — truyền vào executeTool để Agent Activity Log/Terminal echo gắn đúng session */
-  agentSessionId?: string | null
-}): Promise<{ content: string; iterations: number; toolCallsExecuted: number; runId?: string | null }> {
-  const {
-    systemPrompt,
-    userMessage,
-    chatHistory,
-    agentProvider,
-    agentModel,
-    agentId,
-    agentName,
-    agentTemperature,
-    agentMaxTokens,
-    agentTools = [],
-    maxIterations = 5,
-    agentSessionId = null,
-  } = params
-
-  // Build messages array for multi-turn conversation
-  const messages: Array<{
-    role: 'system' | 'user' | 'assistant' | 'tool'
-    content: string
-    tool_call_id?: string
-  }> = [
-    { role: 'system', content: systemPrompt },
-    // Include last 6 messages from chat history for context
-    ...chatHistory.slice(-6).map(m => ({
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-    })),
-    { role: 'user', content: userMessage },
-  ]
-
-  let finalContent = ''
-  let iterations = 0
-  let totalToolCalls = 0
-
-  // ===== Thought Process tracking (user request 2026-08-31) =====
-  // 1 run = 1 chat exchange. executeTool() tự ghi tool events vào run active
-  // của session này (xem tool-executor.ts recordActivity) — nên mọi tool call
-  // (kèm kết quả thật) hiện trong khối Thought Process của chat UI.
-  const runId = startAgentRun({
-    sessionId: agentSessionId,
-    agentName,
-    task: userMessage,
-    mode: 'standalone',
-  })
-  // USER REQUEST 2026-08-31 (bấm nút Gửi để Dừng): endRun IDEMPOTENT — status
-  // ĐẦU TIÊN thắng (cancelled/error không bị ghi đè thành done ở cuối loop).
-  let runEnded = false
-  const endRun = (status: 'done' | 'error' | 'cancelled') => {
-    if (runEnded) return
-    runEnded = true
-    endAgentRun(agentSessionId, runId, status, `${iterations} vòng · ${totalToolCalls} tool calls`)
-  }
-  // Flag session bị user hủy → (a) cắt ngang ReAct giữa các vòng, (b) truyền
-  // xuống callLLMForAgent (abortCheck) để chuỗi xoay vòng key dừng ngay giữa chừng.
-  const isCancelled = () => isSessionCancelled(agentSessionId)
-
-  // CUSTOM TOOLS (user request 2026-08-30): nạp custom tool registry 1 lần
-  // trước loop — whitelist check bên dưới cho phép gọi custom tools đã register
-  // (agents TỰ VIẾT qua create_custom_tool, kể cả tool tạo trong cùng loop này).
-  try {
-    const { ensureCustomToolsLoaded } = await import('@/lib/custom-tool-registry')
-    await ensureCustomToolsLoaded()
-  } catch { /* fail-open */ }
-
-  while (iterations < maxIterations) {
-    // USER REQUEST 2026-08-31: user bấm Dừng → kết thúc ReAct NGAY giữa các vòng
-    if (isCancelled()) {
-      finalContent = '⏹ Đã dừng tác vụ theo yêu cầu của bạn.'
-      endRun('cancelled')
-      break
-    }
-    iterations++
-
-    // Format messages for LLM (since callLLMForAgent takes a single prompt string)
-    const formattedPrompt = formatMessagesForLLM(messages)
-
-    // Call LLM for this agent
-    // abortCheck (user request 2026-08-31): chuỗi xoay vòng key LLM cũng dừng
-    // ngay khi user bấm Dừng — không đợi hết 4 key × 3 lần.
-    const result = await callLLMForAgent(
-      formattedPrompt,
-      { provider: agentProvider, model: agentModel },
-      systemPrompt,
-      {
-        agentId,
-        agentName,
-        temperature: agentTemperature,
-        maxTokens: agentMaxTokens,
-        abortCheck: isCancelled,
-      }
-    )
-
-    if (isCancelled()) {
-      finalContent = '⏹ Đã dừng tác vụ theo yêu cầu của bạn.'
-      endRun('cancelled')
-      break
-    }
-
-    if (!result || (result.error && !result.content)) {
-      finalContent = result?.error || 'LLM call failed'
-      endRun('error')
-      break
-    }
-
-    finalContent = result.content
-
-    // Thought của vòng này = output LLM (phần reasoning trước tool_call)
-    recordAgentThought(agentSessionId, result.content, iterations)
-
-    // Check if LLM output contains tool calls
-    const toolCalls = parseToolCallsFromOutput(result.content)
-
-    if (toolCalls.length === 0) {
-      // No tool calls → agent is done
-      break
-    }
-
-    // Execute tool calls
-    console.log(`[ReAct] ${agentName} calling ${toolCalls.length} tools (iteration ${iterations})`)
-
-    // Add assistant message with tool calls to conversation
-    messages.push({
-      role: 'assistant',
-      content: result.content,
-    })
-
-    for (const tc of toolCalls) {
-      // USER REQUEST 2026-08-31: user bấm Dừng → không thực thi tool còn lại
-      if (isCancelled()) {
-        messages.push({
-          role: 'tool',
-          content: JSON.stringify({ tool: tc.name, success: false, result: 'Đã dừng bởi người dùng' }),
-        })
-        continue
-      }
-      totalToolCalls++
-
-      // Only execute tools that the agent has permission for
-      // EXCEPTION (user request 2026-08-30): custom tools (agent TỰ VIẾT qua
-      // create_custom_tool) luôn được phép — mọi agents dùng chung registry.
-      let isCustomTool = false
-      try {
-        const { isCustomToolRegistered } = await import('@/lib/custom-tool-registry')
-        isCustomTool = isCustomToolRegistered(tc.name)
-      } catch { /* fail-open */ }
-      if (agentTools.length > 0 && !agentTools.includes(tc.name) && !isCustomTool) {
-        messages.push({
-          role: 'tool',
-          content: JSON.stringify({ tool: tc.name, success: false, result: `Tool "${tc.name}" not available for this agent. Available tools: ${agentTools.join(', ')}` }),
-        })
-        continue
-      }
-
-      console.log(`[ReAct] Executing: ${tc.name}(${JSON.stringify(tc.args).slice(0, 200)})`)
-
-      // FIX 2026-08-27: inject chat sessionId vào todo_write — trước đây todos
-      // của MỌI phiên chat đổ dồn vào session "default", panel Agent Tasks không
-      // phân biệt được phiên nào. Giờ mỗi chat có todo list riêng (dropdown
-      // session trong panel hoạt động đúng).
-      const toolArgs: Record<string, unknown> = { ...tc.args }
-      if (tc.name === 'todo_write' && agentSessionId && !toolArgs.sessionId) {
-        toolArgs.sessionId = agentSessionId
-      }
-
-      const toolResult = await executeTool(tc.name, toolArgs, { agentName, sessionId: agentSessionId })
-
-      // Add tool result to conversation
-      messages.push({
-        role: 'tool',
-        content: JSON.stringify({
-          tool: tc.name,
-          success: toolResult.success,
-          result: toolResult.result,
-        }),
-      })
-    }
-
-    // If max iterations reached, break
-    if (iterations >= maxIterations) {
-      finalContent += `\n\n⚠️ Đạt max ${maxIterations} vòng iteration.`
-      break
-    }
-  }
-
-  console.log(`[ReAct] ${agentName} done: ${iterations} iterations, ${totalToolCalls} tool calls`)
-  endRun(finalContent.startsWith('Error') ? 'error' : 'done')
-  return { content: finalContent, iterations, toolCallsExecuted: totalToolCalls, runId }
-}
+// runAgentReActLoop cũ (while iterations < 8, kết thúc khi LLM ngừng phát tool
+// call — không kiểm chứng mục tiêu) được thay bằng runGoalDrivenLoop từ
+// src/lib/agent-goal-loop.ts:
+//   - Nhiều chu kỳ (mặc định 4) × vòng ReAct mỗi chu kỳ (mặc định 10)
+//   - Protocol 3 giai đoạn: PLAN → EXECUTE → VERIFY (bằng chứng tool thật)
+//   - Evaluator độc lập sau mỗi chu kỳ (evidence-based, không tin lời tuyên bố)
+//   - Chưa đạt → chẩn đoán rootCause + kế hoạch mới → chu kỳ kế tiếp
+//   - Budgets (time/token) + no-progress detection + báo cáo trung thực
+// Return shape tương thích: { content, iterations, toolCallsExecuted, runId }
+// + goalLoop metadata { cycles, complete, stopReason, ... }.
 
 const DEFAULT_SYSTEM_PROMPT = `Bạn là AI Agent của The Magnum Opus — Hệ thống GraphRAG Knowledge Base.
 
@@ -938,13 +736,17 @@ export async function POST(request: NextRequest) {
     // (hasAgentProviderModel declared earlier — Phase A procedural guard)
 
     if (hasAgentProviderModel) {
-      console.log(`[OpenClaw Chat] ReAct loop: Agent using own provider/model (${agentProvider}/${agentModel})`)
+      console.log(`[OpenClaw Chat] Goal-driven loop: Agent using own provider/model (${agentProvider}/${agentModel})`)
 
       try {
         // Determine agent tools from standalone agents definition
         const agentTools = agentProfileName ? getStandaloneAgentTools(agentProfileName) : []
 
-        const reactResult = await runAgentReActLoop({
+        // GOAL-DRIVEN LOOP (2026-09-01): thay ReAct loop 8 vòng — chạy nhiều chu kỳ
+        // PLAN → EXECUTE → VERIFY → EVALUATE (trọng tài độc lập) → DIAGNOSE+REPLAN
+        // cho đến khi mục tiêu hoàn thành hoặc hết budget. maxIterations không còn
+        // hardcoded ở đây — cấu hình qua env trong agent-goal-loop.ts.
+        const reactResult = await runGoalDrivenLoop({
           systemPrompt,
           userMessage: lastUserContent,
           chatHistory: messages.filter((m: { role: string }) => m.role === 'user' || m.role === 'assistant'),
@@ -955,10 +757,6 @@ export async function POST(request: NextRequest) {
           agentTemperature,
           agentMaxTokens,
           agentTools,
-          // 8 vòng: plan (1) + 4-5 hành động + update todo + báo cáo cuối.
-          // Trước đây 5 vòng bị cut ngay trước bước tổng kết (task thành công
-          // nhưng thiếu báo cáo cuối — "Đạt max 5 vòng iteration").
-          maxIterations: 8,
           agentSessionId: sessionId || null,
         })
 
@@ -990,15 +788,19 @@ export async function POST(request: NextRequest) {
         // FIX 2026-08-27 (user bug report "4 task đã chạy xong nhưng vẫn báo có 4
         // task đang chạy"): LLM thường quên gọi todo_write lần cuối để đóng các
         // bước (đánh dấu in_progress rồi báo cáo luôn). Auto-close mọi todo còn
-        // in_progress/pending của session này khi ReAct loop đã kết thúc —
+        // in_progress/pending của session này khi loop đã kết thúc —
         // agent đã trả lời xong thì không còn gì "đang chạy".
+        // GOAL LOOP (2026-09-01): nếu trọng tài kết luận CHƯA hoàn thành → đánh dấu
+        // todo còn sót là 'failed' thay vì 'completed' (đóng ảo) — trung thực với
+        // trạng thái thật, UI panel hiện ✗ thay vì ✓.
         if (sessionId) {
           try {
+            const goalIncomplete = reactResult.goalLoop ? reactResult.goalLoop.complete === false : false
             const closed = await db.todo.updateMany({
               where: { sessionId, status: { in: ['in_progress', 'pending'] } },
-              data: { status: 'completed' },
+              data: { status: goalIncomplete ? 'failed' : 'completed' },
             })
-            if (closed.count > 0) console.log(`[ReAct] Auto-closed ${closed.count} stale todo(s) in session ${sessionId}`)
+            if (closed.count > 0) console.log(`[GoalLoop] Auto-closed ${closed.count} stale todo(s) in session ${sessionId} → ${goalIncomplete ? 'failed (mục tiêu chưa hoàn thành)' : 'completed'}`)
           } catch { /* non-blocking — todo hiển thị chỉ là UI progress */ }
         }
 
@@ -1063,7 +865,7 @@ export async function POST(request: NextRequest) {
         if (agentProfileId && sessionId) {
           // 2026-09-01: user message đã lưu ở ĐẦU request → chỉ lưu assistant
           saveChatMessages(sessionId, [
-            { role: 'assistant', content, model: agentModel, provider: agentProvider, metadata: { reactIterations: reactResult.iterations, toolCallsExecuted: reactResult.toolCallsExecuted, agentRun: agentRunSummary } },
+            { role: 'assistant', content, model: agentModel, provider: agentProvider, metadata: { reactIterations: reactResult.iterations, toolCallsExecuted: reactResult.toolCallsExecuted, agentRun: agentRunSummary, goalLoop: reactResult.goalLoop } },
           ]).catch(err => console.warn('[Memory] Failed to save chat messages:', err instanceof Error ? err.message : String(err)))
 
           if (!isTrivialExchange(lastUserContent, content)) {
@@ -1098,12 +900,13 @@ export async function POST(request: NextRequest) {
           reactIterations: reactResult.iterations,
           toolCallsExecuted: reactResult.toolCallsExecuted,
           agentRun: agentRunSummary,
+          goalLoop: reactResult.goalLoop,
           memoriesRecalled: recalledMemories.length || undefined,
           intent,
           kbConfidence: kbSearchResult?.confidence || undefined,
         })
       } catch (err) {
-        console.warn('[OpenClaw Chat] ReAct loop error, falling back to /api/query:', err instanceof Error ? err.message : String(err))
+        console.warn('[OpenClaw Chat] Goal loop error, falling back to /api/query:', err instanceof Error ? err.message : String(err))
         // Fall through to /api/query fallback below
       }
     }

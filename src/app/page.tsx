@@ -8931,13 +8931,15 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
           }
 
           if (d.runs.length > 0) {
-          // 1. Cập nhật dữ liệu run (kèm safeguard: run "running" quá 10 phút
-          //    coi như lỗi client-side — tránh poller kẹt vĩnh viễn)
+          // 1. Cập nhật dữ liệu run (kèm safeguard: run "running" quá 30 phút
+          //    coi như lỗi client-side — tránh poller kẹt vĩnh viễn).
+          //    GOAL LOOP (2026-09-01): nâng 10' → 30' vì vòng lặp mục tiêu dài hạn
+          //    chạy hợp pháp nhiều chu kỳ (budget mặc định 12', env có thể tăng).
           setAgentRuns(prev => {
             const next = { ...prev }
             for (const raw of d.runs!) {
               let run = raw
-              if (run.status === 'running' && Date.now() - (run.startedAt || 0) > 10 * 60_000) {
+              if (run.status === 'running' && Date.now() - (run.startedAt || 0) > 30 * 60_000) {
                 run = { ...run, status: 'error' as const, endedAt: Date.now() }
               }
               next[run.runId] = run
