@@ -1332,8 +1332,14 @@ export async function GET(request: NextRequest) {
 
       try {
         // Step 1: Find orphan entities in Neo4j (entities with no relationships)
+        // DATA-LOSS FIX 2026-08-31: previously `MATCH (e) WHERE NOT (e)-[]-()` matched
+        // EVERY unconnected node — including Document nodes whose extraction found no
+        // entities, and isolated entities freshly written by chat auto-learn (their
+        // relationships arrive in a later step). Deleting a Document node orphaned all
+        // its CONTAINS-linked entities, which then fed the ingestion pipeline's orphan
+        // cleanup → cascading data loss. Now: only entity nodes, never Documents.
         const orphans = await readCypher<{ id: string; name: string }>(
-          'MATCH (e) WHERE NOT (e)-[]-() RETURN e.id AS id, e.name AS name'
+          'MATCH (e) WHERE NOT (e)-[]-() AND NOT (e:Document) AND e.entity_type IS NOT NULL RETURN e.id AS id, e.name AS name'
         )
         console.log(`[Reconcile] Found ${orphans.length} orphan entities in Neo4j`)
 

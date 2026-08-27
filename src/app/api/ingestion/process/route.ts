@@ -1595,6 +1595,28 @@ async function writeEntitiesToNeo4j(
   const NEO4J_SESSION_TIMEOUT_MS = 60_000 // 60s per session operation timeout
   let nodesCreated = 0; let relationshipsCreated = 0
   let neo4jTimedOut = false
+  // DATA-LOSS FIX 2026-08-31: entity IDs this document referenced BEFORE this run.
+  // Step 7's orphan cleanup is restricted to this set — previously it deleted ANY
+  // entity without a CONTAINS edge (LIMIT 1000 per ingestion), which wiped entities
+  // written by auto-learn writeback, sync-resolved and sync-orphan flows.
+  let prevEntityIds: string[] = []
+  let containsFailed = false
+  try {
+    const prevRead = await session.executeRead(tx =>
+      tx.run(
+        `MATCH (d:Document {id: $documentId})-[:CONTAINS]->(e)
+         WHERE e.id IS NOT NULL
+         RETURN collect(e.id) AS ids`,
+        { documentId }
+      )
+    )
+    const rawIds = (prevRead.records[0]?.get('ids') ?? []) as Array<unknown>
+    prevEntityIds = rawIds.filter((v): v is string => typeof v === 'string')
+  } catch (err) {
+    // If we can't read the previous references, skip orphan cleanup (keep data)
+    console.warn(`[Neo4j] Failed to capture previous CONTAINS references for ${documentId} — orphan cleanup will be skipped:`, err instanceof Error ? err.message : String(err))
+    prevEntityIds = []
+  }
   try {
     // ========================================================================
     // CROSS-DOCUMENT SAFE DELETION:
@@ -1835,28 +1857,63 @@ async function writeEntitiesToNeo4j(
         }
         console.log(`[Neo4j] Created CONTAINS relationships: Document ${documentId.slice(0, 8)}... → ${entityIds.length} entities`)
       } catch (err) {
-        console.warn(`[Neo4j] CONTAINS relationship creation failed:`, err instanceof Error ? err.message : String(err))
+        containsFailed = true
+        console.warn(`[Neo4j] CONTAINS relationship creation failed (orphan cleanup will be skipped for safety):`, err instanceof Error ? err.message : String(err))
       }
     }
 
-    // Step 7: Clean up orphaned entity nodes (no CONTAINS from ANY document).
-    // With global entity IDs, a node becomes orphaned when ALL documents that referenced
-    // it have been deleted or re-processed without including it. This is a slow operation,
-    // so we only do it for fresh processing (not re-extract) and limit the batch size.
+    // Step 7 (DATA-LOSS FIX 2026-08-31): Clean up orphaned entity nodes — SCOPED.
+    // Previously this step deleted ANY entity node without a CONTAINS edge from a
+    // Document (LIMIT 1000 per ingestion). That global sweep silently deleted:
+    //   - entities written by chat auto-learn/writeback (no CONTAINS edges)
+    //   - resolved/orphan entities synced by /api/sync-neo4j (no CONTAINS edges)
+    //   - entities whose CONTAINS creation just failed in Step 6
+    // Now the cleanup is restricted to entities THIS document referenced before
+    // this run (prevEntityIds) that are no longer referenced by ANY document.
+    // The old global behavior is available behind NEO4J_GLOBAL_ORPHAN_CLEANUP=true
+    // (dangerous — only for deliberate manual graph surgery).
     if (!skipDeletion) {
-      try {
-        const orphanResult = await session.executeWrite(tx =>
-          tx.run(
-            `MATCH (n) WHERE n.entity_type IS NOT NULL AND n.entity_type <> 'Document' AND NOT (n)<-[:CONTAINS]-(:Document)
-             WITH n LIMIT 1000 DETACH DELETE n RETURN count(n) AS deleted`
+      if (containsFailed) {
+        console.warn(`[Neo4j] Skipping orphan cleanup for ${documentId}: CONTAINS creation failed — deleting orphans now would delete this document's freshly written entities.`)
+      } else if (process.env.NEO4J_GLOBAL_ORPHAN_CLEANUP === 'true') {
+        try {
+          const orphanResult = await session.executeWrite(tx =>
+            tx.run(
+              `MATCH (n) WHERE n.entity_type IS NOT NULL AND n.entity_type <> 'Document' AND NOT (n)<-[:CONTAINS]-(:Document)
+               WITH n LIMIT 1000 DETACH DELETE n RETURN count(n) AS deleted`
+            )
           )
-        )
-        const orphanDeleted = orphanResult.records.length > 0 ? orphanResult.records[0].get('deleted').toNumber() : 0
-        if (orphanDeleted > 0) {
-          console.log(`[Neo4j] Cleaned up ${orphanDeleted} orphaned entity nodes (no document references them)`)
+          const orphanDeleted = orphanResult.records.length > 0 ? orphanResult.records[0].get('deleted').toNumber() : 0
+          if (orphanDeleted > 0) {
+            console.log(`[Neo4j] Cleaned up ${orphanDeleted} orphaned entity nodes (GLOBAL mode via NEO4J_GLOBAL_ORPHAN_CLEANUP)`)
+          }
+        } catch (err) {
+          console.warn(`[Neo4j] Orphan cleanup failed:`, err instanceof Error ? err.message : String(err))
         }
-      } catch (err) {
-        console.warn(`[Neo4j] Orphan cleanup failed:`, err instanceof Error ? err.message : String(err))
+      } else if (prevEntityIds.length > 0) {
+        try {
+          let scopedDeleted = 0
+          for (let i = 0; i < prevEntityIds.length; i += 1000) {
+            const batch = prevEntityIds.slice(i, i + 1000)
+            const result = await session.executeWrite(tx =>
+              tx.run(
+                `UNWIND $ids AS eid
+                 MATCH (n {id: eid})
+                 WHERE n.entity_type IS NOT NULL AND n.entity_type <> 'Document' AND NOT (n)<-[:CONTAINS]-(:Document)
+                 DETACH DELETE n
+                 RETURN count(n) AS deleted`,
+                { ids: batch }
+              )
+            )
+            const deleted = result.records.length > 0 ? result.records[0].get('deleted').toNumber() : 0
+            scopedDeleted += deleted
+          }
+          if (scopedDeleted > 0) {
+            console.log(`[Neo4j] Cleaned up ${scopedDeleted} orphaned entity nodes (scoped to document ${documentId.slice(0, 8)}...)`)
+          }
+        } catch (err) {
+          console.warn(`[Neo4j] Scoped orphan cleanup failed:`, err instanceof Error ? err.message : String(err))
+        }
       }
     }
   } finally { await session?.close().catch(() => {}) }

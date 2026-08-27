@@ -16,7 +16,7 @@
 import { db } from '@/lib/db'
 import { qdrant, COLLECTION_CHUNKS } from '@/lib/qdrant'
 import { upsertChunks } from '@/lib/qdrant'
-import { upsertEntitiesBatch, upsertRelationshipsBatch, type EntityNode, type RelationshipEdge } from '@/lib/neo4j'
+import { upsertEntitiesBatch, upsertRelationshipsBatch, upsertDocumentNode, linkDocumentToEntities, readCypher, type EntityNode, type RelationshipEdge } from '@/lib/neo4j'
 import { storeMemory } from '@/lib/agent-memory'
 import { generateEmbedding, getCurrentEmbeddingModelVersion } from '@/lib/embeddings'
 import { callLLM } from '@/lib/llm'
@@ -295,6 +295,9 @@ async function writeKnowledgeToStores(
   let entitiesWritten = 0
   let relationshipsWritten = 0
   let chunksWritten = 0
+  // DATA-LOSS FIX 2026-08-31: entity name → resolved Neo4j node id map. Populated
+  // after the entity upsert; used to give relationships REAL node ids.
+  const nameToNodeId = new Map<string, string>()
 
   // === WRITE 1: Qdrant chunks (embed entity descriptions) ===
   if (entities.length > 0) {
@@ -394,6 +397,38 @@ async function writeKnowledgeToStores(
       await upsertEntitiesBatch(resolvedEntityNodes, documentId)
       entitiesWritten = resolvedEntityNodes.length
       console.log(`[Writeback] Wrote ${entitiesWritten} entities to Neo4j (after embedding resolution)`)
+
+      // DATA-LOSS FIX 2026-08-31 (part 1): anchor chat-learned entities to a Document
+      // node with CONTAINS edges. Previously these entities had no CONTAINS edge, so
+      // the ingestion pipeline's orphan cleanup (Step 7) DETACH DELETEd them the next
+      // time ANY document was processed — chat-learned knowledge kept vanishing.
+      try {
+        await upsertDocumentNode({
+          id: documentId,
+          title: `Auto-Learn: ${(agentName || 'agent').slice(0, 40)} — ${query.slice(0, 80)}`,
+          domain: 'auto-learned',
+          status: 'extracted',
+          page_count: undefined,
+          created_at: now,
+          updated_at: now,
+        })
+        const anchored = await linkDocumentToEntities(documentId, resolvedEntityNodes.map(n => n.id))
+        console.log(`[Writeback] Anchored ${anchored} entities to Document ${documentId.slice(0, 24)}... (orphan-cleanup safe)`)
+      } catch (err) {
+        console.warn('[Writeback] Document anchor failed (entities still written, but vulnerable to orphan cleanup):', err instanceof Error ? err.message : String(err))
+      }
+
+      // DATA-LOSS FIX 2026-08-31 (part 2): build name → resolved node id map so
+      // relationships reference REAL entity node ids. Previously edges used
+      // `${sourceTag}-by-name:${name}` ids which match NO node — upsertRelationshipsBatch
+      // MATCHes by `{id: $sourceId}`, so 100% of writeback relationships silently
+      // never got created.
+      nameToNodeId.clear()
+      resolvedEntityNodes.forEach((node, idx) => {
+        nameToNodeId.set(entities[idx].name.toLowerCase().trim(), node.id)
+        // also allow lookup by the entity's own (possibly merged) name
+        nameToNodeId.set(node.name.toLowerCase().trim(), node.id)
+      })
     } catch (err) {
       console.warn('[Writeback] Neo4j entity write failed:', err instanceof Error ? err.message : String(err))
     }
@@ -401,22 +436,55 @@ async function writeKnowledgeToStores(
 
   if (relationships.length > 0) {
     try {
-      // Build edge payloads — note: sourceId/targetId must match existing entity IDs
-      // For writeback, we link by entity name (Neo4j MERGE on name)
-      const edges: RelationshipEdge[] = relationships.map((r) => ({
-        sourceId: `${sourceTag}-by-name:${r.source}`,
-        targetId: `${sourceTag}-by-name:${r.target}`,
-        relationship_type: r.type,
-        description: r.description,
-        confidence: r.confidence,
-        documentId,
-        source: sourceTag,
-        created_at: now,
-      }))
+      // Build edge payloads — sourceId/targetId must reference REAL entity node ids.
+      // (DATA-LOSS FIX 2026-08-31: the old `${sourceTag}-by-name:${name}` ids never
+      // matched any node, so relationships were silently dropped. Now we resolve
+      // names through the nameToNodeId map built after entity upsert.)
+      const edges: RelationshipEdge[] = []
+      let droppedByName = 0
+      for (const r of relationships) {
+        let sId = nameToNodeId.get(r.source.toLowerCase().trim())
+        let tId = nameToNodeId.get(r.target.toLowerCase().trim())
+        // Fallback: look up endpoints that exist in Neo4j from earlier writebacks /
+        // document ingestion — lets rels connect to pre-existing entities by name.
+        try {
+          const missingNames = [!sId ? r.source : null, !tId ? r.target : null].filter(Boolean) as string[]
+          for (const mn of missingNames) {
+            const hits = await readCypher<{ id: string }>(
+              `MATCH (n) WHERE (n.name = $name OR n.entity_name = $name) AND n.id IS NOT NULL RETURN n.id AS id LIMIT 1`,
+              { name: mn }
+            )
+            if (hits.length > 0) {
+              nameToNodeId.set(mn.toLowerCase().trim(), hits[0].id)
+            }
+          }
+          sId = sId || nameToNodeId.get(r.source.toLowerCase().trim())
+          tId = tId || nameToNodeId.get(r.target.toLowerCase().trim())
+        } catch { /* lookup best-effort */ }
+        if (!sId || !tId || sId === tId) {
+          droppedByName++
+          continue
+        }
+        edges.push({
+          sourceId: sId,
+          targetId: tId,
+          relationship_type: r.type,
+          description: r.description,
+          confidence: r.confidence,
+          documentId,
+          source: sourceTag,
+          created_at: now,
+        })
+      }
+      if (droppedByName > 0) {
+        console.warn(`[Writeback] ${droppedByName}/${relationships.length} relationships dropped — source/target name not found among the ${nameToNodeId.size} mapped entities`)
+      }
 
-      await upsertRelationshipsBatch(edges, documentId)
-      relationshipsWritten = edges.length
-      console.log(`[Writeback] Wrote ${relationshipsWritten} relationships to Neo4j`)
+      if (edges.length > 0) {
+        await upsertRelationshipsBatch(edges, documentId)
+        relationshipsWritten = edges.length
+        console.log(`[Writeback] Wrote ${relationshipsWritten} relationships to Neo4j`)
+      }
     } catch (err) {
       console.warn('[Writeback] Neo4j relationship write failed:', err instanceof Error ? err.message : String(err))
     }

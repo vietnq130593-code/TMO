@@ -1,5 +1,24 @@
 import { PrismaClient } from '@prisma/client'
 
+// ==================== PORTABILITY CHECK (2026-08-31) ====================
+// Nếu DATABASE_URL dùng đường dẫn TUYỆT ĐỐI (vd: file:/home/z/tmo-app/db/custom.db
+// hoặc file:C:/Users/.../db/custom.db), việc copy thư mục app sang vị trí khác
+// sẽ KHÔNG mang theo dữ liệu — bản copy vẫn đọc/ghi DB ở vị trí CŨ.
+// Khuyến nghị: dùng đường dẫn TƯƠNG ĐỐI `file:../db/custom.db` (tương đối với
+// prisma/schema.prisma) để bản copy tự dùng file DB riêng của nó.
+(function warnIfAbsoluteDbPath() {
+  const url = process.env.DATABASE_URL || ''
+  const m = url.match(/^file:(\/|\\|[A-Za-z]:[\\/])/)
+  if (m) {
+    console.warn(
+      `[DB] ⚠️ DATABASE_URL đang dùng đường dẫn TUYỆT ĐỐI: "${url.replace(/([/\\])[^/\\]+$/, '$1...')}"` +
+      ` — nếu copy thư mục app sang chỗ khác, bản copy VẪN trỏ về DB cũ. ` +
+      `Đổi thành 'file:../db/custom.db' (tương đối) để DB đi kèm theo thư mục. ` +
+      `Lưu ý: stop app trước khi copy (WAL mode — dữ liệu mới nhất có thể nằm trong custom.db-wal).`
+    )
+  }
+})()
+
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
   sqlitePragmasApplied: boolean | undefined

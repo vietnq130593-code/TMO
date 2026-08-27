@@ -92,6 +92,38 @@ export async function DELETE(request: NextRequest) {
 
     console.log(`[Neo4j Clean] Before: ${beforeNodes} nodes, ${beforeRels} relationships`)
 
+    // SAFETY BACKUP (DATA-LOSS FIX 2026-08-31): before wiping, dump all nodes + rels
+    // to a local JSON file in db/ so the wipe is reversible. Best-effort — the clean
+    // still proceeds if the backup fails, but the response reports it.
+    let backup: { file?: string; nodes: number; rels: number; error?: string } = { nodes: 0, rels: 0 }
+    try {
+      const { readCypher } = await import('@/lib/neo4j')
+      const nodes = await readCypher<{ props: Record<string, unknown>; labels: string[]; eid: string }>(
+        'MATCH (n) RETURN properties(n) AS props, labels(n) AS labels, elementId(n) AS eid'
+      )
+      const rels = await readCypher<{ props: Record<string, unknown>; type: string; source: string; target: string; rid: string }>(
+        'MATCH ()-[r]->() RETURN properties(r) AS props, type(r) AS type, elementId(startNode(r)) AS source, elementId(endNode(r)) AS target, elementId(r) AS rid'
+      )
+      const fs = await import('fs/promises')
+      const path = await import('path')
+      const backupDir = path.join(process.cwd(), 'db')
+      await fs.mkdir(backupDir, { recursive: true })
+      const fileName = `neo4j-pre-clean-backup-${Date.now()}.json`
+      const filePath = path.join(backupDir, fileName)
+      await fs.writeFile(filePath, JSON.stringify({
+        createdAt: new Date().toISOString(),
+        reason: 'setup/neo4j?action=clean',
+        note: 'Restore by re-creating nodes/rels from this dump (labels in _labels, type in _type).',
+        nodes: nodes.map(n => ({ ...n.props, _labels: n.labels, _eid: n.eid })),
+        rels: rels.map(r => ({ ...r.props, _type: r.type, _source: r.source, _target: r.target, _rid: r.rid })),
+      }), 'utf-8')
+      backup = { file: fileName, nodes: nodes.length, rels: rels.length }
+      console.log(`[Neo4j Clean] Safety backup written: ${fileName} (${nodes.length} nodes, ${rels.length} rels)`)
+    } catch (err) {
+      backup = { nodes: 0, rels: 0, error: err instanceof Error ? err.message : String(err) }
+      console.warn('[Neo4j Clean] Safety backup FAILED (continuing with clean):', backup.error)
+    }
+
     // Step 2: Delete ALL nodes and relationships
     let cleanSession: import('neo4j-driver').Session | null = null
     try { cleanSession = await safeSession() } catch { return NextResponse.json({ error: 'Neo4j not connected' }, { status: 500 }) }
@@ -143,10 +175,11 @@ export async function DELETE(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Cleaned Neo4j: ${beforeNodes}→${afterNodes} nodes, ${beforeRels}→${afterRels} relationships. Reset ${resetCount} documents for re-sync.`,
+      message: `Cleaned Neo4j: ${beforeNodes}→${afterNodes} nodes, ${beforeRels}→${afterRels} relationships. Reset ${resetCount} documents for re-sync.` + (backup.file ? ` Safety backup: ${backup.file} (${backup.nodes} nodes, ${backup.rels} rels).` : ''),
       before: { nodes: beforeNodes, relationships: beforeRels },
       after: { nodes: afterNodes, relationships: afterRels },
       documentsReset: resetCount,
+      backup,
     })
   } catch (err) {
     console.error('[Neo4j Clean] Error:', err)

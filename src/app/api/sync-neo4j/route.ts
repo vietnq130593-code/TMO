@@ -32,13 +32,62 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getNeo4jDriver, upsertEntitiesBatch, upsertRelationshipsBatch, deleteEntitiesByDocument, upsertDocumentNode, linkDocumentToEntities, getGraphStats, mergePerDocumentNodesToGlobal } from '@/lib/neo4j'
+import { getNeo4jDriver, upsertEntitiesBatch, upsertRelationshipsBatch, deleteEntitiesByDocument, upsertDocumentNode, linkDocumentToEntities, readCypher, getGraphStats, mergePerDocumentNodesToGlobal } from '@/lib/neo4j'
 import type { EntityNode, RelationshipEdge } from '@/lib/neo4j'
 import { listDocuments, getDocument } from '@/lib/qdrant'
 import { db } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
+
+// DATA-LOSS FIX 2026-08-31 — synthetic anchor Document nodes.
+// Resolved/orphan entities previously had NO CONTAINS edge from any Document node,
+// so the ingestion pipeline's orphan cleanup (Step 7) and deleteEntitiesByDocument's
+// global sweep DETACH DELETEd them on the next document processing. Anchoring them
+// to these synthetic Document nodes makes them legitimate graph citizens.
+const RESOLVED_ANCHOR_DOC_ID = '__resolved_entities__'
+const ORPHAN_ANCHOR_DOC_ID = '__orphan_entities__'
+const LEGACY_ANCHOR_DOC_ID = '__auto_learned__'
+
+/**
+ * DATA-LOSS FIX 2026-08-31 (step 3): re-anchor legacy unanchored entities.
+ *
+ * Entities written by the OLD writeback/auto-learn code (before the anchoring fix)
+ * have NO CONTAINS edge from any Document — they were exactly the nodes the old
+ * global orphan-cleanup DETACH DELETEd on the next document ingestion. This step
+ * links every still-unanchored entity node to a synthetic anchor Document so all
+ * pre-existing chat-learned/agent knowledge is permanently protected. Idempotent:
+ * nodes that already have a CONTAINS edge are skipped by the query itself.
+ */
+async function anchorLegacyEntities(): Promise<{ anchored: number }> {
+  const driver = await getNeo4jDriver()
+  if (!driver) throw new Error('Neo4j not connected')
+
+  const rows = await readCypher<{ id: string }>(
+    `MATCH (n)
+     WHERE n.entity_type IS NOT NULL AND NOT (n:Document)
+       AND n.entity_type <> 'Document'
+       AND NOT (n)<-[:CONTAINS]-(:Document)
+       AND n.id IS NOT NULL
+     RETURN n.id AS id`
+  )
+  const ids = rows.map(r => r.id).filter(Boolean) as string[]
+  if (ids.length === 0) return { anchored: 0 }
+
+  const now = new Date().toISOString()
+  await upsertDocumentNode({
+    id: LEGACY_ANCHOR_DOC_ID,
+    title: 'Auto-Learned & Agent Knowledge (legacy anchor)',
+    domain: 'auto-learned',
+    status: 'extracted',
+    page_count: undefined,
+    created_at: now,
+    updated_at: now,
+  })
+  const linked = await linkDocumentToEntities(LEGACY_ANCHOR_DOC_ID, ids)
+  console.log(`[Sync-Neo4j] Re-anchored ${linked} legacy entities (no CONTAINS edge) to ${LEGACY_ANCHOR_DOC_ID}`)
+  return { anchored: linked }
+}
 
 // ==================== SHARED SYNC HELPERS ====================
 
@@ -351,6 +400,28 @@ async function syncResolvedEntities(): Promise<{
     data: { synced: true },
   })
 
+  // DATA-LOSS FIX 2026-08-31: anchor resolved entities to a synthetic Document node.
+  // Without CONTAINS edges these canonical entities were "orphans" and got deleted
+  // by the ingestion pipeline's orphan cleanup. (Existing nodes are re-anchored too
+  // — MERGE makes this idempotent, so previously-synced entities get protected.)
+  if (entityNodes.length > 0) {
+    try {
+      await upsertDocumentNode({
+        id: RESOLVED_ANCHOR_DOC_ID,
+        title: 'Resolved Entities (cross-document canonical)',
+        domain: 'mixed',
+        status: 'extracted',
+        page_count: undefined,
+        created_at: now,
+        updated_at: now,
+      })
+      const linked = await linkDocumentToEntities(RESOLVED_ANCHOR_DOC_ID, entityNodes.map(n => n.id))
+      console.log(`[Sync-Neo4j] Anchored ${linked} resolved entities to ${RESOLVED_ANCHOR_DOC_ID}`)
+    } catch (err) {
+      console.warn('[Sync-Neo4j] Resolved-entity anchoring failed (entities still synced):', err instanceof Error ? err.message : String(err))
+    }
+  }
+
   return {
     synced: nodesCreated,
     failed: failedCount,
@@ -441,6 +512,27 @@ async function syncOrphanEntities(): Promise<{
     where: { id: { in: orphanRels.map(r => r.id) } },
     data: { synced: true },
   })
+
+  // DATA-LOSS FIX 2026-08-31: anchor orphan entities to a synthetic Document node.
+  // Without CONTAINS edges these entities were "orphans" and got deleted by the
+  // ingestion pipeline's orphan cleanup on the next document processing.
+  if (entityNodes.length > 0) {
+    try {
+      await upsertDocumentNode({
+        id: ORPHAN_ANCHOR_DOC_ID,
+        title: 'Orphan Entities (codebase-scan / test / unattributed)',
+        domain: 'mixed',
+        status: 'extracted',
+        page_count: undefined,
+        created_at: now,
+        updated_at: now,
+      })
+      const linked = await linkDocumentToEntities(ORPHAN_ANCHOR_DOC_ID, entityNodes.map(n => n.id))
+      console.log(`[Sync-Neo4j] Anchored ${linked} orphan entities to ${ORPHAN_ANCHOR_DOC_ID}`)
+    } catch (err) {
+      console.warn('[Sync-Neo4j] Orphan-entity anchoring failed (entities still synced):', err instanceof Error ? err.message : String(err))
+    }
+  }
 
   return { synced: nodesCreated, relsSynced: relsCreated }
 }
@@ -568,6 +660,17 @@ export async function GET(request: NextRequest) {
         errors.push({ docId: 'resolved', error: errorMsg })
       }
 
+      // DATA-LOSS FIX 2026-08-31 (step 3): re-anchor legacy unanchored entities so
+      // pre-fix chat-learned/agent knowledge is protected from any future cleanup.
+      let legacyAnchorResult = { anchored: 0 }
+      try {
+        legacyAnchorResult = await anchorLegacyEntities()
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err)
+        console.error('[Sync-Neo4j] Error re-anchoring legacy entities:', errorMsg)
+        errors.push({ docId: 'legacy-anchor', error: errorMsg })
+      }
+
       return NextResponse.json({
         action: 'sync-all',
         documentsProcessed: docIds.length,
@@ -580,6 +683,7 @@ export async function GET(request: NextRequest) {
           totalRelsSynced: totalRelsSynced + orphanResult.relsSynced,
         },
         resolvedEntities: resolvedResult,
+        legacyAnchor: legacyAnchorResult,
         errors: errors.length > 0 ? errors : undefined,
       })
     } catch (err) {

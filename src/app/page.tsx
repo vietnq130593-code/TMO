@@ -2778,7 +2778,10 @@ function Neo4jVerification({ health }: { health?: HealthResponse | null }) {
       const res = await fetch('/api/setup/neo4j?action=clean', { method: 'DELETE' })
       const data = await res.json()
       if (data.success) {
-        alert(`Đã dọn dẹp Neo4j: ${data.before.relationships}→${data.after.relationships} relationships, ${data.documentsReset} tài liệu cần đồng bộ lại`)
+        const backupNote = data.backup?.file
+          ? `\n\n🛡️ Backup an toàn đã lưu: ${data.backup.file} (${data.backup.nodes} nodes, ${data.backup.rels} rels) — xem trong thư mục db/`
+          : (data.backup?.error ? `\n\n⚠️ Backup thất bại: ${data.backup.error}` : '')
+        alert(`Đã dọn dẹp Neo4j: ${data.before.relationships}→${data.after.relationships} relationships, ${data.documentsReset} tài liệu cần đồng bộ lại${backupNote}`)
         await checkNeo4j(true) // force=true — bypass cache after cleanup
       } else {
         alert(`Lỗi: ${data.error}`)
@@ -3650,6 +3653,17 @@ function AutoLearnSection() {
   const [records, setRecords] = useState<AutoLearnRecord[]>([])
   const [stats, setStats] = useState<AutoLearnStats | null>(null)
   const [loading, setLoading] = useState(true)
+  // Neo4j sync status (DATA-LOSS FIX 2026-08-31): make the Auto-Learn loop actionable —
+  // show how much knowledge is buffered in SQLite and let the user push it to Neo4j.
+  const [syncInfo, setSyncInfo] = useState<{
+    connected: boolean
+    unsyncedEntities: number
+    unsyncedRels: number
+    unsyncedResolved: number
+  } | null>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [syncMsg, setSyncMsg] = useState<string | null>(null)
+  const formatNumber = (n: number) => n.toLocaleString('vi-VN')
 
   const fetchData = useCallback(async () => {
     try {
@@ -3666,13 +3680,55 @@ function AutoLearnSection() {
     }
   }, [])
 
+  const fetchSyncStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/sync-neo4j?action=status')
+      if (res.ok) {
+        const data = await res.json()
+        setSyncInfo({
+          connected: true,
+          unsyncedEntities: data.buffer?.unsyncedEntities ?? 0,
+          unsyncedRels: data.buffer?.unsyncedRels ?? 0,
+          unsyncedResolved: data.buffer?.unsyncedResolvedEntities ?? 0,
+        })
+      } else {
+        setSyncInfo({ connected: false, unsyncedEntities: 0, unsyncedRels: 0, unsyncedResolved: 0 })
+      }
+    } catch {
+      setSyncInfo({ connected: false, unsyncedEntities: 0, unsyncedRels: 0, unsyncedResolved: 0 })
+    }
+  }, [])
+
+  const handleSyncNeo4j = useCallback(async () => {
+    setSyncing(true)
+    setSyncMsg(null)
+    try {
+      const res = await fetch('/api/sync-neo4j?action=sync-all')
+      const data = await res.json()
+      if (data.error) {
+        setSyncMsg(`❌ Lỗi sync: ${data.error}`)
+      } else {
+        const s = data.summary || {}
+        const anchorNote = data.legacyAnchor?.anchored > 0 ? `, bảo vệ thêm ${formatNumber(data.legacyAnchor.anchored)} entities chưa neo` : ''
+        setSyncMsg(`✅ Đã đồng bộ: +${formatNumber(s.totalNodesCreated ?? 0)} nodes, +${formatNumber(s.totalRelsCreated ?? 0)} relationships — ${data.documentsProcessed ?? 0} tài liệu, ${data.resolvedEntities?.synced ?? 0} resolved entities${anchorNote}${data.errors ? `, ${data.errors.length} lỗi` : ''}`)
+        await Promise.all([fetchData(), fetchSyncStatus()])
+      }
+    } catch (err) {
+      setSyncMsg(`❌ Lỗi sync: ${err instanceof Error ? err.message : 'Unknown'}`)
+    } finally {
+      setSyncing(false)
+    }
+  }, [fetchData, fetchSyncStatus])
+
   useEffect(() => {
     fetchData()
-    const interval = setInterval(fetchData, 10000)
+    fetchSyncStatus()
+    const interval = setInterval(() => {
+      fetchData()
+      fetchSyncStatus()
+    }, 10000)
     return () => clearInterval(interval)
-  }, [fetchData])
-
-  const formatNumber = (n: number) => n.toLocaleString('vi-VN')
+  }, [fetchData, fetchSyncStatus])
 
   const statusColor: Record<string, string> = {
     completed: 'text-emerald-400',
@@ -3753,6 +3809,32 @@ function AutoLearnSection() {
                 <span>Lưu vào <span className="text-green-400">Qdrant</span> (vector) + <span className="text-orange-400">Neo4j</span> (graph) + <span className="text-blue-400">SQLite</span></span>
               </div>
             </div>
+          </div>
+
+          {/* Neo4j Sync — push buffered knowledge to the graph (DATA-LOSS FIX 2026-08-31) */}
+          <div className="nc-panel nc-sm nc-border-lime p-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Database className="h-3.5 w-3.5 text-lime-400 flex-shrink-0" />
+              <span className="text-xs font-semibold text-stone-300">Đồng bộ Neo4j</span>
+              {syncInfo && (
+                <span className="text-[10px] text-stone-400" title="Số lượng tri thức đang chờ trong SQLite buffer, chưa đẩy lên Neo4j">
+                  {syncInfo.connected
+                    ? `Buffer chưa sync: ${formatNumber(syncInfo.unsyncedEntities)} entities · ${formatNumber(syncInfo.unsyncedRels)} rels · ${formatNumber(syncInfo.unsyncedResolved)} resolved`
+                    : 'Neo4j chưa kết nối — kiểm tra NEO4J_URI / NEO4J_PASSWORD trong .env'}
+                </span>
+              )}
+              <button
+                onClick={handleSyncNeo4j}
+                disabled={syncing || (syncInfo ? !syncInfo.connected : false)}
+                className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-semibold bg-gradient-to-r from-lime-600/90 to-emerald-600/90 text-white hover:from-lime-500 hover:to-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                {syncing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                {syncing ? 'Đang đồng bộ...' : 'Sync to Neo4j'}
+              </button>
+            </div>
+            {syncMsg && (
+              <p className={`mt-2 text-[10px] rounded px-2 py-1.5 border ${syncMsg.startsWith('✅') ? 'text-emerald-300 bg-emerald-950/30 border-emerald-500/20' : 'text-red-300 bg-red-950/30 border-red-500/20'}`}>{syncMsg}</p>
+            )}
           </div>
 
           {/* Records Table */}

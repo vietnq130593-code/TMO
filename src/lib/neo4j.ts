@@ -1078,6 +1078,32 @@ export async function deleteEntitiesByDocument(documentId: string): Promise<numb
     let totalDeleted = 0
     const session = await getSession()
     try {
+      // Step 0 (DATA-LOSS FIX 2026-08-31): capture the entity IDs that THIS document
+      // currently references via CONTAINS. The orphan cleanup in Step 4 is restricted
+      // to this set. Previously Step 4 ran a GLOBAL sweep
+      // (`MATCH (n) WHERE n.entity_type IS NOT NULL AND NOT (n)<-[:CONTAINS]-(:Document)
+      //   DETACH DELETE n` × 10 batches × 5000) which deleted ANY unlinked entity in
+      // the whole graph — including resolved/orphan entities from sync-neo4j and
+      // auto-learn/writeback entities from chat (they had no CONTAINS edges).
+      // That global sweep was the root cause of losing nodes + rels in Neo4j Aura.
+      let affectedEntityIds: string[] = []
+      try {
+        const preRead = await session.executeRead(tx =>
+          tx.run(
+            `MATCH (d:Document {id: $documentId})-[:CONTAINS]->(e)
+             WHERE e.id IS NOT NULL
+             RETURN collect(e.id) AS ids`,
+            { documentId }
+          )
+        )
+        const rawIds = (preRead.records[0]?.get('ids') ?? []) as Array<unknown>
+        affectedEntityIds = rawIds.filter((v): v is string => typeof v === 'string')
+      } catch (err) {
+        // Read failure → safest is to skip orphan cleanup entirely (keep data)
+        console.warn(`[Neo4j] deleteEntitiesByDocument: failed to capture referenced entities, skipping orphan cleanup:`, err instanceof Error ? err.message : String(err))
+        affectedEntityIds = []
+      }
+
       // Step 1: Delete CONTAINS relationships for this document
       await session.executeWrite((tx) =>
         tx.run(
@@ -1114,20 +1140,27 @@ export async function deleteEntitiesByDocument(documentId: string): Promise<numb
         maxBatches--
       }
 
-      // Step 4: Delete orphaned entity nodes (no CONTAINS from any document)
-      // These are entities that were only referenced by this document and now have no references.
-      let orphanBatches = 10
-      let hasOrphans = true
-      while (hasOrphans && orphanBatches > 0) {
+      // Step 4 (DATA-LOSS FIX 2026-08-31): delete orphaned entity nodes — SCOPED to
+      // entities this document previously referenced (captured in Step 0). Only those
+      // that are now unreferenced by ANY document are deleted. Entities from other
+      // sources (resolved/orphan/auto-learn/writeback) are never touched here.
+      let orphanBatches = Math.ceil(affectedEntityIds.length / 1000)
+      while (orphanBatches > 0) {
+        const batch = affectedEntityIds.splice(0, 1000)
+        if (batch.length === 0) break
         const orphanResult = await session.executeWrite((tx) =>
           tx.run(
-            `MATCH (n) WHERE n.entity_type IS NOT NULL AND NOT (n)<-[:CONTAINS]-(:Document) WITH n LIMIT 5000 DETACH DELETE n RETURN count(n) AS deleted`
+            `UNWIND $ids AS eid
+             MATCH (n {id: eid})
+             WHERE n.entity_type IS NOT NULL AND NOT (n)<-[:CONTAINS]-(:Document)
+             DETACH DELETE n
+             RETURN count(n) AS deleted`,
+            { ids: batch }
           )
         )
         const orphanDeleted = orphanResult.records[0]?.get('deleted')
         const orphanNum = typeof orphanDeleted?.toNumber === 'function' ? orphanDeleted.toNumber() : (orphanDeleted ?? 0) as number
         totalDeleted += orphanNum
-        hasOrphans = orphanNum >= 5000
         orphanBatches--
       }
 
