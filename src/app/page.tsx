@@ -23,7 +23,7 @@ import {
   GitCommit, History, Minimize2, ExternalLink as ExternalLinkIcon, GripHorizontal, ArrowDownToLine,
   Wifi, WifiOff,
   Flame, Archive, Snowflake, Thermometer, FlaskConical, ShieldAlert, Swords,
-  CloudDownload, CircleHelp, ClipboardList, Circle, CircleDot as CircleDotIcon
+  CloudDownload, CircleHelp, ClipboardList
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -3846,7 +3846,7 @@ function AutoLearnSection() {
 
 interface SmolabMessage {
   id: string
-  role: 'user' | 'assistant' | 'tool_call' | 'error' | 'opencode_progress' | 'opencode_result'
+  role: 'user' | 'assistant' | 'tool_call' | 'error' | 'opencode_progress' | 'opencode_result' | 'agent_run'
   content: string
   timestamp: Date
   model?: string
@@ -3894,6 +3894,11 @@ interface SmolabMessage {
     spec: string
   }
   suggestionRejected?: boolean // True if user rejected the suggestion
+  // ===== Agent Run (Thought Process — user request 2026-08-31) =====
+  /** runId trong agent-run-tracker — panel live poll theo id này */
+  runId?: string
+  /** Summary tĩnh (từ message metadata sau reload — events in-memory đã mất) */
+  agentRunSummary?: AgentRunSummaryData
 }
 
 interface SmolabSession {
@@ -3907,6 +3912,299 @@ interface SmolabSession {
   teamMode?: string | null
   teamName?: string | null
   tasks?: Array<{ id: string; type: string; status: string; progress: number; inputSummary?: string | null }>
+}
+
+// ==================== AGENT RUN — THOUGHT PROCESS PANEL (user request 2026-08-31) ====================
+//
+// Muốn TẤT CẢ agents (độc lập + team) hiển thị trong cửa sổ chat một khối
+// "Thought Process" (mặc định ĐÓNG, bấm mới mở) giống Claude Code / Z.ai Code:
+//   - Thought Process: tư duy từng vòng ReAct
+//   - Todos: ✓ xong / ◐ đang làm / ○ chờ
+//   - Tiến trình live: đã đọc bao nhiêu file, chạy bao nhiêu lệnh, KẾT QUẢ THẬT
+//   - Trạng thái Done khi hoàn thành
+
+interface AgentRunEventData {
+  id: string
+  ts: number
+  type: 'run_start' | 'thought' | 'tool' | 'todo_update' | 'run_end'
+  text?: string
+  iteration?: number
+  tool?: string
+  argsSummary?: string
+  resultPreview?: string
+  success?: boolean
+  durationMs?: number
+  todos?: Array<{ id: string; content: string; status: string; priority?: string }>
+}
+
+interface AgentRunCountersData {
+  iterations: number
+  toolCalls: number
+  filesRead: number
+  commandsRun: number
+  editsMade: number
+  searches: number
+}
+
+interface AgentRunData {
+  runId: string
+  sessionId: string
+  agentName: string
+  agentPosition?: string
+  step?: string
+  task?: string
+  mode: 'standalone' | 'team'
+  startedAt: number
+  endedAt?: number
+  status: 'running' | 'done' | 'error'
+  events: AgentRunEventData[]
+  counters: AgentRunCountersData
+  lastTodos?: Array<{ id: string; content: string; status: string; priority?: string }>
+}
+
+/** Summary tĩnh gắn vào assistant message (persist qua DB metadata) */
+interface AgentRunSummaryData {
+  agentName: string
+  status: string
+  iterations: number
+  toolCalls: number
+  filesRead: number
+  commandsRun: number
+  editsMade?: number
+  durationMs?: number
+  todos?: Array<{ id: string; content: string; status: string; priority?: string }>
+}
+
+/** Icon theo tool — timeline Thought Process */
+const RUN_TOOL_ICONS: Record<string, string> = {
+  shell: '$',
+  run_bg: '$',
+  opencode: '⌨️',
+  file_read: '📖',
+  file_list: '📁',
+  file_edit: '✏️',
+  file_multi_edit: '✏️',
+  file_delete: '🗑️',
+  grep: '🔍',
+  todo_write: '📋',
+  todo_read: '📋',
+  knowledge_search: '🧠',
+  knowledge_graph: '🕸️',
+  knowledge_write: '✍️',
+  tavily: '🌐',
+  serper: '🌐',
+  jina: '🌐',
+  web_search: '🌐',
+  web_fetch: '🌐',
+  git_commit: '📦',
+  git_push: '📤',
+  git_pull: '📥',
+  run_tests: '🧪',
+  create_custom_tool: '🔨',
+  delete_custom_tool: '🗑️',
+  list_custom_tools: '🔧',
+}
+
+function runToolIcon(tool?: string): string {
+  if (!tool) return '🔧'
+  return RUN_TOOL_ICONS[tool] || '🔧'
+}
+
+function fmtRunDuration(ms?: number): string {
+  if (!ms || ms < 0) return ''
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  return `${Math.floor(ms / 60000)}m${Math.round((ms % 60000) / 1000)}s`
+}
+
+/** Panel Thought Process — render bên trong message flow (role 'agent_run') */
+function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: string; content: string; status: string; priority?: string }> }) {
+  // Mặc định ĐÓNG — bấm tiêu đề mới mở (user request: như Claude Code)
+  const [open, setOpen] = useState(false)
+
+  const running = run.status === 'running'
+  const elapsed = (run.endedAt || Date.now()) - run.startedAt
+  const c = run.counters
+  const todoList = todos.length > 0 ? todos : (run.lastTodos || [])
+  const doneCount = todoList.filter(t => t.status === 'completed').length
+
+  // Hoạt động mới nhất — hiện ngay ở header (collapsed) để thấy "đang làm gì"
+  const lastTool = [...run.events].reverse().find(e => e.type === 'tool')
+  const lastThought = [...run.events].reverse().find(e => e.type === 'thought')
+  const lastActivity = lastTool
+    ? `${runToolIcon(lastTool.tool)} ${lastTool.argsSummary || lastTool.tool || ''}`
+    : lastThought?.text
+
+  const agentColor = AGENT_COLORS[run.agentName]?.text
+    || (run.agentPosition ? POSITION_COLORS[run.agentPosition]?.text : undefined)
+    || 'text-stone-300'
+
+  return (
+    <div className="max-w-[88%] w-full rounded-xl border border-stone-700/60 bg-slate-950/60 overflow-hidden">
+      {/* Header — bấm để mở/thu gọn */}
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-900/60 transition-colors text-left"
+        aria-expanded={open}
+        title={open ? 'Thu gọn Thought Process' : 'Mở Thought Process'}
+      >
+        <Brain className="h-3.5 w-3.5 text-violet-400 flex-shrink-0" />
+        <span className="text-[11px] font-semibold text-stone-200">Thought Process</span>
+        <span className={`text-[10px] font-medium ${agentColor}`}>{run.agentName}</span>
+        {run.agentPosition && <span className="text-[9px] text-stone-500">({run.agentPosition})</span>}
+
+        {/* Trạng thái */}
+        {running ? (
+          <span className="flex items-center gap-1 text-[9px] text-amber-300 flex-shrink-0">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Đang chạy · {fmtRunDuration(elapsed)}
+          </span>
+        ) : run.status === 'done' ? (
+          <span className="flex items-center gap-1 text-[9px] text-emerald-400 flex-shrink-0">
+            <CheckCircle2 className="h-3 w-3" /> Done
+          </span>
+        ) : (
+          <span className="flex items-center gap-1 text-[9px] text-red-400 flex-shrink-0">
+            <XCircle className="h-3 w-3" /> Lỗi
+          </span>
+        )}
+
+        {/* Counters — tiến trình live ngay ở header */}
+        <span className="ml-auto flex items-center gap-1.5 text-[9px] text-stone-500 flex-shrink-0">
+          {c.iterations > 0 && <span>🔁 {c.iterations}</span>}
+          {c.toolCalls > 0 && <span>🔧 {c.toolCalls}</span>}
+          {c.filesRead > 0 && <span title={`${c.filesRead} file đã đọc`}>📖 {c.filesRead}</span>}
+          {c.commandsRun > 0 && <span title={`${c.commandsRun} lệnh đã chạy`}>💻 {c.commandsRun}</span>}
+          {c.editsMade > 0 && <span>✏️ {c.editsMade}</span>}
+          {c.searches > 0 && <span>🔍 {c.searches}</span>}
+          {!running && elapsed > 0 && <span>⏱ {fmtRunDuration(elapsed)}</span>}
+          <ChevronDown className={`h-3 w-3 transition-transform ${open ? '' : '-rotate-90'}`} />
+        </span>
+      </button>
+
+      {/* Live activity — luôn hiện khi đang chạy (kể cả collapsed) */}
+      {running && lastActivity && !open && (
+        <div className="px-3 pb-1.5 -mt-0.5 flex items-center gap-1.5 text-[9px] text-stone-500">
+          <span className="text-amber-400/80">→</span>
+          <span className="truncate">{lastActivity.slice(0, 90)}</span>
+        </div>
+      )}
+
+      {open && (
+        <div className="px-3 pb-2.5 space-y-2 border-t border-stone-700/40 pt-2">
+          {/* Todos */}
+          {todoList.length > 0 && (
+            <div>
+              <div className="flex items-center gap-1.5 mb-1">
+                <ClipboardList className="h-3 w-3 text-emerald-400" />
+                <span className="text-[10px] font-medium text-stone-300">Todos</span>
+                <span className="text-[9px] text-stone-500">{doneCount}/{todoList.length}</span>
+                <div className="flex-1 h-1 bg-slate-800 rounded-full overflow-hidden ml-1">
+                  <div
+                    className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-500"
+                    style={{ width: `${todoList.length > 0 ? Math.round((doneCount / todoList.length) * 100) : 0}%` }}
+                  />
+                </div>
+              </div>
+              <div className="max-h-40 overflow-y-auto space-y-0.5 pr-1" style={{ scrollbarWidth: 'thin' }}>
+                {todoList.map(t => {
+                  const st = t.status
+                  const icon = st === 'completed' ? '✓' : st === 'in_progress' ? '◐' : st === 'failed' ? '✗' : st === 'blocked' ? '⚠' : '○'
+                  const color = st === 'completed' ? 'text-emerald-400' : st === 'in_progress' ? 'text-amber-300' : st === 'failed' ? 'text-red-400' : st === 'blocked' ? 'text-orange-400' : 'text-stone-500'
+                  return (
+                    <div key={t.id} className="flex items-start gap-2 px-1 py-0.5">
+                      <span className={`text-[11px] leading-4 flex-shrink-0 ${color} ${st === 'in_progress' ? 'animate-pulse' : ''}`}>{icon}</span>
+                      <span className={`text-[10px] leading-4 flex-1 ${st === 'completed' ? 'text-stone-500 line-through' : 'text-stone-300'}`}>{t.content}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Timeline — thoughts + tools + kết quả thật */}
+          <div>
+            <div className="flex items-center gap-1.5 mb-1">
+              <Activity className="h-3 w-3 text-cyan-400" />
+              <span className="text-[10px] font-medium text-stone-300">Quá trình thực thi</span>
+              <span className="text-[9px] text-stone-500">{run.events.filter(e => e.type !== 'todo_update').length} sự kiện</span>
+            </div>
+            <div className="max-h-80 overflow-y-auto space-y-1 pr-1" style={{ scrollbarWidth: 'thin' }}>
+              {run.task && (
+                <div className="text-[9px] text-stone-500 px-1">
+                  🎯 Nhiệm vụ: <span className="text-stone-400">{run.task.slice(0, 160)}</span>
+                </div>
+              )}
+              {run.events.map(e => {
+                if (e.type === 'thought') {
+                  return (
+                    <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/50 border-l-2 border-violet-500/50">
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span className="text-[9px] text-violet-400">💭 Suy nghĩ</span>
+                        {e.iteration != null && <span className="text-[8px] text-stone-600">Vòng {e.iteration}</span>}
+                        <span className="text-[8px] text-stone-600 ml-auto">{new Date(e.ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                      </div>
+                      <p className="text-[10px] leading-4 text-stone-400 italic whitespace-pre-wrap line-clamp-6">{e.text}</p>
+                    </div>
+                  )
+                }
+                if (e.type === 'tool') {
+                  return (
+                    <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/40 border-l-2 border-cyan-500/40">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] flex-shrink-0">{runToolIcon(e.tool)}</span>
+                        <span className="text-[9px] font-mono text-cyan-300 flex-shrink-0">{e.tool}</span>
+                        {e.argsSummary && <span className="text-[9px] text-stone-400 truncate max-w-[45%]">{e.argsSummary}</span>}
+                        <span className={`text-[9px] flex-shrink-0 ${e.success ? 'text-emerald-400' : 'text-red-400'}`}>{e.success ? '✓' : '✗'}</span>
+                        {e.durationMs != null && <span className="text-[8px] text-stone-600 ml-auto flex-shrink-0">{fmtRunDuration(e.durationMs)}</span>}
+                      </div>
+                      {/* KẾT QUẢ THẬT — minh bạch: lệnh thật + output thật */}
+                      {e.resultPreview && (
+                        <pre className="mt-1 text-[9px] leading-3.5 text-stone-500 whitespace-pre-wrap max-h-24 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>{e.resultPreview}</pre>
+                      )}
+                    </div>
+                  )
+                }
+                if (e.type === 'run_end') {
+                  return (
+                    <div key={e.id} className={`flex items-center gap-1.5 px-2 py-1 text-[10px] ${e.success ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {e.success ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+                      {e.success ? 'Done' : 'Lỗi'}{e.text ? ` — ${e.text}` : ''}
+                    </div>
+                  )
+                }
+                return null
+              })}
+              {running && (
+                <div className="flex items-center gap-1.5 px-2 py-1 text-[9px] text-amber-300/80">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Đang thực thi...
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Summary bar tĩnh — hiện trên assistant message sau khi reload session */
+function AgentRunSummaryBar({ summary }: { summary: AgentRunSummaryData }) {
+  const ok = summary.status !== 'error'
+  return (
+    <div className="flex items-center gap-2 flex-wrap text-[9px] text-stone-500 mb-1.5 pb-1.5 border-b border-stone-700/40">
+      <Brain className="h-3 w-3 text-violet-400" />
+      <span className="text-stone-400">{summary.agentName}</span>
+      <span className={ok ? 'text-emerald-400' : 'text-red-400'}>{ok ? '✓ Done' : '✗ Lỗi'}</span>
+      {summary.iterations > 0 && <span>🔁 {summary.iterations} vòng</span>}
+      {summary.toolCalls > 0 && <span>🔧 {summary.toolCalls} tool</span>}
+      {summary.filesRead > 0 && <span>📖 {summary.filesRead} file</span>}
+      {summary.commandsRun > 0 && <span>💻 {summary.commandsRun} lệnh</span>}
+      {summary.editsMade != null && summary.editsMade > 0 && <span>✏️ {summary.editsMade}</span>}
+      {summary.durationMs != null && summary.durationMs > 0 && <span>⏱ {fmtRunDuration(summary.durationMs)}</span>}
+    </div>
+  )
 }
 
 const SMOLAB_MODEL_GROUPS = [
@@ -7755,6 +8053,18 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
   const [feedbackLoading, setFeedbackLoading] = useState<string | null>(null)
   const [loadingMessages, setLoadingMessages] = useState(false)
 
+  // ===== Agent Run — Thought Process + Todos + Progress (user request 2026-08-31) =====
+  // agentRuns: runId → dữ liệu run mới nhất (poll từ /api/agent-run mỗi 1.2s
+  // trong lúc agent đang chạy). Panel render trong message flow (role 'agent_run').
+  const [agentRuns, setAgentRuns] = useState<Record<string, AgentRunData>>({})
+  const [sessionTodos, setSessionTodos] = useState<Array<{ id: string; content: string; status: string; priority?: string }>>([])
+  const agentRunsRef = useRef<Record<string, AgentRunData>>({})
+  const isLoadingRef = useRef(false)
+  useEffect(() => { agentRunsRef.current = agentRuns })
+  useEffect(() => { isLoadingRef.current = isLoading })
+  // Clear run data khi đổi session (panel messages cũng bị thay bởi session load)
+  useEffect(() => { setAgentRuns({}); setSessionTodos([]) }, [currentSessionId])
+
   // Restore persisted Smolab tab AFTER mount to avoid hydration mismatch.
   const smolabTabRestoredRef = useRef(false)
   useEffect(() => {
@@ -8185,6 +8495,9 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
               agentName: parsedMeta?.agentName as string | undefined,
               agentPosition: parsedMeta?.agentPosition as string | undefined,
               isTeamMessage: parsedMeta?.isTeamMessage as boolean | undefined,
+              // Thought Process summary (user request 2026-08-31) — persist qua
+              // chat message metadata; render AgentRunSummaryBar khi reload
+              agentRunSummary: parsedMeta?.agentRun as SmolabMessage['agentRunSummary'],
               // Khôi phục trạng thái like/dislike đã ghi nhận trước đó
               feedback: (feedbackMap[m.id] as 'positive' | 'negative') ?? null,
             }
@@ -8200,6 +8513,91 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
       })
       .finally(() => setLoadingMessages(false))
   }, [currentSessionId])
+
+  // ===== Agent Run poller — Thought Process + Todos live (user request 2026-08-31) =====
+  // Single-agent chat là stream:false (await JSON) → poll là cơ chế live:
+  // mỗi 1.2s lấy runs + todos của session đang mở, cập nhật panel trong chat.
+  // Chỉ fetch khi (a) đang chờ response (isLoading) hoặc (b) có run đang chạy
+  // — run đã đóng giữ nguyên dữ liệu cuối (client state, không re-fetch).
+  // Team mode: startWorkflow cũng set isLoading → runs của từng agent step
+  // được bắt và render panel riêng cho mỗi agent (giống single mode).
+  const refreshAgentRuns = useCallback(async () => {
+    if (!currentSessionId) return
+    try {
+      const [runsRes, todosRes] = await Promise.all([
+        fetch(`/api/agent-run?sessionId=${encodeURIComponent(currentSessionId)}&limit=10`).catch(() => null),
+        fetch(`/api/todos?sessionId=${encodeURIComponent(currentSessionId)}`).catch(() => null),
+      ])
+
+      if (runsRes?.ok) {
+        const d = await runsRes.json().catch(() => null) as { ok?: boolean; runs?: AgentRunData[] } | null
+        if (d?.ok && Array.isArray(d.runs) && d.runs.length > 0) {
+          // 1. Cập nhật dữ liệu run (kèm safeguard: run "running" quá 10 phút
+          //    coi như lỗi client-side — tránh poller kẹt vĩnh viễn)
+          setAgentRuns(prev => {
+            const next = { ...prev }
+            for (const raw of d.runs!) {
+              let run = raw
+              if (run.status === 'running' && Date.now() - (run.startedAt || 0) > 10 * 60_000) {
+                run = { ...run, status: 'error' as const, endedAt: Date.now() }
+              }
+              next[run.runId] = run
+            }
+            return next
+          })
+          // 2. Insert panel message cho run mới (đặt CUỐI danh sách — đúng vị trí:
+          //    run bắt đầu ngay khi user gửi tin / agent step bắt đầu)
+          setMessages(prev => {
+            const knownRunIds = new Set(prev.filter(m => m.role === 'agent_run').map(m => m.runId))
+            const newRuns = d.runs!.filter(r => r.runId && !knownRunIds.has(r.runId))
+            if (newRuns.length === 0) return prev
+            const panels: SmolabMessage[] = newRuns.map(r => ({
+              id: `ar_${r.runId}`,
+              role: 'agent_run' as const,
+              content: '',
+              timestamp: new Date(r.startedAt || Date.now()),
+              runId: r.runId,
+            }))
+            // Nếu message cuối đã là assistant reply (response về trước poll —
+            // xảy ra với ReAct nhanh không tool) thì chèn panel TRƯỚC reply
+            const last = prev[prev.length - 1]
+            if (last && last.role === 'assistant' && !last.isTeamMessage) {
+              return [...prev.slice(0, -1), ...panels, last]
+            }
+            return [...prev, ...panels]
+          })
+        }
+      }
+
+      if (todosRes?.ok) {
+        const td = await todosRes.json().catch(() => null) as {
+          ok?: boolean
+          todos?: Array<{ id: string; content: string; status: string; priority?: string }>
+        } | null
+        if (td?.ok && Array.isArray(td.todos)) {
+          setSessionTodos(td.todos.map(t => ({
+            id: String(t.id),
+            content: String(t.content || ''),
+            status: String(t.status || 'pending'),
+            priority: t.priority ? String(t.priority) : undefined,
+          })))
+        }
+      }
+    } catch { /* offline — retry ở interval sau */ }
+  }, [currentSessionId])
+
+  useEffect(() => {
+    if (!currentSessionId) return
+    const poll = async () => {
+      if (document.hidden) return
+      const anyRunning = Object.values(agentRunsRef.current).some(r => r.status === 'running')
+      if (!isLoadingRef.current && !anyRunning) return
+      await refreshAgentRuns()
+    }
+    poll()
+    const interval = setInterval(poll, 1200)
+    return () => { clearInterval(interval) }
+  }, [currentSessionId, refreshAgentRuns])
 
   // Close dropdown menus on click outside
   // Use mousedown (not click) so the handler fires BEFORE React's onClick + stopPropagation
@@ -8910,15 +9308,11 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     if (!queryText) setInput('')
     setIsLoading(true)
 
-    // Add tool call indicator
-    const toolMsg: SmolabMessage = {
-      id: crypto.randomUUID(),
-      role: 'tool_call',
-      content: 'Đang tìm kiếm Knowledge Base...',
-      timestamp: new Date(),
-      toolName: 'knowledge_search',
-    }
-    setMessages(prev => [...prev, toolMsg])
+    // 2026-08-31 — BỎ chỉ báo fake "Đang tìm kiếm Knowledge Base..." (không
+    // phản ánh gì thật). Thay bằng: (a) khối Thought Process THẬT (poll
+    // /api/agent-run — hiện tư duy/todos/tool + kết quả thật của agent),
+    // (b) spinner "Đang suy nghĩ..." cho chat không qua agent.
+    const toolMsg: SmolabMessage | null = null
 
     try {
       const chatMessages = [...messages, userMsg]
@@ -8973,9 +9367,13 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
 
       const data = await res.json()
 
-      // Remove tool call indicator and add real response
+      // Thought Process (2026-08-31): response về TRƯỚC khi poll bắt kịp
+      // (ReAct nhanh / không tool) → refresh 1 lần để chèn panel + final state
+      refreshAgentRuns().catch(() => {})
+
+      // Add real response
       setMessages(prev => {
-        const withoutTool = prev.filter(m => m.id !== toolMsg.id)
+        const withoutTool = toolMsg ? prev.filter(m => m.id !== toolMsg.id) : prev
         
         // OC-3.2: If routed to OpenCode, show progress messages
         if (data.routedTo === 'opencode') {
@@ -9001,12 +9399,15 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
           provider: data.provider,
           sources: data.sources,
           confidence: data.confidence,
+          // Thought Process summary — persist qua DB metadata, hiện lại bar
+          // tĩnh khi reload session (events in-memory đã mất)
+          agentRunSummary: data.agentRun as SmolabMessage['agentRunSummary'],
         }
         return [...withoutTool, assistantMsg]
       })
     } catch (err) {
       setMessages(prev => {
-        const withoutTool = prev.filter(m => m.id !== toolMsg.id)
+        const withoutTool = toolMsg ? prev.filter(m => m.id !== toolMsg.id) : prev
         return [...withoutTool, {
           id: crypto.randomUUID(),
           role: 'error',
@@ -9014,9 +9415,11 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
           timestamp: new Date(),
         }]
       })
+      // Bắt final state của run (nếu có) — tránh panel kẹt "Đang chạy"
+      refreshAgentRuns().catch(() => {})
     }
     setIsLoading(false)
-  }, [input, isLoading, messages, selectedModel, currentSessionId, chatMode, selectedAgentId, selectedTeam, smolabAgents, startWorkflow])
+  }, [input, isLoading, messages, selectedModel, currentSessionId, chatMode, selectedAgentId, selectedTeam, smolabAgents, startWorkflow, refreshAgentRuns])
 
   const handleFeedback = useCallback(async (messageId: string, type: 'positive' | 'negative', msgContent: string) => {
     setFeedbackLoading(messageId)
@@ -9633,6 +10036,11 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                       </div>
                     )}
 
+                    {/* Thought Process panel — live tư duy/todos/kết quả thật của agent (user request 2026-08-31) */}
+                    {msg.role === 'agent_run' && msg.runId && agentRuns[msg.runId] && (
+                      <AgentRunPanel run={agentRuns[msg.runId]} todos={sessionTodos} />
+                    )}
+
                     {/* Team agent message rendering */}
                     {msg.isTeamMessage && msg.agentName ? (
                       <div className={`max-w-[85%] p-3 rounded-xl border ${
@@ -9735,6 +10143,10 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                           {msg.provider && <Badge className="text-[7px] h-3 px-1 bg-stone-950/50 text-stone-400">{msg.provider}</Badge>}
                           {msg.confidence != null && <Badge variant="outline" className="text-[7px] h-3 px-1">{(msg.confidence * 100).toFixed(0)}%</Badge>}
                         </div>
+                      )}
+                      {/* Thought Process summary bar (reload session) — events in-memory đã mất, chỉ còn summary */}
+                      {msg.role === 'assistant' && msg.agentRunSummary && (
+                        <AgentRunSummaryBar summary={msg.agentRunSummary} />
                       )}
                       {msg.role === 'tool_call' && (
                         <div className="flex items-center gap-1.5 mb-1">
@@ -9859,8 +10271,8 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                 ))
               )}
 
-              {/* Loading indicator */}
-              {isLoading && messages[messages.length - 1]?.role !== 'tool_call' && (
+              {/* Loading indicator — ẩn khi Thought Process panel đang hiển thị trạng thái chạy */}
+              {isLoading && messages[messages.length - 1]?.role !== 'tool_call' && messages[messages.length - 1]?.role !== 'agent_run' && (
                 <div className="flex justify-start gap-2">
                   <div className="flex-shrink-0 w-6 h-6 bg-gradient-to-br from-emerald-900 to-teal-900 flex items-center justify-center">
                     <Brain className="h-3 w-3 text-emerald-400" />
@@ -11744,19 +12156,12 @@ function CodeTabContent() {
   const [mcpSyncing, setMcpSyncing] = useState(false)
   const [mcpToggling, setMcpToggling] = useState<string | null>(null)
 
-  // ===== Agent Tasks (Todo Progress) — user request 2026-08-29 =====
-  // Long-running task tracking: agent ghi todo qua tool todo_write (independent
-  // agents ReAct loop) hoặc auto-upsert mỗi agent step (Team Code workflow).
-  // Panel poll GET /api/todos 3s/lần + hiển thị progress bar + trạng thái từng bước
-  // + agent activity feed (tool_call events từ window bridge).
-  const [todoSessions, setTodoSessions] = useState<Array<{
-    sessionId: string; total: number; lastUpdatedAt: string;
-    summary: { total: number; byStatus: Record<string, number>; completedPct: number };
-    todos?: Array<{ id: string; agentRole: string | null; content: string; status: string; priority: string; parentId: string | null; createdAt: string; updatedAt: string }>;
-  }>>([])
-  const [activeTodoSession, setActiveTodoSession] = useState<string | null>(null)
-  const [todoPanelOpen, setTodoPanelOpen] = useState(true)
-  const [agentActivity, setAgentActivity] = useState<Array<{ id: string; tool: string; detail: string; ts: number }>>([])
+  // ===== Agent Tasks (Todo Progress) — REMOVED 2026-08-31 =====
+  // User: khối Thought Process + Todos trong cửa sổ chat (AgentRunPanel, poll
+  // /api/agent-run + /api/todos trong SmolabModule) thay thế panel này —
+  // "Nếu có tính năng này tôi nghĩ sẽ không cần đến Agents tasks nữa".
+  // Todos VẪN được agents ghi qua todo_write + workflow auto-todo (DB) —
+  // chỉ gỡ phần hiển thị panel ở tab Code.
 
   // Terminal
   const [terminalOutput, setTerminalOutput] = useState<string[]>([])
@@ -12378,73 +12783,16 @@ function CodeTabContent() {
     return () => clearTimeout(t)
   }, [])
 
-  // ===== Agent Tasks polling (user request 2026-08-29) =====
-  // Poll GET /api/todos mỗi 3s (gate theo tab visible — không burn CPU khi ẩn).
-  // activeTodoSession: session user đang chọn xem; mặc định = session gần nhất
-  // có todo. Detail todos được fetch riêng cho session được chọn.
-  const activeTodoSessionRef = useRef<string | null>(null)
-  useEffect(() => { activeTodoSessionRef.current = activeTodoSession })
-  useEffect(() => {
-    let cancelled = false
-    const poll = async () => {
-      if (document.hidden) return
-      try {
-        const selected = activeTodoSessionRef.current
-        const url = selected
-          ? `/api/todos?sessionId=${encodeURIComponent(selected)}`
-          : '/api/todos'
-        const res = await authedFetch(url)
-        if (!res.ok || cancelled) return
-        const d = await res.json().catch(() => null) as {
-          ok?: boolean
-          sessions?: Array<{
-            sessionId: string; total: number; lastUpdatedAt: string;
-            summary: { total: number; byStatus: Record<string, number>; completedPct: number };
-            todos?: Array<{ id: string; agentRole: string | null; content: string; status: string; priority: string; parentId: string | null; createdAt: string; updatedAt: string }>;
-          }>
-          sessionId?: string
-          summary?: { total: number; byStatus: Record<string, number>; completedPct: number }
-          todos?: Array<{ id: string; agentRole: string | null; content: string; status: string; priority: string; parentId: string | null; createdAt: string; updatedAt: string }>
-        } | null
-        if (!d?.ok || cancelled) return
-        if (selected && d.sessionId) {
-          // Chi tiết 1 session — wrap về cùng shape overview
-          setTodoSessions(prev => {
-            const others = prev.filter(s => s.sessionId !== d.sessionId)
-            return [{
-              sessionId: d.sessionId!,
-              total: d.summary?.total ?? 0,
-              lastUpdatedAt: new Date().toISOString(),
-              summary: d.summary ?? { total: 0, byStatus: {}, completedPct: 0 },
-              todos: d.todos,
-            }, ...others]
-          })
-        } else if (d.sessions) {
-          // Overview — merge giữ detail cũ cho session không có todos trong response
-          setTodoSessions(prev => d.sessions!.map(s => ({
-            ...s,
-            todos: s.todos ?? prev.find(p => p.sessionId === s.sessionId)?.todos,
-          })))
-        }
-      } catch { /* offline — retry ở interval sau */ }
-    }
-    poll()
-    const interval = setInterval(poll, 3000)
-    const onVisible = () => { if (!document.hidden) poll() }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => {
-      cancelled = true
-      clearInterval(interval)
-      document.removeEventListener('visibilitychange', onVisible)
-    }
-  }, [])
-
   // ===== Agent Activity → Terminal echo (user request 2026-08-27) =====
   // Poll GET /api/agent-activity (server-side ring buffer ghi bởi executeTool)
   // mỗi 2.5s và echo lệnh shell/tool của agents vào ô Terminal. Trước đây
   // terminal echo chỉ xảy ra với SSE event (chế độ Team Code) — single-agent
   // chat (stream:false) thì Terminal trống rỗng dù agent chạy shell thật.
   // Lần mount đầu (since=0) hiện tối đa 30 entry gần nhất = lịch sử agent.
+  //
+  // 2026-08-31 — hiện CẢ KẾT QUẢ THẬT (resultPreview: stdout/stderr, content
+  // preview...) sau lệnh — user nhận biết được kết quả thực tế chứ không phải
+  // lệnh chạy giả/kết quả giả.
   const agentActivityTsRef = useRef<number>(0)
   const seenAgentActRef = useRef<Set<string>>(new Set())
   useEffect(() => {
@@ -12456,7 +12804,7 @@ function CodeTabContent() {
         if (!res.ok || cancelled) return
         const d = await res.json().catch(() => null) as {
           ok?: boolean
-          entries?: Array<{ id: string; ts: number; agentName?: string; tool: string; detail?: string; success?: boolean; durationMs?: number }>
+          entries?: Array<{ id: string; ts: number; agentName?: string; tool: string; detail?: string; success?: boolean; durationMs?: number; resultPreview?: string }>
         } | null
         if (!d?.ok || !Array.isArray(d.entries) || d.entries.length === 0 || cancelled) return
 
@@ -12475,20 +12823,29 @@ function CodeTabContent() {
             ? (e.durationMs >= 1000 ? `${(e.durationMs / 1000).toFixed(1)}s` : `${e.durationMs}ms`)
             : ''
           const cmd = String(e.detail || '').replace(/\s+/g, ' ').trim()
+          // Kết quả thật — tối đa 6 dòng / 400 ký tự, prefix ⎿ (kiểu Claude Code)
+          const resultLines = String(e.resultPreview || '').split('\n').map(l => l.replace(/\s+$/, '')).filter(l => l.length > 0).slice(0, 6)
+          const resultBlock = resultLines.length > 0
+            ? resultLines.map(l => `⎿ ${l.slice(0, 200)}`).join('\n').slice(0, 400).split('\n')
+            : [] as string[]
           if (e.tool === 'shell' || e.tool === 'run_bg') {
             lines.push(`$ [${who}] ${cmd.slice(0, 160)}`)
             lines.push(e.success
               ? `✓ [${who}] xong${dur ? ` · ${dur}` : ''}`
               : `✗ [${who}] LỖI${dur ? ` · ${dur}` : ''}`)
+            lines.push(...resultBlock)
           } else if (e.tool === 'opencode' && /bash|exec/i.test(cmd)) {
             lines.push(`$ [${who}] ${cmd.slice(0, 160)}`)
             lines.push(e.success ? `✓ [${who}] xong${dur ? ` · ${dur}` : ''}` : `✗ [${who}] LỖI${dur ? ` · ${dur}` : ''}`)
+            lines.push(...resultBlock)
           } else if (e.tool === 'read_output' || e.tool === 'kill_process' || e.tool === 'run_tests' || e.tool === 'git_commit') {
             const icon = e.tool === 'run_tests' ? '🧪' : e.tool === 'git_commit' ? '📦' : e.tool === 'kill_process' ? '⛔' : '📄'
             lines.push(`[AI] ${icon} ${e.tool} ${cmd.slice(0, 110)}`.trim())
+            lines.push(...resultBlock)
           } else if (e.tool === 'file_edit' || e.tool === 'file_multi_edit' || e.tool === 'file_delete') {
             const icon = e.tool === 'file_delete' ? '🗑️' : '✏️'
             lines.push(`[AI] ${icon} ${e.tool === 'file_multi_edit' ? 'file_multi_edit' : e.tool} ${cmd.slice(0, 110)}`)
+            lines.push(...resultBlock)
           }
         }
         agentActivityTsRef.current = maxTs
@@ -12510,25 +12867,6 @@ function CodeTabContent() {
       clearInterval(interval)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [])
-
-  // Agent activity feed — capture tool_call events từ window bridge (Phase 7)
-  // để hiển thị "agent đang làm gì" trong panel Agent Tasks.
-  useEffect(() => {
-    const listener = (e: Event) => {
-      try {
-        const d = (e as CustomEvent).detail as { type?: string; tool?: string; detail?: string } | undefined
-        if (!d || d.type !== 'tool_call' || !d.tool) return
-        setAgentActivity(prev => [...prev.slice(-4), {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          tool: d.tool!,
-          detail: typeof d.detail === 'string' ? d.detail.slice(0, 160) : '',
-          ts: Date.now(),
-        }])
-      } catch { /* ignore */ }
-    }
-    window.addEventListener(AI_TOOL_EVENT_NAME, listener)
-    return () => { window.removeEventListener(AI_TOOL_EVENT_NAME, listener) }
   }, [])
 
   // Reload file tree when workspace root changes
@@ -14080,161 +14418,6 @@ function CodeTabContent() {
         </div>
       )}
 
-      {/* ===== Section 1.5: Agent Tasks (Todo Progress — long-running) ===== */}
-      {(() => {
-        // Session đang hiển thị: user chọn HOẶC session gần nhất có todo
-        const current = todoSessions.find(s => s.sessionId === activeTodoSession) || todoSessions[0] || null
-        const todos = current?.todos ?? []
-        const summary = current?.summary ?? { total: 0, byStatus: {}, completedPct: 0 }
-        const hasAnyWork = todoSessions.length > 0 || agentActivity.length > 0
-        const inProgress = (summary.byStatus['in_progress'] || 0) + (summary.byStatus['pending'] || 0)
-        const statusIcon = (st: string) => st === 'completed' ? '✅' : st === 'in_progress' ? '⏳' : st === 'failed' ? '❌' : st === 'blocked' ? '⚠️' : '○'
-        const statusColor = (st: string) => st === 'completed' ? 'text-emerald-400' : st === 'in_progress' ? 'text-amber-300' : st === 'failed' ? 'text-red-400' : st === 'blocked' ? 'text-orange-400' : 'text-stone-500'
-        const prioColor = (p: string) => p === 'high' ? 'bg-red-500/70' : p === 'medium' ? 'bg-amber-500/70' : 'bg-stone-500/70'
-        // Nested: todo có parentId → render indented dưới parent
-        const rootTodos = todos.filter(t => !t.parentId)
-        const childOf = (pid: string) => todos.filter(t => t.parentId === pid)
-        return (
-          <div className="nc-wrap nc-emerald">
-            <div className="nc-panel nc-sm nc-border-emerald p-4">
-              {/* Header */}
-              <div className="flex items-center justify-between mb-2">
-                <button
-                  className="flex items-center gap-2 hover:bg-emerald-500/10 rounded px-1 py-0.5 transition-colors cursor-pointer"
-                  onClick={() => setTodoPanelOpen(!todoPanelOpen)}
-                  title={todoPanelOpen ? 'Thu gọn' : 'Mở rộng'}
-                >
-                  <ClipboardList className="h-4 w-4 text-emerald-400" />
-                  <span className="text-sm font-semibold text-stone-100">Agent Tasks</span>
-                  {hasAnyWork && inProgress > 0 && (
-                    <Badge className="text-[8px] bg-amber-950/60 text-amber-300 border border-amber-400/40 animate-pulse">
-                      {inProgress} đang chạy
-                    </Badge>
-                  )}
-                  {current && (
-                    <span className="text-[10px] text-stone-500">
-                      {summary.completedPct}% hoàn thành · {current.sessionId.length > 14 ? current.sessionId.slice(0, 14) + '…' : current.sessionId}
-                    </span>
-                  )}
-                  <ChevronDown className={`h-3 w-3 text-stone-500 transition-transform ${todoPanelOpen ? '' : '-rotate-90'}`} />
-                </button>
-                <div className="flex items-center gap-1.5">
-                  {todoSessions.length > 1 && (
-                    <select
-                      className="h-6 bg-slate-900 border border-emerald-400/30 rounded text-[9px] text-stone-300 px-1 max-w-[160px]"
-                      value={activeTodoSession || current?.sessionId || ''}
-                      onChange={(e) => setActiveTodoSession(e.target.value || null)}
-                      title="Chọn session để xem tiến độ"
-                      aria-label="Chọn session Agent Tasks"
-                    >
-                      {todoSessions.map(s => (
-                        <option key={s.sessionId} value={s.sessionId}>
-                          {s.sessionId.length > 18 ? s.sessionId.slice(0, 18) + '…' : s.sessionId} ({s.summary.completedPct}%)
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  {current && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-6 text-[9px] text-stone-500 hover:text-red-400"
-                      title="Xóa todo list của session này"
-                      onClick={() => {
-                        authedFetch(`/api/todos?sessionId=${encodeURIComponent(current.sessionId)}`, { method: 'DELETE' })
-                          .then(() => { setTodoSessions(prev => prev.filter(s => s.sessionId !== current.sessionId)); setActiveTodoSession(null) })
-                          .catch(() => toast({ title: 'Lỗi xóa todo', variant: 'destructive' }))
-                      }}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              {todoPanelOpen && (
-                <>
-                  {/* Progress bar */}
-                  {current && todos.length > 0 ? (
-                    <div className="mb-2">
-                      <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden" role="progressbar" aria-valuenow={summary.completedPct} aria-valuemin={0} aria-valuemax={100}>
-                        <div
-                          className={`h-full transition-all duration-500 ${summary.completedPct === 100 ? 'bg-emerald-500' : 'bg-gradient-to-r from-emerald-500 to-amber-400'}`}
-                          style={{ width: `${summary.completedPct}%` }}
-                        />
-                      </div>
-                      <div className="flex items-center gap-2 mt-1 text-[9px] text-stone-500">
-                        <span>✅ {summary.byStatus['completed'] || 0}</span>
-                        <span>⏳ {summary.byStatus['in_progress'] || 0}</span>
-                        <span>○ {summary.byStatus['pending'] || 0}</span>
-                        {(summary.byStatus['blocked'] || 0) > 0 && <span className="text-orange-400">⚠️ {summary.byStatus['blocked']}</span>}
-                        {(summary.byStatus['failed'] || 0) > 0 && <span className="text-red-400">❌ {summary.byStatus['failed']}</span>}
-                        <span className="ml-auto">{todos.length} bước</span>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {/* Todo list */}
-                  {todos.length > 0 ? (
-                    <div className="max-h-64 overflow-y-auto space-y-0.5 pr-1" style={{ scrollbarWidth: 'thin' }} aria-label="Danh sách bước agent đang thực hiện">
-                      {rootTodos.map(t => (
-                        <div key={t.id}>
-                          <div className="flex items-start gap-2 px-2 py-1 rounded hover:bg-emerald-500/5 transition-colors">
-                            <span className={`text-[11px] leading-4 flex-shrink-0 ${statusColor(t.status)} ${t.status === 'in_progress' ? 'animate-pulse' : ''}`}>
-                              {t.status === 'pending' ? <Circle className="h-3 w-3" /> : statusIcon(t.status)}
-                            </span>
-                            <span className={`text-[11px] leading-4 flex-1 ${t.status === 'completed' ? 'text-stone-500 line-through' : 'text-stone-200'}`}>
-                              {t.content}
-                            </span>
-                            {t.agentRole && (
-                              <Badge className="text-[7px] bg-slate-800 text-stone-400 flex-shrink-0">{t.agentRole}</Badge>
-                            )}
-                            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ${prioColor(t.priority)}`} title={`priority: ${t.priority}`} />
-                          </div>
-                          {childOf(t.id).map(c => (
-                            <div key={c.id} className="flex items-start gap-2 px-2 py-0.5 pl-7 rounded hover:bg-emerald-500/5 transition-colors">
-                              <span className={`text-[10px] leading-4 flex-shrink-0 ${statusColor(c.status)} ${c.status === 'in_progress' ? 'animate-pulse' : ''}`}>
-                                {c.status === 'pending' ? <Circle className="h-2.5 w-2.5" /> : statusIcon(c.status)}
-                              </span>
-                              <span className={`text-[10px] leading-4 flex-1 ${c.status === 'completed' ? 'text-stone-600 line-through' : 'text-stone-400'}`}>
-                                {c.content}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-[10px] text-stone-500 px-1 py-2">
-                      {hasAnyWork ? 'Session này chưa có todo chi tiết.' : 'Chưa có task nào. Giao việc phức tạp cho agent (chat Smolab hoặc Team Code) — agent sẽ tự chia nhỏ thành các bước và tiến độ hiển thị ở đây.'}
-                    </p>
-                  )}
-
-                  {/* Agent activity feed — "agent đang làm gì" ngay lúc này */}
-                  {agentActivity.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-emerald-400/15">
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <Activity className="h-3 w-3 text-emerald-400" />
-                        <span className="text-[10px] font-medium text-stone-300">Hoạt động agent (trực tiếp)</span>
-                      </div>
-                      <div className="space-y-0.5">
-                        {agentActivity.slice().reverse().map(a => (
-                          <div key={a.id} className="flex items-center gap-2 text-[9px] text-stone-500 px-1">
-                            <CircleDotIcon className="h-2 w-2 text-emerald-500/70 flex-shrink-0" />
-                            <span className="font-mono text-emerald-400/80 flex-shrink-0">{a.tool}</span>
-                            <span className="truncate">{a.detail || '…'}</span>
-                            <span className="ml-auto flex-shrink-0 text-stone-600">{new Date(a.ts).toLocaleTimeString('vi-VN')}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        )
-      })()}
 
       {/* ===== Section 2: Terminal ===== */}
       <div className="nc-wrap nc-emerald">
@@ -14282,7 +14465,7 @@ function CodeTabContent() {
           <div ref={terminalViewRef} className={`bg-slate-950/80 rounded-lg border border-emerald-500/10 p-3 overflow-y-auto font-mono text-[11px]`} style={{ scrollbarWidth: 'thin', height: `${terminalHeight}px` }}>
             {terminalOutput.length > 0 ? (
               terminalOutput.map((line, i) => (
-                <div key={i} className={`${line.startsWith('$') ? 'text-emerald-400' : line.startsWith('Error') || line.startsWith('✗') ? 'text-red-400' : line.startsWith('✓') ? 'text-emerald-300' : line.startsWith('[AI') ? 'text-cyan-400/80' : line.startsWith('[local-exec]') ? 'text-stone-600 text-[9px]' : 'text-stone-400'}`}>
+                <div key={i} className={`whitespace-pre-wrap break-all ${line.startsWith('$') ? 'text-emerald-400' : line.startsWith('Error') || line.startsWith('✗') ? 'text-red-400' : line.startsWith('✓') ? 'text-emerald-300' : line.startsWith('⎿') ? 'text-stone-500 pl-3 text-[10px]' : line.startsWith('[AI') ? 'text-cyan-400/80' : line.startsWith('[local-exec]') ? 'text-stone-600 text-[9px]' : 'text-stone-400'}`}>
                   {line}
                 </div>
               ))

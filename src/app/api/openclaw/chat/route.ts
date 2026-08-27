@@ -26,6 +26,9 @@ import { recallMemories, extractMemoriesFromConversation, saveChatMessages, getU
 import { executeTool } from '@/lib/code-team/tool-executor'
 import { parseToolCallsFromOutput, formatMessagesForLLM } from '@/lib/tool-calls'
 import { getStandaloneAgentTools } from '@/lib/standalone-agents'
+// Agent Run Tracker — Thought Process + Todos + Progress realtime trong chat
+// (user request 2026-08-31: mọi agents hiển thị tư duy/tiến trình như Claude Code)
+import { startAgentRun, endAgentRun, recordAgentThought, getAgentRuns } from '@/lib/agent-run-tracker'
 // Phase A: Smart KB Routing — Intent Classifier
 // Phase C: Smart KB Writeback — replaces autoLearnFromAnswer with confidence-filtered writeback
 // Phase B: Smart KB Pre-Search — search Qdrant+Neo4j before building system prompt
@@ -131,7 +134,7 @@ async function runAgentReActLoop(params: {
   maxIterations?: number
   /** Chat sessionId — truyền vào executeTool để Agent Activity Log/Terminal echo gắn đúng session */
   agentSessionId?: string | null
-}): Promise<{ content: string; iterations: number; toolCallsExecuted: number }> {
+}): Promise<{ content: string; iterations: number; toolCallsExecuted: number; runId?: string | null }> {
   const {
     systemPrompt,
     userMessage,
@@ -166,6 +169,20 @@ async function runAgentReActLoop(params: {
   let iterations = 0
   let totalToolCalls = 0
 
+  // ===== Thought Process tracking (user request 2026-08-31) =====
+  // 1 run = 1 chat exchange. executeTool() tự ghi tool events vào run active
+  // của session này (xem tool-executor.ts recordActivity) — nên mọi tool call
+  // (kèm kết quả thật) hiện trong khối Thought Process của chat UI.
+  const runId = startAgentRun({
+    sessionId: agentSessionId,
+    agentName,
+    task: userMessage,
+    mode: 'standalone',
+  })
+  const endRun = (status: 'done' | 'error') => {
+    endAgentRun(agentSessionId, runId, status, `${iterations} vòng · ${totalToolCalls} tool calls`)
+  }
+
   // CUSTOM TOOLS (user request 2026-08-30): nạp custom tool registry 1 lần
   // trước loop — whitelist check bên dưới cho phép gọi custom tools đã register
   // (agents TỰ VIẾT qua create_custom_tool, kể cả tool tạo trong cùng loop này).
@@ -195,10 +212,14 @@ async function runAgentReActLoop(params: {
 
     if (!result || (result.error && !result.content)) {
       finalContent = result?.error || 'LLM call failed'
+      endRun('error')
       break
     }
 
     finalContent = result.content
+
+    // Thought của vòng này = output LLM (phần reasoning trước tool_call)
+    recordAgentThought(agentSessionId, result.content, iterations)
 
     // Check if LLM output contains tool calls
     const toolCalls = parseToolCallsFromOutput(result.content)
@@ -268,7 +289,8 @@ async function runAgentReActLoop(params: {
   }
 
   console.log(`[ReAct] ${agentName} done: ${iterations} iterations, ${totalToolCalls} tool calls`)
-  return { content: finalContent, iterations, toolCallsExecuted: totalToolCalls }
+  endRun(finalContent.startsWith('Error') ? 'error' : 'done')
+  return { content: finalContent, iterations, toolCallsExecuted: totalToolCalls, runId }
 }
 
 const DEFAULT_SYSTEM_PROMPT = `Bạn là AI Agent của The Magnum Opus — Hệ thống GraphRAG Knowledge Base.
@@ -852,6 +874,29 @@ export async function POST(request: NextRequest) {
 
         const content = reactResult.content
 
+        // Thought Process summary (user request 2026-08-31) — trích từ run tracker
+        // để (a) response JSON trả về frontend, (b) persist vào chat message
+        // metadata cho session reload (hiện lại panel tĩnh collapsed).
+        const agentRunSummary = (() => {
+          try {
+            const run = sessionId && reactResult.runId
+              ? getAgentRuns(sessionId).find(r => r.runId === reactResult.runId)
+              : null
+            if (!run) return undefined
+            return {
+              agentName: run.agentName,
+              status: run.status,
+              iterations: run.counters.iterations,
+              toolCalls: run.counters.toolCalls,
+              filesRead: run.counters.filesRead,
+              commandsRun: run.counters.commandsRun,
+              editsMade: run.counters.editsMade,
+              durationMs: run.endedAt ? run.endedAt - run.startedAt : undefined,
+              todos: run.lastTodos,
+            }
+          } catch { return undefined }
+        })()
+
         // FIX 2026-08-27 (user bug report "4 task đã chạy xong nhưng vẫn báo có 4
         // task đang chạy"): LLM thường quên gọi todo_write lần cuối để đóng các
         // bước (đánh dấu in_progress rồi báo cáo luôn). Auto-close mọi todo còn
@@ -928,7 +973,7 @@ export async function POST(request: NextRequest) {
         if (agentProfileId && sessionId) {
           saveChatMessages(sessionId, [
             { role: 'user', content: lastUserContent },
-            { role: 'assistant', content, model: agentModel, provider: agentProvider, metadata: { reactIterations: reactResult.iterations, toolCallsExecuted: reactResult.toolCallsExecuted } },
+            { role: 'assistant', content, model: agentModel, provider: agentProvider, metadata: { reactIterations: reactResult.iterations, toolCallsExecuted: reactResult.toolCallsExecuted, agentRun: agentRunSummary } },
           ]).catch(err => console.warn('[Memory] Failed to save chat messages:', err instanceof Error ? err.message : String(err)))
 
           if (!isTrivialExchange(lastUserContent, content)) {
@@ -962,6 +1007,7 @@ export async function POST(request: NextRequest) {
           kbResults: 'agent-react',
           reactIterations: reactResult.iterations,
           toolCallsExecuted: reactResult.toolCallsExecuted,
+          agentRun: agentRunSummary,
           memoriesRecalled: recalledMemories.length || undefined,
           intent,
           kbConfidence: kbSearchResult?.confidence || undefined,

@@ -29,6 +29,9 @@ import { tavilyKeyPool, jinaKeyPool, serperKeyPool } from '@/lib/service-key-poo
 import { ensureTmoApiToken } from '@/lib/tmo-token'
 // Agent Activity Log — mọi tool call được echo vào ô Terminal (user request 2026-08-27)
 import { recordAgentActivity } from '@/lib/agent-activity-log'
+// Agent Run Tracker — Thought Process + Todos + Progress trong chat
+// (user request 2026-08-31 — mọi agents hiển thị tư duy/tiến trình realtime)
+import { recordAgentRunTool, recordAgentRunTodos } from '@/lib/agent-run-tracker'
 import {
   fileEdit, fileDelete, fileList, grep,
   runTests, gitCommit, gitPush, gitPullWorkspace,
@@ -1261,8 +1264,14 @@ export async function executeTool(
   // Mỗi tool call đều được ghi vào Agent Activity Log (ring buffer in-memory)
   // → GET /api/agent-activity → Terminal UI poll 2.5s và echo `$ [AI] ...`.
   // Fail-open: record lỗi không được phép làm hỏng tool execution.
-  const recordActivity = (success: boolean) => {
+  //
+  // 2026-08-31 — recordActivity giờ nhận cả `result` để:
+  //   1. Terminal hiện KẾT QUẢ THẬT (resultPreview) chứ không chỉ lệnh
+  //   2. Agent Run Tracker ghi tool event vào khối Thought Process trong chat
+  //   3. todo_write → capture snapshot todo list cho panel Todos
+  const recordActivity = (success: boolean, result?: unknown) => {
     try {
+      const resultPreview = summarizeToolResult(toolName, result)
       recordAgentActivity({
         agentName: context?.agentName,
         tool: toolName,
@@ -1270,7 +1279,28 @@ export async function executeTool(
         success,
         durationMs: Date.now() - startTime,
         sessionId: context?.sessionId ?? null,
+        resultPreview,
       })
+      // Thought Process panel trong chat — ghi vào run đang active của session
+      recordAgentRunTool(context?.sessionId ?? null, {
+        tool: toolName,
+        argsSummary: summarizeToolCall(toolName, args),
+        success,
+        durationMs: Date.now() - startTime,
+        resultPreview,
+      })
+      // todo_write thành công → snapshot todo list (panel Todos trong chat)
+      if (toolName === 'todo_write' && success) {
+        const r = result as { todos?: Array<{ id?: string; content?: string; status?: string; priority?: string }> } | null
+        if (r && Array.isArray(r.todos)) {
+          recordAgentRunTodos(context?.sessionId ?? null, r.todos.map((t, i) => ({
+            id: String(t.id ?? `todo_${i}`),
+            content: String(t.content ?? ''),
+            status: String(t.status ?? 'pending'),
+            priority: t.priority ? String(t.priority) : undefined,
+          })))
+        }
+      }
     } catch { /* ignore — display-only */ }
   }
 
@@ -2021,7 +2051,7 @@ export async function executeTool(
           }
           if (ctr.isCustomToolRegistered(toolName)) {
             const execResult = await ctr.executeCustomTool(toolName, args, 10000, 2000)
-            recordActivity(execResult.success)
+            recordActivity(execResult.success, execResult.success ? execResult.result : { error: execResult.error || 'Custom tool execution failed', timedOut: execResult.timedOut || false })
             return {
               success: execResult.success,
               result: execResult.success
@@ -2034,7 +2064,7 @@ export async function executeTool(
           console.warn(`[ToolExecutor] Custom tool dispatch failed for "${toolName}":`, registryErr instanceof Error ? registryErr.message : String(registryErr))
         }
 
-        recordActivity(false)
+        recordActivity(false, `Unknown tool: ${toolName}`)
         return {
           success: false,
           result: `Unknown tool: ${toolName}`,
@@ -2043,7 +2073,7 @@ export async function executeTool(
       }
     }
 
-    recordActivity(true)
+    recordActivity(true, result)
     return {
       success: true,
       result,
@@ -2052,7 +2082,7 @@ export async function executeTool(
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err)
     console.error(`[ToolExecutor] Error executing ${toolName}:`, errorMsg)
-    recordActivity(false)
+    recordActivity(false, `Tool error: ${errorMsg}`)
     return {
       success: false,
       result: `Tool error: ${errorMsg}`,
@@ -2113,6 +2143,80 @@ function summarizeToolCall(toolName: string, args: Record<string, unknown>): str
     default: {
       try { return JSON.stringify(args).slice(0, 150) } catch { return '' }
     }
+  }
+}
+
+/**
+ * Tóm tắt KẾT QUẢ THẬT của tool cho Terminal + Thought Process panel
+ * (user request 2026-08-31: hiện cả lệnh LẪN kết quả chạy thật).
+ *
+ * shell/run_bg → stdout+stderr; file_read → content preview + số dòng;
+ * file_edit → số edits áp dụng; todo_write → số bước ghi; search → count kết quả;
+ * default → JSON stringify truncated. Fail-open: lỗi → chuỗi rỗng.
+ */
+function summarizeToolResult(toolName: string, result: unknown): string {
+  try {
+    if (result == null) return ''
+    const trunc = (s: string, max = 700) => (s.length > max ? `${s.slice(0, max)}…` : s)
+    if (typeof result === 'string') {
+      return trunc(result)
+    }
+    if (typeof result !== 'object') {
+      return trunc(String(result), 300)
+    }
+    const r = result as Record<string, unknown>
+    switch (toolName) {
+      case 'shell':
+      case 'run_bg': {
+        const out = [String(r.stdout || ''), String(r.stderr || '')].filter(Boolean).join('\n').trim()
+        if (out) return trunc(out)
+        // run_bg không có output ngay (background) — hiện process info
+        if (r.pid) return trunc(`[background] pid=${r.pid}${r.message ? ` · ${r.message}` : ''}`, 200)
+        return trunc(JSON.stringify(result), 300)
+      }
+      case 'file_read': {
+        const content = typeof r.content === 'string' ? r.content : ''
+        const totalLines = typeof r.totalLines === 'number' ? r.totalLines : 0
+        if (content) {
+          const preview = content.split('\n').slice(0, 12).join('\n')
+          return trunc(`${preview}\n… (${totalLines} dòng)`, 600)
+        }
+        return trunc(JSON.stringify(result), 300)
+      }
+      case 'file_edit':
+      case 'file_multi_edit': {
+        const applied = typeof r.editsApplied === 'number' ? r.editsApplied : 0
+        const dry = r.dryRun ? ' (dry-run)' : ''
+        return trunc(`Đã áp dụng ${applied} edit${dry}${r.newFileSize ? ` · size=${r.newFileSize}` : ''} · ${r.path || ''}`, 300)
+      }
+      case 'todo_write': {
+        const n = typeof r.upserted === 'number' ? r.upserted : (Array.isArray(r.todos) ? r.todos.length : 0)
+        return `Đã ghi ${n} todo`
+      }
+      case 'todo_read': {
+        const total = typeof r.total === 'number' ? r.total : 0
+        return `Đọc ${total} todo`
+      }
+      case 'knowledge_search':
+      case 'tavily':
+      case 'serper':
+      case 'web_search': {
+        const n = Array.isArray(r.results) ? r.results.length
+          : Array.isArray(r.sources) ? r.sources.length
+          : typeof r.resultCount === 'number' ? r.resultCount : 0
+        return trunc(`${n} kết quả`, 200)
+      }
+      case 'git_commit': {
+        const commit = typeof r.commit === 'string' ? r.commit.slice(0, 12) : ''
+        const files = Array.isArray(r.files) ? r.files.length : 0
+        return trunc(`${commit ? `commit ${commit}` : 'OK'}${files ? ` · ${files} file` : ''}`, 200)
+      }
+      default: {
+        return trunc(JSON.stringify(result), 500)
+      }
+    }
+  } catch {
+    return ''
   }
 }
 

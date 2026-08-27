@@ -45,6 +45,8 @@ import { findBalancedJson as findBalancedJsonUtil } from './find-balanced-json'
 import {
   executeTool,
 } from './tool-executor'
+// Agent Run Tracker — Thought Process + Todos + Progress trong chat (user request 2026-08-31)
+import { startAgentRun, endAgentRun, recordAgentThought, recordAgentRunTodos } from '@/lib/agent-run-tracker'
 import { flagMode, isFlagEnabled } from '@/lib/feature-flags'
 // Phase 6/7 (rebuild) — workspace root follows the USER's ACTIVE workspace
 import { resolveWorkspaceRoot } from './workspace-root'
@@ -1376,9 +1378,25 @@ export async function runAgentStep(params: {
           },
         })
       }
+      // Thought Process panel (2026-08-31): step-todo cũng hiện trong Todos
+      // snapshot của run — panel trong chat hiển thị tiến độ từng agent step.
+      recordAgentRunTodos(sessionId, [{ id: stepTodoKey, content: stepTodoContent, status, priority: 'medium' }])
     } catch { /* non-blocking */ }
   }
   await upsertStepTodo('in_progress')
+
+  // ===== Thought Process tracking (user request 2026-08-31) =====
+  // 1 run = 1 agent step của team workflow. executeTool() tự ghi tool events
+  // (kèm kết quả thật) vào run active — hiển thị trong khối Thought Process
+  // của chat UI, giống chế độ single-agent.
+  const runId = startAgentRun({
+    sessionId,
+    agentName: agent.name,
+    agentPosition: position,
+    step,
+    task: prompt,
+    mode: 'team',
+  })
 
   // ━━━ Phase 1c: Native Function Calling setup ━━━
   // Mode: 'off' (regex only) | 'dual' (native preferred, regex fallback) | 'strict' (native only)
@@ -1496,6 +1514,9 @@ export async function runAgentStep(params: {
     }
 
     finalContent = result.content
+
+    // Thought của vòng này = output LLM (phần reasoning trước tool_call)
+    recordAgentThought(sessionId, result.content, iterations)
 
     // Layer 9 P0.2: accumulate tokens from this LLM call (LLMResult.tokensUsed
     // comes from the NIM API usage field — available on every call).
@@ -1787,6 +1808,9 @@ export async function runAgentStep(params: {
   // 2026-08-29 — AUTO-TODO TRACKING: đánh dấu step todo hoàn thành/thất bại.
   // finalContent bắt đầu bằng "Error:" = LLM fail hoàn toàn (branch break ở trên).
   await upsertStepTodo(finalContent.startsWith('Error:') ? 'failed' : 'completed')
+
+  // Thought Process tracking (2026-08-31) — đóng run của step này
+  endAgentRun(sessionId, runId, finalContent.startsWith('Error:') ? 'error' : 'done', `${iterations} vòng · ${totalToolCalls} tool calls`)
 
   // Layer 9 P0.2: expose the step's real token usage to the caller
   // (runWorkflow passes it down to metricsCollector.recordStepComplete).

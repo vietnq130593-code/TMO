@@ -31,9 +31,16 @@ export interface AgentActivityEntry {
   durationMs: number
   /** Chat/workflow session id (nếu có) */
   sessionId?: string | null
+  /**
+   * KẾT QUẢ THẬT của tool (stdout/stderr, content preview...) — truncated.
+   * User request 2026-08-31: Terminal phải hiện cả lệnh LẪN kết quả chạy
+   * thật để nhận biết kết quả thực tế chứ không phải giả.
+   */
+  resultPreview?: string
 }
 
 const MAX_ENTRIES = 300
+const MAX_RESULT_PREVIEW = 900
 
 const globalForActivity = globalThis as unknown as {
   __tmoAgentActivityLog?: AgentActivityEntry[]
@@ -59,6 +66,7 @@ export function recordAgentActivity(entry: {
   success: boolean
   durationMs: number
   sessionId?: string | null
+  resultPreview?: string
 }): AgentActivityEntry {
   const buf = buffer()
   const recorded: AgentActivityEntry = {
@@ -70,6 +78,9 @@ export function recordAgentActivity(entry: {
     success: !!entry.success,
     durationMs: Math.max(0, Math.round(entry.durationMs || 0)),
     sessionId: entry.sessionId || null,
+    resultPreview: entry.resultPreview
+      ? String(entry.resultPreview).slice(0, MAX_RESULT_PREVIEW)
+      : undefined,
   }
   buf.push(recorded)
   if (buf.length > MAX_ENTRIES) {
