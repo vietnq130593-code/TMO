@@ -2016,22 +2016,38 @@ async function waitForRateLimitCooldown(
   // Poll every 3s until the key is available or max wait exceeded
   const pollInterval = 3000
   const maxWaitUntil = now + cappedWait
+  // NOTE (fix 2026-08-27): `rateLimited` chỉ được reset lười (lazy) trong
+  // getNextKey()/getKeyByIndex() — trong lúc chờ đây KHÔNG ai gọi 2 hàm đó,
+  // nên phải check theo THỜI GIAN (rateLimitResetAt) chứ không đọc cờ stale.
+  // Trước fix: solo-wait 90s rồi give up dù cooldown 30s đã lâu hết.
+  const isKeyAvailable = (k: { key: string; rateLimited: boolean; rateLimitResetAt: number; exhausted: boolean; dailyQuotaExhausted: boolean }) =>
+    !!k.key && (!k.rateLimited || Date.now() >= k.rateLimitResetAt) && !k.exhausted && !k.dailyQuotaExhausted
   while (Date.now() < maxWaitUntil) {
     if (abortCheck && abortCheck()) {
       console.log(`[LLM] ⏳ waitForRateLimitCooldown: aborted by user during wait`)
       return false
     }
     await new Promise(resolve => setTimeout(resolve, pollInterval))
-    // Check if any key has recovered
-    const recovered = allKeys.some(k => k.key && !k.rateLimited && !k.exhausted && !k.dailyQuotaExhausted)
+    // Check if any key has recovered (time-aware — clears stale flags)
+    const recoveredKeys = allKeys.filter(k => k.key && k.rateLimited && Date.now() >= k.rateLimitResetAt)
+    for (const k of recoveredKeys) {
+      k.rateLimited = false
+      k.failureCount = 0
+    }
+    const recovered = allKeys.some(k => isKeyAvailable(k))
     if (recovered) {
       console.log(`[LLM] ⏳ waitForRateLimitCooldown: key recovered after ${Math.ceil((Date.now() - now) / 1000)}s — retrying`)
       return true
     }
   }
 
-  // Final check after max wait
-  const recovered = allKeys.some(k => k.key && !k.rateLimited && !k.exhausted && !k.dailyQuotaExhausted)
+  // Final check after max wait (time-aware)
+  const finalRecoveredKeys = allKeys.filter(k => k.key && k.rateLimited && Date.now() >= k.rateLimitResetAt)
+  for (const k of finalRecoveredKeys) {
+    k.rateLimited = false
+    k.failureCount = 0
+  }
+  const recovered = allKeys.some(k => isKeyAvailable(k))
   if (recovered) {
     console.log(`[LLM] ⏳ waitForRateLimitCooldown: key recovered after max wait — retrying`)
     return true
@@ -2150,11 +2166,15 @@ async function callModelWithKeyRotation(
         // waiting for a key to become available again.
         const waited = await waitForRateLimitCooldown(pool, options?.abortCheck)
         if (waited) {
-          // A key became available — reset deadKeys and do one more round
+          // A key became available — reset deadKeys and RESTART all rounds.
+          // (fix 2026-08-27: trước đây chỉ `continue` inner-loop — nếu wait rơi vào
+          // iteration cuối của round cuối thì vòng lặp kết thúc, key đã recovered
+          // không bao giờ được thử lại.) Budget 15 phút vẫn chặn tổng thời gian.
           console.log(`[LLM] 🔄 ${model}: rate-limit cooldown expired — retrying with refreshed keys`)
           deadKeys.clear()
-          for (const [k, v] of failuresByKey) failuresByKey.set(k, 0)
-          continue  // re-enter the loop for one more round
+          for (const [k] of failuresByKey) failuresByKey.set(k, 0)
+          round = -1 // restart outer round loop
+          break      // exit inner offset loop
         }
         console.warn(`[LLM] 🔄 ${model}: MỌI key đều đã fail đủ ${KEY_FAILURES_PER_KEY} lần (sau ${attemptNo} attempts) — dừng xoay vòng`)
         return null
