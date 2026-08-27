@@ -166,6 +166,14 @@ async function runAgentReActLoop(params: {
   let iterations = 0
   let totalToolCalls = 0
 
+  // CUSTOM TOOLS (user request 2026-08-30): nạp custom tool registry 1 lần
+  // trước loop — whitelist check bên dưới cho phép gọi custom tools đã register
+  // (agents TỰ VIẾT qua create_custom_tool, kể cả tool tạo trong cùng loop này).
+  try {
+    const { ensureCustomToolsLoaded } = await import('@/lib/custom-tool-registry')
+    await ensureCustomToolsLoaded()
+  } catch { /* fail-open */ }
+
   while (iterations < maxIterations) {
     iterations++
 
@@ -213,7 +221,14 @@ async function runAgentReActLoop(params: {
       totalToolCalls++
 
       // Only execute tools that the agent has permission for
-      if (agentTools.length > 0 && !agentTools.includes(tc.name)) {
+      // EXCEPTION (user request 2026-08-30): custom tools (agent TỰ VIẾT qua
+      // create_custom_tool) luôn được phép — mọi agents dùng chung registry.
+      let isCustomTool = false
+      try {
+        const { isCustomToolRegistered } = await import('@/lib/custom-tool-registry')
+        isCustomTool = isCustomToolRegistered(tc.name)
+      } catch { /* fail-open */ }
+      if (agentTools.length > 0 && !agentTools.includes(tc.name) && !isCustomTool) {
         messages.push({
           role: 'tool',
           content: JSON.stringify({ tool: tc.name, success: false, result: `Tool "${tc.name}" not available for this agent. Available tools: ${agentTools.join(', ')}` }),
@@ -709,6 +724,35 @@ export async function POST(request: NextRequest) {
       }
     } catch (skillErr) {
       console.warn('[OpenClaw Chat] Failed to load enabled skills:', skillErr instanceof Error ? skillErr.message : String(skillErr))
+    }
+
+    // CUSTOM TOOLS (user request 2026-08-30): agents TỰ VIẾT tools khi thiếu.
+    // Inject danh sách custom tools đã có + hướng dẫn create_custom_tool để
+    // agent biết có thể tự tạo tool mới và DÙNG NGAY (hot-register).
+    try {
+      const { ensureCustomToolsLoaded, getAllCustomTools } = await import('@/lib/custom-tool-registry')
+      await ensureCustomToolsLoaded()
+      const customTools = getAllCustomTools().filter(t => t.enabled)
+      let customToolsText = `\n\n--- Custom Tools (TỰ VIẾT) ---\n`
+      customToolsText += `Bạn có thể TỰ VIẾT tool mới khi thiếu tool cho task:\n`
+      customToolsText += `tool_call: create_custom_tool({"name": "tool_snake_case", "description": "...", "parameters": {"type":"object","properties":{...},"required":[...]}, "handlerCode": "function handler(args) { ... return result }"})\n`
+      customToolsText += `- Handler JS thuần, sandbox có: fetch/JSON/Math/Date/console. KHÔNG process/require/import/eval/fs.\n`
+      customToolsText += `- Sau tạo THÀNH CÔNG → gọi NGAY: tool_call: <name>({...}). Tool + SKILL.md guide lưu vĩnh viễn, mọi agents dùng được.\n`
+      customToolsText += `- Liệt kê: tool_call: list_custom_tools({}) — Xóa: tool_call: delete_custom_tool({"name": "..."})\n`
+      if (customTools.length > 0) {
+        customToolsText += `\nCustom tools hiện có (${customTools.length}) — gọi trực tiếp bằng tên:\n`
+        for (const t of customTools) {
+          const props = t.parameters && typeof t.parameters === 'object' && (t.parameters as { properties?: Record<string, unknown> }).properties
+            ? Object.keys((t.parameters as { properties: Record<string, unknown> }).properties).join(', ')
+            : ''
+          customToolsText += `- ${t.name}(${props}): ${t.description.slice(0, 150)} [đã gọi ${t.callCount} lần]\n`
+        }
+      } else {
+        customToolsText += `\n(Chưa có custom tool nào — bạn là agent đầu tiên có thể tạo.)\n`
+      }
+      systemPrompt += customToolsText
+    } catch (ctErr) {
+      console.warn('[OpenClaw Chat] Custom tools injection failed (fail-open):', ctErr instanceof Error ? ctErr.message : String(ctErr))
     }
 
     // Inject standing orders — persistent agent instructions

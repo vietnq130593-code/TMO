@@ -1122,6 +1122,70 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       },
     },
   },
+
+  // ==================== Custom Tools (user request 2026-08-30) ====================
+  // Agents TỰ VIẾT tools khi cần và DÙNG NGAY (hot-register trong cùng ReAct loop).
+  // Handler JS chạy trong sandbox (fetch HTTP OK, KHÔNG fs/process/eval).
+  // Mỗi custom tool tự tạo AgentSkill companion (source 'agent-tool') → hiện
+  // trong ô "SKILL.md Guides" của module Skills.
+  create_custom_tool: {
+    type: 'function',
+    function: {
+      name: 'create_custom_tool',
+      description:
+        'TẠO TOOL MỚI do chính bạn viết — dùng NGAY sau khi tạo (hot-register). ' +
+        'Khi thiếu tool cho task (vd: tính toán đặc biệt, convert format, gọi API lạ), ĐỪNG lặp code mỗi lần — ' +
+        'viết 1 tool reusable: định nghĩa name + description + parameters (JSON schema) + handlerCode. ' +
+        'Handler là JavaScript thuần: function handler(args, sandbox) { ... return result } — ' +
+        'sandbox có: fetch (HTTP/HTTPS), JSON, Math, Date, console. KHÔNG dùng process/require/import/eval/fs. ' +
+        'Tool được lưu vĩnh viễn (DB) + tự tạo SKILL.md guide. Timeout 10s, output ~2000 ký tự.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Tên tool (snake_case, vd: word_frequency, base32_encode). KHÔNG trùng tool có sẵn.' },
+          description: { type: 'string', description: 'Mô tả tool làm gì — dùng để các agent khác hiểu và gọi đúng' },
+          parameters: {
+            type: 'object',
+            description: 'JSON schema các tham số. VD: {"type":"object","properties":{"text":{"type":"string","description":"Văn bản cần phân tích"}},"required":["text"]}',
+            properties: {},
+          },
+          handlerCode: {
+            type: 'string',
+            description:
+              'JavaScript handler. VD: function handler(args) { const words = args.text.split(/\\s+/); return { words: words.length }; } ' +
+              'Có thể async. Return string/object đều được.',
+          },
+          skillMd: { type: 'string', description: '(Tùy chọn) Nội dung SKILL.md hướng dẫn dùng tool — bỏ trống sẽ tự sinh' },
+        },
+        required: ['name', 'description', 'parameters', 'handlerCode'],
+      },
+    },
+  },
+  delete_custom_tool: {
+    type: 'function',
+    function: {
+      name: 'delete_custom_tool',
+      description: 'Xóa một custom tool đã tạo (kèm SKILL.md guide của nó). Chỉ xóa được tool do agent/user tạo.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Tên custom tool cần xóa' },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  list_custom_tools: {
+    type: 'function',
+    function: {
+      name: 'list_custom_tools',
+      description: 'Liệt kê các custom tools đã tạo (tên + mô tả + số lần gọi). Dùng trước khi create để tránh trùng tên.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  },
 }
 
 /**
@@ -1143,6 +1207,29 @@ export function getToolDefinitions(tools: string[]): ToolDefinition[] {
   return tools
     .map(t => ALL_TOOL_DEFINITIONS[t])
     .filter((def): def is ToolDefinition => def !== undefined)
+}
+
+/**
+ * Get ALL built-in tool summaries (name + description + category) — dùng bởi
+ * GET /api/tools/registry để UI module Skills hiển thị đầy đủ tools hiện có
+ * của app (user request 2026-08-30: "ô Skill.md guides chưa hiện hết skills/tools").
+ */
+export function getAllBuiltinToolSummaries(): Array<{
+  name: string
+  description: string
+  category: string
+  paramNames: string[]
+}> {
+  const summaries: Array<{ name: string; description: string; category: string; paramNames: string[] }> = []
+  for (const [name, def] of Object.entries(ALL_TOOL_DEFINITIONS)) {
+    summaries.push({
+      name,
+      description: def.function.description,
+      category: name.startsWith('gateway_') ? 'gateway' : name.startsWith('knowledge_') ? 'knowledge' : name.startsWith('file_') || name === 'opencode' ? 'code' : 'other',
+      paramNames: Object.keys((def.function.parameters as { properties?: Record<string, unknown> })?.properties || {}),
+    })
+  }
+  return summaries
 }
 
 // ==================== TOOL EXECUTION ====================
@@ -1845,13 +1932,115 @@ export async function executeTool(
         }
         break
       }
-      default:
+      // ===== Custom Tools (user request 2026-08-30) — agents tự viết tools =====
+      case 'create_custom_tool': {
+        try {
+          const { createCustomTool } = await import('@/lib/custom-tool-registry')
+          const createResult = await createCustomTool({
+            name: String(args.name || ''),
+            description: String(args.description || ''),
+            parameters: (args.parameters && typeof args.parameters === 'object'
+              ? args.parameters as Record<string, unknown>
+              : { type: 'object', properties: {} }),
+            handlerCode: String(args.handlerCode || ''),
+            skillMd: typeof args.skillMd === 'string' ? args.skillMd : undefined,
+            source: 'agent',
+          })
+          result = createResult
+          if (!createResult.success) {
+            recordActivity(false)
+            return {
+              success: false,
+              result: `Tạo custom tool thất bại: ${createResult.error}`,
+              duration: Date.now() - startTime,
+            }
+          }
+        } catch (err) {
+          return {
+            success: false,
+            result: `create_custom_tool lỗi: ${err instanceof Error ? err.message : String(err)}`,
+            duration: Date.now() - startTime,
+          }
+        }
+        break
+      }
+      case 'delete_custom_tool': {
+        try {
+          const { deleteCustomTool } = await import('@/lib/custom-tool-registry')
+          result = await deleteCustomTool(String(args.name || ''))
+        } catch (err) {
+          return {
+            success: false,
+            result: `delete_custom_tool lỗi: ${err instanceof Error ? err.message : String(err)}`,
+            duration: Date.now() - startTime,
+          }
+        }
+        break
+      }
+      case 'list_custom_tools': {
+        try {
+          const { ensureCustomToolsLoaded, getAllCustomTools } = await import('@/lib/custom-tool-registry')
+          await ensureCustomToolsLoaded()
+          const tools = getAllCustomTools()
+          result = {
+            success: true,
+            count: tools.length,
+            tools: tools.map(t => ({
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters,
+              version: t.version,
+              callCount: t.callCount,
+              enabled: t.enabled,
+            })),
+            hint: tools.length === 0
+              ? 'Chưa có custom tool nào. Dùng create_custom_tool để tự viết tool mới.'
+              : 'Gọi trực tiếp: tool_call: <name>({...args}). Muốn xóa: delete_custom_tool({"name": "..."})',
+          }
+        } catch (err) {
+          return {
+            success: false,
+            result: `list_custom_tools lỗi: ${err instanceof Error ? err.message : String(err)}`,
+            duration: Date.now() - startTime,
+          }
+        }
+        break
+      }
+      default: {
+        // ===== Custom tool dispatch (user request 2026-08-30) =====
+        // Tool không nằm trong built-in list → kiểm tra custom tool registry
+        // (agents TỰ VIẾT qua create_custom_tool + lazy-load từ DB).
+        try {
+          const ctr = await import('@/lib/custom-tool-registry')
+          await ctr.ensureCustomToolsLoaded()
+          // Next.js dev có thể tách module instance theo route → tool tạo ở
+          // instance khác có thể chưa vào registry instance này. Reload DB
+          // một lần trước khi kết luận "unknown tool".
+          if (!ctr.isCustomToolRegistered(toolName)) {
+            await ctr.loadCustomToolsFromDB()
+          }
+          if (ctr.isCustomToolRegistered(toolName)) {
+            const execResult = await ctr.executeCustomTool(toolName, args, 10000, 2000)
+            recordActivity(execResult.success)
+            return {
+              success: execResult.success,
+              result: execResult.success
+                ? execResult.result
+                : { error: execResult.error || 'Custom tool execution failed', timedOut: execResult.timedOut || false },
+              duration: Date.now() - startTime,
+            }
+          }
+        } catch (registryErr) {
+          console.warn(`[ToolExecutor] Custom tool dispatch failed for "${toolName}":`, registryErr instanceof Error ? registryErr.message : String(registryErr))
+        }
+
         recordActivity(false)
         return {
           success: false,
           result: `Unknown tool: ${toolName}`,
           duration: Date.now() - startTime,
         }
+      }
     }
 
     recordActivity(true)
@@ -1915,6 +2104,12 @@ function summarizeToolCall(toolName: string, args: Record<string, unknown>): str
     case 'jina':
     case 'web_fetch':
       return s(args.url)
+    case 'create_custom_tool':
+      return `tạo tool "${s(args.name)}"`
+    case 'delete_custom_tool':
+      return `xóa tool "${s(args.name)}"`
+    case 'list_custom_tools':
+      return 'liệt kê custom tools'
     default: {
       try { return JSON.stringify(args).slice(0, 150) } catch { return '' }
     }

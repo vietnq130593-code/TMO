@@ -138,6 +138,14 @@ Khi cần commit code: tool_call: git_commit({"message": "...", "paths": ["..."]
 Khi user yêu cầu PUSH code lên GitHub: tool_call: git_push({"branch": "main"}) — token xác thực đã được lưu sẵn, KHÔNG cần hỏi user
 Khi user yêu cầu PULL code từ GitHub: tool_call: git_pull({"branch": "main"}) — an toàn (ff-only, không đè thay đổi local)
 
+TỰ VIẾT TOOL KHI THIẾU (create_custom_tool):
+- Nếu task cần function/tool mà chưa có (tính toán đặc biệt, convert format, gọi API lạ...) → TỰ VIẾT tool:
+  tool_call: create_custom_tool({"name": "tool_name", "description": "...", "parameters": {"type":"object","properties":{...},"required":[...]}, "handlerCode": "function handler(args) { ... return result }"})
+- Handler JS thuần chạy sandbox: có fetch/JSON/Math/Date. KHÔNG process/require/import/eval/fs. Timeout 10s, output ~2000 ký tự.
+- Sau khi tạo THÀNH CÔNG → gọi NGAY: tool_call: tool_name({...args}) — không cần restart.
+- Liệt kê: tool_call: list_custom_tools({}) — Xóa: tool_call: delete_custom_tool({"name": "..."})
+- Tool + SKILL.md guide được LƯU VĨNH VIỄN (DB) — các agent khác cũng dùng được.
+
 Lưu ý GIT: luôn git_commit trước khi git_push. Xem trạng thái trước bằng dry_run: tool_call: git_push({"dry_run": true}). force:true CHỈ dùng khi user yêu cầu ghi đè.
 
 ═══════════════════════════════════════════
@@ -191,6 +199,12 @@ LEARNING & MEMORY
       'list_skills',
       'read_skill',
       'mcp_list_servers',
+      // Self-authoring tools (user request 2026-08-30): agent TỰ VIẾT function/tool
+      // khi thiếu tool cho task → create_custom_tool (hot-register, dùng NGAY) —
+      // tool mới tự lưu vào ô "SKILL.md Guides" của module Skills.
+      'create_custom_tool',
+      'delete_custom_tool',
+      'list_custom_tools',
     ],
   },
 ]
@@ -250,6 +264,7 @@ async function _doStandaloneSeed(): Promise<void> {
         // Omega instruction thiếu docs git_push/git_pull → refresh instruction từ
         // code definition để LLM biết cú pháp gọi tool mới. Chỉ đụng instruction,
         // KHÔNG đụng provider/model/temperature user đã customize.
+        // (2026-08-30) Thêm marker create_custom_tool — agents TỰ VIẾT tools.
         if (existing.instruction && def.instruction.includes('git_push') && !existing.instruction.includes('git_push')) {
           try {
             await db.agentProfile.update({
@@ -257,6 +272,16 @@ async function _doStandaloneSeed(): Promise<void> {
               data: { instruction: def.instruction },
             })
             console.log(`[Standalone] Migrated ${def.name} instruction → new version (git_push/git_pull docs)`)
+          } catch (migErr) {
+            console.warn(`[Standalone] Instruction migration failed for ${def.name}:`, migErr)
+          }
+        } else if (existing.instruction && def.instruction.includes('create_custom_tool') && !existing.instruction.includes('create_custom_tool')) {
+          try {
+            await db.agentProfile.update({
+              where: { name: def.name },
+              data: { instruction: def.instruction },
+            })
+            console.log(`[Standalone] Migrated ${def.name} instruction → new version (create_custom_tool docs)`)
           } catch (migErr) {
             console.warn(`[Standalone] Instruction migration failed for ${def.name}:`, migErr)
           }

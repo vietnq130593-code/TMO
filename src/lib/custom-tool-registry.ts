@@ -521,3 +521,240 @@ export async function loadCustomToolsFromDB(): Promise<{
 export function clearRegistry(): void {
   registry.clear()
 }
+
+// ==================== AGENT-FACING API (user request 2026-08-30) ====================
+// Agents TỰ VIẾT tools khi cần (create_custom_tool) và DÙNG NGAY sau đó.
+// Mỗi custom tool được lưu DB (persist qua restart) + tạo AgentSkill companion
+// (source 'agent-tool') để hiện trong ô "SKILL.md Guides" của module Skills.
+
+/** Lazy-load flag — registry tự nạp từ DB ở lần truy cập đầu tiên */
+let dbLoaded = false
+
+/**
+ * Đảm bảo registry đã nạp custom tools từ DB (idempotent, fail-open).
+ * Gọi ở executeTool dispatch + chat route whitelist check.
+ */
+export async function ensureCustomToolsLoaded(): Promise<void> {
+  if (dbLoaded) return
+  dbLoaded = true
+  try {
+    await loadCustomToolsFromDB()
+  } catch (err) {
+    console.warn('[CustomToolRegistry] Lazy load failed:', err instanceof Error ? err.message : String(err))
+  }
+}
+
+/** Sync check — tool này có phải custom tool đã register không? */
+export function isCustomToolRegistered(name: string): boolean {
+  const entry = registry.get(name)
+  return !!entry && entry.tool.enabled
+}
+
+/** Danh sách tên custom tools đang enabled (sync) */
+export function getCustomToolNames(): string[] {
+  const names: string[] = []
+  for (const entry of registry.values()) {
+    if (entry.tool.enabled) names.push(entry.tool.name)
+  }
+  return names
+}
+
+export interface CreateCustomToolResult {
+  success: boolean
+  toolName?: string
+  skillSlug?: string
+  error?: string
+  usage?: string
+}
+
+/**
+ * Agent/user tạo custom tool MỚI — validate + save DB + register in-memory
+ * (dùng được NGAY trong cùng ReAct loop) + tạo AgentSkill companion để hiện
+ * trong ô SKILL.md Guides.
+ */
+export async function createCustomTool(input: {
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+  handlerCode: string
+  skillMd?: string
+  source?: string
+  category?: string
+}): Promise<CreateCustomToolResult> {
+  const { name, description, parameters, handlerCode } = input
+
+  // ===== Validate name =====
+  if (!name || typeof name !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+    return { success: false, error: 'Invalid tool name — phải bắt đầu bằng chữ/c underscore, chỉ chứa [a-zA-Z0-9_]' }
+  }
+  if (isToolNameTaken(name)) {
+    return { success: false, error: `Tool name "${name}" bị trùng với built-in/gateway tool hoặc custom tool đã có` }
+  }
+  const existing = await db.customTool.findUnique({ where: { name } })
+  if (existing) {
+    return { success: false, error: `Custom tool "${name}" đã tồn tại trong DB` }
+  }
+
+  // ===== Validate description =====
+  if (!description || typeof description !== 'string') {
+    return { success: false, error: 'Thiếu description' }
+  }
+
+  // ===== Validate parameters (JSON schema object) =====
+  let paramsSchema: Record<string, unknown>
+  if (typeof parameters === 'string') {
+    try {
+      paramsSchema = JSON.parse(parameters)
+    } catch {
+      return { success: false, error: 'parameters là JSON string không hợp lệ' }
+    }
+  } else if (parameters && typeof parameters === 'object') {
+    paramsSchema = parameters
+  } else {
+    paramsSchema = { type: 'object', properties: {} }
+  }
+  if (paramsSchema.type !== 'object') {
+    paramsSchema = { type: 'object', ...paramsSchema, type: 'object' } as Record<string, unknown>
+  }
+
+  // ===== Validate handler code (sandbox security) =====
+  const codeCheck = validateHandlerCode(handlerCode, name)
+  if (!codeCheck.safe) {
+    return { success: false, error: `Handler code không đạt security check: ${codeCheck.error}` }
+  }
+  // Phải định nghĩa function handler(args, sandbox)
+  if (!/\bfunction\s+handler\s*\(|\bhandler\s*=\s*(async\s*)?\(|const\s+handler\s*=/.test(handlerCode)) {
+    return { success: false, error: 'Handler code phải định nghĩa: function handler(args, sandbox) { ... return result }' }
+  }
+
+  // ===== Save DB =====
+  const source = input.source === 'user' ? 'user' : 'agent'
+  const category = input.category || 'custom'
+  const saved = await db.customTool.create({
+    data: {
+      name,
+      description,
+      parameters: JSON.stringify(paramsSchema),
+      handlerCode,
+      source,
+      category,
+      enabled: true,
+    },
+  })
+
+  // ===== Register in-memory (hot — dùng ngay) =====
+  const entry: CustomToolEntry = {
+    id: saved.id,
+    name: saved.name,
+    description: saved.description,
+    parameters: paramsSchema,
+    handlerCode: saved.handlerCode,
+    version: saved.version,
+    source: saved.source,
+    category: saved.category,
+    enabled: saved.enabled,
+    isPublic: saved.isPublic,
+    skillSlug: null,
+    callCount: 0,
+    createdAt: saved.createdAt,
+    updatedAt: saved.updatedAt,
+  }
+  await registerCustomTool(entry, true)
+
+  // ===== AgentSkill companion → hiện trong ô SKILL.md Guides =====
+  const skillSlug = `tool-${name}`
+  const skillMdContent =
+    input.skillMd && input.skillMd.trim()
+      ? input.skillMd
+      : `# Tool: ${name}
+
+## Description
+${description}
+
+## When to Use
+- Gọi tool \`${name}\` khi cần: ${description.slice(0, 150)}
+
+## How to Use
+tool_call: ${name}(${JSON.stringify(
+          Object.entries((paramsSchema.properties as Record<string, { description?: string; type?: string }>) || {})
+            .slice(0, 3)
+            .map(([k, v]) => `"${k}": <${v.type || 'string'}${v.description ? ` — ${v.description}` : ''}>`)
+        )})
+
+## Handler
+Tool này do agent TỰ VIẾT (create_custom_tool) — handler JS chạy trong sandbox
+(fetch HTTP được phép, KHÔNG truy cập filesystem/process). Source code lưu trong
+CustomTool DB table, gọi trực tiếp qua tool_call: ${name}({...}).
+
+## Rules
+- Kết quả trả về bị giới hạn ~2000 ký tự (truncated)
+- Timeout 10s
+- Tool bị lỗi → báo lỗi rõ ràng, KHÔNG bịa kết quả`
+
+  try {
+    await db.agentSkill.upsert({
+      where: { agentId_slug: { agentId: 'default', slug: skillSlug } },
+      create: {
+        agentId: 'default',
+        slug: skillSlug,
+        name: `🔧 ${name}`,
+        content: skillMdContent,
+        source: 'agent-tool',
+        enabled: true,
+        version: saved.version,
+      },
+      update: { content: skillMdContent, enabled: true },
+    })
+    await db.customTool.update({ where: { id: saved.id }, data: { skillSlug } })
+    entry.skillSlug = skillSlug
+
+    // Filesystem sync cho z.ai platform layer
+    try {
+      const { writeFileSync, mkdirSync } = await import('fs')
+      const { join } = await import('path')
+      const skillsDir = join(process.cwd(), 'skills', skillSlug)
+      mkdirSync(skillsDir, { recursive: true })
+      writeFileSync(join(skillsDir, 'SKILL.md'), skillMdContent, 'utf-8')
+    } catch { /* non-fatal */ }
+  } catch (skillErr) {
+    console.warn('[CustomToolRegistry] AgentSkill companion failed (non-blocking):', skillErr instanceof Error ? skillErr.message : String(skillErr))
+  }
+
+  const paramNames = Object.keys((paramsSchema.properties as Record<string, unknown>) || {})
+  const usage = paramNames.length > 0
+    ? `tool_call: ${name}({${paramNames.map(p => `"${p}": ...`).join(', ')}})`
+    : `tool_call: ${name}({})`
+
+  console.log(`[CustomToolRegistry] Agent created custom tool "${name}" + skill "${skillSlug}"`)
+  return { success: true, toolName: name, skillSlug, usage }
+}
+
+/**
+ * Xóa custom tool (kèm AgentSkill companion). Chỉ tool source 'agent'/'user'
+ * (built-in không đụng được).
+ */
+export async function deleteCustomTool(name: string): Promise<{ success: boolean; error?: string }> {
+  const existing = await db.customTool.findUnique({ where: { name } })
+  if (!existing) return { success: false, error: `Custom tool "${name}" không tồn tại` }
+
+  await db.customTool.delete({ where: { name } })
+  await unregisterCustomTool(name)
+
+  // Gỡ AgentSkill companion + filesystem
+  if (existing.skillSlug) {
+    try {
+      await db.agentSkill.deleteMany({ where: { slug: existing.skillSlug } })
+      const { unlinkSync, existsSync, rmdirSync, readdirSync } = await import('fs')
+      const { join } = await import('path')
+      const skillDir = join(process.cwd(), 'skills', existing.skillSlug)
+      const skillFile = join(skillDir, 'SKILL.md')
+      if (existsSync(skillFile)) unlinkSync(skillFile)
+      if (existsSync(skillDir)) {
+        try { if (readdirSync(skillDir).length === 0) rmdirSync(skillDir) } catch { /* ignore */ }
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  console.log(`[CustomToolRegistry] Deleted custom tool "${name}"`)
+  return { success: true }
+}

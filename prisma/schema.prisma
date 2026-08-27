@@ -312,6 +312,27 @@ model AgentSkill {
   @@unique([agentId, slug])
 }
 
+/// Custom tools — tools do agents/user tự viết (handler JS chạy trong sandbox).
+/// Agent gọi tool create_custom_tool → lưu đây → dùng NGAY qua registry in-memory.
+/// Mỗi custom tool tự tạo 1 AgentSkill companion (source 'agent-tool') để hiện
+/// trong ô "SKILL.md Guides" của module Skills (user request 2026-08-30).
+model CustomTool {
+  id          String   @id @default(cuid())
+  name        String   @unique /// tool name agents gọi: tool_call: <name>({...})
+  description String
+  parameters  String   /// JSON schema (object type) — mô tả args cho LLM
+  handlerCode String   /// JS: function handler(args, sandbox) { ... return result }
+  version     String   @default("1.0.0")
+  source      String   @default("agent") /// agent | user | clawhub
+  category    String   @default("custom")
+  enabled     Boolean  @default(true)
+  isPublic    Boolean  @default(false)
+  skillSlug   String?  /// slug AgentSkill companion (nếu có)
+  callCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
 /// Tool permissions — controls which tools each agent can use
 model ToolPermission {
   id         String @id @default(cuid())

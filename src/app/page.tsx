@@ -10043,6 +10043,53 @@ function SkillsTabContent() {
   } | null>(null)
   const [skillDialogContentLoading, setSkillDialogContentLoading] = useState(false)
 
+  // Collapse/expand panels (user request 2026-08-30): ClawHub Marketplace +
+  // SKILL.md Guides + Tools Registry chỉ hiện nội dung khi bấm vào tiêu đề
+  const [clawhubOpen, setClawhubOpen] = useState(false)
+  const [skillGuidesOpen, setSkillGuidesOpen] = useState(false)
+  const [toolsRegistryOpen, setToolsRegistryOpen] = useState(false)
+
+  // Tools Registry — tổng quan TOÀN BỘ skills/tools của app + agents nào dùng được
+  const [toolsRegistry, setToolsRegistry] = useState<{
+    ok: boolean
+    summary: {
+      builtinToolCount: number; customToolCount: number; filesystemSkillCount: number;
+      dbSkillCount: number; agentCount: number; orphanToolCount: number;
+    }
+    builtinTools: Array<{
+      name: string; description: string; category: string; paramNames: string[];
+      agents: Array<{ name: string; short: string }>; agentCount: number; totalAgents: number;
+      accessibleByAll: boolean;
+    }>
+    customTools: Array<{
+      name: string; description: string; parameters: unknown; version: string;
+      source: string; enabled: boolean; callCount: number; skillSlug: string | null;
+    }>
+    filesystemSkills: Array<{ slug: string; hasSkillMd: boolean; description: string }>
+    agentMatrix: Array<{
+      name: string; short: string; builtinToolCount: number; canSelfWriteTools: boolean;
+      customToolCount: number; totalUsable: number;
+    }>
+  } | null>(null)
+  const [toolsRegistryLoading, setToolsRegistryLoading] = useState(false)
+  const [toolsRegistryFilter, setToolsRegistryFilter] = useState('')
+
+  // Load tools registry
+  const loadToolsRegistry = useCallback(async () => {
+    setToolsRegistryLoading(true)
+    try {
+      const res = await fetch('/api/tools/registry')
+      if (res.ok) {
+        const data = await res.json()
+        setToolsRegistry(data)
+      }
+    } catch (error) {
+      console.error('Failed to load tools registry:', error)
+    } finally {
+      setToolsRegistryLoading(false)
+    }
+  }, [])
+
   // Load installed skills
   const loadSkills = useCallback(async () => {
     setSkillsLoading(true)
@@ -10058,6 +10105,28 @@ function SkillsTabContent() {
       setSkillsLoading(false)
     }
   }, [])
+
+  // Delete a custom tool (agent-written) from Tools Registry UI
+  const deleteCustomToolFromUi = useCallback(async (name: string) => {
+    if (!confirm(`Xóa custom tool "${name}"? Kèm cả SKILL.md guide của nó.`)) return
+    try {
+      const res = await fetch('/api/tools/custom', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+      if (res.ok) {
+        toast({ title: '🗑️ Đã xóa custom tool', description: name })
+        loadToolsRegistry()
+        loadSkills()
+      } else {
+        const data = await res.json()
+        toast({ title: '❌ Lỗi', description: data.error || 'Không xóa được', variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: '❌ Lỗi', description: 'Không xóa được custom tool', variant: 'destructive' })
+    }
+  }, [loadToolsRegistry, loadSkills])
 
   // Search ClawHub
   const searchClawHub = useCallback(async (queryOverride?: string) => {
@@ -10236,6 +10305,7 @@ function SkillsTabContent() {
   // Load data on mount (only once)
   useEffect(() => {
     loadSkills()
+    loadToolsRegistry()
     searchClawHub('skill') // initial load — browse popular skills from ClawHub
   }, [])
 
@@ -10244,21 +10314,221 @@ function SkillsTabContent() {
     clawhub: 'bg-blue-500/20 text-blue-300 border-blue-400/50',
     custom: 'bg-emerald-500/20 text-emerald-300 border-emerald-400/50',
     template: 'bg-purple-500/20 text-purple-300 border-purple-400/50',
+    'agent-tool': 'bg-cyan-500/20 text-cyan-300 border-cyan-400/50',
   }
 
   return (
     <div className="space-y-4 p-4 max-h-full overflow-y-auto">
+      {/* Tools Registry — tổng quan TOÀN BỘ skills/tools (user request 2026-08-30) */}
+      <div className="nc-wrap nc-violet">
+        <div className="nc-panel nc-md nc-border-violet p-4">
+          <div
+            className="flex items-center gap-2 cursor-pointer select-none group"
+            onClick={() => setToolsRegistryOpen(!toolsRegistryOpen)}
+            role="button"
+            tabIndex={0}
+            aria-expanded={toolsRegistryOpen}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setToolsRegistryOpen(!toolsRegistryOpen) }}
+          >
+            {toolsRegistryOpen ? <ChevronDown className="w-4 h-4 text-violet-400" /> : <ChevronRight className="w-4 h-4 text-violet-400" />}
+            <Wrench className="w-5 h-5 text-violet-400" />
+            <h3 className="text-sm font-semibold text-violet-300 uppercase tracking-wider group-hover:text-violet-200 transition-colors">Tools Registry</h3>
+            {toolsRegistry && (
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-violet-500/20 text-violet-300 border-violet-400/50">
+                {toolsRegistry.summary.builtinToolCount + toolsRegistry.summary.customToolCount} tools · {toolsRegistry.summary.filesystemSkillCount} skills
+              </Badge>
+            )}
+            <span className="ml-auto text-[10px] text-slate-500">{toolsRegistryOpen ? 'Thu gọn' : 'Bấm để mở'} </span>
+          </div>
+
+          {toolsRegistryOpen && (
+            <div className="mt-4">
+              {toolsRegistryLoading && !toolsRegistry ? (
+                <div className="flex items-center justify-center gap-2 py-6 text-slate-500 text-sm">
+                  <Loader2 className="w-4 h-4 animate-spin text-violet-400" />
+                  <span>Đang tải registry...</span>
+                </div>
+              ) : toolsRegistry ? (
+                <div className="space-y-4">
+                  {/* Summary cards */}
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                    <div className="nc-panel nc-sm nc-border-violet-soft p-2.5 text-center">
+                      <div className="text-lg font-bold text-white">{toolsRegistry.summary.builtinToolCount}</div>
+                      <div className="text-[10px] text-slate-500">Built-in Tools</div>
+                    </div>
+                    <div className="nc-panel nc-sm nc-border-violet-soft p-2.5 text-center">
+                      <div className="text-lg font-bold text-cyan-300">{toolsRegistry.summary.customToolCount}</div>
+                      <div className="text-[10px] text-slate-500">Custom (Agent viết)</div>
+                    </div>
+                    <div className="nc-panel nc-sm nc-border-violet-soft p-2.5 text-center">
+                      <div className="text-lg font-bold text-emerald-300">{toolsRegistry.summary.filesystemSkillCount}</div>
+                      <div className="text-[10px] text-slate-500">Filesystem Skills</div>
+                    </div>
+                    <div className="nc-panel nc-sm nc-border-violet-soft p-2.5 text-center">
+                      <div className="text-lg font-bold text-violet-300">{toolsRegistry.summary.dbSkillCount}</div>
+                      <div className="text-[10px] text-slate-500">SKILL.md Guides</div>
+                    </div>
+                    <div className="nc-panel nc-sm nc-border-violet-soft p-2.5 text-center">
+                      <div className="text-lg font-bold text-amber-300">{toolsRegistry.summary.orphanToolCount}</div>
+                      <div className="text-[10px] text-slate-500">Chưa cấp agent nào</div>
+                    </div>
+                  </div>
+
+                  {/* Agent matrix */}
+                  <div>
+                    <h4 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
+                      <Cpu className="w-3.5 h-3.5 text-violet-400" /> Agents — tools khả dụng
+                      <span className="text-[10px] font-normal text-slate-500">(custom tools dùng chung cho mọi agents)</span>
+                    </h4>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+                      {toolsRegistry.agentMatrix.map(a => (
+                        <div key={a.name} className="nc-panel nc-sm nc-border-violet-soft p-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-medium text-white truncate">{a.name}</span>
+                            {a.canSelfWriteTools && (
+                              <span title="Agent này có thể TỰ VIẾT tools (create_custom_tool)" className="text-[9px] text-cyan-400">✍️</span>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">
+                            {a.builtinToolCount} built-in{a.customToolCount > 0 ? ` + ${a.customToolCount} custom` : ''}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Custom tools (agent-written) */}
+                  {toolsRegistry.customTools.length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
+                        <Wrench className="w-3.5 h-3.5 text-cyan-400" /> Custom Tools — agents tự viết
+                        <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-cyan-500/20 text-cyan-300 border-cyan-400/50">{toolsRegistry.customTools.length}</Badge>
+                      </h4>
+                      <div className="space-y-1.5">
+                        {toolsRegistry.customTools.map(ct => (
+                          <div key={ct.name} className="nc-panel nc-sm nc-border-violet-soft p-2.5 flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-mono font-medium text-cyan-300 truncate">{ct.name}</span>
+                                <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-slate-500/20 text-slate-400 border-slate-400/50 flex-shrink-0">v{ct.version}</Badge>
+                                {ct.enabled ? (
+                                  <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-emerald-500/20 text-emerald-300 border-emerald-400/50 flex-shrink-0">✅ Bật</Badge>
+                                ) : (
+                                  <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-slate-500/20 text-slate-400 border-slate-400/50 flex-shrink-0">⏸️ Tắt</Badge>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-2">{ct.description}</p>
+                            </div>
+                            <div className="text-right flex-shrink-0">
+                              <div className="text-[10px] text-slate-500">gọi {ct.callCount} lần</div>
+                              <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px] text-red-400 hover:bg-red-500/10 mt-1" onClick={() => deleteCustomToolFromUi(ct.name)}>
+                                <Trash2 className="w-3 h-3 mr-1" /> Xóa
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Built-in tools list */}
+                  <div>
+                    <h4 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
+                      <Wrench className="w-3.5 h-3.5 text-violet-400" /> Built-in Tools
+                      <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-violet-500/20 text-violet-300 border-violet-400/50">{toolsRegistry.summary.builtinToolCount}</Badge>
+                      <span className="text-[10px] font-normal text-slate-500">— agents nào dùng được tool nào</span>
+                    </h4>
+                    <Input
+                      placeholder="Lọc tool theo tên..."
+                      value={toolsRegistryFilter}
+                      onChange={(e) => setToolsRegistryFilter(e.target.value)}
+                      className="mb-2 bg-slate-800/50 border-violet-400/35 text-white placeholder:text-slate-500 text-sm h-8"
+                    />
+                    <div className="max-h-96 overflow-y-auto space-y-1 pr-1" style={{ scrollbarWidth: 'thin' }}>
+                      {toolsRegistry.builtinTools
+                        .filter(t => !toolsRegistryFilter || t.name.toLowerCase().includes(toolsRegistryFilter.toLowerCase()))
+                        .map(t => (
+                        <div key={t.name} className="nc-panel nc-sm nc-border-violet-soft p-2 flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-mono font-medium text-white">{t.name}</span>
+                              {t.paramNames.length > 0 && (
+                                <span className="text-[9px] text-slate-600">({t.paramNames.slice(0, 4).join(', ')}{t.paramNames.length > 4 ? '...' : ''})</span>
+                              )}
+                            </div>
+                            <p className="text-[10px] text-slate-500 mt-0.5 line-clamp-1">{t.description}</p>
+                          </div>
+                          <div className="flex items-center gap-1 flex-wrap justify-end flex-shrink-0 max-w-[45%]">
+                            {t.agentCount === 0 ? (
+                              <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-amber-500/20 text-amber-300 border-amber-400/50">Chưa cấp</Badge>
+                            ) : (
+                              <>
+                                {t.accessibleByAll && <span className="text-[9px] text-emerald-400" title="Mọi agents đều dùng được">★</span>}
+                                {t.agents.map(a => (
+                                  <span key={a.name} title={a.name} className="text-[9px] px-1 py-0.5 rounded bg-violet-500/15 text-violet-300 border border-violet-400/30">{a.short}</span>
+                                ))}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Filesystem skills */}
+                  <div>
+                    <h4 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
+                      <BookOpen className="w-3.5 h-3.5 text-emerald-400" /> Filesystem Skills
+                      <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-emerald-500/20 text-emerald-300 border-emerald-400/50">{toolsRegistry.summary.filesystemSkillCount}</Badge>
+                      <span className="text-[10px] font-normal text-slate-500">— agents đọc qua tool read_skill</span>
+                    </h4>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1.5 max-h-64 overflow-y-auto pr-1" style={{ scrollbarWidth: 'thin' }}>
+                      {toolsRegistry.filesystemSkills.map(fs => (
+                        <div key={fs.slug} className="nc-panel nc-sm nc-border-violet-soft p-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] font-mono text-emerald-300 truncate">{fs.slug}</span>
+                            {!fs.hasSkillMd && <span className="text-[9px] text-amber-500" title="Thiếu SKILL.md">⚠</span>}
+                          </div>
+                          {fs.description && <p className="text-[9px] text-slate-500 mt-0.5 line-clamp-1">{fs.description}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-4 text-slate-500 text-sm">Không tải được Tools Registry</div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* ClawHub Marketplace */}
       <div className="nc-wrap nc-violet">
         <div className="nc-panel nc-md nc-border-violet p-4">
-          <div className="flex items-center gap-2 mb-4">
+          <div
+            className="flex items-center gap-2 cursor-pointer select-none group"
+            onClick={() => setClawhubOpen(!clawhubOpen)}
+            role="button"
+            tabIndex={0}
+            aria-expanded={clawhubOpen}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setClawhubOpen(!clawhubOpen) }}
+          >
+            {clawhubOpen ? <ChevronDown className="w-4 h-4 text-violet-400" /> : <ChevronRight className="w-4 h-4 text-violet-400" />}
             <Globe className="w-5 h-5 text-violet-400" />
-            <h3 className="text-sm font-semibold text-violet-300 uppercase tracking-wider">ClawHub Marketplace</h3>
-            <a href="https://clawhub.ai/skills" target="_blank" rel="noopener noreferrer" className="ml-auto text-[10px] text-violet-400 hover:text-violet-300 flex items-center gap-1">
+            <h3 className="text-sm font-semibold text-violet-300 uppercase tracking-wider group-hover:text-violet-200 transition-colors">ClawHub Marketplace</h3>
+            {clawhubResults && clawhubResults.length > 0 && (
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-blue-500/20 text-blue-300 border-blue-400/50">{clawhubResults.length}</Badge>
+            )}
+            <span className="ml-auto text-[10px] text-slate-500">{clawhubOpen ? 'Thu gọn' : 'Bấm để mở'}</span>
+            <a href="https://clawhub.ai/skills" target="_blank" rel="noopener noreferrer" className="text-[10px] text-violet-400 hover:text-violet-300 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
               <ExternalLink className="w-3 h-3" /> ClawHub.ai
             </a>
           </div>
-          <div className="flex gap-2 mb-3">
+
+          {clawhubOpen && (
+            <>
+          <div className="flex gap-2 mb-3 mt-4">
             <Input
               placeholder="Tìm kiếm skill trên ClawHub.ai..."
               value={clawhubQuery}
@@ -10335,6 +10605,8 @@ function SkillsTabContent() {
               )}
             </div>
           )}
+            </>
+          )}
         </div>
       </div>
 
@@ -10342,20 +10614,29 @@ function SkillsTabContent() {
       {installedSkills && installedSkills.length > 0 && (
         <div className="nc-wrap nc-violet">
           <div className="nc-panel nc-md nc-border-violet p-4">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <BookOpen className="w-5 h-5 text-violet-400" />
-                <h3 className="text-sm font-semibold text-violet-300 uppercase tracking-wider">SKILL.md Guides</h3>
-                <Badge variant="outline" className="text-violet-400 border-violet-400/50">{installedSkills.length}</Badge>
-              </div>
-              <div className="flex gap-2">
+            <div
+              className="flex items-center gap-2 cursor-pointer select-none group"
+              onClick={() => setSkillGuidesOpen(!skillGuidesOpen)}
+              role="button"
+              tabIndex={0}
+              aria-expanded={skillGuidesOpen}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSkillGuidesOpen(!skillGuidesOpen) }}
+            >
+              {skillGuidesOpen ? <ChevronDown className="w-4 h-4 text-violet-400" /> : <ChevronRight className="w-4 h-4 text-violet-400" />}
+              <BookOpen className="w-5 h-5 text-violet-400" />
+              <h3 className="text-sm font-semibold text-violet-300 uppercase tracking-wider group-hover:text-violet-200 transition-colors">SKILL.md Guides</h3>
+              <Badge variant="outline" className="text-violet-400 border-violet-400/50">{installedSkills.length}</Badge>
+              <span className="ml-auto text-[10px] text-slate-500">{skillGuidesOpen ? 'Thu gọn' : 'Bấm để mở'}</span>
+              <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                 <Button size="sm" variant="outline" className="text-violet-400 border-violet-400/50 hover:bg-violet-500/10" onClick={() => setShowCreateSkill(true)}>
                   <Plus className="w-3.5 h-3.5 mr-1" /> Tạo Custom
                 </Button>
               </div>
             </div>
 
-            <p className="text-xs text-slate-500 mb-3">
+            {skillGuidesOpen && (
+              <>
+            <p className="text-xs text-slate-500 mb-3 mt-4">
               Tài liệu SKILL.md được inject vào system prompt của agent — hướng dẫn agent <em>khi nào</em> và <em>cách nào</em> sử dụng tool tương ứng. Đây là &quot;sách hướng dẫn&quot;, không phải code.
             </p>
 
@@ -10379,7 +10660,7 @@ function SkillsTabContent() {
                     </div>
                     <div className="flex items-center gap-2 mb-2">
                       <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${sourceBadgeColor[skill.source] || sourceBadgeColor.custom}`}>
-                        {skill.source === 'bundled' ? '📦 Mặc định' : skill.source === 'clawhub' ? '🏪 ClawHub' : skill.source === 'template' ? '📋 Template' : '✏️ Custom'}
+                        {skill.source === 'bundled' ? '📦 Mặc định' : skill.source === 'clawhub' ? '🏪 ClawHub' : skill.source === 'agent-tool' ? '🔧 Agent Tool' : skill.source === 'template' ? '📋 Template' : '✏️ Custom'}
                       </Badge>
                       <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${skill.enabled ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/50' : 'bg-slate-500/20 text-slate-400 border-slate-400/50'}`}>
                         {skill.enabled ? '✅ Bật' : '⏸️ Tắt'}
@@ -10402,6 +10683,8 @@ function SkillsTabContent() {
                 </div>
               ))}
             </div>
+              </>
+            )}
           </div>
         </div>
       )}
