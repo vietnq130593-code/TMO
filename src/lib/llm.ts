@@ -1955,6 +1955,92 @@ async function attemptNvidiaOnce(params: {
  * @param startKeyIndex Key bắt đầu chuỗi (extraction: key được gán cho document;
  *                      agent/chat: xoay từ counter toàn cục để phân tải)
  */
+
+/**
+ * RATE-LIMIT COOLDOWN WAIT — critical fix for "agents stop mid-task" bug.
+ *
+ * When ALL keys in the pool are dead due to rate-limiting (429 RPM exceeded),
+ * this function WAITS for the earliest cooldown reset instead of immediately
+ * giving up. The NVIDIA NIM API enforces ~40 RPM per key with a 30-45s cooldown
+ * on 429. Without this wait, the agent would try all 4 keys × 3 attempts = 12
+ * rapid retries, all fail (keys still cooling down), and the agent step errors
+ * out — causing the "agent stops after a few iterations" bug.
+ *
+ * Behavior:
+ * 1. Check if ALL dead keys are rate-limited (NOT daily-quota or auth-error —
+ *    those are permanent and waiting won't help).
+ * 2. Find the earliest rateLimitResetAt among dead keys.
+ * 3. Sleep until that time (polling every 3s), up to a max of 90s.
+ * 4. If a key becomes available → return true (caller retries).
+ * 5. If max wait exceeded or keys are permanently dead → return false (caller gives up).
+ *
+ * @param pool The NVIDIA key pool
+ * @param abortCheck Optional cancellation check (user pressed Stop)
+ * @returns true if a key became available, false if still all dead
+ */
+async function waitForRateLimitCooldown(
+  pool: ProviderKeyPool,
+  abortCheck?: () => boolean,
+): Promise<boolean> {
+  // Check if ALL keys are rate-limited (temporary) vs permanently dead (daily-quota/auth)
+  const allKeys = pool.keys.filter(k => !!k.key)
+  if (allKeys.length === 0) return false
+
+  const rateLimitedKeys = allKeys.filter(k => k.rateLimited && !k.dailyQuotaExhausted)
+  const permanentlyDeadKeys = allKeys.filter(k => k.dailyQuotaExhausted)
+
+  // If all keys are permanently dead (daily quota), waiting won't help
+  if (permanentlyDeadKeys.length === allKeys.length) {
+    console.warn(`[LLM] ⏳ waitForRateLimitCooldown: ALL keys daily-quota-exhausted — waiting won't help, giving up`)
+    return false
+  }
+
+  // If no keys are rate-limited, nothing to wait for
+  if (rateLimitedKeys.length === 0) return false
+
+  // Find the earliest reset time
+  const now = Date.now()
+  const earliestReset = Math.min(...rateLimitedKeys.map(k => k.rateLimitResetAt))
+  const waitMs = Math.max(0, earliestReset - now)
+
+  if (waitMs <= 0) {
+    // A key should already be available — reset and signal retry
+    console.log(`[LLM] ⏳ waitForRateLimitCooldown: rate-limit already expired — retrying immediately`)
+    return true
+  }
+
+  // Cap the wait at 90s — don't hang forever
+  const cappedWait = Math.min(waitMs, 90_000)
+  console.log(`[LLM] ⏳ waitForRateLimitCooldown: ALL ${rateLimitedKeys.length} NVIDIA keys rate-limited — waiting ${Math.ceil(cappedWait / 1000)}s for cooldown reset (abortCheck: ${!!abortCheck})`)
+
+  // Poll every 3s until the key is available or max wait exceeded
+  const pollInterval = 3000
+  const maxWaitUntil = now + cappedWait
+  while (Date.now() < maxWaitUntil) {
+    if (abortCheck && abortCheck()) {
+      console.log(`[LLM] ⏳ waitForRateLimitCooldown: aborted by user during wait`)
+      return false
+    }
+    await new Promise(resolve => setTimeout(resolve, pollInterval))
+    // Check if any key has recovered
+    const recovered = allKeys.some(k => k.key && !k.rateLimited && !k.exhausted && !k.dailyQuotaExhausted)
+    if (recovered) {
+      console.log(`[LLM] ⏳ waitForRateLimitCooldown: key recovered after ${Math.ceil((Date.now() - now) / 1000)}s — retrying`)
+      return true
+    }
+  }
+
+  // Final check after max wait
+  const recovered = allKeys.some(k => k.key && !k.rateLimited && !k.exhausted && !k.dailyQuotaExhausted)
+  if (recovered) {
+    console.log(`[LLM] ⏳ waitForRateLimitCooldown: key recovered after max wait — retrying`)
+    return true
+  }
+
+  console.warn(`[LLM] ⏳ waitForRateLimitCooldown: still all rate-limited after ${Math.ceil(cappedWait / 1000)}s wait — giving up`)
+  return false
+}
+
 async function callModelWithKeyRotation(
   model: string,
   prompt: string,
@@ -2057,6 +2143,19 @@ async function callModelWithKeyRotation(
         deadKeys.add(keyIdx)
       }
       if (deadKeys.size >= validIndices.length) {
+        // RATE-LIMIT WAIT: If all keys are dead due to RATE-LIMITING (not daily-quota/auth),
+        // WAIT for the earliest cooldown reset instead of immediately giving up.
+        // This is the critical fix for "agents stop mid-task after a few iterations" —
+        // the 429 rate limit (30-45s cooldown) was causing immediate failure instead of
+        // waiting for a key to become available again.
+        const waited = await waitForRateLimitCooldown(pool, options?.abortCheck)
+        if (waited) {
+          // A key became available — reset deadKeys and do one more round
+          console.log(`[LLM] 🔄 ${model}: rate-limit cooldown expired — retrying with refreshed keys`)
+          deadKeys.clear()
+          for (const [k, v] of failuresByKey) failuresByKey.set(k, 0)
+          continue  // re-enter the loop for one more round
+        }
         console.warn(`[LLM] 🔄 ${model}: MỌI key đều đã fail đủ ${KEY_FAILURES_PER_KEY} lần (sau ${attemptNo} attempts) — dừng xoay vòng`)
         return null
       }

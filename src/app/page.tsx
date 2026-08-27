@@ -2888,6 +2888,33 @@ function ConnectionStatus({ health, lastChecked, onRefresh, refreshing, error }:
   refreshing: boolean
   error?: string | null
 }) {
+  // Neo4j restore state — "Ánh xạ lại dữ liệu" button inside the Neo4j tooltip
+  const [neo4jRestoring, setNeo4jRestoring] = useState(false)
+  const [neo4jRestoreMsg, setNeo4jRestoreMsg] = useState<string | null>(null)
+  const handleRestoreNeo4j = useCallback(async () => {
+    setNeo4jRestoring(true)
+    setNeo4jRestoreMsg(null)
+    try {
+      const res = await fetch('/api/storage/restore-neo4j', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resetSynced: true, regenerateEmbeddings: false }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        const n = data.neo4j || {}
+        setNeo4jRestoreMsg(`✅ Đã ánh xạ ${n.totalEntitiesSynced || 0} entities, ${n.totalRelationshipsSynced || 0} relationships, ${n.totalResolvedEntitiesSynced || 0} resolved entities vào Neo4j (${data.durationMs ? Math.round(data.durationMs / 1000) : '?'}s)`)
+        onRefresh() // refresh health to show updated node/rel counts
+      } else {
+        setNeo4jRestoreMsg(`❌ ${data.message || data.error || 'Khôi phục thất bại'}`)
+      }
+    } catch (err) {
+      setNeo4jRestoreMsg(`❌ ${err instanceof Error ? err.message : 'Lỗi kết nối'}`)
+    } finally {
+      setNeo4jRestoring(false)
+    }
+  }, [onRefresh])
+
   // FIX: show a real error state instead of spinning "Đang kiểm tra kết nối..."
   // forever when the health check fails (network error, timeout, HTTP 500...).
   // The 10s auto-poll keeps retrying in the background; the user can also retry manually.
@@ -2993,14 +3020,33 @@ function ConnectionStatus({ health, lastChecked, onRefresh, refreshing, error }:
                 {!neo4j.connected && <span className="text-red-400">{neo4jError?.includes('discovery') ? 'DNS' : neo4jError?.includes('timed out') ? 'Timeout' : 'Offline'}</span>}
               </div>
             </StatusTooltipTrigger>
-            <StatusTooltipContent side="top" className="bg-slate-900 border border-cyan-400/30 text-stone-200 text-[10px] max-w-[260px]">
-              <div className="space-y-1">
+            <StatusTooltipContent side="top" className="bg-slate-900 border border-cyan-400/30 text-stone-200 text-[10px] max-w-[320px]">
+              <div className="space-y-1.5">
                 <div className="font-semibold text-stone-100">Neo4j Graph DB</div>
                 {neo4j.connected ? (<>
                   <div>Nodes: {neo4j.nodeCount.toLocaleString()}</div>
                   <div>Relationships: {neo4j.relationshipCount.toLocaleString()}</div>
                   {neo4j.labels.length > 0 && <div>Labels: {neo4j.labels.slice(0, 10).join(', ')}{neo4j.labels.length > 10 ? ` +${neo4j.labels.length - 10}` : ''}</div>}
                 </>) : <div className="text-red-400">Error: {neo4jError || 'Không kết nối được'}</div>}
+                <div className="pt-1.5 mt-1 border-t border-slate-700">
+                  <button
+                    onClick={handleRestoreNeo4j}
+                    disabled={neo4jRestoring}
+                    className="flex items-center gap-1 px-2 py-1 text-[9px] bg-violet-950/60 text-violet-200 rounded border border-violet-500/40 hover:bg-violet-900/60 hover:text-violet-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors w-full justify-center"
+                    title="Ánh xạ lại entities + relationships từ SQLite buffer vào Neo4j Aura (idempotent MERGE — không trùng lặp)"
+                  >
+                    {neo4jRestoring ? (
+                      <><Loader2 className="h-2.5 w-2.5 animate-spin" /> Đang ánh xạ...</>
+                    ) : (
+                      <><RefreshCw className="h-2.5 w-2.5" /> Ánh xạ lại từ SQLite</>
+                    )}
+                  </button>
+                  {neo4jRestoreMsg && (
+                    <div className={`mt-1 text-[9px] leading-tight ${neo4jRestoreMsg.startsWith('✅') ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {neo4jRestoreMsg}
+                    </div>
+                  )}
+                </div>
               </div>
             </StatusTooltipContent>
           </StatusTooltip>
@@ -3994,8 +4040,6 @@ interface SmolabSession {
   teamMode?: string | null
   teamName?: string | null
   tasks?: Array<{ id: string; type: string; status: string; progress: number; inputSummary?: string | null }>
-  /** USER REQUEST 2026-09-01 — agent/team đang chạy dở ở session này (chấm xanh live) */
-  hasActiveRun?: boolean
 }
 
 // ==================== AGENT RUN — THOUGHT PROCESS PANEL (user request 2026-08-31) ====================
@@ -8126,48 +8170,24 @@ function ChannelsTabContent() {
   )
 }
 
-// ==================== SMOLAB CHAT CONTEXT PERSISTENCE (user request 2026-09-01) ====================
-// User rời module Smolab (sang Database/Agents) rồi quay lại → phải thấy
-// ĐÚNG phiên làm việc lúc rời đi (agent/team đã chọn + session đang mở),
-// kể cả agent đang chạy dở (task tiếp tục chạy nền — xem inFlightChatsRef).
-const SMOLAB_CTX_KEY = 'smolab-chat-context-v1'
-
-function readSmolabContext(): {
-  chatMode?: 'single' | 'multi'
-  selectedAgentId?: string | null
-  selectedTeam?: string | null
-  currentSessionId?: string
-  selectedModel?: string
-} {
-  if (typeof window === 'undefined') return {}
-  try {
-    const raw = localStorage.getItem(SMOLAB_CTX_KEY)
-    return raw ? JSON.parse(raw) : {}
-  } catch { return {} }
-}
-
 function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
-  // Chat state — KHỞI TẠO TỪ localStorage (restore phiên làm việc cũ)
-  const restoredCtx = useMemo(() => readSmolabContext(), [])
+  // Chat state
   const [messages, setMessages] = useState<SmolabMessage[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   // MODEL POLICY 2026-08-27: kimi-k3 là mặc định (agents độc lập + chat);
   // deepseek → minimax là failover backup (GLM 5.2/5.3 không dùng được trên NIM)
-  const [selectedModel, setSelectedModel] = useState(restoredCtx.selectedModel || 'moonshotai/kimi-k3')
+  const [selectedModel, setSelectedModel] = useState('moonshotai/kimi-k3')
   const [activeSmolabTab, setActiveSmolabTab] = useState('knowledge')
   const [gatewayOnline, setGatewayOnline] = useState(false)
   const [sessions, setSessions] = useState<SmolabSession[]>([])
-  const [currentSessionId, setCurrentSessionId] = useState(restoredCtx.currentSessionId || '')
+  const [currentSessionId, setCurrentSessionId] = useState('')
   const [showSessionSelect, setShowSessionSelect] = useState(false)
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [sessionSearchQuery, setSessionSearchQuery] = useState('')
   const [feedbackLoading, setFeedbackLoading] = useState<string | null>(null)
   const [loadingMessages, setLoadingMessages] = useState(false)
-  // USER REQUEST 2026-09-01: bump để refresh danh sách session ngay khi tác vụ
-  // nền kết thúc (chấm xanh "đang chạy" phải biến mất kịp thời, không chờ 30s)
-  const [sessionsRefreshTick, setSessionsRefreshTick] = useState(0)
 
   // ===== Agent Run — Thought Process + Todos + Progress (user request 2026-08-31) =====
   // agentRuns: runId → dữ liệu run mới nhất (poll từ /api/agent-run mỗi 1.2s
@@ -8211,15 +8231,11 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     }
   }, [])
 
-  // Phase D: Agent/Team chat mode — restore từ context cũ
-  const [chatMode, setChatMode] = useState<'single' | 'multi'>(
-    restoredCtx.chatMode === 'multi' ? 'multi' : 'single'
-  )
+  // Phase D: Agent/Team chat mode
+  const [chatMode, setChatMode] = useState<'single' | 'multi'>('single')
   const [smolabAgents, setSmolabAgents] = useState<any[]>([])
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(restoredCtx.selectedAgentId || null)
-  const [selectedTeam, setSelectedTeam] = useState<string | null>(
-    restoredCtx.selectedTeam === 'code' || restoredCtx.selectedTeam === 'research' ? restoredCtx.selectedTeam : null
-  ) // 'code' | 'research'
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
+  const [selectedTeam, setSelectedTeam] = useState<string | null>(null) // 'code' | 'research'
   const [showAgentSelect, setShowAgentSelect] = useState(false)
   const [showTeamSelect, setShowTeamSelect] = useState(false)
 
@@ -8287,48 +8303,6 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
   // V1 FIX: Ref to skip message loading when session ID is set programmatically (e.g. sendMessage creates new session)
   // This prevents the useEffect from wiping messages that were just added to state
   const skipMessageLoadRef = useRef(false)
-
-  // ===== USER REQUEST 2026-09-01 — LAZY-LOAD HISTORY + BACKGROUND TASKS =====
-  // Lazy-load: mặc định chỉ load 3 lượt trao đổi CUỐI (exchanges=3); lượt thứ 4
-  // trở đi phải kéo lên đầu khung chat mới load thêm (cursor = id message cũ
-  // nhất đang hiển thị) → session dài không còn render hàng nghìn message mỗi lần mở.
-  const [hasMoreMessages, setHasMoreMessages] = useState(false)
-  const [loadingOlder, setLoadingOlder] = useState(false)
-  const oldestLoadedIdRef = useRef<string | null>(null)
-  const chatScrollRef = useRef<HTMLDivElement | null>(null)
-  const isNearBottomRef = useRef(true) // user đang ở cuối chat? → auto-scroll
-  const lastScrollTopRef = useRef(0) // chống trigger load-older bởi auto-scroll animation
-
-  // Per-session background tasks: sessionId → AbortController của fetch đang
-  // chờ (single chat JSON + team workflow SSE). ĐỔI PHIÊN KHÔNG ABORT — task
-  // của phiên cũ chạy tiếp nền (server lưu response vào DB); quay lại phiên
-  // đang chạy → spinner + Thought Process poll tự resume.
-  const inFlightChatsRef = useRef<Map<string, AbortController>>(new Map())
-
-  // Restore context KHÔNG chạy effect reset lần đầu (mount) — nếu không
-  // currentSessionId restore bị effect đổi-agent wipe mất ngay.
-  // true = lần chạy đầu tiên (mount) chưa được tiêu thụ
-  const contextMountRef = useRef(true)
-
-  // Sync spinner + stop-button controller theo phiên đang mở
-  const syncSpinnerToSession = useCallback((sid: string) => {
-    const controller = inFlightChatsRef.current.get(sid)
-    chatAbortRef.current = controller ?? null
-    setIsLoading(!!controller)
-  }, [])
-
-  // Persist context mỗi khi đổi — quay lại module Smolab là về đúng phiên cũ
-  useEffect(() => {
-    try {
-      localStorage.setItem(SMOLAB_CTX_KEY, JSON.stringify({
-        chatMode,
-        selectedAgentId,
-        selectedTeam,
-        currentSessionId,
-        selectedModel,
-      }))
-    } catch { /* ignore */ }
-  }, [chatMode, selectedAgentId, selectedTeam, currentSessionId, selectedModel])
 
   // Persist layout positions to localStorage on every change
   useEffect(() => {
@@ -8563,7 +8537,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     loadSessions()
     const interval = setInterval(loadSessions, 30000) // Refresh every 30s
     return () => clearInterval(interval)
-  }, [chatMode, selectedAgentId, selectedTeam, sessionsRefreshTick])
+  }, [chatMode, selectedAgentId, selectedTeam])
 
   const [agentsLoadError, setAgentsLoadError] = useState<string | null>(null)
 
@@ -8592,220 +8566,14 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     return () => clearInterval(interval)
   }, [])
 
-  // Auto-scroll to bottom — USER REQUEST 2026-09-01 (lazy-load): CHỈ scroll
-  // xuống khi user đang ở gần cuối chat. Đang kéo lên đọc tin nhắn cũ → giữ
-  // nguyên vị trí (append tin mới / prepend tin cũ đều không giật màn hình).
+  // Auto-scroll to bottom
   useEffect(() => {
-    if (isNearBottomRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isLoading])
 
-  // ===== V1 + 2026-09-01: Load TAIL of messages when switching sessions =====
-  // LAZY-LOAD (user request 2026-09-01): chỉ load 3 lượt trao đổi CUỐI. Lượt
-  // cũ hơn phải kéo lên đầu khung chat mới load (loadOlderMessages). Phiên dài
-  // không còn mount toàn bộ DOM → mở session luôn nhanh.
-  // Đồng thời RESUME tác vụ nền: nếu session này còn run đang chạy trên server
-  // (user rời đi lúc agent đang làm dở) → bật lại spinner + Thought Process
-  // poll; run kết thúc → reload tail từ DB (xem refreshAgentRuns).
-  const loadSessionTail = useCallback(async (sid: string, opts?: { silent?: boolean }) => {
-    if (!sid) {
-      setMessages([])
-      setHasMoreMessages(false)
-      oldestLoadedIdRef.current = null
-      return
-    }
-    if (!opts?.silent) setLoadingMessages(true)
-    try {
-      const [msgRes, fbRes] = await Promise.all([
-        fetch(`/api/chat-messages?sessionId=${encodeURIComponent(sid)}&exchanges=3`),
-        fetch(`/api/openclaw/feedback?sessionId=${encodeURIComponent(sid)}`).catch(() => null),
-      ])
-      if (!msgRes.ok) throw new Error(`HTTP ${msgRes.status}`)
-      const data = await msgRes.json()
-
-      // FIX (user request 2026-08-27): restore feedback (👍/👎) state từ
-      // LearningLog — trước đây feedback chỉ nằm trong state React nên bị
-      // reset khi reload/switch session, trông như hệ thống không ghi nhận.
-      let feedbackMap: Record<string, 'positive' | 'negative'> = {}
-      try {
-        if (fbRes?.ok) {
-          const fbData = await fbRes.json()
-          if (fbData?.feedback && typeof fbData.feedback === 'object') {
-            feedbackMap = fbData.feedback as Record<string, 'positive' | 'negative'>
-          }
-        }
-      } catch { /* feedback restore là best-effort */ }
-
-      if (data.messages && Array.isArray(data.messages) && data.messages.length > 0) {
-        const loaded: SmolabMessage[] = data.messages.map((m: {
-          id: string
-          role: string
-          content: string
-          model?: string | null
-          provider?: string | null
-          metadata?: string | null
-          createdAt: string
-        }) => {
-          // Parse metadata JSON if present (handle both single and double-stringified data for backward compat)
-          let parsedMeta: Record<string, unknown> | undefined
-          if (m.metadata) {
-            try {
-              const first = JSON.parse(m.metadata)
-              // If double-stringified (legacy data), first parse returns a string — parse again
-              parsedMeta = typeof first === 'string' ? JSON.parse(first) : first
-            } catch { /* ignore */ }
-          }
-          return {
-            id: m.id,
-            role: (['user', 'assistant', 'tool_call', 'error'].includes(m.role) ? m.role : 'assistant') as SmolabMessage['role'],
-            content: m.content,
-            timestamp: new Date(m.createdAt),
-            model: m.model || undefined,
-            provider: m.provider || undefined,
-            sources: parsedMeta?.sources as Array<{ type: string; content: string; documentTitle?: string }> | undefined,
-            confidence: parsedMeta?.confidence as number | undefined,
-            toolName: parsedMeta?.toolName as string | undefined,
-            toolCallInfo: parsedMeta?.toolCallInfo as { tool: string; detail: string } | undefined,
-            agentName: parsedMeta?.agentName as string | undefined,
-            agentPosition: parsedMeta?.agentPosition as string | undefined,
-            isTeamMessage: parsedMeta?.isTeamMessage as boolean | undefined,
-            // Thought Process summary (user request 2026-08-31) — persist qua
-            // chat message metadata; render AgentRunSummaryBar khi reload
-            agentRunSummary: parsedMeta?.agentRun as SmolabMessage['agentRunSummary'],
-            // Khôi phục trạng thái like/dislike đã ghi nhận trước đó
-            feedback: (feedbackMap[m.id] as 'positive' | 'negative') ?? null,
-          }
-        })
-        setMessages(loaded)
-        setHasMoreMessages(!!data.hasMore)
-        oldestLoadedIdRef.current = data.oldestId || loaded[0]?.id || null
-      } else {
-        setMessages([])
-        setHasMoreMessages(false)
-        oldestLoadedIdRef.current = null
-      }
-      isNearBottomRef.current = true // mở session → đứng ở cuối
-      lastScrollTopRef.current = 0 // chống false-trigger load-older khi scrollTop bị clamp về 0 (nội dung mới ngắn hơn)
-    } catch (err) {
-      console.error('[Smolab] Failed to load session messages:', err)
-      setMessages([])
-      setHasMoreMessages(false)
-      oldestLoadedIdRef.current = null
-    } finally {
-      if (!opts?.silent) setLoadingMessages(false)
-
-      // ===== RESUME TÁC VỤ NỀN (user request 2026-09-01) =====
-      // Session này có run đang chạy trên server (agent làm dở lúc user rời
-      // đi / refresh trang) → bật spinner + poll để Thought Process hiện tiếp.
-      // KHÔNG bật nếu fetch của phiên này vẫn đang chờ trong client (spinner
-      // đã đúng trạng thái rồi).
-      try {
-        const runRes = await fetch(`/api/agent-run?sessionId=${encodeURIComponent(sid)}&limit=5`)
-        if (runRes.ok) {
-          const runData = await runRes.json()
-          if (runData?.hasActive && !inFlightChatsRef.current.has(sid)) {
-            setIsLoading(true)
-          }
-        }
-      } catch { /* best-effort */ }
-    }
-  }, [])
-
-  // Kéo lên đầu chat → load thêm N lượt trao đổi CŨ hơn (prepend + giữ vị trí đọc)
-  const loadOlderMessages = useCallback(async () => {
-    const sid = currentSessionIdRef.current
-    if (!sid || !oldestLoadedIdRef.current || loadingOlder || !hasMoreMessages) return
-    setLoadingOlder(true)
-    try {
-      const el = chatScrollRef.current
-      const prevScrollHeight = el?.scrollHeight ?? 0
-      const prevScrollTop = el?.scrollTop ?? 0
-
-      const res = await fetch(
-        `/api/chat-messages?sessionId=${encodeURIComponent(sid)}&exchanges=3&beforeId=${encodeURIComponent(oldestLoadedIdRef.current)}`
-      )
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json()
-
-      if (data.messages && Array.isArray(data.messages) && data.messages.length > 0) {
-        setMessages(prev => {
-          // Dedupe theo id (an toàn khi reload đan xen load-older)
-          const existingIds = new Set(prev.map(m => m.id))
-          const older: SmolabMessage[] = data.messages
-            .filter((m: { id: string }) => !existingIds.has(m.id))
-            .map((m: {
-              id: string
-              role: string
-              content: string
-              model?: string | null
-              provider?: string | null
-              metadata?: string | null
-              createdAt: string
-            }) => {
-              let parsedMeta: Record<string, unknown> | undefined
-              if (m.metadata) {
-                try {
-                  const first = JSON.parse(m.metadata)
-                  parsedMeta = typeof first === 'string' ? JSON.parse(first) : first
-                } catch { /* ignore */ }
-              }
-              return {
-                id: m.id,
-                role: (['user', 'assistant', 'tool_call', 'error'].includes(m.role) ? m.role : 'assistant') as SmolabMessage['role'],
-                content: m.content,
-                timestamp: new Date(m.createdAt),
-                model: m.model || undefined,
-                provider: m.provider || undefined,
-                toolCallInfo: parsedMeta?.toolCallInfo as { tool: string; detail: string } | undefined,
-                agentName: parsedMeta?.agentName as string | undefined,
-                agentPosition: parsedMeta?.agentPosition as string | undefined,
-                isTeamMessage: parsedMeta?.isTeamMessage as boolean | undefined,
-                agentRunSummary: parsedMeta?.agentRun as SmolabMessage['agentRunSummary'],
-              }
-            })
-          return [...older, ...prev]
-        })
-        oldestLoadedIdRef.current = data.oldestId || oldestLoadedIdRef.current
-        setHasMoreMessages(!!data.hasMore)
-
-        // Giữ nguyên vị trí đọc: bù scrollHeight tăng thêm sau khi prepend
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            const el2 = chatScrollRef.current
-            if (el2) {
-              el2.scrollTop = el2.scrollHeight - prevScrollHeight + prevScrollTop
-            }
-          })
-        })
-      } else {
-        // Hết tin cũ — tắt nút load thêm
-        setHasMoreMessages(false)
-      }
-    } catch (err) {
-      console.error('[Smolab] Failed to load older messages:', err)
-    } finally {
-      setLoadingOlder(false)
-    }
-  }, [loadingOlder, hasMoreMessages])
-
-  // Scroll handler: track gần cuối (auto-scroll) + chạm đầu → load cũ hơn.
-  // CHỐNG AUTO-TRIGGER: chỉ load khi user THẬT SỰ cuộn lên qua ngưỡng (scrollTop
-  // trước đó > 60 và giờ ≤ 60). Auto-scroll animation lúc mở session bắt đầu ở
-  // scrollTop=0 → không tính (trước đó = 0) → không tự load 1 trang cũ mỗi lần mở.
-  const handleChatScroll = useCallback(() => {
-    const el = chatScrollRef.current
-    if (!el) return
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120
-    isNearBottomRef.current = nearBottom
-    const prevTop = lastScrollTopRef.current
-    lastScrollTopRef.current = el.scrollTop
-    if (!nearBottom && prevTop > 60 && el.scrollTop <= 60) {
-      loadOlderMessages()
-    }
-  }, [loadOlderMessages])
-
-  const prevSessionIdRef = useRef('')
+  // ===== V1 FIX: Load messages from DB when switching sessions =====
+  // When currentSessionId changes, fetch persisted messages from /api/chat-messages
+  const prevSessionIdRef = useRef(currentSessionId)
   useEffect(() => {
     // Skip if session ID hasn't actually changed (prevents re-fetch on re-render)
     if (prevSessionIdRef.current === currentSessionId) return
@@ -8814,23 +8582,84 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     // Skip when session ID is set programmatically (sendMessage/startWorkflow) to avoid wiping in-flight messages
     if (skipMessageLoadRef.current) {
       skipMessageLoadRef.current = false
-      // Session mới tạo client-side (chưa có message trong DB) — reset lazy state
-      setHasMoreMessages(false)
-      oldestLoadedIdRef.current = null
       return
     }
 
-    loadSessionTail(currentSessionId)
-  }, [currentSessionId, loadSessionTail])
+    if (!currentSessionId) {
+      setMessages([])
+      return
+    }
 
-  // CHUẨN HÓA lazy-load state khi đổi phiên: (a) scrollTop bị clamp về 0 khi
-  // nội dung mới ngắn hơn → scroll event với prevTop cũ (lớn) → false-trigger
-  // load-older; (b) cursor (oldestLoadedIdRef) + hasMore của phiên CŨ không
-  // được dùng cho phiên MỚI → reset ngay (loadSessionTail sẽ set lại sau fetch).
-  useEffect(() => {
-    lastScrollTopRef.current = 0
-    oldestLoadedIdRef.current = null
-    setHasMoreMessages(false)
+    setLoadingMessages(true)
+    fetch(`/api/chat-messages?sessionId=${encodeURIComponent(currentSessionId)}`)
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then(async data => {
+        // FIX (user request 2026-08-27): restore feedback (👍/👎) state từ
+        // LearningLog — trước đây feedback chỉ nằm trong state React nên bị
+        // reset khi reload/switch session, trông như hệ thống không ghi nhận.
+        let feedbackMap: Record<string, 'positive' | 'negative'> = {}
+        try {
+          const fbRes = await fetch(`/api/openclaw/feedback?sessionId=${encodeURIComponent(currentSessionId)}`)
+          if (fbRes.ok) {
+            const fbData = await fbRes.json()
+            if (fbData?.feedback && typeof fbData.feedback === 'object') {
+              feedbackMap = fbData.feedback as Record<string, 'positive' | 'negative'>
+            }
+          }
+        } catch { /* feedback restore là best-effort */ }
+
+        if (data.messages && Array.isArray(data.messages) && data.messages.length > 0) {
+          const loaded: SmolabMessage[] = data.messages.map((m: {
+            id: string
+            role: string
+            content: string
+            model?: string | null
+            provider?: string | null
+            metadata?: string | null
+            createdAt: string
+          }) => {
+            // Parse metadata JSON if present (handle both single and double-stringified data for backward compat)
+            let parsedMeta: Record<string, unknown> | undefined
+            if (m.metadata) {
+              try {
+                const first = JSON.parse(m.metadata)
+                // If double-stringified (legacy data), first parse returns a string — parse again
+                parsedMeta = typeof first === 'string' ? JSON.parse(first) : first
+              } catch { /* ignore */ }
+            }
+            return {
+              id: m.id,
+              role: (['user', 'assistant', 'tool_call', 'error'].includes(m.role) ? m.role : 'assistant') as SmolabMessage['role'],
+              content: m.content,
+              timestamp: new Date(m.createdAt),
+              model: m.model || undefined,
+              provider: m.provider || undefined,
+              sources: parsedMeta?.sources as Array<{ type: string; content: string; documentTitle?: string }> | undefined,
+              confidence: parsedMeta?.confidence as number | undefined,
+              toolName: parsedMeta?.toolName as string | undefined,
+              agentName: parsedMeta?.agentName as string | undefined,
+              agentPosition: parsedMeta?.agentPosition as string | undefined,
+              isTeamMessage: parsedMeta?.isTeamMessage as boolean | undefined,
+              // Thought Process summary (user request 2026-08-31) — persist qua
+              // chat message metadata; render AgentRunSummaryBar khi reload
+              agentRunSummary: parsedMeta?.agentRun as SmolabMessage['agentRunSummary'],
+              // Khôi phục trạng thái like/dislike đã ghi nhận trước đó
+              feedback: (feedbackMap[m.id] as 'positive' | 'negative') ?? null,
+            }
+          })
+          setMessages(loaded)
+        } else {
+          setMessages([])
+        }
+      })
+      .catch(err => {
+        console.error('[Smolab] Failed to load session messages:', err)
+        setMessages([])
+      })
+      .finally(() => setLoadingMessages(false))
   }, [currentSessionId])
 
   // ===== Agent Run poller — Thought Process + Todos live (user request 2026-08-31) =====
@@ -8840,39 +8669,17 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
   // — run đã đóng giữ nguyên dữ liệu cuối (client state, không re-fetch).
   // Team mode: startWorkflow cũng set isLoading → runs của từng agent step
   // được bắt và render panel riêng cho mỗi agent (giống single mode).
-  //
-  // USER REQUEST 2026-09-01 (background tasks): run chuyển running → kết thúc
-  // mà KHÔNG có fetch nào đang chờ cho session này (user rời đi rồi quay lại,
-  // server chạy xong nền) → reload tail từ DB để hiện response + tắt spinner.
   const refreshAgentRuns = useCallback(async () => {
     if (!currentSessionId) return
-    const sid = currentSessionId
     try {
       const [runsRes, todosRes] = await Promise.all([
-        fetch(`/api/agent-run?sessionId=${encodeURIComponent(sid)}&limit=10`).catch(() => null),
-        fetch(`/api/todos?sessionId=${encodeURIComponent(sid)}`).catch(() => null),
+        fetch(`/api/agent-run?sessionId=${encodeURIComponent(currentSessionId)}&limit=10`).catch(() => null),
+        fetch(`/api/todos?sessionId=${encodeURIComponent(currentSessionId)}`).catch(() => null),
       ])
 
       if (runsRes?.ok) {
-        const d = await runsRes.json().catch(() => null) as { ok?: boolean; runs?: AgentRunData[]; hasActive?: boolean } | null
-        if (d?.ok && Array.isArray(d.runs)) {
-          // 0. USER REQUEST 2026-09-01: phát hiện run vừa KẾT THÚC mà client
-          //    không có fetch nào đang chờ cho session (tác vụ chạy nền xong)
-          const hadRunning = Object.values(agentRunsRef.current).some(r => r.status === 'running')
-          const stillRunning = d.runs.some(r => r.status === 'running')
-          if (hadRunning && !stillRunning && !inFlightChatsRef.current.has(sid) && sid === currentSessionIdRef.current) {
-            // Server đã chạy xong và lưu DB → reload tail để hiện response;
-            // spinner (isLoading) do resume lúc mở session → tắt bây giờ.
-            if (isLoadingRef.current) setIsLoading(false)
-            loadSessionTail(sid, { silent: true }).catch(() => {})
-            setSessionsRefreshTick(t => t + 1) // cập nhật chấm "đang chạy" ở dropdown
-          } else if (!stillRunning && !d.hasActive && !inFlightChatsRef.current.has(sid) && isLoadingRef.current && sid === currentSessionIdRef.current) {
-            // Edge: mở session lúc hasActive=true nhưng run kết thúc TRƯỚC lần
-            // poll đầu → không có "hadRunning" → vẫn phải tắt spinner
-            setIsLoading(false)
-          }
-
-          if (d.runs.length > 0) {
+        const d = await runsRes.json().catch(() => null) as { ok?: boolean; runs?: AgentRunData[] } | null
+        if (d?.ok && Array.isArray(d.runs) && d.runs.length > 0) {
           // 1. Cập nhật dữ liệu run (kèm safeguard: run "running" quá 10 phút
           //    coi như lỗi client-side — tránh poller kẹt vĩnh viễn)
           setAgentRuns(prev => {
@@ -8904,9 +8711,6 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
             r.status !== 'running' ||
             (r.events || []).some(e => e.type === 'thought' || e.type === 'tool' || e.type === 'todo_update')
           setMessages(prev => {
-            // GUARD 2026-09-01: user đã đổi phiên giữa chừng → KHÔNG chèn panel
-            // của session cũ vào phiên mới
-            if (currentSessionIdRef.current !== sid) return prev
             const knownRunIds = new Set(prev.filter(m => m.role === 'agent_run').map(m => m.runId))
             const newRuns = d.runs!.filter(r => r.runId && !knownRunIds.has(r.runId) && hasVisibleActivity(r))
             if (newRuns.length === 0) return prev
@@ -8925,7 +8729,6 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
             }
             return [...prev, ...panels]
           })
-          }
         }
       }
 
@@ -8944,7 +8747,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         }
       }
     } catch { /* offline — retry ở interval sau */ }
-  }, [currentSessionId, loadSessionTail])
+  }, [currentSessionId])
 
   useEffect(() => {
     if (!currentSessionId) return
@@ -8961,20 +8764,17 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
 
   // ===== USER REQUEST 2026-08-31 — DỪNG tác vụ Agents bằng cách bấm nút Gửi lần nữa =====
   // Khi agent đang chạy (isLoading), nút Gửi biến thành nút DỪNG:
-  //   1. Abort fetch đang chờ của PHIÊN ĐANG MỞ (chat JSON + team SSE) — spinner tắt NGAY
+  //   1. Abort fetch đang chờ (chat JSON + team workflow SSE) — spinner tắt NGAY
   //   2. POST /api/agent-run {sessionId} → server: mọi run running → 'cancelled'
   //      + ReAct loops + chuỗi xoay vòng key LLM cắt ngang sớm
   //   3. Thông báo ⏹ trong chat + refresh panel về trạng thái "Đã dừng"
-  // 2026-09-01: tác vụ ở CÁC PHIÊN KHÁC đang chạy nền KHÔNG bị ảnh hưởng —
-  // nút Dừng chỉ chặn phiên mình đang xem.
   const stopAgentTask = useCallback(() => {
-    const sid = currentSessionIdRef.current || currentSessionId
-    // 1+2. Hủy client-side (phiên hiện tại) + server-side
+    // 1+2. Hủy client-side + server-side
     stoppingRef.current = true
     try { chatAbortRef.current?.abort() } catch { /* ignore */ }
     chatAbortRef.current = null
+    const sid = currentSessionIdRef.current || currentSessionId
     if (sid) {
-      inFlightChatsRef.current.delete(sid)
       fetch('/api/agent-run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -8994,38 +8794,25 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     refreshAgentRuns().catch(() => {})
   }, [currentSessionId, refreshAgentRuns])
 
-  // Abort request đang chờ của PHIÊN HIỆN TẠI + tắt spinner — dùng khi user
-  // CHỦ ĐỘNG kết thúc ngữ cảnh hiện tại (xóa phiên / clear chat / đổi mode).
-  // Lưu ý 2026-09-01: ĐỔI PHIÊN / ĐỔI AGENT / RỜI MODULE không còn gọi hàm này —
-  // task chạy nền tiếp (user request: agents độc lập tiếp tục công việc dở).
+  // Abort request đang chờ (chat/team SSE) + tắt spinner — dùng khi user rời
+  // context hiện tại (đổi phiên / xóa phiên / đổi agent / clear chat / đổi mode).
   const abortInFlightChat = useCallback(() => {
-    const sid = currentSessionIdRef.current
     stoppingRef.current = true // request cũ bị abort → catch KHÔNG hiện error
     try { chatAbortRef.current?.abort() } catch { /* ignore */ }
     chatAbortRef.current = null
-    if (sid) inFlightChatsRef.current.delete(sid)
     setIsLoading(false)
   }, [])
 
-  // TẮT spinner + gỡ controller của phiên hiện tại NHƯNG KHÔNG ABORT — task
-  // của phiên cũ chạy tiếp nền; server vẫn lưu response vào DB (user request
-  // 2026-09-01: rời module/đổi agent → agents vẫn làm dở đến khi xong).
-  const detachFromInFlightChat = useCallback(() => {
-    chatAbortRef.current = null
-    setIsLoading(false)
-  }, [])
-
-  // Đổi phiên chat (user action) — USER REQUEST 2026-09-01: KHÔNG abort task
-  // của phiên cũ nữa. Task chạy tiếp nền (controller giữ trong inFlightChatsRef);
-  // response do server lưu DB — quay lại phiên cũ sẽ thấy (đang chạy → spinner +
-  // Thought Process tự resume; đã xong → reload từ DB).
+  // Đổi phiên chat (user action) — FIX BUG 2026-08-31: "kể cả khi mở phiên mới đã
+  // ở trạng thái Đang suy nghĩ". isLoading/request cũ của phiên trước KHÔNG được
+  // theo sang phiên mới: reset spinner + abort request cũ (response vẫn được
+  // server lưu vào DB — mở lại phiên cũ sẽ thấy).
   const switchToSession = useCallback((sid: string) => {
-    if (sid === currentSessionId) return
+    if (sid !== currentSessionId) {
+      abortInFlightChat()
+    }
     setCurrentSessionId(sid)
-    // Spinner/nút Dừng theo PHIÊN MỚI: phiên mới có task đang chạy (background)
-    // → spinner bật lại; không có → spinner tắt (phiên cũ chạy nền không cản)
-    syncSpinnerToSession(sid)
-  }, [currentSessionId, syncSpinnerToSession])
+  }, [currentSessionId, abortInFlightChat])
 
   // Close dropdown menus on click outside
   // Use mousedown (not click) so the handler fires BEFORE React's onClick + stopPropagation
@@ -9070,29 +8857,12 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
   }, [])
 
   // Phase 7: Reset + reload sessions khi đổi Agent/Team
-  // USER REQUEST 2026-09-01: (a) BỎ qua lần chạy ĐẦU TIÊN (mount) — context
-  // vừa restore từ localStorage sẽ bị wipe mất nếu reset ở đây; (b) KHÔNG
-  // abort task đang chạy của agent/team cũ — task chạy tiếp nền theo phiên
-  // của nó (user: "agents độc lập hoặc team vẫn tiếp tục xử lý công việc dở").
   useEffect(() => {
-    if (contextMountRef.current) {
-      contextMountRef.current = false
-      // Mount: chỉ load sessions cho context đã restore — KHÔNG reset gì cả
-      if (chatMode === 'single' && selectedAgentId) {
-        fetchSessionsForAgent(selectedAgentId)
-      } else if (chatMode === 'multi' && selectedTeam) {
-        fetchSessionsForTeam(selectedTeam)
-      }
-      return
-    }
-
-    // Đổi agent/team/mode THẬT SỰ: reset view (messages/session), tắt spinner
-    // nhưng task cũ vẫn chạy nền (controller giữ trong inFlightChatsRef)
-    detachFromInFlightChat()
+    // Reset chat khi đổi agent/team — kèm abort request đang chờ của
+    // agent/team cũ (fix bug "Đang suy nghĩ" theo sang context mới)
+    abortInFlightChat()
     setMessages([])
     setCurrentSessionId('')
-    setHasMoreMessages(false)
-    oldestLoadedIdRef.current = null
     setActiveTaskIds(new Map())
     setTaskPolling(false)
     setSessions([])
@@ -9103,20 +8873,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     } else if (chatMode === 'multi' && selectedTeam) {
       fetchSessionsForTeam(selectedTeam)
     }
-  }, [selectedAgentId, selectedTeam, chatMode, fetchSessionsForAgent, fetchSessionsForTeam, detachFromInFlightChat])
-
-  // USER REQUEST 2026-09-01: validate context restore sau khi agents load —
-  // agent đã restore có còn tồn tại (enabled) không? Không còn → reset lựa
-  // chọn để tránh chat với agent ảo (context mồ côi khi DB đổi máy/xóa agent).
-  useEffect(() => {
-    if (smolabAgents.length === 0) return
-    if (chatMode === 'single' && selectedAgentId && !smolabAgents.some((a: any) => a.id === selectedAgentId)) {
-      console.warn('[Smolab] Restored agent no longer exists — resetting selection')
-      setSelectedAgentId(null)
-      setCurrentSessionId('')
-      setMessages([])
-    }
-  }, [smolabAgents, chatMode, selectedAgentId])
+  }, [selectedAgentId, selectedTeam, chatMode, fetchSessionsForAgent, fetchSessionsForTeam, abortInFlightChat])
 
   // Phase 6: Task polling — check mỗi 2 giây khi có task đang chạy
   useEffect(() => {
@@ -9274,16 +9031,6 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         method: 'DELETE',
       })
       if (res.ok) {
-        // Hủy task chạy nền của PHIÊN BỊ XÓA (abort client + cancel server-side)
-        const controller = inFlightChatsRef.current.get(sessionId)
-        try { controller?.abort() } catch { /* ignore */ }
-        inFlightChatsRef.current.delete(sessionId)
-        fetch('/api/agent-run', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId }),
-        }).catch(() => {})
-
         // Remove from local list
         setSessions(prev => prev.filter(s => s.sessionId !== sessionId))
         // If deleted the current session, reset (+ abort request đang chờ)
@@ -9377,27 +9124,15 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     setInput('')
     setIsLoading(true)
 
-    // USER REQUEST 2026-08-31: AbortController cho workflow SSE — nút Dừng
-    // (stopAgentTask) abort stream client-side + POST /api/agent-run hủy
-    // pipeline server-side (các agent step dừng ở ranh giới an toàn gần nhất).
-    // Hard-timeout 30 phút (workflow dài hơn single chat).
-    // 2026-09-01: controller lưu theo sessionId — đổi phiên/rời module KHÔNG
-    // abort; workflow chạy tiếp nền (server continueOnDisconnect=true + events
-    // đã persist DB) — quay lại phiên sẽ thấy tiến độ/kết quả.
+    // AbortController cho workflow SSE — nút Dừng (stopAgentTask) abort stream
+    // client-side + POST /api/agent-run hủy pipeline server-side.
+    // NO HARD TIMEOUT — workflow runs until completion regardless of duration
+    // (user directive: "làm gì có cái gọi là thời gian chờ").
     stoppingRef.current = false
     timedOutRef.current = false
     const controller = new AbortController()
     chatAbortRef.current = controller
-    inFlightChatsRef.current.set(sessionId, controller)
-    const hardTimeoutId = setTimeout(() => {
-      timedOutRef.current = true
-      controller.abort()
-    }, 30 * 60_000)
-
-    // GUARD 2026-09-01: mọi setMessages trong SSE loop chỉ được áp dụng khi
-    // user đang NGHIÊN CỨU session này — tránh tin nhắn của workflow nền rơi
-    // vào phiên khác user vừa mở
-    const isActiveSession = () => currentSessionIdRef.current === sessionId
+    // Hard-timeout removed — was 30 min, now unlimited. User can always press Stop.
 
     // Add workflow start indicator
     const startMsg: SmolabMessage = {
@@ -9422,7 +9157,6 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         messages: chatMessages,
         sessionId,
         userRequest: text,
-        teamName: selectedTeam || undefined,
       }
       // Phase 3: Pass pre-computed routing from TL Assessment if available
       if (routing) {
@@ -9497,7 +9231,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
           switch (eventType) {
             case 'workflow_start': {
               // Update the start indicator message
-              if (isActiveSession()) setMessages(prev => prev.map(m =>
+              setMessages(prev => prev.map(m =>
                 m.id === startMsg.id
                   ? { ...m, content: `🚀 Code Team workflow đã bắt đầu (Session: ${(event.sessionId as string || '').slice(0, 8)}...)` }
                   : m
@@ -9520,7 +9254,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                 agentAvatar,
               }
               currentAgentMsgId = agentMsg.id
-              if (isActiveSession()) setMessages(prev => [...prev, agentMsg])
+              setMessages(prev => [...prev, agentMsg])
               break
             }
 
@@ -9529,7 +9263,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
               // REPLACE content (not append) — each ReAct iteration returns FULL LLM output,
               // not incremental deltas. Appending would duplicate text across iterations.
               const chunkContent = event.content as string
-              if (isActiveSession()) setMessages(prev => prev.map(m =>
+              setMessages(prev => prev.map(m =>
                 m.id === currentAgentMsgId
                   ? { ...m, content: chunkContent }
                   : m
@@ -9541,7 +9275,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
               if (!currentAgentMsgId) break
               const completeContent = event.content as string
               const duration = event.duration as number | undefined
-              if (isActiveSession()) setMessages(prev => prev.map(m =>
+              setMessages(prev => prev.map(m =>
                 m.id === currentAgentMsgId
                   ? { ...m, content: completeContent || m.content, durationMs: duration }
                   : m
@@ -9567,7 +9301,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                 agentAvatar: '🔧',
                 toolCallInfo: { tool: toolName, detail: toolDetail || '' },
               }
-              if (isActiveSession()) setMessages(prev => [...prev, toolMsg])
+              setMessages(prev => [...prev, toolMsg])
               break
             }
 
@@ -9592,7 +9326,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                 agentPosition: 'TL',
                 agentAvatar: '📋',
               }
-              if (isActiveSession()) setMessages(prev => [...prev, checkpointMsg])
+              setMessages(prev => [...prev, checkpointMsg])
               break
             }
 
@@ -9608,7 +9342,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                 agentPosition: 'TL',
                 agentAvatar: '✅',
               }
-              if (isActiveSession()) setMessages(prev => [...prev, doneMsg])
+              setMessages(prev => [...prev, doneMsg])
               break
             }
 
@@ -9618,7 +9352,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                 const iterNum = event.iteration as number | undefined
                 const maxIter = event.maxIterations as number | undefined
                 const iterText = maxIter ? ` (Vòng ${iterNum}/${maxIter})` : ` (Vòng ${iterNum})`
-                if (isActiveSession()) setMessages(prev => prev.map(m =>
+                setMessages(prev => prev.map(m =>
                   m.id === currentAgentMsgId
                     ? { ...m, iterationInfo: iterText }
                     : m
@@ -9636,7 +9370,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                 content: `❌ Workflow Error${errorAgent ? ` (${errorAgent})` : ''}: ${errorMsg}`,
                 timestamp: new Date(),
               }
-              if (isActiveSession()) setMessages(prev => [...prev, errMsg])
+              setMessages(prev => [...prev, errMsg])
               break
             }
           }
@@ -9645,9 +9379,8 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     } catch (err) {
       // USER REQUEST 2026-08-31: user bấm DỪNG → không hiện "Workflow failed"
       // (stopAgentTask đã hiện thông báo ⏹ rồi)
-      // 2026-09-01 GUARD: user đã đổi phiên → im lặng (không nhảy error vào phiên mới)
-      if (stoppingRef.current || currentSessionIdRef.current !== sessionId) {
-        // Đã dừng bởi user hoặc user đang ở phiên khác — im lặng
+      if (stoppingRef.current) {
+        // Đã dừng bởi user — im lặng
       } else {
         const errorMsg = err instanceof Error ? err.message : String(err)
         const errMsg: SmolabMessage = {
@@ -9659,15 +9392,13 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         setMessages(prev => [...prev, errMsg])
       }
     } finally {
-      clearTimeout(hardTimeoutId)
-      inFlightChatsRef.current.delete(sessionId)
+      // hardTimeoutId removed — no hard timeout (user directive)
       if (chatAbortRef.current === controller) chatAbortRef.current = null
       stoppingRef.current = false
       timedOutRef.current = false
-      // 2026-09-01: spinner theo PHIÊN ĐANG MỞ (phiên khác vẫn chạy nền)
-      setIsLoading(inFlightChatsRef.current.has(currentSessionIdRef.current))
+      setIsLoading(false)
     }
-  }, [messages, currentSessionId, setCurrentSessionId, setMessages, setInput, setIsLoading, selectedTeam])
+  }, [messages, currentSessionId, setCurrentSessionId, setMessages, setInput, setIsLoading])
 
   const sendMessage = useCallback(async (queryText?: string) => {
     const text = queryText || input.trim()
@@ -9824,21 +9555,14 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     // bước đầu tiên (user bug report 2026-08-31).
     const toolMsg: SmolabMessage | null = null
 
-    // USER REQUEST 2026-08-31: AbortController + hard-timeout 20 phút —
-    // (a) nút Gửi biến thành nút DỪNG khi đang chạy (stopAgentTask abort),
-    // (b) không bao giờ kẹt "Đang suy nghĩ" vĩnh viễn khi request treo.
-    // 2026-09-01: controller lưu theo sessionId — user đổi phiên/rời module
-    // KHÔNG abort; task chạy tiếp nền, response do server lưu DB.
+    // AbortController — nút Gửi biến thành nút DỪNG khi đang chạy (stopAgentTask abort).
+    // NO HARD TIMEOUT — request runs until completion regardless of duration
+    // (user directive: "làm gì có cái gọi là thời gian chờ").
     stoppingRef.current = false
     timedOutRef.current = false
     const controller = new AbortController()
     chatAbortRef.current = controller
-    inFlightChatsRef.current.set(sessionId, controller)
-    const HARD_TIMEOUT_MS = 20 * 60_000
-    const hardTimeoutId = setTimeout(() => {
-      timedOutRef.current = true
-      controller.abort()
-    }, HARD_TIMEOUT_MS)
+    // Hard-timeout removed — was 20 min, now unlimited. User can always press Stop.
 
     try {
       const chatMessages = [...messages, userMsg]
@@ -9907,14 +9631,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
       }
       setMessages(prev => {
         const withoutTool = toolMsg ? prev.filter(m => m.id !== toolMsg.id) : prev
-
-        // DEDUPE 2026-09-01: user rời phiên rồi quay lại ĐÚNG lúc response về
-        // → messages đã reload từ DB (có sẵn response) → không append lần nữa
-        const content = data.content || 'Không thể tạo câu trả lời.'
-        if (prev.some(m => m.role === 'assistant' && m.content === content)) {
-          return prev
-        }
-
+        
         // OC-3.2: If routed to OpenCode, show progress messages
         if (data.routedTo === 'opencode') {
           const progressMsg: SmolabMessage = {
@@ -9929,11 +9646,11 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
           }
           return [...withoutTool, progressMsg]
         }
-
+        
         const assistantMsg: SmolabMessage = {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content,
+          content: data.content || 'Không thể tạo câu trả lời.',
           timestamp: new Date(),
           model: data.model,
           provider: data.provider,
@@ -9949,23 +9666,15 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
       // USER REQUEST 2026-08-31 — 3 trường hợp phân biệt rõ ràng:
       //   (a) stoppingRef: user bấm DỪNG → stopAgentTask đã hiện thông báo ⏹ —
       //       KHÔNG thêm error message
-      //   (b) timedOutRef: request treo quá 20 phút → thông báo timeout rõ ràng
-      //       (fix bug "mãi Đang suy nghĩ" — spinner chắc chắn tắt sau finally)
+      //   (b) timedOutRef: REMOVED — no hard timeout (user directive: "làm gì có
+      //       cái gọi là thời gian chờ"). timedOutRef is always false now.
       //   (c) lỗi thật → error message như cũ
-      // 2026-09-01 GUARD: user đã đổi phiên → error KHÔNG append vào phiên mới
-      const stillOnSession = currentSessionIdRef.current === sessionId
       if (stoppingRef.current) {
         // Đã dừng bởi user — không hiện error
-      } else if (!stillOnSession) {
-        // User đang ở phiên khác — im lặng (phiên gốc sẽ reload từ DB khi mở lại)
       } else if (timedOutRef.current) {
-        setMessages(prev => [...prev, {
-          id: crypto.randomUUID(),
-          role: 'error',
-          content: `⏱ Hết thời gian chờ phản hồi (20 phút) — request có thể đang bị treo. Hãy gửi lại hoặc bấm Dừng nếu lặp lại.`,
-          timestamp: new Date(),
-        }])
-        refreshAgentRuns().catch(() => {})
+        // No hard timeout — this branch is dead code but kept for safety.
+        // If somehow timedOutRef gets set, just log it without showing a timeout toast.
+        console.warn('[Chat] timedOutRef was set but no hard timeout exists — ignoring')
       } else {
         setMessages(prev => {
           const withoutTool = toolMsg ? prev.filter(m => m.id !== toolMsg.id) : prev
@@ -9980,15 +9689,12 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         refreshAgentRuns().catch(() => {})
       }
     } finally {
-      clearTimeout(hardTimeoutId)
-      inFlightChatsRef.current.delete(sessionId)
+      // hardTimeoutId removed — no hard timeout (user directive)
       if (chatAbortRef.current === controller) chatAbortRef.current = null
       stoppingRef.current = false
       timedOutRef.current = false
-      // 2026-09-01: spinner theo PHIÊN ĐANG MỞ — phiên khác vẫn đang chạy
-      // background → isLoading giữ nguyên đúng với phiên đó
-      setIsLoading(inFlightChatsRef.current.has(currentSessionIdRef.current))
     }
+    setIsLoading(false)
   }, [input, isLoading, messages, selectedModel, currentSessionId, chatMode, selectedAgentId, selectedTeam, smolabAgents, startWorkflow, refreshAgentRuns])
 
   const handleFeedback = useCallback(async (messageId: string, type: 'positive' | 'negative', msgContent: string) => {
@@ -10157,9 +9863,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                       setSelectedTeam(null)
                       setMessages([])
                       skipMessageLoadRef.current = true
-                      // 2026-09-01: KHÔNG abort — task của context cũ chạy tiếp nền
-                      // theo phiên của nó; chỉ tắt spinner của view hiện tại
-                      detachFromInFlightChat()
+                      abortInFlightChat() // FIX 2026-08-31: không kẹt "Đang suy nghĩ" qua context mới
                       setCurrentSessionId('')
                       setSessions([])
                       setActiveTaskIds(new Map())
@@ -10335,12 +10039,6 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                                 onClick={() => { switchToSession(s.sessionId); setShowSessionSelect(false) }}
                                 className={`flex-1 min-w-0 text-left truncate ${currentSessionId === s.sessionId ? 'text-cyan-400' : 'text-stone-300'}`}
                               >
-                                {s.hasActiveRun && (
-                                  <span className="inline-flex items-center gap-1 mr-1 text-emerald-400" title="Agents đang chạy tác vụ ở phiên này">
-                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                                    <span className="text-[9px] font-medium">đang chạy</span>
-                                  </span>
-                                )}
                                 {s.title} <span className="text-stone-500">({s.messageCount})</span>
                                 {s.tasks && s.tasks.length > 0 && (
                                   <span className="flex items-center gap-0.5 ml-1 text-amber-400">
@@ -10495,12 +10193,6 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                                 onClick={() => { switchToSession(s.sessionId); setShowSessionSelect(false) }}
                                 className={`flex-1 min-w-0 text-left truncate ${currentSessionId === s.sessionId ? 'text-amber-400' : 'text-stone-300'}`}
                               >
-                                {s.hasActiveRun && (
-                                  <span className="inline-flex items-center gap-1 mr-1 text-emerald-400" title="Agents đang chạy tác vụ ở phiên này">
-                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                                    <span className="text-[9px] font-medium">đang chạy</span>
-                                  </span>
-                                )}
                                 {s.title} <span className="text-stone-500">({s.messageCount})</span>
                                 {s.tasks && s.tasks.length > 0 && (
                                   <span className="flex items-center gap-0.5 ml-1 text-amber-400">
@@ -10561,33 +10253,8 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
               )}
             </div>
 
-            {/* Messages List — USER REQUEST 2026-09-01: onScroll theo dõi vị trí
-                (gần cuối → auto-scroll tin mới; chạm đầu → load tin cũ hơn) */}
-            <div
-              ref={chatScrollRef}
-              onScroll={handleChatScroll}
-              className="flex-1 overflow-y-auto p-3 space-y-3"
-              style={{ scrollbarWidth: 'thin' }}
-            >
-              {/* Lazy-load indicator — còn tin cũ hơn → bấm/kéo lên để load */}
-              {messages.length > 0 && hasMoreMessages && (
-                <div className="flex justify-center py-1">
-                  <button
-                    onClick={() => loadOlderMessages()}
-                    disabled={loadingOlder}
-                    className="chamfer-sm text-[10px] px-3 py-1.5 border border-cyan-400/30 bg-slate-950/60 text-stone-400 hover:text-cyan-300 hover:border-cyan-400/60 transition-colors flex items-center gap-1.5"
-                  >
-                    {loadingOlder ? (
-                      <>
-                        <div className="h-3 w-3 animate-spin rounded-full border border-cyan-400 border-t-transparent" />
-                        Đang tải tin nhắn cũ hơn...
-                      </>
-                    ) : (
-                      <>↑ Xem tin nhắn cũ hơn</>
-                    )}
-                  </button>
-                </div>
-              )}
+            {/* Messages List */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-3" style={{ scrollbarWidth: 'thin' }}>
               {loadingMessages ? (
                 /* V1 FIX: Loading indicator while fetching session messages */
                 <div className="flex items-center justify-center h-full py-8">

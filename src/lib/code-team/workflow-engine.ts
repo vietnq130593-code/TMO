@@ -1095,13 +1095,14 @@ async function runPipeline(
       sessionId,
       emit,
       ctx,
-      // G2-B max 3 vòng iteration (workflow doc: "max 3 vòng iteration")
-      // TL self-verify (Mode A) max 3 vòng iterate (workflow doc: "tối đa 3 vòng")
-      // TL analyze (routing) max 6 — enough for 3 recon iterations + 2-3 JSON production iterations
-      // Others max 10
-      maxIterations: (step.position === 'G2-B' || (step.position === 'TL' && step.step === 'verify')) ? 3
-        : (step.position === 'TL' && step.step === 'analyze') ? 6
-        : 10,
+      // G2-B max 5 vòng iteration (was 3 — too few for complex bug-fix loops)
+      // TL self-verify (Mode A) max 5 vòng iterate
+      // TL analyze (routing) max 15 — enough for recon + JSON production (was 6 — too few)
+      // Others max 25 — large tasks need many ReAct iterations (Claude Code uses 50+)
+      //   Previously 10 — agents would stop mid-task after a few tool calls.
+      maxIterations: (step.position === 'G2-B' || (step.position === 'TL' && step.step === 'verify')) ? 5
+        : (step.position === 'TL' && step.step === 'analyze') ? 15
+        : 25,
     })
 
     // Parse worklog from agent output
@@ -1348,7 +1349,7 @@ export async function runAgentStep(params: {
   maxIterations?: number
   ctx: WorkflowContext
 }): Promise<{ content: string; duration: number; tokensUsed: number }> {
-  const { position, step, prompt, sessionId, emit, maxIterations = 10, ctx } = params
+  const { position, step, prompt, sessionId, emit, maxIterations = 25, ctx } = params
   const stepStartTime = Date.now()
 
   // Resolve agent from per-workflow cache (populated by runPipeline) or on-demand
@@ -1847,7 +1848,7 @@ export async function runAgentStep(params: {
     // recon (file reading), inject a system message forcing it to produce the
     // routing JSON now. Without this, TL can spend all 10 iterations reading
     // files and never emit the routing decision — falling back to defaults.
-    if (position === 'TL' && step === 'analyze' && iterations >= 3 && toolCalls.length > 0) {
+    if (position === 'TL' && step === 'analyze' && iterations >= 5 && toolCalls.length > 0) {
       console.log(`[Workflow] ${agent.name} recon budget: ${iterations} iterations done — injecting "produce routing now" message`)
       messages.push({
         role: 'user',
