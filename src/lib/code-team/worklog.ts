@@ -15,6 +15,11 @@
 
 import { db } from '@/lib/db'
 import { getAgentTools } from './agents'
+// FIX 2026-08-29: findBalancedJson được tách sang module pure-utility riêng để
+// tool-calls.ts (chat route) không phải kéo theo Prisma DB + agents registry.
+// Re-export giữ backward-compat cho workflow-engine.ts và các importer cũ.
+import { findBalancedJson } from './find-balanced-json'
+export { findBalancedJson }
 
 // ==================== TYPES ====================
 
@@ -655,83 +660,9 @@ function normalizeCodeLocationMap(
 }
 
 /**
- * Extract worklog from free text — fallback when no JSON found.
- * Uses heuristics to identify key information.
+ * findBalancedJson đã chuyển sang ./find-balanced-json.ts (2026-08-29)
+ * — xem re-export ở đầu file để biết backward-compat.
  */
-/**
- * Find balanced JSON object containing a specific key.
- * Avoids greedy over-match by tracking brace depth.
- * Exported for use by other modules (e.g., workflow-engine.ts).
- */
-export function findBalancedJson(text: string, requiredKey: string): string | null {
-  // FIX 2026-08-28: requiredKey rỗng (được parseToolCallsFromOutput dùng) nghĩa là
-  // "KHÔNG yêu cầu key — extract JSON object bắt đầu từ brace đầu tiên của text".
-  // Trước đây `indexOf('""')` luôn -1 → return null → ReAct loop KHÔNG BAO GIỜ
-  // parse được tool_call → agent không thực thi được tool nào (silent no-op).
-  let startBrace = -1
-
-  if (requiredKey === '') {
-    startBrace = text.indexOf('{')
-    if (startBrace === -1) return null
-  } else {
-    // Find the start of a JSON object that contains the required key
-    const keyIndex = text.indexOf(`"${requiredKey}"`)
-    if (keyIndex === -1) return null
-
-    // Walk backwards from the key to find the opening brace
-    let depth = 0
-    for (let i = keyIndex; i >= 0; i--) {
-      if (text[i] === '}') depth++
-      if (text[i] === '{') {
-        depth--
-        if (depth < 0) {
-          startBrace = i
-          break
-        }
-      }
-    }
-    if (startBrace === -1) return null
-  }
-
-  // Walk forward from the opening brace to find the matching closing brace
-  // IMPORTANT: Track whether we're inside a string to avoid counting braces inside string values
-  // e.g., {"summary": "Code with {braces} in description"} should NOT count the inner braces
-  let depth = 0
-  let inString = false
-  let escape = false
-
-  for (let i = startBrace; i < text.length; i++) {
-    const ch = text[i]
-
-    if (escape) {
-      escape = false
-      continue
-    }
-
-    if (ch === '\\' && inString) {
-      escape = true
-      continue
-    }
-
-    if (ch === '"') {
-      inString = !inString
-      continue
-    }
-
-    // Only count braces outside of strings
-    if (!inString) {
-      if (ch === '{') depth++
-      if (ch === '}') {
-        depth--
-        if (depth === 0) {
-          return text.slice(startBrace, i + 1)
-        }
-      }
-    }
-  }
-
-  return null
-}
 
 /**
  * Normalize a single WorklogIssue — validate and default fields.

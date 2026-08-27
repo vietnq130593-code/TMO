@@ -9,7 +9,11 @@
  * formatMessagesForLLM: Formats conversation messages into a single prompt string
  */
 
-import { findBalancedJson as findBalancedJsonUtil } from '@/lib/code-team/worklog'
+// FIX 2026-08-29: import from the standalone pure-utility module instead of the
+// heavy worklog.ts (which pulls Prisma DB + full agents registry into the chat
+// route's module graph, and breaks the build when worklog.ts is missing from a
+// partial checkout — "Module not found: Can't resolve '@/lib/code-team/worklog'")
+import { findBalancedJson as findBalancedJsonUtil } from '@/lib/code-team/find-balanced-json'
 
 /**
  * Parse tool_call patterns from LLM text output.

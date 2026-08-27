@@ -39,8 +39,9 @@ import {
   completeSession,
   type WorklogEntry,
   type RoutingDecision,
-  findBalancedJson as findBalancedJsonUtil,
 } from './worklog'
+// FIX 2026-08-29: import pure utility trực tiếp (không qua worklog) để giảm coupling
+import { findBalancedJson as findBalancedJsonUtil } from './find-balanced-json'
 import {
   executeTool,
 } from './tool-executor'
