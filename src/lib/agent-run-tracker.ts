@@ -58,6 +58,8 @@ export interface AgentRunEvent {
   durationMs?: number
   /** Snapshot todo list (event type 'todo_update') */
   todos?: AgentRunTodo[]
+  /** run_end bị dừng bởi người dùng (bấm nút Dừng) — hiển thị ⏹ thay vì ✗ */
+  cancelled?: boolean
 }
 
 export interface AgentRunCounters {
@@ -80,7 +82,7 @@ export interface AgentRun {
   mode: 'standalone' | 'team'
   startedAt: number
   endedAt?: number
-  status: 'running' | 'done' | 'error'
+  status: 'running' | 'done' | 'error' | 'cancelled'
   events: AgentRunEvent[]
   counters: AgentRunCounters
   lastTodos?: AgentRunTodo[]
@@ -98,7 +100,16 @@ interface RunRegistry {
   runsBySession: Map<string, AgentRun[]>
   /** runId đang active (đang chạy) cho mỗi session — executeTool ghi vào đây */
   activeRunBySession: Map<string, string>
+  /** USER REQUEST 2026-08-31 (bấm nút Gửi để Dừng tác vụ): session bị user hủy —
+   *  Map<sessionId, cancelledAtTs>. ReAct loops (chat route + workflow-engine)
+   *  và cả chuỗi xoay vòng key LLM kiểm tra flag này để cắt ngang sớm.
+   *  startAgentRun của session XÓA flag (hủy chỉ tác dụng lên các run ĐANG chạy,
+   *  không giết request mới). Entries quá CANCEL_TTL_MS tự expire. */
+  cancelledSessions: Map<string, number>
 }
+
+/** Thời gian flag cancel có hiệu lực (ms) — đủ dài để mọi loop trong-flight thấy */
+const CANCEL_FLAG_TTL_MS = 10 * 60 * 1000
 
 const globalForRuns = globalThis as unknown as {
   __tmoAgentRunTracker?: RunRegistry
@@ -109,6 +120,7 @@ function registry(): RunRegistry {
     globalForRuns.__tmoAgentRunTracker = {
       runsBySession: new Map(),
       activeRunBySession: new Map(),
+      cancelledSessions: new Map(),
     }
   }
   return globalForRuns.__tmoAgentRunTracker
@@ -140,6 +152,7 @@ function trimSessions() {
   for (const [sid] of toRemove) {
     reg.runsBySession.delete(sid)
     reg.activeRunBySession.delete(sid)
+    reg.cancelledSessions.delete(sid)
   }
 }
 
@@ -187,6 +200,9 @@ export function startAgentRun(params: {
     const { sessionId, agentName } = params
     if (!sessionId) return null
     const reg = registry()
+    // USER REQUEST 2026-08-31: run MỚI xóa flag cancel của session — việc dừng
+    // chỉ tác dụng lên các run đang chạy, không giết request kế tiếp của user.
+    reg.cancelledSessions.delete(sessionId)
     const run: AgentRun = {
       runId: `run_${Date.now()}_${++runSeq}`,
       sessionId,
@@ -220,13 +236,13 @@ export function startAgentRun(params: {
 }
 
 /**
- * Kết thúc run. status 'done' | 'error'. Tự clear active run của session nếu
- * run đang kết thúc chính là run active.
+ * Kết thúc run. status 'done' | 'error' | 'cancelled'. Tự clear active run của
+ * session nếu run đang kết thúc chính là run active.
  */
 export function endAgentRun(
   sessionId: string | null | undefined,
   runId: string | null | undefined,
-  status: 'done' | 'error',
+  status: 'done' | 'error' | 'cancelled',
   summary?: string,
 ): void {
   try {
@@ -243,12 +259,75 @@ export function endAgentRun(
       ts: Date.now(),
       type: 'run_end',
       success: status === 'done',
+      cancelled: status === 'cancelled',
       text: truncateText(summary, 300),
     })
     if (reg.activeRunBySession.get(sessionId) === run.runId) {
       reg.activeRunBySession.delete(sessionId)
     }
   } catch { /* fail-open */ }
+}
+
+// ==================== CANCEL (user request 2026-08-31) ====================
+
+/**
+ * USER HỦY TÁC VỤ (bấm nút Gửi/Dừng): đánh dấu session bị cancel.
+ *  - Mọi run đang 'running' của session → status 'cancelled' + run_end event.
+ *  - ReAct loops (chat route + workflow-engine) + chuỗi xoay vòng key LLM kiểm
+ *    tra isSessionCancelled() để cắt ngang sớm (giữa các vòng / trước mỗi attempt).
+ *  - startAgentRun tiếp theo của session sẽ XÓA flag → request mới không bị ảnh hưởng.
+ */
+export function cancelSessionRuns(sessionId: string | null | undefined): number {
+  try {
+    if (!sessionId) return 0
+    const reg = registry()
+    const now = Date.now()
+    // Dọn flag hết hạn
+    for (const [sid, ts] of reg.cancelledSessions) {
+      if (now - ts > CANCEL_FLAG_TTL_MS) reg.cancelledSessions.delete(sid)
+    }
+    reg.cancelledSessions.set(sessionId, now)
+
+    let cancelledCount = 0
+    const runs = reg.runsBySession.get(sessionId) || []
+    for (const run of runs) {
+      if (run.status === 'running') {
+        run.status = 'cancelled'
+        run.endedAt = now
+        pushEvent(run, {
+          id: nextEventId(),
+          ts: now,
+          type: 'run_end',
+          success: false,
+          cancelled: true,
+          text: 'Đã dừng bởi người dùng',
+        })
+        cancelledCount++
+      }
+    }
+    reg.activeRunBySession.delete(sessionId)
+    console.log(`[AgentRun] 🛑 Session ${sessionId} bị user HỦY — ${cancelledCount} run(s) đang chạy → cancelled`)
+    return cancelledCount
+  } catch {
+    return 0
+  }
+}
+
+/** Session có đang bị user hủy không? (flag TTL 10 phút; startAgentRun xóa flag) */
+export function isSessionCancelled(sessionId: string | null | undefined): boolean {
+  try {
+    if (!sessionId) return false
+    const reg = registry()
+    const ts = reg.cancelledSessions.get(sessionId)
+    if (ts == null) return false
+    if (Date.now() - ts > CANCEL_FLAG_TTL_MS) {
+      reg.cancelledSessions.delete(sessionId)
+      return false
+    }
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**

@@ -46,7 +46,7 @@ import {
   executeTool,
 } from './tool-executor'
 // Agent Run Tracker — Thought Process + Todos + Progress trong chat (user request 2026-08-31)
-import { startAgentRun, endAgentRun, recordAgentThought, recordAgentRunTodos } from '@/lib/agent-run-tracker'
+import { startAgentRun, endAgentRun, recordAgentThought, recordAgentRunTodos, isSessionCancelled } from '@/lib/agent-run-tracker'
 import { flagMode, isFlagEnabled } from '@/lib/feature-flags'
 // Phase 6/7 (rebuild) — workspace root follows the USER's ACTIVE workspace
 import { resolveWorkspaceRoot } from './workspace-root'
@@ -1008,6 +1008,18 @@ async function runPipeline(
   for (let i = 0; i < pipeline.length; i++) {
     const step = pipeline[i]
 
+    // USER REQUEST 2026-08-31: user bấm nút Dừng (POST /api/agent-run) → dừng
+    // cả workflow giữa các step, không chỉ step đang chạy.
+    if (isSessionCancelled(sessionId)) {
+      console.log(`[Workflow] 🛑 Session ${sessionId} bị user HỦY — dừng pipeline tại step ${i} (${step.position}/${step.step})`)
+      emit({ type: 'error', agent: 'SYSTEM', message: '⏹ Đã dừng workflow theo yêu cầu của bạn.' })
+      await metricsCollector.flush().catch((mErr) => {
+        console.error('[Workflow] Layer 9 flush failed (cancel path):', mErr)
+      })
+      await completeSession(sessionId, 'failed', Date.now() - workflowStartTime, completedAgents)
+      return
+    }
+
     // Check if workflow was aborted (client disconnected)
     if (isAborted()) {
       console.log(`[Workflow] Aborted at step ${i} (${step.position}/${step.step}) — client disconnected`)
@@ -1397,6 +1409,16 @@ export async function runAgentStep(params: {
     task: prompt,
     mode: 'team',
   })
+  // USER REQUEST 2026-08-31 (bấm nút Gửi để Dừng): endRun IDEMPOTENT — status
+  // đầu tiên (cancelled/error) không bị ghi đè thành done ở cuối step.
+  let runEnded = false
+  const endStepRun = (status: 'done' | 'error' | 'cancelled') => {
+    if (runEnded) return
+    runEnded = true
+    endAgentRun(sessionId, runId, status, `${iterations} vòng · ${totalToolCalls} tool calls`)
+  }
+  // Flag session bị user hủy → cắt ngang ReAct của step + truyền xuống LLM
+  const isCancelled = () => isSessionCancelled(sessionId)
 
   // ━━━ Phase 1c: Native Function Calling setup ━━━
   // Mode: 'off' (regex only) | 'dual' (native preferred, regex fallback) | 'strict' (native only)
@@ -1444,6 +1466,12 @@ export async function runAgentStep(params: {
   console.log(`[Workflow] Running agent: ${agent.name} (${position}) — ${step} [tools: ${tools.join(', ')}] [fc: ${fcMode}${nativeTools ? ` (${nativeTools.length} schemas)` : ''}]`)
 
   while (iterations < maxIterations) {
+    // USER REQUEST 2026-08-31: user bấm Dừng → kết thúc step NGAY giữa các vòng
+    if (isCancelled()) {
+      finalContent = '⏹ Đã dừng tác vụ theo yêu cầu của bạn.'
+      endStepRun('cancelled')
+      break
+    }
     iterations++
 
     // Build the prompt from conversation history
@@ -1465,6 +1493,8 @@ export async function runAgentStep(params: {
         agentName: agent.name,
         temperature: agent.temperature,
         maxTokens: agent.maxTokens,
+        // USER REQUEST 2026-08-31: chuỗi xoay vòng key LLM dừng ngay khi user hủy
+        abortCheck: isCancelled,
         ...(nativeTools && nativeTools.length > 0
           ? { tools: nativeTools, tool_choice: 'auto' as const }
           : {}),
@@ -1501,6 +1531,12 @@ export async function runAgentStep(params: {
     // result is guaranteed to be defined here because:
     // - If try succeeds: result is assigned, finally clears timeout, code continues
     // - If catch fires: break exits the while loop, this code is never reached
+    // USER REQUEST 2026-08-31: user bấm Dừng trong lúc LLM đang chạy
+    if (isCancelled()) {
+      finalContent = '⏹ Đã dừng tác vụ theo yêu cầu của bạn.'
+      endStepRun('cancelled')
+      break
+    }
     if (!result || (result.error && !result.content)) {
       // LLM call completely failed
       finalContent = `Error: ${result.error}`
@@ -1631,6 +1667,11 @@ export async function runAgentStep(params: {
     })
 
     for (const tc of toolCalls) {
+      // USER REQUEST 2026-08-31: user bấm Dừng → không thực thi tool còn lại
+      if (isCancelled()) {
+        console.log(`[Workflow] ${agent.name} (${position}) — user đã HỦY, bỏ qua tool ${tc.name}`)
+        continue
+      }
       totalToolCalls++
       const toolStartTime = Date.now()
 
@@ -1810,7 +1851,8 @@ export async function runAgentStep(params: {
   await upsertStepTodo(finalContent.startsWith('Error:') ? 'failed' : 'completed')
 
   // Thought Process tracking (2026-08-31) — đóng run của step này
-  endAgentRun(sessionId, runId, finalContent.startsWith('Error:') ? 'error' : 'done', `${iterations} vòng · ${totalToolCalls} tool calls`)
+  // (idempotent: nếu đã đóng là 'cancelled' thì giữ nguyên)
+  endStepRun(finalContent.startsWith('Error:') ? 'error' : 'done')
 
   // Layer 9 P0.2: expose the step's real token usage to the caller
   // (runWorkflow passes it down to metricsCollector.recordStepComplete).

@@ -4017,6 +4017,8 @@ interface AgentRunEventData {
   success?: boolean
   durationMs?: number
   todos?: Array<{ id: string; content: string; status: string; priority?: string }>
+  /** USER REQUEST 2026-08-31: run_end bị dừng bởi người dùng (bấm nút Dừng) */
+  cancelled?: boolean
 }
 
 interface AgentRunCountersData {
@@ -4038,7 +4040,7 @@ interface AgentRunData {
   mode: 'standalone' | 'team'
   startedAt: number
   endedAt?: number
-  status: 'running' | 'done' | 'error'
+  status: 'running' | 'done' | 'error' | 'cancelled'
   events: AgentRunEventData[]
   counters: AgentRunCountersData
   lastTodos?: Array<{ id: string; content: string; status: string; priority?: string }>
@@ -4145,6 +4147,10 @@ function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: s
           <span className="flex items-center gap-1 text-[9px] text-emerald-400 flex-shrink-0">
             <CheckCircle2 className="h-3 w-3" /> Done
           </span>
+        ) : run.status === 'cancelled' ? (
+          <span className="flex items-center gap-1 text-[9px] text-orange-400 flex-shrink-0">
+            <Square className="h-3 w-3" /> Đã dừng
+          </span>
         ) : (
           <span className="flex items-center gap-1 text-[9px] text-red-400 flex-shrink-0">
             <XCircle className="h-3 w-3" /> Lỗi
@@ -4249,9 +4255,9 @@ function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: s
                 }
                 if (e.type === 'run_end') {
                   return (
-                    <div key={e.id} className={`flex items-center gap-1.5 px-2 py-1 text-[10px] ${e.success ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {e.success ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
-                      {e.success ? 'Done' : 'Lỗi'}{e.text ? ` — ${e.text}` : ''}
+                    <div key={e.id} className={`flex items-center gap-1.5 px-2 py-1 text-[10px] ${e.cancelled ? 'text-orange-400' : e.success ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {e.cancelled ? <Square className="h-3 w-3" /> : e.success ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+                      {e.cancelled ? 'Đã dừng' : e.success ? 'Done' : 'Lỗi'}{e.text ? ` — ${e.text}` : ''}
                     </div>
                   )
                 }
@@ -4273,12 +4279,14 @@ function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: s
 
 /** Summary bar tĩnh — hiện trên assistant message sau khi reload session */
 function AgentRunSummaryBar({ summary }: { summary: AgentRunSummaryData }) {
-  const ok = summary.status !== 'error'
+  const ok = summary.status !== 'error' && summary.status !== 'cancelled'
+  const statusLabel = summary.status === 'cancelled' ? '⏹ Đã dừng' : ok ? '✓ Done' : '✗ Lỗi'
+  const statusColor = summary.status === 'cancelled' ? 'text-orange-400' : ok ? 'text-emerald-400' : 'text-red-400'
   return (
     <div className="flex items-center gap-2 flex-wrap text-[9px] text-stone-500 mb-1.5 pb-1.5 border-b border-stone-700/40">
       <Brain className="h-3 w-3 text-violet-400" />
       <span className="text-stone-400">{summary.agentName}</span>
-      <span className={ok ? 'text-emerald-400' : 'text-red-400'}>{ok ? '✓ Done' : '✗ Lỗi'}</span>
+      <span className={statusColor}>{statusLabel}</span>
       {summary.iterations > 0 && <span>🔁 {summary.iterations} vòng</span>}
       {summary.toolCalls > 0 && <span>🔧 {summary.toolCalls} tool</span>}
       {summary.filesRead > 0 && <span>📖 {summary.filesRead} file</span>}
@@ -8147,6 +8155,18 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
   // Clear run data khi đổi session (panel messages cũng bị thay bởi session load)
   useEffect(() => { setAgentRuns({}); setSessionTodos([]) }, [currentSessionId])
 
+  // ===== USER REQUEST 2026-08-31 — DỪNG tác vụ Agents bằng nút Gửi + chống kẹt "Đang suy nghĩ" =====
+  // chatAbortRef: AbortController của fetch đang chờ (chat + team workflow SSE).
+  //   Bấm nút Gửi khi đang chạy → abort client-side + POST /api/agent-run hủy server-side.
+  // stoppingRef: phân biệt "user chủ động dừng" (không hiện error) với lỗi thật.
+  // timedOutRef: hard-timeout client 20 phút — không bao giờ kẹt "Đang suy nghĩ" vĩnh viễn
+  //   (bug report: request treo → isLoading true mãi → đổi phiên vẫn "Đang suy nghĩ").
+  const currentSessionIdRef = useRef('')
+  const chatAbortRef = useRef<AbortController | null>(null)
+  const stoppingRef = useRef(false)
+  const timedOutRef = useRef(false)
+  useEffect(() => { currentSessionIdRef.current = currentSessionId })
+
   // Restore persisted Smolab tab AFTER mount to avoid hydration mismatch.
   const smolabTabRestoredRef = useRef(false)
   useEffect(() => {
@@ -8625,13 +8645,28 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
               }
               next[run.runId] = run
             }
+            // Reconcile: run client đang "running" nhưng server KHÔNG trả về nữa
+            // (server restart / run bị LRU purge) → đánh dấu error để poller
+            // không quay vô hạn và panel không kẹt "Đang chạy"
+            const serverRunIds = new Set(d.runs!.map(r => r.runId))
+            for (const [rid, run] of Object.entries(next)) {
+              if (run.status === 'running' && !serverRunIds.has(rid)) {
+                next[rid] = { ...run, status: 'error' as const, endedAt: Date.now() }
+              }
+            }
             return next
           })
-          // 2. Insert panel message cho run mới (đặt CUỐI danh sách — đúng vị trí:
-          //    run bắt đầu ngay khi user gửi tin / agent step bắt đầu)
+          // 2. Insert panel message cho run mới — USER BUG REPORT 2026-08-31
+          //    ("Thought Process phải hiện ra lúc SUY NGHĨ XONG và tiến đến bước
+          //    thực thi tiếp theo"): panel KHÔNG hiện ngay khi gửi tin nhắn nữa —
+          //    chỉ chèn khi run đã có event thought/tool/todo ĐẦU TIÊN (= agent
+          //    nghĩ xong bước 1, bắt đầu thực thi) hoặc run đã kết thúc.
+          const hasVisibleActivity = (r: AgentRunData) =>
+            r.status !== 'running' ||
+            (r.events || []).some(e => e.type === 'thought' || e.type === 'tool' || e.type === 'todo_update')
           setMessages(prev => {
             const knownRunIds = new Set(prev.filter(m => m.role === 'agent_run').map(m => m.runId))
-            const newRuns = d.runs!.filter(r => r.runId && !knownRunIds.has(r.runId))
+            const newRuns = d.runs!.filter(r => r.runId && !knownRunIds.has(r.runId) && hasVisibleActivity(r))
             if (newRuns.length === 0) return prev
             const panels: SmolabMessage[] = newRuns.map(r => ({
               id: `ar_${r.runId}`,
@@ -8681,6 +8716,58 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     return () => { clearInterval(interval) }
   }, [currentSessionId, refreshAgentRuns])
 
+  // ===== USER REQUEST 2026-08-31 — DỪNG tác vụ Agents bằng cách bấm nút Gửi lần nữa =====
+  // Khi agent đang chạy (isLoading), nút Gửi biến thành nút DỪNG:
+  //   1. Abort fetch đang chờ (chat JSON + team workflow SSE) — spinner tắt NGAY
+  //   2. POST /api/agent-run {sessionId} → server: mọi run running → 'cancelled'
+  //      + ReAct loops + chuỗi xoay vòng key LLM cắt ngang sớm
+  //   3. Thông báo ⏹ trong chat + refresh panel về trạng thái "Đã dừng"
+  const stopAgentTask = useCallback(() => {
+    // 1+2. Hủy client-side + server-side
+    stoppingRef.current = true
+    try { chatAbortRef.current?.abort() } catch { /* ignore */ }
+    chatAbortRef.current = null
+    const sid = currentSessionIdRef.current || currentSessionId
+    if (sid) {
+      fetch('/api/agent-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: sid }),
+      }).catch(() => {})
+    }
+    // 3. UI state
+    setIsLoading(false)
+    setMessages(prev => [...prev, {
+      id: crypto.randomUUID(),
+      role: 'error',
+      content: '⏹ Đã dừng tác vụ Agents theo yêu cầu của bạn. Agent sẽ kết thúc ở bước an toàn gần nhất.',
+      timestamp: new Date(),
+    }])
+    toast({ title: '⏹ Đã dừng tác vụ', description: 'Agents đang dừng ở bước an toàn gần nhất', duration: 2500 })
+    // Panel cập nhật sang "Đã dừng" ở lần poll kế tiếp
+    refreshAgentRuns().catch(() => {})
+  }, [currentSessionId, refreshAgentRuns])
+
+  // Abort request đang chờ (chat/team SSE) + tắt spinner — dùng khi user rời
+  // context hiện tại (đổi phiên / xóa phiên / đổi agent / clear chat / đổi mode).
+  const abortInFlightChat = useCallback(() => {
+    stoppingRef.current = true // request cũ bị abort → catch KHÔNG hiện error
+    try { chatAbortRef.current?.abort() } catch { /* ignore */ }
+    chatAbortRef.current = null
+    setIsLoading(false)
+  }, [])
+
+  // Đổi phiên chat (user action) — FIX BUG 2026-08-31: "kể cả khi mở phiên mới đã
+  // ở trạng thái Đang suy nghĩ". isLoading/request cũ của phiên trước KHÔNG được
+  // theo sang phiên mới: reset spinner + abort request cũ (response vẫn được
+  // server lưu vào DB — mở lại phiên cũ sẽ thấy).
+  const switchToSession = useCallback((sid: string) => {
+    if (sid !== currentSessionId) {
+      abortInFlightChat()
+    }
+    setCurrentSessionId(sid)
+  }, [currentSessionId, abortInFlightChat])
+
   // Close dropdown menus on click outside
   // Use mousedown (not click) so the handler fires BEFORE React's onClick + stopPropagation
   useEffect(() => {
@@ -8725,7 +8812,9 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
 
   // Phase 7: Reset + reload sessions khi đổi Agent/Team
   useEffect(() => {
-    // Reset chat khi đổi agent/team
+    // Reset chat khi đổi agent/team — kèm abort request đang chờ của
+    // agent/team cũ (fix bug "Đang suy nghĩ" theo sang context mới)
+    abortInFlightChat()
     setMessages([])
     setCurrentSessionId('')
     setActiveTaskIds(new Map())
@@ -8738,7 +8827,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     } else if (chatMode === 'multi' && selectedTeam) {
       fetchSessionsForTeam(selectedTeam)
     }
-  }, [selectedAgentId, selectedTeam, chatMode, fetchSessionsForAgent, fetchSessionsForTeam])
+  }, [selectedAgentId, selectedTeam, chatMode, fetchSessionsForAgent, fetchSessionsForTeam, abortInFlightChat])
 
   // Phase 6: Task polling — check mỗi 2 giây khi có task đang chạy
   useEffect(() => {
@@ -8898,9 +8987,10 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
       if (res.ok) {
         // Remove from local list
         setSessions(prev => prev.filter(s => s.sessionId !== sessionId))
-        // If deleted the current session, reset
+        // If deleted the current session, reset (+ abort request đang chờ)
         if (currentSessionId === sessionId) {
           skipMessageLoadRef.current = true  // V1 FIX: skip useEffect on reset
+          abortInFlightChat()
           setCurrentSessionId('')
           setMessages([])
         }
@@ -8988,6 +9078,19 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     setInput('')
     setIsLoading(true)
 
+    // USER REQUEST 2026-08-31: AbortController cho workflow SSE — nút Dừng
+    // (stopAgentTask) abort stream client-side + POST /api/agent-run hủy
+    // pipeline server-side (các agent step dừng ở ranh giới an toàn gần nhất).
+    // Hard-timeout 30 phút (workflow dài hơn single chat).
+    stoppingRef.current = false
+    timedOutRef.current = false
+    const controller = new AbortController()
+    chatAbortRef.current = controller
+    const hardTimeoutId = setTimeout(() => {
+      timedOutRef.current = true
+      controller.abort()
+    }, 30 * 60_000)
+
     // Add workflow start indicator
     const startMsg: SmolabMessage = {
       id: crypto.randomUUID(),
@@ -9021,6 +9124,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(workflowBody),
+        signal: controller.signal, // USER REQUEST 2026-08-31: nút Dừng abort stream này
       })
 
       if (!res.ok) {
@@ -9230,15 +9334,25 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         }
       }
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err)
-      const errMsg: SmolabMessage = {
-        id: crypto.randomUUID(),
-        role: 'error',
-        content: `❌ Workflow failed: ${errorMsg}`,
-        timestamp: new Date(),
+      // USER REQUEST 2026-08-31: user bấm DỪNG → không hiện "Workflow failed"
+      // (stopAgentTask đã hiện thông báo ⏹ rồi)
+      if (stoppingRef.current) {
+        // Đã dừng bởi user — im lặng
+      } else {
+        const errorMsg = err instanceof Error ? err.message : String(err)
+        const errMsg: SmolabMessage = {
+          id: crypto.randomUUID(),
+          role: 'error',
+          content: `❌ Workflow failed: ${errorMsg}`,
+          timestamp: new Date(),
+        }
+        setMessages(prev => [...prev, errMsg])
       }
-      setMessages(prev => [...prev, errMsg])
     } finally {
+      clearTimeout(hardTimeoutId)
+      if (chatAbortRef.current === controller) chatAbortRef.current = null
+      stoppingRef.current = false
+      timedOutRef.current = false
       setIsLoading(false)
     }
   }, [messages, currentSessionId, setCurrentSessionId, setMessages, setInput, setIsLoading])
@@ -9393,8 +9507,23 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     // 2026-08-31 — BỎ chỉ báo fake "Đang tìm kiếm Knowledge Base..." (không
     // phản ánh gì thật). Thay bằng: (a) khối Thought Process THẬT (poll
     // /api/agent-run — hiện tư duy/todos/tool + kết quả thật của agent),
-    // (b) spinner "Đang suy nghĩ..." cho chat không qua agent.
+    // (b) spinner "Đang suy nghĩ..." cho giai đoạn agent đang nghĩ (chưa có
+    // event nào) — panel Thought Process chỉ xuất hiện khi agent NGHĨ XONG
+    // bước đầu tiên (user bug report 2026-08-31).
     const toolMsg: SmolabMessage | null = null
+
+    // USER REQUEST 2026-08-31: AbortController + hard-timeout 20 phút —
+    // (a) nút Gửi biến thành nút DỪNG khi đang chạy (stopAgentTask abort),
+    // (b) không bao giờ kẹt "Đang suy nghĩ" vĩnh viễn khi request treo.
+    stoppingRef.current = false
+    timedOutRef.current = false
+    const controller = new AbortController()
+    chatAbortRef.current = controller
+    const HARD_TIMEOUT_MS = 20 * 60_000
+    const hardTimeoutId = setTimeout(() => {
+      timedOutRef.current = true
+      controller.abort()
+    }, HARD_TIMEOUT_MS)
 
     try {
       const chatMessages = [...messages, userMsg]
@@ -9443,6 +9572,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(chatBody),
+        signal: controller.signal, // USER REQUEST 2026-08-31: nút Dừng abort request này
       })
 
       if (!res.ok) throw new Error(`Chat API error: ${res.status}`)
@@ -9453,7 +9583,13 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
       // (ReAct nhanh / không tool) → refresh 1 lần để chèn panel + final state
       refreshAgentRuns().catch(() => {})
 
-      // Add real response
+      // Add real response — GUARD: user đã đổi phiên trong lúc chờ → KHÔNG append
+      // vào phiên mới (response đã được server lưu vào DB của phiên gốc — mở lại
+      // phiên cũ sẽ thấy).
+      if (currentSessionIdRef.current !== sessionId) {
+        console.log('[Smolab] Response về sau khi user đổi phiên — bỏ qua append client-side (đã lưu DB)')
+        return
+      }
       setMessages(prev => {
         const withoutTool = toolMsg ? prev.filter(m => m.id !== toolMsg.id) : prev
         
@@ -9488,17 +9624,40 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         return [...withoutTool, assistantMsg]
       })
     } catch (err) {
-      setMessages(prev => {
-        const withoutTool = toolMsg ? prev.filter(m => m.id !== toolMsg.id) : prev
-        return [...withoutTool, {
+      // USER REQUEST 2026-08-31 — 3 trường hợp phân biệt rõ ràng:
+      //   (a) stoppingRef: user bấm DỪNG → stopAgentTask đã hiện thông báo ⏹ —
+      //       KHÔNG thêm error message
+      //   (b) timedOutRef: request treo quá 20 phút → thông báo timeout rõ ràng
+      //       (fix bug "mãi Đang suy nghĩ" — spinner chắc chắn tắt sau finally)
+      //   (c) lỗi thật → error message như cũ
+      if (stoppingRef.current) {
+        // Đã dừng bởi user — không hiện error
+      } else if (timedOutRef.current) {
+        setMessages(prev => [...prev, {
           id: crypto.randomUUID(),
           role: 'error',
-          content: `Lỗi: ${err instanceof Error ? err.message : 'Unknown error'}`,
+          content: `⏱ Hết thời gian chờ phản hồi (20 phút) — request có thể đang bị treo. Hãy gửi lại hoặc bấm Dừng nếu lặp lại.`,
           timestamp: new Date(),
-        }]
-      })
-      // Bắt final state của run (nếu có) — tránh panel kẹt "Đang chạy"
-      refreshAgentRuns().catch(() => {})
+        }])
+        refreshAgentRuns().catch(() => {})
+      } else {
+        setMessages(prev => {
+          const withoutTool = toolMsg ? prev.filter(m => m.id !== toolMsg.id) : prev
+          return [...withoutTool, {
+            id: crypto.randomUUID(),
+            role: 'error',
+            content: `Lỗi: ${err instanceof Error ? err.message : 'Unknown error'}`,
+            timestamp: new Date(),
+          }]
+        })
+        // Bắt final state của run (nếu có) — tránh panel kẹt "Đang chạy"
+        refreshAgentRuns().catch(() => {})
+      }
+    } finally {
+      clearTimeout(hardTimeoutId)
+      if (chatAbortRef.current === controller) chatAbortRef.current = null
+      stoppingRef.current = false
+      timedOutRef.current = false
     }
     setIsLoading(false)
   }, [input, isLoading, messages, selectedModel, currentSessionId, chatMode, selectedAgentId, selectedTeam, smolabAgents, startWorkflow, refreshAgentRuns])
@@ -9536,9 +9695,10 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
   // V1/V6 FIX: Clear chat resets to empty session (no need to delete server-side messages — user may want to revisit them)
   const clearChat = useCallback(() => {
     skipMessageLoadRef.current = true  // V1 FIX: skip useEffect on clear
+    abortInFlightChat() // FIX 2026-08-31: request đang chờ không theo sang phiên mới
     setMessages([])
     setCurrentSessionId('')
-  }, [])
+  }, [abortInFlightChat])
 
   // Get provider display name from model id
   const getModelDisplay = useCallback((modelId: string) => {
@@ -9668,6 +9828,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                       setSelectedTeam(null)
                       setMessages([])
                       skipMessageLoadRef.current = true
+                      abortInFlightChat() // FIX 2026-08-31: không kẹt "Đang suy nghĩ" qua context mới
                       setCurrentSessionId('')
                       setSessions([])
                       setActiveTaskIds(new Map())
@@ -9840,7 +10001,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                               </div>
                             ) : (
                               <button
-                                onClick={() => { setCurrentSessionId(s.sessionId); setShowSessionSelect(false) }}
+                                onClick={() => { switchToSession(s.sessionId); setShowSessionSelect(false) }}
                                 className={`flex-1 min-w-0 text-left truncate ${currentSessionId === s.sessionId ? 'text-cyan-400' : 'text-stone-300'}`}
                               >
                                 {s.title} <span className="text-stone-500">({s.messageCount})</span>
@@ -9994,7 +10155,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                               </div>
                             ) : (
                               <button
-                                onClick={() => { setCurrentSessionId(s.sessionId); setShowSessionSelect(false) }}
+                                onClick={() => { switchToSession(s.sessionId); setShowSessionSelect(false) }}
                                 className={`flex-1 min-w-0 text-left truncate ${currentSessionId === s.sessionId ? 'text-amber-400' : 'text-stone-300'}`}
                               >
                                 {s.title} <span className="text-stone-500">({s.messageCount})</span>
@@ -10392,13 +10553,29 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                   className="chamfer-sm flex-1 px-3 py-2 text-xs bg-slate-950/60 border border-cyan-400/40 text-stone-200 placeholder:text-stone-500 focus:outline-none focus:border-cyan-500/50 transition-colors"
                   disabled={isLoading}
                 />
-                <Button
-                  onClick={() => sendMessage()}
-                  disabled={isLoading || !input.trim()}
-                  className="chamfer-sm h-8 w-8 p-0 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white"
-                >
-                  {isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                </Button>
+                {/* USER REQUEST 2026-08-31: khi agent đang chạy, nút Gửi biến thành
+                    nút DỪNG — bấm lần nữa để ngừng tác vụ Agents ngay lập tức
+                    (abort request + hủy ReAct/workflow ở server). */}
+                {isLoading ? (
+                  <Button
+                    onClick={stopAgentTask}
+                    title="Dừng tác vụ Agents đang chạy"
+                    aria-label="Dừng tác vụ Agents đang chạy"
+                    className="chamfer-sm h-8 w-8 p-0 bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-500 hover:to-orange-500 text-white border border-red-400/40 animate-pulse"
+                  >
+                    <Square className="h-3 w-3 fill-current" />
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => sendMessage()}
+                    disabled={!input.trim()}
+                    title="Gửi tin nhắn"
+                    aria-label="Gửi tin nhắn"
+                    className="chamfer-sm h-8 w-8 p-0 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                  </Button>
+                )}
               </div>
               </>
               ) : (

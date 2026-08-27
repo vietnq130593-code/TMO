@@ -135,6 +135,11 @@ export interface LLMCallOptions {
    *  model fails, the error result is returned (callers decide how to fail-open).
    *  Backward compatible: undefined (default) = current rotation behavior. */
   model?: string
+  /** USER DIRECTIVE 2026-08-31 — dừng sớm chuỗi xoay vòng key.
+   *  Callback được kiểm tra TRƯỚC MỖI attempt gọi API; trả về true → dừng xoay vòng
+   *  ngay lập tức (ví dụ: người dùng bấm Dừng tác vụ → ReAct loop hủy mọi LLM call
+   *  đang chờ). Không bắt buộc — undefined = xoay vòng chạy đủ chu kỳ. */
+  abortCheck?: () => boolean
 }
 
 // ==================== CONSTANTS ====================
@@ -1559,6 +1564,20 @@ class ProviderKeyPool {
     return this.getNextKey()
   }
 
+  /** USER DIRECTIVE 2026-08-31 — truy cập key THÔ tại index cho cơ chế xoay vòng
+   *  key mới (callModelWithKeyRotation). KHÔNG bỏ qua key đang cooldown/exhausted —
+   *  chính sách xoay vòng của user yêu cầu MỖI key đều được thử đủ 3 lần (kể cả
+   *  key vừa 429 — vì khi quay vòng qua 3 key khác xong, quota RPM có thể đã reset).
+   *  Chỉ trả về null với key rỗng (thiếu env var). */
+  getRawKeyInfo(index: number): ProviderKeyInfo | null {
+    if (index < 0 || index >= this.keys.length) return null
+    const keyInfo = this.keys[index]
+    return keyInfo.key ? keyInfo : null
+  }
+
+  /** Số lượng key hợp lệ (không rỗng) trong pool */
+  get validKeyCount(): number { return this.keys.filter(k => !!k.key).length }
+
   /** Mark a key as rate-limited.
    *  Exhaustion threshold is 20 — high enough to avoid premature exhaustion
    *  from temporary rate limits (40 RPM/key), but low enough to stop using
@@ -1746,6 +1765,314 @@ const nvidiaPool = new ProviderKeyPool('NVIDIA', [
 
 console.log(`[LLM] Provider pool: NVIDIA=${nvidiaPool.keyCount} keys (${NVIDIA_MODELS.length} models) — SINGLE PROVIDER`)
 console.log(`[LLM] NVIDIA: 1 extraction core (nemotron-550b, extraction ONLY) + 3 agent/chat cores = 4 models, 4 keys × 4 docs = 16 max concurrent`)
+
+// ==================== KIMI K3 MODEL POLICY + NVIDIA KEY ROTATION ====================
+// USER DIRECTIVE 2026-08-31: "mọi Agents, mọi tác vụ từ giờ sẽ sử dụng lõi Kimi k3,
+// nếu gặp vấn đề thì chuyển API key của NVIDIA NIM, xoay vòng mỗi key 3 đủ 3 lần thì
+// mới dừng lại... tới khi chuyển qua cả 4 key lại về key đầu tiên, đến khi mỗi key
+// đều đủ 3 lần thì mới dừng lại"
+//
+// Chính sách:
+//   1. MỌI agents + MỌI tác vụ (chat/ReAct/team/cron/phân loại/auto-learn...) dùng
+//      lõi kimi-k3 LÀM CHUẨN — cấu hình model riêng của từng agent bị override.
+//      (Tắt bằng ENFORCE_KIMI_K3=false để quay về cấu hình per-agent.)
+//   2. Khi 1 attempt gặp vấn đề (429 rate-limit, 5xx, 401/403, timeout, network...)
+//      → CHUYỂN NGAY sang key kế tiếp: key1→key2→key3→key4→key1→key2→...
+//   3. MỖI key được thử tối đa KEY_FAILURES_PER_KEY (3) lần trong 1 chuỗi xoay vòng.
+//      Chỉ khi MỌI key đều đã fail đủ 3 lần (4 key × 3 = 12 attempts) mới dừng —
+//      khi đó mới fallback sang backup core (deepseek → minimax) rồi z-ai-sdk.
+//   4. Extraction pipeline giữ lõi nemotron-550b (user directive 2026-08-25 — lõi
+//      trích xuất duy nhất; override bằng env EXTRACTION_MODEL nếu muốn) nhưng vẫn
+//      được hưởng cùng cơ chế xoay vòng key.
+
+/** Lõi mặc định cho MỌI agents, MỌI tác vụ (user directive 2026-08-31) */
+export const KIMI_K3_MODEL = 'moonshotai/kimi-k3'
+
+/** Số lần fail tối đa MỖI key trong 1 chuỗi xoay vòng (user: "mỗi key 3 đủ 3 lần") */
+export const KEY_FAILURES_PER_KEY = 3
+
+/** Tổng budget thời gian cho TOÀN BỘ chuỗi xoay vòng key của 1 model (ms).
+ *  429/auth fail rất nhanh nên chuỗi 12 attempts thường hoàn tất trong vài giây;
+ *  budget chỉ chặn trường hợp pathological (mọi attempt đều timeout 240s).
+ *  Override bằng env KEY_ROTATION_BUDGET_MS. */
+const KEY_ROTATION_BUDGET_MS = parseInt(process.env.KEY_ROTATION_BUDGET_MS || '900000', 10) // 15 phút
+
+/** Model trích xuất — override được qua env (mặc định giữ nemotron-550b) */
+const EXTRACTION_MODEL_OVERRIDE = process.env.EXTRACTION_MODEL || ''
+
+/** Chính sách Kimi k3 có đang bật không? (mặc định BẬT — user directive 2026-08-31) */
+export function isKimiK3Enforced(): boolean {
+  return (process.env.ENFORCE_KIMI_K3 ?? 'true').trim().toLowerCase() !== 'false'
+}
+
+/** Chuỗi backup cores sau khi kimi-k3 fail đủ 12 attempts (giữ thứ tự failover cũ) */
+function backupModelChain(): string[] {
+  return NVIDIA_AGENT_MODELS.filter(m => m !== KIMI_K3_MODEL)
+}
+
+/** Kết quả 1 attempt gọi NIM thô */
+type NvidiaAttemptStatus =
+  | 'success'
+  | 'rate_limited'     // 429 tạm thời (RPM)
+  | 'daily_quota'      // 429 hết hạn mức ngày → key chết tới nửa đêm
+  | 'auth_error'       // 401/403 — key sai/hết hạn
+  | 'server_error'     // 5xx
+  | 'timeout'          // hết timeoutMs
+  | 'network_error'    // fetch throw khác
+  | 'empty_response'   // 200 nhưng không có content lẫn tool_calls
+
+/**
+ * 1 attempt gọi NVIDIA NIM với 1 key cụ thể + 1 model cụ thể.
+ * Trả về status + result (khi success). KHÔNG đụng pool state — caller quyết định.
+ */
+async function attemptNvidiaOnce(params: {
+  keyInfo: { key: string; keyIndex: number }
+  model: string
+  prompt: string
+  systemPrompt: string | undefined
+  temperature: number
+  maxTokens: number
+  timeoutMs: number
+  tools?: LLMTool[]
+  tool_choice?: 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } }
+  agentId?: string
+  agentName?: string
+}): Promise<{ status: NvidiaAttemptStatus; result?: LLMResult; httpStatus?: number; errorMessage?: string }> {
+  const { keyInfo, model, prompt, systemPrompt, temperature, maxTokens, timeoutMs } = params
+
+  const messages = [
+    ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
+    { role: 'user' as const, content: prompt },
+  ]
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const body: Record<string, unknown> = {
+      model,
+      messages,
+      max_tokens: maxTokens,
+      temperature,
+    }
+    if (params.tools && params.tools.length > 0) {
+      body.tools = params.tools
+      body.tool_choice = params.tool_choice ?? 'auto'
+    }
+
+    const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${keyInfo.key}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+    clearTimeout(timer)
+
+    if (response.status === 429) {
+      let errorBody = ''
+      try { errorBody = await response.text() } catch { /* ignore */ }
+      const quotaCheck = parse429ForDailyQuota('NVIDIA', errorBody)
+      return {
+        status: quotaCheck.isDailyQuota ? 'daily_quota' : 'rate_limited',
+        httpStatus: 429,
+        errorMessage: errorBody.slice(0, 200),
+      }
+    }
+
+    if (response.ok) {
+      const data = await response.json() as {
+        choices: Array<{
+          message: {
+            content: string
+            tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>
+          }
+          finish_reason?: string | null
+        }>
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+      }
+      const choice = data.choices?.[0]
+      const content = choice?.message?.content
+      const nativeToolCalls = choice?.message?.tool_calls
+      const finishReason = choice?.finish_reason ?? null
+      const totalTokens = data.usage?.total_tokens ?? ((data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0))
+
+      if (content || (nativeToolCalls && nativeToolCalls.length > 0)) {
+        // Token tracking — giống tryProviderWithSlotKey (per-slot + per-agent)
+        if (totalTokens > 0) addTokensUsed(totalTokens, 'nvidia', keyInfo.keyIndex, model)
+        if (totalTokens > 0 && params.agentId && params.agentName) {
+          addTokensUsedByAgent(
+            totalTokens,
+            data.usage?.prompt_tokens ?? 0,
+            data.usage?.completion_tokens ?? 0,
+            'nvidia',
+            model,
+            params.agentId,
+            params.agentName,
+          )
+        }
+        return {
+          status: 'success',
+          result: {
+            content: content ?? '',  // NIM trả content rỗng khi finish_reason='tool_calls'
+            provider: 'nvidia',
+            model,
+            tokensUsed: totalTokens,
+            tool_calls: nativeToolCalls && nativeToolCalls.length > 0 ? nativeToolCalls : undefined,
+            finish_reason: finishReason,
+          },
+        }
+      }
+      return { status: 'empty_response', httpStatus: 200 }
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      return { status: 'auth_error', httpStatus: response.status, errorMessage: `HTTP ${response.status}` }
+    }
+    if (response.status >= 500) {
+      return { status: 'server_error', httpStatus: response.status, errorMessage: `HTTP ${response.status}` }
+    }
+    // 4xx khác (400 bad request...) — xử lý như lỗi không thể retry cùng key/model
+    return { status: 'server_error', httpStatus: response.status, errorMessage: `HTTP ${response.status}` }
+  } catch (err) {
+    clearTimeout(timer)
+    if (err instanceof Error && err.name === 'AbortError') {
+      return { status: 'timeout', errorMessage: `timeout ${timeoutMs / 1000}s` }
+    }
+    return { status: 'network_error', errorMessage: err instanceof Error ? err.message : 'unknown' }
+  }
+}
+
+/**
+ * Gọi 1 model NVIDIA NIM với XOAY VÒNG KEY đầy đủ theo chính sách user 2026-08-31:
+ *   key1→key2→key3→key4→key1→key2→key3→key4→key1→key2→key3→key4
+ *   (mỗi key đúng 3 lần; key thiếu env var bị loại khỏi chuỗi; daily-quota/auth-dead
+ *   key bị loại ngay trong chuỗi). SUCCESS ở attempt nào → trả ngay.
+ *   Chỉ trả null khi MỌI key đều đã fail đủ 3 lần (hoặc hết budget / abortCheck).
+ *
+ * @param startKeyIndex Key bắt đầu chuỗi (extraction: key được gán cho document;
+ *                      agent/chat: xoay từ counter toàn cục để phân tải)
+ */
+async function callModelWithKeyRotation(
+  model: string,
+  prompt: string,
+  systemPrompt: string | undefined,
+  options?: LLMCallOptions,
+  rotationOpts?: { startKeyIndex?: number; timeoutMs?: number; maxTokens?: number; temperature?: number; taskLabel?: string },
+): Promise<LLMResult | null> {
+  const pool = nvidiaPool
+  const validIndices: number[] = []
+  for (let i = 0; i < MAX_KEYS; i++) {
+    if (pool.getRawKeyInfo(i)) validIndices.push(i)
+  }
+  if (validIndices.length === 0) {
+    console.warn(`[LLM] 🔄 ${model}: KHÔNG có NVIDIA key nào hợp lệ (NVIDIA_API_KEY_1..4)`)
+    return null
+  }
+
+  const taskLabel = rotationOpts?.taskLabel || 'rotation'
+  const timeoutMs = rotationOpts?.timeoutMs ?? parseInt(process.env.LLM_TIMEOUT_MS || '240000', 10)
+  const maxTokens = rotationOpts?.maxTokens ?? options?.maxTokens ?? 4096
+  const temperature = rotationOpts?.temperature ?? options?.temperature ?? 0.1
+
+  // Chuỗi attempt: xoay vòng validIndices đủ KEY_FAILURES_PER_KEY vòng —
+  // mỗi key đúng 3 lần, quay vòng hết 4 key lại về key đầu tiên (user directive).
+  const startIndex = rotationOpts?.startKeyIndex != null && rotationOpts.startKeyIndex >= 0
+    ? validIndices.indexOf(rotationOpts.startKeyIndex) >= 0
+      ? validIndices.indexOf(rotationOpts.startKeyIndex)
+      : 0
+    : (kimiKeyRotationCounter++) % validIndices.length
+  const maxAttempts = validIndices.length * KEY_FAILURES_PER_KEY
+
+  const failuresByKey = new Map<number, number>()
+  const deadKeys = new Set<number>()   // daily-quota / auth-dead trong chuỗi này
+  const startedAt = Date.now()
+  let attemptNo = 0
+
+  console.log(`[LLM] 🔄 ${model} (${taskLabel}): bắt đầu xoay vòng ${validIndices.length} key × ${KEY_FAILURES_PER_KEY} lần = tối đa ${maxAttempts} attempts`)
+
+  for (let round = 0; round < KEY_FAILURES_PER_KEY; round++) {
+    for (let offset = 0; offset < validIndices.length; offset++) {
+      // Abort check — người dùng bấm Dừng → cắt ngang chuỗi ngay
+      if (options?.abortCheck && options.abortCheck()) {
+        console.log(`[LLM] 🔄 ${model}: chuỗi xoay vòng bị HỦY (abortCheck) sau ${attemptNo} attempts`)
+        return null
+      }
+      // Budget — chặn trường hợp mọi attempt đều treo timeout
+      if (Date.now() - startedAt > KEY_ROTATION_BUDGET_MS) {
+        console.warn(`[LLM] 🔄 ${model}: vượt budget ${KEY_ROTATION_BUDGET_MS / 60000} phút sau ${attemptNo} attempts — dừng xoay vòng`)
+        return null
+      }
+
+      const keyIdx = validIndices[(startIndex + round * validIndices.length + offset) % validIndices.length]
+      if (deadKeys.has(keyIdx)) continue
+      const keyInfo = pool.getRawKeyInfo(keyIdx)
+      if (!keyInfo) continue
+
+      attemptNo++
+
+      const attempt = await attemptNvidiaOnce({
+        keyInfo,
+        model,
+        prompt,
+        systemPrompt,
+        temperature,
+        maxTokens,
+        timeoutMs,
+        tools: options?.tools,
+        tool_choice: options?.tool_choice,
+        agentId: options?.agentId,
+        agentName: options?.agentName,
+      })
+
+      if (attempt.status === 'success' && attempt.result) {
+        pool.markSuccess(keyInfo.key, attempt.result.tokensUsed)
+        console.log(`[LLM] 🔄 ${model} ✓ key#${keyIdx + 1} ...${keyInfo.key.slice(-6)} (attempt ${attemptNo}, ${attempt.result.tokensUsed} tokens, ${tcCount(attempt.result)} tool_calls)`)
+        return attempt.result
+      }
+
+      const failCount = (failuresByKey.get(keyIdx) || 0) + 1
+      failuresByKey.set(keyIdx, failCount)
+
+      if (attempt.status === 'daily_quota') {
+        // Key chết tới nửa đêm — loại khỏi chuỗi (không thử tiếp 2 lần còn lại)
+        pool.markDailyQuotaExhausted(keyInfo.key)
+        deadKeys.add(keyIdx)
+        console.warn(`[LLM] 🔄 ${model} ✗ key#${keyIdx + 1} → 429 DAILY QUOTA — loại key khỏi chuỗi (reset nửa đêm)`)
+      } else if (attempt.status === 'auth_error') {
+        // Key sai/hết hạn — thử lại vô nghĩa, loại luôn (đã tiêu 1/3 lần fail)
+        pool.markRateLimitedSoft(keyInfo.key, 60000)
+        deadKeys.add(keyIdx)
+        console.warn(`[LLM] 🔄 ${model} ✗ key#${keyIdx + 1} → ${attempt.errorMessage} (auth) — loại key khỏi chuỗi`)
+      } else {
+        // 429 RPM / 5xx / timeout / network / empty — cooldown ngắn cho pool,
+        // KHÔNG tăng failureCount pool (tránh cascade-exhaust) rồi CHUYỂN KEY
+        pool.markRateLimitedSoft(keyInfo.key, attempt.status === 'rate_limited' ? 30000 : 15000)
+        console.log(`[LLM] 🔄 ${model} ✗ key#${keyIdx + 1} ...${keyInfo.key.slice(-6)} → ${attempt.status}${attempt.httpStatus ? ` (${attempt.httpStatus})` : ''} [fail ${failCount}/${KEY_FAILURES_PER_KEY}]${attempt.errorMessage ? ` — ${attempt.errorMessage.slice(0, 120)}` : ''} → chuyển key kế tiếp`)
+      }
+
+      if (failCount >= KEY_FAILURES_PER_KEY) {
+        deadKeys.add(keyIdx)
+      }
+      if (deadKeys.size >= validIndices.length) {
+        console.warn(`[LLM] 🔄 ${model}: MỌI key đều đã fail đủ ${KEY_FAILURES_PER_KEY} lần (sau ${attemptNo} attempts) — dừng xoay vòng`)
+        return null
+      }
+    }
+  }
+
+  console.warn(`[LLM] 🔄 ${model}: hết chuỗi xoay vòng (${attemptNo} attempts) — mọi key đều fail đủ ${KEY_FAILURES_PER_KEY} lần`)
+  return null
+}
+
+/** Counter xoay vòng start key cho agent/chat calls — phân tải đều các key */
+let kimiKeyRotationCounter = 0
+
+function tcCount(result: LLMResult): number {
+  return result.tool_calls?.length ?? 0
+}
 
 // ==================== BACKPRESSURE — PROVIDER AVAILABILITY ====================
 
@@ -1995,36 +2322,8 @@ async function tryProviderWithSlotKey(
 }
 
 // ==================== PROVIDER-SPECIFIC TRY FUNCTIONS ====================
-
-/** Try NVIDIA NIM with assigned key — EXTRACTION ONLY: lõi duy nhất nemotron-3-ultra-550b */
-async function tryNvidiaSlot(slotIndex: number, prompt: string, systemPrompt: string | undefined, temperature?: number, maxTokens?: number, agentId?: string, agentName?: string, isFallback: boolean = false): Promise<LLMResult | null> {
-  return tryProviderWithSlotKey(
-    slotIndex,
-    nvidiaPool,
-    'https://integrate.api.nvidia.com/v1/chat/completions',
-    NVIDIA_EXTRACTION_MODELS,
-    prompt,
-    systemPrompt,
-    300000, // 300s timeout — nemotron-3-ultra-550b is a 550B reasoning model that
-            // emits chain-of-thought before JSON; complex extraction prompts can
-            // exceed 120s. 300s gives the model time to either complete or hit the
-            // max_tokens limit (→ truncation, handled by process route Fix #1).
-    {},
-    30000, // 30s rate limit cooldown — shorter to recover faster from temporary rate limits
-    temperature ?? 0.1,
-    // EXTRACTION MAX_TOKENS FIX 2026-08-27: bumped 4096 → 16384.
-    // nemotron-3-ultra-550b là reasoning model — sinh chain-of-thought trước khi
-    // xuất JSON. Với 4096 tokens, CoT ngốn 3000-3800 tokens → JSON bị cắt giữa
-    // chừng → parseLLMResponse trả null → 0 entities → document "thành công" với
-    // kết quả rỗng (triệu chứng "dừng sau vài nghìn token" trên UI).
-    // 16384 tokens cho phép CoT + JSON mà không bị truncation.
-    maxTokens ?? 16384,
-    agentId,
-    agentName,
-    isFallback,
-    // Phase 1c: extraction path does not use native FC — left undefined intentionally
-  )
-}
+// (tryNvidiaSlot đã bị XÓA 2026-08-31 — callLLMSlot giờ dùng callModelWithKeyRotation
+//  với chính sách xoay vòng key mới: mỗi key 3 lần fail, key được gán thử trước.)
 
 // ==================== LEGACY PROVIDER TRY FUNCTIONS (for callLLM) ====================
 
@@ -2168,39 +2467,39 @@ export async function callLLMSlot(
 
   const temp = options?.temperature
   const maxTok = options?.maxTokens
-  const aId = options?.agentId
-  const aName = options?.agentName
 
   console.log(`[LLM] Key ${slotIndex} (NVIDIA) Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
 
-  // Try NVIDIA with assigned key (extraction models only)
-  const result = await tryNvidiaSlot(slotIndex, prompt, systemPrompt, temp, maxTok, aId, aName)
+  // ===== KEY ROTATION (user directive 2026-08-31) =====
+  // Extraction giữ lõi nemotron-550b (user directive 2026-08-25; override env
+  // EXTRACTION_MODEL) nhưng được hưởng cùng chính sách xoay vòng key: key được
+  // GÁN cho document được thử TRƯỚC, rồi xoay vòng đủ các key còn lại — mỗi key
+  // tối đa 3 lần fail (4 key × 3 = 12 attempts) trước khi chịu thua.
+  const extractionModel = EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0]
+  const result = await callModelWithKeyRotation(
+    extractionModel,
+    prompt,
+    systemPrompt,
+    options,
+    {
+      startKeyIndex: slotIndex,
+      taskLabel: `extraction:${taskLabel}`,
+      timeoutMs: 300000, // 300s — nemotron-550b là reasoning model (giữ nguyên như tryNvidiaSlot cũ)
+      maxTokens: maxTok ?? 16384, // EXTRACTION MAX_TOKENS FIX 2026-08-27 — CoT + JSON không bị cắt
+      temperature: temp ?? 0.1,
+    },
+  )
   if (result?.content) {
     return result
   }
 
-  // Assigned key failed — try other available keys as fallback (cross-key retry)
-  // This prevents a document from completely failing just because its assigned
-  // key is temporarily rate-limited. Other keys may still have capacity.
-  // BUG FIX: Pass isFallback=true so fallback keys don't get failureCount increments
-  // that could cascade-exhaust all keys simultaneously.
-  console.log(`[LLM] Key ${slotIndex} NVIDIA failed for "${taskLabel}", trying fallback keys...`)
-  for (let fallbackIdx = 0; fallbackIdx < MAX_KEYS; fallbackIdx++) {
-    if (fallbackIdx === slotIndex) continue // Already tried this key
-    const fallbackResult = await tryNvidiaSlot(fallbackIdx, prompt, systemPrompt, temp, maxTok, aId, aName, true)
-    if (fallbackResult?.content) {
-      console.log(`[LLM] Fallback key ${fallbackIdx} succeeded for "${taskLabel}" (original key ${slotIndex} failed)`)
-      return fallbackResult
-    }
-  }
-
-  // All keys failed
-  console.warn(`[LLM] All NVIDIA keys failed for "${taskLabel}" — document will be retried later`)
+  // All keys failed (đủ 3 lần mỗi key)
+  console.warn(`[LLM] All NVIDIA keys failed for "${taskLabel}" (đủ chuỗi xoay vòng 3 lần/key) — document will be retried later`)
   return {
     content: '',
     provider: 'none',
     model: 'none',
-    error: `NVIDIA NIM failed for all keys (original key ${slotIndex})`,
+    error: `NVIDIA NIM failed for all keys (original key ${slotIndex}, xoay vòng đủ ${KEY_FAILURES_PER_KEY} lần/key)`,
   }
 }
 
@@ -2307,11 +2606,12 @@ export async function callLLM(
   console.log(`[LLM] (NVIDIA) Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
 
   // Phase 4 SMOLAB Prop 11' — explicit model override: try ONLY the requested
-  // model (all 4 keys, round-robin). Used by the eval harness (judges must not
-  // silently fall back to a rotated model — that would reintroduce circular bias
-  // between the answer generator and the judges). No pool-rotation fallback.
+  // model. Used by the eval harness (judges must not silently fall back to a
+  // rotated model — that would reintroduce circular bias between the answer
+  // generator and the judges). No pool-rotation fallback — nhưng vẫn XOAY VÒNG
+  // ĐẦY ĐỦ 4 key × 3 lần (user directive 2026-08-31) trước khi trả error.
   if (options?.model) {
-    const specific = await callLLMWithSpecificProvider(prompt, 'nvidia', options.model, systemPrompt, options)
+    const specific = await callModelWithKeyRotation(options.model, prompt, systemPrompt, options, { taskLabel: `override:${options.model}` })
     if (specific) return specific
     console.log(`[LLM] Model override "${options.model}" failed for task "${taskLabel}" — returning error (no rotation fallback)`)
     return {
@@ -2322,6 +2622,34 @@ export async function callLLM(
     }
   }
 
+  // ===== KIMI K3 MODEL POLICY (user directive 2026-08-31) =====
+  // Mọi tác vụ dùng lõi kimi-k3 + xoay vòng 4 key (mỗi key 3 lần). Chỉ khi
+  // kimi-k3 fail đủ 12 attempts mới fallback backup cores, rồi z-ai-sdk.
+  if (isKimiK3Enforced()) {
+    const chain = [KIMI_K3_MODEL, ...backupModelChain()]
+    for (const model of chain) {
+      const result = await callModelWithKeyRotation(model, prompt, systemPrompt, options, { taskLabel })
+      if (result && (result.content || (result.tool_calls && result.tool_calls.length > 0))) {
+        return result
+      }
+      if (options?.abortCheck && options.abortCheck()) break // user hủy — khỏi thử backup
+      console.warn(`[LLM] ${model} thất bại (task "${taskLabel}") sau xoay vòng đủ key — chuyển core kế tiếp`)
+    }
+
+    // NVIDIA cạn (mọi model × mọi key đều fail đủ 3 lần/key) → z-ai-sdk last resort
+    console.log(`[LLM] NVIDIA failed for task "${taskLabel}" — trying z-ai-sdk fallback`)
+    const sdkResult = await tryZaiSdk(prompt, systemPrompt, taskLabel, options)
+    if (sdkResult?.content) return sdkResult
+
+    return {
+      content: '',
+      provider: 'none',
+      model: 'none',
+      error: 'NVIDIA NIM failed — mọi model đều fail đủ chuỗi xoay vòng key (4 key × 3 lần) và z-ai-sdk cũng lỗi',
+    }
+  }
+
+  // ===== LEGACY PATH (ENFORCE_KIMI_K3=false) — hành vi cũ =====
   // Try NVIDIA only (single provider)
   const result = await tryNvidia(prompt, systemPrompt, temp, maxTok, aId, aName)
   if (result?.content) return result
@@ -2439,6 +2767,40 @@ export async function callLLMForAgent(
 ): Promise<LLMResult> {
   const { provider, model } = agentConfig
 
+  // ===== KIMI K3 MODEL POLICY (user directive 2026-08-31) =====
+  // "mọi Agents, mọi tác vụ từ giờ sẽ sử dụng lõi Kimi k3" — cấu hình model riêng
+  // của agent bị OVERRIDE; kimi-k3 xoay vòng đủ 4 key × 3 lần trước khi fallback
+  // backup cores (deepseek → minimax) rồi z-ai-sdk.
+  if (isKimiK3Enforced()) {
+    if (model !== KIMI_K3_MODEL) {
+      console.log(`[LLM] MODEL POLICY: agent cấu hình ${provider}/${model} → override → ${KIMI_K3_MODEL} (Kimi k3 cho mọi agents)`)
+    }
+    const chain = [KIMI_K3_MODEL, ...backupModelChain()]
+    for (const m of chain) {
+      const result = await callModelWithKeyRotation(m, prompt, systemPrompt, options, { taskLabel: `agent:${model}` })
+      if (result && (result.content || (result.tool_calls && result.tool_calls.length > 0))) {
+        const tcCount = result.tool_calls?.length ?? 0
+        console.log(`[LLM] Agent dùng lõi ${m} ✓ (${tcCount} tool_calls) — agent cấu hình gốc: ${provider}/${model}`)
+        return result
+      }
+      if (options?.abortCheck && options.abortCheck()) break // user hủy — khỏi thử backup
+      console.warn(`[LLM] ${m} thất bại sau xoay vòng đủ key — chuyển core kế tiếp (agent cấu hình gốc: ${provider}/${model})`)
+    }
+
+    // NVIDIA cạn hoàn toàn → z-ai-sdk last resort
+    console.log(`[LLM] NVIDIA failed for agent (${provider}/${model}) — trying z-ai-sdk fallback`)
+    const sdkResult = await tryZaiSdk(prompt, systemPrompt, 'agent-kimi-fallback', options)
+    if (sdkResult?.content) return sdkResult
+
+    return {
+      content: '',
+      provider: 'none',
+      model: 'none',
+      error: 'NVIDIA NIM failed — kimi-k3 + backup cores đều fail đủ chuỗi xoay vòng key (mỗi key 3 lần) và z-ai-sdk cũng lỗi',
+    }
+  }
+
+  // ===== LEGACY PATH (ENFORCE_KIMI_K3=false) — tôn trọng cấu hình per-agent =====
   // Step 1: Try agent's configured provider+model
   // Phase 1c fix: when native FC is enabled, models may return empty content
   // with finish_reason='tool_calls'. The success check must consider tool_calls

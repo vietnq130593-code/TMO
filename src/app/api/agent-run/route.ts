@@ -4,6 +4,14 @@
  * GET /api/agent-run?sessionId=<sid>&limit=12
  *   → { ok: true, runs: AgentRun[], hasActive: boolean }
  *
+ * POST /api/agent-run { sessionId } — USER REQUEST 2026-08-31 (bấm nút Gửi
+ * trong khung chat để DỪNG tác vụ Agents đang chạy):
+ *   → { ok: true, cancelled: <số run đang chạy đã bị dừng> }
+ *   - Mọi run 'running' của session → status 'cancelled'
+ *   - Đặt flag cancel → ReAct loops (chat route + workflow-engine) và chuỗi
+ *     xoay vòng key LLM (llm.ts callModelWithKeyRotation) cắt ngang sớm.
+ *   - Request GỬI TIẾP THEO của user không bị ảnh hưởng (startAgentRun xóa flag).
+ *
  * Nguồn: src/lib/agent-run-tracker.ts (in-memory registry trên globalThis,
  * được ghi bởi ReAct loops — chat route + workflow-engine — và executeTool).
  *
@@ -19,7 +27,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getAgentRuns, hasActiveRun } from '@/lib/agent-run-tracker'
+import { getAgentRuns, hasActiveRun, cancelSessionRuns } from '@/lib/agent-run-tracker'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,6 +50,24 @@ export async function GET(request: NextRequest) {
       serverTs: Date.now(),
       count: runs.length,
     })
+  } catch (err) {
+    return NextResponse.json(
+      { ok: false, error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 },
+    )
+  }
+}
+
+/** POST — dừng tác vụ Agents đang chạy của session (user bấm nút Gửi/Dừng) */
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json().catch(() => null) as { sessionId?: string } | null
+    const sessionId = body?.sessionId
+    if (!sessionId) {
+      return NextResponse.json({ ok: false, error: 'missing `sessionId`' }, { status: 400 })
+    }
+    const cancelled = cancelSessionRuns(sessionId)
+    return NextResponse.json({ ok: true, cancelled, serverTs: Date.now() })
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : 'Internal server error' },

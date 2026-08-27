@@ -28,7 +28,7 @@ import { parseToolCallsFromOutput, formatMessagesForLLM } from '@/lib/tool-calls
 import { getStandaloneAgentTools } from '@/lib/standalone-agents'
 // Agent Run Tracker — Thought Process + Todos + Progress realtime trong chat
 // (user request 2026-08-31: mọi agents hiển thị tư duy/tiến trình như Claude Code)
-import { startAgentRun, endAgentRun, recordAgentThought, getAgentRuns } from '@/lib/agent-run-tracker'
+import { startAgentRun, endAgentRun, recordAgentThought, getAgentRuns, isSessionCancelled } from '@/lib/agent-run-tracker'
 // Phase A: Smart KB Routing — Intent Classifier
 // Phase C: Smart KB Writeback — replaces autoLearnFromAnswer with confidence-filtered writeback
 // Phase B: Smart KB Pre-Search — search Qdrant+Neo4j before building system prompt
@@ -179,9 +179,17 @@ async function runAgentReActLoop(params: {
     task: userMessage,
     mode: 'standalone',
   })
-  const endRun = (status: 'done' | 'error') => {
+  // USER REQUEST 2026-08-31 (bấm nút Gửi để Dừng): endRun IDEMPOTENT — status
+  // ĐẦU TIÊN thắng (cancelled/error không bị ghi đè thành done ở cuối loop).
+  let runEnded = false
+  const endRun = (status: 'done' | 'error' | 'cancelled') => {
+    if (runEnded) return
+    runEnded = true
     endAgentRun(agentSessionId, runId, status, `${iterations} vòng · ${totalToolCalls} tool calls`)
   }
+  // Flag session bị user hủy → (a) cắt ngang ReAct giữa các vòng, (b) truyền
+  // xuống callLLMForAgent (abortCheck) để chuỗi xoay vòng key dừng ngay giữa chừng.
+  const isCancelled = () => isSessionCancelled(agentSessionId)
 
   // CUSTOM TOOLS (user request 2026-08-30): nạp custom tool registry 1 lần
   // trước loop — whitelist check bên dưới cho phép gọi custom tools đã register
@@ -192,12 +200,20 @@ async function runAgentReActLoop(params: {
   } catch { /* fail-open */ }
 
   while (iterations < maxIterations) {
+    // USER REQUEST 2026-08-31: user bấm Dừng → kết thúc ReAct NGAY giữa các vòng
+    if (isCancelled()) {
+      finalContent = '⏹ Đã dừng tác vụ theo yêu cầu của bạn.'
+      endRun('cancelled')
+      break
+    }
     iterations++
 
     // Format messages for LLM (since callLLMForAgent takes a single prompt string)
     const formattedPrompt = formatMessagesForLLM(messages)
 
     // Call LLM for this agent
+    // abortCheck (user request 2026-08-31): chuỗi xoay vòng key LLM cũng dừng
+    // ngay khi user bấm Dừng — không đợi hết 4 key × 3 lần.
     const result = await callLLMForAgent(
       formattedPrompt,
       { provider: agentProvider, model: agentModel },
@@ -207,8 +223,15 @@ async function runAgentReActLoop(params: {
         agentName,
         temperature: agentTemperature,
         maxTokens: agentMaxTokens,
+        abortCheck: isCancelled,
       }
     )
+
+    if (isCancelled()) {
+      finalContent = '⏹ Đã dừng tác vụ theo yêu cầu của bạn.'
+      endRun('cancelled')
+      break
+    }
 
     if (!result || (result.error && !result.content)) {
       finalContent = result?.error || 'LLM call failed'
@@ -239,6 +262,14 @@ async function runAgentReActLoop(params: {
     })
 
     for (const tc of toolCalls) {
+      // USER REQUEST 2026-08-31: user bấm Dừng → không thực thi tool còn lại
+      if (isCancelled()) {
+        messages.push({
+          role: 'tool',
+          content: JSON.stringify({ tool: tc.name, success: false, result: 'Đã dừng bởi người dùng' }),
+        })
+        continue
+      }
       totalToolCalls++
 
       // Only execute tools that the agent has permission for
