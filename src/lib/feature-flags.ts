@@ -40,7 +40,12 @@ const DEFAULTS: Record<string, string> = {
   ENABLE_QUALITY_GATE: 'off', // off | warn | strict
 
   // Phase 1b
-  ENABLE_WEB_UNIFIED: 'false',
+  // ENABLE_WEB_UNIFIED mặc định true (user bug report 2026-08-30): web_search/
+  // web_fetch đã multi-strategy (Tavily → Serper → SDK / Jina → SDK) nên tool
+  // hoạt động cả khi chạy LOCAL không có SDK z-ai (SDK chỉ là fallback cuối
+  // trong sandbox Z.ai). Trước đây default false khiến 2 tool này TẮT hoàn toàn
+  // trên máy local dù user đã cấu hình TAVILY/SERPER/JINA keys trong .env.
+  ENABLE_WEB_UNIFIED: 'true',
   ENABLE_GATEWAY_TOOLS: 'off', // off | phase-1b | full
 
   // Phase 1c

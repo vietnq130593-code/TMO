@@ -96,11 +96,23 @@ async function probeFilesystem(): Promise<{ root: string | null; entries: number
 
 async function probeShell(): Promise<{ ok: boolean; detail: string; durationMs: number }> {
   const t0 = Date.now()
+  // FIX (user bug report 2026-08-30): probe cũ gọi executeShellFn trực tiếp từ
+  // dev-tools — BYPASS flag check ở layer executeTool. Kết quả: probe báo
+  // "shell ok — echo xác nhận" dù tool_call shell thật bị chặn bởi
+  // ENABLE_SHELL_TOOL=false ("shell tool is disabled"). Probe phải xác minh
+  // QUYỀN THỰC THI qua đúng path mà agent sẽ đi: flag check + echo thật.
+  if (!isFlagEnabled('ENABLE_SHELL_TOOL')) {
+    return {
+      ok: false,
+      detail: 'TẮT (ENABLE_SHELL_TOOL=false trong .env) — tool_call shell sẽ bị từ chối. Sửa .env: ENABLE_SHELL_TOOL=true rồi restart app.',
+      durationMs: 0,
+    }
+  }
   try {
     const res = (await executeShellFn({ command: 'echo __TMO_PROBE_OK__' })) as { success?: boolean; output?: string; stdout?: string; error?: string }
     const out = String(res?.output ?? res?.stdout ?? '')
     const ok = res?.success !== false && out.includes('__TMO_PROBE_OK__')
-    return { ok, detail: ok ? `echo xác nhận (${Date.now() - t0}ms)` : `output bất thường: ${out.slice(0, 80)}`, durationMs: Date.now() - t0 }
+    return { ok, detail: ok ? `flag BẬT + echo xác nhận (${Date.now() - t0}ms)` : `output bất thường: ${out.slice(0, 80)}`, durationMs: Date.now() - t0 }
   } catch (err) {
     return { ok: false, detail: `không thực thi được: ${err instanceof Error ? err.message : String(err)}`, durationMs: Date.now() - t0 }
   }
@@ -129,26 +141,65 @@ async function probeKnowledge(): Promise<{ qdrant: string; neo4j: string }> {
   return out
 }
 
-/** Web search probe — tốn kém nhất nên cache dài (10 phút). */
+/** Web search probe — đa nguồn: API key pools (Tavily/Serper/Jina) + SDK z-ai.
+ * Cache dài (10 phút). FIX (user bug report 2026-08-30): probe cũ CHỈ test SDK
+ * z-ai — trên máy local SDK luôn lỗi ".z-ai-config not found" (SDK chỉ khả dụng
+ * trong sandbox Z.ai) → probe báo cả nhóm web ❌ dù Tavily/Serper/Jina keys
+ * hoạt động tốt. Giờ probe kiểm tra MỌI nguồn theo đúng path tool sẽ dùng. */
 async function probeWebSearch(): Promise<{ ok: boolean; detail: string; durationMs: number }> {
   const cached = globalForCaps.__tmoWebProbe
   if (cached && Date.now() - cached.at < 10 * 60_000) {
     return { ok: cached.ok, detail: `${cached.detail} (đã xác nhận ${Math.round((Date.now() - cached.at) / 1000)}s trước)`, durationMs: cached.durationMs }
   }
   const t0 = Date.now()
+
+  // Nguồn 1-3: API key pools (chính — hoạt động cả ngoài sandbox Z.ai)
+  const sources: string[] = []
+  try {
+    const { tavilyKeyPool, serperKeyPool, jinaKeyPool } = await import('@/lib/service-key-pool')
+    if (tavilyKeyPool.hasKeys()) sources.push(`Tavily (${tavilyKeyPool.getTotalCount()} keys)`)
+    if (serperKeyPool.hasKeys()) sources.push(`Serper (${serperKeyPool.getTotalCount()} keys)`)
+    if (jinaKeyPool.hasKeys()) sources.push(`Jina (${jinaKeyPool.getTotalCount()} keys)`)
+  } catch { /* ignore */ }
+
+  // Nguồn 4: SDK z-ai (fallback — chỉ hoạt động trong sandbox Z.ai)
+  let sdkOk = false
+  let sdkErr = ''
   try {
     const ZAI = (await import('z-ai-web-dev-sdk')).default
     const zai = await ZAI.create()
     const results = await zai.functions.invoke('web_search', { query: 'test', num: 1 })
-    const ok = Array.isArray(results) || (results && typeof results === 'object')
-    const detail = ok ? 'SDK web_search trả kết quả' : 'SDK trả về rỗng'
-    globalForCaps.__tmoWebProbe = { ok, detail, at: Date.now(), durationMs: Date.now() - t0 }
-    return { ok, detail, durationMs: Date.now() - t0 }
+    sdkOk = Array.isArray(results) || (results && typeof results === 'object')
   } catch (err) {
-    const detail = `SDK lỗi: ${err instanceof Error ? err.message.slice(0, 80) : String(err)}`
-    globalForCaps.__tmoWebProbe = { ok: false, detail, at: Date.now(), durationMs: Date.now() - t0 }
-    return { ok: false, detail, durationMs: Date.now() - t0 }
+    sdkErr = err instanceof Error ? err.message.slice(0, 60) : String(err).slice(0, 60)
   }
+  if (sdkOk) sources.push('SDK z-ai')
+
+  // Flag cho web_search/web_fetch unified tools (tavily/serper/jina tools riêng
+  // lẻ không cần flag này)
+  const unifiedFlag = isFlagEnabled('ENABLE_WEB_UNIFIED')
+
+  let ok: boolean
+  let detail: string
+  if (sources.length > 0) {
+    ok = true
+    detail = `nguồn hoạt động: ${sources.join(' · ')}`
+    if (!unifiedFlag) {
+      detail += ` — LƯU Ý: web_search/web_fetch TẮT (ENABLE_WEB_UNIFIED=false); tavily/serper/jina vẫn dùng được`
+    }
+    if (!sdkOk) {
+      // Không báo lỗi SDK khi đã có key sources — SDK chỉ là fallback
+      detail += ` · SDK z-ai không khả dụng (ngoài môi trường Z.ai — bình thường khi chạy local)`
+    }
+  } else {
+    ok = false
+    detail = 'KHÔNG có nguồn web search nào: thiếu TAVILY_API_KEY/SERPER_API_KEY/JINA_API_KEY trong .env'
+    if (!sdkOk) detail += ` và SDK z-ai lỗi (${sdkErr})`
+    if (!unifiedFlag) detail += ' · web_search/web_fetch cũng TẮT (ENABLE_WEB_UNIFIED=false)'
+  }
+
+  globalForCaps.__tmoWebProbe = { ok, detail, at: Date.now(), durationMs: Date.now() - t0 }
+  return { ok, detail, durationMs: Date.now() - t0 }
 }
 
 async function probeSkills(): Promise<{ dbEnabled: number; filesystem: number }> {
@@ -173,9 +224,10 @@ async function probeMcp(): Promise<{ servers: number; note: string; flag: boolea
   const flag = isFlagEnabled('ENABLE_MCP_CALL')
   try {
     const servers = await listAvailableServers()
+    const mockCount = servers.filter(s => s.mock).length
     return {
       servers: servers.length,
-      note: `${servers.length} MCP server (${servers.map(s => s.id).join(', ')}) — mcp_call ${flag ? 'ĐÃ BẬT' : 'TẮT (ENABLE_MCP_CALL=false)'}`,
+      note: `${servers.length} MCP server (${servers.map(s => s.id).join(', ')}) — mcp_call ${flag ? 'ĐÃ BẬT' : 'TẮT (ENABLE_MCP_CALL=false)'}${mockCount > 0 ? ` · LƯU Ý: ${mockCount}/${servers.length} server builtin là MOCK (kết quả mô phỏng — KHÔNG phải thực thi thật: puppeteer không mở browser thật, postgres không query DB thật)` : ''}`,
       flag,
     }
   } catch (err) {
