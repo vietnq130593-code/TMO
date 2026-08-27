@@ -530,11 +530,11 @@ async function routeToOpenCode(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { messages, model, sessionId, stream, systemPromptAdditions,
+    const { messages: clientMessages, model, sessionId, stream, systemPromptAdditions,
             agentInstruction, agentTemperature, agentMaxTokens, agentProfileId, agentProfileName,
             agentProvider, agentModel, teamMode, teamName } = body
 
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+    if (!clientMessages || !Array.isArray(clientMessages) || clientMessages.length === 0) {
       return NextResponse.json(
         { error: 'Messages array is required' },
         { status: 400 }
@@ -542,8 +542,67 @@ export async function POST(request: NextRequest) {
     }
 
     // Extract last user message early — needed for memory recall and routing
-    const lastUserMsg = [...messages].reverse().find((m: { role: string }) => m.role === 'user')
+    const lastUserMsg = [...clientMessages].reverse().find((m: { role: string }) => m.role === 'user')
     const lastUserContent = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : ''
+
+    // ============================================
+    // USER REQUEST 2026-09-01 (session persistence) — LƯU USER MESSAGE NGAY
+    // khi nhận request (không đợi response xong như trước). Trước đây user+
+    // assistant lưu cùng lúc CUỐI request → user rời phiên giữa chừng (đổi
+    // module / mở phiên khác) rồi quay lại sẽ KHÔNG thấy tin mình vừa gửi.
+    // Giờ: user message vào DB ngay → reload phiên đang chạy vẫn thấy; các
+    // lệnh save cuối request (casual/ReAct/fallback) giờ chỉ lưu assistant.
+    // AWAIT để DB-history merge bên dưới chắc chắn thấy (tránh race khi user
+    // gửi 2 lần nội dung giống nhau).
+    // ============================================
+    if (sessionId && lastUserContent) {
+      try {
+        await db.chatMessage.create({ data: { sessionId, role: 'user', content: lastUserContent } })
+        db.agentSession
+          .updateMany({
+            where: { sessionId },
+            data: { messageCount: { increment: 1 }, updatedAt: new Date() },
+          })
+          .catch(() => {})
+      } catch (err) {
+        console.warn('[OpenClaw Chat] Early user-message save failed:', err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    // ============================================
+    // USER REQUEST 2026-09-01 (lazy-load history) — MERGE DB HISTORY
+    // Frontend giờ chỉ gửi phần hội thoại đang HIỂN THỊ (mặc định 3 lượt cuối,
+    // phần cũ phải kéo lên mới load) → nếu dùng nguyên mảng client, LLM sẽ
+    // MẤT context của các lượt trao đổi cũ. Merge với history trong DB:
+    //   - DB có full lịch sử của session (mọi lượt đều được saveChatMessages)
+    //   - user message vừa gửi CHƯA có trong DB (server save SAU khi response
+    //     xong) → append vào cuối
+    // Fail-open: lỗi DB → dùng nguyên messages client như cũ.
+    // ============================================
+    let messages = clientMessages
+    if (sessionId) {
+      try {
+        const dbHistory = await db.chatMessage.findMany({
+          where: { sessionId, role: { in: ['user', 'assistant'] } },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: 30, // 30 message gần nhất (≈ 15 lượt) — đủ context, không phình prompt
+        })
+        if (dbHistory.length > 0) {
+          const dbMapped = dbHistory
+            .slice()
+            .reverse() // desc → asc
+            .map(m => ({ role: m.role, content: m.content }))
+          // DB đã chứa user message mới nhất? (request gửi lại / duplicate) →
+          // không append nữa để tránh lặp
+          const lastDbUser = [...dbMapped].reverse().find(m => m.role === 'user')
+          messages = lastDbUser && lastDbUser.content === lastUserContent
+            ? dbMapped
+            : [...dbMapped, ...(lastUserMsg ? [lastUserMsg] : [])]
+        }
+      } catch (err) {
+        console.warn('[OpenClaw Chat] DB history merge failed — using client messages:', err instanceof Error ? err.message : String(err))
+      }
+    }
 
     // ============================================
     // PHASE A: INTENT CLASSIFICATION — Smart KB Routing
@@ -585,9 +644,9 @@ export async function POST(request: NextRequest) {
       const casualResponse = generateCasualResponse(lastUserContent, agentProfileName)
 
       // Save chat messages (non-blocking — for session history)
+      // 2026-09-01: user message đã lưu Ở ĐẦU request → chỉ lưu assistant ở đây
       if (sessionId) {
         saveChatMessages(sessionId, [
-          { role: 'user', content: lastUserContent },
           { role: 'assistant', content: casualResponse, model: 'casual-fast-path', provider: 'intent-classifier' },
         ]).catch(() => {})
       }
@@ -1002,8 +1061,8 @@ export async function POST(request: NextRequest) {
 
         // Background: Memory & Learning
         if (agentProfileId && sessionId) {
+          // 2026-09-01: user message đã lưu ở ĐẦU request → chỉ lưu assistant
           saveChatMessages(sessionId, [
-            { role: 'user', content: lastUserContent },
             { role: 'assistant', content, model: agentModel, provider: agentProvider, metadata: { reactIterations: reactResult.iterations, toolCallsExecuted: reactResult.toolCallsExecuted, agentRun: agentRunSummary } },
           ]).catch(err => console.warn('[Memory] Failed to save chat messages:', err instanceof Error ? err.message : String(err)))
 
@@ -1238,8 +1297,8 @@ export async function POST(request: NextRequest) {
         // Non-blocking: fire-and-forget, don't delay the response.
         if (agentProfileId && sessionId) {
           // Save chat messages to DB for persistence
+          // 2026-09-01: user message đã lưu ở ĐẦU request → chỉ lưu assistant
           saveChatMessages(sessionId, [
-            { role: 'user', content: lastUserContent },
             { role: 'assistant', content, model: agentModel || model, provider: agentProvider || 'local-fallback', metadata: { confidence: queryConfidence, sources: data.sources?.length || 0 } },
           ]).catch(err => console.warn('[Memory] Failed to save chat messages:', err instanceof Error ? err.message : String(err)))
 

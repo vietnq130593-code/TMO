@@ -33,12 +33,94 @@
 
 import { NextRequest } from 'next/server'
 import { runWorkflow } from '@/lib/code-team/workflow-engine'
+import { db } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300 // 5 min timeout for long workflows
 
+/**
+ * USER REQUEST 2026-09-01 (session persistence): persist team workflow events
+ * vào ChatMessage DB ngay khi emit — trước đây team messages CHỈ tồn tại trong
+ * state React của client đang mở SSE stream → user rời session/module mất
+ * hết nội dung. Giờ mọi event quan trọng được lưu DB (best-effort, không chặn
+ * stream) → mở lại session bất kỳ lúc nào đều thấy full cuộc trao đổi.
+ */
+function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
+  const type = event.type as string
+  try {
+    const agentName = (event.agent as string) || undefined
+    const agentPosition = (event.position as string) || undefined
+    let row: { role: string; content: string; metadata?: Record<string, unknown> } | null = null
+
+    if (type === 'agent_complete') {
+      const content = (event.content as string) || ''
+      if (content.trim()) {
+        row = {
+          role: 'assistant',
+          content,
+          metadata: { isTeamMessage: true, agentName, agentPosition, durationMs: event.duration },
+        }
+      }
+    } else if (type === 'tool_call') {
+      const tool = (event.tool as string) || 'tool'
+      const detail = (event.detail as string) || ''
+      row = {
+        role: 'assistant',
+        content: detail || `🔧 ${tool}`,
+        metadata: { isTeamMessage: true, agentName, agentPosition, toolCallInfo: { tool, detail } },
+      }
+    } else if (type === 'checkpoint') {
+      const step = event.step as string | undefined
+      const decision = event.decision as string | undefined
+      const reasoning = event.reasoning as string | undefined
+      row = {
+        role: 'assistant',
+        content: `📋 Checkpoint: Step ${step || '?'}${decision ? ` → ${decision}` : ''}${reasoning ? `\n${reasoning}` : ''}`,
+        metadata: { isTeamMessage: true, agentName: 'CHECKPOINT', agentPosition: 'TL' },
+      }
+    } else if (type === 'workflow_done') {
+      const totalDuration = event.totalDuration as number | undefined
+      row = {
+        role: 'assistant',
+        content: `✅ Workflow hoàn thành!${totalDuration ? ` (${(totalDuration / 1000).toFixed(1)}s)` : ''}`,
+        metadata: { isTeamMessage: true, agentName: 'SYSTEM', agentPosition: 'TL' },
+      }
+    } else if (type === 'error') {
+      const message = (event.message as string) || 'Unknown error'
+      row = {
+        role: 'error',
+        content: `❌ Workflow Error${agentName ? ` (${agentName})` : ''}: ${message}`,
+      }
+    }
+
+    if (row) {
+      db.chatMessage
+        .create({
+          data: {
+            sessionId,
+            role: row.role,
+            content: row.content,
+            metadata: row.metadata ? JSON.stringify(row.metadata) : null,
+          },
+        })
+        .then(() => {
+          // Cập nhật messageCount + updatedAt để session nổi lên đầu danh sách
+          db.agentSession
+            .update({
+              where: { sessionId },
+              data: { messageCount: { increment: 1 }, updatedAt: new Date() },
+            })
+            .catch(() => {})
+        })
+        .catch(err => {
+          console.warn('[WorkflowAPI] Failed to persist team event:', err instanceof Error ? err.message : String(err))
+        })
+    }
+  } catch { /* persistence là best-effort — không bao giờ phá stream */ }
+}
+
 export async function POST(request: NextRequest) {
-  let body: { messages?: Array<{ role: string; content: string }>; sessionId?: string; userRequest?: string; routing?: Record<string, unknown>; continueOnDisconnect?: boolean }
+  let body: { messages?: Array<{ role: string; content: string }>; sessionId?: string; userRequest?: string; routing?: Record<string, unknown>; continueOnDisconnect?: boolean; teamName?: string }
 
   try {
     body = await request.json()
@@ -49,7 +131,7 @@ export async function POST(request: NextRequest) {
     })
   }
 
-  const { messages = [], sessionId, userRequest, routing: rawRouting } = body
+  const { messages = [], sessionId, userRequest, routing: rawRouting, teamName } = body
 
   // Validate required fields
   if (!sessionId) {
@@ -80,6 +162,9 @@ export async function POST(request: NextRequest) {
     async start(controller) {
       // SSE emitter — sends events to client
       const emit = (event: Record<string, unknown>) => {
+        // USER REQUEST 2026-09-01: persist event quan trọng vào DB trước khi
+        // gửi (best-effort — lỗi persist không chặn stream)
+        persistTeamEvent(sessionId, event)
         if (isClosed) return
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
@@ -112,6 +197,31 @@ export async function POST(request: NextRequest) {
       }, 15000)
 
       try {
+        // USER REQUEST 2026-09-01: lưu user request + đảm bảo AgentSession row
+        // tồn tại (session do client auto-tạo `sess_...` chưa có row → không
+        // hiện trong danh sách session; team events persist ở dưới sẽ mồ côi)
+        try {
+          await db.chatMessage.create({
+            data: { sessionId, role: 'user', content: userRequest },
+          })
+          await db.agentSession.upsert({
+            where: { sessionId },
+            create: {
+              sessionId,
+              title: userRequest.slice(0, 50) || 'Team Workflow',
+              teamMode: 'multi',
+              teamName: teamName || null,
+              messageCount: 1,
+            },
+            update: {
+              messageCount: { increment: 1 },
+              updatedAt: new Date(),
+            },
+          })
+        } catch (err) {
+          console.warn('[WorkflowAPI] Failed to persist user request:', err instanceof Error ? err.message : String(err))
+        }
+
         // Phase 2: Smart TL Bridge — accept pre-computed routing from TL Assessment
         // If routing is provided, TL analyze step is skipped and pipeline starts immediately
         let routing: import('@/lib/code-team/worklog').RoutingDecision | undefined

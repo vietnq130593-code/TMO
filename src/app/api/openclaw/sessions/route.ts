@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { listSessions as gatewayListSessions } from '@/lib/openclaw'
+import { hasActiveRun } from '@/lib/agent-run-tracker'
 
 export const dynamic = 'force-dynamic'
 
@@ -57,6 +58,9 @@ export async function GET(request: NextRequest) {
           teamName: s.teamName,
           createdAt: s.createdAt,
           updatedAt: s.updatedAt,
+          // USER REQUEST 2026-09-01: agent/team vẫn đang chạy dở ở session này?
+          // (in-memory run tracker — hiển thị chấm xanh nhấp nháy ở dropdown)
+          hasActiveRun: hasActiveRun(s.sessionId),
         })),
         gatewaySessions,
         total: sessions.length,

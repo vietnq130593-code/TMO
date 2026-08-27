@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSessionsForAgent, getSessionsForTeam, createIsolatedSession, deleteIsolatedSession } from '@/lib/smolab/session-manager'
+import { hasActiveRun } from '@/lib/agent-run-tracker'
 
 export const dynamic = 'force-dynamic'
 
@@ -13,11 +14,12 @@ export async function GET(req: NextRequest) {
   try {
     if (mode === 'single' && agentProfileId) {
       const sessions = await getSessionsForAgent(agentProfileId)
-      return NextResponse.json({ sessions })
+      // USER REQUEST 2026-09-01: flag "agents đang chạy dở" cho dropdown session
+      return NextResponse.json({ sessions: sessions.map(s => ({ ...s, hasActiveRun: hasActiveRun(s.sessionId) })) })
     }
     if (mode === 'multi' && teamName) {
       const sessions = await getSessionsForTeam(teamName)
-      return NextResponse.json({ sessions })
+      return NextResponse.json({ sessions: sessions.map(s => ({ ...s, hasActiveRun: hasActiveRun(s.sessionId) })) })
     }
     return NextResponse.json({ error: 'Thiếu mode + agentProfileId hoặc teamName' }, { status: 400 })
   } catch (err) {
