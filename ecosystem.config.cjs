@@ -55,6 +55,14 @@ module.exports = {
       autorestart: true,
       max_restarts: 50,
       restart_delay: 4000,
+      // Memory guard: dev-mode Next.js (Turbopack + 18k-line page.tsx + SQLite
+      // + embedding pipelines) grows past 1GB RSS on this 4.1GB box and the
+      // kernel OOM-killer SIGKILLs it (verified in dmesg — restarts with no
+      // log trace, in-flight background agent tasks die). PM2 restarts
+      // CLEANLY at 1GB instead: SQLite is durable (WAL), agent-run tracker
+      // re-enqueues on boot (instrumentation crash recovery), mini-services
+      // are orphan-killed + respawned by service-manager.
+      max_memory_restart: '1G',
       // Route both stdout + stderr into the single monitored dev.log,
       // appending (merge_logs) on every restart so history is preserved.
       out_file: '/home/z/my-project/dev.log',
