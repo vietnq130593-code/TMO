@@ -13,6 +13,7 @@
  *     "thiết lập deepseek v4 pro, deepseek v4 flash, minimax lần lượt làm fall
  *     back cho k3"; kết thúc giai đoạn Kimi-only "không fallback model khác"):
  *       kimi-k3 (chính) → deepseek-v4-pro-0813 → deepseek-v4-flash-0731 → minimax-m3
+ *     (MODEL-FIRST từ 2026-09-06 — chạy đủ chuỗi lõi trên 1 key trước khi chuyển key)
  *     (user directive 2026-08-27: bỏ gpt-oss-120b khỏi Agent/Chat — model này
  *     CHỈ còn dùng làm generator/judge nội bộ cho RedTeam + Eval)
  *   - glm-5.2 REMOVED 2026-08-25: NVIDIA NIM end-of-life 2026-08-21 (HTTP 410)
@@ -24,13 +25,20 @@
  *   - Deprecated (404): kimi-k2.6(đã quay lại catalog nhưng không dùng), glm-5.1,
  *     minimax-m2.7, qwen3.5-397b
  *
+ * FAILOVER ORDER (USER DIRECTIVE 2026-09-06 — MODEL TRƯỚC, KEY SAU):
+ *   "gọi lõi chính không được thì chuyển lõi fallback NGAY (cùng key), chuyển
+ *    tới lõi cuối cùng mới chuyển key" — áp cho cả extraction (nemotron-550b →
+ *   gpt-oss-120b) lẫn agent/chat (kimi-k3 → v4-pro → v4-flash → minimax-m3).
+ *   Triển khai: callModelChainModelFirst() — mỗi sweep chạy chuỗi model trên
+ *   từng key, tối đa 3 sweep, cooldown-wait giữa sweep, circuit breaker/model.
+ *
  * Key assignment (AUTO mode, least-loaded-first):
  *   - Each document gets a key (0-3, auto-assigned to least-loaded key)
  *   - Key N uses NVIDIA Key N (strict binding for rate limit isolation)
  *   - If Key N is rate-limited/exhausted → fallback to next available key
  *
- * Model rotation: Models within each group are tried in round-robin order
- *   so all models get usage, not just the first in the list.
+ * Model rotation: chuỗi model cố định thứ tự (lõi chính trước, fallback sau) —
+ *   không round-robin (single-core + failover directives).
  *
  * Token tracking: NVIDIA NIM (single provider)
  */
@@ -1814,9 +1822,11 @@ console.log(`[LLM] NVIDIA: agent/chat kimi-k3 (chính) + FALLBACK CHAIN [${NVIDI
 /** Lõi CHÍNH cho MỌI agents, MỌI tác vụ (user directive 2026-08-31) */
 export const KIMI_K3_MODEL = 'moonshotai/kimi-k3'
 
-/** Chuỗi fallback tuần tự cho kimi-k3 (USER DIRECTIVE 2026-08-28):
+/** Chuỗi fallback tuần tự cho kimi-k3 (USER DIRECTIVE 2026-08-28; thứ tự failover
+ *  MODEL-FIRST theo directive 2026-09-06):
  *  deepseek-v4-pro-0813 → deepseek-v4-flash-0731 → minimax-m3.
- *  Mỗi lõi fallback được xoay vòng ĐẦY ĐỦ 4 key × 3 lần trước khi chuyển lõi kế.
+ *  kimi-k3 fail → chuyển NGAY lõi fallback kế trên CÙNG key; chỉ khi cả chuỗi
+ *  fail trên key đó mới chuyển key (chain restart từ kimi-k3).
  *  deepseek-v4-pro-0813 = bản MỚI verified live 2026-08-28 qua GET /v1/models
  *  (bản cũ 'deepseek-v4-pro' không suffix đã 404 từ 2026-08-27). */
 export const AGENT_FALLBACK_CHAIN = [
@@ -1847,12 +1857,12 @@ export function isKimiK3Enforced(): boolean {
  *  ở trên. Giai đoạn Kimi-only "không fallback model khác" đã kết thúc. */
 
 /**
- * Gọi lõi agent theo chuỗi fallback đầy đủ (USER DIRECTIVE 2026-08-28):
+ * Gọi lõi agent theo chuỗi MODEL-FIRST (USER DIRECTIVE 2026-09-06):
  *   kimi-k3 (chính) → deepseek-v4-pro-0813 → deepseek-v4-flash-0731 → minimax-m3
- * Mỗi lõi được xoay vòng ĐẦY ĐỦ 4 key × KEY_FAILURES_PER_KEY lần trước khi chuyển
- * lõi kế tiếp. Circuit breaker hard-block giúp lõi bị NIM chặn cứng 429-instant
- * fail NGAY (ms) — chuỗi không tốn thời gian chờ khi kimi-k3 bị chặn.
- * abortCheck được kiểm tra TRƯỚC MỖI lõi — người dùng bấm Dừng cắt ngang ngay.
+ * Lõi chính fail → chuyển NGAY lõi fallback kế (CÙNG key); chỉ khi TOÀN BỘ chuỗi
+ * lõi fail trên 1 key mới CHUYỂN KEY (chain khởi động lại từ lõi chính).
+ * Circuit breaker hard-block giúp lõi bị NIM chặn cứng 429-instant fail NGAY (ms).
+ * abortCheck được kiểm tra TRƯỚC MỖI attempt — người dùng bấm Dừng cắt ngang ngay.
  */
 async function callAgentModelWithFallbackChain(
   prompt: string,
@@ -1861,32 +1871,30 @@ async function callAgentModelWithFallbackChain(
   taskLabel: string,
 ): Promise<LLMResult> {
   const chain = [KIMI_K3_MODEL, ...AGENT_FALLBACK_CHAIN]
-  const failedModels: string[] = []
 
-  for (let i = 0; i < chain.length; i++) {
-    const model = chain[i]
-
-    // Người dùng bấm Dừng → cắt ngang chuỗi NGAY, không đốt thêm call/key
-    if (options?.abortCheck && options.abortCheck()) {
-      console.log(`[LLM] Agent fallback chain (task "${taskLabel}"): HỦY (abortCheck) tại lõi #${i + 1} ${model}`)
-      return {
-        content: '',
-        provider: 'none',
-        model,
-        error: `Task "${taskLabel}" aborted by user`,
-      }
+  // Người dùng bấm Dừng → cắt ngang chuỗi NGAY, không đốt call/key
+  if (options?.abortCheck && options.abortCheck()) {
+    console.log(`[LLM] Agent fallback chain (task "${taskLabel}"): HỦY (abortCheck) trước khi gọi`)
+    return {
+      content: '',
+      provider: 'none',
+      model: KIMI_K3_MODEL,
+      error: `Task "${taskLabel}" aborted by user`,
     }
+  }
 
-    const result = await callModelWithKeyRotation(model, prompt, systemPrompt, options, { taskLabel })
-    if (result && (result.content || (result.tool_calls && result.tool_calls.length > 0))) {
-      if (i > 0) {
-        console.log(`[LLM] Agent fallback chain (task "${taskLabel}"): lõi #${i + 1} ${model} THÀNH CÔNG (fallback) — các lõi trước đã fail: ${failedModels.join(' → ')}`)
-      }
-      return result
+  const result = await callModelChainModelFirst(
+    chain,
+    prompt,
+    systemPrompt,
+    options,
+    { taskLabel: `agent:${taskLabel}` },
+  )
+  if (result && (result.content || (result.tool_calls && result.tool_calls.length > 0))) {
+    if (result.model !== KIMI_K3_MODEL) {
+      console.log(`[LLM] Agent fallback chain (task "${taskLabel}"): lõi ${result.model} THÀNH CÔNG (fallback) — kimi-k3 đã fail`)
     }
-
-    failedModels.push(model)
-    console.warn(`[LLM] Agent fallback chain (task "${taskLabel}"): lõi ${model} thất bại${i < chain.length - 1 ? ' → chuyển lõi fallback kế tiếp' : ' (HẾT chuỗi)'}`)
+    return result
   }
 
   // Toàn bộ chuỗi thất bại — báo lỗi trung thực kèm trạng thái circuit breaker
@@ -1897,7 +1905,7 @@ async function callAgentModelWithFallbackChain(
     model: KIMI_K3_MODEL,
     error: breaker.blocked
       ? `🔴 NVIDIA NIM đang CHẶN CỨNG ${KIMI_K3_MODEL} (429 instant trên TẤT CẢ key — circuit breaker). ${breaker.reason} Đã thử toàn bộ chuỗi fallback (${AGENT_FALLBACK_CHAIN.join(', ')}) — cũng thất bại.`
-      : `CẢ chuỗi lõi agent đều thất bại sau xoay vòng đầy đủ mỗi key (${chain.join(' → ')}; mỗi lõi xoay đủ ${KEY_FAILURES_PER_KEY} lần/key). Vui lòng kiểm tra hạn mức NVIDIA NIM (build.nvidia.com → Credits) hoặc API keys.`,
+      : `CẢ chuỗi lõi agent đều thất bại sau ${KEY_FAILURES_PER_KEY} sweep model-first (${chain.join(' → ')} trên từng key — chỉ chuyển key khi cả chuỗi fail). Vui lòng kiểm tra hạn mức NVIDIA NIM (build.nvidia.com → Credits) hoặc API keys.`,
   }
 }
 
@@ -2037,14 +2045,15 @@ async function attemptNvidiaOnce(params: {
 }
 
 /**
- * Gọi 1 model NVIDIA NIM với XOAY VÒNG KEY đầy đủ theo chính sách user 2026-08-31:
+ * Gọi 1 model NVIDIA NIM duy nhất với XOAY VÒNG KEY (chính sách 2026-08-31).
+ * TỪ 2026-09-06 chỉ còn dùng cho đường model-override (callLLM options.model —
+ * eval judges) vì extraction/agent đã chuyển sang chuỗi model-first
+ * callModelChainModelFirst(). Với 1 model đơn, xoay vòng key là chiều fallback
+ * duy nhất nên thứ tự "key-first" ở đây vẫn hợp lệ.
  *   key1→key2→key3→key4→key1→key2→key3→key4→key1→key2→key3→key4
- *   (mỗi key đúng 3 lần; key thiếu env var bị loại khỏi chuỗi; daily-quota/auth-dead
- *   key bị loại ngay trong chuỗi). SUCCESS ở attempt nào → trả ngay.
- *   Chỉ trả null khi MỌI key đều đã fail đủ 3 lần (hoặc hết budget / abortCheck).
- *
- * @param startKeyIndex Key bắt đầu chuỗi (extraction: key được gán cho document;
- *                      agent/chat: xoay từ counter toàn cục để phân tải)
+ *   (mỗi key đúng 3 lần; daily-quota/auth-dead key bị loại ngay trong chuỗi).
+ *   SUCCESS ở attempt nào → trả ngay. Chỉ trả null khi MỌI key fail đủ 3 lần
+ *   (hoặc hết budget / abortCheck).
  */
 
 /**
@@ -2369,6 +2378,215 @@ function tcCount(result: LLMResult): number {
   return result.tool_calls?.length ?? 0
 }
 
+// ==================== MODEL-FIRST CHAIN — KEY SAU CÙNG (USER DIRECTIVE 2026-09-06) ====================
+
+/**
+ * USER DIRECTIVE 2026-09-06 — MODEL TRƯỚC, KEY SAU:
+ *   "đối với tác vụ trích xuất, tôi muốn gọi nemotron-3-ultra-550b không được
+ *    thì chuyển qua gọi gpt-oss-120b luôn, nếu gpt-oss-120b cũng lỗi thì mới
+ *    chuyển key; tương tự với Agent/Chat: gọi lõi chính không được thì lần lượt
+ *    chuyển qua các lõi fallback luôn, chuyển tới lõi cuối mới chuyển key"
+ *
+ * Nghĩa vụ thi hành:
+ *   • Trên CÙNG 1 key, chạy ĐẦY ĐỦ chuỗi model theo thứ tự cố định
+ *     (lõi chính → fallback 1 → ... → fallback cuối), mỗi model 1 attempt.
+ *   • Model fail → chuyển NGAY model kế tiếp (KHÔNG chuyển key).
+ *   • Key chết vĩnh viễn (429 daily-quota / 401 auth) → chuyển key NGAY
+ *     (key chết thì model kế trên key đó cũng vô nghĩa).
+ *   • CẢ chuỗi model fail trên key → CHUYỂN KEY, chain khởi động lại từ lõi chính.
+ *   • Hết mọi key → chờ rate-limit cooldown (nếu tạm thời) rồi sweep lại.
+ *     Tổng số sweep = KEY_FAILURES_PER_KEY (3) — mỗi model cuối cùng được thử
+ *     đúng 3 lần/key (1 lần/sweep), bảo toàn tổng retry volume của chính sách
+ *     key-first cũ nhưng ĐẢO ngược thứ tự ưu tiên theo directive mới.
+ *
+ * Circuit breaker (hard-block 429): model 429-instant trên MỌI key trong 1 sweep
+ * SAU ít nhất 1 cooldown cycle → trip breaker, skip model đó ở sweep sau.
+ *
+ * Giữ nguyên: budget KEY_ROTATION_BUDGET_MS, abortCheck, token tracking,
+ * native tool-calls, daily-quota/auth-dead key isolation.
+ */
+async function callModelChainModelFirst(
+  modelChain: string[],
+  prompt: string,
+  systemPrompt: string | undefined,
+  options?: LLMCallOptions,
+  chainOpts?: { startKeyIndex?: number; timeoutMs?: number; maxTokens?: number; temperature?: number; taskLabel?: string },
+): Promise<LLMResult | null> {
+  const taskLabel = chainOpts?.taskLabel || 'chain'
+  const pool = nvidiaPool
+
+  // Circuit breaker đang mở → bỏ model khỏi chuỗi (fail-fast)
+  const activeChain: string[] = []
+  for (const m of modelChain) {
+    const breaker = isModelHardBlocked(m)
+    if (breaker.blocked) {
+      console.warn(`[LLM] 🔗 ${taskLabel}: model ${m} bị circuit breaker chặn — bỏ qua (còn ${Math.ceil((modelBlockBreakers.get(m)!.blockedUntil - Date.now()) / 1000)}s)`)
+      continue
+    }
+    activeChain.push(m)
+  }
+  if (activeChain.length === 0) {
+    console.warn(`[LLM] 🔗 ${taskLabel}: TẤT CẢ model trong chuỗi [${modelChain.join(' → ')}] đều bị circuit breaker chặn — fail-fast`)
+    return null
+  }
+
+  const validIndices: number[] = []
+  for (let i = 0; i < MAX_KEYS; i++) {
+    if (pool.getRawKeyInfo(i)) validIndices.push(i)
+  }
+  if (validIndices.length === 0) {
+    console.warn(`[LLM] 🔗 ${taskLabel}: KHÔNG có NVIDIA key nào hợp lệ (NVIDIA_API_KEY_1..4)`)
+    return null
+  }
+
+  const timeoutMs = chainOpts?.timeoutMs ?? parseInt(process.env.LLM_TIMEOUT_MS || '240000', 10)
+  const maxTokens = chainOpts?.maxTokens ?? options?.maxTokens ?? 4096
+  const temperature = chainOpts?.temperature ?? options?.temperature ?? 0.1
+
+  // Key bắt đầu: key được gán (extraction) hoặc xoay counter toàn cục (agent/chat)
+  const startIndex = chainOpts?.startKeyIndex != null && chainOpts.startKeyIndex >= 0
+    ? Math.max(0, validIndices.indexOf(chainOpts.startKeyIndex))
+    : (kimiKeyRotationCounter++) % validIndices.length
+
+  const deadKeys = new Set<number>() // daily-quota / auth-dead trong CALL này
+  const startedAt = Date.now()
+  let attemptNo = 0
+  let cooldownCycles = 0
+  let sweepNo = 0
+
+  console.log(`[LLM] 🔗 ${taskLabel}: MODEL-FIRST [${activeChain.join(' → ')}] × ${validIndices.length} key — model fallback trước, chỉ chuyển key khi cả chuỗi fail (tối đa ${KEY_FAILURES_PER_KEY} sweep)`)
+
+  while (sweepNo < KEY_FAILURES_PER_KEY) {
+    sweepNo++
+    // Instant-429 per model trong sweep này (input circuit breaker)
+    const sweepInstant429 = new Map<string, Set<number>>()
+    for (const m of activeChain) sweepInstant429.set(m, new Set())
+
+    for (let offset = 0; offset < validIndices.length; offset++) {
+      const keyIdx = validIndices[(startIndex + offset) % validIndices.length]
+      if (deadKeys.has(keyIdx)) continue
+      const keyInfo = pool.getRawKeyInfo(keyIdx)
+      if (!keyInfo) continue
+      // Key đã daily-quota-dead từ call khác → skip (không đốt attempt)
+      if (keyInfo.dailyQuotaExhausted && Date.now() < keyInfo.dailyQuotaResetAt) {
+        deadKeys.add(keyIdx)
+        console.warn(`[LLM] 🔗 ${taskLabel}: key#${keyIdx + 1} daily-quota-dead (từ call khác) — bỏ qua key`)
+        continue
+      }
+
+      let chainFailedOnKey = false
+      for (const model of activeChain) {
+        // Model có thể bị trip breaker giữa sweep → bỏ qua
+        if (isModelHardBlocked(model).blocked) continue
+        // Người dùng bấm Dừng → cắt ngang chuỗi ngay
+        if (options?.abortCheck && options.abortCheck()) {
+          console.log(`[LLM] 🔗 ${taskLabel}: chuỗi bị HỦY (abortCheck) sau ${attemptNo} attempts`)
+          return null
+        }
+        // Budget — chặn trường hợp mọi attempt đều treo timeout
+        if (Date.now() - startedAt > KEY_ROTATION_BUDGET_MS) {
+          console.warn(`[LLM] 🔗 ${taskLabel}: vượt budget ${KEY_ROTATION_BUDGET_MS / 60000} phút sau ${attemptNo} attempts — dừng chuỗi`)
+          return null
+        }
+
+        attemptNo++
+        const attemptStartedAt = Date.now()
+        const attempt = await attemptNvidiaOnce({
+          keyInfo: { key: keyInfo.key, keyIndex: keyIdx },
+          model,
+          prompt,
+          systemPrompt,
+          temperature,
+          maxTokens,
+          timeoutMs,
+          tools: options?.tools,
+          tool_choice: options?.tool_choice,
+          agentId: options?.agentId,
+          agentName: options?.agentName,
+        })
+        const attemptMs = Date.now() - attemptStartedAt
+
+        if (attempt.status === 'success' && attempt.result) {
+          pool.markSuccess(keyInfo.key, attempt.result.tokensUsed)
+          console.log(`[LLM] 🔗 ${taskLabel} ✓ ${model} key#${keyIdx + 1} ...${keyInfo.key.slice(-6)} (attempt ${attemptNo}, ${attempt.result.tokensUsed} tokens, ${tcCount(attempt.result)} tool_calls)`)
+          return attempt.result
+        }
+
+        // ===== HARD-BLOCK DETECTION per model =====
+        // 429 trả về gần như NGAY LẬP TỨC = dấu hiệu chặn ở tầng model/tài khoản,
+        // không phải rate-limit RPM thông thường.
+        if (attempt.status === 'rate_limited' && attemptMs < INSTANT_429_MS) {
+          sweepInstant429.get(model)!.add(keyIdx)
+        }
+
+        if (attempt.status === 'daily_quota') {
+          // Key chết tới nửa đêm — model kế trên key này vô nghĩa → chuyển key
+          pool.markDailyQuotaExhausted(keyInfo.key)
+          deadKeys.add(keyIdx)
+          console.warn(`[LLM] 🔗 ${taskLabel} ✗ ${model} key#${keyIdx + 1} ...${keyInfo.key.slice(-6)} → 429 DAILY QUOTA — key chết tới nửa đêm, chuyển KEY`)
+          chainFailedOnKey = true
+          break
+        }
+        if (attempt.status === 'auth_error') {
+          // Key sai/hết hạn — thử lại vô nghĩa → chuyển key
+          pool.markRateLimitedSoft(keyInfo.key, 60000)
+          deadKeys.add(keyIdx)
+          console.warn(`[LLM] 🔗 ${taskLabel} ✗ ${model} key#${keyIdx + 1} ...${keyInfo.key.slice(-6)} → ${attempt.errorMessage} (auth) — loại key, chuyển KEY`)
+          chainFailedOnKey = true
+          break
+        }
+
+        // 429 RPM / 5xx / timeout / network / empty → DIRECTIVE 2026-09-06:
+        // chuyển MODEL kế tiếp trên CÙNG key (soft-mark, không tăng failureCount)
+        pool.markRateLimitedSoft(keyInfo.key, attempt.status === 'rate_limited' ? 30000 : 15000)
+        console.log(`[LLM] 🔗 ${taskLabel} ✗ ${model} key#${keyIdx + 1} ...${keyInfo.key.slice(-6)} → ${attempt.status}${attempt.httpStatus ? ` (${attempt.httpStatus})` : ''}${attempt.errorMessage ? ` — ${attempt.errorMessage.slice(0, 120)}` : ''} → chuyển MODEL kế (cùng key)`)
+        chainFailedOnKey = true
+      }
+
+      // CẢ chuỗi model fail trên key này → "mới chuyển key" (directive 2026-09-06)
+      if (chainFailedOnKey && !deadKeys.has(keyIdx)) {
+        console.warn(`[LLM] 🔗 ${taskLabel}: CẢ chuỗi [${activeChain.join(' → ')}] fail trên key#${keyIdx + 1} — CHUYỂN KEY`)
+      }
+    }
+
+    // ===== Sau sweep: trip breaker cho model bị hard-block xác nhận =====
+    // (đã qua ít nhất 1 cooldown cycle mà vẫn 429-instant trên MỌI key)
+    if (cooldownCycles >= 1) {
+      for (const model of activeChain) {
+        if (sweepInstant429.get(model)!.size >= validIndices.length) {
+          tripModelBreaker(
+            model,
+            `Model-first sweep xác nhận: ${model} 429-instant trên cả ${validIndices.length} key ngay cả sau ${cooldownCycles} lần cooldown — khả năng NVIDIA NIM chặn model ở tầng tài khoản/hạn mức. Kiểm tra build.nvidia.com → Credits/Rate limits.`,
+          )
+        }
+      }
+    }
+
+    // Hết sweep cuối → dừng
+    if (sweepNo >= KEY_FAILURES_PER_KEY) break
+
+    // Còn model nào chưa bị block không?
+    const stillActive = activeChain.filter(m => !isModelHardBlocked(m).blocked)
+    if (stillActive.length === 0) {
+      console.warn(`[LLM] 🔗 ${taskLabel}: mọi model trong chuỗi đều bị circuit breaker chặn sau sweep ${sweepNo} — dừng`)
+      return null
+    }
+
+    // Hết sweep nhưng còn key/key-model khả dụng → chờ rate-limit cooldown
+    // (waitForRateLimitCooldown tự trả false nếu mọi key chết vĩnh viễn)
+    const waited = await waitForRateLimitCooldown(pool, options?.abortCheck)
+    if (!waited) {
+      console.warn(`[LLM] 🔗 ${taskLabel}: không còn key khả dụng sau sweep ${sweepNo} — dừng chuỗi (${attemptNo} attempts)`)
+      return null
+    }
+    cooldownCycles++
+    console.log(`[LLM] 🔗 ${taskLabel}: key hồi sau cooldown — sweep lại (sweep ${sweepNo + 1}/${KEY_FAILURES_PER_KEY})`)
+  }
+
+  console.warn(`[LLM] 🔗 ${taskLabel}: hết ${sweepNo} sweep × (${activeChain.length} model × ${validIndices.length} key) = ${attemptNo} attempts — THẤT BẠI`)
+  return null
+}
+
 // ==================== BACKPRESSURE — PROVIDER AVAILABILITY ====================
 
 /** Get overall provider availability across all active pools (0.0 to 1.0).
@@ -2617,8 +2835,8 @@ async function tryProviderWithSlotKey(
 }
 
 // ==================== PROVIDER-SPECIFIC TRY FUNCTIONS ====================
-// (tryNvidiaSlot đã bị XÓA 2026-08-31 — callLLMSlot giờ dùng callModelWithKeyRotation
-//  với chính sách xoay vòng key mới: mỗi key 3 lần fail, key được gán thử trước.)
+// (tryNvidiaSlot đã bị XÓA 2026-08-31 — callLLMSlot giờ dùng callModelChainModelFirst
+//  với chính sách model-first 2026-09-06: chuỗi lõi chạy trên từng key, chuyển key sau cùng.)
 
 // ==================== LEGACY PROVIDER TRY FUNCTIONS (for callLLM) ====================
 
@@ -2742,9 +2960,11 @@ const EXTRACTION_FALLBACK_MODEL_OVERRIDE = process.env.EXTRACTION_FALLBACK_MODEL
 /**
  * Key-based LLM call for document processing — EXTRACTION CORES ONLY.
  *
- * NVIDIA NIM với chuỗi 2 lõi trích xuất (user directive 2026-09-05):
- *   1. PRIMARY:   nvidia/nemotron-3-ultra-550b-a55b — xoay vòng đủ key
- *   2. FALLBACK:  openai/gpt-oss-120b — chỉ chạy khi primary fail TOÀN BỘ key
+ * NVIDIA NIM với chuỗi 2 lõi trích xuất MODEL-FIRST (user directive 2026-09-06):
+ *   1. PRIMARY:   nvidia/nemotron-3-ultra-550b-a55b — gọi trước trên mỗi key
+ *   2. FALLBACK:  openai/gpt-oss-120b — gọi NGAY khi primary fail (CÙNG key);
+ *                 chỉ khi cả 2 lõi fail trên key đó mới chuyển key kế tiếp
+ *                 (chain khởi động lại từ lõi chính trên key mới)
  *
  * KHÔNG BAO GIỜ gọi kimi-k3 (lõi agent/chat) cho extraction — đây là ràng
  * buộc cứng theo directive user. Callers không còn phải fallback sang callLLM()
@@ -2777,19 +2997,22 @@ export async function callLLMSlot(
 
   console.log(`[LLM] Key ${startKeyIndex >= 0 ? startKeyIndex : 'RR'} (NVIDIA) Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
 
-  // ===== KEY ROTATION (user directive 2026-08-31) =====
-  // Mỗi lõi được xoay vòng ĐẦY ĐỦ chuỗi key: key GÁN cho document (nếu có) được
-  // thử TRƯỚC, rồi xoay vòng đủ các key còn lại — mỗi key tối đa 3 lần fail
-  // (4 key × 3 = 12 attempts) trước khi chuyển lõi fallback.
+  // ===== MODEL-FIRST CHAIN (USER DIRECTIVE 2026-09-06) =====
+  // nemotron-3-ultra-550b fail → gọi gpt-oss-120b NGAY (cùng key); cả 2 lõi
+  // fail trên key đó MỚI chuyển key (chain khởi động lại từ lõi chính).
+  // Key GÁN cho document được thử TRƯỚC, rồi xoay vòng các key còn lại.
   const primaryModel = EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0]
   const fallbackModel =
     EXTRACTION_FALLBACK_MODEL_OVERRIDE === 'none' || EXTRACTION_FALLBACK_MODEL_OVERRIDE === ''
       ? (NVIDIA_EXTRACTION_MODELS[1] || '')
       : EXTRACTION_FALLBACK_MODEL_OVERRIDE
 
-  // ===== LÕI CHÍNH: nemotron-3-ultra-550b =====
-  const primaryResult = await callModelWithKeyRotation(
-    primaryModel,
+  const chain = fallbackModel && fallbackModel !== primaryModel
+    ? [primaryModel, fallbackModel]
+    : [primaryModel]
+
+  const result = await callModelChainModelFirst(
+    chain,
     prompt,
     systemPrompt,
     options,
@@ -2801,13 +3024,13 @@ export async function callLLMSlot(
       temperature: temp ?? 0.1,
     },
   )
-  if (primaryResult?.content) {
-    return primaryResult
+  if (result?.content) {
+    return result
   }
 
-  // Người dùng bấm Dừng → KHÔNG chạy lõi fallback (nhiệm vụ đã bị hủy)
+  // Người dùng bấm Dừng → nhiệm vụ đã bị hủy
   if (options?.abortCheck && options.abortCheck()) {
-    console.log(`[LLM] Extraction "${taskLabel}": bị HỦY (abortCheck) — bỏ qua lõi fallback`)
+    console.log(`[LLM] Extraction "${taskLabel}": bị HỦY (abortCheck)`)
     return {
       content: '',
       provider: 'none',
@@ -2816,35 +3039,13 @@ export async function callLLMSlot(
     }
   }
 
-  // ===== LÕI FALLBACK: openai/gpt-oss-120b (user directive 2026-09-05) =====
-  if (fallbackModel && fallbackModel !== primaryModel) {
-    console.warn(`[LLM] Extraction "${taskLabel}": lõi chính ${primaryModel} thất bại (đủ chuỗi xoay vòng key) — chuyển lõi FALLBACK ${fallbackModel}`)
-    const fallbackResult = await callModelWithKeyRotation(
-      fallbackModel,
-      prompt,
-      systemPrompt,
-      options,
-      {
-        startKeyIndex,
-        taskLabel: `extraction-fallback:${taskLabel}`,
-        timeoutMs: 300000,
-        maxTokens: maxTok ?? 16384,
-        temperature: temp ?? 0.1,
-      },
-    )
-    if (fallbackResult?.content) {
-      console.log(`[LLM] Extraction "${taskLabel}": lõi fallback ${fallbackModel} thành công`)
-      return fallbackResult
-    }
-  }
-
-  // Cả 2 lõi đều thất bại (đủ 3 lần mỗi key mỗi lõi)
-  console.warn(`[LLM] Extraction "${taskLabel}": CẢ HAI lõi (${primaryModel}${fallbackModel ? ` + ${fallbackModel}` : ''}) đều thất bại sau xoay vòng key — document will be retried later`)
+  // Cả 2 lõi đều thất bại sau đủ số sweep model-first
+  console.warn(`[LLM] Extraction "${taskLabel}": CẢ HAI lõi (${primaryModel}${fallbackModel ? ` + ${fallbackModel}` : ''}) đều thất bại sau ${KEY_FAILURES_PER_KEY} sweep model-first — document will be retried later`)
   return {
     content: '',
     provider: 'none',
     model: 'none',
-    error: `Extraction failed on BOTH cores (${primaryModel}${fallbackModel ? ` + fallback ${fallbackModel}` : ''}) — mọi NVIDIA key đều fail (xoay vòng đủ ${KEY_FAILURES_PER_KEY} lần/key mỗi lõi)`,
+    error: `Extraction failed on BOTH cores (${primaryModel}${fallbackModel ? ` + fallback ${fallbackModel}` : ''}) — mọi NVIDIA key đều fail (model-first: mỗi sweep chạy đủ chuỗi lõi trên từng key, ${KEY_FAILURES_PER_KEY} sweep)`,
   }
 }
 
@@ -2867,8 +3068,9 @@ export async function callLLMSlot(
  *
  * CHÍNH SÁCH: kimi-k3 là lõi LÀM VIỆC của agents (chat / goal-loop / team) —
  * KHÔNG dành cho utility nền. Utility về bản chất là tác vụ trích xuất /
- * phân loại / chưng cất → dùng chuỗi lõi extraction (nemotron-3-ultra-550b
- * chính → gpt-oss-120b fallback), round-robin key, KHÔNG BAO GIỜ chạm kimi-k3.
+ * phân loại / chưng cất → dùng chuỗi lõi extraction MODEL-FIRST (directive
+ * 2026-09-06: nemotron-3-ultra-550b fail → gpt-oss-120b NGAY cùng key, hết chuỗi
+ * mới chuyển key), round-robin start key, KHÔNG BAO GIỜ chạm kimi-k3.
  * Override qua env EXTRACTION_MODEL / EXTRACTION_FALLBACK_MODEL (đi theo lõi
  * extraction) — đặt EXTRACTION_FALLBACK_MODEL=none để tắt tầng fallback.
  */
@@ -2888,9 +3090,15 @@ export async function callUtilityLLM(
       ? (NVIDIA_EXTRACTION_MODELS[1] || '')
       : EXTRACTION_FALLBACK_MODEL_OVERRIDE
 
-  // ===== LÕI CHÍNH: nemotron-3-ultra-550b =====
-  const primaryResult = await callModelWithKeyRotation(
-    primaryModel,
+  // ===== MODEL-FIRST CHAIN (USER DIRECTIVE 2026-09-06) =====
+  // nemotron-3-ultra-550b fail → gpt-oss-120b NGAY (cùng key, round-robin start);
+  // cả chuỗi fail trên key mới chuyển key.
+  const chain = fallbackModel && fallbackModel !== primaryModel
+    ? [primaryModel, fallbackModel]
+    : [primaryModel]
+
+  const result = await callModelChainModelFirst(
+    chain,
     prompt,
     systemPrompt,
     options,
@@ -2902,39 +3110,17 @@ export async function callUtilityLLM(
       temperature: options?.temperature ?? 0.1,
     },
   )
-  if (primaryResult?.content) {
-    return primaryResult
+  if (result?.content) {
+    return result
   }
 
-  // abortCheck (nếu caller truyền) → không chạy lõi fallback
+  // abortCheck (nếu caller truyền)
   if (options?.abortCheck && options.abortCheck()) {
     return {
       content: '',
       provider: 'none',
       model: 'none',
       error: `Utility "${taskLabel}" aborted by caller`,
-    }
-  }
-
-  // ===== LÕI FALLBACK: openai/gpt-oss-120b =====
-  if (fallbackModel && fallbackModel !== primaryModel) {
-    console.warn(`[LLM] Utility "${taskLabel}": lõi chính ${primaryModel} thất bại — chuyển lõi FALLBACK ${fallbackModel}`)
-    const fallbackResult = await callModelWithKeyRotation(
-      fallbackModel,
-      prompt,
-      systemPrompt,
-      options,
-      {
-        startKeyIndex: -1,
-        taskLabel: `utility-fallback:${taskLabel}`,
-        timeoutMs: 180000,
-        maxTokens: options?.maxTokens ?? 4096,
-        temperature: options?.temperature ?? 0.1,
-      },
-    )
-    if (fallbackResult?.content) {
-      console.log(`[LLM] Utility "${taskLabel}": lõi fallback ${fallbackModel} thành công`)
-      return fallbackResult
     }
   }
 
@@ -3067,9 +3253,9 @@ export async function callLLM(
     }
   }
 
-  // ===== KIMI-K3 CHÍNH + FALLBACK CHAIN (user directive 2026-08-28) =====
-  // kimi-k3 là lõi chính + xoay vòng 4 key (mỗi key 3 lần). Cạn chuỗi key →
-  // fallback tuần tự deepseek-v4-pro → deepseek-v4-flash → minimax-m3.
+  // ===== KIMI-K3 CHÍNH + FALLBACK CHAIN MODEL-FIRST (directive 2026-09-06) =====
+  // kimi-k3 fail → fallback tuần tự v4-pro → v4-flash → minimax-m3 NGAY (cùng
+  // key); hết cả chuỗi trên key mới chuyển key (callModelChainModelFirst).
   if (isKimiK3Enforced()) {
     return callAgentModelWithFallbackChain(prompt, systemPrompt, options, taskLabel)
   }
@@ -3192,11 +3378,11 @@ export async function callLLMForAgent(
 ): Promise<LLMResult> {
   const { provider, model } = agentConfig
 
-  // ===== KIMI-K3 CHÍNH + FALLBACK CHAIN (user directive 2026-08-28) =====
+  // ===== KIMI-K3 CHÍNH + FALLBACK CHAIN MODEL-FIRST (directive 2026-09-06) =====
   // "deepseek v4 pro, deepseek v4 flash, minimax lần lượt làm fall back cho k3" —
-  // cấu hình model riêng của agent vẫn bị override về kimi-k3 (lõi chính), nhưng
-  // khi kimi-k3 cạn chuỗi xoay vòng key thì fallback tuần tự qua 3 lõi kia
-  // (callAgentModelWithFallbackChain).
+  // cấu hình model riêng của agent vẫn bị override về kimi-k3 (lõi chính); khi
+  // kimi-k3 fail → fallback tuần tự qua 3 lõi kia NGAY (cùng key), chỉ hết cả
+  // chuỗi mới chuyển key (callAgentModelWithFallbackChain).
   if (isKimiK3Enforced()) {
     if (model !== KIMI_K3_MODEL) {
       console.log(`[LLM] MODEL POLICY: agent cấu hình ${provider}/${model} → override → ${KIMI_K3_MODEL} (lõi chính) + fallback chain [${AGENT_FALLBACK_CHAIN.join(' → ')}]`)
