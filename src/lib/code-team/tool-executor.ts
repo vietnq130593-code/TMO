@@ -1225,6 +1225,117 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       },
     },
   },
+  // ===== OMEGA ORCHESTRATION (user request 2026-09-08) =====
+  // 3 tool phối hợp multi-agent: mọi agent GẶP VẤN ĐỀ escalate về Omega;
+  // Omega (và agents có quyền) TẠO AGENT MỚI + ĐIỀU ĐỘNG agent bất kỳ.
+  escalate_problem: {
+    type: 'function',
+    function: {
+      name: 'escalate_problem',
+      description:
+        'ESCALATE vấn đề cho OMEGA — orchestrator của hệ thống agents. Omega phân tích căn nguyên, ' +
+        'cân nhắc các phương án (tự sửa / đổi cách tiếp cận / điều agent khác xử lý / tạo agent mới) và trả về ' +
+        'TƯ VẤN TỐT NHẤT cho bạn. Dùng khi: (1) tool fail lặp lại cùng lỗi, (2) cùng hành động lặp lại không tiến triển, ' +
+        '(3) task cần chuyên môn ngoài vòng của bạn (xem Agent Roster), (4) NHẬN DIỆN SỚM rủi ro trước khi kẹt hẳn. ' +
+        'Escalate sớm rẻ hơn chữa sau — đừng xoay vòng mãi mới hỏi.',
+      parameters: {
+        type: 'object',
+        properties: {
+          problem: {
+            type: 'string',
+            description: 'Mô tả vấn đề CỤ THỂ: gì đang sai/bế tắc, thông báo lỗi, kết quả mong muốn vs thực tế',
+          },
+          context: {
+            type: 'string',
+            description: 'Context: mục tiêu task, file/lệnh liên quan, ràng buộc...',
+          },
+          attempted: {
+            type: 'string',
+            description: 'Các cách ĐÃ THỬ và kết quả từng cách (để Omega không đề xuất lại cách đã fail)',
+          },
+          severity: {
+            type: 'string',
+            enum: ['low', 'medium', 'high'],
+            description: 'Mức độ: low=phiền nhưng đi tiếp được, medium=chặn 1 phần task, high=kẹt hẳn/task fail',
+          },
+        },
+        required: ['problem'],
+      },
+    },
+  },
+  create_agent: {
+    type: 'function',
+    function: {
+      name: 'create_agent',
+      description:
+        'TẠO AGENT MỚI trong module Agents (Agent Factory — quyền của Omega orchestrator). ' +
+        'Dùng khi hệ thống THIẾU agent có kỹ năng phù hợp cho tác vụ (xem Agent Roster trước — nếu đã có agent ' +
+        'phù hợp thì dispatch_agent/delegate_task thay vì tạo mới). Agent mới hiện ngay trong UI module Agents. ' +
+        'Fields: Tên (unique), Mô tả vai trò, Hướng dẫn chi tiết (system prompt), Avatar (emoji), Model, ' +
+        'Team + vị trí (hoặc standalone), Temperature, Lương token (maxTokens), Toolset.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Tên agent MỚI (unique, 2-50 ký tự, không trùng agent hiện có)' },
+          description: { type: 'string', description: 'Mô tả vai trò ngắn (hiện trong UI module Agents)' },
+          instruction: {
+            type: 'string',
+            description:
+              'Hướng dẫn chi tiết — system prompt đầy đủ cho agent mới: vai trò, kỹ năng, cách làm việc, ' +
+              'khi nào escalate về Omega. Viết kỹ — đây là "cặp não" của agent.',
+          },
+          capable: { type: 'string', description: 'Kỹ năng chính (comma-separated) — hiển thị trong Agent Roster cho agents khác thấy' },
+          avatar: { type: 'string', description: 'Emoji avatar, vd: 🤖 🏗️ 🔬 🎨 📊 🧠 💡 ⚡ 🎯 🛡️ 📝 🔍 💻 🌐 🧪 📐' },
+          model: {
+            type: 'string',
+            description:
+              'Model ID. Khả dụng: moonshotai/kimi-k3 (lõi chính, mạnh) | deepseek-ai/deepseek-v4-pro-0813 | ' +
+              'deepseek-ai/deepseek-v4-flash-0731 (nhanh) | minimaxai/minimax-m3 | nvidia/nemotron-3-ultra-550b-a55b | openai/gpt-oss-120b',
+          },
+          team: { type: 'string', enum: ['code', 'research'], description: 'Team (null/omit = standalone agent)' },
+          position: {
+            type: 'string',
+            description: 'Vị trí trong team — code: G4/G5 (mở rộng; TL/G1/G2-A/G2-B/G3 reserved cho hệ thống), research: TL/G1/G2/G3/G4/G5',
+          },
+          temperature: { type: 'number', description: 'Temperature 0.0-2.0 (0.3=kỹ thuật chặt chẽ, 0.7=cân bằng, 1.0+=sáng tạo)' },
+          maxTokens: { type: 'number', description: 'LƯƠNG TOKEN (maxTokens) 256-32768 — trần output mỗi lượt của agent' },
+          tools: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Toolset cho agent mới (tên tool). Bỏ trống = generalist mặc định (fs+shell+test+web+KB+todo+custom-tool+escalate_problem)',
+          },
+        },
+        required: ['name', 'description', 'instruction'],
+      },
+    },
+  },
+  dispatch_agent: {
+    type: 'function',
+    function: {
+      name: 'dispatch_agent',
+      description:
+        'ĐIỀU ĐỘNG agent BẤT KỲ trong Agent Roster tham gia xử lý tác vụ (quyền của Omega orchestrator). ' +
+        '2 chế độ: (1) "task" (mặc định) — TẠM THỜI: agent chạy 1 task tự chủ, trả báo cáo nén (context của bạn không phình); ' +
+        '(2) "long_term" — LÂU DÀI: điều agent vào team (cập nhật team/position trong module Agents, kèm task chạy luôn nếu có). ' +
+        'Khác delegate_task (chỉ Code Team 5 vị trí): dispatch_agent gọi được MỌI agent kể cả custom/standalone.',
+      parameters: {
+        type: 'object',
+        properties: {
+          agent: { type: 'string', description: 'TÊN agent trong Agent Roster sẽ được điều động' },
+          task: { type: 'string', description: 'Nhiệm vụ cụ thể giao cho agent (bắt buộc với duration=task; tùy chọn với long_term)' },
+          context: { type: 'string', description: 'Context bổ sung: file liên quan, ràng buộc, kết quả bước trước...' },
+          duration: {
+            type: 'string',
+            enum: ['task', 'long_term'],
+            description: 'task = tham gia tạm thời cho 1 tác vụ (mặc định) | long_term = điều động lâu dài vào team',
+          },
+          team: { type: 'string', enum: ['code', 'research'], description: '(long_term) team đích — null/omit = standalone' },
+          position: { type: 'string', description: '(long_term) vị trí trong team đích — code: G4/G5 (mở rộng), research: TL/G1/G2/G3/G4/G5' },
+        },
+        required: ['agent', 'task'],
+      },
+    },
+  },
 }
 
 /**
@@ -2122,6 +2233,113 @@ export async function executeTool(
           }
         } catch (err) {
           result = { success: false, error: `delegate_task lỗi: ${err instanceof Error ? err.message : String(err)}` }
+        }
+        break
+      }
+      // ===== OMEGA ORCHESTRATION (user request 2026-09-08) =====
+      // (1) Mọi agent gặp vấn đề → escalate_problem → Omega-on-demand tư vấn
+      //     giải pháp tốt nhất (nhận diện sớm, không chờ kẹt hẳn).
+      case 'escalate_problem': {
+        const problem = String(args.problem ?? args.issue ?? '').trim()
+        if (!problem) {
+          result = { success: false, error: 'Thiếu "problem" — mô tả vấn đề cụ thể bạn đang gặp.' }
+          break
+        }
+        try {
+          const { consultOmega } = await import('@/lib/omega-orchestrator')
+          const consult = await consultOmega({
+            problem,
+            context: args.context ? String(args.context) : undefined,
+            attempted: args.attempted ? String(args.attempted) : undefined,
+            callingAgent: context?.agentName || 'unknown-agent',
+            severity: ['low', 'medium', 'high'].includes(String(args.severity)) ? String(args.severity) : 'medium',
+          })
+          result = consult.success
+            ? {
+                success: true,
+                advisory: consult.text,
+                dispatchAgent: consult.advisory?.dispatchAgent ?? null,
+                createAgentSuggestion: consult.advisory?.createAgent ?? null,
+                tokensUsed: consult.tokensUsed,
+              }
+            : { success: false, error: `Omega consult thất bại: ${consult.error || 'không rõ lỗi'}` }
+        } catch (err) {
+          result = { success: false, error: `escalate_problem lỗi: ${err instanceof Error ? err.message : String(err)}` }
+        }
+        break
+      }
+      // (2) Omega Agent Factory — tự tạo agent mới trong module Agents
+      //     (avatar, tên, mô tả, instruction, model, team, vị trí, temp, lương token).
+      case 'create_agent': {
+        try {
+          const { createAgentByOmega } = await import('@/lib/omega-orchestrator')
+          const created = await createAgentByOmega({
+            name: args.name !== undefined ? String(args.name) : '',
+            description: args.description !== undefined ? String(args.description) : '',
+            instruction: args.instruction !== undefined ? String(args.instruction) : '',
+            avatar: args.avatar !== undefined ? String(args.avatar) : undefined,
+            provider: args.provider ? String(args.provider) : undefined,
+            model: args.model !== undefined ? String(args.model) : undefined,
+            team: args.team === null || args.team === undefined ? null : (args.team ? String(args.team) : null),
+            position: args.position === null || args.position === undefined ? null : (args.position ? String(args.position) : null),
+            temperature: typeof args.temperature === 'number' ? args.temperature : undefined,
+            maxTokens: typeof args.maxTokens === 'number' ? args.maxTokens : undefined,
+            domain: args.domain ? String(args.domain) : undefined,
+            capable: args.capable ? String(args.capable) : undefined,
+            tools: Array.isArray(args.tools) ? args.tools.map((t: unknown) => String(t)) : undefined,
+          })
+          result = created.success
+            ? {
+                success: true,
+                agent: created.agent,
+                message: `Đã tạo agent "${created.agent?.name}" — hiện trong module Agents. Agents khác thấy agent này trong Agent Roster (điều động qua dispatch_agent).`,
+              }
+            : { success: false, error: created.error || 'Tạo agent thất bại' }
+        } catch (err) {
+          result = { success: false, error: `create_agent lỗi: ${err instanceof Error ? err.message : String(err)}` }
+        }
+        break
+      }
+      // (3) Omega Dispatcher — điều động agent BẤT KỲ: tạm thời (task) hoặc
+      //     lâu dài (vào team). Token sub-agent báo về qua result.tokensUsed.
+      case 'dispatch_agent': {
+        if (!isFlagEnabled('ENABLE_SUBAGENT_DELEGATE')) {
+          return {
+            success: false,
+            result: 'dispatch_agent tool is disabled (set ENABLE_SUBAGENT_DELEGATE=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
+        try {
+          const { dispatchAgentByOmega } = await import('@/lib/omega-orchestrator')
+          const duration = String(args.duration ?? 'task') === 'long_term' ? 'long_term' : 'task'
+          const dispatched = await dispatchAgentByOmega({
+            agent: args.agent ?? args.agentName,
+            task: args.task ? String(args.task) : undefined,
+            context: args.context ? String(args.context) : undefined,
+            duration,
+            team: args.team === undefined ? undefined : (args.team === null ? null : String(args.team)),
+            position: args.position === undefined ? undefined : (args.position === null ? null : String(args.position)),
+            parentAgentName: context?.agentName || 'Omega',
+            sessionId: context?.sessionId ?? null,
+          })
+          result = {
+            success: dispatched.success,
+            mode: dispatched.mode,
+            agent: dispatched.agent,
+            report: dispatched.report,
+            assignment: dispatched.assignment,
+            tokensUsed: dispatched.tokensUsed,
+            iterations: dispatched.iterations,
+            toolCalls: dispatched.toolCalls,
+            endedBy: dispatched.endedBy,
+            error: dispatched.error,
+            hint: dispatched.success
+              ? undefined
+              : 'Điều động thất bại — kiểm tra tên agent trong Agent Roster, hoặc tự làm trực tiếp bằng tools của mình.',
+          }
+        } catch (err) {
+          result = { success: false, error: `dispatch_agent lỗi: ${err instanceof Error ? err.message : String(err)}` }
         }
         break
       }

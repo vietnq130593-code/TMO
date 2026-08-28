@@ -28,6 +28,11 @@ import { recallMemories, extractMemoriesFromConversation, saveChatMessages, getU
 // inject digest "agent đã làm gì gần đây" vào system prompt
 import { addToWorkingMemory, getWorkingMemory, getRecentWorkingMemory } from '@/lib/memory-tiers'
 import { getStandaloneAgentTools } from '@/lib/standalone-agents'
+// SESSION TOMBSTONE (user request 2026-09-08: "phiên chat đã bấm xóa phải xóa hẳn,
+// lần sau vào lại không còn") — session đã xóa KHÔNG được upsert/persist lại
+// (4 chỗ agentSession.upsert dưới đây từng khiến session "hồi sinh" khi user
+// xóa xong vẫn còn request chạy dở trong session đó).
+import { isSessionDeleted } from '@/lib/session-tombstone'
 // Agent Run Tracker — Thought Process + Todos + Progress realtime trong chat
 // (user request 2026-08-31: mọi agents hiển thị tư duy/tiến trình như Claude Code)
 // 2026-09-01: start/end/thought/cancel đã chuyển vào agent-goal-loop.ts (run
@@ -264,8 +269,8 @@ async function routeToOpenCode(
 
     if (!session) return null
 
-    // Track in SQLite
-    if (sessionId) {
+    // Track in SQLite (TOMBSTONE GUARD: session đã xóa → không upsert lại)
+    if (sessionId && !isSessionDeleted(sessionId)) {
       try {
         await db.agentSession.upsert({
           where: { sessionId },
@@ -365,8 +370,10 @@ export async function POST(request: NextRequest) {
     // lệnh save cuối request (casual/ReAct/fallback) giờ chỉ lưu assistant.
     // AWAIT để DB-history merge bên dưới chắc chắn thấy (tránh race khi user
     // gửi 2 lần nội dung giống nhau).
+    // TOMBSTONE GUARD (2026-09-08): session đã bị user xóa → KHÔNG lưu gì nữa
+    // (phiên đã xóa = xóa hẳn, không hồi sinh).
     // ============================================
-    if (sessionId && lastUserContent) {
+    if (sessionId && lastUserContent && !isSessionDeleted(sessionId)) {
       try {
         await db.chatMessage.create({ data: { sessionId, role: 'user', content: lastUserContent } })
         db.agentSession
@@ -637,6 +644,19 @@ export async function POST(request: NextRequest) {
       console.warn('[OpenClaw Chat] Capability probe failed (fail-open):', capErr instanceof Error ? capErr.message : String(capErr))
     }
 
+    // AGENT ROSTER (user request 2026-09-08: "các Agents cần nắm được kỹ năng
+    // chuyên môn của nhau, xác định khi cần có thể gọi Agents có kỹ năng chuyên
+    // môn tốt hơn") — danh bạ đồng nghiệp inject vào system prompt MỌI agents:
+    // ai giỏi gì + cách gọi (escalate_problem → Omega / delegate_task Code Team /
+    // dispatch_agent mọi agent). Fail-open: DB lỗi → bỏ qua block.
+    try {
+      const { buildAgentRosterPromptBlock } = await import('@/lib/agent-roster')
+      const rosterBlock = await buildAgentRosterPromptBlock(agentProfileName || undefined)
+      if (rosterBlock) systemPrompt += `\n${rosterBlock}`
+    } catch (rosterErr) {
+      console.warn('[OpenClaw Chat] Agent roster injection failed (fail-open):', rosterErr instanceof Error ? rosterErr.message : String(rosterErr))
+    }
+
     if (agentInstruction && typeof agentInstruction === 'string' && agentInstruction.trim()) {
       systemPrompt = agentInstruction.trim() + '\n\n--- Base System Prompt ---\n' + systemPrompt
     }
@@ -815,8 +835,28 @@ export async function POST(request: NextRequest) {
       console.log(`[OpenClaw Chat] Goal-driven loop: Agent using own provider/model (${agentProvider}/${agentModel})`)
 
       try {
-        // Determine agent tools from standalone agents definition
-        const agentTools = agentProfileName ? getStandaloneAgentTools(agentProfileName) : []
+        // Determine agent tools — DB-first (user request 2026-09-08 Agent Factory):
+        //   1. AgentProfile.tools (JSON) — agent do Omega create_agent tạo có toolset riêng
+        //   2. Standalone definition (Omega hardcoded whitelist)
+        //   3. [] — agent custom không khai báo tools → MỌI tool đều được phép
+        //      (goal loop: agentTools.length===0 → không filter)
+        let agentTools = agentProfileName ? getStandaloneAgentTools(agentProfileName) : []
+        if (agentProfileId) {
+          try {
+            const dbProfile = await db.agentProfile.findUnique({
+              where: { id: agentProfileId },
+              select: { tools: true },
+            })
+            if (dbProfile?.tools) {
+              const parsed = JSON.parse(dbProfile.tools)
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                agentTools = parsed.map((t: unknown) => String(t))
+              }
+            }
+          } catch (toolErr) {
+            console.warn('[OpenClaw Chat] DB tools resolve failed (fail-open → standalone def):', toolErr instanceof Error ? toolErr.message : String(toolErr))
+          }
+        }
 
         // GOAL-DRIVEN LOOP (2026-09-01): thay ReAct loop 8 vòng — chạy nhiều chu kỳ
         // PLAN → EXECUTE → VERIFY → EVALUATE (trọng tài độc lập) → DIAGNOSE+REPLAN
@@ -892,8 +932,8 @@ export async function POST(request: NextRequest) {
           } catch { /* non-blocking — todo hiển thị chỉ là UI progress */ }
         }
 
-        // Track session
-        if (sessionId) {
+        // Track session (TOMBSTONE GUARD: session đã xóa → không upsert lại)
+        if (sessionId && !isSessionDeleted(sessionId)) {
           try {
             await db.agentSession.upsert({
               where: { sessionId },
@@ -1053,8 +1093,8 @@ export async function POST(request: NextRequest) {
             addTokensUsed(gwTotalTokens, 'openclaw', undefined, data.model || model)
           }
 
-          // Update session in SQLite
-          if (sessionId) {
+          // Update session in SQLite (TOMBSTONE GUARD: session đã xóa → không upsert lại)
+          if (sessionId && !isSessionDeleted(sessionId)) {
             try {
               await db.agentSession.upsert({
                 where: { sessionId },
@@ -1153,7 +1193,8 @@ export async function POST(request: NextRequest) {
 
         // Track session (include agentProfileId if from an Agent)
         // NOTE: agentTemperature/agentMaxTokens are now passed to the local fallback via /api/query
-        if (sessionId) {
+        // TOMBSTONE GUARD: session đã xóa → không upsert lại
+        if (sessionId && !isSessionDeleted(sessionId)) {
           try {
             await db.agentSession.upsert({
               where: { sessionId },

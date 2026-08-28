@@ -25,6 +25,9 @@ import {
 } from '@/lib/agent-constants'
 import { ensureCodeTeamAgents, ensureMCPBridgeConfig } from '@/lib/code-team/agents'
 import { ensureStandaloneAgents } from '@/lib/standalone-agents'
+// AGENT ROSTER (user request 2026-09-08): sau khi tạo/sửa/xóa agent → invalidate
+// roster cache để danh bạ kỹ năng inject vào system prompt của agents cập nhật.
+import { invalidateRosterCache } from '@/lib/agent-roster'
 
 // ==================== DB RETRY HELPER ====================
 
@@ -187,7 +190,7 @@ export async function POST(request: NextRequest) {
     const {
       name, description, instruction, domain, capable,
       provider, model, temperature, maxTokens,
-      team, position, avatar,
+      team, position, avatar, tools,
     } = body
 
     // Validate required fields
@@ -271,8 +274,14 @@ export async function POST(request: NextRequest) {
         team: team || null,
         position: position || null,
         avatar: avatar || '🤖',
+        // TOOLSET (user request 2026-09-08 — Agent Factory): whitelist tools riêng
+        // cho agent (JSON string). UI/Omega create_agent có thể chỉ định; null =
+        // mọi tool đều được phép (hành vi cũ).
+        tools: Array.isArray(tools) && tools.length > 0 ? JSON.stringify(tools.map((t: unknown) => String(t))) : null,
       },
     })
+
+    invalidateRosterCache()
 
     return NextResponse.json({ agent }, { status: 201 })
   } catch (err) {
@@ -290,7 +299,7 @@ export async function PUT(request: NextRequest) {
     const body = await request.json()
     const { id, name, description, instruction, domain, capable,
       provider, model, temperature, maxTokens,
-      team, position, avatar, enabled } = body
+      team, position, avatar, enabled, tools } = body
 
     if (!id) {
       return NextResponse.json({ error: 'Agent ID là bắt buộc' }, { status: 400 })
@@ -428,11 +437,20 @@ export async function PUT(request: NextRequest) {
     if (avatar !== undefined) updateData.avatar = avatar
     if (enabled !== undefined) updateData.enabled = enabled
 
+    // TOOLSET (user request 2026-09-08 — Agent Factory): cập nhật whitelist tools
+    if (tools !== undefined) {
+      updateData.tools = Array.isArray(tools) && tools.length > 0
+        ? JSON.stringify(tools.map((t: unknown) => String(t)))
+        : null
+    }
+
     // Apply update
     const updated = await db.agentProfile.update({
       where: { id },
       data: updateData,
     })
+
+    invalidateRosterCache()
 
     return NextResponse.json({ agent: updated })
   } catch (err) {
@@ -473,6 +491,8 @@ export async function DELETE(request: NextRequest) {
 
     // Delete the agent
     await db.agentProfile.delete({ where: { id } })
+
+    invalidateRosterCache()
 
     return NextResponse.json({
       success: true,

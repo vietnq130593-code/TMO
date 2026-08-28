@@ -9,15 +9,19 @@
  *
  *   PARENT (goal loop, vd Omega)
  *     └─ tool_call: delegate_task({agent: "BOLT", task: "..."})
- *          └─ runSubAgent() — mini ReAct loop IN-PROCESS:
- *              · resolve agent (APEX/CORTEX/BOLT/SENTINEL/CATALYST) từ DB/hardcoded
+ *        hoặc dispatch_agent({agent: "BẤT KỲ AGENT", task: "..."})
+ *          └─ runSubAgentForProfile() — mini ReAct loop IN-PROCESS:
+ *              · profile do caller resolve (Code Team qua resolveAgent,
+ *                custom/Omega-created qua DB AgentProfile theo tên)
  *              · tối đa SUBAGENT_MAX_ITERATIONS vòng LLM + tool thật
  *              · token budget RIÊNG (SUBAGENT_TOKEN_BUDGET) — onTokens báo lên
  *                parent để cộng vào budget tổng (không thể chạy tuột)
  *              · context của sub-agent KHÔNG đổ vào parent — parent chỉ nhận
  *                BÁO CÁO NÉN (≤ ~3500 chars): đã làm · bằng chứng · còn thiếu
- *              · DEPTH GUARD: sub-agent KHÔNG có delegate_task trong whitelist
- *                → không bao giờ đệ quy vô hạn
+ *              · DEPTH GUARD: sub-agent KHÔNG có delegate_task/dispatch_agent/
+ *                create_agent trong whitelist → không bao giờ đệ quy vô hạn.
+ *                (escalate_problem ĐƯỢC GIỮ — sub-agent kẹt có thể hỏi Omega
+ *                tư vấn; consult là 1 LLM call đơn, không đệ quy.)
  *
  * Vì sao thiết kế này giúp budget 200k:
  *   - Parent context không phình theo lượng file sub-agent đọc (isolation)
@@ -62,6 +66,25 @@ const POSITION_BY_NAME: Record<string, string> = {
   CATALYST: 'G3',
 }
 
+/**
+ * DEPTH GUARD — sub-agent KHÔNG BAO GIỜ có các tool điều phối này (đệ quy
+ * vô hạn: agent A delegate B, B delegate C...). escalate_problem được GIỮ —
+ * consult Omega là 1 LLM call đơn (không chạy tool, không đệ quy).
+ */
+export const DEPTH_GUARD_TOOLS = ['delegate_task', 'dispatch_agent', 'create_agent']
+
+/**
+ * Toolset mặc định khi profile KHÔNG khai báo tools (agent custom cũ trong DB
+ * không có field tools) — generalist an toàn + escalate_problem.
+ */
+export const DEFAULT_SUBAGENT_TOOLS = [
+  'file_read', 'file_list', 'grep', 'file_edit', 'file_multi_edit',
+  'shell', 'run_tests', 'lint', 'type_check', 'get_diagnostics',
+  'tavily', 'serper', 'jina', 'knowledge_search', 'knowledge_graph',
+  'todo_write', 'todo_read', 'list_skills', 'read_skill',
+  'create_custom_tool', 'list_custom_tools', 'escalate_problem',
+]
+
 /** Danh sách agent có thể delegate (cho tool description + validate) */
 export const DELEGATABLE_AGENTS: Array<{ name: string; role: string; bestFor: string }> = [
   { name: 'APEX', role: 'TL — Nhìn & Điều hướng', bestFor: 'phân tích yêu cầu phức tạp, routing, code UI fast-track, verify kết quả tổng thể' },
@@ -100,6 +123,19 @@ export interface SubAgentOutcome {
   error?: string
 }
 
+/** Profile agent chạy như sub-agent — do caller resolve (Code Team hoặc DB) */
+export interface SubAgentProfile {
+  id?: string
+  name: string
+  instruction: string
+  provider: string
+  model: string
+  temperature: number
+  maxTokens: number
+  /** Whitelist tools của sub-agent — rỗng → DEFAULT_SUBAGENT_TOOLS */
+  tools: string[]
+}
+
 // ==================== HELPERS ====================
 
 /** Timeout wrapper (giúp sub-agent không treo quá SUBAGENT_TIMEOUT_MS) */
@@ -131,18 +167,19 @@ function compactArgs(args: Record<string, unknown>, maxLen = 100): string {
   }
 }
 
-// ==================== MAIN ENTRY ====================
+// ==================== GENERIC SUB-AGENT RUNNER ====================
 
 /**
- * Chạy 1 sub-agent (Code Team) cho task được delegate.
+ * Chạy 1 sub-agent THEO PROFILE (generic — Code Team, custom, hoặc agent do
+ * Omega tạo). Đây là lõi mini ReAct loop với context isolation + depth guard.
  *
- * @param params.position position đã chuẩn hoá ('TL' | 'G1' | 'G2-A' | 'G2-B' | 'G3')
- * @param params.task     mô tả nhiệm vụ delegate (bắt buộc)
- * @param params.context  context bổ sung từ parent (file liên quan, ràng buộc...)
- * @param params.onTokens callback báo token tiêu thụ về PARENT budget
+ * @param params.profile   profile agent đã resolve (provider/model/tools...)
+ * @param params.task      mô tả nhiệm vụ delegate (bắt buộc)
+ * @param params.context   context bổ sung từ parent (file liên quan, ràng buộc...)
+ * @param params.onTokens  callback báo token tiêu thụ về PARENT budget
  */
-export async function runSubAgent(params: {
-  position: string
+export async function runSubAgentForProfile(params: {
+  profile: SubAgentProfile
   task: string
   context?: string
   parentAgentName?: string
@@ -150,7 +187,7 @@ export async function runSubAgent(params: {
   onTokens?: (tokens: number) => void
 }): Promise<SubAgentOutcome> {
   const {
-    position,
+    profile,
     task,
     context,
     parentAgentName = 'parent-agent',
@@ -189,32 +226,31 @@ export async function runSubAgent(params: {
   const isCancelled = () => isSessionCancelled(sessionId)
 
   try {
-    // ===== 1. Resolve agent (DB-first → hardcoded) =====
-    const agent = await resolveAgent(position)
-    if (agent.source === 'missing' || !agent.provider || !agent.model) {
+    if (!profile.provider || !profile.model) {
       return {
         success: false,
-        agent: `Unknown-${position}`,
-        position,
+        agent: profile.name,
+        position: '-',
         report: '',
         tokensUsed: 0,
         iterations: 0,
         toolCalls: 0,
         endedBy: 'error',
         evidence: [],
-        error: `Agent position "${position}" không resolve được (missing) — kiểm tra Agents module.`,
+        error: `Agent "${profile.name}" thiếu provider/model — không chạy sub-agent được.`,
       }
     }
 
-    // DEPTH GUARD: sub-agent KHÔNG BAO GIỜ có delegate_task → không đệ quy
-    const allowedTools = agent.tools.filter(t => t !== 'delegate_task')
+    // DEPTH GUARD: strip tool điều phối khỏi whitelist sub-agent (chống đệ quy)
+    const baseTools = profile.tools.length > 0 ? profile.tools : DEFAULT_SUBAGENT_TOOLS
+    const allowedTools = baseTools.filter(t => !DEPTH_GUARD_TOOLS.includes(t))
 
-    console.log(`[SubAgent] ${parentAgentName} → ${agent.name} (${position}): "${task.slice(0, 100)}" (max ${SUBAGENT_MAX_ITERATIONS} vòng, budget ${SUBAGENT_TOKEN_BUDGET} tokens)`)
+    console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${SUBAGENT_MAX_ITERATIONS} vòng, budget ${SUBAGENT_TOKEN_BUDGET} tokens, ${allowedTools.length} tools)`)
 
-    // ===== 2. Mini ReAct loop =====
-    const systemPrompt = agent.instruction || `Bạn là ${agent.name} — agent chuyên trách của Code Team. Hoàn thành nhiệm vụ được delegate một cách tự chủ, ngắn gọn.`
+    // ===== Mini ReAct loop =====
+    const systemPrompt = profile.instruction || `Bạn là ${profile.name} — agent chuyên trách. Hoàn thành nhiệm vụ được delegate một cách tự chủ, ngắn gọn.`
     const transcript: Array<{ role: 'user' | 'assistant' | 'tool'; content: string }> = [
-      { role: 'user', content: buildDelegationPrompt(agent.name, task, context, allowedTools, parentAgentName) },
+      { role: 'user', content: buildDelegationPrompt(profile.name, task, context, allowedTools, parentAgentName) },
     ]
 
     const loopPromise = (async () => {
@@ -236,15 +272,15 @@ export async function runSubAgent(params: {
         let result: Awaited<ReturnType<typeof callLLMForAgent>> | null = null
         try {
           result = await withTimeout(
-            callLLMForAgent(formatted, { provider: agent.provider, model: agent.model }, systemPrompt, {
-              agentId: agent.id || `code-team:${position}`,
-              agentName: `${agent.name} (sub-agent)`,
-              temperature: agent.temperature,
-              maxTokens: Math.min(agent.maxTokens, 4096),
+            callLLMForAgent(formatted, { provider: profile.provider, model: profile.model }, systemPrompt, {
+              agentId: profile.id || `subagent:${profile.name}`,
+              agentName: `${profile.name} (sub-agent)`,
+              temperature: profile.temperature,
+              maxTokens: Math.min(profile.maxTokens, 4096),
               abortCheck: isCancelled,
             }),
             Math.max(60_000, SUBAGENT_TIMEOUT_MS - (Date.now() - startedAt)),
-            `SubAgent ${agent.name} LLM`,
+            `SubAgent ${profile.name} LLM`,
           )
         } catch (err) {
           state.errorMessage = err instanceof Error ? err.message : String(err)
@@ -270,16 +306,16 @@ export async function runSubAgent(params: {
 
         for (const tc of toolCalls) {
           if (isCancelled()) break
-          // Sub-agent bị giới hạn trong whitelist CỦA NÓ (đã loại delegate_task)
+          // Sub-agent bị giới hạn trong whitelist CỦA NÓ (đã strip depth-guard tools)
           if (!allowedTools.includes(tc.name)) {
-            transcript.push({ role: 'tool', content: JSON.stringify({ tool: tc.name, success: false, result: `Tool "${tc.name}" not available for sub-agent ${agent.name}.` }) })
+            transcript.push({ role: 'tool', content: JSON.stringify({ tool: tc.name, success: false, result: `Tool "${tc.name}" not available for sub-agent ${profile.name}.` }) })
             evidence.push(`${tc.name}: bị từ chối (ngoài whitelist)`)
             continue
           }
           toolCallCount++
           let toolResult: { success: boolean; result: unknown }
           try {
-            toolResult = await executeTool(tc.name, tc.args, { agentName: agent.name, sessionId })
+            toolResult = await executeTool(tc.name, tc.args, { agentName: profile.name, sessionId })
           } catch (err) {
             toolResult = { success: false, result: { error: err instanceof Error ? err.message : String(err) } }
           }
@@ -305,7 +341,7 @@ export async function runSubAgent(params: {
       }
     })()
 
-    await withTimeout(loopPromise, SUBAGENT_TIMEOUT_MS, `SubAgent ${agent.name} loop`)
+    await withTimeout(loopPromise, SUBAGENT_TIMEOUT_MS, `SubAgent ${profile.name} loop`)
       .catch(err => {
         if (state.endedBy === 'error' && !state.errorMessage) state.errorMessage = err instanceof Error ? err.message : String(err)
         state.endedBy = state.endedBy === 'concluded' ? state.endedBy : 'timeout'
@@ -313,7 +349,7 @@ export async function runSubAgent(params: {
 
     if (isCancelled()) state.endedBy = 'cancelled'
 
-    // ===== 3. Báo cáo NÉN trả về parent =====
+    // ===== Báo cáo NÉN trả về parent =====
     let report = state.lastContent
     const needWrapUp = state.forceWrapUp || state.endedBy === 'iteration_limit' || state.endedBy === 'token_budget' || state.endedBy === 'timeout' || (state.endedBy === 'error' && (state.lastContent || evidence.length > 0))
 
@@ -324,18 +360,18 @@ export async function runSubAgent(params: {
         const wrap = await withTimeout(
           callLLMForAgent(
             buildWrapUpPrompt(task, state.lastContent, evidence, state.wrapUpReason || state.endedBy),
-            { provider: agent.provider, model: agent.model },
-            `Bạn là ${agent.name}. Viết báo cáo tổng kết NGẮN GỌN theo đúng format yêu cầu.`,
+            { provider: profile.provider, model: profile.model },
+            `Bạn là ${profile.name}. Viết báo cáo tổng kết NGẮN GỌN theo đúng format yêu cầu.`,
             {
-              agentId: agent.id || `code-team:${position}`,
-              agentName: `${agent.name} (sub-agent wrap-up)`,
+              agentId: profile.id || `subagent:${profile.name}`,
+              agentName: `${profile.name} (sub-agent wrap-up)`,
               temperature: 0.3,
               maxTokens: 900,
               abortCheck: isCancelled,
             },
           ),
           120_000,
-          `SubAgent ${agent.name} wrap-up`,
+          `SubAgent ${profile.name} wrap-up`,
         )
         if (wrap?.content) {
           addTokens(wrap.tokensUsed)
@@ -347,7 +383,7 @@ export async function runSubAgent(params: {
     if (!report) {
       // Fallback cuối: dựng báo cáo deterministic từ evidence
       report = [
-        `**${agent.name} (${position}) — kết quả delegate**`,
+        `**${profile.name} — kết quả delegate**`,
         state.endedBy === 'error' ? `Lỗi: ${state.errorMessage}` : `Kết thúc: ${state.endedBy}`,
         evidence.length > 0 ? `**Tool đã chạy:**\n${evidence.slice(-15).map(e => `- ${e}`).join('\n')}` : '(không có tool call nào)',
       ].join('\n\n')
@@ -359,8 +395,8 @@ export async function runSubAgent(params: {
 
     const outcome: SubAgentOutcome = {
       success: state.endedBy === 'concluded' || (state.endedBy !== 'error' && evidence.length > 0),
-      agent: agent.name,
-      position,
+      agent: profile.name,
+      position: '-',
       report,
       tokensUsed,
       iterations,
@@ -370,15 +406,15 @@ export async function runSubAgent(params: {
       error: state.endedBy === 'error' ? state.errorMessage : undefined,
     }
 
-    console.log(`[SubAgent] ${agent.name} xong: ${state.endedBy} — ${iterations} vòng, ${toolCallCount} tool calls, ${tokensUsed} tokens, ${Math.round((Date.now() - startedAt) / 1000)}s`)
+    console.log(`[SubAgent] ${profile.name} xong: ${state.endedBy} — ${iterations} vòng, ${toolCallCount} tool calls, ${tokensUsed} tokens, ${Math.round((Date.now() - startedAt) / 1000)}s`)
     return outcome
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err)
-    console.warn(`[SubAgent] Delegate "${position}" failed:`, errorMessage)
+    console.warn(`[SubAgent] Delegate "${profile.name}" failed:`, errorMessage)
     return {
       success: false,
-      agent: `Unknown-${position}`,
-      position,
+      agent: profile.name,
+      position: '-',
       report: '',
       tokensUsed,
       iterations,
@@ -390,6 +426,61 @@ export async function runSubAgent(params: {
   }
 }
 
+// ==================== CODE TEAM ENTRY (legacy — delegate_task) ====================
+
+/**
+ * Chạy 1 sub-agent CODE TEAM (APEX/CORTEX/BOLT/SENTINEL/CATALYST) cho task
+ * được delegate — giữ tương thích ngược với delegate_task.
+ */
+export async function runSubAgent(params: {
+  position: string
+  task: string
+  context?: string
+  parentAgentName?: string
+  sessionId?: string | null
+  onTokens?: (tokens: number) => void
+}): Promise<SubAgentOutcome> {
+  const { position, task, context, parentAgentName = 'parent-agent', sessionId = null, onTokens } = params
+
+  // ===== 1. Resolve agent (DB-first → hardcoded) =====
+  const agent = await resolveAgent(position)
+  if (agent.source === 'missing' || !agent.provider || !agent.model) {
+    return {
+      success: false,
+      agent: `Unknown-${position}`,
+      position,
+      report: '',
+      tokensUsed: 0,
+      iterations: 0,
+      toolCalls: 0,
+      endedBy: 'error',
+      evidence: [],
+      error: `Agent position "${position}" không resolve được (missing) — kiểm tra Agents module.`,
+    }
+  }
+
+  // ===== 2. Chạy generic runner =====
+  const outcome = await runSubAgentForProfile({
+    profile: {
+      id: agent.id,
+      name: agent.name,
+      instruction: agent.instruction,
+      provider: agent.provider,
+      model: agent.model,
+      temperature: agent.temperature,
+      maxTokens: agent.maxTokens,
+      tools: agent.tools,
+    },
+    task,
+    context,
+    parentAgentName,
+    sessionId,
+    onTokens,
+  })
+  // Giữ position trong outcome cho delegate_task legacy (UI/logs dùng)
+  return { ...outcome, position }
+}
+
 // ==================== PROMPTS ====================
 
 function buildDelegationPrompt(
@@ -399,6 +490,7 @@ function buildDelegationPrompt(
   allowedTools: string[],
   parentAgentName: string,
 ): string {
+  const canEscalate = allowedTools.includes('escalate_problem')
   return `Bạn (${agentName}) được ${parentAgentName} DELEGATE một nhiệm vụ tự chủ. Làm việc ĐỘC LẬP — không hỏi lại parent.
 
 NHIỆM VỤ:
@@ -409,6 +501,7 @@ TOOLS BẠN ĐƯỢC DÙNG: ${allowedTools.join(', ') || '(none — trả lời 
 QUY TẮC:
 - Dùng tools thật để đọc/sửa/chạy — không đoán kết quả file/lệnh.
 - Mỗi vòng tối đa vài tool calls; ưu tiên hành động trực tiếp.
+${canEscalate ? '- Nếu BẾ TẮC (tool fail lặp lại / không rõ hướng giải): tool_call: escalate_problem({"problem": "...", "context": "...", "attempted": "..."}) → Omega orchestrator sẽ tư vấn giải pháp.' : ''}
 - Khi xong (hoặc không làm tiếp được), viết BÁO CÁO ≤ 300 từ theo format:
   1. ĐÃ LÀM: từng việc + bằng chứng tool (tên tool + kết quả ngắn: file:line, pass/fail, số lỗi)
   2. CÒN THIẾU / CHƯA XÁC ĐỊNH: thành thật — KHÔNG tuyên bố hoàn thành gì thiếu bằng chứng

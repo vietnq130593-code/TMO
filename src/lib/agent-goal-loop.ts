@@ -137,7 +137,7 @@ const VERIFY_TOOLS = new Set(['run_tests', 'lint', 'type_check', 'test_coverage'
 /** [C] Đọc lại kết quả (file_read/grep sau khi sửa) cũng là kiểm định */
 const READBACK_TOOLS = new Set(['file_read', 'grep'])
 /** [C] Tool sửa đổi — sau những tool này PHẢI có kiểm định lại trước khi kết luận */
-const MODIFY_TOOLS = new Set(['file_edit', 'file_multi_edit', 'file_delete', 'mkdir', 'shell', 'run_bg', 'git_commit', 'delegate_task'])
+const MODIFY_TOOLS = new Set(['file_edit', 'file_multi_edit', 'file_delete', 'mkdir', 'shell', 'run_bg', 'git_commit', 'delegate_task', 'dispatch_agent'])
 /** [D] Tool verify được cap context lớn hơn (cần thấy đủ kết quả test/lint/tsc) */
 const VERIFY_RESULT_CHARS = 6000
 /**
@@ -197,6 +197,8 @@ export interface GoalLoopResult {
     /** [F] Số lần delegate cho sub-agent (Code Team) + token sub-agent tiêu thụ */
     delegations?: number
     subagentTokens?: number
+    /** [G] Số lần auto-escalate hỏi Omega orchestrator (nhận diện bế tắc sớm) */
+    escalations?: number
   }
 }
 
@@ -271,6 +273,29 @@ function buildDelegationProtocol(): string {
 - KHÔNG delegate việc 1-2 bước đơn giản — tự làm nhanh hơn.
 - Báo cáo sub-agent quay về dạng NÉN (đã làm · bằng chứng · còn thiếu) — ĐỌC kỹ "còn thiếu". Với kết quả QUAN TRỌNG, tự KIỂM ĐỊNH LẠI bằng tool của bạn (file_read/lint/type_check) trước khi kết luận.
 - Token sub-agent tiêu thụ cộng vào budget của bạn — scope task rõ ràng, không delegate task mờ hồ to đùng.`
+}
+
+/**
+ * [G] OMEGA ORCHESTRATION protocol (user request 2026-09-08) — chỉ append khi
+ * agent CÓ tool phối hợp (escalate_problem / dispatch_agent / create_agent).
+ * Agent bất kỳ gặp vấn đề (hoặc nhận diện rủi ro sớm) escalate về Omega —
+ * orchestrator phân tích + đề xuất giải pháp tốt nhất.
+ */
+function buildOrchestrationProtocol(hasDispatch: boolean, hasCreate: boolean): string {
+  const lines: string[] = []
+  lines.push('')
+  lines.push('🧠 PHỐI HỢP MULTI-AGENT (Omega orchestrator):')
+  lines.push('- Gặp vấn đề / kẹt / lặp lỗi: tool_call: escalate_problem({"problem": "vấn đề cụ thể", "context": "...", "attempted": "đã thử gì", "severity": "low|medium|high"}) → OMEGA phân tích căn nguyên + cân nhắc các phương án → trả TƯ VẤN TỐT NHẤT (có thể kèm: agent nào nên xử lý, agent mới cần tạo).')
+  lines.push('- NHẬN DIỆN SỚM (quan trọng): tool fail 2 lần cùng lỗi / cùng hành động lặp lại / task cần chuyên môn ngoài vòng của bạn (đối chiếu Agent Roster) → escalate NGAY khi có dấu hiệu đầu tiên, đừng chờ kẹt hẳn. Vấn đề được giải từ trước rẻ hơn chữa sau.')
+  lines.push('- Escalate xong: LÀM THEO tư vấn của Omega (đổi cách tiếp cận / điều agent khác / dùng tool theo hướng dẫn mới) — không lặp lại cách cũ đã fail.')
+  if (hasDispatch) {
+    lines.push('- Điều động agent BẤT KỲ trong Agent Roster: tool_call: dispatch_agent({"agent": "TÊN", "task": "nhiệm vụ cụ thể", "context": "..."}) — agent chạy tự chủ, trả báo cáo nén (context của bạn không phình). Điều LÂU DÀI vào team: thêm {"duration": "long_term", "team": "code", "position": "G4"}.')
+  }
+  if (hasCreate) {
+    lines.push('- Hệ thống THIẾU agent có kỹ năng phù hợp (đã kiểm tra Agent Roster): tool_call: create_agent({"name": "...", "description": "mô tả vai trò", "instruction": "system prompt chi tiết", "model": "moonshotai/kimi-k3", "avatar": "🤖", "temperature": 0.7, "maxTokens": 4096, "tools": ["file_read", "..."]}) — agent mới hiện trong module Agents, giao việc NGAY qua dispatch_agent.')
+  }
+  lines.push('- Token sub-agent (delegate_task/dispatch_agent) + consult Omega đều cộng vào budget của bạn — dùng có kỷ luật.')
+  return lines.join('\n')
 }
 
 /** Directive nối tiếp chu kỳ — chẩn đoán + kế hoạch mới từ evaluator */
@@ -732,7 +757,21 @@ export async function runGoalDrivenLoop(params: {
   } = params
 
   const startedAt = Date.now()
-  const fullSystemPrompt = systemPrompt + buildGoalProtocol() + (agentTools.includes('delegate_task') ? buildDelegationProtocol() : '')
+  // [G] Tool hiệu dụng cho protocol injection: agent KHÔNG khai báo whitelist
+  // (agentTools=[] → mọi tool đều được phép — agent custom/Omega-created) vẫn
+  // thấy delegation + orchestration protocol vì các tool đó thực sự gọi được.
+  const effectiveTools = agentTools.length > 0
+    ? agentTools
+    : ['delegate_task', 'escalate_problem', 'dispatch_agent', 'create_agent']
+  const hasDelegation = effectiveTools.includes('delegate_task')
+  const hasOrchestration = effectiveTools.includes('escalate_problem') || effectiveTools.includes('dispatch_agent') || effectiveTools.includes('create_agent')
+  const fullSystemPrompt =
+    systemPrompt +
+    buildGoalProtocol() +
+    (hasDelegation ? buildDelegationProtocol() : '') +
+    (hasOrchestration
+      ? buildOrchestrationProtocol(effectiveTools.includes('dispatch_agent'), effectiveTools.includes('create_agent'))
+      : '')
 
   // ===== Thought Process tracking — 1 run cho toàn bộ goal loop =====
   const runId = startAgentRun({
@@ -780,6 +819,10 @@ export async function runGoalDrivenLoop(params: {
   /** [F] Số lần delegate + token sub-agent tiêu thụ (báo cáo lên metadata) */
   let delegations = 0
   let subagentTokens = 0
+  /** [G] Số lần auto-escalate hỏi Omega + advisory đang chờ inject */
+  let escalations = 0
+  let omegaConsulted = false
+  let omegaAdvisory = ''
   let lastContent = ''
   /** Lỗi LLM gần nhất (result.error) — surface lên báo cáo cuối thay vì nuốt lỗi */
   let lastLlmError = ''
@@ -804,11 +847,14 @@ export async function runGoalDrivenLoop(params: {
     cyclesAttempted = cycle
 
     // Cycle > 1 → inject continuation directive (chẩn đoán + kế hoạch mới)
+    // [G] + advisory của Omega (nếu auto-escalate đã chạy ở cuối chu kỳ trước)
     if (cycle > 1 && lastVerdict) {
-      const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev)
+      const advisoryBlock = omegaAdvisory ? `\n\n${omegaAdvisory}\n(Theo tư vấn trên — ĐỔI CÁCH TIẾP CẬN, không lặp lại hành động đã fail.)` : ''
+      omegaAdvisory = ''
+      const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev) + advisoryBlock
       messages.push({ role: 'user', content: directive })
-      evidence.push({ cycle, kind: 'directive', text: `Chu kỳ ${cycle}: chẩn đoán "${lastVerdict.rootCause.slice(0, 120)}" → kế hoạch mới` })
-      recordAgentThought(agentSessionId, `🔄 Chu kỳ ${cycle}/${MAX_CYCLES} — chẩn đoán: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục`, totalIterations)
+      evidence.push({ cycle, kind: 'directive', text: `Chu kỳ ${cycle}: chẩn đoán "${lastVerdict.rootCause.slice(0, 120)}" → kế hoạch mới${advisoryBlock ? ' + tư vấn Omega orchestrator' : ''}` })
+      recordAgentThought(agentSessionId, `🔄 Chu kỳ ${cycle}/${MAX_CYCLES} — chẩn đoán: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}`, totalIterations)
     }
 
     // ===== INNER REACT LOOP (EXECUTE + VERIFY theo protocol) =====
@@ -918,14 +964,15 @@ export async function runGoalDrivenLoop(params: {
 
         const toolResult = await executeTool(tc.name, toolArgs, { agentName, sessionId: agentSessionId })
 
-        // [F] TOKEN ACCOUNTING cho tool có LLM nội bộ (delegate_task: sub-agent
-        // tiêu token thật) — cộng vào budget loop để không chạy tuột. Token này
+        // [F] TOKEN ACCOUNTING cho tool có LLM nội bộ (delegate_task /
+        // dispatch_agent: sub-agent tiêu token thật; escalate_problem: Omega
+        // consult) — cộng vào budget loop để không chạy tuột. Token này
         // KHÔNG được đếm ở đâu khác (executeTool không báo qua callLLMForAgent).
         if (toolResult.result && typeof toolResult.result === 'object') {
           const innerTokens = (toolResult.result as { tokensUsed?: unknown }).tokensUsed
           if (typeof innerTokens === 'number' && innerTokens > 0) {
             tokensUsed += innerTokens
-            if (tc.name === 'delegate_task') {
+            if (tc.name === 'delegate_task' || tc.name === 'dispatch_agent') {
               delegations++
               subagentTokens += innerTokens
             }
@@ -1061,14 +1108,88 @@ export async function runGoalDrivenLoop(params: {
     // [A] Budget cạn (đã evaluate xong) → dừng; final report sẽ dùng reserve
     if (budgetStop) break
 
+    // ===== [G] AUTO-ESCALATE #1 — chưa kiểm định được (dấu hiệu bế tắc chuẩn)
+    // User request 2026-09-08: "Agents khi vận hành... tốt nhất là TRƯỚC khi gặp
+    // vấn đề cần một cơ chế nhận diện được, từ đó đưa ra giải pháp từ trước".
+    // Chu kỳ >= 2 mà mục tiêu chưa đạt + KHÔNG có bằng chứng kiểm định → agent
+    // đang xoay vòng → hỏi Omega orchestrator 1 lần (budget-guarded), advisory
+    // inject vào continuation directive của chu kỳ kế tiếp.
+    if (
+      !omegaConsulted && cycle >= 2 && !verdict.verified && !verdict.complete &&
+      tokenLeft() > REPORT_RESERVE_TOKENS + 8_000 && !isCancelled()
+    ) {
+      try {
+        const { consultOmega } = await import('@/lib/omega-orchestrator')
+        const failedRecent = evidence
+          .filter(e => e.kind === 'tool' && e.success === false)
+          .slice(-5)
+          .map(e => `- ${e.tool}: ${e.text.slice(0, 120)}`)
+          .join('\n')
+        const consult = await consultOmega({
+          problem: `Agent "${agentName}" đã làm ${cycle} chu kỳ nhưng trọng tài độc lập kết luận: mục tiêu CHƯA hoàn thành và kết quả CHƯA được kiểm định bằng tool (verified=false). Căn nguyên theo trọng tài: ${verdict.rootCause || '(không rõ)'}. Còn thiếu: ${verdict.missing.join('; ') || '(không liệt kê)'}. Tool fail gần nhất:\n${failedRecent || '(không có tool fail nào)'}`,
+          context: `Mục tiêu: ${userMessage.slice(0, 800)}\nKế hoạch trọng tài đề xuất cho chu kỳ sau: ${verdict.nextPlan.join('; ') || '(trống)'}\nAgent này có tools: ${effectiveTools.slice(0, 30).join(', ')}`,
+          attempted: `Đã làm ${totalIterations} vòng / ${totalToolCalls} tool calls qua ${cycle} chu kỳ. Bằng chứng gần nhất: ${evidence.slice(-6).map(e => (e.kind === 'tool' ? `${e.tool}(${e.success ? '✓' : '✗'})` : 'directive')).join(', ')}`,
+          callingAgent: agentName,
+          severity: 'high',
+          autoTriggered: true,
+          abortCheck: isCancelled,
+          onTokens: (t) => { tokensUsed += t },
+        })
+        if (consult.success && consult.text) {
+          omegaConsulted = true
+          escalations++
+          omegaAdvisory = consult.text
+          evidence.push({ cycle, kind: 'directive', text: `AUTO-ESCALATE → Omega orchestrator tư vấn giải pháp (kèm cho chu kỳ ${cycle + 1})` })
+          recordAgentThought(agentSessionId, `🧠 AUTO-ESCALATE: chu kỳ ${cycle} chưa kiểm định được → đã hỏi Omega orchestrator (${consult.tokensUsed} tokens) — tư vấn sẽ dẫn đường chu kỳ ${cycle + 1}`, totalIterations)
+          console.log(`[GoalLoop] ${agentName} auto-escalate (unverified cycle ${cycle}) → Omega consult OK (${consult.tokensUsed} tokens)`)
+        }
+      } catch { /* fail-open — không escalate được thì theo kế hoạch evaluator */ }
+    }
+
     // ===== No-progress detection =====
     const fp = progressFingerprint(messages)
     if (cycle > 1 && fp === prevFingerprint) {
       noProgressCount++
       console.warn(`[GoalLoop] ${agentName} NO-PROGRESS: fingerprint chu kỳ ${cycle} trùng chu kỳ trước (lần ${noProgressCount})`)
       if (noProgressCount >= 1) {
-        stopReason = 'no_progress'
-        break
+        // ===== [G] AUTO-ESCALATE #2 — agent LẶP hành động không tiến triển =====
+        // Trước khi bỏ cuộc: hỏi Omega 1 lần duy nhất còn budget. Nếu Omega
+        // đưa được cách tiếp cận MỚI → cho 1 chu kỳ cuối theo tư vấn đó
+        // (reset noProgress), chỉ dừng hẳn khi consult fail/lặp lại lần 2.
+        if (!omegaConsulted && tokenLeft() > REPORT_RESERVE_TOKENS + 8_000) {
+          try {
+            const { consultOmega } = await import('@/lib/omega-orchestrator')
+            const consult = await consultOmega({
+              problem: `Agent "${agentName}" bị phát hiện LẶP LẠI hành động không tiến triển (fingerprint chu kỳ ${cycle} trùng chu kỳ trước — dấu hiệu bế tắc kinh điển: agent đang xoay vòng cùng cách tiếp cận đã fail).`,
+              context: `Mục tiêu: ${userMessage.slice(0, 800)}\nChẩn đoán trọng tài: ${lastVerdict?.rootCause || '(không rõ)'}\nCòn thiếu: ${lastVerdict?.missing.join('; ') || '(không liệt kê)'}\nAgent này có tools: ${effectiveTools.slice(0, 30).join(', ')}`,
+              attempted: `Nhật ký tool gần nhất: ${evidence.slice(-8).map(e => (e.kind === 'tool' ? `${e.tool}(${e.success ? '✓' : '✗'}) ${e.text.slice(0, 60)}` : 'directive').slice(0, 100)).join(' | ')}`,
+              callingAgent: agentName,
+              severity: 'high',
+              autoTriggered: true,
+              abortCheck: isCancelled,
+              onTokens: (t) => { tokensUsed += t },
+            })
+            if (consult.success && consult.text) {
+              omegaConsulted = true
+              escalations++
+              omegaAdvisory = consult.text
+              noProgressCount = 0
+              evidence.push({ cycle, kind: 'directive', text: 'NO-PROGRESS → Omega tư vấn cách tiếp cận MỚI — tiếp tục 1 chu kỳ theo tư vấn thay vì dừng' })
+              recordAgentThought(agentSessionId, `🧠 AUTO-ESCALATE (no-progress): Omega đưa cách tiếp cận mới — tiếp tục chu kỳ ${cycle + 1} theo tư vấn thay vì dừng`, totalIterations)
+              console.log(`[GoalLoop] ${agentName} no-progress → Omega consult OK (${consult.tokensUsed} tokens) — tiếp tục với kế hoạch mới`)
+              // KHÔNG break — cho 1 chu kỳ cuối theo advisory của Omega
+            } else {
+              stopReason = 'no_progress'
+              break
+            }
+          } catch {
+            stopReason = 'no_progress'
+            break
+          }
+        } else {
+          stopReason = 'no_progress'
+          break
+        }
       }
     } else {
       noProgressCount = 0
@@ -1143,7 +1264,7 @@ export async function runGoalDrivenLoop(params: {
   }
 
   const elapsedMs = Date.now() - startedAt
-  console.log(`[GoalLoop] ${agentName} kết thúc: ${stopReason} — ${cyclesAttempted} chu kỳ (${cyclesDone} hoàn thành), ${totalIterations} vòng, ${totalToolCalls} tool calls, ${tokensUsed} tokens, ${Math.round(elapsedMs / 1000)}s${usedFinalReport ? ' + final-report' : ''}${compressions > 0 ? `, ${compressions} lần nén context` : ''}${delegations > 0 ? `, ${delegations} lần delegate (${subagentTokens} tokens sub-agent)` : ''}`)
+  console.log(`[GoalLoop] ${agentName} kết thúc: ${stopReason} — ${cyclesAttempted} chu kỳ (${cyclesDone} hoàn thành), ${totalIterations} vòng, ${totalToolCalls} tool calls, ${tokensUsed} tokens, ${Math.round(elapsedMs / 1000)}s${usedFinalReport ? ' + final-report' : ''}${compressions > 0 ? `, ${compressions} lần nén context` : ''}${delegations > 0 ? `, ${delegations} lần delegate (${subagentTokens} tokens sub-agent)` : ''}${escalations > 0 ? `, ${escalations} lần auto-escalate Omega` : ''}`)
 
   // ===== WORKING MEMORY (HOT) — báo cáo kết thúc mục tiêu =====
   // Entry tóm tắt "đã làm gì, kết quả thế nào" — quan trọng nhất cho việc
@@ -1177,6 +1298,8 @@ export async function runGoalDrivenLoop(params: {
       /** [F] Delegation stats — số lần gọi sub-agent + token sub-agent tiêu thụ */
       delegations: delegations || undefined,
       subagentTokens: subagentTokens || undefined,
+      /** [G] Số lần auto-escalate hỏi Omega orchestrator khi phát hiện bế tắc */
+      escalations: escalations || undefined,
     },
   }
 }

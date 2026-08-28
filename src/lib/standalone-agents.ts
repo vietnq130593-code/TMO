@@ -145,6 +145,32 @@ GỌI CODE TEAM CHUYÊN TRÁCH (delegate_task) — dùng khi task CÓ 1 trong c�
 Ví dụ: tool_call: delegate_task({"agent": "BOLT", "task": "Implement API route X theo spec...", "context": "file liên quan: ..."})
 Sau khi nhận báo cáo: ĐỌC kỹ phần "còn thiếu" — nếu sub-agent chưa kiểm định, bạn tự kiểm định lại (lint/type_check/file_read) trước khi kết luận. Token sub-agent tiêu thụ được cộng vào budget của bạn — cân nhắc scope task trước khi delegate.
 
+═══════════════════════════════════════════
+🎛 ORCHESTRATOR & AGENT FACTORY (nhiệm vụ trung tâm — user request 2026-09-08)
+═══════════════════════════════════════════
+Bạn là ORCHESTRATOR (tổng chỉ huy) của toàn bộ hệ thống agents:
+
+1. TIẾP NHẬN VẤN ĐỀ TỪ AGENTS KHÁC:
+   - Khi agent khác gọi escalate_problem, bộ não tư vấn của bạn được kích hoạt để phân tích vấn đề + tính toán GIẢI PHÁP TỐT NHẤT (cân nhắc: agent tự khắc phục / điều agent khác / tạo agent mới / đổi cách tiếp cận).
+   - Khi tư vấn: nhìn AGENT ROSTER (danh bạ kỹ năng) để đề xuất đúng người — kèm lý do + bước cụ thể.
+
+2. TẠO AGENT MỚI (create_agent) — khi hệ thống THIẾU agent có kỹ năng phù hợp (đã kiểm tra Agent Roster):
+   tool_call: create_agent({"name": "TÊN", "description": "Mô tả vai trò", "instruction": "Hướng dẫn chi tiết — system prompt đầy đủ", "avatar": "🤖", "model": "moonshotai/kimi-k3", "team": null, "position": null, "temperature": 0.7, "maxTokens": 4096, "capable": "kỹ năng chính", "tools": ["file_read", "shell", ...]})
+   - Model: moonshotai/kimi-k3 | deepseek-ai/deepseek-v4-pro-0813 | deepseek-ai/deepseek-v4-flash-0731 | minimaxai/minimax-m3
+   - Team/vị trí: null (standalone) hoặc "code"/"research" + position (code: G4/G5 cho agent mới — TL/G1/G2-A/G2-B/G3 đã có hệ thống giữ; research: TL/G1/G2/G3/G4/G5)
+   - Temperature: 0.3 (kỹ thuật chặt) → 0.7 (cân bằng) → 1.0+ (sáng tạo)
+   - Lương token (maxTokens): 256-32768
+   - Agent mới hiện ngay trong module Agents → agents khác thấy trong Agent Roster → giao việc qua dispatch_agent.
+
+3. ĐIỀU ĐỘNG AGENT (dispatch_agent) — điều BẤT KỲ agent nào tham gia xử lý tác vụ:
+   - TẠM THỜI (1 task): tool_call: dispatch_agent({"agent": "TÊN", "task": "Nhiệm vụ cụ thể", "context": "..."})
+   - LÂU DÀI (vào team): tool_call: dispatch_agent({"agent": "TÊN", "duration": "long_term", "team": "code", "position": "G4", "task": "(tùy chọn) task chạy ngay sau khi điều"})
+   - Sub-agent chạy tự chủ, trả báo cáo NÉN — context của bạn KHÔNG phình. Đọc kỹ "còn thiếu" + tự kiểm định lại kết quả quan trọng.
+
+4. KHI PHÂN TÍCH VẤN ĐỀ (được escalate hoặc tự phát hiện):
+   - Chẩn đoán căn nguyên (không chỉ triệu chứng) → cân nhắc tối thiểu 2 phương án → chọn giải pháp TỐT NHẤT kèm lý do + bước thực hiện cụ thể.
+   - Ưu tiên: agent có chuyên môn đúng nhất trong roster > tạo agent mới (chỉ khi thật sự thiếu) > tự xử lý.
+
 TỰ VIẾT TOOL KHI THIẾU (create_custom_tool):
 - Nếu task cần function/tool mà chưa có (tính toán đặc biệt, convert format, gọi API lạ...) → TỰ VIẾT tool:
   tool_call: create_custom_tool({"name": "tool_name", "description": "...", "parameters": {"type":"object","properties":{...},"required":[...]}, "handlerCode": "function handler(args) { ... return result }"})
@@ -217,6 +243,15 @@ LEARNING & MEMORY
       // sub-agent chạy tự chủ, trả báo cáo NÉN → context Omega không phình
       // (tiết kiệm budget token vòng lặp mục tiêu).
       'delegate_task',
+      // OMEGA ORCHESTRATION (user request 2026-09-08):
+      // - escalate_problem: agent khác (và chính Omega) hỏi tư vấn khi gặp vấn đề
+      // - create_agent: Omega TỰ TẠO agent mới (avatar, tên, mô tả, instruction,
+      //   model, team, vị trí, temperature, lương token, toolset)
+      // - dispatch_agent: Omega ĐIỀU ĐỘNG agent bất kỳ — tạm thời (1 task) hoặc
+      //   lâu dài (điều vào team)
+      'escalate_problem',
+      'create_agent',
+      'dispatch_agent',
     ],
   },
 ]
@@ -277,6 +312,9 @@ async function _doStandaloneSeed(): Promise<void> {
         // code definition để LLM biết cú pháp gọi tool mới. Chỉ đụng instruction,
         // KHÔNG đụng provider/model/temperature user đã customize.
         // (2026-08-30) Thêm marker create_custom_tool — agents TỰ VIẾT tools.
+        // (2026-09-08) Thêm marker ORCHESTRATOR (dispatch_agent/create_agent/
+        // escalate_problem) — Omega làm tổng chỉ huy: nhận vấn đề từ agents,
+        // tự tạo agent mới, điều động agent bất kỳ tạm thời/lâu dài.
         if (existing.instruction && def.instruction.includes('git_push') && !existing.instruction.includes('git_push')) {
           try {
             await db.agentProfile.update({
@@ -294,6 +332,16 @@ async function _doStandaloneSeed(): Promise<void> {
               data: { instruction: def.instruction },
             })
             console.log(`[Standalone] Migrated ${def.name} instruction → new version (create_custom_tool docs)`)
+          } catch (migErr) {
+            console.warn(`[Standalone] Instruction migration failed for ${def.name}:`, migErr)
+          }
+        } else if (existing.instruction && def.instruction.includes('dispatch_agent') && !existing.instruction.includes('dispatch_agent')) {
+          try {
+            await db.agentProfile.update({
+              where: { name: def.name },
+              data: { instruction: def.instruction },
+            })
+            console.log(`[Standalone] Migrated ${def.name} instruction → new version (ORCHESTRATOR & AGENT FACTORY)`)
           } catch (migErr) {
             console.warn(`[Standalone] Instruction migration failed for ${def.name}:`, migErr)
           }

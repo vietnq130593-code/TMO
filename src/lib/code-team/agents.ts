@@ -55,7 +55,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'TL',
     avatar: '👑',
-    tools: ['opencode', 'knowledge_search', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'db_query', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools'],
+    tools: ['opencode', 'knowledge_search', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'db_query', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem'],
   },
   {
     name: 'CORTEX',
@@ -70,7 +70,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'G1',
     avatar: '🧠',
-    tools: ['knowledge_search', 'knowledge_graph', 'tavily', 'serper', 'jina', 'file_read', 'file_list', 'grep', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools'],
+    tools: ['knowledge_search', 'knowledge_graph', 'tavily', 'serper', 'jina', 'file_read', 'file_list', 'grep', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem'],
   },
   {
     name: 'BOLT',
@@ -85,7 +85,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'G2-A',
     avatar: '⚡',
-    tools: ['opencode', 'knowledge_search', 'file_read', 'file_edit', 'file_multi_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'browser_screenshot', 'mcp_call', 'start_preview', 'stop_preview', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools'],
+    tools: ['opencode', 'knowledge_search', 'file_read', 'file_edit', 'file_multi_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'browser_screenshot', 'mcp_call', 'start_preview', 'stop_preview', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem'],
   },
   {
     name: 'SENTINEL',
@@ -100,7 +100,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'G2-B',
     avatar: '🛡️',
-    tools: ['opencode', 'knowledge_search', 'file_read', 'file_edit', 'file_list', 'grep', 'get_diagnostics', 'run_tests', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_edit', 'lsp_diagnostics', 'lint', 'type_check', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools'],
+    tools: ['opencode', 'knowledge_search', 'file_read', 'file_edit', 'file_list', 'grep', 'get_diagnostics', 'run_tests', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_edit', 'lsp_diagnostics', 'lint', 'type_check', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem'],
   },
   {
     name: 'CATALYST',
@@ -115,7 +115,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'G3',
     avatar: '🔧',
-    tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'file_read', 'file_edit', 'file_multi_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools'],
+    tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'file_read', 'file_edit', 'file_multi_edit', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem'],
   },
 ]
 

@@ -11,6 +11,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { listSessions as gatewayListSessions } from '@/lib/openclaw'
 import { hasActiveRun } from '@/lib/agent-run-tracker'
+// SESSION TOMBSTONE (user request 2026-09-08): đánh dấu session đã xóa để chat
+// route KHÔNG upsert/persist lại (chống "hồi sinh" phiên đã xóa).
+import { markSessionDeleted, clearSessionTombstone } from '@/lib/session-tombstone'
 
 export const dynamic = 'force-dynamic'
 
@@ -84,6 +87,10 @@ export async function POST(request: NextRequest) {
     try {
       const body = await request.json().catch(() => ({}))
       const sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+
+      // Session mới — xóa tombstone (nếu id trùng — gần như không xảy ra vì
+      // sessionId sinh theo timestamp, nhưng đúng ngữ nghĩa tạo lại)
+      clearSessionTombstone(sessionId)
 
       const session = await db.agentSession.create({
         data: {
@@ -237,18 +244,56 @@ export async function DELETE(request: NextRequest) {
 
   if (action === 'delete' && sessionId) {
     try {
-      // Clean up all related records before deleting the session
-      // SmolabTask: auto-cascaded via onDelete: Cascade in schema
-      // ChatMessage, CodeTeamWorklog, CodeTeamSession: reference sessionId as plain string (no FK)
-      await db.$transaction([
+      // ============================================================
+      // HARD DELETE (user request 2026-09-08: "các phiên chat tôi đã bấm xóa
+      // phải xóa hẳn, lần sau vào lại không còn, chỉ những gì còn học từ đó
+      // thì giữ lại") — purge TOÀN BỘ dữ liệu scoped theo phiên chat:
+      //
+      // XÓA (thuộc về phiên chat):
+      //   - ChatMessage          — nội dung hội thoại
+      //   - CodeTeamWorklog/Session — nhật ký làm việc của team trong phiên
+      //   - SmolabTask           — background tasks của phiên (cascade sẵn nhưng
+      //                             xóa tường minh cho chắc)
+      //   - WorkingMemory        — HOT tier (raw working memory của phiên)
+      //   - Todo                 — Agent Tasks panel của phiên
+      //   - PendingEdit          — file edits chờ duyệt của phiên
+      //   - FsCheckpoint / Neo4jCheckpointDiff — checkpoints của phiên
+      //   - MemoryAccessLog      — log truy cập memory của phiên
+      //   - ToolMetric           — analytics tool chạy trong phiên
+      //   - AgentSession         — row phiên chat
+      //
+      // GIỮ (những gì HỌC được — user yêu cầu rõ):
+      //   - AgentMemory (WARM)   — ký ức dài hạn đã học từ phiên
+      //   - MemoryArchive (COLD) — bản nén ký ức
+      //   - LearningLog          — sự kiện học (feedback/insight/correction)
+      //   - AgentInsight / AgentCorrection / AgentPreference — tri thức tích lũy
+      //   - PendingWriteback     — tri thức đang chờ ghi vào KB
+      //
+      // Sau purge → markSessionDeleted() để chat route KHÔNG upsert/persist
+      // lại session này nữa (chống hồi sinh khi còn request chạy dở).
+      // ============================================================
+      const deleted = await db.$transaction([
         db.chatMessage.deleteMany({ where: { sessionId } }),
         db.codeTeamWorklog.deleteMany({ where: { sessionId } }),
         db.codeTeamSession.deleteMany({ where: { sessionId } }),
         db.smolabTask.deleteMany({ where: { sessionId } }),
+        db.workingMemory.deleteMany({ where: { sessionId } }),
+        db.todo.deleteMany({ where: { sessionId } }),
+        db.pendingEdit.deleteMany({ where: { sessionId } }),
+        db.fsCheckpoint.deleteMany({ where: { sessionId } }),
+        db.neo4jCheckpointDiff.deleteMany({ where: { sessionId } }),
+        db.memoryAccessLog.deleteMany({ where: { sessionId } }),
+        db.toolMetric.deleteMany({ where: { sessionId } }),
         db.agentSession.deleteMany({ where: { sessionId } }),
       ])
 
-      return NextResponse.json({ success: true, sessionId })
+      // Tombstone — mọi write sau này cho sessionId này bị chặn
+      markSessionDeleted(sessionId)
+
+      const totalDeleted = deleted.reduce((sum, r) => sum + r.count, 0)
+      console.log(`[Sessions] HARD DELETE session ${sessionId}: đã purge ${totalDeleted} bản ghi (chat messages, tasks, working memory, todos, checkpoints, metrics...) — GIỮ lại AgentMemory/MemoryArchive/LearningLog (những gì đã học)`)
+
+      return NextResponse.json({ success: true, sessionId, purgedRecords: totalDeleted })
     } catch (err) {
       return NextResponse.json(
         { error: 'Failed to delete session', details: err instanceof Error ? err.message : String(err) },

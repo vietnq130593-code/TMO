@@ -1384,6 +1384,18 @@ export async function runAgentStep(params: {
     console.warn('[Workflow] capability probe failed (non-blocking):', err instanceof Error ? err.message : String(err))
   }
 
+  // AGENT ROSTER (user request 2026-09-08: "các Agents cần nắm được kỹ năng
+  // chuyên môn của nhau, xác định khi cần có thể gọi Agents có kỹ năng tốt
+  // hơn") — parity với chat route: member Code Team cũng thấy danh bạ đồng
+  // nghiệp + cơ chế escalate_problem → Omega orchestrator tư vấn khi gặp vấn đề.
+  try {
+    const { buildAgentRosterPromptBlock } = await import('@/lib/agent-roster')
+    const rosterBlock = await buildAgentRosterPromptBlock(agent.name)
+    if (rosterBlock) systemPrompt += `\n${rosterBlock}`
+  } catch (err) {
+    console.warn('[Workflow] agent roster inject failed (non-blocking):', err instanceof Error ? err.message : String(err))
+  }
+
   // 2026-08-29 — AUTO-TODO TRACKING (long-running task progress): mỗi agent step
   // tự upsert 1 todo (idempotencyKey = sessionId:position:step) vào DB → UI panel
   // "Agent Tasks" trong tab Code hiển thị tiến độ workflow theo thời gian thực.

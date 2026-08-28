@@ -954,6 +954,14 @@ export async function saveChatMessages(
   try {
     if (messages.length === 0) return 0
 
+    // TOMBSTONE GUARD (user request 2026-09-08): session đã bị user xóa vĩnh viễn
+    // → KHÔNG lưu message mới (phiên đã xóa = xóa hẳn; message lưu lại thành orphan
+    // vô hình nhưng chiếm dung lượng DB). Fail-open khi import lỗi.
+    try {
+      const { isSessionDeleted } = await import('@/lib/session-tombstone')
+      if (isSessionDeleted(sessionId)) return 0
+    } catch { /* fail-open */ }
+
     const result = await db.chatMessage.createMany({
       data: messages.map(msg => ({
         sessionId,

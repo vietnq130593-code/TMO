@@ -202,6 +202,11 @@ model AgentProfile {
   team        String?  /// Team: "code" | "research" | null (không bắt buộc)
   position    String?  /// Vị trí trong team: TL | G1 | G2 | G3 | G4 (code) | TL | G1 | G2 | G3 (research)
   avatar      String?  /// Emoji hoặc icon name cho avatar
+  /// Tool whitelist (JSON array string) — user request 2026-09-08 (Omega Agent
+  /// Factory): agent do Omega tạo qua create_agent mang toolset riêng. null =
+  /// resolve theo logic cũ (standalone def → [], tức mọi tool đều được phép).
+  /// Chuẩn hoá tại chat route: JSON.parse(profile.tools) ?? fallback.
+  tools       String?  /// JSON: ["file_read", "shell", ...]
   isSystem    Boolean  @default(false) /// System agent — seeded on startup, cannot be deleted. Customizable but persistent.
   enabled     Boolean  @default(true)
   createdAt   DateTime @default(now())

@@ -78,8 +78,11 @@ export const PROVIDER_DATA = [
 
 export const VALID_PROVIDERS = ['nvidia']
 export const VALID_DOMAINS = ['programming', 'algorithm', 'ml', 'meta_cognitive', 'linux', 'security', 'ux_ui', 'mixed']
-export const CODE_POSITIONS = ['TL', 'G1', 'G2-A', 'G2-B', 'G3']
-export const RESEARCH_POSITIONS = ['TL', 'G1', 'G2', 'G3']
+// G4 (user request 2026-09-08 — Omega Agent Factory/dispatch): vị trí MỞ RỘNG cho
+// team code — TL/G1/G2-A/G2-B/G3 đã được 5 agent hệ thống (APEX/CORTEX/BOLT/
+// SENTINEL/CATALYST) giữ; agent do Omega tạo/điều động vào team code dùng G4+.
+export const CODE_POSITIONS = ['TL', 'G1', 'G2-A', 'G2-B', 'G3', 'G4', 'G5']
+export const RESEARCH_POSITIONS = ['TL', 'G1', 'G2', 'G3', 'G4', 'G5']
 export const TEAM_POSITIONS: Record<string, string[]> = {
   code: CODE_POSITIONS,
   research: RESEARCH_POSITIONS,
@@ -123,7 +126,8 @@ export const POSITION_LABELS: Record<string, string> = {
   // Legacy positions (kept for backward compatibility)
   'G2': 'Member 2',
   'G3-OLD': 'Member 3',
-  'G4': 'Member 4',
+  'G4': 'Member 4 (mở rộng — Omega Factory)',
+  'G5': 'Member 5 (mở rộng — Omega Factory)',
 }
 
 // Provider options (for UI, with icons)
