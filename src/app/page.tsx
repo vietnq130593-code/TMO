@@ -23,7 +23,7 @@ import {
   GitCommit, History, Minimize2, ExternalLink as ExternalLinkIcon, GripHorizontal, ArrowDownToLine,
   Wifi, WifiOff,
   Flame, Archive, Snowflake, Thermometer, FlaskConical, ShieldAlert, Swords,
-  CloudDownload, CircleHelp, ClipboardList
+  CloudDownload, CircleHelp, ClipboardList, Mic, AudioLines, Volume2
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -42,6 +42,7 @@ import { Tooltip as StatusTooltip, TooltipTrigger as StatusTooltipTrigger, Toolt
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { format } from 'date-fns'
 import { toast } from '@/hooks/use-toast'
+import { useVoiceLive, type VoiceLiveStatus } from '@/hooks/use-voice-live'
 import { authedFetch } from '@/lib/api-auth'
 import { toast as sonnerToast } from 'sonner'
 import {
@@ -9875,6 +9876,8 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
             assessmentRouting: assessmentRouting,
           }
           setMessages(prev => [...prev, suggestionMsg])
+          // LIVE VOICE: trả về nội dung để chế độ Live đọc thành giọng nói
+          return assessment.suggestion || 'APEX đề xuất sử dụng Code Team để xử lý yêu cầu này.'
         } else {
           // SIMPLE → TL can answer directly or show normal chat
           const tlAnswer: SmolabMessage = {
@@ -9888,6 +9891,8 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
             agentAvatar: '👑',
           }
           setMessages(prev => [...prev, tlAnswer])
+          // LIVE VOICE: trả về nội dung để chế độ Live đọc thành giọng nói
+          return tlAnswer.content
         }
       } catch (err) {
         // Assessment failed → show error, suggest keyword fallback
@@ -10009,12 +10014,14 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         console.log('[Smolab] Response về sau khi user đổi phiên — bỏ qua append client-side (đã lưu DB)')
         return
       }
+      // LIVE VOICE (user request 2026-08-28): nội dung câu trả lời — hoisted
+      // ra ngoài để return cho useVoiceLive đọc thành giọng nói sau khi xong.
+      const content = String(data.content || 'Không thể tạo câu trả lời.')
       setMessages(prev => {
         const withoutTool = toolMsg ? prev.filter(m => m.id !== toolMsg.id) : prev
 
         // DEDUPE 2026-09-01: user rời phiên rồi quay lại ĐÚNG lúc response về
         // → messages đã reload từ DB (có sẵn response) → không append lần nữa
-        const content = data.content || 'Không thể tạo câu trả lời.'
         if (prev.some(m => m.role === 'assistant' && m.content === content)) {
           return prev
         }
@@ -10049,6 +10056,9 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         }
         return [...withoutTool, assistantMsg]
       })
+      // LIVE VOICE (user request 2026-08-28): trả về nội dung câu trả lời cho
+      // useVoiceLive — đọc thành giọng nói từng câu sau khi agent trả lời xong.
+      return content
     } catch (err) {
       // USER REQUEST 2026-08-31 — 3 trường hợp phân biệt rõ ràng:
       //   (a) stoppingRef: user bấm DỪNG → stopAgentTask đã hiện thông báo ⏹ —
@@ -10090,6 +10100,36 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
       setIsLoading(inFlightChatsRef.current.has(currentSessionIdRef.current))
     }
   }, [input, isLoading, messages, selectedModel, currentSessionId, chatMode, selectedAgentId, selectedTeam, smolabAgents, startWorkflow, refreshAgentRuns])
+
+  // ===== LIVE VOICE (user request 2026-08-28) — nút Live cạnh nút Gửi =====
+  // Nói tiếng Việt → ASR → văn bản trong khung nhập. Tự gửi khi thỏa CẢ HAI:
+  // (1) ngừng nói ≥1s, (2) câu tiếp theo là "xin hết". Agent trả lời → đọc
+  // thành giọng nói từng câu → mở mic lại → vòng lặp. Bấm Live lần nữa để tắt.
+  const inputVoiceRef = useRef('')
+  useEffect(() => { inputVoiceRef.current = input }, [input])
+
+  const voiceLive = useVoiceLive({
+    onTranscriptAppend: (text) => {
+      setInput(prev => (prev ? `${prev} ${text}` : text))
+    },
+    onAutoSend: async () => {
+      const text = inputVoiceRef.current.trim()
+      if (!text) return null
+      setInput('')
+      const reply = await sendMessage(text)
+      return typeof reply === 'string' ? reply : null
+    },
+  })
+
+  const VOICE_STATUS_META: Record<VoiceLiveStatus, { label: string; className: string }> = {
+    off: { label: '', className: 'text-stone-500' },
+    starting: { label: 'ĐANG BẬT MICRO...', className: 'text-amber-400' },
+    listening: { label: 'ĐANG NGHE', className: 'text-emerald-400' },
+    transcribing: { label: 'ĐANG NHẬN DIỆN GIỌNG NÓI...', className: 'text-cyan-400' },
+    sending: { label: 'ĐANG GỬI — AGENT ĐANG XỬ LÝ...', className: 'text-amber-400' },
+    speaking: { label: 'ĐANG ĐỌC CÂU TRẢ LỜI...', className: 'text-teal-300' },
+    error: { label: 'LỖI MICRO', className: 'text-red-400' },
+  }
 
   const handleFeedback = useCallback(async (messageId: string, type: 'positive' | 'negative', msgContent: string) => {
     setFeedbackLoading(messageId)
@@ -11013,6 +11053,35 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
             <div className="flex-shrink-0 p-3 border-t border-cyan-400/35">
               {canChat ? (
               <>
+              {/* LIVE VOICE (2026-08-28) — thanh trạng thái chế độ Live
+                  (hiển thị cả khi lỗi micro để user thấy phản hồi) */}
+              {(voiceLive.isLive || voiceLive.status === 'error') && (
+                <div className="flex items-center gap-2 mb-2 px-2 py-1 chamfer-sm bg-slate-950/60 border border-cyan-400/25">
+                  <span className={`relative flex h-2 w-2 ${voiceLive.status === 'listening' ? '' : 'opacity-60'}`}>
+                    <span className={`absolute inline-flex h-full w-full rounded-full ${voiceLive.status === 'listening' ? 'bg-emerald-400 animate-ping' : 'bg-stone-500'} opacity-60`} />
+                    <span className={`relative inline-flex rounded-full h-2 w-2 ${voiceLive.status === 'listening' ? 'bg-emerald-500' : 'bg-stone-400'}`} />
+                  </span>
+                  <span className={`text-[10px] font-mono uppercase tracking-wider ${VOICE_STATUS_META[voiceLive.status].className}`}>
+                    {VOICE_STATUS_META[voiceLive.status].label}
+                    {voiceLive.error && <span className="ml-1 normal-case">— {voiceLive.error}</span>}
+                  </span>
+                  {voiceLive.status === 'listening' && (
+                    <span className="ml-auto text-[9px] text-stone-500">
+                      Ngừng ≥1s rồi nói <span className="text-cyan-300">“xin hết”</span> để gửi
+                    </span>
+                  )}
+                  {(voiceLive.status === 'sending' || voiceLive.status === 'speaking') && (
+                    <span className="ml-auto text-[9px] text-stone-500 flex items-center gap-1">
+                      {voiceLive.status === 'speaking' ? <Volume2 className="h-2.5 w-2.5" /> : <Loader2 className="h-2.5 w-2.5 animate-spin" />} mic tạm tắt
+                    </span>
+                  )}
+                </div>
+              )}
+              {voiceLive.isLive && voiceLive.ttsVoiceMissing && (
+                <div className="mb-1.5 px-1 text-[9px] text-amber-500/90">
+                  ⚠ Trình duyệt chưa có giọng đọc tiếng Việt (vi-VN) — câu trả lời sẽ chỉ hiển thị dạng chữ. Hãy dùng Chrome/Edge hoặc cài thêm giọng vi-VN cho Windows.
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <input
                   ref={chatInputRef}
@@ -11020,10 +11089,26 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }}
-                  placeholder="Nhập câu hỏi..."
-                  className="chamfer-sm flex-1 px-3 py-2 text-xs bg-slate-950/60 border border-cyan-400/40 text-stone-200 placeholder:text-stone-500 focus:outline-none focus:border-cyan-500/50 transition-colors"
+                  placeholder={voiceLive.isLive ? 'Nói gì đó… (hoặc gõ tay)' : 'Nhập câu hỏi...'}
+                  className="chamfer-sm flex-1 min-w-0 px-3 py-2 text-xs bg-slate-950/60 border border-cyan-400/40 text-stone-200 placeholder:text-stone-500 focus:outline-none focus:border-cyan-500/50 transition-colors"
                   disabled={isLoading}
                 />
+                {/* LIVE VOICE (2026-08-28) — nút Live cạnh nút Gửi:
+                    bấm để bật/tắt chế độ đàm thoại tiếng Việt.
+                    - Tắt: icon mic viền cyan
+                    - Bật: nền đỏ gradient + sóng âm nhấp nháy  */}
+                <Button
+                  onClick={voiceLive.toggle}
+                  title={voiceLive.isLive ? 'Tắt chế độ Live (dừng mic + đọc)' : 'Bật chế độ Live — nói tiếng Việt, ngừng ≥1s rồi nói “xin hết” để tự gửi'}
+                  aria-label={voiceLive.isLive ? 'Tắt chế độ Live' : 'Bật chế độ Live'}
+                  className={`chamfer-sm h-8 w-8 p-0 shrink-0 ${
+                    voiceLive.isLive
+                      ? 'bg-gradient-to-r from-red-600 to-rose-500 hover:from-red-500 hover:to-rose-400 text-white border border-red-400/50 animate-pulse'
+                      : 'bg-slate-950/60 hover:bg-slate-900 text-cyan-300 border border-cyan-400/40 hover:border-cyan-400/70'
+                  }`}
+                >
+                  {voiceLive.isLive ? <AudioLines className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+                </Button>
                 {/* USER REQUEST 2026-08-31: khi agent đang chạy, nút Gửi biến thành
                     nút DỪNG — bấm lần nữa để ngừng tác vụ Agents ngay lập tức
                     (abort request + hủy ReAct/workflow ở server). */}

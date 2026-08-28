@@ -20,6 +20,8 @@
     "3d-force-graph": "^1.80.0",
     "@aws-sdk/client-s3": "^3.1115.0",
     "@aws-sdk/s3-request-presigner": "^3.1115.0",
+    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/proto-loader": "^0.8.1",
     "@monaco-editor/react": "^4.7.0",
     "@prisma/client": "^6.19.2",
     "@qdrant/js-client-rest": "^1.18.0",
