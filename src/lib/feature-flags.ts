@@ -110,6 +110,14 @@ const DEFAULTS: Record<string, string> = {
   // src/lib/kb-routing/query-rewriter.ts. Default OFF: opt-in for latency-sensitive
   // deployments; flip to true once retrieval quality matters more than p95 latency.
   ENABLE_QUERY_REWRITE: 'false',
+
+  // Phase 4 SMOLAB (user request 2026-09-05 — kiến trúc truy vấn Leiden cho lõi
+  // embed): community-aware retrieval. Leiden chạy trên entity graph Neo4j →
+  // community summaries embed vào Qdrant (theopus_communities) → query-time
+  // vector search song song với chunks. Default true nhưng search trả []
+  // cho tới khi detection chạy lần đầu (GET /api/query?action=community-detect
+  // hoặc lazy auto-detect ở query đầu tiên) → zero-impact khi chưa bật.
+  ENABLE_COMMUNITY_SEARCH: 'true',
 }
 
 /**

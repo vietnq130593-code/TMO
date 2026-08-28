@@ -580,6 +580,15 @@ export async function POST(request: NextRequest) {
             `- ${e.name} (${e.type}): ${e.description.slice(0, 200)}`
           ).join('\n'))
         }
+        // Leiden community context (user request 2026-09-05): bức tranh lớn từ
+        // entity graph — Agents thấy cả "chủ đề nào đang nói tới" chứ không chỉ
+        // từng chunk rời rạc
+        if (kbSearchResult.communities.length > 0) {
+          parts.push('--- Knowledge Communities (Leiden graph clusters) ---')
+          parts.push(kbSearchResult.communities.map(c =>
+            `[${c.score?.toFixed(2) ?? '?'}] ${c.summary.slice(0, 600)}`
+          ).join('\n'))
+        }
         dynamicKBContext = parts.join('\n\n')
       } catch (err) {
         console.warn('[OpenClaw Chat] KB pre-search failed:', err instanceof Error ? err.message : String(err))
@@ -848,7 +857,7 @@ export async function POST(request: NextRequest) {
           writebackToKBTransactionally({
             query: lastUserContent,
             step2Result: { used: true, content, supplemented: true, source: 'model-knowledge' },
-            step1Result: kbSearchResult || { chunks: [], entities: [], memories: recalledMemories, confidence: 0, source: 'user-kb' },
+            step1Result: kbSearchResult || { chunks: [], entities: [], memories: recalledMemories, communities: [], confidence: 0, source: 'user-kb' },
             agentId: agentProfileId!,
             agentName: agentProfileName || 'unknown',
             sessionId,
@@ -1086,7 +1095,7 @@ export async function POST(request: NextRequest) {
           writebackToKBTransactionally({
             query: lastUserContent,
             step2Result: { used: true, content, supplemented: true, source: 'model-knowledge' },
-            step1Result: kbSearchResult || { chunks: [], entities: [], memories: recalledMemories, confidence: queryConfidence, source: 'user-kb' },
+            step1Result: kbSearchResult || { chunks: [], entities: [], memories: recalledMemories, communities: [], confidence: queryConfidence, source: 'user-kb' },
             agentId: agentProfileId!,
             agentName: agentProfileName || 'unknown',
             sessionId,

@@ -3351,7 +3351,8 @@ interface TokenUsageData {
 }
 
 /** NVIDIA NIM model configuration — Single Provider Architecture
- *  1 extraction core (nemotron-550b — DUÝ NHẤT, chỉ dùng cho trích xuất dữ liệu)
+ *  2 extraction cores (nemotron-550b chính + gpt-oss-120b fallback — user
+ *  directive 2026-09-05: kimi-k3 KHÔNG dùng cho trích xuất tài liệu)
  *  + 3 agent/chat cores (user directive 2026-08-27: bỏ gpt-oss-120b;
  *  GLM 5.2 đã chết HTTP 410, GLM 5.3 không tồn tại trên NIM)
  *  Verified 2026-08-25 via actual completion calls against integrate.api.nvidia.com */
@@ -3363,7 +3364,8 @@ const NVIDIA_CORE_CONFIG = {
     headerBg: 'bg-cyan-950/60',
     barColor: '#22d3ee',
     models: [
-      { key: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b' },
+      { key: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (chính)' },
+      { key: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (fallback)' },
     ],
   },
   agent: {
@@ -4350,8 +4352,9 @@ const SMOLAB_MODEL_GROUPS = [
     provider: 'NVIDIA',
     icon: '🎮',
     models: [
-      // 1 extraction core
-      { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b' },
+      // 2 extraction cores (user directive 2026-09-05 — kimi-k3 bị cấm cho extraction)
+      { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction chính)' },
+      { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (extraction fallback)' },
       // 3 agent/chat cores (user directive 2026-08-27 — gpt-oss-120b đã bỏ,
       // GLM 5.2/5.3 không dùng được trên NIM: 410 Gone / 404)
       { id: 'moonshotai/kimi-k3', label: 'Kimi K3 (lõi DUY NHẤT)' },

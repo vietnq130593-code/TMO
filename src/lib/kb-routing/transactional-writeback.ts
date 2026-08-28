@@ -283,6 +283,7 @@ export async function reconcilePendingWritebacks(limit = 10): Promise<{
           chunks: [],
           entities: [],
           memories: [],
+          communities: [],
           confidence: 0,
           source: 'user-kb',
         },

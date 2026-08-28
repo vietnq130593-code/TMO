@@ -17,7 +17,7 @@
  *   3. Chunk text (domain-specific configs)
  *   4. Save chunks to Qdrant chunks collection
  *   5. Delete old embeddings for this document first
- *   6. Extract entities & relationships using callLLM (loop through chunks)
+ *   6. Extract entities & relationships using callLLMSlot (loop through chunks)
  *   7. Resolve entities (exact match + fuzzy match, skip LLM resolution for speed)
  *   8. Save entities to SQLite buffer + Neo4j
  *   9. Save relationships to SQLite buffer + Neo4j
@@ -29,7 +29,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { callLLM, callLLMSlot, acquireKey, releaseKey, flushTokenCount, MAX_KEYS, MAX_DOCS_PER_KEY, MAX_TOTAL_CONCURRENT, getFreeKeyCount, getActiveDocCount, getActiveDocIds, markDocPaused, clearDocPaused, isDocPaused, recoverKeys, persistKeyAssignments, getOverallAvailability, getProviderAvailability } from '@/lib/llm'
+import { callLLMSlot, acquireKey, releaseKey, flushTokenCount, MAX_KEYS, MAX_DOCS_PER_KEY, MAX_TOTAL_CONCURRENT, getFreeKeyCount, getActiveDocCount, getActiveDocIds, markDocPaused, clearDocPaused, isDocPaused, recoverKeys, persistKeyAssignments, getOverallAvailability, getProviderAvailability } from '@/lib/llm'
 import { generateEmbeddingBatch, getEmbeddingDimension } from '@/lib/embeddings'
 import { getNeo4jDriver, safeSession, executeCypher, readCypher, upsertDocumentNode } from '@/lib/neo4j'
 import { upsertDocument, getDocument, listDocuments, updateDocumentStatus, deleteDocument, upsertChunks, getChunksByDocument, getChunkCount, deleteChunksByDocument } from '@/lib/qdrant'
@@ -836,12 +836,14 @@ Output ONLY the domain name in lowercase. For example: programming`
   }
 
   // Try LLM classification with retries
+  // EXTRACTION-ONLY (user directive 2026-09-05): phân loại domain của TÀI LIỆU là
+  // tác vụ trích xuất — luôn dùng callLLMSlot (nemotron-550b chính + gpt-oss-120b
+  // fallback, slotIndex=-1 → round-robin key). KHÔNG fallback sang callLLM()
+  // vì callLLM giờ là kimi-k3 (lõi agent) — bị CẤM cho tác vụ trích xuất.
   const MAX_RETRIES = 2
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      const result = slotIndex >= 0
-        ? await callLLMSlot(slotIndex, classifyPrompt, classifySystemPrompt, 'classification')
-        : await callLLM(classifyPrompt, classifySystemPrompt, 'classification')
+      const result = await callLLMSlot(slotIndex, classifyPrompt, classifySystemPrompt, 'classification')
 
       const domainText = result.content.trim().toLowerCase()
 
@@ -1063,9 +1065,9 @@ async function extractFromChunk(chunkContent: string, domain: DocumentDomain, ch
     // EXTRACTION MAX_TOKENS FIX 2026-08-27: truyền { maxTokens: 16384 } rõ ràng
     // để phòng ngược — nếu default trong llm.ts bị đổi về 4096 thì extract
     // vẫn dùng 16384, tránh JSON bị cắt giữa chừng.
-    const result = slotIndex >= 0
-      ? await callLLMSlot(slotIndex, userPrompt, systemPrompt, 'extraction', { maxTokens: 16384 })
-      : await callLLM(userPrompt, systemPrompt, 'extraction', { maxTokens: 16384 })
+    // EXTRACTION-ONLY (user directive 2026-09-05): luôn callLLMSlot — slotIndex=-1
+    // → round-robin key. KHÔNG fallback callLLM() (kimi-k3 bị cấm cho extraction).
+    const result = await callLLMSlot(slotIndex, userPrompt, systemPrompt, 'extraction', { maxTokens: 16384 })
     provider = result.provider; model = result.model
 
     // FINISH_REASON='length' WARNING (FIX 2026-08-27): model reasoning bị cắt
@@ -1108,9 +1110,9 @@ async function extractFromChunk(chunkContent: string, domain: DocumentDomain, ch
         const entityList = entities.map((e, i) => `${i + 1}. ${e.name} (${e.type})`).join('\n')
         const retrySystem = `You are a relationship extractor. The previous extraction was truncated before relationships were emitted. Given the entities below, output ONLY a JSON array of relationships. Format: [{"source":"<exact entity name>","target":"<exact entity name>","type":"<RELATIONSHIP_TYPE>","description":"<short>"}]. Source and target MUST exactly match entity names from the list. Output ONLY the JSON array — no code fences, no explanation, no surrounding object.`
         const retryUser = `Entities extracted from chunk ${chunkIndex}:\n${entityList}\n\n--- Chunk text ---\n${chunkContent}`
-        const retryResult = slotIndex >= 0
-          ? await callLLMSlot(slotIndex, retryUser, retrySystem, 'extraction', { maxTokens: 8192 })
-          : await callLLM(retryUser, retrySystem, 'extraction', { maxTokens: 8192 })
+        // EXTRACTION-ONLY (user directive 2026-09-05): retry cũng dùng callLLMSlot
+        // (slotIndex=-1 → round-robin) — kimi-k3 không bao giờ chạm tác vụ extraction.
+        const retryResult = await callLLMSlot(slotIndex, retryUser, retrySystem, 'extraction', { maxTokens: 8192 })
         if (retryResult.content) {
           // Parse the retry response — it's a bare JSON array (not the full object)
           const arrMatch = retryResult.content.match(/\[[\s\S]*\]/)
@@ -2610,7 +2612,7 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       }
     }
 
-    // Step 6: Extract entities & relationships using callLLM (loop through chunks)
+    // Step 6: Extract entities & relationships using callLLMSlot (loop through chunks)
     const alreadyProcessedCount = chunksToProcess.length < savedChunks.length ? savedChunks.length - chunksToProcess.length : 0
     steps = markStepRunning(steps, 'extract', `[Key ${slotIndex + 1}/${MAX_KEYS}] ${alreadyProcessedCount}/${savedChunks.length} chunks`)
     await updateDocProgress(documentId, { status: 'extracting', steps, extractProgress: { processed: alreadyProcessedCount, total: savedChunks.length } })

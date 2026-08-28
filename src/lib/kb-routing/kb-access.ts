@@ -33,6 +33,7 @@ import { getCalibratedConfidence } from '@/lib/calibration'
 import { mmrSelect } from '@/lib/kb-routing/mmr'
 import { hybridFuse } from '@/lib/kb-routing/hybrid'
 import { rerankTopK } from '@/lib/kb-routing/reranker'
+import { searchCommunities, ensureCommunitiesLazy, type CommunityInfo } from '@/lib/kb-routing/communities'
 
 // ==================== CONFIG ====================
 
@@ -111,6 +112,10 @@ export interface UserKBResult {
     importance: number
     relevance: number
   }>
+  /** Leiden community hits (user request 2026-09-05) — bức tranh lớn từ
+   *  entity graph: community summary + top member entities. [] khi chưa
+   *  chạy detection hoặc flag tắt. */
+  communities: CommunityInfo[]
   confidence: number  // 0-1 — how relevant the KB content is
   source: 'user-kb'
 }
@@ -237,16 +242,31 @@ export async function searchUserKB(
     )
   })
 
-  // Run 3 searches in parallel for speed
-  const [chunksResult, entitiesResult, memoriesResult] = await Promise.allSettled([
+  // Leiden community layer (user request 2026-09-05): nếu collection chưa tồn
+  // tại → lazy auto-detect nền (fire-and-forget, đúng 1 lần/process) — query
+  // hiện tại vẫn chạy bình thường (communities=[]), query sau hưởng kết quả.
+  ensureCommunitiesLazy()
+
+  // Query embedding dùng chung cho chunks + communities (1 lần embed —
+  // generateQueryEmbedding có L1/L2 cache nên không tốn thêm call khi trùng)
+  const queryEmbedding =
+    options.embeddingOverride && options.embeddingOverride.length > 0
+      ? options.embeddingOverride
+      : (await generateQueryEmbedding(query)).vector
+
+  // Run 4 searches in parallel for speed
+  // (4) community search — vector search trên Leiden community summaries
+  const [chunksResult, entitiesResult, memoriesResult, communitiesResult] = await Promise.allSettled([
     searchChunks(query, topK, options.embeddingOverride),
     agentId ? searchEntitiesForUser(agentId, query, topK) : Promise.resolve([]),
     agentId ? recallAgentMemories(agentId, query, topK, minImportance) : Promise.resolve([]),
+    searchCommunities(queryEmbedding, 3),
   ])
 
   const chunks = chunksResult.status === 'fulfilled' ? chunksResult.value : []
   const entities = entitiesResult.status === 'fulfilled' ? entitiesResult.value : []
   const memories = memoriesResult.status === 'fulfilled' ? memoriesResult.value : []
+  const communities = communitiesResult.status === 'fulfilled' ? communitiesResult.value : []
 
   // Phase 4 SMOLAB Prop 3.5 apply — calibrate the raw heuristic confidence with
   // the trained logistic-regression model (scripts/train-calibration.ts →
@@ -256,12 +276,13 @@ export async function searchUserKB(
   const confidence = await getCalibratedConfidence(rawConfidence)
   const durationMs = Date.now() - startTime
   const calibratedNote = confidence !== rawConfidence ? ` (calibrated from raw: ${rawConfidence.toFixed(2)})` : ''
-  console.log(`[KB-Access] Step 1 user KB: ${chunks.length} chunks, ${entities.length} entities, ${memories.length} memories, confidence=${confidence.toFixed(2)}${calibratedNote} (${durationMs}ms)`)
+  console.log(`[KB-Access] Step 1 user KB: ${chunks.length} chunks, ${entities.length} entities, ${memories.length} memories, ${communities.length} communities, confidence=${confidence.toFixed(2)}${calibratedNote} (${durationMs}ms)`)
 
   return {
     chunks,
     entities,
     memories,
+    communities,
     confidence,
     source: 'user-kb',
   }

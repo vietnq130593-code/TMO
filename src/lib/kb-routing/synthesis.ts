@@ -162,6 +162,14 @@ function formatUserKB(step1: UserKBResult): string {
     ).join('\n'))
   }
 
+  // Leiden community context (user request 2026-09-05) — bức tranh lớn
+  if (step1.communities.length > 0) {
+    parts.push('--- Knowledge communities (graph clusters) ---')
+    parts.push(step1.communities.map(c =>
+      `[${c.score?.toFixed(2) ?? '?'}] ${c.summary.slice(0, 500)}`
+    ).join('\n'))
+  }
+
   if (step1.memories.length > 0) {
     parts.push('--- Past memories ---')
     parts.push(step1.memories.map(m =>

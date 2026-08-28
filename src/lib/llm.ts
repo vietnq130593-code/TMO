@@ -5,8 +5,10 @@
  *   NVIDIA NIM (4 keys × 4 docs = 16 max concurrent, auto mode)
  *
  * Architecture: NVIDIA NIM ONLY (no Mistral, Cerebras, OpenRouter)
- *   - 1 extraction core: nemotron-3-ultra-550b (DUY NHẤT — user directive 2026-08-25,
- *     lõi này chỉ dùng cho trích xuất dữ liệu, không dùng cho tác vụ khác)
+ *   - 1 extraction core: nemotron-3-ultra-550b (primary) + openai/gpt-oss-120b
+ *     (fallback — user directive 2026-09-05: "trích xuất chỉ dùng nemotron-3-ultra-550b
+ *     và chatgpt-os-120b làm fall back, KHÔNG được gọi kimi-k3"). Lõi extraction
+ *     KHÔNG dùng cho chat/agent — ngược lại kimi-k3 (lõi agent) KHÔNG dùng cho extraction.
  *   - 3 agent/chat cores: kimi-k3, deepseek-v4-flash-0731, minimax-m3
  *     (user directive 2026-08-27: bỏ gpt-oss-120b khỏi Agent/Chat — model này
  *     CHỈ còn dùng làm generator/judge nội bộ cho RedTeam + Eval)
@@ -191,7 +193,7 @@ function getRotatedModels(provider: string, models: string[]): string[] {
   // EXTRACTION models: no rotation — the single nemotron-550b core
   // Compare by reference — if it's the extraction list, skip rotation
   if (models === NVIDIA_EXTRACTION_MODELS) {
-    return models // Always [nemotron-550b]
+    return models // Fixed order: [nemotron-550b (primary), gpt-oss-120b (fallback)]
   }
   // AGENT/CHAT models (MODEL POLICY 2026-08-25): no rotation — kimi-k3 is the
   // DEFAULT for every agent; the others are sequential failover backups
@@ -206,19 +208,24 @@ function getRotatedModels(provider: string, models: string[]): string[] {
   return [...models.slice(offset), ...models.slice(0, offset)]
 }
 
-/** NVIDIA NIM EXTRACTION model (lõi DUY NHẤT — user directive 2026-08-25)
- *  CHÍNH SÁCH: nemotron-3-ultra-550b là lõi trích xuất DUY NHẤT và chỉ dùng
- *  cho trích xuất dữ liệu — KHÔNG dùng cho chat/agent/eval hay tác vụ khác.
+/** NVIDIA NIM EXTRACTION models (user directive 2026-09-05):
+ *  CHÍNH SÁCH: trích xuất tài liệu dùng nemotron-3-ultra-550b làm LÕI CHÍNH,
+ *  openai/gpt-oss-120b ("chatgpt-os-120b") làm LÕI FALL BACK — KHÔNG BAO GIỜ
+ *  dùng kimi-k3 cho bất kỳ tác vụ trích xuất tài liệu nào.
+ *  Thứ tự cố định: primary trước, fallback sau (không rotation).
  *
  *  nvidia/nemotron-3-ultra-550b-a55b: 550B MoE (55B active), mạnh nhất ✓ VERIFIED 2026-08-21
+ *  openai/gpt-oss-120b: fallback ✓ CÒN TỒN TẠI trên NIM (verified 2026-09-05 qua
+ *  GET /v1/models — đã từng bị bỏ khỏi Agent/Chat theo directive cũ 2026-08-27,
+ *  giờ quay lại làm lõi extraction fallback theo directive mới 2026-09-05)
  *
- *  Đã bỏ: openai/gpt-oss-120b (chuyển sang Agent/Chat — user directive 2026-08-25)
  *  Đã bỏ: llama-3.1-nemotron-ultra-253b-v1 (404 NOT FOUND — deprecated 2026-08-21)
  *  Đã bỏ: nemotron-4-340b-instruct (404 NOT FOUND — deprecated 2026-08-21)
  *  Đã bỏ: meta/llama-3.3-70b-instruct (chất lượng trích xuất kém hơn 550b)
  */
 const NVIDIA_EXTRACTION_MODELS = [
   'nvidia/nemotron-3-ultra-550b-a55b',
+  'openai/gpt-oss-120b',
 ]
 
 /** NVIDIA NIM AGENT/CHAT models — KIMI-ONLY POLICY (mới nhất):
@@ -1763,7 +1770,7 @@ const nvidiaPool = new ProviderKeyPool('NVIDIA', [
 ])
 
 console.log(`[LLM] Provider pool: NVIDIA=${nvidiaPool.keyCount} keys (${NVIDIA_MODELS.length} models) — SINGLE PROVIDER`)
-console.log(`[LLM] NVIDIA: agent/chat lõi DUY NHẤT kimi-k3 (Kimi-only policy) + 1 extraction core (nemotron-550b, extraction ONLY)`)
+console.log(`[LLM] NVIDIA: agent/chat lõi DUY NHẤT kimi-k3 (Kimi-only policy) + 2 extraction cores (nemotron-550b chính → gpt-oss-120b fallback — kimi-k3 KHÔNG dùng cho extraction, user directive 2026-09-05)`)
 
 // ==================== KIMI K3 MODEL POLICY + NVIDIA KEY ROTATION ====================
 // USER DIRECTIVE 2026-08-31: "mọi Agents, mọi tác vụ từ giờ sẽ sử dụng lõi Kimi k3,
@@ -1784,9 +1791,10 @@ console.log(`[LLM] NVIDIA: agent/chat lõi DUY NHẤT kimi-k3 (Kimi-only policy)
 //      Chỉ khi MỌI key đều đã fail đủ 3 lần (4 key × 3 = 12 attempts) mới dừng.
 //   4. KIMI-ONLY: KHÔNG fallback sang model khác (deepseek/minimax/z-ai-sdk đều đã
 //      BỎ) — lỗi được surface trung thực để user biết đúng tình trạng key.
-//   5. Extraction pipeline giữ lõi nemotron-550b (user directive 2026-08-25 — lõi
-//      trích xuất duy nhất; override bằng env EXTRACTION_MODEL nếu muốn) nhưng vẫn
-//      được hưởng cùng cơ chế xoay vòng key.
+//   5. Extraction pipeline dùng 2 lõi riêng (user directive 2026-09-05):
+//      nemotron-3-ultra-550b (chính) + openai/gpt-oss-120b (fallback) — qua
+//      callLLMSlot, TUYỆT ĐỐI không dùng kimi-k3; override bằng env
+//      EXTRACTION_MODEL / EXTRACTION_FALLBACK_MODEL nếu muốn.
 
 /** Lõi mặc định cho MỌI agents, MỌI tác vụ (user directive 2026-08-31) */
 export const KIMI_K3_MODEL = 'moonshotai/kimi-k3'
@@ -2556,13 +2564,28 @@ export function getProviderDiagnostics(): Record<string, {
 
 // ==================== KEY-BASED CALL (for extraction) ====================
 
+// (EXTRACTION_MODEL_OVERRIDE khai báo ở section KIMI K3 MODEL POLICY phía trên)
+
 /**
- * Key-based LLM call for document processing — NVIDIA NIM ONLY.
+ * Model trích xuất FALLBACK (user directive 2026-09-05): khi lõi chính
+ * (nemotron-3-ultra-550b) thất bại ĐẦY ĐỦ chuỗi xoay vòng key (4 key × 3 lần),
+ * chuyển sang lõi fallback openai/gpt-oss-120b ("chatgpt-os-120b") — cũng xoay
+ * vòng đủ key. Đặt EXTRACTION_FALLBACK_MODEL=none để tắt fallback.
+ */
+const EXTRACTION_FALLBACK_MODEL_OVERRIDE = process.env.EXTRACTION_FALLBACK_MODEL || ''
+
+/**
+ * Key-based LLM call for document processing — EXTRACTION CORES ONLY.
  *
- * Single provider: NVIDIA NIM với 1 lõi trích xuất duy nhất (nemotron-3-ultra-550b).
- * Falls back to round-robin key selection if the assigned key is unavailable.
+ * NVIDIA NIM với chuỗi 2 lõi trích xuất (user directive 2026-09-05):
+ *   1. PRIMARY:   nvidia/nemotron-3-ultra-550b-a55b — xoay vòng đủ key
+ *   2. FALLBACK:  openai/gpt-oss-120b — chỉ chạy khi primary fail TOÀN BỘ key
  *
- * @param slotIndex - The key index (0-3) assigned to this document
+ * KHÔNG BAO GIỜ gọi kimi-k3 (lõi agent/chat) cho extraction — đây là ràng
+ * buộc cứng theo directive user. Callers không còn phải fallback sang callLLM()
+ * khi không có slot: truyền slotIndex=-1 để dùng round-robin key.
+ *
+ * @param slotIndex - The key index (0-3) assigned to this document; -1 = round-robin
  * @param prompt - The user prompt
  * @param systemPrompt - Optional system prompt
  * @param task - Task identifier for logging
@@ -2575,53 +2598,88 @@ export async function callLLMSlot(
   options?: LLMCallOptions
 ): Promise<LLMResult> {
   const taskLabel = task || 'general'
-
-  // Guard against invalid slot index
-  if (slotIndex < 0 || slotIndex >= MAX_KEYS) {
-    console.error(`[LLM] Invalid key index ${slotIndex} for task "${taskLabel}" — must be 0-${MAX_KEYS - 1}`)
-    return {
-      content: '',
-      provider: 'none',
-      model: 'none',
-      error: `Invalid key index ${slotIndex}, must be 0-${MAX_KEYS - 1}`,
-    }
-  }
-
   const temp = options?.temperature
   const maxTok = options?.maxTokens
 
-  console.log(`[LLM] Key ${slotIndex} (NVIDIA) Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
+  // slotIndex -1 (hoặc invalid) = không có key riêng → round-robin mọi key hợp lệ.
+  // (Trước đây caller phải fallback sang callLLM() khi slotIndex=-1 — callLLM()
+  // giờ là kimi-k3 theo Kimi-only policy → VI PHẠM directive "extraction không
+  // dùng kimi-k3". Giờ callLLMSlot tự xử lý -1 nên không còn đường rò đó.)
+  if (slotIndex >= 0 && slotIndex >= MAX_KEYS) {
+    console.warn(`[LLM] Invalid key index ${slotIndex} for task "${taskLabel}" — falling back to round-robin key selection`)
+  }
+  const startKeyIndex = slotIndex >= 0 && slotIndex < MAX_KEYS ? slotIndex : -1
+
+  console.log(`[LLM] Key ${startKeyIndex >= 0 ? startKeyIndex : 'RR'} (NVIDIA) Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
 
   // ===== KEY ROTATION (user directive 2026-08-31) =====
-  // Extraction giữ lõi nemotron-550b (user directive 2026-08-25; override env
-  // EXTRACTION_MODEL) nhưng được hưởng cùng chính sách xoay vòng key: key được
-  // GÁN cho document được thử TRƯỚC, rồi xoay vòng đủ các key còn lại — mỗi key
-  // tối đa 3 lần fail (4 key × 3 = 12 attempts) trước khi chịu thua.
-  const extractionModel = EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0]
-  const result = await callModelWithKeyRotation(
-    extractionModel,
+  // Mỗi lõi được xoay vòng ĐẦY ĐỦ chuỗi key: key GÁN cho document (nếu có) được
+  // thử TRƯỚC, rồi xoay vòng đủ các key còn lại — mỗi key tối đa 3 lần fail
+  // (4 key × 3 = 12 attempts) trước khi chuyển lõi fallback.
+  const primaryModel = EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0]
+  const fallbackModel =
+    EXTRACTION_FALLBACK_MODEL_OVERRIDE === 'none' || EXTRACTION_FALLBACK_MODEL_OVERRIDE === ''
+      ? (NVIDIA_EXTRACTION_MODELS[1] || '')
+      : EXTRACTION_FALLBACK_MODEL_OVERRIDE
+
+  // ===== LÕI CHÍNH: nemotron-3-ultra-550b =====
+  const primaryResult = await callModelWithKeyRotation(
+    primaryModel,
     prompt,
     systemPrompt,
     options,
     {
-      startKeyIndex: slotIndex,
+      startKeyIndex,
       taskLabel: `extraction:${taskLabel}`,
-      timeoutMs: 300000, // 300s — nemotron-550b là reasoning model (giữ nguyên như tryNvidiaSlot cũ)
+      timeoutMs: 300000, // 300s — nemotron-550b là reasoning model
       maxTokens: maxTok ?? 16384, // EXTRACTION MAX_TOKENS FIX 2026-08-27 — CoT + JSON không bị cắt
       temperature: temp ?? 0.1,
     },
   )
-  if (result?.content) {
-    return result
+  if (primaryResult?.content) {
+    return primaryResult
   }
 
-  // All keys failed (đủ 3 lần mỗi key)
-  console.warn(`[LLM] All NVIDIA keys failed for "${taskLabel}" (đủ chuỗi xoay vòng 3 lần/key) — document will be retried later`)
+  // Người dùng bấm Dừng → KHÔNG chạy lõi fallback (nhiệm vụ đã bị hủy)
+  if (options?.abortCheck && options.abortCheck()) {
+    console.log(`[LLM] Extraction "${taskLabel}": bị HỦY (abortCheck) — bỏ qua lõi fallback`)
+    return {
+      content: '',
+      provider: 'none',
+      model: 'none',
+      error: `Extraction "${taskLabel}" aborted by user`,
+    }
+  }
+
+  // ===== LÕI FALLBACK: openai/gpt-oss-120b (user directive 2026-09-05) =====
+  if (fallbackModel && fallbackModel !== primaryModel) {
+    console.warn(`[LLM] Extraction "${taskLabel}": lõi chính ${primaryModel} thất bại (đủ chuỗi xoay vòng key) — chuyển lõi FALLBACK ${fallbackModel}`)
+    const fallbackResult = await callModelWithKeyRotation(
+      fallbackModel,
+      prompt,
+      systemPrompt,
+      options,
+      {
+        startKeyIndex,
+        taskLabel: `extraction-fallback:${taskLabel}`,
+        timeoutMs: 300000,
+        maxTokens: maxTok ?? 16384,
+        temperature: temp ?? 0.1,
+      },
+    )
+    if (fallbackResult?.content) {
+      console.log(`[LLM] Extraction "${taskLabel}": lõi fallback ${fallbackModel} thành công`)
+      return fallbackResult
+    }
+  }
+
+  // Cả 2 lõi đều thất bại (đủ 3 lần mỗi key mỗi lõi)
+  console.warn(`[LLM] Extraction "${taskLabel}": CẢ HAI lõi (${primaryModel}${fallbackModel ? ` + ${fallbackModel}` : ''}) đều thất bại sau xoay vòng key — document will be retried later`)
   return {
     content: '',
     provider: 'none',
     model: 'none',
-    error: `NVIDIA NIM failed for all keys (original key ${slotIndex}, xoay vòng đủ ${KEY_FAILURES_PER_KEY} lần/key)`,
+    error: `Extraction failed on BOTH cores (${primaryModel}${fallbackModel ? ` + fallback ${fallbackModel}` : ''}) — mọi NVIDIA key đều fail (xoay vòng đủ ${KEY_FAILURES_PER_KEY} lần/key mỗi lõi)`,
   }
 }
 

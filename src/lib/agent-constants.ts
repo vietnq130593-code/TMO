@@ -2,8 +2,8 @@
  * Agent Constants — Shared provider/model data and validation constants
  *
  * Architecture: NVIDIA NIM ONLY (single provider)
- *   - 1 extraction core: nemotron-3-ultra-550b (DUY NHẤT — user directive 2026-08-25;
- *     chỉ dùng cho trích xuất dữ liệu, không dùng cho tác vụ khác)
+ *   - 2 extraction cores: nemotron-3-ultra-550b (chính) + gpt-oss-120b (fallback)
+ *     (user directive 2026-09-05 — kimi-k3 bị CẤM cho tác vụ trích xuất tài liệu)
  *   - 3 agent/chat cores: kimi-k3, deepseek-v4-flash, minimax-m3
  *     (user directive 2026-08-27: bỏ gpt-oss-120b khỏi Agent/Chat)
  *   - glm-5.2 removed 2026-08-25 (NIM end-of-life — HTTP 410)
@@ -22,22 +22,24 @@
 
 // ==================== PROVIDER + MODEL DATA ====================
 
-/** EXTRACTION model — lõi DUY NHẤT dùng cho trích xuất tài liệu (callLLMSlot)
- *  nemotron-3-ultra-550b-a55b (mạnh nhất, 550B MoE) — chỉ dùng cho extraction.
- *  Đã bỏ openai/gpt-oss-120b (chuyển sang Agent/Chat — user directive 2026-08-25)
+/** EXTRACTION models — chuỗi 2 lõi dùng cho trích xuất tài liệu (callLLMSlot)
+ *  (user directive 2026-09-05: nemotron-3-ultra-550b làm LÕI CHÍNH +
+ *   openai/gpt-oss-120b ("chatgpt-os-120b") làm FALL BACK — kimi-k3 TUYỆT ĐỐI
+ *   không dùng cho trích xuất tài liệu)
  *  Đã bỏ llama-3.1-nemotron-ultra-253b-v1 (404 NOT FOUND — deprecated)
  *  Đã bỏ nemotron-4-340b-instruct (404 NOT FOUND — deprecated)
  */
 export const EXTRACTION_MODELS: Record<string, Array<{ id: string; label: string }>> = {
   nvidia: [
-    { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b' },
+    { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (chính)' },
+    { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (fallback)' },
   ],
 }
 
 /** ALL models — NVIDIA NIM ONLY
- *  1 lõi trích xuất + 3 lõi Agent/Chat (user directive 2026-08-27:
- *  nemotron-550b chỉ dành cho extraction; Agents/Chat chỉ dùng 3 lõi dưới đây —
- *  gpt-oss-120b đã bị bỏ, GLM 5.2/5.3 không dùng được trên NIM)
+ *  2 lõi trích xuất + 3 lõi Agent/Chat (user directive 2026-09-05:
+ *  nemotron-550b chính + gpt-oss-120b fallback cho extraction — kimi-k3 bị cấm
+ *  ở pipeline trích xuất tài liệu; Agents/Chat chỉ dùng 3 lõi dưới đây)
  *  Verified 2026-08-25 via actual completion calls against integrate.api.nvidia.com
  *  Deprecated (404): kimi-k2.6, glm-5.1, minimax-m2.7, deepseek-v4-pro, qwen3.5-397b
  *  Deprecated (404): llama-3.1-nemotron-ultra-253b-v1, nemotron-4-340b-instruct
@@ -45,8 +47,9 @@ export const EXTRACTION_MODELS: Record<string, Array<{ id: string; label: string
  */
 export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string }>> = {
   nvidia: [
-    // Extraction core (1 lõi — chỉ trích xuất dữ liệu)
-    { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b' },
+    // Extraction cores (2 lõi — chỉ trích xuất dữ liệu, user directive 2026-09-05)
+    { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction chính)' },
+    { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (extraction fallback)' },
     // Agent/Chat cores — 3 lõi (user directive 2026-08-27: bỏ gpt-oss-120b;
     // dự định thay bằng GLM 5.2 nhưng NIM end-of-life HTTP 410, GLM 5.3 không
     // tồn tại — verified 2026-08-27):

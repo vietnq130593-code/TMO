@@ -1314,6 +1314,42 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ paths })
     }
 
+    // ===== Leiden community layer (user request 2026-09-05) =====
+    // GET /api/query?action=community-status — trạng thái community layer
+    if (action === 'community-status') {
+      const { getCommunityStatus } = await import('@/lib/kb-routing/communities')
+      const status = await getCommunityStatus()
+      return NextResponse.json(status)
+    }
+
+    // GET /api/query?action=community-detect — chạy Leiden detection NGAY
+    // (fetch entity graph Neo4j → Leiden → write communityId → embed summaries
+    //  → upsert Qdrant theopus_communities). Chạy ~10-60s tùy cỡ graph.
+    // Sau khi xong, mọi query Agent tự động có community context (flag
+    // ENABLE_COMMUNITY_SEARCH, default true).
+    if (action === 'community-detect') {
+      const { detectAndStoreCommunities } = await import('@/lib/kb-routing/communities')
+      try {
+        const stats = await detectAndStoreCommunities()
+        return NextResponse.json({ ok: true, ...stats })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        return NextResponse.json({ ok: false, error: msg }, { status: 500 })
+      }
+    }
+
+    // GET /api/query?action=community-search&q=... — test community retrieval
+    // (embed query → vector search community summaries — KHÔNG đụng LLM)
+    if (action === 'community-search') {
+      const q = searchParams.get('q')
+      if (!q) return NextResponse.json({ error: 'Missing q' }, { status: 400 })
+      const { searchCommunities } = await import('@/lib/kb-routing/communities')
+      const { generateQueryEmbedding } = await import('@/lib/embeddings')
+      const emb = await generateQueryEmbedding(q)
+      const hits = await searchCommunities(emb.vector, 5)
+      return NextResponse.json({ query: q, hits })
+    }
+
     if (action === 'embed-regenerate') {
       const docId = searchParams.get('documentId')
       const result = await regenerateEmbeddings(docId || undefined)
