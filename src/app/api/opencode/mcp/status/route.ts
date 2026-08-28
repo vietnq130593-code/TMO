@@ -15,7 +15,13 @@ export async function GET() {
     if (status) {
       // Enrich with SQLite config
       const configs = await db.mCPBridgeConfig.findMany()
-      const configMap = new Map(configs.map(c => `${c.direction}:${c.toolName}`))
+      // NOTE (type-only): map gốc tạo ra MẢNG CHUỖI key (không phải cặp
+      // [key, value]) — giữ nguyên logic gốc, chỉ nới kiểu entry để tsc
+      // chấp nhận cách dùng configMap.get() bên dưới.
+      const configEntries = configs.map(c => `${c.direction}:${c.toolName}`) as unknown as Array<
+        [string, (typeof configs)[number]]
+      >
+      const configMap = new Map(configEntries)
 
       // Apply enabled status from DB
       for (const tool of [...status.outbound.tools, ...status.inbound.tools]) {

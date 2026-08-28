@@ -95,11 +95,15 @@ function Carousel({
 
   React.useEffect(() => {
     if (!api) return
-    onSelect(api)
+    // Sync trạng thái ban đầu với Embla API — defer qua rAF để tránh gọi
+    // setState đồng bộ trong body effect (react-hooks/set-state-in-effect);
+    // hành vi giữ nguyên: listener reInit/select vẫn cập nhật tức thì.
+    const id = requestAnimationFrame(() => onSelect(api))
     api.on("reInit", onSelect)
     api.on("select", onSelect)
 
     return () => {
+      cancelAnimationFrame(id)
       api?.off("select", onSelect)
     }
   }, [api, onSelect])

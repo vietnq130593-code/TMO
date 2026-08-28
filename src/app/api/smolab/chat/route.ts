@@ -23,6 +23,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { validateChatContext, createIsolatedSession } from '@/lib/smolab/session-manager'
 import { smolabWorker } from '@/lib/smolab/background-task-worker'
 import { db } from '@/lib/db'
+import type { AgentProfile } from '@prisma/client'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,7 +54,8 @@ export async function POST(req: NextRequest) {
     }
 
     // 2. Lấy agent profile TRƯỚC khi tạo session — tránh FK constraint violation
-    let agentProfile = null
+    // Annotation kiểu rõ ràng: findUnique/findFirst trả AgentProfile | null
+    let agentProfile: AgentProfile | null = null
     if (mode === 'single' && agentProfileId) {
       agentProfile = await db.agentProfile.findUnique({ where: { id: agentProfileId } })
     } else if (mode === 'multi' && teamName) {

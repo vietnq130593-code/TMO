@@ -367,7 +367,8 @@ export async function GET(request: NextRequest) {
           // Build Qdrant metadata map (id → payload) for enrichment
           const qdrantMeta = new Map<string, Record<string, unknown>>()
           try {
-            let scrollOffset: string | number | undefined = undefined
+            // next_page_offset có thể là Record (qdrant client >=1.19) — khớp kiểu client
+            let scrollOffset: string | number | Record<string, unknown> | null | undefined = undefined
             do {
               const result = await qdrant.scroll(COLLECTION_DOCUMENTS, {
                 limit: 100,

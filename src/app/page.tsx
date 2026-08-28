@@ -62,6 +62,8 @@ import { CodeEditor, detectLanguage, type OpenFile } from '@/components/code-edi
 import { DiffViewer } from '@/components/code-editor/DiffViewer'
 import { PendingEditModal } from '@/components/code-editor/PendingEditModal'
 import { SearchPanel } from '@/components/code-editor/SearchPanel'
+// Type-only (erased lúc build — không kéo 3d-force-graph vào bundle chính)
+import type { NodeObject as ForceGraphNodeObject, LinkObject as ForceGraphLinkObject } from '3d-force-graph'
 
 // ==================== HELPERS ====================
 
@@ -732,7 +734,8 @@ function DocumentsList({ documents, onProcessDoc, onDeleteDoc, onPauseDoc, onReE
                         )}
                         {doc.status === 'extracted' && !extractingDocIds.has(doc.id) && !pausedDocIds.has(doc.id) && (
                           <div className="flex items-center gap-0.5">
-                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" title="Đã trích xuất entities (lưu trong Neo4j)" />
+                            {/* Lucide icon không nhận prop `title` — bọc span để giữ tooltip */}
+                            <span title="Đã trích xuất entities (lưu trong Neo4j)"><CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /></span>
                             {onEmbedOnlyDoc && (
                               <Button size="sm" variant="outline" className="h-7 px-2.5 text-[10px] rounded-lg border-violet-400/45 bg-violet-950/40 text-violet-200 btn-glow hover:bg-violet-900/50 hover:text-violet-300 hover:border-violet-500/65" onClick={() => onEmbedOnlyDoc(doc.id)} disabled={processingIds.has(doc.id)} title="Tạo embeddings (vector) cho tài liệu này — bỏ qua LLM vì entities đã có sẵn trong Neo4j. Cần thiết để kích hoạt Vector Search.">
                                 {processingIds.has(doc.id) ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Zap className="h-3 w-3 mr-1" />} Tạo Embedding
@@ -896,9 +899,11 @@ function DocumentsList({ documents, onProcessDoc, onDeleteDoc, onPauseDoc, onReE
                                             {processedChunks}/{totalChunks} chunks processed
                                           </p>
                                         )}
-                                        {/* Fallback: show raw detail if no structured data parsed */}
+                                        {/* Fallback: show raw detail if no structured data parsed
+                                            (nhánh chỉ chạy khi status là 'running' | 'completed' theo guard
+                                             ở trên — nhánh 'error' là dead code, bỏ để hết TS2367) */}
                                         {!chunkMatch && !entityMatch && !relMatch && (
-                                          <p className={`text-[9px] ${step.status === 'error' ? 'text-red-500' : 'text-stone-400'}`}>
+                                          <p className="text-[9px] text-stone-400">
                                             {step.detail}
                                           </p>
                                         )}
@@ -1693,8 +1698,11 @@ function KnowledgeExplorer() {
         .attr('y2', d => (d.target as GraphNode).y ?? 0)
 
       linkLabel
-        .attr('x', d => ((d.source as GraphNode).x ?? 0 + (d.target as GraphNode).x ?? 0) / 2)
-        .attr('y', d => ((d.source as GraphNode).y ?? 0 + (d.target as GraphNode).y ?? 0) / 2)
+        // Midpoint của link — sửa precedence: cũ `a ?? 0 + b ?? 0` bị parse thành
+        // `a/2` (label lệch vị trí) và sinh TS2881/TS2532; chuẩn hóa thành công
+        // thức midpoint đúng ý đồ ban đầu.
+        .attr('x', d => (((d.source as GraphNode).x ?? 0) + ((d.target as GraphNode).x ?? 0)) / 2)
+        .attr('y', d => (((d.source as GraphNode).y ?? 0) + ((d.target as GraphNode).y ?? 0)) / 2)
 
       nodeGroup.attr('transform', d => `translate(${d.x ?? 0},${d.y ?? 0})`)
     })
@@ -2432,7 +2440,7 @@ function AnalyticsSection({ data, onRefreshStats }: { data: AnalyticsData; onRef
                     outerRadius={85}
                     paddingAngle={2}
                     dataKey="value"
-                    label={({ name, percent }) => ({ value: `${name} ${(percent * 100).toFixed(0)}%`, fill: '#d6d3d1', fontSize: 10 })}
+                    label={({ name, percent }) => ({ value: `${name} ${(percent * 100).toFixed(0)}%`, fill: '#d6d3d1', fontSize: 10 } as unknown as React.ReactNode)}
                   >
                     {entityTypeData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.fill} />
@@ -2740,7 +2748,8 @@ function Neo4jVerification({ health }: { health?: HealthResponse | null }) {
   }, [])
 
   // Fetch once on mount (covers the initial load before parent's health arrives).
-  useEffect(() => { checkNeo4j() }, [checkNeo4j])
+  // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
+  useEffect(() => { queueMicrotask(() => { checkNeo4j() }) }, [checkNeo4j])
 
   // FIX #8: auto-refresh every 30s. 30s > 20s cache TTL → each call returns fresh
   // data without forcing (no extra Aura load). This catches writes that happen
@@ -3397,8 +3406,9 @@ function TokenUsageSection({ health }: { health: HealthResponse | null }) {
   const [tokenError, setTokenError] = useState<string | null>(null)
 
   // Mark loading as done once SSE data arrives
+  // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
   useEffect(() => {
-    if (todayUsage) setTokenLoading(false)
+    queueMicrotask(() => { if (todayUsage) setTokenLoading(false) })
   }, [todayUsage])
 
   // Fetch usage for a specific date (still uses REST API — SSE only for today)
@@ -3771,8 +3781,11 @@ function AutoLearnSection() {
   }, [fetchData, fetchSyncStatus])
 
   useEffect(() => {
-    fetchData()
-    fetchSyncStatus()
+    // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
+    queueMicrotask(() => {
+      fetchData()
+      fetchSyncStatus()
+    })
     const interval = setInterval(() => {
       fetchData()
       fetchSyncStatus()
@@ -5299,7 +5312,8 @@ function MemoryTabContent() {
   }, [selectedAgentId])
 
   useEffect(() => {
-    fetchTierStats()
+    // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
+    queueMicrotask(() => { fetchTierStats() })
   }, [fetchTierStats])
 
   // ---------- Load memory list when agent or page changes ----------
@@ -5333,7 +5347,8 @@ function MemoryTabContent() {
   }, [selectedAgentId, memoryPage, searchQuery])
 
   useEffect(() => {
-    fetchMemories()
+    // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
+    queueMicrotask(() => { fetchMemories() })
   }, [fetchMemories])
 
   // ---------- Load archive list ----------
@@ -5354,7 +5369,8 @@ function MemoryTabContent() {
   }, [selectedAgentId])
 
   useEffect(() => {
-    if (activeTier === 'archive') fetchArchives()
+    // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
+    if (activeTier === 'archive') queueMicrotask(() => { fetchArchives() })
   }, [activeTier, fetchArchives])
 
   // ---------- Actions ----------
@@ -7413,7 +7429,7 @@ function LearningTabContent() {
                       </div>
                       <p className="text-[11px] text-stone-300 leading-relaxed line-clamp-2">{event.content}</p>
                       {/* Show extra metadata for feedback */}
-                      {event.type === 'feedback' && (event.metadata?.feedbackType || event.metadata?.type) && (
+                      {event.type === 'feedback' && Boolean(event.metadata?.feedbackType || event.metadata?.type) && (
                         <span className="inline-flex items-center gap-1 mt-0.5">
                           {((event.metadata?.feedbackType || event.metadata?.type) === 'positive') ? (
                             <ThumbsUp className="h-2.5 w-2.5 text-emerald-400" />
@@ -7855,9 +7871,10 @@ function ChannelsTabContent() {
     }
   }, [msgFilter])
 
-  useEffect(() => { loadChannels() }, [loadChannels])
+  // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
+  useEffect(() => { queueMicrotask(() => { loadChannels() }) }, [loadChannels])
   useEffect(() => {
-    loadMessages()
+    queueMicrotask(() => { loadMessages() })
     const interval = setInterval(loadMessages, 30000)
     return () => clearInterval(interval)
   }, [loadMessages])
@@ -10039,7 +10056,9 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     // (b) spinner "Đang suy nghĩ..." cho giai đoạn agent đang nghĩ (chưa có
     // event nào) — panel Thought Process chỉ xuất hiện khi agent NGHĨ XONG
     // bước đầu tiên (user bug report 2026-08-31).
-    const toolMsg: SmolabMessage | null = null
+    // (giữ lại làm scaffolding — assertion widening để closure dưới đây không
+    // bị TS narrow `toolMsg` thành `null` → `never`)
+    const toolMsg = null as SmolabMessage | null
 
     // USER REQUEST 2026-08-31: AbortController —
     // (a) nút Gửi biến thành nút DỪNG khi đang chạy (stopAgentTask abort),
@@ -11372,7 +11391,7 @@ function SkillsTabContent() {
   const [skillDialogContent, setSkillDialogContent] = useState<{
     name: string; slug: string; content: string; version: string;
     source: string; installed: boolean; author?: string; authorHandle?: string;
-    description?: string;
+    description?: string; url?: string;
   } | null>(null)
   const [skillDialogContentLoading, setSkillDialogContentLoading] = useState(false)
 
@@ -11636,10 +11655,13 @@ function SkillsTabContent() {
   }, [newSkillSlug, newSkillName, newSkillContent, loadSkills])
 
   // Load data on mount (only once)
+  // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
   useEffect(() => {
-    loadSkills()
-    loadToolsRegistry()
-    searchClawHub('skill') // initial load — browse popular skills from ClawHub
+    queueMicrotask(() => {
+      loadSkills()
+      loadToolsRegistry()
+      searchClawHub('skill') // initial load — browse popular skills from ClawHub
+    })
   }, [])
 
   const sourceBadgeColor: Record<string, string> = {
@@ -12236,33 +12258,40 @@ function describeCronExpression(expr: string): string {
   return expr
 }
 
+// Kiểu item của Automation tab — tách ra để editingCron/editingWebhook tham chiếu
+// (trước đây dùng conditional type `typeof cronJobs extends Array<infer T> | null ? T : never | null`
+// → resolve thành T (không có null) → setEditingCron(null) bị TS2345)
+interface CronJobItem {
+  id: string; agentId: string; expression: string; taskPrompt: string;
+  enabled: boolean; lastRunAt: string | null; nextRunAt: string | null;
+  createdAt: string; updatedAt: string;
+}
+
+interface WebhookItem {
+  id: string; agentId: string; url: string; events: string;
+  secret: string | null; enabled: boolean; createdAt: string; updatedAt: string;
+}
+
 function AutomationTabContent() {
   // Cron Jobs
-  const [cronJobs, setCronJobs] = useState<Array<{
-    id: string; agentId: string; expression: string; taskPrompt: string;
-    enabled: boolean; lastRunAt: string | null; nextRunAt: string | null;
-    createdAt: string; updatedAt: string;
-  }> | null>(null)
+  const [cronJobs, setCronJobs] = useState<Array<CronJobItem> | null>(null)
   const [cronLoading, setCronLoading] = useState(false)
 
   // Cron Editor
   const [showCronEditor, setShowCronEditor] = useState(false)
-  const [editingCron, setEditingCron] = useState<typeof cronJobs extends Array<infer T> | null ? T : never | null>(null)
+  const [editingCron, setEditingCron] = useState<CronJobItem | null>(null)
   const [cronExpression, setCronExpression] = useState('')
   const [cronTaskPrompt, setCronTaskPrompt] = useState('')
   const [cronEnabled, setCronEnabled] = useState(true)
   const [cronSaving, setCronSaving] = useState(false)
 
   // Webhooks
-  const [webhooks, setWebhooks] = useState<Array<{
-    id: string; agentId: string; url: string; events: string;
-    secret: string | null; enabled: boolean; createdAt: string; updatedAt: string;
-  }> | null>(null)
+  const [webhooks, setWebhooks] = useState<Array<WebhookItem> | null>(null)
   const [webhookLoading, setWebhookLoading] = useState(false)
 
   // Webhook Editor
   const [showWebhookEditor, setShowWebhookEditor] = useState(false)
-  const [editingWebhook, setEditingWebhook] = useState<typeof webhooks extends Array<infer T> | null ? T : never | null>(null)
+  const [editingWebhook, setEditingWebhook] = useState<WebhookItem | null>(null)
   const [whUrl, setWhUrl] = useState('')
   const [whEvents, setWhEvents] = useState('')
   const [whSecret, setWhSecret] = useState('')
@@ -12351,10 +12380,11 @@ function AutomationTabContent() {
   }, [historyFilter])
 
   // Initial load (only data that doesn't depend on volatile filters)
-  useEffect(() => { loadCronJobs(); loadWebhooks(); loadHeartbeat(); loadOrders(); loadHistory() }, [loadCronJobs, loadWebhooks, loadHeartbeat, loadOrders])
+  // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
+  useEffect(() => { queueMicrotask(() => { loadCronJobs(); loadWebhooks(); loadHeartbeat(); loadOrders(); loadHistory() }) }, [loadCronJobs, loadWebhooks, loadHeartbeat, loadOrders])
 
   // Reload history when filter changes (separate from main load to avoid re-fetching all data)
-  useEffect(() => { loadHistory() }, [loadHistory])
+  useEffect(() => { queueMicrotask(() => { loadHistory() }) }, [loadHistory])
 
   // Scheduler auto-poll — triggers cron/heartbeat execution every 30s
   useEffect(() => {
@@ -13118,9 +13148,9 @@ function CodeTabContent() {
   const previewEventSrcRef = useRef<EventSource | null>(null)
   const [previewLogs, setPreviewLogs] = useState<string[]>([])
 
-  // LSP Diagnostics
+  // LSP Diagnostics (raw: fallback hiển thị khi message rỗng — khớp kiểu LSPDiagnostic từ /api/opencode/lsp/diagnostics)
   const [diagnostics, setDiagnostics] = useState<Array<{
-    file?: string; line?: number; column?: number; severity?: string; code?: string; message?: string;
+    file?: string; line?: number; column?: number; severity?: string; code?: string; message?: string; raw?: string;
   }>>([])
 
   // Log modal
@@ -13667,15 +13697,18 @@ function CodeTabContent() {
   }, [])
 
   // Initial load + polling
+  // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
   useEffect(() => {
-    loadStatus()
-    loadFileTree()
-    loadSessions()
-    loadMcpStatus()
-    loadTerminal()
-    loadDiagnostics()
-    loadGitStatus()
-    loadKbContext()
+    queueMicrotask(() => {
+      loadStatus()
+      loadFileTree()
+      loadSessions()
+      loadMcpStatus()
+      loadTerminal()
+      loadDiagnostics()
+      loadGitStatus()
+      loadKbContext()
+    })
     const interval = setInterval(() => { loadStatus() }, 30000)
     return () => clearInterval(interval)
   }, [loadStatus, loadFileTree, loadSessions, loadMcpStatus, loadTerminal, loadDiagnostics, loadGitStatus, loadKbContext])
@@ -13791,9 +13824,10 @@ function CodeTabContent() {
   }, [])
 
   // Reload file tree when workspace root changes
+  // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
   useEffect(() => {
     if (workspaceRoot) {
-      loadFileTree()
+      queueMicrotask(() => { loadFileTree() })
     }
   }, [workspaceRoot, loadFileTree])
 
@@ -15240,7 +15274,7 @@ function CodeTabContent() {
               <Input
                 value={folderPickerPath}
                 onChange={e => setFolderPickerPath(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') loadFolderPicker(e.target.value) }}
+                onKeyDown={e => { if (e.key === 'Enter') loadFolderPicker(e.currentTarget.value) }}
                 className="h-7 flex-1 text-[11px] font-mono bg-slate-950/50 border-emerald-400/35"
                 placeholder="/path/to/project"
               />
@@ -16116,6 +16150,12 @@ function AgentsModule() {
         throw new Error(errMsg)
       }
       const data = await res.json()
+      // FALLBACK GUARD (fix 2026-09-09 "local không load agents"): khi DB schema
+      // drift và self-heal thất bại, API trả HTTP 200 + agents rỗng + warning —
+      // nếu không check sẽ hiện danh sách TRỐNG câm lặng, user không biết lý do.
+      if (data.source === 'fallback' && (!data.agents || data.agents.length === 0)) {
+        throw new Error(data.warning || 'Database chưa khớp schema — chạy: bun run db:push')
+      }
       setAgents(data.agents || [])
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Không thể tải danh sách Agent'
@@ -16139,8 +16179,11 @@ function AgentsModule() {
   }, [])
 
   useEffect(() => {
-    void fetchAgents()
-    void fetchModels()
+    // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
+    queueMicrotask(() => {
+      void fetchAgents()
+      void fetchModels()
+    })
   }, [fetchAgents, fetchModels])
 
   // Get models for current provider
@@ -17082,15 +17125,19 @@ export default function Home() {
   useEffect(() => {
     if (!moduleRestoredRef.current) {
       moduleRestoredRef.current = true
-      try {
-        const saved = localStorage.getItem('graphrag-active-module')
-        if (saved) {
-          const validModules = ['smolab', 'agents', 'database']
-          const validModule = validModules.includes(saved) ? saved as 'smolab' | 'agents' | 'database' : 'database'
-          setActiveModule(validModule)
-          if (validModule !== saved) localStorage.setItem('graphrag-active-module', validModule)
-        }
-      } catch { /* ignore */ }
+      // (queueMicrotask: defer setActiveModule ra khỏi body effect — tránh
+      // setState đồng bộ trong effect + vẫn tránh hydration mismatch)
+      queueMicrotask(() => {
+        try {
+          const saved = localStorage.getItem('graphrag-active-module')
+          if (saved) {
+            const validModules = ['smolab', 'agents', 'database']
+            const validModule = validModules.includes(saved) ? saved as 'smolab' | 'agents' | 'database' : 'database'
+            setActiveModule(validModule)
+            if (validModule !== saved) localStorage.setItem('graphrag-active-module', validModule)
+          }
+        } catch { /* ignore */ }
+      })
     }
   }, [])
 
@@ -17155,7 +17202,9 @@ export default function Home() {
         // Notify user about daily quota exhaustion
         if (data.dailyQuotaStatus) {
           const exhausted: string[] = []
-          for (const [name, q] of Object.entries(data.dailyQuotaStatus)) {
+          // Object.entries(any) → [string, unknown][] — ép về Record<string, DailyQuotaInfo>
+          // (khớp kiểu HealthResponse.dailyQuotaStatus) để truy cập field an toàn
+          for (const [name, q] of Object.entries(data.dailyQuotaStatus as Record<string, DailyQuotaInfo>)) {
             if (q.dailyQuotaExhaustedKeys > 0) exhausted.push(`${name} (${q.dailyQuotaExhaustedKeys}/${q.totalKeys} key hết hạn mức)`)
           }
           if (exhausted.length > 0) {
@@ -18053,29 +18102,6 @@ export default function Home() {
     }
   }, [fetchDocuments])
 
-  // Recovery polling: every 60 seconds, call the recovery endpoint to reset stuck documents
-  // and check for documents in error status. Only runs after initial load and when on Documents tab.
-  useEffect(() => {
-    // Only start recovery polling after initial data is loaded AND user is on documents tab
-    if (!initializedRef.current || activeTab !== 'documents') return
-
-    const recoveryPoll = async () => {
-      try {
-        const res = await fetch('/api/ingestion/process', { method: 'PUT' })
-        if (res.ok) {
-          const data = await res.json()
-          if (data.recovered > 0) {
-            sonnerToast.success('Phục hồi tự động', { description: data.message })
-            fetchDocuments(false, undefined, { lite: true })
-          }
-        }
-      } catch { /* ignore */ }
-    }
-    // Do NOT run immediately on mount — only on the interval
-    const interval = setInterval(recoveryPoll, 60000)
-    return () => clearInterval(interval)
-  }, [fetchDocuments, activeTab])
-
   // Auto-poll for documents being processed: refresh every 3s when any doc is in processing state.
   // FIX: Use refs instead of `documents` state as dependency to prevent interval churn.
   // Previously, `documents` was a dependency — every fetchDocuments() call → setDocuments() →
@@ -18117,21 +18143,25 @@ export default function Home() {
   useEffect(() => {
     if (!tabRestoredRef.current) {
       tabRestoredRef.current = true
-      try {
-        const saved = localStorage.getItem('graphrag-active-tab')
-        if (saved && saved !== 'chat') {
-          // FIX: 'autolearn' was missing from the whitelist — reloading while on the
-          // Auto-Learn tab silently dumped the user onto Analytics and overwrote the
-          // saved tab, permanently losing it.
-          const validTab = ['chat', 'explorer', 'documents', 'analytics', 'token', 'autolearn'].includes(saved) ? saved : 'analytics'
-          setActiveTab(validTab)
-          if (validTab !== saved) localStorage.setItem('graphrag-active-tab', validTab)
-          // Trigger data loading for the restored tab
-          if (validTab === 'explorer') fetchEmbeddingStatus()
-          if (validTab === 'analytics') { fetchStats(); fetchEmbeddingStatus(); fetchHealth() }
-          // TokenUsageSection handles its own data fetching
-        }
-      } catch { /* ignore */ }
+      // (queueMicrotask: defer setActiveTab + các loader ra khỏi body effect —
+      // tránh setState đồng bộ trong effect + vẫn tránh hydration mismatch)
+      queueMicrotask(() => {
+        try {
+          const saved = localStorage.getItem('graphrag-active-tab')
+          if (saved && saved !== 'chat') {
+            // FIX: 'autolearn' was missing from the whitelist — reloading while on the
+            // Auto-Learn tab silently dumped the user onto Analytics and overwrote the
+            // saved tab, permanently losing it.
+            const validTab = ['chat', 'explorer', 'documents', 'analytics', 'token', 'autolearn'].includes(saved) ? saved : 'analytics'
+            setActiveTab(validTab)
+            if (validTab !== saved) localStorage.setItem('graphrag-active-tab', validTab)
+            // Trigger data loading for the restored tab
+            if (validTab === 'explorer') fetchEmbeddingStatus()
+            if (validTab === 'analytics') { fetchStats(); fetchEmbeddingStatus(); fetchHealth() }
+            // TokenUsageSection handles its own data fetching
+          }
+        } catch { /* ignore */ }
+      })
     }
   }, [fetchEmbeddingStatus, fetchHealth, fetchStats])
 
@@ -18161,6 +18191,31 @@ export default function Home() {
       void load()
     }
   }, [fetchDocuments])
+
+  // Recovery polling: every 60 seconds, call the recovery endpoint to reset stuck documents
+  // and check for documents in error status. Only runs after initial load and when on Documents tab.
+  // (ĐÃ DỜI xuống dưới effect "Load initial data" — effect ghi initializedRef phải
+  // khai báo TRƯỚC effect đọc nó, nếu không React Compiler báo immutability)
+  useEffect(() => {
+    // Only start recovery polling after initial data is loaded AND user is on documents tab
+    if (!initializedRef.current || activeTab !== 'documents') return
+
+    const recoveryPoll = async () => {
+      try {
+        const res = await fetch('/api/ingestion/process', { method: 'PUT' })
+        if (res.ok) {
+          const data = await res.json()
+          if (data.recovered > 0) {
+            sonnerToast.success('Phục hồi tự động', { description: data.message })
+            fetchDocuments(false, undefined, { lite: true })
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    // Do NOT run immediately on mount — only on the interval
+    const interval = setInterval(recoveryPoll, 60000)
+    return () => clearInterval(interval)
+  }, [fetchDocuments, activeTab])
 
   // Auto-refresh: periodically refresh stats and health for real-time data display
   useEffect(() => {
@@ -18761,14 +18816,14 @@ function KnowledgeGraph3D({ nodes, links, getNodeColor, getNodeRadius, onNodeCli
         .graphData(graphData)
         .backgroundColor('rgba(0,0,0,0)')
         .nodeRelSize(6)
-        .nodeVal((node: { val?: number }) => node.val || 6)
-        .nodeColor((node: { color?: string }) => node.color || '#9ca3af')
+        .nodeVal((node: ForceGraphNodeObject) => (node as { val?: number }).val || 6)
+        .nodeColor((node: ForceGraphNodeObject) => (node as { color?: string }).color || '#9ca3af')
         .nodeOpacity(0.95)
-        .nodeLabel((node: { name?: string; type?: string }) => {
+        .nodeLabel((node: ForceGraphNodeObject) => {
           const n = node as { name?: string; type?: string; occurrences?: number }
           return `<div style="background:rgba(15,23,42,0.95);padding:6px 10px;border-radius:6px;border:1px solid rgba(34,211,238,0.4);color:#e2e8f0;font-size:11px;"><b>${n.name}</b><br/><span style="color:#67e8f9;">${n.type}</span>${n.occurrences ? `<br/><span style="color:#94a3b8;">×${n.occurrences} occurrences</span>` : ''}</div>`
         })
-        .nodeThreeObject((node: { color?: string; val?: number }) => {
+        .nodeThreeObject((node: ForceGraphNodeObject) => {
           const n = node as { color?: string; val?: number }
           // Glowing sphere with emissive material
           const colorHex = n.color || '#9ca3af'
@@ -18790,7 +18845,7 @@ function KnowledgeGraph3D({ nodes, links, getNodeColor, getNodeRadius, onNodeCli
           mesh.add(halo)
           return mesh
         })
-        .linkColor((link: { color?: string }) => (link as { color?: string }).color || 'rgba(180,200,255,0.4)')
+        .linkColor((link: ForceGraphLinkObject) => (link as { color?: string }).color || 'rgba(180,200,255,0.4)')
         .linkWidth(0.8)
         .linkOpacity(0.6)
         .linkDirectionalParticles(2)
@@ -18799,11 +18854,11 @@ function KnowledgeGraph3D({ nodes, links, getNodeColor, getNodeRadius, onNodeCli
         .linkDirectionalParticleSpeed(0.004)
         .linkDirectionalArrowLength(3.5)
         .linkDirectionalArrowRelPos(1)
-        .linkLabel((link: { relType?: string }) => {
+        .linkLabel((link: ForceGraphLinkObject) => {
           const l = link as { relType?: string }
           return l.relType ? `<div style="background:rgba(15,23,42,0.9);padding:3px 6px;border-radius:4px;color:#94a3b8;font-size:9px;">${l.relType}</div>` : ''
         })
-        .onNodeClick((node: { name?: string }) => {
+        .onNodeClick((node: ForceGraphNodeObject) => {
           const n = node as { name?: string }
           if (n.name) onNodeClick(n.name)
         })

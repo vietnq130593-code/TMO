@@ -140,7 +140,14 @@ export async function DELETE(request: NextRequest) {
     for (const status of targetStatuses) {
       const { documents: docs } = await listDocuments({ status, limit: 1000 })
       for (const doc of docs) {
-        const steps = doc.payload.processing_steps as Array<{ step: string; status: string; timestamp: string }> | null
+        // processing_steps lưu dưới 2 shape khác nhau tùy thời điểm ghi
+        // ({name,label,...} theo DocumentPayload vs {step,timestamp} legacy)
+        // — cast 2 bước để giữ nguyên logic đọc/ghi gốc
+        const steps = doc.payload.processing_steps as unknown as Array<{
+          step: string
+          status: string
+          timestamp: string
+        }> | null
         if (steps && Array.isArray(steps)) {
           // Check if there's a neo4j step to reset
           const hasNeo4jStep = steps.some(s => s.step === 'neo4j')
@@ -152,7 +159,7 @@ export async function DELETE(request: NextRequest) {
                 : s
             )
             await updateDocumentStatus(doc.id, {
-              processing_steps: updatedSteps as DocumentPayload['processing_steps'],
+              processing_steps: updatedSteps as unknown as DocumentPayload['processing_steps'],
             })
             resetCount++
           }

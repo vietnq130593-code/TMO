@@ -22,6 +22,30 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 
+/** Shape log mong đợi của bảng ToolCallLog — model CHƯA có trong schema.prisma.
+ *  Truy vấn qua cast; runtime db.toolCallLog undefined → throw → catch → 500
+ *  (giữ nguyên behavior hiện tại, chờ schema thêm model). */
+interface ToolCallLogRow {
+  agentId: string
+  agentName: string | null
+  toolName: string
+  toolSource: string
+  success: boolean
+  durationMs: number
+  errorMessage: string | null
+  createdAt: Date
+}
+
+/** Delegate mô tả các method đang dùng — cast từ PrismaClient (model thiếu trong schema) */
+interface ToolCallLogDelegate {
+  findMany(args: {
+    where?: Record<string, unknown>
+    select?: Record<string, boolean>
+    orderBy?: Record<string, string>
+    take?: number
+  }): Promise<ToolCallLogRow[]>
+}
+
 export const dynamic = 'force-dynamic'
 
 /** Valid time ranges */
@@ -84,7 +108,8 @@ export async function GET(request: NextRequest) {
     }
 
     // Fetch all matching logs
-    const logs = await db.toolCallLog.findMany({
+    const toolCallLog = (db as unknown as { toolCallLog: ToolCallLogDelegate }).toolCallLog
+    const logs = await toolCallLog.findMany({
       where,
       select: {
         agentId: true,

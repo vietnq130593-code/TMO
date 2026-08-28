@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getAllCustomTools } from '@/lib/custom-tool-registry'
 import { tavilyKeyPool, jinaKeyPool, serperKeyPool } from '@/lib/service-key-pool'
+import type { CustomTool } from '@prisma/client'
 
 // FIX (P2 broken import): the route previously imported GATEWAY_TOOL_REGISTRY,
 // SESSION_CONTEXT_TOOLS, HTTP_ACCESSIBLE_TOOLS from '@/lib/openclaw' — but those
@@ -267,7 +268,8 @@ export async function GET(request: NextRequest) {
     // (returns the in-memory registry's custom tools + local + gateway tools
     // instead of 500-ing the whole endpoint). When the model is added later,
     // this branch will just start working.
-    let dbCustomTools: Array<{ name: string }> = []
+    // Model CustomTool đã có trong schema.prisma — dùng type Prisma thay vì { name: string }
+    let dbCustomTools: CustomTool[] = []
     try {
       if ((db as any).customTool) {
         dbCustomTools = await (db as any).customTool.findMany()

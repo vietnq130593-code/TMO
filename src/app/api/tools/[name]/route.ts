@@ -7,6 +7,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { unregisterCustomTool, registerCustomTool, type CustomToolEntry } from '@/lib/custom-tool-registry'
+import type { CustomTool } from '@prisma/client'
+
+/** CustomTool + các field meta tùy chọn (lastTestedAt/lastUsedAt/testArgs chưa có trong
+ *  schema — runtime là undefined, giữ nguyên response JSON cũ qua type mở rộng) */
+type CustomToolWithMeta = CustomTool & {
+  lastTestedAt?: Date | string | null
+  lastUsedAt?: Date | string | null
+  testArgs?: string | null
+}
 
 export const dynamic = 'force-dynamic'
 
@@ -57,9 +66,9 @@ export async function GET(
         isPublic: tool.isPublic,
         skillSlug: tool.skillSlug,
         callCount: tool.callCount,
-        lastTestedAt: tool.lastTestedAt,
-        lastUsedAt: tool.lastUsedAt,
-        testArgs: tool.testArgs,
+        lastTestedAt: (tool as CustomToolWithMeta).lastTestedAt,
+        lastUsedAt: (tool as CustomToolWithMeta).lastUsedAt,
+        testArgs: (tool as CustomToolWithMeta).testArgs,
         createdAt: tool.createdAt,
         updatedAt: tool.updatedAt,
       },
@@ -216,9 +225,9 @@ export async function PUT(
         isPublic: updated.isPublic,
         skillSlug: updated.skillSlug,
         callCount: updated.callCount,
-        lastTestedAt: updated.lastTestedAt,
-        lastUsedAt: updated.lastUsedAt,
-        testArgs: updated.testArgs,
+        lastTestedAt: (updated as CustomToolWithMeta).lastTestedAt,
+        lastUsedAt: (updated as CustomToolWithMeta).lastUsedAt,
+        testArgs: (updated as CustomToolWithMeta).testArgs,
         createdAt: updated.createdAt,
         updatedAt: updated.updatedAt,
       },

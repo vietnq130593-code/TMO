@@ -287,6 +287,16 @@ function chunkText(text: string, domain: DocumentDomain): ParsedChunk[] {
 
 // ==================== MAIN PARSE FUNCTION ====================
 
+// Compat shape cho 2 phiên bản pdf-parse:
+//   v2: named export class PDFParse (bản đang cài) — không có default export
+//   v1: module.exports = hàm pdf(buffer) → { text, numpages, total } (branch fallback)
+type PdfParseV1Fn = (buffer: Buffer | Uint8Array) => Promise<{ text?: string; numpages?: number; total?: number }>
+
+type PdfParseCompat = {
+  PDFParse?: typeof import('pdf-parse')['PDFParse']
+  default?: PdfParseV1Fn
+} & PdfParseV1Fn
+
 /**
  * Parse a PDF buffer and return chunks with domain-specific strategy
  */
@@ -300,7 +310,8 @@ export async function parsePDF(
   let totalPages = 0
 
   try {
-    const pdfParseModule = await import('pdf-parse')
+    // Cast compat (v2 type không khai báo default — branch v1 chỉ chạy khi cài v1)
+    const pdfParseModule = (await import('pdf-parse')) as unknown as PdfParseCompat
     if (pdfParseModule.PDFParse) {
       // v2 style: PDFParse class — constructor expects { data: Uint8Array } config object
       const parser = new pdfParseModule.PDFParse({ data: new Uint8Array(buffer) })
@@ -323,7 +334,8 @@ export async function parsePDF(
     }
   } catch (v2Error) {
     try {
-      const pdf = (await import('pdf-parse')).default
+      // Fallback pdf-parse v1 — default export là hàm (v2 không có → sẽ throw → log lỗi bên dưới)
+      const pdf = ((await import('pdf-parse')) as unknown as PdfParseCompat).default!
       const data = await pdf(buffer)
       text = data.text || ''
       totalPages = data.numpages || data.total || 0

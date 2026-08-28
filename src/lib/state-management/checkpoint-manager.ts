@@ -16,6 +16,34 @@ import type { PipelineStep } from '@/lib/code-team/types'
 import type { RoutingDecision } from '@/lib/code-team/worklog'
 import { db } from '@/lib/db'
 
+// ==================== PRISMA DELEGATE (CodeTeamCheckpoint) ====================
+// Bảng CodeTeamCheckpoint tồn tại trong DB (migration 20260618154653) nhưng model
+// CHƯA được khai báo trong prisma/schema.prisma nên PrismaClient không sinh delegate.
+// Mô tả lại shape (khớp migration.sql) để giữ type-safety — runtime behavior giữ nguyên.
+interface CodeTeamCheckpointRecord {
+  id: string
+  sessionId: string
+  phase: string
+  completedSteps: string
+  currentStepIndex: number
+  filesModified: string
+  keyDecisions: string
+  pendingIssues: string
+  progressSnapshot: string
+  contextSnapshot: string
+  routingDecision: string
+  createdAt: Date
+}
+
+interface CodeTeamCheckpointDelegate {
+  create(args: { data: Record<string, unknown> }): Promise<CodeTeamCheckpointRecord>
+  findUnique(args: { where: { id: string } }): Promise<CodeTeamCheckpointRecord | null>
+  findMany(args: { where?: { sessionId?: string }; orderBy?: Record<string, string> }): Promise<CodeTeamCheckpointRecord[]>
+  findFirst(args: { where?: { sessionId?: string }; orderBy?: Record<string, string> }): Promise<CodeTeamCheckpointRecord | null>
+}
+
+const checkpointDb = (db as unknown as { codeTeamCheckpoint: CodeTeamCheckpointDelegate }).codeTeamCheckpoint
+
 // ==================== HELPER FUNCTIONS ====================
 
 /**
@@ -110,7 +138,7 @@ export function createCheckpointManager(sessionId: string): CheckpointManager {
         .filter(e => !e.fixApplied)
         .map(e => `${e.severity}: ${e.message}`)
 
-      const record = await db.codeTeamCheckpoint.create({
+      const record = await checkpointDb.create({
         data: {
           sessionId,
           phase,
@@ -144,7 +172,7 @@ export function createCheckpointManager(sessionId: string): CheckpointManager {
     },
 
     async restoreCheckpoint(checkpointId: string): Promise<CheckpointState> {
-      const record = await db.codeTeamCheckpoint.findUnique({
+      const record = await checkpointDb.findUnique({
         where: { id: checkpointId },
       })
 
@@ -171,7 +199,7 @@ export function createCheckpointManager(sessionId: string): CheckpointManager {
     },
 
     async listCheckpoints(): Promise<Checkpoint[]> {
-      const records = await db.codeTeamCheckpoint.findMany({
+      const records = await checkpointDb.findMany({
         where: { sessionId },
         orderBy: { createdAt: 'desc' },
       })
@@ -193,7 +221,7 @@ export function createCheckpointManager(sessionId: string): CheckpointManager {
     },
 
     async getLatestCheckpoint(): Promise<Checkpoint | null> {
-      const record = await db.codeTeamCheckpoint.findFirst({
+      const record = await checkpointDb.findFirst({
         where: { sessionId },
         orderBy: { createdAt: 'desc' },
       })

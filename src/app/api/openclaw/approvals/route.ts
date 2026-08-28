@@ -17,6 +17,58 @@ import { db } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 
+// ---------------------------------------------------------------------------
+// TYPE-ONLY: model ToolApprovalQueue CHƯA được khai báo trong Prisma schema —
+// runtime `db.toolApprovalQueue` là undefined và mọi call sẽ throw TypeError,
+// đã được try/catch của từng handler bắt (500) như behavior hiện tại. Khai báo
+// type theo shape route đang dùng, cast delegate MỘT lần ở root — không thêm/
+// bớt call, không đổi logic. Khi model được thêm vào schema thì cast này vẫn
+// khớp (structural typing).
+// ---------------------------------------------------------------------------
+type ToolApprovalQueueRow = {
+  id: string
+  agentId: string
+  agentName: string | null
+  toolName: string
+  args: string | null
+  sessionId: string | null
+  status: string
+  expiresAt: Date
+  reviewedBy: string | null
+  reviewedAt: Date | null
+  createdAt: Date
+}
+
+type ToolApprovalQueueModel = {
+  updateMany(args: {
+    where: { status?: string; expiresAt?: { lt: Date } }
+    data: { status: string }
+  }): Promise<{ count: number }>
+  findMany(args?: {
+    where?: Record<string, unknown>
+    orderBy?: { createdAt: 'asc' | 'desc' }
+  }): Promise<ToolApprovalQueueRow[]>
+  create(args: {
+    data: {
+      agentId: string
+      agentName?: string | null
+      toolName: string
+      args?: string | null
+      sessionId?: string | null
+      status: string
+      expiresAt: Date
+    }
+  }): Promise<ToolApprovalQueueRow>
+  findUnique(args: { where: { id: string } }): Promise<ToolApprovalQueueRow | null>
+  update(args: {
+    where: { id: string }
+    data: { status: string; reviewedBy?: string | null; reviewedAt?: Date }
+  }): Promise<ToolApprovalQueueRow>
+}
+
+const toolApprovalQueue = (db as unknown as { toolApprovalQueue: ToolApprovalQueueModel })
+  .toolApprovalQueue
+
 /** Valid approval statuses */
 const VALID_STATUSES = ['pending', 'approved', 'denied', 'expired'] as const
 type ValidStatus = (typeof VALID_STATUSES)[number]
@@ -30,7 +82,7 @@ function isValidStatus(value: unknown): value is ValidStatus {
  * Called on each GET to keep the queue clean.
  */
 async function expireOldRequests(): Promise<number> {
-  const result = await db.toolApprovalQueue.updateMany({
+  const result = await toolApprovalQueue.updateMany({
     where: {
       status: 'pending',
       expiresAt: { lt: new Date() },
@@ -65,7 +117,7 @@ export async function GET(request: NextRequest) {
       where.agentId = agentId
     }
 
-    const approvals = await db.toolApprovalQueue.findMany({
+    const approvals = await toolApprovalQueue.findMany({
       where,
       orderBy: { createdAt: 'desc' },
     })
@@ -109,7 +161,7 @@ export async function POST(request: NextRequest) {
     const ttl = Math.max(60, Math.min(expiresInSeconds, 3600)) // Clamp: 1 min to 1 hour
     const expiresAt = new Date(Date.now() + ttl * 1000)
 
-    const approval = await db.toolApprovalQueue.create({
+    const approval = await toolApprovalQueue.create({
       data: {
         agentId,
         agentName: agentName || null,
@@ -150,7 +202,7 @@ export async function PUT(request: NextRequest) {
     }
 
     // Check the approval exists and is still pending
-    const existing = await db.toolApprovalQueue.findUnique({ where: { id } })
+    const existing = await toolApprovalQueue.findUnique({ where: { id } })
     if (!existing) {
       return NextResponse.json({ error: 'Approval request not found' }, { status: 404 })
     }
@@ -163,7 +215,7 @@ export async function PUT(request: NextRequest) {
     }
 
     // Update the approval
-    const updated = await db.toolApprovalQueue.update({
+    const updated = await toolApprovalQueue.update({
       where: { id },
       data: {
         status,

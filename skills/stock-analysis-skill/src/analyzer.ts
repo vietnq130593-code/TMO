@@ -253,7 +253,9 @@ export async function analyzeChartImage(
           content: [
             { type: "image", image: imageContent },
             { type: "text", text: `这是 ${stockCode} 的K线图，请分析：\n1. 当前K线形态\n2. 趋势方向\n3. 关键支撑位和压力位\n4. 成交量配合\n5. 短期操作建议` },
-          ],
+            // SDK khai báo ChatMessage.content là string — payload multimodal
+            // gốc giữ nguyên (chỉ fix type, không đổi request thật)
+          ] as unknown as string,
         },
       ],
     });

@@ -1,6 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+// socket.io-client chưa được cài trong dependencies của repo (file example
+// tham khảo) — giữ nguyên import gốc, chỉ chặn lỗi type TS2307.
+// @ts-expect-error TS2307: module 'socket.io-client' không tồn tại (chưa install)
 import { io } from 'socket.io-client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

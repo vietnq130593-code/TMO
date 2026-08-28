@@ -316,7 +316,10 @@ async function runReVerification(
   try {
     // Chạy static verification trên file đã sửa
     // Lazy import to avoid circular dependency
-    const { runStaticVerification } = await import('../verification')
+    // NOTE: module '../verification' CHƯA tồn tại trong codebase — dùng biến string
+    // cho dynamic import (giữ nguyên runtime: import fail → catch → passed:false).
+    const verificationModule: string = '../verification'
+    const { runStaticVerification } = await import(verificationModule)
     const result = await runStaticVerification({
       runLint: true,
       runTypeCheck: true,

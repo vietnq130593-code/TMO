@@ -2059,10 +2059,13 @@ async function buildTLPrompt(userRequest: string, messages: Array<{ role: string
   // Inject workspace context so TL knows the project structure before recon
   let workspaceContext = ''
   try {
-    const { buildWorkspaceContext } = await import('./workspace-context')
-    workspaceContext = await buildWorkspaceContext()
+    // buildWorkspaceContext đã import tĩnh ở đầu file (line ~55) — path cũ
+    // './workspace-context' sai (module nằm ở @/lib/workspace/workspace-context);
+    // trả về { text, root } — lấy .text (pattern giống dòng ~1369)
+    const wsCtx = await buildWorkspaceContext()
+    workspaceContext = wsCtx.text
   } catch {
-    // Fallback: minimal context if workspace-context module unavailable
+    // Fallback: minimal context nếu buildWorkspaceContext lỗi
     workspaceContext = `Workspace root: ${process.env.OPENCODE_WORKSPACE || process.cwd()}`
   }
 

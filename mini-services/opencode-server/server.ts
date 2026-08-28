@@ -20,6 +20,20 @@ import { existsSync } from 'fs'
 import { join, relative, extname, resolve } from 'path'
 import { execSync } from 'child_process'
 
+// Bun global — tsconfig chính chưa include bun-types; khai báo interface
+// tối thiểu cho đúng shape API đang dùng (runtime vẫn dùng global Bun thật).
+declare const Bun: {
+  serve(options: {
+    port?: number | string
+    hostname?: string
+    fetch: (request: Request) => Response | Promise<Response>
+  }): {
+    port: number
+    hostname: string
+    fetch: (request: Request) => Response | Promise<Response>
+  }
+}
+
 // ============================================
 // CONFIG
 // ============================================
@@ -80,7 +94,11 @@ app.use('*', async (c, next) => {
     c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-TMO-API-Token')
     c.header('Access-Control-Max-Age', '86400')
   }
-  if (c.req.method === 'OPTIONS') return c.body('', 204)
+  if (c.req.method === 'OPTIONS') {
+    // 204 (no-content) không nằm trong ContentfulStatusCode của Hono — Bun
+    // runtime vẫn trả body rỗng kèm 204 như cũ; giữ nguyên giá trị, chỉ nới type.
+    return c.body('', 204 as 200)
+  }
   // Phase 1: mọi request phải có X-TMO-API-Token (C1 fix)
   const token = c.req.header('X-TMO-API-Token')
   const expected = process.env.TMO_API_TOKEN

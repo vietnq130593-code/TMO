@@ -77,7 +77,9 @@ const CHUNKS_PER_BATCH = 20
 
 type DocumentDomain = 'programming' | 'algorithm' | 'ml' | 'meta_cognitive' | 'linux' | 'security' | 'ux_ui' | 'mixed'
 type EntityType = 'Concept' | 'Technology' | 'Framework' | 'Vulnerability' | 'Principle' | 'Domain' | 'Document' | 'Person'
-type RelationshipType = 'PART_OF' | 'IMPLEMENTED_IN' | 'USES' | 'EXPLOITS' | 'MITIGATES' | 'RUNS_ON' | 'DEPENDS_ON' | 'CONTRASTS_WITH' | 'ENABLES' | 'CONTAINS' | 'EXTENDS' | 'APPLIES_TO' | 'CREATED_BY' | 'DOCUMENTED_IN' | 'ALTERNATIVE_TO'
+type RelationshipType = 'PART_OF' | 'IMPLEMENTED_IN' | 'USES' | 'EXPLOITS' | 'MITIGATES' | 'RUNS_ON' | 'DEPENDS_ON' | 'CONTRASTS_WITH' | 'ENABLES' | 'CONTAINS' | 'EXTENDS' | 'APPLIES_TO' | 'CREATED_BY' | 'DOCUMENTED_IN' | 'ALTERNATIVE_TO' | 'RELATED_TO'
+// ^ 'RELATED_TO' (2026-09-09): fallback của normalizeRelationshipType() — runtime vẫn luôn
+// trả về giá trị này khi không match, union phải phản ánh đúng dòng chảy thực tế.
 
 interface ParsedChunk { content: string; chunkIndex: number; headingPath: string; tokenCount: number; domain: DocumentDomain }
 interface ParseResult { chunks: ParsedChunk[]; totalPages: number; totalTokens: number }
@@ -123,7 +125,7 @@ const UPLOAD_DIR = process.env.UPLOAD_DIR || '/tmp/theopus-uploads'
 /** Convert Qdrant DocumentPayload to a flat record format expected by the pipeline.
  *  Qdrant stores the full DocumentPayload — we map it to the flat shape the pipeline expects.
  */
-function qdrantDocToRecord(payload: DocumentPayload, id: string): Record<string, unknown> {
+function qdrantDocToRecord(payload: DocumentPayload, id: string): QdrantDocumentRecord {
   return {
     id,
     title: payload.title,
@@ -139,6 +141,28 @@ function qdrantDocToRecord(payload: DocumentPayload, id: string): Record<string,
     // Preserve R2 linkage for fallback download when local file is missing
     r2_key: (payload as Record<string, unknown>).r2_key,
   }
+}
+
+/**
+ * Bản ghi document lấy từ Qdrant sau khi chuẩn hoá qua qdrantDocToRecord.
+ * (2026-09-09) Trước đây trả Record<string, unknown> → mọi field access
+ * (status/created_at/title/updated_at...) đều unknown, gây 20+ lỗi tsc cascade.
+ * Giữ index signature để vẫn assignable sang Record<string, unknown> như cũ.
+ */
+interface QdrantDocumentRecord {
+  [key: string]: unknown
+  id: string
+  title: string
+  file_path?: string
+  domain: string
+  page_count?: number
+  status: string
+  error_message?: string | null
+  processing_steps: DocumentPayload['processing_steps']
+  processing_percent: number
+  created_at: string
+  updated_at: string
+  r2_key?: unknown
 }
 
 /** Convert ProcessingStepRecord[] to the Qdrant-compatible format.
@@ -429,6 +453,16 @@ async function extractTextWithPdfjsDist(buffer: Buffer): Promise<{ text: string;
   }
 }
 
+// Compat shape cho 2 phiên bản pdf-parse (đồng bộ với src/lib/ingestion/pdf-parser.ts):
+//   v2: named export class PDFParse (bản đang cài) — không có default export
+//   v1: module.exports = hàm pdf(buffer) → { text, numpages, total } (branch fallback)
+type PdfParseV1Fn = (buffer: Buffer | Uint8Array) => Promise<{ text?: string; numpages?: number; total?: number }>
+
+type PdfParseCompat = {
+  PDFParse?: typeof import('pdf-parse')['PDFParse']
+  default?: PdfParseV1Fn
+} & PdfParseV1Fn
+
 async function parsePDF(buffer: Buffer, domain: DocumentDomain = 'mixed'): Promise<ParseResult> {
   let text = ''
   let totalPages = 0
@@ -436,7 +470,8 @@ async function parsePDF(buffer: Buffer, domain: DocumentDomain = 'mixed'): Promi
   // PRIMARY: pdf-parse v2 (modern, reliable, handles standard fonts natively)
   // pdf-parse v2 uses pdfjs-dist internally with proper font support.
   try {
-    const pdfParseModule = await import('pdf-parse')
+    // Compat cast (v2 không khai báo default; branch v1 chỉ chạy khi cài v1)
+    const pdfParseModule = (await import('pdf-parse')) as unknown as PdfParseCompat
     if (pdfParseModule.PDFParse) {
       // v2: PDFParse class — constructor expects { data: Uint8Array } config object
       const parser = new pdfParseModule.PDFParse({ data: new Uint8Array(buffer) })
@@ -540,7 +575,8 @@ async function extractPDFText(buffer: Buffer): Promise<{ text: string; totalPage
 
   // PRIMARY: pdf-parse v2 (modern, handles standard fonts natively, no timeout issues)
   try {
-    const pdfParseModule = await import('pdf-parse')
+    // Compat cast (v2 không khai báo default; branch v1 chỉ chạy khi cài v1)
+    const pdfParseModule = (await import('pdf-parse')) as unknown as PdfParseCompat
     if (pdfParseModule.PDFParse) {
       // v2: PDFParse class — constructor expects { data: Uint8Array } config object
       const parser = new pdfParseModule.PDFParse({ data: new Uint8Array(buffer) })
@@ -1171,7 +1207,7 @@ async function extractFromChunk(chunkContent: string, domain: DocumentDomain, ch
     return { entities, relationships, provider, model }
   } catch (extractErr) {
     // Log the error instead of silently swallowing — helps debugging provider failures
-    console.warn(`[Extract] extractFromChunk FAILED for doc ${documentId?.slice(0, 8) || '?'} chunk ${chunkIndex}:`, extractErr instanceof Error ? extractErr.message : String(extractErr))
+    console.warn(`[Extract] extractFromChunk FAILED for chunk ${chunkIndex}:`, extractErr instanceof Error ? extractErr.message : String(extractErr))
     return { entities: [], relationships: [], provider, model }
   }
 }
@@ -1270,7 +1306,7 @@ async function updateDocProgress(
   documentId: string,
   updates: {
     status?: string
-    errorMessage?: string
+    errorMessage?: string | null
     steps?: ProcessingStepRecord[]
     extractProgress?: { processed: number; total: number }
     pageCount?: number
@@ -1734,7 +1770,7 @@ async function writeEntitiesToNeo4j(
                                  n.confidence_score = CASE WHEN e.confidence > COALESCE(n.confidence_score, 0) THEN e.confidence ELSE n.confidence_score END,
                                  n.occurrence_count = COALESCE(n.occurrence_count, 1) + 1,
                                  n.updated_at = $updatedAt`,
-                  { entities: batch.map(e => ({ ...e, entityType: e.type || label, source: 'llm', createdAt: new Date().toISOString() })), updatedAt: new Date().toISOString() }
+                  { entities: batch.map(e => ({ ...e, entityType: (e as { type?: string }).type || label, source: 'llm', createdAt: new Date().toISOString() })), updatedAt: new Date().toISOString() }
                 )
               ),
               new Promise<never>((_, reject) =>
@@ -1768,7 +1804,7 @@ async function writeEntitiesToNeo4j(
                                  n.confidence_score = CASE WHEN $confidence > COALESCE(n.confidence_score, 0) THEN $confidence ELSE n.confidence_score END,
                                  n.occurrence_count = COALESCE(n.occurrence_count, 1) + 1,
                                  n.updated_at = $updatedAt`,
-                  { id: entity.id, name: entity.name, entityType: entity.type || label, domain: entity.domain, description: entity.description, confidence: entity.confidence, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+                  { id: entity.id, name: entity.name, entityType: (entity as { type?: string }).type || label, domain: entity.domain, description: entity.description, confidence: entity.confidence, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
                 )
               )
               nodesCreated++
@@ -2682,7 +2718,7 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
     // Result processing function — handles entity/relationship extraction results
     // This is called sequentially for each completed chunk (no race conditions on shared state)
     async function processExtractionResult(
-      chunk: { id: string; content: string; chunk_index: number; domain?: string },
+      chunk: { id: string; content: string; chunk_index: number; domain?: string | null },
       extractionResult: { entities: ExtractedEntity[]; relationships: ExtractedRelationship[]; provider: string; model: string } | null,
     ): Promise<void> {
       if (!extractionResult) {
@@ -3235,7 +3271,7 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
         const existingMap = new Map(existingResolved.map(e => [e.canonicalName.toLowerCase(), e]))
 
         const toInsert: Array<{
-          canonicalName: string; entityType: string; description: string;
+          documentId: string; canonicalName: string; entityType: string; description: string;
           properties: string; avgConfidence: number; occurrenceCount: number; domains: string;
         }> = []
         const toUpdate: Array<{ id: string; data: Record<string, unknown> }> = []
@@ -3270,15 +3306,16 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
         }
 
         // Insert new resolved entities — 3-layer protection against pipeline abort:
-        // Layer 1: skipDuplicates to handle race condition (2 docs inserting same canonicalName)
-        // Layer 2: Fallback to individual upsert if skipDuplicates still fails
+        // Layer 1: bulk createMany (SQLite KHÔNG hỗ trợ skipDuplicates — Prisma sẽ
+        //   throw "Unknown argument" nếu truyền; race-condition trùng canonicalName
+        //   vẫn được bảo vệ bởi unique constraint → rơi xuống Layer 2)
+        // Layer 2: Fallback to individual upsert if createMany fails
         // Layer 3: Log but DO NOT abort pipeline on individual entity errors
         if (toInsert.length > 0) {
           try {
             for (let i = 0; i < toInsert.length; i += 100) {
               await db.localResolvedEntity.createMany({
                 data: toInsert.slice(i, i + 100),
-                skipDuplicates: true, // Layer 1: Skip rows that violate unique constraints
               })
             }
           } catch (createManyErr: any) {
@@ -4501,7 +4538,7 @@ export async function POST(request: NextRequest) {
           // This ensures partially-extracted docs are resumed BEFORE new docs are started.
           let remainingCapacity = freeKeysAvailable
           const priorityGroups: Array<['partial'] | ['error'] | ['uploaded']> = [['partial'], ['error'], ['uploaded']]
-          const allEligibleDocs: typeof eligibleDocs = []
+          const allEligibleDocs: Array<{ id: string; payload: DocumentPayload }> = []
 
           for (const statusSet of priorityGroups) {
             if (remainingCapacity <= 0) break
@@ -4970,7 +5007,7 @@ export async function POST(request: NextRequest) {
       if (slotIndex < 0) {
         // No free key — can't process this document in sync mode
         results.push({
-          documentId,
+          documentId: docId,
           status: 'error',
           error: `No free key available — all ${MAX_TOTAL_CONCURRENT} key assignments are busy (${MAX_KEYS} keys × ${MAX_DOCS_PER_KEY} docs/key). Use async mode for queuing.`,
         })

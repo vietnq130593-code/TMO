@@ -12,6 +12,49 @@ import { db } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 
+// ---------------------------------------------------------------------------
+// TYPE-ONLY: ToolPermission trong Prisma schema chỉ có 4 cột gốc (id, agentId,
+// toolName, permission) — route này viết theo shape MỞ RỘNG (source,
+// requiresApproval, maxCallsPerHour) chưa có trong schema. Khai báo type theo
+// shape route đang dùng, cast delegate MỘT lần ở root — runtime giữ nguyên
+// (vẫn gọi đúng db.toolPermission.* với đúng args như cũ).
+// ---------------------------------------------------------------------------
+type ToolPermissionRow = {
+  id: string
+  agentId: string
+  toolName: string
+  permission: string
+  source?: string
+  requiresApproval?: boolean
+  maxCallsPerHour?: number | null
+}
+
+type ToolPermissionData = {
+  agentId?: string
+  toolName?: string
+  permission?: string
+  source?: string
+  requiresApproval?: boolean
+  maxCallsPerHour?: number | null
+}
+
+const toolPermissions = (db as unknown as {
+  toolPermission: {
+    findMany(args?: {
+      where?: { agentId?: string }
+      orderBy?: { toolName?: 'asc' | 'desc' }
+    }): Promise<ToolPermissionRow[]>
+    upsert(args: {
+      where: { agentId_toolName: { agentId: string; toolName: string } }
+      create: ToolPermissionData
+      update: ToolPermissionData
+    }): Promise<ToolPermissionRow>
+    delete(args: {
+      where: { agentId_toolName: { agentId: string; toolName: string } }
+    }): Promise<ToolPermissionRow>
+  }
+}).toolPermission
+
 /** Valid permission values */
 const VALID_PERMISSIONS = ['allow', 'deny', 'ask'] as const
 type ValidPermission = (typeof VALID_PERMISSIONS)[number]
@@ -37,7 +80,7 @@ async function seedDefaultPermissions() {
   ]
 
   for (const tool of dangerousTools) {
-    await db.toolPermission.upsert({
+    await toolPermissions.upsert({
       where: { agentId_toolName: { agentId: 'default', toolName: tool.toolName } },
       create: { agentId: 'default', ...tool },
       update: {},
@@ -60,7 +103,7 @@ export async function GET(request: NextRequest) {
   // Seed default permissions on first access only
   await seedDefaultPermissions()
 
-  const permissions = await db.toolPermission.findMany({
+  const permissions = await toolPermissions.findMany({
     where: { agentId },
     orderBy: { toolName: 'asc' },
   })
@@ -86,7 +129,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const perm = await db.toolPermission.upsert({
+    const perm = await toolPermissions.upsert({
       where: { agentId_toolName: { agentId, toolName } },
       create: {
         agentId,
@@ -147,7 +190,7 @@ export async function PUT(request: NextRequest) {
 
     const results = await Promise.all(
       permissions.map(p =>
-        db.toolPermission.upsert({
+        toolPermissions.upsert({
           where: { agentId_toolName: { agentId, toolName: p.toolName } },
           create: {
             agentId,
@@ -189,7 +232,7 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
-    await db.toolPermission.delete({
+    await toolPermissions.delete({
       where: { agentId_toolName: { agentId, toolName } },
     })
     return NextResponse.json({ success: true })

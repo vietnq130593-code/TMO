@@ -174,6 +174,10 @@ export async function GET(request: NextRequest) {
 
 // ==================== HELPERS ====================
 
+// Point trả về từ qdrant.scroll — dùng type suy ra từ client để khớp shape thật
+// (payload có thể null, next_page_offset có thể là object shard-key)
+type QdrantScrolledPoint = (Awaited<ReturnType<typeof qdrant.scroll>>)['points'][number]
+
 async function restoreSingleDocument(docId: string): Promise<{ restored: boolean; skipped: boolean; error?: string }> {
   try {
     // Get document metadata from Qdrant
@@ -222,11 +226,11 @@ async function restoreSingleDocument(docId: string): Promise<{ restored: boolean
   }
 }
 
-async function fetchAllQdrantDocuments(): Promise<Array<{ id: string | number; payload?: Record<string, unknown> }>> {
+async function fetchAllQdrantDocuments(): Promise<QdrantScrolledPoint[]> {
   try {
     // Use scroll API to get all documents
-    const allPoints: Array<{ id: string | number; payload?: Record<string, unknown> }> = []
-    let offset: string | number | undefined = undefined
+    const allPoints: QdrantScrolledPoint[] = []
+    let offset: (Awaited<ReturnType<typeof qdrant.scroll>>)['next_page_offset'] = undefined
 
     do {
       const result = await qdrant.scroll(COLLECTION_DOCUMENTS, {

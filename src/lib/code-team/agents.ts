@@ -123,7 +123,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
 // Idempotent — chạy khi app startup hoặc lazy khi GET /api/agents
 // Đảm bảo 5 agents LUÔN tồn tại — clone GitHub về vẫn đủ
 
-let seedPromise: Promise<void> | null = null
+let seedPromise: Promise<boolean> | null = null
 let seedCompleted = false
 
 /**
@@ -152,18 +152,25 @@ export function resetSeedState(): void {
  *   when the workflow needs them (lazy seeding). Both paths create deletable agents.
  *
  * - Idempotent — safe to call multiple times, cached promise
- * - After first run, becomes no-op (use forceReseedCodeTeam for full reset)
+ * - After first SUCCESSFUL run, becomes no-op (use forceReseedCodeTeam for full reset)
+ * - FIX 2026-09-09 (bug "local không load agents"): trước đây seedCompleted
+ *   được set TRUE ngay cả khi _doSeed có agent fail (vd DB schema drift) —
+ *   comment nói "cho retry" nhưng code không làm vậy → sau khi DB được heal,
+ *   seeds KHÔNG BAO GIỜ chạy lại trong cùng process. Giờ: chỉ đánh dấu hoàn
+ *   thành khi KHÔNG có lỗi; có lỗi → lần gọi kế tiếp retry (vd sau self-heal).
  */
 export async function ensureCodeTeamAgents(): Promise<void> {
   if (seedCompleted) return
   if (!seedPromise) {
     seedPromise = _doSeed()
   }
-  await seedPromise
+  const hadFailures = await seedPromise
+  seedPromise = null
+  if (hadFailures) return // seedCompleted giữ false → retry ở lần gọi sau
   seedCompleted = true
 }
 
-async function _doSeed(): Promise<void> {
+async function _doSeed(): Promise<boolean> {
   console.log('[CodeTeam] Checking Code Team agents...')
   let created = 0
   let skipped = 0
@@ -214,12 +221,11 @@ async function _doSeed(): Promise<void> {
 
   if (failedAgents > 0) {
     console.warn(`[CodeTeam] ⚠️ ${failedAgents}/${CODE_TEAM_AGENTS.length} agents failed to seed — will retry on next ensureCodeTeamAgents() call`)
-    // Allow retry by NOT setting seedCompleted
-    seedPromise = null
-    return
+    return true
   }
 
   console.log(`[CodeTeam] Agents check complete: ${created} created, ${skipped} already existed`)
+  return false
 }
 
 /**

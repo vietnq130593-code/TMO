@@ -141,6 +141,14 @@ async function withTimeout<T>(
   }
 }
 
+/** Shape kết quả z-ai-sdk functions.invoke('page_reader') — chỉ các field code dùng */
+interface ZaiPageReaderResult {
+  data?: {
+    html?: string
+    title?: string
+  }
+}
+
 // ==================== TOOL DEFINITIONS (OpenAI function calling format) ====================
 // Each agent receives tools according to its permissions from agents.ts
 
@@ -152,7 +160,8 @@ export interface ToolDefinition {
     parameters: {
       type: 'object'
       properties: Record<string, unknown>
-      required: string[]
+      // JSON Schema cho phép omit `required` (không param nào bắt buộc)
+      required?: string[]
     }
   }
 }
@@ -2314,7 +2323,7 @@ export async function executeTool(
           const { dispatchAgentByOmega } = await import('@/lib/omega-orchestrator')
           const duration = String(args.duration ?? 'task') === 'long_term' ? 'long_term' : 'task'
           const dispatched = await dispatchAgentByOmega({
-            agent: args.agent ?? args.agentName,
+            agent: (args.agent ?? args.agentName) as string,
             task: args.task ? String(args.task) : undefined,
             context: args.context ? String(args.context) : undefined,
             duration,
@@ -3189,7 +3198,7 @@ async function executeJina(args: Record<string, unknown>): Promise<unknown> {
   try {
     const zai = await getZAI()
     if (zai) {
-      const result = await withTimeout(
+      const result = await withTimeout<ZaiPageReaderResult>(
         zai.functions.invoke('page_reader', { url }),
         30_000,
         'z-ai-sdk page_reader (jina fallback)',
@@ -3380,7 +3389,7 @@ async function executeWebFetch(args: Record<string, unknown>): Promise<unknown> 
   try {
     const zai = await getZAI()
     if (zai) {
-      const result = await withTimeout(
+      const result = await withTimeout<ZaiPageReaderResult>(
         zai.functions.invoke('page_reader', { url }),
         30_000,
         'z-ai-sdk page_reader (unified web_fetch)',

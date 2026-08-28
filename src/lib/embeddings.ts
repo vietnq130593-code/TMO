@@ -77,7 +77,9 @@ function setCachedEmbedding(cacheKey: string, vector: number[], model: string): 
  *
  *  Lazy-loaded db reference to avoid circular imports at module init time.
  */
-let cachedDb: ReturnType<typeof import('@/lib/db')['db']> | null = null
+// Dùng đúng type của export `db` (PrismaClient instance) — ReturnType<typeof db>
+// sai constraint vì db không phải hàm.
+let cachedDb: typeof import('@/lib/db')['db'] | null = null
 
 async function getDb() {
   if (!cachedDb) {

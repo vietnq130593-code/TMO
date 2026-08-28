@@ -651,7 +651,8 @@ export class WorkspaceManager {
     filePath: string;
     oldContent: string;
     newContent: string;
-    diff: string;
+    // Prisma schema: diff String? (nullable) — legacy row có thể null
+    diff: string | null;
     status: string;
     agentName: string;
     // Phase 4.4 spec fields:
@@ -672,7 +673,8 @@ export class WorkspaceManager {
       filePath: record.filePath,
       oldContent: record.oldContent,
       newContent: record.newContent,
-      diff: record.diff,
+      // giữ nguyên giá trị runtime (null với legacy row) — chỉ bridge type
+      diff: record.diff as string,
       status: record.status as PendingEdit["status"],
       agentName: record.agentName,
       createdAt: record.createdAt,

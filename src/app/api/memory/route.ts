@@ -206,7 +206,9 @@ export async function DELETE(request: NextRequest) {
 
     const { agentId } = body
 
-    const result = await decayMemories(agentId)
+    // agentId undefined = decay TOÀN BỘ agents (Prisma bỏ qua filter undefined) —
+    // lib decayMemories ký string, cast giữ nguyên runtime
+    const result = await decayMemories(agentId as string)
 
     return NextResponse.json({
       decayed: result.decayed,

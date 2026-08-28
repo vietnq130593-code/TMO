@@ -9,7 +9,7 @@
  */
 
 import { db } from '@/lib/db'
-import { agentKnowledgeSearch } from '@/lib/knowledge-bridge'
+import { agentKnowledgeSearch, type KnowledgeSearchResult } from '@/lib/knowledge-bridge'
 
 // ============================================
 // TYPES
@@ -52,7 +52,7 @@ export async function enrichCodeContext(
     try {
       const kbResults = await agentKnowledgeSearch(query, { topK: 5 })
       if (kbResults && kbResults.results) {
-        result.documents = kbResults.results.map((r: { content: string; score: number; source?: string }) => ({
+        result.documents = kbResults.results.map((r: KnowledgeSearchResult) => ({
           content: r.content?.substring(0, 500) || '',
           score: r.score || 0,
           source: r.source || 'qdrant',

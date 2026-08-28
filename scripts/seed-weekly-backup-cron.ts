@@ -39,3 +39,6 @@ main()
     console.error('[SeedWeeklyBackupCron] FAILED:', err instanceof Error ? err.message : String(err))
     process.exit(1)
   })
+
+// Module marker — tránh TS2393 trùng tên `main` với script khác khi tsc gộp toàn bộ *.ts
+export {}

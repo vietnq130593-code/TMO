@@ -106,7 +106,9 @@ function percentFor(steps: ProcessingStepRecord[]): number {
 async function buildChunkCountMap(): Promise<Map<string, number>> {
   const map = new Map<string, number>()
   try {
-    let scrollOffset: string | number | undefined = undefined
+    // next_page_offset của qdrant client ≥1.19 có thể là Record (extended format) —
+    // kiểu khai báo phải khớp client, chỉ dùng lại làm offset cho scroll kế tiếp
+    let scrollOffset: string | number | Record<string, unknown> | null | undefined = undefined
     do {
       const result = await qdrant.scroll(COLLECTION_CHUNKS, {
         limit: 256,
@@ -282,7 +284,7 @@ async function runReconcile(execute: boolean): Promise<ReconcileReport> {
         create: {
           id: docId,
           title: payload.title,
-          filePath: payload.file_path ?? null,
+          filePath: payload.file_path ?? '',
           domain: payload.domain,
           pageCount: payload.page_count ?? null,
           status: payload.status,
@@ -295,7 +297,7 @@ async function runReconcile(execute: boolean): Promise<ReconcileReport> {
         },
         update: {
           title: payload.title,
-          filePath: payload.file_path ?? null,
+          filePath: payload.file_path ?? '',
           domain: payload.domain,
           pageCount: payload.page_count ?? null,
           status: payload.status,

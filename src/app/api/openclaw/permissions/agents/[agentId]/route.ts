@@ -16,6 +16,46 @@ import { db } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 
+// ---------------------------------------------------------------------------
+// TYPE-ONLY: ToolPermission trong Prisma schema chỉ có 4 cột gốc (id, agentId,
+// toolName, permission) — route này viết theo shape MỞ RỘNG (source,
+// requiresApproval, maxCallsPerHour) chưa có trong schema. Khai báo type theo
+// shape route đang dùng, cast delegate MỘT lần ở root — runtime giữ nguyên
+// (vẫn gọi đúng db.toolPermission.* với đúng args như cũ).
+// ---------------------------------------------------------------------------
+type ToolPermissionRow = {
+  id: string
+  agentId: string
+  toolName: string
+  permission: string
+  source?: string
+  requiresApproval?: boolean
+  maxCallsPerHour?: number | null
+}
+
+type ToolPermissionData = {
+  agentId?: string
+  toolName?: string
+  permission?: string
+  source?: string
+  requiresApproval?: boolean
+  maxCallsPerHour?: number | null
+}
+
+const toolPermissions = (db as unknown as {
+  toolPermission: {
+    findMany(args?: {
+      where?: { agentId?: string }
+      orderBy?: { toolName?: 'asc' | 'desc' }
+    }): Promise<ToolPermissionRow[]>
+    upsert(args: {
+      where: { agentId_toolName: { agentId: string; toolName: string } }
+      create: ToolPermissionData
+      update: ToolPermissionData
+    }): Promise<ToolPermissionRow>
+  }
+}).toolPermission
+
 /** Valid permission values */
 const VALID_PERMISSIONS = ['allow', 'deny', 'ask'] as const
 type ValidPermission = (typeof VALID_PERMISSIONS)[number]
@@ -33,13 +73,13 @@ export async function GET(
     const { agentId } = await params
 
     // Fetch agent-specific permissions
-    const agentPerms = await db.toolPermission.findMany({
+    const agentPerms = await toolPermissions.findMany({
       where: { agentId },
       orderBy: { toolName: 'asc' },
     })
 
     // Fetch default agent permissions for inheritance
-    const defaultPerms = await db.toolPermission.findMany({
+    const defaultPerms = await toolPermissions.findMany({
       where: { agentId: 'default' },
     })
 
@@ -57,9 +97,9 @@ export async function GET(
     const mergedPermissions: Array<{
       toolName: string
       permission: string
-      source: string
-      requiresApproval: boolean
-      maxCallsPerHour: number | null
+      source?: string // cột mở rộng chưa có trong schema — runtime là undefined
+      requiresApproval?: boolean
+      maxCallsPerHour?: number | null
       inherited: boolean
       inheritedFrom: string | null
     }> = []
@@ -131,7 +171,7 @@ export async function POST(
       )
     }
 
-    const perm = await db.toolPermission.upsert({
+    const perm = await toolPermissions.upsert({
       where: { agentId_toolName: { agentId, toolName } },
       create: {
         agentId,
@@ -196,7 +236,7 @@ export async function PUT(
 
     const results = await Promise.all(
       permissions.map(p =>
-        db.toolPermission.upsert({
+        toolPermissions.upsert({
           where: { agentId_toolName: { agentId, toolName: p.toolName } },
           create: {
             agentId,

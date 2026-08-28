@@ -1,3 +1,4 @@
+/// <reference types="bun-types" />
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test'
 import { processManager } from '../process-manager'
 

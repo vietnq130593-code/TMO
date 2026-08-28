@@ -27,8 +27,10 @@ interface SkillDef {
   hasFallback: boolean
   fallbackProvider: string
   usedByAgents: string[]
-  status: 'active' | 'fallback' | 'unavailable'
-  docsUrl: string
+  // Optional: 3 skill key-pool (tavily/serper/jina) chưa khai báo tĩnh —
+  // runtime undefined (quickStatus đếm chúng ra cả 3 nhóm, giữ nguyên hiện trạng)
+  status?: 'active' | 'fallback' | 'unavailable'
+  docsUrl?: string
 }
 
 function getSkills(): SkillDef[] {

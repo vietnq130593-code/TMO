@@ -1,3 +1,4 @@
+/// <reference types="bun-types" />
 /**
  * Layer 9: Learning & Adaptation — Unit Tests
  *

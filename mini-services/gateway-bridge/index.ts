@@ -19,6 +19,20 @@
 import { WebSocket } from 'ws'
 import { execSync } from 'child_process'
 
+// Bun global — tsconfig chính chưa include bun-types; khai báo interface
+// tối thiểu cho đúng shape API đang dùng (runtime vẫn dùng global Bun thật).
+declare const Bun: {
+  serve(options: {
+    port?: number | string
+    hostname?: string
+    fetch: (request: Request) => Response | Promise<Response>
+  }): {
+    port: number
+    hostname: string
+    fetch: (request: Request) => Response | Promise<Response>
+  }
+}
+
 // ==================== ORPHAN CLEANUP ====================
 
 /** Root-cause fix (2026-08-25 post-deploy audit): when the app restarts, an

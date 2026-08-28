@@ -46,6 +46,8 @@
 // ==================== TOKEN EVENT EMITTER (SSE REALTIME) ====================
 
 import { EventEmitter } from 'events'
+// Type-only import (erased lúc runtime — không tạo thêm module instance)
+import type { DocumentPayload } from '@/lib/qdrant'
 
 /** EventEmitter for real-time token updates (SSE).
  *  Emits 'token-update' event whenever addTokensUsed() or addTokensUsedByAgent() is called.
@@ -321,7 +323,9 @@ const agentDirty: Set<string> = new Set()        // Set of "agentId:provider:mod
  *  error: each dynamic import might compile to a separate module context,
  *  creating a new PrismaClient that conflicts with the existing one.
  */
-let cachedDb: InstanceType<typeof import('@/lib/db')['db']> | null = null
+// Dùng đúng type của export `db` (PrismaClient instance, không phải class) —
+// InstanceType<typeof db> sai vì db đã là instance.
+let cachedDb: typeof import('@/lib/db')['db'] | null = null
 
 async function getDb() {
   if (!cachedDb) {
@@ -1035,7 +1039,7 @@ export async function recoverKeys(): Promise<{
 
     // Find documents that are actively being processed (stuck in transitional states).
     const activeStatuses = ['extracting', 'parsing', 'chunked']
-    const allActiveDocs: Array<{ id: string; payload: { status: string; updated_at: string; title?: string; [key: string]: unknown } }> = []
+    const allActiveDocs: Array<{ id: string; payload: DocumentPayload }> = []
 
     for (const status of activeStatuses) {
       try {
@@ -1256,7 +1260,9 @@ export function releaseKey(docId: string): void {
       // document finished, so the table grew forever. Delete the row for
       // this doc (fire-and-forget, best effort).
       try {
-        db.jobQueue.delete({ where: { id: `key-${ka.keyIndex}-doc-${docId.slice(0, 8)}` } }).catch(() => {})
+        // best-effort cleanup — qua retryDbOp để tái sử dụng cached PrismaClient
+        // (trước đây tham chiếu `db` không tồn tại → bị catch nuốt, row không bao giờ bị xóa)
+        retryDbOp(db => db.jobQueue.delete({ where: { id: `key-${ka.keyIndex}-doc-${docId.slice(0, 8)}` } })).catch(() => {})
       } catch { /* ignore — best effort cleanup */ }
       if (ka.docIds.length === 0) {
         ka.failureCount = 0
@@ -1431,7 +1437,8 @@ interface ProviderKeyInfo {
 }
 
 class ProviderKeyPool {
-  private keys: ProviderKeyInfo[]
+  // public (type-level only) — helper module-level waitForRateLimitCooldown() cần đọc trạng thái key
+  keys: ProviderKeyInfo[]
   private nextKeyIndex: number = 0
   private _providerName: string
   private exhaustionCooldownMs: number

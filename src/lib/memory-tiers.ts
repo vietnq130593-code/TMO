@@ -94,7 +94,7 @@ export async function promoteWorkingMemoryToWarm(
 
   try {
     // Find expired working memory records
-    const where: { agentId: string; expiresAt?: { lt: Date } } = { agentId }
+    const where: { agentId: string; sessionId?: string; expiresAt?: { lt: Date } } = { agentId }
     if (sessionId) {
       where.sessionId = sessionId
     } else {
@@ -434,17 +434,27 @@ async function archiveSingleMemory(mem: {
   }
 }
 
+/** @qdrant/js-client-rest ≥1.19 đã bỏ method `search` (deprecated, thay bằng `query`).
+ *  Giữ nguyên runtime call (sẽ throw TypeError → catch → fallback prefix-clustering
+ *  bên dưới) — chỉ mô tả lại type của API cũ. */
+interface LegacyQdrantSearchClient {
+  search(
+    collection: string,
+    request: Record<string, unknown>,
+  ): Promise<Array<{ payload?: Record<string, unknown> }>>
+}
+
 /**
  * Cluster memories by vector similarity.
  * Uses Qdrant search to find similar memories, groups them.
  * Memories with similarity > 0.85 are grouped together.
  */
-async function clusterBySimilarity(
-  memories: Array<{ id: string; content: string; qdrantPointId: string | null }>
-): Promise<Array<typeof memories>> {
+async function clusterBySimilarity<T extends { id: string; content: string; qdrantPointId: string | null }>(
+  memories: T[]
+): Promise<T[][]> {
   if (memories.length <= 1) return [memories]
 
-  const clusters: Array<typeof memories> = []
+  const clusters: T[][] = []
   const assigned = new Set<string>()
   const SIMILARITY_THRESHOLD = 0.85
 
@@ -452,14 +462,14 @@ async function clusterBySimilarity(
     if (assigned.has(mem.id)) continue
 
     // Start a new cluster with this memory
-    const cluster = [mem]
+    const cluster: T[] = [mem]
     assigned.add(mem.id)
 
     // Find similar memories via Qdrant (if this memory has a point ID)
     if (mem.qdrantPointId) {
       try {
         // Use the existing point's vector to search for similar
-        const similar = await qdrant.search('agent_memory', {
+        const similar = await (qdrant as unknown as LegacyQdrantSearchClient).search('agent_memory', {
           filter: {
             must: [
               { key: 'memoryId', match: { any: memories.filter(m => !assigned.has(m.id)).map(m => m.id) } },

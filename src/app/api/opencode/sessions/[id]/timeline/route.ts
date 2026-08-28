@@ -8,6 +8,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 
+/** Một event trên timeline của session (annotation tường minh — tránh never[]) */
+type TimelineEvent = {
+  timestamp: string
+  type: string
+  icon: string
+  label: string
+  detail: string
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -28,7 +37,7 @@ export async function GET(
     const toolsUsed: string[] = JSON.parse(session.toolsUsed || '[]')
     const filesTouched: string[] = JSON.parse(session.filesTouched || '[]')
 
-    const timeline = []
+    const timeline: TimelineEvent[] = []
     const createdAt = new Date(session.createdAt)
     const updatedAt = new Date(session.updatedAt)
 

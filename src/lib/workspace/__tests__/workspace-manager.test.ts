@@ -1,3 +1,4 @@
+/// <reference types="bun-types" />
 // ============================================
 // WorkspaceManager Tests — Phase 1: CRUD + PendingEdit lifecycle
 // ============================================

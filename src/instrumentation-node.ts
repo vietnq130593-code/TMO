@@ -10,10 +10,17 @@
  * unavailable.
  */
 
-import { startAllServices } from './lib/service-manager'
+import { startAllServices, type ServiceConfig } from './lib/service-manager'
 import { resolve } from 'path'
 import { ensureTmoApiToken } from './lib/tmo-token'
 import { isOnDemandEnabled, initOnDemandWatchdog } from './lib/openclaw-ondemand'
+// DB SELF-HEALING (fix user report 2026-09-09 "local không load agents"):
+// user pull code mới có thay đổi schema (cột/bảng mới) nhưng chưa chạy
+// `bun run db:push` trên local → Prisma client mới query DB cũ → mọi API
+// agents lỗi P2021/P2022 → UI hiện danh sách TRỐNG. ensureDbReady() probe
+// drift và tự chạy `prisma db push` — KHÔNG chặn boot (fire-and-forget);
+// warm-up bên dưới await nó trước khi prefetch /api/agents.
+import { ensureDbReady } from './lib/db-setup'
 
 // FIX 2026-08-28: đảm bảo TMO_API_TOKEN tồn tại TRƯỚC KHI spawn mini-services.
 // opencode-server validate X-TMO-API-Token trên MỌI request (kể cả /health) —
@@ -33,7 +40,7 @@ try {
 
 function buildServices(resolveFn: (...paths: string[]) => string) {
   const ROOT = resolveFn(process.cwd())
-  const services = [
+  const services: ServiceConfig[] = [
     {
       name: 'openclaw-gateway',
       cwd: resolve(ROOT, 'mini-services/openclaw-gateway'),
@@ -109,6 +116,14 @@ function buildServices(resolveFn: (...paths: string[]) => string) {
 
 console.log('[instrumentation] Starting mini-services (non-blocking)...')
 
+// DB self-healing — chạy NGAY sau boot (không đợi warm-up): probe schema drift
+// và tự `prisma db push` nếu DB local cũ hơn schema (thường xảy ra sau git pull).
+// Fire-and-forget: promise này được dedup — warm-up + API agents await lại cùng
+// promise, không chạy trùng.
+void ensureDbReady().then((r) => {
+  if (r.migrated) console.log('[instrumentation] DB schema đã được tự đồng bộ:', r.reason || 'prisma db push')
+})
+
 // Fire-and-forget: do NOT await. Keeps the Next.js UI available instantly
 // while the services come up asynchronously.
 startAllServices(buildServices(resolve))
@@ -142,6 +157,16 @@ setTimeout(async () => {
   const base = `http://127.0.0.1:${process.env.PORT || 3000}`
   const warmPaths = ['/api/agents', '/api/agents/models', '/api/openclaw/sessions?action=list']
   try {
+    // DB self-heal PHẢI xong trước khi warm /api/agents — nếu không, lần warm
+    // đầu tiên đập vào DB cũ, seed agents fail, và (không có retry) sẽ bỏ sót
+    // tới request kế tiếp. ensureDbReady dedup với lời gọi ở boot phía trên.
+    const dbReady = await Promise.race([
+      ensureDbReady(),
+      new Promise<{ ok: boolean }>((r) => setTimeout(() => r({ ok: false }), 150_000)),
+    ])
+    if (!dbReady.ok) {
+      console.warn('[instrumentation] DB chưa sẵn sàng sau self-heal — warm-up vẫn tiếp tục (API sẽ tự heal khi có request)')
+    }
     // Đợi server listen (tối đa 60s — Windows dev boot chậm)
     const deadline = Date.now() + 60_000
     while (Date.now() < deadline) {

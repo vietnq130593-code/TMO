@@ -1,4 +1,7 @@
 import { createServer } from 'http'
+// socket.io chưa được cài trong dependencies của repo (file example tham khảo)
+// — giữ nguyên import gốc, chỉ chặn lỗi type TS2307.
+// @ts-expect-error TS2307: module 'socket.io' không tồn tại (chưa install)
 import { Server } from 'socket.io'
 
 const httpServer = createServer()

@@ -317,12 +317,12 @@ function handleCrash(config: ServiceConfig): void {
 // ==================== MEMORY GUARD ====================
 // Reads /proc/meminfo (Linux only) to get system RAM usage.
 // Returns 0 on non-Linux or read failure (assumes OK — better than blocking forever).
-function getSystemMemoryUsagePercent(): number {
+async function getSystemMemoryUsagePercent(): Promise<number> {
   try {
-    // Avoid importing 'fs' at module top — service-manager runs in Next.js
-    // instrumentation which is statically analyzed by the Edge bundler.
-    // require() inside a function keeps Node-only code out of the Edge bundle.
-    const fs = require('fs')
+    // Lazy dynamic import 'fs' — tránh import top-level (service-manager chạy trong
+    // Next.js instrumentation, chỉ được import từ instrumentation-node.ts — Node-only).
+    // await import() thay require() để pass lint @typescript-eslint/no-require-imports.
+    const fs = await import('fs')
     const meminfo = fs.readFileSync('/proc/meminfo', 'utf-8')
     const total = parseInt(meminfo.match(/^MemTotal:\s+(\d+)/m)?.[1] || '0', 10) * 1024
     const available = parseInt(meminfo.match(/^MemAvailable:\s+(\d+)/m)?.[1] || '0', 10) * 1024
@@ -338,7 +338,7 @@ const MEMORY_CHECK_INTERVAL_MS = 10_000
 
 async function waitForSystemMemory(): Promise<void> {
   while (true) {
-    const usage = getSystemMemoryUsagePercent()
+    const usage = await getSystemMemoryUsagePercent()
     if (usage < MEMORY_LIMIT_PERCENT) return
     console.log(`[service-manager] System RAM at ${usage}% (limit ${MEMORY_LIMIT_PERCENT}%), delaying restart...`)
     await sleep(MEMORY_CHECK_INTERVAL_MS)

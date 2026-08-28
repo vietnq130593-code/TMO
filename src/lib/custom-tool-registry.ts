@@ -614,7 +614,8 @@ export async function createCustomTool(input: {
     paramsSchema = { type: 'object', properties: {} }
   }
   if (paramsSchema.type !== 'object') {
-    paramsSchema = { type: 'object', ...paramsSchema, type: 'object' } as Record<string, unknown>
+    // ép type='object' (duplicate key tsc TS1117 — chỉ cần 1 lần, giá trị cuối vẫn 'object')
+    paramsSchema = { ...paramsSchema, type: 'object' } as Record<string, unknown>
   }
 
   // ===== Validate handler code (sandbox security) =====

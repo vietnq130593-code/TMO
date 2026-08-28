@@ -206,7 +206,8 @@ class ProcessManagerImpl {
     return new Promise<RunCommandResult>((resolve) => {
       const child = spawn(shell, args, {
         cwd,
-        env: { ...env, FORCE_COLOR: '0' },
+        // Next.js augment ProcessEnv yêu cầu NODE_ENV bắt buộc → cast (giá trị runtime vẫn là env dict hợp lệ)
+        env: { ...env, FORCE_COLOR: '0' } as unknown as NodeJS.ProcessEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: false,
       })
@@ -290,7 +291,8 @@ class ProcessManagerImpl {
     return new Promise<ProcessInfo>((resolve, reject) => {
       const child = spawn(shell, args, {
         cwd,
-        env: { ...env, FORCE_COLOR: '0' },
+        // Next.js augment ProcessEnv yêu cầu NODE_ENV bắt buộc → cast (giá trị runtime vẫn là env dict hợp lệ)
+        env: { ...env, FORCE_COLOR: '0' } as unknown as NodeJS.ProcessEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: false,
       })

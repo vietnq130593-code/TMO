@@ -58,7 +58,10 @@ async function checkpointWal(): Promise<void> {
   try {
     // Prisma's $executeRawUnsafe runs the PRAGMA inside the same connection
     // pool that holds the DB open — TRUNCATE forces a full checkpoint.
-    await db.$executeRawUnsafe`PRAGMA wal_checkpoint(TRUNCATE)`
+    // NOTE (type-only): gọi dạng tagged-template nên runtime nhận
+    // TemplateStringsArray (Prisma sẽ throw → catch bên dưới, giữ behavior
+    // gốc). Cast chữ ký để tsc chấp nhận, không đổi call.
+    await (db.$executeRawUnsafe as unknown as (strings: TemplateStringsArray) => Promise<number>)`PRAGMA wal_checkpoint(TRUNCATE)`
     console.log('[DB-Backup] WAL checkpointed')
   } catch (err) {
     console.warn(

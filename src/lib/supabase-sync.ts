@@ -342,7 +342,7 @@ export async function pushToSupabase(): Promise<FullSyncResult> {
         direction: c.direction,
         tool_name: c.toolName,
         enabled: c.enabled,
-        config: c.config as Record<string, unknown>,
+        config: c.config as unknown as Record<string, unknown>,
         updated_at: c.updatedAt?.toISOString(),
       })),
       { onConflict: 'id' }

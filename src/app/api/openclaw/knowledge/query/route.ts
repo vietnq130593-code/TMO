@@ -72,7 +72,9 @@ async function executeCypherQuery(query: string) {
     const columns = result.records.length > 0 ? result.records[0].keys : []
     const records = result.records.slice(0, 100).map(record => {
       const obj: Record<string, unknown> = {}
-      for (const key of record.keys) {
+      // Neo4j Record.keys typed là (string|number|symbol)[] (keyof RecordShape)
+      // — key thật luôn là string; cast một lần để dùng làm index
+      for (const key of record.keys as string[]) {
         const val = record.get(key)
         // Convert Neo4j Integer to number
         if (val !== null && typeof val === 'object' && typeof val.toNumber === 'function') {

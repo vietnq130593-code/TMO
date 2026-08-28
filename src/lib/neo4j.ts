@@ -375,12 +375,14 @@ export function toNative(val: unknown): unknown {
     // Neo4j Node
     if (typeof (val as { properties?: unknown; labels?: unknown }).properties === 'object') {
       const node = val as { properties: Record<string, unknown>; labels: string[] }
-      return { ...toNative(node.properties), _labels: node.labels }
+      // toNative trả unknown — cast về record để spread (primitive spread ra {} ở runtime, vô hại)
+      return { ...(toNative(node.properties) as Record<string, unknown>), _labels: node.labels }
     }
     // Neo4j Relationship
     if (typeof (val as { properties?: unknown; type?: unknown }).properties === 'object' && typeof (val as { type?: unknown }).type === 'string') {
       const rel = val as { properties: Record<string, unknown>; type: string }
-      return { ...toNative(rel.properties), _type: rel.type }
+      // toNative trả unknown — cast về record để spread (primitive spread ra {} ở runtime, vô hại)
+      return { ...(toNative(rel.properties) as Record<string, unknown>), _type: rel.type }
     }
     // Neo4j Path
     if (typeof (val as { segments?: unknown }).segments === 'object') {

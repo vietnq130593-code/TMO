@@ -56,7 +56,8 @@ export interface ToolSchemaLike {
     parameters: {
       type: 'object'
       properties: Record<string, unknown>
-      required: string[]
+      // JSON Schema cho phép omit `required` — sync với ToolDefinition (tool-executor.ts)
+      required?: string[]
     }
   }
 }

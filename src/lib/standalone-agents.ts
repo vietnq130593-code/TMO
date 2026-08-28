@@ -260,7 +260,7 @@ LEARNING & MEMORY
 // Idempotent — chạy khi app startup hoặc lazy khi GET /api/agents
 // Standalone agents LUÔN có isSystem=true — không thể xóa từ UI
 
-let standaloneSeedPromise: Promise<void> | null = null
+let standaloneSeedPromise: Promise<boolean> | null = null
 let standaloneSeedCompleted = false
 
 /**
@@ -284,18 +284,24 @@ export function resetStandaloneSeedState(): void {
  *   that should not be accidentally removed.
  *
  * - Idempotent — safe to call multiple times, cached promise
- * - After first run, becomes no-op (use forceReseedStandaloneAgents for full reset)
+ * - After first SUCCESSFUL run, becomes no-op (use forceReseedStandaloneAgents for full reset)
+ * - FIX 2026-09-09 (bug "local không load agents"): trước đây standaloneSeedCompleted
+ *   được set TRUE ngay cả khi seed có agent fail (vd DB schema drift) → sau khi
+ *   DB được heal, seeds KHÔNG chạy lại trong cùng process. Giờ: chỉ hoàn thành
+ *   khi KHÔNG có lỗi; có lỗi → retry ở lần gọi sau.
  */
 export async function ensureStandaloneAgents(): Promise<void> {
   if (standaloneSeedCompleted) return
   if (!standaloneSeedPromise) {
     standaloneSeedPromise = _doStandaloneSeed()
   }
-  await standaloneSeedPromise
+  const hadFailures = await standaloneSeedPromise
+  standaloneSeedPromise = null
+  if (hadFailures) return // standaloneSeedCompleted giữ false → retry lần sau
   standaloneSeedCompleted = true
 }
 
-async function _doStandaloneSeed(): Promise<void> {
+async function _doStandaloneSeed(): Promise<boolean> {
   console.log('[Standalone] Checking standalone agents...')
   let created = 0
   let skipped = 0
@@ -383,12 +389,11 @@ async function _doStandaloneSeed(): Promise<void> {
     console.warn(
       `[Standalone] ⚠️ ${failedAgents}/${STANDALONE_AGENTS.length} agents failed to seed — will retry on next ensureStandaloneAgents() call`
     )
-    // Allow retry by NOT setting standaloneSeedCompleted
-    standaloneSeedPromise = null
-    return
+    return true
   }
 
   console.log(`[Standalone] Agents check complete: ${created} created, ${skipped} already existed`)
+  return false
 }
 
 /**

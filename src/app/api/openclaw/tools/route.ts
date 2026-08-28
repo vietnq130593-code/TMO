@@ -182,7 +182,7 @@ export async function GET(request: NextRequest) {
   const allTools = [
     ...LOCAL_TOOLS,
     ...extraGatewayTools.map((t: Record<string, unknown>) => ({
-      name: t.name || t.id,
+      name: (t.name || t.id) as string, // key lookup về sau cần string — data gateway là JSON không định dạng
       category: t.category || 'Other',
       description: t.description || '',
       source: 'gateway',

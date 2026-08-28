@@ -616,7 +616,8 @@ export async function GET(request: NextRequest) {
         if (!docIds.includes(did)) docIds.push(did)
       }
 
-      const results = []
+      // Annotation tường minh — tránh never[] (strict + noImplicitAny:false)
+      const results: Awaited<ReturnType<typeof syncDocumentToNeo4j>>[] = []
       let totalNodesCreated = 0
       let totalRelsCreated = 0
       let totalEntitiesSynced = 0

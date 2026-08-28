@@ -285,7 +285,8 @@ export async function checkQdrantHealth(): Promise<{
       const docInfo = await qdrant.getCollection(COLLECTION_DOCUMENTS)
       result.documentsCollection = {
         exists: true,
-        pointCount: docInfo.points_count,
+        // points_count có thể null/undefined theo type của client → chuẩn hoá về undefined
+        pointCount: docInfo.points_count ?? undefined,
       }
     } catch {
       result.documentsCollection = { exists: false }
@@ -295,8 +296,10 @@ export async function checkQdrantHealth(): Promise<{
       const chunkInfo = await qdrant.getCollection(COLLECTION_CHUNKS)
       result.chunksCollection = {
         exists: true,
-        pointCount: chunkInfo.points_count,
-        vectorCount: chunkInfo.vectors_count,
+        pointCount: chunkInfo.points_count ?? undefined,
+        // vectors_count đã bị bỏ khỏi type @qdrant client ≥1.19 (deprecated) —
+        // đọc qua cast để giữ nguyên runtime value (server cũ vẫn trả field này)
+        vectorCount: (chunkInfo as { vectors_count?: number | null }).vectors_count ?? undefined,
       }
     } catch {
       result.chunksCollection = { exists: false }
@@ -315,13 +318,25 @@ export async function checkQdrantHealth(): Promise<{
 
 /** Document payload stored in Qdrant */
 export interface DocumentPayload {
+  // Index signature: Qdrant payload là open map — cho phép gán vào Record<string, unknown>
+  [key: string]: unknown
   title: string
   file_path?: string
   domain: string
   page_count?: number
   status: 'uploaded' | 'parsing' | 'chunked' | 'extracted' | 'indexed' | 'error' | 'partial' | 'extracting'
-  error_message?: string
-  processing_steps: Array<{ name: string; label: string; status: string; startedAt: string | null; completedAt: string | null; detail: string | null }>
+  // (2026-09-09) `| null`: pipeline dùng error_message: null để XÓA lỗi trong Qdrant
+  // payload (nhiều call site updateDocumentStatus) — null là giá trị thật của dữ liệu.
+  error_message?: string | null
+  // (2026-09-09) Union 2 format cùng tồn tại thật trong payload:
+  //   - rich format (ProcessingStepRecord) do pipeline chính ghi
+  //   - legacy format {step,status,timestamp} do stepsToQdrantFormat() ghi
+  // Qdrant lưu JSON as-is nên cả 2 đều đọc lại được — code đọc luôn cast sang
+  // format cần dùng (xem các call site `as ProcessingStepRecord[]`).
+  processing_steps: Array<
+    | { name: string; label: string; status: string; startedAt: string | null; completedAt: string | null; detail: string | null }
+    | { step: string; status: string; timestamp: string }
+  >
   processing_percent: number
   created_at: string
   updated_at: string
@@ -546,6 +561,8 @@ export async function deleteDocument(id: string): Promise<boolean> {
 
 /** Chunk payload stored in Qdrant (alongside embedding vector) */
 export interface ChunkPayload {
+  // Index signature: Qdrant payload là open map — cho phép gán vào Record<string, unknown>
+  [key: string]: unknown
   document_id: string
   chunk_index: number
   content: string
@@ -869,18 +886,19 @@ export async function getQdrantStats(): Promise<{
 
     if (names.includes(COLLECTION_DOCUMENTS)) {
       const info = await qdrant.getCollection(COLLECTION_DOCUMENTS)
-      totalDocuments = info.points_count
+      totalDocuments = info.points_count ?? 0
     }
 
     if (names.includes(COLLECTION_CHUNKS)) {
       const info = await qdrant.getCollection(COLLECTION_CHUNKS)
-      totalChunks = info.points_count
+      totalChunks = info.points_count ?? 0
       // vectors_count can be null for some Qdrant versions/configs (scalar-quantized
       // single-vector collections). Every chunk point always carries a real vector
       // (the pipeline refuses to upsert zero-vector placeholders since the pseudo
       // fallback was removed), so points_count is the accurate embedding count.
       // Fall back to points_count when vectors_count is null/undefined.
-      vectorsIndexed = info.vectors_count ?? info.points_count ?? 0
+      // (Field đã bị bỏ khỏi type @qdrant client ≥1.19 — đọc qua cast giữ nguyên runtime.)
+      vectorsIndexed = (info as { vectors_count?: number | null }).vectors_count ?? info.points_count ?? 0
     }
 
     return {

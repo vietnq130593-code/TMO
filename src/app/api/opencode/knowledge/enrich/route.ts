@@ -14,10 +14,15 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { enrichCodeContext, isCodeQuery, detectCodeConfidence, parseCodeStructure } from '@/lib/opencode-knowledge-context'
+import { enrichCodeContext, isCodeQuery, detectCodeConfidence, parseCodeStructure, type CodeStructureResult } from '@/lib/opencode-knowledge-context'
 import { generateOpenCodeSystemPrompt } from '@/lib/opencode-system-prompt'
 import { db } from '@/lib/db'
 import { resolve } from 'path'
+
+// LocalEntity chưa khai báo @@unique([entityName, domain]) — where theo
+// entityName_domain sẽ bị Prisma từ chối runtime (đã try/catch skip như cũ).
+// Cast where về type thật của upsert, giữ nguyên payload gốc.
+type LocalEntityUpsertWhere = Parameters<typeof db.localEntity.upsert>[0]['where']
 
 export async function GET(request: NextRequest) {
   try {
@@ -163,7 +168,7 @@ export async function POST(request: NextRequest) {
     const enrichment = await enrichCodeContext(query, filePath)
 
     // Parse code structure if file content provided
-    let codeStructure = null
+    let codeStructure: CodeStructureResult | null = null
     if (fileContent && filePath) {
       codeStructure = parseCodeStructure(fileContent, filePath)
     }
@@ -220,7 +225,7 @@ export async function POST(request: NextRequest) {
                 entityName: `${exp.name} (${filePath})`,
                 domain: 'codebase',
               },
-            },
+            } as unknown as LocalEntityUpsertWhere,
             create: {
               entityName: `${exp.name} (${filePath})`,
               entityType: exp.type === 'function' ? 'CodeFunction' : exp.type === 'class' ? 'CodeClass' : 'CodeExport',
@@ -249,7 +254,7 @@ export async function POST(request: NextRequest) {
                 entityName: dep,
                 domain: 'codebase',
               },
-            },
+            } as unknown as LocalEntityUpsertWhere,
             create: {
               entityName: dep,
               entityType: 'NpmPackage',

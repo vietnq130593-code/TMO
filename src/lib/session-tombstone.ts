@@ -37,6 +37,26 @@ import { db } from '@/lib/db'
 const globalForTombstone = globalThis as unknown as {
   __tmoDeletedSessions?: Set<string>
   __tmoTombstoneHydrated?: Promise<void> | null
+  __tmoTombstoneWarned?: boolean
+}
+
+/**
+ * Model DeletedSession — GUARD chống Prisma client cũ (user pull code mới nhưng
+ * chưa `bun install`/generate → client trong bộ nhớ thiếu model này → undefined).
+ * Gọi method trên undefined sẽ throw TypeError ĐỒNG BỘ (không nằm trong promise
+ * chain → .catch không bắt được) và crash route. Guard này giúp tombstone
+ * degrade thành in-process-only cho tới khi app restart với client mới.
+ */
+function deletedSessionModel(): typeof db.deletedSession | undefined {
+  const model = (db as unknown as Record<string, unknown>).deletedSession as typeof db.deletedSession | undefined
+  if (!model && !globalForTombstone.__tmoTombstoneWarned) {
+    globalForTombstone.__tmoTombstoneWarned = true
+    console.warn(
+      '[Tombstone] Prisma client chưa có model DeletedSession (client cũ?) — tombstone chạy in-process-only. ' +
+      'Chạy `bun install` rồi restart app để bật tầng persist.'
+    )
+  }
+  return model
 }
 
 function tombstoneSet(): Set<string> {
@@ -61,8 +81,10 @@ function addSessionToSet(sessionId: string): void {
 function hydrateFromDb(): Promise<void> {
   if (globalForTombstone.__tmoTombstoneHydrated) return globalForTombstone.__tmoTombstoneHydrated
   globalForTombstone.__tmoTombstoneHydrated = (async () => {
+    const model = deletedSessionModel()
+    if (!model) return // client cũ — bỏ qua tầng persist (in-process Set vẫn chặn)
     try {
-      const rows = await db.deletedSession.findMany({ select: { sessionId: true } })
+      const rows = await model.findMany({ select: { sessionId: true } })
       for (const r of rows) addSessionToSet(r.sessionId)
       if (rows.length > 0) {
         console.log(`[Tombstone] Hydrate ${rows.length} session đã-xóa từ DB (persist layer)`)
@@ -86,7 +108,9 @@ void hydrateFromDb()
 export function markSessionDeleted(sessionId: string): void {
   if (!sessionId) return
   addSessionToSet(sessionId)
-  db.deletedSession
+  const model = deletedSessionModel()
+  if (!model) return // client cũ — in-process Set vẫn chặn trong process này
+  model
     .upsert({ where: { sessionId }, create: { sessionId }, update: {} })
     .catch(err => {
       console.warn('[Tombstone] Persist DB thất bại (in-process Set vẫn chặn):', err instanceof Error ? err.message : String(err))
@@ -107,10 +131,12 @@ export function isSessionDeleted(sessionId: string | null | undefined): boolean 
 export async function isSessionDeletedDeep(sessionId: string | null | undefined): Promise<boolean> {
   if (!sessionId) return false
   if (tombstoneSet().has(sessionId)) return true
+  const model = deletedSessionModel()
+  if (!model) return false // client cũ — fail-closed theo Set in-process
   try {
     await hydrateFromDb() // chắc chắn hydrate đã chạy xong (nếu chưa)
     if (tombstoneSet().has(sessionId)) return true
-    const row = await db.deletedSession.findUnique({ where: { sessionId }, select: { id: true } })
+    const row = await model.findUnique({ where: { sessionId }, select: { id: true } })
     if (row) {
       addSessionToSet(sessionId) // write-through — lần sau là hit Set
       return true
@@ -125,7 +151,9 @@ export async function isSessionDeletedDeep(sessionId: string | null | undefined)
 export function clearSessionTombstone(sessionId: string): void {
   if (!sessionId) return
   tombstoneSet().delete(sessionId)
-  db.deletedSession
+  const model = deletedSessionModel()
+  if (!model) return // client cũ — best-effort
+  model
     .deleteMany({ where: { sessionId } })
     .catch(() => { /* best-effort */ })
 }

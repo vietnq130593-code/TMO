@@ -73,7 +73,9 @@ export async function GET() {
       collections.chunks = {
         exists: true,
         pointCount: chunkInfo.points_count,
-        vectorCount: chunkInfo.vectors_count,
+        // vectors_count không có trong type CollectionInfo của client v1.x —
+        // đọc qua cast để giữ nguyên runtime (field có thể undefined)
+        vectorCount: (chunkInfo as { vectors_count?: number | null }).vectors_count,
         status: chunkInfo.status,
         optimizerStatus: chunkInfo.optimizer_status,
         vectorConfig: {
@@ -128,14 +130,21 @@ export async function DELETE(request: NextRequest) {
 
     // Delete all points from both collections (keeps collection structure + indexes)
     // Use filter: {} (match all) — NOT points: [] (which deletes nothing)
+    // NOTE (type-only): client v1.x delete() chỉ nhận (collection, selector) —
+    // đối số { wait: true } thứ 3 hiện bị runtime BỎ QUA. Giữ nguyên 3 đối số
+    // runtime như call gốc (spread mảng 2 phần tử), chỉ đánh type mảng là
+    // 1-tuple để tsc thấy đúng số tham số.
+    type QdrantDeleteSelector = Parameters<typeof qdrant.delete>[1]
+    const deleteDocArgs = [{ filter: {} }, { wait: true }] as unknown as [QdrantDeleteSelector]
     try {
-      await qdrant.delete(COLLECTION_DOCUMENTS, { filter: {} }, { wait: true })
+      await qdrant.delete(COLLECTION_DOCUMENTS, ...deleteDocArgs)
     } catch {
       // Collection may not exist — skip
     }
 
+    const deleteChunkArgs = [{ filter: {} }, { wait: true }] as unknown as [QdrantDeleteSelector]
     try {
-      await qdrant.delete(COLLECTION_CHUNKS, { filter: {} }, { wait: true })
+      await qdrant.delete(COLLECTION_CHUNKS, ...deleteChunkArgs)
     } catch {
       // Collection may not exist — skip
     }

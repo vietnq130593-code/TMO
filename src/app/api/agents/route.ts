@@ -28,6 +28,10 @@ import { ensureStandaloneAgents } from '@/lib/standalone-agents'
 // AGENT ROSTER (user request 2026-09-08): sau khi tạo/sửa/xóa agent → invalidate
 // roster cache để danh bạ kỹ năng inject vào system prompt của agents cập nhật.
 import { invalidateRosterCache } from '@/lib/agent-roster'
+// DB SELF-HEAL (fix "local không load agents" 2026-09-09): DB local cũ hơn
+// schema sau git pull → query lỗi P2021/P2022 → thay vì trả fallback rỗng câm
+// lặng, tự chạy prisma db push rồi THỬ LẠI một lần.
+import { ensureDbReady } from '@/lib/db-setup'
 
 // ==================== DB RETRY HELPER ====================
 
@@ -123,6 +127,15 @@ function validateDomain(domain: string): string | null {
 // ==================== GET — LIST AGENTS ====================
 
 export async function GET(request: NextRequest) {
+  return getAgentsHandler(request, 0)
+}
+
+/**
+ * Handler nội bộ với attempt-count: gặp DB error (schema drift) → tự heal qua
+ * ensureDbReady({force:true}) → retry 1 lần. Đây là đường tự chữa KHÔNG cần
+ * restart — user pull code mới là dùng được ngay, không cần nhớ `db:push`.
+ */
+async function getAgentsHandler(request: NextRequest, attempt: number): Promise<Response> {
   try {
     // Auto-seed Code Team + Standalone agents on first agents fetch (idempotent, cached)
     await Promise.all([ensureCodeTeamAgents(), ensureStandaloneAgents(), ensureMCPBridgeConfig()])
@@ -167,12 +180,24 @@ export async function GET(request: NextRequest) {
       errMsg.includes('SQLITE_ERROR') || errMsg.includes('Prisma Client') ||
       errMsg.includes('Unable to open') || errMsg.includes('SQLITE_BUSY') ||
       errMsg.includes('database is locked') || errMsg.includes('SQLITE_LOCKED')
+
+    // SELF-HEAL (2026-09-09): DB error thường là schema drift (DB local cũ sau
+    // git pull). Tự migrate rồi thử lại NGAY trong cùng request — không restart.
+    if (isDbError && attempt === 0) {
+      const healed = await ensureDbReady({ force: true })
+      if (healed.ok) {
+        console.log('[Agents API] DB đã tự đồng bộ schema — retry GET agents')
+        return getAgentsHandler(request, 1)
+      }
+      console.error('[Agents API] Self-heal thất bại:', healed.reason)
+    }
+
     if (isDbError) {
       return NextResponse.json({
         agents: [],
         total: 0,
         source: 'fallback',
-        warning: 'Database chưa sẵn sàng. Chạy: bun run db:push',
+        warning: `Database chưa khớp schema và không tự sửa được (${(healReasonOf(errMsg))}). Chạy thủ công: bun run db:push`,
       })
     }
     return NextResponse.json(
@@ -180,6 +205,11 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     )
   }
+}
+
+/** Rút gọn lý do heal thất bại cho warning trả về UI */
+function healReasonOf(errMsg: string): string {
+  return errMsg.slice(0, 160)
 }
 
 // ==================== POST — CREATE AGENT ====================
@@ -418,8 +448,8 @@ export async function PUT(request: NextRequest) {
     }
 
     // Check Code Team position reservation for non-system agents
-    const effectiveTeam2 = updateData.team ?? existing.team
-    const effectivePosition2 = updateData.position ?? existing.position
+    const effectiveTeam2 = (updateData.team as string | null | undefined) ?? existing.team
+    const effectivePosition2 = (updateData.position as string | null | undefined) ?? existing.position
     if (effectiveTeam2 === 'code' && effectivePosition2 && !existing.isSystem) {
       const reservedPositions = ['TL', 'G1', 'G2-A', 'G2-B', 'G3']
       if (reservedPositions.includes(effectivePosition2)) {

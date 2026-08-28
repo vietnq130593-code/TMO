@@ -19,6 +19,7 @@ import { promisify } from 'util'
 import path from 'path'
 import fs from 'fs/promises'
 import { existsSync } from 'fs'
+import type { Dirent } from 'node:fs'
 // Phase 1a.2 — DB-backed Todo store (replaces globalThis.__devTasks)
 // Both Code Team agents AND independent agents share this table; sessionId scopes each list.
 import { db } from '@/lib/db'
@@ -357,7 +358,9 @@ async function countFilesRecursive(dirPath: string): Promise<number> {
   const stack: string[] = [dirPath]
   while (stack.length > 0) {
     const current = stack.pop()!
-    let entries: Awaited<ReturnType<typeof fs.readdir>>
+    // Type đúng của readdir({ withFileTypes: true }) — tránh ReturnType<typeof fs.readdir>
+    // (chọn nhầm overload encoding:'buffer' → Dirent<Buffer>)
+    let entries: Dirent[]
     try {
       entries = await fs.readdir(current, { withFileTypes: true })
     } catch {
