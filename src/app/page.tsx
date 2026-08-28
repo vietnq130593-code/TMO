@@ -8305,6 +8305,12 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
   const SIDEBAR_WIDTH_OPEN = 224 // w-56 = 14rem = 224px
   const SIDEBAR_WIDTH_CLOSED = 48  // w-12 = 3rem = 48px
   const HEADER_HEIGHT = 56
+  // FIX 2026-08-28 (post-reset review): connection status bar (footer, z-40, ~33px)
+  // overlaps the bottom of the Smolab module (z-15) — the chat input row / nút
+  // Gửi-Dừng bị chìm ~21px dưới status bar → click center trúng status bar, không
+  // trúng nút (user không dừng được agent). Module height giờ trừ thêm chiều cao
+  // status bar để input row nằm HOÀN TOÀN phía trên footer.
+  const STATUS_BAR_HEIGHT = 34
   const MIN_MODULE_WIDTH = 300
   const MIN_MODULE_HEIGHT = 200
 
@@ -8319,7 +8325,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
   const effectiveLeft = smolabLeft !== null ? smolabLeft : sidebarWidth
   const effectiveRight = smolabRight !== null ? smolabRight : 0
   const effectiveTop = smolabTop !== null ? smolabTop : 0
-  const effectiveHeight = smolabHeight !== null ? smolabHeight : (window.innerHeight - HEADER_HEIGHT - effectiveTop)
+  const effectiveHeight = smolabHeight !== null ? smolabHeight : (window.innerHeight - HEADER_HEIGHT - STATUS_BAR_HEIGHT - effectiveTop)
 
   const isDraggingLeft = useRef(false)
   const isDraggingRight = useRef(false)
@@ -8471,7 +8477,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     e.preventDefault()
     isDraggingBottom.current = true
     dragStartY.current = e.clientY
-    dragStartHeight.current = smolabHeight ?? (window.innerHeight - HEADER_HEIGHT - effectiveTop)
+    dragStartHeight.current = smolabHeight ?? (window.innerHeight - HEADER_HEIGHT - STATUS_BAR_HEIGHT - effectiveTop)
     document.body.style.cursor = 'row-resize'
     document.body.style.userSelect = 'none'
     const overlay = document.createElement('div')
@@ -8521,7 +8527,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
       if (isDraggingBottom.current) {
         // Bottom edge: dragging down → taller, dragging up → shorter
         const delta = e.clientY - dragStartY.current
-        const maxH = vh - HEADER_HEIGHT - effectiveTop
+        const maxH = vh - HEADER_HEIGHT - STATUS_BAR_HEIGHT - effectiveTop
         const newHeight = Math.min(maxH, Math.max(MIN_MODULE_HEIGHT, dragStartHeight.current + delta))
         setSmolabHeight(newHeight)
       }
@@ -10099,7 +10105,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     top: effectiveTop + 'px',
     left: effectiveLeft + 'px',
     right: effectiveRight + 'px',
-    height: smolabHeight !== null ? smolabHeight + 'px' : `calc(100vh - ${HEADER_HEIGHT + effectiveTop}px)`,
+    height: smolabHeight !== null ? smolabHeight + 'px' : `calc(100vh - ${HEADER_HEIGHT + STATUS_BAR_HEIGHT + effectiveTop}px)`,
     minHeight: MIN_MODULE_HEIGHT + 'px',
     zIndex: 15, // Above sidebar (z-10)
   }
