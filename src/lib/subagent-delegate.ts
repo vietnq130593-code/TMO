@@ -199,6 +199,10 @@ export async function runSubAgentForProfile(params: {
   const evidence: string[] = []
   // Mutable state object — TS không track được phép gán `let` bên trong closure
   // async (narrowing sai → TS2367), nên đóng gói vào object.
+  // FIX (review 2026-09-08): endedBy khởi tạo 'iteration_limit' thay vì 'error'
+  // — nếu không, sub-agent chạy hết vòng/budget mà KHÔNG conclude sẽ bị phân
+  // loại nhầm là 'error' + success=false (parent tưởng thất bại → làm lại việc
+  // đã xong). Nhánh classify ở cuối loop trước đây là dead-code vì init 'error'.
   const state: {
     endedBy: SubAgentOutcome['endedBy']
     errorMessage: string
@@ -206,12 +210,22 @@ export async function runSubAgentForProfile(params: {
     forceWrapUp: boolean
     wrapUpReason: string
   } = {
-    endedBy: 'error',
+    endedBy: 'iteration_limit',
     errorMessage: '',
     lastContent: '',
     forceWrapUp: false,
     wrapUpReason: '',
   }
+  // FIX ZOMBIE (review 2026-09-08): timeout trước đây chỉ race — vòng lặp async
+  // vẫn chạy tiếp chạy tool thật (file_edit/shell!) sau khi parent đã nhận báo
+  // cáo timeout. timedOut được set ngay khi race thua và loop tự dừng ở checkpoint
+  // gần nhất (đầu vòng / trước mỗi tool call).
+  let timedOut = false
+  // ANTI-HALLUCINATION (E2E 2026-09-08): APEX được delegate "đọc 3 file" nhưng
+  // conclude ngay vòng 1 với 0 tool call → "phân tích" là bịa (parent may mắn
+  // tự đọc lại). Giờ: task yêu cầu bằng chứng thật mà sub-agent chưa chạy tool
+  // nào → đẩy 1 directive ép chạy tool, chỉ accept conclude ở vòng sau.
+  let nudgedOnce = false
   let tokensUsed = 0
   let iterations = 0
   let toolCallCount = 0
@@ -256,6 +270,7 @@ export async function runSubAgentForProfile(params: {
     const loopPromise = (async () => {
       while (iterations < SUBAGENT_MAX_ITERATIONS) {
         if (isCancelled()) { state.endedBy = 'cancelled'; return }
+        if (timedOut) { return } // zombie guard — parent đã nhận timeout
         if (Date.now() - startedAt > SUBAGENT_TIMEOUT_MS - 60_000) {
           state.forceWrapUp = true; state.wrapUpReason = 'gần hết thời gian'; break
         }
@@ -294,9 +309,23 @@ export async function runSubAgentForProfile(params: {
           return
         }
         addTokens(result.tokensUsed)
+        if (timedOut) { return } // LLM về nhưng timeout đã nổ — không chạy tool nữa
 
         const toolCalls = parseToolCallsFromOutput(result.content)
         if (toolCalls.length === 0) {
+          // ANTI-HALLUCINATION GUARD: task cần bằng chứng (đọc file / review /
+          // kiểm tra...) mà sub-agent CHƯA chạy tool nào → không chấp nhận kết
+          // luận ngay — ép 1 vòng thu thập bằng chứng thật.
+          const taskNeedsEvidence = /đọc|read|review|phân tích|analyz|kiểm tra|verify|lint|test|file|source|code|mã nguồn/i.test(task)
+          if (!nudgedOnce && taskNeedsEvidence && evidence.length === 0 && iterations < SUBAGENT_MAX_ITERATIONS && !timedOut) {
+            nudgedOnce = true
+            transcript.push({ role: 'assistant', content: result.content })
+            transcript.push({
+              role: 'user',
+              content: '⚠️ Bạn vừa KẾT LUẬN mà CHƯA chạy tool nào. Nhiệm vụ yêu cầu bằng chứng THẬT (đọc file / chạy lệnh / lint...). Hãy dùng tools (file_read / grep / shell...) để thu thập thông tin chính xác RỒI mới báo cáo — KHÔNG đoán nội dung file/code. Nếu bạn đã có thông tin chính xác từ context parent cung cấp, hãy nêu rõ nguồn trong báo cáo và chạy ít nhất 1 tool xác nhận.',
+            })
+            continue
+          }
           state.lastContent = result.content
           state.endedBy = 'concluded'
           return
@@ -305,7 +334,7 @@ export async function runSubAgentForProfile(params: {
         transcript.push({ role: 'assistant', content: result.content })
 
         for (const tc of toolCalls) {
-          if (isCancelled()) break
+          if (isCancelled() || timedOut) break // zombie guard — dừng tool batch
           // Sub-agent bị giới hạn trong whitelist CỦA NÓ (đã strip depth-guard tools)
           if (!allowedTools.includes(tc.name)) {
             transcript.push({ role: 'tool', content: JSON.stringify({ tool: tc.name, success: false, result: `Tool "${tc.name}" not available for sub-agent ${profile.name}.` }) })
@@ -318,6 +347,13 @@ export async function runSubAgentForProfile(params: {
             toolResult = await executeTool(tc.name, tc.args, { agentName: profile.name, sessionId })
           } catch (err) {
             toolResult = { success: false, result: { error: err instanceof Error ? err.message : String(err) } }
+          }
+          // TOKEN ACCOUNTING (fix review 2026-09-08): escalate_problem/
+          // dispatch_agent (consult Omega) tiêu tokens — cộng vào budget của
+          // sub-agent và báo lên parent, không để lọt ngoài kế toán.
+          const resObj = toolResult.result as { tokensUsed?: number } | null | undefined
+          if (resObj && typeof resObj === 'object' && typeof resObj.tokensUsed === 'number' && resObj.tokensUsed > 0) {
+            addTokens(resObj.tokensUsed)
           }
           let preview = ''
           try {
@@ -334,26 +370,33 @@ export async function runSubAgentForProfile(params: {
         }
       }
 
-      if (state.endedBy !== 'concluded' && state.endedBy !== 'cancelled' && state.endedBy !== 'error') {
+      // Phân loại kết thúc khi loop thoát KHÔNG qua concluded/cancelled/error/
+      // timeout — trước đây dead-code vì endedBy khởi tạo 'error' (fix ở trên).
+      if (state.endedBy !== 'concluded' && state.endedBy !== 'cancelled' && state.endedBy !== 'error' && state.endedBy !== 'timeout') {
         state.forceWrapUp = true
         if (!state.wrapUpReason) state.wrapUpReason = `hết ${SUBAGENT_MAX_ITERATIONS} vòng`
-        state.endedBy = 'iteration_limit'
+        state.endedBy = state.wrapUpReason.includes('token')
+          ? 'token_budget'
+          : state.wrapUpReason.includes('thời gian') ? 'timeout' : 'iteration_limit'
       }
     })()
 
     await withTimeout(loopPromise, SUBAGENT_TIMEOUT_MS, `SubAgent ${profile.name} loop`)
       .catch(err => {
+        timedOut = true // loop vẫn chạy nền — sẽ tự dừng ở checkpoint gần nhất
         if (state.endedBy === 'error' && !state.errorMessage) state.errorMessage = err instanceof Error ? err.message : String(err)
         state.endedBy = state.endedBy === 'concluded' ? state.endedBy : 'timeout'
       })
 
     if (isCancelled()) state.endedBy = 'cancelled'
+    // Zombie guard: nếu loop nền vẫn kịp conclude SAU timeout (race hiếm),
+    // state.endedBy đã được loop ghi đè — tôn trọng kết luận đó nếu có report.
 
     // ===== Báo cáo NÉN trả về parent =====
     let report = state.lastContent
     const needWrapUp = state.forceWrapUp || state.endedBy === 'iteration_limit' || state.endedBy === 'token_budget' || state.endedBy === 'timeout' || (state.endedBy === 'error' && (state.lastContent || evidence.length > 0))
 
-    if (needWrapUp && !isCancelled() && tokensUsed < SUBAGENT_TOKEN_BUDGET + 5_000) {
+    if (needWrapUp && !isCancelled() && !timedOut && tokensUsed < SUBAGENT_TOKEN_BUDGET + 5_000) {
       // 1 call ép tổng kết ngắn — parent nhận báo cáo cô đọng thay vì
       // lastContent dài (đây là chìa khóa context isolation).
       try {
@@ -387,6 +430,14 @@ export async function runSubAgentForProfile(params: {
         state.endedBy === 'error' ? `Lỗi: ${state.errorMessage}` : `Kết thúc: ${state.endedBy}`,
         evidence.length > 0 ? `**Tool đã chạy:**\n${evidence.slice(-15).map(e => `- ${e}`).join('\n')}` : '(không có tool call nào)',
       ].join('\n\n')
+    }
+
+    // ANTI-HALLUCINATION DISCLAIMER: sub-agent kết thúc mà KHÔNG chạy tool nào
+    // → nội dung là từ kiến thức model, KHÔNG phải bằng chứng đọc thật. Parent
+    // cần biết điều này để tự verify (E2E 2026-09-08: APEX "phân tích" 3 file
+    // mà 0 tool call — may Omega tự đọc lại).
+    if (toolCallCount === 0 && !report.startsWith('⚠️')) {
+      report = `⚠️ (LƯU Ý: sub-agent ${profile.name} KHÔNG chạy tool nào — nội dung dưới đây từ kiến thức model, chưa có bằng chứng đọc file/lệnh thật. Nếu cần chính xác, hãy tự file_read/grep verify hoặc delegate lại với yêu cầu rõ ràng dùng tool.)\n\n${report}`
     }
 
     if (report.length > REPORT_MAX_CHARS) {
@@ -443,7 +494,8 @@ export async function runSubAgent(params: {
   const { position, task, context, parentAgentName = 'parent-agent', sessionId = null, onTokens } = params
 
   // ===== 1. Resolve agent (DB-first → hardcoded) =====
-  const agent = await resolveAgent(position)
+  // strictEnabled: agent bị user DISABLE → từ chối (không chạy fallback ngầm)
+  const agent = await resolveAgent(position, { strictEnabled: true })
   if (agent.source === 'missing' || !agent.provider || !agent.model) {
     return {
       success: false,
@@ -455,7 +507,7 @@ export async function runSubAgent(params: {
       toolCalls: 0,
       endedBy: 'error',
       evidence: [],
-      error: `Agent position "${position}" không resolve được (missing) — kiểm tra Agents module.`,
+      error: agent.note || `Agent position "${position}" không resolve được (missing) — kiểm tra Agents module.`,
     }
   }
 

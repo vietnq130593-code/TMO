@@ -130,6 +130,37 @@ if (isOnDemandEnabled()) {
   }
 }
 
+// WARM-UP ROUTES (fix "load danh sách agents lâu sau khi khởi động lại" —
+// user report 2026-09-08): trong next dev, route đầu tiên được gọi phải chịu
+// chi phí Turbopack compile + Prisma client cold-init + agent seeds. Nếu
+// user mở UI ngay sau `bun run dev`, các fetch agents/sessions dồn vào đúng
+// lần compile đó. Warm-up chủ động sau boot: (1) đợi server HTTP listen,
+// (2) tự gọi /api/agents + /api/agents/models để compile + seed sẵn — khi
+// user mở UI thì response gần như tức thì. HOÀN TOÀN fail-open, KHÔNG đụng
+// gateway (không spawn on-demand) và không chặn boot.
+setTimeout(async () => {
+  const base = `http://127.0.0.1:${process.env.PORT || 3000}`
+  const warmPaths = ['/api/agents', '/api/agents/models', '/api/openclaw/sessions?action=list']
+  try {
+    // Đợi server listen (tối đa 60s — Windows dev boot chậm)
+    const deadline = Date.now() + 60_000
+    while (Date.now() < deadline) {
+      try {
+        const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(2000) })
+        if (res.ok) break
+      } catch { /* chưa listen — thử lại */ }
+      await new Promise(r => setTimeout(r, 1000))
+    }
+    const results = await Promise.allSettled(warmPaths.map(p =>
+      fetch(`${base}${p}`, { signal: AbortSignal.timeout(30_000) }).then(r => r.status)
+    ))
+    const ok = results.filter(r => r.status === 'fulfilled' && r.value === 200).length
+    console.log(`[instrumentation] Warm-up xong: ${ok}/${warmPaths.length} route sẵn sàng (agents list sẽ load nhanh)`)
+  } catch (err) {
+    console.warn('[instrumentation] Warm-up skipped:', err instanceof Error ? err.message : String(err))
+  }
+}, 1500).unref?.()
+
 // Phase 3 SMOLAB Proposal 9 — Recover orphaned Smolab tasks on startup.
 //
 // When PM2 restarts the app (or the process crashes), SmolabTaskWorker

@@ -32,7 +32,9 @@ import { getStandaloneAgentTools } from '@/lib/standalone-agents'
 // lần sau vào lại không còn") — session đã xóa KHÔNG được upsert/persist lại
 // (4 chỗ agentSession.upsert dưới đây từng khiến session "hồi sinh" khi user
 // xóa xong vẫn còn request chạy dở trong session đó).
-import { isSessionDeleted } from '@/lib/session-tombstone'
+// TOMBSTONE 2 LỚP (fix review 2026-09-08): Set in-process (nhanh) + DB persist
+// (chống hồi sinh sau app restart — browser tab cũ giữ sessionId gửi tiếp).
+import { isSessionDeleted, isSessionDeletedDeep } from '@/lib/session-tombstone'
 // Agent Run Tracker — Thought Process + Todos + Progress realtime trong chat
 // (user request 2026-08-31: mọi agents hiển thị tư duy/tiến trình như Claude Code)
 // 2026-09-01: start/end/thought/cancel đã chuyển vào agent-goal-loop.ts (run
@@ -270,7 +272,7 @@ async function routeToOpenCode(
     if (!session) return null
 
     // Track in SQLite (TOMBSTONE GUARD: session đã xóa → không upsert lại)
-    if (sessionId && !isSessionDeleted(sessionId)) {
+    if (sessionId && !(await isSessionDeletedDeep(sessionId))) {
       try {
         await db.agentSession.upsert({
           where: { sessionId },
@@ -371,17 +373,33 @@ export async function POST(request: NextRequest) {
     // AWAIT để DB-history merge bên dưới chắc chắn thấy (tránh race khi user
     // gửi 2 lần nội dung giống nhau).
     // TOMBSTONE GUARD (2026-09-08): session đã bị user xóa → KHÔNG lưu gì nữa
-    // (phiên đã xóa = xóa hẳn, không hồi sinh).
+    // (phiên đã xóa = xóa hẳn, không hồi sinh). Deep check (Set + DB persist)
+    // — chặn cả sessionId từ browser tab cũ sau khi app đã restart.
     // ============================================
-    if (sessionId && lastUserContent && !isSessionDeleted(sessionId)) {
+    if (sessionId && lastUserContent && !(await isSessionDeletedDeep(sessionId))) {
       try {
-        await db.chatMessage.create({ data: { sessionId, role: 'user', content: lastUserContent } })
-        db.agentSession
-          .updateMany({
-            where: { sessionId },
-            data: { messageCount: { increment: 1 }, updatedAt: new Date() },
-          })
-          .catch(() => {})
+        // DEDUPE (fix E2E 2026-09-08): user bấm Dừng rồi GỬI LẠI cùng nội dung
+        // (hoặc cancel giữa chừng rồi retry) → request cũ đã early-save user
+        // message này rồi → KHÔNG lưu bản trùng (E2E thấy 2 rows y hệt nhau).
+        const threeMinAgo = new Date(Date.now() - 3 * 60_000)
+        const dup = await db.chatMessage.findFirst({
+          where: {
+            sessionId,
+            role: 'user',
+            content: lastUserContent,
+            createdAt: { gte: threeMinAgo },
+          },
+          select: { id: true },
+        })
+        if (!dup) {
+          await db.chatMessage.create({ data: { sessionId, role: 'user', content: lastUserContent } })
+          db.agentSession
+            .updateMany({
+              where: { sessionId },
+              data: { messageCount: { increment: 1 }, updatedAt: new Date() },
+            })
+            .catch(() => {})
+        }
       } catch (err) {
         console.warn('[OpenClaw Chat] Early user-message save failed:', err instanceof Error ? err.message : String(err))
       }
@@ -893,6 +911,10 @@ export async function POST(request: NextRequest) {
         // Thought Process summary (user request 2026-08-31) — trích từ run tracker
         // để (a) response JSON trả về frontend, (b) persist vào chat message
         // metadata cho session reload (hiện lại panel tĩnh collapsed).
+        // FIX (E2E 2026-09-08): thêm EVENTS (compact) vào metadata — trước đây
+        // chỉ persist counters, thought steps chi tiết chỉ sống trong
+        // /api/agent-run (in-memory) → app restart là mất toàn bộ quá trình
+        // thực thi (user yêu cầu xem được Thought Process của Omega).
         const agentRunSummary = (() => {
           try {
             const run = sessionId && reactResult.runId
@@ -909,6 +931,12 @@ export async function POST(request: NextRequest) {
               editsMade: run.counters.editsMade,
               durationMs: run.endedAt ? run.endedAt - run.startedAt : undefined,
               todos: run.lastTodos,
+              // Thought steps compact — persist qua restart (cap 80 events × 400 chars)
+              events: run.events.slice(-80).map(e => ({
+                type: e.type,
+                ts: e.ts,
+                text: typeof e.text === 'string' ? e.text.slice(0, 400) : '',
+              })),
             }
           } catch { return undefined }
         })()
@@ -933,7 +961,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Track session (TOMBSTONE GUARD: session đã xóa → không upsert lại)
-        if (sessionId && !isSessionDeleted(sessionId)) {
+        if (sessionId && !(await isSessionDeletedDeep(sessionId))) {
           try {
             await db.agentSession.upsert({
               where: { sessionId },
@@ -1094,7 +1122,7 @@ export async function POST(request: NextRequest) {
           }
 
           // Update session in SQLite (TOMBSTONE GUARD: session đã xóa → không upsert lại)
-          if (sessionId && !isSessionDeleted(sessionId)) {
+          if (sessionId && !(await isSessionDeletedDeep(sessionId))) {
             try {
               await db.agentSession.upsert({
                 where: { sessionId },
@@ -1194,7 +1222,7 @@ export async function POST(request: NextRequest) {
         // Track session (include agentProfileId if from an Agent)
         // NOTE: agentTemperature/agentMaxTokens are now passed to the local fallback via /api/query
         // TOMBSTONE GUARD: session đã xóa → không upsert lại
-        if (sessionId && !isSessionDeleted(sessionId)) {
+        if (sessionId && !(await isSessionDeletedDeep(sessionId))) {
           try {
             await db.agentSession.upsert({
               where: { sessionId },

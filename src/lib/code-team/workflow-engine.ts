@@ -1767,6 +1767,16 @@ export async function runAgentStep(params: {
       const toolResult = await executeTool(tc.name, tc.args, { agentName: agent.name, sessionId })
       const toolDuration = Date.now() - toolStartTime
 
+      // TOKEN ACCOUNTING (fix review 2026-09-08): escalate_problem (Omega
+      // consult) tiêu token thật — cộng vào stepTokensUsed để metrics đúng
+      // (goal loop đã đếm từ trước; workflow engine thì chưa).
+      if (toolResult.result && typeof toolResult.result === 'object') {
+        const innerTokens = (toolResult.result as { tokensUsed?: unknown }).tokensUsed
+        if (typeof innerTokens === 'number' && innerTokens > 0) {
+          stepTokensUsed += innerTokens
+        }
+      }
+
       toolCallsLog.push({
         tool: tc.name,
         args: tc.args,

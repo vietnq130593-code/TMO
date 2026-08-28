@@ -1312,3 +1312,13 @@ model RedTeamResult {
   @@index([runId])
   @@index([caseId])
 }
+
+/// DeletedSession (fix review 2026-09-08): tombstone PERSIST cho session đã
+/// hard-delete. Tombstone in-process trước đây mất khi app restart — browser
+/// tab còn giữ sessionId cũ gửi chat → upsert tạo lại row → "phiên đã xóa
+/// hồi sinh". Row nhỏ (sessionId unique) — sống vô hạn, không cần dọn.
+model DeletedSession {
+  id        String   @id @default(cuid())
+  sessionId String   @unique
+  deletedAt DateTime @default(now())
+}

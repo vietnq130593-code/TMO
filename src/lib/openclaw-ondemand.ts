@@ -141,8 +141,14 @@ function spawnService(relDir: string, extraEnv: Record<string, string>): ChildPr
   }
 }
 
-/** Kill PID an toàn (SIGTERM, đợi, SIGKILL nếu cần) */
-function killPidTree(pid: number, label: string): void {
+/** Kill PID an toàn (SIGTERM, đợi, SIGKILL nếu cần)
+ *
+ * FIX (review 2026-09-08): trước đây vòng đợi là busy-wait ĐỒNG BỘ (while
+ * spin 100% CPU tới 6s mỗi kill, shutdown gọi tới 3 lần → Next server bị
+ * ĐÓNG BĂNG tới ~18s — mọi request/chat SSE đứng hết). Giờ await sleep
+ * giữa các lần check — event loop được nhả.
+ */
+async function killPidTree(pid: number, label: string): Promise<void> {
   const isAlive = (p: number) => {
     try {
       process.kill(p, 0)
@@ -156,7 +162,9 @@ function killPidTree(pid: number, label: string): void {
     console.log(`[openclaw-ondemand] SIGTERM ${label} (PID ${pid})`)
     process.kill(pid, 'SIGTERM')
     const start = Date.now()
-    while (isAlive(pid) && Date.now() - start < 6000) { /* busy wait */ }
+    while (isAlive(pid) && Date.now() - start < 6000) {
+      await new Promise(r => setTimeout(r, 150)) // yield event loop
+    }
     if (isAlive(pid)) {
       console.log(`[openclaw-ondemand] SIGKILL ${label} (PID ${pid})`)
       try { process.kill(pid, 'SIGKILL') } catch { /* đã chết */ }
@@ -193,14 +201,14 @@ function readPidFile(relDir: string, file: string): number | null {
   }
 }
 
-/** Tắt gateway (manager → gateway binary) + bridge khi idle */
-export async function shutdownIdleGateway(): Promise<void> {
+/** Tắt gateway (manager → gateway binary) + bridge khi idle (hoặc dọn spawn-fail) */
+export async function shutdownIdleGateway(reason = 'idle shutdown'): Promise<void> {
   const s = getState()
   if (s.shuttingDown) return
   s.shuttingDown = true
   try {
     // 1) Bridge trước (ws client — không ảnh hưởng gateway)
-    if (s.bridgeChild?.pid) killPidTree(s.bridgeChild.pid, 'gateway-bridge')
+    if (s.bridgeChild?.pid) await killPidTree(s.bridgeChild.pid, 'gateway-bridge')
     else killPortHolders(BRIDGE_PORT)
     s.bridgeChild = null
 
@@ -208,20 +216,20 @@ export async function shutdownIdleGateway(): Promise<void> {
     //    gateway binary child — nếu kill binary trước, manager sẽ respawn!)
     const managerPid = s.gatewayChild?.pid
       ?? readPidFile('mini-services/openclaw-gateway', '.manager.pid')
-    if (managerPid) killPidTree(managerPid, 'openclaw-gateway manager')
+    if (managerPid) await killPidTree(managerPid, 'openclaw-gateway manager')
     s.gatewayChild = null
 
     // 3) Gateway binary còn sống (orphan) → dọn bằng PID file / port
     await new Promise(r => setTimeout(r, 1500))
     if (await probeGateway(1500)) {
       const gwPid = readPidFile('mini-services/openclaw-gateway', '.gateway.pid')
-      if (gwPid) killPidTree(gwPid, 'openclaw-gateway binary')
+      if (gwPid) await killPidTree(gwPid, 'openclaw-gateway binary')
       if (await probeGateway(1500)) killPortHolders(GATEWAY_PORT)
     }
 
     s.running = false
     s.lastProbeOk = 0
-    console.log('[openclaw-ondemand] Gateway + bridge đã tắt (idle shutdown) — RAM giải phóng')
+    console.log(`[openclaw-ondemand] Gateway + bridge đã tắt (${reason}) — RAM giải phóng`)
   } finally {
     s.shuttingDown = false
   }
@@ -231,6 +239,19 @@ export async function shutdownIdleGateway(): Promise<void> {
 
 async function spawnAndWait(timeoutMs: number): Promise<{ online: boolean; started?: boolean; error?: string }> {
   const s = getState()
+
+  // WINDOWS FAST-FAIL (fix review 2026-09-08): binary openclaw là symlink POSIX
+  // (node_modules/.bin/openclaw — không có .cmd) → trên Windows KHÔNG chạy
+  // được; poll health đủ 45s chỉ làm request (vd mở tab Channels) treo vô ích
+  // lặp lại sau mỗi cooldown. Fast-fail ngay kèm lý do rõ ràng. Set
+  // OPENCLAW_FORCE_SPAWN=true để ép thử khi openclaw hỗ trợ Windows.
+  if (process.platform === 'win32' && process.env.OPENCLAW_FORCE_SPAWN !== 'true') {
+    s.lastSpawnFailed = Date.now()
+    const reason = 'openclaw gateway binary không chạy được trên Windows (symlink POSIX) — app dùng fallback paths (chat trực tiếp LLM, Code Studio in-process). Set OPENCLAW_FORCE_SPAWN=true để ép thử.'
+    console.warn(`[openclaw-ondemand] ${reason}`)
+    return { online: false, error: reason }
+  }
+
   console.log(`[openclaw-ondemand] Gateway offline — spawning on-demand (timeout ${Math.round(timeoutMs / 1000)}s)...`)
 
   // Manager gateway: spawn node bun index.ts (manager tự spawn binary openclaw
@@ -265,6 +286,13 @@ async function spawnAndWait(timeoutMs: number): Promise<{ online: boolean; start
   }
 
   s.lastSpawnFailed = Date.now()
+  // SPAWN-FAIL CLEANUP (fix review 2026-09-08): health không OK sau timeout
+  // → KILL manager + bridge đã spawn. Nếu không, manager (có auto-restart 3s
+  // không giới hạn lần) chạy mãi mãi ngầm và idle-watchdog không bao giờ dọn
+  // (vì s.running=false) → leak RAM + crash-loop vô tận.
+  try {
+    await shutdownIdleGateway('spawn-fail cleanup — health không OK sau timeout')
+  } catch { /* best-effort */ }
   const reason = `gateway không health-OK sau ${Math.round(timeoutMs / 1000)}s (Windows local: binary openclaw không chạy được — app fallback bình thường)`
   console.warn(`[openclaw-ondemand] ${reason}`)
   return { online: false, error: reason }

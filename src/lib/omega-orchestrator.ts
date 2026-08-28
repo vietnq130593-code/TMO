@@ -65,6 +65,14 @@ const CONSULT_TIMEOUT_MS = 3 * 60_000
 /** Omega fallback khi DB không có profile (fail-open, vẫn tư vấn được) */
 const OMEGA_FALLBACK = { provider: 'nvidia', model: 'moonshotai/kimi-k3' }
 
+/**
+ * FIX (review 2026-09-08 — directive 2026-09-05): 2 model dưới là LÕI EXTRACTION
+ * (chỉ phục vụ trích xuất tài liệu KB) — CẤM dùng làm model chat cho agent do
+ * Omega tạo (agent chat bằng extraction core = chất lượng tệ + sai directive).
+ */
+const EXTRACTION_ONLY_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b', 'openai/gpt-oss-120b'])
+const CHAT_MODEL_HINT = 'moonshotai/kimi-k3 (mạnh, khuyến nghị) | deepseek-ai/deepseek-v4-pro-0813 | deepseek-ai/deepseek-v4-flash-0731 (nhanh) | minimaxai/minimax-m3'
+
 /** Toolset mặc định cho agent mới nếu Omega không chỉ định — luôn kèm
  *  escalate_problem (agent mới được hỏi Omega khi kẹt — đúng cơ chế
  *  "agents nắm kỹ năng nhau" user yêu cầu) */
@@ -352,6 +360,11 @@ export async function createAgentByOmega(params: {
   if (!models.some(m => m.id === modelValue)) {
     return { success: false, error: `Model "${modelValue}" không thuộc provider "${providerValue}". Models khả dụng: ${models.map(m => m.id).join(', ')}` }
   }
+  // EXTRACTION CORE GUARD (fix review 2026-09-08): lõi extraction không được
+  // làm model chat cho agent mới (directive 2026-09-05).
+  if (EXTRACTION_ONLY_MODELS.has(modelValue)) {
+    return { success: false, error: `Model "${modelValue}" là LÕI EXTRACTION (chỉ dùng trích xuất tài liệu KB — directive 2026-09-05), không được làm model chat cho agent. Chat models khả dụng: ${CHAT_MODEL_HINT}` }
+  }
 
   const domainValue = domain || 'mixed'
   if (!VALID_DOMAINS.includes(domainValue)) {
@@ -584,8 +597,13 @@ export async function dispatchAgentByOmega(params: {
         result.iterations = run.iterations
         result.toolCalls = run.toolCalls
         result.endedBy = run.endedBy
-        result.success = run.success
-        if (!run.success && run.error) result.error = run.error
+        // FIX (review 2026-09-08): assignment đã COMMIT ở trên (update DB) —
+        // task kèm theo fail KHÔNG rollback assignment. Giữ success=true cho
+        // assignment (roster/UI đã thấy agent ở team mới) và báo task-fail qua
+        // error để LLM không tưởng điều động thất bại rồi retry/thôi bỏ.
+        if (!run.success) {
+          result.error = `⚠️ Điều động vào ${newTeam || 'standalone'}/${newPosition || '-'} ĐÃ ÁP DỤNG thành công, nhưng task kèm theo thất bại (${run.error || run.endedBy}) — xem report để tự làm phần việc đó.`
+        }
       }
       return result
     } catch (err) {

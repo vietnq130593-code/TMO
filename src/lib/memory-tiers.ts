@@ -26,6 +26,9 @@
  */
 
 import { db } from '@/lib/db'
+// TOMBSTONE GUARD (fix review 2026-09-08): session đã bị user xóa → KHÔNG ghi
+// thêm working-memory mồ côi (goal-loop chạy dở sau delete vẫn viết HOT entries).
+import { isSessionDeleted } from '@/lib/session-tombstone'
 import { qdrant } from '@/lib/qdrant'
 import { generateEmbedding } from '@/lib/embeddings'
 import { storeMemory } from '@/lib/agent-memory'
@@ -169,6 +172,8 @@ export async function addToWorkingMemory(params: {
   importance?: number
 }): Promise<void> {
   try {
+    // Tombstone guard — session đã xóa thì KHÔNG tạo row mới (anti-orphan)
+    if (params.sessionId && isSessionDeleted(params.sessionId)) return
     await db.workingMemory.create({
       data: {
         agentId: params.agentId,

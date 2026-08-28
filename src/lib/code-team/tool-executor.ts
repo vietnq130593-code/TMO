@@ -1289,8 +1289,8 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           model: {
             type: 'string',
             description:
-              'Model ID. Khả dụng: moonshotai/kimi-k3 (lõi chính, mạnh) | deepseek-ai/deepseek-v4-pro-0813 | ' +
-              'deepseek-ai/deepseek-v4-flash-0731 (nhanh) | minimaxai/minimax-m3 | nvidia/nemotron-3-ultra-550b-a55b | openai/gpt-oss-120b',
+              'Model ID (CHAT models — lõi extraction nemotron/gpt-oss BỊ CẤM cho agent chat). Khả dụng: moonshotai/kimi-k3 (lõi chính, mạnh) | ' +
+              'deepseek-ai/deepseek-v4-pro-0813 | deepseek-ai/deepseek-v4-flash-0731 (nhanh) | minimaxai/minimax-m3',
           },
           team: { type: 'string', enum: ['code', 'research'], description: 'Team (null/omit = standalone agent)' },
           position: {
@@ -2380,9 +2380,19 @@ export async function executeTool(
       }
     }
 
-    recordActivity(true, result)
+    // FIX (review 2026-09-08): result là OBJECT có field success (vd
+    // delegate_task / escalate_problem / create_agent / dispatch_agent /
+    // knowledge_search...) → propagate truthiness ĐÚNG ra ngoài. Trước đây
+    // outer luôn success:true → goal-loop evidence ghi "✓" cho tool THẤT BẠI
+    // bên trong (tín hiệu mâu thuẫn cho evaluator + AUTO-ESCALATE không thấy
+    // được dispatch fail).
+    const innerSuccess = result !== null && typeof result === 'object'
+      && typeof (result as Record<string, unknown>).success === 'boolean'
+      ? (result as Record<string, unknown>).success === true
+      : true
+    recordActivity(innerSuccess, result)
     return {
-      success: true,
+      success: innerSuccess,
       result,
       duration: Date.now() - startTime,
     }

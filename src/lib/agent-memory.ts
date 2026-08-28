@@ -958,8 +958,8 @@ export async function saveChatMessages(
     // → KHÔNG lưu message mới (phiên đã xóa = xóa hẳn; message lưu lại thành orphan
     // vô hình nhưng chiếm dung lượng DB). Fail-open khi import lỗi.
     try {
-      const { isSessionDeleted } = await import('@/lib/session-tombstone')
-      if (isSessionDeleted(sessionId)) return 0
+      const { isSessionDeletedDeep } = await import('@/lib/session-tombstone')
+      if (await isSessionDeletedDeep(sessionId)) return 0
     } catch { /* fail-open */ }
 
     const result = await db.chatMessage.createMany({

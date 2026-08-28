@@ -429,8 +429,25 @@ function summarizeToolResult(result: unknown): string {
     if (typeof r.errorCount === 'number') parts.push(`${r.errorCount} lỗi`)
     if (typeof r.warningCount === 'number') parts.push(`${r.warningCount} cảnh báo`)
     if (typeof r.totalCount === 'number') parts.push(`tổng ${r.totalCount}`)
+    if (typeof r.totalMatches === 'number') parts.push(`${r.totalMatches} match`)
+    if (typeof r.exitCode === 'number') parts.push(`exit=${r.exitCode}`)
     if (r.truncated === true) parts.push('output bị cắt')
     if (r.parseError) parts.push(`parseError: ${String(r.parseError).slice(0, 70)}`)
+    // FIX (E2E 2026-09-08): bằng chứng grep/shell cần NỘI DUNG match/output —
+    // trước đây chỉ ghi "PASS" → evaluator không thấy kết quả grep (Omega E2E:
+    // "output shell grep bị cắt, chỉ thấy exit thành công" → không verify được).
+    if (Array.isArray(r.matches) && r.matches.length > 0) {
+      const previews = (r.matches as Array<Record<string, unknown>>).slice(0, 3).map(m => {
+        const f = String(m.file || '').split('/').pop()
+        const ln = m.line !== undefined ? `:${m.line}` : ''
+        return `${f}${ln} ${String(m.text || '').slice(0, 60)}`
+      })
+      parts.push(`match: ${previews.join(' | ')}`)
+    }
+    if (typeof r.stdout === 'string' && r.stdout.trim()) {
+      const so = r.stdout.trim()
+      parts.push(`output: ${so.slice(0, 120)}${so.length > 200 ? ' …' + so.slice(-50) : ''}`)
+    }
     if (Array.isArray(r.results) && r.results.length > 0) {
       const first = r.results[0] as Record<string, unknown>
       const file = String(first.file || first.path || '')
@@ -494,16 +511,19 @@ async function compressHistory(params: {
 }): Promise<{ digestChars: number; savedChars: number; method: 'llm' | 'heuristic' } | null> {
   const { messages, goalMsgIndex, evidence, agentId, agentSessionId, onTokens } = params
 
-  let payload = 0
-  for (const m of messages) payload += m.content.length
-  if (payload <= COMPRESS_THRESHOLD_CHARS) return null
-
+  // FIX (review 2026-09-08): threshold trước đây tính trên TOÀN BỘ messages
+  // (kể cả system prompt + goal + KEEP_RECENT tail KHÔNG THỂ nén) → khi phần
+  // cố định vượt ngưỡng, mỗi 2-3 vòng lại fired 1 LLM digest re-nén chính
+  // digest cũ (tiết kiệm âm). Giờ: chỉ đo SEGMENT nén được (workStart..
+  // compressEnd) và bỏ qua nếu tiết kiệm < 2× digest size.
   const workStart = goalMsgIndex + 1
   const compressEnd = messages.length - KEEP_RECENT_MESSAGES
   if (compressEnd - workStart < MIN_COMPRESSIBLE_MESSAGES) return null // segment quá nhỏ — không đáng nén
 
   const compressible = messages.slice(workStart, compressEnd)
   const removedChars = compressible.reduce((s, m) => s + m.content.length, 0)
+  if (removedChars < COMPRESS_THRESHOLD_CHARS) return null // segment nén được chưa đủ lớn
+  if (removedChars - DIGEST_MAX_CHARS < DIGEST_MAX_CHARS * 2) return null // tiết kiệm < 2× digest — không đáng tốn 1 LLM call
 
   // Transcript đầu vào cho LLM nén (cap COMPRESS_INPUT_CHARS)
   let transcript = ''
@@ -581,8 +601,10 @@ async function evaluateCompletion(params: {
   agentId: string
   agentName: string
   abortCheck: () => boolean
+  /** Token của evaluator cũng phải vào kế toán budget (fix review 2026-09-08) */
+  onTokens?: (tokens: number) => void
 }): Promise<EvalVerdict | null> {
-  const { goal, lastAssistantContent, evidence, verifyEvidence, unverifiedModifications, agentProvider, agentModel, agentId, agentName, abortCheck } = params
+  const { goal, lastAssistantContent, evidence, verifyEvidence, unverifiedModifications, agentProvider, agentModel, agentId, agentName, abortCheck, onTokens } = params
 
   const evidenceLines = evidence
     .slice(-MAX_EVIDENCE_ENTRIES)
@@ -599,7 +621,7 @@ async function evaluateCompletion(params: {
   // [C] Khối bằng chứng kiểm định — harness kiểm đếm, agent KHÔNG thể bịa
   const verifyBlock = verifyEvidence.length > 0
     ? verifyEvidence.map(l => `- ${l}`).join('\n')
-    : '⚠️ KHÔNG có tool kiểm định nào (run_tests/lint/type_check/test_coverage/file_read/grep) thành công ở chu kỳ cuối — mọi lời tuyên bố "đã kiểm tra/đã test" đều KHÔNG có bằng chứng.'
+    : '⚠️ KHÔNG có tool kiểm định nào (run_tests/lint/type_check/test_coverage/file_read/grep/shell-thành-công) ở chu kỳ cuối — mọi lời tuyên bố "đã kiểm tra/đã test" đều KHÔNG có bằng chứng.'
 
   const prompt = `MỤC TIÊU CỦA AGENT:
 ${goal.slice(0, 2000)}
@@ -629,6 +651,10 @@ ${evidenceBlock}
     )
     if (!result || (!result.content && !result.tool_calls)) return null
     if (!result.content) return null
+    // TOKEN ACCOUNTING (fix review 2026-09-08): evaluator call tiêu token thật
+    // (tối đa 4 lần/run) — trước đây không được đếm vào tokensUsed → budget
+    // ảo (thực tiêu nhiều hơn metadata báo).
+    if (typeof result.tokensUsed === 'number' && result.tokensUsed > 0) onTokens?.(result.tokensUsed)
     return parseEvalVerdict(result.content)
   } catch (err) {
     console.warn(`[GoalLoop] Evaluator LLM failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -939,8 +965,33 @@ export async function runGoalDrivenLoop(params: {
       console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} vòng ${cycleIterations}: ${toolCalls.length} tool calls`)
       messages.push({ role: 'assistant', content: result.content })
 
-      for (const tc of toolCalls) {
+      for (const [tcIdx, tc] of toolCalls.entries()) {
         if (isCancelled()) break
+
+        // BATCH BUDGET GUARD (fix review 2026-09-08): trước đây budget chỉ
+        // check SAU cả batch — 1 message chứa nhiều tool call (mỗi delegate
+        // tới 10 phút/40k token) có thể vượt time-budget HÀNG GIỜ trước khi
+        // vòng ngoài nhận ra. Giờ check trước MỖI tool call.
+        if (timeLeft() <= 0 || tokenLeft() <= REPORT_RESERVE_TOKENS) {
+          // Đẩy stub result cho các tool call còn lại (LLM cần thấy response
+          // cho mọi tool_call đã phát ra) rồi thoát batch.
+          for (const rest of toolCalls.slice(tcIdx)) {
+            pushToolMessage(messages, { tool: rest.name, success: false, result: 'Bỏ qua — budget token/thời gian của vòng lặp đã cạn (report reserve). Hãy tổng hợp báo cáo cuối.' })
+            evidence.push({ cycle, kind: 'tool', tool: rest.name, success: false, text: 'bỏ qua (budget cạn)' })
+          }
+          endedBy = 'budget'
+          break
+        }
+
+        // DELEGATE PRE-FLIGHT (fix review 2026-09-08): sub-agent có budget
+        // riêng 40k token — không bắn khi vòng lặp cha gần cạn (sub-agent
+        // chạy xong mà cha không còn token đọc báo cáo = tiền mất tật mang).
+        if ((tc.name === 'delegate_task' || tc.name === 'dispatch_agent') && tokenLeft() <= REPORT_RESERVE_TOKENS + 10_000) {
+          pushToolMessage(messages, { tool: tc.name, success: false, result: 'Từ chối delegate — budget token của vòng lặp gần cạn (≤ reserve + 10k). Hãy TỰ LÀM phần việc còn lại ngắn gọn thay vì delegate.' })
+          evidence.push({ cycle, kind: 'tool', tool: tc.name, success: false, text: 'từ chối (budget cha gần cạn)' })
+          continue
+        }
+
         totalToolCalls++
         cycleToolCalls++
 
@@ -989,8 +1040,16 @@ export async function runGoalDrivenLoop(params: {
         // LƯU Ý: lint/type_check FAIL (có errorCount) VẪN LÀ bằng chứng kiểm định
         // hợp lệ — agent thấy được số lỗi cụ thể. Chỉ tool không chạy được
         // (permission disabled / exception → result là string) mới không tính.
+        //
+        // FIX (review 2026-09-08): shell/run_bg THÀNH CÔNG cũng tính là bằng
+        // chứng kiểm định (protocol của loop cho phép "shell kiểm tra output"
+        // — bun test, cat file...). Trước đây shell chỉ đếm là MODIFY → chu kỳ
+        // kết thúc bằng shell-verify bị verify-guard hạ "hoàn thành" →
+        // "chưa đạt" SAI (task xong bị ép chạy tới max_cycles). Ordinal
+        // modify/verify bằng nhau khi shell là tool cuối → guard không hạ.
         const isStructuredResult = toolResult.result !== null && typeof toolResult.result === 'object'
-        if ((VERIFY_TOOLS.has(tc.name) || READBACK_TOOLS.has(tc.name)) && isStructuredResult) {
+        const shellVerify = (tc.name === 'shell' || tc.name === 'run_bg') && toolResult.success && isStructuredResult
+        if ((VERIFY_TOOLS.has(tc.name) || READBACK_TOOLS.has(tc.name) || shellVerify) && isStructuredResult) {
           lastVerifyOrdinal = totalToolCalls
           cycleVerifyEvidence.push(`${tc.name}: ${resultPreview}`)
         }
@@ -1059,6 +1118,7 @@ export async function runGoalDrivenLoop(params: {
       agentId,
       agentName,
       abortCheck: isCancelled,
+      onTokens: (t) => { tokensUsed += t },
     })
 
     if (isCancelled()) { stopReason = 'cancelled'; break }
@@ -1187,8 +1247,13 @@ export async function runGoalDrivenLoop(params: {
             break
           }
         } else {
-          stopReason = 'no_progress'
-          break
+          // GRACE (fix review 2026-09-08): quota consult đã tiêu (auto-escalate
+          // #1 trước đó) — vẫn cho 1 chu kỳ grace cuối trước khi bỏ cuộc;
+          // chỉ break khi lặp THẬT SỰ lần 2 (bounded bởi MAX_CYCLES).
+          if (noProgressCount >= 2) {
+            stopReason = 'no_progress'
+            break
+          }
         }
       }
     } else {
@@ -1210,11 +1275,16 @@ export async function runGoalDrivenLoop(params: {
   let usedFinalReport = false
   if (stopReason === 'cancelled') {
     content = '⏹ Đã dừng tác vụ theo yêu cầu của bạn.'
-  } else if (stopReason === 'error') {
+  } else if (stopReason === 'error' && !lastContent) {
     // Surface lỗi LLM gốc (vd: NVIDIA cạn key) — không nuốt lỗi
     content = `Error: Goal loop LLM failed — ${lastLlmError || lastContent || 'không có nội dung trả về'}`
   } else {
+    // FIX (review 2026-09-08): stopReason=error nhưng CÓ work đã làm → không
+    // vứt partial work; giữ lastContent + note lỗi, đi tiếp final-report path.
     content = lastContent || '(agent không trả về nội dung)'
+    if (stopReason === 'error') {
+      content += `\n\n---\n⚠️ Vòng lặp dừng sớm vì lỗi LLM: ${lastLlmError || '(không rõ lỗi)'} — phần trên là kết quả đã làm được trước khi lỗi xảy ra.`
+    }
     // [B] FINAL REPORT CALL — dừng giữa chừng (budget/max_cycles/no_progress)
     // mà chưa complete: tổng hợp 1 báo cáo HOÀN CHỈNH từ bằng chứng đã thu
     // (đã làm · bằng chứng tool · còn thiếu · ĐỀ XUẤT KHẮC PHỤC) thay vì trả

@@ -73,15 +73,24 @@ export async function getAgentRoster(): Promise<AgentRoster> {
     probedAt: new Date().toISOString(),
   }
 
+  let dbFetchFailed = false
   try {
+    // FIX (review 2026-09-08 — 2 vấn đề):
+    // (a) orderBy createdAt ASC + take 100 → khi vượt 100 agents, agent do
+    //     Omega Factory TẠO MỚI (mục đích chính của feature) bị ẨN khỏi roster
+    //     → giờ orderBy createdAt DESC (mới nhất trước, system vẫn hiện nhờ số
+    //     lượng ít) + take 200.
+    // (b) KHÔNG cache roster rỗng khi DB fetch throw (lock tạm — vd trong
+    //     transaction hard-delete) — nếu không mọi agents thấy "roster trống"
+    //     suốt 60s TTL.
     const profiles = await db.agentProfile.findMany({
       where: { enabled: true },
       select: {
         id: true, name: true, avatar: true, description: true, capable: true,
         team: true, position: true, domain: true, isSystem: true,
       },
-      orderBy: [{ team: 'asc' }, { position: 'asc' }, { createdAt: 'asc' }],
-      take: 100,
+      orderBy: [{ team: 'asc' }, { position: 'asc' }, { createdAt: 'desc' }],
+      take: 200,
     })
 
     for (const p of profiles) {
@@ -107,11 +116,16 @@ export async function getAgentRoster(): Promise<AgentRoster> {
       }
     }
   } catch (err) {
-    // Fail-open: DB lỗi → roster rỗng (block rút gọn vẫn inject được)
-    console.warn('[AgentRoster] DB fetch failed (fail-open):', err instanceof Error ? err.message : String(err))
+    // Fail-open: DB lỗi → roster rỗng (block rút gọn vẫn inject được) —
+    // nhưng KHÔNG cache kết quả rỗng này (fetch lỗi tạm thời không đáng
+    // khiến agents mù đồng nghiệp suốt 60s TTL).
+    dbFetchFailed = true
+    console.warn('[AgentRoster] DB fetch failed (fail-open, không cache):', err instanceof Error ? err.message : String(err))
   }
 
-  globalForRoster.__tmoAgentRosterCache = { roster, at: Date.now() }
+  if (!dbFetchFailed) {
+    globalForRoster.__tmoAgentRosterCache = { roster, at: Date.now() }
+  }
   return roster
 }
 
@@ -136,6 +150,11 @@ export async function buildAgentRosterPromptBlock(excludeName?: string): Promise
   const parts: string[] = []
   parts.push('--- Agent Roster (ĐỒNG NGHIỆP — kỹ năng chuyên môn của các agents khác) ---')
   parts.push('Bạn KHÔNG làm việc một mình. Khi tác vụ vượt chuyên môn của bạn hoặc bạn gặp vấn đề → gọi agent có kỹ năng tốt hơn:')
+
+  // FIX (review 2026-09-08): cap tổng kích thước block — 200 agents × ~190
+  // chars ≈ 38KB (~10k tokens) đơ system prompt. 8k chars đủ cho ~40 dòng
+  // roster + phần cơ chế; vượt thì cắt phần cũ hơn theo team.
+  const MAX_BLOCK_CHARS = 8_000
 
   const standalone = roster.standalone.filter(ex)
   const codeTeam = roster.codeTeam.filter(ex)
@@ -164,9 +183,19 @@ export async function buildAgentRosterPromptBlock(excludeName?: string): Promise
 
   parts.push('')
   parts.push('CƠ CHẾ PHỐI HỢP:')
-  parts.push('• Gặp vấn đề / kẹt / lặp lỗi / không rõ hướng giải → tool_call: escalate_problem({"problem": " mô tả vấn đề", "context": "...", "attempted": "đã thử gì"}) → OMEGA (orchestrator) phân tích và đề xuất giải pháp tốt nhất (điều agent nào xử lý, cần agent mới nào, đổi cách tiếp cận...).')
+  parts.push('• Gặp vấn đề / kẹt / lặp lỗi / không rõ hướng giải → tool_call: escalate_problem({"problem": "mô tả vấn đề", "context": "...", "attempted": "đã thử gì"}) → OMEGA (orchestrator) phân tích và đề xuất giải pháp tốt nhất (điều agent nào xử lý, cần agent mới nào, đổi cách tiếp cận...).')
   parts.push('• NHẬN DIỆN SỚM: tool fail 2 lần cùng lỗi / cùng hành động lặp lại / task cần chuyên môn ngoài vòng của bạn → escalate NGAY, đừng chờ kẹt hẳn. Vấn đề được giải từ trước rẻ hơn chữa sau.')
   parts.push('• Task code lớn tự chứa → delegate_task cho Code Team chuyên trách. Task phù hợp agent khác trong roster → dispatch_agent({"agent": "TÊN", "task": "..."}) — sub-agent chạy tự chủ, trả báo cáo nén (context của bạn không phình).')
 
-  return '\n' + parts.join('\n')
+  const block = '\n' + parts.join('\n')
+  if (block.length <= MAX_BLOCK_CHARS) return block
+  // Vượt cap → giữ header + cơ chế, cắt bớt entry cũ (đầu danh sách)
+  const tail = '\n' + parts.slice(-4).join('\n')
+  const headLines = parts.slice(0, parts.length - 4)
+  let head = ''
+  for (const line of headLines) {
+    if (head.length + line.length + tail.length > MAX_BLOCK_CHARS) break
+    head += '\n' + line
+  }
+  return head + tail + `\n(roster đã rút gọn — ${roster.standalone.length + roster.codeTeam.length + roster.research.length + roster.custom.length} agents tổng)`
 }

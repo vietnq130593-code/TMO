@@ -23,6 +23,8 @@ import { existsSync } from 'fs'
 // Both Code Team agents AND independent agents share this table; sessionId scopes each list.
 import { db } from '@/lib/db'
 import { isFlagEnabled } from '@/lib/feature-flags'
+// TOMBSTONE GUARD (fix review 2026-09-08): chặn todo_write cho session đã xóa
+import { isSessionDeleted } from '@/lib/session-tombstone'
 // Phase 6/7 (rebuild) — workspace root now follows the USER's ACTIVE workspace
 // (SQLite Workspace table) instead of process.cwd(); 5s cache.
 import { resolveWorkspaceRoot } from './workspace-root'
@@ -488,6 +490,54 @@ export async function grep(args: {
     }
   }
 
+  // FIX (E2E 2026-09-08): tách logic match 1 FILE riêng — trước đây scan() chỉ
+  // readdir DIRECTORY; khi agent truyền path là FILE đơn (grep "export" trong
+  // file.ts — cách dùng tự nhiên nhất) thì readdir(file) throw → catch →
+  // trả 0 matches THẦM LẶNG (Omega E2E: grep 5-export file trả totalMatches=0,
+  // phải mò sang file_read). Giờ: searchRoot là file → scan trực tiếp file đó.
+  async function scanFile(full: string, rel: string): Promise<void> {
+    // glob filter (simple * support)
+    if (args.glob) {
+      const globRe = new RegExp('^' + args.glob.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$')
+      if (!globRe.test(path.basename(rel))) return
+    }
+    // Phase 2.5 — skip binary files (NULL byte in first 8KB)
+    if (await isBinaryMaybe(full)) return
+    try {
+      const content = await fs.readFile(full, 'utf-8')
+      if (args.multiline) {
+        // Multiline mode: test against full content; record file as match if any match.
+        // We don't get per-line `line` info for cross-line matches — set to 1 with full
+        // match preview (first 200 chars of the matched substring).
+        const m = content.match(regex)
+        if (m) {
+          fileMatches.add(rel)
+          fileMatchCounts.set(rel, (fileMatchCounts.get(rel) || 0) + 1)
+          if (mode === 'content') {
+            matches.push({ file: rel, line: 1, text: m[0].slice(0, 200) })
+          }
+        }
+      } else {
+        const lines = content.split('\n')
+        for (let i = 0; i < lines.length; i++) {
+          if (regex.test(lines[i])) {
+            fileMatches.add(rel)
+            fileMatchCounts.set(rel, (fileMatchCounts.get(rel) || 0) + 1)
+            if (mode === 'content') {
+              const ctx: string[] = []
+              if (contextLines > 0) {
+                for (let c = Math.max(0, i - contextLines); c < Math.min(lines.length, i + contextLines + 1); c++) {
+                  if (c !== i) ctx.push(`${c + 1}: ${lines[c]}`)
+                }
+              }
+              matches.push({ file: rel, line: i + 1, text: lines[i].trim().slice(0, 200), context: ctx.length ? ctx : undefined })
+            }
+          }
+        }
+      }
+    } catch { /* binary/unreadable — skip */ }
+  }
+
   async function scan(dir: string, relBase: string) {
     let entries: import('fs').Dirent[]
     try { entries = await fs.readdir(dir, { withFileTypes: true }) } catch { return }
@@ -498,53 +548,19 @@ export async function grep(args: {
       if (entry.isDirectory()) {
         await scan(full, rel)
       } else if (entry.isFile()) {
-        // glob filter (simple * support)
-        if (args.glob) {
-          const globRe = new RegExp('^' + args.glob.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$')
-          if (!globRe.test(entry.name)) continue
-        }
-        // Phase 2.5 — skip binary files (NULL byte in first 8KB)
-        if (await isBinaryMaybe(full)) continue
-        try {
-          const content = await fs.readFile(full, 'utf-8')
-          if (args.multiline) {
-            // Multiline mode: test against full content; record file as match if any match.
-            // We don't get per-line `line` info for cross-line matches — set to 1 with full
-            // match preview (first 200 chars of the matched substring).
-            const m = content.match(regex)
-            if (m) {
-              fileMatches.add(rel)
-              fileMatchCounts.set(rel, (fileMatchCounts.get(rel) || 0) + 1)
-              if (mode === 'content') {
-                matches.push({ file: rel, line: 1, text: m[0].slice(0, 200) })
-                if (matches.length >= headLimit) return
-              }
-            }
-          } else {
-            const lines = content.split('\n')
-            for (let i = 0; i < lines.length; i++) {
-              if (regex.test(lines[i])) {
-                fileMatches.add(rel)
-                fileMatchCounts.set(rel, (fileMatchCounts.get(rel) || 0) + 1)
-                if (mode === 'content') {
-                  const ctx: string[] = []
-                  if (contextLines > 0) {
-                    for (let c = Math.max(0, i - contextLines); c < Math.min(lines.length, i + contextLines + 1); c++) {
-                      if (c !== i) ctx.push(`${c + 1}: ${lines[c]}`)
-                    }
-                  }
-                  matches.push({ file: rel, line: i + 1, text: lines[i].trim().slice(0, 200), context: ctx.length ? ctx : undefined })
-                  if (matches.length >= headLimit) return
-                }
-              }
-            }
-          }
-        } catch { /* binary/unreadable — skip */ }
+        await scanFile(full, rel)
+        if (matches.length >= headLimit) return
       }
     }
   }
 
-  await scan(searchRoot, '')
+  // searchRoot là FILE đơn → scan file đó; là directory → scan đệ quy
+  const rootStat = await fs.stat(searchRoot).catch(() => null)
+  if (rootStat?.isFile()) {
+    await scanFile(searchRoot, path.basename(searchRoot))
+  } else {
+    await scan(searchRoot, '')
+  }
   if (mode === 'files') return { success: true, files: Array.from(fileMatches), total: fileMatches.size }
   if (mode === 'count') return { success: true, files: Array.from(fileMatches).map(f => ({ file: f, count: fileMatchCounts.get(f) || 0 })), totalMatches: Array.from(fileMatchCounts.values()).reduce((a, b) => a + b, 0) }
   return { success: true, matches, totalMatches: matches.length, truncated: matches.length >= headLimit }
@@ -2016,6 +2032,12 @@ export async function todoWrite(args: {
 
   const sessionId = args.sessionId || 'default'
   const agentRole = args.agentRole || null
+
+  // TOMBSTONE GUARD (fix review 2026-09-08): session đã bị user xóa (hard-delete
+  // đã purge todos) → agent chạy dở KHÔNG được đẻ todo mới cho session mồ côi.
+  if (sessionId !== 'default' && isSessionDeleted(sessionId)) {
+    return { success: false, error: 'Phiên chat đã bị xóa — không thể ghi todo cho phiên này.' }
+  }
 
   // Guard against runaway agents trying to create thousands of todos
   const MAX_TODOS_PER_SESSION = 200

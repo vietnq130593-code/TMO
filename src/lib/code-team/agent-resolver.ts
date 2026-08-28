@@ -23,6 +23,21 @@ import { db } from '@/lib/db'
 import { getAgentByPosition, getAgentTools, type CodeTeamAgentDef } from './agents'
 import { getAgentPrompt } from './prompts'
 
+/**
+ * Parse AgentProfile.tools (JSON string — Agent Factory whitelist) → string[].
+ * Null/rỗng/lỗi parse → fallback (hành vi cũ: toolset theo position).
+ */
+function parseDbTools(raw: string | null | undefined, fallback: string[]): string[] {
+  if (!raw) return fallback
+  try {
+    const arr = JSON.parse(raw)
+    if (Array.isArray(arr) && arr.length > 0 && arr.every(x => typeof x === 'string')) {
+      return arr as string[]
+    }
+  } catch { /* JSON hỏng → fallback */ }
+  return fallback
+}
+
 // ==================== LAZY SEED CACHE ====================
 
 /** Per-process cache of recently resolved agents to avoid redundant DB queries.
@@ -78,6 +93,8 @@ export interface ResolvedAgent {
   avatar: string | null
   /** Where this agent config came from */
   source: 'database' | 'hardcoded' | 'lazy_seeded' | 'missing'
+  /** Ghi chú bổ sung (vd lý do missing — agent bị disable) */
+  note?: string
 }
 
 /** Resolution result — includes all resolved agents + any missing positions */
@@ -148,7 +165,13 @@ export async function resolveAllAgents(positions: string[]): Promise<ResolutionR
  * @param position - Agent position (TL, G1, G2-A, G2-B, G3)
  * @returns ResolvedAgent with source indicating where config came from
  */
-export async function resolveAgent(position: string): Promise<ResolvedAgent> {
+export async function resolveAgent(position: string, opts?: { strictEnabled?: boolean }): Promise<ResolvedAgent> {
+  // strictEnabled (fix review 2026-09-08): caller là SUB-AGENT DELEGATION —
+  // agent bị user DISABLE phải từ chối (missing) thay vì fallback hardcoded
+  // và chạy ngầm (user tắt agent mà vẫn bị gọi = vi phạm ý người dùng).
+  // Workflow engine giữ hành vi cũ (fallback để pipeline không chết).
+  const strictEnabled = opts?.strictEnabled === true
+
   // ===== Step 0: Check resolve cache (Phase 4: avoid redundant DB queries) =====
   const cached = getCachedResolvedAgent(position)
   if (cached) {
@@ -175,7 +198,9 @@ export async function resolveAgent(position: string): Promise<ResolvedAgent> {
         temperature: dbAgent.temperature,
         maxTokens: dbAgent.maxTokens,
         instruction: dbAgent.instruction || getAgentPrompt(position),
-        tools: getAgentTools(position),
+        // FIX (review 2026-09-08): tôn trọng whitelist tools riêng của agent
+        // (Agent Factory / user-customized) thay vì luôn lấy toolset hardcoded.
+        tools: parseDbTools(dbAgent.tools, getAgentTools(position)),
         avatar: dbAgent.avatar || '',
         source: 'database',
       }
@@ -194,6 +219,26 @@ export async function resolveAgent(position: string): Promise<ResolvedAgent> {
     })
 
     if (disabledAgent) {
+      // STRICT MODE (sub-agent delegation): agent bị disable → missing, KHÔNG
+      // chạy fallback hardcoded (đều đặn với ý định disable của user).
+      if (strictEnabled) {
+        console.warn(`[AgentResolver] Agent ${position} (${disabledAgent.name}) is DISABLED — strict mode → missing (từ chối delegate)`)
+        const disabledResult: ResolvedAgent = {
+          name: disabledAgent.name,
+          position,
+          provider: '',
+          model: '',
+          temperature: 0.5,
+          maxTokens: 4096,
+          instruction: '',
+          tools: [],
+          avatar: disabledAgent.avatar || '⏸️',
+          source: 'missing',
+          note: `Agent "${disabledAgent.name}" đang bị TẮT (disabled) — không thể delegate. Bật lại agent trong module Agents nếu cần.`,
+        }
+        setCachedResolvedAgent(position, disabledResult)
+        return disabledResult
+      }
       console.warn(`[AgentResolver] Agent ${position} exists in DB but is DISABLED — using hardcoded fallback (no lazy seed to avoid duplicate)`)
       const hardcoded = getAgentByPosition(position)
       if (hardcoded) {
@@ -319,7 +364,7 @@ export async function resolveAgent(position: string): Promise<ResolvedAgent> {
           temperature: retryDb.temperature,
           maxTokens: retryDb.maxTokens,
           instruction: retryDb.instruction || getAgentPrompt(position),
-          tools: getAgentTools(position),
+          tools: parseDbTools(retryDb.tools, getAgentTools(position)),
           avatar: retryDb.avatar || '',
           source: 'database',
         }

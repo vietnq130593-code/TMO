@@ -4109,6 +4109,9 @@ interface AgentRunSummaryData {
   editsMade?: number
   durationMs?: number
   todos?: Array<{ id: string; content: string; status: string; priority?: string }>
+  /** THOUGHT STEPS PERSIST (fix 2026-09-08): quá trình thực thi được lưu vào
+   * message metadata → sau reload/app-restart vẫn xem được Thought Process */
+  events?: Array<{ type: string; ts?: number; text: string }>
 }
 
 /** Icon theo tool — timeline Thought Process */
@@ -4334,17 +4337,34 @@ function AgentRunSummaryBar({ summary }: { summary: AgentRunSummaryData }) {
   const ok = summary.status !== 'error' && summary.status !== 'cancelled'
   const statusLabel = summary.status === 'cancelled' ? '⏹ Đã dừng' : ok ? '✓ Done' : '✗ Lỗi'
   const statusColor = summary.status === 'cancelled' ? 'text-orange-400' : ok ? 'text-emerald-400' : 'text-red-400'
+  const events = summary.events || []
   return (
-    <div className="flex items-center gap-2 flex-wrap text-[9px] text-stone-500 mb-1.5 pb-1.5 border-b border-stone-700/40">
-      <Brain className="h-3 w-3 text-violet-400" />
-      <span className="text-stone-400">{summary.agentName}</span>
-      <span className={statusColor}>{statusLabel}</span>
-      {summary.iterations > 0 && <span>🔁 {summary.iterations} vòng</span>}
-      {summary.toolCalls > 0 && <span>🔧 {summary.toolCalls} tool</span>}
-      {summary.filesRead > 0 && <span>📖 {summary.filesRead} file</span>}
-      {summary.commandsRun > 0 && <span>💻 {summary.commandsRun} lệnh</span>}
-      {summary.editsMade != null && summary.editsMade > 0 && <span>✏️ {summary.editsMade}</span>}
-      {summary.durationMs != null && summary.durationMs > 0 && <span>⏱ {fmtRunDuration(summary.durationMs)}</span>}
+    <div className="mb-1.5 pb-1.5 border-b border-stone-700/40">
+      <div className="flex items-center gap-2 flex-wrap text-[9px] text-stone-500">
+        <Brain className="h-3 w-3 text-violet-400" />
+        <span className="text-stone-400">{summary.agentName}</span>
+        <span className={statusColor}>{statusLabel}</span>
+        {summary.iterations > 0 && <span>🔁 {summary.iterations} vòng</span>}
+        {summary.toolCalls > 0 && <span>🔧 {summary.toolCalls} tool</span>}
+        {summary.filesRead > 0 && <span>📖 {summary.filesRead} file</span>}
+        {summary.commandsRun > 0 && <span>💻 {summary.commandsRun} lệnh</span>}
+        {summary.editsMade != null && summary.editsMade > 0 && <span>✏️ {summary.editsMade}</span>}
+        {summary.durationMs != null && summary.durationMs > 0 && <span>⏱ {fmtRunDuration(summary.durationMs)}</span>}
+      </div>
+      {events.length > 0 && (
+        <details className="mt-1 group">
+          <summary className="cursor-pointer text-[9px] text-violet-400/80 hover:text-violet-300 select-none">
+            🧠 Xem quá trình thực thi ({events.length} bước — đã lưu, survives restart)
+          </summary>
+          <div className="mt-1 max-h-64 overflow-y-auto text-[9px] leading-relaxed text-stone-400 border border-stone-700/40 rounded bg-stone-900/40 p-1.5 space-y-0.5">
+            {events.map((e, i) => (
+              <div key={i} className={e.type === 'tool' ? 'text-cyan-400/80' : e.type === 'thought' ? 'text-stone-400' : 'text-stone-500'}>
+                {e.type === 'tool' ? '🔧' : e.type === 'thought' ? '💭' : '•'} {e.text}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   )
 }

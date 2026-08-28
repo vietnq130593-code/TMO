@@ -9,11 +9,10 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { listSessions as gatewayListSessions } from '@/lib/openclaw'
-import { hasActiveRun } from '@/lib/agent-run-tracker'
+import { hasActiveRun, cancelSessionRuns } from '@/lib/agent-run-tracker'
 // SESSION TOMBSTONE (user request 2026-09-08): đánh dấu session đã xóa để chat
 // route KHÔNG upsert/persist lại (chống "hồi sinh" phiên đã xóa).
-import { markSessionDeleted, clearSessionTombstone } from '@/lib/session-tombstone'
+import { markSessionDeleted, clearSessionTombstone, isSessionDeletedDeep } from '@/lib/session-tombstone'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,11 +41,16 @@ export async function GET(request: NextRequest) {
         take: 50,
       })
 
-      // Also try gateway
-      let gatewaySessions: unknown[] = []
-      try {
-        gatewaySessions = await gatewayListSessions()
-      } catch {}
+      // FIX SLOW AGENT/SESSION LIST (user report 2026-09-08: "mỗi khi khởi
+      // động lại, load danh sách agents khá lâu"):
+      // Trước đây route gọi gatewayListSessions() — hàm này ensureGatewayRunning()
+      // → LAZY-SPAWN openclaw-gateway và chờ health tới 45s (Windows local:
+      // binary không chạy được → chờ đủ 45s RỒI fail). UI gọi route này NGAY
+      // KHI MOUNT (+ mỗi 30s) và CHỈ dùng `sessions` (SQLite) — KHÔNG bao giờ
+      // đọc `gatewaySessions`. Kết quả: mọi lần mở app/reload đều chặn 8-45s
+      // + tiêu ~340MB RAM spawn gateway không ai dùng, 10 phút sau idle-shutdown
+      // rồi lặp lại. Bỏ hẳn call — session list là dữ liệu SQLite thuần.
+      const gatewaySessions: unknown[] = []
 
       return NextResponse.json({
         sessions: sessions.map(s => ({
@@ -129,6 +133,9 @@ export async function POST(request: NextRequest) {
   // execute a due CronJob. Body: { sessionId?, task, agentId, source, jobId }.
   // If sessionId is provided → resume; otherwise → create a fresh session.
   // Returns { success, sessionId, response, jobId, source } on success.
+  // Run cron task — có tombstone guard (fix review 2026-09-08: CronJob trỏ vào
+  // session đã xóa cứ firing mãi, mỗi lần POST action=run lại TẠO chatMessage
+  // mồ côi cho session đã purge + báo success trong khi không ai xử lý).
   if (action === 'run') {
     try {
       const body = await request.json().catch(() => ({}))
@@ -140,6 +147,18 @@ export async function POST(request: NextRequest) {
       const source = String(body.source || 'cron')
       const jobId = body.jobId ? String(body.jobId) : undefined
       let sessionId = body.sessionId ? String(body.sessionId) : ''
+
+      // Session đã bị user xóa (tombstone) hoặc KHÔNG còn tồn tại trong DB →
+      // từ chối, không tự tạo mới (session đã xóa = xóa hẳn, kể cả với cron)
+      if (await isSessionDeletedDeep(sessionId)) {
+        return NextResponse.json({ error: `Session ${sessionId} đã bị xóa — cron job này nên bị gỡ (sessionId không còn hợp lệ).` }, { status: 410 })
+      }
+      if (sessionId) {
+        const exists = await db.agentSession.findFirst({ where: { sessionId }, select: { id: true } })
+        if (!exists) {
+          return NextResponse.json({ error: `Session ${sessionId} không tồn tại — cron job sessionId lệch (đã bị purge?).` }, { status: 410 })
+        }
+      }
 
       // Create a fresh session if not resuming
       if (!sessionId) {
@@ -245,6 +264,22 @@ export async function DELETE(request: NextRequest) {
   if (action === 'delete' && sessionId) {
     try {
       // ============================================================
+      // MARK TOMBSTONE TRƯỚC (fix review 2026-09-08 — TOCTOU): trước đây
+      // mark SAU purge transaction — request chat chạy song song hoàn tất
+      // upsert ngay giữa cửa sổ đó → row session được tạo lại rồi tombstone
+      // mới chặn (row hồi sinh ở lại list mãi mãi). Mark trước + persist DB
+      // (chống hồi sinh sau restart) + mark lại sau transaction cho chắc.
+      // ============================================================
+      markSessionDeleted(sessionId)
+
+      // CANCEL ACTIVE RUNS (fix review 2026-09-08): session đang có agent
+      // goal-loop/sub-agent chạy dở → hủy ngay (không để loop viết thêm
+      // working-memory/todo/metrics cho session đã purge + không đốt token).
+      const cancelledRuns = cancelSessionRuns(sessionId)
+      if (cancelledRuns > 0) {
+        console.log(`[Sessions] HARD DELETE ${sessionId}: đã hủy ${cancelledRuns} agent run đang chạy dở`)
+      }
+      // ============================================================
       // HARD DELETE (user request 2026-09-08: "các phiên chat tôi đã bấm xóa
       // phải xóa hẳn, lần sau vào lại không còn, chỉ những gì còn học từ đó
       // thì giữ lại") — purge TOÀN BỘ dữ liệu scoped theo phiên chat:
@@ -284,10 +319,17 @@ export async function DELETE(request: NextRequest) {
         db.neo4jCheckpointDiff.deleteMany({ where: { sessionId } }),
         db.memoryAccessLog.deleteMany({ where: { sessionId } }),
         db.toolMetric.deleteMany({ where: { sessionId } }),
+        // FIX review 2026-09-08 — 3 bảng session-scoped còn sót:
+        // FailurePattern + StrategyAdaptationLog được workflow-engine ghi theo
+        // chat sessionId → không purge sẽ leak; CronJob trỏ session đã xóa cứ
+        // firing (mỗi fire lại đẻ chatMessage mồ côi qua action=run).
+        db.failurePattern.deleteMany({ where: { sessionId } }),
+        db.strategyAdaptationLog.deleteMany({ where: { sessionId } }),
+        db.cronJob.deleteMany({ where: { sessionId } }),
         db.agentSession.deleteMany({ where: { sessionId } }),
       ])
 
-      // Tombstone — mọi write sau này cho sessionId này bị chặn
+      // Tombstone — mark lại sau purge (idempotent; persist DB chống hồi sinh sau restart)
       markSessionDeleted(sessionId)
 
       const totalDeleted = deleted.reduce((sum, r) => sum + r.count, 0)

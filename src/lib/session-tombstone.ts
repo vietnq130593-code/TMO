@@ -13,22 +13,30 @@
  *   2. Request chat tiếp theo (hoặc background task persist) gọi upsert
  *      → session row được TẠO LẠI → reload app thấy session "sống lại".
  *
- * GIẢI PHÁP: tombstone in-process (globalThis singleton — app chạy 1 instance
- * PM2). Khi DELETE thành công → markSessionDeleted(sessionId). Mọi nơi định
- * upsert/persist cho sessionId đó → check isSessionDeleted() → SKIP (không
- * tạo lại row, không lưu message). Phiên đã xóa = xóa hẳn.
+ * GIẢI PHÁP — 2 LỚP (fix review 2026-09-08):
+ *   Lớp 1 (in-process Set — globalThis singleton): check NHANH, 0 I/O.
+ *   Lớp 2 (DB table DeletedSession — PERSIST): app restart / Windows reboot /
+ *   PM2 restart không mất tombstone — browser tab cũ còn giữ sessionId vẫn
+ *   không thể hồi sinh phiên. Trước đây tombstone in-process-only nên restart
+ *   là "phiên đã xóa quay lại" (browser tabs outlive processes).
  *
- * POST /api/openclaw/sessions?action=create → clearSessionTombstone (sessionId
- * mới sinh duy nhất theo timestamp nên gần như không tái sử dụng — nhưng clear
- * cho đúng ngữ nghĩa nếu có recreate thủ công cùng id).
+ * API:
+ *   - markSessionDeleted(id)      — Set + DB row (fire-and-forget)
+ *   - clearSessionTombstone(id)   — Set + DB row (POST create lại cùng id)
+ *   - isSessionDeleted(id)        — SYNC, chỉ check Set (hot path, 0 await)
+ *   - isSessionDeletedDeep(id)    — ASYNC, Set → miss → DB (write-through vào
+ *                                   Set) — dùng cho CỔNG WRITE quan trọng
+ *                                   (upsert chat/workflow/cron-run).
  *
- * Tombstone KHÔNG cần persist xuống DB: DELETE đã hard-delete mọi row của
- * session (chat messages, tasks, working memory...) — không còn dữ liệu nào
- * "nhớ" session cả; tombstone chỉ cần sống đúng tuổi đời của process.
+ * Hydrate: module-load nạp toàn bộ DeletedSession vào Set (giảm DB hits) —
+ * request đến trước khi hydrate xong vẫn đúng nhờ isSessionDeletedDeep query DB.
  */
+
+import { db } from '@/lib/db'
 
 const globalForTombstone = globalThis as unknown as {
   __tmoDeletedSessions?: Set<string>
+  __tmoTombstoneHydrated?: Promise<void> | null
 }
 
 function tombstoneSet(): Set<string> {
@@ -38,26 +46,86 @@ function tombstoneSet(): Set<string> {
   return globalForTombstone.__tmoDeletedSessions
 }
 
-/** Đánh dấu session đã bị xóa vĩnh viễn — mọi write sau này cho session này bị chặn */
-export function markSessionDeleted(sessionId: string): void {
-  if (!sessionId) return
-  tombstoneSet().add(sessionId)
-  // Bảo vệ bộ nhớ: tombstone là Set chuỗi — cap 2000 entry, xóa cũ nhất (FIFO)
+function addSessionToSet(sessionId: string): void {
   const set = tombstoneSet()
+  set.add(sessionId)
+  // Bảo vệ bộ nhớ: tombstone là Set chuỗi — cap 2000 entry, xóa cũ nhất (FIFO).
+  // (Lớp DB persist vô hạn nên eviction Set không mất dữ liệu — miss sẽ query DB lại)
   if (set.size > 2000) {
     const first = set.values().next().value
     if (first) set.delete(first)
   }
 }
 
-/** Session này đã bị user xóa? (true → KHÔNG upsert/persist nữa) */
+/** Nạp tombstone từ DB vào Set — 1 lần mỗi process (fire-and-forget) */
+function hydrateFromDb(): Promise<void> {
+  if (globalForTombstone.__tmoTombstoneHydrated) return globalForTombstone.__tmoTombstoneHydrated
+  globalForTombstone.__tmoTombstoneHydrated = (async () => {
+    try {
+      const rows = await db.deletedSession.findMany({ select: { sessionId: true } })
+      for (const r of rows) addSessionToSet(r.sessionId)
+      if (rows.length > 0) {
+        console.log(`[Tombstone] Hydrate ${rows.length} session đã-xóa từ DB (persist layer)`)
+      }
+    } catch (err) {
+      // Bảng chưa tồn tại (chưa migrate) hoặc DB bận — isSessionDeletedDeep vẫn query trực tiếp
+      console.warn('[Tombstone] Hydrate từ DB thất bại:', err instanceof Error ? err.message : String(err))
+    }
+  })()
+  return globalForTombstone.__tmoTombstoneHydrated
+}
+
+// Module-load: bắt đầu hydrate ngay (không chặn ai — fire-and-forget)
+void hydrateFromDb()
+
+/**
+ * Đánh dấu session đã bị xóa vĩnh viễn — Set in-process + DB row persist.
+ * DB write là fire-and-forget (caller DELETE route đã await purge xong —
+ * nếu DB write fail hiếm hoi, in-process Set vẫn chặn trong phiên process này).
+ */
+export function markSessionDeleted(sessionId: string): void {
+  if (!sessionId) return
+  addSessionToSet(sessionId)
+  db.deletedSession
+    .upsert({ where: { sessionId }, create: { sessionId }, update: {} })
+    .catch(err => {
+      console.warn('[Tombstone] Persist DB thất bại (in-process Set vẫn chặn):', err instanceof Error ? err.message : String(err))
+    })
+}
+
+/** Session này đã bị user xóa? (SYNC — chỉ check Set; cổng write quan trọng dùng isSessionDeletedDeep) */
 export function isSessionDeleted(sessionId: string | null | undefined): boolean {
   if (!sessionId) return false
   return tombstoneSet().has(sessionId)
+}
+
+/**
+ * Session đã bị xóa? (ASYNC — Set trước, DB sau, write-through vào Set).
+ * Dùng tại CỔNG WRITE (agentSession.upsert, chatMessage.create, cron action=run,
+ * workflow persist) — chặn hồi sinh NGAY CẢ SAU app restart.
+ */
+export async function isSessionDeletedDeep(sessionId: string | null | undefined): Promise<boolean> {
+  if (!sessionId) return false
+  if (tombstoneSet().has(sessionId)) return true
+  try {
+    await hydrateFromDb() // chắc chắn hydrate đã chạy xong (nếu chưa)
+    if (tombstoneSet().has(sessionId)) return true
+    const row = await db.deletedSession.findUnique({ where: { sessionId }, select: { id: true } })
+    if (row) {
+      addSessionToSet(sessionId) // write-through — lần sau là hit Set
+      return true
+    }
+  } catch {
+    // DB lỗi (chưa migrate / lock) — fail-closed theo Set in-process
+  }
+  return false
 }
 
 /** Xóa tombstone — dùng khi session được tạo lại CÙNG id (POST create) */
 export function clearSessionTombstone(sessionId: string): void {
   if (!sessionId) return
   tombstoneSet().delete(sessionId)
+  db.deletedSession
+    .deleteMany({ where: { sessionId } })
+    .catch(() => { /* best-effort */ })
 }

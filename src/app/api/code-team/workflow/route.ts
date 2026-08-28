@@ -34,6 +34,9 @@
 import { NextRequest } from 'next/server'
 import { runWorkflow } from '@/lib/code-team/workflow-engine'
 import { db } from '@/lib/db'
+// SESSION TOMBSTONE (fix review 2026-09-08 — HIGH): workflow chạy trong session
+// đã bị user xóa → KHÔNG persist (chống hồi sinh phiên + chatMessage mồ côi).
+import { isSessionDeleted, isSessionDeletedDeep } from '@/lib/session-tombstone'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300 // 5 min timeout for long workflows
@@ -48,6 +51,8 @@ export const maxDuration = 300 // 5 min timeout for long workflows
 function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
   const type = event.type as string
   try {
+    // Tombstone guard — session đã xóa thì event KHÔNG được ghi lại (mồ côi)
+    if (isSessionDeleted(sessionId)) return
     const agentName = (event.agent as string) || undefined
     const agentPosition = (event.position as string) || undefined
     let row: { role: string; content: string; metadata?: Record<string, unknown> } | null = null
@@ -132,6 +137,17 @@ export async function POST(request: NextRequest) {
   }
 
   const { messages = [], sessionId, userRequest, routing: rawRouting, teamName } = body
+
+  // TOMBSTONE GUARD (fix review 2026-09-08 — HIGH): user đã xóa session này →
+  // từ chối workflow mới. Trước đây POST workflow upsert agentSession KHÔNG
+  // check tombstone → session đã xóa hiện lại trong sidebar (hồi sinh) +
+  // persistTeamEvent đẻ chatMessage mồ côi.
+  if (sessionId && (await isSessionDeletedDeep(sessionId))) {
+    return new Response(JSON.stringify({ error: `Phiên ${sessionId} đã bị xóa — không thể chạy workflow trong phiên đã xóa. Hãy tạo phiên mới.` }), {
+      status: 410,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
 
   // Validate required fields
   if (!sessionId) {
