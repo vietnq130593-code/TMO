@@ -2401,10 +2401,14 @@ async function executeKnowledgeSearch(args: Record<string, unknown>): Promise<un
     const { agentKnowledgeSearch } = await import('@/lib/knowledge-bridge')
     const result = await agentKnowledgeSearch(query, { topK })
 
+    // BUG FIX 2026-09-06: truyền diagnostics (lý do 0 kết quả — Qdrant chết /
+    // embedding lỗi / KB rỗng / không khớp) vào kết quả tool để AGENT báo đúng
+    // nguyên nhân cho user thay vì chỉ "0 kết quả".
     return {
       results: result.results.slice(0, topK),
       answer: result.answer,
       totalFound: result.results.length,
+      diagnostics: result.diagnostics,
     }
   } catch (err) {
     return { error: `Knowledge search failed: ${err instanceof Error ? err.message : String(err)}` }

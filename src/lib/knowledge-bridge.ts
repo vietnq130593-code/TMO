@@ -8,6 +8,13 @@
  */
 
 import { db } from '@/lib/db'
+import { generateQueryEmbedding } from '@/lib/embeddings'
+import {
+  searchSimilar,
+  getDocument,
+  qdrant as qdrantClient,
+  COLLECTION_CHUNKS,
+} from '@/lib/qdrant'
 
 // ==================== KNOWLEDGE SEARCH ====================
 
@@ -23,48 +30,145 @@ export interface KnowledgeSearchResult {
   targetEntity?: string
 }
 
+/**
+ * Chẩn đoán lý do Knowledge Search trả về 0 kết quả — bug fix 2026-09-06
+ * (user report: "Agents báo truy vấn knowledge base nhưng kết quả là 0,
+ * không nhận được gì"). Trước đây MỌI lỗi kỹ thuật (Qdrant chết / embedding
+ * API lỗi / KB rỗng / fetch loopback fail) đều bị nuốt âm thầm trả về
+ * {results: []} → agent chỉ biết "0 kết quả" mà không nói được TẠI SAO.
+ */
+export interface KnowledgeSearchDiagnostics {
+  ok: boolean
+  /** Lý do 0 kết quả (khi ok=false hoặc results rỗng) */
+  reason?: 'embedding_failed' | 'qdrant_unreachable' | 'kb_empty' | 'no_match' | 'error' | 'ok'
+  /** Mô tả tiếng Việt — agent đọc trực tiếp để báo cho user */
+  message?: string
+  embeddingModel?: string
+  qdrantReachable?: boolean
+  totalChunks?: number
+  minScoreUsed?: number
+  durationMs?: number
+}
+
+/**
+ * Tìm kiếm semantic Knowledge Base — TRỰC TIẾP Qdrant + NVIDIA embedding.
+ *
+ * BUG FIX 2026-09-06: trước đây hàm này fetch HTTP loopback tới
+ * `${NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/query` — chạy toàn
+ * bộ pipeline (classification LLM + meta-cog + answer LLM + follow-up LLM,
+ * ~15s) và fragile với port/IPv6 trên Windows local; lỗi network bị catch
+ * âm thầm → "0 kết quả". Giờ:
+ *   1. Embed query trực tiếp (generateQueryEmbedding — có cache L1/L2)
+ *   2. searchSimilar trực tiếp Qdrant (threshold 0.2, retry 0.1)
+ *   3. 0 kết quả → chẩn đoán lý do THẬT (embedding fail / Qdrant chết /
+ *      KB rỗng / không chunk nào khớp) trả về trong `diagnostics` để agent
+ *      báo đúng nguyên nhân cho user thay vì "0 kết quả".
+ * Nhanh hơn ~10x (1-2s thay vì 15s) và agent tự tổng hợp câu trả lời từ
+ * `results` (agent vốn là LLM — không cần answer LLM lồng nhau).
+ */
 export async function agentKnowledgeSearch(query: string, options?: {
   topK?: number
   expandGraph?: boolean
   domain?: string
-}): Promise<{ results: KnowledgeSearchResult[]; answer?: string }> {
+}): Promise<{ results: KnowledgeSearchResult[]; answer?: string; diagnostics?: KnowledgeSearchDiagnostics }> {
+  const startTime = Date.now()
+  const topK = Math.min(Math.max(options?.topK ?? 5, 1), 20)
+
   try {
-    // Use the existing /api/query infrastructure internally
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
-    const res = await fetch(`${baseUrl}/api/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query,
-        chatHistory: [],
-      }),
-      signal: AbortSignal.timeout(30000),
-    })
+    // 1. Query embedding — trực tiếp, không qua HTTP loopback
+    const { vector, model } = await generateQueryEmbedding(query)
+    if (!vector || vector.length === 0) {
+      return {
+        results: [],
+        diagnostics: {
+          ok: false,
+          reason: 'embedding_failed',
+          embeddingModel: model,
+          durationMs: Date.now() - startTime,
+          message: 'Không tạo được vector embedding cho truy vấn (NVIDIA/OpenRouter embedding API đều lỗi — kiểm tra NVIDIA_API_KEY_*, mạng, hoặc rate-limit).',
+        },
+      }
+    }
 
-    if (res.ok) {
-      const data = await res.json()
-      const results: KnowledgeSearchResult[] = []
+    // 2. Vector search Qdrant — threshold 0.2 (như /api/query), retry 0.1
+    let hits = await searchSimilar(vector, { limit: topK, minScore: 0.2, domain: options?.domain })
+    let minScoreUsed = 0.2
+    if (hits.length === 0) {
+      hits = await searchSimilar(vector, { limit: topK, minScore: 0.1, domain: options?.domain })
+      minScoreUsed = 0.1
+    }
 
-      // Convert sources to structured results
-      if (data.sources) {
-        for (const src of data.sources) {
-          results.push({
-            type: src.type || 'chunk',
-            content: src.content,
-            source: src.documentTitle,
-            entityName: src.entityName,
-            score: src.similarity,
-          })
+    // 3. 0 kết quả → chẩn đoán lý do THẬT (không còn nuốt âm thầm)
+    if (hits.length === 0) {
+      try {
+        await qdrantClient.getCollections() // reachable?
+        const info = await qdrantClient.getCollection(COLLECTION_CHUNKS)
+        const totalChunks = info.points_count ?? 0
+        if (totalChunks === 0) {
+          return {
+            results: [],
+            diagnostics: {
+              ok: false, reason: 'kb_empty', qdrantReachable: true, totalChunks: 0,
+              embeddingModel: model, minScoreUsed, durationMs: Date.now() - startTime,
+              message: 'Knowledge Base đang RỖNG (0 chunks trong Qdrant). Hãy upload tài liệu vào Knowledge Base rồi thử lại.',
+            },
+          }
+        }
+        return {
+          results: [],
+          diagnostics: {
+            ok: true, reason: 'no_match', qdrantReachable: true, totalChunks,
+            embeddingModel: model, minScoreUsed, durationMs: Date.now() - startTime,
+            message: `Đã tìm trong ${totalChunks} chunks của Knowledge Base nhưng không nội dung nào khớp truy vấn (score < ${minScoreUsed}).`,
+          },
+        }
+      } catch (qErr) {
+        return {
+          results: [],
+          diagnostics: {
+            ok: false, reason: 'qdrant_unreachable', qdrantReachable: false,
+            embeddingModel: model, minScoreUsed, durationMs: Date.now() - startTime,
+            message: `Không kết nối được Qdrant server (${qErr instanceof Error ? qErr.message : String(qErr)}). Kiểm tra Qdrant đang chạy (mặc định port 6333) và QDRANT_URL trong .env.`,
+          },
         }
       }
+    }
 
-      return { results, answer: data.answer }
+    // 4. Kết quả có sẵn → kèm tiêu đề tài liệu
+    const docIds = [...new Set(hits.map(h => h.payload?.document_id).filter((x): x is string => !!x))]
+    const docMap = new Map<string, { title: string; domain: string }>()
+    for (const docId of docIds) {
+      try {
+        const doc = await getDocument(docId)
+        if (doc) docMap.set(docId, { title: doc.title, domain: doc.domain })
+      } catch { /* skip missing docs */ }
+    }
+
+    const results: KnowledgeSearchResult[] = hits.map(h => ({
+      type: 'chunk' as const,
+      content: String(h.payload?.content || ''),
+      source: docMap.get(String(h.payload?.document_id))?.title || 'Unknown',
+      score: h.score,
+    }))
+
+    return {
+      results,
+      diagnostics: {
+        ok: true, reason: 'ok', qdrantReachable: true,
+        embeddingModel: model, minScoreUsed,
+        durationMs: Date.now() - startTime,
+      },
     }
   } catch (err) {
     console.error('[Knowledge Bridge] Search error:', err)
+    return {
+      results: [],
+      diagnostics: {
+        ok: false, reason: 'error', durationMs: Date.now() - startTime,
+        message: `Knowledge search lỗi: ${err instanceof Error ? err.message : String(err)}`,
+      },
+    }
   }
-
-  return { results: [] }
 }
 
 // ==================== GRAPH QUERY ====================

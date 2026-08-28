@@ -27,9 +27,13 @@ export async function POST(request: NextRequest) {
       expandGraph: expandGraph || false,
     })
 
+    // BUG FIX 2026-09-06: trả kèm diagnostics (lý do 0 kết quả — Qdrant chết /
+    // embedding lỗi / KB rỗng / không khớp) để client + agent thấy nguyên nhân
+    // thật thay vì chỉ "0 kết quả".
     return NextResponse.json({
       results: result.results,
       answer: result.answer,
+      diagnostics: result.diagnostics,
       query,
       totalResults: result.results.length,
     })

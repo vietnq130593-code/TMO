@@ -8706,6 +8706,50 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
   // Đồng thời RESUME tác vụ nền: nếu session này còn run đang chạy trên server
   // (user rời đi lúc agent đang làm dở) → bật lại spinner + Thought Process
   // poll; run kết thúc → reload tail từ DB (xem refreshAgentRuns).
+  // USER BUG REPORT 2026-09-06 ("Thought Process của yêu cầu nào thì hiện sau
+  // yêu cầu đó, đừng dồn tất cả sau yêu cầu cuối cùng"):
+  // Panel Thought Process là client-only state — KHÔNG nằm trong DB messages.
+  // Trước đây khi load session (mở lại / refresh / reload nền), messages chỉ có
+  // user/assistant → poller thấy knownRunIds rỗng → chèn panel của TẤT CẢ 10
+  // run cũ (vẫn còn trong registry server) vào CUỐI khung chat, ngay sau yêu
+  // cầu MỚI NHẤT. Fix: khi load xong DB messages, fetch luôn runs của session
+  // và MERGE panel vào đúng vị trí — ngay sau user message (anchor) đã khởi
+  // tạo run đó (timestamp user message <= startedAt + slack). Run không tìm
+  // được anchor (thuộc lượt trao đổi cũ hơn phần tail đã load) → bỏ qua.
+  const mergeAgentRunPanels = useCallback((msgs: SmolabMessage[], runs: AgentRunData[]): SmolabMessage[] => {
+    if (runs.length === 0) return msgs
+    const SLACK_MS = 5000 // dung sai lệch clock client/server
+    let out = [...msgs]
+    for (const r of runs) {
+      if (!r.runId) continue
+      // Đã có panel của run này → skip (idempotent)
+      if (out.some(m => m.role === 'agent_run' && m.runId === r.runId)) continue
+      // Tìm anchor: user message CUỐI CÙNG có timestamp <= startedAt + slack
+      let anchorIdx = -1
+      for (let i = out.length - 1; i >= 0; i--) {
+        const m = out[i]
+        if (m.role === 'user') {
+          const ts = m.timestamp instanceof Date ? m.timestamp.getTime() : 0
+          if (ts <= r.startedAt + SLACK_MS) { anchorIdx = i; break }
+        }
+      }
+      // Chưa thấy anchor (run chạy trước mọi user message đang hiển thị —
+      // ví dụ load-older chưa kéo tới) → sẽ hiện khi kéo tải lịch sử; bỏ qua.
+      if (anchorIdx === -1) continue
+      const panel: SmolabMessage = {
+        id: `ar_${r.runId}`,
+        role: 'agent_run' as const,
+        content: '',
+        timestamp: new Date(r.startedAt || Date.now()),
+        runId: r.runId,
+      }
+      // Chèn NGAY SAU anchor (sau các panel cùng anchor đã chèn trước đó)
+      // → [user msg, panel, (assistant reply)...]
+      out = [...out.slice(0, anchorIdx + 1), panel, ...out.slice(anchorIdx + 1)]
+    }
+    return out
+  }, [])
+
   const loadSessionTail = useCallback(async (sid: string, opts?: { silent?: boolean }) => {
     if (!sid) {
       setMessages([])
@@ -8778,6 +8822,27 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         setMessages(loaded)
         setHasMoreMessages(!!data.hasMore)
         oldestLoadedIdRef.current = data.oldestId || loaded[0]?.id || null
+
+        // ===== MERGE Thought Process panels (bug fix 2026-09-06) =====
+        // Fetch runs của session + chèn panel vào đúng vị trí (ngay sau user
+        // message khởi tạo run) + nạp dữ liệu vào agentRuns để panel render.
+        // Run đang chạy (resume tác vụ nền) cũng được merge — panel hiện đúng
+        // chỗ ngay khi mở lại session.
+        try {
+          const runRes = await fetch(`/api/agent-run?sessionId=${encodeURIComponent(sid)}&limit=10`)
+          if (runRes.ok) {
+            const runData = await runRes.json() as { ok?: boolean; runs?: AgentRunData[] } | null
+            if (runData?.ok && Array.isArray(runData.runs) && runData.runs.length > 0) {
+              const runs = runData.runs
+              setAgentRuns(prev => {
+                const next = { ...prev }
+                for (const r of runs) if (r?.runId) next[r.runId] = r
+                return next
+              })
+              setMessages(prev => mergeAgentRunPanels(prev, runs))
+            }
+          }
+        } catch { /* best-effort — panel merge thất bại không chặn session load */ }
       } else {
         setMessages([])
         setHasMoreMessages(false)
@@ -8798,6 +8863,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
       // đi / refresh trang) → bật spinner + poll để Thought Process hiện tiếp.
       // KHÔNG bật nếu fetch của phiên này vẫn đang chờ trong client (spinner
       // đã đúng trạng thái rồi).
+      // 2026-09-06: runs đã fetch ở trên cho merge — chỉ cần hasActive check.
       try {
         const runRes = await fetch(`/api/agent-run?sessionId=${encodeURIComponent(sid)}&limit=5`)
         if (runRes.ok) {
@@ -8808,7 +8874,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         }
       } catch { /* best-effort */ }
     }
-  }, [])
+  }, [mergeAgentRunPanels])
 
   // Kéo lên đầu chat → load thêm N lượt trao đổi CŨ hơn (prepend + giữ vị trí đọc)
   const loadOlderMessages = useCallback(async () => {
@@ -8864,6 +8930,10 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
             })
           return [...older, ...prev]
         })
+        // BUG FIX 2026-09-06: history cũ hơn đã load → panel Thought Process của
+        // các run cũ (trước đó bị skip vì anchor chưa hiển thị) giờ tìm được
+        // anchor — merge lại từ dữ liệu run đã có trong agentRuns state.
+        setMessages(prev => mergeAgentRunPanels(prev, Object.values(agentRunsRef.current)))
         oldestLoadedIdRef.current = data.oldestId || oldestLoadedIdRef.current
         setHasMoreMessages(!!data.hasMore)
 
@@ -8885,7 +8955,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     } finally {
       setLoadingOlder(false)
     }
-  }, [loadingOlder, hasMoreMessages])
+  }, [loadingOlder, hasMoreMessages, mergeAgentRunPanels])
 
   // Scroll handler: track gần cuối (auto-scroll) + chạm đầu → load cũ hơn.
   // CHỐNG AUTO-TRIGGER: chỉ load khi user THẬT SỰ cuộn lên qua ngưỡng (scrollTop
@@ -9016,7 +9086,23 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
             // của session cũ vào phiên mới
             if (currentSessionIdRef.current !== sid) return prev
             const knownRunIds = new Set(prev.filter(m => m.role === 'agent_run').map(m => m.runId))
-            const newRuns = d.runs!.filter(r => r.runId && !knownRunIds.has(r.runId) && hasVisibleActivity(r))
+            // BUG FIX 2026-09-06 ("đừng dồn Thought Process sau yêu cầu cuối"):
+            // Chỉ chèn panel của run THUỘC yêu cầu HIỆN TẠI — run.startedAt phải
+            // >= timestamp của user message cuối cùng (-5s dung sai clock).
+            // Run cũ hơn (thuộc các yêu cầu trước đó, panel có thể đã bị mất do
+            // reload) sẽ KHÔNG bị chèn lại vào cuối chat — merge lúc load session
+            // đã đặt chúng đúng chỗ.
+            let lastUserTs = 0
+            for (let i = prev.length - 1; i >= 0; i--) {
+              if (prev[i].role === 'user') {
+                lastUserTs = prev[i].timestamp instanceof Date ? prev[i].timestamp.getTime() : 0
+                break
+              }
+            }
+            const newRuns = d.runs!.filter(r =>
+              r.runId && !knownRunIds.has(r.runId) && hasVisibleActivity(r) &&
+              r.startedAt >= lastUserTs - 5000
+            )
             if (newRuns.length === 0) return prev
             const panels: SmolabMessage[] = newRuns.map(r => ({
               id: `ar_${r.runId}`,
@@ -14071,41 +14157,48 @@ function CodeTabContent() {
     // Phase 4: persistent shell — cwd/env/background jobs survive between commands
     const sid = await ensureTerminalSession()
     setTerminalOutput(prev => [...prev, `$ ${cmd}`])
-    if (sid) {
+    // BUG FIX 2026-09-06 (user report: "nhập lệnh mà không thấy chạy lệnh gì
+    // hết"): path persistent-shell thành công trước đây `return` NGAY mà
+    // KHÔNG reset terminalRunning → ô nhập + nút Run bị disable VĨNH VIỄN sau
+    // lệnh đầu tiên. Giờ bọc toàn bộ trong try/finally — output vẫn stream qua
+    // SSE bất đồng bộ, input mở lại ngay sau khi lệnh được đẩy vào shell.
+    try {
+      if (sid) {
+        try {
+          const res = await authedFetch('/api/opencode/terminal/input', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId: sid, data: `${cmd}\n` }),
+          })
+          if (res.ok) {
+            const data = await res.json()
+            if (data?.ok) {
+              return // output streams in via SSE (terminalEvtRef)
+            }
+          }
+        } catch { /* fall through to legacy one-shot execute */ }
+      }
+      // Legacy fallback: one-shot /api/opencode/execute
       try {
-        const res = await authedFetch('/api/opencode/terminal/input', {
+        const res = await authedFetch('/api/opencode/execute', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId: sid, data: `${cmd}\n` }),
+          body: JSON.stringify({ command: cmd, cwd: workspaceRoot || undefined }),
         })
-        if (res.ok) {
-          const data = await res.json()
-          if (data?.ok) {
-            return // output streams in via SSE (terminalEvtRef)
-          }
+        const data = await res.json()
+        if (data.output) {
+          setTerminalOutput(prev => [...prev, ...data.output.split('\n')])
         }
-      } catch { /* fall through to legacy one-shot execute */ }
-    }
-    // Legacy fallback: one-shot /api/opencode/execute
-    try {
-      const res = await authedFetch('/api/opencode/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: cmd, cwd: workspaceRoot || undefined }),
-      })
-      const data = await res.json()
-      if (data.output) {
-        setTerminalOutput(prev => [...prev, ...data.output.split('\n')])
+        if (data.error && !data.success) {
+          setTerminalOutput(prev => [...prev, `Error (exit ${data.exitCode ?? 1}): ${data.error}`])
+        }
+        if (data.source === 'local-exec') {
+          // Show source indicator for local execution
+          setTerminalOutput(prev => prev.length > 0 && prev[prev.length - 1] !== '' ? prev : [...prev, `[local-exec]`])
+        }
+      } catch {
+        setTerminalOutput(prev => [...prev, 'Error: Failed to execute command'])
       }
-      if (data.error && !data.success) {
-        setTerminalOutput(prev => [...prev, `Error (exit ${data.exitCode ?? 1}): ${data.error}`])
-      }
-      if (data.source === 'local-exec') {
-        // Show source indicator for local execution
-        setTerminalOutput(prev => prev.length > 0 && prev[prev.length - 1] !== '' ? prev : [...prev, `[local-exec]`])
-      }
-    } catch {
-      setTerminalOutput(prev => [...prev, 'Error: Failed to execute command'])
     } finally {
       setTerminalRunning(false)
     }

@@ -1,15 +1,45 @@
 import { EventEmitter } from 'events'
 import { spawn, type ChildProcess } from 'child_process'
+import { existsSync } from 'fs'
 
 /**
  * Phase 4 — persistent interactive terminal sessions.
  *
- * Each session is a long-lived `bash -i` (or $SHELL) child process whose
+ * Each session is a long-lived interactive shell child process whose
  * stdout+stderr are buffered (512KB tail) and streamed to clients over SSE
  * (/api/opencode/terminal/stream). Clients write to stdin via
  * /api/opencode/terminal/input, so cwd / env vars / background jobs SURVIVE
  * between commands — unlike the old one-shot /api/opencode/execute.
+ *
+ * BUG FIX 2026-09-06 (user report Windows local: "nhập lệnh mà không thấy
+ * chạy lệnh gì hết"): shell detection giờ theo platform —
+ *   - Windows: Git Bash (C:\Program Files\Git\bin\bash.exe) nếu có,
+ *     không thì cmd.exe (ComSpec) — trước đây hardcode '/bin/bash' → spawn
+ *     ENOENT → shell chết ngay từ đầu + child 'error' không có handler.
+ *   - Unix: $SHELL → /bin/bash (như cũ).
+ * Đồng thời thêm child.on('error') — trước đây spawn fail phát 'error' không
+ * có listener → uncaught exception; giờ dọn session + emit exit để SSE client
+ * nhận frame exit thay vì treo vô hạn.
  */
+
+/** Detect interactive shell + args theo platform (bug fix 2026-09-06) */
+function detectInteractiveShell(): { shell: string; args: string[] } {
+  if (process.platform === 'win32') {
+    // Ưu tiên bash của Git for Windows (lệnh Unix quen thuộc: ls, grep, cat…)
+    const bashCandidates = [
+      process.env.SHELL, // user tự cấu hình
+      `${process.env.ProgramFiles || 'C:\\Program Files'}\\Git\\bin\\bash.exe`,
+      `${process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)'}\\Git\\bin\\bash.exe`,
+    ].filter((p): p is string => !!p)
+    for (const c of bashCandidates) {
+      try { if (existsSync(c)) return { shell: c, args: ['-i'] } } catch { /* ignore */ }
+    }
+    // Fallback: cmd.exe — LUÔN có trên Windows. Không dùng flag '-i' (không
+    // hợp lệ với cmd.exe); cmd đọc lệnh từ stdin pipe một cách tự nhiên.
+    return { shell: process.env.ComSpec || 'cmd.exe', args: [] }
+  }
+  return { shell: process.env.SHELL || '/bin/bash', args: ['-i'] }
+}
 
 export interface TerminalSession {
   id: string
@@ -47,12 +77,17 @@ export class TerminalSessionManager extends EventEmitter {
     }
 
     const cwd = options.cwd || process.cwd()
-    const shell = options.shell || process.env.SHELL || '/bin/bash'
+    // BUG FIX 2026-09-06: shell theo platform (Windows: Git Bash → cmd.exe)
+    const detected = detectInteractiveShell()
+    const shell = options.shell || detected.shell
+    const shellArgs = options.shell ? ['-i'] : detected.args
 
-    const child = spawn(shell, ['-i'], {
+    const child = spawn(shell, shellArgs, {
       cwd,
       env: { ...process.env, TERM: 'xterm-256color' },
       stdio: ['pipe', 'pipe', 'pipe'],
+      // Windows: chặn cửa sổ console bật lên riêng khi spawn cmd/bash
+      windowsHide: true,
     })
 
     const session: TerminalSession = {
@@ -79,6 +114,17 @@ export class TerminalSessionManager extends EventEmitter {
     child.stdout?.on('error', () => {})
     child.stderr?.on('error', () => {})
     child.stdin?.on('error', () => {})
+
+    // BUG FIX 2026-09-06: child 'error' (spawn ENOENT / binary crash) trước đây
+    // KHÔNG có handler → uncaught exception. Giờ: log + dọn session + emit
+    // exit để SSE client nhận lifecycle xác định thay vì treo.
+    child.on('error', (err) => {
+      console.error(`[Terminal] Shell error (${shell}):`, err instanceof Error ? err.message : String(err))
+      if (this.sessions.get(id) === session) {
+        this.sessions.delete(id)
+        this.emit(`exit:${id}`, session.child.exitCode)
+      }
+    })
 
     child.stdout?.on('data', appendOutput)
     child.stderr?.on('data', appendOutput)

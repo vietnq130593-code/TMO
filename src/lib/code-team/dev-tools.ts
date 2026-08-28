@@ -1896,11 +1896,14 @@ export async function shell(args: {
     let killTimer: ReturnType<typeof setTimeout> | null = null
 
     // Use spawn with shell:true to allow metacharacters (|, &&, ;, >)
+    // (Windows: shell:true tự dùng cmd.exe; windowsHide chặn cửa sổ console
+    // bật lên riêng mỗi lần agent chạy lệnh — bug fix 2026-09-06)
     const child = spawn(command, {
       cwd,
       shell: true,
       env: { ...process.env, ...(args.env || {}) },
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
     })
 
     // Feed stdin if provided
