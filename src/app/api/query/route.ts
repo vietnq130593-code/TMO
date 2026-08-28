@@ -18,7 +18,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { callLLM, callLLMForAgent, getDailyTokenUsage, LLMCallOptions } from '@/lib/llm'
+import { callLLM, callLLMForAgent, callUtilityLLM, getDailyTokenUsage, LLMCallOptions } from '@/lib/llm'
 import { generateQueryEmbedding, generateEmbedding } from '@/lib/embeddings'
 import { getNeo4jDriver, safeSession, readCypher, executeCypher } from '@/lib/neo4j'
 import {
@@ -144,7 +144,9 @@ Output format:
   "reasoning": "Brief explanation"
 }`
 
-  const result = await callLLM(query, systemPrompt, 'classification', llmOptions)
+  // UTILITY CORE (user report 2026-09-05): classification là tiền xử lý — dùng lõi
+  // utility (nemotron→gpt-oss) để query module không bị treo khi kimi-k3 bị block.
+  const result = await callUtilityLLM(query, systemPrompt, 'classification', llmOptions)
 
   try {
     const jsonMatch = result.content.match(/\{[\s\S]*\}/)
@@ -704,7 +706,8 @@ async function sufficiencyCheck(query: string, vectorResults: VectorSearchResult
   const context = buildContextSummary(vectorResults, graphResults)
   if (!context.trim()) return { sufficient: false, missingAspects: ['No search results available'] }
 
-  const result = await callLLM(
+  // UTILITY CORE: meta-cognitive checks là tác vụ đánh giá nền — lõi utility.
+  const result = await callUtilityLLM(
     `Question: ${query}\n\nSearch Results:\n${context}`,
     'You are evaluating whether the provided search results contain enough information to fully answer the given question. Output ONLY valid JSON: { "sufficient": true/false, "missingAspects": ["aspect1"] }',
     'sufficiency-check',
@@ -724,7 +727,8 @@ async function crossValidation(query: string, vectorResults: VectorSearchResult[
   const context = buildContextSummary(vectorResults, graphResults)
   if (!context.trim()) return { validatedFacts: [], contradictions: [], score: 0 }
   const hasBoth = vectorResults.length > 0 && graphResults.entities.length > 0
-  const result = await callLLM(
+  // UTILITY CORE: cross-validation là tác vụ kiểm chứng nền — lõi utility.
+  const result = await callUtilityLLM(
     `Question: ${query}\nAvailable Sources: Document chunks: ${vectorResults.length}, Graph entities: ${graphResults.entities.length}, Both: ${hasBoth}\n\nSearch Results:\n${context}`,
     'You are verifying facts by cross-referencing information from multiple sources. Output ONLY valid JSON: { "validatedFacts": ["fact1"], "contradictions": ["contradiction1"], "score": 0.85 }',
     'cross-validation',
@@ -743,7 +747,8 @@ async function crossValidation(query: string, vectorResults: VectorSearchResult[
 async function reasoningChainGeneration(query: string, vectorResults: VectorSearchResult[], graphResults: GraphSearchResult, llmOptions?: LLMCallOptions): Promise<ReasoningChainStep[]> {
   const context = buildContextSummary(vectorResults, graphResults)
   if (!context.trim()) return []
-  const result = await callLLM(
+  // UTILITY CORE: reasoning chain là tác vụ diễn giải nền — lõi utility.
+  const result = await callUtilityLLM(
     `Question: ${query}\n\nSearch Results:\n${context}`,
     'Generate a step-by-step reasoning chain showing how an answer can be derived from the search results. Output ONLY valid JSON: { "steps": [{ "step": "1", "claim": "conclusion", "evidence": "source quote", "sourceType": "vector|graph|both" }] }',
     'reasoning-chain',
@@ -907,7 +912,8 @@ async function processQuery(query: string, options?: { skipClassify?: boolean; v
   // Follow-up questions
   let followUpQuestions: string[] = []
   try {
-    const followUpResult = await callLLM(
+    // UTILITY CORE: follow-up questions là gợi ý phụ — lõi utility.
+    const followUpResult = await callUtilityLLM(
       `Based on the following Q&A, suggest 2-3 follow-up questions.\nQuestion: ${query}\nAnswer: ${answerResult.answer.slice(0, 500)}\n\nOutput ONLY a JSON array of strings.`,
       'You generate concise follow-up questions. Output ONLY valid JSON array of strings.',
       'follow-up',

@@ -98,7 +98,10 @@ function classifyByRule(message: string): IntentResult | null {
  */
 async function classifyByLLM(message: string): Promise<IntentResult> {
   // Lazy import to avoid Edge bundler issues
-  const { callLLM } = await import('@/lib/llm')
+  // UTILITY CORE (user report 2026-09-05): intent classification là tiền xử lý
+  // phân loại — dùng lõi utility (nemotron→gpt-oss), không đụng kimi-k3
+  // (tránh query module treo 15' xoay vòng khi NVIDIA block kimi).
+  const { callUtilityLLM } = await import('@/lib/llm')
 
   const prompt = `Classify this user message into exactly ONE category. Reply with ONLY the category name, nothing else.
 
@@ -113,7 +116,7 @@ User message: "${message.slice(0, 500)}"
 Category:`
 
   try {
-    const result = await callLLM(prompt, undefined, 'intent-classification', {
+    const result = await callUtilityLLM(prompt, undefined, 'intent-classification', {
       temperature: 0.0,
       maxTokens: 10,
     })

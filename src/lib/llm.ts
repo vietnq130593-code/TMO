@@ -2768,6 +2768,106 @@ export async function callLLMSlot(
   }
 }
 
+// ==================== UTILITY LLM CORE (user report 2026-09-05: "kimi-k3 bị gọi ngầm khi idle") ====================
+
+/**
+ * callUtilityLLM — lõi LLM riêng cho các tác vụ NỀN / tiền xử lý / hậu xử lý:
+ *   • KB writeback (writeback-extraction), auto-learn extraction
+ *   • Memory extraction / summarization / merge / HOT→WARM chưng cất
+ *   • Intent classification (fallback khi rule-based bó tay)
+ *   • Query rewrite / HyDE / expansion
+ *
+ * VẤN ĐỀ GỐC (user report 2026-09-05): các tác vụ này trước đây gọi callLLM()
+ * → kimi-k3 (lõi agent). Sau khi goal-loop TRẢ LỜI XONG, chat route bắn
+ * writebackToKBTransactionally() + extractMemoriesFromConversation()
+ * (fire-and-forget, không abortCheck, chạy SONG SONG) — khi NVIDIA hard-block
+ * kimi-k3 (429 instant cả 4 key), mỗi call cháy 12 attempts + cooldown 30s
+ * lặp lại suốt budget 15 phút → terminal spam 429 "ngay cả khi không làm
+ * việc với các agent" (agents đã trả lời xong từ lâu).
+ *
+ * CHÍNH SÁCH: kimi-k3 là lõi LÀM VIỆC của agents (chat / goal-loop / team) —
+ * KHÔNG dành cho utility nền. Utility về bản chất là tác vụ trích xuất /
+ * phân loại / chưng cất → dùng chuỗi lõi extraction (nemotron-3-ultra-550b
+ * chính → gpt-oss-120b fallback), round-robin key, KHÔNG BAO GIỜ chạm kimi-k3.
+ * Override qua env EXTRACTION_MODEL / EXTRACTION_FALLBACK_MODEL (đi theo lõi
+ * extraction) — đặt EXTRACTION_FALLBACK_MODEL=none để tắt tầng fallback.
+ */
+export async function callUtilityLLM(
+  prompt: string,
+  systemPrompt?: string,
+  task?: string,
+  options?: LLMCallOptions
+): Promise<LLMResult> {
+  const taskLabel = task || 'general'
+
+  console.log(`[LLM] Utility core Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
+
+  const primaryModel = EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0]
+  const fallbackModel =
+    EXTRACTION_FALLBACK_MODEL_OVERRIDE === 'none' || EXTRACTION_FALLBACK_MODEL_OVERRIDE === ''
+      ? (NVIDIA_EXTRACTION_MODELS[1] || '')
+      : EXTRACTION_FALLBACK_MODEL_OVERRIDE
+
+  // ===== LÕI CHÍNH: nemotron-3-ultra-550b =====
+  const primaryResult = await callModelWithKeyRotation(
+    primaryModel,
+    prompt,
+    systemPrompt,
+    options,
+    {
+      startKeyIndex: -1, // round-robin — utility không sở hữu slot key nào
+      taskLabel: `utility:${taskLabel}`,
+      timeoutMs: 180000, // 180s — utility prompts nhỏ, không cần 300s như extraction chunk lớn
+      maxTokens: options?.maxTokens ?? 4096, // utility output nhỏ (JSON phân loại/chưng cất)
+      temperature: options?.temperature ?? 0.1,
+    },
+  )
+  if (primaryResult?.content) {
+    return primaryResult
+  }
+
+  // abortCheck (nếu caller truyền) → không chạy lõi fallback
+  if (options?.abortCheck && options.abortCheck()) {
+    return {
+      content: '',
+      provider: 'none',
+      model: 'none',
+      error: `Utility "${taskLabel}" aborted by caller`,
+    }
+  }
+
+  // ===== LÕI FALLBACK: openai/gpt-oss-120b =====
+  if (fallbackModel && fallbackModel !== primaryModel) {
+    console.warn(`[LLM] Utility "${taskLabel}": lõi chính ${primaryModel} thất bại — chuyển lõi FALLBACK ${fallbackModel}`)
+    const fallbackResult = await callModelWithKeyRotation(
+      fallbackModel,
+      prompt,
+      systemPrompt,
+      options,
+      {
+        startKeyIndex: -1,
+        taskLabel: `utility-fallback:${taskLabel}`,
+        timeoutMs: 180000,
+        maxTokens: options?.maxTokens ?? 4096,
+        temperature: options?.temperature ?? 0.1,
+      },
+    )
+    if (fallbackResult?.content) {
+      console.log(`[LLM] Utility "${taskLabel}": lõi fallback ${fallbackModel} thành công`)
+      return fallbackResult
+    }
+  }
+
+  // Cả 2 lõi đều thất bại — utility là fail-open: caller tự bỏ qua
+  console.warn(`[LLM] Utility "${taskLabel}": CẢ HAI lõi (${primaryModel}${fallbackModel ? ` + ${fallbackModel}` : ''}) đều thất bại — caller sẽ fail-open`)
+  return {
+    content: '',
+    provider: 'none',
+    model: 'none',
+    error: `Utility "${taskLabel}" failed on BOTH cores (${primaryModel}${fallbackModel ? ` + fallback ${fallbackModel}` : ''})`,
+  }
+}
+
 // ==================== Z-AI SDK FALLBACK (sandbox self-heal, 2026-08-30) ====================
 
 /**

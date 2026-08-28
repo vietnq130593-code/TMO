@@ -25,7 +25,7 @@
  */
 
 import { generateEmbedding, getEmbeddingDimension, getCurrentEmbeddingModelVersion } from '@/lib/embeddings'
-import { callLLM, addTokensUsedByAgent } from '@/lib/llm'
+import { callUtilityLLM, addTokensUsedByAgent } from '@/lib/llm'
 import { db } from '@/lib/db'
 import { chunkText } from '@/lib/chunking'
 
@@ -445,7 +445,9 @@ Rules:
 - Return ONLY the JSON, no markdown or explanation`
 
   try {
-    const result = await callLLM(extractionPrompt, undefined, 'auto-learn-extraction', {
+    // UTILITY CORE (user report 2026-09-05): auto-learn extraction chạy nền sau
+    // response — dùng lõi utility (nemotron→gpt-oss), không đụng kimi-k3.
+    const result = await callUtilityLLM(extractionPrompt, undefined, 'auto-learn-extraction', {
       temperature: 0.1,
       maxTokens: 2048,
       ...(agentId ? { agentId } : {}),

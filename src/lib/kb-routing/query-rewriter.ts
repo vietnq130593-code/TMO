@@ -32,7 +32,7 @@
  * retrieval never breaks because of this module.
  */
 
-import { callLLM } from '@/lib/llm'
+import { callUtilityLLM } from '@/lib/llm'
 import { generateEmbedding, generateQueryEmbedding } from '@/lib/embeddings'
 
 // ==================== TYPES ====================
@@ -191,7 +191,7 @@ export async function rewriteQuery(
         'Reply with ONLY the rewritten query — no quotes, no explanation.',
       ].join('\n')
 
-      const rewriteRes = await callLLM(rewritePrompt, undefined, 'query-rewrite', {
+      const rewriteRes = await callUtilityLLM(rewritePrompt, undefined, 'query-rewrite', {
         temperature: 0.3,
         maxTokens: 150,
       })
@@ -215,9 +215,11 @@ export async function rewriteQuery(
       `Query: "${rewrittenQuery}"`,
     ].join('\n')
 
+    // UTILITY CORE (user report 2026-09-05): rewrite/HyDE/expansion là tiền xử lý
+    // retrieval — dùng lõi utility (nemotron→gpt-oss), không đụng kimi-k3.
     const [hydeRes, expansionRes, queryEmb] = await Promise.all([
-      callLLM(hydePrompt, undefined, 'query-hyde', { temperature: 0.5, maxTokens: 400 }),
-      callLLM(expansionPrompt, undefined, 'query-expansion', { temperature: 0.7, maxTokens: 250 }),
+      callUtilityLLM(hydePrompt, undefined, 'query-hyde', { temperature: 0.5, maxTokens: 400 }),
+      callUtilityLLM(expansionPrompt, undefined, 'query-expansion', { temperature: 0.7, maxTokens: 250 }),
       generateQueryEmbedding(rewrittenQuery),
     ])
 

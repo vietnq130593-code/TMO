@@ -19,7 +19,7 @@
  * Frequency: only when memories decay below archive threshold (low frequency).
  */
 
-import { callLLM } from '@/lib/llm'
+import { callUtilityLLM } from '@/lib/llm'
 
 // ==================== CONFIG ====================
 
@@ -78,7 +78,9 @@ INSTRUCTIONS:
 Summary:`
 
   try {
-    const result = await callLLM(prompt, undefined, 'memory-summarization', {
+    // UTILITY CORE (user report 2026-09-05): summarization/merge là tác vụ chưng cất
+    // nền — dùng lõi utility (nemotron→gpt-oss), không đụng kimi-k3.
+    const result = await callUtilityLLM(prompt, undefined, 'memory-summarization', {
       temperature: 0.2, // low temperature for faithful summary
       maxTokens: 300,    // summary is short
     })
@@ -148,7 +150,7 @@ INSTRUCTIONS:
 Merged:`
 
   try {
-    const result = await callLLM(prompt, undefined, 'memory-merge', {
+    const result = await callUtilityLLM(prompt, undefined, 'memory-merge', {
       temperature: 0.2,
       maxTokens: 200,
     })

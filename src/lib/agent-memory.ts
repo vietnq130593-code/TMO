@@ -21,7 +21,7 @@
 import { db } from '@/lib/db'
 import { qdrant } from '@/lib/qdrant'
 import { generateEmbedding, generateQueryEmbedding, getEmbeddingDimension, generateEmbeddingBatch } from '@/lib/embeddings'
-import { callLLM } from '@/lib/llm'
+import { callUtilityLLM } from '@/lib/llm'
 
 // ==================== CONSTANTS ====================
 
@@ -633,7 +633,9 @@ Respond with ONLY a JSON array, no other text:
   }
 ]`
 
-    const result = await callLLM(extractionPrompt, undefined, 'memory-extraction', {
+    // UTILITY CORE (user report 2026-09-05): memory extraction chạy fire-and-forget
+    // sau response — không đụng kimi-k3 (tránh spam 429 nền khi NVIDIA block kimi).
+    const result = await callUtilityLLM(extractionPrompt, undefined, 'memory-extraction', {
       temperature: 0.1,
       maxTokens: 2000,
       agentId,
