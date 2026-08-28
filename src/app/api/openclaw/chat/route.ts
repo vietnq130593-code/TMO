@@ -15,7 +15,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { chatCompletion, isGatewayOnline } from '@/lib/openclaw'
+import { chatCompletion } from '@/lib/openclaw'
+import { ensureGatewayRunning } from '@/lib/openclaw-ondemand'
 import { isOpenCodeOnline, createOpenCodeSession, opencodeFetch } from '@/lib/opencode'
 import { enrichCodeContext, isCodeQuery as isCodeQueryAdvanced, detectCodeConfidence } from '@/lib/opencode-knowledge-context'
 import { generateOpenCodeSystemPrompt } from '@/lib/opencode-system-prompt'
@@ -1009,8 +1010,11 @@ export async function POST(request: NextRequest) {
 
     if (!hasAgentProviderModel) {
       // No agent config → try OpenClaw Gateway first (original flow)
+      // ON-DEMAND (2026-09-07): ensureGatewayRunning() sẽ SPAWN gateway nếu
+      // offline (lazy start) thay vì bỏ qua — đảm bảo fallback path dùng được
+      // gateway khi user cần, mà không tốn RAM khi không ai gọi.
       try {
-        const onlineResult = await isGatewayOnline()
+        const onlineResult = await ensureGatewayRunning()
         if (onlineResult.online) {
           const res = await chatCompletion({
             messages: fullMessages,

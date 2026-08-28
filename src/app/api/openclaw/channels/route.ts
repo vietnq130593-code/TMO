@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { gatewayFetch, isGatewayOnline, listChannels } from '@/lib/openclaw'
+import { ensureGatewayRunning } from '@/lib/openclaw-ondemand'
 
 export const dynamic = 'force-dynamic'
 
@@ -40,7 +41,10 @@ export async function GET() {
     let gatewayChannels: Array<{ channelType?: string; type?: string; status?: string; connected?: boolean }> = []
     let gatewayOnline = false
     try {
-      const health = await isGatewayOnline()
+      // ON-DEMAND (2026-09-07): ensureGatewayRunning() lazy-spawn gateway khi
+      // offline (mở tab Channels = tính năng thật sự cần gateway) thay vì
+      // isGatewayOnline() passive luôn bỏ qua khi gateway đang tắt.
+      const health = await ensureGatewayRunning()
       gatewayOnline = health.online
       if (gatewayOnline) {
         gatewayChannels = await listChannels() as Array<{ channelType?: string; type?: string; status?: string; connected?: boolean }>
@@ -98,6 +102,12 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const { action, channelType, config } = body
+
+    // ON-DEMAND (2026-09-07): các action connect/disconnect/test/delete gọi
+    // thẳng gatewayFetch → đảm bảo gateway đang chạy trước (spawn nếu offline)
+    if (action !== 'delete') {
+      await ensureGatewayRunning()
+    }
 
     if (!channelType || !CHANNEL_TYPES.some((c) => c.channelType === channelType)) {
       return NextResponse.json(

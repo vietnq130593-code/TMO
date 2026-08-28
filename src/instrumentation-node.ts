@@ -13,6 +13,7 @@
 import { startAllServices } from './lib/service-manager'
 import { resolve } from 'path'
 import { ensureTmoApiToken } from './lib/tmo-token'
+import { isOnDemandEnabled, initOnDemandWatchdog } from './lib/openclaw-ondemand'
 
 // FIX 2026-08-28: đảm bảo TMO_API_TOKEN tồn tại TRƯỚC KHI spawn mini-services.
 // opencode-server validate X-TMO-API-Token trên MỌI request (kể cả /health) —
@@ -32,7 +33,7 @@ try {
 
 function buildServices(resolveFn: (...paths: string[]) => string) {
   const ROOT = resolveFn(process.cwd())
-  return [
+  const services = [
     {
       name: 'openclaw-gateway',
       cwd: resolve(ROOT, 'mini-services/openclaw-gateway'),
@@ -92,6 +93,18 @@ function buildServices(resolveFn: (...paths: string[]) => string) {
       maxRetries: 3,
     },
   ]
+
+  // ON-DEMAND GATEWAY (user request 2026-09-07): KHÔNG spawn openclaw-gateway
+  // + gateway-bridge lúc boot — gateway chỉ chiếm RAM (~340MB idle, có thể lên
+  // GB khi có session) mà các luồng chính (agents có provider/model, Code
+  // Studio, Code Team, KB) đều KHÔNG đi qua nó. Gateway sẽ được lazy-spawn khi
+  // một tính năng thật sự cần (chat fallback, Channels, skills...) qua
+  // ensureGatewayRunning() và tự tắt sau idle. Tắt chế độ: OPENCLAW_ON_DEMAND=false
+  if (isOnDemandEnabled()) {
+    console.log('[instrumentation] OpenClaw gateway: ON-DEMAND mode — không spawn lúc boot; lazy-start khi tính năng cần (OPENCLAW_ON_DEMAND=false để luôn-start như cũ)')
+    return services.filter(s => s.name !== 'openclaw-gateway' && s.name !== 'gateway-bridge')
+  }
+  return services
 }
 
 console.log('[instrumentation] Starting mini-services (non-blocking)...')
@@ -106,6 +119,16 @@ startAllServices(buildServices(resolve))
     console.error('[instrumentation] Failed to start some services:', err)
     // Don't block Next.js startup — app can still work with fallback
   })
+
+// ON-DEMAND watchdog: đăng ký idle-shutdown timer + adopt gateway orphan
+// còn chạy từ process trước (nếu có) — chỉ khi on-demand mode bật.
+if (isOnDemandEnabled()) {
+  try {
+    initOnDemandWatchdog()
+  } catch (err) {
+    console.warn('[instrumentation] openclaw-ondemand watchdog init failed:', err)
+  }
+}
 
 // Phase 3 SMOLAB Proposal 9 — Recover orphaned Smolab tasks on startup.
 //

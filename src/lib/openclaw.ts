@@ -3,7 +3,14 @@
  *
  * Centralized client for communicating with the OpenClaw Gateway.
  * Uses OPENCLAW_GATEWAY_URL env variable (default: http://127.0.0.1:18789)
+ *
+ * ON-DEMAND (2026-09-07): các hàm "real-use" (chatCompletion, list*, createSession)
+ * gọi ensureGatewayRunning() TRƯỚC — gateway offline thì tự spawn on-demand
+ * (xem openclaw-ondemand.ts). isGatewayOnline() giữ THỤ ĐỘNG cho status polling
+ * (không bao giờ tự spawn từ health check).
  */
+
+import { ensureGatewayRunning } from './openclaw-ondemand'
 
 const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || 'http://127.0.0.1:18789'
 const DEFAULT_TIMEOUT = 5000
@@ -57,6 +64,11 @@ export interface ChatCompletionParams {
 }
 
 export async function chatCompletion(params: ChatCompletionParams) {
+  // On-demand: đảm bảo gateway chạy trước khi gọi (spawn nếu cần)
+  const gw = await ensureGatewayRunning()
+  if (!gw.online) {
+    throw new Error(`Gateway offline (on-demand start failed: ${gw.error || 'unknown'})`)
+  }
   const res = await gatewayFetch('/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -83,6 +95,7 @@ export async function chatCompletion(params: ChatCompletionParams) {
 // ==================== MODELS ====================
 
 export async function listModels() {
+  if (!(await ensureGatewayRunning()).online) return []
   try {
     const res = await gatewayFetch('/v1/models')
     if (res.ok) {
@@ -96,6 +109,7 @@ export async function listModels() {
 // ==================== SESSIONS ====================
 
 export async function listSessions() {
+  if (!(await ensureGatewayRunning()).online) return []
   try {
     const res = await gatewayFetch('/v1/sessions')
     if (res.ok) {
@@ -107,6 +121,7 @@ export async function listSessions() {
 }
 
 export async function createSession(title?: string) {
+  if (!(await ensureGatewayRunning()).online) throw new Error('Gateway offline (on-demand start failed)')
   const res = await gatewayFetch('/v1/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -119,6 +134,7 @@ export async function createSession(title?: string) {
 // ==================== SKILLS ====================
 
 export async function listSkills() {
+  if (!(await ensureGatewayRunning()).online) return []
   try {
     const res = await gatewayFetch('/v1/skills')
     if (res.ok) {
@@ -130,6 +146,7 @@ export async function listSkills() {
 }
 
 export async function searchSkills(query: string) {
+  if (!(await ensureGatewayRunning()).online) return []
   try {
     const res = await gatewayFetch(`/v1/skills/search?q=${encodeURIComponent(query)}`)
     if (res.ok) {
@@ -143,6 +160,7 @@ export async function searchSkills(query: string) {
 // ==================== TOOLS ====================
 
 export async function listTools() {
+  if (!(await ensureGatewayRunning()).online) return []
   try {
     const res = await gatewayFetch('/v1/tools')
     if (res.ok) {
@@ -156,6 +174,7 @@ export async function listTools() {
 // ==================== AUTOMATION ====================
 
 export async function listCronJobs() {
+  if (!(await ensureGatewayRunning()).online) return { jobs: [] }
   try {
     const res = await gatewayFetch('/v1/automation/cron')
     if (res.ok) return await res.json()
@@ -164,6 +183,7 @@ export async function listCronJobs() {
 }
 
 export async function listWebhooks() {
+  if (!(await ensureGatewayRunning()).online) return { webhooks: [] }
   try {
     const res = await gatewayFetch('/v1/automation/webhooks')
     if (res.ok) return await res.json()
@@ -174,6 +194,7 @@ export async function listWebhooks() {
 // ==================== CHANNELS ====================
 
 export async function listChannels() {
+  if (!(await ensureGatewayRunning()).online) return []
   try {
     const res = await gatewayFetch('/v1/channels')
     if (res.ok) {
