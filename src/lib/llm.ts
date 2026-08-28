@@ -2068,6 +2068,51 @@ async function waitForRateLimitCooldown(
   return false
 }
 
+// ==================== MODEL CIRCUIT BREAKER — HARD 429 BLOCK DETECTION ====================
+// (2026-08-28, root-cause của "agents không triển khai nhiệm vụ")
+// NVIDIA NIM có thể chặn CỨNG một model trên TẤT CẢ key: 429 trả về NGAY LẬP TỨC
+// (không Retry-After header, không hết sau cooldown 30s) trong khi CÙNG key gọi
+// model khác vẫn 200 OK (verified live: moonshotai/kimi-k3 → 429 cả 4 key,
+// openai/gpt-oss-120b → 200 cùng key). Chuỗi xoay vòng cũ xoay đủ 4 key × 3 lần
+// + chờ cooldown lặp lại → MỖI call tốn 2.5'+ trước khi fail, goal-loop +
+// fallback /api/query nhân đôi thời gian chờ → user thấy agent "đứng im".
+// → Circuit breaker: sau khi cooldown đã reset ít nhất 1 lần mà sweep tiếp theo
+//   vẫn TOÀN 429-instant trên mọi key → xác nhận hard-block → mở breaker
+//   MODEL_BLOCK_BREAKER_MS (10'): các call sau fail NGAY (ms) với lỗi rõ ràng,
+//   không đốt 15' budget mỗi call.
+const MODEL_BLOCK_BREAKER_MS = parseInt(process.env.MODEL_BLOCK_BREAKER_MS || '600000', 10) // 10 phút
+/** Ngưỡng coi 1 response 429 là "instant reject" (server từ chối không xử lý) */
+const INSTANT_429_MS = 3000
+
+const modelBlockBreakers = new Map<string, { blockedUntil: number; reason: string; detectedAt: number }>()
+
+function isModelHardBlocked(model: string): { blocked: boolean; reason?: string } {
+  const b = modelBlockBreakers.get(model)
+  if (!b) return { blocked: false }
+  if (Date.now() >= b.blockedUntil) {
+    modelBlockBreakers.delete(model)
+    return { blocked: false }
+  }
+  return { blocked: true, reason: b.reason }
+}
+
+function tripModelBreaker(model: string, reason: string): void {
+  modelBlockBreakers.set(model, {
+    blockedUntil: Date.now() + MODEL_BLOCK_BREAKER_MS,
+    reason,
+    detectedAt: Date.now(),
+  })
+  console.warn(`[LLM] 🔴 CIRCUIT BREAKER TRIPPED: model ${model} bị NVIDIA NIM chặn cứng (429 instant trên mọi key) — fail-fast trong ${Math.round(MODEL_BLOCK_BREAKER_MS / 60000)} phút. Lý do: ${reason}`)
+}
+
+/** Diagnostic — trạng thái breaker hiện tại (cho API/status hiển thị) */
+export function getModelBlockBreakers(): Array<{ model: string; blockedUntil: number; reason: string }> {
+  const now = Date.now()
+  return [...modelBlockBreakers.entries()]
+    .filter(([, b]) => b.blockedUntil > now)
+    .map(([model, b]) => ({ model, blockedUntil: b.blockedUntil, reason: b.reason }))
+}
+
 async function callModelWithKeyRotation(
   model: string,
   prompt: string,
@@ -2075,6 +2120,13 @@ async function callModelWithKeyRotation(
   options?: LLMCallOptions,
   rotationOpts?: { startKeyIndex?: number; timeoutMs?: number; maxTokens?: number; temperature?: number; taskLabel?: string },
 ): Promise<LLMResult | null> {
+  // ===== CIRCUIT BREAKER — hard-block đã được xác nhận trước đó → fail NGAY =====
+  const breaker = isModelHardBlocked(model)
+  if (breaker.blocked) {
+    console.warn(`[LLM] 🔴 ${model} (${rotationOpts?.taskLabel || 'rotation'}): circuit breaker đang mở — bỏ qua xoay vòng (còn ${Math.ceil((modelBlockBreakers.get(model)!.blockedUntil - Date.now()) / 1000)}s). ${breaker.reason}`)
+    return null
+  }
+
   const pool = nvidiaPool
   const validIndices: number[] = []
   for (let i = 0; i < MAX_KEYS; i++) {
@@ -2084,6 +2136,12 @@ async function callModelWithKeyRotation(
     console.warn(`[LLM] 🔄 ${model}: KHÔNG có NVIDIA key nào hợp lệ (NVIDIA_API_KEY_1..4)`)
     return null
   }
+
+  // ===== Hard-block detection state =====
+  /** Số lần cooldown đã reset xong (key "recovered" theo thời gian) rồi retry */
+  let cooldownCycles = 0
+  /** Các key trả 429-instant KỂ TỪ cooldown gần nhất (reset khi có kết quả khác) */
+  const instant429Keys = new Set<number>()
 
   const taskLabel = rotationOpts?.taskLabel || 'rotation'
   const timeoutMs = rotationOpts?.timeoutMs ?? parseInt(process.env.LLM_TIMEOUT_MS || '240000', 10)
@@ -2126,6 +2184,7 @@ async function callModelWithKeyRotation(
 
       attemptNo++
 
+      const attemptStartedAt = Date.now()
       const attempt = await attemptNvidiaOnce({
         keyInfo,
         model,
@@ -2139,11 +2198,35 @@ async function callModelWithKeyRotation(
         agentId: options?.agentId,
         agentName: options?.agentName,
       })
+      const attemptMs = Date.now() - attemptStartedAt
 
       if (attempt.status === 'success' && attempt.result) {
         pool.markSuccess(keyInfo.key, attempt.result.tokensUsed)
         console.log(`[LLM] 🔄 ${model} ✓ key#${keyIdx + 1} ...${keyInfo.key.slice(-6)} (attempt ${attemptNo}, ${attempt.result.tokensUsed} tokens, ${tcCount(attempt.result)} tool_calls)`)
         return attempt.result
+      }
+
+      // ===== HARD-BLOCK DETECTION (circuit breaker input) =====
+      // 429 trả về gần như NGAY LẬP TỨC (server từ chối không xử lý) = dấu hiệu
+      // chặn ở tầng model/tài khoản, KHÔNG phải rate-limit RPM thông thường
+      // (RPM-throttle thường trả 429 sau khi đã xử lý 1 phần hoặc kèm Retry-After).
+      const isInstant429 = attempt.status === 'rate_limited' && attemptMs < INSTANT_429_MS
+      if (isInstant429) {
+        instant429Keys.add(keyIdx)
+      } else {
+        // Kết quả khác (thành công/timeout/5xx/429 chậm) → sweep này không phải hard-block
+        instant429Keys.clear()
+      }
+      // Đã từng cooldown-reset xong mà sweep hiện tại lại TOÀN 429-instant trên
+      // mọi key → chặn cứng đã được xác nhận → trip breaker, fail NGAY (không
+      // đốt thêm 15' budget). Cooldown RPM thật đã có 30s để hồi — nếu 30s sau
+      // vẫn instant-429 toàn bộ thì không phải RPM.
+      if (cooldownCycles >= 1 && instant429Keys.size >= validIndices.length) {
+        tripModelBreaker(
+          model,
+          `Xác nhận bằng live-test: cả ${validIndices.length} key đều 429-instant (${attemptMs}ms/lần) ngay cả sau cooldown ${cooldownCycles} lần — khả năng NVIDIA NIM chặn model ở tầng tài khoản/hạn mức. Kiểm tra tài khoản NIM (build.nvidia.com → Credits/Rate limits) hoặc thử model khác trên cùng key để xác nhận.`,
+        )
+        return null
       }
 
       const failCount = (failuresByKey.get(keyIdx) || 0) + 1
@@ -2184,6 +2267,8 @@ async function callModelWithKeyRotation(
           console.log(`[LLM] 🔄 ${model}: rate-limit cooldown expired — retrying with refreshed keys`)
           deadKeys.clear()
           for (const [k] of failuresByKey) failuresByKey.set(k, 0)
+          cooldownCycles++
+          instant429Keys.clear() // sweep mới bắt đầu — đếm lại 429-instant
           round = -1 // restart outer round loop
           break      // exit inner offset loop
         }
@@ -2813,11 +2898,16 @@ export async function callLLM(
     }
 
     console.warn(`[LLM] ${KIMI_K3_MODEL} thất bại (task "${taskLabel}") sau xoay vòng đủ mọi key — KIMI-ONLY: không fallback model khác`)
+    // Hard-block 429 (circuit breaker) → lỗi phải chỉ đúng nguyên nhân để user
+    // khắc phục ở đúng chỗ (tài khoản NIM), không phải mò mẫm trong app
+    const breaker = isModelHardBlocked(KIMI_K3_MODEL)
     return {
       content: '',
       provider: 'none',
       model: KIMI_K3_MODEL,
-      error: `Kimi k3 (${KIMI_K3_MODEL}) thất bại sau khi xoay vòng đủ mọi NVIDIA key (mỗi key ${KEY_FAILURES_PER_KEY} lần) — chính sách Kimi-only: không fallback model khác. Vui lòng kiểm tra lại API keys.`,
+      error: breaker.blocked
+        ? `🔴 NVIDIA NIM đang CHẶN CỨNG ${KIMI_K3_MODEL} (429 ngay lập tức trên TẤT CẢ key, đã xác nhận qua circuit breaker). ${breaker.reason} Agent tạm không thể làm việc theo chính sách Kimi-only.`
+        : `Kimi k3 (${KIMI_K3_MODEL}) thất bại sau khi xoay vòng đủ mọi NVIDIA key (mỗi key ${KEY_FAILURES_PER_KEY} lần) — chính sách Kimi-only: không fallback model khác. Vui lòng kiểm tra lại API keys.`,
     }
   }
 
@@ -2955,11 +3045,16 @@ export async function callLLMForAgent(
     }
 
     console.warn(`[LLM] ${KIMI_K3_MODEL} thất bại sau xoay vòng đủ key (agent cấu hình gốc: ${provider}/${model}) — KIMI-ONLY: không fallback model khác`)
+    // Hard-block 429 (circuit breaker) → lỗi chỉ đúng nguyên nhân (tài khoản NIM
+    // chặn model) thay vì gợi ý mò mẫm "kiểm tra API keys"
+    const breaker = isModelHardBlocked(KIMI_K3_MODEL)
     return {
       content: '',
       provider: 'none',
       model: KIMI_K3_MODEL,
-      error: `Kimi k3 (${KIMI_K3_MODEL}) thất bại sau khi xoay vòng đủ mọi NVIDIA key (mỗi key ${KEY_FAILURES_PER_KEY} lần) — chính sách Kimi-only: không fallback model khác. Vui lòng kiểm tra lại API keys.`,
+      error: breaker.blocked
+        ? `🔴 NVIDIA NIM đang CHẶN CỨNG ${KIMI_K3_MODEL} (429 ngay lập tức trên TẤT CẢ key, đã xác nhận qua circuit breaker). ${breaker.reason} Agent tạm không thể làm việc theo chính sách Kimi-only.`
+        : `Kimi k3 (${KIMI_K3_MODEL}) thất bại sau khi xoay vòng đủ mọi NVIDIA key (mỗi key ${KEY_FAILURES_PER_KEY} lần) — chính sách Kimi-only: không fallback model khác. Vui lòng kiểm tra lại API keys.`,
     }
   }
 

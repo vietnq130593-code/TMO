@@ -205,6 +205,31 @@ export async function getWorkingMemory(
   }
 }
 
+/**
+ * Get recent UNEXPIRED working memory across ALL sessions of an agent
+ * (HOT entries from sessions khác — vẫn còn trong TTL 1h).
+ *
+ * USER REQUEST 2026-08-28 (Working Memory wiring): quá trình làm việc với
+ * workspace (tool đã chạy, file đã đọc, kết quả) ghi vào HOT theo session;
+ * khi user mở session mới trong TTL, agent vẫn thấy hoạt động gần đây qua
+ * digest này — không phải chạy lại tool để "nhớ lại".
+ */
+export async function getRecentWorkingMemory(
+  agentId: string,
+  limit = 8
+): Promise<Array<{ content: string; role: string; sessionId: string; createdAt: Date }>> {
+  try {
+    return await db.workingMemory.findMany({
+      where: { agentId, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      select: { content: true, role: true, sessionId: true, createdAt: true },
+    })
+  } catch {
+    return []
+  }
+}
+
 // ==================== 2. WARM → COLD (ARCHIVE) ====================
 
 /**

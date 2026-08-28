@@ -48,6 +48,33 @@ import {
   recordAgentThought,
   isSessionCancelled,
 } from '@/lib/agent-run-tracker'
+// WORKING MEMORY (HOT) — user request 2026-08-28: ghi nhận quá trình làm việc
+// (tool đã chạy, kết quả ra sao) vào WorkingMemory để (a) request sau trong cùng
+// session KHÔNG phải đọc/làm lại — tiết kiệm token, (b) hết phiên promote lên
+// WARM (AgentMemory) qua runTierTransitions → ghi nhớ dài hạn về công việc đã làm.
+import { addToWorkingMemory } from '@/lib/memory-tiers'
+
+/** Gọn args để nhét vào working memory (chống phình) */
+function compactToolArgs(args: Record<string, unknown>, maxLen = 120): string {
+  try {
+    const s = JSON.stringify(args)
+    return s.length > maxLen ? s.slice(0, maxLen) + '…' : s
+  } catch {
+    return '(args không serialize được)'
+  }
+}
+
+/** Fire-and-forget ghi 1 entry HOT — fail-open, không chặn loop */
+function recordWorkMemory(agentId: string, sessionId: string | null, content: string, importance = 0.7): void {
+  if (!agentId || agentId === 'unknown' || !sessionId) return // HOT cần agent + session thật
+  addToWorkingMemory({
+    agentId,
+    sessionId,
+    content: content.slice(0, 600),
+    role: 'system',
+    importance,
+  }).catch(() => { /* fail-open — memory không được phép làm hỏng task */ })
+}
 
 // ==================== CONFIG (env override) ====================
 
@@ -505,6 +532,9 @@ export async function runGoalDrivenLoop(params: {
 
         const toolResult = await executeTool(tc.name, toolArgs, { agentName, sessionId: agentSessionId })
 
+        // ===== WORKING MEMORY (HOT) — ghi nhận tool đã chạy + kết quả =====
+        // Các request sau trong session thấy entry này qua digest HOT trong
+        // system prompt → không lặp lại tool đã chạy (tiết kiệm token + time)
         const resultPreview = (() => {
           try {
             const s = JSON.stringify(toolResult.result)
@@ -513,6 +543,12 @@ export async function runGoalDrivenLoop(params: {
             return String(toolResult.result).slice(0, 200)
           }
         })()
+        recordWorkMemory(
+          agentId,
+          agentSessionId,
+          `🔧 ${tc.name}(${compactToolArgs(tc.args)}) → ${toolResult.success ? '✓' : '✗'} ${resultPreview}`,
+        )
+
         evidence.push({ cycle, kind: 'tool', tool: tc.name, success: toolResult.success, text: resultPreview })
 
         pushToolMessage(messages, { tool: tc.name, success: toolResult.success, result: toolResult.result })
@@ -638,6 +674,16 @@ export async function runGoalDrivenLoop(params: {
 
   const elapsedMs = Date.now() - startedAt
   console.log(`[GoalLoop] ${agentName} kết thúc: ${stopReason} — ${cyclesAttempted} chu kỳ (${cyclesDone} hoàn thành), ${totalIterations} vòng, ${totalToolCalls} tool calls, ${tokensUsed} tokens, ${Math.round(elapsedMs / 1000)}s`)
+
+  // ===== WORKING MEMORY (HOT) — báo cáo kết thúc mục tiêu =====
+  // Entry tóm tắt "đã làm gì, kết quả thế nào" — quan trọng nhất cho việc
+  // agent tự biết việc gì đã xong khi user hỏi tiếp / mở session mới trong TTL
+  recordWorkMemory(
+    agentId,
+    agentSessionId,
+    `🏁 Mục tiêu "${userMessage.slice(0, 150)}" — ${stopReason === 'complete' ? 'HOÀN THÀNH' : `dừng (${stopReason})`} sau ${totalIterations} vòng, ${totalToolCalls} tool calls, ${Math.round(elapsedMs / 1000)}s. ${lastContent ? `Kết luận: ${lastContent.slice(0, 200)}` : ''}`,
+    0.85,
+  )
 
   endRun(stopReason === 'error' ? 'error' : stopReason === 'cancelled' ? 'cancelled' : 'done')
 

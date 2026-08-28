@@ -5185,6 +5185,13 @@ interface TierStats {
   pending: { decayed: number; expiredArchives: number }
 }
 
+// USER REQUEST 2026-08-28 (Memory tab persistence): lựa chọn agent trong tab
+// Memory phải được GIỮ NGUYÊN khi user chuyển tab khác / module khác rồi quay
+// lại — MemoryTabContent unmount khi rời tab nên state mất; persist qua
+// localStorage (cùng pattern với smolab-chat-context-v1).
+const MEMORY_TAB_AGENT_KEY = 'smolab-memory-selected-agent-v1'
+const MEMORY_TAB_TIER_KEY = 'smolab-memory-active-tier-v1'
+
 function MemoryTabContent() {
   // Agent selector
   const [agents, setAgents] = useState<Array<{ id: string; name: string }>>([])
@@ -5217,9 +5224,19 @@ function MemoryTabContent() {
   // Track which memory is being acted on (delete/promote/archive)
   const [actingId, setActingId] = useState<string | null>(null)
 
-  // ---------- Load agent list ----------
+  // ---------- Load agent list + restore trạng thái đã lưu ----------
+  // (Restore tier nằm trong async IIFE — setState sau await không bị
+  //  "set-state-in-effect" lint và tránh hydration mismatch localStorage)
   useEffect(() => {
     (async () => {
+      // Restore active tier sub-tab (localStorage phải đọc sau mount)
+      try {
+        const savedTier = localStorage.getItem(MEMORY_TAB_TIER_KEY)
+        if (savedTier === 'hot' || savedTier === 'warm' || savedTier === 'cold' || savedTier === 'archive') {
+          setActiveTier(savedTier)
+        }
+      } catch { /* non-fatal */ }
+
       setAgentsLoading(true)
       try {
         const res = await fetch('/api/agents')
@@ -5227,8 +5244,14 @@ function MemoryTabContent() {
         const list = (data.agents || data || []).map((a: { id: string; name: string }) => ({ id: a.id, name: a.name }))
         list.sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name))
         setAgents(list)
-        // Default to first agent if any
-        if (list.length > 0 && !selectedAgentId) setSelectedAgentId(list[0].id)
+        // Restore agent đã chọn từ lần trước (user quay lại tab Memory) —
+        // chỉ dùng khi agent vẫn còn tồn tại; nếu không thì về mặc định đầu danh sách
+        const savedAgentId = (() => { try { return localStorage.getItem(MEMORY_TAB_AGENT_KEY) } catch { return null } })()
+        if (savedAgentId && list.some(a => a.id === savedAgentId)) {
+          setSelectedAgentId(savedAgentId)
+        } else if (list.length > 0 && !selectedAgentId) {
+          setSelectedAgentId(list[0].id)
+        }
       } catch (e) {
         console.error('Failed to load agents:', e)
       } finally {
@@ -5554,7 +5577,15 @@ function MemoryTabContent() {
               </CardDescription>
             </div>
             <div className="flex items-center gap-2">
-              <Select value={selectedAgentId} onValueChange={setSelectedAgentId} disabled={agentsLoading}>
+              <Select
+                value={selectedAgentId}
+                onValueChange={(v) => {
+                  setSelectedAgentId(v)
+                  setMemoryPage(1) // đổi agent → về trang 1 của danh sách memory mới
+                  try { localStorage.setItem(MEMORY_TAB_AGENT_KEY, v) } catch { /* non-fatal */ }
+                }}
+                disabled={agentsLoading}
+              >
                 <SelectTrigger className="w-[180px] h-8 text-xs">
                   <SelectValue placeholder={agentsLoading ? 'Đang tải...' : 'Chọn agent'} />
                 </SelectTrigger>
@@ -5584,7 +5615,11 @@ function MemoryTabContent() {
               return (
                 <button
                   key={card.key}
-                  onClick={() => { setActiveTier(card.key); setMemoryPage(1) }}
+                  onClick={() => {
+                    setActiveTier(card.key)
+                    setMemoryPage(1)
+                    try { localStorage.setItem(MEMORY_TAB_TIER_KEY, card.key) } catch { /* non-fatal */ }
+                  }}
                   className={`text-left p-3 rounded-lg border transition-all ${colorMap[card.color]} ${isActive ? 'ring-2 ring-offset-2 ring-offset-slate-900 ring-current' : 'opacity-80 hover:opacity-100'}`}
                 >
                   <div className="flex items-center justify-between mb-1">

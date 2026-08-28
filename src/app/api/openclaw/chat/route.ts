@@ -23,6 +23,9 @@ import { db } from '@/lib/db'
 import { addTokensUsed, addTokensUsedByAgent } from '@/lib/llm'
 import { autoLearnFromAnswer, shouldAutoLearn } from '@/lib/auto-learn'
 import { recallMemories, extractMemoriesFromConversation, saveChatMessages, getUserProfile, ensureAgentMemoryCollection, decayMemories } from '@/lib/agent-memory'
+// WORKING MEMORY (HOT) — user request 2026-08-28: ghi user/assistant exchange +
+// inject digest "agent đã làm gì gần đây" vào system prompt
+import { addToWorkingMemory, getWorkingMemory, getRecentWorkingMemory } from '@/lib/memory-tiers'
 import { getStandaloneAgentTools } from '@/lib/standalone-agents'
 // Agent Run Tracker — Thought Process + Todos + Progress realtime trong chat
 // (user request 2026-08-31: mọi agents hiển thị tư duy/tiến trình như Claude Code)
@@ -374,6 +377,19 @@ export async function POST(request: NextRequest) {
       } catch (err) {
         console.warn('[OpenClaw Chat] Early user-message save failed:', err instanceof Error ? err.message : String(err))
       }
+
+      // WORKING MEMORY (HOT) — user request 2026-08-28: lưu user message vào
+      // WorkingMemory theo (agent, session). Hết phiên, promoteWorkingMemoryToWarm
+      // sẽ dùng các entry này (kèm tool-log từ goal loop) để LLM chưng cất thành
+      // AgentMemory dài hạn — "đã làm dự án gì, triển khai gì, kết quả thế nào".
+      if (agentProfileId) {
+        addToWorkingMemory({
+          agentId: agentProfileId,
+          sessionId,
+          content: lastUserContent.slice(0, 2000),
+          role: 'user',
+        }).catch(() => { /* fail-open */ })
+      }
     }
 
     // ============================================
@@ -706,6 +722,47 @@ export async function POST(request: NextRequest) {
       systemPrompt += `\n\n--- Recalled Memories ---\nYou have the following memories from past interactions. Use them to personalize your response and remember what you've learned:\n${memoryText}`
     }
 
+    // ============================================
+    // WORKING MEMORY (HOT) DIGEST — user request 2026-08-28
+    // "Agents có được thiết lập để truy vấn vào vùng nhớ HOT không?" → CÓ.
+    // Inject các hoạt động gần đây của agent (files đã đọc, lệnh đã chạy, kết
+    // quả, mục tiêu đã xong) vào system prompt. Mục đích kép:
+    //   (a) Agent NHỚ việc đã làm → không phải chạy tool lại để "nhớ lại"
+    //   (b) TIẾT KIỆM TOKEN — thông tin nằm sẵn trong prompt, khỏi re-read
+    // Cap ~2000 ký tự để không phình prompt. Fail-open toàn bộ.
+    // ============================================
+    if (agentProfileId) {
+      try {
+        const sessionHot = sessionId ? await getWorkingMemory(agentProfileId, sessionId, 12) : []
+        const recentHot = await getRecentWorkingMemory(agentProfileId, 8)
+        const otherSessionHot = recentHot.filter(h => h.sessionId !== sessionId)
+
+        const lines: string[] = []
+        if (sessionHot.length > 0) {
+          lines.push('Hoạt động trong PHIÊN NÀY (mới nhất trước — DÙNG LUÔN thông tin này, KHÔNG chạy tool đọc lại những gì đã có kết quả):')
+          for (const h of sessionHot) {
+            lines.push(`- ${h.content.replace(/\s+/g, ' ').slice(0, 180)}`)
+          }
+        }
+        if (otherSessionHot.length > 0) {
+          lines.push('')
+          lines.push('Hoạt động gần đây khác (phiên khác, còn hiệu lực HOT):')
+          for (const h of otherSessionHot) {
+            lines.push(`- ${h.content.replace(/\s+/g, ' ').slice(0, 160)}`)
+          }
+        }
+
+        let hotDigest = lines.join('\n')
+        if (hotDigest.length > 2000) hotDigest = hotDigest.slice(0, 2000) + '\n…(giới hạn 2000 ký tự)'
+
+        if (hotDigest) {
+          systemPrompt += `\n\n--- Working Memory (HOT — quá trình làm việc gần đây) ---\n${hotDigest}\nQuy tắc: nếu dữ liệu cần cho câu trả lời ĐÃ có trong working memory ở trên, dùng ngay — không gọi tool lặp lại. Chỉ chạy tool mới khi cần thông tin chưa có.`
+        }
+      } catch (hotErr) {
+        console.warn('[OpenClaw Chat] Working Memory digest failed (fail-open):', hotErr instanceof Error ? hotErr.message : String(hotErr))
+      }
+    }
+
     // Inject user profile into system prompt
     if (userProfileContext) {
       systemPrompt += `\n\n--- User Profile ---\nWhat you know about the user:\n${userProfileContext}`
@@ -779,6 +836,18 @@ export async function POST(request: NextRequest) {
         })
 
         const content = reactResult.content
+
+        // WORKING MEMORY (HOT) — lưu câu trả lời của agent (phần cuối cùng của
+        // exchange user↔assistant; promoteWorkingMemoryToWarm sẽ chưng cất cặp
+        // này thành AgentMemory dài hạn khi hết phiên)
+        if (agentProfileId && sessionId && content && !isLlmErrorContent(content)) {
+          addToWorkingMemory({
+            agentId: agentProfileId,
+            sessionId,
+            content: content.slice(0, 2500),
+            role: 'assistant',
+          }).catch(() => { /* fail-open */ })
+        }
 
         // Thought Process summary (user request 2026-08-31) — trích từ run tracker
         // để (a) response JSON trả về frontend, (b) persist vào chat message
@@ -899,10 +968,16 @@ export async function POST(request: NextRequest) {
             }).catch(err => console.warn('[Memory] Failed to extract memories:', err instanceof Error ? err.message : String(err)))
           }
 
-          // Periodic memory decay
+          // Periodic memory decay + HOT→WARM promotion
           memoryDecayCounter++
           if (memoryDecayCounter >= 20 && agentProfileId) {
             memoryDecayCounter = 0
+            // HOT→WARM (user request 2026-08-28): entry WorkingMemory hết TTL được
+            // LLM chưng cất thành AgentMemory dài hạn — "đã làm gì, kết quả thế nào"
+            // không bị mất khi TTL 1h hết
+            import('@/lib/memory-tiers')
+              .then(m => m.promoteWorkingMemoryToWarm(agentProfileId))
+              .catch(err => console.warn('[Memory] HOT→WARM promotion error:', err instanceof Error ? err.message : String(err)))
             decayMemories(agentProfileId).catch(err =>
               console.warn('[Memory] Periodic decay error:', err instanceof Error ? err.message : String(err))
             )
@@ -1056,6 +1131,17 @@ export async function POST(request: NextRequest) {
         const data = await queryRes.json()
         const content = data.answer || 'Không thể tạo câu trả lời.'
 
+        // WORKING MEMORY (HOT) — lưu câu trả lời fallback path (agent vẫn là
+        // chủ nhân của exchange — HOT phải đầy đủ user + assistant)
+        if (agentProfileId && sessionId && content && !isLlmErrorContent(content)) {
+          addToWorkingMemory({
+            agentId: agentProfileId,
+            sessionId,
+            content: content.slice(0, 2500),
+            role: 'assistant',
+          }).catch(() => { /* fail-open */ })
+        }
+
         // If this was a code query but OpenCode was offline, add a note
         const codeNote = isCodeQuery(lastUserContent)
           ? '\n\n⚠️ **OpenCode Server đang offline** — Không thể thực hiện code editing. Kết quả trên chỉ dựa trên Knowledge Base. Hãy bật OpenCode Server để sử dụng đầy đủ tính năng code.'
@@ -1139,11 +1225,14 @@ export async function POST(request: NextRequest) {
             }).catch(err => console.warn('[Memory] Failed to extract memories:', err instanceof Error ? err.message : String(err)))
           }
 
-          // Periodic memory decay — every ~20 chat requests, decay old memories
-          // This prevents stale memories from accumulating without requiring a cron scheduler
+          // Periodic memory decay + HOT→WARM promotion (bản fallback path)
+          // every ~20 chat requests — decay old memories + promote expired HOT
           memoryDecayCounter++
           if (memoryDecayCounter >= 20 && agentProfileId) {
             memoryDecayCounter = 0
+            import('@/lib/memory-tiers')
+              .then(m => m.promoteWorkingMemoryToWarm(agentProfileId))
+              .catch(err => console.warn('[Memory] HOT→WARM promotion error:', err instanceof Error ? err.message : String(err)))
             decayMemories(agentProfileId).catch(err =>
               console.warn('[Memory] Periodic decay error:', err instanceof Error ? err.message : String(err))
             )
