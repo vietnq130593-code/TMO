@@ -93,6 +93,14 @@ const DEFAULTS: Record<string, string> = {
   ENABLE_REAL_DELEGATE: 'false',
   ENABLE_SESSION_RESUME: 'false',
 
+  // SUB-AGENT DELEGATION (user request 2026-09-08): delegate_task tool cho
+  // goal loop — agent (vd Omega) gọi Code Team chuyên trách, sub-agent chạy
+  // mini ReAct loop có budget riêng, parent nhận báo cáo nén (context
+  // isolation). Default TRUE: an toàn vì (a) whitelist per-agent — chỉ agent
+  // có 'delegate_task' trong tools[] mới gọi được, (b) depth-guard chống đệ
+  // quy, (c) token budget riêng mỗi lần delegate.
+  ENABLE_SUBAGENT_DELEGATE: 'true',
+
   // Phase 4 SMOLAB — Retrieval quality suite (kb-access.ts searchChunks pipeline +
   // searchEntitiesForUser). Hybrid BM25+RRF, MMR and semantic entity search ship ON
   // by default: they are pure in-process upgrades with graceful degradation (no

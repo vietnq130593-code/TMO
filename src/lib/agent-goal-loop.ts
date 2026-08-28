@@ -54,7 +54,7 @@
  * (chat route) có fallback /api/query như cũ.
  */
 
-import { callLLMForAgent } from '@/lib/llm'
+import { callLLMForAgent, callUtilityLLM } from '@/lib/llm'
 import { executeTool } from '@/lib/code-team/tool-executor'
 import { parseToolCallsFromOutput, formatMessagesForLLM } from '@/lib/tool-calls'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
@@ -137,9 +137,33 @@ const VERIFY_TOOLS = new Set(['run_tests', 'lint', 'type_check', 'test_coverage'
 /** [C] Đọc lại kết quả (file_read/grep sau khi sửa) cũng là kiểm định */
 const READBACK_TOOLS = new Set(['file_read', 'grep'])
 /** [C] Tool sửa đổi — sau những tool này PHẢI có kiểm định lại trước khi kết luận */
-const MODIFY_TOOLS = new Set(['file_edit', 'file_multi_edit', 'file_delete', 'mkdir', 'shell', 'run_bg', 'git_commit'])
+const MODIFY_TOOLS = new Set(['file_edit', 'file_multi_edit', 'file_delete', 'mkdir', 'shell', 'run_bg', 'git_commit', 'delegate_task'])
 /** [D] Tool verify được cap context lớn hơn (cần thấy đủ kết quả test/lint/tsc) */
 const VERIFY_RESULT_CHARS = 6000
+/**
+ * [E] CONTEXT COMPRESSION (user request 2026-09-08: "lượng dữ liệu phải đọc có
+ * thể nhiều nhưng có cần nhớ toàn bộ không hay có thể tóm tắt... tổng hợp lại
+ * rồi tiến hành tóm tắt thành nội dung đủ để hiểu và triển khai")
+ *
+ * Mỗi vòng lặp gửi TOÀN BỘ transcript cho LLM (formatMessagesForLLM) → chi phí
+ * prompt tích luỹ O(n²) — đây là lý do budget 200k cạn nhanh. Giải pháp rolling
+ * digest: khi payload vượt ngưỡng, NÉN segment cũ (tool results/assistant cũ)
+ * thành 1 digest message (~2.5k chars) bằng LLM utility core (rẻ, không đụng
+ * provider chính), giữ nguyên system + goal + KEEP_RECENT message gần nhất.
+ *
+ * Digest cũng được ghi vào WorkingMemory (HOT) — request sau trong session đọc
+ * lại được ngay (đúng ý user: "tóm tắt và phần bộ nhớ này và đọc lại").
+ */
+/** Ngưỡng tổng ký tự của messages — vượt quá thì nén segment cũ */
+const COMPRESS_THRESHOLD_CHARS = intEnv('GOAL_LOOP_COMPRESS_THRESHOLD_CHARS', 50_000)
+/** Số message gần nhất GIỮ NGUYÊN khi nén (agent đang làm việc với chúng) */
+const KEEP_RECENT_MESSAGES = intEnv('GOAL_LOOP_KEEP_RECENT_MESSAGES', 8)
+/** Cap ký tự của digest message sau nén */
+const DIGEST_MAX_CHARS = intEnv('GOAL_LOOP_DIGEST_MAX_CHARS', 2500)
+/** Cap ký tự transcript đưa vào LLM nén (đầu vào) */
+const COMPRESS_INPUT_CHARS = 30_000
+/** Ngưỡng tối thiểu số message nén được (dưới đây thì không đáng nén) */
+const MIN_COMPRESSIBLE_MESSAGES = 4
 
 // ==================== TYPES ====================
 
@@ -168,6 +192,11 @@ export interface GoalLoopResult {
     finalReport?: boolean
     /** Token đã tiêu thụ toàn bộ loop — UI có thể hiển thị so với budget */
     tokensUsed?: number
+    /** [E] Số lần nén context (rolling digest) đã thực hiện trong loop */
+    compressions?: number
+    /** [F] Số lần delegate cho sub-agent (Code Team) + token sub-agent tiêu thụ */
+    delegations?: number
+    subagentTokens?: number
   }
 }
 
@@ -224,6 +253,24 @@ GIAI ĐOẠN 3 — KIỂM ĐỊNH & BÁO CÁO (BẮT BUỘC trước khi kết l
 
 ⚠️ Một TRỌNG TÀI ĐỘC LẬP sẽ đánh giá lại kết quả của bạn DỰA TRÊN BẰNG CHỨNG TOOL THẬT. Lời tuyên bố không có bằng chứng sẽ BỊ TỪ CHỐI và bạn phải làm lại ở chu kỳ tiếp theo.
 Nếu mục tiêu là câu hỏi/thông tin (không cần hành động), chỉ cần trả lời đầy đủ, chính xác — không cần tool.`
+}
+
+/**
+ * [F] SUB-AGENT DELEGATION protocol — chỉ append khi agent CÓ delegate_task
+ * trong tool whitelist (vd Omega). Hướng dẫn khi nào chia việc cho Code Team
+ * + kỷ luật kiểm định lại kết quả sub-agent (verify-guard vẫn áp vì
+ * delegate_task nằm trong MODIFY_TOOLS).
+ */
+function buildDelegationProtocol(): string {
+  return `
+
+📦 PHÂN CÔNG SUB-AGENT (delegate_task — Code Team chuyên trách):
+- BOLT: implement code · SENTINEL: review/bug/security · CATALYST: tối ưu/refactor · CORTEX: thiết kế kiến trúc/DB/API · APEX: phân tích + verify tổng thể.
+- Cú pháp: tool_call: delegate_task({"agent": "BOLT", "task": "Nhiệm vụ cụ thể...", "context": "file liên quan, ràng buộc..."})
+- NÊN delegate khi: task cần đọc/sửa NHIỀU file (làm trực tiếp sẽ phình context của bạn), cần chuyên môn sâu, hoặc task giao trọn được cho 1 agent.
+- KHÔNG delegate việc 1-2 bước đơn giản — tự làm nhanh hơn.
+- Báo cáo sub-agent quay về dạng NÉN (đã làm · bằng chứng · còn thiếu) — ĐỌC kỹ "còn thiếu". Với kết quả QUAN TRỌNG, tự KIỂM ĐỊNH LẠI bằng tool của bạn (file_read/lint/type_check) trước khi kết luận.
+- Token sub-agent tiêu thụ cộng vào budget của bạn — scope task rõ ràng, không delegate task mờ hồ to đùng.`
 }
 
 /** Directive nối tiếp chu kỳ — chẩn đoán + kế hoạch mới từ evaluator */
@@ -373,6 +420,121 @@ function summarizeToolResult(result: unknown): string {
     if (r.error) return `error: ${String(r.error).slice(0, 150)}`
   }
   return s.slice(0, 130) + '…' + s.slice(-60)
+}
+
+/**
+ * [E] Prompt cho LLM nén context — chưng cất transcript cũ thành digest.
+ * Ưu tiên giữ: file path + điểm chính, kết quả lệnh (pass/fail + SỐ LỖI),
+ * quyết định đã chốt, việc đang dở. Bỏ: code trích dẫn, output chi tiết.
+ */
+function buildDigestPrompt(transcript: string): string {
+  return `Bạn là hệ thống NÉN CONTEXT cho AI agent đang làm task dài hạn. Nén nhật ký làm việc dưới đây thành 1 DIGEST cô đọng (≤ ${DIGEST_MAX_CHARS} ký tự) để agent tiếp tục công việc mà KHÔNG mất thông tin cần thiết.
+
+NHẬT KÝ (đã cắt bớt):
+${transcript}
+
+GIỮ LẠI (quan trọng giảm dần):
+1. File đã đọc/sửa/tạo (đường dẫn) + điểm chính mỗi file (hàm/struct quan trọng, mục đích)
+2. Lệnh/tool đã chạy + kết quả: pass/fail, exit code, SỐ LỖI cụ thể nếu có
+3. Kết luận + quyết định kỹ thuật đã chốt; bug đã tìm thấy + nguyên nhân
+4. Việc đang DỞ (làm đến đâu)
+BỎ: nội dung file đầy đủ, code trích dẫn dài, output lệnh chi tiết, suy nghĩ thừa.
+
+Output CHỈ digest (không preamble, không markdown fence), tiếng Việt, gọn theo bullet.`
+}
+
+/**
+ * [E] ROLLING CONTEXT COMPRESSION — nén segment cũ của messages thành digest.
+ *
+ * Nguyên tắc BẢO TOÀN:
+ *   - KHÔNG đụng: system prompt, chat history, goal message (index <= goalMsgIndex)
+ *   - GIỮ NGUYÊN: KEEP_RECENT_MESSAGES message gần nhất (agent đang làm việc với chúng)
+ *   - NÉN: toàn bộ assistant/tool/directive ở giữa → 1 digest message (role user)
+ *
+ * 2 lớp:
+ *   1. LLM digest qua callUtilityLLM (lõi utility nemotron/gpt-oss — rẻ, không
+ *      đụng provider chính của agent) — ~700 maxTokens/lần nén
+ *   2. Fallback heuristic deterministic từ evidence log (LLM hỏng vẫn nén được)
+ *
+ * Fail-open: mọi lỗi → return null (giữ nguyên messages như cũ, loop vẫn chạy).
+ * Mutates messages in-place (splice) — goalMsgIndex giữ nguyên vị trí.
+ */
+async function compressHistory(params: {
+  messages: GoalMessage[]
+  goalMsgIndex: number
+  evidence: EvidenceEntry[]
+  agentId: string
+  agentSessionId: string | null
+  onTokens: (tokens: number) => void
+}): Promise<{ digestChars: number; savedChars: number; method: 'llm' | 'heuristic' } | null> {
+  const { messages, goalMsgIndex, evidence, agentId, agentSessionId, onTokens } = params
+
+  let payload = 0
+  for (const m of messages) payload += m.content.length
+  if (payload <= COMPRESS_THRESHOLD_CHARS) return null
+
+  const workStart = goalMsgIndex + 1
+  const compressEnd = messages.length - KEEP_RECENT_MESSAGES
+  if (compressEnd - workStart < MIN_COMPRESSIBLE_MESSAGES) return null // segment quá nhỏ — không đáng nén
+
+  const compressible = messages.slice(workStart, compressEnd)
+  const removedChars = compressible.reduce((s, m) => s + m.content.length, 0)
+
+  // Transcript đầu vào cho LLM nén (cap COMPRESS_INPUT_CHARS)
+  let transcript = ''
+  for (const m of compressible) {
+    const label = m.role === 'assistant' ? 'ASSISTANT' : m.role === 'tool' ? 'TOOL RESULT' : 'USER'
+    transcript += `[${label}] ${m.content.slice(0, 1800)}\n`
+    if (transcript.length >= COMPRESS_INPUT_CHARS) break
+  }
+
+  // ===== Lớp 1: LLM digest (utility core) =====
+  let digest = ''
+  let method: 'llm' | 'heuristic' = 'llm'
+  try {
+    const res = await withTimeout(
+      callUtilityLLM(buildDigestPrompt(transcript), undefined, 'goal-loop-context-compression', {
+        temperature: 0.2,
+        maxTokens: 700,
+      }),
+      90_000,
+      'Context compression LLM',
+    )
+    if (res?.content && res.content.trim().length > 50) {
+      digest = res.content.trim()
+      if (typeof res.tokensUsed === 'number' && res.tokensUsed > 0) onTokens(res.tokensUsed)
+    }
+  } catch {
+    /* fall-through heuristic */
+  }
+
+  // ===== Lớp 2: heuristic fallback từ evidence log (deterministic, 0 LLM) =====
+  if (!digest) {
+    method = 'heuristic'
+    digest = evidence
+      .slice(-40)
+      .map(e => (e.kind === 'tool' ? `- [${e.tool}] ${e.success ? '✓' : '✗'} ${e.text}` : `- ${e.text}`))
+      .join('\n')
+      .slice(0, DIGEST_MAX_CHARS)
+  } else if (digest.length > DIGEST_MAX_CHARS) {
+    digest = digest.slice(0, DIGEST_MAX_CHARS) + '…'
+  }
+
+  if (!digest) return null
+
+  const digestMessage: GoalMessage = {
+    role: 'user',
+    content:
+      `📦 [WORKSPACE DIGEST — các bước TRƯỚC ĐÂY đã được NÉN để tiết kiệm budget token. Đây là TÓM TẮT công việc đã làm; nội dung gốc (file đã đọc, output lệnh) đã bỏ. Nếu cần chi tiết chính xác một file/lệnh cũ → gọi file_read/grep/shell LẠI.]\n\n${digest}`,
+  }
+
+  messages.splice(workStart, compressible.length, digestMessage)
+
+  // Ghi digest vào WorkingMemory (HOT) — request sau trong session đọc lại
+  // ngay qua HOT digest trong system prompt (user: "tóm tắt và... đọc lại")
+  recordWorkMemory(agentId, agentSessionId, `📦 [context-digest] ${digest.slice(0, 400)}`, 0.75)
+
+  return { digestChars: digestMessage.content.length, savedChars: removedChars - digestMessage.content.length, method }
 }
 
 // ==================== EVALUATOR ====================
@@ -570,7 +732,7 @@ export async function runGoalDrivenLoop(params: {
   } = params
 
   const startedAt = Date.now()
-  const fullSystemPrompt = systemPrompt + buildGoalProtocol()
+  const fullSystemPrompt = systemPrompt + buildGoalProtocol() + (agentTools.includes('delegate_task') ? buildDelegationProtocol() : '')
 
   // ===== Thought Process tracking — 1 run cho toàn bộ goal loop =====
   const runId = startAgentRun({
@@ -613,6 +775,11 @@ export async function runGoalDrivenLoop(params: {
   /** Chu kỳ đã BẮT ĐẦU (kể cả đang dở) — dùng cho report/metadata trung thực:
    *  budget cắt giữa chu kỳ 1 → "1 chu kỳ (dở)", không phải 0 hay 1 hoàn thành */
   let cyclesAttempted = 0
+  /** [E] Số lần nén context đã thực hiện */
+  let compressions = 0
+  /** [F] Số lần delegate + token sub-agent tiêu thụ (báo cáo lên metadata) */
+  let delegations = 0
+  let subagentTokens = 0
   let lastContent = ''
   /** Lỗi LLM gần nhất (result.error) — surface lên báo cáo cuối thay vì nuốt lỗi */
   let lastLlmError = ''
@@ -626,7 +793,7 @@ export async function runGoalDrivenLoop(params: {
   const timeLeft = () => TIME_BUDGET_MS - (Date.now() - startedAt)
   const tokenLeft = () => TOKEN_BUDGET - tokensUsed
 
-  console.log(`[GoalLoop] ${agentName} bắt đầu — mục tiêu: "${userMessage.slice(0, 100)}" (max ${MAX_CYCLES} chu kỳ × ${ITER_PER_CYCLE} vòng, budget ${Math.round(TIME_BUDGET_MS / 60000)}' / ${TOKEN_BUDGET} tokens, reserve ${REPORT_RESERVE_TOKENS} tokens cho evaluate + báo cáo cuối)`)
+  console.log(`[GoalLoop] ${agentName} bắt đầu — mục tiêu: "${userMessage.slice(0, 100)}" (max ${MAX_CYCLES} chu kỳ × ${ITER_PER_CYCLE} vòng, budget ${Math.round(TIME_BUDGET_MS / 60000)}' / ${TOKEN_BUDGET} tokens, reserve ${REPORT_RESERVE_TOKENS} tokens cho evaluate + báo cáo cuối, nén context @${COMPRESS_THRESHOLD_CHARS} chars${agentTools.includes('delegate_task') ? ', delegate_task BẬT' : ''})`)
 
   // ================== OUTER CYCLE LOOP ==================
   outerLoop: for (let cycle = 1; cycle <= MAX_CYCLES; cycle++) {
@@ -658,6 +825,25 @@ export async function runGoalDrivenLoop(params: {
       if (timeLeft() <= 0 || tokenLeft() <= REPORT_RESERVE_TOKENS) { endedBy = 'budget'; break }
       cycleIterations++
       totalIterations++
+
+      // [E] ROLLING CONTEXT COMPRESSION — nén segment cũ trước khi gửi prompt
+      // (mỗi vòng đều gửi TOÀN BỘ transcript → chi phí O(n²) nếu không nén).
+      // Fail-open: lỗi nén → giữ nguyên messages, loop vẫn chạy bình thường.
+      try {
+        const comp = await compressHistory({
+          messages,
+          goalMsgIndex,
+          evidence,
+          agentId,
+          agentSessionId,
+          onTokens: (t) => { tokensUsed += t },
+        })
+        if (comp) {
+          compressions++
+          console.log(`[GoalLoop] ${agentName} nén context #${compressions} (${comp.method}): ${Math.round(comp.savedChars / 1000)}k ký tự tiết kiệm — giữ system + goal + ${KEEP_RECENT_MESSAGES} message gần nhất`)
+          recordAgentThought(agentSessionId, `📦 Nén context #${compressions}: tiết kiệm ~${Math.round(comp.savedChars / 1000)}k ký tự (${comp.method === 'llm' ? 'LLM digest' : 'heuristic'}) — phần cũ đã thành tóm tắt, message gần nhất giữ nguyên`, totalIterations)
+        }
+      } catch { /* fail-open — nén lỗi không được phép làm hỏng vòng lặp */ }
 
       const formattedPrompt = formatMessagesForLLM(messages)
 
@@ -731,6 +917,20 @@ export async function runGoalDrivenLoop(params: {
         }
 
         const toolResult = await executeTool(tc.name, toolArgs, { agentName, sessionId: agentSessionId })
+
+        // [F] TOKEN ACCOUNTING cho tool có LLM nội bộ (delegate_task: sub-agent
+        // tiêu token thật) — cộng vào budget loop để không chạy tuột. Token này
+        // KHÔNG được đếm ở đâu khác (executeTool không báo qua callLLMForAgent).
+        if (toolResult.result && typeof toolResult.result === 'object') {
+          const innerTokens = (toolResult.result as { tokensUsed?: unknown }).tokensUsed
+          if (typeof innerTokens === 'number' && innerTokens > 0) {
+            tokensUsed += innerTokens
+            if (tc.name === 'delegate_task') {
+              delegations++
+              subagentTokens += innerTokens
+            }
+          }
+        }
 
         // ===== WORKING MEMORY (HOT) — ghi nhận tool đã chạy + kết quả =====
         // Các request sau trong session thấy entry này qua digest HOT trong
@@ -943,7 +1143,7 @@ export async function runGoalDrivenLoop(params: {
   }
 
   const elapsedMs = Date.now() - startedAt
-  console.log(`[GoalLoop] ${agentName} kết thúc: ${stopReason} — ${cyclesAttempted} chu kỳ (${cyclesDone} hoàn thành), ${totalIterations} vòng, ${totalToolCalls} tool calls, ${tokensUsed} tokens, ${Math.round(elapsedMs / 1000)}s${usedFinalReport ? ' + final-report' : ''}`)
+  console.log(`[GoalLoop] ${agentName} kết thúc: ${stopReason} — ${cyclesAttempted} chu kỳ (${cyclesDone} hoàn thành), ${totalIterations} vòng, ${totalToolCalls} tool calls, ${tokensUsed} tokens, ${Math.round(elapsedMs / 1000)}s${usedFinalReport ? ' + final-report' : ''}${compressions > 0 ? `, ${compressions} lần nén context` : ''}${delegations > 0 ? `, ${delegations} lần delegate (${subagentTokens} tokens sub-agent)` : ''}`)
 
   // ===== WORKING MEMORY (HOT) — báo cáo kết thúc mục tiêu =====
   // Entry tóm tắt "đã làm gì, kết quả thế nào" — quan trọng nhất cho việc
@@ -972,6 +1172,11 @@ export async function runGoalDrivenLoop(params: {
       finalReport: usedFinalReport || undefined,
       /** Token đã tiêu thụ — frontend/UI có thể hiển thị so với budget */
       tokensUsed,
+      /** [E] Số lần nén context (rolling digest) trong loop */
+      compressions: compressions || undefined,
+      /** [F] Delegation stats — số lần gọi sub-agent + token sub-agent tiêu thụ */
+      delegations: delegations || undefined,
+      subagentTokens: subagentTokens || undefined,
     },
   }
 }

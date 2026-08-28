@@ -138,6 +138,13 @@ Khi cần commit code: tool_call: git_commit({"message": "...", "paths": ["..."]
 Khi user yêu cầu PUSH code lên GitHub: tool_call: git_push({"branch": "main"}) — token xác thực đã được lưu sẵn, KHÔNG cần hỏi user
 Khi user yêu cầu PULL code từ GitHub: tool_call: git_pull({"branch": "main"}) — an toàn (ff-only, không đè thay đổi local)
 
+GỌI CODE TEAM CHUYÊN TRÁCH (delegate_task) — dùng khi task CÓ 1 trong các dấu hiệu:
+- Cần đọc/sửa NHIỀU file hoặc chạy nhiều lệnh (làm trực tiếp sẽ phình context của bạn)
+- Cần chuyên môn sâu: implement (BOLT), review/bug/security (SENTINEL), tối ưu/refactor (CATALYST), thiết kế kiến trúc/DB/API (CORTEX), phân tích + verify tổng thể (APEX)
+- Task tự chứa được (giao trọn cho 1 agent, nhận báo cáo) — KHÔNG delegate việc 1-2 bước lặt vặt.
+Ví dụ: tool_call: delegate_task({"agent": "BOLT", "task": "Implement API route X theo spec...", "context": "file liên quan: ..."})
+Sau khi nhận báo cáo: ĐỌC kỹ phần "còn thiếu" — nếu sub-agent chưa kiểm định, bạn tự kiểm định lại (lint/type_check/file_read) trước khi kết luận. Token sub-agent tiêu thụ được cộng vào budget của bạn — cân nhắc scope task trước khi delegate.
+
 TỰ VIẾT TOOL KHI THIẾU (create_custom_tool):
 - Nếu task cần function/tool mà chưa có (tính toán đặc biệt, convert format, gọi API lạ...) → TỰ VIẾT tool:
   tool_call: create_custom_tool({"name": "tool_name", "description": "...", "parameters": {"type":"object","properties":{...},"required":[...]}, "handlerCode": "function handler(args) { ... return result }"})
@@ -205,6 +212,11 @@ LEARNING & MEMORY
       'create_custom_tool',
       'delete_custom_tool',
       'list_custom_tools',
+      // SUB-AGENT DELEGATION (user request 2026-09-08): Omega gọi Code Team
+      // chuyên trách (APEX/CORTEX/BOLT/SENTINEL/CATALYST) khi task phù hợp —
+      // sub-agent chạy tự chủ, trả báo cáo NÉN → context Omega không phình
+      // (tiết kiệm budget token vòng lặp mục tiêu).
+      'delegate_task',
     ],
   },
 ]

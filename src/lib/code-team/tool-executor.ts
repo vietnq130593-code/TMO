@@ -1189,6 +1189,42 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       },
     },
   },
+  // ===== SUB-AGENT DELEGATION (user request 2026-09-08) =====
+  // Agent (vd Omega) gọi Code Team chuyên trách xử lý task phù hợp —
+  // parent chỉ nhận báo cáo NÉN, context của sub-agent không đổ vào
+  // parent (context isolation → tiết kiệm budget token vòng lặp mục tiêu).
+  delegate_task: {
+    type: 'function',
+    function: {
+      name: 'delegate_task',
+      description:
+        'DELEGATE task cho agent chuyên trách của Code Team — sub-agent chạy tự chủ (đọc/sửa file, chạy lệnh, kiểm định) ' +
+        'và trả về BÁO CÁO NÉN (đã làm · bằng chứng tool · còn thiếu). ' +
+        'Dùng khi: (1) task code lớn cần implement/review/tối ưu chuyên sâu, (2) muốn giảm tải context của bạn — ' +
+        'sub-agent đọc nhiều file mà context của bạn KHÔNG phình, (3) cần góc nhìn chuyên trách (security review, arch design). ' +
+        'KHÔNG dùng cho task 1-2 bước đơn giản — tự làm nhanh hơn. Chọn đúng agent: APEX=phân tích/verify tổng thể, ' +
+        'CORTEX=thiết kế kiến trúc/DB/API, BOLT=implement code, SENTINEL=review/bug/security, CATALYST=tối ưu/refactor.',
+      parameters: {
+        type: 'object',
+        properties: {
+          agent: {
+            type: 'string',
+            enum: ['APEX', 'CORTEX', 'BOLT', 'SENTINEL', 'CATALYST'],
+            description: 'Agent chuyên trách sẽ nhận task',
+          },
+          task: {
+            type: 'string',
+            description: 'Nhiệm vụ CỤ THỂ cho sub-agent (mục tiêu, phạm vi file, điều kiện hoàn thành kiểm định được)',
+          },
+          context: {
+            type: 'string',
+            description: 'Context bổ sung từ bạn: file liên quan, ràng buộc, kết quả bước trước, quyết định đã chốt...',
+          },
+        },
+        required: ['agent', 'task'],
+      },
+    },
+  },
 }
 
 /**
@@ -2033,6 +2069,59 @@ export async function executeTool(
             result: `list_custom_tools lỗi: ${err instanceof Error ? err.message : String(err)}`,
             duration: Date.now() - startTime,
           }
+        }
+        break
+      }
+      // ===== SUB-AGENT DELEGATION (user request 2026-09-08) =====
+      // Omega/agent khác → gọi Code Team chuyên trách. Token sub-agent tiêu thụ
+      // được báo về caller qua result.tokensUsed — goal loop cộng vào budget tổng.
+      case 'delegate_task': {
+        if (!isFlagEnabled('ENABLE_SUBAGENT_DELEGATE')) {
+          return {
+            success: false,
+            result: 'delegate_task tool is disabled (set ENABLE_SUBAGENT_DELEGATE=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
+        try {
+          const { runSubAgent, resolveDelegationTarget, DELEGATABLE_AGENTS } = await import('@/lib/subagent-delegate')
+          const target = resolveDelegationTarget(args.agent ?? args.agentName)
+          if (!target) {
+            result = {
+              success: false,
+              error: `Agent "${String(args.agent ?? '')}" không hợp lệ. Chọn một trong: ${DELEGATABLE_AGENTS.map(a => a.name).join(', ')}.`,
+            }
+            break
+          }
+          const task = String(args.task ?? args.description ?? '').trim()
+          if (!task) {
+            result = { success: false, error: 'Thiếu "task" — mô tả nhiệm vụ cụ thể cho sub-agent.' }
+            break
+          }
+          const outcome = await runSubAgent({
+            position: target,
+            task,
+            context: args.context ? String(args.context) : undefined,
+            parentAgentName: context?.agentName || 'parent-agent',
+            sessionId: context?.sessionId ?? null,
+          })
+          result = {
+            success: outcome.success,
+            agent: outcome.agent,
+            position: outcome.position,
+            report: outcome.report,
+            tokensUsed: outcome.tokensUsed,
+            iterations: outcome.iterations,
+            toolCalls: outcome.toolCalls,
+            endedBy: outcome.endedBy,
+            evidence: outcome.evidence.slice(-12),
+            error: outcome.error,
+            hint: outcome.success
+              ? undefined
+              : 'Delegate thất bại — bạn có thể tự làm trực tiếp bằng tools của mình, hoặc delegate lại agent khác.',
+          }
+        } catch (err) {
+          result = { success: false, error: `delegate_task lỗi: ${err instanceof Error ? err.message : String(err)}` }
         }
         break
       }
