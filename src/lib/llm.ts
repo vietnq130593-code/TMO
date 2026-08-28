@@ -221,13 +221,12 @@ const NVIDIA_EXTRACTION_MODELS = [
   'nvidia/nemotron-3-ultra-550b-a55b',
 ]
 
-/** NVIDIA NIM AGENT/CHAT models — MODEL POLICY (updated 2026-08-27):
- *  kimi-k3 là MẶC ĐỊNH cho tất cả agents (kể cả agents độc lập); các lõi khác
- *  là BACKUP theo thứ tự (deepseek-v4-flash → minimax-m3) — chỉ dùng khi kimi-k3
- *  fail/rate-limit. Không rotation round-robin (backup = failover, không phải
- *  load-balance) — see getRotatedModels().
+/** NVIDIA NIM AGENT/CHAT models — KIMI-ONLY POLICY (mới nhất):
+ *  kimi-k3 là lõi LÀM VIỆC DUY NHẤT cho mọi agents ở enforced path (default) —
+ *  KHÔNG fallback model khác khi fail, chỉ xoay vòng key. deepseek/minimax chỉ
+ *  còn được dùng ở legacy path (ENFORCE_KIMI_K3=false — tắt explicit).
  *
- *  User directive 2026-08-27: gpt-oss-120b bị LOẠI khỏi Agent/Chat (dự định thay
+ *  User directive cũ 2026-08-27: gpt-oss-120b bị LOẠI khỏi Agent/Chat (dự định thay
  *  bằng GLM 5.2 nhưng NIM đã end-of-life 2026-08-21 HTTP 410; GLM 5.3 không tồn
  *  tại — verified 404 mọi biến thể ID). gpt-oss-120b CHỈ còn là generator/judge
  *  nội bộ (RedTeam generator + Eval judge 1) — tách vai trò theo thiết kế,
@@ -1764,7 +1763,7 @@ const nvidiaPool = new ProviderKeyPool('NVIDIA', [
 ])
 
 console.log(`[LLM] Provider pool: NVIDIA=${nvidiaPool.keyCount} keys (${NVIDIA_MODELS.length} models) — SINGLE PROVIDER`)
-console.log(`[LLM] NVIDIA: 1 extraction core (nemotron-550b, extraction ONLY) + 3 agent/chat cores = 4 models, 4 keys × 4 docs = 16 max concurrent`)
+console.log(`[LLM] NVIDIA: agent/chat lõi DUY NHẤT kimi-k3 (Kimi-only policy) + 1 extraction core (nemotron-550b, extraction ONLY)`)
 
 // ==================== KIMI K3 MODEL POLICY + NVIDIA KEY ROTATION ====================
 // USER DIRECTIVE 2026-08-31: "mọi Agents, mọi tác vụ từ giờ sẽ sử dụng lõi Kimi k3,
@@ -1772,16 +1771,20 @@ console.log(`[LLM] NVIDIA: 1 extraction core (nemotron-550b, extraction ONLY) + 
 // mới dừng lại... tới khi chuyển qua cả 4 key lại về key đầu tiên, đến khi mỗi key
 // đều đủ 3 lần thì mới dừng lại"
 //
+// USER DIRECTIVE (Kimi-only): "sử dụng kimi làm lõi làm việc DUY NHẤT cho tất cả
+// các agents, nếu api key bị lỗi thì đổi key, KHÔNG fallback model khác"
+//
 // Chính sách:
 //   1. MỌI agents + MỌI tác vụ (chat/ReAct/team/cron/phân loại/auto-learn...) dùng
-//      lõi kimi-k3 LÀM CHUẨN — cấu hình model riêng của từng agent bị override.
+//      lõi kimi-k3 LÀ DUY NHẤT — cấu hình model riêng của từng agent bị override.
 //      (Tắt bằng ENFORCE_KIMI_K3=false để quay về cấu hình per-agent.)
 //   2. Khi 1 attempt gặp vấn đề (429 rate-limit, 5xx, 401/403, timeout, network...)
 //      → CHUYỂN NGAY sang key kế tiếp: key1→key2→key3→key4→key1→key2→...
 //   3. MỖI key được thử tối đa KEY_FAILURES_PER_KEY (3) lần trong 1 chuỗi xoay vòng.
-//      Chỉ khi MỌI key đều đã fail đủ 3 lần (4 key × 3 = 12 attempts) mới dừng —
-//      khi đó mới fallback sang backup core (deepseek → minimax) rồi z-ai-sdk.
-//   4. Extraction pipeline giữ lõi nemotron-550b (user directive 2026-08-25 — lõi
+//      Chỉ khi MỌI key đều đã fail đủ 3 lần (4 key × 3 = 12 attempts) mới dừng.
+//   4. KIMI-ONLY: KHÔNG fallback sang model khác (deepseek/minimax/z-ai-sdk đều đã
+//      BỎ) — lỗi được surface trung thực để user biết đúng tình trạng key.
+//   5. Extraction pipeline giữ lõi nemotron-550b (user directive 2026-08-25 — lõi
 //      trích xuất duy nhất; override bằng env EXTRACTION_MODEL nếu muốn) nhưng vẫn
 //      được hưởng cùng cơ chế xoay vòng key.
 
@@ -1805,10 +1808,10 @@ export function isKimiK3Enforced(): boolean {
   return (process.env.ENFORCE_KIMI_K3 ?? 'true').trim().toLowerCase() !== 'false'
 }
 
-/** Chuỗi backup cores sau khi kimi-k3 fail đủ 12 attempts (giữ thứ tự failover cũ) */
-function backupModelChain(): string[] {
-  return NVIDIA_AGENT_MODELS.filter(m => m !== KIMI_K3_MODEL)
-}
+/** (ĐÃ BỎ — Kimi-only) Chuỗi backup cores deepseek/minimax không còn được dùng
+ *  ở enforced path: khi kimi-k3 fail đủ chuỗi xoay vòng key, trả lỗi — KHÔNG
+ *  chuyển model. Danh sách NVIDIA_AGENT_MODELS chỉ còn ý nghĩa ở legacy path
+ *  (ENFORCE_KIMI_K3=false). */
 
 /** Kết quả 1 attempt gọi NIM thô */
 type NvidiaAttemptStatus =
@@ -2741,30 +2744,22 @@ export async function callLLM(
     }
   }
 
-  // ===== KIMI K3 MODEL POLICY (user directive 2026-08-31) =====
-  // Mọi tác vụ dùng lõi kimi-k3 + xoay vòng 4 key (mỗi key 3 lần). Chỉ khi
-  // kimi-k3 fail đủ 12 attempts mới fallback backup cores, rồi z-ai-sdk.
+  // ===== KIMI-ONLY MODEL POLICY (user directive: Kimi là lõi DUY NHẤT) =====
+  // Mọi tác vụ dùng lõi kimi-k3 + xoay vòng 4 key (mỗi key 3 lần). Hết chuỗi
+  // xoay vòng → trả lỗi — KHÔNG fallback model khác (deepseek/minimax/z-ai-sdk
+  // đều đã bỏ theo directive).
   if (isKimiK3Enforced()) {
-    const chain = [KIMI_K3_MODEL, ...backupModelChain()]
-    for (const model of chain) {
-      const result = await callModelWithKeyRotation(model, prompt, systemPrompt, options, { taskLabel })
-      if (result && (result.content || (result.tool_calls && result.tool_calls.length > 0))) {
-        return result
-      }
-      if (options?.abortCheck && options.abortCheck()) break // user hủy — khỏi thử backup
-      console.warn(`[LLM] ${model} thất bại (task "${taskLabel}") sau xoay vòng đủ key — chuyển core kế tiếp`)
+    const result = await callModelWithKeyRotation(KIMI_K3_MODEL, prompt, systemPrompt, options, { taskLabel })
+    if (result && (result.content || (result.tool_calls && result.tool_calls.length > 0))) {
+      return result
     }
 
-    // NVIDIA cạn (mọi model × mọi key đều fail đủ 3 lần/key) → z-ai-sdk last resort
-    console.log(`[LLM] NVIDIA failed for task "${taskLabel}" — trying z-ai-sdk fallback`)
-    const sdkResult = await tryZaiSdk(prompt, systemPrompt, taskLabel, options)
-    if (sdkResult?.content) return sdkResult
-
+    console.warn(`[LLM] ${KIMI_K3_MODEL} thất bại (task "${taskLabel}") sau xoay vòng đủ mọi key — KIMI-ONLY: không fallback model khác`)
     return {
       content: '',
       provider: 'none',
-      model: 'none',
-      error: 'NVIDIA NIM failed — mọi model đều fail đủ chuỗi xoay vòng key (4 key × 3 lần) và z-ai-sdk cũng lỗi',
+      model: KIMI_K3_MODEL,
+      error: `Kimi k3 (${KIMI_K3_MODEL}) thất bại sau khi xoay vòng đủ mọi NVIDIA key (mỗi key ${KEY_FAILURES_PER_KEY} lần) — chính sách Kimi-only: không fallback model khác. Vui lòng kiểm tra lại API keys.`,
     }
   }
 
@@ -2886,36 +2881,27 @@ export async function callLLMForAgent(
 ): Promise<LLMResult> {
   const { provider, model } = agentConfig
 
-  // ===== KIMI K3 MODEL POLICY (user directive 2026-08-31) =====
-  // "mọi Agents, mọi tác vụ từ giờ sẽ sử dụng lõi Kimi k3" — cấu hình model riêng
-  // của agent bị OVERRIDE; kimi-k3 xoay vòng đủ 4 key × 3 lần trước khi fallback
-  // backup cores (deepseek → minimax) rồi z-ai-sdk.
+  // ===== KIMI-ONLY MODEL POLICY (user directive: Kimi là lõi DUY NHẤT) =====
+  // "mọi Agents dùng kimi; key lỗi thì đổi key; KHÔNG fallback model khác" —
+  // cấu hình model riêng của agent bị OVERRIDE hoàn toàn; kimi-k3 xoay vòng đủ
+  // 4 key × 3 lần, hết chuỗi → trả lỗi (không deepseek/minimax/z-ai-sdk).
   if (isKimiK3Enforced()) {
     if (model !== KIMI_K3_MODEL) {
-      console.log(`[LLM] MODEL POLICY: agent cấu hình ${provider}/${model} → override → ${KIMI_K3_MODEL} (Kimi k3 cho mọi agents)`)
+      console.log(`[LLM] MODEL POLICY: agent cấu hình ${provider}/${model} → override → ${KIMI_K3_MODEL} (Kimi k3 là lõi DUY NHẤT cho mọi agents)`)
     }
-    const chain = [KIMI_K3_MODEL, ...backupModelChain()]
-    for (const m of chain) {
-      const result = await callModelWithKeyRotation(m, prompt, systemPrompt, options, { taskLabel: `agent:${model}` })
-      if (result && (result.content || (result.tool_calls && result.tool_calls.length > 0))) {
-        const tcCount = result.tool_calls?.length ?? 0
-        console.log(`[LLM] Agent dùng lõi ${m} ✓ (${tcCount} tool_calls) — agent cấu hình gốc: ${provider}/${model}`)
-        return result
-      }
-      if (options?.abortCheck && options.abortCheck()) break // user hủy — khỏi thử backup
-      console.warn(`[LLM] ${m} thất bại sau xoay vòng đủ key — chuyển core kế tiếp (agent cấu hình gốc: ${provider}/${model})`)
+    const result = await callModelWithKeyRotation(KIMI_K3_MODEL, prompt, systemPrompt, options, { taskLabel: `agent:${model}` })
+    if (result && (result.content || (result.tool_calls && result.tool_calls.length > 0))) {
+      const tcCount = result.tool_calls?.length ?? 0
+      console.log(`[LLM] Agent dùng lõi ${KIMI_K3_MODEL} ✓ (${tcCount} tool_calls) — agent cấu hình gốc: ${provider}/${model}`)
+      return result
     }
 
-    // NVIDIA cạn hoàn toàn → z-ai-sdk last resort
-    console.log(`[LLM] NVIDIA failed for agent (${provider}/${model}) — trying z-ai-sdk fallback`)
-    const sdkResult = await tryZaiSdk(prompt, systemPrompt, 'agent-kimi-fallback', options)
-    if (sdkResult?.content) return sdkResult
-
+    console.warn(`[LLM] ${KIMI_K3_MODEL} thất bại sau xoay vòng đủ key (agent cấu hình gốc: ${provider}/${model}) — KIMI-ONLY: không fallback model khác`)
     return {
       content: '',
       provider: 'none',
-      model: 'none',
-      error: 'NVIDIA NIM failed — kimi-k3 + backup cores đều fail đủ chuỗi xoay vòng key (mỗi key 3 lần) và z-ai-sdk cũng lỗi',
+      model: KIMI_K3_MODEL,
+      error: `Kimi k3 (${KIMI_K3_MODEL}) thất bại sau khi xoay vòng đủ mọi NVIDIA key (mỗi key ${KEY_FAILURES_PER_KEY} lần) — chính sách Kimi-only: không fallback model khác. Vui lòng kiểm tra lại API keys.`,
     }
   }
 

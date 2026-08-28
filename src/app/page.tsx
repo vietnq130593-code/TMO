@@ -3373,9 +3373,9 @@ const NVIDIA_CORE_CONFIG = {
     headerBg: 'bg-amber-950/60',
     barColor: '#f59e0b',
     models: [
-      { key: 'moonshotai/kimi-k3', label: 'kimi-k3 (mặc định)' },
-      { key: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash (backup #1)' },
-      { key: 'minimaxai/minimax-m3', label: 'minimax-m3 (backup #2)' },
+      { key: 'moonshotai/kimi-k3', label: 'kimi-k3 (lõi DUY NHẤT — Kimi-only)' },
+      { key: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash (đã bỏ — chỉ thống kê lịch sử)' },
+      { key: 'minimaxai/minimax-m3', label: 'minimax-m3 (đã bỏ — chỉ thống kê lịch sử)' },
     ],
   },
 } as const
@@ -4354,9 +4354,9 @@ const SMOLAB_MODEL_GROUPS = [
       { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b' },
       // 3 agent/chat cores (user directive 2026-08-27 — gpt-oss-120b đã bỏ,
       // GLM 5.2/5.3 không dùng được trên NIM: 410 Gone / 404)
-      { id: 'moonshotai/kimi-k3', label: 'Kimi K3' },
-      { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash' },
-      { id: 'minimaxai/minimax-m3', label: 'MiniMax M3' },
+      { id: 'moonshotai/kimi-k3', label: 'Kimi K3 (lõi DUY NHẤT)' },
+      { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash (đã bỏ)' },
+      { id: 'minimaxai/minimax-m3', label: 'MiniMax M3 (đã bỏ)' },
     ],
   },
 ]
@@ -14508,10 +14508,10 @@ function CodeTabContent() {
   // dùng 3 lõi sau; nemotron-3-ultra-550b KHÔNG nằm trong danh sách — lõi đó chỉ
   // dành cho trích xuất dữ liệu; gpt-oss-120b đã bỏ; GLM 5.2/5.3 không dùng được
   // trên NIM — 410 Gone / 404)
+  // KIMI-ONLY (user directive): kimi-k3 là lõi làm việc DUY NHẤT — server override
+  // mọi agent về kimi-k3, không còn fallback model khác nên selector chỉ 1 lựa chọn.
   const MODEL_OPTIONS = [
-    { value: 'moonshotai/kimi-k3', label: 'Kimi K3 (mặc định — reasoning)' },
-    { value: 'deepseek-ai/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash (backup #1)' },
-    { value: 'minimaxai/minimax-m3', label: 'MiniMax M3 (backup #2 — nhanh)' },
+    { value: 'moonshotai/kimi-k3', label: 'Kimi K3 (lõi duy nhất)' },
   ]
 
   return (

@@ -70,6 +70,15 @@ function isTrivialExchange(userMsg: string, assistantMsg: string): boolean {
 }
 
 /**
+ * KIMI-ONLY: nội dung là LỖI LLM (key cạn/rate-limit/timeout...) — KHÔNG ghi
+ * vào Knowledge Base (writeback) hay AgentMemory: chặn nhiễm dữ liệu garbage
+ * vào graph/vectors từ error message. User vẫn thấy lỗi trong chat.
+ */
+function isLlmErrorContent(content: string): boolean {
+  return typeof content === 'string' && content.startsWith('Error: Goal loop LLM failed')
+}
+
+/**
  * Phase A: Generate a fast response for casual messages (greetings, thanks, etc.)
  * without hitting the LLM or Knowledge Base.
  *
@@ -833,7 +842,9 @@ export async function POST(request: NextRequest) {
         // Phase 2 SMOLAB Prop 6 — uses writebackToKBTransactionally (PendingWriteback saga
         // tracking via batchId). Each writeback is now reconcilable via POST /api/storage/reconcile-writebacks.
         const hasAgent = !!(agentProfileId && agentProvider && agentModel)
-        if (hasAgent && !isTrivialExchange(lastUserContent, content)) {
+        // KIMI-ONLY: lỗi LLM → bỏ writeback (không nhiễm KB bằng error message)
+        const llmErrContent = isLlmErrorContent(content)
+        if (hasAgent && !llmErrContent && !isTrivialExchange(lastUserContent, content)) {
           writebackToKBTransactionally({
             query: lastUserContent,
             step2Result: { used: true, content, supplemented: true, source: 'model-knowledge' },
@@ -868,7 +879,8 @@ export async function POST(request: NextRequest) {
             { role: 'assistant', content, model: agentModel, provider: agentProvider, metadata: { reactIterations: reactResult.iterations, toolCallsExecuted: reactResult.toolCallsExecuted, agentRun: agentRunSummary, goalLoop: reactResult.goalLoop } },
           ]).catch(err => console.warn('[Memory] Failed to save chat messages:', err instanceof Error ? err.message : String(err)))
 
-          if (!isTrivialExchange(lastUserContent, content)) {
+          // KIMI-ONLY: lỗi LLM → không extract memory từ error message
+          if (!llmErrContent && !isTrivialExchange(lastUserContent, content)) {
             extractMemoriesFromConversation({
               agentId: agentProfileId,
               agentName: agentProfileName || 'unknown',
@@ -1069,7 +1081,8 @@ export async function POST(request: NextRequest) {
         // Phase 2 SMOLAB Prop 6 — uses writebackToKBTransactionally (PendingWriteback saga).
         const queryConfidence = data.confidence ?? 0
         const hasAgent = !!(agentProfileId && agentProvider && agentModel)
-        if (hasAgent && !isTrivialExchange(lastUserContent, content)) {
+        // KIMI-ONLY: lỗi LLM → bỏ writeback (không nhiễm KB bằng error message)
+        if (hasAgent && !isLlmErrorContent(content) && !isTrivialExchange(lastUserContent, content)) {
           writebackToKBTransactionally({
             query: lastUserContent,
             step2Result: { used: true, content, supplemented: true, source: 'model-knowledge' },
@@ -1106,7 +1119,8 @@ export async function POST(request: NextRequest) {
           ]).catch(err => console.warn('[Memory] Failed to save chat messages:', err instanceof Error ? err.message : String(err)))
 
           // Extract memories from this conversation (skip trivial exchanges to save LLM tokens)
-          if (!isTrivialExchange(lastUserContent, content)) {
+          // KIMI-ONLY: lỗi LLM → không extract memory từ error message
+          if (!isLlmErrorContent(content) && !isTrivialExchange(lastUserContent, content)) {
             extractMemoriesFromConversation({
               agentId: agentProfileId,
               agentName: agentProfileName || 'unknown',
