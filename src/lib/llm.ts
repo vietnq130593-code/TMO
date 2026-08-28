@@ -9,13 +9,20 @@
  *     (fallback — user directive 2026-09-05: "trích xuất chỉ dùng nemotron-3-ultra-550b
  *     và chatgpt-os-120b làm fall back, KHÔNG được gọi kimi-k3"). Lõi extraction
  *     KHÔNG dùng cho chat/agent — ngược lại kimi-k3 (lõi agent) KHÔNG dùng cho extraction.
- *   - 3 agent/chat cores: kimi-k3, deepseek-v4-flash-0731, minimax-m3
+ *   - 4 agent/chat cores (FALLBACK CHAIN RESTORED — user directive 2026-08-28:
+ *     "thiết lập deepseek v4 pro, deepseek v4 flash, minimax lần lượt làm fall
+ *     back cho k3"; kết thúc giai đoạn Kimi-only "không fallback model khác"):
+ *       kimi-k3 (chính) → deepseek-v4-pro-0813 → deepseek-v4-flash-0731 → minimax-m3
  *     (user directive 2026-08-27: bỏ gpt-oss-120b khỏi Agent/Chat — model này
  *     CHỈ còn dùng làm generator/judge nội bộ cho RedTeam + Eval)
  *   - glm-5.2 REMOVED 2026-08-25: NVIDIA NIM end-of-life 2026-08-21 (HTTP 410)
  *   - glm-5.3 KHÔNG tồn tại trên NIM (verified 2026-08-27: 404 mọi biến thể ID,
  *     catalog 95 models không có GLM nào — NIM đã bỏ GLM hoàn toàn)
- *   - Deprecated (404): kimi-k2.6, glm-5.1, minimax-m2.7, deepseek-v4-pro, qwen3.5-397b
+ *   - deepseek-v4-pro: bản cũ không suffix đã 404 (2026-08-27); bản MỚI
+ *     deepseek-ai/deepseek-v4-pro-0813 VERIFIED LIVE 2026-08-28 qua GET /v1/models
+ *     (84 models trong catalog — user đã kiểm tra trên build.nvidia.com)
+ *   - Deprecated (404): kimi-k2.6(đã quay lại catalog nhưng không dùng), glm-5.1,
+ *     minimax-m2.7, qwen3.5-397b
  *
  * Key assignment (AUTO mode, least-loaded-first):
  *   - Each document gets a key (0-3, auto-assigned to least-loaded key)
@@ -195,11 +202,11 @@ function getRotatedModels(provider: string, models: string[]): string[] {
   if (models === NVIDIA_EXTRACTION_MODELS) {
     return models // Fixed order: [nemotron-550b (primary), gpt-oss-120b (fallback)]
   }
-  // AGENT/CHAT models (MODEL POLICY 2026-08-25): no rotation — kimi-k3 is the
-  // DEFAULT for every agent; the others are sequential failover backups
-  // (not load-balanced), so the order must stay fixed.
+  // AGENT/CHAT models (MODEL POLICY 2026-08-25, fallback chain 2026-08-28):
+  // no rotation — kimi-k3 is the DEFAULT for every agent; the others are
+  // sequential failover backups (not load-balanced), so the order must stay fixed.
   if (models === NVIDIA_AGENT_MODELS) {
-    return models // Always [kimi-k3, deepseek, minimax]
+    return models // Always [kimi-k3, v4-pro, v4-flash, minimax]
   }
   // Legacy lists: rotate as before
   const offset = modelRotationCounters[provider] % models.length
@@ -228,28 +235,30 @@ const NVIDIA_EXTRACTION_MODELS = [
   'openai/gpt-oss-120b',
 ]
 
-/** NVIDIA NIM AGENT/CHAT models — KIMI-ONLY POLICY (mới nhất):
- *  kimi-k3 là lõi LÀM VIỆC DUY NHẤT cho mọi agents ở enforced path (default) —
- *  KHÔNG fallback model khác khi fail, chỉ xoay vòng key. deepseek/minimax chỉ
- *  còn được dùng ở legacy path (ENFORCE_KIMI_K3=false — tắt explicit).
+/** NVIDIA NIM AGENT/CHAT models — KIMI-K3 CHÍNH + FALLBACK CHAIN (mới nhất):
+ *  USER DIRECTIVE 2026-08-28: "thiết lập deepseek v4 pro (đã kiểm tra trên
+ *  build.nvidia.com), deepseek v4 flash, minimax lần lượt làm fall back cho k3"
+ *  — kết thúc chính sách Kimi-only "KHÔNG fallback model khác" (2026-08-31 cũ).
+ *  Thứ tự cố định (không rotation): kimi-k3 chính, sau đó fallback tuần tự.
  *
- *  User directive cũ 2026-08-27: gpt-oss-120b bị LOẠI khỏi Agent/Chat (dự định thay
- *  bằng GLM 5.2 nhưng NIM đã end-of-life 2026-08-21 HTTP 410; GLM 5.3 không tồn
- *  tại — verified 404 mọi biến thể ID). gpt-oss-120b CHỈ còn là generator/judge
- *  nội bộ (RedTeam generator + Eval judge 1) — tách vai trò theo thiết kế,
- *  không nằm trong pool chat/agent này.
+ *  Verified LIVE 2026-08-28 qua GET /v1/models (84 models):
+ *    moonshotai/kimi-k3 ✓ | deepseek-ai/deepseek-v4-pro-0813 ✓ (BẢN MỚI —
+ *    bản cũ không suffix đã 404 từ 2026-08-27) | deepseek-ai/deepseek-v4-flash-0731 ✓
+ *    | minimaxai/minimax-m3 ✓
  *  Verified 2026-08-25: kimi-k3 ~16s | deepseek ~27s | minimax ~0.3s */
 const NVIDIA_AGENT_MODELS = [
   'moonshotai/kimi-k3',
+  'deepseek-ai/deepseek-v4-pro-0813',
   'deepseek-ai/deepseek-v4-flash-0731',
   'minimaxai/minimax-m3',
 ]
 
 /**
- * NVIDIA_MODELS (updated 2026-08-27): = NVIDIA_AGENT_MODELS (3 lõi chat —
- * gpt-oss-120b đã bỏ khỏi Agent/Chat theo user directive).
+ * NVIDIA_MODELS (updated 2026-08-28): = NVIDIA_AGENT_MODELS (4 lõi chat —
+ * kimi-k3 chính + 3 lõi fallback theo user directive 2026-08-28).
  * nemotron-3-ultra-550b KHÔNG thuộc danh sách này — lõi extraction duy nhất.
- * Deprecated (404): kimi-k2.6, glm-5.1, minimax-m2.7, deepseek-v4-pro, qwen3.5-397b
+ * Deprecated (404): kimi-k2.6 (đã quay lại catalog, không dùng), glm-5.1,
+ * minimax-m2.7, qwen3.5-397b; deepseek-v4-pro bản cũ (bản mới: -0813)
  */
 // Alias of NVIDIA_AGENT_MODELS — same 3 chat cores, same failover order.
 // (Kept as a separate export because getNvidiaModels() + the pool log line
@@ -1770,7 +1779,7 @@ const nvidiaPool = new ProviderKeyPool('NVIDIA', [
 ])
 
 console.log(`[LLM] Provider pool: NVIDIA=${nvidiaPool.keyCount} keys (${NVIDIA_MODELS.length} models) — SINGLE PROVIDER`)
-console.log(`[LLM] NVIDIA: agent/chat lõi DUY NHẤT kimi-k3 (Kimi-only policy) + 2 extraction cores (nemotron-550b chính → gpt-oss-120b fallback — kimi-k3 KHÔNG dùng cho extraction, user directive 2026-09-05)`)
+console.log(`[LLM] NVIDIA: agent/chat kimi-k3 (chính) + FALLBACK CHAIN [${NVIDIA_AGENT_MODELS.slice(1).join(' → ')}] (user directive 2026-08-28) + 2 extraction cores (nemotron-550b chính → gpt-oss-120b fallback — kimi-k3 KHÔNG dùng cho extraction, user directive 2026-09-05)`)
 
 // ==================== KIMI K3 MODEL POLICY + NVIDIA KEY ROTATION ====================
 // USER DIRECTIVE 2026-08-31: "mọi Agents, mọi tác vụ từ giờ sẽ sử dụng lõi Kimi k3,
@@ -1778,26 +1787,43 @@ console.log(`[LLM] NVIDIA: agent/chat lõi DUY NHẤT kimi-k3 (Kimi-only policy)
 // mới dừng lại... tới khi chuyển qua cả 4 key lại về key đầu tiên, đến khi mỗi key
 // đều đủ 3 lần thì mới dừng lại"
 //
-// USER DIRECTIVE (Kimi-only): "sử dụng kimi làm lõi làm việc DUY NHẤT cho tất cả
-// các agents, nếu api key bị lỗi thì đổi key, KHÔNG fallback model khác"
+// USER DIRECTIVE 2026-08-28 (MỚI NHẤT — thay thế Kimi-only): "tôi nhớ khi còn
+// thiết lập fall back thì việc gọi K3 vẫn ổn định, hiện tại hãy thử thiết lập
+// deepseek v4 pro (đã kiểm tra trên build.nvidia.com), deepseek v4 flash,
+// minimax lần lượt làm fall back cho k3" — khôi phục FALLBACK CHAIN.
 //
 // Chính sách:
-//   1. MỌI agents + MỌI tác vụ (chat/ReAct/team/cron/phân loại/auto-learn...) dùng
-//      lõi kimi-k3 LÀ DUY NHẤT — cấu hình model riêng của từng agent bị override.
+//   1. MỌI agents + MỌI tác vụ (chat/ReAct/team/cron...) dùng lõi kimi-k3 làm
+//      lõi CHÍNH — cấu hình model riêng của từng agent bị override.
 //      (Tắt bằng ENFORCE_KIMI_K3=false để quay về cấu hình per-agent.)
 //   2. Khi 1 attempt gặp vấn đề (429 rate-limit, 5xx, 401/403, timeout, network...)
 //      → CHUYỂN NGAY sang key kế tiếp: key1→key2→key3→key4→key1→key2→...
 //   3. MỖI key được thử tối đa KEY_FAILURES_PER_KEY (3) lần trong 1 chuỗi xoay vòng.
 //      Chỉ khi MỌI key đều đã fail đủ 3 lần (4 key × 3 = 12 attempts) mới dừng.
-//   4. KIMI-ONLY: KHÔNG fallback sang model khác (deepseek/minimax/z-ai-sdk đều đã
-//      BỎ) — lỗi được surface trung thực để user biết đúng tình trạng key.
+//   4. FALLBACK CHAIN (user directive 2026-08-28): khi kimi-k3 cạn chuỗi xoay vòng
+//      key → chuyển TUẦN TỰ sang deepseek-v4-pro-0813 → deepseek-v4-flash-0731 →
+//      minimax-m3 (mỗi lõi lại xoay vòng đủ 4 key × 3 lần). Lý do: khi còn
+//      fallback, kimi-k3 ổn định vì traffic được giảm tải khi 429; chính sách
+//      Kimi-only trước đó khiến mọi call dồn vào kimi-k3 → 4 key cháy đồng loạt
+//      (NIM chặn kimi-k3 dễ hơn các model khác — 40 RPM + RPD thấp hơn mặt bằng).
 //   5. Extraction pipeline dùng 2 lõi riêng (user directive 2026-09-05):
 //      nemotron-3-ultra-550b (chính) + openai/gpt-oss-120b (fallback) — qua
 //      callLLMSlot, TUYỆT ĐỐI không dùng kimi-k3; override bằng env
 //      EXTRACTION_MODEL / EXTRACTION_FALLBACK_MODEL nếu muốn.
 
-/** Lõi mặc định cho MỌI agents, MỌI tác vụ (user directive 2026-08-31) */
+/** Lõi CHÍNH cho MỌI agents, MỌI tác vụ (user directive 2026-08-31) */
 export const KIMI_K3_MODEL = 'moonshotai/kimi-k3'
+
+/** Chuỗi fallback tuần tự cho kimi-k3 (USER DIRECTIVE 2026-08-28):
+ *  deepseek-v4-pro-0813 → deepseek-v4-flash-0731 → minimax-m3.
+ *  Mỗi lõi fallback được xoay vòng ĐẦY ĐỦ 4 key × 3 lần trước khi chuyển lõi kế.
+ *  deepseek-v4-pro-0813 = bản MỚI verified live 2026-08-28 qua GET /v1/models
+ *  (bản cũ 'deepseek-v4-pro' không suffix đã 404 từ 2026-08-27). */
+export const AGENT_FALLBACK_CHAIN = [
+  'deepseek-ai/deepseek-v4-pro-0813',
+  'deepseek-ai/deepseek-v4-flash-0731',
+  'minimaxai/minimax-m3',
+]
 
 /** Số lần fail tối đa MỖI key trong 1 chuỗi xoay vòng (user: "mỗi key 3 đủ 3 lần") */
 export const KEY_FAILURES_PER_KEY = 3
@@ -1816,10 +1842,64 @@ export function isKimiK3Enforced(): boolean {
   return (process.env.ENFORCE_KIMI_K3 ?? 'true').trim().toLowerCase() !== 'false'
 }
 
-/** (ĐÃ BỎ — Kimi-only) Chuỗi backup cores deepseek/minimax không còn được dùng
- *  ở enforced path: khi kimi-k3 fail đủ chuỗi xoay vòng key, trả lỗi — KHÔNG
- *  chuyển model. Danh sách NVIDIA_AGENT_MODELS chỉ còn ý nghĩa ở legacy path
- *  (ENFORCE_KIMI_K3=false). */
+/** (KHÔI PHỤC 2026-08-28) Chuỗi backup cores deepseek/minimax ĐƯỢC DÙNG ở
+ *  enforced path qua callAgentModelWithFallbackChain() — xem AGENT_FALLBACK_CHAIN
+ *  ở trên. Giai đoạn Kimi-only "không fallback model khác" đã kết thúc. */
+
+/**
+ * Gọi lõi agent theo chuỗi fallback đầy đủ (USER DIRECTIVE 2026-08-28):
+ *   kimi-k3 (chính) → deepseek-v4-pro-0813 → deepseek-v4-flash-0731 → minimax-m3
+ * Mỗi lõi được xoay vòng ĐẦY ĐỦ 4 key × KEY_FAILURES_PER_KEY lần trước khi chuyển
+ * lõi kế tiếp. Circuit breaker hard-block giúp lõi bị NIM chặn cứng 429-instant
+ * fail NGAY (ms) — chuỗi không tốn thời gian chờ khi kimi-k3 bị chặn.
+ * abortCheck được kiểm tra TRƯỚC MỖI lõi — người dùng bấm Dừng cắt ngang ngay.
+ */
+async function callAgentModelWithFallbackChain(
+  prompt: string,
+  systemPrompt: string | undefined,
+  options: LLMCallOptions | undefined,
+  taskLabel: string,
+): Promise<LLMResult> {
+  const chain = [KIMI_K3_MODEL, ...AGENT_FALLBACK_CHAIN]
+  const failedModels: string[] = []
+
+  for (let i = 0; i < chain.length; i++) {
+    const model = chain[i]
+
+    // Người dùng bấm Dừng → cắt ngang chuỗi NGAY, không đốt thêm call/key
+    if (options?.abortCheck && options.abortCheck()) {
+      console.log(`[LLM] Agent fallback chain (task "${taskLabel}"): HỦY (abortCheck) tại lõi #${i + 1} ${model}`)
+      return {
+        content: '',
+        provider: 'none',
+        model,
+        error: `Task "${taskLabel}" aborted by user`,
+      }
+    }
+
+    const result = await callModelWithKeyRotation(model, prompt, systemPrompt, options, { taskLabel })
+    if (result && (result.content || (result.tool_calls && result.tool_calls.length > 0))) {
+      if (i > 0) {
+        console.log(`[LLM] Agent fallback chain (task "${taskLabel}"): lõi #${i + 1} ${model} THÀNH CÔNG (fallback) — các lõi trước đã fail: ${failedModels.join(' → ')}`)
+      }
+      return result
+    }
+
+    failedModels.push(model)
+    console.warn(`[LLM] Agent fallback chain (task "${taskLabel}"): lõi ${model} thất bại${i < chain.length - 1 ? ' → chuyển lõi fallback kế tiếp' : ' (HẾT chuỗi)'}`)
+  }
+
+  // Toàn bộ chuỗi thất bại — báo lỗi trung thực kèm trạng thái circuit breaker
+  const breaker = isModelHardBlocked(KIMI_K3_MODEL)
+  return {
+    content: '',
+    provider: 'none',
+    model: KIMI_K3_MODEL,
+    error: breaker.blocked
+      ? `🔴 NVIDIA NIM đang CHẶN CỨNG ${KIMI_K3_MODEL} (429 instant trên TẤT CẢ key — circuit breaker). ${breaker.reason} Đã thử toàn bộ chuỗi fallback (${AGENT_FALLBACK_CHAIN.join(', ')}) — cũng thất bại.`
+      : `CẢ chuỗi lõi agent đều thất bại sau xoay vòng đầy đủ mỗi key (${chain.join(' → ')}; mỗi lõi xoay đủ ${KEY_FAILURES_PER_KEY} lần/key). Vui lòng kiểm tra hạn mức NVIDIA NIM (build.nvidia.com → Credits) hoặc API keys.`,
+  }
+}
 
 /** Kết quả 1 attempt gọi NIM thô */
 type NvidiaAttemptStatus =
@@ -2987,28 +3067,11 @@ export async function callLLM(
     }
   }
 
-  // ===== KIMI-ONLY MODEL POLICY (user directive: Kimi là lõi DUY NHẤT) =====
-  // Mọi tác vụ dùng lõi kimi-k3 + xoay vòng 4 key (mỗi key 3 lần). Hết chuỗi
-  // xoay vòng → trả lỗi — KHÔNG fallback model khác (deepseek/minimax/z-ai-sdk
-  // đều đã bỏ theo directive).
+  // ===== KIMI-K3 CHÍNH + FALLBACK CHAIN (user directive 2026-08-28) =====
+  // kimi-k3 là lõi chính + xoay vòng 4 key (mỗi key 3 lần). Cạn chuỗi key →
+  // fallback tuần tự deepseek-v4-pro → deepseek-v4-flash → minimax-m3.
   if (isKimiK3Enforced()) {
-    const result = await callModelWithKeyRotation(KIMI_K3_MODEL, prompt, systemPrompt, options, { taskLabel })
-    if (result && (result.content || (result.tool_calls && result.tool_calls.length > 0))) {
-      return result
-    }
-
-    console.warn(`[LLM] ${KIMI_K3_MODEL} thất bại (task "${taskLabel}") sau xoay vòng đủ mọi key — KIMI-ONLY: không fallback model khác`)
-    // Hard-block 429 (circuit breaker) → lỗi phải chỉ đúng nguyên nhân để user
-    // khắc phục ở đúng chỗ (tài khoản NIM), không phải mò mẫm trong app
-    const breaker = isModelHardBlocked(KIMI_K3_MODEL)
-    return {
-      content: '',
-      provider: 'none',
-      model: KIMI_K3_MODEL,
-      error: breaker.blocked
-        ? `🔴 NVIDIA NIM đang CHẶN CỨNG ${KIMI_K3_MODEL} (429 ngay lập tức trên TẤT CẢ key, đã xác nhận qua circuit breaker). ${breaker.reason} Agent tạm không thể làm việc theo chính sách Kimi-only.`
-        : `Kimi k3 (${KIMI_K3_MODEL}) thất bại sau khi xoay vòng đủ mọi NVIDIA key (mỗi key ${KEY_FAILURES_PER_KEY} lần) — chính sách Kimi-only: không fallback model khác. Vui lòng kiểm tra lại API keys.`,
-    }
+    return callAgentModelWithFallbackChain(prompt, systemPrompt, options, taskLabel)
   }
 
   // ===== LEGACY PATH (ENFORCE_KIMI_K3=false) — hành vi cũ =====
@@ -3129,33 +3192,21 @@ export async function callLLMForAgent(
 ): Promise<LLMResult> {
   const { provider, model } = agentConfig
 
-  // ===== KIMI-ONLY MODEL POLICY (user directive: Kimi là lõi DUY NHẤT) =====
-  // "mọi Agents dùng kimi; key lỗi thì đổi key; KHÔNG fallback model khác" —
-  // cấu hình model riêng của agent bị OVERRIDE hoàn toàn; kimi-k3 xoay vòng đủ
-  // 4 key × 3 lần, hết chuỗi → trả lỗi (không deepseek/minimax/z-ai-sdk).
+  // ===== KIMI-K3 CHÍNH + FALLBACK CHAIN (user directive 2026-08-28) =====
+  // "deepseek v4 pro, deepseek v4 flash, minimax lần lượt làm fall back cho k3" —
+  // cấu hình model riêng của agent vẫn bị override về kimi-k3 (lõi chính), nhưng
+  // khi kimi-k3 cạn chuỗi xoay vòng key thì fallback tuần tự qua 3 lõi kia
+  // (callAgentModelWithFallbackChain).
   if (isKimiK3Enforced()) {
     if (model !== KIMI_K3_MODEL) {
-      console.log(`[LLM] MODEL POLICY: agent cấu hình ${provider}/${model} → override → ${KIMI_K3_MODEL} (Kimi k3 là lõi DUY NHẤT cho mọi agents)`)
+      console.log(`[LLM] MODEL POLICY: agent cấu hình ${provider}/${model} → override → ${KIMI_K3_MODEL} (lõi chính) + fallback chain [${AGENT_FALLBACK_CHAIN.join(' → ')}]`)
     }
-    const result = await callModelWithKeyRotation(KIMI_K3_MODEL, prompt, systemPrompt, options, { taskLabel: `agent:${model}` })
-    if (result && (result.content || (result.tool_calls && result.tool_calls.length > 0))) {
-      const tcCount = result.tool_calls?.length ?? 0
-      console.log(`[LLM] Agent dùng lõi ${KIMI_K3_MODEL} ✓ (${tcCount} tool_calls) — agent cấu hình gốc: ${provider}/${model}`)
-      return result
+    const result = await callAgentModelWithFallbackChain(prompt, systemPrompt, options, `agent:${model}`)
+    const tcCount = result.tool_calls?.length ?? 0
+    if (result.content || tcCount > 0) {
+      console.log(`[LLM] Agent dùng lõi ${result.model} ✓ (${tcCount} tool_calls) — agent cấu hình gốc: ${provider}/${model}`)
     }
-
-    console.warn(`[LLM] ${KIMI_K3_MODEL} thất bại sau xoay vòng đủ key (agent cấu hình gốc: ${provider}/${model}) — KIMI-ONLY: không fallback model khác`)
-    // Hard-block 429 (circuit breaker) → lỗi chỉ đúng nguyên nhân (tài khoản NIM
-    // chặn model) thay vì gợi ý mò mẫm "kiểm tra API keys"
-    const breaker = isModelHardBlocked(KIMI_K3_MODEL)
-    return {
-      content: '',
-      provider: 'none',
-      model: KIMI_K3_MODEL,
-      error: breaker.blocked
-        ? `🔴 NVIDIA NIM đang CHẶN CỨNG ${KIMI_K3_MODEL} (429 ngay lập tức trên TẤT CẢ key, đã xác nhận qua circuit breaker). ${breaker.reason} Agent tạm không thể làm việc theo chính sách Kimi-only.`
-        : `Kimi k3 (${KIMI_K3_MODEL}) thất bại sau khi xoay vòng đủ mọi NVIDIA key (mỗi key ${KEY_FAILURES_PER_KEY} lần) — chính sách Kimi-only: không fallback model khác. Vui lòng kiểm tra lại API keys.`,
-    }
+    return result
   }
 
   // ===== LEGACY PATH (ENFORCE_KIMI_K3=false) — tôn trọng cấu hình per-agent =====

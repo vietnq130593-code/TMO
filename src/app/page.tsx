@@ -3375,9 +3375,10 @@ const NVIDIA_CORE_CONFIG = {
     headerBg: 'bg-amber-950/60',
     barColor: '#f59e0b',
     models: [
-      { key: 'moonshotai/kimi-k3', label: 'kimi-k3 (lõi DUY NHẤT — Kimi-only)' },
-      { key: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash (đã bỏ — chỉ thống kê lịch sử)' },
-      { key: 'minimaxai/minimax-m3', label: 'minimax-m3 (đã bỏ — chỉ thống kê lịch sử)' },
+      { key: 'moonshotai/kimi-k3', label: 'kimi-k3 (lõi chính)' },
+      { key: 'deepseek-ai/deepseek-v4-pro-0813', label: 'deepseek-v4-pro (fallback #1)' },
+      { key: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash (fallback #2)' },
+      { key: 'minimaxai/minimax-m3', label: 'minimax-m3 (fallback #3)' },
     ],
   },
 } as const
@@ -4355,11 +4356,13 @@ const SMOLAB_MODEL_GROUPS = [
       // 2 extraction cores (user directive 2026-09-05 — kimi-k3 bị cấm cho extraction)
       { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction chính)' },
       { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (extraction fallback)' },
-      // 3 agent/chat cores (user directive 2026-08-27 — gpt-oss-120b đã bỏ,
-      // GLM 5.2/5.3 không dùng được trên NIM: 410 Gone / 404)
-      { id: 'moonshotai/kimi-k3', label: 'Kimi K3 (lõi DUY NHẤT)' },
-      { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash (đã bỏ)' },
-      { id: 'minimaxai/minimax-m3', label: 'MiniMax M3 (đã bỏ)' },
+      // 4 agent/chat cores — kimi-k3 lõi chính + fallback chain tuần tự
+      // (user directive 2026-08-28: "deepseek v4 pro, deepseek v4 flash, minimax
+      // lần lượt làm fall back cho k3"; gpt-oss-120b đã bỏ 2026-08-27)
+      { id: 'moonshotai/kimi-k3', label: 'Kimi K3 (lõi chính)' },
+      { id: 'deepseek-ai/deepseek-v4-pro-0813', label: 'DeepSeek V4 Pro (fallback #1)' },
+      { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash (fallback #2)' },
+      { id: 'minimaxai/minimax-m3', label: 'MiniMax M3 (fallback #3)' },
     ],
   },
 ]
@@ -14542,14 +14545,12 @@ function CodeTabContent() {
     { label: 'Optimize', icon: Zap, prompt: 'Optimize this code for better performance' },
   ]
 
-  // Model options — NVIDIA NIM only (user directive 2026-08-27: Agents/Chat chỉ
-  // dùng 3 lõi sau; nemotron-3-ultra-550b KHÔNG nằm trong danh sách — lõi đó chỉ
-  // dành cho trích xuất dữ liệu; gpt-oss-120b đã bỏ; GLM 5.2/5.3 không dùng được
-  // trên NIM — 410 Gone / 404)
-  // KIMI-ONLY (user directive): kimi-k3 là lõi làm việc DUY NHẤT — server override
-  // mọi agent về kimi-k3, không còn fallback model khác nên selector chỉ 1 lựa chọn.
+  // Model options — NVIDIA NIM only (user directive 2026-08-28: kimi-k3 là lõi
+  // CHÍNH; deepseek-v4-pro-0813 / deepseek-v4-flash / minimax-m3 là fallback
+  // chain TỰ ĐỘNG phía server — selector vẫn 1 lựa chọn vì server override mọi
+  // agent về kimi-k3 rồi tự chuyển lõi khi kimi cạn key)
   const MODEL_OPTIONS = [
-    { value: 'moonshotai/kimi-k3', label: 'Kimi K3 (lõi duy nhất)' },
+    { value: 'moonshotai/kimi-k3', label: 'Kimi K3 (lõi chính + fallback tự động)' },
   ]
 
   return (
