@@ -1,184 +1,151 @@
 /**
- * Tool Analytics Export API
+ * Tool Analytics Export API — Task 20-b rewrite
  *
- * GET /api/tools/analytics/export — Export analytics data as CSV or JSON
+ * GET /api/tools/analytics/export?days=7&format=csv|json
  *
- * Same query params as analytics route plus:
- *   format=csv|json  — output format (default: json)
- *   range=24h|7d|30d|all
- *   agentId=...
- *   toolName=...
+ * Trước đây route này cast `db.toolCallLog` — model KHÔNG tồn tại trong schema →
+ * runtime luôn 500. Từ 20-b export đọc từ bảng ToolMetric THẬT (được ghi bởi
+ * recordToolMetric choke-point). KHÔNG có UI consumer (verify bằng grep — chỉ 2
+ * route tools/analytics tự tham chiếu nhau) nên interface được chuẩn hóa theo
+ * param `days` của route chính.
  *
- * For CSV: returns comma-separated text with headers
- * For JSON: returns same structured data as the analytics route
+ * Query params:
+ *   days=7       — số ngày nhìn lại (default 7, max 90)
+ *   format=json  — csv | json (default json)
+ *
+ * Fail-open: lỗi DB → CSV trả header-only 200, JSON trả zero-state 200.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 
-/** Shape log mong đợi của bảng ToolCallLog — model CHƯA có trong schema.prisma.
- *  Truy vấn qua cast; runtime db.toolCallLog undefined → throw → catch → 500
- *  (giữ nguyên behavior hiện tại, chờ schema thêm model). */
-interface ToolCallLogRow {
-  id: string
-  agentId: string
-  agentName: string | null
-  toolName: string
-  toolSource: string
-  success: boolean
-  durationMs: number
-  errorMessage: string | null
-  sessionId: string | null
-  iteration: number | null
-  createdAt: Date
-}
-
-/** Delegate mô tả các method đang dùng — cast từ PrismaClient (model thiếu trong schema) */
-interface ToolCallLogDelegate {
-  findMany(args: {
-    where?: Record<string, unknown>
-    select?: Record<string, boolean>
-    orderBy?: Record<string, string>
-    take?: number
-  }): Promise<ToolCallLogRow[]>
-}
-
 export const dynamic = 'force-dynamic'
 
-/** Valid time ranges */
-const VALID_RANGES = ['24h', '7d', '30d', 'all'] as const
-type ValidRange = (typeof VALID_RANGES)[number]
+const DEFAULT_DAYS = 7
+const MAX_DAYS = 90
+const EXPORT_ROW_LIMIT = 10000 // Safety limit cho export
 
-/** Compute the start date for a given time range */
-function getStartDate(range: ValidRange): Date | null {
-  if (range === 'all') return null
-  const now = new Date()
-  switch (range) {
-    case '24h': return new Date(now.getTime() - 24 * 60 * 60 * 1000)
-    case '7d': return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-    case '30d': return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
-  }
+function parseDays(raw: string | null): number {
+  const parsed = parseInt(raw || '', 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_DAYS
+  return Math.min(parsed, MAX_DAYS)
 }
 
+function escapeCsv(val: unknown): string {
+  const str = val === null || val === undefined ? '' : String(val)
+  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    return `"${str.replace(/"/g, '""')}"`
+  }
+  return str
+}
+
+const CSV_HEADERS = [
+  'id',
+  'toolName',
+  'sessionId',
+  'agentRole',
+  'success',
+  'exitCode',
+  'durationMs',
+  'errorTag',
+  'timestamp',
+]
+
 export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url)
+  const days = parseDays(searchParams.get('days'))
+  const format = searchParams.get('format') || 'json'
+  const to = new Date()
+  const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000)
+
+  if (format !== 'json' && format !== 'csv') {
+    return NextResponse.json(
+      { error: `Invalid format "${format}". Must be json or csv` },
+      { status: 400 },
+    )
+  }
+
+  let logs: Array<{
+    id: string
+    toolName: string
+    sessionId: string
+    agentRole: string
+    success: boolean
+    exitCode: number | null
+    durationMs: number
+    errorTag: string | null
+    timestamp: Date
+  }> = []
+
   try {
-    const { searchParams } = new URL(request.url)
-    const range = (searchParams.get('range') || '24h') as ValidRange
-    const agentId = searchParams.get('agentId') || undefined
-    const toolName = searchParams.get('toolName') || undefined
-    const format = searchParams.get('format') || 'json'
-
-    // Validate range
-    if (!VALID_RANGES.includes(range)) {
-      return NextResponse.json(
-        { error: `Invalid range "${range}". Must be one of: 24h, 7d, 30d, all` },
-        { status: 400 }
-      )
-    }
-
-    // Validate format
-    if (format !== 'json' && format !== 'csv') {
-      return NextResponse.json(
-        { error: `Invalid format "${format}". Must be json or csv` },
-        { status: 400 }
-      )
-    }
-
-    // Build where clause
-    const startDate = getStartDate(range)
-    const where: Record<string, unknown> = {}
-    if (startDate) {
-      where.createdAt = { gte: startDate }
-    }
-    if (agentId && agentId !== 'all') {
-      where.agentId = agentId
-    }
-    if (toolName) {
-      where.toolName = toolName
-    }
-
-    // Fetch all matching logs for export
-    const toolCallLog = (db as unknown as { toolCallLog: ToolCallLogDelegate }).toolCallLog
-    const logs = await toolCallLog.findMany({
-      where,
+    logs = await db.toolMetric.findMany({
+      where: { timestamp: { gte: from } },
       select: {
         id: true,
-        agentId: true,
-        agentName: true,
         toolName: true,
-        toolSource: true,
-        success: true,
-        durationMs: true,
-        errorMessage: true,
         sessionId: true,
-        iteration: true,
-        createdAt: true,
+        agentRole: true,
+        success: true,
+        exitCode: true,
+        durationMs: true,
+        errorTag: true,
+        timestamp: true,
       },
-      orderBy: { createdAt: 'desc' },
-      take: 10000, // Safety limit for exports
-    })
-
-    if (format === 'csv') {
-      // CSV export with all fields
-      const headers = [
-        'id', 'agentId', 'agentName', 'toolName', 'toolSource',
-        'success', 'durationMs', 'errorMessage', 'sessionId',
-        'iteration', 'createdAt',
-      ]
-      const escapeCsv = (val: unknown): string => {
-        const str = val === null || val === undefined ? '' : String(val)
-        // Escape double quotes and wrap in quotes if contains comma, quote, or newline
-        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-          return `"${str.replace(/"/g, '""')}"`
-        }
-        return str
-      }
-
-      const lines: string[] = [headers.join(',')]
-      for (const l of logs) {
-        const row = [
-          escapeCsv(l.id),
-          escapeCsv(l.agentId),
-          escapeCsv(l.agentName),
-          escapeCsv(l.toolName),
-          escapeCsv(l.toolSource),
-          escapeCsv(l.success),
-          escapeCsv(l.durationMs),
-          escapeCsv(l.errorMessage),
-          escapeCsv(l.sessionId),
-          escapeCsv(l.iteration),
-          escapeCsv(l.createdAt.toISOString()),
-        ]
-        lines.push(row.join(','))
-      }
-
-      return new NextResponse(lines.join('\n'), {
-        headers: {
-          'Content-Type': 'text/csv',
-          'Content-Disposition': `attachment; filename="tool-analytics-${range}-${Date.now()}.csv"`,
-        },
-      })
-    }
-
-    // JSON export — return raw logs plus computed summary
-    const totalCalls = logs.length
-    const successCount = logs.filter(l => l.success).length
-    const totalDurationMs = logs.reduce((sum, l) => sum + l.durationMs, 0)
-
-    return NextResponse.json({
-      exportedAt: new Date().toISOString(),
-      range,
-      filters: { agentId: agentId || 'all', toolName: toolName || 'all' },
-      summary: {
-        totalCalls,
-        successRate: totalCalls === 0 ? 0 : Math.round((successCount / totalCalls) * 1000) / 1000,
-        avgDurationMs: totalCalls === 0 ? 0 : Math.round(totalDurationMs / totalCalls),
-      },
-      logs,
-      total: logs.length,
+      orderBy: { timestamp: 'desc' },
+      take: EXPORT_ROW_LIMIT,
     })
   } catch (error) {
-    console.error('[Tools/Analytics/Export] GET error:', error)
-    return NextResponse.json({ error: 'Failed to export analytics' }, { status: 500 })
+    // Fail-open — export dữ liệu rỗng thay vì 500
+    console.error('[Tools/Analytics/Export] GET error (fail-open → empty):', error)
+    logs = []
   }
+
+  if (format === 'csv') {
+    const lines: string[] = [CSV_HEADERS.join(',')]
+    for (const l of logs) {
+      lines.push(
+        [
+          escapeCsv(l.id),
+          escapeCsv(l.toolName),
+          escapeCsv(l.sessionId),
+          escapeCsv(l.agentRole),
+          escapeCsv(l.success),
+          escapeCsv(l.exitCode),
+          escapeCsv(l.durationMs),
+          escapeCsv(l.errorTag),
+          escapeCsv(l.timestamp.toISOString()),
+        ].join(','),
+      )
+    }
+    return new NextResponse(lines.join('\n'), {
+      headers: {
+        'Content-Type': 'text/csv',
+        'Content-Disposition': `attachment; filename="tool-analytics-${days}d-${Date.now()}.csv"`,
+      },
+    })
+  }
+
+  // JSON export — raw logs + summary
+  const totalCalls = logs.length
+  const successCount = logs.filter(l => l.success).length
+  const totalDurationMs = logs.reduce((sum, l) => sum + l.durationMs, 0)
+
+  return NextResponse.json({
+    exportedAt: new Date().toISOString(),
+    period: { days, from: from.toISOString(), to: to.toISOString() },
+    summary: {
+      totalCalls,
+      successRate:
+        totalCalls === 0
+          ? 0
+          : Math.round((successCount / totalCalls) * 1000) / 1000,
+      avgDurationMs: avgDurationSafe(totalDurationMs, totalCalls),
+    },
+    logs,
+    total: logs.length,
+  })
+}
+
+function avgDurationSafe(totalDurationMs: number, count: number): number {
+  return count === 0 ? 0 : Math.round(totalDurationMs / count)
 }

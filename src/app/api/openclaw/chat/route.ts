@@ -55,6 +55,9 @@ import { rewriteQuery } from '@/lib/kb-routing/query-rewriter'
 import { isFlagEnabled } from '@/lib/feature-flags'
 import { writebackToKBTransactionally } from '@/lib/kb-routing/transactional-writeback'
 import { buildWorkspaceContext } from '@/lib/workspace/workspace-context'
+// Task 20-c (self-evaluation) — link AgentRunRecord với ChatMessage id sau khi
+// message persist (fire-and-forget, fail-open — qua raw-SQL bridge metrics-db)
+import { updateLatestAgentRunRecord } from '@/lib/metrics-db'
 
 export const dynamic = 'force-dynamic'
 
@@ -1020,11 +1023,32 @@ export async function POST(request: NextRequest) {
         }
 
         // Background: Memory & Learning
+        // Task 20-c — confidence THẬT (evaluator của goal-loop ?? KB retrieval):
+        // dùng cho response JSON + persist vào message metadata (UI badge hiển
+        // thị đúng khi reload session; undefined → JSON.stringify bỏ key →
+        // badge tự ẩn — hết 0.6 giả hardcode)
+        const finalConfidence = reactResult.goalLoop?.evaluatorConfidence ?? kbSearchResult?.confidence ?? undefined
         if (agentProfileId && sessionId) {
           // 2026-09-01: user message đã lưu ở ĐẦU request → chỉ lưu assistant
           saveChatMessages(sessionId, [
-            { role: 'assistant', content, model: agentModel, provider: agentProvider, metadata: { reactIterations: reactResult.iterations, toolCallsExecuted: reactResult.toolCallsExecuted, agentRun: agentRunSummary, goalLoop: reactResult.goalLoop } },
-          ]).catch(err => console.warn('[Memory] Failed to save chat messages:', err instanceof Error ? err.message : String(err)))
+            { role: 'assistant', content, model: agentModel, provider: agentProvider, metadata: { confidence: finalConfidence, reactIterations: reactResult.iterations, toolCallsExecuted: reactResult.toolCallsExecuted, agentRun: agentRunSummary, goalLoop: reactResult.goalLoop } },
+          ])
+            .then(async () => {
+              // Task 20-c — link AgentRunRecord của run này với ChatMessage id
+              // vừa persist (message mới nhất của session). Fire-and-forget,
+              // fail-open — metrics không được phép làm hỏng chat flow.
+              try {
+                const latest = await db.chatMessage.findFirst({
+                  where: { sessionId, role: 'assistant' },
+                  orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+                  select: { id: true },
+                })
+                if (latest) {
+                  await updateLatestAgentRunRecord(sessionId, { messageId: latest.id })
+                }
+              } catch { /* fail-open */ }
+            })
+            .catch(err => console.warn('[Memory] Failed to save chat messages:', err instanceof Error ? err.message : String(err)))
 
           // KIMI-ONLY: lỗi LLM → không extract memory từ error message
           if (!llmErrContent && !isTrivialExchange(lastUserContent, content)) {
@@ -1053,6 +1077,10 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        // Task 20-c — confidence THẬT (tính ở trên) thay hardcode 0.6:
+        // ưu tiên verdict của trọng tài độc lập (goal-loop evaluator), fallback
+        // KB retrieval confidence. Không có nguồn nào → KHÔNG set field
+        // (UI badge tự ẩn khi null — page.tsx check msg.confidence != null).
         return NextResponse.json({
           content,
           model: agentModel,
@@ -1060,7 +1088,7 @@ export async function POST(request: NextRequest) {
           sessionId: sessionId || `session-${Date.now()}`,
           agentProfileId: agentProfileId || undefined,
           sources: [],
-          confidence: 0.6,
+          ...(finalConfidence !== undefined ? { confidence: finalConfidence } : {}),
           kbResults: 'agent-react',
           reactIterations: reactResult.iterations,
           toolCallsExecuted: reactResult.toolCallsExecuted,

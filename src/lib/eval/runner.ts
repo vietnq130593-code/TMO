@@ -22,6 +22,8 @@ import { db } from '@/lib/db'
 import { callLLM } from '@/lib/llm'
 import { searchUserKB } from '@/lib/kb-routing/kb-access'
 import { judgeAnswer } from './judges'
+// Task 20-c — auto-retrain calibration model sau eval run (fail-open)
+import { trainCalibrationModel } from '@/lib/calibration-train'
 
 /** System-under-test answer generator — a dedicated Agent/Chat core.
  *  MUST be different from all judge models (see judges.ts) to avoid circular
@@ -220,13 +222,13 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
       const isNegativeCase = evalCase.category === 'negative'
 
       // ---- Step 1: retrieval (production path) ----
-      let kb: { chunks: Array<{ text: string; score: number }>; confidence: number }
+      let kb: { chunks: Array<{ text: string; score: number }>; confidence: number; rawConfidence?: number }
       try {
         // Task 13E: pass EVAL_AGENT_ID — searchUserKB gates entity search +
         // memory recall on agentId; without it every eval case measured a
         // KB with the (backfilled) semantic entity layer silently disabled.
         const result = await searchUserKB(evalCase.question, EVAL_AGENT_ID)
-        kb = { chunks: result.chunks, confidence: result.confidence }
+        kb = { chunks: result.chunks, confidence: result.confidence, rawConfidence: result.rawConfidence }
       } catch (err) {
         console.warn(`[EvalRunner] searchUserKB failed for case ${evalCase.id}: ${err instanceof Error ? err.message : String(err)}`)
         kb = { chunks: [], confidence: 0 }
@@ -313,7 +315,7 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
           hallucinationDetected,
           coverage,
           answered,
-          rawConfidence: kb.confidence, // Prop 3.5 — calibration training X
+          rawConfidence: kb.rawConfidence ?? kb.confidence, // Prop 3.5 — calibration training X (20-c fix: giá trị TRƯỚC calibration, hết feedback-loop)
           latencyMs,
         },
       })
@@ -370,6 +372,23 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
       `avgF1=${(processed > 0 ? sumF1 / processed : 0).toFixed(3)}, ` +
       `hallucinations=${hallucinationCount}`
     )
+
+    // Task 20-c — AUTO-RETRAIN calibration sau eval run hoàn tất: đủ ≥10
+    // EvalResult usable là train lại CalibrationModel (fail-open tuyệt đối —
+    // retrain fail KHÔNG được làm fail eval run đã completed).
+    try {
+      void trainCalibrationModel()
+        .then(train => {
+          if (train.trained) {
+            console.log(`[EvalRunner] Auto-retrain calibration OK: intercept=${train.intercept.toFixed(4)}, coef=${train.coef.toFixed(4)}, sampleSize=${train.sampleSize} (kb-access áp khi sampleSize ≥ 20)`)
+          } else {
+            console.log(`[EvalRunner] Auto-retrain skipped: ${train.error} (usable=${train.usable}/${train.total})`)
+          }
+        })
+        .catch(trainErr => {
+          console.warn('[EvalRunner] Auto-retrain calibration failed (fail-open):', trainErr instanceof Error ? trainErr.message : String(trainErr))
+        })
+    } catch { /* fail-open */ }
   } catch (err) {
     // Catastrophic error — mark the run failed.
     const message = err instanceof Error ? err.message : String(err)

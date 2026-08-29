@@ -64,6 +64,17 @@ import {
   recordAgentThought,
   isSessionCancelled,
 } from '@/lib/agent-run-tracker'
+// Task 20-c (self-evaluation) — persist lifecycle AgentRunRecord (start row +
+// end update, dedup với tracker qua dbPersistBy:'caller') + ArbiterVerdict mỗi
+// chu kỳ EVALUATE + resolve outcome khi run kết thúc. Mọi write fire-and-forget
+// fail-open qua raw-SQL bridge (metrics-db) — không được phép làm hỏng loop.
+import {
+  insertAgentRunRecord,
+  insertAgentRunRecordRunning,
+  updateLatestAgentRunRecord,
+  insertArbiterVerdict,
+  resolveArbiterVerdicts,
+} from '@/lib/metrics-db'
 // WORKING MEMORY (HOT) — user request 2026-08-28: ghi nhận quá trình làm việc
 // (tool đã chạy, kết quả ra sao) vào WorkingMemory để (a) request sau trong cùng
 // session KHÔNG phải đọc/làm lại — tiết kiệm token, (b) hết phiên promote lên
@@ -298,6 +309,25 @@ function buildOrchestrationProtocol(hasDispatch: boolean, hasCreate: boolean): s
   return lines.join('\n')
 }
 
+/**
+ * [20-c] CONFIDENCE PROTOCOL — kỷ luật khai báo nguồn + mức chắc chắn trung thực.
+ * Appended vào system prompt của executor agent (mọi agents chạy goal-loop).
+ * Tag nguồn cho phép phân loại claim (verified-by-tool / KB / model-prior) —
+ * nền cho calibration claim-level (roadmap) + chống overconfidence mặc định.
+ */
+function buildConfidenceProtocol(): string {
+  return `
+
+🎯 CONFIDENCE PROTOCOL (bắt buộc):
+- Mỗi nhận định quan trọng trong câu trả lời PHẢI gắn nhãn nguồn:
+  [verified-by-tool] = đã kiểm chứng bằng tool thật (đọc lại file, chạy lệnh, test)
+  [KB] = trích từ knowledge base/tài liệu người dùng cung cấp
+  [model-prior] = suy đoán từ kiến thức có sẵn của model (chưa kiểm chứng)
+- Cuối phản hồi LUÔN có đúng 1 dòng: "Confidence: <0-100>%" phản ánh THẬT mức chắc chắn của bạn:
+  ≥85% = có bằng chứng tool trực tiếp · 60-85% = bằng chứng gián tiếp/KB · 35-60% = suy luận · <35% = đoán mò (nên đề xuất cách verify thêm).
+- KHÔNG mặc định tự tin 90% — overconfidence là lỗi nghiêm trọng. Trung thực về những gì chưa kiểm chứng được.`
+}
+
 /** Directive nối tiếp chu kỳ — chẩn đoán + kế hoạch mới từ evaluator */
 function buildContinuationDirective(v: EvalVerdict, cycle: number, cutMidWork: boolean): string {
   const missing = v.missing.length > 0 ? v.missing.map(m => `- ${m}`).join('\n') : '- (trọng tài không liệt kê cụ thể — tự rà soát lại mục tiêu)'
@@ -325,6 +355,7 @@ Nguyên tắc SẮT:
 4. Agent KHÔNG kiểm định (không có tool nào xác nhận kết quả) → "verified": false → với mục tiêu hành động thì "complete": false.
 5. "missing" = những gì còn thiếu so với mục tiêu. "rootCause" = vấn đề nằm chính xác ở đâu (bước nào fail / thiếu gì / sai chỗ nào). "nextPlan" = các bước khắc phục cụ thể cho chu kỳ kế tiếp.
 6. Công cụ kiểm định FAIL (type_check/lint/run_tests lỗi) KHÔNG tự động là "bằng chứng đã kiểm định": chỉ tin khi kết quả chứa errorCount/thông báo lỗi CỤ THỂ; nếu agent không trích được lỗi cụ thể (output bị cắt / nguyên nhân mơ hồ như "tsc fail") → "verified": false và ghi rõ vào "missing".
+7. "confidence" phải CALIBRATED trung thực — đây là XÁC SUẤT dự đoán của bạn, không phải mức độ mong muốn: đa số trường hợp "tự tin nhưng sai" nằm ở 0.6-0.8 chứ KHÔNG phải 0.95. Chỉ ≥0.9 khi bằng chứng tool trực tiếp khớp hoàn toàn mục tiêu; thiếu bằng chứng → ≤0.5.
 
 Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích thêm):
 {"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."]}`
@@ -797,15 +828,33 @@ export async function runGoalDrivenLoop(params: {
     (hasDelegation ? buildDelegationProtocol() : '') +
     (hasOrchestration
       ? buildOrchestrationProtocol(effectiveTools.includes('dispatch_agent'), effectiveTools.includes('create_agent'))
-      : '')
+      : '') +
+    buildConfidenceProtocol()
 
   // ===== Thought Process tracking — 1 run cho toàn bộ goal loop =====
+  // Task 20-c: dbPersistBy 'caller' → tracker KHÔNG insert AgentRunRecord khi
+  // run kết thúc (goal-loop tự insert lúc start + update đầy đủ metadata lúc
+  // end) — đảm bảo 1 chat run = đúng 1 row AgentRunRecord.
   const runId = startAgentRun({
     sessionId: agentSessionId,
     agentName,
     task: userMessage,
     mode: 'standalone',
+    dbPersistBy: 'caller',
   })
+  // Task 20-c — INSERT row AgentRunRecord 'running' lúc START: runs.active
+  // (Runtime Metrics panel) ≠ 0 trong lúc agent đang chạy. Fire-and-forget,
+  // fail-open — metrics không được phép làm hỏng loop.
+  if (agentSessionId) {
+    try {
+      void insertAgentRunRecordRunning({
+        sessionId: agentSessionId,
+        agentId,
+        agentName,
+        startedAt: new Date(startedAt),
+      }).catch(() => { /* fail-open */ })
+    } catch { /* fail-open */ }
+  }
   let runEnded = false
   const endRun = (status: 'done' | 'error' | 'cancelled') => {
     if (runEnded) return
@@ -1137,7 +1186,9 @@ export async function runGoalDrivenLoop(params: {
     // [C] VERIFY GUARD — harness override: evaluator kết luận "hoàn thành"
     // nhưng có thao tác SỬA (file/shell/git) sau lần kiểm định cuối mà chưa
     // verify lại → hạ xuống chưa đạt (evaluator có thể sót — harness thì không)
+    let forcedDowngrade = false // Task 20-c — flag cho ArbiterVerdict.forcedDowngrade
     if (verdict.complete && lastModifyOrdinal > lastVerifyOrdinal) {
+      forcedDowngrade = true
       verdict = {
         ...verdict,
         complete: false,
@@ -1152,6 +1203,29 @@ export async function runGoalDrivenLoop(params: {
     }
 
     lastVerdict = verdict
+
+    // Task 20-c — PERSIST VERDICT mỗi chu kỳ: verdict EFFECTIVE (sau verify-guard)
+    // là dự đoán P(complete)=confidence của trọng tài. Khi run kết thúc,
+    // resolveArbiterVerdicts() ghi outcome (confirmed/refuted) → dữ liệu tính
+    // Brier/ECE calibration của trọng tài. Fire-and-forget, fail-open.
+    if (agentSessionId) {
+      try {
+        void insertArbiterVerdict({
+          sessionId: agentSessionId,
+          agentName,
+          cycle,
+          complete: verdict.complete,
+          confidence: verdict.confidence,
+          verified: verdict.verified,
+          missing: JSON.stringify(verdict.missing),
+          rootCause: forcedDowngrade && verdict.rootCause
+            ? `${verdict.rootCause} (harness downgrade)`
+            : verdict.rootCause || null,
+          forcedDowngrade,
+        }).catch(() => { /* fail-open — verdict persist không được phép làm hỏng loop */ })
+      } catch { /* fail-open */ }
+    }
+
     recordAgentThought(
       agentSessionId,
       verdict.complete
@@ -1347,6 +1421,67 @@ export async function runGoalDrivenLoop(params: {
   )
 
   endRun(stopReason === 'error' ? 'error' : stopReason === 'cancelled' ? 'cancelled' : 'done')
+
+  // ===== Task 20-c — wire metadata THẬT vào AgentRunRecord + resolve verdicts =====
+  // Goal-loop là nguồn sự thật lifecycle của chat run (tracker đã bỏ qua qua
+  // dbPersistBy:'caller' → 1 run = đúng 1 row): UPDATE row 'running' inserted
+  // lúc start bằng đầy đủ metadata (nếu start-insert fail → insert full row);
+  // RESOLVE outcome các ArbiterVerdict của session (confirmed/refuted) → dữ
+  // liệu Brier/ECE của trọng tài. Toàn bộ fire-and-forget, fail-open.
+  if (agentSessionId) {
+    try {
+      const runComplete = stopReason === 'complete'
+      const runStatus = runComplete
+        ? 'completed'
+        : stopReason === 'error'
+          ? 'failed'
+          : stopReason === 'cancelled'
+            ? 'cancelled'
+            : 'completed'
+      const toolFailures = evidence.filter(e => e.kind === 'tool' && e.success === false).length
+      const endCompletedAt = new Date()
+      void (async () => {
+        const updated = await updateLatestAgentRunRecord(agentSessionId, {
+          status: runStatus,
+          stopReason,
+          cycles: cyclesAttempted,
+          tokensUsed,
+          toolCalls: totalToolCalls,
+          toolFailures,
+          durationMs: elapsedMs,
+          evaluatorConfidence: lastVerdict?.confidence ?? null,
+          complete: runComplete,
+          startedAt: new Date(startedAt),
+          completedAt: endCompletedAt,
+        })
+        if (updated === 0) {
+          // Row 'running' lúc start insert thất bại (DB lỗi tạm thời) → insert
+          // full row lúc end — vẫn đảm bảo 1 run = 1 row AgentRunRecord
+          await insertAgentRunRecord({
+            sessionId: agentSessionId,
+            agentId,
+            agentName,
+            status: runStatus,
+            stopReason,
+            toolCalls: totalToolCalls,
+            toolFailures,
+            durationMs: elapsedMs,
+            complete: runComplete,
+            startedAt: new Date(startedAt),
+            completedAt: endCompletedAt,
+            cycles: cyclesAttempted,
+            tokensUsed,
+            evaluatorConfidence: lastVerdict?.confidence ?? null,
+          })
+        }
+      })().catch(() => { /* fail-open — metrics không được phép làm hỏng response */ })
+      void resolveArbiterVerdicts(agentSessionId, runComplete, stopReason)
+        .then(n => {
+          if (n > 0) console.log(`[GoalLoop] ${agentName} resolved ${n} arbiter verdict(s) → outcome theo run ${stopReason} (${runComplete ? 'complete' : 'incomplete'})`)
+        })
+        .catch(() => { /* fail-open */ })
+    } catch { /* fail-open */ }
+  }
 
   return {
     content,

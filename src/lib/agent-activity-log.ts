@@ -15,7 +15,16 @@
  *
  * In-memory (không DB) — đủ cho mục đích hiển thị realtime, tự giới hạn
  * kích thước (ring buffer 300 entries).
+ *
+ * Task 20-b (self-monitoring): MỖI entry ghi vào ring buffer cũng được persist
+ * vào bảng ToolMetric (SQLite) qua recordToolMetric() — fire-and-forget,
+ * fail-open. Đây là choke-point DUY NHẤT mà mọi tool execution chảy qua
+ * (executeTool() là caller duy nhất hiện tại) → mọi tool call hiện lên
+ * Terminal feed cũng land vào ToolMetric 1:1, sống sót qua restart. Mọi entry
+ * của buffer này THEO HỢP ĐỒNG là 1 tool execution thật (không có event non-tool).
  */
+
+import { recordToolMetric } from '@/lib/tool-metrics-recorder'
 
 export interface AgentActivityEntry {
   id: string
@@ -86,6 +95,18 @@ export function recordAgentActivity(entry: {
   if (buf.length > MAX_ENTRIES) {
     buf.splice(0, buf.length - MAX_ENTRIES)
   }
+
+  // Task 20-b — persist ToolMetric (fire-and-forget, fail-open bên trong;
+  // khi tool FAIL thì resultPreview chứa message lỗi → errorTag dòng đầu).
+  recordToolMetric({
+    toolName: recorded.tool,
+    sessionId: recorded.sessionId,
+    agentRole: recorded.agentName,
+    success: recorded.success,
+    durationMs: recorded.durationMs,
+    error: recorded.success ? undefined : recorded.resultPreview,
+  })
+
   return recorded
 }
 

@@ -977,6 +977,82 @@ model ToolMetric {
   @@index([success])
 }
 
+/// Task 20-b (self-monitoring) — persist run lifecycle của mỗi agent run
+/// (chat goal-loop / team workflow). Trước đây goal-loop metadata (cycles,
+/// stopReason, evaluatorConfidence, tokensUsed...) chỉ sống trong
+/// ChatMessage.metadata JSON + agent-run-tracker in-memory (mất khi restart).
+/// AgentRunRecord ghi 1 row/run khi run KẾT THÚC (endAgentRun / user cancel).
+/// v1 (20-b): tokensUsed/evaluatorConfidence/cycles = null — task 20-c sẽ wire
+/// goal-loop metadata thật; stopReason v1 là heuristic map từ tracker status
+/// (complete|error|cancelled), các lý do budget (max_cycles|time_budget|
+/// token_budget|no_progress) chờ 20-c.
+model AgentRunRecord {
+  id            String   @id @default(cuid())
+  sessionId     String
+  /// ChatMessage id của user message gốc (20-c wire — v1 null)
+  messageId     String?
+  agentId       String?
+  agentName     String?
+  /// running | completed | failed | cancelled
+  status        String?
+  /// complete | max_cycles | time_budget | token_budget | no_progress | cancelled | error
+  stopReason    String?
+  cycles        Int?
+  tokensUsed    Int?
+  toolCalls     Int?
+  toolFailures  Int?
+  durationMs    Int?
+  evaluatorConfidence Float?
+  complete      Boolean?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+  @@index([createdAt])
+  @@index([stopReason])
+}
+
+/// Task 20-c (self-evaluation) — persist verdict của TRỌNG TÀI ĐỘC LẬP (EVALUATE
+/// step trong agent-goal-loop) mỗi chu kỳ. Mỗi verdict là 1 DỰ ĐOÁN của trọng
+/// tài: P(mục tiêu hoàn thành) = confidence. Khi run kết thúc thật sự,
+/// resolveArbiterVerdicts() ghi outcome (confirmed|refuted) bằng cách đối chiếu
+/// verdict.complete với run kết quả cuối → dữ liệu để tính Brier/ECE calibration
+/// của trọng tài (GET /api/eval/calibration). Trước đây verdict chỉ sống trong
+/// ChatMessage.metadata.goalLoop JSON — không đo được sai số dự đoán.
+model ArbiterVerdict {
+  id          String    @id @default(cuid())
+  sessionId   String
+  /// ChatMessage id của assistant reply (link sau khi message persist — nullable)
+  messageId   String?
+  agentName   String?
+  /// Chu kỳ EVALUATE thứ mấy của run (1-based)
+  cycle       Int
+  /// Verdict EFFECTIVE sau verify-guard (harness hạ cấp complete→false khi
+  /// có modify-tool chạy sau verify-tool cuối — đây là verdict hệ thống THẬT SỰ tin)
+  complete    Boolean
+  /// P(complete) theo trọng tài — 0.0-1.0
+  confidence  Float
+  verified    Boolean
+  /// JSON array các mục còn thiếu (theo trọng tài)
+  missing     String?
+  rootCause   String?
+  /// true khi verify-guard hạ cấp verdict.complete true→false
+  forcedDowngrade Boolean @default(false)
+  /// stopReason của run khi verdict được resolve (ghi kèm lúc resolve)
+  runStopReason  String?
+  /// kết quả cuối của run khi verdict được resolve
+  runComplete    Boolean?
+  /// confirmed | refuted | null (chưa resolve — run còn chạy)
+  outcome     String?
+  outcomeAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([sessionId, createdAt])
+  @@index([outcome])
+  @@index([confidence])
+}
+
 /// Phase 5.6 — Session Resume (spec Appendix C, docs/FULLSTACK_CAPABILITY_PLAN_V2.md
 /// lines 723-779).
 ///

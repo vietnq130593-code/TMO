@@ -22,7 +22,24 @@
  * Data model:
  *   AgentRun  = 1 lần agent chạy ReAct loop (1 chat exchange hoặc 1 team step)
  *   RunEvent  = thought | tool | todo_update | run_start | run_end
+ *
+ * Task 20-b (self-monitoring): mỗi run KẾT THÚC (endAgentRun / user cancel)
+ * được persist 1 row AgentRunRecord (SQLite) — fire-and-forget, fail-open.
+ * Trước đây run lifecycle chỉ sống trong ChatMessage.metadata JSON + map
+ * in-memory này (restart là mất). v1: cycles/tokensUsed/evaluatorConfidence/
+ * messageId = null (goal-loop metadata — task 20-c sẽ wire); stopReason là
+ * heuristic map từ status (complete|error|cancelled).
+ *
+ * Task 20-c (DEDUP — 1 run = đúng 1 row): goal-loop giờ TỰ persist lifecycle
+ * AgentRunRecord (insertAgentRunRecordRunning lúc start + updateLatestAgentRunRecord
+ * lúc end với đầy đủ metadata thật). Để tránh double-insert, startAgentRun nhận
+ * dbPersistBy:'caller' → endAgentRun/cancelSessionRuns BỎ QUA persistAgentRunRecord
+ * cho run đó (caller — goal-loop — chịu trách nhiệm DB). Run của Code Team
+ * workflow-engine (mode 'team', mặc định 'tracker') giữ nguyên behavior 20-b:
+ * tracker insert 1 row đầy đủ khi run kết thúc.
  */
+
+import { insertAgentRunRecord } from '@/lib/metrics-db'
 
 // ==================== Types ====================
 
@@ -80,6 +97,11 @@ export interface AgentRun {
   /** Yêu cầu gốc (user message / team step prompt) — rút gọn */
   task?: string
   mode: 'standalone' | 'team'
+  /** Task 20-c: ai chịu trách nhiệm persist AgentRunRecord ra DB?
+   *  'tracker' (mặc định) — endAgentRun/cancelSessionRuns insert row khi run kết thúc
+   *  'caller' — goal-loop tự insert lúc start + update đầy đủ metadata lúc end
+   *             (tracker bỏ qua để không double-insert — 1 run = đúng 1 row) */
+  dbPersistBy?: 'tracker' | 'caller'
   startedAt: number
   endedAt?: number
   status: 'running' | 'done' | 'error' | 'cancelled'
@@ -182,6 +204,53 @@ function pushEvent(run: AgentRun, event: AgentRunEvent) {
   }
 }
 
+// ==================== AgentRunRecord persistence (Task 20-b) ====================
+
+/** Map tracker status → AgentRunRecord.status */
+function runStatusToRecordStatus(status: AgentRun['status']): string {
+  if (status === 'done') return 'completed'
+  if (status === 'error') return 'failed'
+  return 'cancelled'
+}
+
+/**
+ * Persist 1 AgentRunRecord row khi run kết thúc — fire-and-forget, fail-open
+ * ( KHÔNG await, KHÔNG throw — display/tracking không được phép làm hỏng run).
+ * Chỉ gọi khi run CHUYỂN từ 'running' sang trạng thái kết thúc (đảm bảo 1 row/run,
+ * không sinh trùng khi endAgentRun bị gọi lại cho run đã kết thúc).
+ */
+function persistAgentRunRecord(run: AgentRun): void {
+  try {
+    const endedAt = run.endedAt ?? Date.now()
+    const toolFailures = run.events.filter(
+      e => e.type === 'tool' && e.success === false,
+    ).length
+    // insertAgentRunRecord: delegate path nếu Prisma instance fresh, raw-SQL
+    // bridge nếu stale (dev server chạy trước db:push) — Task 20-b
+    void insertAgentRunRecord({
+      sessionId: run.sessionId,
+      messageId: null, // 20-c: wire ChatMessage id từ goal-loop
+      agentId: null, // 20-c: wire agentId (tracker chỉ có agentName)
+      agentName: run.agentName,
+      status: runStatusToRecordStatus(run.status),
+      // v1 heuristic — stopReason budget thật (max_cycles/time_budget/
+      // token_budget/no_progress) nằm trong goal-loop, task 20-c wire
+      stopReason: run.status === 'done' ? 'complete' : run.status === 'error' ? 'error' : 'cancelled',
+      cycles: null, // 20-c: wire số chu kỳ goal-loop
+      tokensUsed: null, // 20-c: wire tokensUsed từ goalLoop metadata
+      toolCalls: run.counters.toolCalls,
+      toolFailures,
+      durationMs: Math.max(0, endedAt - run.startedAt),
+      evaluatorConfidence: null, // 20-c: wire evaluator verdict confidence
+      complete: run.status === 'done',
+      startedAt: new Date(run.startedAt),
+      completedAt: new Date(endedAt),
+    }).catch(() => {
+      /* fail-open — không crash run vì lỗi metrics */
+    })
+  } catch { /* fail-open */ }
+}
+
 // ==================== Public API ====================
 
 /**
@@ -195,6 +264,8 @@ export function startAgentRun(params: {
   step?: string
   task?: string
   mode?: 'standalone' | 'team'
+  /** Task 20-c — 'caller' = goal-loop tự persist AgentRunRecord (dedup) */
+  dbPersistBy?: 'tracker' | 'caller'
 }): string | null {
   try {
     const { sessionId, agentName } = params
@@ -211,6 +282,7 @@ export function startAgentRun(params: {
       step: truncateText(params.step, 120),
       task: truncateText(params.task, 240),
       mode: params.mode || 'standalone',
+      dbPersistBy: params.dbPersistBy === 'caller' ? 'caller' : 'tracker',
       startedAt: Date.now(),
       status: 'running',
       events: [],
@@ -252,6 +324,10 @@ export function endAgentRun(
       ? runsOf(sessionId).find(r => r.runId === runId)
       : activeRun(sessionId)
     if (!run) return
+    // Chỉ persist AgentRunRecord khi run ĐANG running (chuyển đổi đầu tiên sang
+    // trạng thái kết thúc) — tránh ghi trùng khi endAgentRun được gọi 2 lần.
+    // Task 20-c: run do CALLER (goal-loop) persist thì tracker bỏ qua (dedup).
+    const wasRunning = run.status === 'running'
     run.status = status
     run.endedAt = Date.now()
     pushEvent(run, {
@@ -265,6 +341,7 @@ export function endAgentRun(
     if (reg.activeRunBySession.get(sessionId) === run.runId) {
       reg.activeRunBySession.delete(sessionId)
     }
+    if (wasRunning && run.dbPersistBy !== 'caller') persistAgentRunRecord(run)
   } catch { /* fail-open */ }
 }
 
@@ -302,6 +379,9 @@ export function cancelSessionRuns(sessionId: string | null | undefined): number 
           cancelled: true,
           text: 'Đã dừng bởi người dùng',
         })
+        // Task 20-c: run do caller (goal-loop) persist → tracker không insert
+        // (goal-loop sẽ update row 'running' thành cancelled khi loop thoát)
+        if (run.dbPersistBy !== 'caller') persistAgentRunRecord(run)
         cancelledCount++
       }
     }

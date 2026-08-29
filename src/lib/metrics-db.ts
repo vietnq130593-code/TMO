@@ -1,0 +1,474 @@
+/**
+ * Metrics DB — AgentRunRecord + ArbiterVerdict persistence bridge (Task 20-b/20-c)
+ *
+ * Vấn đề: dev server cache Prisma instance chính trên globalThis
+ * (src/lib/db.ts). Khi `prisma db push` thêm MODEL MỚI (AgentRunRecord 20-b,
+ * ArbiterVerdict 20-c) trong khi dev server đang chạy, instance chính +
+ * PrismaClient class đã nạp vào process đều là bản CŨ →
+ * `db.agentRunRecord`/`db.arbiterVerdict` === undefined (TypeError).
+ * KHÔNG restart PM2 được → cần cầu nối.
+ *
+ * Giải pháp: bảng ĐÃ tồn tại trong SQLite sau db:push → truy cập qua RAW SQL
+ * bằng instance hiện có ($executeRaw/$queryRaw không cần delegate). Khi
+ * instance fresh (sau lần restart app kế tiếp), delegate path type-safe chạy
+ * thay thế — tự lành, không cần can thiệp.
+ *
+ * (ToolMetric/EvalResult/CalibrationModel KHÔNG cần bridge: model có sẵn từ
+ * Phase 3/4 → delegate tồn tại trên instance cũ.)
+ *
+ * Fail-open: mọi hàm throw lỗi DB lên caller — caller (goal-loop/chat route/
+ * tracker/API route) tự .catch(() => {}) theo pattern fire-and-forget.
+ */
+
+import { db } from '@/lib/db'
+
+/** Shape 1 row AgentRunRecord (đủ field cho overview + 20-c wire sau) */
+export interface AgentRunRecordRow {
+  id: string
+  sessionId: string
+  messageId: string | null
+  agentId: string | null
+  agentName: string | null
+  status: string | null
+  stopReason: string | null
+  cycles: number | null
+  tokensUsed: number | null
+  toolCalls: number | null
+  toolFailures: number | null
+  durationMs: number | null
+  evaluatorConfidence: number | null
+  complete: boolean | null
+  startedAt: Date | null
+  completedAt: Date | null
+  createdAt: Date
+}
+
+/** Instance chính đã có delegate agentRunRecord chưa? (fresh sau restart) */
+function hasAgentRunRecordDelegate(): boolean {
+  try {
+    return typeof (db as unknown as Record<string, unknown>).agentRunRecord !== 'undefined'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * INSERT 1 AgentRunRecord. Ưu tiên delegate (type-safe, fresh client); nếu
+ * instance còn stale → raw SQL (bảng đã tồn tại sau db:push).
+ * KHÔNG tạo id/createdAt ở đây nếu delegate path (Prisma tự cuid/now) —
+ * raw path tự sinh id (uuid) + createdAt (now).
+ */
+export async function insertAgentRunRecord(params: {
+  sessionId: string
+  agentName: string
+  status: string
+  stopReason: string
+  toolCalls: number
+  toolFailures: number
+  durationMs: number
+  complete: boolean
+  startedAt: Date
+  completedAt: Date
+  /** v1 (20-b) luôn null — 20-c wire từ goal-loop metadata */
+  messageId?: string | null
+  agentId?: string | null
+  cycles?: number | null
+  tokensUsed?: number | null
+  evaluatorConfidence?: number | null
+}): Promise<void> {
+  if (hasAgentRunRecordDelegate()) {
+    // Fresh client — delegate path (Prisma tự sinh id cuid + createdAt)
+    await db.agentRunRecord.create({
+      data: {
+        sessionId: params.sessionId,
+        messageId: params.messageId ?? null,
+        agentId: params.agentId ?? null,
+        agentName: params.agentName,
+        status: params.status,
+        stopReason: params.stopReason,
+        cycles: params.cycles ?? null,
+        tokensUsed: params.tokensUsed ?? null,
+        toolCalls: params.toolCalls,
+        toolFailures: params.toolFailures,
+        durationMs: params.durationMs,
+        evaluatorConfidence: params.evaluatorConfidence ?? null,
+        complete: params.complete,
+        startedAt: params.startedAt,
+        completedAt: params.completedAt,
+      },
+    })
+    return
+  }
+
+  // Stale client — raw SQL bridge (id/createdAt sinh thủ công vì Prisma
+  // implement @default(cuid()/now()) client-side, không phải DB default)
+  const id = randomId()
+  const createdAt = new Date()
+  await db.$executeRaw`
+    INSERT INTO AgentRunRecord (
+      id, sessionId, messageId, agentId, agentName, status, stopReason,
+      cycles, tokensUsed, toolCalls, toolFailures, durationMs,
+      evaluatorConfidence, complete, startedAt, completedAt, createdAt
+    ) VALUES (
+      ${id}, ${params.sessionId}, ${params.messageId ?? null}, ${params.agentId ?? null},
+      ${params.agentName}, ${params.status}, ${params.stopReason},
+      ${params.cycles ?? null}, ${params.tokensUsed ?? null}, ${params.toolCalls},
+      ${params.toolFailures}, ${params.durationMs},
+      ${params.evaluatorConfidence ?? null}, ${params.complete ? 1 : 0},
+      ${params.startedAt}, ${params.completedAt}, ${createdAt}
+    )
+  `
+}
+
+/**
+ * SELECT AgentRunRecord từ `since` trở đi, mới nhất trước. Delegate path nếu
+ * fresh; raw SQL nếu stale (boolean `complete` trong SQLite là 0/1 → coerce).
+ */
+export async function findAgentRunRecordsSince(since: Date): Promise<AgentRunRecordRow[]> {
+  if (hasAgentRunRecordDelegate()) {
+    return db.agentRunRecord.findMany({
+      where: { createdAt: { gte: since } },
+      orderBy: { createdAt: 'desc' },
+    })
+  }
+
+  const raw = await db.$queryRaw<
+    Array<{
+      id: string
+      sessionId: string
+      messageId: string | null
+      agentId: string | null
+      agentName: string | null
+      status: string | null
+      stopReason: string | null
+      cycles: number | null
+      tokensUsed: number | null
+      toolCalls: number | null
+      toolFailures: number | null
+      durationMs: number | null
+      evaluatorConfidence: number | null
+      complete: number | null
+      startedAt: Date | null
+      completedAt: Date | null
+      createdAt: Date
+    }>
+  >`
+    SELECT id, sessionId, messageId, agentId, agentName, status, stopReason,
+      cycles, tokensUsed, toolCalls, toolFailures, durationMs,
+      evaluatorConfidence, complete, startedAt, completedAt, createdAt
+    FROM AgentRunRecord
+    WHERE createdAt >= ${since}
+    ORDER BY createdAt DESC
+  `
+  return raw.map(r => ({
+    ...r,
+    complete: r.complete === null || r.complete === undefined ? null : !!r.complete,
+  }))
+}
+
+/** Id duy nhất cho raw INSERT (uuid — không phụ thuộc internals của Prisma) */
+function randomId(): string {
+  try {
+    return globalThis.crypto?.randomUUID?.() || `run_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+  } catch {
+    return `run_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+  }
+}
+
+// ==================== ArbiterVerdict — Task 20-c ====================
+
+/** Instance chính đã có delegate arbiterVerdict chưa? (fresh sau restart) */
+function hasArbiterVerdictDelegate(): boolean {
+  try {
+    return typeof (db as unknown as Record<string, unknown>).arbiterVerdict !== 'undefined'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * INSERT 1 ArbiterVerdict — verdict EFFECTIVE (sau verify-guard) của trọng tài
+ * độc lập cho 1 chu kỳ EVALUATE. Delegate path nếu fresh, raw SQL nếu stale.
+ */
+export async function insertArbiterVerdict(params: {
+  sessionId: string
+  messageId?: string | null
+  agentName?: string | null
+  cycle: number
+  complete: boolean
+  confidence: number
+  verified: boolean
+  /** JSON string của các mục còn thiếu (EvalVerdict.missing) */
+  missing?: string | null
+  rootCause?: string | null
+  forcedDowngrade?: boolean
+}): Promise<void> {
+  if (hasArbiterVerdictDelegate()) {
+    await db.arbiterVerdict.create({
+      data: {
+        sessionId: params.sessionId,
+        messageId: params.messageId ?? null,
+        agentName: params.agentName ?? null,
+        cycle: params.cycle,
+        complete: params.complete,
+        confidence: params.confidence,
+        verified: params.verified,
+        missing: params.missing ?? null,
+        rootCause: params.rootCause ?? null,
+        forcedDowngrade: params.forcedDowngrade ?? false,
+      },
+    })
+    return
+  }
+
+  const id = randomId()
+  const createdAt = new Date()
+  await db.$executeRaw`
+    INSERT INTO ArbiterVerdict (
+      id, sessionId, messageId, agentName, cycle, complete, confidence, verified,
+      missing, rootCause, forcedDowngrade, runStopReason, runComplete, outcome, outcomeAt, createdAt
+    ) VALUES (
+      ${id}, ${params.sessionId}, ${params.messageId ?? null}, ${params.agentName ?? null},
+      ${params.cycle}, ${params.complete ? 1 : 0}, ${params.confidence}, ${params.verified ? 1 : 0},
+      ${params.missing ?? null}, ${params.rootCause ?? null}, ${params.forcedDowngrade ? 1 : 0},
+      NULL, NULL, NULL, NULL, ${createdAt}
+    )
+  `
+}
+
+/** Shape 1 ArbiterVerdict ĐÃ resolve — dữ liệu tính Brier/ECE của trọng tài */
+export interface ArbiterVerdictCalibrationRow {
+  id: string
+  sessionId: string
+  cycle: number
+  complete: boolean
+  confidence: number
+  verified: boolean
+  forcedDowngrade: boolean
+  outcome: string
+  runComplete: boolean | null
+  runStopReason: string | null
+  createdAt: Date
+}
+
+/**
+ * SELECT các ArbiterVerdict ĐÃ resolve (outcome IS NOT NULL), mới nhất trước —
+ * cho GET /api/eval/calibration tính Brier/ECE của trọng tài.
+ */
+export async function findArbiterVerdictsForCalibration(limit = 2000): Promise<ArbiterVerdictCalibrationRow[]> {
+  const capped = Math.max(1, Math.min(limit, 10_000))
+  if (hasArbiterVerdictDelegate()) {
+    const rows = await db.arbiterVerdict.findMany({
+      where: { outcome: { not: null } },
+      orderBy: { createdAt: 'desc' },
+      take: capped,
+    })
+    // `outcome: { not: null }` không narrow type của Prisma → filter + assert
+    return rows
+      .filter(r => r.outcome !== null)
+      .map(r => ({ ...r, outcome: r.outcome as string }))
+  }
+
+  const raw = await db.$queryRaw<
+    Array<{
+      id: string
+      sessionId: string
+      cycle: number
+      complete: number
+      confidence: number
+      verified: number
+      forcedDowngrade: number
+      outcome: string
+      runComplete: number | null
+      runStopReason: string | null
+      createdAt: Date
+    }>
+  >`
+    SELECT id, sessionId, cycle, complete, confidence, verified, forcedDowngrade,
+      outcome, runComplete, runStopReason, createdAt
+    FROM ArbiterVerdict
+    WHERE outcome IS NOT NULL
+    ORDER BY createdAt DESC
+    LIMIT ${capped}
+  `
+  return raw.map(r => ({
+    id: r.id,
+    sessionId: r.sessionId,
+    cycle: r.cycle,
+    complete: !!r.complete,
+    confidence: r.confidence,
+    verified: !!r.verified,
+    forcedDowngrade: !!r.forcedDowngrade,
+    outcome: r.outcome,
+    runComplete: r.runComplete === null || r.runComplete === undefined ? null : !!r.runComplete,
+    runStopReason: r.runStopReason,
+    createdAt: r.createdAt,
+  }))
+}
+
+/**
+ * RESOLVE các verdict CHƯA resolve của session khi run kết thúc:
+ *   outcome = (verdict.complete === runComplete) ? 'confirmed' : 'refuted'
+ * Trả về số verdict đã resolve. Fail-open: lỗi DB → throw lên caller .catch.
+ */
+export async function resolveArbiterVerdicts(
+  sessionId: string,
+  runComplete: boolean,
+  runStopReason: string,
+): Promise<number> {
+  const now = new Date()
+  if (hasArbiterVerdictDelegate()) {
+    // updateMany không set giá trị per-row được → 2 nhóm confirmed/refuted
+    const confirmed = await db.arbiterVerdict.updateMany({
+      where: { sessionId, outcome: null, complete: runComplete },
+      data: { outcome: 'confirmed', outcomeAt: now, runStopReason, runComplete },
+    })
+    const refuted = await db.arbiterVerdict.updateMany({
+      where: { sessionId, outcome: null, complete: !runComplete },
+      data: { outcome: 'refuted', outcomeAt: now, runStopReason, runComplete },
+    })
+    return confirmed.count + refuted.count
+  }
+
+  const n = await db.$executeRaw`
+    UPDATE ArbiterVerdict
+    SET outcome = CASE WHEN complete = ${runComplete ? 1 : 0} THEN 'confirmed' ELSE 'refuted' END,
+        outcomeAt = ${now},
+        runStopReason = ${runStopReason},
+        runComplete = ${runComplete ? 1 : 0}
+    WHERE sessionId = ${sessionId} AND outcome IS NULL
+  `
+  return n
+}
+
+// ==================== AgentRunRecord — start/end lifecycle (Task 20-c) ====================
+
+/**
+ * INSERT 1 AgentRunRecord lúc run START (status='running', startedAt=now) —
+ * giúp /api/metrics/overview runs.active ≠ 0 trong lúc run đang chạy.
+ * Goal-loop là nguồn sự thật cho lifecycle của chat run: row này sẽ được
+ * updateLatestAgentRunRecord() cập nhật đầy đủ khi run kết thúc.
+ */
+export async function insertAgentRunRecordRunning(params: {
+  sessionId: string
+  agentId?: string | null
+  agentName?: string | null
+  startedAt?: Date
+}): Promise<void> {
+  const startedAt = params.startedAt ?? new Date()
+  if (hasAgentRunRecordDelegate()) {
+    await db.agentRunRecord.create({
+      data: {
+        sessionId: params.sessionId,
+        agentId: params.agentId ?? null,
+        agentName: params.agentName ?? null,
+        status: 'running',
+        startedAt,
+      },
+    })
+    return
+  }
+
+  const id = randomId()
+  const createdAt = new Date()
+  await db.$executeRaw`
+    INSERT INTO AgentRunRecord (
+      id, sessionId, messageId, agentId, agentName, status, stopReason,
+      cycles, tokensUsed, toolCalls, toolFailures, durationMs,
+      evaluatorConfidence, complete, startedAt, completedAt, createdAt
+    ) VALUES (
+      ${id}, ${params.sessionId}, NULL, ${params.agentId ?? null}, ${params.agentName ?? null},
+      'running', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+      ${startedAt}, NULL, ${createdAt}
+    )
+  `
+}
+
+/** Các field có thể UPDATE trên 1 AgentRunRecord (chỉ field truyền vào mới set) */
+export interface AgentRunRecordUpdate {
+  messageId?: string | null
+  agentId?: string | null
+  agentName?: string | null
+  status?: string
+  stopReason?: string
+  cycles?: number
+  tokensUsed?: number
+  toolCalls?: number
+  toolFailures?: number
+  durationMs?: number
+  evaluatorConfidence?: number | null
+  complete?: boolean
+  startedAt?: Date
+  completedAt?: Date
+}
+
+/** Build SET clauses cho raw UPDATE — chỉ field có mặt trong data object */
+function buildAgentRunSetClauses(data: AgentRunRecordUpdate): { sets: string[]; args: unknown[] } {
+  const sets: string[] = []
+  const args: unknown[] = []
+  if ('messageId' in data) { sets.push('messageId = ?'); args.push(data.messageId ?? null) }
+  if ('agentId' in data) { sets.push('agentId = ?'); args.push(data.agentId ?? null) }
+  if ('agentName' in data) { sets.push('agentName = ?'); args.push(data.agentName ?? null) }
+  if ('status' in data) { sets.push('status = ?'); args.push(data.status ?? null) }
+  if ('stopReason' in data) { sets.push('stopReason = ?'); args.push(data.stopReason ?? null) }
+  if ('cycles' in data) { sets.push('cycles = ?'); args.push(data.cycles ?? null) }
+  if ('tokensUsed' in data) { sets.push('tokensUsed = ?'); args.push(data.tokensUsed ?? null) }
+  if ('toolCalls' in data) { sets.push('toolCalls = ?'); args.push(data.toolCalls ?? null) }
+  if ('toolFailures' in data) { sets.push('toolFailures = ?'); args.push(data.toolFailures ?? null) }
+  if ('durationMs' in data) { sets.push('durationMs = ?'); args.push(data.durationMs ?? null) }
+  if ('evaluatorConfidence' in data) { sets.push('evaluatorConfidence = ?'); args.push(data.evaluatorConfidence ?? null) }
+  if ('complete' in data) { sets.push('complete = ?'); args.push(data.complete === null || data.complete === undefined ? null : (data.complete ? 1 : 0)) }
+  if ('startedAt' in data) { sets.push('startedAt = ?'); args.push(data.startedAt ?? null) }
+  if ('completedAt' in data) { sets.push('completedAt = ?'); args.push(data.completedAt ?? null) }
+  return { sets, args }
+}
+
+/** Build Prisma data object cho delegate UPDATE — chỉ field có mặt trong data */
+function buildAgentRunDelegateData(data: AgentRunRecordUpdate): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(data) as Array<keyof AgentRunRecordUpdate>) {
+    if (key === 'complete') {
+      out[key] = data.complete === undefined ? undefined : (data.complete === null ? null : data.complete)
+    } else {
+      out[key] = data[key]
+    }
+  }
+  return out
+}
+
+/**
+ * UPDATE row AgentRunRecord MỚI NHẤT của session (bất kể status) — goal-loop
+ * wire metadata thật (cycles/tokensUsed/evaluatorConfidence/stopReason...) khi
+ * run kết thúc; chat route link messageId sau khi message persist.
+ * Trả về số row đã update (0 = session chưa có row nào).
+ */
+export async function updateLatestAgentRunRecord(
+  sessionId: string,
+  data: AgentRunRecordUpdate,
+): Promise<number> {
+  const { sets, args } = buildAgentRunSetClauses(data)
+  if (sets.length === 0) return 0
+
+  if (hasAgentRunRecordDelegate()) {
+    const latest = await db.agentRunRecord.findFirst({
+      where: { sessionId },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    })
+    if (!latest) return 0
+    await db.agentRunRecord.update({
+      where: { id: latest.id },
+      data: buildAgentRunDelegateData(data),
+    })
+    return 1
+  }
+
+  // Raw path: subquery chọn row mới nhất theo createdAt — 1 statement atomic
+  args.push(sessionId)
+  return db.$executeRawUnsafe(
+    `UPDATE AgentRunRecord SET ${sets.join(', ')} WHERE id = (
+       SELECT id FROM AgentRunRecord WHERE sessionId = ? ORDER BY createdAt DESC LIMIT 1
+     )`,
+    ...args,
+  )
+}

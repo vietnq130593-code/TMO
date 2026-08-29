@@ -51,6 +51,12 @@ skipBuild=true
 
 Biến môi trường tương đương: `TMO_GATE_SKIP_BUILD=1`.
 
+## Trạng thái triển khai (2026-09-10)
+
+- ✅ **Lớp 1 — Git hooks local**: HOẠT ĐỘNG (đã verify: pre-push chạy gate 36.6s, 169/169 test xanh trước khi cho push `d8c4cc4`).
+- ⚠️ **Lớp 2 — GitHub Actions**: workflow đúng, GitHub đã nhận diện và trigger — nhưng job chết sau 2s với lỗi **"The job was not started because recent account payments have failed or your spending limit needs to be increased"** (hết phút Actions / hạn mức chi tiêu của account — private repo cần trả phí). **Cần Mr. Architect vào GitHub → Settings → Billing & plans** nạp/add spending limit; sau đó workflow tự chạy bình thường, không cần sửa gì.
+- ⬜ **Lớp 3 — Branch protection**: bật sau khi lớp 2 sống.
+
 ## Lịch sử & quy ước
 
 - **2026-09-10**: Gate ra đời. Baseline trước gate: `tsc` PASS, `eslint` PASS, `bun test` 168/169 — 1 test flaky (`FsCheckpoint > listCheckpoints`) do 2 checkpoint cùng millisecond → `orderBy createdAt` không xác định thứ tự; đã fix bằng cách đảm bảo 2 lần tạo cách ≥5ms. 25/169 test khác fail khi chạy ngoài PM2 do `DATABASE_URL` từ `.env` trỏ DB khác → gate luôn ghi đè `DATABASE_URL` sang DB test cô lập.

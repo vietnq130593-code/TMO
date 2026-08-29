@@ -62,6 +62,7 @@ import { CodeEditor, detectLanguage, type OpenFile } from '@/components/code-edi
 import { DiffViewer } from '@/components/code-editor/DiffViewer'
 import { PendingEditModal } from '@/components/code-editor/PendingEditModal'
 import { SearchPanel } from '@/components/code-editor/SearchPanel'
+import { RuntimeMetricsPanel } from '@/components/analytics/runtime-metrics-panel'
 // Type-only (erased lúc build — không kéo 3d-force-graph vào bundle chính)
 import type { NodeObject as ForceGraphNodeObject, LinkObject as ForceGraphLinkObject } from '3d-force-graph'
 
@@ -11117,7 +11118,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                         <div className="flex items-center gap-1.5 mb-1">
                           <span className="text-[11px] text-stone-300 font-medium">Agent</span>
                           {msg.provider && <Badge className="text-[9px] h-3.5 px-1 bg-stone-950/50 text-stone-300">{msg.provider}</Badge>}
-                          {msg.confidence != null && <Badge variant="outline" className="text-[9px] h-3.5 px-1">{(msg.confidence * 100).toFixed(0)}%</Badge>}
+                          {msg.confidence != null && <Badge variant="outline" className="text-[9px] h-3.5 px-1" title={`Confidence từ trọng tài độc lập (goal-loop evaluator) / KB retrieval — Task 20-c`}>{(msg.confidence * 100).toFixed(0)}%</Badge>}
                         </div>
                       )}
                       {/* Thought Process summary bar (reload session) — events in-memory đã mất, chỉ còn summary */}
@@ -18629,6 +18630,18 @@ export default function Home() {
                   </TabsContent>
 
                   <TabsContent value="analytics" className="mt-4">
+                    <div className="mb-5">
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-1.5 rounded-lg bg-gradient-to-br from-rose-500 to-amber-600"><Activity className="h-4 w-4 text-white" /></div>
+                        <div>
+                          <h3 className="text-sm font-semibold tracking-tight text-stone-100">🩺 Runtime Metrics — giám sát real-time</h3>
+                          <p className="text-[11px] text-stone-400">Token burn · tool health · agent runs — 1 endpoint tập trung, poll 10s, fail-open</p>
+                        </div>
+                      </div>
+                      <div className="mt-3">
+                        <RuntimeMetricsPanel />
+                      </div>
+                    </div>
                     <AnalyticsSection data={{
                       documents,
                       embeddingStatus,

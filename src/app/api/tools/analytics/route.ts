@@ -1,137 +1,107 @@
 /**
- * Tool Usage Analytics API
+ * Tool Usage Analytics API — Task 20-b rewrite
  *
- * GET /api/tools/analytics — Return analytics data for tool usage
+ * GET /api/tools/analytics?days=7 — analytics tool usage từ bảng ToolMetric THẬT.
+ *
+ * Trước đây route này cast `db.toolCallLog` — model KHÔNG tồn tại trong
+ * schema.prisma → runtime luôn 500 (dead code). Từ 20-b, executeTool() ghi
+ * MỖI tool call vào ToolMetric (qua recordAgentActivity choke-point) → route
+ * này đọc dữ liệu thật: success rate per tool/agent, timeline theo ngày,
+ * alerts tool tệ.
  *
  * Query params:
- *   range=24h|7d|30d|all  — time range (default: 24h)
- *   agentId=default        — filter by agent (default: all)
- *   toolName=...           — filter by tool name
- *   format=json|csv        — output format (default: json)
+ *   days=7   — số ngày nhìn lại (default 7, max 90)
  *
- * Returns:
- *   - summary: aggregate stats (total calls, success rate, avg duration, unique tools/agents)
- *   - topTools: per-tool breakdown
- *   - topAgents: per-agent breakdown
- *   - timeline: hourly time series
- *   - failures: top error messages
- *   - bySource: breakdown by tool source (local, gateway-http, gateway-bridge, custom)
- *   - alerts: automatically detected anomalies (e.g. high failure rate)
+ * Fail-open: lỗi DB → vẫn trả 200 với zero-state (đúng tinh thần các route
+ * khác của app — analytics không được phép 500).
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 
-/** Shape log mong đợi của bảng ToolCallLog — model CHƯA có trong schema.prisma.
- *  Truy vấn qua cast; runtime db.toolCallLog undefined → throw → catch → 500
- *  (giữ nguyên behavior hiện tại, chờ schema thêm model). */
-interface ToolCallLogRow {
-  agentId: string
-  agentName: string | null
-  toolName: string
-  toolSource: string
-  success: boolean
-  durationMs: number
-  errorMessage: string | null
-  createdAt: Date
-}
-
-/** Delegate mô tả các method đang dùng — cast từ PrismaClient (model thiếu trong schema) */
-interface ToolCallLogDelegate {
-  findMany(args: {
-    where?: Record<string, unknown>
-    select?: Record<string, boolean>
-    orderBy?: Record<string, string>
-    take?: number
-  }): Promise<ToolCallLogRow[]>
-}
-
 export const dynamic = 'force-dynamic'
 
-/** Valid time ranges */
-const VALID_RANGES = ['24h', '7d', '30d', 'all'] as const
-type ValidRange = (typeof VALID_RANGES)[number]
+const DEFAULT_DAYS = 7
+const MAX_DAYS = 90
+const BY_TOOL_LIMIT = 50
+const BY_AGENT_LIMIT = 20
+const ALERTS_LIMIT = 10
 
-/** Compute the start date for a given time range */
-function getStartDate(range: ValidRange): Date | null {
-  if (range === 'all') return null
-  const now = new Date()
-  switch (range) {
-    case '24h': return new Date(now.getTime() - 24 * 60 * 60 * 1000)
-    case '7d': return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-    case '30d': return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
-  }
-}
-
-/** Format a date as ISO hour string: "2024-01-15T10:00" */
-function formatHour(date: Date): string {
-  return date.toISOString().slice(0, 13) + ':00'
-}
-
-/** Compute success rate safely (returns 0 if no calls) */
+/** Tính success rate an toàn (0 nếu không có call) — làm tròn 3 chữ số */
 function successRate(successCount: number, total: number): number {
   return total === 0 ? 0 : Math.round((successCount / total) * 1000) / 1000
 }
 
-/** Compute average duration safely */
-function avgDuration(totalDuration: number, count: number): number {
-  return count === 0 ? 0 : Math.round(totalDuration / count)
+/** Tính avg duration an toàn */
+function avgDuration(totalDurationMs: number, count: number): number {
+  return count === 0 ? 0 : Math.round(totalDurationMs / count)
+}
+
+function zeroState(days: number, from: Date, to: Date) {
+  return {
+    period: { days, from: from.toISOString(), to: to.toISOString() },
+    summary: {
+      totalCalls: 0,
+      successRate: 0,
+      avgDurationMs: 0,
+      uniqueTools: 0,
+      uniqueAgents: 0,
+    },
+    byTool: [] as Array<{
+      toolName: string
+      calls: number
+      successRate: number
+      avgDurationMs: number
+      errors: number
+      topErrorTag: string | null
+    }>,
+    byAgent: [] as Array<{
+      agentRole: string
+      calls: number
+      successRate: number
+      avgDurationMs: number
+    }>,
+    timeline: [] as Array<{ date: string; calls: number; successRate: number }>,
+    alerts: [] as Array<{
+      toolName: string
+      calls: number
+      successRate: number
+      reason: string
+    }>,
+  }
 }
 
 export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url)
+  const parsedDays = parseInt(searchParams.get('days') || '', 10)
+  const days =
+    Number.isFinite(parsedDays) && parsedDays > 0
+      ? Math.min(parsedDays, MAX_DAYS)
+      : DEFAULT_DAYS
+  const to = new Date()
+  const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000)
+
   try {
-    const { searchParams } = new URL(request.url)
-    const range = (searchParams.get('range') || '24h') as ValidRange
-    const agentId = searchParams.get('agentId') || undefined
-    const toolName = searchParams.get('toolName') || undefined
-    const format = searchParams.get('format') || 'json'
-
-    // Validate range
-    if (!VALID_RANGES.includes(range)) {
-      return NextResponse.json(
-        { error: `Invalid range "${range}". Must be one of: 24h, 7d, 30d, all` },
-        { status: 400 }
-      )
-    }
-
-    // Build where clause
-    const startDate = getStartDate(range)
-    const where: Record<string, unknown> = {}
-    if (startDate) {
-      where.createdAt = { gte: startDate }
-    }
-    if (agentId && agentId !== 'all') {
-      where.agentId = agentId
-    }
-    if (toolName) {
-      where.toolName = toolName
-    }
-
-    // Fetch all matching logs
-    const toolCallLog = (db as unknown as { toolCallLog: ToolCallLogDelegate }).toolCallLog
-    const logs = await toolCallLog.findMany({
-      where,
+    const logs = await db.toolMetric.findMany({
+      where: { timestamp: { gte: from } },
       select: {
-        agentId: true,
-        agentName: true,
         toolName: true,
-        toolSource: true,
+        sessionId: true,
+        agentRole: true,
         success: true,
         durationMs: true,
-        errorMessage: true,
-        createdAt: true,
+        errorTag: true,
+        timestamp: true,
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { timestamp: 'desc' },
     })
 
-    // ---- Compute analytics ----
-
-    // Summary
+    // ---- Summary ----
     const totalCalls = logs.length
     const successCount = logs.filter(l => l.success).length
     const totalDurationMs = logs.reduce((sum, l) => sum + l.durationMs, 0)
     const uniqueTools = new Set(logs.map(l => l.toolName)).size
-    const uniqueAgents = new Set(logs.map(l => l.agentId)).size
+    const uniqueAgents = new Set(logs.map(l => l.agentRole)).size
 
     const summary = {
       totalCalls,
@@ -141,136 +111,112 @@ export async function GET(request: NextRequest) {
       uniqueAgents,
     }
 
-    // Top tools
-    const toolMap = new Map<string, { calls: number; successCount: number; totalDuration: number }>()
-    for (const l of logs) {
-      const existing = toolMap.get(l.toolName) || { calls: 0, successCount: 0, totalDuration: 0 }
-      existing.calls++
-      if (l.success) existing.successCount++
-      existing.totalDuration += l.durationMs
-      toolMap.set(l.toolName, existing)
+    // ---- By tool (calls desc, limit 50) ----
+    interface ToolAgg {
+      calls: number
+      successCount: number
+      totalDuration: number
+      errors: number
+      errorTags: Map<string, number>
     }
-    const topTools = Array.from(toolMap.entries())
-      .map(([toolName, data]) => ({
-        toolName,
-        calls: data.calls,
-        successRate: successRate(data.successCount, data.calls),
-        avgDurationMs: avgDuration(data.totalDuration, data.calls),
-      }))
-      .sort((a, b) => b.calls - a.calls)
-      .slice(0, 20)
-
-    // Top agents
-    const agentMap = new Map<string, { agentName: string; calls: number; successCount: number }>()
+    const toolMap = new Map<string, ToolAgg>()
     for (const l of logs) {
-      const existing = agentMap.get(l.agentId) || { agentName: l.agentName || l.agentId, calls: 0, successCount: 0 }
-      existing.calls++
-      if (l.success) existing.successCount++
-      agentMap.set(l.agentId, existing)
-    }
-    const topAgents = Array.from(agentMap.entries())
-      .map(([id, data]) => ({
-        agentId: id,
-        agentName: data.agentName,
-        calls: data.calls,
-        successRate: successRate(data.successCount, data.calls),
-      }))
-      .sort((a, b) => b.calls - a.calls)
-      .slice(0, 10)
-
-    // Timeline (hourly buckets)
-    const timelineMap = new Map<string, { calls: number; successCount: number; totalDuration: number }>()
-    for (const l of logs) {
-      const hour = formatHour(l.createdAt)
-      const existing = timelineMap.get(hour) || { calls: 0, successCount: 0, totalDuration: 0 }
-      existing.calls++
-      if (l.success) existing.successCount++
-      existing.totalDuration += l.durationMs
-      timelineMap.set(hour, existing)
-    }
-    const timeline = Array.from(timelineMap.entries())
-      .map(([hour, data]) => ({
-        hour,
-        calls: data.calls,
-        successRate: successRate(data.successCount, data.calls),
-        avgDurationMs: avgDuration(data.totalDuration, data.calls),
-      }))
-      .sort((a, b) => a.hour.localeCompare(b.hour))
-
-    // Failures — group by (toolName, errorMessage)
-    const failureMap = new Map<string, { toolName: string; errorMessage: string; count: number; lastAt: string }>()
-    for (const l of logs) {
-      if (!l.success && l.errorMessage) {
-        const key = `${l.toolName}::${l.errorMessage}`
-        const existing = failureMap.get(key)
-        if (existing) {
-          existing.count++
-          existing.lastAt = l.createdAt.toISOString()
-        } else {
-          failureMap.set(key, {
-            toolName: l.toolName,
-            errorMessage: l.errorMessage,
-            count: 1,
-            lastAt: l.createdAt.toISOString(),
-          })
+      const agg =
+        toolMap.get(l.toolName) ||
+        { calls: 0, successCount: 0, totalDuration: 0, errors: 0, errorTags: new Map<string, number>() }
+      agg.calls++
+      if (l.success) {
+        agg.successCount++
+      } else {
+        agg.errors++
+        if (l.errorTag) {
+          agg.errorTags.set(l.errorTag, (agg.errorTags.get(l.errorTag) || 0) + 1)
         }
       }
+      agg.totalDuration += l.durationMs
+      toolMap.set(l.toolName, agg)
     }
-    const failures = Array.from(failureMap.values())
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 20)
-
-    // By source
-    const sourceMap = new Map<string, { calls: number; successCount: number }>()
-    for (const l of logs) {
-      const existing = sourceMap.get(l.toolSource) || { calls: 0, successCount: 0 }
-      existing.calls++
-      if (l.success) existing.successCount++
-      sourceMap.set(l.toolSource, existing)
-    }
-    const bySource: Record<string, { calls: number; successRate: number }> = {}
-    for (const [source, data] of sourceMap.entries()) {
-      bySource[source] = {
-        calls: data.calls,
-        successRate: successRate(data.successCount, data.calls),
-      }
-    }
-
-    // Alerts — detect anomalies
-    const alerts: Array<{ type: string; toolName: string; rate: number; message: string }> = []
-    for (const [toolName, data] of toolMap.entries()) {
-      if (data.calls >= 5) {
-        const failRate = 1 - successRate(data.successCount, data.calls)
-        if (failRate >= 0.25) {
-          alerts.push({
-            type: 'high_failure_rate',
-            toolName,
-            rate: Math.round(failRate * 100) / 100,
-            message: `${toolName} has ${Math.round(failRate * 100)}% failure rate`,
-          })
+    const byTool = Array.from(toolMap.entries())
+      .map(([toolName, agg]) => {
+        let topErrorTag: string | null = null
+        let topCount = 0
+        for (const [tag, count] of agg.errorTags) {
+          if (count > topCount) {
+            topCount = count
+            topErrorTag = tag
+          }
         }
-      }
-    }
-
-    const result = { summary, topTools, topAgents, timeline, failures, bySource, alerts }
-
-    // CSV format
-    if (format === 'csv') {
-      const lines: string[] = ['toolName,calls,successRate,avgDurationMs']
-      for (const t of topTools) {
-        lines.push(`${t.toolName},${t.calls},${t.successRate},${t.avgDurationMs}`)
-      }
-      return new NextResponse(lines.join('\n'), {
-        headers: {
-          'Content-Type': 'text/csv',
-          'Content-Disposition': 'attachment; filename="tool-analytics.csv"',
-        },
+        return {
+          toolName,
+          calls: agg.calls,
+          successRate: successRate(agg.successCount, agg.calls),
+          avgDurationMs: avgDuration(agg.totalDuration, agg.calls),
+          errors: agg.errors,
+          topErrorTag,
+        }
       })
-    }
+      .sort((a, b) => b.calls - a.calls)
+      .slice(0, BY_TOOL_LIMIT)
 
-    return NextResponse.json(result)
+    // ---- By agent (limit 20) ----
+    const agentMap = new Map<string, { calls: number; successCount: number; totalDuration: number }>()
+    for (const l of logs) {
+      const agg = agentMap.get(l.agentRole) || { calls: 0, successCount: 0, totalDuration: 0 }
+      agg.calls++
+      if (l.success) agg.successCount++
+      agg.totalDuration += l.durationMs
+      agentMap.set(l.agentRole, agg)
+    }
+    const byAgent = Array.from(agentMap.entries())
+      .map(([agentRole, agg]) => ({
+        agentRole,
+        calls: agg.calls,
+        successRate: successRate(agg.successCount, agg.calls),
+        avgDurationMs: avgDuration(agg.totalDuration, agg.calls),
+      }))
+      .sort((a, b) => b.calls - a.calls)
+      .slice(0, BY_AGENT_LIMIT)
+
+    // ---- Timeline (bucket theo ngày YYYY-MM-DD, UTC) ----
+    const dayMap = new Map<string, { calls: number; successCount: number }>()
+    for (const l of logs) {
+      const date = l.timestamp.toISOString().slice(0, 10)
+      const agg = dayMap.get(date) || { calls: 0, successCount: 0 }
+      agg.calls++
+      if (l.success) agg.successCount++
+      dayMap.set(date, agg)
+    }
+    const timeline = Array.from(dayMap.entries())
+      .map(([date, agg]) => ({
+        date,
+        calls: agg.calls,
+        successRate: successRate(agg.successCount, agg.calls),
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date))
+
+    // ---- Alerts: successRate < 50% và >= 5 calls, tệ nhất trước, limit 10 ----
+    const alerts = Array.from(toolMap.entries())
+      .filter(([, agg]) => agg.calls >= 5 && successRate(agg.successCount, agg.calls) < 0.5)
+      .map(([toolName, agg]) => ({
+        toolName,
+        calls: agg.calls,
+        successRate: successRate(agg.successCount, agg.calls),
+        reason: `success rate < 50% (>= 5 calls)`,
+      }))
+      .sort((a, b) => a.successRate - b.successRate || b.calls - a.calls)
+      .slice(0, ALERTS_LIMIT)
+
+    return NextResponse.json({
+      period: { days, from: from.toISOString(), to: to.toISOString() },
+      summary,
+      byTool,
+      byAgent,
+      timeline,
+      alerts,
+    })
   } catch (error) {
-    console.error('[Tools/Analytics] GET error:', error)
-    return NextResponse.json({ error: 'Failed to compute analytics' }, { status: 500 })
+    // Fail-open — zero-state 200 (analytics không được phép 500)
+    console.error('[Tools/Analytics] GET error (fail-open → zero-state):', error)
+    return NextResponse.json(zeroState(days, from, to))
   }
 }

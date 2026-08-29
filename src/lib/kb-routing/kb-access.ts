@@ -117,6 +117,10 @@ export interface UserKBResult {
    *  chạy detection hoặc flag tắt. */
   communities: CommunityInfo[]
   confidence: number  // 0-1 — how relevant the KB content is
+  /** Task 20-c — confidence TRƯỚC calibration (giá trị heuristic gốc).
+   *  Giữ để train calibration trên input THẬT (EvalResult.rawConfidence) —
+   *  tránh feedback-loop fit trên output của chính model calibration. */
+  rawConfidence?: number
   source: 'user-kb'
 }
 
@@ -269,9 +273,12 @@ export async function searchUserKB(
   const communities = communitiesResult.status === 'fulfilled' ? communitiesResult.value : []
 
   // Phase 4 SMOLAB Prop 3.5 apply — calibrate the raw heuristic confidence with
-  // the trained logistic-regression model (scripts/train-calibration.ts →
+  // the trained logistic-regression model (calibration-train.ts →
   // CalibrationModel row). Falls back to the raw value when no model is trained
   // or sampleSize < 20 → zero behavior change until the user trains.
+  // Task 20-c: rawConfidence (giá trị TRƯỚC calibration) cũng được trả về —
+  // EvalResult.rawConfidence phải lấy TỪ ĐÂY, không lấy `confidence` (đã
+  // calibrate) — tránh feedback-loop trainer fit trên output của chính nó.
   const rawConfidence = calculateRawConfidence(chunks, entities, memories)
   const confidence = await getCalibratedConfidence(rawConfidence)
   const durationMs = Date.now() - startTime
@@ -284,6 +291,7 @@ export async function searchUserKB(
     memories,
     communities,
     confidence,
+    rawConfidence,
     source: 'user-kb',
   }
 }
