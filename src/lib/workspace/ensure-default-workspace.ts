@@ -92,6 +92,12 @@ export async function ensureDefaultWorkspace(): Promise<void> {
       } else if (currentClean !== repoUrl) {
         await execFileAsync('git', ['remote', 'set-url', 'origin', repoUrl], { cwd: rootPath, timeout: 10_000 })
         console.log(`[WORKSPACE] Đã cập nhật remote origin: ${currentClean} → ${repoUrl}`)
+      } else if (currentRemote !== currentClean) {
+        // FIX 2026-09-11 (review #10 LOW): URL trùng nhưng đang NHÚNG TOKEN trong
+        // .git/config → normalize về URL sạch (token sống ở token store, không
+        // nằm trong config world-readable)
+        await execFileAsync('git', ['remote', 'set-url', 'origin', repoUrl], { cwd: rootPath, timeout: 10_000 })
+        console.log('[WORKSPACE] Đã bỏ token nhúng khỏi remote origin URL (normalize an toàn)')
       }
     }
 

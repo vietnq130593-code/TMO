@@ -59,9 +59,7 @@ const TYPECHECK_TIMEOUT_MS = 300_000
 const TESTS_TIMEOUT_MS = 600_000
 /** Timeout smoke probe HEAD */
 const SMOKE_TIMEOUT_MS = 10_000
-/** Secret scan: tối đa số file untracked đọc nội dung */
-const UNTRACKED_FILE_CAP = 20
-/** Secret scan: tối đa dung lượng mỗi file untracked */
+/** Secret scan: tối đa dung lượng mỗi file untracked (đọc 100KB đầu — secret thường nằm đầu file) */
 const UNTRACKED_FILE_MAX_BYTES = 100 * 1024
 
 /**
@@ -72,8 +70,13 @@ const SECRET_PATTERNS: Array<{ name: string; regex: RegExp }> = [
   { name: 'github_classic_pat', regex: /ghp_[A-Za-z0-9]{20,}/ },
   { name: 'github_fine_grained_pat', regex: /github_pat_[A-Za-z0-9_]{20,}/ },
   { name: 'github_oauth_token', regex: /gho_[A-Za-z0-9]{20,}/ },
+  { name: 'github_refresh_token', regex: /ghr_[A-Za-z0-9]{20,}/ },
   { name: 'sk_api_key', regex: /sk-[A-Za-z0-9]{20,}/ },
   { name: 'private_key_block', regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+  // FIX 2026-09-11 (review #9 LOW): bổ sung AWS access key, Google API key, Slack token
+  { name: 'aws_access_key', regex: /AKIA[0-9A-Z]{16}/ },
+  { name: 'google_api_key', regex: /AIza[0-9A-Za-z_\-]{35}/ },
+  { name: 'slack_token', regex: /xox[baprs]-[0-9A-Za-z\-]{10,}/ },
   { name: 'generic_secret_assignment', regex: /(api[_-]?key|secret|password|token)\s*[:=]\s*['"][A-Za-z0-9_\-]{16,}['"]/i },
 ]
 
@@ -393,21 +396,63 @@ export async function runPrePushVerification(opts: {
     console.log('[PRE-PUSH] ⊘ smoke SKIP — chưa cấu hình smokeUrl — bỏ qua probe')
   }
 
-  // ── Bước 5: secret_scan (git diff HEAD + file untracked) ──
+  // ── Bước 5: secret_scan (git diff HEAD + ahead commits + file untracked) ──
+  // FIX 2026-09-11 (review #2/#4/#5): (2) quét cả commit CHƯA PUSH (đường
+  // clean-tree-ahead có thể đẩy commit tạo out-of-band qua git_commit — không
+  // qua pipeline); (4) FAIL-CLOSED khi git diff lỗi thật (trước đây fail-open);
+  // (5) quét MỌI file untracked sẽ commit (bỏ cap 20 file).
   const scanOk = await step('secret_scan', async () => {
     const hits: SecretHit[] = []
+    const scanSources: string[] = []
 
     // (a) Diff toàn bộ thay đổi chưa commit so với HEAD
-    const diff = await execFileAsync('git', ['diff', 'HEAD'], {
+    // FIX #4: phân biệt "repo chưa có commit nào" (an toàn bỏ qua) với lỗi THẬT (fail-closed)
+    const diffResult = await execFileAsync('git', ['diff', 'HEAD'], {
+      cwd: root,
+      timeout: 30_000,
+      maxBuffer: 20 * 1024 * 1024,
+    })
+      .then(r => ({ ok: true as const, stdout: r.stdout }))
+      .catch(() => ({ ok: false as const, stdout: '' }))
+    const diff = diffResult.ok ? diffResult.stdout : ''
+    const diffFailed = !diffResult.ok
+    if (diff) scanSources.push('git diff HEAD')
+    hits.push(...scanDiffForSecrets(diff))
+
+    // (b+) FIX #2: diff các commit CHƯA PUSH (upstream..HEAD) — nội dung đã
+    // commit out-of-band (qua git_commit riêng) cũng phải qua secret scan trước push
+    const aheadDiff = await execFileAsync('git', ['diff', '@{upstream}..HEAD'], {
       cwd: root,
       timeout: 30_000,
       maxBuffer: 20 * 1024 * 1024,
     })
       .then(r => r.stdout)
-      .catch(() => '') // repo chưa có commit nào / git lỗi → chuỗi rỗng, scan bỏ qua
-    hits.push(...scanDiffForSecrets(diff))
+      .catch((e: unknown) => {
+        // chưa có upstream tracking (push lần đầu) → quét commit gần nhất
+        const msg = e instanceof Error ? e.message : String(e)
+        if (/no upstream|ambiguous|unknown revision|bad revision/i.test(msg)) return null
+        return '' // lỗi khác → đánh dấu fail dưới
+      })
+    if (aheadDiff === null) {
+      const lastCommitDiff = await execFileAsync('git', ['diff', 'HEAD~1..HEAD'], {
+        cwd: root,
+        timeout: 30_000,
+        maxBuffer: 20 * 1024 * 1024,
+      })
+        .then(r => r.stdout)
+        .catch(() => undefined)
+      if (typeof lastCommitDiff === 'string' && lastCommitDiff) {
+        hits.push(...scanDiffForSecrets(lastCommitDiff))
+        scanSources.push('diff HEAD~1..HEAD (chưa có upstream)')
+      }
+    } else if (typeof aheadDiff === 'string' && aheadDiff) {
+      hits.push(...scanDiffForSecrets(aheadDiff))
+      scanSources.push('diff @{upstream}..HEAD (commit chưa push)')
+    }
 
-    // (b) File untracked (đã qua .gitignore): git ls-files --others --exclude-standard
+    // (c) File untracked (đã qua .gitignore) — FIX #5: quét TẤT CẢ file sẽ
+    // commit (bỏ cap số file; giữ cap 100KB/file để chống phình — file lớn hơn
+    // vẫn quét 100KB đầu, đủ bắt secret ở phần đầu file)
     const untrackedOut = await execFileAsync('git', ['ls-files', '--others', '--exclude-standard'], {
       cwd: root,
       timeout: 15_000,
@@ -418,21 +463,44 @@ export async function runPrePushVerification(opts: {
       .split('\n')
       .map(l => l.trim().replace(/^"|"$/g, ''))
       .filter(Boolean)
-      .slice(0, UNTRACKED_FILE_CAP) // cap 20 file — chống phình pipeline
     for (const rel of untrackedFiles) {
       try {
         const abs = path.resolve(root, rel)
         const stat = await fs.stat(abs)
-        if (!stat.isFile() || stat.size > UNTRACKED_FILE_MAX_BYTES) continue // cap 100KB/file
-        const content = await fs.readFile(abs, 'utf-8')
-        hits.push(...scanLinesForSecrets(content.split('\n'), rel, 1))
-      } catch { /* đọc file lỗi → bỏ qua (secret scan không được crash pipeline) */ }
+        if (!stat.isFile()) continue
+        const fh = await fs.open(abs, 'r')
+        try {
+          const len = Math.min(stat.size, UNTRACKED_FILE_MAX_BYTES)
+          const buf = Buffer.alloc(len)
+          await fh.read(buf, 0, len, 0)
+          const content = buf.toString('utf-8')
+          hits.push(...scanLinesForSecrets(content.split('\n'), rel, 1))
+        } finally {
+          await fh.close()
+        }
+      } catch { /* đọc file lỗi → bỏ qua file (secret scan không được crash pipeline) */ }
+    }
+    if (untrackedFiles.length > 0) scanSources.push(`${untrackedFiles.length} file untracked`)
+
+    // FIX #4: fail-closed — git diff HEAD lỗi thật (không phải repo rỗng) → FAIL
+    if (diffFailed && diff === '') {
+      // Kiểm tra repo có commit nào chưa: git rev-parse --verify HEAD
+      const hasHead = await execFileAsync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: root, timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false)
+      if (hasHead) {
+        return {
+          status: 'fail',
+          detail: 'git diff HEAD lỗi — secret scan không thể xác minh (fail-closed theo nguyên tắc số 1)',
+        }
+      }
+      // repo chưa có commit nào → diff rỗng là hợp lệ
     }
 
     if (hits.length === 0) {
       return {
         status: 'pass',
-        detail: `Không phát hiện secret (quét git diff HEAD + ${untrackedFiles.length} file untracked)`,
+        detail: `Không phát hiện secret (quét ${scanSources.join(' + ') || 'git diff HEAD'})`,
       }
     }
     // Liệt kê file:line từng hit — secret bị che (chỉ 8 ký tự đầu)

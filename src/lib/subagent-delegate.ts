@@ -59,6 +59,17 @@ const SUBAGENT_MAX_ITERATIONS = intEnv('SUBAGENT_MAX_ITERATIONS', 5)
 const SUBAGENT_TOKEN_BUDGET = intEnv('SUBAGENT_TOKEN_BUDGET', 40_000)
 /** Timeout toàn bộ sub-agent run (mặc định 8 phút < time budget loop 30'; 0 = ∞ — CI-1) */
 const SUBAGENT_TIMEOUT_MS = intEnv('SUBAGENT_TIMEOUT_MS', 8 * 60_000)
+/**
+ * FIX 2026-09-11 (review #7 MEDIUM): khi CẢ 3 cap đều = 0 (unlimited) sub-agent
+ * không còn phanh nào → parent kẹt vĩnh viễn trong executeTool. Trần cứng dự
+ * phòng: KHÔNG thể tắt qua env — chỉ kích hoạt khi cả 3 cap đều 0.
+ */
+const SUBAGENT_HARD_CEILING_ITERATIONS = 200
+const ALL_SUBAGENT_CAPS_UNLIMITED =
+  SUBAGENT_MAX_ITERATIONS === 0 && SUBAGENT_TOKEN_BUDGET === 0 && SUBAGENT_TIMEOUT_MS === 0
+const SUBAGENT_EFFECTIVE_MAX_ITERATIONS = ALL_SUBAGENT_CAPS_UNLIMITED
+  ? SUBAGENT_HARD_CEILING_ITERATIONS
+  : SUBAGENT_MAX_ITERATIONS
 /** Cap ký tự tool result trong context CỦA SUB-AGENT */
 const SUBAGENT_TOOL_RESULT_CHARS = 4000
 /** Cap ký tự báo cáo trả về PARENT */
@@ -276,7 +287,7 @@ export async function runSubAgentForProfile(params: {
     } catch { /* fail-open — giữ whitelist mặc định */ }
     const allowedTools = effectiveBaseTools.filter(t => !DEPTH_GUARD_TOOLS.includes(t))
 
-    console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${SUBAGENT_MAX_ITERATIONS === 0 ? '∞' : SUBAGENT_MAX_ITERATIONS} vòng, budget ${SUBAGENT_TOKEN_BUDGET === 0 ? '∞' : SUBAGENT_TOKEN_BUDGET} tokens${SUBAGENT_TIMEOUT_MS === 0 ? ', timeout ∞' : ''}, ${allowedTools.length} tools)`)
+    console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${ALL_SUBAGENT_CAPS_UNLIMITED ? SUBAGENT_HARD_CEILING_ITERATIONS + ' (trần cứng — cả 3 cap = 0)' : SUBAGENT_MAX_ITERATIONS === 0 ? '∞' : SUBAGENT_MAX_ITERATIONS} vòng, budget ${SUBAGENT_TOKEN_BUDGET === 0 ? '∞' : SUBAGENT_TOKEN_BUDGET} tokens${SUBAGENT_TIMEOUT_MS === 0 ? ', timeout ∞' : ''}, ${allowedTools.length} tools)`)
 
     // ===== Mini ReAct loop =====
     const systemPrompt = profile.instruction || `Bạn là ${profile.name} — agent chuyên trách. Hoàn thành nhiệm vụ được delegate một cách tự chủ, ngắn gọn.`
@@ -287,7 +298,9 @@ export async function runSubAgentForProfile(params: {
     const loopPromise = (async () => {
       // CI-1 (0 = UNLIMITED): cap = 0 → KHÔNG trần tương ứng (vòng / token /
       // thời gian). Check timeout/token chỉ áp dụng khi cap đó > 0.
-      while (SUBAGENT_MAX_ITERATIONS === 0 || iterations < SUBAGENT_MAX_ITERATIONS) {
+      // CI-1 + review #7: dùng effective max — khi cả 3 cap = 0 (unlimited) vẫn có
+      // trần cứng 200 vòng chống kẹt parent vĩnh viễn
+      while (SUBAGENT_EFFECTIVE_MAX_ITERATIONS === 0 || iterations < SUBAGENT_EFFECTIVE_MAX_ITERATIONS) {
         if (isCancelled()) { state.endedBy = 'cancelled'; return }
         if (timedOut) { return } // zombie guard — parent đã nhận timeout
         if (SUBAGENT_TIMEOUT_MS > 0 && Date.now() - startedAt > SUBAGENT_TIMEOUT_MS - 60_000) {
@@ -342,7 +355,7 @@ export async function runSubAgentForProfile(params: {
           // conclude như thường. Giờ: đẩy feedback vào transcript để LLM phát lại
           // GỌN HƠN (chia file thành nhiều lần ghi qua file_write append) — tối đa 2 lần.
           const brokenHint = detectBrokenToolCallHint(result.content)
-          if (brokenHint && parseFailNudges < 2 && !timedOut && (SUBAGENT_MAX_ITERATIONS === 0 || iterations < SUBAGENT_MAX_ITERATIONS)) {
+          if (brokenHint && parseFailNudges < 2 && !timedOut && (SUBAGENT_EFFECTIVE_MAX_ITERATIONS === 0 || iterations < SUBAGENT_EFFECTIVE_MAX_ITERATIONS)) {
             parseFailNudges++
             transcript.push({ role: 'assistant', content: result.content })
             transcript.push({ role: 'tool', content: brokenHint })
@@ -409,7 +422,7 @@ export async function runSubAgentForProfile(params: {
       // timeout — trước đây dead-code vì endedBy khởi tạo 'error' (fix ở trên).
       if (state.endedBy !== 'concluded' && state.endedBy !== 'cancelled' && state.endedBy !== 'error' && state.endedBy !== 'timeout') {
         state.forceWrapUp = true
-        if (!state.wrapUpReason) state.wrapUpReason = `hết ${SUBAGENT_MAX_ITERATIONS === 0 ? '∞' : SUBAGENT_MAX_ITERATIONS} vòng`
+        if (!state.wrapUpReason) state.wrapUpReason = `hết ${SUBAGENT_EFFECTIVE_MAX_ITERATIONS} vòng${ALL_SUBAGENT_CAPS_UNLIMITED ? ' (trần cứng dự phòng — cả 3 cap = 0)' : ''}`
         state.endedBy = state.wrapUpReason.includes('token')
           ? 'token_budget'
           : state.wrapUpReason.includes('thời gian') ? 'timeout' : 'iteration_limit'

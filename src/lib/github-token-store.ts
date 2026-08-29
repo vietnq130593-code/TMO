@@ -48,7 +48,10 @@ export function saveGithubToken(token: string): { preview: string } {
 
   const filePath = tokenFilePath()
   const payload: StoredGithubToken = { token: clean, savedAt: new Date().toISOString() }
-  writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf-8')
+  // FIX 2026-09-11 (review #15 NIT): ghi với mode 0600 NGAY TỪ ĐẦU (trước đây
+  // write mặc định 0644 rồi chmod sau — tồn tại cửa sổ thời gian file group/
+  // world-readable; mode option không có tác dụng trên Windows nhưng vô hại)
+  writeFileSync(filePath, JSON.stringify(payload, null, 2), { encoding: 'utf-8', mode: 0o600 })
   try { chmodSync(filePath, 0o600) } catch { /* non-fatal trên Windows */ }
 
   console.log(`[GithubTokenStore] Saved GitHub token (${maskGithubToken(clean)}) → ${filePath}`)

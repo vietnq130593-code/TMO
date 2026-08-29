@@ -1190,16 +1190,29 @@ export async function gitPush(args: {
       console.log('[gitPush] Cleaned embedded token from .git/config (safety)')
     }
 
+    // FIX 2026-09-11 (review #3 MEDIUM): push qua one-shot URL KHÔNG cập nhật
+    // refs/remotes/origin/<branch> → tracking ref stale mãi (ahead/behind sai,
+    // verify_and_push lặp push dư). Fetch + update-ref để tracking phản ánh đúng.
+    await execFileAsync('git', ['fetch', authedUrl, branch], { cwd: root, timeout: 60_000 })
+      .then(() => execFileAsync('git', ['update-ref', `refs/remotes/${remoteName}/${branch}`, 'FETCH_HEAD'], { cwd: root, timeout: 5_000 }))
+      .catch(() => {}) // best-effort — tracking stale không làm hỏng push đã thành công
+
+    // FIX 2026-09-11 (review #3): "pushed" phải phản ánh kết quả THẬT —
+    // "Everything up-to-date" nghĩa là KHÔNG có commit mới nào được đẩy lên
+    const combined = `${stdout || ''}\n${stderr || ''}`
+    const upToDate = /Everything up-to-date/i.test(combined)
+
     return {
       success: true,
-      pushed: true,
+      pushed: !upToDate,
+      upToDate,
       branch,
       remote: status.remoteUrl,
       beforeCommit: status.headCommit,
       afterCommit: afterOut,
-      commitsPushed: status.ahead || 'unknown',
+      commitsPushed: upToDate ? 0 : (status.ahead || 'unknown'),
       authenticated: !!token,
-      output: (stdout + stderr).trim().slice(0, 2000),
+      output: (token ? combined.split(token).join('****') : combined).trim().slice(0, 2000),
     }
   } catch (err: any) {
     const { stdout, stderr } = err
@@ -1217,7 +1230,9 @@ export async function gitPush(args: {
 
     return {
       success: false,
-      error: `git push failed: ${err.message}`,
+      // FIX 2026-09-11 (review #1 HIGH): err.message chứa FULL command line kèm
+      // authed URL (có token) → mask token trong error như đã làm với output
+      error: `git push failed: ${token ? String(err.message).split(token).join('****') : err.message}`,
       hint,
       branch,
       remote: status.remoteUrl,
@@ -1302,7 +1317,8 @@ export async function gitPullWorkspace(args: {
     } else if (/Repository not found|does not appear to exist/i.test(raw)) {
       hint = `Không tìm thấy repository — kiểm tra URL remote: ${remoteUrl}`
     }
-    return { success: false, error: `git fetch failed: ${err.message}`, hint, remote: remoteUrl, branch, output: output.slice(0, 2000) }
+    // FIX 2026-09-11 (review #1 HIGH): mask token trong error message (authed URL leak)
+    return { success: false, error: `git fetch failed: ${token ? String(err.message).split(token).join('****') : err.message}`, hint, remote: remoteUrl, branch, output: output.slice(0, 2000) }
   }
 
   // 2. So sánh HEAD vs FETCH_HEAD
@@ -1400,7 +1416,8 @@ export async function gitPullWorkspace(args: {
     }
     return {
       success: false,
-      error: `git pull (ff-only) failed: ${err.message}`,
+      // FIX 2026-09-11 (review #1 HIGH): mask token trong error message (authed URL leak)
+      error: `git pull (ff-only) failed: ${token ? String(err.message).split(token).join('****') : err.message}`,
       hint,
       branch,
       remote: remoteUrl,
@@ -1461,6 +1478,23 @@ export async function openWorkspaceInExplorer(
       editor,
       message: `Thư mục không tồn tại trên đĩa: ${resolved}`,
       error: `Thư mục không tồn tại: ${resolved}`,
+    }
+  }
+
+  // FIX 2026-09-11 (review #6 MEDIUM): chống shell injection — command chạy qua
+  // shell:true với "${resolved}" được bọc nháy kép; các ký tự "/" ` $ " và ký tự
+  // điều khiển có thể THOÁT khỏi chuỗi quote (command substitution / escape).
+  // Windows cấm " trong tên file (đường dẫn E:\APP\TMO-clone an toàn); trên
+  // Linux/mac đường dẫn chứa các ký tự này → từ chối mở thay vì rủi ro inject.
+  if(/["`$\r\n\t]/.test(resolved)){
+    return {
+      success: false,
+      opened: false,
+      rootPath: resolved,
+      method: 'none',
+      editor,
+      message: 'Đường dẫn chứa ký tự nguy hiểm với shell (" ` $ tab/newline) — từ chối mở để chống injection',
+      error: 'Đường dẫn chứa ký tự không an toàn cho shell exec',
     }
   }
 
