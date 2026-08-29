@@ -116,6 +116,14 @@ function recordWorkMemory(agentId: string, sessionId: string | null, content: st
  * Trả null nếu không có bằng chứng hợp lệ. Bảo thủ chủ đích: chỉ chuỗi-con
  * CHÍNH XÁC mới được tính (xem autoCompleteRunTodosByEvidence trong dev-tools).
  */
+/**
+ * FIX review GĐ2 #1 (MEDIUM): evidence auto-complete chỉ tính tool THAY ĐỔI
+ * thật — file_read/liệt kê (read-only) KHÔNG đánh dấu todo hoàn thành (đọc
+ * xong chưa nghĩa là làm xong; trước đây mọi tool có args.path đều tính).
+ */
+const TODO_EVIDENCE_MODIFY_TOOLS = new Set([
+  'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'opencode',
+])
 function extractTodoEvidence(toolName: string, args: Record<string, unknown> | undefined): string | null {
   try {
     if (!args || typeof args !== 'object') return null
@@ -124,6 +132,7 @@ function extractTodoEvidence(toolName: string, args: Record<string, unknown> | u
       if (typeof cmd === 'string' && cmd.trim().length >= 6) return cmd.trim()
       return null
     }
+    if (!TODO_EVIDENCE_MODIFY_TOOLS.has(toolName)) return null
     const p = (args as { path?: unknown }).path ?? (args as { file_path?: unknown }).file_path
     if (typeof p === 'string' && p.length >= 3 && (p.includes('/') || p.includes('.'))) return p
     return null

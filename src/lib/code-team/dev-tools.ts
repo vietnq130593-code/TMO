@@ -24,6 +24,7 @@ import type { Dirent } from 'node:fs'
 // Both Code Team agents AND independent agents share this table; sessionId scopes each list.
 import { db } from '@/lib/db'
 import { isFlagEnabled } from '@/lib/feature-flags'
+import { getActiveRunId } from '@/lib/agent-run-tracker'
 // TOMBSTONE GUARD (fix review 2026-09-08): chặn todo_write cho session đã xóa
 import { isSessionDeleted } from '@/lib/session-tombstone'
 // Phase 6/7 (rebuild) — workspace root now follows the USER's ACTIVE workspace
@@ -1661,11 +1662,11 @@ function stripPorcelainPath(raw: string): string {
  * Read-only — KHÔNG feature flag. Dùng ĐẦU TIÊN khi khảo sát repo trước khi sửa.
  */
 export async function gitStatus(rootArg?: string): Promise<unknown> {
-  // root: absolute dùng nguyên; relative resolve theo ACTIVE workspace root
-  const wsRoot = await resolveWorkspaceRoot()
+  // root: relative resolve theo ACTIVE workspace root; absolute bị chặn nếu
+  // thoát khỏi workspace (FIX review GĐ2 LOW#1 — đồng bộ với gitDiff/gitLog)
   const root = rootArg && typeof rootArg === 'string' && rootArg.trim()
-    ? path.resolve(wsRoot, rootArg.trim())
-    : wsRoot
+    ? await resolveWithinWorkspace(rootArg.trim())
+    : await resolveWorkspaceRoot()
 
   try {
     const isRepo = await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, timeout: 5_000 })
@@ -3201,10 +3202,15 @@ export async function todoRead(args: {
 export async function archiveStaleRunTodos(sessionId: string): Promise<number> {
   try {
     if (!sessionId) return 0
+    // FIX review GĐ2 LOW#2: bỏ qua todo của run VẪN ĐANG CHẠY trong session
+    // (goal-loop đồng thời — run mới archive nhầm todo run đang sống thì
+    // honest-close của run đó sẽ không còn thấy gì để đóng)
+    const activeRunId = getActiveRunId(sessionId)
     const res = await db.todo.updateMany({
       where: {
         sessionId,
         runId: { not: null },
+        ...(activeRunId ? { runId: { not: activeRunId } } : {}),
         status: { in: ['pending', 'in_progress', 'blocked'] },
       },
       data: { status: 'archived', archivedAt: new Date() },
@@ -3258,11 +3264,18 @@ export async function closeRunTodosAtEnd(params: {
     const scope: { sessionId: string; runId: string | null } = { sessionId, runId }
 
     // 1) in_progress → completed (đạt) | failed (chưa đạt / crash)
+    // FIX review GĐ2 LOW#4: 'blocked' đóng cùng nhóm in_progress (đã bắt tay,
+    // bị chặn — verdict cuối quyết định completed/failed, không để kẹt mãi)
     const ip = await db.todo.updateMany({
       where: { ...scope, status: 'in_progress' },
       data: { status: goalComplete ? 'completed' : 'failed' },
     })
     out.inProgressClosed = ip.count
+    const bl = await db.todo.updateMany({
+      where: { ...scope, status: 'blocked' },
+      data: { status: goalComplete ? 'completed' : 'failed' },
+    })
+    out.inProgressClosed += bl.count
 
     // 2) pending — tùy verdict
     if (goalComplete) {

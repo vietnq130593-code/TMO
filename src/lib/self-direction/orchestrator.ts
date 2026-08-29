@@ -97,6 +97,22 @@ const SD_CODE_TOOL_ALLOWLIST = new Set([
   'git_status', 'git_diff', 'git_log', 'todo_write',
 ])
 
+/**
+ * FIX review GĐ2 #3 (MEDIUM): shell nằm trong allowlist nhưng KHÔNG được dùng
+ * để commit/push thủ công — chặn bằng denylist substring trong lệnh shell
+ * (giữ invariant "pipeline bước cuối là đường DUY NHẤT đẩy code").
+ * Chỉ áp dụng cho SD code-workflow steps — không đụng shell tool của agents
+ * thường (mô hình tin tưởng đã có từ trước).
+ */
+const SD_SHELL_DENY_PATTERNS: RegExp[] = [
+  /\bgit\s+(commit|push|pull|merge|rebase|reset|checkout\s+--\s*\.|restore|clean)\b/i,
+  /\bgit\s+remote\s+(add|set-url)\b/i,
+]
+function sdShellCommandAllowed(command: unknown): boolean {
+  if (typeof command !== 'string') return true
+  return !SD_SHELL_DENY_PATTERNS.some(re => re.test(command))
+}
+
 /** Receipt 1 bước GIỮA code-workflow — log tool calls đã THỰC THI thật */
 export interface SdToolBatchReceipt {
   kind: 'tool-batch'
@@ -729,6 +745,16 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
         })
         continue
       }
+      // FIX review GĐ2 #3: shell bị chặn lệnh git commit/push/pull... — pipeline
+      // bước cuối là đường DUY NHẤT đẩy code (invariant thực thi, không chỉ prompt)
+      if (tc.name === 'shell' && !sdShellCommandAllowed((tc.args as { command?: unknown } | undefined)?.command)) {
+        toolCallsLog.push({ tool: tc.name, success: false })
+        messages.push({
+          role: 'tool',
+          content: sdToolResultToMessage(tc.name, false, 'Lệnh shell chứa git commit/push/pull/merge/rebase/reset/remote — BỊ CHẶN ở bước code-workflow. Pipeline verify_and_push ở bước CUỐI sẽ commit + push sau khi qua kiểm định đầy đủ. Hãy tiếp tục phần việc code.'),
+        })
+        continue
+      }
       // THỰC THI THẬT trong workspace active — executeTool của tool-executor
       // (context mirror agent-goal-loop: agentName + sessionId sd-<proposalId>)
       const res = await executeTool(tc.name, tc.args, { agentName: step.assignee, sessionId })
@@ -1004,12 +1030,40 @@ export async function triggerOrchestration(proposalId: string): Promise<boolean>
   }
 }
 
+/**
+ * FIX review GĐ2 #2 (MEDIUM): MUTEX workspace cho code-workflow — các
+ * orchestration code-workflow dùng CHUNG 1 workspace active nên phải chạy
+ * TUẦN TỰ: (a) tránh git index.lock contention khi 2 pipeline cùng commit;
+ * (b) tránh pipeline proposal A commit dính file nửa vời của proposal B
+ * (cross-contamination). Chuỗi promise nối tiếp — mỗi orchestration chờ
+ * orchestration code-workflow trước xong hẳn mới bắt đầu.
+ * (llm-mode proposals KHÔNG qua mutex — chúng không đụng workspace file/git.)
+ */
+let sdCodeWorkflowChain: Promise<unknown> = Promise.resolve()
+function serializeCodeWorkflow<T>(fn: () => Promise<T>): Promise<T> {
+  const next = sdCodeWorkflowChain.then(fn, fn) // chạy kể cả khi cái trước fail
+  // giữ chain sống dù fn throw — nhưng không nuốt lỗi của next
+  sdCodeWorkflowChain = next.catch(() => undefined)
+  return next
+}
+
 /** Kiểm tra orchestration có đang chạy cho proposal này không (in-process) */
 export function isOrchestrating(proposalId: string): boolean {
   return runningOrchestrations.has(proposalId)
 }
 
 async function runOrchestration(proposalId: string): Promise<void> {
+  // FIX review GĐ2 #2: code-workflow → serialize qua mutex workspace (XEM
+  // serializeCodeWorkflow). Đọc executionMode TRƯỚC để quyết định có cần mutex.
+  const pre = await db.selfDirectionProposal.findUnique({ where: { id: proposalId }, select: { executionMode: true } })
+  if (pre?.executionMode === 'code-workflow') {
+    await serializeCodeWorkflow(() => runOrchestrationInner(proposalId))
+    return
+  }
+  await runOrchestrationInner(proposalId)
+}
+
+async function runOrchestrationInner(proposalId: string): Promise<void> {
   // === Phase 1: PLAN ===
   await db.selfDirectionProposal.update({ where: { id: proposalId }, data: { status: 'planning' } })
   const proposal = await db.selfDirectionProposal.findUnique({ where: { id: proposalId } })

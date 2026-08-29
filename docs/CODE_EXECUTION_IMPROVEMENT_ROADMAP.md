@@ -6,7 +6,7 @@
 | **Ngày lập** | 2026-09-11 |
 | **Người lập kế hoạch** | Opus (Kiến trúc sư AI / Kỹ sư hệ thống) |
 | **Người phê duyệt** | Mr. Architect |
-| **Trạng thái** | 🟢 ĐANG TRIỂN KHAI — GĐ1 hoàn thành 2026-09-11; GĐ2 tiếp theo |
+| **Trạng thái** | 🟢 ĐANG TRIỂN KHAI — GĐ1 + GĐ2 hoàn thành 2026-09-11 (golden E2E PASS); GĐ3 tiếp theo |
 | **Phạm vi** | 6 hạng mục cải tiến chức năng code, triển khai liên tục dài hạn |
 | **Workspace chuẩn** | `E:\APP\TMO-clone` (máy local Mr. Architect) |
 | **Kho lưu trữ chuẩn** | `https://github.com/vietnq130593-code/TMO` (private) |
@@ -624,7 +624,10 @@ kết quả sau cùng kèm commit hash + đề xuất tiếp theo
 | GĐ1 | CI-1 Unlimited budget | ✅ HOÀN THÀNH 2026-09-11 | 0=unlimited semantics + phanh no_progress (3 chu kỳ không tool-call thành công) + getGoalLoopBudgetInfo() + intEnv fix falsy-bug; maxTokens existing 32768 giữ nguyên, schema default mới 16384 |
 | GĐ1 | CI-4 B1-B2 Verify tools | ✅ HOÀN THÀNH 2026-09-11 | ENABLE_LINT/TYPE_CHECK/LSP/COVERAGE/SCREENSHOT=true; Omega +7 tools (lint, type_check, lsp_diagnostics, test_coverage, browser_screenshot, open_workspace, verify_and_push); SENTINEL +browser_screenshot; APEX/CATALYST +verify_and_push; APEX +open_workspace |
 | GĐ1 | CI-6 B1-B4 Workspace pipeline | ✅ HOÀN THÀNH 2026-09-11 | ensureDefaultWorkspace (bootstrap + git init + remote + activate + auto-open Explorer) | open_workspace tool | pre-push-verify.ts (lint→typecheck→tests→smoke→secret-scan→commit→push→pull) | verify_and_push tool | DEFAULT_REPO_URL=TMO_REPO_URL env |
-| GĐ2 | CI-2 + CI-4 B3-B6 + CI-6 B5/B8-B9 | ⏳ Tiếp theo | |
+| GĐ2 | CI-2 Todo theo tác vụ | ✅ HOÀN THÀNH 2026-09-11 | Todo.runId + archivedAt; archive run cũ khi run mới; per-item honest close + crash path; auto-complete theo evidence; API ?runId= + agent-run.todos; UI panel ưu tiên todo đúng run; 20/20 functional tests |
+| GĐ2 | CI-4 B3-B6 Git tools + skill | ✅ HOÀN THÀNH 2026-09-11 | 5 tools git_status/diff/log/branch/clone (injection guards, token masked) — 70 builtin; skill tmo-code-workflow SOP 8 bước; MCP mock ẩn + chặn; grants 5 agents |
+| GĐ2 | CI-6 B5 SELF-DIRECTION↔workspace | ✅ HOÀN THÀNH 2026-09-11 | executionMode + workspaceReceipt; bước giữa chạy executeTool THẬT (17 tools, không commit/push tay); bước cuối verify_and_push pipeline 9 bước; báo cáo Omega + section kiểm định + commit hash. GOLDEN E2E: proposal thật → 4 agents thực thi 16 tool calls thật → pipeline tự commit 00d337a + push + pull verify → completed |
+| GĐ2 | Review findings còn lại | ✅ HOÀN THÀNH 2026-09-11 | #8 git_push redirect verify_and_push (description), #11 bootstrap 3 trạng thái, #12 smokeUrl SSRF guard, #14 per-cap unlimited flags. Defer GĐ3: #13 runner fallback, #16 gitCommit execFile, Neo4j log spam |
 | GĐ3 | CI-3 Nén context | ⏳ | |
 | GĐ4 | CI-5 Durable goal loop | ⏳ | |
 
