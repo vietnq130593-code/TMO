@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { readFile, stat, readdir } from 'fs/promises'
 import { join, resolve } from 'path'
 import { existsSync } from 'fs'
+import { allowPreviewPort } from '@/lib/preview-ports'
 
 export const dynamic = 'force-dynamic'
 
@@ -212,6 +213,9 @@ export async function GET(request: Request) {
       })
       clearTimeout(timeout)
       detectedPorts.push({ port, status: checkRes.status })
+      // Preview proxy allowlist (user request 2026-09-10): port dev server đang
+      // chạy (scan thấy) → cho phép forward qua same-origin proxy route.
+      allowPreviewPort(port)
       if (!result.detectedPort) {
         result.detectedPort = port
       }

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { spawn } from 'child_process'
 import net from 'net'
 import { createWriteStream, existsSync, readFileSync } from 'fs'
+import { allowPreviewPort } from '@/lib/preview-ports'
 import { resolve, join } from 'path'
 
 export const dynamic = 'force-dynamic'
@@ -152,6 +153,10 @@ export async function POST(request: Request) {
     const startedAt = Date.now()
 
     runningProcesses.set(resolvedRoot, { child: childProcess, port, logFile, startedAt })
+
+    // Preview proxy allowlist (user request 2026-09-10) — port này được phép
+    // forward qua /api/opencode/preview/proxy/<port>/...
+    allowPreviewPort(port)
 
     // Clean up on process exit
     childProcess.on('exit', () => {

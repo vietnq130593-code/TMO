@@ -18,6 +18,14 @@ const nextConfig: NextConfig = {
   // Packages that need to run outside the bundler (native modules)
   serverExternalPackages: ["neo4j-driver", "pdf-parse"],
 
+  // PREVIEW SAME-ORIGIN PROXY (fix 2026-09-10): iframe Preview trỏ tới
+  // /api/opencode/preview/proxy/<port>/ (CÓ trailing slash — để relative URL
+  // trong HTML của app được preview resolve đúng). Next mặc định 308-redirect
+  // URL có trailing slash → redirect đó phá resolve relative URL của trang
+  // được proxy + phát sinh round-trip. Tắt redirect — TMO là SPA 1 trang,
+  // không route nào phụ thuộc hành vi mặc định này.
+  skipTrailingSlashRedirect: true,
+
   // Allow large file uploads through the dev server proxy.
   // Default is 10MB which causes 400 errors when uploading large PDFs.
   // Individual file limit: 100MB. Frontend uploads files ONE AT A TIME.

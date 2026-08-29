@@ -138,3 +138,4 @@ mini-services/*/.gateway.pid
 
 # Auto-provisioned TMO API token (secret — generated at startup, never commit)
 .tmo-api-token
+qdrant-backup-latest.tar

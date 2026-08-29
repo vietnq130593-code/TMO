@@ -13061,6 +13061,10 @@ function CodeTabContent() {
   // File explorer
   const [fileTree, setFileTree] = useState<FileNode[]>([])
   const [treeLoading, setTreeLoading] = useState(false)
+  // FILE TREE REALTIME (fix 2026-09-10): token ép reload tree — (a) user chọn
+  // lại CÙNG thư mục (workspaceRoot không đổi → effect không chạy → tree trống
+  // vĩnh viễn sau setFileTree([])), (b) agents thay đổi file qua tools.
+  const [treeReloadToken, setTreeReloadToken] = useState(0)
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set(['src']))
   // Phase 8 — Monaco multi-tab state. selectedFile/fileContent/editedContent
   // are now COMPAT DERIVED values (same names, see below) so existing call
@@ -13143,6 +13147,33 @@ function CodeTabContent() {
   const [previewAutoStarting, setPreviewAutoStarting] = useState(false)
   const [previewAutoStartAttempted, setPreviewAutoStartAttempted] = useState(false)
   const [previewIframeKey, setPreviewIframeKey] = useState(0)
+  // PREVIEW SAME-ORIGIN PROXY (fix 2026-09-10): iframe trỏ /api/opencode/preview/
+  // proxy/<port>/ thay vì http://127.0.0.1:<port> — hoạt động cả khi xem app qua
+  // HTTPS proxy (127.0.0.1 trong browser = máy user, không có dev server +
+  // mixed-content block). previewWaiting: dev server đã start nhưng chưa nhận
+  // connection (npm install/compile chậm) — hiện spinner thay vì iframe lỗi.
+  const [previewWaiting, setPreviewWaiting] = useState(false)
+  const previewProxyUrl = useCallback((port: number, path = '/') =>
+    `/api/opencode/preview/proxy/${port}${path.startsWith('/') ? path : `/${path}`}`, [])
+  /** Poll dev server QUA PROXY (server-side check — đúng máy với dev server)
+   *  cho tới khi sẵn sàng (không 502/403) → remount iframe. Tối đa 45s. */
+  const waitForPreviewReady = useCallback(async (port: number) => {
+    setPreviewWaiting(true)
+    for (let i = 0; i < 90; i++) {
+      await new Promise(r => setTimeout(r, 500))
+      try {
+        const res = await fetch(`/api/opencode/preview/proxy/${port}/`, { signal: AbortSignal.timeout(1500) })
+        // 502 = upstream chưa lên · 403 = port không trong allowlist — chưa sẵn sàng
+        if (res.status !== 502 && res.status !== 403) {
+          setPreviewWaiting(false)
+          setPreviewIframeKey(prev => prev + 1)
+          return true
+        }
+      } catch { /* chưa lên — poll tiếp */ }
+    }
+    setPreviewWaiting(false)
+    return false
+  }, [])
   const previewAutoStartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Phase 3: SSE log stream for the running preview dev server
   const previewEventSrcRef = useRef<EventSource | null>(null)
@@ -13231,6 +13262,9 @@ function CodeTabContent() {
     setOpenFiles([])
     setActiveFileIndex(0)
     setShowFolderPicker(false)
+    // FILE TREE REALTIME (fix 2026-09-10): ép reload tree kể cả khi chọn lại
+    // CÙNG thư mục (workspaceRoot không đổi → effect chỉ chạy nhờ token này).
+    setTreeReloadToken(t => t + 1)
     toast({ title: `Đã chọn workspace: ${folderPath}` })
     try {
       const folderName = baseNameOf(folderPath) // FIX Windows: split('/') sai với backslash
@@ -13749,6 +13783,20 @@ function CodeTabContent() {
   // lệnh chạy giả/kết quả giả.
   const agentActivityTsRef = useRef<number>(0)
   const seenAgentActRef = useRef<Set<string>>(new Set())
+  // FILE TREE REALTIME (fix 2026-09-10): loadFileTree đổi theo workspaceRoot —
+  // giữ ref luôn trỏ bản mới nhất để poll effect (deps []) gọi được.
+  const loadFileTreeRef = useRef(loadFileTree)
+  useEffect(() => { loadFileTreeRef.current = loadFileTree }, [loadFileTree])
+  // Debounce timer cho tree reload khi agents đụng file (nhiều tool calls liên
+  // tiếp trong 1 task → chỉ reload 1 lần sau khi agents ngừng đụng file 1.5s).
+  const treeReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const FILE_MUTATING_TOOLS = new Set([
+    'shell', 'run_bg', 'opencode', 'file_edit', 'file_multi_edit', 'file_delete',
+    'git_commit', 'git_push', 'git_pull', 'run_tests',
+  ])
+  useEffect(() => {
+    return () => { if (treeReloadTimerRef.current) clearTimeout(treeReloadTimerRef.current) }
+  }, [])
   useEffect(() => {
     let cancelled = false
     const poll = async () => {
@@ -13803,6 +13851,18 @@ function CodeTabContent() {
           }
         }
         agentActivityTsRef.current = maxTs
+        // FILE TREE REALTIME (fix 2026-09-10): agents vừa đụng file (shell
+        // rm/mv/touch, file_edit, file_delete, git...) → debounce reload tree
+        // sau 1.5s — File Explorer phản ánh cấu trúc filesystem MỚI NHẤT mà
+        // không cần user bấm refresh hay chọn lại thư mục.
+        const hasFileMutation = d.entries.some(e => e && typeof e.tool === 'string' && FILE_MUTATING_TOOLS.has(e.tool))
+        if (hasFileMutation) {
+          if (treeReloadTimerRef.current) clearTimeout(treeReloadTimerRef.current)
+          treeReloadTimerRef.current = setTimeout(() => {
+            treeReloadTimerRef.current = null
+            try { loadFileTreeRef.current() } catch { /* offline — bỏ qua */ }
+          }, 1500)
+        }
         if (lines.length > 0) {
           setTerminalOutput(prev => {
             const next = [...prev, ...lines]
@@ -13825,11 +13885,14 @@ function CodeTabContent() {
 
   // Reload file tree when workspace root changes
   // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
+  // FILE TREE REALTIME (fix 2026-09-10): thêm treeReloadToken vào deps — chọn
+  // lại CÙNG thư mục giờ cũng reload (trước đây workspaceRoot không đổi →
+  // effect không chạy → tree đã bị setFileTree([]) xóa sạch mà không load lại).
   useEffect(() => {
     if (workspaceRoot) {
       queueMicrotask(() => { loadFileTree() })
     }
-  }, [workspaceRoot, loadFileTree])
+  }, [workspaceRoot, loadFileTree, treeReloadToken])
 
   // File Explorer drag-to-resize handlers
   useEffect(() => {
@@ -14380,19 +14443,11 @@ function CodeTabContent() {
                 setPreviewPort(startedPort)
                 // Tail the dev-server log via SSE
                 startPreviewLogStream(workspaceRoot)
-                // Port-ready poll: remount the iframe only once the dev server
-                // actually accepts connections (timing-race fix — no manual
-                // refresh needed)
-                void (async () => {
-                  for (let i = 0; i < 24; i++) {
-                    await new Promise(r => setTimeout(r, 500))
-                    try {
-                      await fetch(`http://127.0.0.1:${startedPort}`, { mode: 'no-cors', signal: AbortSignal.timeout(800) })
-                      setPreviewIframeKey(prev => prev + 1)
-                      return
-                    } catch { /* not ready yet — keep polling */ }
-                  }
-                })()
+                // Port-ready poll QUA PROXY (server-side check): remount iframe
+                // khi dev server thật sự nhận connection — không còn timing-race
+                // (trước đây poll 127.0.0.1 phía browser + chỉ 12s → app start
+                // chậm là iframe kẹt trang lỗi vĩnh viễn).
+                void waitForPreviewReady(startedPort)
               } else if (startData.status === 'started' || startData.status === 'already_running') {
                 // Legacy path (no port reported) — poll for port with retries
                 const maxRetries = 15
@@ -14442,7 +14497,7 @@ function CodeTabContent() {
     } finally {
       setPreviewDetecting(false)
     }
-  }, [showPreview, workspaceRoot, startPreviewLogStream])
+  }, [showPreview, workspaceRoot, startPreviewLogStream, waitForPreviewReady])
 
   // ==================== PHASE 7: AI-DRIVEN PREVIEW + TOOL EVENT HANDLING ====================
 
@@ -14461,19 +14516,10 @@ function CodeTabContent() {
     setPreviewLogs([])
     // Tail the dev-server log (closes any previous stream first)
     if (previewRoot) startPreviewLogStream(previewRoot)
-    // Port-ready poll — timing-race fix (same as handlePreviewToggle)
-    void (async () => {
-      for (let i = 0; i < 24; i++) {
-        await new Promise(r => setTimeout(r, 500))
-        try {
-          await fetch(`http://127.0.0.1:${port}`, { mode: 'no-cors', signal: AbortSignal.timeout(800) })
-          setPreviewIframeKey(prev => prev + 1)
-          return
-        } catch { /* not ready yet — keep polling */ }
-      }
-    })()
+    // Port-ready poll QUA PROXY (same as handlePreviewToggle — 45s, server-side check)
+    void waitForPreviewReady(port)
     toast({ title: '🚀 AI đã start preview', description: `Port ${port}` })
-  }, [workspaceRoot, startPreviewLogStream])
+  }, [workspaceRoot, startPreviewLogStream, waitForPreviewReady])
 
   /** handleAIToolEvent — react to AI tool calls streamed from the code-team
    *  workflow (via the 'tmo-ai-tool-event' window CustomEvent dispatched by
@@ -14952,6 +14998,17 @@ function CodeTabContent() {
                       size="sm"
                       variant="ghost"
                       className="h-5 w-5 p-0 text-stone-500 hover:text-emerald-400"
+                      onClick={() => { try { window.open(previewProxyUrl(previewPort), '_blank', 'noopener') } catch { /* ignore */ } }}
+                      title="Mở preview trong tab mới (qua same-origin proxy — hoạt động cả khi xem app qua HTTPS)"
+                    >
+                      <ExternalLinkIcon className="h-3 w-3" />
+                    </Button>
+                  )}
+                  {previewPort && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-5 w-5 p-0 text-stone-500 hover:text-emerald-400"
                       onClick={handlePreviewRefresh}
                       title="Làm mới preview"
                     >
@@ -14996,12 +15053,28 @@ function CodeTabContent() {
                     )}
                     <p className="text-[10px] text-stone-600 mt-2">Chờ dev server sẵn sàng (tối đa 30s)</p>
                   </div>
+                ) : previewPort && previewWaiting ? (
+                  /* Dev server đã start nhưng chưa nhận connection — chờ (tối đa 45s) */
+                  <div className="flex flex-col items-center justify-center h-full text-stone-500 p-4 text-center">
+                    <Loader2 className="h-8 w-8 animate-spin text-emerald-400 mb-3" />
+                    <p className="text-[11px] text-stone-400">Đang chờ dev server :{previewPort} sẵn sàng...</p>
+                    {previewDevCommand && (
+                      <p className="text-[10px] text-amber-400/80 font-mono mt-1.5 bg-amber-950/30 px-2 py-0.5 rounded">
+                        $ {previewDevCommand}
+                      </p>
+                    )}
+                    <p className="text-[10px] text-stone-600 mt-2">Tự làm mới khi server nhận kết nối (tối đa 45s)</p>
+                  </div>
                 ) : previewPort ? (
-                  /* ✅ App loaded — show iframe + dev-server log tail (Phase 3) */
+                  /* ✅ App loaded — show iframe (SAME-ORIGIN PROXY — fix 2026-09-10:
+                     http://127.0.0.1:<port> chỉ chạy khi mở app trực tiếp bằng
+                     HTTP localhost; qua proxy HTTPS thì 127.0.0.1 = máy user +
+                     mixed-content → lỗi. Proxy chạy server-side, mọi môi trường
+                     đều hiển thị được) + dev-server log tail (Phase 3) */
                   <div className="flex flex-col h-full min-h-0">
                     <iframe
                       key={previewIframeKey}
-                      src={`http://127.0.0.1:${previewPort}`}
+                      src={previewProxyUrl(previewPort)}
                       className="w-full flex-1 min-h-0 border-0 bg-white"
                       title="App Preview"
                       sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
