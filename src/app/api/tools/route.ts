@@ -175,6 +175,8 @@ const LOCAL_TOOLS = [
   { name: 'start_preview', category: 'Preview', description: 'Start dev server cho active workspace (auto-detect framework, free port 3005+, per-root log + SSE stream). UI tự mở Preview panel.', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: '', hasApiKey: true },
   { name: 'stop_preview', category: 'Preview', description: 'Stop dev server đang chạy cho 1 workspace root (idempotent — nothing-running vẫn success).', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
   { name: 'get_app_runtime_status', category: 'Preview', description: 'Kiểm tra trạng thái runtime: preview nào đang chạy (port, pid, user/agent khởi động), HTTP có respond không, tail log gần nhất. Read-only.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  // ===== 21-c: Omega Tools Manager =====
+  { name: 'manage_tools', category: 'Admin', description: 'Quản lý tool-access của agents (CHỈ Omega): list_tools / set_tool_access / read_tool / read_skill / write_skill. Enforce ToolAssignment 2 lớp (prompt + executor).', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: '', hasApiKey: true },
   // ===== P2: gateway proxy =====
   { name: 'gateway_tool', category: 'Gateway', description: 'Proxy tới 1 trong 36 gateway-bridge tools (web_search, exec, read, write, browser...).', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: '', hasApiKey: true },
   // ===== v2.1 Phase 1a: shell + todo (Claude Code parity) =====

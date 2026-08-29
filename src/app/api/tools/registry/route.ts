@@ -33,6 +33,20 @@ export async function GET() {
     // ===== 1. Built-in tools + agent access matrix =====
     const builtinSummaries = getAllBuiltinToolSummaries()
 
+    // 21-c: ToolConfig description override THẮNG mô tả mặc định (quản trị viên
+    // chỉnh trong Tools Manager) — hiển thị đúng cái agent sẽ thấy trong prompt.
+    try {
+      const { getAllToolConfigs } = await import('@/lib/tool-access')
+      const configs = await getAllToolConfigs()
+      if (configs.length > 0) {
+        const overrideMap = new Map(configs.map(c => [c.toolName, c.description]))
+        for (const s of builtinSummaries) {
+          const ov = overrideMap.get(s.name)
+          if (ov !== undefined && ov !== null && ov !== '') s.description = ov
+        }
+      }
+    } catch { /* fail-open — mô tả mặc định */ }
+
     // Agent tool lists: Omega (standalone) + 5 team agents
     const agentToolLists: Array<{ name: string; short: string; tools: string[] }> = []
     for (const saName of getStandaloneAgentNames()) {

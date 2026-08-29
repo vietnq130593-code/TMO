@@ -63,6 +63,8 @@ import { DiffViewer } from '@/components/code-editor/DiffViewer'
 import { PendingEditModal } from '@/components/code-editor/PendingEditModal'
 import { SearchPanel } from '@/components/code-editor/SearchPanel'
 import { RuntimeMetricsPanel } from '@/components/analytics/runtime-metrics-panel'
+// 21-c: Tools Manager Dialog — quản lý tool-access theo agent + xem/sửa nội dung tool/skill
+import { ToolsManagerDialog } from '@/components/tools/tools-manager-dialog'
 // Type-only (erased lúc build — không kéo 3d-force-graph vào bundle chính)
 import type { NodeObject as ForceGraphNodeObject, LinkObject as ForceGraphLinkObject } from '3d-force-graph'
 
@@ -11791,6 +11793,8 @@ function SkillsTabContent() {
                 {toolsRegistry.summary.builtinToolCount + toolsRegistry.summary.customToolCount} tools · {toolsRegistry.summary.filesystemSkillCount} skills
               </Badge>
             )}
+            {/* 21-c: nút mở dialog quản lý Tools & Skills (xem/sửa nội dung + gán tool cho agents) */}
+            <ToolsManagerDialog />
             <span className="ml-auto text-[10px] text-slate-500">{toolsRegistryOpen ? 'Thu gọn' : 'Bấm để mở'} </span>
           </div>
 

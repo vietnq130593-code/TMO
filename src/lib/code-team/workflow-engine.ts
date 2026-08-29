@@ -22,7 +22,7 @@ import { callLLMForAgent, type LLMResult, type LLMTool } from '@/lib/llm'
 import { db } from '@/lib/db'
 import { getAgentTools } from './agents'
 import { getAgentPrompt, buildToolSchemasSection } from './prompts'
-import { getToolDefinitionsForPosition } from './tool-executor'
+import { getToolDefinitions } from './tool-executor'
 import {
   resolveAgent,
   resolveAllAgents,
@@ -1363,7 +1363,16 @@ export async function runAgentStep(params: {
 
   // Resolve agent from per-workflow cache (populated by runPipeline) or on-demand
   const agent = ctx.resolvedAgentsCache.get(position) || await resolveAgent(position)
-  const tools = agent.tools.length > 0 ? agent.tools : getAgentTools(position)
+  const defaultTools = agent.tools.length > 0 ? agent.tools : getAgentTools(position)
+  // ━━━ 21-c — PROMPT-SIDE TOOL-ACCESS ENFORCEMENT ━━━
+  // ToolAssignment override (Tools Manager UI / Omega manage_tools): tool bị
+  // disable → loại khỏi whitelist của step này (LLM không thấy tool trong
+  // schemas); tool được enable-thêm → xuất hiện. Fail-open: lỗi DB → giữ mặc định.
+  let tools = defaultTools
+  try {
+    const { getEffectiveToolNames } = await import('@/lib/tool-access')
+    tools = await getEffectiveToolNames(agent.name || position, defaultTools)
+  } catch { /* fail-open — giữ whitelist mặc định */ }
   let systemPrompt = agent.instruction || getAgentPrompt(position)
 
   // Inject enabled skills from DB (cached per-workflow in ctx.skillsContext)
@@ -1482,7 +1491,14 @@ export async function runAgentStep(params: {
   const fcMode = flagMode('ENABLE_NATIVE_FC', ['off', 'dual', 'strict']) as 'off' | 'dual' | 'strict'
   let nativeTools: LLMTool[] | undefined
   if (fcMode !== 'off') {
-    const toolDefs = getToolDefinitionsForPosition(position)
+    // 21-c: build defs từ EFFECTIVE tools (đã áp ToolAssignment overrides — không
+    // còn getToolDefinitionsForPosition(position) tĩnh) + áp description override
+    // (ToolConfig — quản trị viên chỉnh mô tả tool trong prompt LLM). Fail-open.
+    let toolDefs = getToolDefinitions(tools)
+    try {
+      const { applyDescriptionOverrides } = await import('@/lib/tool-access')
+      toolDefs = await applyDescriptionOverrides(toolDefs)
+    } catch { /* fail-open — mô tả mặc định */ }
     if (toolDefs.length > 0) {
       // ToolDefinition matches LLMTool shape exactly (both OpenAI-compatible)
       nativeTools = toolDefs as unknown as LLMTool[]
@@ -2281,7 +2297,7 @@ function parseToolCallsFromOutput(output: string): Array<{ id: string; name: str
 
   // Pattern 2: Direct tool invocation like opencode({...})
   if (calls.length === 0) {
-    const validToolNames = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'list_skills', 'read_skill', 'mcp_list_servers', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools']
+    const validToolNames = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'list_skills', 'read_skill', 'mcp_list_servers', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'manage_tools']
     const regex2 = new RegExp(`(${validToolNames.join('|')})\\s*\\(\\s*\\{`, 'g')
     let match2
     while ((match2 = regex2.exec(output)) !== null) {

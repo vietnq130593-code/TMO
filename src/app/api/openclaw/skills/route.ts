@@ -244,8 +244,9 @@ export async function GET(request: NextRequest) {
   }
 
   if (action === 'content') {
-    // Fetch skill content (SKILL.md) from ClawHub.ai for a search result
-    const slug = searchParams.get('slug')
+    // Fetch skill content (SKILL.md) — DB → filesystem fallback (21-c) → ClawHub
+    // 21-c: hỗ trợ cả param `name` lẫn `slug` (Tools Manager gọi ?action=content&name=X)
+    const slug = searchParams.get('slug') || searchParams.get('name')
     const ownerHandle = searchParams.get('ownerHandle') || ''
     if (!slug) {
       return NextResponse.json({ error: 'Missing slug parameter' }, { status: 400 })
@@ -265,6 +266,28 @@ export async function GET(request: NextRequest) {
         installed: true,
       })
     }
+
+    // 21-c — FILESYSTEM FALLBACK: 67 skills sống trên đĩa (skills/<slug>/SKILL.md)
+    // nhưng KHÔNG có trong DB → trước đây action=content chỉ tra DB→ClawHub nên
+    // UI không xem được nội dung. Giờ: DB miss → đọc trực tiếp file (validate slug
+    // chống path traversal trong readFsSkill). canEdit=true → PUT /api/openclaw/skills/fs.
+    try {
+      const { readFsSkill } = await import('@/lib/fs-skills')
+      const fsSkill = await readFsSkill(slug)
+      if (fsSkill) {
+        return NextResponse.json({
+          name: slug,
+          slug,
+          content: fsSkill.content,
+          size: fsSkill.size,
+          hasBackup: fsSkill.hasBackup,
+          version: 'filesystem',
+          source: 'filesystem',
+          installed: true,
+          canEdit: true,
+        })
+      }
+    } catch { /* fall-through sang ClawHub */ }
 
     // Try to fetch from ClawHub API
     if (ownerHandle) {

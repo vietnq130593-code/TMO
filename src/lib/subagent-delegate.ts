@@ -260,7 +260,14 @@ export async function runSubAgentForProfile(params: {
 
     // DEPTH GUARD: strip tool điều phối khỏi whitelist sub-agent (chống đệ quy)
     const baseTools = profile.tools.length > 0 ? profile.tools : DEFAULT_SUBAGENT_TOOLS
-    const allowedTools = baseTools.filter(t => !DEPTH_GUARD_TOOLS.includes(t))
+    // 21-c: áp ToolAssignment overrides (Tools Manager / Omega manage_tools) —
+    // disable → loại khỏi whitelist sub-agent; enable-thêm → được dùng. Fail-open.
+    let effectiveBaseTools = baseTools
+    try {
+      const { getEffectiveToolNames } = await import('@/lib/tool-access')
+      effectiveBaseTools = await getEffectiveToolNames(profile.name, baseTools)
+    } catch { /* fail-open — giữ whitelist mặc định */ }
+    const allowedTools = effectiveBaseTools.filter(t => !DEPTH_GUARD_TOOLS.includes(t))
 
     console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${SUBAGENT_MAX_ITERATIONS} vòng, budget ${SUBAGENT_TOKEN_BUDGET} tokens, ${allowedTools.length} tools)`)
 

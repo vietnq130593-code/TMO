@@ -172,6 +172,17 @@ const LOCAL_TOOLS = [
     apiKeyEnv: '',
     hasApiKey: true,
   },
+  {
+    name: 'manage_tools',
+    category: 'Admin',
+    description: '21-c Omega Tools Manager — quản lý tool-access của agents (CHỈ Omega): list_tools / set_tool_access / read_tool / read_skill / write_skill. Enforce ToolAssignment 2 lớp (prompt + executor).',
+    source: 'bundled',
+    dangerous: true,
+    implemented: true,
+    hasSkillGuide: false,
+    apiKeyEnv: '',
+    hasApiKey: true,
+  },
 ]
 
 export async function GET(request: NextRequest) {

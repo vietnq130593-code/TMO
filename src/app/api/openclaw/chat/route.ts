@@ -879,6 +879,17 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        // ━━━ 21-c — PROMPT-SIDE TOOL-ACCESS ENFORCEMENT ━━━
+        // ToolAssignment override (Tools Manager UI / Omega manage_tools): tool bị
+        // disable → loại khỏi whitelist (LLM không thấy + goal-loop không cho gọi);
+        // enable-thêm → vào whitelist. Fail-open: lỗi DB → giữ whitelist như trên.
+        try {
+          const { getEffectiveToolNames } = await import('@/lib/tool-access')
+          agentTools = await getEffectiveToolNames(agentProfileName, agentTools)
+        } catch (toolAccessErr) {
+          console.warn('[OpenClaw Chat] ToolAccess enforce failed (fail-open):', toolAccessErr instanceof Error ? toolAccessErr.message : String(toolAccessErr))
+        }
+
         // GOAL-DRIVEN LOOP (2026-09-01): thay ReAct loop 8 vòng — chạy nhiều chu kỳ
         // PLAN → EXECUTE → VERIFY → EVALUATE (trọng tài độc lập) → DIAGNOSE+REPLAN
         // cho đến khi mục tiêu hoàn thành hoặc hết budget. maxIterations không còn

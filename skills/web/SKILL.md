@@ -41,3 +41,4 @@ description: Build, debug, and deploy websites with HTML, CSS, JavaScript, moder
 - **Interactive app with auth** → Next.js or Remix
 - **Full SSR/ISR control** → Next.js
 - **Simple SPA, no SEO needed** → Vite + React/Vue
+

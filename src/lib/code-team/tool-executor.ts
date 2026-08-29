@@ -79,6 +79,8 @@ import {
 } from '@/lib/cron/scheduler'
 // v2.1 Phase 4.5 — exit_plan_mode persistence (uses db.codeTeamSession metadata)
 import { db } from '@/lib/db'
+// 21-c: Tool Access — hard-gate tool bị disable-override theo agent (ToolAssignment DB)
+import { isToolDisabledForAgent, resolveAgentKey } from '@/lib/tool-access'
 
 // ==================== Z-AI-SDK LAZY INITIALIZATION ====================
 //
@@ -1387,6 +1389,30 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       },
     },
   },
+
+  // ===== 21-c: OMEGA TOOLS MANAGER — Omega tự quản lý tool-access của agents =====
+  // (user request: "thiết lập để Omega cũng có thể sử dụng chức năng này") — CHỈ nằm
+  // trong tool list của Omega (standalone-agents.ts) — Code Team 5 agent KHÔNG có
+  // (tránh tranh quyền với quản trị viên). Executor: case 'manage_tools'.
+  manage_tools: {
+    type: 'function',
+    function: {
+      name: 'manage_tools',
+      description: 'Quản lý tool-access của agents (chỉ Omega được dùng). Action: (1) list_tools — danh sách tool + agents + override status (compact); (2) set_tool_access {agentKey, toolName, enabled} — bật/tắt 1 tool cho 1 agent (enabled=null → reset về mặc định); (3) read_tool {toolName} — mô tả đầy đủ + parameters + ma trận agent của 1 tool; (4) read_skill {name} — đọc SKILL.md của skill filesystem; (5) write_skill {name, content} — ghi đè SKILL.md (tự backup .bak). agentKey hợp lệ: APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|NEW_AGENT (NEW_AGENT = mọi agent động do Omega tạo).',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['list_tools', 'set_tool_access', 'read_tool', 'read_skill', 'write_skill'], description: 'Hành động quản lý' },
+          agentKey: { type: 'string', description: '(set_tool_access) Agent key: APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|NEW_AGENT' },
+          toolName: { type: 'string', description: '(set_tool_access/read_tool) Tên tool builtin' },
+          enabled: { type: 'boolean', description: '(set_tool_access) true=bật, false=vô hiệu hóa, null/omit=reset về mặc định' },
+          name: { type: 'string', description: '(read_skill/write_skill) Slug skill filesystem (vd "pdf", "web")' },
+          content: { type: 'string', description: '(write_skill) Nội dung SKILL.md MỚI (toàn bộ, ghi đè — có backup .bak tự động)' },
+        },
+        required: ['action'],
+      },
+    },
+  },
 }
 
 /**
@@ -1431,6 +1457,22 @@ export function getAllBuiltinToolSummaries(): Array<{
     })
   }
   return summaries
+}
+
+/**
+ * 21-c: tool có phải builtin (có def trong ALL_TOOL_DEFINITIONS) không? —
+ * dùng bởi POST /api/tools/assignments validate toolName trước khi set override.
+ */
+export function isBuiltinTool(name: string): boolean {
+  return Object.prototype.hasOwnProperty.call(ALL_TOOL_DEFINITIONS, name)
+}
+
+/**
+ * 21-c: lấy FULL def 1 tool builtin (description + parameters JSON) — dùng bởi
+ * GET /api/tools/builtin/[name] (dialog Tools Manager hiển thị parameters).
+ */
+export function getBuiltinToolDefinition(name: string): ToolDefinition | null {
+  return ALL_TOOL_DEFINITIONS[name] ?? null
 }
 
 // ==================== TOOL EXECUTION ====================
@@ -1504,6 +1546,27 @@ export async function executeTool(
 
   try {
     let result: unknown
+
+    // ━━━ 21-c — EXECUTOR HARD-GATE (defense in depth) ━━━
+    // ToolAssignment override enabled=false (Tools Manager UI / Omega manage_tools)
+    // → chặn TẠI EXECUTOR dù LLM vẫn phát tool call — phủ mọi đường gọi
+    // (goal-loop, workflow ReAct, sub-agent delegate, Pattern-1/2 parse).
+    // KHÔNG chặn khi thiếu agent context (caller hệ thống). Fail-open tuyệt đối:
+    // lỗi DB → cho chạy (prompt-side đã lượt tool khỏi list rồi).
+    if (context?.agentName) {
+      try {
+        if (await isToolDisabledForAgent(context.agentName, toolName)) {
+          const key = resolveAgentKey(context.agentName)
+          const gateMsg = `Tool [${toolName}] đã bị vô hiệu hóa cho agent [${key}] bởi quản trị viên. Nếu cần dùng, hãy yêu cầu bật lại qua Tools Manager (hoặc Omega gọi manage_tools action=set_tool_access).`
+          recordActivity(false, gateMsg)
+          return {
+            success: false,
+            result: gateMsg,
+            duration: Date.now() - startTime,
+          }
+        }
+      } catch { /* fail-open — không bao giờ làm hỏng tool vì check quyền lỗi */ }
+    }
 
     switch (toolName) {
       case 'opencode':
@@ -2486,6 +2549,17 @@ export async function executeTool(
         }
         break
       }
+      // ===== 21-c: Omega Tools Manager — Omega tự quản lý tool-access khi cần =====
+      // (def chỉ nằm trong tool list của Omega — Code Team KHÔNG được cấp).
+      // Mọi action fail-open: lỗi → JSON thân thiện, KHÔNG crash executor.
+      case 'manage_tools': {
+        try {
+          result = await executeManageTools(args, context)
+        } catch (err) {
+          result = { success: false, error: `manage_tools lỗi: ${err instanceof Error ? err.message : String(err)}` }
+        }
+        break
+      }
       default: {
         // ===== Custom tool dispatch (user request 2026-08-30) =====
         // Tool không nằm trong built-in list → kiểm tra custom tool registry
@@ -2549,6 +2623,159 @@ export async function executeTool(
       duration: Date.now() - startTime,
     }
   }
+}
+
+// ==================== 21-c: MANAGE_TOOLS — Omega Tools Manager ====================
+//
+// Omega tự quản lý tool-access + đọc/sửa skill khi user yêu cầu ("hãy bật tool X
+// cho agent Y"). 5 action — mọi action try/catch fail-open (lỗi → JSON thân thiện).
+
+/** Ma trận agent mặc định cho manage_tools: [key, tên hiển thị, tools mặc định] */
+async function getManageToolsAgentMatrix(): Promise<Array<{ key: string; label: string; tools: string[] }>> {
+  const matrix: Array<{ key: string; label: string; tools: string[] }> = []
+  try {
+    const { getStandaloneAgentTools } = await import('@/lib/standalone-agents')
+    for (const name of ['Omega']) {
+      matrix.push({ key: 'OMEGA', label: name, tools: getStandaloneAgentTools(name) })
+    }
+  } catch { /* fail-open — bỏ qua */ }
+  const { getAgentName } = await import('./agents')
+  for (const [pos, key] of [['TL', 'APEX'], ['G1', 'CORTEX'], ['G2-A', 'BOLT'], ['G2-B', 'SENTINEL'], ['G3', 'CATALYST']] as const) {
+    try {
+      matrix.push({ key, label: getAgentName(pos), tools: getAgentTools(pos) })
+    } catch { /* fail-open */ }
+  }
+  try {
+    const { DEFAULT_NEW_AGENT_TOOLS } = await import('@/lib/omega-orchestrator')
+    matrix.push({ key: 'NEW_AGENT', label: 'Agent động (do Omega tạo)', tools: [...DEFAULT_NEW_AGENT_TOOLS] })
+  } catch { /* fail-open */ }
+  return matrix
+}
+
+async function executeManageTools(
+  args: Record<string, unknown>,
+  _context?: { agentName?: string; sessionId?: string | null },
+): Promise<unknown> {
+  const action = String(args.action ?? '')
+  const {
+    getAllAssignments, setAssignment, normalizeAgentKeyStrict,
+  } = await import('@/lib/tool-access')
+
+  // ── (1) list_tools — compact: mỗi tool 1 dòng "tên | agents | override" ──
+  if (action === 'list_tools') {
+    const summaries = getAllBuiltinToolSummaries()
+    const matrix = await getManageToolsAgentMatrix()
+    const assignments = await getAllAssignments()
+
+    const lines: string[] = []
+    lines.push(`TOOLS (${summaries.length} builtin) — cột A = agents mặc định có tool; OV = override:`)
+    for (const t of summaries) {
+      const agents = matrix
+        .filter(m => m.tools.includes(t.name))
+        .map(m => m.key)
+      const overrides = assignments
+        .filter(a => a.toolName === t.name)
+        .map(a => `${a.agentKey}:${a.enabled ? 'ON' : 'OFF'}`)
+      const descLine = t.description.split('\n')[0].slice(0, 60)
+      lines.push(
+        `- ${t.name} [${t.category}] A=[${agents.join(',') || '—'}]${overrides.length ? ` OV=[${overrides.join(', ')}]` : ''} — ${descLine}`,
+      )
+    }
+    lines.push('')
+    lines.push('AGENTS: ' + matrix.map(m => `${m.key}=${m.label} (${m.tools.length} tools)`).join(' · '))
+    lines.push('Lệnh: set_tool_access {agentKey, toolName, enabled} | read_tool {toolName} | read_skill/write_skill {name}')
+    // Cap ~70 dòng compact để đỡ tốn token
+    return { success: true, toolCount: summaries.length, listing: lines.slice(0, 72).join('\n'), truncated: lines.length > 72 }
+  }
+
+  // ── (2) set_tool_access — bật/tắt/reset tool cho agent (updatedBy: omega) ──
+  if (action === 'set_tool_access') {
+    const agentKey = String(args.agentKey ?? '')
+    const toolName = String(args.toolName ?? '')
+    const enabled = args.enabled === null || args.enabled === undefined ? null : Boolean(args.enabled)
+    if (!agentKey || !toolName) {
+      return { success: false, error: 'Cần đủ agentKey + toolName (enabled: true/false/null-reset)' }
+    }
+    const key = normalizeAgentKeyStrict(agentKey)
+    if (!key) {
+      return { success: false, error: 'agentKey không hợp lệ — dùng: APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|NEW_AGENT' }
+    }
+    if (!isBuiltinTool(toolName)) {
+      return { success: false, error: `Tool "${toolName}" không phải builtin. Dùng list_tools để xem danh sách.` }
+    }
+    const row = await setAssignment(key, toolName, enabled, 'omega')
+    return {
+      success: true,
+      agentKey: key,
+      toolName,
+      enabled,
+      effect: enabled === null ? 'reset về mặc định (đã xóa override)' : enabled ? 'ĐÃ BẬT (thêm vào whitelist hiệu dụng)' : 'ĐÃ VÔ HIỆU HÓA (chặn cả prompt lẫn executor)',
+      row,
+      note: 'Enforce 2 lớp: prompt-side (LLM không thấy tool) + executor hard-gate (gọi cũng bị chặn).',
+    }
+  }
+
+  // ── (3) read_tool — mô tả đầy đủ + parameters + ma trận agent 1 tool ──
+  if (action === 'read_tool') {
+    const toolName = String(args.toolName ?? '')
+    const summary = getAllBuiltinToolSummaries().find(t => t.name === toolName)
+    if (!summary) {
+      return { success: false, error: `Tool "${toolName}" không phải builtin. Dùng list_tools để xem danh sách.` }
+    }
+    const matrix = await getManageToolsAgentMatrix()
+    const assignments = await getAllAssignments()
+    return {
+      success: true,
+      tool: toolName,
+      description: summary.description,
+      parameters: summary.paramNames,
+      agents: matrix.map(m => ({
+        agentKey: m.key,
+        label: m.label,
+        defaultHas: m.tools.includes(toolName),
+        override: assignments.find(a => a.agentKey === m.key && a.toolName === toolName)?.enabled ?? null,
+      })),
+    }
+  }
+
+  // ── (4) read_skill — đọc SKILL.md filesystem (cap 30K chars như read_skill) ──
+  if (action === 'read_skill') {
+    const name = String(args.name ?? '')
+    const { readFsSkill } = await import('@/lib/fs-skills')
+    const skill = await readFsSkill(name)
+    if (!skill) {
+      return { success: false, error: `Skill "${name}" không có SKILL.md trên đĩa (hoặc tên không hợp lệ). Omega có thể dùng list_skills để liệt kê.` }
+    }
+    const CAP = 30_000
+    return {
+      success: true,
+      slug: skill.slug,
+      size: skill.size,
+      hasBackup: skill.hasBackup,
+      truncated: skill.content.length > CAP,
+      content: skill.content.slice(0, CAP),
+    }
+  }
+
+  // ── (5) write_skill — ghi đè SKILL.md (backup .bak tự động lần đầu) ──
+  if (action === 'write_skill') {
+    const name = String(args.name ?? '')
+    const content = typeof args.content === 'string' ? args.content : ''
+    const { writeFsSkill } = await import('@/lib/fs-skills')
+    const written = await writeFsSkill(name, content)
+    if (!written.ok) {
+      return { success: false, error: written.error }
+    }
+    return {
+      success: true,
+      slug: written.slug,
+      size: written.size,
+      backupCreated: written.backupCreated,
+      note: 'Đã ghi đè skills/' + written.slug + '/SKILL.md. Bản gốc giữ tại SKILL.md.bak (lần sửa đầu).',
+    }
+  }
+
+  return { success: false, error: `Action không hợp lệ: "${action}" — dùng list_tools | set_tool_access | read_tool | read_skill | write_skill` }
 }
 
 /**

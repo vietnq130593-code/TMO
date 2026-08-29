@@ -258,6 +258,10 @@ LEARNING & MEMORY
       'escalate_problem',
       'create_agent',
       'dispatch_agent',
+      // 21-c: OMEGA TOOLS MANAGER — Omega tự quản lý tool-access của agents khi
+      // user yêu cầu ("hãy bật tool X cho agent Y") + đọc/sửa SKILL.md filesystem.
+      // CHỈ Omega có tool này — Code Team 5 agent KHÔNG (tránh tranh quyền QTV).
+      'manage_tools',
     ],
   },
 ]

@@ -1,0 +1,323 @@
+{
+  "knowledge_search": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "knowledge_graph": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "knowledge_write": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "tavily": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "serper": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "jina": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "web_search": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_WEB_UNIFIED"
+  },
+  "web_fetch": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_WEB_UNIFIED"
+  },
+  "file_read": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_FILE_READ"
+  },
+  "file_edit": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_FILE_EDIT"
+  },
+  "file_multi_edit": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_FILE_MULTI_EDIT"
+  },
+  "file_write": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_FILE_WRITE"
+  },
+  "file_list": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_FILE_LIST"
+  },
+  "grep": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_FILE_GREP"
+  },
+  "file_delete": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_FILE_DELETE"
+  },
+  "shell": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_SHELL_TOOL"
+  },
+  "opencode": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "run_tests": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_RUN_TESTS"
+  },
+  "git_commit": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_GIT_COMMIT"
+  },
+  "git_pull": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_GIT_COMMIT"
+  },
+  "git_push": {
+    "status": "skip",
+    "origin": "native",
+    "flag": "ENABLE_GIT_COMMIT"
+  },
+  "manage_packages": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "run_bg": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "read_output": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "kill_process": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "get_diagnostics": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "decompose_task": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "create_task": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "update_task": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "get_plan": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "summarize": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "synthesize": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "todo_write": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_TODO_TOOL"
+  },
+  "todo_read": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_TODO_TOOL"
+  },
+  "list_skills": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "read_skill": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "mcp_list_servers": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_MCP_CALL"
+  },
+  "mcp_call": {
+    "status": "ok",
+    "origin": "native",
+    "flag": "ENABLE_MCP_CALL"
+  },
+  "get_app_runtime_status": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "stop_preview": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "start_preview": {
+    "status": "skip",
+    "origin": "native",
+    "flag": null
+  },
+  "gateway_tool": {
+    "status": "fail",
+    "origin": "gateway",
+    "flag": null,
+    "errorTag": "bridge down (on-demand 18791)"
+  },
+  "gateway_exec": {
+    "status": "fail",
+    "origin": "gateway",
+    "flag": "ENABLE_GATEWAY_TOOLS=off",
+    "errorTag": "flag OFF (ENABLE_GATEWAY_TOOLS=off)"
+  },
+  "gateway_read": {
+    "status": "fail",
+    "origin": "gateway",
+    "flag": "ENABLE_GATEWAY_TOOLS=off",
+    "errorTag": "flag OFF (ENABLE_GATEWAY_TOOLS=off)"
+  },
+  "gateway_write": {
+    "status": "fail",
+    "origin": "gateway",
+    "flag": "ENABLE_GATEWAY_TOOLS=off",
+    "errorTag": "flag OFF (ENABLE_GATEWAY_TOOLS=off)"
+  },
+  "gateway_edit": {
+    "status": "fail",
+    "origin": "gateway",
+    "flag": "ENABLE_GATEWAY_TOOLS=off",
+    "errorTag": "flag OFF (ENABLE_GATEWAY_TOOLS=off)"
+  },
+  "gateway_apply_patch": {
+    "status": "fail",
+    "origin": "gateway",
+    "flag": "ENABLE_GATEWAY_TOOLS=off",
+    "errorTag": "flag OFF (ENABLE_GATEWAY_TOOLS=off)"
+  },
+  "create_custom_tool": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "list_custom_tools": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "audit_hello": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "delete_custom_tool": {
+    "status": "ok",
+    "origin": "native",
+    "flag": null
+  },
+  "delegate_task": {
+    "status": "skip",
+    "origin": "native",
+    "flag": "ENABLE_SUBAGENT_DELEGATE"
+  },
+  "escalate_problem": {
+    "status": "skip",
+    "origin": "native",
+    "flag": null
+  },
+  "create_agent": {
+    "status": "skip",
+    "origin": "native",
+    "flag": null
+  },
+  "dispatch_agent": {
+    "status": "skip",
+    "origin": "native",
+    "flag": null
+  },
+  "lsp_diagnostics": {
+    "status": "skip",
+    "origin": "native",
+    "flag": "ENABLE_LSP_DIAGNOSTICS=off"
+  },
+  "browser_screenshot": {
+    "status": "skip",
+    "origin": "native",
+    "flag": "ENABLE_BROWSER_SCREENSHOT=off"
+  },
+  "lint": {
+    "status": "skip",
+    "origin": "native",
+    "flag": "ENABLE_LINT=off"
+  },
+  "type_check": {
+    "status": "skip",
+    "origin": "native",
+    "flag": "ENABLE_TYPE_CHECK=off"
+  },
+  "test_coverage": {
+    "status": "skip",
+    "origin": "native",
+    "flag": "ENABLE_TEST_COVERAGE=off"
+  },
+  "db_query": {
+    "status": "skip",
+    "origin": "native",
+    "flag": "ENABLE_DB_QUERY=off"
+  },
+  "exit_plan_mode": {
+    "status": "skip",
+    "origin": "native",
+    "flag": "ENABLE_PLAN_MODE=off"
+  },
+  "cron": {
+    "status": "skip",
+    "origin": "native",
+    "flag": "ENABLE_CRON_TOOL=off"
+  }
+}

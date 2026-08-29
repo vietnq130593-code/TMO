@@ -1398,3 +1398,36 @@ model DeletedSession {
   sessionId String   @unique
   deletedAt DateTime @default(now())
 }
+
+/// ToolAssignment (Task 21-c): override quyền dùng tool THEO AGENT — enforce thật
+/// tại prompt-side (workflow-engine/chat route) + executeTool hard-gate.
+/// Row = override so với whitelist mặc định hardcoded:
+///   enabled=true  → THÊM tool cho agent (kể cả tool ngoài whitelist mặc định)
+///   enabled=false → VÔ HIỆU HÓA tool cho agent (chặn cả prompt lẫn executor)
+///   (xóa row)     → về mặc định hardcoded
+model ToolAssignment {
+  id        String   @id @default(cuid())
+  /// 'APEX'|'CORTEX'|'BOLT'|'SENTINEL'|'CATALYST'|'OMEGA'|'NEW_AGENT'
+  /// (NEW_AGENT = mọi agent động do Omega tạo — map 1 chiều tại tool-access.ts)
+  agentKey  String
+  toolName  String
+  enabled   Boolean
+  /// 'user' | 'omega' | 'system'
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([agentKey, toolName])
+  @@index([agentKey])
+}
+
+/// ToolConfig (Task 21-c): override MÔ TẢ tool builtin — đưa vào prompt LLM
+/// (def.description) + hiển thị UI Tools Registry. KHÔNG đổi executor code.
+model ToolConfig {
+  id          String   @id @default(cuid())
+  toolName    String   @unique
+  /// Override description (≤2000 ký tự — đưa vào prompt LLM)
+  description String?
+  updatedBy   String?
+  updatedAt   DateTime @updatedAt
+}
