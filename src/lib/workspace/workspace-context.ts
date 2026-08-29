@@ -21,6 +21,10 @@ import { readdirSync, statSync } from 'fs'
 import { join } from 'path'
 import { getActiveWorkspaceRoot } from '@/lib/workspace/workspace-manager'
 import { isFlagEnabled } from '@/lib/feature-flags'
+// Task 19-b (App Runtime Awareness): inject trạng thái preview/dev-server đang
+// chạy vào system prompt — agents (chat route + workflow engine đều dùng
+// buildWorkspaceContext) phải BIẾT user đang xem preview nào để không kill nhầm.
+import { listRunningPreviews } from '@/lib/preview-registry'
 
 /** Cache nhẹ 10s — system prompt được build mỗi request, tránh scan thư mục liên tục */
 let workspaceCtxCache: { text: string; root: string | null; at: number } | null = null
@@ -31,10 +35,43 @@ export interface WorkspaceContext {
   root: string | null
 }
 
+/**
+ * Task 19-b — block trạng thái preview/app đang chạy (APPEND SAU cache — luôn
+ * FRESH mỗi request, không dính TTL 10s: user vừa bấm Start Preview thì agent
+ * request tiếp theo phải thấy ngay).
+ * - Có preview đang chạy → thêm section "TRẠNG THÁI PREVIEW/APP ĐANG CHẠY"
+ *   (tối đa 3 preview mới nhất, kèm ai khởi động + giờ + log file).
+ * - Không có preview / lỗi bất kỳ → KHÔNG thêm gì (giữ prompt gọn, fail-open
+ *   tuyệt đối — preview awareness không bao giờ được làm hỏng chat).
+ */
+function appendPreviewRuntimeSection(baseText: string): string {
+  try {
+    const previews = listRunningPreviews()
+    if (previews.length === 0) return baseText
+
+    const lines = previews
+      .slice() // không mutate mảng registry trả về
+      .sort((a, b) => b.startedAt - a.startedAt) // mới nhất trước
+      .slice(0, 3)
+      .map(p => {
+        const d = new Date(p.startedAt)
+        const hh = String(d.getHours()).padStart(2, '0')
+        const mm = String(d.getMinutes()).padStart(2, '0')
+        const who = p.startedBy === 'agent' ? 'agent' : 'user'
+        return `- App preview đang chạy: port ${p.port ?? '?'} (root ${p.root}, ${who} khởi động lúc ${hh}:${mm}${p.logFile ? `, log ${p.logFile}` : ''})`
+      })
+
+    return `${baseText}\n\n--- TRẠNG THÁI PREVIEW/APP ĐANG CHẠY ---\n${lines.join('\n')}\n- Dùng tool get_app_runtime_status để xem log mới nhất; KHÔNG kill preview của user.`
+  } catch {
+    return baseText // fail-open — không bao giờ làm hỏng system prompt
+  }
+}
+
 export async function buildWorkspaceContext(): Promise<WorkspaceContext> {
   const now = Date.now()
   if (workspaceCtxCache && now - workspaceCtxCache.at < WORKSPACE_CTX_TTL_MS) {
-    return { text: workspaceCtxCache.text, root: workspaceCtxCache.root }
+    // Cache hit phần workspace root + listing; trạng thái preview vẫn append FRESH
+    return { text: appendPreviewRuntimeSection(workspaceCtxCache.text), root: workspaceCtxCache.root }
   }
 
   let root: string | null = null
@@ -45,7 +82,7 @@ export async function buildWorkspaceContext(): Promise<WorkspaceContext> {
   }
   if (!root) {
     workspaceCtxCache = { text: '', root: null, at: now }
-    return { text: '', root: null }
+    return { text: appendPreviewRuntimeSection(''), root: null }
   }
 
   // Scan cấu trúc cấp 1 (skip hidden + node_modules để gọn prompt)
@@ -96,7 +133,8 @@ ${gitHint}
 - Sau khi có kết quả tool, TÓM TẮT cho user bằng tiếng Việt (cấu trúc cây, nội dung file, output lệnh...).`
 
   workspaceCtxCache = { text, root, at: now }
-  return { text, root }
+  // Trạng thái preview append SAU cache — mỗi request đọc registry mới nhất
+  return { text: appendPreviewRuntimeSection(text), root }
 }
 
 /** Invalidate cache — gọi sau khi user switch active workspace (PATCH /api/workspace). */

@@ -243,6 +243,10 @@ LEARNING & MEMORY
       // sub-agent chạy tự chủ, trả báo cáo NÉN → context Omega không phình
       // (tiết kiệm budget token vòng lặp mục tiêu).
       'delegate_task',
+      // APP RUNTIME AWARENESS (Task 19-b): Omega thấy được preview/dev-server
+      // user đang chạy (port/pid/ai khởi động + tail log) — biết app user đang
+      // xem có ổn không, tránh kill nhầm process của user.
+      'get_app_runtime_status',
       // OMEGA ORCHESTRATION (user request 2026-09-08):
       // - escalate_problem: agent khác (và chính Omega) hỏi tư vấn khi gặp vấn đề
       // - create_agent: Omega TỰ TẠO agent mới (avatar, tên, mô tả, instruction,

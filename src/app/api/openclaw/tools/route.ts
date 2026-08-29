@@ -150,6 +150,17 @@ const LOCAL_TOOLS = [
     apiKeyEnv: '',
     hasApiKey: true,
   },
+  {
+    name: 'get_app_runtime_status',
+    category: 'Preview',
+    description: 'Kiểm tra trạng thái runtime: preview nào đang chạy (port, pid, user/agent khởi động), HTTP có respond không, tail log gần nhất. Read-only.',
+    source: 'bundled',
+    dangerous: false,
+    implemented: true,
+    hasSkillGuide: false,
+    apiKeyEnv: '',
+    hasApiKey: true,
+  },
 ]
 
 export async function GET(request: NextRequest) {

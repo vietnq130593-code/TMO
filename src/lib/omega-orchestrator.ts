@@ -75,7 +75,9 @@ const CHAT_MODEL_HINT = 'moonshotai/kimi-k3 (mạnh, khuyến nghị) | deepseek
 
 /** Toolset mặc định cho agent mới nếu Omega không chỉ định — luôn kèm
  *  escalate_problem (agent mới được hỏi Omega khi kẹt — đúng cơ chế
- *  "agents nắm kỹ năng nhau" user yêu cầu) */
+ *  "agents nắm kỹ năng nhau" user yêu cầu).
+ *  Task 19-b: thêm get_app_runtime_status — agent mới cũng phải NHÌN THẤY
+ *  preview/dev-server user đang chạy (tránh kill nhầm process của user). */
 export const DEFAULT_NEW_AGENT_TOOLS = [
   'tavily', 'serper', 'jina',
   'knowledge_search', 'knowledge_graph',
@@ -83,6 +85,7 @@ export const DEFAULT_NEW_AGENT_TOOLS = [
   'shell', 'run_tests', 'lint', 'type_check', 'get_diagnostics',
   'todo_write', 'todo_read', 'list_skills', 'read_skill',
   'create_custom_tool', 'list_custom_tools',
+  'get_app_runtime_status',
   'escalate_problem',
 ]
 

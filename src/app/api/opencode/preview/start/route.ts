@@ -3,16 +3,25 @@ import { spawn } from 'child_process'
 import net from 'net'
 import { createWriteStream, existsSync, readFileSync } from 'fs'
 import { allowPreviewPort } from '@/lib/preview-ports'
+// Task 19-b (App Runtime Awareness): registry preview tách ra lib dùng chung
+// (globalThis-safe) để tool get_app_runtime_status + workspace context của
+// agents đọc được trạng thái preview user đã khởi động.
+import {
+  previewProcesses,
+  registerPreview,
+  unregisterPreview,
+  getPreview,
+  type PreviewStartedBy,
+} from '@/lib/preview-registry'
 import { resolve, join } from 'path'
 
 export const dynamic = 'force-dynamic'
 
-// Phase 3: shared registry — /preview/stop and /preview/stream import this map
-// to kill the process group and tail the log file.
-export const runningProcesses: Map<
-  string,
-  { child: ReturnType<typeof spawn>; startedAt: number; port?: number; logFile?: string }
-> = new Map()
+// BACKWARD COMPAT (Task 19-b): /preview/stop và /preview/stream từng import
+// Map này trực tiếp từ route cũ. Giữ alias trỏ về registry shared — KHÔNG còn
+// là Map riêng của module này (state sống trên globalThis như preview-ports.ts,
+// an toàn Next dev multi-instance).
+export const runningProcesses = previewProcesses
 
 // TMO itself runs on PORT (default 3000) — reserve 3000..3004 so preview dev
 // servers NEVER collide with the TMO UI (the old bug: preview on 3000 killed
@@ -67,12 +76,17 @@ function detectIsNextProject(root: string): boolean {
 /**
  * POST /api/opencode/preview/start
  * Auto-start dev server for the workspace project on a FREE port >= 3005
- * Body: { root: string, command?: string, script?: string }
+ * Body: { root: string, command?: string, script?: string, startedBy?: 'user' | 'agent' }
+ *   startedBy — Task 19-b: 'user' khi bấm Preview trong UI (default),
+ *   'agent' khi agent gọi start_preview tool → agents khác biết process này
+ *   do ai khởi động (hint KHÔNG kill preview của user).
  */
 export async function POST(request: Request) {
   try {
     const body = await request.json()
     const { root, command, script } = body
+    // Task 19-b: ai khởi động — chỉ chấp nhận 'agent', còn lại coi như 'user'
+    const startedBy: PreviewStartedBy = body?.startedBy === 'agent' ? 'agent' : 'user'
 
     if (!root) {
       return NextResponse.json({ error: 'root parameter is required' }, { status: 400 })
@@ -84,7 +98,7 @@ export async function POST(request: Request) {
     }
 
     // Check if already running for this root
-    const existingProcess = runningProcesses.get(resolvedRoot)
+    const existingProcess = getPreview(resolvedRoot)
     if (existingProcess) {
       return NextResponse.json({
         status: 'already_running',
@@ -92,6 +106,7 @@ export async function POST(request: Request) {
         pid: existingProcess.child.pid,
         port: existingProcess.port ?? null,
         startedAt: existingProcess.startedAt,
+        startedBy: existingProcess.startedBy,
       })
     }
 
@@ -152,7 +167,7 @@ export async function POST(request: Request) {
     const pid = childProcess.pid
     const startedAt = Date.now()
 
-    runningProcesses.set(resolvedRoot, { child: childProcess, port, logFile, startedAt })
+    registerPreview(resolvedRoot, { child: childProcess, port, logFile, startedAt, startedBy })
 
     // Preview proxy allowlist (user request 2026-09-10) — port này được phép
     // forward qua /api/opencode/preview/proxy/<port>/...
@@ -160,7 +175,7 @@ export async function POST(request: Request) {
 
     // Clean up on process exit
     childProcess.on('exit', () => {
-      runningProcesses.delete(resolvedRoot)
+      unregisterPreview(resolvedRoot)
     })
 
     return NextResponse.json({
@@ -171,6 +186,7 @@ export async function POST(request: Request) {
       logFile,
       pid,
       startedAt,
+      startedBy,
     })
   } catch (error) {
     return NextResponse.json({
@@ -193,7 +209,7 @@ export async function GET(request: Request) {
   }
 
   const resolvedRoot = resolve(root)
-  const existingProcess = runningProcesses.get(resolvedRoot)
+  const existingProcess = getPreview(resolvedRoot)
 
   if (existingProcess) {
     return NextResponse.json({
@@ -201,6 +217,7 @@ export async function GET(request: Request) {
       pid: existingProcess.child.pid,
       port: existingProcess.port ?? null,
       startedAt: existingProcess.startedAt,
+      startedBy: existingProcess.startedBy,
     })
   }
 

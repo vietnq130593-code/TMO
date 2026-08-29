@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { resolve } from 'path'
-import { runningProcesses } from '../start/route'
+// Task 19-b: đọc registry shared (globalThis) thay vì import Map từ start route
+import { getPreview, unregisterPreview } from '@/lib/preview-registry'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,7 +20,7 @@ export async function POST(request: Request) {
     }
 
     const resolvedRoot = resolve(root)
-    const entry = runningProcesses.get(resolvedRoot)
+    const entry = getPreview(resolvedRoot)
 
     if (!entry) {
       return NextResponse.json({ ok: true, message: 'no running process' })
@@ -27,7 +28,7 @@ export async function POST(request: Request) {
 
     const pid = entry.child?.pid
     // Remove from registry first (idempotent stop)
-    runningProcesses.delete(resolvedRoot)
+    unregisterPreview(resolvedRoot)
 
     if (pid) {
       // Spawned detached → child is a process-group leader → -pid kills the

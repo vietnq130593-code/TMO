@@ -34,6 +34,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getNeo4jDriver, upsertEntitiesBatch, upsertRelationshipsBatch, deleteEntitiesByDocument, upsertDocumentNode, linkDocumentToEntities, readCypher, getGraphStats, mergePerDocumentNodesToGlobal } from '@/lib/neo4j'
 import type { EntityNode, RelationshipEdge } from '@/lib/neo4j'
+import { globalEntityId } from '@/lib/ingestion/entity-resolver'
 import { listDocuments, getDocument } from '@/lib/qdrant'
 import { db } from '@/lib/db'
 
@@ -540,9 +541,18 @@ async function syncOrphanEntities(): Promise<{
 
   const now = new Date().toISOString()
 
-  // Build entity nodes with synthetic IDs
+  // FIX 19-a (2026-09-10): entity id DETERMINISTIC `global__<name>__<type>` — hết đẻ
+  // node `orphan__<rowId>` không dedup được (cùng entity tái sinh node mới mỗi lần sync,
+  // id khác nhau giữa các máy). Giờ cùng format với mọi write path khác (17-c/17-a)
+  // → MERGE idempotent vào đúng node sẵn có.
+  const rowIdToDetId = new Map<string, string>()
+  for (const e of orphanEntities) {
+    rowIdToDetId.set(e.id, globalEntityId(e.entityName.trim(), e.entityType || 'Concept'))
+  }
+
+  // Build entity nodes with deterministic IDs
   const entityNodes: EntityNode[] = orphanEntities.map(e => ({
-    id: `orphan__${e.id}`,
+    id: rowIdToDetId.get(e.id)!,
     name: e.entityName.trim(),
     entity_type: (e.entityType || 'Concept') as EntityNode['entity_type'],
     domain: e.domain || 'mixed',
@@ -563,7 +573,7 @@ async function syncOrphanEntities(): Promise<{
   // Build name → deduped ID map for relationship resolution
   const nameToId = new Map<string, string>()
   for (const e of orphanEntities) {
-    nameToId.set(e.entityName.toLowerCase().trim(), `orphan__${e.id}`)
+    nameToId.set(e.entityName.toLowerCase().trim(), rowIdToDetId.get(e.id)!)
   }
 
   // Build relationship edges
@@ -571,8 +581,9 @@ async function syncOrphanEntities(): Promise<{
   for (const r of orphanRels) {
     const sName = r.sourceEntityName?.toLowerCase().trim()
     const tName = r.targetEntityName?.toLowerCase().trim()
-    const sId = r.sourceEntityId ? `orphan__${r.sourceEntityId}` : (sName ? nameToId.get(sName) : undefined)
-    const tId = r.targetEntityId ? `orphan__${r.targetEntityId}` : (tName ? nameToId.get(tName) : undefined)
+    // FIX 19-a: endpoint map qua row-id → det-id (ưu tiên) rồi name → det-id (fallback)
+    const sId = (r.sourceEntityId ? rowIdToDetId.get(r.sourceEntityId) : undefined) ?? (sName ? nameToId.get(sName) : undefined)
+    const tId = (r.targetEntityId ? rowIdToDetId.get(r.targetEntityId) : undefined) ?? (tName ? nameToId.get(tName) : undefined)
     if (!sId || !tId || sId === tId) continue
 
     const rt = (r.relationshipType || 'RELATED_TO').replace(/[^a-zA-Z0-9_]/g, '_').toUpperCase()

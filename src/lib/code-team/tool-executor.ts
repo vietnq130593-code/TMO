@@ -62,6 +62,10 @@ import { mcpCall as executeMcpCallFn } from '@/lib/mcp/mcp-bridge'
 import { isFlagEnabled, flagMode } from '@/lib/feature-flags'
 // Phase 6 (rebuild) — start_preview/stop_preview operate on the USER's ACTIVE workspace
 import { getActiveWorkspaceRoot } from '@/lib/workspace/workspace-manager'
+// Task 19-b (App Runtime Awareness) — agents NHÌN THẤY runtime của app:
+// preview nào đang chạy (port/pid/ai khởi động), HTTP probe + tail log.
+import { listRunningPreviews, tailPreviewLog } from '@/lib/preview-registry'
+import { listPreviewPorts } from '@/lib/preview-ports'
 // v2.1 Phase 4.6 — Cron scheduler (separate module)
 import {
   createCronJob as createCronJobFn,
@@ -825,6 +829,23 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
         type: 'object',
         properties: {
           root: { type: 'string', description: 'Workspace root directory (default: active workspace)' },
+        },
+        required: [],
+      },
+    },
+  },
+  // ===== Task 19-b (App Runtime Awareness): agent NHÌN THẤY preview/dev-server
+  // đang chạy (kể cả preview USER tự bấm Start trong UI) — dùng TRƯỚC khi kill
+  // process hoặc khi cần biết app user đang xem có chạy ổn không. =====
+  get_app_runtime_status: {
+    type: 'function',
+    function: {
+      name: 'get_app_runtime_status',
+      description: 'Kiểm tra trạng thái runtime của app: preview/dev-server nào đang chạy (port, pid, ai khởi động: user/agent), HTTP có respond không, và tail log gần nhất của từng preview. Dùng trước khi kill process hoặc khi cần biết app user đang xem có chạy ổn không.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tail_lines: { type: 'number', description: 'Số dòng log gần nhất trả về cho từng preview (default: 20, max: 100)' },
         },
         required: [],
       },
@@ -1738,6 +1759,9 @@ export async function executeTool(
             },
             body: JSON.stringify({
               root: previewRoot,
+              // Task 19-b: đánh dấu preview do AGENT khởi động — agents khác
+              // (qua get_app_runtime_status) biết process này KHÔNG phải của user.
+              startedBy: 'agent',
               ...(typeof args.command === 'string' && args.command ? { command: args.command } : {}),
             }),
             signal: AbortSignal.timeout(30_000),
@@ -1812,6 +1836,83 @@ export async function executeTool(
           result = {
             success: false,
             error: `stop_preview request failed: ${err instanceof Error ? err.message : String(err)}`,
+          }
+        }
+        break
+      }
+      // ===== Task 19-b (App Runtime Awareness): liệt kê preview/dev-server
+      // đang chạy (registry shared — thấy được CẢ preview user tự bấm Start
+      // trong UI), HTTP probe từng port + tail log gần nhất. Fail-open tuyệt
+      // đối: registry rỗng/lỗi → vẫn trả JSON hợp lệ, không bao giờ throw. =====
+      case 'get_app_runtime_status': {
+        const rawTail = Number(args.tail_lines)
+        const tailLines = Number.isFinite(rawTail) && rawTail > 0
+          ? Math.min(100, Math.floor(rawTail))
+          : 20
+        try {
+          const previews = listRunningPreviews()
+          if (previews.length === 0) {
+            result = {
+              success: true,
+              running: false,
+              count: 0,
+              hint: 'Không có preview nào đang chạy. Dùng start_preview để khởi động.',
+            }
+            break
+          }
+
+          // Chỉ HTTP-probe port nằm trong allowlist preview-proxy (start/detect
+          // đăng ký) — tránh quét port tùy ý (SSRF-ish).
+          const allowedPorts = new Set(listPreviewPorts())
+          const detailed = await Promise.all(previews.map(async (p) => {
+            let httpStatus: number | 'unreachable' = 'unreachable'
+            if (typeof p.port === 'number' && allowedPorts.has(p.port)) {
+              try {
+                const probe = await fetch(`http://127.0.0.1:${p.port}/`, {
+                  method: 'HEAD',
+                  signal: AbortSignal.timeout(2500),
+                })
+                httpStatus = probe.status
+              } catch {
+                httpStatus = 'unreachable'
+              }
+            }
+            return {
+              root: p.root,
+              port: p.port ?? null,
+              pid: p.pid,
+              startedAt: new Date(p.startedAt).toISOString(),
+              startedBy: p.startedBy,
+              alive: p.alive,
+              httpStatus,
+              logFile: p.logFile ?? null,
+              recentLog: p.logFile ? tailPreviewLog(p.logFile, tailLines) : [],
+            }
+          }))
+
+          // Hint lấy từ preview MỚI KHỞI ĐỘNG NHẤT (user thường đang xem cái đó)
+          const newest = detailed
+            .slice()
+            .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))
+            .find(d => typeof d.port === 'number')
+          const hint = newest
+            ? `Preview của user đang chạy ở port ${newest.port} — KHÔNG kill nếu không được yêu cầu. Có thể curl http://127.0.0.1:${newest.port}/ qua tool shell để kiểm tra sâu hơn.`
+            : 'Có preview đang chạy nhưng chưa xác định được port — chờ dev server sẵn sàng rồi gọi lại get_app_runtime_status, hoặc đọc recentLog.'
+
+          result = {
+            success: true,
+            running: true,
+            count: detailed.length,
+            previews: detailed,
+            hint,
+          }
+        } catch (err) {
+          result = {
+            success: true, // fail-open — không có preview nào biết được ≠ lỗi tool
+            running: false,
+            count: 0,
+            hint: 'Không xác định được trạng thái preview (fail-open). Có thể dùng shell để kiểm tra thủ công (ps aux | grep dev).',
+            error: err instanceof Error ? err.message : String(err),
           }
         }
         break
