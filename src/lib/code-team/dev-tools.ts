@@ -1011,7 +1011,8 @@ function extractEmbeddedToken(remoteUrl: string): string | null {
 interface RemoteGitStatus {
   isGitRepo: boolean
   branch: string
-  remoteUrl: string // cleaned (không token)
+  remoteUrl: string // cleaned (không token) — an toàn hiển thị/trả receipt
+  rawRemoteUrl: string // RAW (có thể chứa token nhúng) — CHỈ dùng extract token nội bộ, KHÔNG BAO GIỜ hiển thị/log/trả về client
   ahead: number
   behind: number
   uncommitted: string[]
@@ -1026,7 +1027,7 @@ async function probeWorkspaceGit(root: string): Promise<RemoteGitStatus> {
     isGitRepo = stdout.trim() === 'true'
   } catch { isGitRepo = false }
   if (!isGitRepo) {
-    return { isGitRepo: false, branch: '', remoteUrl: '', ahead: 0, behind: 0, uncommitted: [], headCommit: '' }
+    return { isGitRepo: false, branch: '', remoteUrl: '', rawRemoteUrl: '', ahead: 0, behind: 0, uncommitted: [], headCommit: '' }
   }
 
   const branchOut = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, timeout: 5_000 })
@@ -1057,6 +1058,11 @@ async function probeWorkspaceGit(root: string): Promise<RemoteGitStatus> {
     isGitRepo: true,
     branch: branchOut,
     remoteUrl: stripTokenFromGitUrl(remoteOut),
+    // FIX 2026-09-11 (CI-6 review): giữ RAW URL để gitPush/gitPull trích được
+    // token nhúng — trước đây strip quá sớm khiến tier "embedded" trong chuỗi
+    // resolve (embedded > store > env) KHÔNG BAO GIỜ khớp → push/pull rơi
+    // xuống env/store và fail khi không có 2 nguồn đó.
+    rawRemoteUrl: remoteOut,
     ahead,
     behind,
     uncommitted,
@@ -1142,7 +1148,9 @@ export async function gitPush(args: {
   }
 
   // Resolve authentication token: embedded > saved store > env
-  const embedded = extractEmbeddedToken(status.remoteUrl)
+  // FIX 2026-09-11: trích token từ RAW remote URL (probeWorkspaceGit đã strip
+  // remoteUrl cho an toàn hiển thị — dùng rawRemoteUrl cho tier embedded)
+  const embedded = extractEmbeddedToken(status.rawRemoteUrl || status.remoteUrl)
   const { getSavedGithubToken } = await import('@/lib/github-token-store')
   const savedToken = getSavedGithubToken()
   const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || ''
@@ -1240,11 +1248,14 @@ export async function gitPullWorkspace(args: {
   // Remote URL: dùng remoteName config nếu có, fallback origin
   const remoteName = (args.remote || 'origin').replace(/[^a-zA-Z0-9\-_\/\.]/g, '') || 'origin'
   let remoteUrl = status.remoteUrl
+  // FIX 2026-09-11: giữ RAW URL (có thể chứa token nhúng) để extract token —
+  // trước đây extractEmbeddedToken nhận URL ĐÃ STRIP → tier embedded never fires
+  let rawRemoteUrl = status.rawRemoteUrl || status.remoteUrl
   if (remoteName !== 'origin' && status.isGitRepo) {
-    remoteUrl = stripTokenFromGitUrl(
-      await execFileAsync('git', ['remote', 'get-url', remoteName], { cwd: root, timeout: 5_000 })
-        .then(r => r.stdout.trim()).catch(() => '')
-    )
+    const rawOut = await execFileAsync('git', ['remote', 'get-url', remoteName], { cwd: root, timeout: 5_000 })
+      .then(r => r.stdout.trim()).catch(() => '')
+    rawRemoteUrl = rawOut
+    remoteUrl = stripTokenFromGitUrl(rawOut)
   }
   if (!remoteUrl) {
     return {
@@ -1257,7 +1268,7 @@ export async function gitPullWorkspace(args: {
   const branch = (args.branch || '').trim() || status.branch
 
   // Resolve token như gitPush
-  const embedded = extractEmbeddedToken(remoteUrl)
+  const embedded = extractEmbeddedToken(rawRemoteUrl)
   const { getSavedGithubToken } = await import('@/lib/github-token-store')
   const savedToken = getSavedGithubToken()
   const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || ''
