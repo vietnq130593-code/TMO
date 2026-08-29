@@ -288,6 +288,60 @@ export async function runPrePushVerification(opts: {
     }
   }
 
+  /**
+   * Bước 8+9: push + pull verify — dùng chung cho 2 luồng:
+   * (a) sau khi commit thay đổi mới; (b) cây sạch nhưng còn commit chờ push
+   * (retry sau lần push fail). Dùng closure steps/root/state của hàm chính.
+   */
+  const pushAndVerify = async (): Promise<PrePushResult> => {
+    // ── Bước 8: push (tái dùng gitPush — token resolution 3 tầng có sẵn) ──
+    const pushOk = await step('push', async () => {
+      const receipt = (await gitPush({})) as GitReceipt
+      if (receipt && receipt.success) {
+        if (receipt.pushed) pushed = true
+        return {
+          status: 'pass',
+          detail: receipt.pushed
+            ? 'Pushed lên origin thành công'
+            : receipt.upToDate
+              ? 'Branch đã đồng bộ remote — không có gì để push'
+              : 'Push hoàn tất',
+        }
+      }
+      return {
+        status: 'fail',
+        detail: `git push thất bại: ${receipt?.error || 'không rõ lỗi'}${receipt?.hint ? ` — ${receipt.hint}` : ''}`,
+      }
+    })
+    if (!pushOk) {
+      return { success: false, steps, commitHash, pushed, error: 'Bước push thất bại' }
+    }
+
+    // ── Bước 9: pull_verify (ff-only — xác nhận round-trip push/pull) ──
+    const pullOk = await step('pull_verify', async () => {
+      const receipt = (await gitPullWorkspace({})) as GitReceipt
+      if (receipt && receipt.success) {
+        pulled = true
+        return {
+          status: 'pass',
+          detail: receipt.upToDate
+            ? 'Remote đã đồng bộ (ff-only up-to-date) — round-trip xác nhận'
+            : `Pull ff-only về ${receipt.afterCommit || '?'} — round-trip xác nhận`,
+        }
+      }
+      return {
+        status: 'fail',
+        detail: `git pull verify thất bại: ${receipt?.error || 'không rõ lỗi'}${receipt?.hint ? ` — ${receipt.hint}` : ''}`,
+      }
+    })
+    if (!pullOk) {
+      return { success: false, steps, commitHash, pushed, error: 'Bước pull_verify thất bại' }
+    }
+
+    console.log(`[PRE-PUSH] ✓ Pipeline HOÀN TẤT — commit ${commitHash || '?'} pushed=${pushed} pulled=${pulled}`)
+    return { success: true, steps, commitHash, pushed, pulled }
+  }
+
   // ── Bước 1: lint (script "lint" của repo — eslint .) ──
   const lintOk = await step('lint', async () => {
     const r = await runRepoScript(['run', 'lint'], root, LINT_TIMEOUT_MS)
@@ -410,13 +464,33 @@ export async function runPrePushVerification(opts: {
   }
   const changedFiles = parseChangedFiles(porcelain)
   if (changedFiles.length === 0) {
-    // Cây sạch: mọi kiểm định đã PASS — không có gì để commit/push/pull
-    steps.push({ name: 'git_preflight', status: 'pass', detail: 'Không có thay đổi để commit' })
+    // FIX 2026-09-11 (E2E retry): cây sạch NHƯNG có thể vẫn còn commit chưa push
+    // (kịch bản: lần push trước fail / push thủ công bị gián đoạn). Kiểm tra
+    // ahead-of-upstream trước khi kết luận "không cần push".
+    const aheadCount = await execFileAsync('git', ['rev-list', '--count', '@{upstream}..HEAD'], { cwd: root, timeout: 10_000 })
+      .then(r => parseInt(r.stdout.trim(), 10) || 0)
+      .catch(() => -1) // -1 = chưa có upstream tracking — để gitPush tự xử lý
+    if (aheadCount === 0) {
+      // Cây sạch + đã đồng bộ remote: mọi kiểm định đã PASS — không có gì để commit/push/pull
+      steps.push({ name: 'git_preflight', status: 'pass', detail: 'Không có thay đổi để commit' })
+      steps.push({ name: 'commit', status: 'skip', detail: 'Không có thay đổi để commit' })
+      steps.push({ name: 'push', status: 'skip', detail: 'Không có commit mới — không cần push' })
+      steps.push({ name: 'pull_verify', status: 'skip', detail: 'Không có commit mới — bỏ qua pull verify' })
+      console.log('[PRE-PUSH] ✓ git_preflight PASS — Không có thay đổi để commit (bỏ qua commit/push/pull)')
+      return { success: true, steps, pushed: false }
+    }
+    // Cây sạch nhưng còn N commit chờ push → bỏ commit, VẪN push + pull verify
+    steps.push({
+      name: 'git_preflight',
+      status: 'pass',
+      detail: aheadCount > 0
+        ? `Cây sạch nhưng còn ${aheadCount} commit chưa push lên remote`
+        : 'Cây sạch (chưa có upstream tracking) — sẽ push branch hiện tại',
+    })
     steps.push({ name: 'commit', status: 'skip', detail: 'Không có thay đổi để commit' })
-    steps.push({ name: 'push', status: 'skip', detail: 'Không có commit mới — không cần push' })
-    steps.push({ name: 'pull_verify', status: 'skip', detail: 'Không có commit mới — bỏ qua pull verify' })
-    console.log('[PRE-PUSH] ✓ git_preflight PASS — Không có thay đổi để commit (bỏ qua commit/push/pull)')
-    return { success: true, steps, pushed: false }
+    console.log(`[PRE-PUSH] ✓ git_preflight PASS — ${aheadCount > 0 ? `${aheadCount} commit chờ push` : 'chưa có upstream'} (bỏ commit, vẫn push + pull verify)`)
+    // Rơi xuống push/pull verify (bỏ qua bước commit — dùng closure pushAndVerify)
+    return await pushAndVerify()
   }
   steps.push({
     name: 'git_preflight',
@@ -474,50 +548,6 @@ export async function runPrePushVerification(opts: {
     return { success: false, steps, error: 'Bước commit thất bại — TỪ CHỐI push' }
   }
 
-  // ── Bước 8: push (tái dùng gitPush — token resolution 3 tầng có sẵn) ──
-  const pushOk = await step('push', async () => {
-    const receipt = (await gitPush({})) as GitReceipt
-    if (receipt && receipt.success) {
-      if (receipt.pushed) pushed = true
-      return {
-        status: 'pass',
-        detail: receipt.pushed
-          ? 'Pushed lên origin thành công'
-          : receipt.upToDate
-            ? 'Branch đã đồng bộ remote — không có gì để push'
-            : 'Push hoàn tất',
-      }
-    }
-    return {
-      status: 'fail',
-      detail: `git push thất bại: ${receipt?.error || 'không rõ lỗi'}${receipt?.hint ? ` — ${receipt.hint}` : ''}`,
-    }
-  })
-  if (!pushOk) {
-    return { success: false, steps, commitHash, pushed, error: 'Bước push thất bại' }
-  }
-
-  // ── Bước 9: pull_verify (ff-only — xác nhận round-trip push/pull) ──
-  const pullOk = await step('pull_verify', async () => {
-    const receipt = (await gitPullWorkspace({})) as GitReceipt
-    if (receipt && receipt.success) {
-      pulled = true
-      return {
-        status: 'pass',
-        detail: receipt.upToDate
-          ? 'Remote đã đồng bộ (ff-only up-to-date) — round-trip xác nhận'
-          : `Pull ff-only về ${receipt.afterCommit || '?'} — round-trip xác nhận`,
-      }
-    }
-    return {
-      status: 'fail',
-      detail: `git pull verify thất bại: ${receipt?.error || 'không rõ lỗi'}${receipt?.hint ? ` — ${receipt.hint}` : ''}`,
-    }
-  })
-  if (!pullOk) {
-    return { success: false, steps, commitHash, pushed, error: 'Bước pull_verify thất bại' }
-  }
-
-  console.log(`[PRE-PUSH] ✓ Pipeline HOÀN TẤT — commit ${commitHash || '?'} pushed=${pushed} pulled=${pulled}`)
-  return { success: true, steps, commitHash, pushed, pulled }
+  // ── Bước 8+9: push + pull verify (closure pushAndVerify) ──
+  return await pushAndVerify()
 }
