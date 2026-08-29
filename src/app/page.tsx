@@ -4246,7 +4246,7 @@ function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: s
 
   const agentColor = AGENT_COLORS[run.agentName]?.text
     || (run.agentPosition ? POSITION_COLORS[run.agentPosition]?.text : undefined)
-    || 'text-stone-300'
+    || 'text-stone-200'
 
   return (
     <div className="max-w-[88%] w-full rounded-xl border border-stone-700/60 bg-slate-950/60 overflow-hidden">
@@ -4258,32 +4258,32 @@ function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: s
         title={open ? 'Thu gọn Thought Process' : 'Mở Thought Process'}
       >
         <Brain className="h-3.5 w-3.5 text-violet-400 flex-shrink-0" />
-        <span className="text-[11px] font-semibold text-stone-200">Thought Process</span>
-        <span className={`text-[10px] font-medium ${agentColor}`}>{run.agentName}</span>
-        {run.agentPosition && <span className="text-[9px] text-stone-500">({run.agentPosition})</span>}
+        <span className="text-[13px] font-semibold text-stone-100">Thought Process</span>
+        <span className={`text-[12px] font-medium ${agentColor}`}>{run.agentName}</span>
+        {run.agentPosition && <span className="text-[11px] text-stone-400">({run.agentPosition})</span>}
 
         {/* Trạng thái */}
         {running ? (
-          <span className="flex items-center gap-1 text-[9px] text-amber-300 flex-shrink-0">
+          <span className="flex items-center gap-1 text-[11px] text-amber-300 flex-shrink-0">
             <Loader2 className="h-3 w-3 animate-spin" />
             Đang chạy · {fmtRunDuration(elapsed)}
           </span>
         ) : run.status === 'done' ? (
-          <span className="flex items-center gap-1 text-[9px] text-emerald-400 flex-shrink-0">
+          <span className="flex items-center gap-1 text-[11px] text-emerald-400 flex-shrink-0">
             <CheckCircle2 className="h-3 w-3" /> Done
           </span>
         ) : run.status === 'cancelled' ? (
-          <span className="flex items-center gap-1 text-[9px] text-orange-400 flex-shrink-0">
+          <span className="flex items-center gap-1 text-[11px] text-orange-400 flex-shrink-0">
             <Square className="h-3 w-3" /> Đã dừng
           </span>
         ) : (
-          <span className="flex items-center gap-1 text-[9px] text-red-400 flex-shrink-0">
+          <span className="flex items-center gap-1 text-[11px] text-red-400 flex-shrink-0">
             <XCircle className="h-3 w-3" /> Lỗi
           </span>
         )}
 
         {/* Counters — tiến trình live ngay ở header */}
-        <span className="ml-auto flex items-center gap-1.5 text-[9px] text-stone-500 flex-shrink-0">
+        <span className="ml-auto flex items-center gap-1.5 text-[11px] text-stone-400 flex-shrink-0">
           {c.iterations > 0 && <span>🔁 {c.iterations}</span>}
           {c.toolCalls > 0 && <span>🔧 {c.toolCalls}</span>}
           {c.filesRead > 0 && <span title={`${c.filesRead} file đã đọc`}>📖 {c.filesRead}</span>}
@@ -4297,7 +4297,7 @@ function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: s
 
       {/* Live activity — luôn hiện khi đang chạy (kể cả collapsed) */}
       {running && lastActivity && !open && (
-        <div className="px-3 pb-1.5 -mt-0.5 flex items-center gap-1.5 text-[9px] text-stone-500">
+        <div className="px-3 pb-1.5 -mt-0.5 flex items-center gap-1.5 text-[11px] text-stone-400">
           <span className="text-amber-400/80">→</span>
           <span className="truncate">{lastActivity.slice(0, 90)}</span>
         </div>
@@ -4310,8 +4310,8 @@ function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: s
             <div>
               <div className="flex items-center gap-1.5 mb-1">
                 <ClipboardList className="h-3 w-3 text-emerald-400" />
-                <span className="text-[10px] font-medium text-stone-300">Todos</span>
-                <span className="text-[9px] text-stone-500">{doneCount}/{todoList.length}</span>
+                <span className="text-[12px] font-medium text-stone-200">Todos</span>
+                <span className="text-[11px] text-stone-400">{doneCount}/{todoList.length}</span>
                 <div className="flex-1 h-1 bg-slate-800 rounded-full overflow-hidden ml-1">
                   <div
                     className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-500"
@@ -4323,11 +4323,11 @@ function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: s
                 {todoList.map(t => {
                   const st = t.status
                   const icon = st === 'completed' ? '✓' : st === 'in_progress' ? '◐' : st === 'failed' ? '✗' : st === 'blocked' ? '⚠' : '○'
-                  const color = st === 'completed' ? 'text-emerald-400' : st === 'in_progress' ? 'text-amber-300' : st === 'failed' ? 'text-red-400' : st === 'blocked' ? 'text-orange-400' : 'text-stone-500'
+                  const color = st === 'completed' ? 'text-emerald-400' : st === 'in_progress' ? 'text-amber-300' : st === 'failed' ? 'text-red-400' : st === 'blocked' ? 'text-orange-400' : 'text-stone-400'
                   return (
                     <div key={t.id} className="flex items-start gap-2 px-1 py-0.5">
-                      <span className={`text-[11px] leading-4 flex-shrink-0 ${color} ${st === 'in_progress' ? 'animate-pulse' : ''}`}>{icon}</span>
-                      <span className={`text-[10px] leading-4 flex-1 ${st === 'completed' ? 'text-stone-500 line-through' : 'text-stone-300'}`}>{t.content}</span>
+                      <span className={`text-[13px] leading-5 flex-shrink-0 ${color} ${st === 'in_progress' ? 'animate-pulse' : ''}`}>{icon}</span>
+                      <span className={`text-[12px] leading-5 flex-1 ${st === 'completed' ? 'text-stone-400 line-through' : 'text-stone-200'}`}>{t.content}</span>
                     </div>
                   )
                 })}
@@ -4339,13 +4339,13 @@ function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: s
           <div>
             <div className="flex items-center gap-1.5 mb-1">
               <Activity className="h-3 w-3 text-cyan-400" />
-              <span className="text-[10px] font-medium text-stone-300">Quá trình thực thi</span>
-              <span className="text-[9px] text-stone-500">{run.events.filter(e => e.type !== 'todo_update').length} sự kiện</span>
+              <span className="text-[12px] font-medium text-stone-200">Quá trình thực thi</span>
+              <span className="text-[11px] text-stone-400">{run.events.filter(e => e.type !== 'todo_update').length} sự kiện</span>
             </div>
             <div className="max-h-80 overflow-y-auto space-y-1 pr-1" style={{ scrollbarWidth: 'thin' }}>
               {run.task && (
-                <div className="text-[9px] text-stone-500 px-1">
-                  🎯 Nhiệm vụ: <span className="text-stone-400">{run.task.slice(0, 160)}</span>
+                <div className="text-[11px] text-stone-400 px-1">
+                  🎯 Nhiệm vụ: <span className="text-stone-300">{run.task.slice(0, 160)}</span>
                 </div>
               )}
               {run.events.map(e => {
@@ -4353,11 +4353,11 @@ function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: s
                   return (
                     <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/50 border-l-2 border-violet-500/50">
                       <div className="flex items-center gap-1.5 mb-0.5">
-                        <span className="text-[9px] text-violet-400">💭 Suy nghĩ</span>
-                        {e.iteration != null && <span className="text-[8px] text-stone-600">Vòng {e.iteration}</span>}
-                        <span className="text-[8px] text-stone-600 ml-auto">{new Date(e.ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                        <span className="text-[11px] text-violet-300">💭 Suy nghĩ</span>
+                        {e.iteration != null && <span className="text-[10px] text-stone-500">Vòng {e.iteration}</span>}
+                        <span className="text-[10px] text-stone-500 ml-auto">{new Date(e.ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
                       </div>
-                      <p className="text-[10px] leading-4 text-stone-400 italic whitespace-pre-wrap line-clamp-6">{e.text}</p>
+                      <p className="text-[12px] leading-5 text-stone-300 italic whitespace-pre-wrap line-clamp-6">{e.text}</p>
                     </div>
                   )
                 }
@@ -4365,22 +4365,22 @@ function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: s
                   return (
                     <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/40 border-l-2 border-cyan-500/40">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-[10px] flex-shrink-0">{runToolIcon(e.tool)}</span>
-                        <span className="text-[9px] font-mono text-cyan-300 flex-shrink-0">{e.tool}</span>
-                        {e.argsSummary && <span className="text-[9px] text-stone-400 truncate max-w-[45%]">{e.argsSummary}</span>}
-                        <span className={`text-[9px] flex-shrink-0 ${e.success ? 'text-emerald-400' : 'text-red-400'}`}>{e.success ? '✓' : '✗'}</span>
-                        {e.durationMs != null && <span className="text-[8px] text-stone-600 ml-auto flex-shrink-0">{fmtRunDuration(e.durationMs)}</span>}
+                        <span className="text-[12px] flex-shrink-0">{runToolIcon(e.tool)}</span>
+                        <span className="text-[11px] font-mono text-cyan-200 flex-shrink-0">{e.tool}</span>
+                        {e.argsSummary && <span className="text-[11px] text-stone-300 truncate max-w-[45%]">{e.argsSummary}</span>}
+                        <span className={`text-[11px] flex-shrink-0 ${e.success ? 'text-emerald-400' : 'text-red-400'}`}>{e.success ? '✓' : '✗'}</span>
+                        {e.durationMs != null && <span className="text-[10px] text-stone-500 ml-auto flex-shrink-0">{fmtRunDuration(e.durationMs)}</span>}
                       </div>
                       {/* KẾT QUẢ THẬT — minh bạch: lệnh thật + output thật */}
                       {e.resultPreview && (
-                        <pre className="mt-1 text-[9px] leading-3.5 text-stone-500 whitespace-pre-wrap max-h-24 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>{e.resultPreview}</pre>
+                        <pre className="mt-1 text-[11px] leading-4 text-stone-400 whitespace-pre-wrap max-h-24 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>{e.resultPreview}</pre>
                       )}
                     </div>
                   )
                 }
                 if (e.type === 'run_end') {
                   return (
-                    <div key={e.id} className={`flex items-center gap-1.5 px-2 py-1 text-[10px] ${e.cancelled ? 'text-orange-400' : e.success ? 'text-emerald-400' : 'text-red-400'}`}>
+                    <div key={e.id} className={`flex items-center gap-1.5 px-2 py-1 text-[12px] ${e.cancelled ? 'text-orange-400' : e.success ? 'text-emerald-400' : 'text-red-400'}`}>
                       {e.cancelled ? <Square className="h-3 w-3" /> : e.success ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
                       {e.cancelled ? 'Đã dừng' : e.success ? 'Done' : 'Lỗi'}{e.text ? ` — ${e.text}` : ''}
                     </div>
@@ -4389,7 +4389,7 @@ function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: s
                 return null
               })}
               {running && (
-                <div className="flex items-center gap-1.5 px-2 py-1 text-[9px] text-amber-300/80">
+                <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-amber-300/90">
                   <Loader2 className="h-3 w-3 animate-spin" />
                   Đang thực thi...
                 </div>
@@ -4410,9 +4410,9 @@ function AgentRunSummaryBar({ summary }: { summary: AgentRunSummaryData }) {
   const events = summary.events || []
   return (
     <div className="mb-1.5 pb-1.5 border-b border-stone-700/40">
-      <div className="flex items-center gap-2 flex-wrap text-[9px] text-stone-500">
+      <div className="flex items-center gap-2 flex-wrap text-[11px] text-stone-400">
         <Brain className="h-3 w-3 text-violet-400" />
-        <span className="text-stone-400">{summary.agentName}</span>
+        <span className="text-stone-300">{summary.agentName}</span>
         <span className={statusColor}>{statusLabel}</span>
         {summary.iterations > 0 && <span>🔁 {summary.iterations} vòng</span>}
         {summary.toolCalls > 0 && <span>🔧 {summary.toolCalls} tool</span>}
@@ -4423,12 +4423,12 @@ function AgentRunSummaryBar({ summary }: { summary: AgentRunSummaryData }) {
       </div>
       {events.length > 0 && (
         <details className="mt-1 group">
-          <summary className="cursor-pointer text-[9px] text-violet-400/80 hover:text-violet-300 select-none">
+          <summary className="cursor-pointer text-[11px] text-violet-300/90 hover:text-violet-200 select-none">
             🧠 Xem quá trình thực thi ({events.length} bước — đã lưu, survives restart)
           </summary>
-          <div className="mt-1 max-h-64 overflow-y-auto text-[9px] leading-relaxed text-stone-400 border border-stone-700/40 rounded bg-stone-900/40 p-1.5 space-y-0.5">
+          <div className="mt-1 max-h-64 overflow-y-auto text-[11px] leading-relaxed text-stone-300 border border-stone-700/40 rounded bg-stone-900/40 p-1.5 space-y-0.5">
             {events.map((e, i) => (
-              <div key={i} className={e.type === 'tool' ? 'text-cyan-400/80' : e.type === 'thought' ? 'text-stone-400' : 'text-stone-500'}>
+              <div key={i} className={e.type === 'tool' ? 'text-cyan-300/90' : e.type === 'thought' ? 'text-stone-300' : 'text-stone-400'}>
                 {e.type === 'tool' ? '🔧' : e.type === 'thought' ? '💭' : '•'} {e.text}
               </div>
             ))}
@@ -10901,7 +10901,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                     )}
                   </div>
                   ) : (
-                    <div className="flex-1 flex items-center justify-center px-2.5 py-1.5 text-xs text-amber-500/50 border border-amber-400/15 bg-slate-950/30">
+                    <div className="flex-1 flex items-center justify-center px-2.5 py-1.5 text-sm text-amber-400/70 border border-amber-400/15 bg-slate-950/30">
                       Chọn Team để xem phiên
                     </div>
                   )}
@@ -10910,7 +10910,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
 
               {/* Agent/Team model indicator */}
               {((chatMode === 'single' && selectedAgentId) || (chatMode === 'multi' && selectedTeam)) && (
-                <div className="mt-2 px-2.5 py-1.5 text-[10px] text-stone-500 bg-slate-950/30 border border-stone-700/20">
+                <div className="mt-2 px-2.5 py-1.5 text-[12px] text-stone-400 bg-slate-950/30 border border-stone-700/20">
                   {chatMode === 'single' && selectedAgentId && (() => {
                     const a = smolabAgents.find((ag: any) => ag.id === selectedAgentId)
                     return a ? `🤖 Model: ${a.model} (${a.provider}) • T: ${a.temperature} • 📦 ${a.maxTokens} tokens` : ''
@@ -10937,7 +10937,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                   <button
                     onClick={() => loadOlderMessages()}
                     disabled={loadingOlder}
-                    className="chamfer-sm text-[10px] px-3 py-1.5 border border-cyan-400/30 bg-slate-950/60 text-stone-400 hover:text-cyan-300 hover:border-cyan-400/60 transition-colors flex items-center gap-1.5"
+                    className="chamfer-sm text-[12px] px-3 py-1.5 border border-cyan-400/30 bg-slate-950/60 text-stone-300 hover:text-cyan-200 hover:border-cyan-400/60 transition-colors flex items-center gap-1.5"
                   >
                     {loadingOlder ? (
                       <>
@@ -10955,7 +10955,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                 <div className="flex items-center justify-center h-full py-8">
                   <div className="flex items-center gap-2 text-stone-400">
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-cyan-400 border-t-transparent" />
-                    <span className="text-xs">Đang tải tin nhắn...</span>
+                    <span className="text-sm">Đang tải tin nhắn...</span>
                   </div>
                 </div>
               ) : messages.length === 0 ? (
@@ -10967,21 +10967,21 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                   <h3 className="text-base font-bold text-stone-200 mb-1" style={{ fontFamily: "'Cormorant Infant', 'Georgia', serif" }}>
                     {chatMode === 'single' ? 'Single Agent Chat' : 'Multi Agent Team'}
                   </h3>
-                  <p className="text-xs text-stone-400 max-w-[240px] mb-4">
+                  <p className="text-sm text-stone-300 max-w-[240px] mb-4">
                     {chatMode === 'single'
                       ? 'Chọn một Agent để bắt đầu trò chuyện với AI Agent chuyên biệt.'
                       : 'Chọn một Team để các Agents phối hợp làm việc.'}
                   </p>
                   <div className="flex items-center gap-1.5 mb-4">
                     <div className={`w-2 h-2 ${gatewayOnline ? 'bg-emerald-400' : 'bg-red-400'}`} />
-                    <span className="text-[10px] text-stone-400">Gateway {gatewayOnline ? 'Online' : 'Offline — Mock Mode'}</span>
+                    <span className="text-[12px] text-stone-300">Gateway {gatewayOnline ? 'Online' : 'Offline — Mock Mode'}</span>
                   </div>
                   <div className="flex flex-col gap-2 w-full">
                     {SMOLAB_SUGGESTIONS.map(q => (
                       <button
                         key={q}
                         onClick={() => sendMessage(q)}
-                        className="chamfer-sm text-xs px-3 py-2 border border-cyan-400/35 bg-slate-950/50 text-stone-300 hover:border-emerald-300 hover:bg-emerald-900/30 hover:text-emerald-400 transition-colors text-left"
+                        className="chamfer-sm text-sm px-3 py-2 border border-cyan-400/35 bg-slate-950/50 text-stone-200 hover:border-emerald-300 hover:bg-emerald-900/30 hover:text-emerald-400 transition-colors text-left"
                       >
                         💬 {q}
                       </button>
@@ -11022,15 +11022,15 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                         AGENT_COLORS[msg.agentName]?.bg || (msg.agentPosition ? POSITION_COLORS[msg.agentPosition]?.bg : undefined) || 'bg-slate-950/50'
                       }`}>
                         <div className="flex items-center gap-2 mb-1.5">
-                          <span className="text-sm">{msg.agentAvatar || '🤖'}</span>
-                          <span className={`font-semibold text-xs ${
-                            AGENT_COLORS[msg.agentName]?.text || (msg.agentPosition ? POSITION_COLORS[msg.agentPosition]?.text : undefined) || 'text-stone-200'
+                          <span className="text-base">{msg.agentAvatar || '🤖'}</span>
+                          <span className={`font-semibold text-sm ${
+                            AGENT_COLORS[msg.agentName]?.text || (msg.agentPosition ? POSITION_COLORS[msg.agentPosition]?.text : undefined) || 'text-stone-100'
                           }`}>
                             {msg.agentName}
                           </span>
-                          {msg.agentPosition && <span className="text-[9px] text-stone-400">({msg.agentPosition})</span>}
-                          {msg.iterationInfo && <span className="text-[9px] text-amber-400/80 ml-1">{msg.iterationInfo}</span>}
-                          <span className="text-[9px] text-stone-500 ml-auto">
+                          {msg.agentPosition && <span className="text-[11px] text-stone-300">({msg.agentPosition})</span>}
+                          {msg.iterationInfo && <span className="text-[11px] text-amber-300/90 ml-1">{msg.iterationInfo}</span>}
+                          <span className="text-[11px] text-stone-400 ml-auto">
                             {msg.timestamp.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
                           </span>
                         </div>
@@ -11038,11 +11038,11 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                         {msg.isWorkflowSuggestion && !msg.suggestionRejected ? (
                           <div className="mt-1.5 p-3 rounded-lg border border-amber-500/30 bg-amber-950/20">
                             <div className="flex items-center gap-2 mb-2">
-                              <span className="text-amber-400 text-xs font-medium">🚀 APEX đề xuất Code Team</span>
+                              <span className="text-amber-300 text-sm font-medium">🚀 APEX đề xuất Code Team</span>
                             </div>
-                            <p className="text-[11px] text-gray-300 mb-2">{msg.suggestionText}</p>
+                            <p className="text-[13px] text-stone-200 mb-2">{msg.suggestionText}</p>
                             {(msg.routingMode || msg.routingTier || msg.routingScore) && (
-                              <div className="flex items-center gap-2 text-[9px] text-gray-400 mb-3">
+                              <div className="flex items-center gap-2 text-[11px] text-stone-300 mb-3">
                                 {msg.routingMode && <span className="px-1.5 py-0.5 bg-slate-800/60 rounded">Mode {msg.routingMode === 'A' ? 'A (Visual)' : msg.routingMode === 'B' ? 'B (Backend)' : 'C (Hybrid)'}</span>}
                                 {msg.routingTier && <span className="px-1.5 py-0.5 bg-slate-800/60 rounded">Tier {msg.routingTier === 1 ? '1 Simple' : msg.routingTier === 2 ? '2 Medium' : '3 Complex'}</span>}
                                 {msg.routingScore != null && <span className="px-1.5 py-0.5 bg-slate-800/60 rounded">Score {msg.routingScore}/9</span>}
@@ -11063,7 +11063,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                                     startWorkflow(lastUserMsg.content, undefined, { skipUserMsg: true })
                                   }
                                 }}
-                                className="px-3 py-1.5 text-[10px] bg-amber-500/20 text-amber-300 rounded border border-amber-500/30 hover:bg-amber-500/30 transition-colors font-medium"
+                                className="px-3 py-1.5 text-[12px] bg-amber-500/20 text-amber-200 rounded border border-amber-500/30 hover:bg-amber-500/30 transition-colors font-medium"
                               >
                                 ✅ Triển khai
                               </button>
@@ -11076,29 +11076,29 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                                       : m
                                   ))
                                 }}
-                                className="px-3 py-1.5 text-[10px] bg-slate-700/30 text-gray-400 rounded border border-slate-600/30 hover:bg-slate-700/50 transition-colors"
+                                className="px-3 py-1.5 text-[12px] bg-slate-700/30 text-stone-300 rounded border border-slate-600/30 hover:bg-slate-700/50 transition-colors"
                               >
                                 ❌ Không
                               </button>
                             </div>
                           </div>
                         ) : msg.suggestionRejected ? (
-                          <p className="text-sm text-stone-400 italic">{msg.content}</p>
+                          <p className="text-base text-stone-300 italic">{msg.content}</p>
                         ) : (
-                          <p className="text-sm whitespace-pre-wrap leading-relaxed text-stone-200">{msg.content}</p>
+                          <p className="text-base whitespace-pre-wrap leading-relaxed text-stone-100">{msg.content}</p>
                         )}
                         {msg.toolCallInfo && (
-                          <div className="mt-2 p-2 rounded-lg bg-slate-950/50 border border-stone-700/50 text-[9px] text-stone-400">
+                          <div className="mt-2 p-2 rounded-lg bg-slate-950/50 border border-stone-700/50 text-[11px] text-stone-300">
                             {formatToolBubble(msg.toolCallInfo.tool, msg.toolCallInfo.detail)}
                           </div>
                         )}
                         {msg.durationMs && (
-                          <div className="text-[8px] text-stone-500 mt-1">{(msg.durationMs / 1000).toFixed(1)}s</div>
+                          <div className="text-[10px] text-stone-400 mt-1">{(msg.durationMs / 1000).toFixed(1)}s</div>
                         )}
                       </div>
                     ) : msg.role === 'user' ? (
                       <div className="max-w-[85%] p-2.5 bg-gradient-to-r from-cyan-600/80 to-teal-700/80 text-white">
-                        <p className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                        <p className="text-base whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                       </div>
                     ) : (
                     <div className={`max-w-[85%] p-2.5 ${
@@ -11115,9 +11115,9 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                       {/* Role label */}
                       {msg.role === 'assistant' && (
                         <div className="flex items-center gap-1.5 mb-1">
-                          <span className="text-[9px] text-stone-400 font-medium">Agent</span>
-                          {msg.provider && <Badge className="text-[7px] h-3 px-1 bg-stone-950/50 text-stone-400">{msg.provider}</Badge>}
-                          {msg.confidence != null && <Badge variant="outline" className="text-[7px] h-3 px-1">{(msg.confidence * 100).toFixed(0)}%</Badge>}
+                          <span className="text-[11px] text-stone-300 font-medium">Agent</span>
+                          {msg.provider && <Badge className="text-[9px] h-3.5 px-1 bg-stone-950/50 text-stone-300">{msg.provider}</Badge>}
+                          {msg.confidence != null && <Badge variant="outline" className="text-[9px] h-3.5 px-1">{(msg.confidence * 100).toFixed(0)}%</Badge>}
                         </div>
                       )}
                       {/* Thought Process summary bar (reload session) — events in-memory đã mất, chỉ còn summary */}
@@ -11127,42 +11127,42 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                       {msg.role === 'tool_call' && (
                         <div className="flex items-center gap-1.5 mb-1">
                           <Loader2 className="h-3 w-3 animate-spin text-cyan-400" />
-                          <span className="text-[9px] text-cyan-400">🔍 {msg.content}</span>
+                          <span className="text-[11px] text-cyan-300">🔍 {msg.content}</span>
                         </div>
                       )}
                       {msg.role === 'error' && (
                         <div className="flex items-center gap-1.5 mb-1">
-                          <span className="text-[9px] text-red-400">Lỗi</span>
+                          <span className="text-[11px] text-red-400">Lỗi</span>
                         </div>
                       )}
                       {msg.role === 'opencode_progress' && (
                         <div className="flex items-center gap-1.5 mb-1">
                           <Loader2 className="h-3 w-3 animate-spin text-emerald-400" />
-                          <span className="text-[9px] text-emerald-400 font-medium">🔧 OpenCode Session</span>
-                          {msg.opencodeSessionId && <Badge className="text-[7px] h-3 px-1 bg-emerald-950/50 text-emerald-400">{msg.opencodeSessionId.slice(0, 8)}</Badge>}
+                          <span className="text-[11px] text-emerald-300 font-medium">🔧 OpenCode Session</span>
+                          {msg.opencodeSessionId && <Badge className="text-[9px] h-3.5 px-1 bg-emerald-950/50 text-emerald-300">{msg.opencodeSessionId.slice(0, 8)}</Badge>}
                         </div>
                       )}
                       {msg.role === 'opencode_result' && (
                         <div className="flex items-center gap-1.5 mb-1">
                           <CheckCircle2 className="h-3 w-3 text-emerald-400" />
-                          <span className="text-[9px] text-emerald-400 font-medium">✅ OpenCode Hoàn thành</span>
+                          <span className="text-[11px] text-emerald-300 font-medium">✅ OpenCode Hoàn thành</span>
                         </div>
                       )}
 
-                      {/* Content — chat font +2px (user request 2026-08-27) */}
+                      {/* Content — chat font +2px LẦN 2 (user request 2026-09-10: 14px → 16px + chữ sáng hơn) */}
                       {msg.role !== 'tool_call' && (
-                        <p className="text-sm whitespace-pre-wrap leading-relaxed text-stone-300">{msg.content}</p>
+                        <p className="text-base whitespace-pre-wrap leading-relaxed text-stone-100">{msg.content}</p>
                       )}
 
                       {/* Sources */}
                       {msg.role === 'assistant' && msg.sources && msg.sources.length > 0 && (
                         <details className="mt-1.5 pt-1.5 border-t border-cyan-500/15">
-                          <summary className="text-[9px] text-stone-400 cursor-pointer hover:text-stone-300">Nguồn ({msg.sources.length})</summary>
+                          <summary className="text-[11px] text-stone-300 cursor-pointer hover:text-stone-100">Nguồn ({msg.sources.length})</summary>
                           <div className="mt-1 space-y-0.5 max-h-24 overflow-y-auto">
                             {msg.sources.map((s, i) => (
-                              <div key={i} className="text-[9px] text-stone-400 flex items-start gap-1">
+                              <div key={i} className="text-[11px] text-stone-300 flex items-start gap-1">
                                 <span>{s.type === 'chunk' ? '📄' : s.type === 'entity' ? '🏷️' : '🔗'}</span>
-                                <span className="truncate">{s.content.slice(0, 60)}{s.documentTitle && <span className="text-[8px]"> ({s.documentTitle})</span>}</span>
+                                <span className="truncate">{s.content.slice(0, 60)}{s.documentTitle && <span className="text-[10px]"> ({s.documentTitle})</span>}</span>
                               </div>
                             ))}
                           </div>
@@ -11173,17 +11173,17 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                       {msg.role === 'opencode_progress' && msg.enrichment && (
                         <div className="mt-1.5 pt-1.5 border-t border-emerald-500/15">
                           <div className="flex items-center gap-1.5 mb-1">
-                            <span className="text-[9px] text-emerald-400">📊 KB Enrichment</span>
+                            <span className="text-[11px] text-emerald-300">📊 KB Enrichment</span>
                             <div className="flex-1 h-1 bg-slate-800 rounded-full overflow-hidden">
                               <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full" style={{ width: `${Math.round(msg.enrichment.score * 100)}%` }} />
                             </div>
-                            <span className="text-[9px] text-emerald-300">{Math.round(msg.enrichment.score * 100)}%</span>
+                            <span className="text-[11px] text-emerald-300">{Math.round(msg.enrichment.score * 100)}%</span>
                           </div>
                           <div className="flex flex-wrap gap-1">
-                            {msg.enrichment.entitiesFound > 0 && <Badge className="text-[7px] h-3 px-1 bg-emerald-950/50 text-emerald-400">🏷️ {msg.enrichment.entitiesFound} entities</Badge>}
-                            {msg.enrichment.documentsFound > 0 && <Badge className="text-[7px] h-3 px-1 bg-cyan-950/50 text-cyan-400">📄 {msg.enrichment.documentsFound} docs</Badge>}
-                            {msg.enrichment.correctionsFound > 0 && <Badge className="text-[7px] h-3 px-1 bg-amber-950/50 text-amber-400">📝 {msg.enrichment.correctionsFound} corrections</Badge>}
-                            {msg.enrichment.insightsFound > 0 && <Badge className="text-[7px] h-3 px-1 bg-violet-950/50 text-violet-400">💡 {msg.enrichment.insightsFound} insights</Badge>}
+                            {msg.enrichment.entitiesFound > 0 && <Badge className="text-[9px] h-3.5 px-1 bg-emerald-950/50 text-emerald-300">🏷️ {msg.enrichment.entitiesFound} entities</Badge>}
+                            {msg.enrichment.documentsFound > 0 && <Badge className="text-[9px] h-3.5 px-1 bg-cyan-950/50 text-cyan-300">📄 {msg.enrichment.documentsFound} docs</Badge>}
+                            {msg.enrichment.correctionsFound > 0 && <Badge className="text-[9px] h-3.5 px-1 bg-amber-950/50 text-amber-300">📝 {msg.enrichment.correctionsFound} corrections</Badge>}
+                            {msg.enrichment.insightsFound > 0 && <Badge className="text-[9px] h-3.5 px-1 bg-violet-950/50 text-violet-300">💡 {msg.enrichment.insightsFound} insights</Badge>}
                           </div>
                         </div>
                       )}
@@ -11192,13 +11192,13 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                       {msg.role === 'opencode_result' && msg.opencodeResult && (
                         <div className="mt-1.5 pt-1.5 border-t border-emerald-500/15 space-y-1">
                           <div className="flex flex-wrap gap-1">
-                            <Badge className="text-[7px] h-3 px-1 bg-emerald-950/50 text-emerald-400">+{msg.opencodeResult.additions} -{msg.opencodeResult.deletions}</Badge>
-                            <Badge className="text-[7px] h-3 px-1 bg-cyan-950/50 text-cyan-400">📁 {msg.opencodeResult.filesChanged.length} files</Badge>
-                            <Badge className="text-[7px] h-3 px-1 bg-amber-950/50 text-amber-400">🔧 {msg.opencodeResult.diagnostics} diagnostics</Badge>
-                            {msg.opencodeResult.kbUsed && <Badge className="text-[7px] h-3 px-1 bg-violet-950/50 text-violet-400">🔍 KB used</Badge>}
+                            <Badge className="text-[9px] h-3.5 px-1 bg-emerald-950/50 text-emerald-300">+{msg.opencodeResult.additions} -{msg.opencodeResult.deletions}</Badge>
+                            <Badge className="text-[9px] h-3.5 px-1 bg-cyan-950/50 text-cyan-300">📁 {msg.opencodeResult.filesChanged.length} files</Badge>
+                            <Badge className="text-[9px] h-3.5 px-1 bg-amber-950/50 text-amber-300">🔧 {msg.opencodeResult.diagnostics} diagnostics</Badge>
+                            {msg.opencodeResult.kbUsed && <Badge className="text-[9px] h-3.5 px-1 bg-violet-950/50 text-violet-300">🔍 KB used</Badge>}
                           </div>
                           {msg.opencodeResult.filesChanged.length > 0 && (
-                            <div className="text-[9px] text-stone-400">
+                            <div className="text-[11px] text-stone-300">
                               Files: {msg.opencodeResult.filesChanged.join(', ')}
                             </div>
                           )}
@@ -11229,7 +11229,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                           >
                             <ThumbsDown className="h-3 w-3" />
                           </button>
-                          <span className="text-[8px] text-stone-500 ml-auto">
+                          <span className="text-[10px] text-stone-400 ml-auto">
                             {msg.timestamp.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
                           </span>
                         </div>
@@ -11256,14 +11256,14 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                   <div className="bg-slate-950/50 border border-cyan-400/35 p-2.5">
                     <div className="flex items-center gap-2">
                       <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
-                      <span className="text-xs text-stone-400">Đang suy nghĩ...</span>
+                      <span className="text-sm text-stone-300">Đang suy nghĩ...</span>
                     </div>
                   </div>
                 </div>
               )}
               {/* Phase 6: Typing indicator khi task đang chạy trong background */}
               {activeTaskIds.has(currentSessionId) && !isLoading && (
-                <div className="flex items-center gap-2 px-4 py-2 text-xs text-stone-400">
+                <div className="flex items-center gap-2 px-4 py-2 text-sm text-stone-300">
                   <Loader2 className="h-3 w-3 animate-spin" />
                   <span>{chatMode === 'single' ? (smolabAgents.find((a: any) => a.id === selectedAgentId)?.name || 'Agent') : (selectedTeam === 'code' ? 'Code Team' : 'Research Team')} đang xử lý...</span>
                 </div>
@@ -11283,24 +11283,24 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                     <span className={`absolute inline-flex h-full w-full rounded-full ${voiceLive.status === 'listening' ? 'bg-emerald-400 animate-ping' : 'bg-stone-500'} opacity-60`} />
                     <span className={`relative inline-flex rounded-full h-2 w-2 ${voiceLive.status === 'listening' ? 'bg-emerald-500' : 'bg-stone-400'}`} />
                   </span>
-                  <span className={`text-[10px] font-mono uppercase tracking-wider ${VOICE_STATUS_META[voiceLive.status].className}`}>
+                  <span className={`text-[12px] font-mono uppercase tracking-wider ${VOICE_STATUS_META[voiceLive.status].className}`}>
                     {VOICE_STATUS_META[voiceLive.status].label}
                     {voiceLive.error && <span className="ml-1 normal-case">— {voiceLive.error}</span>}
                   </span>
                   {voiceLive.status === 'listening' && (
-                    <span className="ml-auto text-[9px] text-stone-500">
-                      Ngừng ≥1s rồi nói <span className="text-cyan-300">“xin hết”</span> để gửi
+                    <span className="ml-auto text-[11px] text-stone-400">
+                      Ngừng ≥1s rồi nói <span className="text-cyan-200">“xin hết”</span> để gửi
                     </span>
                   )}
                   {(voiceLive.status === 'sending' || voiceLive.status === 'speaking') && (
-                    <span className="ml-auto text-[9px] text-stone-500 flex items-center gap-1">
+                    <span className="ml-auto text-[11px] text-stone-400 flex items-center gap-1">
                       {voiceLive.status === 'speaking' ? <Volume2 className="h-2.5 w-2.5" /> : <Loader2 className="h-2.5 w-2.5 animate-spin" />} mic tạm tắt
                     </span>
                   )}
                 </div>
               )}
               {voiceLive.isLive && voiceLive.ttsVoiceMissing && (
-                <div className="mb-1.5 px-1 text-[9px] text-amber-500/90">
+                <div className="mb-1.5 px-1 text-[11px] text-amber-400/90">
                   ⚠ Trình duyệt chưa có giọng đọc tiếng Việt (vi-VN) — câu trả lời sẽ chỉ hiển thị dạng chữ. Hãy dùng Chrome/Edge hoặc cài thêm giọng vi-VN cho Windows.
                 </div>
               )}
@@ -11312,7 +11312,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }}
                   placeholder={voiceLive.isLive ? 'Nói gì đó… (hoặc gõ tay)' : 'Nhập câu hỏi...'}
-                  className="chamfer-sm flex-1 min-w-0 px-3 py-2 text-xs bg-slate-950/60 border border-cyan-400/40 text-stone-200 placeholder:text-stone-500 focus:outline-none focus:border-cyan-500/50 transition-colors"
+                  className="chamfer-sm flex-1 min-w-0 px-3 py-2 text-sm bg-slate-950/60 border border-cyan-400/40 text-stone-100 placeholder:text-stone-400 focus:outline-none focus:border-cyan-500/50 transition-colors"
                   disabled={isLoading}
                 />
                 {/* LIVE VOICE (2026-08-28) — nút Live cạnh nút Gửi:
