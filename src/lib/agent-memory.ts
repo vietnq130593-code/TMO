@@ -57,6 +57,10 @@ export interface RecalledMemory {
   importance: number
   relevance: number
   context: string | null
+  /** Tier của memory (Phase 4) — 'warm' (AgentMemory active) | 'cold' (MemoryArchive) */
+  tier?: string
+  /** true nếu là COLD archive memory (bản nén từ memory cũ) — caller/URI có thể hiển thị "(ký ức cũ)" */
+  archived?: boolean
 }
 
 export interface StoreMemoryParams {
@@ -200,6 +204,8 @@ export async function ensureAgentMemoryCollection(): Promise<boolean> {
  *   2. Search Qdrant agent_memory collection
  *   3. Update access stats (accessCount++, lastAccessedAt)
  *   4. Log to MemoryAccessLog
+ *   5. FIX 17-b: fill phần topK còn trống bằng COLD archive (MemoryArchive)
+ *      — active memories luôn được ưu tiên đứng trước (xem Step 5 trong hàm)
  *
  * @param params - Recall parameters
  * @returns Array of recalled memories sorted by relevance
@@ -266,10 +272,13 @@ export async function recallMemories(params: RecallParams): Promise<RecalledMemo
     // FIX RESET-2026-08-30: qdrant.search() bị remove ở @qdrant/js-client-rest
     // v1.19.0 → migrate sang qdrant.query() (Universally Query API).
     // Response shape: { points: ScoredPoint[] }.
+    // FIX 17-b: fetch rộng hơn topK để archive points không chiếm chỗ của active
+    // memories trong kết quả Qdrant — active luôn được ưu tiên lấy đủ topK trước.
+    const fetchLimit = Math.max(topK, Math.min(topK * 3, 50))
     const results = await qdrant.query(COLLECTION_AGENT_MEMORY, {
       query: queryVector,
       filter: { must },
-      limit: topK,
+      limit: fetchLimit,
       with_payload: true,
       score_threshold: DEFAULT_MIN_SCORE,
     })
@@ -278,8 +287,11 @@ export async function recallMemories(params: RecallParams): Promise<RecalledMemo
       return []
     }
 
-    // Step 4: Process results — update access stats and log
+    // Step 4: Process results — active (hot/warm) memories LUÔN đứng trước;
+    // points không match AgentMemory active để lại làm ứng viên COLD archive
+    // cho Step 5 (chỉ fill phần topK còn trống).
     const recalled: RecalledMemory[] = []
+    const archiveCandidates: Array<{ pointId: string; score: number }> = []
 
     for (const result of results.points) {
       const payload = result.payload as unknown as AgentMemoryPayload
@@ -289,44 +301,94 @@ export async function recallMemories(params: RecallParams): Promise<RecalledMemo
 
       // Check if memory is still active in SQLite
       const memory = await db.agentMemory.findUnique({ where: { id: memoryId } })
-      if (!memory || !memory.isActive) continue
+      if (memory && memory.isActive) {
+        // Đủ active cho topK rồi — bỏ qua phần thừa (không update stats)
+        if (recalled.length >= topK) continue
 
-      // Update access stats
-      try {
-        await db.agentMemory.update({
-          where: { id: memoryId },
-          data: {
-            accessCount: { increment: 1 },
-            lastAccessedAt: new Date(),
-          },
+        // Update access stats
+        try {
+          await db.agentMemory.update({
+            where: { id: memoryId },
+            data: {
+              accessCount: { increment: 1 },
+              lastAccessedAt: new Date(),
+            },
+          })
+        } catch {
+          // Non-critical — don't break recall if stats update fails
+        }
+
+        // Log access
+        try {
+          await db.memoryAccessLog.create({
+            data: {
+              memoryId,
+              agentId,
+              sessionId: sessionId || null,
+              query: query.slice(0, 500),
+              relevance: result.score,
+            },
+          })
+        } catch {
+          // Non-critical — don't break recall if logging fails
+        }
+
+        recalled.push({
+          id: memoryId,
+          content: memory.content,
+          category: memory.category,
+          importance: memory.importance,
+          relevance: result.score,
+          context: memory.context,
+          tier: memory.tier,
         })
-      } catch {
-        // Non-critical — don't break recall if stats update fails
+      } else {
+        // Point KHÔNG match AgentMemory active — ứng viên COLD archive: điểm
+        // archive được upsert với memoryId GIẢ "archive:<timestamp>" (cluster
+        // summary, memory-tiers.ts) hoặc memoryId gốc đã bị XÓA row nguồn
+        // (single archive) → đối chiếu MemoryArchive qua qdrantPointId ở Step 5.
+        archiveCandidates.push({ pointId: String(result.id), score: result.score })
       }
+    }
 
-      // Log access
-      try {
-        await db.memoryAccessLog.create({
-          data: {
-            memoryId,
-            agentId,
-            sessionId: sessionId || null,
-            query: query.slice(0, 500),
-            relevance: result.score,
-          },
-        })
-      } catch {
-        // Non-critical — don't break recall if logging fails
+    // Step 5 (FIX 17-b — COLD archive recall path): trước đây memory đã archive
+    // là write-only — Qdrant search VẪN thấy archive points nhưng post-filter
+    // findUnique(AgentMemory) fail (row nguồn đã xóa khi archive) → COLD memory
+    // không bao giờ được recall lại cho agent. Giờ: lookup MemoryArchive theo
+    // qdrantPointId (khoá nối duy nhất — payload KHÔNG lưu archiveId) và chỉ
+    // fill phần topK còn trống, với điều kiện: chưa hết hạn (expiresAt),
+    // importance ≥ minImportance (Qdrant score đã qua score_threshold sẵn).
+    if (recalled.length < topK && archiveCandidates.length > 0) {
+      let archivedRecalled = 0
+      for (const candidate of archiveCandidates) {
+        if (recalled.length >= topK) break
+        try {
+          const archive = await db.memoryArchive.findFirst({
+            where: { qdrantPointId: candidate.pointId, agentId },
+          })
+          if (!archive) continue
+          // Hết hạn 90 ngày — chờ cleanupExpiredArchives xóa, không recall
+          if (archive.expiresAt && archive.expiresAt.getTime() < Date.now()) continue
+          if (archive.importance < minImportance) continue
+
+          recalled.push({
+            id: archive.id,
+            content: archive.summaryContent,
+            category: 'archived',
+            importance: archive.importance,
+            relevance: candidate.score,
+            context: null,
+            tier: 'cold',
+            archived: true,
+          })
+          archivedRecalled++
+        } catch {
+          // Fail-open từng point — archive lookup lỗi không phá recall
+        }
       }
-
-      recalled.push({
-        id: memoryId,
-        content: memory.content,
-        category: memory.category,
-        importance: memory.importance,
-        relevance: result.score,
-        context: memory.context,
-      })
+      if (archivedRecalled > 0) {
+        console.log(`[AgentMemory] Recalled ${archivedRecalled} COLD archive memor${archivedRecalled === 1 ? 'y' : 'ies'} for agent ${agentId} (recall ${recalled.length}/${topK})`)
+      }
     }
 
     return recalled

@@ -22,7 +22,6 @@
  *   a time, can afford the embedding API call).
  */
 
-import { randomUUID } from 'crypto'
 import type { DocumentDomain } from './pdf-parser'
 import { generateEmbedding } from '@/lib/embeddings'
 import { readCypher, ENTITY_LABELS, type EntityLabel } from '@/lib/neo4j'
@@ -349,6 +348,64 @@ export const ENTITY_EMBEDDING_NEO4J_SCORE_THRESHOLD = (1 + ENTITY_EMBEDDING_RAW_
 /** Top-K nearest candidates to fetch from Neo4j before applying the score threshold. */
 const ENTITY_EMBEDDING_TOP_K = 5
 
+/**
+ * Tạo entity id deterministic `global__<slug(name)>__<slug(type)>`.
+ * Copy NGUYÊN format từ ingestion process route (~dòng 1590) để entity cùng
+ * (name, type) từ chat-writeback và PDF-ingestion MERGE vào CÙNG 1 node —
+ * idempotent, hết cảnh mỗi lượt chat đẻ node UUID mới (kg-arch-a: 265 node trùng).
+ * slug: trim + lowercase + thay mọi ký tự ngoài [a-z0-9] bằng `_`
+ * (entity types chuẩn đều 1 từ → trùng khớp byte với process route).
+ */
+export function globalEntityId(name: string, type: string): string {
+  const slug = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]/g, '_')
+  return `global__${slug(name)}__${slug(type)}`
+}
+
+/**
+ * FIX kg-arch-a — exact-name lookup: lớp fallback BÊN DƯỚI embedding-dedup,
+ * chạy TRƯỚC khi tạo node mới. Bắt các node trùng tên nhưng KHÔNG có embedding
+ * (node do ingestion tạo, embedding fail, Neo4j lỗi...) → reuse id thay vì tạo mới.
+ *
+ * Loại node Document "thật" (có n.status) trừ khi cần tìm entity type Document —
+ * tránh MERGE (label, id) của upsertEntitiesBatch bám nhầm id node Document.
+ * Ưu tiên: cùng label → id global__ (node canonical của ingestion) → id ổn định.
+ *
+ * Fail-open: lỗi Neo4j → trả null (giữ hành vi cũ — tạo id mới).
+ */
+async function findExactNameMatch(
+  name: string,
+  preferredLabel: EntityLabel
+): Promise<{ id: string; name: string; label: string } | null> {
+  try {
+    const hits = await readCypher<{ id: string; nodeName: string; labels: string[] }>(
+      `MATCH (n)
+       WHERE toLower(n.name) = toLower($name)
+         AND n.id IS NOT NULL
+         AND ($prefLabel = 'Document' OR n.status IS NULL)
+       WITH n,
+            CASE WHEN $prefLabel IN labels(n) THEN 0 ELSE 1 END AS labelPrio,
+            CASE WHEN n.id STARTS WITH 'global__' THEN 0 ELSE 1 END AS idPrio
+       ORDER BY labelPrio, idPrio, n.id
+       RETURN n.id AS id, n.name AS nodeName, labels(n) AS labels
+       LIMIT 1`,
+      { name, prefLabel: preferredLabel }
+    )
+    if (hits.length === 0) return null
+    const labels = hits[0].labels ?? []
+    // Label để caller align entity_type: ưu tiên label đang tìm, rồi label chuẩn
+    const label = labels.includes(preferredLabel)
+      ? preferredLabel
+      : labels.find(l => (ENTITY_LABELS as readonly string[]).includes(l)) ?? labels[0] ?? preferredLabel
+    return { id: hits[0].id, name: hits[0].nodeName ?? name, label }
+  } catch (err) {
+    console.warn(
+      `[EntityResolver] Exact-name lookup failed for "${name}" (fail-open):`,
+      err instanceof Error ? err.message : String(err)
+    )
+    return null
+  }
+}
+
 export interface ResolveByEmbeddingInput {
   name: string
   description: string
@@ -357,32 +414,44 @@ export interface ResolveByEmbeddingInput {
 }
 
 export interface ResolveByEmbeddingResult {
-  /** Resolved entity ID. Either an existing Neo4j node id (match) or a fresh UUID (new). */
+  /**
+   * Resolved entity ID: id node Neo4j đang có (merge) hoặc id deterministic
+   * `global__<name>__<type>` (node mới — MERGE idempotent mỗi lượt chat,
+   * fix kg-arch-a: hết cảnh mỗi turn đẻ node UUID trùng khái niệm).
+   */
   id: string
   /** True if no match was found and a new id was generated; false if merged into existing. */
   isNew: boolean
   /** Embedding vector for the entity. Empty array if all embedding providers failed. */
   embedding: number[]
-  /** Method used for resolution — 'embedding' or 'none' (when embedding gen failed). */
-  method: 'embedding' | 'none'
+  /**
+   * Method used for resolution:
+   *   - 'embedding' — cosine ≥ threshold (raw 0.85)
+   *   - 'exact'     — fallback exact-name lookup (bắt node trùng tên không có embedding)
+   *   - 'none'      — embedding gen failed + không exact-match (id deterministic mới)
+   */
+  method: 'embedding' | 'exact' | 'none'
   /** Matched candidate details (only present when isNew=false). */
-  matched?: { id: string; name: string; score: number }
+  matched?: { id: string; name: string; score: number; label?: string }
 }
 
 /**
  * Resolve an entity by name + description using embedding similarity.
  *
  * Flow:
- *   1. Generate embedding for `${name}: ${description}` via generateEmbedding().
- *   2. Length-check (P0.1 — skip if all providers failed, returns empty array).
- *   3. Query Neo4j for the nearest entity of the same label using
+ *   1. Sanitize label (ENTITY_LABELS, fallback 'Concept').
+ *   2. Generate embedding for `${name}: ${description}` via generateEmbedding().
+ *   3. Length-check (P0.1 — skip if all providers failed, returns empty array).
+ *   4. Query Neo4j for the nearest entity of the same label using
  *      vector.similarity.cosine() scalar function. This is a linear scan but
  *      Neo4j entity nodes per label are typically <10K so it's fast enough.
  *      The db.index.vector.queryNodes procedure (HNSW-accelerated) is the
  *      alternative — but it requires the index to be ONLINE which is async
  *      after CREATE VECTOR INDEX. The scalar function works without an index.
- *   4. If top candidate score > NEO4J_NORMALIZED_THRESHOLD → merge (return its id).
- *   5. Else → return new UUID (caller will create the node with the embedding).
+ *   5. If top candidate score > NEO4J_NORMALIZED_THRESHOLD → merge (return its id).
+ *   6. Else exact-name lookup (fallback) → node trùng tên (kể cả không
+ *      embedding) → reuse id. Chỉ khi hoàn toàn không có node trùng tên mới
+ *      trả id deterministic `global__<name>__<type>` (node mới).
  *
  * Failures (embedding API down, Neo4j unreachable) → returns isNew=true with
  * empty embedding array. The caller's writeback pipeline skips the embedding
@@ -391,24 +460,37 @@ export interface ResolveByEmbeddingResult {
 export async function resolveEntityByNameAndEmbedding(
   entity: ResolveByEmbeddingInput
 ): Promise<ResolveByEmbeddingResult> {
-  // Step 1: Generate embedding for entity name + description
+  // Step 1: Sanitize label — must be in ENTITY_LABELS (Neo4j schema constraint)
+  const label: EntityLabel = (ENTITY_LABELS as readonly string[]).includes(entity.type)
+    ? (entity.type as EntityLabel)
+    : 'Concept'
+
+  // Step 2: Generate embedding for entity name + description
   const text = `${entity.name}: ${entity.description}`.trim()
   const { vector, model } = await generateEmbedding(text)
 
-  // Step 2: P0.1 — skip if embedding generation failed (no pseudo-hash fallback)
+  // Step 3: P0.1 — skip if embedding generation failed (no pseudo-hash fallback).
+  // FIX kg-arch-a: vẫn thử exact-name lookup trước khi rơi xuống id mới —
+  // node trùng tên (không embedding) được reuse thay vì đẻ node UUID mới.
   if (vector.length === 0 || model === 'none') {
+    const exact = await findExactNameMatch(entity.name, label)
+    if (exact) {
+      return {
+        id: exact.id,
+        isNew: false,
+        embedding: [] as number[],
+        method: 'exact',
+        matched: { id: exact.id, name: exact.name, score: 1, label: exact.label },
+      }
+    }
     return {
-      id: randomUUID(),
+      // Id deterministic thay randomUUID — lượt sau MERGE vào đúng node này
+      id: globalEntityId(entity.name, label),
       isNew: true,
       embedding: [] as number[],
       method: 'none',
     }
   }
-
-  // Step 3: Sanitize label — must be in ENTITY_LABELS (Neo4j schema constraint)
-  const label: EntityLabel = (ENTITY_LABELS as readonly string[]).includes(entity.type)
-    ? (entity.type as EntityLabel)
-    : 'Concept'
 
   // Step 4: Query Neo4j for nearest entities of the same label.
   // vector.similarity.cosine() returns the normalized (1 + raw_cos) / 2 ∈ [0, 1].
@@ -442,7 +524,7 @@ export async function resolveEntityByNameAndEmbedding(
     )
   }
 
-  // Step 5: Merge into top candidate if found, else return new id
+  // Step 5: Merge into top candidate if found
   if (candidates.length > 0) {
     const top = candidates[0]
     return {
@@ -450,12 +532,27 @@ export async function resolveEntityByNameAndEmbedding(
       isNew: false,
       embedding: vector,
       method: 'embedding',
-      matched: { id: top.id, name: top.name, score: top.score },
+      matched: { id: top.id, name: top.name, score: top.score, label },
+    }
+  }
+
+  // Step 6: FIX kg-arch-a — exact-name fallback (bên DƯỚI embedding-dedup,
+  // KHÔNG thay thế): node trùng tên nhưng không embedding (vd node ingestion
+  // global__*) → reuse id để caller MERGE vào node cũ.
+  const exact = await findExactNameMatch(entity.name, label)
+  if (exact) {
+    return {
+      id: exact.id,
+      isNew: false,
+      embedding: vector,
+      method: 'exact',
+      matched: { id: exact.id, name: exact.name, score: 1, label: exact.label },
     }
   }
 
   return {
-    id: randomUUID(),
+    // Id deterministic thay randomUUID — MERGE idempotent mỗi lượt chat
+    id: globalEntityId(entity.name, label),
     isNew: true,
     embedding: vector,
     method: 'embedding',

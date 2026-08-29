@@ -89,6 +89,61 @@ async function anchorLegacyEntities(): Promise<{ anchored: number }> {
   return { anchored: linked }
 }
 
+/**
+ * FIX 17-a: resolve entity endpoint cho relationship NAME-ONLY (legacy auto-learn
+ * lưu rel chỉ có tên, không có resolved entity ids).
+ * Code cũ hardcode type 'concept' → id `global__name__concept`; nếu entity thật có type
+ * khác (Framework, Tool...) thì MATCH trong upsertRelationshipsBatch fail → rel bị DROP lặng lẽ.
+ *
+ * Thứ tự lookup trước khi fallback 'concept':
+ *   1. SQLite LocalEntity theo name (LIKE — case-insensitive ASCII) → type thật
+ *   2. Neo4j theo name (case-insensitive) → DÙNG LUÔN node id sẵn có (không tạo node mới)
+ * Nhiều node trùng name → chọn 1 đại diện duy nhất (ORDER BY id LIMIT 1).
+ * Fail-open: mọi lỗi lookup → trả null (caller giữ fallback 'concept' như cũ).
+ */
+async function resolveNameOnlyEndpoint(
+  name: string,
+  cache: Map<string, { id?: string; type?: string } | null>
+): Promise<{ id?: string; type?: string } | null> {
+  const key = name.toLowerCase().trim()
+  if (cache.has(key)) return cache.get(key) ?? null
+
+  let resolved: { id?: string; type?: string } | null = null
+
+  // 1) SQLite LocalEntity — lấy type thật (đại diện duy nhất: ORDER BY id LIMIT 1)
+  try {
+    // LIKE của SQLite case-insensitive với ASCII; escape wildcard % _ \ trong name
+    const pattern = key.replace(/[\\%_]/g, (ch) => '\\' + ch)
+    const rows = await db.$queryRaw<Array<{ entityType: string }>>`SELECT entityType FROM LocalEntity WHERE entityName LIKE ${pattern} ESCAPE '\\' ORDER BY id LIMIT 1`
+    const realType = rows[0]?.entityType?.toLowerCase().trim()
+    if (realType) {
+      resolved = { type: realType }
+    }
+  } catch { /* fail-open */ }
+
+  // 2) Neo4j — node trùng name đã tồn tại → dùng luôn id (không tạo node trùng lặp mới)
+  if (!resolved) {
+    try {
+      const nodes = await readCypher<{ type: string | null; id: string | null }>(
+        `MATCH (n)
+         WHERE n.id IS NOT NULL AND n.name IS NOT NULL
+           AND toLower(n.name) = toLower($name)
+           AND NOT (n:Document)
+         RETURN labels(n)[0] AS type, n.id AS id
+         ORDER BY n.id
+         LIMIT 1`,
+        { name: key }
+      )
+      if (nodes.length > 0 && nodes[0].id) {
+        resolved = { id: nodes[0].id, type: nodes[0].type?.toLowerCase().trim() || undefined }
+      }
+    } catch { /* fail-open */ }
+  }
+
+  cache.set(key, resolved)
+  return resolved
+}
+
 // ==================== SHARED SYNC HELPERS ====================
 
 /**
@@ -100,6 +155,7 @@ async function syncDocumentToNeo4j(docId: string): Promise<{
   title: string
   nodesCreated: number
   relsCreated: number
+  relsDropped: number
   uniqueEntities: number
   documentNodeCreated: boolean
   entitiesSynced: number
@@ -171,6 +227,7 @@ async function syncDocumentToNeo4j(docId: string): Promise<{
       title: docTitle,
       nodesCreated: 0,
       relsCreated: 0,
+      relsDropped: 0,
       uniqueEntities: 0,
       documentNodeCreated: true,
       entitiesSynced: 0,
@@ -240,6 +297,10 @@ async function syncDocumentToNeo4j(docId: string): Promise<{
   const eName = new Map(entities.map(e => [e.id, e.entityName.toLowerCase().trim()]))
   const eType = new Map(entities.map(e => [e.id, (e.entityType || 'Concept').toLowerCase().trim()]))
 
+  // FIX 17-a: cache lookup name-only endpoint + tập hợp name phải fallback 'concept' (log nhóm 1 dòng)
+  const nameOnlyCache = new Map<string, { id?: string; type?: string } | null>()
+  const conceptFallbackNames = new Set<string>()
+
   // Deduplicate relationships by (source, target, relType)
   const relByKey = new Map<string, { sId: string; tId: string; rt: string; desc: string; conf: number; source: string }>()
   for (const r of rels) {
@@ -252,16 +313,33 @@ async function syncDocumentToNeo4j(docId: string): Promise<{
       sId = originalToDedupedId.get(r.sourceEntityId)
     } else if (r.sourceEntityName) {
       const sn = r.sourceEntityName.toLowerCase().trim()
-      const st = eType.get(r.sourceEntityId || '') || 'concept'
-      sId = `global__${sn.replace(/[^a-z0-9]/g, '_')}__${st}`
+      // Ưu tiên type từ entity-id của chính row (nếu entity còn trong buffer chưa sync của doc)
+      let st = eType.get(r.sourceEntityId || '') || ''
+      if (!st) {
+        // FIX 17-a: rel name-only — lookup type thật (SQLite) / node sẵn có (Neo4j)
+        // thay vì hardcode 'concept' làm MATCH fail → rel bị drop lặng lẽ
+        const resolved = await resolveNameOnlyEndpoint(r.sourceEntityName, nameOnlyCache)
+        if (resolved?.id) sId = resolved.id
+        else if (resolved?.type) st = resolved.type
+        else conceptFallbackNames.add(sn)
+      }
+      if (!sId) sId = `global__${sn.replace(/[^a-z0-9]/g, '_')}__${st || 'concept'}`
     }
 
     if (r.targetEntityId && originalToDedupedId.has(r.targetEntityId)) {
       tId = originalToDedupedId.get(r.targetEntityId)
     } else if (r.targetEntityName) {
       const tn = r.targetEntityName.toLowerCase().trim()
-      const tt = eType.get(r.targetEntityId || '') || 'concept'
-      tId = `global__${tn.replace(/[^a-z0-9]/g, '_')}__${tt}`
+      // Ưu tiên type từ entity-id của chính row (nếu entity còn trong buffer chưa sync của doc)
+      let tt = eType.get(r.targetEntityId || '') || ''
+      if (!tt) {
+        // FIX 17-a: rel name-only — lookup type thật (SQLite) / node sẵn có (Neo4j)
+        const resolved = await resolveNameOnlyEndpoint(r.targetEntityName, nameOnlyCache)
+        if (resolved?.id) tId = resolved.id
+        else if (resolved?.type) tt = resolved.type
+        else conceptFallbackNames.add(tn)
+      }
+      if (!tId) tId = `global__${tn.replace(/[^a-z0-9]/g, '_')}__${tt || 'concept'}`
     }
 
     // If we still don't have IDs, try to find them by name in the entity map
@@ -298,6 +376,13 @@ async function syncDocumentToNeo4j(docId: string): Promise<{
     })
   }
 
+  // FIX 17-a: cảnh báo nhóm 1 dòng — các rel endpoint name-only không tìm thấy entity thật
+  // (cả SQLite lẫn Neo4j) nên phải fallback type 'concept'
+  if (conceptFallbackNames.size > 0) {
+    const sample = Array.from(conceptFallbackNames).slice(0, 10).join(', ')
+    console.log(`[Sync-Neo4j] ${conceptFallbackNames.size} name-only rel endpoint(s) fell back to type 'concept' (not found in SQLite/Neo4j): ${sample}${conceptFallbackNames.size > 10 ? ' …' : ''}`)
+  }
+
   // Build RelationshipEdge array for batch upsert
   const relEdges: RelationshipEdge[] = Array.from(relByKey.values()).map(r => ({
     sourceId: r.sId,
@@ -311,7 +396,11 @@ async function syncDocumentToNeo4j(docId: string): Promise<{
   }))
 
   // Batch upsert relationships using enhanced operations (sets full metadata)
-  const relsCreated = await upsertRelationshipsBatch(relEdges, docId)
+  // FIX kg-arch-a (task 17-c): upsertRelationshipsBatch giờ trả
+  // {upserted, dropped, failed, total} — relsCreated giữ số MERGE THẬT
+  // cho UI, relsDropped minh bạch rel bị drop vì thiếu endpoint
+  const relsResult = await upsertRelationshipsBatch(relEdges, docId)
+  const relsCreated = relsResult.upserted
 
   // Mark entities and relationships as synced in SQLite buffer
   const entityIds = entities.map(e => e.id)
@@ -330,6 +419,7 @@ async function syncDocumentToNeo4j(docId: string): Promise<{
     title: docTitle,
     nodesCreated,
     relsCreated,
+    relsDropped: relsResult.dropped,
     uniqueEntities: entityByKey.size,
     documentNodeCreated: true,
     entitiesSynced: syncedEntities.count,
@@ -500,7 +590,8 @@ async function syncOrphanEntities(): Promise<{
 
   let relsCreated = 0
   if (relEdges.length > 0) {
-    relsCreated = await upsertRelationshipsBatch(relEdges, 'orphan')
+    // FIX kg-arch-a (task 17-c): return type mới — lấy count MERGE thật
+    relsCreated = (await upsertRelationshipsBatch(relEdges, 'orphan')).upserted
   }
 
   // Mark as synced

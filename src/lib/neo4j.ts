@@ -919,6 +919,11 @@ export async function upsertEntitiesBatch(
     }
   }
 
+  // Ghi chú (audit kg-arch-a): MERGE (label, id) KHÔNG có MATCH precondition
+  // như relationships → không tồn tại drop lặng lẽ; count hiện tại ĐÚNG
+  // (batch thành công = batch.length node được MERGE, fallback đếm từng node).
+  console.log(`[Neo4j] upsertEntitiesBatch: ${upserted} upserted, ${entities.length - upserted} failed`)
+
   return upserted
 }
 
@@ -1453,20 +1458,44 @@ export async function upsertRelationship(rel: RelationshipEdge): Promise<boolean
 }
 
 /**
+ * Kết quả batch upsert relationships — count THẬT (fix kg-arch-a: trước đây
+ * luôn tính batch.length vào "upserted" dù rel thiếu endpoint bị MATCH
+ * drop lặng lẽ → số liệu/log/UI ảo tưởng "đã ghi").
+ */
+export interface RelationshipBatchResult {
+  /** MERGE thành công (đủ 2 endpoint) */
+  upserted: number
+  /** Bị drop — 1 trong 2 endpoint MATCH không thấy node */
+  dropped: number
+  /** Lỗi query (batch fail sau retry + fallback từng rel cũng fail) */
+  failed: number
+  /** Tổng rel đầu vào */
+  total: number
+}
+
+/**
  * Batch upsert relationships by type.
  * Groups relationships by their type for efficient UNWIND batching.
  *
+ * MATCH-then-MERGE: rel nào thiếu endpoint sẽ bị Neo4j drop khỏi kết quả MATCH
+ * (không tạo rel) — được đếm vào `dropped`, KHÔNG tựu vào `upserted` như cũ.
+ *
  * @param relationships Array of relationship edges to upsert
  * @param documentId Document ID for batch operations
- * @returns Number of relationships successfully upserted
+ * @returns Count thật: { upserted, dropped (thiếu endpoint), failed, total }
  */
 export async function upsertRelationshipsBatch(
   relationships: RelationshipEdge[],
   documentId: string
-): Promise<number> {
-  if (relationships.length === 0) return 0
+): Promise<RelationshipBatchResult> {
+  const counts: RelationshipBatchResult = {
+    upserted: 0,
+    dropped: 0,
+    failed: 0,
+    total: relationships.length,
+  }
+  if (relationships.length === 0) return counts
 
-  let upserted = 0
   const now = new Date().toISOString()
 
   // Group by relationship type for efficient batching
@@ -1484,10 +1513,11 @@ export async function upsertRelationshipsBatch(
     for (let i = 0; i < typeRels.length; i += BATCH_SIZE) {
       const batch = typeRels.slice(i, i + BATCH_SIZE)
       try {
+        let upsertedCount = 0
         await withNeo4jRetry(async () => {
           const session = await getSession()
           try {
-            await session.executeWrite((tx) =>
+            const result = await session.executeWrite((tx) =>
               tx.run(
                 `UNWIND $rels AS r
                  MATCH (a {id: r.sourceId}), (b {id: r.targetId})
@@ -1501,7 +1531,8 @@ export async function upsertRelationshipsBatch(
                      rel.relationship_type = $relType,
                      rel.source_entity_id = r.sourceId,
                      rel.target_entity_id = r.targetId,
-                     rel.created_at = $createdAt`,
+                     rel.created_at = $createdAt
+                 RETURN count(rel) AS upsertedCount`,
                 {
                   rels: batch.map(r => ({
                     sourceId: r.sourceId,
@@ -1516,23 +1547,43 @@ export async function upsertRelationshipsBatch(
                 }
               )
             )
+            // count THẬT: rel thiếu endpoint bị MATCH loại bỏ trước khi MERGE
+            upsertedCount = Number(result.records[0]?.get('upsertedCount') ?? 0)
           } finally {
             await session.close()
           }
         })
-        upserted += batch.length
+        counts.upserted += upsertedCount
+        counts.dropped += batch.length - upsertedCount
       } catch (err) {
         console.error(`[Neo4j] Batch relationship upsert error (${relType}):`, err instanceof Error ? err.message : String(err))
-        // Fallback: try individual upserts
+        // Fallback: try individual upserts — phân loại từng rel
+        // (dropped = thiếu endpoint check trước, failed = query lỗi)
         for (const rel of batch) {
+          try {
+            const hits = await readCypher<{ ok: number }>(
+              `MATCH (a {id: $sid}), (b {id: $tid}) RETURN count(a) AS ok`,
+              { sid: rel.sourceId, tid: rel.targetId }
+            )
+            if (!hits.length || Number(hits[0].ok) === 0) {
+              counts.dropped++
+              continue
+            }
+          } catch {
+            /* endpoint check fail → vẫn thử upsert, phân loại theo kết quả */
+          }
           const success = await upsertRelationship(rel)
-          if (success) upserted++
+          if (success) counts.upserted++
+          else counts.failed++
         }
       }
     }
   }
 
-  return upserted
+  // Tổng kết 1 dòng — chống ảo tưởng "đã ghi" khi rel bị drop lặng lẽ
+  console.log(`[Neo4j] upsertRelationshipsBatch: ${counts.upserted} upserted, ${counts.dropped} dropped (thiếu endpoint), ${counts.failed} failed`)
+
+  return counts
 }
 
 

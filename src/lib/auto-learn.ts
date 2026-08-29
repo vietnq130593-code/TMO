@@ -259,9 +259,13 @@ export async function autoLearnFromAnswer(input: AutoLearnInput): Promise<boolea
 
     // 6. Save entities to SQLite buffer (will sync to Neo4j later)
     let entitiesSaved = 0
+    // FIX kg-arch-a (task 17-c): name (lower) → LocalEntity.id — map để gắn
+    // sourceEntityId/targetEntityId cho relationships bên dưới (giống ingestion
+    // path — process/route.ts entityNameToIdMap)
+    const entityIdByName = new Map<string, string>()
     for (const entity of extraction.entities) {
       try {
-        await db.localEntity.create({
+        const created = await db.localEntity.create({
           data: {
             documentId,
             entityName: entity.name,
@@ -273,6 +277,7 @@ export async function autoLearnFromAnswer(input: AutoLearnInput): Promise<boolea
             synced: false,
           },
         })
+        entityIdByName.set(entity.name.toLowerCase().trim(), created.id)
         entitiesSaved++
       } catch (err) {
         console.warn(`[AutoLearn] Failed to save entity "${entity.name}":`, err instanceof Error ? err.message : String(err))
@@ -286,6 +291,12 @@ export async function autoLearnFromAnswer(input: AutoLearnInput): Promise<boolea
         await db.localRelationship.create({
           data: {
             documentId,
+            // FIX kg-arch-a (task 17-c): gắn entity ids — schema LocalRelationship
+            // CÓ SẴN 2 field sourceEntityId/targetEntityId (path resolved đang dùng).
+            // sync-neo4j ưu tiên id trước name → đúng node, tránh rels name-only
+            // rơi vào fallback global__name__concept hardcode sai type → bị drop
+            sourceEntityId: entityIdByName.get(rel.sourceName.toLowerCase().trim()) ?? null,
+            targetEntityId: entityIdByName.get(rel.targetName.toLowerCase().trim()) ?? null,
             sourceEntityName: rel.sourceName,
             targetEntityName: rel.targetName,
             relationshipType: rel.type,
@@ -440,7 +451,7 @@ Rules:
 - Entity types must be one of: Concept, Technology, Framework, Vulnerability, Principle, Domain, Document, Person
 - Relationship types must be one of the listed types
 - Keep descriptions concise (1-2 sentences max)
-- Extract 1-5 entities, 0-3 relationships, 2-5 key facts
+- Extract 1-5 entities, 0-5 relationships, 2-5 key facts
 - If the answer doesn't contain extractable knowledge, return empty arrays
 - Return ONLY the JSON, no markdown or explanation`
 
@@ -495,7 +506,9 @@ Rules:
       relationships: Array.isArray(parsed.relationships)
         ? parsed.relationships
             .filter(r => r.sourceName && r.targetName && r.type)
-            .slice(0, 3)
+            // FIX kg-arch-a (task 17-c): cap 5/5 đối xứng với entities
+            // (trước đây 5 ents/3 rels — bất đối xứng, mất rels khi sync)
+            .slice(0, 5)
             .map(r => ({
               sourceName: String(r.sourceName).slice(0, 200),
               targetName: String(r.targetName).slice(0, 200),

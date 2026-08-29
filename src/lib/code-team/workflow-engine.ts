@@ -536,6 +536,8 @@ export interface WorkflowContext {
   resolvedAgentsCache: Map<string, ResolvedAgent>
   /** Cached skills injection string — loaded once per workflow run to avoid repeated DB queries */
   skillsContext?: string
+  /** Task 17-b (Layer 9): số hint "bài học từ thất bại trước" đã inject trong run — dùng cho observation log khi workflow thành công */
+  layer9HintsInjected?: number
 }
 
 // ==================== LAYER 9 P1.2 + P1.3 — ERROR TAXONOMY & PATTERN PERSISTENCE ====================
@@ -1307,6 +1309,13 @@ async function runPipeline(
 
   await completeSession(sessionId, finalStatus, totalDuration, completedAgents)
 
+  // Task 17-b (Layer 9) — observation: workflow kết thúc thành công dù đã
+  // inject "bài học từ thất bại trước" → bài học có thể đã phát huy tác dụng
+  // (chỉ log, không logic phức tạp hơn — auto-apply mạnh hơn chờ đủ dữ liệu).
+  if ((ctx.layer9HintsInjected ?? 0) > 0) {
+    console.log(`[Workflow] Layer 9 observation — workflow ${finalStatus} với ${ctx.layer9HintsInjected} hint(s) đã inject (bài học từ thất bại trước được áp dụng) [session ${sessionId.slice(0, 12)}]`)
+  }
+
   // Phase 2 SMOLAB Proposal 7 — flush Layer 9 metrics before workflow_done emit.
   // This is the SUCCESS path: every step recordStart/recordComplete has been
   // called inside the for-loop above. flush() persists ExecutionMetrics row
@@ -1394,6 +1403,23 @@ export async function runAgentStep(params: {
     if (rosterBlock) systemPrompt += `\n${rosterBlock}`
   } catch (err) {
     console.warn('[Workflow] agent roster inject failed (non-blocking):', err instanceof Error ? err.message : String(err))
+  }
+
+  // ━━━ Task 17-b — Layer 9 auto-apply CONSERVATIVE: bài học từ thất bại trước ━━━
+  // Trước 17-b, Layer 9 là observe-only (persist pattern xong không ai đọc lại)
+  // → learning loop hở. Giờ inject hints từ FailurePattern vào system prompt:
+  // KHÔNG đổi model/tools/config agent — chỉ nhắc nhở bằng văn bản. Fail-open
+  // + cache in-memory 60s + timeout guard bên trong getFailureHintsForAgent.
+  try {
+    const { getFailureHintsForAgent } = await import('@/lib/learning/strategy-adapter')
+    const hints = await getFailureHintsForAgent(agent.name)
+    if (hints.length > 0) {
+      systemPrompt += `\n\n--- BÀI HỌC TỪ THẤT BẠI TRƯỚC (Layer 9) ---\n${hints.join('\n')}`
+      ctx.layer9HintsInjected = (ctx.layer9HintsInjected ?? 0) + hints.length
+      console.log(`[Workflow] Layer 9 — injected ${hints.length} failure hint(s) into ${agent.name} (${position}) system prompt`)
+    }
+  } catch (err) {
+    console.warn('[Workflow] Layer 9 hints inject failed (non-blocking):', err instanceof Error ? err.message : String(err))
   }
 
   // 2026-08-29 — AUTO-TODO TRACKING (long-running task progress): mỗi agent step

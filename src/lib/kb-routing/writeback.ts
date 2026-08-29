@@ -20,7 +20,7 @@ import { upsertEntitiesBatch, upsertRelationshipsBatch, upsertDocumentNode, link
 import { storeMemory } from '@/lib/agent-memory'
 import { generateEmbedding, getCurrentEmbeddingModelVersion } from '@/lib/embeddings'
 import { callUtilityLLM } from '@/lib/llm'
-import { resolveEntityByNameAndEmbedding } from '@/lib/ingestion/entity-resolver'
+import { resolveEntityByNameAndEmbedding, globalEntityId } from '@/lib/ingestion/entity-resolver'
 import type { UserKBResult, ModelKnowledgeResult } from './kb-access'
 
 // ==================== CONFIG ====================
@@ -366,8 +366,12 @@ async function writeKnowledgeToStores(
   // === WRITE 2: Neo4j entities + relationships ===
   if (entities.length > 0) {
     try {
-      const entityNodes: EntityNode[] = entities.map((e, i) => ({
-        id: `${sourceTag}-${Date.now()}-${i}`,
+      // FIX kg-arch-a: entity id deterministic `global__<name>__<type>` (bỏ
+      // `${sourceTag}-${ts}-${i}` cũ) — đúng format id mà ingestion process route
+      // tạo (route.ts ~dòng 1590) → cùng khái niệm qua nhiều lượt chat MERGE
+      // vào 1 node, hết cảnh mỗi turn đẻ node mới (265 node UUID-trùng).
+      const entityNodes: EntityNode[] = entities.map((e) => ({
+        id: globalEntityId(e.name, e.type),
         name: e.name,
         entity_type: e.type as EntityNode['entity_type'],
         domain: 'mixed',
@@ -481,9 +485,11 @@ async function writeKnowledgeToStores(
       }
 
       if (edges.length > 0) {
-        await upsertRelationshipsBatch(edges, documentId)
-        relationshipsWritten = edges.length
-        console.log(`[Writeback] Wrote ${relationshipsWritten} relationships to Neo4j`)
+        // FIX kg-arch-a: dùng count THẬT từ batch — rel thiếu endpoint bị drop,
+        // không tựu edges.length như trước (ảo tưởng "đã ghi")
+        const relsResult = await upsertRelationshipsBatch(edges, documentId)
+        relationshipsWritten = relsResult.upserted
+        console.log(`[Writeback] Wrote ${relationshipsWritten}/${edges.length} relationships to Neo4j (${relsResult.dropped} dropped, ${relsResult.failed} failed)`)
       }
     } catch (err) {
       console.warn('[Writeback] Neo4j relationship write failed:', err instanceof Error ? err.message : String(err))
@@ -657,8 +663,11 @@ async function extractWithConfidence(
  *     replace the entity id with the existing Neo4j node id so the MERGE in
  *     upsertEntitiesBatch increments occurrence_count instead of creating a
  *     duplicate node.
- *   - If no match: keep the auto-generated id, attach the embedding to the
- *     EntityNode so upsertEntitiesBatch writes n.embedding on the node.
+ *   - FIX kg-arch-a: nếu cosine không khớp → exact-name lookup (node trùng tên
+ *     kể cả không embedding, vd node ingestion) → reuse id node cũ; hoàn toàn
+ *     không có → giữ id deterministic `global__<name>__<type>` (không còn UUID
+ *     random) + attach embedding vào EntityNode để upsertEntitiesBatch ghi
+ *     n.embedding cho node.
  *
  * Concurrency-limited to 3 parallel embedding API calls (out of caution for
  * NVIDIA 160 RPM shared budget — writeback batches max at 10 entities, so
@@ -687,28 +696,40 @@ export async function resolveEntitiesForWriteback(
             type: node.entity_type,
           })
 
-          if (result.method === 'embedding' && !result.isNew && result.matched) {
+          if (result.method === 'exact' && result.matched) {
+            console.log(
+              `[Writeback] Entity "${node.name}" → merged via exact-name into ${result.matched.label ?? node.entity_type} "${result.matched.name}" (id=${result.matched.id.slice(0, 40)})`
+            )
+          } else if (result.method === 'embedding' && !result.isNew && result.matched) {
             console.log(
               `[Writeback] Entity "${node.name}" → merged into existing ${node.entity_type} "${result.matched.name}" (id=${result.matched.id.slice(0, 8)}, score=${result.matched.score.toFixed(3)})`
             )
           } else if (result.method === 'embedding' && result.isNew) {
             console.log(
-              `[Writeback] Entity "${node.name}" → NEW ${node.entity_type} (id=${result.id.slice(0, 8)}, embedding dim=${result.embedding.length})`
+              `[Writeback] Entity "${node.name}" → NEW ${node.entity_type} (id=${result.id.slice(0, 40)}, embedding dim=${result.embedding.length})`
             )
           } else {
             console.warn(
-              `[Writeback] Entity "${node.name}" → embedding generation failed, persisting without embedding`
+              `[Writeback] Entity "${node.name}" → embedding generation failed, persisting without embedding (id=${result.id.slice(0, 40)})`
             )
           }
 
           // Replace the auto-generated id with the resolved id (merge or new)
           // and attach the embedding vector to the EntityNode payload so
           // upsertEntitiesBatch writes n.embedding on the Neo4j node.
+          // FIX kg-arch-a: khi merge (embedding/exact) align entity_type với
+          // label của node cũ → MERGE (label, id) trong upsertEntitiesBatch
+          // khớp ĐÚNG node cũ (tránh tạo node trùng id khác label).
           const embedding: number[] | undefined =
             result.embedding.length > 0 ? result.embedding : undefined
+          const entityType: EntityNode['entity_type'] =
+            !result.isNew && result.matched?.label
+              ? (result.matched.label as EntityNode['entity_type'])
+              : node.entity_type
           return {
             ...node,
             id: result.id,
+            entity_type: entityType,
             embedding,
           } as EntityNode
         } catch (err) {

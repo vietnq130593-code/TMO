@@ -7,6 +7,12 @@
  * When sandbox resets: pull from Supabase → restore all data
  * On every write: push to Supabase (non-blocking)
  *
+ * FIX 17-a (buffer prune): backup tables buffer (LocalEntity / LocalRelationship /
+ *   LocalResolvedEntity) là append-only (upsert-by-id) → re-extract tạo UUID mới khiến
+ *   row cũ tích lũy vĩnh viễn (Windows phình 66k rows). Giờ:
+ *   - PUSH: sau upsert, delete-orphan các row backup mà id KHÔNG còn tồn tại local
+ *   - PULL: chỉ pull row của Document còn sống trong DB local (+ row không có documentId)
+ *
  * Tables synced (24 total = 23 backup + sync_log):
  *   Non-learning (18): AgentProfile, AgentSkill, AgentMemory, MemoryArchive,
  *     MemoryAccessLog, AgentSession, ChatMessage, DailyTokenByProviderModel,
@@ -50,6 +56,10 @@ export interface SyncResult {
   pushed: number
   pulled: number
   errors: string[]
+  /** FIX 17-a: số row backup đã bị xóa khi push (delete-orphan prune) */
+  pruned?: number
+  /** FIX 17-a: số row pull bị skip vì documentId thuộc document đã xóa khỏi DB local */
+  skipped?: number
 }
 
 export interface FullSyncResult {
@@ -57,6 +67,10 @@ export interface FullSyncResult {
   totalPushed: number
   totalPulled: number
   durationMs: number
+  /** FIX 17-a: tổng số row backup đã prune trong lần push này */
+  totalPruned?: number
+  /** FIX 17-a: cảnh báo cho caller/logs (vd: pull buffer > 200k rows) */
+  warnings?: string[]
 }
 
 // ==================== PAGINATED PUSH HELPERS ====================
@@ -134,6 +148,117 @@ async function pullTablePaginated(
   return pulled
 }
 
+// ==================== BUFFER PRUNE HELPERS (FIX 17-a) ====================
+
+/** Ngưỡng cảnh báo buffer backup quá lớn khi pull — vẫn pull, chỉ log + trả stats */
+const LARGE_BUFFER_PULL_THRESHOLD = 200_000
+
+/** Spec 17-a: delete-orphan theo batch ≤500 ids/lần — chọn 150 để URL REST an toàn
+ *  (id UUID 36 ký tự × ~45 chars URL-encoded ≈ 6.8KB < gateway limit ~8KB) */
+const DELETE_BATCH_SIZE = 150
+
+/**
+ * FIX 17-a: cảnh báo trước khi pull nếu backup table buffer có > 200k rows.
+ * Fail-open hoàn toàn — lỗi count chỉ bị bỏ qua, pull vẫn chạy bình thường.
+ */
+async function warnLargeBackupPull(
+  client: SupabaseClient,
+  tableName: string,
+  warnings: string[]
+): Promise<void> {
+  try {
+    const { count, error } = await client.from(tableName).select('*', { count: 'exact', head: true })
+    if (!error && typeof count === 'number' && count > LARGE_BUFFER_PULL_THRESHOLD) {
+      const msg = `${tableName}: ${count} rows to pull (> ${LARGE_BUFFER_PULL_THRESHOLD}) — pulling anyway`
+      console.warn(`[Supabase] Large buffer warning: ${msg}`)
+      warnings.push(msg)
+    }
+  } catch { /* chỉ là cảnh báo — fail-open */ }
+}
+
+/**
+ * FIX 17-a (pull theo document còn sống): giữ row KHÔNG có documentId
+ * (auto-learn / knowledge_write writes) + row thuộc Document còn tồn tại trong DB local.
+ * liveDocIds = null → không filter (fail-open, giữ behavior cũ).
+ */
+function filterRowsByLiveDocuments<T>(
+  rows: T[],
+  liveDocIds: Set<string> | null,
+  getDocId: (row: T) => string | null | undefined
+): T[] {
+  if (liveDocIds === null) return rows
+  return rows.filter(row => {
+    const did = getDocId(row)
+    return !did || liveDocIds.has(did)
+  })
+}
+
+/**
+ * FIX 17-a (push delete-orphan): sau khi push upsert xong, xóa các row trong backup
+ * table mà id KHÔNG còn tồn tại local — backup mirror local, ngừng tích lũy vĩnh viễn.
+ *
+ * Safety:
+ *  - Local trống hoàn toàn (0 row) → SKIP prune + warn (tránh wipe toàn bộ backup khi
+ *    local trống do lỗi)
+ *  - Fetch id backup lỗi / pagination chưa xong → SKIP prune (không delete mù)
+ *  - Mọi lỗi fail-open (log + trả error, KHÔNG throw làm crash push)
+ */
+async function deleteOrphanBackupRows(
+  client: SupabaseClient,
+  tableName: string,
+  tableLabel: string,
+  fetchLocalIds: () => Promise<Array<{ id: string }>>
+): Promise<{ pruned: number; error?: string }> {
+  try {
+    const localRows = await fetchLocalIds()
+    if (localRows.length === 0) {
+      console.warn(`[Supabase] Prune skipped for ${tableName}: local ${tableLabel} is EMPTY — not wiping backup (fail-open)`)
+      return { pruned: 0 }
+    }
+    const localIds = new Set(localRows.map(r => r.id))
+
+    // Fetch TOÀN BỘ id hiện có trong backup — phải fetch xong mới được delete
+    const backupIds: string[] = []
+    let lastId: string | null = null
+    let fetchComplete = false
+    for (let page = 0; page < 1000; page++) {
+      let query = client.from(tableName).select('id').order('id').limit(1000)
+      if (lastId) query = query.gt('id', lastId)
+      const { data, error } = await query
+      if (error) return { pruned: 0, error: `fetch ids: ${error.message}` }
+      if (!data || data.length === 0) { fetchComplete = true; break }
+      for (const row of data) {
+        if (row?.id) backupIds.push(row.id)
+      }
+      lastId = data[data.length - 1].id
+      if (data.length < 1000) { fetchComplete = true; break }
+    }
+    if (!fetchComplete) return { pruned: 0, error: 'fetch ids: pagination cap reached (backup > 1M rows?)' }
+
+    const orphans = backupIds.filter(id => !localIds.has(id))
+    if (orphans.length === 0) return { pruned: 0 }
+
+    // Delete theo batch ≤ DELETE_BATCH_SIZE ids/lần qua Supabase REST
+    let pruned = 0
+    let firstError: string | undefined
+    for (let i = 0; i < orphans.length; i += DELETE_BATCH_SIZE) {
+      const batch = orphans.slice(i, i + DELETE_BATCH_SIZE)
+      const { error } = await client.from(tableName).delete().in('id', batch)
+      if (error) {
+        if (!firstError) firstError = error.message
+      } else {
+        pruned += batch.length
+      }
+    }
+    if (pruned > 0) {
+      console.log(`[Supabase] Pruned ${pruned}/${orphans.length} orphan rows from ${tableName} (local ${tableLabel}: ${localIds.size} rows)`)
+    }
+    return { pruned, error: firstError }
+  } catch (e) {
+    return { pruned: 0, error: String(e) }
+  }
+}
+
 // ==================== PUSH (SQLite → Supabase) ====================
 
 /**
@@ -149,6 +274,8 @@ export async function pushToSupabase(): Promise<FullSyncResult> {
 
   const results: SyncResult[] = []
   let totalPushed = 0
+  // FIX 17-a: tổng số row backup đã prune (delete-orphan)
+  let totalPruned = 0
 
   // 1. AgentProfile
   try {
@@ -503,8 +630,13 @@ export async function pushToSupabase(): Promise<FullSyncResult> {
       }),
       pushErrors
     )
-    results.push({ table: 'LocalEntity', pushed, pulled: 0, errors: pushErrors.slice(-3) })
+    // FIX 17-a: prune backup append-only — xóa row backup mà id KHÔNG còn tồn tại local
+    const prune = await deleteOrphanBackupRows(client, 'local_entities_backup', 'LocalEntity',
+      () => db.localEntity.findMany({ select: { id: true } }))
+    if (prune.error) pushErrors.push(`prune: ${prune.error}`)
+    results.push({ table: 'LocalEntity', pushed, pulled: 0, errors: pushErrors.slice(-3), pruned: prune.pruned })
     totalPushed += pushed
+    totalPruned += prune.pruned
   } catch (e) { results.push({ table: 'LocalEntity', pushed: 0, pulled: 0, errors: [String(e)] }) }
 
   // 17. LocalRelationship — extracted relationships buffer
@@ -535,8 +667,13 @@ export async function pushToSupabase(): Promise<FullSyncResult> {
       }),
       relErrors
     )
-    results.push({ table: 'LocalRelationship', pushed, pulled: 0, errors: relErrors.slice(-3) })
+    // FIX 17-a: prune backup append-only — xóa row backup mà id KHÔNG còn tồn tại local
+    const prune = await deleteOrphanBackupRows(client, 'local_relationships_backup', 'LocalRelationship',
+      () => db.localRelationship.findMany({ select: { id: true } }))
+    if (prune.error) relErrors.push(`prune: ${prune.error}`)
+    results.push({ table: 'LocalRelationship', pushed, pulled: 0, errors: relErrors.slice(-3), pruned: prune.pruned })
     totalPushed += pushed
+    totalPruned += prune.pruned
   } catch (e) { results.push({ table: 'LocalRelationship', pushed: 0, pulled: 0, errors: [String(e)] }) }
 
   // 18. LocalResolvedEntity — canonical merged entities (post-resolution)
@@ -566,8 +703,13 @@ export async function pushToSupabase(): Promise<FullSyncResult> {
       }),
       resErrors
     )
-    results.push({ table: 'LocalResolvedEntity', pushed, pulled: 0, errors: resErrors.slice(-3) })
+    // FIX 17-a: prune backup append-only — xóa row backup mà id KHÔNG còn tồn tại local
+    const prune = await deleteOrphanBackupRows(client, 'local_resolved_entities_backup', 'LocalResolvedEntity',
+      () => db.localResolvedEntity.findMany({ select: { id: true } }))
+    if (prune.error) resErrors.push(`prune: ${prune.error}`)
+    results.push({ table: 'LocalResolvedEntity', pushed, pulled: 0, errors: resErrors.slice(-3), pruned: prune.pruned })
     totalPushed += pushed
+    totalPruned += prune.pruned
   } catch (e) { results.push({ table: 'LocalResolvedEntity', pushed: 0, pulled: 0, errors: [String(e)] }) }
 
   // 19. LearningLog — learning event log (Phase 3 SMOLAB Prop 10 — sync 5 missing learning tables)
@@ -688,8 +830,8 @@ export async function pushToSupabase(): Promise<FullSyncResult> {
   } catch (e) { results.push({ table: 'StrategyAdaptationLog', pushed: 0, pulled: 0, errors: [String(e)] }) }
 
   const durationMs = Date.now() - startTime
-  console.log(`[Supabase] Push complete: ${totalPushed} records in ${durationMs}ms`)
-  return { results, totalPushed, totalPulled: 0, durationMs }
+  console.log(`[Supabase] Push complete: ${totalPushed} records pushed, ${totalPruned} pruned in ${durationMs}ms`)
+  return { results, totalPushed, totalPulled: 0, durationMs, totalPruned }
 }
 
 // ==================== PULL (Supabase → SQLite) ====================
@@ -1163,8 +1305,12 @@ export async function pullFromSupabase(): Promise<FullSyncResult> {
   // 12. Document — restore document processing state
   //     Requires the documents_backup table created by migration
   //     supabase/migrations/20260822110000_add_document_extraction_backup_tables.sql
+  //     FIX 17-a: track việc đọc documents_backup — nếu lỗi thì pull buffer sẽ KHÔNG áp
+  //     dead-document filter (fail-open, tránh wipe buffer do restore Document thiếu)
+  let documentsBackupPullOk = false
   try {
     const { data, error } = await client.from('documents_backup').select('*').limit(5000)
+    documentsBackupPullOk = !error
     if (!error && data && data.length > 0) {
       let pulled = 0
       for (const d of data) {
@@ -1208,15 +1354,39 @@ export async function pullFromSupabase(): Promise<FullSyncResult> {
     }
   } catch (e) { results.push({ table: 'Document', pushed: 0, pulled: 0, errors: [String(e)] }) }
 
+  // FIX 17-a (pull theo document còn sống): set id Document hiện có trong DB local
+  // (chạy SAU section 12 — Document đã được restore từ backup trước).
+  // liveDocIds = null khi không check được (documents_backup đọc lỗi / DB lỗi)
+  // → pull buffer KHÔNG filter, giữ behavior cũ (fail-open).
+  let liveDocIds: Set<string> | null = null
+  if (documentsBackupPullOk) {
+    try {
+      const liveDocs = await db.document.findMany({ select: { id: true } })
+      liveDocIds = new Set(liveDocs.map(d => d.id))
+    } catch { liveDocIds = null }
+  }
+  if (liveDocIds === null) {
+    console.warn('[Supabase] Live-document set unavailable — pulling buffer WITHOUT dead-document filter (fail-open)')
+  }
+  // FIX 17-a: cảnh báo pull buffer quá lớn — stats trả về trong result.warnings
+  const warnings: string[] = []
+
   // 13. LocalEntity — restore extracted entities buffer (PAGINATED + createMany with per-row fallback)
   try {
+    await warnLargeBackupPull(client, 'local_entities_backup', warnings)
     // Clear existing rows for a clean insert (avoids skipDuplicates issues on SQLite)
     await db.localEntity.deleteMany()
     const errors: string[] = []
+    // FIX 17-a: chỉ pull row của Document còn sống + row KHÔNG có documentId
+    // (auto-learn / knowledge_write) — extraction của document đã xóa không kéo về nữa
+    let skippedDeadDoc = 0
     const pulled = await pullTablePaginated(client, 'local_entities_backup', async (rows: any[]) => {
+      const keep = filterRowsByLiveDocuments(rows, liveDocIds, (r: any) => r.document_id)
+      skippedDeadDoc += rows.length - keep.length
+      if (keep.length === 0) return 0
       try {
         const result = await db.localEntity.createMany({
-          data: rows.map((e: any) => ({
+          data: keep.map((e: any) => ({
             id: e.id,
             documentId: e.document_id ?? null,
             chunkId: e.chunk_id ?? null,
@@ -1237,7 +1407,7 @@ export async function pullFromSupabase(): Promise<FullSyncResult> {
       } catch {
         // Batch failed (bad row in batch) — fall back to per-row create, skipping bad rows
         let count = 0
-        for (const e of rows) {
+        for (const e of keep) {
           try {
             await db.localEntity.create({ data: {
               id: e.id,
@@ -1261,18 +1431,27 @@ export async function pullFromSupabase(): Promise<FullSyncResult> {
         return count
       }
     }, errors)
-    results.push({ table: 'LocalEntity', pushed: 0, pulled, errors })
+    if (skippedDeadDoc > 0) {
+      console.log(`[Supabase] LocalEntity pull: skipped ${skippedDeadDoc} rows of deleted documents`)
+    }
+    results.push({ table: 'LocalEntity', pushed: 0, pulled, errors, skipped: skippedDeadDoc })
     totalPulled += pulled
   } catch (e) { results.push({ table: 'LocalEntity', pushed: 0, pulled: 0, errors: [String(e)] }) }
 
   // 14. LocalRelationship — restore extracted relationships buffer (PAGINATED + createMany with per-row fallback)
   try {
+    await warnLargeBackupPull(client, 'local_relationships_backup', warnings)
     await db.localRelationship.deleteMany()
     const errors: string[] = []
+    // FIX 17-a: chỉ pull row của Document còn sống + row KHÔNG có documentId
+    let skippedDeadDoc = 0
     const pulled = await pullTablePaginated(client, 'local_relationships_backup', async (rows: any[]) => {
+      const keep = filterRowsByLiveDocuments(rows, liveDocIds, (r: any) => r.document_id)
+      skippedDeadDoc += rows.length - keep.length
+      if (keep.length === 0) return 0
       try {
         const result = await db.localRelationship.createMany({
-          data: rows.map((r: any) => ({
+          data: keep.map((r: any) => ({
             id: r.id,
             documentId: r.document_id ?? null,
             sourceEntityId: r.source_entity_id ?? null,
@@ -1291,7 +1470,7 @@ export async function pullFromSupabase(): Promise<FullSyncResult> {
         return result.count
       } catch {
         let count = 0
-        for (const r of rows) {
+        for (const r of keep) {
           try {
             await db.localRelationship.create({ data: {
               id: r.id,
@@ -1314,18 +1493,27 @@ export async function pullFromSupabase(): Promise<FullSyncResult> {
         return count
       }
     }, errors)
-    results.push({ table: 'LocalRelationship', pushed: 0, pulled, errors })
+    if (skippedDeadDoc > 0) {
+      console.log(`[Supabase] LocalRelationship pull: skipped ${skippedDeadDoc} rows of deleted documents`)
+    }
+    results.push({ table: 'LocalRelationship', pushed: 0, pulled, errors, skipped: skippedDeadDoc })
     totalPulled += pulled
   } catch (e) { results.push({ table: 'LocalRelationship', pushed: 0, pulled: 0, errors: [String(e)] }) }
 
   // 15. LocalResolvedEntity — restore canonical merged entities (PAGINATED + createMany with per-row fallback)
   try {
+    await warnLargeBackupPull(client, 'local_resolved_entities_backup', warnings)
     await db.localResolvedEntity.deleteMany()
     const errors: string[] = []
+    // FIX 17-a: chỉ pull row của Document còn sống + row KHÔNG có documentId
+    let skippedDeadDoc = 0
     const pulled = await pullTablePaginated(client, 'local_resolved_entities_backup', async (rows: any[]) => {
+      const keep = filterRowsByLiveDocuments(rows, liveDocIds, (r: any) => r.document_id)
+      skippedDeadDoc += rows.length - keep.length
+      if (keep.length === 0) return 0
       try {
         const result = await db.localResolvedEntity.createMany({
-          data: rows.map((r: any) => ({
+          data: keep.map((r: any) => ({
             id: r.id,
             documentId: r.document_id ?? null,
             canonicalName: r.canonical_name,
@@ -1343,7 +1531,7 @@ export async function pullFromSupabase(): Promise<FullSyncResult> {
         return result.count
       } catch {
         let count = 0
-        for (const r of rows) {
+        for (const r of keep) {
           try {
             await db.localResolvedEntity.create({ data: {
               id: r.id,
@@ -1365,7 +1553,10 @@ export async function pullFromSupabase(): Promise<FullSyncResult> {
         return count
       }
     }, errors)
-    results.push({ table: 'LocalResolvedEntity', pushed: 0, pulled, errors })
+    if (skippedDeadDoc > 0) {
+      console.log(`[Supabase] LocalResolvedEntity pull: skipped ${skippedDeadDoc} rows of deleted documents`)
+    }
+    results.push({ table: 'LocalResolvedEntity', pushed: 0, pulled, errors, skipped: skippedDeadDoc })
     totalPulled += pulled
   } catch (e) { results.push({ table: 'LocalResolvedEntity', pushed: 0, pulled: 0, errors: [String(e)] }) }
 
@@ -1543,7 +1734,7 @@ export async function pullFromSupabase(): Promise<FullSyncResult> {
 
   const durationMs = Date.now() - startTime
   console.log(`[Supabase] Pull complete: ${totalPulled} records in ${durationMs}ms`)
-  return { results, totalPushed: 0, totalPulled, durationMs }
+  return { results, totalPushed: 0, totalPulled, durationMs, warnings }
 }
 
 // ==================== HEALTH CHECK ====================

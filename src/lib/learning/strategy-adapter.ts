@@ -4,6 +4,10 @@
  * Phát hiện pattern thất bại và đề xuất/áp dụng chiến lược thích ứng.
  * Khi approach hiện tại không hiệu quả, tự động chuyển sang approach khác
  * dựa trên historical data và predefined rules.
+ *
+ * Task 17-b — auto-apply CONSERVATIVE: getFailureHintsForAgent() chưng cất
+ * FailurePattern lịch sử thành hints ngắn để inject vào system prompt của
+ * Code Team agents (KHÔNG tự đổi model/tools/config — chỉ nhắc nhở bằng prompt).
  */
 
 import { db } from '@/lib/db'
@@ -299,4 +303,134 @@ export async function persistAdaptationLog(logEntry: unknown): Promise<void> {
   } catch (err) {
     console.error('[StrategyAdapter] Failed to persist adaptation log:', err)
   }
+}
+
+// ==================== CONSERVATIVE AUTO-APPLY — PROMPT HINTS (Task 17-b) ====================
+
+/** Cache in-memory cho hints (per agent) — chống spam DB mỗi agent step (60s) */
+const HINTS_CACHE_TTL_MS = 60_000
+
+/** Timeout guard cho DB query — vượt ngưỡng thì fail-open trả [] */
+const HINTS_QUERY_TIMEOUT_MS = 3_000
+
+/** Số hints tối đa trả về cho 1 agent */
+const MAX_HINTS = 3
+
+/** Độ dài tối đa 1 hint (ký tự) */
+const MAX_HINT_CHARS = 200
+
+const PATTERN_TYPE_LABELS: Record<string, string> = {
+  repeated_error: 'Lỗi lặp lại',
+  approach_exhausted: 'Đã cạn kiệt cách làm hiện tại',
+  resource_limit: 'Vượt giới hạn tài nguyên (token/time)',
+  timeout: 'Timeout kéo dài',
+  redteam_breach: 'Vector tấn công bị breach (red team)',
+}
+
+const STRATEGY_LABELS: Record<string, string> = {
+  read_lint_rules_first: 'đọc kỹ lint rules/cấu hình dự án TRƯỚC khi sửa',
+  read_api_docs: 'đọc API docs thật thay vì đoán interface',
+  check_dev_log: 'kiểm tra dev.log thay vì chỉ đọc error message',
+  change_fix_approach: 'đổi cách fix (surgical → refactoring → redesign)',
+  compress_context: 'nén/tóm tắt context thay vì đọc thêm dữ liệu',
+  reduce_scope: 'giảm scope, chia nhỏ task',
+  escalate_to_user: 'hỏi user khi đã thử ≥3 cách',
+  tighten_refusal_threshold: 'siết ngưỡng từ chối tạm thời',
+}
+
+/** Cache sống qua dev hot-reload (pattern globalThis của codebase) */
+const globalForHints = globalThis as unknown as {
+  __layer9HintsCache?: Map<string, { hints: string[]; expiresAt: number }>
+}
+
+/**
+ * Task 17-b — Lấy "bài học từ thất bại trước" cho agent, dùng để inject vào
+ * system prompt của Code Team (workflow-engine.ts runAgentStep).
+ *
+ * Lưu ý schema: FailurePattern KHÔNG có field agent (chỉ sessionId) và KHÔNG có
+ * createdAt (schema có sẵn — không được sửa) → hints là bài học CHUNG, ưu tiên
+ * theo count (pattern lặp nhiều nhất), không lọc recency trong SQL được.
+ *
+ * Lọc: pattern chưa resolved, lặp ≥2 lần (count).
+ * Trả về tối đa 3 hints tiếng Việt ≤200 ký tự, dạng:
+ *   "⚠ Bài học: <pattern> → khuyến nghị: <recommendation>"
+ *
+ * Fail-open tuyệt đối: lỗi DB/timeout → trả [] (workflow chạy như thường).
+ */
+export async function getFailureHintsForAgent(agentName: string): Promise<string[]> {
+  try {
+    // 1) Cache check — cache CẢ kết quả rỗng (bảng 0 rows không spam DB)
+    const cache = (globalForHints.__layer9HintsCache ??= new Map())
+    const cached = cache.get(agentName)
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.hints
+    }
+
+    // 2) Query unresolved patterns — timeout guard (Promise.race).
+    // Model FailurePattern KHÔNG có createdAt → không lọc recency trong SQL;
+    // order by count desc để ưu tiên pattern lặp nhiều nhất (nghiêm trọng nhất).
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const patterns = await Promise.race([
+      db.failurePattern.findMany({
+        where: {
+          resolved: false,
+          count: { gte: 2 }, // lặp ≥2 lần mới đáng làm "bài học"
+        },
+        orderBy: [{ count: 'desc' }],
+        take: 20,
+        select: { type: true, count: true, nextStrategy: true, context: true },
+      }),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Layer 9 hints query timed out after ${HINTS_QUERY_TIMEOUT_MS}ms`)),
+          HINTS_QUERY_TIMEOUT_MS,
+        )
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer)
+    })
+
+    // 3) Dedupe theo type (giữ count cao nhất) — tránh các hint trùng nội dung
+    const byType = new Map<string, { count: number; nextStrategy: string; stepType: string }>()
+    for (const p of patterns) {
+      let stepType = ''
+      try {
+        const ctx = JSON.parse(p.context || '{}') as { stepType?: unknown }
+        stepType = typeof ctx.stepType === 'string' ? ctx.stepType : ''
+      } catch {
+        // context JSON hỏng — bỏ qua stepType (hint vẫn dùng được)
+      }
+      const existing = byType.get(p.type)
+      if (!existing || p.count > existing.count) {
+        byType.set(p.type, { count: p.count, nextStrategy: p.nextStrategy, stepType })
+      }
+    }
+
+    // 4) Build hints — ưu tiên pattern lặp nhiều nhất, ≤3 hints, ≤200 ký tự
+    const hints = [...byType.entries()]
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, MAX_HINTS)
+      .map(([type, info]) => {
+        const patternLabel = PATTERN_TYPE_LABELS[type] || `Pattern thất bại (${type})`
+        const strategyLabel = STRATEGY_LABELS[info.nextStrategy] || info.nextStrategy || 'đổi cách tiếp cận'
+        const stepLabel = info.stepType ? ` ở bước ${formatStepLabel(info.stepType)}` : ''
+        return `⚠ Bài học: ${patternLabel}${stepLabel} (x${info.count} lần gần đây) → khuyến nghị: ${strategyLabel}`.slice(
+          0,
+          MAX_HINT_CHARS,
+        )
+      })
+
+    // 5) Cache (TTL 60s) + trả về
+    cache.set(agentName, { hints, expiresAt: Date.now() + HINTS_CACHE_TTL_MS })
+    return hints
+  } catch {
+    // Fail-open tuyệt đối — không hints, workflow chạy như thường
+    return []
+  }
+}
+
+/** "G2-B-review" → "G2-B/review" (stepType có format `${position}-${step}`) */
+function formatStepLabel(stepType: string): string {
+  const dashIdx = stepType.indexOf('-')
+  return dashIdx > 0 ? `${stepType.slice(0, dashIdx)}/${stepType.slice(dashIdx + 1)}` : stepType
 }
