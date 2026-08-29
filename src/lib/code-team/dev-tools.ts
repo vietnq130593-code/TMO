@@ -261,6 +261,96 @@ export async function fileEdit(args: {
 }
 
 /**
+ * file_write — Task 21-d: tạo file mới / ghi đè / nối tiếp (append).
+ *
+ * DÙNG CHO FILE LỚN: viết từng phần (mỗi lần ~200-400 dòng) — lần đầu
+ * mode=overwrite, các lần sau mode=append. KHÔNG giới hạn độ dài content
+ * (không truncate) — executor ghi nguyên văn ra đĩa.
+ *
+ * - Path resolve theo ACTIVE workspace root (resolveWithinWorkspace — giống
+ *   file_edit/file_read), guard chặn path thoát workspace root.
+ * - mode=overwrite: atomic write (temp file + rename — crash giữa chừng
+ *   không phá file cũ). Từ chối content rỗng (tránh xoá nhầm nội dung file).
+ * - mode=append: file chưa tồn tại → tạo mới (tiện continuation); content
+ *   rỗng được phép (no-op, trả bytesWritten=0).
+ * - create_dirs (default true): tự tạo parent directories.
+ */
+export async function fileWrite(args: {
+  path: string
+  content: string
+  mode?: 'overwrite' | 'append'
+  create_dirs?: boolean
+}): Promise<unknown> {
+  try {
+    if (!args.path || typeof args.path !== 'string') {
+      return { success: false, error: 'path là bắt buộc (đường dẫn file relative từ workspace root)' }
+    }
+    const mode = args.mode === 'append' ? 'append' : 'overwrite'
+    const createDirs = args.create_dirs !== false // default true
+    const content = typeof args.content === 'string' ? args.content : ''
+    if (mode === 'overwrite' && content.length === 0) {
+      return {
+        success: false,
+        error: 'content rỗng khi mode=overwrite sẽ XÓA sạch file — nếu muốn ghi tiếp hãy dùng mode:"append", nếu muốn xoá file hãy dùng file_delete.',
+      }
+    }
+
+    const resolvedPath = await resolveWithinWorkspace(args.path)
+    const root = await resolveWorkspaceRoot()
+    if (resolvedPath === root) {
+      return { success: false, error: 'Refusing to write to the workspace root — path phải trỏ tới FILE, không phải thư mục gốc.' }
+    }
+
+    // Parent dirs (default tự tạo — thoải mái viết src/new-module/file.ts)
+    if (createDirs) {
+      await fs.mkdir(path.dirname(resolvedPath), { recursive: true })
+    }
+
+    const existed = await fs.access(resolvedPath).then(() => true).catch(() => false)
+
+    if (mode === 'append') {
+      // Append thuần — file không tồn tại → appendFile tự tạo mới (continuation-friendly)
+      await fs.appendFile(resolvedPath, content, 'utf-8')
+    } else {
+      // Atomic overwrite: temp file trong cùng dir + rename (POSIX/NTFS atomic)
+      const tmpPath = resolvedPath + `.tmp.${process.pid}.${Date.now()}`
+      await fs.writeFile(tmpPath, content, 'utf-8')
+      try {
+        await fs.rename(tmpPath, resolvedPath)
+      } catch (err) {
+        await fs.unlink(tmpPath).catch(() => {})
+        throw err
+      }
+    }
+
+    let fileSize = 0
+    try { fileSize = (await fs.stat(resolvedPath)).size } catch { /* just-wrote — ignore */ }
+
+    return {
+      success: true,
+      path: args.path,
+      mode,
+      bytesWritten: Buffer.byteLength(content, 'utf-8'),
+      fileExistedBefore: existed,
+      fileSize,
+      hint: mode === 'append' && fileSize > 0
+        ? 'Đã nối tiếp. Tiếp tục append phần kế tiếp, hoặc file_read để kiểm tra.'
+        : undefined,
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return {
+      success: false,
+      path: args.path,
+      error: `file_write thất bại: ${msg}`,
+      hint: /escapes workspace root/.test(msg)
+        ? 'Path phải nằm TRONG workspace root (dùng đường dẫn relative, không ../).'
+        : undefined,
+    }
+  }
+}
+
+/**
  * file_delete — delete a file or directory.
  * Refuses to delete the workspace root or paths outside it.
  * dry_run returns what would be deleted without touching the filesystem.
@@ -633,11 +723,17 @@ export async function runTests(args: {
   try {
     // execFileAsync bypasses shell — no shell-injection risk from args.target.
     // The first element of argv is the executable name (lookup via PATH).
+    // 21-d FIX (audit 21-d phát hiện): nhánh bun trước đây dùng argv.slice(1)
+    // làm runnerArgs — nhưng argv[0] của bun là 'test' (không phải 'bun'),
+    // slice(1) làm MẤT chữ 'test' → chạy `bun math.test.ts` thay vì
+    // `bun test math.test.ts` → "Cannot use test outside of the test runner".
+    // Giờ: bun truyền nguyên argv ['test', target?] (pytest vẫn slice(1) vì
+    // argv[0] là 'pytest' — trùng tên runner).
     const runner = framework === 'pytest' ? 'pytest'
       : framework === 'bun' ? 'bun'
       : 'npx'
     const runnerArgs = framework === 'pytest' ? argv.slice(1)
-      : framework === 'bun' ? argv.slice(1)
+      : framework === 'bun' ? argv
       : argv
     const { stdout, stderr } = await execFileAsync(runner, runnerArgs, {
       cwd: root,

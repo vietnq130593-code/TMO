@@ -33,7 +33,7 @@ import { recordAgentActivity } from '@/lib/agent-activity-log'
 // (user request 2026-08-31 — mọi agents hiển thị tư duy/tiến trình realtime)
 import { recordAgentRunTool, recordAgentRunTodos } from '@/lib/agent-run-tracker'
 import {
-  fileEdit, fileDelete, fileList, grep,
+  fileEdit, fileWrite, fileDelete, fileList, grep,
   runTests, gitCommit, gitPush, gitPullWorkspace,
   getDiagnostics, decomposeTask, createTask, updateTask, getPlan,
   summarize, synthesize,
@@ -62,6 +62,9 @@ import { mcpCall as executeMcpCallFn } from '@/lib/mcp/mcp-bridge'
 import { isFlagEnabled, flagMode } from '@/lib/feature-flags'
 // Phase 6 (rebuild) — start_preview/stop_preview operate on the USER's ACTIVE workspace
 import { getActiveWorkspaceRoot } from '@/lib/workspace/workspace-manager'
+// 21-d: resolve workspace root cho opencode action=write (thay process.cwd()) —
+// pattern giống file_* tools (workspace-root.ts: active workspace → env → cwd)
+import { resolveWorkspaceRoot } from './workspace-root'
 // Task 19-b (App Runtime Awareness) — agents NHÌN THẤY runtime của app:
 // preview nào đang chạy (port/pid/ai khởi động), HTTP probe + tail log.
 import { listRunningPreviews, tailPreviewLog } from '@/lib/preview-registry'
@@ -399,6 +402,24 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           dry_run: { type: 'boolean', description: 'true = preview diff không write' },
         },
         required: ['path', 'edits'],
+      },
+    },
+  },
+  // 21-d: file_write — native write tool cho FILE LỚN (không truncate, hỗ trợ append)
+  file_write: {
+    type: 'function',
+    function: {
+      name: 'file_write',
+      description: 'Tạo file mới / ghi đè / nối tiếp (append) — DÙNG CHO FILE LỚN: viết từng phần (mỗi lần ~200-400 dòng) với mode append sau lần đầu overwrite; KHÔNG giới hạn độ dài content. Path relative từ workspace root; tự tạo parent dirs.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Đường dẫn file relative từ workspace root' },
+          content: { type: 'string', description: 'Nội dung cần ghi (nguyên văn, không truncate)' },
+          mode: { type: 'string', enum: ['overwrite', 'append'], description: "overwrite = ghi đè (mặc định, từ chối content rỗng); append = nối tiếp vào cuối file (file chưa tồn tại thì tạo mới) — dùng cho phần 2, 3... của file lớn" },
+          create_dirs: { type: 'boolean', description: 'true = tự tạo parent directories (mặc định true)' },
+        },
+        required: ['path', 'content'],
       },
     },
   },
@@ -1544,6 +1565,18 @@ export async function executeTool(
         result = await fileEdit(args as any)
         break
       }
+      // 21-d: file_write — native write cho file lớn (overwrite/append, không truncate)
+      case 'file_write': {
+        if (!isFlagEnabled('ENABLE_FILE_OPS') || !isFlagEnabled('ENABLE_FILE_WRITE')) {
+          return {
+            success: false,
+            result: 'file_write tool is disabled (set ENABLE_FILE_OPS=true + ENABLE_FILE_WRITE=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await fileWrite(args as any)
+        break
+      }
       case 'file_delete': {
         if (!isFlagEnabled('ENABLE_FILE_OPS') || !isFlagEnabled('ENABLE_FILE_DELETE')) {
           return {
@@ -2530,6 +2563,7 @@ function summarizeToolCall(toolName: string, args: Record<string, unknown>): str
       return s(args.command)
     case 'file_read':
     case 'file_edit':
+    case 'file_write':
     case 'file_delete':
       return s(args.path)
     case 'file_multi_edit':
@@ -2615,6 +2649,11 @@ function summarizeToolResult(toolName: string, result: unknown): string {
         const applied = typeof r.editsApplied === 'number' ? r.editsApplied : 0
         const dry = r.dryRun ? ' (dry-run)' : ''
         return trunc(`Đã áp dụng ${applied} edit${dry}${r.newFileSize ? ` · size=${r.newFileSize}` : ''} · ${r.path || ''}`, 300)
+      }
+      case 'file_write': {
+        const bytes = typeof r.bytesWritten === 'number' ? r.bytesWritten : 0
+        const mode = r.mode === 'append' ? 'append' : 'overwrite'
+        return trunc(`Đã ghi ${mode} ${bytes} bytes · size=${r.fileSize ?? '?'} · ${r.path || ''}`, 300)
       }
       case 'todo_write': {
         const n = typeof r.upserted === 'number' ? r.upserted : (Array.isArray(r.todos) ? r.todos.length : 0)
@@ -2754,6 +2793,13 @@ async function executeFileRead(filePath: string): Promise<{ success: boolean; co
  * Write a file to the project directory.
  * Security: Only allows writing within the project root. Uses path.resolve to prevent traversal.
  * Auto-creates parent directories.
+ *
+ * 21-d FIX cwd footgun: path resolve theo ACTIVE workspace root (pattern
+ * workspace-root.ts — giống file_edit/file_write) thay vì process.cwd().
+ * process.cwd() của Next.js dev = /home/z/tmo-app (thư mục app) → LLM dùng
+ * path tương đối ("src/foo.ts") sẽ ghi nhầm vào source của app. Nếu workspace
+ * root không xác định được → fallback cwd + ghi chú trong kết quả (giữ behavior
+ * cũ).
  */
 async function executeFileWrite(filePath: string, content: string): Promise<{ success: boolean; message: string; error?: string }> {
   if (!filePath) return { success: false, message: '', error: 'Path is required' }
@@ -2761,7 +2807,19 @@ async function executeFileWrite(filePath: string, content: string): Promise<{ su
 
   try {
     const pathModule = await import('path')
-    const projectRoot = process.cwd()
+    // 21-d: ưu tiên ACTIVE workspace root; fallback process.cwd() (behavior cũ)
+    let projectRoot = process.cwd()
+    let rootNote = ''
+    try {
+      projectRoot = await resolveWorkspaceRoot()
+      if (!projectRoot || typeof projectRoot !== 'string') {
+        projectRoot = process.cwd()
+        rootNote = ' [note: workspace root không xác định được — fallback process.cwd()]'
+      }
+    } catch {
+      projectRoot = process.cwd()
+      rootNote = ' [note: workspace root không xác định được — fallback process.cwd()]'
+    }
     const resolvedPath = pathModule.resolve(projectRoot, filePath)
 
     // Security: Prevent path traversal — resolved path must be within project root
@@ -2778,7 +2836,7 @@ async function executeFileWrite(filePath: string, content: string): Promise<{ su
     // Write file
     await fs.writeFile(resolvedPath, content, 'utf-8')
 
-    return { success: true, message: `File written: ${filePath} (${content.length} chars)` }
+    return { success: true, message: `File written: ${filePath} (${content.length} chars)${rootNote}` }
   } catch (err) {
     return {
       success: false,

@@ -35,7 +35,7 @@
 
 import { callLLMForAgent } from '@/lib/llm'
 import { executeTool } from '@/lib/code-team/tool-executor'
-import { parseToolCallsFromOutput } from '@/lib/tool-calls'
+import { parseToolCallsFromOutput, detectBrokenToolCallHint } from '@/lib/tool-calls'
 import { resolveAgent } from '@/lib/code-team/agent-resolver'
 import { isSessionCancelled } from '@/lib/agent-run-tracker'
 
@@ -226,6 +226,9 @@ export async function runSubAgentForProfile(params: {
   // tự đọc lại). Giờ: task yêu cầu bằng chứng thật mà sub-agent chưa chạy tool
   // nào → đẩy 1 directive ép chạy tool, chỉ accept conclude ở vòng sau.
   let nudgedOnce = false
+  // 21-d: số lần đẩy feedback parse-fail (tool call bị cắt cụt giữa JSON)
+  // — tránh loop vô hạn khi LLM liên tục phát JSON lỗi.
+  let parseFailNudges = 0
   let tokensUsed = 0
   let iterations = 0
   let toolCallCount = 0
@@ -291,7 +294,7 @@ export async function runSubAgentForProfile(params: {
               agentId: profile.id || `subagent:${profile.name}`,
               agentName: `${profile.name} (sub-agent)`,
               temperature: profile.temperature,
-              maxTokens: Math.min(profile.maxTokens, 4096),
+              maxTokens: Math.min(profile.maxTokens, 16384), // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
               abortCheck: isCancelled,
             }),
             Math.max(60_000, SUBAGENT_TIMEOUT_MS - (Date.now() - startedAt)),
@@ -313,6 +316,18 @@ export async function runSubAgentForProfile(params: {
 
         const toolCalls = parseToolCallsFromOutput(result.content)
         if (toolCalls.length === 0) {
+          // 21-d FIX silent parse-drop: output CÓ dấu hiệu tool call ("tool_call:"
+          // hoặc ```json chứa "name") nhưng parse THẤT BẠI (JSON bị cắt cụt giữa
+          // chừng do output quá dài/maxTokens) → trước đây bị BỎ QUA IM LẶNG, sub-agent
+          // conclude như thường. Giờ: đẩy feedback vào transcript để LLM phát lại
+          // GỌN HƠN (chia file thành nhiều lần ghi qua file_write append) — tối đa 2 lần.
+          const brokenHint = detectBrokenToolCallHint(result.content)
+          if (brokenHint && parseFailNudges < 2 && !timedOut && iterations < SUBAGENT_MAX_ITERATIONS) {
+            parseFailNudges++
+            transcript.push({ role: 'assistant', content: result.content })
+            transcript.push({ role: 'tool', content: brokenHint })
+            continue
+          }
           // ANTI-HALLUCINATION GUARD: task cần bằng chứng (đọc file / review /
           // kiểm tra...) mà sub-agent CHƯA chạy tool nào → không chấp nhận kết
           // luận ngay — ép 1 vòng thu thập bằng chứng thật.

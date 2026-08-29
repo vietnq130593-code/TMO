@@ -56,7 +56,7 @@
 
 import { callLLMForAgent, callUtilityLLM } from '@/lib/llm'
 import { executeTool } from '@/lib/code-team/tool-executor'
-import { parseToolCallsFromOutput, formatMessagesForLLM } from '@/lib/tool-calls'
+import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint } from '@/lib/tool-calls'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
 import {
   startAgentRun,
@@ -148,7 +148,7 @@ const VERIFY_TOOLS = new Set(['run_tests', 'lint', 'type_check', 'test_coverage'
 /** [C] Đọc lại kết quả (file_read/grep sau khi sửa) cũng là kiểm định */
 const READBACK_TOOLS = new Set(['file_read', 'grep'])
 /** [C] Tool sửa đổi — sau những tool này PHẢI có kiểm định lại trước khi kết luận */
-const MODIFY_TOOLS = new Set(['file_edit', 'file_multi_edit', 'file_delete', 'mkdir', 'shell', 'run_bg', 'git_commit', 'delegate_task', 'dispatch_agent'])
+const MODIFY_TOOLS = new Set(['file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'mkdir', 'shell', 'run_bg', 'git_commit', 'delegate_task', 'dispatch_agent'])
 /** [D] Tool verify được cap context lớn hơn (cần thấy đủ kết quả test/lint/tsc) */
 const VERIFY_RESULT_CHARS = 6000
 /**
@@ -257,6 +257,7 @@ GIAI ĐOẠN 1 — XÁC ĐỊNH VẤN ĐỀ & LẬP KẾ HOẠCH:
 
 GIAI ĐOẠN 2 — TRIỂN KHAI:
 - Thực hiện từng bước bằng tools. Đọc file (file_read) trước khi sửa. Chạy lệnh (shell) khi cần.
+- TẠO FILE MỚI / FILE LỚN: dùng file_write — viết từng phần (~200-400 dòng/lần), lần đầu mode "overwrite", các lần sau mode "append" (đừng nhét cả file 1000+ dòng vào 1 tool call — output dễ bị cắt giữa JSON → tool call KHÔNG thực thi được).
 
 GIAI ĐOẠN 3 — KIỂM ĐỊNH & BÁO CÁO (BẮT BUỘC trước khi kết luận):
 - Với tác vụ tạo/sửa file, code, lệnh, dữ liệu: PHẢI kiểm định bằng tool thật — file_read đọc lại kết quả, run_tests / lint / type_check, shell kiểm tra output. Bằng chứng phải nằm trong KẾT QUẢ TOOL.
@@ -901,6 +902,9 @@ export async function runGoalDrivenLoop(params: {
   let lastContent = ''
   /** Lỗi LLM gần nhất (result.error) — surface lên báo cáo cuối thay vì nuốt lỗi */
   let lastLlmError = ''
+  /** 21-d: số lần đẩy feedback parse-fail (tool call bị cắt cụt giữa JSON khi
+   *  output đạt maxTokens) — chống loop vô hạn nếu LLM liên tục phát JSON lỗi. */
+  let parseFailNudges = 0
   let lastVerdict: EvalVerdict | null = null
   let stopReason: GoalStopReason = 'max_cycles'
   let prevFingerprint = ''
@@ -1006,6 +1010,23 @@ export async function runGoalDrivenLoop(params: {
 
       const toolCalls = parseToolCallsFromOutput(result.content)
       if (toolCalls.length === 0) {
+        // 21-d FIX SILENT PARSE-DROP: output CÓ dấu hiệu tool call ("tool_call:"
+        // hoặc ```json chứa "name") nhưng parse thất bại (JSON bị cắt cụt giữa
+        // chừng — thường do output quá dài chạm maxTokens) → trước đây tool call
+        // bị BỎ QUA IM LẶNG, agent kết thúc 'no_tool_calls' mà không biết file
+        // vừa mất. Giờ: đẩy feedback vào conversation (pattern pushToolMessage)
+        // để LLM phát lại GỌN HƠN ở lượt kế — tối đa 2 lần, sau đó conclude như cũ.
+        try {
+          const brokenHint = detectBrokenToolCallHint(result.content)
+          if (brokenHint && parseFailNudges < 2 && timeLeft() > 0 && tokenLeft() > REPORT_RESERVE_TOKENS) {
+            parseFailNudges++
+            messages.push({ role: 'assistant', content: result.content })
+            pushToolMessage(messages, { tool: 'parse_error', success: false, result: brokenHint })
+            evidence.push({ cycle, kind: 'tool', tool: 'parse_error', success: false, text: 'tool call bị cắt/JSON lỗi — đã yêu cầu phát lại gọn hơn' })
+            recordAgentThought(agentSessionId, `⚠️ Tool call bị cắt cụt giữa JSON (lần ${parseFailNudges}/2) — đã phản hồi lỗi để agent phát lại gọn hơn (chia file nhỏ, file_write append)`, totalIterations)
+            continue
+          }
+        } catch { /* fail-open — feedback lỗi không được phép crash loop */ }
         // Agent tự kết luận (protocol yêu cầu đã verify + báo cáo ở đây)
         endedBy = 'no_tool_calls'
         break

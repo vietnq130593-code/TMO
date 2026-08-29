@@ -81,7 +81,7 @@ const CHAT_MODEL_HINT = 'moonshotai/kimi-k3 (mạnh, khuyến nghị) | deepseek
 export const DEFAULT_NEW_AGENT_TOOLS = [
   'tavily', 'serper', 'jina',
   'knowledge_search', 'knowledge_graph',
-  'file_read', 'file_list', 'grep', 'file_edit', 'file_multi_edit',
+  'file_read', 'file_list', 'grep', 'file_edit', 'file_multi_edit', 'file_write',
   'shell', 'run_tests', 'lint', 'type_check', 'get_diagnostics',
   'todo_write', 'todo_read', 'list_skills', 'read_skill',
   'create_custom_tool', 'list_custom_tools',
@@ -403,7 +403,9 @@ export async function createAgentByOmega(params: {
 
   const tempValue = typeof temperature === 'number' ? temperature : 0.7
   if (tempValue < 0 || tempValue > 2) return { success: false, error: 'Temperature phải từ 0.0 đến 2.0' }
-  const tokensValue = typeof maxTokens === 'number' ? Math.floor(maxTokens) : 4096
+  // 21-d: default 4096 → 16384 — agent mới cũng viết được file vừa/lớn qua
+  // file_write append (cap không phải target; giữ range 256-32768)
+  const tokensValue = typeof maxTokens === 'number' ? Math.floor(maxTokens) : 16384
   if (tokensValue < 256 || tokensValue > 32768) return { success: false, error: 'Lương token (maxTokens) phải từ 256 đến 32768' }
 
   // Toolset — mặc định generalist + LUÔN có escalate_problem (agent mới có thể

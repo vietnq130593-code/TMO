@@ -196,7 +196,7 @@ LEARNING & MEMORY
     provider: 'nvidia',
     model: 'moonshotai/kimi-k3',
     temperature: 0.7,
-    maxTokens: 6000,
+    maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: null,
     position: null,
     avatar: '🌟',
@@ -215,6 +215,8 @@ LEARNING & MEMORY
       'file_list',
       'file_edit',
       'file_multi_edit',
+      // 21-d: file_write — tạo file mới / append (file lớn, không truncate)
+      'file_write',
       'grep',
       'shell',
       'run_tests',

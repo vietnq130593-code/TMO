@@ -60,6 +60,9 @@ const DEFAULTS: Record<string, string> = {
   ENABLE_FILE_READ: 'true',
   ENABLE_FILE_EDIT: 'true',
   ENABLE_FILE_MULTI_EDIT: 'true',
+  // 21-d: file_write — tạo file mới / ghi đè / APPEND (continuation cho file
+  // lớn). Default true cùng nhóm file ops (đã ship active từ task này).
+  ENABLE_FILE_WRITE: 'true',
   ENABLE_FILE_DELETE: 'true',
   ENABLE_FILE_LIST: 'true',
   ENABLE_FILE_GREP: 'true',

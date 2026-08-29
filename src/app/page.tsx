@@ -13889,7 +13889,7 @@ function CodeTabContent() {
   // tiếp trong 1 task → chỉ reload 1 lần sau khi agents ngừng đụng file 1.5s).
   const treeReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const FILE_MUTATING_TOOLS = new Set([
-    'shell', 'run_bg', 'opencode', 'file_edit', 'file_multi_edit', 'file_delete',
+    'shell', 'run_bg', 'opencode', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete',
     'git_commit', 'git_push', 'git_pull', 'run_tests',
   ])
   useEffect(() => {
@@ -13942,8 +13942,8 @@ function CodeTabContent() {
             const icon = e.tool === 'run_tests' ? '🧪' : e.tool === 'git_commit' ? '📦' : e.tool === 'kill_process' ? '⛔' : '📄'
             lines.push(`[AI] ${icon} ${e.tool} ${cmd.slice(0, 110)}`.trim())
             lines.push(...resultBlock)
-          } else if (e.tool === 'file_edit' || e.tool === 'file_multi_edit' || e.tool === 'file_delete') {
-            const icon = e.tool === 'file_delete' ? '🗑️' : '✏️'
+          } else if (e.tool === 'file_edit' || e.tool === 'file_multi_edit' || e.tool === 'file_delete' || e.tool === 'file_write') {
+            const icon = e.tool === 'file_delete' ? '🗑️' : e.tool === 'file_write' ? '📝' : '✏️'
             lines.push(`[AI] ${icon} ${e.tool === 'file_multi_edit' ? 'file_multi_edit' : e.tool} ${cmd.slice(0, 110)}`)
             lines.push(...resultBlock)
           }

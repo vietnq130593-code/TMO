@@ -129,6 +129,17 @@ const LOCAL_TOOLS = [
     hasApiKey: true,
   },
   {
+    name: 'file_write',
+    category: 'File',
+    description: 'Tạo file mới / ghi đè / nối tiếp (append) — tool chính thống cho FILE LỚN (viết từng phần ~200-400 dòng/lần với mode append, không truncate).',
+    source: 'bundled',
+    dangerous: true,
+    implemented: true,
+    hasSkillGuide: false,
+    apiKeyEnv: '',
+    hasApiKey: true,
+  },
+  {
     name: 'start_preview',
     category: 'Preview',
     description: 'Start dev server cho active workspace (auto-detect framework, free port 3005+, log SSE). UI tự mở Preview panel khi tool chạy.',

@@ -153,6 +153,7 @@ const LOCAL_TOOLS = [
   },
   // ===== P0: dev tools (file ops + tests + git) =====
   { name: 'file_edit', category: 'File', description: 'Sửa file bằng exact string replace (atomic, error trên 0/>1 match). Ưu tiên dùng thay vì ghi đè cả file.', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
+  { name: 'file_write', category: 'File', description: 'Tạo file mới / ghi đè / nối tiếp (append) — DÙNG CHO FILE LỚN: viết từng phần (~200-400 dòng/lần) với mode append; KHÔNG giới hạn độ dài content. Flag: ENABLE_FILE_WRITE.', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: 'ENABLE_FILE_WRITE', hasApiKey: true },
   { name: 'file_delete', category: 'File', description: 'Xóa file/thư mục (có dry_run + guard chống xóa root).', source: 'local' as const, dangerous: true, implemented: true, apiKeyEnv: '', hasApiKey: true },
   { name: 'file_list', category: 'File', description: 'List thư mục (tree depth 1-5, tự bỏ node_modules/.next/.git).', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
   { name: 'grep', category: 'Search', description: 'Tìm nội dung file bằng regex (content/files/count modes).', source: 'local' as const, dangerous: false, implemented: true, apiKeyEnv: '', hasApiKey: true },
