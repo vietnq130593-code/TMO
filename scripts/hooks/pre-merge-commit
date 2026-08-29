@@ -1,0 +1,19 @@
+#!/bin/sh
+# TMO QUALITY GATE — pre-merge-commit hook
+# Chặn merge khi bất kỳ stage nào của quality gate FAIL.
+# Bỏ qua khẩn cấp: git merge --no-verify (không khuyến khích).
+# Cài: bun scripts/setup-hooks.mjs (hoặc bun run setup)
+
+echo ""
+echo "⏳ [TMO QUALITY GATE] Kiểm tra trước khi merge (type_check → lint → tests → build)..."
+echo "   (Bỏ qua: git merge --no-verify — không khuyến khích)"
+echo ""
+
+if command -v bun >/dev/null 2>&1; then
+  exec bun scripts/quality-gate.mjs
+elif command -v node >/dev/null 2>&1; then
+  exec node scripts/quality-gate.mjs
+else
+  echo "❌ [TMO QUALITY GATE] Không tìm thấy bun/node — không kiểm tra được. Cài bun: https://bun.sh"
+  exit 1
+fi

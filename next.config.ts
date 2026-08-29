@@ -6,6 +6,12 @@ const nextConfig: NextConfig = {
   },
   reactStrictMode: false,
 
+  // QUALITY GATE TRIAL BUILD (2026-09-10): build thử (quality gate / CI) ghi ra
+  // thư mục riêng qua env TMO_BUILD_DIST_DIR (mặc định .next-qa trong
+  // scripts/quality-gate.mjs) để KHÔNG đụng .next của dev server đang chạy.
+  // Khi env không set (dev bình thường) → giá trị mặc định '.next' như cũ.
+  distDir: process.env.TMO_BUILD_DIST_DIR || ".next",
+
   // Post-deploy audit fix (2026-08-25): Next 16 blocks cross-origin requests to
   // dev resources (/_next/*, /_next/hmr) unless the Origin host is allow-listed.
   // Default allowlist only covers localhost/**.localhost — NOT 127.0.0.1 (direct

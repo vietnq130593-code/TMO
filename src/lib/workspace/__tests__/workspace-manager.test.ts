@@ -330,6 +330,11 @@ describe("WorkspaceManager — FsCheckpoint", () => {
 
   test("listCheckpoints → returns checkpoints in order", async () => {
     // Create another checkpoint
+    // NOTE (quality-gate fix 2026-09-10): chờ 5ms để createdAt của checkpoint
+    // thứ 2 chắc chắn LỚN HƠN checkpoint thứ 1. Không chờ thì 2 insert có thể
+    // rơi vào cùng 1 millisecond → orderBy createdAt không xác định thứ tự →
+    // test flaky khi cả suite chạy nhanh (từng fail 1/169 trên gate).
+    await new Promise((r) => setTimeout(r, 5));
     await wm.createCheckpoint({
       sessionId: testSessionId,
       workspaceId: testWorkspaceId,

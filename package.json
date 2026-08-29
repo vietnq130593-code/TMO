@@ -13,7 +13,11 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
-    "setup": "prisma generate && prisma db push",
+    "setup": "prisma generate && prisma db push && bun scripts/setup-hooks.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "bun scripts/quality-gate.mjs --stage=tests",
+    "quality-gate": "bun scripts/quality-gate.mjs",
+    "setup:hooks": "bun scripts/setup-hooks.mjs",
     "repair:neo4j": "bun scripts/repair-neo4j-documents.ts"
   },
   "dependencies": {

@@ -1,0 +1,19 @@
+#!/bin/sh
+# TMO QUALITY GATE — pre-push hook
+# Chặn push khi bất kỳ stage nào của quality gate FAIL (type_check + lint + tests + build thử).
+# Bỏ qua khẩn cấp: git push --no-verify (không khuyến khích).
+# Cài: bun scripts/setup-hooks.mjs (hoặc bun run setup)
+
+echo ""
+echo "⏳ [TMO QUALITY GATE] Kiểm tra trước khi push (type_check → lint → tests → build)..."
+echo "   (Bỏ qua: git push --no-verify — không khuyến khích)"
+echo ""
+
+if command -v bun >/dev/null 2>&1; then
+  exec bun scripts/quality-gate.mjs
+elif command -v node >/dev/null 2>&1; then
+  exec node scripts/quality-gate.mjs
+else
+  echo "❌ [TMO QUALITY GATE] Không tìm thấy bun/node — không kiểm tra được. Cài bun: https://bun.sh"
+  exit 1
+fi

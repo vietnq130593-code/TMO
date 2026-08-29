@@ -139,3 +139,9 @@ mini-services/*/.gateway.pid
 # Auto-provisioned TMO API token (secret — generated at startup, never commit)
 .tmo-api-token
 qdrant-backup-latest.tar
+
+# quality gate (2026-09-10): build thử ghi ra distDir riêng + DB test cô lập
+# + file cấu hình gate per-machine (máy yếu/dev đang chạy → skipBuild=true)
+/.next-qa/
+.quality-gate.local
+db/.quality-gate-test.db*
