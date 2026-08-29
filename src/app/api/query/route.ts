@@ -1063,11 +1063,18 @@ export async function GET(request: NextRequest) {
 
       try {
         // Phase 1: Get counts from all sources in parallel
-        // IMPORTANT: We always query BOTH Neo4j AND SQLite, then take the MAX.
-        // This fixes the bug where Neo4j returns 0 (data not yet synced) but SQLite has data.
+        //
+        // FIX 2026-09-10 (unit-mixing bug): Neo4j nodes and SQLite LocalEntity rows are
+        // DIFFERENT units — Neo4j = deduplicated knowledge-graph nodes (1 row per concept),
+        // SQLite buffer = raw per-chunk extraction mentions (1 entity mentioned in 50 chunks
+        // = 50 rows). Taking Math.max() of the two mixed units made the UI display the raw
+        // buffer count (e.g. 66,205 "entities" on machines restoring an append-only Supabase
+        // backup) while the real graph holds ~25.9k nodes / ~49.8k relationships (healthy 1.9:1).
+        // Now: Neo4j is the source of truth when reachable; SQLite buffer is a FALLBACK only
+        // (fresh install before first sync) and is also exposed separately as buffer* fields.
         const [qdrantStats, neo4jEntityCount, neo4jRelCount, sqliteEntityCount, sqliteRelCount, resolvedCountResult] = await Promise.all([
           getQdrantStats(),
-          // Entity count from Neo4j (may be 0 if not synced)
+          // Entity count from Neo4j (-1 sentinel = Neo4j unreachable)
           (async () => {
             try {
               const result = await readCypher<{ totalEntities: unknown }>(
@@ -1075,10 +1082,10 @@ export async function GET(request: NextRequest) {
               )
               return toNum(result[0]?.totalEntities)
             } catch {
-              return 0 // Neo4j unavailable — rely on SQLite
+              return -1 // Neo4j unavailable — fallback to SQLite buffer below
             }
           })(),
-          // Relationship count from Neo4j (may be 0 if not synced)
+          // Relationship count from Neo4j (-1 sentinel = Neo4j unreachable)
           (async () => {
             try {
               const result = await readCypher<{ totalRelationships: unknown }>(
@@ -1086,24 +1093,23 @@ export async function GET(request: NextRequest) {
               )
               return toNum(result[0]?.totalRelationships)
             } catch {
-              return 0 // Neo4j unavailable — rely on SQLite
+              return -1 // Neo4j unavailable — fallback to SQLite buffer below
             }
           })(),
-          // Entity count from SQLite (always accurate — local buffer)
+          // Raw extraction buffer counts (pre-dedup, per-chunk mentions — NOT graph nodes)
           db.localEntity.count().catch(() => 0),
-          // Relationship count from SQLite (always accurate — local buffer)
           db.localRelationship.count().catch(() => 0),
           // Resolved entities: SQLite only (local buffer)
           db.localResolvedEntity.count().catch(() => 0),
         ])
 
-        // Take MAX of Neo4j and SQLite — ensures we always show the highest count
-        // (Neo4j may have synced entities from previous runs, SQLite has current batch)
-        const entityCountResult = Math.max(neo4jEntityCount, sqliteEntityCount)
-        const relCountResult = Math.max(neo4jRelCount, sqliteRelCount)
+        // Neo4j is the source of truth when at least one count query succeeded.
+        const neo4jReachable = neo4jEntityCount >= 0 || neo4jRelCount >= 0
+        const graphEntities = neo4jReachable ? Math.max(neo4jEntityCount, 0) : sqliteEntityCount
+        const graphRelationships = neo4jReachable ? Math.max(neo4jRelCount, 0) : sqliteRelCount
 
-        const totalEntities = entityCountResult
-        const totalRelationships = relCountResult
+        const totalEntities = graphEntities
+        const totalRelationships = graphRelationships
         const totalResolvedEntities = resolvedCountResult
 
         // Document status distribution from Qdrant
@@ -1114,76 +1120,76 @@ export async function GET(request: NextRequest) {
           documentsByStatus[status] = (documentsByStatus[status] || 0) + 1
         }
 
-        // Phase 2: Distribution queries — always query BOTH Neo4j AND SQLite, merge results
-        // This ensures data shows up even when Neo4j hasn't synced yet
+        // Phase 2: Distributions — Neo4j (real graph) is the source of truth when
+        // reachable; SQLite buffer distribution is a fallback for fresh installs
+        // before the first sync. (Old per-type Math.max mixed the two units —
+        // see Phase 1 comment.)
         const [entityTypeDistribution, domainDistribution, relTypeDistribution] = await Promise.all([
           // Entity type distribution
           (async () => {
             const dist: Record<string, number> = {}
-            // Always get SQLite distribution (most up-to-date)
-            try {
-              // FIX (perf): was findMany() loading ALL 55k+ rows into JS just to count types.
-              // groupBy computes the distribution inside SQLite.
-              const groups = await db.localEntity.groupBy({ by: ['entityType'], _count: { _all: true } })
-              for (const g of groups) dist[g.entityType] = (dist[g.entityType] || 0) + g._count._all
-            } catch { /* ignore */ }
-            // Also try Neo4j (may have historical data from previous syncs)
-            try {
-              const result = await readCypher<{ type: string; count: unknown }>(
-                `MATCH (e)
-                 WITH CASE WHEN size(labels(e)) > 1 THEN [l IN labels(e) WHERE l <> 'Entity'][0] ELSE labels(e)[0] END AS type
-                 RETURN type, count(*) AS count
-                 ORDER BY count DESC`
-              )
-              for (const r of result) {
-                const count = toNum(r.count)
-                dist[r.type] = Math.max(dist[r.type] || 0, count)
-              }
-            } catch { /* Neo4j unavailable — use SQLite only */ }
+            if (neo4jReachable) {
+              try {
+                const result = await readCypher<{ type: string; count: unknown }>(
+                  `MATCH (e)
+                   WITH CASE WHEN size(labels(e)) > 1 THEN [l IN labels(e) WHERE l <> 'Entity'][0] ELSE labels(e)[0] END AS type
+                   RETURN type, count(*) AS count
+                   ORDER BY count DESC`
+                )
+                for (const r of result) dist[r.type] = toNum(r.count)
+              } catch { /* fall through to SQLite */ }
+            }
+            if (Object.keys(dist).length === 0) {
+              try {
+                // groupBy computes the distribution inside SQLite (perf).
+                const groups = await db.localEntity.groupBy({ by: ['entityType'], _count: { _all: true } })
+                for (const g of groups) dist[g.entityType] = g._count._all
+              } catch { /* ignore */ }
+            }
             return dist
           })(),
           // Domain distribution
           (async () => {
             const dist: Record<string, number> = {}
-            try {
-              // FIX (perf): groupBy instead of loading all rows into JS
-              const groups = await db.localEntity.groupBy({ by: ['domain'], _count: { _all: true } })
-              for (const g of groups) {
-                if (g.domain) dist[g.domain] = (dist[g.domain] || 0) + g._count._all
-              }
-            } catch { /* ignore */ }
-            try {
-              const result = await readCypher<{ domain: string; count: unknown }>(
-                `MATCH (e) WHERE e.domain IS NOT NULL
-                 RETURN e.domain AS domain, count(*) AS count
-                 ORDER BY count DESC`
-              )
-              for (const r of result) {
-                const count = toNum(r.count)
-                dist[r.domain] = Math.max(dist[r.domain] || 0, count)
-              }
-            } catch { /* Neo4j unavailable */ }
+            if (neo4jReachable) {
+              try {
+                const result = await readCypher<{ domain: string; count: unknown }>(
+                  `MATCH (e) WHERE e.domain IS NOT NULL
+                   RETURN e.domain AS domain, count(*) AS count
+                   ORDER BY count DESC`
+                )
+                for (const r of result) dist[r.domain] = toNum(r.count)
+              } catch { /* fall through to SQLite */ }
+            }
+            if (Object.keys(dist).length === 0) {
+              try {
+                const groups = await db.localEntity.groupBy({ by: ['domain'], _count: { _all: true } })
+                for (const g of groups) {
+                  if (g.domain) dist[g.domain] = g._count._all
+                }
+              } catch { /* ignore */ }
+            }
             return dist
           })(),
           // Relationship type distribution
           (async () => {
             const dist: Record<string, number> = {}
-            try {
-              // FIX (perf): groupBy instead of loading all relationship rows into JS
-              const groups = await db.localRelationship.groupBy({ by: ['relationshipType'], _count: { _all: true } })
-              for (const g of groups) dist[g.relationshipType] = (dist[g.relationshipType] || 0) + g._count._all
-            } catch { /* ignore */ }
-            try {
-              const result = await readCypher<{ relType: string; count: unknown }>(
-                `MATCH ()-[r]->()
-                 RETURN type(r) AS relType, count(*) AS count
-                 ORDER BY count DESC`
-              )
-              for (const r of result) {
-                const count = toNum(r.count)
-                dist[r.relType] = Math.max(dist[r.relType] || 0, count)
-              }
-            } catch { /* Neo4j unavailable */ }
+            if (neo4jReachable) {
+              try {
+                const result = await readCypher<{ relType: string; count: unknown }>(
+                  `MATCH ()-[r]->()
+                   RETURN type(r) AS relType, count(*) AS count
+                   ORDER BY count DESC`
+                )
+                for (const r of result) dist[r.relType] = toNum(r.count)
+              } catch { /* fall through to SQLite */ }
+            }
+            if (Object.keys(dist).length === 0) {
+              try {
+                const groups = await db.localRelationship.groupBy({ by: ['relationshipType'], _count: { _all: true } })
+                for (const g of groups) dist[g.relationshipType] = g._count._all
+              } catch { /* ignore */ }
+            }
             return dist
           })(),
         ])
@@ -1266,6 +1272,13 @@ export async function GET(request: NextRequest) {
         const statsResult = {
           totalDocuments: qdrantStats.totalDocuments, totalEntities, totalRelationships,
           totalResolvedEntities,
+          // FIX 2026-09-10: expose the two sources separately so the UI (and the
+          // owner) can distinguish real graph size from the raw extraction buffer.
+          graphEntities,
+          graphRelationships,
+          bufferEntities: sqliteEntityCount,
+          bufferRelationships: sqliteRelCount,
+          knowledgeSource: neo4jReachable ? 'neo4j' : 'sqlite-buffer',
           documentsByStatus,
           entityTypeDistribution,
           domainDistribution,

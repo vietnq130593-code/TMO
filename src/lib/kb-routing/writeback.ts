@@ -37,7 +37,7 @@ export const WRITEBACK_CONFIDENCE_THRESHOLD = 0.5
  * hay không thì mới phải cần hỏi tôi"). Items with confidence in
  * (ASK_MIN, WRITEBACK_CONFIDENCE_THRESHOLD] là những tri thức Agent KHÔNG CHẮC
  * — thay vì bỏ mặc như trước đây, chúng được xếp vào hàng chờ PHÊ DUYỆT để
- * user quyết định (tab Auto-Learn → "Kiến thức chờ phê duyệt").
+ * user quyết định (module Smolab → tab Learning → "Kiến thức chờ phê duyệt").
  * Mặc định mọi tri thức thiếu (conf > 0.5) vẫn tự ghi vào KB.
  */
 export const WRITEBACK_ASK_MIN_CONFIDENCE = 0.3

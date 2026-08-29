@@ -133,7 +133,9 @@ export async function writebackToKBTransactionally(params: {
 
   // ===== Gray-zone queue (user request 2026-08-27) =====
   // Tri thức có confidence 0.3-0.5 (Agent "không chắc") → PendingWriteback
-  // status 'needs_review' — hiển thị trong tab Auto-Learn để user phê duyệt.
+  // status 'needs_review' — hiển thị trong module Smolab → tab Learning
+  // ("Kiến thức chờ phê duyệt") để user phê duyệt. (Tab Auto-Learn chỉ hiển thị
+  // thống kê tổng hợp + LearningLog — không phải nơi review.)
   // Mặc định: tri thức thiếu (conf > 0.5) đã được auto-write ở trên.
   if (result.grayZone && (result.grayZone.entities.length > 0 || result.grayZone.relationships.length > 0)) {
     try {

@@ -3281,8 +3281,8 @@ function formatTokenCount(n: number): string {
   return String(n)
 }
 
-function StatsOverview({ docTotal, docStatusBreakdown, entities, relationships, resolvedEntities, embeddingStatus, processingCount }: {
-  docTotal: number; docStatusBreakdown: Record<string, number>; entities: number; relationships: number; resolvedEntities: number; embeddingStatus: EmbeddingStatus | null; processingCount: number
+function StatsOverview({ docTotal, docStatusBreakdown, entities, relationships, resolvedEntities, embeddingStatus, processingCount, knowledgeSource, bufferCounts }: {
+  docTotal: number; docStatusBreakdown: Record<string, number>; entities: number; relationships: number; resolvedEntities: number; embeddingStatus: EmbeddingStatus | null; processingCount: number; knowledgeSource?: 'neo4j' | 'sqlite-buffer' | null; bufferCounts?: { entities: number; relationships: number } | null
 }) {
   // Use server-provided status breakdown (covers ALL docs, not just current page)
   const processedCount = (docStatusBreakdown['extracted'] || 0) + (docStatusBreakdown['indexed'] || 0)
@@ -3335,10 +3335,10 @@ function StatsOverview({ docTotal, docStatusBreakdown, entities, relationships, 
         </div>
       </Card></div>
       <div className="nc-wrap nc-lime"><Card className="nc-panel nc-sm nc-border-lime metric-sparkle p-4">
-        <div className="flex items-center gap-3"><div className="p-2 rounded-lg bg-violet-950/50"><Layers className="h-4 w-4 text-violet-400" /></div><div><p className="text-xl font-bold tracking-tight text-stone-100">{entities}</p><p className="text-[10px] text-stone-400">Entities{resolvedEntities > 0 && entities > resolvedEntities ? ` (${resolvedEntities} đã hợp nhất)` : ''}</p></div></div>
+        <div className="flex items-center gap-3"><div className="p-2 rounded-lg bg-violet-950/50"><Layers className="h-4 w-4 text-violet-400" /></div><div><p className="text-xl font-bold tracking-tight text-stone-100">{entities}</p><p className="text-[10px] text-stone-400" title={knowledgeSource === 'neo4j' ? `Neo4j knowledge graph (đã dedup)${bufferCounts ? ` · SQLite buffer thô: ${bufferCounts.entities.toLocaleString('vi-VN')} rows` : ''}` : 'SQLite raw extraction buffer (Neo4j chưa kết nối)'}>Entities{resolvedEntities > 0 && entities > resolvedEntities ? ` (${resolvedEntities} đã hợp nhất)` : ''}</p></div></div>
       </Card></div>
       <div className="nc-wrap nc-lime"><Card className="nc-panel nc-sm nc-border-lime metric-sparkle p-4">
-        <div className="flex items-center gap-3"><div className="p-2 rounded-lg bg-orange-950/50"><GitBranch className="h-4 w-4 text-orange-400" /></div><div><p className="text-xl font-bold tracking-tight text-stone-100">{relationships}</p><p className="text-[10px] text-stone-400">Relationships</p></div></div>
+        <div className="flex items-center gap-3"><div className="p-2 rounded-lg bg-orange-950/50"><GitBranch className="h-4 w-4 text-orange-400" /></div><div><p className="text-xl font-bold tracking-tight text-stone-100">{relationships}</p><p className="text-[10px] text-stone-400" title={knowledgeSource === 'neo4j' ? `Neo4j knowledge graph (đã dedup)${bufferCounts ? ` · SQLite buffer thô: ${bufferCounts.relationships.toLocaleString('vi-VN')} rows` : ''}` : 'SQLite raw extraction buffer (Neo4j chưa kết nối)'}>Relationships</p></div></div>
       </Card></div>
       <div className="nc-wrap nc-lime"><Card className="nc-panel nc-sm nc-border-lime metric-sparkle p-4">
         <div className="flex items-center gap-3"><div className={`p-2 rounded-lg ${embeddingStatus && embeddingStatus.realRatio > 0 ? 'bg-teal-950/50' : 'bg-amber-950/50'}`}><TrendingUp className={`h-4 w-4 ${embeddingStatus && embeddingStatus.realRatio > 0 ? 'text-teal-400' : 'text-amber-500'}`} /></div><div>
@@ -3709,9 +3709,27 @@ interface AutoLearnStats {
   totalChunks: number
 }
 
+/**
+ * FIX 2026-09-10: thống kê pipeline học THẬT — Smart KB Writeback chạy sau MỖI lượt
+ * chat (conf > 0.5 auto-write; 0.3–0.5 chờ phê duyệt tại Smolab → Learning),
+ * thay cho legacy AutoLearnRecord (chỉ còn là fallback khi writeback throw).
+ */
+interface LearningStats {
+  writebacks: { total: number; completed: number; pending: number; needsReview: number; partial: number; failed: number; rejected: number }
+  memories: { active: number; total: number }
+  insights: number
+  learningLogs: number
+  recentLogs: Array<{ id: string; eventType: string; kind: string; summary: string; agentId: string; createdAt: string }>
+  kgAutoLearn: { entities: number; relationships: number; documents: number } | null
+}
+
 function AutoLearnSection() {
   const [records, setRecords] = useState<AutoLearnRecord[]>([])
   const [stats, setStats] = useState<AutoLearnStats | null>(null)
+  // Pipeline học thật (writeback saga + memory + Neo4j auto-learn) — FIX 2026-09-10:
+  // legacy AutoLearnRecord đã bị thay bởi Smart KB Writeback từ 2026-08-21, tab này
+  // trước đây chỉ đọc bảng chết → giờ hiển thị cả hai, ưu tiên pipeline thật.
+  const [learningStats, setLearningStats] = useState<LearningStats | null>(null)
   const [loading, setLoading] = useState(true)
   // Neo4j sync status (DATA-LOSS FIX 2026-08-31): make the Auto-Learn loop actionable —
   // show how much knowledge is buffered in SQLite and let the user push it to Neo4j.
@@ -3732,6 +3750,7 @@ function AutoLearnSection() {
         const data = await res.json()
         setRecords(data.records || [])
         setStats(data.stats || null)
+        setLearningStats(data.learningStats || null)
       }
     } catch (err) {
       console.error('[AutoLearn] Fetch error:', err)
@@ -3803,9 +3822,6 @@ function AutoLearnSection() {
     failed: 'bg-red-950/50',
     pending: 'bg-amber-950/50',
   }
-  const providerColorMap: Record<string, { color: string; bg: string }> = {
-    nvidia: { color: 'text-green-400', bg: 'bg-green-950/50' },
-  }
 
   return (
     <div className="nc-wrap nc-lime">
@@ -3813,46 +3829,46 @@ function AutoLearnSection() {
       <CardHeader className="pb-1">
         <div className="flex flex-col items-center gap-1">
           <CardTitle className="text-base font-bold tracking-widest text-center text-white">AUTO-LEARN</CardTitle>
-          <p className="text-[10px] text-stone-400">Agent tự bổ sung kiến thức vào Knowledge Base khi DB chưa đủ thông tin</p>
+          <p className="text-[10px] text-stone-400">Smart KB Writeback — Agent tự học từ mỗi lượt chat, ghi vào Qdrant + Neo4j + Memory (conf &gt; 0.5)</p>
         </div>
       </CardHeader>
       <CardContent className="pt-0">
         <div className="space-y-3">
-          {/* Stats Overview */}
-          {stats && (
+          {/* Stats Overview — pipeline học THẬT (writeback) + legacy để đối chiếu */}
+          {learningStats && (
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-              <div className="nc-panel nc-sm nc-border-lime p-2.5 text-center">
-                <p className="text-lg font-bold text-stone-100">{formatNumber(stats.totalRecords)}</p>
-                <p className="text-[9px] text-stone-400">Tổng bản ghi</p>
+              <div className="nc-panel nc-sm nc-border-lime p-2.5 text-center" title="Số batch writeback hoàn thành đầy đủ (Qdrant + Neo4j + Memory + Insight + Log)">
+                <p className="text-lg font-bold text-emerald-400">{formatNumber(learningStats.writebacks.completed)}</p>
+                <p className="text-[9px] text-stone-400">WB hoàn thành</p>
               </div>
-              <div className="nc-panel nc-sm nc-border-lime p-2.5 text-center">
-                <p className="text-lg font-bold text-emerald-400">{formatNumber(stats.completedRecords)}</p>
-                <p className="text-[9px] text-stone-400">Hoàn thành</p>
+              <div className="nc-panel nc-sm nc-border-lime p-2.5 text-center" title="Tri thức vùng xám (conf 0.3–0.5) đang chờ bạn phê duyệt — xem module Smolab → tab Learning">
+                <p className="text-lg font-bold text-amber-400">{formatNumber(learningStats.writebacks.needsReview)}</p>
+                <p className="text-[9px] text-stone-400">Chờ phê duyệt</p>
               </div>
-              <div className="nc-panel nc-sm nc-border-lime p-2.5 text-center">
-                <p className="text-lg font-bold text-red-400">{formatNumber(stats.failedRecords)}</p>
-                <p className="text-[9px] text-stone-400">Thất bại</p>
+              <div className="nc-panel nc-sm nc-border-lime p-2.5 text-center" title="Entities Agent tự học từ chat, đang sống trong Neo4j graph (source=auto-learn)">
+                <p className="text-lg font-bold text-cyan-400">{learningStats.kgAutoLearn ? formatNumber(learningStats.kgAutoLearn.entities) : '—'}</p>
+                <p className="text-[9px] text-stone-400">Entities đã học (Neo4j)</p>
               </div>
-              <div className="nc-panel nc-sm nc-border-lime p-2.5 text-center">
-                <p className="text-lg font-bold text-amber-400">{formatNumber(stats.pendingRecords)}</p>
-                <p className="text-[9px] text-stone-400">Đang xử lý</p>
+              <div className="nc-panel nc-sm nc-border-lime p-2.5 text-center" title="Relationships Agent tự học từ chat trong Neo4j graph (source=auto-learn)">
+                <p className="text-lg font-bold text-violet-400">{learningStats.kgAutoLearn ? formatNumber(learningStats.kgAutoLearn.relationships) : '—'}</p>
+                <p className="text-[9px] text-stone-400">Rels đã học (Neo4j)</p>
               </div>
-              <div className="nc-panel nc-sm nc-border-lime p-2.5 text-center">
-                <p className="text-lg font-bold text-cyan-400">{formatNumber(stats.totalEntities)}</p>
-                <p className="text-[9px] text-stone-400">Entities</p>
+              <div className="nc-panel nc-sm nc-border-lime p-2.5 text-center" title="AgentMemory đang active — được đưa vào context mỗi lượt chat qua recallMemories">
+                <p className="text-lg font-bold text-pink-400">{formatNumber(learningStats.memories.active)}</p>
+                <p className="text-[9px] text-stone-400">Memories active</p>
               </div>
-              <div className="nc-panel nc-sm nc-border-lime p-2.5 text-center">
-                <p className="text-lg font-bold text-violet-400">{formatNumber(stats.totalRelationships)}</p>
-                <p className="text-[9px] text-stone-400">Relationships</p>
+              <div className="nc-panel nc-sm nc-border-lime p-2.5 text-center" title="AgentInsight — insight trích xuất từ chat (hiển thị ở Smolab → Learning)">
+                <p className="text-lg font-bold text-orange-400">{formatNumber(learningStats.insights)}</p>
+                <p className="text-[9px] text-stone-400">Insights</p>
               </div>
-              <div className="nc-panel nc-sm nc-border-lime p-2.5 text-center">
-                <p className="text-lg font-bold text-pink-400">{formatNumber(stats.totalChunks)}</p>
-                <p className="text-[9px] text-stone-400">Chunks Qdrant</p>
+              <div className="nc-panel nc-sm nc-border-lime p-2.5 text-center" title="Bản ghi legacy autoLearnFromAnswer — chỉ chạy khi writeback lỗi (trước 2026-08-21 là đường chính)">
+                <p className="text-lg font-bold text-stone-400">{stats ? formatNumber(stats.totalRecords) : '—'}</p>
+                <p className="text-[9px] text-stone-400">Legacy records</p>
               </div>
             </div>
           )}
 
-          {/* How it works */}
+          {/* How it works — cập nhật 2026-09-10 theo pipeline hiện tại (writeback saga) */}
           <div className="nc-panel nc-sm nc-border-lime p-3">
             <div className="flex items-center gap-2 mb-2">
               <Brain className="h-3.5 w-3.5 text-rose-400" />
@@ -3861,15 +3877,15 @@ function AutoLearnSection() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px] text-stone-400">
               <div className="flex items-start gap-1.5">
                 <span className="flex-shrink-0 w-4 h-4 rounded-full bg-rose-950/50 text-rose-400 flex items-center justify-center text-[9px] font-bold">1</span>
-                <span>Agent trả lời câu hỏi → Kiểm tra <span className="text-amber-400">confidence</span> (0.5–0.85)</span>
+                <span>Sau mỗi lượt chat có giá trị → LLM trích xuất <span className="text-cyan-400">entities</span> + <span className="text-violet-400">relationships</span> kèm <span className="text-amber-400">confidence</span></span>
               </div>
               <div className="flex items-start gap-1.5">
                 <span className="flex-shrink-0 w-4 h-4 rounded-full bg-rose-950/50 text-rose-400 flex items-center justify-center text-[9px] font-bold">2</span>
-                <span>LLM trích xuất <span className="text-cyan-400">entities</span> + <span className="text-violet-400">relationships</span> + key facts</span>
+                <span>conf <span className="text-emerald-400">&gt; 0.5</span> tự ghi vào <span className="text-green-400">Qdrant</span> + <span className="text-orange-400">Neo4j</span> + <span className="text-pink-400">AgentMemory</span>; vùng xám 0.3–0.5 xếp hàng chờ phê duyệt</span>
               </div>
               <div className="flex items-start gap-1.5">
                 <span className="flex-shrink-0 w-4 h-4 rounded-full bg-rose-950/50 text-rose-400 flex items-center justify-center text-[9px] font-bold">3</span>
-                <span>Lưu vào <span className="text-green-400">Qdrant</span> (vector) + <span className="text-orange-400">Neo4j</span> (graph) + <span className="text-blue-400">SQLite</span></span>
+                <span>Phê duyệt vùng xám + timeline học: module <span className="text-lime-400">Smolab → tab Learning</span> (Mỗi batch có saga PendingWriteback đối soát)</span>
               </div>
             </div>
           </div>
@@ -3900,11 +3916,11 @@ function AutoLearnSection() {
             )}
           </div>
 
-          {/* Records Table */}
+          {/* Recent Learning Activity — LearningLog thật từ writeback saga (FIX 2026-09-10) */}
           <div className="nc-panel nc-sm nc-border-lime overflow-hidden">
             <div className="flex items-center gap-2 mb-0 px-3 py-2 bg-slate-950/60 border-b border-cyan-400/35">
               <GraduationCap className="h-3.5 w-3.5 text-stone-400" />
-              <span className="text-xs font-semibold text-stone-300">Bản ghi Auto-Learn</span>
+              <span className="text-xs font-semibold text-stone-300">Hoạt động học gần đây</span>
               <span className="text-[10px] text-stone-500 ml-auto">Tự cập nhật mỗi 10s</span>
             </div>
             {loading ? (
@@ -3912,35 +3928,82 @@ function AutoLearnSection() {
                 <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2 text-stone-400" />
                 <span className="text-xs text-stone-500">Đang tải...</span>
               </div>
-            ) : records.length === 0 ? (
+            ) : !learningStats || learningStats.recentLogs.length === 0 ? (
               <div className="py-6 text-center">
                 <Brain className="h-8 w-8 mx-auto mb-2 text-stone-600" />
-                <p className="text-xs text-stone-500">Chưa có bản ghi Auto-Learn.</p>
-                <p className="text-[10px] text-stone-600 mt-1">Khi Agent chat với confidence 0.5–0.85, kiến thức sẽ tự động được bổ sung.</p>
+                <p className="text-xs text-stone-500">Chưa có hoạt động học nào được ghi lại.</p>
+                <p className="text-[10px] text-stone-600 mt-1">
+                  Học xảy ra tự động sau mỗi lượt chat có giá trị: conf &gt; 0.5 tự ghi vào KB, vùng xám 0.3–0.5 chờ phê duyệt (Smolab → Learning).
+                </p>
               </div>
             ) : (
               <div className="max-h-96 overflow-y-auto dialog-scrollbar">
                 <table className="w-full text-xs">
                   <thead className="sticky top-0 bg-slate-950/80 backdrop-blur-sm z-10">
                     <tr className="border-b border-cyan-400/35">
+                      <th className="py-2 px-2 text-left font-semibold text-stone-300">Loại</th>
+                      <th className="py-2 px-2 text-left font-semibold text-stone-300">Nội dung</th>
+                      <th className="py-2 px-2 text-center font-semibold text-stone-300">Agent</th>
+                      <th className="py-2 px-2 text-right font-semibold text-stone-300">Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {learningStats.recentLogs.map((log, idx) => {
+                      const timeAgo = Math.round((Date.now() - new Date(log.createdAt).getTime()) / 60000)
+                      const timeStr = timeAgo < 60 ? `${timeAgo}m` : timeAgo < 1440 ? `${Math.round(timeAgo / 60)}h` : `${Math.round(timeAgo / 1440)}d`
+                      const isWriteback = log.kind === 'kb-writeback'
+                      return (
+                        <tr key={log.id} className={`${idx % 2 === 0 ? 'bg-cyan-950/10' : ''} hover:bg-slate-950/50 transition-colors border-b border-stone-700/30`}>
+                          <td className="py-2 px-2">
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${isWriteback ? 'bg-emerald-950/50 text-emerald-400' : 'bg-stone-950/50 text-stone-400'}`}>
+                              {isWriteback ? 'KB Writeback' : log.eventType}
+                            </span>
+                          </td>
+                          <td className="py-2 px-2">
+                            <span className="text-[10px] text-stone-300" title={log.summary}>{log.summary}</span>
+                          </td>
+                          <td className="py-2 px-2 text-center">
+                            <span className="text-[10px] text-stone-400 truncate max-w-[80px] inline-block align-middle" title={log.agentId}>{log.agentId}</span>
+                          </td>
+                          <td className="py-2 px-2 text-right">
+                            <span className="text-[10px] text-stone-500 tabular-nums">{timeStr}</span>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Legacy Auto-Learn records — chỉ hiện khi có dữ liệu (fallback path, trước 2026-08-21) */}
+          {records.length > 0 && (
+            <div className="nc-panel nc-sm nc-border-lime overflow-hidden">
+              <div className="flex items-center gap-2 mb-0 px-3 py-2 bg-slate-950/60 border-b border-stone-700/40">
+                <GraduationCap className="h-3.5 w-3.5 text-stone-500" />
+                <span className="text-xs font-semibold text-stone-400">Legacy Auto-Learn records</span>
+                <span className="text-[9px] text-stone-600 px-1.5 py-0.5 rounded bg-stone-950/60 border border-stone-700/40">đường cũ — chỉ chạy khi writeback lỗi</span>
+              </div>
+              <div className="max-h-72 overflow-y-auto dialog-scrollbar">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-slate-950/80 backdrop-blur-sm z-10">
+                    <tr className="border-b border-stone-700/40">
                       <th className="py-2 px-2 text-left font-semibold text-stone-300">Agent</th>
                       <th className="py-2 px-2 text-left font-semibold text-stone-300">Query</th>
                       <th className="py-2 px-2 text-center font-semibold text-stone-300">Conf</th>
-                      <th className="py-2 px-2 text-center font-semibold text-stone-300">Provider</th>
                       <th className="py-2 px-2 text-center font-semibold text-stone-300">Ent</th>
                       <th className="py-2 px-2 text-center font-semibold text-stone-300">Rel</th>
-                      <th className="py-2 px-2 text-center font-semibold text-stone-300">Chunk</th>
                       <th className="py-2 px-2 text-center font-semibold text-stone-300">Status</th>
                       <th className="py-2 px-2 text-right font-semibold text-stone-300">Time</th>
                     </tr>
                   </thead>
                   <tbody>
                     {records.map((rec, idx) => {
-                      const pc = providerColorMap[rec.provider] || { color: 'text-stone-400', bg: 'bg-stone-950/50' }
                       const timeAgo = Math.round((Date.now() - new Date(rec.createdAt).getTime()) / 60000)
                       const timeStr = timeAgo < 60 ? `${timeAgo}m` : timeAgo < 1440 ? `${Math.round(timeAgo / 60)}h` : `${Math.round(timeAgo / 1440)}d`
                       return (
-                        <tr key={rec.id} className={`${idx % 2 === 0 ? 'bg-cyan-950/10' : ''} hover:bg-slate-950/50 transition-colors border-b border-stone-700/30`}>
+                        <tr key={rec.id} className={`${idx % 2 === 0 ? 'bg-cyan-950/5' : ''} hover:bg-slate-950/50 transition-colors border-b border-stone-700/20`}>
                           <td className="py-2 px-2">
                             <span className="text-[10px] font-medium text-white truncate max-w-[80px] inline-block align-middle">{rec.agentName}</span>
                           </td>
@@ -3953,16 +4016,10 @@ function AutoLearnSection() {
                             </span>
                           </td>
                           <td className="py-2 px-2 text-center">
-                            <span className={`text-[9px] px-1.5 py-0.5 rounded ${pc.bg} ${pc.color} font-medium`}>{rec.provider}</span>
-                          </td>
-                          <td className="py-2 px-2 text-center">
                             <span className="text-[10px] tabular-nums text-cyan-400">{rec.entitiesCount || '—'}</span>
                           </td>
                           <td className="py-2 px-2 text-center">
                             <span className="text-[10px] tabular-nums text-violet-400">{rec.relationshipsCount || '—'}</span>
-                          </td>
-                          <td className="py-2 px-2 text-center">
-                            {rec.chunkSaved ? <CheckCircle2 className="h-3 w-3 text-emerald-400 inline" /> : <XCircle className="h-3 w-3 text-stone-600 inline" />}
                           </td>
                           <td className="py-2 px-2 text-center">
                             <span className={`text-[9px] px-1.5 py-0.5 rounded ${statusBg[rec.status] || 'bg-stone-950/50'} ${statusColor[rec.status] || 'text-stone-400'} font-medium`}>
@@ -3978,8 +4035,8 @@ function AutoLearnSection() {
                   </tbody>
                 </table>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -5409,6 +5466,37 @@ function MemoryTabContent() {
     }
   }, [selectedAgentId, activeTier, fetchTierStats, fetchMemories, fetchArchives])
 
+  // FIX 2026-09-10: POST /api/memory/decay trước đây không có caller nào (endpoint
+  // chết) — decay chỉ chạy tự động mỗi ~20 tin nhắn. Nút này cho phép chủ động chạy
+  // decay ngay cho TẤT CẢ agent (importance giảm theo ngày không truy cập,
+  // < 0.1 → deactivate + tier transition).
+  const handleRunDecay = useCallback(async () => {
+    if (!window.confirm('Chạy memory decay ngay cho TẤT CẢ agent? (importance giảm theo ngày không truy cập; < 0.1 → deactivate)')) return
+    setActionLoading(true)
+    try {
+      const res = await fetch('/api/memory/decay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}), // no agentId → decay ALL agents
+      })
+      const data = await res.json()
+      if (res.ok) {
+        sonnerToast.success('Decay hoàn tất', {
+          description: `agents=${data.agentsProcessed ?? 0}, decayed=${data.totals?.decayed ?? 0}, deactivated=${data.totals?.deactivated ?? 0}`,
+          duration: 4000,
+        })
+        fetchTierStats()
+        fetchMemories()
+      } else {
+        sonnerToast.error('Lỗi', { description: data.error || 'Thất bại', duration: 4000 })
+      }
+    } catch (e) {
+      sonnerToast.error('Lỗi mạng', { description: e instanceof Error ? e.message : 'unknown', duration: 4000 })
+    } finally {
+      setActionLoading(false)
+    }
+  }, [fetchTierStats, fetchMemories])
+
   const handleDeleteMemory = useCallback(async (id: string) => {
     if (!window.confirm('Xóa memory này? Không thể hoàn tác.')) return
     setActingId(id)
@@ -5642,6 +5730,15 @@ function MemoryTabContent() {
               >
                 {actionLoading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
                 Run Transitions
+              </Button>
+              <Button
+                size="sm" variant="outline" disabled={actionLoading}
+                onClick={handleRunDecay}
+                className="h-8 text-[11px] border-amber-500/40 bg-amber-950/20 text-amber-200 hover:bg-amber-900/40"
+                title="Chạy memory decay ngay cho tất cả agent — importance giảm theo ngày không truy cập"
+              >
+                {actionLoading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Zap className="h-3 w-3 mr-1" />}
+                Decay Now
               </Button>
             </div>
           </div>
@@ -17004,6 +17101,10 @@ export default function Home() {
   const fetchDocsAbortRef = useRef<AbortController | null>(null)
   const [entityTotal, setEntityTotal] = useState(0)
   const [relationshipTotal, setRelationshipTotal] = useState(0)
+  // FIX 2026-09-10: nguồn số liệu KG — 'neo4j' (graph thật, đã dedup) hay
+  // 'sqlite-buffer' (raw extraction, fallback khi Neo4j không kết nối được)
+  const [knowledgeSource, setKnowledgeSource] = useState<'neo4j' | 'sqlite-buffer' | null>(null)
+  const [bufferCounts, setBufferCounts] = useState<{ entities: number; relationships: number } | null>(null)
   const [resolvedEntityTotal, setResolvedEntityTotal] = useState(0)
   const [dbStats, setDbStats] = useState<DBStats | null>(null)
   const [loading, setLoading] = useState(false)
@@ -17513,6 +17614,10 @@ export default function Home() {
         setEntityTotal(data.totalEntities || 0)
         setRelationshipTotal(data.totalRelationships || 0)
         setResolvedEntityTotal(data.totalResolvedEntities || 0)
+        if (data.knowledgeSource) setKnowledgeSource(data.knowledgeSource)
+        if (typeof data.bufferEntities === 'number') {
+          setBufferCounts({ entities: data.bufferEntities, relationships: data.bufferRelationships || 0 })
+        }
         setDbStats(data)
       }
     } catch { /* ignore */ }
@@ -18257,7 +18362,7 @@ export default function Home() {
             .catch(() => {}),
           fetch('/api/query?action=stats')
             .then(res => res.ok ? res.json() : Promise.reject('stats error'))
-            .then(data => { setEntityTotal(data.totalEntities || 0); setRelationshipTotal(data.totalRelationships || 0); setResolvedEntityTotal(data.totalResolvedEntities || 0); setDbStats(data) })
+            .then(data => { setEntityTotal(data.totalEntities || 0); setRelationshipTotal(data.totalRelationships || 0); setResolvedEntityTotal(data.totalResolvedEntities || 0); if (data.knowledgeSource) setKnowledgeSource(data.knowledgeSource); if (typeof data.bufferEntities === 'number') setBufferCounts({ entities: data.bufferEntities, relationships: data.bufferRelationships || 0 }); setDbStats(data) })
             .catch(() => {}),
         ])
       }
@@ -18481,7 +18586,7 @@ export default function Home() {
               {/* Token SSE Provider — wraps both StatsOverview and TokenUsageSection */}
               <TokenStreamProvider>
               {/* Stats */}
-              <StatsOverview docTotal={docTotal} docStatusBreakdown={docStatusBreakdown} entities={entityTotal} relationships={relationshipTotal} resolvedEntities={resolvedEntityTotal} embeddingStatus={embeddingStatus} processingCount={(docStatusBreakdown['parsing'] || 0) + (docStatusBreakdown['chunked'] || 0) + (docStatusBreakdown['extracting'] || 0)} />
+              <StatsOverview docTotal={docTotal} docStatusBreakdown={docStatusBreakdown} entities={entityTotal} relationships={relationshipTotal} resolvedEntities={resolvedEntityTotal} embeddingStatus={embeddingStatus} processingCount={(docStatusBreakdown['parsing'] || 0) + (docStatusBreakdown['chunked'] || 0) + (docStatusBreakdown['extracting'] || 0)} knowledgeSource={knowledgeSource} bufferCounts={bufferCounts} />
 
               {/* Tabs */}
               <div className="mt-5">
