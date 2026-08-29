@@ -1151,10 +1151,24 @@ export async function gitPush(args: {
   // FIX 2026-09-11: trích token từ RAW remote URL (probeWorkspaceGit đã strip
   // remoteUrl cho an toàn hiển thị — dùng rawRemoteUrl cho tier embedded)
   const embedded = extractEmbeddedToken(status.rawRemoteUrl || status.remoteUrl)
-  const { getSavedGithubToken } = await import('@/lib/github-token-store')
+  const { getSavedGithubToken, saveGithubToken } = await import('@/lib/github-token-store')
   const savedToken = getSavedGithubToken()
   const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || ''
   const token = embedded || savedToken || envToken || ''
+
+  // FIX 2026-09-11 (CI-6 E2E): token embedded sắp bị clean khỏi .git/config
+  // (bước safety bên dưới) → LƯU VÀO TOKEN STORE (0600) để các lần push/pull
+  // sau (kể cả pull_verify ngay sau push) vẫn xác thực được qua tier store.
+  // Không giảm an toàn: token vốn đã nằm trong .git/config (world-readable
+  // hơn file 0600); store là vị trí chuẩn theo thiết kế.
+  if (embedded && embedded !== savedToken) {
+    try {
+      saveGithubToken(embedded)
+      console.log('[gitPush] Embedded token → đã lưu vào token store (db/.github-token.json, 0600)')
+    } catch (saveErr) {
+      console.warn('[gitPush] Không lưu được token vào store:', saveErr instanceof Error ? saveErr.message : String(saveErr))
+    }
+  }
 
   const authedUrl = buildAuthedGitUrl(status.remoteUrl, token)
   const pushArgs = ['push', authedUrl, branch]
