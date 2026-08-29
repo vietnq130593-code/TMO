@@ -274,3 +274,27 @@ if (!globalForSd.__tmoSdSchedulerStarted) {
       setInterval(() => void sdTick(), SD_TICK_MS)
     })
 }
+
+// ============================================================================
+// CI-6 WORKSPACE BOOTSTRAP (Task 10-b — roadmap CI-6.1)
+// ============================================================================
+// TMO_DEFAULT_WORKSPACE trỏ thư mục workspace mặc định trên máy user (vd
+// E:\APP\TMO-clone — nơi agent Omega thực hiện thay đổi code theo quy trình
+// CI-6). Bootstrap MỘT LẦN sau khi DB sẵn sàng (ensureDbReady dedup với các
+// lời gọi phía trên): tạo thư mục + git init + remote origin (TMO_REPO_URL)
+// + upsert Workspace row active. Hoàn toàn no-op khi env chưa cấu hình
+// (sandbox) và fail-open tuyệt đối (lỗi bootstrap không chặn boot).
+// globalThis guard chống double-run khi Next dev HMR reload instrumentation.
+const globalForWs = globalThis as unknown as { __tmoWorkspaceBootstrapped?: boolean }
+if (!globalForWs.__tmoWorkspaceBootstrapped) {
+  globalForWs.__tmoWorkspaceBootstrapped = true
+  void ensureDbReady()
+    .then(() => import('@/lib/workspace/ensure-default-workspace'))
+    .then(({ ensureDefaultWorkspace }) => ensureDefaultWorkspace())
+    .catch((err) => {
+      console.warn(
+        '[WORKSPACE] bootstrap lỗi (không chặn boot):',
+        err instanceof Error ? err.message : String(err)
+      )
+    })
+}

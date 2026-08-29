@@ -1385,6 +1385,171 @@ export async function gitPullWorkspace(args: {
   }
 }
 
+// ==================== CI-6 / CI-4 (Task 10-b): OPEN WORKSPACE IN EXPLORER ====================
+//
+// Roadmap CI-6.3 (docs/CODE_EXECUTION_IMPROVEMENT_ROADMAP.md): agent phải mở
+// được thư mục workspace trên máy người dùng — File Explorer (Windows),
+// Finder (macOS), xdg-open (Linux) — hoặc VS Code khi editor='vscode'.
+//
+// Người gọi: tool open_workspace (tool-executor) + ensureDefaultWorkspace
+// (bootstrap lúc boot — lazy import để không kéo cả dev-tools vào boot path).
+//
+// Receipt-based KHÔNG throw: mọi nhánh lỗi (thư mục không tồn tại, binary
+// không có trên máy) đều trả { success: false, error, message } tiếng Việt.
+
+/** Receipt mở workspace — shape thống nhất cho tool + bootstrap */
+export interface WorkspaceOpenReceipt {
+  success: boolean
+  opened: boolean
+  rootPath: string
+  /** Lệnh/launcher đã dùng (explorer.exe | open | xdg-open | vscode (code) | none) */
+  method: string
+  editor?: 'explorer' | 'vscode'
+  message: string
+  error?: string
+}
+
+export async function openWorkspaceInExplorer(
+  rootPath: string,
+  editor?: 'explorer' | 'vscode',
+): Promise<WorkspaceOpenReceipt> {
+  // Validate: đường dẫn trống
+  if (!rootPath || typeof rootPath !== 'string' || !rootPath.trim()) {
+    return {
+      success: false,
+      opened: false,
+      rootPath: String(rootPath ?? ''),
+      method: 'none',
+      editor,
+      message: 'Đường dẫn workspace trống — không thể mở',
+      error: 'rootPath là bắt buộc (đường dẫn thư mục workspace)',
+    }
+  }
+
+  const resolved = path.resolve(rootPath.trim())
+  if (!existsSync(resolved)) {
+    return {
+      success: false,
+      opened: false,
+      rootPath: resolved,
+      method: 'none',
+      editor,
+      message: `Thư mục không tồn tại trên đĩa: ${resolved}`,
+      error: `Thư mục không tồn tại: ${resolved}`,
+    }
+  }
+
+  // Chọn lệnh mở theo editor + nền tảng
+  const useVscode = editor === 'vscode'
+  let command: string
+  let method: string
+  let notAvailableMsg: string
+  if (useVscode) {
+    // VS Code CLI "code" nằm trong PATH trên cả Windows/macOS/Linux
+    command = `code "${resolved}"`
+    method = 'vscode (code)'
+    notAvailableMsg = 'code không khả dụng — cần cài VS Code CLI (Command Palette → "Shell Command: Install \'code\' command in PATH")'
+  } else if (process.platform === 'win32') {
+    // explorer.exe thường thoát với code 1 NGAY CẢ KHI MỞ THÀNH CÔNG (quirk
+    // của Windows) — xử lý riêng khi đọc exit code bên dưới.
+    command = `explorer.exe "${resolved}"`
+    method = 'explorer.exe'
+    notAvailableMsg = 'explorer.exe không khả dụng'
+  } else if (process.platform === 'darwin') {
+    command = `open "${resolved}"`
+    method = 'open'
+    notAvailableMsg = 'open không khả dụng'
+  } else {
+    command = `xdg-open "${resolved}"`
+    method = 'xdg-open'
+    notAvailableMsg = 'xdg-open không khả dụng'
+  }
+
+  console.log(`[open_workspace] ${method} → ${resolved}`)
+
+  return new Promise((resolve) => {
+    const startedAt = Date.now()
+    let settled = false
+    const child = spawn(command, {
+      shell: true, // explorer.exe / code(.cmd) cần shell; path đã được quote
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+
+    const finish = (receipt: WorkspaceOpenReceipt) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(receipt)
+    }
+
+    // GUI launcher (explorer/vscode) có thể giữ process sống dai dẳng — sau
+    // 10s mà process vẫn chạy bình thường (chưa exit lỗi) coi như đã mở xong
+    // (kill launcher KHÔNG đóng cửa sổ đã mở — launcher chỉ chuyển giao việc).
+    const timer = setTimeout(() => {
+      try { child.kill() } catch { /* process đã tự thoát — bỏ qua */ }
+      finish({
+        success: true,
+        opened: true,
+        rootPath: resolved,
+        method,
+        editor,
+        message: `Đã mở workspace bằng ${method} (launcher vẫn chạy sau ${Math.round((Date.now() - startedAt) / 1000)}s — coi như thành công): ${resolved}`,
+      })
+    }, 10_000)
+
+    child.on('error', (err: Error) => {
+      // spawn lỗi (ENOENT — binary không có trên máy) → receipt graceful
+      finish({
+        success: false,
+        opened: false,
+        rootPath: resolved,
+        method,
+        editor,
+        message: `${notAvailableMsg} — không thể mở ${resolved}`,
+        error: `${notAvailableMsg}: ${err.message}`,
+      })
+    })
+
+    child.on('close', (code: number | null) => {
+      const exit = code ?? -1
+      // explorer.exe trả 1 ngay cả khi mở thành công (quirk Windows)
+      const ok = exit === 0 || (process.platform === 'win32' && !useVscode && exit === 1)
+      if (ok) {
+        finish({
+          success: true,
+          opened: true,
+          rootPath: resolved,
+          method,
+          editor,
+          message: `Đã mở workspace bằng ${method}: ${resolved}`,
+        })
+      } else if (exit === 127) {
+        // exit 127 = "command not found" từ shell unix
+        finish({
+          success: false,
+          opened: false,
+          rootPath: resolved,
+          method,
+          editor,
+          message: `${notAvailableMsg} — không thể mở ${resolved}`,
+          error: notAvailableMsg,
+        })
+      } else {
+        finish({
+          success: false,
+          opened: false,
+          rootPath: resolved,
+          method,
+          editor,
+          message: `Lệnh ${method} thoát với code ${exit} — không mở được ${resolved}`,
+          error: `${method} exit ${exit}`,
+        })
+      }
+    })
+  })
+}
+
 // ==================== P1: GET DIAGNOSTICS (LSP / tsc) ====================
 
 /**

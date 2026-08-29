@@ -28,8 +28,12 @@ const execFileAsync = promisify(execFile)
 
 export const dynamic = 'force-dynamic'
 
-/** Repo mặc định khi không có git remote nào cấu hình (user request 2026-08-29) */
-const DEFAULT_REPO_URL = 'https://github.com/nguyenquocviety2c-code/TMO'
+/**
+ * Repo mặc định khi không có git remote nào cấu hình (user request 2026-08-29).
+ * CI-6 (Task 10-b): ưu tiên env TMO_REPO_URL (kho local của Mr. Architect —
+ * vd https://github.com/vietnq130593-code/TMO), fallback repo sandbox cũ.
+ */
+const DEFAULT_REPO_URL = process.env.TMO_REPO_URL || 'https://github.com/vietnq130593-code/TMO'
 
 /** Protected directories that must never be affected by a git pull — database data lives here */
 const PROTECTED_DIRS = ['db/', 'upload/', 'qdrant-storage/', 'agent-ctx/']

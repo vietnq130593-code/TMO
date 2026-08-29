@@ -52,6 +52,8 @@ import {
   typeCheck as executeTypeCheckFn,
   testCoverage as executeTestCoverageFn,
   dbQuery as executeDbQueryFn,
+  // CI-6 / CI-4 (Task 10-b) — mở workspace bằng File Explorer / VS Code
+  openWorkspaceInExplorer as openWorkspaceInExplorerFn,
   // Dynamic skill + MCP enumeration (user request 2026-08-29)
   listSkills as executeListSkillsFn,
   readSkill as executeReadSkillFn,
@@ -59,6 +61,9 @@ import {
 } from './dev-tools'
 // v2.1 Phase 3.6 — MCP bridge (separate module)
 import { mcpCall as executeMcpCallFn } from '@/lib/mcp/mcp-bridge'
+// CI-6.4 (Task 10-b) — pipeline kiểm định 5 lớp trước push (lint→typecheck→tests→
+// smoke→secret scan→commit→push→pull verify; TỪ CHỐI push khi có bước fail)
+import { runPrePushVerification } from './pre-push-verify'
 import { isFlagEnabled, flagMode } from '@/lib/feature-flags'
 // Phase 6 (rebuild) — start_preview/stop_preview operate on the USER's ACTIVE workspace
 import { getActiveWorkspaceRoot } from '@/lib/workspace/workspace-manager'
@@ -541,6 +546,41 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           force: { type: 'boolean', description: 'true = hard-reset về phiên bản remote, DISCARD mọi thay đổi local. NGUY HIỂM — chỉ khi user yêu cầu.' },
           dry_run: { type: 'boolean', description: 'true = fetch + báo cáo khác biệt, KHÔNG apply' },
         },
+      },
+    },
+  },
+
+  // CI-6 (Task 10-b) — open_workspace: mở thư mục workspace bằng File Explorer
+  // / VS Code trên máy người dùng (bridge giữa agent và desktop user).
+  open_workspace: {
+    type: 'function',
+    function: {
+      name: 'open_workspace',
+      description: 'Mở thư mục workspace bằng File Explorer (hoặc VS Code) trên máy người dùng',
+      parameters: {
+        type: 'object',
+        properties: {
+          rootPath: { type: 'string', description: 'Đường dẫn tuyệt đối thư mục cần mở (optional — default = workspace đang active)' },
+          editor: { type: 'string', enum: ['explorer', 'vscode'], description: 'explorer = File Explorer (default), vscode = VS Code' },
+        },
+      },
+    },
+  },
+  // CI-6.4 (Task 10-b) — verify_and_push: pipeline kiểm định 5 lớp trước push.
+  verify_and_push: {
+    type: 'function',
+    function: {
+      name: 'verify_and_push',
+      description: 'Pipeline kiểm định trước push: lint → typecheck → tests → smoke → quét secret → commit → push → pull verify. Tự động TỪ CHỐI push nếu bất kỳ bước nào thất bại.',
+      parameters: {
+        type: 'object',
+        properties: {
+          commit_message: { type: 'string', description: 'Commit message (bắt buộc)' },
+          paths: { type: 'array', items: { type: 'string' }, description: 'Scoped paths cần commit (optional — default = mọi file thay đổi theo git status)' },
+          smoke_url: { type: 'string', description: 'URL smoke probe HEAD (optional — bỏ qua nếu omit)' },
+          dry_run: { type: 'boolean', description: 'true = chạy đủ các bước kiểm định nhưng KHÔNG commit/push/pull' },
+        },
+        required: ['commit_message'],
       },
     },
   },
@@ -1717,6 +1757,36 @@ export async function executeTool(
           }
         }
         result = await gitPullWorkspace(args as any)
+        break
+      }
+      // CI-6 (Task 10-b) — mở thư mục workspace bằng File Explorer / VS Code
+      case 'open_workspace': {
+        let wsRoot = typeof args.rootPath === 'string' && args.rootPath.trim() ? args.rootPath.trim() : ''
+        if (!wsRoot) {
+          // Default = workspace đang active (workspace-root resolver: DB → env → cwd)
+          wsRoot = await resolveWorkspaceRoot()
+        }
+        const editorArg = args.editor === 'vscode' ? 'vscode' : 'explorer'
+        result = await openWorkspaceInExplorerFn(wsRoot, editorArg)
+        break
+      }
+      // CI-6.4 (Task 10-b) — pipeline kiểm định 5 lớp trước push (fail → TỪ CHỐI push)
+      case 'verify_and_push': {
+        if (!isFlagEnabled('ENABLE_GIT_COMMIT')) {
+          return {
+            success: false,
+            result: 'verify_and_push tool is disabled (set ENABLE_GIT_COMMIT=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await runPrePushVerification({
+          commitMessage: typeof args.commit_message === 'string' ? args.commit_message : '',
+          paths: Array.isArray(args.paths)
+            ? args.paths.filter((p): p is string => typeof p === 'string' && p.trim() !== '')
+            : undefined,
+          smokeUrl: typeof args.smoke_url === 'string' && args.smoke_url.trim() ? args.smoke_url.trim() : undefined,
+          dryRun: args.dry_run === true,
+        })
         break
       }
       // ===== P1: diagnostics + planning + synthesis + processes + packages =====

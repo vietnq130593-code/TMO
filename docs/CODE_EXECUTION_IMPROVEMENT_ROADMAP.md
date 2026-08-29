@@ -6,7 +6,7 @@
 | **Ngày lập** | 2026-09-11 |
 | **Người lập kế hoạch** | Opus (Kiến trúc sư AI / Kỹ sư hệ thống) |
 | **Người phê duyệt** | Mr. Architect |
-| **Trạng thái** | ⏳ CHỜ PHÊ DUYỆT — mỗi hạng mục sẽ được đưa vào module SELF-DIRECTION để duyệt đúng thời điểm |
+| **Trạng thái** | 🟢 ĐANG TRIỂN KHAI — GĐ1 hoàn thành 2026-09-11; GĐ2 tiếp theo |
 | **Phạm vi** | 6 hạng mục cải tiến chức năng code, triển khai liên tục dài hạn |
 | **Workspace chuẩn** | `E:\APP\TMO-clone` (máy local Mr. Architect) |
 | **Kho lưu trữ chuẩn** | `https://github.com/vietnq130593-code/TMO` (private) |
@@ -604,15 +604,30 @@ kết quả sau cùng kèm commit hash + đề xuất tiếp theo
 
 `agent-goal-loop.ts` · `subagent-delegate.ts` · `llm.ts` · `code-team/workflow-engine.ts` · `code-team/dev-tools.ts` (todoWrite + 5 git tools + open_workspace) · `code-team/tool-executor.ts` (definitions + dispatch) · `code-team/pre-push-verify.ts` *(mới)* · `standalone-agents.ts` (Omega whitelist) · `workspace-root.ts` + `ensure-default-workspace.ts` *(mới)* · `agent-run-tracker.ts` · `openclaw/chat/route.ts` · `todos/route.ts` · `agent-run/route.ts` · `git-pull/route.ts` · `self-direction/orchestrator.ts` + `scan.ts` · `instrumentation-node.ts` · `goal-loop-worker.ts` *(mới)* · `context-compression.ts` *(mới — tách từ goal-loop)* · `prisma/schema.prisma` · `.env` / `.env.example` · `page.tsx` (AgentRunPanel todos theo run + job monitor) · `skills/tmo-code-workflow/SKILL.md` *(mới)*
 
-### D. Câu hỏi mở cho Mr. Architect (trả lời lúc phê duyệt)
+### D. Câu hỏi mở cho Mr. Architect — ĐÃ TRẢ LỜI 2026-09-11 ✅
 
-1. **CI-1**: Xác nhận unlimited áp cho MỌI agent & mọi loại tác vụ (kể cả task phi-code)? — *Kế hoạch đang hiểu là CÓ theo nguyên văn yêu cầu.*
-2. **CI-6**: Flow push thẳng `main` hay cần qua branch + review? — *Kế hoạch đang để push main sau pipeline 5 lớp; nếu muốn thêm lớp, bật `ENABLE_STAGING_BRANCH=true`.*
-3. **CI-6**: Repo cũ `nguyenquocviety2c-code/TMO` giữ làm backup (đóng băng, không xóa)?
-4. **CI-4**: Có cần PR/issue GitHub thật (tool `github_api`) hay push/pull qua git là đủ? — *Kế hoạch để DEFER.*
-5. **CI-5**: Số job chạy đồng thời tối đa trên máy local (đề xuất 2)?
-6. **CI-6.6**: `TMO_AUTO_OPEN_WORKSPACE` để `true` (mở Explorer mỗi lần activate) hay `false` (chỉ khi được yêu cầu)? — *Đề xuất `true` theo tinh thần câu hỏi của anh.*
+| # | Câu hỏi | Trả lời của Mr. Architect (CHỐT) |
+|---|---|---|
+| 1 | CI-1: Unlimited áp cho mọi agent & mọi loại tác vụ? | **MỌI AGENT** — không giới hạn token budget cho bất kỳ agents nào |
+| 2 | CI-6: Push thẳng main hay qua branch + review? | **THẲNG MAIN** sau pipeline kiểm định |
+| 3 | Vai trò 2 kho? | **ĐỘC LẬP** — `vietnq130593-code/TMO` = Omega local (qua kiểm định, push/pull bằng token mới); `nguyenquocviety2c-code/TMO` = sandbox agents push thẳng (token đầu). Không đồng bộ 2 kho |
+| 4 | CI-4: Cần PR/issue GitHub thật? | **PUSH/PULL QUA GIT LÀ ĐỦ** — github_api tool vẫn DEFER |
+| 5 | CI-5: Số job đồng thời tối đa? | **2** (`GOAL_LOOP_MAX_CONCURRENT=2`) |
+| 6 | CI-6.6: Tự mở Explorer mỗi lần activate? | **A — TỰ MỞ** (`TMO_AUTO_OPEN_WORKSPACE=true`) |
+
+> Phụ thêm (2026-09-11): Sau khi hoàn thành triển khai, thêm **1 bước review** mỗi giai đoạn trước khi sang giai đoạn sau.
+
+### E. Tiến độ triển khai
+
+| Giai đoạn | Hạng mục | Trạng thái | Ghi chú |
+|---|---|---|---|
+| GĐ1 | CI-1 Unlimited budget | ✅ HOÀN THÀNH 2026-09-11 | 0=unlimited semantics + phanh no_progress (3 chu kỳ không tool-call thành công) + getGoalLoopBudgetInfo() + intEnv fix falsy-bug; maxTokens existing 32768 giữ nguyên, schema default mới 16384 |
+| GĐ1 | CI-4 B1-B2 Verify tools | ✅ HOÀN THÀNH 2026-09-11 | ENABLE_LINT/TYPE_CHECK/LSP/COVERAGE/SCREENSHOT=true; Omega +7 tools (lint, type_check, lsp_diagnostics, test_coverage, browser_screenshot, open_workspace, verify_and_push); SENTINEL +browser_screenshot; APEX/CATALYST +verify_and_push; APEX +open_workspace |
+| GĐ1 | CI-6 B1-B4 Workspace pipeline | ✅ HOÀN THÀNH 2026-09-11 | ensureDefaultWorkspace (bootstrap + git init + remote + activate + auto-open Explorer) | open_workspace tool | pre-push-verify.ts (lint→typecheck→tests→smoke→secret-scan→commit→push→pull) | verify_and_push tool | DEFAULT_REPO_URL=TMO_REPO_URL env |
+| GĐ2 | CI-2 + CI-4 B3-B6 + CI-6 B5/B8-B9 | ⏳ Tiếp theo | |
+| GĐ3 | CI-3 Nén context | ⏳ | |
+| GĐ4 | CI-5 Durable goal loop | ⏳ | |
 
 ---
 
-*— Hết kế hoạch. Opus chờ Mr. Architect phê duyệt từng hạng mục qua module SELF-DIRECTION. Sau khi duyệt, mỗi hạng mục sẽ xuất hiện trong tab "Chờ phê duyệt" với đủ 4 phần (vấn đề/giải pháp/triển khai/thời điểm) đúng theo kế hoạch này.*
+*— Kế hoạch đã được Mr. Architect PHÊ DUYỆT TOÀN BỘ (6/6 câu hỏi đã chốt 2026-09-11). Triển khai theo giai đoạn, mỗi giai đoạn xong có 1 bước review bổ sung trước khi sang giai đoạn sau. GĐ1 hoàn thành 2026-09-11.*

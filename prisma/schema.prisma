@@ -198,7 +198,7 @@ model AgentProfile {
   provider    String   /// AI provider: "nvidia" (NVIDIA NIM only)
   model       String   /// Model ID from TOKEN THEO PROVIDER table
   temperature Float    @default(0.7) /// Generation temperature (0.0 - 2.0)
-  maxTokens   Int      @default(4096) /// Maximum output tokens
+  maxTokens   Int      @default(16384) /// Maximum output tokens (CI-1: 4096→16384 — giảm cắt ngang giữa chừng khi sinh file code lớn)
   team        String?  /// Team: "code" | "research" | null (không bắt buộc)
   position    String?  /// Vị trí trong team: TL | G1 | G2 | G3 | G4 (code) | TL | G1 | G2 | G3 (research)
   avatar      String?  /// Emoji hoặc icon name cho avatar

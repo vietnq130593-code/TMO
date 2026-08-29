@@ -105,28 +105,58 @@ function recordWorkMemory(agentId: string, sessionId: string | null, content: st
 
 // ==================== CONFIG (env override) ====================
 
+/**
+ * Parse int từ env — CHẤP NHẬN 0 HỢP LỆ (CI-1 "0 = UNLIMITED": budget caps
+ * đặt 0 nghĩa là KHÔNG GIỚI HẠN). Env không set / rỗng / không phải số hữu
+ * hạn / âm → fallback.
+ * (Fix falsy-bug: bản cũ check `v > 0` → env "0" bị nuốt thành fallback,
+ * khiến chế độ unlimited không bao giờ bật được từ env.)
+ */
 function intEnv(name: string, fallback: number): number {
+  const raw = process.env[name]
+  if (raw === undefined || raw.trim() === '') return fallback
+  const v = Number(raw)
+  return Number.isFinite(v) && v >= 0 ? Math.floor(v) : fallback
+}
+
+/**
+ * Biến thể CHỈ NHẬN số dương (giữ nguyên ngữ nghĩa intEnv cũ) — cho các cap
+ * mà 0 là vô nghĩa/nguy hiểm: timeout 0ms giết mọi LLM call ngay lập tức,
+ * ngưỡng nén 0 = nén mỗi vòng... KHÔNG áp "0 = unlimited" cho các hằng này.
+ */
+function intEnvPositive(name: string, fallback: number): number {
   const v = Number(process.env[name])
   return Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback
 }
 
-/** Số chu kỳ PLAN→EXECUTE→VERIFY→EVALUATE tối đa (mặc định 4) */
+/** CI-1 (0 = UNLIMITED) — hiển thị cap dạng "∞" khi = 0 (progress display +
+ *  báo cáo cuối). Dùng cho mọi chỗ format `X/Y chu kỳ`, `max N vòng`... */
+const fmtCap = (n: number): string => (n === 0 ? '∞' : String(n))
+
+/** Số chu kỳ PLAN→EXECUTE→VERIFY→EVALUATE tối đa (mặc định 4; 0 = ∞ — CI-1) */
 const MAX_CYCLES = intEnv('GOAL_LOOP_MAX_CYCLES', 4)
-/** Số vòng ReAct tối đa MỖI chu kỳ (mặc định 10 → tổng tối đa 40 vòng) */
+/** Số vòng ReAct tối đa MỖI chu kỳ (mặc định 10 → tổng tối đa 40 vòng; 0 = ∞ — CI-1) */
 const ITER_PER_CYCLE = intEnv('GOAL_LOOP_ITERATIONS_PER_CYCLE', 10)
 /** Budget thời gian toàn bộ loop (mặc định 30 phút — tác vụ dài hạn; align với
  *  client display safeguard 30' — E2E Test B cho thấy kimi-k3 ~100s/call nên
- *  12' cũ quá ngắn: agent đang tiến triển tốt vẫn bị cắt giữa chừng) */
+ *  12' cũ quá ngắn: agent đang tiến triển tốt vẫn bị cắt giữa chừng;
+ *  0 = ∞ — CI-1 "0 = UNLIMITED") */
 const TIME_BUDGET_MS = intEnv('GOAL_LOOP_TIME_BUDGET_MS', 30 * 60_000)
-/** Budget token toàn bộ loop (mặc định 200k — đủ ~40 vòng context lớn) */
+/** Budget token toàn bộ loop (mặc định 200k — đủ ~40 vòng context lớn;
+ *  0 = ∞ KHÔNG giới hạn — CI-1 "0 = UNLIMITED") */
 const TOKEN_BUDGET = intEnv('GOAL_LOOP_TOKEN_BUDGET', 200_000)
 /**
  * [A] REPORT RESERVE — phần token dự trữ KHÔNG cho EXECUTE dùng. Dành riêng cho
  * evaluator chu kỳ cuối + FINAL REPORT call → khi budget cạn, loop vẫn đủ token
  * tổng kết báo cáo HOÀN CHỈNH thay vì cắt ngang giữa chừng.
  * (user report 2026-09-07: "báo cáo bị cắt ngang ở phần Workflow Engine")
+ * CI-1: TOKEN_BUDGET = 0 (unlimited) → reserve bắt buộc 0, nếu không các
+ * điểm check `tokenLeft() <= reserve` sẽ so với ngưỡng ÂM và cắt loop
+ * ngay lập tức — trái ý "không giới hạn".
  */
-const REPORT_RESERVE_TOKENS = intEnv('GOAL_LOOP_REPORT_RESERVE_TOKENS', Math.max(15_000, Math.floor(TOKEN_BUDGET * 0.1)))
+const REPORT_RESERVE_TOKENS = TOKEN_BUDGET === 0
+  ? 0
+  : intEnv('GOAL_LOOP_REPORT_RESERVE_TOKENS', Math.max(15_000, Math.floor(TOKEN_BUDGET * 0.1)))
 /**
  * Timeout 1 LLM call. Mặc định 21 phút > KEY_ROTATION_BUDGET_MS (15') của
  * callLLMForAgent — E2E Test C/live-UI cho thấy khi NVIDIA rate-limit nặng,
@@ -136,7 +166,7 @@ const REPORT_RESERVE_TOKENS = intEnv('GOAL_LOOP_REPORT_RESERVE_TOKENS', Math.max
  * viễn; bound thật của loop = TIME_BUDGET_MS (30') + TOKEN_BUDGET + user cancel
  * (abortCheck xuyên suốt mọi vòng đợi cooldown).
  */
-const LLM_TIMEOUT_MS = intEnv('GOAL_LOOP_LLM_TIMEOUT_MS', 21 * 60_000)
+const LLM_TIMEOUT_MS = intEnvPositive('GOAL_LOOP_LLM_TIMEOUT_MS', 21 * 60_000)
 /** Cap ký tự của tool result khi đẩy vào messages (chống context nổ) */
 const MAX_TOOL_RESULT_CHARS = 4000
 /** Cap số messages giữa các chu kỳ (trim giữ system + goal + đuôi gần nhất) */
@@ -166,15 +196,38 @@ const VERIFY_RESULT_CHARS = 6000
  * lại được ngay (đúng ý user: "tóm tắt và phần bộ nhớ này và đọc lại").
  */
 /** Ngưỡng tổng ký tự của messages — vượt quá thì nén segment cũ */
-const COMPRESS_THRESHOLD_CHARS = intEnv('GOAL_LOOP_COMPRESS_THRESHOLD_CHARS', 50_000)
+const COMPRESS_THRESHOLD_CHARS = intEnvPositive('GOAL_LOOP_COMPRESS_THRESHOLD_CHARS', 50_000)
 /** Số message gần nhất GIỮ NGUYÊN khi nén (agent đang làm việc với chúng) */
-const KEEP_RECENT_MESSAGES = intEnv('GOAL_LOOP_KEEP_RECENT_MESSAGES', 8)
+const KEEP_RECENT_MESSAGES = intEnvPositive('GOAL_LOOP_KEEP_RECENT_MESSAGES', 8)
 /** Cap ký tự của digest message sau nén */
-const DIGEST_MAX_CHARS = intEnv('GOAL_LOOP_DIGEST_MAX_CHARS', 2500)
+const DIGEST_MAX_CHARS = intEnvPositive('GOAL_LOOP_DIGEST_MAX_CHARS', 2500)
 /** Cap ký tự transcript đưa vào LLM nén (đầu vào) */
 const COMPRESS_INPUT_CHARS = 30_000
 /** Ngưỡng tối thiểu số message nén được (dưới đây thì không đáng nén) */
 const MIN_COMPRESSIBLE_MESSAGES = 4
+
+/**
+ * CI-1 "0 = UNLIMITED" — budget HIỆN TẠI của goal-loop (pure function, không
+ * side-effect). Metrics API/UI dùng để hiển thị "∞" khi `unlimited: true`
+ * thay vì so tokensUsed với budget. Từng cap = 0 → không giới hạn cap đó.
+ */
+export function getGoalLoopBudgetInfo(): {
+  tokenBudget: number
+  timeBudgetMs: number
+  maxCycles: number
+  iterationsPerCycle: number
+  reportReserveTokens: number
+  unlimited: boolean
+} {
+  return {
+    tokenBudget: TOKEN_BUDGET,
+    timeBudgetMs: TIME_BUDGET_MS,
+    maxCycles: MAX_CYCLES,
+    iterationsPerCycle: ITER_PER_CYCLE,
+    reportReserveTokens: REPORT_RESERVE_TOKENS,
+    unlimited: TOKEN_BUDGET === 0,
+  }
+}
 
 // ==================== TYPES ====================
 
@@ -334,7 +387,7 @@ function buildContinuationDirective(v: EvalVerdict, cycle: number, cutMidWork: b
   const missing = v.missing.length > 0 ? v.missing.map(m => `- ${m}`).join('\n') : '- (trọng tài không liệt kê cụ thể — tự rà soát lại mục tiêu)'
   const plan = v.nextPlan.length > 0 ? v.nextPlan.map((p, i) => `${i + 1}. ${p}`).join('\n') : '- tự xác định bước khắc phục'
   const cut = cutMidWork ? '\n⚠️ Chu kỳ trước bị cắt giữa chừng do hết vòng lặp — công việc có thể đang dở.' : ''
-  return `[GOAL-LOOP: Chu kỳ ${cycle}/${MAX_CYCLES}] Mục tiêu CHƯA hoàn thành theo đánh giá độc lập (độ tin cậy ${Math.round(v.confidence * 100)}%).${cut}
+  return `[GOAL-LOOP: Chu kỳ ${cycle}/${fmtCap(MAX_CYCLES)}] Mục tiêu CHƯA hoàn thành theo đánh giá độc lập (độ tin cậy ${Math.round(v.confidence * 100)}%).${cut}
 
 ❌ Còn thiếu:
 ${missing}
@@ -748,7 +801,7 @@ ${evidenceLines.slice(0, 8000)}
 ĐÁNH GIÁ CỦA TRỌNG TÀI ĐỘC LẬP:
 ${verdictBlock}
 
-TÌNH TRẠNG: vòng lặp dừng sau ${cyclesAttempted}/${maxCycles} chu kỳ — lý do: ${stopReason}.
+TÌNH TRẠNG: vòng lặp dừng sau ${cyclesAttempted}/${maxCycles === 0 ? '∞' : maxCycles} chu kỳ — lý do: ${stopReason}.
 
 NHIỆM VỤ: viết BÁO CÁO CUỐI trung thực + HOÀN CHỈNH cho người dùng (tiếng Việt), theo đúng 4 phần:
 1. **ĐÃ LÀM ĐƯỢC** — từng việc cụ thể, kèm bằng chứng tool (tên tool + kết quả ngắn trích từ nhật ký)
@@ -932,16 +985,24 @@ export async function runGoalDrivenLoop(params: {
   let stopReason: GoalStopReason = 'max_cycles'
   let prevFingerprint = ''
   let noProgressCount = 0
+  /** [B4] CI-1 — số chu kỳ LIÊN TIẾP không có tool call THÀNH CÔNG nào
+   *  (stall brake). Khi budget unlimited đây là phanh an toàn chính thay budget. */
+  let stallCycles = 0
   /** Chu kỳ trước có bị cắt giữa chừng (hết vòng / hết budget) không */
   let cutMidWorkPrev = false
 
-  const timeLeft = () => TIME_BUDGET_MS - (Date.now() - startedAt)
-  const tokenLeft = () => TOKEN_BUDGET - tokensUsed
+  // CI-1 (0 = UNLIMITED): cap = 0 → không trần → Infinity. Toàn bộ điểm check
+  // `timeLeft() <= 0` / `tokenLeft() <= REPORT_RESERVE_TOKENS` (6 chỗ) tự động
+  // vô hiệu vì so sánh với Infinity luôn false — không cần sửa từng điểm chặn.
+  const timeLeft = () => (TIME_BUDGET_MS === 0 ? Infinity : TIME_BUDGET_MS - (Date.now() - startedAt))
+  const tokenLeft = () => (TOKEN_BUDGET === 0 ? Infinity : TOKEN_BUDGET - tokensUsed)
 
-  console.log(`[GoalLoop] ${agentName} bắt đầu — mục tiêu: "${userMessage.slice(0, 100)}" (max ${MAX_CYCLES} chu kỳ × ${ITER_PER_CYCLE} vòng, budget ${Math.round(TIME_BUDGET_MS / 60000)}' / ${TOKEN_BUDGET} tokens, reserve ${REPORT_RESERVE_TOKENS} tokens cho evaluate + báo cáo cuối, nén context @${COMPRESS_THRESHOLD_CHARS} chars${agentTools.includes('delegate_task') ? ', delegate_task BẬT' : ''})`)
+  console.log(`[GoalLoop] ${agentName} bắt đầu — mục tiêu: "${userMessage.slice(0, 100)}" (max ${fmtCap(MAX_CYCLES)} chu kỳ × ${fmtCap(ITER_PER_CYCLE)} vòng, budget ${TIME_BUDGET_MS === 0 ? '∞' : `${Math.round(TIME_BUDGET_MS / 60000)}'`} / ${TOKEN_BUDGET === 0 ? '∞ tokens (KHÔNG GIỚI HẠN — CI-1)' : `${TOKEN_BUDGET} tokens, reserve ${REPORT_RESERVE_TOKENS} cho evaluate + báo cáo cuối`}, nén context @${COMPRESS_THRESHOLD_CHARS} chars${agentTools.includes('delegate_task') ? ', delegate_task BẬT' : ''})`)
 
   // ================== OUTER CYCLE LOOP ==================
-  outerLoop: for (let cycle = 1; cycle <= MAX_CYCLES; cycle++) {
+  // CI-1 (0 = UNLIMITED): MAX_CYCLES = 0 → KHÔNG trần chu kỳ (loop chỉ dừng
+  // bởi complete / no-progress brake / cancel / error).
+  outerLoop: for (let cycle = 1; MAX_CYCLES === 0 || cycle <= MAX_CYCLES; cycle++) {
     if (isCancelled()) { stopReason = 'cancelled'; break }
     if (timeLeft() <= 0) { stopReason = 'time_budget'; break }
     // [A] Không bắt đầu chu kỳ mới nếu chỉ còn token reserve (dành cho final report)
@@ -956,7 +1017,7 @@ export async function runGoalDrivenLoop(params: {
       const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev) + advisoryBlock
       messages.push({ role: 'user', content: directive })
       evidence.push({ cycle, kind: 'directive', text: `Chu kỳ ${cycle}: chẩn đoán "${lastVerdict.rootCause.slice(0, 120)}" → kế hoạch mới${advisoryBlock ? ' + tư vấn Omega orchestrator' : ''}` })
-      recordAgentThought(agentSessionId, `🔄 Chu kỳ ${cycle}/${MAX_CYCLES} — chẩn đoán: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}`, totalIterations)
+      recordAgentThought(agentSessionId, `🔄 Chu kỳ ${cycle}/${fmtCap(MAX_CYCLES)} — chẩn đoán: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}`, totalIterations)
     }
 
     // ===== INNER REACT LOOP (EXECUTE + VERIFY theo protocol) =====
@@ -966,7 +1027,8 @@ export async function runGoalDrivenLoop(params: {
     let endedBy: 'no_tool_calls' | 'iteration_limit' | 'error' | 'budget' | 'cancelled' = 'no_tool_calls'
     let cycleHadLlmError = false
 
-    while (cycleIterations < ITER_PER_CYCLE) {
+    // CI-1 (0 = UNLIMITED): ITER_PER_CYCLE = 0 → KHÔNG trần vòng ReAct mỗi chu kỳ
+    while (ITER_PER_CYCLE === 0 || cycleIterations < ITER_PER_CYCLE) {
       if (isCancelled()) { endedBy = 'cancelled'; break }
       // [A] Reserve token cho evaluate cuối + final report — EXECUTE dừng ở
       // ngưỡng reserve thay vì đợi cạn kiệt về 0 (báo cáo không bị cắt giữa chừng)
@@ -1165,7 +1227,9 @@ export async function runGoalDrivenLoop(params: {
       if (isCancelled()) { endedBy = 'cancelled'; break }
       if (timeLeft() <= 0 || tokenLeft() <= REPORT_RESERVE_TOKENS) { endedBy = 'budget'; break }
 
-      if (cycleIterations >= ITER_PER_CYCLE) {
+      // CI-1: chỉ chốt 'iteration_limit' khi CÓ trần vòng (cap = 0 thì while
+      // không bao giờ tự thoát vì hết vòng — endedBy do điểm thoát thật ghi)
+      if (ITER_PER_CYCLE > 0 && cycleIterations >= ITER_PER_CYCLE) {
         endedBy = 'iteration_limit'
       }
     }
@@ -1379,6 +1443,28 @@ export async function runGoalDrivenLoop(params: {
     }
     prevFingerprint = fp
 
+    // ===== [B4] CI-1 CYCLE-LEVEL STALL BRAKE — phanh an toàn chính khi unlimited =====
+    // Khi budget = 0 (không giới hạn), budget không còn cắt được loop nữa →
+    // phanh chống chạy vô hạn là ĐÂY: đếm chu kỳ LIÊN TIẾP không có tín hiệu
+    // tiến triển. "Có tiến triển" = chu kỳ có ÍT NHẤT 1 tool call THÀNH CÔNG
+    // (bằng chứng mới xuất hiện trong evidence log). Chủ ý KHÔNG aggressive:
+    // agent thử-sai tool rồi đổi cách vẫn là tiến triển; chỉ khi CẢ chu kỳ
+    // không có tool call thành công nào mới tính là stall. 3 chu kỳ stall
+    // liên tiếp → dừng 'no_progress' + final report tổng kết (kế thừa reserve
+    // = 0 khi unlimited nên báo cáo cuối vẫn đủ chỗ viết trọn vẹn).
+    const cycleSuccessfulTools = evidence.filter(e => e.cycle === cycle && e.kind === 'tool' && e.success === true).length
+    if (cycleSuccessfulTools > 0) {
+      if (stallCycles > 0) stallCycles = 0
+    } else {
+      stallCycles++
+      console.warn(`[GoalLoop] ${agentName} STALL: chu kỳ ${cycle} không có tool call thành công nào (${stallCycles}/3 chu kỳ liên tiếp)`)
+      recordAgentThought(agentSessionId, `⚠️ Chu kỳ ${cycle} kết thúc mà không có tool call thành công nào — tín hiệu bế tắc ${stallCycles}/3 (quá 3 chu kỳ liên tiếp loop sẽ dừng để tránh chạy vô hạn)`, totalIterations)
+      if (stallCycles >= 3) {
+        stopReason = 'no_progress'
+        break
+      }
+    }
+
     // Budget check sau evaluation (đã tốn thêm 1 call)
     if (timeLeft() <= 0) { stopReason = 'time_budget'; break }
     if (tokenLeft() <= REPORT_RESERVE_TOKENS) { stopReason = 'token_budget'; break }
@@ -1434,19 +1520,19 @@ export async function runGoalDrivenLoop(params: {
     }
     if (stopReason !== 'complete') {
       const reasonText: Record<string, string> = {
-        max_cycles: `đã hết ${MAX_CYCLES} chu kỳ làm việc`,
-        time_budget: `hết budget thời gian (${Math.round(TIME_BUDGET_MS / 60000)} phút)${cyclesAttempted > cyclesDone ? ' — đang dở giữa chu kỳ ' + cyclesAttempted : ''}`,
-        token_budget: `hết budget token (${TOKEN_BUDGET} — có thể tăng qua env GOAL_LOOP_TOKEN_BUDGET)`,
-        no_progress: 'phát hiện lặp lại hành động không tiến triển',
+        max_cycles: `đã hết ${fmtCap(MAX_CYCLES)} chu kỳ làm việc`,
+        time_budget: `hết budget thời gian (${TIME_BUDGET_MS === 0 ? '∞' : `${Math.round(TIME_BUDGET_MS / 60000)} phút`})${cyclesAttempted > cyclesDone ? ' — đang dở giữa chu kỳ ' + cyclesAttempted : ''}`,
+        token_budget: `hết budget token (${TOKEN_BUDGET === 0 ? '∞' : TOKEN_BUDGET} — có thể tăng qua env GOAL_LOOP_TOKEN_BUDGET, hoặc đặt GOAL_LOOP_TOKEN_BUDGET=0 để chạy KHÔNG giới hạn)`,
+        no_progress: 'phát hiện bế tắc không tiến triển (lặp lại hành động cũ theo fingerprint, hoặc 3 chu kỳ liên tiếp không có tool call thành công nào — stall brake CI-1)',
         error: 'lỗi LLM',
       }
       if (usedFinalReport) {
         // Báo cáo tổng hợp đã có "còn thiếu" + "đề xuất" — chỉ append dòng trạng thái
-        content += `\n\n---\n⚠️ **Vòng lặp mục tiêu dừng sau ${cyclesAttempted}/${MAX_CYCLES} chu kỳ** — ${reasonText[stopReason] || stopReason}. Bạn có thể yêu cầu tiếp tục để tôi khắc phục phần còn thiếu.`
+        content += `\n\n---\n⚠️ **Vòng lặp mục tiêu dừng sau ${cyclesAttempted}/${fmtCap(MAX_CYCLES)} chu kỳ** — ${reasonText[stopReason] || stopReason}. Bạn có thể yêu cầu tiếp tục để tôi khắc phục phần còn thiếu.`
       } else {
         const missing = lastVerdict?.missing?.length ? lastVerdict.missing.map(m => `- ${m}`).join('\n') : '(chưa đánh giá được chi tiết — xem tiến trình ở trên)'
         const rootCause = lastVerdict?.rootCause ? `\n🔍 **Vấn đề xác định:** ${lastVerdict.rootCause}` : ''
-        content += `\n\n---\n⚠️ **Vòng lặp mục tiêu dừng sau ${cyclesAttempted}/${MAX_CYCLES} chu kỳ — chưa hoàn thành trọn vẹn** (${reasonText[stopReason] || stopReason}).\n❌ **Còn thiếu:**\n${missing}${rootCause}\n\nBạn có thể yêu cầu tiếp tục để tôi khắc phục phần còn thiếu.`
+        content += `\n\n---\n⚠️ **Vòng lặp mục tiêu dừng sau ${cyclesAttempted}/${fmtCap(MAX_CYCLES)} chu kỳ — chưa hoàn thành trọn vẹn** (${reasonText[stopReason] || stopReason}).\n❌ **Còn thiếu:**\n${missing}${rootCause}\n\nBạn có thể yêu cầu tiếp tục để tôi khắc phục phần còn thiếu.`
       }
     }
   }

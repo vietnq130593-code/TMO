@@ -41,16 +41,23 @@ import { isSessionCancelled } from '@/lib/agent-run-tracker'
 
 // ==================== CONFIG (env override) ====================
 
+/**
+ * Parse int từ env — CHẤP NHẬN 0 HỢP LỆ (CI-1 "0 = UNLIMITED": đặt 0 nghĩa
+ * là KHÔNG GIỚI HẠN cap tương ứng). Env không set / rỗng / không phải số hữu
+ * hạn / âm → fallback. (Fix falsy-bug: bản cũ check `v > 0` nuốt "0".)
+ */
 function intEnv(name: string, fallback: number): number {
-  const v = Number(process.env[name])
-  return Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback
+  const raw = process.env[name]
+  if (raw === undefined || raw.trim() === '') return fallback
+  const v = Number(raw)
+  return Number.isFinite(v) && v >= 0 ? Math.floor(v) : fallback
 }
 
-/** Số vòng LLM tối đa cho sub-agent (mặc định 5 — task delegate phải gọn) */
+/** Số vòng LLM tối đa cho sub-agent (mặc định 5 — task delegate phải gọn; 0 = ∞ — CI-1) */
 const SUBAGENT_MAX_ITERATIONS = intEnv('SUBAGENT_MAX_ITERATIONS', 5)
-/** Token budget riêng của MỖI lần delegate (mặc định 40k) */
+/** Token budget riêng của MỖI lần delegate (mặc định 40k; 0 = ∞ — CI-1) */
 const SUBAGENT_TOKEN_BUDGET = intEnv('SUBAGENT_TOKEN_BUDGET', 40_000)
-/** Timeout toàn bộ sub-agent run (mặc định 8 phút < time budget loop 30') */
+/** Timeout toàn bộ sub-agent run (mặc định 8 phút < time budget loop 30'; 0 = ∞ — CI-1) */
 const SUBAGENT_TIMEOUT_MS = intEnv('SUBAGENT_TIMEOUT_MS', 8 * 60_000)
 /** Cap ký tự tool result trong context CỦA SUB-AGENT */
 const SUBAGENT_TOOL_RESULT_CHARS = 4000
@@ -269,7 +276,7 @@ export async function runSubAgentForProfile(params: {
     } catch { /* fail-open — giữ whitelist mặc định */ }
     const allowedTools = effectiveBaseTools.filter(t => !DEPTH_GUARD_TOOLS.includes(t))
 
-    console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${SUBAGENT_MAX_ITERATIONS} vòng, budget ${SUBAGENT_TOKEN_BUDGET} tokens, ${allowedTools.length} tools)`)
+    console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${SUBAGENT_MAX_ITERATIONS === 0 ? '∞' : SUBAGENT_MAX_ITERATIONS} vòng, budget ${SUBAGENT_TOKEN_BUDGET === 0 ? '∞' : SUBAGENT_TOKEN_BUDGET} tokens${SUBAGENT_TIMEOUT_MS === 0 ? ', timeout ∞' : ''}, ${allowedTools.length} tools)`)
 
     // ===== Mini ReAct loop =====
     const systemPrompt = profile.instruction || `Bạn là ${profile.name} — agent chuyên trách. Hoàn thành nhiệm vụ được delegate một cách tự chủ, ngắn gọn.`
@@ -278,13 +285,15 @@ export async function runSubAgentForProfile(params: {
     ]
 
     const loopPromise = (async () => {
-      while (iterations < SUBAGENT_MAX_ITERATIONS) {
+      // CI-1 (0 = UNLIMITED): cap = 0 → KHÔNG trần tương ứng (vòng / token /
+      // thời gian). Check timeout/token chỉ áp dụng khi cap đó > 0.
+      while (SUBAGENT_MAX_ITERATIONS === 0 || iterations < SUBAGENT_MAX_ITERATIONS) {
         if (isCancelled()) { state.endedBy = 'cancelled'; return }
         if (timedOut) { return } // zombie guard — parent đã nhận timeout
-        if (Date.now() - startedAt > SUBAGENT_TIMEOUT_MS - 60_000) {
+        if (SUBAGENT_TIMEOUT_MS > 0 && Date.now() - startedAt > SUBAGENT_TIMEOUT_MS - 60_000) {
           state.forceWrapUp = true; state.wrapUpReason = 'gần hết thời gian'; break
         }
-        if (tokensUsed >= SUBAGENT_TOKEN_BUDGET) {
+        if (SUBAGENT_TOKEN_BUDGET > 0 && tokensUsed >= SUBAGENT_TOKEN_BUDGET) {
           state.forceWrapUp = true; state.wrapUpReason = 'hết token budget của sub-agent'; break
         }
 
@@ -304,7 +313,11 @@ export async function runSubAgentForProfile(params: {
               maxTokens: Math.min(profile.maxTokens, 16384), // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
               abortCheck: isCancelled,
             }),
-            Math.max(60_000, SUBAGENT_TIMEOUT_MS - (Date.now() - startedAt)),
+            // CI-1: timeout tổng = 0 (unlimited) → per-call timeout standalone
+            // 21' (align GOAL_LOOP_LLM_TIMEOUT_MS) thay vì "thời gian còn lại"
+            SUBAGENT_TIMEOUT_MS > 0
+              ? Math.max(60_000, SUBAGENT_TIMEOUT_MS - (Date.now() - startedAt))
+              : 21 * 60_000,
             `SubAgent ${profile.name} LLM`,
           )
         } catch (err) {
@@ -329,7 +342,7 @@ export async function runSubAgentForProfile(params: {
           // conclude như thường. Giờ: đẩy feedback vào transcript để LLM phát lại
           // GỌN HƠN (chia file thành nhiều lần ghi qua file_write append) — tối đa 2 lần.
           const brokenHint = detectBrokenToolCallHint(result.content)
-          if (brokenHint && parseFailNudges < 2 && !timedOut && iterations < SUBAGENT_MAX_ITERATIONS) {
+          if (brokenHint && parseFailNudges < 2 && !timedOut && (SUBAGENT_MAX_ITERATIONS === 0 || iterations < SUBAGENT_MAX_ITERATIONS)) {
             parseFailNudges++
             transcript.push({ role: 'assistant', content: result.content })
             transcript.push({ role: 'tool', content: brokenHint })
@@ -339,7 +352,7 @@ export async function runSubAgentForProfile(params: {
           // kiểm tra...) mà sub-agent CHƯA chạy tool nào → không chấp nhận kết
           // luận ngay — ép 1 vòng thu thập bằng chứng thật.
           const taskNeedsEvidence = /đọc|read|review|phân tích|analyz|kiểm tra|verify|lint|test|file|source|code|mã nguồn/i.test(task)
-          if (!nudgedOnce && taskNeedsEvidence && evidence.length === 0 && iterations < SUBAGENT_MAX_ITERATIONS && !timedOut) {
+          if (!nudgedOnce && taskNeedsEvidence && evidence.length === 0 && (SUBAGENT_MAX_ITERATIONS === 0 || iterations < SUBAGENT_MAX_ITERATIONS) && !timedOut) {
             nudgedOnce = true
             transcript.push({ role: 'assistant', content: result.content })
             transcript.push({
@@ -396,19 +409,25 @@ export async function runSubAgentForProfile(params: {
       // timeout — trước đây dead-code vì endedBy khởi tạo 'error' (fix ở trên).
       if (state.endedBy !== 'concluded' && state.endedBy !== 'cancelled' && state.endedBy !== 'error' && state.endedBy !== 'timeout') {
         state.forceWrapUp = true
-        if (!state.wrapUpReason) state.wrapUpReason = `hết ${SUBAGENT_MAX_ITERATIONS} vòng`
+        if (!state.wrapUpReason) state.wrapUpReason = `hết ${SUBAGENT_MAX_ITERATIONS === 0 ? '∞' : SUBAGENT_MAX_ITERATIONS} vòng`
         state.endedBy = state.wrapUpReason.includes('token')
           ? 'token_budget'
           : state.wrapUpReason.includes('thời gian') ? 'timeout' : 'iteration_limit'
       }
     })()
 
-    await withTimeout(loopPromise, SUBAGENT_TIMEOUT_MS, `SubAgent ${profile.name} loop`)
-      .catch(err => {
-        timedOut = true // loop vẫn chạy nền — sẽ tự dừng ở checkpoint gần nhất
-        if (state.endedBy === 'error' && !state.errorMessage) state.errorMessage = err instanceof Error ? err.message : String(err)
-        state.endedBy = state.endedBy === 'concluded' ? state.endedBy : 'timeout'
-      })
+    if (SUBAGENT_TIMEOUT_MS > 0) {
+      await withTimeout(loopPromise, SUBAGENT_TIMEOUT_MS, `SubAgent ${profile.name} loop`)
+        .catch(err => {
+          timedOut = true // loop vẫn chạy nền — sẽ tự dừng ở checkpoint gần nhất
+          if (state.endedBy === 'error' && !state.errorMessage) state.errorMessage = err instanceof Error ? err.message : String(err)
+          state.endedBy = state.endedBy === 'concluded' ? state.endedBy : 'timeout'
+        })
+    } else {
+      // CI-1 (0 = UNLIMITED): không trần thời gian — đợi loop tự kết thúc
+      // (concluded / error / cancelled, hoặc brake token/iteration nếu cap đó > 0)
+      await loopPromise
+    }
 
     if (isCancelled()) state.endedBy = 'cancelled'
     // Zombie guard: nếu loop nền vẫn kịp conclude SAU timeout (race hiếm),
@@ -418,7 +437,8 @@ export async function runSubAgentForProfile(params: {
     let report = state.lastContent
     const needWrapUp = state.forceWrapUp || state.endedBy === 'iteration_limit' || state.endedBy === 'token_budget' || state.endedBy === 'timeout' || (state.endedBy === 'error' && (state.lastContent || evidence.length > 0))
 
-    if (needWrapUp && !isCancelled() && !timedOut && tokensUsed < SUBAGENT_TOKEN_BUDGET + 5_000) {
+    // CI-1: token budget = 0 (unlimited) → luôn cho wrap-up (không so với 0 + 5k)
+    if (needWrapUp && !isCancelled() && !timedOut && (SUBAGENT_TOKEN_BUDGET === 0 || tokensUsed < SUBAGENT_TOKEN_BUDGET + 5_000)) {
       // 1 call ép tổng kết ngắn — parent nhận báo cáo cô đọng thay vì
       // lastContent dài (đây là chìa khóa context isolation).
       try {

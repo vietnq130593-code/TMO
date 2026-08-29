@@ -262,6 +262,17 @@ LEARNING & MEMORY
       // user yêu cầu ("hãy bật tool X cho agent Y") + đọc/sửa SKILL.md filesystem.
       // CHỈ Omega có tool này — Code Team 5 agent KHÔNG (tránh tranh quyền QTV).
       'manage_tools',
+      // CI-4 B2 (Task 10-b) — verify tools cho Omega: lint/type_check/
+      // lsp_diagnostics/test_coverage (kiểm định code), browser_screenshot
+      // (verify UI), open_workspace (mở thư mục workspace trên máy user),
+      // verify_and_push (pipeline kiểm định 5 lớp trước push — CI-6.4).
+      'lint',
+      'type_check',
+      'lsp_diagnostics',
+      'test_coverage',
+      'browser_screenshot',
+      'open_workspace',
+      'verify_and_push',
     ],
   },
 ]
