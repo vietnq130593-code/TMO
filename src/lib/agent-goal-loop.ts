@@ -823,6 +823,28 @@ export async function runGoalDrivenLoop(params: {
     : ['delegate_task', 'escalate_problem', 'dispatch_agent', 'create_agent']
   const hasDelegation = effectiveTools.includes('delegate_task')
   const hasOrchestration = effectiveTools.includes('escalate_problem') || effectiveTools.includes('dispatch_agent') || effectiveTools.includes('create_agent')
+
+  // ===== A6 · EPISODIC MEMORY — PRE-ACT RETRIEVAL (nhịp 1 learning loop) =====
+  // Trước khi hành động: lessons đã học + cảnh báo lỗi chưa resolve + episodes
+  // tương tự → inject vào system prompt. Lesson confidence ≥ 0.7 auto-apply
+  // (appliedLessonIds) → được VALIDATE sau run (nhịp 3 EVALUATE).
+  // Timeout 4s + fail-open tuyệt đối — episodic memory không được làm chậm
+  // cold-start hay làm hỏng response của agent.
+  let preActBlock = ''
+  let appliedLessonIds: string[] = []
+  try {
+    const { buildPreActContext } = await import('@/lib/episodic-memory/preact')
+    const preAct = await Promise.race([
+      buildPreActContext({ agentName, task: userMessage }),
+      new Promise<null>(resolve => setTimeout(() => resolve(null), 4000)),
+    ])
+    if (preAct && preAct.promptBlock) {
+      preActBlock = preAct.promptBlock
+      appliedLessonIds = preAct.appliedLessonIds
+      console.log(`[GoalLoop] ${agentName} PRE-ACT episodic: ${preAct.lessons.length} lessons, ${preAct.unresolvedWarnings.length} cảnh báo lỗi chưa resolve, ${appliedLessonIds.length} lesson auto-apply`)
+    }
+  } catch { /* fail-open — không có ký ức thì chạy như thường */ }
+
   const fullSystemPrompt =
     systemPrompt +
     buildGoalProtocol() +
@@ -830,7 +852,8 @@ export async function runGoalDrivenLoop(params: {
     (hasOrchestration
       ? buildOrchestrationProtocol(effectiveTools.includes('dispatch_agent'), effectiveTools.includes('create_agent'))
       : '') +
-    buildConfidenceProtocol()
+    buildConfidenceProtocol() +
+    preActBlock
 
   // ===== Thought Process tracking — 1 run cho toàn bộ goal loop =====
   // Task 20-c: dbPersistBy 'caller' → tracker KHÔNG insert AgentRunRecord khi
@@ -1503,6 +1526,42 @@ export async function runGoalDrivenLoop(params: {
         .catch(() => { /* fail-open */ })
     } catch { /* fail-open */ }
   }
+
+  // ===== A6 · EPISODIC MEMORY — CONSOLIDATE (pipeline A.5, nhịp 4) =====
+  // Sau mỗi run: ghi Episode (goal + actions + errors + outcome) vào Neo4j
+  // graph + Qdrant semantic index + SQLite mirror; ErrorOccurrence được phân
+  // loại root cause (taxonomy R1-R6); lesson sinh/merge từ lỗi đã resolve;
+  // lessons PRE-ACT đã áp dụng được validate theo outcome (times_validated
+  // /times_failed, confidence ±). Fire-and-forget, fail-open.
+  try {
+    const { recordEpisodeFromRun, mapOutcome } = await import('@/lib/episodic-memory/recorder')
+    const episodeToolEvidence = evidence
+      .filter(e => e.kind === 'tool')
+      .map(e => ({ cycle: e.cycle, tool: e.tool ?? 'unknown', success: e.success === true, text: e.text ?? '' }))
+    const episodeFailures = episodeToolEvidence.filter(e => !e.success).length
+    const episodeOutcome = mapOutcome(stopReason, episodeFailures)
+    void recordEpisodeFromRun({
+      agentName,
+      goal: userMessage,
+      sessionId: agentSessionId,
+      outcome: episodeOutcome,
+      confidence: lastVerdict?.confidence ?? 0.5,
+      stopReason,
+      cycles: cyclesAttempted,
+      tokensUsed,
+      toolCalls: totalToolCalls,
+      startedAt: new Date(startedAt),
+      endedAt: new Date(),
+      toolEvidence: episodeToolEvidence,
+      appliedLessonIds,
+    }).then(r => {
+      if (r.error) {
+        console.warn(`[GoalLoop] ${agentName} episodic memory ghi lỗi: ${r.error}`)
+      } else if (r.episodeId) {
+        console.log(`[GoalLoop] ${agentName} episodic memory: episode ${r.episodeId} (${episodeOutcome}, ${r.errorsRecorded} errors, ${r.lessonsCreated} lesson mới, ${r.lessonsMerged} merge, ${r.similarEpisodesLinked} SIMILAR_TO, validate ${r.lessonsValidated}✓/${r.lessonsFailed}✗)`)
+      }
+    }).catch(() => { /* fail-open — episodic memory không được làm hỏng response */ })
+  } catch { /* fail-open */ }
 
   return {
     content,

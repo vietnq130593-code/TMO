@@ -1431,3 +1431,80 @@ model ToolConfig {
   updatedBy   String?
   updatedAt   DateTime @updatedAt
 }
+
+/// ============================================================
+/// EPISODIC MEMORY (A6 — file upload 2026-08-29)
+/// Mirror SQLite bền của Episode/Lesson trên Neo4j (graph primary).
+/// Episodic Neo4j layer là nguồn sự thật quan hệ (Episode-CONTAINS->Action,
+/// Lesson-ABOUT->Concept...); 2 model này giữ data khi Neo4j drift/reset +
+/// cho dashboard UI đọc nhanh. Ghi qua raw-SQL bridge (metrics-db pattern)
+/// vì Prisma client trên dev server stale sau db:push.
+/// ============================================================
+
+/// EpisodeRecord — mirror node Episode (Neo4j) cho 1 task run hoàn chỉnh.
+/// "Đã xảy ra gì, tôi làm gì, kết quả ra sao" — trải nghiệm, KHÔNG phải tri thức.
+model EpisodeRecord {
+  id             String    @id // "ep_<ts>_<rand>" — trùng id Neo4j + Qdrant point
+  title          String
+  goal           String
+  contextSummary String
+  /// SUCCESS | FAILURE | PARTIAL | ABANDONED
+  outcome        String
+  /// Độ tin của việc đánh giá outcome (evaluator confidence)
+  confidence     Float     @default(0.5)
+  /// OMEGA | BOLT | SENTINEL...
+  agent          String
+  sessionId      String?
+  /// 0-1 — dùng cho decay (×0.9/30 ngày không đụng) & retrieval ranking
+  importance     Float     @default(0.8)
+  accessCount    Int       @default(0)
+  cycles         Int?
+  tokensUsed     Int?
+  toolCalls      Int?
+  toolFailures   Int?
+  /// complete | max_cycles | time_budget | token_budget | no_progress | cancelled | error
+  stopReason     String?
+  /// JSON array Action nodes: [{sequence, tool, inputSummary, reasoning, result, errorRef}]
+  actionsJson    String?
+  /// JSON array ErrorOccurrence: [{id, rawMessage, category, rootCause, resolved, fixSummary}]
+  errorsJson     String?
+  /// JSON array lesson ids yielded
+  lessonsJson    String?
+  /// Qdrant point id (collection theopus_episodes)
+  embeddingId    String?
+  startedAt      DateTime  @default(now())
+  endedAt        DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([agent])
+  @@index([outcome])
+  @@index([createdAt])
+}
+
+/// LessonRecord — mirror node Lesson (Neo4j) — bài học TỒN TẠI VĨNH VIỄN
+/// (không bao giờ decay). "Khi [trigger], nên [fix] vì [root_cause]".
+model LessonRecord {
+  id               String   @id // "lesson_<rand>" — trùng id Neo4j
+  statement        String
+  triggerCondition String?
+  /// R1..R6 taxonomy code
+  rootCause        String?
+  /// JSON array string: ["refactor","typescript",...]
+  appliesTo        String?
+  /// SELF_DERIVED | USER_TAUGHT | SUBAGENT_REPORT
+  source           String   @default("SELF_DERIVED")
+  /// ≥0.7 auto-apply | <0.4 cần user review
+  confidence       Float    @default(0.6)
+  timesApplied     Int      @default(0)
+  timesValidated   Int      @default(0)
+  timesFailed      Int      @default(0)
+  needsReview      Boolean  @default(false)
+  /// Qdrant point id (dùng cho similarity merge check > 0.85)
+  embeddingId      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([confidence])
+  @@index([needsReview])
+  @@index([rootCause])
+}

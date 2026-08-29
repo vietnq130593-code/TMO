@@ -63,6 +63,8 @@ import { DiffViewer } from '@/components/code-editor/DiffViewer'
 import { PendingEditModal } from '@/components/code-editor/PendingEditModal'
 import { SearchPanel } from '@/components/code-editor/SearchPanel'
 import { RuntimeMetricsPanel } from '@/components/analytics/runtime-metrics-panel'
+// A6: Episodic Memory Panel — episodes/lessons/error taxonomy (Neo4j + Qdrant + SQLite mirror)
+import { EpisodicMemoryPanel } from '@/components/analytics/episodic-memory-panel'
 // 21-c: Tools Manager Dialog — quản lý tool-access theo agent + xem/sửa nội dung tool/skill
 import { ToolsManagerDialog } from '@/components/tools/tools-manager-dialog'
 // Type-only (erased lúc build — không kéo 3d-force-graph vào bundle chính)
@@ -18644,6 +18646,18 @@ export default function Home() {
                       </div>
                       <div className="mt-3">
                         <RuntimeMetricsPanel />
+                      </div>
+                    </div>
+                    <div className="mb-5">
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-1.5 rounded-lg bg-gradient-to-br from-teal-500 to-emerald-600"><Brain className="h-4 w-4 text-white" /></div>
+                        <div>
+                          <h3 className="text-sm font-semibold tracking-tight text-stone-100">🧠 Episodic Memory — học từ trải nghiệm</h3>
+                          <p className="text-[11px] text-stone-400">Episodes · lessons · error taxonomy — Neo4j + Qdrant, poll 15s</p>
+                        </div>
+                      </div>
+                      <div className="mt-3">
+                        <EpisodicMemoryPanel />
                       </div>
                     </div>
                     <AnalyticsSection data={{

@@ -1,0 +1,324 @@
+/**
+ * EPISODE RECORDER — pipeline A.5 (tích hợp vào agent runtime)
+ *
+ * Sau mỗi task/run kết thúc (goal-loop gọi, fire-and-forget fail-open):
+ *
+ *   1. Tóm tắt: goal, các action chính, outcome, lỗi gặp
+ *   2. Embed summary → Qdrant (collection theopus_episodes)
+ *   3. Tìm top-3 episode tương tự (cosine > 0.8) → tạo [:SIMILAR_TO]
+ *   4. Ghi Episode + Action + ErrorOccurrence nodes vào Neo4j (+ SQLite mirror)
+ *   5. Nếu có lỗi ĐÃ resolve → sinh/cập nhật Lesson (consolidateLesson)
+ *   6. Nếu lỗi thuộc pattern đã có Lesson → times_validated/times_failed
+ *      (validateAppliedLessons — PRE-ACT đã áp lesson cho run này)
+ *   7. Link Episode/Lesson sang KB semantic (INVOLVES/ABOUT)
+ *
+ * ErrorOccurrence sinh từ tool-evidence fail của goal-loop:
+ *   - root_cause: classifyRootCause (B.3) trên raw message
+ *   - resolved: có tool call THÀNH CÔNG sau lỗi đó (fix_summary = action
+ *     thành công kế tiếp cùng tool — heuristic, không tốn LLM)
+ *
+ * Bước 2 lộ trình A6: bắt đầu chỉ với GHI (chưa cần đọc) — PRE-ACT đọc
+ * ở preact.ts, bật riêng (bước 3).
+ */
+
+import { classifyRootCause } from './taxonomy'
+import {
+  writeEpisodeGraph,
+  linkEpisodeToKB,
+  extractContextEntities,
+} from './episodic-neo4j'
+import {
+  upsertEpisodeEmbedding,
+  searchSimilarEpisodes,
+} from './episode-store'
+import {
+  upsertEpisodeRecord,
+} from './episodic-db'
+import {
+  consolidateLesson,
+  validateAppliedLessons,
+} from './lessons'
+import {
+  EPISODIC_THRESHOLDS,
+  type ActionNode,
+  type EpisodeNode,
+  type EpisodeOutcome,
+  type ErrorOccurrenceNode,
+  type RecordEpisodeInput,
+  type RecordEpisodeResult,
+  type RootCauseCode,
+} from './types'
+
+// ==================== OUTCOME MAPPING ====================
+
+/** Map stopReason goal-loop → EpisodeOutcome (A.2) */
+export function mapOutcome(stopReason: string, toolFailures: number): EpisodeOutcome {
+  switch (stopReason) {
+    case 'complete': return 'SUCCESS'
+    case 'cancelled': return 'ABANDONED'
+    case 'error': return toolFailures > 0 ? 'FAILURE' : 'FAILURE'
+    case 'no_progress': return 'FAILURE'
+    case 'max_cycles': return toolFailures > 0 ? 'FAILURE' : 'PARTIAL'
+    case 'time_budget':
+    case 'token_budget': return 'PARTIAL'
+    default: return 'PARTIAL'
+  }
+}
+
+/** Importance khởi đầu (A.2) — lỗi là dữ liệu quý: FAILURE > SUCCESS */
+function initialImportance(outcome: EpisodeOutcome, toolCalls: number, errors: number): number {
+  let imp = 0.8
+  if (outcome === 'FAILURE') imp = 0.85
+  if (outcome === 'ABANDONED') imp = 0.4
+  if (outcome === 'PARTIAL') imp = 0.7
+  if (toolCalls >= 10) imp += 0.05   // episode dài — nhiều chi tiết
+  if (errors >= 3) imp += 0.05       // nhiều lỗi — nhiều dữ liệu học
+  return Math.min(1, imp)
+}
+
+// ==================== PIPELINE A.5 ====================
+
+/**
+ * Ghi 1 episode hoàn chỉnh từ goal-loop run. Mọi bước fail-open — trả
+ * result kèm error string để caller log, KHÔNG throw (recorder không được
+ * làm hỏng response của agent).
+ */
+export async function recordEpisodeFromRun(input: RecordEpisodeInput): Promise<RecordEpisodeResult> {
+  const result: RecordEpisodeResult = {
+    episodeId: '',
+    lessonsCreated: 0, lessonsMerged: 0,
+    lessonsValidated: 0, lessonsFailed: 0,
+    similarEpisodesLinked: 0, errorsRecorded: 0,
+  }
+  try {
+    // ── Bước 1: Tóm tắt run — actions + errors từ tool evidence ──
+    const toolEvents = input.toolEvidence.slice(0, 60) // cap防爆 graph
+    const actions: ActionNode[] = []
+    const errors: ErrorOccurrenceNode[] = []
+    const resolvedBy: Record<string, string> = {}
+    let seq = 0
+
+    for (const ev of toolEvents) {
+      seq++
+      const actionId = `act_${Date.now().toString(36)}_${seq.toString(36)}_${Math.random().toString(36).slice(2, 6)}`
+      if (ev.success) {
+        actions.push({
+          id: actionId,
+          sequence: seq,
+          tool: ev.tool,
+          inputSummary: ev.text.slice(0, 300),
+          result: 'SUCCESS',
+          errorRef: null,
+        })
+        // Heuristic resolved: action thành công SAU error cùng tool → error này
+        // được fix bởi action này (đi ngược lên tìm error cùng tool chưa gán)
+        for (let i = errors.length - 1; i >= 0; i--) {
+          const err = errors[i]
+          if (err.tool === ev.tool && !err.resolved && !resolvedBy[err.id]) {
+            err.resolved = true
+            err.fixSummary = `Tool "${ev.tool}" thành công sau lỗi: ${ev.text.slice(0, 160)}`
+            resolvedBy[err.id] = actionId
+            break
+          }
+        }
+      } else {
+        // Tool fail → classify root cause (B.3) + ErrorOccurrence node
+        const rawMessage = ev.text.slice(0, 600) || `(tool ${ev.tool} fail — không có message)`
+        const cls = classifyRootCause({ rawMessage, tool: ev.tool })
+        const errorId = `err_${Date.now().toString(36)}_${seq.toString(36)}_${Math.random().toString(36).slice(2, 6)}`
+        errors.push({
+          id: errorId,
+          rawMessage,
+          category: cls.manifestation ?? 'unknown',
+          rootCause: cls.rootCause,
+          manifestation: cls.manifestation,
+          tool: ev.tool,
+          occurredAt: new Date(),
+          resolved: false,
+          fixSummary: null,
+        })
+        actions.push({
+          id: actionId,
+          sequence: seq,
+          tool: ev.tool,
+          inputSummary: ev.text.slice(0, 300),
+          result: 'FAIL',
+          errorRef: errorId,
+        })
+        result.errorsRecorded++
+      }
+    }
+    // Nếu run thành công → mọi lỗi còn lại coi như đã resolve (agent vượt qua)
+    if (input.outcome === 'SUCCESS') {
+      for (const err of errors) {
+        if (!err.resolved) {
+          err.resolved = true
+          err.fixSummary = err.fixSummary ?? 'Run kết thúc SUCCESS — lỗi đã được khắc phục trong tiến trình'
+        }
+      }
+    }
+
+    const contextSummary = buildContextSummary(input, errors)
+
+    const episode: EpisodeNode = {
+      id: `ep_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      title: input.goal.slice(0, 140) || '(task không tên)',
+      goal: input.goal,
+      contextSummary,
+      startedAt: input.startedAt,
+      endedAt: input.endedAt,
+      outcome: input.outcome,
+      confidence: Math.max(0, Math.min(1, input.confidence)),
+      agent: input.agentName,
+      sessionId: input.sessionId ?? null,
+      importance: initialImportance(input.outcome, input.toolCalls, errors.length),
+      accessCount: 0,
+      lastAccessed: new Date(),
+      embeddingId: null,
+      cycles: input.cycles,
+      tokensUsed: input.tokensUsed,
+      toolCalls: input.toolCalls,
+      toolFailures: errors.length,
+      stopReason: input.stopReason,
+    }
+    result.episodeId = episode.id
+
+    // ── Bước 2: Embed summary → Qdrant ──
+    const embeddingId = await upsertEpisodeEmbedding({
+      episodeId: episode.id,
+      summaryText: `${episode.title}\n${contextSummary}\nOutcome: ${episode.outcome}\nLỗi chính: ${errors.slice(0, 3).map(e => e.rawMessage.slice(0, 120)).join(' | ')}`,
+      payload: {
+        title: episode.title,
+        goal: episode.goal.slice(0, 500),
+        outcome: episode.outcome,
+        agent: episode.agent,
+        session_id: episode.sessionId ?? '',
+        importance: episode.importance,
+        stop_reason: episode.stopReason ?? '',
+        created_at: new Date().toISOString(),
+      },
+    })
+    episode.embeddingId = embeddingId
+
+    // ── Bước 3: Tìm top-3 episode tương tự → [:SIMILAR_TO] ──
+    // mode='passage': summary↔summary — cùng input type, score đối xứng
+    // point-to-point (query↔passage cross-type bị tụt ~5-8% dưới ngưỡng 0.8)
+    const similar = await searchSimilarEpisodes({
+      queryText: `${episode.title}\n${contextSummary}`,
+      topK: 3,
+      minScore: EPISODIC_THRESHOLDS.episodeSimilarity,
+      mode: 'passage',
+    }).catch(() => [])
+    // Loại chính nó (upsert vừa ghi có thể match)
+    const similarFiltered = similar.filter(s => s.episodeId !== episode.id)
+    result.similarEpisodesLinked = similarFiltered.length
+
+    // ── Bước 4: Ghi graph Neo4j + SQLite mirror ──
+    const yieldedLessonIds: string[] = []
+
+    // ── Bước 5: Lỗi đã resolve → sinh/merge Lesson ──
+    for (const err of errors.slice(0, 5)) {
+      if (!err.resolved || !err.fixSummary) continue
+      const consolidated = await consolidateLesson({
+        rootCause: err.rootCause as RootCauseCode,
+        triggerCondition: buildTriggerCondition(err, input),
+        fixSummary: err.fixSummary.slice(0, 200),
+        appliesTo: [err.tool ?? 'general', ...extractAppliesTags(input.goal)],
+        errorId: err.id,
+        episodeId: episode.id,
+      }).catch(() => null)
+      if (consolidated?.lesson) {
+        yieldedLessonIds.push(consolidated.lesson.id)
+        if (consolidated.status === 'created') result.lessonsCreated++
+        if (consolidated.status === 'merged') result.lessonsMerged++
+      }
+    }
+
+    // ── Bước 6: Validate lessons PRE-ACT đã áp dụng (EVALUATE nhịp 3) ──
+    const validation = await validateAppliedLessons(
+      input.appliedLessonIds,
+      input.outcome === 'SUCCESS'
+    ).catch(() => null)
+    if (validation) {
+      result.lessonsValidated = validation.validated
+      result.lessonsFailed = validation.failed
+    }
+
+    // Ghi graph (episode + actions + errors + rels) — sau consolidate để có
+    // YIELDED lesson ids đủ
+    const graphOk = await writeEpisodeGraph({
+      episode,
+      actions,
+      errors: errors.map(e => ({
+        id: e.id, rawMessage: e.rawMessage, category: e.category,
+        rootCause: e.rootCause, manifestation: e.manifestation ?? null,
+        occurredAt: e.occurredAt, resolved: e.resolved, fixSummary: e.fixSummary ?? null,
+      })),
+      resolvedBy,
+      yieldedLessonIds,
+      similarTo: similarFiltered.map(s => ({ episodeId: s.episodeId, score: s.score })),
+    })
+
+    // SQLite mirror (fallback + dashboard)
+    await upsertEpisodeRecord({
+      episode,
+      actionsJson: JSON.stringify(actions.slice(0, 40)),
+      errorsJson: JSON.stringify(errors.map(e => ({
+        id: e.id, rawMessage: e.rawMessage, category: e.category,
+        rootCause: e.rootCause, resolved: e.resolved, fixSummary: e.fixSummary,
+      }))),
+      lessonsJson: JSON.stringify(yieldedLessonIds),
+    }).catch(err => {
+      console.error('[Episodic] mirror EpisodeRecord failed:', err instanceof Error ? err.message : String(err))
+    })
+
+    // ── Bước 7: Link sang KB semantic (INVOLVES / ABOUT) ──
+    const kbLinked = await linkEpisodeToKB({
+      episodeId: episode.id,
+      text: `${input.goal} ${contextSummary}`,
+      lessonIds: yieldedLessonIds,
+    }).catch(() => 0)
+
+    console.log(
+      `[Episodic] Episode ${episode.id} ghi xong — outcome=${episode.outcome}, ${actions.length} actions, ${errors.length} errors (${errors.filter(e => e.resolved).length} resolved), ${result.lessonsCreated} lesson mới, ${result.lessonsMerged} merge, ${result.similarEpisodesLinked} SIMILAR_TO${graphOk ? '' : ' [Neo4j FAIL — mirror SQLite vẫn có]'}${kbLinked > 0 ? `, ${kbLinked} KB link` : ''}`
+    )
+    return result
+  } catch (err) {
+    result.error = err instanceof Error ? err.message : String(err)
+    console.error('[Episodic] recordEpisodeFromRun failed:', result.error)
+    return result
+  }
+}
+
+// ==================== HELPERS ====================
+
+/** Context summary (A.5 bước 1) — gọn cho embed + hiển thị */
+function buildContextSummary(input: RecordEpisodeInput, errors: ErrorOccurrenceNode[]): string {
+  const parts = [
+    `Agent ${input.agentName} thực hiện task với ${input.cycles} chu kỳ, ${input.toolCalls} tool calls, ${input.tokensUsed} tokens.`,
+    `Kết thúc vì: ${input.stopReason}. Outcome: ${input.outcome} (confidence ${(input.confidence * 100).toFixed(0)}%).`,
+  ]
+  const failedTools = input.toolEvidence.filter(e => !e.success).map(e => e.tool)
+  if (failedTools.length > 0) {
+    parts.push(`Tools gặp lỗi: ${Array.from(new Set(failedTools)).join(', ')}.`)
+  }
+  if (errors.length > 0) {
+    parts.push(`Root causes: ${Array.from(new Set(errors.map(e => e.rootCause))).join(', ')}.`)
+  }
+  const okTools = input.toolEvidence.filter(e => e.success).map(e => e.tool)
+  if (okTools.length > 0) {
+    parts.push(`Tools dùng tốt: ${Array.from(new Set(okTools)).slice(0, 10).join(', ')}.`)
+  }
+  return parts.join(' ')
+}
+
+/** Trigger condition cho lesson — mô tả hoàn cảnh gặp lỗi */
+function buildTriggerCondition(err: ErrorOccurrenceNode, input: RecordEpisodeInput): string {
+  if (err.tool) return `dùng tool ${err.tool} trong task kiểu "${input.goal.slice(0, 80)}" và gặp lỗi ${err.category}`
+  return `thao tác trong task kiểu "${input.goal.slice(0, 80)}" gặp lỗi ${err.category}`
+}
+
+/** Tags áp dụng từ goal text — từ kỹ thuật dài ≥ 4 ký tự */
+function extractAppliesTags(goal: string): string[] {
+  return goal.toLowerCase().split(/[^\p{L}\p{N}#+.-]+/u).filter(w => w.length >= 4 && w.length <= 24).slice(0, 5)
+}
