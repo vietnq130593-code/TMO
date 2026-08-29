@@ -5,6 +5,11 @@
  *                                        trước), mỗi session kèm summary + todos.
  * GET  /api/todos?sessionId=xxx       — Chi tiết 1 session: todos ordered +
  *                                        byStatus + progress %.
+ * GET  /api/todos?runId=xxx           — CI-2 (Task 11-a): todo của ĐÚNG 1 run
+ *                                        (orderBy position asc) — panel của
+ *                                        task hiện tại chỉ thấy todo run này,
+ *                                        không trộn task cũ. Kết hợp thêm
+ *                                        &sessionId= để scope chặt hơn.
  * DELETE /api/todos?sessionId=xxx     — Xóa toàn bộ todo của 1 session.
  *
  * Dữ liệu do agent ghi qua tool todo_write (Team Code workflow tự động
@@ -36,6 +41,7 @@ function summarize(todos: Array<{ status: string }>): TodoSummary {
 function serializeTodo(t: {
   id: string; sessionId: string; agentRole: string | null; content: string;
   status: string; priority: string; parentId: string | null; position: number;
+  runId: string | null; archivedAt: Date | null;
   createdAt: Date; updatedAt: Date;
 }) {
   return {
@@ -47,6 +53,9 @@ function serializeTodo(t: {
     priority: t.priority,
     parentId: t.parentId,
     position: t.position,
+    // CI-2 (Task 11-a) — run scope + thời điểm lưu trữ (UI 11-b lọc/ẩn archived)
+    runId: t.runId,
+    archivedAt: t.archivedAt,
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
   }
@@ -55,6 +64,25 @@ function serializeTodo(t: {
 export async function GET(request: NextRequest) {
   try {
     const sessionId = request.nextUrl.searchParams.get('sessionId')
+    // CI-2 (Task 11-a) — filter theo run: todo của ĐÚNG 1 agent run (per-task
+    // isolation). Dùng riêng hoặc kèm sessionId. Không có runId → giữ nguyên
+    // hành vi cũ (toàn bộ theo session).
+    const runId = request.nextUrl.searchParams.get('runId')
+
+    // ===== CI-2 — Chi tiết 1 run (orderBy position asc) =====
+    if (runId) {
+      const todos = await db.todo.findMany({
+        where: sessionId ? { sessionId, runId } : { runId },
+        orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+      })
+      return NextResponse.json({
+        ok: true,
+        ...(sessionId ? { sessionId } : {}),
+        runId,
+        summary: summarize(todos),
+        todos: todos.map(serializeTodo),
+      })
+    }
 
     // ===== Chi tiết 1 session =====
     if (sessionId) {

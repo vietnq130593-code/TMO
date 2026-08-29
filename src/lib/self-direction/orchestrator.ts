@@ -14,12 +14,28 @@
  * Fire-and-forget: các route gọi triggerOrchestration()/omegaReviewPending()
  * và trả response ngay — UI poll GET /api/self-direction/proposals để xem
  * tiến độ (status: planning → executing → completed/failed).
+ *
+ * CI-6 B5 (SELF-DIRECTION ↔ workspace): proposal có executionMode
+ * 'code-workflow' → bước GIỮA thực thi bằng TOOL THẬT (executeTool trên
+ * workspace active — file tools, git_status, lint...), bước CUỐI
+ * verify_and_push (Omega) chạy pipeline kiểm định 9 bước THẬT trước khi
+ * commit+push (runPrePushVerification: lint→typecheck→tests→smoke→
+ * secret-scan→commit→push→pull). Receipts lưu ProposalStep.workspaceReceipt;
+ * báo cáo hoàn thiện đan thêm section "Kết quả kiểm định & triển khai code".
+ * Mặc định 'llm' giữ nguyên hành vi thuần hội thoại (tương thích ngược).
  */
 
 import { db } from '@/lib/db'
 import { callLLMForAgent } from '@/lib/llm'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
 import { getAgentRoster } from '@/lib/agent-roster'
+// CI-6 B5 (SELF-DIRECTION ↔ workspace): bước code-workflow thực thi THẬT qua
+// tool executor + pipeline pre-push — import tĩnh an toàn (code-team modules đã
+// nằm trong module graph của app qua chat routes; không có vòng import).
+import { executeTool } from '@/lib/code-team/tool-executor'
+import { runPrePushVerification, type PrePushResult } from '@/lib/code-team/pre-push-verify'
+import { parseToolCallsFromOutput, formatMessagesForLLM } from '@/lib/tool-calls'
+import { Prisma } from '@prisma/client'
 
 // ==================== TYPES ====================
 
@@ -27,6 +43,8 @@ export interface SdPlanStep {
   title: string
   description: string
   assignee: string
+  /** CI-6 B5: kế thừa executionMode từ proposal — 'code-workflow' = thực thi tool thật */
+  executionMode?: string
 }
 
 export interface SdWorkPlan {
@@ -50,6 +68,59 @@ const OMEGA_FALLBACK_BRAIN = { provider: 'nvidia', model: 'moonshotai/kimi-k3' }
 const LLM_TIMEOUT_MS = 120_000
 const MAX_PLAN_STEPS = 12
 const MAX_STEP_ATTEMPTS = 3
+
+// ==================== CI-6 B5 — CODE-WORKFLOW (thực thi code THẬT trong workspace) ====================
+
+/**
+ * Proposal executionMode='code-workflow': agents CHỈNH SỬA CODE THẬT qua tool
+ * executor (executeTool — file tools, git tools, lint... chạy trên workspace
+ * active) và bước CUỐI chạy pipeline kiểm định 9 bước thật
+ * (runPrePushVerification: lint→typecheck→tests→smoke→secret-scan→commit→
+ * push→pull). Mọi biên lai (receipts) lưu vào ProposalStep.workspaceReceipt.
+ */
+
+/** Bước cuối code-workflow: marker trong title (giao Omega) */
+const VERIFY_AND_PUSH_TITLE_RE = /verify_and_push|pipeline|kiểm định/i
+/** Trần an toàn cho ReAct loop 1 bước code-workflow (guard chống loop vô hạn) */
+const SD_CODE_STEP_MAX_TOOL_CALLS = 8
+const SD_CODE_STEP_MAX_TURNS = 6
+/** Cap ký tự tool-result đẩy vào conversation (chống context nổ) */
+const SD_CODE_TOOL_RESULT_CAP = 4000
+/**
+ * Tools cho phép ở bước GIỮA code-workflow: edit code thật + khảo sát + kiểm
+ * định cục bộ. CHỈ TRỪ commit/push/pull/verify_and_push — pipeline ở bước cuối
+ * là đường DUY NHẤT đẩy code lên remote (bảo đảm mọi thay đổi qua kiểm định).
+ */
+const SD_CODE_TOOL_ALLOWLIST = new Set([
+  'file_read', 'file_write', 'file_edit', 'file_multi_edit', 'file_list', 'file_delete',
+  'grep', 'shell', 'run_tests', 'lint', 'type_check', 'lsp_diagnostics',
+  'git_status', 'git_diff', 'git_log', 'todo_write',
+])
+
+/** Receipt 1 bước GIỮA code-workflow — log tool calls đã THỰC THI thật */
+export interface SdToolBatchReceipt {
+  kind: 'tool-batch'
+  toolCalls: Array<{ tool: string; success: boolean }>
+  executedAt: string
+}
+
+/** Receipt bước CUỐI code-workflow — kết quả pipeline pre-push (verify_and_push) */
+export interface SdPipelineReceipt extends PrePushResult {
+  kind: 'pre-push-pipeline'
+  executedAt: string
+  dryRun?: boolean
+}
+
+/** Dữ liệu receipt pipeline rút gọn đan vào báo cáo hoàn thiện của Omega */
+export interface SdPipelineReceiptSummary {
+  success: boolean
+  commitHash?: string
+  pushed?: boolean
+  pulled?: boolean
+  error?: string
+  steps: Array<{ name: string; status: string; detail?: string }>
+}
+
 /** Proposal đang planning/executing mà updatedAt đứng yên quá lâu → coi là gián đoạn (PM2 restart/OOM) */
 const STALLED_AFTER_MS = 10 * 60_000
 
@@ -339,11 +410,46 @@ Quyết định duyệt hay không duyệt (JSON).`
 
 // ==================== 2. PLAN — Omega lập kế hoạch triển khai ====================
 
+/**
+ * CI-6 B5 — bước này có phải bước CUỐI verify_and_push (pipeline kiểm định
+ * thật) không? Chỉ xét ở vị trí cuối kế hoạch: marker "verify_and_push" trong
+ * title, hoặc bước cuối giao Omega với title chỉ dấu pipeline/kiểm định.
+ */
+export function isVerifyAndPushStep(step: Pick<SdPlanStep, 'title' | 'assignee'>, isLastStep: boolean): boolean {
+  if (!isLastStep) return false
+  if (/verify_and_push/i.test(step.title)) return true
+  return step.assignee === 'Omega' && VERIFY_AND_PUSH_TITLE_RE.test(step.title)
+}
+
+/**
+ * CI-6 B5 — bảo đảm kế hoạch code-workflow LUÔN kết thúc bằng bước verify_and_push
+ * giao Omega (LLM có thể quên/sai tên marker). Bước cuối hợp lệ giữ nguyên;
+ * ngược lại chèn bước chuẩn (giữ tổng ≤ MAX_PLAN_STEPS).
+ */
+function ensureFinalVerifyStep(steps: SdPlanStep[]): SdPlanStep[] {
+  if (steps.length === 0) return steps
+  if (isVerifyAndPushStep(steps[steps.length - 1], true)) return steps
+  const capped = steps.slice(0, MAX_PLAN_STEPS - 1)
+  capped.push({
+    title: 'Kiểm định & đẩy code (verify_and_push)',
+    description: 'Omega chạy pipeline kiểm định 9 bước THẬT trên workspace active: lint → type_check → run_tests → smoke → secret_scan → git_preflight → commit (scoped paths) → push → pull verify. Bước CHỈ ĐẠT khi pipeline PASS. Cây làm việc sạch → pipeline trả "không có gì để commit" và bước vẫn đạt (đề xuất có thể chỉ mang tính phân tích).',
+    assignee: 'Omega',
+  })
+  return capped
+}
+
 async function generateWorkPlan(proposal: {
   title: string; problem: string; solution: string; implementation: string
-  impact: string | null; userNotes: string | null
+  impact: string | null; userNotes: string | null; executionMode: string
 }): Promise<SdWorkPlan> {
   const { names, text } = await rosterInfo()
+  const isCodeWorkflow = proposal.executionMode === 'code-workflow'
+
+  const codeWorkflowBlock = isCodeWorkflow ? `
+
+⚡ CHẾ ĐỘ CODE-WORKFLOW (CI-6 B5 — đề xuất này THAY ĐỔI CODE THẬT trong workspace):
+- Các bước triển khai giao agents chỉnh sửa code THẬT qua tool executor (BOLT implement, SENTINEL review/bug, CORTEX thiết kế API/schema, CATALYST tối ưu/hiệu năng...).
+- Bước CUỐI CÙNG PHẢI là "Kiểm định & đẩy code" giao cho CHÍNH BẠN (Omega), tiêu đề CHỨA "verify_and_push" — bước này chạy pipeline kiểm định 9 bước thật (lint → type_check → tests → smoke → secret_scan → commit scoped → push → pull verify). KHÔNG giao bước commit/push cho agent khác, KHÔNG thêm bước kiểm định khác sau nó.` : ''
 
   const systemPrompt = `Bạn là OMEGA — orchestrator của hệ thống multi-agent TMO. Một đề xuất cải tiến hệ thống VỪA ĐƯỢC Mr. Architect phê duyệt. Nhiệm vụ của bạn: lập KẾ HOẠCH TRIỂN KHAI chi tiết.
 
@@ -351,7 +457,7 @@ Nguyên tắc lập kế hoạch:
 - Chia công việc thành 3-6 bước tuần tự hợp lý (tối đa ${MAX_PLAN_STEPS}), mỗi bước 1 việc rõ ràng có kết quả kiểm chứng được.
 - Giao đúng người: xem AGENT ROSTER bên dưới — chọn agent có chuyên môn phù hợp nhất từng bước.
 - Bước cuối cùng LUÔN là kiểm định/nghiệm thu (giao verifier hoặc chính bạn).
-- Mô tả từng bước đủ cụ thể để agent thực hiện không cần hỏi lại.
+- Mô tả từng bước đủ cụ thể để agent thực hiện không cần hỏi lại.${codeWorkflowBlock}
 
 Output DUY NHẤT một JSON hợp lệ (KHÔNG markdown fence):
 {"planSummary": "tóm tắt kế hoạch 1-2 câu", "steps": [{"title": "tên bước ngắn", "description": "mô tả cụ thể cần làm gì, tiêu chí hoàn thành", "assignee": "TÊN agent trong roster"}]}`
@@ -382,7 +488,7 @@ Lập kế hoạch triển khai (JSON).`
     if (jsonStr) {
       const obj = JSON.parse(jsonStr) as Record<string, unknown>
       const rawSteps = Array.isArray(obj.steps) ? obj.steps : []
-      const steps: SdPlanStep[] = rawSteps
+      let steps: SdPlanStep[] = rawSteps
         .filter((s): s is Record<string, unknown> => !!s && typeof s === 'object')
         .slice(0, MAX_PLAN_STEPS)
         .map(s => ({
@@ -391,6 +497,10 @@ Lập kế hoạch triển khai (JSON).`
           assignee: normalizeAssignee(typeof s.assignee === 'string' ? s.assignee : null, names),
         }))
       if (steps.length > 0) {
+        // CI-6 B5: kế hoạch code-workflow PHẢI kết thúc bằng verify_and_push (Omega)
+        if (isCodeWorkflow) steps = ensureFinalVerifyStep(steps)
+        // Mọi step kế thừa executionMode của proposal (per-step flag)
+        steps = steps.map(s => ({ ...s, executionMode: proposal.executionMode }))
         return {
           planSummary: String(obj.planSummary || `Kế hoạch ${steps.length} bước do Omega lập`).slice(0, 500),
           steps,
@@ -400,20 +510,30 @@ Lập kế hoạch triển khai (JSON).`
     throw new Error('Plan JSON rỗng/sai shape')
   } catch (err) {
     console.warn('[SelfDirection] OmegaPlan lỗi — dùng kế hoạch mặc định:', err instanceof Error ? err.message : String(err))
-    return defaultPlan(proposal.title, names)
+    return defaultPlan(proposal.title, names, proposal.executionMode)
   }
 }
 
-function defaultPlan(title: string, validNames: string[]): SdWorkPlan {
+function defaultPlan(title: string, validNames: string[], executionMode = 'llm'): SdWorkPlan {
   const pick = (n: string) => (validNames.includes(n) ? n : 'Omega')
+  const steps: SdPlanStep[] = [
+    { title: 'Phân tích & thiết kế giải pháp chi tiết', description: `Phân tích vấn đề của đề xuất "${title.slice(0, 80)}", xác định yêu cầu, rủi ro, thiết kế giải pháp cụ thể trước khi triển khai. Kết quả: bản thiết kế rõ ràng các việc cần làm.`, assignee: pick('APEX'), executionMode },
+    { title: 'Triển khai phần lõi của giải pháp', description: 'Thực hiện phần việc chính theo thiết kế ở bước 1. Kết quả: phần lõi hoàn thành kèm mô tả cụ thể đã làm gì.', assignee: pick('CORTEX'), executionMode },
+    { title: 'Triển khai phần bổ trợ & tích hợp', description: 'Hoàn thiện các phần phụ thuộc, tích hợp phần lõi vào tổng thể hệ thống. Kết quả: hệ thống đồng bộ, không bỏ sót.', assignee: pick('BOLT'), executionMode },
+    { title: 'Kiểm định chất lượng & nghiệm thu', description: 'Kiểm tra kết quả triển khai theo tiêu chí đề xuất, xác nhận vấn đề gốc đã được giải quyết. Kết quả: verdict đạt/không đạt kèm bằng chứng.', assignee: pick('CATALYST'), executionMode },
+  ]
+  // CI-6 B5: fallback plan cho code-workflow cũng phải có bước cuối verify_and_push
+  if (executionMode === 'code-workflow') {
+    steps.push({
+      title: 'Kiểm định & đẩy code (verify_and_push)',
+      description: 'Omega chạy pipeline kiểm định 9 bước THẬT trên workspace active (lint → type_check → run_tests → smoke → secret_scan → commit scoped → push → pull verify). Bước CHỈ ĐẠT khi pipeline PASS; cây sạch → "không có gì để commit" vẫn đạt.',
+      assignee: 'Omega',
+      executionMode,
+    })
+  }
   return {
-    planSummary: `Kế hoạch mặc định 4 bước (LLM không phản hồi — fallback): phân tích → triển khai lõi → tích hợp → kiểm định, cho đề xuất "${title.slice(0, 80)}".`,
-    steps: [
-      { title: 'Phân tích & thiết kế giải pháp chi tiết', description: `Phân tích vấn đề của đề xuất "${title.slice(0, 80)}", xác định yêu cầu, rủi ro, thiết kế giải pháp cụ thể trước khi triển khai. Kết quả: bản thiết kế rõ ràng các việc cần làm.`, assignee: pick('APEX') },
-      { title: 'Triển khai phần lõi của giải pháp', description: 'Thực hiện phần việc chính theo thiết kế ở bước 1. Kết quả: phần lõi hoàn thành kèm mô tả cụ thể đã làm gì.', assignee: pick('CORTEX') },
-      { title: 'Triển khai phần bổ trợ & tích hợp', description: 'Hoàn thiện các phần phụ thuộc, tích hợp phần lõi vào tổng thể hệ thống. Kết quả: hệ thống đồng bộ, không bỏ sót.', assignee: pick('BOLT') },
-      { title: 'Kiểm định chất lượng & nghiệm thu', description: 'Kiểm tra kết quả triển khai theo tiêu chí đề xuất, xác nhận vấn đề gốc đã được giải quyết. Kết quả: verdict đạt/không đạt kèm bằng chứng.', assignee: pick('CATALYST') },
-    ],
+    planSummary: `Kế hoạch mặc định ${steps.length} bước (LLM không phản hồi — fallback): phân tích → triển khai lõi → tích hợp → kiểm định${executionMode === 'code-workflow' ? ' + pipeline verify_and_push' : ''}, cho đề xuất "${title.slice(0, 80)}".`,
+    steps,
   }
 }
 
@@ -471,6 +591,244 @@ Viết báo cáo output của bạn.`
   throw new Error(`Agent ${step.assignee} không tạo được output`)
 }
 
+// ==================== 3b. EXECUTE CODE-WORKFLOW — ReAct với TOOL THẬT (CI-6 B5) ====================
+
+/**
+ * LLM call cho ReAct loop code-workflow: callLLMForAgent (persona brain) →
+ * z-ai-sdk fallback cuối (đồng bộ executeStep — sandbox không NVIDIA key).
+ */
+async function callStepBrain(params: {
+  prompt: string
+  systemPrompt: string
+  brain: { provider: string; model: string }
+  agentName: string
+  label: string
+}): Promise<string | null> {
+  const { prompt, systemPrompt, brain, agentName, label } = params
+  try {
+    const result = await withTimeout(
+      callLLMForAgent(prompt, brain, systemPrompt, {
+        agentName,
+        temperature: 0.4,
+        maxTokens: 1400,
+      }),
+      LLM_TIMEOUT_MS,
+      `${label} (${agentName})`,
+    )
+    if (result.content && result.content.trim()) return result.content.trim()
+  } catch { /* fall through */ }
+  const zai = await withTimeout(tryZaiSdk(prompt, systemPrompt), LLM_TIMEOUT_MS, `${label} zai (${agentName})`)
+  if (zai && zai.trim()) return zai.trim()
+  return null
+}
+
+/** Tool-result → message string cap ký tự (chống context nổ trong ReAct loop) */
+function sdToolResultToMessage(tool: string, success: boolean, result: unknown): string {
+  let content: string
+  try {
+    content = JSON.stringify({ tool, success, result })
+  } catch {
+    content = JSON.stringify({ tool, success, result: String(result).slice(0, 2000) })
+  }
+  return content.length > SD_CODE_TOOL_RESULT_CAP ? `${content.slice(0, SD_CODE_TOOL_RESULT_CAP)}…(cắt)` : content
+}
+
+/**
+ * CI-6 B5 — thực thi 1 bước GIỮA của proposal code-workflow: agent persona
+ * ReAct qua TOOL THẬT (executeTool chạy file tools, git_status, lint... trên
+ * workspace active). LLM đề xuất tool_call → thực thi thật → đẩy kết quả
+ * vào conversation → lặp tới khi agent kết luận (hoặc chạm trần guard:
+ * ${SD_CODE_STEP_MAX_TOOL_CALLS} tool call / ${SD_CODE_STEP_MAX_TURNS} lượt LLM).
+ * Context shape executeTool mirror agent-goal-loop.ts: { agentName, sessionId }.
+ */
+async function executeCodeStepWithTools(params: {
+  proposal: { id: string; title: string; problem: string; solution: string; implementation: string; userNotes: string | null }
+  step: { stepOrder: number; title: string; description: string; assignee: string }
+  previousOutputs: Array<{ title: string; output: string }>
+  reworkFeedback?: string | null
+}): Promise<{ output: string; receipt: SdToolBatchReceipt }> {
+  const { proposal, step, previousOutputs, reworkFeedback } = params
+  const persona = await agentPersona(step.assignee)
+  const sessionId = `sd-${proposal.id}`
+
+  const systemPrompt = `${persona.systemPrompt}
+
+═══════════════════════════════════════════
+ CHẾ ĐỘ CODE-WORKFLOW — THỰC THI WORKSPACE THẬT (SELF-DIRECTION)
+═══════════════════════════════════════════
+Bạn đang thực hiện 1 bước kế hoạch cần THAY ĐỔI CODE THẬT trong workspace active. Bạn có TOOL THẬT — mọi tool call thực thi thật trên hệ thống file và git của workspace.
+
+Cú pháp tool call (1 hoặc nhiều trong 1 lượt, mỗi call 1 dòng):
+tool_call: tên_tool({"tham_số": "giá trị"})
+
+Tools khả dụng: ${[...SD_CODE_TOOL_ALLOWLIST].join(', ')}.
+
+Quy tắc:
+- Đọc file trước khi sửa (file_read). Tạo file mới/file lớn: file_write chia phần (~200-400 dòng/lần, lần đầu mode "overwrite", các lần sau "append").
+- KHÔNG commit/push/pull (bị chặn ở bước này) — pipeline kiểm định ở bước CUỐI sẽ commit + push mọi thay đổi.
+- Giới hạn ${SD_CODE_STEP_MAX_TOOL_CALLS} tool call cho bước này — làm phần việc CHÍNH, gọn.
+- Xong (hoặc hết ngân sách): viết báo cáo output text thuần (KHÔNG tool_call, ~150 từ): đã làm gì, file nào đã sửa/tạo (đường dẫn), bằng chứng kiểm chứng (lint/type_check/file_read), còn vấn đề gì.`
+
+  const handover = previousOutputs.length > 0
+    ? previousOutputs.map(p => `• [Bước "${p.title}"]: ${p.output.slice(0, 400)}`).join('\n')
+    : '(bước đầu tiên — chưa có bàn giao)'
+
+  const userPrompt = `ĐỀ XUẤT ĐANG TRIỂN KHAI (code-workflow): ${proposal.title}
+VẤN ĐỀ GỐC: ${proposal.problem.slice(0, 600)}
+GIẢI PHÁP ĐÃ DUYỆT: ${proposal.solution.slice(0, 600)}
+${proposal.userNotes ? `GHI CHÚ MR. ARCHITECT (bắt buộc tuân thủ): ${proposal.userNotes.slice(0, 400)}` : ''}
+
+KẾT QUẢ BÀN GIAO TỪ CÁC BƯỚC TRƯỚC:
+${handover}
+
+BẠN (${step.assignee}) THỰC HIỆN BƯỚC ${step.stepOrder}: ${step.title}
+MÔ TẢ CÔNG VIỆC: ${step.description}
+${reworkFeedback ? `\n⚠️ PHẢN HỒI TỪ OMEGA VỀ LẦN THỬ TRƯỚC (chưa đạt — phải khắc phục): ${reworkFeedback.slice(0, 600)}` : ''}
+
+Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi sửa code thật. Kết thúc bằng báo cáo text thuần.`
+
+  const messages: Array<{ role: 'user' | 'assistant' | 'tool'; content: string }> = [
+    { role: 'user', content: userPrompt },
+  ]
+  const toolCallsLog: Array<{ tool: string; success: boolean }> = []
+  let lastAssistant = ''
+  let output = ''
+
+  for (let turn = 1; turn <= SD_CODE_STEP_MAX_TURNS; turn++) {
+    const formatted = formatMessagesForLLM(messages)
+    const content = await callStepBrain({
+      prompt: formatted,
+      systemPrompt,
+      brain: persona.brain,
+      agentName: step.assignee,
+      label: `CodeStep ${step.stepOrder}`,
+    })
+    if (!content) break
+    lastAssistant = content
+    messages.push({ role: 'assistant', content })
+
+    const toolCalls = parseToolCallsFromOutput(content)
+    if (toolCalls.length === 0) {
+      output = content // agent đã kết luận — báo cáo text thuần
+      break
+    }
+
+    for (const tc of toolCalls) {
+      const budgetLeft = SD_CODE_STEP_MAX_TOOL_CALLS - toolCallsLog.length
+      if (budgetLeft <= 0) {
+        messages.push({
+          role: 'tool',
+          content: sdToolResultToMessage(tc.name, false, 'Đã đạt giới hạn tool call của bước — KHÔNG thực thi. Hãy viết báo cáo output cuối (text thuần).'),
+        })
+        continue
+      }
+      if (!SD_CODE_TOOL_ALLOWLIST.has(tc.name)) {
+        messages.push({
+          role: 'tool',
+          content: sdToolResultToMessage(tc.name, false, `Tool không khả dụng ở bước này. Cho phép: ${[...SD_CODE_TOOL_ALLOWLIST].join(', ')}. KHÔNG tự commit/push — pipeline bước cuối sẽ làm.`),
+        })
+        continue
+      }
+      // THỰC THI THẬT trong workspace active — executeTool của tool-executor
+      // (context mirror agent-goal-loop: agentName + sessionId sd-<proposalId>)
+      const res = await executeTool(tc.name, tc.args, { agentName: step.assignee, sessionId })
+      toolCallsLog.push({ tool: tc.name, success: res.success })
+      messages.push({ role: 'tool', content: sdToolResultToMessage(tc.name, res.success, res.result) })
+    }
+
+    if (toolCallsLog.length >= SD_CODE_STEP_MAX_TOOL_CALLS) {
+      messages.push({
+        role: 'user',
+        content: '⚠️ Đã dùng hết ngân sách tool call của bước. Viết báo cáo output cuối NGAY (text thuần, KHÔNG tool_call): đã làm gì, file đã sửa, bằng chứng, còn thiếu gì.',
+      })
+    }
+  }
+
+  if (!output) {
+    // Loop kết thúc không có báo cáo text thuần (hết lượt/kẹt): nếu có tool call
+    // thì tổng hợp TRUNG THỰC từ tool log (lastAssistant lúc này chứa tool_call
+    // thô — không phải báo cáo); không có tool call thì giữ text LLM cuối.
+    output = toolCallsLog.length > 0
+      ? `Đã thực thi ${toolCallsLog.length} tool call trong workspace thật (${toolCallsLog.filter(t => t.success).length} thành công): ${toolCallsLog.map(t => `${t.tool}${t.success ? '✓' : '✗'}`).join(', ')}. Agent không viết báo cáo tổng kết (hết lượt LLM) — xem chi tiết tool receipts trong workspaceReceipt.`
+      : lastAssistant
+  }
+  console.log(`[SelfDirection] CodeStep ${step.stepOrder} [${step.assignee}] thực thi THẬT ${toolCallsLog.length} tool call (${toolCallsLog.filter(t => t.success).length} ok)`)
+  return {
+    output: output.slice(0, 3000),
+    receipt: { kind: 'tool-batch', toolCalls: toolCallsLog, executedAt: new Date().toISOString() },
+  }
+}
+
+// ==================== 3c. FINAL STEP — verify_and_push PIPELINE THẬT (CI-6 B5) ====================
+
+/** Slug hóa tiêu đề đề xuất cho commit message (bỏ dấu tiếng Việt) */
+function slugifyTitle(title: string): string {
+  return title
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 72)
+}
+
+/** Commit message chuẩn cho đề xuất SELF-DIRECTION (CI-6 B5) */
+export function buildSelfDirectionCommitMessage(proposal: { id: string; title: string }, planSummary: string | null): string {
+  const slug = slugifyTitle(proposal.title) || 'de-xuat'
+  const oneLine = (planSummary || 'Triển khai theo kế hoạch Omega (Self-direction)')
+    .split('\n')[0]
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 140)
+  return `self-direction: ${slug} (${proposal.id})\n\n${oneLine}\n\nTriển khai từ đề xuất SELF-DIRECTION`
+}
+
+/**
+ * CI-6 B5 — bước CUỐI của proposal code-workflow: chạy pipeline kiểm định
+ * TRƯỚC KHI PUSH thật (runPrePushVerification — 9 bước: lint → typecheck →
+ * tests → smoke → secret-scan → git-preflight → commit scoped → push →
+ * pull-verify) trên workspace active. Thành công của bước = pipeline PASS.
+ * Cây làm việc sạch → pipeline trả "không có gì để commit" (success, không
+ * commit/push) → bước vẫn ĐẠT kèm ghi chú (đề xuất có thể chỉ phân tích).
+ */
+export async function executeVerifyAndPushStep(params: {
+  proposal: { id: string; title: string }
+  planSummary: string | null
+  dryRun?: boolean
+}): Promise<{ output: string; receipt: SdPipelineReceipt; success: boolean }> {
+  const { proposal, planSummary, dryRun = false } = params
+  const commitMessage = buildSelfDirectionCommitMessage(proposal, planSummary)
+  const smokeUrl = process.env.TMO_SMOKE_URL || 'http://localhost:3000/'
+
+  let result: PrePushResult
+  try {
+    result = await runPrePushVerification({ commitMessage, smokeUrl, dryRun })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[SelfDirection] verify_and_push pipeline lỗi ngoài dự kiến:', msg)
+    result = { success: false, steps: [], error: `Pipeline lỗi ngoài dự kiến: ${msg}` }
+  }
+
+  const receipt: SdPipelineReceipt = {
+    ...result,
+    kind: 'pre-push-pipeline',
+    executedAt: new Date().toISOString(),
+    ...(dryRun ? { dryRun: true } : {}),
+  }
+
+  const lines = [
+    `Bước kiểm định & triển khai code (verify_and_push)${dryRun ? ' [DRY-RUN]' : ''} — pipeline ${result.success ? 'ĐẠT' : 'THẤT BẠI'}.`,
+    ...result.steps.map(s => `- ${s.name}: ${s.status}${typeof s.durationMs === 'number' ? ` (${Math.round(s.durationMs / 100) / 10}s)` : ''} — ${(s.detail || '').slice(0, 160)}`),
+  ]
+  if (result.commitHash) lines.push(`Commit: ${result.commitHash}`)
+  else if (result.success) lines.push('Không có commit — cây làm việc sạch, không có gì để commit (đề xuất có thể chỉ mang tính phân tích/tư vấn).')
+  lines.push(`Push: ${result.pushed ? 'đã push lên remote' : 'không push (skip/thất bại)'}`)
+  lines.push(`Pull verify: ${result.pulled ? 'đã pull ff-only xác nhận đồng bộ' : 'không pull (skip/thất bại)'}`)
+  if (result.error) lines.push(`Lỗi pipeline: ${result.error}`)
+
+  return { output: lines.join('\n').slice(0, 3000), receipt, success: result.success }
+}
+
 // ==================== 4. EVALUATE — Omega đánh giá bước ====================
 
 async function evaluateStep(params: {
@@ -511,14 +869,35 @@ ${params.output.slice(0, 2000)}
 
 // ==================== 5. REPORT — Omega viết báo cáo hoàn thiện ====================
 
+/** Rút gọn receipt pipeline thành text đan vào prompt báo cáo (CI-6 B5) */
+function pipelineReceiptToText(r: SdPipelineReceiptSummary): string {
+  const stepLines = r.steps.map(s => `  - ${s.name}: ${s.status}${s.detail ? ` — ${s.detail.slice(0, 120)}` : ''}`).join('\n')
+  return [
+    `- Tổng quan pipeline: ${r.success ? 'PASS' : 'FAIL'}${r.error ? ` — ${r.error.slice(0, 200)}` : ''}`,
+    `- Các bước kiểm định:\n${stepLines}`,
+    `- Commit: ${r.commitHash || '(không có — cây làm việc sạch, không có gì để commit)'}`,
+    `- Push: ${r.pushed ? 'đã push lên remote' : 'chưa/không push'} | Pull verify: ${r.pulled ? 'đã pull ff-only xác nhận' : 'chưa/không pull'}`,
+  ].join('\n')
+}
+
 async function writeFinalReport(params: {
   proposal: { title: string; problem: string; solution: string; implementation: string }
   steps: Array<{ stepOrder: number; title: string; assignee: string; status: string; output: string | null; evaluation: string | null }>
   failed: boolean
+  /** CI-6 B5: receipt pipeline verify_and_push (tồn tại khi có bước chạy workspace thật) */
+  pipelineReceipt?: SdPipelineReceiptSummary | null
 }): Promise<string> {
   const stepsText = params.steps.map(s =>
     `Bước ${s.stepOrder} — ${s.title} [${s.assignee}] (${s.status === 'done' ? 'đạt' : s.status}):\n  Output: ${(s.output || '(trống)').slice(0, 600)}\n  Đánh giá Omega: ${s.evaluation || '(không có)'}`
   ).join('\n\n')
+
+  // CI-6 B5 — section pipeline khi proposal chạy code-workflow (có workspaceReceipt)
+  const hasPipeline = !!params.pipelineReceipt
+  const pipelineSection = hasPipeline ? `
+
+## Kết quả kiểm định & triển khai code
+(pipeline verify_and_push — dữ liệu THẬT từ receipt: tổng quan pass/fail, trạng thái từng bước kiểm định, commit hash, đã push/pull chưa; chỉ dựa trên dữ liệu được cung cấp, không bịa bổ sung)
+` : ''
 
   const systemPrompt = `Bạn là OMEGA — orchestrator. Kế hoạch triển khai đề xuất "${params.proposal.title}" ${params.failed ? 'đã THẤT BẠI ở 1 bước' : 'đã HOÀN TẤT'}. Viết BÁO CÁO HOÀN THIỆN gửi Mr. Architect bằng tiếng Việt, markdown đơn giản (chỉ dùng ## và **, KHÔNG bảng), theo đúng khung:
 
@@ -529,8 +908,7 @@ async function writeFinalReport(params: {
 (tóm tắt cách tiếp cận tổng thể)
 
 ## Kết quả các bước triển khai
-(mỗi bước 2-4 câu: agent nào làm gì, kết quả ra sao${params.failed ? ' — nêu rõ bước nào THẤT BẠI và tại sao' : ''})
-
+(mỗi bước 2-4 câu: agent nào làm gì, kết quả ra sao${params.failed ? ' — nêu rõ bước nào THẤT BẠI và tại sao' : ''})${pipelineSection}
 ## Kết quả sau cùng
 (vấn đề gốc đã được giải quyết chưa? còn tồn đọng gì?)
 
@@ -545,7 +923,7 @@ GIẢI PHÁP ĐÃ DUYỆT: ${params.proposal.solution.slice(0, 800)}
 
 KẾT QUẢ TỪNG BƯỚC:
 ${stepsText.slice(0, 4000)}
-
+${params.pipelineReceipt ? `\nKẾT QUẢ PIPELINE KIỂM ĐỊNH & TRIỂN KHAI CODE (bước verify_and_push — dữ liệu THẬT):\n${pipelineReceiptToText(params.pipelineReceipt)}\n` : ''}
 Viết báo cáo hoàn thiện.`
 
   try {
@@ -563,6 +941,11 @@ Viết báo cáo hoàn thiện.`
       `## Kết quả các bước triển khai`,
       ...params.steps.map(s => `Bước ${s.stepOrder} — ${s.title} [${s.assignee}]: ${s.status === 'done' ? 'Hoàn tất' : 'THẤT BẠI'}. ${(s.output || '').slice(0, 300)}`),
       ``,
+      ...(params.pipelineReceipt ? [
+        `## Kết quả kiểm định & triển khai code`,
+        pipelineReceiptToText(params.pipelineReceipt),
+        ``,
+      ] : []),
       `## Kết quả sau cùng`,
       params.failed ? `Chưa hoàn thành — cần xem xét thử lại (bấm "Thử lại" trong Lịch sử).` : `Hoàn thành theo kế hoạch.`,
       ``,
@@ -653,6 +1036,11 @@ async function runOrchestration(proposalId: string): Promise<void> {
   console.log(`[SelfDirection] Bắt đầu triển khai "${proposal.title}": ${plan.steps.length} bước [${plan.steps.map(s => s.assignee).join(' → ')}]`)
 
   // === Phase 2: EXECUTE từng bước (tuần tự + đánh giá + rework) ===
+  // CI-6 B5: proposal code-workflow → bước GIỮA chạy ReAct bằng TOOL THẬT
+  // (executeCodeStepWithTools), bước CUỐI verify_and_push chạy pipeline
+  // kiểm định 9 bước THẬT (executeVerifyAndPushStep) — receipts lưu vào
+  // ProposalStep.workspaceReceipt.
+  const isCodeWorkflow = proposal.executionMode === 'code-workflow'
   let failed = false
   let failReason = ''
   const totalSteps = plan.steps.length
@@ -668,19 +1056,73 @@ async function runOrchestration(proposalId: string): Promise<void> {
       data: { status: 'in_progress', startedAt: new Date(), attempts: { increment: 1 } },
     })
 
+    // ── CI-6 B5: bước CUỐI code-workflow → pipeline verify_and_push THẬT ──
+    // Single-shot (KHÔNG rework loop): mỗi lần chạy pipeline = lint + typecheck
+    // + tests (~40s+) + có thể commit/push thật. Thành công của bước = pipeline
+    // PASS (đánh giá deterministic — không cần Omega chấm lại); cây sạch →
+    // "không có gì để commit" vẫn ĐẠT (đề xuất có thể chỉ phân tích).
+    if (isCodeWorkflow && isVerifyAndPushStep(stepDef, i === totalSteps - 1)) {
+      const result = await executeVerifyAndPushStep({
+        proposal: { id: proposal.id, title: proposal.title },
+        planSummary: plan.planSummary,
+      })
+      if (result.success) {
+        await db.proposalStep.update({
+          where: { id: stepRow.id },
+          data: {
+            status: 'done',
+            output: result.output,
+            evaluation: `Pipeline kiểm định ${result.receipt.steps.length} bước PASS${result.receipt.commitHash ? ` — commit ${result.receipt.commitHash.slice(0, 7)}` : ' — cây làm việc sạch, không có gì để commit'}`,
+            workspaceReceipt: result.receipt as unknown as Prisma.InputJsonValue,
+            finishedAt: new Date(),
+          },
+        })
+        doneOutputs.push({ title: stepDef.title, output: result.output })
+        console.log(`[SelfDirection] Bước ${i + 1}/${totalSteps} verify_and_push [Omega] ĐẠT — pipeline PASS${result.receipt.commitHash ? ` (commit ${result.receipt.commitHash.slice(0, 7)}, pushed=${result.receipt.pushed === true})` : ' (cây sạch — không có gì để commit)'}`)
+        continue
+      }
+      await db.proposalStep.update({
+        where: { id: stepRow.id },
+        data: {
+          status: 'failed',
+          output: result.output,
+          evaluation: `Pipeline kiểm định THẤT BẠI: ${result.receipt.error || 'có bước kiểm định không đạt — xem chi tiết trong output'}`,
+          workspaceReceipt: result.receipt as unknown as Prisma.InputJsonValue,
+          finishedAt: new Date(),
+        },
+      })
+      failed = true
+      failReason = `Bước ${i + 1} "${stepDef.title}" (verify_and_push pipeline) THẤT BẠI: ${result.receipt.error || 'có bước kiểm định không đạt'}`
+      console.warn(`[SelfDirection] Bước ${i + 1}/${totalSteps} verify_and_push THẤT BẠI: ${result.receipt.error || 'xem steps trong workspaceReceipt'}`)
+      break // dừng cả pipeline — KHÔNG push code chưa qua kiểm định
+    }
+
     let stepDone = false
     let lastOutput = ''
     let lastEvaluation = ''
+    let lastReceipt: SdToolBatchReceipt | null = null
     for (let attempt = 1; attempt <= MAX_STEP_ATTEMPTS && !stepDone; attempt++) {
       if (attempt > 1) {
         await db.proposalStep.update({ where: { id: stepRow.id }, data: { attempts: { increment: 1 } } })
       }
-      lastOutput = await executeStep({
-        proposal,
-        step: { ...stepDef, stepOrder: i + 1 },
-        previousOutputs: doneOutputs.slice(-3), // bàn giao 3 bước gần nhất (anti context-bloat)
-        reworkFeedback: attempt > 1 ? lastEvaluation : null,
-      })
+      if (isCodeWorkflow) {
+        // CI-6 B5 — bước GIỮA: agent persona ReAct qua TOOL THẬT trong workspace
+        const r = await executeCodeStepWithTools({
+          proposal,
+          step: { ...stepDef, stepOrder: i + 1 },
+          previousOutputs: doneOutputs.slice(-3),
+          reworkFeedback: attempt > 1 ? lastEvaluation : null,
+        })
+        lastOutput = r.output
+        lastReceipt = r.receipt
+      } else {
+        lastOutput = await executeStep({
+          proposal,
+          step: { ...stepDef, stepOrder: i + 1 },
+          previousOutputs: doneOutputs.slice(-3), // bàn giao 3 bước gần nhất (anti context-bloat)
+          reworkFeedback: attempt > 1 ? lastEvaluation : null,
+        })
+      }
       const evaluation = await evaluateStep({
         step: { ...stepDef, stepOrder: i + 1 },
         output: lastOutput,
@@ -690,7 +1132,13 @@ async function runOrchestration(proposalId: string): Promise<void> {
       if (evaluation.complete) {
         await db.proposalStep.update({
           where: { id: stepRow.id },
-          data: { status: 'done', output: lastOutput, evaluation: lastEvaluation, finishedAt: new Date() },
+          data: {
+            status: 'done',
+            output: lastOutput,
+            evaluation: lastEvaluation,
+            finishedAt: new Date(),
+            ...(lastReceipt ? { workspaceReceipt: lastReceipt as unknown as Prisma.InputJsonValue } : {}),
+          },
         })
         doneOutputs.push({ title: stepDef.title, output: lastOutput })
         stepDone = true
@@ -700,7 +1148,11 @@ async function runOrchestration(proposalId: string): Promise<void> {
         if (attempt < MAX_STEP_ATTEMPTS) {
           await db.proposalStep.update({
             where: { id: stepRow.id },
-            data: { output: lastOutput, evaluation: `Chưa đạt (lần ${attempt}): ${lastEvaluation} — sẽ thử lại` },
+            data: {
+              output: lastOutput,
+              evaluation: `Chưa đạt (lần ${attempt}): ${lastEvaluation} — sẽ thử lại`,
+              ...(lastReceipt ? { workspaceReceipt: lastReceipt as unknown as Prisma.InputJsonValue } : {}),
+            },
           })
         }
       }
@@ -709,7 +1161,12 @@ async function runOrchestration(proposalId: string): Promise<void> {
     if (!stepDone) {
       await db.proposalStep.update({
         where: { id: stepRow.id },
-        data: { status: 'failed', output: lastOutput, evaluation: `THẤT BẠI sau ${MAX_STEP_ATTEMPTS} lần: ${lastEvaluation}` },
+        data: {
+          status: 'failed',
+          output: lastOutput,
+          evaluation: `THẤT BẠI sau ${MAX_STEP_ATTEMPTS} lần: ${lastEvaluation}`,
+          ...(lastReceipt ? { workspaceReceipt: lastReceipt as unknown as Prisma.InputJsonValue } : {}),
+        },
       })
       failed = true
       failReason = `Bước ${i + 1} "${stepDef.title}" (agent ${stepDef.assignee}) không đạt sau ${MAX_STEP_ATTEMPTS} lần thử`
@@ -719,7 +1176,16 @@ async function runOrchestration(proposalId: string): Promise<void> {
 
   // === Phase 3: REPORT ===
   const finalSteps = await db.proposalStep.findMany({ where: { proposalId }, orderBy: { stepOrder: 'asc' } })
-  const report = await writeFinalReport({ proposal, steps: finalSteps, failed })
+  // CI-6 B5: receipt pipeline từ bước verify_and_push (nếu có) → đan vào báo cáo
+  // hoàn thiện phần "Kết quả kiểm định & triển khai code".
+  const pipelineStepRow = finalSteps.find(s => {
+    const r = s.workspaceReceipt as { kind?: string } | null
+    return !!r && typeof r === 'object' && r.kind === 'pre-push-pipeline'
+  })
+  const pipelineReceipt = pipelineStepRow
+    ? (pipelineStepRow.workspaceReceipt as unknown as SdPipelineReceiptSummary)
+    : null
+  const report = await writeFinalReport({ proposal, steps: finalSteps, failed, pipelineReceipt })
   await db.selfDirectionProposal.update({
     where: { id: proposalId },
     data: {
@@ -854,9 +1320,39 @@ export function kickOmegaReviewsSerially(proposalIds: string[]): number {
 
 // ==================== 8. VALIDATION HELPERS (dùng cho API routes) ====================
 
+/**
+ * CI-6 B5 — tạo proposal kèm executionMode, CHỊU ĐỰNG Prisma client cũ:
+ * dev server đang giữ client generate TRƯỚC db:push (không biết cột mới) sẽ
+ * throw PrismaClientValidationError "Unknown argument executionMode" → retry
+ * KHÔNG kèm field (DB default 'llm' áp dụng — fail-open, app vẫn tạo đề xuất
+ * bình thường tới khi restart app nạp client mới; pattern known từ Task 11-a).
+ * Message-match thay vì instanceof (class identity có thể khác nhau giữa 2
+ * bản generate của @prisma/client trong cùng process).
+ */
+function isStaleClientExecutionModeError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const msg = err.message || ''
+  return /Unknown argument [`]?executionMode/i.test(msg) || (err.name === 'PrismaClientValidationError' && /executionMode/i.test(msg))
+}
+
+export async function createSelfDirectionProposal(
+  data: Omit<Prisma.SelfDirectionProposalUncheckedCreateInput, 'executionMode'> & { executionMode?: string },
+) {
+  try {
+    return await db.selfDirectionProposal.create({ data })
+  } catch (err) {
+    if (data.executionMode !== undefined && isStaleClientExecutionModeError(err)) {
+      console.warn('[SelfDirection] Prisma client cũ chưa biết cột executionMode — tạo proposal KHÔNG kèm executionMode (DB default llm). Restart app để dùng đầy đủ CI-6 B5.')
+      const { executionMode: _stale, ...rest } = data
+      return await db.selfDirectionProposal.create({ data: rest })
+    }
+    throw err
+  }
+}
+
 export function validateProposalInput(input: Record<string, unknown>): { ok: true; data: {
   title: string; category: string; priority: string; problem: string; solution: string; implementation: string
-  scheduleAt: Date | null; impact: string | null; source: string; createdBy: string
+  scheduleAt: Date | null; impact: string | null; source: string; createdBy: string; executionMode: string
 } } | { ok: false; error: string } {
   const title = String(input.title || '').trim()
   const problem = String(input.problem || '').trim()
@@ -886,6 +1382,9 @@ export function validateProposalInput(input: Record<string, unknown>): { ok: tru
       impact: input.impact ? String(input.impact).slice(0, 1000) : null,
       source: ['scan', 'agent', 'user', 'omega'].includes(String(input.source)) ? String(input.source) : 'user',
       createdBy: String(input.createdBy || 'user').slice(0, 100),
+      // CI-6 B5: chỉ nhận 'code-workflow' tường minh — ngoài ra mặc định 'llm'
+      // (bảo thủ, tương thích ngược client cũ không gửi field này)
+      executionMode: input.executionMode === 'code-workflow' ? 'code-workflow' : 'llm',
     },
   }
 }

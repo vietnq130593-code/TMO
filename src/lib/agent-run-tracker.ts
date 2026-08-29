@@ -549,3 +549,20 @@ export function getAgentRuns(sessionId: string, limit = 12): AgentRun[] {
 export function hasActiveRun(sessionId: string): boolean {
   return activeRun(sessionId) !== null
 }
+
+/**
+ * CI-2 (Task 11-a) — Lấy runId của run ĐANG ACTIVE (status='running') của
+ * session. Chat route dùng ở CRASH-PATH: goal loop văng exception ra ngoài
+ * trước khi endAgentRun được gọi → cần runId để đóng todo của run đó một cách
+ * trung thực (in_progress → 'failed', pending → 'archived' — xem
+ * closeRunTodosAtEnd trong dev-tools TODO section).
+ * Trả null nếu session không có run đang chạy (hoặc lỗi — fail-open).
+ */
+export function getActiveRunId(sessionId: string | null | undefined): string | null {
+  try {
+    const run = activeRun(sessionId)
+    return run ? run.runId : null
+  } catch {
+    return null
+  }
+}

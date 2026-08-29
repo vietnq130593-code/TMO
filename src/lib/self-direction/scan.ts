@@ -23,6 +23,7 @@
 import { db } from '@/lib/db'
 import { callLLMForAgent } from '@/lib/llm'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
+import { createSelfDirectionProposal } from '@/lib/self-direction/orchestrator'
 
 // ==================== TYPES ====================
 
@@ -35,6 +36,8 @@ export interface ScanProposalInput {
   implementation: string
   scheduleAt: Date | null
   impact: string | null
+  /** llm | code-workflow (CI-6 B5) — thiếu/invalid → classifyExecutionMode quyết định */
+  executionMode?: string
 }
 
 export interface ScanResult {
@@ -60,6 +63,46 @@ const MAX_PROPOSALS_PER_SCAN = 5
 const LLM_TIMEOUT_MS = 120_000
 const OMEGA_FALLBACK_BRAIN = { provider: 'nvidia', model: 'moonshotai/kimi-k3' }
 const VALID_CATEGORIES = ['gap', 'kb_contradiction', 'tool_failure', 'missing_skill', 'missing_test', 'improvement', 'long_term']
+
+// ==================== CI-6 B5 — PHÂN LOẠI executionMode (code-workflow?) ====================
+
+/**
+ * Deterministic classifier — đề xuất này có đòi hỏi THAY ĐỔI CODE trong
+ * workspace không? (CI-6 B5: proposals code-change → executionMode
+ * 'code-workflow' — agents sửa code thật + pipeline kiểm định 9 bước).
+ *
+ * Nguyên tắc BẢO THỦ: mặc định 'llm' (thuần hội thoại — tương thích ngược);
+ * chỉ lên 'code-workflow' khi có tín hiệu rõ ràng:
+ *   - category thuộc nhóm rủi ro code (tool_failure ~ tool_gap, missing_test
+ *     ~ test_gap — map từ bộ category thực tế của module);
+ *   - text problem/solution khớp regex chỉ dấu thay đổi source
+ *     (code/tool/git/workflow/api/route/schema/bug/lỗi/hàm/function/component).
+ */
+const CODE_WORKFLOW_CATEGORIES = new Set(['tool_failure', 'missing_test'])
+const CODE_CHANGE_HINT_RE = /code|tool|git|workflow|api|route|schema|bug|lỗi|hàm|function|component/i
+
+export function classifyExecutionMode(input: {
+  category?: string | null
+  problem?: string | null
+  solution?: string | null
+}): 'llm' | 'code-workflow' {
+  const category = String(input.category || '').trim()
+  if (CODE_WORKFLOW_CATEGORIES.has(category)) return 'code-workflow'
+  const text = `${input.problem || ''}\n${input.solution || ''}`
+  if (CODE_CHANGE_HINT_RE.test(text)) return 'code-workflow'
+  return 'llm'
+}
+
+/** Chuẩn hóa executionMode: giá trị hợp lệ giữ nguyên, thiếu/sai → classifier */
+function normalizeExecutionMode(input: {
+  category?: string | null
+  problem?: string | null
+  solution?: string | null
+  executionMode?: string | null
+}): 'llm' | 'code-workflow' {
+  if (input.executionMode === 'code-workflow' || input.executionMode === 'llm') return input.executionMode
+  return classifyExecutionMode(input)
+}
 
 // ==================== Z-AI SDK FALLBACK (đồng bộ orchestrator) ====================
 
@@ -234,8 +277,10 @@ Dựa vào SNAPSHOT bên dưới, đề xuất tối đa ${MAX_PROPOSALS_PER_SCA
 
 Danh mục (category): "gap" (thiếu năng lực/học gì), "kb_contradiction" (KB mâu thuẫn/chất lượng), "tool_failure" (tool hay fail), "missing_skill" (thiếu skill), "missing_test" (thiếu test/eval), "improvement" (cải tiến), "long_term" (kế hoạch dài hạn phát triển).
 
+Trường "executionMode" (CI-6 B5): "code-workflow" nếu giải pháp ĐÒI HỎI THAY ĐỔI SOURCE CODE thật trong workspace (sửa tool/API/route/schema/bug, viết hàm/component, thêm test... — agents sẽ edit file thật + chạy pipeline kiểm định trước khi push); "llm" nếu chỉ cần phân tích/tư vấn/tổ chức kiến thức thuần (mặc định khi không chắc).
+
 Output DUY NHẤT một JSON hợp lệ (KHÔNG markdown fence):
-{"proposals": [{"title": "tiêu đề ngắn tiếng Việt", "category": "gap|kb_contradiction|tool_failure|missing_skill|missing_test|improvement|long_term", "priority": "low|medium|high|critical", "problem": "vấn đề là gì (2-4 câu, dẫn chứng từ snapshot)", "solution": "giải quyết như thế nào (2-4 câu)", "implementation": "triển khai như thế nào — các bước cụ thể", "scheduleAt": "ISO datetime hoặc null (null = ngay khi duyệt; ưu tiên cao thì sớm)", "impact": "tác động kỳ vọng (1 câu)"}]}`
+{"proposals": [{"title": "tiêu đề ngắn tiếng Việt", "category": "gap|kb_contradiction|tool_failure|missing_skill|missing_test|improvement|long_term", "priority": "low|medium|high|critical", "problem": "vấn đề là gì (2-4 câu, dẫn chứng từ snapshot)", "solution": "giải quyết như thế nào (2-4 câu)", "implementation": "triển khai như thế nào — các bước cụ thể", "scheduleAt": "ISO datetime hoặc null (null = ngay khi duyệt; ưu tiên cao thì sớm)", "impact": "tác động kỳ vọng (1 câu)", "executionMode": "llm|code-workflow"}]}`
 
   const userPrompt = `SNAPSHOT HỆ THỐNG TMO:
 ${snapshotToText(snapshot)}
@@ -289,6 +334,13 @@ Phân tích và đề xuất (JSON).`
         implementation: implementation.slice(0, 3000),
         scheduleAt,
         impact: p.impact ? String(p.impact).slice(0, 600) : null,
+        // CI-6 B5: LLM hint executionMode — invalid/thiếu → deterministic classifier
+        executionMode: normalizeExecutionMode({
+          category: String(p.category || ''),
+          problem,
+          solution,
+          executionMode: typeof p.executionMode === 'string' ? p.executionMode : null,
+        }),
       })
     }
     return out
@@ -392,7 +444,12 @@ function fallbackProposals(s: SystemSnapshot): ScanProposalInput[] {
     })
   }
 
-  return out.slice(0, MAX_PROPOSALS_PER_SCAN)
+  return out.slice(0, MAX_PROPOSALS_PER_SCAN).map(p => ({
+    ...p,
+    // CI-6 B5: fallback deterministic cũng qua classifier (đề xuất tool_failure/
+    // missing_test hoặc text chỉ dấu code-change → code-workflow)
+    executionMode: normalizeExecutionMode(p),
+  }))
 }
 
 // ==================== 4. DEDUP + PERSIST ====================
@@ -420,20 +477,21 @@ async function dedupAndCreate(inputs: ScanProposalInput[]): Promise<{ created: A
       notes.push(`Bỏ qua (trùng): ${input.title.slice(0, 60)}`)
       continue
     }
-    const row = await db.selfDirectionProposal.create({
-      data: {
-        title: input.title,
-        category: input.category,
-        priority: input.priority,
-        problem: input.problem,
-        solution: input.solution,
-        implementation: input.implementation,
-        scheduleAt: input.scheduleAt,
-        impact: input.impact,
-        status: 'pending',
-        source: 'scan',
-        createdBy: 'self-direction-scan',
-      },
+    // CI-6 B5: chế độ thực thi (LLM hint hoặc deterministic classifier) —
+    // createSelfDirectionProposal chịu đựng Prisma client cũ (fail-open)
+    const row = await createSelfDirectionProposal({
+      title: input.title,
+      category: input.category,
+      priority: input.priority,
+      problem: input.problem,
+      solution: input.solution,
+      implementation: input.implementation,
+      scheduleAt: input.scheduleAt,
+      impact: input.impact,
+      status: 'pending',
+      source: 'scan',
+      createdBy: 'self-direction-scan',
+      executionMode: normalizeExecutionMode(input),
     })
     existingTitles.add(norm)
     created.push({ id: row.id, title: row.title })

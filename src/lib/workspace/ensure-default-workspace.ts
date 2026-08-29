@@ -61,10 +61,28 @@ export async function ensureDefaultWorkspace(): Promise<void> {
   try {
     // (1) No-op nếu đã có workspace ACTIVE và thư mục còn tồn tại trên đĩa —
     // tránh bootstrap lại + KHÔNG mở explorer sau mỗi lần restart app.
+    // FIX review #11: phân biệt 3 trạng thái rõ ràng:
+    //   (a) active == rootPath → sẵn sàng, im lặng
+    //   (b) active khác rootPath (user đang dùng workspace khác) → KHÔNG đè
+    //       ý định user — chỉ log 1 dòng nhắc (env vẫn thế, lần active bị
+    //       deactivate/hủy sẽ tự bootstrap lại)
+    //   (c) không active / thư mục biến mất → bootstrap env workspace
     const active = await db.workspace.findFirst({ where: { isActive: true } })
     if (active && existsSync(active.rootPath)) {
-      console.log(`[WORKSPACE] Workspace active đã sẵn sàng (${active.rootPath}) — bỏ qua bootstrap`)
+      const activeResolved = path.resolve(active.rootPath)
+      const envResolved = path.resolve(rootPath)
+      if (activeResolved === envResolved) {
+        console.log(`[WORKSPACE] Workspace active đã sẵn sàng (${active.rootPath}) — bỏ qua bootstrap`)
+        return
+      }
+      console.log(
+        `[WORKSPACE] Workspace active hiện tại là "${active.rootPath}" (khác TMO_DEFAULT_WORKSPACE="${rootPath}") — giữ nguyên lựa chọn đang dùng, không bootstrap đè. Hủy active workspace đó nếu muốn chuyển.`,
+      )
       return
+    }
+    if (active && !existsSync(active.rootPath)) {
+      console.log(`[WORKSPACE] Workspace active cũ biến mất trên đĩa (${active.rootPath}) — deactivating, bootstrap lại từ env`)
+      await db.workspace.update({ where: { id: active.id }, data: { isActive: false } }).catch(() => {})
     }
 
     // (2) Bootstrap thư mục vật lý

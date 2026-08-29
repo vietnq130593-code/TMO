@@ -273,6 +273,14 @@ LEARNING & MEMORY
       'browser_screenshot',
       'open_workspace',
       'verify_and_push',
+      // CI-4 B3-B5 (Task 11-c) — structured git tools: khảo sát repo trước khi
+      // sửa (status/diff/log), quản lý branch, clone repo về workspace. Omega
+      // có đủ 5 tool — đọc skill "tmo-code-workflow" cho SOP chuẩn.
+      'git_status',
+      'git_diff',
+      'git_log',
+      'git_branch',
+      'git_clone',
     ],
   },
 ]

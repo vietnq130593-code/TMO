@@ -3,6 +3,10 @@
  *
  * GET /api/agent-run?sessionId=<sid>&limit=12
  *   → { ok: true, runs: AgentRun[], hasActive: boolean }
+ *   CI-2 (Task 11-a): mỗi run item gains `todos` — Todo[] của ĐÚNG runId đó
+ *   (DB-backed, orderBy position asc, cap 50/run) → panel Thought Process hiển
+ *   thị todo CỦA RUN NÀY (per-task isolation — không trộn task cũ). Run mode
+ *   team (runId per-step) thường có todos=[] vì step-todo gắn runId=session.
  *
  * POST /api/agent-run { sessionId } — USER REQUEST 2026-08-31 (bấm nút Gửi
  * trong khung chat để DỪNG tác vụ Agents đang chạy):
@@ -28,6 +32,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getAgentRuns, hasActiveRun, cancelSessionRuns } from '@/lib/agent-run-tracker'
+import { db } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,12 +48,50 @@ export async function GET(request: NextRequest) {
 
     const runs = getAgentRuns(sessionId, limit)
 
+    // CI-2 (Task 11-a) — gắn todo DB cho từng run theo runId (orderBy position
+    // asc, cap 50/run — đủ cho mọi kế hoạch thực tế). Fail-open: lỗi DB →
+    // todos=[] từng run, response vẫn trả bình thường (không break API cũ).
+    const runIds = runs.map(r => r.runId).filter((id): id is string => typeof id === 'string' && id.length > 0)
+    const todosByRun = new Map<string, Array<Record<string, unknown>>>()
+    if (runIds.length > 0) {
+      try {
+        const rows = await db.todo.findMany({
+          where: { runId: { in: runIds } },
+          orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+        })
+        for (const row of rows) {
+          const arr = todosByRun.get(row.runId as string) || []
+          if (arr.length < 50) {
+            arr.push({
+              id: row.id,
+              sessionId: row.sessionId,
+              runId: row.runId,
+              agentRole: row.agentRole,
+              content: row.content,
+              status: row.status,
+              priority: row.priority,
+              parentId: row.parentId,
+              position: row.position,
+              archivedAt: row.archivedAt,
+              createdAt: row.createdAt,
+              updatedAt: row.updatedAt,
+            })
+            todosByRun.set(row.runId as string, arr)
+          }
+        }
+      } catch { /* fail-open — todos=[] cho mọi run */ }
+    }
+    const runsWithTodos = runs.map(r => ({
+      ...r,
+      todos: todosByRun.get(r.runId) || [],
+    }))
+
     return NextResponse.json({
       ok: true,
-      runs,
+      runs: runsWithTodos,
       hasActive: hasActiveRun(sessionId),
       serverTs: Date.now(),
-      count: runs.length,
+      count: runsWithTodos.length,
     })
   } catch (err) {
     return NextResponse.json(

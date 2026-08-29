@@ -15,6 +15,7 @@ import {
   autoReviewPendingIfDelegated,
   validateProposalInput,
   isOrchestrating,
+  createSelfDirectionProposal,
 } from '@/lib/self-direction/orchestrator'
 import { ensureDbReady } from '@/lib/db-setup'
 
@@ -30,6 +31,8 @@ async function serializeProposals(rows: Array<{
   planSummary: string | null; omegaReport: string | null
   executedAt: Date | null; completedAt: Date | null
   createdAt: Date; updatedAt: Date
+  /** CI-6 B5: llm | code-workflow (spread ...r truyền đủ field về UI) */
+  executionMode?: string
 }>) {
   const ids = rows.map(r => r.id)
   const steps = ids.length > 0
@@ -97,9 +100,10 @@ export async function POST(req: NextRequest) {
     if (!validated.ok) {
       return NextResponse.json({ error: validated.error }, { status: 400 })
     }
-    const created = await db.selfDirectionProposal.create({
-      data: { ...validated.data, status: 'pending' },
-    })
+    // CI-6 B5: validated.data kèm executionMode ('llm' mặc định / 'code-workflow'
+    // khi client gửi tường minh) — createSelfDirectionProposal chịu đựng
+    // Prisma client cũ (retry không kèm field, fail-open).
+    const created = await createSelfDirectionProposal({ ...validated.data, status: 'pending' })
 
     // Ủy quyền đang bật → Omega review ngay đề xuất mới (fire-and-forget)
     const settings = await getSelfDirectionSettings()

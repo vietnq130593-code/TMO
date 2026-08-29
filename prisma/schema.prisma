@@ -941,11 +941,22 @@ model Todo {
   /// Optional client-supplied idempotency key — when set, repeat calls with
   /// same key return the existing todo instead of creating a duplicate.
   idempotencyKey String?
+  /// CI-2 (Task 11-a) — Run scope: todo thuộc về ĐÚNG 1 agent run (runId do
+  /// startAgentRun sinh ra; goal-loop inject vào todo_write). null = todo
+  /// legacy (trước CI-2) hoặc caller không có run — vẫn hiển thị theo session
+  /// như cũ và KHÔNG bị archive khi run mới bắt đầu.
+  runId          String?
+  /// CI-2 (Task 11-a) — Thời điểm todo bị lưu trữ: (a) status='archived' khi
+  /// run mới bắt đầu (archive todo mở của các run trước), hoặc (b) pending
+  /// được giữ nguyên lúc run kết thúc CHƯA đạt mục tiêu (trung thực — chưa làm
+  /// gì thì không thành failed) nhưng đánh dấu archivedAt để ẩn khỏi run sau.
+  archivedAt     DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   @@index([sessionId])
   @@index([sessionId, agentRole])
+  @@index([sessionId, runId])
   @@index([parentId])
   @@index([idempotencyKey])
 }
@@ -1544,6 +1555,11 @@ model SelfDirectionProposal {
   status          String    @default("pending")
   /// scan | agent | user | omega
   source          String    @default("scan")
+  /// llm | code-workflow — chế độ thực thi khi được duyệt (CI-6 B5):
+  /// 'llm' = các bước chạy thuần hội thoại LLM (mặc định, tương thích ngược);
+  /// 'code-workflow' = agents chỉnh sửa code THẬT trong workspace qua tool
+  /// executor + bước cuối verify_and_push chạy pipeline kiểm định 9 bước thật
+  executionMode   String    @default("llm")
   createdBy       String    @default("self-direction-scan")
 
   // ===== Mr. Architect / Omega review =====
@@ -1592,6 +1608,10 @@ model ProposalStep {
   evaluation  String?
   /// Số lần thử lại khi Omega đánh giá chưa đạt (max 3)
   attempts    Int       @default(0)
+  /// Biên lai thực thi THẬT trong workspace (CI-6 B5): bước cuối code-workflow
+  /// lưu PrePushResult (pipeline 9 bước lint→…→pull); bước giữa lưu tool-call
+  /// receipts (executeTool thật). null = bước chạy chế độ llm thuần hội thoại.
+  workspaceReceipt Json?
   startedAt   DateTime?
   finishedAt  DateTime?
   /// Prisma tự update ở MỌI lần ghi (attempts/output/evaluation...) — dùng làm

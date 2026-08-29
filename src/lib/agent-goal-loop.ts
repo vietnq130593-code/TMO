@@ -62,8 +62,12 @@ import {
   startAgentRun,
   endAgentRun,
   recordAgentThought,
+  recordAgentRunTodos,
   isSessionCancelled,
 } from '@/lib/agent-run-tracker'
+// CI-2 (Task 11-a) — auto-complete todo theo bằng chứng tool giữa chừng run
+// (helper DB-backed trong TODO section của dev-tools — không đụng git section)
+import { autoCompleteRunTodosByEvidence } from '@/lib/code-team/dev-tools'
 // Task 20-c (self-evaluation) — persist lifecycle AgentRunRecord (start row +
 // end update, dedup với tracker qua dbPersistBy:'caller') + ArbiterVerdict mỗi
 // chu kỳ EVALUATE + resolve outcome khi run kết thúc. Mọi write fire-and-forget
@@ -101,6 +105,31 @@ function recordWorkMemory(agentId: string, sessionId: string | null, content: st
     role: 'system',
     importance,
   }).catch(() => { /* fail-open — memory không được phép làm hỏng task */ })
+}
+
+/**
+ * CI-2 (Task 11-a) — Trích "bằng chứng" từ args của 1 tool call THÀNH CÔNG để
+ * khớp với nội dung todo (auto-complete theo bằng chứng, không tin lời tuyên bố):
+ *   - shell/run_bg → lệnh shell (≥6 ký tự, trim)
+ *   - tool file_*  → đường dẫn file chính (args.path theo quy ước dev-tools;
+ *                    chỉ nhận chuỗi chứa '/' hoặc '.' — chống khớp giả)
+ * Trả null nếu không có bằng chứng hợp lệ. Bảo thủ chủ đích: chỉ chuỗi-con
+ * CHÍNH XÁC mới được tính (xem autoCompleteRunTodosByEvidence trong dev-tools).
+ */
+function extractTodoEvidence(toolName: string, args: Record<string, unknown> | undefined): string | null {
+  try {
+    if (!args || typeof args !== 'object') return null
+    if (toolName === 'shell' || toolName === 'run_bg') {
+      const cmd = (args as { command?: unknown }).command
+      if (typeof cmd === 'string' && cmd.trim().length >= 6) return cmd.trim()
+      return null
+    }
+    const p = (args as { path?: unknown }).path ?? (args as { file_path?: unknown }).file_path
+    if (typeof p === 'string' && p.length >= 3 && (p.includes('/') || p.includes('.'))) return p
+    return null
+  } catch {
+    return null
+  }
 }
 
 // ==================== CONFIG (env override) ====================
@@ -218,6 +247,11 @@ export function getGoalLoopBudgetInfo(): {
   iterationsPerCycle: number
   reportReserveTokens: number
   unlimited: boolean
+  /** FIX review #14: unlimited chi tiết theo từng cap — UI/metrics hiển thị chính xác cap nào đang ∞ */
+  unlimitedToken: boolean
+  unlimitedTime: boolean
+  unlimitedCycles: boolean
+  unlimitedIterations: boolean
 } {
   return {
     tokenBudget: TOKEN_BUDGET,
@@ -226,6 +260,10 @@ export function getGoalLoopBudgetInfo(): {
     iterationsPerCycle: ITER_PER_CYCLE,
     reportReserveTokens: REPORT_RESERVE_TOKENS,
     unlimited: TOKEN_BUDGET === 0,
+    unlimitedToken: TOKEN_BUDGET === 0,
+    unlimitedTime: TIME_BUDGET_MS === 0,
+    unlimitedCycles: MAX_CYCLES === 0,
+    unlimitedIterations: ITER_PER_CYCLE === 0,
   }
 }
 
@@ -1120,6 +1158,11 @@ export async function runGoalDrivenLoop(params: {
       console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} vòng ${cycleIterations}: ${toolCalls.length} tool calls`)
       messages.push({ role: 'assistant', content: result.content })
 
+      // CI-2 (Task 11-a) — bằng chứng thu được trong batch này (đường dẫn file /
+      // lệnh shell của tool call THÀNH CÔNG) → auto-complete todo in_progress
+      // khớp nội dung NGAY SAU batch (LLM thường quên tự đóng todo).
+      const batchEvidence: string[] = []
+
       for (const [tcIdx, tc] of toolCalls.entries()) {
         if (isCancelled()) break
 
@@ -1163,12 +1206,24 @@ export async function runGoalDrivenLoop(params: {
         }
 
         // todo_write → inject sessionId (todos theo phiên chat, không đổ dồn "default")
+        // CI-2 (Task 11-a): inject THÊM runId của run hiện tại — todo được scope
+        // theo TỪNG RUN (per-task isolation: run mới không thấy todo run cũ).
+        // Điều kiện inject: sessionId trống hoặc trùng session của loop (agent
+        // tự khai sessionId khác → tôn trọng, không đụng).
         const toolArgs: Record<string, unknown> = { ...tc.args }
-        if (tc.name === 'todo_write' && agentSessionId && !toolArgs.sessionId) {
-          toolArgs.sessionId = agentSessionId
+        if (tc.name === 'todo_write' && agentSessionId && (!toolArgs.sessionId || toolArgs.sessionId === agentSessionId)) {
+          toolArgs.sessionId = toolArgs.sessionId || agentSessionId
+          if (runId && !toolArgs.runId) toolArgs.runId = runId
         }
 
         const toolResult = await executeTool(tc.name, toolArgs, { agentName, sessionId: agentSessionId })
+
+        // CI-2 (Task 11-a) — thu bằng chứng từ tool call THÀNH CÔNG (bảo thủ:
+        // chỉ path file/lệnh shell — xem extractTodoEvidence)
+        if (toolResult.success) {
+          const ev = extractTodoEvidence(tc.name, tc.args)
+          if (ev) batchEvidence.push(ev)
+        }
 
         // [F] TOKEN ACCOUNTING cho tool có LLM nội bộ (delegate_task /
         // dispatch_agent: sub-agent tiêu token thật; escalate_problem: Omega
@@ -1222,6 +1277,35 @@ export async function runGoalDrivenLoop(params: {
         evidence.push({ cycle, kind: 'tool', tool: tc.name, success: toolResult.success, text: resultPreview })
 
         pushToolMessage(messages, { tool: tc.name, success: toolResult.success, result: toolResult.result })
+      }
+
+      // ===== CI-2 (Task 11-a) — MID-RUN EVIDENCE-BASED AUTO-COMPLETE =====
+      // Sau mỗi batch tool call: todo 'in_progress' của ĐÚNG run hiện tại mà
+      // nội dung chứa đúng đường dẫn file / lệnh shell của tool call THÀNH CÔNG
+      // → tự đánh dấu 'completed' + snapshot lại todo list của run cho panel.
+      // LLM thường quên gọi todo_write đóng bước → đây là lưới an toàn dựa trên
+      // bằng chứng THẬT (substring match chặt, chỉ todo đúng runId). Fail-open.
+      if (agentSessionId && runId && batchEvidence.length > 0) {
+        try {
+          const res = await autoCompleteRunTodosByEvidence({
+            sessionId: agentSessionId,
+            runId,
+            evidence: batchEvidence,
+          })
+          if (res.completed > 0) {
+            recordAgentRunTodos(agentSessionId, res.todos.map(t => ({
+              id: t.id,
+              content: t.content,
+              status: t.status,
+              priority: t.priority,
+            })))
+            recordAgentThought(
+              agentSessionId,
+              `✅ CI-2: tự hoàn thành ${res.completed} todo theo bằng chứng tool (đường dẫn/lệnh shell khớp nội dung todo)`,
+              totalIterations,
+            )
+          }
+        } catch { /* fail-open — auto-complete không được phép làm hỏng loop */ }
       }
 
       if (isCancelled()) { endedBy = 'cancelled'; break }

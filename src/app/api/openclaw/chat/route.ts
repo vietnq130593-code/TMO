@@ -39,7 +39,13 @@ import { isSessionDeleted, isSessionDeletedDeep } from '@/lib/session-tombstone'
 // (user request 2026-08-31: mọi agents hiển thị tư duy/tiến trình như Claude Code)
 // 2026-09-01: start/end/thought/cancel đã chuyển vào agent-goal-loop.ts (run
 // của toàn bộ goal loop); route chỉ còn đọc run summary qua getAgentRuns.
-import { getAgentRuns } from '@/lib/agent-run-tracker'
+// CI-2 (Task 11-a): getActiveRunId dùng ở crash-path để đóng todo của run
+// đang chạy dở khi goal loop văng exception.
+import { getAgentRuns, getActiveRunId } from '@/lib/agent-run-tracker'
+// CI-2 (Task 11-a) — PER-TASK TODO ISOLATION: 2 helper vòng đời todo theo
+// runId (dev-tools TODO section): archive todo của run trước khi run mới bắt
+// đầu + đóng per-item trung thực khi run kết thúc (thay bulk-close cũ).
+import { archiveStaleRunTodos, closeRunTodosAtEnd } from '@/lib/code-team/dev-tools'
 // GOAL-DRIVEN LONG-HORIZON LOOP (user request 2026-09-01): thay thế ReAct loop cũ —
 // vòng lặp mục tiêu dài hạn: Xác định vấn đề → Triển khai → Kiểm định → Đánh giá
 // hoàn thành → (chưa: Chẩn đoán lỗi + Lập kế hoạch lại → lặp) → Hoàn thành.
@@ -894,6 +900,25 @@ export async function POST(request: NextRequest) {
         // PLAN → EXECUTE → VERIFY → EVALUATE (trọng tài độc lập) → DIAGNOSE+REPLAN
         // cho đến khi mục tiêu hoàn thành hoặc hết budget. maxIterations không còn
         // hardcoded ở đây — cấu hình qua env trong agent-goal-loop.ts.
+        //
+        // CI-2 (Task 11-a) — PER-TASK TODO ISOLATION: NGAY TRƯỚC khi run mới bắt
+        // đầu, lưu trữ (archive) mọi todo CÒN ĐANG MỞ (pending/in_progress/
+        // blocked) của các run TRƯỚC trong session (runId != null) → status
+        // 'archived' + archivedAt. Chọn hook ở ĐÂY (chat route, trước
+        // runGoalDrivenLoop) thay vì trong startAgentRun (tracker) vì:
+        //   (a) tracker là in-memory + fail-open — không nên gánh DB write;
+        //   (b) mọi goal-loop run của chat đều đi qua đúng 1 điểm này → không
+        //       archive nhầm todo của run đang chuẩn bị tạo (run mới chưa có
+        //       todo nào — archive chạy trước startAgentRun trong loop);
+        //   (c) todo runId=null (legacy, trước CI-2) được GIỮ NGUYÊN — hành vi
+        //       hiển thị theo session của mọi dữ liệu cũ không đổi.
+        // Fail-open tuyệt đối: isolation lỗi không được phép chặn chat.
+        if (sessionId) {
+          try {
+            await archiveStaleRunTodos(sessionId)
+          } catch { /* fail-open — archive lỗi không chặn chat */ }
+        }
+
         const reactResult = await runGoalDrivenLoop({
           systemPrompt,
           userMessage: lastUserContent,
@@ -957,20 +982,33 @@ export async function POST(request: NextRequest) {
 
         // FIX 2026-08-27 (user bug report "4 task đã chạy xong nhưng vẫn báo có 4
         // task đang chạy"): LLM thường quên gọi todo_write lần cuối để đóng các
-        // bước (đánh dấu in_progress rồi báo cáo luôn). Auto-close mọi todo còn
-        // in_progress/pending của session này khi loop đã kết thúc —
-        // agent đã trả lời xong thì không còn gì "đang chạy".
+        // bước (đánh dấu in_progress rồi báo cáo luôn).
         // GOAL LOOP (2026-09-01): nếu trọng tài kết luận CHƯA hoàn thành → đánh dấu
         // todo còn sót là 'failed' thay vì 'completed' (đóng ảo) — trung thực với
         // trạng thái thật, UI panel hiện ✗ thay vì ✓.
+        //
+        // CI-2 (Task 11-a) — PER-ITEM HONEST CLOSE (thay bulk-close "TẤT CẢ cùng
+        // lúc" quá thô): chỉ đóng todo của ĐÚNG run này (runId = reactResult.
+        // runId; tracker fail → runId null → scope legacy của session), mỗi item
+        // theo trạng thái thật của nó:
+        //   - in_progress → completed (mục tiêu đạt) | failed (chưa đạt — đã bắt
+        //     tay làm mà dở)
+        //   - pending (chưa từng bắt tay) → completed (mục tiêu đạt) | GIỮ pending
+        //     + archivedAt (chưa đạt — không đổ lỗi failed, nhưng ẩn khỏi run sau)
+        // Todo của CÁC run khác trong session KHÔNG bị đụng (đã được archive khi
+        // run này bắt đầu). try/catch — không bao giờ làm hỏng chat response.
         if (sessionId) {
           try {
             const goalIncomplete = reactResult.goalLoop ? reactResult.goalLoop.complete === false : false
-            const closed = await db.todo.updateMany({
-              where: { sessionId, status: { in: ['in_progress', 'pending'] } },
-              data: { status: goalIncomplete ? 'failed' : 'completed' },
+            const closed = await closeRunTodosAtEnd({
+              sessionId,
+              runId: reactResult.runId || null,
+              goalComplete: !goalIncomplete,
             })
-            if (closed.count > 0) console.log(`[GoalLoop] Auto-closed ${closed.count} stale todo(s) in session ${sessionId} → ${goalIncomplete ? 'failed (mục tiêu chưa hoàn thành)' : 'completed'}`)
+            const closedTotal = closed.inProgressClosed + closed.pendingCompleted + closed.pendingArchived
+            if (closedTotal > 0) {
+              console.log(`[Todo CI-2] Run ${reactResult.runId || '(legacy)'} kết thúc (${goalIncomplete ? 'CHƯA đạt' : 'đạt'} mục tiêu): đóng ${closed.inProgressClosed} in_progress, ${closed.pendingCompleted} pending→completed, ${closed.pendingArchived} pending ẩn (archivedAt) trong session ${sessionId}`)
+            }
           } catch { /* non-blocking — todo hiển thị chỉ là UI progress */ }
         }
 
@@ -1111,6 +1149,27 @@ export async function POST(request: NextRequest) {
         })
       } catch (err) {
         console.warn('[OpenClaw Chat] Goal loop error, falling back to /api/query:', err instanceof Error ? err.message : String(err))
+        // CI-2 (Task 11-a) — CRASH-PATH HONEST CLOSE: goal loop văng exception
+        // (trước khi endAgentRun chạy) → todo của run đang dở phải được đóng
+        // trung thực NGAY: in_progress → 'failed' (đã bắt tay làm mà run chết),
+        // pending → 'archived' (không còn cơ resume — ẩn khỏi run sau). Lấy
+        // runId qua getActiveRunId vì reactResult không tồn tại ở nhánh này.
+        // try/catch lồng — crash-path không được phép sinh lỗi thứ hai.
+        if (sessionId) {
+          try {
+            const crashRunId = getActiveRunId(sessionId)
+            const closed = await closeRunTodosAtEnd({
+              sessionId,
+              runId: crashRunId,
+              goalComplete: false,
+              crash: true,
+            })
+            const closedTotal = closed.inProgressClosed + closed.pendingCompleted + closed.pendingArchived
+            if (closedTotal > 0) {
+              console.log(`[Todo CI-2] Run ${crashRunId || '(legacy)'} crash → đóng ${closed.inProgressClosed} in_progress→failed, ${closed.pendingArchived} pending→archived trong session ${sessionId}`)
+            }
+          } catch { /* non-blocking — không được phép che lỗi gốc */ }
+        }
         // Fall through to /api/query fallback below
       }
     }

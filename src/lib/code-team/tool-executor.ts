@@ -54,6 +54,12 @@ import {
   dbQuery as executeDbQueryFn,
   // CI-6 / CI-4 (Task 10-b) — mở workspace bằng File Explorer / VS Code
   openWorkspaceInExplorer as openWorkspaceInExplorerFn,
+  // CI-4 B3-B5 (Task 11-c) — structured git tools (khảo sát repo + branch/clone)
+  gitStatus as executeGitStatusFn,
+  gitDiff as executeGitDiffFn,
+  gitLog as executeGitLogFn,
+  gitBranch as executeGitBranchFn,
+  gitClone as executeGitCloneFn,
   // Dynamic skill + MCP enumeration (user request 2026-08-29)
   listSkills as executeListSkillsFn,
   readSkill as executeReadSkillFn,
@@ -179,6 +185,70 @@ export interface ToolDefinition {
     }
   }
 }
+
+// ==================== CI-4 B6 (Task 11-c): MCP MOCK DE-ADVERTISE ====================
+//
+// mcp-bridge.ts ship 4 built-in servers (filesystem/github/postgres/puppeteer)
+// đều mock:true (Phase 3 stub) — agents gọi mcp_call nhận dữ liệu GIẢ (vd
+// github create_pr → "PR #42" không tồn tại) rồi hành động/nói dối user theo
+// dữ liệu đó. Fix: ẨN mock built-ins khỏi mọi bề mặt agents NHÌN THẤY —
+//   (1) mô tả tool mcp_call / mcp_list_servers không còn liệt kê chúng,
+//   (2) mcp_list_servers case lọc chúng khỏi listing,
+//   (3) mcp_call case chặn thẳng gọi trúng (redirect sang tools builtin thật).
+// mcp-bridge.ts GIỮ NGUYÊN (mock wiring còn cho Phase 5 thay bằng subprocess
+// thật — bỏ flag mock thì các lọc dưới tự mở lại). Servers operator khai báo
+// qua env MCP_SERVERS / ~/.config/mcp/servers.json KHÔNG bị ảnh hưởng.
+
+/** 4 built-in MCP servers Phase 3 (mock:true trong mcp-bridge BUILTIN_SERVERS) */
+const MCP_MOCK_BUILTIN_IDS = ['filesystem', 'github', 'postgres', 'puppeteer'] as const
+
+/**
+ * Set ID của built-in servers đang còn mock — tra động từ mcp-bridge để khi
+ * Phase 5 hiện thực server nào (bỏ mock) thì server đó tự hiện lại cho agents.
+ * Fail-open về danh sách tĩnh nếu bridge lỗi (vẫn ẩn — an toàn hơn).
+ */
+async function getHiddenMockMcpServerIds(): Promise<Set<string>> {
+  try {
+    const { listAvailableServers } = await import('@/lib/mcp/mcp-bridge')
+    const all = await listAvailableServers()
+    return new Set(
+      all.filter(s => s.mock && (MCP_MOCK_BUILTIN_IDS as readonly string[]).includes(s.id)).map(s => s.id),
+    )
+  } catch {
+    return new Set(MCP_MOCK_BUILTIN_IDS)
+  }
+}
+
+/**
+ * Lọc mock built-in servers khỏi receipt của mcp_list_servers (đổi tại chỗ —
+ * shape giữ nguyên, chỉ mảng servers[] bị lọc + ghi chú _note cho agents).
+ */
+async function filterMockMcpServersFromListing(raw: unknown): Promise<unknown> {
+  try {
+    if (raw && typeof raw === 'object' && Array.isArray((raw as { servers?: unknown }).servers)) {
+      const listing = raw as { servers?: Array<Record<string, unknown>>; [k: string]: unknown }
+      const hidden = await getHiddenMockMcpServerIds()
+      const before = listing.servers?.length ?? 0
+      listing.servers = (listing.servers || []).filter(s => !hidden.has(String(s.id || '')))
+      const hiddenCount = before - (listing.servers?.length ?? 0)
+      if (hiddenCount > 0) {
+        listing._note = `Đã ẩn ${hiddenCount} built-in mock server (Phase 3 stub — Phase 5 chưa hiện thực). Chỉ MCP servers operator cấu hình (env MCP_SERVERS / ~/.config/mcp/servers.json) được liệt kê.`
+      }
+      return listing
+    }
+    return raw
+  } catch {
+    return raw // fail-open shape gốc
+  }
+}
+
+// Log 1 lần khi module load (globalThis guard chống HMR double-log)
+;(() => {
+  const g = globalThis as { __tmoMcpMockHiddenLogged?: boolean }
+  if (g.__tmoMcpMockHiddenLogged) return
+  g.__tmoMcpMockHiddenLogged = true
+  console.log('[MCP] Built-in mock servers hidden from agents (filesystem/github/postgres/puppeteer — Phase 5 chưa hiện thực)')
+})()
 
 const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   opencode: {
@@ -520,7 +590,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'git_push',
-      description: 'Push commits local của ACTIVE WORKSPACE lên remote (origin). Token xác thực tự động lấy từ token đã lưu (user nhập trong dialog Pull Code) — KHÔNG cần hỏi user lại. Trước khi push: đảm bảo đã git_commit mọi thay đổi. dry_run=true để xem trạng thái (ahead/behind/uncommitted) mà không push. Chỉ dùng force:true khi user yêu cầu ghi đè.',
+      description: 'Push commits local của ACTIVE WORKSPACE lên remote (origin). Token xác thực tự động lấy từ token đã lưu (user nhập trong dialog Pull Code) — KHÔNG cần hỏi user lại. ⚠️ KHUYẾN NGHỊ: với tác vụ code của hệ thống TMO, hãy dùng tool verify_and_push thay thế — nó chạy pipeline kiểm định đầy đủ (lint → typecheck → tests → smoke → quét secret) TRƯỚC KHI push và TỰ TỪ CHỐI nếu có bước fail. Chỉ dùng git_push trực tiếp khi user yêu cầu push gấp không cần kiểm định, hoặc push branch phụ. dry_run=true để xem trạng thái (ahead/behind/uncommitted) mà không push. Chỉ dùng force:true khi user yêu cầu ghi đè.',
       parameters: {
         type: 'object',
         properties: {
@@ -581,6 +651,86 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           dry_run: { type: 'boolean', description: 'true = chạy đủ các bước kiểm định nhưng KHÔNG commit/push/pull' },
         },
         required: ['commit_message'],
+      },
+    },
+  },
+
+  // CI-4 B3-B5 (Task 11-c) — structured git tools: khảo sát repo TRƯỚC khi sửa.
+  // git_status/git_diff/git_log read-only luôn bật; git_branch/git_clone gate
+  // chung ENABLE_GIT_COMMIT như mọi git tool (policy "1 flag tắt hết").
+  git_status: {
+    type: 'function',
+    function: {
+      name: 'git_status',
+      description: 'Trạng thái git có cấu trúc: branch hiện tại, ahead/behind so với upstream, clean/dirty, danh sách file thay đổi (path + status modified/added/deleted/untracked + staged?), remote URL (đã strip token), head commit. Gọi ĐẦU TIÊN khi khảo sát repo trước khi sửa code — rẻ, read-only, không side-effect.',
+      parameters: {
+        type: 'object',
+        properties: {
+          root: { type: 'string', description: 'Đường dẫn repo cần kiểm tra, absolute hoặc relative so với workspace (optional — default = ACTIVE workspace)' },
+        },
+      },
+    },
+  },
+  git_diff: {
+    type: 'function',
+    function: {
+      name: 'git_diff',
+      description: 'Xem diff so với 1 ref cục bộ (default HEAD): summary (filesChanged + insertions + deletions) + nội dung diff capped max_lines (default 400). staged_only=true chỉ xem phần đã stage. Xem trước khi commit để chắc chắn sửa đúng chỗ; thu hẹp bằng paths[] cho diff nhỏ.',
+      parameters: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: 'Git ref cục bộ cần so sánh (default HEAD — vd HEAD, main, abc1234, HEAD~3). KHÔNG nhận URL remote/option.' },
+          staged_only: { type: 'boolean', description: 'true = chỉ diff phần đã stage (git diff --cached)' },
+          paths: { type: 'array', items: { type: 'string' }, description: 'Chỉ diff các path này (relative từ workspace root)' },
+          max_lines: { type: 'number', description: 'Cap số dòng diff trả về (default 400, max 2000)' },
+        },
+      },
+    },
+  },
+  git_log: {
+    type: 'function',
+    function: {
+      name: 'git_log',
+      description: 'Lịch sử commit có cấu trúc: commits[] với hash, shortHash, author, date, message (+ files[] mỗi commit mặc định). oneline=true = compact không kèm files. Dùng khi cần hiểu commit nào đụng file gì, ai sửa gần đây, trước khi refactor/xóa code.',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit: { type: 'number', description: 'Số commit tối đa (default 20, max 100)' },
+          path: { type: 'string', description: 'Chỉ xem lịch sử của 1 file/thư mục (relative từ workspace root)' },
+          oneline: { type: 'boolean', description: 'true = compact (không kèm files[] mỗi commit) — xem nhanh dòng thời gian' },
+        },
+      },
+    },
+  },
+  git_branch: {
+    type: 'function',
+    function: {
+      name: 'git_branch',
+      description: 'Quản lý branch: list (danh sách + branch hiện tại) | create (tạo mới, không switch) | switch (chuyển branch — thay đổi working tree) | delete (-d an toàn chỉ xóa branch đã merge; force=true (-D) xóa cả branch chưa merge; TỪ CHỐI xóa branch đang đứng).',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['list', 'create', 'switch', 'delete'], description: 'Hành động trên branch' },
+          name: { type: 'string', description: 'Tên branch (bắt buộc với create/switch/delete — chỉ [a-zA-Z0-9._-/])' },
+          force: { type: 'boolean', description: 'delete: true = -D xóa cả branch chưa merge (NGUY HIỂM — mất commit chưa merge)' },
+        },
+        required: ['action'],
+      },
+    },
+  },
+  git_clone: {
+    type: 'function',
+    function: {
+      name: 'git_clone',
+      description: 'Clone 1 repo GitHub (https://) VÀO thư mục con của ACTIVE workspace (target_dir hoặc tên repo). depth=1 clone shallow cho nhanh. Token embedded trong URL được dùng one-shot rồi dọn khỏi .git/config; repo private cũng dùng được token đã lưu. Sau clone trả targetPath + số file + branch.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'URL https:// của repo (vd https://github.com/user/repo.git) — CHỈ https://' },
+          target_dir: { type: 'string', description: 'Thư mục đích trong workspace (optional — default = tên repo từ URL)' },
+          depth: { type: 'number', description: 'Shallow clone depth (vd 1 = chỉ commit cuối — nhanh, tiết kiệm disk)' },
+        },
+        required: ['url'],
       },
     },
   },
@@ -698,17 +848,21 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       },
     },
   },
-  // 3.6 — MCP bridge call (stub: 4 built-in servers with mock impl).
+  // 3.6 — MCP bridge call. CI-4 B6 (Task 11-c) de-advertise: 4 built-in server
+  // (filesystem/github/postgres/puppeteer) là MOCK Phase 3 (trả dữ liệu giả —
+  // vd github create_pr → PR #42 không tồn tại) → KHÔNG còn quảng bá trong mô
+  // tả; gọi trực tiếp cũng bị chặn ở case mcp_call bên dưới. Chỉ MCP servers
+  // operator cấu hình (env MCP_SERVERS / ~/.config/mcp/servers.json) được dùng.
   mcp_call: {
     type: 'function',
     function: {
       name: 'mcp_call',
-      description: 'Gọi tool trên MCP server (filesystem/github/postgres/puppeteer + discovered từ env MCP_SERVERS hoặc ~/.config/mcp/servers.json). First-use permission prompt (D10): trả requiresPermission=true lần đầu, agent phải gọi /api/openclaw/permissions grant. Phase 3 stub — mock impl, real subprocess deferred Phase 5.',
+      description: 'Gọi tool trên MCP server do operator cấu hình (env MCP_SERVERS hoặc ~/.config/mcp/servers.json — xem danh sách qua mcp_list_servers). First-use permission prompt (D10): trả requiresPermission=true lần đầu, agent phải gọi /api/openclaw/permissions grant. Lưu ý: mọi thao tác code/git/DB/browser dùng tools builtin của app (file_read, git_commit, db_query, browser_screenshot...) — mcp_call chỉ cho MCP servers operator cấu hình riêng.',
       parameters: {
         type: 'object',
         properties: {
-          server: { type: 'string', description: 'MCP server ID (filesystem/github/postgres/puppeteer/...)' },
-          tool: { type: 'string', description: 'Tool name trên server (vd create_pr, read_file, query...)' },
+          server: { type: 'string', description: 'MCP server ID (lấy từ mcp_list_servers)' },
+          tool: { type: 'string', description: 'Tool name trên server (vd invoke...)' },
           args: { type: 'object', description: 'Tool args (schema phụ thuộc server+tool)' },
         },
         required: ['server', 'tool'],
@@ -1033,7 +1187,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'mcp_list_servers',
-      description: 'Enumerate MCP servers runtime: built-in servers (filesystem/github/postgres/puppeteer) + tools mỗi server + MCP Bridge OpenClaw↔OpenCode (outbound/inbound) + trạng thái mcp_call.',
+      description: 'Enumerate MCP servers runtime: MCP servers operator cấu hình (env MCP_SERVERS / ~/.config/mcp/servers.json) + tools mỗi server + MCP Bridge OpenClaw↔OpenCode (outbound/inbound) + trạng thái mcp_call. Built-in mock servers Phase 3 đã bị ẩn (dữ liệu giả — Phase 5 chưa hiện thực).',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -1789,6 +1943,63 @@ export async function executeTool(
         })
         break
       }
+      // ===== CI-4 B3-B5 (Task 11-c) — structured git tools =====
+      // Read-only 3 tool (status/diff/log): luôn bật — không flag, đã validate
+      // injection guard ở tầng dev-tools (target ref cục bộ, paths scoped workspace).
+      case 'git_status':
+        result = await executeGitStatusFn(
+          typeof args.root === 'string' && args.root.trim() ? args.root.trim() : undefined,
+        )
+        break
+      case 'git_diff':
+        result = await executeGitDiffFn({
+          target: typeof args.target === 'string' && args.target.trim() ? args.target : undefined,
+          staged_only: args.staged_only === true,
+          paths: Array.isArray(args.paths)
+            ? args.paths.filter((p): p is string => typeof p === 'string' && p.trim() !== '')
+            : undefined,
+          max_lines: typeof args.max_lines === 'number' && Number.isFinite(args.max_lines) ? args.max_lines : undefined,
+        })
+        break
+      case 'git_log':
+        result = await executeGitLogFn({
+          limit: typeof args.limit === 'number' && Number.isFinite(args.limit) ? args.limit : undefined,
+          path: typeof args.path === 'string' && args.path.trim() ? args.path : undefined,
+          oneline: args.oneline === true,
+        })
+        break
+      // Write-class 2 tool (branch/clone): gate chung ENABLE_GIT_COMMIT — đồng bộ
+      // policy section P0.5 ("1 flag tắt hết mọi git tool"), KHÔNG thêm flag mới.
+      case 'git_branch': {
+        if (!isFlagEnabled('ENABLE_GIT_COMMIT')) {
+          return {
+            success: false,
+            result: 'git_branch tool is disabled (set ENABLE_GIT_COMMIT=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeGitBranchFn({
+          action: (typeof args.action === 'string' ? args.action : '') as 'list' | 'create' | 'switch' | 'delete',
+          name: typeof args.name === 'string' ? args.name : undefined,
+          force: args.force === true,
+        })
+        break
+      }
+      case 'git_clone': {
+        if (!isFlagEnabled('ENABLE_GIT_COMMIT')) {
+          return {
+            success: false,
+            result: 'git_clone tool is disabled (set ENABLE_GIT_COMMIT=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeGitCloneFn({
+          url: typeof args.url === 'string' ? args.url : '',
+          target_dir: typeof args.target_dir === 'string' && args.target_dir.trim() ? args.target_dir : undefined,
+          depth: typeof args.depth === 'number' && Number.isFinite(args.depth) ? args.depth : undefined,
+        })
+        break
+      }
       // ===== P1: diagnostics + planning + synthesis + processes + packages =====
       case 'get_diagnostics':
         result = await getDiagnostics(args as any)
@@ -1866,12 +2077,25 @@ export async function executeTool(
         result = await executeDbQueryFn(args as any)
         break
       }
-      // 3.6 mcp_call — MCP bridge (filesystem/github/postgres/puppeteer + discovered)
+      // 3.6 mcp_call — MCP bridge (servers operator cấu hình qua env/config)
       case 'mcp_call': {
         if (!isFlagEnabled('ENABLE_MCP_CALL')) {
           return {
             success: false,
             result: 'mcp_call tool is disabled (set ENABLE_MCP_CALL=true in .env to enable). See docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 3.6.',
+            duration: Date.now() - startTime,
+          }
+        }
+        // CI-4 B6 (Task 11-c): chặn mock built-in servers tại executor — chúng
+        // trả dữ liệu GIẢ (vd github create_pr → PR #42 không tồn tại) và agents
+        // đã từng tin theo. mcp-bridge.ts giữ nguyên; khi Phase 5 thay mock bằng
+        // subprocess thật (bỏ flag mock) thì lọc này tự mở lại.
+        const mcpServerId = typeof args.server === 'string' ? args.server.trim().toLowerCase() : ''
+        const hiddenMockIds = await getHiddenMockMcpServerIds()
+        if (hiddenMockIds.has(mcpServerId)) {
+          return {
+            success: false,
+            result: `MCP server "${mcpServerId}" là built-in MOCK (Phase 3 stub — dữ liệu giả, Phase 5 chưa hiện thực) và đã bị ẩn. KHÔNG dùng nó cho tác vụ thật. Dùng tools builtin tương ứng: file_read/file_write/file_list (filesystem), git_status/git_diff/git_log/git_commit/git_push (github), db_query (SQL), browser_screenshot (browser).`,
             duration: Date.now() - startTime,
           }
         }
@@ -2125,9 +2349,14 @@ export async function executeTool(
       case 'read_skill':
         result = await executeReadSkillFn(args as { slug: string })
         break
-      case 'mcp_list_servers':
-        result = await executeMcpListServersFn()
+      case 'mcp_list_servers': {
+        // CI-4 B6 (Task 11-c) — de-advertise: lọc mock built-in servers (Phase 3
+        // stub) khỏi danh sách agents nhìn thấy. mcp-bridge.ts giữ nguyên — chỉ
+        // lọc ở tầng hiển thị cho agents.
+        const rawListing = await executeMcpListServersFn()
+        result = await filterMockMcpServersFromListing(rawListing)
         break
+      }
       // ===== v2.1 Phase 1b.1: Unified web (consolidate tavily/serper/jina) =====
       case 'web_search':
         if (!isFlagEnabled('ENABLE_WEB_UNIFIED')) {

@@ -55,6 +55,7 @@ import {
   Compass,
   Eye,
   FlaskConical,
+  GitBranch,
   Lightbulb,
   Loader2,
   Play,
@@ -108,6 +109,8 @@ export interface SdProposal {
   status: SdStatus
   source: string
   createdBy: string
+  /** CI-6 B5: llm | code-workflow (optional — API cũ có thể thiếu field) */
+  executionMode?: string | null
   userNotes: string | null
   reviewer: 'mr-architect' | 'omega' | null
   decisionReason: string | null
@@ -297,6 +300,20 @@ function StepStatusBadge({ status }: { status: SdStepStatus }) {
   return (
     <Badge variant="outline" className={`text-[9px] h-4 px-1.5 ${meta.className}`}>
       {meta.label}
+    </Badge>
+  )
+}
+
+/** CI-6 B5: badge đề xuất chạy chế độ code-workflow (thực thi code thật + pipeline kiểm định) */
+function CodeWorkflowBadge({ compact = false }: { compact?: boolean }) {
+  return (
+    <Badge
+      variant="outline"
+      className={`bg-amber-950/30 text-amber-300 border-amber-500/40 ${compact ? 'text-[9px] h-4 px-1.5' : 'text-[10px]'}`}
+      title="Đề xuất thực thi CODE THẬT trong workspace: agents sửa file qua tool executor + bước cuối chạy pipeline kiểm định 9 bước (lint → typecheck → tests → smoke → secret-scan → commit → push → pull)"
+    >
+      <GitBranch className="h-3 w-3" />
+      Code-workflow
     </Badge>
   )
 }
@@ -892,6 +909,7 @@ export default function SelfDirectionModule() {
                           <div className="flex flex-wrap items-center gap-1.5">
                             <CategoryBadge category={p.category} />
                             <PriorityBadge priority={p.priority} />
+                            {p.executionMode === 'code-workflow' && <CodeWorkflowBadge />}
                             <span className="text-[10px] text-stone-500 ml-auto">
                               {p.source}/{p.createdBy} • {fmtDateTime(p.createdAt)}
                             </span>
@@ -1032,6 +1050,7 @@ export default function SelfDirectionModule() {
                             <h3 className="text-xs font-semibold text-stone-100 flex-1 min-w-[160px] truncate">
                               {p.title}
                             </h3>
+                            {p.executionMode === 'code-workflow' && <CodeWorkflowBadge compact />}
                             <CategoryBadge category={p.category} compact />
                             <PriorityBadge priority={p.priority} compact />
                           </div>
@@ -1184,6 +1203,7 @@ export default function SelfDirectionModule() {
             <DialogDescription className="text-xs text-stone-400 flex flex-wrap items-center gap-1.5">
               {detailHeader && <CategoryBadge category={detailHeader.category} compact />}
               {detailHeader && <PriorityBadge priority={detailHeader.priority} compact />}
+              {detailHeader?.executionMode === 'code-workflow' && <CodeWorkflowBadge compact />}
               {detailHeader?.reviewer && <ReviewerBadge reviewer={detailHeader.reviewer} />}
               {detailHeader?.reviewedAt && (
                 <span>• Duyệt lúc {fmtDateTime(detailHeader.reviewedAt)}</span>

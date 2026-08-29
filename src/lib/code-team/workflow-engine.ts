@@ -1435,13 +1435,24 @@ export async function runAgentStep(params: {
   // tự upsert 1 todo (idempotencyKey = sessionId:position:step) vào DB → UI panel
   // "Agent Tasks" trong tab Code hiển thị tiến độ workflow theo thời gian thực.
   // Fail-open: todo lỗi KHÔNG bao giờ làm hỏng workflow.
+  // CI-2 (Task 11-a): step-todo được gắn runId = sessionId của workflow — nhóm
+  // todo của CÙNG workflow session thành 1 khối (không phải runId per-step của
+  // tracker vì step-todo được tạo TRƯỚC startAgentRun của step). Run chat mới
+  // của session sẽ archive chúng qua archiveStaleRunTodos → per-task isolation.
   const stepTodoKey = `${sessionId}:${position}:${step}`
   const stepTodoContent = `[${position}] ${step} — ${agent.name}`
   const upsertStepTodo = async (status: 'in_progress' | 'completed' | 'failed') => {
     try {
       const existing = await db.todo.findFirst({ where: { sessionId, idempotencyKey: stepTodoKey } })
       if (existing) {
-        await db.todo.update({ where: { id: existing.id }, data: { status } })
+        await db.todo.update({
+          where: { id: existing.id },
+          data: {
+            status,
+            // CI-2 — backfill runId cho step-todo cũ (trước CI-2, runId null)
+            ...(existing.runId ? {} : { runId: sessionId }),
+          },
+        })
       } else {
         await db.todo.create({
           data: {
@@ -1451,6 +1462,7 @@ export async function runAgentStep(params: {
             status,
             priority: 'medium',
             idempotencyKey: stepTodoKey,
+            runId: sessionId,
           },
         })
       }

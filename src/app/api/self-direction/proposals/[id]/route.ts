@@ -29,6 +29,8 @@ export async function GET(
       where: { proposalId: id },
       orderBy: { stepOrder: 'asc' },
     })
+    // CI-6 B5: proposal row (spread) tự chứa executionMode; steps tự chứa
+    // workspaceReceipt (pipeline pre-push / tool-call receipts của code-workflow)
     return NextResponse.json({
       proposal: { ...proposal, orchestrating: isOrchestrating(id) },
       steps,

@@ -4133,6 +4133,28 @@ interface SmolabSession {
 //   - Tiến trình live: đã đọc bao nhiêu file, chạy bao nhiêu lệnh, KẾT QUẢ THẬT
 //   - Trạng thái Done khi hoàn thành
 
+/** CI-2 (Task 11-a/11-b) — Todo gắn per-run (per-task isolation).
+ *  Nguồn: DB Todo (serializeTodo của /api/todos + /api/agent-run) — mỗi run
+ *  chỉ thấy todo của ĐÚNG runId mình; runId=null = todo legacy tiền CI-2.
+ *  status: pending | in_progress | blocked | completed | failed | archived
+ *  ('archived' = đã lưu trữ — panel ẩn, chỉ đếm "N đã lưu trữ"). */
+interface RunTodoData {
+  id: string
+  sessionId?: string
+  /** Run sở hữu todo — null = legacy (tạo trước CI-2, không thuộc run nào) */
+  runId?: string | null
+  agentRole?: string
+  content: string
+  status: string
+  priority?: string
+  parentId?: string | null
+  position?: number
+  /** Thời điểm lưu trữ — != null → ẩn khỏi panel (đã bị run mới archive) */
+  archivedAt?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+
 interface AgentRunEventData {
   id: string
   ts: number
@@ -4172,6 +4194,10 @@ interface AgentRunData {
   events: AgentRunEventData[]
   counters: AgentRunCountersData
   lastTodos?: Array<{ id: string; content: string; status: string; priority?: string }>
+  /** CI-2 (Task 11-a): todo DB của ĐÚNG runId này (orderBy position, kèm theo
+   *  mỗi run item từ GET /api/agent-run) — panel Thought Process (11-b) ưu
+   *  tiên nguồn này thay vì danh sách session-wide. Fail-open [] khi lỗi DB. */
+  todos?: RunTodoData[]
 }
 
 /** Summary tĩnh gắn vào assistant message (persist qua DB metadata) */
@@ -4233,14 +4259,28 @@ function fmtRunDuration(ms?: number): string {
 }
 
 /** Panel Thought Process — render bên trong message flow (role 'agent_run') */
-function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: string; content: string; status: string; priority?: string }> }) {
+function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTodoData[] }) {
   // Mặc định ĐÓNG — bấm tiêu đề mới mở (user request: như Claude Code)
   const [open, setOpen] = useState(false)
 
   const running = run.status === 'running'
   const elapsed = (run.endedAt || Date.now()) - run.startedAt
   const c = run.counters
-  const todoList = todos.length > 0 ? todos : (run.lastTodos || [])
+  // CI-2 (Task 11-b) — PER-TASK TODO ISOLATION: panel chỉ hiện todo của ĐÚNG
+  // run này, ưu tiên theo thứ tự:
+  //   (1) run.todos — DB per-runId từ /api/agent-run (11-a)
+  //   (2) run.lastTodos — snapshot in-memory của tracker
+  //   (3) prop todos (session-wide) — CHỈ còn fallback CUỐI cho dữ liệu legacy
+  //       (runId=null, tạo trước CI-2) và đã lọc bỏ todo thuộc run khác →
+  //       task cũ không còn trộn (bleed) vào panel task mới.
+  const legacyTodos = todos.filter(t => !t.runId)
+  const sourceTodos: RunTodoData[] = (run.todos && run.todos.length > 0)
+    ? run.todos
+    : ((run.lastTodos && run.lastTodos.length > 0) ? run.lastTodos : legacyTodos)
+  // Ẩn todo đã lưu trữ (status 'archived' hoặc archivedAt != null) — run mới
+  // archive todo mở của run cũ (archiveStaleRunTodos, 11-a) → panel cũ sạch.
+  const todoList = sourceTodos.filter(t => t.status !== 'archived' && !t.archivedAt)
+  const archivedCount = sourceTodos.length - todoList.length
   const doneCount = todoList.filter(t => t.status === 'completed').length
 
   // Hoạt động mới nhất — hiện ngay ở header (collapsed) để thấy "đang làm gì"
@@ -4327,9 +4367,10 @@ function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: s
               </div>
               <div className="max-h-40 overflow-y-auto space-y-0.5 pr-1" style={{ scrollbarWidth: 'thin' }}>
                 {todoList.map(t => {
+                  // 'archived' đã bị lọc ở trên (todoList) — nhánh dưới chỉ phòng thủ
                   const st = t.status
                   const icon = st === 'completed' ? '✓' : st === 'in_progress' ? '◐' : st === 'failed' ? '✗' : st === 'blocked' ? '⚠' : '○'
-                  const color = st === 'completed' ? 'text-emerald-400' : st === 'in_progress' ? 'text-amber-300' : st === 'failed' ? 'text-red-400' : st === 'blocked' ? 'text-orange-400' : 'text-stone-400'
+                  const color = st === 'completed' ? 'text-emerald-400' : st === 'in_progress' ? 'text-amber-300' : st === 'failed' ? 'text-red-400' : st === 'blocked' ? 'text-orange-400' : st === 'archived' ? 'text-stone-500' : 'text-stone-400'
                   return (
                     <div key={t.id} className="flex items-start gap-2 px-1 py-0.5">
                       <span className={`text-[13px] leading-5 flex-shrink-0 ${color} ${st === 'in_progress' ? 'animate-pulse' : ''}`}>{icon}</span>
@@ -4337,6 +4378,11 @@ function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: Array<{ id: s
                     </div>
                   )
                 })}
+                {/* CI-2 — todo đã lưu trữ của run này (bị run sau archive hoặc
+                    crash-close): gọn 1 dòng xám, không chiếm chỗ */}
+                {archivedCount > 0 && (
+                  <div className="px-1 py-0.5 text-[11px] text-stone-500">▸ {archivedCount} đã lưu trữ</div>
+                )}
               </div>
             </div>
           )}
@@ -8401,7 +8447,9 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
   // agentRuns: runId → dữ liệu run mới nhất (poll từ /api/agent-run mỗi 1.2s
   // trong lúc agent đang chạy). Panel render trong message flow (role 'agent_run').
   const [agentRuns, setAgentRuns] = useState<Record<string, AgentRunData>>({})
-  const [sessionTodos, setSessionTodos] = useState<Array<{ id: string; content: string; status: string; priority?: string }>>([])
+  // CI-2 (11-b): sessionTodos giờ chỉ còn là fallback CUỐI trong panel Thought
+  // Process (todo legacy runId=null) — ưu tiên run.todos per-runId (11-a).
+  const [sessionTodos, setSessionTodos] = useState<RunTodoData[]>([])
   const agentRunsRef = useRef<Record<string, AgentRunData>>({})
   const isLoadingRef = useRef(false)
   useEffect(() => { agentRunsRef.current = agentRuns })
@@ -9266,7 +9314,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
       if (todosRes?.ok) {
         const td = await todosRes.json().catch(() => null) as {
           ok?: boolean
-          todos?: Array<{ id: string; content: string; status: string; priority?: string }>
+          todos?: Array<{ id: string; content: string; status: string; priority?: string; runId?: string | null; archivedAt?: string | null }>
         } | null
         if (td?.ok && Array.isArray(td.todos)) {
           setSessionTodos(td.todos.map(t => ({
@@ -9274,6 +9322,10 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
             content: String(t.content || ''),
             status: String(t.status || 'pending'),
             priority: t.priority ? String(t.priority) : undefined,
+            // CI-2 (11-a): giữ runId + archivedAt — panel dùng để lọc chỉ còn
+            // todo legacy (runId=null) làm fallback + ẩn todo đã lưu trữ
+            runId: t.runId != null ? String(t.runId) : null,
+            archivedAt: t.archivedAt != null ? String(t.archivedAt) : null,
           })))
         }
       }
@@ -11016,6 +11068,9 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                     )}
 
                     {/* Thought Process panel — live tư duy/todos/kết quả thật của agent (user request 2026-08-31) */}
+                    {/* CI-2 (11-b): panel TỰ LẤY todo của run này từ run.todos
+                        (per-runId — /api/agent-run, 11-a); sessionTodos chỉ còn
+                        là fallback legacy (runId=null), không override nữa. */}
                     {msg.role === 'agent_run' && msg.runId && agentRuns[msg.runId] && (
                       <AgentRunPanel run={agentRuns[msg.runId]} todos={sessionTodos} />
                     )}

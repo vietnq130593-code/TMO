@@ -381,7 +381,22 @@ export async function runPrePushVerification(opts: {
   // ── Bước 4: smoke (optional — HEAD probe URL, mong status < 400) ──
   if (opts.smokeUrl && opts.smokeUrl.trim()) {
     const smokeUrl = opts.smokeUrl.trim()
+    // FIX review #12: chặn SSRF — smokeUrl chỉ chấp nhận http(s), từ chối IP
+    // metadata cloud (169.254.169.254, fd00:ec2::254) và localhost variants
+    // NGOẠI trừ host localhost/127.0.0.1 (probe app local là use-case chính)
     const smokeOk = await step('smoke', async () => {
+      let parsed: URL
+      try {
+        parsed = new URL(smokeUrl)
+      } catch {
+        return { status: 'fail', detail: `smokeUrl không phải URL hợp lệ: ${smokeUrl.slice(0, 80)}` }
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return { status: 'fail', detail: `smokeUrl chỉ chấp nhận http/https (nhận ${parsed.protocol})` }
+      }
+      if (/^169\.254\.169\.254$|^fd00:ec2::/i.test(parsed.hostname)) {
+        return { status: 'fail', detail: 'smokeUrl trỏ tới metadata endpoint cloud — bị chặn (SSRF guard)' }
+      }
       const res = await fetch(smokeUrl, { method: 'HEAD', signal: AbortSignal.timeout(SMOKE_TIMEOUT_MS) })
       if (res.status < 400) {
         return { status: 'pass', detail: `HEAD ${smokeUrl} → HTTP ${res.status}` }

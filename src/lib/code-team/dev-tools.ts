@@ -1609,6 +1609,625 @@ export async function openWorkspaceInExplorer(
   })
 }
 
+// ==================== CI-4 B3-B5 (Task 11-c): STRUCTURED GIT TOOLS ====================
+//
+// Roadmap CI-4 (docs/CODE_EXECUTION_IMPROVEMENT_ROADMAP.md): bộ 5 git tools có
+// cấu trúc (receipt) cho agents KHẢO SÁT repo trước khi sửa code —
+//   B3. git_status — branch / ahead-behind / clean / files[] (staged? untracked?)
+//   B4. git_diff  — diff có kiểm soát (numstat summary + content capped max_lines)
+//   B5. git_log   — lịch sử commit structured (hash/author/date/message/files)
+//   B5. git_branch— list / create / switch / delete (validate tên, chống injection)
+//   B5. git_clone — clone repo https:// INTO workspace root (token mask toàn bộ)
+//
+// Pattern: execFileAsync('git', [argv...], { cwd: root, timeout }) — argv array
+// bypass shell hoàn toàn (không shell-injection); token KHÔNG BAO GIỜ xuất hiện
+// trong receipt/log (stripTokenFromGitUrl + mask err.message — cùng chuẩn fix
+// review #1 HIGH của GĐ1). Read-mostly (status/diff/log) chạy luôn không cần
+// feature flag; git_branch/git_clone gate chung ENABLE_GIT_COMMIT ở tầng
+// tool-executor (đồng bộ policy "1 flag tắt hết mọi git tool" của section P0.5).
+
+/** Cap số file trong receipt git_status — chống phình context agent */
+const GIT_STATUS_MAX_FILES = 200
+
+/** Map mã XY của `git status --porcelain` sang tên trạng thái thân thiện */
+function mapPorcelainStatus(code: string): string {
+  const x = code[0] || ' '
+  const y = code[1] || ' '
+  if (code === '??') return 'untracked'
+  if (x === 'A' || y === 'A') return 'added'
+  if (x === 'D' || y === 'D') return 'deleted'
+  if (x === 'R' || y === 'R') return 'renamed'
+  if (x === 'C' || y === 'C') return 'copied'
+  if (x === 'U' || y === 'U' || code === 'AA' || code === 'DD') return 'conflict'
+  return 'modified'
+}
+
+/** Bỏ cặp nháy kép mà git porcelain bọc quanh path chứa ký tự đặc biệt */
+function stripPorcelainPath(raw: string): string {
+  let p = raw.trim()
+  if (p.startsWith('"') && p.endsWith('"') && p.length >= 2) p = p.slice(1, -1)
+  return p
+}
+
+/**
+ * gitStatus — B3: trạng thái git có cấu trúc của 1 repo (default = ACTIVE workspace).
+ *
+ * 1 lệnh `git status --porcelain -b` cho ra branch + ahead/behind + files;
+ * `git remote get-url origin` lấy remote (STRIP token qua stripTokenFromGitUrl);
+ * `git rev-parse --short HEAD` lấy head commit. Receipt:
+ *   { success, root, branch, upstream, ahead, behind, clean, fileCount,
+ *     files: [{path, status, staged}], remoteUrl (đã strip token), headCommit }
+ *
+ * Read-only — KHÔNG feature flag. Dùng ĐẦU TIÊN khi khảo sát repo trước khi sửa.
+ */
+export async function gitStatus(rootArg?: string): Promise<unknown> {
+  // root: absolute dùng nguyên; relative resolve theo ACTIVE workspace root
+  const wsRoot = await resolveWorkspaceRoot()
+  const root = rootArg && typeof rootArg === 'string' && rootArg.trim()
+    ? path.resolve(wsRoot, rootArg.trim())
+    : wsRoot
+
+  try {
+    const isRepo = await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, timeout: 5_000 })
+      .then(r => r.stdout.trim() === 'true').catch(() => false)
+    if (!isRepo) {
+      return {
+        success: false,
+        root,
+        error: `Thư mục (${root}) KHÔNG phải git repository — kiểm tra đường dẫn, hoặc khởi tạo bằng shell({"command": "git init"}).`,
+      }
+    }
+
+    // Branch + upstream + ahead/behind + files: 1 call duy nhất
+    const { stdout: porcelainB } = await execFileAsync('git', ['status', '--porcelain', '-b'], { cwd: root, timeout: 10_000 })
+    const lines = porcelainB.split('\n')
+
+    // Header: "## branch...upstream [ahead N, behind M]" | "## HEAD (no branch)" | "## No commits yet on main"
+    let branch = ''
+    let upstream: string | null = null
+    let ahead = 0
+    let behind = 0
+    const header = (lines[0] || '').trim()
+    if (header.startsWith('## ')) {
+      const headerBody = header.slice(3)
+      if (headerBody.startsWith('No commits yet on ')) {
+        branch = headerBody.replace('No commits yet on ', '').trim()
+      } else {
+        const m = headerBody.match(/^(\S+?)(?:\.\.\.(\S+))?(?:\s+\[(.*)\])?$/)
+        if (m) {
+          if (m[1] === 'HEAD') {
+            // Detached HEAD — hiển thị kèm commit để agent không lạc ngữ cảnh
+            const short = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, timeout: 5_000 })
+              .then(r => r.stdout.trim()).catch(() => '?')
+            branch = `HEAD (detached tại ${short})`
+          } else {
+            branch = m[1]
+          }
+          upstream = m[2] || null
+          if (m[3]) {
+            const aheadM = m[3].match(/ahead (\d+)/)
+            const behindM = m[3].match(/behind (\d+)/)
+            ahead = aheadM ? parseInt(aheadM[1], 10) || 0 : 0
+            behind = behindM ? parseInt(behindM[1], 10) || 0 : 0
+          }
+        }
+      }
+    }
+
+    // Files: các dòng sau header — "XY path" / "XY old -> new" (rename) / "?? path"
+    const files: Array<{ path: string; status: string; staged: boolean }> = []
+    for (const line of lines.slice(1)) {
+      if (!line.trim()) continue
+      const code = line.slice(0, 2)
+      const rawPath = line.slice(3)
+      // Rename "R  old -> new": lấy path MỚI làm chính (path cũ nằm trong git output gốc)
+      const displayPath = rawPath.includes(' -> ')
+        ? stripPorcelainPath(rawPath.split(' -> ').pop() || '')
+        : stripPorcelainPath(rawPath)
+      if (!displayPath) continue
+      files.push({
+        path: displayPath,
+        status: mapPorcelainStatus(code),
+        staged: code[0] !== ' ' && code !== '??',
+      })
+    }
+
+    // Remote URL (STRIP token) + head commit — best-effort, không fail chính
+    const remoteUrl = await execFileAsync('git', ['remote', 'get-url', 'origin'], { cwd: root, timeout: 5_000 })
+      .then(r => stripTokenFromGitUrl(r.stdout.trim())).catch(() => '')
+    const headCommit = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, timeout: 5_000 })
+      .then(r => r.stdout.trim()).catch(() => '')
+
+    return {
+      success: true,
+      root,
+      branch,
+      upstream,
+      ahead,
+      behind,
+      clean: files.length === 0,
+      fileCount: files.length,
+      files: files.slice(0, GIT_STATUS_MAX_FILES),
+      ...(files.length > GIT_STATUS_MAX_FILES ? { filesTruncated: true, note: `Hiển thị ${GIT_STATUS_MAX_FILES}/${files.length} file — thu hẹp bằng cách commit dần hoặc xem git_diff theo paths.` } : {}),
+      remoteUrl, // đã strip token — an toàn hiển thị
+      headCommit,
+    }
+  } catch (err: any) {
+    return { success: false, root, error: `git status failed: ${err.message}` }
+  }
+}
+
+/**
+ * gitDiff — B4: diff có kiểm soát so với 1 ref cục bộ (default HEAD).
+ *
+ * Injection guard: target phải là git ref cục bộ (HEAD, main, abc1234, HEAD~3...) —
+ * từ chối target chứa khoảng trắng, bắt đầu bằng '-' (option giả mạo), hoặc chứa
+ * '://' (URL remote — KHÔNG BAO GIỜ diff với authed URL). Summary qua
+ * `git diff --numstat` (files + insertions + deletions trong 1 call), content
+ * capped max_lines (default 400) chống tràn context.
+ */
+export async function gitDiff(args: {
+  target?: string
+  staged_only?: boolean
+  paths?: string[]
+  max_lines?: number
+}): Promise<unknown> {
+  const root = await resolveWorkspaceRoot()
+
+  try {
+    // Guard: target = 1 ref cục bộ duy nhất, không khoảng trắng/option/URL
+    const target = (args.target ?? 'HEAD').trim()
+    if (!target || /\s/.test(target)) {
+      return { success: false, error: `target không hợp lệ ("${target}") — chỉ nhận 1 git ref cục bộ (vd HEAD, main, abc1234, HEAD~3), không chứa khoảng trắng.` }
+    }
+    if (target.startsWith('-') || target.includes('://')) {
+      return { success: false, error: `target bị từ chối vì an toàn ("${target}") — không chấp nhận option giả mạo (bắt đầu '-') hay URL remote (chỉ diff với ref cục bộ).` }
+    }
+
+    const maxLines = Math.max(10, Math.min(2_000, args.max_lines ?? 400))
+
+    // Paths resolve + scope-check như gitCommit (chống escape workspace)
+    let pathArgs: string[] = []
+    if (args.paths && args.paths.length > 0) {
+      const resolved = await Promise.all(args.paths.map(p => resolveWithinWorkspace(p)))
+      const rels = resolved.map(p => path.relative(root, p)).filter(p => p !== '')
+      if (rels.length > 0) pathArgs = ['--', ...rels]
+    }
+
+    // 1. Summary: `git diff --numstat` — "<ins>\t<del>\t<path>" mỗi dòng (binary: "-\t-\t...")
+    const numstatOut = await execFileAsync(
+      'git',
+      ['diff', '--numstat', ...(args.staged_only ? ['--cached'] : []), target, ...pathArgs],
+      { cwd: root, timeout: 15_000, maxBuffer: 2 * 1024 * 1024 },
+    ).then(r => r.stdout).catch(() => '')
+
+    const filesChanged: string[] = []
+    let insertions = 0
+    let deletions = 0
+    for (const line of numstatOut.split('\n')) {
+      if (!line.trim()) continue
+      const parts = line.split('\t')
+      if (parts.length < 3) continue
+      filesChanged.push(parts.slice(2).join('\t')) // path chứa '\t' hiếm — ghép lại cho đúng
+      if (parts[0] !== '-') insertions += parseInt(parts[0], 10) || 0
+      if (parts[1] !== '-') deletions += parseInt(parts[1], 10) || 0
+    }
+
+    // 2. Content — cap max_lines
+    const { stdout: diffOut } = await execFileAsync(
+      'git',
+      ['diff', ...(args.staged_only ? ['--cached'] : []), target, ...pathArgs],
+      { cwd: root, timeout: 30_000, maxBuffer: 10 * 1024 * 1024 },
+    )
+
+    const allLines = diffOut.split('\n')
+    const totalDiffLines = allLines.length
+    const truncated = totalDiffLines > maxLines
+
+    return {
+      success: true,
+      root,
+      target,
+      stagedOnly: args.staged_only === true,
+      filesChanged,
+      insertions,
+      deletions,
+      diff: allLines.slice(0, maxLines).join('\n'),
+      diffLines: Math.min(totalDiffLines, maxLines),
+      truncated,
+      totalDiffLines,
+      ...(truncated ? { note: `Diff cắt ở ${maxLines}/${totalDiffLines} dòng — thu hẹp bằng paths[]/target cụ thể hoặc tăng max_lines (max 2000).` } : {}),
+      ...(filesChanged.length === 0 && !truncated && diffOut.trim() === '' ? { message: `Không có khác biệt nào so với ${target}${args.staged_only ? ' (staged only)' : ''}.` } : {}),
+    }
+  } catch (err: any) {
+    const hint = /unknown revision|bad revision|ambiguous argument|unknown object/i.test(err.message || '')
+      ? `Không tìm thấy ref "${args.target ?? 'HEAD'}" — repo chưa có commit nào (HEAD chưa tồn tại) hoặc ref sai.`
+      : /does not have (any )?commits/i.test(err.message || '')
+        ? 'Repository chưa có commit nào — so sánh với cây rỗng bằng cách commit lần đầu.'
+        : ''
+    return { success: false, error: `git diff failed: ${err.message}`, hint }
+  }
+}
+
+/**
+ * gitLog — B5: lịch sử commit có cấu trúc.
+ *
+ * Custom format %H%x1f%h%x1f%an%x1f%ad%x1f%s%x1e (field \x1f / record \x1e) —
+ * parse bền vững kể cả message chứa ký tự lạ. oneline=true = compact (không kèm
+ * files[] mỗi commit); mặc định kèm files (cap 50/commit) khi agent cần xem
+ * commit nào đụng file gì.
+ */
+export async function gitLog(args: {
+  limit?: number
+  path?: string
+  oneline?: boolean
+}): Promise<unknown> {
+  const root = await resolveWorkspaceRoot()
+
+  try {
+    const limit = Math.max(1, Math.min(100, args.limit ?? 20))
+    const wantFiles = args.oneline !== true
+
+    let pathArgs: string[] = []
+    if (args.path && args.path.trim()) {
+      const resolved = await resolveWithinWorkspace(args.path.trim())
+      const rel = path.relative(root, resolved)
+      if (rel) pathArgs = ['--', rel]
+    }
+
+    const fmt = '%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1e'
+    const { stdout } = await execFileAsync(
+      'git',
+      ['log', '-n', String(limit), '--date=iso', `--pretty=format:${fmt}`, ...(wantFiles ? ['--name-only'] : []), ...pathArgs],
+      { cwd: root, timeout: 15_000, maxBuffer: 5 * 1024 * 1024 },
+    )
+
+    // Parse theo DÒNG: dòng chứa \x1f = meta commit; dòng khác (không rỗng) = file
+    // của commit hiện tại — không phụ thuộc thứ tự blank-line separator của git.
+    const commits: Array<{ hash: string; shortHash: string; author: string; date: string; message: string; files?: string[] }> = []
+    let current: { hash: string; shortHash: string; author: string; date: string; message: string; files: string[] } | null = null
+    for (const rawLine of stdout.split('\n')) {
+      const line = rawLine.replace(/\x1e$/, '')
+      if (line.includes('\x1f')) {
+        if (current) commits.push(current)
+        const meta = line.split('\x1f')
+        current = {
+          hash: meta[0] || '',
+          shortHash: meta[1] || '',
+          author: meta[2] || '',
+          date: meta[3] || '',
+          message: meta.slice(4).join('\x1f'),
+          files: [],
+        }
+      } else if (line.trim() && current) {
+        current.files.push(line.trim())
+      }
+    }
+    if (current) commits.push(current)
+
+    if (commits.length === 0) {
+      return {
+        success: true,
+        root,
+        commits: [],
+        count: 0,
+        message: 'Không có commit nào (repo trống hoặc path không có lịch sử).',
+      }
+    }
+
+    // Ép shape output: files chỉ kèm khi wantFiles (cap 50/commit)
+    return {
+      success: true,
+      root,
+      count: commits.length,
+      oneline: args.oneline === true,
+      commits: commits.map(c => {
+        const entry: { hash: string; shortHash: string; author: string; date: string; message: string; files?: string[] } = {
+          hash: c.hash,
+          shortHash: c.shortHash,
+          author: c.author,
+          date: c.date,
+          message: c.message,
+        }
+        if (wantFiles && c.files && c.files.length > 0) entry.files = c.files.slice(0, 50)
+        return entry
+      }),
+    }
+  } catch (err: any) {
+    const hint = /does not have (any )?commits|unknown revision|bad default revision/i.test(err.message || '')
+      ? 'Repository chưa có commit nào — dùng git_status để kiểm tra.'
+      : /ambiguous argument|unknown revision/i.test(err.message || '')
+        ? 'Path không tồn tại trong lịch sử git — kiểm tra lại path.'
+        : ''
+    return { success: false, error: `git log failed: ${err.message}`, hint }
+  }
+}
+
+/**
+ * gitBranch — B5: quản lý branch (list / create / switch / delete).
+ *
+ * Tên branch validate /^[a-zA-Z0-9._\-\/]+$/ + không bắt đầu '-' + không chứa '..'
+ * (chống option/refspec giả mạo — execFileAsync đã bypass shell, đây là lớp
+ * phòng thủ thứ hai). delete: TỪ CHỐI xóa branch đang đứng; branch chưa merge
+ * chỉ xóa được khi force:true (git branch -D), còn lại dùng -d an toàn.
+ */
+export async function gitBranch(args: {
+  action: 'list' | 'create' | 'switch' | 'delete'
+  name?: string
+  force?: boolean
+}): Promise<unknown> {
+  const root = await resolveWorkspaceRoot()
+  const action = args.action
+  const name = (args.name || '').trim()
+
+  // Validate action + branch name
+  if (!action || !['list', 'create', 'switch', 'delete'].includes(action)) {
+    return { success: false, error: `action không hợp lệ: "${action}" — dùng list | create | switch | delete.` }
+  }
+  const VALID_BRANCH = /^[a-zA-Z0-9._\-\/]+$/
+  if (action !== 'list' && (!name || !VALID_BRANCH.test(name) || name.startsWith('-') || name.includes('..'))) {
+    return {
+      success: false,
+      action,
+      error: `Tên branch không hợp lệ: "${name}" — chỉ nhận [a-zA-Z0-9._-/], không bắt đầu bằng '-', không chứa '..'.`,
+    }
+  }
+
+  try {
+    const isRepo = await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, timeout: 5_000 })
+      .then(r => r.stdout.trim() === 'true').catch(() => false)
+    if (!isRepo) {
+      return { success: false, action, error: `Workspace (${root}) KHÔNG phải git repository — không thao tác branch được.` }
+    }
+
+    const currentBranch = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, timeout: 5_000 })
+      .then(r => r.stdout.trim()).catch(() => '')
+
+    // ---------- list ----------
+    if (action === 'list') {
+      const { stdout } = await execFileAsync('git', ['branch', '--no-color'], { cwd: root, timeout: 10_000 })
+      const branches = stdout.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+        const isCurrent = l.startsWith('* ')
+        return { name: isCurrent ? l.slice(2).trim() : l, current: isCurrent }
+      })
+      return {
+        success: true,
+        action,
+        root,
+        current: currentBranch,
+        branches,
+        count: branches.length,
+      }
+    }
+
+    // ---------- create ----------
+    if (action === 'create') {
+      // Pre-check tồn tại cho receipt thân thiện (git branch sẽ fail "already exists")
+      const exists = await execFileAsync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${name}`], { cwd: root, timeout: 5_000 })
+        .then(() => true).catch(() => false)
+      if (exists) {
+        return {
+          success: false,
+          action,
+          error: `Branch "${name}" đã tồn tại.`,
+          hint: `Dùng action "switch" để chuyển sang nó, hoặc chọn tên khác.`,
+        }
+      }
+      await execFileAsync('git', ['branch', name], { cwd: root, timeout: 10_000 })
+      const headCommit = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, timeout: 5_000 })
+        .then(r => r.stdout.trim()).catch(() => '')
+      return {
+        success: true,
+        action,
+        created: name,
+        fromCommit: headCommit,
+        message: `Đã tạo branch "${name}" từ ${headCommit} (KHÔNG switch — dùng action "switch" để chuyển sang).`,
+      }
+    }
+
+    // ---------- switch ----------
+    if (action === 'switch') {
+      if (name === currentBranch) {
+        return { success: true, action, branch: name, switched: false, message: `Đã đang ở branch "${name}" — không cần switch.` }
+      }
+      try {
+        const previousBranch = currentBranch
+        await execFileAsync('git', ['switch', name], { cwd: root, timeout: 15_000 })
+        return {
+          success: true,
+          action,
+          switchedTo: name,
+          previousBranch,
+          message: `Đã chuyển branch: ${previousBranch || '?'} → ${name}.`,
+        }
+      } catch (err: any) {
+        const raw = ((err.stdout || '') + (err.stderr || '')).trim()
+        let hint = ''
+        if (/did not match|not found|unknown branch/i.test(raw)) {
+          hint = `Branch "${name}" chưa tồn tại — dùng action "create" trước rồi "switch".`
+        } else if (/would be overwritten|local changes|uncommitted/i.test(raw)) {
+          hint = 'Có thay đổi chưa commit cản trở switch — git_commit (scoped paths) hoặc stash trước rồi switch lại.'
+        }
+        return { success: false, action, error: `git switch failed: ${err.message}`, hint, output: raw.slice(0, 1000) }
+      }
+    }
+
+    // ---------- delete ----------
+    if (name === currentBranch) {
+      return {
+        success: false,
+        action,
+        error: `KHÔNG thể xóa branch đang đứng ("${name}") — switch sang branch khác trước rồi xóa.`,
+        hint: `Ví dụ: git_branch({action: "switch", name: "main"}) trước, rồi mới delete "${name}" (đừng delete chính branch vừa switch sang).`,
+      }
+    }
+    try {
+      // -d = chỉ xóa branch ĐÃ merge (an toàn); force → -D xóa vĩnh viễn kể cả chưa merge
+      await execFileAsync('git', ['branch', args.force ? '-D' : '-d', name], { cwd: root, timeout: 10_000 })
+      return {
+        success: true,
+        action,
+        deleted: name,
+        forced: args.force === true,
+        message: `Đã xóa branch "${name}"${args.force ? ' (force -D — có thể chứa commit chưa merge)' : ' (chỉ merged — an toàn)'}.`,
+      }
+    } catch (err: any) {
+      const raw = ((err.stdout || '') + (err.stderr || '')).trim()
+      let hint = ''
+      if (/not fully merged|not merged/i.test(raw)) {
+        hint = `Branch "${name}" có commit CHƯA merge — xác nhận thật sự muốn mất chúng thì dùng force:true (git branch -D).`
+      } else if (/not found|did not match|no branch/i.test(raw)) {
+        hint = `Không tìm thấy branch "${name}" — dùng action "list" để xem branch hiện có.`
+      }
+      return { success: false, action, error: `git branch delete failed: ${err.message}`, hint, output: raw.slice(0, 1000) }
+    }
+  } catch (err: any) {
+    return { success: false, action, error: `git branch failed: ${err.message}` }
+  }
+}
+
+/**
+ * gitClone — B5: clone repo https:// VÀO thư mục con của ACTIVE workspace.
+ *
+ * Bảo mật:
+ *   - URL: CHỈ https:// (từ chối git@/http/file/...) — validate qua new URL()
+ *   - Token embedded trong URL (https://ghp_x@...) được DÙNG cho clone thật
+ *     (one-shot) nhưng mọi log/receipt chỉ chứa bản ĐÃ STRIP; sau clone xong
+ *     clean authed URL khỏi .git/config của repo mới (standing rule: token
+ *     không bao giờ nằm trong .git/config). KHÔNG lưu token của repo lạ vào
+ *     token store (tránh đè token chính của workspace).
+ *   - Token store/env chỉ đính khi host là github.com (token GitHub không gửi
+ *     sang host lạ — chống exfiltration qua URL agent tự chế).
+ *   - target_dir resolve + verify NẰM TRONG workspace root (resolveWithinWorkspace).
+ */
+export async function gitClone(args: {
+  url: string
+  target_dir?: string
+  depth?: number
+}): Promise<unknown> {
+  const root = await resolveWorkspaceRoot()
+
+  try {
+    // 1. URL validation — https:// only
+    const rawUrl = (args.url || '').trim()
+    if (!rawUrl) return { success: false, error: 'url là bắt buộc (https://host/user/repo.git)' }
+    let parsed: URL
+    try {
+      parsed = new URL(rawUrl)
+    } catch {
+      return { success: false, error: `URL không hợp lệ: "${rawUrl}"` }
+    }
+    if (parsed.protocol !== 'https:') {
+      return { success: false, error: `Chỉ chấp nhận URL https:// (nhận ${parsed.protocol}) — SSH (git@), http://, file:// bị từ chối.` }
+    }
+
+    // 2. Token resolution: embedded trong URL > store/env (chỉ github.com) > công khai
+    const embedded = extractEmbeddedToken(rawUrl)
+    const cleanUrl = stripTokenFromGitUrl(rawUrl)
+    let authedUrl = rawUrl
+    let tokenUsed = embedded || ''
+    let tokenSource: 'embedded' | 'store/env' | 'none' = embedded ? 'embedded' : 'none'
+    if (!embedded) {
+      const host = parsed.hostname.toLowerCase()
+      if (host === 'github.com' || host.endsWith('.github.com')) {
+        const { getSavedGithubToken } = await import('@/lib/github-token-store')
+        const savedToken = getSavedGithubToken()
+        const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || ''
+        const token = savedToken || envToken || ''
+        if (token) {
+          authedUrl = buildAuthedGitUrl(cleanUrl, token)
+          tokenUsed = token
+          tokenSource = 'store/env'
+        }
+      }
+    }
+    // Mask mọi vị trí token có thể lộ (err.message chứa command line — review #1 HIGH)
+    const maskToken = (s: string): string => (tokenUsed ? s.split(tokenUsed).join('****') : s)
+
+    // 3. Target dir — luôn NẰM TRONG workspace root
+    let targetDir = (args.target_dir || '').trim()
+    if (!targetDir) {
+      const repoName = (parsed.pathname.split('/').filter(Boolean).pop() || 'repo').replace(/\.git$/, '')
+      targetDir = repoName
+    }
+    let targetPath: string
+    try {
+      targetPath = await resolveWithinWorkspace(targetDir)
+    } catch (err: any) {
+      return { success: false, error: `target_dir nằm NGOÀI workspace root (${targetDir}): ${err.message}` }
+    }
+    // Pre-check: dir tồn tại + không trống → git clone sẽ fail — báo rõ thay vì lỗi mù
+    try {
+      const entries = await fs.readdir(targetPath)
+      if (entries.length > 0) {
+        return {
+          success: false,
+          error: `Thư mục đích không trống: ${targetPath} (${entries.length} mục) — chọn target_dir khác hoặc dọn thư mục trước.`,
+        }
+      }
+    } catch { /* chưa tồn tại — git clone tự tạo */ }
+
+    // 4. Clone (depth shallow khi có) — GIT_TERMINAL_PROMPT=0 chống treo prompt tương tác
+    const depth = args.depth ? Math.max(1, Math.min(1_000, Math.floor(args.depth))) : undefined
+    const cloneArgs = ['clone', ...(depth ? ['--depth', String(depth)] : []), authedUrl, targetPath]
+    console.log(`[gitClone] ${cleanUrl} → ${targetPath}${depth ? ` (depth ${depth})` : ''}${tokenUsed ? ' (token: yes)' : ' (không token)'}`)
+
+    try {
+      await execFileAsync('git', cloneArgs, {
+        cwd: root,
+        timeout: 300_000,
+        maxBuffer: 10 * 1024 * 1024,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      })
+    } catch (err: any) {
+      const raw = ((err.stdout || '') + (err.stderr || '')).trim()
+      let hint = ''
+      if (/Authentication failed|could not read Username|403|terminal prompts disabled/i.test(raw)) {
+        hint = 'Không xác thực được (repo private?) — nhúng token vào URL (https://<token>@github.com/...) hoặc nhờ user nhập GitHub PAT trong dialog "Pull Code từ GitHub".'
+      } else if (/Repository not found|does not appear|not found/i.test(raw)) {
+        hint = `Không tìm thấy repository ${cleanUrl} — kiểm tra URL (repo private cần token có quyền truy cập).`
+      } else if (/already exists and is not an empty directory/i.test(raw)) {
+        hint = `Thư mục đích đã có nội dung — chọn target_dir khác.`
+      }
+      return {
+        success: false,
+        error: `git clone failed: ${maskToken(String(err.message))}`,
+        hint,
+        url: cleanUrl,
+        targetPath,
+        output: maskToken(raw).slice(0, 2000),
+      }
+    }
+
+    // 5. Dọn authed URL khỏi .git/config của repo vừa clone (standing rule CI-6)
+    if (tokenUsed) {
+      await execFileAsync('git', ['remote', 'set-url', 'origin', cleanUrl], { cwd: targetPath, timeout: 5_000 })
+        .then(() => console.log('[gitClone] Cleaned authed URL from cloned .git/config (safety)'))
+        .catch(() => {})
+    }
+
+    // 6. Receipt: branch + số file tracked (git ls-files) — mô tả cái vừa clone về
+    const branch = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: targetPath, timeout: 5_000 })
+      .then(r => r.stdout.trim()).catch(() => '')
+    const fileCount = await execFileAsync('git', ['ls-files'], { cwd: targetPath, timeout: 15_000 })
+      .then(r => r.stdout.split('\n').filter(Boolean).length).catch(() => 0)
+
+    return {
+      success: true,
+      url: cleanUrl, // đã strip token — an toàn hiển thị
+      targetPath,
+      ...(depth ? { depth } : {}),
+      branch,
+      fileCount,
+      authenticated: !!tokenUsed,
+      tokenSource, // 'embedded' | 'store/env' | 'none' — KHÔNG chứa giá trị token
+      message: `Đã clone ${cleanUrl} → ${targetPath} (${fileCount} file, branch ${branch || '?'})${depth ? ` [shallow depth ${depth}]` : ''}.`,
+    }
+  } catch (err: any) {
+    return { success: false, error: `git clone failed: ${err.message}` }
+  }
+}
+
 // ==================== P1: GET DIAGNOSTICS (LSP / tsc) ====================
 
 /**
@@ -2334,12 +2953,22 @@ export async function shell(args: {
  *   - Otherwise → create new
  *   - Max 200 todos per session (guard against runaway agents)
  *
+ * CI-2 (Task 11-a) — PER-TASK TODO ISOLATION: tham số `runId` (tùy chọn) gắn
+ * todo vào đúng 1 agent run (goal-loop inject runId hiện tại vào todo_write).
+ *   - Create  → lưu runId lên row mới
+ *   - Update  → backfill runId khi row đang null (todo tạo giữa chừng bởi path
+ *              không có runId, agent update lại trong cùng run)
+ *   - Dedup theo content được scope THÊM theo runId → run mới tạo row riêng,
+ *              không tự ý update todo của run cũ cùng nội dung.
+ *
  * Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Part 4 Phase 1a.2
  * Feature flag: ENABLE_TODO_TOOL (off by default per D11)
  */
 export async function todoWrite(args: {
   sessionId?: string
   agentRole?: string
+  /** CI-2 — run scope (runId của agent run hiện hành; bỏ trống = legacy/null) */
+  runId?: string
   todos: Array<{
     id?: string
     content: string
@@ -2355,6 +2984,8 @@ export async function todoWrite(args: {
 
   const sessionId = args.sessionId || 'default'
   const agentRole = args.agentRole || null
+  // CI-2 — run scope hiệu dụng: rỗng/whitespace → null (scope legacy)
+  const runId = (typeof args.runId === 'string' && args.runId.trim() !== '') ? args.runId.trim() : null
 
   // TOMBSTONE GUARD (fix review 2026-09-08): session đã bị user xóa (hard-delete
   // đã purge todos) → agent chạy dở KHÔNG được đẻ todo mới cho session mồ côi.
@@ -2390,6 +3021,12 @@ export async function todoWrite(args: {
 
     // Update existing by ID
     if (t.id) {
+      // CI-2 — đọc runId hiện tại để backfill: chỉ set runId khi row đang null
+      // (không giành todo của run khác về run hiện tại)
+      const existingById = await db.todo.findUnique({
+        where: { id: t.id },
+        select: { runId: true },
+      }).catch(() => null)
       const updated = await db.todo.update({
         where: { id: t.id },
         data: {
@@ -2397,6 +3034,7 @@ export async function todoWrite(args: {
           status: t.status || undefined,
           priority: t.priority || undefined,
           parentId: t.parentId || undefined,
+          ...(runId && !existingById?.runId ? { runId } : {}),
         },
       }).catch(() => null)
       if (!updated) {
@@ -2433,8 +3071,11 @@ export async function todoWrite(args: {
     // "Agent Tasks" hiển thị 8 rows trùng lặp: 4 pending gốc + 4 completed mới,
     // và badge "4 đang chạy" không bao giờ tắt. Giờ: nếu đã có row cùng content
     // trong session → UPDATE row đó thay vì create.
+    // CI-2 (Task 11-a): scope dedup THÊM theo runId — cùng nội dung nhưng khác
+    // run (tác vụ khác) thì tạo row riêng cho run mới, không đụng todo run cũ
+    // (chống trộn task — bug "todo của task trước dồn vào task mới").
     const existingByContent = await db.todo.findFirst({
-      where: { sessionId, content: t.content },
+      where: { sessionId, content: t.content, runId },
       orderBy: { createdAt: 'asc' },
     })
     if (existingByContent) {
@@ -2444,6 +3085,7 @@ export async function todoWrite(args: {
           status: t.status || existingByContent.status,
           priority: t.priority || existingByContent.priority,
           parentId: t.parentId || existingByContent.parentId,
+          ...(runId && !existingByContent.runId ? { runId } : {}),
         },
       }).catch(() => null)
       if (updated) {
@@ -2467,6 +3109,7 @@ export async function todoWrite(args: {
         priority: t.priority || 'medium',
         parentId: t.parentId || null,
         idempotencyKey: t.idempotencyKey || null,
+        runId,
       },
     })
     upserted.push({
@@ -2480,6 +3123,7 @@ export async function todoWrite(args: {
   return {
     success: true,
     sessionId,
+    runId,
     upserted: upserted.length,
     todos: upserted,
   }
@@ -2525,6 +3169,193 @@ export async function todoRead(args: {
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
     })),
+  }
+}
+
+// ==================== CI-2 (Task 11-a) — PER-TASK TODO ISOLATION LIFECYCLE ====================
+//
+// Bộ 3 helper điều phối vòng đời todo theo runId (được gọi từ chat route +
+// goal loop; xem docs/CODE_EXECUTION_IMPROVEMENT_ROADMAP.md CI-2):
+//   1. archiveStaleRunTodos      — run MỚI bắt đầu → lưu trữ todo còn mở của các run TRƯỚC
+//   2. closeRunTodosAtEnd        — run kết thúc → đóng per-item TRUNG THỰC theo verdict
+//   3. autoCompleteRunTodosByEvidence — giữa chừng run → auto-complete theo bằng chứng tool
+//
+// Nguyên tắc: todo có runId=null (legacy, trước CI-2) KHÔNG BAO GIỜ bị các
+// helper này đụng tới — hiển thị theo session như cũ, không bị archive/đóng.
+
+/**
+ * CI-2 — Lưu trữ (archive) mọi todo CÒN ĐANG MỞ (pending/in_progress/blocked)
+ * của các run TRƯỚC trong session (runId KHÁC null) ngay trước khi run mới bắt
+ * đầu → status 'archived' + archivedAt = now.
+ *
+ * Tại sao archive thay vì xóa: (a) giữ lịch sử trung thực — todo của task cũ
+ * vẫn tra cứu được qua /api/todos (không lọc archived), (b) an toàn khi có
+ * request cũ của run trước vẫn đang chạy dở và update status — run mới không
+ * nhìn thấy chúng (UI 11-b lọc theo runId), status 'archived' tự nói lên
+ * "thuộc task cũ, đã bị lưu trữ".
+ *
+ * Todo runId=null (legacy) được GIỮ NGUYÊN — hành vi cũ không đổi.
+ *
+ * @returns số todo đã archive (0 nếu không có gì để archive)
+ */
+export async function archiveStaleRunTodos(sessionId: string): Promise<number> {
+  try {
+    if (!sessionId) return 0
+    const res = await db.todo.updateMany({
+      where: {
+        sessionId,
+        runId: { not: null },
+        status: { in: ['pending', 'in_progress', 'blocked'] },
+      },
+      data: { status: 'archived', archivedAt: new Date() },
+    })
+    if (res.count > 0) {
+      console.log(`[Todo CI-2] Archived ${res.count} stale todo(s) của các run trước trong session ${sessionId} (run mới bắt đầu)`)
+    }
+    return res.count
+  } catch (err) {
+    // Fail-open — isolation là UI concern, không được làm hỏng chat request
+    console.warn('[Todo CI-2] archiveStaleRunTodos failed:', err instanceof Error ? err.message : String(err))
+    return 0
+  }
+}
+
+/**
+ * CI-2 — Đóng todo per-item TRUNG THỰC khi run kết thúc (thay cho bulk-close
+ * "TẤT CẢ → completed/failed" cũ vốn quá thô — todo chưa từng làm mà bị đánh
+ * ✓ là đóng ảo).
+ *
+ * Chỉ đóng todo của ĐÚNG run này (runId = currentRunId); runId=null fallback
+ * về scope legacy của session (todo không gắn run — hành vi tương đương cũ).
+ *
+ * Luật đóng (theo verdict goal-loop):
+ *   - 'in_progress'  → goal đạt: 'completed' | chưa đạt: 'failed' (đã bắt tay
+ *                      làm mà dở — failed là trung thực)
+ *   - 'pending'      → goal đạt: 'completed' | chưa đạt: GIỮ 'pending' +
+ *                      archivedAt=now (chưa từng bắt tay — không đổ lỗi
+ *                      'failed'; archivedAt để ẩn khỏi run kế tiếp)
+ *   - crash=true (run văng exception) → in_progress → 'failed', pending →
+ *                      'archived' ngay (run đã chết, không còn cơ resume)
+ *
+ * @returns số liệu đóng theo từng loại (để log/verify, không dùng cho flow)
+ */
+export async function closeRunTodosAtEnd(params: {
+  sessionId: string
+  /** runId của run vừa kết thúc; null → scope todo legacy (runId null) của session */
+  runId: string | null
+  /** verdict goal-loop: true = mục tiêu hoàn thành */
+  goalComplete: boolean
+  /** Run crash (exception bắn ra ngoài goal loop) → đóng cứng pending thành archived */
+  crash?: boolean
+}): Promise<{ inProgressClosed: number; pendingCompleted: number; pendingArchived: number }> {
+  const { sessionId, runId, goalComplete, crash } = params
+  const out = { inProgressClosed: 0, pendingCompleted: 0, pendingArchived: 0 }
+  try {
+    if (!sessionId) return out
+    // Scope: đúng run này. runId null (tracker fail) → đóng scope legacy của
+    // session — todos do run này tạo cũng runId=null (goal-loop chỉ inject
+    // runId khi startAgentRun thành công) nên vẫn được đóng đúng.
+    const scope: { sessionId: string; runId: string | null } = { sessionId, runId }
+
+    // 1) in_progress → completed (đạt) | failed (chưa đạt / crash)
+    const ip = await db.todo.updateMany({
+      where: { ...scope, status: 'in_progress' },
+      data: { status: goalComplete ? 'completed' : 'failed' },
+    })
+    out.inProgressClosed = ip.count
+
+    // 2) pending — tùy verdict
+    if (goalComplete) {
+      // Mục tiêu đạt → kế hoạch được coi là hoàn thành trọn vẹn
+      const pc = await db.todo.updateMany({
+        where: { ...scope, status: 'pending' },
+        data: { status: 'completed' },
+      })
+      out.pendingCompleted = pc.count
+    } else if (crash) {
+      // Run chết giữa chừng → archived ngay (không thể resume)
+      const pa = await db.todo.updateMany({
+        where: { ...scope, status: 'pending' },
+        data: { status: 'archived', archivedAt: new Date() },
+      })
+      out.pendingArchived = pa.count
+    } else {
+      // Chưa đạt nhưng report trung thực: pending giữ nguyên (chưa làm gì sai)
+      // + archivedAt để ẩn khỏi run kế tiếp
+      const pa = await db.todo.updateMany({
+        where: { ...scope, status: 'pending' },
+        data: { archivedAt: new Date() },
+      })
+      out.pendingArchived = pa.count
+    }
+    return out
+  } catch (err) {
+    // Fail-open — không được phép làm hỏng chat response
+    console.warn('[Todo CI-2] closeRunTodosAtEnd failed:', err instanceof Error ? err.message : String(err))
+    return out
+  }
+}
+
+/**
+ * CI-2 — Auto-complete todo THEO BẰNG CHỨNG giữa chừng run (sau mỗi batch tool
+ * call): todo đang 'in_progress' của run hiện tại, nếu nội dung todo CHỨA
+ * đúng (substring) đường dẫn file hoặc lệnh shell của một tool call THÀNH
+ * CÔNG → đánh dấu 'completed' ngay (LLM thường quên gọi todo_write lần cuối —
+ * đây là lưới an toàn dựa trên bằng chứng thật, không tin lời tuyên bố).
+ *
+ * Bảo thủ (chống false-positive):
+ *   - Chỉ khớp Chuỗi-CON CHÍNH XÁC (evidence là substring của todo content)
+ *   - Evidence chỉ là: đường dẫn file (chứa '/' hoặc '.') hoặc lệnh shell
+ *     (≥6 ký tự) — do caller trích từ args của tool THÀNH CÔNG
+ *   - Chỉ todo 'in_progress' (đã bắt tay làm) của ĐÚNG run hiện tại
+ *
+ * @returns { completed, todos } — todos = danh sách todo hiện tại của run
+ * (orderBy position) để caller snapshot qua recordAgentRunTodos
+ */
+export async function autoCompleteRunTodosByEvidence(params: {
+  sessionId: string
+  runId: string | null
+  /** Chuỗi bằng chứng: đường dẫn file / lệnh shell từ tool call thành công */
+  evidence: string[]
+}): Promise<{ completed: number; todos: Array<{ id: string; content: string; status: string; priority: string; position: number }> }> {
+  const { sessionId, runId, evidence } = params
+  try {
+    if (!sessionId || !runId || !Array.isArray(evidence) || evidence.length === 0) {
+      return { completed: 0, todos: [] }
+    }
+    // Lọc bằng chứng hợp lệ (không rỗng, đủ dài để tránh khớp giả)
+    const evs = evidence
+      .map(e => (typeof e === 'string' ? e.trim() : ''))
+      .filter(e => e.length >= 3)
+    if (evs.length === 0) return { completed: 0, todos: [] }
+
+    const open = await db.todo.findMany({
+      where: { sessionId, runId, status: 'in_progress' },
+      orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+    })
+    let completed = 0
+    for (const t of open) {
+      const hit = evs.some(ev => t.content.includes(ev))
+      if (!hit) continue
+      await db.todo
+        .update({ where: { id: t.id }, data: { status: 'completed' } })
+        .catch(() => null)
+      completed++
+    }
+    // Trả danh sách todo HIỆN TẠI của run (sau update) để caller snapshot
+    const todos = await db.todo.findMany({
+      where: { sessionId, runId },
+      orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+      select: { id: true, content: true, status: true, priority: true, position: true },
+    })
+    if (completed > 0) {
+      console.log(`[Todo CI-2] Auto-completed ${completed} in_progress todo(s) theo bằng chứng tool trong run ${runId}`)
+    }
+    return { completed, todos }
+  } catch (err) {
+    // Fail-open — không được phép làm hỏng goal loop
+    console.warn('[Todo CI-2] autoCompleteRunTodosByEvidence failed:', err instanceof Error ? err.message : String(err))
+    return { completed: 0, todos: [] }
   }
 }
 
