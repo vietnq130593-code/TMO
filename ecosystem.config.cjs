@@ -39,8 +39,11 @@ module.exports = {
       // orphan the next-server grandchild which then holds port 3000 and causes
       // EADDRINUSE crash-loops on PM2 restart. Running next directly lets PM2
       // kill the whole process tree cleanly on restart/stop.
-      script: 'node_modules/next/dist/bin/next',
-      args: 'dev -p 3000',
+      // Wrapper script: trước khi start, tự dọn process mồ côi đang giữ
+      // port 3000 (tình huống SIGKILL/OOM để lại orphan next-server gây
+      // EADDRINUSE crash-loop). Wrapper exec sang `node next dev` nên PM2
+      // vẫn sở hữu trực tiếp process Next.js như thiết kế ban đầu.
+      script: 'scripts/pm2-start.sh',
       cwd: '/home/z/tmo-app',
       env: {
         NODE_ENV: 'development',

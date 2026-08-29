@@ -23,7 +23,7 @@ import {
   GitCommit, History, Minimize2, ExternalLink as ExternalLinkIcon, GripHorizontal, ArrowDownToLine,
   Wifi, WifiOff,
   Flame, Archive, Snowflake, Thermometer, FlaskConical, ShieldAlert, Swords,
-  CloudDownload, CircleHelp, ClipboardList, Mic, AudioLines, Volume2
+  CloudDownload, CircleHelp, ClipboardList, Mic, AudioLines, Volume2, Compass
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -44,6 +44,7 @@ import { format } from 'date-fns'
 import { toast } from '@/hooks/use-toast'
 import { useVoiceLive, type VoiceLiveStatus } from '@/hooks/use-voice-live'
 import { authedFetch } from '@/lib/api-auth'
+import SelfDirectionModule from '@/components/self-direction/self-direction-module'
 import { toast as sonnerToast } from 'sonner'
 import {
   AVATAR_OPTIONS,
@@ -17145,7 +17146,7 @@ export default function Home() {
   const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus | null>(null)
   /** Sidebar state: collapsed = thin strip with logo only, expanded = full sidebar panel */
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [activeModule, setActiveModule] = useState<'smolab' | 'agents' | 'database'>('database')
+  const [activeModule, setActiveModule] = useState<'smolab' | 'agents' | 'database' | 'selfdirection'>('database')
 
   // Auto-collapse sidebar on small screens (below md breakpoint)
   useEffect(() => {
@@ -17312,8 +17313,8 @@ export default function Home() {
         try {
           const saved = localStorage.getItem('graphrag-active-module')
           if (saved) {
-            const validModules = ['smolab', 'agents', 'database']
-            const validModule = validModules.includes(saved) ? saved as 'smolab' | 'agents' | 'database' : 'database'
+            const validModules = ['smolab', 'agents', 'database', 'selfdirection']
+            const validModule = validModules.includes(saved) ? saved as 'smolab' | 'agents' | 'database' | 'selfdirection' : 'database'
             setActiveModule(validModule)
             if (validModule !== saved) localStorage.setItem('graphrag-active-module', validModule)
           }
@@ -18530,6 +18531,7 @@ export default function Home() {
               { id: 'smolab' as const, label: 'Smolab', icon: Sparkles, desc: 'AI Micro Lab' },
               { id: 'agents' as const, label: 'Agents', icon: Bot, desc: 'AI Agents' },
               { id: 'database' as const, label: 'Database', icon: Database, desc: 'GraphRAG KB' },
+              { id: 'selfdirection' as const, label: 'Self-Direction', icon: Compass, desc: 'Tự đề xuất & duyệt' },
             ]).map((mod) => {
               const isActive = activeModule === mod.id
               const IconComp = mod.icon
@@ -18728,6 +18730,8 @@ export default function Home() {
               </TokenStreamProvider>
             </>) : activeModule === 'agents' ? (
               <AgentsModule />
+            ) : activeModule === 'selfdirection' ? (
+              <SelfDirectionModule />
             ) : null}
           </main>
           )}

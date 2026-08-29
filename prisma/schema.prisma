@@ -1508,3 +1508,109 @@ model LessonRecord {
   @@index([needsReview])
   @@index([rootCause])
 }
+
+// ============================================================================
+// SELF-DIRECTION MODULE (2026-09-12)
+// Agents tự phát hiện khoảng trống (thiếu gì? học gì? KB mâu thuẫn? tool hay
+// fail? skill thiếu? test chưa có?) → tự đặt mục tiêu, tự đề xuất kế hoạch
+// triển khai + thời điểm triển khai → gửi Mr. Architect phê duyệt (hoặc ủy
+// quyền cho Omega duyệt). Được duyệt → Omega orchestrate: lập kế hoạch bước,
+// giao việc agents, theo dõi bàn giao, đánh giá hoàn thành, viết báo cáo.
+// ============================================================================
+
+/// Đề xuất/kế hoạch do hệ thống (scan), agents hoặc user tạo — chờ phê duyệt.
+model SelfDirectionProposal {
+  id              String    @id @default(cuid())
+  title           String
+  /// gap | kb_contradiction | tool_failure | missing_skill | missing_test | improvement | long_term
+  category        String    @default("improvement")
+  /// low | medium | high | critical
+  priority        String    @default("medium")
+
+  // ===== Nội dung đề xuất (bắt buộc rõ ràng 4 phần) =====
+  /// Vấn đề là gì?
+  problem         String
+  /// Giải quyết như thế nào?
+  solution        String
+  /// Triển khai như thế nào?
+  implementation  String
+  /// Thời điểm triển khai là gì? (null = triển khai ngay khi được duyệt)
+  scheduleAt      DateTime?
+  /// Tác động kỳ vọng
+  impact          String?
+
+  // ===== Trạng thái phê duyệt + triển khai =====
+  /// pending | approved | rejected | ready | planning | executing | completed | failed
+  status          String    @default("pending")
+  /// scan | agent | user | omega
+  source          String    @default("scan")
+  createdBy       String    @default("self-direction-scan")
+
+  // ===== Mr. Architect / Omega review =====
+  /// Ghi chú / yêu cầu bổ sung của Mr. Architect (user)
+  userNotes        String?
+  /// mr-architect | omega (khi được ủy quyền duyệt)
+  reviewer         String?
+  /// Lý do từ chối hoặc lý do Omega duyệt/bỏ duyệt
+  decisionReason   String?
+  reviewedAt       DateTime?
+
+  // ===== Omega orchestration =====
+  /// Tóm tắt kế hoạch do Omega lập (sau khi được duyệt)
+  planSummary      String?
+  /// Báo cáo hoàn thiện do Omega viết (markdown): đã làm gì, làm thế nào,
+  /// kết quả từng bước, kết quả sau cùng, đề xuất thêm
+  omegaReport      String?
+  executedAt       DateTime?
+  completedAt      DateTime?
+
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  steps            ProposalStep[]
+
+  @@index([status])
+  @@index([category])
+  @@index([createdAt])
+  @@map("self_direction_proposals")
+}
+
+/// 1 bước trong kế hoạch triển khai do Omega lập — giao cho agent/team thực hiện.
+model ProposalStep {
+  id          String    @id @default(cuid())
+  proposalId  String
+  stepOrder   Int
+  title       String
+  description String
+  /// Agent thực hiện (tên trong roster) hoặc "Omega"
+  assignee    String
+  /// pending | in_progress | done | failed
+  status      String    @default("pending")
+  /// Output agent trả về sau khi thực hiện bước này
+  output      String?
+  /// Đánh giá của Omega về output (đã thật sự hoàn thành chưa?)
+  evaluation  String?
+  /// Số lần thử lại khi Omega đánh giá chưa đạt (max 3)
+  attempts    Int       @default(0)
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  /// Prisma tự update ở MỌI lần ghi (attempts/output/evaluation...) — dùng làm
+  /// tín hiệu sống cho stall-detection: step đang rework vẫn "còn sống".
+  updatedAt   DateTime  @default(now()) @updatedAt
+
+  proposal    SelfDirectionProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+
+  @@index([proposalId, stepOrder])
+  @@map("proposal_steps")
+}
+
+/// Cài đặt singleton của module Self-direction (đơn giản hóa: 1 row id='singleton').
+model SelfDirectionSettings {
+  id             String    @id @default("singleton")
+  /// true = Omega được ủy quyền duyệt/không duyệt thay Mr. Architect
+  omegaDelegated Boolean   @default(false)
+  delegatedAt    DateTime?
+  updatedAt      DateTime  @updatedAt
+
+  @@map("self_direction_settings")
+}

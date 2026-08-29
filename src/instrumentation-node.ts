@@ -213,3 +213,64 @@ import('@/lib/smolab/background-task-worker')
     )
     // Don't block Next.js startup — worker still functions for new tasks
   })
+
+// ============================================================================
+// SELF-DIRECTION SCHEDULER (fix 2026-08-29 — kiến trúc review)
+// ============================================================================
+// Trước đây promoteDueProposals()/autoReviewPendingIfDelegated() CHỈ chạy khi
+// UI đang mở (GET /api/self-direction/proposals poll 4s gọi side-effects).
+// → Đề xuất được duyệt với scheduleAt tương lai KHÔNG tự triển khai "đúng thời
+// điểm" nếu user đóng trình duyệt — vi phạm yêu cầu core của module.
+//
+// Scheduler nền chạy ngay trong process Next.js (được PM2 duy trì):
+//   - mỗi 60s: promote đề xuất đến hạn → Omega orchestration
+//              + kick Omega auto-review nếu ủy quyền đang bật
+//   - stall-detection 10 phút vẫn xử lý orchestration đứt sau restart
+// Tất cả fail-open (đã có try/catch bên trong), có globalThis guard chống
+// double-register khi Next dev HMR reload instrumentation, và tự đợi DB sẵn
+// sàng (ensureDbReady dedup) trước lần chạy đầu.
+const globalForSd = globalThis as unknown as { __tmoSdSchedulerStarted?: boolean }
+if (!globalForSd.__tmoSdSchedulerStarted) {
+  globalForSd.__tmoSdSchedulerStarted = true
+  const SD_TICK_MS = 60_000
+  let sdTickCount = 0
+  const sdTick = async () => {
+    const tickNo = ++sdTickCount
+    try {
+      const { promoteDueProposals, autoReviewPendingIfDelegated } = await import(
+        '@/lib/self-direction/orchestrator'
+      )
+      const triggered = await promoteDueProposals()
+      if (triggered.length > 0) {
+        console.log(`[SelfDirection][scheduler] Đã kích hoạt triển khai đúng hạn: ${triggered.length} đề xuất`)
+      }
+      await autoReviewPendingIfDelegated()
+      // Heartbeat: tick ĐẦU TIÊN (chứng minh interval sống ngay sau boot) +
+      // mỗi 15 tick (15 phút) — heartbeat định kỳ cho ops theo dõi scheduler.
+      if (tickNo === 1 || tickNo % 15 === 0) {
+        console.log(`[SelfDirection][scheduler] heartbeat tick #${tickNo} — scheduler sống (promoted=${triggered.length})`)
+      }
+    } catch (err) {
+      // Fail-open: tick lỗi thì tick sau sẽ thử lại — không throw phá interval
+      console.warn(
+        `[SelfDirection][scheduler] tick #${tickNo} lỗi (bỏ qua, chờ tick sau):`,
+        err instanceof Error ? err.message : String(err)
+      )
+    }
+  }
+  // Lần đầu: đợi DB self-heal xong rồi mới tick (tránh đập vào DB chưa migrate)
+  void ensureDbReady()
+    .then(() => new Promise((r) => setTimeout(r, 10_000)))
+    .then(() => {
+      console.log('[SelfDirection][scheduler] Bật scheduler nền (60s/tick) — đề xuất đến hạn sẽ tự triển khai đúng thời điểm kể cả khi không mở UI')
+      void sdTick()
+      setInterval(() => void sdTick(), SD_TICK_MS)
+    })
+    .catch(() => {
+      // ensureDbReady hiếm khi reject — nhưng nếu có, vẫn bật scheduler (tick
+      // có try/catch riêng + GET proposals side-effects vẫn heal được)
+      console.warn('[SelfDirection][scheduler] DB warm-up lỗi — bật scheduler ở chế độ thường trực')
+      void sdTick()
+      setInterval(() => void sdTick(), SD_TICK_MS)
+    })
+}
