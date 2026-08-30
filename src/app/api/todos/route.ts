@@ -15,10 +15,16 @@
  * Dữ liệu do agent ghi qua tool todo_write (Team Code workflow tự động
  * upsert todo mỗi agent step; independent agents gọi tay trong ReAct loop).
  * UI (panel "Agent Tasks" trong tab Code) poll endpoint này 3s/lần.
+ *
+ * DB SELF-HEAL (fix user report 2026-09-12 "The column main.Todo.runId does
+ * not exist" → GET /api/todos 500): DB local cũ hơn schema sau git pull →
+ * query P2021/P2022 → tự ensureDbReady({force:true}) (prisma db push) rồi
+ * THỬ LẠI 1 lần — chữa không cần restart app (pattern /api/agents 2026-09-09).
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { ensureDbReady } from '@/lib/db-setup'
 
 export const dynamic = 'force-dynamic'
 
@@ -61,7 +67,22 @@ function serializeTodo(t: {
   }
 }
 
+/** DB error là schema drift? (P2021/P2022 "column/table does not exist" —
+ * DB local cũ sau git pull, thiếu cột mới như Todo.runId CI-2). */
+function isDriftDbError(err: unknown): boolean {
+  const code = (err as { code?: string }).code
+  if (code === 'P2021' || code === 'P2022') return true
+  const msg = err instanceof Error ? err.message : String(err)
+  return /does not exist in the current database/i.test(msg) ||
+    /no such (table|column)/i.test(msg)
+}
+
 export async function GET(request: NextRequest) {
+  return getTodosHandler(request, 0)
+}
+
+/** Handler nội bộ với attempt-count: gặp drift → tự heal rồi retry 1 lần. */
+async function getTodosHandler(request: NextRequest, attempt: number): Promise<Response> {
   try {
     const sessionId = request.nextUrl.searchParams.get('sessionId')
     // CI-2 (Task 11-a) — filter theo run: todo của ĐÚNG 1 agent run (per-task
@@ -140,6 +161,20 @@ export async function GET(request: NextRequest) {
       }),
     })
   } catch (err) {
+    // SELF-HEAL (2026-09-12): DB drift (DB cũ thiếu Todo.runId...) → tự
+    // prisma db push qua ensureDbReady rồi THỬ LẠI ngay trong cùng request.
+    if (isDriftDbError(err) && attempt === 0) {
+      const healed = await ensureDbReady({ force: true })
+      if (healed.ok) {
+        console.log('[Todos API] DB đã tự đồng bộ schema — retry GET todos')
+        return getTodosHandler(request, 1)
+      }
+      console.error('[Todos API] Self-heal thất bại:', healed.reason)
+      return NextResponse.json({
+        ok: false,
+        error: `DB schema chưa khớp và không tự sửa được (${healed.reason}). Chạy thủ công: bun run db:push (hoặc npx prisma db push) rồi tải lại trang.`,
+      }, { status: 500 })
+    }
     return NextResponse.json({
       ok: false,
       error: err instanceof Error ? err.message : String(err),

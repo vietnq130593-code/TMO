@@ -53,10 +53,12 @@ export async function GET(request: NextRequest) {
     // CI-2 (Task 11-a) — gắn todo DB cho từng run theo runId (orderBy position
     // asc, cap 50/run — đủ cho mọi kế hoạch thực tế). Fail-open: lỗi DB →
     // todos=[] từng run, response vẫn trả bình thường (không break API cũ).
+    // SELF-HEAL (2026-09-12): lỗi drift (DB cũ thiếu Todo.runId — user report
+    // P2022) → tự prisma db push rồi THỬ LẠI 1 lần; vẫn lỗi → todos=[].
     const runIds = runs.map(r => r.runId).filter((id): id is string => typeof id === 'string' && id.length > 0)
     const todosByRun = new Map<string, Array<Record<string, unknown>>>()
     if (runIds.length > 0) {
-      try {
+      const loadRunTodos = async (): Promise<void> => {
         const rows = await db.todo.findMany({
           where: { runId: { in: runIds } },
           orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
@@ -81,7 +83,28 @@ export async function GET(request: NextRequest) {
             todosByRun.set(row.runId as string, arr)
           }
         }
-      } catch { /* fail-open — todos=[] cho mọi run */ }
+      }
+      try {
+        await loadRunTodos()
+      } catch (todoErr) {
+        // Drift (P2021/P2022 "column/table does not exist")? → tự heal schema
+        // (prisma db push) rồi load lại 1 lần — vẫn lỗi thì fail-open todos=[].
+        const tErr = todoErr as { code?: string }
+        const tMsg = todoErr instanceof Error ? todoErr.message : String(todoErr)
+        const isDrift = tErr.code === 'P2021' || tErr.code === 'P2022' ||
+          /does not exist in the current database/i.test(tMsg) || /no such (table|column)/i.test(tMsg)
+        if (isDrift) {
+          try {
+            const { ensureDbReady } = await import('@/lib/db-setup')
+            const healed = await ensureDbReady({ force: true })
+            if (healed.ok) {
+              todosByRun.clear()
+              await loadRunTodos()
+              console.log('[AgentRun API] DB đã tự đồng bộ schema — todos của run đã load lại')
+            }
+          } catch { /* fail-open — todos=[] cho mọi run */ }
+        }
+      }
     }
     const runsWithTodos = runs.map(r => ({
       ...r,

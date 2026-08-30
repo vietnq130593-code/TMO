@@ -32,8 +32,15 @@
  *                      cần restart (module đã load không thể hoán đổi).
  *                      Các call site `deletedSession` có guard chống crash.
  *
- * CẬP NHẬT TƯƠNG LAI: khi thêm field/model mới vào schema.prisma, THÊM
- * probe tương ứng vào probeSchema() bên dưới để drift đó cũng được tự chữa.
+ * FIX (user report 2026-09-12 "The column main.Todo.runId does not exist"):
+ * probe thủ công cũ CHỈ đếm 2 điểm (DeletedSession + AgentProfile.tools) —
+ * Todo.runId (CI-2 Task 11-a) + archivedAt + các bảng GĐ3/GĐ4 (TaskContext,
+ * TaskContextArchive, GoalLoopJob…) KHÔNG được probe → probeSchema() trả
+ * 'ok' sai, db push không chạy, API P2022 lỗi runtime. Giờ probe bằng
+ * `prisma migrate diff --from-schema-datasource --to-schema-datamodel
+ * --exit-code`: so sánh TOÀN BỘ schema DB thật vs schema.prisma (bảng +
+ * cột + index + FK) → phát hiện MỌI drift, KHÔNG cần duy trì probe thủ công
+ * khi thêm field/model mới. Probe thủ công chỉ còn là fallback khi CLI lỗi.
  */
 
 import { spawn, spawnSync } from 'child_process'
@@ -56,20 +63,56 @@ const globalForDbSetup = globalThis as unknown as {
 // ==================== PROBE — phát hiện schema drift ====================
 
 /**
- * Query chạm các phần schema MỚI NHẤT — DB cũ sẽ throw P2021/P2022.
- * Mỗi lần thêm field/model mới vào schema.prisma → thêm 1 dòng probe ở đây.
+ * Probe TOÀN DIỆN bằng Prisma CLI: `migrate diff` so sánh schema của DB thật
+ * (datasource — DATABASE_URL từ env, inherit xuống CLI) với schema.prisma.
+ *   - exit 0 → 'ok'      (DB khớp schema 100%)
+ *   - exit 2 → 'db-drift' (DB thiếu/khác bảng-cột-index bất kỳ)
+ *   - exit 1/other → CLI lỗi → gọi fallback probe thủ công bên dưới.
+ *
+ * Ưu điểm so với probe thủ công: phát hiện MỌI drift (cột mới, bảng mới,
+ * index, FK, kiểu cột) — kể cả những field/model thêm SAU này mà không cần
+ * cập nhật code. Chi phí: 1 lần spawn CLI (~1-2s) mỗi lần runSetup (dedup
+ * + cache qua ensureDbReady).
  */
-async function probeSchema(): Promise<DriftKind> {
+async function probeSchemaViaCli(): Promise<DriftKind | 'cli-error'> {
+  const res = await runPrismaCli([
+    'migrate', 'diff',
+    '--from-schema-datasource', 'prisma/schema.prisma',
+    '--to-schema-datamodel', 'prisma/schema.prisma',
+    '--exit-code',
+  ], 90_000)
+  if (res.code === 0) return 'ok'
+  if (res.code === 2) return 'db-drift'
+  return 'cli-error'
+}
+
+/**
+ * Fallback probe thủ công (chỉ dùng khi Prisma CLI lỗi — spawn fail, thiếu
+ * node/bun...). Query chạm các phần schema MỚI NHẤT — DB cũ sẽ throw
+ * P2021/P2022; client cũ (chưa generate) sẽ throw validation error.
+ */
+async function probeSchemaManual(): Promise<DriftKind> {
+  const dbAny = db as unknown as Record<string, { count?: () => Promise<number> }>
   // Model mới nhất: DeletedSession (tombstone persist — 2026-09-08).
   // Client cũ (chưa generate) sẽ không có model này → 'client-drift'.
-  const ds = (db as unknown as Record<string, unknown>).deletedSession
-  if (!ds) return 'client-drift'
+  if (!dbAny.deletedSession) return 'client-drift'
+  // Client có DeletedSession nhưng thiếu model GĐ3/GĐ4 → client cũ hơn schema
+  if (typeof dbAny.goalLoopJob?.count !== 'function' || typeof dbAny.taskContextArchive?.count !== 'function') {
+    return 'client-drift'
+  }
 
   try {
     // Bảng mới nhất: DeletedSession
     await db.deletedSession.count()
     // Cột mới nhất: AgentProfile.tools (Agent Factory — 2026-09-08)
     await db.agentProfile.findFirst({ select: { tools: true } })
+    // Cột GĐ2 CI-2 (Task 11-a) — chính là cột user report 2026-09-12 thiếu:
+    // Todo.runId (run scope) + Todo.archivedAt (lưu trữ trung thực).
+    await db.todo.findFirst({ select: { runId: true, archivedAt: true } })
+    // Bảng GĐ4 CI-5 (Task 14-a): GoalLoopJob (durable job queue) +
+    // TaskContextArchive GĐ3 CI-3 (Task 13-a) — Kho Context.
+    await db.goalLoopJob.count()
+    await db.taskContextArchive.count()
     return 'ok'
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -82,8 +125,35 @@ async function probeSchema(): Promise<DriftKind> {
     ) {
       return 'db-drift'
     }
+    // Client trong bộ nhớ không biết field/model mới (select runId → validation
+    // error "Unknown field") → client-drift: generate + push cho lần restart sau.
+    if (code === 'P2009' || code === 'P2007' || /unknown field/i.test(msg)) {
+      return 'client-drift'
+    }
     throw err // lỗi khác (lock, file hỏng...) — không phải drift
   }
+}
+
+async function probeSchema(): Promise<DriftKind> {
+  // 1. Fast-path in-memory: client quá cũ (không có model mới nhất) →
+  //    client-drift NGAY không cần CLI.
+  const ds = (db as unknown as Record<string, unknown>).deletedSession
+  if (!ds) return 'client-drift'
+
+  // 2. Toàn diện qua CLI migrate diff (phát hiện MỌI drift bảng/cột/index).
+  try {
+    const cli = await probeSchemaViaCli()
+    if (cli !== 'cli-error') return cli
+    console.warn('[DbSetup] migrate diff CLI lỗi — fallback probe thủ công')
+  } catch (cliErr) {
+    console.warn(
+      '[DbSetup] migrate diff CLI exception — fallback probe thủ công:',
+      cliErr instanceof Error ? cliErr.message : String(cliErr)
+    )
+  }
+
+  // 3. Fallback thủ công khi CLI không chạy được.
+  return probeSchemaManual()
 }
 
 // ==================== PRISMA CLI RUNNER ====================
@@ -179,7 +249,13 @@ async function runSetup(): Promise<DbSetupResult> {
   const push = await runPrismaCli(['db', 'push', '--skip-generate'])
   if (push.code !== 0) {
     const out = (push.stderr || push.stdout).slice(0, 500)
-    console.error('[DbSetup] prisma db push thất bại:', out)
+    console.error(
+      '[DbSetup] prisma db push thất bại:', out,
+      '\n[DbSetup] ⛔ DB local đang cũ hơn schema.prisma — API sẽ lỗi P2021/P2022 ("column/table does not exist").' +
+      '\n[DbSetup] 👉 CHẠY THỦ CÔNG trên terminal của bạn (chọn 1):' +
+      '\n           bun run db:push      (hoặc)      npx prisma db push' +
+      '\n[DbSetup]    (nếu CLI hỏi xác nhận mất dữ liệu bảng đã bị xóa khỏi schema — gõ y; dữ liệu app chính không bị ảnh hưởng)'
+    )
     return { ok: false, migrated: false, reason: `db push failed: ${out}` }
   }
 

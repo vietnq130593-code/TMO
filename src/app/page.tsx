@@ -12161,6 +12161,12 @@ function SkillsTabContent() {
   const [toolsRegistryLoading, setToolsRegistryLoading] = useState(false)
   const [toolsRegistryFilter, setToolsRegistryFilter] = useState('')
 
+  // Filter cho danh sách filesystem skills trong panel SKILL.md Guides
+  // (fix 2026-09-12: panel này trước đây CHỈ hiện 3 DB skills — 68 filesystem
+  // skills không hiển thị chỗ nào ngoài Tools Registry => user tưởng app
+  // thiếu tài nguyên, thực chất agents đọc được qua list_skills/read_skill)
+  const [fsSkillFilter, setFsSkillFilter] = useState('')
+
   // Load tools registry
   const loadToolsRegistry = useCallback(async () => {
     setToolsRegistryLoading(true)
@@ -12458,7 +12464,7 @@ function SkillsTabContent() {
                     </div>
                     <div className="nc-panel nc-sm nc-border-violet-soft p-2.5 text-center">
                       <div className="text-lg font-bold text-violet-300">{toolsRegistry.summary.dbSkillCount}</div>
-                      <div className="text-[10px] text-slate-500">SKILL.md Guides</div>
+                      <div className="text-[10px] text-slate-500">DB Skills (inject prompt)</div>
                     </div>
                     <div className="nc-panel nc-sm nc-border-violet-soft p-2.5 text-center">
                       <div className="text-lg font-bold text-amber-300">{toolsRegistry.summary.orphanToolCount}</div>
@@ -12572,7 +12578,7 @@ function SkillsTabContent() {
                     <h4 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
                       <BookOpen className="w-3.5 h-3.5 text-emerald-400" /> Filesystem Skills
                       <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-emerald-500/20 text-emerald-300 border-emerald-400/50">{toolsRegistry.summary.filesystemSkillCount}</Badge>
-                      <span className="text-[10px] font-normal text-slate-500">— agents đọc qua tool read_skill</span>
+                      <span className="text-[10px] font-normal text-slate-500">— MỌI agents đọc qua list_skills + read_skill (đã cấp đủ từ 2026-09-12)</span>
                     </h4>
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1.5 max-h-64 overflow-y-auto pr-1" style={{ scrollbarWidth: 'thin' }}>
                       {toolsRegistry.filesystemSkills.map(fs => (
@@ -12702,8 +12708,17 @@ function SkillsTabContent() {
         </div>
       </div>
 
-      {/* SKILL.md Guides — Hướng dẫn cho agents */}
-      {installedSkills && installedSkills.length > 0 && (
+      {/* SKILL.md Guides — Hướng dẫn cho agents (DB inject prompt + filesystem) */}
+      {(() => {
+        const fsSkills = (toolsRegistry?.filesystemSkills || []).filter(fs => fs.hasSkillMd)
+        const dbCount = installedSkills?.length || 0
+        if (dbCount === 0 && fsSkills.length === 0) return null
+        const fsFiltered = fsSkills.filter(fs =>
+          !fsSkillFilter ||
+          fs.slug.toLowerCase().includes(fsSkillFilter.toLowerCase()) ||
+          (fs.description || '').toLowerCase().includes(fsSkillFilter.toLowerCase())
+        )
+        return (
         <div className="nc-wrap nc-violet">
           <div className="nc-panel nc-md nc-border-violet p-4">
             <div
@@ -12717,7 +12732,8 @@ function SkillsTabContent() {
               {skillGuidesOpen ? <ChevronDown className="w-4 h-4 text-violet-400" /> : <ChevronRight className="w-4 h-4 text-violet-400" />}
               <BookOpen className="w-5 h-5 text-violet-400" />
               <h3 className="text-sm font-semibold text-violet-300 uppercase tracking-wider group-hover:text-violet-200 transition-colors">SKILL.md Guides</h3>
-              <Badge variant="outline" className="text-violet-400 border-violet-400/50">{installedSkills.length}</Badge>
+              <Badge variant="outline" className="text-violet-400 border-violet-400/50">{dbCount + fsSkills.length}</Badge>
+              <span className="text-[10px] text-slate-500 hidden sm:inline">{dbCount} inject prompt · {fsSkills.length} trên đĩa</span>
               <span className="ml-auto text-[10px] text-slate-500">{skillGuidesOpen ? 'Thu gọn' : 'Bấm để mở'}</span>
               <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                 <Button size="sm" variant="outline" className="text-violet-400 border-violet-400/50 hover:bg-violet-500/10" onClick={() => setShowCreateSkill(true)}>
@@ -12729,11 +12745,12 @@ function SkillsTabContent() {
             {skillGuidesOpen && (
               <>
             <p className="text-xs text-slate-500 mb-3 mt-4">
-              Tài liệu SKILL.md được inject vào system prompt của agent — hướng dẫn agent <em>khi nào</em> và <em>cách nào</em> sử dụng tool tương ứng. Đây là &quot;sách hướng dẫn&quot;, không phải code.
+              Tài nguyên skills có <strong>2 lớp</strong>: (1) <strong>{dbCount} skill DB</strong> (dưới đây) được inject thẳng vào system prompt của agent — hướng dẫn <em>khi nào</em> và <em>cách nào</em> dùng tool; (2) <strong>{fsSkills.length} skill filesystem</strong> (<code className="text-violet-300">skills/&lt;slug&gt;/SKILL.md</code>) — agents tự liệt kê qua tool <code className="text-violet-300">list_skills</code> và đọc chi tiết qua <code className="text-violet-300">read_skill</code> (đã cấp cho <strong>mọi agents</strong> kể từ 2026-09-12).
             </p>
 
+            {dbCount > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {installedSkills.map((skill, idx) => (
+              {installedSkills?.map((skill, idx) => (
                 <div key={skill.id || `${skill.slug}::idx-${idx}`} className="nc-wrap nc-violet-soft">
                   <div className="nc-panel nc-sm nc-border-violet-soft p-3">
                     <div className="flex items-start justify-between mb-2">
@@ -12775,11 +12792,51 @@ function SkillsTabContent() {
                 </div>
               ))}
             </div>
+            )}
+
+            {/* ===== Filesystem Skills — 68 skills trên đĩa (fix 2026-09-12) ===== */}
+            {fsSkills.length > 0 && (
+              <div className="mt-4">
+                <h4 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5 flex-wrap">
+                  <HardDrive className="w-3.5 h-3.5 text-emerald-400" /> Filesystem Skills
+                  <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-emerald-500/20 text-emerald-300 border-emerald-400/50">{fsSkills.length}</Badge>
+                  <span className="text-[10px] font-normal text-slate-500">— skills/&lt;slug&gt;/SKILL.md · agents đọc qua list_skills + read_skill</span>
+                </h4>
+                <Input
+                  placeholder={`Tìm trong ${fsSkills.length} skills filesystem theo tên hoặc mô tả...`}
+                  value={fsSkillFilter}
+                  onChange={(e) => setFsSkillFilter(e.target.value)}
+                  className="mb-2 bg-slate-800/50 border-violet-400/35 text-white placeholder:text-slate-500 text-sm h-8"
+                />
+                <div className="max-h-96 overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 pr-1" style={{ scrollbarWidth: 'thin' }}>
+                  {fsFiltered.map(fs => (
+                    <div key={fs.slug} className="nc-panel nc-sm nc-border-violet-soft p-2.5 flex flex-col gap-1.5">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <FileText className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                        <span className="text-xs font-mono font-medium text-white truncate" title={fs.slug}>{fs.slug}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 line-clamp-2 min-h-[2rem]" title={fs.description || ''}>
+                        {fs.description || 'Không có mô tả'}
+                      </p>
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-xs text-cyan-400 hover:bg-cyan-500/10 w-fit" onClick={() => fetchSkillContent(fs.slug)}>
+                        <Eye className="w-3 h-3 mr-1" /> Xem
+                      </Button>
+                    </div>
+                  ))}
+                  {fsFiltered.length === 0 && (
+                    <div className="col-span-full text-center text-xs text-slate-500 py-4">
+                      Không có skill filesystem nào khớp &quot;{fsSkillFilter}&quot;
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
               </>
             )}
           </div>
         </div>
-      )}
+        )
+      })()}
 
 
 
