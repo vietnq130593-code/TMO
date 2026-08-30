@@ -54,6 +54,10 @@ export interface GoalLoopVerdictSnapshot {
   missing: string[]
   rootCause: string
   nextPlan: string[]
+  /** FIX 2026-09-14 #9 — side issues + debt decision của trọng tài (resume
+   * giữa debt cycle vẫn khôi phục được ngữ cảnh lỗi phát sinh). */
+  sideIssues?: string[]
+  debtDecision?: 'none' | 'record' | 'continue'
 }
 
 /**

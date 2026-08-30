@@ -1614,6 +1614,42 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     },
   },
 
+  // ===== FAN-OUT / FAN-IN (user report 2026-09-14 #1) =====
+  // Dispatch NHIỀU sub-agent ĐỒNG THỜI + hợp nhất kết quả. Xung đột kết quả
+  // KHÔNG throw — liệt kê conflicts để agent cha tự phân xử.
+  dispatch_agents_parallel: {
+    type: 'function',
+    function: {
+      name: 'dispatch_agents_parallel',
+      description:
+        'FAN-OUT: dispatch 2-4 sub-agent chạy ĐỒNG THỜI (song song) rồi HỢP NHẤT (fan-in) kết quả về 1 báo cáo. ' +
+        'Mỗi sub-agent độc lập — 1 agent fail KHÔNG kéo sập cả lô; xung đột (2+ agent cùng đụng 1 file) được LIỆT KÊ trong "conflicts" thay vì báo lỗi. ' +
+        'Dùng khi tác vụ tách được thành các nhánh ĐỘC LẬP (vd: review 3 module khác nhau, phân tích song song nhiều phần). ' +
+        'Tác vụ có phụ thuộc tuần tự (B cần kết quả A) thì KHÔNG dùng tool này — gọi tuần tự từng dispatch_agent.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tasks: {
+            type: 'array',
+            minItems: 2,
+            maxItems: 4,
+            description: 'Danh sách 2-4 task ĐỘC LẬP (không phụ thuộc nhau)',
+            items: {
+              type: 'object',
+              properties: {
+                agent: { type: 'string', description: 'TÊN agent trong Agent Roster' },
+                task: { type: 'string', description: 'Nhiệm vụ cụ thể của agent này' },
+                context: { type: 'string', description: 'Context bổ sung cho agent này (file, ràng buộc...)' },
+              },
+              required: ['agent', 'task'],
+            },
+          },
+        },
+        required: ['tasks'],
+      },
+    },
+  },
+
   // ===== 21-c: OMEGA TOOLS MANAGER — Omega tự quản lý tool-access của agents =====
   // (user request: "thiết lập để Omega cũng có thể sử dụng chức năng này") — CHỈ nằm
   // trong tool list của Omega (standalone-agents.ts) — Code Team 5 agent KHÔNG có
@@ -2256,17 +2292,41 @@ export async function executeTool(
         result = await executeMcpCallFn(args as any)
         break
       }
+      // FIX 2026-09-14 #4 (ghost system): decompose_task/create_task/update_task/
+      // get_plan giờ map bền vững vào DB Todo — truyền sessionId + runId từ
+      // context để subtask gắn đúng phiên chat + run (Thought Process panel
+      // hiển thị, auto-complete theo bằng chứng tool CI-2, sống sót qua restart).
       case 'decompose_task':
-        result = await decomposeTask(args as any)
+        result = await decomposeTask({
+          goal: String(args.goal ?? ''),
+          context: args.context ? String(args.context) : undefined,
+          sessionId: (typeof args.sessionId === 'string' && args.sessionId) || context?.sessionId || undefined,
+          runId: (typeof args.runId === 'string' && args.runId) || context?.runId || undefined,
+        })
         break
       case 'create_task':
-        result = await createTask(args as any)
+        result = await createTask({
+          title: String(args.title ?? ''),
+          spec: String(args.spec ?? ''),
+          assignee: args.assignee ? String(args.assignee) : undefined,
+          priority: args.priority as 'low' | 'medium' | 'high' | undefined,
+          deps: Array.isArray(args.deps) ? args.deps.map((d: unknown) => String(d)) : undefined,
+          sessionId: (typeof args.sessionId === 'string' && args.sessionId) || context?.sessionId || undefined,
+          runId: (typeof args.runId === 'string' && args.runId) || context?.runId || undefined,
+        })
         break
       case 'update_task':
-        result = await updateTask(args as any)
+        result = await updateTask({
+          task_id: String(args.task_id ?? ''),
+          status: args.status as 'pending' | 'in_progress' | 'blocked' | 'completed' | 'failed' | undefined,
+          notes: args.notes ? String(args.notes) : undefined,
+          sessionId: (typeof args.sessionId === 'string' && args.sessionId) || context?.sessionId || undefined,
+        })
         break
       case 'get_plan':
-        result = await getPlan()
+        result = await getPlan(
+          (typeof args.sessionId === 'string' && args.sessionId) || context?.sessionId || undefined,
+        )
         break
       case 'summarize':
         result = await summarize(args as any)
@@ -2890,6 +2950,9 @@ export async function executeTool(
             toolCalls: outcome.toolCalls,
             endedBy: outcome.endedBy,
             evidence: outcome.evidence.slice(-12),
+            // FIX 2026-09-14 #2 — verdict của trọng tài delegation ĐỘC LẬP:
+            // parent đọc evaluation.pass/gaps thay vì chỉ tin report tự chấm.
+            evaluation: outcome.evaluation ?? null,
             error: outcome.error,
             hint: outcome.success
               ? undefined
@@ -2903,6 +2966,10 @@ export async function executeTool(
       // ===== OMEGA ORCHESTRATION (user request 2026-09-08) =====
       // (1) Mọi agent gặp vấn đề → escalate_problem → Omega-on-demand tư vấn
       //     giải pháp tốt nhất (nhận diện sớm, không chờ kẹt hẳn).
+      //     FIX 2026-09-14 #3 — AUTO-APPLY: advisory.dispatchAgent giờ được THỰC
+      //     THI NGAY trong cùng tool call (mặc định) thay vì chỉ trả JSON gợi ý
+      //     để caller tự gọi dispatch_agent ở vòng sau. Caller vẫn nhận đầy đủ
+      //     advisory + báo cáo sub-agent đã chạy. Tắt bằng auto_apply=false.
       case 'escalate_problem': {
         const problem = String(args.problem ?? args.issue ?? '').trim()
         if (!problem) {
@@ -2918,15 +2985,56 @@ export async function executeTool(
             callingAgent: context?.agentName || 'unknown-agent',
             severity: ['low', 'medium', 'high'].includes(String(args.severity)) ? String(args.severity) : 'medium',
           })
-          result = consult.success
-            ? {
-                success: true,
-                advisory: consult.text,
-                dispatchAgent: consult.advisory?.dispatchAgent ?? null,
-                createAgentSuggestion: consult.advisory?.createAgent ?? null,
-                tokensUsed: consult.tokensUsed,
+          if (!consult.success) {
+            result = { success: false, error: `Omega consult thất bại: ${consult.error || 'không rõ lỗi'}` }
+            break
+          }
+          const out: Record<string, unknown> = {
+            success: true,
+            advisory: consult.text,
+            dispatchAgent: consult.advisory?.dispatchAgent ?? null,
+            createAgentSuggestion: consult.advisory?.createAgent ?? null,
+            tokensUsed: consult.tokensUsed,
+          }
+          // ===== AUTO-APPLY (fix #3) =====
+          // advisory.dispatchAgent có tên agent hợp lệ + flag chưa tắt →
+          // dispatch NGAY (task = khuyến nghị của Omega) — caller nhận kèm
+          // báo cáo sub-agent trong CÙNG tool result, không phải tự gọi
+          // tool ở vòng sau. Fail-open: auto-apply lỗi → vẫn trả advisory
+          // như cũ (kèm autoApplyError để caller biết).
+          const autoApply = args.auto_apply !== false && args.auto_apply !== 'false'
+          const suggestedAgent = consult.advisory?.dispatchAgent?.trim()
+          if (autoApply && suggestedAgent && isFlagEnabled('ENABLE_SUBAGENT_DELEGATE')) {
+            try {
+              const { dispatchAgentByOmega } = await import('@/lib/omega-orchestrator')
+              const dispatchTask = `Xử lý giúp agent "${context?.agentName || 'unknown-agent'}" vấn đề sau:\n${problem.slice(0, 600)}\n\nKhuyến nghị của Omega: ${consult.advisory?.recommendation?.slice(0, 600) || '(theo phân tích của bạn)'}`
+              const dispatched = await dispatchAgentByOmega({
+                agent: suggestedAgent,
+                task: dispatchTask,
+                context: args.context ? String(args.context) : undefined,
+                duration: 'task',
+                parentAgentName: context?.agentName || 'Omega',
+                sessionId: context?.sessionId ?? null,
+              })
+              out.autoApplied = {
+                agent: dispatched.agent || suggestedAgent,
+                success: dispatched.success,
+                report: dispatched.report?.slice(0, 2500) ?? '',
+                evaluation: dispatched.evaluation ?? null,
+                tokensUsed: dispatched.tokensUsed ?? 0,
               }
-            : { success: false, error: `Omega consult thất bại: ${consult.error || 'không rõ lỗi'}` }
+              if (typeof dispatched.tokensUsed === 'number' && dispatched.tokensUsed > 0) {
+                out.tokensUsed = (consult.tokensUsed || 0) + dispatched.tokensUsed
+              }
+              console.log(`[ToolExecutor] escalate_problem AUTO-APPLY: điều ${suggestedAgent} xử lý giúp ${context?.agentName || 'unknown-agent'} — ${dispatched.success ? 'đạt' : 'chưa đạt'}`)
+            } catch (applyErr) {
+              out.autoApplied = { agent: suggestedAgent, success: false, error: applyErr instanceof Error ? applyErr.message : String(applyErr) }
+            }
+          } else if (suggestedAgent && !autoApply) {
+            out.autoApplied = null
+            out.note = `auto_apply=false — tự gọi dispatch_agent({"agent": "${suggestedAgent}", ...}) nếu muốn theo gợi ý.`
+          }
+          result = out
         } catch (err) {
           result = { success: false, error: `escalate_problem lỗi: ${err instanceof Error ? err.message : String(err)}` }
         }
@@ -2997,6 +3105,8 @@ export async function executeTool(
             iterations: dispatched.iterations,
             toolCalls: dispatched.toolCalls,
             endedBy: dispatched.endedBy,
+            // FIX 2026-09-14 #2 — verdict trọng tài delegation độc lập
+            evaluation: dispatched.evaluation ?? null,
             error: dispatched.error,
             hint: dispatched.success
               ? undefined
@@ -3004,6 +3114,50 @@ export async function executeTool(
           }
         } catch (err) {
           result = { success: false, error: `dispatch_agent lỗi: ${err instanceof Error ? err.message : String(err)}` }
+        }
+        break
+      }
+      // ===== FAN-OUT / FAN-IN (user report 2026-09-14 #1) =====
+      // Dispatch nhiều sub-agent SONG SONG + hợp nhất — xung đột KHÔNG throw.
+      case 'dispatch_agents_parallel': {
+        if (!isFlagEnabled('ENABLE_SUBAGENT_DELEGATE')) {
+          return {
+            success: false,
+            result: 'dispatch_agents_parallel tool is disabled (set ENABLE_SUBAGENT_DELEGATE=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
+        try {
+          const { dispatchAgentsParallel } = await import('@/lib/omega-orchestrator')
+          const rawTasks = Array.isArray(args.tasks) ? args.tasks : []
+          const tasks = rawTasks
+            .map((t: Record<string, unknown>) => ({
+              agent: String(t.agent ?? ''),
+              task: String(t.task ?? ''),
+              context: t.context ? String(t.context) : undefined,
+            }))
+            .filter(t => t.agent.trim() && t.task.trim())
+          const fanout = await dispatchAgentsParallel({
+            tasks,
+            parentAgentName: context?.agentName || 'Omega',
+            sessionId: context?.sessionId ?? null,
+          })
+          result = {
+            success: fanout.success,
+            mode: 'fan_out',
+            total: fanout.total,
+            succeeded: fanout.succeeded,
+            failed: fanout.failed,
+            tokensUsed: fanout.tokensUsed,
+            results: fanout.results,
+            conflicts: fanout.conflicts,
+            merged: fanout.merged,
+            hint: fanout.failed > 0
+              ? `${fanout.failed}/${fanout.total} sub-agent chưa đạt — đọc "results" xem gaps từng agent, tự khắc phục phần còn lại bằng tools của mình (không cần dispatch lại toàn bộ).`
+              : undefined,
+          }
+        } catch (err) {
+          result = { success: false, error: `dispatch_agents_parallel lỗi: ${err instanceof Error ? err.message : String(err)}` }
         }
         break
       }

@@ -483,6 +483,8 @@ export interface DispatchResult {
   iterations?: number
   toolCalls?: number
   endedBy?: string
+  /** FIX 2026-09-14 #2 — verdict của trọng tài delegation độc lập (mode='task') */
+  evaluation?: { pass: boolean; confidence: number; gaps: string[]; note: string }
   /** Kết quả điều động lâu dài (mode='long_term') */
   assignment?: { team: string | null; position: string | null }
   error?: string
@@ -637,6 +639,7 @@ export async function dispatchAgentByOmega(params: {
     iterations: run.iterations,
     toolCalls: run.toolCalls,
     endedBy: run.endedBy,
+    evaluation: run.evaluation,
     error: run.error,
   }
 }
@@ -664,7 +667,7 @@ async function runDispatchTask(
   parentAgentName: string,
   sessionId: string | null,
   onTokens?: (tokens: number) => void,
-): Promise<{ success: boolean; report: string; tokensUsed: number; iterations: number; toolCalls: number; endedBy: string; error?: string }> {
+): Promise<{ success: boolean; report: string; tokensUsed: number; iterations: number; toolCalls: number; endedBy: string; evaluation?: { pass: boolean; confidence: number; gaps: string[]; note: string }; error?: string }> {
   const { runSubAgentForProfile } = await import('@/lib/subagent-delegate')
   const outcome = await runSubAgentForProfile({
     profile: {
@@ -690,6 +693,157 @@ async function runDispatchTask(
     iterations: outcome.iterations,
     toolCalls: outcome.toolCalls,
     endedBy: outcome.endedBy,
+    evaluation: outcome.evaluation,
     error: outcome.error,
+  }
+}
+
+// ==================== FAN-OUT / FAN-IN (user report 2026-09-14 #1) ====================
+
+/**
+ * DISPATCH SONG SONG + HỢP NHẤT — dispatch N sub-agent chạy ĐỒNG THỜI
+ * (Promise.allSettled) rồi merge kết quả:
+ *   - Mỗi sub-agent độc lập: 1 fail KHÔNG kéo sập cả batch (no-throwError
+ *     — lỗi của agent nào báo riêng kết quả của agent đó).
+ *   - Xung đột kết quả (2+ agent đụng cùng file / kết luận trái ngược)
+ *     KHÔNG throw — liệt kê vào `conflicts` để agent cha tự phân xử.
+ *   - Merged summary đếm succeeded/failed + tổng token — parent đọc 1 chỗ.
+ *
+ * Cap bảo vệ: tối đa 4 task/lần (nhất quán DELEGATE_PRE-FLIGHT của goal-loop —
+ * sub-agent có budget riêng 40k token/lần; 4 song song ≈ trần hợp lý).
+ */
+export async function dispatchAgentsParallel(params: {
+  tasks: Array<{ agent: string; task: string; context?: string }>
+  parentAgentName?: string
+  sessionId?: string | null
+  onTokens?: (tokens: number) => void
+}): Promise<{
+  success: boolean
+  mode: 'fan_out'
+  total: number
+  succeeded: number
+  failed: number
+  tokensUsed: number
+  results: Array<{
+    agent: string
+    success: boolean
+    report: string
+    tokensUsed: number
+    toolCalls: number
+    endedBy: string
+    error?: string
+    evaluation?: { pass: boolean; confidence: number; gaps: string[]; note: string }
+  }>
+  conflicts: string[]
+  merged: string
+}> {
+  const { tasks, parentAgentName = 'Omega', sessionId = null, onTokens } = params
+  const MAX_PARALLEL = 4
+  const valid = (Array.isArray(tasks) ? tasks : [])
+    .filter(t => t && typeof t.agent === 'string' && t.agent.trim() && typeof t.task === 'string' && t.task.trim())
+    .slice(0, MAX_PARALLEL)
+
+  if (valid.length === 0) {
+    return {
+      success: false, mode: 'fan_out', total: 0, succeeded: 0, failed: 0, tokensUsed: 0,
+      results: [], conflicts: [],
+      merged: 'Không có task hợp lệ — mỗi task cần {"agent": "TÊN", "task": "nhiệm vụ cụ thể"} (tối đa 4 task/lần).',
+    }
+  }
+
+  console.log(`[OmegaOrchestrator] FAN-OUT: ${valid.length} sub-agent chạy song song (${valid.map(t => t.agent).join(', ')}) theo yêu cầu của ${parentAgentName}`)
+
+  // FAN-OUT — mọi dispatch chạy đồng thời; allSettled đảm bảo không cái nào
+  // throw ra ngoài (reject → đổi thành outcome fail của chính nó).
+  const settled = await Promise.allSettled(
+    valid.map(t =>
+      dispatchAgentByOmega({
+        agent: t.agent,
+        task: t.task,
+        context: t.context,
+        duration: 'task',
+        parentAgentName,
+        sessionId,
+        onTokens: (n) => onTokens?.(n),
+      }).then(r => ({ agent: t.agent, r })),
+    ),
+  )
+
+  // FAN-IN — hợp nhất kết quả, KHÔNG throwError xung đột:
+  let tokensUsed = 0
+  let succeeded = 0
+  const results: Array<{
+    agent: string
+    success: boolean
+    report: string
+    tokensUsed: number
+    toolCalls: number
+    endedBy: string
+    error?: string
+    evaluation?: { pass: boolean; confidence: number; gaps: string[]; note: string }
+  }> = []
+  const fileTouch = new Map<string, string[]>() // filePath → [agentName...]
+
+  for (const s of settled) {
+    if (s.status === 'rejected') {
+      // Exception văng từ dispatch (đã hiếm — dispatchAgentByOmega fail-open)
+      // → coi là 1 kết quả fail của agent đó, KHÔNG sập batch.
+      const msg = s.reason instanceof Error ? s.reason.message : String(s.reason)
+      results.push({ agent: '?', success: false, report: '', tokensUsed: 0, toolCalls: 0, endedBy: 'error', error: msg })
+      continue
+    }
+    const { agent, r } = s.value
+    tokensUsed += r.tokensUsed ?? 0
+    if (r.success) succeeded++
+    results.push({
+      agent: r.agent || agent,
+      success: r.success,
+      report: r.report ?? '',
+      tokensUsed: r.tokensUsed ?? 0,
+      toolCalls: r.toolCalls ?? 0,
+      endedBy: r.endedBy ?? '-',
+      error: r.error,
+      evaluation: r.evaluation,
+    })
+    // Heuristic phát hiện xung đột: 2+ sub-agent cùng nhắc 1 đường dẫn file
+    // trong report → có thể ghi đè lẫn nhau — cảnh báo cho parent (không throw).
+    const paths = (r.report ?? '').match(/[\w./-]+\.(?:ts|tsx|js|jsx|json|md|prisma|css)/g) ?? []
+    for (const p of new Set(paths.slice(0, 40))) {
+      const list = fileTouch.get(p) ?? []
+      if (!list.includes(r.agent || agent)) list.push(r.agent || agent)
+      fileTouch.set(p, list)
+    }
+  }
+
+  const conflicts: string[] = []
+  for (const [path, agents] of fileTouch) {
+    if (agents.length > 1) {
+      conflicts.push(`${agents.join(' + ')} cùng đụng file "${path}" — kiểm tra file cuối cùng có đủ ý đồ của cả 2 không`)
+    }
+  }
+
+  const failed = results.length - succeeded
+  const summaryLines = [
+    `FAN-OUT ${results.length} sub-agent song song — ${succeeded} đạt / ${failed} chưa đạt · ${tokensUsed} tokens${conflicts.length > 0 ? ` · ⚠️ ${conflicts.length} xung đột tiềm năng` : ''}`,
+    ...results.map(r =>
+      `${r.success ? '✅' : '❌'} ${r.agent}: ${(r.error && !r.report ? r.error : (r.report || r.error || '(không có báo cáo)')).slice(0, 600)}${r.report && r.error ? `\n   ⚠️ ${r.error.slice(0, 200)}` : ''}`,
+    ),
+  ]
+  if (conflicts.length > 0) {
+    summaryLines.push(`⚠️ XUNG ĐỘT (không chặn — parent tự phân xử): ${conflicts.slice(0, 5).join(' | ')}`)
+  }
+
+  console.log(`[OmegaOrchestrator] FAN-IN: ${succeeded}/${results.length} đạt, ${conflicts.length} xung đột tiềm năng, ${tokensUsed} tokens`)
+
+  return {
+    success: failed === 0,
+    mode: 'fan_out',
+    total: results.length,
+    succeeded,
+    failed,
+    tokensUsed,
+    results,
+    conflicts,
+    merged: summaryLines.join('\n\n').slice(0, 6000),
   }
 }

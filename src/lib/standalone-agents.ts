@@ -270,6 +270,9 @@ LEARNING & MEMORY
       'escalate_problem',
       'create_agent',
       'dispatch_agent',
+      // FAN-OUT/FAN-IN (user report 2026-09-14 #1): dispatch 2-4 sub-agent
+      // SONG SONG + hợp nhất kết quả (xung đột liệt kê, không throw).
+      'dispatch_agents_parallel',
       // 21-c: OMEGA TOOLS MANAGER — Omega tự quản lý tool-access của agents khi
       // user yêu cầu ("hãy bật tool X cho agent Y") + đọc/sửa SKILL.md filesystem.
       // CHỈ Omega có tool này — Code Team 5 agent KHÔNG (tránh tranh quyền QTV).

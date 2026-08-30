@@ -88,8 +88,10 @@ const POSITION_BY_NAME: Record<string, string> = {
  * DEPTH GUARD — sub-agent KHÔNG BAO GIỜ có các tool điều phối này (đệ quy
  * vô hạn: agent A delegate B, B delegate C...). escalate_problem được GIỮ —
  * consult Omega là 1 LLM call đơn (không chạy tool, không đệ quy).
+ * dispatch_agents_parallel (2026-09-14 fan-out) cũng bị strip — chống
+ * fan-out lồng nhau nổ token.
  */
-export const DEPTH_GUARD_TOOLS = ['delegate_task', 'dispatch_agent', 'create_agent']
+export const DEPTH_GUARD_TOOLS = ['delegate_task', 'dispatch_agent', 'create_agent', 'dispatch_agents_parallel']
 
 /**
  * Toolset mặc định khi profile KHÔNG khai báo tools (agent custom cũ trong DB
@@ -139,6 +141,14 @@ export interface SubAgentOutcome {
   /** evidence lines — parent có thể nối vào nhật ký bằng chứng của mình */
   evidence: string[]
   error?: string
+  /** FIX 2026-09-14 #2 — verdict của TRỌNG TÀI ĐỘC LẬP (delegation-evaluator):
+   *  null = đánh giá không chạy được (fail-open) — parent tự cân nhắc như cũ. */
+  evaluation?: {
+    pass: boolean
+    confidence: number
+    gaps: string[]
+    note: string
+  }
 }
 
 /** Profile agent chạy như sub-agent — do caller resolve (Code Team hoặc DB) */
@@ -611,6 +621,43 @@ export async function runSubAgentForProfile(params: {
           }))
           .catch(() => { /* fail-open — learning không được phá delegation */ })
       } catch { /* fail-open */ }
+    }
+
+    // ===== FIX 2026-09-14 #2 — TRỌNG TÀI ĐỘC LẬP CHO DELEGATION =====
+    // Sub-agent vừa TỰ verify theo prompt (học sinh tự chấm bài mình) — giờ
+    // 1 LLM call với persona trọng tài riêng soi task + acceptance criteria +
+    // report + evidence THẬT → verdict gắn vào outcome.evaluation. Parent
+    // nhận KẾT QUẢ CHẤM ĐỘC LẬP trong tool result (không phải chỉ lời tự chấm).
+    // Fail-open: evaluator lỗi → evaluation undefined → hành vi cũ. Bỏ qua
+    // khi cancelled (user chủ động dừng — không tốn thêm 1 call).
+    if (state.endedBy !== 'cancelled' && task.trim()) {
+      try {
+        const { evaluateDelegationOutcome } = await import('@/lib/delegation-evaluator')
+        const evaluation = await evaluateDelegationOutcome({
+          agentName: profile.name,
+          agentId: profile.id,
+          task,
+          acceptanceCriteria,
+          report,
+          evidence,
+          endedBy: state.endedBy,
+          provider: profile.provider,
+          model: profile.model,
+          abortCheck: isCancelled,
+          onTokens: addTokens,
+        })
+        if (evaluation) {
+          outcome.evaluation = evaluation
+          console.log(`[SubAgent] ${profile.name} trọng tài độc lập: ${evaluation.pass ? 'ĐẠT' : 'CHƯA ĐẠT'} (tin cậy ${Math.round(evaluation.confidence * 100)}%)${evaluation.gaps.length > 0 ? ` — thiếu: ${evaluation.gaps[0].slice(0, 80)}` : ''}`)
+          // Đánh giá CHƯA ĐẠT nhưng outcome đang success → hạ success để
+          // parent không tin kết quả delegation theo lời tự chấm (vẫn kèm
+          // đầy đủ report/evidence — parent tự cân nhắc khắc phục gaps).
+          if (!evaluation.pass && outcome.success) {
+            outcome.success = false
+            outcome.error = `Trọng tài độc lập: CHƯA ĐẠT — ${evaluation.gaps.join('; ') || evaluation.note}`
+          }
+        }
+      } catch { /* fail-open — evaluator không được phá delegation */ }
     }
 
     console.log(`[SubAgent] ${profile.name} xong: ${state.endedBy} — ${iterations} vòng, ${toolCallCount} tool calls, ${tokensUsed} tokens, ${Math.round((Date.now() - startedAt) / 1000)}s`)

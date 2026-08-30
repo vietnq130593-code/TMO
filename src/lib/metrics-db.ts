@@ -69,6 +69,10 @@ export async function insertAgentRunRecord(params: {
   complete: boolean
   startedAt: Date
   completedAt: Date
+  /** FIX 2026-09-14 #5: runId của run (run_xxx | sub_xxx delegation) */
+  runId?: string | null
+  /** FIX 2026-09-14 #5: runId cha (delegation → query mọi sub-run của 1 run) */
+  parentRunId?: string | null
   /** v1 (20-b) luôn null — 20-c wire từ goal-loop metadata */
   messageId?: string | null
   agentId?: string | null
@@ -81,6 +85,8 @@ export async function insertAgentRunRecord(params: {
     await db.agentRunRecord.create({
       data: {
         sessionId: params.sessionId,
+        runId: params.runId ?? null,
+        parentRunId: params.parentRunId ?? null,
         messageId: params.messageId ?? null,
         agentId: params.agentId ?? null,
         agentName: params.agentName,
@@ -106,11 +112,12 @@ export async function insertAgentRunRecord(params: {
   const createdAt = new Date()
   await db.$executeRaw`
     INSERT INTO AgentRunRecord (
-      id, sessionId, messageId, agentId, agentName, status, stopReason,
+      id, sessionId, runId, parentRunId, messageId, agentId, agentName, status, stopReason,
       cycles, tokensUsed, toolCalls, toolFailures, durationMs,
       evaluatorConfidence, complete, startedAt, completedAt, createdAt
     ) VALUES (
-      ${id}, ${params.sessionId}, ${params.messageId ?? null}, ${params.agentId ?? null},
+      ${id}, ${params.sessionId}, ${params.runId ?? null}, ${params.parentRunId ?? null},
+      ${params.messageId ?? null}, ${params.agentId ?? null},
       ${params.agentName}, ${params.status}, ${params.stopReason},
       ${params.cycles ?? null}, ${params.tokensUsed ?? null}, ${params.toolCalls},
       ${params.toolFailures}, ${params.durationMs},
@@ -136,6 +143,8 @@ export async function findAgentRunRecordsSince(since: Date): Promise<AgentRunRec
     Array<{
       id: string
       sessionId: string
+      runId: string | null
+      parentRunId: string | null
       messageId: string | null
       agentId: string | null
       agentName: string | null
@@ -153,7 +162,7 @@ export async function findAgentRunRecordsSince(since: Date): Promise<AgentRunRec
       createdAt: Date
     }>
   >`
-    SELECT id, sessionId, messageId, agentId, agentName, status, stopReason,
+    SELECT id, sessionId, runId, parentRunId, messageId, agentId, agentName, status, stopReason,
       cycles, tokensUsed, toolCalls, toolFailures, durationMs,
       evaluatorConfidence, complete, startedAt, completedAt, createdAt
     FROM AgentRunRecord
@@ -354,12 +363,17 @@ export async function insertAgentRunRecordRunning(params: {
   agentId?: string | null
   agentName?: string | null
   startedAt?: Date
+  /** FIX 2026-09-14 #5: runId — row 'running' khớp ĐÚNG run khi update lúc end */
+  runId?: string | null
+  parentRunId?: string | null
 }): Promise<void> {
   const startedAt = params.startedAt ?? new Date()
   if (hasAgentRunRecordDelegate()) {
     await db.agentRunRecord.create({
       data: {
         sessionId: params.sessionId,
+        runId: params.runId ?? null,
+        parentRunId: params.parentRunId ?? null,
         agentId: params.agentId ?? null,
         agentName: params.agentName ?? null,
         status: 'running',
@@ -373,11 +387,12 @@ export async function insertAgentRunRecordRunning(params: {
   const createdAt = new Date()
   await db.$executeRaw`
     INSERT INTO AgentRunRecord (
-      id, sessionId, messageId, agentId, agentName, status, stopReason,
+      id, sessionId, runId, parentRunId, messageId, agentId, agentName, status, stopReason,
       cycles, tokensUsed, toolCalls, toolFailures, durationMs,
       evaluatorConfidence, complete, startedAt, completedAt, createdAt
     ) VALUES (
-      ${id}, ${params.sessionId}, NULL, ${params.agentId ?? null}, ${params.agentName ?? null},
+      ${id}, ${params.sessionId}, ${params.runId ?? null}, ${params.parentRunId ?? null},
+      NULL, ${params.agentId ?? null}, ${params.agentName ?? null},
       'running', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
       ${startedAt}, NULL, ${createdAt}
     )
@@ -437,38 +452,62 @@ function buildAgentRunDelegateData(data: AgentRunRecordUpdate): Record<string, u
 }
 
 /**
- * UPDATE row AgentRunRecord MỚI NHẤT của session (bất kể status) — goal-loop
- * wire metadata thật (cycles/tokensUsed/evaluatorConfidence/stopReason...) khi
- * run kết thúc; chat route link messageId sau khi message persist.
- * Trả về số row đã update (0 = session chưa có row nào).
+ * UPDATE row AgentRunRecord của run (FIX 2026-09-14 #5: ưu tiên khớp THEO
+ * runId — chính xác ngay cả khi có delegation rows chen giữa; fallback row
+ * mới nhất theo createdAt như cũ khi runId không có/không khớp) — goal-loop
+ * wire metadata thật (cycles/tokensUsed/evaluatorConfidence/stopReason...)
+ * khi run kết thúc; chat route link messageId sau khi message persist.
+ * Trả về số row đã update (0 = chưa có row nào khớp).
  */
 export async function updateLatestAgentRunRecord(
   sessionId: string,
   data: AgentRunRecordUpdate,
+  runId?: string | null,
 ): Promise<number> {
   const { sets, args } = buildAgentRunSetClauses(data)
   if (sets.length === 0) return 0
 
   if (hasAgentRunRecordDelegate()) {
-    const latest = await db.agentRunRecord.findFirst({
-      where: { sessionId },
-      orderBy: { createdAt: 'desc' },
-      select: { id: true },
-    })
-    if (!latest) return 0
+    let targetId: string | null = null
+    if (runId) {
+      const byRunId = await db.agentRunRecord.findFirst({
+        where: { sessionId, runId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      })
+      targetId = byRunId?.id ?? null
+    }
+    if (!targetId) {
+      const latest = await db.agentRunRecord.findFirst({
+        where: { sessionId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      })
+      targetId = latest?.id ?? null
+    }
+    if (!targetId) return 0
     await db.agentRunRecord.update({
-      where: { id: latest.id },
+      where: { id: targetId },
       data: buildAgentRunDelegateData(data),
     })
     return 1
   }
 
-  // Raw path: subquery chọn row mới nhất theo createdAt — 1 statement atomic
-  args.push(sessionId)
-  return db.$executeRawUnsafe(
-    `UPDATE AgentRunRecord SET ${sets.join(', ')} WHERE id = (
-       SELECT id FROM AgentRunRecord WHERE sessionId = ? ORDER BY createdAt DESC LIMIT 1
-     )`,
-    ...args,
-  )
+  // Raw path: subquery chọn row theo runId (nếu có) else mới nhất theo
+  // createdAt — 1 statement atomic. Params: SET args → cond args.
+  const run = async (cond: string, condArgs: unknown[]): Promise<number> =>
+    db.$executeRawUnsafe(
+      `UPDATE AgentRunRecord SET ${sets.join(', ')} WHERE id = (
+         SELECT id FROM AgentRunRecord WHERE ${cond} ORDER BY createdAt DESC LIMIT 1
+       )`,
+      ...args,
+      ...condArgs,
+    )
+  if (runId) {
+    const n = await run('sessionId = ? AND runId = ?', [sessionId, runId])
+    if (n > 0) return n
+    // Row không khớp runId (insert bởi code cũ chưa có cột runId) → fallback
+    return run('sessionId = ?', [sessionId])
+  }
+  return run('sessionId = ?', [sessionId])
 }

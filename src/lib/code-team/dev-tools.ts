@@ -2350,13 +2350,114 @@ function nextTaskId(): string {
  *
  * Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 5.5 (lines 322-326).
  */
-export async function decomposeTask(args: { goal: string; context?: string }): Promise<unknown> {
+/**
+ * FIX 2026-09-14 #4 (ghost system → DB Todo): persist DAG DevTask[] vào DB
+ * Todo bền vững — mỗi subtask 1 row:
+ *   - content = "<title> — <spec>" ( Thought Process panel + auto-complete
+ *     CI-2 theo bằng chứng tool path/lệnh shell khớp content)
+ *   - idempotencyKey = "task:T00N" (taskId ổn định — update_task/get_plan
+ *     tra cứu lại được sau restart)
+ *   - taskMetaJson = {taskId, title, spec, assignee, deps[], notes} (DAG)
+ *   - agentRole = assignee (TL/G1/G2-A/G2-B/G3), runId scope theo run cha
+ * Fail-open tuyệt đối: DB lỗi → trả note lỗi, DAG in-memory vẫn giữ (hành vi
+ * cũ) — decomposition KHÔNG BAO GIỜ fail vì DB.
+ */
+async function persistDevTasksToDb(
+  tasks: DevTask[],
+  scope: { sessionId?: string; runId?: string },
+): Promise<{ persisted: number; todoIds: string[]; error?: string }> {
+  const todoIds: string[] = []
+  if (tasks.length === 0) return { persisted: 0, todoIds }
+  const sessionId = (typeof scope.sessionId === 'string' && scope.sessionId.trim()) || 'default'
+  const runId = (typeof scope.runId === 'string' && scope.runId.trim()) || null
+  try {
+    const { db } = await import('@/lib/db')
+    // Dedup: decompose lại cùng session → taskId đã có thì UPDATE chứ không đẻ row mới
+    const existing = await db.todo.findMany({
+      where: { sessionId, idempotencyKey: { startsWith: 'task:' } },
+      select: { id: true, idempotencyKey: true },
+    })
+    const existingByTaskId = new Map(existing.map(t => [t.idempotencyKey ?? '', t.id]))
+    let position = existing.length
+    for (const t of tasks) {
+      const key = `task:${t.id}`
+      const meta = {
+        taskId: t.id,
+        title: t.title,
+        spec: t.spec,
+        assignee: t.assignee,
+        deps: t.deps,
+        notes: t.notes,
+        source: 'decompose_task',
+      }
+      const content = `${t.title}${t.spec ? ` — ${t.spec}` : ''}`.slice(0, 500)
+      const existingId = existingByTaskId.get(key)
+      if (existingId) {
+        await db.todo.update({
+          where: { id: existingId },
+          data: {
+            content,
+            status: t.status,
+            priority: t.priority,
+            taskMetaJson: JSON.stringify(meta),
+            archivedAt: null,
+          },
+        })
+        todoIds.push(existingId)
+        continue
+      }
+      const created = await db.todo.create({
+        data: {
+          sessionId,
+          agentRole: t.assignee,
+          content,
+          status: t.status,
+          priority: t.priority,
+          position: position++,
+          idempotencyKey: key,
+          taskMetaJson: JSON.stringify(meta),
+          ...(runId ? { runId } : {}),
+        },
+      })
+      todoIds.push(created.id)
+    }
+    return { persisted: todoIds.length, todoIds }
+  } catch (err) {
+    return { persisted: 0, todoIds, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * FIX E2E 2026-09-14 — z-ai-sdk fallback cho decompose_task: NVIDIA NIM cạn
+ * hạn mức (cả 4 key) thì callLLM trả content rỗng → phân rã chết. Fallback
+ * cuối qua z-ai-web-dev-sdk (không cần key — pattern copy từ self-direction
+ * orchestrator tryZaiSdk). Fail-open: sdk lỗi → trả null (caller dùng kết quả
+ * callLLM như cũ).
+ */
+async function tryZaiSdkForDecompose(prompt: string, systemPrompt: string): Promise<string | null> {
+  try {
+    const { default: ZAI } = await import('z-ai-web-dev-sdk')
+    const sdk = await ZAI.create()
+    const res = (await sdk.chat.completions.create({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt },
+      ],
+    })) as { choices?: Array<{ message?: { content?: string } }> }
+    return res?.choices?.[0]?.message?.content ?? null
+  } catch (err) {
+    console.warn('[dev-tools:decomposeTask] z-ai-sdk fallback failed:', err instanceof Error ? err.message : String(err))
+    return null
+  }
+}
+
+export async function decomposeTask(args: { goal: string; context?: string; sessionId?: string; runId?: string }): Promise<unknown> {
   if (!args.goal) return { error: 'goal is required' }
 
   // ===== v2.1 Phase 5.5 — full thinking/decomposer.ts path =====
   if (isFlagEnabled('ENABLE_MASTER_ORCHESTRATOR')) {
     try {
-      return await decomposeTaskViaThinkingLayer(args.goal, args.context)
+      return await decomposeTaskViaThinkingLayer(args.goal, args.context, args)
     } catch (err) {
       // Graceful fallback to the simplified path — never break the caller
       console.warn('[dev-tools:decomposeTask] thinking layer failed, falling back to simplified LLM call:', err instanceof Error ? err.message : String(err))
@@ -2373,7 +2474,12 @@ ${args.context ? `Context: ${args.context}` : ''}
 
 JSON:`
   const result = await callLLM(prompt, 'You are a senior tech lead. Be concrete and minimal.', 'task_decomposition')
-  const text = result.content || '[]'
+  let text = result.content || ''
+  // FIX E2E 2026-09-14 — NVIDIA chain fail (content rỗng) → z-ai-sdk fallback
+  if (!text.trim()) {
+    console.log('[dev-tools:decomposeTask] NVIDIA trả rỗng — thử z-ai-sdk fallback')
+    text = (await tryZaiSdkForDecompose(prompt, 'You are a senior tech lead. Be concrete and minimal.')) ?? ''
+  }
 
   let tasksRaw: any[]
   try {
@@ -2382,6 +2488,15 @@ JSON:`
     tasksRaw = JSON.parse(cleaned)
   } catch {
     return { error: 'LLM did not return valid JSON', raw: text.slice(0, 500) }
+  }
+  // GUARD (E2E 2026-09-14): LLM trả list rỗng / không phải mảng → báo lỗi trung
+  // thực thay vì "success + 0 task + durable=true" gây hiểu nhầm đã phân rã xong.
+  if (!Array.isArray(tasksRaw) || tasksRaw.length === 0) {
+    return {
+      error: 'LLM did not return any subtasks (empty list)',
+      raw: text.slice(0, 300),
+      hint: 'Thử lại decompose_task, hoặc tự chia nhỏ task bằng todo_write.',
+    }
   }
 
   const store = getTaskStore()
@@ -2412,7 +2527,20 @@ JSON:`
     created.push(task)
   }
 
-  return { success: true, goal: args.goal, tasksCreated: created.length, tasks: created }
+  // FIX 2026-09-14 #4 — DAG bền vững trong DB Todo (không còn ghost in-memory)
+  const persisted = await persistDevTasksToDb(created, args)
+  return {
+    success: true,
+    goal: args.goal,
+    tasksCreated: created.length,
+    tasks: created,
+    durable: persisted.persisted === created.length,
+    durableNote: persisted.error
+      ? `⚠️ DB persist lỗi (${persisted.error.slice(0, 120)}) — DAG chỉ còn in-memory, mất khi restart`
+      : persisted.persisted > 0
+        ? `Đã lưu ${persisted.persisted}/${created.length} subtask vào DB Todo (bền vững qua restart — get_plan đọc lại được, update_task cập nhật được)`
+        : undefined,
+  }
 }
 
 /**
@@ -2435,7 +2563,7 @@ JSON:`
  * db etc.) risks subtle ordering issues; lazy loading is safer and zero-cost
  * when the flag is off.
  */
-async function decomposeTaskViaThinkingLayer(goal: string, context?: string): Promise<unknown> {
+async function decomposeTaskViaThinkingLayer(goal: string, context?: string, scope?: { sessionId?: string; runId?: string }): Promise<unknown> {
   const { parseIntent, buildMentalModel } = await import('@/lib/intake')
   const { decomposeTask: thinkingDecomposeTask } = await import('@/lib/thinking/decomposer')
 
@@ -2513,11 +2641,20 @@ async function decomposeTaskViaThinkingLayer(goal: string, context?: string): Pr
     created.push(task)
   }
 
+  // FIX 2026-09-14 #4 — thinking path cũng persist DAG vào DB Todo (bền vững)
+  const persisted = await persistDevTasksToDb(created, scope ?? {})
+
   return {
     success: true,
     goal,
     tasksCreated: created.length,
     tasks: created,
+    durable: persisted.persisted === created.length,
+    durableNote: persisted.error
+      ? `⚠️ DB persist lỗi (${persisted.error.slice(0, 120)}) — DAG chỉ còn in-memory, mất khi restart`
+      : persisted.persisted > 0
+        ? `Đã lưu ${persisted.persisted}/${created.length} subtask vào DB Todo (bền vững qua restart — get_plan đọc lại được, update_task cập nhật được)`
+        : undefined,
     // Phase 5.5 — pass through the full DecompositionPlan metadata for callers
     // that want it (critical path, dependency graph, total estimated tokens/time).
     plan: {
@@ -2537,6 +2674,9 @@ export async function createTask(args: {
   assignee?: string
   priority?: 'low' | 'medium' | 'high'
   deps?: string[]
+  /** FIX 2026-09-14 #4 — persist bền vững vào DB Todo */
+  sessionId?: string
+  runId?: string
 }): Promise<unknown> {
   const store = getTaskStore()
   const id = nextTaskId()
@@ -2554,14 +2694,76 @@ export async function createTask(args: {
     updatedAt: now,
   }
   store.set(id, task)
-  return { success: true, task }
+  // FIX 2026-09-14 #4 — DB Todo bền vững (fail-open)
+  const persisted = await persistDevTasksToDb([task], args)
+  return {
+    success: true,
+    task,
+    durable: persisted.persisted === 1,
+    durableNote: persisted.error ? `⚠️ DB persist lỗi (${persisted.error.slice(0, 120)})` : persisted.persisted === 1 ? 'Đã lưu DB Todo (bền vững qua restart)' : undefined,
+  }
 }
 
 export async function updateTask(args: {
   task_id: string
   status?: 'pending' | 'in_progress' | 'blocked' | 'completed' | 'failed'
   notes?: string
+  /** FIX 2026-09-14 #4 — có sessionId thì update DB Todo (bền vững); không thì
+   * chỉ in-memory như cũ (legacy callers) */
+  sessionId?: string
 }): Promise<unknown> {
+  // ===== DB-FIRST (FIX 2026-09-14 #4): row Todo bền vững theo idempotencyKey
+  // "task:T00N" — status/notes cập nhật THẬT, sống sót qua restart. =====
+  if (args.sessionId && args.task_id) {
+    try {
+      const { db } = await import('@/lib/db')
+      const row = await db.todo.findFirst({
+        where: { sessionId: args.sessionId, idempotencyKey: `task:${args.task_id}` },
+      })
+      if (row) {
+        let meta: Record<string, unknown> = {}
+        try {
+          meta = row.taskMetaJson ? JSON.parse(row.taskMetaJson) : {}
+        } catch { /* ignore */ }
+        if (args.notes !== undefined) meta.notes = args.notes
+        const updated = await db.todo.update({
+          where: { id: row.id },
+          data: {
+            ...(args.status ? { status: args.status } : {}),
+            ...(args.notes !== undefined ? { taskMetaJson: JSON.stringify(meta) } : {}),
+          },
+        })
+        // Giữ in-memory store đồng bộ (cho getPlan không có sessionId)
+        const store = getTaskStore()
+        const mem = store.get(args.task_id)
+        if (mem) {
+          if (args.status) mem.status = args.status
+          if (args.notes !== undefined) mem.notes = args.notes
+          mem.updatedAt = new Date().toISOString()
+          store.set(args.task_id, mem)
+        }
+        return {
+          success: true,
+          task: {
+            id: args.task_id,
+            title: String(meta.title ?? row.content.split(' — ')[0] ?? args.task_id),
+            spec: String(meta.spec ?? ''),
+            assignee: (meta.assignee as string | null) ?? row.agentRole,
+            priority: updated.priority as 'low' | 'medium' | 'high',
+            deps: (meta.deps as string[]) ?? [],
+            status: updated.status as string,
+            notes: (meta.notes as string | null) ?? null,
+            createdAt: row.createdAt,
+            updatedAt: updated.updatedAt,
+          },
+          durable: true,
+        }
+      }
+      // Row DB không có (task tạo trước fix / khác session) → fallback in-memory
+    } catch { /* fail-open → in-memory path */ }
+  }
+
+  // ===== In-memory fallback (legacy) =====
   const store = getTaskStore()
   const task = store.get(args.task_id)
   if (!task) return { error: `Task not found: ${args.task_id}` }
@@ -2569,10 +2771,53 @@ export async function updateTask(args: {
   if (args.notes !== undefined) task.notes = args.notes
   task.updatedAt = new Date().toISOString()
   store.set(args.task_id, task)
-  return { success: true, task }
+  return { success: true, task, durable: false }
 }
 
-export async function getPlan(): Promise<unknown> {
+export async function getPlan(sessionId?: string): Promise<unknown> {
+  // ===== DB-FIRST (FIX 2026-09-14 #4): có sessionId → đọc DAG bền vững từ DB
+  // Todo (idempotencyKey "task:*") — kế hoạch phân rã sống sót qua restart,
+  // pipeline/agent sau truy vấn được kế hoạch của run trước. Fail-open →
+  // in-memory như cũ. =====
+  if (sessionId) {
+    try {
+      const { db } = await import('@/lib/db')
+      const rows = await db.todo.findMany({
+        where: { sessionId, idempotencyKey: { startsWith: 'task:' } },
+        orderBy: { position: 'asc' },
+      })
+      if (rows.length > 0) {
+        const tasks: DevTask[] = rows.map(r => {
+          let meta: Record<string, unknown> = {}
+          try {
+            meta = r.taskMetaJson ? JSON.parse(r.taskMetaJson) : {}
+          } catch { /* ignore */ }
+          return {
+            id: String(meta.taskId ?? (r.idempotencyKey ?? '').replace('task:', '')),
+            title: String(meta.title ?? r.content.split(' — ')[0] ?? r.content),
+            spec: String(meta.spec ?? ''),
+            assignee: (meta.assignee as string | null) ?? r.agentRole,
+            priority: (r.priority as 'low' | 'medium' | 'high') ?? 'medium',
+            deps: (Array.isArray(meta.deps) ? meta.deps : []).map((d: unknown) => String(d)),
+            status: (r.status as DevTask['status']) ?? 'pending',
+            notes: (meta.notes as string | null) ?? null,
+            createdAt: r.createdAt.toISOString(),
+            updatedAt: r.updatedAt.toISOString(),
+          }
+        })
+        const byStatus = {
+          pending: tasks.filter(t => t.status === 'pending').length,
+          in_progress: tasks.filter(t => t.status === 'in_progress').length,
+          blocked: tasks.filter(t => t.status === 'blocked').length,
+          completed: tasks.filter(t => t.status === 'completed').length,
+          failed: tasks.filter(t => t.status === 'failed').length,
+        }
+        return { success: true, total: tasks.length, byStatus, tasks, durable: true }
+      }
+    } catch { /* fail-open → in-memory */ }
+  }
+
+  // ===== In-memory fallback (legacy — mất khi restart) =====
   const store = getTaskStore()
   const tasks = Array.from(store.values())
   const byStatus = {
@@ -2582,7 +2827,7 @@ export async function getPlan(): Promise<unknown> {
     completed: tasks.filter(t => t.status === 'completed').length,
     failed: tasks.filter(t => t.status === 'failed').length,
   }
-  return { success: true, total: tasks.length, byStatus, tasks }
+  return { success: true, total: tasks.length, byStatus, tasks, durable: false }
 }
 
 // ==================== P1: SUMMARIZE + SYNTHESIZE ====================

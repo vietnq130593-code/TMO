@@ -26,7 +26,7 @@ import {
   getEpisodeInsights,
 } from './episodic-neo4j'
 import { searchSimilarEpisodes } from './episode-store'
-import { findAllLessonRecords } from './episodic-db'
+import { findAllLessonRecords, findLessonsByStatementFragment } from './episodic-db'
 import { EPISODIC_THRESHOLDS, type PreActContext } from './types'
 
 /**
@@ -161,5 +161,102 @@ export async function buildPreActContext(params: {
   } catch (err) {
     console.error('[Episodic] buildPreActContext failed:', err instanceof Error ? err.message : String(err))
     return empty
+  }
+}
+
+/**
+ * FIX 2026-09-14 #8 — MID-RUN SIMILAR-ERROR RECALL
+ * ==============================================
+ * Giữa các chu kỳ của goal-loop (user report: "4 chu kỳ nếu có vấn đề, thiếu
+ * sót, lỗi thì có cơ chế khai thác dữ liệu kiểm tra các lỗi tương tự từng gặp
+ * phải không") — PRE-ACT chỉ chạy 1 lần đầu run; khi chu kỳ N fail với
+ * rootCause mới, agent KHÔNG được nhắc về các lỗi TƯƠNG TỪ đã gặp + cách đã
+ * khắc phục.
+ *
+ * Hàm này build block directive cho chu kỳ kế:
+ *   - Fingerprint lỗi = rootCause của trọng tài + tool fail gần nhất
+ *   - Qdrant searchSimilarEpisodes (minScore hạ 0.65 — cross-type query)
+ *   + SQLite LessonRecord fallback (fragment match) khi Qdrant trống
+ *   → "LỖI TƯƠNG TỪ ĐÃ GẶP + cách đã khắc phục" — áp dụng ngay, không lặp vết xe đổ.
+ *
+ * Fail-open tuyệt đối: mọi lỗi → '' (không chặn continuation directive).
+ */
+export async function buildMidRunSimilarErrorBlock(params: {
+  agentName: string
+  rootCause: string
+  failedTools: string[]
+}): Promise<string> {
+  try {
+    const rootCause = (params.rootCause || '').trim()
+    if (!rootCause && params.failedTools.length === 0) return ''
+
+    const queryText = [
+      rootCause ? `Lỗi: ${rootCause}` : '',
+      params.failedTools.length > 0 ? `Tool fail: ${params.failedTools.join(' | ')}` : '',
+    ].filter(Boolean).join('\n').slice(0, 1500)
+    if (!queryText) return ''
+
+    // Song song: Qdrant episodes + SQLite lessons (fragment match theo từ khóa
+    // chính của rootCause — lỗi MỚI chưa có episode vẫn có thể khớp lesson cũ)
+    const [hits, lessonHits] = await Promise.all([
+      searchSimilarEpisodes({ queryText, topK: 3, minScore: 0.65 }).catch(() => []),
+      (async () => {
+        try {
+          // Trích 1-2 từ khóa dài nhất có ý nghĩa từ rootCause
+          const keywords = rootCause
+            .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+            .split(/\s+/)
+            .filter(w => w.length >= 5)
+            .slice(0, 3)
+          for (const kw of keywords) {
+            const rows = await findLessonsByStatementFragment(kw, 3)
+            if (rows.length > 0) return rows
+          }
+          return []
+        } catch {
+          return []
+        }
+      })(),
+    ])
+
+    const lines: string[] = []
+
+    if (hits.length > 0) {
+      const { getEpisodeInsights } = await import('./episodic-neo4j')
+      const insights = await getEpisodeInsights(hits.map(h => h.episodeId)).catch(() => ({ unresolvedErrors: [], lessons: [] }))
+      lines.push('🔁 LỖI TƯƠNG TỪ ĐÃ GẶP (Episodic Memory — giữa chừng run, chu kỳ trước fail):')
+      for (const h of hits) {
+        const p = h.payload
+        const outcome = String(p.outcome ?? '?')
+        lines.push(`- "${String(p.title ?? '').slice(0, 110)}" [${outcome}, agent ${String(p.agent ?? '?')}] — score ${(h.score * 100).toFixed(0)}%`)
+      }
+      const lessons = [...insights.lessons]
+      if (lessons.length > 0) {
+        lines.push('  Cách đã khắc phục (lessons từ các episode đó):')
+        for (const l of lessons.slice(0, 3)) {
+          lines.push(`  → ${l.statement.slice(0, 180)} [confidence ${Math.round((l.confidence ?? 0) * 100)}%]`)
+        }
+      }
+      if (insights.unresolvedErrors.length > 0) {
+        lines.push('  ⚠️ Cảnh báo — các lỗi tương tự từng CHƯA resolve:')
+        for (const e of insights.unresolvedErrors.slice(0, 2)) {
+          lines.push(`  → ${String(e.rawMessage).slice(0, 130)} (${e.rootCause})`)
+        }
+      }
+    }
+
+    if (lessonHits.length > 0) {
+      if (lines.length === 0) lines.push('🔁 BÀI HỌC LIÊN QUAN LỖI HIỆN TẠI (LessonRecord — đã từng gặp pattern này):')
+      for (const l of lessonHits.slice(0, 3)) {
+        if (lines.some(li => li.includes(l.statement.slice(0, 60)))) continue // dedup với episode lessons
+        lines.push(`- ${l.statement.slice(0, 180)}${l.triggerCondition ? ` (trigger: ${l.triggerCondition.slice(0, 80)})` : ''} [confidence ${Math.round(l.confidence * 100)}%, validated ${l.timesValidated ?? 0} lần]`)
+      }
+    }
+
+    if (lines.length === 0) return ''
+    return `\n\n=== LỖI TƯƠNG TỪ TRONG QUÁ KHỨ (khai thác dữ liệu episodic memory — áp dụng cách đã khắc phục, KHÔNG lặp vết xe đổ) ===\n${lines.join('\n')}\n→ Nếu lỗi hiện tại trùng pattern: dùng NGAY cách khắc phục đã được validate. Nếu là lỗi MỚI chưa từng gặp: xử lý theo kế hoạch của trọng tài — hệ thống sẽ ghi nhận làm bài học sau run.`
+  } catch (err) {
+    console.warn('[Episodic] buildMidRunSimilarErrorBlock failed (fail-open):', err instanceof Error ? err.message : String(err))
+    return ''
   }
 }

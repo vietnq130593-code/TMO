@@ -243,7 +243,15 @@ const VERIFY_TOOLS = new Set(['run_tests', 'lint', 'type_check', 'test_coverage'
 /** [C] Đọc lại kết quả (file_read/grep sau khi sửa) cũng là kiểm định */
 const READBACK_TOOLS = new Set(['file_read', 'grep'])
 /** [C] Tool sửa đổi — sau những tool này PHẢI có kiểm định lại trước khi kết luận */
-const MODIFY_TOOLS = new Set(['file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'mkdir', 'shell', 'run_bg', 'git_commit', 'delegate_task', 'dispatch_agent'])
+const MODIFY_TOOLS = new Set(['file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'mkdir', 'shell', 'run_bg', 'git_commit', 'delegate_task', 'dispatch_agent', 'dispatch_agents_parallel'])
+/** FIX 2026-09-14 #7 — tool kiểm định MẠNH (đối lập READBACK chỉ-đọc-again: với
+ * thay đổi LOGIC, bằng chứng file_read-only là kiểm định YẾU). */
+const STRONG_VERIFY_TOOLS = new Set(['run_tests', 'lint', 'type_check', 'test_coverage'])
+/** FIX 2026-09-14 #7 — tool SỬA CODE (đối lập sửa config/data... — dùng cho
+ * cảnh báo E2E verification của trọng tài). */
+const CODE_MODIFY_TOOLS = new Set(['file_edit', 'file_multi_edit', 'file_write', 'shell', 'run_bg', 'git_commit'])
+/** FIX 2026-09-14 #4 — tool DAG task: goal-loop inject sessionId/runId để map DB Todo */
+const TASK_DAG_TOOLS = new Set(['decompose_task', 'create_task', 'update_task', 'get_plan'])
 /** [D] Tool verify được cap context lớn hơn (cần thấy đủ kết quả test/lint/tsc) */
 const VERIFY_RESULT_CHARS = 6000
 /**
@@ -356,6 +364,14 @@ interface EvalVerdict {
   missing: string[]
   rootCause: string
   nextPlan: string[]
+  /** FIX 2026-09-14 #9 — lỗi PHÁT SINH ngoài mục tiêu (side issues) trong quá
+   * trình làm: tool fail không chạm mục tiêu, lint lỗi file khác, lỗi ngẫu
+   * nhiên... Trọng tài quyết định xử lý qua debtDecision. */
+  sideIssues: string[]
+  /** 'none' = không đáng kể · 'record' = ghi nợ kỹ thuật (Todo follow-up,
+   * không chặn hoàn thành) · 'continue' = nghiêm trọng → đề xuất 1 chu kỳ
+   * debt mới xử lý ngay (nếu còn chu kỳ + budget). */
+  debtDecision: 'none' | 'record' | 'continue'
   raw: string
 }
 
@@ -402,9 +418,11 @@ function buildDelegationProtocol(): string {
 
 📦 PHÂN CÔNG SUB-AGENT (delegate_task — Code Team chuyên trách):
 - BOLT: implement code · SENTINEL: review/bug/security · CATALYST: tối ưu/refactor · CORTEX: thiết kế kiến trúc/DB/API · APEX: phân tích + verify tổng thể.
-- Cú pháp: tool_call: delegate_task({"agent": "BOLT", "task": "Nhiệm vụ cụ thể...", "context": "file liên quan, ràng buộc..."})
+- Cú pháp: tool_call: delegate_task({"agent": "BOLT", "task": "Nhiệm vụ cụ thể...", "context": "file liên quan, ràng buộc...", "acceptance_criteria": "điều kiện hoàn thành kiểm định được"})
 - NÊN delegate khi: task cần đọc/sửa NHIỀU file (làm trực tiếp sẽ phình context của bạn), cần chuyên môn sâu, hoặc task giao trọn được cho 1 agent.
 - KHÔNG delegate việc 1-2 bước đơn giản — tự làm nhanh hơn.
+- 🔄 FAN-OUT: nhiều delegation ĐỘC LẬP trong 1 message → hệ thống tự chạy SONG SONG + hợp nhất kết quả (không cần đợi tuần tự).
+- ⚖️ TRỌNG TÀI ĐỘC LẬP chấm từng delegation (field "evaluation" trong kết quả): pass=false + gaps[] = sub-agent CHƯA đạt theo tiêu chí — đọc gaps và khắc phục phần còn thiếu (tự làm hoặc delegate lại), KHÔNG tin report tự chấm của sub-agent.
 - Báo cáo sub-agent quay về dạng NÉN (đã làm · bằng chứng · còn thiếu) — ĐỌC kỹ "còn thiếu". Với kết quả QUAN TRỌNG, tự KIỂM ĐỊNH LẠI bằng tool của bạn (file_read/lint/type_check) trước khi kết luận.
 - Token sub-agent tiêu thụ cộng vào budget của bạn — scope task rõ ràng, không delegate task mờ hồ to đùng.`
 }
@@ -419,11 +437,12 @@ function buildOrchestrationProtocol(hasDispatch: boolean, hasCreate: boolean): s
   const lines: string[] = []
   lines.push('')
   lines.push('🧠 PHỐI HỢP MULTI-AGENT (Omega orchestrator):')
-  lines.push('- Gặp vấn đề / kẹt / lặp lỗi: tool_call: escalate_problem({"problem": "vấn đề cụ thể", "context": "...", "attempted": "đã thử gì", "severity": "low|medium|high"}) → OMEGA phân tích căn nguyên + cân nhắc các phương án → trả TƯ VẤN TỐT NHẤT (có thể kèm: agent nào nên xử lý, agent mới cần tạo).')
+  lines.push('- Gặp vấn đề / kẹt / lặp lỗi: tool_call: escalate_problem({"problem": "vấn đề cụ thể", "context": "...", "attempted": "đã thử gì", "severity": "low|medium|high"}) → OMEGA phân tích căn nguyên + cân nhắc các phương án → trả TƯ VẤN TỐT NHẤT. Nếu Omega đề xuất điều agent: hệ thống TỰ ĐỘNG ĐIỀU ĐỘNG agent đó NGAY trong cùng tool call (auto-apply — kết quả kèm trong "autoApplied"), bạn không phải gọi dispatch_agent lại.')
   lines.push('- NHẬN DIỆN SỚM (quan trọng): tool fail 2 lần cùng lỗi / cùng hành động lặp lại / task cần chuyên môn ngoài vòng của bạn (đối chiếu Agent Roster) → escalate NGAY khi có dấu hiệu đầu tiên, đừng chờ kẹt hẳn. Vấn đề được giải từ trước rẻ hơn chữa sau.')
   lines.push('- Escalate xong: LÀM THEO tư vấn của Omega (đổi cách tiếp cận / điều agent khác / dùng tool theo hướng dẫn mới) — không lặp lại cách cũ đã fail.')
   if (hasDispatch) {
     lines.push('- Điều động agent BẤT KỲ trong Agent Roster: tool_call: dispatch_agent({"agent": "TÊN", "task": "nhiệm vụ cụ thể", "context": "..."}) — agent chạy tự chủ, trả báo cáo nén (context của bạn không phình). Điều LÂU DÀI vào team: thêm {"duration": "long_term", "team": "code", "position": "G4"}.')
+    lines.push('- FAN-OUT nhiều agent SONG SONG (task ĐỘC LẬP): tool_call: dispatch_agents_parallel({"tasks": [{"agent": "APEX", "task": "..."}, {"agent": "SENTINEL", "task": "..."}]}) — tối đa 4 task/lần, chạy đồng thời, kết quả hợp nhất về 1 báo cáo; xung đột (cùng đụng 1 file) được liệt kê trong "conflicts" — tự phân xử.')
   }
   if (hasCreate) {
     lines.push('- Hệ thống THIẾU agent có kỹ năng phù hợp (đã kiểm tra Agent Roster): tool_call: create_agent({"name": "...", "description": "mô tả vai trò", "instruction": "system prompt chi tiết", "model": "moonshotai/kimi-k3", "avatar": "🤖", "temperature": 0.7, "maxTokens": 4096, "tools": ["file_read", "..."]}) — agent mới hiện trong module Agents, giao việc NGAY qua dispatch_agent.')
@@ -575,9 +594,15 @@ Nguyên tắc SẮT:
 5. "missing" = những gì còn thiếu so với mục tiêu. "rootCause" = vấn đề nằm chính xác ở đâu (bước nào fail / thiếu gì / sai chỗ nào). "nextPlan" = các bước khắc phục cụ thể cho chu kỳ kế tiếp.
 6. Công cụ kiểm định FAIL (type_check/lint/run_tests lỗi) KHÔNG tự động là "bằng chứng đã kiểm định": chỉ tin khi kết quả chứa errorCount/thông báo lỗi CỤ THỂ; nếu agent không trích được lỗi cụ thể (output bị cắt / nguyên nhân mơ hồ như "tsc fail") → "verified": false và ghi rõ vào "missing".
 7. "confidence" phải CALIBRATED trung thực — đây là XÁC SUẤT dự đoán của bạn, không phải mức độ mong muốn: đa số trường hợp "tự tin nhưng sai" nằm ở 0.6-0.8 chứ KHÔNG phải 0.95. Chỉ ≥0.9 khi bằng chứng tool trực tiếp khớp hoàn toàn mục tiêu; thiếu bằng chứng → ≤0.5.
+8. E2E VERIFICATION (sửa code nhưng chỉ đọc lại file): mục tiêu có SỬA CODE mà bằng chứng kiểm định chỉ là file_read/grep (KHÔNG run_tests/lint/type_check dù thông báo hệ thống nói tool có sẵn) → chỉ chấp nhận "complete": true khi thay đổi là thuần hiển thị/nội dung tĩnh; thay đổi LOGIC → "complete": false và thêm vào "missing": "chạy run_tests/lint/type_check để kiểm định thay đổi logic".
+9. SIDE ISSUES (lỗi phát sinh NGOÀI mục tiêu trong quá trình làm — tool fail không chạm mục tiêu, lint lỗi ở file khác, lỗi transient...): liệt kê vào "sideIssues" (tối đa 4, ngắn gọn). Mục tiêu chính ĐẠT nhưng có side issues → "complete": true VẪN ĐÚNG (đừng trừng phạt thành công vì lỗi ngoài), rồi chọn "debtDecision":
+   - "none": side issues tầm thường/đã tự hết → bỏ qua.
+   - "record": đáng ghi nhận nhưng không chặn việc hoàn thành → hệ thống ghi nợ kỹ thuật (Todo follow-up) cho lần sau.
+   - "continue": NGHIÊM TRỌNG (test fail toàn cục, build hỏng, lỗi lây lan) → hệ thống chạy THÊM 1 chu kỳ debt để xử lý ngay trong run này.
+   KHÔNG dùng side issues để hạ "complete" khi mục tiêu chính đã đạt theo bằng chứng.
 
 Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích thêm):
-{"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."]}`
+{"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."], "sideIssues": ["..."], "debtDecision": "none|record|continue"}`
 
 // ==================== HELPERS ====================
 
@@ -607,7 +632,10 @@ function parseEvalVerdict(raw: string): EvalVerdict | null {
     const missing = Array.isArray(obj.missing) ? obj.missing.map(m => String(m).slice(0, 200)).filter(Boolean).slice(0, 6) : []
     const rootCause = typeof obj.rootCause === 'string' ? obj.rootCause.slice(0, 400) : ''
     const nextPlan = Array.isArray(obj.nextPlan) ? obj.nextPlan.map(p => String(p).slice(0, 200)).filter(Boolean).slice(0, 6) : []
-    return { complete, confidence, verified, missing, rootCause, nextPlan, raw: raw.slice(0, 400) }
+    // FIX 2026-09-14 #9 — side issues + quyết định xử lý nợ kỹ thuật của trọng tài
+    const sideIssues = Array.isArray(obj.sideIssues) ? obj.sideIssues.map(s => String(s).slice(0, 200)).filter(Boolean).slice(0, 4) : []
+    const debtDecision = obj.debtDecision === 'record' || obj.debtDecision === 'continue' ? obj.debtDecision : 'none'
+    return { complete, confidence, verified, missing, rootCause, nextPlan, sideIssues, debtDecision, raw: raw.slice(0, 400) }
   } catch {
     return null
   }
@@ -729,6 +757,13 @@ async function evaluateCompletion(params: {
   verifyEvidence: string[]
   /** [C] Có thao tác sửa SAU lần kiểm định cuối (kết quả sửa chưa được kiểm chứng) */
   unverifiedModifications: boolean
+  /** FIX 2026-09-14 #7 (E2E verification): chu kỳ có SỬA CODE không? */
+  codeModified: boolean
+  /** FIX 2026-09-14 #7: có bằng chứng kiểm định MẠNH (run_tests/lint/type_check)
+   * ở chu kỳ cuối không — file_read-only là kiểm định YẾU với thay đổi logic. */
+  hasStrongVerify: boolean
+  /** FIX 2026-09-14 #7: agent có tool kiểm định mạnh trong whitelist không */
+  strongVerifyToolsAvailable: boolean
   agentProvider: string
   agentModel: string
   agentId: string
@@ -737,7 +772,7 @@ async function evaluateCompletion(params: {
   /** Token của evaluator cũng phải vào kế toán budget (fix review 2026-09-08) */
   onTokens?: (tokens: number) => void
 }): Promise<EvalVerdict | null> {
-  const { goal, lastAssistantContent, evidence, verifyEvidence, unverifiedModifications, agentProvider, agentModel, agentId, agentName, abortCheck, onTokens } = params
+  const { goal, lastAssistantContent, evidence, verifyEvidence, unverifiedModifications, codeModified, hasStrongVerify, strongVerifyToolsAvailable, agentProvider, agentModel, agentId, agentName, abortCheck, onTokens } = params
 
   const evidenceLines = evidence
     .slice(-MAX_EVIDENCE_ENTRIES)
@@ -756,6 +791,13 @@ async function evaluateCompletion(params: {
     ? verifyEvidence.map(l => `- ${l}`).join('\n')
     : '⚠️ KHÔNG có tool kiểm định nào (run_tests/lint/type_check/test_coverage/file_read/grep/shell-thành-công) ở chu kỳ cuối — mọi lời tuyên bố "đã kiểm tra/đã test" đều KHÔNG có bằng chứng.'
 
+  // FIX 2026-09-14 #7 — cảnh báo E2E verification cho trọng tài: chu kỳ có SỬA
+  // CODE nhưng bằng chứng kiểm định chỉ là đọc lại file (YẾU) trong khi tool
+  // kiểm định MẠNH (run_tests/lint/type_check) có sẵn — trọng tài áp quy tắc 8.
+  const weakVerifyWarning = codeModified && !hasStrongVerify && strongVerifyToolsAvailable
+    ? `\n\n⚠️ E2E VERIFICATION: chu kỳ có SỬA CODE nhưng bằng chứng kiểm định CHỈ là đọc lại file/grep (KHÔNG có run_tests/lint/type_check dù tool có sẵn). Theo quy tắc 8: thay đổi LOGIC chỉ được coi hoàn thành khi đã chạy test/lint/type_check — kiểm tra kỹ loại thay đổi trước khi chấm "complete": true.`
+    : ''
+
   const prompt = `MỤC TIÊU CỦA AGENT:
 ${goal.slice(0, 2000)}
 
@@ -763,7 +805,7 @@ LỜI KẾT LUẬN CUỐI CÙNG CỦA AGENT (chỉ là tuyên bố — cần đ�
 ${lastAssistantContent.slice(0, 2500)}
 
 BẰNG CHỨNG KIỂM ĐỊNH CHU KỲ CUỐI (HARNESS kiểm đếm từ tool call thật — agent KHÔNG thể bịa):
-${verifyBlock}${unverifiedModifications ? '\n\n⚠️ CÓ THAO TÁC SỬA (file_edit/shell/git...) SAU LẦN KIỂM ĐỊNH CUỐI — kết quả của lần sửa đó CHƯA được kiểm chứng.' : ''}
+${verifyBlock}${weakVerifyWarning}${unverifiedModifications ? '\n\n⚠️ CÓ THAO TÁC SỬA (file_edit/shell/git...) SAU LẦN KIỂM ĐỊNH CUỐI — kết quả của lần sửa đó CHƯA được kiểm chứng.' : ''}
 
 NHẬT KÝ BẰNG CHỨNG TOOL (theo thứ tự thời gian — đây là sự thật duy nhất đáng tin):
 ${evidenceBlock}
@@ -812,6 +854,8 @@ async function generateFinalReport(params: {
   stopReason: GoalStopReason
   cyclesAttempted: number
   maxCycles: number
+  /** FIX 2026-09-14 #9 — nợ kỹ thuật chưa xử lý (đã ghi Todo follow-up) */
+  debtIssues?: string[]
   agentProvider: string
   agentModel: string
   agentId: string
@@ -823,7 +867,7 @@ async function generateFinalReport(params: {
   onTokens: (tokens: number) => void
 }): Promise<string | null> {
   const {
-    goal, lastContent, evidence, lastVerdict, stopReason, cyclesAttempted, maxCycles,
+    goal, lastContent, evidence, lastVerdict, stopReason, cyclesAttempted, maxCycles, debtIssues,
     agentProvider, agentModel, agentId, agentName, agentTemperature, agentMaxTokens,
     fullSystemPrompt, abortCheck, onTokens,
   } = params
@@ -837,6 +881,12 @@ async function generateFinalReport(params: {
     ? `complete=${lastVerdict.complete}, verified=${lastVerdict.verified}, confidence=${Math.round(lastVerdict.confidence * 100)}%\nCòn thiếu (theo trọng tài): ${lastVerdict.missing.join('; ') || '(không liệt kê)'}\nVấn đề gốc: ${lastVerdict.rootCause || '(không xác định)'}`
     : '(trọng tài không đánh giá được)'
 
+  // FIX 2026-09-14 #9 — phần NỢ KỸ THUẬT cho báo cáo cuối khi trọng tài ghi nhận
+  // side issues (mục tiêu chính đạt nhưng có lỗi phát sinh chưa xử lý).
+  const debtBlock = debtIssues && debtIssues.length > 0
+    ? `\nNỢ KỸ THUẬT (lỗi phát sinh ngoài mục tiêu — trọng tài quyết định GHI NỢ thay vì chạy thêm chu kỳ; ĐÃ tạo Todo follow-up):\n${debtIssues.map(d => `- ${d}`).join('\n')}`
+    : ''
+
   const prompt = `MỤC TIÊU GỐC:
 ${goal.slice(0, 1500)}
 
@@ -847,7 +897,7 @@ NHẬT KÝ BẰNG CHỨNG TOOL THẬT (sự thật duy nhất đáng tin — tr�
 ${evidenceLines.slice(0, 8000)}
 
 ĐÁNH GIÁ CỦA TRỌNG TÀI ĐỘC LẬP:
-${verdictBlock}
+${verdictBlock}${debtBlock}
 
 TÌNH TRẠNG: vòng lặp dừng sau ${cyclesAttempted}/${maxCycles === 0 ? '∞' : maxCycles} chu kỳ — lý do: ${stopReason}.
 
@@ -855,7 +905,7 @@ NHIỆM VỤ: viết BÁO CÁO CUỐI trung thực + HOÀN CHỈNH cho người 
 1. **ĐÃ LÀM ĐƯỢC** — từng việc cụ thể, kèm bằng chứng tool (tên tool + kết quả ngắn trích từ nhật ký)
 2. **CHƯA HOÀN THÀNH / CÒN THIẾU** — thành thật nêu giới hạn (bị cắt vì budget/chu kỳ), KHÔNG tuyên bố hoàn thành những gì chưa có bằng chứng
 3. **NHỮNG GÌ CHƯA KIỂM ĐỊNH ĐƯỢC** — nêu rõ khi công cụ kiểm định fail mà không trích được lỗi cụ thể (không đoán nguyên nhân)
-4. **ĐỀ XUẤT KHẮC PHỤC** — các bước cụ thể, khả thi cho lần chạy tiếp theo
+4. **ĐỀ XUẤT KHẮC PHỤC** — các bước cụ thể, khả thi cho lần chạy tiếp theo${debtBlock ? '\n\nKèm mục **NỢ KỸ THUẬT** (cuối báo cáo): liệt kê rõ các lỗi phát sinh đã ghi nhận thành Todo follow-up — người dùng quyết định xử lý lúc nào.' : ''}
 
 QUY TẮC: KHÔNG gọi tool. KHÔNG bắt đầu công việc mới. Chỉ tổng kết từ bằng chứng có sẵn. Báo cáo phải trọn vẹn có kết luận (không bị cắt ngang).`
 
@@ -1121,9 +1171,8 @@ export async function runGoalDrivenLoop(params: {
   // không duplicate). Thay bằng fire-and-forget UPDATE row cũ (refresh
   // startedAt = lúc resume — báo hiệu run đang sống lại; row này sẽ được
   // updateLatestAgentRunRecord update đầy đủ khi run kết thúc như thường).
-  // Lưu ý: schema AgentRunRecord KHÔNG có cột runId/updatedAt → where theo
-  // (sessionId, status='running') — đúng row của run này vì mọi lần resume
-  // đều skip insert nên không tích lũy row 'running' khác trong session.
+  // FIX 2026-09-14 #5: schema AgentRunRecord ĐÃ CÓ cột runId → updateMany
+  // target ĐÚNG row theo (sessionId, runId, status='running').
   // Dynamic import @/lib/db theo pattern sẵn có trong file (fail-open tuyệt
   // đối — DB lỗi không được phép làm hỏng loop).
   if (agentSessionId) {
@@ -1131,8 +1180,11 @@ export async function runGoalDrivenLoop(params: {
       try {
         void (async () => {
           const { db } = await import('@/lib/db')
+          // FIX 2026-09-14 #5: row giờ CÓ cột runId → target ĐÚNG row của run
+          // này (không còn phải Assumes "mọi row running trong session là run
+          // này" — delegation rows sub_xxx có thể chen giữa).
           await db.agentRunRecord.updateMany({
-            where: { sessionId: agentSessionId, status: 'running' },
+            where: { sessionId: agentSessionId, runId: runId ?? undefined, status: 'running' },
             data: { startedAt: new Date(startedAt) },
           })
         })().catch(() => { /* fail-open — resume không được phép fail vì metrics */ })
@@ -1144,6 +1196,9 @@ export async function runGoalDrivenLoop(params: {
           agentId,
           agentName,
           startedAt: new Date(startedAt),
+          // FIX 2026-09-14 #5 — row 'running' gắn runId: updateLatestAgentRunRecord
+          // lúc end khớp ĐÚNG row theo runId (delegation rows không cướp chỗ).
+          runId,
         }).catch(() => { /* fail-open */ })
       } catch { /* fail-open */ }
     }
@@ -1229,6 +1284,18 @@ export async function runGoalDrivenLoop(params: {
   let lastVerifyOrdinal = 0
   let lastModifyOrdinal = 0
   let cycleVerifyEvidence: string[] = []
+  // FIX 2026-09-14 #7 — E2E verification: chu kỳ có SỬA CODE + có kiểm định MẠNH?
+  // cycleCodeModified = file_edit/file_multi_edit/file_write/shell chạy trong chu kỳ;
+  // cycleStrongVerify = run_tests/lint/type_check/test_coverage có bằng chứng.
+  let cycleCodeModified = false
+  let cycleStrongVerify = false
+  // FIX 2026-09-14 #9 — DEBT MODE: trọng tài chấm complete nhưng phát hiện side
+  // issues nghiêm trọng (debtDecision='continue') → 1 chu kỳ debt xử lý lỗi phát
+  // sinh (bounded: chỉ 1 debt cycle/run — không đẻ vòng lặp mới vô hạn).
+  let debtCycleUsed = false
+  let debtMode = false
+  /** Side issues chưa xử lý khi run kết thúc (đã ghi Todo follow-up — report) */
+  let unresolvedDebt: string[] = []
   // CI-5 (Task 14-b) — RESUME: counters khôi phục từ checkpoint (MANG TIẾP —
   // tokensUsed KHÔNG reset: trung thực tổng chi phí của run; budget thời gian
   // vẫn tính từ startedAt của lần chạy này — đúng chủ đích).
@@ -1264,6 +1331,8 @@ export async function runGoalDrivenLoop(params: {
         missing: resumeState.verdict.missing,
         rootCause: resumeState.verdict.rootCause,
         nextPlan: resumeState.verdict.nextPlan,
+        sideIssues: resumeState.verdict.sideIssues ?? [],
+        debtDecision: resumeState.verdict.debtDecision ?? 'none',
         raw: '',
       }
     : null
@@ -1296,6 +1365,8 @@ export async function runGoalDrivenLoop(params: {
           missing: lastVerdict.missing,
           rootCause: lastVerdict.rootCause,
           nextPlan: lastVerdict.nextPlan,
+          sideIssues: lastVerdict.sideIssues,
+          debtDecision: lastVerdict.debtDecision,
         }
       : null,
     fingerprint: prevFingerprint,
@@ -1361,16 +1432,56 @@ export async function runGoalDrivenLoop(params: {
     if (cycle > 1 && lastVerdict) {
       const advisoryBlock = omegaAdvisory ? `\n\n${omegaAdvisory}\n(Theo tư vấn trên — ĐỔI CÁCH TIẾP CẬN, không lặp lại hành động đã fail.)` : ''
       omegaAdvisory = ''
-      const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev) + advisoryBlock
-      messages.push({ role: 'user', content: directive })
-      evidence.push({ cycle, kind: 'directive', text: `Chu kỳ ${cycle}: chẩn đoán "${lastVerdict.rootCause.slice(0, 120)}" → kế hoạch mới${advisoryBlock ? ' + tư vấn Omega orchestrator' : ''}` })
-      recordAgentThought(agentSessionId, `🔄 Chu kỳ ${cycle}/${fmtCap(MAX_CYCLES)} — chẩn đoán: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}`, totalIterations)
+
+      // ===== FIX 2026-09-14 #9 — DEBT CYCLE DIRECTIVE =====
+      // Chu kỳ trước trọng tài chấm complete NHƯNG quyết định 'continue' cho
+      // side issues nghiêm trọng → chu kỳ này là CHU KỲ DEBT: mục tiêu chính đã
+      // xong, việc duy nhất là xử lý các lỗi phát sinh (side issues).
+      if (debtMode) {
+        const debtList = lastVerdict.sideIssues.map(s => `- ${s}`).join('\n')
+        const debtDirective = `[GOAL-LOOP: Chu kỳ ${cycle}/${fmtCap(MAX_CYCLES)} — DEBT CYCLE] Mục tiêu chính ĐÃ HOÀN THÀNH theo trọng tài độc lập ✅ — KHÔNG làm lại việc đã xong.
+
+Chu kỳ này chỉ xử lý CÁC LỖI PHÁT SINH trong quá trình làm (trọng tài phân loại nghiêm trọng):
+${debtList}
+
+Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc phục từng lỗi, (3) KIỂM ĐỊNH bằng tool thật (run_tests/lint/type_check), (4) KHÔNG mở việc mới ngoài các lỗi trên. Xong hết → báo cáo ngắn từng lỗi đã xử lý + bằng chứng.`
+        messages.push({ role: 'user', content: debtDirective })
+        evidence.push({ cycle, kind: 'directive', text: `DEBT CYCLE ${cycle}: xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã xong)` })
+        recordAgentThought(agentSessionId, `🔁 DEBT CYCLE ${cycle}: trọng tài quyết định tái khởi động 1 chu kỳ mới để xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã hoàn thành)`, totalIterations)
+        debtMode = false // directive đã inject — chu kỳ debt chạy như chu kỳ thường (verdict cuối cùng quyết định kết thúc)
+      } else {
+        // ===== FIX 2026-09-14 #8 — MID-RUN SIMILAR-ERROR RECALL =====
+        // Giữa các chu kỳ (không chỉ PRE-ACT đầu run): truy vấn Episodic Memory
+        // các episode/lỗi TƯƠNG TỰ từng gặp (fingerprint = rootCause + tool fail
+        // gần nhất) → liệt kê "lỗi tương tự đã gặp + cách đã khắc phục" vào
+        // directive — chu kỳ kế không lặp lại vết xe đổ. Fire-and-forget,
+        // fail-open (lỗi Qdrant/DB → bỏ qua, không chặn loop).
+        let similarErrorsBlock = ''
+        try {
+          const { buildMidRunSimilarErrorBlock } = await import('@/lib/episodic-memory/preact')
+          similarErrorsBlock = await buildMidRunSimilarErrorBlock({
+            agentName,
+            rootCause: lastVerdict.rootCause,
+            failedTools: evidence
+              .filter(e => e.kind === 'tool' && e.success === false)
+              .slice(-5)
+              .map(e => `${e.tool}: ${e.text.slice(0, 100)}`),
+          })
+        } catch { /* fail-open */ }
+
+        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev) + similarErrorsBlock + advisoryBlock
+        messages.push({ role: 'user', content: directive })
+        evidence.push({ cycle, kind: 'directive', text: `Chu kỳ ${cycle}: chẩn đoán "${lastVerdict.rootCause.slice(0, 120)}" → kế hoạch mới${similarErrorsBlock ? ' + lỗi tương tự đã gặp (episodic memory)' : ''}${advisoryBlock ? ' + tư vấn Omega orchestrator' : ''}` })
+        recordAgentThought(agentSessionId, `🔄 Chu kỳ ${cycle}/${fmtCap(MAX_CYCLES)} — chẩn đoán: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${similarErrorsBlock ? ' (kèm lỗi tương tự đã gặp)' : ''}${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}`, totalIterations)
+      }
     }
 
     // ===== INNER REACT LOOP (EXECUTE + VERIFY theo protocol) =====
     let cycleIterations = 0
     let cycleToolCalls = 0
     cycleVerifyEvidence = [] // [C] bằng chứng kiểm định tính lại mỗi chu kỳ
+    cycleCodeModified = false // FIX #7 — tính lại mỗi chu kỳ
+    cycleStrongVerify = false // FIX #7 — tính lại mỗi chu kỳ
     let endedBy: 'no_tool_calls' | 'iteration_limit' | 'error' | 'budget' | 'cancelled' = 'no_tool_calls'
     let cycleHadLlmError = false
 
@@ -1484,8 +1595,143 @@ export async function runGoalDrivenLoop(params: {
       // khớp nội dung NGAY SAU batch (LLM thường quên tự đóng todo).
       const batchEvidence: string[] = []
 
+      // FIX 2026-09-14 #1/#7 — hậu xử lý tool result DÙNG CHUNG cho nhánh tuần
+      // tự lẫn nhánh fan-in (token accounting · working memory · verify ordinals
+      // · evidence · pushToolMessage · tracking cycleCodeModified/StrongVerify).
+      const processToolResult = (tc: { name: string; args: Record<string, unknown> }, toolResult: { success: boolean; result: unknown }) => {
+        // CI-2 (Task 11-a) — thu bằng chứng từ tool call THÀNH CÔNG (bảo thủ:
+        // chỉ path file/lệnh shell — xem extractTodoEvidence)
+        if (toolResult.success) {
+          const ev = extractTodoEvidence(tc.name, tc.args)
+          if (ev) batchEvidence.push(ev)
+        }
+
+        // [F] TOKEN ACCOUNTING cho tool có LLM nội bộ (delegate_task /
+        // dispatch_agent/dispatch_agents_parallel: sub-agent tiêu token thật;
+        // escalate_problem: Omega consult) — cộng vào budget loop để không chạy
+        // tuột. Token này KHÔNG được đếm ở đâu khác (executeTool không báo qua
+        // callLLMForAgent).
+        if (toolResult.result && typeof toolResult.result === 'object') {
+          const innerTokens = (toolResult.result as { tokensUsed?: unknown }).tokensUsed
+          if (typeof innerTokens === 'number' && innerTokens > 0) {
+            tokensUsed += innerTokens
+            if (tc.name === 'delegate_task' || tc.name === 'dispatch_agent' || tc.name === 'dispatch_agents_parallel') {
+              delegations++
+              subagentTokens += innerTokens
+            }
+          }
+        }
+
+        // ===== WORKING MEMORY (HOT) — ghi nhận tool đã chạy + kết quả =====
+        // [D] Preview thông minh (errorCount + lỗi cụ thể) thay vì cắt 200 ký tự đầu
+        const resultPreview = summarizeToolResult(toolResult.result).slice(0, 250)
+
+        // [C] Harness kiểm đếm bằng chứng kiểm định theo thứ tự thời gian.
+        // LƯU Ý: lint/type_check FAIL (có errorCount) VẪN LÀ bằng chứng kiểm định
+        // hợp lệ — agent thấy được số lỗi cụ thể. Chỉ tool không chạy được
+        // (permission disabled / exception → result là string) mới không tính.
+        //
+        // FIX (review 2026-09-08): shell/run_bg THÀNH CÔNG cũng tính là bằng
+        // chứng kiểm định (protocol cho phép "shell kiểm tra output" — bun
+        // test, cat file...). Ordinal modify/verify bằng nhau khi shell là tool
+        // cuối → guard không hạ.
+        const isStructuredResult = toolResult.result !== null && typeof toolResult.result === 'object'
+        const shellVerify = (tc.name === 'shell' || tc.name === 'run_bg') && toolResult.success && isStructuredResult
+        if ((VERIFY_TOOLS.has(tc.name) || READBACK_TOOLS.has(tc.name) || shellVerify) && isStructuredResult) {
+          lastVerifyOrdinal = totalToolCalls
+          cycleVerifyEvidence.push(`${tc.name}: ${resultPreview}`)
+        }
+        // shell/run_bg fail vẫn CÓ THỂ đã sửa file (side effect) → tính modify
+        // regardless of success; tool sửa file chỉ tính khi thành công.
+        if (MODIFY_TOOLS.has(tc.name) && (toolResult.success || tc.name === 'shell' || tc.name === 'run_bg')) {
+          lastModifyOrdinal = totalToolCalls
+        }
+
+        // FIX 2026-09-14 #7 — E2E verification tracking cho trọng tài: chu kỳ có
+        // SỬA CODE (thành công) và có KIỂM ĐỊNH MẠNH (run_tests/lint/type_check/
+        // test_coverage chạy thật — kết quả structured dù pass hay fail).
+        if (CODE_MODIFY_TOOLS.has(tc.name) && (toolResult.success || tc.name === 'shell' || tc.name === 'run_bg')) {
+          cycleCodeModified = true
+        }
+        if (STRONG_VERIFY_TOOLS.has(tc.name) && isStructuredResult) {
+          cycleStrongVerify = true
+        }
+
+        recordWorkMemory(
+          agentId,
+          agentSessionId,
+          `🔧 ${tc.name}(${compactToolArgs(tc.args)}) → ${toolResult.success ? '✓' : '✗'} ${resultPreview}`,
+        )
+
+        evidence.push({ cycle, kind: 'tool', tool: tc.name, success: toolResult.success, text: resultPreview })
+
+        pushToolMessage(messages, { tool: tc.name, success: toolResult.success, result: toolResult.result })
+      }
+
+      // ===== FIX 2026-09-14 #1 — FAN-OUT/FAN-IN: batch chứa ≥2 delegation
+      // (delegate_task/dispatch_agent) → chạy ĐỒNG THỜI (mỗi sub-agent chậm
+      // 1-10 phút — tuần tự là lãng phí lớn). Wrapper tự check pre-flight +
+      // permission + executeTool; kết quả consumer ở đúng vị trí tcIdx trong
+      // vòng lặp tuần tự bên dưới (thứ tự message giữ nguyên cho LLM). Lỗi của
+      // sub-agent nào báo riêng kết quả sub-agent đó — KHÔNG kéo sập batch. =====
+      const delegationPromises = new Map<number, Promise<{
+        tcIdx: number
+        preFlightFail?: string
+        permissionFail?: string
+        toolResult?: { success: boolean; result: unknown }
+      }>>()
+      {
+        const delegationIdxs = toolCalls
+          .map((tc, i) => ({ tc, i }))
+          .filter(({ tc }) => tc.name === 'delegate_task' || tc.name === 'dispatch_agent')
+        if (delegationIdxs.length >= 2) {
+          console.log(`[GoalLoop] ${agentName} FAN-OUT: ${delegationIdxs.length} delegation trong 1 batch → chạy SONG SONG (${delegationIdxs.map(d => String(d.tc.args?.agent || d.tc.name)).join(', ')})`)
+          for (const { tc, i } of delegationIdxs) {
+            delegationPromises.set(i, (async () => {
+              // DELEGATE PRE-FLIGHT (mirror nhánh tuần tự — check TRƯỚC khi launch)
+              if (tokenLeft() <= REPORT_RESERVE_TOKENS + 10_000) {
+                return { tcIdx: i, preFlightFail: 'Từ chối delegate — budget token của vòng lặp gần cạn (≤ reserve + 10k). Hãy TỰ LÀM phần việc còn lại ngắn gọn thay vì delegate.' }
+              }
+              if (agentTools.length > 0 && !agentTools.includes(tc.name)) {
+                return { tcIdx: i, permissionFail: `Tool "${tc.name}" not available for this agent. Available: ${agentTools.join(', ')}` }
+              }
+              try {
+                const r = await executeTool(tc.name, { ...tc.args }, { agentName, sessionId: agentSessionId, runId })
+                return { tcIdx: i, toolResult: r }
+              } catch (err) {
+                // No-throwError: exception của 1 delegation → kết quả fail riêng
+                return { tcIdx: i, toolResult: { success: false, result: { error: err instanceof Error ? err.message : String(err) } } }
+              }
+            })())
+          }
+        }
+      }
+
       for (const [tcIdx, tc] of toolCalls.entries()) {
         if (isCancelled()) break
+
+        // ===== FAN-IN consumer — delegation đã chạy song song ở trên: await kết
+        // quả (thường đã resolve) + xử lý ĐÚNG như nhánh tuần tự (giữ thứ tự
+        // message cho LLM). ĐÃ TRẢ TIỀN cho sub-agent → không bị budget-guard
+        // vứt stub (kết quả đã trả phải về tay agent). =====
+        const pendingDelegation = delegationPromises.get(tcIdx)
+        if (pendingDelegation) {
+          const r = await pendingDelegation
+          if (r.preFlightFail) {
+            pushToolMessage(messages, { tool: tc.name, success: false, result: r.preFlightFail })
+            evidence.push({ cycle, kind: 'tool', tool: tc.name, success: false, text: 'từ chối (budget cha gần cạn)' })
+            continue
+          }
+          totalToolCalls++
+          cycleToolCalls++
+          if (r.permissionFail) {
+            pushToolMessage(messages, { tool: tc.name, success: false, result: r.permissionFail })
+            evidence.push({ cycle, kind: 'tool', tool: tc.name, success: false, text: 'bị từ chối (không có quyền)' })
+            continue
+          }
+          processToolResult(tc, r.toolResult!)
+          continue
+        }
 
         // BATCH BUDGET GUARD (fix review 2026-09-08): trước đây budget chỉ
         // check SAU cả batch — 1 message chứa nhiều tool call (mỗi delegate
@@ -1531,8 +1777,14 @@ export async function runGoalDrivenLoop(params: {
         // theo TỪNG RUN (per-task isolation: run mới không thấy todo run cũ).
         // Điều kiện inject: sessionId trống hoặc trùng session của loop (agent
         // tự khai sessionId khác → tôn trọng, không đụng).
+        // FIX 2026-09-14 #4: decompose_task/create_task/update_task/get_plan
+        // cũng được inject (DAG map DB Todo theo session + run).
         const toolArgs: Record<string, unknown> = { ...tc.args }
-        if (tc.name === 'todo_write' && agentSessionId && (!toolArgs.sessionId || toolArgs.sessionId === agentSessionId)) {
+        if (
+          (tc.name === 'todo_write' || TASK_DAG_TOOLS.has(tc.name)) &&
+          agentSessionId &&
+          (!toolArgs.sessionId || toolArgs.sessionId === agentSessionId)
+        ) {
           toolArgs.sessionId = toolArgs.sessionId || agentSessionId
           if (runId && !toolArgs.runId) toolArgs.runId = runId
         }
@@ -1542,65 +1794,13 @@ export async function runGoalDrivenLoop(params: {
         // hiển thị "delegated bởi run_X").
         const toolResult = await executeTool(tc.name, toolArgs, { agentName, sessionId: agentSessionId, runId })
 
-        // CI-2 (Task 11-a) — thu bằng chứng từ tool call THÀNH CÔNG (bảo thủ:
-        // chỉ path file/lệnh shell — xem extractTodoEvidence)
-        if (toolResult.success) {
-          const ev = extractTodoEvidence(tc.name, tc.args)
-          if (ev) batchEvidence.push(ev)
-        }
+        processToolResult(tc, toolResult)
+      }
 
-        // [F] TOKEN ACCOUNTING cho tool có LLM nội bộ (delegate_task /
-        // dispatch_agent: sub-agent tiêu token thật; escalate_problem: Omega
-        // consult) — cộng vào budget loop để không chạy tuột. Token này
-        // KHÔNG được đếm ở đâu khác (executeTool không báo qua callLLMForAgent).
-        if (toolResult.result && typeof toolResult.result === 'object') {
-          const innerTokens = (toolResult.result as { tokensUsed?: unknown }).tokensUsed
-          if (typeof innerTokens === 'number' && innerTokens > 0) {
-            tokensUsed += innerTokens
-            if (tc.name === 'delegate_task' || tc.name === 'dispatch_agent') {
-              delegations++
-              subagentTokens += innerTokens
-            }
-          }
-        }
-
-        // ===== WORKING MEMORY (HOT) — ghi nhận tool đã chạy + kết quả =====
-        // Các request sau trong session thấy entry này qua digest HOT trong
-        // system prompt → không lặp lại tool đã chạy (tiết kiệm token + time)
-        // [D] Preview thông minh (errorCount + lỗi cụ thể) thay vì cắt 200 ký tự đầu
-        const resultPreview = summarizeToolResult(toolResult.result).slice(0, 250)
-
-        // [C] Harness kiểm đếm bằng chứng kiểm định theo thứ tự thời gian.
-        // LƯU Ý: lint/type_check FAIL (có errorCount) VẪN LÀ bằng chứng kiểm định
-        // hợp lệ — agent thấy được số lỗi cụ thể. Chỉ tool không chạy được
-        // (permission disabled / exception → result là string) mới không tính.
-        //
-        // FIX (review 2026-09-08): shell/run_bg THÀNH CÔNG cũng tính là bằng
-        // chứng kiểm định (protocol của loop cho phép "shell kiểm tra output"
-        // — bun test, cat file...). Trước đây shell chỉ đếm là MODIFY → chu kỳ
-        // kết thúc bằng shell-verify bị verify-guard hạ "hoàn thành" →
-        // "chưa đạt" SAI (task xong bị ép chạy tới max_cycles). Ordinal
-        // modify/verify bằng nhau khi shell là tool cuối → guard không hạ.
-        const isStructuredResult = toolResult.result !== null && typeof toolResult.result === 'object'
-        const shellVerify = (tc.name === 'shell' || tc.name === 'run_bg') && toolResult.success && isStructuredResult
-        if ((VERIFY_TOOLS.has(tc.name) || READBACK_TOOLS.has(tc.name) || shellVerify) && isStructuredResult) {
-          lastVerifyOrdinal = totalToolCalls
-          cycleVerifyEvidence.push(`${tc.name}: ${resultPreview}`)
-        }
-        // shell/run_bg fail vẫn CÓ THỂ đã sửa file (side effect) → tính modify
-        // regardless of success; tool sửa file chỉ tính khi thành công.
-        if (MODIFY_TOOLS.has(tc.name) && (toolResult.success || tc.name === 'shell' || tc.name === 'run_bg')) {
-          lastModifyOrdinal = totalToolCalls
-        }
-        recordWorkMemory(
-          agentId,
-          agentSessionId,
-          `🔧 ${tc.name}(${compactToolArgs(tc.args)}) → ${toolResult.success ? '✓' : '✗'} ${resultPreview}`,
-        )
-
-        evidence.push({ cycle, kind: 'tool', tool: tc.name, success: toolResult.success, text: resultPreview })
-
-        pushToolMessage(messages, { tool: tc.name, success: toolResult.success, result: toolResult.result })
+      // FAN-IN log — ghi dấu hợp nhất cho ops theo dõi
+      if (delegationPromises.size >= 2) {
+        evidence.push({ cycle, kind: 'directive', text: `FAN-IN: ${delegationPromises.size} delegation song song đã hợp nhất kết quả về 1 batch` })
+        recordAgentThought(agentSessionId, `🔀 FAN-OUT/FAN-IN: ${delegationPromises.size} sub-agent chạy song song trong batch này — kết quả đã hợp nhất (xung đột tự phân xử qua báo cáo từng agent)`, totalIterations)
       }
 
       // ===== CI-2 (Task 11-a) — MID-RUN EVIDENCE-BASED AUTO-COMPLETE =====
@@ -1682,12 +1882,17 @@ export async function runGoalDrivenLoop(params: {
 
     // ===== EVALUATE — trọng tài độc lập =====
     console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} kết thúc (${endedBy}, ${cycleToolCalls} tool calls) — gọi evaluator`)
+    const strongVerifyToolsAvailable = effectiveTools.some(t => STRONG_VERIFY_TOOLS.has(t))
     let verdict = await evaluateCompletion({
       goal: userMessage,
       lastAssistantContent: lastContent,
       evidence,
       verifyEvidence: cycleVerifyEvidence,
       unverifiedModifications: lastModifyOrdinal > lastVerifyOrdinal,
+      // FIX 2026-09-14 #7 — E2E verification signals cho trọng tài (quy tắc 8)
+      codeModified: cycleCodeModified,
+      hasStrongVerify: cycleStrongVerify,
+      strongVerifyToolsAvailable,
       agentProvider,
       agentModel,
       agentId,
@@ -1703,9 +1908,9 @@ export async function runGoalDrivenLoop(params: {
     //  - có tool call nhưng không đánh giá được → chưa hoàn thành (đánh giá lại chu kỳ sau)
     if (!verdict) {
       if (cycleToolCalls === 0) {
-        verdict = { complete: true, confidence: 0.6, verified: false, missing: [], rootCause: '', nextPlan: [], raw: '(evaluator unavailable — pure answer accepted)' }
+        verdict = { complete: true, confidence: 0.6, verified: false, missing: [], rootCause: '', nextPlan: [], sideIssues: [], debtDecision: 'none', raw: '(evaluator unavailable — pure answer accepted)' }
       } else {
-        verdict = { complete: false, confidence: 0.5, verified: false, missing: ['(không đánh giá được — tự rà soát)'], rootCause: '(evaluator LLM lỗi — kiểm tra lại toàn bộ kết quả)', nextPlan: [], raw: '' }
+        verdict = { complete: false, confidence: 0.5, verified: false, missing: ['(không đánh giá được — tự rà soát)'], rootCause: '(evaluator LLM lỗi — kiểm tra lại toàn bộ kết quả)', nextPlan: [], sideIssues: [], debtDecision: 'none', raw: '' }
       }
     }
 
@@ -1726,6 +1931,56 @@ export async function runGoalDrivenLoop(params: {
         ])).slice(0, 6),
       }
       recordAgentThought(agentSessionId, `🛡 Harness verify-guard: hạ "hoàn thành" → "chưa đạt" — có sửa sau lần kiểm định cuối mà chưa kiểm định lại`, totalIterations)
+    }
+
+    // ===== FIX 2026-09-14 #9 — SIDE ISSUES / DEBT DECISION (trọng tài quyết
+    // định thay vì “chấm xong là xong”): mục tiêu hoàn thành NHƯNG có lỗi phát
+    // sinh ngoài mục tiêu → 3 lựa chọn của trọng tài:
+    //   debtDecision='continue' + còn chu kỳ + còn budget + chưa từng dùng debt
+    //     → KHÔNG dừng: 1 chu kỳ debt mới xử lý lỗi phát sinh (đã inject
+    //       directive đầu chu kỳ debt ở trên)
+    //   'record' hoặc 'continue' mà hết chu kỳ/budget → hoàn thành + GHI NỢ:
+    //     mỗi side issue thành 1 Todo follow-up (pending) + báo cáo cuối nêu rõ
+    //   'none' → hoàn thành sạch (side issues tầm thường)
+    // =====
+    if (verdict.complete && verdict.sideIssues.length > 0 && verdict.debtDecision !== 'none') {
+      const canDebtCycle =
+        verdict.debtDecision === 'continue' &&
+        !debtCycleUsed &&
+        (MAX_CYCLES === 0 || cycle < MAX_CYCLES) &&
+        timeLeft() > 0 &&
+        tokenLeft() > REPORT_RESERVE_TOKENS + 8_000 &&
+        !isCancelled()
+      if (canDebtCycle) {
+        debtCycleUsed = true
+        debtMode = true
+        recordAgentThought(agentSessionId, `⚖️ Trọng tài: mục tiêu ĐẠT nhưng ${verdict.sideIssues.length} lỗi phát sinh nghiêm trọng → TÁI KHỞI ĐỘNG 1 chu kỳ debt (chu kỳ ${cycle + 1}) để xử lý: ${verdict.sideIssues.slice(0, 2).join('; ').slice(0, 200)}`, totalIterations)
+        console.log(`[GoalLoop] ${agentName} DEBT CYCLE: complete=true nhưng trọng tài quyết định 'continue' — chu kỳ ${cycle + 1} xử lý ${verdict.sideIssues.length} side issue(s)`)
+        evidence.push({ cycle, kind: 'directive', text: `Trọng tài: hoàn thành + debtDecision='continue' → 1 chu kỳ debt cho ${verdict.sideIssues.length} lỗi phát sinh` })
+        // KHÔNG break — để outerLoop chạy chu kỳ debt (directive debt đã sẵn sàng)
+      } else {
+        // Hoàn thành + GHI NỢ kỹ thuật: mỗi side issue 1 Todo follow-up —
+        // không chặn completion nhưng việc phát sinh KHÔNG bị lãng quên.
+        unresolvedDebt = verdict.sideIssues
+        if (agentSessionId) {
+          try {
+            const { db } = await import('@/lib/db')
+            for (const issue of verdict.sideIssues) {
+              await db.todo.create({
+                data: {
+                  sessionId: agentSessionId,
+                  content: `🔁 Follow-up (nợ kỹ thuật từ run ${runId?.slice(0, 18) ?? '-'}): ${issue}`.slice(0, 480),
+                  status: 'pending',
+                  priority: 'medium',
+                  ...(runId ? { runId } : {}),
+                  taskMetaJson: JSON.stringify({ source: 'arbiter_side_issue', cycle, debtDecision: verdict.debtDecision }),
+                },
+              }).catch(() => { /* fail-open từng item */ })
+            }
+            recordAgentThought(agentSessionId, `📋 Trọng tài: hoàn thành + ${verdict.sideIssues.length} lỗi phát sinh được GHI NỢ kỹ thuật (Todo follow-up)${verdict.debtDecision === 'continue' ? ' — hết chu kỳ/budget nên không chạy debt cycle' : ''}`, totalIterations)
+          } catch { /* fail-open — ghi nợ không được làm hỏng completion */ }
+        }
+      }
     }
 
     lastVerdict = verdict
@@ -1755,12 +2010,14 @@ export async function runGoalDrivenLoop(params: {
     recordAgentThought(
       agentSessionId,
       verdict.complete
-        ? `⚖️ Đánh giá chu kỳ ${cycle}: HOÀN THÀNH (tin cậy ${Math.round(verdict.confidence * 100)}%${verdict.verified ? ', đã có bằng chứng kiểm định' : ''})`
+        ? `⚖️ Đánh giá chu kỳ ${cycle}: HOÀN THÀNH (tin cậy ${Math.round(verdict.confidence * 100)}%${verdict.verified ? ', đã có bằng chứng kiểm định' : ''})${verdict.sideIssues.length > 0 ? ` — kèm ${verdict.sideIssues.length} lỗi phát sinh (${verdict.debtDecision === 'none' ? 'bỏ qua' : verdict.debtDecision === 'record' ? 'ghi nợ kỹ thuật' : 'debt cycle'})` : ''}`
         : `⚖️ Đánh giá chu kỳ ${cycle}: CHƯA ĐẠT (tin cậy ${Math.round(verdict.confidence * 100)}%) — còn thiếu: ${verdict.missing.join('; ').slice(0, 200) || '(không liệt kê)'}`,
       totalIterations,
     )
 
-    if (verdict.complete) {
+    // FIX 2026-09-14 #9 — debtMode=true nghĩa là trọng tài vừa chọn 'continue'
+    // cho side issues: KHÔNG dừng ở đây — outerLoop chạy tiếp chu kỳ debt.
+    if (verdict.complete && !debtMode) {
       stopReason = 'complete'
       break outerLoop
     }
@@ -1802,6 +2059,33 @@ export async function runGoalDrivenLoop(params: {
           evidence.push({ cycle, kind: 'directive', text: `AUTO-ESCALATE → Omega orchestrator tư vấn giải pháp (kèm cho chu kỳ ${cycle + 1})` })
           recordAgentThought(agentSessionId, `🧠 AUTO-ESCALATE: chu kỳ ${cycle} chưa kiểm định được → đã hỏi Omega orchestrator (${consult.tokensUsed} tokens) — tư vấn sẽ dẫn đường chu kỳ ${cycle + 1}`, totalIterations)
           console.log(`[GoalLoop] ${agentName} auto-escalate (unverified cycle ${cycle}) → Omega consult OK (${consult.tokensUsed} tokens)`)
+
+          // ===== FIX 2026-09-14 #3 — OMEGA ADVISORY AUTO-APPLY =====
+          // Advisory có dispatchAgent → THỰC THI NGAY (dispatch sub-agent xử lý
+          // giúp) thay vì chỉ inject gợi ý JSON để agent tự gọi tool vòng sau.
+          // Báo cáo sub-agent gắn kèm advisory — chu kỳ kế vừa có hướng vừa có
+          // kết quả thực tế. Budget-guard chặt hơn (reserve + 15k) vì sub-agent
+          // tiêu token thật. Fail-open: auto-dispatch lỗi → giữ advisory thuần.
+          const suggested = consult.advisory?.dispatchAgent?.trim()
+          if (suggested && tokenLeft() > REPORT_RESERVE_TOKENS + 15_000 && !isCancelled()) {
+            try {
+              const { dispatchAgentByOmega } = await import('@/lib/omega-orchestrator')
+              const dispatched = await dispatchAgentByOmega({
+                agent: suggested,
+                task: `Xử lý giúp agent "${agentName}" đang bế tắc (chu kỳ ${cycle}, verified=false).\nVấn đề: ${(verdict.rootCause || userMessage).slice(0, 500)}\nKhuyến nghị của Omega: ${consult.advisory?.recommendation?.slice(0, 500) || '(theo phân tích của bạn)'}`,
+                context: `Mục tiêu gốc: ${userMessage.slice(0, 400)}`,
+                duration: 'task',
+                parentAgentName: agentName,
+                sessionId: agentSessionId,
+                onTokens: (t) => { tokensUsed += t; subagentTokens += t; delegations++ },
+              })
+              if (dispatched.report) {
+                omegaAdvisory += `\n\n🚀 AUTO-APPLY — Omega đã điều ${dispatched.agent} xử lý giúp bạn (kết quả ${dispatched.success ? 'ĐẠT' : 'CHƯA ĐẠT'}${dispatched.evaluation ? `, trọng tài độc lập: ${dispatched.evaluation.pass ? 'pass' : 'chưa pass'}` : ''}):\n${dispatched.report.slice(0, 2000)}`
+                evidence.push({ cycle, kind: 'directive', text: `AUTO-APPLY: điều ${dispatched.agent} theo advisory Omega (${dispatched.tokensUsed ?? 0} tokens sub-agent)` })
+                recordAgentThought(agentSessionId, `🚀 AUTO-APPLY advisory: Omega điều ${dispatched.agent} xử lý giúp — báo cáo kèm tư vấn chu kỳ ${cycle + 1}`, totalIterations)
+              }
+            } catch { /* fail-open — advisory thuần vẫn inject */ }
+          }
         }
       } catch { /* fail-open — không escalate được thì theo kế hoạch evaluator */ }
     }
@@ -1928,6 +2212,7 @@ export async function runGoalDrivenLoop(params: {
         stopReason,
         cyclesAttempted,
         maxCycles: MAX_CYCLES,
+        debtIssues: unresolvedDebt.length > 0 ? unresolvedDebt : undefined,
         agentProvider,
         agentModel,
         agentId,
@@ -1961,6 +2246,12 @@ export async function runGoalDrivenLoop(params: {
         content += `\n\n---\n⚠️ **Vòng lặp mục tiêu dừng sau ${cyclesAttempted}/${fmtCap(MAX_CYCLES)} chu kỳ — chưa hoàn thành trọn vẹn** (${reasonText[stopReason] || stopReason}).\n❌ **Còn thiếu:**\n${missing}${rootCause}\n\nBạn có thể yêu cầu tiếp tục để tôi khắc phục phần còn thiếu.`
       }
     }
+  }
+
+  // FIX 2026-09-14 #9 — hoàn thành + nợ kỹ thuật: KHÔNG để lỗi phát sinh "chìm"
+  // — báo cáo cuối nêu đích danh + đã ghi Todo follow-up cho người dùng.
+  if (stopReason === 'complete' && unresolvedDebt.length > 0) {
+    content += `\n\n---\n📋 **NỢ KỸ THUẬT (${unresolvedDebt.length} lỗi phát sinh trong quá trình xử lý — trọng tài quyết định hoàn thành + ghi nhận, KHÔNG chạy thêm chu kỳ):**\n${unresolvedDebt.map(d => `- ${d}`).join('\n')}\n\n→ Đã tạo Todo follow-up tương ứng — bạn có thể yêu cầu xử lý các mục này bất cứ lúc nào.`
   }
 
   const elapsedMs = Date.now() - startedAt
@@ -2070,24 +2361,30 @@ export async function runGoalDrivenLoop(params: {
       const toolFailures = evidence.filter(e => e.kind === 'tool' && e.success === false).length
       const endCompletedAt = new Date()
       void (async () => {
-        const updated = await updateLatestAgentRunRecord(agentSessionId, {
-          status: runStatus,
-          stopReason,
-          cycles: cyclesAttempted,
-          tokensUsed,
-          toolCalls: totalToolCalls,
-          toolFailures,
-          durationMs: elapsedMs,
-          evaluatorConfidence: lastVerdict?.confidence ?? null,
-          complete: runComplete,
-          startedAt: new Date(startedAt),
-          completedAt: endCompletedAt,
-        })
+        const updated = await updateLatestAgentRunRecord(
+          agentSessionId,
+          {
+            status: runStatus,
+            stopReason,
+            cycles: cyclesAttempted,
+            tokensUsed,
+            toolCalls: totalToolCalls,
+            toolFailures,
+            durationMs: elapsedMs,
+            evaluatorConfidence: lastVerdict?.confidence ?? null,
+            complete: runComplete,
+            startedAt: new Date(startedAt),
+            completedAt: endCompletedAt,
+          },
+          // FIX 2026-09-14 #5 — target ĐÚNG row theo runId (fallback latest bên trong)
+          runId,
+        )
         if (updated === 0) {
           // Row 'running' lúc start insert thất bại (DB lỗi tạm thời) → insert
           // full row lúc end — vẫn đảm bảo 1 run = 1 row AgentRunRecord
           await insertAgentRunRecord({
             sessionId: agentSessionId,
+            runId,
             agentId,
             agentName,
             status: runStatus,

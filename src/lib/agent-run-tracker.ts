@@ -97,6 +97,9 @@ export interface AgentRun {
   /** Yêu cầu gốc (user message / team step prompt) — rút gọn */
   task?: string
   mode: 'standalone' | 'team'
+  /** FIX 2026-09-14 #5: runId của run CHA (delegation) — persist lên
+   * AgentRunRecord.parentRunId để truy vấn mọi sub-run của 1 run cha. */
+  parentRunId?: string | null
   /** Task 20-c: ai chịu trách nhiệm persist AgentRunRecord ra DB?
    *  'tracker' (mặc định) — endAgentRun/cancelSessionRuns insert row khi run kết thúc
    *  'caller' — goal-loop tự insert lúc start + update đầy đủ metadata lúc end
@@ -229,6 +232,11 @@ function persistAgentRunRecord(run: AgentRun): void {
     // bridge nếu stale (dev server chạy trước db:push) — Task 20-b
     void insertAgentRunRecord({
       sessionId: run.sessionId,
+      // FIX 2026-09-14 #5 — wire runId + parentRunId: delegation rows
+      // (sub_xxx) giờ truy vấn được theo run (runId) + theo run cha
+      // (parentRunId) từ AgentRunRecord.
+      runId: run.runId,
+      parentRunId: run.parentRunId ?? null,
       messageId: null, // 20-c: wire ChatMessage id từ goal-loop
       agentId: null, // 20-c: wire agentId (tracker chỉ có agentName)
       agentName: run.agentName,
@@ -569,6 +577,9 @@ export function registerDelegationRun(params: {
         : 'delegated',
       task: truncateText(params.task, 240),
       mode: 'team',
+      // FIX 2026-09-14 #5: persist parentRunId lên AgentRunRecord — query
+      // "mọi delegation rows của run X" giờ chạy được qua cột parentRunId.
+      parentRunId: params.parentRunId ?? null,
       dbPersistBy: 'tracker',
       startedAt: Date.now(),
       status: 'running',

@@ -988,6 +988,13 @@ model Todo {
   /// được giữ nguyên lúc run kết thúc CHƯA đạt mục tiêu (trung thực — chưa làm
   /// gì thì không thành failed) nhưng đánh dấu archivedAt để ẩn khỏi run sau.
   archivedAt     DateTime?
+  /// FIX ghost system (user report 2026-09-14 #4): decompose_task/create_task
+  /// trước đây chỉ ghi globalThis.__devTasks (mất khi restart). Giờ DAG subtask
+  /// map bền vững vào DB Todo: idempotencyKey = "task:T00N" (taskId ổn định),
+  /// taskMetaJson = {"taskId","title","spec","assignee","deps":["T00M"],"notes"}.
+  /// get_plan đọc lại từ DB (durable qua restart) — pipeline/agent sau truy vấn
+  /// được kế hoạch phân rã của run trước.
+  taskMetaJson    String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -1039,6 +1046,14 @@ model AgentRunRecord {
   sessionId     String
   /// ChatMessage id của user message gốc (20-c wire — v1 null)
   messageId     String?
+  /// FIX (user report 2026-09-14 #5 — 20-c wire): runId của run (run_xxx /
+  /// sub_xxx delegation). Trước đây thiếu cột → delegation rows KHÔNG truy
+  /// vấn được theo run. Giờ: query theo runId (đúng row) hoặc parentRunId
+  /// (mọi delegation rows của 1 run cha).
+  runId         String?
+  /// runId của run CHA (delegation: goal-loop / pipeline step cha) — null với
+  /// run top-level. Kèm index để truy "mọi sub-agent đã chạy cho run X".
+  parentRunId   String?
   agentId       String?
   agentName     String?
   /// running | completed | failed | cancelled
@@ -1059,6 +1074,8 @@ model AgentRunRecord {
   @@index([sessionId, createdAt])
   @@index([createdAt])
   @@index([stopReason])
+  @@index([runId])
+  @@index([parentRunId])
 }
 
 /// Task 20-c (self-evaluation) — persist verdict của TRỌNG TÀI ĐỘC LẬP (EVALUATE
