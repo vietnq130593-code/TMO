@@ -1535,6 +1535,11 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
             enum: ['low', 'medium', 'high'],
             description: 'Mức độ: low=phiền nhưng đi tiếp được, medium=chặn 1 phần task, high=kẹt hẳn/task fail',
           },
+          auto_apply: {
+            type: 'boolean',
+            description:
+              'Mặc định true — nếu Omega đề xuất điều agent xử lý, hệ thống TỰ ĐỘNG dispatch agent đó NGAY trong tool call này (kết quả kèm trong "autoApplied": report + evaluation của trọng tài độc lập). Đặt false nếu bạn muốn tự quyết định / tự gọi dispatch_agent ở vòng sau.',
+          },
         },
         required: ['problem'],
       },
@@ -3015,6 +3020,9 @@ export async function executeTool(
                 duration: 'task',
                 parentAgentName: context?.agentName || 'Omega',
                 sessionId: context?.sessionId ?? null,
+                // REVIEW 9-fix (2026-08-30) #5 — auto-apply delegation cũng gắn
+                // parentRunId (query theo run cha hoạt động đủ đường)
+                parentRunId: context?.runId ?? null,
               })
               out.autoApplied = {
                 agent: dispatched.agent || suggestedAgent,
@@ -3094,6 +3102,10 @@ export async function executeTool(
             position: args.position === undefined ? undefined : (args.position === null ? null : String(args.position)),
             parentAgentName: context?.agentName || 'Omega',
             sessionId: context?.sessionId ?? null,
+            // REVIEW 9-fix (2026-08-30) #5 — dispatch_agent delegation rows gắn
+            // parentRunId (trước đây chỉ delegate_task có — giờ query theo run
+            // cha hoạt động ĐỦ mọi đường dispatch)
+            parentRunId: context?.runId ?? null,
           })
           result = {
             success: dispatched.success,
@@ -3141,6 +3153,8 @@ export async function executeTool(
             tasks,
             parentAgentName: context?.agentName || 'Omega',
             sessionId: context?.sessionId ?? null,
+            // REVIEW 9-fix (2026-08-30) #5 — fan-out sub-agents gắn parentRunId
+            parentRunId: context?.runId ?? null,
           })
           result = {
             success: fanout.success,

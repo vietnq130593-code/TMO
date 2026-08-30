@@ -1099,7 +1099,7 @@ export async function runGoalDrivenLoop(params: {
   // thấy delegation + orchestration protocol vì các tool đó thực sự gọi được.
   const effectiveTools = agentTools.length > 0
     ? agentTools
-    : ['delegate_task', 'escalate_problem', 'dispatch_agent', 'create_agent']
+    : ['delegate_task', 'escalate_problem', 'dispatch_agent', 'create_agent', 'dispatch_agents_parallel']
   const hasDelegation = effectiveTools.includes('delegate_task')
   const hasOrchestration = effectiveTools.includes('escalate_problem') || effectiveTools.includes('dispatch_agent') || effectiveTools.includes('create_agent')
   // AUTOMATION (user request 2026-09-13) — protocol block khi agent có tool
@@ -1292,10 +1292,17 @@ export async function runGoalDrivenLoop(params: {
   // FIX 2026-09-14 #9 — DEBT MODE: trọng tài chấm complete nhưng phát hiện side
   // issues nghiêm trọng (debtDecision='continue') → 1 chu kỳ debt xử lý lỗi phát
   // sinh (bounded: chỉ 1 debt cycle/run — không đẻ vòng lặp mới vô hạn).
-  let debtCycleUsed = false
-  let debtMode = false
+  // REVIEW 9-fix (2026-08-30): restore từ checkpoint (crash giữa debt cycle →
+  // resume vẫn inject debt directive đúng + không chạy debt cycle lần 2).
+  let debtCycleUsed = resumeState?.debtCycleUsed ?? false
+  let debtMode = resumeState?.debtMode ?? false
   /** Side issues chưa xử lý khi run kết thúc (đã ghi Todo follow-up — report) */
   let unresolvedDebt: string[] = []
+  /** REVIEW 9-fix (2026-08-30) #9 — side issues đã quyết định chạy DEBT CYCLE.
+   * Nếu debt cycle THẤT BẠI (verdict chưa complete / hết budget-chu kỳ),
+   * các lỗi gốc này không được phép "chìm": cuối run chúng được ghi Todo
+   * follow-up + nêu trong báo cáo cuối (như nhánh debtDecision='record'). */
+  let pendingDebtIssues: string[] = []
   // CI-5 (Task 14-b) — RESUME: counters khôi phục từ checkpoint (MANG TIẾP —
   // tokensUsed KHÔNG reset: trung thực tổng chi phí của run; budget thời gian
   // vẫn tính từ startedAt của lần chạy này — đúng chủ đích).
@@ -1375,6 +1382,10 @@ export async function runGoalDrivenLoop(params: {
     cutMidWorkPrev,
     lastContent,
     lastLlmError,
+    // REVIEW 9-fix (2026-08-30) #9 — persist debt state để resume giữa debt
+    // cycle vẫn inject đúng debt directive + không lặp debt cycle thứ 2.
+    debtMode,
+    debtCycleUsed,
     savedAt: Date.now(),
   })
   /** Fire onCheckpoint (sync/async) — fail-open */
@@ -1685,8 +1696,29 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
           .map((tc, i) => ({ tc, i }))
           .filter(({ tc }) => tc.name === 'delegate_task' || tc.name === 'dispatch_agent')
         if (delegationIdxs.length >= 2) {
-          console.log(`[GoalLoop] ${agentName} FAN-OUT: ${delegationIdxs.length} delegation trong 1 batch → chạy SONG SONG (${delegationIdxs.map(d => String(d.tc.args?.agent || d.tc.name)).join(', ')})`)
-          for (const { tc, i } of delegationIdxs) {
+          // REVIEW 9-fix (2026-08-30) #1 — BUDGET CAP cho fan-out: nhánh tuần tự
+          // check budget SAU MỖI delegation (token đã trừ), còn fan-out launch
+          // hết một lúc → N sub-agent × ~40k token có thể vượt budget cha.
+          // Cap số delegation launch song song theo budget khả dụng, đúng
+          // semantics nhánh tuần tự: delegation thứ K chỉ được phép khi sau khi
+          // K-1 delegation trước tiêu ~40k mỗi cái vẫn còn > reserve + 10k.
+          // Budget unlimited (TOKEN_BUDGET=0 → Infinity) → không cap.
+          const SUBAGENT_TOKEN_ESTIMATE = 40_000
+          const budgetForDelegation = tokenLeft() - REPORT_RESERVE_TOKENS - 10_000
+          const maxLaunch = budgetForDelegation <= 0
+            ? 0
+            : Math.floor(budgetForDelegation / SUBAGENT_TOKEN_ESTIMATE) + 1
+          console.log(`[GoalLoop] ${agentName} FAN-OUT: ${delegationIdxs.length} delegation trong 1 batch → chạy SONG SONG (${delegationIdxs.map(d => String(d.tc.args?.agent || d.tc.name)).join(', ')}) — cap ${maxLaunch} theo budget`)
+          for (const [delegationRank, { tc, i }] of delegationIdxs.entries()) {
+            if (delegationRank >= maxLaunch) {
+              // Vượt cap budget → pre-flight fail cho delegation này (kết quả
+              // vẫn về đúng vị trí message — KHÔNG sập batch).
+              delegationPromises.set(i, Promise.resolve({
+                tcIdx: i,
+                preFlightFail: `Từ chối delegate (thứ ${delegationRank + 1} trong batch song song) — budget token của vòng lặp chỉ đủ chạy ${maxLaunch} delegation đồng thời (mỗi sub-agent tiêu ~${SUBAGENT_TOKEN_ESTIMATE / 1000}k). Hãy TỰ LÀM phần việc này ngắn gọn, hoặc delegate lại lẻ ở vòng sau khi budget cho phép.`,
+              }))
+              continue
+            }
             delegationPromises.set(i, (async () => {
               // DELEGATE PRE-FLIGHT (mirror nhánh tuần tự — check TRƯỚC khi launch)
               if (tokenLeft() <= REPORT_RESERVE_TOKENS + 10_000) {
@@ -1954,6 +1986,9 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
       if (canDebtCycle) {
         debtCycleUsed = true
         debtMode = true
+        // REVIEW 9-fix (2026-08-30) #9 — checkpoint lại các side issues gốc: nếu
+        // debt cycle thất bại/chạy dở, chúng vẫn được ghi nợ ở cuối run.
+        pendingDebtIssues = verdict.sideIssues
         recordAgentThought(agentSessionId, `⚖️ Trọng tài: mục tiêu ĐẠT nhưng ${verdict.sideIssues.length} lỗi phát sinh nghiêm trọng → TÁI KHỞI ĐỘNG 1 chu kỳ debt (chu kỳ ${cycle + 1}) để xử lý: ${verdict.sideIssues.slice(0, 2).join('; ').slice(0, 200)}`, totalIterations)
         console.log(`[GoalLoop] ${agentName} DEBT CYCLE: complete=true nhưng trọng tài quyết định 'continue' — chu kỳ ${cycle + 1} xử lý ${verdict.sideIssues.length} side issue(s)`)
         evidence.push({ cycle, kind: 'directive', text: `Trọng tài: hoàn thành + debtDecision='continue' → 1 chu kỳ debt cho ${verdict.sideIssues.length} lỗi phát sinh` })
@@ -2018,6 +2053,9 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
     // FIX 2026-09-14 #9 — debtMode=true nghĩa là trọng tài vừa chọn 'continue'
     // cho side issues: KHÔNG dừng ở đây — outerLoop chạy tiếp chu kỳ debt.
     if (verdict.complete && !debtMode) {
+      // REVIEW 9-fix (2026-08-30) #9 — hoàn thành nghĩa là các side issues đã
+      // được debt cycle (hoặc chu kỳ kế) xử lý xong → không còn nợ treo.
+      pendingDebtIssues = []
       stopReason = 'complete'
       break outerLoop
     }
@@ -2077,8 +2115,15 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
                 duration: 'task',
                 parentAgentName: agentName,
                 sessionId: agentSessionId,
-                onTokens: (t) => { tokensUsed += t; subagentTokens += t; delegations++ },
+                // REVIEW 9-fix (2026-08-30) #5 — auto-escalate delegation gắn
+                // parentRunId (đủ đường query theo run cha)
+                parentRunId: runId,
+                onTokens: (t) => { tokensUsed += t; subagentTokens += t },
               })
+              // REVIEW 9-fix (2026-08-30) — đếm delegation 1 LẦN/lần auto-apply
+              // (trước đây delegations++ nằm trong onTokens → phình theo số
+              // LLM call của sub-agent)
+              delegations++
               if (dispatched.report) {
                 omegaAdvisory += `\n\n🚀 AUTO-APPLY — Omega đã điều ${dispatched.agent} xử lý giúp bạn (kết quả ${dispatched.success ? 'ĐẠT' : 'CHƯA ĐẠT'}${dispatched.evaluation ? `, trọng tài độc lập: ${dispatched.evaluation.pass ? 'pass' : 'chưa pass'}` : ''}):\n${dispatched.report.slice(0, 2000)}`
                 evidence.push({ cycle, kind: 'directive', text: `AUTO-APPLY: điều ${dispatched.agent} theo advisory Omega (${dispatched.tokensUsed ?? 0} tokens sub-agent)` })
@@ -2182,6 +2227,35 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
     // Chu kỳ kế tiếp: evaluator đã chẩn đoán + kế hoạch → continuation directive
   }
 
+  // REVIEW 9-fix (2026-08-30) #9 — DEBT CYCLE THẤT BẠI: trọng tài từng quyết
+  // 'continue' (1 chu kỳ debt xử lý side issues) nhưng run kết thúc MÀ KHÔNG
+  // complete (debt cycle chưa xong / hết budget-chu kỳ / stall...). Các lỗi
+  // gốc KHÔNG được phép "chìm": ghi Todo follow-up (như nhánh 'record') để
+  // người dùng quyết định xử lý lúc nào — fail-open từng item.
+  if (pendingDebtIssues.length > 0 && stopReason !== 'complete') {
+    unresolvedDebt = unresolvedDebt.length > 0
+      ? [...unresolvedDebt, ...pendingDebtIssues.filter(d => !unresolvedDebt.includes(d))]
+      : pendingDebtIssues
+    if (agentSessionId) {
+      try {
+        const { db } = await import('@/lib/db')
+        for (const issue of pendingDebtIssues) {
+          await db.todo.create({
+            data: {
+              sessionId: agentSessionId,
+              content: `🔁 Follow-up (debt cycle chưa xử lý xong — run ${runId?.slice(0, 18) ?? '-'} dừng vì ${stopReason}): ${issue}`.slice(0, 480),
+              status: 'pending',
+              priority: 'medium',
+              ...(runId ? { runId } : {}),
+              taskMetaJson: JSON.stringify({ source: 'arbiter_side_issue', cycle: cyclesAttempted, debtDecision: 'continue' }),
+            },
+          }).catch(() => { /* fail-open từng item */ })
+        }
+        recordAgentThought(agentSessionId, `📋 Debt cycle chưa xử lý xong (${stopReason}) — ${pendingDebtIssues.length} lỗi phát sinh được GHI NỢ kỹ thuật (Todo follow-up)`, totalIterations)
+      } catch { /* fail-open — ghi nợ không được làm hỏng response cuối */ }
+    }
+  }
+
   // ================== FINAL REPORT ==================
 
   let content = ''
@@ -2250,8 +2324,13 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
 
   // FIX 2026-09-14 #9 — hoàn thành + nợ kỹ thuật: KHÔNG để lỗi phát sinh "chìm"
   // — báo cáo cuối nêu đích danh + đã ghi Todo follow-up cho người dùng.
-  if (stopReason === 'complete' && unresolvedDebt.length > 0) {
-    content += `\n\n---\n📋 **NỢ KỸ THUẬT (${unresolvedDebt.length} lỗi phát sinh trong quá trình xử lý — trọng tài quyết định hoàn thành + ghi nhận, KHÔNG chạy thêm chu kỳ):**\n${unresolvedDebt.map(d => `- ${d}`).join('\n')}\n\n→ Đã tạo Todo follow-up tương ứng — bạn có thể yêu cầu xử lý các mục này bất cứ lúc nào.`
+  // REVIEW 9-fix (2026-08-30): chạy cho CẢ trường hợp debt cycle thất bại
+  // (stopReason ≠ complete nhưng vẫn còn nợ kỹ thuật chưa xử lý).
+  if (unresolvedDebt.length > 0) {
+    const debtNote = stopReason === 'complete'
+      ? 'trọng tài quyết định hoàn thành + ghi nhận, KHÔNG chạy thêm chu kỳ'
+      : `debt cycle chưa xử lý xong — vòng lặp dừng vì ${stopReason}`
+    content += `\n\n---\n📋 **NỢ KỸ THUẬT (${unresolvedDebt.length} lỗi phát sinh trong quá trình xử lý — ${debtNote}):**\n${unresolvedDebt.map(d => `- ${d}`).join('\n')}\n\n→ Đã tạo Todo follow-up tương ứng — bạn có thể yêu cầu xử lý các mục này bất cứ lúc nào.`
   }
 
   const elapsedMs = Date.now() - startedAt

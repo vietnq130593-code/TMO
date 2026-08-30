@@ -506,11 +506,16 @@ export async function dispatchAgentByOmega(params: {
   position?: string | null
   parentAgentName?: string
   sessionId?: string | null
+  /** REVIEW 9-fix (2026-08-30) #5 — runId của run CHA (goal-loop / pipeline
+   * step): persist lên AgentRunRecord.parentRunId để query "mọi delegation
+   * của run X" hoạt động ĐỦ đường (trước đây chỉ delegate_task truyền).
+   * Truyền từ context.runId của tool-executor / runId của goal-loop. */
+  parentRunId?: string | null
   onTokens?: (tokens: number) => void
 }): Promise<DispatchResult> {
   const {
     agent, task, context, duration = 'task', team, position,
-    parentAgentName = 'Omega', sessionId = null, onTokens,
+    parentAgentName = 'Omega', sessionId = null, parentRunId = null, onTokens,
   } = params
 
   const agentName = String(agent || '').trim()
@@ -603,7 +608,7 @@ export async function dispatchAgentByOmega(params: {
       // Kèm task → agent mới điều động tham gia NGAY công việc
       const taskText = String(task || '').trim()
       if (taskText) {
-        const run = await runDispatchTask(profile, toolset, taskText, context, parentAgentName, sessionId, onTokens)
+        const run = await runDispatchTask(profile, toolset, taskText, context, parentAgentName, sessionId, parentRunId, onTokens)
         result.report = run.report
         result.tokensUsed = run.tokensUsed
         result.iterations = run.iterations
@@ -629,7 +634,7 @@ export async function dispatchAgentByOmega(params: {
     return { success: false, mode: 'task', agent: profile.name, error: 'Thiếu "task" — mô tả nhiệm vụ cụ thể cho agent được điều động.' }
   }
 
-  const run = await runDispatchTask(profile, toolset, taskText, context, parentAgentName, sessionId, onTokens)
+  const run = await runDispatchTask(profile, toolset, taskText, context, parentAgentName, sessionId, parentRunId, onTokens)
   return {
     success: run.success,
     mode: 'task',
@@ -666,6 +671,7 @@ async function runDispatchTask(
   context: string | undefined,
   parentAgentName: string,
   sessionId: string | null,
+  parentRunId?: string | null,
   onTokens?: (tokens: number) => void,
 ): Promise<{ success: boolean; report: string; tokensUsed: number; iterations: number; toolCalls: number; endedBy: string; evaluation?: { pass: boolean; confidence: number; gaps: string[]; note: string }; error?: string }> {
   const { runSubAgentForProfile } = await import('@/lib/subagent-delegate')
@@ -684,6 +690,9 @@ async function runDispatchTask(
     context,
     parentAgentName,
     sessionId,
+    // REVIEW 9-fix (2026-08-30) #5 — delegation rows qua dispatch_agent /
+    // auto-apply / fan-out giờ CŨNG gắn parentRunId (như delegate_task).
+    parentRunId,
     onTokens,
   })
   return {
@@ -716,7 +725,9 @@ export async function dispatchAgentsParallel(params: {
   tasks: Array<{ agent: string; task: string; context?: string }>
   parentAgentName?: string
   sessionId?: string | null
-  onTokens?: (tokens: number) => void
+  /** REVIEW 9-fix (2026-08-30) #5 — runId cha: mọi sub-agent trong fan-out
+   * gắn parentRunId trên AgentRunRecord (query theo run cha hoạt động đủ đường). */
+  parentRunId?: string | null
 }): Promise<{
   success: boolean
   mode: 'fan_out'
@@ -737,7 +748,7 @@ export async function dispatchAgentsParallel(params: {
   conflicts: string[]
   merged: string
 }> {
-  const { tasks, parentAgentName = 'Omega', sessionId = null, onTokens } = params
+  const { tasks, parentAgentName = 'Omega', sessionId = null, parentRunId = null } = params
   const MAX_PARALLEL = 4
   const valid = (Array.isArray(tasks) ? tasks : [])
     .filter(t => t && typeof t.agent === 'string' && t.agent.trim() && typeof t.task === 'string' && t.task.trim())
@@ -755,6 +766,8 @@ export async function dispatchAgentsParallel(params: {
 
   // FAN-OUT — mọi dispatch chạy đồng thời; allSettled đảm bảo không cái nào
   // throw ra ngoài (reject → đổi thành outcome fail của chính nó).
+  // (Token KHÔNG đếm qua callback — tổng tokensUsed trả về trong result để
+  // caller đếm đúng 1 lần, tránh double-count ở goal-loop processToolResult.)
   const settled = await Promise.allSettled(
     valid.map(t =>
       dispatchAgentByOmega({
@@ -764,7 +777,7 @@ export async function dispatchAgentsParallel(params: {
         duration: 'task',
         parentAgentName,
         sessionId,
-        onTokens: (n) => onTokens?.(n),
+        parentRunId,
       }).then(r => ({ agent: t.agent, r })),
     ),
   )

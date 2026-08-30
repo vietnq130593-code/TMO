@@ -104,6 +104,11 @@ export interface GoalLoopCheckpoint {
   cutMidWorkPrev: boolean
   lastContent: string
   lastLlmError: string
+  /** REVIEW 9-fix (2026-08-30) #9 — state debt cycle: resume giữa debt cycle
+   *  vẫn inject đúng debt directive + không lặp debt cycle thứ 2 sau restart.
+   *  (Optional — checkpoint cũ không có → hiểu là false.) */
+  debtMode?: boolean
+  debtCycleUsed?: boolean
   /** Epoch ms lúc checkpoint được ghi */
   savedAt: number
 }
