@@ -29,6 +29,10 @@ import { db } from '@/lib/db'
 import { callLLMForAgent } from '@/lib/llm'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
 import { getAgentRoster } from '@/lib/agent-roster'
+// CI-5 B6 (Task 14-d) — stall-kill thích ứng: đọc tín hiệu sống của execution
+// (sd-<proposalId>) từ agent-run-tracker (in-memory globalThis — events có ts).
+// KHÔNG circular: agent-run-tracker chỉ phụ thuộc metrics-db.
+import { getAgentRuns } from '@/lib/agent-run-tracker'
 // CI-6 B5 (SELF-DIRECTION ↔ workspace): bước code-workflow thực thi THẬT qua
 // tool executor + pipeline pre-push — import tĩnh an toàn (code-team modules đã
 // nằm trong module graph của app qua chat routes; không có vòng import).
@@ -1254,6 +1258,133 @@ async function runOrchestrationInner(proposalId: string): Promise<void> {
   console.log(`[SelfDirection] "${proposal.title}" ${failed ? `THẤT BẠI: ${failReason}` : `HOÀN TẤT ${finalSteps.length} bước — báo cáo Omega đã lưu`}`)
 }
 
+// ==================== 7b. CI-5 B6 (Task 14-d) — STALL-KILL THÍCH ỨNG ====================
+// Roadmap CI-5 sơ hở #5: "Stall-kill self-direction 10 phút có thể giết step
+// LLM chậm hợp lệ". Trong lúc 1 step đang chạy LLM dài (kimi-k3 trên context
+// 30K + timeout 8' + tool time), KHÔNG có ghi nào vào proposal/steps → lastSignal
+// (updatedAt/startedAt của steps) già đi > 10' dù orchestration ĐANG SỐNG.
+// Stall-kill thích ứng: trước khi đánh dấu failed, kiểm tra CÁC NGUỒN HEARTBEAT
+// của execution (session sd-<proposalId>) — có tín hiệu tươi trong cửa sổ 10'
+// thì KHÔNG giết lần tick này (tick sau lại check: heartbeat vẫn tươi → vẫn
+// không giết — đúng nghĩa thích ứng; hết tín hiệu 10' → giết như hành vi cũ,
+// KHÔNG có vòng vô hạn vì heartbeat chỉ tươi khi execution THẬT SỰ hoạt động).
+
+/** 1 tín hiệu sống thu thập được từ nguồn heartbeat của execution */
+export interface SdHeartbeatSignal {
+  /** Tên nguồn ('tool-metric' | 'goal-loop-job' | 'agent-run-tracker') */
+  source: string
+  /** Thời điểm tín hiệu (epoch ms) — null/undefined = nguồn không có dữ liệu */
+  ts: number | null | undefined
+}
+
+/** Kết quả tìm thấy tín hiệu sống tươi */
+export interface SdFreshHeartbeat {
+  source: string
+  ts: number
+  ageMs: number
+}
+
+/**
+ * Tìm tín hiệu sống TƯƠI NHẤT trong cửa sổ windowMs — PURE FUNCTION (test
+ * được không cần DB). Trả về tín hiệu tươi nhất (ts lớn nhất thỏa cửa sổ),
+ * hoặc null khi KHÔNG có tín hiệu nào trong cửa sổ (→ stall-kill giữ hành vi
+ * cũ). Ts trong tương lai xa (> 60s — clock skew giữa nguồn) bị loại; skew
+ * nhỏ được chặn về ageMs=0.
+ */
+export function findFreshHeartbeat(
+  signals: Array<SdHeartbeatSignal | null | undefined>,
+  nowMs: number,
+  windowMs: number,
+): SdFreshHeartbeat | null {
+  let best: SdFreshHeartbeat | null = null
+  for (const s of signals) {
+    if (!s || typeof s.ts !== 'number' || !Number.isFinite(s.ts)) continue
+    const rawAge = nowMs - s.ts
+    if (rawAge > windowMs) continue // quá cũ — không phải tín hiệu sống
+    if (rawAge < -60_000) continue // lệch đồng hồ lớn (tương lai xa) — bỏ
+    if (!best || s.ts > best.ts) {
+      best = { source: s.source, ts: s.ts, ageMs: Math.max(0, rawAge) }
+    }
+  }
+  return best
+}
+
+/**
+ * Thu thập MỌI nguồn heartbeat của execution của proposal (session sd-<id>),
+ * mỗi nguồn fail-open RIÊNG (try/catch + delegate guard — nguồn lỗi/không map
+ * được → không đóng góp tín hiệu, KHÔNG throw):
+ *   (a) ToolMetric (DB) — TOOL RECEIPT GẦN: mọi executeTool của code-workflow
+ *       step chảy qua recordAgentActivity → recordToolMetric (choke-point duy
+ *       nhất từ Task 20-b, có @@index([sessionId]); delegate an toàn với cả
+ *       stale Prisma client vì model có từ Phase 3). Tool receipts chỉ land
+ *       khi agent THẬT SỰ đang gọi tool → tín hiệu sống đáng tin nhất hôm nay.
+ *   (b) GoalLoopJob.heartbeatAt (DB, GĐ4 14-a) — nếu execution chạy qua
+ *       goal-loop worker (ghi mỗi vòng/tool batch, throttle 15s). Self-direction
+ *       hôm nay chạy inline (không spawn job) → nguồn thường rỗng — giữ cho
+ *       future-proof CI-5. Guard delegate: process giữ Prisma client cũ (chưa
+ *       có model GoalLoopJob sau db:push của 14-a) → bỏ nguồn im lặng.
+ *   (c) agent-run-tracker (in-memory globalThis) — events có ts của run thuộc
+ *       session sd-<id> (startAgentRun/recordAgentRunTool của execution khác
+ *       nếu có). Hôm nay self-direction không startAgentRun → nguồn thường
+ *       rỗng — vô hại.
+ * Chi phí: chỉ gọi khi stall-kill ĐỊNH giết (hiếm) — 2 query DB nhẹ + 1 đọc map.
+ */
+async function collectProposalHeartbeats(proposalId: string): Promise<SdHeartbeatSignal[]> {
+  const sessionId = `sd-${proposalId}`
+  const cutoff = new Date(Date.now() - STALLED_AFTER_MS)
+  const signals: SdHeartbeatSignal[] = []
+
+  // (a) ToolMetric — tool receipt gần nhất của session sd-<id>
+  try {
+    const latest = await db.toolMetric.findFirst({
+      where: { sessionId, timestamp: { gte: cutoff } },
+      orderBy: { timestamp: 'desc' },
+      select: { timestamp: true },
+    })
+    if (latest) signals.push({ source: 'tool-metric', ts: latest.timestamp.getTime() })
+  } catch (tmErr) {
+    console.warn(`[SelfDirection] stall-kill heartbeat ToolMetric lỗi (fail-open — bỏ nguồn này): ${tmErr instanceof Error ? tmErr.message : String(tmErr)}`)
+  }
+
+  // (b) GoalLoopJob.heartbeatAt (14-a ghi mỗi vòng/tool batch)
+  try {
+    // Guard stale Prisma client: process chạy trước db:push của 14-a chưa có
+    // delegate goalLoopJob → TypeError nếu gọi thẳng; check tồn tại trước.
+    const dbAny = db as unknown as { goalLoopJob?: { findFirst: (args: Record<string, unknown>) => Promise<{ heartbeatAt: Date | null } | null> } }
+    if (dbAny.goalLoopJob?.findFirst) {
+      const job = await dbAny.goalLoopJob.findFirst({
+        where: { sessionId, heartbeatAt: { gte: cutoff } },
+        orderBy: { heartbeatAt: 'desc' },
+        select: { heartbeatAt: true },
+      })
+      if (job?.heartbeatAt) signals.push({ source: 'goal-loop-job', ts: job.heartbeatAt.getTime() })
+    }
+  } catch (glErr) {
+    console.warn(`[SelfDirection] stall-kill heartbeat GoalLoopJob lỗi (fail-open — bỏ nguồn này): ${glErr instanceof Error ? glErr.message : String(glErr)}`)
+  }
+
+  // (c) agent-run-tracker (in-memory) — event ts gần nhất mỗi run của session
+  try {
+    for (const run of getAgentRuns(sessionId, 10)) {
+      const lastTs = run.events.length > 0 ? run.events[run.events.length - 1].ts : run.startedAt
+      signals.push({ source: 'agent-run-tracker', ts: lastTs })
+    }
+  } catch (arErr) {
+    console.warn(`[SelfDirection] stall-kill heartbeat agent-run-tracker lỗi (fail-open — bỏ nguồn này): ${arErr instanceof Error ? arErr.message : String(arErr)}`)
+  }
+
+  return signals
+}
+
+/**
+ * Tín hiệu sống tươi nhất của execution proposal, hoặc null khi KHÔNG có
+ * (stall-kill giữ hành vi cũ). Exported cho smoke test (14-d).
+ */
+export async function latestExecutionHeartbeat(proposalId: string): Promise<SdFreshHeartbeat | null> {
+  const signals = await collectProposalHeartbeats(proposalId)
+  return findFreshHeartbeat(signals, Date.now(), STALLED_AFTER_MS)
+}
+
 // ==================== 7. AUTO-PROMOTION (gọi từ GET proposals) ====================
 
 /**
@@ -1311,6 +1442,25 @@ export async function promoteDueProposals(): Promise<string[]> {
         )
       }
       if (lastSignal >= stalledCutoff.getTime()) continue // còn tín hiệu sống
+      // ━━━ CI-5 B6 (Task 14-d) — STALL-KILL THÍCH ỨNG ━━━
+      // Trước khi giết: kiểm tra heartbeat của EXECUTION (tool receipt
+      // ToolMetric / GoalLoopJob.heartbeatAt / agent-run-tracker events — xem
+      // collectProposalHeartbeats). Step LLM chậm hợp lệ (sơ hở #5 roadmap)
+      // không ghi gì vào proposal/steps trong lúc LLM/tool đang chạy, nhưng tool
+      // receipts vẫn land DB → heartbeat tươi = execution đang sống → KHÔNG
+      // giết lần tick này (tick sau lại check — không giữ deadline state, không
+      // vòng vô hạn). Nguồn lỗi / không map được → không tín hiệu → hành vi cũ.
+      // Fail-open: heartbeat check throw bất kỳ → coi như không có tín hiệu.
+      let freshHeartbeat: SdFreshHeartbeat | null = null
+      try {
+        freshHeartbeat = await latestExecutionHeartbeat(p.id)
+      } catch (hbErr) {
+        console.warn(`[SelfDirection] stall-kill heartbeat check lỗi (fail-open — coi như không có tín hiệu): ${hbErr instanceof Error ? hbErr.message : String(hbErr)}`)
+      }
+      if (freshHeartbeat) {
+        console.log(`[SelfDirection] stall-kill bỏ qua proposal ${p.id} — có tín hiệu sống (${freshHeartbeat.source}, ${Math.round(freshHeartbeat.ageMs / 1000)}s trước ≤ ${STALLED_AFTER_MS / 60_000}')`)
+        continue
+      }
       await db.selfDirectionProposal.update({
         where: { id: p.id },
         data: { status: 'failed', decisionReason: 'Triển khai bị gián đoạn (server restart?) — bấm "Thử lại" để Omega tiếp tục' },

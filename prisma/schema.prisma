@@ -1663,3 +1663,47 @@ model TaskContextArchive {
   @@index([sessionId, createdAt])
   @@index([kind, createdAt])
 }
+
+// ============================================================================
+// CI-5 (GĐ4, Task 14-a) — DURABLE GOAL LOOP (GoalLoopJob)
+// ============================================================================
+// DB LÀ QUEUE của kiến trúc durable goal loop (contract types:
+// src/lib/goal-loop-durable-types.ts — worker: src/lib/goal-loop-worker.ts):
+// POST /api/openclaw/chat → enqueue job (status='queued') → trả jobId ngay →
+// GoalLoopWorker nền tick 5s claim job bằng updateMany conditional (atomic
+// lock) → chạy tối đa 2 job song song → checkpoint SAU MỖI VÒNG (resume
+// granularity 1 vòng) → hoàn thành hoặc recover sau restart (orphan sweep:
+// job DB-running KHÔNG nằm trong running-map của process = mồ côi → requeue
+// nếu attempts < maxAttempts, else failed). Cancel qua DB flag
+// cancelRequestedAt — nút Dừng sống sót qua restart, KHÔNG phụ thuộc RAM.
+
+/// 1 job goal-loop chạy nền — sống sót qua restart/đóng tab (durable).
+model GoalLoopJob {
+  id                String    @id @default(cuid())
+  sessionId         String    /// AgentSession.sessionId — phiên chat gốc
+  messageId         String?   /// ChatMessage.id của user message trigger (nullable)
+  status            String    @default("queued") /// queued | running | completed | failed | cancelled (GoalLoopJobStatus)
+  /// Input đầy đủ để re-run sau restart — JSON GoalLoopJobInput (goal-loop-durable-types.ts)
+  input             String
+  cyclesDone        Int       @default(0)
+  /// JSON GoalLoopCheckpoint — snapshot mỗi vòng lặp (đã bounded bởi CI-3 compression ~50k chars)
+  checkpoint        String?
+  /// JSON GoalLoopResult khi completed (content final + metadata)
+  result            String?
+  stopReason        String?
+  error             String?
+  attempts          Int       @default(0) /// số lần requeue sau crash; chết vĩnh viễn khi >= maxAttempts
+  /// Nút Dừng qua DB flag — worker cancelCheck đọc field này, KHÔNG phụ thuộc RAM
+  cancelRequestedAt DateTime?
+  /// Tín hiệu sống cuối (mỗi vòng + mỗi tool batch) — stall warning UI khi stale
+  heartbeatAt       DateTime?
+  /// ID process đang chạy job (os.pid) — observability
+  workerPid         Int?
+  createdAt         DateTime  @default(now())
+  startedAt         DateTime?
+  completedAt       DateTime?
+  updatedAt         DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([sessionId, createdAt])
+}

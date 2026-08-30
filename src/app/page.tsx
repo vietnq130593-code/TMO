@@ -4107,6 +4107,10 @@ interface SmolabMessage {
   runId?: string
   /** Summary tĩnh (từ message metadata sau reload — events in-memory đã mất) */
   agentRunSummary?: AgentRunSummaryData
+  /** GĐ4 CI-5 (Task 14-e) — job durable goal-loop đang chạy: message là
+   *  PLACEHOLDER (⏳ hàng đợi nền), sẽ được THAY THẾ bằng câu trả lời thật
+   *  (result.content) khi poll /api/goal-loop-jobs thấy job completed. */
+  goalLoopJobId?: string
 }
 
 interface SmolabSession {
@@ -4487,6 +4491,236 @@ function AgentRunSummaryBar({ summary }: { summary: AgentRunSummaryData }) {
           </div>
         </details>
       )}
+    </div>
+  )
+}
+
+// ==================== GĐ4 CI-5 (Task 14-e) — DURABLE GOAL LOOP JOB MONITOR ====================
+//
+// POST /api/openclaw/chat khi ENABLE_DURABLE_GOAL_LOOP=true trả về TỨC THÌ
+// { durable: true, jobId, content: "⏳ Tác vụ đã vào hàng đợi nền…" } — goal
+// loop chạy NGOÀI HTTP request (worker nền, checkpoint mỗi vòng, sống sót
+// qua restart; finalize lưu ChatMessage assistant thật vào phiên). Frontend:
+//   (1) sendMessage append PLACEHOLDER message (goalLoopJobId) — KHÔNG coi
+//       là lỗi, spinner tắt như request đã xong (job chạy nền);
+//   (2) poll GET /api/goal-loop-jobs?jobId= mỗi 3s — cập nhật progressHint
+//       ("chu kỳ N · X vòng · Y tool calls") vào placeholder + panel;
+//   (3) job completed → THAY placeholder bằng câu trả lời thật (result.content)
+//       + refreshAgentRuns() để Thought Process panel pick up run (worker
+//       cùng process ghi run tracker — mirror inline path);
+//   (4) failed → thông báo lỗi tiếng Việt; cancelled → ⏹ (không phải lỗi);
+//   (5) Panel "Tác vụ nền" theo dõi mọi job của phiên đang mở (re-attach khi
+//       mở lại phiên — đóng tab/restart KHÔNG mất tác vụ, đúng B8-b).
+// Khi response KHÔNG có durable/jobId (flag OFF / đường thường) → toàn bộ
+// mảng này DORMANT — hành vi cũ 100% giữ nguyên.
+
+/** Job item từ GET /api/goal-loop-jobs (mirror GoalLoopJobApiItem của route —
+ *  KHÔNG chứa input/checkpoint raw). */
+interface GoalLoopJobApiData {
+  id: string
+  sessionId: string
+  messageId: string | null
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+  cyclesDone: number
+  progressHint: string | null
+  stopReason: string | null
+  error: string | null
+  attempts: number
+  cancelRequested: boolean
+  cancelRequestedAt: string | null
+  heartbeatAt: string | null
+  createdAt: string
+  startedAt: string | null
+  completedAt: string | null
+  ageMs: number
+  stallWarning: boolean
+  /** CHỈ khi completed — projection kết quả (content = câu trả lời thật) */
+  result?: {
+    content: string
+    goalLoop?: unknown
+    taskSummary?: string
+    agentName?: string
+  } | null
+}
+
+/** Job state client-side — API item + agentName client (server chỉ trả tên
+ *  trong result khi completed; khi đang chạy dùng tên seed client lúc gửi). */
+interface GoalLoopJobViewData extends GoalLoopJobApiData {
+  agentName?: string
+}
+
+/** Badge màu theo trạng thái job (panel Tác vụ nền + placeholder). */
+const GOAL_LOOP_STATUS_META: Record<GoalLoopJobViewData['status'], { label: string; badgeClass: string }> = {
+  queued: { label: 'Đang chờ', badgeClass: 'bg-stone-800/70 text-stone-300 border border-stone-600/40' },
+  running: { label: 'Đang chạy', badgeClass: 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/40 animate-pulse' },
+  completed: { label: 'Hoàn tất', badgeClass: 'bg-emerald-900/50 text-emerald-300 border border-emerald-500/50' },
+  failed: { label: 'Lỗi', badgeClass: 'bg-red-950/60 text-red-300 border border-red-500/40' },
+  cancelled: { label: 'Đã dừng', badgeClass: 'bg-amber-950/60 text-amber-300 border border-amber-500/40' },
+}
+
+/** Tuổi "không tín hiệu sống" của job (phút, làm tròn ≥1) — cảnh báo stall. */
+function goalLoopStallMinutes(job: GoalLoopJobViewData): number {
+  const ref = job.heartbeatAt || job.startedAt || job.createdAt
+  const ms = ref ? Date.now() - Date.parse(ref) : job.ageMs
+  return Math.max(1, Math.round((Number.isFinite(ms) ? ms : job.ageMs) / 60000))
+}
+
+/**
+ * Thay message placeholder (goalLoopJobId) bằng message thật khi job terminal.
+ * Placeholder đã mất (vd tail reload giữa chừng) → append thông báo ở cuối
+ * thay vì chen lại giữa dòng chat. Pure function — gọi trong setMessages.
+ */
+function replaceDurablePlaceholder(
+  prev: SmolabMessage[],
+  jobId: string,
+  patch: { role: SmolabMessage['role']; content: string } & Partial<SmolabMessage>,
+): SmolabMessage[] {
+  const idx = prev.findIndex(m => m.goalLoopJobId === jobId)
+  if (idx === -1) {
+    return [...prev, {
+      id: crypto.randomUUID(),
+      timestamp: new Date(),
+      ...patch,
+      goalLoopJobId: undefined,
+    }]
+  }
+  const next = [...prev]
+  next[idx] = { ...next[idx], ...patch, goalLoopJobId: undefined }
+  return next
+}
+
+/**
+ * Placeholder bubble trong message flow — job durable đang chạy (14-e Mảnh 2+3):
+ * spinner + progressHint live + cảnh báo stall (KHÔNG tự hủy) + nút Dừng riêng
+ * (touch target 44px — nút Gửi/Dừng chính không đổi vì isLoading đã tắt).
+ */
+function DurableGoalLoopBubble({
+  msg, job, onCancel,
+}: {
+  msg: SmolabMessage
+  job: GoalLoopJobViewData
+  onCancel: (jobId: string) => void
+}) {
+  const cancelling = job.cancelRequested
+  const queued = job.status === 'queued'
+  return (
+    <div className="max-w-[85%] p-2.5 bg-slate-950/50 border border-emerald-400/35 border-l-2 border-l-emerald-400">
+      <div className="flex items-center gap-1.5 mb-1">
+        <Loader2 className="h-3 w-3 animate-spin text-emerald-400" aria-hidden="true" />
+        <span className="text-[11px] text-emerald-300 font-medium">⚙️ Tác vụ nền</span>
+        {job.agentName && <span className="text-[10px] text-stone-400 truncate">{job.agentName}</span>}
+        <Badge className={`text-[9px] h-3.5 px-1.5 ${GOAL_LOOP_STATUS_META[job.status]?.badgeClass || ''}`}>
+          {GOAL_LOOP_STATUS_META[job.status]?.label || job.status}
+        </Badge>
+      </div>
+      <p className="text-base whitespace-pre-wrap leading-relaxed text-stone-100">
+        {cancelling
+          ? '⏳ Đang yêu cầu dừng… (agent sẽ kết thúc ở bước an toàn gần nhất)'
+          : queued
+          ? (msg.content || '⏳ Tác vụ đã vào hàng đợi nền — đang chờ worker nhận…')
+          : `⏳ Đang chạy — ${job.progressHint || 'đang khởi động…'}`}
+      </p>
+      {job.stallWarning && !cancelling && (
+        <p className="mt-1 text-[11px] text-amber-400">
+          ⚠ Không có tín hiệu sống {goalLoopStallMinutes(job)} phút — job vẫn đang chạy, không tự hủy
+        </p>
+      )}
+      <div className="flex items-center gap-2 mt-2 pt-1.5 border-t border-emerald-500/15">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => onCancel(job.id)}
+          disabled={cancelling}
+          aria-label={`Dừng tác vụ nền của ${job.agentName || 'Agent'}`}
+          title={cancelling ? 'Đang yêu cầu dừng…' : 'Dừng tác vụ nền này'}
+          className="h-11 min-w-[44px] px-4 border-red-400/40 bg-red-950/30 text-red-300 hover:bg-red-900/50 hover:text-red-200 hover:border-red-400/60"
+        >
+          <Square className="h-3 w-3 fill-current" aria-hidden="true" />
+          <span className="text-[12px]">Dừng</span>
+        </Button>
+        <span className="text-[10px] text-stone-400 ml-auto">
+          {fmtRunDuration(job.ageMs) || 'mới'} · job {job.id.slice(0, 8)}…
+        </span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Panel "Tác vụ nền" (roadmap CI-5 B7) — chỉ render khi có job của phiên đang
+ * mở (active, hoặc vừa terminal — purge khỏi state sau 15s → panel tự ẩn,
+ * KHÔNG chiếm không gian khi rảnh). Mỗi job: tên agent, badge trạng thái,
+ * progressHint, tuổi, ⚠ stall, nút hủy riêng (touch target 44px).
+ */
+function GoalLoopJobsPanel({
+  jobs, onCancel,
+}: {
+  jobs: GoalLoopJobViewData[]
+  onCancel: (jobId: string) => void
+}) {
+  const activeCount = jobs.filter(j => j.status === 'queued' || j.status === 'running').length
+  return (
+    <div
+      className="flex-shrink-0 mx-3 mt-2 p-2.5 chamfer-sm bg-slate-950/60 border border-emerald-400/30"
+      role="region"
+      aria-label={`Tác vụ nền — ${activeCount} đang chạy`}
+    >
+      <div className="flex items-center gap-1.5 mb-2">
+        <Activity className="h-3 w-3 text-emerald-400" aria-hidden="true" />
+        <span className="text-[11px] font-medium text-emerald-300 uppercase tracking-wider">Tác vụ nền</span>
+        <span className="text-[10px] text-stone-400 truncate">
+          {activeCount > 0 ? `${activeCount} đang chạy — chạy tiếp kể cả khi đóng tab` : 'vừa kết thúc'}
+        </span>
+      </div>
+      <div className="space-y-1.5 max-h-44 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
+        {jobs.map(job => {
+          const meta = GOAL_LOOP_STATUS_META[job.status] || GOAL_LOOP_STATUS_META.queued
+          const active = job.status === 'queued' || job.status === 'running'
+          return (
+            <div key={job.id} className="flex items-center gap-2 p-1.5 bg-slate-900/40 border border-stone-700/40">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[12px] text-stone-200 font-medium truncate">{job.agentName || 'Agent'}</span>
+                  <Badge className={`text-[9px] h-3.5 px-1.5 ${meta.badgeClass}`}>{meta.label}</Badge>
+                  {job.attempts > 0 && (
+                    <span className="text-[9px] text-amber-400/80" title={`Đã tự thử lại ${job.attempts} lần sau crash`}>↻ {job.attempts}</span>
+                  )}
+                  {job.stallWarning && (
+                    <span className="text-[10px] text-amber-400" title={`Không cập nhật tín hiệu sống ${goalLoopStallMinutes(job)} phút — job vẫn chạy`}>
+                      ⚠ {goalLoopStallMinutes(job)} phút không tín hiệu
+                    </span>
+                  )}
+                </div>
+                <div className="text-[10px] text-stone-400 truncate">
+                  {job.status === 'queued'
+                    ? 'Đang chờ worker nhận…'
+                    : job.status === 'running'
+                    ? (job.progressHint || 'đang khởi động…')
+                    : job.status === 'failed'
+                    ? `Lỗi${job.error ? `: ${String(job.error).slice(0, 80)}` : ''}`
+                    : job.status === 'cancelled'
+                    ? 'Đã dừng theo yêu cầu'
+                    : 'Hoàn tất — câu trả lời đã vào khung chat'}
+                  {' · '}{fmtRunDuration(job.ageMs) || 'mới'}
+                </div>
+              </div>
+              {active && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onCancel(job.id)}
+                  disabled={job.cancelRequested}
+                  aria-label={`Dừng tác vụ nền của ${job.agentName || 'Agent'}`}
+                  title={job.cancelRequested ? 'Đang yêu cầu dừng…' : 'Dừng tác vụ nền này'}
+                  className="h-11 w-11 p-0 shrink-0 border-red-400/40 bg-red-950/30 text-red-300 hover:bg-red-900/50 hover:text-red-200 hover:border-red-400/60"
+                >
+                  <Square className="h-3 w-3 fill-current" aria-hidden="true" />
+                </Button>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -8457,6 +8691,18 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
   // Clear run data khi đổi session (panel messages cũng bị thay bởi session load)
   useEffect(() => { setAgentRuns({}); setSessionTodos([]) }, [currentSessionId])
 
+  // ===== GĐ4 CI-5 (Task 14-e) — Durable goal-loop jobs: state + poll =====
+  // goalLoopJobs: jobId → view mới nhất (poll GET /api/goal-loop-jobs?jobId=
+  // mỗi 3s khi job active — mirror poller agent-run 1.2s). Chỉ chứa job của
+  // PHIÊN ĐANG MỞ: đổi phiên → clear (job vẫn chạy nền server-side; mở lại
+  // phiên → loadSessionTail re-attach + poll tiếp — đóng tab không mất tác vụ).
+  const [goalLoopJobs, setGoalLoopJobs] = useState<Record<string, GoalLoopJobViewData>>({})
+  const goalLoopJobsRef = useRef<Record<string, GoalLoopJobViewData>>({})
+  // Số lần poll lỗi liên tiếp theo jobId — 5 lần → dừng poll + log console
+  const goalLoopFailsRef = useRef<Record<string, number>>({})
+  useEffect(() => { goalLoopJobsRef.current = goalLoopJobs })
+  useEffect(() => { setGoalLoopJobs({}) }, [currentSessionId])
+
   // ===== USER REQUEST 2026-08-31 — DỪNG tác vụ Agents bằng nút Gửi + chống kẹt "Đang suy nghĩ" =====
   // chatAbortRef: AbortController của fetch đang chờ (chat + team workflow SSE).
   //   Bấm nút Gửi khi đang chạy → abort client-side + POST /api/agent-run hủy server-side.
@@ -9061,6 +9307,58 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
           }
         }
       } catch { /* best-effort */ }
+
+      // ===== GĐ4 CI-5 (14-e) — RE-ATTACH durable goal-loop jobs của session =====
+      // Mở lại phiên (reload / restart / đổi phiên về) mà còn job nền
+      // queued/running → panel "Tác vụ nền" hiện lại + poll jobId tiếp tục
+      // (đóng tab trước đó KHÔNG mất tác vụ — B8-b). Idempotent: silent reload
+      // của agent-run poller cũng chạy qua đây → placeholder bị replace bởi
+      // DB tail sẽ được chèn lại đúng chỗ nếu job vẫn đang chạy. Job đã
+      // terminal KHÔNG re-attach (assistant message do worker finalize lưu
+      // DB — nằm trong tail vừa load phía trên).
+      try {
+        const jobsRes = await fetch(`/api/goal-loop-jobs?sessionId=${encodeURIComponent(sid)}`)
+        if (jobsRes.ok) {
+          const jobsData = await jobsRes.json().catch(() => null) as { ok?: boolean; jobs?: GoalLoopJobApiData[] } | null
+          const toAttach = (jobsData?.ok && Array.isArray(jobsData.jobs))
+            ? jobsData.jobs.filter(j => !!j?.id && (j.status === 'queued' || j.status === 'running'))
+            : []
+          if (toAttach.length > 0 && currentSessionIdRef.current === sid) {
+            setGoalLoopJobs(prev => {
+              const next = { ...prev }
+              for (const j of toAttach) {
+                next[j.id] = {
+                  ...j,
+                  result: j.result ?? null,
+                  agentName: prev[j.id]?.agentName || j.result?.agentName,
+                }
+              }
+              return next
+            })
+            // Placeholder message trong khung chat (nếu chưa có) — chèn NGAY
+            // SAU user message khởi tạo job (job.messageId = id ChatMessage DB)
+            // để đúng dòng chat; không tìm thấy anchor → append cuối.
+            setMessages(prev => {
+              let next = prev
+              for (const j of toAttach) {
+                if (next.some(m => m.goalLoopJobId === j.id)) continue
+                const placeholderMsg: SmolabMessage = {
+                  id: `glj_${j.id}`,
+                  role: 'assistant',
+                  content: '⏳ Tác vụ nền đang chạy…',
+                  timestamp: new Date(j.startedAt || j.createdAt || Date.now()),
+                  goalLoopJobId: j.id,
+                }
+                const anchorIdx = j.messageId ? next.findIndex(m => m.id === j.messageId) : -1
+                next = anchorIdx >= 0
+                  ? [...next.slice(0, anchorIdx + 1), placeholderMsg, ...next.slice(anchorIdx + 1)]
+                  : [...next, placeholderMsg]
+              }
+              return next
+            })
+          }
+        }
+      } catch { /* best-effort — job re-attach thất bại không chặn session load */ }
     }
   }, [mergeAgentRunPanels])
 
@@ -9243,9 +9541,16 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
           //    chạy hợp pháp nhiều chu kỳ (budget mặc định 12', env có thể tăng).
           setAgentRuns(prev => {
             const next = { ...prev }
+            // GĐ4 CI-5 (14-e): durable goal-loop job đang chạy → run có thể
+            // HỢP PHÁP chạy rất lâu (CI-1 không giới hạn chu kỳ) → nâng ngưỡng
+            // safeguard 30' → 24h, tránh panel hiện "error" oan khi job nền
+            // chạy dài. Không có job durable → giữ nguyên ngưỡng cũ.
+            const durableGoalLoopActive = Object.values(goalLoopJobsRef.current)
+              .some(j => j.status === 'queued' || j.status === 'running')
+            const staleRunThresholdMs = durableGoalLoopActive ? 24 * 60 * 60_000 : 30 * 60_000
             for (const raw of d.runs!) {
               let run = raw
-              if (run.status === 'running' && Date.now() - (run.startedAt || 0) > 30 * 60_000) {
+              if (run.status === 'running' && Date.now() - (run.startedAt || 0) > staleRunThresholdMs) {
                 run = { ...run, status: 'error' as const, endedAt: Date.now() }
               }
               next[run.runId] = run
@@ -9337,13 +9642,237 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
     const poll = async () => {
       if (document.hidden) return
       const anyRunning = Object.values(agentRunsRef.current).some(r => r.status === 'running')
-      if (!isLoadingRef.current && !anyRunning) return
+      // GĐ4 CI-5 (14-e): job durable goal-loop đang chạy → poll tiếp để
+      // Thought Process panel hiện LIVE trong lúc job nền chạy (worker cùng
+      // process ghi run tracker — runs của session trả về như đường inline).
+      const anyDurableJob = Object.values(goalLoopJobsRef.current)
+        .some(j => j.sessionId === currentSessionIdRef.current && (j.status === 'queued' || j.status === 'running'))
+      if (!isLoadingRef.current && !anyRunning && !anyDurableJob) return
       await refreshAgentRuns()
     }
     poll()
     const interval = setInterval(poll, 1200)
     return () => { clearInterval(interval) }
   }, [currentSessionId, refreshAgentRuns])
+
+  // ===== GĐ4 CI-5 (Task 14-e) — Durable goal-loop job: poll + terminal + cancel =====
+  // Áp dụng 1 lần poll GET /api/goal-loop-jobs?jobId= vào state + xử lý chuyển
+  // TERMINAL (completed/failed/cancelled): thay placeholder bằng kết quả thật
+  // (completed), thông báo lỗi (failed) hoặc ⏹ (cancelled — không phải lỗi).
+  const applyGoalLoopJobUpdate = useCallback((job: GoalLoopJobApiData) => {
+    const prevJob = goalLoopJobsRef.current[job.id]
+    const wasActive = !!prevJob && (prevJob.status === 'queued' || prevJob.status === 'running')
+    const isTerminal = job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled'
+
+    setGoalLoopJobs(prev => {
+      const existing = prev[job.id]
+      return {
+        ...prev,
+        [job.id]: {
+          ...job,
+          result: job.result ?? null,
+          // Giữ tên agent client-side (server chỉ trả tên trong result khi completed)
+          agentName: existing?.agentName || job.result?.agentName,
+        },
+      }
+    })
+
+    if (!wasActive || !isTerminal) return
+
+    // ===== TERMINAL — chỉ đụng messages khi user còn đang ở phiên của job =====
+    const sid = job.sessionId
+    const onSession = currentSessionIdRef.current === sid
+    if (job.status === 'completed') {
+      const content = job.result?.content ? String(job.result.content) : ''
+      if (onSession) {
+        if (content) {
+          setMessages(prev => {
+            const already = prev.some(m => m.role === 'assistant' && m.content === content && m.goalLoopJobId !== job.id)
+            const idx = prev.findIndex(m => m.goalLoopJobId === job.id)
+            if (idx >= 0) {
+              // Placeholder còn → THAY bằng câu trả lời thật (KHÔNG reload);
+              // tail reload đã bring message thật về (race finalize) → bỏ
+              // placeholder để không nhân đôi.
+              const next = [...prev]
+              if (already) next.splice(idx, 1)
+              else next[idx] = { ...next[idx], goalLoopJobId: undefined, content }
+              return next
+            }
+            if (already) return prev
+            // Placeholder đã mất (vd silent reload giữa chừng) → append cuối
+            return [...prev, {
+              id: crypto.randomUUID(),
+              role: 'assistant' as const,
+              content,
+              timestamp: new Date(),
+            }]
+          })
+          // SAFETY NET: silent reload của agent-run poller có thể ĐÈ mất
+          // message thật (race với finalize lưu DB) → 2.5s sau chắc chắn
+          // message kết quả còn trong khung chat (idempotent).
+          window.setTimeout(() => {
+            setMessages(prev => {
+              if (currentSessionIdRef.current !== sid) return prev
+              if (prev.some(m => m.role === 'assistant' && m.content === content)) return prev
+              return [...prev, {
+                id: crypto.randomUUID(),
+                role: 'assistant' as const,
+                content,
+                timestamp: new Date(),
+              }]
+            })
+          }, 2500)
+        }
+        // Thought Process panel pick up run của job (worker cùng process ghi
+        // run tracker — mirror inline path gọi refreshAgentRuns sau response)
+        refreshAgentRuns().catch(() => {})
+      }
+      setSessionsRefreshTick(t => t + 1)
+    } else if (job.status === 'failed') {
+      const errMsg = `❌ Tác vụ nền thất bại${job.error ? `: ${String(job.error).slice(0, 300)}` : ' (không rõ nguyên nhân)'}${job.attempts > 0 ? ` — đã thử lại ${job.attempts} lần sau crash.` : ''}`
+      if (onSession) {
+        setMessages(prev => replaceDurablePlaceholder(prev, job.id, { role: 'error', content: errMsg }))
+      }
+      setSessionsRefreshTick(t => t + 1)
+    } else if (job.status === 'cancelled') {
+      if (onSession) {
+        setMessages(prev => replaceDurablePlaceholder(prev, job.id, {
+          role: 'assistant',
+          content: '⏹ Tác vụ nền đã dừng theo yêu cầu của bạn.',
+        }))
+      }
+      setSessionsRefreshTick(t => t + 1)
+    }
+
+    // Purge khỏi state sau 15s — panel còn kịp thấy badge kết thúc rồi tự ẩn
+    window.setTimeout(() => {
+      setGoalLoopJobs(prev => {
+        if (!prev[job.id]) return prev
+        const next = { ...prev }
+        delete next[job.id]
+        return next
+      })
+    }, 15000)
+  }, [refreshAgentRuns])
+
+  // Poll 1 job — lỗi mạng: retry thầm lặng ở interval sau (KHÔNG toast spam);
+  // 5 lần liên tiếp → dừng poll + log console + placeholder chuyển thông báo.
+  const pollGoalLoopJob = useCallback(async (jobId: string) => {
+    try {
+      const res = await fetch(`/api/goal-loop-jobs?jobId=${encodeURIComponent(jobId)}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json().catch(() => null) as { ok?: boolean; job?: GoalLoopJobApiData } | null
+      if (!data?.ok || !data.job?.id) throw new Error('job response không hợp lệ')
+      delete goalLoopFailsRef.current[jobId]
+      applyGoalLoopJobUpdate(data.job)
+    } catch {
+      const fails = (goalLoopFailsRef.current[jobId] || 0) + 1
+      goalLoopFailsRef.current[jobId] = fails
+      if (fails >= 5) {
+        console.warn(`[GoalLoop] job ${jobId}: dừng poll sau ${fails} lần lỗi liên tiếp — tác vụ vẫn chạy trên server`)
+        const sid = goalLoopJobsRef.current[jobId]?.sessionId
+        delete goalLoopFailsRef.current[jobId]
+        setGoalLoopJobs(prev => {
+          if (!prev[jobId]) return prev
+          const next = { ...prev }
+          delete next[jobId]
+          return next
+        })
+        if (sid && currentSessionIdRef.current === sid) {
+          setMessages(prev => replaceDurablePlaceholder(prev, jobId, {
+            role: 'error',
+            content: '⚠️ Mất kết nối theo dõi tác vụ nền (5 lần lỗi liên tiếp). Tác vụ vẫn chạy trên server — mở lại phiên này để xem kết quả khi hoàn tất.',
+          }))
+        }
+      }
+      // else: retry thầm lặng ở interval sau
+    }
+  }, [applyGoalLoopJobUpdate])
+
+  // Nút Dừng của 1 job durable — POST /api/goal-loop-jobs {jobId, cancel}.
+  // Optimistic: placeholder + panel hiện "Đang yêu cầu dừng…" ngay; poll kế
+  // (≤3s) thấy status cancelled → ⏹ thay placeholder.
+  const cancelGoalLoopJob = useCallback((jobId: string) => {
+    setGoalLoopJobs(prev => (prev[jobId]
+      ? { ...prev, [jobId]: { ...prev[jobId], cancelRequested: true } }
+      : prev))
+    fetch('/api/goal-loop-jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId, action: 'cancel' }),
+    }).catch(() => {
+      // Lỗi mạng — rollback optimistic flag (job vẫn đang chạy)
+      setGoalLoopJobs(prev => (prev[jobId]
+        ? { ...prev, [jobId]: { ...prev[jobId], cancelRequested: false } }
+        : prev))
+      toast({ title: 'Không gửi được yêu cầu dừng', description: 'Lỗi kết nối — thử lại sau', variant: 'destructive' })
+    })
+  }, [])
+
+  // Seed job state NGAY từ response chat durable (trước lần poll đầu) —
+  // placeholder + panel hiện "Đang chờ" tức thì; poll effect tự bắt đầu.
+  const seedGoalLoopJob = useCallback((jobId: string, sessionId: string, agentName: string) => {
+    setGoalLoopJobs(prev => {
+      if (prev[jobId]) return prev
+      return {
+        ...prev,
+        [jobId]: {
+          id: jobId,
+          sessionId,
+          messageId: null,
+          status: 'queued',
+          cyclesDone: 0,
+          progressHint: null,
+          stopReason: null,
+          error: null,
+          attempts: 0,
+          cancelRequested: false,
+          cancelRequestedAt: null,
+          heartbeatAt: null,
+          createdAt: new Date().toISOString(),
+          startedAt: null,
+          completedAt: null,
+          ageMs: 0,
+          stallWarning: false,
+          result: null,
+          agentName,
+        },
+      }
+    })
+  }, [])
+
+  // Job active của PHIÊN ĐANG MỞ — key chuỗi id ổn định (progressHint/ageMs
+  // đổi KHÔNG restart interval; job terminal / đổi phiên → key đổi → dọn poll).
+  const goalLoopActiveKey = useMemo(() => Object.values(goalLoopJobs)
+    .filter(j => j.sessionId === currentSessionId && (j.status === 'queued' || j.status === 'running'))
+    .map(j => j.id)
+    .sort()
+    .join(','), [goalLoopJobs, currentSessionId])
+
+  // Poller 3s (vòng LLM 60-120s — 3s đủ mượt; mirror poller agent-run:
+  // document.hidden skip + clearInterval cleanup). DỌN poll khi: job terminal
+  // / user đổi phiên / component unmount.
+  useEffect(() => {
+    if (!goalLoopActiveKey) return
+    const ids = goalLoopActiveKey.split(',').filter(Boolean)
+    const poll = async () => {
+      if (document.hidden) return
+      for (const id of ids) {
+        const job = goalLoopJobsRef.current[id]
+        if (!job || (job.status !== 'queued' && job.status !== 'running')) continue
+        await pollGoalLoopJob(id)
+      }
+    }
+    poll()
+    const interval = setInterval(poll, 3000)
+    return () => { clearInterval(interval) }
+  }, [goalLoopActiveKey, pollGoalLoopJob])
+
+  // Job list cho panel "Tác vụ nền" — job của phiên đang mở (active + terminal
+  // chưa purge 15s), cũ nhất trước.
+  const goalLoopPanelJobs = useMemo(() => Object.values(goalLoopJobs)
+    .filter(j => j.sessionId === currentSessionId)
+    .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1)), [goalLoopJobs, currentSessionId])
 
   // ===== USER REQUEST 2026-08-31 — DỪNG tác vụ Agents bằng cách bấm nút Gửi lần nữa =====
   // Khi agent đang chạy (isLoading), nút Gửi biến thành nút DỪNG:
@@ -10294,6 +10823,35 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
         console.log('[Smolab] Response về sau khi user đổi phiên — bỏ qua append client-side (đã lưu DB)')
         return
       }
+
+      // ===== GĐ4 CI-5 (Task 14-e) — DURABLE GOAL LOOP: server đã ENQUEUE job
+      // nền và trả jobId NGAY (ENABLE_DURABLE_GOAL_LOOP=true). KHÔNG coi là
+      // lỗi — request đã xong: tắt spinner bình thường (finally), append 1
+      // PLACEHOLDER assistant message (goalLoopJobId) sẽ được thay bằng câu
+      // trả lời thật khi poll /api/goal-loop-jobs thấy job completed, và
+      // KHÔNG append message assistant thứ hai. Response KHÔNG có durable/
+      // jobId (flag OFF / đường thường) → nhánh này dormant 100%.
+      if (data.durable && data.jobId) {
+        const jobId = String(data.jobId)
+        const placeholderContent = String(
+          data.content || `⏳ Tác vụ đã vào hàng đợi nền (job ${jobId.slice(0, 12)}…) — Phiên chat sẽ tự cập nhật khi hoàn tất.`
+        )
+        setMessages(prev => [...prev, {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: placeholderContent,
+          timestamp: new Date(),
+          model: data.model,
+          provider: data.provider,
+          goalLoopJobId: jobId,
+        }])
+        // Seed job state (tên agent từ chatBody để panel + placeholder hiển
+        // thị ngay) → poll effect 3s tự bắt đầu.
+        seedGoalLoopJob(jobId, sessionId, String(chatBody.agentProfileName || 'Agent'))
+        // LIVE VOICE: đọc thông báo xếp hàng (kết quả thật đến qua poll)
+        return placeholderContent
+      }
+
       // LIVE VOICE (user request 2026-08-28): nội dung câu trả lời — hoisted
       // ra ngoài để return cho useVoiceLive đọc thành giọng nói sau khi xong.
       const content = String(data.content || 'Không thể tạo câu trả lời.')
@@ -10379,7 +10937,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
       // background → isLoading giữ nguyên đúng với phiên đó
       setIsLoading(inFlightChatsRef.current.has(currentSessionIdRef.current))
     }
-  }, [input, isLoading, messages, selectedModel, currentSessionId, chatMode, selectedAgentId, selectedTeam, smolabAgents, startWorkflow, refreshAgentRuns])
+  }, [input, isLoading, messages, selectedModel, currentSessionId, chatMode, selectedAgentId, selectedTeam, smolabAgents, startWorkflow, refreshAgentRuns, seedGoalLoopJob])
 
   // ===== LIVE VOICE (user request 2026-08-28) — nút Live cạnh nút Gửi =====
   // Nói tiếng Việt → ASR → văn bản trong khung nhập. Tự gửi khi thỏa CẢ HAI:
@@ -10981,6 +11539,14 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
               )}
             </div>
 
+            {/* ===== GĐ4 CI-5 (14-e) — Panel "Tác vụ nền" (durable goal-loop job
+                monitor — roadmap B7): chỉ hiện khi có job của phiên đang mở
+                (active hoặc vừa kết thúc — purge khỏi state sau 15s → panel tự
+                ẩn, KHÔNG chiếm không gian khi rảnh). ===== */}
+            {goalLoopPanelJobs.length > 0 && (
+              <GoalLoopJobsPanel jobs={goalLoopPanelJobs} onCancel={cancelGoalLoopJob} />
+            )}
+
             {/* Messages List — USER REQUEST 2026-09-01: onScroll theo dõi vị trí
                 (gần cuối → auto-scroll tin mới; chạm đầu → load tin cũ hơn) */}
             <div
@@ -11161,6 +11727,17 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                       <div className="max-w-[85%] p-2.5 bg-gradient-to-r from-cyan-600/80 to-teal-700/80 text-white">
                         <p className="text-base whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                       </div>
+                    ) : (msg.goalLoopJobId && goalLoopJobs[msg.goalLoopJobId]
+                        && (goalLoopJobs[msg.goalLoopJobId].status === 'queued' || goalLoopJobs[msg.goalLoopJobId].status === 'running')) ? (
+                      /* GĐ4 CI-5 (14-e): placeholder job durable đang chạy —
+                         spinner + progressHint live + ⚠ stall + nút Dừng riêng.
+                         Job terminal → placeholder đã bị THAY bằng message thật
+                         (goalLoopJobId đã dọn) → rơi xuống bubble thường. */
+                      <DurableGoalLoopBubble
+                        msg={msg}
+                        job={goalLoopJobs[msg.goalLoopJobId]}
+                        onCancel={cancelGoalLoopJob}
+                      />
                     ) : (
                     <div className={`max-w-[85%] p-2.5 ${
                       msg.role === 'tool_call'

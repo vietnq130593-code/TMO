@@ -266,6 +266,14 @@ export function startAgentRun(params: {
   mode?: 'standalone' | 'team'
   /** Task 20-c — 'caller' = goal-loop tự persist AgentRunRecord (dedup) */
   dbPersistBy?: 'tracker' | 'caller'
+  /**
+   * CI-5 (Task 14-b) — runId override cho RESUME durable goal-loop: run khôi
+   * phục từ checkpoint phải DÙNG LẠI runId cũ (todos CI-2 keyed theo runId +
+   * AgentRunRecord + panel Thought Process liền mạch "1 chat run = 1 run").
+   * Không truyền / rỗng → sinh mới như cũ (behavior mọi caller hiện có giữ
+   * nguyên 100%).
+   */
+  runId?: string
 }): string | null {
   try {
     const { sessionId, agentName } = params
@@ -275,7 +283,7 @@ export function startAgentRun(params: {
     // chỉ tác dụng lên các run đang chạy, không giết request kế tiếp của user.
     reg.cancelledSessions.delete(sessionId)
     const run: AgentRun = {
-      runId: `run_${Date.now()}_${++runSeq}`,
+      runId: params.runId && params.runId.trim() !== '' ? params.runId : `run_${Date.now()}_${++runSeq}`,
       sessionId,
       agentName: agentName.slice(0, 40),
       agentPosition: params.agentPosition?.slice(0, 12),

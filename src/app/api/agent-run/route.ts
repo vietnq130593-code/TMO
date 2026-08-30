@@ -14,7 +14,9 @@
  *   - Mọi run 'running' của session → status 'cancelled'
  *   - Đặt flag cancel → ReAct loops (chat route + workflow-engine) và chuỗi
  *     xoay vòng key LLM (llm.ts callModelWithKeyRotation) cắt ngang sớm.
- *   - Request GỬI TIẾP THEO của user không bị ảnh hưởng (startAgentRun xóa flag).
+ *   - Request GỬI TIẬP THEO của user không bị ảnh hưởng (startAgentRun xóa flag).
+ *   - CI-5 (Task 14-c): đồng thời hủy mọi durable goal-loop job của session
+ *     (fail-open — response shape không đổi).
  *
  * Nguồn: src/lib/agent-run-tracker.ts (in-memory registry trên globalThis,
  * được ghi bởi ReAct loops — chat route + workflow-engine — và executeTool).
@@ -110,6 +112,26 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: false, error: 'missing `sessionId`' }, { status: 400 })
     }
     const cancelled = cancelSessionRuns(sessionId)
+
+    // CI-5 (GĐ4, Task 14-c) — FAIL-OPEN: hủy luôn mọi durable goal-loop job
+    // của session (queued → cancelled; running → DB flag cancelRequestedAt —
+    // loop worker tự thoát ở vòng check kế, sống sót qua restart). Nút Dừng
+    // hiện có tự hủy durable job — KHÔNG đổi response shape: `cancelled` vẫn
+    // là số run in-memory như cũ, số job durable chỉ log. Dynamic import để
+    // GET poll (mỗi ~1.2s) không phải nạp module worker nặng.
+    try {
+      const { goalLoopWorker } = await import('@/lib/goal-loop-worker')
+      const cancelledJobs = await goalLoopWorker.cancelSessionJobs(sessionId)
+      if (cancelledJobs > 0) {
+        console.log(`[AgentRun] Nút Dừng: đã hủy ${cancelledJobs} durable goal-loop job của session ${sessionId}`)
+      }
+    } catch (glErr) {
+      console.warn(
+        '[AgentRun] cancelSessionJobs lỗi (fail-open — run in-memory vẫn đã hủy):',
+        glErr instanceof Error ? glErr.message : String(glErr)
+      )
+    }
+
     return NextResponse.json({ ok: true, cancelled, serverTs: Date.now() })
   } catch (err) {
     return NextResponse.json(

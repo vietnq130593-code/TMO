@@ -105,6 +105,12 @@ import { archiveContext, recallContext } from '@/lib/context-store'
 // SYSTEM_PROMPT_BUDGET_CHARS (mặc định 24k) → cắt block priority thấp nhất
 // giữ đầu. Tổng < budget → prompt GIỮ NGUYÊN 100%.
 import { budgetPrompt } from '@/lib/prompt-budget'
+// CI-5 (Task 14-b) — DURABLE GOAL LOOP: contract types dùng chung với worker
+// nền (14-a, goal-loop-worker.ts) — TYPE-ONLY import (erased lúc build, 0
+// runtime dependency, không circular). Khi `durable` KHÔNG được truyền vào
+// runGoalDrivenLoop → mọi hooks inert → hành vi inline cũ GIỮ NGUYÊN 100%
+// (đường chat route + tests hiện có không hề hay biết hooks tồn tại).
+import type { GoalLoopCheckpoint, GoalLoopDurableHooks } from '@/lib/goal-loop-durable-types'
 
 /** Gọn args để nhét vào working memory (chống phình) */
 function compactToolArgs(args: Record<string, unknown>, maxLen = 120): string {
@@ -967,6 +973,20 @@ export async function runGoalDrivenLoop(params: {
   agentMaxTokens?: number
   agentTools?: string[]
   agentSessionId?: string | null
+  /**
+   * CI-5 (Task 14-b) — DURABLE HOOKS (worker nền 14-a truyền vào). HOÀN TOÀN
+   * optional — không truyền = hành vi inline cũ 100% (feature flag off path):
+   *   - resumeState  → khôi phục từ checkpoint sau crash/restart: messages dùng
+   *                    snapshot (KHÔNG build lại từ chatHistory), counters/
+   *                    verdict/fingerprint... khôi phục, runId tracker DÙNG LẠI
+   *   - onCheckpoint → worker ghi checkpoint vào DB (throttle bên worker) —
+   *                    gọi mỗi vòng inner loop + cuối mỗi chu kỳ + trước return
+   *   - onSignal     → heartbeat tín hiệu sống (iteration/tool_batch/compression/cycle)
+   *   - cancelCheck  → override isSessionCancelled in-memory (nút Dừng qua DB
+   *                    flag cancelRequestedAt — sống qua restart)
+   * Mọi hook fail-open: lỗi durable KHÔNG BAO GIỜ được làm hỏng vòng lặp.
+   */
+  durable?: GoalLoopDurableHooks
 }): Promise<GoalLoopResult> {
   const {
     systemPrompt,
@@ -980,6 +1000,7 @@ export async function runGoalDrivenLoop(params: {
     agentMaxTokens,
     agentTools = [],
     agentSessionId = null,
+    durable,
   } = params
 
   const startedAt = Date.now()
@@ -1027,6 +1048,10 @@ export async function runGoalDrivenLoop(params: {
     agentName,
   })
 
+  // CI-5 (Task 14-b) — RESUME: capture 1 lần, mọi nhánh dưới guard bằng
+  // resumeState → đường inline (không truyền durable) KHÔNG đổi hành vi.
+  const resumeState = durable?.resumeState
+
   // ===== Thought Process tracking — 1 run cho toàn bộ goal loop =====
   // Task 20-c: dbPersistBy 'caller' → tracker KHÔNG insert AgentRunRecord khi
   // run kết thúc (goal-loop tự insert lúc start + update đầy đủ metadata lúc
@@ -1037,19 +1062,45 @@ export async function runGoalDrivenLoop(params: {
     task: userMessage,
     mode: 'standalone',
     dbPersistBy: 'caller',
+    // CI-5 (14-b): resume DÙNG LẠI runId cũ — todos CI-2 keyed theo runId +
+    // AgentRunRecord + panel Thought Process liền mạch "1 chat run = 1 run".
+    runId: resumeState?.runId ?? undefined,
   })
   // Task 20-c — INSERT row AgentRunRecord 'running' lúc START: runs.active
   // (Runtime Metrics panel) ≠ 0 trong lúc agent đang chạy. Fire-and-forget,
   // fail-open — metrics không được phép làm hỏng loop.
+  //
+  // CI-5 (Task 14-b) — khi RESUME: KHÔNG insert row mới (row 'running' đã có
+  // từ lần chạy trước crash — mục tiêu "1 chat run = 1 row AgentRunRecord",
+  // không duplicate). Thay bằng fire-and-forget UPDATE row cũ (refresh
+  // startedAt = lúc resume — báo hiệu run đang sống lại; row này sẽ được
+  // updateLatestAgentRunRecord update đầy đủ khi run kết thúc như thường).
+  // Lưu ý: schema AgentRunRecord KHÔNG có cột runId/updatedAt → where theo
+  // (sessionId, status='running') — đúng row của run này vì mọi lần resume
+  // đều skip insert nên không tích lũy row 'running' khác trong session.
+  // Dynamic import @/lib/db theo pattern sẵn có trong file (fail-open tuyệt
+  // đối — DB lỗi không được phép làm hỏng loop).
   if (agentSessionId) {
-    try {
-      void insertAgentRunRecordRunning({
-        sessionId: agentSessionId,
-        agentId,
-        agentName,
-        startedAt: new Date(startedAt),
-      }).catch(() => { /* fail-open */ })
-    } catch { /* fail-open */ }
+    if (resumeState) {
+      try {
+        void (async () => {
+          const { db } = await import('@/lib/db')
+          await db.agentRunRecord.updateMany({
+            where: { sessionId: agentSessionId, status: 'running' },
+            data: { startedAt: new Date(startedAt) },
+          })
+        })().catch(() => { /* fail-open — resume không được phép fail vì metrics */ })
+      } catch { /* fail-open */ }
+    } else {
+      try {
+        void insertAgentRunRecordRunning({
+          sessionId: agentSessionId,
+          agentId,
+          agentName,
+          startedAt: new Date(startedAt),
+        }).catch(() => { /* fail-open */ })
+      } catch { /* fail-open */ }
+    }
   }
   let runEnded = false
   const endRun = (status: 'done' | 'error' | 'cancelled') => {
@@ -1057,7 +1108,12 @@ export async function runGoalDrivenLoop(params: {
     runEnded = true
     endAgentRun(agentSessionId, runId, status, `${totalIterations} vòng · ${totalToolCalls} tool calls · ${cyclesDone} chu kỳ hoàn thành${cyclesAttempted > cyclesDone ? ` (chu kỳ ${cyclesAttempted} dở)` : ''}`)
   }
-  const isCancelled = () => isSessionCancelled(agentSessionId)
+  // CI-5 (Task 14-b) — worker override cancel check (DB flag cancelRequestedAt
+  // — nút Dừng sống qua restart/app-reload). Không truyền durable.cancelCheck
+  // → đúng hàm in-memory cũ, mọi call site isCancelled()/abortCheck giữ nguyên.
+  const isCancelled: () => boolean = durable?.cancelCheck
+    ? durable.cancelCheck
+    : () => isSessionCancelled(agentSessionId)
 
   // Custom tools registry (agent TỰ VIẾT qua create_custom_tool — dùng ngay được)
   try {
@@ -1071,64 +1127,159 @@ export async function runGoalDrivenLoop(params: {
   // (kind='task_summary' trong Kho Context) của session — đặt TRƯỚC 6 message
   // cuối: summary = bức tranh dài hạn, 6 message gần = chi tiết liền kề.
   // Fail-open bên trong helper: lỗi recall → '' → hành vi cũ nguyên vẹn.
-  const priorTaskSummariesBlock = await buildPriorTaskSummariesBlock(agentSessionId, userMessage)
+  //
+  // CI-5 (Task 14-b) — RESUME: KHÔNG nạp lại (bức tranh dài hạn của run trước
+  // đã nằm sẵn trong messages snapshot — nạp lại là lặp thông tin).
+  const priorTaskSummariesBlock = resumeState ? '' : await buildPriorTaskSummariesBlock(agentSessionId, userMessage)
 
   // ===== Conversation state =====
   // CI-3 B4: có summary block mà tổng context (summary + 6 message cuối) vượt
   // ngưỡng nén → GIẢM 6 message cuối xuống 4 (summary đã thay phần bức tranh
   // dài hạn — tiết kiệm context cho run mới).
+  // (RESUME: priorTaskSummariesBlock luôn '' → historyTake giữ 6, không dùng.)
   let historyTake = 6
   if (priorTaskSummariesBlock) {
     const tailChars = chatHistory.slice(-6).reduce((s, m) => s + (m.content?.length ?? 0), 0)
     if (priorTaskSummariesBlock.length + tailChars > COMPRESS_THRESHOLD_CHARS) historyTake = 4
   }
-  const messages: GoalMessage[] = [
-    { role: 'system', content: fullSystemPrompt },
-    ...(priorTaskSummariesBlock ? [{ role: 'user' as const, content: priorTaskSummariesBlock }] : []),
-    ...chatHistory.slice(-historyTake).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-    { role: 'user', content: userMessage },
-  ]
-  const goalMsgIndex = messages.length - 1
+  // CI-5 (Task 14-b) — RESUME: messages KHÔNG build lại từ chatHistory +
+  // userMessage — dùng NGUYÊN snapshot từ checkpoint (shape khớp GoalMessage:
+  // role/content/tool_call_id; tool_call_id giữ nguyên để CI-3 pairing-splice
+  // nhận diện cặp assistant↔tool khi nén tiếp — xem goal-loop-durable-types).
+  // System message của snapshot (index 0) giữ nguyên nội dung run trước;
+  // formatMessagesForLLM bỏ qua role 'system' (callLLMForAgent nhận system
+  // prompt qua tham số riêng) → không xung đột với fullSystemPrompt lần này.
+  const messages: GoalMessage[] = resumeState
+    ? resumeState.messages.map(m => ({ role: m.role, content: m.content, tool_call_id: m.tool_call_id }))
+    : [
+        { role: 'system', content: fullSystemPrompt },
+        ...(priorTaskSummariesBlock ? [{ role: 'user' as const, content: priorTaskSummariesBlock }] : []),
+        ...chatHistory.slice(-historyTake).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+        { role: 'user', content: userMessage },
+      ]
+  // goalMsgIndex: run thường = index user message cuối — compressConversation
+  // KHÔNG đụng mọi message index <= goalMsgIndex (system + summaries + history
+  // + goal) và mid-cycle trim giữ system + goal.
+  // CI-5 (Task 14-b) — RESUME: snapshot KHÔNG có "goal message cuối" đáng tin
+  // (goal gốc nằm giữa transcript đã nén từ run trước). compressConversation
+  // có semantic "protect range [0..protectedStartIndex]" (workStart =
+  // protectedStartIndex + 1 — xem context-compression.ts) → truyền 0 bảo vệ
+  // ĐÚNG system message (index 0); mọi message index >= 1 được phép nén (CI-3
+  // đã chạy từ run trước, transcript đã có digest — hệ quả cần tránh duy nhất
+  // là nén làm MẤT system prompt). Mid-cycle trim với goalMsgIndex=0 cũng chỉ
+  // giữ system + đuôi gần nhất — chấp nhận được theo cùng lập luận.
+  const goalMsgIndex = resumeState ? 0 : messages.length - 1
   if (priorTaskSummariesBlock) {
     console.log(`[GoalLoop] ${agentName} nạp tóm tắt các tác vụ trước trong session (${priorTaskSummariesBlock.length} chars) trước ${historyTake} message cuối — bức tranh dài hạn cho run mới`)
   }
 
-  const evidence: EvidenceEntry[] = []
+  const evidence: EvidenceEntry[] = resumeState
+    ? resumeState.evidence.map(e => ({ cycle: e.cycle, kind: e.kind, tool: e.tool, success: e.success, text: e.text }))
+    : []
   // [C] Verify-evidence tracking — harness kiểm đếm tool verify theo thứ tự so với tool sửa
+  // (CI-5 14-b: 2 ordinal này KHÔNG thuộc checkpoint contract → reset 0 khi
+  // resume — an toàn vì verify-guard so sánh ordinal TRONG run resumed: 0 = 0
+  // không kích hoạt spurious downgrade.)
   let lastVerifyOrdinal = 0
   let lastModifyOrdinal = 0
   let cycleVerifyEvidence: string[] = []
-  let totalIterations = 0
-  let totalToolCalls = 0
-  let tokensUsed = 0
-  let cyclesDone = 0
+  // CI-5 (Task 14-b) — RESUME: counters khôi phục từ checkpoint (MANG TIẾP —
+  // tokensUsed KHÔNG reset: trung thực tổng chi phí của run; budget thời gian
+  // vẫn tính từ startedAt của lần chạy này — đúng chủ đích).
+  let totalIterations = resumeState?.counters.totalIterations ?? 0
+  let totalToolCalls = resumeState?.counters.totalToolCalls ?? 0
+  let tokensUsed = resumeState?.counters.tokensUsed ?? 0
+  let cyclesDone = resumeState?.counters.cyclesDone ?? 0
   /** Chu kỳ đã BẮT ĐẦU (kể cả đang dở) — dùng cho report/metadata trung thực:
    *  budget cắt giữa chu kỳ 1 → "1 chu kỳ (dở)", không phải 0 hay 1 hoàn thành */
-  let cyclesAttempted = 0
+  let cyclesAttempted = resumeState?.counters.cyclesAttempted ?? 0
   /** [E] Số lần nén context đã thực hiện */
-  let compressions = 0
+  let compressions = resumeState?.counters.compressions ?? 0
   /** [F] Số lần delegate + token sub-agent tiêu thụ (báo cáo lên metadata) */
-  let delegations = 0
-  let subagentTokens = 0
+  let delegations = resumeState?.counters.delegations ?? 0
+  let subagentTokens = resumeState?.counters.subagentTokens ?? 0
   /** [G] Số lần auto-escalate hỏi Omega + advisory đang chờ inject */
-  let escalations = 0
+  let escalations = resumeState?.counters.escalations ?? 0
   let omegaConsulted = false
   let omegaAdvisory = ''
-  let lastContent = ''
+  let lastContent = resumeState?.lastContent ?? ''
   /** Lỗi LLM gần nhất (result.error) — surface lên báo cáo cuối thay vì nuốt lỗi */
-  let lastLlmError = ''
+  let lastLlmError = resumeState?.lastLlmError ?? ''
   /** 21-d: số lần đẩy feedback parse-fail (tool call bị cắt cụt giữa JSON khi
    *  output đạt maxTokens) — chống loop vô hạn nếu LLM liên tục phát JSON lỗi. */
-  let parseFailNudges = 0
-  let lastVerdict: EvalVerdict | null = null
+  let parseFailNudges = resumeState?.counters.parseFailNudges ?? 0
+  // CI-5 (14-b) — resume khôi phục verdict từ snapshot (bỏ field `raw` lớn —
+  // snapshot không lưu; raw chỉ dùng debug/fallback heuristic, '' an toàn).
+  let lastVerdict: EvalVerdict | null = resumeState?.verdict
+    ? {
+        complete: resumeState.verdict.complete,
+        confidence: resumeState.verdict.confidence,
+        verified: resumeState.verdict.verified,
+        missing: resumeState.verdict.missing,
+        rootCause: resumeState.verdict.rootCause,
+        nextPlan: resumeState.verdict.nextPlan,
+        raw: '',
+      }
+    : null
   let stopReason: GoalStopReason = 'max_cycles'
-  let prevFingerprint = ''
-  let noProgressCount = 0
+  let prevFingerprint = resumeState?.fingerprint ?? ''
+  let noProgressCount = resumeState?.noProgressCount ?? 0
   /** [B4] CI-1 — số chu kỳ LIÊN TIẾP không có tool call THÀNH CÔNG nào
    *  (stall brake). Khi budget unlimited đây là phanh an toàn chính thay budget. */
-  let stallCycles = 0
+  let stallCycles = resumeState?.stallCycles ?? 0
   /** Chu kỳ trước có bị cắt giữa chừng (hết vòng / hết budget) không */
-  let cutMidWorkPrev = false
+  let cutMidWorkPrev = resumeState?.cutMidWorkPrev ?? false
+
+  // ================== CI-5 (Task 14-b) — DURABLE HOOK HELPERS ==================
+  // Worker nền (14-a) truyền hooks; khi `durable` không truyền → mọi helper
+  // return ngay (0 side-effect) → đường inline cũ KHÔNG đổi. Hook có thể sync
+  // hoặc async — Promise kết quả được .catch() nuốt im lặng (fail-open tuyệt
+  // đối: lỗi checkpoint/heartbeat KHÔNG BAO GIỜ làm hỏng vòng lặp).
+  /** Snapshot đầy đủ state loop tại thời điểm gọi — worker persist làm checkpoint */
+  const buildCheckpoint = (): GoalLoopCheckpoint => ({
+    version: 1,
+    runId,
+    messages: messages.map(m => ({ role: m.role, content: m.content, tool_call_id: m.tool_call_id })),
+    evidence: evidence.slice(-120).map(e => ({ cycle: e.cycle, kind: e.kind, tool: e.tool, success: e.success, text: e.text })),
+    counters: { cyclesDone, cyclesAttempted, totalIterations, totalToolCalls, tokensUsed, compressions, delegations, subagentTokens, escalations, parseFailNudges },
+    verdict: lastVerdict
+      ? {
+          complete: lastVerdict.complete,
+          confidence: lastVerdict.confidence,
+          verified: lastVerdict.verified,
+          missing: lastVerdict.missing,
+          rootCause: lastVerdict.rootCause,
+          nextPlan: lastVerdict.nextPlan,
+        }
+      : null,
+    fingerprint: prevFingerprint,
+    noProgressCount,
+    stallCycles,
+    cutMidWorkPrev,
+    lastContent,
+    lastLlmError,
+    savedAt: Date.now(),
+  })
+  /** Fire onCheckpoint (sync/async) — fail-open */
+  const fireCheckpoint = (): void => {
+    if (!durable?.onCheckpoint) return
+    try {
+      const r = durable.onCheckpoint(buildCheckpoint())
+      if (r && typeof (r as unknown as { catch?: unknown }).catch === 'function') {
+        ;(r as Promise<void>).catch(() => { /* fail-open */ })
+      }
+    } catch { /* fail-open — checkpoint KHÔNG BAO GIỜ làm hỏng loop */ }
+  }
+  /** Fire onSignal heartbeat (sync/async) — fail-open */
+  const fireSignal = (signal: 'iteration' | 'tool_batch' | 'compression' | 'cycle'): void => {
+    if (!durable?.onSignal) return
+    try {
+      const r = durable.onSignal(signal)
+      if (r && typeof (r as unknown as { catch?: unknown }).catch === 'function') {
+        ;(r as Promise<void>).catch(() => { /* fail-open */ })
+      }
+    } catch { /* fail-open */ }
+  }
 
   // CI-1 (0 = UNLIMITED): cap = 0 → không trần → Infinity. Toàn bộ điểm check
   // `timeLeft() <= 0` / `tokenLeft() <= REPORT_RESERVE_TOKENS` (6 chỗ) tự động
@@ -1138,10 +1289,21 @@ export async function runGoalDrivenLoop(params: {
 
   console.log(`[GoalLoop] ${agentName} bắt đầu — mục tiêu: "${userMessage.slice(0, 100)}" (max ${fmtCap(MAX_CYCLES)} chu kỳ × ${fmtCap(ITER_PER_CYCLE)} vòng, budget ${TIME_BUDGET_MS === 0 ? '∞' : `${Math.round(TIME_BUDGET_MS / 60000)}'`} / ${TOKEN_BUDGET === 0 ? '∞ tokens (KHÔNG GIỚI HẠN — CI-1)' : `${TOKEN_BUDGET} tokens, reserve ${REPORT_RESERVE_TOKENS} cho evaluate + báo cáo cuối`}, nén context @${COMPRESS_THRESHOLD_CHARS} chars${agentTools.includes('delegate_task') ? ', delegate_task BẬT' : ''})`)
 
+  // CI-5 (Task 14-b) — RESUME: chu kỳ bắt đầu = cyclesAttempted + 1 (chu kỳ
+  // đã BẮT ĐẦU kể cả dở được tính là đã attempt — checkpoint theo VÒNG nên
+  // tối đa replay 1 vòng LLM: vòng in-flight lúc crash). startedAt giữ
+  // Date.now() ở trên — budget THỜI GIAN tính từ lúc resume (đúng chủ đích:
+  // budget là của lần chạy này); tokensUsed đã mang tiếp từ checkpoint.
+  const resumeStartCycle = resumeState ? resumeState.counters.cyclesAttempted + 1 : 1
+  if (resumeState) {
+    console.log(`[GoalLoop] ${agentName} RESUME từ checkpoint — chu kỳ ${resumeStartCycle}, ${totalIterations} vòng đã chạy, ${messages.length} messages, runId ${runId}`)
+  }
+
   // ================== OUTER CYCLE LOOP ==================
   // CI-1 (0 = UNLIMITED): MAX_CYCLES = 0 → KHÔNG trần chu kỳ (loop chỉ dừng
   // bởi complete / no-progress brake / cancel / error).
-  outerLoop: for (let cycle = 1; MAX_CYCLES === 0 || cycle <= MAX_CYCLES; cycle++) {
+  // CI-5 (14-b): resume bắt đầu từ chu kỳ kế của checkpoint (resumeStartCycle).
+  outerLoop: for (let cycle = resumeStartCycle; MAX_CYCLES === 0 || cycle <= MAX_CYCLES; cycle++) {
     if (isCancelled()) { stopReason = 'cancelled'; break }
     if (timeLeft() <= 0) { stopReason = 'time_budget'; break }
     // [A] Không bắt đầu chu kỳ mới nếu chỉ còn token reserve (dành cho final report)
@@ -1172,6 +1334,8 @@ export async function runGoalDrivenLoop(params: {
       // [A] Reserve token cho evaluate cuối + final report — EXECUTE dừng ở
       // ngưỡng reserve thay vì đợi cạn kiệt về 0 (báo cáo không bị cắt giữa chừng)
       if (timeLeft() <= 0 || tokenLeft() <= REPORT_RESERVE_TOKENS) { endedBy = 'budget'; break }
+      // CI-5 (14-b) — heartbeat: tín hiệu sống đầu mỗi vòng (ngay sau cancel/budget check)
+      fireSignal('iteration')
       cycleIterations++
       totalIterations++
 
@@ -1199,6 +1363,8 @@ export async function runGoalDrivenLoop(params: {
           // cũ — request sau trong session đọc lại được ngay qua HOT digest).
           recordWorkMemory(agentId, agentSessionId, `📦 [context-digest] ${comp.digest.slice(0, 400)}`, 0.75)
           recordAgentThought(agentSessionId, `📦 Nén context #${compressions}: tiết kiệm ~${Math.round(comp.savedChars / 1000)}k ký tự (${comp.method === 'llm' ? 'LLM digest' : 'heuristic'}) — phần cũ đã thành tóm tắt, message gần nhất giữ nguyên`, totalIterations)
+          // CI-5 (14-b) — heartbeat sau lần nén context THÀNH CÔNG
+          fireSignal('compression')
         }
       } catch { /* fail-open — nén lỗi không được phép làm hỏng vòng lặp */ }
 
@@ -1416,6 +1582,16 @@ export async function runGoalDrivenLoop(params: {
           }
         } catch { /* fail-open — auto-complete không được phép làm hỏng loop */ }
       }
+
+      // CI-5 (Task 14-b) — CHECKPOINT CUỐI MỖI VÒNG inner loop + heartbeat
+      // tool_batch: đây là điểm ĐẦU TIÊN mà messages (assistant + tool results
+      // của batch) + evidence + counters đều đã cập nhật đầy đủ — checkpoint
+      // ở đây bảo đảm kill -9 ngay sau batch chỉ replay tối đa 1 vòng LLM
+      // (đặt TRƯỚC các break cancel/budget để vòng sắp break vẫn được chốt
+      // state). Biến cục bộ chu kỳ (cycleToolCalls...) KHÔNG thuộc checkpoint
+      // — chỉ state toàn cục loop. Fail-open (fireCheckpoint tự nuốt lỗi).
+      fireCheckpoint()
+      fireSignal('tool_batch')
 
       if (isCancelled()) { endedBy = 'cancelled'; break }
       if (timeLeft() <= 0 || tokenLeft() <= REPORT_RESERVE_TOKENS) { endedBy = 'budget'; break }
@@ -1661,6 +1837,14 @@ export async function runGoalDrivenLoop(params: {
     // Budget check sau evaluation (đã tốn thêm 1 call)
     if (timeLeft() <= 0) { stopReason = 'time_budget'; break }
     if (tokenLeft() <= REPORT_RESERVE_TOKENS) { stopReason = 'token_budget'; break }
+
+    // CI-5 (Task 14-b) — CHECKPOINT + HEARTBEAT CUỐI MỖI CHU KỲ: ranh giới quan
+    // trọng nhất (cyclesDone đã tăng + verdict chu kỳ đã có + escalate/stall
+    // brake đã xong) — trước khi chu kỳ kế tiếp bắt đầu. Các đường break sớm
+    // (complete / budget / no_progress / cancel) không qua điểm này nhưng đều
+    // hội tụ về checkpoint-final ngay trước return của runGoalDrivenLoop.
+    fireCheckpoint()
+    fireSignal('cycle')
 
     // Chu kỳ kế tiếp: evaluator đã chẩn đoán + kế hoạch → continuation directive
   }
@@ -1914,6 +2098,18 @@ export async function runGoalDrivenLoop(params: {
       }
     }).catch(() => { /* fail-open — episodic memory không được làm hỏng response */ })
   } catch { /* fail-open */ }
+
+  // CI-5 (Task 14-b) — CHECKPOINT CUỐI (final): runGoalDrivenLoop có DUY NHẤT 1
+  // return — mọi exit path (complete / max_cycles / budget / no_progress /
+  // cancelled / error) đều hội tụ về đây. REVIEW 14-g L4 (sửa doc-code
+  // mismatch): worker phân biệt "job XONG" vs "crash giữa chừng" qua STATUS
+  // DB (terminal mark chạy sau checkpoint này) — KHÔNG đọc savedAt. Nếu
+  // process chết giữa final-checkpoint và terminal mark: sweep requeue →
+  // replay 1 "chu kỳ zombie" (chạy lại evaluate/final-report — bounded, không
+  // infinite loop vì attempts tăng dần tới max). Checkpoint cuối giúp replay
+  // đó hội tụ nhanh (state kết thúc nằm sẵn trong messages snapshot).
+  // Fail-open như mọi hook.
+  fireCheckpoint()
 
   return {
     content,

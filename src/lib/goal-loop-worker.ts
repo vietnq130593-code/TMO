@@ -1,0 +1,854 @@
+/**
+ * CI-5 (GĐ4, Task 14-a) — DURABLE GOAL LOOP WORKER
+ * =================================================
+ *
+ * Worker nền chạy goal-loop tác vụ nhiều giờ, sống sót qua restart/đóng tab
+ * (kiến trúc chốt ở worklog 14-0 — xem contract: goal-loop-durable-types.ts):
+ *
+ *   POST /api/openclaw/chat → enqueue GoalLoopJob (DB) → trả jobId ngay
+ *   → worker này tick mỗi GOAL_LOOP_WORKER_TICK_MS (5s) poll DB
+ *   → claim job bằng updateMany conditional (atomic lock)
+ *   → chạy tối đa GOAL_LOOP_MAX_CONCURRENT (2) job song song
+ *   → checkpoint SAU MỖI VÒNG (throttle 3s + force khi sang chu kỳ mới)
+ *   → hoàn thành → mark completed → finalize seam (Task 14-c).
+ *
+ * DB LÀ QUEUE — không cần in-memory queue riêng. PM2 fork single-instance →
+ * Map `running` trong process này là authoritative cho orphan detection:
+ * job status='running' trong DB mà KHÔNG nằm trong Map = mồ côi (process cũ
+ * chết) → orphan sweep requeue nếu attempts < GOAL_LOOP_MAX_ATTEMPTS, else
+ * mark failed. Cơ chế này xử lý CẢ boot-recovery lẫn steady-state crash
+ * detection bằng một đường duy nhất (recoverPending() chỉ là sweep chạy ngay
+ * lúc boot cho log rõ ràng).
+ *
+ * Nguyên tắc BẮT BUỘC: mọi DB write trong tick/heartbeat/checkpoint path đều
+ * fail-open — worker KHÔNG BAO GIỜ throw làm chết interval. Job đang chạy
+ * trong process này KHÔNG bị stall-kill (LLM call hợp lệ tối đa 8' + tool
+ * time) — stale heartbeat chỉ cảnh báo UI (GOAL_LOOP_STALL_WARN_MS).
+ */
+
+import type { GoalLoopJob } from '@prisma/client'
+import { db } from '@/lib/db'
+import { runGoalDrivenLoop, type GoalLoopResult } from '@/lib/agent-goal-loop'
+import {
+  GOAL_LOOP_CHECKPOINT_MIN_INTERVAL_MS,
+  GOAL_LOOP_HEARTBEAT_MIN_INTERVAL_MS,
+  GOAL_LOOP_MAX_ATTEMPTS,
+  GOAL_LOOP_MAX_CONCURRENT,
+  GOAL_LOOP_STALL_WARN_MS,
+  GOAL_LOOP_WORKER_TICK_MS,
+  type GoalLoopCheckpoint,
+  type GoalLoopDurableHooks,
+  type GoalLoopJobInput,
+  type GoalLoopJobStatus,
+} from '@/lib/goal-loop-durable-types'
+
+// ==================== TYPES ====================
+
+/** Trạng thái in-memory của 1 job đang chạy trong process này. */
+interface RunningJobMeta {
+  /** Epoch ms lúc process này claim job */
+  startedAt: number
+  /** Epoch ms lần ghi heartbeat cuối (throttle onSignal) */
+  lastHeartbeatWrite: number
+  /** Epoch ms lần ghi checkpoint THÀNH CÔNG cuối (throttle onCheckpoint) */
+  lastCheckpointWrite: number
+  /** cyclesDone đã ghi DB thành công lần cuối — force-write khi sang chu kỳ mới */
+  lastWrittenCyclesDone: number
+  /** Flag cancel set bởi cancel()/cancelSessionJobs() — cancelCheck() đọc */
+  cancelRequested: boolean
+  /** REVIEW 14-g M2 — sessionId của job đang chạy: mutual-exclusion per-session
+   *  (chatHistory snapshot của job sau phải chứa kết quả job trước — 2 job
+   *  cùng session chạy song song sẽ đan xen ChatMessage + resolve sai). */
+  sessionId: string
+}
+
+/**
+ * View job cho API /api/goal-loop-jobs (Task 14-c) — KHÔNG trả input/
+ * checkpoint raw (quá lớn), chỉ trả metadata + progressHint parse từ
+ * checkpoint counters. result (GoalLoopResult đã parse) CHỈ có ở getJobStatus.
+ */
+export interface GoalLoopJobView {
+  id: string
+  sessionId: string
+  messageId: string | null
+  status: GoalLoopJobStatus
+  cyclesDone: number
+  stopReason: string | null
+  error: string | null
+  attempts: number
+  cancelRequested: boolean
+  heartbeatAt: string | null
+  createdAt: string
+  startedAt: string | null
+  completedAt: string | null
+  /** Tuổi job tính từ lúc enqueue (ms) */
+  ageMs: number
+  /** true khi running mà heartbeat stale > GOAL_LOOP_STALL_WARN_MS (UI cảnh báo stall — job vẫn chạy) */
+  stallWarning: boolean
+  /** vd "chu kỳ 2 · 15 vòng · 42 tool calls" — parse từ checkpoint counters */
+  progressHint: string | null
+  /** Chỉ có ở getJobStatus — GoalLoopResult đã parse (content final + metadata) */
+  result?: GoalLoopResult | null
+}
+
+/** Row Prisma sau select — dùng chung cho getJobStatus/listJobs. */
+type GoalLoopJobViewRow = Pick<
+  GoalLoopJob,
+  | 'id'
+  | 'sessionId'
+  | 'messageId'
+  | 'status'
+  | 'cyclesDone'
+  | 'stopReason'
+  | 'error'
+  | 'attempts'
+  | 'cancelRequestedAt'
+  | 'heartbeatAt'
+  | 'createdAt'
+  | 'startedAt'
+  | 'completedAt'
+  | 'checkpoint'
+> & { result?: string | null }
+
+// ==================== WORKER ====================
+
+class GoalLoopWorker {
+  /** Job đang chạy trong process này — key: jobId, value: meta. Authoritative
+   * cho orphan detection (PM2 single-instance): job DB-running KHÔNG có trong
+   * Map = mồ côi của process cũ. */
+  private running: Map<string, RunningJobMeta> = new Map()
+
+  /** Guard chống 2 tick chồng nhau khi DB chậm (claim vẫn an toàn nhờ
+   * updateMany conditional — guard này chỉ giảm churn không đổi tính đúng) */
+  private tickInFlight = false
+
+  private started = false
+  private intervalHandle: ReturnType<typeof setInterval> | null = null
+
+  // -------------------- ENQUEUE --------------------
+
+  /**
+   * Enqueue 1 job goal-loop mới — tạo row status='queued' và trả jobId NGAY
+   * (route chat 14-c dùng cho response durable). KHÔNG đánh thức worker thủ
+   * công — tick kế tiếp (≤5s) tự claim — đơn giản, không race.
+   */
+  async enqueue(input: {
+    sessionId: string
+    messageId?: string | null
+    jobInput: GoalLoopJobInput
+  }): Promise<string> {
+    const job = await db.goalLoopJob.create({
+      data: {
+        sessionId: input.sessionId,
+        messageId: input.messageId ?? null,
+        status: 'queued',
+        input: JSON.stringify(input.jobInput),
+      },
+    })
+    console.log(
+      `[GoalLoopWorker] enqueue job ${job.id} — session ${input.sessionId} — goal: "${input.jobInput.userMessage.slice(0, 80)}"`
+    )
+    return job.id
+  }
+
+  // -------------------- LIFECYCLE --------------------
+
+  /** Bật worker — idempotent (đã start thì return). TICK=0 → không start. */
+  start(): void {
+    if (this.started) return
+    this.started = true
+    if (GOAL_LOOP_WORKER_TICK_MS <= 0) {
+      console.log('[GoalLoopWorker] GOAL_LOOP_WORKER_TICK_MS=0 — worker tắt hẳn (không tick)')
+      return
+    }
+    console.log(
+      `[GoalLoopWorker] start — tick mỗi ${GOAL_LOOP_WORKER_TICK_MS}ms, tối đa ${GOAL_LOOP_MAX_CONCURRENT} job song song, stall-warn ${GOAL_LOOP_STALL_WARN_MS}ms, max-attempts ${GOAL_LOOP_MAX_ATTEMPTS}`
+    )
+    // Tick handler KHÔNG throw (tick wrap try/catch toàn bộ bên trong) —
+    // interval không bao giờ chết vì lỗi 1 tick.
+    this.intervalHandle = setInterval(() => void this.tick(), GOAL_LOOP_WORKER_TICK_MS)
+    // Tick đầu tiên chạy NGAY (instrumentation đã đợi DB ready trước start)
+    void this.tick()
+  }
+
+  /** Dừng worker (dọn interval) — dùng cho shutdown/test. */
+  stop(): void {
+    if (this.intervalHandle) clearInterval(this.intervalHandle)
+    this.intervalHandle = null
+    this.started = false
+    this.tickInFlight = false
+  }
+
+  /**
+   * 1 chu kỳ poll: (a) orphan sweep — job DB-running không thuộc process này
+   * → requeue/failed; (b) claim + chạy job queued theo slot trống.
+   * KHÔNG throw — mọi lỗi được bắt và log, chờ tick sau.
+   */
+  async tick(): Promise<void> {
+    if (this.tickInFlight) return
+    this.tickInFlight = true
+    try {
+      await this.sweepOrphans()
+      await this.claimQueued()
+    } catch (err) {
+      // Fail-open tuyệt đối — tick lỗi thì tick sau thử lại
+      console.warn(
+        '[GoalLoopWorker] tick lỗi (bỏ qua, chờ tick sau):',
+        err instanceof Error ? err.message : String(err)
+      )
+    } finally {
+      this.tickInFlight = false
+    }
+  }
+
+  // -------------------- ORPHAN SWEEP --------------------
+
+  /**
+   * Sweep job mồ côi: status='running' trong DB mà KHÔNG nằm trong Map
+   * `running` của process này (process cũ chết/crash). Xử lý CẢ boot-recovery
+   * lẫn steady-state crash detection:
+   *   - attempts < GOAL_LOOP_MAX_ATTEMPTS → requeue (attempts+1, conditional
+   *     updateMany tránh đè race) — checkpoint còn nguyên nên job RESUME từ
+   *     vòng gần nhất, không chạy lại từ đầu.
+   *   - else → mark failed (không retry vô hạn).
+   * Job ĐANG chạy trong process này (có trong Map) → KHÔNG đụng — LLM call
+   * tối đa 8' là hợp lệ, stale heartbeat KHÔNG phải lý do kill.
+   */
+  private async sweepOrphans(): Promise<{ requeued: number; markedFailed: number }> {
+    let requeued = 0
+    let markedFailed = 0
+    const runningRows = await db.goalLoopJob.findMany({ where: { status: 'running' } })
+    const now = Date.now()
+    for (const row of runningRows) {
+      // Job của process này — Map là authoritative (PM2 single-instance)
+      if (this.running.has(row.id)) continue
+      const heartbeatAgeMs = row.heartbeatAt ? now - row.heartbeatAt.getTime() : null
+      try {
+        if (row.attempts < GOAL_LOOP_MAX_ATTEMPTS) {
+          // Conditional updateMany: chỉ requeue khi VẪN còn running — tránh
+          // đè nếu có race với process khác claim/cancel trong chốc lát vừa rồi
+          const res = await db.goalLoopJob.updateMany({
+            where: { id: row.id, status: 'running' },
+            data: { status: 'queued', attempts: row.attempts + 1, error: null, workerPid: null },
+          })
+          if (res.count === 1) {
+            requeued++
+            console.log(
+              `[GoalLoopWorker] orphan sweep: requeue job ${row.id} (attempts ${row.attempts}→${row.attempts + 1}/${GOAL_LOOP_MAX_ATTEMPTS}, pid cũ ${row.workerPid ?? '?'}) — ` +
+                `heartbeat ${heartbeatAgeMs !== null ? `${Math.round(heartbeatAgeMs / 1000)}s trước` : 'chưa có'} — process cũ đã chết, tick kế sẽ claim + RESUME từ checkpoint`
+            )
+          }
+        } else {
+          const res = await db.goalLoopJob.updateMany({
+            where: { id: row.id, status: 'running' },
+            data: {
+              status: 'failed',
+              error: `job mồ côi sau crash — vượt số lần thử tối đa (${GOAL_LOOP_MAX_ATTEMPTS})`,
+              completedAt: new Date(),
+              workerPid: null,
+            },
+          })
+          if (res.count === 1) {
+            markedFailed++
+            console.log(
+              `[GoalLoopWorker] orphan sweep: mark FAILED job ${row.id} — attempts ${row.attempts} ≥ max ${GOAL_LOOP_MAX_ATTEMPTS} (không retry vô hạn)`
+            )
+          }
+        }
+      } catch (err) {
+        // Fail-open theo-từng-row: 1 row lỗi không chặn sweep các row còn lại
+        console.warn(
+          `[GoalLoopWorker] orphan sweep lỗi ở job ${row.id} (bỏ qua, tick sau thử lại):`,
+          err instanceof Error ? err.message : String(err)
+        )
+      }
+    }
+    return { requeued, markedFailed }
+  }
+
+  // -------------------- CLAIM + EXECUTE --------------------
+
+  /** Claim job queued theo số slot trống (atomic qua updateMany conditional). */
+  private async claimQueued(): Promise<void> {
+    const freeSlots = GOAL_LOOP_MAX_CONCURRENT - this.running.size
+    if (freeSlots <= 0) return
+    const queuedJobs = await db.goalLoopJob.findMany({
+      where: { status: 'queued' },
+      orderBy: { createdAt: 'asc' },
+      take: freeSlots,
+    })
+    for (const job of queuedJobs) {
+      try {
+        // REVIEW 14-g M2 — MUTUAL-EXCLUSION PER-SESSION: session đã có job
+        // đang chạy trong process này → SKIP job (để queued, tick sau claim
+        // khi job trước xong). Chat dòng là hội thoại tuần tự: chatHistory
+        // snapshot của job sau cần kết quả job trước; chạy song song cùng
+        // session → ChatMessage đan xen + AgentRunRecord updateMany đụng row
+        // nhau. KHÔNG tính vào take ở query vì kiểm tra sau findMany an toàn
+        // hơn (slot có thể thay đổi giữa query và claim).
+        const sessionRunning = Array.from(this.running.values()).some(m => m.sessionId === job.sessionId)
+        if (sessionRunning) {
+          console.log(
+            `[GoalLoopWorker] job ${job.id}: session ${job.sessionId} đang có job khác chạy — giữ queued (mutual-exclusion per-session, tick sau claim lại)`
+          )
+          continue
+        }
+        // Job requeue sau crash mà user đã bấm Dừng (cancelRequestedAt còn
+        // nguyên trong DB) → hủy ngay lúc claim, không chạy lại
+        if (job.cancelRequestedAt) {
+          await db.goalLoopJob
+            .updateMany({
+              where: { id: job.id, status: 'queued' },
+              data: { status: 'cancelled', completedAt: new Date() },
+            })
+            .catch(() => {})
+          console.log(
+            `[GoalLoopWorker] job ${job.id}: cancelRequestedAt đã set từ trước (requeue sau crash) → cancelled ngay lúc claim`
+          )
+          continue
+        }
+        // Claim = atomic lock: chỉ process nào đổi status queued→running TRƯỚC
+        // được chạy job (bảo vệ multi-process tương lai). startedAt giữ nguyên
+        // nếu job từng chạy (requeue sau crash) — reflect lần start ĐẦU TIÊN.
+        const claimed = await db.goalLoopJob.updateMany({
+          where: { id: job.id, status: 'queued' },
+          data: {
+            status: 'running',
+            startedAt: job.startedAt ?? new Date(),
+            heartbeatAt: new Date(),
+            workerPid: process.pid,
+          },
+        })
+        if (claimed.count === 1) {
+          console.log(
+            `[GoalLoopWorker] claim job ${job.id} — session ${job.sessionId} (slot ${this.running.size + 1}/${GOAL_LOOP_MAX_CONCURRENT}, attempts ${job.attempts})`
+          )
+          // Fire-and-forget — executeJob tự xử lý mọi outcome; phần chạy đồng
+          // bộ đầu hàm (running.set) chạy NGAY trước cả await kế tiếp nên slot
+          // accounting không bị race với tick khác.
+          void this.executeJob(job).catch((err) => {
+            // executeJob đã try/catch toàn bộ bên trong — đây là hàng rào cuối
+            console.error(
+              `[GoalLoopWorker] executeJob ${job.id} throw ra ngoài (bất thường — kiểm tra bug):`,
+              err instanceof Error ? err.message : String(err)
+            )
+          })
+        }
+        // count === 0 → job bị process khác claim trước → skip bình thường
+      } catch (err) {
+        // Fail-open theo-từng-job: 1 job claim lỗi không chặn các job sau
+        console.warn(
+          `[GoalLoopWorker] claim job ${job.id} lỗi (bỏ qua, tick sau thử lại):`,
+          err instanceof Error ? err.message : String(err)
+        )
+      }
+    }
+  }
+
+  /**
+   * Chạy 1 job đã claim: parse input/checkpoint → gọi runGoalDrivenLoop với
+   * durable hooks (Task 14-b) → mark terminal → finalize seam (Task 14-c).
+   * Mọi DB write trong heartbeat/checkpoint path đều fail-open.
+   */
+  private async executeJob(job: GoalLoopJob): Promise<void> {
+    const meta: RunningJobMeta = {
+      startedAt: Date.now(),
+      lastHeartbeatWrite: 0,
+      lastCheckpointWrite: 0,
+      lastWrittenCyclesDone: job.cyclesDone ?? 0,
+      cancelRequested: false,
+      sessionId: job.sessionId,
+    }
+    // Set Map NGAY (phần đồng bộ — trước mọi await) để cancel()/sweep thấy job
+    this.running.set(job.id, meta)
+    // REVIEW 14-g H2 — crash context cho markFailed honest-close: khai báo
+    // NGOÀI try để catch cũng thấy (TS scope). runId cập nhật sau khi parse
+    // checkpoint; sessionId luôn có (job.sessionId NOT NULL).
+    let jobInputCrashContext: { sessionId: string; runId: string | null } = {
+      sessionId: job.sessionId,
+      runId: null,
+    }
+    try {
+      // 1. Parse input đầy đủ để re-run (GoalLoopJobInput)
+      let jobInput: GoalLoopJobInput
+      try {
+        jobInput = JSON.parse(job.input) as GoalLoopJobInput
+      } catch (parseErr) {
+        await this.markFailed(job.id, `input JSON không parse được: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`)
+        return
+      }
+
+      // 2. Parse checkpoint → resume state (job requeue sau crash). Checkpoint
+      // hỏng → chạy từ đầu (fail-open) — không giết job.
+      let resumeState: GoalLoopCheckpoint | undefined
+      if (job.checkpoint) {
+        try {
+          const cp = JSON.parse(job.checkpoint) as GoalLoopCheckpoint
+          if (cp && cp.version === 1 && Array.isArray(cp.messages)) resumeState = cp
+        } catch {
+          console.warn(`[GoalLoopWorker] job ${job.id}: checkpoint cũ không parse được — chạy từ đầu (fail-open)`)
+        }
+      }
+
+      // REVIEW 14-g H2 — cập nhật runId cho crash context khi đã parse được
+      // checkpoint (run tracker của loop này); checkpoint chưa từng ghi → null
+      // → todo scope legacy của session (đúng behavior crash của đường inline).
+      jobInputCrashContext = {
+        sessionId: job.sessionId,
+        runId: resumeState?.runId ?? null,
+      }
+
+      // 3. Re-fetch row fresh — đóng race cancel-xảy-ra-giữa-claim-và-execute
+      //    (cancel() đánh dấu khi job KHÔNG có trong Map — cửa sổ ms này)
+      const fresh = await db.goalLoopJob.findUnique({ where: { id: job.id } })
+      if (!fresh || fresh.status !== 'running') {
+        console.log(
+          `[GoalLoopWorker] job ${job.id}: status đã đổi (${fresh?.status ?? 'đã bị xóa'}) giữa lúc claim và execute — bỏ qua`
+        )
+        return
+      }
+      if (fresh.cancelRequestedAt) meta.cancelRequested = true
+
+      console.log(
+        `[GoalLoopWorker] chạy job ${job.id} — session ${job.sessionId} — goal: "${jobInput.userMessage.slice(0, 80)}"` +
+          (resumeState
+            ? ` — RESUME từ checkpoint (chu kỳ ${resumeState.counters.cyclesDone}, ${resumeState.counters.totalIterations} vòng, ${resumeState.messages.length} messages, runId ${resumeState.runId ?? 'n/a'})`
+            : ' — chạy từ đầu')
+      )
+
+      // 4. Checkpoint writer — single-writer + latest-wins + throttle:
+      //    - throttle GOAL_LOOP_CHECKPOINT_MIN_INTERVAL_MS SO VỚI lần ghi thành công cuối
+      //    - LUÔN ghi khi cp.counters.cyclesDone thay đổi (ranh giới chu kỳ không bỏ sót)
+      //    - chỉ 1 write in-flight tại 1 thời điểm (chống write cũ đè write mới)
+      //    - fail-open: lỗi ghi → reset throttle để checkpoint sau ghi lại ngay
+      let cpPending: GoalLoopCheckpoint | null = null
+      let cpWriting = false
+      let lastCp: GoalLoopCheckpoint | null = null
+      const flushCheckpoint = async (): Promise<void> => {
+        if (cpWriting || !cpPending) return
+        cpWriting = true
+        const cp = cpPending
+        cpPending = null
+        try {
+          await db.goalLoopJob.update({
+            where: { id: job.id },
+            data: {
+              checkpoint: JSON.stringify(cp),
+              cyclesDone: cp.counters.cyclesDone,
+              heartbeatAt: new Date(),
+            },
+          })
+          meta.lastCheckpointWrite = Date.now()
+          meta.lastWrittenCyclesDone = cp.counters.cyclesDone
+        } catch (err) {
+          // Fail-open: lỗi checkpoint KHÔNG BAO GIỜ làm hỏng loop — reset
+          // throttle để checkpoint kế tiếp ghi lại ngay
+          meta.lastCheckpointWrite = 0
+          console.warn(
+            `[GoalLoopWorker] job ${job.id}: ghi checkpoint lỗi (fail-open):`,
+            err instanceof Error ? err.message : String(err)
+          )
+        } finally {
+          cpWriting = false
+          // Checkpoint mới đến trong lúc ghi → nối dây ghi tiếp (luôn latest-wins)
+          if (cpPending) void flushCheckpoint()
+        }
+      }
+      const onCheckpoint = (cp: GoalLoopCheckpoint): void => {
+        lastCp = cp
+        cpPending = cp
+        const cyclesChanged = cp.counters.cyclesDone !== meta.lastWrittenCyclesDone
+        if (cyclesChanged || Date.now() - meta.lastCheckpointWrite >= GOAL_LOOP_CHECKPOINT_MIN_INTERVAL_MS) {
+          void flushCheckpoint()
+        }
+      }
+
+      // 5. Heartbeat — throttle GOAL_LOOP_HEARTBEAT_MIN_INTERVAL_MS, chỉ update
+      //    heartbeatAt. Fail-open im lặng (heartbeat là tín hiệu phụ cho stall
+      //    warning UI — KHÔNG dùng làm phán quyết sống/chết của job).
+      const onSignal = (): void => {
+        const now = Date.now()
+        if (now - meta.lastHeartbeatWrite < GOAL_LOOP_HEARTBEAT_MIN_INTERVAL_MS) return
+        meta.lastHeartbeatWrite = now
+        void db.goalLoopJob
+          .update({ where: { id: job.id }, data: { heartbeatAt: new Date() } })
+          .catch(() => {})
+      }
+
+      // 6. Cancel check — đọc flag in-memory (set bởi cancel()/cancelSession-
+      //    Jobs() qua Map). KHÔNG query DB mỗi vòng (đắt) — cancel() đã update
+      //    DB flag + set flag Map; job requeue sau crash đọc cancelRequestedAt
+      //    ngay lúc claim (bước claimQueued phía trên).
+      const cancelCheck = (): boolean => meta.cancelRequested
+
+      // 7. Chạy goal loop với durable hooks (param `durable` do Task 14-b thêm
+      //    vào runGoalDrivenLoop — chạy song song với 14-a). Nếu tsc complain
+      //    param này chưa tồn tại → transient race giữa 2 wave, KHÔNG tự sửa
+      //    agent-goal-loop.ts — parent verify tổng sau khi cả 2 land. Flag off
+      //    (inline cũ) thì worker này không chạy nên call-site vô hại.
+      const result: GoalLoopResult = await runGoalDrivenLoop({
+        systemPrompt: jobInput.systemPrompt,
+        userMessage: jobInput.userMessage,
+        chatHistory: jobInput.chatHistory,
+        agentProvider: jobInput.agentProvider,
+        agentModel: jobInput.agentModel,
+        agentId: jobInput.agentId,
+        agentName: jobInput.agentName,
+        agentTemperature: jobInput.agentTemperature,
+        agentMaxTokens: jobInput.agentMaxTokens,
+        agentTools: jobInput.agentTools ?? [],
+        agentSessionId: jobInput.agentSessionId ?? null,
+        durable: {
+          resumeState,
+          onCheckpoint,
+          onSignal,
+          cancelCheck,
+        } satisfies GoalLoopDurableHooks,
+      })
+
+      // 8. Final checkpoint — buộc ghi KHÔNG throttle (ranh giới cuối trước
+      //    return của loop, chỉ còn giá trị observability sau khi completed)
+      if (lastCp) {
+        cpPending = lastCp
+        await flushCheckpoint()
+      }
+
+      // 9. Terminal mark — conditional (status vẫn 'running') để không đè
+      //    trạng thái nếu có ai đó đổi giữa chừng (vd cancel/failed)
+      const cancelled = meta.cancelRequested || result.goalLoop?.stopReason === 'cancelled'
+      if (cancelled) {
+        await db.goalLoopJob
+          .updateMany({
+            where: { id: job.id, status: 'running' },
+            data: { status: 'cancelled', stopReason: 'cancelled', completedAt: new Date(), heartbeatAt: new Date() },
+          })
+          .catch(() => {})
+        console.log(
+          `[GoalLoopWorker] job ${job.id} CANCELLED — nút Dừng qua DB flag (chu kỳ ${result.goalLoop?.cycles ?? job.cyclesDone}, ${result.iterations} vòng đã chạy)`
+        )
+        // REVIEW 14-g H2 — CANCELLED cũng được finalize (mirror đường inline:
+        // user bấm Dừng vẫn có todo honest-close CI-2 + partial answer lưu DB).
+        // Trước đây return ngay → todo treo in_progress + phiên reload mất
+        // partial answer (vi phạm tiêu chí CI-2 trên đường durable).
+        // Finalize tự guard theo content (isLlmErrorContent/isTrivialExchange
+        // chặn writeback rác; WM/message vẫn lưu như inline).
+        try {
+          const mod = await import('@/lib/goal-loop-finalize')
+          if (typeof mod.finalizeGoalLoopRun === 'function') {
+            const freshJob = await db.goalLoopJob.findUnique({ where: { id: job.id } })
+            if (freshJob) await mod.finalizeGoalLoopRun({ job: freshJob, result })
+          }
+        } catch (finalizeErr) {
+          console.warn(
+            `[GoalLoopWorker] job ${job.id}: finalize sau cancel lỗi (fail-open — job vẫn cancelled):`,
+            finalizeErr instanceof Error ? finalizeErr.message : String(finalizeErr)
+          )
+        }
+        return
+      }
+      const completed = await db.goalLoopJob.updateMany({
+        where: { id: job.id, status: 'running' },
+        data: {
+          status: 'completed',
+          result: JSON.stringify(result),
+          stopReason: result.goalLoop?.stopReason ?? null,
+          completedAt: new Date(),
+          heartbeatAt: new Date(),
+        },
+      })
+      if (completed.count === 0) {
+        console.warn(
+          `[GoalLoopWorker] job ${job.id}: KHÔNG mark completed được — status đã bị đổi giữa chừng (để nguyên trạng thái hiện tại)`
+        )
+        return
+      }
+      console.log(
+        `[GoalLoopWorker] job ${job.id} COMPLETED — ${result.iterations} vòng, ${result.toolCallsExecuted} tool calls, stopReason=${result.goalLoop?.stopReason ?? 'n/a'}`
+      )
+
+      // 10. FINALIZE SEAM (Task 14-c implement goal-loop-finalize.ts): lưu
+      //     ChatMessage assistant vào phiên chat gốc SAU KHI job đã completed.
+      //     Fail-open tuyệt đối — mọi lỗi (module vắng mặt/chưa implement/
+      //     runtime lỗi) KHÔNG làm ảnh hưởng job đã completed.
+      try {
+        const mod = await import('@/lib/goal-loop-finalize')
+        if (typeof mod.finalizeGoalLoopRun === 'function') {
+          const freshJob = await db.goalLoopJob.findUnique({ where: { id: job.id } })
+          if (freshJob) await mod.finalizeGoalLoopRun({ job: freshJob, result })
+        }
+      } catch (finalizeErr) {
+        console.warn(
+          `[GoalLoopWorker] job ${job.id}: finalize chưa sẵn sàng hoặc lỗi (fail-open — job vẫn completed):`,
+          finalizeErr instanceof Error ? finalizeErr.message : String(finalizeErr)
+        )
+      }
+    } catch (err) {
+      // Loop throw (bug thật / LLM chết hẳn) → mark failed. Conditional để
+      // không đè status nếu job đã bị đánh dấu terminal từ đường khác.
+      const msg = err instanceof Error ? err.message : String(err)
+      await this.markFailed(job.id, msg, jobInputCrashContext)
+    } finally {
+      this.running.delete(job.id)
+    }
+  }
+
+  /**
+   * Mark job failed (conditional status='running') + log. Fail-open về DB.
+   *
+   * REVIEW 14-g H2 — CRASH-PATH HONEST CLOSE (mirror inline catch của chat
+   * route): job exception → todo của run đang dở phải được đóng trung thực
+   * NGAY (in_progress → 'failed', pending → 'archived') — không để stale
+   * in_progress treo tới run sau. Fail-open lồng: crash-close lỗi không được
+   * phép che lỗi gốc đã log.
+   */
+  private async markFailed(jobId: string, error: string, crashContext?: { sessionId: string; runId: string | null }): Promise<void> {
+    console.error(`[GoalLoopWorker] job ${jobId} FAILED: ${error.slice(0, 300)}`)
+    await db.goalLoopJob
+      .updateMany({
+        where: { id: jobId, status: 'running' },
+        data: { status: 'failed', error: error.slice(0, 2000), completedAt: new Date(), heartbeatAt: new Date() },
+      })
+      .catch(() => {})
+    // REVIEW 14-g H2 — crash honest-close CI-2 (mirror route catch L1230+)
+    if (crashContext?.sessionId) {
+      try {
+        const { closeRunTodosAtEnd } = await import('@/lib/code-team/dev-tools')
+        const closed = await closeRunTodosAtEnd({
+          sessionId: crashContext.sessionId,
+          runId: crashContext.runId,
+          goalComplete: false,
+          crash: true,
+        })
+        const closedTotal = closed.inProgressClosed + closed.pendingCompleted + closed.pendingArchived
+        if (closedTotal > 0) {
+          console.log(`[Todo CI-2][durable] Job ${jobId} crash → đóng ${closed.inProgressClosed} in_progress→failed, ${closed.pendingArchived} pending→archived trong session ${crashContext.sessionId}`)
+        }
+      } catch (closeErr) {
+        console.warn(`[GoalLoopWorker] job ${jobId}: crash-close todos lỗi (fail-open):`, closeErr instanceof Error ? closeErr.message : String(closeErr))
+      }
+    }
+  }
+
+  // -------------------- CANCEL --------------------
+
+  /**
+   * Nút Dừng của 1 job — sống sót qua restart vì DB flag là tín hiệu bền:
+   *   - queued     → cancelled thẳng (chưa chạy thì không cần chạy nữa)
+   *   - running trong Map → set cancelRequestedAt (DB) + flag (Map) — loop
+   *     tự thoát ở vòng cancelCheck kế tiếp
+   *   - running KHÔNG trong Map (orphan) → cancelled thẳng
+   */
+  async cancel(jobId: string): Promise<boolean> {
+    // 1. Job còn queued → cancelled ngay
+    const queuedCancel = await db.goalLoopJob.updateMany({
+      where: { id: jobId, status: 'queued' },
+      data: { status: 'cancelled', completedAt: new Date() },
+    })
+    if (queuedCancel.count === 1) {
+      console.log(`[GoalLoopWorker] cancel job ${jobId} — queued → cancelled`)
+      return true
+    }
+    // 2. Job đang chạy trong process này → DB flag + in-memory flag
+    const meta = this.running.get(jobId)
+    if (meta) {
+      meta.cancelRequested = true
+      await db.goalLoopJob
+        .update({ where: { id: jobId }, data: { cancelRequestedAt: new Date() } })
+        .catch((err) => {
+          // Flag in-memory đã set — loop vẫn sẽ thoát; DB flag chỉ để bền qua
+          // restart (nếu process chết ngay sau đó, job requeue rồi bị hủy lúc claim)
+          console.warn(
+            `[GoalLoopWorker] cancel job ${jobId}: set cancelRequestedAt lỗi (flag in-memory vẫn đã bật):`,
+            err instanceof Error ? err.message : String(err)
+          )
+        })
+      console.log(`[GoalLoopWorker] cancel job ${jobId} — running: đã bật cancelRequestedAt, loop thoát ở vòng check kế`)
+      return true
+    }
+    // 3. Job running mồ côi (process cũ chết) → cancelled thẳng
+    const orphanCancel = await db.goalLoopJob.updateMany({
+      where: { id: jobId, status: 'running' },
+      data: { status: 'cancelled', completedAt: new Date() },
+    })
+    if (orphanCancel.count === 1) {
+      console.log(`[GoalLoopWorker] cancel job ${jobId} — running mồ côi (không thuộc process này) → cancelled`)
+      return true
+    }
+    return false // job không tồn tại hoặc đã terminal
+  }
+
+  /**
+   * Nút Dừng mọi job của 1 session (dùng bởi 14-c ở agent-run cancel route):
+   * queued → cancelled; running trong Map → flag + cancelRequestedAt; running
+   * mồ côi → cancelled thẳng. Return số job affected.
+   */
+  async cancelSessionJobs(sessionId: string): Promise<number> {
+    // Mọi job queued của session → cancelled
+    const queuedCancel = await db.goalLoopJob.updateMany({
+      where: { sessionId, status: 'queued' },
+      data: { status: 'cancelled', completedAt: new Date() },
+    })
+    // Job running của session — tách 2 nhóm: trong Map (bật flag, loop tự thoát)
+    // vs mồ côi process cũ (không ai chạy → cancel thẳng)
+    const runningRows = await db.goalLoopJob.findMany({
+      where: { sessionId, status: 'running' },
+      select: { id: true },
+    })
+    const inMapIds: string[] = []
+    const orphanIds: string[] = []
+    for (const row of runningRows) {
+      const meta = this.running.get(row.id)
+      if (meta) {
+        meta.cancelRequested = true
+        inMapIds.push(row.id)
+      } else {
+        orphanIds.push(row.id)
+      }
+    }
+    if (inMapIds.length > 0) {
+      await db.goalLoopJob
+        .updateMany({ where: { id: { in: inMapIds } }, data: { cancelRequestedAt: new Date() } })
+        .catch(() => {})
+    }
+    if (orphanIds.length > 0) {
+      await db.goalLoopJob
+        .updateMany({
+          where: { id: { in: orphanIds } },
+          data: { status: 'cancelled', completedAt: new Date() },
+        })
+        .catch(() => {})
+    }
+    const affected = queuedCancel.count + inMapIds.length + orphanIds.length
+    console.log(
+      `[GoalLoopWorker] cancelSessionJobs ${sessionId}: ${queuedCancel.count} queued → cancelled, ${inMapIds.length} running bật flag cancel, ${orphanIds.length} running mồ côi → cancelled`
+    )
+    return affected
+  }
+
+  // -------------------- QUERIES (cho API 14-c) --------------------
+
+  /** Chi tiết 1 job (kèm GoalLoopResult đã parse). Null nếu không tồn tại. */
+  async getJobStatus(jobId: string): Promise<GoalLoopJobView | null> {
+    const row = await db.goalLoopJob.findUnique({
+      where: { id: jobId },
+      select: {
+        id: true, sessionId: true, messageId: true, status: true, cyclesDone: true,
+        stopReason: true, error: true, attempts: true, cancelRequestedAt: true,
+        heartbeatAt: true, createdAt: true, startedAt: true, completedAt: true,
+        checkpoint: true, result: true,
+      },
+    })
+    if (!row) return null
+    return this.toView(row, { withResult: true })
+  }
+
+  /** Danh sách job (mới nhất trước) — KHÔNG trả result/checkpoint raw. */
+  async listJobs(opts: { sessionId?: string; statuses?: GoalLoopJobStatus[]; limit?: number } = {}): Promise<GoalLoopJobView[]> {
+    const limit = Math.min(Math.max(1, opts.limit ?? 50), 200)
+    const rows = await db.goalLoopJob.findMany({
+      where: {
+        ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+        ...(opts.statuses && opts.statuses.length > 0 ? { status: { in: opts.statuses } } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      select: {
+        id: true, sessionId: true, messageId: true, status: true, cyclesDone: true,
+        stopReason: true, error: true, attempts: true, cancelRequestedAt: true,
+        heartbeatAt: true, createdAt: true, startedAt: true, completedAt: true,
+        checkpoint: true,
+      },
+    })
+    return rows.map(r => this.toView(r))
+  }
+
+  /** Row Prisma → view API — parse checkpoint counters cho progressHint. */
+  private toView(row: GoalLoopJobViewRow, opts: { withResult?: boolean } = {}): GoalLoopJobView {
+    const now = Date.now()
+    // Heartbeat fallback: job vừa claim (chưa kịp onSignal) dùng startedAt/
+    // createdAt làm mốc staleness — không cảnh báo stall oan lúc mới start
+    const heartbeatRef = row.heartbeatAt ?? row.startedAt ?? row.createdAt
+    const stallWarning = row.status === 'running' && now - heartbeatRef.getTime() > GOAL_LOOP_STALL_WARN_MS
+    let progressHint: string | null = null
+    if (row.checkpoint) {
+      try {
+        const cp = JSON.parse(row.checkpoint) as GoalLoopCheckpoint
+        if (cp && typeof cp.counters?.cyclesDone === 'number') {
+          progressHint =
+            `chu kỳ ${cp.counters.cyclesDone} · ${cp.counters.totalIterations} vòng · ${cp.counters.totalToolCalls} tool calls`
+        }
+      } catch { /* checkpoint hỏng — bỏ qua hint (fail-open) */ }
+    }
+    const view: GoalLoopJobView = {
+      id: row.id,
+      sessionId: row.sessionId,
+      messageId: row.messageId,
+      status: row.status as GoalLoopJobStatus,
+      cyclesDone: row.cyclesDone,
+      stopReason: row.stopReason,
+      error: row.error,
+      attempts: row.attempts,
+      cancelRequested: row.cancelRequestedAt != null,
+      heartbeatAt: row.heartbeatAt?.toISOString() ?? null,
+      createdAt: row.createdAt.toISOString(),
+      startedAt: row.startedAt?.toISOString() ?? null,
+      completedAt: row.completedAt?.toISOString() ?? null,
+      ageMs: now - row.createdAt.getTime(),
+      stallWarning,
+      progressHint,
+    }
+    if (opts.withResult && row.result) {
+      try {
+        view.result = JSON.parse(row.result) as GoalLoopResult
+      } catch { /* result hỏng — bỏ qua (fail-open) */ }
+    }
+    return view
+  }
+
+  // -------------------- RECOVERY --------------------
+
+  /**
+   * Boot recovery — chạy orphan sweep NGAY 1 lần lúc boot cho log rõ ràng
+   * (tick a của kiến trúc chốt 14-0). Steady-state crash detection do tick
+   * định kỳ đảm nhiệm — cùng một cơ chế sweepOrphans().
+   */
+  async recoverPending(): Promise<{ requeued: number; markedFailed: number }> {
+    try {
+      const { requeued, markedFailed } = await this.sweepOrphans()
+      console.log(
+        `[GoalLoopWorker] recoverPending (boot): requeue ${requeued} job mồ côi, mark failed ${markedFailed} job vượt max-attempts — tick kế sẽ claim + RESUME từ checkpoint`
+      )
+      return { requeued, markedFailed }
+    } catch (err) {
+      console.error(
+        '[GoalLoopWorker] recoverPending lỗi (bỏ qua — tick định kỳ sẽ tự sweep lại):',
+        err instanceof Error ? err.message : String(err)
+      )
+      return { requeued: 0, markedFailed: 0 }
+    }
+  }
+
+  // -------------------- OBSERVABILITY --------------------
+
+  /** Số job đang chạy trong process này (debug/status). */
+  getRunningCount(): number {
+    return this.running.size
+  }
+}
+
+// ==================== SINGLETON ====================
+
+// Singleton sống sót qua Next dev HMR reload qua globalThis (pattern
+// smolabWorker / self-direction scheduler). PM2 fork single-instance → một
+// process duy nhất sở hữu Map running → orphan detection đúng.
+// REVIEW 14-g M4 — cache globalThis LUÔN LUÔN (bỏ điều kiện NODE_ENV !==
+// 'production'): next build/start có thể duplicate module giữa
+// instrumentation và routes → 2 instance khác nhau → cancel() rơi nhánh
+// orphan-cancel (hủy DB thẳng trong khi loop vẫn chạy) + sweep instance này
+// requeue job instance kia đang chạy = double-run thật. globalThis là duy
+// nhất theo process → cache vô điều kiện an toàn cả dev lẫn production
+// (mirror fix áp cùng cho smolabWorker).
+const globalForWorker = globalThis as unknown as { __goalLoopWorker?: GoalLoopWorker }
+
+export const goalLoopWorker = globalForWorker.__goalLoopWorker ?? new GoalLoopWorker()
+globalForWorker.__goalLoopWorker = goalLoopWorker

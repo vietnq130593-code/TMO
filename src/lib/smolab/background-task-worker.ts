@@ -358,9 +358,14 @@ class SmolabTaskWorker {
 }
 
 // Singleton instance — survives hot-reload via globalThis
+// REVIEW 14-g M4 (GĐ4) — cache globalThis LUÔN LUÔN (bỏ điều kiện NODE_ENV
+// !== 'production', mirror goal-loop-worker.ts): next build/start có thể
+// duplicate module giữa instrumentation và routes → 2 instance khác nhau →
+// enqueue vào queue instance này nhưng recoverPending chạy trên instance
+// kia. globalThis duy nhất theo process → cache vô điều kiện an toàn.
 const globalForWorker = globalThis as unknown as {
   smolabWorker: SmolabTaskWorker | undefined
 }
 
 export const smolabWorker = globalForWorker.smolabWorker ?? new SmolabTaskWorker()
-if (process.env.NODE_ENV !== 'production') globalForWorker.smolabWorker = smolabWorker
+globalForWorker.smolabWorker = smolabWorker

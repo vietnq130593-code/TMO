@@ -342,11 +342,26 @@ function parseTscErrors(output: string): { count: number; sample: string[] } {
 
 /** Timeout for each LLM call inside an agent step (ReAct loop).
  *  If the LLM hangs beyond this, the step is aborted with an error,
- *  and the workflow continues to the next pipeline step (graceful degradation). */
-const AGENT_STEP_TIMEOUT_MS = 240_000 // 4 minutes per LLM call — TL recon with large tool results needs more time (kimi-k3 can take 120s+ on 30K-token contexts)
+ *  and the workflow continues to the next pipeline step (graceful degradation).
+ *
+ *  CI-5 B6 (Task 14-d): 4 phút → 8 phút (env-controlled) — roadmap Phụ lục A:
+ *  lượt suy luận/biến đổi lớn (TL recon 30K-token context) bị cắt giữa chừng
+ *  ở 4'. Đọc 1 LẦN module-level theo pattern env của file — đổi giá trị cần
+ *  restart app. KHÔNG đụng: GOAL_LOOP_LLM_TIMEOUT_MS của agent-goal-loop.ts
+ *  (goal-loop có timeout riêng 21') và CHECKPOINT_VERIFY_TIMEOUT_MS bên dưới
+ *  (TL verify là quyết định ngắn — giữ 30s). Exported cho smoke test (14-d). */
+export const AGENT_STEP_TIMEOUT_MS =
+  Math.max(1_000, parseInt(process.env.AGENT_STEP_TIMEOUT_MS || '480000', 10) || 480_000) // 8 minutes per LLM call — REVIEW 14-g L1: Math.max chống giá trị âm/0 ('-5' truthy → setTimeout âm = timeout tức thì mọi call)
 
 /** Shorter timeout for TL checkpoint verification calls — these are brief decisions, not long code generation. */
 const CHECKPOINT_VERIFY_TIMEOUT_MS = 30_000 // 30 seconds for checkpoint verify
+
+/** CI-5 B6 (Task 14-d) — RETRY LLM call transient trong 1 iteration của ReAct
+ *  loop của step: tối đa 2 lần retry (tổng 3 attempts), backoff 5s → 15s
+ *  (hardcode hợp lý theo đề bài — không env). Chỉ retry lỗi TRANSIENT hạ tầng
+ *  (isTransientLlmError) — chi tiết khối retry trong runAgentStep. */
+const WORKFLOW_STEP_LLM_MAX_RETRIES = 2
+const WORKFLOW_STEP_LLM_RETRY_DELAYS_MS = [5_000, 15_000]
 
 // v2.1 Phase 5.6 — Context overflow threshold (Appendix C.4 step 1).
 // 80k tokens triggers a session pause + resume handoff so a new agent can
@@ -598,6 +613,42 @@ function classifyWorkflowError(errorMessage: string): import('@/lib/error-handli
   if (/permission|denied|unauthorized|forbidden|401|403/.test(msg)) return 'systematic_permission'
   if (/not found|does not exist|no such file|missing/.test(msg)) return 'systematic_notfound'
   return 'runtime' // không phân loại được — giữ type cũ làm fallback
+}
+
+/**
+ * CI-5 B6 (Task 14-d) — phân loại lỗi LLM call của step có đáng retry hay không.
+ * TRANSIENT = lỗi hạ tầng TỰ HỒI PHỤC, tái dùng đúng taxonomy transient_* của
+ * classifyWorkflowError ở trên (network/timeout — 429/rate-limit — 5xx), cộng
+ * thêm tổng kết "CẢ chuỗi lõi agent đều thất bại sau N sweep" của
+ * callAgentModelWithFallbackChain (llm.ts) — nguyên nhân rễ của message này là
+ * các attempt 429/5xx/timeout/network đã burn hết sweep bên trong chuỗi (key
+ * chết auth/quota bị loại sớm khỏi chuỗi) → retry outer là đúng đắn.
+ * KHÔNG transient: auth/permission (401/403 — key sai, retry vô nghĩa), user
+ * abort, tool rejected, parse error (systematic_*) — và TUYỆT ĐỐI không retry
+ * khi agent trả lời HỢP LỆ nhưng content "fail" theo domain (đó là quyết định
+ * của agent, không phải lỗi hạ tầng — response như vậy có content/tool_calls
+ * và được dùng thẳng, không bao giờ rơi vào classifier này).
+ * Exported cho smoke test (14-d) — không đổi hành vi của caller hiện có.
+ */
+export function isTransientLlmError(message: string): boolean {
+  try {
+    const cls = classifyWorkflowError(message)
+    if (
+      cls === 'transient_network' ||
+      cls === 'transient_ratelimit' ||
+      cls === 'transient_server'
+    ) {
+      return true
+    }
+    return (
+      /cả chuỗi lõi agent đều thất bại/i.test(message) ||
+      // Mã lỗi mạng Node/Bun mà taxonomy P1.2 bỏ sót ("ETIMEDOUT" không chứa
+      // chuỗi con "timeout"/"timed out" nguyên vẹn)
+      /etimedout|eai_again|epipe|socket hang up/i.test(message)
+    )
+  } catch {
+    return false // fail-safe: không phân loại được → coi như không transient
+  }
 }
 
 /**
@@ -1783,75 +1834,127 @@ export async function runAgentStep(params: {
 
     // Build the prompt from conversation history
     // callLLMForAgent takes a single prompt string, so we format messages into it
+    // (tính 1 LẦN trước vòng retry — giữa các attempt KHÔNG có tool nào chạy
+    // nên messages không đổi, reuse prompt là an toàn)
     const formattedPrompt = formatMessagesForLLM(messages)
 
-    // Call LLM for this agent — with timeout to prevent infinite hangs
-    // Edge case #1: LLM timeout → emit error event, break ReAct loop
-    //
-    // Phase 1c: when fcMode is 'dual' or 'strict', pass tools/tool_choice via options.
-    // tryProviderWithSlotKey will include them in the NIM API request body.
-    // The response will contain result.tool_calls (parsed by tryProviderWithSlotKey).
-    const llmCallPromise = callLLMForAgent(
-      formattedPrompt,
-      { provider: agent.provider, model: agent.model },
-      systemPrompt,
-      {
-        agentId: position,
-        agentName: agent.name,
-        temperature: agent.temperature,
-        maxTokens: agent.maxTokens,
-        // USER REQUEST 2026-08-31: chuỗi xoay vòng key LLM dừng ngay khi user hủy
-        abortCheck: isCancelled,
-        ...(nativeTools && nativeTools.length > 0
-          ? { tools: nativeTools, tool_choice: 'auto' as const }
-          : {}),
+    // ━━━ CI-5 B6 (Task 14-d) — RETRY LLM CALL CHỈ CHO LỖI TRANSIENT ━━━
+    // Bọc LLM call của step trong vòng retry ≤ WORKFLOW_STEP_LLM_MAX_RETRIES
+    // (tổng 3 attempts), backoff 5s → 15s. Retry CHỈ khi lỗi là TRANSIENT của
+    // hạ tầng LLM (timeout/network/429/5xx/chain-exhausted/response-rỗng —
+    // isTransientLlmError); KHÔNG retry khi agent trả lời hợp lệ nhưng content
+    // "fail" theo domain (đó là quyết định của agent) hay khi user đã hủy.
+    // Hết retry vẫn fail → hành vi CŨ nguyên vẹn (log + emit error + break —
+    // pipeline giữ nguyên policy log+skip, KHÔNG đổi PIVOT/ESCALATE).
+    // Vùng KHÔNG can thiệp: compressConversation / handleOverflow /
+    // scheduleAutoResume / budgetPrompt / capToolResult (CI-3 đã kiểm định).
+    let result: LLMResult | null = null
+    // Kết quả attempt cuối (error-result / response rỗng) — dùng sau vòng retry
+    // để tái hiện ĐÚNG nhánh code cũ: error-result → fail path; response rỗng
+    // không lỗi → bước kết thúc im lặng với content rỗng (như trước 14-d).
+    let lastAttemptResult: LLMResult | null = null
+    let lastTransientReason: string | null = null
+    let llmRetriedCount = 0
+    const llmMaxAttempts = WORKFLOW_STEP_LLM_MAX_RETRIES + 1
+
+    for (let attempt = 1; attempt <= llmMaxAttempts; attempt++) {
+      if (attempt > 1) {
+        llmRetriedCount = attempt - 1
+        const delayMs = WORKFLOW_STEP_LLM_RETRY_DELAYS_MS[Math.min(attempt - 2, WORKFLOW_STEP_LLM_RETRY_DELAYS_MS.length - 1)]
+        console.warn(`[Workflow] ${agent.name} (${position}) LLM call lỗi transient (attempt ${attempt - 1}/${llmMaxAttempts}: ${lastTransientReason ?? 'unknown'}) — retry ${llmRetriedCount}/${WORKFLOW_STEP_LLM_MAX_RETRIES} sau ${delayMs}ms`)
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs))
+        // User hủy giữa backoff → không đốt thêm LLM call; khối phân định
+        // dưới xử lý theo nhánh cancelled (đúng semantics nút Dừng của file)
+        if (isCancelled()) break
       }
-    )
 
-    let timeoutId: ReturnType<typeof setTimeout> | undefined
-    const timeoutPromise = new Promise<LLMResult>((_resolve, reject) => {
-      timeoutId = setTimeout(() => reject(new Error(`LLM call timed out after ${AGENT_STEP_TIMEOUT_MS}ms`)), AGENT_STEP_TIMEOUT_MS)
-    })
+      // Call LLM for this agent — with timeout to prevent infinite hangs
+      // Edge case #1: LLM timeout → transient → retry; hết retry → emit error, break ReAct loop
+      //
+      // Phase 1c: when fcMode is 'dual' or 'strict', pass tools/tool_choice via options.
+      // tryProviderWithSlotKey will include them in the NIM API request body.
+      // The response will contain result.tool_calls (parsed by tryProviderWithSlotKey).
+      const llmCallPromise = callLLMForAgent(
+        formattedPrompt,
+        { provider: agent.provider, model: agent.model },
+        systemPrompt,
+        {
+          agentId: position,
+          agentName: agent.name,
+          temperature: agent.temperature,
+          maxTokens: agent.maxTokens,
+          // USER REQUEST 2026-08-31: chuỗi xoay vòng key LLM dừng ngay khi user hủy
+          abortCheck: isCancelled,
+          ...(nativeTools && nativeTools.length > 0
+            ? { tools: nativeTools, tool_choice: 'auto' as const }
+            : {}),
+        }
+      )
 
-    let result: LLMResult
-    try {
-      result = await Promise.race([llmCallPromise, timeoutPromise])
-    } catch (timeoutErr) {
-      // Always clear timeout to prevent resource leak
-      if (timeoutId) clearTimeout(timeoutId)
-      // LLM call timed out — graceful degradation
-      const timeoutMsg = timeoutErr instanceof Error ? timeoutErr.message : 'LLM call timed out'
-      console.error(`[Workflow] ${agent.name} (${position}) LLM timeout: ${timeoutMsg}`)
-      finalContent = `Error: ${timeoutMsg}`
-      emit({
-        type: 'error',
-        agent: agent.name,
-        position,
-        message: timeoutMsg,
+      let timeoutId: ReturnType<typeof setTimeout> | undefined
+      const timeoutPromise = new Promise<LLMResult>((_resolve, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(`LLM call timed out after ${AGENT_STEP_TIMEOUT_MS}ms`)), AGENT_STEP_TIMEOUT_MS)
       })
-      break
-    } finally {
-      // Clear timeout on success to prevent resource leak
-      if (timeoutId) clearTimeout(timeoutId)
+
+      try {
+        const r = await Promise.race([llmCallPromise, timeoutPromise])
+        lastAttemptResult = r
+        if (r && (r.content || (r.tool_calls && r.tool_calls.length > 0))) {
+          // THÀNH CÔNG — có output thật (content hoặc tool_calls; result kèm
+          // error nhưng CÓ content vẫn dùng content — đúng semantics code cũ)
+          result = r
+          break
+        }
+        if (r && !r.error) {
+          // Response rỗng KHÔNG kèm lỗi hạ tầng (200 nhưng không content lẫn
+          // tool_calls) — CI-5 B6 coi là transient của hạ tầng: retry. Hết
+          // retry → khối phân định giữ NGUYÊN nhánh cũ (kết thúc im lặng).
+          lastTransientReason = 'LLM trả về response rỗng (không content, không tool_calls, không error)'
+          continue
+        }
+        // r.error && !r.content — lỗi hạ tầng của chuỗi LLM (content rỗng)
+        const errMsg = r ? r.error ?? 'LLM call failed' : 'LLM trả về null'
+        lastTransientReason = errMsg
+        if (!isTransientLlmError(errMsg)) {
+          // Non-transient (auth/permission/aborted...) — KHÔNG retry, xử lý
+          // fail NGAY ở khối phân định như hành vi cũ
+          break
+        }
+        // Transient → vòng kế retry (hết retry thì fail path cũ với errMsg)
+      } catch (timeoutErr) {
+        // Promise.race reject = LLM call timeout — luôn transient → retry
+        lastAttemptResult = null
+        lastTransientReason = timeoutErr instanceof Error ? timeoutErr.message : 'LLM call timed out'
+      } finally {
+        // Always clear timeout to prevent resource leak
+        if (timeoutId) clearTimeout(timeoutId)
+      }
     }
 
-    // result is guaranteed to be defined here because:
-    // - If try succeeds: result is assigned, finally clears timeout, code continues
-    // - If catch fires: break exits the while loop, this code is never reached
-    // USER REQUEST 2026-08-31: user bấm Dừng trong lúc LLM đang chạy
+    // ===== Phân định kết quả — bảo toàn semantics code cũ =====
+    // USER REQUEST 2026-08-31: user bấm Dừng trong lúc LLM đang chạy (kể cả
+    // giữa backoff retry) → nhãn cancelled, KHÔNG phải error
     if (isCancelled()) {
       finalContent = '⏹ Đã dừng tác vụ theo yêu cầu của bạn.'
       endStepRun('cancelled')
       break
     }
-    if (!result || (result.error && !result.content)) {
-      // LLM call completely failed
-      finalContent = `Error: ${result.error}`
+    // Response rỗng không lỗi sau khi hết retry → GIỮ NGUYÊN hành vi cũ:
+    // bước kết thúc im lặng với content rỗng (không emit error)
+    if (!result && lastAttemptResult && !lastAttemptResult.error) {
+      result = lastAttemptResult
+    }
+    if (!result) {
+      // Mọi attempt đều thất bại hạ tầng (timeout throw / error-result) —
+      // ĐÚNG hành vi cũ: log + emit error + break (pipeline log+skip)
+      const errMsg = lastAttemptResult?.error ?? lastTransientReason ?? 'LLM call failed'
+      console.error(`[Workflow] ${agent.name} (${position}) LLM call failed${llmRetriedCount > 0 ? ` — đã retry ${llmRetriedCount}/${WORKFLOW_STEP_LLM_MAX_RETRIES} lần, vẫn thất bại` : ''}: ${errMsg}`)
+      finalContent = `Error: ${errMsg}`
       emit({
         type: 'error',
         agent: agent.name,
         position,
-        message: `LLM call failed: ${result.error}`,
+        message: `LLM call failed: ${errMsg}`,
       })
       break
     }

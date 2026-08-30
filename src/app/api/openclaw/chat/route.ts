@@ -38,10 +38,11 @@ import { isSessionDeleted, isSessionDeletedDeep } from '@/lib/session-tombstone'
 // Agent Run Tracker — Thought Process + Todos + Progress realtime trong chat
 // (user request 2026-08-31: mọi agents hiển thị tư duy/tiến trình như Claude Code)
 // 2026-09-01: start/end/thought/cancel đã chuyển vào agent-goal-loop.ts (run
-// của toàn bộ goal loop); route chỉ còn đọc run summary qua getAgentRuns.
+// của toàn bộ goal loop); run summary route đọc qua helper chia sẻ
+// buildAgentRunSummaryForMessage (goal-loop-finalize.ts, Task 14-c pure-move).
 // CI-2 (Task 11-a): getActiveRunId dùng ở crash-path để đóng todo của run
 // đang chạy dở khi goal loop văng exception.
-import { getAgentRuns, getActiveRunId } from '@/lib/agent-run-tracker'
+import { getActiveRunId } from '@/lib/agent-run-tracker'
 // CI-2 (Task 11-a) — PER-TASK TODO ISOLATION: 2 helper vòng đời todo theo
 // runId (dev-tools TODO section): archive todo của run trước khi run mới bắt
 // đầu + đóng per-item trung thực khi run kết thúc (thay bulk-close cũ).
@@ -51,6 +52,18 @@ import { archiveStaleRunTodos, closeRunTodosAtEnd } from '@/lib/code-team/dev-to
 // hoàn thành → (chưa: Chẩn đoán lỗi + Lập kế hoạch lại → lặp) → Hoàn thành.
 // Xem docs/DANH_GIA_REACT_LOOP_VS_CLAUDE_CODE.md + src/lib/agent-goal-loop.ts
 import { runGoalDrivenLoop } from '@/lib/agent-goal-loop'
+// CI-5 (GĐ4, Task 14-c — roadmap B5): DURABLE GOAL LOOP — khi flag bật, goal
+// loop chạy NỀN qua GoalLoopWorker (enqueue job → trả jobId ngay) thay vì chặn
+// request HTTP. finalize + các helper chia sẻ (isLlmErrorContent /
+// closeGoalLoopRunTodos / buildAgentRunSummaryForMessage) tách sang
+// goal-loop-finalize.ts để 2 đường 1 nguồn sự thật (pure move khỏi file này).
+import { goalLoopWorker } from '@/lib/goal-loop-worker'
+import {
+  isLlmErrorContent,
+  isTrivialExchange,
+  closeGoalLoopRunTodos,
+  buildAgentRunSummaryForMessage,
+} from '@/lib/goal-loop-finalize'
 // Phase A: Smart KB Routing — Intent Classifier
 // Phase C: Smart KB Writeback — replaces autoLearnFromAnswer with confidence-filtered writeback
 // Phase B: Smart KB Pre-Search — search Qdrant+Neo4j before building system prompt
@@ -67,6 +80,12 @@ import { updateLatestAgentRunRecord } from '@/lib/metrics-db'
 
 export const dynamic = 'force-dynamic'
 
+// CI-5 (GĐ4, Task 14-c — roadmap B5): flag bật nhánh durable của goal loop —
+// POST chat enqueue GoalLoopJob (DB) + trả jobId NGAY thay vì chạy loop chặn
+// request. Đọc 1 lần lúc module load (đồng bộ với worker start ở
+// instrumentation-node.ts cũng đọc lúc boot — flip flag cần restart app).
+const DURABLE_GOAL_LOOP = process.env.ENABLE_DURABLE_GOAL_LOOP === 'true'
+
 // Module-level counter for periodic memory decay (Bug 3 fix)
 let memoryDecayCounter = 0
 
@@ -77,26 +96,9 @@ let memoryDecayCounter = 0
 //   - code-team/workflow-engine runAgentStep (Team Code: TL/G1/G2-A/G2-B/G3)
 // ============================================
 
-/**
- * Check if a chat exchange is too trivial to warrant memory extraction.
- * Avoids wasting LLM tokens on greetings and short confirmations.
- */
-function isTrivialExchange(userMsg: string, assistantMsg: string): boolean {
-  // Skip memory extraction for trivial exchanges (greetings, short confirmations)
-  if (userMsg.trim().length < 15 && assistantMsg.trim().length < 50) return true
-  const trivialPatterns = /^(hi|hello|hey|chào|xin chào|ok|okay|cảm ơn|thanks|thank you|bye|tạm biệt|được|vâng|yes|no|không)$/i
-  if (trivialPatterns.test(userMsg.trim())) return true
-  return false
-}
-
-/**
- * KIMI-ONLY: nội dung là LỖI LLM (key cạn/rate-limit/timeout...) — KHÔNG ghi
- * vào Knowledge Base (writeback) hay AgentMemory: chặn nhiễm dữ liệu garbage
- * vào graph/vectors từ error message. User vẫn thấy lỗi trong chat.
- */
-function isLlmErrorContent(content: string): boolean {
-  return typeof content === 'string' && content.startsWith('Error: Goal loop LLM failed')
-}
+// (isLlmErrorContent + isTrivialExchange — PURE MOVE sang
+// src/lib/goal-loop-finalize.ts Task 14-c + REVIEW 14-g H1,
+// route import lại từ đó để đường durable + inline dùng cùng 1 định nghĩa)
 
 /**
  * Phase A: Generate a fast response for casual messages (greetings, thanks, etc.)
@@ -385,6 +387,10 @@ export async function POST(request: NextRequest) {
     // (phiên đã xóa = xóa hẳn, không hồi sinh). Deep check (Set + DB persist)
     // — chặn cả sessionId từ browser tab cũ sau khi app đã restart.
     // ============================================
+    // CI-5 (Task 14-c): id của user message vừa early-save (nếu có) — nhánh
+    // durable enqueue GoalLoopJob kèm messageId này để job truy vết về đúng
+    // tin nhắn trigger (không có/duplicate → null → enqueue nhận undefined).
+    let savedUserMessageId: string | null = null
     if (sessionId && lastUserContent && !(await isSessionDeletedDeep(sessionId))) {
       try {
         // DEDUPE (fix E2E 2026-09-08): user bấm Dừng rồi GỬI LẠI cùng nội dung
@@ -401,7 +407,8 @@ export async function POST(request: NextRequest) {
           select: { id: true },
         })
         if (!dup) {
-          await db.chatMessage.create({ data: { sessionId, role: 'user', content: lastUserContent } })
+          const savedUserMsg = await db.chatMessage.create({ data: { sessionId, role: 'user', content: lastUserContent } })
+          savedUserMessageId = savedUserMsg.id
           db.agentSession
             .updateMany({
               where: { sessionId },
@@ -919,6 +926,119 @@ export async function POST(request: NextRequest) {
           } catch { /* fail-open — archive lỗi không chặn chat */ }
         }
 
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // CI-5 (GĐ4, Task 14-c — roadmap B5): DURABLE BRANCH — ENQUEUE + TRẢ
+        // JOBID NGAY. Khi ENABLE_DURABLE_GOAL_LOOP=true (đọc lúc boot) và có
+        // sessionId: KHÔNG chạy goal loop chặn request này nữa — enqueue job
+        // vào DB queue, GoalLoopWorker nền (tick ≤5s) claim + chạy + checkpoint
+        // mỗi vòng + finalize (lưu ChatMessage assistant khi hoàn tất). User
+        // đóng tab / app restart: job sống sót, resume từ checkpoint, nút Dừng
+        // sống qua DB flag cancelRequestedAt.
+        //
+        // Mọi thứ PHÍA TRƯỚC đã chạy xong như đường inline (user message save,
+        // archiveStaleRunTodos, tool resolve/enforce phía trên) — jobInput dưới
+        // đây mang ĐỦ tham số runGoalDrivenLoop cần (closure không sống qua
+        // restart nên phải serialize toàn bộ). Fail-open 2 lớp:
+        //   (a) enqueue lỗi → LOG + rơi xuống chạy INLINE như cũ (KHÔNG 500);
+        //   (b) worker chưa start (flag lệch boot) → job vẫn nằm queued trong
+        //       DB, tick sẽ claim khi worker được bật.
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        if (DURABLE_GOAL_LOOP && sessionId) {
+          // REVIEW 14-g M1 — try HẸP CHỈ BAO enqueue (job row ĐÃ tạo mà throw
+          // thì tuyệt đối KHÔNG rơi xuống inline: job queued + inline chạy =
+          // DOUBLE-RUN cùng 1 request). Mọi bước sau enqueue (upsert/return)
+          // nằm NGOÀI try: sai lệch nhỏ (upsert fail...) được nuốt im lặng,
+          // response durable vẫn trả về jobId — đúng tinh thần fail-open của
+          // kiến trúc worker (job nằm queued, tick claim khi worker bật).
+          let durableJobId: string | null = null
+          try {
+            durableJobId = await goalLoopWorker.enqueue({
+              sessionId,
+              messageId: savedUserMessageId ?? undefined,
+              jobInput: {
+                systemPrompt,
+                userMessage: lastUserContent,
+                // ĐÚNG filter như inline — chỉ user/assistant (bỏ system ở client)
+                chatHistory: messages.filter((m: { role: string }) => m.role === 'user' || m.role === 'assistant'),
+                agentProvider,
+                agentModel,
+                agentId: agentProfileId || 'unknown',
+                agentName: agentProfileName || 'Agent',
+                agentTemperature,
+                agentMaxTokens,
+                agentTools,
+                agentSessionId: sessionId,
+              },
+            })
+          } catch (enqueueErr) {
+            // FAIL-OPEN: enqueue lỗi (DB nghẽn/schema lệch...) → LOG + chạy
+            // inline như cũ ngay bên dưới — user vẫn được phục vụ, KHÔNG 500.
+            console.warn(
+              '[OpenClaw Chat] Durable enqueue thất bại — fallback chạy goal loop inline:',
+              enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr)
+            )
+          }
+
+          if (durableJobId) {
+            const jobId = durableJobId
+
+            // Track session NGAY (mirror khối upsert sau loop của đường inline —
+            // không đợi job chạy xong vì có thể mất nhiều phút; TOMBSTONE GUARD:
+            // session đã xóa → không upsert lại). Đặt SAU enqueue thành công để
+            // nhánh fallback inline không bị double-increment messageCount.
+            try {
+              if (!(await isSessionDeletedDeep(sessionId))) {
+                try {
+                  await db.agentSession.upsert({
+                    where: { sessionId },
+                    create: {
+                      sessionId,
+                      model: agentModel,
+                      provider: agentProvider,
+                      title: messages[0]?.content?.slice(0, 50) || 'New Chat',
+                      messageCount: messages.length + 1,
+                      agentProfileId: agentProfileId || null,
+                      teamMode: teamMode || null,
+                      teamName: teamName || null,
+                    },
+                    update: {
+                      messageCount: { increment: 1 },
+                    },
+                  })
+                } catch {}
+              }
+            } catch { /* isSessionDeletedDeep fail → vẫn upsert best-effort */ }
+
+            console.log(
+              `[OpenClaw Chat] Durable goal loop: job ${jobId} đã enqueue (session ${sessionId}, agent ${agentProfileName || 'Agent'}) — trả jobId ngay, worker nền sẽ chạy + finalize`
+            )
+
+            // Response giữ MỌI field frontend đang đọc (page.tsx sendMessage:
+            // content/model/provider/sources/confidence/agentRun) + thêm
+            // durable:true + jobId để UI (14-e) poll /api/goal-loop-jobs.
+            // content = placeholder tiếng Việt — kết quả thật arrive qua poll
+            // (finalize lưu ChatMessage assistant vào session gốc).
+            return NextResponse.json({
+              content: `⏳ Tác vụ đã vào hàng đợi nền (job ${jobId.slice(0, 12)}…) — Phiên chat sẽ tự cập nhật khi hoàn tất.`,
+              model: agentModel,
+              provider: agentProvider,
+              sessionId: sessionId || `session-${Date.now()}`,
+              agentProfileId: agentProfileId || undefined,
+              sources: [],
+              kbResults: 'agent-react',
+              reactIterations: 0,
+              toolCallsExecuted: 0,
+              // confidence/agentRun/goalLoop: chưa có kết quả (job chạy nền) —
+              // JSON.stringify bỏ key undefined, frontend đọc undefined an toàn
+              durable: true,
+              jobId,
+              memoriesRecalled: recalledMemories.length || undefined,
+              intent,
+              kbConfidence: kbSearchResult?.confidence || undefined,
+            })
+          }
+        }
+
         const reactResult = await runGoalDrivenLoop({
           systemPrompt,
           userMessage: lastUserContent,
@@ -954,39 +1074,11 @@ export async function POST(request: NextRequest) {
         // chỉ persist counters, thought steps chi tiết chỉ sống trong
         // /api/agent-run (in-memory) → app restart là mất toàn bộ quá trình
         // thực thi (user yêu cầu xem được Thought Process của Omega).
-        const agentRunSummary = (() => {
-          try {
-            const run = sessionId && reactResult.runId
-              ? getAgentRuns(sessionId).find(r => r.runId === reactResult.runId)
-              : null
-            if (!run) return undefined
-            return {
-              agentName: run.agentName,
-              status: run.status,
-              iterations: run.counters.iterations,
-              toolCalls: run.counters.toolCalls,
-              filesRead: run.counters.filesRead,
-              commandsRun: run.counters.commandsRun,
-              editsMade: run.counters.editsMade,
-              durationMs: run.endedAt ? run.endedAt - run.startedAt : undefined,
-              todos: run.lastTodos,
-              // Thought steps compact — persist qua restart (cap 80 events × 400 chars)
-              events: run.events.slice(-80).map(e => ({
-                type: e.type,
-                ts: e.ts,
-                text: typeof e.text === 'string' ? e.text.slice(0, 400) : '',
-              })),
-            }
-          } catch { return undefined }
-        })()
+        // (Task 14-c: PURE MOVE IIFE này thành helper chia sẻ
+        // buildAgentRunSummaryForMessage trong goal-loop-finalize.ts — đường
+        // durable finalize dùng cùng 1 nguồn sự thật.)
+        const agentRunSummary = buildAgentRunSummaryForMessage(sessionId, reactResult.runId)
 
-        // FIX 2026-08-27 (user bug report "4 task đã chạy xong nhưng vẫn báo có 4
-        // task đang chạy"): LLM thường quên gọi todo_write lần cuối để đóng các
-        // bước (đánh dấu in_progress rồi báo cáo luôn).
-        // GOAL LOOP (2026-09-01): nếu trọng tài kết luận CHƯA hoàn thành → đánh dấu
-        // todo còn sót là 'failed' thay vì 'completed' (đóng ảo) — trung thực với
-        // trạng thái thật, UI panel hiện ✗ thay vì ✓.
-        //
         // CI-2 (Task 11-a) — PER-ITEM HONEST CLOSE (thay bulk-close "TẤT CẢ cùng
         // lúc" quá thô): chỉ đóng todo của ĐÚNG run này (runId = reactResult.
         // runId; tracker fail → runId null → scope legacy của session), mỗi item
@@ -996,21 +1088,11 @@ export async function POST(request: NextRequest) {
         //   - pending (chưa từng bắt tay) → completed (mục tiêu đạt) | GIỮ pending
         //     + archivedAt (chưa đạt — không đổ lỗi failed, nhưng ẩn khỏi run sau)
         // Todo của CÁC run khác trong session KHÔNG bị đụng (đã được archive khi
-        // run này bắt đầu). try/catch — không bao giờ làm hỏng chat response.
-        if (sessionId) {
-          try {
-            const goalIncomplete = reactResult.goalLoop ? reactResult.goalLoop.complete === false : false
-            const closed = await closeRunTodosAtEnd({
-              sessionId,
-              runId: reactResult.runId || null,
-              goalComplete: !goalIncomplete,
-            })
-            const closedTotal = closed.inProgressClosed + closed.pendingCompleted + closed.pendingArchived
-            if (closedTotal > 0) {
-              console.log(`[Todo CI-2] Run ${reactResult.runId || '(legacy)'} kết thúc (${goalIncomplete ? 'CHƯA đạt' : 'đạt'} mục tiêu): đóng ${closed.inProgressClosed} in_progress, ${closed.pendingCompleted} pending→completed, ${closed.pendingArchived} pending ẩn (archivedAt) trong session ${sessionId}`)
-            }
-          } catch { /* non-blocking — todo hiển thị chỉ là UI progress */ }
-        }
+        // run này bắt đầu).
+        // (Task 14-c: PURE MOVE khối inline này thành helper chia sẻ
+        // closeGoalLoopRunTodos trong goal-loop-finalize.ts — đường durable
+        // finalize dùng cùng 1 nguồn sự thật; helper tự fail-open.)
+        await closeGoalLoopRunTodos({ sessionId, runId: reactResult.runId, goalLoop: reactResult.goalLoop })
 
         // Track session (TOMBSTONE GUARD: session đã xóa → không upsert lại)
         if (sessionId && !(await isSessionDeletedDeep(sessionId))) {
