@@ -87,6 +87,11 @@ export const DEFAULT_NEW_AGENT_TOOLS = [
   'create_custom_tool', 'list_custom_tools',
   'get_app_runtime_status',
   'escalate_problem',
+  // AUTOMATION PROPOSAL (user request 2026-09-13): agent mới thấy cần cron
+  // job / webhook / standing order / task flow → đề xuất với Omega
+  // (propose_automation) — Omega quyết định forward vào Self-direction chờ
+  // phê duyệt. Không có quyền tạo trực tiếp (chỉ Omega có manage_automation).
+  'propose_automation',
 ]
 
 /** 5 vị trí chuẩn của team code — RESERVED cho APEX/CORTEX/BOLT/SENTINEL/

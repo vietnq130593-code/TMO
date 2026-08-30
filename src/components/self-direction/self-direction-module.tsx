@@ -68,6 +68,7 @@ import {
   TrendingUp,
   Wrench,
   XCircle,
+  Zap,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
@@ -81,6 +82,7 @@ export type SdCategory =
   | 'missing_test'
   | 'improvement'
   | 'long_term'
+  | 'automation'
 
 export type SdPriority = 'low' | 'medium' | 'high' | 'critical'
 
@@ -173,6 +175,10 @@ const CATEGORY_META: Record<SdCategory, { label: string; icon: LucideIcon }> = {
   missing_test: { label: 'Thiếu test', icon: FlaskConical },
   improvement: { label: 'Cải tiến', icon: TrendingUp },
   long_term: { label: 'Dài hạn', icon: Route },
+  // AUTOMATION (user request 2026-09-13): đề xuất cron job / webhook /
+  // standing order / task flow do agent gửi qua propose_automation (Omega
+  // forward) — được duyệt → tài nguyên tự tạo trong Smolab > Automation.
+  automation: { label: 'Tự động hóa', icon: Zap },
 }
 
 const PRIORITY_META: Record<SdPriority, { label: string; className: string }> = {

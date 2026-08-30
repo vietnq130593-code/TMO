@@ -144,7 +144,7 @@ export interface SdPipelineReceiptSummary {
 /** Proposal đang planning/executing mà updatedAt đứng yên quá lâu → coi là gián đoạn (PM2 restart/OOM) */
 const STALLED_AFTER_MS = 10 * 60_000
 
-const VALID_CATEGORIES = ['gap', 'kb_contradiction', 'tool_failure', 'missing_skill', 'missing_test', 'improvement', 'long_term']
+const VALID_CATEGORIES = ['gap', 'kb_contradiction', 'tool_failure', 'missing_skill', 'missing_test', 'improvement', 'long_term', 'automation']
 const VALID_PRIORITIES = ['low', 'medium', 'high', 'critical']
 
 // ==================== IN-PROCESS LOCKS (chống double-run) ====================
@@ -1004,9 +1004,26 @@ export async function triggerOrchestration(proposalId: string): Promise<boolean>
   runningOrchestrations.add(proposalId) // reserve NGAY (atomic với check phía trên)
   let started = false
   try {
-    const proposal = await db.selfDirectionProposal.findUnique({ where: { id: proposalId }, select: { status: true, title: true } })
+    const proposal = await db.selfDirectionProposal.findUnique({
+      where: { id: proposalId },
+      select: { status: true, title: true, category: true, automationJson: true },
+    })
     if (!proposal) return false
     if (!['ready', 'approved', 'failed'].includes(proposal.status)) return false
+
+    // ━━━ AUTOMATION FAST-PATH (user request 2026-09-13) ━━━
+    // Proposal category='automation' (agent đề xuất qua propose_automation,
+    // Omega forward) là hành động CƠ KHÍ — tạo cron job / webhook / standing
+    // order / task flow. KHÔNG cần Omega lập kế hoạch giao agents (orchestration
+    // 6 bước cho 1 lệnh INSERT là lãng phí) → thực thi trực tiếp qua
+    // executeAutomationProposal (idempotent-guard: completed bỏ qua).
+    if (proposal.category === 'automation' && proposal.automationJson) {
+      console.log(`[SelfDirection] Automation fast-path cho "${proposal.title}" — thực thi trực tiếp (không orchestration)`)
+      void runAutomationFastPath(proposalId)
+      started = true
+      return true
+    }
+
     console.log(`[SelfDirection] Trigger orchestration cho "${proposal.title}" (status=${proposal.status})`)
     // Fire-and-forget — mọi lỗi được xử lý trong catch bên dưới
     void runOrchestration(proposalId).catch(async err => {
@@ -1031,6 +1048,32 @@ export async function triggerOrchestration(proposalId: string): Promise<boolean>
   } finally {
     // Không kick được orchestration (early-return/exception) → nhả lock reservation
     if (!started) runningOrchestrations.delete(proposalId)
+  }
+}
+
+/**
+ * AUTOMATION FAST-PATH runner (2026-09-13): thực thi proposal automation trực
+ * tiếp (dynamic import chống module-load-order issue), lỗi → đánh dấu failed
+ * (đúng pattern catch của runOrchestration), luôn nhả lock reservation.
+ */
+async function runAutomationFastPath(proposalId: string): Promise<void> {
+  try {
+    const { executeAutomationProposal } = await import('@/lib/automation-proposals')
+    const result = await executeAutomationProposal(proposalId)
+    console.log(`[SelfDirection] Automation fast-path ${proposalId}: ${result.success ? 'THÀNH CÔNG' : 'THẤT BẠI'} — ${result.detail.slice(0, 150)}`)
+  } catch (err) {
+    console.error(`[SelfDirection] Automation fast-path ${proposalId} crash:`, err instanceof Error ? err.message : String(err))
+    try {
+      await db.selfDirectionProposal.update({
+        where: { id: proposalId },
+        data: {
+          status: 'failed',
+          decisionReason: `Lỗi thực thi automation: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      })
+    } catch { /* best-effort */ }
+  } finally {
+    runningOrchestrations.delete(proposalId)
   }
 }
 

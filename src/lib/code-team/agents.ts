@@ -73,7 +73,13 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
       // agents không dùng được"): mọi Code Team agents tự liệt kê/đọc 68
       // filesystem skills qua list_skills/read_skill (trước đây CHỈ Omega có —
       // 5 agents này không tài nguyên nào dùng được skill registry).
-      'list_skills', 'read_skill'],
+      'list_skills', 'read_skill',
+      // AUTOMATION PROPOSAL (user request 2026-09-13): APEX thấy cần cron job /
+      // webhook / standing order / task flow → đề xuất với Omega qua
+      // propose_automation — Omega quyết định forward vào Self-direction chờ
+      // Mr. Architect / agent được ủy quyền phê duyệt. (APEX có tool `cron` nhưng
+      // đó là mini-service riêng flag-gated; propose_automation là luồng chuẩn.)
+      'propose_automation'],
   },
   {
     name: 'CORTEX',
@@ -90,7 +96,9 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     avatar: '🧠',
     tools: ['knowledge_search', 'knowledge_graph', 'tavily', 'serper', 'jina', 'file_read', 'file_list', 'grep', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
       // SKILL ACCESS (fix 2026-09-12) — xem note APEX phía trên.
-      'list_skills', 'read_skill'],
+      'list_skills', 'read_skill',
+      // AUTOMATION PROPOSAL (2026-09-13) — xem note APEX phía trên.
+      'propose_automation'],
   },
   {
     name: 'BOLT',
@@ -109,7 +117,9 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
       // CI-3 B3 (Task 13-b) — Kho Context: truy hồi digest đã nén của run trước.
       'context_recall',
       // SKILL ACCESS (fix 2026-09-12) — xem note APEX phía trên.
-      'list_skills', 'read_skill'],
+      'list_skills', 'read_skill',
+      // AUTOMATION PROPOSAL (2026-09-13) — xem note APEX phía trên.
+      'propose_automation'],
   },
   {
     name: 'SENTINEL',
@@ -132,7 +142,9 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
       'context_recall',
       'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_edit', 'lsp_diagnostics', 'lint', 'type_check', 'browser_screenshot', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
       // SKILL ACCESS (fix 2026-09-12) — xem note APEX phía trên.
-      'list_skills', 'read_skill'],
+      'list_skills', 'read_skill',
+      // AUTOMATION PROPOSAL (2026-09-13) — xem note APEX phía trên.
+      'propose_automation'],
   },
   {
     name: 'CATALYST',
@@ -151,7 +163,9 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
       // CI-3 B3 (Task 13-b) — Kho Context: truy hồi digest đã nén của run trước.
       'context_recall',
       // SKILL ACCESS (fix 2026-09-12) — xem note APEX phía trên.
-      'list_skills', 'read_skill'],
+      'list_skills', 'read_skill',
+      // AUTOMATION PROPOSAL (2026-09-13) — xem note APEX phía trên.
+      'propose_automation'],
   },
 ]
 

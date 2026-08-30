@@ -179,6 +179,18 @@ TỰ VIẾT TOOL KHI THIẾU (create_custom_tool):
 - Liệt kê: tool_call: list_custom_tools({}) — Xóa: tool_call: delete_custom_tool({"name": "..."})
 - Tool + SKILL.md guide được LƯU VĨNH VIỄN (DB) — các agent khác cũng dùng được.
 
+═══════════════════════════════════════════
+🎛 QUẢN LÝ TỰ ĐỘNG HÓA (manage_automation — quyền mặc định của BẠN)
+═══════════════════════════════════════════
+Bạn là agent DUY NHẤT được tạo/sửa/xóa tài nguyên automation của module Smolab > Automation TRỰC TIẾP (user request 2026-09-13):
+- Tạo cron job: tool_call: manage_automation({"action": "create_cron", "expression": "0 9 * * 1-5", "taskPrompt": "nhiệm vụ chạy theo lịch"})
+- Đăng ký webhook: tool_call: manage_automation({"action": "create_webhook", "url": "https://...", "events": ["document.uploaded"]})
+- Thêm standing order: tool_call: manage_automation({"action": "add_standing_order", "order": "chỉ thị thường trực", "priority": 50})
+- Tạo task flow (quy trình nhiều bước Trigger→Action→Condition→Result): tool_call: manage_automation({"action": "create_flow", "name": "...", "steps": [{"type":"trigger","title":"...","config":{"kind":"cron","expression":"0 8 * * *"}},{"type":"action","title":"...","config":{"kind":"agent_task","taskPrompt":"..."}},{"type":"condition","title":"...","config":{"description":"điều kiện chạy tiếp"}},{"type":"result","title":"...","config":{"resultKind":"notify"}}]})
+- Tinh chỉnh flow: action=update_flow {id, name/description/steps/enabled} — chạy ngay: action=run_flow {id}
+- Liệt kê: action=list_cron | list_webhooks | list_standing_orders | list_flows — xóa: action=delete_cron|delete_webhook|delete_standing_order|delete_flow {id}
+Agents KHÁC thấy cần automation sẽ đề xuất với bạn qua propose_automation — bạn là người ra quyết định (tool sẽ tự gọi bộ não của bạn). Dùng quyền trực tiếp này có trách nhiệm: tạo tài nguyên user/YÊU CẦU hoặc hệ thống thật cần.
+
 Lưu ý GIT: luôn git_commit trước khi git_push. Xem trạng thái trước bằng dry_run: tool_call: git_push({"dry_run": true}). force:true CHỈ dùng khi user yêu cầu ghi đè.
 
 ═══════════════════════════════════════════
@@ -262,6 +274,12 @@ LEARNING & MEMORY
       // user yêu cầu ("hãy bật tool X cho agent Y") + đọc/sửa SKILL.md filesystem.
       // CHỈ Omega có tool này — Code Team 5 agent KHÔNG (tránh tranh quyền QTV).
       'manage_tools',
+      // AUTOMATION (user request 2026-09-13): Omega được phép TRỰC TIẾP tạo
+      // cron job / webhook / standing order / task flow của module Smolab >
+      // Automation (manage_automation). Agents khác không có quyền trực tiếp —
+      // họ đề xuất qua propose_automation → Omega quyết định forward vào
+      // Self-direction chờ Mr. Architect / agent được ủy quyền phê duyệt.
+      'manage_automation',
       // CI-4 B2 (Task 10-b) — verify tools cho Omega: lint/type_check/
       // lsp_diagnostics/test_coverage (kiểm định code), browser_screenshot
       // (verify UI), open_workspace (mở thư mục workspace trên máy user),
@@ -381,6 +399,18 @@ async function _doStandaloneSeed(): Promise<boolean> {
               data: { instruction: def.instruction },
             })
             console.log(`[Standalone] Migrated ${def.name} instruction → new version (ORCHESTRATOR & AGENT FACTORY)`)
+          } catch (migErr) {
+            console.warn(`[Standalone] Instruction migration failed for ${def.name}:`, migErr)
+          }
+        } else if (existing.instruction && def.instruction.includes('manage_automation') && !existing.instruction.includes('manage_automation')) {
+          // (2026-09-13) Marker QUẢN LÝ TỰ ĐỘNG HÓA — Omega có tool manage_automation
+          // (tạo cron/webhook/standing order/task flow trực tiếp — quyền mặc định).
+          try {
+            await db.agentProfile.update({
+              where: { name: def.name },
+              data: { instruction: def.instruction },
+            })
+            console.log(`[Standalone] Migrated ${def.name} instruction → new version (MANAGE_AUTOMATION — Smolab Automation)`)
           } catch (migErr) {
             console.warn(`[Standalone] Instruction migration failed for ${def.name}:`, migErr)
           }

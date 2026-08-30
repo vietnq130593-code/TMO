@@ -1636,6 +1636,90 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       },
     },
   },
+
+  // ===== AUTOMATION TOOLS (user request 2026-09-13) =====
+  // 2 tool bổ sung cho module Smolab > Automation:
+  //   • manage_automation — CHỈ Omega: trực tiếp tạo cron job / webhook /
+  //     standing order / task flow (quyền mặc định của orchestrator).
+  //   • propose_automation — MỌI agents: thấy cần automation → đề xuất, Omega
+  //     quyết định forward vào Self-direction chờ Mr. Architect / agent được
+  //     ủy quyền phê duyệt (được duyệt → tài nguyên tự tạo).
+  manage_automation: {
+    type: 'function',
+    function: {
+      name: 'manage_automation',
+      description:
+        'QUẢN LÝ TỰ ĐỘNG HÓA của module Smolab > Automation (CHỈ Omega có quyền mặc định). ' +
+        'Actions: (1) create_cron {expression, taskPrompt} — cron job chạy theo lịch (expression vd "*/5 * * * *" hoặc "0 9 * * 1-5"); ' +
+        '(2) list_cron; (3) toggle_cron {id, enabled}; (4) delete_cron {id}; ' +
+        '(5) create_webhook {url, events[], secret?} — đăng ký endpoint nhận sự kiện (HTTPS công khai); (6) list_webhooks; (7) delete_webhook {id}; ' +
+        '(8) add_standing_order {order, priority?} — chỉ thị thường trực inject vào mọi automation runs; (9) list_standing_orders; (10) delete_standing_order {id}; ' +
+        '(11) list_flows — danh sách task flow; (12) create_flow {name, description?, steps[]} — quy trình nhiều bước Trigger→Action→Condition→Result ' +
+        '(steps: [{type:"trigger",config:{kind:"cron",expression:"..."}}, {type:"action",config:{kind:"agent_task",taskPrompt:"..."}}, {type:"condition",config:{description:"điều kiện chạy tiếp"}}, {type:"result",config:{resultKind:"log"|"notify"}}]); ' +
+        '(13) update_flow {id, name?, description?, steps?, enabled?}; (14) delete_flow {id}; (15) run_flow {id} — chạy flow ngay. ' +
+        'Tác vụ chạy nền tự động — dùng khi user yêu cầu hoặc hệ thống cần automation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: [
+              'create_cron', 'list_cron', 'toggle_cron', 'delete_cron',
+              'create_webhook', 'list_webhooks', 'delete_webhook',
+              'add_standing_order', 'list_standing_orders', 'delete_standing_order',
+              'list_flows', 'create_flow', 'update_flow', 'delete_flow', 'run_flow',
+            ],
+            description: 'Hành động automation',
+          },
+          // cron
+          expression: { type: 'string', description: '(create_cron) Cron expression, vd "*/5 * * * *" (mỗi 5 phút), "0 9 * * 1-5" (9h sáng thứ 2-6)' },
+          taskPrompt: { type: 'string', description: '(create_cron) Nhiệm vụ LLM chạy theo lịch (tiếng Việt, cụ thể)' },
+          // webhook
+          url: { type: 'string', description: '(create_webhook) URL đích HTTPS công khai' },
+          events: { type: 'array', items: { type: 'string' }, description: '(create_webhook) Event đăng ký, vd ["document.uploaded","query.completed"] hoặc ["*"]' },
+          secret: { type: 'string', description: '(create_webhook) HMAC secret (tùy chọn)' },
+          // standing order
+          order: { type: 'string', description: '(add_standing_order) Nội dung chỉ thị thường trực' },
+          priority: { type: 'number', description: '(add_standing_order) Ưu tiên 0-100 (mặc định 0)' },
+          // task flow
+          name: { type: 'string', description: '(create_flow/update_flow) Tên flow' },
+          description: { type: 'string', description: '(create_flow/update_flow) Mô tả flow' },
+          steps: { type: 'array', items: { type: 'object' }, description: '(create_flow/update_flow) Chuỗi bước [{type, title, config}] — xem mô tả tool' },
+          // chung
+          id: { type: 'string', description: '(toggle_cron/delete_cron/delete_webhook/delete_standing_order/update_flow/delete_flow/run_flow) ID tài nguyên' },
+          enabled: { type: 'boolean', description: '(toggle_cron/update_flow) Bật/tắt' },
+        },
+        required: ['action'],
+      },
+    },
+  },
+
+  propose_automation: {
+    type: 'function',
+    function: {
+      name: 'propose_automation',
+      description:
+        'ĐỀ XUẤT tạo tài nguyên automation (cron job / webhook / standing order / task flow) khi bạn thấy CẦN nhưng KHÔNG có quyền tạo trực tiếp (chỉ Omega có manage_automation). ' +
+        'Luồng: đề xuất của bạn → OMEGA quyết định (forward/từ chối) → nếu forward: vào module Self-direction chờ Mr. Architect hoặc agent được ủy quyền PHÊ DUYỆT → được duyệt thì tài nguyên tự tạo. ' +
+        'Dùng khi: tác vụ lặp lại định kỳ đáng tự động hóa, cần đẩy sự kiện ra endpoint ngoài, cần chỉ thị thường trực, hoặc cần quy trình nhiều bước. ' +
+        'KHÔNG dùng cho việc gấp cần làm ngay — tự làm bằng tools của mình.',
+      parameters: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: ['cron', 'webhook', 'standing_order', 'task_flow'], description: 'Loại tài nguyên cần tạo' },
+          payload: {
+            type: 'object',
+            description:
+              'Nội dung theo kind: cron={expression:"0 9 * * 1-5", taskPrompt:"nhiệm vụ..."} | webhook={url:"https://...", events:["document.uploaded"]} | ' +
+              'standing_order={order:"chỉ thị...", priority:50} | task_flow={name:"...", description:"...", steps:[{type:"trigger",config:{kind:"cron",expression:"..."}},{type:"action",config:{kind:"agent_task",taskPrompt:"..."}}]}',
+          },
+          reason: { type: 'string', description: 'Lý do cần automation này (cụ thể — Omega và người duyệt đọc lý do này)' },
+          evidence: { type: 'string', description: 'Bằng chứng/dữ liệu hỗ trợ (vd tần suất lặp lại, số lần đã làm tay)' },
+        },
+        required: ['kind', 'payload', 'reason'],
+      },
+    },
+  },
 }
 
 /**
@@ -2917,6 +3001,53 @@ export async function executeTool(
         }
         break
       }
+      // ===== AUTOMATION TOOLS (user request 2026-09-13) =====
+      // Omega trực tiếp quản lý automation của module Smolab > Automation.
+      // Fail-open mọi action: lỗi → JSON thân thiện với hint.
+      case 'manage_automation': {
+        try {
+          result = await executeManageAutomation(args, context)
+        } catch (err) {
+          result = { success: false, error: `manage_automation lỗi: ${err instanceof Error ? err.message : String(err)}` }
+        }
+        break
+      }
+      // Agent (không có quyền trực tiếp) đề xuất automation → Omega quyết định
+      // → Self-direction chờ phê duyệt (user request 2026-09-13).
+      case 'propose_automation': {
+        try {
+          const { submitAutomationProposal, validateAutomationRequest } = await import('@/lib/automation-proposals')
+          const validated = validateAutomationRequest(args.kind, args.payload)
+          if (!validated.ok) {
+            result = { success: false, error: validated.error }
+            break
+          }
+          const submitted = await submitAutomationProposal({
+            kind: validated.data.kind,
+            // Payload đã validate đầy đủ theo kind — cast qua unknown (union
+            // payload types không overlap đủ trực tiếp từ Record<string, unknown>)
+            payload: validated.data.payload as unknown as Parameters<typeof submitAutomationProposal>[0]['payload'],
+            proposedBy: context?.agentName || 'unknown-agent',
+            reason: args.reason ? String(args.reason) : undefined,
+            evidence: args.evidence ? String(args.evidence) : undefined,
+          })
+          result = submitted.success
+            ? {
+                success: true,
+                forwarded: submitted.forwarded,
+                proposalId: submitted.proposalId ?? null,
+                message: submitted.forwarded
+                  ? `Omega đã CHUYỂN TIẾP đề xuất ${validated.data.kind} vào module Self-direction (proposal ${submitted.proposalId}) — chờ Mr. Architect hoặc agent được ủy quyền phê duyệt; được duyệt thì tài nguyên tự tạo. Lý do Omega: ${submitted.omegaReason || '(không nêu)'}`
+                  : `Omega TỪ CHỐI đề xuất này — không gửi vào Self-direction. Lý do: ${submitted.omegaReason || '(không nêu)'}. Có thể chỉnh sửa đề xuất rõ hơn rồi thử lại.`,
+                omegaReason: submitted.omegaReason ?? null,
+                tokensUsed: submitted.tokensUsed,
+              }
+            : { success: false, error: submitted.error || 'Đề xuất thất bại' }
+        } catch (err) {
+          result = { success: false, error: `propose_automation lỗi: ${err instanceof Error ? err.message : String(err)}` }
+        }
+        break
+      }
       default: {
         // ===== Custom tool dispatch (user request 2026-08-30) =====
         // Tool không nằm trong built-in list → kiểm tra custom tool registry
@@ -3267,6 +3398,265 @@ function summarizeToolResult(toolName: string, result: unknown): string {
     }
   } catch {
     return ''
+  }
+}
+
+// ==================== MANAGE_AUTOMATION — Omega trực tiếp quản lý automation (2026-09-13) ====================
+//
+// 15 action trên 4 loại tài nguyên của module Smolab > Automation:
+// cron jobs / webhooks / standing orders / task flows. Fail-open mọi action
+// (lỗi → JSON thân thiện + hint, KHÔNG throw ra executor).
+
+async function executeManageAutomation(
+  args: Record<string, unknown>,
+  context?: { agentName?: string; sessionId?: string | null },
+): Promise<unknown> {
+  const action = String(args.action ?? '')
+  const dbMod = await import('@/lib/db')
+  const db = dbMod.db
+  const { approximateNextRun, validateWebhookUrl } = await import('@/lib/automation-engine')
+  const AGENT_ID = 'default'
+  const actor = context?.agentName || 'Omega'
+
+  // ── Cron Jobs ──────────────────────────────────────────────────────────
+  if (action === 'create_cron') {
+    const expression = String(args.expression ?? '').trim()
+    const taskPrompt = String(args.taskPrompt ?? '').trim()
+    if (!expression || !taskPrompt) {
+      return { success: false, error: 'create_cron cần {expression, taskPrompt} — vd expression "0 9 * * 1-5"' }
+    }
+    const job = await db.cronJob.create({
+      data: {
+        agentId: AGENT_ID,
+        expression: expression.slice(0, 100),
+        taskPrompt: taskPrompt.slice(0, 3000),
+        enabled: true,
+        nextRunAt: approximateNextRun(expression),
+      },
+    })
+    return {
+      success: true,
+      jobId: job.id,
+      expression: job.expression,
+      nextRunAt: job.nextRunAt?.toISOString() ?? null,
+      message: `Đã tạo cron job "${taskPrompt.slice(0, 80)}" (lịch ${expression}) — hiển thị trong Smolab > Automation, scheduler tự chạy theo lịch.`,
+    }
+  }
+  if (action === 'list_cron') {
+    const jobs = await db.cronJob.findMany({
+      where: { agentId: AGENT_ID },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      select: { id: true, expression: true, taskPrompt: true, enabled: true, lastRunAt: true, nextRunAt: true, status: true },
+    })
+    return {
+      success: true,
+      count: jobs.length,
+      jobs: jobs.map(j => ({
+        id: j.id, expression: j.expression, task: j.taskPrompt.slice(0, 120),
+        enabled: j.enabled, status: j.status,
+        lastRunAt: j.lastRunAt?.toISOString() ?? null, nextRunAt: j.nextRunAt?.toISOString() ?? null,
+      })),
+    }
+  }
+  if (action === 'toggle_cron') {
+    const id = String(args.id ?? '')
+    const enabled = args.enabled === true
+    if (!id) return { success: false, error: 'toggle_cron cần {id, enabled}' }
+    const existing = await db.cronJob.findUnique({ where: { id } })
+    if (!existing) return { success: false, error: `Cron job ${id} không tồn tại` }
+    const updated = await db.cronJob.update({
+      where: { id },
+      data: { enabled, ...(enabled ? { nextRunAt: approximateNextRun(existing.expression) } : {}) },
+    })
+    return { success: true, jobId: id, enabled: updated.enabled, message: `Cron job "${updated.taskPrompt.slice(0, 60)}" ${enabled ? 'ĐÃ BẬT' : 'ĐÃ TẮT'}.` }
+  }
+  if (action === 'delete_cron') {
+    const id = String(args.id ?? '')
+    if (!id) return { success: false, error: 'delete_cron cần {id}' }
+    const existing = await db.cronJob.findUnique({ where: { id } })
+    if (!existing) return { success: false, error: `Cron job ${id} không tồn tại` }
+    await db.cronJob.delete({ where: { id } })
+    return { success: true, jobId: id, message: `Đã xóa cron job "${existing.taskPrompt.slice(0, 60)}".` }
+  }
+
+  // ── Webhooks ───────────────────────────────────────────────────────────
+  if (action === 'create_webhook') {
+    const url = String(args.url ?? '').trim()
+    const events = Array.isArray(args.events) ? args.events.map(e => String(e).trim()).filter(Boolean) : []
+    if (!url || events.length === 0) {
+      return { success: false, error: 'create_webhook cần {url, events[]} — vd events ["document.uploaded","query.completed"] hoặc ["*"]' }
+    }
+    const check = validateWebhookUrl(url)
+    if (!check.valid) {
+      return { success: false, error: `URL không hợp lệ: ${check.reason} — chỉ nhận HTTP/HTTPS công khai (chống SSRF).` }
+    }
+    const wh = await db.webhook.create({
+      data: {
+        agentId: AGENT_ID,
+        url: url.slice(0, 1000),
+        events: JSON.stringify(events.slice(0, 10)),
+        secret: args.secret ? String(args.secret).slice(0, 200) : null,
+        enabled: true,
+      },
+    })
+    return {
+      success: true,
+      webhookId: wh.id,
+      url: wh.url,
+      events,
+      message: `Đã đăng ký webhook ${url} (events: ${events.join(', ')}) — sự kiện khớp sẽ POST kèm HMAC-SHA256 (nếu có secret).`,
+    }
+  }
+  if (action === 'list_webhooks') {
+    const webhooks = await db.webhook.findMany({
+      where: { agentId: AGENT_ID },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      select: { id: true, url: true, events: true, enabled: true, secret: true },
+    })
+    return {
+      success: true,
+      count: webhooks.length,
+      webhooks: webhooks.map(w => ({ id: w.id, url: w.url, events: JSON.parse(w.events || '[]'), enabled: w.enabled, hasSecret: Boolean(w.secret) })),
+    }
+  }
+  if (action === 'delete_webhook') {
+    const id = String(args.id ?? '')
+    if (!id) return { success: false, error: 'delete_webhook cần {id}' }
+    const existing = await db.webhook.findUnique({ where: { id } })
+    if (!existing) return { success: false, error: `Webhook ${id} không tồn tại` }
+    await db.webhook.delete({ where: { id } })
+    return { success: true, webhookId: id, message: `Đã xóa webhook ${existing.url}.` }
+  }
+
+  // ── Standing Orders ────────────────────────────────────────────────────
+  if (action === 'add_standing_order') {
+    const order = String(args.order ?? '').trim()
+    if (!order) return { success: false, error: 'add_standing_order cần {order} — nội dung chỉ thị thường trực' }
+    const priorityRaw = typeof args.priority === 'number' ? args.priority : parseInt(String(args.priority ?? '0'), 10)
+    const priority = Number.isFinite(priorityRaw) ? Math.min(100, Math.max(0, Math.round(priorityRaw))) : 0
+    const so = await db.standingOrder.create({
+      data: { agentId: AGENT_ID, order: order.slice(0, 2000), priority, enabled: true },
+    })
+    return {
+      success: true,
+      orderId: so.id,
+      priority,
+      message: `Đã thêm standing order (P${priority}): "${order.slice(0, 100)}" — inject vào system prompt của mọi automation runs (cron/heartbeat/task flow).`,
+    }
+  }
+  if (action === 'list_standing_orders') {
+    const orders = await db.standingOrder.findMany({
+      where: { agentId: AGENT_ID },
+      orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
+      take: 50,
+      select: { id: true, order: true, priority: true, enabled: true },
+    })
+    return { success: true, count: orders.length, orders }
+  }
+  if (action === 'delete_standing_order') {
+    const id = String(args.id ?? '')
+    if (!id) return { success: false, error: 'delete_standing_order cần {id}' }
+    const existing = await db.standingOrder.findUnique({ where: { id } })
+    if (!existing) return { success: false, error: `Standing order ${id} không tồn tại` }
+    await db.standingOrder.delete({ where: { id } })
+    return { success: true, orderId: id, message: `Đã xóa standing order "${existing.order.slice(0, 80)}".` }
+  }
+
+  // ── Task Flows ─────────────────────────────────────────────────────────
+  if (action === 'list_flows') {
+    const { listTaskFlows } = await import('@/lib/task-flows')
+    const flows = await listTaskFlows()
+    return {
+      success: true,
+      count: flows.length,
+      flows: flows.map(f => ({
+        id: f.id, name: f.name, description: f.description.slice(0, 150), enabled: f.enabled,
+        createdBy: f.createdBy, steps: f.steps.length,
+        stepTypes: f.steps.map(s => `${s.type}:${s.title.slice(0, 40)}`),
+        nextRunAt: f.nextRunAt?.toISOString() ?? null, lastRunAt: f.lastRunAt?.toISOString() ?? null,
+      })),
+    }
+  }
+  if (action === 'create_flow') {
+    const { validateTaskFlowInput, createTaskFlow } = await import('@/lib/task-flows')
+    const validated = validateTaskFlowInput({
+      name: args.name,
+      description: args.description,
+      steps: args.steps,
+      enabled: true,
+      createdBy: `omega (${actor})`,
+    })
+    if (!validated.ok) {
+      return { success: false, error: `Flow không hợp lệ: ${validated.error}`, hint: 'Flow cần ≥1 action; trigger (nếu có) phải là bước đầu tiên và duy nhất.' }
+    }
+    const flow = await createTaskFlow(validated.data)
+    return {
+      success: true,
+      flowId: flow.id,
+      name: flow.name,
+      steps: flow.steps.length,
+      nextRunAt: flow.nextRunAt?.toISOString() ?? null,
+      message: `Đã tạo task flow "${flow.name}" (${flow.steps.length} bước) — thiết kế được/tinh chỉnh được trong Smolab > Automation.${flow.nextRunAt ? ` Trigger cron tự chạy từ ${flow.nextRunAt.toISOString()}.` : ''}`,
+    }
+  }
+  if (action === 'update_flow') {
+    const id = String(args.id ?? '')
+    if (!id) return { success: false, error: 'update_flow cần {id}' }
+    const { updateTaskFlow, validateTaskFlowInput } = await import('@/lib/task-flows')
+    const patch: Record<string, unknown> = {}
+    if (args.name !== undefined) patch.name = String(args.name)
+    if (args.description !== undefined) patch.description = String(args.description)
+    if (args.enabled !== undefined) patch.enabled = args.enabled === true
+    if (args.steps !== undefined) {
+      const validated = validateTaskFlowInput({ name: args.name ?? '(check)', description: args.description, steps: args.steps, enabled: args.enabled ?? true })
+      if (!validated.ok) return { success: false, error: `Steps không hợp lệ: ${validated.error}` }
+      patch.steps = validated.data.steps
+    }
+    const flow = await updateTaskFlow(id, patch as Parameters<typeof updateTaskFlow>[1])
+    if (!flow) return { success: false, error: `Task flow ${id} không tồn tại` }
+    return {
+      success: true,
+      flowId: id,
+      name: flow.name,
+      enabled: flow.enabled,
+      nextRunAt: flow.nextRunAt?.toISOString() ?? null,
+      message: `Đã cập nhật task flow "${flow.name}" (${Object.keys(patch).join(', ')}) — thay đổi có hiệu lực ngay.`,
+    }
+  }
+  if (action === 'delete_flow') {
+    const id = String(args.id ?? '')
+    if (!id) return { success: false, error: 'delete_flow cần {id}' }
+    const { deleteTaskFlow } = await import('@/lib/task-flows')
+    const ok = await deleteTaskFlow(id)
+    if (!ok) return { success: false, error: `Task flow ${id} không tồn tại` }
+    return { success: true, flowId: id, message: 'Đã xóa task flow.' }
+  }
+  if (action === 'run_flow') {
+    const id = String(args.id ?? '')
+    if (!id) return { success: false, error: 'run_flow cần {id}' }
+    const { runTaskFlow } = await import('@/lib/task-flows')
+    const run = await runTaskFlow(id, { trigger: 'manual (Omega)' })
+    return {
+      success: run.success,
+      flowId: id,
+      flowName: run.flowName,
+      stoppedAtCondition: run.stopReason ? { reason: run.stopReason } : null,
+      steps: run.steps.map(s => ({ title: s.title, type: s.type, outcome: s.outcome, summary: s.summary.slice(0, 200) })),
+      durationMs: run.durationMs,
+      error: run.error ?? null,
+      message: run.success
+        ? `Flow "${run.flowName}" HOÀN TẤT (${run.steps.filter(s => s.outcome === 'executed').length}/${run.steps.length} bước chạy).`
+        : run.stopReason
+          ? `Flow dừng ở condition: ${run.stopReason}`
+          : `Flow thất bại: ${run.error}`,
+    }
+  }
+
+  return {
+    success: false,
+    error: `Action "${action}" không hợp lệ. Actions: create_cron | list_cron | toggle_cron | delete_cron | create_webhook | list_webhooks | delete_webhook | add_standing_order | list_standing_orders | delete_standing_order | list_flows | create_flow | update_flow | delete_flow | run_flow`,
   }
 }
 

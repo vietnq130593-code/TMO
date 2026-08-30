@@ -13066,6 +13066,50 @@ interface WebhookItem {
   secret: string | null; enabled: boolean; createdAt: string; updatedAt: string;
 }
 
+// ==================== TASK FLOW (user request 2026-09-13) ====================
+// Quy trình tự động hóa THIẾT KẾ ĐƯỢC (Trigger → Action → Condition → Result)
+// — user tinh chỉnh qua designer này, Omega tinh chỉnh qua tool manage_automation.
+
+interface TaskFlowStepUi {
+  id: string
+  type: 'trigger' | 'action' | 'condition' | 'result'
+  title: string
+  config: {
+    kind?: string          // trigger: cron|webhook|manual · action: agent_task|webhook
+    expression?: string    // trigger cron
+    events?: string[]      // trigger webhook
+    taskPrompt?: string    // action agent_task
+    url?: string           // action webhook
+    payload?: string       // action webhook payload
+    description?: string   // condition
+    resultKind?: string    // result: log|notify
+    note?: string          // result note
+  }
+}
+
+interface TaskFlowUi {
+  id: string; name: string; description: string; steps: TaskFlowStepUi[];
+  enabled: boolean; createdBy: string;
+  lastRunAt: string | null; nextRunAt: string | null;
+  createdAt: string; updatedAt: string;
+}
+
+const FLOW_STEP_META: Record<TaskFlowStepUi['type'], { label: string; hint: string }> = {
+  trigger: { label: 'Trigger', hint: 'Cron / Webhook / Manual' },
+  action: { label: 'Action', hint: 'LLM task / Webhook POST' },
+  condition: { label: 'Condition', hint: 'Cổng logic — đạt mới chạy tiếp' },
+  result: { label: 'Result', hint: 'Log / Notify webhooks' },
+}
+
+function newFlowStep(type: TaskFlowStepUi['type']): TaskFlowStepUi {
+  const id = `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
+  const base = { id, type, title: FLOW_STEP_META[type].label }
+  if (type === 'trigger') return { ...base, config: { kind: 'manual' } }
+  if (type === 'action') return { ...base, config: { kind: 'agent_task', taskPrompt: '' } }
+  if (type === 'condition') return { ...base, config: { description: '' } }
+  return { ...base, config: { resultKind: 'log' } }
+}
+
 function AutomationTabContent() {
   // Cron Jobs
   const [cronJobs, setCronJobs] = useState<Array<CronJobItem> | null>(null)
@@ -13116,6 +13160,18 @@ function AutomationTabContent() {
   }> | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyFilter, setHistoryFilter] = useState('all')
+
+  // Task Flows (user request 2026-09-13 — thiết kế được, tinh chỉnh được)
+  const [flows, setFlows] = useState<TaskFlowUi[] | null>(null)
+  const [flowsLoading, setFlowsLoading] = useState(false)
+  const [showFlowEditor, setShowFlowEditor] = useState(false)
+  const [editingFlow, setEditingFlow] = useState<TaskFlowUi | null>(null)
+  const [flowName, setFlowName] = useState('')
+  const [flowDescription, setFlowDescription] = useState('')
+  const [flowSteps, setFlowSteps] = useState<TaskFlowStepUi[]>([])
+  const [flowEnabled, setFlowEnabled] = useState(true)
+  const [flowSaving, setFlowSaving] = useState(false)
+  const [flowRunning, setFlowRunning] = useState<string | null>(null)
 
   // Load cron jobs
   const loadCronJobs = useCallback(async () => {
@@ -13173,9 +13229,19 @@ function AutomationTabContent() {
     finally { setHistoryLoading(false) }
   }, [historyFilter])
 
+  // Load task flows
+  const loadFlows = useCallback(async () => {
+    setFlowsLoading(true)
+    try {
+      const res = await fetch('/api/task-flows')
+      if (res.ok) { const data = await res.json(); setFlows(data.flows || []) }
+    } catch (e) { console.error('Failed to load task flows:', e) }
+    finally { setFlowsLoading(false) }
+  }, [])
+
   // Initial load (only data that doesn't depend on volatile filters)
   // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
-  useEffect(() => { queueMicrotask(() => { loadCronJobs(); loadWebhooks(); loadHeartbeat(); loadOrders(); loadHistory() }) }, [loadCronJobs, loadWebhooks, loadHeartbeat, loadOrders])
+  useEffect(() => { queueMicrotask(() => { loadCronJobs(); loadWebhooks(); loadHeartbeat(); loadOrders(); loadHistory(); loadFlows() }) }, [loadCronJobs, loadWebhooks, loadHeartbeat, loadOrders, loadFlows])
 
   // Reload history when filter changes (separate from main load to avoid re-fetching all data)
   useEffect(() => { queueMicrotask(() => { loadHistory() }) }, [loadHistory])
@@ -13188,15 +13254,16 @@ function AutomationTabContent() {
         if (res.ok) {
           const data = await res.json()
           // If any jobs were executed, refresh the data
-          if (data.cron?.executed > 0 || data.cron?.failed > 0 || data.heartbeat?.executed) {
+          if (data.cron?.executed > 0 || data.cron?.failed > 0 || data.heartbeat?.executed || data.taskFlows?.executed > 0) {
             loadCronJobs()
             loadHistory()
+            loadFlows()
           }
         }
       } catch { /* silent */ }
     }, 30000) // Poll every 30 seconds
     return () => clearInterval(interval)
-  }, [loadCronJobs, loadHistory])
+  }, [loadCronJobs, loadHistory, loadFlows])
 
   // ─── Cron Actions ───
   const saveCron = useCallback(async () => {
@@ -13346,6 +13413,107 @@ function AutomationTabContent() {
       setEditingWebhook(null); setWhUrl(''); setWhEvents(''); setWhSecret(''); setWhEnabled(true)
     }
     setShowWebhookEditor(true)
+  }, [])
+
+  // ─── Task Flow Actions (user request 2026-09-13 — designer + tinh chỉnh) ───
+  const openFlowEditor = useCallback((flow?: TaskFlowUi) => {
+    if (flow) {
+      setEditingFlow(flow); setFlowName(flow.name); setFlowDescription(flow.description || '')
+      setFlowSteps(flow.steps.map(s => ({ ...s, config: { ...s.config } }))); setFlowEnabled(flow.enabled)
+    } else {
+      setEditingFlow(null); setFlowName(''); setFlowDescription('')
+      // Flow mới: 1 action mẫu để user bắt đầu ngay (trigger manual ngầm hiểu)
+      setFlowSteps([newFlowStep('action')]); setFlowEnabled(true)
+    }
+    setShowFlowEditor(true)
+  }, [])
+
+  const saveFlow = useCallback(async () => {
+    if (!flowName.trim()) {
+      toast({ title: '❌ Thiếu tên flow', description: 'Đặt tên cho task flow', variant: 'destructive' })
+      return
+    }
+    const hasAction = flowSteps.some(s => s.type === 'action')
+    if (!hasAction) {
+      toast({ title: '❌ Flow cần ít nhất 1 Action', description: 'Thêm bước Action (LLM task hoặc Webhook POST) để flow làm được việc', variant: 'destructive' })
+      return
+    }
+    setFlowSaving(true)
+    try {
+      const body = { name: flowName.trim(), description: flowDescription, steps: flowSteps, enabled: flowEnabled }
+      const res = editingFlow
+        ? await fetch(`/api/task-flows/${editingFlow.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        : await fetch('/api/task-flows', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      if (res.ok) {
+        toast({ title: editingFlow ? '✅ Đã cập nhật flow' : '✅ Đã tạo flow', description: `"${flowName}" — ${flowSteps.length} bước` })
+        setShowFlowEditor(false); setEditingFlow(null)
+        loadFlows()
+      } else {
+        const d = await res.json().catch(() => ({ error: 'Lỗi không rõ' }))
+        toast({ title: '❌ Lưu flow thất bại', description: d.error, variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: '❌ Lỗi', description: 'Không thể lưu task flow', variant: 'destructive' })
+    } finally { setFlowSaving(false) }
+  }, [editingFlow, flowName, flowDescription, flowSteps, flowEnabled, loadFlows])
+
+  const deleteFlow = useCallback(async (id: string) => {
+    if (!confirm('Xóa task flow này?')) return
+    try {
+      const res = await fetch(`/api/task-flows/${id}`, { method: 'DELETE' })
+      if (res.ok) { toast({ title: '🗑️ Đã xóa flow' }); loadFlows() }
+    } catch { toast({ title: '❌ Lỗi', variant: 'destructive' }) }
+  }, [loadFlows])
+
+  const toggleFlowEnabled = useCallback(async (id: string, enabled: boolean) => {
+    try {
+      const res = await fetch(`/api/task-flows/${id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      })
+      if (res.ok) { toast({ title: enabled ? '▶️ Đã bật flow' : '⏸️ Đã tắt flow' }); loadFlows() }
+    } catch { toast({ title: '❌ Lỗi', variant: 'destructive' }) }
+  }, [loadFlows])
+
+  const runFlowNow = useCallback(async (id: string) => {
+    setFlowRunning(id)
+    toast({ title: '⏳ Đang chạy flow...', description: 'Thực thi từng bước qua LLM' })
+    try {
+      const res = await fetch(`/api/task-flows/${id}`, { method: 'POST' })
+      if (res.ok) {
+        const data = await res.json()
+        const r = data.result
+        if (r.success) {
+          const executed = (r.steps || []).filter((s: { outcome: string }) => s.outcome === 'executed').length
+          toast({ title: '✅ Flow hoàn tất', description: `${executed}/${r.steps?.length || 0} bước chạy · ${Math.round((r.durationMs || 0) / 1000)}s` })
+        } else if (r.stopReason) {
+          toast({ title: '⛔ Flow dừng ở condition', description: r.stopReason })
+        } else {
+          toast({ title: '⚠️ Flow thất bại', description: r.error || 'Lỗi không rõ', variant: 'destructive' })
+        }
+        loadFlows(); loadHistory()
+      }
+    } catch { toast({ title: '❌ Lỗi', description: 'Không chạy được flow', variant: 'destructive' }) }
+    finally { setFlowRunning(null) }
+  }, [loadFlows, loadHistory])
+
+  /** Sửa 1 bước trong draft editor (immutable update) */
+  const patchFlowStep = useCallback((idx: number, patch: Partial<TaskFlowStepUi>) => {
+    setFlowSteps(prev => prev.map((s, i) => i === idx ? { ...s, ...patch, config: patch.config ? { ...s.config, ...patch.config } : s.config } : s))
+  }, [])
+
+  const moveFlowStep = useCallback((idx: number, dir: -1 | 1) => {
+    setFlowSteps(prev => {
+      const next = [...prev]
+      const target = idx + dir
+      if (target < 0 || target >= next.length) return prev
+      ;[next[idx], next[target]] = [next[target], next[idx]]
+      return next
+    })
+  }, [])
+
+  const removeFlowStep = useCallback((idx: number) => {
+    setFlowSteps(prev => prev.filter((_, i) => i !== idx))
   }, [])
 
   // ─── Heartbeat Actions ───
@@ -13778,43 +13946,247 @@ function AutomationTabContent() {
         </div>
       </div>
 
-      {/* Section 6: Task Flow Editor (Simplified Visual) */}
+      {/* Section 6: Task Flow Designer (user request 2026-09-13 — thiết kế + tinh chỉnh được) */}
       <div className="nc-wrap nc-orange">
         <div className="nc-panel nc-md nc-border-orange p-4">
-          <div className="flex items-center gap-2 mb-4">
-            <Route className="w-5 h-5 text-orange-400" />
-            <h3 className="text-sm font-semibold text-orange-300 uppercase tracking-wider">Task Flow</h3>
-          </div>
-          <p className="text-[10px] text-stone-500 mb-4">Minh họa quy trình tự động hóa: Trigger → Action → Condition → Action</p>
-          <div className="flex items-center gap-2 overflow-x-auto pb-2">
-            {/* Trigger */}
-            <div className="flex-shrink-0 p-3 rounded-lg bg-orange-950/30 border border-orange-400/35 min-w-[120px] text-center">
-              <div className="p-1.5 rounded-md bg-orange-500/20 inline-block mb-2"><Clock className="w-4 h-4 text-orange-400" /></div>
-              <p className="text-[10px] font-semibold text-orange-300">Trigger</p>
-              <p className="text-[9px] text-stone-500">Cron / Webhook / Manual</p>
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Route className="w-5 h-5 text-orange-400" />
+              <h3 className="text-sm font-semibold text-orange-300 uppercase tracking-wider">Task Flow</h3>
+              {flows && <Badge variant="outline" className="text-orange-400 border-orange-500/30">{flows.length}</Badge>}
             </div>
-            <ChevronRight className="w-4 h-4 text-orange-400/50 flex-shrink-0" />
-            {/* Action */}
-            <div className="flex-shrink-0 p-3 rounded-lg bg-orange-950/30 border border-orange-400/35 min-w-[120px] text-center">
-              <div className="p-1.5 rounded-md bg-orange-500/20 inline-block mb-2"><Zap className="w-4 h-4 text-orange-400" /></div>
-              <p className="text-[10px] font-semibold text-orange-300">Action</p>
-              <p className="text-[9px] text-stone-500">Agent Prompt / Tool</p>
-            </div>
-            <ChevronRight className="w-4 h-4 text-orange-400/50 flex-shrink-0" />
-            {/* Condition */}
-            <div className="flex-shrink-0 p-3 rounded-lg bg-orange-950/30 border border-orange-400/35 min-w-[120px] text-center">
-              <div className="p-1.5 rounded-md bg-orange-500/20 inline-block mb-2"><GitBranch className="w-4 h-4 text-orange-400" /></div>
-              <p className="text-[10px] font-semibold text-orange-300">Condition</p>
-              <p className="text-[9px] text-stone-500">If / Else</p>
-            </div>
-            <ChevronRight className="w-4 h-4 text-orange-400/50 flex-shrink-0" />
-            {/* Result */}
-            <div className="flex-shrink-0 p-3 rounded-lg bg-orange-950/30 border border-orange-400/35 min-w-[120px] text-center">
-              <div className="p-1.5 rounded-md bg-orange-500/20 inline-block mb-2"><CheckCircle2 className="w-4 h-4 text-orange-400" /></div>
-              <p className="text-[10px] font-semibold text-orange-300">Result</p>
-              <p className="text-[9px] text-stone-500">Log / Notify</p>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" className="text-orange-400 border-orange-500/30 hover:bg-orange-500/10" onClick={loadFlows} disabled={flowsLoading}>
+                <RefreshCw className={`w-3.5 h-3.5 ${flowsLoading ? 'animate-spin' : ''}`} />
+              </Button>
+              <Button size="sm" className="bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white text-xs" onClick={() => openFlowEditor()}>
+                <Plus className="w-3.5 h-3.5 mr-1" /> Thiết kế flow
+              </Button>
             </div>
           </div>
+          <p className="text-[10px] text-stone-500 mb-4">
+            Quy trình tự động hóa nhiều bước: <span className="text-orange-400/80">Trigger</span> → <span className="text-orange-400/80">Action</span> → <span className="text-orange-400/80">Condition</span> → <span className="text-orange-400/80">Result</span>.
+            Tinh chỉnh được bởi <span className="text-stone-300">bạn</span> (designer này) và <span className="text-stone-300">Omega</span> (tool manage_automation).
+          </p>
+
+          {/* Danh sách flows */}
+          {flowsLoading && !flows ? (
+            <div className="flex items-center justify-center py-4"><Loader2 className="w-5 h-5 text-orange-400 animate-spin" /></div>
+          ) : flows && flows.length > 0 ? (
+            <div className="space-y-2 mb-4 max-h-72 overflow-y-auto">
+              {flows.map(flow => {
+                const trigger = flow.steps.find(s => s.type === 'trigger')
+                const triggerLabel = trigger?.config.kind === 'cron' ? `⏰ ${trigger.config.expression}` : trigger?.config.kind === 'webhook' ? `🔗 ${flow.steps[0]?.config.events?.join(', ') || 'webhook'}` : '👆 Manual'
+                return (
+                  <div key={flow.id} className="p-3 rounded-lg bg-orange-950/20 border border-orange-500/10">
+                    <div className="flex items-start gap-3">
+                      <Switch checked={flow.enabled} onCheckedChange={(checked) => toggleFlowEnabled(flow.id, checked)} className="scale-75 data-[state=checked]:bg-orange-500 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className={`text-xs font-medium truncate ${flow.enabled ? 'text-stone-200' : 'text-stone-500'}`}>{flow.name}</p>
+                          <Badge className="text-[8px] bg-orange-950/50 text-orange-400 border border-orange-400/30">{flow.steps.length} bước</Badge>
+                          <Badge className="text-[8px] bg-slate-800 text-stone-400">{triggerLabel}</Badge>
+                          {flow.createdBy && flow.createdBy !== 'user' && (
+                            <Badge className="text-[8px] bg-violet-950/50 text-violet-400 border border-violet-400/30">{flow.createdBy.startsWith('omega') ? '⚡ Omega' : flow.createdBy.startsWith('self-direction') ? '✅ Duyệt qua Self-direction' : `🤖 ${flow.createdBy}`}</Badge>
+                          )}
+                        </div>
+                        {flow.description && <p className="text-[10px] text-stone-500 mt-0.5 truncate">{flow.description}</p>}
+                        {/* Chuỗi bước dạng compact */}
+                        <div className="flex items-center gap-1 mt-1.5 overflow-x-auto pb-1">
+                          {flow.steps.map((s, i) => (
+                            <span key={s.id} className="flex items-center gap-1 flex-shrink-0">
+                              {i > 0 && <ChevronRight className="w-3 h-3 text-orange-400/40 flex-shrink-0" />}
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] border ${
+                                s.type === 'trigger' ? 'bg-amber-950/40 text-amber-400 border-amber-500/20'
+                                : s.type === 'action' ? 'bg-orange-950/40 text-orange-400 border-orange-500/20'
+                                : s.type === 'condition' ? 'bg-violet-950/40 text-violet-400 border-violet-500/20'
+                                : 'bg-emerald-950/40 text-emerald-400 border-emerald-500/20'
+                              }`}>{s.title}</span>
+                            </span>
+                          ))}
+                        </div>
+                        {(flow.lastRunAt || flow.nextRunAt) && (
+                          <p className="text-[9px] text-stone-600 mt-1">
+                            {flow.lastRunAt ? `Chạy cuối: ${new Date(flow.lastRunAt).toLocaleString('vi-VN')}` : 'Chưa chạy'}
+                            {flow.enabled && flow.nextRunAt ? ` · Kế tiếp: ${new Date(flow.nextRunAt).toLocaleString('vi-VN')}` : ''}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-stone-400 hover:text-emerald-400" onClick={() => runFlowNow(flow.id)} disabled={flowRunning === flow.id} title="Chạy ngay">
+                          {flowRunning === flow.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-stone-400 hover:text-orange-400" onClick={() => openFlowEditor(flow)} title="Tinh chỉnh">
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-stone-400 hover:text-red-400" onClick={() => deleteFlow(flow.id)} title="Xóa">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="text-center py-4 text-stone-500 text-xs mb-4">
+              Chưa có task flow nào — bấm <span className="text-orange-400">"Thiết kế flow"</span> để tạo quy trình tự động hóa đầu tiên.
+            </div>
+          )}
+
+          {/* Flow Designer (inline) */}
+          {showFlowEditor && (
+            <div className="mt-2 pt-4 border-t border-orange-400/35">
+              <h4 className="text-xs font-semibold text-orange-300 mb-3">{editingFlow ? `✏️ Tinh chỉnh "${editingFlow.name}"` : '➕ Thiết kế Task Flow mới'}</h4>
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] text-stone-400 uppercase tracking-wider mb-1 block">Tên flow</label>
+                    <Input value={flowName} onChange={e => setFlowName(e.target.value)} placeholder="vd: Báo cáo sáng hằng ngày" className="h-8 text-xs bg-slate-950/60 border-orange-400/35 text-stone-200" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-stone-400 uppercase tracking-wider mb-1 block">Mô tả (tùy chọn)</label>
+                    <Input value={flowDescription} onChange={e => setFlowDescription(e.target.value)} placeholder="Flow này làm gì..." className="h-8 text-xs bg-slate-950/60 border-orange-400/35 text-stone-200" />
+                  </div>
+                </div>
+
+                {/* Các bước */}
+                <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                  {flowSteps.map((step, idx) => (
+                    <div key={step.id} className="p-2.5 rounded-lg bg-slate-950/60 border border-orange-500/15">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${
+                          step.type === 'trigger' ? 'bg-amber-950/40 text-amber-400 border-amber-500/30'
+                          : step.type === 'action' ? 'bg-orange-950/40 text-orange-400 border-orange-500/30'
+                          : step.type === 'condition' ? 'bg-violet-950/40 text-violet-400 border-violet-500/30'
+                          : 'bg-emerald-950/40 text-emerald-400 border-emerald-500/30'
+                        }`}>{idx + 1}. {FLOW_STEP_META[step.type].label}</span>
+                        <Input value={step.title} onChange={e => patchFlowStep(idx, { title: e.target.value })} className="h-6 text-[11px] bg-slate-900/60 border-stone-700 text-stone-200 flex-1" placeholder="Tên bước" />
+                        <div className="flex items-center gap-0.5">
+                          <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-stone-500 hover:text-orange-400" onClick={() => moveFlowStep(idx, -1)} disabled={idx === 0} title="Lên">
+                            <ChevronUp className="w-3 h-3" />
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-stone-500 hover:text-orange-400" onClick={() => moveFlowStep(idx, 1)} disabled={idx === flowSteps.length - 1} title="Xuống">
+                            <ChevronDown className="w-3 h-3" />
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-stone-500 hover:text-red-400" onClick={() => removeFlowStep(idx)} title="Xóa bước">
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Config theo loại bước */}
+                      {step.type === 'trigger' && (
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <div>
+                            <label className="text-[9px] text-stone-500 mb-1 block">Loại trigger</label>
+                            <Select value={step.config.kind || 'manual'} onValueChange={v => patchFlowStep(idx, { config: { kind: v, ...(v === 'cron' && !step.config.expression ? { expression: '0 8 * * *' } : {}) } })}>
+                              <SelectTrigger className="h-7 text-[11px] bg-slate-900/60 border-stone-700 text-stone-200"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="manual">👆 Manual (chạy tay)</SelectItem>
+                                <SelectItem value="cron">⏰ Cron (theo lịch)</SelectItem>
+                                <SelectItem value="webhook">🔗 Webhook event</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {step.config.kind === 'cron' && (
+                            <div className="sm:col-span-2">
+                              <label className="text-[9px] text-stone-500 mb-1 block">Cron expression (phút giờ ngày tháng thứ)</label>
+                              <Input value={step.config.expression || ''} onChange={e => patchFlowStep(idx, { config: { expression: e.target.value } })} placeholder="0 8 * * * (8h sáng hằng ngày)" className="h-7 text-[11px] font-mono bg-slate-900/60 border-stone-700 text-stone-200" />
+                            </div>
+                          )}
+                          {step.config.kind === 'webhook' && (
+                            <div className="sm:col-span-2">
+                              <label className="text-[9px] text-stone-500 mb-1 block">Events (phẩy ngăn cách)</label>
+                              <Input value={(step.config.events || []).join(', ')} onChange={e => patchFlowStep(idx, { config: { events: e.target.value.split(',').map(s => s.trim()).filter(Boolean) } })} placeholder="document.uploaded, query.completed" className="h-7 text-[11px] bg-slate-900/60 border-stone-700 text-stone-200" />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {step.type === 'action' && (
+                        <div className="space-y-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            <div>
+                              <label className="text-[9px] text-stone-500 mb-1 block">Loại action</label>
+                              <Select value={step.config.kind || 'agent_task'} onValueChange={v => patchFlowStep(idx, { config: { kind: v } })}>
+                                <SelectTrigger className="h-7 text-[11px] bg-slate-900/60 border-stone-700 text-stone-200"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="agent_task">🤖 Agent task (LLM)</SelectItem>
+                                  <SelectItem value="webhook">📤 Webhook POST</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
+                          {step.config.kind === 'webhook' ? (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[9px] text-stone-500 mb-1 block">URL đích (HTTPS công khai)</label>
+                                <Input value={step.config.url || ''} onChange={e => patchFlowStep(idx, { config: { url: e.target.value } })} placeholder="https://hooks.slack.com/..." className="h-7 text-[11px] font-mono bg-slate-900/60 border-stone-700 text-stone-200" />
+                              </div>
+                              <div>
+                                <label className="text-[9px] text-stone-500 mb-1 block">Payload JSON (tùy chọn)</label>
+                                <Input value={step.config.payload || ''} onChange={e => patchFlowStep(idx, { config: { payload: e.target.value } })} placeholder='{"text": "Báo cáo sẵn sàng"}' className="h-7 text-[11px] font-mono bg-slate-900/60 border-stone-700 text-stone-200" />
+                              </div>
+                            </div>
+                          ) : (
+                            <div>
+                              <label className="text-[9px] text-stone-500 mb-1 block">Nhiệm vụ (LLM thực thi — thấy kết quả các bước trước)</label>
+                              <Textarea value={step.config.taskPrompt || ''} onChange={e => patchFlowStep(idx, { config: { taskPrompt: e.target.value } })} placeholder="vd: Tóm tắt các bản ghi KB mới trong 24h qua thành báo cáo 5 điểm..." className="min-h-[52px] text-[11px] bg-slate-900/60 border-stone-700 text-stone-200" />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {step.type === 'condition' && (
+                        <div>
+                          <label className="text-[9px] text-stone-500 mb-1 block">Điều kiện chạy tiếp (LLM đánh giá true/false theo kết quả các bước trước — không đạt thì flow dừng)</label>
+                          <Textarea value={step.config.description || ''} onChange={e => patchFlowStep(idx, { config: { description: e.target.value } })} placeholder="vd: Báo cáo có ít nhất 3 điểm đáng chú ý mới đáng gửi thông báo" className="min-h-[52px] text-[11px] bg-slate-900/60 border-stone-700 text-stone-200" />
+                        </div>
+                      )}
+                      {step.type === 'result' && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-[9px] text-stone-500 mb-1 block">Kiểu kết thúc</label>
+                            <Select value={step.config.resultKind || 'log'} onValueChange={v => patchFlowStep(idx, { config: { resultKind: v } })}>
+                              <SelectTrigger className="h-7 text-[11px] bg-slate-900/60 border-stone-700 text-stone-200"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="log">📝 Log (ghi tóm tắt)</SelectItem>
+                                <SelectItem value="notify">🔔 Notify (POST tới webhooks)</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <label className="text-[9px] text-stone-500 mb-1 block">Ghi chú (tùy chọn)</label>
+                            <Input value={step.config.note || ''} onChange={e => patchFlowStep(idx, { config: { note: e.target.value } })} placeholder="Ghi chú hiển thị trong tóm tắt" className="h-7 text-[11px] bg-slate-900/60 border-stone-700 text-stone-200" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Thêm bước */}
+                <div className="flex flex-wrap gap-1.5">
+                  {(Object.keys(FLOW_STEP_META) as TaskFlowStepUi['type'][]).map(t => (
+                    <Button key={t} size="sm" variant="outline" className="h-7 text-[10px] text-stone-400 border-stone-600 hover:text-orange-400 hover:border-orange-500/40" onClick={() => setFlowSteps(prev => [...prev, newFlowStep(t)])}>
+                      <Plus className="w-3 h-3 mr-1" /> {FLOW_STEP_META[t].label}
+                    </Button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <Switch checked={flowEnabled} onCheckedChange={setFlowEnabled} className="data-[state=checked]:bg-orange-500" />
+                  <span className="text-xs text-stone-400">Bật ngay (trigger cron sẽ tự chạy theo lịch)</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" className="bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white text-xs" onClick={saveFlow} disabled={flowSaving}>
+                    {flowSaving ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : null} {editingFlow ? 'Cập nhật flow' : 'Tạo flow'}
+                  </Button>
+                  <Button size="sm" variant="outline" className="text-xs text-stone-400 border-stone-600" onClick={() => { setShowFlowEditor(false); setEditingFlow(null) }}>Hủy</Button>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="mt-3 flex flex-wrap gap-2">
             <Badge className="text-[9px] bg-orange-950/50 text-orange-400 border border-orange-400/35">Cron Jobs: {regularCronJobs.length}</Badge>
             <Badge className="text-[9px] bg-blue-950/50 text-blue-400 border border-blue-400/35">Webhooks: {webhooks?.length || 0}</Badge>

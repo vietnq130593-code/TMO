@@ -452,6 +452,36 @@ function buildConfidenceProtocol(): string {
 }
 
 /**
+ * AUTOMATION PROTOCOL (user request 2026-09-13) — khi agent có tool automation:
+ *   • hasDirect (manage_automation — chỉ Omega): trực tiếp tạo/sửa/xóa cron
+ *     job / webhook / standing order / task flow.
+ *   • hasPropose (propose_automation — mọi agents): thấy cần automation →
+ *     đề xuất với Omega → Omega quyết định forward vào Self-direction chờ
+ *     Mr. Architect / agent được ủy quyền phê duyệt.
+ */
+function buildAutomationProtocol(hasDirect: boolean, hasPropose: boolean): string {
+  const lines: string[] = []
+  if (hasDirect) {
+    lines.push('')
+    lines.push('⚙️ QUẢN LÝ TỰ ĐỘNG HÓA (manage_automation — quyền trực tiếp của bạn):')
+    lines.push('- Tạo cron job: tool_call: manage_automation({"action": "create_cron", "expression": "0 9 * * 1-5", "taskPrompt": "nhiệm vụ"})')
+    lines.push('- Đăng ký webhook: tool_call: manage_automation({"action": "create_webhook", "url": "https://...", "events": ["document.uploaded"]})')
+    lines.push('- Thêm standing order: tool_call: manage_automation({"action": "add_standing_order", "order": "chỉ thị", "priority": 50})')
+    lines.push('- Tạo/tinh chỉnh task flow (Trigger→Action→Condition→Result): tool_call: manage_automation({"action": "create_flow", "name": "...", "steps": [...]}) — update_flow/run_flow/list_flows tương tự.')
+    lines.push('- Chỉ dùng khi user yêu cầu hoặc hệ thống THẬT cần automation — không tạo bừa.')
+  }
+  if (hasPropose) {
+    lines.push('')
+    lines.push('📤 ĐỀ XUẤT TỰ ĐỘNG HÓA (propose_automation — khi thấy cần nhưng KHÔNG có quyền tạo trực tiếp):')
+    lines.push('- Tác vụ lặp lại định kỳ / cần đẩy sự kiện ra endpoint ngoài / cần chỉ thị thường trực / cần quy trình nhiều bước → đề xuất:')
+    lines.push('  tool_call: propose_automation({"kind": "cron|webhook|standing_order|task_flow", "payload": {...}, "reason": "lý do cụ thể", "evidence": "dữ liệu hỗ trợ"})')
+    lines.push('- Omega quyết định: forward vào module Self-direction chờ Mr. Architect (hoặc agent được ủy quyền) phê duyệt — được duyệt thì tài nguyên TỰ TẠO. Từ chối thì Omega trả lý do.')
+    lines.push('- Việc gấp cần làm NGAY thì tự làm bằng tools của mình — KHÔNG propose.')
+  }
+  return lines.length > 0 ? '\n' + lines.join('\n') : ''
+}
+
+/**
  * CI-3 B7 (Task 13-e) — ghép system prompt HOÀN CHỈNH của goal loop + áp budget
  * ký tự TỔNG (SYSTEM_PROMPT_BUDGET_CHARS — env SYSTEM_PROMPT_BUDGET_CHARS,
  * mặc định 24k chars ~ 6k tokens, 0 = không giới hạn).
@@ -475,6 +505,10 @@ export function assembleGoalLoopSystemPrompt(params: {
   hasDispatch: boolean
   hasCreate: boolean
   preActBlock: string
+  /** AUTOMATION (2026-09-13): manage_automation (trực tiếp — Omega) */
+  hasAutomationDirect?: boolean
+  /** AUTOMATION (2026-09-13): propose_automation (đề xuất — mọi agents) */
+  hasAutomationPropose?: boolean
   /** nhãn context cho log 1 dòng khi có cut */
   agentName?: string
 }): string {
@@ -486,6 +520,7 @@ export function assembleGoalLoopSystemPrompt(params: {
         { name: 'goalProtocol', content: buildGoalProtocol(), priority: 100 },
         { name: 'delegationProtocol', content: hasDelegation ? buildDelegationProtocol() : '', priority: 90 },
         { name: 'orchestrationProtocol', content: hasOrchestration ? buildOrchestrationProtocol(hasDispatch, hasCreate) : '', priority: 80 },
+        { name: 'automationProtocol', content: buildAutomationProtocol(params.hasAutomationDirect === true, params.hasAutomationPropose === true), priority: 78 },
         { name: 'confidenceProtocol', content: buildConfidenceProtocol(), priority: 70 },
         { name: 'preAct', content: preActBlock, priority: 60 },
       ],
@@ -501,6 +536,7 @@ export function assembleGoalLoopSystemPrompt(params: {
       buildGoalProtocol() +
       (hasDelegation ? buildDelegationProtocol() : '') +
       (hasOrchestration ? buildOrchestrationProtocol(hasDispatch, hasCreate) : '') +
+      buildAutomationProtocol(params.hasAutomationDirect === true, params.hasAutomationPropose === true) +
       buildConfidenceProtocol() +
       preActBlock
     )
@@ -1012,6 +1048,10 @@ export async function runGoalDrivenLoop(params: {
     : ['delegate_task', 'escalate_problem', 'dispatch_agent', 'create_agent']
   const hasDelegation = effectiveTools.includes('delegate_task')
   const hasOrchestration = effectiveTools.includes('escalate_problem') || effectiveTools.includes('dispatch_agent') || effectiveTools.includes('create_agent')
+  // AUTOMATION (user request 2026-09-13) — protocol block khi agent có tool
+  // automation (trực tiếp = chỉ Omega / đề xuất = mọi agents).
+  const hasAutomationDirect = effectiveTools.includes('manage_automation')
+  const hasAutomationPropose = effectiveTools.includes('propose_automation')
 
   // ===== A6 · EPISODIC MEMORY — PRE-ACT RETRIEVAL (nhịp 1 learning loop) =====
   // Trước khi hành động: lessons đã học + cảnh báo lỗi chưa resolve + episodes
@@ -1044,6 +1084,8 @@ export async function runGoalDrivenLoop(params: {
     hasOrchestration,
     hasDispatch: effectiveTools.includes('dispatch_agent'),
     hasCreate: effectiveTools.includes('create_agent'),
+    hasAutomationDirect,
+    hasAutomationPropose,
     preActBlock,
     agentName,
   })

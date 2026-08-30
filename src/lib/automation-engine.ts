@@ -366,8 +366,9 @@ const BLOCKED_URL_PATTERNS = [
 /**
  * Validate a webhook URL to prevent SSRF attacks.
  * Only allows HTTPS URLs to public internet addresses.
+ * Exported (2026-09-13) cho task-flows.ts tái dùng (action webhook outbound).
  */
-function validateWebhookUrl(url: string): { valid: boolean; reason?: string } {
+export function validateWebhookUrl(url: string): { valid: boolean; reason?: string } {
   try {
     const parsed = new URL(url)
 

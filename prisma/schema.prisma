@@ -531,6 +531,29 @@ model StandingOrder {
   @@index([agentId])
 }
 
+/// Task Flow (user request 2026-09-13) — quy trình tự động hóa THIẾT KẾ ĐƯỢC
+/// (chuỗi bước Trigger → Action → Condition → Result) do user tinh chỉnh qua
+/// UI Smolab > Automation, hoặc do Omega tinh chỉnh qua tool manage_automation.
+/// Scheduler poll (/api/openclaw/automation/scheduler) tự chạy flow có trigger
+/// cron đến hạn (nextRunAt); chạy tay qua POST /api/task-flows/[id]?action=run.
+model TaskFlow {
+  id          String    @id @default(cuid())
+  name        String
+  description String    @default("")
+  /// JSON array các bước: [{id, type: trigger|action|condition|result, title, config}] — xem src/lib/task-flows.ts
+  stepsJson   String
+  enabled     Boolean   @default(true)
+  /// user | omega | agent:<name> | self-direction
+  createdBy   String    @default("user")
+  lastRunAt   DateTime?
+  nextRunAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([enabled])
+  @@index([nextRunAt])
+}
+
 /// Task execution history — tracks all automation task runs
 model TaskExecution {
   id           String    @id @default(cuid())
@@ -1561,6 +1584,14 @@ model SelfDirectionProposal {
   /// executor + bước cuối verify_and_push chạy pipeline kiểm định 9 bước thật
   executionMode   String    @default("llm")
   createdBy       String    @default("self-direction-scan")
+
+  // ===== AUTOMATION PROPOSAL (user request 2026-09-13) =====
+  // category='automation' — đề xuất tạo cron job / webhook / standing order /
+  // task flow do agent đề xuất qua propose_automation (Omega chuyển tiếp) hoặc
+  // user tạo tay. JSON {kind, payload, proposedBy}. Được duyệt →
+  // executeAutomationProposal() tạo tài nguyên THẬT (fast-path, không cần
+  // Omega orchestration giao agents — hành động thuần cơ khí).
+  automationJson  String?
 
   // ===== Mr. Architect / Omega review =====
   /// Ghi chú / yêu cầu bổ sung của Mr. Architect (user)
