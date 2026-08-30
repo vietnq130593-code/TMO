@@ -44,7 +44,10 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "no-useless-escape": "off",
   },
 }, {
-  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills", "public/**"]
+  // .next-qa = distDir cô lập của quality gate (scripts/quality-gate.mjs) —
+  // build FAIL giữa chừng (vd OOM exit 137) có thể để lại chunks sinh lỗi lint
+  // ở lần gate sau; ignore vĩnh viễn.
+  ignores: ["node_modules/**", ".next/**", ".next-qa/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills", "public/**"]
 }];
 
 export default eslintConfig;
