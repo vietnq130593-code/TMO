@@ -187,6 +187,16 @@ export async function initializeCollections(): Promise<{
     }
     result.chunks = true
 
+    // CI-3 B2 (Task 13-b) — Kho Context: tạo thêm collection task_context
+    // (embedding digest để truy hồi ngữ nghĩa qua context_recall). Dynamic
+    // import tránh circular import lúc load module (context-store import qdrant
+    // client từ đây). Fail-open toàn bộ — layer này là best-effort: SQL fallback
+    // trên Prisma TaskContextArchive vẫn hoạt động khi Qdrant/embed hỏng.
+    try {
+      const { initTaskContextCollection } = await import('@/lib/context-store')
+      await initTaskContextCollection()
+    } catch { /* fail-open — task_context là best-effort layer */ }
+
     // Create payload indexes for fast filtering
     await createPayloadIndexes()
 

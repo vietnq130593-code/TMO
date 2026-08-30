@@ -15,13 +15,13 @@ export type {
   ProgressReport,
   ProgressTracker,
 
-  // Context Management
+  // Context Management — CI-3 B6 (Task 13-a): stub context-manager đã XÓA,
+  // thay bằng module thống nhất @/lib/context-compression. Chỉ giữ các type
+  // còn được dùng thật (ContextState → orchestration, ContextEntry/
+  // SummarizationResult → checkpoint + ContextState).
   ContextState,
   ContextEntry,
   SummarizationResult,
-  PruneStrategy,
-  ProgressiveContext,
-  ContextManager,
 
   // Checkpoint & Recovery
   Checkpoint,
@@ -36,5 +36,4 @@ export type {
 // ==================== FACTORY FUNCTIONS ====================
 
 export { createProgressTracker } from './progress-tracker'
-export { createContextManager } from './context-manager'
 export { createCheckpointManager } from './checkpoint-manager'

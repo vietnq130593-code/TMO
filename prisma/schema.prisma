@@ -1634,3 +1634,32 @@ model SelfDirectionSettings {
 
   @@map("self_direction_settings")
 }
+
+// ============================================================================
+// CI-3 B2 (Task 13-b) — KHO CONTEXT (TaskContextArchive)
+// ============================================================================
+// Roadmap CI-3 tầng 2 "Offload đọc lại khi cần": mỗi lần rolling digest nén
+// context, digest đầy đủ (và các đoạn raw bị cắt) được lưu vào KHO này — agent
+// BỎ thông tin không cần khỏi context active nhưng KHÔNG MẤT: tool
+// context_recall(query, runId?) truy hồi lại bất cứ lúc nào (Qdrant task_context
+// semantic search + SQL LIKE fallback — xem src/lib/context-store.ts).
+// Dual-storage: Prisma TaskContextArchive = SOURCE OF TRUTH (luôn ghi);
+// Qdrant task_context = best-effort semantic index (embed hỏng → bỏ qua im lặng).
+
+/// 1 bản ghi context đã nén/lưu trữ để truy hồi lại ("đọc lại khi cần").
+model TaskContextArchive {
+  id        String   @id @default(cuid())
+  /// Run của goal-loop (runId từ agent-run-tracker) hoặc sessionId workflow
+  runId     String?
+  sessionId String?
+  agentName String?
+  /// 'digest' (rolling digest sau nén) | 'raw' (đoạn bị cắt/truncate) | 'task_summary' (B4 — tóm tắt cuối run)
+  kind      String
+  content   String
+  tags      String?
+  createdAt DateTime @default(now())
+
+  @@index([runId])
+  @@index([sessionId, createdAt])
+  @@index([kind, createdAt])
+}

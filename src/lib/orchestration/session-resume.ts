@@ -273,6 +273,14 @@ export async function resumeWorkflowSession(sessionId: string): Promise<ResumeSe
         return { ready: false, conflict: true }
       }
 
+      // CI-3 B5 (Task 13-d) — STALE-LOCK RECOVERY LOG: lock_holder cũ còn giữ
+      // status='active' nhưng updatedAt đã >30 phút (holder chắc chắn đã crash
+      // hoặc treo) → chiếm lock lại (steal). Trước đây steal diễn ra NGẦM — giờ
+      // log rõ để vận hành truy vết được lần chiếm lại.
+      if (isActive && lockStale) {
+        console.warn(`[SessionResume] stale lock detected on session ${sessionId}: holder kept status='active' but last update ${row.updatedAt.toISOString()} is older than ${SESSION_LOCK_TIMEOUT_MS / 60000}min — stealing the lock (holder likely crashed)`)
+      }
+
       // Either:
       //   - status was 'paused' | 'completed' | 'failed' | 'archived' (free to acquire), OR
       //   - status was 'active' but stale (lock holder crashed >30min ago) → re-acquire.
@@ -409,6 +417,44 @@ export async function buildResumeContext(sessionId: string): Promise<ResumeConte
     todoList,
     lastToolReceipts: lastFive,
     currentStep: state.currentStep || row.taskDescription,
+  }
+}
+
+// ============================================
+// CI-3 B5 (Task 13-d) — Shared resume entry point
+// ============================================
+
+/**
+ * Shared resume logic used by BOTH the POST /api/workflow/resume route AND
+ * the workflow-engine in-process auto-resume (GĐ3 B5: "resume tự động, không
+ * cần API thủ công"). Reuses the exact same code path:
+ *   1. resumeWorkflowSession — atomic check-and-acquire (stale-lock 30-min
+      recovery included) — the core of the resume endpoint.
+ *   2. buildResumeContext — Appendix C.2 payload (task + todos + last 5
+ *      tool receipts + currentStep) for whoever continues the session.
+ *
+ * Fail-open semantics: buildResumeContext failing does NOT undo the acquired
+ * lock — the session stays 'active' and the (already fail-open) empty context
+ * is returned instead. Callers must NEVER crash on this result.
+ */
+export interface PerformSessionResumeResult extends ResumeSessionResult {
+  /** Present only when ready=true. Empty stub when the context build failed. */
+  context?: ResumeContext
+}
+
+export async function performSessionResume(sessionId: string): Promise<PerformSessionResumeResult> {
+  const resumeResult = await resumeWorkflowSession(sessionId)
+  if (!resumeResult.ready || !resumeResult.session) {
+    // flagDisabled / conflict / not-found / DB error — pass through untouched.
+    return resumeResult
+  }
+  try {
+    const context = await buildResumeContext(sessionId)
+    return { ...resumeResult, context }
+  } catch (err) {
+    // Lock đã acquire xong — context build fail KHÔNG được làm hỏng resume.
+    console.error(`[SessionResume] performSessionResume: buildResumeContext failed for ${sessionId} (lock vẫn giữ nguyên):`, err instanceof Error ? err.message : String(err))
+    return resumeResult
   }
 }
 

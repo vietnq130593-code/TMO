@@ -1080,7 +1080,7 @@ export async function POST(request: NextRequest) {
         if (agentProfileId && sessionId) {
           // 2026-09-01: user message đã lưu ở ĐẦU request → chỉ lưu assistant
           saveChatMessages(sessionId, [
-            { role: 'assistant', content, model: agentModel, provider: agentProvider, metadata: { confidence: finalConfidence, reactIterations: reactResult.iterations, toolCallsExecuted: reactResult.toolCallsExecuted, agentRun: agentRunSummary, goalLoop: reactResult.goalLoop } },
+            { role: 'assistant', content, model: agentModel, provider: agentProvider, metadata: { confidence: finalConfidence, reactIterations: reactResult.iterations, toolCallsExecuted: reactResult.toolCallsExecuted, agentRun: agentRunSummary, goalLoop: reactResult.goalLoop, taskSummary: reactResult.taskSummary } },
           ])
             .then(async () => {
               // Task 20-c — link AgentRunRecord của run này với ChatMessage id

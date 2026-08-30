@@ -281,6 +281,10 @@ LEARNING & MEMORY
       'git_log',
       'git_branch',
       'git_clone',
+      // CI-3 B3 (Task 13-b) — Kho Context: truy hồi digest/đoạn context đã nén
+      // của các run trước ("đọc lại khi cần" — Mr. Architect yêu cầu nén context
+      // nhưng KHÔNG mất thông tin).
+      'context_recall',
     ],
   },
 ]

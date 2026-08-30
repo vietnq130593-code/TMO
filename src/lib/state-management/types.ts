@@ -10,7 +10,7 @@
 import type { ErrorRecord } from '@/lib/error-handling'
 import type { PipelineStep, AgentPosition, StepType, StepStatus } from '@/lib/code-team/types'
 import type { DecompositionPlan } from '@/lib/thinking'
-import type { RoutingDecision, WorklogEntry } from '@/lib/code-team/worklog'
+import type { RoutingDecision } from '@/lib/code-team/worklog'
 import type { CommunicationState } from '@/lib/communication'
 
 // ==================== PROGRESS TRACKING (6.1) ====================
@@ -81,9 +81,13 @@ export interface ProgressTracker {  // FIX #10: Định nghĩa interface
 }
 
 // ==================== CONTEXT MANAGEMENT (6.2) ====================
-
-/** Chiến lược prune context */
-export type PruneStrategy = 'summarize_old' | 'drop_low_priority' | 'write_to_worklog'  // FIX #7
+// CI-3 B6 (Task 13-a): Layer 6.2 context-manager (stub chưa nối dây) đã XÓA —
+// thay bằng module thống nhất `@/lib/context-compression` (rolling digest dùng
+// chung goal-loop + workflow-engine). Chỉ giữ các type còn được dùng thật:
+//   - ContextState      → orchestration/types.ts (OrchestrationState.context)
+//   - ContextEntry      → CheckpointState.context (checkpoint-manager)
+//   - SummarizationResult → ContextState.summarizationCache
+// (ContextManager / PruneStrategy / ProgressiveContext chỉ stub dùng → xóa.)
 
 /** Trạng thái context hiện tại */
 export interface ContextState {  // FIX #2: Tách khỏi ContextManager
@@ -116,24 +120,7 @@ export interface SummarizationResult {
 }
 
 /** Context được build cho một step tiếp theo */
-export interface ProgressiveContext {  // FIX #6: Định nghĩa
-  systemPrompt: string
-  userPrompt: string
-  relevantWorklogs: WorklogEntry[]
-  relevantCodeFiles: string[]
-  tokenCount: number
-}
-
-/** Interface cho Context Manager */
-export interface ContextManager {  // FIX #2: Interface cho đối tượng manager
-  getState(): ContextState
-  summarizeStep(stepResult: StepResult): SummarizationResult
-  prioritizeContext(entries: ContextEntry[], currentStep: string): ContextEntry[]
-  shouldPruneContext(): boolean
-  pruneContext(strategy: PruneStrategy): void
-  buildProgressiveContext(step: PipelineStep): ProgressiveContext
-  writeContextToWorklog(sessionId: string): Promise<void>
-}
+// (ProgressiveContext + ContextManager interface đã xóa cùng stub Layer 6.2 — CI-3 B6)
 
 // ==================== CHECKPOINT & RECOVERY (6.3) ====================
 
@@ -196,7 +183,8 @@ export interface PipelineContext {
   thinkingContext?: unknown
   // Layer 6 additions:
   progressTracker: ProgressTracker
-  contextManager: ContextManager
+  // CI-3 B6: contextManager (stub Layer 6.2) đã xóa — nén context giờ dùng
+  // module dùng chung @/lib/context-compression (không cần manager object).
   checkpointManager: CheckpointManager
   // Layer 7 additions:
   orchestrator?: unknown  // MasterOrchestrator instance

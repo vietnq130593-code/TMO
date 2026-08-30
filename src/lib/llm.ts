@@ -3398,6 +3398,20 @@ export async function callLLMForAgent(
     const tcCount = result.tool_calls?.length ?? 0
     if (result.content || tcCount > 0) {
       console.log(`[LLM] Agent dùng lõi ${result.model} ✓ (${tcCount} tool_calls) — agent cấu hình gốc: ${provider}/${model}`)
+      return result
+    }
+    // SANDBOX SELF-HEAL (bổ sung FIX RESET-2026-08-30): đường kimi-k3 enforced
+    // (mặc định) từng BỎ SÓT khỏi lớp fallback z-ai-sdk — chỉ legacy path
+    // (ENFORCE_KIMI_K3=false) có tryZaiSdk, còn goal-loop + workflow-engine
+    // (đều gọi callLLMForAgent) chết hoàn toàn khi NVIDIA keys placeholder
+    // (401 × 4 key × sweep ≈ 61s → error). Thêm z-ai-sdk làm fallback CUỐI
+    // chuỗi, đúng cùng pattern callLLM legacy + callBrain (self-direction):
+    // ReAct loop parse tool_call từ TEXT nên SDK text-only vẫn thực thi tool
+    // đầy đủ. Fail-open: zai lỗi → trả error gốc của chuỗi NVIDIA.
+    const sdkResult = await tryZaiSdk(prompt, systemPrompt, `agent:${model}`, options)
+    if (sdkResult?.content) {
+      console.log(`[LLM] Agent dùng z-ai-sdk fallback ✓ (chuỗi NVIDIA ${KIMI_K3_MODEL} thất bại) — agent cấu hình gốc: ${provider}/${model}`)
+      return sdkResult
     }
     return result
   }

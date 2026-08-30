@@ -106,7 +106,8 @@ export function createCheckpointManager(sessionId: string): CheckpointManager {
       }
 
       // Rule 4: Khi context window sắp đầy (> 90%)
-      // (Được kiểm tra từ context-manager, gọi từ workflow-engine)
+      // (Nén context giờ dùng module dùng chung @/lib/context-compression —
+      // rolling digest trong workflow-engine, CI-3 B1; context-manager stub đã xóa)
       const tokenRatio = progress.totalTokensUsed / progress.totalTokensBudgeted
       if (tokenRatio > 0.9) return true
 

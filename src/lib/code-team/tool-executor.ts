@@ -60,6 +60,8 @@ import {
   gitLog as executeGitLogFn,
   gitBranch as executeGitBranchFn,
   gitClone as executeGitCloneFn,
+  // CI-3 B2+B3 (Task 13-b) — Kho Context: truy hồi context đã nén
+  contextRecall as executeContextRecallFn,
   // Dynamic skill + MCP enumeration (user request 2026-08-29)
   listSkills as executeListSkillsFn,
   readSkill as executeReadSkillFn,
@@ -731,6 +733,26 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           depth: { type: 'number', description: 'Shallow clone depth (vd 1 = chỉ commit cuối — nhanh, tiết kiệm disk)' },
         },
         required: ['url'],
+      },
+    },
+  },
+
+  // CI-3 B2+B3 (Task 13-b) — Kho Context "đọc lại khi cần": truy hồi digest/
+  // raw/task_summary đã bị nén khỏi context active (Qdrant semantic + SQL LIKE
+  // fallback trên TaskContextArchive). Read-only — không flag gate.
+  context_recall: {
+    type: 'function',
+    function: {
+      name: 'context_recall',
+      description: 'Truy hồi thông tin context đã nén/lưu trữ của các run trước (digest, đoạn raw bị cắt, task_summary) — dùng khi cần đọc lại chi tiết đã bị nén (tên file đã đọc, kết quả lệnh, quyết định kỹ thuật đã chốt của run cũ) thay vì đọc lại toàn bộ transcript.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Từ khóa tìm kiếm — tên file, tên hàm, lệnh đã chạy, quyết định kỹ thuật...' },
+          runId: { type: 'string', description: 'Chỉ tìm trong run/session này (optional — bỏ qua để tìm xuyên run)' },
+          limit: { type: 'number', description: 'Số kết quả tối đa (default 5, max 20)' },
+        },
+        required: ['query'],
       },
     },
   },
@@ -2000,6 +2022,16 @@ export async function executeTool(
         })
         break
       }
+      // ===== CI-3 B2+B3 (Task 13-b) — Kho Context: truy hồi context đã nén =====
+      // Read-only (Qdrant semantic + SQL LIKE trên TaskContextArchive) — không
+      // flag gate, fail-open trả hint 0 kết quả khi mọi layer hỏng (không 500).
+      case 'context_recall':
+        result = await executeContextRecallFn({
+          query: typeof args.query === 'string' ? args.query : '',
+          runId: typeof args.runId === 'string' && args.runId.trim() ? args.runId.trim() : undefined,
+          limit: typeof args.limit === 'number' && Number.isFinite(args.limit) ? args.limit : undefined,
+        })
+        break
       // ===== P1: diagnostics + planning + synthesis + processes + packages =====
       case 'get_diagnostics':
         result = await getDiagnostics(args as any)

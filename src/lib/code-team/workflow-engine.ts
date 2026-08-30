@@ -53,6 +53,11 @@ import { resolveWorkspaceRoot } from './workspace-root'
 // 2026-08-29 — Team Code agents cũng cần biết workspace root + cấu trúc cấp 1
 // (user request: mọi agents + team code đều nắm được thư mục đã chọn).
 import { buildWorkspaceContext } from '@/lib/workspace/workspace-context'
+// CI-3 B7 (Task 13-e) — system prompt per-step có budget ký tự TỔNG
+// (SYSTEM_PROMPT_BUDGET_CHARS mặc định 24k): các block góp vào prompt của step
+// (persona/skills/workspace/capabilities/roster/layer9-hints/tool-schemas)
+// ngoài skills 16k không block nào cap → vượt budget thì cắt priority thấp nhất giữ đầu.
+import { budgetPrompt, type PromptBlock } from '@/lib/prompt-budget'
 import { exec, execFile } from 'child_process'
 import { promisify } from 'util'
 
@@ -85,7 +90,9 @@ import { getFsCheckpoint, autoRestoreFsOnVerifyFailure } from '@/lib/workspace/f
 import {
   detectContextOverflow,
   estimateTokens,
+  getSessionMetadata,
   pauseWorkflowSession,
+  performSessionResume,
   saveWorkflowSession,
   type WorkflowState,
 } from '@/lib/orchestration/session-resume'
@@ -98,6 +105,18 @@ import {
 // Fire-and-forget pattern: any flush error is caught + logged, never
 // crashes the workflow (metrics are best-effort side-effects).
 import { createMetricsCollector, analyzeHistoricalFeedback, getAdjustedBudget, getSuccessProbability, type MetricsCollector } from '@/lib/learning'
+// CI-3 B1 (Task 13-a) — nén context dùng chung với goal-loop: cap tool result
+// 4k chars + rolling digest 50k chars (roadmap CI-3 "Lỗ hổng 1": workflow push
+// tool result THÔ không giới hạn → task code dài phình đến 80k tokens rồi pause).
+import {
+  COMPRESS_THRESHOLD_CHARS,
+  KEEP_RECENT_MESSAGES,
+  TOOL_RESULT_MAX_CHARS,
+  capToolResult,
+  compressConversation,
+  type CompressionMessage,
+  type CompressionResult,
+} from '@/lib/context-compression'
 
 /** Operations that trigger auto-checkpoint BEFORE they execute. */
 const RISKY_OPS = new Set<string>([
@@ -335,6 +354,21 @@ const CHECKPOINT_VERIFY_TIMEOUT_MS = 30_000 // 30 seconds for checkpoint verify
 // Configurable via CONTEXT_OVERFLOW_THRESHOLD env var.
 const CONTEXT_OVERFLOW_THRESHOLD =
   parseInt(process.env.CONTEXT_OVERFLOW_THRESHOLD || '80000', 10) || 80000
+
+// ━━━ CI-3 B5 (Task 13-d) — AUTO-RESUME GUARD ━━━
+// Overflow pause sau digest thất bại sẽ KHÔNG treo vĩnh viễn: workflow tự
+// resume session in-process (cùng code path POST /api/workflow/resume).
+// Guard chống loop vĩnh viễn nén→pause→resume→nén: tối đa N lần auto-resume
+// mỗi session (đếm contextOverflowCount — vượt N → pause THẬT chờ can thiệp
+// thủ công). Configurable qua WORKFLOW_MAX_AUTO_RESUME.
+const MAX_AUTO_RESUME_PER_SESSION =
+  parseInt(process.env.WORKFLOW_MAX_AUTO_RESUME || '3', 10) || 3
+
+// Độ trễ trước khi auto-resume kích hoạt (ms). Ngắn — chỉ để pause
+// transaction + break ReAct loop yên vị; KHÔNG block step (fire-and-forget).
+// Configurable qua WORKFLOW_AUTO_RESUME_DELAY_MS.
+const AUTO_RESUME_DELAY_MS =
+  parseInt(process.env.WORKFLOW_AUTO_RESUME_DELAY_MS || '2000', 10) || 2000
 
 
 // ==================== TYPES ====================
@@ -1309,6 +1343,33 @@ async function runPipeline(
 
   await completeSession(sessionId, finalStatus, totalDuration, completedAgents)
 
+  // ===== CI-3 B4 (Task 13-c) — TASK SUMMARY cuối team workflow (liên tác vụ) =====
+  // Lưu task_summary (kind='task_summary') vào Kho Context để workflow/chat
+  // run sau trong cùng session nạp lại bức tranh dài hạn (goal-loop
+  // buildPriorTaskSummariesBlock). Summary deterministic từ dữ liệu có sẵn
+  // (spec + status + agents + quality) — 0 LLM call thêm, cap 500 chars.
+  // Fail-open: lỗi archive KHÔNG được đổi outcome workflow (đã completed).
+  // Chỉ đường SUCCESS (WORKFLOW DONE) — escalate/cancel/abort path là
+  // follow-up cho parent (tránh đụng vùng 13-d đang sửa).
+  try {
+    const { archiveContext } = await import('@/lib/context-store')
+    const tlName = ctx.resolvedAgentsCache.get('TL')?.name || 'CodeTeam'
+    const wfSummary = `[Team workflow ${finalStatus}] Yêu cầu: ${spec.replace(/\s+/g, ' ').slice(0, 160)} — pipeline ${routingDecision.mode}/${routingDecision.tier} qua ${completedAgents.join(' → ')} trong ${Math.round(totalDuration / 1000)}s${quality.mode !== 'off' ? `, quality gate ${quality.mode} (lint ${quality.lintErrors}, tsc ${quality.tscErrors})` : ''}.`.slice(0, 500)
+    const res = await archiveContext({
+      runId: sessionId,
+      sessionId,
+      agentName: tlName,
+      kind: 'task_summary',
+      content: wfSummary,
+      tags: 'final-summary',
+    })
+    if (res.archived) {
+      console.log(`[Workflow] task_summary đã lưu vào Kho Context (${wfSummary.length} chars) — run sau trong session ${sessionId.slice(0, 12)} sẽ nạp`)
+    }
+  } catch (wfSumErr) {
+    console.warn('[Workflow] Lưu task_summary thất bại (fail-open):', wfSumErr instanceof Error ? wfSumErr.message : String(wfSumErr))
+  }
+
   // Task 17-b (Layer 9) — observation: workflow kết thúc thành công dù đã
   // inject "bài học từ thất bại trước" → bài học có thể đã phát huy tác dụng
   // (chỉ log, không logic phức tạp hơn — auto-apply mạnh hơn chờ đủ dữ liệu).
@@ -1333,6 +1394,147 @@ async function runPipeline(
     quality: quality.mode === 'off' ? undefined : quality,
   })
   console.log(`[Workflow] Completed in ${totalDuration}ms. Agents: ${completedAgents.join(' → ')} (quality: ${quality.mode})`)
+}
+
+// ==================== CI-3 B5 — OVERFLOW HANDLING (digest-first + auto-resume) ====================
+
+/**
+ * Quyết định của handleOverflow khi ReAct conversation vượt ngưỡng token:
+ *  - 'continue'         → digest đã kéo context xuống dưới ngưỡng — KHÔNG pause,
+ *                         ReAct loop chạy tiếp với lịch sử đã nén.
+ *  - 'pause-auto-resume'→ digest không cứu được nhưng chưa vượt cap N — pause
+ *                         (hành vi cũ) rồi TỰ ĐỘNG resume in-process sau 1 khoảng ngắn.
+ *  - 'pause-manual'     → digest không cứu được VÀ đã vượt cap N (hoặc lỗi
+ *                         fail-open) → pause THẬT chờ POST resume thủ công.
+ */
+export type OverflowAction = 'continue' | 'pause-auto-resume' | 'pause-manual'
+
+export interface HandleOverflowParams {
+  /** Mảng messages của ReAct loop — digest MUTATE in-place (splice) như rolling digest. */
+  messages: CompressionMessage[]
+  /** Ước lượng token TRƯỚC digest (caller đã tính bằng estimateTokens). */
+  currentTokens: number
+  /** Ngưỡng overflow (CONTEXT_OVERFLOW_THRESHOLD — 80k mặc định). */
+  threshold: number
+  /** Session id — đọc contextOverflowCount hiện tại khi param đó bị omit. */
+  sessionId: string
+  agentName: string
+  position: string
+  /** Index instruction được bảo vệ cuối cùng (biên nén — như rolling digest). */
+  protectedStartIndex: number
+  /** Số lần overflow TRƯỚC lần này; omit → tự đọc từ DB (fail-open → 0). */
+  contextOverflowCount?: number
+  /** Cap auto-resume mỗi session — mặc định MAX_AUTO_RESUME_PER_SESSION (3). */
+  maxAutoResumes?: number
+  /** Số message gần nhất giữ nguyên khi digest — mặc định KEEP_RECENT_MESSAGES. */
+  keepRecent?: number
+  /** Kế toán token digest vào budget của step. */
+  onTokens?: (tokens: number) => void
+  /** Tag archive Kho Context (CI-3 B2) cho digest khi nén thành công. */
+  archive?: { runId?: string | null; sessionId?: string | null; agentName?: string | null }
+}
+
+export interface HandleOverflowResult {
+  action: OverflowAction
+  /** estimateTokens(messages) SAU digest attempt (bằng currentTokens khi digest null). */
+  tokensAfter: number
+  /** Chars tiết kiệm được (0 khi digest trả null). */
+  savedChars: number
+  digestMethod: string | null
+  /** Số hiệu auto-resume (1..N) khi action='pause-auto-resume'; null trong các case khác. */
+  autoResumeNumber: number | null
+}
+
+/**
+ * CI-3 B5 (Task 13-d) — Xử lý context overflow trong ReAct loop, digest-first:
+ *
+ *  1. TRƯỚC TIÊN chạy compressConversation — nếu nén thành công (≠ null) và
+ *     sau nén estimateTokens(messages) < threshold → 'continue' (không pause;
+ *     vòng lặp sau tự nhẹ hơn).
+ *  2. Nếu nén KHÔNG giúp được (segment đã tối thiểu / savings không đủ / vẫn
+ *     ≥ threshold sau nén) → pause. Chưa vượt cap N (mặc định 3, đếm qua
+ *     contextOverflowCount) → 'pause-auto-resume'; vượt → 'pause-manual'.
+ *
+ * FAIL-OPEN TUYỆT ĐỐI: mọi lỗi digest/đọc-đếm đều nuốt bên trong và rơi về
+ * nhánh pause — KHÔNG BAO GIỜ throw (caller vẫn bọc thêm try/catch để về
+ * hành vi pause cũ nguyên vẹn nếu có lỗi bất ngờ).
+ */
+export async function handleOverflow(params: HandleOverflowParams): Promise<HandleOverflowResult> {
+  const { messages, currentTokens, threshold, sessionId, agentName, position, protectedStartIndex, onTokens, archive } = params
+  const maxAutoResumes = params.maxAutoResumes ?? MAX_AUTO_RESUME_PER_SESSION
+  const keepRecent = params.keepRecent ?? KEEP_RECENT_MESSAGES
+
+  // ---- BƯỚC 1: digest-first — thử tự cứu bằng nén trước khi pause ----
+  let comp: CompressionResult | null = null
+  try {
+    comp = await compressConversation({
+      messages,
+      protectedStartIndex,
+      keepRecent,
+      // workflow không giữ evidence log riêng → heuristic fallback suy xuất từ
+      // transcript (tool JSON có sẵn tool/success) — giống rolling digest B1.
+      minCompressibleMessages: 6, // < 3 cặp (assistant + tool reply) → không nén
+      llmContext: 'workflow-overflow-compression',
+      onTokens,
+      archive,
+    })
+  } catch (digestErr) {
+    // compressConversation đã fail-open nội bộ — belt-and-suspenders cho caller lỗi bất ngờ.
+    console.warn(`[Workflow] ${agentName} (${position}) overflow digest FAILED — rơi về nhánh pause: ${digestErr instanceof Error ? digestErr.message : String(digestErr)}`)
+  }
+  const tokensAfter = estimateTokens(messages)
+  if (comp && tokensAfter < threshold) {
+    console.log(`[Workflow] ${agentName} (${position}) overflow ~${currentTokens} tokens → rolling digest giảm về ~${tokensAfter} — tiếp tục không pause`)
+    return { action: 'continue', tokensAfter, savedChars: comp.savedChars, digestMethod: comp.method, autoResumeNumber: null }
+  }
+
+  // ---- BƯỚC 2: digest không cứu được → pause; quyết định auto-resume qua cap N ----
+  let priorCount = params.contextOverflowCount
+  if (priorCount === undefined) {
+    try {
+      const meta = await getSessionMetadata(sessionId)
+      priorCount = meta?.contextOverflowCount ?? 0
+    } catch {
+      priorCount = 0 // fail-open: đọc DB lỗi → coi như chưa từng overflow
+    }
+  }
+  const thisOverflowNumber = priorCount + 1
+  const autoResumeNumber = thisOverflowNumber <= maxAutoResumes ? thisOverflowNumber : null
+  return {
+    action: autoResumeNumber !== null ? 'pause-auto-resume' : 'pause-manual',
+    tokensAfter,
+    savedChars: comp?.savedChars ?? 0,
+    digestMethod: comp?.method ?? null,
+    autoResumeNumber,
+  }
+}
+
+/**
+ * CI-3 B5 — Lên lịch auto-resume session sau overflow pause (NON-BLOCKING):
+ * đợi AUTO_RESUME_DELAY_MS rồi gọi performSessionResume — ĐÚNG code path của
+ * POST /api/workflow/resume (atomic check-and-acquire + stale-lock 30-min
+ * recovery + buildResumeContext). Fire-and-forget: KHÔNG block step, lỗi bất
+ * kỳ chỉ log — session giữ nguyên pause chờ can thiệp thủ công (fail-open).
+ */
+function scheduleAutoResume(sessionId: string, resumeNumber: number, agentName: string, position: string): void {
+  console.log(`[Workflow] auto-resume #${resumeNumber} cho session ${sessionId} sau digest overflow — lên lịch kích hoạt sau ${AUTO_RESUME_DELAY_MS}ms (agent ${agentName}/${position})`)
+  setTimeout(() => {
+    void (async () => {
+      const result = await performSessionResume(sessionId)
+      if (result.ready) {
+        console.log(`[Workflow] auto-resume #${resumeNumber} cho session ${sessionId} sau digest overflow — session ACTIVE lại (overflow #${result.session?.contextOverflowCount}); agent kế tiếp lấy resume context qua cùng code path POST /api/workflow/resume`)
+      } else if (result.conflict) {
+        console.warn(`[Workflow] auto-resume #${resumeNumber} cho session ${sessionId}: lock đang bị agent khác giữ (409) — bỏ qua, giữ pause chờ thủ công`)
+      } else if (result.flagDisabled) {
+        console.warn(`[Workflow] auto-resume #${resumeNumber} cho session ${sessionId}: ENABLE_SESSION_RESUME đã tắt giữa chừng — bỏ qua`)
+      } else {
+        console.warn(`[Workflow] auto-resume #${resumeNumber} cho session ${sessionId} KHÔNG thành công (không tìm thấy / DB lỗi) — giữ pause chờ POST /api/workflow/resume?sessionId=${sessionId} thủ công`)
+      }
+    })().catch((err) => {
+      // Fail-open tuyệt đối — KHÔNG BAO GIỜ crash step vì auto-resume lỗi.
+      console.error(`[Workflow] auto-resume #${resumeNumber} cho session ${sessionId} FAILED (session giữ pause chờ thủ công):`, err instanceof Error ? err.message : String(err))
+    })
+  }, AUTO_RESUME_DELAY_MS)
 }
 
 // ==================== AGENT STEP RUNNER (ReAct Loop) ====================
@@ -1373,11 +1575,20 @@ export async function runAgentStep(params: {
     const { getEffectiveToolNames } = await import('@/lib/tool-access')
     tools = await getEffectiveToolNames(agent.name || position, defaultTools)
   } catch { /* fail-open — giữ whitelist mặc định */ }
-  let systemPrompt = agent.instruction || getAgentPrompt(position)
+  // CI-3 B7 (Task 13-e) — system prompt per-step ghép từ CÁC BLOCK CÓ TÊN, cuối
+  // cùng áp budget ký tự tổng (budgetPrompt — xem prompt-budget.ts): vượt
+  // SYSTEM_PROMPT_BUDGET_CHARS (mặc định 24k) → cắt block priority thấp nhất
+  // trước (giữ đầu block), block nhỏ <500 chars không cắt, tổng < budget →
+  // prompt GIỮ NGUYÊN 100%. Separator nhúng sẵn trong content mỗi block —
+  // join('') tái tạo đúng chuỗi ghép += cũ khi không có cut.
+  const systemBlocks: PromptBlock[] = [
+    // persona: instruction user-edit từ DB (KHÔNG cap) hoặc prompt mặc định theo position — priority cao nhất
+    { name: 'persona', content: agent.instruction || getAgentPrompt(position), priority: 100 },
+  ]
 
   // Inject enabled skills from DB (cached per-workflow in ctx.skillsContext)
   if (ctx.skillsContext) {
-    systemPrompt += ctx.skillsContext
+    systemBlocks.push({ name: 'skills', content: ctx.skillsContext, priority: 20 }) // đã cap 16k nội bộ (loadEnabledSkills)
   }
 
   // 2026-08-29 — WORKSPACE CONTEXT cho Team Code (parity với /api/openclaw/chat):
@@ -1386,7 +1597,7 @@ export async function runAgentStep(params: {
   try {
     const wsCtx = await buildWorkspaceContext()
     if (wsCtx.text) {
-      systemPrompt += `\n\n${wsCtx.text}`
+      systemBlocks.push({ name: 'workspace', content: `\n\n${wsCtx.text}`, priority: 40 })
     }
   } catch (err) {
     console.warn('[Workflow] workspace context inject failed (non-blocking):', err instanceof Error ? err.message : String(err))
@@ -1397,7 +1608,7 @@ export async function runAgentStep(params: {
   // working vào system prompt để agent biết CHÍNH XÁC cái gì dùng được.
   try {
     const { buildCapabilityPromptBlock } = await import('@/lib/agent-capabilities')
-    systemPrompt += `\n${await buildCapabilityPromptBlock()}`
+    systemBlocks.push({ name: 'capabilities', content: `\n${await buildCapabilityPromptBlock()}`, priority: 50 })
   } catch (err) {
     console.warn('[Workflow] capability probe failed (non-blocking):', err instanceof Error ? err.message : String(err))
   }
@@ -1409,7 +1620,7 @@ export async function runAgentStep(params: {
   try {
     const { buildAgentRosterPromptBlock } = await import('@/lib/agent-roster')
     const rosterBlock = await buildAgentRosterPromptBlock(agent.name)
-    if (rosterBlock) systemPrompt += `\n${rosterBlock}`
+    if (rosterBlock) systemBlocks.push({ name: 'roster', content: `\n${rosterBlock}`, priority: 30 }) // đã cap 8k nội bộ (agent-roster.ts)
   } catch (err) {
     console.warn('[Workflow] agent roster inject failed (non-blocking):', err instanceof Error ? err.message : String(err))
   }
@@ -1423,7 +1634,7 @@ export async function runAgentStep(params: {
     const { getFailureHintsForAgent } = await import('@/lib/learning/strategy-adapter')
     const hints = await getFailureHintsForAgent(agent.name)
     if (hints.length > 0) {
-      systemPrompt += `\n\n--- BÀI HỌC TỪ THẤT BẠI TRƯỚC (Layer 9) ---\n${hints.join('\n')}`
+      systemBlocks.push({ name: 'layer9Hints', content: `\n\n--- BÀI HỌC TỪ THẤT BẠI TRƯỚC (Layer 9) ---\n${hints.join('\n')}`, priority: 35 })
       ctx.layer9HintsInjected = (ctx.layer9HintsInjected ?? 0) + hints.length
       console.log(`[Workflow] Layer 9 — injected ${hints.length} failure hint(s) into ${agent.name} (${position}) system prompt`)
     }
@@ -1514,9 +1725,16 @@ export async function runAgentStep(params: {
     if (toolDefs.length > 0) {
       // ToolDefinition matches LLMTool shape exactly (both OpenAI-compatible)
       nativeTools = toolDefs as unknown as LLMTool[]
-      systemPrompt += buildToolSchemasSection(toolDefs)
+      // CI-3 B7 — priority THẤP NHẤT: schemas đã truyền ĐẦY ĐỦ qua API param
+      // `tools` (nativeTools trên) — bản text này chỉ là defense-in-depth,
+      // cắt được khi vượt budget mà không mất khả năng gọi tool
+      systemBlocks.push({ name: 'toolSchemas', content: buildToolSchemasSection(toolDefs), priority: 10 })
     }
   }
+
+  // CI-3 B7 (Task 13-e) — áp budget TỔNG rồi ghép các block thành system
+  // prompt cuối (fail-open bên trong budgetPrompt: lỗi → chuỗi ghép không cut).
+  const systemPrompt = budgetPrompt(systemBlocks, `workflow-step:${agent.name}(${position})`)
 
   // Build initial messages array for multi-turn conversation with tool calls
   const messages: Array<{
@@ -1528,6 +1746,12 @@ export async function runAgentStep(params: {
     { role: 'system', content: systemPrompt },
     { role: 'user', content: prompt },
   ]
+
+  // CI-3 B1 — index của step instruction (user prompt) ĐẦU TIÊN = 1; mọi message
+  // index <= lastInstructionIndex KHÔNG bị nén (protected). Cập nhật khi TL recon
+  // budget inject instruction mới phía dưới. Nén chỉ chèn/xóa SAU index này nên
+  // vị trí tracked luôn hợp lệ.
+  let lastInstructionIndex = 1
 
   // NOTE: Tool definitions are not passed to callLLMForAgent because it doesn't support
   // native function calling. Instead, tools are parsed from LLM text output.
@@ -1850,73 +2074,184 @@ export async function runAgentStep(params: {
       })
 
       // Add tool result to conversation
-      messages.push({
-        role: 'tool',
-        content: JSON.stringify({
-          tool: tc.name,
-          success: toolResult.success,
-          result: toolResult.result,
-        }),
-        tool_call_id: tc.id,
-      })
+      // CI-3 B1 — cap tool result ~4k chars TRƯỚC khi push (pattern goal-loop):
+      // tool output lớn (file_read/shell/run_tests) làm ReAct loop phình vô hạn.
+      // Result NHỎ giữ nguyên shape object như cũ (không đổi hành vi); result LỚN
+      // trở thành chuỗi JSON đã cap + { truncated, totalChars } — content luôn là
+      // JSON hợp lệ (provider chỉ cần string, không nhất thiết JSON — nhưng giữ
+      // parse được cho formatMessagesForLLM + heuristic nén phía dưới).
+      let toolResultJson: string
+      try {
+        toolResultJson = JSON.stringify(toolResult.result)
+      } catch {
+        toolResultJson = String(toolResult.result)
+      }
+      if (toolResultJson.length <= TOOL_RESULT_MAX_CHARS) {
+        messages.push({
+          role: 'tool',
+          content: JSON.stringify({
+            tool: tc.name,
+            success: toolResult.success,
+            result: toolResult.result,
+          }),
+          tool_call_id: tc.id,
+        })
+      } else {
+        const capped = capToolResult(toolResultJson, TOOL_RESULT_MAX_CHARS)
+        messages.push({
+          role: 'tool',
+          content: JSON.stringify({
+            tool: tc.name,
+            success: toolResult.success,
+            result: capped.content,
+            truncated: true,
+            totalChars: capped.totalChars,
+          }),
+          tool_call_id: tc.id,
+        })
+      }
+    }
+
+    // ===== CI-3 B1 — Rolling context compression (digest) =====
+    // Chạy sau MỖI iteration (đã push đủ tool results), TRƯỚC overflow check:
+    // đo tổng chars của segment nén được (sau step-instruction cuối, trừ
+    // KEEP_RECENT_MESSAGES message gần nhất); vượt 50k → nén thành 1 digest
+    // message (goal-loop pattern). KHÔNG nén khi segment < 3 cặp message (6
+    // messages). FAIL-OPEN TUYỆT ĐỐI: lỗi nén KHÔNG BAO GIỜ làm fail step.
+    try {
+      const compressStart = lastInstructionIndex + 1
+      const compressEnd = messages.length - KEEP_RECENT_MESSAGES
+      if (compressEnd > compressStart) {
+        let segmentChars = 0
+        for (let mi = compressStart; mi < compressEnd; mi++) segmentChars += messages[mi].content.length
+        if (segmentChars >= COMPRESS_THRESHOLD_CHARS) {
+          const comp = await compressConversation({
+            messages,
+            protectedStartIndex: lastInstructionIndex,
+            keepRecent: KEEP_RECENT_MESSAGES,
+            // workflow không giữ evidence log như goal-loop → heuristic fallback
+            // sẽ suy xuất từ chính transcript (tool JSON có sẵn tool/success)
+            minCompressibleMessages: 6, // < 3 cặp (assistant + tool reply) → không nén
+            llmContext: 'workflow-context-compression',
+            onTokens: (t) => { stepTokensUsed += t },
+            // CI-3 B2 (Task 13-b): lưu digest vào Kho Context — runId = sessionId
+            // workflow (cùng scope step-todo CI-2) để context_recall truy hồi
+            // trọn vẹn 1 workflow session (fail-open bên trong).
+            archive: { runId: sessionId, sessionId, agentName: agent.name },
+          })
+          if (comp) {
+            console.log(`[Workflow] ${agent.name} (${position}) rolling digest: -${comp.savedChars} chars (${comp.method})`)
+          }
+        }
+      }
+    } catch (compErr) {
+      console.warn(`[Workflow] ${agent.name} (${position}) rolling digest FAILED (non-blocking): ${compErr instanceof Error ? compErr.message : String(compErr)}`)
     }
 
     // ===== v2.1 Phase 5.6 — Context overflow detection (Appendix C.4) =====
     // Strategy: after every tool iteration, estimate the conversation's
     // token count. If it exceeds CONTEXT_OVERFLOW_THRESHOLD (80k default)
-    // AND ENABLE_SESSION_RESUME is on, build a WorkflowState snapshot,
-    // pause the session (status='paused' + contextOverflowCount++), and
-    // break the ReAct loop with a sentinel marker so the parent workflow
-    // can detect the overflow and (in a later phase) call the resume
-    // endpoint. For now the marker is logged + appended to finalContent;
-    // auto-resume is a manual API call per spec ("DON'T wire the resume
-    // side into the parent workflow auto-resume yet").
+    // AND ENABLE_SESSION_RESUME is on:
+    //   CI-3 B5 (Task 13-d) — DIGEST-FIRST: chạy handleOverflow TRƯỚC — nếu
+    //   digest kéo context xuống dưới ngưỡng → KHÔNG pause, ReAct loop chạy
+    //   tiếp ("resume" nhanh nhất là không cần pause). Digest không cứu được
+    //   → pause như cũ (save state → pause → sentinel → break) NHƯNG tự động
+    //   resume in-process sau 1 khoảng ngắn — ĐÚNG code path POST
+    //   /api/workflow/resume, không cần API thủ công; tối đa
+    //   MAX_AUTO_RESUME_PER_SESSION (3) lần mỗi session, vượt → pause thật
+    //   chờ can thiệp thủ công. TOÀN BỘ fail-open: lỗi bất kỳ trong
+    //   auto-resume path → rơi về hành vi pause cũ.
     const currentTokens = estimateTokens(messages)
     if (
       detectContextOverflow(currentTokens, CONTEXT_OVERFLOW_THRESHOLD) &&
       isFlagEnabled('ENABLE_SESSION_RESUME')
     ) {
-      console.warn(`[Workflow] ${agent.name} (${position}) context overflow detected: ~${currentTokens} tokens > ${CONTEXT_OVERFLOW_THRESHOLD} threshold — pausing session ${sessionId} for resume handoff`)
-      // Build the serialized state — keep the last 5 tool receipts to comply
-      // with Appendix C.4 step 5 ("re-inject: ... last 5 tool receipts").
-      const lastFiveReceipts = toolCallsLog.slice(-5).map((entry) => ({
-        tool: entry.tool,
-        args: entry.args,
-        result: entry.result,
-        timestamp: new Date().toISOString(),
-      }))
-      const overflowState: WorkflowState = {
-        currentStep: `${agent.name} (${position}) — ${step}`,
-        todoIds: [], // populated by the consumer from the Todo table at resume time
-        lastToolReceipts: lastFiveReceipts,
-        overflowTokenCount: currentTokens,
-        overflowIteration: iterations,
-      }
-      // Persist the latest state BEFORE pausing so the resuming agent sees
-      // the most recent tool receipts (save → pause, atomic order).
+      let overflowOutcome: HandleOverflowResult | null = null
       try {
-        await saveWorkflowSession(
+        overflowOutcome = await handleOverflow({
+          messages,
+          currentTokens,
+          threshold: CONTEXT_OVERFLOW_THRESHOLD,
           sessionId,
+          agentName: agent.name,
           position,
-          step, // taskDescription placeholder — caller can update via save on next call
-          overflowState,
-          'active',
-        )
-        await pauseWorkflowSession(sessionId, 'context overflow')
-      } catch (persistErr) {
-        // Never crash the workflow because state persistence failed — log + continue.
-        console.error(`[Workflow] Phase 5.6 state persist failed (non-blocking): ${persistErr instanceof Error ? persistErr.message : String(persistErr)}`)
+          protectedStartIndex: lastInstructionIndex,
+          onTokens: (t) => { stepTokensUsed += t },
+          archive: { runId: sessionId, sessionId, agentName: agent.name },
+        })
+      } catch (overflowErr) {
+        // Fail-open tuyệt đối — lỗi bất ngờ trong overflow path → hành vi
+        // pause cũ nguyên vẹn (pause chờ thủ công, KHÔNG auto-resume).
+        console.error(`[Workflow] ${agent.name} (${position}) handleOverflow FAILED — falling back to legacy manual pause: ${overflowErr instanceof Error ? overflowErr.message : String(overflowErr)}`)
       }
-      // Sentinel marker — parent workflow detects this and (Phase 5+ future)
-      // auto-calls POST /api/workflow/resume?sessionId=<sessionId>.
-      finalContent += `\n\n[CONTEXT_OVERFLOW:session=${sessionId}] Conversation reached ~${currentTokens} tokens (> ${CONTEXT_OVERFLOW_THRESHOLD} threshold). State persisted; call POST /api/workflow/resume?sessionId=${sessionId} to continue.`
-      emit({
-        type: 'error',
-        agent: agent.name,
-        position,
-        message: `Context overflow (~${currentTokens} tokens) — session ${sessionId} paused for resume handoff`,
-      })
-      break
+
+      if (overflowOutcome?.action === 'continue') {
+        // Digest đã tự cứu: context giờ nằm dưới ngưỡng — KHÔNG pause, KHÔNG
+        // break; ReAct loop chạy tiếp với lịch sử đã nén (log chi tiết đã in
+        // bên trong handleOverflow — "overflow → rolling digest giảm về ~N
+        // tokens — tiếp tục không pause").
+      } else {
+        console.warn(`[Workflow] ${agent.name} (${position}) context overflow detected: ~${currentTokens} tokens > ${CONTEXT_OVERFLOW_THRESHOLD} threshold — pausing session ${sessionId} for resume handoff${overflowOutcome?.digestMethod ? ` (digest ${overflowOutcome.digestMethod} tiết kiệm −${overflowOutcome.savedChars} chars nhưng vẫn vượt ngưỡng)` : ''}`)
+        // Build the serialized state — keep the last 5 tool receipts to comply
+        // with Appendix C.4 step 5 ("re-inject: ... last 5 tool receipts").
+        const lastFiveReceipts = toolCallsLog.slice(-5).map((entry) => ({
+          tool: entry.tool,
+          args: entry.args,
+          result: entry.result,
+          timestamp: new Date().toISOString(),
+        }))
+        const overflowState: WorkflowState = {
+          currentStep: `${agent.name} (${position}) — ${step}`,
+          todoIds: [], // populated by the consumer from the Todo table at resume time
+          lastToolReceipts: lastFiveReceipts,
+          overflowTokenCount: currentTokens,
+          overflowIteration: iterations,
+        }
+        // Persist the latest state BEFORE pausing so the resuming agent sees
+        // the most recent tool receipts (save → pause, atomic order).
+        let autoResumeNumber: number | null = null
+        try {
+          await saveWorkflowSession(
+            sessionId,
+            position,
+            step, // taskDescription placeholder — caller can update via save on next call
+            overflowState,
+            'active',
+          )
+          const pauseResult = await pauseWorkflowSession(sessionId, 'context overflow')
+          // CI-3 B5 — contextOverflowCount AUTHORITATIVE từ pause result (chống
+          // race với process khác): chỉ auto-resume khi 1 ≤ count ≤ cap N;
+          // vượt cap → pause thật chờ can thiệp thủ công.
+          if (
+            pauseResult.success &&
+            pauseResult.contextOverflowCount >= 1 &&
+            pauseResult.contextOverflowCount <= MAX_AUTO_RESUME_PER_SESSION
+          ) {
+            autoResumeNumber = pauseResult.contextOverflowCount
+          }
+        } catch (persistErr) {
+          // Never crash the workflow because state persistence failed — log + continue.
+          autoResumeNumber = null // fail-open: persist lỗi → không auto-resume
+          console.error(`[Workflow] Phase 5.6 state persist failed (non-blocking): ${persistErr instanceof Error ? persistErr.message : String(persistErr)}`)
+        }
+        // CI-3 B5 — auto-resume in-process (không cần POST thủ công); mọi lỗi
+        // bên trong scheduler chỉ log — KHÔNG BAO GIỜ crash step.
+        if (autoResumeNumber !== null) {
+          scheduleAutoResume(sessionId, autoResumeNumber, agent.name, position)
+        } else {
+          console.warn(`[Workflow] session ${sessionId} đã đạt/vượt cap ${MAX_AUTO_RESUME_PER_SESSION} lần auto-resume (hoặc persist lỗi) — pause THẬT chờ can thiệp thủ công: POST /api/workflow/resume?sessionId=${sessionId}`)
+        }
+        // Sentinel marker — parent workflow/UI detect overflow qua marker này
+        // (giữ nguyên format cũ; auto-resume chỉ APPEND ghi chú phía sau).
+        finalContent += `\n\n[CONTEXT_OVERFLOW:session=${sessionId}] Conversation reached ~${currentTokens} tokens (> ${CONTEXT_OVERFLOW_THRESHOLD} threshold). State persisted; call POST /api/workflow/resume?sessionId=${sessionId} to continue.${autoResumeNumber !== null ? ` (auto-resume #${autoResumeNumber} đã lên lịch — session sẽ tự ACTIVE lại)` : ''}`
+        emit({
+          type: 'error',
+          agent: agent.name,
+          position,
+          message: `Context overflow (~${currentTokens} tokens) — session ${sessionId} paused for resume handoff${autoResumeNumber !== null ? ` — auto-resume #${autoResumeNumber} scheduled` : ''}`,
+        })
+        break
+      }
     }
 
     // ===== Recon budget enforcement for TL/analyze =====
@@ -1930,6 +2265,8 @@ export async function runAgentStep(params: {
         role: 'user',
         content: `⚠️ RECON BUDGET: Bạn đã đọc đủ code (iteration ${iterations}/${maxIterations}). NGAY BÂY GIỜ, hãy emit routing JSON với format:\n\`\`\`json\n{\n  "mode": "A|B|C",\n  "tier": 1|2|3,\n  "score": <3-9>,\n  "reasoning": "<giải thích dựa trên code đã đọc>",\n  "targetFiles": ["<files cần sửa>"],\n  "filesInspected": ["<files đã đọc>"],\n  "riskLevel": "low|medium|high",\n  "executionPlan": [{"step":1,"description":"...","targetFiles":["..."],"agent":"G1|G2-A|G2-B|G3|TL","risk":"low|medium|high"}],\n  "parts": [{"name":"...","type":"visual|backend","description":"...","dependency":[]}],\n  "spec": "<spec chi tiết>"\n}\n\`\`\`\nKHÔNG gọi tool thêm — chỉ output JSON.`,
       })
+      // CI-3 B1 — instruction mới trở thành protected head của segment nén kế tiếp
+      lastInstructionIndex = messages.length - 1
     }
 
     // If G2-B reached max iterations, break
@@ -2034,10 +2371,16 @@ Output JSON trong markdown code block:
 \`\`\``
 
   // Build system prompt for TL checkpoint verify — include skills injection
-  let verifySystemPrompt = getAgentPrompt('TL')
-  if (ctx.skillsContext) {
-    verifySystemPrompt += ctx.skillsContext
-  }
+  // CI-3 B7 (Task 13-e): áp budget tổng như step prompt (persona cao nhất —
+  // skills thấp hơn; tổng ~21k thường dưới 24k → no-op, chỉ kích hoạt khi user
+  // hạ SYSTEM_PROMPT_BUDGET_CHARS)
+  const verifySystemPrompt = budgetPrompt(
+    [
+      { name: 'persona', content: getAgentPrompt('TL'), priority: 100 },
+      ...(ctx.skillsContext ? [{ name: 'skills', content: ctx.skillsContext, priority: 20 }] : []),
+    ],
+    'workflow-checkpoint-verify:TL',
+  )
 
   // Call LLM for checkpoint verification — with shorter timeout (30s)
   // Edge case #1: LLM timeout → fallback to rule-based decision

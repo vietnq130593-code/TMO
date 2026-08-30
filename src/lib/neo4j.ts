@@ -196,6 +196,67 @@ export async function withNeo4jRetry<T>(
   throw lastError
 }
 
+// ==================== CONNECT-FAIL LOG THROTTLE (dedup spam) ====================
+//
+// FIX 2026-09-12 (defer finding GĐ1 — Task 10-f "Neo4j ECONNREFUSED log spam"):
+// khi Neo4j không chạy (sandbox giữ key placeholder / AuraDB pause), MỖI lần
+// app thử dùng Neo4j (episodic memory, health check, sync route...) đều in FULL
+// error dài nhiều dòng → dev.log spam. Chính sách mới — KHÔNG đổi logic kết
+// nối/retry, chỉ đổi logging:
+//   - FULL error đúng 1 lần ĐẦU TIÊN trong process (console.error).
+//   - Các lần fail sau: 1 dòng ngắn
+//       `[Neo4j] still unreachable (last full error at <ts>) — retry #N [<context>]`
+//     tối đa 1 dòng/60s (nhanh hơn → im lặng hoàn toàn).
+//   - Kết nối lại THÀNH CÔNG → reset trạng thái → đợt gián đoạn kế tiếp lại
+//     được log full error (lỗi mới có thể khác lỗi cũ).
+// State đặt trên globalThis (cùng pattern globalForNeo4j / globalForNeo4jMonitor
+// ở dưới) để sống qua Next dev hot-reload — tránh N lần full error khi module
+// được reload.
+
+/** Tần suất tối đa của dòng log ngắn "still unreachable" */
+const NEO4J_FAIL_LOG_INTERVAL_MS = 60_000
+
+const globalForNeo4jFailLog = globalThis as unknown as {
+  __neo4jLastFullErrorLoggedAt?: number
+  __neo4jLastFailLineLoggedAt?: number
+  __neo4jConsecutiveFailures?: number
+}
+
+/**
+ * Log lỗi kết nối Neo4j qua helper throttle (mọi console.error/warn connect-fail
+ * trong module này đều phải qua đây — xem comment section trên).
+ * `context` phân biệt nguồn lỗi: init / safeSession ping / health check ping /
+ * background monitor — để dòng ngắn vẫn biết đường truy nguyên nhân.
+ */
+function logNeo4jConnectFailure(context: string, err: unknown): void {
+  const now = Date.now()
+  const g = globalForNeo4jFailLog
+  const message = err instanceof Error ? err.message : String(err)
+  g.__neo4jConsecutiveFailures = (g.__neo4jConsecutiveFailures ?? 0) + 1
+
+  // Lần đầu tiên trong process (hoặc sau khi đã kết nối lại thành công) → FULL error
+  if (!g.__neo4jLastFullErrorLoggedAt) {
+    g.__neo4jLastFullErrorLoggedAt = now
+    g.__neo4jLastFailLineLoggedAt = now
+    console.error(`[Neo4j] Failed to connect (${context}):`, message)
+    return
+  }
+
+  // Đã log full error trước đó → 1 dòng ngắn, tối đa 1 dòng/60s
+  if (now - (g.__neo4jLastFailLineLoggedAt ?? 0) < NEO4J_FAIL_LOG_INTERVAL_MS) return
+  g.__neo4jLastFailLineLoggedAt = now
+  const ts = new Date(g.__neo4jLastFullErrorLoggedAt).toISOString()
+  console.warn(`[Neo4j] still unreachable (last full error at ${ts}) — retry #${g.__neo4jConsecutiveFailures} [${context}]`)
+}
+
+/** Kết nối lại thành công → reset throttle để đợt gián đoạn kế tiếp log full error. */
+function resetNeo4jFailLogState(): void {
+  const g = globalForNeo4jFailLog
+  g.__neo4jLastFullErrorLoggedAt = undefined
+  g.__neo4jLastFailLineLoggedAt = undefined
+  g.__neo4jConsecutiveFailures = undefined
+}
+
 // ==================== LAZY DRIVER INITIALIZATION ====================
 
 const globalForNeo4j = globalThis as unknown as {
@@ -233,7 +294,7 @@ export async function getNeo4jDriver(): Promise<Neo4jDriver | null> {
     const password = process.env.NEO4J_PASSWORD
 
     if (!uri || !user || !password) {
-      console.error('[Neo4j] Missing NEO4J_URI, NEO4J_USER, or NEO4J_PASSWORD env vars')
+      logNeo4jConnectFailure('init: missing env', new Error('Missing NEO4J_URI, NEO4J_USER, or NEO4J_PASSWORD env vars'))
       driverInitPromise = null
       return null
     }
@@ -259,6 +320,7 @@ export async function getNeo4jDriver(): Promise<Neo4jDriver | null> {
       try {
         await session.run('RETURN 1 AS test')
         console.log('[Neo4j] Connected successfully to', uri.replace(/\/\/[^@]+@/, '//***@'))
+        resetNeo4jFailLogState() // kết nối lại thành công → đợt fail kế tiếp log full error mới
       } finally {
         await session.close()
       }
@@ -266,7 +328,10 @@ export async function getNeo4jDriver(): Promise<Neo4jDriver | null> {
       globalForNeo4j.neo4jDriver = driver
       return driver
     } catch (err) {
-      console.error('[Neo4j] Failed to connect:', err instanceof Error ? err.message : String(err))
+      // FIX log-spam: full error chỉ in 1 lần đầu trong process — các lần sau
+      // qua helper throttle (1 dòng ngắn, tối đa 1 dòng/60s). Logic close driver
+      // + return null GIỮ NGUYÊN (không đổi retry/connect semantics).
+      logNeo4jConnectFailure('init', err)
       // FIX (resource leak): close the driver when connectivity verification fails.
       // Previously it was abandoned (connection pool + sockets leaked). During an
       // AuraDB outage every request leaked one driver.
@@ -341,7 +406,7 @@ export async function safeSession(options?: { database?: string }): Promise<Sess
   } catch (pingError: any) {
     await session.close().catch(() => {})
     // Ping failed — driver pool may have stale connections (e.g., after laptop sleep)
-    console.warn('[Neo4j] safeSession ping failed, resetting driver...', pingError instanceof Error ? pingError.message : String(pingError))
+    logNeo4jConnectFailure('safeSession ping — resetting driver', pingError)
     await resetNeo4jDriver()
     const freshDriver = await getNeo4jDriver()
     if (!freshDriver) throw new Error('Neo4j driver not available after reset')
@@ -487,7 +552,7 @@ async function checkNeo4jHealthUncached(): Promise<Neo4jHealthResult> {
     } catch (pingError: any) {
       await session.close().catch(() => {})
       // Driver object exists but connections are dead — RESET DRIVER
-      console.warn('[Neo4j] Health check ping failed (driver may be zombie), resetting driver...', pingError instanceof Error ? pingError.message : String(pingError))
+      logNeo4jConnectFailure('health check ping (driver may be zombie) — resetting driver', pingError)
       await resetNeo4jDriver()
       driver = await getNeo4jDriver()
       if (!driver) {
@@ -501,6 +566,7 @@ async function checkNeo4jHealthUncached(): Promise<Neo4jHealthResult> {
         session = driver.session(dbParam)
         await session.run('RETURN 1 AS test')
         console.log('[Neo4j] Driver reset successful — reconnected')
+        resetNeo4jFailLogState() // kết nối lại thành công → reset throttle
       } catch (retryError: any) {
         await session.close().catch(() => {})
         return {
@@ -1987,8 +2053,7 @@ export function startNeo4jHealthMonitor(): void {
           await session.close()
         }
       } catch (err: any) {
-        const msg = err instanceof Error ? err.message : String(err)
-        console.warn(`[Neo4j] Background health check FAILED — resetting driver. Error: ${msg}`)
+        logNeo4jConnectFailure('background health check — resetting driver', err)
         // Proactively reset the driver so the next real request succeeds immediately
         await resetNeo4jDriver()
       }

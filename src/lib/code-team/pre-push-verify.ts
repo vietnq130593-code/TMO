@@ -29,6 +29,57 @@ import { resolveWorkspaceRoot } from './workspace-root'
 
 const execFileAsync = promisify(execFile)
 
+// ==================== CROSS-PLATFORM RUNNER HELPER (review GĐ1 finding #13) ====================
+//
+// Trên Windows, spawn KHÔNG shell không resolve runner theo PATH như shell
+// (CreateProcess không tự tìm bun.exe/bunx.cmd shim cài qua npm/scoop) →
+// execFile('bun', ...) fail ENOENT trên máy local Windows (Mr. Architect).
+// scripts/quality-gate.mjs đã chạy shell:true từ trước; pipeline này thì chưa.
+// Chuẩn hóa qua 1 helper:
+//   - win32  → execFile với shell:true + args đã quote an toàn (cmd.exe resolve
+//              bun.exe/bunx.cmd theo PATH; args chứa space/quote được bọc "..."
+//              + escape " → \" nên không vỡ command line)
+//   - *nix   → execFile argv-array trực tiếp (KHÔNG shell) — behavior y hệt
+//              phiên bản trước (an toàn shell-injection).
+
+/** Quote 1 arg cho cmd.exe khi shell=true: bọc "..." + escape " thành \" (chuẩn CommandLineToArgvW; backslash đứng trước " / cuối chuỗi nhân đôi) */
+function quoteWindowsArg(arg: string): string {
+  if (arg === '') return '""'
+  // Backslash ngay trước dấu " phải nhân đôi trước khi escape "; backslash cuối
+  // chuỗi (ngay trước closing quote) cũng phải nhân đôi — theo quy tắc CommandLineToArgvW.
+  let escaped = arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1')
+  // Chỉ cần quote khi có ký tự đặc biệt (space, quote, cmd metachar) — args
+  // "thường" (run, lint, --version...) đi thẳng cho log dễ đọc.
+  if (!/^[\w\-.:/=+@]*$/.test(escaped)) {
+    escaped = `"${escaped}"`
+  }
+  return escaped
+}
+
+/**
+ * Chạy 1 lệnh runner (bun/bunx/...) cross-platform — dùng cho MỌI runner call
+ * trong pipeline này (hiện tại: `bun run <script>` ở runRepoScript).
+ *
+ * - Windows (win32): execFile(shell: true) + args đã quote an toàn — cmd.exe
+ *   resolve được bun.exe/bunx.cmd theo PATH (fix ENOENT).
+ * - Linux/macOS: execFile argv-array thuần, không shell — semantics giữ nguyên
+ *   100% so với phiên bản trước (timeout/maxBuffer/cwd pass-through nguyên vẹn).
+ */
+export async function runCommand(
+  cmd: string,
+  args: string[],
+  opts: { cwd?: string; timeout?: number; maxBuffer?: number } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  if (process.platform === 'win32') {
+    // Node join cmd + args thành 1 dòng lệnh khi shell:true rồi bọc qua
+    // `cmd.exe /d /s /c "..."` (cùng đường đi với exec()) — ta tự quote từng arg
+    // TRƯỚC để args chứa space/quote không bị cmd.exe cắt xé.
+    const commandLine = [cmd, ...args.map(quoteWindowsArg)].join(' ')
+    return execFileAsync(commandLine, { ...opts, shell: true })
+  }
+  return execFileAsync(cmd, args, opts)
+}
+
 // ==================== TYPES ====================
 
 /** Kết quả 1 bước trong pipeline */
@@ -217,6 +268,9 @@ interface GitReceipt {
 /**
  * Chạy 1 script của repo (bun run <script>) trong workspace root — pass nếu exit 0.
  * Trả về reason (exit code / timeout) + tail output để nhét vào detail của step.
+ * FIX 2026-09-12 (review GĐ1 finding #13): chạy qua runCommand() — win32 dùng
+ * shell:true (cmd.exe resolve bun.exe/bunx.cmd theo PATH, fix ENOENT), *nix giữ
+ * nguyên execFile argv-array. KHÔNG đổi semantics bước (timeout/maxBuffer/cwd y hệt).
  */
 async function runRepoScript(
   args: string[],
@@ -225,7 +279,7 @@ async function runRepoScript(
 ): Promise<{ ok: boolean; reason: string; tail: string }> {
   const startedAt = Date.now()
   try {
-    const { stdout, stderr } = await execFileAsync('bun', args, {
+    const { stdout, stderr } = await runCommand('bun', args, {
       cwd,
       timeout: timeoutMs,
       maxBuffer: 20 * 1024 * 1024,

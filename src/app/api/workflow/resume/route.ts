@@ -24,9 +24,12 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import {
-  resumeWorkflowSession,
-  buildResumeContext,
+  // CI-3 B5 (Task 13-d) — performSessionResume là hàm dùng chung của route này
+  // VÀ workflow-engine auto-resume (in-process) — đảm bảo 2 đường resume chạy
+  // ĐÚNG cùng 1 code path (acquire lock + build resume context).
+  performSessionResume,
   getSessionMetadata,
+  type ResumeContext,
 } from '@/lib/orchestration/session-resume'
 
 export const dynamic = 'force-dynamic'
@@ -61,8 +64,9 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // 1. Atomic check-and-resume (Appendix C.3)
-  const resumeResult = await resumeWorkflowSession(sessionId)
+  // 1. Atomic check-and-resume + resume context (Appendix C.3 + C.2) — shared
+  //    code path with the workflow-engine in-process auto-resume (CI-3 B5).
+  const resumeResult = await performSessionResume(sessionId)
 
   if (resumeResult.flagDisabled) {
     // Flag is off — return ready=false consistently so the caller can decide
@@ -89,8 +93,14 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // 2. Build resume context (Appendix C.2 / C.4 step 5)
-  const ctx = await buildResumeContext(sessionId)
+  // 2. Resume context đã được build bên trong performSessionResume (fail-open
+  //    trả stub rỗng — không bao giờ 500 vì context build lỗi).
+  const ctx: ResumeContext = resumeResult.context ?? {
+    taskDescription: '',
+    todoList: [],
+    lastToolReceipts: [],
+    currentStep: '',
+  }
 
   return NextResponse.json(
     {

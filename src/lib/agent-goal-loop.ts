@@ -54,7 +54,7 @@
  * (chat route) có fallback /api/query như cũ.
  */
 
-import { callLLMForAgent, callUtilityLLM } from '@/lib/llm'
+import { callLLMForAgent } from '@/lib/llm'
 import { executeTool } from '@/lib/code-team/tool-executor'
 import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint } from '@/lib/tool-calls'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
@@ -84,6 +84,27 @@ import {
 // session KHÔNG phải đọc/làm lại — tiết kiệm token, (b) hết phiên promote lên
 // WARM (AgentMemory) qua runTierTransitions → ghi nhớ dài hạn về công việc đã làm.
 import { addToWorkingMemory } from '@/lib/memory-tiers'
+// CI-3 B1 (Task 13-a) — nén context tách thành module dùng chung (workflow-engine
+// tái dùng cùng pattern); constants + digest prompt + compressConversation gốc
+// của goal-loop chuyển sang đây, hành vi giữ nguyên như đã verify GĐ1/GĐ2.
+import {
+  COMPRESS_THRESHOLD_CHARS,
+  KEEP_RECENT_MESSAGES,
+  TOOL_RESULT_MAX_CHARS,
+  compressConversation,
+} from '@/lib/context-compression'
+// CI-3 B4 (Task 13-c) — Kho Context "đọc lại khi cần" (Task 13-b): cuối mỗi
+// run lưu task_summary (kind='task_summary') vào TaskContextArchive; run mới
+// trong cùng session nạp lại các summary này TRƯỚC 6 message cuối thô —
+// liên tác vụ: tác vụ sau có bức tranh dài hạn (mục tiêu đạt/không, việc đã
+// làm, kết quả chính) của các tác vụ trước. Không circular import
+// (context-store chỉ phụ thuộc db/qdrant/embeddings).
+import { archiveContext, recallContext } from '@/lib/context-store'
+// CI-3 B7 (Task 13-e) — system prompt TỔNG có budget ký tự: base từ chat route
+// (chỉ skills 16k/HOT 2k có cap riêng) + protocol của loop ghép lại vượt
+// SYSTEM_PROMPT_BUDGET_CHARS (mặc định 24k) → cắt block priority thấp nhất
+// giữ đầu. Tổng < budget → prompt GIỮ NGUYÊN 100%.
+import { budgetPrompt } from '@/lib/prompt-budget'
 
 /** Gọn args để nhét vào working memory (chống phình) */
 function compactToolArgs(args: Record<string, unknown>, maxLen = 120): string {
@@ -205,8 +226,8 @@ const REPORT_RESERVE_TOKENS = TOKEN_BUDGET === 0
  * (abortCheck xuyên suốt mọi vòng đợi cooldown).
  */
 const LLM_TIMEOUT_MS = intEnvPositive('GOAL_LOOP_LLM_TIMEOUT_MS', 21 * 60_000)
-/** Cap ký tự của tool result khi đẩy vào messages (chống context nổ) */
-const MAX_TOOL_RESULT_CHARS = 4000
+/** Cap ký tự của tool result khi đẩy vào messages (chống context nén) — CI-3 B1: nguồn duy nhất từ module dùng chung */
+const MAX_TOOL_RESULT_CHARS = TOOL_RESULT_MAX_CHARS
 /** Cap số messages giữa các chu kỳ (trim giữ system + goal + đuôi gần nhất) */
 const MAX_MESSAGES = 48
 /** Cap số dòng evidence log giữ lại cho evaluator */
@@ -224,25 +245,14 @@ const VERIFY_RESULT_CHARS = 6000
  * thể nhiều nhưng có cần nhớ toàn bộ không hay có thể tóm tắt... tổng hợp lại
  * rồi tiến hành tóm tắt thành nội dung đủ để hiểu và triển khai")
  *
- * Mỗi vòng lặp gửi TOÀN BỘ transcript cho LLM (formatMessagesForLLM) → chi phí
- * prompt tích luỹ O(n²) — đây là lý do budget 200k cạn nhanh. Giải pháp rolling
- * digest: khi payload vượt ngưỡng, NÉN segment cũ (tool results/assistant cũ)
- * thành 1 digest message (~2.5k chars) bằng LLM utility core (rẻ, không đụng
- * provider chính), giữ nguyên system + goal + KEEP_RECENT message gần nhất.
- *
- * Digest cũng được ghi vào WorkingMemory (HOT) — request sau trong session đọc
- * lại được ngay (đúng ý user: "tóm tắt và phần bộ nhớ này và đọc lại").
+ * CI-3 B1 (Task 13-a): constants (COMPRESS_THRESHOLD_CHARS / KEEP_RECENT_MESSAGES /
+ * DIGEST_MAX_CHARS / COMPRESS_INPUT_CHARS / MIN_COMPRESSIBLE_MESSAGES),
+ * buildDigestPrompt và compressConversation đã tách sang module dùng chung
+ * `@/lib/context-compression` (workflow-engine tái dùng cùng pattern — roadmap
+ * CI-3 "Lỗ hổng 1"). Digest vẫn được ghi vào WorkingMemory (HOT) ngay sau khi nén
+ * — request sau trong session đọc lại được ngay (đúng ý user: "tóm tắt và phần
+ * bộ nhớ này và đọc lại").
  */
-/** Ngưỡng tổng ký tự của messages — vượt quá thì nén segment cũ */
-const COMPRESS_THRESHOLD_CHARS = intEnvPositive('GOAL_LOOP_COMPRESS_THRESHOLD_CHARS', 50_000)
-/** Số message gần nhất GIỮ NGUYÊN khi nén (agent đang làm việc với chúng) */
-const KEEP_RECENT_MESSAGES = intEnvPositive('GOAL_LOOP_KEEP_RECENT_MESSAGES', 8)
-/** Cap ký tự của digest message sau nén */
-const DIGEST_MAX_CHARS = intEnvPositive('GOAL_LOOP_DIGEST_MAX_CHARS', 2500)
-/** Cap ký tự transcript đưa vào LLM nén (đầu vào) */
-const COMPRESS_INPUT_CHARS = 30_000
-/** Ngưỡng tối thiểu số message nén được (dưới đây thì không đáng nén) */
-const MIN_COMPRESSIBLE_MESSAGES = 4
 
 /**
  * CI-1 "0 = UNLIMITED" — budget HIỆN TẠI của goal-loop (pure function, không
@@ -292,6 +302,12 @@ export interface GoalLoopResult {
   iterations: number
   toolCallsExecuted: number
   runId?: string | null
+  /**
+   * CI-3 B4 (Task 13-c) — task_summary cuối run (~500 chars, distill
+   * deterministic từ final report/verdict — 0 LLM call thêm). Chat route
+   * persist vào ChatMessage.metadata.taskSummary (merge, không đè field cũ).
+   */
+  taskSummary?: string
   /** Goal-loop metadata — response JSON + todo auto-close quyết định theo complete */
   goalLoop?: {
     cycles: number
@@ -427,6 +443,62 @@ function buildConfidenceProtocol(): string {
 - Cuối phản hồi LUÔN có đúng 1 dòng: "Confidence: <0-100>%" phản ánh THẬT mức chắc chắn của bạn:
   ≥85% = có bằng chứng tool trực tiếp · 60-85% = bằng chứng gián tiếp/KB · 35-60% = suy luận · <35% = đoán mò (nên đề xuất cách verify thêm).
 - KHÔNG mặc định tự tin 90% — overconfidence là lỗi nghiêm trọng. Trung thực về những gì chưa kiểm chứng được.`
+}
+
+/**
+ * CI-3 B7 (Task 13-e) — ghép system prompt HOÀN CHỈNH của goal loop + áp budget
+ * ký tự TỔNG (SYSTEM_PROMPT_BUDGET_CHARS — env SYSTEM_PROMPT_BUDGET_CHARS,
+ * mặc định 24k chars ~ 6k tokens, 0 = không giới hạn).
+ *
+ * Block & priority (cao = giữ nguyên khi vượt budget):
+ *   base (systemPrompt từ chat route: agent instruction + base prompt + KB +
+ *   workspace + capability + roster + skills[cap 16k] + custom tools +
+ *   standing orders + memories + HOT[cap 2k] + user profile + additions —
+ *   NGOÀI skills/HOT KHÔNG block nào cap) → priority THẤP NHẤT (cắt trước,
+ *   giữ ĐẦU block: persona/KB/workspace nằm đầu) · goalProtocol → CAO NHẤT
+ *   (quy tắc vận hành loop — cắt là đổi hành vi) · delegation/orchestration/
+ *   confidence/preAct giảm dần.
+ * Block nhỏ (<500 chars) không bao giờ bị cắt. Fail-open: lỗi budget → trả
+ * prompt ghép nguyên bản. Exported cho smoke test (mock base lớn → prompt
+ * cuối ≤ budget). Tổng < budget → chuỗi trả về GIỐNG HỆT concat cũ.
+ */
+export function assembleGoalLoopSystemPrompt(params: {
+  systemPrompt: string
+  hasDelegation: boolean
+  hasOrchestration: boolean
+  hasDispatch: boolean
+  hasCreate: boolean
+  preActBlock: string
+  /** nhãn context cho log 1 dòng khi có cut */
+  agentName?: string
+}): string {
+  const { systemPrompt, hasDelegation, hasOrchestration, hasDispatch, hasCreate, preActBlock, agentName } = params
+  try {
+    return budgetPrompt(
+      [
+        { name: 'base', content: systemPrompt, priority: 10 },
+        { name: 'goalProtocol', content: buildGoalProtocol(), priority: 100 },
+        { name: 'delegationProtocol', content: hasDelegation ? buildDelegationProtocol() : '', priority: 90 },
+        { name: 'orchestrationProtocol', content: hasOrchestration ? buildOrchestrationProtocol(hasDispatch, hasCreate) : '', priority: 80 },
+        { name: 'confidenceProtocol', content: buildConfidenceProtocol(), priority: 70 },
+        { name: 'preAct', content: preActBlock, priority: 60 },
+      ],
+      `goal-loop:${agentName || 'agent'}`,
+    )
+  } catch (err) {
+    // FAIL-OPEN — lỗi budget: ghép nguyên bản như cũ (không cut)
+    console.warn(
+      `[GoalLoop] prompt budget thất bại (fail-open — system prompt nguyên bản): ${err instanceof Error ? err.message : String(err)}`,
+    )
+    return (
+      systemPrompt +
+      buildGoalProtocol() +
+      (hasDelegation ? buildDelegationProtocol() : '') +
+      (hasOrchestration ? buildOrchestrationProtocol(hasDispatch, hasCreate) : '') +
+      buildConfidenceProtocol() +
+      preActBlock
+    )
+  }
 }
 
 /** Directive nối tiếp chu kỳ — chẩn đoán + kế hoạch mới từ evaluator */
@@ -596,123 +668,6 @@ function summarizeToolResult(result: unknown): string {
   return s.slice(0, 130) + '…' + s.slice(-60)
 }
 
-/**
- * [E] Prompt cho LLM nén context — chưng cất transcript cũ thành digest.
- * Ưu tiên giữ: file path + điểm chính, kết quả lệnh (pass/fail + SỐ LỖI),
- * quyết định đã chốt, việc đang dở. Bỏ: code trích dẫn, output chi tiết.
- */
-function buildDigestPrompt(transcript: string): string {
-  return `Bạn là hệ thống NÉN CONTEXT cho AI agent đang làm task dài hạn. Nén nhật ký làm việc dưới đây thành 1 DIGEST cô đọng (≤ ${DIGEST_MAX_CHARS} ký tự) để agent tiếp tục công việc mà KHÔNG mất thông tin cần thiết.
-
-NHẬT KÝ (đã cắt bớt):
-${transcript}
-
-GIỮ LẠI (quan trọng giảm dần):
-1. File đã đọc/sửa/tạo (đường dẫn) + điểm chính mỗi file (hàm/struct quan trọng, mục đích)
-2. Lệnh/tool đã chạy + kết quả: pass/fail, exit code, SỐ LỖI cụ thể nếu có
-3. Kết luận + quyết định kỹ thuật đã chốt; bug đã tìm thấy + nguyên nhân
-4. Việc đang DỞ (làm đến đâu)
-BỎ: nội dung file đầy đủ, code trích dẫn dài, output lệnh chi tiết, suy nghĩ thừa.
-
-Output CHỈ digest (không preamble, không markdown fence), tiếng Việt, gọn theo bullet.`
-}
-
-/**
- * [E] ROLLING CONTEXT COMPRESSION — nén segment cũ của messages thành digest.
- *
- * Nguyên tắc BẢO TOÀN:
- *   - KHÔNG đụng: system prompt, chat history, goal message (index <= goalMsgIndex)
- *   - GIỮ NGUYÊN: KEEP_RECENT_MESSAGES message gần nhất (agent đang làm việc với chúng)
- *   - NÉN: toàn bộ assistant/tool/directive ở giữa → 1 digest message (role user)
- *
- * 2 lớp:
- *   1. LLM digest qua callUtilityLLM (lõi utility nemotron/gpt-oss — rẻ, không
- *      đụng provider chính của agent) — ~700 maxTokens/lần nén
- *   2. Fallback heuristic deterministic từ evidence log (LLM hỏng vẫn nén được)
- *
- * Fail-open: mọi lỗi → return null (giữ nguyên messages như cũ, loop vẫn chạy).
- * Mutates messages in-place (splice) — goalMsgIndex giữ nguyên vị trí.
- */
-async function compressHistory(params: {
-  messages: GoalMessage[]
-  goalMsgIndex: number
-  evidence: EvidenceEntry[]
-  agentId: string
-  agentSessionId: string | null
-  onTokens: (tokens: number) => void
-}): Promise<{ digestChars: number; savedChars: number; method: 'llm' | 'heuristic' } | null> {
-  const { messages, goalMsgIndex, evidence, agentId, agentSessionId, onTokens } = params
-
-  // FIX (review 2026-09-08): threshold trước đây tính trên TOÀN BỘ messages
-  // (kể cả system prompt + goal + KEEP_RECENT tail KHÔNG THỂ nén) → khi phần
-  // cố định vượt ngưỡng, mỗi 2-3 vòng lại fired 1 LLM digest re-nén chính
-  // digest cũ (tiết kiệm âm). Giờ: chỉ đo SEGMENT nén được (workStart..
-  // compressEnd) và bỏ qua nếu tiết kiệm < 2× digest size.
-  const workStart = goalMsgIndex + 1
-  const compressEnd = messages.length - KEEP_RECENT_MESSAGES
-  if (compressEnd - workStart < MIN_COMPRESSIBLE_MESSAGES) return null // segment quá nhỏ — không đáng nén
-
-  const compressible = messages.slice(workStart, compressEnd)
-  const removedChars = compressible.reduce((s, m) => s + m.content.length, 0)
-  if (removedChars < COMPRESS_THRESHOLD_CHARS) return null // segment nén được chưa đủ lớn
-  if (removedChars - DIGEST_MAX_CHARS < DIGEST_MAX_CHARS * 2) return null // tiết kiệm < 2× digest — không đáng tốn 1 LLM call
-
-  // Transcript đầu vào cho LLM nén (cap COMPRESS_INPUT_CHARS)
-  let transcript = ''
-  for (const m of compressible) {
-    const label = m.role === 'assistant' ? 'ASSISTANT' : m.role === 'tool' ? 'TOOL RESULT' : 'USER'
-    transcript += `[${label}] ${m.content.slice(0, 1800)}\n`
-    if (transcript.length >= COMPRESS_INPUT_CHARS) break
-  }
-
-  // ===== Lớp 1: LLM digest (utility core) =====
-  let digest = ''
-  let method: 'llm' | 'heuristic' = 'llm'
-  try {
-    const res = await withTimeout(
-      callUtilityLLM(buildDigestPrompt(transcript), undefined, 'goal-loop-context-compression', {
-        temperature: 0.2,
-        maxTokens: 700,
-      }),
-      90_000,
-      'Context compression LLM',
-    )
-    if (res?.content && res.content.trim().length > 50) {
-      digest = res.content.trim()
-      if (typeof res.tokensUsed === 'number' && res.tokensUsed > 0) onTokens(res.tokensUsed)
-    }
-  } catch {
-    /* fall-through heuristic */
-  }
-
-  // ===== Lớp 2: heuristic fallback từ evidence log (deterministic, 0 LLM) =====
-  if (!digest) {
-    method = 'heuristic'
-    digest = evidence
-      .slice(-40)
-      .map(e => (e.kind === 'tool' ? `- [${e.tool}] ${e.success ? '✓' : '✗'} ${e.text}` : `- ${e.text}`))
-      .join('\n')
-      .slice(0, DIGEST_MAX_CHARS)
-  } else if (digest.length > DIGEST_MAX_CHARS) {
-    digest = digest.slice(0, DIGEST_MAX_CHARS) + '…'
-  }
-
-  if (!digest) return null
-
-  const digestMessage: GoalMessage = {
-    role: 'user',
-    content:
-      `📦 [WORKSPACE DIGEST — các bước TRƯỚC ĐÂY đã được NÉN để tiết kiệm budget token. Đây là TÓM TẮT công việc đã làm; nội dung gốc (file đã đọc, output lệnh) đã bỏ. Nếu cần chi tiết chính xác một file/lệnh cũ → gọi file_read/grep/shell LẠI.]\n\n${digest}`,
-  }
-
-  messages.splice(workStart, compressible.length, digestMessage)
-
-  // Ghi digest vào WorkingMemory (HOT) — request sau trong session đọc lại
-  // ngay qua HOT digest trong system prompt (user: "tóm tắt và... đọc lại")
-  recordWorkMemory(agentId, agentSessionId, `📦 [context-digest] ${digest.slice(0, 400)}`, 0.75)
-
-  return { digestChars: digestMessage.content.length, savedChars: removedChars - digestMessage.content.length, method }
-}
 
 // ==================== EVALUATOR ====================
 
@@ -879,6 +834,119 @@ QUY TẮC: KHÔNG gọi tool. KHÔNG bắt đầu công việc mới. Chỉ tổ
   }
 }
 
+// ==================== CI-3 B4 (Task 13-c) — TASK SUMMARY LIÊN TÁC VỤ ====================
+
+/**
+ * [CI-3 B4] Distill task_summary ~500 chars từ final report/verdict text đã
+ * có — DETERMINISTIC, 0 LLM call thêm (roadmap CI-3 B4: "tái dùng final report
+ * LLM call"). Lý do không gọi thêm callUtilityLLM: trong sandbox utility core
+ * chết sau ~90s sweep key → summary cuối run bị chậm đúng bằng thời gian đó,
+ * vi phạm "không làm chậm ending path"; heuristic path PHẢI là đường chính.
+ *
+ * Cấu trúc (ưu tiên giảm dần — thông tin quan trọng nhất đứng trước để khi
+ * cắt budget vẫn còn):
+ *   🏁 [task_summary] <HOÀN THÀNH ✅ | CHƯA hoàn thành (dừng: reason)> — Mục tiêu: …
+ *   ⏱ X chu kỳ · Y tool calls · Zs
+ *   ❌ Còn thiếu: … (chỉ khi chưa đạt — verdict của trọng tài)
+ *   🔍 Vấn đề: …    (chỉ khi chưa đạt)
+ *   📋 <final report distill — giữ ĐẦU 65% + CUỐI 35% vì báo cáo cuối có
+ *      "ĐÃ LÀM" ở đầu và "ĐỀ XUẤT KHẮC PHỤC" ở cuối>
+ *
+ * Exported để smoke test trực tiếp (verification 13-c mục 4a).
+ */
+export function distillTaskSummary(params: {
+  goal: string
+  finalContent: string
+  stopReason: GoalStopReason
+  complete: boolean
+  /** verdict của trọng tài chu kỳ cuối (missing/rootCause — chỉ dùng khi chưa đạt) */
+  verdictMissing?: string[]
+  rootCause?: string
+  cycles: number
+  toolCalls: number
+  elapsedMs?: number
+  /** cap tổng — default 500, clamp 200..2000 */
+  maxChars?: number
+}): string {
+  const maxChars = Math.max(200, Math.min(2000, params.maxChars ?? 500))
+  const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim()
+
+  const status = params.complete
+    ? 'HOÀN THÀNH ✅'
+    : `CHƯA hoàn thành (dừng: ${params.stopReason})`
+  const lines: string[] = [
+    `🏁 [task_summary] ${status} — Mục tiêu: ${oneLine(params.goal).slice(0, 90)}`,
+    `⏱ ${params.cycles} chu kỳ · ${params.toolCalls} tool calls${typeof params.elapsedMs === 'number' && params.elapsedMs >= 0 ? ` · ${Math.round(params.elapsedMs / 1000)}s` : ''}`,
+  ]
+  if (!params.complete) {
+    const missing = (params.verdictMissing ?? []).filter(m => typeof m === 'string' && m.trim()).join('; ')
+    if (missing) lines.push(`❌ Còn thiếu: ${oneLine(missing).slice(0, 120)}`)
+    if (params.rootCause) lines.push(`🔍 Vấn đề: ${oneLine(params.rootCause).slice(0, 100)}`)
+  }
+
+  // Body = final report distill (phần lớn budget); head 65% giữ "ĐÃ LÀM ĐƯỢC",
+  // tail 35% giữ "ĐỀ XUẤT KHẮC PHỤC" (2 phần đầu/cuối của báo cáo 4 phần).
+  const fixedLen = lines.join('\n').length + 1 // +1 = '\n' trước body
+  const bodyBudget = Math.max(80, maxChars - fixedLen)
+  let body = oneLine(params.finalContent)
+  if (body.length > bodyBudget) {
+    const headKeep = Math.floor(bodyBudget * 0.65)
+    const tailKeep = Math.max(30, bodyBudget - headKeep - 12) // 12 = ' …[cắt]… '
+    body = `${body.slice(0, headKeep)} …[cắt]… ${body.slice(-tailKeep)}`
+  }
+  if (body) lines.push(`📋 ${body}`)
+
+  return lines.join('\n').slice(0, maxChars)
+}
+
+/** Cap tổng của block tóm tắt các tác vụ trước nạp vào context run mới */
+const PRIOR_SUMMARY_BLOCK_MAX_CHARS = 1500
+/** Số task_summary tối đa nạp vào run mới */
+const PRIOR_SUMMARY_LIMIT = 3
+
+/**
+ * [CI-3 B4] Nạp tóm tắt các TÁC VỤ TRƯỚC trong session (kind='task_summary'
+ * từ Kho Context — Task 13-b): run mới thay vì chỉ thấy 6 message cuối thô
+ * còn có bức tranh dài hạn của cả session (mục tiêu từng run đạt/không, việc
+ * đã làm, kết quả chính). Exported để smoke test trực tiếp (verification 13-c
+ * mục 4c/4d).
+ *
+ * @returns '' khi không có summary nào / lỗi (fail-open → caller giữ nguyên
+ *          hành vi cũ 6 message cuối).
+ */
+export async function buildPriorTaskSummariesBlock(
+  sessionId: string | null | undefined,
+  goal: string,
+): Promise<string> {
+  if (!sessionId) return ''
+  try {
+    const recall = await recallContext({
+      query: goal,
+      sessionId,
+      kind: 'task_summary',
+      limit: PRIOR_SUMMARY_LIMIT,
+    })
+    const summaries = (recall.items ?? [])
+      .map(it => (typeof it.content === 'string' ? it.content.replace(/\s+/g, ' ').trim() : ''))
+      .filter(s => s.length > 0)
+    if (summaries.length === 0) return ''
+
+    const lines: string[] = [
+      '[TÓM TẮT CÁC TÁC VỤ TRƯỚC TRONG SESSION — kết quả các run trước (mới nhất trước); cần chi tiết deeper → tool context_recall]',
+    ]
+    for (const s of summaries) {
+      const line = `- ${s.slice(0, 480)}`
+      if (lines.join('\n').length + line.length + 1 > PRIOR_SUMMARY_BLOCK_MAX_CHARS) break
+      lines.push(line)
+    }
+    return lines.length > 1 ? lines.join('\n').slice(0, PRIOR_SUMMARY_BLOCK_MAX_CHARS) : ''
+  } catch (err) {
+    // Fail-open — recall lỗi không được phép chặn run mới
+    console.warn(`[GoalLoop] recall task_summary thất bại (fail-open — giữ hành vi cũ 6 message cuối): ${err instanceof Error ? err.message : String(err)}`)
+    return ''
+  }
+}
+
 // ==================== MAIN LOOP ====================
 
 /**
@@ -945,15 +1013,19 @@ export async function runGoalDrivenLoop(params: {
     }
   } catch { /* fail-open — không có ký ức thì chạy như thường */ }
 
-  const fullSystemPrompt =
-    systemPrompt +
-    buildGoalProtocol() +
-    (hasDelegation ? buildDelegationProtocol() : '') +
-    (hasOrchestration
-      ? buildOrchestrationProtocol(effectiveTools.includes('dispatch_agent'), effectiveTools.includes('create_agent'))
-      : '') +
-    buildConfidenceProtocol() +
-    preActBlock
+  // CI-3 B7 (Task 13-e) — system prompt TỔNG có budget ký tự: nhiều block
+  // (base từ chat route + goal/delegation/orchestration/confidence protocol +
+  // preAct episodic) trước đây ghép không cap ngoài skills 16k/HOT 2k — giờ
+  // vượt SYSTEM_PROMPT_BUDGET_CHARS thì cắt block priority thấp nhất giữ đầu.
+  const fullSystemPrompt = assembleGoalLoopSystemPrompt({
+    systemPrompt,
+    hasDelegation,
+    hasOrchestration,
+    hasDispatch: effectiveTools.includes('dispatch_agent'),
+    hasCreate: effectiveTools.includes('create_agent'),
+    preActBlock,
+    agentName,
+  })
 
   // ===== Thought Process tracking — 1 run cho toàn bộ goal loop =====
   // Task 20-c: dbPersistBy 'caller' → tracker KHÔNG insert AgentRunRecord khi
@@ -993,13 +1065,33 @@ export async function runGoalDrivenLoop(params: {
     await ensureCustomToolsLoaded()
   } catch { /* fail-open */ }
 
+  // ===== CI-3 B4 (Task 13-c) — nạp tóm tắt các TÁC VỤ TRƯỚC trong session =====
+  // Liên tác vụ: trước đây run mới chỉ nhận 6 message cuối thô (không có
+  // bức tranh dài hạn của session). Giờ recall các task_summary
+  // (kind='task_summary' trong Kho Context) của session — đặt TRƯỚC 6 message
+  // cuối: summary = bức tranh dài hạn, 6 message gần = chi tiết liền kề.
+  // Fail-open bên trong helper: lỗi recall → '' → hành vi cũ nguyên vẹn.
+  const priorTaskSummariesBlock = await buildPriorTaskSummariesBlock(agentSessionId, userMessage)
+
   // ===== Conversation state =====
+  // CI-3 B4: có summary block mà tổng context (summary + 6 message cuối) vượt
+  // ngưỡng nén → GIẢM 6 message cuối xuống 4 (summary đã thay phần bức tranh
+  // dài hạn — tiết kiệm context cho run mới).
+  let historyTake = 6
+  if (priorTaskSummariesBlock) {
+    const tailChars = chatHistory.slice(-6).reduce((s, m) => s + (m.content?.length ?? 0), 0)
+    if (priorTaskSummariesBlock.length + tailChars > COMPRESS_THRESHOLD_CHARS) historyTake = 4
+  }
   const messages: GoalMessage[] = [
     { role: 'system', content: fullSystemPrompt },
-    ...chatHistory.slice(-6).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+    ...(priorTaskSummariesBlock ? [{ role: 'user' as const, content: priorTaskSummariesBlock }] : []),
+    ...chatHistory.slice(-historyTake).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
     { role: 'user', content: userMessage },
   ]
   const goalMsgIndex = messages.length - 1
+  if (priorTaskSummariesBlock) {
+    console.log(`[GoalLoop] ${agentName} nạp tóm tắt các tác vụ trước trong session (${priorTaskSummariesBlock.length} chars) trước ${historyTake} message cuối — bức tranh dài hạn cho run mới`)
+  }
 
   const evidence: EvidenceEntry[] = []
   // [C] Verify-evidence tracking — harness kiểm đếm tool verify theo thứ tự so với tool sửa
@@ -1085,19 +1177,27 @@ export async function runGoalDrivenLoop(params: {
 
       // [E] ROLLING CONTEXT COMPRESSION — nén segment cũ trước khi gửi prompt
       // (mỗi vòng đều gửi TOÀN BỘ transcript → chi phí O(n²) nếu không nén).
+      // CI-3 B1 (Task 13-a): gọi module dùng chung compressConversation với
+      // tham số tương đương compressHistory cũ — HÀNH VI KHÔNG ĐỔI.
       // Fail-open: lỗi nén → giữ nguyên messages, loop vẫn chạy bình thường.
       try {
-        const comp = await compressHistory({
+        const comp = await compressConversation({
           messages,
-          goalMsgIndex,
+          protectedStartIndex: goalMsgIndex,
+          keepRecent: KEEP_RECENT_MESSAGES,
           evidence,
-          agentId,
-          agentSessionId,
           onTokens: (t) => { tokensUsed += t },
+          llmContext: 'goal-loop-context-compression',
+          // CI-3 B2 (Task 13-b): lưu digest vào Kho Context — agent dùng
+          // context_recall đọc lại chi tiết đã nén khi cần (fail-open bên trong).
+          archive: { runId, sessionId: agentSessionId, agentName },
         })
         if (comp) {
           compressions++
           console.log(`[GoalLoop] ${agentName} nén context #${compressions} (${comp.method}): ${Math.round(comp.savedChars / 1000)}k ký tự tiết kiệm — giữ system + goal + ${KEEP_RECENT_MESSAGES} message gần nhất`)
+          // Ghi digest preview 400 chars vào WorkingMemory HOT (giữ nguyên như
+          // cũ — request sau trong session đọc lại được ngay qua HOT digest).
+          recordWorkMemory(agentId, agentSessionId, `📦 [context-digest] ${comp.digest.slice(0, 400)}`, 0.75)
           recordAgentThought(agentSessionId, `📦 Nén context #${compressions}: tiết kiệm ~${Math.round(comp.savedChars / 1000)}k ký tự (${comp.method === 'llm' ? 'LLM digest' : 'heuristic'}) — phần cũ đã thành tóm tắt, message gần nhất giữ nguyên`, totalIterations)
         }
       } catch { /* fail-open — nén lỗi không được phép làm hỏng vòng lặp */ }
@@ -1633,6 +1733,79 @@ export async function runGoalDrivenLoop(params: {
   const elapsedMs = Date.now() - startedAt
   console.log(`[GoalLoop] ${agentName} kết thúc: ${stopReason} — ${cyclesAttempted} chu kỳ (${cyclesDone} hoàn thành), ${totalIterations} vòng, ${totalToolCalls} tool calls, ${tokensUsed} tokens, ${Math.round(elapsedMs / 1000)}s${usedFinalReport ? ' + final-report' : ''}${compressions > 0 ? `, ${compressions} lần nén context` : ''}${delegations > 0 ? `, ${delegations} lần delegate (${subagentTokens} tokens sub-agent)` : ''}${escalations > 0 ? `, ${escalations} lần auto-escalate Omega` : ''}`)
 
+  // ===== CI-3 B4 (Task 13-c) — TASK SUMMARY CUỐI RUN (liên tác vụ) =====
+  // Mọi stopReason TRỪ crash trắng (error mà không có nội dung gì) → tạo
+  // task_summary ~500 chars TÁI DỤNG final report/verdict đã có (0 LLM call
+  // thêm — distillTaskSummary deterministic). Lưu 3 nơi, mỗi nơi fail-open
+  // riêng (lỗi nơi này không phá nơi khác, KHÔNG bao giờ làm hỏng response):
+  //   (a) Kho Context TaskContextArchive kind='task_summary' — AWAIT (nhanh:
+  //       1 SQLite insert, kind != 'digest' nên không tốn embed Qdrant) để
+  //       test deterministic được;
+  //   (b) ChatMessage metadata.taskSummary — qua GoalLoopResult.taskSummary,
+  //       chat route merge vào metadata khi persist message cuối run;
+  //   (c) AgentMemory WARM (storeMemory category='insight') — fire-and-forget
+  //       (embed có thể fail chậm trong sandbox → không await ending path).
+  let taskSummary = ''
+  if (stopReason !== 'error' || lastContent) {
+    try {
+      // 'cancelled' → content chỉ là câu thông báo dừng; lastContent là work
+      // cuối cùng của agent — tóm tắt cái có thông tin hơn
+      const summarySource = stopReason === 'cancelled' && lastContent ? lastContent : content
+      taskSummary = distillTaskSummary({
+        goal: userMessage,
+        finalContent: summarySource,
+        stopReason,
+        complete: stopReason === 'complete',
+        verdictMissing: lastVerdict?.missing,
+        rootCause: lastVerdict?.rootCause,
+        cycles: cyclesAttempted,
+        toolCalls: totalToolCalls,
+        elapsedMs,
+      })
+    } catch { taskSummary = '' /* fail-open */ }
+
+    if (taskSummary && agentSessionId) {
+      // (a) Kho Context — run sau trong session recall lại được (buildPriorTaskSummariesBlock)
+      try {
+        const res = await archiveContext({
+          runId,
+          sessionId: agentSessionId,
+          agentName,
+          kind: 'task_summary',
+          content: taskSummary,
+          tags: 'final-summary',
+        })
+        if (res.archived) {
+          console.log(`[GoalLoop] ${agentName} task_summary đã lưu vào Kho Context (${taskSummary.length} chars, id ${String(res.archiveId ?? '').slice(0, 8)}…) — run sau trong session sẽ nạp làm bức tranh dài hạn`)
+        }
+      } catch (err) {
+        console.warn(`[GoalLoop] ${agentName} lưu task_summary vào Kho Context thất bại (fail-open): ${err instanceof Error ? err.message : String(err)}`)
+      }
+
+      // (c) AgentMemory WARM — best-effort fire-and-forget (điều tra Task 13-c:
+      // storeMemory là cơ chế WARM sẵn có — SQLite AgentMemory tier='warm' +
+      // Qdrant agent_memory; wiring ~12 dòng < ngưỡng 20 dòng nên LÀM)
+      if (agentId && agentId !== 'unknown') {
+        try {
+          void import('@/lib/agent-memory')
+            .then(({ storeMemory }) => storeMemory({
+              agentId,
+              agentName,
+              sessionId: agentSessionId,
+              category: 'insight',
+              content: taskSummary,
+              context: userMessage.slice(0, 300),
+              importance: 0.9,
+              source: 'goal-loop',
+              tags: ['task-summary', 'final-summary'],
+            }))
+            .catch(() => { /* fail-open — WARM là best-effort */ })
+        } catch { /* fail-open — dynamic import lỗi không đụng ending path */ }
+      }
+    }
+  }
+
+
   // ===== WORKING MEMORY (HOT) — báo cáo kết thúc mục tiêu =====
   // Entry tóm tắt "đã làm gì, kết quả thế nào" — quan trọng nhất cho việc
   // agent tự biết việc gì đã xong khi user hỏi tiếp / mở session mới trong TTL
@@ -1747,6 +1920,8 @@ export async function runGoalDrivenLoop(params: {
     iterations: totalIterations,
     toolCallsExecuted: totalToolCalls,
     runId,
+    /** CI-3 B4 (Task 13-c) — chat route merge vào ChatMessage.metadata.taskSummary */
+    taskSummary: taskSummary || undefined,
     goalLoop: {
       cycles: cyclesAttempted,
       complete: stopReason === 'complete',

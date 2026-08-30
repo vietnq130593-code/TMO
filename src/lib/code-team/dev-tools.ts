@@ -30,6 +30,9 @@ import { isSessionDeleted } from '@/lib/session-tombstone'
 // Phase 6/7 (rebuild) — workspace root now follows the USER's ACTIVE workspace
 // (SQLite Workspace table) instead of process.cwd(); 5s cache.
 import { resolveWorkspaceRoot } from './workspace-root'
+// CI-3 B2+B3 (Task 13-b) — Kho Context: data layer recallContext (Qdrant
+// semantic + SQL LIKE fallback trên TaskContextArchive) cho tool context_recall.
+import { recallContext, MAX_RECALL_LIMIT } from '@/lib/context-store'
 
 const execAsync = promisify(exec)
 // Phase 3 audit fix (Task 9): execFileAsync passes argv as an array — bypasses
@@ -889,15 +892,22 @@ export async function gitCommit(args: {
       : []
 
     // Pre-flight: detect "nothing to commit" before running git add
+    // FIX 2026-09-12 (review GĐ1 finding #16): mọi git call trong gitCommit chạy
+    // qua execFileAsync('git', [argv...]) — argv array bypass shell hoàn toàn
+    // (cùng pattern gitStatus/gitDiff/gitLog/gitBranch/gitClone của GĐ2 — Task 11-c).
     if (args.all && resolvedPaths.length > 0) {
       const relPaths = resolvedPaths.map(p => path.relative(root, p))
-      const { stdout: porcelain } = await execAsync(`git status --porcelain -- ${relPaths.map(p => `"${p}"`).join(' ')}`, { cwd: root, timeout: 10_000 })
+      const { stdout: porcelain } = await execFileAsync(
+        'git',
+        ['status', '--porcelain', '--', ...relPaths],
+        { cwd: root, timeout: 10_000 }
+      )
       if (!porcelain.trim()) {
         return { success: false, error: `Nothing to commit — paths have no changes: ${relPaths.join(', ')}` }
       }
     } else if (!args.paths || args.paths.length === 0) {
       // Commit-only path: check what's already staged
-      const { stdout: staged } = await execAsync('git diff --cached --name-only', { cwd: root, timeout: 10_000 })
+      const { stdout: staged } = await execFileAsync('git', ['diff', '--cached', '--name-only'], { cwd: root, timeout: 10_000 })
       if (!staged.trim()) {
         return { success: false, error: 'Nothing staged to commit. Pass paths + all=true to stage first, or stage manually with `git add`.' }
       }
@@ -907,8 +917,8 @@ export async function gitCommit(args: {
     // NOTE: dry_run skips staging entirely — it computes "would commit" via git status
     // so the index is left untouched (no persistent side-effects).
     if (!args.dry_run && args.all && resolvedPaths.length > 0) {
-      const relPaths = resolvedPaths.map(p => `"${path.relative(root, p)}"`)
-      await execAsync(`git add -- ${relPaths.join(' ')}`, { cwd: root, timeout: 15_000 })
+      const relPaths = resolvedPaths.map(p => path.relative(root, p))
+      await execFileAsync('git', ['add', '--', ...relPaths], { cwd: root, timeout: 15_000 })
     }
 
     // Dry-run: do NOT stage, do NOT commit — show what WOULD be committed.
@@ -919,15 +929,16 @@ export async function gitCommit(args: {
         : []
       let wouldCommitFiles: string[] = []
       if (relPaths.length > 0) {
-        const { stdout: porcelain } = await execAsync(
-          `git status --porcelain -- ${relPaths.map(p => `"${p}"`).join(' ')}`,
+        const { stdout: porcelain } = await execFileAsync(
+          'git',
+          ['status', '--porcelain', '--', ...relPaths],
           { cwd: root, timeout: 10_000 }
         )
         // Porcelain format: "XY path" where X=staged, Y=unstaged. We report any path with changes.
         wouldCommitFiles = porcelain.split('\n').filter(Boolean).map(l => l.slice(3).trim())
       } else {
         // No paths specified → report all currently-staged files
-        const { stdout: staged } = await execAsync('git diff --cached --name-only', { cwd: root, timeout: 10_000 })
+        const { stdout: staged } = await execFileAsync('git', ['diff', '--cached', '--name-only'], { cwd: root, timeout: 10_000 })
         wouldCommitFiles = staged.split('\n').filter(Boolean)
       }
       return {
@@ -938,34 +949,29 @@ export async function gitCommit(args: {
       }
     }
 
-    // Build commit command (use a temp file for the message to avoid shell-escaping hell)
-    const tmpFile = path.join(root, `.git/COMMIT_EDITMSG_${Date.now()}`)
-    await fs.writeFile(tmpFile, args.message, 'utf-8')
-    try {
-      const noVerifyFlag = args.no_verify ? ' --no-verify' : ''
-      // No pathArgs here — `git commit path1 path2` only commits those paths even if
-      // other things are staged. We already scoped via `git add` above, so commit alone
-      // is what we want (commit everything currently staged, which is exactly the paths added).
-      const { stdout, stderr } = await execAsync(
-        `git commit -F "${path.relative(root, tmpFile)}"${noVerifyFlag}`,
-        { cwd: root, timeout: 30_000 }
-      )
+    // FIX 2026-09-12 (review GĐ1 finding #16): git commit chạy qua execFileAsync
+    // argv-array — commit message là 1 argv element duy nhất (bypass shell hoàn
+    // toàn, không cần shell-escaping hay temp file COMMIT_EDITMSG như trước —
+    // message chứa nháy kép/nháy đơn/xuống dòng truyền verbatim qua execFile).
+    // No pathArgs here — `git commit path1 path2` only commits those paths even if
+    // other things are staged. We already scoped via `git add` above, so commit alone
+    // is what we want (commit everything currently staged, which is exactly the paths added).
+    const commitArgs = ['commit', '-m', args.message]
+    if (args.no_verify) commitArgs.push('--no-verify')
+    const { stdout, stderr } = await execFileAsync('git', commitArgs, { cwd: root, timeout: 30_000 })
 
-      // Structured receipt: hash + branch + filesChanged[]
-      const { stdout: hashOut } = await execAsync('git rev-parse HEAD', { cwd: root, timeout: 5_000 })
-      const { stdout: branchOut } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: root, timeout: 5_000 }).catch(() => ({ stdout: 'unknown' }))
-      const { stdout: filesOut } = await execAsync('git show --stat --name-only --format= HEAD', { cwd: root, timeout: 10_000 })
+    // Structured receipt: hash + branch + filesChanged[]
+    const { stdout: hashOut } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: root, timeout: 5_000 })
+    const { stdout: branchOut } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, timeout: 5_000 }).catch(() => ({ stdout: 'unknown' }))
+    const { stdout: filesOut } = await execFileAsync('git', ['show', '--stat', '--name-only', '--format=', 'HEAD'], { cwd: root, timeout: 10_000 })
 
-      return {
-        success: true,
-        commitHash: hashOut.trim().slice(0, 12),
-        branch: branchOut.trim(),
-        message: args.message,
-        filesChanged: filesOut.split('\n').filter(Boolean),
-        output: (stdout + stderr).trim() || 'committed',
-      }
-    } finally {
-      await fs.unlink(tmpFile).catch(() => {})
+    return {
+      success: true,
+      commitHash: hashOut.trim().slice(0, 12),
+      branch: branchOut.trim(),
+      message: args.message,
+      filesChanged: filesOut.split('\n').filter(Boolean),
+      output: (stdout + stderr).trim() || 'committed',
     }
   } catch (err: any) {
     const { stdout, stderr } = err
@@ -4245,6 +4251,85 @@ export async function dbQuery(args: {
       error: `db_query failed: ${err?.message || String(err)}`,
       sql: rawSql.slice(0, 500),
       durationMs: Date.now() - startedAt,
+    }
+  }
+}
+
+// ==================== CI-3 B2+B3 (Task 13-b): KHO CONTEXT — TOOL CONTEXT_RECALL ====================
+//
+// Roadmap CI-3 tầng 2 "Offload đọc lại khi cần": mỗi lần rolling digest nén
+// context, digest đầy đủ được lưu vào TaskContextArchive (Prisma — source of
+// truth) + Qdrant task_context (best-effort embed; xem src/lib/context-store.ts).
+// Tool context_recall cho agent TRUY HỒI lại các context đó theo từ khóa —
+// thay vì đọc lại toàn bộ transcript gốc (đã bị nén/cắt khỏi context active).
+//
+// Receipt có cấu trúc (giảm phình context agent): content mỗi mục cap 2000
+// ký tự; tổng số mục cap limit (default 5, max 20). Fail-open tuyệt đối —
+// recall lỗi/embed chết → success=true + items=[] + hint đổi từ khóa (SQL
+// fallback trên Prisma chạy được ngay cả khi Prisma client stale — raw SQL
+// bridge pattern episodic-db.ts), KHÔNG BAO GIỜ trả 500.
+
+/** Cap ký tự content mỗi mục trong receipt context_recall */
+const CONTEXT_RECALL_ITEM_MAX_CHARS = 2000
+
+/**
+ * context_recall — truy hồi thông tin context đã nén/lưu trữ của các run
+ * trước (digest, đoạn raw bị cắt, task_summary).
+ *
+ * @returns receipt { success, query, source, items[], totalFound, hint }:
+ *   - source: 'qdrant' (semantic) | 'sql' (LIKE fallback) | 'mixed'
+ *   - items: [{ runId, agentName, kind, content (cap 2000 chars), createdAt }]
+ *   - hint: chỉ dẫn agent dùng kết quả (hoặc đổi từ khóa khi 0 kết quả)
+ */
+export async function contextRecall(args: {
+  query: string
+  runId?: string
+  limit?: number
+}): Promise<unknown> {
+  const query = typeof args.query === 'string' ? args.query.trim() : ''
+  if (!query) {
+    return {
+      success: false,
+      error: 'query (string, không rỗng) là bắt buộc — từ khóa tìm kiếm như tên file, tên hàm, lệnh đã chạy, quyết định kỹ thuật.',
+    }
+  }
+  const runId = typeof args.runId === 'string' && args.runId.trim() ? args.runId.trim() : undefined
+  const limit = typeof args.limit === 'number' && Number.isFinite(args.limit) ? args.limit : undefined
+
+  try {
+    const res = await recallContext({ query, runId, limit })
+    const items = res.items.map(it => ({
+      runId: it.runId,
+      agentName: it.agentName,
+      kind: it.kind,
+      content: it.content.length > CONTEXT_RECALL_ITEM_MAX_CHARS
+        ? it.content.slice(0, CONTEXT_RECALL_ITEM_MAX_CHARS) +
+          `…[TRUNCATED ${CONTEXT_RECALL_ITEM_MAX_CHARS}/${it.content.length} chars — dùng query cụ thể hơn hoặc truy vấn từng run để lấy phần cần]`
+        : it.content,
+      createdAt: it.createdAt instanceof Date ? it.createdAt.toISOString() : String(it.createdAt),
+    }))
+
+    return {
+      success: true,
+      query,
+      source: res.source,
+      items,
+      totalFound: items.length,
+      limitApplied: Math.min(MAX_RECALL_LIMIT, limit && limit > 0 ? Math.floor(limit) : 5),
+      hint: items.length > 0
+        ? 'Đây là context đã NÉN (digest/raw/task_summary) từ các run trước — dùng trực tiếp thay vì đọc lại transcript gốc. Nội dung mỗi mục đã cap 2000 ký tự; cần rộng hơn thì gọi lại với query cụ thể hơn hoặc bỏ runId để tìm xuyên run.'
+        : 'Không tìm thấy context nào khớp từ khóa — thử từ khóa khác (tên file, tên hàm, lệnh đã chạy, quyết định kỹ thuật), bỏ runId để tìm rộng hơn, hoặc tăng limit.',
+    }
+  } catch (err) {
+    // Fail-open — recall là best-effort, KHÔNG bao giờ lỗi làm gãy workflow
+    return {
+      success: true,
+      query,
+      source: 'sql',
+      items: [],
+      totalFound: 0,
+      hint: 'Không tìm thấy context nào khớp từ khóa — thử từ khóa khác (tên file, tên hàm, lệnh đã chạy) hoặc bỏ runId để tìm rộng hơn.',
+      note: `recall lỗi (đã bỏ qua an toàn): ${err instanceof Error ? err.message : String(err)}`,
     }
   }
 }
