@@ -1491,7 +1491,10 @@ export async function runGoalDrivenLoop(params: {
           if (runId && !toolArgs.runId) toolArgs.runId = runId
         }
 
-        const toolResult = await executeTool(tc.name, toolArgs, { agentName, sessionId: agentSessionId })
+        // DELEGATION CONTRACT (fix 2026-09-12): truyền runId vào context —
+        // delegate_task đọc context.runId làm parentRunId (Thought Process panel
+        // hiển thị "delegated bởi run_X").
+        const toolResult = await executeTool(tc.name, toolArgs, { agentName, sessionId: agentSessionId, runId })
 
         // CI-2 (Task 11-a) — thu bằng chứng từ tool call THÀNH CÔNG (bảo thủ:
         // chỉ path file/lệnh shell — xem extractTodoEvidence)

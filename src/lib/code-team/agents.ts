@@ -61,6 +61,14 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
       'git_status', 'git_diff', 'git_log', 'git_branch', 'git_clone',
       // CI-3 B3 (Task 13-b) — Kho Context: truy hồi digest đã nén của run trước.
       'context_recall',
+      // DELEGATION CONTRACT (fix 2026-09-12 — gap so với quy trình orchestrator:
+      // Code Team pipeline không có delegation động): TL (APEX) được cấp
+      // delegate_task — giữa pipeline step, khi nhận thấy 1 phần việc phức tạp
+      // cần chuyên trách, TL giao cho CORTEX/BOLT/SENTINEL/CATALYST (sub-agent
+      // chạy mini-loop có plan-first + acceptance criteria + self-verify, trả
+      // báo cáo nén). Depth-guard strip tool này khỏi sub-agent → không đệ quy.
+      // Chỉ TL có (orchestrator role) — G1-G3 dùng escalate_problem khi cần giúp.
+      'delegate_task',
       // SKILL ACCESS (fix 2026-09-12 — user report "71 tools + 68 skills nhưng
       // agents không dùng được"): mọi Code Team agents tự liệt kê/đọc 68
       // filesystem skills qua list_skills/read_skill (trước đây CHỈ Omega có —

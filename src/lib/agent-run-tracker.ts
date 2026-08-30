@@ -480,16 +480,27 @@ function counterFor(tool: string): keyof AgentRunCounters | null {
  * Ghi 1 tool execution (kèm kết quả thật) vào run đang active của session.
  * Được gọi từ executeTool() — che mọi paths: single chat, team, cron.
  */
-export function recordAgentRunTool(sessionId: string | null | undefined, entry: {
-  tool: string
-  argsSummary?: string
-  success: boolean
-  durationMs: number
-  resultPreview?: string
-  iteration?: number
-}): void {
+export function recordAgentRunTool(
+  sessionId: string | null | undefined,
+  entry: {
+    tool: string
+    argsSummary?: string
+    success: boolean
+    durationMs: number
+    resultPreview?: string
+    iteration?: number
+  },
+  /**
+   * DELEGATION CONTRACT (fix 2026-09-12): truyền runId để ghi event vào run
+   * CỤ THỂ (run sub-agent được delegate) thay vì run active của session.
+   * Không truyền → giữ nguyên hành vi cũ (run active — parent run).
+   */
+  runId?: string,
+): void {
   try {
-    const run = activeRun(sessionId)
+    const run = runId
+      ? runsOf(sessionId || '').find(r => r.runId === runId && r.status === 'running') || null
+      : activeRun(sessionId)
     if (!run) return
     run.counters.toolCalls++
     const counter = counterFor(entry.tool)
@@ -512,15 +523,90 @@ export function recordAgentRunTool(sessionId: string | null | undefined, entry: 
   } catch { /* fail-open */ }
 }
 
+// ==================== DELEGATION RUNS (fix 2026-09-12) ====================
+
+/**
+ * DELEGATION CONTRACT — đăng ký run cho SUB-AGENT được delegate.
+ *
+ * GAP được vá (so sánh quy trình orchestrator Claude-Code với TMO 2026-09-12):
+ * sub-agent chạy minh bạch — user thấy run riêng trong panel Thought Process
+ * (kèm todo kế hoạch + tool events của sub-agent), todos gắn đúng session +
+ * runId (không còn rơi scope 'default' vô hình).
+ *
+ * KHÁC startAgentRun ở 3 điểm (quan trọng — không thay thế nhau):
+ *  (1) KHÔNG xóa flag cancel của session — parent run đang chạy; user bấm
+ *      Dừng giữa chừng phải cắt được cả sub-agent (isSessionCancelled check
+ *      trong mini loop của subagent-delegate);
+ *  (2) KHÔNG chiếm activeRunBySession — recordAgentRunTool/recordAgentThought
+ *      của PARENT tiếp tục ghi vào run parent (event của sub-agent ghi qua
+ *      tham số runId riêng);
+ *  (3) không set dbPersistBy='caller' — endAgentRun tự persist AgentRunRecord
+ *      (1 row cho mỗi delegation — nhìn lại lịch sử delegation trong DB).
+ *
+ * Fail-open như mọi API tracker: lỗi → null (delegation vẫn chạy bình thường,
+ * chỉ thiếu hiển thị).
+ */
+export function registerDelegationRun(params: {
+  sessionId?: string | null
+  /** runId của parent (goal-loop / pipeline step) — chỉ để hiển thị nguồn giao việc */
+  parentRunId?: string | null
+  agentName: string
+  /** position thật của sub-agent (TL/G1/G2-A/G2-B/G3) — hiển thị màu đúng trong UI */
+  agentPosition?: string
+  task?: string
+}): string | null {
+  try {
+    const { sessionId, agentName } = params
+    if (!sessionId) return null
+    const reg = registry()
+    const run: AgentRun = {
+      runId: `sub_${Date.now()}_${++runSeq}`,
+      sessionId,
+      agentName: agentName.slice(0, 40),
+      agentPosition: params.agentPosition?.slice(0, 12),
+      step: params.parentRunId
+        ? `delegated bởi ${params.parentRunId.slice(0, 16)}`
+        : 'delegated',
+      task: truncateText(params.task, 240),
+      mode: 'team',
+      dbPersistBy: 'tracker',
+      startedAt: Date.now(),
+      status: 'running',
+      events: [],
+      counters: { iterations: 0, toolCalls: 0, filesRead: 0, commandsRun: 0, editsMade: 0, searches: 0 },
+    }
+    const arr = runsOf(sessionId)
+    arr.push(run)
+    if (arr.length > MAX_RUNS_PER_SESSION) {
+      arr.splice(0, arr.length - MAX_RUNS_PER_SESSION)
+    }
+    trimSessions()
+    pushEvent(run, {
+      id: nextEventId(),
+      ts: Date.now(),
+      type: 'run_start',
+      text: `[Delegation] ${run.task || ''}`,
+    })
+    return run.runId
+  } catch {
+    return null
+  }
+}
+
 /**
  * Ghi snapshot todo list (từ kết quả todo_write hoặc auto-todo của workflow).
+ * runId (fix 2026-09-12 delegation): ghi vào run cụ thể của sub-agent thay vì
+ * run active của parent — todo plan của sub-agent không đè lastTodos parent.
  */
 export function recordAgentRunTodos(
   sessionId: string | null | undefined,
   todos: AgentRunTodo[],
+  runId?: string,
 ): void {
   try {
-    const run = activeRun(sessionId)
+    const run = runId
+      ? runsOf(sessionId || '').find(r => r.runId === runId && r.status === 'running') || null
+      : activeRun(sessionId)
     if (!run || !Array.isArray(todos) || todos.length === 0) return
     run.lastTodos = todos.slice(0, 50).map(t => ({
       id: String(t.id || ''),

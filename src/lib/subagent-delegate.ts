@@ -37,7 +37,7 @@ import { callLLMForAgent } from '@/lib/llm'
 import { executeTool } from '@/lib/code-team/tool-executor'
 import { parseToolCallsFromOutput, detectBrokenToolCallHint } from '@/lib/tool-calls'
 import { resolveAgent } from '@/lib/code-team/agent-resolver'
-import { isSessionCancelled } from '@/lib/agent-run-tracker'
+import { isSessionCancelled, registerDelegationRun, endAgentRun } from '@/lib/agent-run-tracker'
 
 // ==================== CONFIG (env override) ====================
 
@@ -191,15 +191,34 @@ function compactArgs(args: Record<string, unknown>, maxLen = 100): string {
  * Chạy 1 sub-agent THEO PROFILE (generic — Code Team, custom, hoặc agent do
  * Omega tạo). Đây là lõi mini ReAct loop với context isolation + depth guard.
  *
+ * DELEGATION CONTRACT (fix 2026-09-12 — gap so với quy trình orchestrator):
+ * Trước đây sub-agent nhận việc → chạy thẳng ReAct KHÔNG kế hoạch, todos (nếu
+ * có) rơi scope 'default' vô hình, kết quả không lưu lại cho run sau. Giờ:
+ *   · PLAN-FIRST — prompt bắt buộc BƯỚC 0: task nhiều bước → todo_write chia
+ *     kế hoạch TRƯỚC, làm từng bước, cập nhật trạng thái; harness plan-nudge
+ *     (≥3 tool calls chưa có todo → nhắc 1 lần);
+ *   · ACCEPTANCE — delegate_task truyền điều kiện hoàn thành kiểm định được,
+ *     sub-agent tự verify từng điều kiện trước khi báo cáo;
+ *   · SELF-VERIFY — báo cáo bắt buộc kèm bằng chứng tool (đã có từ trước,
+ *     giờ đối chiếu cả acceptance);
+ *   · VISIBILITY — todos inject sessionId + delegationRunId → panel Thought
+ *     Process hiện run riêng của sub-agent (kế hoạch + tool events);
+ *   · LEARNING — cuối run lưu task_summary vào Kho Context (context_recall
+ *     cho run sau — delegation không còn là "ngõ cụt tri thức").
+ *
  * @param params.profile   profile agent đã resolve (provider/model/tools...)
  * @param params.task      mô tả nhiệm vụ delegate (bắt buộc)
  * @param params.context   context bổ sung từ parent (file liên quan, ràng buộc...)
+ * @param params.acceptanceCriteria  điều kiện hoàn thành kiểm định được (parent đối chiếu báo cáo theo đây)
+ * @param params.parentRunId  runId của parent (goal-loop / pipeline step) — hiển thị nguồn giao việc
  * @param params.onTokens  callback báo token tiêu thụ về PARENT budget
  */
 export async function runSubAgentForProfile(params: {
   profile: SubAgentProfile
   task: string
   context?: string
+  acceptanceCriteria?: string
+  parentRunId?: string | null
   parentAgentName?: string
   sessionId?: string | null
   onTokens?: (tokens: number) => void
@@ -208,6 +227,8 @@ export async function runSubAgentForProfile(params: {
     profile,
     task,
     context,
+    acceptanceCriteria,
+    parentRunId = null,
     parentAgentName = 'parent-agent',
     sessionId = null,
     onTokens,
@@ -247,9 +268,18 @@ export async function runSubAgentForProfile(params: {
   // 21-d: số lần đẩy feedback parse-fail (tool call bị cắt cụt giữa JSON)
   // — tránh loop vô hạn khi LLM liên tục phát JSON lỗi.
   let parseFailNudges = 0
+  // DELEGATION CONTRACT: plan-nudge — sub-agent chạy ≥3 tool calls mà chưa
+  // từng todo_write → nhắc 1 lần duy nhất "lập kế hoạch rồi làm từng bước"
+  // (mirror kỷ luật TodoWrite của orchestrator — không ép task đơn giản).
+  let sawTodoWrite = false
+  let planNudged = false
   let tokensUsed = 0
   let iterations = 0
   let toolCallCount = 0
+  // DELEGATION CONTRACT — khai báo NGOÀI try để catch-path kết thúc được run
+  // hiển thị khi exception văng ra giữa chừng (TS scope — mirror jobInputCrashContext pattern)
+  let delegationRunId: string | null = null
+  let finishDelegationRun: (status: 'done' | 'error' | 'cancelled', summary: string) => void = () => {}
 
   const addTokens = (t?: number) => {
     if (typeof t === 'number' && t > 0) {
@@ -287,12 +317,29 @@ export async function runSubAgentForProfile(params: {
     } catch { /* fail-open — giữ whitelist mặc định */ }
     const allowedTools = effectiveBaseTools.filter(t => !DEPTH_GUARD_TOOLS.includes(t))
 
-    console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${ALL_SUBAGENT_CAPS_UNLIMITED ? SUBAGENT_HARD_CEILING_ITERATIONS + ' (trần cứng — cả 3 cap = 0)' : SUBAGENT_MAX_ITERATIONS === 0 ? '∞' : SUBAGENT_MAX_ITERATIONS} vòng, budget ${SUBAGENT_TOKEN_BUDGET === 0 ? '∞' : SUBAGENT_TOKEN_BUDGET} tokens${SUBAGENT_TIMEOUT_MS === 0 ? ', timeout ∞' : ''}, ${allowedTools.length} tools)`)
+    // DELEGATION CONTRACT — đăng ký run riêng cho sub-agent (Thought Process
+    // panel + AgentRunRecord + todos theo runId). Fail-open: null → delegation
+    // vẫn chạy, chỉ thiếu hiển thị. KHÔNG đụng flag cancel/activeRun của parent.
+    try {
+      delegationRunId = registerDelegationRun({
+        sessionId,
+        parentRunId,
+        agentName: profile.name,
+        agentPosition: POSITION_BY_NAME[profile.name.toUpperCase()] || undefined,
+        task,
+      })
+    } catch { /* fail-open */ }
+    finishDelegationRun = (status: 'done' | 'error' | 'cancelled', summary: string) => {
+      if (!delegationRunId || !sessionId) return
+      try { endAgentRun(sessionId, delegationRunId, status, summary) } catch { /* fail-open */ }
+    }
+
+    console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${ALL_SUBAGENT_CAPS_UNLIMITED ? SUBAGENT_HARD_CEILING_ITERATIONS + ' (trần cứng — cả 3 cap = 0)' : SUBAGENT_MAX_ITERATIONS === 0 ? '∞' : SUBAGENT_MAX_ITERATIONS} vòng, budget ${SUBAGENT_TOKEN_BUDGET === 0 ? '∞' : SUBAGENT_TOKEN_BUDGET} tokens${SUBAGENT_TIMEOUT_MS === 0 ? ', timeout ∞' : ''}, ${allowedTools.length} tools${delegationRunId ? `, run ${delegationRunId.slice(0, 22)}…` : ''})`)
 
     // ===== Mini ReAct loop =====
     const systemPrompt = profile.instruction || `Bạn là ${profile.name} — agent chuyên trách. Hoàn thành nhiệm vụ được delegate một cách tự chủ, ngắn gọn.`
     const transcript: Array<{ role: 'user' | 'assistant' | 'tool'; content: string }> = [
-      { role: 'user', content: buildDelegationPrompt(profile.name, task, context, allowedTools, parentAgentName) },
+      { role: 'user', content: buildDelegationPrompt(profile.name, task, context, allowedTools, parentAgentName, acceptanceCriteria) },
     ]
 
     const loopPromise = (async () => {
@@ -390,9 +437,22 @@ export async function runSubAgentForProfile(params: {
             continue
           }
           toolCallCount++
+          // DELEGATION CONTRACT — todo_write: inject sessionId của parent +
+          // runId delegation (mirror agent-goal-loop CI-2): todos của sub-agent
+          // gắn đúng phiên chat + run riêng → hiển thị trong panel Thought
+          // Process thay vì rơi scope 'default' vô hình. Agent tự khai sessionId
+          // khác → tôn trọng, không đụng.
+          const toolArgs: Record<string, unknown> = { ...tc.args }
+          if (tc.name === 'todo_write') {
+            sawTodoWrite = true
+            if (sessionId && (!toolArgs.sessionId || toolArgs.sessionId === sessionId)) {
+              toolArgs.sessionId = toolArgs.sessionId || sessionId
+              if (delegationRunId && !toolArgs.runId) toolArgs.runId = delegationRunId
+            }
+          }
           let toolResult: { success: boolean; result: unknown }
           try {
-            toolResult = await executeTool(tc.name, tc.args, { agentName: profile.name, sessionId })
+            toolResult = await executeTool(tc.name, toolArgs, { agentName: profile.name, sessionId, delegationRunId })
           } catch (err) {
             toolResult = { success: false, result: { error: err instanceof Error ? err.message : String(err) } }
           }
@@ -414,6 +474,22 @@ export async function runSubAgentForProfile(params: {
           transcript.push({
             role: 'tool',
             content: truncateResult(safeStringify({ tool: tc.name, success: toolResult.success, result: toolResult.result }), SUBAGENT_TOOL_RESULT_CHARS),
+          })
+        }
+
+        // DELEGATION CONTRACT — plan-nudge (1 lần): ≥3 tool calls mà chưa từng
+        // todo_write → nhắc lập kế hoạch rồi làm từng bước. Task đơn giản
+        // (1-2 calls) không bị làm phiền. Nudge là user-message trong transcript
+        // của sub-agent — parent context KHÔNG phình (isolation giữ nguyên).
+        if (
+          !planNudged && !sawTodoWrite && toolCallCount >= 3 && allowedTools.includes('todo_write') &&
+          !timedOut && !isCancelled() &&
+          (SUBAGENT_EFFECTIVE_MAX_ITERATIONS === 0 || iterations < SUBAGENT_EFFECTIVE_MAX_ITERATIONS)
+        ) {
+          planNudged = true
+          transcript.push({
+            role: 'user',
+            content: `📌 Bạn đã chạy ${toolCallCount} tool calls mà chưa có kế hoạch. Nếu nhiệm vụ còn nhiều bước: gọi todo_write ngay chia việc còn lại thành các bước có thứ tự (mỗi bước 1 mục) rồi làm theo từng bước, cập nhật trạng thái qua todo_write. Báo cáo cuối phải nêu tiến độ từng bước. Nếu chỉ còn ≤1 bước nữa là xong thì cứ làm tiếp, không cần kế hoạch.`,
           })
         }
       }
@@ -512,11 +588,37 @@ export async function runSubAgentForProfile(params: {
       error: state.endedBy === 'error' ? state.errorMessage : undefined,
     }
 
+    // DELEGATION CONTRACT — kết thúc run hiển thị + persist bài học:
+    // (a) endAgentRun: run sub-agent → terminal status trong Thought Process
+    //     panel + 1 AgentRunRecord row (lịch sử delegation tra cứu được);
+    // (b) archiveContext task_summary (fire-and-forget, fail-open): run sau
+    //     trong session recall lại được kết quả delegation — vá gap "delegation
+    //     là ngõ cụt tri thức" (so sánh quy trình orchestrator 2026-09-12).
+    finishDelegationRun(
+      state.endedBy === 'cancelled' ? 'cancelled' : state.endedBy === 'error' ? 'error' : 'done',
+      `[Delegation] ${state.endedBy} · ${iterations} vòng · ${toolCallCount} tool calls · ${tokensUsed} tokens`,
+    )
+    if (sessionId && report.trim()) {
+      try {
+        void import('@/lib/context-store')
+          .then(({ archiveContext }) => archiveContext({
+            runId: delegationRunId,
+            sessionId,
+            agentName: profile.name,
+            kind: 'task_summary',
+            content: `[Delegation từ ${parentAgentName}] Nhiệm vụ: ${task.slice(0, 400)}\n\n${report}`,
+            tags: 'delegation',
+          }))
+          .catch(() => { /* fail-open — learning không được phá delegation */ })
+      } catch { /* fail-open */ }
+    }
+
     console.log(`[SubAgent] ${profile.name} xong: ${state.endedBy} — ${iterations} vòng, ${toolCallCount} tool calls, ${tokensUsed} tokens, ${Math.round((Date.now() - startedAt) / 1000)}s`)
     return outcome
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err)
     console.warn(`[SubAgent] Delegate "${profile.name}" failed:`, errorMessage)
+    try { finishDelegationRun('error', `[Delegation] lỗi: ${errorMessage.slice(0, 200)}`) } catch { /* fail-open */ }
     return {
       success: false,
       agent: profile.name,
@@ -542,11 +644,13 @@ export async function runSubAgent(params: {
   position: string
   task: string
   context?: string
+  acceptanceCriteria?: string
+  parentRunId?: string | null
   parentAgentName?: string
   sessionId?: string | null
   onTokens?: (tokens: number) => void
 }): Promise<SubAgentOutcome> {
-  const { position, task, context, parentAgentName = 'parent-agent', sessionId = null, onTokens } = params
+  const { position, task, context, acceptanceCriteria, parentRunId = null, parentAgentName = 'parent-agent', sessionId = null, onTokens } = params
 
   // ===== 1. Resolve agent (DB-first → hardcoded) =====
   // strictEnabled: agent bị user DISABLE → từ chối (không chạy fallback ngầm)
@@ -580,6 +684,8 @@ export async function runSubAgent(params: {
     },
     task,
     context,
+    acceptanceCriteria,
+    parentRunId,
     parentAgentName,
     sessionId,
     onTokens,
@@ -596,23 +702,31 @@ function buildDelegationPrompt(
   context: string | undefined,
   allowedTools: string[],
   parentAgentName: string,
+  acceptanceCriteria?: string,
 ): string {
   const canEscalate = allowedTools.includes('escalate_problem')
+  const canTodo = allowedTools.includes('todo_write')
   return `Bạn (${agentName}) được ${parentAgentName} DELEGATE một nhiệm vụ tự chủ. Làm việc ĐỘC LẬP — không hỏi lại parent.
 
 NHIỆM VỤ:
 ${task}
 ${context ? `\nCONTEXT TỪ PARENT:\n${context.slice(0, 3000)}\n` : ''}
+${acceptanceCriteria ? `ĐIỀU KIỆN HOÀN THÀNH (parent đối chiếu báo cáo của bạn theo danh sách này — từng điều kiện phải nêu ĐẠT/CHƯA ĐẠT kèm bằng chứng):
+${acceptanceCriteria.slice(0, 1200)}
+` : ''}
 TOOLS BẠN ĐƯỢC DÙNG: ${allowedTools.join(', ') || '(none — trả lời bằng kiến thức)'}
 
-QUY TẮC:
-- Dùng tools thật để đọc/sửa/chạy — không đoán kết quả file/lệnh.
+QUY TRÌNH LÀM VIỆC (bắt buộc):
+${canTodo ? `- BƯỚC 0 — LẬP KẾ HOẠCH: đánh giá nhiệm vụ. Nếu cần NHIỀU BƯỚC (đọc/sửa nhiều file, research rồi code, cài đặt rồi kiểm định...) → gọi todo_write NGAY ĐẦU TIÊN, chia nhiệm vụ thành các bước có thứ tự (mỗi bước 1 mục, mô tả đo đếm được) → làm TỪNG BƯỚC, cập nhật trạng thái qua todo_write (pending → in_progress → completed/failed). Nhiệm vụ đơn giản (1-2 tool call) → làm thẳng, không cần todo.
+` : ''}- Dùng tools thật để đọc/sửa/chạy — không đoán kết quả file/lệnh.
+- TỰ KIỂM ĐỊNH trước khi kết luận: chạy ít nhất 1 tool xác nhận kết quả cuối (file_read đọc lại / lint / type_check / run_tests...) — KHÔNG kết luận "hoàn thành" suông không bằng chứng.${acceptanceCriteria ? ' Đối chiếu TỪNG điều kiện hoàn thành phía trên — điều kiện nào chưa đạt phải nói rõ.' : ''}
 - Mỗi vòng tối đa vài tool calls; ưu tiên hành động trực tiếp.
 ${canEscalate ? '- Nếu BẾ TẮC (tool fail lặp lại / không rõ hướng giải): tool_call: escalate_problem({"problem": "...", "context": "...", "attempted": "..."}) → Omega orchestrator sẽ tư vấn giải pháp.' : ''}
 - Khi xong (hoặc không làm tiếp được), viết BÁO CÁO ≤ 300 từ theo format:
-  1. ĐÃ LÀM: từng việc + bằng chứng tool (tên tool + kết quả ngắn: file:line, pass/fail, số lỗi)
-  2. CÒN THIẾU / CHƯA XÁC ĐỊNH: thành thật — KHÔNG tuyên bố hoàn thành gì thiếu bằng chứng
-  3. ĐỀ XUẤT cho parent: bước tiếp theo (nếu có)
+  1. ĐÃ LÀM: từng việc + bằng chứng tool (tên tool + kết quả ngắn: file:line, pass/fail, số lỗi)${canTodo ? `
+  2. KẾ HOẠCH & TIẾN ĐỘ: nếu đã tạo todo — liệt kê từng bước + trạng thái cuối (completed/failed/in_progress); task đơn giản thì ghi "(không cần kế hoạch)"` : ''}
+  ${canTodo ? '3' : '2'}. CÒN THIẾU / CHƯA XÁC ĐỊNH: thành thật — KHÔNG tuyên bố hoàn thành gì thiếu bằng chứng
+  ${canTodo ? '4' : '3'}. ĐỀ XUẤT cho parent: bước tiếp theo (nếu có)
 - Tool call format: tool_call: <name>({ ...args })`
 }
 
@@ -628,7 +742,7 @@ ${evidence.slice(-20).map(e => `- ${e}`).join('\n') || '(không có)'}
 
 TÌNH TRẠNG: dừng vì ${reason}.
 
-NHIỆM VỤ: viết BÁO CÁO TỔNG KẾT ≤ 300 từ, đúng 3 phần: (1) ĐÃ LÀM + bằng chứng tool cụ thể, (2) CÒN THIẾU/CHƯA KIỂM ĐỊNH ĐƯỢC — không đoán, (3) ĐỀ XUẤT bước tiếp theo. Không gọi tool. Không viết dài.`
+NHIỆM VỤ: viết BÁO CÁO TỔNG KẾT ≤ 300 từ theo 4 phần: (1) ĐÃ LÀM + bằng chứng tool cụ thể, (2) KẾ HOẠCH & TIẾN ĐỘ từng bước nếu có todo (completed/failed/in_progress — không có thì ghi "không cần kế hoạch"), (3) CÒN THIẾU/CHƯA KIỂM ĐỊNH ĐƯỢC — không đoán, (4) ĐỀ XUẤT bước tiếp theo. Không gọi tool. Không viết dài.`
 }
 
 function safeStringify(entry: { tool: string; success: boolean; result: unknown }): string {

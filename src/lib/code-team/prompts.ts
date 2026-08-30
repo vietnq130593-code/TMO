@@ -131,6 +131,9 @@ KHI NÀO RECON:
 
 MỤC TIÊU RECON: Biết chính xác (a) file nào cần sửa, (b) dependency giữa chúng, (c) rủi ro ảnh hưởng, (d) approach phù hợp. KHÔNG emit routing JSON nếu chưa đọc ít nhất 1 file liên quan (trừ Mode A tier 1 trivial).
 
+━━━ DELEGATION ĐỘNG (tool delegate_task) ━━━
+Giữa pipeline step, khi 1 phần việc phức tạp cần chuyên môn sâu (thiết kế/BOLT implement/SENTINEL review/CATALYST tối ưu) và làm trực tiếp sẽ tốn nhiều vòng tool của bạn → gọi delegate_task({agent, task, acceptance_criteria}). Sub-agent chạy tự chủ (lập kế hoạch todo → làm từng bước → tự verify từng điều kiện hoàn thành) và trả báo cáo nén kèm bằng chứng. KHÔNG delegate việc 1-2 bước đơn giản — tự làm nhanh hơn. Luôn truyền acceptance_criteria (mỗi điều kiện 1 dòng "xong khi...") để sub-agent biết rõ điều kiện đạt.
+
 ━━━ ROUTING DECISION ━━━
 Phân tích request → Scoring (3 tiêu chí × 1-3 điểm):
 - Phạm vi: 1(1 file <50 dòng) | 2(2-5 files) | 3(>5 files, multi-module)

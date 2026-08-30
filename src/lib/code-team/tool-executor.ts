@@ -1489,6 +1489,13 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
             type: 'string',
             description: 'Context bổ sung từ bạn: file liên quan, ràng buộc, kết quả bước trước, quyết định đã chốt...',
           },
+          acceptance_criteria: {
+            type: 'string',
+            description:
+              'DELEGATION CONTRACT — danh sách điều kiện hoàn thành KIỂM ĐỊNH ĐƯỢC (mỗi điều kiện 1 dòng, dạng "xong khi..."). ' +
+              'Sub-agent tự verify từng điều kiện bằng tool thật trước khi báo cáo và nêu ĐẠT/CHƯA ĐẠT từng điều kiện trong báo cáo. ' +
+              'Vd: "xong khi file src/lib/x.ts sửa hàm Y và lint pass", "xong khi test X chạy 169/169 pass".',
+          },
         },
         required: ['agent', 'task'],
       },
@@ -1713,7 +1720,18 @@ export interface ToolExecutionResult {
 export async function executeTool(
   toolName: string,
   args: Record<string, unknown>,
-  context?: { agentName?: string; sessionId?: string | null }
+  context?: {
+    agentName?: string
+    sessionId?: string | null
+    /** RunId của run CHA (goal-loop / pipeline step) — delegate_task dùng làm parentRunId */
+    runId?: string | null
+    /**
+     * DELEGATION CONTRACT (fix 2026-09-12): runId của run SUB-AGENT được
+     * delegate — subagent-delegate truyền vào để tool events + todo snapshots
+     * ghi vào run của sub-agent (chứ không trộn vào parent run).
+     */
+    delegationRunId?: string | null
+  }
 ): Promise<ToolExecutionResult> {
   const startTime = Date.now()
 
@@ -1737,14 +1755,17 @@ export async function executeTool(
         sessionId: context?.sessionId ?? null,
         resultPreview,
       })
-      // Thought Process panel trong chat — ghi vào run đang active của session
+      // Thought Process panel trong chat — ghi vào run đang active của session.
+      // DELEGATION CONTRACT (fix 2026-09-12): context.delegationRunId (sub-agent
+      // được delegate) → ghi vào run CỦA SUB-AGENT thay vì run active của parent
+      // (tránh trộn event + đè lastTodos của parent run — context isolation).
       recordAgentRunTool(context?.sessionId ?? null, {
         tool: toolName,
         argsSummary: summarizeToolCall(toolName, args),
         success,
         durationMs: Date.now() - startTime,
         resultPreview,
-      })
+      }, context?.delegationRunId || undefined)
       // todo_write thành công → snapshot todo list (panel Todos trong chat)
       if (toolName === 'todo_write' && success) {
         const r = result as { todos?: Array<{ id?: string; content?: string; status?: string; priority?: string }> } | null
@@ -1754,7 +1775,7 @@ export async function executeTool(
             content: String(t.content ?? ''),
             status: String(t.status ?? 'pending'),
             priority: t.priority ? String(t.priority) : undefined,
-          })))
+          })), context?.delegationRunId || undefined)
         }
       }
     } catch { /* ignore — display-only */ }
@@ -2750,6 +2771,11 @@ export async function executeTool(
             position: target,
             task,
             context: args.context ? String(args.context) : undefined,
+            // DELEGATION CONTRACT (fix 2026-09-12): điều kiện hoàn thành kiểm
+            // định được — sub-agent tự verify từng điều kiện + báo cáo ĐẠT/CHƯA ĐẠT;
+            // parentRunId để hiển thị nguồn giao việc trong Thought Process panel.
+            acceptanceCriteria: args.acceptance_criteria ? String(args.acceptance_criteria) : undefined,
+            parentRunId: context?.runId ?? null,
             parentAgentName: context?.agentName || 'parent-agent',
             sessionId: context?.sessionId ?? null,
           })

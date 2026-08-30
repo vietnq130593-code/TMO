@@ -2145,7 +2145,17 @@ export async function runAgentStep(params: {
       }
 
       // Agent context cho Agent Activity Log (Terminal echo — user request 2026-08-27)
-      const toolResult = await executeTool(tc.name, tc.args, { agentName: agent.name, sessionId })
+      // DELEGATION CONTRACT (fix 2026-09-12):
+      //  · todo_write → inject sessionId + runId của step run (mirror goal-loop
+      //    CI-2): todos agent-initiated gắn đúng phiên chat + run của step —
+      //    không còn rơi scope 'default' vô hình (panel Thought Process hiển thị).
+      //  · context.runId → delegate_task của APEX đọc làm parentRunId.
+      const wfToolArgs: Record<string, unknown> = { ...tc.args }
+      if (tc.name === 'todo_write' && sessionId && (!wfToolArgs.sessionId || wfToolArgs.sessionId === sessionId)) {
+        wfToolArgs.sessionId = wfToolArgs.sessionId || sessionId
+        if (runId && !wfToolArgs.runId) wfToolArgs.runId = runId
+      }
+      const toolResult = await executeTool(tc.name, wfToolArgs, { agentName: agent.name, sessionId, runId })
       const toolDuration = Date.now() - toolStartTime
 
       // TOKEN ACCOUNTING (fix review 2026-09-08): escalate_problem (Omega
