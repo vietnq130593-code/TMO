@@ -32,17 +32,30 @@
 import { db } from '@/lib/db'
 import { callLLMForAgent } from '@/lib/llm'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
-import { approximateNextRun } from '@/lib/automation-engine'
+import { approximateNextRun, validateAutomationExecutor } from '@/lib/automation-engine'
+// CRON BUILDER (user request 2026-09-14): đề xuất cron dùng lịch có cấu trúc
+import {
+  validateCronSchedule,
+  nextRunFromSchedule,
+  scheduleToRepresentativeExpression,
+  describeSchedule,
+  type CronScheduleConfig,
+} from '@/lib/cron-schedule'
 
 // ==================== TYPES ====================
 
 export type AutomationProposalKind = 'cron' | 'webhook' | 'standing_order' | 'task_flow'
 
 export interface AutomationCronPayload {
-  /** Cron expression (vd "0 9 * * 1-5" hoặc "5-59/5 * * * *") — automation-engine style */
-  expression: string
+  /** Cron expression (vd "0 9 * * 1-5") — đường legacy, dùng KHI KHÔNG có schedule */
+  expression?: string
   /** Nhiệm vụ LLM chạy theo lịch */
   taskPrompt: string
+  /** Lịch có cấu trúc (KHUYẾN KHÍCH — user request 2026-09-14):
+   * {mode:'day'|'week'|'month', times:['09:30'], daysOfWeek?:[1,3], daysOfMonth?:[1,15], repeat:true} */
+  schedule?: CronScheduleConfig
+  /** Agent thực thi: '' (mặc định) | tên agent | 'team:xxx' (TL điều phối) */
+  executor?: string
 }
 
 export interface AutomationWebhookPayload {
@@ -117,11 +130,31 @@ export function validateAutomationRequest(
   }
   const p = payload as Record<string, unknown>
   if (k === 'cron') {
-    const expression = String(p.expression || '').trim()
     const taskPrompt = String(p.taskPrompt || '').trim()
-    if (!expression) return { ok: false, error: 'cron payload thiếu "expression" (vd "0 9 * * 1-5")' }
     if (!taskPrompt) return { ok: false, error: 'cron payload thiếu "taskPrompt" (nhiệm vụ chạy theo lịch)' }
-    return { ok: true, data: { kind: 'cron', payload: { expression: expression.slice(0, 100), taskPrompt: taskPrompt.slice(0, 3000) } } }
+    // CRON BUILDER: schedule có cấu trúc (ưu tiên) HOẶC expression thô (legacy)
+    let schedule: CronScheduleConfig | undefined
+    if (p.schedule !== undefined && p.schedule !== null) {
+      const v = validateCronSchedule(p.schedule)
+      if (!v.ok) return { ok: false, error: `cron payload schedule không hợp lệ: ${v.error}` }
+      schedule = v.data
+    }
+    let expression = String(p.expression || '').trim()
+    if (schedule) {
+      // expression đại diện (deterministic — dùng cho dedup + hiển thị)
+      expression = scheduleToRepresentativeExpression(schedule)
+    }
+    if (!expression) {
+      return { ok: false, error: 'cron payload cần "schedule" {mode:"day"|"week"|"month", times:["09:30"], ...} HOẶC "expression" (vd "0 9 * * 1-5")' }
+    }
+    const executor = String(p.executor || '').trim()
+    const out: Record<string, unknown> = {
+      expression: expression.slice(0, 100),
+      taskPrompt: taskPrompt.slice(0, 3000),
+    }
+    if (schedule) out.schedule = schedule
+    if (executor) out.executor = executor.slice(0, 100)
+    return { ok: true, data: { kind: 'cron', payload: out } }
   }
   if (k === 'webhook') {
     const url = String(p.url || '').trim()
@@ -161,11 +194,15 @@ export function describeAutomationRequest(req: AutomationRequest): { title: stri
   const by = req.proposedBy || 'agent'
   if (req.kind === 'cron') {
     const p = req.payload as AutomationCronPayload
+    const scheduleDesc = p.schedule ? describeSchedule(p.schedule) : `expression ${p.expression}`
+    const executorDesc = p.executor
+      ? (p.executor.startsWith('team:') ? `Team "${p.executor.slice(5)}" (TL điều phối toàn bộ tác vụ)` : `Agent ${p.executor}`)
+      : 'Automation Agent (mặc định)'
     return {
       title: `Cron job: ${p.taskPrompt.slice(0, 80)}`,
       problem: `Agent ${by} nhận thấy tác vụ cần chạy định kỳ nhưng chưa có lịch tự động: ${req.reason || '(agent không nêu lý do)'}`,
-      solution: `Tạo cron job chạy theo lịch "${p.expression}" với nhiệm vụ: ${p.taskPrompt}`,
-      implementation: `Thêm CronJob (expression="${p.expression}") vào module Smolab > Automation — scheduler tự thực thi qua LLM theo chu kỳ. ${req.evidence ? `Bằng chứng: ${req.evidence}` : ''}`,
+      solution: `Tạo cron job chạy theo lịch "${scheduleDesc}" — thực thi bởi ${executorDesc} — với nhiệm vụ: ${p.taskPrompt}`,
+      implementation: `Thêm CronJob (lịch \`${scheduleDesc}\`, executor=${p.executor || 'mặc định'}) vào module Smolab > Automation — scheduler tự thực thi qua LLM theo chu kỳ. ${req.evidence ? `Bằng chứng: ${req.evidence}` : ''}`,
     }
   }
   if (req.kind === 'webhook') {
@@ -298,6 +335,15 @@ Quyết định forward hay từ chối (JSON).`
  */
 export async function submitAutomationProposal(req: AutomationRequest): Promise<SubmitAutomationResult> {
   try {
+    // CRON BUILDER: validate executor NGAY lúc đề xuất (DB check) — agent đề xuất
+    // executor không tồn tại → báo lỗi về agent thay vì để lỗi nổ lúc phê duyệt
+    if (req.kind === 'cron') {
+      const executorRaw = String(((req.payload as unknown as Record<string, unknown>).executor) || '').trim()
+      const executorCheck = await validateAutomationExecutor(executorRaw)
+      if (!executorCheck.ok) {
+        return { success: false, forwarded: false, error: `executor không hợp lệ: ${executorCheck.error}`, tokensUsed: 0 }
+      }
+    }
     const desc = describeAutomationRequest(req)
     const decision = await decideAutomationProposal(req)
     if (!decision.forward) {
@@ -388,6 +434,17 @@ export async function executeAutomationProposal(proposalId: string): Promise<{ s
       const expression = String(payload.expression || '').trim()
       const taskPrompt = String(payload.taskPrompt || '').trim()
       if (!expression || !taskPrompt) throw new Error('Payload cron thiếu expression/taskPrompt')
+      // CRON BUILDER: lịch có cấu trúc (ưu tiên) + executor
+      const schedule = payload.schedule
+        ? validateCronSchedule(payload.schedule)
+        : null
+      if (payload.schedule && !schedule?.ok) {
+        throw new Error(`Payload cron schedule không hợp lệ: ${schedule && !schedule.ok ? schedule.error : 'unknown'}`)
+      }
+      const scheduleCfg = schedule?.ok ? schedule.data : null
+      const executorRaw = String(payload.executor || '').trim()
+      const executorCheck = await validateAutomationExecutor(executorRaw)
+      if (!executorCheck.ok) throw new Error(`Executor không hợp lệ: ${executorCheck.error}`)
       // IDEMPOTENT DEDUP GUARD (fix E2E 2026-09-13): proposal bị trigger lại
       // (promoteDueProposals / double-click approve) KHÔNG tạo cron trùng lặp —
       // cùng expression + taskPrompt → trả về job cũ.
@@ -404,10 +461,16 @@ export async function executeAutomationProposal(proposalId: string): Promise<{ s
             expression,
             taskPrompt,
             enabled: true,
-            nextRunAt: approximateNextRun(expression),
+            nextRunAt: scheduleCfg ? nextRunFromSchedule(scheduleCfg) : approximateNextRun(expression),
+            scheduleJson: scheduleCfg ? JSON.stringify(scheduleCfg) : null,
+            executor: executorCheck.value,
           },
         })
-        resultDetail = `✅ Đã tạo CronJob "${taskPrompt.slice(0, 100)}" (lịch \`${expression}\`, chạy kế tiếp ${job.nextRunAt?.toISOString()}) — hiển thị trong module Smolab > Automation.`
+        const schedDesc = scheduleCfg ? describeSchedule(scheduleCfg) : `expression \`${expression}\``
+        const execDesc = executorCheck.value
+          ? (executorCheck.value.startsWith('team:') ? `Team "${executorCheck.value.slice(5)}" (TL điều phối)` : `Agent ${executorCheck.value}`)
+          : 'Automation Agent (mặc định)'
+        resultDetail = `✅ Đã tạo CronJob "${taskPrompt.slice(0, 100)}" (lịch ${schedDesc}, thực thi bởi ${execDesc}, chạy kế tiếp ${job.nextRunAt?.toISOString()}) — hiển thị trong module Smolab > Automation.`
       }
     } else if (kind === 'webhook') {
       const url = String(payload.url || '').trim()

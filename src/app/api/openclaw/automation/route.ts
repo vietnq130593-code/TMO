@@ -14,7 +14,19 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { executeCronJob, testWebhookDispatch, approximateNextRun } from '@/lib/automation-engine'
+import {
+  executeCronJob,
+  testWebhookDispatch,
+  approximateNextRun,
+  validateAutomationExecutor,
+} from '@/lib/automation-engine'
+// CRON BUILDER (user request 2026-09-14): lịch có cấu trúc Ngày/Tuần/Tháng
+import {
+  validateCronSchedule,
+  nextRunFromSchedule,
+  scheduleToRepresentativeExpression,
+  type CronScheduleConfig,
+} from '@/lib/cron-schedule'
 
 export const dynamic = 'force-dynamic'
 
@@ -68,25 +80,53 @@ export async function POST(request: NextRequest) {
     // ── Cron Actions ──────────────────────────────────────────────────────
 
     if (action === 'create-cron') {
-      const { expression, taskPrompt, enabled } = body
-      if (!expression || !taskPrompt) {
-        return NextResponse.json({ error: 'expression and taskPrompt are required' }, { status: 400 })
+      const { expression, taskPrompt, enabled, schedule, executor } = body
+      if (!taskPrompt) {
+        return NextResponse.json({ error: 'taskPrompt is required' }, { status: 400 })
       }
-      const nextRunAt = approximateNextRun(expression)
+
+      // CRON BUILDER: schedule có cấu trúc (Ngày/Tuần/Tháng + times + Lặp)
+      // được ưu tiên; expression thô (legacy) vẫn chấp nhận khi không có schedule
+      let validatedSchedule: CronScheduleConfig | null = null
+      if (schedule !== undefined && schedule !== null) {
+        const v = validateCronSchedule(schedule)
+        if (!v.ok) return NextResponse.json({ error: `Lịch không hợp lệ: ${v.error}` }, { status: 400 })
+        validatedSchedule = v.data
+      }
+      if (!validatedSchedule && !expression) {
+        return NextResponse.json({ error: 'Cần chọn lịch (schedule) hoặc nhập cron expression' }, { status: 400 })
+      }
+
+      // Executor: '' (mặc định) | agent name | 'team:xxx' (TL điều phối)
+      const executorRaw = typeof executor === 'string' ? executor.trim() : ''
+      const executorCheck = await validateAutomationExecutor(executorRaw)
+      if (!executorCheck.ok) {
+        return NextResponse.json({ error: `Executor không hợp lệ: ${executorCheck.error}` }, { status: 400 })
+      }
+
+      const finalExpression = validatedSchedule
+        ? scheduleToRepresentativeExpression(validatedSchedule)
+        : String(expression)
+      const nextRunAt = validatedSchedule
+        ? nextRunFromSchedule(validatedSchedule)
+        : approximateNextRun(finalExpression)
+
       const job = await db.cronJob.create({
         data: {
           agentId: AGENT_ID,
-          expression,
+          expression: finalExpression,
           taskPrompt,
           enabled: enabled ?? true,
           nextRunAt,
+          scheduleJson: validatedSchedule ? JSON.stringify(validatedSchedule) : null,
+          executor: executorCheck.value,
         },
       })
       return NextResponse.json({ success: true, job })
     }
 
     if (action === 'update-cron') {
-      const { id, expression, taskPrompt, enabled } = body
+      const { id, expression, taskPrompt, enabled, schedule, executor } = body
       if (!id) {
         return NextResponse.json({ error: 'id is required' }, { status: 400 })
       }
@@ -95,12 +135,57 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Cron job not found' }, { status: 404 })
       }
       const data: Record<string, unknown> = {}
-      if (expression !== undefined) {
-        data.expression = expression
-        data.nextRunAt = approximateNextRun(expression)
+
+      // Schedule có cấu trúc (nếu có) — ghi đè expression thô
+      let validatedSchedule: CronScheduleConfig | null = null
+      if (schedule !== undefined && schedule !== null) {
+        const v = validateCronSchedule(schedule)
+        if (!v.ok) return NextResponse.json({ error: `Lịch không hợp lệ: ${v.error}` }, { status: 400 })
+        validatedSchedule = v.data
+        data.scheduleJson = JSON.stringify(validatedSchedule)
+        data.expression = scheduleToRepresentativeExpression(validatedSchedule)
+        data.nextRunAt = nextRunFromSchedule(validatedSchedule)
+        // Sửa lịch của job một-lần đã hoàn tất → kích hoạt lại (status về active)
+        if (!existing.enabled || existing.status === 'completed') {
+          data.status = 'active'
+        }
+      } else if (expression !== undefined) {
+        // Expression thô → quay về chế độ legacy (bỏ scheduleJson)
+        data.expression = String(expression)
+        data.scheduleJson = null
+        data.nextRunAt = approximateNextRun(String(expression))
       }
+
+      // Executor
+      if (executor !== undefined) {
+        const executorRaw = typeof executor === 'string' ? executor.trim() : ''
+        const executorCheck = await validateAutomationExecutor(executorRaw)
+        if (!executorCheck.ok) {
+          return NextResponse.json({ error: `Executor không hợp lệ: ${executorCheck.error}` }, { status: 400 })
+        }
+        data.executor = executorCheck.value
+      }
+
       if (taskPrompt !== undefined) data.taskPrompt = taskPrompt
       if (enabled !== undefined) data.enabled = enabled
+
+      // Bật lại job đã hoàn tất (one-time) → re-arm nextRunAt từ lịch hiện có
+      if (enabled === true) {
+        if (validatedSchedule) {
+          data.nextRunAt = nextRunFromSchedule(validatedSchedule)
+        } else if (data.scheduleJson === undefined && existing.scheduleJson) {
+          const parsed = (await import('@/lib/cron-schedule')).parseScheduleJson(existing.scheduleJson)
+          if (parsed) {
+            data.nextRunAt = nextRunFromSchedule(parsed)
+            if (existing.status === 'completed') data.status = 'active'
+          }
+        } else if (data.expression !== undefined) {
+          data.nextRunAt = approximateNextRun(String(data.expression))
+        } else if (existing.expression) {
+          data.nextRunAt = approximateNextRun(existing.expression)
+        }
+      }
+
       const job = await db.cronJob.update({ where: { id }, data })
       return NextResponse.json({ success: true, job })
     }

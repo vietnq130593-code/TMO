@@ -18,6 +18,7 @@ import {
   X, PieChart as PieChartIcon, AlertCircle, ChevronsLeft, ChevronsRight, Calendar,
   ThumbsUp, ThumbsDown, Settings, Wrench, Radio, BookMarked, Zap as ZapIcon, Plus, CircleDot, Table,
   Download, Upload as UploadIcon, FileJson, GraduationCap, RotateCcw, FileDown, FileUp, Edit3, Pencil, Users, User,
+  CalendarDays, Repeat as RepeatIcon, Timer,
   Code2, Terminal as TerminalIcon, FolderTree, FileCode, Bug, RefreshCw as RefreshCwIcon, Monitor,
   Play as PlayIcon, Square, ScrollText, ArrowRight as ArrowRightIcon, Cpu as CpuIcon, Cable as CableIcon,
   GitCommit, History, Minimize2, ExternalLink as ExternalLinkIcon, GripHorizontal, ArrowDownToLine,
@@ -44,6 +45,15 @@ import { format } from 'date-fns'
 import { toast } from '@/hooks/use-toast'
 import { useVoiceLive, type VoiceLiveStatus } from '@/hooks/use-voice-live'
 import { authedFetch } from '@/lib/api-auth'
+// CRON BUILDER (user request 2026-09-14): lịch có cấu trúc Ngày/Tuần/Tháng — pure
+// functions, an toàn import client-side (không đụng db)
+import {
+  describeSchedule,
+  parseExpressionToSchedule,
+  parseScheduleJson,
+  DOW_LABELS_VI,
+  type CronScheduleConfig,
+} from '@/lib/cron-schedule'
 import SelfDirectionModule from '@/components/self-direction/self-direction-module'
 import { toast as sonnerToast } from 'sonner'
 import {
@@ -13005,8 +13015,6 @@ const CRON_PRESETS = [
   { label: 'Mỗi ngày đầu tháng', expression: '0 0 1 * *' },
 ]
 
-const HEARTBEAT_INTERVALS = ['1m', '5m', '15m', '30m', '1h']
-
 /** Convert a cron expression to a human-readable Vietnamese description */
 function describeCronExpression(expr: string): string {
   if (expr.startsWith('heartbeat:')) return `Heartbeat mỗi ${expr.replace('heartbeat:', '')}`
@@ -13059,6 +13067,10 @@ interface CronJobItem {
   id: string; agentId: string; expression: string; taskPrompt: string;
   enabled: boolean; lastRunAt: string | null; nextRunAt: string | null;
   createdAt: string; updatedAt: string;
+  // CRON BUILDER (user request 2026-09-14)
+  scheduleJson: string | null;   // lịch có cấu trúc {mode, times, daysOfWeek?, daysOfMonth?, repeat}
+  executor: string | null;      // '' | agent name | 'team:xxx' (TL điều phối)
+  status: string;               // 'active' | 'paused' | 'completed' | 'failed'
 }
 
 interface WebhookItem {
@@ -13110,18 +13122,60 @@ function newFlowStep(type: TaskFlowStepUi['type']): TaskFlowStepUi {
   return { ...base, config: { resultKind: 'log' } }
 }
 
+// ==================== CRON BUILDER HELPERS (user request 2026-09-14) ====================
+
+const CRON_MODE_META: Record<CronScheduleConfig['mode'], { label: string; icon: typeof CalendarDays }> = {
+  day: { label: 'Ngày', icon: CalendarDays },
+  week: { label: 'Tuần', icon: CalendarDays },
+  month: { label: 'Tháng', icon: CalendarDays },
+}
+
+/** Mô tả Lặp theo mode — hint dưới nút Lặp */
+function cronRepeatHint(mode: CronScheduleConfig['mode'], repeat: boolean): string {
+  if (mode === 'day') {
+    return repeat
+      ? 'Lặp BẬT — tác vụ thực hiện lặp lại HÀNG NGÀY vào các giờ đã chọn'
+      : 'Lặp TẮT — tác vụ chạy ĐÚNG MỘT LẦN vào giờ đã chọn (lần khớp gần nhất)'
+  }
+  if (mode === 'week') {
+    return repeat
+      ? 'Lặp BẬT — cứ đến đúng các ngày + giờ đã chọn là thực hiện tác vụ HÀNG TUẦN'
+      : 'Lặp TẮT — chạy đúng một lần vào ngày + giờ khớp kế tiếp'
+  }
+  return repeat
+    ? 'Lặp BẬT — cứ đến đúng các ngày + giờ đã chọn là thực hiện tác vụ HÀNG THÁNG'
+    : 'Lặp TẮT — chạy đúng một lần vào ngày + giờ khớp kế tiếp'
+}
+
+/** Thứ hiển thị theo T2..CN (index JS getDay()) */
+const DOW_ORDER_UI = [1, 2, 3, 4, 5, 6, 0]
+
 function AutomationTabContent() {
   // Cron Jobs
   const [cronJobs, setCronJobs] = useState<Array<CronJobItem> | null>(null)
   const [cronLoading, setCronLoading] = useState(false)
 
-  // Cron Editor
+  // Cron Editor — CRON BUILDER: nút chọn Ngày/Tuần/Tháng → chọn ngày → chọn
+  // giờ+phút (nút Thêm để thêm nhiều giờ) → nút Lặp → chọn Agent/Team thực thi
   const [showCronEditor, setShowCronEditor] = useState(false)
   const [editingCron, setEditingCron] = useState<CronJobItem | null>(null)
-  const [cronExpression, setCronExpression] = useState('')
   const [cronTaskPrompt, setCronTaskPrompt] = useState('')
   const [cronEnabled, setCronEnabled] = useState(true)
   const [cronSaving, setCronSaving] = useState(false)
+  // Lịch có cấu trúc
+  const [cronMode, setCronMode] = useState<CronScheduleConfig['mode']>('day')
+  const [cronHour, setCronHour] = useState(9)
+  const [cronMinute, setCronMinute] = useState(0)
+  const [cronTimes, setCronTimes] = useState<string[]>([])
+  const [cronDaysOfWeek, setCronDaysOfWeek] = useState<number[]>([])
+  const [cronDaysOfMonth, setCronDaysOfMonth] = useState<number[]>([])
+  const [cronRepeat, setCronRepeat] = useState(true)
+  // Nâng cao: cron expression thô (job legacy / power user)
+  const [cronAdvanced, setCronAdvanced] = useState(false)
+  const [cronExpression, setCronExpression] = useState('')
+  // Executor: '' (Automation Agent mặc định) | agent name | 'team:xxx' (TL điều phối)
+  const [cronExecutor, setCronExecutor] = useState('')
+  const [cronAgents, setCronAgents] = useState<Array<{ name: string; team: string | null; position: string | null; enabled: boolean; avatar: string | null }> | null>(null)
 
   // Webhooks
   const [webhooks, setWebhooks] = useState<Array<WebhookItem> | null>(null)
@@ -13135,13 +13189,6 @@ function AutomationTabContent() {
   const [whSecret, setWhSecret] = useState('')
   const [whEnabled, setWhEnabled] = useState(true)
   const [whSaving, setWhSaving] = useState(false)
-
-  // Heartbeat
-  const [heartbeat, setHeartbeat] = useState<{
-    interval: string; actionPrompt: string; enabled: boolean;
-  }>({ interval: '5m', actionPrompt: 'Kiểm tra sức khỏe hệ thống', enabled: false })
-  const [heartbeatLoading, setHeartbeatLoading] = useState(false)
-  const [heartbeatSaving, setHeartbeatSaving] = useState(false)
 
   // Standing Orders
   const [orders, setOrders] = useState<Array<{
@@ -13193,17 +13240,12 @@ function AutomationTabContent() {
     finally { setWebhookLoading(false) }
   }, [])
 
-  // Load heartbeat
-  const loadHeartbeat = useCallback(async () => {
-    setHeartbeatLoading(true)
+  // Load agents cho executor selector (Agent / Team — TL điều phối)
+  const loadCronAgents = useCallback(async () => {
     try {
-      const res = await fetch('/api/openclaw/automation/heartbeat')
-      if (res.ok) {
-        const data = await res.json()
-        if (data.config) setHeartbeat(data.config)
-      }
-    } catch (e) { console.error('Failed to load heartbeat:', e) }
-    finally { setHeartbeatLoading(false) }
+      const res = await fetch('/api/agents?enabled=true')
+      if (res.ok) { const data = await res.json(); setCronAgents(data.agents || []) }
+    } catch (e) { console.error('Failed to load agents for executor selector:', e) }
   }, [])
 
   // Load standing orders
@@ -13241,12 +13283,14 @@ function AutomationTabContent() {
 
   // Initial load (only data that doesn't depend on volatile filters)
   // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
-  useEffect(() => { queueMicrotask(() => { loadCronJobs(); loadWebhooks(); loadHeartbeat(); loadOrders(); loadHistory(); loadFlows() }) }, [loadCronJobs, loadWebhooks, loadHeartbeat, loadOrders, loadFlows])
+  // [CRON BUILDER] Heartbeat ĐÃ BỎ (user request 2026-09-14) — cần kiểm tra
+  // định kỳ thì tạo Cron Job bằng builder; không load heartbeat nữa.
+  useEffect(() => { queueMicrotask(() => { loadCronJobs(); loadWebhooks(); loadCronAgents(); loadOrders(); loadHistory(); loadFlows() }) }, [loadCronJobs, loadWebhooks, loadCronAgents, loadOrders, loadFlows])
 
   // Reload history when filter changes (separate from main load to avoid re-fetching all data)
   useEffect(() => { queueMicrotask(() => { loadHistory() }) }, [loadHistory])
 
-  // Scheduler auto-poll — triggers cron/heartbeat execution every 30s
+  // Scheduler auto-poll — triggers cron/task-flow execution every 30s
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -13254,7 +13298,7 @@ function AutomationTabContent() {
         if (res.ok) {
           const data = await res.json()
           // If any jobs were executed, refresh the data
-          if (data.cron?.executed > 0 || data.cron?.failed > 0 || data.heartbeat?.executed || data.taskFlows?.executed > 0) {
+          if (data.cron?.executed > 0 || data.cron?.failed > 0 || data.taskFlows?.executed > 0) {
             loadCronJobs()
             loadHistory()
             loadFlows()
@@ -13267,14 +13311,48 @@ function AutomationTabContent() {
 
   // ─── Cron Actions ───
   const saveCron = useCallback(async () => {
-    if (!cronExpression.trim() || !cronTaskPrompt.trim()) {
-      toast({ title: '❌ Thiếu thông tin', description: 'Vui lòng nhập cron expression và task prompt', variant: 'destructive' })
+    if (!cronTaskPrompt.trim()) {
+      toast({ title: '❌ Thiếu nhiệm vụ', description: 'Vui lòng nhập nội dung tác vụ cần thực hiện', variant: 'destructive' })
       return
     }
+
+    // Dựng body — builder (lịch có cấu trúc) hoặc nâng cao (expression thô)
+    let schedule: CronScheduleConfig | null = null
+    if (!cronAdvanced) {
+      if (cronTimes.length === 0) {
+        toast({ title: '❌ Chưa chọn giờ', description: 'Chọn giờ + phút rồi bấm Thêm để thêm ít nhất 1 giờ thực thi', variant: 'destructive' })
+        return
+      }
+      if (cronMode === 'week' && cronDaysOfWeek.length === 0) {
+        toast({ title: '❌ Chưa chọn ngày trong tuần', description: 'Tích ít nhất 1 ngày trong tuần (T2–CN)', variant: 'destructive' })
+        return
+      }
+      if (cronMode === 'month' && cronDaysOfMonth.length === 0) {
+        toast({ title: '❌ Chưa chọn ngày trong tháng', description: 'Chọn ít nhất 1 ngày trong tháng (1–31)', variant: 'destructive' })
+        return
+      }
+      schedule = {
+        mode: cronMode,
+        times: [...cronTimes].sort(),
+        ...(cronMode === 'week' ? { daysOfWeek: [...cronDaysOfWeek].sort((a, b) => a - b) } : {}),
+        ...(cronMode === 'month' ? { daysOfMonth: [...cronDaysOfMonth].sort((a, b) => a - b) } : {}),
+        repeat: cronRepeat,
+      }
+    } else if (!cronExpression.trim()) {
+      toast({ title: '❌ Thiếu cron expression', description: 'Nhập cron expression (vd 0 9 * * 1-5) hoặc dùng trình dựng lịch', variant: 'destructive' })
+      return
+    }
+
     setCronSaving(true)
     try {
       const action = editingCron ? 'update-cron' : 'create-cron'
-      const body: Record<string, unknown> = { action, expression: cronExpression, taskPrompt: cronTaskPrompt, enabled: cronEnabled }
+      const body: Record<string, unknown> = {
+        action,
+        taskPrompt: cronTaskPrompt,
+        enabled: cronEnabled,
+        executor: cronExecutor,
+        ...(schedule ? { schedule } : { expression: cronExpression }),
+      }
       if (editingCron) body.id = editingCron.id
       const res = await fetch('/api/openclaw/automation', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -13282,12 +13360,15 @@ function AutomationTabContent() {
       })
       if (res.ok) {
         toast({ title: editingCron ? '✅ Đã cập nhật' : '✅ Đã tạo', description: 'Cron job đã được lưu' })
-        setShowCronEditor(false); setEditingCron(null); setCronExpression(''); setCronTaskPrompt(''); setCronEnabled(true)
+        setShowCronEditor(false); setEditingCron(null); setCronTaskPrompt(''); setCronEnabled(true)
+        setCronTimes([]); setCronDaysOfWeek([]); setCronDaysOfMonth([]); setCronRepeat(true)
+        setCronMode('day'); setCronAdvanced(false); setCronExpression(''); setCronExecutor('')
+        setCronHour(9); setCronMinute(0)
         loadCronJobs()
       } else { const d = await res.json(); toast({ title: '❌ Lỗi', description: d.error, variant: 'destructive' }) }
     } catch { toast({ title: '❌ Lỗi', description: 'Không thể lưu cron job', variant: 'destructive' }) }
     finally { setCronSaving(false) }
-  }, [editingCron, cronExpression, cronTaskPrompt, cronEnabled, loadCronJobs])
+  }, [editingCron, cronTaskPrompt, cronEnabled, cronExecutor, cronAdvanced, cronExpression, cronTimes, cronDaysOfWeek, cronDaysOfMonth, cronRepeat, cronMode, loadCronJobs])
 
   const deleteCron = useCallback(async (id: string) => {
     if (!confirm('Xóa cron job này?')) return
@@ -13335,11 +13416,32 @@ function AutomationTabContent() {
     } catch { toast({ title: '❌ Lỗi', variant: 'destructive' }) }
   }, [loadCronJobs, loadHistory])
 
-  const openCronEditor = useCallback((job?: NonNullable<typeof cronJobs>[number]) => {
+  const openCronEditor = useCallback((job?: CronJobItem) => {
     if (job) {
-      setEditingCron(job); setCronExpression(job.expression); setCronTaskPrompt(job.taskPrompt); setCronEnabled(job.enabled)
+      setEditingCron(job); setCronTaskPrompt(job.taskPrompt); setCronEnabled(job.enabled)
+      setCronExecutor(job.executor || '')
+      // Ưu tiên lịch có cấu trúc; job legacy → best-effort parse expression
+      let parsed: CronScheduleConfig | null = parseScheduleJson(job.scheduleJson)
+      if (!parsed) parsed = parseExpressionToSchedule(job.expression)
+      if (parsed) {
+        setCronAdvanced(false)
+        setCronMode(parsed.mode)
+        setCronTimes(parsed.times)
+        setCronDaysOfWeek(parsed.daysOfWeek ?? [])
+        setCronDaysOfMonth(parsed.daysOfMonth ?? [])
+        setCronRepeat(parsed.repeat)
+        const [h, m] = (parsed.times[0] || '09:00').split(':').map(Number)
+        setCronHour(Number.isFinite(h) ? h : 9); setCronMinute(Number.isFinite(m) ? m : 0)
+      } else {
+        // Expression phức tạp không dựng lại được → chế độ nâng cao
+        setCronAdvanced(true); setCronExpression(job.expression)
+        setCronMode('day'); setCronTimes([]); setCronDaysOfWeek([]); setCronDaysOfMonth([]); setCronRepeat(true)
+      }
     } else {
-      setEditingCron(null); setCronExpression(''); setCronTaskPrompt(''); setCronEnabled(true)
+      setEditingCron(null); setCronTaskPrompt(''); setCronEnabled(true); setCronExecutor('')
+      setCronAdvanced(false); setCronExpression('')
+      setCronMode('day'); setCronTimes([]); setCronDaysOfWeek([]); setCronDaysOfMonth([]); setCronRepeat(true)
+      setCronHour(9); setCronMinute(0)
     }
     setShowCronEditor(true)
   }, [])
@@ -13516,20 +13618,6 @@ function AutomationTabContent() {
     setFlowSteps(prev => prev.filter((_, i) => i !== idx))
   }, [])
 
-  // ─── Heartbeat Actions ───
-  const saveHeartbeat = useCallback(async () => {
-    setHeartbeatSaving(true)
-    try {
-      const res = await fetch('/api/openclaw/automation/heartbeat', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(heartbeat),
-      })
-      if (res.ok) { toast({ title: '✅ Heartbeat đã cập nhật' }) }
-      else { const d = await res.json(); toast({ title: '❌ Lỗi', description: d.error, variant: 'destructive' }) }
-    } catch { toast({ title: '❌ Lỗi', variant: 'destructive' }) }
-    finally { setHeartbeatSaving(false) }
-  }, [heartbeat])
-
   // ─── Standing Order Actions ───
   const addOrder = useCallback(async () => {
     if (!newOrder.trim()) return
@@ -13580,6 +13668,36 @@ function AutomationTabContent() {
   // Filter out heartbeat jobs from regular cron display
   const regularCronJobs = cronJobs?.filter(j => !j.expression.startsWith('heartbeat:')) || []
 
+  // CRON BUILDER: thêm giờ đang chọn vào danh sách giờ thực thi (nút Thêm)
+  const addCronTime = useCallback(() => {
+    const t = `${String(cronHour).padStart(2, '0')}:${String(cronMinute).padStart(2, '0')}`
+    setCronTimes(prev => (prev.includes(t) ? prev : [...prev, t].sort()))
+  }, [cronHour, cronMinute])
+
+  // Nhãn executor cho list row — team thì kèm tên TL điều phối
+  const cronExecutorLabel = (executor: string | null | undefined): string | null => {
+    const raw = (executor || '').trim()
+    if (!raw) return null
+    if (raw.startsWith('team:')) {
+      const team = raw.slice('team:'.length)
+      const tl = cronAgents?.find(a => a.team === team && a.position === 'TL')
+      return `Team ${team}${tl ? ` — ${tl.name} (TL)` : ''}`
+    }
+    return raw
+  }
+
+  // Teams cho executor selector — TL = agent có position 'TL'
+  const executorTeamOptions = useMemo(() => {
+    const teams = new Map<string, { team: string; tlName: string | null }>()
+    for (const a of cronAgents || []) {
+      if (!a.team) continue
+      const entry = teams.get(a.team) ?? { team: a.team, tlName: null }
+      if (a.position === 'TL' && !entry.tlName) entry.tlName = a.name
+      teams.set(a.team, entry)
+    }
+    return [...teams.values()]
+  }, [cronAgents])
+
   return (
     <div className="space-y-4 p-4 max-h-full overflow-y-auto">
 
@@ -13610,60 +13728,223 @@ function AutomationTabContent() {
             <div className="text-center py-8 text-stone-500 text-xs">Chưa có cron job nào. Nhấn &quot;Tạo Cron&quot; để bắt đầu.</div>
           ) : (
             <div className="space-y-2 max-h-64 overflow-y-auto">
-              {regularCronJobs.map(job => (
-                <div key={job.id} className="nc-wrap nc-orange-soft">
-                  <div className="nc-panel nc-sm nc-border-orange-soft p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <code className="text-xs text-orange-300 bg-orange-950/50 px-1.5 py-0.5 rounded font-mono">{job.expression}</code>
-                          <span className="text-[9px] text-orange-400/60">— {describeCronExpression(job.expression)}</span>
-                          <Badge className={`text-[9px] ${job.enabled ? 'bg-emerald-950/50 text-emerald-400' : 'bg-slate-800 text-stone-500'}`}>
-                            {job.enabled ? 'Active' : 'Paused'}
-                          </Badge>
+              {regularCronJobs.map(job => {
+                const sched = parseScheduleJson(job.scheduleJson)
+                const schedDesc = sched ? describeSchedule(sched) : describeCronExpression(job.expression)
+                const executorLbl = cronExecutorLabel(job.executor)
+                const isDone = !job.enabled && job.status === 'completed'
+                return (
+                  <div key={job.id} className="nc-wrap nc-orange-soft">
+                    <div className="nc-panel nc-sm nc-border-orange-soft p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                            {sched && (
+                              <Badge className="text-[9px] bg-orange-950/60 text-orange-400 border border-orange-500/25">{CRON_MODE_META[sched.mode].label}</Badge>
+                            )}
+                            <code className="text-xs text-orange-300 bg-orange-950/50 px-1.5 py-0.5 rounded font-mono">{job.expression}</code>
+                            {sched && (
+                              <Badge className={`text-[9px] inline-flex items-center gap-0.5 ${sched.repeat ? 'bg-amber-950/50 text-amber-400' : 'bg-slate-800 text-stone-400'}`}>
+                                {sched.repeat ? <RepeatIcon className="w-2.5 h-2.5" /> : null}
+                                {sched.repeat ? 'Lặp' : 'Một lần'}
+                              </Badge>
+                            )}
+                            {isDone ? (
+                              <Badge className="text-[9px] bg-cyan-950/50 text-cyan-400">Hoàn tất</Badge>
+                            ) : (
+                              <Badge className={`text-[9px] ${job.enabled ? 'bg-emerald-950/50 text-emerald-400' : 'bg-slate-800 text-stone-500'}`}>
+                                {job.enabled ? 'Active' : 'Paused'}
+                              </Badge>
+                            )}
+                            {executorLbl && (
+                              <Badge className="text-[9px] bg-violet-950/50 text-violet-300 inline-flex items-center gap-0.5">
+                                <Users className="w-2.5 h-2.5" /> {executorLbl}
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="text-xs text-stone-300 truncate">{job.taskPrompt}</p>
+                          <p className="text-[9px] text-orange-400/70 mt-0.5">— {schedDesc}</p>
+                          <div className="flex items-center gap-3 mt-1.5 text-[10px] text-stone-500">
+                            <span>Chạy cuối: {timeAgo(job.lastRunAt)}</span>
+                            {job.nextRunAt && <span>Tiếp: {new Date(job.nextRunAt).toLocaleString('vi-VN')}</span>}
+                          </div>
                         </div>
-                        <p className="text-xs text-stone-300 truncate">{job.taskPrompt}</p>
-                        <div className="flex items-center gap-3 mt-1.5 text-[10px] text-stone-500">
-                          <span>Chạy cuối: {timeAgo(job.lastRunAt)}</span>
-                          {job.nextRunAt && <span>Tiếp: {new Date(job.nextRunAt).toLocaleString('vi-VN')}</span>}
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-stone-400 hover:text-orange-400" onClick={() => runCronNow(job.id)} title="Chạy ngay">
+                            <Play className="w-3.5 h-3.5" />
+                          </Button>
+                          <Switch checked={job.enabled} onCheckedChange={(checked) => toggleCron(job.id, checked)} className="scale-75" />
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-stone-400 hover:text-orange-400" onClick={() => openCronEditor(job)} title="Sửa">
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-stone-400 hover:text-red-400" onClick={() => deleteCron(job.id)} title="Xóa">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-stone-400 hover:text-orange-400" onClick={() => runCronNow(job.id)} title="Chạy ngay">
-                          <Play className="w-3.5 h-3.5" />
-                        </Button>
-                        <Switch checked={job.enabled} onCheckedChange={(checked) => toggleCron(job.id, checked)} className="scale-75" />
-                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-stone-400 hover:text-orange-400" onClick={() => openCronEditor(job)} title="Sửa">
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </Button>
-                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-stone-400 hover:text-red-400" onClick={() => deleteCron(job.id)} title="Xóa">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
                       </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
 
-          {/* Cron Editor (inline) */}
+          {/* Cron Editor (inline) — CRON BUILDER: Ngày/Tuần/Tháng → giờ+phút
+              (nút Thêm) → Lặp → chọn Agent/Team thực thi (user request 2026-09-14) */}
           {showCronEditor && (
             <div className="mt-4 pt-4 border-t border-orange-400/35">
               <h4 className="text-xs font-semibold text-orange-300 mb-3">{editingCron ? '✏️ Sửa Cron Job' : '➕ Tạo Cron Job'}</h4>
               <div className="space-y-3">
-                <div>
-                  <label className="text-[10px] text-stone-400 uppercase tracking-wider mb-1 block">Cron Expression</label>
-                  <Input value={cronExpression} onChange={e => setCronExpression(e.target.value)} placeholder="0 9 * * *" className="h-8 text-xs font-mono bg-slate-950/60 border-orange-400/35 text-stone-200" />
-                  {cronExpression && <p className="text-[9px] text-orange-400/70 mt-1">{describeCronExpression(cronExpression)}</p>}
-                  <div className="flex flex-wrap gap-1 mt-1.5">
-                    {CRON_PRESETS.map(p => (
-                      <Button key={p.expression} size="sm" variant="outline" className="h-6 text-[9px] text-orange-400 border-orange-400/35 hover:bg-orange-500/10" onClick={() => setCronExpression(p.expression)}>
-                        {p.label}
-                      </Button>
-                    ))}
+
+                {!cronAdvanced ? (
+                  <>
+                    {/* Bước 1: Nút chọn kiểu lịch */}
+                    <div>
+                      <label className="text-[10px] text-stone-400 uppercase tracking-wider mb-1.5 block">Kiểu lịch</label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(['day', 'week', 'month'] as const).map(m => (
+                          <Button key={m} size="sm" variant={cronMode === m ? 'default' : 'outline'}
+                            className={`h-8 text-xs ${cronMode === m ? 'bg-orange-500 text-white' : 'text-orange-400 border-orange-400/35 hover:bg-orange-500/10'}`}
+                            onClick={() => setCronMode(m)}>
+                            <CalendarDays className="w-3.5 h-3.5 mr-1" /> {CRON_MODE_META[m].label}
+                          </Button>
+                        ))}
+                      </div>
+                      <p className="text-[9px] text-stone-500 mt-1">
+                        {cronMode === 'day' ? 'Chọn giờ thực thi trong ngày — bật Lặp để chạy hàng ngày' : cronMode === 'week' ? 'Tích các ngày trong tuần, rồi chọn giờ thực thi' : 'Chọn các ngày trong tháng, rồi chọn giờ thực thi'}
+                      </p>
+                    </div>
+
+                    {/* Bước 2a: Tuần — tích các ngày trong tuần */}
+                    {cronMode === 'week' && (
+                      <div>
+                        <label className="text-[10px] text-stone-400 uppercase tracking-wider mb-1.5 block">Các ngày trong tuần</label>
+                        <div className="flex flex-wrap gap-1">
+                          {DOW_ORDER_UI.map(d => (
+                            <button key={d} type="button" aria-pressed={cronDaysOfWeek.includes(d)}
+                              className={`h-8 min-w-[40px] px-1 rounded-md border text-xs font-medium transition-colors ${cronDaysOfWeek.includes(d) ? 'bg-orange-500 text-white border-orange-500' : 'bg-slate-950/60 text-orange-400 border-orange-400/35 hover:bg-orange-500/10'}`}
+                              onClick={() => setCronDaysOfWeek(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d])}>
+                              {DOW_LABELS_VI[d]}
+                            </button>
+                          ))}
+                        </div>
+                        {cronDaysOfWeek.length > 0 && <p className="text-[9px] text-orange-400/70 mt-1">Đã chọn {cronDaysOfWeek.length} ngày trong tuần</p>}
+                      </div>
+                    )}
+
+                    {/* Bước 2b: Tháng — chọn các ngày trong tháng */}
+                    {cronMode === 'month' && (
+                      <div>
+                        <label className="text-[10px] text-stone-400 uppercase tracking-wider mb-1.5 block">Các ngày trong tháng</label>
+                        <div className="grid grid-cols-8 sm:grid-cols-10 gap-1">
+                          {Array.from({ length: 31 }, (_, i) => i + 1).map(d => (
+                            <button key={d} type="button" aria-pressed={cronDaysOfMonth.includes(d)}
+                              className={`h-7 rounded border text-[10px] font-medium transition-colors ${cronDaysOfMonth.includes(d) ? 'bg-orange-500 text-white border-orange-500' : 'bg-slate-950/60 text-orange-400 border-orange-400/30 hover:bg-orange-500/10'}`}
+                              onClick={() => setCronDaysOfMonth(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d])}>
+                              {d}
+                            </button>
+                          ))}
+                        </div>
+                        {cronDaysOfMonth.length > 0 && <p className="text-[9px] text-orange-400/70 mt-1">Đã chọn {cronDaysOfMonth.length} ngày (tháng không đủ ngày 29–31 sẽ tự nhảy tháng kế tiếp)</p>}
+                      </div>
+                    )}
+
+                    {/* Bước 3: Chọn giờ + phút, nút Thêm để thêm giờ thực thi */}
+                    <div>
+                      <label className="text-[10px] text-stone-400 uppercase tracking-wider mb-1.5 block">Giờ thực thi</label>
+                      <div className="flex items-center gap-2">
+                        <Select value={String(cronHour)} onValueChange={v => setCronHour(parseInt(v, 10))}>
+                          <SelectTrigger className="h-8 w-[86px] text-xs bg-slate-950/60 border-orange-400/35 text-stone-200" aria-label="Chọn giờ">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="max-h-64">
+                            {Array.from({ length: 24 }, (_, h) => (
+                              <SelectItem key={h} value={String(h)} className="text-xs">Giờ {String(h).padStart(2, '0')}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <span className="text-stone-500 text-xs">:</span>
+                        <Select value={String(cronMinute)} onValueChange={v => setCronMinute(parseInt(v, 10))}>
+                          <SelectTrigger className="h-8 w-[94px] text-xs bg-slate-950/60 border-orange-400/35 text-stone-200" aria-label="Chọn phút">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="max-h-64">
+                            {Array.from({ length: 60 }, (_, m) => (
+                              <SelectItem key={m} value={String(m)} className="text-xs">Phút {String(m).padStart(2, '0')}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button size="sm" className="h-8 bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white text-xs" onClick={addCronTime}>
+                          <Plus className="w-3.5 h-3.5 mr-1" /> Thêm
+                        </Button>
+                      </div>
+                      {cronTimes.length > 0 ? (
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {cronTimes.map(t => (
+                            <button key={t} type="button" title="Bấm để bỏ giờ này"
+                              className="inline-flex items-center gap-1 h-6 px-2 rounded-full bg-orange-500/15 border border-orange-500/35 text-orange-300 text-[10px] font-mono hover:bg-orange-500/25 transition-colors"
+                              onClick={() => setCronTimes(prev => prev.filter(x => x !== t))}>
+                              <Timer className="w-3 h-3" /> {t} <X className="w-3 h-3 text-orange-400/60" />
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[9px] text-stone-500 mt-1.5">Chưa có giờ nào — chọn giờ + phút rồi bấm Thêm (thêm được nhiều giờ thực thi)</p>
+                      )}
+                    </div>
+
+                    {/* Bước 4: Nút Lặp bật/tắt */}
+                    <div className="flex items-start justify-between gap-3 p-2.5 rounded-lg bg-orange-950/20 border border-orange-500/10">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <RepeatIcon className={`w-4 h-4 ${cronRepeat ? 'text-orange-400' : 'text-stone-500'}`} />
+                          <span className="text-xs text-stone-200 font-medium">Lặp</span>
+                          <Switch checked={cronRepeat} onCheckedChange={setCronRepeat} className="data-[state=checked]:bg-orange-500" aria-label="Bật/tắt lặp lại" />
+                        </div>
+                        <p className="text-[9px] text-stone-500 mt-1">{cronRepeatHint(cronMode, cronRepeat)}</p>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  /* Nâng cao — cron expression thô (job legacy / power user) */
+                  <div>
+                    <label className="text-[10px] text-stone-400 uppercase tracking-wider mb-1 block">Cron Expression (nâng cao)</label>
+                    <Input value={cronExpression} onChange={e => setCronExpression(e.target.value)} placeholder="0 9 * * *" className="h-8 text-xs font-mono bg-slate-950/60 border-orange-400/35 text-stone-200" />
+                    {cronExpression && <p className="text-[9px] text-orange-400/70 mt-1">{describeCronExpression(cronExpression)}</p>}
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {CRON_PRESETS.map(p => (
+                        <Button key={p.expression} size="sm" variant="outline" className="h-6 text-[9px] text-orange-400 border-orange-400/35 hover:bg-orange-500/10" onClick={() => setCronExpression(p.expression)}>
+                          {p.label}
+                        </Button>
+                      ))}
+                    </div>
                   </div>
+                )}
+
+                {/* Chọn Agent hoặc Team agents thực thi tác vụ */}
+                <div>
+                  <label className="text-[10px] text-stone-400 uppercase tracking-wider mb-1.5 block">Agent thực thi tác vụ</label>
+                  <Select value={cronExecutor || '__default__'} onValueChange={v => setCronExecutor(v === '__default__' ? '' : v)}>
+                    <SelectTrigger className="h-8 text-xs bg-slate-950/60 border-orange-400/35 text-stone-200">
+                      <SelectValue placeholder="Chọn agent hoặc team" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__default__" className="text-xs">⚙️ Automation Agent (mặc định)</SelectItem>
+                      {(cronAgents || []).map(a => (
+                        <SelectItem key={a.name} value={a.name} className="text-xs">
+                          {a.avatar || '🤖'} {a.name}{a.team ? ` — ${a.position || 'member'} Team ${a.team}` : ' — agent độc lập'}
+                        </SelectItem>
+                      ))}
+                      {executorTeamOptions.map(t => (
+                        <SelectItem key={`team:${t.team}`} value={`team:${t.team}`} className="text-xs">
+                          👥 Team {t.team}{t.tlName ? ` — ${t.tlName} (TL điều phối)` : ' (chưa có TL)'}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[9px] text-stone-500 mt-1">Chọn 1 agent riêng — hoặc chọn team: TL (Team Leader) của team đó sẽ là agent điều phối triển khai toàn bộ tác vụ</p>
                 </div>
+
                 <div>
                   <label className="text-[10px] text-stone-400 uppercase tracking-wider mb-1 block">Task Prompt</label>
                   <textarea value={cronTaskPrompt} onChange={e => setCronTaskPrompt(e.target.value)} placeholder="Tóm tắt tin tức mỗi sáng..." rows={3} className="w-full text-xs bg-slate-950/60 border border-orange-400/35 rounded-md px-3 py-2 text-stone-200 focus:outline-none focus:border-orange-500/40 resize-none" />
@@ -13672,6 +13953,12 @@ function AutomationTabContent() {
                   <label className="text-[10px] text-stone-400 uppercase tracking-wider">Bật ngay</label>
                   <Switch checked={cronEnabled} onCheckedChange={setCronEnabled} className="data-[state=checked]:bg-orange-500" />
                 </div>
+
+                <button type="button" className="text-[10px] text-orange-400/70 hover:text-orange-300 underline underline-offset-2"
+                  onClick={() => setCronAdvanced(prev => !prev)}>
+                  {cronAdvanced ? '← Quay lại trình dựng lịch (Ngày / Tuần / Tháng)' : 'Nâng cao: nhập cron expression thô →'}
+                </button>
+
                 <div className="flex gap-2">
                   <Button size="sm" className="bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white text-xs" onClick={saveCron} disabled={cronSaving}>
                     {cronSaving ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : null} {editingCron ? 'Cập nhật' : 'Tạo'}
@@ -13684,49 +13971,7 @@ function AutomationTabContent() {
         </div>
       </div>
 
-      {/* Section 2: Heartbeat Config */}
-      <div className="nc-wrap nc-orange">
-        <div className="nc-panel nc-md nc-border-orange p-4">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <Activity className="w-5 h-5 text-orange-400" />
-              <h3 className="text-sm font-semibold text-orange-300 uppercase tracking-wider">Heartbeat</h3>
-              <Badge className={`text-[9px] ${heartbeat.enabled ? 'bg-emerald-950/50 text-emerald-400' : 'bg-slate-800 text-stone-500'}`}>
-                {heartbeat.enabled ? 'Active' : 'Inactive'}
-              </Badge>
-            </div>
-          </div>
-          <div className="space-y-3">
-            <div>
-              <label className="text-[10px] text-stone-400 uppercase tracking-wider mb-1 block">Interval</label>
-              <div className="flex flex-wrap gap-1.5">
-                {HEARTBEAT_INTERVALS.map(iv => (
-                  <Button key={iv} size="sm" variant={heartbeat.interval === iv ? 'default' : 'outline'}
-                    className={`h-7 text-xs ${heartbeat.interval === iv ? 'bg-orange-500 text-white' : 'text-orange-400 border-orange-400/35 hover:bg-orange-500/10'}`}
-                    onClick={() => setHeartbeat(prev => ({ ...prev, interval: iv }))}>
-                    {iv}
-                  </Button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <label className="text-[10px] text-stone-400 uppercase tracking-wider mb-1 block">Action Prompt</label>
-              <Input value={heartbeat.actionPrompt} onChange={e => setHeartbeat(prev => ({ ...prev, actionPrompt: e.target.value }))}
-                className="h-8 text-xs bg-slate-950/60 border-orange-400/35 text-stone-200" />
-            </div>
-            <div className="flex items-center gap-3">
-              <Switch checked={heartbeat.enabled} onCheckedChange={(checked) => setHeartbeat(prev => ({ ...prev, enabled: checked }))}
-                className="data-[state=checked]:bg-orange-500" />
-              <span className="text-xs text-stone-400">{heartbeat.enabled ? 'Đang hoạt động' : 'Đã tắt'}</span>
-            </div>
-            <Button size="sm" className="bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white text-xs" onClick={saveHeartbeat} disabled={heartbeatSaving}>
-              {heartbeatSaving ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : null} Lưu Heartbeat
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      {/* Section 3: Webhooks */}
+      {/* Section 2: Webhooks */}
       <div className="nc-wrap nc-orange">
         <div className="nc-panel nc-md nc-border-orange p-4">
           <div className="flex items-center justify-between mb-4">
@@ -14190,7 +14435,7 @@ function AutomationTabContent() {
           <div className="mt-3 flex flex-wrap gap-2">
             <Badge className="text-[9px] bg-orange-950/50 text-orange-400 border border-orange-400/35">Cron Jobs: {regularCronJobs.length}</Badge>
             <Badge className="text-[9px] bg-blue-950/50 text-blue-400 border border-blue-400/35">Webhooks: {webhooks?.length || 0}</Badge>
-            <Badge className="text-[9px] bg-emerald-950/50 text-emerald-400 border border-emerald-400/35">Heartbeat: {heartbeat.enabled ? heartbeat.interval : 'Off'}</Badge>
+            <Badge className="text-[9px] bg-emerald-950/50 text-emerald-400 border border-emerald-400/35">Task Flows: {flows?.length || 0}</Badge>
             <Badge className="text-[9px] bg-amber-950/50 text-amber-400 border border-amber-400/35">Orders: {orders?.length || 0}</Badge>
             <Badge className="text-[9px] bg-slate-800 text-stone-400 border border-stone-600">Executions: {history?.length || 0}</Badge>
           </div>

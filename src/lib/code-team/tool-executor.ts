@@ -27,6 +27,7 @@
 import { getAgentTools } from './agents'
 import { tavilyKeyPool, jinaKeyPool, serperKeyPool } from '@/lib/service-key-pool'
 import { ensureTmoApiToken } from '@/lib/tmo-token'
+import type { CronScheduleConfig } from '@/lib/cron-schedule'
 // Agent Activity Log — mọi tool call được echo vào ô Terminal (user request 2026-08-27)
 import { recordAgentActivity } from '@/lib/agent-activity-log'
 // Agent Run Tracker — Thought Process + Todos + Progress trong chat
@@ -1650,7 +1651,9 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       name: 'manage_automation',
       description:
         'QUẢN LÝ TỰ ĐỘNG HÓA của module Smolab > Automation (CHỈ Omega có quyền mặc định). ' +
-        'Actions: (1) create_cron {expression, taskPrompt} — cron job chạy theo lịch (expression vd "*/5 * * * *" hoặc "0 9 * * 1-5"); ' +
+        'Actions: (1) create_cron {taskPrompt, schedule?, expression?, executor?} — cron job theo lịch DỰNG SẴN qua schedule {mode:"day"|"week"|"month", times:["09:30","14:00"], daysOfWeek?:[1,3], daysOfMonth?:[1,15], repeat:true|false} ' +
+        '(day+lặp=hàng ngày vào các giờ đó; week+lặp=hàng tuần vào các ngày+giờ đó; month+lặp=hàng tháng; repeat=false → chạy ĐÚNG 1 LẦN; KHÔNG có schedule thì dùng expression thô vd "*/5 * * * *"); ' +
+        'executor = agent thực thi: "" (Automation Agent mặc định) | tên agent vd "BOLT" | "team:code" (TL của team đó sẽ là agent ĐIỀU PHỐI TRIỂN KHAI TOÀN BỘ tác vụ); ' +
         '(2) list_cron; (3) toggle_cron {id, enabled}; (4) delete_cron {id}; ' +
         '(5) create_webhook {url, events[], secret?} — đăng ký endpoint nhận sự kiện (HTTPS công khai); (6) list_webhooks; (7) delete_webhook {id}; ' +
         '(8) add_standing_order {order, priority?} — chỉ thị thường trực inject vào mọi automation runs; (9) list_standing_orders; (10) delete_standing_order {id}; ' +
@@ -1671,9 +1674,22 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
             ],
             description: 'Hành động automation',
           },
-          // cron
-          expression: { type: 'string', description: '(create_cron) Cron expression, vd "*/5 * * * *" (mỗi 5 phút), "0 9 * * 1-5" (9h sáng thứ 2-6)' },
+          // cron — lịch có cấu trúc (KHUYẾN KHÍCH, user request 2026-09-14)
+          schedule: {
+            type: 'object',
+            description: '(create_cron) Lịch có cấu trúc — dùng THAY cho expression thô: {mode:"day"|"week"|"month", times:["09:30","14:00"], daysOfWeek:[1,3] (0=CN..6=T7, mode week), daysOfMonth:[1,15] (1-31, mode month), repeat:true|false}. ' +
+              'Vd hàng tuần thứ 2+4 lúc 9:00 và 14:30: {mode:"week", times:["09:00","14:30"], daysOfWeek:[1,3], repeat:true}. Vs repeat=false → chạy đúng 1 lần.',
+            properties: {
+              mode: { type: 'string', enum: ['day', 'week', 'month'], description: 'Kiểu lịch: Ngày / Tuần / Tháng' },
+              times: { type: 'array', items: { type: 'string' }, description: 'Các giờ thực thi "HH:mm", vd ["09:30","14:00"]' },
+              daysOfWeek: { type: 'array', items: { type: 'number' }, description: '(mode=week) Thứ trong tuần 0=CN..6=T7, vd [1,3] = T2+T4' },
+              daysOfMonth: { type: 'array', items: { type: 'number' }, description: '(mode=month) Ngày trong tháng 1-31, vd [1,15]' },
+              repeat: { type: 'boolean', description: 'true=lặp lại theo chu kỳ (hàng ngày/tuần/tháng), false=chạy đúng 1 lần' },
+            },
+          },
+          expression: { type: 'string', description: '(create_cron — legacy) Cron expression thô khi KHÔNG dùng schedule, vd "*/5 * * * *". Ưu tiên dùng tham số schedule.' },
           taskPrompt: { type: 'string', description: '(create_cron) Nhiệm vụ LLM chạy theo lịch (tiếng Việt, cụ thể)' },
+          executor: { type: 'string', description: '(create_cron) Agent thực thi tác vụ: ""/bỏ = Automation Agent mặc định | tên agent vd "BOLT" | "team:code" — TL (Team Leader) của team sẽ điều phối triển khai toàn bộ tác vụ cho team đó' },
           // webhook
           url: { type: 'string', description: '(create_webhook) URL đích HTTPS công khai' },
           events: { type: 'array', items: { type: 'string' }, description: '(create_webhook) Event đăng ký, vd ["document.uploaded","query.completed"] hoặc ["*"]' },
@@ -1710,7 +1726,8 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           payload: {
             type: 'object',
             description:
-              'Nội dung theo kind: cron={expression:"0 9 * * 1-5", taskPrompt:"nhiệm vụ..."} | webhook={url:"https://...", events:["document.uploaded"]} | ' +
+              'Nội dung theo kind: cron={taskPrompt, schedule:{mode:"day"|"week"|"month", times:["09:30"], daysOfWeek?:[1,3], daysOfMonth?:[1,15], repeat:true|false}, executor?:""|"BOLT"|"team:code"} (schedule KHUYẾN KHÍCH — hoặc expression:"0 9 * * 1-5" nếu đặc biệt; executor=agent thực thi, "team:xxx" → TL điều phối toàn bộ tác vụ) | ' +
+              'webhook={url:"https://...", events:["document.uploaded"]} | ' +
               'standing_order={order:"chỉ thị...", priority:50} | task_flow={name:"...", description:"...", steps:[{type:"trigger",config:{kind:"cron",expression:"..."}},{type:"action",config:{kind:"agent_task",taskPrompt:"..."}}]}',
           },
           reason: { type: 'string', description: 'Lý do cần automation này (cụ thể — Omega và người duyệt đọc lý do này)' },
@@ -3414,32 +3431,71 @@ async function executeManageAutomation(
   const action = String(args.action ?? '')
   const dbMod = await import('@/lib/db')
   const db = dbMod.db
-  const { approximateNextRun, validateWebhookUrl } = await import('@/lib/automation-engine')
+  const {
+    approximateNextRun,
+    validateWebhookUrl,
+    validateAutomationExecutor,
+  } = await import('@/lib/automation-engine')
+  // CRON BUILDER (user request 2026-09-14): lịch có cấu trúc + executor
+  const {
+    validateCronSchedule,
+    nextRunFromSchedule,
+    scheduleToRepresentativeExpression,
+    describeSchedule,
+    parseScheduleJson,
+  } = await import('@/lib/cron-schedule')
   const AGENT_ID = 'default'
   const actor = context?.agentName || 'Omega'
 
   // ── Cron Jobs ──────────────────────────────────────────────────────────
   if (action === 'create_cron') {
-    const expression = String(args.expression ?? '').trim()
     const taskPrompt = String(args.taskPrompt ?? '').trim()
-    if (!expression || !taskPrompt) {
-      return { success: false, error: 'create_cron cần {expression, taskPrompt} — vd expression "0 9 * * 1-5"' }
+    if (!taskPrompt) {
+      return { success: false, error: 'create_cron cần {taskPrompt} + (schedule {mode,times,...} HOẶC expression)' }
     }
+    // Lịch có cấu trúc (KHUYẾN KHÍCH) — validate toàn bộ (dữ liệu LLM không tin)
+    let scheduleCfg: CronScheduleConfig | null = null
+    if (args.schedule !== undefined && args.schedule !== null) {
+      const v = validateCronSchedule(args.schedule)
+      if (!v.ok) return { success: false, error: `schedule không hợp lệ: ${v.error}` }
+      scheduleCfg = v.data
+    }
+    const expression = String(args.expression ?? '').trim()
+    if (!scheduleCfg && !expression) {
+      return { success: false, error: 'create_cron cần schedule {mode:"day"|"week"|"month", times:["09:30"], daysOfWeek?, daysOfMonth?, repeat} HOẶC expression (vd "0 9 * * 1-5")' }
+    }
+    // Executor: '' (mặc định) | agent | 'team:xxx' (TL điều phối)
+    const executorRaw = String(args.executor ?? '').trim()
+    const executorCheck = await validateAutomationExecutor(executorRaw)
+    if (!executorCheck.ok) {
+      return { success: false, error: `executor không hợp lệ: ${executorCheck.error}` }
+    }
+    const finalExpression = scheduleCfg ? scheduleToRepresentativeExpression(scheduleCfg) : expression
     const job = await db.cronJob.create({
       data: {
         agentId: AGENT_ID,
-        expression: expression.slice(0, 100),
+        expression: finalExpression.slice(0, 100),
         taskPrompt: taskPrompt.slice(0, 3000),
         enabled: true,
-        nextRunAt: approximateNextRun(expression),
+        nextRunAt: scheduleCfg ? nextRunFromSchedule(scheduleCfg) : approximateNextRun(expression),
+        scheduleJson: scheduleCfg ? JSON.stringify(scheduleCfg) : null,
+        executor: executorCheck.value,
       },
     })
+    const schedDesc = scheduleCfg ? describeSchedule(scheduleCfg) : `expression ${finalExpression}`
+    const execDesc = executorCheck.value
+      ? (executorCheck.value.startsWith('team:')
+        ? `Team "${executorCheck.value.slice(5)}" — TL (Team Leader) điều phối triển khai toàn bộ tác vụ`
+        : `Agent ${executorCheck.value}`)
+      : 'Automation Agent (mặc định)'
     return {
       success: true,
       jobId: job.id,
       expression: job.expression,
+      schedule: schedDesc,
+      executor: execDesc,
       nextRunAt: job.nextRunAt?.toISOString() ?? null,
-      message: `Đã tạo cron job "${taskPrompt.slice(0, 80)}" (lịch ${expression}) — hiển thị trong Smolab > Automation, scheduler tự chạy theo lịch.`,
+      message: `Đã tạo cron job "${taskPrompt.slice(0, 80)}" — lịch: ${schedDesc} — thực thi bởi ${execDesc} — hiển thị trong Smolab > Automation, scheduler tự chạy theo lịch.`,
     }
   }
   if (action === 'list_cron') {
@@ -3447,16 +3503,22 @@ async function executeManageAutomation(
       where: { agentId: AGENT_ID },
       orderBy: { createdAt: 'desc' },
       take: 50,
-      select: { id: true, expression: true, taskPrompt: true, enabled: true, lastRunAt: true, nextRunAt: true, status: true },
+      select: { id: true, expression: true, taskPrompt: true, enabled: true, lastRunAt: true, nextRunAt: true, status: true, scheduleJson: true, executor: true },
     })
     return {
       success: true,
       count: jobs.length,
-      jobs: jobs.map(j => ({
-        id: j.id, expression: j.expression, task: j.taskPrompt.slice(0, 120),
-        enabled: j.enabled, status: j.status,
-        lastRunAt: j.lastRunAt?.toISOString() ?? null, nextRunAt: j.nextRunAt?.toISOString() ?? null,
-      })),
+      jobs: jobs.map(j => {
+        const sched = parseScheduleJson(j.scheduleJson)
+        return {
+          id: j.id, expression: j.expression,
+          schedule: sched ? describeSchedule(sched) : null,
+          executor: j.executor || 'Automation Agent (mặc định)',
+          task: j.taskPrompt.slice(0, 120),
+          enabled: j.enabled, status: j.status,
+          lastRunAt: j.lastRunAt?.toISOString() ?? null, nextRunAt: j.nextRunAt?.toISOString() ?? null,
+        }
+      }),
     }
   }
   if (action === 'toggle_cron') {
@@ -3465,11 +3527,19 @@ async function executeManageAutomation(
     if (!id) return { success: false, error: 'toggle_cron cần {id, enabled}' }
     const existing = await db.cronJob.findUnique({ where: { id } })
     if (!existing) return { success: false, error: `Cron job ${id} không tồn tại` }
+    // Bật lại → re-arm nextRunAt (ưu tiên lịch có cấu trúc; job one-time đã
+    // hoàn tất được kích hoạt lại thành active + nextRun mới)
+    const sched = parseScheduleJson(existing.scheduleJson)
     const updated = await db.cronJob.update({
       where: { id },
-      data: { enabled, ...(enabled ? { nextRunAt: approximateNextRun(existing.expression) } : {}) },
+      data: {
+        enabled,
+        ...(enabled
+          ? { nextRunAt: sched ? nextRunFromSchedule(sched) : approximateNextRun(existing.expression), status: 'active' }
+          : {}),
+      },
     })
-    return { success: true, jobId: id, enabled: updated.enabled, message: `Cron job "${updated.taskPrompt.slice(0, 60)}" ${enabled ? 'ĐÃ BẬT' : 'ĐÃ TẮT'}.` }
+    return { success: true, jobId: id, enabled: updated.enabled, message: `Cron job "${updated.taskPrompt.slice(0, 60)}" ${enabled ? 'ĐÃ BẬT' : 'ĐÃ TẮT'}.${enabled ? ` Chạy kế tiếp: ${updated.nextRunAt?.toISOString() ?? 'không xác định'}` : ''}` }
   }
   if (action === 'delete_cron') {
     const id = String(args.id ?? '')

@@ -12,8 +12,16 @@
  */
 
 import { db } from '@/lib/db'
-import { callLLM } from '@/lib/llm'
+import { callLLM, callLLMForAgent } from '@/lib/llm'
 import { createHmac } from 'crypto'
+// CRON BUILDER (user request 2026-09-14): lịch có cấu trúc + executor
+import {
+  parseScheduleJson,
+  nextRunFromSchedule,
+  describeSchedule,
+  parseExecutor,
+  type CronScheduleConfig,
+} from '@/lib/cron-schedule'
 
 const AGENT_ID = 'default'
 
@@ -216,6 +224,163 @@ export async function getActiveStandingOrders(): Promise<Array<{ order: string; 
  * Records the execution in TaskExecution with real results.
  * Uses concurrency guard to prevent double execution.
  */
+// ─── Executor Resolution (user request 2026-09-14) ────────────────────────────
+// CronJob.executor: '' (Automation Agent mặc định) | 'BOLT' (agent cụ thể) |
+// 'team:code' (TEAM — TL là agent điều phối triển khai toàn bộ tác vụ)
+
+interface ExecutorContext {
+  /** Nhãn hiển thị trong TaskExecution/kết quả */
+  label: string
+  /** null → chạy bằng callLLM generic ( Automation Agent mặc định) */
+  brain: { provider: string; model: string } | null
+  systemPrompt: string
+  temperature?: number
+  maxTokens?: number
+  /** Ghi chú khi executor không resolve được → fallback generic */
+  fallbackNote?: string
+}
+
+const AUTOMATION_EXECUTOR_MAX_TOKENS = 2500
+
+async function resolveExecutorContext(
+  executor: string,
+  ctx: { taskPrompt: string; scheduleDesc: string; standingOrdersCtx: string },
+): Promise<ExecutorContext> {
+  const parsed = parseExecutor(executor)
+
+  // Mặc định — Automation Agent generic (giữ nguyên hành vi cũ)
+  if (parsed.type === 'default') {
+    return { label: 'Automation Agent (mặc định)', brain: null, systemPrompt: '' }
+  }
+
+  // Agent cụ thể thực thi — persona từ AgentProfile
+  if (parsed.type === 'agent') {
+    const profile = await db.agentProfile.findUnique({ where: { name: parsed.value } })
+    if (!profile || !profile.enabled) {
+      return {
+        label: 'Automation Agent (mặc định)',
+        brain: null,
+        systemPrompt: '',
+        fallbackNote: `(Lưu ý: executor agent "${parsed.value}" không tồn tại hoặc đã tắt — fallback về Automation Agent mặc định. Nên kiểm tra lại danh sách agents.)`,
+      }
+    }
+    const instruction = profile.instruction.slice(0, 3000)
+    const systemPrompt = `Bạn là ${profile.name} — agent thực thi tác vụ định kỳ của hệ thống Magnum Opus.
+Vai trò: ${profile.description}
+Khả năng: ${profile.capable}
+${instruction ? `Hướng dẫn vận hành (trích):\n${instruction}\n` : ''}
+TÁC VỤ ĐỊNH KỲ PHÂN CÔNG CHO BẠN: "${ctx.taskPrompt}"
+Lịch: ${ctx.scheduleDesc}
+Thời điểm: ${new Date().toISOString()}
+${ctx.standingOrdersCtx}
+
+Thực thi tác vụ TRONG PHẠM VI chuyên môn của bạn. Báo cáo ngắn gọn những gì bạn đã kiểm tra, tìm thấy hoặc làm. Trung thực và cụ thể.`
+    return {
+      label: profile.name,
+      brain: { provider: profile.provider, model: profile.model },
+      systemPrompt,
+      temperature: Math.min(Math.max(profile.temperature, 0), 2),
+      maxTokens: Math.min(profile.maxTokens || 4096, AUTOMATION_EXECUTOR_MAX_TOKENS),
+    }
+  }
+
+  // TEAM thực thi — TL (Team Leader) là agent điều phối triển khai TOÀN BỘ tác vụ
+  const teamName = parsed.value
+  const members = await db.agentProfile.findMany({
+    where: { team: teamName, enabled: true },
+    orderBy: [{ position: 'asc' }],
+  })
+  const tl = members.find(m => m.position === 'TL')
+  if (!tl || members.length === 0) {
+    return {
+      label: 'Automation Agent (mặc định)',
+      brain: null,
+      systemPrompt: '',
+      fallbackNote: `(Lưu ý: team "${teamName}" không có Team Leader (TL) đang bật — fallback về Automation Agent mặc định. Team cần ít nhất 1 agent vị trí TL để điều phối.)`,
+    }
+  }
+  const roster = members
+    .map(m => `- ${m.name} (${m.position || 'member'}): ${m.capable.slice(0, 120)}`)
+    .join('\n')
+  const instruction = tl.instruction.slice(0, 3000)
+  const systemPrompt = `Bạn là ${tl.name} — Team Leader (TL) của Team "${teamName}" trong hệ thống Magnum Opus.
+Vai trò: ${tl.description}
+${instruction ? `Hướng dẫn vận hành (trích):\n${instruction}\n` : ''}
+TÁC VỤ ĐỊNH KỲ NÀY ĐƯỢC GIAO CHO TOÀN TEAM CỦA BẠN: "${ctx.taskPrompt}"
+Lịch: ${ctx.scheduleDesc}
+Thời điểm: ${new Date().toISOString()}
+
+THÀNH VIÊN TEAM:
+${roster}
+${ctx.standingOrdersCtx}
+
+BẠN (TL) LÀ AGENT ĐIỀU PHỐI TRIỂN KHAI TOÀN BỘ TÁC VỤ:
+1. Phân tích tác vụ và xác định những việc cần làm.
+2. Lên kế hoạch phân công cho từng thành viên team phù hợp chuyên môn (nêu rõ ai làm gì).
+3. Với mỗi phần việc, mô tả cách triển khai và kết quả mong đợi (giả lập việc giao — không gọi tools ngoài lệnh này).
+4. Tổng hợp KẾT QUẢ CUỐI CÙNG của tác vụ (như báo cáo điều phối viên nộp về hệ thống).
+
+Trả lời ngắn gọn theo cấu trúc: Kế hoạch → Phân công → Triển khai → Kết quả cuối cùng.`
+  return {
+    label: `Team ${teamName} · ${tl.name} (TL điều phối)`,
+    brain: { provider: tl.provider, model: tl.model },
+    systemPrompt,
+    temperature: Math.min(Math.max(tl.temperature, 0), 2),
+    maxTokens: Math.min(tl.maxTokens || 4096, AUTOMATION_EXECUTOR_MAX_TOKENS),
+  }
+}
+
+/**
+ * Dữ liệu cập nhật CronJob sau mỗi lần chạy:
+ * - Lịch có cấu trúc + Lặp BẬT → nextRunAt = lần khớp lịch kế tiếp
+ * - Lịch có cấu trúc + Lặp TẮT (one-time) → job HOÀN TẤT: tắt + status completed
+ *   (nextRunAt=null → scheduler không chạy lại; chạy cả khi LLM fail để không
+ *   retry mãi một tác vụ một-lần)
+ * - Legacy (expression thô) → approximateNextRun như cũ
+ */
+function cronJobPostRunData(
+  _jobId: string,
+  schedule: CronScheduleConfig | null,
+  expression: string,
+): { lastRunAt: Date; nextRunAt: Date | null; enabled?: boolean; status?: string } {
+  const now = new Date()
+  if (schedule) {
+    if (schedule.repeat) {
+      return { lastRunAt: now, nextRunAt: nextRunFromSchedule(schedule, now) ?? null }
+    }
+    return { lastRunAt: now, nextRunAt: null, enabled: false, status: 'completed' }
+  }
+  return { lastRunAt: now, nextRunAt: approximateNextRun(expression) }
+}
+
+/**
+ * Validate executor của CronJob (dùng chung cho API route + tool manage_automation
+ * + automation proposals — dữ liệu đầu vào KHÔNG tin, kiểm tra DB thật):
+ *   ''            → Automation Agent mặc định (luôn hợp lệ)
+ *   'BOLT'        → phải là AgentProfile đang bật
+ *   'team:code'   → team phải có agent vị trí TL đang bật (TL điều phối)
+ */
+export async function validateAutomationExecutor(
+  executor: string,
+): Promise<{ ok: true; value: string } | { ok: false; error: string }> {
+  const parsed = parseExecutor(executor)
+  if (parsed.type === 'default') return { ok: true, value: '' }
+  if (parsed.type === 'agent') {
+    const profile = await db.agentProfile.findUnique({ where: { name: parsed.value } })
+    if (!profile || !profile.enabled) {
+      return { ok: false, error: `Executor agent "${parsed.value}" không tồn tại hoặc đã tắt` }
+    }
+    return { ok: true, value: parsed.value }
+  }
+  const tl = await db.agentProfile.findFirst({
+    where: { team: parsed.value, position: 'TL', enabled: true },
+  })
+  if (!tl) {
+    return { ok: false, error: `Team "${parsed.value}" không có Team Leader (TL) đang bật — cần TL để điều phối tác vụ` }
+  }
+  return { ok: true, value: `team:${parsed.value}` }
+}
+
 export async function executeCronJob(jobId: string): Promise<CronJobResult> {
   const startTime = Date.now()
 
@@ -246,21 +411,46 @@ export async function executeCronJob(jobId: string): Promise<CronJobResult> {
       },
     })
 
+    // Lịch có cấu trúc (cron builder) — nếu có thì dùng thay vì expression thô
+    const schedule: CronScheduleConfig | null = parseScheduleJson(job.scheduleJson)
+    const scheduleDesc = schedule ? describeSchedule(schedule) : job.expression
+
     // Build context with standing orders
     const standingOrdersCtx = await buildStandingOrdersContext()
 
+    // Resolve executor (user request 2026-09-14: chọn Agent hoặc team — team thì
+    // TL (Team Leader) là agent điều phối triển khai toàn bộ tác vụ)
+    const executorCtx = await resolveExecutorContext(job.executor, {
+      taskPrompt: job.taskPrompt,
+      scheduleDesc,
+      standingOrdersCtx,
+    })
+
     // Build system prompt for the automation agent
-    const systemPrompt = `You are the Magnum Opus Automation Agent. You execute scheduled tasks autonomously.
+    const genericSystemPrompt = `You are the Magnum Opus Automation Agent. You execute scheduled tasks autonomously.
 
 Current task: "${job.taskPrompt}"
-Schedule: ${job.expression}
+Schedule: ${scheduleDesc}
 Time: ${new Date().toISOString()}
 ${standingOrdersCtx}
 
 Execute this task concisely. Report what you checked, found, or did. Be factual and brief.`
 
     // Call LLM to execute the task
-    const llmResult = await callLLM(job.taskPrompt, systemPrompt, 'automation-cron')
+    // - executor mặc định ('') → callLLM generic (như cũ)
+    // - agent cụ thể / team (TL điều phối) → callLLMForAgent với persona của
+    //   agent đó (kimi-k3 + fallback chain + z-ai-sdk self-heal)
+    let llmResult: Awaited<ReturnType<typeof callLLM>>
+    if (executorCtx.brain) {
+      llmResult = await callLLMForAgent(job.taskPrompt, executorCtx.brain, executorCtx.systemPrompt, {
+        agentId: 'automation-cron',
+        agentName: executorCtx.label,
+        temperature: executorCtx.temperature ?? 0.5,
+        maxTokens: executorCtx.maxTokens ?? 2000,
+      })
+    } else {
+      llmResult = await callLLM(job.taskPrompt, executorCtx.fallbackNote ? `${genericSystemPrompt}\n\n${executorCtx.fallbackNote}` : genericSystemPrompt, 'automation-cron')
+    }
 
     const durationMs = Date.now() - startTime
 
@@ -273,6 +463,8 @@ Execute this task concisely. Report what you checked, found, or did. Be factual 
           result: JSON.stringify({
             taskPrompt: job.taskPrompt,
             expression: job.expression,
+            schedule: schedule ? describeSchedule(schedule) : undefined,
+            executor: executorCtx.label,
             llmResponse: llmResult.content,
             provider: llmResult.provider,
             model: llmResult.model,
@@ -285,10 +477,7 @@ Execute this task concisely. Report what you checked, found, or did. Be factual 
       // Update the job's lastRunAt and nextRunAt
       await db.cronJob.update({
         where: { id: jobId },
-        data: {
-          lastRunAt: new Date(),
-          nextRunAt: approximateNextRun(job.expression),
-        },
+        data: cronJobPostRunData(job.id, schedule, job.expression),
       })
 
       return {
@@ -308,6 +497,8 @@ Execute this task concisely. Report what you checked, found, or did. Be factual 
           result: JSON.stringify({
             taskPrompt: job.taskPrompt,
             expression: job.expression,
+            schedule: schedule ? describeSchedule(schedule) : undefined,
+            executor: executorCtx.label,
             error: llmResult.error || 'LLM returned empty response',
           }),
           errorMessage: llmResult.error || 'LLM returned empty response',
@@ -318,10 +509,7 @@ Execute this task concisely. Report what you checked, found, or did. Be factual 
       // Still update lastRunAt even on failure
       await db.cronJob.update({
         where: { id: jobId },
-        data: {
-          lastRunAt: new Date(),
-          nextRunAt: approximateNextRun(job.expression),
-        },
+        data: cronJobPostRunData(job.id, schedule, job.expression),
       })
 
       return {

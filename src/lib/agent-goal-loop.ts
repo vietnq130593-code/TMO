@@ -464,7 +464,10 @@ function buildAutomationProtocol(hasDirect: boolean, hasPropose: boolean): strin
   if (hasDirect) {
     lines.push('')
     lines.push('⚙️ QUẢN LÝ TỰ ĐỘNG HÓA (manage_automation — quyền trực tiếp của bạn):')
-    lines.push('- Tạo cron job: tool_call: manage_automation({"action": "create_cron", "expression": "0 9 * * 1-5", "taskPrompt": "nhiệm vụ"})')
+    lines.push('- Tạo cron job (KHUYẾN KHÍCH lịch dựng sẵn — Ngày/Tuần/Tháng, nhiều giờ, Lặp):')
+    lines.push('  tool_call: manage_automation({"action": "create_cron", "taskPrompt": "nhiệm vụ", "schedule": {"mode": "day|week|month", "times": ["09:30", "14:00"], "daysOfWeek": [1, 3], "daysOfMonth": [1, 15], "repeat": true}, "executor": "" | "BOLT" | "team:code"})')
+    lines.push('  → mode+repeat: day=hàng ngày · week=hàng tuần vào các thứ (0=CN..6=T7) · month=hàng tháng vào các ngày 1-31; repeat=false → chạy ĐÚNG 1 LẦN; executor = agent thực thi ("team:xxx" → TL của team đó điều phối triển khai toàn bộ tác vụ, "" = Automation Agent mặc định).')
+    lines.push('  (Lịch đặc biệt mới dùng expression thô: {"action": "create_cron", "expression": "0 9 * * 1-5", "taskPrompt": "..."})')
     lines.push('- Đăng ký webhook: tool_call: manage_automation({"action": "create_webhook", "url": "https://...", "events": ["document.uploaded"]})')
     lines.push('- Thêm standing order: tool_call: manage_automation({"action": "add_standing_order", "order": "chỉ thị", "priority": 50})')
     lines.push('- Tạo/tinh chỉnh task flow (Trigger→Action→Condition→Result): tool_call: manage_automation({"action": "create_flow", "name": "...", "steps": [...]}) — update_flow/run_flow/list_flows tương tự.')
@@ -475,6 +478,7 @@ function buildAutomationProtocol(hasDirect: boolean, hasPropose: boolean): strin
     lines.push('📤 ĐỀ XUẤT TỰ ĐỘNG HÓA (propose_automation — khi thấy cần nhưng KHÔNG có quyền tạo trực tiếp):')
     lines.push('- Tác vụ lặp lại định kỳ / cần đẩy sự kiện ra endpoint ngoài / cần chỉ thị thường trực / cần quy trình nhiều bước → đề xuất:')
     lines.push('  tool_call: propose_automation({"kind": "cron|webhook|standing_order|task_flow", "payload": {...}, "reason": "lý do cụ thể", "evidence": "dữ liệu hỗ trợ"})')
+    lines.push('  cron payload KHUYẾN KHÍCH: {"taskPrompt": "...", "schedule": {"mode": "day|week|month", "times": ["09:30"], "daysOfWeek": [1, 3], "repeat": true}, "executor": "BOLT" | "team:code" | ""} (executor = agent thực thi — "team:xxx" → TL điều phối toàn bộ tác vụ).')
     lines.push('- Omega quyết định: forward vào module Self-direction chờ Mr. Architect (hoặc agent được ủy quyền) phê duyệt — được duyệt thì tài nguyên TỰ TẠO. Từ chối thì Omega trả lý do.')
     lines.push('- Việc gấp cần làm NGAY thì tự làm bằng tools của mình — KHÔNG propose.')
   }
