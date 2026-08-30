@@ -6,7 +6,7 @@
 | **Ngày lập** | 2026-09-11 |
 | **Người lập kế hoạch** | Opus (Kiến trúc sư AI / Kỹ sư hệ thống) |
 | **Người phê duyệt** | Mr. Architect |
-| **Trạng thái** | 🟢 ĐANG TRIỂN KHAI — GĐ1 + GĐ2 hoàn thành 2026-09-11 (golden E2E PASS); GĐ3 tiếp theo |
+| **Trạng thái** | 🟢 ĐANG TRIỂN KHAI — GĐ1 + GĐ2 hoàn thành 2026-09-11 (golden E2E PASS); GĐ3 hoàn thành 2026-08-30 (kiểm định B8 4/4 PASS + review APPROVE); GĐ4 tiếp theo |
 | **Phạm vi** | 6 hạng mục cải tiến chức năng code, triển khai liên tục dài hạn |
 | **Workspace chuẩn** | `E:\APP\TMO-clone` (máy local Mr. Architect) |
 | **Kho lưu trữ chuẩn** | `https://github.com/vietnq130593-code/TMO` (private) |
@@ -628,8 +628,8 @@ kết quả sau cùng kèm commit hash + đề xuất tiếp theo
 | GĐ2 | CI-4 B3-B6 Git tools + skill | ✅ HOÀN THÀNH 2026-09-11 | 5 tools git_status/diff/log/branch/clone (injection guards, token masked) — 70 builtin; skill tmo-code-workflow SOP 8 bước; MCP mock ẩn + chặn; grants 5 agents |
 | GĐ2 | CI-6 B5 SELF-DIRECTION↔workspace | ✅ HOÀN THÀNH 2026-09-11 | executionMode + workspaceReceipt; bước giữa chạy executeTool THẬT (17 tools, không commit/push tay); bước cuối verify_and_push pipeline 9 bước; báo cáo Omega + section kiểm định + commit hash. GOLDEN E2E: proposal thật → 4 agents thực thi 16 tool calls thật → pipeline tự commit 00d337a + push + pull verify → completed |
 | GĐ2 | Review findings còn lại | ✅ HOÀN THÀNH 2026-09-11 | #8 git_push redirect verify_and_push (description), #11 bootstrap 3 trạng thái, #12 smokeUrl SSRF guard, #14 per-cap unlimited flags. Defer GĐ3: #13 runner fallback, #16 gitCommit execFile, Neo4j log spam |
-| GĐ3 | CI-3 Nén context | ⏳ | |
-| GĐ4 | CI-5 Durable goal loop | ⏳ | |
+| GĐ3 | CI-3 Nén context | ✅ HOÀN THÀNH 2026-08-30 | Module dùng chung context-compression.ts (splice theo Cặp tool_call) + workflow-engine cap 4k/digest 50k; Kho Context TaskContextArchive (Prisma) + Qdrant task_context + tool context_recall (SQL fallback — 71 builtin); task_summary cuối run (distill 500 chars) + nạp run mới; auto-resume overflow (digest-first, cap 3); prompt budget 24k; xóa stub context-manager. KIỂM ĐỊNH B8 4/4 PASS: 15-file run 2 digest 109k chars · context_recall trả đúng đoạn · token giảm 85% (chuẩn ≥30%) · task sau nhớ task trước. Review APPROVE (0 CRITICAL/HIGH). Defer findings đã xử lý: #13 runner fallback win32, #16 gitCommit execFile, Neo4j log throttle. Commits 2db96c6 + 32c1811 |
+| GĐ4 | CI-5 Durable goal loop | ⏳ | Tiếp theo — dùng digest CI-3 làm checkpoint nhẹ |
 
 ---
 
