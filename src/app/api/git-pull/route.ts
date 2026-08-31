@@ -240,6 +240,26 @@ function smartRestoreConfigFiles(projectRoot: string, backups: Map<string, strin
 }
 
 /**
+ * Nhánh mặc định của remote (git ls-remote --symref HEAD) — dùng khi client
+ * KHÔNG chỉ định branch tường minh. Fail-open: trả '' → caller fallback 'main'.
+ * FIX 2026-09-13 (user report: "pull nhánh master trong khi phải pull nhánh main
+ * thì mới pull được") — thay vì hardcode 'main', hỏi remote thật để repo nào
+ * (main/master khác) cũng hoạt động đúng.
+ */
+async function detectRemoteDefaultBranch(authUrl: string, cwd: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('git', ['ls-remote', '--symref', authUrl, 'HEAD'], {
+      cwd,
+      timeout: 30_000,
+    })
+    const m = String(stdout).match(/ref:\s*refs\/heads\/(\S+)/)
+    return m ? m[1] : ''
+  } catch {
+    return '' // fail-open — mạng/token lỗi không chặn pull
+  }
+}
+
+/**
  * Ensure the project directory is a valid git repository.
  * If not, auto-initialize git, add protected dirs to .gitignore,
  * and create an initial commit so we have a HEAD to diff against.
@@ -260,7 +280,15 @@ async function ensureGitRepo(
 
   if (!isGitRepo) {
     console.log('[GitPull] Directory is not a git repo — initializing...')
-    await execFileAsync('git', ['init'], { cwd: projectRoot })
+    // FIX 2026-09-13: init -b main (khớp nhánh mặc định GitHub) — git init không
+    // -b mặc định tạo 'master', khiến pull/push lệch nhánh với remote 'main'.
+    // Git < 2.28 không hỗ trợ -b → fallback git init + symbolic-ref.
+    try {
+      await execFileAsync('git', ['init', '-b', 'main'], { cwd: projectRoot })
+    } catch {
+      await execFileAsync('git', ['init'], { cwd: projectRoot })
+      await execFileAsync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: projectRoot, timeout: 10_000 }).catch(() => {})
+    }
     isNewRepo = true
 
     const gitignorePath = join(projectRoot, '.gitignore')
@@ -421,7 +449,7 @@ export async function POST(request: NextRequest) {
     const {
       repoUrl: bodyRepoUrl,
       apiToken: bodyApiToken,
-      branch: bodyBranch = 'main',
+      branch: bodyBranch, // FIX 2026-09-13: KHÔNG hardcode default 'main' — auto-detect nhánh mặc định remote khi client không gửi
       dryRun = false,
       forgetToken = false,
     }: {
@@ -443,7 +471,7 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    const branch = sanitizeBranch(bodyBranch)
+    const explicitBranch = sanitizeBranch(bodyBranch || '') // FIX 2026-09-13: '' khi client không gửi → auto-detect nhánh mặc định remote (sau khi có authUrl)
     const effectiveToken = bodyApiToken ? sanitizeToken(bodyApiToken) : ''
 
     // Auto-save token: nhập token mới → lưu lại (ghi đè token cũ nếu khác),
@@ -529,7 +557,19 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    console.log(`[GitPull] Using remote: ${stripTokenFromUrl(authUrl)} token: ${finalToken ? maskToken(finalToken) : '(none)'} branch: ${branch}`)
+    // ── SMART BRANCH (fix 2026-09-13) ──
+    // Client KHÔNG gửi branch → dùng nhánh MẶC ĐỊNH CỦA REMOTE (ls-remote
+    // --symref HEAD) thay vì hardcode — repo mặc định 'main' hay 'master' gì
+    // cũng pull đúng nhánh. Fail-open: ls-remote lỗi → 'main'.
+    let branch = explicitBranch
+    let branchAutoDetected = false
+    if (!branch) {
+      branch = sanitizeBranch((await detectRemoteDefaultBranch(authUrl, projectRoot)) || 'main')
+      branchAutoDetected = true
+      console.log(`[GitPull] Client không chỉ định branch — auto-detect nhánh mặc định remote: ${branch}`)
+    }
+
+    console.log(`[GitPull] Using remote: ${stripTokenFromUrl(authUrl)} token: ${finalToken ? maskToken(finalToken) : '(none)'} branch: ${branch}${branchAutoDetected ? ' (auto-detected)' : ''}`)
 
     // ── Ensure git repo ──
     const { isNewRepo, hadNoCommits } = await ensureGitRepo(projectRoot)
@@ -569,6 +609,9 @@ export async function POST(request: NextRequest) {
       let userError = `Không thể fetch từ repository. ${safeMsg}`
       if (fetchMsg.includes('not a git repository')) {
         userError = 'Thư mục hiện tại không phải là Git repository. Vui lòng đảm bảo project được clone bằng git hoặc thử lại (hệ thống đã tự khởi tạo git).'
+      } else if (fetchMsg.includes("couldn't find remote ref") || fetchMsg.includes('not a valid ref')) {
+        // FIX 2026-09-13: pull sai tên nhánh (vd 'master' trong khi repo mặc định 'main')
+        userError = `Không tìm thấy nhánh "${branch}" trên remote — kiểm tra tên nhánh (nhánh mặc định của repo có thể là "main" hoặc "master"), rồi thử lại.`
       } else if (fetchMsg.includes('Authentication failed') || fetchMsg.includes('could not read Username') || fetchMsg.includes('could not read Password')) {
         userError = 'Xác thực thất bại. Vui lòng kiểm tra lại API Token (GitHub PAT) và đảm bảo token có quyền truy cập repository.'
       } else if (fetchMsg.includes('Repository not found') || fetchMsg.includes('not found')) {

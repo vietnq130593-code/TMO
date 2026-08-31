@@ -202,11 +202,11 @@ const fmtCap = (n: number): string => (n === 0 ? '∞' : String(n))
 const MAX_CYCLES = intEnv('GOAL_LOOP_MAX_CYCLES', 4)
 /** Số vòng ReAct tối đa MỖI chu kỳ (mặc định 10 → tổng tối đa 40 vòng; 0 = ∞ — CI-1) */
 const ITER_PER_CYCLE = intEnv('GOAL_LOOP_ITERATIONS_PER_CYCLE', 10)
-/** Budget thời gian toàn bộ loop (mặc định 30 phút — tác vụ dài hạn; align với
- *  client display safeguard 30' — E2E Test B cho thấy kimi-k3 ~100s/call nên
- *  12' cũ quá ngắn: agent đang tiến triển tốt vẫn bị cắt giữa chừng;
- *  0 = ∞ — CI-1 "0 = UNLIMITED") */
-const TIME_BUDGET_MS = intEnv('GOAL_LOOP_TIME_BUDGET_MS', 30 * 60_000)
+/** Budget thời gian toàn bộ loop (mặc định 12 GIỜ — user request 2026-09-13:
+ *  "tôi muốn budget này đặt là 12h tối đa thay vì 30 phút như hiện tại"; tác vụ
+ *  dài hạn Opus auto-mode cần trần dài — trước đây 30' cắt agent đang tiến
+ *  triển tốt giữa chừng; 0 = ∞ — CI-1 "0 = UNLIMITED") */
+const TIME_BUDGET_MS = intEnv('GOAL_LOOP_TIME_BUDGET_MS', 12 * 60 * 60_000)
 /** Budget token toàn bộ loop (mặc định 200k — đủ ~40 vòng context lớn;
  *  0 = ∞ KHÔNG giới hạn — CI-1 "0 = UNLIMITED") */
 const TOKEN_BUDGET = intEnv('GOAL_LOOP_TOKEN_BUDGET', 200_000)
@@ -228,7 +228,7 @@ const REPORT_RESERVE_TOKENS = TOKEN_BUDGET === 0
  * 1 callLLMForAgent hợp lệ cần 12 attempts + nhiều cooldown 30s (vượt xa 240s
  * cũ — timeout ngoài giết chuỗi xoay vòng key giữa chừng, biến "retry kiên
  * trì" thành "error"). Timeout giờ chỉ là lưới an toàn chống call treo vĩnh
- * viễn; bound thật của loop = TIME_BUDGET_MS (30') + TOKEN_BUDGET + user cancel
+ * viễn; bound thật của loop = TIME_BUDGET_MS (12h) + TOKEN_BUDGET + user cancel
  * (abortCheck xuyên suốt mọi vòng đợi cooldown).
  */
 const LLM_TIMEOUT_MS = intEnvPositive('GOAL_LOOP_LLM_TIMEOUT_MS', 21 * 60_000)

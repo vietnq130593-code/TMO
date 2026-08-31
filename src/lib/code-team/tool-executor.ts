@@ -597,7 +597,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       parameters: {
         type: 'object',
         properties: {
-          branch: { type: 'string', description: 'Branch cần push (default: branch hiện tại)' },
+          branch: { type: 'string', description: 'Branch cần push (mặc định: nhánh hiện tại; nếu nhánh hiện tại là "master" artifact git init mà remote mặc định là "main", tool TỰ ĐỔI TÊN nhánh local cho khớp rồi push đúng nhánh)' },
           remote: { type: 'string', description: 'Tên remote (default: origin)' },
           force: { type: 'boolean', description: 'true = --force-with-lease. CHỈ khi user yêu cầu tường minh.' },
           set_upstream: { type: 'boolean', description: 'true = --set-upstream (push lần đầu branch mới)' },
@@ -614,7 +614,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       parameters: {
         type: 'object',
         properties: {
-          branch: { type: 'string', description: 'Branch cần pull (default: branch hiện tại)' },
+          branch: { type: 'string', description: 'Branch cần pull (mặc định: nhánh hiện tại; nếu nhánh hiện tại là "master" artifact git init mà remote mặc định là "main", tool TỰ ĐỔI TÊN nhánh local cho khớp rồi pull đúng nhánh)' },
           remote: { type: 'string', description: 'Tên remote (default: origin)' },
           force: { type: 'boolean', description: 'true = hard-reset về phiên bản remote, DISCARD mọi thay đổi local. NGUY HIỂM — chỉ khi user yêu cầu.' },
           dry_run: { type: 'boolean', description: 'true = fetch + báo cáo khác biệt, KHÔNG apply' },

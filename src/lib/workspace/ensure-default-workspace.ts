@@ -20,7 +20,7 @@
  *   1. TMO_DEFAULT_WORKSPACE chưa cấu hình → return im lặng (log 1 dòng).
  *   2. Đã có workspace ACTIVE và rootPath còn tồn tại trên đĩa → no-op
  *      (không bootstrap lại, KHÔNG mở explorer lại).
- *   3. Bootstrap: mkdir -p → git init (nếu chưa có .git) → set remote origin
+ *   3. Bootstrap: mkdir -p → git init -b main (nếu chưa có .git) → set remote origin
  *      (add/set-url theo TMO_REPO_URL) → upsert Workspace row (rootPath
  *      @unique) + deactivate mọi row khác.
  *   4. TMO_AUTO_OPEN_WORKSPACE='true' → mở Explorer (chỉ khi bootstrap mới).
@@ -91,8 +91,16 @@ export async function ensureDefaultWorkspace(): Promise<void> {
       console.log(`[WORKSPACE] Đã tạo thư mục workspace: ${rootPath}`)
     }
     if (!existsSync(path.join(rootPath, '.git'))) {
-      await execFileAsync('git', ['init'], { cwd: rootPath, timeout: 30_000 })
-      console.log(`[WORKSPACE] Đã git init tại ${rootPath}`)
+      // FIX 2026-09-13 (user report: workspace git init mặc định nhánh 'master'
+      // trong khi repo GitHub mặc định 'main' → push/pull lệch nhánh): init với
+      // -b main. Git < 2.28 không hỗ trợ -b → fallback git init + symbolic-ref.
+      try {
+        await execFileAsync('git', ['init', '-b', 'main'], { cwd: rootPath, timeout: 30_000 })
+      } catch {
+        await execFileAsync('git', ['init'], { cwd: rootPath, timeout: 30_000 })
+        await execFileAsync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: rootPath, timeout: 10_000 }).catch(() => {})
+      }
+      console.log(`[WORKSPACE] Đã git init (nhánh main) tại ${rootPath}`)
     }
 
     // (3) Remote origin — KHÔNG BAO GIỜ nhúng token vào remote URL

@@ -1077,6 +1077,94 @@ async function probeWorkspaceGit(root: string): Promise<RemoteGitStatus> {
   }
 }
 
+// ==================== SMART BRANCH RESOLUTION (fix 2026-09-13) ====================
+//
+// User report: "agent push code tại workspace thành công nhưng không pull được
+// về hệ thống vì pull nhánh master trong khi đấy phải pull nhánh main".
+//
+// Root cause: `git init` (không -b) mặc định tạo nhánh `master`, trong khi repo
+// GitHub mặc định `main` (origin/HEAD → main) → workspace đứng ở nhánh `master`
+// artifact: push đẩy code lên nhánh `master` LẠC LÕNG trên remote, còn pull về
+// hệ thống (nhánh `main`) không bao giờ thấy code đó.
+//
+// Self-heal (chỉ khi agent KHÔNG chỉ định branch tường minh):
+//   - local branch ≠ 'master' → giữ nguyên (feature branch workflow).
+//   - local branch = 'master' (artifact git init) → hỏi nhánh mặc định remote
+//     (git ls-remote --symref HEAD): nếu khác 'master' (thường 'main') →
+//     `git branch -m master <default>` (rename an toàn — KHÔNG mất commit),
+//     mọi push/pull sau đó TỰ ĐỘNG khớp nhánh mặc định remote.
+//   - ls-remote fail (mạng/token) hoặc remote default cũng = 'master' →
+//     fail-open: giữ 'master' như cũ (không chặn luồng).
+//
+// Trả { branch, remoteDefault, renamed, note } — note (nếu có) được ghép vào
+// receipt để agent + user thấy việc đổi tên đã diễn ra.
+
+async function resolveSmartBranch(
+  root: string,
+  localBranch: string,
+  explicitBranch: string | undefined,
+  authedUrl: string,
+): Promise<{ branch: string; remoteDefault: string; renamed: boolean; note: string }> {
+  const explicit = (explicitBranch || '').trim()
+  // Agent chỉ định tường minh → tôn trọng tuyệt đối (không đụng)
+  if (explicit) return { branch: explicit, remoteDefault: '', renamed: false, note: '' }
+
+  // Unborn HEAD (repo chưa commit lần nào) → symbolic-ref cho TÊN nhánh thật
+  // ('master' mặc định của git init) — rev-parse --abbrev-ref chỉ trả 'HEAD'.
+  const unborn = !localBranch || localBranch === 'HEAD'
+  let local = localBranch
+  if (unborn) {
+    local = await execFileAsync('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: root, timeout: 5_000 })
+      .then(r => String(r.stdout).trim()).catch(() => '')
+  }
+  // Không phải artifact 'master' → giữ branch local (feature branch workflow)
+  if (!local || local !== 'master') {
+    return { branch: localBranch, remoteDefault: '', renamed: false, note: '' }
+  }
+
+  // local = 'master' → hỏi nhánh mặc định của remote (authed URL one-shot)
+  let remoteDefault = ''
+  try {
+    const { stdout } = await execFileAsync('git', ['ls-remote', '--symref', authedUrl, 'HEAD'], {
+      cwd: root,
+      timeout: 20_000,
+    })
+    const m = String(stdout).match(/ref:\s*refs\/heads\/(\S+)/)
+    remoteDefault = m ? m[1] : ''
+  } catch {
+    remoteDefault = '' // fail-open — mạng/token lỗi không chặn push/pull
+  }
+  if (!remoteDefault || remoteDefault === 'master') {
+    return { branch: localBranch, remoteDefault, renamed: false, note: '' }
+  }
+
+  // Self-heal: rename master → remoteDefault (an toàn: chỉ đổi tên ref).
+  // - Đã có commit: `git branch -m` (KHÔNG dùng -M — nếu branch đích đã tồn tại,
+  //   rename fail → fallback giữ 'master' + note hướng dẫn switch tay, không bao
+  //   giờ đè branch sẵn có).
+  // - Unborn HEAD (chưa commit): đổi qua symbolic-ref (branch -m cần branch tồn tại).
+  let renamed = false
+  try {
+    if (unborn) {
+      await execFileAsync('git', ['symbolic-ref', 'HEAD', `refs/heads/${remoteDefault}`], { cwd: root, timeout: 10_000 })
+    } else {
+      await execFileAsync('git', ['branch', '-m', 'master', remoteDefault], { cwd: root, timeout: 10_000 })
+    }
+    renamed = true
+    console.log(`[SmartBranch] Workspace đứng ở nhánh 'master' (artifact git init) — đã đổi tên thành '${remoteDefault}' cho khớp nhánh mặc định remote`)
+  } catch {
+    renamed = false
+  }
+  return {
+    branch: renamed ? remoteDefault : localBranch,
+    remoteDefault,
+    renamed,
+    note: renamed
+      ? `Đã tự đổi tên nhánh local 'master' → '${remoteDefault}' (khớp nhánh mặc định remote — 'master' là artifact mặc định của git init, không phải nhánh thật của repo)`
+      : `Nhánh local đang là 'master' nhưng remote mặc định là '${remoteDefault}' — hãy switch: git_branch({action:"switch", name:"${remoteDefault}"}) rồi thao tác lại`,
+  }
+}
+
 /**
  * gitPush — push commits local của ACTIVE WORKSPACE lên remote.
  *
@@ -1106,7 +1194,7 @@ export async function gitPush(args: {
   if (!status.isGitRepo) {
     return {
       success: false,
-      error: `Workspace (${root}) KHÔNG phải git repository. Hãy yêu cầu user đăng ký workspace là git repo, hoặc tự khởi tạo: shell({"command": "git init && git remote add origin <url>"}) — rồi commit (git_commit) trước khi push.`,
+      error: `Workspace (${root}) KHÔNG phải git repository. Hãy yêu cầu user đăng ký workspace là git repo, hoặc tự khởi tạo: shell({"command": "git init -b main && git remote add origin <url>"}) — rồi commit (git_commit) trước khi push.`,
     }
   }
   if (!status.remoteUrl) {
@@ -1118,36 +1206,36 @@ export async function gitPush(args: {
     }
   }
 
-  const branch = (args.branch || '').trim() || status.branch
-  const remoteName = (args.remote || 'origin').replace(/[^a-zA-Z0-9\-_\/\.]/g, '') || 'origin'
+  const requestedBranch = (args.branch || '').trim() || status.branch // pre-smart (dry-run/upstream probe) — SMART BRANCH resolve sau khi có authedUrl
+  const remoteName = (args.remote || 'origin').replace(/[^a-zA-Z0-9\-_\/\\.]/g, '') || 'origin'
 
   // Dry-run: báo trạng thái, không push
   if (args.dry_run) {
     return {
       success: true,
       dryRun: true,
-      branch,
+      branch: requestedBranch,
       remote: status.remoteUrl,
       ahead: status.ahead,
       behind: status.behind,
       uncommittedCount: status.uncommitted.length,
       uncommitted: status.uncommitted.slice(0, 20),
       message: status.ahead > 0
-        ? `${status.ahead} commit sẵn sàng push lên ${status.remoteUrl} (branch ${branch})`
+        ? `${status.ahead} commit sẵn sàng push lên ${status.remoteUrl} (branch ${requestedBranch})`
         : 'Không có commit nào ahead của upstream — không cần push',
     }
   }
 
   if (status.ahead === 0 && status.uncommitted.length === 0) {
     // Có thể chưa có upstream tracking — vẫn thử push (branch mới)
-    const hasUpstream = await execFileAsync('git', ['config', `branch.${branch}.remote`], { cwd: root, timeout: 5_000 })
+    const hasUpstream = await execFileAsync('git', ['config', `branch.${requestedBranch}.remote`], { cwd: root, timeout: 5_000 })
       .then(r => !!r.stdout.trim()).catch(() => false)
     if (hasUpstream) {
       return {
         success: true,
         pushed: false,
         upToDate: true,
-        branch,
+        branch: requestedBranch,
         remote: status.remoteUrl,
         message: 'Không có gì để push — branch đã đồng bộ với remote',
       }
@@ -1178,6 +1266,15 @@ export async function gitPush(args: {
   }
 
   const authedUrl = buildAuthedGitUrl(status.remoteUrl, token)
+
+  // SMART BRANCH (fix 2026-09-13): workspace đứng ở nhánh 'master' (artifact
+  // git init) trong khi remote mặc định 'main' → push lên nhánh LẠC LÕNG, hệ
+  // thống pull 'main' không bao giờ thấy code. Self-heal: rename local cho
+  // khớp nhánh mặc định remote rồi push đúng nhánh (chỉ khi agent KHÔNG chỉ
+  // định branch tường minh).
+  const smart = await resolveSmartBranch(root, status.branch, args.branch, authedUrl)
+  const branch = smart.branch
+
   const pushArgs = ['push', authedUrl, branch]
   if (args.force) pushArgs.push('--force-with-lease')
   if (args.set_upstream) pushArgs.push('--set-upstream')
@@ -1215,6 +1312,7 @@ export async function gitPush(args: {
       upToDate,
       branch,
       remote: status.remoteUrl,
+      ...(smart.note ? { branchAligned: smart.note } : {}),
       beforeCommit: status.headCommit,
       afterCommit: afterOut,
       commitsPushed: upToDate ? 0 : (status.ahead || 'unknown'),
@@ -1260,7 +1358,9 @@ export async function gitPush(args: {
  *   4. force:true → git reset --hard FETCH_HEAD (PHÁ HỦY local changes — opt-in tường minh)
  *
  * Args:
- *   branch — branch cần pull (default: branch hiện tại)
+ *   branch — branch cần pull (mặc định: nhánh hiện tại; SMART BRANCH — nếu nhánh
+ *            hiện tại là 'master' (artifact git init) mà remote mặc định 'main'
+ *            → tự rename local cho khớp rồi pull đúng nhánh)
  *   remote — tên remote (default: origin)
  *   force  — hard-reset về FETCH_HEAD, discard mọi thay đổi local
  *   dry_run — fetch + báo cáo khác biệt, KHÔNG apply
@@ -1277,7 +1377,7 @@ export async function gitPullWorkspace(args: {
   if (!status.isGitRepo) {
     return {
       success: false,
-      error: `Workspace (${root}) KHÔNG phải git repository. Hãy yêu cầu user đăng ký workspace là git repo, hoặc tự khởi tạo: shell({"command": "git init && git remote add origin <url>"}) — rồi pull lại.`,
+      error: `Workspace (${root}) KHÔNG phải git repository. Hãy yêu cầu user đăng ký workspace là git repo, hoặc tự khởi tạo: shell({"command": "git init -b main && git remote add origin <url>"}) — rồi pull lại.`,
     }
   }
 
@@ -1301,8 +1401,6 @@ export async function gitPullWorkspace(args: {
     }
   }
 
-  const branch = (args.branch || '').trim() || status.branch
-
   // Resolve token như gitPush
   const embedded = extractEmbeddedToken(rawRemoteUrl)
   const { getSavedGithubToken } = await import('@/lib/github-token-store')
@@ -1311,6 +1409,13 @@ export async function gitPullWorkspace(args: {
   const token = embedded || savedToken || envToken || ''
 
   const authedUrl = buildAuthedGitUrl(remoteUrl, token)
+
+  // SMART BRANCH (fix 2026-09-13): workspace đứng ở nhánh 'master' (artifact
+  // git init) trong khi remote mặc định 'main' → pull nhánh LẠC LÕNG không có
+  // code mới. Self-heal: rename local cho khớp nhánh mặc định remote rồi pull
+  // đúng nhánh (chỉ khi agent KHÔNG chỉ định branch tường minh).
+  const smart = await resolveSmartBranch(root, status.branch, args.branch, authedUrl)
+  const branch = smart.branch
 
   // 1. Fetch
   try {
@@ -1323,6 +1428,8 @@ export async function gitPullWorkspace(args: {
       hint = 'Xác thực thất bại — chưa có token hợp lệ. Hãy nhờ user nhập GitHub PAT trong dialog "Pull Code từ GitHub" (token được lưu tự động).'
     } else if (/Repository not found|does not appear to exist/i.test(raw)) {
       hint = `Không tìm thấy repository — kiểm tra URL remote: ${remoteUrl}`
+    } else if (/couldn't find remote ref|not a valid ref|couldn't find/i.test(raw)) {
+      hint = `Không tìm thấy nhánh '${branch}' trên remote — kiểm tra tên nhánh (nhánh mặc định remote có thể khác, vd 'main' thay vì 'master'), hoặc git_pull({dry_run:true}) để khảo sát.`
     }
     // FIX 2026-09-11 (review #1 HIGH): mask token trong error message (authed URL leak)
     return { success: false, error: `git fetch failed: ${token ? String(err.message).split(token).join('****') : err.message}`, hint, remote: remoteUrl, branch, output: output.slice(0, 2000) }
@@ -1353,19 +1460,27 @@ export async function gitPullWorkspace(args: {
       behind: behindRemote,
       filesToChange: diffFiles.slice(0, 50),
       uncommittedCount: status.uncommitted.length,
+      ...(smart.note ? { note: smart.note } : {}),
       message: behindRemote > 0
         ? `${behindRemote} commit mới trên remote (${diffFiles.length} file sẽ thay đổi)`
         : 'Đã là phiên bản mới nhất',
     }
   }
 
-  if (behindRemote === 0 && !args.force) {
+  // Unborn HEAD (workspace chưa commit lần nào): rev-list HEAD...FETCH_HEAD
+  // FAIL → behindRemote false 0 → KHÔNG được early-return "đã cập nhật" —
+  // phải đi tiếp tới ff-merge (git merge --ff-only trên unborn HEAD hoạt động
+  // và bootstrap nội dung đầu tiên — đã kiểm chứng sandbox 2026-09-13).
+  const unborn = !status.branch || status.branch === 'HEAD'
+
+  if (behindRemote === 0 && !args.force && !unborn) {
     return {
       success: true,
       upToDate: true,
       branch,
       remote: remoteUrl,
       headCommit: status.headCommit,
+      ...(smart.note ? { note: smart.note } : {}),
       message: 'Đã là phiên bản mới nhất — không có gì để pull',
     }
   }
@@ -1410,7 +1525,9 @@ export async function gitPullWorkspace(args: {
       filesChanged: diffFiles.slice(0, 100),
       localCommitsPreserved: aheadLocal,
       message: `Fast-forward ${status.headCommit} → ${after} (${diffFiles.length} file cập nhật)`,
-      ...(blockingFiles.length > 0 ? { note: `Có ${blockingFiles.length} file vừa được pull cũng đang modified local — check git status` } : {}),
+      ...((blockingFiles.length > 0 || smart.note)
+        ? { note: [blockingFiles.length > 0 ? `Có ${blockingFiles.length} file vừa được pull cũng đang modified local — check git status` : '', smart.note].filter(Boolean).join(' | ') }
+        : {}),
     }
   } catch (err: any) {
     const raw = ((err.stdout || '') + (err.stderr || '')).trim()
@@ -1681,7 +1798,7 @@ export async function gitStatus(rootArg?: string): Promise<unknown> {
       return {
         success: false,
         root,
-        error: `Thư mục (${root}) KHÔNG phải git repository — kiểm tra đường dẫn, hoặc khởi tạo bằng shell({"command": "git init"}).`,
+        error: `Thư mục (${root}) KHÔNG phải git repository — kiểm tra đường dẫn, hoặc khởi tạo bằng shell({"command": "git init -b main"}).`,
       }
     }
 
