@@ -24,7 +24,10 @@ import {
   GitCommit, History, Minimize2, ExternalLink as ExternalLinkIcon, GripHorizontal, ArrowDownToLine,
   Wifi, WifiOff,
   Flame, Archive, Snowflake, Thermometer, FlaskConical, ShieldAlert, Swords,
-  CloudDownload, CircleHelp, ClipboardList, Mic, AudioLines, Volume2, Compass
+  CloudDownload, CircleHelp, ClipboardList, Mic, AudioLines, Volume2, Compass,
+  // OPUS (Task 13-c) — icon cho CTO meta-agent ⚖️: nút chế độ review + kill switch
+  // (Gavel của nút "Ban hành chỉ đạo" nằm trong components/opus/opus-review-card)
+  Scale, OctagonX
 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -55,6 +58,8 @@ import {
   type CronScheduleConfig,
 } from '@/lib/cron-schedule'
 import SelfDirectionModule from '@/components/self-direction/self-direction-module'
+// OPUS (Task 13-c) — Review Card của CTO meta-agent ⚖️ (render dưới assistant message đã review)
+import OpusReviewCard, { opusDecisionBadgeClass, type OpusReviewSerialized } from '@/components/opus/opus-review-card'
 import { toast as sonnerToast } from 'sonner'
 import {
   AVATAR_OPTIONS,
@@ -4121,6 +4126,15 @@ interface SmolabMessage {
    *  PLACEHOLDER (⏳ hàng đợi nền), sẽ được THAY THẾ bằng câu trả lời thật
    *  (result.content) khi poll /api/goal-loop-jobs thấy job completed. */
   goalLoopJobId?: string
+  // ===== OPUS (Task 13-c) — metadata JSON gốc từ backend ChatMessage =====
+  // Directive message của Opus (role='user' + metadata.opusDirective=true)
+  // render thành OPUS DIRECTIVE CARD thay vì user bubble thường.
+  metadata?: Record<string, unknown> & {
+    opusDirective?: boolean
+    opusReviewId?: string
+    decision?: string
+    triggerMode?: string
+  }
 }
 
 interface SmolabSession {
@@ -8687,6 +8701,21 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
   // nền kết thúc (chấm xanh "đang chạy" phải biến mất kịp thời, không chờ 30s)
   const [sessionsRefreshTick, setSessionsRefreshTick] = useState(0)
 
+  // ===== OPUS (Task 13-c) — ⚖️ CTO meta-agent review mode trong chat =====
+  // mode: manual (bấm nút review sau mỗi run) | auto (Opus tự review & hành
+  // động sau mỗi run — chỉ dừng khi hoàn hảo; kill switch là phanh duy nhất).
+  // killed: OpusSettings.killed TOÀN HỆ THỐNG (không theo session).
+  const [opusMode, setOpusMode] = useState<'manual' | 'auto'>('manual')
+  const [opusKilled, setOpusKilled] = useState(false)
+  const [opusStatusLoading, setOpusStatusLoading] = useState(false)
+  const [showOpusModeMenu, setShowOpusModeMenu] = useState(false)
+  // messageId (assistant) → review — Review Card render ngay dưới message đó
+  const [opusReviews, setOpusReviews] = useState<Map<string, OpusReviewSerialized>>(new Map())
+  // messageId đang chạy review (30-120s — KHÔNG timeout ở UI)
+  const [opusReviewLoading, setOpusReviewLoading] = useState<string | null>(null)
+  // reviewId đã ban hành chỉ đạo (nút → badge "Đã ban hành ✓")
+  const [opusDispatched, setOpusDispatched] = useState<Set<string>>(new Set())
+
   // ===== Agent Run — Thought Process + Todos + Progress (user request 2026-08-31) =====
   // agentRuns: runId → dữ liệu run mới nhất (poll từ /api/agent-run mỗi 1.2s
   // trong lúc agent đang chạy). Panel render trong message flow (role 'agent_run').
@@ -9259,6 +9288,9 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
             // Thought Process summary (user request 2026-08-31) — persist qua
             // chat message metadata; render AgentRunSummaryBar khi reload
             agentRunSummary: parsedMeta?.agentRun as SmolabMessage['agentRunSummary'],
+            // OPUS (Task 13-c) — giữ metadata gốc: directive message của Opus
+            // (opusDirective/opusReviewId/decision) render thành OPUS DIRECTIVE CARD
+            metadata: parsedMeta as SmolabMessage['metadata'],
             // Khôi phục trạng thái like/dislike đã ghi nhận trước đó
             feedback: (feedbackMap[m.id] as 'positive' | 'negative') ?? null,
           }
@@ -9422,6 +9454,8 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                 agentPosition: parsedMeta?.agentPosition as string | undefined,
                 isTeamMessage: parsedMeta?.isTeamMessage as boolean | undefined,
                 agentRunSummary: parsedMeta?.agentRun as SmolabMessage['agentRunSummary'],
+                // OPUS (Task 13-c) — giữ metadata gốc cho directive card của Opus
+                metadata: parsedMeta as SmolabMessage['metadata'],
               }
             })
           return [...older, ...prev]
@@ -9963,10 +9997,259 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
       setShowAgentSelect(false)
       setShowTeamSelect(false)
       setShowSessionSelect(false)
+      setShowOpusModeMenu(false)
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
+
+  // ==================== OPUS (Task 13-c) — ⚖️ CTO meta-agent review ====================
+  // 4 mảnh: (1) nút chế độ + kill switch ở header chat, (2) nút "Opus review"
+  // manual dưới like/dislike, (3) Review Card dưới message đã review,
+  // (4) OPUS DIRECTIVE CARD trong message flow (metadata.opusDirective).
+
+  // Status Opus của phiên — fetch khi load + mỗi lần đổi session
+  // (mode theo AgentSession; killed là settings toàn hệ thống)
+  const fetchOpusStatus = useCallback(async (sid: string) => {
+    if (!sid) return
+    setOpusStatusLoading(true)
+    try {
+      const res = await fetch(`/api/opus/status?sessionId=${encodeURIComponent(sid)}`)
+      if (res.ok) {
+        const data = await res.json()
+        setOpusMode(data.mode === 'auto' ? 'auto' : 'manual')
+        setOpusKilled(!!data.killed)
+      }
+    } catch { /* fail-open — giữ state cũ (server chưa nạp schema mới → 500) */ }
+    setOpusStatusLoading(false)
+  }, [])
+
+  // Reset state review theo phiên + fetch status + khôi phục review cũ của phiên
+  // (GET /api/opus/reviews — Review Card + trạng thái "đã review" sống sót qua F5)
+  useEffect(() => {
+    setOpusReviews(new Map())
+    setOpusDispatched(new Set())
+    setOpusReviewLoading(null)
+    if (!currentSessionId) return
+    void fetchOpusStatus(currentSessionId)
+    void (async () => {
+      try {
+        const res = await fetch(`/api/opus/reviews?sessionId=${encodeURIComponent(currentSessionId)}&limit=20`)
+        if (!res.ok) return
+        const data = await res.json()
+        if (Array.isArray(data.reviews)) {
+          setOpusReviews(prev => {
+            const next = new Map(prev)
+            for (const rv of data.reviews) {
+              if (rv?.messageId) next.set(rv.messageId, rv as OpusReviewSerialized)
+            }
+            return next
+          })
+        }
+      } catch { /* best-effort — review cũ không tải được thì coi như chưa review */ }
+    })()
+  }, [currentSessionId, fetchOpusStatus])
+
+  // Poll status 8s KHI auto mode — bắt killed / đổi mode từ nơi khác (dọn
+  // interval đúng pattern poller của file: clearInterval trong cleanup)
+  useEffect(() => {
+    if (opusMode !== 'auto') return
+    const interval = setInterval(async () => {
+      try {
+        const sid = currentSessionIdRef.current
+        if (!sid) return
+        const res = await fetch(`/api/opus/status?sessionId=${encodeURIComponent(sid)}`)
+        if (res.ok) {
+          const data = await res.json()
+          setOpusMode(data.mode === 'auto' ? 'auto' : 'manual')
+          setOpusKilled(!!data.killed)
+        }
+      } catch { /* poll lỗi — bỏ qua vòng này */ }
+    }, 8000)
+    return () => clearInterval(interval)
+  }, [opusMode])
+
+  // Đổi chế độ review: PATCH /api/opus/review-mode — optimistic update +
+  // revert khi lỗi + toast (bật auto → server tự unkill)
+  const handleOpusModeChange = useCallback(async (mode: 'manual' | 'auto') => {
+    setShowOpusModeMenu(false)
+    if (!currentSessionId || mode === opusMode) return
+    const prevMode = opusMode
+    const prevKilled = opusKilled
+    setOpusMode(mode) // optimistic
+    if (mode === 'auto') setOpusKilled(false) // optimistic — PATCH auto tự unkill
+    try {
+      const res = await fetch('/api/opus/review-mode', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: currentSessionId, mode }),
+      })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({} as { error?: string }))
+        throw new Error(errData?.error || `HTTP ${res.status}`)
+      }
+      const data = await res.json()
+      setOpusMode(data.mode === 'auto' ? 'auto' : 'manual')
+      setOpusKilled(!!data.killed)
+      toast({
+        title: mode === 'auto' ? '⚖️ Opus: chế độ Tự động' : '⚖️ Opus: chế độ Thủ công',
+        description: mode === 'auto'
+          ? 'Opus tự review & hành động sau mỗi run — chỉ dừng khi hoàn hảo.'
+          : 'Bấm nút "Opus review" sau mỗi run để Opus phán xét.',
+        duration: 3000,
+      })
+    } catch (err) {
+      setOpusMode(prevMode) // revert optimistic
+      setOpusKilled(prevKilled)
+      toast({
+        title: 'Không đổi được chế độ Opus',
+        description: err instanceof Error ? err.message : 'Lỗi hệ thống — thử lại sau.',
+        variant: 'destructive',
+        duration: 4000,
+      })
+    }
+  }, [currentSessionId, opusMode, opusKilled])
+
+  // Kill switch (phanh khẩn cấp auto mode): POST /api/opus/kill
+  const handleOpusKill = useCallback(async (action: 'kill' | 'reset') => {
+    try {
+      const res = await fetch('/api/opus/kill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({} as { error?: string }))
+        throw new Error(errData?.error || `HTTP ${res.status}`)
+      }
+      const data = await res.json()
+      setOpusKilled(!!data.killed)
+      if (action === 'kill') {
+        toast({
+          title: '🛑 Đã kích hoạt phanh khẩn cấp Opus',
+          description: 'Auto mode ngưng toàn hệ thống — mở menu Opus để gỡ phanh chạy lại.',
+          duration: 4000,
+        })
+      } else {
+        toast({ title: 'Đã gỡ phanh Opus', description: 'Opus được phép chạy lại ở chế độ tự động.', duration: 3000 })
+      }
+    } catch (err) {
+      toast({
+        title: 'Không đổi được kill switch Opus',
+        description: err instanceof Error ? err.message : 'Lỗi hệ thống — thử lại sau.',
+        variant: 'destructive',
+        duration: 4000,
+      })
+    }
+  }, [])
+
+  // Gỡ phanh & chạy lại (khi killed): POST kill reset → PATCH review-mode auto
+  // (PATCH auto tự unkill thêm lần nữa — idempotent)
+  const handleOpusResume = useCallback(async () => {
+    setShowOpusModeMenu(false)
+    try {
+      const killRes = await fetch('/api/opus/kill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reset' }),
+      })
+      if (!killRes.ok) throw new Error(`HTTP ${killRes.status}`)
+      setOpusKilled(false)
+    } catch (err) {
+      toast({
+        title: 'Không gỡ được phanh Opus',
+        description: err instanceof Error ? err.message : 'Lỗi hệ thống.',
+        variant: 'destructive',
+        duration: 4000,
+      })
+      return
+    }
+    if (currentSessionId && opusMode !== 'auto') {
+      await handleOpusModeChange('auto') // tự toast + set state
+    } else {
+      toast({ title: '⚖️ Opus chạy lại', description: 'Phanh đã gỡ — chế độ tự động tiếp tục.', duration: 3000 })
+    }
+  }, [currentSessionId, opusMode, handleOpusModeChange])
+
+  // "Opus review" (manual): POST /api/opus/review — chạy 30-120s, KHÔNG timeout
+  // UI. 409 = có review khác đang chạy. Key map = messageId client + messageId
+  // DB resolved (review card sống sót qua reload session).
+  const handleOpusReview = useCallback(async (messageId: string) => {
+    if (!currentSessionId) {
+      toast({ title: 'Chưa có phiên chat', description: 'Opus review cần một phiên chat đã lưu.', variant: 'destructive', duration: 3000 })
+      return
+    }
+    const sid = currentSessionId
+    setOpusReviewLoading(messageId)
+    try {
+      const res = await fetch('/api/opus/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: sid, messageId }),
+      })
+      if (res.status === 409) {
+        toast({ title: 'Opus đang review — chờ chút', description: 'Một vòng review khác của phiên này vẫn đang chạy.', duration: 3000 })
+        return
+      }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({} as { error?: string }))
+        throw new Error(errData?.error || `HTTP ${res.status}`)
+      }
+      const data = await res.json()
+      // User đã đổi phiên trong lúc chờ → không áp kết quả vào phiên mới
+      if (currentSessionIdRef.current !== sid) return
+      if (data?.review) {
+        const rv = data.review as OpusReviewSerialized
+        setOpusReviews(prev => {
+          const next = new Map(prev)
+          next.set(messageId, rv)
+          if (rv.messageId && rv.messageId !== messageId) next.set(rv.messageId, rv)
+          return next
+        })
+        toast({
+          title: `⚖️ Opus phán quyết: ${rv.decision}`,
+          description: rv.verdict?.summary || 'Xem Review Card chi tiết dưới tin nhắn.',
+          duration: 4000,
+        })
+      }
+      // Response có `message` (auto-dispatch khi server đang auto mode) →
+      // refresh tail để directive message hiện trong chat
+      if (data?.message) {
+        void loadSessionTail(sid, { silent: true }).catch(() => {})
+      }
+    } catch (err) {
+      toast({
+        title: 'Opus review thất bại',
+        description: err instanceof Error ? err.message : 'Lỗi hệ thống — thử lại sau.',
+        variant: 'destructive',
+        duration: 4000,
+      })
+    } finally {
+      setOpusReviewLoading(null)
+    }
+  }, [currentSessionId, loadSessionTail])
+
+  // Assistant message cuối cùng của session — nút "Opus review" disable khi
+  // message ĐÓ đã có review (review lại được khi có assistant message mới hơn)
+  const lastAssistantMsgId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') return messages[i].id
+    }
+    return null
+  }, [messages])
+
+  // Review đã ban hành = reviewId có directive message trong chat (metadata
+  // opusDirective) — suy ra từ messages, sống sót qua F5 + mọi reload
+  const opusDispatchedFromChat = useMemo(() => {
+    const s = new Set<string>()
+    for (const m of messages) {
+      if (m.metadata?.opusDirective === true && typeof m.metadata?.opusReviewId === 'string') {
+        s.add(m.metadata.opusReviewId)
+      }
+    }
+    return s
+  }, [messages])
+
 
   // Clear session search when dropdown closes
   useEffect(() => {
@@ -11177,9 +11460,86 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                     </div>
                   </div>
                 </div>
-                <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-stone-400 hover:text-amber-400" onClick={clearChat} title="Xóa chat">
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+                <div className="flex items-center gap-1">
+                  {/* OPUS (Task 13-c) — ⚖️ chế độ review CTO meta-agent + kill switch */}
+                  <div className="relative flex items-center gap-1">
+                    {/* Kill switch — chỉ hiện khi auto mode CHƯA bị dừng (killed →
+                        Scale đổi ShieldOff + dropdown có nút gỡ phanh) */}
+                    {opusMode === 'auto' && !opusKilled && (
+                      <Button
+                        variant="ghost" size="sm"
+                        className="h-6 w-6 p-0 text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
+                        onClick={() => { void handleOpusKill('kill') }}
+                        title="DỪNG OPUS NGAY"
+                      >
+                        <OctagonX className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost" size="sm"
+                      data-dropdown-toggle
+                      onClick={(e) => { e.stopPropagation(); setShowOpusModeMenu(!showOpusModeMenu); setShowAgentSelect(false); setShowTeamSelect(false); setShowSessionSelect(false) }}
+                      className={`h-6 w-6 p-0 relative ${
+                        opusKilled
+                          ? 'opacity-50 text-stone-500 hover:text-stone-300'
+                          : opusMode === 'auto'
+                          ? 'text-amber-400 border border-amber-400/50 hover:bg-amber-500/10'
+                          : 'text-stone-400 hover:text-amber-400'
+                      }`}
+                      title="Opus — chế độ review"
+                    >
+                      {opusKilled ? <ShieldOff className="h-3.5 w-3.5" /> : <Scale className="h-3.5 w-3.5" />}
+                      {opusMode === 'auto' && !opusKilled && (
+                        <span className="absolute top-0 right-0 h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                      )}
+                    </Button>
+                    {showOpusModeMenu && (
+                      <div data-dropdown-menu onClick={(e) => e.stopPropagation()} className="absolute top-full right-0 mt-1 z-50 w-60 bg-slate-950/95 border border-amber-400/50">
+                        <div className="px-2.5 py-1.5 text-[9px] font-semibold uppercase tracking-wide text-amber-500/70 border-b border-amber-400/20">
+                          ⚖️ Opus — chế độ review
+                        </div>
+                        <button
+                          onClick={() => { void handleOpusModeChange('manual') }}
+                          className={`w-full text-left px-2.5 py-1.5 hover:bg-amber-500/10 transition-colors flex items-start gap-2 ${opusMode === 'manual' ? 'bg-amber-500/10' : ''}`}
+                        >
+                          <User className="h-3 w-3 mt-0.5 flex-shrink-0 text-stone-400" />
+                          <span className="flex-1">
+                            <span className={`text-xs ${opusMode === 'manual' ? 'text-amber-300' : 'text-stone-300'}`}>Thủ công</span>
+                            <span className="block text-[10px] text-stone-500">Bấm nút review sau mỗi run</span>
+                          </span>
+                          {opusMode === 'manual' && <Check className="h-3 w-3 text-amber-400 flex-shrink-0 mt-1" />}
+                        </button>
+                        <button
+                          onClick={() => { void handleOpusModeChange('auto') }}
+                          className={`w-full text-left px-2.5 py-1.5 hover:bg-amber-500/10 transition-colors flex items-start gap-2 border-t border-amber-400/10 ${opusMode === 'auto' ? 'bg-amber-500/10' : ''}`}
+                        >
+                          <Play className="h-3 w-3 mt-0.5 flex-shrink-0 text-stone-400" />
+                          <span className="flex-1">
+                            <span className={`text-xs ${opusMode === 'auto' ? 'text-amber-300' : 'text-stone-300'}`}>Tự động</span>
+                            <span className="block text-[10px] text-stone-500">Opus tự review &amp; hành động — chỉ dừng khi hoàn hảo</span>
+                          </span>
+                          {opusMode === 'auto' && <Check className="h-3 w-3 text-amber-400 flex-shrink-0 mt-1" />}
+                        </button>
+                        {/* Gỡ phanh & chạy lại — chỉ hiện khi Opus đang bị dừng khẩn cấp */}
+                        {opusKilled && (
+                          <button
+                            onClick={() => { void handleOpusResume() }}
+                            className="w-full text-left px-2.5 py-1.5 hover:bg-rose-500/10 transition-colors flex items-center gap-2 border-t border-rose-400/20"
+                          >
+                            <Play className="h-3 w-3 flex-shrink-0 text-rose-400" />
+                            <span className="text-xs text-rose-300">Gỡ phanh &amp; chạy lại</span>
+                          </button>
+                        )}
+                        {opusStatusLoading && (
+                          <div className="px-2.5 py-1 text-[9px] text-stone-500 border-t border-amber-400/10">Đang đồng bộ trạng thái…</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-stone-400 hover:text-amber-400" onClick={clearChat} title="Xóa chat">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
               </div>
 
               {/* Single Mode — Agent Selector + Session Selector */}
@@ -11189,7 +11549,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                   <div className="flex-1 relative">
                     <button
                       data-dropdown-toggle
-                      onClick={(e) => { e.stopPropagation(); setShowAgentSelect(!showAgentSelect); setShowSessionSelect(false); setShowTeamSelect(false) }}
+                      onClick={(e) => { e.stopPropagation(); setShowAgentSelect(!showAgentSelect); setShowSessionSelect(false); setShowTeamSelect(false); setShowOpusModeMenu(false) }}
                       className={`chamfer-sm w-full flex items-center justify-between px-2.5 py-1.5 text-xs transition-colors ${!selectedAgentId ? 'border-cyan-500/70 bg-cyan-950/30' : 'border-cyan-400/40 bg-slate-950/50 hover:border-cyan-500/40'} border`}
                     >
                       <span className="text-stone-300 truncate">
@@ -11268,7 +11628,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                   <div className="flex-1 relative">
                     <button
                       data-dropdown-toggle
-                      onClick={(e) => { e.stopPropagation(); setShowSessionSelect(!showSessionSelect); setShowAgentSelect(false); setShowTeamSelect(false) }}
+                      onClick={(e) => { e.stopPropagation(); setShowSessionSelect(!showSessionSelect); setShowAgentSelect(false); setShowTeamSelect(false); setShowOpusModeMenu(false) }}
                       className="chamfer-sm w-full flex items-center justify-between px-2.5 py-1.5 text-xs border border-cyan-400/40 bg-slate-950/50 hover:border-cyan-500/40 transition-colors"
                     >
                       <span className="text-stone-300 truncate">{currentSessionId ? (sessions.find((s: SmolabSession) => s.sessionId === currentSessionId)?.title || `Phiên ${currentSessionId.slice(0, 8)}...`) : '💬 Phiên chat'}</span>
@@ -11381,7 +11741,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                   <div className="flex-1 relative">
                     <button
                       data-dropdown-toggle
-                      onClick={(e) => { e.stopPropagation(); setShowTeamSelect(!showTeamSelect); setShowSessionSelect(false); setShowAgentSelect(false) }}
+                      onClick={(e) => { e.stopPropagation(); setShowTeamSelect(!showTeamSelect); setShowSessionSelect(false); setShowAgentSelect(false); setShowOpusModeMenu(false) }}
                       className={`chamfer-sm w-full flex items-center justify-between px-2.5 py-1.5 text-xs transition-colors ${!selectedTeam ? 'border-amber-500/70 bg-amber-950/30' : 'border-amber-400/40 bg-slate-950/50 hover:border-amber-500/40'} border`}
                     >
                       <span className="text-stone-300 truncate">
@@ -11624,8 +11984,12 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                 </div>
               ) : (
                 /* Message Bubbles */
+                /* OPUS (Task 13-c): map bọc React.Fragment — message row + Opus
+                   Review Card (nếu message đó đã được review) là 2 phần tử riêng
+                   trong space-y-3 → card nằm NGAY DƯỚI message, full column width. */
                 messages.map(msg => (
-                  <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} gap-2`}>
+                  <React.Fragment key={msg.id}>
+                  <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} gap-2`}>
                     {/* Bot icon for assistant/tool/error/opencode — team messages use agent avatar */}
                     {(msg.role === 'assistant' || msg.role === 'tool_call' || msg.role === 'error' || msg.role === 'opencode_progress' || msg.role === 'opencode_result') && (
                       <div className={`flex-shrink-0 w-6 h-6 flex items-center justify-center mt-0.5 ${
@@ -11731,6 +12095,26 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                         )}
                         {msg.durationMs && (
                           <div className="text-[10px] text-stone-400 mt-1">{(msg.durationMs / 1000).toFixed(1)}s</div>
+                        )}
+                      </div>
+                    ) : msg.role === 'user' && msg.metadata?.opusDirective === true ? (
+                      /* OPUS (Task 13-c) — DIRECTIVE CARD: Opus hành động thay
+                         Mr. Architect (role='user' + metadata.opusDirective) —
+                         canh phải theo pattern user msg nhưng style riêng amber. */
+                      <div className="max-w-[85%] border border-amber-400/45 bg-amber-950/20 p-2.5">
+                        <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+                          <span className="text-[11px] font-semibold text-amber-300">⚖️ OPUS — CHỈ ĐẠO</span>
+                          {typeof msg.metadata.decision === 'string' && msg.metadata.decision && (
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 border ${opusDecisionBadgeClass(msg.metadata.decision)}`}>
+                              {msg.metadata.decision}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-stone-200 whitespace-pre-wrap leading-relaxed custom-scrollbar max-h-72 overflow-y-auto">
+                          {msg.content}
+                        </div>
+                        {msg.metadata.triggerMode === 'auto' && (
+                          <div className="text-[9px] text-amber-400/60 mt-1.5">Opus hành động thay Mr. Architect</div>
                         )}
                       </div>
                     ) : msg.role === 'user' ? (
@@ -11882,16 +12266,59 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                           </span>
                         </div>
                       )}
+
+                      {/* OPUS (Task 13-c) — nút review thủ công của CTO meta-agent
+                          ⚖️ (chỉ manual mode; disable khi message này là assistant
+                          message cuối cùng VÀ đã có review — review lại được khi
+                          có assistant message mới hơn xuất hiện sau đó) */}
+                      {msg.role === 'assistant' && opusMode === 'manual' && (
+                        <div className="flex mt-1">
+                          <button
+                            onClick={() => { void handleOpusReview(msg.id) }}
+                            disabled={opusReviewLoading != null || (opusReviews.has(msg.id) && msg.id === lastAssistantMsgId)}
+                            className="chamfer-sm border border-amber-400/40 bg-amber-950/20 hover:border-amber-400/70 text-amber-300 text-[10px] px-2 py-0.5 flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Opus đọc Thought Progress + kết quả rồi phán quyết 5 động từ (30-120s)"
+                          >
+                            {opusReviewLoading === msg.id ? (
+                              <><Loader2 className="h-3 w-3 animate-spin" /> Opus đang đọc Thought Progress…</>
+                            ) : (
+                              <><Scale className="h-3 w-3" /> Opus review</>
+                            )}
+                          </button>
+                        </div>
+                      )}
                     </div>
                     )}
 
-                    {/* User icon */}
+                    {/* User icon — directive message của Opus dùng ⚖️ thay MessageSquare (Task 13-c) */}
                     {msg.role === 'user' && (
-                      <div className="flex-shrink-0 w-6 h-6 bg-gradient-to-br from-cyan-900 to-teal-900 flex items-center justify-center mt-0.5">
-                        <MessageSquare className="h-3 w-3 text-cyan-400" />
+                      <div className={`flex-shrink-0 w-6 h-6 flex items-center justify-center mt-0.5 ${msg.metadata?.opusDirective === true ? 'bg-gradient-to-br from-amber-900 to-orange-900' : 'bg-gradient-to-br from-cyan-900 to-teal-900'}`}>
+                        {msg.metadata?.opusDirective === true
+                          ? <span className="text-xs leading-none">⚖️</span>
+                          : <MessageSquare className="h-3 w-3 text-cyan-400" />}
                       </div>
                     )}
                   </div>
+                  {/* OPUS (Task 13-c) — Review Card ngay dưới assistant message
+                      đã review (full message column width) */}
+                  {msg.role === 'assistant' && opusReviews.has(msg.id) && (() => {
+                    const opusRv = opusReviews.get(msg.id)!
+                    return (
+                      <OpusReviewCard
+                        review={opusRv}
+                        dispatched={opusDispatched.has(opusRv.id) || opusDispatchedFromChat.has(opusRv.id)}
+                        onDispatched={() => {
+                          // Đã ban hành → đánh dấu + reload tail để directive
+                          // message hiện trong chat
+                          setOpusDispatched(prev => new Set(prev).add(opusRv.id))
+                          if (currentSessionIdRef.current) {
+                            void loadSessionTail(currentSessionIdRef.current, { silent: true }).catch(() => {})
+                          }
+                        }}
+                      />
+                    )
+                  })()}
+                  </React.Fragment>
                 ))
               )}
 

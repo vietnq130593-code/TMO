@@ -233,6 +233,12 @@ model AgentSession {
   agentProfileId  String?  /// FK → AgentProfile.id (null = default agent)
   teamMode        String?  /// "single" | "multi" — null = legacy session
   teamName        String?  /// "code" | "research" — null = single mode or legacy
+  /// OPUS REVIEW MODE (user request 2026-09-30 — Opus CTO agent):
+  /// "manual" = sau khi agent/team chạy xong, nút "Opus review" hiện dưới hàng
+  /// like/dislike — user bấm mới review. "auto" = Opus TỰ review + TỰ hành động
+  /// thay user sau mỗi run (chỉ dừng khi predicate 4 điều kiện thỏa — xem
+  /// OpusReview + src/lib/opus/). null = "manual" (mặc định an toàn).
+  opusReviewMode  String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -1689,8 +1695,13 @@ model ProposalStep {
 /// Cài đặt singleton của module Self-direction (đơn giản hóa: 1 row id='singleton').
 model SelfDirectionSettings {
   id             String    @id @default("singleton")
-  /// true = Omega được ủy quyền duyệt/không duyệt thay Mr. Architect
-  omegaDelegated Boolean   @default(false)
+  /// OPUS POWER TRANSFER (user decision #3, 2026-09-30): chức năng ủy quyền
+  /// phê duyệt SELF-DIRECTION chuyển từ Omega sang OPUS (CTO). true = Opus
+  /// duyệt/không duyệt thay Mr. Architect. Công việc sau ủy quyền vốn của
+  /// Omega (đánh giá bước, viết báo cáo hoàn thiện) cũng chuyển cho Opus —
+  /// việc TRIỂN KHAI + cách triển khai VẪN của Omega (orchestrator chạy plan).
+  /// Cột cũ omegaDelegated đã đổi tên — giá trị cũ không còn ý nghĩa.
+  opusDelegated  Boolean   @default(false)
   delegatedAt    DateTime?
   updatedAt      DateTime  @updatedAt
 
@@ -1738,6 +1749,81 @@ model TaskContextArchive {
 // job DB-running KHÔNG nằm trong running-map của process = mồ côi → requeue
 // nếu attempts < maxAttempts, else failed). Cancel qua DB flag
 // cancelRequestedAt — nút Dừng sống sót qua restart, KHÔNG phụ thuộc RAM.
+
+// ============================================================================
+// OPUS — CTO META-AGENT (user request 2026-09-30)
+// ============================================================================
+// Opus là CTO của TMO: KHÔNG tự thi công — chỉ phán đoán GIỮA các run và chỉ
+// đạo bước tiếp theo. Sau mỗi run (agent đơn / team workflow / delegation),
+// Opus đọc dossier (yêu cầu gốc + Thought Progress + kết quả cuối + bằng chứng
+// kiểm định + issue ledger) → verdict theo 5 động từ CONTINUE/FIX/REDIRECT/
+// ESCALATE/STOP. Chế độ auto: Opus tự hành động thay user, chỉ dừng khi
+// predicate 4 điều kiện thỏa (spec gốc đạt + ledger sạch blocking/major +
+// chuỗi kiểm định xanh + vòng quét cuối không mở issue blocking mới).
+
+/// 1 bản review của Opus cho 1 agent run đã hoàn thành (manual hoặc auto).
+model OpusReview {
+  id           String   @id @default(cuid())
+  sessionId    String   /// AgentSession.sessionId
+  /// runId (run_xxx / sub_xxx delegation) của run đang được review
+  runRef       String?
+  /// ChatMessage id của assistant message cuối cùng của run (neo UI)
+  messageId    String?
+  /// CONTINUE | FIX | REDIRECT | ESCALATE | STOP (giao thức 5 động từ)
+  decision     String
+  /// JSON OpusVerdict đầy đủ: { summary, axes{...}, issues[], directive,
+  ///   rationale, evidenceRefs[], stopAssessment{...} } — xem src/lib/opus/
+  verdict      String?  /// JSON
+  /// manual | auto — chế độ kích hoạt review này
+  triggerMode  String   @default("manual")
+  model        String?  /// model thực tế trả verdict (kimi-k3 hoặc fallback)
+  tokensUsed   Int?
+  durationMs   Int?
+  createdAt    DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+  @@index([runRef])
+  @@index([decision])
+}
+
+/// OPUS — Issue Ledger: sổ công nợ vấn đề Opus ghi nhận qua các vòng review.
+/// Predicate dừng (auto mode) tra sổ này: không còn issue blocking/major OPEN
+/// là 1 trong 4 điều kiện bắt buộc.
+model IssueLedger {
+  id           String    @id @default(cuid())
+  sessionId    String
+  /// runId mở ra issue (run_xxx / sub_xxx)
+  runRef       String?
+  /// OpusReview.id phát hiện issue
+  opusReviewId String?
+  title        String
+  /// blocking | major | minor | nit
+  severity     String
+  /// open | fixed | wont_fix | superseded
+  status       String    @default("open")
+  /// trích dẫn bằng chứng (tool output / dòng log / diff hunk) — BẮT BUỘC có
+  evidence     String?
+  openedAt     DateTime  @default(now())
+  resolvedAt   DateTime?
+  /// opus_review id xác nhận đã sửa | 'user' khi user tự đóng
+  resolvedBy   String?
+
+  @@index([sessionId, status])
+  @@index([severity])
+}
+
+/// OPUS — cài đặt toàn hệ thống (singleton). Kill switch là PHANH DUY NHẤT còn
+/// lại khi auto mode chạy không giới hạn vòng/budget (user decision #2) —
+/// được đọc ở MỖI vòng trước khi Opus tự hành động tiếp.
+model OpusSettings {
+  id        String    @id @default("singleton")
+  /// true = KILL SWITCH — auto mode ngưng toàn hệ thống tới khi user bật lại
+  killed    Boolean   @default(false)
+  killedAt  DateTime?
+  updatedAt DateTime  @updatedAt
+
+  @@map("opus_settings")
+}
 
 /// 1 job goal-loop chạy nền — sống sót qua restart/đóng tab (durable).
 model GoalLoopJob {

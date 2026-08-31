@@ -374,7 +374,10 @@ class GoalLoopWorker {
       try {
         jobInput = JSON.parse(job.input) as GoalLoopJobInput
       } catch (parseErr) {
-        await this.markFailed(job.id, `input JSON không parse được: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`)
+        await this.markFailed(job.id, `input JSON không parse được: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`, {
+          sessionId: job.sessionId,
+          runId: null,
+        })
         return
       }
 
@@ -582,6 +585,25 @@ class GoalLoopWorker {
           finalizeErr instanceof Error ? finalizeErr.message : String(finalizeErr)
         )
       }
+
+      // 11. OPUS AUTO-REVIEW HOOK (Task 13-b): job hoàn thành (status=
+      //     'completed', assistant message đã finalize vào phiên) → kích hoạt
+      //     cổng auto review của Opus CTO. Import ĐỘNG để tránh circular import
+      //     (pipeline.ts import tĩnh goalLoopWorker của file này). Fire-and-
+      //     forget `void` — maybeAutoOpusReview tự gate (mode auto + kill
+      //     switch + dedupe 45s + có assistant message mới) và KHÔNG throw.
+      try {
+        const { maybeAutoOpusReview } = await import('@/lib/opus/pipeline')
+        void maybeAutoOpusReview(job.sessionId, {
+          runRef: result.runId ?? null,
+          messageId: job.messageId ?? null,
+        })
+      } catch (opusErr) {
+        console.warn(
+          `[GoalLoopWorker] job ${job.id}: Opus auto-review hook lỗi (fail-open — job vẫn completed):`,
+          opusErr instanceof Error ? opusErr.message : String(opusErr)
+        )
+      }
     } catch (err) {
       // Loop throw (bug thật / LLM chết hẳn) → mark failed. Conditional để
       // không đè status nếu job đã bị đánh dấu terminal từ đường khác.
@@ -625,6 +647,23 @@ class GoalLoopWorker {
         }
       } catch (closeErr) {
         console.warn(`[GoalLoopWorker] job ${jobId}: crash-close todos lỗi (fail-open):`, closeErr instanceof Error ? closeErr.message : String(closeErr))
+      }
+
+      // OPUS AUTO-REVIEW HOOK (Task 13-b): job FAIL (status='failed') → Opus
+      // cần biết run fail để FIX. Import động chống circular; fire-and-forget
+      // — maybeAutoOpusReview tự gate (mode auto + kill switch + dedupe 45s +
+      // assistant message mới) và KHÔNG throw. Fail-open tuyệt đối.
+      try {
+        const { maybeAutoOpusReview } = await import('@/lib/opus/pipeline')
+        void maybeAutoOpusReview(crashContext.sessionId, {
+          runRef: crashContext.runId ?? null,
+          messageId: null,
+        })
+      } catch (opusErr) {
+        console.warn(
+          `[GoalLoopWorker] job ${jobId}: Opus auto-review hook (fail path) lỗi (fail-open):`,
+          opusErr instanceof Error ? opusErr.message : String(opusErr)
+        )
       }
     }
   }

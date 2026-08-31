@@ -19,8 +19,8 @@
  *        • forward  → tạo SelfDirectionProposal (category='automation',
  *                     automationJson={kind, payload, proposedBy}, status
  *                     'pending') → hiển thị module Self-direction → chờ
- *                     Mr. Architect duyệt, hoặc Omega duyệt thay khi bật
- *                     ủy quyền (omegaDelegated).
+ *                     Mr. Architect duyệt, hoặc Opus duyệt thay khi bật
+ *                     ủy quyền (opusDelegated — user decision #3).
  *        • reject   → trả lý do ngay cho agent đề xuất (không tạo proposal)
  *      → ĐƯỢC DUYỆT → executeAutomationProposal() tạo tài nguyên THẬT
  *        (fast-path trong triggerOrchestration — hành động cơ khí, không cần

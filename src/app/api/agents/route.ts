@@ -138,7 +138,9 @@ export async function GET(request: NextRequest) {
 async function getAgentsHandler(request: NextRequest, attempt: number): Promise<Response> {
   try {
     // Auto-seed Code Team + Standalone agents on first agents fetch (idempotent, cached)
-    await Promise.all([ensureCodeTeamAgents(), ensureStandaloneAgents(), ensureMCPBridgeConfig()])
+    // + OPUS CTO meta-agent (user request 2026-09-30)
+    const { ensureOpusAgent } = await import('@/lib/opus/opus-agent')
+    await Promise.all([ensureCodeTeamAgents(), ensureStandaloneAgents(), ensureMCPBridgeConfig(), ensureOpusAgent()])
 
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')

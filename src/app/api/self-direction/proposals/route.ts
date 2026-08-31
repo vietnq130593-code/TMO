@@ -2,7 +2,7 @@
  * SELF-DIRECTION PROPOSALS API
  * ====================================
  * GET  /api/self-direction/proposals          — Danh sách đề xuất + settings
- *      (kèm side-effects: promote đề xuất đến hạn, kick Omega auto-review
+ *      (kèm side-effects: promote đề xuất đến hạn, kick Opus auto-review
  *       nếu ủy quyền đang bật — fire-and-forget, không block response)
  * POST /api/self-direction/proposals          — Tạo đề xuất mới (user/agent)
  */
@@ -58,7 +58,8 @@ async function serializeProposals(rows: Array<{
 
 export async function GET() {
   try {
-    // Side-effects (fire-and-forget, fail-open): promote đến hạn + Omega auto-review
+    // Side-effects (fire-and-forget, fail-open): promote đến hạn + Opus auto-review
+    // (user decision #3: ủy quyền duyệt chuyển từ Omega sang Opus)
     void promoteDueProposals()
     void autoReviewPendingIfDelegated()
 
@@ -105,11 +106,12 @@ export async function POST(req: NextRequest) {
     // Prisma client cũ (retry không kèm field, fail-open).
     const created = await createSelfDirectionProposal({ ...validated.data, status: 'pending' })
 
-    // Ủy quyền đang bật → Omega review ngay đề xuất mới (fire-and-forget)
+    // Ủy quyền đang bật → Opus review ngay đề xuất mới (fire-and-forget —
+    // user decision #3: duyệt chuyển từ Omega sang Opus)
     const settings = await getSelfDirectionSettings()
-    if (settings.omegaDelegated && created.status === 'pending') {
-      const { omegaReviewPending } = await import('@/lib/self-direction/orchestrator')
-      void omegaReviewPending(created.id)
+    if (settings.opusDelegated && created.status === 'pending') {
+      const { opusReviewPending } = await import('@/lib/self-direction/orchestrator')
+      void opusReviewPending(created.id)
     }
 
     // scheduleAt đã quá khứ + được duyệt tự động? Không — mới tạo luôn pending, chờ duyệt.

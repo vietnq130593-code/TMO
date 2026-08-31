@@ -6,8 +6,9 @@
  * UI cho pipeline "tự chủ" của hệ thống TMO:
  *   - Agents tự quét hệ thống (khoảng trống / KB mâu thuẫn / tool hay fail /
  *     thiếu skill / thiếu test / cải tiến / dài hạn) → tạo "đề xuất" (proposal).
- *   - Đề xuất chờ Mr. Architect phê duyệt — hoặc ủy quyền cho Omega duyệt thay
- *     (Switch "Ủy quyền duyệt cho Omega").
+ *   - Đề xuất chờ Mr. Architect phê duyệt — hoặc ủy quyền cho Opus duyệt thay
+ *     (Switch "Ủy quyền duyệt cho Opus" — user decision #3: chuyển từ Omega
+ *     sang Opus CTO; orchestration/implementation vẫn của Omega).
  *   - Được duyệt → Omega lập kế hoạch từng bước, giao agents thực hiện, đánh giá
  *     và viết báo cáo hoàn thiện — xem trong Detail Dialog.
  *
@@ -114,7 +115,8 @@ export interface SdProposal {
   /** CI-6 B5: llm | code-workflow (optional — API cũ có thể thiếu field) */
   executionMode?: string | null
   userNotes: string | null
-  reviewer: 'mr-architect' | 'omega' | null
+  /** Người duyệt: Mr. Architect | Opus (ủy quyền — user decision #3) | omega (dữ liệu cũ) */
+  reviewer: 'mr-architect' | 'opus' | 'omega' | null
   decisionReason: string | null
   reviewedAt: string | null
   planSummary: string | null
@@ -142,7 +144,8 @@ export interface SdStep {
 }
 
 export interface SdSettings {
-  omegaDelegated: boolean
+  /** USER DECISION #3: ủy quyền duyệt chuyển Omega → Opus (cột opusDelegated) */
+  opusDelegated: boolean
   delegatedAt: string | null
 }
 
@@ -286,11 +289,20 @@ function StatusBadge({ status }: { status: SdStatus }) {
   )
 }
 
-function ReviewerBadge({ reviewer }: { reviewer: 'mr-architect' | 'omega' }) {
-  if (reviewer === 'omega') {
+function ReviewerBadge({ reviewer }: { reviewer: 'mr-architect' | 'opus' | 'omega' }) {
+  // USER DECISION #3: Opus duyệt thay Mr. Architect khi ủy quyền bật;
+  // 'omega' chỉ còn ở dữ liệu lịch sử (được duyệt trước 2026-09-30).
+  if (reviewer.toLowerCase() === 'opus') {
     return (
       <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-amber-500/40 text-amber-300 bg-amber-950/30">
-        Duyệt: Omega (ủy quyền)
+        Duyệt: Opus (ủy quyền)
+      </Badge>
+    )
+  }
+  if (reviewer.toLowerCase() === 'omega') {
+    return (
+      <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-amber-500/40 text-amber-300 bg-amber-950/30">
+        Duyệt: Omega (ủy quyền cũ)
       </Badge>
     )
   }
@@ -404,7 +416,7 @@ function StepItem({
 export default function SelfDirectionModule() {
   // ----- Data -----
   const [proposals, setProposals] = useState<SdProposal[]>([])
-  const [settings, setSettings] = useState<SdSettings>({ omegaDelegated: false, delegatedAt: null })
+  const [settings, setSettings] = useState<SdSettings>({ opusDelegated: false, delegatedAt: null })
   const [loading, setLoading] = useState(true) // lần fetch đầu
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -649,13 +661,13 @@ export default function SelfDirectionModule() {
     }
   }, [scanning, fetchList])
 
-  // ==================== Ủy quyền duyệt cho Omega ====================
+  // ==================== Ủy quyền duyệt cho Opus (user decision #3) ====================
 
   const toggleDelegation = useCallback(
     async (enabled: boolean) => {
       const prevSettings = settings
       setDelegating(true)
-      setSettings((prev) => ({ ...prev, omegaDelegated: enabled })) // optimistic
+      setSettings((prev) => ({ ...prev, opusDelegated: enabled })) // optimistic
       try {
         const res = await fetch('/api/self-direction/delegation', {
           method: 'POST',
@@ -666,9 +678,9 @@ export default function SelfDirectionModule() {
         const data = (await res.json()) as { settings: SdSettings }
         if (data.settings) setSettings(data.settings)
         toast({
-          title: enabled ? 'Đã bật ủy quyền duyệt cho Omega' : 'Đã tắt ủy quyền duyệt',
+          title: enabled ? 'Đã bật ủy quyền duyệt cho Opus' : 'Đã tắt ủy quyền duyệt',
           description: enabled
-            ? 'Omega sẽ tự phê duyệt các đề xuất mới thay Mr. Architect'
+            ? 'Opus sẽ tự phê duyệt các đề xuất mới thay Mr. Architect'
             : 'Các đề xuất quay lại chờ Mr. Architect phê duyệt',
         })
       } catch (err) {
@@ -820,24 +832,24 @@ export default function SelfDirectionModule() {
             </div>
           </div>
 
-          {/* ===== Ủy quyền duyệt cho Omega ===== */}
+          {/* ===== Ủy quyền duyệt cho Opus (user decision #3: chuyển từ Omega sang Opus CTO) ===== */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-slate-950/40 border border-stone-800/80 px-3 py-2">
             <Switch
-              id="sd-omega-delegation"
-              checked={settings.omegaDelegated}
+              id="sd-opus-delegation"
+              checked={settings.opusDelegated}
               onCheckedChange={(checked) => void toggleDelegation(checked)}
               disabled={delegating}
             />
             <label
-              htmlFor="sd-omega-delegation"
+              htmlFor="sd-opus-delegation"
               className="text-xs text-stone-300 select-none cursor-pointer"
             >
-              Ủy quyền duyệt cho Omega
+              Ủy quyền duyệt cho Opus
             </label>
             {delegating && <Loader2 className="h-3 w-3 animate-spin text-amber-400" />}
-            {settings.omegaDelegated && (
+            {settings.opusDelegated && (
               <Badge variant="outline" className="text-[10px] border-amber-400/40 text-amber-300">
-                Omega duyệt thay Mr. Architect
+                ⚖️ Opus duyệt thay Mr. Architect
               </Badge>
             )}
           </div>

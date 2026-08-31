@@ -19,10 +19,10 @@ export async function POST() {
   try {
     const result = await runSelfDirectionScan()
 
-    // Ủy quyền đang bật → Omega review ngay các đề xuất mới — tuần tự chống
-    // 429 storm (fire-and-forget)
+    // Ủy quyền đang bật → Opus review ngay các đề xuất mới — tuần tự chống
+    // 429 storm (fire-and-forget; user decision #3: duyệt chuyển Omega → Opus)
     const settings = await getSelfDirectionSettings()
-    if (settings.omegaDelegated && result.proposals.length > 0) {
+    if (settings.opusDelegated && result.proposals.length > 0) {
       kickOmegaReviewsSerially(result.proposals.map(p => p.id))
     }
 

@@ -100,6 +100,7 @@ export async function POST(request: NextRequest) {
     // Default: just ensure agents exist (idempotent)
     const { ensureCodeTeamAgents } = await import('@/lib/code-team/agents')
     const { ensureStandaloneAgents } = await import('@/lib/standalone-agents')
+    const { ensureOpusAgent } = await import('@/lib/opus/opus-agent')
 
     if (scope === 'all' || scope === 'code') {
       await ensureCodeTeamAgents()
@@ -107,6 +108,8 @@ export async function POST(request: NextRequest) {
     if (scope === 'all' || scope === 'standalone') {
       await ensureStandaloneAgents()
     }
+    // OPUS CTO meta-agent (user request 2026-09-30) — luôn ensure
+    await ensureOpusAgent()
 
     const [codeAgents, standaloneAgents] = await Promise.all([
       db.agentProfile.findMany({ where: { team: 'code', isSystem: true } }),
