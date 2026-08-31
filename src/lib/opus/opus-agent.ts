@@ -186,6 +186,38 @@ let seeded = false
 export async function ensureOpusAgent(): Promise<void> {
   if (seeded) return
   try {
+    // TASK 22 (user directive 2026-09-30 #3 — "Omega và Opus có quyền sử dụng
+    // TOÀN BỘ tools và skills"): Opus được cấp ĐẦY ĐỦ 74 tool builtin + mọi
+    // skill (list_skills/read_skill) + custom tools (mọi agents đều dùng được
+    // theo whitelist-exception). Vai trò "KHÔNG tự thi công" vẫn giữ trong
+    // OPUS_INSTRUCTION (bất biến kiến trúc) — quyền đầy đủ để Opus TỰ KIỂM
+    // ĐỊNH bằng chứng khi cần (user directive: trọng tài phải tin bằng chứng
+    // tool thật, giờ có đầy đủ tool để tự lấy bằng chứng).
+    // Dynamic import (không tĩnh — tránh thứ tự init module giữa opus-agent ↔
+    // tool-executor chain khi app boot).
+    let fullToolList: string[] = []
+    try {
+      const { getAllBuiltinToolNames } = await import('@/lib/code-team/tool-executor')
+      fullToolList = getAllBuiltinToolNames()
+    } catch { /* fail-open → giữ tools cũ (null = mọi tool đều được phép) */ }
+    const fullToolsJson = fullToolList.length > 0 ? JSON.stringify(fullToolList) : undefined
+
+    // MIGRATION: Opus đã tồn tại với tools=null (cũ) → cấp 1 LẦN full list;
+    // nếu user đã tự chỉnh tools qua UI/ToolAssignment → TÔN TRỌNG, không đè.
+    if (fullToolsJson) {
+      const existing = await db.agentProfile.findUnique({
+        where: { name: OPUS_AGENT_NAME },
+        select: { tools: true },
+      })
+      if (existing && (existing.tools === null || existing.tools === '')) {
+        await db.agentProfile.update({
+          where: { name: OPUS_AGENT_NAME },
+          data: { tools: fullToolsJson },
+        }).catch(() => { /* fail-open */ })
+        console.log(`[Opus] TASK 22: cấp full tools (${fullToolList.length} builtin) cho Opus (trước đó null)`)
+      }
+    }
+
     await db.agentProfile.upsert({
       where: { name: OPUS_AGENT_NAME },
       update: {
@@ -212,10 +244,12 @@ export async function ensureOpusAgent(): Promise<void> {
         avatar: OPUS_AVATAR,
         isSystem: true,
         enabled: true,
+        // TASK 22: Opus khởi tạo với full toolset ngay từ đầu
+        ...(fullToolsJson ? { tools: fullToolsJson } : {}),
       },
     })
     seeded = true
-    console.log(`[Opus] AgentProfile '${OPUS_AGENT_NAME}' sẵn sàng (CTO meta-agent)`)
+    console.log(`[Opus] AgentProfile '${OPUS_AGENT_NAME}' sẵn sàng (CTO meta-agent${fullToolList.length > 0 ? `, full tools: ${fullToolList.length}` : ''})`)
   } catch (err) {
     // Fail-open: thiếu profile → các API opus sẽ tự ensure lại; không crash app
     console.warn(`[Opus] ensureOpusAgent fail-open:`, err instanceof Error ? err.message : err)

@@ -1833,6 +1833,17 @@ export function isBuiltinTool(name: string): boolean {
 }
 
 /**
+ * TASK 22 (user directive 2026-09-30 #3 — "Omega và Opus có quyền sử dụng
+ * TOÀN BỘ tools và skills"): danh sách TÊN mọi tool builtin — nguồn chuẩn để
+ * cấp full quyền (Omega standalone-agents, Opus opus-agent, Tools Registry
+ * hiển thị open-access). Lưu ý: custom tools (agent tự viết) LUÔN dùng được
+ * cho mọi agents theo thiết kế whitelist-exception — không cần liệt kê đây.
+ */
+export function getAllBuiltinToolNames(): string[] {
+  return Object.keys(ALL_TOOL_DEFINITIONS)
+}
+
+/**
  * 21-c: lấy FULL def 1 tool builtin (description + parameters JSON) — dùng bởi
  * GET /api/tools/builtin/[name] (dialog Tools Manager hiển thị parameters).
  */

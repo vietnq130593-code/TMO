@@ -12,14 +12,28 @@
  *
  * Câu trả lời câu hỏi "agents có dùng được TẤT CẢ không" nằm trong agentMatrix +
  * builtinTools[].agents của từng tool.
+ *
+ * TASK 22 (user directive 2026-09-30 #4): "phần Agents - tools khả dụng khi có
+ * thêm agent hoặc agents được setup thêm tools, skills thì phần này có cập
+ * real time luôn không" → NÂNG CẤP:
+ *   - TRƯỚC: agentMatrix chỉ liệt kê 1 standalone (Omega) + 5 team positions
+ *     hardcode — agents do Omega create_agent + Opus KHÔNG BAO GIỜ hiển thị.
+ *   - GIỜ: liệt kê TOÀN BỘ AgentProfile trong DB (Opus, agents động, agents
+ *     user tự tạo...) + effective tools TÍNH TẠI THỜI ĐIỂM MỖI REQUEST:
+ *     profile.tools (JSON) → standalone/team default → ToolAssignment override
+ *     (Tools Manager) — mọi thay đổi (agent mới / gán tool mới / tắt tool)
+ *     hiện đúng NGAY ở request kế tiếp (route force-dynamic, không cache).
+ *   - Agents "open-access" (whelist rỗng = MỌI tool đều được phép) hiển thị
+ *     full bộ builtin qua cờ openAccess + toolCount = toàn bộ.
  */
 
 import { NextResponse } from 'next/server'
 import { readdirSync, existsSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { getAllBuiltinToolSummaries } from '@/lib/code-team/tool-executor'
+import { getAllBuiltinToolSummaries, getAllBuiltinToolNames } from '@/lib/code-team/tool-executor'
 import { getAgentTools, getAgentName } from '@/lib/code-team/agents'
 import { getStandaloneAgentTools, getStandaloneAgentNames } from '@/lib/standalone-agents'
+import { getEffectiveToolNames, getAllAssignments, resolveAgentKey } from '@/lib/tool-access'
 import { db } from '@/lib/db'
 import { ensureCustomToolsLoaded, getAllCustomTools } from '@/lib/custom-tool-registry'
 
@@ -28,8 +42,48 @@ export const dynamic = 'force-dynamic'
 // Team agents theo position (code-team/agents.ts)
 const TEAM_POSITIONS = ['TL', 'G1', 'G2-A', 'G2-B', 'G3']
 
+interface AgentRow {
+  name: string
+  short: string
+  avatar: string | null
+  isSystem: boolean
+  team: string | null
+  position: string | null
+  /** effective tools TẠI THỜI ĐIỂM request (default + ToolAssignment override) */
+  tools: string[]
+  /** whitelist rỗng = open-access (MỌI tool builtin đều được phép — goal-loop) */
+  openAccess: boolean
+  source: 'standalone' | 'opus' | 'team' | 'db' | 'db-open'
+}
+
+/** Whitelist mặc định theo DB row (TASK 22 — DB-first như chat route) */
+function resolveDefaultTools(profile: { name: string; tools: string | null; position: string | null }): string[] {
+  // 1. AgentProfile.tools (JSON) — agent do Omega create_agent / Opus (full list)
+  if (profile.tools) {
+    try {
+      const parsed = JSON.parse(profile.tools)
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map(t => String(t))
+      }
+      // [] rõ ràng → open-access (chat route: length===0 → không filter)
+      if (Array.isArray(parsed)) return []
+    } catch { /* fallthrough */ }
+  }
+  // 2. Standalone definition (Omega hardcoded whitelist)
+  const standalone = getStandaloneAgentTools(profile.name)
+  if (standalone.length > 0) return standalone
+  // 3. Team definition (theo position)
+  if (profile.position && TEAM_POSITIONS.includes(profile.position)) {
+    return getAgentTools(profile.position)
+  }
+  // 4. Open-access — agent custom không khai báo tools → MỌI tool đều được phép
+  return []
+}
+
 export async function GET() {
   try {
+    const builtinNames = getAllBuiltinToolNames()
+
     // ===== 1. Built-in tools + agent access matrix =====
     const builtinSummaries = getAllBuiltinToolSummaries()
 
@@ -47,21 +101,89 @@ export async function GET() {
       }
     } catch { /* fail-open — mô tả mặc định */ }
 
-    // Agent tool lists: Omega (standalone) + 5 team agents
-    const agentToolLists: Array<{ name: string; short: string; tools: string[] }> = []
+    // ===== TASK 22: Agent rows — DB-FIRST (mọi AgentProfile sống) =====
+    // Bao gồm: Omega + Opus + Code Team + agents do Omega create_agent tạo +
+    // agents user tự tạo trong UI. Effective tools = default (DB tools JSON →
+    // standalone → team) + ToolAssignment override (Tools Manager) — phản ánh
+    // CHÍNH XÁC những gì goal-loop sẽ cho agent dùng ở request chat kế tiếp.
+    const agentRows: AgentRow[] = []
+    const seen = new Set<string>()
+    // Assignments 1 lần cho cả batch (hiển thị open-access chính xác: tool bị
+    // disable qua Tools Manager bị executor hard-gate chặn → không hiển thị)
+    const allAssignments = await getAllAssignments().catch(() => [])
+    try {
+      const profiles = await db.agentProfile.findMany({
+        orderBy: [{ isSystem: 'desc' }, { createdAt: 'asc' }],
+        select: {
+          id: true, name: true, avatar: true, isSystem: true,
+          team: true, position: true, tools: true, enabled: true,
+        },
+      })
+      for (const p of profiles) {
+        seen.add(p.name)
+        const defaults = resolveDefaultTools(p)
+        // ToolAssignment override (Tools Manager / Omega manage_tools) — live
+        let effective = defaults
+        try {
+          effective = await getEffectiveToolNames(p.name, defaults)
+        } catch { /* fail-open giữ defaults */ }
+        let openAccess = effective.length === 0
+        let displayTools = effective
+        if (openAccess) {
+          // Open-access (whitelist rỗng = MỌI tool được phép ở prompt-side) —
+          // hiển thị full bộ builtin TRỪ tool bị hard-gate disable tường minh
+          const key = resolveAgentKey(p.name)
+          const disabled = new Set(
+            allAssignments.filter(a => a.agentKey === key && a.enabled === false).map(a => a.toolName)
+          )
+          displayTools = builtinNames.filter(t => !disabled.has(t))
+          // Mọi tool đều bị chặn (edge hiếm) → coi như không còn open-access
+          if (disabled.size > 0 && displayTools.length === 0) openAccess = false
+        }
+        agentRows.push({
+          name: p.name,
+          short: (p.position && TEAM_POSITIONS.includes(p.position)) ? p.position : (p.name.slice(0, 2).toUpperCase()),
+          avatar: p.avatar,
+          isSystem: p.isSystem,
+          team: p.team,
+          position: p.position,
+          tools: displayTools,
+          openAccess,
+          source: p.name === 'Opus' ? 'opus'
+            : getStandaloneAgentNames().includes(p.name) ? 'standalone'
+            : openAccess ? 'db-open' : 'db',
+        })
+      }
+    } catch (dbErr) {
+      // Fail-open: DB lỗi → dùng bộ hardcode cũ (standalone + 5 team)
+      console.warn('[ToolsRegistry] DB agentProfile enumerate failed (fail-open hardcode):', dbErr instanceof Error ? dbErr.message : String(dbErr))
+    }
+
+    // Bổ sung agents hardcode mà DB CHƯA có (seed chưa chạy / DB trống) —
+    // hiển thị vẫn đầy đủ với default whitelist từ code definitions.
     for (const saName of getStandaloneAgentNames()) {
-      agentToolLists.push({
-        name: saName,
-        short: saName.slice(0, 2).toUpperCase(),
-        tools: getStandaloneAgentTools(saName),
+      if (seen.has(saName)) continue
+      seen.add(saName)
+      agentRows.push({
+        name: saName, short: 'OM', avatar: null, isSystem: true, team: null, position: null,
+        tools: getStandaloneAgentTools(saName), openAccess: false, source: 'standalone',
+      })
+    }
+    // Opus (meta-agent — ensureOpusAgent có thể chưa chạy trong process này)
+    if (!seen.has('Opus')) {
+      seen.add('Opus')
+      agentRows.push({
+        name: 'Opus', short: '⚖', avatar: null, isSystem: true, team: null, position: null,
+        tools: builtinNames, openAccess: false, source: 'opus',
       })
     }
     for (const pos of TEAM_POSITIONS) {
       const agentName = getAgentName(pos)
-      agentToolLists.push({
-        name: agentName,
-        short: pos,
-        tools: getAgentTools(pos),
+      if (seen.has(agentName)) continue
+      seen.add(agentName)
+      agentRows.push({
+        name: agentName, short: pos, avatar: null, isSystem: false, team: 'code', position: pos,
+        tools: getAgentTools(pos), openAccess: false, source: 'team',
       })
     }
 
@@ -70,9 +192,9 @@ export async function GET() {
     const customToolsLive = getAllCustomTools()
     const customToolNames = new Set(customToolsLive.map(t => t.name))
 
-    // Per-tool: agents nào có quyền (built-in) hoặc "ALL" (custom)
+    // Per-tool: agents nào có quyền (built-in); open-access agents có MỌI tool
     const builtinTools = builtinSummaries.map(t => {
-      const agents = agentToolLists
+      const agents = agentRows
         .filter(a => a.tools.includes(t.name))
         .map(a => ({ name: a.name, short: a.short }))
       return {
@@ -82,8 +204,8 @@ export async function GET() {
         paramNames: t.paramNames,
         agents,
         agentCount: agents.length,
-        totalAgents: agentToolLists.length,
-        accessibleByAll: agents.length === agentToolLists.length,
+        totalAgents: agentRows.length,
+        accessibleByAll: agents.length === agentRows.length,
       }
     })
 
@@ -162,27 +284,34 @@ export async function GET() {
       dbSkills = rows.map(r => ({ slug: r.slug, name: r.name, source: r.source, enabled: r.enabled, version: r.version }))
     } catch { /* non-fatal */ }
 
-    // ===== 5. Agent matrix =====
-    const agentMatrix = agentToolLists.map(a => {
-      const customCount = a.tools.includes('create_custom_tool') ? customToolNames.size : 0
+    // ===== 5. Agent matrix (TASK 22: TOÀN BỘ agents trong DB + effective live) =====
+    const agentMatrix = agentRows.map(a => {
+      const canSelfWrite = a.tools.includes('create_custom_tool')
+      const customCount = canSelfWrite || a.openAccess ? customToolNames.size : 0
       return {
         name: a.name,
         short: a.short,
+        avatar: a.avatar,
+        isSystem: a.isSystem,
+        team: a.team,
+        openAccess: a.openAccess,
         builtinToolCount: a.tools.length,
-        canSelfWriteTools: a.tools.includes('create_custom_tool'),
-        customToolCount: customCount, // custom tools dùng được (nếu có quyền self-write)
+        canSelfWriteTools: canSelfWrite,
+        customToolCount: customCount, // custom tools dùng được (nếu có quyền self-write / open-access)
         totalUsable: a.tools.length + customCount,
       }
     })
 
     return NextResponse.json({
       ok: true,
+      // TASK 22: dấu thời gian + số agent để UI detect thay đổi (real-time)
+      generatedAt: new Date().toISOString(),
       summary: {
         builtinToolCount: builtinTools.length,
         customToolCount: customTools.length,
         filesystemSkillCount: filesystemSkills.length,
         dbSkillCount: dbSkills.length,
-        agentCount: agentToolLists.length,
+        agentCount: agentRows.length,
         // Tools mà CHƯA agent nào dùng được (định nghĩa nhưng chưa cấp quyền)
         orphanToolCount: builtinTools.filter(t => t.agentCount === 0).length,
       },

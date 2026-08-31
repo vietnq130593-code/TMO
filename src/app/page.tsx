@@ -4772,7 +4772,10 @@ const SMOLAB_TABS = [
   { id: 'knowledge', label: 'Knowledge', icon: Brain, color: 'cyan' },
   { id: 'memory', label: 'Memory', icon: Thermometer, color: 'rose' },
   { id: 'learning', label: 'Learning', icon: BookMarked, color: 'amber' },
-  { id: 'skills', label: 'Skills', icon: Wrench, color: 'violet' },
+  // TASK 22 (user directive 2026-09-30 #4): đổi tên tab "Skills" → "Tools/Skills"
+  // — panel này giờ là trung tâm của CẢ tools (74 builtin + custom) lẫn skills
+  // (filesystem + DB), đồng thời Tools Registry hiển thị matrix agents↔tools.
+  { id: 'skills', label: 'Tools/Skills', icon: Wrench, color: 'violet' },
   { id: 'automation', label: 'Automation', icon: Zap, color: 'orange' },
   { id: 'channels', label: 'Channels', icon: Radio, color: 'teal' },
   { id: 'code', label: 'Code', icon: Code2, color: 'emerald' },
@@ -12574,8 +12577,13 @@ function SkillsTabContent() {
   const [toolsRegistryOpen, setToolsRegistryOpen] = useState(false)
 
   // Tools Registry — tổng quan TOÀN BỘ skills/tools của app + agents nào dùng được
+  // TASK 22 (user directive 2026-09-30 #4): agentMatrix giờ là TOÀN BỘ agents
+  // trong DB (Omega, Opus, Code Team, agents do Omega/user tạo thêm) + effective
+  // tools TÍNH LIVE mỗi request (profile.tools → standalone/team default →
+  // ToolAssignment override) — agent mới / gán tool mới / tắt tool hiện NGAY.
   const [toolsRegistry, setToolsRegistry] = useState<{
     ok: boolean
+    generatedAt: string
     summary: {
       builtinToolCount: number; customToolCount: number; filesystemSkillCount: number;
       dbSkillCount: number; agentCount: number; orphanToolCount: number;
@@ -12591,8 +12599,9 @@ function SkillsTabContent() {
     }>
     filesystemSkills: Array<{ slug: string; hasSkillMd: boolean; description: string }>
     agentMatrix: Array<{
-      name: string; short: string; builtinToolCount: number; canSelfWriteTools: boolean;
-      customToolCount: number; totalUsable: number;
+      name: string; short: string; avatar: string | null; isSystem: boolean;
+      team: string | null; position: string | null; openAccess: boolean;
+      builtinToolCount: number; canSelfWriteTools: boolean; customToolCount: number; totalUsable: number;
     }>
   } | null>(null)
   const [toolsRegistryLoading, setToolsRegistryLoading] = useState(false)
@@ -12842,6 +12851,38 @@ function SkillsTabContent() {
     })
   }, [])
 
+  // ===== TASK 22 (user directive 2026-09-30 #4) — TOOLS REGISTRY REAL-TIME =====
+  // "khi có thêm agent hoặc agents được setup thêm tools, skills thì phần
+  // này có cập real time luôn không" → CÓ: poll mỗi 30s khi panel Tools
+  // Registry đang mở (API force-dynamic tính lại agentMatrix từ DB +
+  // ToolAssignment live mỗi request — agent mới tạo ở module khác / Omega
+  // create_agent chạy nền / gán tắt tool qua Tools Manager hiện trong ≤30s).
+  // Kèm dấu thời điểm cập nhật cuối + toast im lặng KHÔNG phát khi dữ liệu
+  // chưa từng load (tránh spam tab background).
+  const toolsRegistryAgentCountRef = useRef<number>(-1)
+  useEffect(() => {
+    if (!toolsRegistryOpen) return // panel đóng → không tốn request
+    const interval = setInterval(() => {
+      loadToolsRegistry()
+    }, 30_000)
+    return () => clearInterval(interval)
+  }, [toolsRegistryOpen, loadToolsRegistry])
+
+  // Phát hiện agent MỚI xuất hiện giữa 2 lần poll → toast thông báo 1 lần
+  useEffect(() => {
+    if (!toolsRegistry) return
+    const count = toolsRegistry.summary.agentCount
+    const prev = toolsRegistryAgentCountRef.current
+    toolsRegistryAgentCountRef.current = count
+    if (prev >= 0 && count > prev) {
+      toast({
+        title: '🔄 Tools Registry đã cập nhật',
+        description: `Phát hiện ${count - prev} agent mới — matrix Agents ↔ tools làm mới tự động`,
+        duration: 4000,
+      })
+    }
+  }, [toolsRegistry])
+
   const sourceBadgeColor: Record<string, string> = {
     bundled: 'bg-violet-500/20 text-violet-300 border-violet-400/50',
     clawhub: 'bg-blue-500/20 text-blue-300 border-blue-400/50',
@@ -12871,9 +12912,25 @@ function SkillsTabContent() {
                 {toolsRegistry.summary.builtinToolCount + toolsRegistry.summary.customToolCount} tools · {toolsRegistry.summary.filesystemSkillCount} skills
               </Badge>
             )}
+            {/* TASK 22: số agents trong matrix (real-time — agent mới hiện NGAY) */}
+            {toolsRegistry && (
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-emerald-500/20 text-emerald-300 border-emerald-400/50">
+                {toolsRegistry.summary.agentCount} agents
+              </Badge>
+            )}
+            {/* TASK 22: cập nhật thủ công + thời điểm làm mới gần nhất */}
+            <button
+              onClick={() => { loadSkills(); loadToolsRegistry() }}
+              disabled={toolsRegistryLoading}
+              title="Làm mới Tools Registry + skills ngay (agent mới / tool mới gán gần đây)"
+              className="inline-flex items-center gap-1 rounded-md border border-violet-400/50 bg-violet-500/10 px-2 py-0.5 text-[10px] text-violet-300 hover:bg-violet-500/20 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`w-3 h-3 ${toolsRegistryLoading ? 'animate-spin' : ''}`} />
+              Làm mới
+            </button>
             {/* 21-c: nút mở dialog quản lý Tools & Skills (xem/sửa nội dung + gán tool cho agents) */}
             <ToolsManagerDialog />
-            <span className="ml-auto text-[10px] text-slate-500">{toolsRegistryOpen ? 'Thu gọn' : 'Bấm để mở'} </span>
+            <span className="ml-auto text-[10px] text-slate-500">{toolsRegistryOpen ? 'Thu gọn' : 'Bấm để mở'}{toolsRegistry?.generatedAt ? ` · cập nhật ${new Date(toolsRegistry.generatedAt).toLocaleTimeString('vi-VN')}` : ''} </span>
           </div>
 
           {toolsRegistryOpen && (
@@ -12909,23 +12966,37 @@ function SkillsTabContent() {
                     </div>
                   </div>
 
-                  {/* Agent matrix */}
+                  {/* Agent matrix — TASK 22: TOÀN BỘ agents trong DB (Opus, agents
+                      động do Omega create_agent / user tạo) + effective tools live;
+                      poll 30s + nút Làm mới khi agent mới được setup tools/skills */}
                   <div>
-                    <h4 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
+                    <h4 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5 flex-wrap">
                       <Cpu className="w-3.5 h-3.5 text-violet-400" /> Agents — tools khả dụng
-                      <span className="text-[10px] font-normal text-slate-500">(custom tools dùng chung cho mọi agents)</span>
+                      <span className="text-[10px] font-normal text-slate-500">
+                        ({toolsRegistry.summary.agentCount} agents · custom tools dùng chung cho mọi agents · tự cập nhật mỗi 30s)
+                      </span>
                     </h4>
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6 gap-2">
                       {toolsRegistry.agentMatrix.map(a => (
                         <div key={a.name} className="nc-panel nc-sm nc-border-violet-soft p-2">
                           <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-medium text-white truncate">{a.name}</span>
+                            {a.avatar && <span className="text-xs leading-none" title={a.isSystem ? 'Agent hệ thống' : 'Agent do Omega/user tạo'}>{a.avatar}</span>}
+                            <span className="text-xs font-medium text-white truncate" title={`${a.name}${a.team ? ` (team: ${a.team}${a.position ? ` · ${a.position}` : ''})` : ''}`}>{a.name}</span>
                             {a.canSelfWriteTools && (
                               <span title="Agent này có thể TỰ VIẾT tools (create_custom_tool)" className="text-[9px] text-cyan-400">✍️</span>
                             )}
                           </div>
                           <div className="text-[10px] text-slate-500 mt-0.5">
-                            {a.builtinToolCount} built-in{a.customToolCount > 0 ? ` + ${a.customToolCount} custom` : ''}
+                            {a.openAccess ? (
+                              <span className="text-emerald-400" title="Whitelist rỗng — goal-loop KHÔNG filter: mọi tool builtin đều được phép gọi">
+                                MỌI TOOL (∞)
+                              </span>
+                            ) : (
+                              <>
+                                {a.builtinToolCount}/{toolsRegistry.summary.builtinToolCount} built-in
+                              </>
+                            )}
+                            {a.customToolCount > 0 ? ` + ${a.customToolCount} custom` : ''}
                           </div>
                         </div>
                       ))}

@@ -26,13 +26,15 @@ import { db } from '@/lib/db'
 
 // ==================== AGENT KEY MAPPING ====================
 //
-// Chuẩn hóa 1 chiều về 7 key. Nguồn tên gọi trong app:
+// Chuẩn hóa 1 chiều về 8 key. Nguồn tên gọi trong app:
 //   - Code Team: agents.ts — name (APEX/CORTEX/BOLT/SENTINEL/CATALYST) + position (TL/G1/G2-A/G2-B/G3)
 //   - Standalone: standalone-agents.ts — 'Omega'
+//   - Opus (meta-agent CTO): opus-agent.ts — 'Opus' (TASK 22: key riêng để
+//     Tools Manager gán/tắt tool cho Opus độc lập với agents động)
 //   - Agent động do Omega create_agent: tên bất kỳ → NEW_AGENT (áp chung 1 bộ override)
 //   - Tools Registry (agentMatrix): short = 'OM'|'TL'|'G1'|'G2-A'|'G2-B'|'G3'
 
-export const AGENT_KEYS = ['APEX', 'CORTEX', 'BOLT', 'SENTINEL', 'CATALYST', 'OMEGA', 'NEW_AGENT'] as const
+export const AGENT_KEYS = ['APEX', 'CORTEX', 'BOLT', 'SENTINEL', 'CATALYST', 'OMEGA', 'OPUS', 'NEW_AGENT'] as const
 export type AgentKey = (typeof AGENT_KEYS)[number]
 
 const POSITION_TO_KEY: Record<string, AgentKey> = {
@@ -51,6 +53,7 @@ const NAME_TO_KEY: Record<string, AgentKey> = {
   CATALYST: 'CATALYST',
   OMEGA: 'OMEGA',
   OM: 'OMEGA', // Tools Registry agentMatrix short
+  OPUS: 'OPUS', // meta-agent CTO (opus-agent.ts) — TASK 22
 }
 
 /**

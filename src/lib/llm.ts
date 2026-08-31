@@ -2201,6 +2201,39 @@ function tripModelBreaker(model: string, reason: string): void {
   console.warn(`[LLM] 🔴 CIRCUIT BREAKER TRIPPED: model ${model} bị NVIDIA NIM chặn cứng (429 instant trên mọi key) — fail-fast trong ${Math.round(MODEL_BLOCK_BREAKER_MS / 60000)} phút. Lý do: ${reason}`)
 }
 
+// ==================== TASK 22 — MODEL TIMEOUT HEALTH (fast-fail khi model HANG) ====================
+// Sự cố NIM 2026-08-31 (audit Task 22 phát hiện): kimi-k3 + deepseek-v4
+// pro/flash HANG (0 bytes — server nhận request rồi im lặng) trong khi
+// minimax-m3 vẫn OK. Timeout KHÔNG phải 429-instant nên không trip breaker
+// cũ → MỖI LLM call đốt 3 model × 240s = 12 phút chết trước khi chạm model
+// cuối. Theo dõi timeout LIÊN TIẾP theo model:
+//   - ≥ MODEL_TIMEOUT_STRIKES lần timeout liên tiếp (qua nhiều call) → block
+//     model theo MODEL_BLOCK_BREAKER_MS (fail-fast sang model kế trong chuỗi)
+//   - 1 lần SUCCESS → reset strikes (model hồi phục)
+// Phanh an toàn: breaker tự hết sau 10' (isModelHardBlocked expire) — nếu
+// vendor hồi thì model quay lại vòng xoay ngay, không cần restart app.
+const MODEL_TIMEOUT_STRIKES = parseInt(process.env.MODEL_TIMEOUT_STRIKES || '2', 10)
+const modelTimeoutStrikes = new Map<string, number>()
+
+/** Gọi SAU MỖI attempt — phân loại theo status của attemptNvidiaOnce. */
+function noteModelAttempt(model: string, status: string): void {
+  if (status === 'timeout') {
+    const strikes = (modelTimeoutStrikes.get(model) ?? 0) + 1
+    modelTimeoutStrikes.set(model, strikes)
+    console.warn(`[LLM] ⏱ TIMEOUT-STRIKE ${strikes}/${MODEL_TIMEOUT_STRIKES}: model ${model} hang (0 bytes) — ${strikes >= MODEL_TIMEOUT_STRIKES ? 'TRIP breaker, fail-fast sang model kế' : 'còn theo dõi'}`)
+    if (strikes >= MODEL_TIMEOUT_STRIKES) {
+      tripModelBreaker(
+        model,
+        `TIMEOUT-BREAKER (Task 22): ${strikes} lần timeout liên tiếp — model HANG phía NVIDIA NIM (server nhận request nhưng 0 bytes trả về; các model khác vẫn chạy bình thường = sự cố model-level, không phải key/network). Đã block ${Math.round(MODEL_BLOCK_BREAKER_MS / 60000)} phút để fail-fast sang model kế; model tự quay lại sau khi hết block hoặc app restart.`,
+      )
+      modelTimeoutStrikes.delete(model)
+    }
+  } else if (status === 'success') {
+    // Model hồi phục → xóa strikes
+    if (modelTimeoutStrikes.has(model)) modelTimeoutStrikes.delete(model)
+  }
+}
+
 /** Diagnostic — trạng thái breaker hiện tại (cho API/status hiển thị) */
 export function getModelBlockBreakers(): Array<{ model: string; blockedUntil: number; reason: string }> {
   const now = Date.now()
@@ -2295,6 +2328,8 @@ async function callModelWithKeyRotation(
         agentName: options?.agentName,
       })
       const attemptMs = Date.now() - attemptStartedAt
+      // TASK 22 — model timeout health (fast-fail khi model HANG)
+      noteModelAttempt(model, attempt.status)
 
       if (attempt.status === 'success' && attempt.result) {
         pool.markSuccess(keyInfo.key, attempt.result.tokensUsed)
@@ -2512,6 +2547,8 @@ async function callModelChainModelFirst(
           agentName: options?.agentName,
         })
         const attemptMs = Date.now() - attemptStartedAt
+        // TASK 22 — model timeout health (fast-fail khi model HANG)
+        noteModelAttempt(model, attempt.status)
 
         if (attempt.status === 'success' && attempt.result) {
           pool.markSuccess(keyInfo.key, attempt.result.tokensUsed)

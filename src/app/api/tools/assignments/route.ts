@@ -19,7 +19,7 @@ import { getAllAssignments, getAllToolConfigs, setAssignment, normalizeAgentKeyS
 import { getAgentTools } from '@/lib/code-team/agents'
 import { getStandaloneAgentTools } from '@/lib/standalone-agents'
 import { DEFAULT_NEW_AGENT_TOOLS } from '@/lib/omega-orchestrator'
-import { isBuiltinTool } from '@/lib/code-team/tool-executor'
+import { isBuiltinTool, getAllBuiltinToolNames } from '@/lib/code-team/tool-executor'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,6 +31,8 @@ function buildDefaults(): Record<string, string[]> {
   } catch {
     defaults.OMEGA = []
   }
+  // TASK 22: Opus = full builtin list (đồng bộ ensureOpusAgent — mọi tool)
+  defaults.OPUS = getBuiltinToolNamesSafe()
   const positions: Array<[string, string]> = [
     ['TL', 'APEX'],
     ['G1', 'CORTEX'],
@@ -47,6 +49,15 @@ function buildDefaults(): Record<string, string[]> {
   }
   defaults.NEW_AGENT = [...DEFAULT_NEW_AGENT_TOOLS]
   return defaults
+}
+
+/** TASK 22 — full builtin tool names (fail-open []) — dùng cho default OPUS */
+function getBuiltinToolNamesSafe(): string[] {
+  try {
+    return getAllBuiltinToolNames()
+  } catch {
+    return []
+  }
 }
 
 export async function GET() {

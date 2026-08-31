@@ -306,6 +306,38 @@ LEARNING & MEMORY
       // của các run trước ("đọc lại khi cần" — Mr. Architect yêu cầu nén context
       // nhưng KHÔNG mất thông tin).
       'context_recall',
+      // ━━━ TASK 22 (user directive 2026-09-30 #3 — "Omega có quyền sử dụng
+      // TOÀN BỘ tools và skills") — bổ sung 26 tool còn thiếu cho đủ 74 builtin.
+      // KHÔNG import getAllBuiltinToolNames() từ tool-executor ở đây (circular:
+      // tool-executor import standalone-agents) — list này phải giữ đồng bộ
+      // với Object.keys(ALL_TOOL_DEFINITIONS) (Tools Registry agentMatrix
+      // hiển thị số tool để phát hiện lệch).
+      'file_delete',
+      'db_query',
+      'mcp_call',
+      'decompose_task',
+      'create_task',
+      'update_task',
+      'get_plan',
+      'summarize',
+      'synthesize',
+      'run_bg',
+      'read_output',
+      'kill_process',
+      'manage_packages',
+      'start_preview',
+      'stop_preview',
+      'gateway_tool',
+      'web_search',
+      'web_fetch',
+      'gateway_exec',
+      'gateway_read',
+      'gateway_write',
+      'gateway_edit',
+      'gateway_apply_patch',
+      'exit_plan_mode',
+      'cron',
+      'propose_automation',
     ],
   },
 ]

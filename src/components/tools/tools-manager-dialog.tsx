@@ -88,7 +88,7 @@ interface SkillContent {
 type AuditStatus = { status: string; origin: string; flag: string | null; errorTag?: string }
 const auditResults = auditResultsJson as Record<string, AuditStatus>
 
-/** 7 agent key chuẩn (tool-access.ts) — thứ tự hiển thị ma trận */
+/** 8 agent key chuẩn (tool-access.ts) — thứ tự hiển thị ma trận */
 const AGENT_COLUMNS: Array<{ key: string; label: string; short: string }> = [
   { key: 'APEX', label: 'APEX', short: 'TL' },
   { key: 'CORTEX', label: 'CORTEX', short: 'G1' },
@@ -96,6 +96,7 @@ const AGENT_COLUMNS: Array<{ key: string; label: string; short: string }> = [
   { key: 'SENTINEL', label: 'SENTINEL', short: 'G2-B' },
   { key: 'CATALYST', label: 'CATALYST', short: 'G3' },
   { key: 'OMEGA', label: 'Omega', short: '🌟' },
+  { key: 'OPUS', label: 'Opus', short: '⚖️' },
   { key: 'NEW_AGENT', label: 'Agent động', short: '＋' },
 ]
 

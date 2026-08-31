@@ -201,25 +201,29 @@ const fmtCap = (n: number): string => (n === 0 ? '∞' : String(n))
 /** Số chu kỳ PLAN→EXECUTE→VERIFY→EVALUATE tối đa (mặc định 4; 0 = ∞ — CI-1) */
 const MAX_CYCLES = intEnv('GOAL_LOOP_MAX_CYCLES', 4)
 /**
- * TASK 21 (user report 2026-09-30) — TÁI LẬP CỬA SỔ CHU KỲ: khi hết trần
- * MAX_CYCLES mà mục tiêu CHƯA hoàn thành triệt để (verdict chưa complete,
- * hoặc còn lỗi phát sinh liên quan chưa xử lý), loop TÁI LẬP thêm 1 cửa sổ
- * MAX_CYCLES chu kỳ mới thay vì vội phán kết thúc (user: "trọng tài khi còn
- * vấn đề phát sinh tồn tại hoặc công việc chưa hoàn thành triệt để thì nên
- * tái lập thêm chu kỳ để tìm cách giải quyết tiếp"). Mặc định 2 lượt → tổng
- * tối đa 12 chu kỳ với MAX_CYCLES=4; 0 = KHÔNG tái lập (hành vi cũ).
+ * TASK 22 (user directive 2026-09-30 #1 — "cho phép max 100 chu kỳ"): trần
+ * tái lập nâng 2 → 100. Hệ thống được thiết kế giải quyết vấn đề HÀNG LOẠT
+ * trong thời gian dài + NVIDIA NIM key không giới hạn token → làm việc càng
+ * nhiều càng tốt. Khi hết trần MAX_CYCLES mà mục tiêu CHƯA hoàn thành triệt
+ * để (verdict chưa complete, hoặc còn lỗi phát sinh liên quan chưa xử lý),
+ * loop TÁI LẬP thêm 1 cửa sổ MAX_CYCLES chu kỳ mới — tối đa 100 cửa sổ
+ * (MAX_CYCLES=4 → tổng tối đa 4×101=404 chu kỳ; 0 = KHÔNG tái lập).
  * An toàn: tái lập CHỈ xảy ra khi còn budget + chu kỳ vừa rồi CÓ tiến triển
  * (no-progress / stall-brake vẫn cắt như thường trước điểm này) + user chưa
- * cancel → không đẻ vòng lặp vô hạn.
+ * cancel → không đẻ vòng lặp vô hạn. Phanh chính: stall-brake 3 chu kỳ
+ * không tool call thành công + time budget 12h + nút Dừng của user.
  */
-const MAX_CYCLE_RENEWALS = Math.max(0, intEnv('GOAL_LOOP_MAX_CYCLE_RENEWALS', 2))
+const MAX_CYCLE_RENEWALS = Math.max(0, intEnv('GOAL_LOOP_MAX_CYCLE_RENEWALS', 100))
 /**
- * TASK 21 — số chu kỳ debt tối đa / run (trước đây hardcoded 1 qua cờ boolean
- * debtCycleUsed — debt cycle thứ 2 trở đi chỉ được ghi nợ). Giờ cho phép
- * NHIỀU đợt debt cycle liên tiếp xử lý lỗi phát sinh còn treo (điều kiện dừng
- * xem canDebtCycle); 0 = không chạy debt cycle nào (chỉ ghi nợ Todo).
+ * TASK 22 (user directive 2026-09-30 #1) — số chu kỳ debt tối đa / run nâng
+ * 3 → 100 (đồng bộ với trần tái lập 100). Với GOAL_LOOP_MAX_CYCLES=0 (∞ —
+ * cấu hình .env hiện tại của user) trần chu kỳ KHÔNG bao giờ chạm → debt
+ * cycles là cơ chế DUY NHẤT tiếp tục xử lý lỗi phát sinh → 3 đợt là điểm
+ * nghẽn thật. 100 đợt = "giải quyết vấn đề hàng loạt" đúng kỳ vọng user
+ * (stall-brake + time budget + cancel vẫn cắt như thường); 0 = không chạy
+ * debt cycle nào (chỉ ghi nợ Todo).
  */
-const MAX_DEBT_CYCLES = Math.max(0, intEnv('GOAL_LOOP_MAX_DEBT_CYCLES', 3))
+const MAX_DEBT_CYCLES = Math.max(0, intEnv('GOAL_LOOP_MAX_DEBT_CYCLES', 100))
 /** Số vòng ReAct tối đa MỖI chu kỳ (mặc định 10 → tổng tối đa 40 vòng; 0 = ∞ — CI-1) */
 const ITER_PER_CYCLE = intEnv('GOAL_LOOP_ITERATIONS_PER_CYCLE', 10)
 /** Budget thời gian toàn bộ loop (mặc định 12 GIỜ — user request 2026-09-13:
