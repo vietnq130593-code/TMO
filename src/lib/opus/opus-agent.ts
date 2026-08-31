@@ -95,7 +95,7 @@ Mỗi directive (trừ ESCALATE/STOP) phải có đủ 6 trường:
   1. GOAL — mục tiêu 1 câu, đo được.
   2. CONTEXT & RATIONALE — vì sao bước này (nối về issue/bằng chứng đã dẫn).
   3. SCOPE & CONSTRAINTS — phạm vi cho phép/cấm (file nào được đụng, gì không được phá).
-  4. DELEGATION — giao cho agent/team nào, kèm gợi ý cách tiếp cận (agents có thể dùng: Omega, APEX, CORTEX, BOLT, SENTINEL, CATALYST, custom agents, tools builtin).
+  4. DELEGATION — giao cho agent/team nào, kèm gợi ý cách tiếp cận (agents có thể dùng: Omega, APEX, CORTEX, BOLT, SENTINEL, CATALYST, custom agents, tools builtin). Tác vụ code PHỨC TẠP/KHỐI LƯỢNG LỚN → directive khuyến nghị Omega/goal-loop agent gọi request_code_team (huy động TOÀN team code theo SOP: TL phân tích routing → G1→G2-A→G2-B→G3 → checkpoint verify); tác vụ vừa/nhỏ → delegate_task 1 agent chuyên trách.
   5. ACCEPTANCE CRITERIA — checklist nghiệm thu máy-verify được khi nào được coi là xong.
   6. BUDGET HINT — đề xuất giới hạn vòng/tool calls cho bước kế (advisory — Omega được linh hoạt ±50%).
 
@@ -204,6 +204,10 @@ export async function ensureOpusAgent(): Promise<void> {
 
     // MIGRATION: Opus đã tồn tại với tools=null (cũ) → cấp 1 LẦN full list;
     // nếu user đã tự chỉnh tools qua UI/ToolAssignment → TÔN TRỌNG, không đè.
+    // FIX 2026-09-30 (top-up): builtin list MỚI THÊM tool (vd request_code_team
+    // #75) → Opus đang giữ list full CŨ (74) KHÔNG tự có tool mới. Chỉ top-up
+    // khi list hiện tại LÀ list full cấp trước đó (mọi phần tử đều builtin +
+    // thiếu đúng ≤2 tool mới) — list user tự cắt sẽ KHÔNG bị đè.
     if (fullToolsJson) {
       const existing = await db.agentProfile.findUnique({
         where: { name: OPUS_AGENT_NAME },
@@ -215,6 +219,21 @@ export async function ensureOpusAgent(): Promise<void> {
           data: { tools: fullToolsJson },
         }).catch(() => { /* fail-open */ })
         console.log(`[Opus] TASK 22: cấp full tools (${fullToolList.length} builtin) cho Opus (trước đó null)`)
+      } else if (existing?.tools && fullToolList.length > 0) {
+        try {
+          const currentList = JSON.parse(existing.tools)
+          if (Array.isArray(currentList) && currentList.length > 0) {
+            const missing = fullToolList.filter(t => !currentList.includes(t))
+            const allBuiltin = currentList.every((t: unknown) => typeof t === 'string' && fullToolList.includes(t as string))
+            if (allBuiltin && missing.length > 0 && missing.length <= 2 && currentList.length >= fullToolList.length - 2) {
+              await db.agentProfile.update({
+                where: { name: OPUS_AGENT_NAME },
+                data: { tools: fullToolsJson },
+              }).catch(() => { /* fail-open */ })
+              console.log(`[Opus] TASK 22 top-up: bổ sung ${missing.length} tool builtin mới (${missing.join(', ')}) vào list full cũ (${currentList.length} → ${fullToolList.length})`)
+            }
+          }
+        } catch { /* JSON hỏng → bỏ qua top-up */ }
       }
     }
 
@@ -236,7 +255,8 @@ export async function ensureOpusAgent(): Promise<void> {
         capable: OPUS_CAPABLE,
         domain: OPUS_DOMAIN,
         provider: 'nvidia',
-        model: 'moonshotai/kimi-k3',
+        // FIX 2026-09-30 (NIM model-level HANG): minimax-m3 = lõi healthy duy nhất
+        model: 'minimaxai/minimax-m3',
         temperature: 0.4, // CTO phán đoán — nhiệt thấp, nhất quán
         maxTokens: 16384,
         team: null, // meta-agent — không thuộc team nào

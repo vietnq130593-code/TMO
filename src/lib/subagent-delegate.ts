@@ -34,7 +34,7 @@
  */
 
 import { callLLMForAgent } from '@/lib/llm'
-import { executeTool } from '@/lib/code-team/tool-executor'
+import { executeTool, buildCompactToolSchemasSection } from '@/lib/code-team/tool-executor'
 import { parseToolCallsFromOutput, detectBrokenToolCallHint } from '@/lib/tool-calls'
 import { resolveAgent } from '@/lib/code-team/agent-resolver'
 import { isSessionCancelled, registerDelegationRun, endAgentRun } from '@/lib/agent-run-tracker'
@@ -90,8 +90,11 @@ const POSITION_BY_NAME: Record<string, string> = {
  * consult Omega là 1 LLM call đơn (không chạy tool, không đệ quy).
  * dispatch_agents_parallel (2026-09-14 fan-out) cũng bị strip — chống
  * fan-out lồng nhau nổ token.
+ * request_code_team (2026-09-30) cũng bị strip — sub-agent (vd APEX được
+ * delegate) không được huy động workflow team code lồng nhau (workflow
+ * trong workflow → depth explosion token/thời gian).
  */
-export const DEPTH_GUARD_TOOLS = ['delegate_task', 'dispatch_agent', 'create_agent', 'dispatch_agents_parallel']
+export const DEPTH_GUARD_TOOLS = ['delegate_task', 'dispatch_agent', 'create_agent', 'dispatch_agents_parallel', 'request_code_team']
 
 /**
  * Toolset mặc định khi profile KHÔNG khai báo tools (agent custom cũ trong DB
@@ -346,11 +349,28 @@ export async function runSubAgentForProfile(params: {
 
     console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${ALL_SUBAGENT_CAPS_UNLIMITED ? SUBAGENT_HARD_CEILING_ITERATIONS + ' (trần cứng — cả 3 cap = 0)' : SUBAGENT_MAX_ITERATIONS === 0 ? '∞' : SUBAGENT_MAX_ITERATIONS} vòng, budget ${SUBAGENT_TOKEN_BUDGET === 0 ? '∞' : SUBAGENT_TOKEN_BUDGET} tokens${SUBAGENT_TIMEOUT_MS === 0 ? ', timeout ∞' : ''}, ${allowedTools.length} tools${delegationRunId ? `, run ${delegationRunId.slice(0, 22)}…` : ''})`)
 
-    // ===== Mini ReAct loop =====
+    // Mini ReAct loop
     const systemPrompt = profile.instruction || `Bạn là ${profile.name} — agent chuyên trách. Hoàn thành nhiệm vụ được delegate một cách tự chủ, ngắn gọn.`
     const transcript: Array<{ role: 'user' | 'assistant' | 'tool'; content: string }> = [
       { role: 'user', content: buildDelegationPrompt(profile.name, task, context, allowedTools, parentAgentName, acceptanceCriteria) },
     ]
+
+    // FIX 2026-09-30 (E2E audit — "agents thường lỗi khi được Omega gọi"):
+    // delegation prompt trước đây CHỈ liệt kê TÊN tools → LLM đoán mò param
+    // (file_read gọi "file_path" thay vì "path" → 'path is required' →
+    // sub-agent fail + bịa bằng chứng). Giờ inject SCHEMA COMPACT của từng
+    // tool vào ĐẦU transcript (user message riêng, chỉ 1 lần — context của
+    // sub-agent vẫn isolated với parent). Fail-open: schema lỗi → prompt cũ.
+    let toolSchemaMsg: string | null = null
+    try {
+      const schemaSection = buildCompactToolSchemasSection(allowedTools)
+      if (schemaSection) {
+        toolSchemaMsg = `${schemaSection}\n\n(Trên đây là schema ĐẦY ĐỦ của các tool bạn được dùng — tham chiếu mỗi khi gọi tool; KHÔNG đoán tên param.)`
+        transcript.push({ role: 'user', content: toolSchemaMsg })
+      }
+    } catch (schemaErr) {
+      console.warn(`[SubAgent] Tool schema injection fail-open:`, schemaErr instanceof Error ? schemaErr.message : String(schemaErr))
+    }
 
     const loopPromise = (async () => {
       // CI-1 (0 = UNLIMITED): cap = 0 → KHÔNG trần tương ứng (vòng / token /
@@ -761,7 +781,7 @@ ${context ? `\nCONTEXT TỪ PARENT:\n${context.slice(0, 3000)}\n` : ''}
 ${acceptanceCriteria ? `ĐIỀU KIỆN HOÀN THÀNH (parent đối chiếu báo cáo của bạn theo danh sách này — từng điều kiện phải nêu ĐẠT/CHƯA ĐẠT kèm bằng chứng):
 ${acceptanceCriteria.slice(0, 1200)}
 ` : ''}
-TOOLS BẠN ĐƯỢC DÙNG: ${allowedTools.join(', ') || '(none — trả lời bằng kiến thức)'}
+TOOLS BẠN ĐƯỢC DÙNG: ${allowedTools.join(', ') || '(none — trả lời bằng kiến thức)'} (SCHEMA ĐẦY ĐỦ từng tool — tên param bắt buộc — ở message kế tiếp: ĐỌC kỹ trước khi gọi, KHÔNG đoán tên param)
 
 QUY TRÌNH LÀM VIỆC (bắt buộc):
 ${canTodo ? `- BƯỚC 0 — LẬP KẾ HOẠCH: đánh giá nhiệm vụ. Nếu cần NHIỀU BƯỚC (đọc/sửa nhiều file, research rồi code, cài đặt rồi kiểm định...) → gọi todo_write NGAY ĐẦU TIÊN, chia nhiệm vụ thành các bước có thứ tự (mỗi bước 1 mục, mô tả đo đếm được) → làm TỪNG BƯỚC, cập nhật trạng thái qua todo_write (pending → in_progress → completed/failed). Nhiệm vụ đơn giản (1-2 tool call) → làm thẳng, không cần todo.

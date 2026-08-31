@@ -36,12 +36,15 @@ export interface CodeTeamAgentDef {
 // ===== 5 AGENTS HARDCODED =====
 
 export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
-  // ===== MODEL POLICY (updated 2026-08-27) =====
-  // TẤT CẢ agents (kể cả agents độc lập) mặc định kimi-k3 (moonshotai/kimi-k3).
-  // Các lõi khác (deepseek-v4-flash → minimax-m3) là BACKUP — tự kích hoạt qua
-  // callLLMForAgent global-pool fallback khi kimi-k3 fail/rate-limit (xem llm.ts
-  // callLLMForAgent Step 2). gpt-oss-120b đã bị bỏ khỏi Agent/Chat (user
-  // directive 2026-08-27); GLM 5.2/5.3 không dùng được trên NIM (410/404).
+  // ===== MODEL POLICY (updated 2026-09-30 — NIM model-level HANG) =====
+  // FIX sự cố "agents thường lỗi khi được Omega gọi hỗ trợ": audit live xác
+  // minh moonshotai/kimi-k3 + deepseek-v4-pro-0813 + deepseek-v4-flash-0731
+  // đều HANG (0 bytes) phía NVIDIA NIM; minimaxai/minimax-m3 = lõi healthy
+  // duy nhất (HTTP 200 ~2s). Mặc định toàn bộ agents đổi sang minimax-m3;
+  // 3 lõi cũ xuống làm chuỗi backup (llm.ts AGENT_PRIMARY_MODEL /
+  // AGENT_FALLBACK_CHAIN — override qua env khi NIM hồi).
+  // gpt-oss-120b đã bị bỏ khỏi Agent/Chat (user directive 2026-08-27); GLM
+  // 5.2/5.3 không dùng được trên NIM (410/404).
   {
     name: 'APEX',
     description: 'TL — Nhìn & Điều hướng. Phân tích yêu cầu, chọn routing, code UI (Fast Track), verify kết quả.',
@@ -49,7 +52,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'programming',
     capable: 'Phân tích thị giác, routing decision, code UI/UX, verify kết quả, điều phối team',
     provider: 'nvidia',
-    model: 'moonshotai/kimi-k3',
+    model: 'minimaxai/minimax-m3',
     temperature: 0.5,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -88,7 +91,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'programming',
     capable: 'Thiết kế kiến trúc, DB schema, API design, component tree, state management, security architecture',
     provider: 'nvidia',
-    model: 'moonshotai/kimi-k3',
+    model: 'minimaxai/minimax-m3',
     temperature: 0.4,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -107,7 +110,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'programming',
     capable: 'Code TypeScript/React/Next.js, implement API, database operations, error handling',
     provider: 'nvidia',
-    model: 'moonshotai/kimi-k3',
+    model: 'minimaxai/minimax-m3',
     temperature: 0.3,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -128,7 +131,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'security',
     capable: 'Code review, tìm bugs, kiểm tra security, fix bugs, iterative refinement',
     provider: 'nvidia',
-    model: 'moonshotai/kimi-k3',
+    model: 'minimaxai/minimax-m3',
     temperature: 0.2,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -153,7 +156,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'programming',
     capable: 'Tối ưu performance, refactor code, scalability, best practices, UI+Backend integration',
     provider: 'nvidia',
-    model: 'moonshotai/kimi-k3',
+    model: 'minimaxai/minimax-m3',
     temperature: 0.3,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',

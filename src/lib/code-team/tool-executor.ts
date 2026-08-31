@@ -1655,6 +1655,59 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     },
   },
 
+  // ===== CODE TEAM WORKFLOW REQUEST (user directive 2026-09-30 #2) =====
+  // "Việc gọi team code cần được triển khai khi vấn đề yêu cầu xử lý phức tạp,
+  // khối lượng công việc code lớn — gửi yêu cầu tới TL của team code và toàn
+  // team được huy động để vận hành theo quy trình vận hành tiêu chuẩn của
+  // team code." Trước đây runWorkflow (SOP: TL analyze → routing → G1→G2-A→
+  // G2-B→G3 → checkpoint verify → quality gate) CHỈ được gọi từ UI SSE
+  // (/api/code-team/workflow) — Omega/Opus/goal-loop KHÔNG có đường nào huy
+  // động cả team theo SOP (delegate_task chỉ chạy 1 agent đơn lẻ).
+  // Tool này: chạy runWorkflow IN-PROCESS (không cần client SSE), thu events,
+  // trả BÁO CÁO NÉN cho parent khi workflow kết thúc.
+  // CHỈ cấp cho goal-loop agents (Omega/Opus/standalone) — DEPTH GUARD strip
+  // khỏi sub-agent (chống workflow lồng workflow).
+  request_code_team: {
+    type: 'function',
+    function: {
+      name: 'request_code_team',
+      description:
+        'HUY ĐỘNG TOÀN CODE TEAM theo quy trình vận hành tiêu chuẩn (SOP) — gửi yêu cầu tới TL (APEX), TL phân tích routing (Mode A/B/C × Tier 1/2/3) rồi TOÀN TEAM vận hành pipeline: ' +
+        'G1 thiết kế → G2-A code → G2-B review/fix → G3 tối ưu (theo routing), mỗi bước có worklog + checkpoint verify của TL. ' +
+        'DÙNG KHI: (1) tác vụ code PHỨC TẠP, khối lượng LỚN (nhiều file/module, tính năng mới hoàn chỉnh, kiến trúc mới), (2) cần quy trình chuẩn nhiều vai chuyên trách tuần tự (thiết kế → code → review → tối ưu → verify), (3) task cần chất lượng đảm bảo bởi pipeline kiểm định nhiều tầng. ' +
+        'KHÔNG dùng cho: task nhỏ 1-2 file (tự làm hoặc delegate_task 1 agent nhanh hơn), câu hỏi/phân tích không cần code. ' +
+        'Kết quả trả về: báo cáo NÉN toàn pipeline (routing, từng bước + tóm tắt + issues/concerns, kết quả cuối, thời lượng). Tool CHẠY DÀI (phút → chục phút) — gọi ĐÚNG 1 LẦN cho 1 tác vụ lớn, sau đó đọc báo cáo.',
+      parameters: {
+        type: 'object',
+        properties: {
+          task: {
+            type: 'string',
+            description: 'Yêu cầu GỐC gửi tới TL — mô tả đầy đủ mục tiêu, phạm vi, ràng buộc, điều kiện hoàn thành kiểm định được (TL dùng cái này để phân tích routing + làm spec cho toàn team)',
+          },
+          context: {
+            type: 'string',
+            description: 'Context bổ sung từ bạn: file liên quan, kết quả bước trước, quyết định đã chốt, lỗi cần tránh...',
+          },
+          mode: {
+            type: 'string',
+            enum: ['A', 'B', 'C'],
+            description: '(tùy chọn) Routing mode biết trước: A=chỉ UI/UX, B=chỉ backend/logic/DB/API, C=hybrid cả UI+backend. Bỏ trống → TL TỰ PHÂN TÍCH và quyết định (chuẩn SOP)',
+          },
+          tier: {
+            type: 'integer',
+            enum: [1, 2, 3],
+            description: '(tùy chọn) Tier độ phức tạp biết trước: 1=simple, 2=medium, 3=complex. Bỏ trống → TL tự đánh giá',
+          },
+          acceptance_criteria: {
+            type: 'string',
+            description: 'Điều kiện hoàn thành KIỂM ĐỊNH ĐƯỢC (mỗi điều kiện 1 dòng) — TL đối chiếu khi checkpoint verify cuối',
+          },
+        },
+        required: ['task'],
+      },
+    },
+  },
+
   // ===== 21-c: OMEGA TOOLS MANAGER — Omega tự quản lý tool-access của agents =====
   // (user request: "thiết lập để Omega cũng có thể sử dụng chức năng này") — CHỈ nằm
   // trong tool list của Omega (standalone-agents.ts) — Code Team 5 agent KHÔNG có
@@ -1841,6 +1894,45 @@ export function isBuiltinTool(name: string): boolean {
  */
 export function getAllBuiltinToolNames(): string[] {
   return Object.keys(ALL_TOOL_DEFINITIONS)
+}
+
+/**
+ * FIX 2026-09-30 (user report "agents thường lỗi trong quá trình xử lý tác
+ * vụ khi được Omega gọi hỗ trợ") — E2E audit phát hiện: delegation prompt +
+ * goal-loop system prompt trước đây CHỈ liệt kê TÊN tools (không có schema
+ * tham số) → LLM ĐOÁN MÒ param (vd gọi file_read với "file_path" thay vì
+ * "path") → tool fail liên tục → sub-agent kết thúc error/bịa bằng chứng.
+ * Helper này dựng section COMPACT (1 dòng/tool: tên + param + type + required
+ * marker + mô tả ngắn) cho prompt text-protocol `tool_call: name({...})`.
+ * @param toolNames whitelist tools của agent (lọc builtin — custom tool không có schema ở đây)
+ */
+export function buildCompactToolSchemasSection(toolNames: string[]): string {
+  const defs = getToolDefinitions(toolNames)
+  if (defs.length === 0) return ''
+  // SURROGATE-SAFE truncate (fix 400-NIM): slice() thường có thể cắt ĐÔI emoji
+  // (surrogate pair \udXXX) để lại lone surrogate → NIM reject JSON body
+  // ("unexpected end of hex escape" / lone surrogate). Cắt theo code point.
+  const safeSlice = (s: string, max: number): string => {
+    if (s.length <= max) return s
+    let cut = s.slice(0, max)
+    const last = cut.charCodeAt(cut.length - 1)
+    if (last >= 0xD800 && last <= 0xDBFF) cut = cut.slice(0, -1)
+    return cut
+  }
+  const lines: string[] = []
+  lines.push('━━━ TOOL SCHEMAS — gọi ĐÚNG format: tool_call: <tên>({...}) với ĐÚNG tên param (* = bắt buộc) ━━━')
+  for (const d of defs) {
+    const f = d.function
+    const props = (f.parameters?.properties ?? {}) as Record<string, { type?: string; description?: string }>
+    const required = new Set((f.parameters?.required ?? []) as string[])
+    const paramParts = Object.entries(props).slice(0, 8).map(([name, p]) => {
+      const desc = p.description ? safeSlice(String(p.description).replace(/\s+/g, ' '), 38) : ''
+      return `${name}${required.has(name) ? '*' : ''}:${p.type || 'any'}${desc ? ` — ${desc}` : ''}`
+    })
+    const desc = safeSlice(String(f.description ?? '').replace(/\s+/g, ' '), 90)
+    lines.push(`- ${f.name}(${paramParts.join(', ') || 'không params'}) — ${desc}`)
+  }
+  return lines.join('\n')
 }
 
 /**
@@ -3186,6 +3278,24 @@ export async function executeTool(
         }
         break
       }
+      // ===== CODE TEAM WORKFLOW REQUEST (user directive 2026-09-30 #2) =====
+      // Huy động TOÀN team code theo SOP (runWorkflow) — TL nhận yêu cầu, phân
+      // tích routing, toàn team vận hành pipeline, trả báo cáo nén cho parent.
+      case 'request_code_team': {
+        if (!isFlagEnabled('ENABLE_CODE_TEAM_REQUEST')) {
+          return {
+            success: false,
+            result: 'request_code_team tool is disabled (set ENABLE_CODE_TEAM_REQUEST=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
+        try {
+          result = await executeCodeTeamRequest(args, context)
+        } catch (err) {
+          result = { success: false, error: `request_code_team lỗi: ${err instanceof Error ? err.message : String(err)}` }
+        }
+        break
+      }
       // ===== 21-c: Omega Tools Manager — Omega tự quản lý tool-access khi cần =====
       // (def chỉ nằm trong tool list của Omega — Code Team KHÔNG được cấp).
       // Mọi action fail-open: lỗi → JSON thân thiện, KHÔNG crash executor.
@@ -3306,6 +3416,302 @@ export async function executeTool(
       result: `Tool error: ${errorMsg}`,
       duration: Date.now() - startTime,
     }
+  }
+}
+
+// ==================== CODE TEAM WORKFLOW REQUEST (user directive 2026-09-30 #2) ====================
+//
+// "Việc gọi team code cần được triển khai khi vấn đề yêu cầu xử lý phức tạp,
+// khối lượng công việc code lớn — gửi yêu cầu tới TL của team code và toàn team
+// được huy động để vận hành theo quy trình vận hành tiêu chuẩn của team code."
+//
+// Kiến trúc — chạy runWorkflow (SOP chuẩn của team code) IN-PROCESS:
+//   parent (Omega/Opus/goal-loop worker)
+//     └─ tool_call: request_code_team({task, mode?, tier?, ...})
+//        └─ executeCodeTeamRequest():
+//            · sessionId riêng (ct-req-<ts>) — CodeTeamSession + CodeTeamWorklog
+//              rows của workflow này độc lập, tra cứu được trong DB
+//            · routing: caller truyền mode+tier → pre-computed (bỏ qua bước TL
+//              analyze); KHÔNG truyền → runWorkflow chạy TL analyze chuẩn SOP
+//              (TL tự đánh giá routing Mode A/B/C × Tier 1/2/3)
+//            · collector emitter — thu mọi event (agent_start/complete, tool,
+//              checkpoint, error, workflow_done) làm evidence + log console
+//            · watchdog 5s: user hủy session CHA → abort; vượt timeout tổng
+//              (CODE_TEAM_REQUEST_TIMEOUT_MS, mặc định 30') → abort
+//            · chạy xong: đọc CodeTeamWorklog + CodeTeamSession → dựng BÁO CÁO
+//              NÉN cho parent (routing · từng bước + issues/concerns/unfixed
+//              bugs · kết luận · thời lượng) — context parent KHÔNG phình
+//              (nén ~4000 chars bất kể team đã làm bao nhiêu việc).
+
+/** Timeout tổng cho 1 lần request_code_team (mặc định 30'; 0 = ∞). */
+const CODE_TEAM_REQUEST_TIMEOUT_MS = (() => {
+  const raw = process.env.CODE_TEAM_REQUEST_TIMEOUT_MS?.trim()
+  if (raw === undefined || raw === '') return 30 * 60_000
+  const v = Number(raw)
+  return Number.isFinite(v) && v >= 0 ? Math.floor(v) : 30 * 60_000
+})()
+
+interface CodeTeamStepSummary {
+  position: string
+  agent: string
+  step: string
+  summary: string
+  issues: string
+  concerns: string
+  unfixedBugs: string
+  durationMs: number | null
+}
+
+async function executeCodeTeamRequest(
+  args: Record<string, unknown>,
+  context?: { agentName?: string; sessionId?: string | null; runId?: string | null },
+): Promise<unknown> {
+  const { db: dbClient } = await import('@/lib/db')
+  const { runWorkflow } = await import('@/lib/code-team/workflow-engine')
+  const { resolveAgent } = await import('@/lib/code-team/agent-resolver')
+  const { isSessionCancelled, registerDelegationRun, endAgentRun } = await import('@/lib/agent-run-tracker')
+
+  const parentAgentName = context?.agentName || 'parent-agent'
+  const parentSessionId = context?.sessionId ?? null
+  const task = String(args.task ?? '').trim()
+  if (!task) {
+    return { success: false, error: 'Thiếu "task" — mô tả đầy đủ yêu cầu gửi tới TL của team code.' }
+  }
+  const contextText = args.context ? String(args.context).slice(0, 3000) : undefined
+  const acceptanceCriteria = args.acceptance_criteria ? String(args.acceptance_criteria).slice(0, 1200) : undefined
+
+  // ===== 1. Resolve TL — team code cần ít nhất TL để vận hành =====
+  const tl = await resolveAgent('TL')
+  if (tl.source === 'missing' || !tl.provider || !tl.model) {
+    return {
+      success: false,
+      error: tl.note || 'Không resolve được agent TL (APEX) — team code không thể huy động. Kiểm tra module Agents.',
+    }
+  }
+
+  // ===== 2. Routing pre-computed (nếu caller truyền đủ mode+tier) =====
+  // Không truyền → undefined → runWorkflow chạy TL analyze (chuẩn SOP: TL tự quyết).
+  type Routing = import('@/lib/code-team/worklog').RoutingDecision
+  let routing: Routing | undefined
+  const modeArg = String(args.mode ?? '').trim().toUpperCase()
+  const tierArg = Number(args.tier)
+  const validModes = ['A', 'B', 'C'] as const
+  const validTiers = [1, 2, 3] as const
+  const hasMode = (validModes as readonly string[]).includes(modeArg)
+  const hasTier = validTiers.includes(tierArg as 1 | 2 | 3)
+  if (hasMode && hasTier) {
+    const mode = modeArg as 'A' | 'B' | 'C'
+    const tier = tierArg as 1 | 2 | 3
+    const parts: Routing['parts'] =
+      mode === 'A'
+        ? [{ name: 'visual', type: 'visual', description: task, dependency: [] }]
+        : mode === 'C'
+          ? [
+              { name: 'visual', type: 'visual', description: `Phần giao diện UI/UX: ${task}`, dependency: [] },
+              { name: 'backend', type: 'backend', description: `Phần backend/logic: ${task}`, dependency: ['visual'] },
+            ]
+          : [{ name: 'backend', type: 'backend', description: task, dependency: [] }]
+    routing = {
+      mode,
+      tier,
+      score: tier === 1 ? 4 : tier === 2 ? 6 : 8,
+      reasoning: `Caller (${parentAgentName}) chỉ định routing: Mode ${mode}, Tier ${tier}`,
+      parts,
+      spec: task,
+    }
+  }
+
+  // ===== 3. Chuẩn bị session + delegation run hiển thị (Thought Process) =====
+  const ctSessionId = `ct-req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  let delegationRunId: string | null = null
+  try {
+    delegationRunId = registerDelegationRun({
+      sessionId: parentSessionId,
+      parentRunId: context?.runId ?? null,
+      agentName: `${tl.name} (Code Team SOP)`,
+      agentPosition: 'TL',
+      task: `[Code Team SOP] ${task.slice(0, 200)}`,
+    })
+  } catch { /* fail-open — hiển thị thôi */ }
+  const finishRun = (status: 'done' | 'error' | 'cancelled', summary: string) => {
+    if (!delegationRunId || !parentSessionId) return
+    try { endAgentRun(parentSessionId, delegationRunId, status, summary) } catch { /* fail-open */ }
+  }
+
+  // ===== 4. Collector emitter — thu events làm evidence + console log =====
+  const evidence: string[] = []
+  const collectorEmit: import('@/lib/code-team/workflow-engine').SSEEmitter = (event) => {
+    try {
+      const ev = event as Record<string, unknown>
+      const type = String(ev.type || '')
+      if (type === 'agent_start') {
+        console.log(`[CodeTeamRequest] ▶ ${ev.agent} (${ev.position}) — bước ${ev.step}`)
+        evidence.push(`▶ ${ev.position}/${ev.step}: ${ev.agent} bắt đầu`)
+      } else if (type === 'checkpoint') {
+        const decision = ev.decision ? ` → ${ev.decision}` : ''
+        console.log(`[CodeTeamRequest] 📋 Checkpoint sau ${ev.after}${decision}`)
+        evidence.push(`📋 checkpoint ${ev.after}${decision}`)
+      } else if (type === 'error') {
+        console.warn(`[CodeTeamRequest] ⚠️ ${ev.agent || 'SYSTEM'}: ${String(ev.message || '').slice(0, 200)}`)
+        evidence.push(`⚠️ ${ev.agent || 'SYSTEM'}: ${String(ev.message || '').slice(0, 160)}`)
+      } else if (type === 'workflow_done') {
+        console.log(`[CodeTeamRequest] ✅ Workflow xong (${Math.round(Number(ev.totalDuration || 0) / 1000)}s, status=${ev.status})`)
+      }
+    } catch { /* collector không bao giờ phá workflow */ }
+  }
+
+  // ===== 5. Watchdog: hủy session cha + timeout tổng → abort workflow =====
+  const startedAt = Date.now()
+  const abortController = new AbortController()
+  let abortReason = ''
+  const watchdog = setInterval(() => {
+    if (parentSessionId && isSessionCancelled(parentSessionId)) {
+      abortReason = 'user hủy session cha'
+      abortController.abort()
+      return
+    }
+    if (CODE_TEAM_REQUEST_TIMEOUT_MS > 0 && Date.now() - startedAt > CODE_TEAM_REQUEST_TIMEOUT_MS) {
+      abortReason = `vượt timeout ${Math.round(CODE_TEAM_REQUEST_TIMEOUT_MS / 60000)}' của request_code_team`
+      abortController.abort()
+    }
+  }, 5_000)
+
+  // Timeout an toàn cho chính runWorkflow (chồng lên watchdog — chống setInterval
+  // bị throttle bất thường): timeout tổng + 30s đệm cho flush metrics/worklog.
+  const hardDeadline = CODE_TEAM_REQUEST_TIMEOUT_MS > 0 ? CODE_TEAM_REQUEST_TIMEOUT_MS + 30_000 : 0
+
+  console.log(`[CodeTeamRequest] ${parentAgentName} huy động CODE TEAM (SOP) — TL ${tl.name}: "${task.slice(0, 100)}"${routing ? ` [routing caller: Mode ${routing.mode}, Tier ${routing.tier}]` : ' [TL tự phân tích routing]'} (timeout ${CODE_TEAM_REQUEST_TIMEOUT_MS === 0 ? '∞' : `${Math.round(CODE_TEAM_REQUEST_TIMEOUT_MS / 60000)}'`}${parentSessionId ? `, session cha ${parentSessionId.slice(0, 22)}…` : ''})`)
+
+  let runError: string | null = null
+  try {
+    const runPromise = runWorkflow(
+      {
+        sessionId: ctSessionId,
+        userRequest: [
+          `YÊU CẦU TỪ ${parentAgentName} (huy động toàn team code theo SOP):`,
+          task,
+          contextText ? `\nCONTEXT TỪ ${parentAgentName}:\n${contextText}` : '',
+          acceptanceCriteria ? `\nĐIỀU KIỆN HOÀN THÀNH (TL đối chiếu khi verify cuối):\n${acceptanceCriteria}` : '',
+        ].filter(Boolean).join('\n'),
+        messages: [{ role: 'user', content: task }],
+        routing,
+      },
+      collectorEmit,
+      abortController.signal,
+      { continueOnDisconnect: true },
+    )
+    if (hardDeadline > 0) {
+      await Promise.race([
+        runPromise,
+        new Promise<never>((_, reject) => {
+          const t = setTimeout(() => {
+            abortReason = abortReason || `vượt timeout ${Math.round(CODE_TEAM_REQUEST_TIMEOUT_MS / 60000)}' của request_code_team`
+            abortController.abort()
+            reject(new Error(`request_code_team timeout sau ${Math.round(hardDeadline / 1000)}s`))
+          }, hardDeadline + 5_000)
+          // runPromise settle trước → dọn timer
+          runPromise.finally(() => clearTimeout(t)).catch(() => {})
+        }),
+      ])
+    } else {
+      await runPromise
+    }
+  } catch (err) {
+    runError = err instanceof Error ? err.message : String(err)
+  } finally {
+    clearInterval(watchdog)
+  }
+
+  const durationMs = Date.now() - startedAt
+
+  // ===== 6. Đọc kết quả từ DB (CodeTeamSession + CodeTeamWorklog) =====
+  // CodeTeamSession.currentStep = trạng thái cuối (completeSession ghi
+  // 'completed' | 'completed_with_errors' | 'failed' | 'escalated'… vào
+  // currentStep — không có cột status riêng).
+  let steps: CodeTeamStepSummary[] = []
+  let status = 'unknown'
+  let routingInfo: { mode?: string; tier?: number; score?: number } = {}
+  try {
+    const sessionRow = await dbClient.codeTeamSession.findUnique({ where: { sessionId: ctSessionId } })
+    if (sessionRow) {
+      status = sessionRow.currentStep
+      routingInfo = { mode: sessionRow.routingMode ?? undefined, tier: sessionRow.tier ?? undefined, score: sessionRow.score ?? undefined }
+    }
+    const worklogRows = await dbClient.codeTeamWorklog.findMany({
+      where: { sessionId: ctSessionId },
+      orderBy: { createdAt: 'asc' },
+    })
+    steps = worklogRows.map(w => {
+      const content = (() => {
+        try { return typeof w.content === 'string' ? (JSON.parse(w.content) as Record<string, unknown>) : (w.content as Record<string, unknown> | null) } catch { return null }
+      })()
+      const issues = Array.isArray(content?.issues)
+        ? (content.issues as Array<Record<string, unknown>>).map(i => String(i.description ?? i).slice(0, 150)).filter(Boolean).slice(0, 3)
+        : []
+      const unfixed = Array.isArray(content?.unfixedBugs)
+        ? (content.unfixedBugs as unknown[]).map(b => String(b).slice(0, 120)).filter(Boolean).slice(0, 3)
+        : []
+      return {
+        position: w.position,
+        agent: w.agentName,
+        step: w.step,
+        summary: String(w.summary ?? '').slice(0, 400),
+        issues: issues.join(' | '),
+        concerns: Array.isArray(content?.concerns) ? (content.concerns as unknown[]).map(c => String(c).slice(0, 100)).filter(Boolean).slice(0, 3).join(' | ') : '',
+        unfixedBugs: unfixed.join(' | '),
+        durationMs: typeof w.duration === 'number' ? w.duration : null,
+      }
+    })
+  } catch (dbErr) {
+    console.warn('[CodeTeamRequest] Đọc worklog/session thất bại (fail-open):', dbErr instanceof Error ? dbErr.message : String(dbErr))
+  }
+
+  // ===== 7. Dựng BÁO CÁO NÉN cho parent =====
+  // 'completed_with_errors' = strict quality gate phát hiện lint/tsc lỗi —
+  // workflow vẫn chạy hết pipeline (success kèm cảnh báo, đọc steps để khắc phục).
+  const ok = (status === 'completed' || status === 'completed_with_errors') && !runError
+  const escalated = status === 'escalated'
+  const reportLines: string[] = []
+  reportLines.push(`**KẾT QUẢ CODE TEAM (SOP) — ${status.toUpperCase()}${routingInfo.mode ? ` · Mode ${routingInfo.mode} · Tier ${routingInfo.tier}` : ''} · ${Math.round(durationMs / 1000)}s · ${steps.length} bước**`)
+  if (abortReason) reportLines.push(`⚠️ Dừng sớm: ${abortReason}`)
+  if (runError) reportLines.push(`⚠️ Lỗi chạy workflow: ${runError}`)
+  for (const s of steps) {
+    reportLines.push(`\n[${s.position} · ${s.agent} · ${s.step}]${s.durationMs ? ` (${(s.durationMs / 1000).toFixed(0)}s)` : ''}`)
+    reportLines.push(`Tóm tắt: ${s.summary}`)
+    if (s.issues) reportLines.push(`Issues: ${s.issues}`)
+    if (s.unfixedBugs) reportLines.push(`⚠️ Chưa fix: ${s.unfixedBugs}`)
+    if (s.concerns) reportLines.push(`Lưu ý: ${s.concerns}`)
+  }
+  if (steps.length === 0) {
+    reportLines.push('\n(không có worklog — workflow có thể đã abort trước bước đầu)')
+  }
+  reportLines.push(`\nBằng chứng pipeline: ${evidence.slice(-12).join(' · ') || '(trống)'}`)
+  let report = reportLines.join('\n')
+  if (report.length > 4000) {
+    report = report.slice(0, 4000) + '\n…(báo cáo code team đã nén — tra cứu worklog đầy đủ theo sessionId ' + ctSessionId + ')'
+  }
+
+  finishRun(
+    ok ? 'done' : runError || abortReason ? 'error' : 'cancelled',
+    `[Code Team SOP] ${status} · ${steps.length} bước · ${Math.round(durationMs / 1000)}s`,
+  )
+
+  console.log(`[CodeTeamRequest] ${parentAgentName} ← Code Team xong: ${status} — ${steps.length} bước, ${Math.round(durationMs / 1000)}s${routingInfo.mode ? ` (Mode ${routingInfo.mode}/Tier ${routingInfo.tier})` : ''}`)
+
+  return {
+    success: ok,
+    status,
+    escalated,
+    routing: routingInfo,
+    sessionId: ctSessionId,
+    steps,
+    report,
+    durationMs,
+    abortedBy: abortReason || undefined,
+    error: ok ? undefined : (runError || abortReason || (escalated ? 'TL ESCALATE — đọc report để biết lý do' : status === 'failed' ? 'Workflow thất bại — đọc report + steps để biết bước nào lỗi' : `Trạng thái: ${status}`)),
+    hint: ok
+      ? undefined
+      : 'Code team chưa hoàn thành — đọc "steps" + "report" (issues/unfixedBugs từng bước), khắc phục phần còn lại bằng tools của mình hoặc gọi request_code_team lần nữa với task đã thu hẹp.',
   }
 }
 

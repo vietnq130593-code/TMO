@@ -55,7 +55,7 @@
  */
 
 import { callLLMForAgent } from '@/lib/llm'
-import { executeTool } from '@/lib/code-team/tool-executor'
+import { executeTool, buildCompactToolSchemasSection } from '@/lib/code-team/tool-executor'
 import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint } from '@/lib/tool-calls'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
 import {
@@ -270,7 +270,7 @@ const VERIFY_TOOLS = new Set(['run_tests', 'lint', 'type_check', 'test_coverage'
 /** [C] Đọc lại kết quả (file_read/grep sau khi sửa) cũng là kiểm định */
 const READBACK_TOOLS = new Set(['file_read', 'grep'])
 /** [C] Tool sửa đổi — sau những tool này PHẢI có kiểm định lại trước khi kết luận */
-const MODIFY_TOOLS = new Set(['file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'mkdir', 'shell', 'run_bg', 'git_commit', 'delegate_task', 'dispatch_agent', 'dispatch_agents_parallel'])
+const MODIFY_TOOLS = new Set(['file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'mkdir', 'shell', 'run_bg', 'git_commit', 'delegate_task', 'dispatch_agent', 'dispatch_agents_parallel', 'request_code_team'])
 /** FIX 2026-09-14 #7 — tool kiểm định MẠNH (đối lập READBACK chỉ-đọc-again: với
  * thay đổi LOGIC, bằng chứng file_read-only là kiểm định YẾU). */
 const STRONG_VERIFY_TOOLS = new Set(['run_tests', 'lint', 'type_check', 'test_coverage'])
@@ -460,6 +460,24 @@ function buildDelegationProtocol(): string {
 }
 
 /**
+ * [F2] CODE TEAM SOP REQUEST protocol (user directive 2026-09-30 #2) — chỉ
+ * append khi agent CÓ request_code_team trong whitelist (Opus/Omega/
+ * standalone). Hướng dẫn phân biệt với delegate_task + kỷ luật đọc báo cáo
+ * pipeline (verify-guard áp vì request_code_team nằm trong MODIFY_TOOLS).
+ */
+function buildCodeTeamProtocol(): string {
+  return `
+
+🏗 HUY ĐỘNG TOÀN CODE TEAM THEO SOP (request_code_team):
+- DÙNG KHI: tác vụ code PHỨC TẠP, KHỐI LƯỢNG LỚN — tính năng hoàn chỉnh nhiều module/file, kiến trúc mới, cần nhiều VAI tuần tự (thiết kế → code → review → tối ưu → verify) hoặc cần chất lượng đảm bảo bởi pipeline kiểm định nhiều tầng.
+- KHÔNG dùng: task nhỏ 1-2 file (delegate_task 1 agent hoặc tự làm nhanh hơn), câu hỏi/phân tích không cần code.
+- Cú pháp: tool_call: request_code_team({"task": "Yêu cầu đầy đủ gửi TL: mục tiêu, phạm vi, ràng buộc, điều kiện hoàn thành", "context": "...", "acceptance_criteria": "xong khi..."}) — có thể kèm "mode" (A=UI/B=backend/C=hybrid) + "tier" (1/2/3) nếu BIẾT CHẮN routing; không truyền thì TL TỰ PHÂN TÍCH (chuẩn SOP).
+- Quy trình sau khi gọi: TL (APEX) nhận yêu cầu → phân tích routing → TOÀN TEAM vận hành (G1 thiết kế → G2-A code → G2-B review/fix → G3 tối ưu theo routing) → checkpoint verify từng bước → bạn nhận BÁO CÁO NÉN toàn pipeline.
+- Tool CHẠY DÀI (phút → chục phút) — gọi ĐÚNG 1 LẦN cho 1 tác vụ, KHÔNG gọi lặp khi đang chờ.
+- Sau khi nhận báo cáo: đọc "status" + từng bước (issues/unfixedBugs) — workflow ESCALATE/failed hoặc còn unfixedBugs → khắc phục phần còn lại bằng tools của mình (file_read/lint/type_check kiểm định lại) rồi mới kết luận.`
+}
+
+/**
  * [G] OMEGA ORCHESTRATION protocol (user request 2026-09-08) — chỉ append khi
  * agent CÓ tool phối hợp (escalate_problem / dispatch_agent / create_agent).
  * Agent bất kỳ gặp vấn đề (hoặc nhận diện rủi ro sớm) escalate về Omega —
@@ -564,6 +582,10 @@ export function assembleGoalLoopSystemPrompt(params: {
   hasAutomationDirect?: boolean
   /** AUTOMATION (2026-09-13): propose_automation (đề xuất — mọi agents) */
   hasAutomationPropose?: boolean
+  /** CODE TEAM SOP (2026-09-30): request_code_team (huy động toàn team theo SOP) */
+  hasCodeTeamRequest?: boolean
+  /** TOOL SCHEMAS (2026-09-30): schema compact của whitelist tools — model gọi đúng param */
+  toolSchemasBlock?: string
   /** nhãn context cho log 1 dòng khi có cut */
   agentName?: string
 }): string {
@@ -573,7 +595,9 @@ export function assembleGoalLoopSystemPrompt(params: {
       [
         { name: 'base', content: systemPrompt, priority: 10 },
         { name: 'goalProtocol', content: buildGoalProtocol(), priority: 100 },
+        { name: 'toolSchemas', content: params.toolSchemasBlock ?? '', priority: 96 },
         { name: 'delegationProtocol', content: hasDelegation ? buildDelegationProtocol() : '', priority: 90 },
+        { name: 'codeTeamProtocol', content: params.hasCodeTeamRequest === true ? buildCodeTeamProtocol() : '', priority: 88 },
         { name: 'orchestrationProtocol', content: hasOrchestration ? buildOrchestrationProtocol(hasDispatch, hasCreate) : '', priority: 80 },
         { name: 'automationProtocol', content: buildAutomationProtocol(params.hasAutomationDirect === true, params.hasAutomationPropose === true), priority: 78 },
         { name: 'confidenceProtocol', content: buildConfidenceProtocol(), priority: 70 },
@@ -588,8 +612,10 @@ export function assembleGoalLoopSystemPrompt(params: {
     )
     return (
       systemPrompt +
+      (params.toolSchemasBlock ? '\n' + params.toolSchemasBlock : '') +
       buildGoalProtocol() +
       (hasDelegation ? buildDelegationProtocol() : '') +
+      (params.hasCodeTeamRequest === true ? buildCodeTeamProtocol() : '') +
       (hasOrchestration ? buildOrchestrationProtocol(hasDispatch, hasCreate) : '') +
       buildAutomationProtocol(params.hasAutomationDirect === true, params.hasAutomationPropose === true) +
       buildConfidenceProtocol() +
@@ -1190,8 +1216,18 @@ export async function runGoalDrivenLoop(params: {
     hasCreate: effectiveTools.includes('create_agent'),
     hasAutomationDirect,
     hasAutomationPropose,
+    // CODE TEAM SOP (2026-09-30): agent có request_code_team → inject protocol
+    hasCodeTeamRequest: effectiveTools.includes('request_code_team'),
     preActBlock,
     agentName,
+    // FIX 2026-09-30 (E2E audit "agents đoán mò param tool"): schema compact
+    // của whitelist tools — model thấy ĐÚNG tên param + bắt buộc thay vì đoán.
+    // Fail-open: lỗi build → block rỗng (prompt cũ).
+    toolSchemasBlock: (() => {
+      try {
+        return agentTools.length > 0 ? buildCompactToolSchemasSection(agentTools) : ''
+      } catch { return '' }
+    })(),
   })
 
   // CI-5 (Task 14-b) — RESUME: capture 1 lần, mọi nhánh dưới guard bằng

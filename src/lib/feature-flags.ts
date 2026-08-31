@@ -129,6 +129,16 @@ const DEFAULTS: Record<string, string> = {
   // cho tới khi detection chạy lần đầu (GET /api/query?action=community-detect
   // hoặc lazy auto-detect ở query đầu tiên) → zero-impact khi chưa bật.
   ENABLE_COMMUNITY_SEARCH: 'true',
+
+  // CODE TEAM WORKFLOW REQUEST (user directive 2026-09-30 #2): request_code_team
+  // — Omega/Opus/goal-loop gửi yêu cầu tới TL, TOÀN team code huy động theo SOP
+  // (runWorkflow: TL analyze routing → G1→G2-A→G2-B→G3 theo mode/tier →
+  // checkpoint verify → báo cáo nén về parent). Default TRUE: an toàn vì
+  // (a) whitelist per-agent — chỉ agent có 'request_code_team' trong tools[]
+  // mới gọi được, (b) DEPTH GUARD strip tool khỏi sub-agent (chống workflow
+  // lồng workflow), (c) timeout tổng CODE_TEAM_REQUEST_TIMEOUT_MS + abort khi
+  // user hủy session cha.
+  ENABLE_CODE_TEAM_REQUEST: 'true',
 }
 
 /**

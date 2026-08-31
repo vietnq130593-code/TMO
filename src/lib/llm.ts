@@ -1826,21 +1826,48 @@ console.log(`[LLM] NVIDIA: agent/chat kimi-k3 (chính) + FALLBACK CHAIN [${NVIDI
 //      callLLMSlot, TUYỆT ĐỐI không dùng kimi-k3; override bằng env
 //      EXTRACTION_MODEL / EXTRACTION_FALLBACK_MODEL nếu muốn.
 
-/** Lõi CHÍNH cho MỌI agents, MỌI tác vụ (user directive 2026-08-31) */
-export const KIMI_K3_MODEL = 'moonshotai/kimi-k3'
+/** Lõi CHÍNH cho MỌI agents, MỌI tác vụ.
+ *
+ *  ⚠️ FIX 2026-09-30 (sự cố NIM model-level HANG — user report "agents thường
+ *  lỗi khi được Omega gọi hỗ trợ"): audit live xác minh moonshotai/kimi-k3 +
+ *  deepseek-v4-pro-0813 + deepseek-v4-flash-0731 đều HANG (server nhận request
+ *  rồi 0 bytes — 3/4 model đầu chuỗi chết → MỖI call cháy 3×150s trước khi
+ *  chạm minimax-m3; các tầng timeout ngắn (TL bridge 15s, evaluator 90s) chết
+ *  sạch; process trước đây còn 401 → rơi z-ai-sdk → tool-call JSON hỏng cú pháp
+ *  → sub-agent error). minimax-m3 verified live HTTP 200 trong 1.8s.
+ *  → Lõi chính mặc định đổi sang minimaxai/minimax-m3; kimi-k3 + deepseek-v4
+ *  trở thành backup trong chuỗi fallback (NIM hồi thì tự dùng lại qua fallback
+ *  hoặc user đổi AGENT_PRIMARY_MODEL về moonshotai/kimi-k3).
+ *  Override qua env: AGENT_PRIMARY_MODEL.
+ */
+export const AGENT_PRIMARY_MODEL =
+  process.env.AGENT_PRIMARY_MODEL?.trim() || 'minimaxai/minimax-m3'
 
-/** Chuỗi fallback tuần tự cho kimi-k3 (USER DIRECTIVE 2026-08-28; thứ tự failover
- *  MODEL-FIRST theo directive 2026-09-06):
- *  deepseek-v4-pro-0813 → deepseek-v4-flash-0731 → minimax-m3.
+/** @deprecated alias (2026-09-30) — KIMI_K3_MODEL giờ = AGENT_PRIMARY_MODEL
+ *  (nhiều import dùng tên cũ; ngữ nghĩa "lõi chính" giữ nguyên). */
+export const KIMI_K3_MODEL = AGENT_PRIMARY_MODEL
+
+/** Chuỗi fallback tuần tự cho lõi chính (failover MODEL-FIRST — từng model trên
+ *  cùng key trước khi chuyển key).
+ *  FIX 2026-09-30: minimax-m3 lên làm lõi chính (healthy) → 3 lõi cũ (kimi-k3,
+ *  deepseek-v4-pro, deepseek-v4-flash — từng là primary + fallback 1+2 theo
+ *  user directive 2026-08-28) xuống làm backup. Override qua env
+ *  AGENT_FALLBACK_CHAIN (CSV — vd "moonshotai/kimi-k3,deepseek-ai/deepseek-v4-pro-0813").
  *  kimi-k3 fail → chuyển NGAY lõi fallback kế trên CÙNG key; chỉ khi cả chuỗi
- *  fail trên key đó mới chuyển key (chain restart từ kimi-k3).
- *  deepseek-v4-pro-0813 = bản MỚI verified live 2026-08-28 qua GET /v1/models
- *  (bản cũ 'deepseek-v4-pro' không suffix đã 404 từ 2026-08-27). */
-export const AGENT_FALLBACK_CHAIN = [
-  'deepseek-ai/deepseek-v4-pro-0813',
-  'deepseek-ai/deepseek-v4-flash-0731',
-  'minimaxai/minimax-m3',
-]
+ *  fail trên key đó mới chuyển key (chain restart từ lõi chính).
+ *  deepseek-v4-pro-0813 = bản verified live 2026-08-28 qua GET /v1/models. */
+export const AGENT_FALLBACK_CHAIN: string[] = (() => {
+  const csv = process.env.AGENT_FALLBACK_CHAIN?.trim()
+  if (csv) {
+    const parsed = csv.split(',').map(s => s.trim()).filter(Boolean)
+    if (parsed.length > 0) return parsed
+  }
+  return [
+    'moonshotai/kimi-k3',
+    'deepseek-ai/deepseek-v4-pro-0813',
+    'deepseek-ai/deepseek-v4-flash-0731',
+  ]
+})()
 
 /** Số lần fail tối đa MỖI key trong 1 chuỗi xoay vòng (user: "mỗi key 3 đủ 3 lần") */
 export const KEY_FAILURES_PER_KEY = 3
@@ -1928,6 +1955,25 @@ type NvidiaAttemptStatus =
   | 'empty_response'   // 200 nhưng không có content lẫn tool_calls
 
 /**
+ * SURROGATE SANITIZE (fix NIM 400-block 2026-09-30) — loại lone surrogate
+ * (nửa emoji do slice() cắt đôi surrogate pair) khỏi string trước khi vào
+ * JSON body của NIM. NIM (serde_json) reject JSON chứa lone surrogate escape
+ * ("Failed to deserialize... unexpected end of hex escape") → cả chuỗi model
+ * fail 400 trên MỌI key → agent "lỗi không rõ nguyên nhân".
+ * Nguồn gốc: mọi .slice() trên text chứa emoji (tool result preview, digest,
+ * schema description...) đều có thể tạo lone surrogate — sanitize TẠI BIÊN
+ * GIỚI là lưới an toàn cho tất cả đường (đừng phải sửa từng slice).
+ */
+function sanitizeLoneSurrogates(s: string): string {
+  if (!s) return s
+  // High surrogate KHÔNG theo sau bởi low surrogate → xóa
+  let out = s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
+  // Low surrogate KHÔNG đứng sau high surrogate → xóa
+  out = out.replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
+  return out
+}
+
+/**
  * 1 attempt gọi NVIDIA NIM với 1 key cụ thể + 1 model cụ thể.
  * Trả về status + result (khi success). KHÔNG đụng pool state — caller quyết định.
  */
@@ -1946,9 +1992,14 @@ async function attemptNvidiaOnce(params: {
 }): Promise<{ status: NvidiaAttemptStatus; result?: LLMResult; httpStatus?: number; errorMessage?: string }> {
   const { keyInfo, model, prompt, systemPrompt, temperature, maxTokens, timeoutMs } = params
 
+  // FIX 400-block: lone surrogate trong prompt/systemPrompt → NIM reject body.
+  // Sanitize tại biên giới (mọi prompt nguồn đã slice cắt emoji đôi đều được chữa).
+  const cleanPrompt = sanitizeLoneSurrogates(prompt)
+  const cleanSystem = systemPrompt !== undefined ? sanitizeLoneSurrogates(systemPrompt) : undefined
+
   const messages = [
-    ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
-    { role: 'user' as const, content: prompt },
+    ...(cleanSystem ? [{ role: 'system' as const, content: cleanSystem }] : []),
+    { role: 'user' as const, content: cleanPrompt },
   ]
 
   const controller = new AbortController()
@@ -1962,7 +2013,13 @@ async function attemptNvidiaOnce(params: {
       temperature,
     }
     if (params.tools && params.tools.length > 0) {
-      body.tools = params.tools
+      // FIX 400-block: sanitize chuỗi lồng trong tool schemas (description
+      // override có thể chứa lone surrogate) — round-trip JSON qua sanitizer.
+      try {
+        body.tools = JSON.parse(sanitizeLoneSurrogates(JSON.stringify(params.tools)))
+      } catch {
+        body.tools = params.tools
+      }
       body.tool_choice = params.tool_choice ?? 'auto'
     }
 
@@ -2041,7 +2098,15 @@ async function attemptNvidiaOnce(params: {
       return { status: 'server_error', httpStatus: response.status, errorMessage: `HTTP ${response.status}` }
     }
     // 4xx khác (400 bad request...) — xử lý như lỗi không thể retry cùng key/model
-    return { status: 'server_error', httpStatus: response.status, errorMessage: `HTTP ${response.status}` }
+    // FIX 2026-09-30: đọc ERROR BODY (trước đây chỉ "HTTP 400" không lý do —
+    // chẩn đoán sự cố 400-block của goal-loop phải đoán mò). Cap 300 chars.
+    let errBody = ''
+    try { errBody = (await response.text()).slice(0, 300) } catch { /* ignore */ }
+    return {
+      status: 'server_error',
+      httpStatus: response.status,
+      errorMessage: `HTTP ${response.status}${errBody ? `: ${errBody}` : ''}`,
+    }
   } catch (err) {
     clearTimeout(timer)
     if (err instanceof Error && err.name === 'AbortError') {

@@ -145,6 +145,12 @@ GỌI CODE TEAM CHUYÊN TRÁCH (delegate_task) — dùng khi task CÓ 1 trong c�
 Ví dụ: tool_call: delegate_task({"agent": "BOLT", "task": "Implement API route X theo spec...", "context": "file liên quan: ..."})
 Sau khi nhận báo cáo: ĐỌC kỹ phần "còn thiếu" — nếu sub-agent chưa kiểm định, bạn tự kiểm định lại (lint/type_check/file_read) trước khi kết luận. Token sub-agent tiêu thụ được cộng vào budget của bạn — cân nhắc scope task trước khi delegate.
 
+HUY ĐỘNG TOÀN CODE TEAM THEO SOP (request_code_team) — dùng khi tác vụ code PHỨC TẠP, KHỐI LƯỢNG LỚN:
+- Tính năng mới hoàn chỉnh nhiều module/file, kiến trúc mới, hệ thống con cần nhiều VAI tuần tự (thiết kế → code → review → tối ưu → verify)
+- Cần chất lượng đảm bảo bởi pipeline chuẩn nhiều tầng kiểm định (TL checkpoint verify từng bước)
+tool_call: request_code_team({"task": "Yêu cầu đầy đủ: mục tiêu, phạm vi, ràng buộc, điều kiện hoàn thành", "context": "file/decision liên quan...", "acceptance_criteria": "xong khi..."})
+→ Yêu cầu đến TL (APEX), TL tự phân tích routing (Mode A/B/C × Tier 1/2/3), TOÀN TEAM huy động theo quy trình vận hành tiêu chuẩn, bạn nhận BÁO CÁO NÉN toàn pipeline (từng bước + issues + kết quả cuối). Tool chạy DÀI (phút → chục phút) — gọi ĐÚNG 1 lần cho 1 tác vụ lớn, KHÔNG gọi lặp khi đang chờ. Task nhỏ 1-2 file → dùng delegate_task hoặc tự làm.
+
 ═══════════════════════════════════════════
 🎛 ORCHESTRATOR & AGENT FACTORY (nhiệm vụ trung tâm — user request 2026-09-08)
 ═══════════════════════════════════════════
@@ -155,8 +161,8 @@ Bạn là ORCHESTRATOR (tổng chỉ huy) của toàn bộ hệ thống agents:
    - Khi tư vấn: nhìn AGENT ROSTER (danh bạ kỹ năng) để đề xuất đúng người — kèm lý do + bước cụ thể.
 
 2. TẠO AGENT MỚI (create_agent) — khi hệ thống THIẾU agent có kỹ năng phù hợp (đã kiểm tra Agent Roster):
-   tool_call: create_agent({"name": "TÊN", "description": "Mô tả vai trò", "instruction": "Hướng dẫn chi tiết — system prompt đầy đủ", "avatar": "🤖", "model": "moonshotai/kimi-k3", "team": null, "position": null, "temperature": 0.7, "maxTokens": 4096, "capable": "kỹ năng chính", "tools": ["file_read", "shell", ...]})
-   - Model: moonshotai/kimi-k3 | deepseek-ai/deepseek-v4-pro-0813 | deepseek-ai/deepseek-v4-flash-0731 | minimaxai/minimax-m3
+   tool_call: create_agent({"name": "TÊN", "description": "Mô tả vai trò", "instruction": "Hướng dẫn chi tiết — system prompt đầy đủ", "avatar": "🤖", "model": "minimaxai/minimax-m3", "team": null, "position": null, "temperature": 0.7, "maxTokens": 4096, "capable": "kỹ năng chính", "tools": ["file_read", "shell", ...]})
+   - Model: minimaxai/minimax-m3 (mặc định — healthy) | moonshotai/kimi-k3 | deepseek-ai/deepseek-v4-pro-0813 | deepseek-ai/deepseek-v4-flash-0731
    - Team/vị trí: null (standalone) hoặc "code"/"research" + position (code: G4/G5 cho agent mới — TL/G1/G2-A/G2-B/G3 đã có hệ thống giữ; research: TL/G1/G2/G3/G4/G5)
    - Temperature: 0.3 (kỹ thuật chặt) → 0.7 (cân bằng) → 1.0+ (sáng tạo)
    - Lương token (maxTokens): 256-32768
@@ -206,7 +212,11 @@ LEARNING & MEMORY
     capable:
       'Tìm kiếm web, phân tích thông tin, thảo luận triết học, thuật toán, brainstorming đa lĩnh vực, code & tools, skill installation, research sâu, creative ideation',
     provider: 'nvidia',
-    model: 'moonshotai/kimi-k3',
+    // FIX 2026-09-30 (NIM model-level HANG): kimi-k3 + deepseek-v4 pro/flash
+    // đều treo (0 bytes) phía NVIDIA NIM — minimax-m3 là lõi healthy duy nhất
+    // (verified live). Runtime callLLMForAgent override về lõi chính anyway
+    // (AGENT_PRIMARY_MODEL), giá trị này giữ đồng bộ hiển thị UI + legacy path.
+    model: 'minimaxai/minimax-m3',
     temperature: 0.7,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: null,
@@ -257,6 +267,13 @@ LEARNING & MEMORY
       // sub-agent chạy tự chủ, trả báo cáo NÉN → context Omega không phình
       // (tiết kiệm budget token vòng lặp mục tiêu).
       'delegate_task',
+      // CODE TEAM SOP REQUEST (user directive 2026-09-30): Omega gửi yêu cầu
+      // tới TL (APEX) → TOÀN team code huy động theo quy trình vận hành tiêu
+      // chuẩn (TL analyze routing → G1 thiết kế → G2-A code → G2-B review →
+      // G3 tối ưu → checkpoint verify) — dùng cho tác vụ code phức tạp, khối
+      // lượng lớn. Khác delegate_task (1 agent đơn lẻ): đây là nguyên đội
+      // vận hành pipeline nhiều tầng kiểm định.
+      'request_code_team',
       // APP RUNTIME AWARENESS (Task 19-b): Omega thấy được preview/dev-server
       // user đang chạy (port/pid/ai khởi động + tail log) — biết app user đang
       // xem có ổn không, tránh kill nhầm process của user.
