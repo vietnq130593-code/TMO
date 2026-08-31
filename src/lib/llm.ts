@@ -1839,9 +1839,17 @@ console.log(`[LLM] NVIDIA: agent/chat kimi-k3 (chính) + FALLBACK CHAIN [${NVIDI
  *  trở thành backup trong chuỗi fallback (NIM hồi thì tự dùng lại qua fallback
  *  hoặc user đổi AGENT_PRIMARY_MODEL về moonshotai/kimi-k3).
  *  Override qua env: AGENT_PRIMARY_MODEL.
+ *
+ *  ⚠️ UPDATE 2026-08-31 (USER DIRECTIVE — khôi phục kimi-k3 làm lõi chính):
+ *  user chỉ định lại moonshotai/kimi-k3 làm lõi chính cho TẤT CẢ agents, chuỗi
+ *  fallback đúng thứ tự: deepseek-v4-pro → deepseek-v4-flash → minimax-m3
+ *  (trùng directive 2026-08-28/2026-09-06). Nếu NIM kimi-k3 tái HANG →
+ *  timeout-breaker + chuỗi fallback tự chuyển lõi kế (không chết cứng như
+ *  giai đoạn Kimi-only); z-ai-sdk vẫn là fallback cuối. Đổi lại bất kỳ lúc
+ *  nào qua env AGENT_PRIMARY_MODEL / AGENT_FALLBACK_CHAIN (không cần sửa code).
  */
 export const AGENT_PRIMARY_MODEL =
-  process.env.AGENT_PRIMARY_MODEL?.trim() || 'minimaxai/minimax-m3'
+  process.env.AGENT_PRIMARY_MODEL?.trim() || 'moonshotai/kimi-k3'
 
 /** @deprecated alias (2026-09-30) — KIMI_K3_MODEL giờ = AGENT_PRIMARY_MODEL
  *  (nhiều import dùng tên cũ; ngữ nghĩa "lõi chính" giữ nguyên). */
@@ -1849,10 +1857,11 @@ export const KIMI_K3_MODEL = AGENT_PRIMARY_MODEL
 
 /** Chuỗi fallback tuần tự cho lõi chính (failover MODEL-FIRST — từng model trên
  *  cùng key trước khi chuyển key).
- *  FIX 2026-09-30: minimax-m3 lên làm lõi chính (healthy) → 3 lõi cũ (kimi-k3,
- *  deepseek-v4-pro, deepseek-v4-flash — từng là primary + fallback 1+2 theo
- *  user directive 2026-08-28) xuống làm backup. Override qua env
- *  AGENT_FALLBACK_CHAIN (CSV — vd "moonshotai/kimi-k3,deepseek-ai/deepseek-v4-pro-0813").
+ *  FIX 2026-09-30: minimax-m3 tạm làm lõi chính (healthy) khi 3 lõi kia HANG.
+ *  UPDATE 2026-08-31 (USER DIRECTIVE): kimi-k3 lại là lõi chính → chuỗi fallback
+ *  về đúng thứ tự directive 2026-08-28: deepseek-v4-pro (fallback #1) →
+ *  deepseek-v4-flash (fallback #2) → minimax-m3 (fallback #3). Override qua env
+ *  AGENT_FALLBACK_CHAIN (CSV — vd "deepseek-ai/deepseek-v4-pro-0813,minimaxai/minimax-m3").
  *  kimi-k3 fail → chuyển NGAY lõi fallback kế trên CÙNG key; chỉ khi cả chuỗi
  *  fail trên key đó mới chuyển key (chain restart từ lõi chính).
  *  deepseek-v4-pro-0813 = bản verified live 2026-08-28 qua GET /v1/models. */
@@ -1863,9 +1872,9 @@ export const AGENT_FALLBACK_CHAIN: string[] = (() => {
     if (parsed.length > 0) return parsed
   }
   return [
-    'moonshotai/kimi-k3',
     'deepseek-ai/deepseek-v4-pro-0813',
     'deepseek-ai/deepseek-v4-flash-0731',
+    'minimaxai/minimax-m3',
   ]
 })()
 

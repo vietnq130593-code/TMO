@@ -283,6 +283,20 @@ export async function ensureOpusAgent(): Promise<void> {
       }
     }
 
+    // MODEL SYNC (fix 2026-08-31 — USER DIRECTIVE kimi-k3): row Opus seed từ
+    // default cũ 2026-09-30 (minimax-m3) → sync về kimi-k3; model user tự chọn
+    // giữ nguyên. (Update-block của upsert KHÔNG đụng model — tôn trọng config.)
+    try {
+      const opusRow = await db.agentProfile.findUnique({ where: { name: OPUS_AGENT_NAME } })
+      if (opusRow?.model === 'minimaxai/minimax-m3') {
+        await db.agentProfile.update({
+          where: { name: OPUS_AGENT_NAME },
+          data: { model: 'moonshotai/kimi-k3' },
+        })
+        console.log('[Opus] Model sync: minimax-m3 (default cũ 2026-09-30) → moonshotai/kimi-k3 (lõi chính mới)')
+      }
+    } catch { /* fail-open — model chỉ là hiển thị + legacy path */ }
+
     await db.agentProfile.upsert({
       where: { name: OPUS_AGENT_NAME },
       update: {
@@ -301,8 +315,9 @@ export async function ensureOpusAgent(): Promise<void> {
         capable: OPUS_CAPABLE,
         domain: OPUS_DOMAIN,
         provider: 'nvidia',
-        // FIX 2026-09-30 (NIM model-level HANG): minimax-m3 = lõi healthy duy nhất
-        model: 'minimaxai/minimax-m3',
+        // UPDATE 2026-08-31 (USER DIRECTIVE): kimi-k3 lại là lõi chính
+        // (2026-09-30 tạm minimax-m3 do NIM HANG — kết thúc theo chỉ định user)
+        model: 'moonshotai/kimi-k3',
         temperature: 0.4, // CTO phán đoán — nhiệt thấp, nhất quán
         maxTokens: 16384,
         team: null, // meta-agent — không thuộc team nào

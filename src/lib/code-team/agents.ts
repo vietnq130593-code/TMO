@@ -36,7 +36,13 @@ export interface CodeTeamAgentDef {
 // ===== 5 AGENTS HARDCODED =====
 
 export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
-  // ===== MODEL POLICY (updated 2026-09-30 — NIM model-level HANG) =====
+  // ===== MODEL POLICY (updated 2026-08-31 — USER DIRECTIVE: kimi-k3 làm lõi chính) =====
+  // Khôi phục moonshotai/kimi-k3 làm lõi chính cho TẤT CẢ agents (APEX,
+  // CORTEX, BOLT, SENTINEL, CATALYST); chuỗi fallback đúng thứ tự directive
+  // 2026-08-28: deepseek-v4-pro → deepseek-v4-flash → minimax-m3. Giai đoạn
+  // 2026-09-30 tạm dùng minimax-m3 (NIM HANG 3 lõi đầu) kết thúc theo chỉ định
+  // user 2026-08-31. Runtime callLLMForAgent enforce AGENT_PRIMARY_MODEL
+  // (llm.ts) — model ở đây giữ đồng bộ hiển thị UI + legacy path.
   // FIX sự cố "agents thường lỗi khi được Omega gọi hỗ trợ": audit live xác
   // minh moonshotai/kimi-k3 + deepseek-v4-pro-0813 + deepseek-v4-flash-0731
   // đều HANG (0 bytes) phía NVIDIA NIM; minimaxai/minimax-m3 = lõi healthy
@@ -52,7 +58,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'programming',
     capable: 'Phân tích thị giác, routing decision, code UI/UX, verify kết quả, điều phối team',
     provider: 'nvidia',
-    model: 'minimaxai/minimax-m3',
+    model: 'moonshotai/kimi-k3',
     temperature: 0.5,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -91,7 +97,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'programming',
     capable: 'Thiết kế kiến trúc, DB schema, API design, component tree, state management, security architecture',
     provider: 'nvidia',
-    model: 'minimaxai/minimax-m3',
+    model: 'moonshotai/kimi-k3',
     temperature: 0.4,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -110,7 +116,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'programming',
     capable: 'Code TypeScript/React/Next.js, implement API, database operations, error handling',
     provider: 'nvidia',
-    model: 'minimaxai/minimax-m3',
+    model: 'moonshotai/kimi-k3',
     temperature: 0.3,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -131,7 +137,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'security',
     capable: 'Code review, tìm bugs, kiểm tra security, fix bugs, iterative refinement',
     provider: 'nvidia',
-    model: 'minimaxai/minimax-m3',
+    model: 'moonshotai/kimi-k3',
     temperature: 0.2,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -156,7 +162,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'programming',
     capable: 'Tối ưu performance, refactor code, scalability, best practices, UI+Backend integration',
     provider: 'nvidia',
-    model: 'minimaxai/minimax-m3',
+    model: 'moonshotai/kimi-k3',
     temperature: 0.3,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -234,6 +240,23 @@ async function _doSeed(): Promise<boolean> {
       const existing = await db.agentProfile.findUnique({ where: { name: def.name } })
 
       if (existing) {
+        // MODEL SYNC (fix 2026-08-31 — USER DIRECTIVE kimi-k3): rows seed từ
+        // default cũ 2026-09-30 (minimaxai/minimax-m3 — giá trị do CODE đặt,
+        // không phải user chọn) → đồng bộ về def.model (kimi-k3). Model KHÁC
+        // (user tự cấu hình) giữ nguyên — tôn trọng customization. Runtime
+        // callLLMForAgent enforce AGENT_PRIMARY_MODEL anyway — sync này chỉ để
+        // hiển thị UI + legacy path (ENFORCE_KIMI_K3=false) khớp lõi chính.
+        if (existing.model === 'minimaxai/minimax-m3' && def.model !== existing.model) {
+          try {
+            await db.agentProfile.update({
+              where: { id: existing.id },
+              data: { model: def.model },
+            })
+            console.log(`[CodeTeam] Model sync: ${def.name} minimax-m3 (default cũ 2026-09-30) → ${def.model} (lõi chính mới)`)
+          } catch (syncErr) {
+            console.warn(`[CodeTeam] Model sync ${def.name} thất bại (không chặn boot):`, syncErr)
+          }
+        }
         // Agent exists → SKIP entirely (preserve ALL user customizations)
         // This is the key difference from old auto-seeding:
         //   - Old: Overwrote instruction + forced isSystem=true

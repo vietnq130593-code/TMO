@@ -161,8 +161,8 @@ Bạn là ORCHESTRATOR (tổng chỉ huy) của toàn bộ hệ thống agents:
    - Khi tư vấn: nhìn AGENT ROSTER (danh bạ kỹ năng) để đề xuất đúng người — kèm lý do + bước cụ thể.
 
 2. TẠO AGENT MỚI (create_agent) — khi hệ thống THIẾU agent có kỹ năng phù hợp (đã kiểm tra Agent Roster):
-   tool_call: create_agent({"name": "TÊN", "description": "Mô tả vai trò", "instruction": "Hướng dẫn chi tiết — system prompt đầy đủ", "avatar": "🤖", "model": "minimaxai/minimax-m3", "team": null, "position": null, "temperature": 0.7, "maxTokens": 4096, "capable": "kỹ năng chính", "tools": ["file_read", "shell", ...]})
-   - Model: minimaxai/minimax-m3 (mặc định — healthy) | moonshotai/kimi-k3 | deepseek-ai/deepseek-v4-pro-0813 | deepseek-ai/deepseek-v4-flash-0731
+   tool_call: create_agent({"name": "TÊN", "description": "Mô tả vai trò", "instruction": "Hướng dẫn chi tiết — system prompt đầy đủ", "avatar": "🤖", "model": "moonshotai/kimi-k3", "team": null, "position": null, "temperature": 0.7, "maxTokens": 4096, "capable": "kỹ năng chính", "tools": ["file_read", "shell", ...]})
+   - Model: moonshotai/kimi-k3 (mặc định — lõi chính) | deepseek-ai/deepseek-v4-pro-0813 (fallback #1) | deepseek-ai/deepseek-v4-flash-0731 (fallback #2) | minimaxai/minimax-m3 (fallback #3)
    - Team/vị trí: null (standalone) hoặc "code"/"research" + position (code: G4/G5 cho agent mới — TL/G1/G2-A/G2-B/G3 đã có hệ thống giữ; research: TL/G1/G2/G3/G4/G5)
    - Temperature: 0.3 (kỹ thuật chặt) → 0.7 (cân bằng) → 1.0+ (sáng tạo)
    - Lương token (maxTokens): 256-32768
@@ -212,11 +212,12 @@ LEARNING & MEMORY
     capable:
       'Tìm kiếm web, phân tích thông tin, thảo luận triết học, thuật toán, brainstorming đa lĩnh vực, code & tools, skill installation, research sâu, creative ideation',
     provider: 'nvidia',
-    // FIX 2026-09-30 (NIM model-level HANG): kimi-k3 + deepseek-v4 pro/flash
-    // đều treo (0 bytes) phía NVIDIA NIM — minimax-m3 là lõi healthy duy nhất
-    // (verified live). Runtime callLLMForAgent override về lõi chính anyway
-    // (AGENT_PRIMARY_MODEL), giá trị này giữ đồng bộ hiển thị UI + legacy path.
-    model: 'minimaxai/minimax-m3',
+    // UPDATE 2026-08-31 (USER DIRECTIVE): kimi-k3 lại là lõi chính (fallback:
+    // deepseek-v4-pro → flash → minimax-m3). Giai đoạn 2026-09-30 tạm dùng
+    // minimax-m3 (NIM HANG) kết thúc. Runtime callLLMForAgent override về lõi
+    // chính anyway (AGENT_PRIMARY_MODEL), giá trị này giữ đồng bộ hiển thị UI
+    // + legacy path.
+    model: 'moonshotai/kimi-k3',
     temperature: 0.7,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: null,
@@ -467,6 +468,24 @@ async function _doStandaloneSeed(): Promise<boolean> {
             console.warn(`[Standalone] Instruction migration failed for ${def.name}:`, migErr)
           }
         }
+
+        // MODEL SYNC (fix 2026-08-31 — USER DIRECTIVE kimi-k3): rows seed từ
+        // default cũ 2026-09-30 (minimaxai/minimax-m3 — giá trị do CODE đặt)
+        // → đồng bộ về def.model (kimi-k3). Model khác (user tự cấu hình) giữ
+        // nguyên. Runtime callLLMForAgent enforce AGENT_PRIMARY_MODEL anyway —
+        // sync này chỉ để hiển thị UI + legacy path khớp lõi chính.
+        if (existing.model === 'minimaxai/minimax-m3' && def.model !== existing.model) {
+          try {
+            await db.agentProfile.update({
+              where: { name: def.name },
+              data: { model: def.model },
+            })
+            console.log(`[Standalone] Model sync: ${def.name} minimax-m3 (default cũ 2026-09-30) → ${def.model} (lõi chính mới)`)
+          } catch (syncErr) {
+            console.warn(`[Standalone] Model sync ${def.name} thất bại (không chặn boot):`, syncErr)
+          }
+        }
+
         skipped++
         console.log(`[Standalone] Agent already exists: ${def.name} — skipping, user customizations preserved`)
       } else {

@@ -32,6 +32,20 @@
  *                      cần restart (module đã load không thể hoán đổi).
  *                      Các call site `deletedSession` có guard chống crash.
  *
+ * FIX (user report 2026-08-31 "Unknown argument `opusReviewMode`" —
+ * sweepOpusAutoSessions spam lỗi mỗi tick):
+ *   Probe cũ có LỖ HỔNG: CLI `migrate diff` chỉ so DB ↔ schema.prisma trên
+ *   đĩa — nếu CẢ HAI đều mới (user pull code mới + từng db:push) nhưng
+ *   CLIENT trong bộ nhớ cũ (node_modules/@prisma/client generate từ schema
+ *   trước f3d97be — vd copy node_modules từ bản cũ / postinstall không
+ *   re-run khi lockfile không đổi) → probe trả 'ok' SAI, sweep quăng
+ *   PrismaClientValidationError "Unknown argument" mãi mà không ai tự chữa.
+ *   Giờ thêm CANARY client-side trong probeSchema(): 1 query nhẹ chạm field
+ *   mới nhất (AgentSession.opusReviewMode) — client cũ → validation error
+ *   NGAY (chưa chạm DB) → 'client-drift' → generate + push + hướng dẫn
+ *   restart. P2021/P2022 (DB cũ, client mới) → KHÔNG khớp canary → CLI
+ *   probe quyết 'db-drift' như cũ.
+ *
  * FIX (user report 2026-09-12 "The column main.Todo.runId does not exist"):
  * probe thủ công cũ CHỈ đếm 2 điểm (DeletedSession + AgentProfile.tools) —
  * Todo.runId (CI-2 Task 11-a) + archivedAt + các bảng GĐ3/GĐ4 (TaskContext,
@@ -113,6 +127,10 @@ async function probeSchemaManual(): Promise<DriftKind> {
     // TaskContextArchive GĐ3 CI-3 (Task 13-a) — Kho Context.
     await db.goalLoopJob.count()
     await db.taskContextArchive.count()
+    // Field mới nhất (fix 2026-08-31): AgentSession.opusReviewMode
+    // (Opus auto-review sweep — f3d97be). Client cũ → "Unknown argument"
+    // NGAY (validate client-side); DB cũ → P2022 (client mới).
+    await db.agentSession.findFirst({ select: { opusReviewMode: true } })
     return 'ok'
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -127,7 +145,9 @@ async function probeSchemaManual(): Promise<DriftKind> {
     }
     // Client trong bộ nhớ không biết field/model mới (select runId → validation
     // error "Unknown field") → client-drift: generate + push cho lần restart sau.
-    if (code === 'P2009' || code === 'P2007' || /unknown field/i.test(msg)) {
+    // FIX 2026-08-31: mở rộng match "Unknown argument" (Prisma gọi argument
+    // trong where/select — lỗi user report gốc là "Unknown argument `opusReviewMode`").
+    if (code === 'P2009' || code === 'P2007' || /unknown (field|argument)/i.test(msg)) {
       return 'client-drift'
     }
     throw err // lỗi khác (lock, file hỏng...) — không phải drift
@@ -139,6 +159,27 @@ async function probeSchema(): Promise<DriftKind> {
   //    client-drift NGAY không cần CLI.
   const ds = (db as unknown as Record<string, unknown>).deletedSession
   if (!ds) return 'client-drift'
+
+  // 1.5. CANARY client-side (fix 2026-08-31 "Unknown argument
+  //      `opusReviewMode`"): client có model cũ nhưng thiếu FIELD mới nhất
+  //      → PrismaClientValidationError client-side NGAY (chưa chạm DB).
+  //      DB-cũ-lỗi (P2021/P2022 — client mới, DB cũ) KHÔNG khớp nhánh này:
+  //      query validate OK client-side rồi mới lỗi phía server → rơi tiếp
+  //      xuống CLI probe quyết 'db-drift' như cũ. Lỗi khác lạ cũng nhường
+  //      cho CLI probe (an toàn — CLI độc lập client trong bộ nhớ).
+  try {
+    await db.agentSession.findFirst({ select: { opusReviewMode: true } })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    const code = (err as { code?: string }).code
+    if (
+      /unknown (argument|field)/i.test(msg) ||
+      code === 'P2007' || code === 'P2009'
+    ) {
+      return 'client-drift'
+    }
+    // P2021/P2022/lỗi khác → fall-through xuống CLI probe
+  }
 
   // 2. Toàn diện qua CLI migrate diff (phát hiện MỌI drift bảng/cột/index).
   try {

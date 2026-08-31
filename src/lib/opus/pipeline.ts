@@ -840,7 +840,25 @@ export async function sweepOpusAutoSessions(): Promise<{ sessions: number }> {
     }
     return { sessions: sessions.length }
   } catch (err) {
-    console.warn('[Opus][sweep] sweepOpusAutoSessions lỗi (nuốt — tick sau thử lại):', err instanceof Error ? err.message : String(err))
+    const sweepMsg = err instanceof Error ? err.message : String(err)
+    // FIX (user report 2026-08-31 — "Unknown argument `opusReviewMode`"):
+    // Prisma client trong process cũ hơn schema → validation error spam mỗi
+    // tick. Một lần duy nhất: kích hoạt ensureDbReady (tự prisma generate +
+    // db push) và in hướng dẫn RESTART rõ ràng thay vì câm lặng thử lại mãi.
+    const g = globalThis as unknown as { __tmoSweepClientDriftHinted?: boolean }
+    if (/unknown (argument|field)/i.test(sweepMsg) && !g.__tmoSweepClientDriftHinted) {
+      g.__tmoSweepClientDriftHinted = true
+      console.error(
+        '[Opus][sweep] ⛔ Prisma client trong process CŨ hơn schema.prisma (thiếu field như opusReviewMode). ' +
+        'Đang tự chữa (prisma generate + db push) — sau đó RESTART app (bun run dev) để nạp client mới. ' +
+        'Nếu vẫn lỗi: chạy `bun install` (postinstall prisma generate) rồi restart.'
+      )
+      try {
+        const { ensureDbReady } = await import('@/lib/db-setup')
+        void ensureDbReady({ force: true }).catch(() => { /* tick sau sẽ thử lại */ })
+      } catch { /* db-setup không load được — để tick sau */ }
+    }
+    console.warn('[Opus][sweep] sweepOpusAutoSessions lỗi (nuốt — tick sau thử lại):', sweepMsg)
     return { sessions: 0 }
   }
 }
