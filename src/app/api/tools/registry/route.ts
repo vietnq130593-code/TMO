@@ -39,6 +39,13 @@ import { ensureCustomToolsLoaded, getAllCustomTools } from '@/lib/custom-tool-re
 
 export const dynamic = 'force-dynamic'
 
+// FIX (review R2-c #6, 2026-08-31): cache 60s cho filesystem skills — trước đây
+// readdirSync + readFileSync ~68 SKILL.md SYNC trên event loop MỌI request (UI
+// poll 30s → 2 lần/phút). Skill files hiếm khi đổi giữa 2 poll → cache 60s đủ
+// real-time, hết block event loop.
+let fsSkillsCache: { at: number; data: Array<{ slug: string; hasSkillMd: boolean; description: string }> } | null = null
+const FS_SKILLS_CACHE_MS = 60_000
+
 // Team agents theo position (code-team/agents.ts)
 const TEAM_POSITIONS = ['TL', 'G1', 'G2-A', 'G2-B', 'G3']
 
@@ -120,6 +127,10 @@ export async function GET() {
         },
       })
       for (const p of profiles) {
+        // FIX (review R2-c #6): agent bị TẮT (enabled=false) không hiện trong
+        // matrix + không đếm vào agentCount — registry phản ánh agents ĐANG
+        // hoạt động (agent tắt không chat được → hiển thị gây hiểu nhầm).
+        if (!p.enabled) continue
         seen.add(p.name)
         const defaults = resolveDefaultTools(p)
         // ToolAssignment override (Tools Manager / Omega manage_tools) — live
@@ -254,28 +265,34 @@ export async function GET() {
       }
     } catch { /* non-fatal */ }
 
-    // ===== 3. Filesystem skills (skills/<slug>/SKILL.md) =====
-    const filesystemSkills: Array<{ slug: string; hasSkillMd: boolean; description: string }> = []
-    try {
-      const skillsRoot = join(process.cwd(), 'skills')
-      if (existsSync(skillsRoot)) {
-        for (const slug of readdirSync(skillsRoot, { withFileTypes: true })) {
-          if (!slug.isDirectory()) continue
-          const skillMdPath = join(skillsRoot, slug.name, 'SKILL.md')
-          const hasSkillMd = existsSync(skillMdPath)
-          let description = ''
-          if (hasSkillMd) {
-            try {
-              const content = readFileSync(skillMdPath, 'utf-8')
-              // Lấy mô tả ngắn: dòng đầu không phải heading
-              const line = content.split('\n').find(l => l.trim() && !l.trim().startsWith('#'))
-              description = (line || '').trim().slice(0, 150)
-            } catch { /* ignore */ }
+    // ===== 3. Filesystem skills (skills/<slug>/SKILL.md) — cache 60s =====
+    let filesystemSkills: Array<{ slug: string; hasSkillMd: boolean; description: string }>
+    if (fsSkillsCache && Date.now() - fsSkillsCache.at < FS_SKILLS_CACHE_MS) {
+      filesystemSkills = fsSkillsCache.data
+    } else {
+      filesystemSkills = []
+      try {
+        const skillsRoot = join(process.cwd(), 'skills')
+        if (existsSync(skillsRoot)) {
+          for (const slug of readdirSync(skillsRoot, { withFileTypes: true })) {
+            if (!slug.isDirectory()) continue
+            const skillMdPath = join(skillsRoot, slug.name, 'SKILL.md')
+            const hasSkillMd = existsSync(skillMdPath)
+            let description = ''
+            if (hasSkillMd) {
+              try {
+                const content = readFileSync(skillMdPath, 'utf-8')
+                // Lấy mô tả ngắn: dòng đầu không phải heading
+                const line = content.split('\n').find(l => l.trim() && !l.trim().startsWith('#'))
+                description = (line || '').trim().slice(0, 150)
+              } catch { /* ignore */ }
+            }
+            filesystemSkills.push({ slug: slug.name, hasSkillMd, description })
           }
-          filesystemSkills.push({ slug: slug.name, hasSkillMd, description })
         }
-      }
-    } catch { /* non-fatal */ }
+      } catch { /* non-fatal */ }
+      fsSkillsCache = { at: Date.now(), data: filesystemSkills }
+    }
 
     // ===== 4. DB skills (AgentSkill — ô SKILL.md Guides) =====
     let dbSkills: Array<{ slug: string; name: string; source: string; enabled: boolean; version: string }> = []

@@ -116,6 +116,12 @@ export interface GoalLoopCheckpoint {
   /** TASK 21 — số lần TÁI LẬP CỬA SỔ CHU KỲ đã dùng khi hết trần mà việc chưa
    *  xong triệt để (trần hiệu dụng = MAX_CYCLES × (1 + cycleRenewals)). */
   cycleRenewals?: number
+  /** FIX (review R2-b #2, 2026-08-31) — danh sách debt issues còn TREO (side
+   *  issues đã quyết định chạy debt cycle nhưng debt cycle dở dang). Persist để
+   *  resume giữa debt cycle: evaluateCompletion nhận lại debtIssues → rule 10
+   *  DEBT CHECK kích hoạt đúng, nợ không bị phán complete xóa chìm.
+   *  (Optional — checkpoint cũ không có → hiểu là [].) */
+  pendingDebtIssues?: string[]
   /** Epoch ms lúc checkpoint được ghi */
   savedAt: number
 }

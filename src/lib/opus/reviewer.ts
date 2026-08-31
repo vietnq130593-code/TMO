@@ -134,12 +134,20 @@ function normalizeDirective(raw: unknown): OpusDirective {
 function normalizeStopAssessment(raw: unknown): OpusStopAssessment {
   const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
   const b = (v: unknown): boolean => v === true
+  const ledgerClean = b(obj.ledgerClean)
+  const verificationGreen = b(obj.verificationGreen)
+  const specSatisfied = b(obj.specSatisfied)
+  const noNewBlocking = b(obj.noNewBlocking)
   return {
-    ledgerClean: b(obj.ledgerClean),
-    verificationGreen: b(obj.verificationGreen),
-    specSatisfied: b(obj.specSatisfied),
-    noNewBlocking: b(obj.noNewBlocking),
-    allMet: b(obj.allMet),
+    ledgerClean,
+    verificationGreen,
+    specSatisfied,
+    noNewBlocking,
+    // FIX (review R2-b #3, 2026-08-31): harness RECOMPUTE — không tin self-report
+    // allMet của model. STOP GUARD (pipeline) chặn STOP khi !allMet; trước đây
+    // model tự báo allMet=true nhưng 4 sub-flag false (mâu thuẫn chiều NGƯỢC)
+    // vẫn lọt qua guard và dừng loop. allMet = AND 4 sub-flag (authoritative).
+    allMet: ledgerClean && verificationGreen && specSatisfied && noNewBlocking,
     notes: asString(obj.notes) || undefined,
   }
 }

@@ -226,6 +226,16 @@ const MAX_CYCLE_RENEWALS = Math.max(0, intEnv('GOAL_LOOP_MAX_CYCLE_RENEWALS', 10
 const MAX_DEBT_CYCLES = Math.max(0, intEnv('GOAL_LOOP_MAX_DEBT_CYCLES', 100))
 /** Số vòng ReAct tối đa MỖI chu kỳ (mặc định 10 → tổng tối đa 40 vòng; 0 = ∞ — CI-1) */
 const ITER_PER_CYCLE = intEnv('GOAL_LOOP_ITERATIONS_PER_CYCLE', 10)
+/** FIX (review R2-b #1, 2026-08-31) — IN-CYCLE STALL BRAKE: khi ITER_PER_CYCLE=0
+ * (∞) + TOKEN_BUDGET=0 (∞), stall-brake/no-progress CHỈ chạy ở biên chu kỳ → 1 chu
+ * kỳ có thể đốt cả 12h khi model phát tool call hoài mà không tiến triển. Phanh
+ * TRONG chu kỳ: (1) N vòng LIÊN TIẾP không có tool call thành công nào → cắt chu kỳ;
+ * (2) fingerprint transcript (check mỗi 10 vòng) lặp 3 lần liên tiếp → cắt chu kỳ.
+ * Cắt giữa chừng = endedBy 'iteration_limit' → evaluator vẫn đánh giá + stall-brake
+ * biên chu kỳ (3 chu kỳ stall → dừng hẳn) vẫn hoạt động. 0 = tắt phanh in-cycle. */
+const IN_CYCLE_STALL_ITERATIONS = Math.max(0, intEnv('GOAL_LOOP_IN_CYCLE_STALL_ITERATIONS', 12))
+const IN_CYCLE_FP_CHECK_EVERY = Math.max(1, intEnv('GOAL_LOOP_IN_CYCLE_FP_CHECK_EVERY', 10))
+const IN_CYCLE_FP_MAX_REPEATS = Math.max(1, intEnv('GOAL_LOOP_IN_CYCLE_FP_MAX_REPEATS', 3))
 /** Budget thời gian toàn bộ loop (mặc định 12 GIỜ — user request 2026-09-13:
  *  "tôi muốn budget này đặt là 12h tối đa thay vì 30 phút như hiện tại"; tác vụ
  *  dài hạn Opus auto-mode cần trần dài — trước đây 30' cắt agent đang tiến
@@ -1391,8 +1401,12 @@ export async function runGoalDrivenLoop(params: {
   /** REVIEW 9-fix (2026-08-30) #9 — side issues đã quyết định chạy DEBT CYCLE.
    * Nếu debt cycle THẤT BẠI (verdict chưa complete / hết budget-chu kỳ),
    * các lỗi gốc này không được phép "chìm": cuối run chúng được ghi Todo
-   * follow-up + nêu trong báo cáo cuối (như nhánh debtDecision='record'). */
-  let pendingDebtIssues: string[] = []
+   * follow-up + nêu trong báo cáo cuối (như nhánh debtDecision='record').
+   * FIX (review R2-b #2, 2026-08-31): PERSIST vào checkpoint — crash giữa debt
+   * cycle trước đây mất danh sách này (resume vẫn inject directive từ
+   * lastVerdict.sideIssues nhưng evaluateCompletion không nhận debtIssues →
+   * rule 10 DEBT CHECK không kích hoạt → nợ bị xóa chìm nếu phán complete). */
+  let pendingDebtIssues: string[] = resumeState?.pendingDebtIssues ?? []
   // CI-5 (Task 14-b) — RESUME: counters khôi phục từ checkpoint (MANG TIẾP —
   // tokensUsed KHÔNG reset: trung thực tổng chi phí của run; budget thời gian
   // vẫn tính từ startedAt của lần chạy này — đúng chủ đích).
@@ -1478,6 +1492,9 @@ export async function runGoalDrivenLoop(params: {
     debtMode,
     debtCyclesRun,
     cycleRenewals,
+    // FIX (R2-b #2): persist danh sách debt issues còn treo — resume giữa debt
+    // cycle không mất ngữ cảnh (cap 20 issue × 300 chars — chống phình checkpoint).
+    pendingDebtIssues: pendingDebtIssues.slice(-20).map(s => s.slice(0, 300)),
     savedAt: Date.now(),
   })
   /** Fire onCheckpoint (sync/async) — fail-open */
@@ -1598,6 +1615,11 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
     cycleStrongVerify = false // FIX #7 — tính lại mỗi chu kỳ
     let endedBy: 'no_tool_calls' | 'iteration_limit' | 'error' | 'budget' | 'cancelled' = 'no_tool_calls'
     let cycleHadLlmError = false
+    // FIX (R2-b #1) — IN-CYCLE BRAKE state: đếm vòng liên tiếp không tool-call
+    // thành công + fingerprint transcript định kỳ (lặp = không tiến triển).
+    let inCycleStallIters = 0
+    let inCycleFp = ''
+    let inCycleFpRepeats = 0
 
     // CI-1 (0 = UNLIMITED): ITER_PER_CYCLE = 0 → KHÔNG trần vòng ReAct mỗi chu kỳ
     while (ITER_PER_CYCLE === 0 || cycleIterations < ITER_PER_CYCLE) {
@@ -1708,11 +1730,16 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
       // lệnh shell của tool call THÀNH CÔNG) → auto-complete todo in_progress
       // khớp nội dung NGAY SAU batch (LLM thường quên tự đóng todo).
       const batchEvidence: string[] = []
+      // FIX (R2-b #1) — batch này có ÍT NHẤT 1 tool call thành công không? (reset
+      // mỗi vòng; dùng cho in-cycle stall brake)
+      let batchAnySuccess = false
 
       // FIX 2026-09-14 #1/#7 — hậu xử lý tool result DÙNG CHUNG cho nhánh tuần
       // tự lẫn nhánh fan-in (token accounting · working memory · verify ordinals
       // · evidence · pushToolMessage · tracking cycleCodeModified/StrongVerify).
       const processToolResult = (tc: { name: string; args: Record<string, unknown> }, toolResult: { success: boolean; result: unknown }) => {
+        // FIX (R2-b #1) — đánh dấu batch có tool thành công (in-cycle stall brake)
+        if (toolResult.success) batchAnySuccess = true
         // CI-2 (Task 11-a) — thu bằng chứng từ tool call THÀNH CÔNG (bảo thủ:
         // chỉ path file/lệnh shell — xem extractTodoEvidence)
         if (toolResult.success) {
@@ -1938,6 +1965,41 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
         recordAgentThought(agentSessionId, `🔀 FAN-OUT/FAN-IN: ${delegationPromises.size} sub-agent chạy song song trong batch này — kết quả đã hợp nhất (xung đột tự phân xử qua báo cáo từng agent)`, totalIterations)
       }
 
+      // ===== FIX (R2-b #1) — IN-CYCLE STALL BRAKE (ITER_PER_CYCLE=0 + TOKEN=∞) =====
+      // Stall-brake/no-progress chỉ chạy ở BIÊN CHU KỲ — trước đây 1 chu kỳ có thể
+      // đốt cả 12h khi model phát tool call mãi không tiến triển (kể cả toàn fail
+      // hoặc lặp đi lặp lại). 2 phanh: (1) N vòng liên tiếp không tool-call thành
+      // công; (2) fingerprint (mỗi 10 vòng) lặp M lần. Cắt = 'iteration_limit'
+      // (evaluator vẫn đánh giá; chu kỳ stall tăng đếm stall-brake biên chu kỳ).
+      if (IN_CYCLE_STALL_ITERATIONS > 0) {
+        if (batchAnySuccess) {
+          inCycleStallIters = 0
+        } else {
+          inCycleStallIters++
+          if (inCycleStallIters >= IN_CYCLE_STALL_ITERATIONS) {
+            console.warn(`[GoalLoop] ${agentName} IN-CYCLE STALL BRAKE: ${inCycleStallIters} vòng LIÊN TIẾP không có tool call thành công nào (chu kỳ ${cycle}) — cắt chu kỳ giữa chừng, chuyển evaluator`)
+            recordAgentThought(agentSessionId, `⚠️ Phanh trong chu kỳ: ${inCycleStallIters} vòng liên tiếp toàn tool call thất bại — cắt chu kỳ ${cycle} giữa chừng để evaluator đánh giá lại hướng đi`, totalIterations)
+            endedBy = 'iteration_limit'
+            break
+          }
+        }
+      }
+      if (cycleIterations % IN_CYCLE_FP_CHECK_EVERY === 0) {
+        const fp = progressFingerprint(messages)
+        if (fp === inCycleFp && fp !== '') {
+          inCycleFpRepeats++
+          if (inCycleFpRepeats >= IN_CYCLE_FP_MAX_REPEATS) {
+            console.warn(`[GoalLoop] ${agentName} IN-CYCLE NO-PROGRESS: fingerprint transcript lặp ${inCycleFpRepeats}× (mỗi ${IN_CYCLE_FP_CHECK_EVERY} vòng, chu kỳ ${cycle}) — agent xoay vòng lặp lại cùng hành động — cắt chu kỳ giữa chừng, chuyển evaluator`)
+            recordAgentThought(agentSessionId, `⚠️ Phanh trong chu kỳ (no-progress): transcript lặp y hệt ${inCycleFpRepeats * IN_CYCLE_FP_CHECK_EVERY} vòng — agent đang xoay vòng lặp — cắt chu kỳ ${cycle} để evaluator đánh giá lại`, totalIterations)
+            endedBy = 'iteration_limit'
+            break
+          }
+        } else {
+          inCycleFp = fp
+          inCycleFpRepeats = 0
+        }
+      }
+
       // ===== CI-2 (Task 11-a) — MID-RUN EVIDENCE-BASED AUTO-COMPLETE =====
       // Sau mỗi batch tool call: todo 'in_progress' của ĐÚNG run hiện tại mà
       // nội dung chứa đúng đường dẫn file / lệnh shell của tool call THÀNH CÔNG
@@ -2046,10 +2108,29 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
     //  - chu kỳ KHÔNG có tool call nào (Q&A thuần) → coi như hoàn thành
     //  - có tool call nhưng không đánh giá được → chưa hoàn thành (đánh giá lại chu kỳ sau)
     if (!verdict) {
-      if (cycleToolCalls === 0) {
+      if (cycleToolCalls === 0 && pendingDebtIssues.length === 0) {
         verdict = { complete: true, confidence: 0.6, verified: false, missing: [], rootCause: '', nextPlan: [], sideIssues: [], debtDecision: 'none', raw: '(evaluator unavailable — pure answer accepted)' }
       } else {
-        verdict = { complete: false, confidence: 0.5, verified: false, missing: ['(không đánh giá được — tự rà soát)'], rootCause: '(evaluator LLM lỗi — kiểm tra lại toàn bộ kết quả)', nextPlan: [], sideIssues: [], debtDecision: 'none', raw: '' }
+        // FIX (R2-b #4): evaluator hỏng mà debt issues còn TREO → KHÔNG phán
+        // complete (nhánh complete sẽ xóa pendingDebtIssues chìm). Giữ
+        // complete=false + relist debt làm sideIssues (debtDecision='record') —
+        // run kết thúc vẫn ghi Todo follow-up từng lỗi.
+        const hasPendingDebt = pendingDebtIssues.length > 0
+        verdict = {
+          complete: false,
+          confidence: 0.5,
+          verified: false,
+          missing: hasPendingDebt
+            ? ['(evaluator lỗi — tự đối chiếu các lỗi phát sinh còn treo với bằng chứng)']
+            : ['(không đánh giá được — tự rà soát)'],
+          rootCause: hasPendingDebt
+            ? '(evaluator LLM lỗi trong khi còn debt issues chưa xử lý)'
+            : '(evaluator LLM lỗi — kiểm tra lại toàn bộ kết quả)',
+          nextPlan: [],
+          sideIssues: hasPendingDebt ? pendingDebtIssues.slice() : [],
+          debtDecision: hasPendingDebt ? 'record' : 'none',
+          raw: '(evaluator unavailable)',
+        }
       }
     }
 

@@ -3451,6 +3451,60 @@ const CODE_TEAM_REQUEST_TIMEOUT_MS = (() => {
   return Number.isFinite(v) && v >= 0 ? Math.floor(v) : 30 * 60_000
 })()
 
+// ==================== FIX (review R2-c #1/#3, 2026-08-31) — DEPTH GUARD + IN-FLIGHT CAP + ZOMBIE SWEEPER ====================
+// Vấn đề: DEPTH_GUARD_TOOLS chỉ lọc ở mức prompt/whitelist — workflow ReAct loop
+// (regex text tool-calls) vẫn có thể thực thi 'request_code_team' → runWorkflow
+// LỒNG trong runWorkflow (mỗi tầng 30' budget + full-team tokens; abort tầng
+// ngoài KHÔNG hủy tầng trong). Sửa 2 tầng: (1) guard runtime tại executor (đây),
+// (2) guard tại ReAct loop (workflow-engine.ts).
+
+/** Số request_code_team chạy đồng thời tối đa MỖI process (mặc định 1 — mỗi
+ * workflow huy động 5+ agents + LLM nặng; máy sandbox 2GB RAM chỉ chịu nổi 1).
+ * Env CODE_TEAM_MAX_CONCURRENT_REQUESTS. */
+const CODE_TEAM_MAX_CONCURRENT_REQUESTS = Math.max(1, parseInt(process.env.CODE_TEAM_MAX_CONCURRENT_REQUESTS || '1', 10) || 1)
+
+/** Counter in-flight (module scope — mọi đường gọi trong process này dùng chung). */
+let codeTeamRequestsInFlight = 0
+
+/** Sweeper zombie CodeTeamSession (R2-c #3): crash/restart giữa workflow để
+ * currentStep='running' VĨNH VIỄN — không boot sweeper nào dọn. Piggyback tại
+ * mỗi request_code_team MỚI (throttle 10'/process, fire-and-forget): session
+ * 'running' cũ hơn timeout+30' → đánh dấu 'failed' kèm ghi chú. */
+let codeTeamSweepLastAt = 0
+async function sweepStaleCodeTeamSessions(): Promise<void> {
+  const now = Date.now()
+  if (now - codeTeamSweepLastAt < 10 * 60_000) return
+  codeTeamSweepLastAt = now
+  try {
+    const { db: dbClient } = await import('@/lib/db')
+    const staleThreshold = Date.now() - (CODE_TEAM_REQUEST_TIMEOUT_MS > 0 ? CODE_TEAM_REQUEST_TIMEOUT_MS + 30 * 60_000 : 2 * 60 * 60_000)
+    const stale = await dbClient.codeTeamSession.findMany({
+      where: { currentStep: 'running', updatedAt: { lt: new Date(staleThreshold) } },
+      select: { sessionId: true },
+    })
+    if (stale.length === 0) return
+    for (const s of stale) {
+      await dbClient.codeTeamSession.update({
+        where: { sessionId: s.sessionId },
+        data: { currentStep: 'failed' },
+      }).catch(() => { /* fail-open — session có thể đã bị xóa */ })
+    }
+    console.warn(`[CodeTeamRequest] 🧟 Sweeper: đánh dấu ${stale.length} CodeTeamSession 'running' treo (zombie sau crash/restart) → 'failed' (older than threshold)`)
+  } catch { /* fail-open tuyệt đối — sweeper không bao giờ phá request mới */ }
+}
+
+/** Slice theo CODE POINT (UTF-16-safe — không cắt đôi emoji/surrogate pair).
+ * FIX R2-c #4: report.slice(0,4000) cũ có thể tạo lone surrogate. */
+function safeSliceByCodePoints(s: string, max: number): string {
+  if (s.length <= max) return s
+  let end = max
+  // Lùi về trước nếu cắt giữa surrogate pair (high surrogate ở end-1)
+  while (end > 0 && s.charCodeAt(end - 1) >= 0xd800 && s.charCodeAt(end - 1) <= 0xdbff) {
+    end--
+  }
+  return s.slice(0, end)
+}
+
 interface CodeTeamStepSummary {
   position: string
   agent: string
@@ -3462,7 +3516,42 @@ interface CodeTeamStepSummary {
   durationMs: number | null
 }
 
+/**
+ * Wrapper guard (R2-c #1) — KIỂM TRA trước khi vào workflow thật:
+ *   1. Depth guard: parent session đã là ct-req-* (đang ở trong workflow code
+ *      team) → TỪ CHỐI — không lồng workflow-in-workflow.
+ *   2. In-flight cap: đã có request_code_team đang chạy trong process → TỪ CHỐI
+ *      kèm hint thử lại (chống 2 full-team workflow đè RAM song song).
+ *   3. Kick zombie sweeper (fire-and-forget).
+ * Tăng/giảm counter in-flight qua try/finally — mọi lối ra đều giải phóng.
+ */
 async function executeCodeTeamRequest(
+  args: Record<string, unknown>,
+  context?: { agentName?: string; sessionId?: string | null; runId?: string | null },
+): Promise<unknown> {
+  const parentSessionId = context?.sessionId ?? null
+  if (parentSessionId && parentSessionId.startsWith('ct-req-')) {
+    return {
+      success: false,
+      error: 'TỪ CHỐI (depth-guard): session này đã là workflow của code team (ct-req-*) — agent trong team KHÔNG được gọi request_code_team lồng bên trong. Hãy tự làm phần việc của step này bằng tools đã có (file_*/shell/run_tests...).',
+    }
+  }
+  if (codeTeamRequestsInFlight >= CODE_TEAM_MAX_CONCURRENT_REQUESTS) {
+    return {
+      success: false,
+      error: `Đã có ${codeTeamRequestsInFlight} request_code_team đang chạy trong process (cap ${CODE_TEAM_MAX_CONCURRENT_REQUESTS}) — mỗi workflow huy động toàn team code (RAM/token lớn). Hãy chờ workflow hiện tại xong rồi gọi lại (hint cho goal-loop: làm việc khác trước hoặc tổng hợp kết quả), hoặc tăng env CODE_TEAM_MAX_CONCURRENT_REQUESTS nếu có tài nguyên.`,
+      retryHint: 'retry_after_current_workflow',
+    }
+  }
+  codeTeamRequestsInFlight++
+  try {
+    return await executeCodeTeamRequestInner(args, context)
+  } finally {
+    codeTeamRequestsInFlight--
+  }
+}
+
+async function executeCodeTeamRequestInner(
   args: Record<string, unknown>,
   context?: { agentName?: string; sessionId?: string | null; runId?: string | null },
 ): Promise<unknown> {
@@ -3470,6 +3559,9 @@ async function executeCodeTeamRequest(
   const { runWorkflow } = await import('@/lib/code-team/workflow-engine')
   const { resolveAgent } = await import('@/lib/code-team/agent-resolver')
   const { isSessionCancelled, registerDelegationRun, endAgentRun } = await import('@/lib/agent-run-tracker')
+
+  // R2-c #3 — dọn zombie session 'running' từ crash/restart trước (throttle, fire-and-forget)
+  void sweepStaleCodeTeamSessions().catch(() => { /* fail-open */ })
 
   const parentAgentName = context?.agentName || 'parent-agent'
   const parentSessionId = context?.sessionId ?? null
@@ -3688,7 +3780,10 @@ async function executeCodeTeamRequest(
   reportLines.push(`\nBằng chứng pipeline: ${evidence.slice(-12).join(' · ') || '(trống)'}`)
   let report = reportLines.join('\n')
   if (report.length > 4000) {
-    report = report.slice(0, 4000) + '\n…(báo cáo code team đã nén — tra cứu worklog đầy đủ theo sessionId ' + ctSessionId + ')'
+    // FIX R2-c #4: slice theo code point — report chứa emoji (⚠️📋▶), slice
+    // UTF-16 cũ có thể cắt đôi surrogate → lone surrogate (may mắn sanitize
+    // biên giới llm.ts đã chặn 400-block, nhưng ký tự cuối vẫn hỏng).
+    report = safeSliceByCodePoints(report, 4000) + '\n…(báo cáo code team đã nén — tra cứu worklog đầy đủ theo sessionId ' + ctSessionId + ')'
   }
 
   finishRun(

@@ -25,6 +25,8 @@
  */
 
 import { db } from '@/lib/db'
+import { readFile as fsReadFile, writeFile as fsWriteFile } from 'fs/promises'
+import path from 'path'
 
 // ==================== HẰNG SỐ ====================
 
@@ -205,10 +207,31 @@ export async function ensureOpusAgent(): Promise<void> {
     // MIGRATION: Opus đã tồn tại với tools=null (cũ) → cấp 1 LẦN full list;
     // nếu user đã tự chỉnh tools qua UI/ToolAssignment → TÔN TRỌNG, không đè.
     // FIX 2026-09-30 (top-up): builtin list MỚI THÊM tool (vd request_code_team
-    // #75) → Opus đang giữ list full CŨ (74) KHÔNG tự có tool mới. Chỉ top-up
-    // khi list hiện tại LÀ list full cấp trước đó (mọi phần tử đều builtin +
-    // thiếu đúng ≤2 tool mới) — list user tự cắt sẽ KHÔNG bị đè.
+    // #75) → Opus đang giữ list full CŨ (74) KHÔNG tự có tool mới.
+    // FIX (review R2-c #2, 2026-08-31): top-up cũ điều kiện "thiếu ≤2 builtin"
+    // CLOBBER chỉnh tay nhỏ — user cố tình cắt đúng 1-2 tool khỏi list full bị
+    // âm thầm khôi phục full mỗi boot. Giờ dùng MARKER FILE (db/opus-tools-marker.json,
+    // set-baseline grant gần nhất): chỉ top-up khi list hiện tại == EXACT marker
+    // (list hệ thống đã cấp) — list user tự cắt/khác marker → KHÔNG đè bao giờ.
     if (fullToolsJson) {
+      const markerPath = path.join(process.cwd(), 'db', 'opus-tools-marker.json')
+      const readMarker = async (): Promise<string[] | null> => {
+        try {
+          const raw = await fsReadFile(markerPath, 'utf-8')
+          const parsed = JSON.parse(raw) as { tools?: unknown }
+          return Array.isArray(parsed.tools) && parsed.tools.every((t: unknown) => typeof t === 'string')
+            ? (parsed.tools as string[])
+            : null
+        } catch { return null /* chưa có marker / đọc lỗi → bootstrap */ }
+      }
+      const writeMarker = async (tools: string[]): Promise<void> => {
+        try {
+          await fsWriteFile(markerPath, JSON.stringify({ tools, grantedAt: new Date().toISOString() }, null, 0), 'utf-8')
+        } catch { /* fail-open — marker không ghi được thì lần sau bootstrap lại */ }
+      }
+      const setEq = (a: string[], b: string[]): boolean =>
+        a.length === b.length && a.every(t => b.includes(t))
+
       const existing = await db.agentProfile.findUnique({
         where: { name: OPUS_AGENT_NAME },
         select: { tools: true },
@@ -218,20 +241,43 @@ export async function ensureOpusAgent(): Promise<void> {
           where: { name: OPUS_AGENT_NAME },
           data: { tools: fullToolsJson },
         }).catch(() => { /* fail-open */ })
-        console.log(`[Opus] TASK 22: cấp full tools (${fullToolList.length} builtin) cho Opus (trước đó null)`)
+        await writeMarker(fullToolList)
+        console.log(`[Opus] TASK 22: cấp full tools (${fullToolList.length} builtin) cho Opus (trước đó null) + ghi marker baseline`)
       } else if (existing?.tools && fullToolList.length > 0) {
         try {
           const currentList = JSON.parse(existing.tools)
-          if (Array.isArray(currentList) && currentList.length > 0) {
-            const missing = fullToolList.filter(t => !currentList.includes(t))
-            const allBuiltin = currentList.every((t: unknown) => typeof t === 'string' && fullToolList.includes(t as string))
-            if (allBuiltin && missing.length > 0 && missing.length <= 2 && currentList.length >= fullToolList.length - 2) {
+          if (Array.isArray(currentList) && currentList.length > 0 && currentList.every((t: unknown) => typeof t === 'string')) {
+            const current = currentList as string[]
+            const marker = await readMarker()
+            if (!marker) {
+              // BOOTSTRAP (marker chưa có — sandbox reset / deploy đầu): dùng heuristic
+              // cũ ĐÚNG 1 LẦN để bắt kịp list builtin mới (74→75), sau đó khóa baseline.
+              const missing = fullToolList.filter(t => !current.includes(t))
+              const allBuiltin = current.every(t => fullToolList.includes(t))
+              if (allBuiltin && missing.length > 0 && missing.length <= 2 && current.length >= fullToolList.length - 2) {
+                await db.agentProfile.update({
+                  where: { name: OPUS_AGENT_NAME },
+                  data: { tools: fullToolsJson },
+                }).catch(() => { /* fail-open */ })
+                await writeMarker(fullToolList)
+                console.log(`[Opus] TASK 22 top-up (bootstrap 1 lần): bổ sung ${missing.length} tool builtin mới (${missing.join(', ')}) — ${current.length} → ${fullToolList.length}`)
+              } else {
+                // List full hoặc list user tự cắt → marker = full (baseline canonical;
+                // list cắt != marker sẽ KHÔNG bao giờ bị top-up đè).
+                await writeMarker(fullToolList)
+              }
+            } else if (setEq(current, marker) && marker.length < fullToolList.length) {
+              // current == baseline grant + builtin có tool MỚI → top-up (list do
+              // HỆ THỐNG cấp, không phải user cắt) + cập nhật baseline.
+              const added = fullToolList.filter(t => !marker.includes(t))
               await db.agentProfile.update({
                 where: { name: OPUS_AGENT_NAME },
                 data: { tools: fullToolsJson },
               }).catch(() => { /* fail-open */ })
-              console.log(`[Opus] TASK 22 top-up: bổ sung ${missing.length} tool builtin mới (${missing.join(', ')}) vào list full cũ (${currentList.length} → ${fullToolList.length})`)
+              await writeMarker(fullToolList)
+              console.log(`[Opus] TASK 22 top-up (marker match): bổ sung ${added.length} tool builtin mới (${added.join(', ')}) — ${current.length} → ${fullToolList.length}`)
             }
+            // else: current != marker (user chỉnh tay) → TÔN TRỌNG, không đè.
           }
         } catch { /* JSON hỏng → bỏ qua top-up */ }
       }

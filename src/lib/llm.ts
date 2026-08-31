@@ -1904,7 +1904,9 @@ async function callAgentModelWithFallbackChain(
   options: LLMCallOptions | undefined,
   taskLabel: string,
 ): Promise<LLMResult> {
-  const chain = [KIMI_K3_MODEL, ...AGENT_FALLBACK_CHAIN]
+  // FIX (R2-a #9): dedup — AGENT_PRIMARY_MODEL trùng entry trong AGENT_FALLBACK_CHAIN
+  // (vd user set lại kimi-k3 làm primary) → không đốt 2 lần attempt cùng model/key.
+  const chain = [KIMI_K3_MODEL, ...AGENT_FALLBACK_CHAIN].filter((m, i, arr) => arr.indexOf(m) === i)
 
   // Người dùng bấm Dừng → cắt ngang chuỗi NGAY, không đốt call/key
   if (options?.abortCheck && options.abortCheck()) {
@@ -1950,6 +1952,7 @@ type NvidiaAttemptStatus =
   | 'daily_quota'      // 429 hết hạn mức ngày → key chết tới nửa đêm
   | 'auth_error'       // 401/403 — key sai/hết hạn
   | 'server_error'     // 5xx
+  | 'bad_request'      // 400/413/414/422/431 — deterministic, retry cùng body vô nghĩa
   | 'timeout'          // hết timeoutMs
   | 'network_error'    // fetch throw khác
   | 'empty_response'   // 200 nhưng không có content lẫn tool_calls
@@ -1971,6 +1974,26 @@ function sanitizeLoneSurrogates(s: string): string {
   // Low surrogate KHÔNG đứng sau high surrogate → xóa
   out = out.replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
   return out
+}
+
+/**
+ * FIX (review R2-a #1, 2026-08-31): JSON round-trip là NO-OP cho lone surrogate
+ * (well-formed JSON.stringify escape `\udXXX` thành TEXT — regex tìm ký tự surrogate
+ * không thấy gì; JSON.parse trả về lone surrogate nguyên vẹn → body cuối cùng vẫn
+ * bị NIM 400-block). Thay bằng deep-walk: sanitize TỪNG string field trong schema
+ * (function.description, parameter.description, enum values...) TRƯỚC khi build body.
+ */
+function sanitizeToolSchemasDeep<T>(value: T): T {
+  if (typeof value === 'string') return sanitizeLoneSurrogates(value) as unknown as T
+  if (Array.isArray(value)) return value.map(v => sanitizeToolSchemasDeep(v)) as unknown as T
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = sanitizeToolSchemasDeep(v)
+    }
+    return out as unknown as T
+  }
+  return value
 }
 
 /**
@@ -2013,10 +2036,11 @@ async function attemptNvidiaOnce(params: {
       temperature,
     }
     if (params.tools && params.tools.length > 0) {
-      // FIX 400-block: sanitize chuỗi lồng trong tool schemas (description
-      // override có thể chứa lone surrogate) — round-trip JSON qua sanitizer.
+      // FIX 400-block (R2-a #1): deep-walk sanitize MỌI string trong tool schemas —
+      // JSON round-trip cũ là no-op (stringify escape surrogate thành text \udXXX,
+      // regex không match; parse trả lại lone surrogate → NIM vẫn reject).
       try {
-        body.tools = JSON.parse(sanitizeLoneSurrogates(JSON.stringify(params.tools)))
+        body.tools = sanitizeToolSchemasDeep(params.tools)
       } catch {
         body.tools = params.tools
       }
@@ -2032,7 +2056,9 @@ async function attemptNvidiaOnce(params: {
       body: JSON.stringify(body),
       signal: controller.signal,
     })
-    clearTimeout(timer)
+    // FIX (R2-a #4): KHÔNG clearTimeout ngay sau headers — body download
+    // (response.json()/text()) cũng phải nằm trong vùng phủ của abort timer
+    // (mid-body stall = treo vô hạn trước đây). Timer được dọn trong finally.
 
     if (response.status === 429) {
       let errorBody = ''
@@ -2102,17 +2128,23 @@ async function attemptNvidiaOnce(params: {
     // chẩn đoán sự cố 400-block của goal-loop phải đoán mò). Cap 300 chars.
     let errBody = ''
     try { errBody = (await response.text()).slice(0, 300) } catch { /* ignore */ }
+    // FIX (R2-a #7): 4xx deterministic (body hỏng/quá lớn) → 'bad_request' —
+    // caller fail-fast thay vì xoay 4 key × 3 sweep retry cùng body vô nghĩa.
+    const isDeterministic4xx = response.status === 400 || response.status === 413 || response.status === 414 || response.status === 422 || response.status === 431
     return {
-      status: 'server_error',
+      status: isDeterministic4xx ? 'bad_request' : 'server_error',
       httpStatus: response.status,
       errorMessage: `HTTP ${response.status}${errBody ? `: ${errBody}` : ''}`,
     }
   } catch (err) {
-    clearTimeout(timer)
     if (err instanceof Error && err.name === 'AbortError') {
       return { status: 'timeout', errorMessage: `timeout ${timeoutMs / 1000}s` }
     }
     return { status: 'network_error', errorMessage: err instanceof Error ? err.message : 'unknown' }
+  } finally {
+    // FIX (R2-a #4): dọn timer tại MỌI lối ra — phủ cả body-read (json/text)
+    // nằm sau response headers (fetch abort signal cắt được body đang treo).
+    clearTimeout(timer)
   }
 }
 
@@ -2241,7 +2273,7 @@ async function waitForRateLimitCooldown(
 //   vẫn TOÀN 429-instant trên mọi key → xác nhận hard-block → mở breaker
 //   MODEL_BLOCK_BREAKER_MS (10'): các call sau fail NGAY (ms) với lỗi rõ ràng,
 //   không đốt 15' budget mỗi call.
-const MODEL_BLOCK_BREAKER_MS = parseInt(process.env.MODEL_BLOCK_BREAKER_MS || '600000', 10) // 10 phút
+const MODEL_BLOCK_BREAKER_MS = Math.max(30_000, parseInt(process.env.MODEL_BLOCK_BREAKER_MS || '600000', 10) || 600_000) // 10 phút
 /** Ngưỡng coi 1 response 429 là "instant reject" (server từ chối không xử lý) */
 const INSTANT_429_MS = 3000
 
@@ -2277,7 +2309,18 @@ function tripModelBreaker(model: string, reason: string): void {
 //   - 1 lần SUCCESS → reset strikes (model hồi phục)
 // Phanh an toàn: breaker tự hết sau 10' (isModelHardBlocked expire) — nếu
 // vendor hồi thì model quay lại vòng xoay ngay, không cần restart app.
-const MODEL_TIMEOUT_STRIKES = parseInt(process.env.MODEL_TIMEOUT_STRIKES || '2', 10)
+const MODEL_TIMEOUT_STRIKES = Math.max(1, parseInt(process.env.MODEL_TIMEOUT_STRIKES || '2', 10) || 2)
+
+/** FIX (R2-a #2): timeout hiệu dụng co giãn theo maxTokens — 2 lần sinh output
+ * dài hợp lệ (32k token ở 60-150 tok/s cần 3.5-9 phút) không được phép đếm
+ * strike đánh sập model healthy. base + maxTokens × 12ms/token (env
+ * LLM_TIMEOUT_MS_PER_TOKEN). 8k → 150s (base) · 16k → 192s · 32k → 384s. */
+const LLM_TIMEOUT_MS_PER_TOKEN = Math.max(1, parseInt(process.env.LLM_TIMEOUT_MS_PER_TOKEN || '12', 10) || 12)
+function scaleTimeoutByMaxTokens(baseMs: number, maxTokens: number): number {
+  if (!Number.isFinite(maxTokens) || maxTokens <= 0) return baseMs
+  return Math.max(baseMs, Math.ceil(maxTokens * LLM_TIMEOUT_MS_PER_TOKEN))
+}
+
 const modelTimeoutStrikes = new Map<string, number>()
 
 /** Gọi SAU MỖI attempt — phân loại theo status của attemptNvidiaOnce. */
@@ -2338,8 +2381,13 @@ async function callModelWithKeyRotation(
   const instant429Keys = new Set<number>()
 
   const taskLabel = rotationOpts?.taskLabel || 'rotation'
-  const timeoutMs = rotationOpts?.timeoutMs ?? parseInt(process.env.LLM_TIMEOUT_MS || '240000', 10)
   const maxTokens = rotationOpts?.maxTokens ?? options?.maxTokens ?? 4096
+  // FIX (R2-a #2): timeout co giãn theo maxTokens — chống breaker đánh sập
+  // model healthy khi sinh output dài hợp lệ.
+  const timeoutMs = scaleTimeoutByMaxTokens(
+    rotationOpts?.timeoutMs ?? parseInt(process.env.LLM_TIMEOUT_MS || '240000', 10),
+    maxTokens,
+  )
   const temperature = rotationOpts?.temperature ?? options?.temperature ?? 0.1
 
   // Chuỗi attempt: xoay vòng validIndices đủ KEY_FAILURES_PER_KEY vòng —
@@ -2375,6 +2423,14 @@ async function callModelWithKeyRotation(
       if (deadKeys.has(keyIdx)) continue
       const keyInfo = pool.getRawKeyInfo(keyIdx)
       if (!keyInfo) continue
+
+      // FIX (R2-a #3): breaker có thể TRIP giữa chừng chuỗi (2 timeout strike
+      // từ call khác/cùng call) — check TRƯỚC MỖI attempt thay vì chỉ ở cửa vào,
+      // ngừng đốt key/time budget cho model đã bị chặn.
+      if (isModelHardBlocked(model).blocked) {
+        console.warn(`[LLM] 🔄 ${model} (${taskLabel}): breaker TRIPPED giữa xoay vòng sau ${attemptNo} attempts — dừng NGAY (fail-fast)`)
+        return null
+      }
 
       attemptNo++
 
@@ -2428,6 +2484,12 @@ async function callModelWithKeyRotation(
       const failCount = (failuresByKey.get(keyIdx) || 0) + 1
       failuresByKey.set(keyIdx, failCount)
 
+      if (attempt.status === 'bad_request') {
+        // FIX (R2-a #7): 400/413/422 deterministic — body hỏng thì retry key khác
+        // CÙNG body cũng fail y hệt → dừng NGAY, không đốt 11 attempts còn lại.
+        console.warn(`[LLM] 🔄 ${model} ✗ key#${keyIdx + 1} → bad_request (HTTP ${attempt.httpStatus}) — LỖI BODY deterministic, dừng xoay vòng: ${attempt.errorMessage?.slice(0, 160)}`)
+        return null
+      }
       if (attempt.status === 'daily_quota') {
         // Key chết tới nửa đêm — loại khỏi chuỗi (không thử tiếp 2 lần còn lại)
         pool.markDailyQuotaExhausted(keyInfo.key)
@@ -2546,8 +2608,12 @@ async function callModelChainModelFirst(
     return null
   }
 
-  const timeoutMs = chainOpts?.timeoutMs ?? parseInt(process.env.LLM_TIMEOUT_MS || '240000', 10)
   const maxTokens = chainOpts?.maxTokens ?? options?.maxTokens ?? 4096
+  // FIX (R2-a #2): timeout co giãn theo maxTokens (mirror callModelWithKeyRotation)
+  const timeoutMs = scaleTimeoutByMaxTokens(
+    chainOpts?.timeoutMs ?? parseInt(process.env.LLM_TIMEOUT_MS || '240000', 10),
+    maxTokens,
+  )
   const temperature = chainOpts?.temperature ?? options?.temperature ?? 0.1
 
   // Key bắt đầu: key được gán (extraction) hoặc xoay counter toàn cục (agent/chat)
@@ -2645,6 +2711,14 @@ async function callModelChainModelFirst(
           break
         }
 
+        // FIX (R2-a #7): bad_request deterministic → KHÔNG soft-mark cooldown key
+        // (lỗi body, không phải lỗi key) — chỉ chuyển MODEL kế (model khác có thể
+        // nhận context dài hơn → đáng thử), KHÔNG retry model này trên key khác.
+        if (attempt.status === 'bad_request') {
+          console.warn(`[LLM] 🔗 ${taskLabel} ✗ ${model} key#${keyIdx + 1} → bad_request (HTTP ${attempt.httpStatus}) — body deterministic, model này không được retry trên key khác: ${attempt.errorMessage?.slice(0, 160)}`)
+          chainFailedOnKey = true
+          break
+        }
         // 429 RPM / 5xx / timeout / network / empty → DIRECTIVE 2026-09-06:
         // chuyển MODEL kế tiếp trên CÙNG key (soft-mark, không tăng failureCount)
         pool.markRateLimitedSoft(keyInfo.key, attempt.status === 'rate_limited' ? 30000 : 15000)

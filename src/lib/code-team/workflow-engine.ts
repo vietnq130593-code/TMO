@@ -123,6 +123,18 @@ const RISKY_OPS = new Set<string>([
   'file_edit', 'file_delete', 'file_multi_edit', 'git_commit', 'run_tests',
 ])
 
+/** FIX (review R2-c #1, 2026-08-31) — DEPTH GUARD cho ReAct loop workflow.
+ * Vấn đề: ReAct loop thực thi MỌI tool name LLM phát ra (kể cả text tool-call
+ * regex parse khi ENABLE_NATIVE_FC=dual) KHÔNG qua whitelist — agent trong team
+ * hallucinate 'request_code_team'/'delegate_task' → workflow LỒNG workflow /
+ * sub-agent trong team → RAM + token chồng tầng, abort ngoài không lan vào trong.
+ * Giờ: các tool huy động (delegation/team) bị TỪ CHỐI tại executor của workflow
+ * — agent tự làm step bằng tools thi công. (Mirror DEPTH_GUARD_TOOLS của
+ * subagent-delegate.ts — copy local để tránh circular import.) */
+const WF_DEPTH_GUARD_TOOLS = new Set<string>([
+  'delegate_task', 'dispatch_agent', 'dispatch_agents_parallel', 'create_agent', 'request_code_team',
+])
+
 /**
  * Phase 4.3 — Create a git staging branch `code-team/<sessionId>` from the
  * current HEAD before the workflow starts. All file_edit/git_commit ops during
@@ -2093,6 +2105,12 @@ export async function runAgentStep(params: {
         detail: JSON.stringify(tc.args).slice(0, 200),
       })
 
+      // ===== FIX (R2-c #1) — DEPTH GUARD: tool huy động bị từ chối tại executor =====
+      const depthGuardHit = WF_DEPTH_GUARD_TOOLS.has(tc.name)
+      if (depthGuardHit) {
+        console.warn(`[Workflow] DEPTH-GUARD: từ chối tool "${tc.name}" của ${agent.name} (${position}) — không lồng delegation/team huy động bên trong workflow code team. Agent phải tự thực hiện bằng tools thi công.`)
+      }
+
       // ===== v2.1 Phase 4.1 — Auto-checkpoint BEFORE risky ops =====
       // Spec line 252: "Auto-checkpoint BEFORE risky ops (file_edit/file_delete/
       // file_multi_edit/git_commit/run_tests) in workflow-engine.ts executeTool
@@ -2102,7 +2120,7 @@ export async function runAgentStep(params: {
       // Neo4j checkpoint + fs-checkpoint BEFORE calling executeTool. The checkpoint
       // is fire-and-forget (errors swallowed) so a checkpoint failure never blocks
       // the actual operation.
-      if (RISKY_OPS.has(tc.name)) {
+      if (!depthGuardHit && RISKY_OPS.has(tc.name)) {
         try {
           // 1. Neo4j differential checkpoint (Neo4j graph state)
           await autoCheckpointBeforeRiskyOp({
@@ -2155,7 +2173,14 @@ export async function runAgentStep(params: {
         wfToolArgs.sessionId = wfToolArgs.sessionId || sessionId
         if (runId && !wfToolArgs.runId) wfToolArgs.runId = runId
       }
-      const toolResult = await executeTool(tc.name, wfToolArgs, { agentName: agent.name, sessionId, runId })
+      const toolResult = depthGuardHit
+        ? {
+            success: false,
+            result: {
+              error: `TỪ CHỐI (depth-guard workflow): tool "${tc.name}" không khả dụng bên trong workflow code team — không được huy động sub-agent/team lồng nhau. Hãy TỰ THỰC HIỆN step hiện tại bằng tools thi công (file_read/file_edit/shell/run_tests/lint/type_check...).`,
+            },
+          }
+        : await executeTool(tc.name, wfToolArgs, { agentName: agent.name, sessionId, runId })
       const toolDuration = Date.now() - toolStartTime
 
       // TOKEN ACCOUNTING (fix review 2026-09-08): escalate_problem (Omega
