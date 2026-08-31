@@ -224,53 +224,58 @@ import('@/lib/smolab/background-task-worker')
 // checkpoint/heartbeat → completed + finalize seam (14-c). Chi tiết:
 // src/lib/goal-loop-worker.ts + contract src/lib/goal-loop-durable-types.ts.
 //
-// Flag ENABLE_DURABLE_GOAL_LOOP (đọc lúc boot — đổi flag cần restart) chỉ
-// điều khiển WORKER này + route enqueue durable (Task 14-c); goal-loop hooks
-// (Task 14-b trong agent-goal-loop.ts) luôn sẵn sàng nhưng VÔ HẠI khi không
-// có ai truyền (param optional — hành vi inline cũ 100%). Flag OFF (mặc định
-// theo roadmap B5 — rollout an toàn) = worker hoàn toàn im lặng, zero
-// overhead.
+// Flag ENABLE_DURABLE_GOAL_LOOP (đọc lúc boot — đổi flag cần restart) giờ chỉ
+// điều khiển ROUTE ENQUEUE DURABLE của chat (Task 14-c): flag=false → chat
+// chạy inline như cũ, KHÔNG enqueue job. Goal-loop hooks (Task 14-b trong
+// agent-goal-loop.ts) luôn sẵn sàng nhưng VÔ HẠI khi không có ai truyền.
+//
+// REVIEW 13-f: worker giờ start LUÔN (kể cả flag=false) vì Opus auto-mode
+// cần 2 chức năng nền của worker: (1) claim directive job do Opus dispatch
+// (trước đây dispatchDirectiveGoalLoop tự start on-demand — nhưng reconciliation
+// sweep cần worker chạy TRƯỚC directive đầu tiên để bootstrap vòng lặp), và
+// (2) OPUS RECONCILIATION SWEEP trong tick (~30s — lưới an toàn tự chữa cho
+// auto loop: bắt stall do restart/dispatch chết/verdict rơi rớt). Chi phí khi
+// không có auto session + không có job: 1 tick/5s vài query rẻ + sweep/30s
+// 1 query — chấp nhận được để auto mode tự vận hành đúng spec user.
+// Directive job vẫn KHÔNG đụng đường inline của chat (queue rỗng khi không
+// có Opus directive).
 //
 // globalThis guard chống double-register khi Next dev HMR reload
 // instrumentation (pattern như SelfDirection scheduler phía dưới).
 const globalForGlw = globalThis as unknown as { __tmoGoalLoopWorkerStarted?: boolean }
 if (!globalForGlw.__tmoGoalLoopWorkerStarted) {
   globalForGlw.__tmoGoalLoopWorkerStarted = true
-  if (process.env.ENABLE_DURABLE_GOAL_LOOP === 'true') {
-    // Đợi DB self-heal xong (ensureDbReady dedup với các lời gọi phía trên)
-    // rồi mới sweep + start — tránh requeue/claim đập vào DB chưa migrate.
-    // Fire-and-forget: KHÔNG block startup của Next. Nếu DB warm-up lỗi thì
-    // vẫn bật worker (tick tự fail-open rồi tự lành — pattern SelfDirection
-    // scheduler phía dưới).
-    void ensureDbReady()
-      .then(() => import('@/lib/goal-loop-worker'))
-      .then(async ({ goalLoopWorker }) => {
-        const { requeued, markedFailed } = await goalLoopWorker.recoverPending()
-        console.log(
-          `[instrumentation] GoalLoopWorker boot recovery: ${requeued} job requeue (RESUME từ checkpoint), ${markedFailed} job mark failed (vượt max-attempts)`
-        )
+  // REVIEW 13-f: start LUÔN (xem comment khối phía trên) — flag chỉ điều khiển
+  // route enqueue durable của chat, không còn điều khiển worker.
+  // Đợi DB self-heal xong (ensureDbReady dedup với các lời gọi phía trên)
+  // rồi mới sweep + start — tránh requeue/claim đập vào DB chưa migrate.
+  // Fire-and-forget: KHÔNG block startup của Next. Nếu DB warm-up lỗi thì
+  // vẫn bật worker (tick tự fail-open rồi tự lành — pattern SelfDirection
+  // scheduler phía dưới).
+  void ensureDbReady()
+    .then(() => import('@/lib/goal-loop-worker'))
+    .then(async ({ goalLoopWorker }) => {
+      const { requeued, markedFailed } = await goalLoopWorker.recoverPending()
+      console.log(
+        `[instrumentation] GoalLoopWorker boot recovery: ${requeued} job requeue (RESUME từ checkpoint), ${markedFailed} job mark failed (vượt max-attempts)`
+      )
+      goalLoopWorker.start()
+    })
+    .catch(async (err) => {
+      console.warn(
+        '[instrumentation] GoalLoopWorker DB warm-up lỗi — vẫn bật worker (tick tự fail-open rồi tự lành):',
+        err instanceof Error ? err.message : String(err)
+      )
+      try {
+        const { goalLoopWorker } = await import('@/lib/goal-loop-worker')
         goalLoopWorker.start()
-      })
-      .catch(async (err) => {
-        console.warn(
-          '[instrumentation] GoalLoopWorker DB warm-up lỗi — vẫn bật worker (tick tự fail-open rồi tự lành):',
-          err instanceof Error ? err.message : String(err)
+      } catch (err2) {
+        console.error(
+          '[instrumentation] GoalLoopWorker start thất bại (worker nền không chạy — app vẫn hoạt động bình thường):',
+          err2 instanceof Error ? err2.message : String(err2)
         )
-        try {
-          const { goalLoopWorker } = await import('@/lib/goal-loop-worker')
-          goalLoopWorker.start()
-        } catch (err2) {
-          console.error(
-            '[instrumentation] GoalLoopWorker start thất bại (worker nền không chạy — app vẫn hoạt động bình thường):',
-            err2 instanceof Error ? err2.message : String(err2)
-          )
-        }
-      })
-  } else {
-    console.log(
-      '[instrumentation] Durable Goal Loop: ENABLE_DURABLE_GOAL_LOOP != true — worker nền im lặng (goal-loop chạy inline như cũ; flip flag + restart để bật, roadmap B5)'
-    )
-  }
+      }
+    })
 }
 
 // ============================================================================

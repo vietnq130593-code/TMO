@@ -10,9 +10,18 @@
  *            applyOpusVerdict(autoDispatch=true) → directive message vào chat
  *            + enqueue goal-loop job → agent chạy theo chỉ đạo.
  *
- *   AUTO:    goal-loop-worker hoàn thành/fail job → hook maybeAutoOpusReview
- *            (import động — chống circular) → gate (mode auto + kill switch +
- *            dedupe 45s + có assistant message mới) → runAutoReview (serialize
+ *   AUTO:    3 nguồn trigger (REVIEW 13-f):
+ *            (1) goal-loop-worker hoàn thành/fail job → hook maybeAutoOpusReview
+ *                (import động — chống circular)
+ *            (2) chat route INLINE hoàn thành (ENABLE_DURABLE_GOAL_LOOP=false
+ *                là mặc định sandbox — user chat không qua worker) → hook sau
+ *                khi assistant message persist xong
+ *            (3) sweepOpusAutoSessions — reconciliation sweep chạy trong worker
+ *                tick (~30s): lưới an toàn cho mọi stall (job quá nhanh rơi
+ *                vào dedupe window, PM2 restart giữa review, dispatch chết,
+ *                verdict rơi rớt…)
+ *            → gate (mode auto + kill switch + dedupe 45s + 4 tín hiệu A/B/
+ *            C/D — xem passesAutoGate) → runAutoReview (serialize
  *            per-session) → runOpusReview(triggerMode='auto') → verdict:
  *              CONTINUE/FIX/REDIRECT → applyOpusVerdict(autoDispatch=true)
  *                                    → dispatch job kế → LOOP TIẾP TỤC
@@ -419,9 +428,9 @@ const DISPATCHABLE_DECISIONS: readonly string[] = ['CONTINUE', 'FIX', 'REDIRECT'
  * Trả về message đã insert (null khi session đã bị xóa — tombstone).
  */
 export async function applyOpusVerdict(
-  review: { id: string; sessionId: string },
+  review: { id: string; sessionId: string; triggerMode?: string },
   verdict: OpusVerdict,
-  opts?: { autoDispatch?: boolean }
+  opts?: { autoDispatch?: boolean; triggerMode?: 'manual' | 'auto' }
 ): Promise<ChatMessage | null> {
   // TOMBSTONE GUARD — session đã xóa thì không chèn (không hồi sinh phiên)
   try {
@@ -432,6 +441,7 @@ export async function applyOpusVerdict(
   } catch { /* fail-open — vẫn chèn */ }
 
   const content = formatDirectiveMessage(verdict)
+  const triggerMode = opts?.triggerMode ?? review.triggerMode ?? 'manual'
   const message = await db.chatMessage.create({
     data: {
       sessionId: review.sessionId,
@@ -441,6 +451,7 @@ export async function applyOpusVerdict(
         opusDirective: true,
         opusReviewId: review.id,
         decision: verdict.decision,
+        triggerMode, // REVIEW 13-f #5: UI footer "Opus hành động thay Mr. Architect" khi auto
         verdict,
       }),
     },
@@ -507,7 +518,11 @@ export async function dispatchDirectiveForReview(reviewId: string): Promise<Chat
     throw new OpusDispatchError('Review này không có verdict hợp lệ để ban hành', 400)
   }
 
-  const message = await applyOpusVerdict(review, verdict, { autoDispatch: true })
+  const message = await applyOpusVerdict(
+    { id: review.id, sessionId: review.sessionId, triggerMode: review.triggerMode },
+    verdict,
+    { autoDispatch: true }
+  )
   if (!message) {
     throw new OpusDispatchError('Không chèn được directive message (session có thể đã bị xóa)', 409)
   }
@@ -520,12 +535,34 @@ export async function dispatchDirectiveForReview(reviewId: string): Promise<Chat
 const AUTO_REVIEW_DEDUPE_MS = 45_000
 
 /**
+ * REVIEW 13-f: ngưỡng "tín hiệu treo" — directive đã ban hành mà không có
+ * assistant reply và không có job queued/running trong N ms → coi là dispatch
+ * chết (enqueue lỗi / worker chết giữa chừng) → cần Opus review lại để tự chữa.
+ */
+const STALLED_DIRECTIVE_MS = 120_000
+
+/** Review verdict dispatchable nhưng chưa bao giờ được ban hành sau N ms → review lại */
+const UNAPPLIED_VERDICT_MS = 120_000
+
+/**
  * Gate auto mode — trả pass + reason (để log chẩn đoán). Kiểm tra:
  *   1. AgentSession.opusReviewMode === 'auto'
  *   2. Kill switch KHÔNG bật
  *   3. Không có OpusReview nào của session trong 45s qua
- *   4. Có ≥1 assistant message SAU assistant-message-time của OpusReview gần
- *      nhất (chưa review cái mới) — review ngay sau khi agent báo cáo xong
+ *   4. Tồn tại ÍT NHẤT 1 trong 4 "tín hiệu cần review" (REVIEW 13-f — trước
+ *      đây chỉ có tín hiệu A khiến auto loop STALL ở 4 kịch bản thật):
+ *        (A) Assistant message MỚI sau assistant-message-time của review gần
+ *            nhất (chưa review nội dung mới — tín hiệu chính)
+ *        (B) GoalLoopJob status='failed' hoàn thành SAU review gần nhất —
+ *            run crash không sinh assistant message (markFailed/sweepOrphans
+ *            không ghi message) — Opus cần biết để FIX
+ *        (C) Directive ĐÃ ban hành (decision dispatchable) là message cuối,
+ *            KHÔNG có assistant reply, KHÔNG có job queued/running, và đã
+ *            > STALLED_DIRECTIVE_MS → dispatch chết → review lại để tự chữa
+ *        (D) Review gần nhất có verdict dispatchable nhưng CHƯA bao giờ được
+ *            ban hành (không có directive message marker) và đã >
+ *            UNAPPLIED_VERDICT_MS → applyOpusVerdict chết giữa chừng (vd PM2
+ *            restart ngay sau khi lưu review) → review lại
  */
 async function passesAutoGate(sessionId: string): Promise<{ pass: boolean; reason: string; modeAuto: boolean }> {
   const session = await db.agentSession.findUnique({
@@ -566,15 +603,72 @@ async function passesAutoGate(sessionId: string): Promise<{ pass: boolean; reaso
     }
     if (!threshold) threshold = lastReview.createdAt
   }
+
+  // ---- TÍN HIỆU A: assistant message mới chưa review (tín hiệu chính) ----
   const newer = await db.chatMessage.findFirst({
     where: { sessionId, role: 'assistant', ...(threshold ? { createdAt: { gt: threshold } } : {}) },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     select: { id: true },
   })
-  if (!newer) {
-    return { pass: false, reason: 'chưa có assistant message mới sau lần review gần nhất (chưa có gì để review)', modeAuto: true }
+  if (newer) {
+    return { pass: true, reason: `assistant message mới chưa review: ${newer.id}`, modeAuto: true }
   }
-  return { pass: true, reason: `assistant message mới chưa review: ${newer.id}`, modeAuto: true }
+
+  // ---- TÍN HIỆU B: job failed sau review gần nhất (run crash không có ----
+  // ---- assistant message — hook fail-path cần lối qua này)            ----
+  if (lastReview) {
+    const failedJob = await db.goalLoopJob.findFirst({
+      where: { sessionId, status: 'failed', completedAt: { gt: lastReview.createdAt } },
+      orderBy: { completedAt: 'desc' },
+      select: { id: true },
+    })
+    if (failedJob) {
+      return { pass: true, reason: `goal-loop job crash chưa review: ${failedJob.id}`, modeAuto: true }
+    }
+  }
+
+  // ---- TÍN HIỆU C: directive dispatchable treo (không reply, không job) ----
+  const lastMsg = await db.chatMessage.findFirst({
+    where: { sessionId },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    select: { id: true, role: true, createdAt: true, metadata: true },
+  })
+  if (lastMsg && lastMsg.role === 'user' && now - lastMsg.createdAt.getTime() > STALLED_DIRECTIVE_MS) {
+    const meta = parseMetadata(lastMsg.metadata)
+    const decision = typeof meta?.decision === 'string' ? meta.decision : ''
+    if (meta?.opusDirective === true && DISPATCHABLE_DECISIONS.includes(decision)) {
+      const activeJob = await db.goalLoopJob.findFirst({
+        where: { sessionId, status: { in: ['queued', 'running'] } },
+        select: { id: true, status: true },
+      })
+      if (!activeJob) {
+        return {
+          pass: true,
+          reason: `directive [${decision}] treo > ${STALLED_DIRECTIVE_MS / 1000}s không reply không job (dispatch chết) — review lại để tự chữa`,
+          modeAuto: true,
+        }
+      }
+    }
+  }
+
+  // ---- TÍN HIỆU D: verdict dispatchable chưa bao giờ ban hành (review ----
+  // ---- xong nhưng applyOpusVerdict chết giữa chừng)                   ----
+  if (lastReview && DISPATCHABLE_DECISIONS.includes(lastReview.decision) && now - lastReview.createdAt.getTime() > UNAPPLIED_VERDICT_MS) {
+    const marker = `"opusReviewId":"${lastReview.id}"`
+    const dispatched = await db.chatMessage.findFirst({
+      where: { sessionId, role: 'user', metadata: { contains: marker } },
+      select: { id: true },
+    })
+    if (!dispatched) {
+      return {
+        pass: true,
+        reason: `review [${lastReview.decision}] cách ${Math.round((now - lastReview.createdAt.getTime()) / 1000)}s chưa từng ban hành — verdict rơi rớt, review lại`,
+        modeAuto: true,
+      }
+    }
+  }
+
+  return { pass: false, reason: 'chưa có tín hiệu mới cần review (không assistant message mới / job crash / directive treo)', modeAuto: true }
 }
 
 /**
@@ -643,6 +737,7 @@ async function runAutoReviewInner(
 
     await applyOpusVerdict(review, verdict, {
       autoDispatch: DISPATCHABLE_DECISIONS.includes(verdict.decision),
+      triggerMode: 'auto', // runAutoReviewInner luôn là auto (REVIEW 13-f #5)
     })
   } finally {
     markReviewDone(sessionId)
@@ -670,4 +765,42 @@ export function runAutoReview(
       if (autoChains.get(sessionId) === next) autoChains.delete(sessionId)
     })
   return next
+}
+
+// ==================== RECONCILIATION SWEEP (REVIEW 13-f) ====================
+
+/**
+ * Sweep đối chiếu (reconciliation) auto session — goal-loop-worker tick gọi
+ * định kỳ (throttle nội bộ). Là LƯỚI AN TOÀN cho mọi stall của auto loop mà
+ * hook sự kiện (job hoàn thành / chat inline) bỏ sót:
+ *   - job hoàn thành quá nhanh (< 45s dedupe window) → hook bị gate chặn,
+ *     không có gì re-trigger → sweep tick sau bắt lại (dedupe đã hết)
+ *   - PM2 restart giữa review đang chạy (LLM call 30-120s) → review mất dấu,
+ *     không OpusReview row → sweep phát hiện assistant message chưa review
+ *   - hook fail-path/sweepOrphans bỏ sót → tín hiệu B (failed job) của gate
+ *     phát hiện qua sweep
+ *   - dispatch chết / verdict rơi rớt → tín hiệu C/D của gate qua sweep
+ * KHÔNG throw; mỗi session fail-open riêng. Gate tự chặn khi không có tín
+ * hiệu mới (query rẻ: vài query có index cho mỗi auto session).
+ */
+const OPUS_SWEEP_MIN_INTERVAL_MS = 30_000
+let lastOpusSweepAt = 0
+
+export async function sweepOpusAutoSessions(): Promise<{ sessions: number }> {
+  if (Date.now() - lastOpusSweepAt < OPUS_SWEEP_MIN_INTERVAL_MS) return { sessions: 0 }
+  lastOpusSweepAt = Date.now()
+  try {
+    const sessions = await db.agentSession.findMany({
+      where: { opusReviewMode: 'auto' },
+      select: { sessionId: true },
+    })
+    for (const s of sessions) {
+      // Fire-and-forget — maybeAutoOpusReview tự gate + KHÔNG throw
+      void maybeAutoOpusReview(s.sessionId)
+    }
+    return { sessions: sessions.length }
+  } catch (err) {
+    console.warn('[Opus][sweep] sweepOpusAutoSessions lỗi (nuốt — tick sau thử lại):', err instanceof Error ? err.message : String(err))
+    return { sessions: 0 }
+  }
 }

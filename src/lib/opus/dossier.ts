@@ -340,6 +340,29 @@ async function sectionEvidence(
     )
   }
 
+  // (b2) REVIEW 13-f — GoalLoopJob durable gần nhất: job crash KHÔNG sinh
+  // assistant message (bằng chứng duy nhất nằm ở đây) — Opus cần thấy lỗi
+  // để FIX. Job completed cũng liệt kê để đối chiếu với assistant message.
+  try {
+    const jobs = await db.goalLoopJob.findMany({
+      where: { sessionId },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+      select: { id: true, status: true, stopReason: true, error: true, attempts: true, completedAt: true, createdAt: true },
+    })
+    if (jobs.length > 0) {
+      const jobLines: string[] = []
+      for (const j of jobs) {
+        const bits = [j.status]
+        if (j.stopReason) bits.push(`stop=${j.stopReason}`)
+        if (j.attempts != null && j.attempts > 0) bits.push(`attempts=${j.attempts}`)
+        if (j.status === 'failed' && j.error) bits.push(`lỗi: ${truncate(j.error, 220)}`)
+        jobLines.push(`  [${fmtTime(j.createdAt)} · job ${j.id.slice(0, 10)}…] ${bits.join(' · ')}`)
+      }
+      lines.push(`── GoalLoopJob durable (${jobs.length} gần nhất — job 'failed' là BẰNG CHỨNG crash, run đó KHÔNG có assistant message):\n${jobLines.join('\n')}`)
+    }
+  } catch { /* fail-open — không có mảnh này thì bỏ qua */ }
+
   // (c) các vòng Opus review trước đó — để thấy TIẾN TRÌNH
   const priorReviews: OpusReview[] = await db.opusReview.findMany({
     where: { sessionId },

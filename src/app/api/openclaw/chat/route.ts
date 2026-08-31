@@ -1178,6 +1178,24 @@ export async function POST(request: NextRequest) {
                   await updateLatestAgentRunRecord(sessionId, { messageId: latest.id })
                 }
               } catch { /* fail-open */ }
+
+              // OPUS AUTO-REVIEW HOOK (REVIEW 13-f BUG #1): đường inline
+              // (ENABLE_DURABLE_GOAL_LOOP=false — mặc định sandbox) KHÔNG qua
+              // goal-loop-worker nên hook của worker không bao giờ fire cho
+              // run do USER khởi tạo → auto mode chết với user chat. Fire sau
+              // khi assistant message ĐÃ persist (gate query DB). Import động
+              // chống circular; fire-and-forget — maybeAutoOpusReview tự gate
+              // (mode auto + kill switch + dedupe 45s + 4 tín hiệu) + KHÔNG
+              // throw. Session manual → gate im lặng skip (0 side-effect).
+              try {
+                const { maybeAutoOpusReview } = await import('@/lib/opus/pipeline')
+                void maybeAutoOpusReview(sessionId, {
+                  runRef: reactResult.runId ?? null,
+                  messageId: null, // resolveReviewTarget tự lấy assistant message cuối
+                })
+              } catch (opusErr) {
+                console.warn('[OpenClaw Chat] Opus auto-review hook lỗi (fail-open):', opusErr instanceof Error ? opusErr.message : String(opusErr))
+              }
             })
             .catch(err => console.warn('[Memory] Failed to save chat messages:', err instanceof Error ? err.message : String(err)))
 
@@ -1464,7 +1482,20 @@ export async function POST(request: NextRequest) {
           // 2026-09-01: user message đã lưu ở ĐẦU request → chỉ lưu assistant
           saveChatMessages(sessionId, [
             { role: 'assistant', content, model: agentModel || model, provider: agentProvider || 'local-fallback', metadata: { confidence: queryConfidence, sources: data.sources?.length || 0 } },
-          ]).catch(err => console.warn('[Memory] Failed to save chat messages:', err instanceof Error ? err.message : String(err)))
+          ])
+            .then(async () => {
+              // OPUS AUTO-REVIEW HOOK (REVIEW 13-f BUG #1) — đường fallback
+              // local-RAG cũng là 1 run hoàn chỉnh (agent chain fail → degrade
+              // trung thực): auto mode cần review như mọi run khác. Fire sau
+              // khi persist; fail-open tuyệt đối.
+              try {
+                const { maybeAutoOpusReview } = await import('@/lib/opus/pipeline')
+                void maybeAutoOpusReview(sessionId, { runRef: null, messageId: null })
+              } catch (opusErr) {
+                console.warn('[OpenClaw Chat] Opus auto-review hook (fallback path) lỗi (fail-open):', opusErr instanceof Error ? opusErr.message : String(opusErr))
+              }
+            })
+            .catch(err => console.warn('[Memory] Failed to save chat messages:', err instanceof Error ? err.message : String(err)))
 
           // Extract memories from this conversation (skip trivial exchanges to save LLM tokens)
           // KIMI-ONLY: lỗi LLM → không extract memory từ error message

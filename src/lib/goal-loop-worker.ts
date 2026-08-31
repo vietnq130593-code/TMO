@@ -190,6 +190,19 @@ class GoalLoopWorker {
     try {
       await this.sweepOrphans()
       await this.claimQueued()
+      // OPUS RECONCILIATION SWEEP (REVIEW 13-f): lưới an toàn cho auto loop —
+      // bắt mọi stall mà hook sự kiện bỏ sót (job nhanh < 45s dedupe, PM2
+      // restart giữa review, dispatch chết, verdict rơi rớt…). Throttle nội
+      // bộ ~30s (sweepOpusAutoSessions tự đo), fail-open tuyệt đối.
+      try {
+        const { sweepOpusAutoSessions } = await import('@/lib/opus/pipeline')
+        void sweepOpusAutoSessions()
+      } catch (opusSweepErr) {
+        console.warn(
+          '[GoalLoopWorker] Opus reconciliation sweep lỗi (fail-open — tick sau thử lại):',
+          opusSweepErr instanceof Error ? opusSweepErr.message : String(opusSweepErr)
+        )
+      }
     } catch (err) {
       // Fail-open tuyệt đối — tick lỗi thì tick sau thử lại
       console.warn(
@@ -253,6 +266,20 @@ class GoalLoopWorker {
             console.log(
               `[GoalLoopWorker] orphan sweep: mark FAILED job ${row.id} — attempts ${row.attempts} ≥ max ${GOAL_LOOP_MAX_ATTEMPTS} (không retry vô hạn)`
             )
+            // OPUS AUTO-REVIEW HOOK (REVIEW 13-f BUG #3): orphan sweep đánh
+            // failed TRỰC TIẾP bằng updateMany (không qua markFailed) → trước
+            // đây KHÔNG fire hook → auto loop stall khi directive job crash
+            // vượt max attempts. Gate nhận job failed làm tín hiệu B (review
+            // run crash). Import động chống circular; fail-open.
+            try {
+              const { maybeAutoOpusReview } = await import('@/lib/opus/pipeline')
+              void maybeAutoOpusReview(row.sessionId, { runRef: null, messageId: row.messageId ?? null })
+            } catch (opusErr) {
+              console.warn(
+                `[GoalLoopWorker] orphan sweep: Opus hook (mark-failed path) lỗi (fail-open):`,
+                opusErr instanceof Error ? opusErr.message : String(opusErr)
+              )
+            }
           }
         }
       } catch (err) {
