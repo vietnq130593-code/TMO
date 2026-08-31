@@ -200,6 +200,26 @@ const fmtCap = (n: number): string => (n === 0 ? '∞' : String(n))
 
 /** Số chu kỳ PLAN→EXECUTE→VERIFY→EVALUATE tối đa (mặc định 4; 0 = ∞ — CI-1) */
 const MAX_CYCLES = intEnv('GOAL_LOOP_MAX_CYCLES', 4)
+/**
+ * TASK 21 (user report 2026-09-30) — TÁI LẬP CỬA SỔ CHU KỲ: khi hết trần
+ * MAX_CYCLES mà mục tiêu CHƯA hoàn thành triệt để (verdict chưa complete,
+ * hoặc còn lỗi phát sinh liên quan chưa xử lý), loop TÁI LẬP thêm 1 cửa sổ
+ * MAX_CYCLES chu kỳ mới thay vì vội phán kết thúc (user: "trọng tài khi còn
+ * vấn đề phát sinh tồn tại hoặc công việc chưa hoàn thành triệt để thì nên
+ * tái lập thêm chu kỳ để tìm cách giải quyết tiếp"). Mặc định 2 lượt → tổng
+ * tối đa 12 chu kỳ với MAX_CYCLES=4; 0 = KHÔNG tái lập (hành vi cũ).
+ * An toàn: tái lập CHỈ xảy ra khi còn budget + chu kỳ vừa rồi CÓ tiến triển
+ * (no-progress / stall-brake vẫn cắt như thường trước điểm này) + user chưa
+ * cancel → không đẻ vòng lặp vô hạn.
+ */
+const MAX_CYCLE_RENEWALS = Math.max(0, intEnv('GOAL_LOOP_MAX_CYCLE_RENEWALS', 2))
+/**
+ * TASK 21 — số chu kỳ debt tối đa / run (trước đây hardcoded 1 qua cờ boolean
+ * debtCycleUsed — debt cycle thứ 2 trở đi chỉ được ghi nợ). Giờ cho phép
+ * NHIỀU đợt debt cycle liên tiếp xử lý lỗi phát sinh còn treo (điều kiện dừng
+ * xem canDebtCycle); 0 = không chạy debt cycle nào (chỉ ghi nợ Todo).
+ */
+const MAX_DEBT_CYCLES = Math.max(0, intEnv('GOAL_LOOP_MAX_DEBT_CYCLES', 3))
 /** Số vòng ReAct tối đa MỖI chu kỳ (mặc định 10 → tổng tối đa 40 vòng; 0 = ∞ — CI-1) */
 const ITER_PER_CYCLE = intEnv('GOAL_LOOP_ITERATIONS_PER_CYCLE', 10)
 /** Budget thời gian toàn bộ loop (mặc định 12 GIỜ — user request 2026-09-13:
@@ -207,9 +227,12 @@ const ITER_PER_CYCLE = intEnv('GOAL_LOOP_ITERATIONS_PER_CYCLE', 10)
  *  dài hạn Opus auto-mode cần trần dài — trước đây 30' cắt agent đang tiến
  *  triển tốt giữa chừng; 0 = ∞ — CI-1 "0 = UNLIMITED") */
 const TIME_BUDGET_MS = intEnv('GOAL_LOOP_TIME_BUDGET_MS', 12 * 60 * 60_000)
-/** Budget token toàn bộ loop (mặc định 200k — đủ ~40 vòng context lớn;
- *  0 = ∞ KHÔNG giới hạn — CI-1 "0 = UNLIMITED") */
-const TOKEN_BUDGET = intEnv('GOAL_LOOP_TOKEN_BUDGET', 200_000)
+/** Budget token toàn bộ loop. TASK 21 (user 2026-09-30: "NVIDIA NIM key vốn
+ *  không giới hạn token, việc hệ thống làm việc càng nhiều càng tốt") →
+ *  mặc định 0 = ∞ KHÔNG GIỚI HẠN (CI-1). Phanh an toàn khi unlimited:
+ *  no-progress fingerprint + stall-brake 3 chu kỳ + TIME_BUDGET 12h + cancel.
+ *  Muốn giới hạn lại: set env GOAL_LOOP_TOKEN_BUDGET=<n>. */
+const TOKEN_BUDGET = intEnv('GOAL_LOOP_TOKEN_BUDGET', 0)
 /**
  * [A] REPORT RESERVE — phần token dự trữ KHÔNG cho EXECUTE dùng. Dành riêng cho
  * evaluator chu kỳ cuối + FINAL REPORT call → khi budget cạn, loop vẫn đủ token
@@ -285,6 +308,8 @@ export function getGoalLoopBudgetInfo(): {
   unlimitedTime: boolean
   unlimitedCycles: boolean
   unlimitedIterations: boolean
+  maxCycleRenewals: number
+  maxDebtCycles: number
 } {
   return {
     tokenBudget: TOKEN_BUDGET,
@@ -297,6 +322,9 @@ export function getGoalLoopBudgetInfo(): {
     unlimitedTime: TIME_BUDGET_MS === 0,
     unlimitedCycles: MAX_CYCLES === 0,
     unlimitedIterations: ITER_PER_CYCLE === 0,
+    // TASK 21 — tái lập cửa sổ chu kỳ + chu kỳ debt (metrics/UI hiển thị)
+    maxCycleRenewals: MAX_CYCLE_RENEWALS,
+    maxDebtCycles: MAX_DEBT_CYCLES,
   }
 }
 
@@ -567,11 +595,11 @@ export function assembleGoalLoopSystemPrompt(params: {
 }
 
 /** Directive nối tiếp chu kỳ — chẩn đoán + kế hoạch mới từ evaluator */
-function buildContinuationDirective(v: EvalVerdict, cycle: number, cutMidWork: boolean): string {
+function buildContinuationDirective(v: EvalVerdict, cycle: number, cutMidWork: boolean, maxCyclesDisplay: number = MAX_CYCLES): string {
   const missing = v.missing.length > 0 ? v.missing.map(m => `- ${m}`).join('\n') : '- (trọng tài không liệt kê cụ thể — tự rà soát lại mục tiêu)'
   const plan = v.nextPlan.length > 0 ? v.nextPlan.map((p, i) => `${i + 1}. ${p}`).join('\n') : '- tự xác định bước khắc phục'
   const cut = cutMidWork ? '\n⚠️ Chu kỳ trước bị cắt giữa chừng do hết vòng lặp — công việc có thể đang dở.' : ''
-  return `[GOAL-LOOP: Chu kỳ ${cycle}/${fmtCap(MAX_CYCLES)}] Mục tiêu CHƯA hoàn thành theo đánh giá độc lập (độ tin cậy ${Math.round(v.confidence * 100)}%).${cut}
+  return `[GOAL-LOOP: Chu kỳ ${cycle}/${fmtCap(maxCyclesDisplay)}] Mục tiêu CHƯA hoàn thành theo đánh giá độc lập (độ tin cậy ${Math.round(v.confidence * 100)}%).${cut}
 
 ❌ Còn thiếu:
 ${missing}
@@ -595,11 +623,12 @@ Nguyên tắc SẮT:
 6. Công cụ kiểm định FAIL (type_check/lint/run_tests lỗi) KHÔNG tự động là "bằng chứng đã kiểm định": chỉ tin khi kết quả chứa errorCount/thông báo lỗi CỤ THỂ; nếu agent không trích được lỗi cụ thể (output bị cắt / nguyên nhân mơ hồ như "tsc fail") → "verified": false và ghi rõ vào "missing".
 7. "confidence" phải CALIBRATED trung thực — đây là XÁC SUẤT dự đoán của bạn, không phải mức độ mong muốn: đa số trường hợp "tự tin nhưng sai" nằm ở 0.6-0.8 chứ KHÔNG phải 0.95. Chỉ ≥0.9 khi bằng chứng tool trực tiếp khớp hoàn toàn mục tiêu; thiếu bằng chứng → ≤0.5.
 8. E2E VERIFICATION (sửa code nhưng chỉ đọc lại file): mục tiêu có SỬA CODE mà bằng chứng kiểm định chỉ là file_read/grep (KHÔNG run_tests/lint/type_check dù thông báo hệ thống nói tool có sẵn) → chỉ chấp nhận "complete": true khi thay đổi là thuần hiển thị/nội dung tĩnh; thay đổi LOGIC → "complete": false và thêm vào "missing": "chạy run_tests/lint/type_check để kiểm định thay đổi logic".
-9. SIDE ISSUES (lỗi phát sinh NGOÀI mục tiêu trong quá trình làm — tool fail không chạm mục tiêu, lint lỗi ở file khác, lỗi transient...): liệt kê vào "sideIssues" (tối đa 4, ngắn gọn). Mục tiêu chính ĐẠT nhưng có side issues → "complete": true VẪN ĐÚNG (đừng trừng phạt thành công vì lỗi ngoài), rồi chọn "debtDecision":
-   - "none": side issues tầm thường/đã tự hết → bỏ qua.
-   - "record": đáng ghi nhận nhưng không chặn việc hoàn thành → hệ thống ghi nợ kỹ thuật (Todo follow-up) cho lần sau.
-   - "continue": NGHIÊM TRỌNG (test fail toàn cục, build hỏng, lỗi lây lan) → hệ thống chạy THÊM 1 chu kỳ debt để xử lý ngay trong run này.
-   KHÔNG dùng side issues để hạ "complete" khi mục tiêu chính đã đạt theo bằng chứng.
+9. SIDE ISSUES (lỗi phát sinh trong quá trình làm — tool fail, lint/test lỗi ở file run đã đụng, lỗi logic do thay đổi của run tạo ra, config/hành vi hỏng...): liệt kê vào "sideIssues" (tối đa 4, ngắn gọn). Mục tiêu chính ĐẠT nhưng CÓ side issues còn tồn tại → "complete": true vẫn đúng cho MỤC TIÊU GỐC (đừng hạ complete vì lỗi ngoài mục tiêu), NHƯNG run chưa thể kết thúc khi các lỗi liên quan còn treo — chọn "debtDecision" theo mức độ LIÊN QUAN:
+   - "continue": MẶC ĐỊNH cho mọi side issue LIÊN QUAN đến công việc của run này (lint/test fail ở file đã đụng, lỗi phát sinh từ thay đổi của run, tool fail chưa xử lý được, hành vi hỏng do run tạo...) → hệ thống TÁI LẬP chu kỳ debt xử lý NGAY trong run này (nhiều đợt liên tiếp nếu cần). Tác vụ chỉ thực sự trọn vẹn khi các vấn đề phát sinh liên quan đã được giải quyết — ĐỪNG vội phán kết thúc khi còn lỗi treo.
+   - "record": CHỈ khi issue nằm NGOÀI khả năng xử lý của agent (thiếu tool/quyền, lỗi hạ tầng vendor, thuộc phạm vi agent khác) → hệ thống ghi nợ kỹ thuật (Todo follow-up).
+   - "none": CHỈ khi issue tầm thường/đã tự hết và KHÔNG liên quan gì đến thay đổi của run.
+   KHÔNG dùng side issues để hạ "complete" khi mục tiêu chính đã đạt theo bằng chứng — nhưng cũng KHÔNG dùng "record"/"none" để né xử lý lỗi liên quan còn giải quyết được trong run này.
+10. DEBT CHECK (áp dụng khi prompt có khối "CÁC LỖI PHÁT SINH CHƯA XỬ LÝ" — danh sách trọng tài đã quyết định xử lý ở các chu kỳ trước): đối chiếu TỪNG lỗi với bằng chứng chu kỳ này. Lỗi nào CHƯA có bằng chứng máy xác nhận đã khắc phục (fix xong + verify pass) → PHẢI liệt kê lại vào "sideIssues" và đặt "debtDecision": "continue". KHÔNG phán hoàn thành sạch khi danh sách còn mục chưa đối chiếu được bằng chứng khắc phục.
 
 Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích thêm):
 {"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."], "sideIssues": ["..."], "debtDecision": "none|record|continue"}`
@@ -771,8 +800,17 @@ async function evaluateCompletion(params: {
   abortCheck: () => boolean
   /** Token của evaluator cũng phải vào kế toán budget (fix review 2026-09-08) */
   onTokens?: (tokens: number) => void
+  /**
+   * TASK 21 — các lỗi phát sinh CHƯA XỬ LÝ (pendingDebtIssues: trọng tài đã
+   * quyết định xử lý ở chu kỳ debt trước). Truyền vào để evaluator ĐỐI CHIỂU
+   * từng lỗi với bằng chứng chu kỳ này (quy tắc 10): lỗi chưa có bằng chứng
+   * khắc phục → PHẢI liệt kê lại sideIssues + debtDecision='continue' —
+   * trước đây evaluator không biết danh sách nợ → debt cycle dở vẫn bị phán
+   * complete → lỗi treo "chìm" (user report 2026-09-30).
+   */
+  debtIssues?: string[]
 }): Promise<EvalVerdict | null> {
-  const { goal, lastAssistantContent, evidence, verifyEvidence, unverifiedModifications, codeModified, hasStrongVerify, strongVerifyToolsAvailable, agentProvider, agentModel, agentId, agentName, abortCheck, onTokens } = params
+  const { goal, lastAssistantContent, evidence, verifyEvidence, unverifiedModifications, codeModified, hasStrongVerify, strongVerifyToolsAvailable, agentProvider, agentModel, agentId, agentName, abortCheck, onTokens, debtIssues } = params
 
   const evidenceLines = evidence
     .slice(-MAX_EVIDENCE_ENTRIES)
@@ -798,6 +836,14 @@ async function evaluateCompletion(params: {
     ? `\n\n⚠️ E2E VERIFICATION: chu kỳ có SỬA CODE nhưng bằng chứng kiểm định CHỈ là đọc lại file/grep (KHÔNG có run_tests/lint/type_check dù tool có sẵn). Theo quy tắc 8: thay đổi LOGIC chỉ được coi hoàn thành khi đã chạy test/lint/type_check — kiểm tra kỹ loại thay đổi trước khi chấm "complete": true.`
     : ''
 
+  // TASK 21 — DEBT CHECK BLOCK: danh sách lỗi phát sinh trọng tài đã quyết
+  // định xử lý ở chu kỳ trước → evaluator đối chiếu từng lỗi với bằng chứng
+  // chu kỳ này (quy tắc 10 prompt): chưa có bằng chứng khắc phục → liệt kê lại
+  // sideIssues + debtDecision='continue' (KHÔNG phán hoàn thành sạch).
+  const debtCheckBlock = debtIssues && debtIssues.length > 0
+    ? `\n\nCÁC LỖI PHÁT SINH CHƯA XỬ LÝ (trọng tài đã quyết định xử lý — đối chiếu bằng chứng chu kỳ này xem TỪNG lỗi đã khắc phục chưa, quy tắc 10):\n${debtIssues.map(d => `- ${d}`).join('\n')}\n→ Lỗi nào chưa có bằng chứng máy xác nhận đã khắc phục (fix + verify pass) → PHẢI liệt kê lại vào "sideIssues" + "debtDecision": "continue".`
+    : ''
+
   const prompt = `MỤC TIÊU CỦA AGENT:
 ${goal.slice(0, 2000)}
 
@@ -805,7 +851,7 @@ LỜI KẾT LUẬN CUỐI CÙNG CỦA AGENT (chỉ là tuyên bố — cần đ�
 ${lastAssistantContent.slice(0, 2500)}
 
 BẰNG CHỨNG KIỂM ĐỊNH CHU KỲ CUỐI (HARNESS kiểm đếm từ tool call thật — agent KHÔNG thể bịa):
-${verifyBlock}${weakVerifyWarning}${unverifiedModifications ? '\n\n⚠️ CÓ THAO TÁC SỬA (file_edit/shell/git...) SAU LẦN KIỂM ĐỊNH CUỐI — kết quả của lần sửa đó CHƯA được kiểm chứng.' : ''}
+${verifyBlock}${weakVerifyWarning}${debtCheckBlock}${unverifiedModifications ? '\n\n⚠️ CÓ THAO TÁC SỬA (file_edit/shell/git...) SAU LẦN KIỂM ĐỊNH CUỐI — kết quả của lần sửa đó CHƯA được kiểm chứng.' : ''}
 
 NHẬT KÝ BẰNG CHỨNG TOOL (theo thứ tự thời gian — đây là sự thật duy nhất đáng tin):
 ${evidenceBlock}
@@ -1289,13 +1335,17 @@ export async function runGoalDrivenLoop(params: {
   // cycleStrongVerify = run_tests/lint/type_check/test_coverage có bằng chứng.
   let cycleCodeModified = false
   let cycleStrongVerify = false
-  // FIX 2026-09-14 #9 — DEBT MODE: trọng tài chấm complete nhưng phát hiện side
-  // issues nghiêm trọng (debtDecision='continue') → 1 chu kỳ debt xử lý lỗi phát
-  // sinh (bounded: chỉ 1 debt cycle/run — không đẻ vòng lặp mới vô hạn).
+  // FIX 2026-09-14 #9 + TASK 21 — DEBT MODE: trọng tài chấm complete nhưng
+  // phát hiện side issues liên quan (debtDecision='continue') → chu kỳ debt
+  // xử lý lỗi phát sinh. TASK 21: cho phép NHIỀU đợt debt cycle liên tiếp
+  // (bounded bởi MAX_DEBT_CYCLES, thay cờ boolean cũ chỉ cho 1 đợt/run).
   // REVIEW 9-fix (2026-08-30): restore từ checkpoint (crash giữa debt cycle →
-  // resume vẫn inject debt directive đúng + không chạy debt cycle lần 2).
-  let debtCycleUsed = resumeState?.debtCycleUsed ?? false
+  // resume vẫn inject debt directive đúng + không lặp lại debt cycle đã chạy;
+  // checkpoint cũ dạng boolean debtCycleUsed=true → hiểu là 1).
+  let debtCyclesRun = resumeState?.debtCyclesRun ?? (resumeState?.debtCycleUsed ? 1 : 0)
   let debtMode = resumeState?.debtMode ?? false
+  /** TASK 21 — số lần TÁI LẬP CỬA SỔ CHU KỲ đã dùng (xem renewal cuối mỗi chu kỳ) */
+  let cycleRenewals = resumeState?.cycleRenewals ?? 0
   /** Side issues chưa xử lý khi run kết thúc (đã ghi Todo follow-up — report) */
   let unresolvedDebt: string[] = []
   /** REVIEW 9-fix (2026-08-30) #9 — side issues đã quyết định chạy DEBT CYCLE.
@@ -1382,10 +1432,12 @@ export async function runGoalDrivenLoop(params: {
     cutMidWorkPrev,
     lastContent,
     lastLlmError,
-    // REVIEW 9-fix (2026-08-30) #9 — persist debt state để resume giữa debt
-    // cycle vẫn inject đúng debt directive + không lặp debt cycle thứ 2.
+    // REVIEW 9-fix (2026-08-30) #9 + TASK 21 — persist debt/renewal state để
+    // resume giữa debt cycle vẫn inject đúng debt directive + không lặp debt
+    // cycle đã chạy + giữ đúng trần chu kỳ đã tái lập.
     debtMode,
-    debtCycleUsed,
+    debtCyclesRun,
+    cycleRenewals,
     savedAt: Date.now(),
   })
   /** Fire onCheckpoint (sync/async) — fail-open */
@@ -1415,7 +1467,7 @@ export async function runGoalDrivenLoop(params: {
   const timeLeft = () => (TIME_BUDGET_MS === 0 ? Infinity : TIME_BUDGET_MS - (Date.now() - startedAt))
   const tokenLeft = () => (TOKEN_BUDGET === 0 ? Infinity : TOKEN_BUDGET - tokensUsed)
 
-  console.log(`[GoalLoop] ${agentName} bắt đầu — mục tiêu: "${userMessage.slice(0, 100)}" (max ${fmtCap(MAX_CYCLES)} chu kỳ × ${fmtCap(ITER_PER_CYCLE)} vòng, budget ${TIME_BUDGET_MS === 0 ? '∞' : `${Math.round(TIME_BUDGET_MS / 60000)}'`} / ${TOKEN_BUDGET === 0 ? '∞ tokens (KHÔNG GIỚI HẠN — CI-1)' : `${TOKEN_BUDGET} tokens, reserve ${REPORT_RESERVE_TOKENS} cho evaluate + báo cáo cuối`}, nén context @${COMPRESS_THRESHOLD_CHARS} chars${agentTools.includes('delegate_task') ? ', delegate_task BẬT' : ''})`)
+  console.log(`[GoalLoop] ${agentName} bắt đầu — mục tiêu: "${userMessage.slice(0, 100)}" (max ${fmtCap(MAX_CYCLES)} chu kỳ × ${fmtCap(ITER_PER_CYCLE)} vòng${MAX_CYCLE_RENEWALS > 0 && MAX_CYCLES !== 0 ? ` + tái lập tối đa ${MAX_CYCLE_RENEWALS} cửa sổ (${MAX_CYCLE_RENEWALS * MAX_CYCLES} chu kỳ nữa)` : ''}, debt cycles tối đa ${MAX_DEBT_CYCLES}, budget ${TIME_BUDGET_MS === 0 ? '∞' : `${Math.round(TIME_BUDGET_MS / 60000)}'`} / ${TOKEN_BUDGET === 0 ? '∞ tokens (KHÔNG GIỚI HẠN — CI-1)' : `${TOKEN_BUDGET} tokens, reserve ${REPORT_RESERVE_TOKENS} cho evaluate + báo cáo cuối`}, nén context @${COMPRESS_THRESHOLD_CHARS} chars${agentTools.includes('delegate_task') ? ', delegate_task BẬT' : ''})`)
 
   // CI-5 (Task 14-b) — RESUME: chu kỳ bắt đầu = cyclesAttempted + 1 (chu kỳ
   // đã BẮT ĐẦU kể cả dở được tính là đã attempt — checkpoint theo VÒNG nên
@@ -1431,7 +1483,18 @@ export async function runGoalDrivenLoop(params: {
   // CI-1 (0 = UNLIMITED): MAX_CYCLES = 0 → KHÔNG trần chu kỳ (loop chỉ dừng
   // bởi complete / no-progress brake / cancel / error).
   // CI-5 (14-b): resume bắt đầu từ chu kỳ kế của checkpoint (resumeStartCycle).
-  outerLoop: for (let cycle = resumeStartCycle; MAX_CYCLES === 0 || cycle <= MAX_CYCLES; cycle++) {
+  //
+  // TASK 21 — EFFECTIVE MAX CYCLES: trần chu kỳ HIỆN HÀNH, có thể được TÁI LẬP
+  // (mở rộng +MAX_CYCLES/lần) khi hết trần mà mục tiêu CHƯA hoàn thành triệt để
+  // hoặc còn lỗi phát sinh liên quan chưa xử lý (xem renewal cuối mỗi chu kỳ +
+  // renew-for-debt ở khối EVALUATE). Công thức: MAX_CYCLES × (1 + cycleRenewals)
+  // + Math.max với resumeStartCycle để run resume sau crash ở chu kỳ cuối cùng
+  // vẫn được chạy ít nhất 1 chu kỳ đánh giá lại (không rơi vào "resume xong bỏ
+  // đi" khi trần đã vượt).
+  let effectiveMaxCycles = MAX_CYCLES === 0
+    ? 0
+    : Math.max(MAX_CYCLES + cycleRenewals * MAX_CYCLES, resumeStartCycle)
+  outerLoop: for (let cycle = resumeStartCycle; MAX_CYCLES === 0 || cycle <= effectiveMaxCycles; cycle++) {
     if (isCancelled()) { stopReason = 'cancelled'; break }
     if (timeLeft() <= 0) { stopReason = 'time_budget'; break }
     // [A] Không bắt đầu chu kỳ mới nếu chỉ còn token reserve (dành cho final report)
@@ -1450,7 +1513,7 @@ export async function runGoalDrivenLoop(params: {
       // xong, việc duy nhất là xử lý các lỗi phát sinh (side issues).
       if (debtMode) {
         const debtList = lastVerdict.sideIssues.map(s => `- ${s}`).join('\n')
-        const debtDirective = `[GOAL-LOOP: Chu kỳ ${cycle}/${fmtCap(MAX_CYCLES)} — DEBT CYCLE] Mục tiêu chính ĐÃ HOÀN THÀNH theo trọng tài độc lập ✅ — KHÔNG làm lại việc đã xong.
+        const debtDirective = `[GOAL-LOOP: Chu kỳ ${cycle}/${fmtCap(effectiveMaxCycles)} — DEBT CYCLE] Mục tiêu chính ĐÃ HOÀN THÀNH theo trọng tài độc lập ✅ — KHÔNG làm lại việc đã xong.
 
 Chu kỳ này chỉ xử lý CÁC LỖI PHÁT SINH trong quá trình làm (trọng tài phân loại nghiêm trọng):
 ${debtList}
@@ -1480,10 +1543,10 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
           })
         } catch { /* fail-open */ }
 
-        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev) + similarErrorsBlock + advisoryBlock
+        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles) + similarErrorsBlock + advisoryBlock
         messages.push({ role: 'user', content: directive })
         evidence.push({ cycle, kind: 'directive', text: `Chu kỳ ${cycle}: chẩn đoán "${lastVerdict.rootCause.slice(0, 120)}" → kế hoạch mới${similarErrorsBlock ? ' + lỗi tương tự đã gặp (episodic memory)' : ''}${advisoryBlock ? ' + tư vấn Omega orchestrator' : ''}` })
-        recordAgentThought(agentSessionId, `🔄 Chu kỳ ${cycle}/${fmtCap(MAX_CYCLES)} — chẩn đoán: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${similarErrorsBlock ? ' (kèm lỗi tương tự đã gặp)' : ''}${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}`, totalIterations)
+        recordAgentThought(agentSessionId, `🔄 Chu kỳ ${cycle}/${fmtCap(effectiveMaxCycles)} — chẩn đoán: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${similarErrorsBlock ? ' (kèm lỗi tương tự đã gặp)' : ''}${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}`, totalIterations)
       }
     }
 
@@ -1925,6 +1988,10 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
       codeModified: cycleCodeModified,
       hasStrongVerify: cycleStrongVerify,
       strongVerifyToolsAvailable,
+      // TASK 21 — DEBT CHECK: truyền danh sách lỗi phát sinh chưa xử lý
+      // (đang treo từ các chu kỳ trước) để evaluator đối chiếu từng lỗi với
+      // bằng chứng chu kỳ này — debt cycle dở không bị phán complete sạch.
+      debtIssues: pendingDebtIssues.length > 0 ? pendingDebtIssues : undefined,
       agentProvider,
       agentModel,
       agentId,
@@ -1965,33 +2032,59 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
       recordAgentThought(agentSessionId, `🛡 Harness verify-guard: hạ "hoàn thành" → "chưa đạt" — có sửa sau lần kiểm định cuối mà chưa kiểm định lại`, totalIterations)
     }
 
-    // ===== FIX 2026-09-14 #9 — SIDE ISSUES / DEBT DECISION (trọng tài quyết
-    // định thay vì “chấm xong là xong”): mục tiêu hoàn thành NHƯNG có lỗi phát
-    // sinh ngoài mục tiêu → 3 lựa chọn của trọng tài:
-    //   debtDecision='continue' + còn chu kỳ + còn budget + chưa từng dùng debt
-    //     → KHÔNG dừng: 1 chu kỳ debt mới xử lý lỗi phát sinh (đã inject
-    //       directive đầu chu kỳ debt ở trên)
-    //   'record' hoặc 'continue' mà hết chu kỳ/budget → hoàn thành + GHI NỢ:
-    //     mỗi side issue thành 1 Todo follow-up (pending) + báo cáo cuối nêu rõ
+    // ===== FIX 2026-09-14 #9 + TASK 21 — SIDE ISSUES / DEBT DECISION (trọng
+    // tài quyết định thay vì "chấm xong là xong"): mục tiêu hoàn thành NHƯNG có
+    // lỗi phát sinh còn tồn tại → lựa chọn của trọng tài:
+    //   debtDecision='continue' + còn lượt debt (MAX_DEBT_CYCLES) + còn budget
+    //     → KHÔNG dừng: chu kỳ debt xử lý lỗi phát sinh (directive inject đầu
+    //       chu kỳ debt ở trên). TASK 21: NHIỀU đợt liên tiếp được phép — debt
+    //       cycle trước dở/mở thêm lỗi mới → đợt debt nữa cho tới khi sạch
+    //       hoặc cạn lượt (điều kiện dừng bounded, không vô hạn).
+    //   Trần chu kỳ đang chặn debt cycle (cycle >= effectiveMaxCycles) nhưng
+    //   còn lượt TÁI LẬP → mở rộng cửa sổ chu kỳ (renewal) thay vì ghi nợ rồi
+    //   kết thúc vội (user report 2026-09-30: trọng tài không được phán kết
+    //   thúc khi còn vấn đề phát sinh liên quan giải quyết được).
+    //   'record' (issue ngoài khả năng agent) hoặc 'continue' mà hết lượt
+    //   debt/budget → hoàn thành + GHI NỢ: mỗi side issue 1 Todo follow-up
+    //   (pending) + báo cáo cuối nêu rõ
     //   'none' → hoàn thành sạch (side issues tầm thường)
     // =====
     if (verdict.complete && verdict.sideIssues.length > 0 && verdict.debtDecision !== 'none') {
+      // TASK 21 — RENEW-FOR-DEBT: debt cycle cần chạy mà trần chu kỳ hiện hành
+      // đã chặn → tái lập cửa sổ chu kỳ mới (nếu còn lượt + budget) thay vì để
+      // rơi vào nhánh ghi nợ + kết thúc.
+      if (
+        verdict.debtDecision === 'continue' &&
+        MAX_CYCLES !== 0 &&
+        cycle >= effectiveMaxCycles &&
+        cycleRenewals < MAX_CYCLE_RENEWALS &&
+        debtCyclesRun < MAX_DEBT_CYCLES &&
+        timeLeft() > 0 &&
+        tokenLeft() > REPORT_RESERVE_TOKENS + 8_000 &&
+        !isCancelled()
+      ) {
+        cycleRenewals++
+        effectiveMaxCycles += MAX_CYCLES
+        recordAgentThought(agentSessionId, `🔁 TÁI LẬP CỬA SỔ CHU KỲ (lần ${cycleRenewals}/${MAX_CYCLE_RENEWALS}): trọng tài muốn chạy debt cycle cho ${verdict.sideIssues.length} lỗi phát sinh nhưng hết trần chu kỳ → mở thêm ${MAX_CYCLES} chu kỳ để giải quyết tiếp thay vì kết thúc`, totalIterations)
+        evidence.push({ cycle, kind: 'directive', text: `TÁI LẬP cửa sổ chu kỳ (lần ${cycleRenewals}) cho debt cycle — ${verdict.sideIssues.length} side issue(s) chưa xử lý` })
+        console.log(`[GoalLoop] ${agentName} RENEWAL (debt): chu kỳ ${cycle} chạm trần → mở thêm ${MAX_CYCLES} chu kỳ (renewal ${cycleRenewals}/${MAX_CYCLE_RENEWALS}, effectiveMax=${effectiveMaxCycles})`)
+      }
       const canDebtCycle =
         verdict.debtDecision === 'continue' &&
-        !debtCycleUsed &&
-        (MAX_CYCLES === 0 || cycle < MAX_CYCLES) &&
+        debtCyclesRun < MAX_DEBT_CYCLES &&
+        (MAX_CYCLES === 0 || cycle < effectiveMaxCycles) &&
         timeLeft() > 0 &&
         tokenLeft() > REPORT_RESERVE_TOKENS + 8_000 &&
         !isCancelled()
       if (canDebtCycle) {
-        debtCycleUsed = true
+        debtCyclesRun++
         debtMode = true
         // REVIEW 9-fix (2026-08-30) #9 — checkpoint lại các side issues gốc: nếu
         // debt cycle thất bại/chạy dở, chúng vẫn được ghi nợ ở cuối run.
         pendingDebtIssues = verdict.sideIssues
-        recordAgentThought(agentSessionId, `⚖️ Trọng tài: mục tiêu ĐẠT nhưng ${verdict.sideIssues.length} lỗi phát sinh nghiêm trọng → TÁI KHỞI ĐỘNG 1 chu kỳ debt (chu kỳ ${cycle + 1}) để xử lý: ${verdict.sideIssues.slice(0, 2).join('; ').slice(0, 200)}`, totalIterations)
-        console.log(`[GoalLoop] ${agentName} DEBT CYCLE: complete=true nhưng trọng tài quyết định 'continue' — chu kỳ ${cycle + 1} xử lý ${verdict.sideIssues.length} side issue(s)`)
-        evidence.push({ cycle, kind: 'directive', text: `Trọng tài: hoàn thành + debtDecision='continue' → 1 chu kỳ debt cho ${verdict.sideIssues.length} lỗi phát sinh` })
+        recordAgentThought(agentSessionId, `⚖️ Trọng tài: mục tiêu ĐẠT nhưng ${verdict.sideIssues.length} lỗi phát sinh còn tồn tại → TÁI KHỞI ĐỘNG chu kỳ debt (đợt ${debtCyclesRun}/${MAX_DEBT_CYCLES}, chu kỳ ${cycle + 1}) để xử lý: ${verdict.sideIssues.slice(0, 2).join('; ').slice(0, 200)}`, totalIterations)
+        console.log(`[GoalLoop] ${agentName} DEBT CYCLE (đợt ${debtCyclesRun}/${MAX_DEBT_CYCLES}): complete=true nhưng trọng tài quyết định 'continue' — chu kỳ ${cycle + 1} xử lý ${verdict.sideIssues.length} side issue(s)`)
+        evidence.push({ cycle, kind: 'directive', text: `Trọng tài: hoàn thành + debtDecision='continue' → chu kỳ debt (đợt ${debtCyclesRun}) cho ${verdict.sideIssues.length} lỗi phát sinh` })
         // KHÔNG break — để outerLoop chạy chu kỳ debt (directive debt đã sẵn sàng)
       } else {
         // Hoàn thành + GHI NỢ kỹ thuật: mỗi side issue 1 Todo follow-up —
@@ -2012,7 +2105,12 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
                 },
               }).catch(() => { /* fail-open từng item */ })
             }
-            recordAgentThought(agentSessionId, `📋 Trọng tài: hoàn thành + ${verdict.sideIssues.length} lỗi phát sinh được GHI NỢ kỹ thuật (Todo follow-up)${verdict.debtDecision === 'continue' ? ' — hết chu kỳ/budget nên không chạy debt cycle' : ''}`, totalIterations)
+            const whyNoDebt = verdict.debtDecision === 'continue'
+              ? debtCyclesRun >= MAX_DEBT_CYCLES
+                ? `hết lượt debt cycle (${debtCyclesRun}/${MAX_DEBT_CYCLES})`
+                : 'hết budget/chu kỳ nên không chạy debt cycle'
+              : 'issue ngoài khả năng xử lý của agent (trọng tài phân loại)'
+            recordAgentThought(agentSessionId, `📋 Trọng tài: hoàn thành + ${verdict.sideIssues.length} lỗi phát sinh được GHI NỢ kỹ thuật (Todo follow-up) — ${whyNoDebt}`, totalIterations)
           } catch { /* fail-open — ghi nợ không được làm hỏng completion */ }
         }
       }
@@ -2216,6 +2314,34 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
     if (timeLeft() <= 0) { stopReason = 'time_budget'; break }
     if (tokenLeft() <= REPORT_RESERVE_TOKENS) { stopReason = 'token_budget'; break }
 
+    // ===== TASK 21 — CYCLE RENEWAL: hết trần chu kỳ nhưng việc CHƯA xong triệt để =====
+    // User report 2026-09-30: "công việc chưa hoàn thành triệt để thì nên tái
+    // lập thêm chu kỳ để tìm cách giải quyết tiếp thay vì vội vàng quyết định
+    // kết thúc". Đến được điểm này nghĩa là: chu kỳ vừa rồi CÓ tiến triển (no-
+    // progress + stall-brake đã break ở trên nếu bế tắc) + còn budget + chưa
+    // cancel. Nếu trần chu kỳ (effectiveMaxCycles) đã chạm mà verdict chưa
+    // complete hoặc còn lỗi phát sinh liên quan chưa xử lý → TÁI LẬP thêm 1
+    // cửa sổ MAX_CYCLES chu kỳ (bounded bởi MAX_CYCLE_RENEWALS).
+    if (
+      MAX_CYCLES !== 0 &&
+      cycle >= effectiveMaxCycles &&
+      cycleRenewals < MAX_CYCLE_RENEWALS &&
+      (!verdict.complete || (verdict.sideIssues.length > 0 && verdict.debtDecision !== 'none')) &&
+      timeLeft() > 0 &&
+      tokenLeft() > REPORT_RESERVE_TOKENS + 8_000 &&
+      !isCancelled()
+    ) {
+      const oldCap = effectiveMaxCycles
+      cycleRenewals++
+      effectiveMaxCycles += MAX_CYCLES
+      const why = !verdict.complete
+        ? `mục tiêu CHƯA hoàn thành triệt để (còn thiếu: ${verdict.missing[0]?.slice(0, 120) ?? '(trọng tài không liệt kê)'})`
+        : `còn ${verdict.sideIssues.length} lỗi phát sinh liên quan chưa xử lý`
+      recordAgentThought(agentSessionId, `🔁 TÁI LẬP CỬA SỔ CHU KỲ (lần ${cycleRenewals}/${MAX_CYCLE_RENEWALS}): hết trần ${fmtCap(oldCap)} chu kỳ nhưng ${why} → mở thêm ${MAX_CYCLES} chu kỳ để giải quyết tiếp (KHÔNG kết thúc vội)`, totalIterations)
+      evidence.push({ cycle, kind: 'directive', text: `TÁI LẬP cửa sổ chu kỳ lần ${cycleRenewals}/${MAX_CYCLE_RENEWALS}: ${why}` })
+      console.log(`[GoalLoop] ${agentName} RENEWAL: chu kỳ ${cycle}/${fmtCap(oldCap)} hết trần nhưng ${why} → mở thêm ${MAX_CYCLES} chu kỳ (renewal ${cycleRenewals}/${MAX_CYCLE_RENEWALS}, effectiveMax=${effectiveMaxCycles})`)
+    }
+
     // CI-5 (Task 14-b) — CHECKPOINT + HEARTBEAT CUỐI MỖI CHU KỲ: ranh giới quan
     // trọng nhất (cyclesDone đã tăng + verdict chu kỳ đã có + escalate/stall
     // brake đã xong) — trước khi chu kỳ kế tiếp bắt đầu. Các đường break sớm
@@ -2285,7 +2411,7 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
         lastVerdict,
         stopReason,
         cyclesAttempted,
-        maxCycles: MAX_CYCLES,
+        maxCycles: effectiveMaxCycles,
         debtIssues: unresolvedDebt.length > 0 ? unresolvedDebt : undefined,
         agentProvider,
         agentModel,
@@ -2305,7 +2431,7 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
     }
     if (stopReason !== 'complete') {
       const reasonText: Record<string, string> = {
-        max_cycles: `đã hết ${fmtCap(MAX_CYCLES)} chu kỳ làm việc`,
+        max_cycles: `đã hết ${fmtCap(effectiveMaxCycles)} chu kỳ làm việc${cycleRenewals > 0 ? ` (đã tái lập ${cycleRenewals} cửa sổ chu kỳ)` : ''}`,
         time_budget: `hết budget thời gian (${TIME_BUDGET_MS === 0 ? '∞' : `${Math.round(TIME_BUDGET_MS / 60000)} phút`})${cyclesAttempted > cyclesDone ? ' — đang dở giữa chu kỳ ' + cyclesAttempted : ''}`,
         token_budget: `hết budget token (${TOKEN_BUDGET === 0 ? '∞' : TOKEN_BUDGET} — có thể tăng qua env GOAL_LOOP_TOKEN_BUDGET, hoặc đặt GOAL_LOOP_TOKEN_BUDGET=0 để chạy KHÔNG giới hạn)`,
         no_progress: 'phát hiện bế tắc không tiến triển (lặp lại hành động cũ theo fingerprint, hoặc 3 chu kỳ liên tiếp không có tool call thành công nào — stall brake CI-1)',
@@ -2313,11 +2439,11 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
       }
       if (usedFinalReport) {
         // Báo cáo tổng hợp đã có "còn thiếu" + "đề xuất" — chỉ append dòng trạng thái
-        content += `\n\n---\n⚠️ **Vòng lặp mục tiêu dừng sau ${cyclesAttempted}/${fmtCap(MAX_CYCLES)} chu kỳ** — ${reasonText[stopReason] || stopReason}. Bạn có thể yêu cầu tiếp tục để tôi khắc phục phần còn thiếu.`
+        content += `\n\n---\n⚠️ **Vòng lặp mục tiêu dừng sau ${cyclesAttempted}/${fmtCap(effectiveMaxCycles)} chu kỳ** — ${reasonText[stopReason] || stopReason}. Bạn có thể yêu cầu tiếp tục để tôi khắc phục phần còn thiếu.`
       } else {
         const missing = lastVerdict?.missing?.length ? lastVerdict.missing.map(m => `- ${m}`).join('\n') : '(chưa đánh giá được chi tiết — xem tiến trình ở trên)'
         const rootCause = lastVerdict?.rootCause ? `\n🔍 **Vấn đề xác định:** ${lastVerdict.rootCause}` : ''
-        content += `\n\n---\n⚠️ **Vòng lặp mục tiêu dừng sau ${cyclesAttempted}/${fmtCap(MAX_CYCLES)} chu kỳ — chưa hoàn thành trọn vẹn** (${reasonText[stopReason] || stopReason}).\n❌ **Còn thiếu:**\n${missing}${rootCause}\n\nBạn có thể yêu cầu tiếp tục để tôi khắc phục phần còn thiếu.`
+        content += `\n\n---\n⚠️ **Vòng lặp mục tiêu dừng sau ${cyclesAttempted}/${fmtCap(effectiveMaxCycles)} chu kỳ — chưa hoàn thành trọn vẹn** (${reasonText[stopReason] || stopReason}).\n❌ **Còn thiếu:**\n${missing}${rootCause}\n\nBạn có thể yêu cầu tiếp tục để tôi khắc phục phần còn thiếu.`
       }
     }
   }

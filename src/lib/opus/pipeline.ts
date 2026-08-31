@@ -152,7 +152,13 @@ export function formatDirectiveMessage(verdict: OpusVerdict): string {
   lines.push(
     `🏁 ĐIỀU KIỆN DỪNG: ledger sạch ${mark(st.ledgerClean)} · kiểm định xanh ${mark(st.verificationGreen)} · ` +
       `spec đạt ${mark(st.specSatisfied)} · không blocking mới ${mark(st.noNewBlocking)} → ` +
-      `${st.allMet ? 'ĐỦ 4/4 — STOP hợp lệ' : 'CHƯA đủ — vòng lặp tiếp tục'}`
+      (verdict.decision === 'STOP'
+        ? st.allMet
+          ? 'ĐỦ 4/4 — STOP hợp lệ'
+          : 'CHƯA đủ 4 điều kiện — chưa đủ cơ sở kết thúc theo §VII (tác vụ còn vấn đề tồn; auto mode đã đính chính review lại — model vẫn insist STOP, xem rationale)'
+        : st.allMet
+          ? 'ĐỦ 4/4'
+          : 'CHƯA đủ — vòng lặp tiếp tục')
   )
   if (st.notes) lines.push(`   Ghi chú: ${st.notes}`)
 
@@ -518,6 +524,16 @@ export async function dispatchDirectiveForReview(reviewId: string): Promise<Chat
     throw new OpusDispatchError('Review này không có verdict hợp lệ để ban hành', 400)
   }
 
+  // TASK 21 — STOP GUARD (manual path): verdict STOP nhưng predicate 4 điều
+  // kiện §VII chưa thỏa (allMet=false) → KHÔNG ban hành — phán kết thúc khi
+  // còn vấn đề tồn là mâu thuẫn nội tại của verdict. Yêu cầu review lại.
+  if (verdict.decision === 'STOP' && !verdict.stopAssessment.allMet) {
+    throw new OpusDispatchError(
+      'Verdict STOP nhưng predicate 4 điều kiện (§VII) CHƯA thỏa — stopAssessment.allMet=false (còn vấn đề tồn, chưa được phép kết thúc). Hãy chạy "Opus review" lại để Opus tiếp tục vòng mới (FIX/REDIRECT/CONTINUE) xử lý các vấn đề còn mở.',
+      400
+    )
+  }
+
   const message = await applyOpusVerdict(
     { id: review.id, sessionId: review.sessionId, triggerMode: review.triggerMode },
     verdict,
@@ -718,7 +734,31 @@ async function runAutoReviewInner(
     return
   }
   try {
-    const { review, verdict } = await runOpusReview(sessionId, ctx?.messageId ?? null, 'auto')
+    let { review, verdict } = await runOpusReview(sessionId, ctx?.messageId ?? null, 'auto')
+
+    // ===== TASK 21 — STOP GUARD (harness, user report 2026-09-30) =====
+    // Trọng tài phán STOP nhưng predicate 4 điều kiện §VII CHƯA thỏa
+    // (stopAssessment.allMet=false) → verdict TỰ MÂU THUẪN: instruction §VII
+    // nói rõ "khi chưa đủ 4 điều kiện — tiếp tục vòng mới". Trước đây harness
+    // phẳng: model phán STOP là loop tự dừng dù còn vấn đề tồn. Giờ: review
+    // lại 1 lần kèm đính chính; model vẫn insist STOP (tác vụ độc hại/vô
+    // nghĩa — nêu rõ rationale) → tôn trọng phán đó.
+    if (verdict.decision === 'STOP' && !verdict.stopAssessment.allMet) {
+      console.warn(
+        `[Opus][auto] session=${sessionId} STOP GUARD: verdict STOP nhưng 4 điều kiện CHƯA thỏa (ledger=${verdict.stopAssessment.ledgerClean}, verify=${verdict.stopAssessment.verificationGreen}, spec=${verdict.stopAssessment.specSatisfied}, noNewBlocking=${verdict.stopAssessment.noNewBlocking}) — review lại theo §VII thay vì dừng loop khi còn vấn đề tồn`
+      )
+      const retried = await runOpusReview(sessionId, ctx?.messageId ?? null, 'auto', {
+        correctiveHint:
+          'Verdict vòng trước của bạn là STOP nhưng stopAssessment.allMet=false — predicate 4 điều kiện §VII CHƯA thỏa. ' +
+          'Theo §VII bạn KHÔNG được STOP khi chưa đủ 4 điều kiện: hãy tiếp tục vòng mới (FIX/REDIRECT/CONTINUE kèm directive đầy đủ 6 trường). ' +
+          'Chỉ STOP nếu (a) đủ cả 4 điều kiện với bằng chứng (allMet=true) hoặc (b) tác vụ độc hại/vô nghĩa — nêu rõ trong rationale.',
+      })
+      review = retried.review
+      verdict = retried.verdict
+      console.log(
+        `[Opus][auto] session=${sessionId} STOP GUARD → review lại xong: decision=${verdict.decision} allMet=${verdict.stopAssessment.allMet}`
+      )
+    }
 
     const action =
       verdict.decision === 'CONTINUE' || verdict.decision === 'FIX' || verdict.decision === 'REDIRECT'

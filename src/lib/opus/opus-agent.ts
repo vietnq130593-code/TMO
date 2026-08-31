@@ -108,6 +108,7 @@ User decision #1+#2: auto mode KHÔNG giới hạn vòng lặp & ngân sách. Ch
 Đủ 4 điều kiện → STOP kèm final report (tổng kết: đã làm gì, bằng chứng gì, còn lại gì cho user quyết định).
 Mọi lần review khác — khi chưa đủ 4 điều kiện — tiếp tục vòng mới (FIX/REDIRECT/CONTINUE).
 KHÔNG BAO GIỜ giả định điều kiện thỏa: mỗi điều kiện phải dẫn bằng chứng cụ thể trong stopAssessment.
+TASK 21 (2026-09-30 — user report trọng tài phán kết thúc sớm): verdict STOP mà stopAssessment.allMet=false (4 điều kiện CHƯA thỏa) là verdict TỰ MÂU THUẪN — harness sẽ TỪ CHỐI và yêu cầu review lại theo §VII (tiếp tục vòng mới), KHÔNG để loop tự dừng khi còn vấn đề tồn. Muốn STOP: phải đối chiếu từng điều kiện với bằng chứng và đặt allMet=true — hoặc là tác vụ độc hại/vô nghĩa (nêu rõ trong rationale).
 
 ━━━ VIII. RÀO (USER DECISION #4 — PHÂN QUYỀN RỘNG) ━━━
 Bạn ĐƯỢC TỰ QUYẾT (không cần hỏi user):

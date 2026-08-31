@@ -252,11 +252,17 @@ export interface OpusReviewResult {
 /**
  * Chạy 1 vòng review Opus cho session. KHÔNG tự acquire lock (caller quyết —
  * route dùng markReviewRunning để 409, runAutoReview dùng để skip khi chồng).
+ *
+ * TASK 21 — opts.correctiveHint: văn bản nhắc nhở mắc buộc vào cuối dossier
+ * prompt khi harness phát hiện verdict trước TỰ MÂU THUẪN (STOP mà predicate
+ * 4 điều kiện chưa thỏa) → model được yêu cầu review lại đúng §VII thay vì
+ * dừng loop khi còn vấn đề tồn (user report 2026-09-30).
  */
 export async function runOpusReview(
   sessionId: string,
   messageId?: string | null,
-  triggerMode: 'manual' | 'auto' = 'manual'
+  triggerMode: 'manual' | 'auto' = 'manual',
+  opts?: { correctiveHint?: string }
 ): Promise<OpusReviewResult> {
   const startedAt = Date.now()
   const runId = `opus_rev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
@@ -293,7 +299,8 @@ export async function runOpusReview(
     const dossierPrompt =
       dossier +
       '\n\n━━━ NHIỆM VỤ ━━━\n' +
-      'Review run vừa hoàn thành theo §III-§X. Trả về ĐÚNG 1 JSON object, không markdown fence, không text kèm theo.'
+      'Review run vừa hoàn thành theo §III-§X. Trả về ĐÚNG 1 JSON object, không markdown fence, không text kèm theo.' +
+      (opts?.correctiveHint ? `\n\n━━━ ĐÍNH CHÍNH (HARNESS) ━━━\n${opts.correctiveHint}` : '')
 
     // 3. Gọi LLM (model chain đã enforce trong llm.ts)
     llm = await callLLMForAgent(dossierPrompt, agentConfig, OPUS_INSTRUCTION, {

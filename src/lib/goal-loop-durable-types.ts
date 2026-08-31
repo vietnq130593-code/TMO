@@ -106,9 +106,16 @@ export interface GoalLoopCheckpoint {
   lastLlmError: string
   /** REVIEW 9-fix (2026-08-30) #9 — state debt cycle: resume giữa debt cycle
    *  vẫn inject đúng debt directive + không lặp debt cycle thứ 2 sau restart.
-   *  (Optional — checkpoint cũ không có → hiểu là false.) */
+   *  (Optional — checkpoint cũ không có → hiểu là false.)
+   *  TASK 21: debtCycleUsed DEPRECATED — thay bằng debtCyclesRun (counter). */
   debtMode?: boolean
   debtCycleUsed?: boolean
+  /** TASK 21 (2026-09-30) — số đợt debt cycle đã chạy (nhiều đợt liên tiếp
+   *  thay vì 1/run). Checkpoint cũ chỉ có debtCycleUsed boolean → đọc là 1. */
+  debtCyclesRun?: number
+  /** TASK 21 — số lần TÁI LẬP CỬA SỔ CHU KỲ đã dùng khi hết trần mà việc chưa
+   *  xong triệt để (trần hiệu dụng = MAX_CYCLES × (1 + cycleRenewals)). */
+  cycleRenewals?: number
   /** Epoch ms lúc checkpoint được ghi */
   savedAt: number
 }
