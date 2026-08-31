@@ -113,7 +113,11 @@ export async function consolidateLesson(input: ConsolidateLessonInput): Promise<
           timesFailed: existing.timesFailed,
           createdAt: existing.createdAt,
           source: 'SELF_DERIVED',
-          needsReview: false, // được củng cố → khỏi cần review
+          // FIX (merge gỡ cờ review oan): trước đây merge luôn reset
+          // needsReview=false dù confidence sau boost vẫn có thể < 0.4.
+          // Giờ chỉ giữ nguyên cờ theo ngưỡng lessonNeedsReview — lesson
+          // đang chờ review mà được củng cố vẫn dưới ngưỡng thì vẫn cần review.
+          needsReview: Math.min(0.99, existing.confidence + EPISODIC_THRESHOLDS.lessonValidateBoost) < EPISODIC_THRESHOLDS.lessonNeedsReview,
           embeddingId: existing.embeddingId,
         }
         await upsertLessonNode(lesson).catch(() => {})

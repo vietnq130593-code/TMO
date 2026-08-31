@@ -25,6 +25,37 @@ export async function analyzeHistoricalFeedback(): Promise<AggregatedMetrics> {
   let totalSteps = 0
 
   for (const metric of allMetrics) {
+    // FIX (Layer 9.1 loop chết): điền byTaskType với key đúng format caller
+    // dùng — workflow-engine.ts gọi getAdjustedBudget/getSuccessProbability
+    // với taskType = `mode-${routingMode}-tier-${tier}` (vd 'mode-A-tier-1').
+    // Trước đây vòng lặp này chỉ điền byRoutingMode → byTaskType LUÔN trống →
+    // getAdjustedBudget rơi nhánh default base×complexity, lịch sử 100% không
+    // được dùng (vòng [5] history → budget đứt hoàn toàn dù code trông đúng).
+    const taskTypeKey = `mode-${metric.routingMode}-tier-${metric.tier}`
+    if (!byTaskType[taskTypeKey]) {
+      byTaskType[taskTypeKey] = {
+        avgTokensUsed: 0,
+        avgTokensBudgeted: 0,
+        avgTimeSpent: 0,
+        successRate: 0,
+        sampleSize: 0,
+      }
+    }
+    const taskStats = byTaskType[taskTypeKey]
+    taskStats.avgTokensUsed =
+      (taskStats.avgTokensUsed * taskStats.sampleSize + metric.totalTokensUsed) /
+      (taskStats.sampleSize + 1)
+    taskStats.avgTokensBudgeted =
+      (taskStats.avgTokensBudgeted * taskStats.sampleSize + metric.totalTokensBudgeted) /
+      (taskStats.sampleSize + 1)
+    taskStats.avgTimeSpent =
+      (taskStats.avgTimeSpent * taskStats.sampleSize + metric.totalTimeSpent) /
+      (taskStats.sampleSize + 1)
+    taskStats.successRate =
+      (taskStats.successRate * taskStats.sampleSize + metric.stepSuccessRate) /
+      (taskStats.sampleSize + 1)
+    taskStats.sampleSize++
+
     // Group by routingMode (used as proxy for task type complexity)
     const mode = metric.routingMode
     if (!byRoutingMode[mode]) {

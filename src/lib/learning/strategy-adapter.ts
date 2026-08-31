@@ -249,24 +249,79 @@ export function applyAdaptation(
 // ==================== PERSISTENCE ====================
 
 /**
- * Lưu failure pattern vào DB
+ * Lưu failure pattern vào DB.
+ *
+ * FIX (Layer 9.2 dead-end): trước đây LUÔN `create` row mới với count cố định
+ * (workflow-engine detect với previousErrors=[] → luôn null → không persist;
+ * redteam breach create count=1 mỗi lần) — FailurePattern không bao giờ có
+ * row nào đạt ngưỡng count>=2 của getFailureHintsForAgent → hints "bài học
+ * từ thất bại" LUÔN rỗng, rule tighten_refusal_threshold không bao giờ fire.
+ *
+ * Giờ: UPSERT theo (type + sessionId + stepType) unresolved — mỗi lần gọi
+ * = 1 occurrence event → count cộng dồn 1. Trả về count mới sau persist
+ * (0 khi lỗi — caller fail-open).
  */
-export async function persistFailurePattern(pattern: FailurePattern): Promise<void> {
+export async function persistFailurePattern(pattern: FailurePattern): Promise<number> {
   try {
+    const ctx = pattern.context as { sessionId?: string; stepType?: string } | null
+    const sessionId =
+      typeof ctx?.sessionId === 'string' && ctx.sessionId ? ctx.sessionId : 'unknown'
+    const stepType =
+      typeof ctx?.stepType === 'string' && ctx.stepType ? ctx.stepType : 'unknown'
+
+    const existing = await db.failurePattern.findFirst({
+      where: {
+        type: pattern.type,
+        sessionId,
+        resolved: false,
+        ...(stepType !== 'unknown' ? { context: { contains: `"stepType":"${stepType}"` } } : {}),
+      },
+      orderBy: { count: 'desc' },
+    })
+
+    if (existing) {
+      // Cộng dồn — row cũ giữ id, count tăng (pattern lặp = càng nghiêm trọng)
+      const previousStrategies = safeParseJsonArray(existing.strategiesTried)
+      const updated = await db.failurePattern.update({
+        where: { id: existing.id },
+        data: {
+          count: existing.count + 1,
+          strategiesTried: JSON.stringify(
+            Array.from(new Set([...previousStrategies, ...(pattern.strategiesTried ?? [])]))
+          ),
+          nextStrategy: pattern.nextStrategy,
+          context: JSON.stringify(pattern.context),
+        },
+      })
+      return updated.count
+    }
+
     await db.failurePattern.create({
       data: {
         id: pattern.id,
-        sessionId: 'unknown', // Will be set by caller
+        sessionId,
         type: pattern.type,
-        count: pattern.count,
-        strategiesTried: JSON.stringify(pattern.strategiesTried),
+        count: Math.max(1, pattern.count || 1),
+        strategiesTried: JSON.stringify(pattern.strategiesTried ?? []),
         nextStrategy: pattern.nextStrategy,
         context: JSON.stringify(pattern.context),
         resolved: false,
       },
     })
+    return Math.max(1, pattern.count || 1)
   } catch (err) {
     console.error('[StrategyAdapter] Failed to persist failure pattern:', err)
+    return 0
+  }
+}
+
+/** Parse JSON array string an toàn (fallback [] — cột strategiesTried) */
+function safeParseJsonArray(json: string): string[] {
+  try {
+    const v = JSON.parse(json)
+    return Array.isArray(v) ? v.map(String) : []
+  } catch {
+    return []
   }
 }
 

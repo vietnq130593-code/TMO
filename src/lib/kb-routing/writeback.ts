@@ -78,6 +78,15 @@ export interface WritebackResult {
     entities: ExtractedEntityWithConfidence[]
     relationships: ExtractedRelationshipWithConfidence[]
   }
+  /**
+   * FIX (saga mất dữ liệu thầm lặng): lỗi per-step mà writebackToKB nuốt
+   * (chỉ console.warn) — giờ surface lên result để transactional-writeback
+   * đánh dấu step failed → batch 'partial' → reconcile retry. Trước đây
+   * batch luôn 'completed' kể cả khi Neo4j/Qdrant chết → tri thức chat mất
+   * vĩnh viễn không lốiretry + metric writebacks.completed phình.
+   * Key: 'qdrant' | 'neo4j_entities' | 'neo4j_relationships' | 'memory' | 'insight' | 'log'
+   */
+  stepErrors?: Record<string, string>
 }
 
 // ==================== EXTRACTION PROMPT ====================
@@ -238,6 +247,7 @@ export async function writebackToKB(params: {
   })
 
   let memoryStored = false
+  const stepErrors: Record<string, string> = { ...writeCounts.stepErrors }
 
   // === WRITE 3: AgentMemory (episodic) ===
   if (agentId && step2Result.content) {
@@ -257,6 +267,7 @@ export async function writebackToKB(params: {
       console.log(`[Writeback] Stored AgentMemory`)
     } catch (err) {
       console.warn('[Writeback] AgentMemory write failed:', err instanceof Error ? err.message : String(err))
+      stepErrors.memory = err instanceof Error ? err.message : String(err)
     }
   }
 
@@ -271,6 +282,7 @@ export async function writebackToKB(params: {
     grayZone: (grayEntities.length > 0 || grayRelationships.length > 0)
       ? { entities: grayEntities, relationships: grayRelationships }
       : undefined,
+    stepErrors: Object.keys(stepErrors).length > 0 ? stepErrors : undefined,
   }
 }
 
@@ -289,12 +301,15 @@ async function writeKnowledgeToStores(
   entities: ExtractedEntityWithConfidence[],
   relationships: ExtractedRelationshipWithConfidence[],
   ctx: { agentId?: string; agentName?: string; sessionId?: string; sourceTag: string }
-): Promise<{ chunksWritten: number; entitiesWritten: number; relationshipsWritten: number }> {
+): Promise<{ chunksWritten: number; entitiesWritten: number; relationshipsWritten: number; stepErrors: Record<string, string> }> {
   const now = new Date().toISOString()
   const { agentId, agentName, sessionId, sourceTag } = ctx
   let entitiesWritten = 0
   let relationshipsWritten = 0
   let chunksWritten = 0
+  // FIX (saga mất dữ liệu): thu thập lỗi từng step thay vì chỉ warn —
+  // transactional-writeback cần biết step nào fail để đánh 'partial'.
+  const stepErrors: Record<string, string> = {}
   // DATA-LOSS FIX 2026-08-31: entity name → resolved Neo4j node id map. Populated
   // after the entity upsert; used to give relationships REAL node ids.
   const nameToNodeId = new Map<string, string>()
@@ -351,15 +366,19 @@ async function writeKnowledgeToStores(
       const validChunks = embeddedChunks.filter(c => c.vector.length > 0)
       if (validChunks.length === 0) {
         console.warn('[Writeback] All chunk embeddings failed — skipping Qdrant write (no pseudo-hash fallback)')
+        stepErrors.qdrant = 'All chunk embeddings failed (embedding providers down?)'
       } else {
         const success = await upsertChunks(validChunks)
         if (success) {
           chunksWritten = validChunks.length
           console.log(`[Writeback] Wrote ${chunksWritten} chunks to Qdrant`)
+        } else {
+          stepErrors.qdrant = 'upsertChunks returned false (Qdrant unreachable?)'
         }
       }
     } catch (err) {
       console.warn('[Writeback] Qdrant write failed:', err instanceof Error ? err.message : String(err))
+      stepErrors.qdrant = err instanceof Error ? err.message : String(err)
     }
   }
 
@@ -435,6 +454,7 @@ async function writeKnowledgeToStores(
       })
     } catch (err) {
       console.warn('[Writeback] Neo4j entity write failed:', err instanceof Error ? err.message : String(err))
+      stepErrors.neo4j_entities = err instanceof Error ? err.message : String(err)
     }
   }
 
@@ -493,6 +513,7 @@ async function writeKnowledgeToStores(
       }
     } catch (err) {
       console.warn('[Writeback] Neo4j relationship write failed:', err instanceof Error ? err.message : String(err))
+      stepErrors.neo4j_relationships = err instanceof Error ? err.message : String(err)
     }
   }
 
@@ -533,10 +554,11 @@ async function writeKnowledgeToStores(
       console.log(`[Writeback] Recorded AgentInsight + LearningLog (Learning tab)`)
     } catch (err) {
       console.warn('[Writeback] Learning record failed:', err instanceof Error ? err.message : String(err))
+      stepErrors.insight = err instanceof Error ? err.message : String(err)
     }
   }
 
-  return { chunksWritten, entitiesWritten, relationshipsWritten }
+  return { chunksWritten, entitiesWritten, relationshipsWritten, stepErrors }
 }
 
 // ==================== REVIEW-APPROVED WRITEBACK (gray-zone) ====================

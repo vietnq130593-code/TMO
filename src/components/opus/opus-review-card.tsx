@@ -161,7 +161,11 @@ export default function OpusReviewCard({ review, dispatched, onDispatched }: Opu
   const dispatchable = DISPATCHABLE_DECISIONS.includes(review.decision)
 
   // Ban hành chỉ đạo: POST /api/opus/dispatch { reviewId } → chèn directive
-  // message vào chat + enqueue goal-loop job. 400 = đã ban hành trước đó.
+  // message vào chat + enqueue goal-loop job.
+  // FIX (400-conflation): backend giờ trả { error, code } — CHỈ code
+  // 'already_dispatched' mới là "đã ban hành" (sync UI xanh); các code khác
+  // (stop_guard / invalid_verdict / not_found / insert_failed) là lỗi thật —
+  // hiện message thật để user biết phải làm gì (vd chạy lại "Opus review").
   const handleDispatch = async () => {
     setDispatching(true)
     try {
@@ -170,11 +174,19 @@ export default function OpusReviewCard({ review, dispatched, onDispatched }: Opu
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reviewId: review.id }),
       })
-      if (res.status === 400) {
-        // Đã ban hành trước đó — sync UI về trạng thái đúng, không coi là lỗi
-        setDispatchDone(true)
-        toast({ title: 'Chỉ đạo đã được ban hành trước đó', duration: 3000 })
-        return
+      if (res.status === 400 || res.status === 404 || res.status === 409) {
+        const errData = (await res.json().catch(() => ({} as { error?: string; code?: string }))) as {
+          error?: string
+          code?: string
+        }
+        if (errData?.code === 'already_dispatched') {
+          // Đã ban hành trước đó — sync UI về trạng thái đúng, không coi là lỗi
+          setDispatchDone(true)
+          toast({ title: 'Chỉ đạo đã được ban hành trước đó', duration: 3000 })
+          return
+        }
+        // Lỗi thật (stop_guard / invalid_verdict / not_found / insert_failed)
+        throw new Error(errData?.error || `HTTP ${res.status}`)
       }
       if (!res.ok) {
         const errData = await res.json().catch(() => ({} as { error?: string }))
@@ -193,10 +205,13 @@ export default function OpusReviewCard({ review, dispatched, onDispatched }: Opu
         title: 'Không ban hành được chỉ đạo',
         description: err instanceof Error ? err.message : 'Lỗi hệ thống — thử lại sau.',
         variant: 'destructive',
-        duration: 4000,
+        duration: 6000,
       })
+    } finally {
+      // FIX: reset LUÔN (kể cả return sớm ở nhánh already_dispatched) —
+      // trước đây return sớm bỏ reset → button kẹt "Đang ban hành…" vĩnh viễn.
+      setDispatching(false)
     }
-    setDispatching(false)
   }
 
   return (

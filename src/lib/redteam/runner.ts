@@ -82,7 +82,12 @@ async function persistRedTeamBreachPattern(
       context: {
         taskType: `redteam:${attackCase.attackVector}`,
         routingMode: 'redteam',
-        stepType: `case:${attackCase.id}`,
+        // FIX (count không bao giờ đạt 2): key stepType theo VECTOR thay vì
+        // case id — persistFailurePattern giờ upsert-increment theo
+        // (type+sessionId+stepType); cũ: mỗi case 1 row riêng count=1 mãi
+        // mãi. Giờ cùng vector breached 2 lần (kể cả 2 case khác nhau) →
+        // count=2 → rule tighten_refusal_threshold (DEFAULT_RULES) fire.
+        stepType: `vector:${attackCase.attackVector}`,
         // Extra bridge context (surplus fields ride along in the JSON blob)
         failureMode: attack.failureMode,
         attackScore: attack.score,

@@ -483,11 +483,20 @@ export async function applyOpusVerdict(
 
 // ==================== DISPATCH THEO REVIEW ID (MANUAL MODE) ====================
 
-/** Error có statusCode để route map HTTP status chính xác */
+/** Error có statusCode + code máy-đọc-được để route/UI phân biệt đúng case (không gộp hết vào 400) */
+export type OpusDispatchErrorCode =
+  | 'not_found'
+  | 'already_dispatched'
+  | 'invalid_verdict'
+  | 'stop_guard'
+  | 'insert_failed'
+  | 'dispatch_error'
+
 export class OpusDispatchError extends Error {
   constructor(
     message: string,
-    readonly status: number
+    readonly status: number,
+    readonly code: OpusDispatchErrorCode = 'dispatch_error'
   ) {
     super(message)
     this.name = 'OpusDispatchError'
@@ -503,7 +512,7 @@ export class OpusDispatchError extends Error {
 export async function dispatchDirectiveForReview(reviewId: string): Promise<ChatMessage> {
   const review = await db.opusReview.findUnique({ where: { id: reviewId } })
   if (!review) {
-    throw new OpusDispatchError('Không tìm thấy review này', 404)
+    throw new OpusDispatchError('Không tìm thấy review này', 404, 'not_found')
   }
 
   // Đã từng ban hành? — marker JSON string trong metadata (JSON.stringify
@@ -514,14 +523,14 @@ export async function dispatchDirectiveForReview(reviewId: string): Promise<Chat
     select: { id: true },
   })
   if (existing) {
-    throw new OpusDispatchError('Review này đã được ban hành chỉ đạo rồi', 400)
+    throw new OpusDispatchError('Review này đã được ban hành chỉ đạo rồi', 400, 'already_dispatched')
   }
 
   let verdict: OpusVerdict
   try {
     verdict = JSON.parse(review.verdict ?? '') as OpusVerdict
   } catch {
-    throw new OpusDispatchError('Review này không có verdict hợp lệ để ban hành', 400)
+    throw new OpusDispatchError('Review này không có verdict hợp lệ để ban hành', 400, 'invalid_verdict')
   }
 
   // TASK 21 — STOP GUARD (manual path): verdict STOP nhưng predicate 4 điều
@@ -530,7 +539,8 @@ export async function dispatchDirectiveForReview(reviewId: string): Promise<Chat
   if (verdict.decision === 'STOP' && !verdict.stopAssessment.allMet) {
     throw new OpusDispatchError(
       'Verdict STOP nhưng predicate 4 điều kiện (§VII) CHƯA thỏa — stopAssessment.allMet=false (còn vấn đề tồn, chưa được phép kết thúc). Hãy chạy "Opus review" lại để Opus tiếp tục vòng mới (FIX/REDIRECT/CONTINUE) xử lý các vấn đề còn mở.',
-      400
+      400,
+      'stop_guard'
     )
   }
 
@@ -540,7 +550,7 @@ export async function dispatchDirectiveForReview(reviewId: string): Promise<Chat
     { autoDispatch: true }
   )
   if (!message) {
-    throw new OpusDispatchError('Không chèn được directive message (session có thể đã bị xóa)', 409)
+    throw new OpusDispatchError('Không chèn được directive message (session có thể đã bị xóa)', 409, 'insert_failed')
   }
   return message
 }

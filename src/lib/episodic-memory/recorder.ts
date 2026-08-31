@@ -25,6 +25,7 @@ import { classifyRootCause } from './taxonomy'
 import {
   writeEpisodeGraph,
   linkEpisodeToKB,
+  linkEpisodeYieldedLessons,
   extractContextEntities,
 } from './episodic-neo4j'
 import {
@@ -213,10 +214,27 @@ export async function recordEpisodeFromRun(input: RecordEpisodeInput): Promise<R
     const similarFiltered = similar.filter(s => s.episodeId !== episode.id)
     result.similarEpisodesLinked = similarFiltered.length
 
-    // ── Bước 4: Ghi graph Neo4j + SQLite mirror ──
-    const yieldedLessonIds: string[] = []
+    // ── Bước 4: Ghi graph Neo4j (episode + actions + errors + rels) ──
+    // FIX (TAUGHT edge): ghi graph TRƯỚC khi consolidate lesson — node
+    // ErrorOccurrence phải tồn tại trước khi linkErrorTaughtLesson chạy
+    // MATCH (không thì cạnh TAUGHT mất thầm lặng — 0 cạnh trong toàn bộ
+    // graph cũ). YIELDED lesson ids nối RIÊNG sau bước 5 qua
+    // linkEpisodeYieldedLessons (lesson chưa tồn tại ở thời điểm này).
+    const graphOk = await writeEpisodeGraph({
+      episode,
+      actions,
+      errors: errors.map(e => ({
+        id: e.id, rawMessage: e.rawMessage, category: e.category,
+        rootCause: e.rootCause, manifestation: e.manifestation ?? null,
+        occurredAt: e.occurredAt, resolved: e.resolved, fixSummary: e.fixSummary ?? null,
+      })),
+      resolvedBy,
+      yieldedLessonIds: [], // nối riêng sau khi consolidate (bước 5)
+      similarTo: similarFiltered.map(s => ({ episodeId: s.episodeId, score: s.score })),
+    })
 
-    // ── Bước 5: Lỗi đã resolve → sinh/merge Lesson ──
+    // ── Bước 5: Lỗi đã resolve → sinh/merge Lesson (TAUGHT giờ match node) ──
+    const yieldedLessonIds: string[] = []
     for (const err of errors.slice(0, 5)) {
       if (!err.resolved || !err.fixSummary) continue
       const consolidated = await consolidateLesson({
@@ -234,6 +252,11 @@ export async function recordEpisodeFromRun(input: RecordEpisodeInput): Promise<R
       }
     }
 
+    // (Episode)-[:YIELDED]->(Lesson) — sau khi lesson đã tồn tại
+    if (yieldedLessonIds.length > 0) {
+      await linkEpisodeYieldedLessons(episode.id, yieldedLessonIds).catch(() => 0)
+    }
+
     // ── Bước 6: Validate lessons PRE-ACT đã áp dụng (EVALUATE nhịp 3) ──
     const validation = await validateAppliedLessons(
       input.appliedLessonIds,
@@ -243,21 +266,6 @@ export async function recordEpisodeFromRun(input: RecordEpisodeInput): Promise<R
       result.lessonsValidated = validation.validated
       result.lessonsFailed = validation.failed
     }
-
-    // Ghi graph (episode + actions + errors + rels) — sau consolidate để có
-    // YIELDED lesson ids đủ
-    const graphOk = await writeEpisodeGraph({
-      episode,
-      actions,
-      errors: errors.map(e => ({
-        id: e.id, rawMessage: e.rawMessage, category: e.category,
-        rootCause: e.rootCause, manifestation: e.manifestation ?? null,
-        occurredAt: e.occurredAt, resolved: e.resolved, fixSummary: e.fixSummary ?? null,
-      })),
-      resolvedBy,
-      yieldedLessonIds,
-      similarTo: similarFiltered.map(s => ({ episodeId: s.episodeId, score: s.score })),
-    })
 
     // SQLite mirror (fallback + dashboard)
     await upsertEpisodeRecord({

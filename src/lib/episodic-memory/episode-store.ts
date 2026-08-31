@@ -184,7 +184,20 @@ export async function searchSimilarEpisodes(params: {
       const episodeId = String(payload.episode_id ?? p.id)
       hits.push({ episodeId, score, payload })
     }
-    return hits.sort((a, b) => b.score - a.score).slice(0, topK)
+    const topHits = hits.sort((a, b) => b.score - a.score).slice(0, topK)
+    // FIX ("càng dùng càng sống" chết): touch các episode vừa được retrieve —
+    // cập nhật access_count + last_accessed → decay (Q4) sẽ loại chúng ra.
+    // Trước đây touchEpisode 0 caller → episode được dùng vẫn bị decay như
+    // không dùng. Fire-and-forget fail-open, không block search.
+    if (topHits.length > 0) {
+      void (async () => {
+        const { touchEpisode } = await import('./episodic-neo4j')
+        for (const h of topHits) {
+          await touchEpisode(h.episodeId).catch(() => {})
+        }
+      })().catch(() => {})
+    }
+    return topHits
   } catch (err) {
     console.error('[Episodic] searchSimilarEpisodes failed:', err instanceof Error ? err.message : String(err))
     return []

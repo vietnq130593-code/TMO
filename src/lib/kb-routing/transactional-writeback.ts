@@ -167,27 +167,28 @@ export async function writebackToKBTransactionally(params: {
     }
   }
 
-  // Update step statuses based on result. WritebackResult doesn't carry
-  // per-step failure info, so we infer from counts. This is best-effort
-  // — the actual failure was already logged inside writebackToKB.
+  // Update step statuses based on result.
+  // FIX (mất dữ liệu thầm lặng): trước đây MỌI step luôn 'completed' kể cả
+  // khi store thật fail (writebackToKB nuốt lỗi từng step, chỉ warn) →
+  // batch 'completed' → reconcilePendingWritebacks (chỉ retry
+  // pending|partial|failed) KHÔNG BAO GIỜ retry → tri thức chat đã hứa
+  // ghi mất vĩnh viễn, metric writebacks.completed phình. Giờ writebackToKB
+  // surface stepErrors lên result — step nào fail đánh 'failed' + batch
+  // 'partial' → reconcile tự retry.
   const steps: StepStatus[] = JSON.parse(JSON.stringify(DEFAULT_STEPS)) // deep clone
-  const stepMap = new Map(steps.map(s => [s.step, s]))
+  const stepErrors = result.stepErrors ?? {}
 
-  // For each step: >0 means success, ==0 means "nothing to write OR failed"
-  // (we mark completed in both cases for v1 — acceptable since the actual
-  // failure was already logged inside writebackToKB).
-  if (result.chunksWritten > 0) {
-    stepMap.get('qdrant')!.status = 'completed'
-  } else {
-    stepMap.get('qdrant')!.status = 'completed' // skipped = nothing to write = OK
+  for (const s of steps) {
+    const err = stepErrors[s.step]
+    if (typeof err === 'string' && err.length > 0) {
+      s.status = 'failed'
+      s.lastError = err.slice(0, 500)
+    } else {
+      // Không có lỗi step → completed (bao gồm cả "không có gì để ghi" —
+      // skipped là kết quả hợp lệ, không phải failure)
+      s.status = 'completed'
+    }
   }
-
-  stepMap.get('neo4j_entities')!.status = 'completed'
-  stepMap.get('neo4j_relationships')!.status = 'completed'
-  stepMap.get('memory')!.status = 'completed' // memory optional
-  // Always mark insight + log as completed (writebackToKB always tries them)
-  stepMap.get('insight')!.status = 'completed'
-  stepMap.get('log')!.status = 'completed'
 
   // If writebackToKB threw, mark all steps as failed with the catastrophic error
   if (catastrophicError) {

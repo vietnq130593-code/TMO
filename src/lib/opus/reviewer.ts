@@ -291,9 +291,15 @@ export async function runOpusReview(
     console.warn('[Opus][reviewer] Không persist được AgentRunRecord running (fail-open):', err instanceof Error ? err.message : String(err))
   }
 
-  let verdict: OpusVerdict
+  let verdict!: OpusVerdict
   let llm: LLMResult | null = null
   let failed = false
+  // FIX (BUG: fail-safe ESCALATE xóa sổ issue): verdict fallback có issues=[] —
+  // nếu vẫn sync ledger, syncLedgerFromVerdict sẽ auto-resolve TOÀN BỘ issue
+  // đang mở ( coi "không tái xuất hiện = đã sửa") chỉ vì model/DB fail →
+  // mất dữ liệu vĩnh viễn + vòng review sau đọc ledger sạch → STOP sai sự thật.
+  // Cờ này chặn bước 7 sync ledger khi verdict không đáng tin.
+  let usedFallback = false
   try {
     // 2. Profile + dossier
     const profile = await getOpusProfile()
@@ -341,12 +347,14 @@ export async function runOpusReview(
       } catch (secondErr) {
         const secondReason = secondErr instanceof Error ? secondErr.message : String(secondErr)
         verdict = buildSafeEscalateVerdict(`${firstReason} → ${secondReason}`)
+        usedFallback = true
         console.warn(`[Opus][reviewer] Parse verdict lần 2 vẫn fail — FAIL-SAFE ESCALATE: ${secondReason}`)
       }
     }
   } catch (err) {
     // Lỗi hạ tầng (DB dossier / LLM chết hẳn) → verdict ESCALATE an toàn
     failed = true
+    usedFallback = true
     const reason = err instanceof Error ? err.message : String(err)
     verdict = buildSafeEscalateVerdict(reason)
     console.error('[Opus][reviewer] runOpusReview lỗi hạ tầng — verdict ESCALATE an toàn:', reason)
@@ -354,7 +362,7 @@ export async function runOpusReview(
 
   const durationMs = Date.now() - startedAt
 
-  // 5. Neo mục tiêu review (messageId assistant + runRef) cho OpusReview row
+  // Neo mục tiêu review (messageId assistant + runRef) cho OpusReview row
   let reviewMessageId: string | null = null
   let runRef: string | null = null
   try {
@@ -363,55 +371,65 @@ export async function runOpusReview(
     runRef = target.runRef
   } catch { /* fail-open — để null */ }
 
-  // 6. Persist OpusReview
-  const review = await db.opusReview.create({
-    data: {
-      sessionId,
-      runRef,
-      messageId: reviewMessageId,
-      decision: verdict.decision,
-      verdict: JSON.stringify(verdict),
-      triggerMode,
-      model: llm?.model ?? null,
-      tokensUsed: llm?.tokensUsed ?? null,
-      durationMs,
-    },
-  })
-
-  // 7. Sync Issue Ledger từ verdict
   try {
-    await syncLedgerFromVerdict({
-      sessionId,
-      runRef,
-      reviewId: review.id,
-      issues: verdict.issues,
+    // 6. Persist OpusReview
+    const review = await db.opusReview.create({
+      data: {
+        sessionId,
+        runRef,
+        messageId: reviewMessageId,
+        decision: verdict.decision,
+        verdict: JSON.stringify(verdict),
+        triggerMode,
+        model: llm?.model ?? null,
+        tokensUsed: llm?.tokensUsed ?? null,
+        durationMs,
+      },
     })
-  } catch (err) {
-    console.warn('[Opus][reviewer] syncLedgerFromVerdict lỗi (review vẫn lưu):', err instanceof Error ? err.message : String(err))
-  }
 
-  console.log(
-    `[Opus][reviewer] session=${sessionId} review=${review.id.slice(0, 12)}… decision=${verdict.decision} trigger=${triggerMode} model=${llm?.model ?? 'n/a'} duration=${(durationMs / 1000).toFixed(1)}s issues=${verdict.issues.length}`
-  )
-
-  // 8. Đóng AgentRunRecord của chính review này (try/finally semantics)
-  try {
-    if (runRecord) {
-      await db.agentRunRecord.updateMany({
-        where: { id: runRecord.id, status: 'running' },
-        data: {
-          status: failed ? 'failed' : 'completed',
-          stopReason: failed ? 'error' : 'complete',
-          complete: !failed,
-          tokensUsed: llm?.tokensUsed ?? null,
-          durationMs,
-          completedAt: new Date(),
-        },
-      })
+    // 7. Sync Issue Ledger từ verdict — CHỈ khi verdict thật từ model.
+    // Bỏ qua hoàn toàn khi fallback: issues=[] sẽ bị syncLedgerFromVerdict
+    // hiểu là "model xác nhận mọi issue đã hết" → đóng oan toàn bộ sổ.
+    if (!usedFallback) {
+      try {
+        await syncLedgerFromVerdict({
+          sessionId,
+          runRef,
+          reviewId: review.id,
+          issues: verdict.issues,
+        })
+      } catch (err) {
+        console.warn('[Opus][reviewer] syncLedgerFromVerdict lỗi (review vẫn lưu):', err instanceof Error ? err.message : String(err))
+      }
+    } else {
+      console.warn('[Opus][reviewer] Bỏ qua sync Issue Ledger — verdict fallback không đáng tin (chống đóng oan issue đang mở)')
     }
-  } catch (err) {
-    console.warn('[Opus][reviewer] Đóng AgentRunRecord lỗi (fail-open):', err instanceof Error ? err.message : String(err))
-  }
 
-  return { review, verdict }
+    console.log(
+      `[Opus][reviewer] session=${sessionId} review=${review.id.slice(0, 12)}… decision=${verdict.decision} trigger=${triggerMode} model=${llm?.model ?? 'n/a'} duration=${(durationMs / 1000).toFixed(1)}s issues=${verdict.issues.length}${usedFallback ? ' [FALLBACK]' : ''}`
+    )
+
+    return { review, verdict }
+  } finally {
+    // 8. Đóng AgentRunRecord của chính review này — LUÔN chạy kể cả khi
+    // db.opusReview.create throw (trước đây: create fail → record kẹt
+    // status='running' vĩnh viễn = zombie trong Thought Progress panel).
+    try {
+      if (runRecord) {
+        await db.agentRunRecord.updateMany({
+          where: { id: runRecord.id, status: 'running' },
+          data: {
+            status: failed ? 'failed' : 'completed',
+            stopReason: failed ? 'error' : 'complete',
+            complete: !failed,
+            tokensUsed: llm?.tokensUsed ?? null,
+            durationMs,
+            completedAt: new Date(),
+          },
+        })
+      }
+    } catch (err) {
+      console.warn('[Opus][reviewer] Đóng AgentRunRecord lỗi (fail-open):', err instanceof Error ? err.message : String(err))
+    }
+  }
 }

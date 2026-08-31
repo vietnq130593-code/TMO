@@ -68,13 +68,18 @@ async function getLearningStats() {
     else if (g.status === 'rejected') writebacks.rejected = n
   }
 
-  // Neo4j: tri thức Agent tự học từ chat (source='auto-learn') — best-effort
+  // Neo4j: tri thức Agent tự học từ chat — best-effort.
+  // FIX (dưới đếm tri thức legacy): legacy path ghi source = `auto-learn:${agentName}`
+  // (auto-learn.ts:275/305) và sync-neo4j ghi nguyên source đó — phép `=`
+  // 'auto-learn' exact KHÔNG match. Doc-id legacy là `auto-learn-…` (dash)
+  // cũng không khớp prefix 'auto-learn:' (colon). Chuyển sang STARTS WITH
+  // 'auto-learn' bắt cả writeback-path (source='auto-learn') lẫn legacy.
   let kgAutoLearn: { entities: number; relationships: number; documents: number } | null = null
   try {
     const [entRes, relRes, docRes] = await Promise.all([
-      readCypher<{ c: unknown }>(`MATCH (n) WHERE n.source = 'auto-learn' RETURN count(n) AS c`),
-      readCypher<{ c: unknown }>(`MATCH ()-[r]->() WHERE r.source = 'auto-learn' RETURN count(r) AS c`),
-      readCypher<{ c: unknown }>(`MATCH (d:Document) WHERE d.id STARTS WITH 'auto-learn:' RETURN count(d) AS c`),
+      readCypher<{ c: unknown }>(`MATCH (n) WHERE n.source STARTS WITH 'auto-learn' RETURN count(n) AS c`),
+      readCypher<{ c: unknown }>(`MATCH ()-[r]->() WHERE r.source STARTS WITH 'auto-learn' RETURN count(r) AS c`),
+      readCypher<{ c: unknown }>(`MATCH (d:Document) WHERE d.id STARTS WITH 'auto-learn:' OR d.id STARTS WITH 'auto-learn-' RETURN count(d) AS c`),
     ])
     kgAutoLearn = {
       entities: Number(entRes[0]?.c ?? 0),

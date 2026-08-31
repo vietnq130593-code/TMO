@@ -26,10 +26,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, message: serializeChatMessage(message) })
   } catch (err) {
     if (err instanceof OpusDispatchError) {
-      console.warn(`[Opus] POST dispatch: ${err.status} — ${err.message}`)
-      return NextResponse.json({ error: err.message }, { status: err.status })
+      console.warn(`[Opus] POST dispatch: ${err.status} [${err.code}] — ${err.message}`)
+      // FIX (UI 400-conflation): trả code máy-đọc-được để UI phân biệt
+      // "đã ban hành" (already_dispatched) với "STOP guard chặn" (stop_guard)
+      // và "verdict rác" (invalid_verdict) — trước đây UI coi mọi 400 là
+      // "đã ban hành trước đó" và hiện badge xanh sai sự thật.
+      return NextResponse.json({ error: err.message, code: err.code }, { status: err.status })
     }
     console.error('[Opus] POST dispatch error:', err)
-    return NextResponse.json({ error: 'Không ban hành được chỉ đạo của Opus' }, { status: 500 })
+    return NextResponse.json({ error: 'Không ban hành được chỉ đạo của Opus', code: 'dispatch_error' }, { status: 500 })
   }
 }

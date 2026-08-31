@@ -24,6 +24,8 @@ import {
   countLessonRecords,
   findAllLessonRecords,
   findRecentEpisodeRecords,
+  getAllLessonNodes,
+  getEpisodicGraphCounts,
   getErrorDashboard,
   getEscalationCandidates,
   getEpisodePointCount,
@@ -82,7 +84,7 @@ function sanitizeRow(row: Record<string, unknown>): Record<string, unknown> {
 
 export async function GET() {
   // ---- stats ----
-  let stats = { episodes: 0, lessons: 0, qdrantPoints: 0, lessonsNeedReview: 0 }
+  let stats = { episodes: 0, lessons: 0, qdrantPoints: 0, lessonsNeedReview: 0, source: 'sqlite-mirror' as 'sqlite-mirror' | 'neo4j' | 'mixed' }
   let statsError: string | null = null
   try {
     const [episodes, lessons, qdrantPoints, allLessons] = await Promise.all([
@@ -96,6 +98,24 @@ export async function GET() {
       lessons,
       qdrantPoints,
       lessonsNeedReview: allLessons.filter(l => !!l.needsReview).length,
+      source: 'sqlite-mirror',
+    }
+
+    // FIX (query learning data): SQLite mirror trống (deploy mới) nhưng graph
+    // Neo4j Aura có dữ liệu học tập thật → dùng counts từ graph thay vì hiện 0.
+    // Đây chính là tình huống hiện tại: 39 Episode + 17 Lesson trên Aura nhưng
+    // mirror trống → stats toàn 0, panel Lessons trống dù dữ liệu tồn tại.
+    if (episodes === 0 && lessons === 0) {
+      const graphCounts = await getEpisodicGraphCounts()
+      if (graphCounts && (graphCounts.episodes > 0 || graphCounts.lessons > 0)) {
+        stats = {
+          ...stats,
+          episodes: graphCounts.episodes,
+          lessons: graphCounts.lessons,
+          lessonsNeedReview: graphCounts.lessonsNeedReview,
+          source: 'neo4j',
+        }
+      }
     }
   } catch (err) {
     statsError = err instanceof Error ? err.message : String(err)
@@ -166,26 +186,51 @@ export async function GET() {
     }
   }
 
-  // ---- lessons (SQLite mirror) ----
+  // ---- lessons (SQLite mirror → fallback Neo4j graph) ----
   let lessons: Array<Record<string, unknown>> = []
   let lessonsError: string | null = null
+  let lessonsSource: 'sqlite-mirror' | 'neo4j' = 'sqlite-mirror'
   try {
     const rows = await findAllLessonRecords(0, LESSONS_LIMIT)
-    lessons = rows.map(r => ({
-      id: r.id,
-      statement: r.statement,
-      triggerCondition: r.triggerCondition,
-      rootCause: r.rootCause,
-      appliesTo: parseAppliesTo(r.appliesTo),
-      source: r.source,
-      confidence: r.confidence,
-      timesApplied: r.timesApplied,
-      timesValidated: r.timesValidated,
-      timesFailed: r.timesFailed,
-      needsReview: !!r.needsReview,
-      createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt,
-      updatedAt: r.updatedAt instanceof Date ? r.updatedAt.toISOString() : r.updatedAt,
-    }))
+    if (rows.length > 0) {
+      lessons = rows.map(r => ({
+        id: r.id,
+        statement: r.statement,
+        triggerCondition: r.triggerCondition,
+        rootCause: r.rootCause,
+        appliesTo: parseAppliesTo(r.appliesTo),
+        source: r.source,
+        confidence: r.confidence,
+        timesApplied: r.timesApplied,
+        timesValidated: r.timesValidated,
+        timesFailed: r.timesFailed,
+        needsReview: !!r.needsReview,
+        createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt,
+        updatedAt: r.updatedAt instanceof Date ? r.updatedAt.toISOString() : r.updatedAt,
+      }))
+    } else {
+      // FIX (query learning data): mirror trống → đọc lessons thẳng từ graph
+      // (tình huống deploy mới — dữ liệu học tập agents nằm trên AuraDB).
+      const graphLessons = await getAllLessonNodes(LESSONS_LIMIT)
+      if (graphLessons.length > 0) {
+        lessonsSource = 'neo4j'
+        lessons = graphLessons.map(l => ({
+          id: l.id,
+          statement: l.statement,
+          triggerCondition: l.triggerCondition,
+          rootCause: l.rootCause,
+          appliesTo: Array.isArray(l.appliesTo) ? l.appliesTo.map(String) : [],
+          source: l.source,
+          confidence: typeof l.confidence === 'number' ? l.confidence : 0,
+          timesApplied: Number(l.timesApplied ?? 0),
+          timesValidated: Number(l.timesValidated ?? 0),
+          timesFailed: Number(l.timesFailed ?? 0),
+          needsReview: l.needsReview === true,
+          createdAt: toIso(l.createdAt) ?? null,
+          updatedAt: toIso(l.updatedAt) ?? null,
+        }))
+      }
+    }
   } catch (err) {
     lessonsError = err instanceof Error ? err.message : String(err)
     console.error('[Episodic/Overview] lessons section error (fail-open):', err)
@@ -206,7 +251,7 @@ export async function GET() {
     errorDashboard: { rows: errorDashboard, error: errorDashboardError },
     escalations: { rows: escalations, error: escalationsError },
     recentEpisodes: { rows: recentEpisodes, source: recentEpisodesSource, error: recentEpisodesError },
-    lessons: { rows: lessons, error: lessonsError },
+    lessons: { rows: lessons, source: lessonsSource, error: lessonsError },
     taxonomy,
   })
 }

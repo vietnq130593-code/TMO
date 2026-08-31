@@ -670,56 +670,95 @@ export function isTransientLlmError(message: string): boolean {
  * được import (không gọi) trong master-orchestrator phantom path — FailurePattern
  * table 0 rows vĩnh viễn. Helper này chạy mỗi khi 1 step fail trong runWorkflow:
  *
- *   1. detectFailurePattern(tổng hợp errors trong SESSION này — scoping theo
+ *   1. detectFailurePattern(tổng hợp errors trong SESSION+STEP này — scoping theo
  *      stepId để 2 step khác nhau fail cùng lúc không bị tính "repeated")
- *   2. persistFailurePattern — row sống đầu tiên cho Layer 9
+ *   2. persistFailurePattern — upsert-increment (mỗi lần fail = +1 count)
  *   3. Pattern repeated_error (count >= 2, NGƯỠNG SAU taxonomy P1.2 — chỉ đếm
  *      error type systematic_x hoặc runtime, transient tự hồi) → persistAdaptationLog
  *      ghi nhận "cần đổi approach" (log thôi, chưa auto-apply — chờ đủ data)
  *
+ * FIX (dead-end end-to-end): trước đây gọi detectFailurePattern với
+ * previousErrors=[] + metrics toàn 0 → LUÔN trả null → `if (!pattern) return`
+ * → KHÔNG persist gì → FailurePattern mãi 0 rows → getFailureHintsForAgent
+ * (count>=2) LUÔN rỗng. Giờ: (a) lịch sử lỗi per (session,step) tích lũy
+ * in-memory làm previousErrors; (b) metrics token thật truyền xuống để
+ * resource_limit detector sống; (c) lần fail ĐẦU TIÊN vẫn persist seed row
+ * count=1 (upsert bên trong cộng dồn khi lặp lại).
+ *
  * Fire-and-forget từ call site; bên trong cũng tự catch toàn bộ.
  */
-async function detectAndPersistFailurePattern(sessionId: string, stepId: string, errorMessage: string): Promise<void> {
+const sessionStepErrorHistory = new Map<string, Array<{ type: string; message: string }>>()
+
+async function detectAndPersistFailurePattern(
+  sessionId: string,
+  stepId: string,
+  errorMessage: string,
+  metrics?: { totalTokensUsed: number; totalTokensBudgeted: number; totalTimeSpent: number }
+): Promise<void> {
   const { detectFailurePattern, recommendAdaptation, persistFailurePattern, persistAdaptationLog } = await import('@/lib/learning')
   try {
-    // Pattern detection trên CHÍNH session này (đúng scoping P1.2: lỗi giữa
-    // các workflow khác nhau không được tính là "repeated" trong 1 workflow).
+    const errorType = classifyWorkflowError(errorMessage)
+
+    // Tích lũy lịch sử lỗi per (session, step) — cap 30 entry chống phình
+    const key = `${sessionId}::${stepId}`
+    const history = sessionStepErrorHistory.get(key) ?? []
+    history.push({ type: errorType, message: errorMessage.slice(0, 300) })
+    sessionStepErrorHistory.set(key, history.slice(-30))
+
+    // Pattern detection trên CHÍNH session+step này (đúng scoping P1.2: lỗi
+    // giữa các step khác nhau không bị tính "repeated" — previousErrors là
+    // history trừ lỗi hiện tại vì detect tự cộng currentError vào)
     const pattern = detectFailurePattern(
-      { type: classifyWorkflowError(errorMessage), message: errorMessage.slice(0, 300) },
-      [], // previousErrors — pattern trong scope step hiện tại (P1.2: không
-          // gom errors từ step khác để tránh false repeated_error)
-      { totalTokensUsed: 0, totalTokensBudgeted: 0, totalTimeSpent: 0 },
+      { type: errorType, message: errorMessage.slice(0, 300) },
+      history.slice(0, -1),
+      metrics ?? { totalTokensUsed: 0, totalTokensBudgeted: 0, totalTimeSpent: 0 },
       null // historicalMetrics — có thể wired sau khi P1.1 cache sẵn
     )
 
-    if (!pattern) return
+    // Pattern để persist: detect được → dùng nguyên; KHÔNG detect được
+    // (lần fail đầu) → seed row count=1 để upsert-increment cộng dồn sau
+    const toPersist =
+      pattern ??
+      ({
+        id: `pattern-${Date.now()}`,
+        type: 'repeated_error',
+        count: 1,
+        lastOccurrence: new Date().toISOString(),
+        strategiesTried: [],
+        nextStrategy: 'change_fix_approach',
+        context: { taskType: 'code-team-workflow', routingMode: 'unknown', stepType: stepId },
+      } as NonNullable<typeof pattern>)
 
-    // Gắn sessionId thật (persistFailurePattern mặc định 'unknown')
-    pattern.context = {
-      taskType: 'code-team-workflow',
-      routingMode: 'unknown',
-      stepType: stepId,
-    }
+    const newCount = await persistFailurePattern({
+      ...toPersist,
+      context: {
+        ...toPersist.context,
+        taskType: 'code-team-workflow',
+        routingMode: 'unknown',
+        stepType: stepId,
+        sessionId,
+        errorType,
+      } as typeof toPersist.context,
+    })
 
-    await persistFailurePattern({ ...pattern, context: { ...pattern.context, sessionId } as typeof pattern.context })
-
-    // P1.3: chỉ khuyến nghị adaptation khi pattern nghiêm trọng (repeated ≥ 2)
-    if (pattern.type === 'repeated_error' && pattern.count >= 2) {
-      const decision = recommendAdaptation(pattern, null)
+    // P1.3: khuyến nghị adaptation khi pattern lặp đủ ngưỡng (count>=2 từ
+    // DB — sống sót qua restart, tin được hơn in-memory)
+    if (newCount >= 2) {
+      const decision = recommendAdaptation(toPersist, null)
       await persistAdaptationLog({
         id: `adapt-${sessionId}-${Date.now()}`,
         sessionId,
-        patternId: pattern.id,
-        fromStrategy: pattern.nextStrategy,
+        patternId: null, // upsert-increment: không track pattern id riêng
+        fromStrategy: toPersist.nextStrategy,
         toStrategy: decision.recommendedStrategy,
         reason: decision.reason,
         confidence: decision.confidence,
         successful: null, // pending — chưa auto-apply (P1.3 chỉ observe)
         createdAt: new Date().toISOString(),
       })
-      console.log(`[Workflow] Layer 9 P1.3 — pattern persisted + adaptation recommended: ${pattern.type} → ${decision.recommendedStrategy} (session ${sessionId.slice(0, 12)})`)
+      console.log(`[Workflow] Layer 9 P1.3 — pattern persisted + adaptation recommended: ${toPersist.type} count=${newCount} → ${decision.recommendedStrategy} (session ${sessionId.slice(0, 12)})`)
     } else {
-      console.log(`[Workflow] Layer 9 P1.3 — failure pattern persisted: ${pattern.type} (count=${pattern.count}, session ${sessionId.slice(0, 12)})`)
+      console.log(`[Workflow] Layer 9 P1.3 — failure pattern persisted: ${toPersist.type} (count=${newCount}, errorType=${errorType}, session ${sessionId.slice(0, 12)})`)
     }
   } catch (err) {
     // persistFailurePattern đã tự catch bên trong — chỉ log thêm tầng này
@@ -909,7 +948,7 @@ export async function runWorkflow(
       })
 
       // Skip TL analyze — go straight to pipeline
-      await runPipeline(preComputedRouting, sessionId, userRequest, safeEmit, startTime, isAborted, ctx, metricsCollector)
+      await runPipeline(preComputedRouting, sessionId, userRequest, safeEmit, startTime, isAborted, ctx, metricsCollector, effectiveTokenBudget)
       return
     }
 
@@ -987,7 +1026,7 @@ export async function runWorkflow(
         partsDefinition: fallbackDecision.parts,
       })
 
-      await runPipeline(fallbackDecision, sessionId, userRequest, safeEmit, startTime, isAborted, ctx, metricsCollector)
+      await runPipeline(fallbackDecision, sessionId, userRequest, safeEmit, startTime, isAborted, ctx, metricsCollector, effectiveTokenBudget)
       return
     }
 
@@ -1039,7 +1078,7 @@ export async function runWorkflow(
     })
 
     // ===== STEP 2: Run pipeline based on routing =====
-    await runPipeline(routingDecision, sessionId, userRequest, safeEmit, startTime, isAborted, ctx, metricsCollector)
+    await runPipeline(routingDecision, sessionId, userRequest, safeEmit, startTime, isAborted, ctx, metricsCollector, effectiveTokenBudget)
   } catch (err) {
     // Phase 2 SMOLAB Proposal 7 — flush Layer 9 metrics on any catastrophic
     // failure (fire-and-forget; never crash the workflow here).
@@ -1076,6 +1115,9 @@ async function runPipeline(
   // points (escalate, abort, completed) — fire-and-forget, never
   // blocks the workflow.
   metricsCollector: MetricsCollector,
+  // Layer 9 P1.1: history-adjusted budget (từ runWorkflow) — dùng cho
+  // resource_limit detector của detectAndPersistFailurePattern
+  tokenBudget: number,
 ): Promise<void> {
   const pipeline = getPipeline(routingDecision.mode, routingDecision.tier)
   let spec = routingDecision.spec || userRequest // Spec gốc cho toàn bộ pipeline
@@ -1245,7 +1287,19 @@ async function runPipeline(
       //      ghi nhận quyết định cần thiết-ứng (chưa auto-apply — P1.3 chỉ lưu,
       //      auto-apply chờ đủ dữ liệu để tin)
       // Fire-and-forget: không bao giờ block workflow vì learning side-channel.
-      void detectAndPersistFailurePattern(sessionId, stepId, agentResult.content).catch((pErr) => {
+      // FIX (metrics thật): truyền token đã dùng của step + budget hiện tại
+      // xuống detector — trước đây metrics toàn 0 giữ tokenEfficiency=0 →
+      // resource_limit detector chết.
+      void detectAndPersistFailurePattern(
+        sessionId,
+        stepId,
+        agentResult.content,
+        {
+          totalTokensUsed: typeof agentResult.tokensUsed === 'number' ? agentResult.tokensUsed : 0,
+          totalTokensBudgeted: tokenBudget,
+          totalTimeSpent: agentResult.duration,
+        }
+      ).catch((pErr) => {
         console.warn('[Workflow] Layer 9 P1.3 pattern persistence failed (non-fatal):', pErr instanceof Error ? pErr.message : String(pErr))
       })
     }

@@ -326,11 +326,16 @@ export async function finalizeGoalLoopRun(args: { job: GoalLoopJob; result: Goal
         console.log(`[Writeback][durable job ${job.id}] batchId=${batchId} entities=${result.entitiesWritten} rels=${result.relationshipsWritten} chunks=${result.chunksWritten} memory=${result.memoryStored}`)
       }).catch(err => {
         console.error('[Writeback][durable] Failed, falling back to autoLearn:', err instanceof Error ? err.message : String(err))
-        if (shouldAutoLearn(0.5, hasAgent)) {
+        // FIX (confidence giả 0.5/0.6): dùng confidence THẬT từ verdict trọng
+        // tài của goal-loop (mirror BƯỚC 3) — trước đây hardcode 0.5/0.6 làm
+        // AUTO_LEARN_MIN_CONFIDENCE cao hơn đường này im lặng ngừng học + record
+        // audit sai confidence.
+        const fallbackConfidence = result.goalLoop?.evaluatorConfidence ?? 0.6
+        if (shouldAutoLearn(fallbackConfidence, hasAgent)) {
           autoLearnFromAnswer({
             query: userMessage,
             answer: content,
-            confidence: 0.6,
+            confidence: fallbackConfidence,
             agentId: agentProfileId!,
             agentName: jobInput?.agentName || 'unknown',
             provider: jobInput!.agentProvider,

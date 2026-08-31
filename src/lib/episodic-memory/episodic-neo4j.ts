@@ -240,6 +240,32 @@ export async function writeEpisodeGraph(params: {
 // ==================== KB BRIDGE (nguyên tắc A.1 #3) ====================
 
 /**
+ * FIX (TAUGHT edge không bao giờ được tạo): link (Episode)-[:YIELDED]->(Lesson)
+ * RIÊNG sau khi consolidate — trước đây recorder chạy consolidateLesson TRƯỚC
+ * writeEpisodeGraph, nên linkErrorTaughtLesson (MATCH ErrorOccurrence chưa
+ * tồn tại) mất thầm lặng → cạnh TAUGHT không bao giờ có trong graph.
+ * Giờ graph ghi trước, consolidate sau (TAUGHT match được node), rồi hàm
+ * này nối YIELDED cho các lesson vừa sinh/merge.
+ */
+export async function linkEpisodeYieldedLessons(episodeId: string, lessonIds: string[]): Promise<number> {
+  if (lessonIds.length === 0) return 0
+  try {
+    await ensureEpisodicSchema()
+    await executeCypher(
+      `UNWIND $lessonIds AS lid
+       MATCH (e:Episode {id: $episodeId})
+       MATCH (l:Lesson {id: lid})
+       MERGE (e)-[:YIELDED]->(l)`,
+      { episodeId, lessonIds: lessonIds.slice(0, 50) }
+    )
+    return lessonIds.length
+  } catch (err) {
+    console.error('[Episodic] linkEpisodeYieldedLessons failed:', err instanceof Error ? err.message : String(err))
+    return 0
+  }
+}
+
+/**
  * Nối Episode/Lesson/ErrorOccurrence sang node KB semantic hiện có
  * (Concept|Technology|Framework|...) THEO TÊN entity xuất hiện trong text.
  * "Episode về Neo4j query fail nối node Neo4j trong KB → khi hỏi về Neo4j,
@@ -481,10 +507,17 @@ export async function decayEpisodes(params?: {
   const factor = params?.factor ?? 0.9
   try {
     await ensureEpisodicSchema()
+    // FIX (compounding decay): trước đây MỌI lần gọi endpoint lại ×factor cho
+    // episode cũ (bấm nút Decay 10 lần → ×0.9¹⁰ = ×0.35). Giờ dùng marker
+    // last_decayed — mỗi chu kỳ `days` chỉ decay 1 LẦN (coalesce về
+    // last_accessed khi chưa từng decay). Episode được touch (search/read)
+    // thì last_accessed mới → WHERE loại khỏi decay ("càng dùng càng sống").
     const rows = await executeCypher(
       `MATCH (e:Episode)
        WHERE e.last_accessed < datetime() - duration('P' + $days + 'D')
-       SET e.importance = e.importance * $factor
+         AND coalesce(e.last_decayed, e.last_accessed) < datetime() - duration('P' + $days + 'D')
+       SET e.importance = e.importance * $factor,
+           e.last_decayed = datetime()
        RETURN count(e) AS n`,
       { days: String(days), factor }
     )
@@ -567,6 +600,86 @@ export async function getRecentEpisodes(limit = 20): Promise<Array<Record<string
     )
   } catch {
     return []
+  }
+}
+
+/**
+ * FIX (query learning data): liệt kê Lesson từ Neo4j graph — fallback cho
+ * overview route khi SQLite mirror trống (deploy mới: mirror chưa được
+ * backfill nhưng graph Aura đã có dữ liệu học tập của agents). Trước đây
+ * panel "Lessons" + stats đọc MỖI mirror → 17 Lesson trên graph vô hình.
+ */
+export async function getAllLessonNodes(limit = 50): Promise<Array<{
+  id: string
+  statement: string
+  triggerCondition: string | null
+  rootCause: string | null
+  appliesTo: string[] | null
+  source: string | null
+  confidence: number
+  timesApplied: number
+  timesValidated: number
+  timesFailed: number
+  needsReview: boolean
+  createdAt: unknown
+  updatedAt: unknown
+}>> {
+  try {
+    await ensureEpisodicSchema()
+    const rows = await readCypher(
+      `MATCH (l:Lesson)
+       RETURN l.id AS id, l.statement AS statement, l.trigger_condition AS triggerCondition,
+              l.root_cause AS rootCause, l.applies_to AS appliesTo, l.source AS source,
+              l.confidence AS confidence, l.times_applied AS timesApplied,
+              l.times_validated AS timesValidated, l.times_failed AS timesFailed,
+              l.needs_review AS needsReview, l.created_at AS createdAt, l.updated_at AS updatedAt
+       ORDER BY coalesce(l.confidence, 0) DESC
+       LIMIT toInteger($limit)`,
+      { limit }
+    )
+    return rows as Array<{
+      id: string
+      statement: string
+      triggerCondition: string | null
+      rootCause: string | null
+      appliesTo: string[] | null
+      source: string | null
+      confidence: number
+      timesApplied: number
+      timesValidated: number
+      timesFailed: number
+      needsReview: boolean
+      createdAt: unknown
+      updatedAt: unknown
+    }>
+  } catch {
+    return []
+  }
+}
+
+/**
+ * FIX (query learning data): đếm Episode/Lesson từ Neo4j graph — fallback
+ * stats khi SQLite mirror trống (deploy mới giữ graph cũ).
+ */
+export async function getEpisodicGraphCounts(): Promise<{ episodes: number; lessons: number; lessonsNeedReview: number } | null> {
+  try {
+    await ensureEpisodicSchema()
+    const rows = await readCypher<{ episodes: unknown; lessons: unknown; needReview: unknown }>(
+      `OPTIONAL MATCH (e:Episode)
+       WITH count(e) AS episodes
+       OPTIONAL MATCH (l:Lesson)
+       WITH episodes, count(l) AS lessons,
+             sum(CASE WHEN l.needs_review = true THEN 1 ELSE 0 END) AS needReview
+       RETURN episodes, lessons, needReview`
+    )
+    if (rows.length === 0) return null
+    return {
+      episodes: Number(rows[0]?.episodes ?? 0),
+      lessons: Number(rows[0]?.lessons ?? 0),
+      lessonsNeedReview: Number(rows[0]?.needReview ?? 0),
+    }
+  } catch {
+    return null
   }
 }
 

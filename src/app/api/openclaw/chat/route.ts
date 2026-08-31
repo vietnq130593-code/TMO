@@ -1138,11 +1138,18 @@ export async function POST(request: NextRequest) {
           }).catch(err => {
             console.error('[Writeback] Failed, falling back to autoLearn:', err instanceof Error ? err.message : String(err))
             // Fallback: old auto-learn path (writes to SQLite buffer)
-            if (shouldAutoLearn(0.5, hasAgent)) {
+            // FIX (confidence giả 0.5/0.6): dùng confidence THẬT (verdict
+            // trọng tài của ReAct loop → KB pre-search → 0.6 trung tính cuối)
+            // — trước đây hardcode 0.5/0.6: nếu AUTO_LEARN_MIN_CONFIDENCE nâng
+            // lên 0.7 thì đường fallback im lặng ngừng học; record lưu
+            // confidence giả 0.6 làm sai audit/lọc sau này.
+            const fallbackConfidence =
+              reactResult.goalLoop?.evaluatorConfidence ?? kbSearchResult?.confidence ?? 0.6
+            if (shouldAutoLearn(fallbackConfidence, hasAgent)) {
               autoLearnFromAnswer({
                 query: lastUserContent,
                 answer: content,
-                confidence: 0.6,
+                confidence: fallbackConfidence,
                 agentId: agentProfileId!,
                 agentName: agentProfileName || 'unknown',
                 provider: agentProvider!,
