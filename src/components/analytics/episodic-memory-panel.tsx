@@ -41,12 +41,17 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
+import { Calendar } from '@/components/ui/calendar'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { toast } from 'sonner'
 import {
   Loader2, RefreshCw, Activity, Brain, BookMarked, Database, AlertTriangle,
   Hourglass, Plus, CheckCircle2, XCircle, ChevronDown, ChevronRight, Check,
-  GraduationCap, ListChecks, Layers,
+  GraduationCap, ListChecks, Layers, ShieldCheck, Calendar as CalendarIcon, X,
+  History,
 } from 'lucide-react'
+import { format } from 'date-fns'
+import type { DateRange } from 'react-day-picker'
 
 // ==================== Types (mirror /api/episodic/*) ====================
 
@@ -219,11 +224,26 @@ function sourceBadge(source: string): { label: string; className: string } {
 
 const POLL_INTERVAL_MS = 15_000
 
-export function EpisodicMemoryPanel() {
+interface EpisodicMemoryPanelProps {
+  /** v1.1 — ALISTA: null = poll live (default), {from,to} = chế độ lịch sử */
+  analyticsRange?: { from: string; to: string } | null
+  /** Callback khi owner chọn khoảng ngày (popover apply) hoặc ✕ để clear (null) */
+  onAnalyticsRangeChange?: (range: { from: string; to: string } | null) => void
+}
+
+export function EpisodicMemoryPanel({ analyticsRange, onAnalyticsRangeChange }: EpisodicMemoryPanelProps = {}) {
+  const rangeActive = !!analyticsRange
   const [data, setData] = useState<OverviewData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const [lastUpdated, setLastUpdated] = useState<string | null>(null)
+
+  // v1.1 — ALISTA Kiểm tra toàn diện (POST /api/alista/check + poll GET)
+  const [alistaRunning, setAlistaRunning] = useState(false)
+
+  // v1.1 — Range picker draft (chưa apply khi đang chọn)
+  const [rangeDraft, setRangeDraft] = useState<DateRange | undefined>(undefined)
+  const [popoverOpen, setPopoverOpen] = useState(false)
 
   // Dạy bài học (form inline)
   const [teachOpen, setTeachOpen] = useState(false)
@@ -251,7 +271,11 @@ export function EpisodicMemoryPanel() {
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch('/api/episodic/overview', { cache: 'no-store' })
+      // v1.1: range mode dùng ?from=&to= thay cho poll mặc định
+      const url = analyticsRange
+        ? `/api/episodic/overview?from=${encodeURIComponent(analyticsRange.from)}&to=${encodeURIComponent(analyticsRange.to)}`
+        : '/api/episodic/overview'
+      const res = await fetch(url, { cache: 'no-store' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = (await res.json()) as OverviewData
       setData(json)
@@ -263,7 +287,7 @@ export function EpisodicMemoryPanel() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [analyticsRange?.from, analyticsRange?.to])
 
   useEffect(() => {
     let cancelled = false
@@ -272,12 +296,17 @@ export function EpisodicMemoryPanel() {
       await fetchData()
     }
     void poll()
-    const interval = setInterval(poll, POLL_INTERVAL_MS)
+    // v1.1: range mode DỪNG poll (chỉ fetch 1 lần khi range thay đổi).
+    // Live mode: poll 15s như cũ.
+    let interval: ReturnType<typeof setInterval> | null = null
+    if (!rangeActive) {
+      interval = setInterval(poll, POLL_INTERVAL_MS)
+    }
     return () => {
       cancelled = true
-      clearInterval(interval)
+      if (interval) clearInterval(interval)
     }
-  }, [fetchData])
+  }, [fetchData, rangeActive])
 
   // ---- Dạy bài học (POST /api/episodic/lessons) ----
   const handleTeachSubmit = useCallback(async () => {
@@ -391,6 +420,99 @@ export function EpisodicMemoryPanel() {
     }
   }, [expandedEpisodeId, episodeDetails])
 
+  // ---- v1.1 — ALISTA Kiểm tra toàn diện (POST + poll) ----
+  const handleAlistaCheck = useCallback(async () => {
+    if (alistaRunning) return
+    setAlistaRunning(true)
+    toast.info('ALISTA: bắt đầu kiểm tra toàn diện', {
+      description: 'Pipeline 7 bước tuần tự — Tools · Runs · Escalations · Domain · 3 Layers · Self · DB+Memory+Learning',
+    })
+    try {
+      // (1) POST /api/alista/check — fire-and-forget, returns 202 + checkId (UUID)
+      // FIX: dùng checkId từ response trực tiếp (trước đây đoán qua /checks → id TaskExecution không khớp state Map)
+      const postRes = await fetch('/api/alista/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      })
+      if (!postRes.ok && postRes.status !== 202) {
+        const errJson = await postRes.json().catch(() => ({}))
+        throw new Error(errJson.error || `HTTP ${postRes.status}`)
+      }
+      const postJson = (await postRes.json()) as { checkId?: string }
+      const checkId = postJson.checkId
+      if (!checkId) {
+        throw new Error('POST không trả về checkId')
+      }
+      // (2) Poll GET /api/alista/check?checkId=… mỗi 2s tối đa 300s
+      const deadline = Date.now() + 300_000
+      let lastStatus = 'running'
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 2000))
+        try {
+          const pollRes = await fetch(`/api/alista/check?checkId=${encodeURIComponent(checkId)}`, { cache: 'no-store' })
+          if (pollRes.ok) {
+            const state = (await pollRes.json()) as {
+              status: string
+              steps?: Array<{ id: number; label: string; status: string; proposalCount?: number }>
+              proposalsCreated?: Array<{ id: string; title: string }>
+              durationMs?: number
+              deadlineMet?: boolean
+              reason?: string
+              error?: string
+            }
+            lastStatus = state.status || 'running'
+            if (state.status === 'completed' || state.status === 'failed') {
+              const proposalCount = state.proposalsCreated?.length ?? 0
+              const stepCount = state.steps?.length ?? 0
+              const duration = state.durationMs ? Math.round(state.durationMs / 1000) : 0
+              if (state.status === 'completed') {
+                toast.success('Kiểm tra toàn diện hoàn tất', {
+                  description: `${proposalCount} đề xuất mới gửi Self-Direction · ${stepCount} bước · ${duration}s · deadlineMet=${state.deadlineMet} · ${state.reason || ''}`,
+                })
+              } else {
+                toast.error('Kiểm tra toàn diện gặp lỗi', {
+                  description: state.error || `Trạng thái: ${state.status} · ${state.reason || ''}`,
+                })
+              }
+              // Refresh data để thấy proposal mới
+              void fetchData()
+              return
+            }
+          }
+        } catch { /* retry */ }
+      }
+      // Timeout 300s mà chưa xong
+      toast.warning('Kiểm tra toàn diện vẫn đang chạy', {
+        description: `Đã poll 300s, trạng thái cuối: ${lastStatus}. Xem Self-Direction module để xem đề xuất khi pipeline hoàn tất.`,
+      })
+    } catch (err) {
+      toast.error('Không chạy được ALISTA check', {
+        description: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setAlistaRunning(false)
+    }
+  }, [alistaRunning, fetchData])
+
+  // ---- v1.1 — Range picker apply / clear ----
+  const applyRange = useCallback(() => {
+    if (!rangeDraft?.from || !rangeDraft?.to) return
+    const from = format(rangeDraft.from, 'yyyy-MM-dd')
+    const to = format(rangeDraft.to, 'yyyy-MM-dd')
+    onAnalyticsRangeChange?.({ from, to })
+    setPopoverOpen(false)
+    toast.info(`Đang xem dữ liệu lịch sử: ${format(rangeDraft.from, 'dd/MM')} → ${format(rangeDraft.to, 'dd/MM')}`, {
+      description: 'Polling dừng lại — fetch 1 lần. Bấm ✕ để trở về live mode.',
+    })
+  }, [rangeDraft, onAnalyticsRangeChange])
+
+  const clearRange = useCallback(() => {
+    onAnalyticsRangeChange?.(null)
+    setRangeDraft(undefined)
+    toast.info('Trở về live mode (poll 15s)')
+  }, [onAnalyticsRangeChange])
+
   const stats = data?.stats
   const dashboardRows = data?.errorDashboard.rows ?? []
   const escalations = data?.escalations.rows ?? []
@@ -403,7 +525,7 @@ export function EpisodicMemoryPanel() {
     <div className="space-y-4">
       {/* ===== Toolbar ===== */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button
             variant="outline"
             size="sm"
@@ -424,11 +546,76 @@ export function EpisodicMemoryPanel() {
             {decayRunning ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Hourglass className="h-3.5 w-3.5 mr-1.5" />}
             Chạy decay
           </Button>
+          {/* v1.1 — ALISTA: nút Kiểm tra toàn diện (chạy pipeline 7 bước ngay thay vì chờ 23h30) */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs border-teal-700/60 bg-teal-950/40 text-teal-300 hover:bg-teal-900/40 hover:text-teal-200"
+            onClick={() => void handleAlistaCheck()}
+            disabled={alistaRunning}
+            title="Chạy pipeline Kiểm tra toàn diện ngay (7 nhiệm vụ tuần tự, budget 10 phút) — thay vì chờ 23h30"
+          >
+            {alistaRunning ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5 mr-1.5" />}
+            Kiểm tra toàn diện
+          </Button>
+          {/* v1.1 — ALISTA: bộ chọn khoảng ngày (từ ngày → đến ngày) */}
+          <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs border-stone-700 bg-stone-900/60 text-stone-300 hover:bg-stone-800 hover:text-stone-100"
+                disabled={alistaRunning}
+                title="Chọn khoảng ngày để xem dữ liệu Analytics theo lịch sử (poll dừng lại, fetch 1 lần)"
+              >
+                <CalendarIcon className="h-3.5 w-3.5 mr-1.5" />
+                {analyticsRange
+                  ? `${format(new Date(analyticsRange.from + 'T00:00:00'), 'dd/MM')} → ${format(new Date(analyticsRange.to + 'T00:00:00'), 'dd/MM')}`
+                  : 'Từ ngày – đến ngày'}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <Calendar
+                mode="range"
+                selected={rangeDraft}
+                onSelect={setRangeDraft}
+                numberOfMonths={1}
+                disabled={{ after: new Date() }}
+              />
+              <div className="p-2 border-t border-stone-800 flex justify-between gap-2">
+                <Button size="sm" variant="ghost" onClick={() => { setRangeDraft(undefined); onAnalyticsRangeChange?.(null); setPopoverOpen(false) }}>
+                  Xóa khoảng
+                </Button>
+                <Button size="sm" disabled={!rangeDraft?.from || !rangeDraft?.to} onClick={applyRange}>
+                  Xem dữ liệu
+                </Button>
+              </div>
+            </PopoverContent>
+          </Popover>
+          {/* Range active badge với nút ✕ để clear */}
+          {rangeActive && analyticsRange && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 text-xs px-2 bg-violet-950/40 border border-violet-500/55 text-violet-300 hover:bg-violet-900/40 hover:text-violet-200"
+              onClick={clearRange}
+              title="Trở về live mode (poll 15s)"
+            >
+              <History className="h-3 w-3 mr-1.5" />
+              Đang xem {format(new Date(analyticsRange.from + 'T00:00:00'), 'dd/MM')} → {format(new Date(analyticsRange.to + 'T00:00:00'), 'dd/MM')} (lịch sử)
+              <X className="h-3 w-3 ml-1.5" />
+            </Button>
+          )}
         </div>
         <span className="text-[10px] text-stone-500 flex items-center gap-1.5">
           {loading ? (
             <>
               <Loader2 className="h-3 w-3 animate-spin" /> đang tải…
+            </>
+          ) : rangeActive ? (
+            <>
+              <History className="h-3 w-3" />
+              chế độ lịch sử · cập nhật {lastUpdated || '—'}
             </>
           ) : (
             <>

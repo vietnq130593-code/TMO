@@ -18,7 +18,7 @@
  *   taxonomy       — static R1-R6 playbook (luôn ok, không async)
  */
 
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import {
   countEpisodeRecords,
   countLessonRecords,
@@ -41,6 +41,9 @@ const DASHBOARD_LIMIT = 10
 const ESCALATION_MIN = 3
 const LESSONS_LIMIT = 50
 const LESSONS_FOR_REVIEW_SCAN = 200
+// v1.1 — ALISTA range mode: query rộng hơn rồi filter in-memory
+const RANGE_EPISODES_FETCH = 300 // query wider then filter
+const RANGE_LESSONS_FETCH = 500
 
 // ==================== helpers (sanitize/parse) ====================
 
@@ -82,7 +85,22 @@ function sanitizeRow(row: Record<string, unknown>): Record<string, unknown> {
 
 // ==================== GET ====================
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  // v1.1 — ALISTA UI range picker: ?from=YYYY-MM-DD&to=YYYY-MM-DD
+  // Khi có range hợp lệ: episodes/lessons được filter theo timestamp; stats +
+  // escalations + errorDashboard giữ nguyên (không có timestamp field → rangeNote).
+  const searchParams = new URL(request.url).searchParams
+  const fromStr = searchParams.get('from')
+  const toStr = searchParams.get('to')
+  let rangeMs: { fromMs: number; toMs: number; from: string; to: string } | null = null
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/
+  if (fromStr && toStr && dateRe.test(fromStr) && dateRe.test(toStr)) {
+    const fromMs = new Date(`${fromStr}T00:00:00+07:00`).getTime()
+    const toMs = new Date(`${toStr}T23:59:59+07:00`).getTime()
+    if (Number.isFinite(fromMs) && Number.isFinite(toMs) && fromMs <= toMs) {
+      rangeMs = { fromMs, toMs, from: fromStr, to: toStr }
+    }
+  }
   // ---- stats ----
   let stats = { episodes: 0, lessons: 0, qdrantPoints: 0, lessonsNeedReview: 0, source: 'sqlite-mirror' as 'sqlite-mirror' | 'neo4j' | 'mixed' }
   let statsError: string | null = null
@@ -152,17 +170,30 @@ export async function GET() {
   let recentEpisodesError: string | null = null
   let recentEpisodesSource: 'neo4j' | 'sqlite-mirror' = 'neo4j'
   try {
-    const rows = await getRecentEpisodes(RECENT_EPISODES_LIMIT)
-    recentEpisodes = rows.map(r => ({ ...sanitizeRow(r), source: 'neo4j' }))
+    // v1.1: range mode — query rộng hơn (300) rồi filter theo startedAt ∈ [from..to]
+    const fetchLimit = rangeMs ? RANGE_EPISODES_FETCH : RECENT_EPISODES_LIMIT
+    const rows = await getRecentEpisodes(fetchLimit)
+    let filtered: Array<Record<string, unknown>> = rows.map(r => ({ ...sanitizeRow(r), source: 'neo4j' }))
+    if (rangeMs) {
+      filtered = filtered.filter(r => {
+        const sa = r.startedAt
+        if (!sa) return false
+        const t = typeof sa === 'string' ? new Date(sa).getTime() : (sa instanceof Date ? sa.getTime() : null)
+        return t != null && t >= rangeMs.fromMs && t <= rangeMs.toMs
+      }).slice(0, RECENT_EPISODES_LIMIT)
+    }
+    recentEpisodes = filtered
   } catch (err) {
     recentEpisodesError = err instanceof Error ? err.message : String(err)
     console.error('[Episodic/Overview] recentEpisodes (Neo4j) error (fail-open):', err)
   }
   if (recentEpisodes.length === 0) {
     try {
-      const mirror = await findRecentEpisodeRecords(RECENT_EPISODES_LIMIT)
+      // Range mode: query SQLite mirror với fetch cao hơn để bù
+      const fetchLimit = rangeMs ? RANGE_EPISODES_FETCH : RECENT_EPISODES_LIMIT
+      const mirror = await findRecentEpisodeRecords(fetchLimit)
       if (mirror.length > 0) {
-        recentEpisodes = mirror.map(r => ({
+        let mapped: Array<Record<string, unknown>> = mirror.map(r => ({
           id: r.id,
           title: r.title,
           goal: r.goal,
@@ -177,6 +208,13 @@ export async function GET() {
           createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt,
           source: 'sqlite-mirror',
         }))
+        if (rangeMs) {
+          mapped = mapped.filter(r => {
+            const t = r.createdAt ? new Date(r.createdAt as string).getTime() : null
+            return t != null && t >= rangeMs.fromMs && t <= rangeMs.toMs
+          }).slice(0, RECENT_EPISODES_LIMIT)
+        }
+        recentEpisodes = mapped
         recentEpisodesSource = 'sqlite-mirror'
       }
     } catch (err) {
@@ -191,9 +229,11 @@ export async function GET() {
   let lessonsError: string | null = null
   let lessonsSource: 'sqlite-mirror' | 'neo4j' = 'sqlite-mirror'
   try {
-    const rows = await findAllLessonRecords(0, LESSONS_LIMIT)
+    // v1.1: range mode — query rộng hơn (500) rồi filter theo createdAt ∈ [from..to]
+    const fetchLimit = rangeMs ? RANGE_LESSONS_FETCH : LESSONS_LIMIT
+    const rows = await findAllLessonRecords(0, fetchLimit)
     if (rows.length > 0) {
-      lessons = rows.map(r => ({
+      let mapped = rows.map(r => ({
         id: r.id,
         statement: r.statement,
         triggerCondition: r.triggerCondition,
@@ -208,13 +248,20 @@ export async function GET() {
         createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt,
         updatedAt: r.updatedAt instanceof Date ? r.updatedAt.toISOString() : r.updatedAt,
       }))
+      if (rangeMs) {
+        mapped = mapped.filter(r => {
+          const t = r.createdAt ? new Date(r.createdAt as string).getTime() : null
+          return t != null && t >= rangeMs.fromMs && t <= rangeMs.toMs
+        }).slice(0, LESSONS_LIMIT)
+      }
+      lessons = mapped
     } else {
       // FIX (query learning data): mirror trống → đọc lessons thẳng từ graph
       // (tình huống deploy mới — dữ liệu học tập agents nằm trên AuraDB).
-      const graphLessons = await getAllLessonNodes(LESSONS_LIMIT)
+      const graphLessons = await getAllLessonNodes(fetchLimit)
       if (graphLessons.length > 0) {
         lessonsSource = 'neo4j'
-        lessons = graphLessons.map(l => ({
+        let mapped = graphLessons.map(l => ({
           id: l.id,
           statement: l.statement,
           triggerCondition: l.triggerCondition,
@@ -229,6 +276,13 @@ export async function GET() {
           createdAt: toIso(l.createdAt) ?? null,
           updatedAt: toIso(l.updatedAt) ?? null,
         }))
+        if (rangeMs) {
+          mapped = mapped.filter(r => {
+            const t = r.createdAt ? new Date(r.createdAt as string).getTime() : null
+            return t != null && t >= rangeMs.fromMs && t <= rangeMs.toMs
+          }).slice(0, LESSONS_LIMIT)
+        }
+        lessons = mapped
       }
     }
   } catch (err) {
@@ -247,9 +301,11 @@ export async function GET() {
 
   return NextResponse.json({
     generatedAt: new Date().toISOString(),
+    // v1.1: range mode trả thêm {from, to} cho UI hiển thị badge lịch sử
+    ...(rangeMs ? { range: { from: rangeMs.from, to: rangeMs.to } } : {}),
     stats: { ...stats, error: statsError },
-    errorDashboard: { rows: errorDashboard, error: errorDashboardError },
-    escalations: { rows: escalations, error: escalationsError },
+    errorDashboard: { rows: errorDashboard, error: errorDashboardError, rangeNote: rangeMs ? 'theo hiện trạng — không có timestamp để filter' : undefined },
+    escalations: { rows: escalations, error: escalationsError, rangeNote: rangeMs ? 'theo hiện trạng — không có timestamp để filter' : undefined },
     recentEpisodes: { rows: recentEpisodes, source: recentEpisodesSource, error: recentEpisodesError },
     lessons: { rows: lessons, source: lessonsSource, error: lessonsError },
     taxonomy,

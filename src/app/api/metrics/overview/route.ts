@@ -33,6 +33,7 @@ const MAX_HOURS = 168
 const TOP_AGENTS = 5
 const TOP_FAILURES = 5
 const RECENT_RUNS = 10
+const MAX_RANGE_DAYS = 90 // cap khoảng lịch sử
 
 /** Hôm nay theo timezone user (Asia/Ho_Chi_Minh) — cùng chuẩn token-usage routes */
 function getTodayUserTz(): string {
@@ -47,6 +48,50 @@ function getTodayUserTz(): string {
   const month = parts.find(p => p.type === 'month')!.value
   const day = parts.find(p => p.type === 'day')!.value
   return `${year}-${month}-${day}`
+}
+
+/**
+ * Parse ?from=YYYY-MM-DD & ?to=YYYY-MM-DD (v1.1 — ALISTA UI range picker).
+ * Validate: from≤to, to≤hôm nay, span≤MAX_RANGE_DAYS. Trả null nếu không hợp lệ.
+ * Khi hợp lệ, trả {from, to, fromT00z, toT23z} cho filter (timestamp + date string).
+ */
+function parseRangeParams(searchParams: URLSearchParams): {
+  from: string
+  to: string
+  /** Từ 00:00:00+07:00 của ngày from (timestamp filter lower bound) */
+  fromTzMs: number
+  /** Đến 23:59:59+07:00 của ngày to (timestamp filter upper bound) */
+  toTzMs: number
+} | null {
+  const from = searchParams.get('from')
+  const to = searchParams.get('to')
+  if (!from || !to) return null
+  // Validate format YYYY-MM-DD
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/
+  if (!dateRe.test(from) || !dateRe.test(to)) return null
+  // Parse thành epoch ms (tz HN)
+  const fromTzMs = new Date(`${from}T00:00:00+07:00`).getTime()
+  const toTzMs = new Date(`${to}T23:59:59+07:00`).getTime()
+  if (!Number.isFinite(fromTzMs) || !Number.isFinite(toTzMs)) return null
+  // from ≤ to ≤ hôm nay
+  const todayMs = new Date(`${getTodayUserTz()}T23:59:59+07:00`).getTime()
+  if (fromTzMs > toTzMs) return null
+  if (toTzMs > todayMs) return null
+  // span ≤ MAX_RANGE_DAYS
+  const spanDays = (toTzMs - fromTzMs) / (24 * 3600_000)
+  if (spanDays > MAX_RANGE_DAYS) return null
+  return { from, to, fromTzMs, toTzMs }
+}
+
+/** Lấy danh sách date string YYYY-MM-DD trong khoảng [from..to] (cho DailyTokenByAgent query) */
+function dateStringsInRange(from: string, to: string): string[] {
+  const out: string[] = []
+  const startMs = new Date(`${from}T00:00:00+07:00`).getTime()
+  const endMs = new Date(`${to}T00:00:00+07:00`).getTime()
+  for (let t = startMs; t <= endMs; t += 24 * 3600_000) {
+    out.push(new Date(t).toISOString().slice(0, 10))
+  }
+  return out
 }
 
 function rate(success: number, total: number): number {
@@ -98,11 +143,17 @@ export async function GET(request: NextRequest) {
       : DEFAULT_HOURS
   const since = new Date(Date.now() - hours * 60 * 60 * 1000)
 
-  // ==================== tokens (DailyTokenByAgent hôm nay) ====================
+  // v1.1 — ALISTA UI range picker: ?from=YYYY-MM-DD&to=YYYY-MM-DD
+  // Khi có range hợp lệ, dùng range thay cho hours (chế độ lịch sử).
+  const range = parseRangeParams(searchParams)
+
+  // ==================== tokens (DailyTokenByAgent hôm nay, hoặc list date trong range) ====================
   let tokens = zeroTokens()
   try {
-    const date = getTodayUserTz()
-    const dbRecords = await db.dailyTokenByAgent.findMany({ where: { date } })
+    // Range mode: query nhiều ngày + group by agent
+    // Live mode: query hôm nay như cũ
+    const dates = range ? dateStringsInRange(range.from, range.to) : [getTodayUserTz()]
+    const dbRecords = await db.dailyTokenByAgent.findMany({ where: { date: { in: dates } } })
 
     // Merge in-memory + DB (MAX per key) — pattern của /api/token-usage/agents
     const merged = new Map<
@@ -161,12 +212,16 @@ export async function GET(request: NextRequest) {
     tokens = zeroTokens()
   }
 
-  // ==================== tools (ToolMetric trong `hours`) ====================
+  // ==================== tools (ToolMetric trong `hours` hoặc [from..to]) ====================
   let tools = zeroTools()
   let toolRows: Array<{ toolName: string; success: boolean; durationMs: number; errorTag: string | null }> = []
   try {
+    // v1.1: range mode — filter theo [fromTzMs..toTzMs]
+    const toolWhere = range
+      ? { timestamp: { gte: new Date(range.fromTzMs), lte: new Date(range.toTzMs) } }
+      : { timestamp: { gte: since } }
     toolRows = await db.toolMetric.findMany({
-      where: { timestamp: { gte: since } },
+      where: toolWhere,
       select: { toolName: true, success: true, durationMs: true, errorTag: true },
     })
     const totalCalls = toolRows.length
@@ -209,13 +264,17 @@ export async function GET(request: NextRequest) {
     toolRows = []
   }
 
-  // ==================== runs (AgentRunRecord trong `hours`) ====================
+  // ==================== runs (AgentRunRecord trong `hours` hoặc [from..to]) ====================
   let runs = zeroRuns()
   let noProgressCount = 0
   try {
-    // findAgentRunRecordsSince: delegate path nếu Prisma instance fresh,
-    // raw-SQL bridge nếu stale (Task 20-b — dev server chạy trước db:push)
-    const runRows = await findAgentRunRecordsSince(since)
+    // v1.1: range mode — query since from, rồi filter in-memory theo upper bound
+    // (findAgentRunRecordsSince delegate/raw không có overload Between — an toàn dùng since+filter)
+    const runSince = range ? new Date(range.fromTzMs) : since
+    const runUpperMs = range ? range.toTzMs : Date.now()
+    const allRunRows = await findAgentRunRecordsSince(runSince)
+    // Filter theo upper bound (createdAt ≤ toTzMs)
+    const runRows = allRunRows.filter(r => (r.createdAt ?? new Date(0)).getTime() <= runUpperMs)
     noProgressCount = runRows.filter(r => r.stopReason === 'no_progress').length
     const byStopReason: Record<string, number> = {}
     for (const r of runRows) {
@@ -256,11 +315,12 @@ export async function GET(request: NextRequest) {
   const alerts: Array<{ severity: 'high' | 'medium'; type: string; message: string }> = []
   try {
     // (a) Stuck loops: >= 3 run no_progress trong khoảng
+    const periodLabel = range ? `khoảng ${range.from} → ${range.to}` : `${hours}h gần nhất`
     if (noProgressCount >= 3) {
       alerts.push({
         severity: 'high',
         type: 'stuck_loops',
-        message: `${noProgressCount} vòng lặp kẹt (no_progress) trong ${hours}h gần nhất`,
+        message: `${noProgressCount} vòng lặp kẹt (no_progress) trong ${periodLabel}`,
       })
     }
     // (b) Tool fail: successRate < 50% với >= 10 calls
@@ -290,7 +350,8 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     generatedAt: new Date().toISOString(),
-    period: { hours },
+    // v1.1: range mode trả {from, to}; live mode trả {hours} như cũ
+    period: range ? { from: range.from, to: range.to, hours } : { hours },
     tokens,
     tools,
     runs,

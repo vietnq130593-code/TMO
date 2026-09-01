@@ -157,6 +157,9 @@ export const AGENT_COLORS: Record<string, { border: string; bg: string; text: st
   SENTINEL: { border: 'border-rose-500',     bg: 'bg-rose-950/20',    text: 'text-rose-400' },
   CATALYST: { border: 'border-emerald-500',  bg: 'bg-emerald-950/20', text: 'text-emerald-400' },
   Omega:    { border: 'border-sky-500',      bg: 'bg-sky-950/20',     text: 'text-sky-400' },
+  // ALISTA — Kỹ sư Bảo trì Hệ thống (v1.1, 2026-09-01) — amber-on-stone để phân
+  // biệt với APEX (amber-500 sáng hơn). Màu cam-đá ám bảo trì.
+  ALISTA:   { border: 'border-amber-600',    bg: 'bg-stone-950/30',   text: 'text-amber-300' },
 }
 
 // Position colors — fallback for agents not in AGENT_COLORS by name

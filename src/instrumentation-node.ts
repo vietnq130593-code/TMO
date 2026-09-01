@@ -340,6 +340,49 @@ if (!globalForSd.__tmoSdSchedulerStarted) {
 }
 
 // ============================================================================
+// ALISTA SCHEDULER (v1.1 — 2026-09-01) — KỸ SƯ BẢO TRÌ HỆ THỐNG
+// ============================================================================
+// Ca trực 23h30 hàng ngày (giờ VN), budget 6h (đến 05:30 hôm sau). Pipeline
+// kiểm tra toàn diện 7 nhiệm vụ TUẦN TỰ (KHÔNG song song): Tools health,
+// Agent runs, Escalations, Domain coverage, 3 tầng dữ liệu, Tự-đánh-giá,
+// Database + Memory + Learning (v1.1 mới). Mọi phát hiện → proposal gửi
+// Self-Direction.
+//
+// Scheduler nền chạy ngay trong process Next.js (PM2 duy trì) — không phụ
+// thuộc UI mở. Cửa sổ 23:30-23:59 (tz HN), gate 1 lần/ngày. Toàn bộ múi
+// giờ qua Intl tz 'Asia/Ho_Chi_Minh' tường minh — không lệch giờ server UTC.
+//
+// Chống chạy kép: agentId='alista' (≠'default') → automation-engine loop B
+// (chỉ xử lý agentId='default') bỏ qua; không set task → mini-service loop A
+// (cần task) bỏ qua. Chỉ scheduler nền này làm executor duy nhất.
+// CronJob row vẫn hiện trong UI Automation để owner pause/resume + xem
+// nextRunAt — điều khiển scheduler nền qua field `enabled`.
+//
+// globalThis guard chống double-register khi Next dev HMR reload instrumentation
+// (pattern như SelfDirection scheduler phía trên).
+// FIX v1.1a (bug guard-trùng-tên): KHÔNG set flag ở đây — startAlistaScheduler()
+// có globalThis guard riêng (`__alistaSchedulerStarted`). Nếu block này set flag
+// cùng tên TRƯỚC khi async chain chạy, startAlistaScheduler sẽ thấy flag đã set
+// (do chính block này) → skip → scheduler KHÔNG BAO GIỜ start (đã xảy ra: log chỉ
+// thấy "Đã khởi động rồi — skip" ngay lần boot đầu). HMR-safe vẫn đảm bảo vì
+// guard của startAlistaScheduler chống double-call.
+const globalForAlista = globalThis as unknown as { __alistaSchedulerBlockRan?: boolean }
+if (!globalForAlista.__alistaSchedulerBlockRan) {
+  globalForAlista.__alistaSchedulerBlockRan = true
+  void ensureDbReady()
+    .then(() => import('@/lib/alista'))
+    .then(({ startAlistaScheduler }) => {
+      startAlistaScheduler()
+    })
+    .catch((err) => {
+      console.warn(
+        '[ALISTA][scheduler] khởi động fail (không chặn boot — tick sau sẽ tự thử lại):',
+        err instanceof Error ? err.message : String(err),
+      )
+    })
+}
+
+// ============================================================================
 // CI-6 WORKSPACE BOOTSTRAP (Task 10-b — roadmap CI-6.1)
 // ============================================================================
 // TMO_DEFAULT_WORKSPACE trỏ thư mục workspace mặc định trên máy user (vd

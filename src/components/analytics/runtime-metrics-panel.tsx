@@ -1,7 +1,7 @@
 'use client'
 
 /**
- * Runtime Metrics Panel — Task 20-b
+ * Runtime Metrics Panel — Task 20-b + ALISTA v1.1
  *
  * Panel giám sát real-time tập trung (mount trong tab Analytics của page.tsx):
  *   - Token burn hôm nay (DailyTokenByAgent — tổng + input/output + top agents)
@@ -11,14 +11,17 @@
  *     nhất với stopReason badge màu)
  *   - Banner alerts (stuck loops / tool failures)
  *
- * Tự poll GET /api/metrics/overview mỗi 10s (cleanup khi unmount — không leak).
+ * v1.1 — ALISTA range picker: khi prop `analyticsRange` được set, panel chuyển
+ * sang chế độ lịch sử: fetch 1 lần với ?from=&to=, DỪNG poll 10s, hiển thị badge
+ * "📜 Đang xem DD/MM → DD/MM". Khi range = null → poll 10s live như cũ.
+ *
  * Fail-open toàn bộ: endpoint lỗi/timeout → hiển thị "—", KHÔNG crash panel.
  */
 
 import { useCallback, useEffect, useState } from 'react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, RefreshCw, Activity, Wrench, ListChecks, AlertTriangle, Flame, Gauge } from 'lucide-react'
+import { Loader2, RefreshCw, Activity, Wrench, ListChecks, AlertTriangle, Flame, Gauge, History } from 'lucide-react'
 
 // ==================== Types (mirror /api/metrics/overview) ====================
 
@@ -120,7 +123,13 @@ function stopReasonBadge(reason: string | null): { label: string; className: str
 
 const POLL_INTERVAL_MS = 10_000
 
-export function RuntimeMetricsPanel() {
+interface RuntimeMetricsPanelProps {
+  /** v1.1 — ALISTA: null = poll live 24h (default), {from,to} = chế độ lịch sử */
+  analyticsRange?: { from: string; to: string } | null
+}
+
+export function RuntimeMetricsPanel({ analyticsRange }: RuntimeMetricsPanelProps = {}) {
+  const rangeActive = !!analyticsRange
   const [data, setData] = useState<OverviewData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -128,7 +137,11 @@ export function RuntimeMetricsPanel() {
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch('/api/metrics/overview?hours=24', { cache: 'no-store' })
+      // v1.1: range mode dùng ?from=&to= thay cho ?hours=24
+      const url = analyticsRange
+        ? `/api/metrics/overview?from=${encodeURIComponent(analyticsRange.from)}&to=${encodeURIComponent(analyticsRange.to)}`
+        : '/api/metrics/overview?hours=24'
+      const res = await fetch(url, { cache: 'no-store' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = (await res.json()) as OverviewData
       setData(json)
@@ -140,7 +153,7 @@ export function RuntimeMetricsPanel() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [analyticsRange?.from, analyticsRange?.to])
 
   useEffect(() => {
     let cancelled = false
@@ -149,12 +162,17 @@ export function RuntimeMetricsPanel() {
       await fetchData()
     }
     void poll()
-    const interval = setInterval(poll, POLL_INTERVAL_MS)
+    // v1.1: range mode DỪNG poll (chỉ fetch 1 lần khi range thay đổi).
+    // Live mode: poll 10s như cũ.
+    let interval: ReturnType<typeof setInterval> | null = null
+    if (!rangeActive) {
+      interval = setInterval(poll, POLL_INTERVAL_MS)
+    }
     return () => {
       cancelled = true
-      clearInterval(interval)
+      if (interval) clearInterval(interval)
     }
-  }, [fetchData])
+  }, [fetchData, rangeActive])
 
   const tokens = data?.tokens
   const tools = data?.tools
@@ -243,7 +261,9 @@ export function RuntimeMetricsPanel() {
               <div className="p-1.5 rounded-lg bg-teal-950/50">
                 <Wrench className="h-4 w-4 text-teal-400" />
               </div>
-              <span className="text-xs font-semibold tracking-tight text-stone-100">Tool health (24h)</span>
+              <span className="text-xs font-semibold tracking-tight text-stone-100">
+                {rangeActive ? `Tool health (${analyticsRange?.from} → ${analyticsRange?.to})` : 'Tool health (24h)'}
+              </span>
             </div>
             <span className="text-[10px] text-stone-500">ToolMetric</span>
           </div>
@@ -289,7 +309,9 @@ export function RuntimeMetricsPanel() {
               <div className="p-1.5 rounded-lg bg-rose-950/50">
                 <ListChecks className="h-4 w-4 text-rose-400" />
               </div>
-              <span className="text-xs font-semibold tracking-tight text-stone-100">Agent runs (24h)</span>
+              <span className="text-xs font-semibold tracking-tight text-stone-100">
+                {rangeActive ? `Agent runs (${analyticsRange?.from} → ${analyticsRange?.to})` : 'Agent runs (24h)'}
+              </span>
             </div>
             <span className="text-[10px] text-stone-500">AgentRunRecord</span>
           </div>
@@ -333,12 +355,19 @@ export function RuntimeMetricsPanel() {
       <div className="flex items-center justify-between text-[10px] text-stone-500 px-1">
         <span className="flex items-center gap-1">
           <Gauge className="h-3 w-3" />
-          Nguồn: /api/metrics/overview (ToolMetric + DailyTokenByAgent + AgentRunRecord) — v1: tokens/run chờ task 20-c
+          {rangeActive
+            ? `Nguồn: /api/metrics/overview?from=${analyticsRange?.from}&to=${analyticsRange?.to} — chế độ lịch sử (1 lần fetch, không poll)`
+            : 'Nguồn: /api/metrics/overview (ToolMetric + DailyTokenByAgent + AgentRunRecord) — v1: tokens/run chờ task 20-c'}
         </span>
         <span className="flex items-center gap-1.5">
           {loading ? (
             <>
               <Loader2 className="h-3 w-3 animate-spin" /> đang tải…
+            </>
+          ) : rangeActive ? (
+            <>
+              <History className="h-3 w-3" />
+              đang xem lịch sử · cập nhật {lastUpdated || '—'}
             </>
           ) : (
             <>
