@@ -1,5 +1,5 @@
 /**
- * ALISTA — Follow-up Verification Loop (v1.2)
+ * ALISTA — Follow-up Verification Loop (v1.3)
  * ============================================
  * LUỒNG PHẢN HỒI KÍN (owner request 2026-09-01):
  *   1. ALISTA gửi đề xuất → SELF-DIRECTION (pending)
@@ -7,26 +7,36 @@
  *   3. NGAY KHI HOÀN TẤT: hook tại orchestrator.ts + automation-proposals.ts
  *      (dynamic import — chống circular) gọi notifyAlistaProposalCompleted()
  *      → thông tin đề xuất đã hoàn thành được chuyển tới ALISTA NGAY.
- *   4. ALISTA re-run đúng collector của đề xuất đó (parse key từ title) →
- *      so findings: vấn đề còn tồn tại không?
- *   5. Vẫn còn (dù là vấn đề khác trong cùng check) hoặc cần nâng cấp →
+ *   4. (v1.3) ALISTA tra RECHECK WINDOW của vấn đề (types.ts recheckWindowFor —
+ *      cùng map với successCriteria trong proposal):
+ *        - metric phản ánh tức thời (recheck=0) → re-run collector NGAY.
+ *        - metric cần thời gian (successRate 7d, backfill, review backlog...) →
+ *          HOÃN verify đến dueAt = completedAt + recheck — ghi marker
+ *          'alista-verify-deferred' (TaskExecution status='pending', durable
+ *          qua restart). Chống false-negative "CHƯA triệt để" khi giải pháp
+ *          vừa deploy chưa kịp phản ánh vào metric.
+ *   5. Re-run đúng collector của đề xuất đó (parse key từ title) → so findings:
+ *      vấn đề còn tồn tại không?
+ *   6. Vẫn còn (dù là vấn đề khác trong cùng check) hoặc cần nâng cấp →
  *      gửi ĐỀ XUẤT MỚI NGAY (key follow-up `<base>:v<N>` + prefix ⟲ FOLLOW-UP).
- *   6. Đề xuất follow-up lại đi qua luồng 2-5 → vòng lặp tự duy trì đến khi
+ *   7. Đề xuất follow-up lại đi qua luồng 2-6 → vòng lặp tự duy trì đến khi
  *      vấn đề được xử lý triệt để (dedupe LIVE 7 ngày chống spam).
  *
  * An toàn kép:
  *   - Hook in-process (completion-hook): tức thời (cùng process Next.js).
  *   - Sweep 60s trong alistaTick: catch-up nếu hook bị lỡ (restart giữa chừng,
- *     proposal completed lúc app chết...) — window 48h, cap 3 proposal/tick.
+ *     proposal completed lúc app chết...) — window 48h, cap 3 proposal/tick;
+ *     KÈM kích hoạt deferred verify đến hạn (v1.3) + dọn verify row kẹt.
  *
  * Trạng thái lưu TaskExecution (không cần schema mới):
- *   type='alista-verify', jobId=<originalProposalId>, result JSON chứa
- *   { resolved, findingsAfter, newProposals, originalKey, ... }.
+ *   - type='alista-verify'          — 1 lần xác minh thật (jobId=proposalId gốc)
+ *   - type='alista-verify-deferred' — (v1.3) marker hoãn verify: status='pending'
+ *     khi đang chờ dueAt, 'completed' (superseded) khi đã kích hoạt verify thật.
  */
 
 import { db } from '@/lib/db'
 import type { CheckId, CollectorResult } from './types'
-import { baseKeyOf, STEP_LABELS } from './types'
+import { baseKeyOf, STEP_LABELS, recheckWindowFor } from './types'
 import {
   collectToolsHealth, collectAgentRuns, collectEscalations,
   collectDomainCoverage, collect3Layers, collectSelfAssessment,
@@ -60,6 +70,9 @@ const SLUG_TO_CHECK: Record<string, CheckId> = {
   self: 6,
   db: 7,
 }
+
+/** Type TaskExecution cho marker hoãn verify (v1.3) */
+const DEFERRED_TYPE = 'alista-verify-deferred'
 
 // ==================== GLOBAL STATE (chống HMR double + chống chạy kép) ====================
 
@@ -172,16 +185,31 @@ interface VerifyOutcome {
 }
 
 /**
- * Xác minh 1 đề xuất đã hoàn tất: re-run đúng collector → rules → so findings.
+ * Xác minh 1 đề xuất đã hoàn tất: (v1.3) tra recheck window → hoãn nếu metric
+ * cần thời gian, ngược lại re-run collector → rules → so findings.
+ * - Chưa đến hạn đo lại → deferred (marker durable, sweep kích hoạt khi due).
  * - Không còn finding → resolved=true (vấn đề đã xử lý triệt để).
  * - Còn finding (cùng vấn đề hoặc phát hiện mới) → resolved=false → gửi đề xuất
  *   follow-up NGAY qua createProposalsForCheck({followUpFor}).
- * - Collector fail / key không parse được →保守 (resolved=null) — ca trực 23h30
+ * - Collector fail / key không parse được → bảo thủ (resolved=null) — ca trực 23h30
  *   sẽ xử lý, KHÔNG tạo proposal mù.
  */
+interface VerifyOutcome {
+  ok: boolean
+  resolved: boolean | null
+  newProposalIds: Array<{ id: string; title: string }>
+  /** (v1.3) true = hoãn verify đến dueAt (metric cần thời gian phản ánh) */
+  deferred?: boolean
+  error?: string
+}
+
 async function runFollowUpVerification(
   proposalId: string,
   trigger: 'completion-hook' | 'sweep',
+  /** (v1.3) true khi gọi từ sweep kích hoạt deferred đến hạn — quyết định
+   * "window đã hết" đã được đưa ra bởi sweep (dueAt của marker), KHÔNG tính lại
+   * (tránh vòng lặp defer→activate→defer nếu completedAt/RECHECK map đổi giữa chừng) */
+  skipDefer = false,
 ): Promise<VerifyOutcome> {
   const startedAt = Date.now()
   const deadlineMs = startedAt + VERIFY_BUDGET_MS
@@ -202,6 +230,59 @@ async function runFollowUpVerification(
     }
 
     const parsedKey = parseAlistaKey(proposal.title)
+
+    // (A0) v1.3 — DEFER CHECK: metric cần thời gian phản ánh giải pháp →
+    //      hoãn verify đến dueAt (marker durable 'alista-verify-deferred').
+    //      Chỉ áp dụng khi parse được key + check re-run được (≠6).
+    //      skipDefer: đường kích hoạt đến hạn đã quyết định — verify thẳng.
+    if (!skipDefer && parsedKey && parsedKey.checkId != null && parsedKey.checkId !== 6) {
+      const rw = recheckWindowFor(parsedKey.slug, parsedKey.target)
+      const completedTs = (proposal.completedAt ?? new Date()).getTime()
+      const dueAt = completedTs + rw.ms
+      if (Date.now() < dueAt) {
+        // Marker đã có (pending) → không tạo lại (sweep 60s gọi notify nhiều lần)
+        const existing = await db.taskExecution.findFirst({
+          where: { type: DEFERRED_TYPE, jobId: proposalId, status: 'pending' },
+          select: { id: true },
+        }).catch(() => null)
+        if (!existing) {
+          try {
+            await db.taskExecution.create({
+              data: {
+                type: DEFERRED_TYPE,
+                jobId: proposalId,
+                status: 'pending',
+                startedAt: new Date(startedAt),
+                result: JSON.stringify({
+                  kind: DEFERRED_TYPE,
+                  originalProposalId: proposalId,
+                  originalTitle: proposal.title,
+                  originalKey: parsedKey.baseKey,
+                  checkId: parsedKey.checkId,
+                  trigger,
+                  status: 'deferred',
+                  dueAt,
+                  recheckAfterMs: rw.ms,
+                  why: rw.why,
+                }),
+              },
+            })
+            const dueAtVN = new Intl.DateTimeFormat('vi-VN', {
+              timeZone: 'Asia/Ho_Chi_Minh', day: '2-digit', month: '2-digit',
+              hour: '2-digit', minute: '2-digit',
+            }).format(dueAt)
+            console.log(
+              `[ALISTA][verify] ⏳ #${proposalId} "${proposal.title.slice(0, 80)}" — nhận thông tin hoàn tất NGAY, ` +
+              `HOÃN xác minh đến ${dueAtVN} giờ VN (${rw.why}) — metric chưa kịp phản ánh giải pháp`,
+            )
+          } catch (err) {
+            console.warn('[ALISTA][verify] tạo deferred marker fail (fail-open — verify tiếp ngay):', err instanceof Error ? err.message : String(err))
+            // Tạo marker fail → vẫn verify ngay (an toàn hơn là mất verify)
+          }
+        }
+        return { ...outcome, ok: true, resolved: null, deferred: true }
+      }
+    }
 
     // TaskExecution row — jobId=proposalId làm marker durable cho sweep
     const initResult = {
@@ -434,6 +515,13 @@ async function finalizeVerify(
  * Quét các đề xuất ALISTA đã completed trong 48h mà CHƯA được verify → notify.
  * Bắt các trường hợp hook bị lỡ: process restart giữa lúc proposal hoàn tất,
  * dynamic import fail, lỗi tạm thời... Delay tối đa: 60s (1 tick).
+ *
+ * (v1.3) Thêm 2 bước:
+ *   (0b) Kích hoạt deferred verify đến hạn — marker 'alista-verify-deferred'
+ *        status='pending' có dueAt ≤ now → đánh dấu superseded + notify (verify
+ *        thật chạy ngay sau đó). Cap 3/tick chống burst.
+ *   (1b) Bỏ qua proposal đang có deferred marker pending (chưa đến hạn) —
+ *        tránh gọi notify vô ích mỗi tick.
  */
 export async function sweepCompletedAlistaProposals(): Promise<number> {
   try {
@@ -457,6 +545,45 @@ export async function sweepCompletedAlistaProposals(): Promise<number> {
       }).catch(() => { /* fail-open */ })
     }
 
+    // (0b) v1.3 — deferred verify ĐẾN HẠN → kích hoạt verify thật
+    const deferredRows = await db.taskExecution.findMany({
+      where: { type: DEFERRED_TYPE, status: 'pending' },
+      orderBy: { startedAt: 'asc' },
+      select: { id: true, jobId: true, result: true },
+      take: 50,
+    }).catch(() => [] as Array<{ id: string; jobId: string | null; result: string | null }>)
+    let activated = 0
+    const deferredPendingIds = new Set<string>()
+    for (const d of deferredRows) {
+      if (!d.jobId) continue
+      deferredPendingIds.add(d.jobId) // đang chờ (dù chưa due)
+      let dueAt = 0
+      try {
+        const parsed = JSON.parse(d.result || '{}') as { dueAt?: number }
+        dueAt = typeof parsed.dueAt === 'number' ? parsed.dueAt : 0
+      } catch { /* row hỏng → coi như đến hạn để dọn */ }
+      if (Date.now() < dueAt) continue // chưa đến hạn
+      if (isVerifyInFlight(d.jobId)) continue // verify thật đang chạy cho proposal này
+      // Đến hạn → đánh dấu superseded + gọi verify TRỰC TIẾP (bypass
+      // notify — in-memory NOTIFIED dedupe 10' còn fresh từ lúc defer,
+      // sẽ chặn mất đường kích hoạt; các check durable đã qua marker này)
+      await db.taskExecution.update({
+        where: { id: d.id },
+        data: {
+          status: 'completed',
+          completedAt: new Date(),
+          result: JSON.stringify({ status: 'superseded', activatedAt: Date.now() }),
+        },
+      }).catch(() => { /* fail-open */ })
+      deferredPendingIds.delete(d.jobId)
+      console.log(`[ALISTA][verify] ⏰ deferred #${d.jobId} đến hạn — kích hoạt xác minh thật`)
+      void runFollowUpVerification(d.jobId, 'sweep', true).catch((err) => {
+        console.error(`[ALISTA][verify] activation #${d.jobId} crash:`, err instanceof Error ? err.message : String(err))
+      })
+      activated++
+      if (activated >= SWEEP_NOTIFY_CAP) break
+    }
+
     // (1) Đề xuất completed trong 48h chưa có verify row completed
     const since = new Date(Date.now() - SWEEP_WINDOW_MS)
     const proposals = await db.selfDirectionProposal.findMany({
@@ -469,7 +596,7 @@ export async function sweepCompletedAlistaProposals(): Promise<number> {
       orderBy: { completedAt: 'desc' },
       take: 20,
     })
-    if (proposals.length === 0) return 0
+    if (proposals.length === 0) return activated
 
     const ids = proposals.map(p => p.id)
     const existing = await db.taskExecution.findMany({
@@ -482,11 +609,13 @@ export async function sweepCompletedAlistaProposals(): Promise<number> {
     for (const p of proposals) {
       if (notified >= SWEEP_NOTIFY_CAP) break
       if (verified.has(p.id)) continue
+      // (1b) v1.3 — đang hoãn verify (deferred pending, chưa đến hạn) → bỏ
+      if (deferredPendingIds.has(p.id)) continue
       if (isVerifyInFlight(p.id)) continue
       await notifyAlistaProposalCompleted(p.id, 'sweep')
       notified++
     }
-    return notified
+    return activated + notified
   } catch (err) {
     console.warn(
       '[ALISTA][verify] sweep fail (fail-open — tick sau thử lại):',

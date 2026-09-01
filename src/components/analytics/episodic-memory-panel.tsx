@@ -48,7 +48,7 @@ import {
   Loader2, RefreshCw, Activity, Brain, BookMarked, Database, AlertTriangle,
   Hourglass, Plus, CheckCircle2, XCircle, ChevronDown, ChevronRight, Check,
   GraduationCap, ListChecks, Layers, ShieldCheck, Calendar as CalendarIcon, X,
-  History, Repeat,
+  History, Repeat, Clock, Timer,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import type { DateRange } from 'react-day-picker'
@@ -58,7 +58,8 @@ import type { DateRange } from 'react-day-picker'
 /** v1.2 — 1 dòng lịch sử hoạt động ALISTA (/api/alista/checks) */
 interface AlistaHistoryRow {
   id: string
-  kind: 'check' | 'verify'
+  /** v1.3: thêm 'defer' — marker hoãn verify theo recheck window */
+  kind: 'check' | 'verify' | 'defer'
   startedAt: string
   completedAt: string | null
   status: string
@@ -87,6 +88,18 @@ interface AlistaHistoryRow {
     newProposals: Array<{ id: string; title: string }>
     skippedProposals: Array<{ title: string; reason: string }>
     note: string | null
+  } | null
+  /** v1.3 — thông tin hoãn verify (metric cần thời gian phản ánh) */
+  defer: {
+    originalProposalId: string
+    originalTitle: string
+    originalKey: string | null
+    checkId: number | null
+    trigger: string | null
+    dueAt: number | null
+    recheckAfterMs: number | null
+    why: string | null
+    status: string
   } | null
   error: string | null
 }
@@ -1100,15 +1113,21 @@ export function EpisodicMemoryPanel({ analyticsRange, onAnalyticsRangeChange }: 
           <div className="space-y-1.5 max-h-96 overflow-y-auto">
             {alistaHistory.map(row => {
               const isVerify = row.kind === 'verify'
+              const isDefer = row.kind === 'defer'
               const v = row.verify
+              const dfr = row.defer
               const st =
-                row.status === 'running' ? { label: 'đang chạy', cls: 'bg-teal-950/60 text-teal-400 border-teal-500/50' }
-                : row.status === 'completed' ? { label: 'hoàn tất', cls: 'bg-emerald-950/60 text-emerald-400 border-emerald-500/50' }
-                : { label: row.status === 'failed' ? 'lỗi' : row.status, cls: 'bg-rose-950/60 text-rose-400 border-rose-500/50' }
+                row.status === 'running' || row.status === 'pending'
+                  ? { label: isDefer && row.status === 'pending' ? 'đang chờ hạn' : 'đang chạy', cls: 'bg-teal-950/60 text-teal-400 border-teal-500/50' }
+                  : row.status === 'completed'
+                    ? { label: isDefer ? 'đã kích hoạt' : 'hoàn tất', cls: 'bg-emerald-950/60 text-emerald-400 border-emerald-500/50' }
+                    : { label: row.status === 'failed' ? 'lỗi' : row.status, cls: 'bg-rose-950/60 text-rose-400 border-rose-500/50' }
               return (
                 <div key={row.id} className="rounded-lg bg-stone-950/60 border border-stone-800/80 px-3 py-2">
                   <div className="flex items-center gap-2 text-xs">
-                    {isVerify ? (
+                    {isDefer ? (
+                      <Clock className="h-3.5 w-3.5 text-sky-400 flex-shrink-0" />
+                    ) : isVerify ? (
                       <Repeat className="h-3.5 w-3.5 text-amber-400 flex-shrink-0" />
                     ) : (
                       <ShieldCheck className="h-3.5 w-3.5 text-teal-400 flex-shrink-0" />
@@ -1116,7 +1135,13 @@ export function EpisodicMemoryPanel({ analyticsRange, onAnalyticsRangeChange }: 
                     <Badge variant="outline" className={`text-[9px] px-1.5 py-0 h-4 border flex-shrink-0 ${st.cls}`}>
                       {st.label}
                     </Badge>
-                    {isVerify ? (
+                    {isDefer ? (
+                      <span className="text-stone-200 truncate flex-1" title={dfr?.originalTitle || ''}>
+                        ⏳ Hoãn xác minh đề xuất{' '}
+                        <span className="font-mono text-stone-400">#{(dfr?.originalProposalId || '').slice(-8)}</span>{' '}
+                        {truncate(dfr?.originalTitle || '', 56)}
+                      </span>
+                    ) : isVerify ? (
                       <span className="text-stone-200 truncate flex-1" title={v?.originalTitle || ''}>
                         ⟲ Xác minh đề xuất{' '}
                         <span className="font-mono text-stone-400">#{(v?.originalProposalId || '').slice(-8)}</span>{' '}
@@ -1132,6 +1157,44 @@ export function EpisodicMemoryPanel({ analyticsRange, onAnalyticsRangeChange }: 
                       {row.durationMs != null ? ` · ${Math.round(row.durationMs / 1000)}s` : ''}
                     </span>
                   </div>
+
+                  {/* Defer — marker hoãn verify theo recheck window (v1.3) */}
+                  {isDefer && dfr && (
+                    <div className="mt-1.5 space-y-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {dfr.status === 'deferred' && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border bg-sky-950/60 text-sky-400 border-sky-500/50">
+                            <Timer className="h-3 w-3 mr-1" /> chờ đến hạn
+                          </Badge>
+                        )}
+                        {dfr.status === 'superseded' && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border bg-stone-900/60 text-stone-400 border-stone-700">
+                            <CheckCircle2 className="h-3 w-3 mr-1" /> đã kích hoạt verify
+                          </Badge>
+                        )}
+                        {dfr.dueAt != null && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border bg-stone-900/60 text-stone-400 border-stone-700">
+                            <Clock className="h-3 w-3 mr-1" /> hẹn đo lại {fmtTime(new Date(dfr.dueAt).toISOString())}
+                          </Badge>
+                        )}
+                        {dfr.recheckAfterMs != null && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border bg-stone-900/60 text-stone-400 border-stone-700">
+                            recheck +{Math.round(dfr.recheckAfterMs / 3600_000)}h
+                          </Badge>
+                        )}
+                        {dfr.checkId != null && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border bg-stone-900/60 text-stone-400 border-stone-700">
+                            re-check {dfr.checkId}/7
+                          </Badge>
+                        )}
+                      </div>
+                      {dfr.why && (
+                        <p className="text-[11px] text-sky-300/80 truncate" title={dfr.why}>
+                          ↳ lý do hoãn: {dfr.why}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   {/* Verify — kết quả xác minh follow-up */}
                   {isVerify && v && (

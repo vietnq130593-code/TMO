@@ -2,12 +2,14 @@
  * ALISTA — GET /api/alista/checks?limit=20
  * =====================================================
  * Lịch sử hoạt động ALISTA từ TaskExecution (mới nhất trước):
- *   - type='alista-check'  — các lần chạy pipeline Kiểm tra toàn diện (7 bước)
- *   - type='alista-verify' — (v1.2) các lần xác minh follow-up sau khi đề xuất
+ *   - type='alista-check'            — các lần chạy pipeline Kiểm tra toàn diện (7 bước)
+ *   - type='alista-verify'           — (v1.2) các lần xác minh follow-up sau khi đề xuất
  *     Self-Direction hoàn tất: resolved? đề xuất mới? (jobId = proposalId gốc)
+ *   - type='alista-verify-deferred'  — (v1.3) marker hoãn verify theo recheck window
+ *     (metric cần thời gian phản ánh): dueAt, lý do, trạng thái pending/superseded
  *
- * Trả { rows: [{ id, kind: 'check' | 'verify', startedAt, completedAt, status,
- *   durationMs, proposalsCreated, deadlineMet, reason, perCheck[], verify {...} }] }.
+ * Trả { rows: [{ id, kind: 'check' | 'verify' | 'defer', startedAt, completedAt, status,
+ *   durationMs, proposalsCreated, deadlineMet, reason, perCheck[], verify {...}, defer {...} }] }.
  *
  * Source: SQLite TaskExecution (persistent qua restart) — KHÔNG đọc globalState
  * Map (chỉ sống trong process) để đảm bảo owner thấy lịch sử đầy đủ kể cả khi
@@ -44,10 +46,27 @@ interface VerifyInfo {
   note: string | null
 }
 
+/** (v1.3) Thông tin marker hoãn verify */
+interface DeferInfo {
+  originalProposalId: string
+  originalTitle: string
+  originalKey: string | null
+  checkId: number | null
+  trigger: string | null
+  /** Thời điểm hẹn đo lại (epoch ms) */
+  dueAt: number | null
+  /** Cửa sổ recheck (ms) theo successCriteria của vấn đề */
+  recheckAfterMs: number | null
+  /** Lý do hoãn (tiếng Việt) */
+  why: string | null
+  /** 'deferred' (đang chờ) | 'superseded' (đã kích hoạt verify thật) */
+  status: string
+}
+
 interface CheckHistoryRow {
   id: string
-  /** 'check' = pipeline toàn diện | 'verify' = xác minh follow-up (v1.2) */
-  kind: 'check' | 'verify'
+  /** 'check' = pipeline toàn diện | 'verify' = xác minh follow-up (v1.2) | 'defer' = hoãn verify (v1.3) */
+  kind: 'check' | 'verify' | 'defer'
   startedAt: string
   completedAt: string | null
   status: string
@@ -68,6 +87,7 @@ interface CheckHistoryRow {
   }>
   partialSteps: Array<{ step: number; label: string; reason: string }>
   verify: VerifyInfo | null
+  defer: DeferInfo | null
   error: string | null
 }
 
@@ -77,7 +97,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const rows = await db.taskExecution.findMany({
-      where: { type: { in: ['alista-check', 'alista-verify'] } },
+      where: { type: { in: ['alista-check', 'alista-verify', 'alista-verify-deferred'] } },
       orderBy: { startedAt: 'desc' },
       take: limit,
       select: { id: true, type: true, jobId: true, status: true, startedAt: true, completedAt: true, result: true, errorMessage: true },
@@ -119,9 +139,27 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      // v1.3 — normalize defer info (marker hoãn verify)
+      let defer: DeferInfo | null = null
+      if (r.type === 'alista-verify-deferred') {
+        const resultStatus = typeof parsed.status === 'string' ? parsed.status
+          : (r.status === 'completed' ? 'superseded' : 'deferred')
+        defer = {
+          originalProposalId: r.jobId ?? (typeof parsed.originalProposalId === 'string' ? parsed.originalProposalId : ''),
+          originalTitle: typeof parsed.originalTitle === 'string' ? parsed.originalTitle : '',
+          originalKey: typeof parsed.originalKey === 'string' ? parsed.originalKey : null,
+          checkId: typeof parsed.checkId === 'number' ? parsed.checkId : null,
+          trigger: typeof parsed.trigger === 'string' ? parsed.trigger : null,
+          dueAt: typeof parsed.dueAt === 'number' ? parsed.dueAt : null,
+          recheckAfterMs: typeof parsed.recheckAfterMs === 'number' ? parsed.recheckAfterMs : null,
+          why: typeof parsed.why === 'string' ? parsed.why : null,
+          status: resultStatus,
+        }
+      }
+
       out.push({
         id: r.id,
-        kind: r.type === 'alista-verify' ? 'verify' : 'check',
+        kind: r.type === 'alista-verify' ? 'verify' : (r.type === 'alista-verify-deferred' ? 'defer' : 'check'),
         startedAt: r.startedAt.toISOString(),
         completedAt: r.completedAt?.toISOString() ?? null,
         status: r.status,
@@ -134,6 +172,7 @@ export async function GET(request: NextRequest) {
         perCheck,
         partialSteps,
         verify,
+        defer,
         error: r.errorMessage,
       })
     }

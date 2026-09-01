@@ -1,5 +1,5 @@
 /**
- * ALISTA — 7 Collectors (v1.1)
+ * ALISTA — 7 Collectors (v1.3)
  * ============================
  * Mỗi collector là 1 hàm async fail-open — trả {ok, data?, error?, collectMs}.
  * KHÔNG throw ra ngoài collector (mọi query bọc try/catch, fail → ok:false +
@@ -9,9 +9,10 @@
  * (2) Agent runs           — AgentRunRecord 24h/7d, failure signatures, zombies
  * (3) Escalations          — Neo4j ErrorOccurrence getEscalationCandidates
  * (4) Domain coverage      — Neo4j e.domain groupBy + last-updated per domain
- * (5) 3 layers             — Qdrant/Neo4j/embed-status + so sánh với lần trước
+ * (5) 3 layers + infra     — Qdrant/Neo4j/embed + R2/Supabase/LLM-keys/disk (v1.3)
  * (6) Self-assessment      — collector ①-⑤ fail log + tool whitelist gaps
- * (7) DB + Memory + Learning — 7 sub-checks (a-g)
+ * (7) DB + Memory + Learning + Scheduler — 8 sub-checks (a-h, h mới v1.3:
+ *     JobQueue backlog + CronJob scheduler health — "ai canh những người canh")
  */
 
 import { db } from '@/lib/db'
@@ -29,6 +30,8 @@ import { getQdrantStats, checkQdrantHealth } from '@/lib/qdrant'
 import { checkNeo4jHealth, readCypher } from '@/lib/neo4j'
 import { getAutoLearnStats } from '@/lib/auto-learn'
 import { ensureDbReady } from '@/lib/db-setup'
+import { checkR2Health } from '@/lib/r2-storage'
+import { checkSupabaseHealth } from '@/lib/supabase-sync'
 import { promises as fsP } from 'fs'
 import path from 'path'
 import type { CollectorResult, Finding, CheckId } from './types'
@@ -392,6 +395,14 @@ export interface ThreeLayersData {
     hasRealEmbeddings: boolean
     dimension: number
   }
+  /** (v1.3) Infra mở rộng — R2/Supabase (2 service còn lại của health 6/6),
+   *  số LLM key configured, và disk usage (SQLite + Qdrant storage cùng volume). */
+  infra: {
+    r2: { configured: boolean; connected: boolean; objectCount?: number; error?: string }
+    supabase: { configured: boolean; connected: boolean; tableCount: number; error?: string }
+    llmKeys: { nvidiaConfigured: number }
+    disk: { freePct: number | null; availableBytes: number | null; totalBytes: number | null; path: string } | null
+  }
   /** Snapshot của lần 'alista-check' gần nhất — để so sánh sụt giảm */
   previousSnapshot?: {
     runAt: string
@@ -401,13 +412,49 @@ export interface ThreeLayersData {
   }
 }
 
+/** (v1.3) Disk usage qua fs.statfs (Node ≥18.15 / Bun) — fail-open → null */
+async function getDiskUsage(): Promise<ThreeLayersData['infra']['disk']> {
+  try {
+    const fsAny = fsP as unknown as {
+      statfs?: (p: string) => Promise<{ blocks: number; bavail: number; bsize: number }>
+    }
+    if (typeof fsAny.statfs !== 'function') return null
+    const target = process.cwd()
+    const st = await fsAny.statfs(target)
+    const totalBytes = st.blocks * st.bsize
+    const availableBytes = st.bavail * st.bsize
+    return {
+      freePct: totalBytes > 0 ? Math.round((availableBytes / totalBytes) * 1000) / 10 : null,
+      availableBytes,
+      totalBytes,
+      path: target,
+    }
+  } catch {
+    return null
+  }
+}
+
 export async function collect3Layers(previousSnapshot?: ThreeLayersData['previousSnapshot']): Promise<CollectorResult<ThreeLayersData>> {
   return withCollector('3-layers', async () => {
-    const [qdrantHealth, qdrantStats, neo4jHealth] = await Promise.all([
-      checkQdrantHealth(),
-      getQdrantStats(),
-      checkNeo4jHealth(),
+    // (v1.3) 6 service health + disk — fail-open từng cái (withTimeout không cần:
+    // ⑤ đã có timeout 5' bọc ngoài; R2/Supabase health nội bộ đã timeout 8s ở lib)
+    const [qdrantHealth, qdrantStats, neo4jHealth, r2Health, supabaseHealth, disk] = await Promise.all([
+      checkQdrantHealth().catch(() => ({ connected: false, error: 'qdrant health throw' })),
+      getQdrantStats().catch(() => ({ collections: [] as string[], totalDocuments: 0, totalChunks: 0, vectorsIndexed: 0 })),
+      checkNeo4jHealth().catch(() => ({
+        connected: false, error: 'neo4j health throw',
+        nodeCount: undefined, relationshipCount: undefined,
+      })),
+      checkR2Health().catch(() => ({
+        configured: false, connected: false, bucket: '', error: 'r2 health throw', objectCount: undefined,
+      })),
+      checkSupabaseHealth().catch(() => ({ configured: false, connected: false, tableCount: 0, error: 'supabase health throw' })),
+      getDiskUsage(),
     ])
+
+    // Số NVIDIA key configured (1-4) — 0 = mọi agent LLM chết (critical)
+    const nvidiaConfigured = ['NVIDIA_API_KEY_1', 'NVIDIA_API_KEY_2', 'NVIDIA_API_KEY_3', 'NVIDIA_API_KEY_4']
+      .filter(k => !!process.env[k]).length
 
     // Embed-status pattern: total = totalChunks, real = vectorsIndexed
     // (Qdrant architecture: every chunk has real embedding — pseudo removed)
@@ -437,6 +484,22 @@ export async function collect3Layers(previousSnapshot?: ThreeLayersData['previou
         realRatio,
         hasRealEmbeddings: real > 0,
         dimension: 2048,
+      },
+      infra: {
+        r2: {
+          configured: !!r2Health.configured,
+          connected: !!r2Health.connected,
+          objectCount: r2Health.objectCount,
+          error: r2Health.error,
+        },
+        supabase: {
+          configured: !!supabaseHealth.configured,
+          connected: !!supabaseHealth.connected,
+          tableCount: supabaseHealth.tableCount ?? 0,
+          error: supabaseHealth.error,
+        },
+        llmKeys: { nvidiaConfigured },
+        disk,
       },
       previousSnapshot,
     }
@@ -561,6 +624,24 @@ export interface DatabaseSystemData {
     sqliteBytes: number
     tableRowCounts: Record<string, number>
     largeTables: Array<{ table: string; rows: number }>
+  }
+  // (h) Scheduler health — JobQueue backlog + CronJob kẹt (v1.3 "ai canh người canh")
+  scheduler: {
+    jobQueue: {
+      pending: number
+      running: number
+      failedIn24h: number
+      /** Job đang 'running' quá 1h — worker chết giữa job */
+      stuckRunning1h: number
+      /** Tuổi của job pending lâu nhất (giờ) — null nếu queue rỗng */
+      oldestPendingHours: number | null
+    }
+    cronJobs: {
+      total: number
+      enabled: number
+      /** Job enabled + active nhưng nextRunAt đã trễ >1h — scheduler chết/kẹt */
+      stuck: Array<{ id: string; agentId: string; taskPrompt: string; nextRunAt: string | null; hoursLate: number }>
+    }
   }
 }
 
@@ -764,6 +845,56 @@ export async function collectDatabaseSystem(): Promise<CollectorResult<DatabaseS
       console.warn('[ALISTA][collector:database-system] dbStorage fail:', err instanceof Error ? err.message : String(err))
     }
 
+    // (h) Scheduler health — JobQueue backlog + CronJob kẹt (v1.3)
+    // "Ai canh những người canh": auto-learn cron, sync cron, decay cron... nếu
+    // scheduler chết thì KHÔNG ai phát hiện — sub-check này chính là lớp phòng vệ.
+    let scheduler: DatabaseSystemData['scheduler'] = {
+      jobQueue: { pending: 0, running: 0, failedIn24h: 0, stuckRunning1h: 0, oldestPendingHours: null },
+      cronJobs: { total: 0, enabled: 0, stuck: [] },
+    }
+    try {
+      const now1h = new Date(now - 1 * 3600_000)
+      const [pending, running, failedIn24h, stuckRunning1h, oldestPending] = await Promise.all([
+        db.jobQueue.count({ where: { status: 'pending' } }).catch(() => 0),
+        db.jobQueue.count({ where: { status: 'running' } }).catch(() => 0),
+        db.jobQueue.count({ where: { status: 'failed', updatedAt: { gte: now24h } } }).catch(() => 0),
+        db.jobQueue.count({ where: { status: 'running', updatedAt: { lt: now1h } } }).catch(() => 0),
+        db.jobQueue.findFirst({
+          where: { status: 'pending' },
+          orderBy: { createdAt: 'asc' },
+          select: { createdAt: true },
+        }).catch(() => null),
+      ])
+      const oldestPendingHours = oldestPending?.createdAt
+        ? Math.round(((now - oldestPending.createdAt.getTime()) / 3600_000) * 10) / 10
+        : null
+
+      const allCrons = await db.cronJob.findMany({
+        select: { id: true, agentId: true, taskPrompt: true, enabled: true, status: true, nextRunAt: true },
+        take: 100,
+      }).catch(() => [])
+      const stuckLate = allCrons
+        .filter(j => j.enabled && j.status === 'active' && j.nextRunAt && j.nextRunAt.getTime() < now - 1 * 3600_000)
+        .map(j => ({
+          id: j.id,
+          agentId: j.agentId,
+          taskPrompt: j.taskPrompt.slice(0, 120),
+          nextRunAt: j.nextRunAt?.toISOString() ?? null,
+          hoursLate: j.nextRunAt ? Math.round(((now - j.nextRunAt.getTime()) / 3600_000) * 10) / 10 : 0,
+        }))
+
+      scheduler = {
+        jobQueue: { pending, running, failedIn24h, stuckRunning1h, oldestPendingHours },
+        cronJobs: {
+          total: allCrons.length,
+          enabled: allCrons.filter(j => j.enabled).length,
+          stuck: stuckLate,
+        },
+      }
+    } catch (err) {
+      console.warn('[ALISTA][collector:database-system] scheduler health fail:', err instanceof Error ? err.message : String(err))
+    }
+
     return {
       schemaDrift,
       zombies,
@@ -780,6 +911,7 @@ export async function collectDatabaseSystem(): Promise<CollectorResult<DatabaseS
       kgSync,
       tokenAnomaly,
       dbStorage,
+      scheduler,
     }
   })
 }

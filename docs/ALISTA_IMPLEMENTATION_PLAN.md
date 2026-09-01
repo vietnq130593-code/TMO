@@ -1,7 +1,7 @@
 # KẾ HOẠCH TRIỂN KHAI AGENT ALISTA — KỸ SƯ BẢO TRÌ HỆ THỐNG
 
 > **Người soạn:** Obi — Kỹ sư AI / Kiến trúc sư hệ thống TMO
-> **Phiên bản:** v1.2 · **Ngày:** 2026-09-01
+> **Phiên bản:** v1.3 · **Ngày:** 2026-09-01
 > **Trạng thái:** Đã phê duyệt → ĐÃ TRIỂN KHAI + E2E VERIFY ✅
 > **Nguồn yêu cầu:** Owner (phiên chat 2026-09-01)
 >
@@ -9,6 +9,7 @@
 > - v1.0 (2026-09-01) — bản đầu, 6 nhiệm vụ giám sát, pipeline song song.
 > - v1.1 (2026-09-01, bổ sung) — owner directive mới: (1) ca trực tối đa **6 tiếng** kể từ 23h30 (deadline 05:30 sáng hôm sau giờ VN), (2) pipeline chạy **TUẦN TỰ** — kiểm tra từng nhiệm vụ một, viết đề xuất từng nhiệm vụ một (không song song), (3) bổ sung **nhiệm vụ ⑦** kiểm tra lỗi/vấn đề/thiếu sót trong hệ thống **Database bao gồm cả Memory + Learning** (nếu chưa có cơ chế tương đương), (4) máy chạy **local** — không lo sandbox reset, (5) triển khai lần lượt theo plan rồi push code.
 > - **v1.2 (2026-09-01, hậu triển khai)** — owner directive mới: (1) **LUỒNG PHẢN HỒI KÍN** — mỗi đề xuất ALISTA được phê duyệt + xử lý hoàn tất → thông tin chuyển tới ALISTA **NGAY** → ALISTA xác minh lại vấn đề đã triệt để chưa → còn vấn đề (dù khác) hoặc cần nâng cấp → **gửi đề xuất mới ngay lập tức** (vòng lặp tự duy trì); (2) rà soát hậu triển khai + 10 fix v1.2 (xem mục 7).
+> - **v1.3 (2026-09-01, đánh giá năng lực + hoàn thiện)** — owner hỏi: "ALISTA đã đủ công cụ chẩn đoán + nguồn dữ liệu + tiêu chí xác nhận hiệu quả chưa?". Kết quả audit: nền chẩn đoán đủ nhưng 4 khoảng trống → bổ sung (xem mục 8): (1) **SUCCESS CRITERIA có cấu trúc** — mỗi finding kèm metric + current + target + recheck window, đưa vào văn proposal (🎯 TIÊU CHÍ XÁC NHẬN HIỆU QUẢ); (2) **verify hoãn theo recheck window** — metric cần thời gian phản ánh (successRate 7d, backfill...) → HOÃN verify đến dueAt (marker 'alista-verify-deferred' durable, sweep 60s tự kích hoạt khi đến hạn) thay vì verify NGAY gây false-negative "CHƯA triệt để"; (3) **độ phủ nguồn dữ liệu 6/6 services** — ⑤ thêm R2 + Supabase + NVIDIA key count + disk usage; ⑦ thêm sub-check (h) Scheduler health (CronJob trễ lịch >1h, JobQueue stuck/backlog/failures) — "ai canh những người canh"; (4) **recurrence tracking** — đếm số lần đề xuất cùng vấn đề → prefix ⚠ TÁI DIỄN + bump priority deterministic (≥2 lần → medium, ≥4 → high).
 
 ---
 
@@ -620,3 +621,100 @@ Hiển thị: UI Analytics → section **"ALISTA — Hoạt động"** (poll 60s
 ---
 
 *Hết kế hoạch v1.2 — đã triển khai + E2E verify toàn bộ (kể cả feedback loop). Obi.*
+
+## 8. ALISTA v1.3 — TIÊU CHÍ XÁC NHẬN HIỆU QUẢ + ĐỦ PHỦ NGUỒN DỮ LIỆU (2026-09-01)
+
+> **Bối cảnh:** owner hỏi ALISTA đã đủ công cụ chẩn đoán/đánh giá với nguồn dữ liệu rõ ràng + tiêu chí xác
+> nhận hiệu quả chưa — có cần xây thêm tools/chức năng không. Kết quả audit chi tiết:
+
+### 8.1. Kết quả audit năng lực (trước v1.3)
+
+| Yêu cầu | Hiện trạng v1.2 | Đánh giá |
+|---|---|---|
+| Chẩn đoán chính xác, chống ảo giác | 7 collectors fail-open + rules deterministic (LLM không quyết priority/category) + evidence structured | ✅ Đủ |
+| Nguồn dữ liệu rõ ràng | ⑤ chỉ 4/6 services (thiếu R2 + Supabase); không check disk, LLM key, scheduler health | ⚠️ Khoảng trống |
+| Tiêu chí xác nhận hiệu quả rõ ràng | Verify binary (findings=0 → resolved); verify NGAY khi hoàn tất | ⚠️ Khoảng trống nghiêm trọng |
+| Vấn đề dai dẳng | Không track tái diễn — mỗi ca trực là island | ⚠️ Khoảng trống |
+
+**Lỗ hổng "verify NGAY" (nghiêm trọng nhất):** tool successRate tính trên cửa sổ 7 ngày — fix deploy xong,
+verify NGAY → các lần gọi lỗi CŨ vẫn nằm trong cửa sổ → finding vẫn trigger → follow-up "CHƯA triệt để"
+SAI (false-negative) → spam đề xuất. Tương tự: mirror drift cần backfill chạy, backlog cần review thủ công,
+domain entity cần nạp tài liệu.
+
+### 8.2. Bổ sung v1.3 (4 hạng mục)
+
+**H1 — SuccessCriteria có cấu trúc (P0):**
+- `Finding.successCriteria: { metric, current, target, operator(gte|lte|eq), recheckAfterMs, recheckWhy }`
+- Rules điền đầy đủ cho mọi finding; text format vào proposal: `🎯 TIÊU CHÍ XÁC NHẬN HIỆU QUẢ (ALISTA tự
+  kiểm định): metric "X" từ mức hiện tại Y phải đạt [≥|≤|=] Z. ALISTA sẽ đo lại sau N (lý do).`
+- Nguồn truth duy nhất cho recheck window: `types.ts RECHECK_DEFAULTS_MS / RECHECK_TARGET_OVERRIDES_MS
+  / recheckWindowFor(slug, target)` — rules + verify loop đọc cùng map (không lệch nhau).
+
+**H2 — Deferred verification theo recheck window (P0):**
+- `notifyAlistaProposalCompleted` vẫn nhận thông tin NGAY (hook + sweep) — nhưng verify loop quyết:
+  - recheck=0 (connectivity, zombie, schema drift...) → verify NGAY như v1.2
+  - recheck>0 → **HOÃN** đến `dueAt = completedAt + recheckAfterMs`, tạo marker
+    `TaskExecution {type:'alista-verify-deferred', status:'pending', result:{dueAt, why, recheckAfterMs}}`
+    (durable qua restart — chống false-negative)
+- Sweep 60s thêm bước (0b): deferred marker đến hạn → đánh dấu superseded → gọi verify TRỰC TIẾP với
+  `skipDefer=true` (bỏ tính lại dueAt — quyết định "đến hạn" đã đưa ra 1 lần, chống vòng lặp
+  defer→activate→defer nếu completedAt/map đổi giữa chừng). Bước (1b): bỏ qua proposal đang có marker
+  pending (chưa đến hạn) — chống notify vô ích mỗi tick.
+
+**H3 — Độ phủ nguồn dữ liệu 6/6 + "ai canh những người canh" (P0/P1):**
+- ⑤ `infra` block mới: R2 health (checkR2Health), Supabase health (checkSupabaseHealth), số
+  NVIDIA_API_KEY configured (1-4), disk usage (fs.statfs — volume chứa SQLite + Qdrant storage).
+- Rules ⑤ mới: R2 disconnected (đã configure) → high; Supabase disconnected → medium; 0 NVIDIA key →
+  critical; disk free <30% → medium, <15% → high.
+- ⑦ sub-check (h) mới — Scheduler health: CronJob enabled+active nhưng nextRunAt trễ >1h → high
+  (scheduler chết — auto-learn/sync/decay cron ngầm không ai phát hiện); JobQueue stuck running >1h →
+  medium; pending >50 & oldest >24h → medium; failed >10/24h → medium. Cap ⑦ nâng 4 → 5.
+
+**H4 — Recurrence tracking (P2):**
+- Trước khi tạo proposal: query 1 lần toàn bộ proposal ALISTA (mới nhất trước) → group theo base key
+  prefix → `recurrence count + lastProposedAt`.
+- Problem prefix: `⚠ TÁI DIỄN (lần đề xuất thứ N cho cùng vấn đề — lần gần nhất DD/MM giờ VN...)`.
+- Bump priority deterministic (KHÔNG qua LLM): recurrence ≥2 → tối thiểu medium; ≥4 → tối thiểu high.
+  Bump áp cả scheduleAt (high/critical → 08:00 hôm sau).
+
+### 8.3. Sửa bug E2E phát hiện trong quá trình test (2 bug thật)
+
+| # | Bug | Fix |
+|---|---|---|
+| 1 | Đường kích hoạt deferred đến hạn gọi `notifyAlistaProposalCompleted` → bị in-memory NOTIFIED dedupe 10' chặn (mốc còn fresh từ lúc defer) → verify không bao giờ chạy | Sweep (0b) gọi `runFollowUpVerification(jobId, 'sweep', skipDefer=true)` TRỰC TIẾP — bypass notify (các check durable đã qua marker) |
+| 2 | Verify được gọi từ đường kích hoạt vẫn tính lại dueAt từ `completedAt + recheck` — nếu giá trị đổi giữa chừng (re-complete, map mới) → defer lại → vòng lặp defer→activate→defer | Tham số `skipDefer=true` từ đường kích hoạt — quyết định "window đã hết" chỉ đưa ra 1 lần bởi sweep |
+
+### 8.4. E2E verify v1.3 (đã thực hiện)
+
+1. **Manual comprehensive check (force):** 7/7 bước completed, 205.8s — collector ⑤ trả dữ liệu infra THẬT
+   (R2 connected 1 object, Supabase connected 24 tables, 4 NVIDIA keys, disk 51% free); ⑦ scheduler sạch
+   (0 stuck/0 backlog); mọi finding có 🎯 successCriteria; 0 proposal mới (dedupe chặn đúng — các
+   proposal v1.2 còn sống).
+2. **Defer flow:** tạo proposal test completed → sweep bắt trong ≤60s → log "HOÃN xác minh đến 15:30 02-09
+   giờ VN (số occurrence/resolution cần thời gian...)" + marker pending với dueAt 24h + why ✓
+3. **Activation flow (sau 2 fix bug):** đẩy dueAt về quá khứ → sweep kích hoạt → verify thật chạy → row
+   completed `resolved=false, stillOriginal=true`, 2 findings, follow-up bị dedupe chặn đúng (đã có
+   proposal sống) → trạng thái cuối sạch (0 pending marker — không vòng lặp) ✓
+4. **UI:** tab Database > Analytics — section ALISTA render row "⏳ Hoãn xác minh đề xuất #... — badge
+   'chờ đến hạn' + 'hẹn đo lại 08:46 03-09' + 'recheck +48h' + 're-check 7/7' + lý do hoãn ✓; console
+   0 error; mobile 390px render OK; dữ liệu test đã dọn sạch.
+5. **Agent seed:** ALISTA row trong DB cập nhật instruction v1.3 (8.204 chars — thêm mục ⑤ 6/6, ⑦-h,
+   🎯 tiêu chí, vòng phản hồi + hoãn xác minh) qua script 1 lần (forceReseed toàn bộ agents sẽ đè
+   customizations — không dùng).
+
+### 8.5. Cấu trúc recheck window (tóm tắt)
+
+| Nhóm | Window | Lý do chính |
+|---|---|---|
+| Connectivity (Qdrant/Neo4j/R2/Supabase/llm_keys), zombie, schema_drift | 0 (verify NGAY) | metric phản ánh tức thời |
+| tool successRate | 72h | lỗi cũ cần rơi khỏi cửa sổ 7d |
+| run pattern | 24h | cần run kế tiếp xác nhận |
+| domain coverage | 7d | nạp tài liệu + extraction |
+| mirror drift | 48h | backfill cần chạy |
+| backlog review (writeback/lessons) | 48h | review thủ công |
+| token anomaly | 72h | pattern cần bình thường hoá |
+| cron_stuck / autolearn_pending_stuck | 1h | self-heal nhanh qua tick |
+
+---
+
+*Hết kế hoạch v1.3 — audit + 4 bổ sung + 2 bug fix đã E2E verify. Obi.*

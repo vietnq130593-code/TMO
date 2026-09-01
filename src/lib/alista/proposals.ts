@@ -20,7 +20,7 @@ import { callLLMForAgent } from '@/lib/llm'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
 import { createSelfDirectionProposal } from '@/lib/self-direction/orchestrator'
 import { classifyExecutionMode } from '@/lib/self-direction/scan'
-import type { Finding, CreatedProposal, ProposalInput } from './types'
+import type { Finding, CreatedProposal, ProposalInput, SuccessCriteria } from './types'
 import { STEP_LABELS, baseKeyOf } from './types'
 
 // ==================== CONSTANTS ====================
@@ -99,7 +99,8 @@ NGUYÊN TẮC VÀNG:
 2. Tiếng Việt, ngắn gọn (≤2.000 ký tự/phần).
 3. 4 phần rõ ràng: Vấn đề là gì / Giải quyết như thế nào / Triển khai như thế nào (các bước cụ thể) / Tác động kỳ vọng (1 câu).
 4. Mỗi proposal phải có "key" đúng với key trong finding (để pipeline dedupe).
-5. output JSON hợp lệ duy nhất — KHÔNG markdown fence:
+5. SUCCESS_CRITERIA của mỗi finding là TIÊU CHÍ XÁC NHẬN HIỆU QUẢ giải pháp — đưa nguyên vẹn vào cuối phần implementation (pipeline sẽ tự append nếu thiếu).
+6. output JSON hợp lệ duy nhất — KHÔNG markdown fence:
 {"proposals":[{"key":"<key>","title":"<tiêu đề ngắn tiếng Việt>","problem":"...","solution":"...","implementation":"...","impact":"..."}]}`
 
 // ==================== PROMPT BUILDER ====================
@@ -117,11 +118,42 @@ function buildUserPrompt(checkId: number, checkLabel: string, findings: Finding[
     lines.push(`PRIORITY: ${f.priority}`)
     lines.push(`TARGET: ${f.target}`)
     lines.push(`EVIDENCE: ${JSON.stringify(f.evidence)}`)
+    if (f.successCriteria) {
+      lines.push(`SUCCESS_CRITERIA (tiêu chí xác nhận hiệu quả — đưa vào cuối implementation): ${JSON.stringify(f.successCriteria)}`)
+    }
     lines.push(`DIRECTION (gợi ý giải pháp): ${f.direction}`)
     lines.push('')
   })
   lines.push(`Hãy viết ${findings.length} proposal (1 per finding) theo format JSON đã nêu. Output DUY NHẤT JSON hợp lệ.`)
   return lines.join('\n')
+}
+
+// ==================== SUCCESS CRITERIA TEXT (v1.3) ====================
+
+/** Format criteria thành khối text tiếng Việt — đưa vào implementation của proposal */
+function formatSuccessCriteria(c: SuccessCriteria): string {
+  const ops: Record<string, string> = { gte: '≥', lte: '≤', eq: '=' }
+  const op = ops[c.operator] ?? '='
+  const recheckTxt = c.recheckAfterMs > 0
+    ? `ALISTA sẽ đo lại sau ${formatDuration(c.recheckAfterMs)} khi proposal hoàn tất (${c.recheckWhy})`
+    : 'ALISTA đo lại NGAY khi proposal hoàn tất (metric phản ánh tức thời)'
+  return `🎯 TIÊU CHÍ XÁC NHẬN HIỆU QUẢ (ALISTA tự kiểm định): metric "${c.metric}" từ mức hiện tại ${c.current} phải đạt ${op} ${c.target}. ${recheckTxt}.`
+}
+
+/** Format ms → text tiếng Việt (vd '48 giờ', '1 giờ') */
+function formatDuration(ms: number): string {
+  const hours = ms / 3600_000
+  if (hours >= 24 && Number.isInteger(hours / 24)) return `${hours / 24} ngày`
+  if (hours >= 1) return `${Math.round(hours * 10) / 10} giờ`
+  return `${Math.round(ms / 60_000)} phút`
+}
+
+/** Đảm bảo implementation có khối criteria — append nếu LLM quên (guaranteed) */
+function ensureCriteriaInImplementation(implementation: string, c: SuccessCriteria | undefined): string {
+  if (!c) return implementation
+  const marker = 'TIÊU CHÍ XÁC NHẬN HIỆU QUẢ'
+  if (implementation.includes(marker)) return implementation
+  return `${implementation}\n\n${formatSuccessCriteria(c)}`
 }
 
 // ==================== LLM SYNTHESIS ====================
@@ -223,13 +255,16 @@ function fallbackFromFindings(findings: Finding[], followUpFor?: FollowUpContext
   return findings.slice(0, MAX_PROPOSALS_PER_CHECK).map(f => {
     // Title = `[ALISTA] <slug>:<target>:<yyyymm>[:vN] — <short label>`
     const shortLabel = (f.direction.split('.')[0] || f.direction).slice(0, 100)
+    const implementation = `1) Điều tra root cause của vấn đề này; 2) Áp dụng phương án đã nêu trong solution; 3) Verify kết quả bằng metrics trước-sau; 4) Thêm regression test/guard để không lặp lại.`
     return {
       key: f.key,
       title: `${f.key} — ${shortLabel}`,
       problem: followUpProblemPrefix(followUpFor, f) + `Vấn đề phát hiện qua collector ${f.checkLabel} (target: ${f.target}). Bằng chứng: ${JSON.stringify(f.evidence)}. Priority: ${f.priority}, category: ${f.category}.`,
       solution: f.direction,
-      implementation: `1) Điều tra root cause của vấn đề này; 2) Áp dụng phương án đã nêu trong solution; 3) Verify kết quả bằng metrics trước-sau; 4) Thêm regression test/guard để không lặp lại.`,
-      impact: `Giảm tái diễn vấn đề, tăng độ tin cậy của subsystem ${f.checkLabel}.`,
+      implementation: ensureCriteriaInImplementation(implementation, f.successCriteria),
+      impact: f.successCriteria
+        ? `Khi metric "${f.successCriteria.metric}" đạt ${f.successCriteria.target} — vấn đề được xác nhận là đã xử lý triệt để.`
+        : `Giảm tái diễn vấn đề, tăng độ tin cậy của subsystem ${f.checkLabel}.`,
     }
   })
 }
@@ -324,6 +359,65 @@ async function findLiveProposalsByKeyPrefix(keyPrefixes: string[]): Promise<Map<
   return out
 }
 
+// ==================== RECURRENCE (v1.3) ====================
+
+/** Rank priority để so sánh + bump khi vấn đề tái diễn */
+const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 }
+
+/**
+ * (v1.3) Đếm số lần ALISTA đã đề xuất cùng vấn đề (base key prefix — mọi trạng
+ * thái, kể cả completed/rejected) + lần gần nhất. Vấn đề dai dẳng = đề xuất
+ * nhiều lần vẫn tái xuất hiện → annotate vào problem + bump priority.
+ */
+interface RecurrenceInfo { count: number; lastProposedAt: Date | null }
+
+async function findRecurrenceInfo(baseKeys: string[]): Promise<Map<string, RecurrenceInfo>> {
+  const out = new Map<string, RecurrenceInfo>()
+  if (baseKeys.length === 0) return out
+  try {
+    // Query 1 lần toàn bộ proposal của ALISTA (mới nhất trước) rồi group theo
+    // base key prefix — rẻ hơn N query prefix riêng lẻ (prefix không index được).
+    const rows = await db.selfDirectionProposal.findMany({
+      where: { createdBy: ALISTA_AGENT_NAME },
+      orderBy: { createdAt: 'desc' },
+      select: { title: true, createdAt: true },
+      take: 500,
+    })
+    for (const r of rows) {
+      for (const bk of baseKeys) {
+        if (!r.title.startsWith(bk)) continue
+        const cur = out.get(bk) ?? { count: 0, lastProposedAt: null }
+        cur.count += 1
+        // rows desc — row đầu gặp là mới nhất
+        if (!cur.lastProposedAt) cur.lastProposedAt = r.createdAt
+        out.set(bk, cur)
+      }
+    }
+  } catch (err) {
+    console.warn('[ALISTA][proposals] recurrence query fail (fail-open):', err instanceof Error ? err.message : String(err))
+  }
+  return out
+}
+
+/** Prefix problem khi vấn đề tái diễn — đánh dấu độ dai dẳng cho owner */
+function recurrenceProblemPrefix(info: RecurrenceInfo | undefined): string {
+  if (!info || info.count === 0) return ''
+  const lastStr = info.lastProposedAt
+    ? new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', day: '2-digit', month: '2-digit' }).format(info.lastProposedAt)
+    : 'không rõ'
+  return `⚠ TÁI DIỄN (lần đề xuất thứ ${info.count + 1} cho cùng vấn đề — lần gần nhất ${lastStr} giờ VN, vẫn chưa xử lý dứt điểm). `
+}
+
+/**
+ * Bump priority khi vấn đề dai dẳng — DETERMINISTIC (không phải LLM quyết):
+ *   recurrence ≥ 4 → tối thiểu 'high' · ≥ 2 → tối thiểu 'medium'
+ */
+function bumpPriorityByRecurrence(priority: string, recurrenceCount: number): string {
+  if (recurrenceCount >= 4 && (PRIORITY_RANK[priority] ?? 99) > PRIORITY_RANK.high) return 'high'
+  if (recurrenceCount >= 2 && (PRIORITY_RANK[priority] ?? 99) > PRIORITY_RANK.medium) return 'medium'
+  return priority
+}
+
 // ==================== SCHEDULE AT ====================
 
 /** Low/medium → null (triển khai ngay khi duyệt). High/critical → 08:00 hôm sau (giờ VN) */
@@ -411,6 +505,11 @@ export async function createProposalsForCheck(
     if (loose) d.key = loose.key
   }
 
+  // 1c. (v1.3) Recurrence — đếm số lần đã đề xuất cùng vấn đề (base key,
+  //      mọi trạng thái). Vấn đề dai dẳng → annotate problem + bump priority.
+  const recurrenceBaseKeys = Array.from(new Set(findings.map(f => baseKeyOf(f.key))))
+  const recurrenceMap = await findRecurrenceInfo(recurrenceBaseKeys)
+
   // 2. Dedupe — query live proposals theo BASE key prefix (strip `:vN`)
   const keyPrefixes = Array.from(new Set(drafts.map(d => baseKeyOf(d.key))))
   const liveMap = await findLiveProposalsByKeyPrefix(keyPrefixes)
@@ -435,27 +534,37 @@ export async function createProposalsForCheck(
       continue
     }
 
-    // Build ProposalInput — category/priority LẤY TỪ RULES (không tin LLM)
-    const scheduleAt = computeScheduleAt(finding.priority)
+    // (v1.3) Recurrence — annotate + bump priority (deterministic, không LLM)
+    const recInfo = recurrenceMap.get(baseKeyOf(draft.key))
+    const effectivePriority = bumpPriorityByRecurrence(finding.priority, recInfo?.count ?? 0)
+    if (effectivePriority !== finding.priority) {
+      console.log(`[ALISTA][proposals] check ${checkId}: bump priority ${finding.priority} → ${effectivePriority} (vấn đề tái diễn ${recInfo?.count} lần) — key=${draft.key}`)
+    }
+
+    // Build ProposalInput — category/priority LẤY TỪ RULES (+ bump recurrence) — không tin LLM
+    const scheduleAt = computeScheduleAt(effectivePriority)
     const executionMode = classifyExecutionMode({
       category: finding.category,
       problem: draft.problem,
       solution: draft.solution,
     })
-    // (v1.2) Prefix ⟲ FOLLOW-UP vào problem khi ở chế độ xác minh lại
-    const problem = followUpFor
-      ? followUpProblemPrefix(followUpFor, finding) + draft.problem
-      : draft.problem
+    // (v1.2) Prefix ⟲ FOLLOW-UP + (v1.3) prefix ⚠ TÁI DIỄN vào problem
+    const problem = (followUpFor
+      ? followUpProblemPrefix(followUpFor, finding)
+      : '') + recurrenceProblemPrefix(recInfo) + draft.problem
+
+    // (v1.3) Criteria append guaranteed — LLM có thể quên đưa SUCCESS_CRITERIA
+    const implementation = ensureCriteriaInImplementation(draft.implementation, finding.successCriteria)
 
     try {
       const row = await createSelfDirectionProposal({
         // FIX v1.2: truncate 200 chars — khớp contract validateProposalInput
         title: `${draft.key} — ${draft.title}`.slice(0, 200),
         category: finding.category,
-        priority: finding.priority,
+        priority: effectivePriority,
         problem: problem.slice(0, 4000),
         solution: draft.solution,
-        implementation: draft.implementation,
+        implementation,
         impact: draft.impact,
         scheduleAt,
         status: 'pending',

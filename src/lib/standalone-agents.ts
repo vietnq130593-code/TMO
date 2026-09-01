@@ -84,17 +84,20 @@ NGUYÊN TẮC VÀNG — KHÔNG TỰ SỬA HỆ THỐNG
    Đánh giá kho tri thức (Neo4j e.domain groupBy, fallback SQLite localEntity). Tổng entity <500 → high; domain chuẩn nào <20 → medium; domain >30 ngày không cập nhật → low.
    Đề xuất bổ sung làm phong phú domain yếu — liệt kê đầy đủ.
 
-⑤ LỖI Ở 3 TẦNG DỮ LIỆU (Qdrant, Neo4j, Vector Embeddings)
+⑤ LỖI Ở 3 TẦNG DỮ LIỆU + INFRA (v1.3: 6/6 services)
    Qdrant/Neo4j disconnected → critical (mỗi tầng 1 proposal). pointCount=0 mà KB có document → high (re-embed).
    realRatio<50% / hasRealEmbeddings=false → high. nodeCount sụt >20% vs lần check trước → high.
-   Đề xuất kèm phương án triển khai rõ ràng (re-embed, reconnect, backfill).
+   (v1.3 MỚI) R2 Cloudflare disconnected → high (backup/PDF fail âm thầm); Supabase disconnected → medium
+   (sync backup fail); 0 NVIDIA_API_KEY configured → critical (mọi agent LLM chết);
+   disk trống <30% → medium, <15% → high (SQLite + Qdrant cùng volume).
+   Đề xuất kèm phương án triển khai rõ ràng (re-embed, reconnect, backfill, dọn disk).
 
 ⑥ TỰ ĐỀ XUẤT NÂNG CẤP CHÍNH ALISTA
    Cảm nhận từ ca trực: collector nào fail, năng lực nào thiếu (tool, permission, dữ liệu), cải tiến nào giúp ALISTA làm nhiệm vụ tốt hơn.
    Category long_term, priority low. Tối đa 1 proposal/ca trực.
 
-⑦ DATABASE + MEMORY + LEARNING SYSTEM (v1.1 MỚI)
-   Kiểm tra toàn vẹn 3 subsystem:
+⑦ DATABASE + MEMORY + LEARNING + SCHEDULER SYSTEM (v1.1; v1.3 thêm h)
+   Kiểm tra toàn vẹn 4 subsystem:
    (a) SQLite integrity & schema drift — schema drift >0 → high.
    (b) SQLite zombie rows (AgentRunRecord running >6h, TaskExecution running >24h, SmolabTask running >30', GoalLoopJob running >15') → medium.
    (c) Memory mirror drift (SQLite EpisodeRecord vs Neo4j Episode, SQLite LessonRecord vs Neo4j Lesson) — drift >20% → medium.
@@ -102,6 +105,9 @@ NGUYÊN TẮC VÀNG — KHÔNG TỰ SỬA HỆ THỐNG
    (e) KnowledgeGraph sync drift (synced=false >50, buffer >2× graph) → medium.
    (f) Token anomaly (spike >3σ hoặc drop <10% mean so với 7d) → medium.
    (g) DB size & storage (DB >500MB hoặc 1 bảng >1M row) → low long_term.
+   (h) v1.3 MỚI — Scheduler health "ai canh những người canh": CronJob enabled nhưng nextRunAt trễ >1h
+   → high (scheduler chết/kẹt — auto-learn/sync/decay cron ngầm); JobQueue kẹt running >1h → medium;
+   pending >50 & oldest >24h → medium; failed >10/24h → medium.
    Tối đa 2 sub-proposal từ ⑦ mỗi ca trực.
 
 ═══════════════════════════════════════════
@@ -111,12 +117,15 @@ CHUẨN ĐỀ XUẤT (4 phần bắt buộc)
 Mỗi đề xuất gửi tới module Self-Direction phải có 4 phần rõ ràng, tiếng Việt, ngắn gọn (≤2.000 ký tự/phần):
 
 1. **PROBLEM** — Vấn đề là gì? Dẫn chứng từ số liệu đã thu thập (percent, count, sample). KHÔNG bịa số liệu.
+   Nếu vấn đề đã được đề xuất trước mà tái xuất hiện → prefix "⚠ TÁI DIỄN (lần thứ N)" (pipeline tự thêm).
 2. **SOLUTION** — Giải quyết như thế nào? Phương án tổng quan, không quá chi tiết.
 3. **IMPLEMENTATION** — Triển khai như thế nào? Các bước cụ thể, có thể giao cho agent khác.
+   Kèm 🎯 TIÊU CHÍ XÁC NHẬN HIỆU QUẢ (v1.3): metric + giá trị hiện tại + ngưỡng mục tiêu + thời điểm đo lại
+   (pipeline tự append nếu thiếu) — đây là căn cứ để ALISTA xác minh "đã xử lý triệt để chưa".
 4. **IMPACT** — Tác động kỳ vọng (1 câu).
 
 **Category** (do rules quyết, KHÔNG do LLM): tool_failure | gap | improvement | long_term (8 chuẩn của Self-Direction).
-**Priority**: low | medium | high | critical (do rules quyết).
+**Priority**: low | medium | high | critical (do rules quyết + bump khi tái diễn ≥2 lần).
 **scheduleAt**: null (low/medium — triển khai ngay khi duyệt); hoặc 08:00 hôm sau (high/critical).
 **Cap**: ≤6 proposals/1 ca trực.
 
@@ -128,6 +137,21 @@ Khi được yêu cầu viết đề xuất: xuất JSON hợp lệ theo định
 {"key":"...","problem":"...","solution":"...","implementation":"...","impact":"..."} (tiếng Việt, chỉ dùng số liệu trong findings).
 Khi được hỏi báo cáo: markdown có cấu trúc, section rõ ràng.
 Khi được hỏi tình trạng: ngắn gọn, có số liệu.
+
+═══════════════════════════════════════════
+VÒNG LẶP PHẢN HỒI KÍN (v1.2) + HOÃN XÁC MINH THEO RECHECK WINDOW (v1.3)
+═══════════════════════════════════════════
+
+1. Đề xuất được phê duyệt + xử lý hoàn tất → thông tin chuyển tới ALISTA NGAY (hook in-process + sweep 60s lưới an toàn).
+2. ALISTA tra recheck window của vấn đề (cùng map với 🎯 tiêu chí trong proposal):
+   - Metric phản ánh tức thời (zombie, connectivity, schema drift) → re-run collector NGAY.
+   - Metric cần thời gian (successRate 7d, backfill mirror, backlog review) → HOÃN verify đến
+     dueAt (marker 'alista-verify-deferred' durable) — chống kết luận sai "CHƯA triệt để"
+     khi giải pháp vừa deploy chưa kịp phản ánh vào số liệu.
+3. Đến hạn (sweep 60s tự kích hoạt) → re-run collector → so findings:
+   - Không còn finding → ✅ đã xử lý triệt để.
+   - Còn finding (dù khác) → ⟲ gửi đề xuất follow-up NGAY (key :vN tự tăng, prefix ⟲ FOLLOW-UP,
+     tái diễn ≥2 lần → bump priority).
 
 ═══════════════════════════════════════════
 QUY TRÌNH ĐÊM (cron 23h30)
@@ -473,15 +497,21 @@ LEARNING & MEMORY
   },
 
   // ============================================================================
-  // ALISTA — KỸ SƯ BẢO TRÌ HỆ THỐNG (v1.1, 2026-09-01)
+  // ALISTA — KỸ SƯ BẢO TRÌ HỆ THỐNG (v1.3, 2026-09-01)
   // ============================================================================
   // Ca trực 23h30 hàng ngày (giờ VN), budget 6h (đến 05:30 hôm sau). Pipeline
   // kiểm tra toàn diện 7 nhiệm vụ TUẦN TỰ (KHÔNG song song) — mỗi nhiệm vụ:
   // collect → rules → LLM proposal → ghi TaskExecution step → check deadline.
   //
   // 7 nhiệm vụ: (1) Tools health, (2) Agent runs không complete, (3) Escalations
-  // Episodic Memory, (4) Domain Coverage, (5) 3 tầng dữ liệu Qdrant/Neo4j/Embed,
-  // (6) Tự-đánh-giá ALISTA, (7) Database + Memory + Learning system (v1.1 MỚI).
+  // Episodic Memory, (4) Domain Coverage, (5) 3 tầng dữ liệu + INFRA 6/6 services
+  // (v1.3: +R2/Supabase/LLM-keys/disk), (6) Tự-đánh-giá ALISTA, (7) Database +
+  // Memory + Learning + Scheduler system (v1.3 thêm sub-check h: CronJob/JobQueue).
+  //
+  // v1.3: mỗi finding kèm successCriteria (metric + target + recheck window) —
+  // tiêu chí xác nhận hiệu quả giải pháp; verify loop hoãn xác minh theo recheck
+  // window ('alista-verify-deferred') chống false-negative; recurrence tracking
+  // (tái diễn ≥2 lần → bump priority).
   //
   // Mọi phát hiện có vấn đề → viết proposal 4 phần gửi Self-Direction (source
   // 'agent', createdBy 'ALISTA'). ALISTA là KỸ SƯ CHẨN ĐOÁN + ĐỀ XUẤT — KHÔNG
@@ -491,17 +521,21 @@ LEARNING & MEMORY
     name: 'ALISTA',
     description:
       'Kỹ sư bảo trì hệ thống TMO — giám sát real-time tool health & agent runs, '
-      + 'chẩn đoán escalations & 3 tầng dữ liệu (Qdrant/Neo4j/Embeddings), đánh giá Domain Coverage, '
-      + 'kiểm tra toàn vẹn hệ thống Database + Memory + Learning, viết đề xuất cải tiến gửi Self-Direction. '
+      + 'chẩn đoán escalations & 3 tầng dữ liệu + infra 6/6 services (Qdrant/Neo4j/Embeddings/R2/Supabase/disk), '
+      + 'đánh giá Domain Coverage, kiểm tra toàn vẹn Database + Memory + Learning + Scheduler, '
+      + 'viết đề xuất cải tiến kèm tiêu chí xác nhận hiệu quả gửi Self-Direction, '
+      + 'xác minh follow-up theo recheck window (vòng lặp phản hồi kín). '
       + 'Ca trực: 23h30 hàng ngày + kiểm tra thủ công theo yêu cầu.',
     instruction: ALISTA_INSTRUCTION,
     domain: 'mixed',
     capable:
       'Giám sát tool health, phân tích AgentRunRecord lỗi, nghiên cứu escalations episodic, '
-      + 'đánh giá domain coverage KB, health-check 3 tầng dữ liệu (Qdrant/Neo4j/Embeddings), '
-      + 'kiểm tra toàn vẹn hệ thống Database + Memory + Learning (schema drift, zombie rows, '
-      + 'mirror drift, auto-learn health, KnowledgeGraph sync, token anomaly, DB storage), '
-      + 'viết proposal bảo trì 4 phần chuẩn Self-Direction (problem/solution/implementation/impact)',
+      + 'đánh giá domain coverage KB, health-check 3 tầng dữ liệu + infra 6/6 services '
+      + '(Qdrant/Neo4j/Embeddings/R2/Supabase/LLM-keys/disk), kiểm tra toàn vẹn hệ thống '
+      + 'Database + Memory + Learning + Scheduler (schema drift, zombie rows, mirror drift, '
+      + 'auto-learn health, KnowledgeGraph sync, token anomaly, DB storage, cron/queue stuck), '
+      + 'viết proposal bảo trì 4 phần chuẩn Self-Direction kèm tiêu chí xác nhận hiệu quả '
+      + '(metric + target + recheck window) — machine-checkable',
     provider: 'nvidia',
     // MODEL POLICY: kimi-k3 enforced toàn hệ thống (llm.ts:callLLMForAgent) —
     // giá trị profile này chỉ là khai báo, runtime override → kimi-k3 + fallback chain.

@@ -44,6 +44,112 @@ export interface Finding {
   direction: string
   /** Target string dùng làm key phụ cho dedupe (vd 'grep', 'BOLT', 'embed') */
   target: string
+  /**
+   * (v1.3) Tiêu chí xác nhận hiệu quả giải pháp — cấu trúc, machine-checkable.
+   * Rule đi kèm metric + ngưỡng target + cửa sổ re-check: verify loop dùng
+   * recheckAfterMs để quyết định đo lại NGAY hay HOÃN đến khi metric kịp
+   * phản ánh giải pháp (chống false-negative "CHƯA triệt để" sai).
+   */
+  successCriteria?: SuccessCriteria
+}
+
+/** (v1.3) Tiêu chí xác nhận hiệu quả 1 giải pháp — gắn với Finding */
+export interface SuccessCriteria {
+  /** Tên metric (vd 'tool "grep" successRate cửa sổ 7d') */
+  metric: string
+  /** Giá trị hiện tại lúc phát hiện (số hoặc chuỗi mô tả) */
+  current: string | number
+  /** Ngưỡng mục tiêu coi là đã giải quyết */
+  target: string | number
+  /** Toán tử so sánh với target */
+  operator: 'gte' | 'lte' | 'eq'
+  /** Chờ bao lâu (ms) sau khi proposal hoàn tất trước khi đo lại — 0 = đo ngay */
+  recheckAfterMs: number
+  /** Lý do (tiếng Việt) vì sao cần chờ — hiển thị cho owner */
+  recheckWhy: string
+}
+
+// ==================== RECHECK WINDOW (v1.3) ====================
+//
+// Sau khi 1 proposal được phê duyệt + xử lý hoàn tất, verify loop re-run collector.
+// Nhưng nhiều metric cần THỜI GIAN để phản ánh giải pháp (successRate tính trên
+// cửa sổ 7 ngày chứa lỗi cũ; entity count cần nạp tài liệu; backlog cần review...).
+// Verify NGAY → false-negative "CHƯA triệt để" → follow-up spam.
+//
+// Map dưới là nguồn SỰ THẬT DUY NHẤT (single source of truth) cho recheck window:
+//   - rules.ts đọc khi build successCriteria (đưa vào proposal text)
+//   - proposal-verify.ts đọc khi quyết định verify NGAY (0) hay HOÃN (dueAt)
+//
+// Key: slug mặc định | override `slug:target`.
+
+const HOUR = 3600_000
+const DAY = 24 * HOUR
+
+/** Recheck window mặc định theo slug (slug = phần thứ 2 trong dedupe key) */
+export const RECHECK_DEFAULTS_MS: Record<string, number> = {
+  tool: 3 * DAY, // successRate cửa sổ 7d — ~3 ngày để lỗi cũ rơi khỏi cửa sổ
+  run: 1 * DAY, // cần run kế tiếp của agent xác nhận pattern không tái diễn
+  zombie: 0, // dọn zombie có hiệu lực tức thời
+  escalation: 1 * DAY, // occurrence/resolved cần thời gian ghi nhận
+  domain: 7 * DAY, // nạp tài liệu + extraction cần nhiều giờ/ngày
+  layer: 0, // connectivity đo tức thời (override cho các target cần thời gian)
+  self: 0, // không re-check được (guard sẵn ở verify)
+  db: 1 * DAY,
+}
+
+/** Override recheck window cho slug:target cụ thể */
+export const RECHECK_TARGET_OVERRIDES_MS: Record<string, number> = {
+  // ⑤ layer — target cần thời gian phản ánh
+  'layer:qdrant_empty': 1 * DAY, // re-embed backfill cần chạy
+  'layer:embed_low': 3 * DAY, // re-embed + tỷ lệ cần tích lũy
+  'layer:neo4j_drop': 1 * DAY, // restore/sync
+  'layer:qdrant_drop': 1 * DAY, // re-embed collection
+  'layer:disk': 1 * DAY, // archival/vacuum cần chạy
+  // ⑦ db — target cụ thể
+  'db:schema_drift': 0,
+  'db:zombies': 0,
+  'db:mirror_episode_drift': 2 * DAY, // backfill mirror cần chạy
+  'db:mirror_lesson_drift': 2 * DAY,
+  'db:autolearn_pending_stuck': 1 * HOUR, // restart worker là nhanh
+  'db:autolearn_failures': 1 * DAY,
+  'db:writeback_backlog': 2 * DAY, // review thủ công từng mục
+  'db:lessons_review_backlog': 2 * DAY,
+  'db:kg_unsynced': 1 * DAY, // sync catch-up
+  'db:kg_buffer_overload': 1 * DAY,
+  'db:token_spike': 3 * DAY, // pattern tiêu thụ cần ngày để bình thường hoá
+  'db:token_drop': 3 * DAY,
+  'db:db_size': 2 * DAY, // archival + VACUUM
+  'db:large_tables': 2 * DAY,
+  'db:cron_stuck': 1 * HOUR, // scheduler self-heal qua tick 60s
+  'db:queue_stuck': 6 * HOUR,
+  'db:queue_backlog': 1 * DAY,
+  'db:queue_failures': 1 * DAY,
+}
+
+/** Lý do con người đọc được — đi kèm window khi hoãn verify */
+export const RECHECK_WHY: Record<string, string> = {
+  tool: 'successRate đo trên cửa sổ 7 ngày — cần ~3 ngày để các lần gọi lỗi cũ rơi khỏi cửa sổ',
+  run: 'cần run kế tiếp của agent để xác nhận pattern fail không tái diễn',
+  escalation: 'số occurrence/resolution cần thời gian để hệ thống ghi nhận đủ',
+  domain: 'nạp tài liệu + pipeline extraction cần nhiều giờ đến nhiều ngày',
+  'layer:qdrant_empty': 'pipeline re-embed backfill cần thời gian chạy',
+  'layer:embed_low': 're-embed + tích lũy tỷ lệ embedding thật cần ~3 ngày',
+  'layer:disk': 'archival/vacuum/dọn file cần thời gian chạy',
+  'db:mirror_episode_drift': 'backfill mirror từ graph cần thời gian chạy',
+  'db:mirror_lesson_drift': 'backfill mirror từ graph cần thời gian chạy',
+  'db:writeback_backlog': 'review từng writeback là việc thủ công — cần thời gian',
+  'db:lessons_review_backlog': 'review từng lesson là việc thủ công — cần thời gian',
+  'db:token_spike': 'pattern tiêu thụ token cần vài ngày để bình thường hoá',
+  'db:token_drop': 'pattern tiêu thụ token cần vài ngày để bình thường hoá',
+  'db:cron_stuck': 'scheduler self-heal qua tick 60s — 1 giờ là đủ kết luận',
+}
+
+/** Tra recheck window + lý do cho 1 finding (slug + target) */
+export function recheckWindowFor(slug: string, target: string): { ms: number; why: string } {
+  const overrideKey = `${slug}:${target.toLowerCase()}`
+  const ms = RECHECK_TARGET_OVERRIDES_MS[overrideKey] ?? RECHECK_DEFAULTS_MS[slug] ?? 0
+  const why = RECHECK_WHY[overrideKey] ?? RECHECK_WHY[slug] ?? 'metric phản ánh tức thời — đo lại ngay'
+  return { ms, why }
 }
 
 /** Input tạo proposal (đã qua validateProposalInput) */
