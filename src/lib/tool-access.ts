@@ -26,15 +26,18 @@ import { db } from '@/lib/db'
 
 // ==================== AGENT KEY MAPPING ====================
 //
-// Chuẩn hóa 1 chiều về 8 key. Nguồn tên gọi trong app:
+// Chuẩn hóa 1 chiều về 9 key. Nguồn tên gọi trong app:
 //   - Code Team: agents.ts — name (APEX/CORTEX/BOLT/SENTINEL/CATALYST) + position (TL/G1/G2-A/G2-B/G3)
-//   - Standalone: standalone-agents.ts — 'Omega'
+//   - Standalone: standalone-agents.ts — 'Omega' + 'ALISTA' (kỹ sư bảo trì)
 //   - Opus (meta-agent CTO): opus-agent.ts — 'Opus' (TASK 22: key riêng để
 //     Tools Manager gán/tắt tool cho Opus độc lập với agents động)
 //   - Agent động do Omega create_agent: tên bất kỳ → NEW_AGENT (áp chung 1 bộ override)
 //   - Tools Registry (agentMatrix): short = 'OM'|'TL'|'G1'|'G2-A'|'G2-B'|'G3'
+//
+// FIX 2026-09-01 (user request: "hiện tên tất cả các Agents hiện có"): thêm
+// ALISTA — đủ 8 agent thật (AgentProfile) + NEW_AGENT bucket cho agents động.
 
-export const AGENT_KEYS = ['APEX', 'CORTEX', 'BOLT', 'SENTINEL', 'CATALYST', 'OMEGA', 'OPUS', 'NEW_AGENT'] as const
+export const AGENT_KEYS = ['APEX', 'CORTEX', 'BOLT', 'SENTINEL', 'CATALYST', 'OMEGA', 'ALISTA', 'OPUS', 'NEW_AGENT'] as const
 export type AgentKey = (typeof AGENT_KEYS)[number]
 
 const POSITION_TO_KEY: Record<string, AgentKey> = {
@@ -53,6 +56,7 @@ const NAME_TO_KEY: Record<string, AgentKey> = {
   CATALYST: 'CATALYST',
   OMEGA: 'OMEGA',
   OM: 'OMEGA', // Tools Registry agentMatrix short
+  ALISTA: 'ALISTA', // kỹ sư bảo trì (standalone-agents.ts) — ca trực 23h30
   OPUS: 'OPUS', // meta-agent CTO (opus-agent.ts) — TASK 22
 }
 

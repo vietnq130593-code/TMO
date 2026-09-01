@@ -1504,6 +1504,30 @@ model ToolConfig {
 }
 
 /// ============================================================
+/// SKILL ACCESS (2026-09-01 — user request: "Agents - skills access" trong
+/// dialog Quản lý Tools & Skills). Mirror pattern ToolAssignment: override
+/// quyền đọc skill theo agent key. Mặc định (không có row) = MỌI agent đọc
+/// được skill qua list_skills/read_skill (behavior 2026-09-12 giữ nguyên).
+/// enabled=false → chặn agent đó: read_skill hard-gate + list_skills ẩn +
+/// không inject vào system prompt (DB skills).
+model SkillAssignment {
+  id        String   @id @default(cuid())
+  /// 'APEX'|'CORTEX'|'BOLT'|'SENTINEL'|'CATALYST'|'OMEGA'|'ALISTA'|'OPUS'|'NEW_AGENT'
+  /// (cùng key map tool-access.ts — resolveAgentKey)
+  agentKey  String
+  /// Slug skill (FS: skills/<slug>/SKILL.md · DB: AgentSkill.slug)
+  slug      String
+  enabled   Boolean
+  /// 'user' | 'omega' | 'system'
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([agentKey, slug])
+  @@index([agentKey])
+}
+
+/// ============================================================
 /// EPISODIC MEMORY (A6 — file upload 2026-08-29)
 /// Mirror SQLite bền của Episode/Lesson trên Neo4j (graph primary).
 /// Episodic Neo4j layer là nguồn sự thật quan hệ (Episode-CONTAINS->Action,

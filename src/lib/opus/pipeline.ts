@@ -282,11 +282,19 @@ async function buildDirectiveSystemPrompt(profile: AgentProfile): Promise<string
   }
 
   // Enabled skills (global — mirror chat route, budget 16k chars)
+  // 2026-09-01 — SKILL ACCESS: lọc skill bị chặn cho riêng Opus (fail-open)
   try {
-    const enabledSkills = await db.agentSkill.findMany({
+    let enabledSkills = await db.agentSkill.findMany({
       where: { enabled: true },
       select: { name: true, slug: true, content: true, source: true },
     })
+    if (enabledSkills.length > 0) {
+      try {
+        const { getDisabledSlugsForAgent } = await import('@/lib/skill-access')
+        const disabled = await getDisabledSlugsForAgent(profile.name)
+        if (disabled.size > 0) enabledSkills = enabledSkills.filter(sk => !disabled.has(sk.slug))
+      } catch { /* fail-open */ }
+    }
     if (enabledSkills.length > 0) {
       let skillsText = ''
       for (const skill of enabledSkills) {

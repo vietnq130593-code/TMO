@@ -14,6 +14,10 @@
  *   - Tab Skills:  67 FS skills + 3 DB skills → click xem nội dung SKILL.md;
  *                  FS skills SỬA ĐƯỢC (PUT /api/openclaw/skills/fs — backup .bak);
  *                  DB skills giữ flow cũ (read-only tại đây).
+ *                  2026-09-01: ma trận "Agents — skills access" (9 agent × 3 trạng
+ *                  thái) → POST /api/skills/assignments (enforce read_skill
+ *                  hard-gate + list_skills ẩn + không inject prompt); nội dung
+ *                  skill scroll trong khung (field-sizing fixed + max-height).
  *
  * Component TỰ CHỨA: tự fetch /api/tools/registry + /api/tools/assignments +
  * audit JSON (src/lib/tools-audit-results.json) → page.tsx chỉ 1 import + 1 mount.
@@ -64,6 +68,13 @@ interface AssignmentsData {
   defaults: Record<string, string[]>
 }
 
+/** 2026-09-01 — Agents - skills access: row SkillAssignment từ /api/skills/assignments */
+interface SkillAssignmentRow { agentKey: string; slug: string; enabled: boolean; updatedBy: string | null; updatedAt: string }
+interface SkillAssignmentsData {
+  ok: boolean
+  assignments: SkillAssignmentRow[]
+}
+
 interface ToolDetailAgent { agentKey: string; label: string; defaultHas: boolean; override: boolean | null }
 interface ToolDetail {
   ok: boolean
@@ -88,16 +99,20 @@ interface SkillContent {
 type AuditStatus = { status: string; origin: string; flag: string | null; errorTag?: string }
 const auditResults = auditResultsJson as Record<string, AuditStatus>
 
-/** 8 agent key chuẩn (tool-access.ts) — thứ tự hiển thị ma trận */
-const AGENT_COLUMNS: Array<{ key: string; label: string; short: string }> = [
-  { key: 'APEX', label: 'APEX', short: 'TL' },
-  { key: 'CORTEX', label: 'CORTEX', short: 'G1' },
-  { key: 'BOLT', label: 'BOLT', short: 'G2-A' },
-  { key: 'SENTINEL', label: 'SENTINEL', short: 'G2-B' },
-  { key: 'CATALYST', label: 'CATALYST', short: 'G3' },
-  { key: 'OMEGA', label: 'Omega', short: '🌟' },
-  { key: 'OPUS', label: 'Opus', short: '⚖️' },
-  { key: 'NEW_AGENT', label: 'Agent động', short: '＋' },
+/** 9 agent key chuẩn (tool-access.ts) — thứ tự hiển thị ma trận skills access.
+ * 2026-09-01: đủ TOÀN BỘ agents hiện có — 8 agent thật (khớp AgentProfile:
+ * Omega, ALISTA, Opus + 5 Code Team) + bucket NEW_AGENT cho agents động do
+ * Omega create_agent tạo. Ma trận Tools dùng cùng bộ key từ API. */
+const SKILL_AGENT_COLUMNS: Array<{ key: string; label: string }> = [
+  { key: 'OMEGA', label: 'Omega' },
+  { key: 'ALISTA', label: 'ALISTA' },
+  { key: 'OPUS', label: 'Opus' },
+  { key: 'APEX', label: 'APEX' },
+  { key: 'CORTEX', label: 'CORTEX' },
+  { key: 'BOLT', label: 'BOLT' },
+  { key: 'SENTINEL', label: 'SENTINEL' },
+  { key: 'CATALYST', label: 'CATALYST' },
+  { key: 'NEW_AGENT', label: 'Agent động' },
 ]
 
 // ==================== COMPONENT ====================
@@ -131,6 +146,9 @@ export function ToolsManagerDialog() {
   const [skillDirty, setSkillDirty] = useState(false)
   const [skillSaving, setSkillSaving] = useState(false)
   const [confirmSkillSave, setConfirmSkillSave] = useState(false)
+  /** 2026-09-01 — Agents - skills access (null = chưa tải → ma trận hiện mặc định) */
+  const [skillAssignments, setSkillAssignments] = useState<SkillAssignmentRow[] | null>(null)
+  const [skillAssignmentBusy, setSkillAssignmentBusy] = useState<string | null>(null)
 
   // ── Load registry + assignments khi mở dialog ──
   // (queueMicrotask — tránh sync setState trong effect, pattern page.tsx:2755)
@@ -143,10 +161,13 @@ export function ToolsManagerDialog() {
       Promise.all([
         authedFetch('/api/tools/registry').then(r => r.ok ? r.json() : null),
         authedFetch('/api/tools/assignments').then(r => r.ok ? r.json() : null),
-      ]).then(([reg, assign]) => {
+        authedFetch('/api/skills/assignments').then(r => r.ok ? r.json() : null),
+      ]).then(([reg, assign, skillAssign]) => {
         if (cancelled) return
         if (reg && reg.ok) setRegistry(reg as RegistryData)
         if (assign && assign.ok) setAssignmentsData(assign as AssignmentsData)
+        // fail-open: skill assignments lỗi → ma trận hiện toàn mặc định (được đọc)
+        if (skillAssign && skillAssign.ok) setSkillAssignments((skillAssign as SkillAssignmentsData).assignments)
       }).catch(() => {
         toast.error('Không tải được Tools Registry / Assignments')
       }).finally(() => { if (!cancelled) setRegistryLoading(false) })
@@ -287,6 +308,36 @@ export function ToolsManagerDialog() {
     }
   }
 
+  /** 2026-09-01 — Gán/chặn/reset quyền đọc 1 skill cho 1 agent */
+  const setSkillAssignment = async (agentKey: string, slug: string, enabled: boolean | null) => {
+    setSkillAssignmentBusy(`${agentKey}::${slug}`)
+    try {
+      const res = await authedFetch('/api/skills/assignments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentKey, slug, enabled }),
+      })
+      const data = await res.json()
+      if (res.ok && data.ok) {
+        toast.success(data.message)
+        // Reload assignments (fail-open — UI tự đúng sau lần mở dialog sau)
+        try {
+          const r2 = await authedFetch('/api/skills/assignments')
+          if (r2.ok) {
+            const d2 = await r2.json()
+            if (d2.ok) setSkillAssignments(d2.assignments as SkillAssignmentRow[])
+          }
+        } catch { /* fail-open */ }
+      } else {
+        toast.error(data.error || 'Cập nhật quyền skill thất bại')
+      }
+    } catch {
+      toast.error('Cập nhật quyền skill thất bại (lỗi mạng)')
+    } finally {
+      setSkillAssignmentBusy(null)
+    }
+  }
+
   // ── Derived data ──
 
   const assignmentMap = useMemo(() => {
@@ -355,6 +406,55 @@ export function ToolsManagerDialog() {
             className="text-[9px] text-amber-400 hover:text-amber-300 flex items-center gap-0.5"
             title="Xóa override — reset về mặc định"
             onClick={() => setAssignment(agent.agentKey, toolDetail!.name, null)}
+            disabled={cellBusy}
+          >
+            <RotateCcw className="w-2.5 h-2.5" /> reset
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  /** 2026-09-01 — Cell ma trận Agents - skills access: 3 trạng thái
+   *  (mặc định = MỌI agent đọc được · đỏ = đã chặn · xanh = cấp tường minh) */
+  const renderSkillAgentCell = (agentCol: { key: string; label: string }) => {
+    const slug = selectedSkill?.slug
+    if (!slug) return null
+    const row = skillAssignments?.find(a => a.agentKey === agentCol.key && a.slug === slug)
+    const override = row ? row.enabled : null
+    // Mặc định (không override) = agent ĐỌC ĐƯỢC skill (behavior 2026-09-12)
+    const effective = override !== null ? override : true
+    const cellBusy = skillAssignmentBusy === `${agentCol.key}::${slug}`
+    const stateClass = override === null
+      ? 'border-stone-700/60 bg-stone-900/40'
+      : override
+        ? 'border-emerald-500/60 bg-emerald-500/10'
+        : 'border-red-500/60 bg-red-500/10'
+    const stateLabel = override === null
+      ? 'mặc định ✓'
+      : override ? 'đã cấp' : 'đã chặn'
+    return (
+      <div key={agentCol.key} className={`rounded-md border ${stateClass} p-2 flex flex-col items-center gap-1`}>
+        <span className="text-[10px] font-medium text-stone-300 truncate w-full text-center" title={agentCol.label}>
+          {agentCol.label}
+        </span>
+        <Switch
+          checked={effective}
+          disabled={cellBusy}
+          onCheckedChange={(checked) => {
+            // mặc định → override chiều checked; override → đổi chiều
+            setSkillAssignment(agentCol.key, slug, checked)
+          }}
+          className="data-[state=checked]:bg-emerald-600 data-[state=unchecked]:bg-stone-700"
+        />
+        <span className={`text-[9px] ${override === null ? 'text-stone-500' : override ? 'text-emerald-400' : 'text-red-400'}`}>
+          {stateLabel}
+        </span>
+        {override !== null && (
+          <button
+            className="text-[9px] text-amber-400 hover:text-amber-300 flex items-center gap-0.5"
+            title="Xóa override — reset về mặc định (mọi agent đọc được)"
+            onClick={() => setSkillAssignment(agentCol.key, slug, null)}
             disabled={cellBusy}
           >
             <RotateCcw className="w-2.5 h-2.5" /> reset
@@ -576,7 +676,7 @@ export function ToolsManagerDialog() {
                           <label className="text-[11px] font-semibold text-stone-300 block mb-2">
                             Agents — tool access (✓/✗ mặc định xám · <span className="text-emerald-400">bật thêm xanh</span> · <span className="text-red-400">đã tắt đỏ</span>)
                           </label>
-                          <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
+                          <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-1.5">
                             {toolDetail.agents.map(renderAgentCell)}
                           </div>
                           <p className="text-[10px] text-stone-500 mt-2">
@@ -675,13 +775,36 @@ export function ToolsManagerDialog() {
                           )}
                         </div>
 
+                        {/* 2026-09-01 — Agents - skills access: 9 agent × 3 trạng thái.
+                            Mặc định (không override) = MỌI agent đọc được skill qua
+                            list_skills/read_skill. Chặn (đỏ) = agent không thấy skill
+                            trong list_skills + read_skill bị hard-gate + DB skill
+                            không inject vào prompt của agent đó. */}
+                        <div>
+                          <label className="text-[11px] font-semibold text-stone-300 block mb-2">
+                            Agents — skills access (✓ mặc định mọi agent đọc · <span className="text-emerald-400">đã cấp xanh</span> · <span className="text-red-400">đã chặn đỏ</span>)
+                          </label>
+                          <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-1.5">
+                            {SKILL_AGENT_COLUMNS.map(renderSkillAgentCell)}
+                          </div>
+                          <p className="text-[10px] text-stone-500 mt-2">
+                            Chặn = skill ẩn khỏi list_skills + read_skill bị executor chặn + không inject vào prompt agent đó. <span className="text-amber-400">reset</span> = về mặc định (mọi agent đọc được).
+                          </p>
+                        </div>
+
                         {skillContent.canEdit ? (
                           <>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-[11px] font-semibold text-stone-300">
+                                Nội dung SKILL.md {skillContent.source === 'filesystem' ? '(sửa được — backup .bak)' : ''}
+                              </label>
+                              <span className="text-[10px] text-stone-500">{skillDraft.length.toLocaleString('vi-VN')} ký tự</span>
+                            </div>
                             <Textarea
                               value={skillDraft}
                               onChange={(e) => { setSkillDraft(e.target.value); setSkillDirty(true) }}
                               rows={18}
-                              className="bg-stone-900/60 border-stone-700 text-stone-200 text-xs font-mono resize-y"
+                              className="bg-stone-900/60 border-stone-700 text-stone-200 text-xs font-mono resize-y [field-sizing:fixed] max-h-[46vh] overflow-y-auto"
                               placeholder="Nội dung SKILL.md..."
                             />
                             <div className="flex items-center justify-between gap-2">
@@ -702,6 +825,10 @@ export function ToolsManagerDialog() {
                           </>
                         ) : (
                           <>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-[11px] font-semibold text-stone-300">Nội dung SKILL.md (DB — read-only)</label>
+                              <span className="text-[10px] text-stone-500">{(skillContent.content || '').length.toLocaleString('vi-VN')} ký tự</span>
+                            </div>
                             <pre className="text-[11px] font-mono bg-stone-900/80 border border-stone-800 rounded-md p-3 overflow-auto max-h-[46vh] whitespace-pre-wrap text-stone-300" style={{ scrollbarWidth: 'thin' }}>
                               {skillContent.content}
                             </pre>

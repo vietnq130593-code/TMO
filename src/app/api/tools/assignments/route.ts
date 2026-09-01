@@ -10,7 +10,7 @@
  *        enabled=true  → bật thêm tool ngoài whitelist mặc định
  *        enabled=null  → XÓA override (reset về mặc định hardcoded)
  *
- * Validate: agentKey ∈ APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|NEW_AGENT
+ * Validate: agentKey ∈ APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|ALISTA|OPUS|NEW_AGENT
  *           toolName ∈ builtin (ALL_TOOL_DEFINITIONS) ∪ custom tools registry
  */
 
@@ -23,13 +23,16 @@ import { isBuiltinTool, getAllBuiltinToolNames } from '@/lib/code-team/tool-exec
 
 export const dynamic = 'force-dynamic'
 
-/** Whitelist mặc định theo agent key — cùng nguồn với Tools Registry agentMatrix */
+/** Whitelist mặc định theo agent key — cùng nguồn với Tools Registry agentMatrix.
+ * FIX 2026-09-01: đủ 8 agent thật — thêm ALISTA (standalone) + OPUS. */
 function buildDefaults(): Record<string, string[]> {
   const defaults: Record<string, string[]> = {}
-  try {
-    defaults.OMEGA = getStandaloneAgentTools('Omega')
-  } catch {
-    defaults.OMEGA = []
+  for (const [key, name] of [['OMEGA', 'Omega'], ['ALISTA', 'ALISTA']] as const) {
+    try {
+      defaults[key] = getStandaloneAgentTools(name)
+    } catch {
+      defaults[key] = []
+    }
   }
   // TASK 22: Opus = full builtin list (đồng bộ ensureOpusAgent — mọi tool)
   defaults.OPUS = getBuiltinToolNamesSafe()

@@ -552,29 +552,53 @@ export function getPipeline(mode: 'A' | 'B' | 'C', tier: 1 | 2 | 3): PipelineSte
  *    1. DB → systemPrompt (this code) — used by OpenClaw Chat & Workflow Engine
  *    2. Filesystem (skills/<slug>/SKILL.md) — used by z.ai platform sandbox
  *    Do NOT add a third injection point without checking for duplication. */
-async function loadEnabledSkills(): Promise<string> {
+interface RawSkill { name: string; slug: string; content: string }
+
+/** Query DB skills enabled — raw (chưa render) để lọc per-agent sau. */
+async function loadEnabledSkillsRaw(): Promise<RawSkill[]> {
   try {
-    // Load ALL enabled skills — skills are global (not per-agent)
-    const skills = await db.agentSkill.findMany({
+    return await db.agentSkill.findMany({
       where: { enabled: true },
       select: { name: true, slug: true, content: true },
     })
-    if (skills.length === 0) return ''
-    // Token budget: limit skills injection to ~4K tokens (~16K chars) to avoid bloating system prompt
-    const MAX_SKILLS_CHARS = 16000
-    let skillsText = ''
-    for (const s of skills) {
-      const section = `## Skill: ${s.name} (${s.slug})\n${s.content}\n\n---\n\n`
-      if ((skillsText + section).length > MAX_SKILLS_CHARS) {
-        skillsText += `## Skill: ${s.name} (${s.slug})\n[Content truncated — skill content too large.]\n\n---\n\n`
-        break
-      }
-      skillsText += section
-    }
-    return `\n\n━━━ AVAILABLE SKILLS ━━━\nBạn có quyền truy cập các skills sau. Mỗi skill là hướng dẫn cho bạn KHI NÀO và CÁCH NÀO sử dụng một khả năng cụ thể. Tuân theo hướng dẫn trong mỗi skill khi tình huống yêu cầu.\n\n${skillsText}━━━ END SKILLS ━━━`
   } catch {
-    return '' // Never break workflow if DB is unavailable
+    return [] // Never break workflow if DB is unavailable
   }
+}
+
+/** Render skills thành block prompt (budget ~16k chars) — format cũ giữ nguyên. */
+function renderSkillsText(skills: RawSkill[]): string {
+  if (skills.length === 0) return ''
+  const MAX_SKILLS_CHARS = 16000
+  let skillsText = ''
+  for (const s of skills) {
+    const section = `## Skill: ${s.name} (${s.slug})\n${s.content}\n\n---\n\n`
+    if ((skillsText + section).length > MAX_SKILLS_CHARS) {
+      skillsText += `## Skill: ${s.name} (${s.slug})\n[Content truncated — skill content too large.]\n\n---\n\n`
+      break
+    }
+    skillsText += section
+  }
+  return `\n\n━━━ AVAILABLE SKILLS ━━━\nBạn có quyền truy cập các skills sau. Mỗi skill là hướng dẫn cho bạn KHI NÀO và CÁCH NÀO sử dụng một khả năng cụ thể. Tuân theo hướng dẫn trong mỗi skill khi tình huống yêu cầu.\n\n${skillsText}━━━ END SKILLS ━━━`
+}
+
+async function loadEnabledSkills(): Promise<string> {
+  return renderSkillsText(await loadEnabledSkillsRaw())
+}
+
+/** 2026-09-01 — SKILL ACCESS prompt-side: lọc skill bị chặn cho 1 agent rồi
+ *  render. Fail-open trả full text (lỗi DB không bỏ skills). */
+async function loadEnabledSkillsForAgent(agentName: string | null | undefined, raw: RawSkill[]): Promise<string> {
+  if (raw.length === 0) return ''
+  try {
+    const { getDisabledSlugsForAgent } = await import('@/lib/skill-access')
+    const disabled = await getDisabledSlugsForAgent(agentName)
+    if (disabled.size > 0) {
+      const filtered = raw.filter(s => !disabled.has(s.slug))
+      return renderSkillsText(filtered)
+    }
+  } catch { /* fail-open */ }
+  return renderSkillsText(raw)
 }
 
 // ==================== MAIN WORKFLOW RUNNER ====================
@@ -597,6 +621,9 @@ export interface WorkflowContext {
   resolvedAgentsCache: Map<string, ResolvedAgent>
   /** Cached skills injection string — loaded once per workflow run to avoid repeated DB queries */
   skillsContext?: string
+  /** 2026-09-01 — raw DB skills (kèm slug) — dùng lọc per-agent theo SkillAssignment
+   *  rồi render riêng cho từng agent step (skillsContext vẫn dùng cho fallback) */
+  skillsRaw?: RawSkill[]
   /** Task 17-b (Layer 9): số hint "bài học từ thất bại trước" đã inject trong run — dùng cho observation log khi workflow thành công */
   layer9HintsInjected?: number
 }
@@ -782,7 +809,9 @@ export async function runWorkflow(
   }
 
   // Load enabled skills once for the entire workflow run — cached in ctx.skillsContext
-  ctx.skillsContext = await loadEnabledSkills()
+  // 2026-09-01: giữ cả raw (kèm slug) để render per-agent theo SkillAssignment
+  ctx.skillsRaw = await loadEnabledSkillsRaw()
+  ctx.skillsContext = renderSkillsText(ctx.skillsRaw)
 
   // Track whether client has disconnected
   let clientDisconnected = false
@@ -1704,8 +1733,19 @@ export async function runAgentStep(params: {
   ]
 
   // Inject enabled skills from DB (cached per-workflow in ctx.skillsContext)
-  if (ctx.skillsContext) {
-    systemBlocks.push({ name: 'skills', content: ctx.skillsContext, priority: 20 }) // đã cap 16k nội bộ (loadEnabledSkills)
+  // 2026-09-01 — SKILL ACCESS: lọc skill bị chặn (SkillAssignment enabled=false)
+  // cho RIÊNG agent của step này rồi render — agent khác trong cùng workflow vẫn
+  // thấy bộ đầy đủ. Fail-open: lỗi → dùng skillsContext chung.
+  {
+    let skillsText: string | null = null
+    if (ctx.skillsRaw && ctx.skillsRaw.length > 0) {
+      skillsText = await loadEnabledSkillsForAgent(agent.name || position, ctx.skillsRaw)
+    } else if (ctx.skillsContext) {
+      skillsText = ctx.skillsContext
+    }
+    if (skillsText) {
+      systemBlocks.push({ name: 'skills', content: skillsText, priority: 20 }) // đã cap 16k nội bộ (renderSkillsText)
+    }
   }
 
   // 2026-08-29 — WORKSPACE CONTEXT cho Team Code (parity với /api/openclaw/chat):
@@ -2569,7 +2609,14 @@ Output JSON trong markdown code block:
   const verifySystemPrompt = budgetPrompt(
     [
       { name: 'persona', content: getAgentPrompt('TL'), priority: 100 },
-      ...(ctx.skillsContext ? [{ name: 'skills', content: ctx.skillsContext, priority: 20 }] : []),
+      ...(await (async () => {
+        // 2026-09-01 — lọc skill bị chặn cho TL (verify checkpoint) như step thường
+        if (ctx.skillsRaw && ctx.skillsRaw.length > 0) {
+          const t = await loadEnabledSkillsForAgent('TL', ctx.skillsRaw)
+          return t ? [{ name: 'skills', content: t, priority: 20 }] : []
+        }
+        return ctx.skillsContext ? [{ name: 'skills', content: ctx.skillsContext, priority: 20 }] : []
+      })()),
     ],
     'workflow-checkpoint-verify:TL',
   )
@@ -3004,7 +3051,8 @@ export async function createMinimalWorkflowContext(opts?: {
   }
   if (!opts?.skipSkills) {
     try {
-      ctx.skillsContext = await loadEnabledSkills()
+      ctx.skillsRaw = await loadEnabledSkillsRaw()
+      ctx.skillsContext = renderSkillsText(ctx.skillsRaw)
     } catch {
       // Never break orchestration because skills injection fails
       ctx.skillsContext = ''

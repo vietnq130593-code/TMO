@@ -1716,12 +1716,12 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'manage_tools',
-      description: 'Quản lý tool-access của agents (chỉ Omega được dùng). Action: (1) list_tools — danh sách tool + agents + override status (compact); (2) set_tool_access {agentKey, toolName, enabled} — bật/tắt 1 tool cho 1 agent (enabled=null → reset về mặc định); (3) read_tool {toolName} — mô tả đầy đủ + parameters + ma trận agent của 1 tool; (4) read_skill {name} — đọc SKILL.md của skill filesystem; (5) write_skill {name, content} — ghi đè SKILL.md (tự backup .bak). agentKey hợp lệ: APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|NEW_AGENT (NEW_AGENT = mọi agent động do Omega tạo).',
+      description: 'Quản lý tool-access của agents (chỉ Omega được dùng). Action: (1) list_tools — danh sách tool + agents + override status (compact); (2) set_tool_access {agentKey, toolName, enabled} — bật/tắt 1 tool cho 1 agent (enabled=null → reset về mặc định); (3) read_tool {toolName} — mô tả đầy đủ + parameters + ma trận agent của 1 tool; (4) read_skill {name} — đọc SKILL.md của skill filesystem; (5) write_skill {name, content} — ghi đè SKILL.md (tự backup .bak). agentKey hợp lệ: APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|ALISTA|OPUS|NEW_AGENT (NEW_AGENT = mọi agent động do Omega tạo).',
       parameters: {
         type: 'object',
         properties: {
           action: { type: 'string', enum: ['list_tools', 'set_tool_access', 'read_tool', 'read_skill', 'write_skill'], description: 'Hành động quản lý' },
-          agentKey: { type: 'string', description: '(set_tool_access) Agent key: APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|NEW_AGENT' },
+          agentKey: { type: 'string', description: '(set_tool_access) Agent key: APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|ALISTA|OPUS|NEW_AGENT' },
           toolName: { type: 'string', description: '(set_tool_access/read_tool) Tên tool builtin' },
           enabled: { type: 'boolean', description: '(set_tool_access) true=bật, false=vô hiệu hóa, null/omit=reset về mặc định' },
           name: { type: 'string', description: '(read_skill/write_skill) Slug skill filesystem (vd "pdf", "web")' },
@@ -2665,12 +2665,61 @@ export async function executeTool(
         result = await executeTodoReadFn(args as any)
         break
       // ===== Dynamic skill + MCP enumeration (user request 2026-08-29) =====
-      case 'list_skills':
+      case 'list_skills': {
         result = await executeListSkillsFn(args as any)
+        // 2026-09-01 — SKILL ACCESS prompt-side: agent bị chặn skill nào thì
+        // ẨN khỏi danh sách (LLM không thấy → không cố đọc). Fail-open: lỗi
+        // → giữ nguyên listing.
+        try {
+          if (context?.agentName) {
+            const { getDisabledSlugsForAgent } = await import('@/lib/skill-access')
+            const disabled = await getDisabledSlugsForAgent(context.agentName)
+            if (disabled.size > 0 && result && typeof result === 'object') {
+              const r = result as Record<string, unknown>
+              if (Array.isArray(r.dbSkills)) {
+                r.dbSkills = (r.dbSkills as Array<Record<string, unknown>>).filter(
+                  (s) => !disabled.has(String(s.slug)),
+                )
+                if (typeof r.dbSkillCount === 'number') r.dbSkillCount = (r.dbSkills as unknown[]).length
+              }
+              if (Array.isArray(r.filesystemSkills)) {
+                r.filesystemSkills = (r.filesystemSkills as Array<Record<string, unknown>>).filter(
+                  (s) => !disabled.has(String(s.slug)),
+                )
+                if (typeof r.filesystemSkillCount === 'number') r.filesystemSkillCount = (r.filesystemSkills as unknown[]).length
+              }
+              if (disabled.size > 0) {
+                result = {
+                  ...r,
+                  _skillAccess: `${disabled.size} skill bị ẩn khỏi danh sách cho agent này (SkillAssignment)`,
+                }
+              }
+            }
+          }
+        } catch { /* fail-open — giữ nguyên listing */ }
         break
-      case 'read_skill':
+      }
+      case 'read_skill': {
+        // 2026-09-01 — SKILL ACCESS EXECUTOR HARD-GATE (defense in depth):
+        // SkillAssignment override enabled=false → chặn TẠI EXECUTOR dù LLM
+        // vẫn phát tool call. Fail-open: lỗi DB → cho đọc.
+        try {
+          const slug = typeof (args as { slug?: unknown })?.slug === 'string' ? (args as { slug: string }).slug.trim() : ''
+          if (slug && context?.agentName) {
+            const { isSkillDisabledForAgent } = await import('@/lib/skill-access')
+            if (await isSkillDisabledForAgent(context.agentName, slug)) {
+              const key = resolveAgentKey(context.agentName)
+              return {
+                success: false,
+                result: `Skill "${slug}" đã bị VÔ HIỆU HÓA cho agent ${context.agentName} (key ${key}) — quản trị viên chặn qua Agents - skills access. Dùng list_skills để xem skill bạn được đọc.`,
+                duration: Date.now() - startTime,
+              }
+            }
+          }
+        } catch { /* fail-open — cho đọc */ }
         result = await executeReadSkillFn(args as { slug: string })
         break
+      }
       case 'mcp_list_servers': {
         // CI-4 B6 (Task 11-c) — de-advertise: lọc mock built-in servers (Phase 3
         // stub) khỏi danh sách agents nhìn thấy. mcp-bridge.ts giữ nguyên — chỉ
@@ -3820,8 +3869,9 @@ async function getManageToolsAgentMatrix(): Promise<Array<{ key: string; label: 
   const matrix: Array<{ key: string; label: string; tools: string[] }> = []
   try {
     const { getStandaloneAgentTools } = await import('@/lib/standalone-agents')
-    for (const name of ['Omega']) {
-      matrix.push({ key: 'OMEGA', label: name, tools: getStandaloneAgentTools(name) })
+    // FIX 2026-09-01: đủ toàn bộ standalone (Omega + ALISTA)
+    for (const name of ['Omega', 'ALISTA']) {
+      matrix.push({ key: name.toUpperCase() === 'ALISTA' ? 'ALISTA' : 'OMEGA', label: name, tools: getStandaloneAgentTools(name) })
     }
   } catch { /* fail-open — bỏ qua */ }
   const { getAgentName } = await import('./agents')
@@ -3830,6 +3880,10 @@ async function getManageToolsAgentMatrix(): Promise<Array<{ key: string; label: 
       matrix.push({ key, label: getAgentName(pos), tools: getAgentTools(pos) })
     } catch { /* fail-open */ }
   }
+  // Opus — meta-agent CTO: full builtin list (đồng bộ ensureOpusAgent)
+  try {
+    matrix.push({ key: 'OPUS', label: 'Opus', tools: getAllBuiltinToolNames() })
+  } catch { /* fail-open */ }
   try {
     const { DEFAULT_NEW_AGENT_TOOLS } = await import('@/lib/omega-orchestrator')
     matrix.push({ key: 'NEW_AGENT', label: 'Agent động (do Omega tạo)', tools: [...DEFAULT_NEW_AGENT_TOOLS] })
@@ -3883,7 +3937,7 @@ async function executeManageTools(
     }
     const key = normalizeAgentKeyStrict(agentKey)
     if (!key) {
-      return { success: false, error: 'agentKey không hợp lệ — dùng: APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|NEW_AGENT' }
+      return { success: false, error: 'agentKey không hợp lệ — dùng: APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|ALISTA|OPUS|NEW_AGENT' }
     }
     if (!isBuiltinTool(toolName)) {
       return { success: false, error: `Tool "${toolName}" không phải builtin. Dùng list_tools để xem danh sách.` }

@@ -11,7 +11,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getBuiltinToolDefinition } from '@/lib/code-team/tool-executor'
+import { getBuiltinToolDefinition, getAllBuiltinToolNames } from '@/lib/code-team/tool-executor'
 import { getToolDescriptionOverride, setToolConfig, getAllAssignments } from '@/lib/tool-access'
 import { getAgentTools } from '@/lib/code-team/agents'
 import { getStandaloneAgentTools } from '@/lib/standalone-agents'
@@ -23,11 +23,20 @@ interface RouteContext {
   params: Promise<{ name: string }>
 }
 
-/** Ma trận agent mặc định cho 1 tool — cùng nguồn với registry */
+/** Ma trận agent mặc định cho 1 tool — cùng nguồn với registry.
+ * FIX 2026-09-01: đủ TOÀN BỘ 8 agent thật (Omega + Opus + ALISTA + 5 Code Team)
+ * + NEW_AGENT bucket — khớp AgentProfile đang sống trong DB. */
 function buildAgentMatrix(toolName: string): Array<{ agentKey: string; label: string; defaultHas: boolean }> {
   const matrix: Array<{ agentKey: string; label: string; defaultHas: boolean }> = []
+  // Standalone agents (theo STANDALONE_AGENTS: Omega + ALISTA)
+  for (const name of ['Omega', 'ALISTA'] as const) {
+    try {
+      matrix.push({ agentKey: name === 'Omega' ? 'OMEGA' : 'ALISTA', label: name, defaultHas: getStandaloneAgentTools(name).includes(toolName) })
+    } catch { /* fail-open */ }
+  }
+  // Opus — meta-agent CTO: full builtin list (đồng bộ ensureOpusAgent)
   try {
-    matrix.push({ agentKey: 'OMEGA', label: 'Omega', defaultHas: getStandaloneAgentTools('Omega').includes(toolName) })
+    matrix.push({ agentKey: 'OPUS', label: 'Opus', defaultHas: getAllBuiltinToolNames().includes(toolName) })
   } catch { /* fail-open */ }
   const positions: Array<[string, string, string]> = [
     ['TL', 'APEX', 'TL'],

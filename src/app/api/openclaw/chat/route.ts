@@ -703,10 +703,24 @@ export async function POST(request: NextRequest) {
     try {
       // Load ALL enabled skills — skills are global (not per-agent)
       // agentId field on AgentSkill is for future per-agent assignment
-      const enabledSkills = await db.agentSkill.findMany({
+      let enabledSkills = await db.agentSkill.findMany({
         where: { enabled: true },
         select: { name: true, slug: true, content: true, source: true },
       })
+      // 2026-09-01 — SKILL ACCESS prompt-side: SkillAssignment override
+      // enabled=false → KHÔNG inject skill đó vào prompt agent này (agent
+      // vẫn không đọc được qua read_skill — executor hard-gate). Fail-open.
+      if (enabledSkills.length > 0 && agentProfileName) {
+        try {
+          const { getDisabledSlugsForAgent } = await import('@/lib/skill-access')
+          const disabled = await getDisabledSlugsForAgent(agentProfileName)
+          if (disabled.size > 0) {
+            const before = enabledSkills.length
+            enabledSkills = enabledSkills.filter(s => !disabled.has(s.slug))
+            console.log(`[OpenClaw Chat] Skill access: lọc ${before - enabledSkills.length}/${before} skill bị chặn cho agent "${agentProfileName}"`)
+          }
+        } catch { /* fail-open — inject đủ */ }
+      }
       if (enabledSkills.length > 0) {
         // Token budget: limit skills injection to ~4K tokens (~16K chars) to avoid bloating system prompt
         const MAX_SKILLS_CHARS = 16000
