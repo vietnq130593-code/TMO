@@ -1,8 +1,8 @@
-# 📚 docs/blueprints — CODE KIT TEAM RESEARCH (v1.4)
+# 📚 docs/blueprints — CODE KIT TEAM RESEARCH (v1.5)
 
-> **Trạng thái: ✅ READY-TO-CODE** — 71/71 quyết định đã chốt (Decision Lock v1.3, user ủy quyền, thorough-first). Thư mục này **tự chứa 100%** mọi file cần để code team research vào TMO app.
+> **Trạng thái: ✅ READY-TO-CODE** — 71/71 quyết định v1.3 + toàn bộ protocol chấm điểm v1.5 (Phụ lục Z2) đã chốt. Thư mục này **tự chứa 100%** mọi file cần để code team research vào TMO app.
 
-## Inventory — 17 file
+## Inventory — 18 file
 
 | # | File | Vai trò |
 |---|---|---|
@@ -19,23 +19,24 @@
 | 11 | `TB-09-rwv-loop-handoff-protocol.md` | RWV loop + handoff gate |
 | 12 | `TB-10-directed-reading-artifact-map.md` | Đọc có hướng + artifact map |
 | 13 | `TB-11-proposal-schema-self-direction.md` | Proposal P-* + self-direction |
-| 14 | `TB-12-e2e-playbooks-test-cases.md` | **14 TC acceptance toàn hệ** |
+| 14 | `TB-12-e2e-playbooks-test-cases.md` | **18 TC acceptance toàn hệ** (14 + 4 TC scoring v1.5) |
 | 15 | `TB-13-implementation-build-plan.md` | **⭐ Bắt đầu code từ đây** — bản đồ module → code TMO app |
-| 16 | `ai-team-workflow.md` | Bản sao NGUỒN SSOT (4.682 dòng, kèm Phụ lục Z v1.3) |
-| 17 | `DECISION-RECORD-v1.3.md` | Bản sao canonical 71 quyết định (C1–C7 + 64) |
+| 16 | `TB-14-solution-scoring-selection-protocol.md` | **⭐ v1.5 mới** — Rubric A/B chấm điểm · Tournament giả thiết · Council ⑤ · Context-Fit · DIRECT-APPLY rule |
+| 17 | `ai-team-workflow.md` | Bản sao NGUỒN SSOT (4.745 dòng, kèm Phụ lục Z v1.3 + Z2 v1.5) |
+| 18 | `DECISION-RECORD-v1.3.md` | Bản sao canonical 71 quyết định (C1–C7 + 64) |
 
 ## Thứ tự đọc khi bắt đầu code
 
 ```
 TB-00 (quy ước) → TB-13 (bản đồ code) → DECISION-RECORD-v1.3 (quyết định)
 → TB-01 + TB-02 (nền tảng) → engines TB-03/04/05/07/10 (theo phase P2-P4 ở TB-13 §5)
-→ TB-06 (KING) → TB-09 + TB-11 (handoff/proposal) → TB-12 (verify 14 TC)
-→ tra cứu truy nguyên: ai-team-workflow.md (tìm [SRC] trong các TB)
+→ TB-14 (scoring/tournament — phase P2b) → TB-06 (KING) → TB-09 + TB-11 (handoff/proposal)
+→ TB-12 (verify 18 TC) → tra cứu truy nguyên: ai-team-workflow.md (tìm [SRC] trong các TB)
 ```
 
 ## Quy ước annotation (TB-00 §5)
 
-- `[SRC]` = trích nguồn `ai-team-workflow.md` (đúng dòng) · `[EXT]` = mở rộng blueprint · `[DECIDED v1.3]` = quyết định đã chốt
+- `[SRC]` = trích nguồn `ai-team-workflow.md` (đúng dòng) · `[EXT]` = mở rộng blueprint · `[DECIDED v1.3]` = quyết định đã chốt · `[SRC Z2.x]` = trích Phụ lục Z2 (v1.5, dòng 4684–4745)
 - **Quy tắc số 1:** sửa thiết kế → cập nhật NGUỒN trước (`upload/ai-team-workflow.md`, append-only) → blueprint sau → code cuối
 
 ## Quy tắc đồng bộ 3 bản sao
@@ -56,4 +57,4 @@ TB-00 (quy ước) → TB-13 (bản đồ code) → DECISION-RECORD-v1.3 (quyế
 - ❌ Ghi vào Live System ngoài workspace clone (Live = read-only)
 
 ---
-*v1.4 — 2026-09-01 · Tạo Task 21 (Z.ai Code main). Muốn đảo bất kỳ quyết định nào: đọc `DECISION-RECORD-v1.3.md` §4 (quy ước sau chốt).*
+*v1.5 — 2026-09-01 · Tạo Task 23 (Z.ai Code main): TB-14 + Phụ lục Z2 theo yêu cầu user. Muốn đảo bất kỳ quyết định nào: đọc `DECISION-RECORD-v1.3.md` §4 (quy ước sau chốt) — quyết định v1.5 đảo qua Decision Log KING + amend Phụ lục Z2.*

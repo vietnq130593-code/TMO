@@ -6,6 +6,7 @@
 > Version: 1.3 | Ngày: 2026-09-01 (Decision Lock — user ủy quyền chốt toàn bộ [Q]) | Biên soạn: Mr. Robot (Z.ai Code)
 > Quyết định canonical: `docs/DECISION-RECORD-v1.3.md` (71 quyết định — 7 cụm C1–C7 + 64 câu riêng)
 > **v1.4 (2026-09-01):** CODE KIT — thư mục này tự chứa 100% để bắt đầu code: thêm TB-13 (implementation build plan) + bản sao nguồn `ai-team-workflow.md` + `DECISION-RECORD-v1.3.md` + `README.md` (hướng dẫn đọc/đồng bộ). Xem Đợt F ở §6.
+> **v1.5 (2026-09-01):** THÊM TB-14 — Solution Scoring & Selection Protocol (Rubric A/B chấm chẩn đoán/giải pháp · Tournament giả thiết 5 vòng · Council ⑤ · ma trận Context-Fit · rule DIRECT-APPLY vs Proposal). Nguồn amend **Phụ lục Z2** (dòng 4684–4745, append-only). Xem Đợt G ở §6.
 >
 > ⚠️ **QUY TẮC SỐ 1:** `ai-team-workflow.md` là Single Source of Truth. Blueprint MÔ RỘNG từ nó để triển khai được — KHÔNG thay thế nó. Mọi thay đổi thiết kế phải cập nhật nguồn trước, blueprint sau.
 
@@ -83,8 +84,9 @@ Tiếng Việt · Markdown · bảng + ASCII box + emoji section headers (như n
 | TB-11 | `TB-11-proposal-schema-self-direction.md` | Proposal Schema & SELF-DIRECTION Route | 4288–4345 | 172 | S | D | ✅ |
 | TB-12 | `TB-12-e2e-playbooks-test-cases.md` | E2E Playbooks & Test Cases | 4346–4635 | 325 | M | D | ✅ |
 | TB-13 | `TB-13-implementation-build-plan.md` | **Implementation Build Plan → code TMO app** (bản đồ module + Prisma + API + 8 phases + 14 TC verify) | — (EXT) | ~330 | M | D | ✅ |
+| TB-14 | `TB-14-solution-scoring-selection-protocol.md` | **Solution Scoring & Selection** (Rubric A/B · Tournament 5 vòng · Council ⑤ · Context-Fit · DIRECT-APPLY rule) | Z2: 4684–4745 | ~270 | M | D | ✅ |
 
-**Companion files (v1.4 — code kit):** `ai-team-workflow.md` (bản sao nguồn SSOT kèm Phụ lục Z) · `DECISION-RECORD-v1.3.md` (bản sao canonical quyết định) · `README.md` (inventory + thứ tự đọc + quy tắc đồng bộ).
+**Companion files (v1.4 — code kit):** `ai-team-workflow.md` (bản sao nguồn SSOT kèm Phụ lục Z + Z2) · `DECISION-RECORD-v1.3.md` (bản sao canonical quyết định) · `README.md` (inventory + thứ tự đọc + quy tắc đồng bộ).
 
 ---
 
@@ -123,7 +125,7 @@ Tiếng Việt · Markdown · bảng + ASCII box + emoji section headers (như n
                           └─────────┘
 ```
 
-**Thứ tự build:** TB-00 → TB-01 → TB-02 → {TB-03, TB-04, TB-05, TB-07, TB-08, TB-10 — song song} → TB-06 → TB-09 → TB-11 → TB-12.
+**Thứ tự build:** TB-00 → TB-01 → TB-02 → {TB-03, TB-04, TB-05, TB-07, TB-08, TB-10 — song song} → TB-06 → TB-09 → TB-11 → **TB-14** → TB-12. *(v1.5: TB-14 trước TB-12 vì 18 TC cuối phụ thuộc rubric + council ⑤; đọc TB-14 sau TB-06/09/11 vì tái dùng councils/DECIDE/Proposal.)*
 
 ---
 
@@ -177,9 +179,12 @@ Mỗi section blueprint phải ghi nguồn dạng `[TB-XX §n ← nguồn dòng 
 | D — Output & E2E | TB-11, TB-12 | ✅ Hoàn tất |
 | E — Decision Lock v1.3 | Toàn tập (nguồn Phụ lục Z + 13 TB) | ✅ Hoàn tất (2026-09-01) |
 | F — Code Kit v1.4 | TB-13 + 3 companion (nguồn + DR + README) | ✅ Hoàn tất (2026-09-01) |
+| G — Solution Scoring v1.5 | TB-14 + Phụ lục Z2 nguồn + TB-12 (18 TC) + TB-13/TB-00 sync | ✅ Hoàn tất (2026-09-01) |
 
 *Tập 13 blueprint HOÀN TẤT (Version 1.2 — đã qua 2 đợt đảm bảo chất lượng: **review Task 9** — 6 reviewer độc lập đối chiếu 67 findings với nguồn, phân loại P1×2 · P2×3 · P3×21 · P4×41; **fix Task 10** — 6 fixer + coordinator áp toàn bộ P1/P2/P3 và các P4 sửa được cục bộ: typo, citation sai dòng, state machine self-consistent, đồng bộ cross-ref tập, attribution [SRC]/[EXT], bổ edge POC-NEEDS-WORKSPACE ở TB-09/TB-10 — chi tiết worklog Task 9/10). Nguồn ai-team-workflow.md nguyên vẹn 4.635 dòng + Phụ lục Z (v1.3).*
 
 *Đợt E — DECISION LOCK v1.3 (2026-09-01): user **ủy quyền Z.ai Code chốt toàn bộ 71 [Q]** với chính sách **thorough-first** (cẩn thận – chi tiết – đầy đủ, tránh hời hợt) + **không ràng buộc token** (NVIDIA NIM 4 keys, sẽ tăng). Quyết định canonical: `docs/DECISION-RECORD-v1.3.md`; nguồn đã cập nhật trước theo quy tắc TB-00 §5 (Phụ lục Z append-only, dòng gốc nguyên vẹn). Mọi [Q] → [DECIDED v1.3], mọi section Open Questions → Decisions. Triển khai runtime là thao tác riêng — chờ user khởi động.*
 
 *Đợt F — CODE KIT v1.4 (2026-09-01): đáp ứng yêu cầu "docs/blueprints tự chứa mọi file cần để code team research" — bổ TB-13 (implementation build plan: bản đồ module `src/lib/research-team/`, 7 model Prisma, 12 API route `/api/research/*`, 8 build phase P0–P7, map 14 TC verify, risk register, DoD 14 mục) + bản sao nguồn `ai-team-workflow.md` (4.682 dòng, kèm Phụ lục Z) + bản sao `DECISION-RECORD-v1.3.md` + `README.md` folder guide. Tập hiện 17 file. Trạng thái: READY-TO-CODE — chờ user khởi động P0.*
+
+*Đợt G — SOLUTION SCORING v1.5 (2026-09-01): theo yêu cầu user (trace 1a05c01e7a9f66f9) bổ chức năng "tiêu chí chấm điểm giải pháp/chẩn đoán chính xác + xác minh + áp dụng theo bối cảnh + loop thảo luận go/no-go → triển khai luôn hoặc gửi đề xuất": (1) nguồn amend **Phụ lục Z2** (4.682 → 4.745 dòng, append-only: Z2.1 Rubric A chẩn đoán 5 chiều 30/25/15/15/15 · Z2.2 Rubric B giải pháp 6 chiều · Z2.3 Tournament 5 vòng trần 3 lặp · Z2.4 ma trận context-fit 8 chiều 3 gate · Z2.5 rule DIRECT-APPLY 5 điều kiện vs Proposal · Z2.6 council ⑤ kind=5); (2) **TB-14** blueprint chi tiết (~270 dòng, 12 section + Phụ lục A, 13 AC, 0 [Q] mở); (3) TB-12 §3.2 thêm TC-15→TC-18 (14 → **18 TC**); (4) TB-13 bổ module scoring/tournament/experiment + 2 model Prisma (HypothesisRecord, ExperimentRecord) + phase P2b; (5) TB-00 index/tracker cập nhật. Loop thảo luận = KING + SIVIL + BELI + LISMA + HAN (Council ⑤, blocking — trả lời câu hỏi "TL thảo luận với ai").*

@@ -4680,3 +4680,66 @@ P1 Thorough-first (luôn chọn cẩn thận/đầy đủ khi trade-off) · P2 K
 - Triển khai runtime các quyết định vào TMO app = thao tác riêng, chờ user khởi động.
 
 *Hết Phụ lục Z — nguồn ai-team-workflow.md giờ gồm 4.635 dòng gốc (v1–v1.2) + Phụ lục Z (v1.3).*
+
+# 📌 PHỤ LỤC Z2 — SOLUTION SCORING & SELECTION PROTOCOL (v1.5)
+
+> Người khởi xướng: Owner (phiên chat 2026-09-01, trace 1a05c01e7a9f66f9). Yêu cầu: "tiêu chí chấm điểm xác định thế nào là giải pháp/chẩn đoán chính xác, cách xác minh, cách agents áp dụng đúng tiêu chí + giải pháp phù hợp bối cảnh; cơ chế loop thảo luận → giả thiết tốt nhất → phương án thử nghiệm → triển khai → test → đánh giá → go/no-go → triển khai luôn hoặc gửi đề xuất tùy bối cảnh."
+> Trạng thái: ✅ ĐÃ CHỐT (user ủy quyền thorough-first — không mở [Q] mới). Phụ lục này là phần bổ sung v1.5 của Phụ lục Z; toàn bộ 4.682 dòng trước đó (4.635 gốc + Z) nguyên vẹn.
+
+## Z2.1 — RUBRIC A: CHẤM ĐIỂM CHẨN ĐOÁN (Diagnosis Quality)
+
+Mọi root cause / giả thiết chẩn đoán phải được chấm 5 chiều, thang 0–5 mỗi chiều, có evidence anchor:
+
+| Chiều | Trọng số | 0 điểm | 3 điểm | 5 điểm |
+|---|---|---|---|---|
+| D1 Evidence đầy đủ | 30% | claim không evidence | 1 phần có file:line + log | mọi claim có file:line + log excerpt + đường tái tạo |
+| D2 Xác nhận nhân-quả | 25% | chỉ tương quan | có cơ chế giải thích WHY | **kill-test trong workspace**: vá nguyên nhân → triệu chứng biến mất |
+| D3 Nhất quán | 15% | mâu thuẫn code/log | còn 1 điểm chưa đối chiếu | khớp code + log + giải thích 100% triệu chứng quan sát |
+| D4 Tái lập được | 15% | không ai kiểm lại | 1 SA độc lập khớp phần lớn | **2 SA độc lập (blind)** cùng kết luận |
+| D5 Độ sâu | 15% | dừng ở tầng triệu chứng | đến tầng code | đến tầng code + config/data + nguyên nhân gốc hệ thống |
+
+**Xếp loại:** ≥4.0 CONFIRMED · 3.0–3.9 PROBABLE (được vào Options nhưng phải qua thêm 1 falsification test) · <3.0 WEAK (loại, không được vào Options).
+
+## Z2.2 — RUBRIC B: CHẤM ĐIỂM GIẢI PHÁP (Solution Quality)
+
+| Chiều | Trọng số | Đo bằng gì |
+|---|---|---|
+| S1 Phủ bài toán | 25% | % root cause ≥PROBABLE được xử lý + Success Criteria mission |
+| S2 Impact kỳ vọng | 15% | số liệu định lượng + đối chiếu Performance Baselines (KB) |
+| S3 Rủi ro & khả năng hoàn tác | 20% | risk matrix + rollback plan + blast radius |
+| S4 Effort & độ phức tạp | 10% | LOC chạm, hệ thống chạm, thời gian |
+| S5 Context-fit | 20% | ma trận Z2.4 + tiền lệ KB (pattern/lesson) + delta thích ứng |
+| S6 Đ verify được | 10% | Verification Plan (a) tay NGAY + (b) benchmark metric + ngưỡng |
+
+**Xếp loại:** ≥4.0 STRONG · 3.0–3.9 RECOMMENDED (cần POC) · 2.0–2.9 CONDITIONAL (chỉ thử nếu không có gì hơn) · <2.0 REJECTED.
+
+## Z2.3 — TOURNAMENT GIẢ THIỆT & LOOP THỬ NGHIỆM (5 vòng, tối đa 3 vòng lặp)
+
+1. **GENERATE:** SIVIL sinh ≥3 giả thiết/1 vấn đề (SA matrix TB-03 §5).
+2. **SCORE-A:** chấm Rubric A từng giả thiết → top-2 đi tiếp; gap <0.5 → cả 2 đi tiếp.
+3. **FALSIFY:** mỗi giả thiết thiết kế kill-criteria (evidence nào sẽ bác bỏ) → BELI viết spec test tối thiểu → LISMA chạy trong workspace (branch riêng).
+4. **EXPERIMENT:** HAN dựng Options (A/B/C) — mỗi option BẮT BUỘC kèm scorecard B kỳ vọng; LISMA triển khai POC top-2 trong workspace → đo → scorecard B thực đo; delta kỳ vọng vs thực đo → lesson calibration ghi KB.
+5. **COUNCIL ⑤ (Solution Council — KING chủ trì + SIVIL + BELI + LISMA + HAN, blocking):** phê scorecards → verdict:
+   - **CONTINUE-ITERATE** (điểm đang tăng + còn vòng) → vòng tournament kế
+   - **CONVERGE** (solution ≥4.0 VÀ gap ≥0.5 so với á quân VÀ context-fit đạt) → chốt phương án tốt nhất
+   - **PIVOT** (2 vòng liên tiếp điểm đi ngang/giảm) → quay theo quy tắc PIVOT TB-06 §8.6/8.7
+   - **DROP** (3 vòng không ra giả thiết ≥PROBABLE) → negative result ghi KB anti-pattern + đóng task (nguồn: negative result vẫn là kết quả nghiên cứu hợp lệ)
+
+## Z2.4 — MA TRẬN CONTEXT-FIT (áp dụng giải pháp theo bối cảnh)
+
+Giải pháp/pattern trong KB phải kèm bản ghi áp dụng: {8 chiều bối cảnh: module hệ thống · tier/phiên bản protocol · quy mô dữ liệu · profile tải · dependency · môi trường (prod/sandbox) · ràng buộc thời gian · policy user; pre-conditions; adaptation delta; contraindication}.
+
+**Quy trình HAN kiểm tra:** match ≥70% chiều + 100% pre-conditions + 0 contraindication → áp dụng được (delta thích ứng thành yêu cầu spec cho BELI). Không đạt → phải qua tournament mới, không clone mù giải pháp cũ.
+
+## Z2.5 — QUYẾT ĐỊNH TRIỂN KHAI SAU CONVERGE
+
+- **DIRECT-APPLY** (triển khai luôn, không Proposal) chỉ khi hội ĐỦ 5 điều: (1) mission được user phê trước deploy_mode=auto (mission brief hoặc StandingOrder); (2) risk LOW; (3) reversible — rollback <15 phút; (4) tier ≤ T2; (5) blast radius đơn module. → LISMA apply qua RWV + verify + ghi KB + **thông báo user sau khi xong**.
+- **Mọi trường hợp khác → Proposal P-YYYYMMDD-NNN → SELF-DIRECTION** (quy tắc gốc C1/Phụ lục Z không đổi — default an toàn).
+
+## Z2.6 — Hiệu lực
+
+- Bổ sung Council ⑤ (thời điểm ⑤) vào hệ 4 council hiện có; transcript theo schema CouncilTranscript (kind=5).
+- Mọi quyết định mới ghi Decision Log KING; không mở [Q] mới — toàn bộ chốt trong phụ lục này theo ủy quyền thorough-first của user.
+- Blueprint chi tiết: TB-14 (mở rộng của tập 13 TB); integration code map: TB-13 §2/§3/§5 cập nhật.
+
+*Hết Phụ lục Z2 — nguồn gồm 4.635 dòng gốc + Phụ lục Z (v1.3) + Phụ lục Z2 (v1.5). Append-only: không dòng nào phía trên bị sửa.*

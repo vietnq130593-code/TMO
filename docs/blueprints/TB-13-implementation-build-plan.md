@@ -56,6 +56,7 @@ Thư mục mới trung tâm: **`src/lib/research-team/`** (mọi file mới củ
 | TB-10 Directed Reading | `src/lib/research-team/g1/reading-map.ts` · `artifact-map.ts` | 1 map G1 duy nhất, đọc có hướng |
 | TB-11 Proposal/Self-Direction | `src/lib/research-team/proposal/` — `store.ts` · `git-branch.ts` + bridge sang `src/lib/self-direction/` (đã tồn tại) | P-YYYYMMDD-NNN, 1 Proposal = 1 branch, APPLY = merge sau APPROVED |
 | TB-12 E2E Playbooks | `src/lib/research-team/__tests__/` + golden-run script | 14 TC — xem §8 |
+| TB-14 Solution Scoring | `src/lib/research-team/scoring/` — `rubric-a.ts` · `rubric-b.ts` · `tournament.ts` · `context-fit.ts` + mở rộng `king/councils.ts` (kind=5) + `g2/experiment.ts` | Rubric A/B + tournament 5 vòng + Council ⑤ + DIRECT-APPLY rule — TC-15→TC-18 |
 | TB-00/TB-13 (meta) | README này + index | không sinh code |
 
 ### 2.2 API layer — `src/app/api/research/`
@@ -91,8 +92,9 @@ src/lib/research-team/
 ├── g1/    (sivil, beli, engine, sub-agents, reading-map, artifact-map)
 ├── g2/    (lisma, rwv-loop, evidence-log)
 ├── g3/    (han, kb-store, capture)
+├── scoring/ (rubric-a, rubric-b, tournament, context-fit)   # TB-14 v1.5
 ├── proposal/ (store, git-branch)
-└── __tests__/ (tc-01..tc-14 + golden-run)
+└── __tests__/ (tc-01..tc-18 + golden-run)                    # 18 TC (v1.5)
 ```
 
 ---
@@ -187,12 +189,41 @@ model ModelSwitchEvent {
 model CouncilTranscript {
   id         String   @id @default(cuid())
   missionId  String
-  round      Int                        // ① post-DECOMPOSE | ② pre-code | ③ escalation | ④ final
+  round      Int                        // ① post-DECOMPOSE | ② pre-code | ③ escalation | ④ final | ⑤ solution council (TB-14)
   kind       Int
-  verdict    String                     // PASS|REVISE|VETO (② ③ BLOCKING DR)
+  verdict    String                     // PASS|REVISE|VETO (② ③) · CONTINUE-ITERATE|CONVERGE|PIVOT|DROP (⑤)
   blocking   Boolean  @default(true)    // council đồng bộ — chặn pipeline
   transcript String
   createdAt  DateTime @default(now())
+}
+
+// ===== TB-14 v1.5 — SOLUTION SCORING & SELECTION =====
+model HypothesisRecord {
+  id             String   @id @default(cuid())
+  missionId      String
+  problemStmt    String
+  hypothesis     String
+  scoreAJson     String   @default("{}")   // {D1..D5 điểm, score, grade}
+  killCriteria   String?                  // evidence nào sẽ bác bỏ (bắt buộc khi CONFIRMED)
+  killTestResult String?                  // PASS|FAIL + evidence
+  status         String                     // GENERATED|SCORING|FALSIFYING|CONFIRMED|REJECTED|KILLED
+  round          Int      @default(1)      // vòng tournament 1..3
+  createdAt      DateTime @default(now())
+}
+
+model ExperimentRecord {
+  id            String   @id @default(cuid())
+  missionId     String
+  optionId      String                     // A/B/C...
+  hypothesisRef String?                    // HypothesisRecord id
+  specPath      String?                    // spec BELI
+  branchName    String?                    // P-POC-<option>
+  scoreExpected String   @default("{}")   // scorecard B pre
+  scoreMeasured String?                    // scorecard B post
+  deltaJson     String?                    // delta + calibration lesson refs
+  metricsJson   String?                    // số liệu đo (a)/(b)
+  status        String                     // DRAFT|SPEC|POC|MEASURED|SCORED
+  createdAt     DateTime @default(now())
 }
 ```
 
@@ -223,6 +254,7 @@ model CouncilTranscript {
 | **P0 — Scaffold** | Tạo `src/lib/research-team/` khung + `constants.ts` + `types.ts` + Prisma models §3 + `db:push` | `/api/research/health` trả 200 + các bảng xuất hiện trong db |
 | **P1 — Router** | `classify.ts` + `mission-store.ts` + route `/missions` · confidence counting C2 (HIGH ≥3 tín hiệu 0 mâu thuẫn / MEDIUM 1 mâu thuẫn → tie-break UP / LOW ≥2 → hỏi đúng 1 câu) | TC-01 pass |
 | **P2 — G1** | `g1/*` — SIVIL dispatch SA + BELI spec + council ① ② (blocking) + dual-interpretation escalation | TC-03, TC-07 pass |
+| **P2b — Scoring/Tournament (TB-14)** | `scoring/*` — Rubric A/B + tournament 5 vòng + context-fit + council ⑤ kind=5 + ExperimentRecord POC branch | TC-15, TC-16, TC-17 pass |
 | **P3 — G2** | `g2/*` — RWV loop + evidence log + Regression entry + workspace clone (Live read-only) | TC-04, TC-06, TC-10 pass |
 | **P4 — G3+KB** | `g3/*` — KB 3 tầng (SQLite canonical + snapshot md + index) + cold-start seed + curate kép 3 mốc + trần 3 vòng | TC-05 pass |
 | **P5 — KING** | `king/*` — full lifecycle + councils ③ ④ + VETO + PIVOT + escalation deputy + timeout 48h/24h/12h | TC-09, TC-11 pass |
@@ -275,8 +307,12 @@ Mission tạo → workspace clone (đường dẫn: workspace/research/<mission-
 | TC-12 | Fallback giữa task → task KHÔNG reset + dòng model switched | `tc-12-model-switch.ts` |
 | TC-13 | task .md thiếu Success Criteria → council ① chặn ASSIGN | `tc-13-decompose-gate.ts` |
 | TC-14 | Worklog thiếu Artifact Map → gate chặn group kế | `tc-14-handoff-gate.ts` |
+| TC-15 | Giả thiết không có kill-criteria → tối đa PROBABLE | `tc-15-kill-criteria.ts` |
+| TC-16 | Scorecard kỳ vọng 4.2 thực đo 2.1 → calibration lesson + CONTINUE-ITERATE | `tc-16-calibration-delta.ts` |
+| TC-17 | Pattern KB sai bối cảnh → chặn APPLICABLE → tournament | `tc-17-context-fit.ts` |
+| TC-18 | CONVERGE: 5 điều kiện DIRECT-APPLY vs Proposal | `tc-18-deploy-route.ts` |
 
-**Golden-run:** script chạy tuần tự 14 TC + 1 mission E2E mẫu (seed → classify → decompose → G1→G2→G3 → proposal → approve → apply) — lưu kết quả `tool-results/golden-run-v1.json`.
+**Golden-run:** script chạy tuần tự 18 TC + 1 mission E2E mẫu (seed → classify → decompose → G1→G2→G3 → tournament (TB-14) → proposal → approve → apply) — lưu kết quả `tool-results/golden-run-v1.json`.
 
 ---
 
@@ -296,8 +332,8 @@ Mission tạo → workspace clone (đường dẫn: workspace/research/<mission-
 ## §10. DEFINITION OF DONE (checklist verify ≥ 12 items)
 
 - [ ] 1. `/api/research/health` 200 + báo đủ module
-- [ ] 2. Prisma: 7 model research tồn tại, `db:push` sạch
-- [ ] 3. TC-01 → TC-14: 14/14 pass (bằng test tự động)
+- [ ] 2. Prisma: 9 model research tồn tại (7 gốc + HypothesisRecord + ExperimentRecord của TB-14), `db:push` sạch
+- [ ] 3. TC-01 → TC-18: 18/18 pass (bằng test tự động)
 - [ ] 4. Golden-run E2E mission mẫu thành công
 - [ ] 5. Council ① ② ③ ④ blocking đúng thứ tự (log thứ tự TC-07)
 - [ ] 6. KB 3 tầng: SQLite canonical + snapshot md + index query được
@@ -309,6 +345,7 @@ Mission tạo → workspace clone (đường dẫn: workspace/research/<mission-
 - [ ] 12. Evidence log: mọi claim có file:line + excerpt (TC-06)
 - [ ] 13. Worklog zod-validate 8 trường Confidence
 - [ ] 14. `bun run lint` sạch
+- [ ] 15. Rubric A/B chấm đúng trọng số + ngưỡng; council ⑤ blocking; DIRECT-APPLY 5 điều kiện (TB-14 §11 AC1–AC10)
 
 ---
 

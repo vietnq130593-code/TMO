@@ -10,7 +10,7 @@
 
 ## §0. 🎯 MỤC ĐÍCH & PHẠM VI `[TB-12 §0 ← TB-00 §2 — file 13/13]` `[EXT]`
 
-- **Mục đích:** "chạy thử trên giấy" toàn pipeline research team bằng 2 playbook E2E (M1 — House Prices · M2 — chat TMO chậm) + bộ **14 test case cơ chế** (TC-01 → TC-14, bảng giấy — kiểm thử CƠ CHẾ, không phải code — TC-13/TC-14 thêm đợt v1.3 theo DECISION-RECORD) + **coverage matrix 13 blueprint**. Mọi mâu thuẫn giữa các TB sẽ lộ ra ở file này.
+- **Mục đích:** "chạy thử trên giấy" toàn pipeline research team bằng 2 playbook E2E (M1 — House Prices · M2 — chat TMO chậm) + bộ **18 test case cơ chế** (TC-01 → TC-18, bảng giấy — kiểm thử CƠ CHẾ, không phải code — TC-13/TC-14 thêm đợt v1.3 theo DECISION-RECORD; TC-15→TC-18 thêm đợt v1.5 theo TB-14 Solution Scoring) + **coverage matrix 13 blueprint**. Mọi mâu thuẫn giữa các TB sẽ lộ ra ở file này.
 - **Ai dùng:** kỹ sư triển khai (smoke-test khi cài team vào TMO) · user (review tổng thể trước khi khởi động implement) · chính 5 agents (kịch bản vận hành tham chiếu).
 - **Không bao gồm:** mã test tự động (test case dạng bảng giấy) · chi tiết JD từng agent (TB-03/04/05/06) · mọi số liệu không có trong nguồn (không bịa bổ sung).
 - **Quy tắc:** mọi con số trong 2 playbook giữ nguyên nguồn (121s · 6.2s · 8 điểm · 0.115 RMSE log · 72 features...); mốc "ngày" trong timeline chỉ là mô phỏng minh họa `[EXT]`.
@@ -196,7 +196,7 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 
 ---
 
-## §3. 🧪 BẢNG TEST CASE TC-01 → TC-14 (CƠ CHẾ — BẢNG GIẤY) `[TB-12 §3 ← đối soát TB-01 → TB-11]` `[EXT]`
+## §3. 🧪 BẢNG TEST CASE TC-01 → TC-18 (CƠ CHẾ — BẢNG GIẤY) `[TB-12 §3 ← đối soát TB-01 → TB-11 + TB-14]` `[EXT]`
 
 > Cách dùng: mỗi TC = 1 kịch bản runtime giả lập; "verify" = đọc lại artifact (worklog/Decision log/KB/Proposal) kiểm kỳ vọng. KHÔNG phải test code — kiểm cơ chế thiết kế.
 
@@ -228,9 +228,18 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 
 > 2 test case bổ sung đợt v1.3 (✅ chốt §7 Q1): `[TB-12 §3.2 ← TB-07 §3 (task template) + DECISION-RECORD v1.3 (TB-12 Q1)]` `[EXT]` (TC-13) · `[TB-12 §3.2 ← TB-09 §10 E4 + TB-10 §13 Q6 + DECISION-RECORD v1.3 (TB-12 Q1)]` `[EXT]` (TC-14).
 
+**4 test case bổ sung đợt v1.5 (✅ theo TB-14 Solution Scoring & Selection — Phụ lục Z2 nguồn):** `[TB-12 §3.2 ← TB-14 §10 + Phụ lục Z2]` `[EXT]`
+
+| TC | Kịch bản | Hành vi đúng | Verify | Tham chiếu |
+|---|---|---|---|---|
+| TC-15 | **"Giả thiết không thiết kế được kill-criteria"** — tournament TB-14 §3: 3 giả thiết, 1 cái không thể falsify | Giả thiết đó tối đa PROBABLE, KHÔNG thể CONFIRMED (D2 tối đa 3 — §1.2); vào vòng 4 phải kèm falsification plan | DB `HypothesisRecord.killCriteria` NOT NULL khi status=CONFIRMED | TB-14 §1.2/§3 |
+| TC-16 | **"Scorecard kỳ vọng 4.2 — thực đo 2.1"** — experiment TB-14 §2.3 | Delta >1.0 → lesson calibration ghi KB; council ⑤ verdict CONTINUE-ITERATE (KHÔNG CONVERGE) | KB có entry Calibration Lesson + CouncilTranscript kind=5 verdict đúng | TB-14 §2.3/§6.3 |
+| TC-17 | **"Reuse pattern KB sai bối cảnh"** — context-fit TB-14 §5: pattern có pre-condition "4 key active" nhưng mission single-key | HAN chặn APPLICABLE → giải pháp vào tournament như ứng viên mới kèm adaptation | worklog có khối `contextfit` verdict TOURNAMENT | TB-14 §5.2 |
+| TC-18 | **"CONVERGE winner — DIRECT-APPLY vs Proposal (kịch bản đôi)"** — TB-14 §7: (a) risk LOW + deploy_mode=auto + T2 + rollback 10m + đơn module; (b) risk HIGH, còn lại đủ | (a) DIRECT-APPLY: LISMA apply RWV + verify + KB + **notify user sau khi xong**; (b) KHÔNG direct → Proposal P-* SUBMITTED | Decision Log dòng deploy_route=direct kèm 5 điều kiện; Proposal DB status | TB-14 §7 |
+
 ---
 
-## §4. 🗺️ BẢNG ĐỐI SOÁT 13 BLUEPRINT — COVERAGE MATRIX `[TB-12 §4 ← đối soát toàn tập]` `[EXT]`
+## §4. 🗺️ BẢNG ĐỐI SOÁT 14 BLUEPRINT — COVERAGE MATRIX `[TB-12 §4 ← đối soát toàn tập + TB-14 v1.5]` `[EXT]`
 
 | TB | Section then chốt | Phủ bởi | Ghi chú gap |
 |---|---|---|---|
@@ -247,6 +256,7 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 | TB-10 | §3 Artifact Map format · §5 chiến lược đọc theo group | PB §2.3 (SA theo map · LISMA Suspect · HAN Impact Chain) + **TC-14 (v1.3)** | **TC-14 đã thêm v1.3 — §7 Q1 [DECIDED]** |
 | TB-11 | §1 schema 8 trường · §2 vòng đời · §4 checklist SUBMIT | TC-11, PB §2.4, TC-02 | — |
 | TB-12 | §3 TC · §4 matrix · §1–§2 playbook | tự đối soát (file này) | — |
+| TB-14 | §1–§2 rubric A/B · §3 tournament · §5 context-fit · §6 council ⑤ · §7 deploy rule | **TC-15, TC-16, TC-17, TC-18 (v1.5)** | **4 TC thêm v1.5 — phủ đủ rubric + tournament + context-fit + deploy** |
 
 > Cách đọc: "Phủ bởi" = TC (bảng §3) hoặc PB (playbook §1/§2); "—" ở cột gap = không phát hiện khoảng trống. 2 gap (TB-07, TB-10) đã khai báo tại §7 Q1 — ✅ chốt v1.3: đã khép bằng TC-13/TC-14 (bảng §3.2), không còn gap.
 
@@ -289,7 +299,7 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 - [ ] **AC3.** PB-M2 giữ nguyên đủ số liệu thật: 121s khi 401 · 6.2s baseline · 3 root causes · options A/B/C (khuyến nghị A+B) · p95 < 10s · 3 checkpoint KING · 4 parts · 6 SA.
 - [ ] **AC4.** PB-M2 thể hiện quy tắc vàng: toàn mission KHÔNG sửa file TMO — output duy nhất là Proposal; áp Workspace → Live là thao tác riêng sau APPROVED (dòng 4511).
 - [ ] **AC5.** PB-M2 Verification Plan đủ (a) kiểm chứng tay NGAY + (b) benchmark DEFERRED (p50/p95 · acceptance p95 < 10s).
-- [ ] **AC6.** 14 TC đủ 5 cột (ID · kịch bản · kỳ vọng · verify · tham chiếu — gồm TC-13/TC-14 thêm v1.3 theo §7 Q1); không TC nào tham chiếu section không tồn tại trong blueprint tương ứng.
+- [ ] **AC6.** 18 TC đủ 5 cột (ID · kịch bản · kỳ vọng · verify · tham chiếu — gồm TC-13/TC-14 thêm v1.3 + TC-15→TC-18 thêm v1.5 theo TB-14); không TC nào tham chiếu section không tồn tại trong blueprint tương ứng.
 - [ ] **AC7.** Coverage matrix phủ đủ 13 file TB; mọi TB ≥ 1 nguồn phủ (TC hoặc playbook); gap được khai báo (§7 Q1).
 - [ ] **AC8.** Mọi section chính có traceability `[TB-12 §n ← nguồn dòng a–b]` + [SRC]/[EXT]/[Q].
 - [ ] **AC9.** Bảng 3-tier + mapping M2 trùng khớp nguồn 4515–4558 (điểm, đường đi, 3 ví dụ mapping nguyên văn).
