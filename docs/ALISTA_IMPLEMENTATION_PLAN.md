@@ -717,4 +717,45 @@ domain entity cần nạp tài liệu.
 
 ---
 
-*Hết kế hoạch v1.3 — audit + 4 bổ sung + 2 bug fix đã E2E verify. Obi.*
+## 9. RÀ SOÁT HẬU TRIỂN KHAI v1.3 — ROUND 2 (2026-09-01 16:00 VN)
+
+Owner yêu cầu kiểm tra lại toàn bộ sau khi 4 khoảng trống đã xử lý. Kết quả:
+**hạ tầng + logic ĐẦY ĐỦ hoạt động E2E; phát hiện và sửa 2 thiếu sót còn lại (UI + code dư).**
+
+### 9.1. Những gì ĐÃ VERIFY (không có lỗi)
+
+| Hạng mục | Phương pháp | Kết quả |
+|---|---|---|
+| Git/PM2/log | git status + pm2 + dev.log | working tree sạch, a07b652 pushed, app online, 0 sweep fail từ restart |
+| Typecheck + lint | tsc --noEmit + eslint | PASS |
+| DB state | script `inspect-alistadb.ts` (read-only) | 6 proposal thật (5 pending + 1 completed), 0 E2E leftover, 0 zombie, CronJob nextRunAt đúng 23:30 tối nay |
+| H1 criteria | phân tích rules.ts bằng parser | 39/39 call sites thật đều có successCriteria (2 site check ⑥ cố ý không có — không re-check được, guard sẵn) |
+| H3 infra | E2E manual check bước ⑤ | R2 connected 1 object, Supabase 24 tables, 4 NVIDIA keys, disk 50.4% free, Qdrant 3 collections, Neo4j 78300 nodes — 6/6 services |
+| H4 recurrence | code review | query 1 lần group base key + prefix ⚠ TÁI DIỄN + bump deterministic (≥2→medium, ≥4→high) |
+| Manual check E2E | POST /api/alista/check force=true | 7/7 bước completed, deadlineMet, 218.4s, mọi finding có 🎯 criteria, 0 proposal mới (dedupe chặn đúng vì 5 proposal LIVE) |
+| Vòng lặp kín E2E | script tạo proposal test → sweep → defer → force dueAt → activation → verify → dọn | PASS toàn bộ: defer marker 24h đúng why; sweep kích hoạt ≤75s; verify checkId=3 resolved=false stillOriginal=false; dedupe chặn follow-up; marker superseded; **0 leftover sau cleanup** |
+
+### 9.2. Hai thiếu sót phát hiện & đã sửa
+
+1. **BUG UI (thật, thấy bằng mắt owner):** panel "ALISTA — Hoạt động" render per-step badge
+   so `s.status !== 'ok'` — nhưng pipeline dùng vocabulary `completed|partial|failed|skipped`
+   → MỌI bước chạy tốt đều hiện badge ĐỎ "lỗi" (misleading). FIX: chỉ render badge khi
+   bước failed/skipped/partial HOẶC findings > 0; healthy step không badge; badge amber =
+   "N findings", stone = "bỏ qua/một phần", rose = "lỗi" thật. Đã verify lại bằng browser:
+   giờ chỉ hiện "Escalations: 2 findings / Domain coverage: 1 findings / Database + Memory: 2 findings".
+2. **Code dư:** `VerifyOutcome` interface bị khai báo TRÙNG 2 lần trong proposal-verify.ts
+   (leftover khi edit — TS merge được nên không crash, nhưng là mảnh vụn). FIX: gộp còn 1
+   khai báo duy nhất có field `deferred?`.
+
+### 9.3. Quan sát vận hành (không phải bug — đã có fail-safe)
+
+- **kimi-k3 (NVIDIA) timeout 60s mỗi LLM call trong ca check** (endpoint chậm lúc 15-16h VN):
+  fallback chain tự chuyển z-ai-sdk (`nguồn=zai`) — proposal vẫn sinh đúng; mỗi check có
+  findings mất thêm ~60s chờ timeout. Đêm qua kimi hoạt động bình thường (check 04:31 dùng
+  kimi). Không cần xử lý — budget ca trực 6h dư sức.
+- Script ops mới: `scripts/inspect-alistadb.ts` — audit read-only DB state ALISTA
+  (proposals/markers/zombie/cron/agent instruction) cho các lần rà soát sau.
+
+---
+
+*Hết kế hoạch v1.3 + rà soát round 2 (2 fix bổ sung). Obi.*

@@ -1260,23 +1260,40 @@ export function EpisodicMemoryPanel({ analyticsRange, onAnalyticsRangeChange }: 
                     </div>
                   )}
 
-                  {/* Check — chi tiết per-step khi có skip/error */}
-                  {!isVerify && row.perCheck.some(s => s.status !== 'ok' || s.findingsCount > 0) && (
+                  {/* Check — chi tiết per-step khi có findings / skip / lỗi
+                      (FIX v1.3.1: status pipeline là 'completed'|'partial'|'failed'|'skipped' —
+                      code cũ so '!== ok' khiến MỌI bước chạy tốt hiện badge đỏ "lỗi" sai) */}
+                  {!isVerify && row.perCheck.some(s =>
+                    s.status === 'failed' || s.status === 'skipped' || s.status === 'partial' || s.findingsCount > 0,
+                  ) && (
                     <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
-                      {row.perCheck.filter(s => s.status !== 'ok' || s.findingsCount > 0).slice(0, 6).map(s => (
-                        <Badge
-                          key={s.id}
-                          variant="outline"
-                          className={`text-[9px] px-1.5 py-0 h-4 border ${
-                            s.status === 'ok'
-                              ? 'bg-amber-950/60 text-amber-400 border-amber-500/50'
-                              : 'bg-rose-950/60 text-rose-400 border-rose-500/50'
-                          }`}
-                          title={`${s.label}${s.error ? ` — ${s.error}` : ''}${s.skipReason ? ` — ${s.skipReason}` : ''}`}
-                        >
-                          {s.label.slice(0, 22)}: {s.status === 'ok' ? `${s.findingsCount} findings` : 'lỗi'}
-                        </Badge>
-                      ))}
+                      {row.perCheck.filter(s =>
+                        s.status === 'failed' || s.status === 'skipped' || s.status === 'partial' || s.findingsCount > 0,
+                      ).slice(0, 7).map(s => {
+                        const isFailed = s.status === 'failed'
+                        const isSkippedOrPartial = s.status === 'skipped' || s.status === 'partial'
+                        const stepText = isFailed
+                          ? 'lỗi'
+                          : isSkippedOrPartial
+                            ? (s.status === 'skipped' ? 'bỏ qua' : 'một phần')
+                            : `${s.findingsCount} findings`
+                        return (
+                          <Badge
+                            key={s.id}
+                            variant="outline"
+                            className={`text-[9px] px-1.5 py-0 h-4 border ${
+                              isFailed
+                                ? 'bg-rose-950/60 text-rose-400 border-rose-500/50'
+                                : isSkippedOrPartial
+                                  ? 'bg-stone-950/60 text-stone-400 border-stone-600/50'
+                                  : 'bg-amber-950/60 text-amber-400 border-amber-500/50'
+                            }`}
+                            title={`${s.label} — ${s.status}${s.error ? ` — ${s.error}` : ''}${s.skipReason ? ` — ${s.skipReason}` : ''}`}
+                          >
+                            {s.label.slice(0, 22)}: {stepText}
+                          </Badge>
+                        )
+                      })}
                       {!row.deadlineMet && (
                         <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border bg-rose-950/60 text-rose-400 border-rose-500/50">
                           trượt deadline

@@ -177,13 +177,6 @@ export async function notifyAlistaProposalCompleted(
 
 // ==================== MAIN: FOLLOW-UP VERIFICATION ====================
 
-interface VerifyOutcome {
-  ok: boolean
-  resolved: boolean | null
-  newProposalIds: Array<{ id: string; title: string }>
-  error?: string
-}
-
 /**
  * Xác minh 1 đề xuất đã hoàn tất: (v1.3) tra recheck window → hoãn nếu metric
  * cần thời gian, ngược lại re-run collector → rules → so findings.
