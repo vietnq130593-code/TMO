@@ -3,7 +3,8 @@
 > 📐 **TECHNICAL BLUEPRINT — AI RESEARCH TEAM (DUAL MISSION: M1 Kaggle + M2 System Research)**
 > Nguồn chính: `upload/ai-team-workflow.md` — section 📚 KNOWLEDGE CAPTURE (dòng 1718–1825)
 > Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10-c) | Biên soạn: Mr. Robot (Z.ai Code) — nhóm C (Protocols ngang)
-> Quy ước chung: TB-00 §1 (roster · model stack · mission · Live System vs Workspace) + §5 ([SRC]/[EXT]/[Q])
+> **v1.3 (2026-09-01):** toàn bộ [Q] đã chốt theo DECISION-RECORD-v1.3.md (user ủy quyền, thorough-first) — xem Phụ lục Z nguồn.
+> Quy ước chung: TB-00 §1 (roster · model stack · mission · Live System vs Workspace) + §5 ([SRC]/[EXT]/[Q] *(→ từ v1.3: [Q] đã chuyển thành [DECIDED v1.3])*)
 
 ## §0. 🎯 MỤC ĐÍCH & PHẠM VI `[TB-08 §0 ← suy từ nguồn dòng 1718–1825 + TB-00 §2]` `[EXT]`
 
@@ -108,7 +109,7 @@ Quy tắc runtime bổ sung `[EXT]`:
 | WRITE | Agent ghi trực tiếp chịu trách nhiệm entry (Source = tên mình); BELI/LISMA đi theo flow §8 |
 | CURATE | Chỉ HAN được curate; task T1/T2 không qua G3 → entries status NEW chờ chu trình G3 gần nhất của task bất kỳ — không chặn task đang chạy |
 
-✅ *(đồng bộ tham chiếu — đã xử lý tại tổng duyệt Task 8)* TB-06 §10.3 đã trỏ đúng "TB-08 §4" cho KB Write Protocol (TB-06 dòng 998) — không còn trỏ "TB-08 §3". *[Q]* Chu kỳ CURATE khi team dài ngày không chạy task T3 nào (KB tích tụ NEW): đề xuất HAN curate định kỳ (mỗi ~10 entry NEW hoặc cuối mỗi mission) — user chốt.
+✅ *(đồng bộ tham chiếu — đã xử lý tại tổng duyệt Task 8)* TB-06 §10.3 đã trỏ đúng "TB-08 §4" cho KB Write Protocol (TB-06 dòng 998) — không còn trỏ "TB-08 §3". **[DECIDED v1.3]** Chu kỳ CURATE: **định kỳ KÉP (3 mốc):** (a) mỗi ~10 entry NEW; (b) cuối mỗi mission; (c) định kỳ 7 ngày nếu KB còn entry NEW — HAN chủ trì, không cần chờ task T3 (✅ chốt theo DECISION-RECORD v1.3 — TB-08 Q1).
 
 ## §5. 📇 KB ENTRY SCHEMA + 3 VÍ DỤ THẬT `[TB-08 §5 ← nguồn dòng 1791–1811]` `[SRC]`
 
@@ -222,4 +223,4 @@ Checklist verify khi triển khai protocol:
 | 1743–1746, 1785 | KB Candidates trong worklog — duyệt rồi mới ghi | §8 | [EXT] (flow chuẩn hóa) |
 | TB-00 §1/§2/§5 + TB-05/TB-06/TB-03/TB-04/TB-09 | Quy ước tập + tham chiếu ngang | header, §0, §2–§8 | [EXT] |
 
-*[Q] mở của file: (1) chu kỳ curate định kỳ khi không có task T3 chạy; (2) nền tảng lưu trữ KB runtime (file .md theo TB-05 §7.1 hay store nội bộ TMO) — khớp TB-05 §11 Q5, user chốt.* *(Lịch sử: [Q] cũ "đồng bộ tham chiếu TB-06 §10.3 → TB-08 §4" đã xử lý tại tổng duyệt Task 8 — TB-06 dòng 998 đã trỏ đúng.)*
+**[DECIDED v1.3] Cả 2 câu hỏi mở của file đã chốt:** (1) chu kỳ curate định kỳ KÉP (~10 entry NEW · cuối mission · 7 ngày — HAN chủ trì); (2) KB lưu theo kiến trúc 3 lớp ✅ DR-C6 (SQLite/Prisma canonical + snapshot .md multi-file + index; Live read-only — khớp TB-05 §11 Q3/Q5). *(Lịch sử: [Q] cũ "đồng bộ tham chiếu TB-06 §10.3 → TB-08 §4" đã xử lý tại tổng duyệt Task 8 — TB-06 dòng 998 đã trỏ đúng.)*

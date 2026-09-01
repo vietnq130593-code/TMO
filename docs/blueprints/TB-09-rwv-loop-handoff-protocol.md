@@ -3,7 +3,8 @@
 > 📐 **TECHNICAL BLUEPRINT — AI RESEARCH TEAM (DUAL MISSION: M1 Kaggle + M2 System Research)**
 > Nguồn chính: `upload/ai-team-workflow.md` — 📋 HANDOFF PROTOCOL (dòng 3285–3337), 🔄 READ-WRITE-VERIFY LOOP (dòng 3341–3775), worklog mẫu MONITOR (dòng 2294–2337), bảng ghi chú RWV (dòng 4585–4598)
 > Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10-e) | Biên soạn: Mr. Robot (Z.ai Code) — nhóm C (Protocols ngang)
-> Quy ước chung: TB-00 §1 (roster · model stack · mission · Live System vs Workspace) + §5 ([SRC]/[EXT]/[Q])
+> **v1.3 (2026-09-01):** toàn bộ [Q] đã chốt theo DECISION-RECORD-v1.3.md (user ủy quyền, thorough-first) — xem Phụ lục Z nguồn.
+> Quy ước chung: TB-00 §1 (roster · model stack · mission · Live System vs Workspace) + §5 ([SRC]/[EXT]/[Q] *(→ từ v1.3: [Q] đã chuyển thành [DECIDED v1.3])*)
 
 ## §0. 🎯 MỤC ĐÍCH & PHẠM VI `[TB-09 §0 ← suy từ nguồn dòng 3285–3775 + TB-00 §2]` `[EXT]`
 
@@ -252,7 +253,7 @@ LƯU Ý (nguồn):
 └── Tier 3: Có đủ 3 Checkpoint (Full pipeline)
 ```
 
-`[Q]` *(kế thừa TB-01/TB-02)* T2 có CP1 — mức verify: đầy đủ như T3 hay quick-check rút gọn? Nguồn dòng 3518 liệt kê T2 có CP1+CP2 (TL → G1→G2 → TL) nhưng không nêu độ sâu verify tại CP1 của T2; flow Tier 2 (dòng 3208) không thể hiện CP1 — chỉ có bước "TL xác nhận" sau G2. Chờ user chốt.
+`[DECIDED v1.3 → DR-C4]` T2 có CP1 — **verify ĐẦY ĐỦ như T3** (checklist ~60% số item; 3 thành phần formal gate). Đã chốt theo DECISION-RECORD v1.3.
 
 ### 3.6 Bảng quyết định tại checkpoint `[TB-09 §3.6 ← hợp nhất nguồn dòng 3473–3514 + 3455]` `[SRC + EXT]`
 
@@ -352,13 +353,16 @@ Tại mọi checkpoint: **council ④** diễn ra cùng lúc (TB-06 §10) + **Kn
 | KB entries mới / KB Candidates | ✅ | ✅ | TB-08: KING/SIVIL/HAN ghi entry; BELI/LISMA để candidate |
 | Model note | optional | optional | dòng `model switched` (§4.3) `[EXT]` |
 
-### 4.3 Dòng model switched `[TB-09 §4.3 ← giải [Q] mở Task 8-a; suy từ TB-00 §1.2]` `[EXT]`
+### 4.3 Dòng model switched `[TB-09 §4.3 ← giải [Q] mở Task 8-a; suy từ TB-00 §1.2]` `[EXT]` — ✅ DUYỆT v1.3 (DR-C7)
 
 Khi agent chuyển model (Kimi-k3 lỗi/quá tải → fallback DeepSeek v4 Pro → DeepSeek v4 Flash → MiniMax-M3), group thêm 1 dòng vào entry worklog đang viết:
 
 ```markdown
-- **Model note**: model switched Kimi-k3 → DeepSeek v4 Pro —
-  lý do: [timeout / quá tải / lỗi API]; agent giữ nguyên JD + vai trò.
+- **Model note**: model switched Kimi-k3 → DeepSeek V4 Pro —
+  lý do: [timeout / quá tải / lỗi API / quality];
+  trigger: [2 probe liên tiếp vượt SLA / error-code];
+  next check: [cuối task hiện tại / sau 3 probe OK thử về model chính];
+  agent giữ nguyên JD + vai trò.
 ```
 
 - Không reset task, không đổi quyền, mọi protocol (verify/checkpoint/KB) giữ nguyên — role-based.
@@ -444,6 +448,8 @@ Cùng Part 2 Feature Engineering (M1) như §4.4, nhìn từ phía TL — mỗi 
 | V4 | Hypothesis checked | mỗi H có status + evidence (CONFIRMED/REJECTED/PENDING) — không H nào treo không status | mọi CP |
 | V5 | Stability | CV std / ensemble std across folds trong ngưỡng (std > 0.01 = 🟡 fluctuation) | CP3 |
 
+*(✅ chốt v1.3 — §12 Q5: 0.005 = minor (ghi worklog) · 0.01 = notable (đánh giá ổn định hóa) · 0.02 = instability-warning (kiểm tra trước kết luận metric) — bảng chuẩn hóa vào Research Protocol template)*
+
 ### 5.2 Tiêu chí VERIFY — M2 (5)
 
 | # | Tiêu chí | Câu hỏi verify | Phát hiện ở |
@@ -470,7 +476,7 @@ Sau READ + VERIFY, KING ghi 1 dòng vào Meta của worklog entry vừa đọc:
 | ⚠️ NEEDS REVIEW | thiếu thông tin / cần bổ sung nhưng chưa đến mức trả lại | ghi rõ thiếu gì; cho phép group kế chạy với điều kiện kèm |
 | 🔴 PIVOT NEEDED | dính trigger §6 | PIVOT / ESCALATE theo §6.6 |
 
-Kèm mỗi flag: 1 dòng Decision log (TB-06 §13). `[Q]` nguồn không nói rõ ai ghi flag — TB-09 đề xuất KING ghi khi READ xong (worklog là shared artifact theo §1.2).
+Kèm mỗi flag: 1 dòng Decision log (TB-06 §13). `[DECIDED v1.3]` KING ghi flag khi READ xong (worklog là shared artifact theo §1.2 — đề xuất được duyệt).
 
 ## §6. ⚠️ PIVOT TRIGGERS — KHI NÀO TL PHẢI ĐIỀU CHỈNH `[TB-09 §6 ← nguồn dòng 3523–3574, 4594–4597]` `[SRC]`
 
@@ -634,7 +640,7 @@ NEW ──ASSIGN──▶ ASSIGNED ──group nhận+đọc Map──▶ IN_PRO
 
 ### 9.4 Versioning task .md khi pivot — append, KHÔNG rewrite
 
-`[TB-09 §9.4 ← liên quan TB-06 §16 Q4 + TB-07 §11 Q4]` `[EXT + Q]`
+`[TB-09 §9.4 ← liên quan TB-06 §16 Q4 + TB-07 §11 Q4]` `[EXT + DECIDED v1.3]`
 
 - **Quy tắc đề xuất:** KHÔNG rewrite các block gốc (Mô tả/Input/Output kỳ vọng/Constraints). Thêm/append 1 section `## Changelog` ở cuối file; dòng thay thế trong block gốc được đánh dấu `[SUPERSEDED vN]` — không xóa.
 
@@ -646,7 +652,7 @@ NEW ──ASSIGN──▶ ASSIGNED ──group nhận+đọc Map──▶ IN_PRO
 ```
 
 - Version hiện tại = số dòng changelog; task đang chạy luôn tham chiếu "task .md vN".
-- `[Q]` *(đồng bộ chéo)* TB-06 §16 Q4 (nâng/hạ tier giữa chừng: rewrite hay append?) + TB-07 §11 Q4 (thêm version field vào task .md) — TB-09 đề xuất **append-only**; chờ user chốt một lần cho cả 3 file.
+- `[DECIDED v1.3 → DR-C3]` **append-only** — đã chốt một lần cho cả 3 file (TB-06/TB-07/TB-09); task .md có `version` + `## CHANGELOG`.
 
 ## §10. 🧯 ERROR HANDLING & EDGE CASES `[TB-09 §10 ← mở rộng từ nguồn dòng 1746, 3460, 4612, 4613 + quy ước TB-01]` `[EXT]`
 
@@ -656,13 +662,13 @@ NEW ──ASSIGN──▶ ASSIGNED ──group nhận+đọc Map──▶ IN_PRO
 | E2 | Worklog thiếu trường bắt buộc (Metrics M1 / Findings M2) | TL READ thấy thiếu | trả lại group bổ sung entry — protocol là bất biến, không phải gợi ý |
 | E3 | Task M2 không sinh được metric định lượng | tự nhiên (M2 ít số liệu) | dùng qualitative evidence: log excerpt before/after, bảng Performance Baselines (KB — TB-05 §5.1); vẫn phải evidence-based, không "cảm giác nhanh hơn" |
 | E4 | Group xong nhưng không cập nhật Artifact Map | CP check | không giao group kế (quy tắc nguồn 4613) — bắt buộc bổ sung Map rồi mới CONTINUE |
-| E5 | Checkpoint trễ / group treo (không có worklog mới) | MONITOR thiếu entry | KING nhắc qua DECIDE; treo quá ngưỡng → ESCALATE user `[Q]` timeout — §12 Q3 |
+| E5 | Checkpoint trễ / group treo (không có worklog mới) | MONITOR thiếu entry | KING nhắc qua DECIDE; treo quá ngưỡng → ESCALATE user `[DECIDED v1.3: nhắc 1 CP / treo 2 CP → ESCALATE — §12 Q3]` |
 | E6 | PIVOT lặp ≥ 2 lần lớn trên cùng 1 part | Decision log | ESCALATE user (khớp TB-06 E8) — dấu hiệu decompose sai hoặc bài toán ngoài khả năng |
 | E7 | Model fallback giữa phase | dòng model switched (§4.3) | task KHÔNG reset; role giữ nguyên; model reset về Kimi-k3 ở task mới |
 | E8 | Task status mâu thuẫn worklog (task .md Done nhưng worklog ESCALATED) | KING đọc | worklog là chuẩn trạng thái chạy; đồng bộ task .md qua changelog (§9.4) |
 | E9 | Mission lẫn giữa chừng (task M1 sinh findings hệ thống / M2 sinh output kiểu Kaggle) | CP verify thấy loại output sai mission | quay CLASSIFY (TB-06 §2.5); không trộn output 2 mission trong 1 task |
 | E10 | KB Candidates trong worklog không ai duyệt sau 2 checkpoint | KING MONITOR | SLA TB-08 §8 K4 — KING xử lý bắt buộc tại checkpoint kế |
-| E11 | ESCALATED chờ user quá lâu | pipeline đứng | pipeline task đó dừng toàn phần; parts khác độc lập vẫn chạy được `[Q]` timeout + ủy quyền (TB-06 §16 Q7) |
+| E11 | ESCALATED chờ user quá lâu | pipeline đứng | pipeline task đó dừng toàn phần; parts khác độc lập vẫn chạy được `[DECIDED v1.3 → DR-C5: 48h/24h + nhắc 12h + deputy approver SIVIL/HAN (TB-06 §16 Q7)]` |
 | E12 | M2 cần POC nhưng Workspace chưa mở (user chưa mở bản clone) | part Design/Propose cần chạy POC (VD Part 3 — TB-07 §5) | evidence vẫn chạy (đọc Live System); POC hoãn + Proposal đánh cờ `POC-NEEDS-WORKSPACE` (quy ước TB-02 §6; xử lý chi tiết: TB-06 §14 E7 + TB-07 §9 E7; ghi chú ASSIGN task M2 — TB-06 §6.7) |
 
 ## §11. ✅ ACCEPTANCE CRITERIA `[TB-09 §11]`
@@ -681,21 +687,23 @@ NEW ──ASSIGN──▶ ASSIGNED ──group nhận+đọc Map──▶ IN_PRO
 - [ ] AC12 — TL Read-Back 3 mức (✅/⚠️/🔴) + ai ghi + hành động kế (§5.4).
 - [ ] AC13 — Bảng CODE TEAM TL vs RESEARCH TEAM TL giữ nguồn + state diagram loop theo checkpoint + 5 nghĩa vụ controller (§7).
 - [ ] AC14 — Bảng "ai đọc artifact nào" đủ 5 role + quy tắc Map bắt buộc (§8).
-- [ ] AC15 — Lifecycle đủ trạng thái + bảng transition + versioning append-only + đánh dấu [Q] đồng bộ TB-06/TB-07 (§9).
+- [ ] AC15 — Lifecycle đủ trạng thái + bảng transition + versioning append-only + quyết định [DECIDED v1.3] đồng bộ TB-06/TB-07 (§9).
 - [ ] AC16 — ≥ 10 error & edge cases với phản ứng chuẩn, không mâu thuẫn TB-01/TB-06/TB-08 (§10).
 
-## §12. ❓ OPEN QUESTIONS & PHỤ THUỘC `[Q]`
+## §12. DECISIONS — [Q] ĐÃ CHỐT (v1.3)
 
-| # | Câu hỏi | Liên quan |
-|---|---|---|
-| Q1 | T2 có CP1 — verify đầy đủ như T3 hay quick-check? (nguồn 3518 liệt kê CP, không nêu độ sâu — flow 3208 không thể hiện CP1) | kế thừa TB-01/TB-02 |
-| Q2 | Versioning task .md: append changelog (đề xuất §9.4) hay rewrite? | TB-06 §16 Q4 · TB-07 §11 Q4 |
-| Q3 | Timeout group treo + timeout ESCALATED chờ user (đề xuất: nhắc 1 CP, treo 2 CP → ESCALATE) | TB-06 §16 Q7 · §10 E5 |
-| Q4 | Số vòng tối đa re-run 1 group trước khi buộc PIVOT lớn / ESCALATE (nguồn không nêu — đề xuất: 2 vòng trả lại → PIVOT; 3 vòng → ESCALATE) | §6.6 |
-| Q5 | 3 ngưỡng CV-LB gap (0.005 / 0.01 / 0.02) — có cần bảng chuẩn hóa trong Research Protocol template? | §5.1 |
-| Q6 | Format dòng model switched (§4.3) — user duyệt dạng chuẩn? | giải [Q] Task 8-a |
-| Q7 | M2-T1 (verify-only, không qua pipeline 3 group) có cần vòng RWV rút gọn + Proposal 1-item? | TB-11 |
-| Q8 | Ai ghi TL Read-Back (đề xuất: KING ghi khi READ xong) — worklog là shared artifact? | §5.4 |
+*(mọi [Q] của file đã chốt theo DECISION-RECORD-v1.3.md — cụm chéo C1–C7 + quyết định riêng TB-09; bảng dưới giữ nguyên văn câu hỏi gốc kèm giá trị đã chốt)*
+
+| # | Câu hỏi | ✅ QUYẾT ĐỊNH (chốt v1.3) | Liên quan |
+|---|---|---|---|
+| Q1 | T2 có CP1 — verify đầy đủ như T3 hay quick-check? (nguồn 3518 liệt kê CP, không nêu độ sâu — flow 3208 không thể hiện CP1) | ✅ DR-C4 — T2 CP1 verify ĐẦY ĐỦ như T3 (checklist ~60% số item). | kế thừa TB-01/TB-02 |
+| Q2 | Versioning task .md: append changelog (đề xuất §9.4) hay rewrite? | ✅ DR-C3 — **APPEND-ONLY** (changelog + version; KHÔNG rewrite). | TB-06 §16 Q4 · TB-07 §11 Q4 |
+| Q3 | Timeout group treo + timeout ESCALATED chờ user (đề xuất: nhắc 1 CP, treo 2 CP → ESCALATE) | ✅ DR-C5 — nhắc 1 CP / treo 2 CP → ESCALATE; ESCALATED chờ user 48h (M1) / 24h (M2), nhắc 12h. | TB-06 §16 Q7 · §10 E5 |
+| Q4 | Số vòng tối đa re-run 1 group trước khi buộc PIVOT lớn / ESCALATE (nguồn không nêu — đề xuất: 2 vòng trả lại → PIVOT; 3 vòng → ESCALATE) | **2 vòng trả lại → PIVOT; 3 vòng → ESCALATE** (giữ đề xuất). | §6.6 |
+| Q5 | 3 ngưỡng CV-LB gap (0.005 / 0.01 / 0.02) — có cần bảng chuẩn hóa trong Research Protocol template? | **CÓ — bảng chuẩn hóa 0.005 minor / 0.01 notable / 0.02 instability-warning** vào Research Protocol template. | §5.1 |
+| Q6 | Format dòng model switched (§4.3) — user duyệt dạng chuẩn? | ✅ DR-C7 — **duyệt format §4.3** + thêm 2 trường `trigger` + `next check` (giải trọn [Q] Task 8-a). | giải [Q] Task 8-a |
+| Q7 | M2-T1 (verify-only, không qua pipeline 3 group) có cần vòng RWV rút gọn + Proposal 1-item? | ✅ DR-C1 — verify thuần túy: Verify-Report mini + KB entry, không Proposal; có đề xuất → mini-RWV + Proposal 1-item. | TB-11 |
+| Q8 | Ai ghi TL Read-Back (đề xuất: KING ghi khi READ xong) — worklog là shared artifact? | **KING ghi khi READ xong** (worklog shared artifact §1.2). | §5.4 |
 
 ## PHỤ LỤC A — TRACEABILITY MATRIX
 

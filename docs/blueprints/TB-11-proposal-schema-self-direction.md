@@ -3,7 +3,8 @@
 > 📐 **TECHNICAL BLUEPRINT — AI RESEARCH TEAM (DUAL MISSION: M1 KAGGLE + M2 SYSTEM RESEARCH)**
 > Nguồn chính: `upload/ai-team-workflow.md` — section 📨 PROPOSAL SCHEMA (dòng 4288–4344) · tham chiếu ngang: ví dụ M2 chat 121s (4428–4511) · bảng Proposal → SELF-DIRECTION (4615–4623) · FINALIZE M2 (2443–2501) · Verification Plan (a)/(b) (1393–1395)
 > Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10-f) | Author: Mr. Robot (Z.ai Code) — Task 8-i · **nhóm D — Output & E2E** · file 12/13
-> Quy ước chung: TB-00 §1 (danh tính agent · model stack · Live/Workspace · ID P-YYYYMMDD-NNN) + §5 ([SRC]/[EXT]/[Q]) · KING FINALIZE: TB-06 §9.7–9.8 · Proposal items HAN: TB-05 §2.5 · E2E: TB-12 §2
+> Quy ước chung: TB-00 §1 (danh tính agent · model stack · Live/Workspace · ID P-YYYYMMDD-NNN) + §5 ([SRC]/[EXT]/[Q] — từ v1.3: đã chuyển thành [DECIDED v1.3]) · KING FINALIZE: TB-06 §9.7–9.8 · Proposal items HAN: TB-05 §2.5 · E2E: TB-12 §2
+> **v1.3 (2026-09-01):** toàn bộ [Q] đã chốt theo DECISION-RECORD-v1.3.md (user ủy quyền, thorough-first) — xem Phụ lục Z nguồn.
 
 ---
 
@@ -134,7 +135,7 @@ KING chạy checklist NGAY TRƯỚC khi route — 4 dòng đầu khớp **4 gate
 | # | Tình huống | Xử lý |
 |---|---|---|
 | E1 | Claim thiếu evidence phát hiện khi DRAFT | Không route — trả group sinh claim bổ sung (gate 1 fail); không "điền evidence hộ" |
-| E2 | Mission M2 tier T1 thuần verify ("config X có đúng không?") | Trả kết luận verify + KB entry; chỉ đóng Proposal 1-item khi có **thay đổi đề xuất** — giải [Q] TB-02 §5, chờ user xác nhận `[Q]` |
+| E2 | Mission M2 tier T1 thuần verify ("config X có đúng không?") | Trả kết luận verify + KB entry; chỉ đóng Proposal 1-item khi có **thay đổi đề xuất** — giải [Q] TB-02 §5, **✅ ĐÃ CHỐT v1.3 (DR-C1)** |
 | E3 | Proposal bị REJECTED | Phân tích lý do → re-DECOMPOSE phần liên quan hoặc đóng mission (Decision log); không re-submit nguyên trạng |
 | E4 | Proposal bị REVISED | Giao lại group bổ sung evidence/option → update → re-SUBMIT (giữ ID, ghi ngày update) |
 | E5 | Proposal phá compatibility hệ đang chạy | Pivot trigger 🔴 (TB-09 §6) — KING không SUBMIT, quay part thiết kế |
@@ -152,13 +153,13 @@ KING chạy checklist NGAY TRƯỚC khi route — 4 dòng đầu khớp **4 gate
 - [ ] **AC9.** KING không tự phê duyệt; áp Workspace → Live chỉ sau APPROVED, là thao tác riêng.
 - [ ] **AC10.** Checklist C1–C8 khớp đủ 4 gate TB-06 §9.7; ID `P-YYYYMMDD-NNN` đúng format, không tái sử dụng; bảng mapping §3 phủ đủ 8 trường + metadata (quy tắc T1/T2 nêu rõ).
 
-## §7. ❓ OPEN QUESTIONS `[TB-11 §7]` `[Q]`
+## §7. DECISIONS — [Q] ĐÃ CHỐT (v1.3) `[TB-11 §7]` `[DECIDED v1.3]`
 
-| # | Câu hỏi | Phụ thuộc |
-|---|---|---|
-| Q1 | E2 — ngưỡng "mission verify thuần túy" không cần Proposal: chốt cùng [Q] TB-02 §5 | TB-02 §5 |
-| Q2 | SELF-DIRECTION là module nào của TMO; Proposal lưu ở đâu (file/store), ai parse? — dừng ở runtime contract | hạ tầng TMO |
-| Q3 | Timeout chờ phê duyệt SUBMITTED + trần số vòng REVISED trước khi escalate user? | TB-06 §14 E4 |
+| # | Câu hỏi | Phụ thuộc | ✅ QUYẾT ĐỊNH (v1.3) |
+|---|---|---|---|
+| Q1 | E2 — ngưỡng "mission verify thuần túy" không cần Proposal: chốt cùng [Q] TB-02 §5 | TB-02 §5 | ✅ **DR-C1** — ngưỡng deterministic: **không có đề nghị thay đổi** → kết luận (kèm evidence citations) + **Verify-Report mini** + **KB entry**; **có ≥ 1 đề nghị thay đổi** → Proposal 1-item **bắt buộc** (chốt cùng TB-02 §5) |
+| Q2 | SELF-DIRECTION là module nào của TMO; Proposal lưu ở đâu (file/store), ai parse? — dừng ở runtime contract | hạ tầng TMO | **Runtime contract chốt:** SELF-DIRECTION = **module runtime của TMO** (registry + scheduler + applier); Proposal canonical = **file `proposals/P-YYYYMMDD-NNN.md` trong Workspace** + **mirror DB** (Prisma model `Proposal`: 8 trường + status lifecycle + deputy-approver); parser = module self-direction (không phải KING); **KING cấm tự duyệt** (TB-06 §9.8); **APPLY = thao tác runtime sau APPROVED** (merge branch Workspace — TB-01 Q3) |
+| Q3 | Timeout chờ phê duyệt SUBMITTED + trần số vòng REVISED trước khi escalate user? | TB-06 §14 E4 | ✅ **DR-C5** — **48h chờ SUBMITTED + nhắc 12h/lần**; trần REVISED = **2 vòng** (mỗi vòng re-verify đầy đủ); vòng 3 REJECTED → **ESCALATED_USER**; deputy = **SIVIL/HAN** |
 
 ## PHỤ LỤC A — TRACEABILITY MATRIX
 

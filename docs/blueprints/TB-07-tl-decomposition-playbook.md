@@ -4,8 +4,9 @@
 > Source of Truth: `upload/ai-team-workflow.md` — section "🔬 TL RESEARCH DECOMPOSITION — PHÂN TÍCH SÂU CHO RESEARCH TEAM" (dòng 2709–3172) + "Nhiệm vụ 3: DECOMPOSE" & ASSIGN templates (dòng 2122–2289) + 7-nhiệm-vụ box (dòng 2639–2686) + TRIAGE per-part (dòng 2091–2120) + Module Map (dòng 543–601) + RESEARCH COUNCIL (dòng 1748–1772) + ví dụ M2 (dòng 4428–4511)
 > Tập blueprint: 13 file (TB-00 → TB-12) — file này thuộc **nhóm B — Engines**
 > Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10-d) | Author: Mr. Robot (Z.ai Code) — Task ID 8-f
+> **v1.3 (2026-09-01):** toàn bộ [Q] đã chốt theo DECISION-RECORD-v1.3.md (user ủy quyền, thorough-first) — xem Phụ lục Z nguồn.
 >
-> ⚠️ Quy tắc số 1 (TB-00 §5): nguồn là Single Source of Truth — TB-07 MÔ RỘNG để triển khai được, KHÔNG thay đổi thiết kế nguồn. `[SRC]` = giữ nguyên ý nguồn · `[EXT]` = mở rộng mới, không mâu thuẫn nguồn · `[Q]` = câu hỏi mở.
+> ⚠️ Quy tắc số 1 (TB-00 §5): nguồn là Single Source of Truth — TB-07 MÔ RỘNG để triển khai được, KHÔNG thay đổi thiết kế nguồn. `[SRC]` = giữ nguyên ý nguồn · `[EXT]` = mở rộng mới, không mâu thuẫn nguồn · `[Q]` = câu hỏi mở *(→ từ v1.3: đã chuyển thành [DECIDED v1.3]).*
 
 ---
 
@@ -154,7 +155,7 @@ KING KHÔNG phân tích chi tiết ở mức:
 
 `[TB-07 §2 ← nguồn dòng 2921–3049, 2653–2657, 2127–2190, 2220–2289, 2536–2541]` `[SRC — nội dung từng bước; EXT — đánh số hợp nhất 5 bước]`
 
-> **Ghi chú đánh số [EXT]:** nguồn KHÔNG liệt kê sẵn 1 danh sách "5 bước" đánh số liên tục — các bước rải theo thứ tự trong ví dụ House Prices (Bước 0 CLASSIFY → Bước 1 đọc context → Bước 2 xây Research Protocol) + 4 nhánh con của nhiệm vụ DECOMPOSE trong 7-nhiệm-vụ box (chia theo dependency/module → tạo .md → sắp priority). TB-07 hợp nhất CHÚNG THEO ĐÚNG THỨ TỰ nguồn thành 5 bước để vận hành; không thêm bước mới nào ngoài nguồn. [Q1] xem §11.
+> **Ghi chú đánh số [EXT]:** nguồn KHÔNG liệt kê sẵn 1 danh sách "5 bước" đánh số liên tục — các bước rải theo thứ tự trong ví dụ House Prices (Bước 0 CLASSIFY → Bước 1 đọc context → Bước 2 xây Research Protocol) + 4 nhánh con của nhiệm vụ DECOMPOSE trong 7-nhiệm-vụ box (chia theo dependency/module → tạo .md → sắp priority). TB-07 hợp nhất CHÚNG THEO ĐÚNG THỨ TỰ nguồn thành 5 bước để vận hành; không thêm bước mới nào ngoài nguồn. [Q1 → DECIDED v1.3] xem §11 — ✅ CÓ: danh sách 5 bước đã cập nhật lên NGUỒN (amend Phụ lục Z — A1; quy tắc "nguồn trước").
 
 ### 2.0 🔀 Pipeline tổng quan
 
@@ -265,6 +266,8 @@ TRIAGE xong (mission = COMPLEX — decompose; MEDIUM: 1 task_medium.md nguyên k
 ## Evidence Sources (M2)   # [EXT] — danh sách file/log/API bắt buộc có evidence
 ## KB References       # [EXT] — KB-YYYYMMDD-NNN liên quan council ① đã đối chiếu
 ```
+
+*(✅ chốt v1.3 — §11 Q4: task .md có `version: N` + block `## CHANGELOG` chính thức — DR-C3, đồng bộ TB-09 §9.4.)*
 
 ### 3.2 📖 Diễn giải trường mở rộng [EXT]
 
@@ -421,7 +424,7 @@ Winning pattern: fail-fast + key health check + circuit breaker.
 
 `[TB-07 §4 ← nguồn dòng 2127–2167 (6 parts) + 2091–2100 (tier per part) + 2195–2214 (ASSIGN) + 2454–2460 (timeline)]` `[SRC]`
 
-> Ghi chú [Q2]: đề bài tóm tắt "5 parts Setup/EDA/Features/Models/Ensemble&Submit" — nguồn chuẩn là **6 parts (Part 0–5)**; TB-07 GIỮ NGUYÊN cấu trúc nguồn.
+> Ghi chú [Q2 — DECIDED v1.3]: đề bài tóm tắt "5 parts Setup/EDA/Features/Models/Ensemble&Submit" — nguồn chuẩn là **6 parts (Part 0–5)**; TB-07 GIỮ NGUYÊN cấu trúc nguồn (✅ chốt v1.3: theo nguồn — 6 parts 0–5, giữ nguyên).
 
 ### 4.1 🧩 6 Parts (giữ nguyên nguồn)
 
@@ -522,6 +525,8 @@ Part 4: Proposal & Verification Plan (MEDIUM)
 
 > 2 ví dụ nguồn đều dùng đúng khung này: "nâng cấp bộ nhớ TMO" (dòng 2172) và "chat TMO chậm 121s" (dòng 4445: P1 COMPLEX · P2 MEDIUM · P3 COMPLEX · P4 MEDIUM) → 4 Parts chuẩn là hợp đồng cố định cho M2.
 
+*(✅ chốt v1.3 — §11 Q6: thêm Part 0 "Setup & Baseline" cho mission M2 multi-part (≥ 2 parts hoặc tier ≥ T2) — khởi Workspace + snapshot baseline từ logs + chốt số liệu so sánh; mission 1-part T1 bỏ Part 0 — amend nguồn Phụ lục Z A4.)*
+
 ### 5.2 🗺️ Bảng Module TMO → Part audit tương ứng
 
 `[TB-07 §5.2 ← nguồn dòng 543–556 (Module Map)]` `[EXT — mở rộng thành bảng phân công audit]`
@@ -552,6 +557,8 @@ Part 4: Proposal & Verification Plan (MEDIUM)
 | R5 | **Proposal quá lớn** | — | Part 3/4 chạm > 3 module HOẶC > 8 options → chia proposal thành đợt priority (P-YYYYMMDD-NNN nối tiếp, TB-11) |
 
 > **Câu hỏi then chốt chọn R1/R2/R3 [EXT]:** "Nếu xóa 1 module khỏi yêu cầu, các root cause có thay đổi không?" — Không → R2 (triệu chứng chung) · Có → R3 (độc lập).
+
+*(✅ chốt v1.3 — §11 Q3: R3 giữ ngưỡng 50% mặc định; log usage 5 mission M2 đầu → recalibrate qua Decision Log.)*
 
 ### 5.4 🌲 Cấu trúc Branch audit cho Part 1 (M2)
 
@@ -707,17 +714,17 @@ KING tự đối chiếu 12 tiêu chí khi viết xong bộ drafts — mọi ✅
 
 ---
 
-## §11. OPEN QUESTIONS
+## §11. DECISIONS — [Q] ĐÃ CHỐT (v1.3)
 
-`[TB-07 §11 ← quy tắc TB-00 §5]` `[Q]`
+`[TB-07 §11 ← quy tắc TB-00 §5]` `[DECIDED v1.3]`
 
-- **[Q1]** Quy trình 5 bước (§2) là hợp nhất [EXT] từ các mảnh nguồn — có nên cập nhật NGUỒN thành danh sách 5 bước đánh số chính thức (đúng quy tắc "thay đổi thiết kế phải cập nhật nguồn trước")? Nếu không, TB-07 giữ vai trò quy ước vận hành.
-- **[Q2]** Đề bài tóm tắt "House Prices 5 parts" — nguồn là 6 parts (0–5). TB-07 theo nguồn; user xác nhận lại nếu chủ đích gộp Part 4+5.
-- **[Q3]** Ngưỡng R3 (§5.3 — evidence dùng chung < ~50%) là ước lượng [EXT]; cần số liệu thực từ vài mission M2 đầu để hiệu chỉnh.
-- **[Q4]** Suffix part v2 (`T-HP-002-b`) khi re-decompose: có cần quy ước version field chính thức trong task .md (phối TB-09 Task Status lifecycle) không?
-- **[Q5]** Council ① có bắt buộc với mission chỉ có parts SIMPLE/MEDIUM (không có COMPLEX)? Nguồn nói council họp "sau DECOMPOSE" cho mọi mission — đề xuất giữ nguyên (đề án của TB-06).
-- **[Q6]** M2 có cần Part 0 "Setup & Baseline" tương tự M1 (khởi Workspace + chốt baseline metrics từ logs) hay baseline đã đủ nằm trong Lớp 3? Hiện gán baseline = "số đo hiện tại từ logs" [SRC 2860] — không cần Part 0 riêng.
-- **[Q7]** Ai được phép đề xuất tách/gộp part ngoài KING (SIVIL ở council ①? LISMA khi verify)? Nguồn chỉ trao quyền decision cho KING — đề xuất giữ KING độc quyền quyết.
+- **[Q1] Quy trình 5 bước (§2) có cập nhật lên NGUỒN: ✅ CHỐT v1.3 — CÓ** — cập nhật NGUỒN: danh sách 5 bước DECOMPOSE chính thức đánh số (amend Phụ lục Z — A1; quy tắc "nguồn trước").
+- **[Q2] House Prices 5 hay 6 parts: ✅ CHỐT v1.3 — theo nguồn: 6 parts (0–5)** — giữ nguyên.
+- **[Q3] Ngưỡng R3 (§5.3 — evidence dùng chung < ~50%): ✅ CHỐT v1.3 — giữ 50% mặc định** + hiệu chỉnh: log usage 5 mission M2 đầu → recalibrate qua Decision Log.
+- **[Q4] Version field trong task .md khi re-decompose: ✅ CHỐT v1.3 — CÓ** — task .md có `version: N` + `## CHANGELOG` block chính thức (✅ DR-C3; đồng bộ TB-09 §9.4).
+- **[Q5] Council ① với mission chỉ có parts SIMPLE/MEDIUM: ✅ CHỐT v1.3 — BẮT BUỘC council ① cho MỌI mission** (giữ nguyên nguồn).
+- **[Q6] M2 cần Part 0 "Setup & Baseline": ✅ CHỐT v1.3 — CÓ — thêm Part 0 "Setup & Baseline"** cho mission M2 multi-part (≥ 2 parts hoặc tier ≥ T2): khởi Workspace + snapshot baseline từ logs + chốt số liệu so sánh; mission 1-part T1 bỏ (amend nguồn — A4).
+- **[Q7] Ai được đề xuất tách/gộp part ngoài KING: ✅ CHỐT v1.3 — KING độc quyền quyết tách/gộp**; SIVIL (council ①) và LISMA (verify) chỉ FLAG đề xuất qua worklog.
 
 ---
 

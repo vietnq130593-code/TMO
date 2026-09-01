@@ -4,6 +4,7 @@
 > Traceability: `ai-team-workflow.md` dòng 108–166 (Kiến trúc team) · 3174–3283 (3-Tier + Complexity) · 3285–3337 (Handoff) · 3465–3521 (Checkpoint Schedule) · 4515–4558 (Tổng quan 3-Tier)
 > Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10-a) | Author: Mr. Robot (Z.ai Code) | Nhóm A — Nền tảng
 > Chuẩn áp dụng: TB-00 §1/§4/§5 · **Kế thừa trực tiếp TB-01** (danh tính agents, model stack, môi trường Live/Workspace)
+> **v1.3 (2026-09-01):** toàn bộ [Q] đã chốt theo DECISION-RECORD-v1.3.md (user ủy quyền, thorough-first) — xem Phụ lục Z nguồn.
 
 ---
 
@@ -244,12 +245,12 @@ KING đánh giá mỗi task theo 3 tiêu chí (mỗi tiêu chí 1/2/3 điểm):
 | Tier | M1 — Kaggle (đường đi → output) | M2 — System Research (đường đi → output) | Routing & checkpoint (chung) |
 |---|---|---|---|
 | **T1 Simple** | KING → LISMA → KING → DONE; output: fix/patch/answer nhỏ + worklog → **User** | KING → LISMA (verify/chẩn đoán nhanh) → KING; output: kết luận verify hoặc **Proposal 1-item** → SELF-DIRECTION | Chỉ CP2 · ~1–2 vòng · không qua G1/G3 → KB capture tại MONITOR + FINALIZE (nguồn 2343) + DECIDE (nguồn 4630); DECIDE gộp trong quick-check CP2 `[EXT]` |
-| **T2 Medium** | KING → BELI → LISMA → KING → DONE; output: feature/model/EDA hoàn chỉnh → **User** | KING → BELI (report) → LISMA (root cause) → KING; output: **Proposal 1-module** (fix + verification plan) → SELF-DIRECTION | CP1 + CP2 · ~2–3 vòng · Council ① sau DECOMPOSE: SIVIL tham vấn ad-hoc (lưu ý: T2 không route qua SIVIL — [Q] mirror §8) |
+| **T2 Medium** | KING → BELI → LISMA → KING → DONE; output: feature/model/EDA hoàn chỉnh → **User** | KING → BELI (report) → LISMA (root cause) → KING; output: **Proposal 1-module** (fix + verification plan) → SELF-DIRECTION | CP1 + CP2 · ~2–3 vòng · Council ① sau DECOMPOSE: SIVIL tham vấn ad-hoc (lưu ý: T2 không route qua SIVIL — [DECIDED v1.3: council ① T2 vẫn họp, SIVIL ad-hoc consult-only — §8 Q5) |
 | **T3 Complex** | KING → (SIVIL + BELI) → LISMA → HAN → KING, lặp mỗi part; output: **Submission / Dataset / Documentation** → User | KING → audit song song (SIVIL sub-agents) → LISMA → HAN; output: **Proposal multi-item** (kiến trúc + performance, mỗi item kèm Verification Plan) → SELF-DIRECTION | CP1 + CP2 + CP3 · 4+ vòng/part · Council đủ 4 thời điểm |
 
 > **QUY TẮC VÀNG:** mission M2 **luôn** kết thúc bằng PROPOSAL → SELF-DIRECTION **bất kể tier** — kể cả T1. POC/diff sống trong Workspace (TB-01 §3) và chỉ APPLY lên Live System sau APPROVED.
 
-`[Q]` Task M2 thuần verify ("config X có đúng không?") có bắt buộc đóng gói Proposal 1-item, hay KING trả lời trực tiếp + ghi KB? → chốt ở TB-11.
+`[DECIDED v1.3 → DR-C1]` Task M2 thuần verify: ngưỡng deterministic (không đề nghị thay đổi → kết luận + Verify-Report mini + KB; có đề nghị → Proposal 1-item) — đã chốt ở TB-11 §7 Q1 + Phụ lục Z nguồn.
 
 ---
 
@@ -292,13 +293,16 @@ Verify TB-02 đạt chuẩn khi:
 
 ---
 
-## §8. OPEN QUESTIONS & PHỤ THUỘC `[Q]`
+## §8. DECISIONS — [DECIDED v1.3] ĐÃ CHỐT (v1.3)
 
-- `[Q]` **Confidence của CLASSIFY** "cao" là bao nhiêu (0.x)? Cần threshold định lượng khi implement → TB-06.
-- `[Q]` **M2 T1 verify-only** có bắt buộc Proposal 1-item (quy tắc vàng §5) hay trả lời trực tiếp + ghi KB? → TB-11.
-- `[Q]` **Nâng/hạ tier giữa chừng:** task .md cũ bị rewrite hay append amendment (giữ audit trail)? → TB-06 + TB-09.
-- `[Q]` **Mức độ CP1 của T2:** nguồn dòng 3518 khẳng định T2 có CP1+CP2, nhưng flow T2 chỉ vẽ 1 lần "TL xác nhận" — CP1 của T2 là verify đầy đủ như T3 hay quick-check worklog? → cần chốt khi implement.
-- `[Q]` **Research Council ở T2:** T2 không route qua SIVIL (G1 chỉ BELI) — Council ① (sau DECOMPOSE) có diễn ra với SIVIL tham vấn ad-hoc (như ghi chú §5) hay chỉ chạy cho T3? → cần chốt khi implement (mirror §5).
+| Q | ✅ QUYẾT ĐỊNH (v1.3) |
+|---|---|
+| Q1 Confidence CLASSIFY | ✅ DR-C2: HIGH = ≥3 tín hiệu cùng chiều, 0 mâu thuẫn; MEDIUM = 1 mâu thuẫn → verify 1 vòng → **TIE-BREAK UP**; LOW = ≥2 mâu thuẫn → hỏi 1 câu. |
+| Q2 M2 T1 verify-only | ✅ DR-C1: ngưỡng deterministic — không có đề nghị thay đổi → trả lời + Verify-Report mini + KB entry; có ≥1 đề nghị → Proposal 1-item bắt buộc. |
+| Q3 nâng/hạ tier | ✅ DR-C3: **APPEND-ONLY** — task .md có `version: N` + `## CHANGELOG`; không rewrite. |
+| Q4 CP1 của T2 | ✅ DR-C4: verify ĐẦY ĐỦ như T3 (checklist ~60% số item; 3 thành phần formal gate). |
+| Q5 Council ① ở T2 | **CÓ — T2 vẫn họp council ①** sau DECOMPOSE: SIVIL tham vấn ad-hoc (consult-only, KHÔNG dispatch SA). |
+
 - **Phụ thuộc:** TB-01 (danh tính/model stack/môi trường — bắt buộc đọc trước) · TB-06 (KING engine: DECIDE, nâng/hạ tier) · TB-08 (Knowledge Capture bù tier không qua G3) · TB-09 (handoff & worklog schema chi tiết) · TB-11 (Proposal Schema + vòng đời SELF-DIRECTION) · TB-12 (E2E đối soát).
 
 ---
@@ -315,4 +319,4 @@ Verify TB-02 đạt chuẩn khi:
 | §4 Bảng Complexity | Bảng quyết định complexity + 2 bảng ví dụ | 3244–3283 | [SRC] + [EXT] (cột tín hiệu M2, floor-rule) |
 | §5 Routing matrix | Output theo mission + ví dụ mapping tier M2 | 160–166, 4549–4557 | [EXT] |
 | §6 Error & Edge | CLASSIFY + thiết kế CLASSIFY + DECIDE + CP3 outcomes + G2 vòng lặp + G1 conflict/council + pivot scope creep | 1991–2013, 1862, 2698, 3460, 692, 702, 3509–3512, 195, 1759, 3552 | [SRC] + [EXT] |
-| §7–§8 | verify + open questions | — | [EXT] |
+| §7–§8 | verify + Decisions (chốt v1.3) | — | [EXT] · [DECIDED v1.3] |

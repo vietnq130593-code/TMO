@@ -4,6 +4,7 @@
 > Traceability: `ai-team-workflow.md` dòng **1827–2707** (§ "🧠 CHI TIẾT TL — CƠ CHẾ ĐIỀU PHỐI CỦA KING" — 7 nhiệm vụ, code reading, tier escalation, giao tiếp groups) · **1718–1825** (Knowledge Capture / Research Council) · **4288–4343** (Proposal Schema) · **3244–3283** (Bảng Complexity)
 > Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10-d) | Author: Mr. Robot (Z.ai Code) | Nhóm B — Engines (file lớn nhất tập — KING là agent phức tạp nhất)
 > Chuẩn áp dụng: TB-00 §1/§4/§5 · Kế thừa **TB-01** (danh tính, model stack, Live/Workspace) · **TB-02** (tier system, CP1/CP2/CP3, floor-rule M2) · điều phối **TB-03/04/05** (G1/G2/G3)
+> **v1.3 (2026-09-01):** toàn bộ [Q] đã chốt theo DECISION-RECORD-v1.3.md (user ủy quyền, thorough-first) — xem Phụ lục Z nguồn.
 
 ---
 
@@ -158,6 +159,8 @@ Keyword chỉ là lớp 1. KING chốt mission sau khi qua 3 lớp:
 | **L3 — Route check** | Artifact cuối mà user mong đợi là gì? | Submission / Dataset / Documentation | Proposal → quyết định qua SELF-DIRECTION |
 
 **Quy tắc chốt:** L1 + L2 + L3 cùng chiều → confidence HIGH; L1 một chiều nhưng L2/L3 mâu thuẫn → confidence MEDIUM, KING kiểm tra thêm 1 vòng context rồi quyết; tín hiệu xung đột (ví dụ request nhắc cả "dataset" lẫn "TMO") → **LOW/ambiguous → hỏi user đúng 1 câu** (mẫu §2.2), KHÔNG đoán mò.
+
+**[✅ Chốt v1.3 — DR-C2:** HIGH = ≥3 tín hiệu cùng chiều, 0 mâu thuẫn; MEDIUM = 1 mâu thuẫn → verify 1 vòng → TIE-BREAK UP; LOW = ≥2 mâu thuẫn → hỏi 1 câu. Điểm biên ngưỡng 2 tier → chọn tier cao hơn.**
 
 ### 2.4 Bảng ví dụ request → mission + confidence `[TB-06 §2.4 ← mô phỏng theo ví dụ nguồn dòng 2016, 2049]` `[EXT]`
 
@@ -1131,7 +1134,7 @@ RECEIVING → CLASSIFIED:M2 → TRIAGED → DECOMPOSED → ASSIGNED
 
 **Invariants:** (I1) không vào ASSIGNED chưa qua council ①; (I2) không vào FINALIZED khi còn part Pending (trừ DROP có log); (I3) không vào SUBMITTED khi còn claim thiếu evidence; (I4) M2 không bao giờ kết thúc ở Final report cho user — kết thúc ở Proposal; (I5) mọi vòng DECIDE đều sinh dòng Decision log (§13).
 
-> **Ghi chú [EXT]:** RESEARCHING (chỉ xuất hiện ở nhánh REJECTED của M2 — pseudo-state re-DECOMPOSE) và ESCALATED_USER (side state chờ user, §1.2 — chưa có transition ra chi tiết) là 2 state đặc biệt; hành vi hoàn chỉnh (timeout / ủy quyền agent trả lời thay) đang chờ user chốt [Q7] (§16).
+> **Ghi chú [EXT]:** RESEARCHING (chỉ xuất hiện ở nhánh REJECTED của M2 — pseudo-state re-DECOMPOSE) và ESCALATED_USER (side state chờ user, §1.2 — chưa có transition ra chi tiết) là 2 state đặc biệt; hành vi hoàn chỉnh (timeout / ủy quyền agent trả lời thay) đã chốt v1.3 [Q7 → DECIDED]: timeout 48h/24h + nhắc 12h + deputy approver SIVIL/HAN (§16).
 
 ---
 
@@ -1172,7 +1175,7 @@ D-012 | 2025-06-12 09:40 | T-M2-001/Part 1 | M2
 | **E2** | Classified sai mission (phát hiện giữa chừng) | Input của mission này không tồn tại; parts chỉ vận hành được ở môi trường bên kia; CP đầu không ra artifact đúng loại | PIVOT về Bước 0 (§2.5): re-CLASSIFY, ghi Decision log, đánh giá output trung gian (giữ nếu dùng được), KHÔNG "tiếp tục cho xong" |
 | **E3** | ESCALATE chồng (G2 ESCALATE khi G1 đang blocking; nhiều group cùng escalate) | Nhiều tín hiệu ESCALATE trong cùng chu kỳ MONITOR | Xếp thứ tự theo framework §8.9 (CRITICAL trước); gộp các escalate cùng root cause thành 1 quyết định; Council ③ nếu liên quan G1; 1 DECIDE — 1 dòng log |
 | **E4** | Proposal bị REJECTED (từ SELF-DIRECTION) | Status REJECTED kèm lý do | Phân tích lý do: thiếu evidence → giao lại group liên quan (REVISED-style) nhưng nếu REJECTED vì giải pháp không phù hợp hướng hệ thống → quyết định re-research (re-DECOMPOSE) hay đóng mission — ghi log; ESCALATE user nếu lý do không rõ |
-| **E5** | Tier sai giữa chừng (part quá dễ/hard cho tier đã giao) | G1 finish nhanh hơn dự kiến / G2 loop không hội tụ | DECIDE nâng/hạ theo Tier Escalation Matrix §8.8; câu hỏi mở: rewrite hay append task .md (→ TB-09, [Q] kế thừa TB-01/TB-02) |
+| **E5** | Tier sai giữa chừng (part quá dễ/hard cho tier đã giao) | G1 finish nhanh hơn dự kiến / G2 loop không hội tụ | DECIDE nâng/hạ theo Tier Escalation Matrix §8.8; đã chốt v1.3: append task .md (version + CHANGELOG, không rewrite) (→ TB-09, [DECIDED v1.3 → DR-C3: append-only]) |
 | **E6** | Worklog thiếu metrics (M1) / evidence (M2) | Claim không có số đo / file:line | Trả yêu cầu bổ sung cho group; không tự đoán; M2: claim thiếu evidence không bao giờ vào Proposal (Instructions LUÔN) |
 | **E7** | M2 cần POC nhưng user chưa mở Workspace | Part 3 kiểu "BELI viết POC trong Workspace" không có nơi chạy | Giao phần nghiên cứu/solution design; đánh cờ `POC-NEEDS-WORKSPACE` trong Proposal (quy ước TB-02 §6); nhắc user mở Workspace |
 | **E8** | Pivot lặp (oscillation) | Cùng part pivot ≥ 2 lần | Dừng vòng lặp: Council ③/④ mở rộng phân tích root approach; cân nhắc ESCALATE user — "fundamental approach sai" vượt khả năng tự sửa |
@@ -1197,20 +1200,20 @@ Verify TB-06 đạt chuẩn khi:
 - [ ] **AC10** §10 Council: 4 thời điểm ①–④ + nội dung (challenge hypotheses / đối chiếu KB / chốt tri thức) + output (discussion summary vào worklog + KB entries) + template Council Summary [EXT].
 - [ ] **AC11** §11: box giao tiếp TL ↔ Groups nguyên bản 7 kênh (TL→G1/G2/G3, G1/G2/G3→TL, KING↔SIVIL Council).
 - [ ] **AC12** §12 state machine: M1 đủ 8 trạng thái chính theo tên quy ước (RECEIVING→CLASSIFIED(M1)→TRIAGED→DECOMPOSED→ASSIGNED→MONITORING→DECIDING→FINALIZED + side state ESCALATED_USER); M2 thêm PROPOSAL_DRAFTING → SUBMITTED → (APPROVED/REJECTED/REVISED loop); bảng transition ≥ 15 dòng.
-- [ ] **AC13** §13 Decision Log: 1 dòng schema (timestamp/task/decision/lý do/evidence ref) + ≥ 2 ví dụ; §14 ≥ 8 edge cases; §15 ≥ 10 items; §16 có [Q] mở.
+- [ ] **AC13** §13 Decision Log: 1 dòng schema (timestamp/task/decision/lý do/evidence ref) + ≥ 2 ví dụ; §14 ≥ 8 edge cases; §15 ≥ 10 items; §16 có Decisions (chốt v1.3).
 - [ ] **AC14** Không mâu thuẫn nguồn và không mâu thuẫn TB-02/03/04 (CP1=sau G1, CP2=sau G2, CP3=sau G3; floor-rule M2; council ② sau SYNTHESIZE); các phần [EXT] không phát minh cơ chế trái nguồn.
 - [ ] **AC15** Tên agent đúng KING/SIVIL/BELI/LISMA/HAN; model stack Kimi-k3 + fallback 3 bậc (role-based) — không lẫn tên model làm tên agent.
 
-## §16. OPEN QUESTIONS `[TB-06 §16 ← chờ user/quyết định sau]` `[Q]`
+## §16. DECISIONS — [Q] ĐÃ CHỐT (v1.3) `[TB-06 §16 ← đã chốt v1.3 theo DECISION-RECORD + Phụ lục Z]` `[DECIDED v1.3]`
 
-- **Q1 — Ngưỡng confidence CLASSIFY:** "cao" nghĩa là bao nhiêu (đếm signal? L2 match?) — cần chuẩn hóa để implement deterministic (kế thừa [Q] TB-02 §8).
-- **Q2 — Hành vi council ②:** "KING xác nhận specs" trước khi BELI code — KING veto được không, hay chỉ challenge? (kế thừa [Q] TB-03).
-- **Q3 — Proposal REJECTED → tier gì:** quay lại research giữ tier gốc hay re-TRIAGE từ đầu? Giới hạn số vòng REJECTED→research trước khi ESCALATE user?
-- **Q4 — Nâng/hạ tier giữa chừng:** task .md rewrite hay append (kế thừa [Q] TB-01/TB-02 — quyết ở TB-09 Handoff).
-- **Q5 — Giới hạn "hỏi 1 câu":** Instructions cho phép hỏi user khi thiếu thông tin — nhưng tổng số lần hỏi trong 1 mission nên chặn ở đâu để KING không biến thành question-bot? Đề xuất: 1 câu CLASSIFY + tối đa 1 câu/user-blocked-info mỗi task.
-- **Q6 — Council đồng bộ hay bất đồng bộ:** council ①/③/④ có chặn pipeline (KING+SIVIL dừng mọi việc khác) không — ảnh hưởng latency triển khai.
-- **Q7 — ESCALATED_USER:** state này timeout sau bao lâu / user có thể ủy quyền agent khác trả lời thay không (liên quan khái niệm "agent ủy quyền" của SELF-DIRECTION).
-- **Q8 — Verify Proposal trước SUBMIT:** M1 có rule "Submission file — TL check LUÔN"; M2 tương đương có nên bắt buộc KING verify từng trường Proposal (nhất là Risk & Rollback) trước khi route vào SELF-DIRECTION không, hay gate §9.7 hiện tại đủ?
+- **Q1 — Ngưỡng confidence CLASSIFY: ✅ CHỐT v1.3 — DR-C2:** HIGH = ≥ 3 tín hiệu độc lập cùng chiều, **0 mâu thuẫn**; MEDIUM = đúng 1 mâu thuẫn → KING verify thêm 1 vòng context → vẫn mâu thuẫn → **TIE-BREAK UP** (chọn tier cao hơn) + Decision Log; LOW = ≥ 2 mâu thuẫn hoặc thiếu tín hiệu → hỏi user đúng 1 câu. Điểm biên ngưỡng 2 tier (±1 điểm) → chọn tier cao hơn. *(Đồng bộ TB-02 §8.)*
+- **Q2 — Hành vi council ②: ✅ CHỐT v1.3 — KING VETO được:** checklist ack/veto từng spec trong worklog (mỗi spec 1 dòng `ack` hoặc `veto: lý do`); veto → spec quay lại SIVIL revise; ≥ 2 vòng veto cùng spec → escalate council ③. *(Đồng bộ TB-03 §12 Q3.)*
+- **Q3 — Proposal REJECTED → tier gì: ✅ CHỐT v1.3 — Re-TRIAGE đầy đủ từ đầu** (nghi ngờ mis-tier — không giữ tier mặc định), GIỮ toàn bộ worklog/context làm input; **tối đa 2 vòng REJECTED → research; vòng 3 → ESCALATED_USER**.
+- **Q4 — Nâng/hạ tier giữa chừng: ✅ CHỐT v1.3 — DR-C3: append-only:** task .md thêm trường `version: N` + block `## CHANGELOG`; mọi nâng/hạ tier = 1 amendment entry (version n → n+1 | ai quyết | tier cũ → mới | lý do | evidence ref) — KHÔNG bao giờ rewrite. *(Đồng bộ TB-09 Handoff — cập nhật E5 §14.)*
+- **Q5 — Giới hạn "hỏi 1 câu": ✅ CHỐT v1.3 — 1 câu CLASSIFY (chỉ khi confidence LOW) + tối đa 1 câu user-blocked-info mỗi task**; vượt hạn mức → quyết theo tie-break UP (DR-C2) + ghi Decision Log, không hỏi thêm. *(Chốt đúng đề xuất ban đầu.)*
+- **Q6 — Council đồng bộ hay bất đồng bộ: ✅ CHỐT v1.3 — ĐỒNG BỘ (blocking):** mọi council ①②③④ chặn pipeline chờ hoàn tất; chất lượng > latency (P1 thorough-first, P2 không ràng buộc token — không race-condition trên quyết định).
+- **Q7 — ESCALATED_USER: ✅ CHỐT v1.3 — DR-C5:** timeout **48h (M1) / 24h (M2)** wall-clock, nhắc mỗi **12h**, tối đa **3 nhắc**; hết hạn → pipeline task đó dừng toàn phần (parts khác độc lập). Ủy quyền **deputy approver SIVIL/HAN có thời hạn** (không được là author; KING cấm tự duyệt — §9.8), ghi Decision Log + worklog. *(Cập nhật ghi chú §12.)*
+- **Q8 — Verify Proposal trước SUBMIT: ✅ CHỐT v1.3 — CÓ, bắt buộc field-by-field:** KING verify đủ **8 trường** (checklist từng trường lưu Decision Log), trọng điểm **Risk & Rollback (trường 7 — "linh hồn Proposal")** trước khi route vào SELF-DIRECTION; gate §9.7 giữ nguyên + bước verify này thành điều kiện SUBMIT.
 
 ---
 
@@ -1241,7 +1244,7 @@ Verify TB-06 đạt chuẩn khi:
 | §12 State machine | hình thức hóa pipeline + vòng đời Proposal | 2631–2686, 4331–4340 | [EXT] |
 | §13 Decision Log | hình thức hóa Instructions + Deliverables | 1844, 1848 | [EXT] |
 | §14 Error & Edge | suy từ CLASSIFY/DECIDE/Matrix/Proposal + TB-02 §6 | 1862, 2546–2582, 4338–4339 | [EXT] |
-| §15–§16 + Phụ lục | verify + open questions | — | [EXT] |
+| §15–§16 + Phụ lục | verify + decisions (chốt v1.3) | — | [EXT] + [DECIDED v1.3] |
 
 ---
 

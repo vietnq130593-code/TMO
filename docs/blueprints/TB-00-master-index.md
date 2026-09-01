@@ -1,9 +1,10 @@
 # TB-00 — MASTER INDEX & BLUEPRINT MAP
 
 > 📐 **TECHNICAL BLUEPRINT — AI RESEARCH TEAM (DUAL MISSION)**
-> Source of Truth: `upload/ai-team-workflow.md` (4.635 dòng — 21 section)
+> Source of Truth: `upload/ai-team-workflow.md` (4.635 dòng gốc + Phụ lục Z — v1.3, tổng 4.682 dòng)
 > Tập blueprint: 13 file (TB-00 → TB-12), tổng 7.649 dòng (đã qua review Task 9 + fix Task 10)
-> Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10) | Biên soạn: Mr. Robot (Z.ai Code)
+> Version: 1.3 | Ngày: 2026-09-01 (Decision Lock — user ủy quyền chốt toàn bộ [Q]) | Biên soạn: Mr. Robot (Z.ai Code)
+> Quyết định canonical: `docs/DECISION-RECORD-v1.3.md` (71 quyết định — 7 cụm C1–C7 + 64 câu riêng)
 >
 > ⚠️ **QUY TẮC SỐ 1:** `ai-team-workflow.md` là Single Source of Truth. Blueprint MÔ RỘNG từ nó để triển khai được — KHÔNG thay thế nó. Mọi thay đổi thiết kế phải cập nhật nguồn trước, blueprint sau.
 
@@ -155,9 +156,10 @@ Mỗi section blueprint phải ghi nguồn dạng `[TB-XX §n ← nguồn dòng 
 |---|---|
 | `[SRC]` | Giữ nguyên ý nguồn — chỉ chi tiết hóa cách viết |
 | `[EXT]` | Mở rộng thiết kế MỚI (interfaces, state, edge cases...) — không mâu thuẫn nguồn |
-| `[Q]` | Câu hỏi mở — cần user/quyết định sau |
+| `[Q]` | Câu hỏi mở — cần user/quyết định sau *(→ từ v1.3: đã toàn bộ chuyển `[DECIDED v1.3]` theo DECISION-RECORD-v1.3.md)* |
+| `[DECIDED v1.3]` | Câu hỏi mở ĐÃ ĐƯỢC CHỐT (user ủy quyền Z.ai Code, 2026-09-01, chính sách thorough-first) — truy vết bằng số Q gốc + cụm C1–C7 |
 
-**Cấm:** phát minh cơ chế mâu thuẫn nguồn. Nếu bắt buộc phải khác nguồn → dừng, ghi vào Open Questions, báo user.
+**Cấm:** phát minh cơ chế mâu thuẫn nguồn. Nếu bắt buộc phải khác nguồn → dừng, ghi vào Open Questions, báo user. *(Từ v1.3: không còn [Q] chưa chốt — mọi thay đổi thiết kế mới phải ghi vào Phụ lục Z nguồn + cập nhật DECISION-RECORD.)*
 
 ---
 
@@ -169,5 +171,8 @@ Mỗi section blueprint phải ghi nguồn dạng `[TB-XX §n ← nguồn dòng 
 | B — Engines | TB-03, TB-04, TB-05, TB-06, TB-07 | ✅ Hoàn tất |
 | C — Protocols ngang | TB-08, TB-09, TB-10 | ✅ Hoàn tất |
 | D — Output & E2E | TB-11, TB-12 | ✅ Hoàn tất |
+| E — Decision Lock v1.3 | Toàn tập (nguồn Phụ lục Z + 13 TB) | ✅ Hoàn tất (2026-09-01) |
 
-*Tập 13 blueprint HOÀN TẤT (Version 1.2 — đã qua 2 đợt đảm bảo chất lượng: **review Task 9** — 6 reviewer độc lập đối chiếu 67 findings với nguồn, phân loại P1×2 · P2×3 · P3×21 · P4×41; **fix Task 10** — 6 fixer + coordinator áp toàn bộ P1/P2/P3 và các P4 sửa được cục bộ: typo, citation sai dòng, state machine self-consistent, đồng bộ cross-ref tập, attribution [SRC]/[EXT], bổ edge POC-NEEDS-WORKSPACE ở TB-09/TB-10 — chi tiết worklog Task 9/10). Nguồn ai-team-workflow.md nguyên vẹn 4.635 dòng. Bước kế: user review từng file + chốt các [Q] mở (mỗi TB có section Open Questions; các [Q] đều được giữ nguyên, không quyết thay user). Sau khi chốt [Q]: cập nhật nguồn ai-team-workflow.md trước, blueprint sau (quy tắc TB-00 §5). Triển khai runtime là thao tác riêng — chờ user khởi động.*
+*Tập 13 blueprint HOÀN TẤT (Version 1.2 — đã qua 2 đợt đảm bảo chất lượng: **review Task 9** — 6 reviewer độc lập đối chiếu 67 findings với nguồn, phân loại P1×2 · P2×3 · P3×21 · P4×41; **fix Task 10** — 6 fixer + coordinator áp toàn bộ P1/P2/P3 và các P4 sửa được cục bộ: typo, citation sai dòng, state machine self-consistent, đồng bộ cross-ref tập, attribution [SRC]/[EXT], bổ edge POC-NEEDS-WORKSPACE ở TB-09/TB-10 — chi tiết worklog Task 9/10). Nguồn ai-team-workflow.md nguyên vẹn 4.635 dòng + Phụ lục Z (v1.3).*
+
+*Đợt E — DECISION LOCK v1.3 (2026-09-01): user **ủy quyền Z.ai Code chốt toàn bộ 71 [Q]** với chính sách **thorough-first** (cẩn thận – chi tiết – đầy đủ, tránh hời hợt) + **không ràng buộc token** (NVIDIA NIM 4 keys, sẽ tăng). Quyết định canonical: `docs/DECISION-RECORD-v1.3.md`; nguồn đã cập nhật trước theo quy tắc TB-00 §5 (Phụ lục Z append-only, dòng gốc nguyên vẹn). Mọi [Q] → [DECIDED v1.3], mọi section Open Questions → Decisions. Triển khai runtime là thao tác riêng — chờ user khởi động.*

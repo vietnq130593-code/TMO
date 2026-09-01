@@ -4,6 +4,7 @@
 > Traceability: `ai-team-workflow.md` dòng 1–107 (Header · ROSTER · MODEL STACK · MÔI TRƯỜNG M2)
 > Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10-a) | Author: Mr. Robot (Z.ai Code) | Nhóm A — Nền tảng
 > Chuẩn áp dụng: TB-00 §1 (quy ước) · §4 (template) · §5 (traceability [SRC]/[EXT]/[Q])
+> **v1.3 (2026-09-01):** toàn bộ [Q] đã chốt theo DECISION-RECORD-v1.3.md (user ủy quyền, thorough-first) — xem Phụ lục Z nguồn.
 
 ---
 
@@ -67,7 +68,7 @@ Tất cả 5 agents (và mọi sub-agent của SIVIL) chạy trên cùng 1 model
 | Bậc | Model | Chuyển sang khi | Hành vi agent khi chuyển |
 |---|---|---|---|
 | 0 | **Kimi-k3** (chính) | — mặc định của mọi task mới | — |
-| 1 | **DeepSeek v4 Pro** | Kimi-k3 lỗi (timeout / 5xx / quota) hoặc quá tải kéo dài | **GIỮ NGUYÊN vai trò + JD**; ghi worklog dòng `model switched: kimi-k3 → deepseek-v4-pro` |
+| 1 | **DeepSeek v4 Pro** | Kimi-k3 lỗi (timeout / 5xx / quota) hoặc quá tải kéo dài *(✅ chốt v1.3 — dual-signal, xem §7 Q1)* | **GIỮ NGUYÊN vai trò + JD**; ghi worklog dòng `model switched: kimi-k3 → deepseek-v4-pro` |
 | 2 | **DeepSeek v4 Flash** | DeepSeek v4 Pro lỗi tương tự | Idem; worklog ghi rõ bậc chuyển |
 | 3 | **MiniMax-M3** (terminal) | DeepSeek v4 Flash lỗi tương tự | Idem; nếu MiniMax-M3 cũng lỗi → task **BLOCKED**, KING báo user |
 
@@ -152,7 +153,7 @@ Tham chiếu nhanh runtime — 1 dòng/agent (JD đầy đủ: TB-03 G1 · TB-04
 | Tình huống | Xử lý |
 |---|---|
 | Cả 4 bậc model đều lỗi | Task đánh dấu **BLOCKED** trong worklog; KING báo user; các task độc lập khác trong pipeline vẫn chạy |
-| Fallback xảy ra giữa chừng | Agent ghi `model switched` vào worklog TRƯỚC phần kết quả — KING verify vẫn đọc được full context |
+| Fallback xảy ra giữa chừng | Agent ghi `model switched` vào worklog TRƯỚC phần kết quả — KING verify vẫn đọc được full context *(✅ chốt v1.3: format chuẩn DR-C7 — xem §7 Q2)* |
 | M2 request vào khi user chưa mở Workspace | Agents chạy phần EVIDENCE (đọc Live); POC hoãn — Proposal đánh dấu `POC-NEEDS-WORKSPACE` |
 | M2 agent sửa nhầm file ngoài Workspace | Vi phạm biên giới vùng: revert ngay nếu khả năng, ghi worklog sự cố, KING đánh dấu `SAFETY-VIOLATION` vào Proposal |
 | Đo đạc Live System gây tải | Chỉ đọc endpoint có sẵn (health, API status); KHÔNG stress-test Live — stress chỉ chạy trong Workspace |
@@ -178,11 +179,14 @@ Verify TB-01 đạt chuẩn khi:
 
 ---
 
-## §7. OPEN QUESTIONS & PHỤ THUỘC `[Q]`
+## §7. DECISIONS — [DECIDED v1.3] ĐÃ CHỐT (v1.3)
 
-- `[Q]` **"Quá tải kéo dài"** đo bằng gì — agent tự cảm nhận latency, hay orchestrator external probe? Cần chốt trước khi implement runtime.
-- `[Q]` Dòng `model switched` cần schema chuẩn chung (field riêng trong worklog?) → chốt ở TB-09 (RWV & Handoff).
-- `[Q]` Workspace có cần versioning (1 branch git / 1 Proposal) để truy vết diff khi APPLY? → TB-11.
+| Q | ✅ QUYẾT ĐỊNH (v1.3) |
+|---|---|
+| Q1 "Quá tải kéo dài" đo bằng gì | **Dual-signal (cả hai):** agent self-report (latency/op + token/op trong mỗi worklog entry) + orchestrator external probe (queue depth + wall-clock vs SLA). Switch fire khi MỘT TRONG HAI vượt (OR). Hysteresis: về model chính sau 3 probe liên tiếp OK. (DR — TB-01 Q1) |
+| Q2 model switched schema | ✅ DR-C7: duyệt format TB-09 §4.3 làm chuẩn + thêm 2 trường `trigger` + `next check`; kèm 1 dòng Decision Log. |
+| Q3 Workspace versioning | **CÓ — bắt buộc:** 1 Proposal = 1 branch git (tên `P-YYYYMMDD-NNN`); mọi thay đổi APPLY-able commit; diff base..head là artifact review CP3/FINALIZE; APPLY = merge branch sau APPROVED. (DR — TB-01 Q3) |
+
 - **Phụ thuộc:** TB-00 (chuẩn toàn tập) — mọi định danh agent/mission/môi trường lấy từ TB-00 §1; file này là bản đặc tả chi tiết đầu tiên của nhóm A.
 
 ---

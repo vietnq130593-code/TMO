@@ -4,6 +4,7 @@
 > Traceability: `ai-team-workflow.md` — section "⚙️ CHI TIẾT G1 — CƠ CHẾ PHỐI HỢP SIVIL + BELI" (dòng 170–678) + "📚 KNOWLEDGE CAPTURE" (dòng 1718–1826)
 > Thuộc Nhóm B — Engines | Effort: **L** | Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10-b) | Biên soạn: Mr. Robot (Z.ai Code)
 > Đọc trước: **TB-00** (quy ước toàn tập + template), **TB-01** (Roster / Model Stack / Live System & Workspace), **TB-02** (Architecture & Tier System)
+> **v1.3 (2026-09-01):** toàn bộ [Q] đã chốt theo DECISION-RECORD-v1.3.md (user ủy quyền, thorough-first) — xem Phụ lục Z nguồn.
 
 ---
 
@@ -495,7 +496,7 @@ Nguồn không định nghĩa ngưỡng dừng — phần này là thiết kế 
 | S5 | **SA đơn lẻ chết** | Retry ≤ 2 lần (context y nguyên); vẫn chết → đánh dấu ❌ trong bảng kết quả, KHÔNG chặn batch |
 
 **Giới hạn batch [EXT]:**
-- Kích thước batch mặc định: **10–25 SA chạy đồng thời** (đủ để framework điều phối, không trôi tụt context SIVIL). Wave lớn hơn phải chia batch con.
+- Kích thước batch mặc định: **10–25 SA chạy đồng thời** (đủ để framework điều phối, không trôi tụt context SIVIL). Wave lớn hơn phải chia batch con. *(✅ chốt v1.3: 20 mặc định / burst 25 — §12 Q1)*
 - Monitor: SIVIL giữ registry SA-NN → {status: PENDING/RUNNING/DONE/FAILED, branch, kết quả, retries}.
 - SA không spawn SA khác (chỉ SIVIL spawn — 1 tầng duy nhất).
 
@@ -701,7 +702,7 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
 
 - **Phạm vi hợp lệ của feedback:** code issues (chậm, bug pattern, edge case cản trở) + suggestions (ý tưởng tốt hơn). **KHÔNG phải** BELI tự đổi approach — mọi thay đổi approach phải qua SIVIL (và council nếu ảnh hưởng hypothesis đã chốt). [SRC dòng 208, 215]
 - [EXT] Định dạng 1 feedback entry trong worklog: `{SPEC-ID, loại (a/b/c), mô tả, evidence, action của SIVIL}` — để LISMA/KING truy vết được "vì sao approach đổi giữa chừng".
-- [EXT] Giới hạn vòng: nếu cùng 1 spec bị điều chỉnh **≥ 2 lần** do feedback → đó là tín hiệu hypothesis yếu → SIVIL chủ động escalate council ③ thay vì tiếp tục xoay vòng dispatch.
+- [EXT] Giới hạn vòng: nếu cùng 1 spec bị điều chỉnh **≥ 2 lần** do feedback → đó là tín hiệu hypothesis yếu → SIVIL chủ động escalate council ③ thay vì tiếp tục xoay vòng dispatch. *(✅ chốt v1.3: 2 vòng MEDIUM / 3 vòng COMPLEX+Grand — §12 Q6)*
 
 ---
 
@@ -869,19 +870,19 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
 
 ---
 
-## §12. OPEN QUESTIONS
+## §12. DECISIONS — [DECIDED v1.3] ĐÃ CHỐT (v1.3)
 
-**[TB-03 §12 ← chuẩn TB-00 §4 [Q]]**
+**[TB-03 §12 ← chuẩn TB-00 §4 [DECIDED v1.3]]**
 
-| # | Câu hỏi | Phạm vi ảnh hưởng | Đề xuất mặc định (nếu user không chốt) |
+| # | Câu hỏi | Phạm vi ảnh hưởng | ✅ QUYẾT ĐỊNH (chốt v1.3) |
 |---|---|---|---|
-| Q1 | Số SA tối đa chạy đồng thời (§5.4 đặt 10–25) — hạ tầng agent framework thật giữ được bao nhiêu SA concurrent? | Perf + chi phí | Bắt đầu 10, đo rồi nâng; mỗi lần điều chỉnh ghi worklog |
-| Q2 | Timeout chuẩn cho 1 SA là bao lâu (theo loại task EDA vs Grand vs System Audit)? | Stop condition S5 | Default 15 phút/SA hoặc theo tier plan (TB-02 chốt sau) |
-| Q3 | Council ②: KING "xác nhận specs" bằng hành vi cụ thể nào (reply message? ack trong worklog? gate tự động trong runtime)? | Cổng COUNCIL_DONE | Ack bằng 1 dòng confirm trong worklog của KING — đơn giản, đối soát được |
-| Q4 | Trong IMPLEMENT M2, BELI có được chạy thử POC trên dữ liệu thật của Live System (read-only query vào Qdrant/Neo4j) hay chỉ dữ liệu clone trong Workspace? | Ranh giới Live/Workspace (§2.3) | Read-only query được phép (evidence thu thập); ghi rõ trong ràng buộc spec |
-| Q5 | Deadline nội bộ của spec tính bằng giờ hay theo tier deadline của TL (mối quan hệ budget G1 ↔ tier TB-02)? | SPEC template §7.3 | % deadline tier: G1 hết 40% quỹ thời gian task (điều chỉnh khi viết TB-02/TB-06) |
-| Q6 | Feedback loop giới hạn "≥ 2 lần điều chỉnh spec → escalate council ③" (§8) — ngưỡng 2 có hợp lý cho Grand Competition (task M1 COMPLEX quy mô lớn — nhiều vòng tự nhiên hơn)? | Vòng feedback | Giữ 2 cho MEDIUM/COMPLEX thông thường; task Grand Competition cho 3 — chốt cùng TB-02 |
-| Q7 | K specs cho BELI: VERIFIED yêu cầu verify lần lượt từng spec rồi giao, hay verify tất cả rồi giao 1 package? | Transition IMPLEMENTING → VERIFIED | Verify tất cả rồi handoff 1 package (đúng nguồn dòng 338–340 "SIVIL tổng hợp → giao G2") |
+| Q1 | Số SA tối đa chạy đồng thời (§5.4 đặt 10–25) — hạ tầng agent framework thật giữ được bao nhiêu SA concurrent? | Perf + chi phí | **20 mặc định** (round-robin 4 NIM keys → 5 SA/key), **burst 25** cho Grand Competition; hard-cap 25 (giữ khoảng §5.4 nguồn 10–25). Thêm key sau này → ceiling tự tính 5 SA/key, vẫn ≤ 25 tới khi user nâng. Mọi điều chỉnh ghi worklog + Decision Log. |
+| Q2 | Timeout chuẩn cho 1 SA là bao lâu (theo loại task EDA vs Grand vs System Audit)? | Stop condition S5 | Theo loại task: **EDA 30 phút · Grand/Competition 60 phút · System Audit 30 phút**; soft-checkpoint 50%/70% (SA bắt buộc báo tiến độ); hard-kill tại timeout → **retry 1 lần (scope thu hẹp 50%)**; fail → findings rỗng + error entry (per §10). |
+| Q3 | Council ②: KING "xác nhận specs" bằng hành vi cụ thể nào (reply message? ack trong worklog? gate tự động trong runtime)? | Cổng COUNCIL_DONE | **KING CÓ quyền VETO** — checklist spec-by-spec trong worklog (mỗi spec 1 dòng `ack` / `veto: lý do`); veto → spec quay lại SIVIL revise; **≥ 2 vòng veto cùng spec → escalate council ③** (khớp §8). |
+| Q4 | Trong IMPLEMENT M2, BELI có được chạy thử POC trên dữ liệu thật của Live System (read-only query vào Qdrant/Neo4j) hay chỉ dữ liệu clone trong Workspace? | Ranh giới Live/Workspace (§2.3) | **READ-ONLY được phép** (query Qdrant/Neo4j, GET API — evidence phong phú hơn); MỌI query ghi **evidence log** (query + timestamp + số dòng trả về) trong worklog BELI; **WRITE cấm tuyệt đối** — mọi thao tác ghi chỉ trên Workspace clone. |
+| Q5 | Deadline nội bộ của spec tính bằng giờ hay theo tier deadline của TL (mối quan hệ budget G1 ↔ tier TB-02)? | SPEC template §7.3 | **G1 = 40% quỹ thời gian task** (theo tier deadline của TL); override qua Decision Log khi mission đặc biệt. |
+| Q6 | Feedback loop giới hạn "≥ 2 lần điều chỉnh spec → escalate council ③" (§8) — ngưỡng 2 có hợp lý cho Grand Competition (task M1 COMPLEX quy mô lớn — nhiều vòng tự nhiên hơn)? | Vòng feedback | **2 vòng cho MEDIUM; 3 vòng cho COMPLEX/Grand Competition** (task lớn cần nhiều vòng tự nhiên hơn); vượt ngưỡng → council ③ bắt buộc. |
+| Q7 | K specs cho BELI: VERIFIED yêu cầu verify lần lượt từng spec rồi giao, hay verify tất cả rồi giao 1 package? | Transition IMPLEMENTING → VERIFIED | **Verify TẤT CẢ → handoff 1 package** (giữ nguồn dòng 338–340 "SIVIL tổng hợp → giao G2"); package kèm spec-verification checklist từng spec. |
 
 ---
 
@@ -920,7 +921,7 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
 | KB Entry Schema + Research Insights | 1791–1815 | §4.4, §5.3, §6.3 | [SRC] |
 | Quy tắc vàng Knowledge Capture (evidence...) | 1817–1824 | §6.3, §9.4 (I4) | [SRC] |
 | (thiết kế mới: interface contract, SPEC template, state machine, stop conditions, error handling, AC) | — | §7, §9, §10, §11 | [EXT] |
-| (câu hỏi mở) | — | §12 | [Q] |
+| (Decisions v1.3) | Phụ lục Z nguồn | §12 | [DECIDED v1.3] |
 
 **Đối soát rải rác [SRC]:** header nguồn dòng 3–15 (Dual Mission, Live/Workspace, KB ngay) → phản chiếu trong §0, §2.3, §4.4, §9.4; quy ước ID dòng-level TB-00 §1.4 áp toàn file (T-*, SA-*, F-*, KB-*).
 

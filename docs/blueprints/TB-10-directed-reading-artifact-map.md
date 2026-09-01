@@ -5,7 +5,8 @@
 > Tập blueprint: 13 file (TB-00 → TB-12) — file này thuộc **nhóm C — Protocols ngang**
 > Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10-e) | Author: Mr. Robot (Z.ai Code) — Task ID 8-h
 >
-> ⚠️ Quy tắc số 1 (TB-00 §5): nguồn là Single Source of Truth — TB-10 MÔ RỘNG để triển khai được, KHÔNG thay đổi thiết kế nguồn. `[SRC]` = giữ nguyên ý nguồn · `[EXT]` = mở rộng mới, không mâu thuẫn nguồn · `[Q]` = câu hỏi mở.
+> ⚠️ Quy tắc số 1 (TB-00 §5): nguồn là Single Source of Truth — TB-10 MÔ RỘNG để triển khai được, KHÔNG thay đổi thiết kế nguồn. `[SRC]` = giữ nguyên ý nguồn · `[EXT]` = mở rộng mới, không mâu thuẫn nguồn · `[Q]` = câu hỏi mở (→ v1.3: [DECIDED]).
+> **v1.3 (2026-09-01):** toàn bộ [Q] đã chốt theo DECISION-RECORD-v1.3.md (user ủy quyền, thorough-first) — xem Phụ lục Z nguồn.
 
 ---
 
@@ -491,11 +492,11 @@ Audit Report (BELI) tóm tắt `[SRC nguyên văn]`: "Chat request mất 121s kh
 
 ## §8. [EXT] MODULE MAP TMO CHO AUDIT M2 — BẢNG GỢI Ý THƯ MỤC NGUỒN
 
-`[TB-10 §8 ← mở rộng từ nguồn dòng 543–558 (Module Map 8 module + "đọc gì" + nguồn được phép đọc M2) + quan sát repo TMO tại worklog Task 1–3]` `[EXT + Q]`
+`[TB-10 §8 ← mở rộng từ nguồn dòng 543–558 (Module Map 8 module + "đọc gì" + nguồn được phép đọc M2) + quan sát repo TMO tại worklog Task 1–3]` `[EXT + DECIDED v1.3]`
 
-> ⚠️ **CẢNH BÁO — BẢNG GỢI Ý:** cột Module + "Đọc gì" lấy từ nguồn (dòng 547–556); cột **"Vị trí gợi ý"** do TB-10 bổ sung từ quan sát repo Theopusflashlite v2.0.0 (Next.js 16 + Prisma + PM2 + Qdrant) ghi tại worklog Task 1–3. Đường dẫn cụ thể **CẦN XÁC MINH LẠI khi cài cơ chế research team vào TMO thật** — cấu trúc repo có thể đổi giữa các phiên bản (Q5 §13).
+> ⚠️ **CẢNH BÁO — BẢNG GỢI Ý:** cột Module + "Đọc gì" lấy từ nguồn (dòng 547–556); cột **"Vị trí gợi ý"** do TB-10 bổ sung từ quan sát repo Theopusflashlite v2.0.0 (Next.js 16 + Prisma + PM2 + Qdrant) ghi tại worklog Task 1–3. Đường dẫn cụ thể **CẦN XÁC MINH LẠI khi cài cơ chế research team vào TMO thật** — cấu trúc repo có thể đổi giữa các phiên bản (Q5 §13). *(✅ chốt v1.3 — §13 Q5: verify KÉP — kỹ sư triển khai 1 lần lúc cài + cập nhật khi repo đổi; KING verify đường dẫn vs repo thật ở đầu MỌI mission M2 T3 → sai lệch → flag + cập nhật map.)*
 
-| Module | Đọc gì (nguồn) | Vị trí gợi ý `[EXT + Q]` | Artifact type hay gặp trong map |
+| Module | Đọc gì (nguồn) | Vị trí gợi ý `[EXT + DECIDED v1.3]` | Artifact type hay gặp trong map |
 |---|---|---|---|
 | SA-01 Memory Architecture | memory system — Qdrant/Neo4j/SQLite coordination, embedding pipeline | `src/lib/` (memory, qdrant-client, neo4j) + `src/app/api/` | source |
 | SA-02 Execution Pipeline | API routes, query pipeline, workflow thực thi | `src/app/api/**` (vd route /api/query) | source |
@@ -508,13 +509,13 @@ Audit Report (BELI) tóm tắt `[SRC nguyên văn]`: "Chat request mất 121s kh
 
 **Nguồn được phép đọc (M2)** `[SRC dòng 558]`: source code, README, docs, `.env.example`, dev.log, PM2 logs, health check API. **KHÔNG được phép** `[SRC dòng 559]`: sửa bất kỳ file nào của TMO — mọi thay đổi chỉ nằm trong PROPOSAL.
 
-`[EXT]` Cách dùng bảng này khi tạo map M2: mỗi sub-agent SA của SIVIL nhận 1 module → các file nó đọc trở thành entry `LIVE:` với relevance theo bảng → SIVIL tổng hợp thành khối Artifact Chain (Q6: SA có ghi entry riêng hay chỉ SIVIL tổng hợp).
+`[EXT]` Cách dùng bảng này khi tạo map M2: mỗi sub-agent SA của SIVIL nhận 1 module → các file nó đọc trở thành entry `LIVE:` với relevance theo bảng → SIVIL tổng hợp thành khối Artifact Chain (Q6 → DECIDED v1.3: SA không ghi entry trực tiếp — SA trả map-fragments trong findings; SIVIL tổng hợp 1 map G1 duy nhất).
 
 ---
 
 ## §9. [EXT] QUY ƯỚC STATUS ARTIFACT M2 — 5 TRẠNG THÁI
 
-`[TB-10 §9 ← chuẩn hóa các status rời rạc trong ví dụ nguồn (✅ Audited / ✅ Scanned / ✅ Captured / ✅ Done — dòng 3966–3971)]` `[EXT + Q]`
+`[TB-10 §9 ← chuẩn hóa các status rời rạc trong ví dụ nguồn (✅ Audited / ✅ Scanned / ✅ Captured / ✅ Done — dòng 3966–3971)]` `[EXT + DECIDED v1.3]`
 
 | Status | Ý nghĩa | Ai đặt | Điều kiện vào trạng thái |
 |---|---|---|---|
@@ -536,7 +537,7 @@ planned ──▶ reading ──▶ audited ──▶ evidence-attached
 
 - Mọi chuyển trạng thái theo kiểu **append-only**: entry cũ giữ status cũ; thông tin "đã chuyển" nằm ở entry mới hoặc dòng update ghi kèm (D1/D2 §4).
 - Ánh xạ status trong ví dụ nguồn → quy ước 5 mức `[EXT]`: `✅ Scanned` (log) → `audited` · `✅ Captured` (baseline) → `evidence-attached` · `✅ Done` (report của G) → `evidence-attached` (report luôn gắn findings) · các dấu mô tả `⚠️` (Done but needs attention), `❌ Worsen`, `❌ Removed` giữ nguyên ngữ nghĩa mô tả, không ép về 5 mức.
-- `[Q1]` Có cần thêm trạng thái `stale` (như `feature_importance.csv ⚠️ Stale` ở ví dụ M1 — dòng 4120) cho M2, hay gộp vào `superseded`?
+- `[Q1 → DECIDED v1.3]` **Gộp vào `superseded`** + note "stale, cần re-compute" — không thêm state mới, giữ state machine 5 mức gọn. *(✅ chốt v1.3 — §13 Q1)*
 
 ---
 
@@ -548,7 +549,7 @@ planned ──▶ reading ──▶ audited ──▶ evidence-attached
 
 | Ai | Ghi gì |
 |---|---|
-| Mỗi G (SIVIL/BELI/LISMA/HAN) | map cho part mình vừa hoàn thành — đủ 5 khối (§3.3). Sub-agents của SIVIL: findings của SA được SIVIL TỔNG HỢP thành 1 map duy nhất của G1 `[Q6]` |
+| Mỗi G (SIVIL/BELI/LISMA/HAN) | map cho part mình vừa hoàn thành — đủ 5 khối (§3.3). Sub-agents của SIVIL: findings của SA được SIVIL TỔNG HỢP thành 1 map duy nhất của G1 `[Q6 → DECIDED v1.3: SA trả map-fragments trong findings — SIVIL tổng hợp]` |
 | TL (KING) | KHÔNG ghi artifact research; ghi entry `planned` khi DECOMPOSE sinh kế hoạch audit (nếu muốn khóa kế hoạch đọc trước); quyết định pivot ghi vào Decision Log (TB-06 §13) — phần map do G nhận part mới cập nhật |
 
 ### 10.2 Khi nào ghi
@@ -563,11 +564,11 @@ planned ──▶ reading ──▶ audited ──▶ evidence-attached
 |---|---|---|
 | Tạo artifact mới | append entry mới cuối bảng chain | ghi đè entry cũ |
 | File đổi nội dung (phiên bản v2) | entry mới + entry cũ đánh `superseded` + trỏ `→ entry mới` | xóa entry cũ |
-| G sau sửa artifact của G trước (G2 fix bug G1) | M1: cập nhật CỘT STATUS entry gốc theo quy ước nguồn ("✅ Fixed by G2") `[SRC ví dụ §6.1]`; M2: entry mới nếu FILE thay đổi — `[Q3]` | xóa lịch sử entry |
+| G sau sửa artifact của G trước (G2 fix bug G1) | M1: cập nhật CỘT STATUS entry gốc theo quy ước nguồn ("✅ Fixed by G2") `[SRC ví dụ §6.1]`; M2: entry mới nếu FILE thay đổi — `[Q3 → DECIDED v1.3]` | xóa lịch sử entry |
 | Finding mới trỏ vào artifact cũ | giữ nguyên entry, nâng status lên `evidence-attached` (M2) | tạo entry trùng `file` |
 | Artifact bỏ (removed) | giữ entry + status `❌ Removed` (M1) / `superseded` (M2) — KHÔNG xóa | xóa entry |
 
-> Nguồn cho phép cập nhật cột Status của entry gốc (ví dụ M1: "✅ Fixed by G2", "✅ Updated by G3", "❌ Removed by G3" — §6.1); TB-10 áp nguyên quy ước đó cho M1. Riêng M2 theo dõi bằng entry mới + `superseded` khi FILE đổi (không phải khi status đổi) — vì file M2 có 2 bản LIVE/WS cần truy vết riêng (D4). `[Q3]`
+> Nguồn cho phép cập nhật cột Status của entry gốc (ví dụ M1: "✅ Fixed by G2", "✅ Updated by G3", "❌ Removed by G3" — §6.1); TB-10 áp nguyên quy ước đó cho M1. Riêng M2 theo dõi bằng entry mới + `superseded` khi FILE đổi (không phải khi status đổi) — vì file M2 có 2 bản LIVE/WS cần truy vết riêng (D4). `[Q3 → DECIDED v1.3: M1 theo ví dụ nguồn (cột status); M2 append + superseded]`
 
 ### 10.4 Template entry nhanh (dùng khi append)
 
@@ -593,11 +594,11 @@ hypothesis: <confirmed / rejected / pending — kèm id hypothesis của Protoco
 |---|---|---|---|
 | E1 | **Artifact thiếu (chưa tồn tại)** — kế hoạch part đòi artifact chưa ai tạo | map thiếu entry cho artifact được `depends_on` trỏ tới | ghi entry `planned` + đánh dấu blocker trong map; nếu artifact thuộc trách nhiệm part/group TRƯỚC → coi như chain đứt → E2 |
 | E2 | **Chain đứt** — thiếu artifact trung gian (vd Part 3 cần `train_feat.csv` mà map dừng ở `insights.md`) | đối chiếu bảng Dependencies vs Artifact Chain ở Bước 1 (đọc map) | G hiện KHÔNG tự bịa artifact thiếu → **ESCALATE KING**; KING DECIDE: giao lại part thiếu (task .md mini) hoặc pivot từ artifact cuối VALID |
-| E3 | **Map quá lớn** (nhiều part × nhiều SA × nhiều file — chain hàng trăm entry) | đếm entry khi Bước 1 | rank theo relevance + severity: chỉ đọc sâu top (core-target + 🔴); phần còn lại mức scan-qua; Reading Strategy phải phản ánh ranking — `[Q2]` ngưỡng chính thức (đề xuất > 60 entries) |
+| E3 | **Map quá lớn** (nhiều part × nhiều SA × nhiều file — chain hàng trăm entry) | đếm entry khi Bước 1 | rank theo relevance + severity: chỉ đọc sâu top (core-target + 🔴); phần còn lại mức scan-qua; Reading Strategy phải phản ánh ranking — ngưỡng chính thức `[Q2 → DECIDED v1.3: > 60 entries → bắt buộc rank + chỉ đọc sâu top]` *(✅ chốt v1.3 — §13 Q2)* |
 | E4 | **Evidence conflict Live ↔ Workspace** — code Live khác code Workspace cùng 1 file | so 2 bản khi verify (POC chạy ở Workspace nhưng evidence lấy ở Live) | **ưu tiên Live System** — là nguồn thật đang chạy; ghi chú lệch version vào entry (D4); Workspace lệch nhiều → ESCALATE để đồng bộ lại clone |
 | E5 | **Map không cập nhật sau pivot** — KING đã pivot nhưng map không có nhãn pivot-point | Metric Journey lệch với Research Protocol hiện hành | KING ghi pivot vào Decision Log; G nhận part mới bổ sung `pivot-point` tại artifact cuối VALID ngay khi bắt đầu (§4) |
 | E6 | **Hypothesis status thiếu** — map không nói artifact nào confirmed/rejected/pending | checklist AC-8 (§12) | thiếu = thiếu field bắt buộc của khối map (quy tắc 1) → trả về G ghi map bổ sung TRƯỚC khi G sau bắt đầu đọc |
-| E7 | **Artifact stale** — artifact mô tả pipeline đã đổi (vd feature_importance.csv sau khi fix leak) | map đánh `⚠️ Stale` như ví dụ nguồn dòng 4120 | G tạo đánh dấu "re-compute" trong Reading Strategy; KHÔNG dùng stale làm input cho quyết định — `[Q7]` KING có thể giao task mini re-compute qua DECIDE |
+| E7 | **Artifact stale** — artifact mô tả pipeline đã đổi (vd feature_importance.csv sau khi fix leak) | map đánh `⚠️ Stale` như ví dụ nguồn dòng 4120 | G tạo đánh dấu "re-compute" trong Reading Strategy; KHÔNG dùng stale làm input cho quyết định — `[Q7 → DECIDED v1.3: CÓ]` KING giao task mini re-compute qua DECIDE + task .md mini (SIMPLE/Tier 1) giao G sở hữu artifact |
 | E8 | **M2 evidence chỉ tồn tại ở Workspace** (không tái hiện được ở Live) | finding không trỏ được file:line/log ở Live | hạ độ tin cậy finding; tìm evidence Live tương đương (log runtime, health check); nếu không có → finding chỉ vào Proposal kèm nhãn độ tin cậy thấp |
 | E9 | **2 sub-agents mâu thuẫn về cùng 1 artifact** (cùng `file`, severity/kết luận khác) | 2 findings trỏ cùng entry | SIVIL dùng protocol mâu thuẫn SA của TB-03 §5: điều tra arbitrator → vẫn mâu thuẫn → ESCALATE KING kèm 2 interpretation |
 | E10 | **Workspace chưa mở khi M2 cần POC** — user chưa mở bản clone, part Design/Propose cần chạy POC | map có entry POC `WS:` (D5 §4) nhưng không có nơi chạy; liên quan E4 (bản Live ↔ WS) + E8 | evidence vẫn chạy (đọc Live System); POC hoãn + Proposal đánh cờ `POC-NEEDS-WORKSPACE` (quy ước TB-02 §6; xử lý chi tiết: TB-06 §14 E7 + TB-07 §9 E7) |
@@ -625,20 +626,20 @@ hypothesis: <confirmed / rejected / pending — kèm id hypothesis của Protoco
 
 ---
 
-## §13. OPEN QUESTIONS & PHỤ THUỘC
+## §13. DECISIONS — [Q] ĐÃ CHỐT (v1.3)
 
-`[TB-10 §13 ← chuẩn TB-00 §4 (N+4)]` `[Q]`
+`[TB-10 §13 ← chuẩn TB-00 §4 (N+4)]` `[DECIDED v1.3]`
 
-| # | Câu hỏi mở | Ảnh hưởng | Đề xuất mặc định (khi user chưa chốt) |
+| # | Câu hỏi mở | Ảnh hưởng | ✅ QUYẾT ĐỊNH (chốt v1.3) |
 |---|---|---|---|
-| Q1 | Thêm trạng thái `stale` riêng cho artifact M2, hay gộp vào `superseded`? | §9 | gộp vào `superseded` + note "stale, cần re-compute" |
-| Q2 | Ngưỡng "map quá lớn" (E3) — bao nhiêu entry thì bắt buộc rank + chỉ đọc sâu top? | §11 E3 | > 60 entries |
-| Q3 | M1: cập nhật cột status entry gốc ("Fixed by G2") như ví dụ nguồn, hay cũng chuyển hẳn sang append + superseded cho đồng bộ với M2? | §10.3 | M1 theo ví dụ nguồn (cột status); M2 append + superseded |
-| Q4 | Prefix `LIVE:`/`WS:` đặt trong ID dòng hay ở cột riêng trong bảng chain? | §3.2, §7.2 | cột riêng — giữ ID dòng ngắn gọn |
-| Q5 | Bảng Module Map §8: ai xác minh đường dẫn trên TMO thật và khi nào (lúc cài đặt research team, hay từng mission M2)? | §8 | kỹ sư triển khai xác minh 1 lần lúc cài + cập nhật bảng khi repo đổi |
-| Q6 | Sub-agent của SIVIL có ghi entry trực tiếp vào map hay chỉ SIVIL tổng hợp findings của SAs thành 1 map G1? | §10.1 | SIVIL tổng hợp 1 map duy nhất (tránh trùng lặp entry) |
-| Q7 | KING có được giao task mini "re-compute stale artifact" như 1 part đơn giản (SIMPLE/Tier 1)? | §11 E7 | có — qua DECIDE + task .md mini cho G sở hữu artifact |
-| Q8 | Map M1 có cần thêm cột Relevance tương đương M2 để G3 rank ưu tiên đọc khi chain dài? | §3 | không — metric impact + severity đã đủ tín hiệu rank |
+| Q1 | Thêm trạng thái `stale` riêng cho artifact M2, hay gộp vào `superseded`? | §9 | **Gộp vào `superseded`** + note "stale, cần re-compute" (không thêm state mới — giữ state machine gọn) |
+| Q2 | Ngưỡng "map quá lớn" (E3) — bao nhiêu entry thì bắt buộc rank + chỉ đọc sâu top? | §11 E3 | **> 60 entries → bắt buộc rank + chỉ đọc sâu top** |
+| Q3 | M1: cập nhật cột status entry gốc ("Fixed by G2") như ví dụ nguồn, hay cũng chuyển hẳn sang append + superseded cho đồng bộ với M2? | §10.3 | **M1 theo ví dụ nguồn (cột status — "Fixed by G2"); M2 append + superseded** |
+| Q4 | Prefix `LIVE:`/`WS:` đặt trong ID dòng hay ở cột riêng trong bảng chain? | §3.2, §7.2 | **Cột riêng** trong bảng chain — ID dòng giữ ngắn gọn |
+| Q5 | Bảng Module Map §8: ai xác minh đường dẫn trên TMO thật và khi nào (lúc cài đặt research team, hay từng mission M2)? | §8 | **Verify KÉP:** kỹ sư triển khai 1 lần lúc cài + cập nhật khi repo đổi; **KING verify đường dẫn vs repo thật ở đầu MỌI mission M2 T3** (thao tác đọc — rẻ, sạch) → sai lệch → flag + cập nhật map |
+| Q6 | Sub-agent của SIVIL có ghi entry trực tiếp vào map hay chỉ SIVIL tổng hợp findings của SAs thành 1 map G1? | §10.1 | **KHÔNG** — SA trả map-fragments trong findings; **SIVIL tổng hợp 1 map G1 duy nhất** (tránh trùng lặp entry) |
+| Q7 | KING có được giao task mini "re-compute stale artifact" như 1 part đơn giản (SIMPLE/Tier 1)? | §11 E7 | **CÓ** — qua DECIDE + task .md mini (SIMPLE/Tier 1) giao G sở hữu artifact |
+| Q8 | Map M1 có cần thêm cột Relevance tương đương M2 để G3 rank ưu tiên đọc khi chain dài? | §3 | **KHÔNG** — metric impact + severity đủ tín hiệu rank cho M1 |
 
 **Phụ thuộc chéo:** TB-09 (khối map trong worklog schema + handoff) · TB-06 §13 Decision Log (pivot-point) · TB-03 §5 (protocol mâu thuẫn SA — dùng cho E9) · TB-11 (Proposal truy evidence ngược về map) · TB-12 (2 kịch bản E2E đối soát AC-14).
 
@@ -668,6 +669,6 @@ hypothesis: <confirmed / rejected / pending — kèm id hypothesis của Protoco
 | 601, 4486 | "mỗi finding BẮT BUỘC có evidence" + KING verify ở checkpoint | §3.5, §7.2, §11 E8 | SRC |
 | 4428–4511 | ví dụ M2 workflow "chat TMO chậm" — triage 8 điểm COMPLEX, 4 parts, 6 SA, 3 root causes, options A/B/C, proposal + SELF-DIRECTION | §7.2 | SRC (workflow + số liệu) + EXT (map dựng) |
 | — | field spec 2 format; 5 khối map chuẩn; quy tắc D1–D5 + pivot-point; status 5 mức M2; quy trình cập nhật append-only; E1–E10; AC-1–14; Q1–Q8 | §3, §4, §9, §10, §11, §12, §13 | EXT |
-| — | stale/LIVE-WS prefix/ngưỡng map lớn/ai ghi map/Module Map cần xác minh | §8, §9, §11, §13 | Q |
+| — | decisions (chốt v1.3): stale/LIVE-WS prefix/ngưỡng map lớn/ai ghi map/Module Map cần xác minh | §8, §9, §11, §13 | [DECIDED v1.3] |
 
 > **Kết thúc TB-10.** File tiếp theo theo build order TB-00 §3: TB-08 (Knowledge Capture) và TB-09 (RWV Loop & Handoff — nơi map "sống" trong worklog schema) → TB-11 → TB-12. Tracker TB-00 §6: đánh TB-10 ✅ khi user duyệt.

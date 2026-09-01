@@ -4,12 +4,13 @@
 > Nguồn chính: `upload/ai-team-workflow.md` — 🔁 VÍ DỤ THỰC TẾ: KAGGLE (dòng 4346–4425) · 🔁 VÍ DỤ THỰC TẾ: SYSTEM RESEARCH (4428–4511) · 📊 TỔNG QUAN 3-TIER (4515–4558) · 📎 GHI CHÚ THÊM (4560–4635) · tham chiếu ngang: COMPETITION SUMMARY (2443–2501) · Performance Baselines + KB entry (1538–1543, 1810) · NEO4J_DATABASE (1023, 1534, 3601)
 > Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10-f) | Author: Mr. Robot (Z.ai Code) — Task 8-i · **nhóm D — Output & E2E** · file 13/13 — CHỐT TẬP
 > Quy ước chung: TB-00 §1/§4/§5 · đối soát 12 file trước (TB-01 → TB-11) qua coverage matrix §4 · mọi số liệu playbook giữ nguyên từ nguồn
+> **v1.3 (2026-09-01):** toàn bộ [Q] đã chốt theo DECISION-RECORD-v1.3.md (user ủy quyền, thorough-first) — xem Phụ lục Z nguồn.
 
 ---
 
 ## §0. 🎯 MỤC ĐÍCH & PHẠM VI `[TB-12 §0 ← TB-00 §2 — file 13/13]` `[EXT]`
 
-- **Mục đích:** "chạy thử trên giấy" toàn pipeline research team bằng 2 playbook E2E (M1 — House Prices · M2 — chat TMO chậm) + bộ **12 test case cơ chế** (TC-01 → TC-12, bảng giấy — kiểm thử CƠ CHẾ, không phải code) + **coverage matrix 13 blueprint**. Mọi mâu thuẫn giữa các TB sẽ lộ ra ở file này.
+- **Mục đích:** "chạy thử trên giấy" toàn pipeline research team bằng 2 playbook E2E (M1 — House Prices · M2 — chat TMO chậm) + bộ **14 test case cơ chế** (TC-01 → TC-14, bảng giấy — kiểm thử CƠ CHẾ, không phải code — TC-13/TC-14 thêm đợt v1.3 theo DECISION-RECORD) + **coverage matrix 13 blueprint**. Mọi mâu thuẫn giữa các TB sẽ lộ ra ở file này.
 - **Ai dùng:** kỹ sư triển khai (smoke-test khi cài team vào TMO) · user (review tổng thể trước khi khởi động implement) · chính 5 agents (kịch bản vận hành tham chiếu).
 - **Không bao gồm:** mã test tự động (test case dạng bảng giấy) · chi tiết JD từng agent (TB-03/04/05/06) · mọi số liệu không có trong nguồn (không bịa bổ sung).
 - **Quy tắc:** mọi con số trong 2 playbook giữ nguyên nguồn (121s · 6.2s · 8 điểm · 0.115 RMSE log · 72 features...); mốc "ngày" trong timeline chỉ là mô phỏng minh họa `[EXT]`.
@@ -189,11 +190,13 @@ Request: "NEO4J_DATABASE=neo4j — có đúng DB thật không?"
 → tri thức vào KB tại MONITOR/FINALIZE (T1 không qua G3 — TB-08 §7)
 ```
 
-Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng không" → **Simple**, dòng 4555) và edge E2 của TB-11 §5 — verify thuần túy không sinh thay đổi → trả kết luận + KB, không cần Proposal 1-item `[Q]`.
+Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng không" → **Simple**, dòng 4555) và edge E2 của TB-11 §5 — verify thuần túy không sinh thay đổi → trả kết luận + KB, không cần Proposal 1-item `[DECIDED v1.3 — DR-C1]`.
+
+*(✅ chốt v1.3: golden-run PB-M2 sẽ dựng từ mission M2 thật đầu — §7 Q2.)*
 
 ---
 
-## §3. 🧪 BẢNG TEST CASE TC-01 → TC-12 (CƠ CHẾ — BẢNG GIẤY) `[TB-12 §3 ← đối soát TB-01 → TB-11]` `[EXT]`
+## §3. 🧪 BẢNG TEST CASE TC-01 → TC-14 (CƠ CHẾ — BẢNG GIẤY) `[TB-12 §3 ← đối soát TB-01 → TB-11]` `[EXT]`
 
 > Cách dùng: mỗi TC = 1 kịch bản runtime giả lập; "verify" = đọc lại artifact (worklog/Decision log/KB/Proposal) kiểm kỳ vọng. KHÔNG phải test code — kiểm cơ chế thiết kế.
 
@@ -220,6 +223,10 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 | TC-10 | BELI viết POC cho Option A (fail-fast) trong mission M2 | **POC + diff chỉ trong Workspace** (bản clone); Live System chỉ đọc (evidence); diff kèm Proposal khi SUBMITTED | Mọi file sửa nằm trong Workspace; log Live System không đổi | TB-01 §3 |
 | TC-11 | Proposal P-YYYYMMDD-NNN bị REJECTED kèm lý do | KING phân tích → **quay lại research** (re-DECOMPOSE phần liên quan) hoặc đóng mission — Decision log; không re-submit nguyên trạng | Trạng thái REJECTED → RESEARCHING; Decision log có lý do | TB-11 §2 (+ TB-06 §9.8) |
 | TC-12 | Model chính lỗi giữa task → fallback chain | Agent **GIỮ NGUYÊN vai trò + JD**; task KHÔNG reset; worklog ghi dòng "model switched" | Task tiếp tục đúng trạng thái; worklog có dòng model switched | TB-01 §2 (+ TB-09 §10 E7) |
+| TC-13 | **"task .md thiếu Success Criteria"** (phủ TB-07 decomposition gate) — mission M2 T2: KING DECOMPOSE 2 parts, 1 task .md thiếu trường Success Criteria | **Council ①** (bắt buộc mọi mission — TB-07 §11 Q5) phát hiện thiếu → part KHÔNG được ASSIGN cho tới khi KING bổ đủ Success Criteria (append amendment theo DR-C3, có CHANGELOG entry) | task .md có đủ Success Criteria + entry CHANGELOG amendment TRƯỚC khi ASSIGN; transcript council ① ghi phát hiện thiếu | TB-07 §3 (task template) + DECISION-RECORD v1.3 (TB-12 Q1) |
+| TC-14 | **"worklog thiếu Artifact Map → không giao group kế"** (phủ TB-09 §10 E4 / TB-10) — mission M2 T3: G1 xong part 1 nhưng worklog entry thiếu khối Artifact Map | **Gate handoff (TB-09) chặn — KHÔNG giao group kế**; SIVIL phải bổ sung map (1 map G1 duy nhất — TB-10 §13 Q6) trước khi KING MONITOR pass | worklog part 1 có đủ khối Artifact Map (1 map G1 duy nhất) trước khi part kế ASSIGN; worklog/Decision log ghi lý do chặn | TB-09 §10 E4 + TB-10 §13 Q6 + DECISION-RECORD v1.3 (TB-12 Q1) |
+
+> 2 test case bổ sung đợt v1.3 (✅ chốt §7 Q1): `[TB-12 §3.2 ← TB-07 §3 (task template) + DECISION-RECORD v1.3 (TB-12 Q1)]` `[EXT]` (TC-13) · `[TB-12 §3.2 ← TB-09 §10 E4 + TB-10 §13 Q6 + DECISION-RECORD v1.3 (TB-12 Q1)]` `[EXT]` (TC-14).
 
 ---
 
@@ -234,14 +241,14 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 | TB-04 | §4 severity/loại bug · §5 Mode M2 · §7 EVIDENCE-GAP · §9.1 regression | TC-04, TC-06, PB §2.3 | — |
 | TB-05 | §2.5 Proposal Item · §4 Mode M2 options · §9 E1 cold start | TC-05, PB §2.3, TC-11 (gián tiếp) | — |
 | TB-06 | §2 CLASSIFY · §8 DECIDE/pivot · §9.7 4 gate · §12 state machine | TC-01, TC-09, TC-11, PB §1–§2 | — |
-| TB-07 | §2 quy trình 5 bước decompose · §3 task .md · §6 checklist | PB §1 P1 + PB §2.2 (4 parts) | **không có TC riêng → §7 Q1** |
+| TB-07 | §2 quy trình 5 bước decompose · §3 task .md · §6 checklist | PB §1 P1 + PB §2.2 (4 parts) + **TC-13 (v1.3)** | **TC-13 đã thêm v1.3 — §7 Q1 [DECIDED]** |
 | TB-08 | §2 quyền ghi KB · §7 quy tắc vàng | TC-08, PB §2.4 (KB-20250612-002) | — |
 | TB-09 | §3 checkpoint · §6 pivot triggers · §10 E7 model switched | TC-09, TC-12, PB §2.1 | — |
-| TB-10 | §3 Artifact Map format · §5 chiến lược đọc theo group | PB §2.3 (SA theo map · LISMA Suspect · HAN Impact Chain) | **không có TC riêng → §7 Q1** |
+| TB-10 | §3 Artifact Map format · §5 chiến lược đọc theo group | PB §2.3 (SA theo map · LISMA Suspect · HAN Impact Chain) + **TC-14 (v1.3)** | **TC-14 đã thêm v1.3 — §7 Q1 [DECIDED]** |
 | TB-11 | §1 schema 8 trường · §2 vòng đời · §4 checklist SUBMIT | TC-11, PB §2.4, TC-02 | — |
 | TB-12 | §3 TC · §4 matrix · §1–§2 playbook | tự đối soát (file này) | — |
 
-> Cách đọc: "Phủ bởi" = TC (bảng §3) hoặc PB (playbook §1/§2); "—" ở cột gap = không phát hiện khoảng trống. 2 gap còn lại (TB-07, TB-10) đã khai báo tại §7 Q1 — không bị ẩn.
+> Cách đọc: "Phủ bởi" = TC (bảng §3) hoặc PB (playbook §1/§2); "—" ở cột gap = không phát hiện khoảng trống. 2 gap (TB-07, TB-10) đã khai báo tại §7 Q1 — ✅ chốt v1.3: đã khép bằng TC-13/TC-14 (bảng §3.2), không còn gap.
 
 ---
 
@@ -282,7 +289,7 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 - [ ] **AC3.** PB-M2 giữ nguyên đủ số liệu thật: 121s khi 401 · 6.2s baseline · 3 root causes · options A/B/C (khuyến nghị A+B) · p95 < 10s · 3 checkpoint KING · 4 parts · 6 SA.
 - [ ] **AC4.** PB-M2 thể hiện quy tắc vàng: toàn mission KHÔNG sửa file TMO — output duy nhất là Proposal; áp Workspace → Live là thao tác riêng sau APPROVED (dòng 4511).
 - [ ] **AC5.** PB-M2 Verification Plan đủ (a) kiểm chứng tay NGAY + (b) benchmark DEFERRED (p50/p95 · acceptance p95 < 10s).
-- [ ] **AC6.** 12 TC đủ 5 cột (ID · kịch bản · kỳ vọng · verify · tham chiếu); không TC nào tham chiếu section không tồn tại trong blueprint tương ứng.
+- [ ] **AC6.** 14 TC đủ 5 cột (ID · kịch bản · kỳ vọng · verify · tham chiếu — gồm TC-13/TC-14 thêm v1.3 theo §7 Q1); không TC nào tham chiếu section không tồn tại trong blueprint tương ứng.
 - [ ] **AC7.** Coverage matrix phủ đủ 13 file TB; mọi TB ≥ 1 nguồn phủ (TC hoặc playbook); gap được khai báo (§7 Q1).
 - [ ] **AC8.** Mọi section chính có traceability `[TB-12 §n ← nguồn dòng a–b]` + [SRC]/[EXT]/[Q].
 - [ ] **AC9.** Bảng 3-tier + mapping M2 trùng khớp nguồn 4515–4558 (điểm, đường đi, 3 ví dụ mapping nguyên văn).
@@ -292,14 +299,14 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 
 ---
 
-## §7. ❓ OPEN QUESTIONS `[TB-12 §7]` `[Q]`
+## §7. DECISIONS — [Q] ĐÃ CHỐT (v1.3) `[TB-12 §7]` `[DECIDED v1.3]`
 
-| # | Câu hỏi | Phụ thuộc |
-|---|---|---|
-| Q1 | TB-07 (decompose) + TB-10 (Artifact Map) chưa có TC riêng — chỉ phủ qua playbook. Có nên thêm TC-13+ ("task .md thiếu Success Criteria" / "Map thiếu → không giao group kế" theo TB-09 §10 E4) ở đợt mở rộng? | TB-07 §6, TB-10 §10 |
-| Q2 | PB-M2 không có mốc thời gian thật trong nguồn (chỉ M1 có "7 ngày") — khi chạy thật cần log chuẩn TB-09 §4; có cần dựng "golden run" mẫu không? | TB-09 §4 |
-| Q3 | TC-02 phụ thuộc [Q] TB-02 §5 / TB-11 §5 E2 — ngưỡng "mission verify thuần túy" không sinh Proposal cần user chốt trước khi freeze tập | TB-02 §5, TB-11 §7 Q1 |
-| Q4 | "Agent được ủy quyền" phê duyệt Proposal là ai (KING bị cấm tự duyệt — TB-06 §9.8)? Cần user chỉ định khi triển khai SELF-DIRECTION | TB-11 §7 Q2 |
+| # | Câu hỏi | Phụ thuộc | ✅ QUYẾT ĐỊNH (v1.3) |
+|---|---|---|---|
+| Q1 | TB-07 (decompose) + TB-10 (Artifact Map) chưa có TC riêng — chỉ phủ qua playbook. Có nên thêm TC-13+ ("task .md thiếu Success Criteria" / "Map thiếu → không giao group kế" theo TB-09 §10 E4) ở đợt mở rộng? | TB-07 §6, TB-10 §10 | **CÓ — TC-13 + TC-14 đã thêm ngay đợt v1.3** (xem §3.2) |
+| Q2 | PB-M2 không có mốc thời gian thật trong nguồn (chỉ M1 có "7 ngày") — khi chạy thật cần log chuẩn TB-09 §4; có cần dựng "golden run" mẫu không? | TB-09 §4 | **CÓ** — dựng golden-run PB-M2 từ log mission M2 thật đầu tiên, chuẩn hóa schema TB-09 §4; lưu làm artifact đối chiếu E2E |
+| Q3 | TC-02 phụ thuộc [Q] TB-02 §5 / TB-11 §5 E2 — ngưỡng "mission verify thuần túy" không sinh Proposal cần user chốt trước khi freeze tập | TB-02 §5, TB-11 §7 Q1 | **ĐÃ GIẢI** (✅ DR-C1) — tập test case freeze được |
+| Q4 | "Agent được ủy quyền" phê duyệt Proposal là ai (KING bị cấm tự duyệt — TB-06 §9.8)? Cần user chỉ định khi triển khai SELF-DIRECTION | TB-11 §7 Q2 | ✅ **DR-C5** — deputy = **SIVIL mặc định / HAN cho KB-domain**; không author, KING cấm tự duyệt, có thời hạn |
 
 ---
 

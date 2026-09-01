@@ -4,8 +4,9 @@
 > Source of Truth: `upload/ai-team-workflow.md` — section "🔍 CHI TIẾT G2 — CƠ CHẾ FIX BUG & REVIEW CỦA LISMA" (dòng 679–1117) + tham chiếu ngang (dòng 21–31, 144–145, 1736–1790, 3305–3337, 3986–4029, 4440–4490, 4560–4615)
 > Tập blueprint: 13 file (TB-00 → TB-12) — file này thuộc **nhóm B — Engines**
 > Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10-b) | Author: Mr. Robot (Z.ai Code) — Task ID 8-c
+> **v1.3 (2026-09-01):** toàn bộ [Q] đã chốt theo DECISION-RECORD-v1.3.md (user ủy quyền, thorough-first) — xem Phụ lục Z nguồn.
 >
-> ⚠️ Quy tắc số 1 (TB-00 §5): nguồn là Single Source of Truth — TB-04 MÔ RỘNG để triển khai được, KHÔNG thay đổi thiết kế nguồn. `[SRC]` = giữ nguyên ý nguồn · `[EXT]` = mở rộng mới, không mâu thuẫn nguồn · `[Q]` = câu hỏi mở.
+> ⚠️ Quy tắc số 1 (TB-00 §5): nguồn là Single Source of Truth — TB-04 MÔ RỘNG để triển khai được, KHÔNG thay đổi thiết kế nguồn. `[SRC]` = giữ nguyên ý nguồn · `[EXT]` = mở rộng mới, không mâu thuẫn nguồn · `[Q]` = câu hỏi mở (→ từ v1.3: đã chuyển thành [DECIDED v1.3]).
 
 ---
 
@@ -337,7 +338,7 @@ G2 (LISMA) — 1 agent làm cả code + review:
 `[EXT]` Luật vận hành thêm (không mâu thuẫn nguồn):
 - Fix theo thứ tự 🔴 → 🟠 → 🟡 → 🟢 — không đảo ngược vì tiện tay.
 - 1 bug có thể **nâng** severity khi đủ evidence tổ hợp (VD: edge case × data leakage → CRITICAL); **hạ** severity cần lý do ghi worklog.
-- Regression bug: đánh giá severity **độc lập** theo hậu quả của nó, không kế thừa severity bug gốc (xem §9.1). `[Q: chờ xác nhận — xem §11 Q5]`
+- Regression bug: đánh giá severity **độc lập** theo hậu quả của nó, không kế thừa severity bug gốc (xem §9.1). `[DECIDED v1.3 — §11 Q5]`
 
 ### 4.2 5 loại bug M1 — LISMA tìm và sửa (Kaggle)
 
@@ -641,7 +642,7 @@ Tier 3 → G3 (HAN): như §6.3/§6.4
 | D2 | Còn bug nhưng toàn 🟢 LOW | **STOP → CLEAN** | Ghi worklog cho G3 xử lý, KHÔNG cố fix thêm | Nguồn: "low severity bỏ qua" |
 | D3 | Còn 🟡 MEDIUM + còn vòng (< 3) + có thời gian | **CONTINUE** | Vòng mới, fix MEDIUM trước khi dừng | Tùy thời gian (nguồn: "fix nếu có thời gian") |
 | D4 | Còn 🔴/🟠 + vòng < 3 | **CONTINUE (bắt buộc)** | Vòng mới | HIGH/CRITICAL phải fix trong vòng lặp |
-| D5 | Hết 3 vòng, vẫn còn bug ≥ 🟡 | **ESCALATE** | Báo TL — task phức tạp hơn dự kiến | T2/T9 |
+| D5 | Hết 3 vòng, vẫn còn bug ≥ 🟡 | **ESCALATE** | Báo TL — task phức tạp hơn dự kiến *(✅ chốt v1.3 — §11 Q6: 3 vòng đếm theo task/đợt fix, không theo file)* | T2/T9 |
 | D6 | 🔴 CRITICAL đã thử fix ≥ 1 lần, fail | **ESCALATE** | Báo TL + liệt kê mọi fix đã thử | T10 |
 | D7 | Architectural issue (leak fundamental, wrong approach, thiết kế sai system-wide) | **ESCALATE NGAY** (bất kỳ state, bất kỳ vòng) | DỪNG toàn bộ loop → TL quyết định | T8 — bug lẻ không vá được kiến trúc |
 | D8 | Regression bug xuất hiện lần thứ 2 liên tiếp từ cùng 1 fix | **ESCALATE** | Báo TL — fix này có mùi architectural | `[EXT]` mở rộng từ tinh thần nguồn |
@@ -733,7 +734,7 @@ Ví dụ 2 candidate "chuẩn" (dùng bằng chứng thật TMO):
 - **Chẩn đoán:** bug mới xuất hiện sau khi apply fix — thường do fix đổi assumption (VD: fix NaN handling làm break logic phía sau; fix leak đổi thứ tự transform làm feature khác phân bố).
 - **Xử lý bắt buộc:**
   1. Ghi entry riêng Type = `Regression` trong Bugs Found + worklog (Instructions "LUÔN ghi lại regression bug do fix gây ra" — dòng 698).
-  2. Đánh giá severity độc lập theo hậu quả (không kế thừa bug gốc).
+  2. Đánh giá severity độc lập theo hậu quả (không kế thừa bug gốc) *(✅ chốt v1.3 — §11 Q5: đánh giá độc lập + ghi tham chiếu severity bug gốc làm context).*
   3. Fix như bug thường trong vòng mới — verify PHẢI re-run cả test của bug gốc (chống regression quay lại).
   4. Regression lặp 2 lần từ cùng 1 fix → D8 escalate (mùi architectural).
 - **Vì sao là signature:** vòng 2 của ví dụ chuẩn (nguồn dòng 918–928) chỉ ra giá trị thật của G2 — không chỉ fix 5 bug gốc mà bắt được bug thứ 6 do chính mình gây ra. Iterative refinement chết nếu regression bị giấu.
@@ -772,7 +773,7 @@ Ví dụ 2 candidate "chuẩn" (dùng bằng chứng thật TMO):
 | E6 | Fix xong metric/CV tụt | verify so metric trước-sau | coi bug HIGH, vào vòng mới (D10) | không pass D1 |
 | E7 | Tier 1 task hóa phức tạp | verify fail > 1 lần | báo KING re-tier (SIMPLE→MEDIUM) | TL quyết định |
 | E8 | 2 bugs xung đột fix (fix A làm B tái xuất) | verify vòng sau | fix theo cặp, test chéo A+B; 3 lần fail → D8 | escalation nếu bế tắc |
-| E9 | M2 phát hiện lỗi ĐANG đe dọa Live System (VD: lỗi ghi dữ liệu) | đọc log | **vẫn không được tự áp** — escalate KHẨN (format §7.3 + tag URGENT) cho TL/user quyết | escalation ngay lập tức |
+| E9 | M2 phát hiện lỗi ĐANG đe dọa Live System (VD: lỗi ghi dữ liệu) | đọc log | **vẫn không được tự áp** — escalate KHẨN (format §7.3 + tag URGENT) cho TL/user quyết *(✅ chốt v1.3: dual-channel — đồng thời notify user trực tiếp kênh URGENT; KING vẫn decision-maker — §11 Q7)* | escalation ngay lập tức |
 | E10 | Quá nhiều bug (>10/file) | review vòng 1 | không fix dần từng cái — nghi ngờ architectural → D7 | escalation kèm đề xuất re-decompose |
 
 ## §10. ACCEPTANCE CRITERIA
@@ -793,18 +794,18 @@ Ví dụ 2 candidate "chuẩn" (dùng bằng chứng thật TMO):
 - [ ] **AC12.** Traceability matrix (Phụ lục A) khớp mọi section với khoảng dòng nguồn; mọi `[EXT]` không mâu thuẫn `[SRC]`; mọi điểm khác biệt tiềm năng được đưa vào §11 Open Questions thay vì âm thầm thay thiết kế.
 - [ ] **AC13.** Danh tính tuân thủ TB-00: tên agent LISMA ≠ model (Kimi-k3 + fallback chain giữ nguyên vai trò); Priority #1 ghi đúng: M1 = Data Leakage, M2 = System Safety.
 
-## §11. OPEN QUESTIONS
+## §11. DECISIONS — [Q] ĐÃ CHỐT (v1.3)
 
-`[TB-04 §11 ← TB-00 §5 quy tắc: khác nguồn → dừng, ghi question, báo user]` `[Q]`
+`[TB-04 §11 ← TB-00 §5 + Phụ lục Z — đã chốt v1.3 theo DECISION-RECORD]` `[DECIDED v1.3]`
 
-- **Q1 — Tên nhóm checklist 2:** nguồn gọi "Data Safety" (nội dung: data leakage, dòng 968); một số bản tóm tắt (TB-00, kế hoạch split) gọi "Data Leakage". Giữ nguyên tên nguồn hay chuẩn hóa thành "Data Leakage" toàn tập? *(Đề xuất: giữ "Data Safety (Data Leakage)" như §3.1 — không mất thông tin.)*
-- **Q2 — Danh mục 5 loại bug:** kế hoạch split (Task 7) nhắc "Logic, Edge Case, Data Leak, Performance, Regression" nhưng nguồn dòng 735–896 định nghĩa loại 5 là **API/Compatibility** (regression là gốc bug, dòng 918–928). TB-04 theo nguồn (API/Compatibility + quy ước Regression là Type). Cần user xác nhận chốt danh mục này.
-- **Q3 — ESCALATED chờ TL:** nguồn dòng 952–955: "DỪNG → Báo TL → TL quyết định". LISMA có được phép tiếp tục công việc không liên quan bug đang escalate (file khác cùng task) khi chờ TL, hay dừng toàn bộ task? *(Đề xuất: dừng toàn bộ task — đúng chữ "DỪNG"; văn bản TL re-assign sẽ mở state NEW lại.)*
-- **Q4 — Đọc Live System ở M2:** LISMA có được phép chủ động thực hiện thao tác **chỉ-đọc** trên Live System (tail log mới, gọi `/api/health`, query Neo4j read-only) để hoàn thiện evidence, hay mọi thao tác phải qua audit của G1/BELI? *(Nguồn chỉ nói "đọc làm evidence" — chưa phân biệt chủ động/bị động.)*
-- **Q5 — Severity của regression bug:** kế thừa severity bug gốc hay đánh giá độc lập? *(TB-04 đề xuất độc lập — §4.1/§9.1 — nhưng cần KING chốt vì ảnh hưởng bảng quyết định D8.)*
-- **Q6 — Đếm vòng lặp theo gì:** "tối đa 3 vòng" (dòng 692, 1091) đếm theo **task** hay theo **file**? *(Ví dụ nguồn dòng 898–938 đọc 3 files trong 1 vòng → TB-04 hiểu theo task/đợt fix. Cần xác nhận — ảnh hưởng D5.)*
-- **Q7 — Escalate M2 khẩn cấp (E9):** khi phát hiện lỗi đang đe dọa Live System, ESCALATION đi qua KING như mọi trường hợp — có cần kênh URGENT song song đến user không? *(Nguồn không định nghĩa; hiện TB-04 chỉ đánh dấu URGENT trong message, vẫn đi qua TL.)*
-- **Q8 — Tier 1 với M2:** nguồn dòng 1035–1050 mô tả Tier 1 cho M1. Simple task M2 (VD: "đối chiếu 1 biến env") có đi đường Tier 1 của LISMA không, và "code fix 1 bước" lúc đó hiểu là "patch mẫu Workspace 1 bước"? *(Đề xuất: có — nhưng vẫn tuân quy tắc không áp lên Live.)*
+- **Q1 — Tên nhóm checklist 2: ✅ CHỐT v1.3 — "Data Safety (Data Leakage)"** — giữ cả hai tên, chuẩn hóa toàn tập (không mất thông tin — như §3.1). *(Nguồn gọi "Data Safety", dòng 968; một số bản tóm tắt gọi "Data Leakage".)*
+- **Q2 — Danh mục 5 loại bug: ✅ CHỐT v1.3 — theo nguồn: loại 5 = API/Compatibility; Regression là bug GỐC có type riêng** (ghi regression field + tham chiếu bug gốc — không phải danh mục loại 5). Danh mục 5 loại: Logic · Edge Case · Data Leak · Performance · API/Compatibility. *(TB-04 đã theo nguồn dòng 735–896 + 918–928 — giữ nguyên thiết kế.)*
+- **Q3 — ESCALATED chờ TL: ✅ CHỐT v1.3 — DỪNG TOÀN BỘ task** (đúng chữ "DỪNG" — nguồn dòng 952–955); TL re-assign → state mở lại NEW. Không chạy song song việc khác của cùng task.
+- **Q4 — Đọc Live System ở M2: ✅ CHỐT v1.3 — chủ động READ-ONLY được phép** (tail log mới, gọi `/api/health`, query Neo4j read-only) để hoàn thiện evidence; **mọi thao tác ghi evidence log** (query + ts + kết quả); **WRITE cấm tuyệt đối**. *(Chính sách P4 — evidence log bắt buộc; P6 — an toàn Live System.)*
+- **Q5 — Severity của regression bug: ✅ CHỐT v1.3 — đánh giá ĐỘC LẬP** (tác động regression hiện tại có thể khác bug gốc) **+ ghi tham chiếu severity bug gốc làm context** (ảnh hưởng bảng quyết định D8). *(Khớp đề xuất §4.1/§9.1.)*
+- **Q6 — Đếm vòng lặp: ✅ CHỐT v1.3 — theo task/đợt fix** (không theo file) — đúng cách đọc ví dụ nguồn dòng 898–938 (3 files trong 1 vòng); ảnh hưởng D5.
+- **Q7 — Escalate M2 khẩn cấp (E9): ✅ CHỐT v1.3 — URGENT dual-channel:** severity CRITICAL đang đe dọa Live → (a) escalate KING theo format chuẩn §7.3 + tag URGENT, VÀ ĐỒNG THỜI (b) notify **user trực tiếp** qua kênh URGENT song song (không chờ KING relay). **KING vẫn là decision-maker duy nhất cho fix** — LISMA không bao giờ tự áp. *(Cập nhật E9 §9.5.)*
+- **Q8 — Tier 1 với M2: ✅ CHỐT v1.3 — CÓ** — simple task M2 đi đường Tier 1 của LISMA: "code fix 1 bước" = **patch mẫu Workspace 1 bước, không áp Live** + **KING mini read-back bắt buộc** (1 vòng verify nhỏ). *(Vẫn tuân quy tắc không áp lên Live.)*
 
 ---
 
@@ -841,7 +842,7 @@ Ví dụ 2 candidate "chuẩn" (dùng bằng chứng thật TMO):
 | §9.2–§9.4 | —, 4486, 1746, 989–994 | Heisenbug / evidence / compatibility Workspace | [EXT] / [SRC]+[EXT] |
 | §9.5 | tổng hợp | E1–E10 | [EXT] |
 | §10 | TB-00 §4 | Acceptance criteria | [EXT] |
-| §11 | TB-00 §5 | Open questions | [Q] |
+| §11 | TB-00 §5 + Phụ lục Z | Decisions (chốt v1.3) | [DECIDED v1.3] |
 
 ---
 

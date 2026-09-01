@@ -4,8 +4,9 @@
 > Source of Truth: `upload/ai-team-workflow.md` — section "🚀 CHI TIẾT G3 — CƠ CHẾ SELF-EVOLVING CỦA HAN" (dòng 1119–1716) + TEAM KNOWLEDGE BASE bên trong nó + tham chiếu ngang: KNOWLEDGE CAPTURE (dòng 1718–1825), G2 vs G3 chiến lược đọc (dòng 3986–4028), ví dụ M2 chat 121s (dòng 4428–4511), Ghi chú agents (dòng 4560–4615)
 > Tập blueprint: 13 file (TB-00 → TB-12) — file này thuộc **nhóm B — Engines** · file duy nhất còn thiếu của nhóm Engines (TB-03/TB-04/TB-06/TB-07 đã hoàn thành)
 > Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10-c) | Author: Mr. Robot (Z.ai Code) — Task ID 8-d (RETRY — lần chạy trước lỗi hạ tầng 429, viết lại từ đầu)
+> **v1.3 (2026-09-01):** toàn bộ [Q] đã chốt theo DECISION-RECORD-v1.3.md (user ủy quyền, thorough-first) — xem Phụ lục Z nguồn.
 >
-> ⚠️ Quy tắc số 1 (TB-00 §5): nguồn là Single Source of Truth — TB-05 MÔ RỘNG để triển khai được, KHÔNG thay đổi thiết kế nguồn. `[SRC]` = giữ nguyên ý nguồn · `[EXT]` = mở rộng mới, không mâu thuẫn nguồn · `[Q]` = câu hỏi mở.
+> ⚠️ Quy tắc số 1 (TB-00 §5): nguồn là Single Source of Truth — TB-05 MÔ RỘNG để triển khai được, KHÔNG thay đổi thiết kế nguồn. `[SRC]` = giữ nguyên ý nguồn · `[EXT]` = mở rộng mới, không mâu thuẫn nguồn · `[Q]` = câu hỏi mở (→ từ v1.3: đã chuyển thành [DECIDED v1.3]).
 
 ---
 
@@ -453,7 +454,7 @@ Vòng 3 — Part 3 (Model Building):
 
 | Kết quả MEASURE (so với trước tối ưu) | Diễn giải | Hành động ghi KB | Loại entry |
 |---|---|---|---|
-| **Cải thiện đáng kể** (vượt ngưỡng noise — đề xuất: > 1 std của metric `[Q]`) | Approach hiệu quả | Ghi lesson mới; nếu trùng lesson cũ → không ghi entry mới, chỉ tăng confidence | Lesson / Pattern (S1–S4) |
+| **Cải thiện đáng kể** (vượt ngưỡng noise — **✅ chốt v1.3: M1 > 1 std của CV; M2 > 5% hoặc bootstrap 95% CI** — §11 Q2) | Approach hiệu quả | Ghi lesson mới; nếu trùng lesson cũ → không ghi entry mới, chỉ tăng confidence | Lesson / Pattern (S1–S4) |
 | **Cải thiện nằm trong noise** (nhỏ hơn std) | Không kết luận được | KHÔNG ghi — tránh ô nhiễm KB bằng lesson yếu | — |
 | **Xấu đi rõ rệt** | Approach có hại | Ghi anti-pattern + lý do thất bại | Anti-Pattern (A1–A5 / AS1–AS3) |
 | **Xấu đi do vi phạm anti-pattern đã có** | Xác nhận anti-pattern | Tăng confidence anti-pattern cũ (không ghi entry mới) | Cập nhật confidence |
@@ -702,7 +703,7 @@ B4 — TAG      Entry đã qua B3 + entry NEW đúng chuẩn → status CURATED.
 |---|---|
 | **Tần suất** | Mỗi chu trình G3 (state CURATING của state machine §8; Bước 4 của KB Write Protocol: "HAN consolidate trong chu trình G3 gần nhất") |
 | **Không xóa** | HAN KHÔNG xóa entry — chỉ đánh dấu RETIRED (4 lý do §6.3) |
-| **Retire entry của KING/SIVIL** | Được phép, nhưng BẮT BUỘC kèm lý do + evidence; mọi thao tác retire được liệt kê trong report G3 để KING review ở Checkpoint CP3 |
+| **Retire entry của KING/SIVIL** | Được phép, nhưng BẮT BUỘC kèm lý do + evidence; mọi thao tác retire được liệt kê trong report G3 để KING review ở Checkpoint CP3 *(✅ chốt v1.3 — §11 Q4: nâng lên PRE-APPROVAL — KING duyệt tại CP3 TRƯỚC khi retire có hiệu lực; KING tự retire được kèm Decision Log)* |
 | **Không curate phán đoán** | Entries mâu thuẫn không phân định được bằng evidence → KHÔNG tự retire cả hai — flag CONFLICT vào report cho KING (§9 E2) |
 | **Giữ nguyên schema** | Mọi thao tác curate tôn trọng KB Entry Schema §7.4 — không thêm/xóa trường ngoài chuẩn |
 
@@ -731,7 +732,7 @@ B4 — TAG      Entry đã qua B3 + entry NEW đúng chuẩn → status CURATED.
 `[TB-05 §7.1 ← mở rộng từ cấu trúc markdown nguồn dòng 1478–1544]` `[EXT]`
 
 - **Định dạng:** file Markdown (đúng như cấu trúc nguồn: 1 heading `### Category: <tên>` + 1 bảng mỗi category) — dễ diff, dễ đọc bởi cả agent lẫn người.
-- **Đề xuất bố cục — 1 file chính `team-knowledge-base.md`** gồm: phần đầu = **Mục lục** (bảng: Category | Mission | Số entry active | Ghi chú); phần thân = 9 categories theo §5; phần cuối = **Archive RETIRED** (giữ nguyên entries đã retire để audit). Phương án thay thế: tách 1 file/category + 1 file index — đánh đổi độ đơn giản khi load `[Q3]`.
+- **Đề xuất bố cục — 1 file chính `team-knowledge-base.md`** gồm: phần đầu = **Mục lục** (bảng: Category | Mission | Số entry active | Ghi chú); phần thân = 9 categories theo §5; phần cuối = **Archive RETIRED** (giữ nguyên entries đã retire để audit). Phương án thay thế: tách 1 file/category + 1 file index — đánh đổi độ đơn giản khi load `[Q3 → DECIDED v1.3: chọn multi-file + index theo category; canonical là DB — DR-C6, không còn giới hạn 500 entries]`.
 - **Ánh xạ cột bảng category ↔ KB Entry Schema** (hợp nhất 2 dạng nguồn — bảng category cột rút gọn, schema 7 trường đầy đủ):
 
 | Cột bảng category (nguồn) | Trường KB Entry Schema (nguồn) | Ghi chú [EXT] |
@@ -739,7 +740,7 @@ B4 — TAG      Entry đã qua B3 + entry NEW đúng chuẩn → status CURATED.
 | `#` (1–14, A1–A5, S1–S4, AS1–AS3, C1–C3) | `ID: KB-YYYYMMDD-NNN` | Khi triển khai: ID đầy đủ thay cho `#`; các mã `A/S/AS/C` giữ làm **sub-code** nhận diện trong category |
 | `Lesson` / `Pattern` / `Anti-Pattern` | `Insight` | 1 câu — ngắn, actionable |
 | `Context` / `Lý do` / `Áp dụng cho` | `Evidence/Context` | file:line · log excerpt · metric · discussion ref |
-| `Confidence` (HIGH/MEDIUM/LOW) | — (schema không có) | `[EXT]` giữ cột Confidence trong bảng category; khi entry đứng riêng → ghi vào Evidence/Context `[Q6]` |
+| `Confidence` (HIGH/MEDIUM/LOW) | — (schema gốc không có → **✅ v1.3: trường 8**) | `[EXT]` giữ cột Confidence trong bảng category; khi entry đứng riêng → `Confidence` là **trường 8** của KB Entry Schema `[Q6 → DECIDED v1.3]` *(✅ chốt v1.3 — §11 Q6 — amend nguồn Phụ lục Z A2; không còn ghi lồng vào Evidence/Context)* |
 | — | `Source` (agent + thời điểm) | Bổ sung cột cho bảng triển khai |
 | — | `Mission` (M1/M2) | Bổ sung cột — guard chống áp sai mission (§9 E8) |
 | — | `Status` (NEW → CURATED → RETIRED) | Bảng triển khai dùng cột Status; bảng seed §5 ngầm = CURATED |
@@ -960,20 +961,20 @@ G2 Output (code sạch + suggestions + concerns) — Tier 3 routing
 
 ---
 
-## §11. OPEN QUESTIONS & PHỤ THUỘC
+## §11. DECISIONS — [Q] ĐÃ CHỐT (v1.3)
 
-`[TB-05 §11 ← tổng hợp các quyết định chờ user]` `[Q]`
+`[TB-05 §11 ← đã chốt v1.3 theo DECISION-RECORD + Phụ lục Z]` `[DECIDED v1.3]`
 
-| # | Câu hỏi | Bối cảnh / gợi ý |
+| # | Câu hỏi | ✅ QUYẾT ĐỊNH (chốt v1.3) |
 |---|---|---|
-| Q1 | **"Mỗi vòng tối ưu" của quy tắc M2 (dòng 1393) đếm thế nào** — 1 lần chạy state machine G3, hay 1 lần lặp Evolution Cycle trong 1 chu trình G3? | Ảnh hưởng số proposal items sinh ra mỗi chu trình. Gợi ý: 1 vòng = 1 task G3 (1 lần vào OPTIMIZING) — mỗi task sinh ≥ 1 item |
-| Q2 | **Ngưỡng "cải thiện đáng kể" để ghi lesson** (§3.3) — cụ thể là bao nhiêu (1 std? 0.5 std? % cố định?) | M1 dùng std của CV; M2 chưa có benchmark → tạm dùng qualitative + confidence ≤ MEDIUM (E3) |
-| Q3 | **KB lưu 1 file hay nhiều file** (§7.1)? | 1 file: đơn giản, dễ curate, khó scale; nhiều file + index: scale tốt, phức tạp hơn khi consolidate. Gợi ý: 1 file tới ~500 entries rồi tách |
-| Q4 | **HAN retire entries do KING/SIVIL ghi có cần đồng ý trước của KING không** (§6.4)? | Hiện thiết kế: retire được nhưng BẮT BUỘC liệt kê trong report G3 để KING review CP3 (post-hoc). Phương án chặt hơn: pre-approval — đánh đổi tốc độ |
-| Q5 | **KB đặt ở đâu trong hạ tầng** — file trong Workspace, trong repo TMO, hay store riêng (Qdrant/SQLite)? | Nguồn không định vị vật lý. Ảnh hưởng: Live System chỉ đọc được? version control? [Q cho TB-08/TB-09] |
-| Q6 | **Trường Confidence có nằm trong KB Entry Schema chuẩn không** (§7.1)? | Nguồn: bảng category có cột Confidence, schema 7 trường không có. Gợi ý: thêm Confidence làm trường thứ 8 (HIGH/MEDIUM/LOW) — cần cập nhật nguồn trước (quy tắc số 1) |
-| Q7 | **Trần số vòng G3** — G2 có trần 3 vòng review; G3 nguồn không nêu trần | Gợi ý: trần 3 vòng Evolution Cycle mỗi task (đối xứng G2), vượt → ESCALATE. Cần user chốt để thêm vào nguồn |
-| Q8 | **HAN có tham gia Research Council không?** | Nguồn: council = KING ↔ SIVIL (HAN không ngồi). HAN chỉ nhận kết quả (entries mới) rồi curate. Xác nhận chủ đích thiết kế này (tri thức từ council vào KB qua KING/SIVIL ghi) |
+| Q1 | **"Mỗi vòng tối ưu" của quy tắc M2 (dòng 1393) đếm thế nào** — 1 lần chạy state machine G3, hay 1 lần lặp Evolution Cycle trong 1 chu trình G3? | **1 vòng = 1 task G3** (1 lần vào OPTIMIZING); mỗi task sinh ≥ 1 proposal item. |
+| Q2 | **Ngưỡng "cải thiện đáng kể" để ghi lesson** (§3.3) — cụ thể là bao nhiêu (1 std? 0.5 std? % cố định?) | **M1: > 1 std của CV** (định lượng). **M2: > 5% cải thiện metric chuẩn hóa HOẶC vượt bootstrap 95% CI** so baseline; qualitative-only → chỉ ghi lesson với **confidence ≤ MEDIUM** (giữ E3). |
+| Q3 | **KB lưu 1 file hay nhiều file** (§7.1)? | ✅ **DR-C6** — snapshot **multi-file + index** theo category; canonical là DB (SQLite/Prisma, versioned, soft-delete retire) — không còn giới hạn 500 entries. |
+| Q4 | **HAN retire entries do KING/SIVIL ghi có cần đồng ý trước của KING không** (§6.4)? | **PRE-APPROVAL (chặt hơn):** HAN liệt kê retire-candidates trong report/proposal G3 → **KING duyệt tại CP3 TRƯỚC** khi retire có hiệu lực; KING tự retire được (kèm Decision Log). HAN KHÔNG tự retire entries do KING/SIVIL ghi khi chưa được duyệt. Đánh đổi tốc độ — chấp nhận theo P1 (thorough-first). |
+| Q5 | **KB đặt ở đâu trong hạ tầng** — file trong Workspace, trong repo TMO, hay store riêng (Qdrant/SQLite)? | ✅ **DR-C6** — kiến trúc 3 lớp: **SQLite/Prisma canonical** (versioned, soft-delete retire) + **snapshot .md theo category** + **Live System read-only**; mọi write qua KB Write Protocol. *(Giải luôn câu hỏi liên file TB-08/TB-09 theo cùng cụm C6.)* |
+| Q6 | **Trường Confidence có nằm trong KB Entry Schema chuẩn không** (§7.1)? | **CÓ** — thêm `Confidence: HIGH/MEDIUM/LOW` làm **trường 8** KB Entry Schema; amend nguồn trước (Phụ lục Z — A2, quy tắc số 1). |
+| Q7 | **Trần số vòng G3** — G2 có trần 3 vòng review; G3 nguồn không nêu trần | **Trần 3 vòng Evolution Cycle mỗi task G3** (đối xứng G2); vượt → ESCALATE. Amend nguồn (Phụ lục Z — A3). |
+| Q8 | **HAN có tham gia Research Council không?** | **Giữ thiết kế nguồn: HAN KHÔNG ngồi council** (council = KING ↔ SIVIL). [EXT bổ sung, không mâu thuẫn:] council transcript/output được **route tự động tới HAN như input** để curate — HAN nhận đủ thông tin mà không phải thành viên. |
 
 **Phụ thuộc chờ các file khác:** TB-08 (Knowledge Capture chi tiết — 3 lỗ hổng, council output, 5 quy tắc vàng) · TB-09 (worklog schema chuẩn trường "KB Candidates" mà §7.3 tiêu thụ) · TB-11 (Proposal Schema 8 trường — mini-template §2.5 phải khớp khi KING tổng hợp) · TB-10 (Artifact Map nguồn của chuỗi đọc Metric Impact Chain / Impact Chain).
 
@@ -1027,7 +1028,7 @@ G2 Output (code sạch + suggestions + concerns) — Tier 3 routing
 | — (mở rộng) | State machine 8 trạng thái + 15 transitions + 8 invariants | §8 | EXT |
 | — (mở rộng) | Mini-template Proposal Item + bảng metric baseline từng lĩnh vực M2 | §2.5, §4.2 | EXT |
 | — (mở rộng) | 12 edge cases E1–E12 + bảng tổng quan 9 categories | §9, §5.2 | EXT |
-| — (mở rộng) | 8 open questions | §11 | Q |
+| — (mở rộng) | 8 decisions (chốt v1.3) | §11 | DECIDED v1.3 |
 
 ---
 
