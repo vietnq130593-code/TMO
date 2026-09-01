@@ -279,7 +279,7 @@ model ExperimentRecord {
 | E4 | Scorecard thực đo thiếu (POC fail trước khi đo) | option về CONDITIONAL; nếu fail do infra → retry 1 lần; fail do bản chất → REJECTED + negative-evidence |
 | E5 | User bỏ phiếu deploy_mode không rõ (mission brief mơ hồ) | mặc định Proposal (fail-safe) — hỏi 1 câu đúng chỗ theo quy tắc TC-01 |
 | E6 | Tournament vòng 3 vẫn 2 option-gap <0.5 | council ⑤ chọn theo S3 (rủi ro thấp hơn thắng) — tie-break an toàn, KHÔNG mở vòng 4 |
-| E7 | Giải pháp cũ KB match 100% nhưng曾被 REJECTED ở mission khác | contraindication mới được ghi vào KB sau mission REJECT (EVOLVE) — lần check sau sẽ chặn |
+| E7 | Giải pháp cũ KB match 100% nhưng từng bị REJECTED ở mission khác | contraindication mới được ghi vào KB sau mission REJECT (EVOLVE) — lần check sau sẽ chặn |
 | E8 | M1 không có "root cause" (cuộc thi không phải bug) | Rubric A áp cho giả thiết approach (vd "leakage nằm ở target encoding"); kill-test = experiment nhỏ CV |
 | E9 | Council ⑤ thiếu quorum (1 engine vắng) | hoãn + reminder; quá 30 phút → deputy engine (SIVIL↔HAN thay nhau, DR-C5 pattern) |
 | E10 | Option thắng chạm nhiều module (blast radius lớn) | tự động rơi khỏi DIRECT-APPLY (vi phạm điều kiện 5) → Proposal — KHÔNG cắt nhỏ để né rule |
@@ -318,7 +318,7 @@ model ExperimentRecord {
 | Quyết định | Chốt |
 |---|---|
 | Rubric tồn tại ở đâu | 2 rubric riêng (A chẩn đoán / B giải pháp) — Phụ lục Z2 + TB-14, không trộn với TRIAGE 3 điểm (đó là chấm độ phức tạp task, việc khác) |
-| Ai chấm | SIVIL提议 + 2 SA blind chấm D4; HAN chấm B; council ⑤ phê chung — KING không tự chấm (chỉ chủ trì) |
+| Ai chấm | SIVIL đề xuất + 2 SA blind chấm D4; HAN chấm B; council ⑤ phê chung — KING không tự chấm (chỉ chủ trì) |
 | Bao nhiêu giả thiết | ≥3/vấn đề; top-2 đi tiếp; gap <0.5 → cả 2 |
 | Trần vòng | 3 lặp tournament; vòng 3 bắt buộc verdict cuối |
 | Tie-break cuối | S3 (rủi ro thấp) thắng — an toàn trước |

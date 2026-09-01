@@ -1,7 +1,7 @@
 # TB-13 — IMPLEMENTATION BUILD PLAN: TEAM RESEARCH → CODE TMO APP
 
-> **Phiên bản:** v1.0 (2026-09-01) · **Trạng thái:** ✅ READY-TO-CODE — mọi quyết định đã chốt ở DECISION-RECORD v1.3
-> **Vai trò:** Bản đồ triển khai — dịch 13 blueprint (TB-00→TB-12) + 71 quyết định v1.3 thành **code cụ thể trong TMO app** (đường dẫn file, Prisma model, API route, build phase, acceptance).
+> **Phiên bản:** v1.5 (2026-09-01 — Task 23: bổ phase P2b + 2 model Prisma + 4 TC theo TB-14; Task 24: vá nhất quán đếm số) · **Trạng thái:** ✅ READY-TO-CODE — mọi quyết định đã chốt ở DECISION-RECORD v1.3 + Phụ lục Z2 v1.5
+> **Vai trò:** Bản đồ triển khai — dịch 14 blueprint (TB-00→TB-12 + TB-14) + 71 quyết định v1.3 + Phụ lục Z2 v1.5 (solution scoring) thành **code cụ thể trong TMO app** (đường dẫn file, Prisma model, API route, build phase, acceptance).
 > **Quy ước:** Toàn bộ nội dung file này là `[EXT]` (mở rộng triển khai), tham chiếu `[SRC]` = `ai-team-workflow.md` (Phụ lục Z v1.3) và `[DR-Cn]` = cụm quyết định C1–C7 trong `DECISION-RECORD-v1.3.md`.
 > **Nguyên tắc vàng:** Đây là file **dẫn đường cho dev/agent code** — mọi thứ cần đọc đều nằm trong thư mục `docs/blueprints/` (tự chứa 100%).
 
@@ -9,10 +9,10 @@
 
 ## §0. MỤC ĐÍCH & PHẠM VI
 
-**Mục đích:** Bất kỳ dev (người) hoặc agent (máy) cầm file này đều biết chính xác: code gì, đặt ở đâu, theo thứ tự nào, nghiệm thu bằng cách nào — **không phải tự suy đoán từ 13 blueprint**.
+**Mục đích:** Bất kỳ dev (người) hoặc agent (máy) cầm file này đều biết chính xác: code gì, đặt ở đâu, theo thứ tự nào, nghiệm thu bằng cách nào — **không phải tự suy đoán từ 14 blueprint**.
 
 **Phạm vi IN:**
-- Team research = 7 thành phần: Router/CLASSIFY, G1 (SIVIL+BELI), G2 (LISMA), G3 (HAN+KB), KING (TL engine), Councils ①–④, RWV/Handoff + Proposal/Self-Direction.
+- Team research = 8 thành phần: Router/CLASSIFY, G1 (SIVIL+BELI), G2 (LISMA), G3 (HAN+KB), KING (TL engine), Councils ①–⑤, Solution Scoring & Selection (TB-14: Rubric A/B + Tournament + Context-Fit + DIRECT-APPLY), RWV/Handoff + Proposal/Self-Direction.
 - Tích hợp vào TMO app hiện có (Next.js 16 App Router, Prisma SQLite, mini-services).
 
 **Phạm vi OUT (việc riêng, chờ lệnh):**
@@ -32,7 +32,7 @@
 | 4 | **Live System read-only tuyệt đối:** agent research CHỈ đọc Live; mọi ghi nằm trong Workspace clone + diff kèm Proposal. | TB-01 §3, TC-10 |
 | 5 | **Evidence bắt buộc:** claim không có evidence (file:line + log excerpt) → bị loại / EVIDENCE-GAP. | TB-04 §5, TC-06 |
 | 6 | **Tái dùng hạ tầng có sẵn:** NIM client (`src/lib/llm.ts` — đã xoay vòng 4 key + fallback chain), `ServiceKeyPool`, cron-scheduler, Prisma `db`, workspace git — **không viết lại**. | §6 file này |
-| 7 | **Mọi module mới có test-so对照 TB-12:** 14 TC là acceptance duy nhất của toàn hệ. | TB-12 §3.2 |
+| 7 | **Mọi module mới có test đối chiếu TB-12:** 18 TC là acceptance duy nhất của toàn hệ (14 gốc + TC-15→TC-18 scoring v1.5). | TB-12 §3.2 |
 
 ---
 
@@ -55,7 +55,7 @@ Thư mục mới trung tâm: **`src/lib/research-team/`** (mọi file mới củ
 | TB-09 RWV/Handoff | `src/lib/research-team/handoff.ts` · `worklog-schema.ts` | Gate Artifact Map E4 (TC-14), Confidence 8 trường, format model_switched |
 | TB-10 Directed Reading | `src/lib/research-team/g1/reading-map.ts` · `artifact-map.ts` | 1 map G1 duy nhất, đọc có hướng |
 | TB-11 Proposal/Self-Direction | `src/lib/research-team/proposal/` — `store.ts` · `git-branch.ts` + bridge sang `src/lib/self-direction/` (đã tồn tại) | P-YYYYMMDD-NNN, 1 Proposal = 1 branch, APPLY = merge sau APPROVED |
-| TB-12 E2E Playbooks | `src/lib/research-team/__tests__/` + golden-run script | 14 TC — xem §8 |
+| TB-12 E2E Playbooks | `src/lib/research-team/__tests__/` + golden-run script | 18 TC — xem §8 |
 | TB-14 Solution Scoring | `src/lib/research-team/scoring/` — `rubric-a.ts` · `rubric-b.ts` · `tournament.ts` · `context-fit.ts` + mở rộng `king/councils.ts` (kind=5) + `g2/experiment.ts` | Rubric A/B + tournament 5 vòng + Council ⑤ + DIRECT-APPLY rule — TC-15→TC-18 |
 | TB-00/TB-13 (meta) | README này + index | không sinh code |
 
@@ -259,7 +259,7 @@ model ExperimentRecord {
 | **P4 — G3+KB** | `g3/*` — KB 3 tầng (SQLite canonical + snapshot md + index) + cold-start seed + curate kép 3 mốc + trần 3 vòng | TC-05 pass |
 | **P5 — KING** | `king/*` — full lifecycle + councils ③ ④ + VETO + PIVOT + escalation deputy + timeout 48h/24h/12h | TC-09, TC-11 pass |
 | **P6 — Handoff+Proposal** | `handoff.ts` gate Artifact Map + `proposal/*` P-YYYYMMDD-NNN git branch + self-direction bridge | TC-08, TC-13, TC-14 pass |
-| **P7 — E2E** | `__tests__/` 14 TC + golden-run script + verify toàn tập | **14/14 TC pass** |
+| **P7 — E2E** | `__tests__/` 18 TC + golden-run script + verify toàn tập | **18/18 TC pass** |
 
 ---
 
@@ -289,7 +289,7 @@ Mission tạo → workspace clone (đường dẫn: workspace/research/<mission-
 
 ---
 
-## §8. ACCEPTANCE — MAP 14 TC → CÁCH VERIFY CODE
+## §8. ACCEPTANCE — MAP 18 TC → CÁCH VERIFY CODE
 
 | TC | Verify bằng | File test |
 |---|---|---|
@@ -361,8 +361,9 @@ Mission tạo → workspace clone (đường dẫn: workspace/research/<mission-
 | DR-C6 (KB 3 tầng) | §3 ResearchKBEntry + §5 P4 |
 | DR-C7 (model switched format) | §3 ModelSwitchEvent + §4 |
 | TB-00 §3 build order | §5 phases |
-| TB-12 §3.2 (14 TC) | §8 |
+| TB-12 §3.2 (18 TC — v1.5) | §8 |
+| Phụ lục Z2 / TB-14 v1.5 (Rubric · Tournament · Council ⑤) | §2.1 hàng scoring + §3 HypothesisRecord/ExperimentRecord + §5 P2b + §8 TC-15→TC-18 + §10 DoD mục 15 |
 
 ---
 
-*Tạo bởi Z.ai Code (main) — Task 21. File này thuộc tập `docs/blueprints/` (self-contained code kit). Khi sửa: tuân thủ append-only + cập nhật README.md của thư mục.*
+*Tạo bởi Z.ai Code (main) — Task 21. Amend v1.5 (Task 23: +P2b +mapping TB-14 +2 model Prisma +4 TC) · vá nhất quán đếm số 14→18 TC & ký tự CJK (Task 24). File này thuộc tập `docs/blueprints/` (self-contained code kit). Khi sửa: tuân thủ append-only + cập nhật README.md của thư mục.*
