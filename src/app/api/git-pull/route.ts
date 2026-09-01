@@ -10,6 +10,10 @@
  * Strategy: AGGRESSIVE CHECKOUT — overwrite all files except database data.
  *   - Fetch remote → list changed files → checkout each non-protected file from FETCH_HEAD
  *   - Protected dirs (db/, upload/, qdrant-storage/, agent-ctx/) are NEVER touched
+ *     FIX 2026-09-15 (Task 25): file bảo vệ bị BỎ QUA (skip) thay vì chặn cả pull 403
+ *     (hành vi cũ khiến Pull code không bao giờ chạy được khi repo local track db//upload/
+ *     cho reset-survival mà remote không có). Local artifacts (worklog, tool-results,
+ *     bin/, dev.log) cũng được GIỮ NGUYÊN thay vì bị git rm như luồng cũ.
  *   - .env is smart-merged: local values preserved, new keys from remote added
  *   - No "would be overwritten" errors — we force-checkout each file individually
  *   - Token safety: never stores token in .git/config (saved token lives in db/.github-token.json)
@@ -39,6 +43,15 @@ const DEFAULT_REPO_URL = process.env.TMO_REPO_URL || 'https://github.com/vietnq1
 const PROTECTED_DIRS = ['db/', 'upload/', 'qdrant-storage/', 'agent-ctx/']
 /** Files to smart-merge (not force-overwrite) after pull */
 const SMART_MERGE_FILES = ['.env']
+
+// ── FIX 2026-09-15 (Task 25): local-only artifacts — không bao giờ bị pull
+// ghi đè hay XÓA. Repo local (platform) và remote có thể KHÁC lịch sử (local
+// được git-init riêng + track db//upload/ cho reset-survival) — các file dưới
+// đây không tồn tại trên remote, và luồng pull cũ sẽ `git rm --force` chúng
+// ngay khi checkout fail. worklog/tool-results = audit trail multi-agent của
+// platform; bin/qdrant = binary hạ tầng Qdrant; dev.log = log dev server.
+const LOCAL_PRESERVE_EXACT = ['worklog.md', 'dev.log']
+const LOCAL_PRESERVE_PREFIX = ['tool-results/', 'bin/']
 
 // ─── MUTEX: Prevent concurrent pull operations ─────────────────────────────────
 let pullInProgress = false
@@ -141,6 +154,11 @@ function isProtectedFile(file: string): boolean {
 /** Check if a file should be smart-merged instead of force-overwritten */
 function isSmartMergeFile(file: string): boolean {
   return SMART_MERGE_FILES.includes(file)
+}
+
+/** FIX 2026-09-15 (Task 25): file artifact cục bộ — giữ nguyên qua mọi pull */
+function isLocalPreservedFile(file: string): boolean {
+  return LOCAL_PRESERVE_EXACT.includes(file) || LOCAL_PRESERVE_PREFIX.some((p) => file.startsWith(p))
 }
 
 /** Sanitize branch name to prevent command injection */
@@ -628,12 +646,16 @@ export async function POST(request: NextRequest) {
     // ── List files that differ between HEAD and FETCH_HEAD ──
     let changedFiles: string[] = []
     try {
-      const { stdout: diffOutput } = await execFileAsync('git', ['diff', '--name-only', 'HEAD..FETCH_HEAD'], { cwd: projectRoot })
+      // FIX 2026-09-15 (Task 25): core.quotepath=false — đường dẫn chứa ký tự
+      // không ASCII (vd tên file tiếng Trung trong skills/design) mặc định bị
+      // git escape thành "\357\274\210..." → checkout nhận chuỗi escape THẬT →
+      // fail 23 file. Tắt quotepath để đường dẫn ra UTF-8 thô, checkout đúng.
+      const { stdout: diffOutput } = await execFileAsync('git', ['-c', 'core.quotepath=false', 'diff', '--name-only', 'HEAD..FETCH_HEAD'], { cwd: projectRoot })
       changedFiles = diffOutput.split('\n').map((f) => f.trim()).filter(Boolean)
     } catch {
       // diff may fail if no common ancestor — try alternative
       try {
-        const { stdout: listOutput } = await execFileAsync('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', 'FETCH_HEAD'], { cwd: projectRoot })
+        const { stdout: listOutput } = await execFileAsync('git', ['-c', 'core.quotepath=false', 'diff-tree', '--no-commit-id', '--name-only', '-r', 'FETCH_HEAD'], { cwd: projectRoot })
         changedFiles = listOutput.split('\n').map((f) => f.trim()).filter(Boolean)
       } catch {
         console.log('[GitPull] Cannot preview changes — will proceed with checkout')
@@ -645,7 +667,7 @@ export async function POST(request: NextRequest) {
     // For full coverage, also list all files in FETCH_HEAD if this is a fresh repo
     if (hadNoCommits || isNewRepo) {
       try {
-        const { stdout: allFilesOutput } = await execFileAsync('git', ['ls-tree', '-r', '--name-only', 'FETCH_HEAD'], { cwd: projectRoot })
+        const { stdout: allFilesOutput } = await execFileAsync('git', ['-c', 'core.quotepath=false', 'ls-tree', '-r', '--name-only', 'FETCH_HEAD'], { cwd: projectRoot })
         const allRemoteFiles = allFilesOutput.split('\n').map((f) => f.trim()).filter(Boolean)
         // Merge with changedFiles (deduplicate)
         const existingSet = new Set(changedFiles)
@@ -659,49 +681,57 @@ export async function POST(request: NextRequest) {
 
     // ── Separate files into categories ──
     const protectedFiles = changedFiles.filter(f => isProtectedFile(f))
-    const smartMergeFiles = changedFiles.filter(f => isSmartMergeFile(f))
-    const forceOverwriteFiles = changedFiles.filter(f => !isProtectedFile(f) && !isSmartMergeFile(f))
+    const localPreservedFiles = changedFiles.filter(f => isLocalPreservedFile(f))
+    const smartMergeFiles = changedFiles.filter(f => isSmartMergeFile(f) && !isProtectedFile(f) && !isLocalPreservedFile(f))
+    const forceOverwriteFiles = changedFiles.filter(f => !isProtectedFile(f) && !isLocalPreservedFile(f) && !isSmartMergeFile(f))
 
-    // ── Safety check — protected directories ──
+    // ── FIX 2026-09-15 (Task 25): protected dirs → SKIP từng file, KHÔNG chặn cả pull ──
+    // Hành vi cũ: bất kỳ file bảo vệ nào xuất hiện trong diff HEAD..FETCH_HEAD → 403
+    // chặn TOÀN BỘ pull. Nhưng repo platform chủ động track db//upload/ (reset-
+    // survival kép) trong khi remote KHÔNG có → diff luôn liệt kê 25 file bảo vệ →
+    // chức năng Pull code không bao giờ pull được (user report 2026-09-15).
+    // Hành vi mới: file bảo vệ bị BỎ QUA (không ghi đè, không xóa — đúng thiết kế
+    // gốc "Protected dirs are NEVER touched"), pull tiếp tục với phần code, và
+    // response báo rõ danh sách đã bỏ qua. Local artifacts (worklog/tool-results/
+    // bin/dev.log) cũng được giữ nguyên thay vì bị `git rm` như luồng cũ.
     if (protectedFiles.length > 0) {
-      console.error(`[GitPull] Blocked: protected directories affected: ${protectedFiles.join(', ')}`)
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Pull bị chặn: các file sau trong thư mục dữ liệu được bảo vệ sẽ bị thay đổi: ${protectedFiles.join(', ')}. Thư mục bảo vệ (chứa database): ${PROTECTED_DIRS.join(', ')}. Dữ liệu database sẽ KHÔNG bao giờ bị ghi đè.`,
-          protectedFiles,
-          changedFiles,
-          beforeCommit,
-        },
-        { status: 403 }
-      )
+      console.warn(`[GitPull] Skipping ${protectedFiles.length} protected files (kept intact, never touched): ${protectedFiles.join(', ')}`)
+    }
+    if (localPreservedFiles.length > 0) {
+      console.log(`[GitPull] Preserving ${localPreservedFiles.length} local-only artifacts: ${localPreservedFiles.join(', ')}`)
     }
 
     // ── Dry-run mode ──
     if (dryRun) {
-      const depsChanged = changedFiles.some(f => f === 'package.json' || f === 'bun.lock' || f === 'bun.lockb')
+      const effectiveFiles = [...forceOverwriteFiles, ...smartMergeFiles]
+      const depsChanged = effectiveFiles.some(f => f === 'package.json' || f === 'bun.lock' || f === 'bun.lockb')
       return NextResponse.json({
         success: true,
         dryRun: true,
-        changedFiles,
+        changedFiles: effectiveFiles,
         beforeCommit,
         branch,
         repoUrl: stripTokenFromUrl(effectiveRepoUrl),
         isNewRepo,
-        schemaChanged: changedFiles.some(f => f === 'prisma/schema.prisma' || f.startsWith('prisma/')),
+        schemaChanged: effectiveFiles.some(f => f === 'prisma/schema.prisma' || f.startsWith('prisma/')),
         depsChanged,
         forceOverwriteCount: forceOverwriteFiles.length,
         smartMergeCount: smartMergeFiles.length,
         protectedCount: protectedFiles.length,
+        protectedFiles,
+        preservedLocalCount: localPreservedFiles.length,
+        preservedLocalFiles: localPreservedFiles,
         message:
-          changedFiles.length > 0
-            ? `${changedFiles.length} file sẽ cập nhật (${forceOverwriteFiles.length} ghi đè, ${smartMergeFiles.length} smart-merge, ${protectedFiles.length} bảo vệ)`
-            : 'Đã là phiên bản mới nhất — không có thay đổi',
+          effectiveFiles.length > 0
+            ? `${effectiveFiles.length} file sẽ cập nhật (${forceOverwriteFiles.length} ghi đè, ${smartMergeFiles.length} smart-merge) · ${protectedFiles.length} file bảo vệ + ${localPreservedFiles.length} artifact cục bộ sẽ được GIỮ NGUYÊN`
+            : `Đã là phiên bản mới nhất — không có thay đổi${protectedFiles.length > 0 ? ` (${protectedFiles.length} file bảo vệ được giữ nguyên)` : ''}`,
       })
     }
 
-    // ── No changes — skip pull ──
-    if (changedFiles.length === 0 && !hadNoCommits) {
+    // ── No changes — skip pull (FIX Task 25: đếm theo file THỰC TẾ sẽ được áp,
+    // không tính file bảo vệ/artifact bị bỏ qua — trước đây diff chứa 25 file
+    // protected khiến nhánh này không bao giờ chạy) ──
+    if (forceOverwriteFiles.length + smartMergeFiles.length === 0 && !hadNoCommits) {
       return NextResponse.json({
         success: true,
         hasChanges: false,
@@ -710,7 +740,11 @@ export async function POST(request: NextRequest) {
         afterCommit: beforeCommit,
         changedFiles: [],
         isNewRepo,
-        message: 'Đã là phiên bản mới nhất',
+        protectedCount: protectedFiles.length,
+        preservedLocalCount: localPreservedFiles.length,
+        message: protectedFiles.length + localPreservedFiles.length > 0
+          ? `Đã là phiên bản mới nhất · ${protectedFiles.length} file bảo vệ + ${localPreservedFiles.length} artifact cục bộ được giữ nguyên`
+          : 'Đã là phiên bản mới nhất',
       })
     }
 
@@ -828,7 +862,7 @@ export async function POST(request: NextRequest) {
     // ── Re-compute changed files after pull ──
     try {
       if (beforeCommit && afterCommit && beforeCommit !== afterCommit) {
-        const { stdout: diffOutput } = await execFileAsync('git', ['diff', '--name-only', `${beforeCommit}..${afterCommit}`], { cwd: projectRoot })
+        const { stdout: diffOutput } = await execFileAsync('git', ['-c', 'core.quotepath=false', 'diff', '--name-only', `${beforeCommit}..${afterCommit}`], { cwd: projectRoot })
         const postPullFiles = diffOutput.split('\n').map((f) => f.trim()).filter(Boolean)
         if (postPullFiles.length > 0) changedFiles = postPullFiles
       }
@@ -894,6 +928,12 @@ export async function POST(request: NextRequest) {
         success: checkoutSuccess,
         failed: checkoutFailed,
         failedFiles,
+      },
+      skipped: {
+        protectedCount: protectedFiles.length,
+        protectedFiles,
+        preservedLocalCount: localPreservedFiles.length,
+        preservedLocalFiles,
       },
     })
   } catch (err) {

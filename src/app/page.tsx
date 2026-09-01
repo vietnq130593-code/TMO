@@ -17988,6 +17988,7 @@ export default function Home() {
           const parts = [`Cập nhật ${data.beforeCommit} → ${data.afterCommit}`]
           if (data.checkoutStats?.success) parts.push(`${data.checkoutStats.success} file đã cập nhật`)
           if (data.checkoutStats?.failed > 0) parts.push(`⚠️ ${data.checkoutStats.failed} file thất bại: ${data.checkoutStats.failedFiles?.join(', ')}`)
+          if (data.skipped?.protectedCount > 0) parts.push(`${data.skipped.protectedCount} file dữ liệu bảo vệ được GIỮ NGUYÊN`)
           if (data.depsChanged && data.installResult) parts.push('Dependencies đã cài đặt')
           if (data.schemaChanged) parts.push('Schema đã cập nhật — tự động chạy prisma generate & db:push')
           toast({ title: 'Pull thành công!', description: parts.join('. '), duration: 12000 })
