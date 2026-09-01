@@ -5,6 +5,7 @@
 > Tập blueprint: 13 file (TB-00 → TB-12), tổng 7.649 dòng (đã qua review Task 9 + fix Task 10)
 > Version: 1.3 | Ngày: 2026-09-01 (Decision Lock — user ủy quyền chốt toàn bộ [Q]) | Biên soạn: Mr. Robot (Z.ai Code)
 > Quyết định canonical: `docs/DECISION-RECORD-v1.3.md` (71 quyết định — 7 cụm C1–C7 + 64 câu riêng)
+> **v1.4 (2026-09-01):** CODE KIT — thư mục này tự chứa 100% để bắt đầu code: thêm TB-13 (implementation build plan) + bản sao nguồn `ai-team-workflow.md` + `DECISION-RECORD-v1.3.md` + `README.md` (hướng dẫn đọc/đồng bộ). Xem Đợt F ở §6.
 >
 > ⚠️ **QUY TẮC SỐ 1:** `ai-team-workflow.md` là Single Source of Truth. Blueprint MÔ RỘNG từ nó để triển khai được — KHÔNG thay thế nó. Mọi thay đổi thiết kế phải cập nhật nguồn trước, blueprint sau.
 
@@ -81,6 +82,9 @@ Tiếng Việt · Markdown · bảng + ASCII box + emoji section headers (như n
 | TB-10 | `TB-10-directed-reading-artifact-map.md` | Directed Reading & Research Artifact Map | 3780–4287 | 673 | M | C | ✅ |
 | TB-11 | `TB-11-proposal-schema-self-direction.md` | Proposal Schema & SELF-DIRECTION Route | 4288–4345 | 172 | S | D | ✅ |
 | TB-12 | `TB-12-e2e-playbooks-test-cases.md` | E2E Playbooks & Test Cases | 4346–4635 | 325 | M | D | ✅ |
+| TB-13 | `TB-13-implementation-build-plan.md` | **Implementation Build Plan → code TMO app** (bản đồ module + Prisma + API + 8 phases + 14 TC verify) | — (EXT) | ~330 | M | D | ✅ |
+
+**Companion files (v1.4 — code kit):** `ai-team-workflow.md` (bản sao nguồn SSOT kèm Phụ lục Z) · `DECISION-RECORD-v1.3.md` (bản sao canonical quyết định) · `README.md` (inventory + thứ tự đọc + quy tắc đồng bộ).
 
 ---
 
@@ -172,7 +176,10 @@ Mỗi section blueprint phải ghi nguồn dạng `[TB-XX §n ← nguồn dòng 
 | C — Protocols ngang | TB-08, TB-09, TB-10 | ✅ Hoàn tất |
 | D — Output & E2E | TB-11, TB-12 | ✅ Hoàn tất |
 | E — Decision Lock v1.3 | Toàn tập (nguồn Phụ lục Z + 13 TB) | ✅ Hoàn tất (2026-09-01) |
+| F — Code Kit v1.4 | TB-13 + 3 companion (nguồn + DR + README) | ✅ Hoàn tất (2026-09-01) |
 
 *Tập 13 blueprint HOÀN TẤT (Version 1.2 — đã qua 2 đợt đảm bảo chất lượng: **review Task 9** — 6 reviewer độc lập đối chiếu 67 findings với nguồn, phân loại P1×2 · P2×3 · P3×21 · P4×41; **fix Task 10** — 6 fixer + coordinator áp toàn bộ P1/P2/P3 và các P4 sửa được cục bộ: typo, citation sai dòng, state machine self-consistent, đồng bộ cross-ref tập, attribution [SRC]/[EXT], bổ edge POC-NEEDS-WORKSPACE ở TB-09/TB-10 — chi tiết worklog Task 9/10). Nguồn ai-team-workflow.md nguyên vẹn 4.635 dòng + Phụ lục Z (v1.3).*
 
 *Đợt E — DECISION LOCK v1.3 (2026-09-01): user **ủy quyền Z.ai Code chốt toàn bộ 71 [Q]** với chính sách **thorough-first** (cẩn thận – chi tiết – đầy đủ, tránh hời hợt) + **không ràng buộc token** (NVIDIA NIM 4 keys, sẽ tăng). Quyết định canonical: `docs/DECISION-RECORD-v1.3.md`; nguồn đã cập nhật trước theo quy tắc TB-00 §5 (Phụ lục Z append-only, dòng gốc nguyên vẹn). Mọi [Q] → [DECIDED v1.3], mọi section Open Questions → Decisions. Triển khai runtime là thao tác riêng — chờ user khởi động.*
+
+*Đợt F — CODE KIT v1.4 (2026-09-01): đáp ứng yêu cầu "docs/blueprints tự chứa mọi file cần để code team research" — bổ TB-13 (implementation build plan: bản đồ module `src/lib/research-team/`, 7 model Prisma, 12 API route `/api/research/*`, 8 build phase P0–P7, map 14 TC verify, risk register, DoD 14 mục) + bản sao nguồn `ai-team-workflow.md` (4.682 dòng, kèm Phụ lục Z) + bản sao `DECISION-RECORD-v1.3.md` + `README.md` folder guide. Tập hiện 17 file. Trạng thái: READY-TO-CODE — chờ user khởi động P0.*
