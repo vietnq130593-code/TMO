@@ -414,6 +414,16 @@ export async function executeCronJob(jobId: string): Promise<{ success: boolean;
   if (job.status === 'paused' || job.status === 'completed' || job.status === 'failed') {
     return { success: false, error: `CronJob ${jobId} is ${job.status} (cannot execute)` }
   }
+  // FIX v1.2 (ALISTA audit): row có executor riêng (vd 'ALISTA' — scheduler nền
+  // của executor đó tự chạy) KHÔNG được execute qua đường tick/HTTP này.
+  // Trước đây task='' bị POST rỗng → 400 → 3 lần retry → row thành 'failed'
+  // → ca trực 23h30 của ALISTA bị giết âm thầm.
+  if (job.executor && job.executor.trim() !== '') {
+    return {
+      success: false,
+      error: `CronJob ${jobId} owned by executor '${job.executor}' — executor riêng tự chạy row này (tick/HTTP không can thiệp)`,
+    }
+  }
 
   const startedAt = Date.now()
   let success = false
@@ -521,6 +531,10 @@ export async function executeCronJob(jobId: string): Promise<{ success: boolean;
  * Queries the DB for jobs whose nextRunAt <= now AND status='active', then
  * executes each in parallel (with a concurrency cap to avoid flooding the API).
  *
+ * FIX v1.2 (ALISTA audit): chỉ execute các row executor='' (default executor).
+ * Row có executor riêng (vd ALISTA scheduler 23h30) được executor đó tự chạy —
+ * tick này bỏ qua để không POST task rỗng → 400 → retry → giết row thành 'failed'.
+ *
  * @returns number of jobs executed
  */
 export async function tickCronScheduler(): Promise<number> {
@@ -530,6 +544,7 @@ export async function tickCronScheduler(): Promise<number> {
       status: 'active',
       nextRunAt: { lte: now },
       enabled: true,
+      executor: '', // chỉ row của default executor — row executor-owned bị skip
     },
     take: 10, // cap per tick to avoid runaway
   })

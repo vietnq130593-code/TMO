@@ -48,12 +48,48 @@ import {
   Loader2, RefreshCw, Activity, Brain, BookMarked, Database, AlertTriangle,
   Hourglass, Plus, CheckCircle2, XCircle, ChevronDown, ChevronRight, Check,
   GraduationCap, ListChecks, Layers, ShieldCheck, Calendar as CalendarIcon, X,
-  History,
+  History, Repeat,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import type { DateRange } from 'react-day-picker'
 
 // ==================== Types (mirror /api/episodic/*) ====================
+
+/** v1.2 — 1 dòng lịch sử hoạt động ALISTA (/api/alista/checks) */
+interface AlistaHistoryRow {
+  id: string
+  kind: 'check' | 'verify'
+  startedAt: string
+  completedAt: string | null
+  status: string
+  durationMs: number | null
+  proposalsCreated: number
+  deadlineMet: boolean
+  reason: string
+  perCheck: Array<{
+    id: number
+    label: string
+    status: string
+    findingsCount: number
+    proposalsCreated: number
+    error?: string
+    skipReason?: string
+  }>
+  verify: {
+    originalProposalId: string
+    originalTitle: string
+    originalKey: string | null
+    checkId: number | null
+    trigger: string | null
+    resolved: boolean | null
+    findingsAfter: Array<{ key: string; target: string; priority: string }>
+    stillOriginalIssue: boolean | null
+    newProposals: Array<{ id: string; title: string }>
+    skippedProposals: Array<{ title: string; reason: string }>
+    note: string | null
+  } | null
+  error: string | null
+}
 
 interface EpisodicStats {
   episodes: number
@@ -240,6 +276,13 @@ export function EpisodicMemoryPanel({ analyticsRange, onAnalyticsRangeChange }: 
 
   // v1.1 — ALISTA Kiểm tra toàn diện (POST /api/alista/check + poll GET)
   const [alistaRunning, setAlistaRunning] = useState(false)
+  // FIX v1.2: mounted ref — dừng poll loop khi unmount (trước đây loop chạy
+  // thêm tới 300s sau unmount + setState trên component đã chết)
+  const mountedRef = useRef(true)
+
+  // v1.2 — Lịch sử hoạt động ALISTA (check + verify follow-up)
+  const [alistaHistory, setAlistaHistory] = useState<AlistaHistoryRow[]>([])
+  const [alistaHistoryLoading, setAlistaHistoryLoading] = useState(false)
 
   // v1.1 — Range picker draft (chưa apply khi đang chọn)
   const [rangeDraft, setRangeDraft] = useState<DateRange | undefined>(undefined)
@@ -307,6 +350,34 @@ export function EpisodicMemoryPanel({ analyticsRange, onAnalyticsRangeChange }: 
       if (interval) clearInterval(interval)
     }
   }, [fetchData, rangeActive])
+
+  // v1.2 — Fetch lịch sử hoạt động ALISTA (check + verify) — nhẹ, poll 60s
+  const fetchAlistaHistory = useCallback(async (showLoading = false) => {
+    if (showLoading) setAlistaHistoryLoading(true)
+    try {
+      const res = await fetch('/api/alista/checks?limit=12', { cache: 'no-store' })
+      if (!res.ok) return
+      const json = (await res.json()) as { rows?: AlistaHistoryRow[] }
+      if (mountedRef.current && Array.isArray(json.rows)) {
+        setAlistaHistory(json.rows)
+      }
+    } catch { /* fail-open */ } finally {
+      if (showLoading) setAlistaHistoryLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    mountedRef.current = true
+    // Defer ra macrotask — tránh setState sync trong effect body (lint rule)
+    const initial = setTimeout(() => void fetchAlistaHistory(true), 0)
+    // Poll 60s — bắt sự kiện verify follow-up chạy nền (sau khi đề xuất hoàn tất)
+    const h = setInterval(() => void fetchAlistaHistory(), 60_000)
+    return () => {
+      mountedRef.current = false
+      clearTimeout(initial)
+      clearInterval(h)
+    }
+  }, [fetchAlistaHistory])
 
   // ---- Dạy bài học (POST /api/episodic/lessons) ----
   const handleTeachSubmit = useCallback(async () => {
@@ -430,6 +501,7 @@ export function EpisodicMemoryPanel({ analyticsRange, onAnalyticsRangeChange }: 
     try {
       // (1) POST /api/alista/check — fire-and-forget, returns 202 + checkId (UUID)
       // FIX: dùng checkId từ response trực tiếp (trước đây đoán qua /checks → id TaskExecution không khớp state Map)
+      // v1.2: server có thể trả alreadyRunning=true + checkId đang chạy (nightly/manual) → poll tiếp lần đó
       const postRes = await fetch('/api/alista/check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -439,15 +511,21 @@ export function EpisodicMemoryPanel({ analyticsRange, onAnalyticsRangeChange }: 
         const errJson = await postRes.json().catch(() => ({}))
         throw new Error(errJson.error || `HTTP ${postRes.status}`)
       }
-      const postJson = (await postRes.json()) as { checkId?: string }
+      const postJson = (await postRes.json()) as { checkId?: string; alreadyRunning?: boolean }
       const checkId = postJson.checkId
       if (!checkId) {
         throw new Error('POST không trả về checkId')
       }
-      // (2) Poll GET /api/alista/check?checkId=… mỗi 2s tối đa 300s
-      const deadline = Date.now() + 300_000
+      if (postJson.alreadyRunning) {
+        toast.info('ALISTA: pipeline đang chạy sẵn — theo dõi lần chạy đó', { description: 'Chống chạy đè (manual + ca trực 23h30 không đè nhau).' })
+      }
+      // (2) Poll GET /api/alista/check?checkId=… mỗi 2s
+      // FIX v1.2: budget 660s khớp deadline mềm 10' của pipeline (trước đây 300s
+      // < pipeline 600s → thường chỉ thấy toast "vẫn đang chạy") + abort khi unmount
+      const deadline = Date.now() + 660_000
       let lastStatus = 'running'
       while (Date.now() < deadline) {
+        if (!mountedRef.current) return // unmount — dừng sạch, không setState nữa
         await new Promise((r) => setTimeout(r, 2000))
         try {
           const pollRes = await fetch(`/api/alista/check?checkId=${encodeURIComponent(checkId)}`, { cache: 'no-store' })
@@ -475,25 +553,30 @@ export function EpisodicMemoryPanel({ analyticsRange, onAnalyticsRangeChange }: 
                   description: state.error || `Trạng thái: ${state.status} · ${state.reason || ''}`,
                 })
               }
-              // Refresh data để thấy proposal mới
+              // Refresh data để thấy proposal mới + lịch sử ALISTA
               void fetchData()
+              void fetchAlistaHistory()
               return
             }
           }
         } catch { /* retry */ }
       }
-      // Timeout 300s mà chưa xong
-      toast.warning('Kiểm tra toàn diện vẫn đang chạy', {
-        description: `Đã poll 300s, trạng thái cuối: ${lastStatus}. Xem Self-Direction module để xem đề xuất khi pipeline hoàn tất.`,
-      })
+      // Timeout mà chưa xong
+      if (mountedRef.current) {
+        toast.warning('Kiểm tra toàn diện vẫn đang chạy', {
+          description: `Đã poll 11 phút, trạng thái cuối: ${lastStatus}. Xem Self-Direction module để xem đề xuất khi pipeline hoàn tất.`,
+        })
+      }
     } catch (err) {
-      toast.error('Không chạy được ALISTA check', {
-        description: err instanceof Error ? err.message : String(err),
-      })
+      if (mountedRef.current) {
+        toast.error('Không chạy được ALISTA check', {
+          description: err instanceof Error ? err.message : String(err),
+        })
+      }
     } finally {
-      setAlistaRunning(false)
+      if (mountedRef.current) setAlistaRunning(false)
     }
-  }, [alistaRunning, fetchData])
+  }, [alistaRunning, fetchData, fetchAlistaHistory])
 
   // ---- v1.1 — Range picker apply / clear ----
   const applyRange = useCallback(() => {
@@ -981,6 +1064,168 @@ export function EpisodicMemoryPanel({ analyticsRange, onAnalyticsRangeChange }: 
                       </Button>
                     )}
                   </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </Card>
+
+      {/* ===== ALISTA — Hoạt động gần đây (check toàn diện + verify follow-up) ===== */}
+      <Card className="nc-panel nc-sm nc-border-teal p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-teal-950/50">
+              <ShieldCheck className="h-4 w-4 text-teal-400" />
+            </div>
+            <span className="text-xs font-semibold tracking-tight text-stone-100">
+              ALISTA — Hoạt động (kiểm tra toàn diện + xác minh follow-up)
+            </span>
+          </div>
+          <span className="text-[10px] text-stone-500 flex items-center gap-1.5">
+            {alistaHistoryLoading ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Repeat className="h-3 w-3" />
+            )}
+            poll 60s · ca trực 23h30
+          </span>
+        </div>
+        {alistaHistory.length === 0 ? (
+          <p className="text-xs text-stone-500">
+            Chưa có lần chạy nào — bấm <span className="text-teal-300">Kiểm tra toàn diện</span> ở thanh công cụ
+            hoặc chờ ca trực 23h30 (mỗi ngày 1 lần, budget 6h).
+          </p>
+        ) : (
+          <div className="space-y-1.5 max-h-96 overflow-y-auto">
+            {alistaHistory.map(row => {
+              const isVerify = row.kind === 'verify'
+              const v = row.verify
+              const st =
+                row.status === 'running' ? { label: 'đang chạy', cls: 'bg-teal-950/60 text-teal-400 border-teal-500/50' }
+                : row.status === 'completed' ? { label: 'hoàn tất', cls: 'bg-emerald-950/60 text-emerald-400 border-emerald-500/50' }
+                : { label: row.status === 'failed' ? 'lỗi' : row.status, cls: 'bg-rose-950/60 text-rose-400 border-rose-500/50' }
+              return (
+                <div key={row.id} className="rounded-lg bg-stone-950/60 border border-stone-800/80 px-3 py-2">
+                  <div className="flex items-center gap-2 text-xs">
+                    {isVerify ? (
+                      <Repeat className="h-3.5 w-3.5 text-amber-400 flex-shrink-0" />
+                    ) : (
+                      <ShieldCheck className="h-3.5 w-3.5 text-teal-400 flex-shrink-0" />
+                    )}
+                    <Badge variant="outline" className={`text-[9px] px-1.5 py-0 h-4 border flex-shrink-0 ${st.cls}`}>
+                      {st.label}
+                    </Badge>
+                    {isVerify ? (
+                      <span className="text-stone-200 truncate flex-1" title={v?.originalTitle || ''}>
+                        ⟲ Xác minh đề xuất{' '}
+                        <span className="font-mono text-stone-400">#{(v?.originalProposalId || '').slice(-8)}</span>{' '}
+                        {truncate(v?.originalTitle || '', 56)}
+                      </span>
+                    ) : (
+                      <span className="text-stone-200 truncate flex-1">
+                        Kiểm tra toàn diện — {row.proposalsCreated} đề xuất{row.perCheck.length > 0 ? ` · ${row.perCheck.length}/7 bước` : ''}
+                      </span>
+                    )}
+                    <span className="text-[10px] text-stone-500 tabular-nums flex-shrink-0">
+                      {fmtTime(row.startedAt)}
+                      {row.durationMs != null ? ` · ${Math.round(row.durationMs / 1000)}s` : ''}
+                    </span>
+                  </div>
+
+                  {/* Verify — kết quả xác minh follow-up */}
+                  {isVerify && v && (
+                    <div className="mt-1.5 space-y-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {v.resolved === true && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border bg-emerald-950/60 text-emerald-400 border-emerald-500/50">
+                            <CheckCircle2 className="h-3 w-3 mr-1" /> đã xử lý triệt để
+                          </Badge>
+                        )}
+                        {v.resolved === false && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border bg-amber-950/60 text-amber-400 border-amber-500/50">
+                            <AlertTriangle className="h-3 w-3 mr-1" /> chưa triệt để
+                          </Badge>
+                        )}
+                        {v.resolved == null && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border bg-stone-900/60 text-stone-400 border-stone-700">
+                            không kết luận được
+                          </Badge>
+                        )}
+                        {v.trigger && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border bg-stone-900/60 text-stone-400 border-stone-700">
+                            {v.trigger === 'completion-hook' ? 'hook tức thời' : 'sweep 60s'}
+                          </Badge>
+                        )}
+                        {v.checkId != null && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border bg-stone-900/60 text-stone-400 border-stone-700">
+                            re-check {v.checkId}/7
+                          </Badge>
+                        )}
+                        {v.stillOriginalIssue === true && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border bg-rose-950/60 text-rose-400 border-rose-500/50">
+                            vấn đề gốc vẫn còn
+                          </Badge>
+                        )}
+                      </div>
+                      {v.findingsAfter.length > 0 && (
+                        <ul className="space-y-0.5">
+                          {v.findingsAfter.slice(0, 4).map((f, j) => (
+                            <li key={j} className="text-[11px] text-amber-300/80 font-mono truncate" title={f.key}>
+                              ↳ còn: {truncate(f.key, 90)} ({f.priority})
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      {v.newProposals.length > 0 && (
+                        <div className="space-y-0.5">
+                          {v.newProposals.map(p => (
+                            <p key={p.id} className="text-[11px] text-teal-300 truncate" title={p.title}>
+                              ⟲ đề xuất mới: {truncate(p.title, 100)}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                      {v.skippedProposals.length > 0 && (
+                        <p className="text-[10px] text-stone-500 truncate" title={v.skippedProposals.map(s => `${s.title} — ${s.reason}`).join(' | ')}>
+                          {v.skippedProposals.length} finding bị dedupe chặn (đã có đề xuất đang sống)
+                        </p>
+                      )}
+                      {v.note && (
+                        <p className="text-[10px] text-stone-500">{v.note}</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Check — chi tiết per-step khi có skip/error */}
+                  {!isVerify && row.perCheck.some(s => s.status !== 'ok' || s.findingsCount > 0) && (
+                    <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                      {row.perCheck.filter(s => s.status !== 'ok' || s.findingsCount > 0).slice(0, 6).map(s => (
+                        <Badge
+                          key={s.id}
+                          variant="outline"
+                          className={`text-[9px] px-1.5 py-0 h-4 border ${
+                            s.status === 'ok'
+                              ? 'bg-amber-950/60 text-amber-400 border-amber-500/50'
+                              : 'bg-rose-950/60 text-rose-400 border-rose-500/50'
+                          }`}
+                          title={`${s.label}${s.error ? ` — ${s.error}` : ''}${s.skipReason ? ` — ${s.skipReason}` : ''}`}
+                        >
+                          {s.label.slice(0, 22)}: {s.status === 'ok' ? `${s.findingsCount} findings` : 'lỗi'}
+                        </Badge>
+                      ))}
+                      {!row.deadlineMet && (
+                        <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border bg-rose-950/60 text-rose-400 border-rose-500/50">
+                          trượt deadline
+                        </Badge>
+                      )}
+                    </div>
+                  )}
+                  {row.error && (
+                    <p className="mt-1 text-[10px] text-rose-400 truncate" title={row.error}>
+                      {truncate(row.error, 140)}
+                    </p>
+                  )}
                 </div>
               )
             })}

@@ -27,12 +27,16 @@ import {
   type ThreeLayersData,
 } from './collectors'
 import { evaluateRules } from './rules'
-import { createProposalsForCheck } from './proposals'
+import { createProposalsForCheck, withTimeout } from './proposals'
 import type { CollectorResult } from './types'
 
 // ==================== GLOBAL STATE (chống HMR double) ====================
 
 const GLOBAL_KEY = '__alistaChecks'
+const INFLIGHT_KEY = '__alistaCheckInFlight'
+
+/** Giữ state Map mới nhất — cap MAX_STATE_ENTRIES chống phình bộ nhớ vĩnh viễn */
+const MAX_STATE_ENTRIES = 30
 
 function getGlobalMap(): Map<string, CheckResult> {
   const g = globalThis as unknown as { [key: string]: unknown }
@@ -40,6 +44,35 @@ function getGlobalMap(): Map<string, CheckResult> {
     g[GLOBAL_KEY] = new Map<string, CheckResult>()
   }
   return g[GLOBAL_KEY] as Map<string, CheckResult>
+}
+
+/** FIX v1.2: eviction — Map chỉ giữ 30 lần chạy mới nhất (mỗi entry chứa snapshot
+ *  dữ liệu lớn — chạy nightly + manual tích lũy vô hạn sẽ phình RAM). */
+function evictOldStates(): void {
+  const map = getGlobalMap()
+  if (map.size <= MAX_STATE_ENTRIES) return
+  const sorted = Array.from(map.entries()).sort((a, b) => b[1].startedAt - a[1].startedAt)
+  for (let i = MAX_STATE_ENTRIES; i < sorted.length; i++) {
+    map.delete(sorted[i][0])
+  }
+}
+
+/**
+ * FIX v1.2: in-flight guard — chống chạy đè (manual + manual, manual + nightly).
+ * Trả checkId của lần chạy đang sống, hoặc null nếu không có gì đang chạy.
+ */
+export function isAlistaCheckInFlight(): string | null {
+  const g = globalThis as unknown as { [key: string]: unknown }
+  const v = g[INFLIGHT_KEY]
+  return typeof v === 'string' && v ? v : null
+}
+
+function setInFlight(checkId: string): void {
+  ;(globalThis as unknown as { [key: string]: unknown })[INFLIGHT_KEY] = checkId
+}
+
+function clearInFlight(): void {
+  ;(globalThis as unknown as { [key: string]: unknown })[INFLIGHT_KEY] = null
 }
 
 /** Route GET /api/alista/check?checkId=X đọc state */
@@ -60,6 +93,38 @@ const CHECK_IDS: CheckId[] = [1, 2, 3, 4, 5, 6, 7]
 const DEFAULT_BUDGET_MS = 6 * 3600_000 // 6h — fallback nếu cron không truyền deadlineMs
 const MANUAL_SOFT_BUDGET_MS = 10 * 60_000 // 10' mềm cho UI poll
 const MAX_PROPOSALS_PER_RUN = 6 // cap tổng ca trực
+const COLLECTOR_TIMEOUT_MS = 5 * 60_000 // FIX v1.2: timeout cứng mỗi collector — chống await treo phơ deadline
+
+/** Chạy collector cho 1 check — bọc timeout 5' (collector treo → ok:false) */
+async function runCollectorFor(
+  checkIdNum: CheckId,
+  previousSnapshot: ThreeLayersData['previousSnapshot'] | undefined,
+  perCheckResults: Array<{ checkId: CheckId; label: string; result: CollectorResult }>,
+): Promise<CollectorResult> {
+  const label = `collector ${checkIdNum} (${STEP_LABELS[checkIdNum]})`
+  try {
+    return await withTimeout(
+      (async (): Promise<CollectorResult> => {
+        switch (checkIdNum) {
+          case 1: return collectToolsHealth()
+          case 2: return collectAgentRuns()
+          case 3: return collectEscalations()
+          case 4: return collectDomainCoverage()
+          case 5: return collect3Layers(previousSnapshot)
+          case 6: return collectSelfAssessment(perCheckResults)
+          case 7: return collectDatabaseSystem()
+          default: return { ok: false, error: 'unknown check' }
+        }
+      })(),
+      COLLECTOR_TIMEOUT_MS,
+      `ALISTA ${label}`,
+    )
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    console.warn(`[ALISTA][check] ${label} timed out (${COLLECTOR_TIMEOUT_MS}ms) — coi như collector fail`) 
+    return { ok: false, error: `${label} timeout sau ${COLLECTOR_TIMEOUT_MS}ms` }
+  }
+}
 
 /**
  * Pipeline kiểm tra toàn diện 7 bước tuần tự.
@@ -88,6 +153,7 @@ export async function runComprehensiveCheck(opts: {
     reason: 'all_checks_done',
   }
   getGlobalMap().set(checkId, result)
+  setInFlight(checkId)
 
   // Tạo TaskExecution row (status='running') — lịch sử hiện hình dần
   let taskExecutionId: string | null = null
@@ -140,18 +206,8 @@ export async function runComprehensiveCheck(opts: {
       result.steps.push(stepEntry)
 
       try {
-        // (a) Collect — 1 collector tại 1 thời điểm (tuần tự)
-        let collected: CollectorResult
-        switch (checkIdNum) {
-          case 1: collected = await collectToolsHealth(); break
-          case 2: collected = await collectAgentRuns(); break
-          case 3: collected = await collectEscalations(); break
-          case 4: collected = await collectDomainCoverage(); break
-          case 5: collected = await collect3Layers(previousSnapshot); break
-          case 6: collected = await collectSelfAssessment(perCheckResults); break
-          case 7: collected = await collectDatabaseSystem(); break
-          default: collected = { ok: false, error: 'unknown check' }
-        }
+        // (a) Collect — 1 collector tại 1 thời điểm (tuần tự) + timeout 5' mỗi collector
+        const collected = await runCollectorFor(checkIdNum, previousSnapshot, perCheckResults)
         stepEntry.collectMs = collected.collectMs
         stepEntry.collected = { ok: collected.ok, error: collected.error, data: collected.data }
 
@@ -263,12 +319,21 @@ export async function runComprehensiveCheck(opts: {
       result.reason = result.steps.some(s => s.status === 'failed') ? 'partial_failures' : 'all_checks_done'
     }
 
-    // Cập nhật globalState (replace object trong Map)
+    // Cập nhật globalState (replace object trong Map) + eviction giữ 30 mới nhất
     getGlobalMap().set(checkId, { ...result })
+    evictOldStates()
 
     // Finalize TaskExecution
     if (taskExecutionId) {
       try {
+        // FIX v1.2: layersSnapshot — nguồn dữ liệu cho getPreviousSnapshot() ở
+        // lần chạy kế tiếp (rule sụt giảm Qdrant/Neo4j >20% trước đây là dead code
+        // vì v1.1 không bao giờ ghi steps[].collected vào TaskExecution).
+        const layersSnapshot = threeLayersData ? {
+          qdrantVectors: threeLayersData.qdrant?.vectorsIndexed ?? null,
+          neo4jNodes: threeLayersData.neo4j?.nodeCount ?? null,
+          neo4jRels: threeLayersData.neo4j?.relCount ?? null,
+        } : null
         await db.taskExecution.update({
           where: { id: taskExecutionId },
           data: {
@@ -280,6 +345,7 @@ export async function runComprehensiveCheck(opts: {
               durationMs: result.durationMs,
               deadlineMs, deadlineMet: result.deadlineMet,
               reason: result.reason, force: !!opts.force,
+              layersSnapshot,
               perCheck: result.steps.map(s => ({
                 id: s.id, label: s.label, status: s.status,
                 collectMs: s.collectMs, durationMs: s.durationMs,
@@ -332,6 +398,9 @@ export async function runComprehensiveCheck(opts: {
 
     console.error(`[ALISTA][check] Pipeline FAILED:`, result.error)
     return result
+  } finally {
+    // (v1.2) Luôn nhả in-flight guard — kể cả khi pipeline throw/return sớm
+    clearInFlight()
   }
 }
 

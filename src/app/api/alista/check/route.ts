@@ -17,7 +17,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
 import { db } from '@/lib/db'
-import { runComprehensiveCheck, getCheckState } from '@/lib/alista'
+import { runComprehensiveCheck, getCheckState, isAlistaCheckInFlight } from '@/lib/alista'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -64,6 +64,19 @@ export async function POST(request: NextRequest) {
     } catch (err) {
       console.warn('[ALISTA][route:check] idempotency query fail (fail-open — chạy check mới):', err instanceof Error ? err.message : String(err))
     }
+  }
+
+  // FIX v1.2: in-flight guard — đã có pipeline đang chạy (manual/nightly) →
+  // trả về checkId đang chạy cho client poll tiếp, KHÔNG chạy đè (chống
+  // TOCTOU dedupe tạo proposal trùng + state Map đè nhau).
+  const inFlight = isAlistaCheckInFlight()
+  if (inFlight) {
+    return NextResponse.json({
+      checkId: inFlight,
+      startedAt: Date.now(),
+      alreadyRunning: true,
+      message: 'Pipeline đang chạy (manual hoặc ca trực 23h30) — poll checkId này để theo dõi',
+    }, { status: 202 })
   }
 
   // Khởi động pipeline fire-and-forget — deadline now + 10' (mềm cho UI poll)
@@ -113,14 +126,15 @@ export async function GET(request: NextRequest) {
     })
     if (recent) {
       // Parse result JSON để xem checkId có khớp không
-      let parsed: { checkId?: string } | null = null
+      let parsed: { checkId?: string; trigger?: string } | null = null
       try {
-        parsed = JSON.parse(recent.result || '{}') as { checkId?: string }
+        parsed = JSON.parse(recent.result || '{}') as { checkId?: string; trigger?: string }
       } catch { /* ignore */ }
       if (parsed?.checkId === checkId) {
         return NextResponse.json({
           checkId,
-          trigger: 'manual',
+          // FIX v1.2: đọc trigger thật từ result JSON (trước đây hardcode 'manual')
+          trigger: parsed.trigger === 'cron-nightly' ? 'cron-nightly' : 'manual',
           startedAt: recent.startedAt.getTime(),
           completedAt: recent.completedAt?.getTime(),
           status: recent.status === 'running' ? 'running' : 'completed',

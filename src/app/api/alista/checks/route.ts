@@ -1,9 +1,13 @@
 /**
  * ALISTA — GET /api/alista/checks?limit=20
  * =====================================================
- * Lịch sử các lần chạy pipeline 'alista-check' từ TaskExecution (mới nhất trước).
- * Trả { rows: [{ id, startedAt, completedAt, status, durationMs, proposalsCreated,
- *   deadlineMet, reason, perCheck[] }] }.
+ * Lịch sử hoạt động ALISTA từ TaskExecution (mới nhất trước):
+ *   - type='alista-check'  — các lần chạy pipeline Kiểm tra toàn diện (7 bước)
+ *   - type='alista-verify' — (v1.2) các lần xác minh follow-up sau khi đề xuất
+ *     Self-Direction hoàn tất: resolved? đề xuất mới? (jobId = proposalId gốc)
+ *
+ * Trả { rows: [{ id, kind: 'check' | 'verify', startedAt, completedAt, status,
+ *   durationMs, proposalsCreated, deadlineMet, reason, perCheck[], verify {...} }] }.
  *
  * Source: SQLite TaskExecution (persistent qua restart) — KHÔNG đọc globalState
  * Map (chỉ sống trong process) để đảm bảo owner thấy lịch sử đầy đủ kể cả khi
@@ -15,8 +19,35 @@ import { db } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 
+interface VerifyInfo {
+  /** ID proposal gốc đã hoàn tất (đang được xác minh) */
+  originalProposalId: string
+  /** Title proposal gốc */
+  originalTitle: string
+  /** Key gốc `[ALISTA] <slug>:<target>:<yyyymm>[:vN]` */
+  originalKey: string | null
+  /** Check đã re-run (1-7) */
+  checkId: number | null
+  /** 'completion-hook' (ngay khi hoàn tất) | 'sweep' (lưới an toàn 60s) */
+  trigger: string | null
+  /** true = đã xử lý triệt để; false = còn vấn đề (đã gửi follow-up); null = không kết luận được */
+  resolved: boolean | null
+  /** Findings còn sót sau khi xử lý */
+  findingsAfter: Array<{ key: string; target: string; priority: string }>
+  /** true nếu finding CÙNG vấn đề gốc vẫn còn (chưa triệt để đúng vấn đề đó) */
+  stillOriginalIssue: boolean | null
+  /** Đề xuất follow-up mới đã gửi */
+  newProposals: Array<{ id: string; title: string }>
+  /** Findings bị dedupe chặn (đã có proposal sống) */
+  skippedProposals: Array<{ title: string; reason: string }>
+  /** Ghi chú (collector fail / không re-check được / trượt budget...) */
+  note: string | null
+}
+
 interface CheckHistoryRow {
   id: string
+  /** 'check' = pipeline toàn diện | 'verify' = xác minh follow-up (v1.2) */
+  kind: 'check' | 'verify'
   startedAt: string
   completedAt: string | null
   status: string
@@ -36,6 +67,7 @@ interface CheckHistoryRow {
     skipReason?: string
   }>
   partialSteps: Array<{ step: number; label: string; reason: string }>
+  verify: VerifyInfo | null
   error: string | null
 }
 
@@ -45,10 +77,10 @@ export async function GET(request: NextRequest) {
 
   try {
     const rows = await db.taskExecution.findMany({
-      where: { type: 'alista-check' },
+      where: { type: { in: ['alista-check', 'alista-verify'] } },
       orderBy: { startedAt: 'desc' },
       take: limit,
-      select: { id: true, status: true, startedAt: true, completedAt: true, result: true, errorMessage: true },
+      select: { id: true, type: true, jobId: true, status: true, startedAt: true, completedAt: true, result: true, errorMessage: true },
     })
 
     const out: CheckHistoryRow[] = []
@@ -62,17 +94,46 @@ export async function GET(request: NextRequest) {
       const partialSteps = (Array.isArray(parsed.partialSteps) ? parsed.partialSteps : []) as CheckHistoryRow['partialSteps']
       const proposalsCreated = Array.isArray(parsed.proposalsCreated) ? parsed.proposalsCreated : []
 
+      // v1.2 — normalize verify info
+      let verify: VerifyInfo | null = null
+      if (r.type === 'alista-verify') {
+        const findingsAfter = (Array.isArray(parsed.findingsAfter) ? parsed.findingsAfter : []) as VerifyInfo['findingsAfter']
+        const newProposals = (Array.isArray(parsed.newProposals) ? parsed.newProposals : []) as VerifyInfo['newProposals']
+        const skippedProposals = (Array.isArray(parsed.skippedProposals) ? parsed.skippedProposals : []) as VerifyInfo['skippedProposals']
+        verify = {
+          originalProposalId: r.jobId ?? (typeof parsed.originalProposalId === 'string' ? parsed.originalProposalId : ''),
+          originalTitle: typeof parsed.originalTitle === 'string' ? parsed.originalTitle : '',
+          originalKey: typeof parsed.originalKey === 'string' ? parsed.originalKey : null,
+          checkId: typeof parsed.checkId === 'number' ? parsed.checkId : null,
+          trigger: typeof parsed.trigger === 'string' ? parsed.trigger : null,
+          resolved: typeof parsed.resolved === 'boolean' ? parsed.resolved : null,
+          findingsAfter,
+          stillOriginalIssue: typeof parsed.stillOriginalIssue === 'boolean' ? parsed.stillOriginalIssue : null,
+          newProposals,
+          skippedProposals,
+          note: typeof parsed.note === 'string' ? parsed.note
+            : (typeof parsed.collectionError === 'string' ? `collector fail: ${parsed.collectionError}`
+              : (parsed.notVerifiable === true ? 'không xác minh được (key/check không map)'
+                : (parsed.notRecheckable === true ? 'check ⑥ không re-run được'
+                  : null))),
+        }
+      }
+
       out.push({
         id: r.id,
+        kind: r.type === 'alista-verify' ? 'verify' : 'check',
         startedAt: r.startedAt.toISOString(),
         completedAt: r.completedAt?.toISOString() ?? null,
         status: r.status,
         durationMs: typeof parsed.durationMs === 'number' ? parsed.durationMs : null,
-        proposalsCreated: proposalsCreated.length,
+        proposalsCreated: r.type === 'alista-verify'
+          ? ((verify?.newProposals.length) ?? 0)
+          : proposalsCreated.length,
         deadlineMet: parsed.deadlineMet === true,
         reason: typeof parsed.reason === 'string' ? parsed.reason : (r.status === 'completed' ? 'all_checks_done' : 'unknown'),
         perCheck,
         partialSteps,
+        verify,
         error: r.errorMessage,
       })
     }
@@ -81,7 +142,7 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     console.error('[ALISTA][route:checks] GET fail:', err instanceof Error ? err.message : String(err))
     return NextResponse.json(
-      { error: 'Không đọc được lịch sử alista-check', detail: err instanceof Error ? err.message : String(err) },
+      { error: 'Không đọc được lịch sử hoạt động ALISTA', detail: err instanceof Error ? err.message : String(err) },
       { status: 500 },
     )
   }

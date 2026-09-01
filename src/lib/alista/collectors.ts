@@ -51,10 +51,11 @@ async function withCollector<T>(
   }
 }
 
-/** Helper lấy list AgentRunRecord gần đây (cho ① và ②) */
+/** Helper lấy list AgentRunRecord gần đây (cho ① và ②) — cap 2.000 row chống phình bộ nhớ */
 async function fetchRunRecords(days: number): Promise<AgentRunRecordRow[]> {
   const since = new Date(Date.now() - days * 24 * 3600_000)
-  return findAgentRunRecordsSince(since)
+  const rows = await findAgentRunRecordsSince(since)
+  return rows.length > 2_000 ? rows.slice(0, 2_000) : rows
 }
 
 // ==================== ① TOOLS HEALTH ====================
@@ -80,7 +81,7 @@ export async function collectToolsHealth(): Promise<CollectorResult<ToolsHealthD
     const since = new Date(Date.now() - TOOL_WINDOW_DAYS * 24 * 3600_000)
     const metrics = await db.toolMetric.findMany({
       where: { timestamp: { gte: since } },
-      select: { toolName: true, success: true, durationMs: true, errorTag: true, sessionId: true },
+      select: { toolName: true, success: true, durationMs: true, errorTag: true },
       orderBy: { timestamp: 'desc' },
       take: 10_000, // safety cap
     })
@@ -301,16 +302,26 @@ export async function collectDomainCoverage(): Promise<CollectorResult<DomainCov
       neo4jReachable = true
 
       // Distribution + last-updated per domain
+      // FIX v1.2: entity Neo4j dùng prop snake_case (created_at/updated_at —
+      // xem neo4j.ts upsertEntity) — các tên camelCase trước đây luôn null →
+      // rule "domain >30 ngày không cập nhật" đo sai theo creation age.
       const distRows = await readCypher<{ domain: string; count: unknown; lastUpdated: unknown }>(`
         MATCH (e) WHERE e.domain IS NOT NULL
-        WITH e.domain AS domain, count(*) AS count, max(coalesce(e.updatedAt, e.createdAt, e.created_at, '')) AS lastUpdated
+        WITH e.domain AS domain, count(*) AS count, max(coalesce(e.updated_at, e.created_at, '')) AS lastUpdated
         RETURN domain, count, lastUpdated
         ORDER BY count DESC
       `)
       for (const r of distRows) {
         if (r.domain) {
           domainDistribution[r.domain] = Number(r.count ?? 0)
-          domainLastUpdated[r.domain] = r.lastUpdated ? String(r.lastUpdated).slice(0, 10) : null
+          // lastUpdated có thể là string ISO (snake_case props) hoặc DateTime native
+          // → String() an toàn cho string; nếu là Date/DateTime thì lấy toISOString
+          const lu = r.lastUpdated
+          const luStr = lu instanceof Date ? lu.toISOString()
+            : (typeof lu === 'object' && lu !== null && typeof (lu as Date).toISOString === 'function'
+              ? (lu as Date).toISOString()
+              : (lu ? String(lu) : null))
+          domainLastUpdated[r.domain] = luStr ? luStr.slice(0, 10) : null
         }
       }
     } catch (err) {
@@ -684,20 +695,32 @@ export async function collectDatabaseSystem(): Promise<CollectorResult<DatabaseS
     // (f) Token anomaly — DailyTokenByAgent 7d + hôm nay
     let tokenAnomaly = { agentsWithSpike: [], agentsWithDrop: [] } as DatabaseSystemData['tokenAnomaly']
     try {
-      // Lấy 8 ngày gần nhất (today + 7 ngày trước) — groupBy agentName+date
-      const since7d = new Date(now - 7 * 24 * 3600_000)
+      // FIX v1.2: (1) cutoff 7d theo NGÀY VN (string math) — trước đây dùng UTC
+      // toISOString → lệch 7h ở ranh giới ngày; (2) group (agentName × date) rồi
+      // CỘNG DỒN tokens — trước đây `today` bị ghi đè bởi row cuối (DailyTokenByAgent
+      // unique theo [date, agentId, provider, model] → 1 agent có nhiều row/ngày).
       const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date())
+      const sinceStr = shiftVNDate(todayStr, -7)
       const rows = await db.dailyTokenByAgent.findMany({
-        where: { date: { gte: since7d.toISOString().slice(0, 10) } },
+        where: { date: { gte: sinceStr } },
         select: { agentName: true, date: true, tokens: true },
       })
-      // Group by agentName: today vs 7d mean+stddev
-      const byAgent = new Map<string, { today: number; history: number[] }>()
+      // Sum theo (agentName, date)
+      const byAgentDay = new Map<string, number>() // `${agentName}|${date}` → tokens
       for (const r of rows) {
-        const agg = byAgent.get(r.agentName) ?? { today: 0, history: [] as number[] }
-        if (r.date === todayStr) agg.today = r.tokens
-        else if (r.date < todayStr) agg.history.push(r.tokens)
-        byAgent.set(r.agentName, agg)
+        const k = `${r.agentName}|${r.date}`
+        byAgentDay.set(k, (byAgentDay.get(k) ?? 0) + r.tokens)
+      }
+      // Group by agentName: today vs 7d mean+stddev (theo ngày đã cộng dồn)
+      const byAgent = new Map<string, { today: number; history: number[] }>()
+      for (const [k, tokens] of byAgentDay) {
+        const sep = k.lastIndexOf('|')
+        const agentName = k.slice(0, sep)
+        const date = k.slice(sep + 1)
+        const agg = byAgent.get(agentName) ?? { today: 0, history: [] as number[] }
+        if (date === todayStr) agg.today = tokens
+        else if (date < todayStr) agg.history.push(tokens)
+        byAgent.set(agentName, agg)
       }
       const spikeAgents: DatabaseSystemData['tokenAnomaly']['agentsWithSpike'] = []
       const dropAgents: DatabaseSystemData['tokenAnomaly']['agentsWithDrop'] = []
@@ -773,6 +796,13 @@ export interface AllCollectorResults {
   databaseSystem?: CollectorResult<DatabaseSystemData>
 }
 
+/** Helper trừ ngày trên chuỗi YYYY-MM-DD VN (UTC-safe string math) */
+function shiftVNDate(dateStr: string, days: number): string {
+  const d = new Date(`${dateStr}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
 /** Helper trích previousSnapshot cho collector ⑤ từ TaskExecution gần nhất */
 export async function getPreviousSnapshot(): Promise<ThreeLayersData['previousSnapshot'] | undefined> {
   try {
@@ -782,15 +812,36 @@ export async function getPreviousSnapshot(): Promise<ThreeLayersData['previousSn
       select: { result: true, startedAt: true },
     })
     if (!recent?.result) return undefined
-    const parsed = JSON.parse(recent.result) as { steps?: Array<{ id: number; collected?: { data?: { qdrant?: { vectorsIndexed: number }, neo4j?: { nodeCount?: number, relCount?: number } } } }> }
-    const layerStep = parsed.steps?.find(s => s.id === 5)
-    const data = layerStep?.collected?.data
-    if (!data) return undefined
+    const parsed = JSON.parse(recent.result) as {
+      // v1.2: comprehensive-check ghi layersSnapshot ở finalize — nguồn chuẩn
+      layersSnapshot?: {
+        qdrantVectors?: number | null
+        neo4jNodes?: number | null
+        neo4jRels?: number | null
+      }
+      // Legacy (v1.1 — không bao giờ có dữ liệu, giữ cho tương thích)
+      steps?: Array<{ id: number; collected?: { data?: { qdrant?: { vectorsIndexed: number }, neo4j?: { nodeCount?: number, relCount?: number } } } }>
+    }
+    let qdrantVectors: number | null = null
+    let neo4jNodes: number | null = null
+    let neo4jRels: number | null = null
+    if (parsed.layersSnapshot) {
+      qdrantVectors = parsed.layersSnapshot.qdrantVectors ?? null
+      neo4jNodes = parsed.layersSnapshot.neo4jNodes ?? null
+      neo4jRels = parsed.layersSnapshot.neo4jRels ?? null
+    } else {
+      const layerStep = parsed.steps?.find(s => s.id === 5)
+      const data = layerStep?.collected?.data as { qdrant?: { vectorsIndexed: number }, neo4j?: { nodeCount?: number, relCount?: number } } | undefined
+      if (data) {
+        qdrantVectors = data.qdrant?.vectorsIndexed ?? null
+        neo4jNodes = data.neo4j?.nodeCount ?? null
+        neo4jRels = data.neo4j?.relCount ?? null
+      }
+    }
+    if (qdrantVectors == null && neo4jNodes == null && neo4jRels == null) return undefined
     return {
       runAt: recent.startedAt.toISOString(),
-      qdrantVectors: data.qdrant?.vectorsIndexed ?? null,
-      neo4jNodes: data.neo4j?.nodeCount ?? null,
-      neo4jRels: data.neo4j?.relCount ?? null,
+      qdrantVectors, neo4jNodes, neo4jRels,
     }
   } catch {
     return undefined

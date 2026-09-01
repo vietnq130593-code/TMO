@@ -89,6 +89,7 @@ export async function GET(request: NextRequest) {
   // v1.1 — ALISTA UI range picker: ?from=YYYY-MM-DD&to=YYYY-MM-DD
   // Khi có range hợp lệ: episodes/lessons được filter theo timestamp; stats +
   // escalations + errorDashboard giữ nguyên (không có timestamp field → rangeNote).
+  // FIX v1.2: validate mạnh như /api/metrics/overview — to ≤ hôm nay + span ≤ 90'
   const searchParams = new URL(request.url).searchParams
   const fromStr = searchParams.get('from')
   const toStr = searchParams.get('to')
@@ -97,7 +98,14 @@ export async function GET(request: NextRequest) {
   if (fromStr && toStr && dateRe.test(fromStr) && dateRe.test(toStr)) {
     const fromMs = new Date(`${fromStr}T00:00:00+07:00`).getTime()
     const toMs = new Date(`${toStr}T23:59:59+07:00`).getTime()
-    if (Number.isFinite(fromMs) && Number.isFinite(toMs) && fromMs <= toMs) {
+    // to ≤ hôm nay (theo giờ VN)
+    const todayParts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date())
+    const get = (t: string) => todayParts.find(p => p.type === t)?.value ?? ''
+    const todayMs = new Date(`${get('year')}-${get('month')}-${get('day')}T23:59:59+07:00`).getTime()
+    const spanDays = (toMs - fromMs) / (24 * 3600_000)
+    if (Number.isFinite(fromMs) && Number.isFinite(toMs) && fromMs <= toMs && toMs <= todayMs && spanDays <= 90) {
       rangeMs = { fromMs, toMs, from: fromStr, to: toStr }
     }
   }

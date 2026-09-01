@@ -534,7 +534,7 @@ export async function executeAutomationProposal(proposalId: string): Promise<{ s
       `Đề xuất đã được phê duyệt và thực thi tự động (fast-path — hành động cơ khí, không cần giao agents). Tài nguyên hiện diện trong module Smolab > Automation và bắt đầu hoạt động ngay.`,
     ].join('\n')
 
-    await db.selfDirectionProposal.update({
+    const completedProposal = await db.selfDirectionProposal.update({
       where: { id: proposalId },
       data: {
         status: 'completed',
@@ -544,6 +544,16 @@ export async function executeAutomationProposal(proposalId: string): Promise<{ s
         omegaReport,
       },
     })
+    // v1.2 — ALISTA follow-up loop: proposal của ALISTA hoàn tất → notify ALISTA
+    // xác minh lại NGAY (dynamic import chống circular; fail-open — sweep 60s
+    // trong alistaTick là lưới an toàn).
+    if (completedProposal.createdBy === 'ALISTA') {
+      void import('@/lib/alista/proposal-verify')
+        .then(m => m.notifyAlistaProposalCompleted(proposalId, 'completion-hook'))
+        .catch(err => {
+          console.warn('[AutomationProposal] ALISTA follow-up hook fail (sweep sẽ bắt lại):', err instanceof Error ? err.message : String(err))
+        })
+    }
     console.log(`[AutomationProposal] Proposal ${proposalId} (${kind}) ĐƯỢC DUYỆT + THỰC THI: ${resultDetail.slice(0, 150)}`)
     return { success: true, detail: resultDetail }
   } catch (err) {

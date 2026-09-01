@@ -83,13 +83,19 @@ function parseRangeParams(searchParams: URLSearchParams): {
   return { from, to, fromTzMs, toTzMs }
 }
 
-/** Lấy danh sách date string YYYY-MM-DD trong khoảng [from..to] (cho DailyTokenByAgent query) */
+/** Lấy danh sách date string YYYY-MM-DD trong khoảng [from..to] (cho DailyTokenByAgent query)
+ *  FIX v1.2: iterate chuỗi ngày trực tiếp (UTC-safe string math) — trước đây
+ *  epoch→toISOString() render theo UTC = VN−7h → mỗi date lệch 1 ngày. */
 function dateStringsInRange(from: string, to: string): string[] {
   const out: string[] = []
-  const startMs = new Date(`${from}T00:00:00+07:00`).getTime()
-  const endMs = new Date(`${to}T00:00:00+07:00`).getTime()
-  for (let t = startMs; t <= endMs; t += 24 * 3600_000) {
-    out.push(new Date(t).toISOString().slice(0, 10))
+  let cur = from
+  let guard = 0
+  while (cur <= to && guard < MAX_RANGE_DAYS + 5) {
+    out.push(cur)
+    const d = new Date(`${cur}T00:00:00Z`)
+    d.setUTCDate(d.getUTCDate() + 1)
+    cur = d.toISOString().slice(0, 10)
+    guard++
   }
   return out
 }

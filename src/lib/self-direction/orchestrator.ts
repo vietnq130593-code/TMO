@@ -1396,7 +1396,7 @@ async function runOrchestrationInner(proposalId: string): Promise<void> {
     ? (pipelineStepRow.workspaceReceipt as unknown as SdPipelineReceiptSummary)
     : null
   const report = await writeFinalReport({ proposal, steps: finalSteps, failed, pipelineReceipt })
-  await db.selfDirectionProposal.update({
+  const completedProposal = await db.selfDirectionProposal.update({
     where: { id: proposalId },
     data: {
       status: failed ? 'failed' : 'completed',
@@ -1407,6 +1407,18 @@ async function runOrchestrationInner(proposalId: string): Promise<void> {
       completedAt: new Date(),
     },
   })
+  // v1.2 — ALISTA follow-up loop: proposal của ALISTA hoàn tất → thông tin
+  // được chuyển tới ALISTA NGAY để xác minh lại (re-check collector tương ứng,
+  // gửi đề xuất mới nếu vấn đề chưa triệt để). Dynamic import chống circular
+  // (alista/proposals.ts đã import orchestrator tĩnh). Fail-open tuyệt đối —
+  // lưới an toàn sweep 60s trong alistaTick sẽ bắt lại nếu hook lỡ.
+  if (completedProposal.status === 'completed' && completedProposal.createdBy === 'ALISTA') {
+    void import('@/lib/alista/proposal-verify')
+      .then(m => m.notifyAlistaProposalCompleted(proposalId, 'completion-hook'))
+      .catch(err => {
+        console.warn('[SelfDirection] ALISTA follow-up hook fail (sweep 60s sẽ bắt lại):', err instanceof Error ? err.message : String(err))
+      })
+  }
   console.log(`[SelfDirection] "${proposal.title}" ${failed ? `THẤT BẠI: ${failReason}` : `HOÀN TẤT ${finalSteps.length} bước — báo cáo hoàn thiện đã lưu`}`)
 }
 

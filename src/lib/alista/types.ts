@@ -136,9 +136,36 @@ export const STEP_ICONS: Record<CheckId, string> = {
   7: '💾',
 }
 
-/** Helper tạo key dedupe — `[ALISTA] <check>:<target>:<yyyymm>` */
+/** Lấy chuỗi YYYY-MM-DD 'hôm nay' theo giờ VN (Asia/Ho_Chi_Minh) */
+export function vnDateStr(date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(date)
+}
+
+/** Cộng/trừ số ngày trên chuỗi YYYY-MM-DD (UTC-safe string math) */
+export function shiftDateStr(dateStr: string, days: number): string {
+  const d = new Date(`${dateStr}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+/** Helper tạo key dedupe — `[ALISTA] <check>:<target>:<yyyymm>` (yyyymm theo giờ VN) */
 export function makeDedupeKey(checkSlug: string, target: string, date = new Date()): string {
-  const yyyymm = `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, '0')}`
+  // FIX v1.2: yyyymm theo giờ VN (trước đây UTC → lệch 7h ở ranh giới tháng);
+  // dùng vnDateStr tách phần year/month để không lệ thuộc đồng hồ server UTC.
+  const [y, m] = vnDateStr(date).split('-')
+  const yyyymm = `${y}${m}`
   const safeTarget = target.toLowerCase().replace(/\s+/g, '_').slice(0, 40)
   return `[ALISTA] ${checkSlug}:${safeTarget}:${yyyymm}`
+}
+
+/**
+ * Strip hậu tố follow-up `:v<N>` khỏi key → base key.
+ * Dùng cho dedupe: proposal `[ALISTA] db:x:202609` và follow-up `...:202609:v2`
+ * là CÙNG một vấn đề — base key dùng làm prefix khớp title.
+ */
+export function baseKeyOf(key: string): string {
+  return key.replace(/:v\d+$/, '')
 }

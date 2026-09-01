@@ -1,24 +1,35 @@
 /**
- * ALISTA — Scheduler nền (v1.1)
+ * ALISTA — Scheduler nền (v1.2)
  * ===============================
  * Tick 60s trong process Next.js (được PM2 duy trì):
  *   - Đọc CronJob row executor='ALISTA' (owner pause được từ UI Automation)
- *   - Cửa sổ 23:30-23:59 giờ VN (Asia/Ho_Chi_Minh) — gate 1 lần/ngày
- *   - Tính deadline 05:30 hôm sau (giờ VN) → truyền vào pipeline (budget 6h)
+ *   - Cửa sổ ca trực 23:30 → 05:30 hôm sau (giờ VN, Asia/Ho_Chi_Minh) —
+ *     FIX v1.2: mở rộng catch-up — server down lúc 23:30-23:59 rồi lên lại
+ *     trong đêm vẫn chạy ca trực đó (trước đây trượt cửa sổ = mất cả ngày).
+ *   - Gate 1-lần/ca: theo CronJob.lastRunAt (FIX v1.2: trước đây gate theo
+ *     TaskExecution 'alista-check' hôm nay → 1 lần manual ban ngày LÀM ẾCH
+ *     ca trực 23h30).
+ *   - Tính deadline 05:30 hôm sau (anchor 23:30 + 6h budget cứng)
  *   - Gọi runComprehensiveCheck({trigger:'cron-nightly', deadlineMs})
+ *   - FIX v1.2: dọn TaskExecution 'alista-check' zombie (process chết giữa
+ *     ca → row kẹt 'running') + SWEEP follow-up verification 60s (v1.2 —
+ *     lưới an toàn cho hook hoàn tất proposal, xem proposal-verify.ts).
  *
  * Toàn bộ múi giờ qua Intl.DateTimeFormat với timeZone 'Asia/Ho_Chi_Minh'
  * tường minh — không phụ thuộc đồng hồ server (sandbox chạy UTC).
  *
- * Chống chạy kép có chủ đích:
- *   - agentId='alista' (≠'default') → automation-engine loop B (chỉ xử lý
- *     agentId='default') bỏ qua; không set field `task` → mini-service loop A
- *     (cần task) bỏ qua. Chỉ scheduler nền này làm executor duy nhất.
+ * Chống chạy kép có chủ đích (và mini-service cron-scheduler v1.2 đã filter
+ * executor='' nên không còn bắn nhầm row này):
+ *   - agentId='alista' (≠'default') → automation-engine loop B bỏ qua
+ *   - executor='ALISTA' → mini-service cron-scheduler tick bỏ qua
+ *     (FIX v1.2: kèm guard trong executeCronJob — phòng đường POST /jobs/:id/run)
+ *   - In-flight guard __alistaCheckInFlight chống manual + nightly đè nhau
  */
 
 import { ensureDbReady } from '@/lib/db-setup'
 import { db } from '@/lib/db'
-import { runComprehensiveCheck } from './comprehensive-check'
+import { runComprehensiveCheck, isAlistaCheckInFlight, getCheckState } from './comprehensive-check'
+import { sweepCompletedAlistaProposals } from './proposal-verify'
 
 // ==================== CONSTANTS ====================
 
@@ -26,6 +37,14 @@ const ALISTA_TICK_MS = 60_000
 const ALISTA_TZ = 'Asia/Ho_Chi_Minh' // UTC+7 — owner directive
 const ALISTA_AGENT_ID = 'alista'
 const ALISTA_EXECUTOR = 'ALISTA'
+
+/** Ca trực bắt đầu 23:30 VN; budget 6h → deadline 05:30 hôm sau */
+const SHIFT_START_MIN = 23 * 60 + 30 // 23:30
+const SHIFT_BUDGET_MS = 6 * 3600_000 // 6h
+/** Catch-up: cần ≥30' budget còn lại mới chạy (ít hơn → đợi ca sau) */
+const MIN_CATCHUP_REMAINING_MS = 30 * 60_000
+/** Zombie sweep: row 'running' quá deadline + 2' → đánh dấu failed (process chết) */
+const ZOMBIE_GRACE_MS = 2 * 60_000
 
 // ==================== GLOBAL GUARD (chống HMR double) ====================
 
@@ -61,25 +80,40 @@ function startOfTodayHN(dateStr: string): Date {
   return new Date(`${dateStr}T00:00:00+07:00`)
 }
 
-/** Deadline 05:30 hôm sau theo tz HN (23:30 + 6h) */
-function computeNightlyDeadline(dateStr: string): number {
-  // dateStr là "hôm nay" theo HN → deadline = "hôm nay 05:30 + 1 ngày"
-  // Tức là hôm sau 05:30 — nhưng vì cửa sổ chạy là 23:30-23:59 hôm nay,
-  // deadline 05:30 hôm sau là "hôm nay + 6h".
-  // Để cản pipeline chạy quá 05:30 hôm sau, ta tính:
-  //   startOfTodayHN + 23h30 (window start) + 6h = 05:30 hôm sau
-  // Hoặc đơn giản: new Date(`${dateStr}T05:30:00+07:00`).getTime() + 24h
-  const startOfToday = startOfTodayHN(dateStr)
-  // deadline = startOfToday + 23h30 + 6h = startOfToday + 29h30
-  return startOfToday.getTime() + (29 * 3600_000 + 30 * 60_000)
+/** Cộng/trừ ngày trên chuỗi YYYY-MM-DD (UTC-safe string math) */
+function shiftDateStr(dateStr: string, days: number): string {
+  const d = new Date(`${dateStr}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
 }
 
-/** Tính nextRunAt cho CronJob — 23:30 hôm sau theo tz HN */
+/**
+ * Anchor của ca trực đang mở — FIX v1.2:
+ *   - 23:30-23:59 hôm nay → anchor = hôm nay (ca trực mới bắt đầu)
+ *   - 00:00-05:30 hôm sau → anchor = HÔM QUA (catch-up ca trực 23:30 hôm qua —
+ *     server down lúc 23:30 rồi lên lại trong đêm vẫn chạy được ca đó)
+ *   - Ngoài 2 khoảng trên → null (không ca trực nào đang mở)
+ */
+function getShiftAnchor(hn: ReturnType<typeof getHNNow>): string | null {
+  const minutesNow = hn.HH * 60 + hn.mm
+  // 23:30 → 23:59 hôm nay
+  if (hn.HH === 23 && minutesNow >= SHIFT_START_MIN) return hn.dateStr
+  // 00:00 → 05:30 hôm sau (catch-up cho ca trực của hôm qua)
+  if (hn.HH < 5 || (hn.HH === 5 && hn.mm <= 30)) return shiftDateStr(hn.dateStr, -1)
+  return null
+}
+
+/**
+ * Tính nextRunAt cho CronJob — 23:30 kế tiếp theo tz HN.
+ * FIX v1.2: trước đây luôn trả "hôm sau 23:30" → lúc 10:00 sáng UI hiện
+ * nextRun sai (thực tế tối nay 23:30 là chạy gần nhất).
+ */
 function computeNextRunAt(dateStr: string): Date {
-  // Hôm nay 23:30 — nếu đã qua (sau 23:59), thì hôm sau 23:30
-  // Đơn giản: hôm nay 23:30 + 24h (đảm bảo sau này)
   const today = startOfTodayHN(dateStr)
-  return new Date(today.getTime() + 24 * 3600_000 + 23 * 3600_000 + 30 * 60_000)
+  const tonightStart = today.getTime() + SHIFT_START_MIN * 60_000
+  // Nếu CHƯA tới 23:30 hôm nay → next là tối nay 23:30; đã qua → mai 23:30
+  const next = tonightStart > Date.now() ? tonightStart : tonightStart + 24 * 3600_000
+  return new Date(next)
 }
 
 // ==================== CRON JOB REGISTRY ====================
@@ -91,14 +125,23 @@ export async function ensureAlistaCronJob(): Promise<void> {
       where: { executor: ALISTA_EXECUTOR },
     })
     if (existing) {
-      // Cập nhật nextRunAt nếu null hoặc quá khứ (idempotent self-heal)
-      if (!existing.nextRunAt || existing.nextRunAt < new Date()) {
-        const { dateStr } = getHNNow()
+      // FIX v1.2: tự lành cả status='failed' (đề phòng mini-service cũ đã đánh
+      // fail trước khi fix executor filter) + nextRunAt null/quá khứ.
+      // FIX v1.2b: nextRunAt lệch khỏi "23:30 VN kế tiếp" (vd bản cũ ghi
+      // "hôm sau 23:30" dù tối nay 23:30 chưa tới) cũng được canh về đúng.
+      const nextRun = computeNextRunAt(getHNNow().dateStr)
+      const needsHeal =
+        !existing.nextRunAt ||
+        existing.nextRunAt < new Date() ||
+        existing.status === 'failed' ||
+        existing.nextRunAt.getTime() !== nextRun.getTime()
+      if (needsHeal) {
         await db.cronJob.update({
           where: { id: existing.id },
           data: {
-            nextRunAt: computeNextRunAt(dateStr),
+            nextRunAt: nextRun,
             status: existing.status === 'paused' ? 'paused' : 'active',
+            lastError: null,
           },
         }).catch(() => { /* fail-open */ })
       }
@@ -114,25 +157,62 @@ export async function ensureAlistaCronJob(): Promise<void> {
         kind: 'cron',
         tz: ALISTA_TZ,
         taskPrompt: 'ALISTA — Kiểm tra toàn diện hệ thống hàng đêm (23h30-05:30 budget 6h, 7 nhiệm vụ tuần tự)',
-        task: '', // KHÔNG set task → mini-service loop A (cần task) bỏ qua
+        task: '', // KHÔNG set task — row chỉ để hiển thị/pause trong UI Automation
         executor: ALISTA_EXECUTOR, // scheduler nền là executor duy nhất
         scheduleJson: JSON.stringify({
           mode: 'day', times: ['23:30'], repeat: true, budget: '6h', deadline: '05:30',
+          window: '23:30→05:30+1 (catch-up)', followUpVerify: '60s sweep',
         }),
         enabled: true,
         status: 'active',
         nextRunAt: computeNextRunAt(dateStr),
       },
     })
-    console.log(`[ALISTA][scheduler] Đã tạo CronJob row executor='${ALISTA_EXECUTOR}' — cửa sổ 23:30-23:59 (tz HN), nextRunAt=${computeNextRunAt(dateStr).toISOString()}`)
+    console.log(`[ALISTA][scheduler] Đã tạo CronJob row executor='${ALISTA_EXECUTOR}' — cửa sổ 23:30→05:30+1 (tz HN), nextRunAt=${computeNextRunAt(dateStr).toISOString()}`)
   } catch (err) {
     console.warn('[ALISTA][scheduler] ensureAlistaCronJob fail (không chặn boot):', err instanceof Error ? err.message : String(err))
   }
 }
 
+// ==================== SWEEP: ZOMBIE ROW + FOLLOW-UP VERIFY ====================
+
+/**
+ * FIX v1.2: dọn TaskExecution 'alista-check' kẹt 'running' sau khi process chết
+ * (deadline trong result đã qua + không còn in-flight trong Map) → 'failed'.
+ * Chống: gate lượt chạy sau nhìn row 'running' mà tưởng đang chạy.
+ */
+async function sweepZombieChecks(): Promise<void> {
+  try {
+    const running = await db.taskExecution.findMany({
+      where: { type: 'alista-check', status: 'running' },
+      select: { id: true, result: true },
+      take: 20,
+    })
+    for (const r of running) {
+      try {
+        const parsed = JSON.parse(r.result || '{}') as { checkId?: string; deadlineMs?: number }
+        // Còn sống trong state Map → không phải zombie
+        if (parsed.checkId && getCheckState(parsed.checkId)?.status === 'running') continue
+        const dl = typeof parsed.deadlineMs === 'number' ? parsed.deadlineMs : 0
+        if (dl && Date.now() > dl + ZOMBIE_GRACE_MS) {
+          await db.taskExecution.update({
+            where: { id: r.id },
+            data: {
+              status: 'failed',
+              completedAt: new Date(),
+              errorMessage: 'orphaned — process restart giữa ca trực (zombie sweep)',
+            },
+          })
+          console.warn(`[ALISTA][scheduler] zombie sweep: TaskExecution ${r.id} kẹt 'running' quá deadline → đánh dấu failed`)
+        }
+      } catch { /* row cũ parse fail → bỏ qua */ }
+    }
+  } catch { /* fail-open */ }
+}
+
 // ==================== TICK ====================
 
-/** 1 tick (60s) — chạy toàn bộ gate + (nếu đúng cửa sổ) pipeline */
+/** 1 tick (60s) — sweep + gate + (nếu đúng cửa sổ) pipeline */
 async function alistaTick(tickNo: number): Promise<void> {
   try {
     // (1) Đảm bảo CronJob row tồn tại (idempotent — chỉ tạo lần đầu)
@@ -140,46 +220,64 @@ async function alistaTick(tickNo: number): Promise<void> {
       await ensureAlistaCronJob()
     }
 
+    // (1b) FIX v1.2 — sweep follow-up verification MỖI TICK (lưới an toàn 60s
+    // cho hook hoàn tất proposal; hook in-process vẫn là đường tức thời chính)
+    const notified = await sweepCompletedAlistaProposals()
+
+    // (1c) FIX v1.2 — zombie sweep TaskExecution kẹt 'running'
+    await sweepZombieChecks()
+
     // (2) Đọc CronJob row — owner có thể pause từ UI
     const job = await db.cronJob.findFirst({ where: { executor: ALISTA_EXECUTOR } })
     if (!job || !job.enabled || job.status !== 'active') {
-      return // Owner paused hoặc chưa cấu hình — không chạy
+      return // Owner paused hoặc chưa cấu hình — không chạy (sweep vẫn đã chạy)
     }
 
-    // (3) Gate cửa sổ 23:30-23:59 (giờ VN) — chịu restart, trễ vẫn chạy
-    const { HH, mm, dateStr } = getHNNow()
-    if (HH !== 23 || mm < 30) return
+    // (3) FIX v1.2 — cửa sổ ca trực 23:30 → 05:30+1 (giờ VN) + anchor catch-up
+    const hn = getHNNow()
+    const anchor = getShiftAnchor(hn)
+    if (!anchor) return // Ngoài ca trực — không chạy pipeline
 
-    // (4) Gate 1 lần/ngày — đã chạy hôm nay chưa?
-    const startOfToday = startOfTodayHN(dateStr)
-    const ranToday = await db.taskExecution.findFirst({
-      where: {
-        type: 'alista-check',
-        startedAt: { gte: startOfToday },
-      },
-      select: { id: true, status: true, startedAt: true },
-    })
-    if (ranToday) {
-      // Đã chạy hôm nay — skip (chống chạy kép nếu restart nhiều lần trong cửa sổ)
+    const shiftStartMs = startOfTodayHN(anchor).getTime() + SHIFT_START_MIN * 60_000 // anchor 23:30
+    const deadlineMs = shiftStartMs + SHIFT_BUDGET_MS // anchor 23:30 + 6h = 05:30 hôm sau
+
+    // (4) FIX v1.2 — gate 1-lần/ca theo CronJob.lastRunAt (KHÔNG theo TaskExecution
+    // 'alista-check' — chạy manual ban ngày không còn làm ếch ca trực 23h30)
+    if (job.lastRunAt && job.lastRunAt.getTime() >= shiftStartMs) {
+      return // Ca trực anchor này đã bắn rồi (chống re-fire khi restart trong ca)
+    }
+
+    // (5) In-flight guard — đang có pipeline chạy (manual/nightly) → đợi tick sau
+    const inFlight = isAlistaCheckInFlight()
+    if (inFlight) {
+      console.log(`[ALISTA][scheduler] tick #${tickNo}: pipeline đang chạy (checkId=${inFlight}) — skip`)
       return
     }
 
-    // (5) Tính deadline 6h — 05:30 hôm sau (giờ VN)
-    const deadlineMs = computeNightlyDeadline(dateStr)
+    // (6) Catch-up đủ điều kiện: còn ≥30' budget (catch-up sát giờ không chạy nửa ca)
+    const remaining = deadlineMs - Date.now()
+    const isCatchup = hn.dateStr !== anchor // chạy trong khung 00:00-05:30 cho ca hôm qua
+    if (isCatchup && remaining < MIN_CATCHUP_REMAINING_MS) {
+      return // Quá sát 05:30 — đợi ca trực mai
+    }
 
-    // (6) Cập nhật lastRunAt + nextRunAt
+    // (7) Cập nhật lastRunAt + nextRunAt TRƯỚC khi bắn (chống re-fire nếu restart ngay)
     try {
       await db.cronJob.update({
         where: { id: job.id },
         data: {
           lastRunAt: new Date(),
-          nextRunAt: computeNextRunAt(dateStr),
+          nextRunAt: computeNextRunAt(hn.dateStr),
         },
       })
     } catch { /* fail-open */ }
 
-    // (7) CHẠY PIPELINE — fire-and-forget (không await để tick sau không bị block)
-    console.log(`[ALISTA][scheduler] tick #${tickNo}: cửa sổ 23:30-${HH === 23 && mm < 60 ? '23:59' : '...'} (tz HN) → chạy comprehensive check (deadline 05:30 hôm sau)`)
+    // (8) CHẠY PIPELINE — fire-and-forget (không await để tick sau không bị block)
+    console.log(
+      `[ALISTA][scheduler] tick #${tickNo}: ca trực anchor ${anchor} 23:30 VN${isCatchup ? ' (CATCH-UP — trễ do server down lúc 23:30)' : ''} → ` +
+      `chạy comprehensive check (deadline 05:30 hôm sau, còn ${Math.round(remaining / 60_000)}' budget)` +
+      (notified > 0 ? ` · sweep đã notify ${notified} đề xuất hoàn tất` : ''),
+    )
     void runComprehensiveCheck({
       trigger: 'cron-nightly',
       deadlineMs,
@@ -223,7 +321,7 @@ export function startAlistaScheduler(): void {
   void ensureDbReady()
     .then(() => new Promise((r) => setTimeout(r, 15_000))) // delay 15s
     .then(() => {
-      console.log('[ALISTA][scheduler] Bật scheduler nền (60s/tick) — cửa sổ 23:30-23:59 (tz HN), budget 6h, deadline 05:30 hôm sau')
+      console.log('[ALISTA][scheduler] Bật scheduler nền (60s/tick) — cửa sổ 23:30→05:30+1 catch-up (tz HN), budget 6h, deadline 05:30 + sweep follow-up 60s')
       void tick()
       setInterval(() => void tick(), ALISTA_TICK_MS)
     })
