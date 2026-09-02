@@ -180,53 +180,14 @@ const globalForSd = globalThis as unknown as {
 const runningOrchestrations: Set<string> = (globalForSd.__tmoSdRunningOrchestrations ??= new Set())
 const reviewingProposals: Set<string> = (globalForSd.__tmoSdReviewingProposals ??= new Set())
 
-// ==================== Z-AI SDK FALLBACK ====================
-// callLLMForAgent ở chế độ ENFORCE_KIMI_K3 (mặc định) KHÔNG có z-ai-sdk
-// fallback trong chuỗi (chỉ NVIDIA). Sandbox không có NVIDIA key → mọi call
-// chết. Tự thêm tầng fallback cuối: z-ai-web-dev-sdk (chạy trong sandbox
-// không cần key) — pattern copy từ llm.ts tryZaiSdk.
-
-let zaiSdkModule: { chat: { completions: { create: (p: unknown) => Promise<unknown> } } } | null = null
-let zaiSdkInitPromise: Promise<typeof zaiSdkModule> | null = null
-
-async function getZaiSdk(): Promise<typeof zaiSdkModule> {
-  if (zaiSdkModule) return zaiSdkModule
-  if (!zaiSdkInitPromise) {
-    zaiSdkInitPromise = (async () => {
-      try {
-        const mod = await import('z-ai-web-dev-sdk')
-        const ZAI = (mod as unknown as { default: { create: () => Promise<unknown> } }).default
-        const inst = (await ZAI.create()) as NonNullable<typeof zaiSdkModule>
-        zaiSdkModule = inst
-        return inst
-      } catch (err) {
-        console.warn('[SelfDirection] z-ai-sdk init failed:', err instanceof Error ? err.message : String(err))
-        return null
-      }
-    })()
-  }
-  return zaiSdkInitPromise.then(r => r)
-}
-
-async function tryZaiSdk(prompt: string, systemPrompt: string | undefined): Promise<string | null> {
-  try {
-    const sdk = await getZaiSdk()
-    if (!sdk) return null
-    const messages = [
-      ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-      { role: 'user', content: prompt },
-    ]
-    const res = (await sdk.chat.completions.create({ messages })) as {
-      choices?: Array<{ message?: { content?: string } }>
-      model?: string
-    }
-    const content = res?.choices?.[0]?.message?.content ?? ''
-    return content || null
-  } catch (err) {
-    console.warn('[SelfDirection] z-ai-sdk fallback failed:', err instanceof Error ? err.message : String(err))
-    return null
-  }
-}
+// ==================== Z-AI SDK FALLBACK — ĐÃ GỠ (audit Omega #5, 2026-09-02) ====================
+// Trước đây file này (và scan.ts) có bản copy getZaiSdk/tryZaiSdk pattern từ
+// llm.ts. callLLMForAgent (llm.ts) ở chế độ ENFORCE_KIMI_K3 (mặc định) ĐÃ tự
+// kèm z-ai-sdk làm fallback CUỐI chuỗi (sandbox self-heal, FIX RESET-2026-08-30:
+// NVIDIA fail → z-ai-sdk trong cùng 1 call). Bản copy tại đây chỉ gây:
+// (a) trùng lặp bảo trì 3 nơi, (b) z-ai-sdk bị gọi LẦN 2 vô nghĩa khi chuỗi
+// NVIDIA + z-ai bên trong callLLMForAgent đều fail. Đã gỡ sạch — mọi callBrain /
+// executeStep / callStepBrain / analyzeWithLLM (scan) chỉ dùng callLLMForAgent.
 
 // ==================== CORE LLM HELPER ====================
 
@@ -239,6 +200,8 @@ async function callBrain(params: {
 }): Promise<string> {
   const { prompt, systemPrompt, temperature = 0.3, maxTokens = 1200, label } = params
   try {
+    // callLLMForAgent: NVIDIA chain (kimi-k3 → fallback chain) + z-ai-sdk tự
+    // heal bên trong — content trả về là của backend ĐẦU TIÊN thành công.
     const result = await withTimeout(
       callLLMForAgent(prompt, OMEGA_FALLBACK_BRAIN, systemPrompt, {
         agentName: 'SelfDirection',
@@ -246,17 +209,12 @@ async function callBrain(params: {
         maxTokens,
       }),
       LLM_TIMEOUT_MS,
-      `${label} (NVIDIA chain)`,
+      `${label} (NVIDIA chain + z-ai-sdk)`,
     )
     if (result.content && result.content.trim()) return result.content.trim()
+    console.warn(`[SelfDirection] ${label}: chuỗi NVIDIA + z-ai-sdk fallback không trả content — coi như thất bại`)
   } catch (err) {
-    console.warn(`[SelfDirection] ${label}: NVIDIA chain lỗi — thử z-ai-sdk fallback:`, err instanceof Error ? err.message : String(err))
-  }
-  // Fallback cuối: z-ai-sdk (sandbox, không cần key)
-  const zai = await withTimeout(tryZaiSdk(prompt, systemPrompt), LLM_TIMEOUT_MS, `${label} (zai-sdk)`)
-  if (zai && zai.trim()) {
-    console.log(`[SelfDirection] ${label}: dùng z-ai-sdk fallback ✓`)
-    return zai.trim()
+    console.warn(`[SelfDirection] ${label}: chuỗi LLM lỗi (timeout/backend):`, err instanceof Error ? err.message : String(err))
   }
   throw new Error(`${label}: mọi LLM backend đều thất bại`)
 }
@@ -692,6 +650,7 @@ ${reworkFeedback ? `\n⚠️ PHẢN HỒI TỪ OMEGA VỀ LẦN THỬ TRƯỚC (
 Viết báo cáo output của bạn.`
 
   try {
+    // callLLMForAgent tự kèm z-ai-sdk fallback cuối chuỗi (llm.ts) — audit #5
     const result = await withTimeout(
       callLLMForAgent(userPrompt, persona.brain, systemPrompt, {
         agentName: step.assignee,
@@ -699,18 +658,11 @@ Viết báo cáo output của bạn.`
         maxTokens: 900,
       }),
       LLM_TIMEOUT_MS,
-      `StepExec ${step.assignee}`,
+      `StepExec ${step.assignee} (NVIDIA chain + z-ai-sdk)`,
     )
     if (result.content && result.content.trim()) return result.content.trim().slice(0, 3000)
   } catch (err) {
     console.warn(`[SelfDirection] executeStep ${step.assignee} callLLMForAgent lỗi:`, err instanceof Error ? err.message : String(err))
-  }
-  // zai-sdk fallback
-  try {
-    const zai = await withTimeout(tryZaiSdk(userPrompt, systemPrompt), LLM_TIMEOUT_MS, `StepExec zai ${step.assignee}`)
-    if (zai && zai.trim()) return zai.trim().slice(0, 3000)
-  } catch (err) {
-    console.warn(`[SelfDirection] executeStep ${step.assignee} tryZaiSdk lỗi:`, err instanceof Error ? err.message : String(err))
   }
   // ━━ USER REQUEST (2026-09-02): KHÔNG throw làm sập pipeline ━━
   // Trước đây: cả 2 LLM call fail → throw Error → runOrchestration catch →
@@ -725,8 +677,8 @@ Viết báo cáo output của bạn.`
 // ==================== 3b. EXECUTE CODE-WORKFLOW — ReAct với TOOL THẬT (CI-6 B5) ====================
 
 /**
- * LLM call cho ReAct loop code-workflow: callLLMForAgent (persona brain) →
- * z-ai-sdk fallback cuối (đồng bộ executeStep — sandbox không NVIDIA key).
+ * LLM call cho ReAct loop code-workflow: callLLMForAgent (persona brain) —
+ * chuỗi NVIDIA + z-ai-sdk fallback tự heal bên trong (llm.ts, audit Omega #5).
  */
 async function callStepBrain(params: {
   prompt: string
@@ -744,12 +696,10 @@ async function callStepBrain(params: {
         maxTokens: 1400,
       }),
       LLM_TIMEOUT_MS,
-      `${label} (${agentName})`,
+      `${label} (${agentName}) (NVIDIA chain + z-ai-sdk)`,
     )
     if (result.content && result.content.trim()) return result.content.trim()
   } catch { /* fall through */ }
-  const zai = await withTimeout(tryZaiSdk(prompt, systemPrompt), LLM_TIMEOUT_MS, `${label} zai (${agentName})`)
-  if (zai && zai.trim()) return zai.trim()
   return null
 }
 
@@ -973,6 +923,17 @@ export async function executeVerifyAndPushStep(params: {
 // ==================== 4. EVALUATE — đánh giá bước (Opus khi ủy quyền bật, Omega khi tắt) ====================
 
 /**
+ * FIX 2026-09-02 (Omega audit #4): đánh dấu TÊN NGƯỜI CHẤM đầu chuỗi evaluation
+ * dạng "[Tên] " — UI (self-direction-module.tsx) đọc marker này để hiển thị đúng
+ * "Đánh giá của Opus" / "Đánh giá của Omega" thay vì hardcode Omega. Chỉ đánh
+ * marker khi reviewer ≠ Omega (tương thích ngược: dữ liệu cũ không marker =
+ * Omega chấm). Đồng bộ convention prefix "**Báo cáo của Opus**" của writeFinalReport.
+ */
+function tagEvaluation(reviewerName: string, text: string): string {
+  return reviewerName !== 'Omega' ? `[${reviewerName}] ${text}` : text
+}
+
+/**
  * USER DECISION #3: khi ủy quyền bật (opusDelegated=true) → OPUS (CTO) chấm
  * bước đạt/chưa đạt (system prompt = OPUS_INSTRUCTION + context đánh giá);
  * khi tắt → Omega chấm như cũ (việc nội tại orchestration). Output format
@@ -1001,7 +962,10 @@ ${params.output.slice(0, 2000)}
       const obj = JSON.parse(jsonStr) as Record<string, unknown>
       return {
         complete: obj.complete === true || obj.complete === 'true',
-        evaluation: typeof obj.evaluation === 'string' ? obj.evaluation.slice(0, 600) : '',
+        evaluation: tagEvaluation(
+          reviewerName,
+          typeof obj.evaluation === 'string' ? obj.evaluation.slice(0, 600) : '',
+        ),
       }
     }
   } catch (err) {
@@ -1016,12 +980,12 @@ ${params.output.slice(0, 2000)}
   const outputEmpty = !params.output || params.output.trim().length === 0
   if (outputEmpty && params.attempt >= MAX_STEP_ATTEMPTS) {
     // Lần cuối + output trống → fail-open để pipeline tiếp tục (tránh kẹt vĩnh viễn)
-    return { complete: true, evaluation: `(${reviewerName} không đánh giá được — output trống lần cuối, chấp nhận để mở kẹt pipeline)` }
+    return { complete: true, evaluation: tagEvaluation(reviewerName, `(không đánh giá được — output trống lần cuối, chấp nhận để mở kẹt pipeline)`) }
   }
   // Còn lại: KHÔNG accept — retry với feedback cảnh báo
   return {
     complete: false,
-    evaluation: `(${reviewerName} không đánh giá được — KHÔNG chấp nhận mù, cần agent làm lại output chất lượng hơn)`,
+    evaluation: tagEvaluation(reviewerName, `(không đánh giá được — KHÔNG chấp nhận mù, cần agent làm lại output chất lượng hơn)`),
   }
 }
 
@@ -1135,7 +1099,14 @@ Viết báo cáo hoàn thiện.`
  * xung đột status). Check-and-add đồng bộ (không await xen giữa) là atomic
  * trong event loop JS → đảm bảo đúng 1 orchestration chạy mỗi proposal.
  */
-export async function triggerOrchestration(proposalId: string): Promise<boolean> {
+export async function triggerOrchestration(
+  proposalId: string,
+  /** FIX 2026-09-02 (Omega audit #2): lever dryRun TÙY CHỌN — mặc định
+   *  *KHÔNG* dry-run (push thật theo yêu cầu Mr. Architect). Caller (route
+   *  deploy) có thể truyền body {dryRun:true} để chạy pipeline kiểm định mà
+   *  không commit/push — dùng thử an toàn trước khi triển khai thật. */
+  opts?: { dryRun?: boolean },
+): Promise<boolean> {
   if (runningOrchestrations.has(proposalId)) return false
   runningOrchestrations.add(proposalId) // reserve NGAY (atomic với check phía trên)
   let started = false
@@ -1160,9 +1131,9 @@ export async function triggerOrchestration(proposalId: string): Promise<boolean>
       return true
     }
 
-    console.log(`[SelfDirection] Trigger orchestration cho "${proposal.title}" (status=${proposal.status})`)
+    console.log(`[SelfDirection] Trigger orchestration cho "${proposal.title}" (status=${proposal.status})${opts?.dryRun ? ' [DRY-RUN]' : ''}`)
     // Fire-and-forget — mọi lỗi được xử lý trong catch bên dưới
-    void runOrchestration(proposalId).catch(async err => {
+    void runOrchestration(proposalId, opts).catch(async err => {
       console.error(`[SelfDirection] Orchestration ${proposalId} crash:`, err instanceof Error ? err.message : String(err))
       try {
         await db.selfDirectionProposal.update({
@@ -1235,18 +1206,18 @@ export function isOrchestrating(proposalId: string): boolean {
   return runningOrchestrations.has(proposalId)
 }
 
-async function runOrchestration(proposalId: string): Promise<void> {
+async function runOrchestration(proposalId: string, opts?: { dryRun?: boolean }): Promise<void> {
   // FIX review GĐ2 #2: code-workflow → serialize qua mutex workspace (XEM
   // serializeCodeWorkflow). Đọc executionMode TRƯỚC để quyết định có cần mutex.
   const pre = await db.selfDirectionProposal.findUnique({ where: { id: proposalId }, select: { executionMode: true } })
   if (pre?.executionMode === 'code-workflow') {
-    await serializeCodeWorkflow(() => runOrchestrationInner(proposalId))
+    await serializeCodeWorkflow(() => runOrchestrationInner(proposalId, opts))
     return
   }
-  await runOrchestrationInner(proposalId)
+  await runOrchestrationInner(proposalId, opts)
 }
 
-async function runOrchestrationInner(proposalId: string): Promise<void> {
+async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boolean }): Promise<void> {
   // === Phase 1: PLAN ===
   await db.selfDirectionProposal.update({ where: { id: proposalId }, data: { status: 'planning' } })
   const proposal = await db.selfDirectionProposal.findUnique({ where: { id: proposalId } })
@@ -1302,6 +1273,10 @@ async function runOrchestrationInner(proposalId: string): Promise<void> {
       const result = await executeVerifyAndPushStep({
         proposal: { id: proposal.id, title: proposal.title },
         planSummary: plan.planSummary,
+        // FIX 2026-09-02 (audit #2): dryRun tùy chọn từ caller (route deploy đọc
+        // body) — mặc định KHÔNG dry-run: pipeline commit + push THẬT lên remote
+        // (yêu cầu Mr. Architect: chức năng push code từ workspace phải hoạt động thật).
+        dryRun: opts?.dryRun === true,
       })
       if (result.success) {
         await db.proposalStep.update({

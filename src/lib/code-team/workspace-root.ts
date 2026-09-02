@@ -16,6 +16,7 @@
  * Fallback chain: active workspace rootPath → OPENCODE_WORKSPACE env → cwd.
  */
 
+import path from 'path'
 import { getActiveWorkspaceRoot } from '@/lib/workspace/workspace-manager'
 
 let cachedRoot: string | null = null
@@ -37,9 +38,17 @@ export async function resolveWorkspaceRoot(): Promise<string> {
     root = process.env.OPENCODE_WORKSPACE || process.cwd()
   }
 
-  cachedRoot = root
+  // FIX 2026-09-02 (push blocker — audit Omega E2E): normalize root về ĐƯỜNG
+  // DẪN TUYỆT ĐỐI. Env fallback OPENCODE_WORKSPACE có thể là đường dẫn tương
+  // đối (mặc định ".") — root tương đối làm mọi check startsWith(root + sep)
+  // ở resolveWithinWorkspace (dev-tools) so KHÔNG KHỚP với path.resolve()
+  // (absolute) → "Access denied: path escapes workspace root" oan MỌI file →
+  // git_commit/verify_and_push bị chặn hoàn toàn. path.resolve(".") = cwd —
+  // đúng ngữ nghĩa gốc của fallback.
+  const absRoot = path.resolve(root)
+  cachedRoot = absRoot
   cachedAt = now
-  return root
+  return absRoot
 }
 
 /** Invalidate the cache — call after the user switches active workspace. */

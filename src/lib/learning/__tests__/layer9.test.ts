@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
+import { PrismaClient } from '@prisma/client'
 import { createMetricsCollector } from '../metrics-collector'
 import {
   analyzeHistoricalFeedback,
@@ -23,10 +24,25 @@ import {
 } from '../strategy-adapter'
 import type { AggregatedMetrics, FailurePattern } from '../types'
 
-// ==================== MOCK PRISMA ====================
-
-mock.module('@/lib/db', () => ({
-  db: {
+// ==================== MOCK PRISMA (FIX 2026-09-02 — Omega audit, push blocker) ====================
+//
+// VẤN ĐỀ CŨ: mock.module('@/lib/db', () => ({ db: {executionMetrics, failurePattern,
+// strategyAdaptationLog} })) — mock BỘ PHẬN này LEAK toàn process bun-test (bun
+// KHÔNG tự restore mock.module giữa các file test). File test chạy sau trong
+// cùng process (workspace-manager.test.ts) nhận db giả thiếu model → 25 test
+// fail → quality gate FAIL → pipeline verify_and_push TỪ CHỐI push code.
+//
+// LƯU Ý: bun HOIST mock.module lên TRƯỚC import → không thể `import { db } from
+// '@/lib/db'` trong file này để lấy client thật (import sẽ nhận chính mock →
+// đệ quy vô hạn nếu fall-through về nó).
+//
+// FIX: mock vẫn trả giá trị giả cho đúng 3 model layer9 cần (behavior layer9
+// không đổi), nhưng bọc trong Proxy — mọi property KHÁC fall-through về 1
+// PrismaClient MỚI (đọc DATABASE_URL hiện tại của tiến trình test — quality
+// gate đã ghi đè trỏ DB test cô lập .quality-gate-test.db). File test sau dùng
+// db đầy đủ chức năng → không còn phá workspace-manager.test.ts.
+mock.module('@/lib/db', () => {
+  const mockedModels: Record<string, unknown> = {
     executionMetrics: {
       findMany: mock(() => Promise.resolve([])),
       create: mock(() => Promise.resolve({})),
@@ -37,8 +53,20 @@ mock.module('@/lib/db', () => ({
     strategyAdaptationLog: {
       create: mock(() => Promise.resolve({})),
     },
-  },
-}))
+  }
+  let fallback: PrismaClient | null = null
+  return {
+    db: new Proxy(mockedModels, {
+      get(target, prop, receiver) {
+        // Guard: không tạo client chỉ vì thenable-probe (Promise.resolve(db))
+        if (prop === 'then') return undefined
+        if (prop in target) return Reflect.get(target, prop, receiver)
+        fallback ??= new PrismaClient()
+        return Reflect.get(fallback, prop, receiver)
+      },
+    }),
+  }
+})
 
 // ==================== METRICS COLLECTOR TESTS ====================
 

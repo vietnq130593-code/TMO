@@ -462,7 +462,9 @@ LEARNING & MEMORY
       // nhưng KHÔNG mất thông tin).
       'context_recall',
       // ━━━ TASK 22 (user directive 2026-09-30 #3 — "Omega có quyền sử dụng
-      // TOÀN BỘ tools và skills") — bổ sung 26 tool còn thiếu cho đủ 74 builtin.
+      // TOÀN BỘ tools và skills") — bổ sung 26 tool còn thiếu cho đủ số builtin
+      // đầy đủ (hiện 75 — FIX 2026-09-02 audit Omega #7: comment cũ ghi 74 đã
+      // lỗi thời).
       // KHÔNG import getAllBuiltinToolNames() từ tool-executor ở đây (circular:
       // tool-executor import standalone-agents) — list này phải giữ đồng bộ
       // với Object.keys(ALL_TOOL_DEFINITIONS) (Tools Registry agentMatrix

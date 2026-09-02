@@ -402,11 +402,22 @@ function StepItem({
         </div>
       )}
 
-      {step.evaluation && (
-        <p className="text-xs text-amber-300/80 whitespace-pre-wrap">
-          Đánh giá của Omega: {step.evaluation}
-        </p>
-      )}
+      {step.evaluation && (() => {
+        // FIX 2026-09-02 (Omega audit #4): evaluation có thể do OPUS chấm khi
+        // ủy quyền bật (user decision #3) — orchestrator ghi marker "[Tên] "
+        // đầu chuỗi. Đọc marker để hiển thị đúng người chấm thay vì hardcode
+        // "Omega"; dữ liệu cũ không marker → mặc định Omega (tương thích ngược).
+        const markerMatch = step.evaluation.match(/^\[([^\]]{1,24})\]\s*/)
+        const evaluator = markerMatch?.[1] ?? 'Omega'
+        const evaluationText = markerMatch
+          ? step.evaluation.slice(markerMatch[0].length)
+          : step.evaluation
+        return (
+          <p className="text-xs text-amber-300/80 whitespace-pre-wrap">
+            Đánh giá của {evaluator}: {evaluationText}
+          </p>
+        )
+      })()}
     </div>
   )
 }
@@ -1168,19 +1179,31 @@ export default function SelfDirectionModule() {
                             </div>
                           )}
 
-                          {/* Hoàn tất → snippet báo cáo + xem full */}
-                          {p.status === 'completed' && p.omegaReport && (
+                          {/* Hoàn tất / thất bại → snippet báo cáo + xem full
+                              FIX 2026-09-02 (Omega audit #3): hiển thị báo cáo
+                              cả khi proposal FAILED — writeFinalReport vẫn viết
+                              phân tích thất bại có giá trị (nguyên nhân, bước
+                              hỏng, đề xuất khắc phục); trước đây chỉ status
+                              'completed' mới hiện → user mất thông tin. */}
+                          {(p.status === 'completed' || p.status === 'failed') && p.omegaReport && (
                             <div className="flex flex-wrap items-center justify-between gap-2">
-                              <p className="text-[11px] text-stone-400 truncate flex-1 min-w-0" title={firstLine(p.omegaReport)}>
+                              <p
+                                className={`text-[11px] truncate flex-1 min-w-0 ${p.status === 'failed' ? 'text-red-400/90' : 'text-stone-400'}`}
+                                title={firstLine(p.omegaReport)}
+                              >
                                 {firstLine(p.omegaReport)}
                               </p>
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="h-7 px-2.5 text-[11px] border-emerald-500/40 text-emerald-300 hover:bg-emerald-950/30"
+                                className={`h-7 px-2.5 text-[11px] ${
+                                  p.status === 'failed'
+                                    ? 'border-red-500/40 text-red-300 hover:bg-red-950/30'
+                                    : 'border-emerald-500/40 text-emerald-300 hover:bg-emerald-950/30'
+                                }`}
                                 onClick={() => openDetail(p)}
                               >
-                                <BookOpen className="h-3.5 w-3.5" /> Xem báo cáo Omega
+                                <BookOpen className="h-3.5 w-3.5" /> Xem báo cáo
                               </Button>
                             </div>
                           )}
@@ -1287,14 +1310,30 @@ export default function SelfDirectionModule() {
                 )}
               </section>
 
-              {/* 3. Báo cáo hoàn thiện của Omega */}
-              {detail.proposal.status === 'completed' && detail.proposal.omegaReport && (
+              {/* 3. Báo cáo hoàn thiện — hiện cho CẢ completed lẫn failed
+                  (FIX 2026-09-02, Omega audit #3: báo cáo thất bại chứa phân
+                  tích nguyên nhân + đề xuất khắc phục có giá trị; tác giả của
+                  báo cáo ghi ngay dòng đầu prefix "**Báo cáo của Opus**" khi
+                  ủy quyền bật — title giữ trung tính). */}
+              {(detail.proposal.status === 'completed' || detail.proposal.status === 'failed') && detail.proposal.omegaReport && (
                 <section className="space-y-1.5">
-                  <p className="text-[10px] uppercase tracking-wider text-emerald-300/80 flex items-center gap-1.5">
-                    <BookOpen className="h-3.5 w-3.5 text-emerald-400" />
-                    Báo cáo hoàn thiện của Omega
+                  <p
+                    className={`text-[10px] uppercase tracking-wider flex items-center gap-1.5 ${
+                      detail.proposal.status === 'failed'
+                        ? 'text-red-300/80'
+                        : 'text-emerald-300/80'
+                    }`}
+                  >
+                    <BookOpen className={`h-3.5 w-3.5 ${detail.proposal.status === 'failed' ? 'text-red-400' : 'text-emerald-400'}`} />
+                    Báo cáo hoàn thiện
                   </p>
-                  <div className="border border-emerald-500/30 bg-emerald-950/10 p-4 rounded max-h-96 overflow-y-auto custom-scrollbar">
+                  <div
+                    className={`border p-4 rounded max-h-96 overflow-y-auto custom-scrollbar ${
+                      detail.proposal.status === 'failed'
+                        ? 'border-red-500/30 bg-red-950/10'
+                        : 'border-emerald-500/30 bg-emerald-950/10'
+                    }`}
+                  >
                     <p className="text-xs text-stone-200 whitespace-pre-wrap break-words">
                       {detail.proposal.omegaReport}
                     </p>

@@ -75,11 +75,37 @@ const VALID_CATEGORIES = ['gap', 'kb_contradiction', 'tool_failure', 'missing_sk
  * chỉ lên 'code-workflow' khi có tín hiệu rõ ràng:
  *   - category thuộc nhóm rủi ro code (tool_failure ~ tool_gap, missing_test
  *     ~ test_gap — map từ bộ category thực tế của module);
- *   - text problem/solution khớp regex chỉ dấu thay đổi source
- *     (code/tool/git/workflow/api/route/schema/bug/lỗi/hàm/function/component).
+ *   - text problem/solution khớp regex HÀNH ĐỘNG thay đổi source (xem bên dưới).
+ *
+ * FIX 2026-09-02 (Omega audit #1 MEDIUM — classifier tham lam): regex cũ
+ * /code|tool|git|api|route|schema|bug|lỗi|hàm|function|component/i là DANH TỪ
+ * chung → match gần như mọi đề xuất kỹ thuật (audit thực tế: 5/5 đề xuất scan
+ * bị đánh code-workflow, kể cả kb_contradiction chỉ cần review tri thức).
+ * Regex mới đòi hỏi ĐỘNG TỪ sửa source đi CÙNG mục tiêu code (cách ≤60 ký tự
+ * trong cùng câu) — "API trả lời chậm" / "tool hay timeout" (phân tích, giám
+ * sát) không còn bị kéo vào code-workflow; "sửa tool X" / "viết test cho hàm
+ * Y" / "fix bug trong route Z" thì vẫn đúng code-workflow.
  */
 const CODE_WORKFLOW_CATEGORIES = new Set(['tool_failure', 'missing_test'])
-const CODE_CHANGE_HINT_RE = /code|tool|git|workflow|api|route|schema|bug|lỗi|hàm|function|component/i
+/**
+ * FIX 2026-09-02 (Omega audit #1): category thuần tri thức — review writeback
+ * vùng xám / mâu thuẫn KB là knowledge-work (approve/reject/đánh dấu lại),
+ * KHÔNG đụng source code → classifier không bao giờ đẩy lên code-workflow.
+ * (LLM hint tường minh executionMode='code-workflow' vẫn được tôn trọng ở
+ * normalizeExecutionMode — nếu giải pháp thật sự cần sửa code, LLM nói rõ.)
+ */
+const LLM_ONLY_CATEGORIES = new Set(['kb_contradiction'])
+const CODE_CHANGE_ACTION_RE = new RegExp(
+  [
+    // (1) Động từ thay đổi source + mục tiêu code trong cùng câu
+    String.raw`\b(sửa|sua|fix|patch|refactor|viết|viet|rewrite|thêm|them|add|tạo|tao|create|xây|xay|build|implement|commit|push|deploy|xóa|xoa|remove|bổ sung|bo sung)\b`,
+    String.raw`[^\n.]{0,60}`,
+    String.raw`\b(code|hàm|ham|function|component|module|script|route|api|endpoint|schema|model|prisma|tool|test|hook|middleware|type|interface|file|library|package|bug|lỗi|loi)\b`,
+    // (2) "bug/lỗi/crash ... trong code/hàm/route..."
+    String.raw`|\b(bug|lỗi|loi|crash|exception)\b[^\n.]{0,50}\b(trong|của|cua|ở|o|at|in|of)\b[^\n.]{0,40}\b(code|hàm|ham|function|component|module|route|api|schema|tool)\b`,
+  ].join(''),
+  'i',
+)
 
 export function classifyExecutionMode(input: {
   category?: string | null
@@ -87,9 +113,10 @@ export function classifyExecutionMode(input: {
   solution?: string | null
 }): 'llm' | 'code-workflow' {
   const category = String(input.category || '').trim()
+  if (LLM_ONLY_CATEGORIES.has(category)) return 'llm'
   if (CODE_WORKFLOW_CATEGORIES.has(category)) return 'code-workflow'
   const text = `${input.problem || ''}\n${input.solution || ''}`
-  if (CODE_CHANGE_HINT_RE.test(text)) return 'code-workflow'
+  if (CODE_CHANGE_ACTION_RE.test(text)) return 'code-workflow'
   return 'llm'
 }
 
@@ -104,47 +131,12 @@ function normalizeExecutionMode(input: {
   return classifyExecutionMode(input)
 }
 
-// ==================== Z-AI SDK FALLBACK (đồng bộ orchestrator) ====================
-
-let zaiSdkModule: { chat: { completions: { create: (p: unknown) => Promise<unknown> } } } | null = null
-let zaiSdkInitPromise: Promise<typeof zaiSdkModule> | null = null
-
-async function getZaiSdk(): Promise<typeof zaiSdkModule> {
-  if (zaiSdkModule) return zaiSdkModule
-  if (!zaiSdkInitPromise) {
-    zaiSdkInitPromise = (async () => {
-      try {
-        const mod = await import('z-ai-web-dev-sdk')
-        const ZAI = (mod as unknown as { default: { create: () => Promise<unknown> } }).default
-        const inst = (await ZAI.create()) as NonNullable<typeof zaiSdkModule>
-        zaiSdkModule = inst
-        return inst
-      } catch (err) {
-        console.warn('[SelfDirectionScan] z-ai-sdk init failed:', err instanceof Error ? err.message : String(err))
-        return null
-      }
-    })()
-  }
-  return zaiSdkInitPromise.then(r => r)
-}
-
-async function tryZaiSdk(prompt: string, systemPrompt: string | undefined): Promise<string | null> {
-  try {
-    const sdk = await getZaiSdk()
-    if (!sdk) return null
-    const messages = [
-      ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-      { role: 'user', content: prompt },
-    ]
-    const res = (await sdk.chat.completions.create({ messages })) as {
-      choices?: Array<{ message?: { content?: string } }>
-    }
-    return res?.choices?.[0]?.message?.content ?? ''
-  } catch (err) {
-    console.warn('[SelfDirectionScan] z-ai-sdk fallback failed:', err instanceof Error ? err.message : String(err))
-    return null
-  }
-}
+// ==================== Z-AI SDK FALLBACK — ĐÃ GỠ (audit Omega #5, 2026-09-02) ====================
+// Trước đây file này có bản copy getZaiSdk/tryZaiSdk "đồng bộ orchestrator".
+// callLLMForAgent (llm.ts) ĐÃ tự có z-ai-sdk làm fallback CUỐI chuỗi (sandbox
+// self-heal FIX RESET-2026-08-30) — bản copy ở đây chỉ trùng lặp bảo trì và
+// gọi z-ai-sdk 2 lần khi chuỗi NVIDIA fail. Đã xóa: analyzeWithLLM giờ chỉ
+// dùng callLLMForAgent (fallback z-ai-sdk bên trong).
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -290,6 +282,8 @@ Phân tích và đề xuất (JSON).`
   try {
     let raw: string | null = null
     try {
+      // callLLMForAgent tự kèm z-ai-sdk fallback cuối chuỗi (llm.ts) — không
+      // cần bản copy tryZaiSdk ở đây nữa (audit Omega #5).
       const result = await withTimeout(
         callLLMForAgent(userPrompt, OMEGA_FALLBACK_BRAIN, systemPrompt, {
           agentName: 'SelfDirectionScan',
@@ -297,13 +291,10 @@ Phân tích và đề xuất (JSON).`
           maxTokens: 2200,
         }),
         LLM_TIMEOUT_MS,
-        'ScanLLM (NVIDIA)',
+        'ScanLLM (NVIDIA chain + z-ai-sdk fallback)',
       )
       if (result.content && result.content.trim()) raw = result.content.trim()
-    } catch { /* fall to zai */ }
-    if (!raw) {
-      raw = await withTimeout(tryZaiSdk(userPrompt, systemPrompt), LLM_TIMEOUT_MS, 'ScanLLM (zai-sdk)')
-    }
+    } catch { /* fall xuống deterministic fallback proposals */ }
     if (!raw || !raw.trim()) return []
 
     const jsonStr = findBalancedJson(raw.replace(/```(?:json)?/g, ''), 'proposals')

@@ -3685,8 +3685,9 @@ const SMOLAB_TABS = [
   { id: 'memory', label: 'Memory', icon: Thermometer, color: 'rose' },
   { id: 'learning', label: 'Learning', icon: BookMarked, color: 'amber' },
   // TASK 22 (user directive 2026-09-30 #4): đổi tên tab "Skills" → "Tools/Skills"
-  // — panel này giờ là trung tâm của CẢ tools (74 builtin + custom) lẫn skills
+  // — panel này giờ là trung tâm của CẢ tools (75 builtin + custom) lẫn skills
   // (filesystem + DB), đồng thời Tools Registry hiển thị matrix agents↔tools.
+  // (FIX 2026-09-02 audit Omega #7: đếm lại — builtin thực tế là 75, không phải 74)
   { id: 'skills', label: 'Tools/Skills', icon: Wrench, color: 'violet' },
   { id: 'automation', label: 'Automation', icon: Zap, color: 'orange' },
   { id: 'channels', label: 'Channels', icon: Radio, color: 'teal' },

@@ -136,9 +136,18 @@ export async function fileRead(args: {
 /** Resolve a path within the workspace root, rejecting traversal escapes. */
 async function resolveWithinWorkspace(filePath: string): Promise<string> {
   const root = await resolveWorkspaceRoot()
-  const resolved = path.resolve(root, filePath)
+  // FIX 2026-09-02 (push blocker — audit Omega E2E): normalize root TUYỆT ĐỐI
+  // trước khi so. Trước đây nếu root là đường dẫn tương đối (env fallback
+  // OPENCODE_WORKSPACE=".") thì resolved = path.resolve(...) luôn TUYỆT ĐỐI
+  // trong khi startsWith(root + sep) so với prefix TƯƠNG ĐỐI "./" → không
+  // bao giờ khớp → "Access denied: path escapes workspace root" oan MỌI path
+  // → git_commit (scoped paths) bị chặn hoàn toàn → verify_and_push TỪ CHỐI
+  // push. (workspace-root.ts đã normalize ở tầng resolver — đây là lớp
+  // phòng thủ sâu thứ 2, fail-closed đúng nghĩa traversal thật.)
+  const absRoot = path.resolve(root)
+  const resolved = path.resolve(absRoot, filePath)
   // Allow the root itself OR anything nested under it
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+  if (resolved !== absRoot && !resolved.startsWith(absRoot + path.sep)) {
     throw new Error(`Access denied: path escapes workspace root (${filePath})`)
   }
   return resolved

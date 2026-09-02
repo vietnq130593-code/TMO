@@ -149,7 +149,14 @@ async function rosterTextForConsult(): Promise<string> {
   push('CODE TEAM', roster.codeTeam)
   push('RESEARCH TEAM', roster.research)
   push('AGENTS KHÁC', roster.custom)
-  return lines.join('\n').slice(0, 4000) || '(roster trống)'
+  // FIX 2026-09-02 (Omega audit #6): cap cũ 4000 ký tự cắt roster lớn giữa
+  // chừng — Omega consult không thấy agent phù hợp tồn tại → khuyến nghị tạo
+  // agent TRÙNG năng lực. Tăng lên 12000 (consult prompt rất gọn ~1-2k, các
+  // brain kimi-k3/deepseek/minimax chịu 16k+ context thoải mái) + nếu vượt
+  // cap thì cắt từng MỖI dòng cuối (giữ nguyên 4 nhóm đầu đủ nhận diện).
+  const full = lines.join('\n')
+  if (full.length <= 12_000) return full || '(roster trống)'
+  return `${full.slice(0, 12_000)}\n…(roster còn ${lines.length} dòng đã bị cắt bớt — cân nhắc gọi getAgentRoster trực tiếp)`
 }
 
 // ==================== 1. CONSULT — tiếp nhận vấn đề từ agents ====================
