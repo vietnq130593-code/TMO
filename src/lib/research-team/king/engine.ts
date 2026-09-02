@@ -20,7 +20,7 @@
  */
 
 import { db } from '@/lib/db'
-import { callLLM, callUtilityLLM } from '@/lib/llm'
+import { callLLM } from '@/lib/llm'
 import type { LLMResult } from '@/lib/llm'
 import { RESEARCH_ROSTER, AGENT_ID } from '../constants'
 import type {
@@ -1221,7 +1221,7 @@ async function llmRunKillTest(
   }
 }
 
-/** Score hypothesis blind via 2x callUtilityLLM (TB-14 §1.3 AC5). Fail-open: 0. */
+/** Score hypothesis blind via 2x callLLM (TB-14 §1.3 AC5). Fail-open: 0. */
 async function llmScoreHypothesisBlind(
   h: { hypothesis: string; evidence: string[] },
   problemStmt: string,
@@ -1235,8 +1235,8 @@ async function llmScoreHypothesisBlind(
   ].join('\n')
   // 2 SA blind scorers (TB-14 §1.3 AC5 — KHÔNG do SIVIL tự chấm)
   const [r1, r2] = await Promise.all([
-    callUtilityLLM(prompt, BLIND_SCORE_SYSTEM_PROMPT, 'tournament-blind-sa1'),
-    callUtilityLLM(prompt, BLIND_SCORE_SYSTEM_PROMPT, 'tournament-blind-sa2'),
+    callLLM(prompt, BLIND_SCORE_SYSTEM_PROMPT, 'tournament-blind-sa1', { temperature: 0.2, maxTokens: 200 }),
+    callLLM(prompt, BLIND_SCORE_SYSTEM_PROMPT, 'tournament-blind-sa2', { temperature: 0.2, maxTokens: 200 }),
   ])
   const parseScore = (r: LLMResult): number => {
     if (r.error || !r.content) return 0

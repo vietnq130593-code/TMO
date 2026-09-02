@@ -933,7 +933,7 @@ export async function POST(request: NextRequest) {
         protectedCount: protectedFiles.length,
         protectedFiles,
         preservedLocalCount: localPreservedFiles.length,
-        preservedLocalFiles,
+        preservedLocalFiles: localPreservedFiles,
       },
     })
   } catch (err) {

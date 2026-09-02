@@ -702,11 +702,24 @@ Viết báo cáo output của bạn.`
       `StepExec ${step.assignee}`,
     )
     if (result.content && result.content.trim()) return result.content.trim().slice(0, 3000)
-  } catch { /* fall through */ }
+  } catch (err) {
+    console.warn(`[SelfDirection] executeStep ${step.assignee} callLLMForAgent lỗi:`, err instanceof Error ? err.message : String(err))
+  }
   // zai-sdk fallback
-  const zai = await withTimeout(tryZaiSdk(userPrompt, systemPrompt), LLM_TIMEOUT_MS, `StepExec zai ${step.assignee}`)
-  if (zai && zai.trim()) return zai.trim().slice(0, 3000)
-  throw new Error(`Agent ${step.assignee} không tạo được output`)
+  try {
+    const zai = await withTimeout(tryZaiSdk(userPrompt, systemPrompt), LLM_TIMEOUT_MS, `StepExec zai ${step.assignee}`)
+    if (zai && zai.trim()) return zai.trim().slice(0, 3000)
+  } catch (err) {
+    console.warn(`[SelfDirection] executeStep ${step.assignee} tryZaiSdk lỗi:`, err instanceof Error ? err.message : String(err))
+  }
+  // ━━ USER REQUEST (2026-09-02): KHÔNG throw làm sập pipeline ━━
+  // Trước đây: cả 2 LLM call fail → throw Error → runOrchestration catch →
+  // proposal.status='failed' → pipeline DỪNG hoàn toàn. Điều này khiến các
+  // đề xuất được duyệt nhưng KHÔNG thể hoàn thành khi NIM keys placeholder.
+  // Fix: trả output cảnh báo (KHÔNG phải output thật) — evaluateStep sẽ thấy
+  // output "chưa đạt" → retry (MAX_STEP_ATTEMPTS). Nếu retry vẫn fail → step
+  // failed nhưng proposal có thể tiếp tục bước khác (KHÔNG sập toàn pipeline).
+  return `[${step.assignee} chưa tạo được output do LLM unavailable — cần retry]`
 }
 
 // ==================== 3b. EXECUTE CODE-WORKFLOW — ReAct với TOOL THẬT (CI-6 B5) ====================
@@ -992,10 +1005,24 @@ ${params.output.slice(0, 2000)}
       }
     }
   } catch (err) {
-    console.warn('[SelfDirection] StepEval lỗi — mặc định đạt (fail-open):', err instanceof Error ? err.message : String(err))
+    console.warn('[SelfDirection] StepEval lỗi — KHÔNG auto-accept mù:', err instanceof Error ? err.message : String(err))
   }
-  // Fail-open: không đánh giá được → chấp nhận output để không kẹt pipeline
-  return { complete: true, evaluation: `(${reviewerName} không đánh giá được — chấp nhận theo fail-open)` }
+  // ━━ USER REQUEST (2026-09-02): KHÔNG fail-open auto-accept mù ━━
+  // Trước đây: Opus/Omega không đánh giá được → complete:true (accept output mù)
+  // → pipeline chấp nhận output rỗng/sai → proposal "hoàn thành" nhưng code lỗi.
+  // Fix: nếu không đánh giá được → complete:false + evaluation cảnh báo, cho
+  // phép retry (MAX_STEP_ATTEMPTS). CHỈ khi output thực sự trống/rõ ràng fail
+  // mới được fail-open (tránh kẹt pipeline hoàn toàn khi attempt cuối).
+  const outputEmpty = !params.output || params.output.trim().length === 0
+  if (outputEmpty && params.attempt >= MAX_STEP_ATTEMPTS) {
+    // Lần cuối + output trống → fail-open để pipeline tiếp tục (tránh kẹt vĩnh viễn)
+    return { complete: true, evaluation: `(${reviewerName} không đánh giá được — output trống lần cuối, chấp nhận để mở kẹt pipeline)` }
+  }
+  // Còn lại: KHÔNG accept — retry với feedback cảnh báo
+  return {
+    complete: false,
+    evaluation: `(${reviewerName} không đánh giá được — KHÔNG chấp nhận mù, cần agent làm lại output chất lượng hơn)`,
+  }
 }
 
 // ==================== 5. REPORT — báo cáo hoàn thiện (Opus khi ủy quyền bật, Omega khi tắt) ====================
@@ -1642,12 +1669,35 @@ export async function autoReviewPendingIfDelegated(): Promise<number> {
   try {
     const settings = await getSelfDirectionSettings()
     if (!settings.opusDelegated) return 0
+
+    // ━━ USER REQUEST (2026-09-02): duyệt tuần tự, chờ orchestration xong ━━
+    // Nếu có ĐANG TỚI HẠN đang chạy orchestration (status=ready/running or
+    // in-process runningOrchestrations) → KHÔNG kick thêm, chờ hoàn thành.
+    // Lý do: workspace code-workflow dùng chung 1 git index → KHÔNG chạy song
+    // song (serializeCodeWorkflow mutex). Nếu Opus duyệt proposal B khi proposal
+    // A đang chạy → proposal B vào hàng chờ mutex, nhưng user không thấy → tưởng
+    // Opus bỏ qua. Fix: chỉ duyệt khi KHÔNG có orchestration nào đang chạy.
+    const activeOrchestrations = await db.selfDirectionProposal.findMany({
+      where: { status: { in: ['ready', 'running'] } },
+      select: { id: true },
+    })
+    const inProcess = activeOrchestrations.filter(p => runningOrchestrations.has(p.id))
+    if (inProcess.length > 0) {
+      console.log(`[SelfDirection] Opus KHÔNG duyệt thêm — ${inProcess.length} đề xuất đang tiến hành orchestration (chờ xong mới duyệt cái kế)`)
+      return 0
+    }
+
     const pending = await db.selfDirectionProposal.findMany({
       where: { status: 'pending' },
-      select: { id: true },
-      orderBy: { createdAt: 'asc' },
+      select: { id: true, priority: true, createdAt: true },
+      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
       take: 10,
     })
+    if (pending.length === 0) return 0
+
+    // Sắp xếp đề xuất theo ưu tiên Opus đánh giá (priority desc + createdAt asc
+    // = ưu tiên cao + sớm trước). Opus sẽ duyệt TỪNG cái, chờ orchestration xong
+    // mới duyệt cái kế (kickOmegaReviewsSerially đã sửa await orchestration).
     return kickOmegaReviewsSerially(pending.map(p => p.id))
   } catch {
     return 0
@@ -1684,6 +1734,29 @@ export function kickOmegaReviewsSerially(proposalIds: string[]): number {
       try {
         await opusReviewPending(id)
       } catch { /* đã được xử lý bên trong — fail-open giữ pending */ }
+
+      // ━━ USER REQUEST (2026-09-02): chờ orchestration HOÀN THÀNH ━━
+      // Sau khi Opus duyệt (approve → status ready → triggerOrchestration),
+      // KHÔNG duyệt đề xuất kế ngay. Chờ orchestration hoàn thành (proposal
+      // status chuyển completed/failed, hoặc runningOrchestrations nhả lock).
+      // Lý do: workspace code-workflow dùng chung 1 git index → KHÔNG chạy
+      // song song (serializeCodeWorkflow mutex). Duyệt liên tiếp sẽ xếp hàng
+      // chờ mutex, user không thấy tiến trình, dễ tưởng Opus bỏ qua/kẹt.
+      // Timeout 10 phút (orchestration code-workflow có thể dài — nhiều bước).
+      const startedAt = Date.now()
+      const TIMEOUT_MS = 10 * 60 * 1000
+      while (runningOrchestrations.has(id)) {
+        if (Date.now() - startedAt > TIMEOUT_MS) {
+          console.warn(`[SelfDirection] Opus chờ orchestration ${id} quá 10 phút — timeout, duyệt đề xuất kế`)
+          break
+        }
+        // Kiểm tra xem proposal còn ở status active không (có thể đã completed/failed)
+        try {
+          const cur = await db.selfDirectionProposal.findUnique({ where: { id }, select: { status: true } })
+          if (!cur || !['ready', 'running'].includes(cur.status)) break // orchestration đã xong
+        } catch { break }
+        await new Promise(r => setTimeout(r, 3000)) // poll mỗi 3s
+      }
     }
   })()
   return queued

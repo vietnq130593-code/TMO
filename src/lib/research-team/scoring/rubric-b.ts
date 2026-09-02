@@ -24,7 +24,7 @@
  * scoreRubricB + computeScorecardDelta KHÔNG gọi LLM/DB — testable standalone.
  */
 
-import { callUtilityLLM } from '@/lib/llm'
+import { callLLM } from '@/lib/llm'
 import type { ScorecardB } from '../types'
 
 // ============================================================
@@ -263,10 +263,10 @@ export async function scoreRubricBWithLlm(
 
   let result
   try {
-    result = await callUtilityLLM(prompt, RUBRIC_B_SYSTEM_PROMPT, 'rubric-b-score')
+    result = await callLLM(prompt, RUBRIC_B_SYSTEM_PROMPT, 'rubric-b-score', { temperature: 0.2, maxTokens: 800 })
   } catch (err) {
     console.warn(
-      '[RubricB] callUtilityLLM threw (non-blocking — fail-open):',
+      '[RubricB] callLLM threw (non-blocking — fail-open):',
       err instanceof Error ? err.message : String(err),
     )
     return failOpenRubricB('LLM call threw')

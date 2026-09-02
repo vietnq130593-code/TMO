@@ -23,7 +23,7 @@
  * Pure checkContextFit + formatWorklogLine KHÔNG gọi LLM/DB — testable.
  */
 
-import { callUtilityLLM } from '@/lib/llm'
+import { callLLM } from '@/lib/llm'
 
 // ============================================================
 // §1. TYPES
@@ -301,10 +301,10 @@ export async function checkContextFitWithLlm(
 
   let result
   try {
-    result = await callUtilityLLM(prompt, CONTEXT_FIT_SYSTEM_PROMPT, 'context-fit-match')
+    result = await callLLM(prompt, CONTEXT_FIT_SYSTEM_PROMPT, 'context-fit-match', { temperature: 0.2, maxTokens: 600 })
   } catch (err) {
     console.warn(
-      '[ContextFit] callUtilityLLM threw (non-blocking — fail-open → TOURNAMENT):',
+      '[ContextFit] callLLM threw (non-blocking — fail-open → TOURNAMENT):',
       err instanceof Error ? err.message : String(err),
     )
     return { ...baseline, reason: `LLM unavailable — ${baseline.reason || 'safe default TOURNAMENT'}` }

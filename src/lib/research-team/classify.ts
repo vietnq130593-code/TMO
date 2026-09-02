@@ -19,7 +19,7 @@
  * KHÔNG throw. Caller (API route) đảm bảo mission vẫn persist với status 'CLASSIFY'.
  */
 
-import { callUtilityLLM } from '@/lib/llm'
+import { callLLM } from '@/lib/llm'
 import type { LLMResult } from '@/lib/llm'
 import {
   scoreComplexity,
@@ -137,7 +137,7 @@ function extractJsonObject(content: string): Record<string, unknown> | null {
 // ============================================================
 
 /**
- * Phân loại mission: gọi callUtilityLLM → parse JSON → DR-C2 confidence counting
+ * Phân loại mission: gọi callLLM (kimi-k3 + fallback chain) → parse JSON → DR-C2 confidence counting
  * → TRIAGE → floor-rule → tie-break.
  *
  * KHÔNG throw — mọi lỗi (LLM error, parse fail, ...) → LOW confidence +
@@ -152,7 +152,7 @@ export async function classifyMission(
     return lowConfidenceFallback('Request rỗng — không thể phân loại.')
   }
 
-  // ---------- 1. GỌI LLM (callUtilityLLM — nemotron extraction core) ----------
+  // ---------- 1. GỌI LLM (callLLM — kimi-k3 agent core + fallback chain DeepSeek/MiniMax) ----------
   const userPrompt = [
     `TITLE: ${title || '(không có)'}`,
     `REQUEST: ${safeRequest}`,
@@ -162,7 +162,7 @@ export async function classifyMission(
 
   let llmResult: LLMResult
   try {
-    llmResult = await callUtilityLLM(userPrompt, CLASSIFY_SYSTEM_PROMPT, 'research-classify', {
+    llmResult = await callLLM(userPrompt, CLASSIFY_SYSTEM_PROMPT, 'research-classify', {
       temperature: 0.1,
       maxTokens: 1500,
       agentId: 'KING',
@@ -170,7 +170,7 @@ export async function classifyMission(
     })
   } catch (err) {
     console.error(
-      '[ResearchTeam/classify] callUtilityLLM threw:',
+      '[ResearchTeam/classify] callLLM threw:',
       err instanceof Error ? err.message : String(err),
     )
     return lowConfidenceFallback(

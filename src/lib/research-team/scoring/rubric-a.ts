@@ -27,7 +27,7 @@
  * Pure scoreRubricA KHÔNG gọi LLM/DB — testable standalone.
  */
 
-import { callUtilityLLM } from '@/lib/llm'
+import { callLLM } from '@/lib/llm'
 import type { ScoreAResult } from '../types'
 
 // ============================================================
@@ -293,7 +293,7 @@ function parseRubricAJson(content: string): RubricAInput | null {
 }
 
 /**
- * LLM-assisted scoring: gọi callUtilityLLM chấm 5 dim → scoreRubricA.
+ * LLM-assisted scoring: gọi callLLM (kimi-k3 agent core) chấm 5 dim → scoreRubricA.
  * Caller persist HypothesisRecord.scoreAJson (KHÔNG persist ở đây — pure scoring).
  *
  * Fail-open (TB-13 §4 — NIM keys placeholder): LLM error / parse fail →
@@ -315,10 +315,10 @@ export async function scoreRubricAWithLlm(
 
   let result
   try {
-    result = await callUtilityLLM(prompt, RUBRIC_A_SYSTEM_PROMPT, 'rubric-a-score')
+    result = await callLLM(prompt, RUBRIC_A_SYSTEM_PROMPT, 'rubric-a-score', { temperature: 0.2, maxTokens: 800 })
   } catch (err) {
     console.warn(
-      '[RubricA] callUtilityLLM threw (non-blocking — fail-open):',
+      '[RubricA] callLLM threw (non-blocking — fail-open):',
       err instanceof Error ? err.message : String(err),
     )
     return failOpenRubricA('LLM call threw — manual scoring needed')

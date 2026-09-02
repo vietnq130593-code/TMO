@@ -15,11 +15,12 @@
  *    thu tất cả kết quả; SA FAILED đánh dấu ❌ trong registry, batch tiếp tục.
  *
  * NOTE: Sub-agent là instance model stack chung (kimi-k3 + fallback chain — TB-01 §2).
- * SA dùng callUtilityLLM vì là small task (1 context riêng, 1 câu hỏi hẹp); nếu cần
- * deep reasoning sẽ qua callLLM (sivil.ts SYNTHESIZE + council engine.ts).
+ * SA dùng callLLM (kimi-k3 agent core + fallback chain) vì là agent logic;
+ * nếu cần deep reasoning sẽ qua callLLM (sivil.ts SYNTHESIZE + council engine.ts).
+ * callUtilityLLM (extraction cores nemotron/gpt-oss) CHỈ dùng cho trích xuất tài liệu — KHÔNG cho agent logic.
  */
 
-import { callUtilityLLM } from '@/lib/llm'
+import { callLLM } from '@/lib/llm'
 import type { LLMResult } from '@/lib/llm'
 import { SUB_AGENT_LIMITS } from '../constants'
 import { recordModelSwitch } from '../model-switch'
@@ -111,7 +112,7 @@ export function planSubAgents(
 // ============================================================
 
 /**
- * Dispatch 1 SA: gọi callUtilityLLM (SA = small task), set status, parse result.
+ * Dispatch 1 SA: gọi callLLM (kimi-k3 agent core), set status, parse result.
  * - LLM success → status DONE + result + modelUsed.
  * - LLM error → status FAILED + error; KHÔNG throw (fail-open).
  * - Record model switch nếu fallback xảy ra (non-blocking — best-effort).
@@ -129,7 +130,7 @@ export async function dispatchSubAgent(
 
   let llmResult: LLMResult
   try {
-    llmResult = await callUtilityLLM(prompt, systemPrompt, `g1-sa-${sa.id}`, {
+    llmResult = await callLLM(prompt, systemPrompt, `g1-sa-${sa.id}`, {
       temperature: 0.2,
       maxTokens: 2000, // SA output nhỏ — claim + evidence ngắn
       agentId: 'SIVIL',

@@ -8,14 +8,18 @@
  * OPUS (CTO). Response payload đổi field ủy quyền cũ → opusDelegated
  * (theo cột SelfDirectionSettings.opusDelegated đã db push).
  *
- * BẬT  → Opus phê duyệt/không duyệt các đề xuất THAY Mr. Architect
- *        (mọi proposal pending được kick review ngay lập tức — fire-and-forget)
+ * USER REQUEST (2026-09-02): khi bật ủy quyền, Opus duyệt TUẦN TỰ:
+ *  - Kiểm tra có đề xuất đang tiến hành (orchestration running) không → KHÔNG duyệt thêm
+ *  - Chỉ duyệt khi tất cả đề xuất đã duyệt được xử lý xong (completed/failed)
+ *  - Duyệt từng đề xuất, chờ xử lý xong mới duyệt cái tiếp
+ *  - Ưu tiên đề xuất nào nên duyệt (priority desc + createdAt asc)
+ *
+ * BẬT  → Opus phê duyệt/không duyệt các đề xuất THAY Mr. Architect (tuần tự)
  * TẮT  → Mr. Architect tự duyệt lại như bình thường
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
-import { setDelegation, getSelfDirectionSettings, kickOmegaReviewsSerially } from '@/lib/self-direction/orchestrator'
+import { setDelegation, getSelfDirectionSettings, autoReviewPendingIfDelegated } from '@/lib/self-direction/orchestrator'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,16 +32,12 @@ export async function POST(req: NextRequest) {
     const settings = await getSelfDirectionSettings()
 
     if (enabled) {
-      // Kick Opus review mọi proposal pending ngay — TUẦN TỰ (chống 429 storm
-      // khi hàng chục review đổ dồn vào LLM cùng lúc), fire-and-forget
-      const pending = await db.selfDirectionProposal.findMany({
-        where: { status: 'pending' },
-        select: { id: true },
-        orderBy: { createdAt: 'asc' },
-        take: 10,
-      })
-      const queued = kickOmegaReviewsSerially(pending.map(p => p.id))
-      console.log(`[SelfDirection] ỦY QUYỀN DUYỆT BẬT — Opus sẽ duyệt ${queued} đề xuất đang chờ thay Mr. Architect (xếp hàng tuần tự)`)
+      // USER REQUEST (2026-09-02): KHÔNG kick ngay lập tức — gọi
+      // autoReviewPendingIfDelegated sẽ (a) kiểm tra có orchestration đang chạy
+      // không → skip nếu có, (b) duyệt tuần tự + chờ orchestration hoàn thành
+      // trước khi duyệt cái kế. Fire-and-forget (void) — API return ngay.
+      void autoReviewPendingIfDelegated()
+      console.log('[SelfDirection] ỦY QUYỀN DUYỆT BẬT — Opus sẽ duyệt tuần tự (chờ orchestration xong mới duyệt cái kế)')
     } else {
       console.log('[SelfDirection] ỦY QUYỀN DUYỆT TẮT — Mr. Architect tự duyệt lại')
     }
