@@ -3563,6 +3563,13 @@ interface CodeTeamStepSummary {
   concerns: string
   unfixedBugs: string
   durationMs: number | null
+  // FIX 2026-09-15 #8 (P3 — audit Team Code): bằng chứng tool THẬT mỗi bước —
+  // trước đây "Bằng chứng pipeline" chỉ là milestone markers (agent_start/
+  // checkpoint/error) chứ KHÔNG phải tool evidence. Giờ mỗi step parse cột
+  // toolCalls của CodeTeamWorklog → tổng/OK/fail + tên tool fail.
+  toolsTotal: number
+  toolsOk: number
+  failedTools: string
 }
 
 /**
@@ -3792,6 +3799,14 @@ async function executeCodeTeamRequestInner(
       const unfixed = Array.isArray(content?.unfixedBugs)
         ? (content.unfixedBugs as unknown[]).map(b => String(b).slice(0, 120)).filter(Boolean).slice(0, 3)
         : []
+      // FIX 2026-09-15 #8 (P3): parse toolCalls JSON — bằng chứng tool thật/bước
+      const toolCalls = (() => {
+        try {
+          const raw = typeof w.toolCalls === 'string' ? JSON.parse(w.toolCalls) : w.toolCalls
+          return Array.isArray(raw) ? (raw as Array<{ tool?: string; success?: boolean }>) : []
+        } catch { return [] }
+      })()
+      const failedToolNames = [...new Set(toolCalls.filter(t => t && t.success === false).map(t => String(t.tool || '?')))]
       return {
         position: w.position,
         agent: w.agentName,
@@ -3801,6 +3816,9 @@ async function executeCodeTeamRequestInner(
         concerns: Array.isArray(content?.concerns) ? (content.concerns as unknown[]).map(c => String(c).slice(0, 100)).filter(Boolean).slice(0, 3).join(' | ') : '',
         unfixedBugs: unfixed.join(' | '),
         durationMs: typeof w.duration === 'number' ? w.duration : null,
+        toolsTotal: toolCalls.length,
+        toolsOk: toolCalls.filter(t => t && t.success === true).length,
+        failedTools: failedToolNames.join(', '),
       }
     })
   } catch (dbErr) {
@@ -3816,9 +3834,19 @@ async function executeCodeTeamRequestInner(
   reportLines.push(`**KẾT QUẢ CODE TEAM (SOP) — ${status.toUpperCase()}${routingInfo.mode ? ` · Mode ${routingInfo.mode} · Tier ${routingInfo.tier}` : ''} · ${Math.round(durationMs / 1000)}s · ${steps.length} bước**`)
   if (abortReason) reportLines.push(`⚠️ Dừng sớm: ${abortReason}`)
   if (runError) reportLines.push(`⚠️ Lỗi chạy workflow: ${runError}`)
+  // FIX 2026-09-15 #1 (P1): status 'escalated' giờ được persist THẬT (trước đây
+  // ghi 'failed' → flag escalated luôn false) — dòng này chỉ ra vấn đề đã được
+  // AUTO-ESCALATE tới Omega orchestrator (bước [OMEGA] phía dưới chứa advisory).
+  if (escalated) reportLines.push('🔴 TL ESCALATE: workflow dừng theo chỉ đạo TL — vấn đề đã AUTO-ESCALATE tới Omega orchestrator (xem bước OMEGA phía dưới).')
   for (const s of steps) {
     reportLines.push(`\n[${s.position} · ${s.agent} · ${s.step}]${s.durationMs ? ` (${(s.durationMs / 1000).toFixed(0)}s)` : ''}`)
     reportLines.push(`Tóm tắt: ${s.summary}`)
+    // FIX 2026-09-15 #8 (P3): bằng chứng tool thật mỗi bước (từ worklog toolCalls)
+    if (s.toolsTotal > 0) {
+      reportLines.push(`Tools: ${s.toolsOk}/${s.toolsTotal} OK${s.failedTools ? ` — FAIL: ${s.failedTools}` : ''}`)
+    } else {
+      reportLines.push('Tools: (bước này không gọi tool — tuyên bố chưa có bằng chứng thực tế)')
+    }
     if (s.issues) reportLines.push(`Issues: ${s.issues}`)
     if (s.unfixedBugs) reportLines.push(`⚠️ Chưa fix: ${s.unfixedBugs}`)
     if (s.concerns) reportLines.push(`Lưu ý: ${s.concerns}`)
@@ -3826,7 +3854,13 @@ async function executeCodeTeamRequestInner(
   if (steps.length === 0) {
     reportLines.push('\n(không có worklog — workflow có thể đã abort trước bước đầu)')
   }
-  reportLines.push(`\nBằng chứng pipeline: ${evidence.slice(-12).join(' · ') || '(trống)'}`)
+  // FIX 2026-09-15 #8 (P3): đổi tên dòng evid— "Bằng chứng pipeline" (milestone
+  // markers) giờ đi kèm TỔNG tool evidence thật từ worklog để parent agent phân
+  // biệt milestone vs bằng chứng thực tế.
+  const totalTools = steps.reduce((acc, s) => acc + s.toolsTotal, 0)
+  const totalToolsOk = steps.reduce((acc, s) => acc + s.toolsOk, 0)
+  reportLines.push(`\nBằng chứng thực tế: ${totalToolsOk}/${totalTools} tool calls OK (chi tiết từng bước phía trên; bước 0 tool = chưa kiểm định được)`)
+  reportLines.push(`Tiến trình pipeline: ${evidence.slice(-12).join(' · ') || '(trống)'}`)
   let report = reportLines.join('\n')
   if (report.length > 4000) {
     // FIX R2-c #4: slice theo code point — report chứa emoji (⚠️📋▶), slice
@@ -3836,8 +3870,12 @@ async function executeCodeTeamRequestInner(
   }
 
   finishRun(
-    ok ? 'done' : runError || abortReason ? 'error' : 'cancelled',
-    `[Code Team SOP] ${status} · ${steps.length} bước · ${Math.round(durationMs / 1000)}s`,
+    // FIX 2026-09-15 #9 (P4 — audit Team Code): nhãn delegation run đúng nghĩa —
+    // trước đây status 'escalated'/'failed' (không runError/abortReason) rơi vào
+    // 'cancelled' SAI (audit: "AgentRunRecord delegation run ghi status='
+    // cancelled' (sai nhãn)"). escalated/failed là thất bại thật → 'error'.
+    ok ? 'done' : (runError || abortReason || escalated || status === 'failed') ? 'error' : 'cancelled',
+    `[Code Team SOP] ${status} · ${steps.length} bước · ${Math.round(durationMs / 1000)}s${totalTools > 0 ? ` · ${totalToolsOk}/${totalTools} tools OK` : ''}`,
   )
 
   console.log(`[CodeTeamRequest] ${parentAgentName} ← Code Team xong: ${status} — ${steps.length} bước, ${Math.round(durationMs / 1000)}s${routingInfo.mode ? ` (Mode ${routingInfo.mode}/Tier ${routingInfo.tier})` : ''}`)
@@ -3852,7 +3890,7 @@ async function executeCodeTeamRequestInner(
     report,
     durationMs,
     abortedBy: abortReason || undefined,
-    error: ok ? undefined : (runError || abortReason || (escalated ? 'TL ESCALATE — đọc report để biết lý do' : status === 'failed' ? 'Workflow thất bại — đọc report + steps để biết bước nào lỗi' : `Trạng thái: ${status}`)),
+    error: ok ? undefined : (runError || abortReason || (escalated ? 'TL ESCALATE — vấn đề đã AUTO-ESCALATE tới Omega orchestrator; đọc report + steps (bước OMEGA) để biết lý do và tư vấn khắc phục' : status === 'failed' ? 'Workflow thất bại — đọc report + steps để biết bước nào lỗi' : status === 'cancelled' ? 'Workflow bị hủy (user dừng/ngắt kết nối) — không phải lỗi hệ thống' : `Trạng thái: ${status}`)),
     hint: ok
       ? undefined
       : 'Code team chưa hoàn thành — đọc "steps" + "report" (issues/unfixedBugs từng bước), khắc phục phần còn lại bằng tools của mình hoặc gọi request_code_team lần nữa với task đã thu hẹp.',

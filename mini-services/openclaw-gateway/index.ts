@@ -17,7 +17,8 @@ import { spawn, ChildProcess } from "child_process";
 import { resolve, dirname } from "path";
 import fs, { writeFileSync, readFileSync, unlinkSync, existsSync } from "fs";
 
-const GATEWAY_PORT = 18789;
+// FIX 2026-09-15 (multi-instance): port từ env — bản clone đặt OPENCLAW_GATEWAY_PORT riêng.
+const GATEWAY_PORT = parseInt(process.env.OPENCLAW_GATEWAY_PORT || '18789', 10);
 const GATEWAY_AUTH = "none";
 const GATEWAY_BIND = "loopback";
 const PID_FILE = resolve(__dirname, ".gateway.pid");

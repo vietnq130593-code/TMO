@@ -337,6 +337,18 @@ Agents KHÁC thấy cần automation sẽ đề xuất với bạn qua propose_a
 Lưu ý GIT: luôn git_commit trước khi git_push. Xem trạng thái trước bằng dry_run: tool_call: git_push({"dry_run": true}). force:true CHỈ dùng khi user yêu cầu ghi đè.
 
 ═══════════════════════════════════════════
+🔐 CLONE-FIRST WORKFLOW — QUY TRÌNH NÂNG CẤP HỆ THỐNG (user directive 2026-09-15)
+═══════════════════════════════════════════
+Khi phát hiện lỗi/thiếu sót/điểm cần nâng cấp của hệ thống TMO — TẤT CẢ chỉnh sửa thực hiện THEO QUY TRÌNH CLONE-FIRST (bắt buộc khi điều phối team):
+
+1. LÀM VIỆC TRÊN THƯ MỤC CLONE: workspace root của agents là bản sao CLONE của TMO chính thức (env TMO_CLONE_DIR — ví dụ E:\APP\TMO-clone trên máy user). Toàn bộ file_read/file_edit/git_commit... của team thực hiện TRÊN CLONE — TUYỆT ĐỐI KHÔNG sửa trực tiếp thư mục hệ thống TMO đang vận hành.
+2. KIỂM ĐỊNH TRÊN CLONE: sau khi team sửa code, chạy pipeline kiểm định đầy đủ TRÊN CLONE (lint → type_check → run_tests → smoke) — chỉ khi TOÀN BỘ PASS và không còn vấn đề gì mới sang bước 3.
+3. PUSH LÊN GITHUB: code đã kiểm định mới được commit + push lên kho lưu trữ GitHub chính thức (git_push / verify_and_push).
+4. PULL VỀ HỆ THỐNG ĐANG VẬN HÀNH: TMO production cập nhật bằng git_pull (ff-only, an toàn) — RIÊNG BIỆT, sau khi push thành công.
+
+ĐIỀU PHỐI: khi giao request_code_team / delegate_task / dispatch_agent cho team sửa code hệ thống, PHẢI ghi rõ trong task: "thực hiện trên workspace clone, chạy kiểm định (lint/type_check/run_tests) trước khi commit". CHỈ kết luận "nâng cấp thành công" khi: pipeline kiểm định trên clone PASS + push lên GitHub thành công + pull về hệ thống đang vận hành không lỗi.
+
+═══════════════════════════════════════════
 LEARNING & MEMORY
 ═══════════════════════════════════════════
 
@@ -680,6 +692,20 @@ async function _doStandaloneSeed(): Promise<boolean> {
               data: { instruction: def.instruction },
             })
             console.log(`[Standalone] Migrated ${def.name} instruction → new version (MANAGE_AUTOMATION — Smolab Automation)`)
+          } catch (migErr) {
+            console.warn(`[Standalone] Instruction migration failed for ${def.name}:`, migErr)
+          }
+        } else if (existing.instruction && def.instruction.includes('CLONE-FIRST WORKFLOW') && !existing.instruction.includes('CLONE-FIRST WORKFLOW')) {
+          // (2026-09-15) Marker CLONE-FIRST (user directive): mọi chỉnh sửa hệ
+          // thống thực hiện trên thư mục clone (env TMO_CLONE_DIR — local user:
+          // E:\APP\TMO-clone) → kiểm định → push GitHub → pull về hệ thống đang
+          // vận hành. Omega phải biết điều phối các team theo quy trình này.
+          try {
+            await db.agentProfile.update({
+              where: { name: def.name },
+              data: { instruction: def.instruction },
+            })
+            console.log(`[Standalone] Migrated ${def.name} instruction → new version (CLONE-FIRST WORKFLOW — quy trình nâng cấp qua clone)`)
           } catch (migErr) {
             console.warn(`[Standalone] Instruction migration failed for ${def.name}:`, migErr)
           }

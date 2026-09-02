@@ -12,7 +12,11 @@ import { createServer } from 'net'
 import { resolve } from 'path'
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'fs'
 
-const PORT = 18790
+// FIX 2026-09-15: port từ env (mặc định 18790 như cũ). Trước đây HARDCODE
+// 18790 → mọi app instance (production + clone kiểm định) tranh nhau 1 port,
+// manager killPortHolders ping-pong SIGKILL server của nhau. Multi-instance
+// đặt OPENCODE_SERVER_PORT riêng (vd clone chạy app để kiểm định: 18791).
+const PORT = parseInt(process.env.OPENCODE_SERVER_PORT || '18790', 10)
 const PID_FILE = resolve(__dirname, '.pid')
 const MANAGER_PID_FILE = resolve(__dirname, '.manager.pid')
 const SERVER_SCRIPT = resolve(__dirname, 'server.ts')

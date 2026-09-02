@@ -111,6 +111,11 @@ export interface AgentRun {
   events: AgentRunEvent[]
   counters: AgentRunCounters
   lastTodos?: AgentRunTodo[]
+  /** FIX 2026-09-15 #6 (P4 — audit Team Code): token usage thật của run (tích
+   * lũy qua các LLM call trong ReAct loop) — endAgentRun nhận từ caller
+   * (workflow-engine đã đếm stepTokensUsed), persist lên AgentRunRecord.
+   * Trước đây tracker luôn ghi null → mất số liệu phân tích hiệu năng. */
+  tokensUsed?: number
 }
 
 // ==================== Storage (globalThis — shared across module instances) ====================
@@ -245,7 +250,7 @@ function persistAgentRunRecord(run: AgentRun): void {
       // token_budget/no_progress) nằm trong goal-loop, task 20-c wire
       stopReason: run.status === 'done' ? 'complete' : run.status === 'error' ? 'error' : 'cancelled',
       cycles: null, // 20-c: wire số chu kỳ goal-loop
-      tokensUsed: null, // 20-c: wire tokensUsed từ goalLoop metadata
+      tokensUsed: run.tokensUsed ?? null, // FIX 2026-09-15 #6: token thật từ caller (trước đây null cứng)
       toolCalls: run.counters.toolCalls,
       toolFailures,
       durationMs: Math.max(0, endedAt - run.startedAt),
@@ -332,6 +337,9 @@ export function endAgentRun(
   runId: string | null | undefined,
   status: 'done' | 'error' | 'cancelled',
   summary?: string,
+  /** FIX 2026-09-15 #6 (P4): token usage thật tích lũy của run — optional,
+   * mọi caller cũ không truyền giữ behavior nguyên vẹn. */
+  tokensUsed?: number,
 ): void {
   try {
     if (!sessionId) return
@@ -346,6 +354,10 @@ export function endAgentRun(
     const wasRunning = run.status === 'running'
     run.status = status
     run.endedAt = Date.now()
+    // FIX 2026-09-15 #6 (P4): gắn token thật trước khi persist (nếu caller truyền)
+    if (typeof tokensUsed === 'number' && tokensUsed > 0) {
+      run.tokensUsed = tokensUsed
+    }
     pushEvent(run, {
       id: nextEventId(),
       ts: Date.now(),

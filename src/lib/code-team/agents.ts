@@ -132,7 +132,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
   },
   {
     name: 'SENTINEL',
-    description: 'G2-B — Review & Bug Fix. 5 loại bug (Security #1), max 3 vòng iteration, ESCALATE khi cần.',
+    description: 'G2-B — Review & Bug Fix. 5 loại bug (Security #1), max 5 vòng iteration (engine cap — audit 2026-09-15 #10: đồng bộ text với runtime thực tế), ESCALATE khi cần.',
     instruction: '',
     domain: 'security',
     capable: 'Code review, tìm bugs, kiểm tra security, fix bugs, iterative refinement',
@@ -257,6 +257,28 @@ async function _doSeed(): Promise<boolean> {
             console.warn(`[CodeTeam] Model sync ${def.name} thất bại (không chặn boot):`, syncErr)
           }
         }
+        // FIX 2026-09-15 #10 (P4 — audit Team Code): marker-migration cho
+        // instruction/description lỗi thời — SENTINEL prompt nói "Max 3 vòng"
+        // trong khi workflow-engine cap thực tế = 5 (comment engine: "was 3 —
+        // too few"). Row còn mang default cũ (chứa marker "Max 3 vòng iteration")
+        // → refresh instruction/description từ định nghĩa MỚI trong code; row
+        // user đã customize khác hẳn (không chứa marker) → GiỮ NGUYÊN.
+        if (def.name === 'SENTINEL' && existing.instruction && existing.instruction.includes('Max 3 vòng iteration')) {
+          try {
+            const freshPrompt = getAgentPrompt('G2-B')
+            await db.agentProfile.update({
+              where: { id: existing.id },
+              data: {
+                instruction: freshPrompt,
+                ...(existing.description && existing.description.includes('max 3 vòng') ? { description: def.description } : {}),
+              },
+            })
+            console.log('[CodeTeam] Migrated SENTINEL instruction → new version (max 5 vòng — đồng bộ engine cap thực tế)')
+          } catch (migErr) {
+            console.warn(`[CodeTeam] Instruction migration SENTINEL thất bại (không chặn boot):`, migErr)
+          }
+        }
+
         // Agent exists → SKIP entirely (preserve ALL user customizations)
         // This is the key difference from old auto-seeding:
         //   - Old: Overwrote instruction + forced isSystem=true

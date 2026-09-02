@@ -47,7 +47,9 @@ export interface WorklogEntry {
 
 export interface WorklogIssue {
   severity: 'critical' | 'high' | 'medium' | 'low'
-  type: 'security' | 'logic' | 'type' | 'edge_case' | 'compatibility' | 'performance' | 'simplification' | 'architecture' | 'best_practice' | 'scalability'
+  // FIX 2026-09-15 #2 (P2): thêm 'workflow_failure' — issue do AUTO-ESCALATE
+  // → Omega ghi vào worklog row OMEGA (terminal failure của workflow).
+  type: 'security' | 'logic' | 'type' | 'edge_case' | 'compatibility' | 'performance' | 'simplification' | 'architecture' | 'best_practice' | 'scalability' | 'workflow_failure'
   description: string
   location?: string
   fixApplied?: boolean
@@ -513,10 +515,19 @@ export async function upsertSession(data: {
  * accepted since the DB column is a free-form string and the status API
  * surfaces it verbatim — callers get an honest terminal state instead of a
  * type error forcing a silent downgrade to 'completed'.
+ *
+ * 'escalated' (TL checkpoint ESCALATE) is likewise a first-class terminal
+ * state — persisted verbatim so request_code_team SOP report, status API and
+ * self-direction scan can distinguish "TL chủ động đẩy vấn đề lên" (escalated)
+ * from "workflow vỡ genuinely" (failed). FIX 2026-09-15 #1.
+ *
+ * 'cancelled' (FIX 2026-09-15 #1 tiếp): user hủy / client ngắt kết nối — KHÔNG
+ * phải lỗi hệ thống, không được trộn lẫn với 'failed' (self-direction scan
+ * chỉ đếm failed/escalated; SOP report hiển thị đúng ý nghĩa).
  */
 export async function completeSession(
   sessionId: string,
-  status: 'completed' | 'completed_with_errors' | 'failed',
+  status: 'completed' | 'completed_with_errors' | 'failed' | 'escalated' | 'cancelled',
   totalDuration?: number,
   completedAgents?: string[],
 ): Promise<void> {

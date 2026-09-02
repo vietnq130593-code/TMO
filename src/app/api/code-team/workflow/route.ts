@@ -27,6 +27,7 @@
  *   - tool_result: { agent, position, tool, result, detail, duration }
  *   - checkpoint: { after, step, decision?, reasoning? }
  *   - workflow_done: { totalDuration, sessionId, status }
+ *   - omega_escalation: { advisory, reason, tokensUsed, agent?, position? } — AUTO-ESCALATE → Omega
  *   - error: { agent?, message }
  *   - heartbeat: { timestamp } — sent every 15s to keep connection alive
  */
@@ -85,10 +86,41 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
       }
     } else if (type === 'workflow_done') {
       const totalDuration = event.totalDuration as number | undefined
+      // FIX 2026-09-15 #1 (P1 — audit Team Code): message cuối tôn trọng THẬT
+      // event.status — trước đây mọi kết thúc (kể cả escalated/failed) đều ghi
+      // "✅ Workflow hoàn thành!" (vừa sai sự thật vừa che dấu thất bại).
+      const status = String(event.status || 'completed')
+      const durSuffix = totalDuration ? ` (${(totalDuration / 1000).toFixed(1)}s)` : ''
+      let content: string
+      if (status === 'completed') {
+        content = `✅ Workflow hoàn thành!${durSuffix}`
+      } else if (status === 'completed_with_errors') {
+        content = `⚠️ Workflow hoàn thành kèm cảnh báo chất lượng (quality gate bắt lỗi lint/tsc) — đọc các bước để khắc phục.${durSuffix}`
+      } else if (status === 'escalated') {
+        content = `🔴 Workflow dừng sớm — TL ESCALATE (vấn đề đã được gửi tới Omega orchestrator để tìm cách xử lý).${durSuffix}`
+      } else if (status === 'failed') {
+        content = `❌ Workflow thất bại — đọc các bước phía trên để biết lỗi ở đâu.${durSuffix}`
+      } else {
+        content = `⏹ Workflow kết thúc (${status}).${durSuffix}`
+      }
       row = {
         role: 'assistant',
-        content: `✅ Workflow hoàn thành!${totalDuration ? ` (${(totalDuration / 1000).toFixed(1)}s)` : ''}`,
-        metadata: { isTeamMessage: true, agentName: 'SYSTEM', agentPosition: 'TL' },
+        content,
+        metadata: { isTeamMessage: true, agentName: 'SYSTEM', agentPosition: 'TL', workflowStatus: status },
+      }
+    } else if (type === 'omega_escalation') {
+      // FIX 2026-09-15 #2 (P2 — audit Team Code): AUTO-ESCALATE → Omega — persist
+      // advisory vào ChatMessage để Omega/user/session-history đều đọc được
+      // (trước đây tín hiệu thất bại của team KHÔNG bao giờ tới Omega).
+      const advisory = String(event.advisory || '').slice(0, 2000)
+      const reason = String(event.reason || '').slice(0, 300)
+      const agentName = (event.agent as string) || 'Omega'
+      if (advisory) {
+        row = {
+          role: 'assistant',
+          content: `🧠 **TƯ VẤN TỪ OMEGA ORCHESTRATOR** (auto-escalate — vấn đề: ${reason || 'workflow gặp sự cố'})\n\n${advisory}`,
+          metadata: { isTeamMessage: true, agentName, agentPosition: 'OMEGA', omegaEscalation: true, reason, tokensUsed: event.tokensUsed },
+        }
       }
     } else if (type === 'error') {
       const message = (event.message as string) || 'Unknown error'

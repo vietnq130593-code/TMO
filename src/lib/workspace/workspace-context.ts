@@ -115,8 +115,18 @@ export async function buildWorkspaceContext(): Promise<WorkspaceContext> {
   - tool_call: git_pull({"branch": "main"})  — PULL code mới nhất từ remote khi user yêu cầu (ff-only an toàn; dry_run:true để xem trước; force:true chỉ khi user yêu cầu)`
     : '  - git tools: HIỆN TẮT — bật ENABLE_GIT_COMMIT=true trong .env rồi restart app'
 
+  // ━━━ FIX 2026-09-15 (P5 — user directive clone-first): workspace là bản CLONE ━━━
+  // Khi TMO_CLONE_DIR được cấu hình, mọi agent (team + standalone) được thông
+  // báo rõ workspace đang thao tác là thư mục clone AN TOÀN để chỉnh sửa;
+  // hệ thống đang vận hành chỉ cập nhật qua push GitHub → pull (riêng).
+  // Không hardcode path — đọc từ env (user local: E:\APP\TMO-clone...).
+  const cloneDir = (process.env.TMO_CLONE_DIR || '').trim()
+  const cloneNote = cloneDir
+    ? `\n🔐 CLONE-FIRST WORKFLOW: workspace này là THƯ MỤC CLONE của TMO chính thức — AN TOÀN để đọc/sửa/commit (${cloneDir}). Quy trình nâng cấp hệ thống: (1) sửa code + chạy kiểm định (lint/type_check/run_tests) TRÊN CLONE → (2) TOÀN BỘ PASS + không còn vấn đề mới git_push lên GitHub → (3) hệ thống TMO đang vận hành cập nhật bằng git_pull riêng. TUYỆT ĐỐI không sửa trực tiếp hệ thống đang chạy; không kết luận "nâng cấp thành công" khi pipeline kiểm định chưa PASS.`
+    : ''
+
   const text = `--- Active Workspace (thư mục user đã chọn) ---
-Workspace root: ${root}
+Workspace root: ${root}${cloneNote}
 Cấu trúc cấp 1 (${listing.length} mục${listing.length >= 40 ? ', đã giới hạn 40' : ''}):
 ${listing.length > 0 ? listing.join('\n') : '(thư mục trống hoặc không đọc được)'}
 

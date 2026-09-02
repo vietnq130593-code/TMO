@@ -397,6 +397,14 @@ const MAX_AUTO_RESUME_PER_SESSION =
 const AUTO_RESUME_DELAY_MS =
   parseInt(process.env.WORKFLOW_AUTO_RESUME_DELAY_MS || '2000', 10) || 2000
 
+// ━━━ FIX 2026-09-15 #3 (P2 — audit Team Code) — TOOL-FAILURE THRESHOLD ━━━
+// Số tool fail LIÊN TIẾP trong 1 ReAct step trước khi auto-consult Omega.
+// Trước đây tool fail chỉ được đẩy vào conversation — KHÔNG counter/threshold/
+// guard nào → agent quay vòng thất bại đến cạn maxIterations (audit Team Code
+// 2026-09-15: "tool fail → đẩy vào conversation, KHÔNG có counter/threshold/guard").
+const WF_TOOL_FAIL_ESCALATE_THRESHOLD =
+  parseInt(process.env.WF_TOOL_FAIL_ESCALATE_THRESHOLD || '3', 10) || 3
+
 
 // ==================== TYPES ====================
 
@@ -416,6 +424,7 @@ export interface WorkflowEvent {
     | 'iteration'
     | 'clarification_resolved'
     | 'workflow_done'
+    | 'omega_escalation'
     | 'error'
   [key: string]: unknown
 }
@@ -932,6 +941,15 @@ export async function runWorkflow(
         console.error('[Workflow] Layer 9 flush failed (TL missing path):', mErr)
       })
       await completeSession(sessionId, 'failed')
+      // FIX 2026-09-15 #2 (P2): team thiếu TL = vấn đề hạ tầng cấu hình — gửi
+      // thẳng Omega để điều phối khắc phục (fail-open).
+      await escalateWorkflowFailureToOmega({
+        sessionId,
+        reason: 'Code Team thiếu agent TL',
+        detail: errorMsg,
+        spec: userRequest,
+        emit: safeEmit,
+      })
       return
     }
 
@@ -1122,6 +1140,119 @@ export async function runWorkflow(
     try {
       await completeSession(sessionId, 'failed')
     } catch {}
+    // FIX 2026-09-15 #2 (P2): fatal error cũng AUTO-ESCALATE về Omega — trước
+    // đây lỗi này chỉ log console + SSE, Omega không nhận được tín hiệu gì.
+    await escalateWorkflowFailureToOmega({
+      sessionId,
+      reason: 'Workflow fatal error',
+      detail: errorMsg,
+      spec: userRequest,
+      routing: request.routing,
+      emit: safeEmit,
+    })
+  }
+}
+
+// ==================== FIX 2026-09-15 #2 — AUTO-ESCALATE → OMEGA (P2) ====================
+
+/**
+ * Audit Team Code 2026-09-15 (phát hiện #2): trước đây mọi terminal failure
+ * của Code Team workflow (TL checkpoint ESCALATE, fatal error, TL missing)
+ * chỉ tới USER qua SSE + completeSession — Omega orchestrator KHÔNG nhận
+ * được tín hiệu gì ("đường (c): ESCALATE chỉ tới USER, Omega không nhận được").
+ *
+ * Giờ mirror AUTO-ESCALATE của goal-loop (agent-goal-loop.ts [G]): khi workflow
+ * kết thúc KHÔNG thành công → consultOmega({autoTriggered:true}) → advisory:
+ *   1. emit SSE 'omega_escalation' (route.ts persist ChatMessage + UI render)
+ *   2. ghi worklog row position OMEGA — request_code_team SOP report (steps)
+ *      + self-direction scan đọc được (bằng chứng escalation tồn tại trong DB)
+ *   3. digest issues/unfixedBugs/tool-fail từ worklog THẬT đính kèm (evidence)
+ *
+ * Fail-open tuyệt đối: lỗi consult KHÔNG được đổi outcome workflow. Mỗi run
+ * chỉ gọi tại 1 terminal path (các path loại nhau loại trừ nhau) → max 1 lần.
+ */
+async function escalateWorkflowFailureToOmega(params: {
+  sessionId: string
+  reason: string
+  detail: string
+  spec?: string
+  routing?: { mode?: string; tier?: number; score?: number }
+  completedAgents?: string[]
+  totalDurationMs?: number
+  emit: SSEEmitter
+}): Promise<void> {
+  const { sessionId, reason, detail, emit } = params
+  try {
+    // Bằng chứng thật cho Omega: issues/unfixedBugs/tool-fail từ worklog đã ghi
+    let issuesDigest = ''
+    try {
+      const worklogs = await readWorklog(sessionId)
+      const allIssues = worklogs.flatMap(w => w.issues).filter(i => !i.fixApplied)
+      const unfixed = worklogs.flatMap(w => w.unfixedBugs || [])
+      const parts: string[] = []
+      if (allIssues.length > 0) {
+        parts.push(`Issues chưa fix: ${allIssues.slice(-6).map(i => `[${i.severity}] ${i.type}: ${i.description.slice(0, 120)}`).join('; ')}`)
+      }
+      if (unfixed.length > 0) {
+        parts.push(`Bugs chưa fix: ${unfixed.slice(-6).map(b => `[${b.severity}] ${b.description.slice(0, 120)}`).join('; ')}`)
+      }
+      const failedTools = worklogs
+        .flatMap(w => (w.toolCallsLog || []).filter(t => !t.success).map(t => `${t.tool}: ${t.result.slice(0, 100)}`))
+      if (failedTools.length > 0) {
+        parts.push(`Tool fail gần nhất: ${failedTools.slice(-5).join(' | ')}`)
+      }
+      issuesDigest = parts.join('\n')
+    } catch { /* fail-open — digest rỗng vẫn consult được */ }
+
+    const { consultOmega } = await import('@/lib/omega-orchestrator')
+    const consult = await consultOmega({
+      problem: `Code Team workflow (session ${sessionId.slice(0, 20)}) kết thúc KHÔNG thành công — ${reason}. Chi tiết: ${detail.slice(0, 600)}`,
+      context: [
+        params.spec ? `Yêu cầu gốc: ${params.spec.replace(/\s+/g, ' ').slice(0, 500)}` : '',
+        params.routing ? `Routing: Mode ${params.routing.mode ?? '?'}/Tier ${params.routing.tier ?? '?'} (score ${params.routing.score ?? '?'})` : '',
+        params.completedAgents && params.completedAgents.length > 0 ? `Agents đã chạy: ${params.completedAgents.join(' → ')}` : '',
+        params.totalDurationMs ? `Thời lượng: ${Math.round(params.totalDurationMs / 1000)}s` : '',
+      ].filter(Boolean).join('\n'),
+      attempted: issuesDigest || '(worklog chưa ghi issue/tool fail nào)',
+      callingAgent: 'APEX (Code Team TL)',
+      severity: 'high',
+      autoTriggered: true,
+    })
+
+    if (consult.success && consult.text) {
+      emit({
+        type: 'omega_escalation',
+        sessionId,
+        agent: 'Omega',
+        position: 'OMEGA',
+        advisory: consult.text.slice(0, 2000),
+        reason: `${reason}: ${detail}`.slice(0, 300),
+        tokensUsed: consult.tokensUsed,
+      })
+      // Worklog row position OMEGA — hiện trong SOP report steps + scan source
+      const entry: WorklogEntry = {
+        sessionId,
+        agentName: 'Omega',
+        position: 'OMEGA',
+        step: 'omega_escalation',
+        timestamp: new Date(),
+        summary: `AUTO-ESCALATE → Omega: ${reason} — advisory ${consult.tokensUsed} tokens`,
+        completed: [],
+        inProgress: [],
+        issues: [{ severity: 'high', type: 'workflow_failure', description: `${reason}: ${detail}`.slice(0, 300) }],
+        suggestions: [consult.text.slice(0, 400)],
+        concerns: [],
+        codeLocationMap: { filesToRead: [], filesToSkip: [], dependencies: [], readingStrategy: 'full' },
+        nextSteps: [],
+        outputForNext: consult.text.slice(0, 2000),
+      }
+      await writeWorklog(entry, 0)
+      console.log(`[Workflow] AUTO-ESCALATE → Omega: advisory nhận (${consult.tokensUsed} tokens) — đã emit + ghi worklog OMEGA [session ${sessionId.slice(0, 12)}]`)
+    } else {
+      console.warn(`[Workflow] AUTO-ESCALATE → Omega KHÔNG trả advisory (fail-open): ${consult.error ?? 'không rõ lý do'}`)
+    }
+  } catch (err) {
+    console.warn('[Workflow] AUTO-ESCALATE → Omega thất bại (fail-open):', err instanceof Error ? err.message : String(err))
   }
 }
 
@@ -1199,7 +1330,10 @@ async function runPipeline(
       await metricsCollector.flush().catch((mErr) => {
         console.error('[Workflow] Layer 9 flush failed (cancel path):', mErr)
       })
-      await completeSession(sessionId, 'failed', Date.now() - workflowStartTime, completedAgents)
+      // FIX 2026-09-15 #1 (P1): user hủy ≠ workflow lỗi — persist 'cancelled'
+      // (trước đây 'failed' làm nhiễm tín hiệu thất bại cho scan/SOP report).
+      // KHÔNG auto-escalate Omega: đây là ý muốn người dùng, không phải sự cố.
+      await completeSession(sessionId, 'cancelled', Date.now() - workflowStartTime, completedAgents)
       return
     }
 
@@ -1210,7 +1344,9 @@ async function runPipeline(
       await metricsCollector.flush().catch((mErr) => {
         console.error('[Workflow] Layer 9 flush failed (abort path):', mErr)
       })
-      await completeSession(sessionId, 'failed', Date.now() - workflowStartTime, completedAgents)
+      // FIX 2026-09-15 #1 (P1): client ngắt kết nối ≠ lỗi hệ thống — persist
+      // 'cancelled' thay vì 'failed' (tín hiệu trung thực cho scan/SOP).
+      await completeSession(sessionId, 'cancelled', Date.now() - workflowStartTime, completedAgents)
       return
     }
 
@@ -1421,14 +1557,29 @@ async function runPipeline(
           workspaceRoot: await getWorkspaceRoot(),
         })
 
-        // Still complete the session as failed
+        // FIX 2026-09-15 #1 (P1 — audit Team Code): ESCALATE giờ là terminal
+        // state THẬT — persist 'escalated' (trước đây ghi 'failed' làm mất tín
+        // hiệu ở SOP report flag + self-direction scan) và truyền kèm
+        // completedAgents (trước đây path này bỏ qua → session neo agent cũ).
         const totalDuration = Date.now() - workflowStartTime
         // Phase 2 SMOLAB Proposal 7 — flush Layer 9 metrics before early-exit
         // (escalate path). Fire-and-forget; never block the workflow.
         await metricsCollector.flush().catch((mErr) => {
           console.error('[Workflow] Layer 9 flush failed (escalate path):', mErr)
         })
-        await completeSession(sessionId, 'failed', totalDuration)
+        await completeSession(sessionId, 'escalated', totalDuration, completedAgents)
+        // FIX 2026-09-15 #2 (P2): ESCALATE tự động gửi vấn đề tới OMEGA —
+        // mirror AUTO-ESCALATE của goal-loop (trước đây Omega không nhận gì).
+        await escalateWorkflowFailureToOmega({
+          sessionId,
+          reason: `TL checkpoint ESCALATE sau ${step.position}`,
+          detail: verifyResult.reasoning,
+          spec,
+          routing: routingDecision,
+          completedAgents,
+          totalDurationMs: totalDuration,
+          emit,
+        })
         emit({ type: 'workflow_done', totalDuration, sessionId, status: 'escalated' })
         return
       }
@@ -1859,7 +2010,9 @@ export async function runAgentStep(params: {
   const endStepRun = (status: 'done' | 'error' | 'cancelled') => {
     if (runEnded) return
     runEnded = true
-    endAgentRun(sessionId, runId, status, `${iterations} vòng · ${totalToolCalls} tool calls`)
+    // FIX 2026-09-15 #6 (P4 — audit Team Code): wire tokensUsed THẬT của step
+    // vào AgentRunRecord (trước đây tracker luôn persist null → mất số liệu).
+    endAgentRun(sessionId, runId, status, `${iterations} vòng · ${totalToolCalls} tool calls`, stepTokensUsed)
   }
   // Flag session bị user hủy → cắt ngang ReAct của step + truyền xuống LLM
   const isCancelled = () => isSessionCancelled(sessionId)
@@ -1926,6 +2079,10 @@ export async function runAgentStep(params: {
   let nativeToolCallCount = 0
   let regexFallbackCount = 0
   const toolCallsLog: Array<{ tool: string; args: Record<string, unknown>; result: string; duration: number; success: boolean }> = []
+  // ━━━ FIX 2026-09-15 #3/#4 (P2/P3) — counters cho guards mới ━━━
+  let consecutiveToolFailures = 0 // tool-fail liên tiếp → auto-consult Omega
+  let omegaConsultedInStep = false // max 1 consult Omega / step (chống đệ quy tư vấn)
+  let hallucinationWarnings = 0 // đếm cảnh cáo kết-quả-tool giả
 
   console.log(`[Workflow] Running agent: ${agent.name} (${position}) — ${step} [tools: ${tools.join(', ')}] [fc: ${fcMode}${nativeTools ? ` (${nativeTools.length} schemas)` : ''}]`)
 
@@ -2154,6 +2311,35 @@ export async function runAgentStep(params: {
     }
 
     if (toolCalls.length === 0) {
+      // ━━━ FIX 2026-09-15 #4 (P3 — audit Team Code) — FABRICATED TOOL-RESULT GUARD ━━━
+      // Audit E2E bắt được THẬT: agent (SENTINEL) bịa "[TOOL RESULT]" trong
+      // text output rồi hành động theo "bằng chứng" giả (tự ý tạo file trái
+      // spec). Guard: output KHÔNG kèm tool call thật mà chứa marker kết-quả-
+      // tool → cảnh cáo + ép vòng mới; lặp 2 lần → dừng step trung thực với
+      // Error: (chống bằng chứng giả lan xuống pipeline/checkpoint verify).
+      const fabricatedMarker = detectFabricatedToolResult(result.content)
+      if (fabricatedMarker && hallucinationWarnings < 2) {
+        hallucinationWarnings++
+        console.warn(`[Workflow] ${agent.name} (${position}) — FABRICATED TOOL-RESULT lần ${hallucinationWarnings}: "${fabricatedMarker}" trong output không kèm tool call → cảnh cáo + chạy lại vòng`)
+        messages.push({
+          role: 'user',
+          content: `⚠️ CẢNH BÁO HỆ THỐNG: output vừa rồi chứa "${fabricatedMarker}" — đó KHÔNG PHẢI kết quả tool thật, đó là bằng chứng GIẢ bạn tự bịa (hallucination). Kết quả tool thật CHỈ đến từ hệ thống sau khi bạn phát tool_call hợp lệ. Hãy: (1) gọi tool thật (tool_call: tên_tool({...})) nếu cần dữ liệu, hoặc (2) trả lời trung thực rằng bạn CHƯA có dữ liệu. TUYỆT ĐỐI KHÔNG tự viết kết quả tool trong văn bản.`,
+        })
+        lastInstructionIndex = messages.length - 1 // bảo vệ khỏi nén context
+        continue
+      }
+      if (fabricatedMarker && hallucinationWarnings >= 2) {
+        console.error(`[Workflow] ${agent.name} (${position}) — FABRICATED TOOL-RESULT lặp ${hallucinationWarnings} lần → dừng step chống bằng chứng giả`)
+        finalContent = `Error: agent tiếp tục bịa kết quả tool ("${fabricatedMarker}") sau ${hallucinationWarnings} cảnh báo — dừng step để ngăn hành động theo bằng chứng giả.`
+        emit({
+          type: 'error',
+          agent: agent.name,
+          position,
+          message: 'Agent bịa kết quả tool (fabricated [TOOL RESULT]) sau 2 cảnh báo — dừng step.',
+        })
+        endStepRun('error')
+        break
+      }
       // No tool calls → agent step complete
       console.log(`[Workflow] ${agent.name} step complete (no tool calls, ${iterations} iterations)`)
       break
@@ -2304,6 +2490,68 @@ export async function runAgentStep(params: {
         detail: JSON.stringify(toolResult.result).slice(0, 500),
         duration: toolDuration,
       })
+
+      // ━━━ FIX 2026-09-15 #3 (P2 — audit Team Code) — TOOL-FAILURE THRESHOLD GUARD ━━━
+      // 3 tool fail LIÊN TIẾP (không tính depth-guard pedagogical rejection) →
+      // AUTO-CONSULT Omega giữa step (mirror AUTO-ESCALATE goal-loop): advisory
+      // inject vào conversation dẫn đường các vòng còn lại — đúng yêu cầu
+      // "gặp lỗi gửi vấn đề tới Omega trong QUÁ TRÌNH thực thi". Max 1
+      // consult/step; reset counter sau consult; fail-open tuyệt đối.
+      if (!toolResult.success && !depthGuardHit) {
+        consecutiveToolFailures++
+      } else if (toolResult.success) {
+        consecutiveToolFailures = 0
+      }
+      if (
+        consecutiveToolFailures >= WF_TOOL_FAIL_ESCALATE_THRESHOLD &&
+        !omegaConsultedInStep &&
+        !isCancelled()
+      ) {
+        const failStreak = consecutiveToolFailures
+        omegaConsultedInStep = true
+        consecutiveToolFailures = 0
+        try {
+          const { consultOmega } = await import('@/lib/omega-orchestrator')
+          const recentFails = toolCallsLog
+            .filter(e => !e.success)
+            .slice(-5)
+            .map(e => `- ${e.tool}: ${e.result.slice(0, 120)}`)
+            .join('\n')
+          const consult = await consultOmega({
+            problem: `Agent "${agent.name}" (vị trí ${position}, step "${step}") của Code Team gặp ${failStreak} tool failures LIÊN TIẾP khi đang thực thi — nguy cơ bế tắc/vòng lặp thất bại. Tool fail gần nhất:\n${recentFails || '(không rõ)'}`,
+            context: `Step task: ${prompt.slice(0, 400)}\nSession: ${sessionId}\nĐã chạy ${iterations} vòng / ${totalToolCalls} tool calls trong step này.`,
+            attempted: `Tool đã thử trong step: ${[...new Set(toolCallsLog.map(e => e.tool))].join(', ')}`,
+            callingAgent: agent.name,
+            severity: 'medium',
+            autoTriggered: true,
+            abortCheck: isCancelled,
+          })
+          if (consult.success && consult.text) {
+            if (typeof consult.tokensUsed === 'number' && consult.tokensUsed > 0) {
+              stepTokensUsed += consult.tokensUsed
+            }
+            messages.push({
+              role: 'user',
+              content: `💡 TƯ VẤN TỪ OMEGA ORCHESTRATOR (auto-escalate sau ${failStreak} tool fail liên tiếp — HÃY LÀM THEO, đổi cách tiếp cận):\n${consult.text.slice(0, 1600)}`,
+            })
+            lastInstructionIndex = messages.length - 1 // bảo vệ khỏi nén context
+            emit({
+              type: 'omega_escalation',
+              agent: agent.name,
+              position,
+              step,
+              advisory: consult.text.slice(0, 800),
+              reason: `${failStreak} tool fail liên tiếp trong step ${step}`,
+              tokensUsed: consult.tokensUsed,
+            })
+            console.log(`[Workflow] AUTO-ESCALATE (tool-failure guard): ${agent.name} (${position}) — Omega advisory nhận (${consult.tokensUsed} tokens), inject vào vòng ${iterations + 1}`)
+          } else {
+            console.warn(`[Workflow] AUTO-ESCALATE (tool-failure guard): consultOmega không trả advisory (fail-open): ${consult.error ?? 'không rõ'}`)
+          }
+        } catch (guardErr) {
+          console.warn('[Workflow] AUTO-ESCALATE (tool-failure guard) thất bại (fail-open):', guardErr instanceof Error ? guardErr.message : String(guardErr))
+        }
+      }
 
       // Add tool result to conversation
       // CI-3 B1 — cap tool result ~4k chars TRƯỚC khi push (pattern goal-loop):
@@ -2549,7 +2797,7 @@ async function runTLCheckpointVerify(
   spec: string,
   emit: SSEEmitter,
   ctx: WorkflowContext,
-): Promise<{ decision: 'CONTINUE' | 'PIVOT' | 'ESCALATE'; reasoning: string; updatedSpec?: string }> {
+): Promise<{ decision: 'CONTINUE' | 'PIVOT' | 'ESCALATE'; reasoning: string; updatedSpec?: string; evidence?: string[] }> {
   const worklogs = await readWorklog(sessionId)
   const latestWorklog = worklogs[worklogs.length - 1]
 
@@ -2585,10 +2833,12 @@ Issues: ${latestWorklog.issues.length > 0 ? latestWorklog.issues.map(i => `[${i.
 Suggestions: ${latestWorklog.suggestions.join('; ') || '(none)'}
 Concerns: ${latestWorklog.concerns.join('; ') || '(none)'}
 ${latestWorklog.unfixedBugs && latestWorklog.unfixedBugs.length > 0 ? `Unfixed bugs: ${latestWorklog.unfixedBugs.map(b => `[${b.severity}] ${b.description} (${b.reason})`).join('; ')}` : ''}
+${latestWorklog.toolCallsLog && latestWorklog.toolCallsLog.length > 0 ? `Tool calls THẬT của agent: ${latestWorklog.toolCallsLog.length} lần (${latestWorklog.toolCallsLog.filter(t => t.success).length} OK / ${latestWorklog.toolCallsLog.filter(t => !t.success).length} fail):
+${latestWorklog.toolCallsLog.slice(-8).map(t => `- ${t.tool} ${t.success ? '✓' : '✗'} (${Math.round(t.duration / 1000)}s): ${t.result.slice(0, 100)}`).join('\n')}` : 'Tool calls THẬT: (agent KHÔNG gọi tool nào — mọi tuyên bố chỉ là khai báo văn bản, chưa có bằng chứng thực tế)'}
 
 ━━━ QUYẾT ĐỊNH ━━━
-Dựa trên worklog, quyết định:
-- CONTINUE: Progress đúng kế hoạch, tiếp tục pipeline
+Dựa trên worklog + TOOL CALLS THẬT phía trên (bằng chứng thực tế), quyết định:
+- CONTINUE: Progress đúng kế hoạch, tiếp tục pipeline — PHẢI liệt kê evidence từ tool calls/worklog
 - PIVOT: Direction cần thay đổi (approach sai, requirement mới)
 - ESCALATE: Cần user input (blocker, ambiguous requirement)
 
@@ -2597,6 +2847,7 @@ Output JSON trong markdown code block:
 {
   "decision": "CONTINUE|PIVOT|ESCALATE",
   "reasoning": "<lý do>",
+  "evidence": ["<bằng chứng THẬT: tool + kết quả rút gọn dẫn chứng>"],
   "updatedSpec": "<nếu PIVOT — spec mới, ngược lại null>",
   "issues": ["<vấn đề phát hiện>"]
 }
@@ -2672,10 +2923,33 @@ Output JSON trong markdown code block:
     duration: 0,
   })
 
+  // ━━━ FIX 2026-09-15 #5 (P3 — audit Team Code) — VERIFY EVIDENCE GUARD ━━━
+  // Mirror VERIFY EVIDENCE GUARD của goal-loop: quyết định CONTINUE mà KHÔNG có
+  // bằng chứng tool nào (evidence rỗng) + worklog còn issue high/critical chưa
+  // fix → hạ xuống PIVOT (yêu cầu đổi hướng/tái kiểm định — không cho qua cửa
+  // chỉ bằng lời khai). CONTINUE không kèm evidence nhưng cũng không có issue
+  // nặng → giữ decision, ghi chú cảnh báo để theo dõi (tránh hạ nặng oan các
+  // step thuần phân tích không cần tool).
+  const evidence = parsed?.evidence ?? []
+  const hasUnfixedHigh =
+    latestWorklog.issues.some(i => (i.severity === 'critical' || i.severity === 'high') && !i.fixApplied) ||
+    (latestWorklog.unfixedBugs || []).some(b => b.severity === 'critical' || b.severity === 'high')
+  let verifyDecision = parsed?.decision || ruleBasedDecision
+  let verifyReasoning = parsed?.reasoning || `Auto-verify: ${ruleBasedDecision} based on worklog issues`
+  if (verifyDecision === 'CONTINUE' && evidence.length === 0 && hasUnfixedHigh) {
+    verifyDecision = 'PIVOT'
+    verifyReasoning += ' [EVIDENCE GUARD: CONTINUE không kèm bằng chứng tool trong khi còn issue high/critical chưa fix — hạ PIVOT]'
+    console.warn(`[Workflow] VERIFY EVIDENCE GUARD: hạ CONTINUE → PIVOT (evidence rỗng + issue nặng chưa fix) [session ${sessionId.slice(0, 12)}]`)
+  } else if (verifyDecision === 'CONTINUE' && evidence.length === 0 && latestWorklog.completed.length > 0) {
+    verifyReasoning += ' (⚠️ TL chưa liệt kê bằng chứng tool — evidence rỗng, theo dõi sát bước tiếp theo)'
+    console.warn(`[Workflow] VERIFY EVIDENCE GUARD: CONTINUE với evidence rỗng (agent khai báo ${latestWorklog.completed.length} việc) [session ${sessionId.slice(0, 12)}]`)
+  }
+
   return {
-    decision: parsed?.decision || ruleBasedDecision,
-    reasoning: parsed?.reasoning || `Auto-verify: ${ruleBasedDecision} based on worklog issues`,
+    decision: verifyDecision,
+    reasoning: verifyReasoning,
     updatedSpec: parsed?.updatedSpec,
+    evidence,
   }
 }
 
@@ -2821,10 +3095,12 @@ function buildRoutingDecision(parsed: Record<string, any>): RoutingDecision {
 
 /**
  * Parse verify decision from TL's checkpoint verify output.
+ * FIX 2026-09-15 #5 (P3): parse thêm "evidence" — mảng bằng chứng tool THẬT
+ * hỗ trợ quyết định (VERIFY EVIDENCE GUARD mirror goal-loop).
  */
 function parseVerifyDecision(
   output: string
-): { decision: 'CONTINUE' | 'PIVOT' | 'ESCALATE'; reasoning: string; updatedSpec?: string } | null {
+): { decision: 'CONTINUE' | 'PIVOT' | 'ESCALATE'; reasoning: string; updatedSpec?: string; evidence?: string[] } | null {
   try {
     const jsonMatch = output.match(/```json\s*([\s\S]*?)```/)
     if (jsonMatch) {
@@ -2835,6 +3111,9 @@ function parseVerifyDecision(
           decision: parsed.decision,
           reasoning: parsed.reasoning || '',
           updatedSpec: parsed.updatedSpec || undefined,
+          evidence: Array.isArray(parsed.evidence)
+            ? parsed.evidence.map((e: unknown) => String(e)).filter(Boolean).slice(0, 10)
+            : [],
         }
       }
     }
@@ -2850,6 +3129,41 @@ function parseVerifyDecision(
   } catch {}
 
   return null
+}
+
+/**
+ * FIX 2026-09-15 #4 (P3 — audit Team Code) — FABRICATED TOOL-RESULT detector.
+ *
+ * Audit E2E bắt được thật: agent output KHÔNG kèm tool call nhưng tự viết
+ * "[TOOL RESULT] ..." / "[TOOL_RESULT]" / "[KẾT QUẢ TOOL]"... trong văn bản —
+ * bằng chứng GIẢ mà các vòng sau + checkpoint verify có thể tin theo (thực tế
+ * SENTINEL đã tự ý tạo file trái spec vì tin tool-result bịa của chính mình).
+ *
+ * Chỉ đọc + regex — không thể throw; trả về marker trùng khớp hoặc null.
+ * Lưu ý: được gọi DUY NHẤT tại nhánh "0 tool call parse được" nên văn bản
+ * hợp pháp trích dẫn marker khi THẢO LUẬN kết quả cũ (kèm tool call mới) không bị
+ * kích oan.
+ */
+const FABRICATED_TOOL_RESULT_PATTERNS: RegExp[] = [
+  /\[\s*TOOL\s*RESULT\s*[:\]]/i,
+  /\[\s*TOOL_RESULT\s*[:\]]/i,
+  /\[\s*TOOL\s*OUTPUT\s*[:\]]/i,
+  /\[\s*KẾT?\s*QUẢ?\s*TOOL\s*[:\]]/i,
+  /\[\s*KET\s*QUA\s*TOOL\s*[:\]]/i,
+  /\[\s*TOOL\s*CALL\s*RESULT\s*[:\]]/i,
+]
+
+function detectFabricatedToolResult(content: string): string | null {
+  try {
+    if (!content || typeof content !== 'string') return null
+    for (const re of FABRICATED_TOOL_RESULT_PATTERNS) {
+      const m = content.match(re)
+      if (m && m[0]) return m[0]
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -2891,7 +3205,17 @@ function parseToolCallsFromOutput(output: string): Array<{ id: string; name: str
 
   // Pattern 2: Direct tool invocation like opencode({...})
   if (calls.length === 0) {
-    const validToolNames = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'list_skills', 'read_skill', 'mcp_list_servers', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'manage_tools']
+    const validToolNames = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'list_skills', 'read_skill', 'mcp_list_servers', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'manage_tools',
+      // FIX 2026-09-15 #7 (P4 — audit Team Code): Pattern 2 thiếu tool mới —
+      // agent phát tên_tool({...}) trực tiếp (không có prefix tool_call:) thì
+      // KHÔNG được parse → hệ thống không trả kết quả, agent tưởng tool chạy
+      // rồi tự bịa output (nguồn hallucination). Bổ sung: git survey + context
+      // recall + escalation/delegation/orchestration tools (workflow depth-guard
+      // sẽ từ chối delegation lồng bằng thông báo sư phạm — đúng thiết kế).
+      'git_status', 'git_diff', 'git_log', 'git_branch', 'context_recall',
+      'escalate_problem', 'propose_automation', 'verify_and_push',
+      'delegate_task', 'request_code_team', 'dispatch_agent', 'dispatch_agents_parallel',
+      'create_agent', 'manage_automation']
     const regex2 = new RegExp(`(${validToolNames.join('|')})\\s*\\(\\s*\\{`, 'g')
     let match2
     while ((match2 = regex2.exec(output)) !== null) {

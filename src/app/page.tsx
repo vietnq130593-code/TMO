@@ -9721,17 +9721,62 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
 
             case 'workflow_done': {
               const totalDuration = event.totalDuration as number | undefined
+              // FIX 2026-09-15 #1 (P1 — audit Team Code): message cuối tôn trọng
+              // THẬT event.status (mirror route.ts) — trước đây mọi kết thúc đều
+              // hiển thị "✅ Workflow hoàn thành!" kể cả escalated/failed.
+              const wfStatus = String(event.status || 'completed')
+              const durSuffix = totalDuration ? ` (${(totalDuration / 1000).toFixed(1)}s)` : ''
+              let doneContent: string
+              let doneAvatar: string
+              if (wfStatus === 'completed') {
+                doneContent = `✅ Workflow hoàn thành!${durSuffix}`
+                doneAvatar = '✅'
+              } else if (wfStatus === 'completed_with_errors') {
+                doneContent = `⚠️ Workflow hoàn thành kèm cảnh báo chất lượng (quality gate bắt lỗi lint/tsc) — đọc các bước để khắc phục.${durSuffix}`
+                doneAvatar = '⚠️'
+              } else if (wfStatus === 'escalated') {
+                doneContent = `🔴 Workflow dừng sớm — TL ESCALATE (vấn đề đã được gửi tới Omega orchestrator để tìm cách xử lý).${durSuffix}`
+                doneAvatar = '🔴'
+              } else if (wfStatus === 'failed') {
+                doneContent = `❌ Workflow thất bại — đọc các bước phía trên để biết lỗi ở đâu.${durSuffix}`
+                doneAvatar = '❌'
+              } else {
+                doneContent = `⏹ Workflow kết thúc (${wfStatus}).${durSuffix}`
+                doneAvatar = '⏹'
+              }
               const doneMsg: SmolabMessage = {
                 id: crypto.randomUUID(),
                 role: 'assistant',
-                content: `✅ Workflow hoàn thành!${totalDuration ? ` (${(totalDuration / 1000).toFixed(1)}s)` : ''}`,
+                content: doneContent,
                 timestamp: new Date(),
                 isTeamMessage: true,
                 agentName: 'SYSTEM',
                 agentPosition: 'TL',
-                agentAvatar: '✅',
+                agentAvatar: doneAvatar,
               }
               if (isActiveSession()) setMessages(prev => [...prev, doneMsg])
+              break
+            }
+
+            case 'omega_escalation': {
+              // FIX 2026-09-15 #2 (P2 — audit Team Code): AUTO-ESCALATE → Omega
+              // hiển thị trong chat (mirror route.ts persist) — user thấy được
+              // Omega đã nhận vấn đề của team và tư vấn gì.
+              const advisory = String(event.advisory || '')
+              const reason = String(event.reason || 'workflow gặp sự cố')
+              if (advisory) {
+                const escalationMsg: SmolabMessage = {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content: `🧠 **TƯ VẤN TỪ OMEGA ORCHESTRATOR** (auto-escalate — vấn đề: ${reason})\n\n${advisory.slice(0, 2000)}`,
+                  timestamp: new Date(),
+                  isTeamMessage: true,
+                  agentName: (event.agent as string) || 'Omega',
+                  agentPosition: 'OMEGA',
+                  agentAvatar: '🧠',
+                }
+                if (isActiveSession()) setMessages(prev => [...prev, escalationMsg])
+              }
               break
             }
 

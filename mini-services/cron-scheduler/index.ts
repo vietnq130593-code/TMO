@@ -27,7 +27,9 @@
 import { createServer } from 'http'
 import { execSync } from 'child_process'
 
-const PORT = 3004
+// FIX 2026-09-15 (multi-instance — clone-first workflow): port từ env — bản
+// clone của app chạy kiểm định đặt CRON_SCHEDULER_PORT riêng (vd 3005).
+const PORT = parseInt(process.env.CRON_SCHEDULER_PORT || '3004', 10)
 const TICK_INTERVAL_MS = 30_000
 
 /** Root-cause fix (2026-08-25 post-deploy audit): an orphaned previous

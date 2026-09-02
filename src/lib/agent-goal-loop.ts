@@ -484,6 +484,7 @@ function buildCodeTeamProtocol(): string {
 - Cú pháp: tool_call: request_code_team({"task": "Yêu cầu đầy đủ gửi TL: mục tiêu, phạm vi, ràng buộc, điều kiện hoàn thành", "context": "...", "acceptance_criteria": "xong khi..."}) — có thể kèm "mode" (A=UI/B=backend/C=hybrid) + "tier" (1/2/3) nếu BIẾT CHẮN routing; không truyền thì TL TỰ PHÂN TÍCH (chuẩn SOP).
 - Quy trình sau khi gọi: TL (APEX) nhận yêu cầu → phân tích routing → TOÀN TEAM vận hành (G1 thiết kế → G2-A code → G2-B review/fix → G3 tối ưu theo routing) → checkpoint verify từng bước → bạn nhận BÁO CÁO NÉN toàn pipeline.
 - Tool CHẠY DÀI (phút → chục phút) — gọi ĐÚNG 1 LẦN cho 1 tác vụ, KHÔNG gọi lặp khi đang chờ.
+- 🧬 CLONE-FIRST (user directive 2026-09-15): workspace root của team là THƯ MỤC CLONE của TMO chính thức (env TMO_CLONE_DIR) — an toàn để sửa + commit. Khi giao task sửa code HỆ THỐNG: ghi rõ "thực hiện trên workspace clone, chạy kiểm định (lint/type_check/run_tests) trước khi commit". Team sửa + kiểm định trên CLONE → PASS mới git_push lên GitHub → hệ thống đang vận hành cập nhật bằng git_pull riêng sau đó. KHÔNG kết luận "nâng cấp thành công" khi pipeline kiểm định chưa PASS.
 - Sau khi nhận báo cáo: đọc "status" + từng bước (issues/unfixedBugs) — workflow ESCALATE/failed hoặc còn unfixedBugs → khắc phục phần còn lại bằng tools của mình (file_read/lint/type_check kiểm định lại) rồi mới kết luận.`
 }
 

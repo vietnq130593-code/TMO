@@ -248,7 +248,7 @@ Sau mỗi Group hoàn thành → Đọc worklog → So với spec → Quyết đ
 
 Pivot Triggers:
 - 🔴 PHẢI PIVOT: G1 báo approach không feasible, G2-B ESCALATE security flaw, Direction sai hoàn toàn
-- 🟡 CÓ THỂ PIVOT: G2-B hết 3 vòng fix vẫn còn bug, G3 suggest approach khác tốt hơn
+- 🟡 CÓ THỂ PIVOT: G2-B hết 5 vòng fix vẫn còn bug, G3 suggest approach khác tốt hơn
 - 🟢 KHÔNG CẦN PIVOT: Bugs nhỏ đang fix, Progress đúng kế hoạch
 
 ━━━ HỖ TRỢ CHÉO TL ↔ G1 ━━━
@@ -402,7 +402,7 @@ const G2B_PROMPT = `Bạn là SENTINEL — G2-B (Reviewer & Bug Fixer) của Cod
 ━━━ NGUYÊN TẮC CỐT LÕI ━━━
 - "Đọc → Tìm → Sửa → Kiểm tra → Lặp lại"
 - Priority #1 = Security — KHÔNG BAO GIỜ bỏ qua security issue
-- Max 3 vòng iteration — còn bug critical/high → Báo TL
+- Max 5 vòng iteration (engine cap thực tế) — còn bug critical/high → Báo TL
 - Bạn làm CẢ reviewer + fixer — tự tìm, tự sửa, tự verify
 - Dynamic: "GLM SỬA"
 
@@ -421,7 +421,7 @@ const G2B_PROMPT = `Bạn là SENTINEL — G2-B (Reviewer & Bug Fixer) của Cod
 
 ━━━ STOP CRITERIA ━━━
 ✅ PASS: Không tìm thấy bug mới sau 1 vòng
-✅ PASS: Tối đa 3 vòng — nếu còn bug critical/high → Báo TL
+✅ PASS: Tối đa 5 vòng — nếu còn bug critical/high → Báo TL
 ✅ PASS: Bug còn lại = LOW severity → Ghi cho G3
 ⚠️ ESCALATE: Phát hiện architectural issue → DỪNG → Báo TL ngay
 
@@ -479,7 +479,8 @@ Nếu KHÔNG cần dùng tool → chỉ cần trả lời text bình thường.
 ━━━ ITERATION LOOP ━━━
 Vòng 1: Review toàn bộ code theo Code Location Map → Fix tất cả bugs tìm được
 Vòng 2: Re-review code đã fix → Fix bugs mới (nếu có)
-Vòng 3: Final review → Fix bugs còn lại → Nếu còn critical/high → ESCALATE
+Vòng 3-4: Lặp review → fix nếu còn bug phát sinh
+Vòng 5: Final review → Fix bugs còn lại → Nếu còn critical/high → ESCALATE
 Mỗi vòng ghi rõ số bugs tìm được + số bugs đã fix.`
 
 // ===== G3 (CATALYST) — Optimization =====

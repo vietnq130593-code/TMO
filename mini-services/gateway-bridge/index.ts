@@ -60,7 +60,8 @@ function killPortHolders(port: number): void {
 
 // ==================== CONFIG ====================
 
-const PORT = 18791
+// FIX 2026-09-15 (multi-instance): port từ env — bản clone đặt GATEWAY_BRIDGE_PORT riêng.
+const PORT = parseInt(process.env.GATEWAY_BRIDGE_PORT || '18791', 10)
 
 // Root-cause fix: reap any orphaned previous instance before binding.
 killPortHolders(PORT)

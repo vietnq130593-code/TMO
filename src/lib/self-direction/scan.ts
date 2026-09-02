@@ -54,6 +54,12 @@ interface SystemSnapshot {
   agents: { total: number; enabled: number; codeTeam: number; standalone: number }
   evalRuns: number
   recentErrors: string[]
+  // FIX 2026-09-15 #11 (P3 — audit Team Code): nguồn 6 — thất bại workflow-level
+  // của Code Team. Trước đây scan chỉ quét ToolMetric (tool-level) — Omega
+  // KHÔNG tự nhận diện được session failed/escalated, worklog issues, omega_
+  // escalation của team (audit: "scan không quét CodeTeamWorklog/issues/
+  // unfixedBugs/session failed → Omega không tự nhận diện vấn đề workflow-level").
+  codeTeam: { failedSessions: number; escalatedSessions: number; omegaEscalations: number; recentFailures: string[] }
 }
 
 // ==================== CONSTANTS ====================
@@ -162,6 +168,7 @@ async function collectSnapshot(): Promise<SystemSnapshot> {
     agents: { total: 0, enabled: 0, codeTeam: 0, standalone: 0 },
     evalRuns: 0,
     recentErrors: [],
+    codeTeam: { failedSessions: 0, escalatedSessions: 0, omegaEscalations: 0, recentFailures: [] },
   }
 
   // 1) Tool failures (group thủ công — SQLite không hỗ trợ groupBy tốt qua Prisma + dữ liệu nhỏ)
@@ -228,6 +235,68 @@ async function collectSnapshot(): Promise<SystemSnapshot> {
     snapshot.evalRuns = await db.evalRun.count()
   } catch { /* fail-open */ }
 
+  // 6) FIX 2026-09-15 #11 (P3 — audit Team Code): Code Team workflow failures —
+  // session terminal state ('failed' | 'escalated') trong cửa sổ quét + đếm
+  // worklog escalation đã gửi tới Omega (position OMEGA) + digest issues của
+  // các session thất bại gần nhất. 'cancelled' (user hủy) KHÔNG tính — không
+  // phải sự cố. Đây là kênh để OMEGA TỰ NHẬN DIỆN vấn đề workflow-level của
+  // team (pull), bổ sung cho AUTO-ESCALATE push từ workflow-engine.
+  try {
+    const failedRows = await db.codeTeamSession.findMany({
+      where: { currentStep: 'failed', updatedAt: { gte: since } },
+      select: { sessionId: true, totalDuration: true, updatedAt: true },
+      orderBy: { updatedAt: 'desc' },
+      take: 20,
+    })
+    const escalatedRows = await db.codeTeamSession.findMany({
+      where: { currentStep: 'escalated', updatedAt: { gte: since } },
+      select: { sessionId: true, totalDuration: true, updatedAt: true },
+      orderBy: { updatedAt: 'desc' },
+      take: 20,
+    })
+    snapshot.codeTeam.failedSessions = failedRows.length
+    snapshot.codeTeam.escalatedSessions = escalatedRows.length
+    // Omega escalation đã ghi worklog (bằng chứng đường push hoạt động)
+    const omegaEscRows = await db.codeTeamWorklog.findMany({
+      where: { position: 'OMEGA', step: 'omega_escalation', createdAt: { gte: since } },
+      select: { sessionId: true, summary: true },
+      take: 50,
+    })
+    snapshot.codeTeam.omegaEscalations = omegaEscRows.length
+    // Digest session thất bại gần nhất: issues/unfixedBugs từ worklog cuối
+    const failingSessionIds = [...escalatedRows, ...failedRows].map(r => r.sessionId).slice(0, 8)
+    if (failingSessionIds.length > 0) {
+      const wlRows = await db.codeTeamWorklog.findMany({
+        where: { sessionId: { in: failingSessionIds } },
+        orderBy: { createdAt: 'asc' },
+      })
+      for (const sid of failingSessionIds) {
+        const rows = wlRows.filter(r => r.sessionId === sid)
+        const terminalRow = escalatedRows.find(r => r.sessionId === sid)
+          ? { status: 'escalated', duration: escalatedRows.find(r => r.sessionId === sid)?.totalDuration ?? 0 }
+          : { status: 'failed', duration: failedRows.find(r => r.sessionId === sid)?.totalDuration ?? 0 }
+        const issues: string[] = []
+        for (const r of rows) {
+          try {
+            const c = typeof r.content === 'string' ? (JSON.parse(r.content) as Record<string, unknown>) : (r.content as Record<string, unknown> | null)
+            if (c && Array.isArray(c.issues)) {
+              for (const i of (c.issues as Array<Record<string, unknown>>).slice(0, 3)) {
+                issues.push(String(i.description ?? i).slice(0, 100))
+              }
+            }
+          } catch { /* skip parse lỗi */ }
+        }
+        const agents = rows.map(r => r.agentName).filter(Boolean)
+        snapshot.codeTeam.recentFailures.push(
+          `- ${sid.slice(0, 18)}… [${terminalRow.status}${terminalRow.duration ? `, ${Math.round(terminalRow.duration / 1000)}s` : ''}] qua ${agents.join('→') || '(chưa có agent)'}${issues.length > 0 ? ` — issues: ${issues.slice(0, 3).join('; ')}` : ''}`
+        )
+      }
+      snapshot.codeTeam.recentFailures = snapshot.codeTeam.recentFailures.slice(0, 8)
+    }
+  } catch (err) {
+    console.warn('[SelfDirectionScan] CodeTeam failures collect lỗi (fail-open):', err instanceof Error ? err.message : String(err))
+  }
+
   return snapshot
 }
 
@@ -257,6 +326,16 @@ function snapshotToText(s: SystemSnapshot): string {
   lines.push('')
   lines.push(`■ EVAL RUNS (đo chất lượng trả lời): ${s.evalRuns}`)
   lines.push('■ TEST SUITE: không có bảng ghi test coverage — kết quả test chỉ nằm rải rác trong tool metrics (run_tests).')
+  lines.push('')
+  // FIX 2026-09-15 #11: section Code Team failures cho LLM scan thấy
+  lines.push(`■ CODE TEAM WORKFLOW (72h qua): ${s.codeTeam.failedSessions} session thất bại · ${s.codeTeam.escalatedSessions} session ESCALATE · ${s.codeTeam.omegaEscalations} lần đã auto-gửi vấn đề tới Omega`)
+  if (s.codeTeam.recentFailures.length === 0) {
+    lines.push('  (không có workflow thất bại — hoặc chưa chạy team nào)')
+  } else {
+    for (const f of s.codeTeam.recentFailures) {
+      lines.push(`  ${f}`)
+    }
+  }
   return lines.join('\n')
 }
 

@@ -53,7 +53,7 @@ function buildServices(resolveFn: (...paths: string[]) => string) {
         NVIDIA_API_KEY_3: process.env.NVIDIA_API_KEY_3 || '',
         NVIDIA_API_KEY_4: process.env.NVIDIA_API_KEY_4 || '',
       },
-      healthUrl: 'http://127.0.0.1:18789/health',
+      healthUrl: `http://127.0.0.1:${process.env.OPENCLAW_GATEWAY_PORT || '18789'}/health`,
       healthTimeoutMs: 30000,
       healthIntervalMs: 1000,
       maxRetries: 5,
@@ -63,7 +63,10 @@ function buildServices(resolveFn: (...paths: string[]) => string) {
       cwd: resolve(ROOT, 'mini-services/opencode-server'),
       command: 'bun',
       args: ['index.ts'],
-      healthUrl: 'http://127.0.0.1:18790/health',
+      // FIX 2026-09-15 (multi-instance — clone-first workflow): health check
+      // theo port env (bản clone chạy app để kiểm định đặt
+      // OPENCODE_SERVER_PORT=18791... riêng, không giành port production).
+      healthUrl: `http://127.0.0.1:${process.env.OPENCODE_SERVER_PORT || '18790'}/health`,
       healthTimeoutMs: 30000,
       healthIntervalMs: 1000,
       maxRetries: 3,
@@ -73,7 +76,7 @@ function buildServices(resolveFn: (...paths: string[]) => string) {
       cwd: resolve(ROOT, 'mini-services/gateway-bridge'),
       command: 'bun',
       args: ['index.ts'],
-      healthUrl: 'http://127.0.0.1:18791/health',
+      healthUrl: `http://127.0.0.1:${process.env.GATEWAY_BRIDGE_PORT || '18791'}/health`,
       healthTimeoutMs: 30000,
       healthIntervalMs: 1000,
       maxRetries: 3,
@@ -93,8 +96,10 @@ function buildServices(resolveFn: (...paths: string[]) => string) {
         DATABASE_URL: process.env.DATABASE_URL || '',
         ENABLE_CRON_TOOL: process.env.ENABLE_CRON_TOOL || 'false',
         CRON_AGENT_ENDPOINT: process.env.CRON_AGENT_ENDPOINT || 'http://localhost:3000/api/openclaw/sessions',
+        // FIX 2026-09-15 (multi-instance): port env cho clone instance
+        CRON_SCHEDULER_PORT: process.env.CRON_SCHEDULER_PORT || '3004',
       },
-      healthUrl: 'http://127.0.0.1:3004/health',
+      healthUrl: `http://127.0.0.1:${process.env.CRON_SCHEDULER_PORT || '3004'}/health`,
       healthTimeoutMs: 30000,
       healthIntervalMs: 1000,
       maxRetries: 3,
