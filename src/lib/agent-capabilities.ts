@@ -141,11 +141,12 @@ async function probeKnowledge(): Promise<{ qdrant: string; neo4j: string }> {
   return out
 }
 
-/** Web search probe — đa nguồn: API key pools (Tavily/Serper/Jina) + SDK z-ai.
+/** Web search probe — nguồn: API key pools (Tavily/Serper/Jina).
  * Cache dài (10 phút). FIX (user bug report 2026-08-30): probe cũ CHỈ test SDK
  * z-ai — trên máy local SDK luôn lỗi ".z-ai-config not found" (SDK chỉ khả dụng
  * trong sandbox Z.ai) → probe báo cả nhóm web ❌ dù Tavily/Serper/Jina keys
- * hoạt động tốt. Giờ probe kiểm tra MỌI nguồn theo đúng path tool sẽ dùng. */
+ * hoạt động tốt. Giờ probe kiểm tra MỌI nguồn theo đúng path tool sẽ dùng.
+ * (2026-10-15) nguồn SDK z-ai đã GỠ BỎ theo user directive — chỉ còn key pools. */
 async function probeWebSearch(): Promise<{ ok: boolean; detail: string; durationMs: number }> {
   const cached = globalForCaps.__tmoWebProbe
   if (cached && Date.now() - cached.at < 10 * 60_000) {
@@ -153,7 +154,7 @@ async function probeWebSearch(): Promise<{ ok: boolean; detail: string; duration
   }
   const t0 = Date.now()
 
-  // Nguồn 1-3: API key pools (chính — hoạt động cả ngoài sandbox Z.ai)
+  // Nguồn: API key pools (chính — hoạt động cả ngoài sandbox Z.ai)
   const sources: string[] = []
   try {
     const { tavilyKeyPool, serperKeyPool, jinaKeyPool } = await import('@/lib/service-key-pool')
@@ -162,18 +163,8 @@ async function probeWebSearch(): Promise<{ ok: boolean; detail: string; duration
     if (jinaKeyPool.hasKeys()) sources.push(`Jina (${jinaKeyPool.getTotalCount()} keys)`)
   } catch { /* ignore */ }
 
-  // Nguồn 4: SDK z-ai (fallback — chỉ hoạt động trong sandbox Z.ai)
-  let sdkOk = false
-  let sdkErr = ''
-  try {
-    const ZAI = (await import('z-ai-web-dev-sdk')).default
-    const zai = await ZAI.create()
-    const results = await zai.functions.invoke('web_search', { query: 'test', num: 1 })
-    sdkOk = Array.isArray(results) || (results && typeof results === 'object')
-  } catch (err) {
-    sdkErr = err instanceof Error ? err.message.slice(0, 60) : String(err).slice(0, 60)
-  }
-  if (sdkOk) sources.push('SDK z-ai')
+  // (2026-10-15) Nguồn 4 (SDK z-ai) đã GỠ BỎ theo user directive — fallback
+  // z-ai-web-dev-sdk không tồn tại trên local deployment.
 
   // Flag cho web_search/web_fetch unified tools (tavily/serper/jina tools riêng
   // lẻ không cần flag này)
@@ -187,14 +178,9 @@ async function probeWebSearch(): Promise<{ ok: boolean; detail: string; duration
     if (!unifiedFlag) {
       detail += ` — LƯU Ý: web_search/web_fetch TẮT (ENABLE_WEB_UNIFIED=false); tavily/serper/jina vẫn dùng được`
     }
-    if (!sdkOk) {
-      // Không báo lỗi SDK khi đã có key sources — SDK chỉ là fallback
-      detail += ` · SDK z-ai không khả dụng (ngoài môi trường Z.ai — bình thường khi chạy local)`
-    }
   } else {
     ok = false
     detail = 'KHÔNG có nguồn web search nào: thiếu TAVILY_API_KEY/SERPER_API_KEY/JINA_API_KEY trong .env'
-    if (!sdkOk) detail += ` và SDK z-ai lỗi (${sdkErr})`
     if (!unifiedFlag) detail += ' · web_search/web_fetch cũng TẮT (ENABLE_WEB_UNIFIED=false)'
   }
 

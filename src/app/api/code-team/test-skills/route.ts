@@ -12,7 +12,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getSkillStatus, getZaiAvailable, executeTool } from '@/lib/code-team/tool-executor'
+import { getSkillStatus, executeTool } from '@/lib/code-team/tool-executor'
 import { tavilyKeyPool, jinaKeyPool, serperKeyPool } from '@/lib/service-key-pool'
 
 export const dynamic = 'force-dynamic'
@@ -21,7 +21,7 @@ interface SkillTestResult {
   skill: string
   status: 'success' | 'fail' | 'skip'
   duration_ms: number
-  source: string | null    // Which provider answered (e.g. 'tavily', 'serper', 'jina', 'z-ai-sdk-web_search')
+  source: string | null    // Which provider answered (e.g. 'tavily', 'serper', 'jina')
   sample: unknown | null   // First result or snippet
   error: string | null
 }
@@ -30,7 +30,7 @@ interface EnvironmentCheck {
   TAVILY_API_KEY_POOL: { total: number; available: number }
   SERPER_API_KEY_POOL: { total: number; available: number }
   JINA_API_KEY_POOL: { total: number; available: number }
-  zai_sdk: boolean | null  // null = not yet checked
+  // (2026-10-15) zai_sdk field removed — z-ai-web-dev-sdk fallback đã gỡ bỏ
 }
 
 interface TestResponse {
@@ -43,7 +43,6 @@ interface TestResponse {
 interface SkillStatusCheck {
   skill: string
   directKey: boolean
-  zaiFallback: boolean | null
   available: boolean
   keyHint: string
 }
@@ -147,7 +146,6 @@ export async function GET(request: NextRequest) {
     TAVILY_API_KEY_POOL: { total: tavilyKeyPool.getTotalCount(), available: tavilyKeyPool.getAvailableCount() },
     SERPER_API_KEY_POOL: { total: serperKeyPool.getTotalCount(), available: serperKeyPool.getAvailableCount() },
     JINA_API_KEY_POOL: { total: jinaKeyPool.getTotalCount(), available: jinaKeyPool.getAvailableCount() },
-    zai_sdk: getZaiAvailable(),
   }
 
   // Get skill statuses
@@ -170,7 +168,7 @@ export async function GET(request: NextRequest) {
         duration_ms: 0,
         source: null,
         sample: null,
-        error: `No API key (${status.keyHint}) and z-ai-sdk not available. Set ${status.keyHint} in .env or run in z.ai sandbox.`,
+        error: `No API key (${status.keyHint}). Set ${status.keyHint} in .env — z-ai-sdk fallback đã gỡ bỏ (direct API keys only).`,
       })
       continue
     }

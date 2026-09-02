@@ -9,9 +9,9 @@
  *   - knowledge_search:  Semantic search in KB (Qdrant) — via knowledge-bridge
  *   - knowledge_graph:   Graph query (Neo4j Cypher) — via knowledge-bridge
  *   - knowledge_write:   Write entity/relationship to KB — via knowledge-bridge
- *   - tavily:           AI-optimized web search — via Tavily API + z-ai-sdk fallback
- *   - serper:           Google search — via Serper API + z-ai-sdk fallback
- *   - jina:             Web page reader — via Jina API + z-ai-sdk fallback
+ *   - tavily:           AI-optimized web search — via Tavily API (direct key)
+ *   - serper:           Google search — via Serper API (direct key)
+ *   - jina:             Web page reader — via Jina API (direct key)
  *
  * Architecture:
  *   Workflow Engine → callLLMForAgent() with tool definitions
@@ -20,7 +20,8 @@
  *
  * Phase 5 Enhancement:
  *   - Tavily/Serper/Jina use direct API keys (from .env)
- *   - z-ai-web-dev-sdk provides automatic fallback when API keys fail
+ *   - (2026-10-15) z-ai-web-dev-sdk fallback REMOVED (user directive — SDK
+ *     sandbox-only, không tồn tại trên local deployment)
  *   - Skills installed from Clawhub Market (web_search + page_reader)
  */
 
@@ -96,81 +97,15 @@ import { db } from '@/lib/db'
 // 21-c: Tool Access — hard-gate tool bị disable-override theo agent (ToolAssignment DB)
 import { isToolDisabledForAgent, resolveAgentKey } from '@/lib/tool-access'
 
-// ==================== Z-AI-SDK LAZY INITIALIZATION ====================
-//
-// ⚠️  IMPORTANT: z-ai-web-dev-sdk is an OPTIONAL dependency!
-//
-// This SDK ONLY works inside the z.ai sandbox environment where backend
-// services (web_search, page_reader) are available. If you clone this
-// project and run locally, the SDK will not initialize — this is expected
-// and NOT an error. Direct API keys (TAVILY_API_KEY, SERPER_API_KEY,
-// JINA_API_KEY) in .env will be used instead.
-//
-// Fallback chain: Direct API key → z-ai-sdk → error with helpful hint
-//
-
-let zaiInstance: any = null
-let zaiInitPromise: Promise<any> | null = null
-let zaiAvailable: boolean | null = null // null = not yet checked
-
-async function getZAI(): Promise<any> {
-  if (zaiInstance) return zaiInstance
-  if (zaiInitPromise) return zaiInitPromise
-
-  zaiInitPromise = (async () => {
-    try {
-      const ZAI = (await import('z-ai-web-dev-sdk')).default
-      const instance = await ZAI.create()
-      console.log('[ToolExecutor] ✅ z-ai-web-dev-sdk initialized — web_search + page_reader available as fallback')
-      zaiInstance = instance
-      zaiAvailable = true
-      return instance
-    } catch (err) {
-      zaiAvailable = false
-      console.warn(
-        '[ToolExecutor] z-ai-web-dev-sdk not available (this is normal for local deployment — direct API keys will be used).',
-        `Detail: ${err instanceof Error ? err.message : String(err)}`
-      )
-      return null
-    }
-  })()
-
-  return zaiInitPromise
-}
-
-/** Phase 1a/1b fix — Race an async operation against a timeout.
- *
- * Wraps z-ai-sdk `functions.invoke()` calls (and similar) so a hung SDK
- * cannot stall the entire workflow. Without this, executeTavily/Serper/Jina/
- * WebSearch/WebFetch could hang forever if z-ai-sdk internal state goes bad.
- *
- * Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Part 4 Phase 1b.1
- */
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string,
-): Promise<T> {
-  let timer: NodeJS.Timeout | undefined
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(`${label} timeout after ${timeoutMs}ms`))
-    }, timeoutMs)
-  })
-  try {
-    return await Promise.race([promise, timeout])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
-}
-
-/** Shape kết quả z-ai-sdk functions.invoke('page_reader') — chỉ các field code dùng */
-interface ZaiPageReaderResult {
-  data?: {
-    html?: string
-    title?: string
-  }
-}
+// ━━ REMOVED 2026-10-15 (user directive): gỡ bỏ toàn bộ z-ai-web-dev-sdk ━━
+// SDK này CHỈ tồn tại trong sandbox triển khai (không nằm trong package.json,
+// không cài được trên máy local của user) — từng là fallback cho
+// tavily/serper/jina/web_search/web_fetch khi API keys lỗi. Đã xóa:
+// getZAI/zaiInstance/zaiAvailable/withTimeout/ZaiPageReaderResult + 5 fallback
+// block (executeTavily/executeSerper/executeJina/executeWebSearch/
+// executeWebFetch). Chuỗi search/read giờ CHỈ dùng API keys trực tiếp
+// (TAVILY_API_KEY/SERPER_API_KEY/JINA_API_KEY trong .env) — lỗi trả error
+// + hint cấu hình key thẳng thắn (không còn đường fallback chết).
 
 // ==================== TOOL DEFINITIONS (OpenAI function calling format) ====================
 // Each agent receives tools according to its permissions from agents.ts
@@ -1217,13 +1152,13 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
 
   // ==================== v2.1 Phase 1b.1: UNIFIED WEB (consolidate tavily/serper/jina) ====================
   // Phase 1b.1 — single unified web interface (Claude Code / Z.ai Code parity).
-  // Routes to best-available provider; falls back to z-ai-web-dev-sdk.
-  // Old tavily/serper/jina tools remain accessible for backward compatibility.
+  // Routes to best-available provider (direct API keys only — z-ai-sdk removed
+  // 2026-10-15). Old tavily/serper/jina tools remain accessible for backward compat.
   web_search: {
     type: 'function',
     function: {
       name: 'web_search',
-      description: 'Unified web search — routes tới provider tốt nhất (Tavily khi có key, Serper fallback, z-ai-sdk cuối cùng). Trả về results[] thống nhất {title, url, snippet/score}. Dùng khi cần research docs, best practices, thông tin mới.',
+      description: 'Unified web search — routes tới provider tốt nhất (Tavily khi có key, Serper fallback — direct API keys). Trả về results[] thống nhất {title, url, snippet/score}. Dùng khi cần research docs, best practices, thông tin mới.',
       parameters: {
         type: 'object',
         properties: {
@@ -4910,7 +4845,7 @@ async function retryWithNextKey(
  * Tavily — AI-optimized web search
  * Uses ServiceKeyPool for multi-key rotation with automatic fallback.
  * Primary: Direct Tavily API with rotating keys from pool
- * Fallback: z-ai-web-dev-sdk web_search function (Clawhub Market skill)
+ * (2026-10-15) z-ai-sdk fallback removed — direct API keys only
  */
 async function executeTavily(args: Record<string, unknown>): Promise<unknown> {
   const query = args.query as string
@@ -4969,34 +4904,11 @@ async function executeTavily(args: Record<string, unknown>): Promise<unknown> {
     }
   }
 
-  // Fallback: z-ai-web-dev-sdk web_search
-  try {
-    const zai = await getZAI()
-    if (zai) {
-      const results = await withTimeout(
-        zai.functions.invoke('web_search', { query, num: 5 }),
-        30_000,
-        'z-ai-sdk web_search (tavily fallback)',
-      )
-      if (Array.isArray(results) && results.length > 0) {
-        return {
-          answer: null,
-          results: results.map((r: any) => ({
-            title: r.name || r.title,
-            url: r.url,
-            content: r.snippet || r.content,
-            score: r.rank || null,
-          })),
-          source: 'z-ai-sdk-web_search',
-        }
-      }
-    }
-  } catch (err) {
-    console.warn(`[ToolExecutor] z-ai-sdk web_search fallback failed: ${err instanceof Error ? err.message : String(err)}`)
-  }
+  // (2026-10-15) z-ai-sdk fallback đã GỠ BỎ (user directive — sdk không có trên
+  // local) — lỗi trả thẳng kèm hint cấu hình key.
 
   return {
-    error: 'Tavily search failed and no fallback available.',
+    error: 'Tavily search failed — no fallback available (z-ai-sdk removed 2026-10-15).',
     hint: !tavilyKeyPool.hasKeys() ? 'Add TAVILY_API_KEY_1..4 to .env' : `All ${tavilyKeyPool.getTotalCount()} keys failed (${tavilyKeyPool.getAvailableCount()} available)`,
     poolStatus: tavilyKeyPool.getSummary(),
   }
@@ -5006,7 +4918,7 @@ async function executeTavily(args: Record<string, unknown>): Promise<unknown> {
  * Serper — Google Search API
  * Uses ServiceKeyPool for multi-key rotation with automatic fallback.
  * Primary: Direct Serper API with rotating keys from pool
- * Fallback: z-ai-web-dev-sdk web_search function (Clawhub Market skill)
+ * (2026-10-15) z-ai-sdk fallback removed — direct API keys only
  */
 async function executeSerper(args: Record<string, unknown>): Promise<unknown> {
   const query = args.query as string
@@ -5064,33 +4976,10 @@ async function executeSerper(args: Record<string, unknown>): Promise<unknown> {
     }
   }
 
-  // Fallback: z-ai-web-dev-sdk web_search
-  try {
-    const zai = await getZAI()
-    if (zai) {
-      const results = await withTimeout(
-        zai.functions.invoke('web_search', { query, num: 5 }),
-        30_000,
-        'z-ai-sdk web_search (serper fallback)',
-      )
-      if (Array.isArray(results) && results.length > 0) {
-        return {
-          organic: results.map((r: any) => ({
-            title: r.name || r.title,
-            link: r.url,
-            snippet: r.snippet || '',
-          })),
-          knowledgeGraph: null,
-          source: 'z-ai-sdk-web_search',
-        }
-      }
-    }
-  } catch (err) {
-    console.warn(`[ToolExecutor] z-ai-sdk web_search fallback failed: ${err instanceof Error ? err.message : String(err)}`)
-  }
+  // (2026-10-15) z-ai-sdk fallback đã GỠ BỎ — lỗi trả thẳng kèm hint cấu hình key.
 
   return {
-    error: 'Serper search failed and no fallback available.',
+    error: 'Serper search failed — no fallback available (z-ai-sdk removed 2026-10-15).',
     hint: !serperKeyPool.hasKeys() ? 'Add SERPER_API_KEY_1..4 to .env' : `All ${serperKeyPool.getTotalCount()} keys failed (${serperKeyPool.getAvailableCount()} available)`,
     poolStatus: serperKeyPool.getSummary(),
   }
@@ -5100,7 +4989,7 @@ async function executeSerper(args: Record<string, unknown>): Promise<unknown> {
  * Jina — Web page reader
  * Uses ServiceKeyPool for multi-key rotation with automatic fallback.
  * Primary: Direct Jina API with rotating keys from pool
- * Fallback: z-ai-web-dev-sdk page_reader function (Clawhub Market skill)
+ * (2026-10-15) z-ai-sdk fallback removed — direct API keys only
  */
 async function executeJina(args: Record<string, unknown>): Promise<unknown> {
   const url = args.url as string
@@ -5169,48 +5058,10 @@ async function executeJina(args: Record<string, unknown>): Promise<unknown> {
     }
   }
 
-  // Fallback: z-ai-web-dev-sdk page_reader
-  try {
-    const zai = await getZAI()
-    if (zai) {
-      const result = await withTimeout<ZaiPageReaderResult>(
-        zai.functions.invoke('page_reader', { url }),
-        30_000,
-        'z-ai-sdk page_reader (jina fallback)',
-      )
-      if (result?.data?.html) {
-        // Convert HTML to clean text
-        const text = result.data.html
-          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-          .replace(/<[^>]*>/g, ' ')
-          .replace(/&nbsp;/g, ' ')
-          .replace(/&amp;/g, '&')
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>')
-          .replace(/\s+/g, ' ')
-          .trim()
-
-        const maxChars = 30000
-        const truncated = text.length > maxChars
-        const content = truncated ? text.slice(0, maxChars) + '\n\n... [TRUNCATED — page too long]' : text
-
-        return {
-          url,
-          title: result.data.title || null,
-          content,
-          length: text.length,
-          truncated,
-          source: 'z-ai-sdk-page_reader',
-        }
-      }
-    }
-  } catch (err) {
-    console.warn(`[ToolExecutor] z-ai-sdk page_reader fallback failed: ${err instanceof Error ? err.message : String(err)}`)
-  }
+  // (2026-10-15) z-ai-sdk fallback đã GỠ BỎ — lỗi trả thẳng kèm hint cấu hình key.
 
   return {
-    error: 'Jina reader failed and no fallback available.',
+    error: 'Jina reader failed — no fallback available (z-ai-sdk removed 2026-10-15).',
     hint: !jinaKeyPool.hasKeys() ? 'Add JINA_API_KEY_1..2 to .env' : `All ${jinaKeyPool.getTotalCount()} keys failed (${jinaKeyPool.getAvailableCount()} available)`,
     poolStatus: jinaKeyPool.getSummary(),
   }
@@ -5224,7 +5075,7 @@ async function executeJina(args: Record<string, unknown>): Promise<unknown> {
  * Routing strategy (best-available provider):
  *   1. Tavily (when TAVILY_API_KEY_* configured) — AI-optimized, returns answer + content
  *   2. Serper (when SERPER_API_KEY_* configured) — Google SERP, returns organic + KG
- *   3. z-ai-web-dev-sdk web_search fallback (sandbox only)
+ *   (2026-10-15) z-ai-sdk fallback đã gỡ bỏ — chỉ API keys trực tiếp
  *
  * Output is normalized to a stable schema:
  *   { query, results: [{title, url, snippet, score?}], source, total }
@@ -5279,38 +5130,12 @@ async function executeWebSearch(args: Record<string, unknown>): Promise<unknown>
     }
   }
 
-  // Strategy 3: z-ai-sdk web_search (sandbox fallback) — invoke directly to skip
-  // the tavilyKeyPool.hasKeys() gate that executeTavily already failed above.
-  try {
-    const zai = await getZAI()
-    if (zai) {
-      const results = await withTimeout(
-        zai.functions.invoke('web_search', { query, num: maxResults }),
-        30_000,
-        'z-ai-sdk web_search (unified)',
-      )
-      if (Array.isArray(results) && results.length > 0) {
-        return {
-          query,
-          source: 'z-ai-sdk-web_search',
-          total: results.length,
-          results: results.map((r: any) => ({
-            title: r.name || r.title,
-            url: r.url,
-            snippet: r.snippet || r.content || '',
-            score: r.rank ?? null,
-          })),
-        }
-      }
-    }
-  } catch (err) {
-    console.warn(`[ToolExecutor] web_search z-ai-sdk fallback failed: ${err instanceof Error ? err.message : String(err)}`)
-  }
+  // (2026-10-15) Strategy 3 (z-ai-sdk) đã GỠ BỎ — không còn đường fallback.
 
   return {
     query,
-    error: 'All web search providers failed (no tavily/serper keys configured + z-ai-sdk unavailable).',
-    hint: 'Set TAVILY_API_KEY_1..4 or SERPER_API_KEY_1..4 in .env, or run inside z.ai sandbox for SDK fallback.',
+    error: 'All web search providers failed (no tavily/serper keys configured — z-ai-sdk fallback removed 2026-10-15).',
+    hint: 'Set TAVILY_API_KEY_1..4 or SERPER_API_KEY_1..4 in .env (direct API keys only).',
     tavilyKeys: tavilyKeyPool.getAvailableCount(),
     serperKeys: serperKeyPool.getAvailableCount(),
   }
@@ -5321,7 +5146,7 @@ async function executeWebSearch(args: Record<string, unknown>): Promise<unknown>
  *
  * Routing strategy:
  *   1. Jina (r.jina.ai) when JINA_API_KEY_* configured — clean text/markdown
- *   2. z-ai-sdk page_reader fallback (sandbox only)
+ *   (2026-10-15) z-ai-sdk fallback đã gỡ bỏ — chỉ API keys trực tiếp
  *
  * Output normalized to:
  *   { url, title, content, length, truncated, source }
@@ -5360,52 +5185,12 @@ async function executeWebFetch(args: Record<string, unknown>): Promise<unknown> 
     }
   }
 
-  // Strategy 2: z-ai-sdk page_reader (returns title + html; we convert to text)
-  try {
-    const zai = await getZAI()
-    if (zai) {
-      const result = await withTimeout<ZaiPageReaderResult>(
-        zai.functions.invoke('page_reader', { url }),
-        30_000,
-        'z-ai-sdk page_reader (unified web_fetch)',
-      )
-      if (result?.data?.html) {
-        let text = result.data.html
-        if (format === 'text' || format === 'markdown') {
-          // Strip tags for text/markdown output
-          text = text
-            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-            .replace(/<[^>]*>/g, ' ')
-            .replace(/&nbsp;/g, ' ')
-            .replace(/&amp;/g, '&')
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/\s+/g, ' ')
-            .trim()
-        }
-        const maxChars = 30000
-        const truncated = text.length > maxChars
-        const content = truncated ? text.slice(0, maxChars) + '\n\n... [TRUNCATED — page too long]' : text
-        return {
-          url,
-          title: result.data.title || null,
-          content,
-          length: text.length,
-          truncated,
-          format,
-          source: 'z-ai-sdk-page_reader',
-        }
-      }
-    }
-  } catch (err) {
-    console.warn(`[ToolExecutor] web_fetch z-ai-sdk fallback failed: ${err instanceof Error ? err.message : String(err)}`)
-  }
+  // (2026-10-15) Strategy 2 (z-ai-sdk page_reader) đã GỠ BỎ.
 
   return {
     url,
-    error: 'All web fetch providers failed (no jina keys + z-ai-sdk unavailable).',
-    hint: 'Set JINA_API_KEY_1..2 in .env, or run inside z.ai sandbox for SDK fallback.',
+    error: 'All web fetch providers failed (no jina keys — z-ai-sdk fallback removed 2026-10-15).',
+    hint: 'Set JINA_API_KEY_1..2 in .env (direct API keys only).',
     jinaKeys: jinaKeyPool.getAvailableCount(),
   }
 }
@@ -5476,17 +5261,16 @@ async function executeP0GatewayTool(
  * Check which skills are available based on environment configuration.
  * Used by the test endpoint and diagnostics.
  *
- * Skills are available if:
- *   - Direct API key is set in .env (primary method)
- *   - z-ai-web-dev-sdk is initialized (fallback method)
+ * Skills are available if direct API keys are set in .env (primary method).
+ * (2026-10-15) zaiFallback field removed together with z-ai-web-dev-sdk —
+ * availability now depends solely on direct API keys.
  */
 export interface SkillStatus {
   skill: string
   directKey: boolean      // At least one API key available in pool
   totalKeys: number       // Total keys in pool
   availableKeys: number   // Keys not in cooldown/disabled
-  zaiFallback: boolean | null  // null = not yet checked, true/false = checked
-  available: boolean      // true if either direct key or z-ai fallback works
+  available: boolean      // true if direct key works
   keyHint: string         // Hint about which env var to set
   poolSummary?: string    // Key pool status summary
 }
@@ -5498,8 +5282,7 @@ export function getSkillStatus(): SkillStatus[] {
       directKey: tavilyKeyPool.hasKeys(),
       totalKeys: tavilyKeyPool.getTotalCount(),
       availableKeys: tavilyKeyPool.getAvailableCount(),
-      zaiFallback: zaiAvailable,
-      available: tavilyKeyPool.getAvailableCount() > 0 || zaiAvailable === true,
+      available: tavilyKeyPool.getAvailableCount() > 0,
       keyHint: 'TAVILY_API_KEY_1..4',
       poolSummary: tavilyKeyPool.getSummary(),
     },
@@ -5508,8 +5291,7 @@ export function getSkillStatus(): SkillStatus[] {
       directKey: serperKeyPool.hasKeys(),
       totalKeys: serperKeyPool.getTotalCount(),
       availableKeys: serperKeyPool.getAvailableCount(),
-      zaiFallback: zaiAvailable,
-      available: serperKeyPool.getAvailableCount() > 0 || zaiAvailable === true,
+      available: serperKeyPool.getAvailableCount() > 0,
       keyHint: 'SERPER_API_KEY_1..4',
       poolSummary: serperKeyPool.getSummary(),
     },
@@ -5518,20 +5300,11 @@ export function getSkillStatus(): SkillStatus[] {
       directKey: jinaKeyPool.hasKeys(),
       totalKeys: jinaKeyPool.getTotalCount(),
       availableKeys: jinaKeyPool.getAvailableCount(),
-      zaiFallback: zaiAvailable,
-      available: jinaKeyPool.getAvailableCount() > 0 || zaiAvailable === true,
+      available: jinaKeyPool.getAvailableCount() > 0,
       keyHint: 'JINA_API_KEY_1..2',
       poolSummary: jinaKeyPool.getSummary(),
     },
   ]
-}
-
-/**
- * Check if z-ai-web-dev-sdk has been initialized and is available.
- * Returns null if not yet checked, true/false otherwise.
- */
-export function getZaiAvailable(): boolean | null {
-  return zaiAvailable
 }
 
 // ==================== REACT LOOP HELPER ====================

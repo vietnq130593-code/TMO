@@ -137,12 +137,11 @@ function normalizeExecutionMode(input: {
   return classifyExecutionMode(input)
 }
 
-// ==================== Z-AI SDK FALLBACK — ĐÃ GỠ (audit Omega #5, 2026-09-02) ====================
-// Trước đây file này có bản copy getZaiSdk/tryZaiSdk "đồng bộ orchestrator".
-// callLLMForAgent (llm.ts) ĐÃ tự có z-ai-sdk làm fallback CUỐI chuỗi (sandbox
-// self-heal FIX RESET-2026-08-30) — bản copy ở đây chỉ trùng lặp bảo trì và
-// gọi z-ai-sdk 2 lần khi chuỗi NVIDIA fail. Đã xóa: analyzeWithLLM giờ chỉ
-// dùng callLLMForAgent (fallback z-ai-sdk bên trong).
+// ==================== Z-AI SDK FALLBACK — ĐÃ GỠ TOÀN BỘ (2026-10-15) ====================
+// (1) 2026-09-02 (audit Omega #5): gỡ bản copy getZaiSdk/tryZaiSdk —
+//     analyzeWithLLM chỉ dùng callLLMForAgent.
+// (2) 2026-10-15 (user directive): llm.ts cũng đã gỡ z-ai-sdk fallback bên
+//     trong — chuỗi LLM thuần NVIDIA NIM; SDK không tồn tại trên máy local.
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -361,8 +360,8 @@ Phân tích và đề xuất (JSON).`
   try {
     let raw: string | null = null
     try {
-      // callLLMForAgent tự kèm z-ai-sdk fallback cuối chuỗi (llm.ts) — không
-      // cần bản copy tryZaiSdk ở đây nữa (audit Omega #5).
+      // callLLMForAgent: chuỗi NVIDIA thuần (kimi-k3 → fallback chain) — z-ai-sdk
+      // fallback đã gỡ toàn bộ (2026-10-15).
       const result = await withTimeout(
         callLLMForAgent(userPrompt, OMEGA_FALLBACK_BRAIN, systemPrompt, {
           agentName: 'SelfDirectionScan',
@@ -370,7 +369,7 @@ Phân tích và đề xuất (JSON).`
           maxTokens: 2200,
         }),
         LLM_TIMEOUT_MS,
-        'ScanLLM (NVIDIA chain + z-ai-sdk fallback)',
+        'ScanLLM (NVIDIA chain)',
       )
       if (result.content && result.content.trim()) raw = result.content.trim()
     } catch { /* fall xuống deterministic fallback proposals */ }

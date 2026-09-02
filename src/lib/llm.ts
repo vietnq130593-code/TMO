@@ -3326,92 +3326,19 @@ export async function callUtilityLLM(
   }
 }
 
-// ==================== Z-AI SDK FALLBACK (sandbox self-heal, 2026-08-30) ====================
-
-/**
- * FIX RESET-2026-08-30: sau khi sandbox reset, NVIDIA keys trong .env là placeholder
- * → HTTP 401 → TOÀN BỘ agent chat/ReAct/classification chết ("Xin lỗi, tôi không tìm
- * thấy thông tin..."). z-ai-web-dev-sdk chạy trong sandbox KHÔNG cần key → dùng làm
- * fallback cuối chuỗi khi NVIDIA pool cạn (401/quota/hết key). ReAct loop parse
- * tool_call từ TEXT nên SDK text-only vẫn thực thi tool đầy đủ.
- *
- * Ưu tiên vẫn là NVIDIA (nhanh, model reasoning); SDK chỉ chạy khi NVIDIA fail toàn bộ.
- */
-let zaiSdkModule: { chat: { completions: { create: (p: unknown) => Promise<unknown> } } } | null = null
-let zaiSdkInitPromise: Promise<typeof zaiSdkModule> | null = null
-
-async function getZaiSdk() {
-  if (zaiSdkModule) return zaiSdkModule
-  if (!zaiSdkInitPromise) {
-    zaiSdkInitPromise = (async () => {
-      try {
-        const mod = await import('z-ai-web-dev-sdk')
-        const ZAI = (mod as unknown as { default: { create: () => Promise<unknown> } }).default
-        const inst = (await ZAI.create()) as NonNullable<typeof zaiSdkModule>
-        zaiSdkModule = inst
-        return inst
-      } catch (err) {
-        console.warn('[LLM] z-ai-sdk init failed:', err instanceof Error ? err.message : String(err))
-        return null
-      }
-    })()
-  }
-  return zaiSdkInitPromise.then(r => r)
-}
-
-async function tryZaiSdk(
-  prompt: string,
-  systemPrompt: string | undefined,
-  taskLabel: string,
-  options?: LLMCallOptions
-): Promise<LLMResult | null> {
-  try {
-    const sdk = await getZaiSdk()
-    if (!sdk) return null
-    const messages = [
-      ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-      { role: 'user', content: prompt },
-    ]
-    const res = (await sdk.chat.completions.create({
-      messages,
-      ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
-      ...(options?.maxTokens ? { max_tokens: options.maxTokens } : {}),
-    })) as {
-      choices?: Array<{ message?: { content?: string } }>
-      model?: string
-      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
-    }
-    const content = res?.choices?.[0]?.message?.content ?? ''
-    if (!content) return null
-    const model = res?.model || 'zai-sdk-default'
-    console.log(`[LLM] z-ai-sdk fallback OK for task "${taskLabel}" (NVIDIA exhausted) — ${content.length} chars`)
-    const totalTokens = res?.usage?.total_tokens ?? 0
-    if (totalTokens > 0) {
-      if (options?.agentId) {
-        addTokensUsedByAgent(
-          totalTokens,
-          res?.usage?.prompt_tokens ?? 0,
-          res?.usage?.completion_tokens ?? 0,
-          'zai-sdk',
-          model,
-          options.agentId,
-          options.agentName || 'unknown'
-        )
-      } else {
-        addTokensUsed(totalTokens, 'zai-sdk', undefined, model)
-      }
-    }
-    return { content, provider: 'zai-sdk', model, tokensUsed: totalTokens || undefined }
-  } catch (err) {
-    console.warn(`[LLM] z-ai-sdk fallback failed for "${taskLabel}":`, err instanceof Error ? err.message : String(err))
-    return null
-  }
-}
-
 // ==================== LEGACY CALL (for chat, health, etc.) ====================
 
+// ━━ REMOVED 2026-10-15 (user directive): gỡ bỏ TOÀN BỘ fallback z-ai-web-dev-sdk ━━
+// z-ai-web-dev-sdk chỉ tồn tại trong sandbox triển khai — KHÔNG có trên máy local
+// của user (không nằm trong package.json) → mỗi lần chuỗi NVIDIA fail, app lại
+// mất thêm 15-20s import sdk thất bại trước khi trả error. Đã xóa:
+// getZaiSdk/tryZaiSdk + 2 call-site (callLLMForAgent enforced path + callLLM
+// legacy path). Chuỗi LLM giờ CHỈ là NVIDIA NIM (kimi-k3 → fallback chain
+// model-first + xoay 4 key + timeout-breaker) — lỗi hiện diện NGAY trong
+// LLMResult.error (thẳng thắn, không che dấu).
+
 /**
- * Legacy LLM call — NVIDIA NIM first, z-ai-sdk as last-resort fallback.
+ * Legacy LLM call — NVIDIA NIM only (z-ai-sdk fallback đã gỡ bỏ 2026-10-15).
  * Uses round-robin key selection (keyIndex=-1).
  * Use this for non-extraction tasks (chat queries, classification, health checks).
  */
@@ -3457,18 +3384,13 @@ export async function callLLM(
   const result = await tryNvidia(prompt, systemPrompt, temp, maxTok, aId, aName)
   if (result?.content) return result
 
-  console.log(`[LLM] NVIDIA failed for task "${taskLabel}" — trying z-ai-sdk fallback`)
-
-  // FIX RESET-2026-08-30: NVIDIA pool exhausted (missing/placeholder keys, quota,
-  // outage) → z-ai-sdk (no key needed in sandbox) thay vì trả error trống.
-  const sdkResult = await tryZaiSdk(prompt, systemPrompt, taskLabel, options)
-  if (sdkResult?.content) return sdkResult
+  console.log(`[LLM] NVIDIA failed for task "${taskLabel}" — no fallback (z-ai-sdk removed 2026-10-15)`)
 
   return {
     content: '',
     provider: 'none',
     model: 'none',
-    error: 'NVIDIA NIM failed (z-ai-sdk fallback also failed)',
+    error: 'NVIDIA NIM failed (chuỗi NVIDIA + fallback chain đều lỗi — kiểm tra NVIDIA_API_KEY_1..4 trong .env)',
   }
 }
 
@@ -3585,19 +3507,10 @@ export async function callLLMForAgent(
       console.log(`[LLM] Agent dùng lõi ${result.model} ✓ (${tcCount} tool_calls) — agent cấu hình gốc: ${provider}/${model}`)
       return result
     }
-    // SANDBOX SELF-HEAL (bổ sung FIX RESET-2026-08-30): đường kimi-k3 enforced
-    // (mặc định) từng BỎ SÓT khỏi lớp fallback z-ai-sdk — chỉ legacy path
-    // (ENFORCE_KIMI_K3=false) có tryZaiSdk, còn goal-loop + workflow-engine
-    // (đều gọi callLLMForAgent) chết hoàn toàn khi NVIDIA keys placeholder
-    // (401 × 4 key × sweep ≈ 61s → error). Thêm z-ai-sdk làm fallback CUỐI
-    // chuỗi, đúng cùng pattern callLLM legacy + callBrain (self-direction):
-    // ReAct loop parse tool_call từ TEXT nên SDK text-only vẫn thực thi tool
-    // đầy đủ. Fail-open: zai lỗi → trả error gốc của chuỗi NVIDIA.
-    const sdkResult = await tryZaiSdk(prompt, systemPrompt, `agent:${model}`, options)
-    if (sdkResult?.content) {
-      console.log(`[LLM] Agent dùng z-ai-sdk fallback ✓ (chuỗi NVIDIA ${KIMI_K3_MODEL} thất bại) — agent cấu hình gốc: ${provider}/${model}`)
-      return sdkResult
-    }
+    // (2026-10-15) z-ai-sdk fallback đã GỠ BỎ theo user directive — trả thẳng
+    // LLMResult lỗi của chuỗi NVIDIA để caller nhìn thấy nguyên nhân thật
+    // (key/timeout/model) thay vì mất thêm 15-20s chờ import sdk thất bại.
+    console.warn(`[LLM] Agent chain NVIDIA thất bại (no fallback — z-ai-sdk removed 2026-10-15): ${(result.error || 'unknown error').slice(0, 200)}`)
     return result
   }
 

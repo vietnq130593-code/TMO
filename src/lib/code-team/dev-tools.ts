@@ -2554,28 +2554,10 @@ async function persistDevTasksToDb(
 }
 
 /**
- * FIX E2E 2026-09-14 — z-ai-sdk fallback cho decompose_task: NVIDIA NIM cạn
- * hạn mức (cả 4 key) thì callLLM trả content rỗng → phân rã chết. Fallback
- * cuối qua z-ai-web-dev-sdk (không cần key — pattern copy từ self-direction
- * orchestrator tryZaiSdk). Fail-open: sdk lỗi → trả null (caller dùng kết quả
- * callLLM như cũ).
+ * (2026-10-15) REMOVED tryZaiSdkForDecompose theo user directive — gỡ bỏ toàn
+ * bộ fallback z-ai-web-dev-sdk (sdk chỉ có trong sandbox, không tồn tại trên máy
+ * local). NVIDIA chain fail → decompose trả lỗi trung thực qua guard bên dưới.
  */
-async function tryZaiSdkForDecompose(prompt: string, systemPrompt: string): Promise<string | null> {
-  try {
-    const { default: ZAI } = await import('z-ai-web-dev-sdk')
-    const sdk = await ZAI.create()
-    const res = (await sdk.chat.completions.create({
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt },
-      ],
-    })) as { choices?: Array<{ message?: { content?: string } }> }
-    return res?.choices?.[0]?.message?.content ?? null
-  } catch (err) {
-    console.warn('[dev-tools:decomposeTask] z-ai-sdk fallback failed:', err instanceof Error ? err.message : String(err))
-    return null
-  }
-}
 
 export async function decomposeTask(args: { goal: string; context?: string; sessionId?: string; runId?: string }): Promise<unknown> {
   if (!args.goal) return { error: 'goal is required' }
@@ -2600,12 +2582,9 @@ ${args.context ? `Context: ${args.context}` : ''}
 
 JSON:`
   const result = await callLLM(prompt, 'You are a senior tech lead. Be concrete and minimal.', 'task_decomposition')
-  let text = result.content || ''
-  // FIX E2E 2026-09-14 — NVIDIA chain fail (content rỗng) → z-ai-sdk fallback
-  if (!text.trim()) {
-    console.log('[dev-tools:decomposeTask] NVIDIA trả rỗng — thử z-ai-sdk fallback')
-    text = (await tryZaiSdkForDecompose(prompt, 'You are a senior tech lead. Be concrete and minimal.')) ?? ''
-  }
+  const text = result.content || ''
+  // (2026-10-15) z-ai-sdk fallback đã GỠ BỎ — content rỗng rơi thẳng vào guard
+  // JSON parse lỗi → trả lỗi trung thực kèm result.error để agent biết nguyên nhân.
 
   let tasksRaw: any[]
   try {

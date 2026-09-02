@@ -180,14 +180,14 @@ const globalForSd = globalThis as unknown as {
 const runningOrchestrations: Set<string> = (globalForSd.__tmoSdRunningOrchestrations ??= new Set())
 const reviewingProposals: Set<string> = (globalForSd.__tmoSdReviewingProposals ??= new Set())
 
-// ==================== Z-AI SDK FALLBACK — ĐÃ GỠ (audit Omega #5, 2026-09-02) ====================
-// Trước đây file này (và scan.ts) có bản copy getZaiSdk/tryZaiSdk pattern từ
-// llm.ts. callLLMForAgent (llm.ts) ở chế độ ENFORCE_KIMI_K3 (mặc định) ĐÃ tự
-// kèm z-ai-sdk làm fallback CUỐI chuỗi (sandbox self-heal, FIX RESET-2026-08-30:
-// NVIDIA fail → z-ai-sdk trong cùng 1 call). Bản copy tại đây chỉ gây:
-// (a) trùng lặp bảo trì 3 nơi, (b) z-ai-sdk bị gọi LẦN 2 vô nghĩa khi chuỗi
-// NVIDIA + z-ai bên trong callLLMForAgent đều fail. Đã gỡ sạch — mọi callBrain /
-// executeStep / callStepBrain / analyzeWithLLM (scan) chỉ dùng callLLMForAgent.
+// ==================== Z-AI SDK FALLBACK — ĐÃ GỠ TOÀN BỘ (2026-10-15) ====================
+// (1) 2026-09-02 (audit Omega #5): gỡ bản copy getZaiSdk/tryZaiSdk tại file
+//     này + scan.ts — mọi LLM call chỉ qua callLLMForAgent (llm.ts).
+// (2) 2026-10-15 (user directive): gỡ NỐT cả fallback z-ai-sdk bên trong
+//     llm.ts (callLLMForAgent + callLLM) — SDK chỉ tồn tại trong sandbox
+//     triển khai, KHÔNG có trên máy local của user. Chuỗi LLM giờ thuần
+//     NVIDIA NIM (kimi-k3 → deepseek-v4-pro → v4-flash → minimax-m3, xoay
+//     4 key + timeout-breaker) — lỗi hiện diện thẳng trong LLMResult.error.
 
 // ==================== CORE LLM HELPER ====================
 
@@ -200,8 +200,8 @@ async function callBrain(params: {
 }): Promise<string> {
   const { prompt, systemPrompt, temperature = 0.3, maxTokens = 1200, label } = params
   try {
-    // callLLMForAgent: NVIDIA chain (kimi-k3 → fallback chain) + z-ai-sdk tự
-    // heal bên trong — content trả về là của backend ĐẦU TIÊN thành công.
+    // callLLMForAgent: NVIDIA chain (kimi-k3 → fallback chain model-first,
+    // xoay 4 key) — z-ai-sdk fallback đã gỡ (2026-10-15).
     const result = await withTimeout(
       callLLMForAgent(prompt, OMEGA_FALLBACK_BRAIN, systemPrompt, {
         agentName: 'SelfDirection',
@@ -209,14 +209,14 @@ async function callBrain(params: {
         maxTokens,
       }),
       LLM_TIMEOUT_MS,
-      `${label} (NVIDIA chain + z-ai-sdk)`,
+      `${label} (NVIDIA chain)`,
     )
     if (result.content && result.content.trim()) return result.content.trim()
-    console.warn(`[SelfDirection] ${label}: chuỗi NVIDIA + z-ai-sdk fallback không trả content — coi như thất bại`)
+    console.warn(`[SelfDirection] ${label}: chuỗi NVIDIA không trả content — error: ${(result.error || '(không có error detail)').slice(0, 200)}`)
   } catch (err) {
     console.warn(`[SelfDirection] ${label}: chuỗi LLM lỗi (timeout/backend):`, err instanceof Error ? err.message : String(err))
   }
-  throw new Error(`${label}: mọi LLM backend đều thất bại`)
+  throw new Error(`${label}: mọi LLM backend đều thất bại (chuỗi NVIDIA kimi-k3 → fallback chain — kiểm tra NVIDIA_API_KEY_1..4 trong .env)`)
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -650,7 +650,8 @@ ${reworkFeedback ? `\n⚠️ PHẢN HỒI TỪ OMEGA VỀ LẦN THỬ TRƯỚC (
 Viết báo cáo output của bạn.`
 
   try {
-    // callLLMForAgent tự kèm z-ai-sdk fallback cuối chuỗi (llm.ts) — audit #5
+    // callLLMForAgent: chuỗi NVIDIA (kimi-k3 → fallback chain) — z-ai-sdk
+    // fallback đã gỡ (2026-10-15)
     const result = await withTimeout(
       callLLMForAgent(userPrompt, persona.brain, systemPrompt, {
         agentName: step.assignee,
@@ -658,7 +659,7 @@ Viết báo cáo output của bạn.`
         maxTokens: 900,
       }),
       LLM_TIMEOUT_MS,
-      `StepExec ${step.assignee} (NVIDIA chain + z-ai-sdk)`,
+      `StepExec ${step.assignee} (NVIDIA chain)`,
     )
     if (result.content && result.content.trim()) return result.content.trim().slice(0, 3000)
   } catch (err) {
@@ -678,7 +679,8 @@ Viết báo cáo output của bạn.`
 
 /**
  * LLM call cho ReAct loop code-workflow: callLLMForAgent (persona brain) —
- * chuỗi NVIDIA + z-ai-sdk fallback tự heal bên trong (llm.ts, audit Omega #5).
+ * chuỗi NVIDIA model-first (kimi-k3 → fallback chain). z-ai-sdk fallback
+ * đã gỡ (2026-10-15) — LLM fail trả null, caller tổng hợp output trung thực.
  */
 async function callStepBrain(params: {
   prompt: string
@@ -696,10 +698,18 @@ async function callStepBrain(params: {
         maxTokens: 1400,
       }),
       LLM_TIMEOUT_MS,
-      `${label} (${agentName}) (NVIDIA chain + z-ai-sdk)`,
+      `${label} (${agentName}) (NVIDIA chain)`,
     )
     if (result.content && result.content.trim()) return result.content.trim()
-  } catch { /* fall through */ }
+    // FIX 2026-10-15 (user report "output trống lần cuối"): content rỗng là LỖI
+    // thật — log rõ error của chuỗi để truy nguyên nhân (key/timeout/model)
+    // thay vì im lặng trả null khiến evaluateStep đánh giá output trống mù.
+    console.warn(
+      `[SelfDirection] ${label} (${agentName}): LLM trả content rỗng — error: ${(result.error || '(không có error detail)').slice(0, 200)}`,
+    )
+  } catch (err) {
+    console.warn(`[SelfDirection] ${label} (${agentName}): LLM call lỗi:`, err instanceof Error ? err.message : String(err))
+  }
   return null
 }
 
@@ -774,6 +784,10 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
   const toolCallsLog: Array<{ tool: string; success: boolean }> = []
   let lastAssistant = ''
   let output = ''
+  // FIX 2026-10-15: đếm lượt LLM fail — tổng hợp vào output trung thực khi cả
+  // ReAct loop chết vì LLM (không còn output rỗng → evaluateStep không rơi vào
+  // fail-open mù "output trống lần cuối, chấp nhận để mở kẹt pipeline").
+  let llmFailTurns = 0
 
   for (let turn = 1; turn <= SD_CODE_STEP_MAX_TURNS; turn++) {
     const formatted = formatMessagesForLLM(messages)
@@ -784,7 +798,10 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
       agentName: step.assignee,
       label: `CodeStep ${step.stepOrder}`,
     })
-    if (!content) break
+    if (!content) {
+      llmFailTurns++
+      break
+    }
     lastAssistant = content
     messages.push({ role: 'assistant', content })
 
@@ -839,11 +856,17 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
     // Loop kết thúc không có báo cáo text thuần (hết lượt/kẹt): nếu có tool call
     // thì tổng hợp TRUNG THỰC từ tool log (lastAssistant lúc này chứa tool_call
     // thô — không phải báo cáo); không có tool call thì giữ text LLM cuối.
+    // FIX 2026-10-15 (user report "output trống lần cuối"): khi LLM fail ngay
+    // lượt đầu (toolCallsLog rỗng + lastAssistant rỗng) → output TRƯỚC ĐÂY là
+    // chuỗi rỗng → evaluateStep đánh giá mù → sau 3 lần thử fail-open
+    // "chấp nhận để mở kẹt pipeline" với evaluation rỗng. Giờ trả cảnh báo
+    // trung thực (mirror executeStep llm-mode) — evaluateStep thấy output KHÔNG
+    // trống + rõ nguyên nhân → step failed đúng nghĩa, KHÔNG đánh lừa completed.
     output = toolCallsLog.length > 0
       ? `Đã thực thi ${toolCallsLog.length} tool call trong workspace thật (${toolCallsLog.filter(t => t.success).length} thành công): ${toolCallsLog.map(t => `${t.tool}${t.success ? '✓' : '✗'}`).join(', ')}. Agent không viết báo cáo tổng kết (hết lượt LLM) — xem chi tiết tool receipts trong workspaceReceipt.`
-      : lastAssistant
+      : lastAssistant || `[${step.assignee} chưa tạo được output do LLM call thất bại${llmFailTurns > 0 ? ` (${llmFailTurns} lượt fail — chuỗi NVIDIA kimi-k3 → fallback chain đều lỗi, kiểm tra NVIDIA_API_KEY_1..4 trong .env / timeout / model)` : ''} — cần retry]`
   }
-  console.log(`[SelfDirection] CodeStep ${step.stepOrder} [${step.assignee}] thực thi THẬT ${toolCallsLog.length} tool call (${toolCallsLog.filter(t => t.success).length} ok)`)
+  console.log(`[SelfDirection] CodeStep ${step.stepOrder} [${step.assignee}] thực thi THẬT ${toolCallsLog.length} tool call (${toolCallsLog.filter(t => t.success).length} ok)${llmFailTurns > 0 ? ` — ${llmFailTurns} lượt LLM fail` : ''}`)
   return {
     output: output.slice(0, 3000),
     receipt: { kind: 'tool-batch', toolCalls: toolCallsLog, executedAt: new Date().toISOString() },
@@ -977,10 +1000,15 @@ ${params.output.slice(0, 2000)}
   // Fix: nếu không đánh giá được → complete:false + evaluation cảnh báo, cho
   // phép retry (MAX_STEP_ATTEMPTS). CHỈ khi output thực sự trống/rõ ràng fail
   // mới được fail-open (tránh kẹt pipeline hoàn toàn khi attempt cuối).
+  //
+  // FIX 2026-10-15: callers giờ KHÔNG còn sinh output rỗng (executeStep +
+  // executeCodeStepWithTools đều có fallback text trung thực) → nhánh fail-open
+  // dưới chỉ còn là lưới an toàn; evaluation message nêu nguyên nhân LLM lỗi để
+  // user biết phải fix gì (không còn câu chung chung "output trống").
   const outputEmpty = !params.output || params.output.trim().length === 0
   if (outputEmpty && params.attempt >= MAX_STEP_ATTEMPTS) {
     // Lần cuối + output trống → fail-open để pipeline tiếp tục (tránh kẹt vĩnh viễn)
-    return { complete: true, evaluation: tagEvaluation(reviewerName, `(không đánh giá được — output trống lần cuối, chấp nhận để mở kẹt pipeline)`) }
+    return { complete: true, evaluation: tagEvaluation(reviewerName, `(không đánh giá được — output trống lần cuối + LLM đánh giá lỗi chuỗi NVIDIA, chấp nhận để mở kẹt pipeline — xem log [SelfDirection] StepEval để truy nguyên nhân)`) }
   }
   // Còn lại: KHÔNG accept — retry với feedback cảnh báo
   return {

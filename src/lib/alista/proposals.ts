@@ -34,47 +34,11 @@ const DEDUPE_WINDOW_DAYS = 7
 /** Status còn sống → không tạo proposal trùng key */
 const LIVE_STATUSES = ['pending', 'approved', 'ready', 'planning', 'executing']
 
-// ==================== Z-AI SDK FALLBACK (đồng bộ scan.ts) ====================
-
-let zaiSdkModule: { chat: { completions: { create: (p: unknown) => Promise<unknown> } } } | null = null
-let zaiSdkInitPromise: Promise<typeof zaiSdkModule> | null = null
-
-async function getZaiSdk(): Promise<typeof zaiSdkModule> {
-  if (zaiSdkModule) return zaiSdkModule
-  if (!zaiSdkInitPromise) {
-    zaiSdkInitPromise = (async () => {
-      try {
-        const mod = await import('z-ai-web-dev-sdk')
-        const ZAI = (mod as unknown as { default: { create: () => Promise<unknown> } }).default
-        const inst = (await ZAI.create()) as NonNullable<typeof zaiSdkModule>
-        zaiSdkModule = inst
-        return inst
-      } catch (err) {
-        console.warn('[ALISTA][proposals] z-ai-sdk init failed:', err instanceof Error ? err.message : String(err))
-        return null
-      }
-    })()
-  }
-  return zaiSdkInitPromise.then(r => r)
-}
-
-async function tryZaiSdk(prompt: string, systemPrompt: string): Promise<string | null> {
-  try {
-    const sdk = await getZaiSdk()
-    if (!sdk) return null
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: prompt },
-    ]
-    const res = (await sdk.chat.completions.create({ messages })) as {
-      choices?: Array<{ message?: { content?: string } }>
-    }
-    return res?.choices?.[0]?.message?.content ?? ''
-  } catch (err) {
-    console.warn('[ALISTA][proposals] z-ai-sdk fallback failed:', err instanceof Error ? err.message : String(err))
-    return null
-  }
-}
+// ━━ REMOVED 2026-10-15 (user directive): gỡ bỏ fallback z-ai-web-dev-sdk —
+// sdk chỉ tồn tại trong sandbox triển khai, không có trên máy local của user
+// (không nằm trong package.json). LLM synthesis giờ chỉ qua callLLMForAgent
+// (chuỗi NVIDIA kimi-k3 → fallback chain); LLM lỗi → fallback template từ
+// evidence (pipeline KHÔNG bao giờ chết vì LLM — nguyên tắc fail-safe giữ nguyên). ━━
 
 export async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -171,12 +135,12 @@ async function synthesizeWithLLM(
   checkId: number,
   checkLabel: string,
   findings: Finding[],
-): Promise<{ drafts: LLMProposalDraft[]; source: 'kimi' | 'zai' | 'template' }> {
+): Promise<{ drafts: LLMProposalDraft[]; source: 'kimi' | 'template' }> {
   const systemPrompt = ALISTA_SYSTEM_PROMPT.replace('<STEP>', `${checkId}/7: ${checkLabel}`)
   const userPrompt = buildUserPrompt(checkId, checkLabel, findings)
 
   let raw: string | null = null
-  let source: 'kimi' | 'zai' | 'template' = 'template'
+  let source: 'kimi' | 'template' = 'template'
 
   // Lần 1: callLLMForAgent (kimi-k3 enforced + fallback chain)
   try {
@@ -198,22 +162,8 @@ async function synthesizeWithLLM(
     console.warn(`[ALISTA][proposals] LLM call fail (check ${checkId}):`, err instanceof Error ? err.message : String(err))
   }
 
-  // Lần 2: z-ai-sdk fallback (text-only — vẫn OK vì parse JSON từ text)
-  if (!raw) {
-    try {
-      const zaiText = await withTimeout(
-        tryZaiSdk(userPrompt, systemPrompt),
-        LLM_TIMEOUT_MS,
-        `ALISTA zai-sdk check ${checkId}`,
-      )
-      if (zaiText && zaiText.trim()) {
-        raw = zaiText.trim()
-        source = 'zai'
-      }
-    } catch (err) {
-      console.warn(`[ALISTA][proposals] z-ai-sdk fallback fail (check ${checkId}):`, err instanceof Error ? err.message : String(err))
-    }
-  }
+  // (2026-10-15) z-ai-sdk fallback đã GỠ BỎ (user directive — sdk không có trên
+  // local). LLM lỗi → return drafts rỗng → caller dùng fallback template.
 
   if (!raw) return { drafts: [], source: 'template' }
 

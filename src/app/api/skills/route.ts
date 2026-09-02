@@ -4,8 +4,13 @@
  * GET  /api/skills          — List all installed skills with status (includes key pool info)
  * GET  /api/skills?status   — Quick health check (just status, no test)
  * GET  /api/skills?pool     — Detailed key pool status for all services
- * POST /api/skills/test     — Test a specific skill (tavily | serper | jina | web_search | page_reader)
+ * POST /api/skills/test     — Test a specific skill (tavily | serper | jina)
  * POST /api/skills/test-all — Test all skills and return results
+ *
+ * (2026-10-15) z-ai-web-dev-sdk fallback đã GỠ BỎ (user directive — SDK chỉ
+ * tồn tại trong sandbox, không có trên local). Skill web_search/page_reader
+ * (provider z-ai-sdk) đã xóa khỏi danh sách; chuỗi search/read giờ chỉ dùng
+ * direct API keys (TAVILY/SERPER/JINA_API_KEY trong .env).
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -46,8 +51,8 @@ function getSkills(): SkillDef[] {
       hasApiKey: tavilyKeyPool.hasKeys(),
       totalKeys: tavilyKeyPool.getTotalCount(),
       availableKeys: tavilyKeyPool.getAvailableCount(),
-      hasFallback: true,
-      fallbackProvider: 'z-ai-web-dev-sdk (web_search)',
+      hasFallback: false,
+      fallbackProvider: '',
       usedByAgents: ['Mọi Agents (khi cần Web Search)'],
     },
     {
@@ -61,8 +66,8 @@ function getSkills(): SkillDef[] {
       hasApiKey: serperKeyPool.hasKeys(),
       totalKeys: serperKeyPool.getTotalCount(),
       availableKeys: serperKeyPool.getAvailableCount(),
-      hasFallback: true,
-      fallbackProvider: 'z-ai-web-dev-sdk (web_search)',
+      hasFallback: false,
+      fallbackProvider: '',
       usedByAgents: ['Mọi Agents (khi cần Google Search)'],
       docsUrl: 'https://serper.dev',
     },
@@ -77,44 +82,10 @@ function getSkills(): SkillDef[] {
       hasApiKey: jinaKeyPool.hasKeys(),
       totalKeys: jinaKeyPool.getTotalCount(),
       availableKeys: jinaKeyPool.getAvailableCount(),
-      hasFallback: true,
-      fallbackProvider: 'z-ai-web-dev-sdk (page_reader)',
+      hasFallback: false,
+      fallbackProvider: '',
       usedByAgents: ['Mọi Agents (khi cần đọc trang web)'],
       docsUrl: 'https://jina.ai',
-    },
-    {
-      id: 'web_search',
-      name: 'Web Search (z-ai-sdk)',
-      description: 'Web search via z-ai-web-dev-sdk. Fallback cho Tavily/Serper khi API keys không khả dụng. Không cần API key riêng.',
-      category: 'search',
-      icon: '🌐',
-      provider: 'z-ai-web-dev-sdk',
-      apiKeyEnv: '(none)',
-      hasApiKey: true,
-      totalKeys: 0,
-      availableKeys: 0,
-      hasFallback: false,
-      fallbackProvider: '',
-      usedByAgents: ['Mọi Agents (fallback Web Search)'],
-      status: 'active',
-      docsUrl: 'https://docs.z.ai',
-    },
-    {
-      id: 'page_reader',
-      name: 'Page Reader (z-ai-sdk)',
-      description: 'Web page reader via z-ai-web-dev-sdk. Fallback cho Jina khi API key không khả dụng. Không cần API key riêng.',
-      category: 'reader',
-      icon: '📄',
-      provider: 'z-ai-web-dev-sdk',
-      apiKeyEnv: '(none)',
-      hasApiKey: true,
-      totalKeys: 0,
-      availableKeys: 0,
-      hasFallback: false,
-      fallbackProvider: '',
-      usedByAgents: ['Mọi Agents (fallback Page Reader)'],
-      status: 'active',
-      docsUrl: 'https://docs.z.ai',
     },
   ]
 }
@@ -222,10 +193,7 @@ async function testSkill(skillId: string): Promise<{
       return await testSerper(startTime)
     case 'jina':
       return await testJina(startTime)
-    case 'web_search':
-      return await testWebSearchSDK(startTime)
-    case 'page_reader':
-      return await testPageReaderSDK(startTime)
+    // (2026-10-15) web_search/page_reader (z-ai-sdk) đã gỡ bỏ — rơi vào default
     default:
       return {
         ok: false,
@@ -240,7 +208,7 @@ async function testSkill(skillId: string): Promise<{
 }
 
 async function testAllSkills() {
-  const skillIds = ['tavily', 'serper', 'jina', 'web_search', 'page_reader']
+  const skillIds = ['tavily', 'serper', 'jina']
   const results = await Promise.allSettled(skillIds.map(id => testSkill(id)))
 
   return {
@@ -300,29 +268,15 @@ async function testTavily(startTime: number) {
     }
   }
 
-  // Fallback: z-ai-web-dev-sdk
-  try {
-    const ZAI = (await import('z-ai-web-dev-sdk')).default
-    const zai = await ZAI.create()
-    const results = await zai.functions.invoke('web_search', { query: 'Next.js 15 new features', num: 2 })
-    return {
-      ok: true,
-      skillId: 'tavily',
-      success: true,
-      source: 'z-ai-sdk-web_search',
-      duration: Date.now() - startTime,
-      resultPreview: `Found ${results?.length || 0} results via SDK fallback`,
-    }
-  } catch (err) {
-    return {
-      ok: false,
-      skillId: 'tavily',
-      success: false,
-      source: tavilyKeyPool.hasKeys() ? 'tavily-api' : 'none',
-      duration: Date.now() - startTime,
-      resultPreview: '',
-      error: `Tavily API failed (${tavilyKeyPool.getAvailableCount()}/${tavilyKeyPool.getTotalCount()} keys available) + SDK fallback failed: ${err instanceof Error ? err.message : String(err)}`,
-    }
+  // (2026-10-15) z-ai-sdk fallback đã GỠ BỎ — trả lỗi thẳng với hint key.
+  return {
+    ok: false,
+    skillId: 'tavily',
+    success: false,
+    source: tavilyKeyPool.hasKeys() ? 'tavily-api' : 'none',
+    duration: Date.now() - startTime,
+    resultPreview: '',
+    error: `Tavily API failed (${tavilyKeyPool.getAvailableCount()}/${tavilyKeyPool.getTotalCount()} keys available) — no fallback (z-ai-sdk removed 2026-10-15)`,
   }
 }
 
@@ -360,28 +314,15 @@ async function testSerper(startTime: number) {
     }
   }
 
-  try {
-    const ZAI = (await import('z-ai-web-dev-sdk')).default
-    const zai = await ZAI.create()
-    const results = await zai.functions.invoke('web_search', { query: 'TypeScript 5.5 new features', num: 2 })
-    return {
-      ok: true,
-      skillId: 'serper',
-      success: true,
-      source: 'z-ai-sdk-web_search',
-      duration: Date.now() - startTime,
-      resultPreview: `Found ${results?.length || 0} results via SDK fallback`,
-    }
-  } catch (err) {
-    return {
-      ok: false,
-      skillId: 'serper',
-      success: false,
-      source: serperKeyPool.hasKeys() ? 'serper-api' : 'none',
-      duration: Date.now() - startTime,
-      resultPreview: '',
-      error: `Serper API failed (${serperKeyPool.getAvailableCount()}/${serperKeyPool.getTotalCount()} keys available) + SDK fallback failed: ${err instanceof Error ? err.message : String(err)}`,
-    }
+  // (2026-10-15) z-ai-sdk fallback đã GỠ BỎ — trả lỗi thẳng với hint key.
+  return {
+    ok: false,
+    skillId: 'serper',
+    success: false,
+    source: serperKeyPool.hasKeys() ? 'serper-api' : 'none',
+    duration: Date.now() - startTime,
+    resultPreview: '',
+    error: `Serper API failed (${serperKeyPool.getAvailableCount()}/${serperKeyPool.getTotalCount()} keys available) — no fallback (z-ai-sdk removed 2026-10-15)`,
   }
 }
 
@@ -420,24 +361,7 @@ async function testJina(startTime: number) {
     }
   }
 
-  try {
-    const ZAI = (await import('z-ai-web-dev-sdk')).default
-    const zai = await ZAI.create()
-    const result = await zai.functions.invoke('page_reader', { url: 'https://example.com' })
-    if (result?.data?.html) {
-      return {
-        ok: true,
-        skillId: 'jina',
-        success: true,
-        source: 'z-ai-sdk-page_reader',
-        duration: Date.now() - startTime,
-        resultPreview: `Read page via SDK. Title: ${result.data.title || 'N/A'}`,
-      }
-    }
-  } catch (err) {
-    // Fall through
-  }
-
+  // (2026-10-15) z-ai-sdk fallback đã GỠ BỎ — trả lỗi thẳng với hint key.
   return {
     ok: false,
     skillId: 'jina',
@@ -445,58 +369,8 @@ async function testJina(startTime: number) {
     source: 'none',
     duration: Date.now() - startTime,
     resultPreview: '',
-    error: `Jina API failed (${jinaKeyPool.getAvailableCount()}/${jinaKeyPool.getTotalCount()} keys available) + SDK fallback failed`,
+    error: `Jina API failed (${jinaKeyPool.getAvailableCount()}/${jinaKeyPool.getTotalCount()} keys available) — no fallback (z-ai-sdk removed 2026-10-15)`,
   }
 }
 
-async function testWebSearchSDK(startTime: number) {
-  try {
-    const ZAI = (await import('z-ai-web-dev-sdk')).default
-    const zai = await ZAI.create()
-    const results = await zai.functions.invoke('web_search', { query: 'test query', num: 1 })
-    return {
-      ok: true,
-      skillId: 'web_search',
-      success: true,
-      source: 'z-ai-sdk',
-      duration: Date.now() - startTime,
-      resultPreview: `SDK web_search works. Found ${results?.length || 0} results`,
-    }
-  } catch (err) {
-    return {
-      ok: false,
-      skillId: 'web_search',
-      success: false,
-      source: 'z-ai-sdk',
-      duration: Date.now() - startTime,
-      resultPreview: '',
-      error: `SDK web_search failed: ${err instanceof Error ? err.message : String(err)}`,
-    }
-  }
-}
-
-async function testPageReaderSDK(startTime: number) {
-  try {
-    const ZAI = (await import('z-ai-web-dev-sdk')).default
-    const zai = await ZAI.create()
-    const result = await zai.functions.invoke('page_reader', { url: 'https://example.com' })
-    return {
-      ok: true,
-      skillId: 'page_reader',
-      success: true,
-      source: 'z-ai-sdk',
-      duration: Date.now() - startTime,
-      resultPreview: `SDK page_reader works. Title: ${result?.data?.title || 'N/A'}`,
-    }
-  } catch (err) {
-    return {
-      ok: false,
-      skillId: 'page_reader',
-      success: false,
-      source: 'z-ai-sdk',
-      duration: Date.now() - startTime,
-      resultPreview: '',
-      error: `SDK page_reader failed: ${err instanceof Error ? err.message : String(err)}`,
-    }
-  }
-}
+// (2026-10-15) testWebSearchSDK + testPageReaderSDK đã GỠ BỎ cùng z-ai-web-dev-sdk.

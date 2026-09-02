@@ -54,7 +54,7 @@ import {
   Bot,
   CheckCircle2,
   Compass,
-  Eye,
+  ExternalLink,
   FlaskConical,
   GitBranch,
   Lightbulb,
@@ -1057,28 +1057,36 @@ export default function SelfDirectionModule() {
                       const deploying = !!busy[`deploy:${p.id}`]
                       return (
                         <Card key={p.id} className="border-stone-800/80 bg-slate-950/40 p-3.5 gap-2.5">
-                          {/* Hàng đầu: status + reviewer + updatedAt + Chi tiết */}
+                          {/* Hàng đầu: status + reviewer + updatedAt + Mở đề xuất */}
                           <div className="flex flex-wrap items-center gap-1.5">
                             <StatusBadge status={p.status} />
                             {p.reviewer && <ReviewerBadge reviewer={p.reviewer} />}
                             <span className="text-[10px] text-stone-500 ml-auto hidden sm:inline">
                               {fmtDateTime(p.updatedAt)}
                             </span>
+                            {/* USER REQUEST 2026-10-15: nút "Mở đề xuất" nổi bật —
+                                bấm vào đề xuất trong Lịch sử mở dialog chi tiết
+                                (trước đây chỉ có nút ghost Chi tiết nhỏ, khó thấy) */}
                             <Button
-                              variant="ghost"
+                              variant="outline"
                               size="sm"
-                              className="h-6 px-2 text-[11px] text-stone-400 hover:text-stone-200 hover:bg-slate-950/60"
+                              className="h-7 px-2.5 text-[11px] border-amber-500/40 text-amber-300 hover:bg-amber-950/30 hover:text-amber-200"
                               onClick={() => openDetail(p)}
                             >
-                              <Eye className="h-3 w-3" /> Chi tiết
+                              <ExternalLink className="h-3.5 w-3.5" /> Mở đề xuất
                             </Button>
                           </div>
 
-                          {/* Tiêu đề + category + priority */}
+                          {/* Tiêu đề (CLICKABLE — mở dialog chi tiết) + category + priority */}
                           <div className="flex flex-wrap items-center gap-1.5">
-                            <h3 className="text-xs font-semibold text-stone-100 flex-1 min-w-[160px] truncate">
+                            <button
+                              type="button"
+                              className="text-xs font-semibold text-stone-100 flex-1 min-w-[160px] truncate text-left hover:text-amber-200 focus-visible:text-amber-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-400/50 cursor-pointer transition-colors"
+                              title={`Mở chi tiết: ${p.title}`}
+                              onClick={() => openDetail(p)}
+                            >
                               {p.title}
-                            </h3>
+                            </button>
                             {p.executionMode === 'code-workflow' && <CodeWorkflowBadge compact />}
                             <CategoryBadge category={p.category} compact />
                             <PriorityBadge priority={p.priority} compact />

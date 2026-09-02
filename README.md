@@ -80,7 +80,7 @@ Verify: `bash scripts/integration-test.sh` → 20/20 ALL GREEN.
 | **Buffer DB** | SQLite via Prisma (job queue, token tracking, agent data, skills) |
 | **LLM Providers** | NVIDIA NIM, Mistral, OpenRouter, Cerebras (optional, geo-blocked) |
 | **Embeddings** | OpenRouter E5 / NVIDIA Llama-Nemotron-Embed (1536-dim) |
-| **AI SDK** | z-ai-web-dev-sdk (Web Search, Page Reader, TTS, ASR, VLM, Image Gen) |
+| **AI SDK** | (2026-10-15) z-ai-web-dev-sdk đã GỠ BỎ — Web Search/Page Reader dùng direct API keys (Tavily/Serper/Jina) |
 | **Code Team** | 5-agent workflow (Team Lead, Generator×2, Verifier) |
 
 ---
@@ -93,7 +93,7 @@ Verify: `bash scripts/integration-test.sh` → 20/20 ALL GREEN.
 | **Qdrant** v1.14+ | ⚠️ Optional | Needed for Knowledge Base features. Without it, Chat still works. |
 | **Neo4j** 5.x+ | ⚠️ Optional | Needed for Graph features. Without it, other features still work. |
 | **LLM API Keys** | ✅ Required | At least 1 key from NVIDIA NIM, Mistral, or OpenRouter |
-| **Tavily / Jina / Serper** | ⚠️ Optional | Enhance Web Search and Page Reader. Fallback to z-ai-sdk in sandbox. |
+| **Tavily / Jina / Serper** | ⚠️ Optional | Web Search and Page Reader. (z-ai-sdk fallback đã gỡ 2026-10-15 — chỉ dùng direct API keys) |
 
 > **Note**: The app gracefully degrades when optional services are unavailable. You can start with just an LLM API key and add databases later.
 
@@ -187,7 +187,7 @@ All configuration is managed through environment variables. Copy `.env.example` 
 | `SERPER_API_KEY` | *(optional)* | Google Search API |
 | `JINA_API_KEY` | *(optional)* | Web page reader |
 
-> **Note**: `z-ai-web-dev-sdk` provides automatic fallback for Web Search and Page Reader **inside the z.ai sandbox environment**. Outside the sandbox, you need Tavily/Serper/Jina API keys for these features.
+> **Note**: (2026-10-15) `z-ai-web-dev-sdk` fallback đã GỠ BỎ khỏi codebase + package.json — Web Search / Page Reader cần Tavily/Serper/Jina API keys trực tiếp.
 
 ### Code Team & OpenCode Server
 
@@ -316,11 +316,11 @@ mini-services/                 # Standalone microservices (OpenCode, OpenClaw Ga
 | Graph Visualization | ✅ (limited) | ❌ | ✅ |
 | PDF Ingestion | ❌ | ⚠️ (no graph sync) | ❌ |
 
-### z-ai-web-dev-sdk
+### z-ai-web-dev-sdk — ĐÃ GỠ BỎ (2026-10-15)
 
-The `z-ai-web-dev-sdk` package provides Web Search and Page Reader capabilities. **Important**:
-- Inside **z.ai sandbox**: Works automatically, no API keys needed
-- **Local development**: Requires Tavily/Serper/Jina API keys as fallback. The SDK won't work outside the sandbox without these keys.
+The `z-ai-web-dev-sdk` package đã được loại bỏ hoàn toàn khỏi codebase và `package.json` theo user directive (SDK chỉ tồn tại trong sandbox z.ai, không cài được trên local):
+- **Web Search**: dùng `TAVILY_API_KEY_*` hoặc `SERPER_API_KEY_*` trực tiếp
+- **Page Reader**: dùng `JINA_API_KEY_*` trực tiếp
 
 ---
 
