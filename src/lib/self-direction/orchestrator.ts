@@ -1678,7 +1678,7 @@ export async function autoReviewPendingIfDelegated(): Promise<number> {
     // A đang chạy → proposal B vào hàng chờ mutex, nhưng user không thấy → tưởng
     // Opus bỏ qua. Fix: chỉ duyệt khi KHÔNG có orchestration nào đang chạy.
     const activeOrchestrations = await db.selfDirectionProposal.findMany({
-      where: { status: { in: ['ready', 'running'] } },
+      where: { status: { in: ['ready', 'planning', 'executing'] } },
       select: { id: true },
     })
     const inProcess = activeOrchestrations.filter(p => runningOrchestrations.has(p.id))
@@ -1753,7 +1753,7 @@ export function kickOmegaReviewsSerially(proposalIds: string[]): number {
         // Kiểm tra xem proposal còn ở status active không (có thể đã completed/failed)
         try {
           const cur = await db.selfDirectionProposal.findUnique({ where: { id }, select: { status: true } })
-          if (!cur || !['ready', 'running'].includes(cur.status)) break // orchestration đã xong
+          if (!cur || !['ready', 'planning', 'executing'].includes(cur.status)) break // orchestration đã xong
         } catch { break }
         await new Promise(r => setTimeout(r, 3000)) // poll mỗi 3s
       }

@@ -23,6 +23,7 @@
 import type { AgentRunRecord, OpusReview } from '@prisma/client'
 import { db } from '@/lib/db'
 import { callLLMForAgent, type LLMResult } from '@/lib/llm'
+import { startAgentRun, endAgentRun } from '@/lib/agent-run-tracker'
 import { OPUS_AGENT_NAME, OPUS_INSTRUCTION, getOpusProfile } from './opus-agent'
 import { buildOpusDossier, resolveReviewTarget } from './dossier'
 import { syncLedgerFromVerdict } from './ledger'
@@ -196,7 +197,7 @@ export function parseOpusVerdict(text: string): OpusVerdict {
     ? parsed.evidenceRefs.map(r => asString(r)).filter(Boolean)
     : []
 
-  return {
+  const verdict: OpusVerdict = {
     decision,
     summary: asString(parsed.summary),
     axes: {
@@ -212,6 +213,20 @@ export function parseOpusVerdict(text: string): OpusVerdict {
     evidenceRefs,
     stopAssessment: normalizeStopAssessment(parsed.stopAssessment),
   }
+
+  // ━━ B9 FIX: post-parse validation cho non-ESCALATE decisions ━━
+  // Trước đây: decision hợp lệ nhưng directive.goal + summary rỗng → verdict
+  // "hợp lệ" nhưng agent không có goal/summary để hành động → dispatch rỗng.
+  // Giờ: nếu decision ≠ ESCALATE mà goal + summary đều rỗng → throw → trigger
+  // retry path → buildSafeEscalateVerdict nếu retry vẫn fail (fail-safe).
+  // ESCALATE được miễn (ESCALATE có thể chỉ cần câu hỏi trong directive.goal).
+  if (decision !== 'ESCALATE') {
+    if (!verdict.directive.goal && !verdict.summary) {
+      throw new Error(`Verdict ${decision} thiếu cả directive.goal lẫn summary — không đủ thông tin để agent hành động`)
+    }
+  }
+
+  return verdict
 }
 
 /** Verdict ESCALATE an toàn khi model không trả JSON hợp lệ sau 2 lần thử */
@@ -289,6 +304,27 @@ export async function runOpusReview(
     })
   } catch (err) {
     console.warn('[Opus][reviewer] Không persist được AgentRunRecord running (fail-open):', err instanceof Error ? err.message : String(err))
+  }
+
+  // ━━ F36 FIX: mirror vào in-memory agent-run-tracker ━━
+  // Thought Progress panel poll /api/agent-run → getAgentRuns() đọc in-memory
+  // registry. Trước đây Opus review chỉ persist DB AgentRunRecord → KHÔNG hiện
+  // trong real-time panel. Giờ startAgentRun/endAgentRun để sync cả 2 nguồn.
+  // dbPersistBy='caller' — reviewer tự persist DB AgentRunRecord ở trên + dưới,
+  // tracker chỉ giữ in-memory cho UI real-time (KHÔNG double-persist DB).
+  let trackerRunId: string | null = null
+  try {
+    trackerRunId = startAgentRun({
+      sessionId,
+      agentName: OPUS_AGENT_NAME,
+      step: 'review',
+      task: `Opus review (${triggerMode})`,
+      mode: 'standalone',
+      dbPersistBy: 'caller',
+      runId, // reuse cùng runId → 1 nguồn真相 cho cả DB + in-memory
+    })
+  } catch (err) {
+    console.warn('[Opus][reviewer] startAgentRun (tracker) lỗi (fail-open — DB AgentRunRecord vẫn persist):', err instanceof Error ? err.message : String(err))
   }
 
   let verdict!: OpusVerdict
@@ -430,6 +466,15 @@ export async function runOpusReview(
       }
     } catch (err) {
       console.warn('[Opus][reviewer] Đóng AgentRunRecord lỗi (fail-open):', err instanceof Error ? err.message : String(err))
+    }
+
+    // ━━ F36 FIX: đóng in-memory tracker run ━━
+    try {
+      if (trackerRunId) {
+        endAgentRun(sessionId, trackerRunId, failed ? 'error' : 'done')
+      }
+    } catch (err) {
+      console.warn('[Opus][reviewer] endAgentRun (tracker) lỗi (fail-open):', err instanceof Error ? err.message : String(err))
     }
   }
 }

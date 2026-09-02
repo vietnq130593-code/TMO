@@ -102,8 +102,30 @@ const DIRECTIVE_MESSAGE_CAP = 16000
 export function formatDirectiveMessage(verdict: OpusVerdict): string {
   const lines: string[] = []
   lines.push(`⚖️ OPUS — CHỈ ĐẠO [${verdict.decision}]`)
+  if (verdict.summary) lines.push(`\n📋 TÓM TẮT: ${verdict.summary}`)
+
+  // ━━ E33 FIX: CHỈ ĐẠO THỰC THI trước, chi tiết đánh giá sau ━━
+  // Trước đây: axes + issues render trước → directive block (chứa goal/scope/
+  // acceptance criteria) ở CUỐI → truncation 16k chars cắt MẤT acceptance
+  // criteria (phần quan trọng nhất cho agent hành động). Giờ directive block
+  // render NGAY sau summary → truncation chỉ cắt verbose axes/issues notes.
+  const d = verdict.directive
   lines.push('')
-  if (verdict.summary) lines.push(`📋 TÓM TẮT: ${verdict.summary}`)
+  lines.push('🎯 CHỈ ĐẠO THỰC THI:')
+  lines.push(`• Mục tiêu: ${d.goal || '(không nêu)'}`)
+  lines.push(`• Lý do: ${d.rationale || '(không nêu)'}`)
+  lines.push(`• Phạm vi: ${d.scope || '(không nêu)'}`)
+  lines.push(`• Phân công: ${d.delegation || '(không nêu)'}`)
+  if (d.acceptanceCriteria.length > 0) {
+    lines.push('• Tiêu chí nghiệm thu:')
+    for (const c of d.acceptanceCriteria) lines.push(`   - [ ] ${c}`)
+  }
+  if (d.budgetHint) lines.push(`• Ngân sách đề xuất: ${d.budgetHint}`)
+
+  if (verdict.rationale) {
+    lines.push('')
+    lines.push(`💡 LÝ DO QUYẾT ĐỊNH: ${verdict.rationale}`)
+  }
 
   const a = verdict.axes
   lines.push('')
@@ -124,23 +146,6 @@ export function formatDirectiveMessage(verdict: OpusVerdict): string {
     })
   }
 
-  const d = verdict.directive
-  lines.push('')
-  lines.push('🎯 CHỈ ĐẠO THỰC THI:')
-  lines.push(`• Mục tiêu: ${d.goal || '(không nêu)'}`)
-  lines.push(`• Lý do: ${d.rationale || '(không nêu)'}`)
-  lines.push(`• Phạm vi: ${d.scope || '(không nêu)'}`)
-  lines.push(`• Phân công: ${d.delegation || '(không nêu)'}`)
-  if (d.acceptanceCriteria.length > 0) {
-    lines.push('• Tiêu chí nghiệm thu:')
-    for (const c of d.acceptanceCriteria) lines.push(`   - [ ] ${c}`)
-  }
-  if (d.budgetHint) lines.push(`• Ngân sách đề xuất: ${d.budgetHint}`)
-
-  if (verdict.rationale) {
-    lines.push('')
-    lines.push(`💡 LÝ DO QUYẾT ĐỊNH: ${verdict.rationale}`)
-  }
   if (verdict.evidenceRefs.length > 0) {
     lines.push('')
     lines.push(`🔍 BẰNG CHỨNG ĐÃ DÙNG: ${verdict.evidenceRefs.join(' · ')}`)
@@ -164,7 +169,7 @@ export function formatDirectiveMessage(verdict: OpusVerdict): string {
 
   const text = lines.join('\n')
   if (text.length <= DIRECTIVE_MESSAGE_CAP) return text
-  return `${text.slice(0, DIRECTIVE_MESSAGE_CAP)}\n[…Opus chỉ đạo bị lược bớt do vượt cap ${DIRECTIVE_MESSAGE_CAP} ký tự]`
+  return `${text.slice(0, DIRECTIVE_MESSAGE_CAP)}\n[…Opus chỉ đạo bị lược bớt do vượt cap ${DIRECTIVE_MESSAGE_CAP} ký tự — phần CHỈ ĐẠO THỰC THI ở đầu đã giữ nguyên, chỉ verbose đánh giá/issues bị cắt]`
 }
 
 // ==================== SERIALIZE (cho API) ====================
@@ -329,6 +334,48 @@ async function buildDirectiveSystemPrompt(profile: AgentProfile): Promise<string
   return systemPrompt
 }
 
+// ==================== DELEGATION ROUTING (A5/E27 fix) ====================
+
+/**
+ * Tìm agent name trong chuỗi delegation mà Opus chỉ định (vd "Omega lập plan",
+ * "CORTEX code lượt đầu", "BOLT review"). Match case-insensitive word boundary
+ * chống false-positive (vd "BOLT" không match "BOLT-2" hay "CATALYST" chứa "CAT").
+ *
+ * Trả về agent name CHÍNH XÁC (từ DB) nếu tìm thấy + khác currentAgentName.
+ * Trả về null nếu không match hoặc match chính currentAgent (không cần switch).
+ *
+ * A5/E27 fix: trước đây directive "delegation: Omega" bị BOLT (session agent)
+ * nhận → BOLT phải tự delegate_task (không enforcement). Giờ switch session
+ * agentProfileId sang delegatee trước khi enqueue → agent ĐÚNG nhận directive.
+ */
+async function findDelegateeAgent(delegationStr: string, currentAgentName: string): Promise<string | null> {
+  try {
+    // Lấy danh sách agent names từ DB (enabled + system agents — filter sau)
+    const agents = await db.agentProfile.findMany({
+      where: { enabled: true },
+      select: { name: true },
+    })
+    const names = agents.map(a => a.name).filter(Boolean)
+    if (names.length === 0) return null
+
+    // Sort by length DESC để match tên dài trước (vd "BOLT" không match trước "BOLT-2")
+    names.sort((a, b) => b.length - a.length)
+
+    const lower = delegationStr.toLowerCase()
+    for (const name of names) {
+      // Word boundary, case-insensitive — tránh match substring
+      const re = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')
+      if (re.test(lower)) {
+        // Trả về nếu khác current agent (không cần switch nếu cùng)
+        return name !== currentAgentName ? name : null
+      }
+    }
+  } catch (err) {
+    console.warn('[Opus][pipeline] findDelegateeAgent lỗi (fail-open):', err instanceof Error ? err.message : String(err))
+  }
+  return null
+}
+
 // ==================== AUTO-DISPATCH GOAL-LOOP (mục 6) ====================
 
 /**
@@ -348,9 +395,38 @@ async function dispatchDirectiveGoalLoop(sessionId: string, directiveMessage: Ch
       console.warn(`[Opus][pipeline] dispatch: session ${sessionId} không tồn tại — bỏ qua`)
       return null
     }
-    const profile = session.agentProfileId
+
+    // ━━ A5/E27 FIX: delegation routing ━━
+    // Parse verdict.directive.delegation từ directive message metadata → tìm
+    // AgentProfile match tên → nếu enabled + khác session's current agent →
+    // switch session.agentProfileId sang delegatee (đảm bảo agent nhận directive
+    // ĐÚNG người Opus chỉ định, không phải agent hiện tại của session).
+    let profile = session.agentProfileId
       ? await db.agentProfile.findUnique({ where: { id: session.agentProfileId } })
       : null
+    try {
+      const meta = directiveMessage.metadata ? JSON.parse(directiveMessage.metadata) : null
+      const verdict = meta?.verdict
+      const delegationStr = typeof verdict?.directive?.delegation === 'string' ? verdict.directive.delegation : ''
+      if (delegationStr && profile) {
+        // Tìm agent name match (case-insensitive, word boundary) trong delegation string
+        const delegateeName = await findDelegateeAgent(delegationStr, profile.name)
+        if (delegateeName && delegateeName !== profile.name) {
+          const delegatee = await db.agentProfile.findUnique({ where: { name: delegateeName } })
+          if (delegatee?.enabled) {
+            console.log(`[Opus][pipeline] Delegation routing: session ${sessionId} agent ${profile.name} → ${delegatee.name} (Opus directive chỉ định)`)
+            // Switch session agentProfileId sang delegatee (đảm bảo job run với profile đúng)
+            await db.agentSession.update({ where: { sessionId }, data: { agentProfileId: delegatee.id } })
+            profile = delegatee
+          } else if (delegatee && !delegatee.enabled) {
+            console.warn(`[Opus][pipeline] Delegation routing: agent "${delegateeName}" bị DISABLED — giữ session agent ${profile.name}, directive nội dung sẽ hướng dẫn agent tự delegate_task`)
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[Opus][pipeline] Delegation routing parse lỗi (fail-open — giữ session agent):', err instanceof Error ? err.message : String(err))
+    }
+
     if (!profile) {
       console.warn(
         `[Opus][pipeline] dispatch: session ${sessionId} không có AgentProfile (agentProfileId=${session.agentProfileId ?? 'null'}) — directive chỉ nằm lại trong chat, không tự chạy`
