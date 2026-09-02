@@ -152,3 +152,9 @@ qdrant-backup-latest.tar
 /.next-qa/
 .quality-gate.local
 db/.quality-gate-test.db*
+
+# Research team runtime workspace (git repos per mission — runtime artifacts, not source)
+/workspace/
+
+# Stray Windows-path artifact (from cross-platform git operations)
+E:\\APP\\

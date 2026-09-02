@@ -58,6 +58,7 @@ import {
   type CronScheduleConfig,
 } from '@/lib/cron-schedule'
 import SelfDirectionModule from '@/components/self-direction/self-direction-module'
+import { ResearchModule } from '@/components/research/research-module'
 // OPUS (Task 13-c) — Review Card của CTO meta-agent ⚖️ (render dưới assistant message đã review)
 import OpusReviewCard, { opusDecisionBadgeClass, type OpusReviewSerialized } from '@/components/opus/opus-review-card'
 import { toast as sonnerToast } from 'sonner'
@@ -17866,7 +17867,7 @@ export default function Home() {
   const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus | null>(null)
   /** Sidebar state: collapsed = thin strip with logo only, expanded = full sidebar panel */
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [activeModule, setActiveModule] = useState<'smolab' | 'agents' | 'database' | 'selfdirection'>('database')
+  const [activeModule, setActiveModule] = useState<'smolab' | 'agents' | 'database' | 'selfdirection' | 'research'>('database')
 
   // Auto-collapse sidebar on small screens (below md breakpoint)
   useEffect(() => {
@@ -18034,8 +18035,8 @@ export default function Home() {
         try {
           const saved = localStorage.getItem('graphrag-active-module')
           if (saved) {
-            const validModules = ['smolab', 'agents', 'database', 'selfdirection']
-            const validModule = validModules.includes(saved) ? saved as 'smolab' | 'agents' | 'database' | 'selfdirection' : 'database'
+            const validModules = ['smolab', 'agents', 'database', 'selfdirection', 'research']
+            const validModule = validModules.includes(saved) ? saved as 'smolab' | 'agents' | 'database' | 'selfdirection' | 'research' : 'database'
             setActiveModule(validModule)
             if (validModule !== saved) localStorage.setItem('graphrag-active-module', validModule)
           }
@@ -19253,6 +19254,7 @@ export default function Home() {
               { id: 'agents' as const, label: 'Agents', icon: Bot, desc: 'AI Agents' },
               { id: 'database' as const, label: 'Database', icon: Database, desc: 'GraphRAG KB' },
               { id: 'selfdirection' as const, label: 'Self-Direction', icon: Compass, desc: 'Tự đề xuất & duyệt' },
+              { id: 'research' as const, label: 'Research', icon: FlaskConical, desc: 'Team Research AI' },
             ]).map((mod) => {
               const isActive = activeModule === mod.id
               const IconComp = mod.icon
@@ -19432,6 +19434,8 @@ export default function Home() {
               <AgentsModule />
             ) : activeModule === 'selfdirection' ? (
               <SelfDirectionModule />
+            ) : activeModule === 'research' ? (
+              <ResearchModule />
             ) : null}
           </main>
           )}

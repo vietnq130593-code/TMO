@@ -25,6 +25,10 @@ import {
 } from '@/lib/agent-constants'
 import { ensureCodeTeamAgents, ensureMCPBridgeConfig } from '@/lib/code-team/agents'
 import { ensureStandaloneAgents } from '@/lib/standalone-agents'
+// RESEARCH TEAM SEED (Task 3-fix WORK 2): ensure 5 research agents
+// (KING/SIVIL/BELI/LISMA/HAN) exist — lazy-seed trên GET /api/agents để
+// Agents module → Team Research section hiển thị đầy đủ roster (TB-01 §1).
+import { ensureResearchTeamAgents } from '@/lib/research-team/agents'
 // AGENT ROSTER (user request 2026-09-08): sau khi tạo/sửa/xóa agent → invalidate
 // roster cache để danh bạ kỹ năng inject vào system prompt của agents cập nhật.
 import { invalidateRosterCache } from '@/lib/agent-roster'
@@ -137,10 +141,17 @@ export async function GET(request: NextRequest) {
  */
 async function getAgentsHandler(request: NextRequest, attempt: number): Promise<Response> {
   try {
-    // Auto-seed Code Team + Standalone agents on first agents fetch (idempotent, cached)
-    // + OPUS CTO meta-agent (user request 2026-09-30)
+    // Auto-seed Code Team + Standalone + Research Team + OPUS meta-agent on first
+    // agents fetch (idempotent, cached). Research Team added in Task 3-fix WORK 2
+    // — ensures KING/SIVIL/BELI/LISMA/HAN always present in DB.
     const { ensureOpusAgent } = await import('@/lib/opus/opus-agent')
-    await Promise.all([ensureCodeTeamAgents(), ensureStandaloneAgents(), ensureMCPBridgeConfig(), ensureOpusAgent()])
+    await Promise.all([
+      ensureCodeTeamAgents(),
+      ensureStandaloneAgents(),
+      ensureMCPBridgeConfig(),
+      ensureOpusAgent(),
+      ensureResearchTeamAgents(),
+    ])
 
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
