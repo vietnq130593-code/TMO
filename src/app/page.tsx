@@ -13912,6 +13912,29 @@ interface FileNode {
   children?: FileNode[]
 }
 
+// ===== PREVIEW SESSION PERSISTENCE (user request 2026-10-15) =====
+// Bấm Preview → app load qua port 3005+ → rời tab Code (sang tab khác của
+// Smolab) hoặc rời hẳn module Smolab → quay lại, chọn tab Code → panel Preview
+// phải TỰ KHÔI PHỤC, giao diện app trong thư mục đang chọn vẫn hiển thị.
+// Dev server là process DETACHED (spawn qua /api/opencode/preview/start) —
+// KHÔNG chết khi tab unmount; chỉ state React của panel bị mất. Vì vậy:
+//   - Khi preview chạy thật (port xác định) → persist {root, port, framework}
+//     vào localStorage (cùng pattern smolab-chat-context-v1).
+//   - Khi CodeTabContent mount lại → đọc session → XÁC MINH dev server còn
+//     sống (registry → detect scan tự re-allow port cho proxy) → dựng lại
+//     panel + SSE logs + port-ready poll như lần bấm Preview đầu.
+//   - Dev server đã tắt thật → xoá session (user bấm Preview lại như bình
+//     thường — self-healing, không bao giờ khôi phục một panel chết).
+const PREVIEW_SESSION_KEY = 'smolab-preview-session-v1'
+type PreviewSession = {
+  root: string
+  port: number
+  framework: string | null
+  frameworkIcon: string
+  devCommand: string | null
+  savedAt: number
+}
+
 function CodeTabContent() {
   // Server status
   const [serverOnline, setServerOnline] = useState(false)
@@ -14129,6 +14152,14 @@ function CodeTabContent() {
     setOpenFiles([])
     setActiveFileIndex(0)
     setShowFolderPicker(false)
+    // PREVIEW SESSION (user request 2026-10-15): đổi thư mục → panel preview
+    // đang hiển thị app của thư mục CŨ, không còn đúng ngữ cảnh — đóng panel +
+    // cắt SSE log (persist effect thấy showPreview=false sẽ tự xoá session).
+    setShowPreview(false)
+    setPreviewPort(null)
+    setPreviewLogs([])
+    try { previewEventSrcRef.current?.close() } catch { /* ignore */ }
+    previewEventSrcRef.current = null
     // FILE TREE REALTIME (fix 2026-09-10): ép reload tree kể cả khi chọn lại
     // CÙNG thư mục (workspaceRoot không đổi → effect chỉ chạy nhờ token này).
     setTreeReloadToken(t => t + 1)
@@ -15222,6 +15253,121 @@ function CodeTabContent() {
       previewEventSrcRef.current = null
     }
   }, [])
+
+  // ===== PREVIEW SESSION RESTORE (user request 2026-10-15) =====
+  // Rời tab Code / module Smolab rồi quay lại → panel Preview tự khôi phục.
+  // Chạy đúng 1 LẦN mỗi lần CodeTabContent mount (guard ref). Không dùng
+  // cleanup/cancel: async có thể hoàn thành sau unmount — setState trên component
+  // đã unmount là no-op vô hại (React 18), instance mới mount lại sẽ tự restore
+  // bằng guard ref của chính nó.
+  // Thứ tự xác minh dev server còn sống:
+  //   (a) GET /api/opencode/preview/start?root= — registry (globalThis) trả port
+  //       của root này (nhanh, không scan) khi TMO còn nguyên process.
+  //   (b) Fallback GET /api/opencode/preview/detect?root= — quét port phổ biến
+  //       theo framework + RE-ALLOW port vào proxy allowlist (tự chữa sau khi
+  //       TMO restart: allowlist in-memory bị sạch nhưng dev server detached
+  //       vẫn chạy).
+  //   (c) Cả hai fail → dev server thật sự đã tắt → xoá session (không dựng
+  //       panel chết).
+  const previewRestoreAttemptedRef = useRef(false)
+  useEffect(() => {
+    if (previewRestoreAttemptedRef.current) return
+    previewRestoreAttemptedRef.current = true
+    const restore = async () => {
+      let session: PreviewSession | null = null
+      try {
+        const raw = localStorage.getItem(PREVIEW_SESSION_KEY)
+        if (raw) session = JSON.parse(raw) as PreviewSession
+      } catch { return }
+      if (!session || !session.root || !Number.isInteger(session.port) || session.port <= 0) return
+      // Thư mục đang chọn phải khớp session (workspaceRoot khởi tạo sync từ
+      // localStorage 'smolab_layout_opencode_root'). Đổi thư mục → handleWorkspace-
+      // Select đã đóng panel + xoá session → không khôi phục.
+      if (!workspaceRoot || workspaceRoot !== session.root) return
+      setPreviewDetecting(true) // spinner "Đang tìm dev server..." trong lúc xác minh
+      try {
+        let port: number | null = null
+        let fw: string | null | undefined
+        let fwIcon: string | undefined
+        let devCmd: string | null | undefined
+        // (a) registry — nhanh, không scan
+        try {
+          const regRes = await authedFetch(`/api/opencode/preview/start?root=${encodeURIComponent(session.root)}`)
+          if (regRes.ok) {
+            const regData = await regRes.json().catch(() => null)
+            if (regData?.running && typeof regData?.port === 'number' && regData.port > 0) {
+              port = regData.port
+            }
+          }
+        } catch { /* ignore */ }
+        // (b) detect scan — re-allow port cho proxy (tự chữa sau restart TMO)
+        if (!port) {
+          try {
+            const detRes = await authedFetch(`/api/opencode/preview/detect?root=${encodeURIComponent(session.root)}`)
+            if (detRes.ok) {
+              const detData = await detRes.json().catch(() => null)
+              if (detData) {
+                fw = detData.framework
+                fwIcon = detData.frameworkIcon
+                devCmd = detData.devCommand
+                if (typeof detData.detectedPort === 'number' && detData.detectedPort > 0) {
+                  port = detData.detectedPort
+                }
+              }
+            }
+          } catch { /* ignore */ }
+        }
+        if (!port) {
+          // (c) dev server đã tắt thật — dọn session, user bấm Preview lại
+          try { localStorage.removeItem(PREVIEW_SESSION_KEY) } catch { /* ignore */ }
+          return
+        }
+        setShowPreview(true)
+        setPreviewAutoStartAttempted(true)
+        setPreviewFramework(fw ?? session.framework ?? null)
+        setPreviewFrameworkIcon(fwIcon || session.frameworkIcon || '📦')
+        setPreviewDevCommand(devCmd ?? session.devCommand ?? null)
+        setPreviewLogs([])
+        setPreviewPort(port)
+        startPreviewLogStream(session.root)
+        // Port-ready poll qua proxy → remount iframe khi server nhận connection
+        // (dev server đã chạy thì poll xong gần như ngay lập tức)
+        void waitForPreviewReady(port)
+        toast({ title: '🔄 Đã khôi phục preview', description: `Port ${port} — ${baseNameOf(session.root) || session.root}` })
+      } finally {
+        setPreviewDetecting(false)
+      }
+    }
+    void restore()
+    // Deps: workspaceRoot chỉ cần GIÁ TRỊ LÚC MOUNT (khởi tạo sync từ localStorage);
+    // guard ref đảm bảo chỉ chạy lần đầu — các lần deps đổi sau đó là no-op.
+  }, [workspaceRoot, startPreviewLogStream, waitForPreviewReady])
+
+  // ===== PREVIEW SESSION PERSIST (user request 2026-10-15) =====
+  // Preview đang chạy thật (showPreview + port + root) → lưu session; tắt
+  // preview (nút Preview lần 2 / AI stop_preview / đổi thư mục) → xoá session.
+  // Skip lần chạy ĐẦU (mount): showPreview=false ban đầu — không được phép
+  // xoá session khi restore effect sắp đọc nó (khai báo restore TRƯỚC persist
+  // cũng là 1 lớp bảo vệ — effect chạy theo thứ tự khai báo).
+  const previewPersistInitRef = useRef(false)
+  useEffect(() => {
+    try {
+      if (showPreview && previewPort && workspaceRoot) {
+        const session: PreviewSession = {
+          root: workspaceRoot,
+          port: previewPort,
+          framework: previewFramework,
+          frameworkIcon: previewFrameworkIcon || '📦',
+          devCommand: previewDevCommand,
+          savedAt: Date.now(),
+        }
+        localStorage.setItem(PREVIEW_SESSION_KEY, JSON.stringify(session))
+      } else if (previewPersistInitRef.current && !showPreview) {
+        localStorage.removeItem(PREVIEW_SESSION_KEY)
+      }
+    } catch { /* ignore */ }
+    previewPersistInitRef.current = true
+  }, [showPreview, previewPort, workspaceRoot, previewFramework, previewFrameworkIcon, previewDevCommand])
 
   // Smart Preview: detect framework, find port, auto-start dev server, auto-refresh
   const handlePreviewToggle = useCallback(async () => {
