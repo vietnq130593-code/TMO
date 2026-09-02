@@ -28,7 +28,13 @@ import { createServer } from 'http'
 import { execSync } from 'child_process'
 
 // FIX 2026-09-15 (multi-instance — clone-first workflow): port từ env — bản
-// clone của app chạy kiểm định đặt CRON_SCHEDULER_PORT riêng (vd 3005).
+// clone của app chạy kiểm định đặt CRON_SCHEDULER_PORT riêng.
+// ⚠️ FIX 2026-10-15: KHÔNG đặt CRON_SCHEDULER_PORT trong khoảng 3005-3008 /
+// 5173-5175 / 4200 / 8000 / 4000 / 4173 / 8888 / 4321-4322 / 8080 — đây là
+// các port mà /api/opencode/preview/detect quét để tìm dev server của app
+// đang preview; cron-scheduler đứng ở đó sẽ bị detect NHẦM là dev server →
+// panel Preview hiển thị lỗi 404 của cron thay vì app (đã xảy ra thật khi
+// clone đặt 3005). Chọn port ngoài các range đó (vd 3210).
 const PORT = parseInt(process.env.CRON_SCHEDULER_PORT || '3004', 10)
 const TICK_INTERVAL_MS = 30_000
 
