@@ -3713,7 +3713,7 @@ const SMOLAB_SUGGESTIONS = [
 // ==================== PHASE 7: AI TOOL EVENT BRIDGE (module helpers) ====================
 //
 // The code-team workflow SSE stream (/api/code-team/workflow) emits
-//   data: {"type":"tool_call"|"tool_result","agent":"APEX","position":"TL",
+//   data: {"type":"tool_call"|"tool_result","agent":"MEGATRON","position":"TL",
 //          "tool":"<name>","detail":"<escaped-JSON-string>","result":"OK"|"Error","duration":N}
 // The REAL data lives in `detail` (a JSON string, truncated at 200/500 chars);
 // `result` is only 'OK'|'Error'. file tools put the path in detail.path, shell
@@ -9926,11 +9926,11 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
             content: '',
             timestamp: new Date(),
             isTeamMessage: true,
-            agentName: 'APEX',
+            agentName: 'MEGATRON',
             agentPosition: 'TL',
             agentAvatar: '👑',
             isWorkflowSuggestion: true,
-            suggestionText: assessment.suggestion || 'APEX đề xuất sử dụng Code Team để xử lý yêu cầu này.',
+            suggestionText: assessment.suggestion || 'MEGATRON đề xuất sử dụng Code Team để xử lý yêu cầu này.',
             routingMode: assessment.routing?.mode,
             routingTier: assessment.routing?.tier,
             routingScore: assessment.routing?.score,
@@ -9938,7 +9938,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
           }
           setMessages(prev => [...prev, suggestionMsg])
           // LIVE VOICE: trả về nội dung để chế độ Live đọc thành giọng nói
-          return assessment.suggestion || 'APEX đề xuất sử dụng Code Team để xử lý yêu cầu này.'
+          return assessment.suggestion || 'MEGATRON đề xuất sử dụng Code Team để xử lý yêu cầu này.'
         } else {
           // SIMPLE → TL can answer directly or show normal chat
           const tlAnswer: SmolabMessage = {
@@ -9947,7 +9947,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
             content: assessment.directAnswer || assessment.reasoning || 'Tôi hiểu yêu cầu của bạn. Bạn có thể hỏi thêm chi tiết hoặc sử dụng "tiến hành triển khai" để khởi động Code Team.',
             timestamp: new Date(),
             isTeamMessage: true,
-            agentName: 'APEX',
+            agentName: 'MEGATRON',
             agentPosition: 'TL',
             agentAvatar: '👑',
           }
@@ -10525,7 +10525,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                       <div data-dropdown-menu onClick={(e) => e.stopPropagation()} className="absolute top-full left-0 right-0 mt-1 z-50 bg-slate-950/95 border border-cyan-400/50 max-h-64 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
                         {/* Đề xuất 1 (2026-08-25): Single mode liệt kê TẤT CẢ agents — nhóm theo
                             "Độc lập" / "💻 Team Code" / "🔬 Team Research" — để user chat 1-1 với
-                            bất kỳ agent nào (BOLT, CORTEX...) cho task nhỏ nhanh, không cần
+                            bất kỳ agent nào (RAMPAGE, SHOCWAVE...) cho task nhỏ nhanh, không cần
                             khởi động workflow multi-agent. Chat flow đã generic theo selectedAgentId. */}
                         {(() => {
                           const enabledAgents = smolabAgents.filter((a: any) => a.enabled)
@@ -11000,7 +11000,7 @@ function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
                         {msg.isWorkflowSuggestion && !msg.suggestionRejected ? (
                           <div className="mt-1.5 p-3 rounded-lg border border-amber-500/30 bg-amber-950/20">
                             <div className="flex items-center gap-2 mb-2">
-                              <span className="text-amber-300 text-sm font-medium">🚀 APEX đề xuất Code Team</span>
+                              <span className="text-amber-300 text-sm font-medium">🚀 MEGATRON đề xuất Code Team</span>
                             </div>
                             <p className="text-[13px] text-stone-200 mb-2">{msg.suggestionText}</p>
                             {(msg.routingMode || msg.routingTier || msg.routingScore) && (

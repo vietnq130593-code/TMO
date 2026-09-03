@@ -13,7 +13,7 @@
  *
  * Block gồm:
  *   1. STANDALONE (Omega — orchestrator, nhận escalate_problem)
- *   2. CODE TEAM (APEX/CORTEX/BOLT/SENTINEL/CATALYST — delegate_task)
+ *   2. CODE TEAM (MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/CATALYST — delegate_task)
  *   3. CUSTOM/RESEARCH (bất kỳ agent nào khác — dispatch_agent)
  *   4. Kỷ luật nhận diện vấn đề SỚM → escalate trước khi kẹt hẳn
  *

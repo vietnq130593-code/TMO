@@ -435,3 +435,27 @@ if (!globalForResearchSeed.__tmoResearchTeamSeeded) {
       )
     })
 }
+
+// ============================================================================
+// CODE TEAM SEED + AGENT RENAME MIGRATION (2026-10-16)
+// ============================================================================
+// Boot-seed Code Team 5 agents (giống Research Team phía trên) + chạy rename
+// migration APEX→MEGATRON / CORTEX→SHOCWAVE / BOLT→RAMPAGE NGAY khi app khởi
+// động — không đợi user mở module Agents. Fire-and-forget, fail-open tuyệt
+// đối (lỗi không chặn boot); GET /api/agents vẫn retry lazy như cũ.
+const globalForCodeTeamSeed = globalThis as unknown as { __tmoCodeTeamSeeded?: boolean }
+if (!globalForCodeTeamSeed.__tmoCodeTeamSeeded) {
+  globalForCodeTeamSeed.__tmoCodeTeamSeeded = true
+  void ensureDbReady()
+    .then(() => import('@/lib/code-team/agents'))
+    .then(({ ensureCodeTeamAgents }) => ensureCodeTeamAgents())
+    .then(() => {
+      console.log('[CodeTeam] seed 5 agents + rename migration ensured (MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/CATALYST)')
+    })
+    .catch((err) => {
+      console.warn(
+        '[CodeTeam] boot seed/rename lỗi (không chặn boot — GET /api/agents sẽ retry lazy):',
+        err instanceof Error ? err.message : String(err),
+      )
+    })
+}

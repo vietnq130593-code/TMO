@@ -93,7 +93,7 @@ function setCachedAssessment(message: string, assessment: TLAssessment): void {
 
 // ==================== TL ASSESSMENT PROMPT ====================
 
-const TL_ASSESSMENT_PROMPT = `Bạn là APEX — Team Lead của Code Team.
+const TL_ASSESSMENT_PROMPT = `Bạn là MEGATRON — Team Lead của Code Team.
 
 Nhiệm vụ: Đánh giá xem request của user có cần Code Team workflow hay không.
 
@@ -328,7 +328,7 @@ function normalizeAssessment(parsed: Record<string, unknown>): TLAssessment {
 
     assessment.suggestion = typeof parsed.suggestion === 'string'
       ? parsed.suggestion
-      : 'APEX đề xuất sử dụng Code Team để xử lý yêu cầu này.'
+      : 'MEGATRON đề xuất sử dụng Code Team để xử lý yêu cầu này.'
   } else {
     // SIMPLE
     assessment.directAnswer = typeof parsed.directAnswer === 'string'
@@ -366,7 +366,7 @@ function heuristicAssessment(output: string): TLAssessment {
         score: 5,
         reasoning: 'Heuristic default',
       },
-      suggestion: 'APEX đề xuất sử dụng Code Team để xử lý yêu cầu này.',
+      suggestion: 'MEGATRON đề xuất sử dụng Code Team để xử lý yêu cầu này.',
     }
   }
 

@@ -79,7 +79,7 @@ export const PROVIDER_DATA = [
 export const VALID_PROVIDERS = ['nvidia']
 export const VALID_DOMAINS = ['programming', 'algorithm', 'ml', 'meta_cognitive', 'linux', 'security', 'ux_ui', 'mixed']
 // G4 (user request 2026-09-08 — Omega Agent Factory/dispatch): vị trí MỞ RỘNG cho
-// team code — TL/G1/G2-A/G2-B/G3 đã được 5 agent hệ thống (APEX/CORTEX/BOLT/
+// team code — TL/G1/G2-A/G2-B/G3 đã được 5 agent hệ thống (MEGATRON/SHOCWAVE/RAMPAGE/
 // SENTINEL/CATALYST) giữ; agent do Omega tạo/điều động vào team code dùng G4+.
 export const CODE_POSITIONS = ['TL', 'G1', 'G2-A', 'G2-B', 'G3', 'G4', 'G5']
 export const RESEARCH_POSITIONS = ['TL', 'G1', 'G2', 'G3', 'G4', 'G5']
@@ -151,14 +151,14 @@ export const TEAM_BADGE_COLORS: Record<string, string> = {
 
 // Agent colors for multi-agent chat — each Code Team agent has a unique color
 export const AGENT_COLORS: Record<string, { border: string; bg: string; text: string }> = {
-  APEX:     { border: 'border-amber-500',    bg: 'bg-amber-950/20',    text: 'text-amber-400' },
-  CORTEX:   { border: 'border-violet-500',   bg: 'bg-violet-950/20',  text: 'text-violet-400' },
-  BOLT:     { border: 'border-cyan-500',     bg: 'bg-cyan-950/20',     text: 'text-cyan-400' },
+  MEGATRON:     { border: 'border-amber-500',    bg: 'bg-amber-950/20',    text: 'text-amber-400' },
+  SHOCWAVE:   { border: 'border-violet-500',   bg: 'bg-violet-950/20',  text: 'text-violet-400' },
+  RAMPAGE:     { border: 'border-cyan-500',     bg: 'bg-cyan-950/20',     text: 'text-cyan-400' },
   SENTINEL: { border: 'border-rose-500',     bg: 'bg-rose-950/20',    text: 'text-rose-400' },
   CATALYST: { border: 'border-emerald-500',  bg: 'bg-emerald-950/20', text: 'text-emerald-400' },
   Omega:    { border: 'border-sky-500',      bg: 'bg-sky-950/20',     text: 'text-sky-400' },
   // ALISTA — Kỹ sư Bảo trì Hệ thống (v1.1, 2026-09-01) — amber-on-stone để phân
-  // biệt với APEX (amber-500 sáng hơn). Màu cam-đá ám bảo trì.
+  // biệt với MEGATRON (amber-500 sáng hơn). Màu cam-đá ám bảo trì.
   ALISTA:   { border: 'border-amber-600',    bg: 'bg-stone-950/30',   text: 'text-amber-300' },
 }
 

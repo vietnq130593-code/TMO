@@ -459,8 +459,8 @@ function buildDelegationProtocol(): string {
   return `
 
 📦 PHÂN CÔNG SUB-AGENT (delegate_task — Code Team chuyên trách):
-- BOLT: implement code · SENTINEL: review/bug/security · CATALYST: tối ưu/refactor · CORTEX: thiết kế kiến trúc/DB/API · APEX: phân tích + verify tổng thể.
-- Cú pháp: tool_call: delegate_task({"agent": "BOLT", "task": "Nhiệm vụ cụ thể...", "context": "file liên quan, ràng buộc...", "acceptance_criteria": "điều kiện hoàn thành kiểm định được"})
+- RAMPAGE: implement code · SENTINEL: review/bug/security · CATALYST: tối ưu/refactor · SHOCWAVE: thiết kế kiến trúc/DB/API · MEGATRON: phân tích + verify tổng thể.
+- Cú pháp: tool_call: delegate_task({"agent": "RAMPAGE", "task": "Nhiệm vụ cụ thể...", "context": "file liên quan, ràng buộc...", "acceptance_criteria": "điều kiện hoàn thành kiểm định được"})
 - NÊN delegate khi: task cần đọc/sửa NHIỀU file (làm trực tiếp sẽ phình context của bạn), cần chuyên môn sâu, hoặc task giao trọn được cho 1 agent.
 - KHÔNG delegate việc 1-2 bước đơn giản — tự làm nhanh hơn.
 - 🔄 FAN-OUT: nhiều delegation ĐỘC LẬP trong 1 message → hệ thống tự chạy SONG SONG + hợp nhất kết quả (không cần đợi tuần tự).
@@ -482,7 +482,7 @@ function buildCodeTeamProtocol(): string {
 - DÙNG KHI: tác vụ code PHỨC TẠP, KHỐI LƯỢNG LỚN — tính năng hoàn chỉnh nhiều module/file, kiến trúc mới, cần nhiều VAI tuần tự (thiết kế → code → review → tối ưu → verify) hoặc cần chất lượng đảm bảo bởi pipeline kiểm định nhiều tầng.
 - KHÔNG dùng: task nhỏ 1-2 file (delegate_task 1 agent hoặc tự làm nhanh hơn), câu hỏi/phân tích không cần code.
 - Cú pháp: tool_call: request_code_team({"task": "Yêu cầu đầy đủ gửi TL: mục tiêu, phạm vi, ràng buộc, điều kiện hoàn thành", "context": "...", "acceptance_criteria": "xong khi..."}) — có thể kèm "mode" (A=UI/B=backend/C=hybrid) + "tier" (1/2/3) nếu BIẾT CHẮN routing; không truyền thì TL TỰ PHÂN TÍCH (chuẩn SOP).
-- Quy trình sau khi gọi: TL (APEX) nhận yêu cầu → phân tích routing → TOÀN TEAM vận hành (G1 thiết kế → G2-A code → G2-B review/fix → G3 tối ưu theo routing) → checkpoint verify từng bước → bạn nhận BÁO CÁO NÉN toàn pipeline.
+- Quy trình sau khi gọi: TL (MEGATRON) nhận yêu cầu → phân tích routing → TOÀN TEAM vận hành (G1 thiết kế → G2-A code → G2-B review/fix → G3 tối ưu theo routing) → checkpoint verify từng bước → bạn nhận BÁO CÁO NÉN toàn pipeline.
 - Tool CHẠY DÀI (phút → chục phút) — gọi ĐÚNG 1 LẦN cho 1 tác vụ, KHÔNG gọi lặp khi đang chờ.
 - 🧬 CLONE-FIRST (user directive 2026-09-15): workspace root của team là THƯ MỤC CLONE của TMO chính thức (env TMO_CLONE_DIR) — an toàn để sửa + commit. Khi giao task sửa code HỆ THỐNG: ghi rõ "thực hiện trên workspace clone, chạy kiểm định (lint/type_check/run_tests) trước khi commit". Team sửa + kiểm định trên CLONE → PASS mới git_push lên GitHub → hệ thống đang vận hành cập nhật bằng git_pull riêng sau đó. KHÔNG kết luận "nâng cấp thành công" khi pipeline kiểm định chưa PASS.
 - Sau khi nhận báo cáo: đọc "status" + từng bước (issues/unfixedBugs) — workflow ESCALATE/failed hoặc còn unfixedBugs → khắc phục phần còn lại bằng tools của mình (file_read/lint/type_check kiểm định lại) rồi mới kết luận.`
@@ -503,7 +503,7 @@ function buildOrchestrationProtocol(hasDispatch: boolean, hasCreate: boolean): s
   lines.push('- Escalate xong: LÀM THEO tư vấn của Omega (đổi cách tiếp cận / điều agent khác / dùng tool theo hướng dẫn mới) — không lặp lại cách cũ đã fail.')
   if (hasDispatch) {
     lines.push('- Điều động agent BẤT KỲ trong Agent Roster: tool_call: dispatch_agent({"agent": "TÊN", "task": "nhiệm vụ cụ thể", "context": "..."}) — agent chạy tự chủ, trả báo cáo nén (context của bạn không phình). Điều LÂU DÀI vào team: thêm {"duration": "long_term", "team": "code", "position": "G4"}.')
-    lines.push('- FAN-OUT nhiều agent SONG SONG (task ĐỘC LẬP): tool_call: dispatch_agents_parallel({"tasks": [{"agent": "APEX", "task": "..."}, {"agent": "SENTINEL", "task": "..."}]}) — tối đa 4 task/lần, chạy đồng thời, kết quả hợp nhất về 1 báo cáo; xung đột (cùng đụng 1 file) được liệt kê trong "conflicts" — tự phân xử.')
+    lines.push('- FAN-OUT nhiều agent SONG SONG (task ĐỘC LẬP): tool_call: dispatch_agents_parallel({"tasks": [{"agent": "MEGATRON", "task": "..."}, {"agent": "SENTINEL", "task": "..."}]}) — tối đa 4 task/lần, chạy đồng thời, kết quả hợp nhất về 1 báo cáo; xung đột (cùng đụng 1 file) được liệt kê trong "conflicts" — tự phân xử.')
   }
   if (hasCreate) {
     lines.push('- Hệ thống THIẾU agent có kỹ năng phù hợp (đã kiểm tra Agent Roster): tool_call: create_agent({"name": "...", "description": "mô tả vai trò", "instruction": "system prompt chi tiết", "model": "moonshotai/kimi-k3", "avatar": "🤖", "temperature": 0.7, "maxTokens": 4096, "tools": ["file_read", "..."]}) — agent mới hiện trong module Agents, giao việc NGAY qua dispatch_agent.')
@@ -545,7 +545,7 @@ function buildAutomationProtocol(hasDirect: boolean, hasPropose: boolean): strin
     lines.push('')
     lines.push('⚙️ QUẢN LÝ TỰ ĐỘNG HÓA (manage_automation — quyền trực tiếp của bạn):')
     lines.push('- Tạo cron job (KHUYẾN KHÍCH lịch dựng sẵn — Ngày/Tuần/Tháng, nhiều giờ, Lặp):')
-    lines.push('  tool_call: manage_automation({"action": "create_cron", "taskPrompt": "nhiệm vụ", "schedule": {"mode": "day|week|month", "times": ["09:30", "14:00"], "daysOfWeek": [1, 3], "daysOfMonth": [1, 15], "repeat": true}, "executor": "" | "BOLT" | "team:code"})')
+    lines.push('  tool_call: manage_automation({"action": "create_cron", "taskPrompt": "nhiệm vụ", "schedule": {"mode": "day|week|month", "times": ["09:30", "14:00"], "daysOfWeek": [1, 3], "daysOfMonth": [1, 15], "repeat": true}, "executor": "" | "RAMPAGE" | "team:code"})')
     lines.push('  → mode+repeat: day=hàng ngày · week=hàng tuần vào các thứ (0=CN..6=T7) · month=hàng tháng vào các ngày 1-31; repeat=false → chạy ĐÚNG 1 LẦN; executor = agent thực thi ("team:xxx" → TL của team đó điều phối triển khai toàn bộ tác vụ, "" = Automation Agent mặc định).')
     lines.push('  (Lịch đặc biệt mới dùng expression thô: {"action": "create_cron", "expression": "0 9 * * 1-5", "taskPrompt": "..."})')
     lines.push('- Đăng ký webhook: tool_call: manage_automation({"action": "create_webhook", "url": "https://...", "events": ["document.uploaded"]})')
@@ -558,7 +558,7 @@ function buildAutomationProtocol(hasDirect: boolean, hasPropose: boolean): strin
     lines.push('📤 ĐỀ XUẤT TỰ ĐỘNG HÓA (propose_automation — khi thấy cần nhưng KHÔNG có quyền tạo trực tiếp):')
     lines.push('- Tác vụ lặp lại định kỳ / cần đẩy sự kiện ra endpoint ngoài / cần chỉ thị thường trực / cần quy trình nhiều bước → đề xuất:')
     lines.push('  tool_call: propose_automation({"kind": "cron|webhook|standing_order|task_flow", "payload": {...}, "reason": "lý do cụ thể", "evidence": "dữ liệu hỗ trợ"})')
-    lines.push('  cron payload KHUYẾN KHÍCH: {"taskPrompt": "...", "schedule": {"mode": "day|week|month", "times": ["09:30"], "daysOfWeek": [1, 3], "repeat": true}, "executor": "BOLT" | "team:code" | ""} (executor = agent thực thi — "team:xxx" → TL điều phối toàn bộ tác vụ).')
+    lines.push('  cron payload KHUYẾN KHÍCH: {"taskPrompt": "...", "schedule": {"mode": "day|week|month", "times": ["09:30"], "daysOfWeek": [1, 3], "repeat": true}, "executor": "RAMPAGE" | "team:code" | ""} (executor = agent thực thi — "team:xxx" → TL điều phối toàn bộ tác vụ).')
     lines.push('- Omega quyết định: forward vào module Self-direction chờ Mr. Architect (hoặc agent được ủy quyền) phê duyệt — được duyệt thì tài nguyên TỰ TẠO. Từ chối thì Omega trả lý do.')
     lines.push('- Việc gấp cần làm NGAY thì tự làm bằng tools của mình — KHÔNG propose.')
   }

@@ -3482,7 +3482,7 @@ const PROVIDER_CONFIG_MAP: Record<string, {
     pool: nvidiaPool,
     endpoint: 'https://integrate.api.nvidia.com/v1/chat/completions',
     // Audit fix 2026-08-25: kimi-k3 (reasoning model) + large Code Team system
-    // prompts can exceed 120s in the reasoning phase → APEX TL timed out every
+    // prompts can exceed 120s in the reasoning phase → MEGATRON TL timed out every
     // run and degraded the whole workflow to the G1 fallback. Make the timeout
     // env-configurable with a longer 240s default for reasoning models.
     timeout: parseInt(process.env.LLM_TIMEOUT_MS || '240000', 10),

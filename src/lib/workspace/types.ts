@@ -29,7 +29,7 @@ export interface PendingEdit {
   newContent: string; // Nội dung đề xuất
   diff: string; // Unified diff string (hiển thị UI)
   status: PendingEditStatus;
-  agentName: string; // Agent đề xuất (BOLT / SENTINEL / CATALYST / ...)
+  agentName: string; // Agent đề xuất (RAMPAGE / SENTINEL / CATALYST / ...)
   createdAt: Date;
   resolvedAt?: Date | null;
 }

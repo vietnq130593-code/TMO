@@ -26,7 +26,7 @@ const LOCAL_TOOLS = [
   {
     name: 'opencode',
     category: 'Code',
-    description: 'Đọc/viết file, chạy terminal command. Dùng bởi Code Team G2-A (BOLT) để implement code.',
+    description: 'Đọc/viết file, chạy terminal command. Dùng bởi Code Team G2-A (RAMPAGE) để implement code.',
     source: 'bundled',
     dangerous: true,
     implemented: true,

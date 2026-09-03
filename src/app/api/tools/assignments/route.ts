@@ -10,7 +10,7 @@
  *        enabled=true  → bật thêm tool ngoài whitelist mặc định
  *        enabled=null  → XÓA override (reset về mặc định hardcoded)
  *
- * Validate: agentKey ∈ APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|ALISTA|OPUS|NEW_AGENT
+ * Validate: agentKey ∈ MEGATRON|SHOCWAVE|RAMPAGE|SENTINEL|CATALYST|OMEGA|ALISTA|OPUS|NEW_AGENT
  *           toolName ∈ builtin (ALL_TOOL_DEFINITIONS) ∪ custom tools registry
  */
 
@@ -37,9 +37,9 @@ function buildDefaults(): Record<string, string[]> {
   // TASK 22: Opus = full builtin list (đồng bộ ensureOpusAgent — mọi tool)
   defaults.OPUS = getBuiltinToolNamesSafe()
   const positions: Array<[string, string]> = [
-    ['TL', 'APEX'],
-    ['G1', 'CORTEX'],
-    ['G2-A', 'BOLT'],
+    ['TL', 'MEGATRON'],
+    ['G1', 'SHOCWAVE'],
+    ['G2-A', 'RAMPAGE'],
     ['G2-B', 'SENTINEL'],
     ['G3', 'CATALYST'],
   ]

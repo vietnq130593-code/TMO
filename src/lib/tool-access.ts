@@ -27,7 +27,7 @@ import { db } from '@/lib/db'
 // ==================== AGENT KEY MAPPING ====================
 //
 // Chuẩn hóa 1 chiều về 9 key. Nguồn tên gọi trong app:
-//   - Code Team: agents.ts — name (APEX/CORTEX/BOLT/SENTINEL/CATALYST) + position (TL/G1/G2-A/G2-B/G3)
+//   - Code Team: agents.ts — name (MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/CATALYST) + position (TL/G1/G2-A/G2-B/G3)
 //   - Standalone: standalone-agents.ts — 'Omega' + 'ALISTA' (kỹ sư bảo trì)
 //   - Opus (meta-agent CTO): opus-agent.ts — 'Opus' (TASK 22: key riêng để
 //     Tools Manager gán/tắt tool cho Opus độc lập với agents động)
@@ -37,21 +37,21 @@ import { db } from '@/lib/db'
 // FIX 2026-09-01 (user request: "hiện tên tất cả các Agents hiện có"): thêm
 // ALISTA — đủ 8 agent thật (AgentProfile) + NEW_AGENT bucket cho agents động.
 
-export const AGENT_KEYS = ['APEX', 'CORTEX', 'BOLT', 'SENTINEL', 'CATALYST', 'OMEGA', 'ALISTA', 'OPUS', 'NEW_AGENT'] as const
+export const AGENT_KEYS = ['MEGATRON', 'SHOCWAVE', 'RAMPAGE', 'SENTINEL', 'CATALYST', 'OMEGA', 'ALISTA', 'OPUS', 'NEW_AGENT'] as const
 export type AgentKey = (typeof AGENT_KEYS)[number]
 
 const POSITION_TO_KEY: Record<string, AgentKey> = {
-  TL: 'APEX',
-  G1: 'CORTEX',
-  'G2-A': 'BOLT',
+  TL: 'MEGATRON',
+  G1: 'SHOCWAVE',
+  'G2-A': 'RAMPAGE',
   'G2-B': 'SENTINEL',
   G3: 'CATALYST',
 }
 
 const NAME_TO_KEY: Record<string, AgentKey> = {
-  APEX: 'APEX',
-  CORTEX: 'CORTEX',
-  BOLT: 'BOLT',
+  MEGATRON: 'MEGATRON',
+  SHOCWAVE: 'SHOCWAVE',
+  RAMPAGE: 'RAMPAGE',
   SENTINEL: 'SENTINEL',
   CATALYST: 'CATALYST',
   OMEGA: 'OMEGA',

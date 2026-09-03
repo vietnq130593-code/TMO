@@ -75,7 +75,7 @@ export interface EpisodeNode {
   outcome: EpisodeOutcome
   /** Độ tin của việc đánh giá outcome (evaluator confidence) */
   confidence: number
-  agent: string              // OMEGA | BOLT | SENTINEL...
+  agent: string              // OMEGA | RAMPAGE | SENTINEL...
   sessionId?: string | null
   /** 0-1 — decay & retrieval ranking */
   importance: number

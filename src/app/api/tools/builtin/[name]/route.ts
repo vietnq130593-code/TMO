@@ -39,9 +39,9 @@ function buildAgentMatrix(toolName: string): Array<{ agentKey: string; label: st
     matrix.push({ agentKey: 'OPUS', label: 'Opus', defaultHas: getAllBuiltinToolNames().includes(toolName) })
   } catch { /* fail-open */ }
   const positions: Array<[string, string, string]> = [
-    ['TL', 'APEX', 'TL'],
-    ['G1', 'CORTEX', 'G1'],
-    ['G2-A', 'BOLT', 'G2-A'],
+    ['TL', 'MEGATRON', 'TL'],
+    ['G1', 'SHOCWAVE', 'G1'],
+    ['G2-A', 'RAMPAGE', 'G2-A'],
     ['G2-B', 'SENTINEL', 'G2-B'],
     ['G3', 'CATALYST', 'G3'],
   ]

@@ -338,14 +338,14 @@ async function buildDirectiveSystemPrompt(profile: AgentProfile): Promise<string
 
 /**
  * Tìm agent name trong chuỗi delegation mà Opus chỉ định (vd "Omega lập plan",
- * "CORTEX code lượt đầu", "BOLT review"). Match case-insensitive word boundary
- * chống false-positive (vd "BOLT" không match "BOLT-2" hay "CATALYST" chứa "CAT").
+ * "SHOCWAVE code lượt đầu", "RAMPAGE review"). Match case-insensitive word boundary
+ * chống false-positive (vd "RAMPAGE" không match "RAMPAGE-2" hay "CATALYST" chứa "CAT").
  *
  * Trả về agent name CHÍNH XÁC (từ DB) nếu tìm thấy + khác currentAgentName.
  * Trả về null nếu không match hoặc match chính currentAgent (không cần switch).
  *
- * A5/E27 fix: trước đây directive "delegation: Omega" bị BOLT (session agent)
- * nhận → BOLT phải tự delegate_task (không enforcement). Giờ switch session
+ * A5/E27 fix: trước đây directive "delegation: Omega" bị RAMPAGE (session agent)
+ * nhận → RAMPAGE phải tự delegate_task (không enforcement). Giờ switch session
  * agentProfileId sang delegatee trước khi enqueue → agent ĐÚNG nhận directive.
  */
 async function findDelegateeAgent(delegationStr: string, currentAgentName: string): Promise<string | null> {
@@ -358,7 +358,7 @@ async function findDelegateeAgent(delegationStr: string, currentAgentName: strin
     const names = agents.map(a => a.name).filter(Boolean)
     if (names.length === 0) return null
 
-    // Sort by length DESC để match tên dài trước (vd "BOLT" không match trước "BOLT-2")
+    // Sort by length DESC để match tên dài trước (vd "RAMPAGE" không match trước "RAMPAGE-2")
     names.sort((a, b) => b.length - a.length)
 
     const lower = delegationStr.toLowerCase()

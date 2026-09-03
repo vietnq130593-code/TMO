@@ -4,7 +4,7 @@
  * 5 Agents hardcoded — thiết lập cứng cho Code Team.
  * Clone GitHub về chạy local → Code Team luôn đầy đủ.
  *
- * Positions: TL (APEX), G1 (CORTEX), G2-A (BOLT), G2-B (SENTINEL), G3 (CATALYST)
+ * Positions: TL (MEGATRON), G1 (SHOCWAVE), G2-A (RAMPAGE), G2-B (SENTINEL), G3 (CATALYST)
  * Dynamic: "Kimi NHÌN & ĐIỀU HƯỚNG, DeepSeek THIẾT KẾ, Qwen XÂY, GLM SỬA, MiniMax TỐI ƯU"
  */
 
@@ -37,8 +37,8 @@ export interface CodeTeamAgentDef {
 
 export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
   // ===== MODEL POLICY (updated 2026-08-31 — USER DIRECTIVE: kimi-k3 làm lõi chính) =====
-  // Khôi phục moonshotai/kimi-k3 làm lõi chính cho TẤT CẢ agents (APEX,
-  // CORTEX, BOLT, SENTINEL, CATALYST); chuỗi fallback đúng thứ tự directive
+  // Khôi phục moonshotai/kimi-k3 làm lõi chính cho TẤT CẢ agents (MEGATRON,
+  // SHOCWAVE, RAMPAGE, SENTINEL, CATALYST); chuỗi fallback đúng thứ tự directive
   // 2026-08-28: deepseek-v4-pro → deepseek-v4-flash → minimax-m3. Giai đoạn
   // 2026-09-30 tạm dùng minimax-m3 (NIM HANG 3 lõi đầu) kết thúc theo chỉ định
   // user 2026-08-31. Runtime callLLMForAgent enforce AGENT_PRIMARY_MODEL
@@ -52,7 +52,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
   // gpt-oss-120b đã bị bỏ khỏi Agent/Chat (user directive 2026-08-27); GLM
   // 5.2/5.3 không dùng được trên NIM (410/404).
   {
-    name: 'APEX',
+    name: 'MEGATRON',
     description: 'TL — Nhìn & Điều hướng. Phân tích yêu cầu, chọn routing, code UI (Fast Track), verify kết quả.',
     instruction: '', // Loaded dynamically from getAgentPrompt('TL')
     domain: 'programming',
@@ -66,14 +66,14 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     avatar: '👑',
     tools: ['opencode', 'knowledge_search', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'db_query', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'open_workspace', 'verify_and_push', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
       // CI-4 B3-B5 (Task 11-c) — structured git tools: khảo sát repo + branch/clone.
-      // APEX (TL) có đủ 5 tool — điều phối và tự verify.
+      // MEGATRON (TL) có đủ 5 tool — điều phối và tự verify.
       'git_status', 'git_diff', 'git_log', 'git_branch', 'git_clone',
       // CI-3 B3 (Task 13-b) — Kho Context: truy hồi digest đã nén của run trước.
       'context_recall',
       // DELEGATION CONTRACT (fix 2026-09-12 — gap so với quy trình orchestrator:
-      // Code Team pipeline không có delegation động): TL (APEX) được cấp
+      // Code Team pipeline không có delegation động): TL (MEGATRON) được cấp
       // delegate_task — giữa pipeline step, khi nhận thấy 1 phần việc phức tạp
-      // cần chuyên trách, TL giao cho CORTEX/BOLT/SENTINEL/CATALYST (sub-agent
+      // cần chuyên trách, TL giao cho SHOCWAVE/RAMPAGE/SENTINEL/CATALYST (sub-agent
       // chạy mini-loop có plan-first + acceptance criteria + self-verify, trả
       // báo cáo nén). Depth-guard strip tool này khỏi sub-agent → không đệ quy.
       // Chỉ TL có (orchestrator role) — G1-G3 dùng escalate_problem khi cần giúp.
@@ -83,15 +83,15 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
       // filesystem skills qua list_skills/read_skill (trước đây CHỈ Omega có —
       // 5 agents này không tài nguyên nào dùng được skill registry).
       'list_skills', 'read_skill',
-      // AUTOMATION PROPOSAL (user request 2026-09-13): APEX thấy cần cron job /
+      // AUTOMATION PROPOSAL (user request 2026-09-13): MEGATRON thấy cần cron job /
       // webhook / standing order / task flow → đề xuất với Omega qua
       // propose_automation — Omega quyết định forward vào Self-direction chờ
-      // Mr. Architect / agent được ủy quyền phê duyệt. (APEX có tool `cron` nhưng
+      // Mr. Architect / agent được ủy quyền phê duyệt. (MEGATRON có tool `cron` nhưng
       // đó là mini-service riêng flag-gated; propose_automation là luồng chuẩn.)
       'propose_automation'],
   },
   {
-    name: 'CORTEX',
+    name: 'SHOCWAVE',
     description: 'G1 — Thiết kế kiến trúc. TL mô tả WHAT → G1 thiết kế HOW. DB Schema, API Design, Component Tree.',
     instruction: '',
     domain: 'programming',
@@ -104,13 +104,13 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     position: 'G1',
     avatar: '🧠',
     tools: ['knowledge_search', 'knowledge_graph', 'tavily', 'serper', 'jina', 'file_read', 'file_list', 'grep', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
-      // SKILL ACCESS (fix 2026-09-12) — xem note APEX phía trên.
+      // SKILL ACCESS (fix 2026-09-12) — xem note MEGATRON phía trên.
       'list_skills', 'read_skill',
-      // AUTOMATION PROPOSAL (2026-09-13) — xem note APEX phía trên.
+      // AUTOMATION PROPOSAL (2026-09-13) — xem note MEGATRON phía trên.
       'propose_automation'],
   },
   {
-    name: 'BOLT',
+    name: 'RAMPAGE',
     description: 'G2-A — Code Execution. Nhận arch spec → Code → Notes → Báo cáo.',
     instruction: '',
     domain: 'programming',
@@ -125,9 +125,9 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     tools: ['opencode', 'knowledge_search', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'git_status', 'git_diff', 'git_log', 'git_branch', 'get_diagnostics', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'browser_screenshot', 'mcp_call', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
       // CI-3 B3 (Task 13-b) — Kho Context: truy hồi digest đã nén của run trước.
       'context_recall',
-      // SKILL ACCESS (fix 2026-09-12) — xem note APEX phía trên.
+      // SKILL ACCESS (fix 2026-09-12) — xem note MEGATRON phía trên.
       'list_skills', 'read_skill',
-      // AUTOMATION PROPOSAL (2026-09-13) — xem note APEX phía trên.
+      // AUTOMATION PROPOSAL (2026-09-13) — xem note MEGATRON phía trên.
       'propose_automation'],
   },
   {
@@ -150,9 +150,9 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
       // CI-3 B3 (Task 13-b) — Kho Context: đọc lại digest run trước khi review.
       'context_recall',
       'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_edit', 'lsp_diagnostics', 'lint', 'type_check', 'browser_screenshot', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
-      // SKILL ACCESS (fix 2026-09-12) — xem note APEX phía trên.
+      // SKILL ACCESS (fix 2026-09-12) — xem note MEGATRON phía trên.
       'list_skills', 'read_skill',
-      // AUTOMATION PROPOSAL (2026-09-13) — xem note APEX phía trên.
+      // AUTOMATION PROPOSAL (2026-09-13) — xem note MEGATRON phía trên.
       'propose_automation'],
   },
   {
@@ -171,12 +171,79 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'git_status', 'git_diff', 'git_log', 'git_branch', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'verify_and_push', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
       // CI-3 B3 (Task 13-b) — Kho Context: truy hồi digest đã nén của run trước.
       'context_recall',
-      // SKILL ACCESS (fix 2026-09-12) — xem note APEX phía trên.
+      // SKILL ACCESS (fix 2026-09-12) — xem note MEGATRON phía trên.
       'list_skills', 'read_skill',
-      // AUTOMATION PROPOSAL (2026-09-13) — xem note APEX phía trên.
+      // AUTOMATION PROPOSAL (2026-09-13) — xem note MEGATRON phía trên.
       'propose_automation'],
   },
 ]
+
+// ===== AGENT RENAME MIGRATION (2026-10-16 — user directive) =====
+// APEX → MEGATRON, CORTEX → SHOCWAVE, BOLT → RAMPAGE.
+// DB local đã seed tên CŨ từ commit trước → cần rename row (giữ nguyên toàn bộ
+// customization: instruction/model/temperature/tools override...) + kéo theo
+// các row keyed theo tên agent:
+//   - ToolAssignment.agentKey        (tool-access override)
+//   - SkillAssignment.agentKey       (skill gate — raw SQL, table không có Prisma model)
+//   - AgentModelOverride.agentName   (override model per-agent)
+//   - CronJob.executor               (cron job gán executor = tên agent)
+// Các bảng HISTORY (CodeTeamWorklog/AutoLearnRecord/AgentMemory/...) KHÔNG đổi
+// — đó là ghi chép quá khứ, giữ nguyên tên agent tại thời điểm chạy.
+// Idempotent: chạy nhiều lần an toàn (lần 2 trở đi old-row không còn → no-op).
+
+export const AGENT_RENAMES: Array<[oldName: string, newName: string]> = [
+  ['APEX', 'MEGATRON'],
+  ['CORTEX', 'SHOCWAVE'],
+  ['BOLT', 'RAMPAGE'],
+]
+
+let renameMigrated = false
+
+async function _migrateAgentRenames(): Promise<void> {
+  if (renameMigrated) return
+  renameMigrated = true // chạy 1 lần/process — idempotent tại DB level
+  for (const [oldName, newName] of AGENT_RENAMES) {
+    try {
+      const oldRow = await db.agentProfile.findUnique({ where: { name: oldName } })
+      if (!oldRow) continue
+      const newRow = await db.agentProfile.findUnique({ where: { name: newName } })
+      if (newRow) {
+        console.warn(`[CodeTeam] Rename migration SKIP: cả "${oldName}" lẫn "${newName}" đều tồn tại — giữ nguyên cả 2 (user tự tạo "${newName}"?)`)
+        continue
+      }
+      // 1. AgentProfile — đổi tên, giữ mọi field khác (customization preserved)
+      await db.agentProfile.update({ where: { id: oldRow.id }, data: { name: newName } })
+      // 2. ToolAssignment (tool-access override keyed theo agentKey)
+      try {
+        await db.toolAssignment.updateMany({ where: { agentKey: oldName }, data: { agentKey: newName } })
+      } catch (e) {
+        console.warn(`[CodeTeam] ToolAssignment migration ${oldName}→${newName} lỗi (không chặn):`, e instanceof Error ? e.message : String(e))
+      }
+      // 3. SkillAssignment — raw SQL (pattern skill-access.ts: table không có Prisma model, schema-drift safe)
+      try {
+        await db.$executeRaw`UPDATE SkillAssignment SET agentKey = ${newName} WHERE agentKey = ${oldName}`
+      } catch (e) {
+        console.warn(`[CodeTeam] SkillAssignment migration ${oldName}→${newName} lỗi (không chặn — table có thể chưa tồn tại):`, e instanceof Error ? e.message : String(e))
+      }
+      // 4. AgentModelOverride (override model per-agent)
+      try {
+        await db.agentModelOverride.updateMany({ where: { agentName: oldName }, data: { agentName: newName } })
+      } catch (e) {
+        console.warn(`[CodeTeam] AgentModelOverride migration ${oldName}→${newName} lỗi (không chặn):`, e instanceof Error ? e.message : String(e))
+      }
+      // 5. CronJob.executor (cron gán executor = tên agent)
+      try {
+        await db.cronJob.updateMany({ where: { executor: oldName }, data: { executor: newName } })
+      } catch (e) {
+        console.warn(`[CodeTeam] CronJob executor migration ${oldName}→${newName} lỗi (không chặn):`, e instanceof Error ? e.message : String(e))
+      }
+      console.log(`[CodeTeam] Rename migration ✓ ${oldName} → ${newName} (AgentProfile + ToolAssignment + SkillAssignment + AgentModelOverride + CronJob.executor)`)
+    } catch (err) {
+      renameMigrated = false // lỗi → cho phép retry lần ensure sau
+      console.warn(`[CodeTeam] Rename migration ${oldName} → ${newName} lỗi (sẽ retry):`, err instanceof Error ? err.message : String(err))
+    }
+  }
+}
 
 // ===== SEED LOGIC =====
 // Idempotent — chạy khi app startup hoặc lazy khi GET /api/agents
@@ -231,6 +298,10 @@ export async function ensureCodeTeamAgents(): Promise<void> {
 
 async function _doSeed(): Promise<boolean> {
   console.log('[CodeTeam] Checking Code Team agents...')
+  // RENAME MIGRATION trước seed — DB cũ có tên APEX/CORTEX/BOLT → đổi sang
+  // MEGATRON/SHOCWAVE/RAMPAGE trước khi vòng findUnique-by-name chạy (nếu
+  // không, seed sẽ tạo row MỚI tên mới trong khi row cũ tên cũ còn nằm đó).
+  await _migrateAgentRenames()
   let created = 0
   let skipped = 0
   let failedAgents = 0

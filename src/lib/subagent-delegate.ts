@@ -8,7 +8,7 @@
  * Kiến trúc — CONTEXT ISOLATION là lợi ích cốt lõi:
  *
  *   PARENT (goal loop, vd Omega)
- *     └─ tool_call: delegate_task({agent: "BOLT", task: "..."})
+ *     └─ tool_call: delegate_task({agent: "RAMPAGE", task: "..."})
  *        hoặc dispatch_agent({agent: "BẤT KỲ AGENT", task: "..."})
  *          └─ runSubAgentForProfile() — mini ReAct loop IN-PROCESS:
  *              · profile do caller resolve (Code Team qua resolveAgent,
@@ -77,9 +77,9 @@ const REPORT_MAX_CHARS = 3500
 
 /** Map tên agent → position trong Code Team (resolveAgent nhận position) */
 const POSITION_BY_NAME: Record<string, string> = {
-  APEX: 'TL',
-  CORTEX: 'G1',
-  BOLT: 'G2-A',
+  MEGATRON: 'TL',
+  SHOCWAVE: 'G1',
+  RAMPAGE: 'G2-A',
   SENTINEL: 'G2-B',
   CATALYST: 'G3',
 }
@@ -90,7 +90,7 @@ const POSITION_BY_NAME: Record<string, string> = {
  * consult Omega là 1 LLM call đơn (không chạy tool, không đệ quy).
  * dispatch_agents_parallel (2026-09-14 fan-out) cũng bị strip — chống
  * fan-out lồng nhau nổ token.
- * request_code_team (2026-09-30) cũng bị strip — sub-agent (vd APEX được
+ * request_code_team (2026-09-30) cũng bị strip — sub-agent (vd MEGATRON được
  * delegate) không được huy động workflow team code lồng nhau (workflow
  * trong workflow → depth explosion token/thời gian).
  */
@@ -110,15 +110,15 @@ export const DEFAULT_SUBAGENT_TOOLS = [
 
 /** Danh sách agent có thể delegate (cho tool description + validate) */
 export const DELEGATABLE_AGENTS: Array<{ name: string; role: string; bestFor: string }> = [
-  { name: 'APEX', role: 'TL — Nhìn & Điều hướng', bestFor: 'phân tích yêu cầu phức tạp, routing, code UI fast-track, verify kết quả tổng thể' },
-  { name: 'CORTEX', role: 'G1 — Thiết kế', bestFor: 'thiết kế kiến trúc, DB schema, API design, component tree' },
-  { name: 'BOLT', role: 'G2-A — Code Execution', bestFor: 'implement code TypeScript/React/Next.js, viết API, database operations' },
+  { name: 'MEGATRON', role: 'TL — Nhìn & Điều hướng', bestFor: 'phân tích yêu cầu phức tạp, routing, code UI fast-track, verify kết quả tổng thể' },
+  { name: 'SHOCWAVE', role: 'G1 — Thiết kế', bestFor: 'thiết kế kiến trúc, DB schema, API design, component tree' },
+  { name: 'RAMPAGE', role: 'G2-A — Code Execution', bestFor: 'implement code TypeScript/React/Next.js, viết API, database operations' },
   { name: 'SENTINEL', role: 'G2-B — Review & Fix', bestFor: 'code review, tìm bug, security check, fix lỗi, iterative refinement' },
   { name: 'CATALYST', role: 'G3 — Tối ưu', bestFor: 'performance optimization, refactor, scalability, best practices' },
 ]
 
 /**
- * Chuẩn hoá input (chấp nhận tên 'BOLT'/'bolt' hoặc position 'G2-A')
+ * Chuẩn hoá input (chấp nhận tên 'RAMPAGE'/'bolt' hoặc position 'G2-A')
  * → position để resolveAgent, hoặc null nếu không hợp lệ.
  */
 export function resolveDelegationTarget(input: unknown): string | null {
@@ -273,7 +273,7 @@ export async function runSubAgentForProfile(params: {
   // cáo timeout. timedOut được set ngay khi race thua và loop tự dừng ở checkpoint
   // gần nhất (đầu vòng / trước mỗi tool call).
   let timedOut = false
-  // ANTI-HALLUCINATION (E2E 2026-09-08): APEX được delegate "đọc 3 file" nhưng
+  // ANTI-HALLUCINATION (E2E 2026-09-08): MEGATRON được delegate "đọc 3 file" nhưng
   // conclude ngay vòng 1 với 0 tool call → "phân tích" là bịa (parent may mắn
   // tự đọc lại). Giờ: task yêu cầu bằng chứng thật mà sub-agent chưa chạy tool
   // nào → đẩy 1 directive ép chạy tool, chỉ accept conclude ở vòng sau.
@@ -595,7 +595,7 @@ export async function runSubAgentForProfile(params: {
 
     // ANTI-HALLUCINATION DISCLAIMER: sub-agent kết thúc mà KHÔNG chạy tool nào
     // → nội dung là từ kiến thức model, KHÔNG phải bằng chứng đọc thật. Parent
-    // cần biết điều này để tự verify (E2E 2026-09-08: APEX "phân tích" 3 file
+    // cần biết điều này để tự verify (E2E 2026-09-08: MEGATRON "phân tích" 3 file
     // mà 0 tool call — may Omega tự đọc lại).
     if (toolCallCount === 0 && !report.startsWith('⚠️')) {
       report = `⚠️ (LƯU Ý: sub-agent ${profile.name} KHÔNG chạy tool nào — nội dung dưới đây từ kiến thức model, chưa có bằng chứng đọc file/lệnh thật. Nếu cần chính xác, hãy tự file_read/grep verify hoặc delegate lại với yêu cầu rõ ràng dùng tool.)\n\n${report}`
@@ -704,7 +704,7 @@ export async function runSubAgentForProfile(params: {
 // ==================== CODE TEAM ENTRY (legacy — delegate_task) ====================
 
 /**
- * Chạy 1 sub-agent CODE TEAM (APEX/CORTEX/BOLT/SENTINEL/CATALYST) cho task
+ * Chạy 1 sub-agent CODE TEAM (MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/CATALYST) cho task
  * được delegate — giữ tương thích ngược với delegate_task.
  */
 export async function runSubAgent(params: {

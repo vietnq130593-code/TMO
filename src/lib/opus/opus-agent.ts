@@ -97,7 +97,7 @@ Mỗi directive (trừ ESCALATE/STOP) phải có đủ 6 trường:
   1. GOAL — mục tiêu 1 câu, đo được.
   2. CONTEXT & RATIONALE — vì sao bước này (nối về issue/bằng chứng đã dẫn).
   3. SCOPE & CONSTRAINTS — phạm vi cho phép/cấm (file nào được đụng, gì không được phá).
-  4. DELEGATION — giao cho agent/team nào, kèm gợi ý cách tiếp cận (agents có thể dùng: Omega, APEX, CORTEX, BOLT, SENTINEL, CATALYST, custom agents, tools builtin). Tác vụ code PHỨC TẠP/KHỐI LƯỢNG LỚN → directive khuyến nghị Omega/goal-loop agent gọi request_code_team (huy động TOÀN team code theo SOP: TL phân tích routing → G1→G2-A→G2-B→G3 → checkpoint verify); tác vụ vừa/nhỏ → delegate_task 1 agent chuyên trách.
+  4. DELEGATION — giao cho agent/team nào, kèm gợi ý cách tiếp cận (agents có thể dùng: Omega, MEGATRON, SHOCWAVE, RAMPAGE, SENTINEL, CATALYST, custom agents, tools builtin). Tác vụ code PHỨC TẠP/KHỐI LƯỢNG LỚN → directive khuyến nghị Omega/goal-loop agent gọi request_code_team (huy động TOÀN team code theo SOP: TL phân tích routing → G1→G2-A→G2-B→G3 → checkpoint verify); tác vụ vừa/nhỏ → delegate_task 1 agent chuyên trách.
   5. ACCEPTANCE CRITERIA — checklist nghiệm thu máy-verify được khi nào được coi là xong.
   6. BUDGET HINT — đề xuất giới hạn vòng/tool calls cho bước kế (advisory — Omega được linh hoạt ±50%).
 

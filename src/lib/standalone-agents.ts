@@ -277,16 +277,16 @@ Khi user yêu cầu PULL code từ GitHub: tool_call: git_pull({"branch": "main"
 
 GỌI CODE TEAM CHUYÊN TRÁCH (delegate_task) — dùng khi task CÓ 1 trong các dấu hiệu:
 - Cần đọc/sửa NHIỀU file hoặc chạy nhiều lệnh (làm trực tiếp sẽ phình context của bạn)
-- Cần chuyên môn sâu: implement (BOLT), review/bug/security (SENTINEL), tối ưu/refactor (CATALYST), thiết kế kiến trúc/DB/API (CORTEX), phân tích + verify tổng thể (APEX)
+- Cần chuyên môn sâu: implement (RAMPAGE), review/bug/security (SENTINEL), tối ưu/refactor (CATALYST), thiết kế kiến trúc/DB/API (SHOCWAVE), phân tích + verify tổng thể (MEGATRON)
 - Task tự chứa được (giao trọn cho 1 agent, nhận báo cáo) — KHÔNG delegate việc 1-2 bước lặt vặt.
-Ví dụ: tool_call: delegate_task({"agent": "BOLT", "task": "Implement API route X theo spec...", "context": "file liên quan: ..."})
+Ví dụ: tool_call: delegate_task({"agent": "RAMPAGE", "task": "Implement API route X theo spec...", "context": "file liên quan: ..."})
 Sau khi nhận báo cáo: ĐỌC kỹ phần "còn thiếu" — nếu sub-agent chưa kiểm định, bạn tự kiểm định lại (lint/type_check/file_read) trước khi kết luận. Token sub-agent tiêu thụ được cộng vào budget của bạn — cân nhắc scope task trước khi delegate.
 
 HUY ĐỘNG TOÀN CODE TEAM THEO SOP (request_code_team) — dùng khi tác vụ code PHỨC TẠP, KHỐI LƯỢNG LỚN:
 - Tính năng mới hoàn chỉnh nhiều module/file, kiến trúc mới, hệ thống con cần nhiều VAI tuần tự (thiết kế → code → review → tối ưu → verify)
 - Cần chất lượng đảm bảo bởi pipeline chuẩn nhiều tầng kiểm định (TL checkpoint verify từng bước)
 tool_call: request_code_team({"task": "Yêu cầu đầy đủ: mục tiêu, phạm vi, ràng buộc, điều kiện hoàn thành", "context": "file/decision liên quan...", "acceptance_criteria": "xong khi..."})
-→ Yêu cầu đến TL (APEX), TL tự phân tích routing (Mode A/B/C × Tier 1/2/3), TOÀN TEAM huy động theo quy trình vận hành tiêu chuẩn, bạn nhận BÁO CÁO NÉN toàn pipeline (từng bước + issues + kết quả cuối). Tool chạy DÀI (phút → chục phút) — gọi ĐÚNG 1 lần cho 1 tác vụ lớn, KHÔNG gọi lặp khi đang chờ. Task nhỏ 1-2 file → dùng delegate_task hoặc tự làm.
+→ Yêu cầu đến TL (MEGATRON), TL tự phân tích routing (Mode A/B/C × Tier 1/2/3), TOÀN TEAM huy động theo quy trình vận hành tiêu chuẩn, bạn nhận BÁO CÁO NÉN toàn pipeline (từng bước + issues + kết quả cuối). Tool chạy DÀI (phút → chục phút) — gọi ĐÚNG 1 lần cho 1 tác vụ lớn, KHÔNG gọi lặp khi đang chờ. Task nhỏ 1-2 file → dùng delegate_task hoặc tự làm.
 
 ═══════════════════════════════════════════
 🎛 ORCHESTRATOR & AGENT FACTORY (nhiệm vụ trung tâm — user request 2026-09-08)
@@ -413,12 +413,12 @@ LEARNING & MEMORY
       'delete_custom_tool',
       'list_custom_tools',
       // SUB-AGENT DELEGATION (user request 2026-09-08): Omega gọi Code Team
-      // chuyên trách (APEX/CORTEX/BOLT/SENTINEL/CATALYST) khi task phù hợp —
+      // chuyên trách (MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/CATALYST) khi task phù hợp —
       // sub-agent chạy tự chủ, trả báo cáo NÉN → context Omega không phình
       // (tiết kiệm budget token vòng lặp mục tiêu).
       'delegate_task',
       // CODE TEAM SOP REQUEST (user directive 2026-09-30): Omega gửi yêu cầu
-      // tới TL (APEX) → TOÀN team code huy động theo quy trình vận hành tiêu
+      // tới TL (MEGATRON) → TOÀN team code huy động theo quy trình vận hành tiêu
       // chuẩn (TL analyze routing → G1 thiết kế → G2-A code → G2-B review →
       // G3 tối ưu → checkpoint verify) — dùng cho tác vụ code phức tạp, khối
       // lượng lớn. Khác delegate_task (1 agent đơn lẻ): đây là nguyên đội

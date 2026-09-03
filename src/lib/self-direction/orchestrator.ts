@@ -296,16 +296,16 @@ function normalizeAssignee(assignee: string | undefined | null, validNames: stri
   if (exact) return exact
   // Alias thường gặp
   if (lower.includes('team code') || lower.includes('code team') || lower === 'code' || lower.includes('team lead')) {
-    return validNames.find(n => n === 'APEX') ?? 'Omega'
+    return validNames.find(n => n === 'MEGATRON') ?? 'Omega'
   }
   if (lower.includes('verif') || lower.includes('g3') || lower.includes('kiểm định')) {
     return validNames.find(n => n === 'CATALYST') ?? 'Omega'
   }
   if (lower.includes('generat') || lower.includes('g1')) {
-    return validNames.find(n => n === 'CORTEX') ?? 'Omega'
+    return validNames.find(n => n === 'SHOCWAVE') ?? 'Omega'
   }
   if (lower.includes('g2')) {
-    return validNames.find(n => n === 'BOLT') ?? 'Omega'
+    return validNames.find(n => n === 'RAMPAGE') ?? 'Omega'
   }
   if (lower.includes('omega') || lower.includes('orchestrat')) return 'Omega'
   // Fuzzy: chứa tên agent
@@ -524,7 +524,7 @@ async function generateWorkPlan(proposal: {
   const codeWorkflowBlock = isCodeWorkflow ? `
 
 ⚡ CHẾ ĐỘ CODE-WORKFLOW (CI-6 B5 — đề xuất này THAY ĐỔI CODE THẬT trong workspace):
-- Các bước triển khai giao agents chỉnh sửa code THẬT qua tool executor (BOLT implement, SENTINEL review/bug, CORTEX thiết kế API/schema, CATALYST tối ưu/hiệu năng...).
+- Các bước triển khai giao agents chỉnh sửa code THẬT qua tool executor (RAMPAGE implement, SENTINEL review/bug, SHOCWAVE thiết kế API/schema, CATALYST tối ưu/hiệu năng...).
 - Bước CUỐI CÙNG PHẢI là "Kiểm định & đẩy code" giao cho CHÍNH BẠN (Omega), tiêu đề CHỨA "verify_and_push" — bước này chạy pipeline kiểm định 9 bước thật (lint → type_check → tests → smoke → secret_scan → commit scoped → push → pull verify). KHÔNG giao bước commit/push cho agent khác, KHÔNG thêm bước kiểm định khác sau nó.` : ''
 
   const systemPrompt = `Bạn là OMEGA — orchestrator của hệ thống multi-agent TMO. Một đề xuất cải tiến hệ thống VỪA ĐƯỢC Mr. Architect phê duyệt. Nhiệm vụ của bạn: lập KẾ HOẠCH TRIỂN KHAI chi tiết.
@@ -593,9 +593,9 @@ Lập kế hoạch triển khai (JSON).`
 function defaultPlan(title: string, validNames: string[], executionMode = 'llm'): SdWorkPlan {
   const pick = (n: string) => (validNames.includes(n) ? n : 'Omega')
   const steps: SdPlanStep[] = [
-    { title: 'Phân tích & thiết kế giải pháp chi tiết', description: `Phân tích vấn đề của đề xuất "${title.slice(0, 80)}", xác định yêu cầu, rủi ro, thiết kế giải pháp cụ thể trước khi triển khai. Kết quả: bản thiết kế rõ ràng các việc cần làm.`, assignee: pick('APEX'), executionMode },
-    { title: 'Triển khai phần lõi của giải pháp', description: 'Thực hiện phần việc chính theo thiết kế ở bước 1. Kết quả: phần lõi hoàn thành kèm mô tả cụ thể đã làm gì.', assignee: pick('CORTEX'), executionMode },
-    { title: 'Triển khai phần bổ trợ & tích hợp', description: 'Hoàn thiện các phần phụ thuộc, tích hợp phần lõi vào tổng thể hệ thống. Kết quả: hệ thống đồng bộ, không bỏ sót.', assignee: pick('BOLT'), executionMode },
+    { title: 'Phân tích & thiết kế giải pháp chi tiết', description: `Phân tích vấn đề của đề xuất "${title.slice(0, 80)}", xác định yêu cầu, rủi ro, thiết kế giải pháp cụ thể trước khi triển khai. Kết quả: bản thiết kế rõ ràng các việc cần làm.`, assignee: pick('MEGATRON'), executionMode },
+    { title: 'Triển khai phần lõi của giải pháp', description: 'Thực hiện phần việc chính theo thiết kế ở bước 1. Kết quả: phần lõi hoàn thành kèm mô tả cụ thể đã làm gì.', assignee: pick('SHOCWAVE'), executionMode },
+    { title: 'Triển khai phần bổ trợ & tích hợp', description: 'Hoàn thiện các phần phụ thuộc, tích hợp phần lõi vào tổng thể hệ thống. Kết quả: hệ thống đồng bộ, không bỏ sót.', assignee: pick('RAMPAGE'), executionMode },
     { title: 'Kiểm định chất lượng & nghiệm thu', description: 'Kiểm tra kết quả triển khai theo tiêu chí đề xuất, xác nhận vấn đề gốc đã được giải quyết. Kết quả: verdict đạt/không đạt kèm bằng chứng.', assignee: pick('CATALYST'), executionMode },
   ]
   // CI-6 B5: fallback plan cho code-workflow cũng phải có bước cuối verify_and_push

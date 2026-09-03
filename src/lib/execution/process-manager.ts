@@ -37,7 +37,7 @@ export interface RunCommandResult {
 
 export interface StartProcessOptions extends RunCommandOptions {
   name: string // human-readable name for registry
-  tags?: string[] // e.g. ['dev-server', 'agent-BOLT']
+  tags?: string[] // e.g. ['dev-server', 'agent-RAMPAGE']
 }
 
 export interface ProcessInfo {

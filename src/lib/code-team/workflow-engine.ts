@@ -932,7 +932,7 @@ export async function runWorkflow(
     ctx.resolvedAgentsCache.set('TL', tlResolved)
 
     if (tlResolved.source === 'missing') {
-      const errorMsg = 'Không tìm thấy agent TL (APEX). Workflow cần ít nhất agent TL để chạy.'
+      const errorMsg = 'Không tìm thấy agent TL (MEGATRON). Workflow cần ít nhất agent TL để chạy.'
       console.error(`[Workflow] ${errorMsg}`)
       safeEmit({ type: 'error', agent: 'SYSTEM', message: errorMsg })
       // Phase 2 SMOLAB Proposal 7 — flush Layer 9 metrics even on early abort
@@ -1214,7 +1214,7 @@ async function escalateWorkflowFailureToOmega(params: {
         params.totalDurationMs ? `Thời lượng: ${Math.round(params.totalDurationMs / 1000)}s` : '',
       ].filter(Boolean).join('\n'),
       attempted: issuesDigest || '(worklog chưa ghi issue/tool fail nào)',
-      callingAgent: 'APEX (Code Team TL)',
+      callingAgent: 'MEGATRON (Code Team TL)',
       severity: 'high',
       autoTriggered: true,
     })
@@ -1282,9 +1282,9 @@ async function runPipeline(
   const pipeline = getPipeline(routingDecision.mode, routingDecision.tier)
   let spec = routingDecision.spec || userRequest // Spec gốc cho toàn bộ pipeline
 
-  // Get TL agent name from resolved cache (BUG 12 fix: don't hardcode 'APEX')
+  // Get TL agent name from resolved cache (BUG 12 fix: don't hardcode 'MEGATRON')
   const tlAgent = ctx.resolvedAgentsCache.get('TL')
-  const completedAgents: string[] = tlAgent ? [tlAgent.name] : ['APEX'] // TL already completed in Step 1
+  const completedAgents: string[] = tlAgent ? [tlAgent.name] : ['MEGATRON'] // TL already completed in Step 1
 
   // ===== v2.1 Phase 4.3 — Staging branch per workflow =====
   // All file_edit/git_commit ops during the workflow target this branch (not main).
@@ -2447,7 +2447,7 @@ export async function runAgentStep(params: {
       //  · todo_write → inject sessionId + runId của step run (mirror goal-loop
       //    CI-2): todos agent-initiated gắn đúng phiên chat + run của step —
       //    không còn rơi scope 'default' vô hình (panel Thought Process hiển thị).
-      //  · context.runId → delegate_task của APEX đọc làm parentRunId.
+      //  · context.runId → delegate_task của MEGATRON đọc làm parentRunId.
       const wfToolArgs: Record<string, unknown> = { ...tc.args }
       if (tc.name === 'todo_write' && sessionId && (!wfToolArgs.sessionId || wfToolArgs.sessionId === sessionId)) {
         wfToolArgs.sessionId = wfToolArgs.sessionId || sessionId
@@ -2819,7 +2819,7 @@ async function runTLCheckpointVerify(
     avatar: agentDef.avatar,
   })
 
-  const verifyPrompt = `Bạn là TL (APEX). Verify checkpoint sau ${latestWorklog.agentName} (${latestWorklog.position}).
+  const verifyPrompt = `Bạn là TL (MEGATRON). Verify checkpoint sau ${latestWorklog.agentName} (${latestWorklog.position}).
 
 ━━━ SPEC GỐC ━━━
 ${spec.slice(0, 1000)}
@@ -2878,7 +2878,7 @@ Output JSON trong markdown code block:
     verifyPrompt,
     { provider: agentDef.provider, model: agentDef.model },
     verifySystemPrompt,
-    { agentId: 'TL-verify', agentName: 'APEX' }
+    { agentId: 'TL-verify', agentName: 'MEGATRON' }
   )
 
   let verifyTimeoutId: ReturnType<typeof setTimeout> | undefined

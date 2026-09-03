@@ -1270,12 +1270,12 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   // Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Phase 4.5 (lines 252-263)
   // Behavior: agent emits plan + target files + risk assessment → workflow pauses →
   // user approves/rejects/modifies via /api/openclaw/plan-mode → workflow resumes.
-  // Used by TL (APEX) and G3 (CATALYST) — only positions that plan.
+  // Used by TL (MEGATRON) and G3 (CATALYST) — only positions that plan.
   exit_plan_mode: {
     type: 'function',
     function: {
       name: 'exit_plan_mode',
-      description: 'Phase 4.5 — Claude Code parity. Agent emits plan + target files + risk assessment. Workflow pauses, surfaces to UI for user approval. User approves/rejects/modifies. Agent resumes with approved scope. Use this BEFORE making file edits if changes are uncertain or risky. Available to TL (APEX) and G3 (CATALYST) only — these are the positions that plan.',
+      description: 'Phase 4.5 — Claude Code parity. Agent emits plan + target files + risk assessment. Workflow pauses, surfaces to UI for user approval. User approves/rejects/modifies. Agent resumes with approved scope. Use this BEFORE making file edits if changes are uncertain or risky. Available to TL (MEGATRON) and G3 (CATALYST) only — these are the positions that plan.',
       parameters: {
         type: 'object',
         properties: {
@@ -1307,7 +1307,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'cron',
-      description: 'Phase 4.6 — Z.ai Code parity. Schedule recurring or one-time agent tasks. Action: create | list | delete | run. Schedule kinds: one_time (epoch-ms expr), cron (cron expression), fixed_rate (interval string). Timezone optional. Retries max 3 with exponential backoff. Dedup: jobId hash, refuse duplicate schedules. Available to TL (APEX) and G3 (CATALYST) only — the planner positions.',
+      description: 'Phase 4.6 — Z.ai Code parity. Schedule recurring or one-time agent tasks. Action: create | list | delete | run. Schedule kinds: one_time (epoch-ms expr), cron (cron expression), fixed_rate (interval string). Timezone optional. Retries max 3 with exponential backoff. Dedup: jobId hash, refuse duplicate schedules. Available to TL (MEGATRON) and G3 (CATALYST) only — the planner positions.',
       parameters: {
         type: 'object',
         properties: {
@@ -1407,14 +1407,14 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
         'và trả về BÁO CÁO NÉN (đã làm · bằng chứng tool · còn thiếu). ' +
         'Dùng khi: (1) task code lớn cần implement/review/tối ưu chuyên sâu, (2) muốn giảm tải context của bạn — ' +
         'sub-agent đọc nhiều file mà context của bạn KHÔNG phình, (3) cần góc nhìn chuyên trách (security review, arch design). ' +
-        'KHÔNG dùng cho task 1-2 bước đơn giản — tự làm nhanh hơn. Chọn đúng agent: APEX=phân tích/verify tổng thể, ' +
-        'CORTEX=thiết kế kiến trúc/DB/API, BOLT=implement code, SENTINEL=review/bug/security, CATALYST=tối ưu/refactor.',
+        'KHÔNG dùng cho task 1-2 bước đơn giản — tự làm nhanh hơn. Chọn đúng agent: MEGATRON=phân tích/verify tổng thể, ' +
+        'SHOCWAVE=thiết kế kiến trúc/DB/API, RAMPAGE=implement code, SENTINEL=review/bug/security, CATALYST=tối ưu/refactor.',
       parameters: {
         type: 'object',
         properties: {
           agent: {
             type: 'string',
-            enum: ['APEX', 'CORTEX', 'BOLT', 'SENTINEL', 'CATALYST'],
+            enum: ['MEGATRON', 'SHOCWAVE', 'RAMPAGE', 'SENTINEL', 'CATALYST'],
             description: 'Agent chuyên trách sẽ nhận task',
           },
           task: {
@@ -1607,7 +1607,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     function: {
       name: 'request_code_team',
       description:
-        'HUY ĐỘNG TOÀN CODE TEAM theo quy trình vận hành tiêu chuẩn (SOP) — gửi yêu cầu tới TL (APEX), TL phân tích routing (Mode A/B/C × Tier 1/2/3) rồi TOÀN TEAM vận hành pipeline: ' +
+        'HUY ĐỘNG TOÀN CODE TEAM theo quy trình vận hành tiêu chuẩn (SOP) — gửi yêu cầu tới TL (MEGATRON), TL phân tích routing (Mode A/B/C × Tier 1/2/3) rồi TOÀN TEAM vận hành pipeline: ' +
         'G1 thiết kế → G2-A code → G2-B review/fix → G3 tối ưu (theo routing), mỗi bước có worklog + checkpoint verify của TL. ' +
         'DÙNG KHI: (1) tác vụ code PHỨC TẠP, khối lượng LỚN (nhiều file/module, tính năng mới hoàn chỉnh, kiến trúc mới), (2) cần quy trình chuẩn nhiều vai chuyên trách tuần tự (thiết kế → code → review → tối ưu → verify), (3) task cần chất lượng đảm bảo bởi pipeline kiểm định nhiều tầng. ' +
         'KHÔNG dùng cho: task nhỏ 1-2 file (tự làm hoặc delegate_task 1 agent nhanh hơn), câu hỏi/phân tích không cần code. ' +
@@ -1651,12 +1651,12 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'manage_tools',
-      description: 'Quản lý tool-access của agents (chỉ Omega được dùng). Action: (1) list_tools — danh sách tool + agents + override status (compact); (2) set_tool_access {agentKey, toolName, enabled} — bật/tắt 1 tool cho 1 agent (enabled=null → reset về mặc định); (3) read_tool {toolName} — mô tả đầy đủ + parameters + ma trận agent của 1 tool; (4) read_skill {name} — đọc SKILL.md của skill filesystem; (5) write_skill {name, content} — ghi đè SKILL.md (tự backup .bak). agentKey hợp lệ: APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|ALISTA|OPUS|NEW_AGENT (NEW_AGENT = mọi agent động do Omega tạo).',
+      description: 'Quản lý tool-access của agents (chỉ Omega được dùng). Action: (1) list_tools — danh sách tool + agents + override status (compact); (2) set_tool_access {agentKey, toolName, enabled} — bật/tắt 1 tool cho 1 agent (enabled=null → reset về mặc định); (3) read_tool {toolName} — mô tả đầy đủ + parameters + ma trận agent của 1 tool; (4) read_skill {name} — đọc SKILL.md của skill filesystem; (5) write_skill {name, content} — ghi đè SKILL.md (tự backup .bak). agentKey hợp lệ: MEGATRON|SHOCWAVE|RAMPAGE|SENTINEL|CATALYST|OMEGA|ALISTA|OPUS|NEW_AGENT (NEW_AGENT = mọi agent động do Omega tạo).',
       parameters: {
         type: 'object',
         properties: {
           action: { type: 'string', enum: ['list_tools', 'set_tool_access', 'read_tool', 'read_skill', 'write_skill'], description: 'Hành động quản lý' },
-          agentKey: { type: 'string', description: '(set_tool_access) Agent key: APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|ALISTA|OPUS|NEW_AGENT' },
+          agentKey: { type: 'string', description: '(set_tool_access) Agent key: MEGATRON|SHOCWAVE|RAMPAGE|SENTINEL|CATALYST|OMEGA|ALISTA|OPUS|NEW_AGENT' },
           toolName: { type: 'string', description: '(set_tool_access/read_tool) Tên tool builtin' },
           enabled: { type: 'boolean', description: '(set_tool_access) true=bật, false=vô hiệu hóa, null/omit=reset về mặc định' },
           name: { type: 'string', description: '(read_skill/write_skill) Slug skill filesystem (vd "pdf", "web")' },
@@ -1682,7 +1682,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
         'QUẢN LÝ TỰ ĐỘNG HÓA của module Smolab > Automation (CHỈ Omega có quyền mặc định). ' +
         'Actions: (1) create_cron {taskPrompt, schedule?, expression?, executor?} — cron job theo lịch DỰNG SẴN qua schedule {mode:"day"|"week"|"month", times:["09:30","14:00"], daysOfWeek?:[1,3], daysOfMonth?:[1,15], repeat:true|false} ' +
         '(day+lặp=hàng ngày vào các giờ đó; week+lặp=hàng tuần vào các ngày+giờ đó; month+lặp=hàng tháng; repeat=false → chạy ĐÚNG 1 LẦN; KHÔNG có schedule thì dùng expression thô vd "*/5 * * * *"); ' +
-        'executor = agent thực thi: "" (Automation Agent mặc định) | tên agent vd "BOLT" | "team:code" (TL của team đó sẽ là agent ĐIỀU PHỐI TRIỂN KHAI TOÀN BỘ tác vụ); ' +
+        'executor = agent thực thi: "" (Automation Agent mặc định) | tên agent vd "RAMPAGE" | "team:code" (TL của team đó sẽ là agent ĐIỀU PHỐI TRIỂN KHAI TOÀN BỘ tác vụ); ' +
         '(2) list_cron; (3) toggle_cron {id, enabled}; (4) delete_cron {id}; ' +
         '(5) create_webhook {url, events[], secret?} — đăng ký endpoint nhận sự kiện (HTTPS công khai); (6) list_webhooks; (7) delete_webhook {id}; ' +
         '(8) add_standing_order {order, priority?} — chỉ thị thường trực inject vào mọi automation runs; (9) list_standing_orders; (10) delete_standing_order {id}; ' +
@@ -1718,7 +1718,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           },
           expression: { type: 'string', description: '(create_cron — legacy) Cron expression thô khi KHÔNG dùng schedule, vd "*/5 * * * *". Ưu tiên dùng tham số schedule.' },
           taskPrompt: { type: 'string', description: '(create_cron) Nhiệm vụ LLM chạy theo lịch (tiếng Việt, cụ thể)' },
-          executor: { type: 'string', description: '(create_cron) Agent thực thi tác vụ: ""/bỏ = Automation Agent mặc định | tên agent vd "BOLT" | "team:code" — TL (Team Leader) của team sẽ điều phối triển khai toàn bộ tác vụ cho team đó' },
+          executor: { type: 'string', description: '(create_cron) Agent thực thi tác vụ: ""/bỏ = Automation Agent mặc định | tên agent vd "RAMPAGE" | "team:code" — TL (Team Leader) của team sẽ điều phối triển khai toàn bộ tác vụ cho team đó' },
           // webhook
           url: { type: 'string', description: '(create_webhook) URL đích HTTPS công khai' },
           events: { type: 'array', items: { type: 'string' }, description: '(create_webhook) Event đăng ký, vd ["document.uploaded","query.completed"] hoặc ["*"]' },
@@ -1755,7 +1755,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           payload: {
             type: 'object',
             description:
-              'Nội dung theo kind: cron={taskPrompt, schedule:{mode:"day"|"week"|"month", times:["09:30"], daysOfWeek?:[1,3], daysOfMonth?:[1,15], repeat:true|false}, executor?:""|"BOLT"|"team:code"} (schedule KHUYẾN KHÍCH — hoặc expression:"0 9 * * 1-5" nếu đặc biệt; executor=agent thực thi, "team:xxx" → TL điều phối toàn bộ tác vụ) | ' +
+              'Nội dung theo kind: cron={taskPrompt, schedule:{mode:"day"|"week"|"month", times:["09:30"], daysOfWeek?:[1,3], daysOfMonth?:[1,15], repeat:true|false}, executor?:""|"RAMPAGE"|"team:code"} (schedule KHUYẾN KHÍCH — hoặc expression:"0 9 * * 1-5" nếu đặc biệt; executor=agent thực thi, "team:xxx" → TL điều phối toàn bộ tác vụ) | ' +
               'webhook={url:"https://...", events:["document.uploaded"]} | ' +
               'standing_order={order:"chỉ thị...", priority:50} | task_flow={name:"...", description:"...", steps:[{type:"trigger",config:{kind:"cron",expression:"..."}},{type:"action",config:{kind:"agent_task",taskPrompt:"..."}}]}',
           },
@@ -3568,7 +3568,7 @@ async function executeCodeTeamRequestInner(
   if (tl.source === 'missing' || !tl.provider || !tl.model) {
     return {
       success: false,
-      error: tl.note || 'Không resolve được agent TL (APEX) — team code không thể huy động. Kiểm tra module Agents.',
+      error: tl.note || 'Không resolve được agent TL (MEGATRON) — team code không thể huy động. Kiểm tra module Agents.',
     }
   }
 
@@ -3848,7 +3848,7 @@ async function getManageToolsAgentMatrix(): Promise<Array<{ key: string; label: 
     }
   } catch { /* fail-open — bỏ qua */ }
   const { getAgentName } = await import('./agents')
-  for (const [pos, key] of [['TL', 'APEX'], ['G1', 'CORTEX'], ['G2-A', 'BOLT'], ['G2-B', 'SENTINEL'], ['G3', 'CATALYST']] as const) {
+  for (const [pos, key] of [['TL', 'MEGATRON'], ['G1', 'SHOCWAVE'], ['G2-A', 'RAMPAGE'], ['G2-B', 'SENTINEL'], ['G3', 'CATALYST']] as const) {
     try {
       matrix.push({ key, label: getAgentName(pos), tools: getAgentTools(pos) })
     } catch { /* fail-open */ }
@@ -3910,7 +3910,7 @@ async function executeManageTools(
     }
     const key = normalizeAgentKeyStrict(agentKey)
     if (!key) {
-      return { success: false, error: 'agentKey không hợp lệ — dùng: APEX|CORTEX|BOLT|SENTINEL|CATALYST|OMEGA|ALISTA|OPUS|NEW_AGENT' }
+      return { success: false, error: 'agentKey không hợp lệ — dùng: MEGATRON|SHOCWAVE|RAMPAGE|SENTINEL|CATALYST|OMEGA|ALISTA|OPUS|NEW_AGENT' }
     }
     if (!isBuiltinTool(toolName)) {
       return { success: false, error: `Tool "${toolName}" không phải builtin. Dùng list_tools để xem danh sách.` }

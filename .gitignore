@@ -85,6 +85,8 @@ worklog.md
 # chạy được `pm2 start ecosystem.config.cjs` (wrapper tự dọn orphan process giữ
 # port 3000 trước khi start, chống EADDRINUSE crash-loop).
 !/scripts/pm2-start.sh
+# NGOẠI LỆ: script test model NIM (user-facing — bun scripts/test-llm-model.ts)
+!/scripts/test-llm-model.ts
 
 # Tool results (dev artifacts)
 /tool-results/

@@ -42,7 +42,7 @@ export interface Finding {
   evidence: Record<string, unknown>
   /** Gợi ý giải pháp ngắn cho LLM phát triển thành văn proposal */
   direction: string
-  /** Target string dùng làm key phụ cho dedupe (vd 'grep', 'BOLT', 'embed') */
+  /** Target string dùng làm key phụ cho dedupe (vd 'grep', 'RAMPAGE', 'embed') */
   target: string
   /**
    * (v1.3) Tiêu chí xác nhận hiệu quả giải pháp — cấu trúc, machine-checkable.

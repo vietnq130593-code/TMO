@@ -186,7 +186,7 @@ describe("WorkspaceManager — PendingEdit lifecycle", () => {
       sessionId: testSessionId,
       filePath: "test.ts",
       newContent: 'export const hello = "universe";\nexport const version = 1;\n',
-      agentName: "BOLT",
+      agentName: "RAMPAGE",
       workspaceRootPath: tempDir,
     });
 
@@ -194,7 +194,7 @@ describe("WorkspaceManager — PendingEdit lifecycle", () => {
     expect(edit.sessionId).toBe(testSessionId);
     expect(edit.filePath).toBe("test.ts");
     expect(edit.status).toBe("pending");
-    expect(edit.agentName).toBe("BOLT");
+    expect(edit.agentName).toBe("RAMPAGE");
     expect(edit.diff).toContain("--- a/test.ts");
     expect(edit.diff).toContain("+++ b/test.ts");
     editId = edit.id;
@@ -321,7 +321,7 @@ describe("WorkspaceManager — FsCheckpoint", () => {
       sessionId: testSessionId,
       workspaceId: testWorkspaceId,
       commitHash: "abc123def456",
-      label: "before BOLT edit",
+      label: "before RAMPAGE edit",
     });
 
     expect(cp).not.toBeNull();
@@ -339,7 +339,7 @@ describe("WorkspaceManager — FsCheckpoint", () => {
       sessionId: testSessionId,
       workspaceId: testWorkspaceId,
       commitHash: "fed654cba321",
-      label: "after BOLT edit",
+      label: "after RAMPAGE edit",
     });
 
     const list = await wm.listCheckpoints(testSessionId);

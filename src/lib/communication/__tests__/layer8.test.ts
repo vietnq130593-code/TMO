@@ -37,7 +37,7 @@ describe('ProgressReporter (8.1)', () => {
         status: 'completed',
         progress: 25,
         message: 'Hoàn thành: Phân tích routing',
-        details: { agent: 'APEX', position: 'TL', step: 'analyze', duration: 5000, content: 'Routing: Mode B, Tier 2' },
+        details: { agent: 'MEGATRON', position: 'TL', step: 'analyze', duration: 5000, content: 'Routing: Mode B, Tier 2' },
       }
 
       const report = reporter.generateReport(input)

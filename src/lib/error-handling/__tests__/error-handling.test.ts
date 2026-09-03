@@ -28,7 +28,7 @@ const mockErrorClassification: ErrorClassification = {
 const mockWorklog: WorklogEntry[] = [
   {
     sessionId: 'test-session',
-    agentName: 'APEX',
+    agentName: 'MEGATRON',
     position: 'TL',
     step: 'analyze',
     timestamp: new Date(),

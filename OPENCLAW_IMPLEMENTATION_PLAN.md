@@ -87,7 +87,7 @@ apply_patch, sessions_spawn, sessions_send, cron, gateway, nodes
 ### ✅ Gateway hỗ trợ model override per request
 
 - Header `x-openclaw-model` cho phép chỉ định model cho mỗi request
-- Ví dụ: `x-openclaw-model: nvidia/qwen/qwen3.5-397b-a17b` → BOLT agent
+- Ví dụ: `x-openclaw-model: nvidia/qwen/qwen3.5-397b-a17b` → RAMPAGE agent
 - Không cần cấu hình mỗi agent riêng trong Gateway
 
 ### ✅ Gateway đã có NVIDIA NIM built-in provider

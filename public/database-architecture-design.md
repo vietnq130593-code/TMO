@@ -136,7 +136,7 @@ Code định nghĩa tại `prisma/schema.prisma` (688 dòng). Mỗi bảng có `
 | `DailyTokenByProvider` | Token theo provider (NVIDIA/Mistral/OpenRouter/Cerebras) | 0 |
 | `DailyTokenByProviderSlot` | Token theo từng key slot (4 keys × 4 providers = 16) | 0 |
 | `DailyTokenByProviderModel` | Token theo model (vd: llama-3.3-70b vs kimi-k2.6) | 0 |
-| `DailyTokenByAgent` | Token theo từng Agent (APEX, CORTEX, OMEGA, v.v.) | 0 |
+| `DailyTokenByAgent` | Token theo từng Agent (MEGATRON, SHOCWAVE, OMEGA, v.v.) | 0 |
 
 ### Nhóm 2: Knowledge Base Pipeline (3 bảng)
 | Bảng | Mục đích | Dòng |
@@ -155,7 +155,7 @@ Code định nghĩa tại `prisma/schema.prisma` (688 dòng). Mỗi bảng có `
 ### Nhóm 4: Agent Core (7 bảng) — Hồ sơ + phiên + kỹ năng + học hỏi
 | Bảng | Mục đích | Dòng |
 |---|---|---|
-| `AgentProfile` | Hồ sơ Agent (6: APEX, CORTEX, BOLT, SENTINEL, CATALYST, Omega) | **6** |
+| `AgentProfile` | Hồ sơ Agent (6: MEGATRON, SHOCWAVE, RAMPAGE, SENTINEL, CATALYST, Omega) | **6** |
 | `AgentSession` | Phiên chat giữa user và agent | 0 |
 | `AgentSkill` | Skill cài đặt (3: knowledge-search/graph/write) | **3** |
 | `AgentMemory` | Ký ức episodic từ hội thoại (lưu vector ở Qdrant) | 0 |

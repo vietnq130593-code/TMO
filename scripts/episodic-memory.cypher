@@ -44,7 +44,7 @@ CREATE INDEX errorocc_resolved IF NOT EXISTS FOR (e:ErrorOccurrence) ON (e.resol
 //   started_at: datetime(), ended_at: datetime(),
 //   outcome: "SUCCESS|FAILURE|PARTIAL|ABANDONED",
 //   confidence: 0.95,                     // độ tin đánh giá outcome
-//   agent: "OMEGA|BOLT|SENTINEL...",
+//   agent: "OMEGA|RAMPAGE|SENTINEL...",
 //   session_id: "sess_xyz",
 //   importance: 0.8,                      // 0-1, decay & retrieval ranking
 //   access_count: 3,                      // càng retrieve càng sống

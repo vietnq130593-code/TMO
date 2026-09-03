@@ -301,7 +301,7 @@ export function parseScheduleJson(json: string | null | undefined): CronSchedule
 /**
  * Executor lưu trong CronJob.executor:
  *   ''            → Automation Agent mặc định (generic, như cũ)
- *   'BOLT'        → agent cụ thể thực thi
+ *   'RAMPAGE'        → agent cụ thể thực thi
  *   'team:code'   → TEAM thực thi: TL (Team Leader) của team điều phối triển khai toàn bộ tác vụ
  */
 export function parseExecutor(executor: string | null | undefined): { type: 'default' | 'agent' | 'team'; value: string } {

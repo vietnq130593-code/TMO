@@ -410,7 +410,7 @@ model CronJob {
   // null = cron expression thô (legacy) — vẫn hoạt động như trước.
   /// Structured schedule config — null khi job dùng cron expression thô
   scheduleJson String?
-  /// Người thực thi: '' (Automation Agent mặc định) | tên agent ('BOLT') | 'team:code' (TL của team điều phối triển khai toàn bộ tác vụ)
+  /// Người thực thi: '' (Automation Agent mặc định) | tên agent ('RAMPAGE') | 'team:code' (TL của team điều phối triển khai toàn bộ tác vụ)
   executor    String   @default("")
 
   @@index([agentId])
@@ -720,7 +720,7 @@ model EmbeddingCache {
 model CodeTeamWorklog {
   id          String   @id @default(cuid())
   sessionId   String   /// Session ID (maps to AgentSession.sessionId)
-  agentName   String   /// APEX | CORTEX | BOLT | SENTINEL | CATALYST
+  agentName   String   /// MEGATRON | SHOCWAVE | RAMPAGE | SENTINEL | CATALYST
   position    String   /// TL | G1 | G2-A | G2-B | G3
   step        String   /// analyze | design | code | review | optimize | verify | routing
   summary     String   /// Tóm tắt những gì agent đã làm
@@ -1020,7 +1020,7 @@ model ToolMetric {
   toolName    String
   /// Session ID for correlation with chat sessions
   sessionId   String
-  /// Agent role: TL | CORTEX | BOLT | SENTINEL | CATALYST | INDEPENDENT
+  /// Agent role: TL | SHOCWAVE | RAMPAGE | SENTINEL | CATALYST | INDEPENDENT
   agentRole   String
   /// true if tool succeeded, false otherwise
   success     Boolean
@@ -1145,7 +1145,7 @@ model ArbiterVerdict {
 ///   - Max 100 active sessions per user → log warning (no FIFO eviction in sandbox)
 model WorkflowSession {
   id              String   @id @default(cuid())
-  /// TL | CORTEX | BOLT | SENTINEL | CATALYST (which agent owned the session)
+  /// TL | SHOCWAVE | RAMPAGE | SENTINEL | CATALYST (which agent owned the session)
   agentRole       String
   /// Original user request (so the resuming agent can re-read the task)
   taskDescription String
@@ -1478,7 +1478,7 @@ model DeletedSession {
 ///   (xóa row)     → về mặc định hardcoded
 model ToolAssignment {
   id        String   @id @default(cuid())
-  /// 'APEX'|'CORTEX'|'BOLT'|'SENTINEL'|'CATALYST'|'OMEGA'|'NEW_AGENT'
+  /// 'MEGATRON'|'SHOCWAVE'|'RAMPAGE'|'SENTINEL'|'CATALYST'|'OMEGA'|'NEW_AGENT'
   /// (NEW_AGENT = mọi agent động do Omega tạo — map 1 chiều tại tool-access.ts)
   agentKey  String
   toolName  String
@@ -1523,7 +1523,7 @@ model EpisodeRecord {
   outcome        String
   /// Độ tin của việc đánh giá outcome (evaluator confidence)
   confidence     Float     @default(0.5)
-  /// OMEGA | BOLT | SENTINEL...
+  /// OMEGA | RAMPAGE | SENTINEL...
   agent          String
   sessionId      String?
   /// 0-1 — dùng cho decay (×0.9/30 ngày không đụng) & retrieval ranking

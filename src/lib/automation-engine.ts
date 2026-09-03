@@ -225,7 +225,7 @@ export async function getActiveStandingOrders(): Promise<Array<{ order: string; 
  * Uses concurrency guard to prevent double execution.
  */
 // ─── Executor Resolution (user request 2026-09-14) ────────────────────────────
-// CronJob.executor: '' (Automation Agent mặc định) | 'BOLT' (agent cụ thể) |
+// CronJob.executor: '' (Automation Agent mặc định) | 'RAMPAGE' (agent cụ thể) |
 // 'team:code' (TEAM — TL là agent điều phối triển khai toàn bộ tác vụ)
 
 interface ExecutorContext {
@@ -357,7 +357,7 @@ function cronJobPostRunData(
  * Validate executor của CronJob (dùng chung cho API route + tool manage_automation
  * + automation proposals — dữ liệu đầu vào KHÔNG tin, kiểm tra DB thật):
  *   ''            → Automation Agent mặc định (luôn hợp lệ)
- *   'BOLT'        → phải là AgentProfile đang bật
+ *   'RAMPAGE'        → phải là AgentProfile đang bật
  *   'team:code'   → team phải có agent vị trí TL đang bật (TL điều phối)
  */
 export async function validateAutomationExecutor(

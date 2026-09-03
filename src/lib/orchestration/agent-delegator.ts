@@ -499,8 +499,8 @@ async function executeSubAgent(
     // 4. Execute the tool call (if any) and capture file receipts.
     //    Defense-in-depth (Task 12-AUDIT P2): reject toolName not in the
     //    sub-agent's allowlist. Without this, a prompt-injected LLM could
-    //    call a tool the sub-agent isn't entitled to (e.g., a BOLT-only tool
-    //    invoked from CORTEX). Mirrors the same guard that workflow-engine's
+    //    call a tool the sub-agent isn't entitled to (e.g., a RAMPAGE-only tool
+    //    invoked from SHOCWAVE). Mirrors the same guard that workflow-engine's
     //    parseToolCallsFromOutput should have — that's a separate concern;
     //    here we at least lock down the more-autonomous delegate path.
     if (toolName) {

@@ -94,11 +94,11 @@ export const DEFAULT_NEW_AGENT_TOOLS = [
   'propose_automation',
 ]
 
-/** 5 vị trí chuẩn của team code — RESERVED cho APEX/CORTEX/BOLT/SENTINEL/
+/** 5 vị trí chuẩn của team code — RESERVED cho MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/
  *  CATALYST (Code Team agents seed isSystem=false nên không check được qua
  *  flag — hard-reserve theo tên vị trí). Agent mới/Omega điều động dùng G4/G5. */
 const CODE_TEAM_RESERVED_POSITIONS = ['TL', 'G1', 'G2-A', 'G2-B', 'G3']
-const CODE_TEAM_STANDARD_NAMES = ['APEX', 'CORTEX', 'BOLT', 'SENTINEL', 'CATALYST']
+const CODE_TEAM_STANDARD_NAMES = ['MEGATRON', 'SHOCWAVE', 'RAMPAGE', 'SENTINEL', 'CATALYST']
 
 // ==================== HELPERS ====================
 
@@ -400,13 +400,13 @@ export async function createAgentByOmega(params: {
     if (!validPositions.includes(positionValue)) {
       return { success: false, error: `Position "${positionValue}" không hợp lệ cho team "${teamValue}". Chọn: ${validPositions.join(', ')}` }
     }
-    // Position reservation — 5 vị trí chuẩn team code là của APEX/CORTEX/BOLT/
+    // Position reservation — 5 vị trí chuẩn team code là của MEGATRON/SHOCWAVE/RAMPAGE/
     // SENTINEL/CATALYST (hard-reserve — Code Team agents isSystem=false nên
     // không thể check qua flag isSystem). Agent mới dùng G4/G5.
     if (teamValue === 'code' && CODE_TEAM_RESERVED_POSITIONS.includes(positionValue)) {
       return {
         success: false,
-        error: `Position "${positionValue}" của team code là vị trí chuẩn của Code Team (APEX/CORTEX/BOLT/SENTINEL/CATALYST). Agent mới vào team code dùng G4/G5 (vị trí mở rộng).`,
+        error: `Position "${positionValue}" của team code là vị trí chuẩn của Code Team (MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/CATALYST). Agent mới vào team code dùng G4/G5 (vị trí mở rộng).`,
       }
     }
   } else if (positionValue) {
@@ -587,13 +587,13 @@ export async function dispatchAgentByOmega(params: {
           return { success: false, mode: 'long_term', agent: profile.name, error: `Position "${newPosition}" không hợp lệ cho team "${newTeam}". Chọn: ${validPositions.join(', ')}` }
         }
         // 5 vị trí chuẩn team code là của Code Team chuẩn — trừ khi chính agent
-        // đang dispatch LÀ agent Code Team chuẩn (điều APEX về TL = no-op hợp lệ)
+        // đang dispatch LÀ agent Code Team chuẩn (điều MEGATRON về TL = no-op hợp lệ)
         if (newTeam === 'code' && CODE_TEAM_RESERVED_POSITIONS.includes(newPosition) && !CODE_TEAM_STANDARD_NAMES.includes(profile.name)) {
           return {
             success: false,
             mode: 'long_term',
             agent: profile.name,
-            error: `Position "${newPosition}" của team code là vị trí chuẩn của Code Team (APEX/CORTEX/BOLT/SENTINEL/CATALYST). Agent điều động vào team code dùng G4/G5 (vị trí mở rộng).`,
+            error: `Position "${newPosition}" của team code là vị trí chuẩn của Code Team (MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/CATALYST). Agent điều động vào team code dùng G4/G5 (vị trí mở rộng).`,
           }
         }
       }
