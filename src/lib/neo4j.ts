@@ -220,6 +220,12 @@ const globalForNeo4jFailLog = globalThis as unknown as {
   __neo4jLastFullErrorLoggedAt?: number
   __neo4jLastFailLineLoggedAt?: number
   __neo4jConsecutiveFailures?: number
+  /** Lỗi kết nối gần nhất (message thật) — health endpoint đọc để báo nguyên nhân
+   *  thật thay vì đoán mò. FIX 2026-09-03 (user report "Neo4j offline không rõ
+   *  lý do"): message cũ "DNS resolution failed" đã che khuất lỗi thật
+   *  "Unable to get a routing table for database 'neo4j' because this database
+   *  does not exist" — AuraDB đặt tên DB theo instance-id, network + auth OK. */
+  __neo4jLastError?: string
 }
 
 /**
@@ -232,6 +238,7 @@ function logNeo4jConnectFailure(context: string, err: unknown): void {
   const now = Date.now()
   const g = globalForNeo4jFailLog
   const message = err instanceof Error ? err.message : String(err)
+  g.__neo4jLastError = message // health endpoint hiển thị nguyên nhân thật
   g.__neo4jConsecutiveFailures = (g.__neo4jConsecutiveFailures ?? 0) + 1
 
   // Lần đầu tiên trong process (hoặc sau khi đã kết nối lại thành công) → FULL error
@@ -255,6 +262,7 @@ function resetNeo4jFailLogState(): void {
   g.__neo4jLastFullErrorLoggedAt = undefined
   g.__neo4jLastFailLineLoggedAt = undefined
   g.__neo4jConsecutiveFailures = undefined
+  g.__neo4jLastError = undefined // đã kết nối lại thành công → hết lỗi để báo
 }
 
 // ==================== LAZY DRIVER INITIALIZATION ====================
@@ -533,9 +541,19 @@ async function checkNeo4jHealthUncached(): Promise<Neo4jHealthResult> {
       driver = await getNeo4jDriver()
     }
     if (!driver) {
+      // FIX 2026-09-03: báo nguyên nhân THẬT (logNeo4jConnectFailure lưu) thay vì
+      // đoán mò "DNS resolution failed" — đoán này từng che khuất lỗi thật
+      // "database 'neo4j' does not exist" (AuraDB đặt tên DB theo instance-id)
+      // trong khi DNS + port Bolt + auth đều bình thường.
+      const realErr = globalForNeo4jFailLog.__neo4jLastError
+      const dbHint = realErr && /database .*does not exist/i.test(realErr)
+        ? ' (Kiểm tra NEO4J_DATABASE trong .env — AuraDB thường đặt tên DB theo instance-id, KHÔNG phải "neo4j")'
+        : ''
       return {
         connected: false,
-        error: 'Neo4j unreachable (DNS resolution failed or connection refused). Check if instance is running — AuraDB may be paused, or Desktop may not be started.',
+        error: realErr
+          ? `Neo4j unreachable — lỗi thật: ${realErr}${dbHint}`
+          : 'Neo4j unreachable (DNS resolution failed or connection refused). Check if instance is running — AuraDB may be paused, or Desktop may not be started.',
       }
     }
 

@@ -1794,7 +1794,13 @@ const nvidiaPool = new ProviderKeyPool('NVIDIA', [
 ])
 
 console.log(`[LLM] Provider pool: NVIDIA=${nvidiaPool.keyCount} keys (${NVIDIA_MODELS.length} models) — SINGLE PROVIDER`)
-console.log(`[LLM] NVIDIA: agent/chat kimi-k3 (chính) + FALLBACK CHAIN [${NVIDIA_AGENT_MODELS.slice(1).join(' → ')}] (user directive 2026-08-28) + 2 extraction cores (nemotron-550b chính → gpt-oss-120b fallback — kimi-k3 KHÔNG dùng cho extraction, user directive 2026-09-05)`)
+// Banner cấu hình chain — tắt khi LLM_QUIET_INIT=1 (scripts/test-llm-model.ts
+// set env này TRƯỚC khi dynamic import; user feedback 2026-09-03: trong output
+// test dòng này chỉ là nhiễu cấu hình, không mang thông tin kết quả test.
+// App runtime bình thường (không set env) vẫn log đầy đủ như cũ.
+if (!process.env.LLM_QUIET_INIT) {
+  console.log(`[LLM] NVIDIA: agent/chat kimi-k3 (chính) + FALLBACK CHAIN [${NVIDIA_AGENT_MODELS.slice(1).join(' → ')}] (user directive 2026-08-28) + 2 extraction cores (nemotron-550b chính → gpt-oss-120b fallback — kimi-k3 KHÔNG dùng cho extraction, user directive 2026-09-05)`)
+}
 
 // ==================== KIMI K3 MODEL POLICY + NVIDIA KEY ROTATION ====================
 // USER DIRECTIVE 2026-08-31: "mọi Agents, mọi tác vụ từ giờ sẽ sử dụng lõi Kimi k3,
