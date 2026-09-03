@@ -299,6 +299,36 @@ async function runRepoScript(
 
 // ==================== PIPELINE CHÍNH ====================
 
+/**
+ * FIX (2026-09-03, Task 24 — run#4 E2E): workspace KHÔNG phải JS repo (vd
+ * Python skill project chỉ có .py/.md/.yaml) → `bun run lint/typecheck/test`
+ * fail oan "không có package.json/script" → pipeline TỪ CHỐI push mặc dù 8/9
+ * bước agents đã ĐẠT và code không hề lỗi. Giờ: đọc package.json của workspace
+ * — thiếu script tương ứng thì bước đó SKIP (không FAIL): pipeline chỉ kiểm
+ * định những gì workspace CÓ (fail-open có kiểm soát, mirror semantics skip
+ * của bước smoke). JS repo đầy đủ script → hành vi giữ nguyên 100%.
+ */
+async function readWorkspaceRepoScripts(root: string): Promise<{
+  hasPackageJson: boolean
+  lint: boolean
+  typecheck: boolean
+  test: boolean
+}> {
+  try {
+    const pkgRaw = await fs.readFile(path.join(root, 'package.json'), 'utf-8')
+    const pkg = JSON.parse(pkgRaw) as { scripts?: Record<string, unknown> }
+    const scripts = pkg.scripts || {}
+    return {
+      hasPackageJson: true,
+      lint: typeof scripts.lint === 'string',
+      typecheck: typeof scripts.typecheck === 'string',
+      test: typeof scripts.test === 'string',
+    }
+  } catch {
+    return { hasPackageJson: false, lint: false, typecheck: false, test: false }
+  }
+}
+
 export async function runPrePushVerification(opts: {
   commitMessage: string
   paths?: string[]
@@ -321,6 +351,8 @@ export async function runPrePushVerification(opts: {
 
   const root = await resolveWorkspaceRoot()
   console.log(`[PRE-PUSH] Workspace root: ${root}`)
+  // FIX Task 24 (run#4): gate lint/typecheck/test theo script có thật trong workspace
+  const repoScripts = await readWorkspaceRepoScripts(root)
 
   /**
    * Chạy 1 bước tuần tự — fail hoặc throw → dừng TOÀN pipeline ngay tại đó
@@ -400,34 +432,70 @@ export async function runPrePushVerification(opts: {
   }
 
   // ── Bước 1: lint (script "lint" của repo — eslint .) ──
-  const lintOk = await step('lint', async () => {
-    const r = await runRepoScript(['run', 'lint'], root, LINT_TIMEOUT_MS)
-    return r.ok
-      ? { status: 'pass', detail: `bun run lint PASS${r.tail ? ` — ${r.tail}` : ''}` }
-      : { status: 'fail', detail: `bun run lint ${r.reason} — ${r.tail}` }
-  })
+  const lintOk = repoScripts.lint
+    ? await step('lint', async () => {
+        const r = await runRepoScript(['run', 'lint'], root, LINT_TIMEOUT_MS)
+        return r.ok
+          ? { status: 'pass', detail: `bun run lint PASS${r.tail ? ` — ${r.tail}` : ''}` }
+          : { status: 'fail', detail: `bun run lint ${r.reason} — ${r.tail}` }
+      })
+    : (steps.push({
+        name: 'lint',
+        status: 'skip',
+        detail: repoScripts.hasPackageJson
+          ? 'package.json không có script "lint" — bỏ qua'
+          : 'workspace không phải JS repo (không có package.json) — bỏ qua lint',
+      }),
+      console.log(
+        `[PRE-PUSH] ⊘ lint SKIP — ${repoScripts.hasPackageJson ? 'package.json không có script "lint"' : 'workspace không phải JS repo'}`,
+      ),
+      true)
   if (!lintOk) {
     return { success: false, steps, error: 'Bước lint thất bại — TỪ CHỐI push' }
   }
 
   // ── Bước 2: type_check (script "typecheck" của repo — tsc --noEmit) ──
-  const typeOk = await step('type_check', async () => {
-    const r = await runRepoScript(['run', 'typecheck'], root, TYPECHECK_TIMEOUT_MS)
-    return r.ok
-      ? { status: 'pass', detail: `bun run typecheck PASS${r.tail ? ` — ${r.tail}` : ''}` }
-      : { status: 'fail', detail: `bun run typecheck ${r.reason} — ${r.tail}` }
-  })
+  const typeOk = repoScripts.typecheck
+    ? await step('type_check', async () => {
+        const r = await runRepoScript(['run', 'typecheck'], root, TYPECHECK_TIMEOUT_MS)
+        return r.ok
+          ? { status: 'pass', detail: `bun run typecheck PASS${r.tail ? ` — ${r.tail}` : ''}` }
+          : { status: 'fail', detail: `bun run typecheck ${r.reason} — ${r.tail}` }
+      })
+    : (steps.push({
+        name: 'type_check',
+        status: 'skip',
+        detail: repoScripts.hasPackageJson
+          ? 'package.json không có script "typecheck" — bỏ qua'
+          : 'workspace không phải JS repo — bỏ qua type_check',
+      }),
+      console.log(
+        `[PRE-PUSH] ⊘ type_check SKIP — ${repoScripts.hasPackageJson ? 'package.json không có script "typecheck"' : 'workspace không phải JS repo'}`,
+      ),
+      true)
   if (!typeOk) {
     return { success: false, steps, error: 'Bước type_check thất bại — TỪ CHỐI push' }
   }
 
   // ── Bước 3: run_tests (script "test" của repo — bun test trên DB test cô lập) ──
-  const testsOk = await step('run_tests', async () => {
-    const r = await runRepoScript(['run', 'test'], root, TESTS_TIMEOUT_MS)
-    return r.ok
-      ? { status: 'pass', detail: `bun run test PASS${r.tail ? ` — ${r.tail}` : ''}` }
-      : { status: 'fail', detail: `bun run test ${r.reason} — ${r.tail}` }
-  })
+  const testsOk = repoScripts.test
+    ? await step('run_tests', async () => {
+        const r = await runRepoScript(['run', 'test'], root, TESTS_TIMEOUT_MS)
+        return r.ok
+          ? { status: 'pass', detail: `bun run test PASS${r.tail ? ` — ${r.tail}` : ''}` }
+          : { status: 'fail', detail: `bun run test ${r.reason} — ${r.tail}` }
+      })
+    : (steps.push({
+        name: 'run_tests',
+        status: 'skip',
+        detail: repoScripts.hasPackageJson
+          ? 'package.json không có script "test" — bỏ qua'
+          : 'workspace không phải JS repo — bỏ qua run_tests',
+      }),
+      console.log(
+        `[PRE-PUSH] ⊘ run_tests SKIP — ${repoScripts.hasPackageJson ? 'package.json không có script "test"' : 'workspace không phải JS repo'}`,
+      ),
+      true)
   if (!testsOk) {
     return { success: false, steps, error: 'Bước run_tests thất bại — TỪ CHỐI push' }
   }

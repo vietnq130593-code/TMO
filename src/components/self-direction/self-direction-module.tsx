@@ -674,14 +674,22 @@ export default function SelfDirectionModule() {
   )
 
   // ==================== Deploy ngay / Thử lại ====================
-
+  // FIX (2026-09-03, Task 24 — user directive "từ giờ không push code", giai
+  // đoạn thử nghiệm): UI deploy mặc định DRY-RUN — orchestration + tools +
+  // pipeline kiểm định chạy THẬT nhưng KHÔNG commit/push workspace (workspace
+  // đang trỏ remote về repo TMO app — push thật sẽ bẩn repo app trong lúc
+  // test). Muốn push thật: gọi API trực tiếp POST /deploy body {"dryRun": false}.
   const deployProposal = useCallback(
     async (p: SdProposal) => {
       const key = `deploy:${p.id}`
       if (busyRef.current[key]) return
       markBusy(key)
       try {
-        const res = await fetch(`/api/self-direction/proposals/${p.id}/deploy`, { method: 'POST' })
+        const res = await fetch(`/api/self-direction/proposals/${p.id}/deploy`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dryRun: true }),
+        })
         if (!res.ok) throw new Error(await readApiError(res))
         const data = (await res.json().catch(() => ({}))) as { ok?: boolean; proposal?: SdProposal }
         if (data.proposal) {
@@ -689,8 +697,8 @@ export default function SelfDirectionModule() {
           setProposals((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))
         }
         toast({
-          title: 'Đã kích hoạt triển khai',
-          description: 'Omega bắt đầu triển khai đề xuất này',
+          title: 'Đã kích hoạt triển khai (dry-run)',
+          description: 'Omega bắt đầu triển khai — chạy thật nhưng KHÔNG commit/push workspace',
         })
         void fetchList(true)
       } catch (err) {
@@ -1377,13 +1385,14 @@ export default function SelfDirectionModule() {
                                 className="h-7 px-2.5 text-[11px] text-amber-300 hover:text-amber-200 hover:bg-amber-950/30"
                                 onClick={() => void deployProposal(p)}
                                 disabled={deploying}
+                                title="Chạy orchestration + tools thật, KHÔNG commit/push workspace"
                               >
                                 {deploying ? (
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                 ) : (
                                   <Play className="h-3.5 w-3.5" />
                                 )}
-                                Triển khai ngay
+                                Triển khai ngay (dry-run)
                               </Button>
                             </div>
                           )}
@@ -1396,13 +1405,14 @@ export default function SelfDirectionModule() {
                                 className="h-7 px-2.5 text-[11px] bg-amber-600 hover:bg-amber-500 text-stone-950 font-semibold"
                                 onClick={() => void deployProposal(p)}
                                 disabled={deploying}
+                                title="Chạy orchestration + tools thật, KHÔNG commit/push workspace"
                               >
                                 {deploying ? (
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                 ) : (
                                   <Play className="h-3.5 w-3.5" />
                                 )}
-                                Triển khai ngay
+                                Triển khai ngay (dry-run)
                               </Button>
                             </div>
                           )}
@@ -1419,13 +1429,14 @@ export default function SelfDirectionModule() {
                                 className="h-7 px-2.5 text-[11px] border-red-500/40 text-red-300 hover:bg-red-950/30"
                                 onClick={() => void deployProposal(p)}
                                 disabled={deploying}
+                                title="Chạy lại orchestration (dry-run — không commit/push workspace)"
                               >
                                 {deploying ? (
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                 ) : (
                                   <RotateCcw className="h-3.5 w-3.5" />
                                 )}
-                                Thử lại
+                                Thử lại (dry-run)
                               </Button>
                             </div>
                           )}

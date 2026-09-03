@@ -63,7 +63,7 @@ import { runPrePushVerification, type PrePushResult } from '@/lib/code-team/pre-
 // định hướng vào system prompt của bước code-workflow.
 import { resolveWorkspaceRoot } from '@/lib/code-team/workspace-root'
 import { readdir } from 'fs/promises'
-import { parseToolCallsFromOutput, formatMessagesForLLM } from '@/lib/tool-calls'
+import { parseToolCallsFromOutput, formatMessagesForLLM, extractToolCallsWithDiagnostics, detectBrokenToolCallHint } from '@/lib/tool-calls'
 import { Prisma } from '@prisma/client'
 // USER DECISION #3 (2026-09-30): ủy quyền phê duyệt SELF-DIRECTION chuyển từ
 // Omega sang OPUS (CTO). Import persona Opus cho 3 vai trò ủy quyền: duyệt đề
@@ -105,7 +105,11 @@ const OMEGA_FALLBACK_BRAIN = { provider: 'nvidia', model: 'moonshotai/kimi-k3' }
 // trip breaker cho lõi hang nên phần lớn call trở lại tốc độ ~giây.
 const LLM_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.SD_LLM_TIMEOUT_MS || '600000', 10) || 600_000)
 const MAX_PLAN_STEPS = 12
-const MAX_STEP_ATTEMPTS = 3
+// FIX (2026-09-03, Task 24 — run#3 E2E): 3 attempts là MỖI attempt tích lũy file
+// thật vào workspace (RAMPAGE bước 4 đạt ở lần 2 nhờ file lần 1 giữ lại) — thêm
+// attempt 4 tăng xác suất hoàn tất bước implementation lớn mà không tăng rủi ro
+// (mỗi attempt có evaluator gate riêng, không phóng tự do).
+const MAX_STEP_ATTEMPTS = 4
 
 // ==================== CI-6 B5 — CODE-WORKFLOW (thực thi code THẬT trong workspace) ====================
 
@@ -119,9 +123,13 @@ const MAX_STEP_ATTEMPTS = 3
 
 /** Bước cuối code-workflow: marker trong title (giao Omega) */
 const VERIFY_AND_PUSH_TITLE_RE = /verify_and_push|pipeline|kiểm định/i
-/** Trần an toàn cho ReAct loop 1 bước code-workflow (guard chống loop vô hạn) */
-const SD_CODE_STEP_MAX_TOOL_CALLS = 8
-const SD_CODE_STEP_MAX_TURNS = 6
+/** Trần an toàn cho ReAct loop 1 bước code-workflow (guard chống loop vô hạn).
+ * FIX (2026-09-03, Task 24 — quan sát E2E): 8 calls / 6 turns quá chặt — agent
+ * tốn 2-4 call khảo sát (file_list/file_read) + cần 2-4 call ghi file; hết
+ * ngân sách giữa chừng → bỏ dở implementation → evaluator fail (3 attempts
+ * đều thế). Nới lên 12 calls / 8 turns (mỗi turn ~5-25s ZAI — chấp nhận được). */
+const SD_CODE_STEP_MAX_TOOL_CALLS = 12
+const SD_CODE_STEP_MAX_TURNS = 8
 /** Cap ký tự tool-result đẩy vào conversation (chống context nổ) */
 const SD_CODE_TOOL_RESULT_CAP = 4000
 /**
@@ -724,9 +732,10 @@ Viết báo cáo output của bạn.`
 // ==================== 3b. EXECUTE CODE-WORKFLOW — ReAct với TOOL THẬT (CI-6 B5) ====================
 
 /**
- * LLM call cho ReAct loop code-workflow: callLLMForAgent (persona brain) —
- * chuỗi NVIDIA model-first (kimi-k3 → fallback chain). z-ai-sdk fallback
- * đã gỡ (2026-10-15) — LLM fail trả null, caller tổng hợp output trung thực.
+ * LLM call cho ReAct loop code-workflow: callLLMForAgent (persona brain). Khi
+ * LLM_PROVIDER=zai (Task 21) callLLMForAgent route qua z-ai-sdk (glm-4-plus,
+ * ~1s); mặc định đi chuỗi NVIDIA model-first (kimi-k3 → fallback chain). LLM
+ * fail trả null — caller tổng hợp output trung thực.
  */
 async function callStepBrain(params: {
   prompt: string
@@ -741,7 +750,11 @@ async function callStepBrain(params: {
       callLLMForAgent(prompt, brain, systemPrompt, {
         agentName,
         temperature: 0.4,
-        maxTokens: 1400,
+        // FIX (2026-09-03, Task 24 — quan sát E2E): 1400 tokens KHÔNG đủ phát
+        // file_write có nội dung code (200-400 dòng ≈ 3-5K tokens) → output bị
+        // cắt cụt giữa JSON → parser drop → agent tưởng đã ghi file. Nới lên
+        // 4000 (đủ 1 file vừa + text quanh; file to vẫn phải chia append).
+        maxTokens: 4000,
       }),
       LLM_TIMEOUT_MS,
       `${label} (${agentName}) (NVIDIA chain)`,
@@ -822,13 +835,28 @@ ${workspaceHint}
 Cú pháp tool call (1 hoặc nhiều trong 1 lượt, mỗi call 1 dòng):
 tool_call: tên_tool({"tham_số": "giá trị"})
 
-Tools khả dụng: ${[...SD_CODE_TOOL_ALLOWLIST].join(', ')}.
+Tools khả dụng + THAM SỐ BẮT BUỘC:
+- file_read({"path": "...", "offset"?: 1, "limit"?: 2000}) — đọc file (path bắt buộc).
+- file_list({"path": "."}) — liệt kê thư mục.
+- file_write({"path": "...", "content": "...", "mode"?: "overwrite"|"append"}) — tạo/ghi file. NỘI DUNG CODE NHIỀU DÒNG: DÙNG FORMAT FENCE-BLOCK (bên dưới) thay vì nhét code vào JSON string (phải escape \n + mọi dấu " — rất hay lỗi).
+- file_edit({"path": "...", "old_str": "...", "new_str": "..."}) — sửa file hiện có (old_str phải khớp CHÍNH XÁC đoạn gốc).
+- grep({"pattern": "...", "path"?: "."}) — tìm text trong workspace.
+- shell({"command": "..."}) — chạy lệnh (KHÔNG git commit/push/pull).
+- git_status() / git_diff() / git_log() — xem trạng thái git (KHÔNG tham số).
+- lint() / type_check() / run_tests() — kiểm định.
+
+FORMAT FENCE-BLOCK cho file_write (KHUYÊN DÙNG khi ghi file code — không cần escape gì cả):
+tool_call: file_write({"path": "duong/dan/file.py", "mode": "overwrite"})
+\`\`\`python
+<nội dung file GỐC — nhiều dòng, dấu " tự do, KHÔNG cần escape>
+\`\`\`
 
 Quy tắc:
 - Đọc file trước khi sửa (file_read). Tạo file mới/file lớn: file_write chia phần (~200-400 dòng/lần, lần đầu mode "overwrite", các lần sau "append").
 - KHÔNG commit/push/pull (bị chặn ở bước này) — pipeline kiểm định ở bước CUỐI sẽ commit + push mọi thay đổi.
 - Giới hạn ${SD_CODE_STEP_MAX_TOOL_CALLS} tool call cho bước này — làm phần việc CHÍNH, gọn.
-- Xong (hoặc hết ngân sách): viết báo cáo output text thuần (KHÔNG tool_call, ~150 từ): đã làm gì, file nào đã sửa/tạo (đường dẫn), bằng chứng kiểm chứng (lint/type_check/file_read), còn vấn đề gì.`
+- ⚠️ TRUNG THỰC tuyệt đối về bằng chứng: CHỈ được khai "đã tạo/sửa file X" khi BẠN VỪA gọi file_write/file_edit cho X TRONG BƯỚC NÀY và tool trả success. Tool receipt là bằng chứng DUY NHẤT người đánh giá tin — khai file không có receipt = thất bại trắng (bước bị đánh fail). File do bước TRƯỚC tạo KHÔNG phải thành quả của bạn.
+- Xong (hoặc hết ngân sách): viết báo cáo output TEXT THUẦN (~150 từ, KHÔNG JSON, KHÔNG format report của persona — ghi đè format đó cho nhiệm vụ này): đã làm gì, file nào đã sửa/tạo bằng tool THÀNH CÔNG (đường dẫn), bằng chứng kiểm chứng (lint/type_check/file_read), còn vấn đề gì.`
 
   const handover = previousOutputs.length > 0
     ? previousOutputs.map(p => `• [Bước "${p.title}"]: ${p.output.slice(0, 400)}`).join('\n')
@@ -858,6 +886,12 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
   // ReAct loop chết vì LLM (không còn output rỗng → evaluateStep không rơi vào
   // fail-open mù "output trống lần cuối, chấp nhận để mở kẹt pipeline").
   let llmFailTurns = 0
+  // FIX (2026-09-03, Task 24): số lần đẩy broken-tool-call feedback — cap 3
+  // chống LLM lặp vô hạn format sai.
+  let brokenCallFeedbacks = 0
+  // FIX (2026-09-03, Task 24 — run#3): số nudge "tiếp tục đi, chưa xong thì
+  // đừng kết luận" — cap 2/attempt.
+  let incompleteNudges = 0
 
   for (let turn = 1; turn <= SD_CODE_STEP_MAX_TURNS; turn++) {
     const formatted = formatMessagesForLLM(messages)
@@ -875,8 +909,41 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
     lastAssistant = content
     messages.push({ role: 'assistant', content })
 
-    const toolCalls = parseToolCallsFromOutput(content)
+    const { calls: toolCalls, parseFailures } = extractToolCallsWithDiagnostics(content)
     if (toolCalls.length === 0) {
+      // FIX (2026-09-03, Task 24 — ROOT CAUSE failure run#2 "Mở rộng thư viện
+      // kỹ năng"): output CÓ dấu hiệu tool_call nhưng parse fail (JSON lỗi vì
+      // code nhiều dòng nhét trong string / bị cắt maxTokens) → trước đây rơi
+      // vào nhánh này, output = content (chứa tool_call dở) được coi là BÁO CÁO
+      // CUỐI → agent tưởng đã ghi file, evaluator thấy 0 file_write → fail.
+      // Giờ: đẩy feedback hướng dẫn phát lại (kể cả format fence-block) và
+      // TIẾP TỤC vòng ReAct thay vì kết luận. Feedback giới hạn 3 lần (chống
+      // LLM lặp vô hạn — sau đó chấp nhận làm output như cũ).
+      const hint = detectBrokenToolCallHint(content)
+      if (hint && brokenCallFeedbacks < 3) {
+        brokenCallFeedbacks++
+        messages.push({ role: 'user', content: hint })
+        continue
+      }
+      // FIX (2026-09-03, Task 24 — run#3 E2E): agent KẾT LUẬN SỚM với tự thừa
+      // nhận việc chưa xong (BOLT bước 5: "chưa triển khai code... cần tiếp
+      // tục triển khai" — rồi dừng luôn, không làm tiếp) → bước fail dù còn
+      // budget/turns. Nếu output tự nhận CHƯA HOÀN THÀNH + còn ngân sách →
+      // đẩy nudge TIẾP TỤC thay vì chấp nhận kết luận. Cap 2 nudge/attempt.
+      const admitsIncomplete = /(chưa\s+(?:triển\s*khai|tạo|được\s+(?:tạo|viết)|xong|hoàn\s*thành|làm)|cần\s+(?:tiếp\s*tục|bổ\s*sung))/i.test(content)
+      if (
+        admitsIncomplete &&
+        incompleteNudges < 2 &&
+        toolCallsLog.length < SD_CODE_STEP_MAX_TOOL_CALLS - 2 &&
+        turn < SD_CODE_STEP_MAX_TURNS
+      ) {
+        incompleteNudges++
+        messages.push({
+          role: 'user',
+          content: '⚠️ Báo cáo của bạn THỪA NHẬN công việc CHƯA hoàn thành — KHÔNG kết luận lúc này. TIẾP TỤC thực hiện NGAY bằng tool_call (ghi file bằng file_write — dùng format fence-block cho code nhiều dòng, chia append nếu dài; file_edit cho file có sẵn). Chỉ viết báo cáo cuối khi phần việc CHÍNH của bước đã xong THẬT (có tool receipt).',
+        })
+        continue
+      }
       output = content // agent đã kết luận — báo cáo text thuần
       break
     }
@@ -918,6 +985,15 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
       messages.push({
         role: 'user',
         content: '⚠️ Đã dùng hết ngân sách tool call của bước. Viết báo cáo output cuối NGAY (text thuần, KHÔNG tool_call): đã làm gì, file đã sửa, bằng chứng, còn thiếu gì.',
+      })
+    } else if (parseFailures > 0 && brokenCallFeedbacks < 2) {
+      // FIX (2026-09-03, Task 24): 1 số tool call parse được nhưng CÓ call bị
+      // drop (JSON lỗi/cắt cụt) — nhắc agent biết có call chưa chạy (tránh
+      // tưởng mọi lệnh đã thực thi) + dạy format phát lại an toàn.
+      brokenCallFeedbacks++
+      messages.push({
+        role: 'user',
+        content: `⚠️ Lưu ý: ${parseFailures} tool call trong lượt vừa rồi bị LỖI JSON/cắt cụt → KHÔNG được thực thi (các call hợp lệ đã chạy phía trên). Nếu call bị drop đó còn cần cho công việc, hãy phát lại — file_write nhiều dòng nên dùng fence-block.`,
       })
     }
   }
