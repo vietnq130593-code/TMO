@@ -251,7 +251,16 @@ async function callBrain(params: {
   } catch (err) {
     console.warn(`[SelfDirection] ${label}: chuỗi LLM lỗi (timeout/backend):`, err instanceof Error ? err.message : String(err))
   }
-  throw new Error(`${label}: mọi LLM backend đều thất bại (chuỗi NVIDIA kimi-k3 → fallback chain — kiểm tra NVIDIA_API_KEY_1..4 trong .env)`)
+  throw new Error(`${label}: mọi LLM backend đều thất bại (provider hiện tại: ${isZaiEnabledText()} — kiểm tra 429 rate limit / key / timeout)`)
+}
+
+/** Lượt quan sát 3: nhánh text lỗi nêu đúng provider đang dùng (zai vs NIM) —
+ *  tránh mổ xẻ log lại "chuỗi NVIDIA" khi thực chất ZAI 429. */
+function isZaiEnabledText(): string {
+  const v = (process.env.LLM_PROVIDER || '').trim().toLowerCase()
+  return v === 'zai' || v === 'zai-sdk' || v === 'z-ai'
+    ? 'z-ai-sdk (LLM_PROVIDER=zai — GLM gateway, có 429 backoff retry)'
+    : 'chuỗi NVIDIA kimi-k3 → fallback chain (kiểm tra NVIDIA_API_KEY_1..4 trong .env)'
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -1094,7 +1103,7 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
     // trống + rõ nguyên nhân → step failed đúng nghĩa, KHÔNG đánh lừa completed.
     output = toolCallsLog.length > 0
       ? `Đã thực thi ${toolCallsLog.length} tool call trong workspace thật (${toolCallsLog.filter(t => t.success).length} thành công): ${toolCallsLog.map(t => `${t.tool}${t.success ? '✓' : '✗'}${t.detail ? `(${t.detail})` : ''}`).join(', ')}. Agent không viết báo cáo tổng kết (hết lượt LLM) — xem chi tiết tool receipts trong workspaceReceipt.`
-      : lastAssistant || `[${step.assignee} chưa tạo được output do LLM call thất bại${llmFailTurns > 0 ? ` (${llmFailTurns} lượt fail — chuỗi NVIDIA kimi-k3 → fallback chain đều lỗi, kiểm tra NVIDIA_API_KEY_1..4 trong .env / timeout / model)` : ''} — cần retry]`
+      : lastAssistant || `[${step.assignee} chưa tạo được output do LLM call thất bại${llmFailTurns > 0 ? ` (${llmFailTurns} lượt fail — ${isZaiEnabledText()})` : ''} — cần retry]`
   }
   console.log(`[SelfDirection] CodeStep ${step.stepOrder} [${step.assignee}] thực thi THẬT ${toolCallsLog.length} tool call (${toolCallsLog.filter(t => t.success).length} ok)${llmFailTurns > 0 ? ` — ${llmFailTurns} lượt LLM fail` : ''}`)
   return {
@@ -1235,6 +1244,7 @@ ${params.output.slice(0, 2000)}
 
 Đánh giá (JSON).`
 
+  let evalErrMsg = ''
   try {
     const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 350, temperature: 0.2, label: `StepEval ${params.step.stepOrder}` })
     const jsonStr = findBalancedJson(raw.replace(/```(?:json)?/g, ''), 'complete')
@@ -1250,6 +1260,10 @@ ${params.output.slice(0, 2000)}
     }
   } catch (err) {
     console.warn('[SelfDirection] StepEval lỗi — KHÔNG auto-accept mù:', err instanceof Error ? err.message : String(err))
+    // Lượt quan sát 3: giữ nguyên nhân LLM lỗi (429/timeout) vào evaluation —
+    // (1) attempt-loop phát hiện provider-failure để backoff thay vì đốt
+    //     attempt tức thời, (2) user nhìn thấy lý do thật trong UI.
+    evalErrMsg = err instanceof Error ? err.message : String(err)
   }
   // ━━ USER REQUEST (2026-09-02): KHÔNG fail-open auto-accept mù ━━
   // Trước đây: Opus/Omega không đánh giá được → complete:true (accept output mù)
@@ -1270,7 +1284,12 @@ ${params.output.slice(0, 2000)}
   // Còn lại: KHÔNG accept — retry với feedback cảnh báo
   return {
     complete: false,
-    evaluation: tagEvaluation(reviewerName, `(không đánh giá được — KHÔNG chấp nhận mù, cần agent làm lại output chất lượng hơn)`),
+    evaluation: tagEvaluation(
+      reviewerName,
+      evalErrMsg
+        ? `(không đánh giá được — LLM lỗi: ${evalErrMsg.slice(0, 220)} — KHÔNG chấp nhận mù, cần agent làm lại output chất lượng hơn)`
+        : `(không đánh giá được — KHÔNG chấp nhận mù, cần agent làm lại output chất lượng hơn)`,
+    ),
   }
 }
 
@@ -1714,6 +1733,16 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
         console.log(`[SelfDirection] Bước ${i + 1}/${totalSteps} "${stepDef.title}" [${stepDef.assignee}] ĐẠT (lần ${attempt})`)
       } else {
         console.warn(`[SelfDirection] Bước ${i + 1}/${totalSteps} [${stepDef.assignee}] CHƯA ĐẠT (lần ${attempt}): ${lastEvaluation.slice(0, 150)}`)
+        // ── Lượt quan sát 3 (2026-09-04): LỖI PROVIDER ≠ lỗi chất lượng —
+        // không đốt 4 attempts trong 1 giây khi z-ai gateway 429/timeout.
+        // Phát hiện qua output (LLM unavailable/thất bại) hoặc evaluation
+        // (mọi LLM backend đều thất bại) → chờ backoff trước attempt kế tiếp.
+        const providerFail = /mọi LLM backend đều thất bại|LLM call thất bại|LLM unavailable|status 429|too many requests|rate.?limit/i.test(`${lastOutput}\n${lastEvaluation}`)
+        if (providerFail && attempt < MAX_STEP_ATTEMPTS) {
+          const waitMs = Math.min(30_000, 10_000 * attempt)
+          console.warn(`[SelfDirection] Bước ${i + 1} fail do LLM PROVIDER (429/timeout) — chờ ${Math.round(waitMs / 1000)}s trước lần thử ${attempt + 1} (backoff) thay vì đốt attempt tức thời`)
+          await new Promise(r => setTimeout(r, waitMs))
+        }
         if (attempt < MAX_STEP_ATTEMPTS) {
           await db.proposalStep.update({
             where: { id: stepRow.id },

@@ -3651,6 +3651,42 @@ async function getZaiSdkInstance(): Promise<ZaiSdkInstance | null> {
   return g.__tmoZaiInitPromise
 }
 
+// ==================== ZAI RATE-LIMIT DEFENSE (lượt quan sát 3 — 2026-09-04) ====================
+// Hiện tượng: b03sdel5 fail 3 attempt CÙNG 1 GIÂY (18:08:22) — z-ai gateway
+// burst-limit 429 "Too many requests" khi 2 orchestration chạy song song
+// (~10 call/19s). Trước đây 429 bubble thẳng lên caller → đốt hết attempt
+// budget tức thời. Fix 2 lớp:
+//   (a) Pacing: min-interval giữa START 2 request liên tiếp (chống burst)
+//   (b) 429-aware retry: exponential backoff 5s→10s→20s (+jitter) — 429 là
+//       transient "try again later", chờ rồi retry là đúng ngữ nghĩa.
+function zaiRateLimits(): { minIntervalMs: number; max429Retries: number; backoffBaseMs: number } {
+  return {
+    minIntervalMs: Math.max(0, parseInt(process.env.ZAI_MIN_INTERVAL_MS || '1200', 10)),
+    max429Retries: Math.max(0, parseInt(process.env.ZAI_429_MAX_RETRIES || '3', 10)),
+    backoffBaseMs: Math.max(500, parseInt(process.env.ZAI_429_BACKOFF_MS || '5000', 10)),
+  }
+}
+
+/** Pacing gate — serialize START của các request ZAI cách nhau ≥ minIntervalMs
+ *  (state trên globalThis — Turbopack tách module instance theo route-graph). */
+async function acquireZaiPacingSlot(taskLabel: string): Promise<void> {
+  const { minIntervalMs } = zaiRateLimits()
+  if (minIntervalMs === 0) return
+  const g = globalThis as unknown as { __tmoZaiLastReqAt?: number; __tmoZaiPaceChain?: Promise<void> }
+  const run = async () => {
+    const wait = (g.__tmoZaiLastReqAt ?? 0) + minIntervalMs - Date.now()
+    if (wait > 0) await new Promise(r => setTimeout(r, wait))
+    g.__tmoZaiLastReqAt = Date.now()
+  }
+  g.__tmoZaiPaceChain = (g.__tmoZaiPaceChain ?? Promise.resolve()).then(run, run)
+  await g.__tmoZaiPaceChain
+  void taskLabel
+}
+
+function isRateLimitError(msg: string): boolean {
+  return /status 429|too many requests|rate.?limit/i.test(msg)
+}
+
 /**
  * Gọi z-ai-sdk khi LLM_PROVIDER=zai. Trả về:
  *   - LLMResult THÀNH CÔNG (content + token tracking đầy đủ)
@@ -3658,6 +3694,11 @@ async function getZaiSdkInstance(): Promise<ZaiSdkInstance | null> {
  *     thấy nguyên nhân NGAY, không đốt thêm ~460s chuỗi NIM đang outage
  *   - null khi sdk KHÔNG khả dụng (chưa cài / thiếu config) → caller fall
  *     về chuỗi NIM mặc định (bảo vệ máy local không set LLM_PROVIDER)
+ *
+ * Lượt quan sát 3: 429 → retry backoff (5s→10s→20s + jitter, tối đa
+ * ZAI_429_MAX_RETRIES=3 lần); mỗi request vào qua pacing gate
+ * (ZAI_MIN_INTERVAL_MS=1200 mặc định). abortCheck được kiểm lại sau mỗi
+ * lần chờ — user bấm Dừng không bị kẹt trong vòng retry.
  */
 async function callZaiProvider(
   prompt: string,
@@ -3666,11 +3707,7 @@ async function callZaiProvider(
   options: LLMCallOptions | undefined,
   callerKind: 'agent' | 'chat' | 'utility' | 'extraction',
 ): Promise<LLMResult | null> {
-  // Người dùng bấm Dừng → không đốt call
-  if (options?.abortCheck && options.abortCheck()) {
-    return { content: '', provider: 'zai-sdk', model: 'zai', error: `Task "${taskLabel}" aborted by user` }
-  }
-
+  const { max429Retries, backoffBaseMs } = zaiRateLimits()
   const sdk = await getZaiSdkInstance()
   if (!sdk) return null
 
@@ -3680,8 +3717,16 @@ async function callZaiProvider(
     { role: 'user', content: sanitizeLoneSurrogates(prompt) },
   ]
 
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
+  for (let attempt429 = 0; ; attempt429++) {
+    // Người dùng bấm Dừng → không đốt call (kiểm lại sau mỗi backoff)
+    if (options?.abortCheck && options.abortCheck()) {
+      return { content: '', provider: 'zai-sdk', model: 'zai', error: `Task "${taskLabel}" aborted by user` }
+    }
+
+    await acquireZaiPacingSlot(taskLabel)
+
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
     const res = (await Promise.race([
       sdk.chat.completions.create({
         messages,
@@ -3737,9 +3782,17 @@ async function callZaiProvider(
   } catch (err) {
     if (timer) clearTimeout(timer)
     const msg = err instanceof Error ? err.message : String(err)
+    // ── Lượt quan sát 3: 429 là transient — backoff + retry thay vì bubble
+    if (isRateLimitError(msg) && attempt429 < max429Retries) {
+      const waitMs = backoffBaseMs * 2 ** attempt429 + Math.floor(Math.random() * 700)
+      console.warn(`[ZAI] ${callerKind}:"${taskLabel}" 429 rate-limit (lần ${attempt429 + 1}/${max429Retries}) — retry sau ${Math.round(waitMs / 100) / 10}s`)
+      await new Promise(r => setTimeout(r, waitMs))
+      continue
+    }
     console.warn(`[ZAI] ${callerKind}:"${taskLabel}" THẤT BẠI:`, msg)
     return { content: '', provider: 'zai-sdk', model: 'zai', error: `ZAI (z-ai-sdk) call failed: ${msg}` }
   }
+  } // for attempt429
 }
 
 /**
