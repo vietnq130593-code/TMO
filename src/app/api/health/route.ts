@@ -13,7 +13,7 @@ import { checkNeo4jHealth } from '@/lib/neo4j'
 import { checkR2Health } from '@/lib/r2-storage'
 import { checkSupabaseHealth } from '@/lib/supabase-sync'
 import { db } from '@/lib/db'
-import { getNvidiaModels, getProviderDiagnostics, getDailyQuotaStatus } from '@/lib/llm'
+import { getNvidiaModels, getProviderDiagnostics, getDailyQuotaStatus, getModelBlockBreakers } from '@/lib/llm'
 
 export const dynamic = 'force-dynamic'
 
@@ -102,6 +102,12 @@ export async function GET(request: NextRequest) {
     // Daily quota status — per-provider daily quota exhaustion info
     const dailyQuotaStatus = getDailyQuotaStatus()
 
+    // FIX (breaker-audit #6): model circuit breakers — các model đang bị chặn
+    // fail-fast kèm lý do (429-hard-block / timeout-hang) + thời điểm hết chặn.
+    // getModelBlockBreakers() trước đây là dead-code (export nhưng 0 chỗ dùng)
+    // → không có cách nào truy vấn breaker từ UI/API.
+    const modelCircuitBreakers = getModelBlockBreakers()
+
     const responseTimeMs = Date.now() - startTime
     // Neo4j is OPTIONAL — the app works fine without it (chat, agents, skills, memory)
     // Only Qdrant + SQLite + at least 1 LLM provider are required for core functionality
@@ -115,6 +121,7 @@ export async function GET(request: NextRequest) {
       services: { qdrant, neo4j, sqlite, r2, supabase, llm },
       providerDiagnostics,
       dailyQuotaStatus,
+      modelCircuitBreakers,
     })
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err)

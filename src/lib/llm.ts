@@ -1943,13 +1943,18 @@ async function callAgentModelWithFallbackChain(
   }
 
   // Toàn bộ chuỗi thất bại — báo lỗi trung thực kèm trạng thái circuit breaker
+  // FIX (breaker-audit #5): không hardcode "(429 instant trên TẤT CẢ key)" —
+  // breaker có thể trip vì timeout-hang; dẫn đầu bằng nguyên nhân thật + số
+  // phút còn lại để user không bị dẫn sai hướng check hạn mức NIM.
   const breaker = isModelHardBlocked(KIMI_K3_MODEL)
+  const breakerEntry = modelBlockBreakers.get(KIMI_K3_MODEL)
+  const breakerRemainingMin = breakerEntry ? Math.max(1, Math.ceil((breakerEntry.blockedUntil - Date.now()) / 60000)) : 0
   return {
     content: '',
     provider: 'none',
     model: KIMI_K3_MODEL,
     error: breaker.blocked
-      ? `🔴 NVIDIA NIM đang CHẶN CỨNG ${KIMI_K3_MODEL} (429 instant trên TẤT CẢ key — circuit breaker). ${breaker.reason} Đã thử toàn bộ chuỗi fallback (${AGENT_FALLBACK_CHAIN.join(', ')}) — cũng thất bại.`
+      ? `🔴 Lõi chính ${KIMI_K3_MODEL} đang bị circuit breaker chặn (còn ~${breakerRemainingMin} phút). ${breaker.reason} Đã thử toàn bộ chuỗi fallback (${AGENT_FALLBACK_CHAIN.join(', ')}) — cũng thất bại.`
       : `CẢ chuỗi lõi agent đều thất bại sau ${KEY_FAILURES_PER_KEY} sweep model-first (${chain.join(' → ')} trên từng key — chỉ chuyển key khi cả chuỗi fail). Vui lòng kiểm tra hạn mức NVIDIA NIM (build.nvidia.com → Credits) hoặc API keys.`,
   }
 }
@@ -2189,15 +2194,20 @@ async function attemptNvidiaOnce(params: {
  *
  * @param pool The NVIDIA key pool
  * @param abortCheck Optional cancellation check (user pressed Stop)
- * @returns true if a key became available, false if still all dead
+ * @returns { recovered, waitedMs } — recovered=true nếu có key khả dụng lại;
+ *   waitedMs = thời gian THỰC SỰ đã ngủ chờ cooldown (0 nếu trả về ngay).
+ *
+ * FIX (breaker-audit #1): trả kèm waitedMs để caller phân biệt "cooldown đã
+ * reset" THẬT (đủ dài) với "reset-time cũ rồi nên trả ngay" (vacuous cycle 0s)
+ * — không đếm cooldown-cycle ảo cho circuit breaker.
  */
 async function waitForRateLimitCooldown(
   pool: ProviderKeyPool,
   abortCheck?: () => boolean,
-): Promise<boolean> {
+): Promise<{ recovered: boolean; waitedMs: number }> {
   // Check if ALL keys are rate-limited (temporary) vs permanently dead (daily-quota/auth)
   const allKeys = pool.keys.filter(k => !!k.key)
-  if (allKeys.length === 0) return false
+  if (allKeys.length === 0) return { recovered: false, waitedMs: 0 }
 
   const rateLimitedKeys = allKeys.filter(k => k.rateLimited && !k.dailyQuotaExhausted)
   const permanentlyDeadKeys = allKeys.filter(k => k.dailyQuotaExhausted)
@@ -2205,11 +2215,11 @@ async function waitForRateLimitCooldown(
   // If all keys are permanently dead (daily quota), waiting won't help
   if (permanentlyDeadKeys.length === allKeys.length) {
     console.warn(`[LLM] ⏳ waitForRateLimitCooldown: ALL keys daily-quota-exhausted — waiting won't help, giving up`)
-    return false
+    return { recovered: false, waitedMs: 0 }
   }
 
   // If no keys are rate-limited, nothing to wait for
-  if (rateLimitedKeys.length === 0) return false
+  if (rateLimitedKeys.length === 0) return { recovered: false, waitedMs: 0 }
 
   // Find the earliest reset time
   const now = Date.now()
@@ -2219,7 +2229,7 @@ async function waitForRateLimitCooldown(
   if (waitMs <= 0) {
     // A key should already be available — reset and signal retry
     console.log(`[LLM] ⏳ waitForRateLimitCooldown: rate-limit already expired — retrying immediately`)
-    return true
+    return { recovered: true, waitedMs: 0 }
   }
 
   // Cap the wait at 90s — don't hang forever
@@ -2238,7 +2248,7 @@ async function waitForRateLimitCooldown(
   while (Date.now() < maxWaitUntil) {
     if (abortCheck && abortCheck()) {
       console.log(`[LLM] ⏳ waitForRateLimitCooldown: aborted by user during wait`)
-      return false
+      return { recovered: false, waitedMs: Date.now() - now }
     }
     await new Promise(resolve => setTimeout(resolve, pollInterval))
     // Check if any key has recovered (time-aware — clears stale flags)
@@ -2250,7 +2260,7 @@ async function waitForRateLimitCooldown(
     const recovered = allKeys.some(k => isKeyAvailable(k))
     if (recovered) {
       console.log(`[LLM] ⏳ waitForRateLimitCooldown: key recovered after ${Math.ceil((Date.now() - now) / 1000)}s — retrying`)
-      return true
+      return { recovered: true, waitedMs: Date.now() - now }
     }
   }
 
@@ -2263,11 +2273,11 @@ async function waitForRateLimitCooldown(
   const recovered = allKeys.some(k => isKeyAvailable(k))
   if (recovered) {
     console.log(`[LLM] ⏳ waitForRateLimitCooldown: key recovered after max wait — retrying`)
-    return true
+    return { recovered: true, waitedMs: Date.now() - now }
   }
 
   console.warn(`[LLM] ⏳ waitForRateLimitCooldown: still all rate-limited after ${Math.ceil(cappedWait / 1000)}s wait — giving up`)
-  return false
+  return { recovered: false, waitedMs: Date.now() - now }
 }
 
 // ==================== MODEL CIRCUIT BREAKER — HARD 429 BLOCK DETECTION ====================
@@ -2285,6 +2295,11 @@ async function waitForRateLimitCooldown(
 const MODEL_BLOCK_BREAKER_MS = Math.max(30_000, parseInt(process.env.MODEL_BLOCK_BREAKER_MS || '600000', 10) || 600_000) // 10 phút
 /** Ngưỡng coi 1 response 429 là "instant reject" (server từ chối không xử lý) */
 const INSTANT_429_MS = 3000
+/** FIX (breaker-audit #1): 1 "cooldown cycle" chỉ được tính khi thực sự NGỦ chờ
+ *  qua reset (≥30s). Trước đây wait trả về NGAY (reset-time cũ) hoặc chỉ chờ
+ *  soft-cooldown 15s của 5xx cũng được đếm là "đã qua cooldown" → breaker có
+ *  thể trip oan model khỏe trên 429 RPM tạm thời của pool key dùng chung. */
+const REAL_COOLDOWN_CYCLE_MIN_MS = 30_000
 
 const modelBlockBreakers = new Map<string, { blockedUntil: number; reason: string; detectedAt: number }>()
 
@@ -2298,13 +2313,19 @@ function isModelHardBlocked(model: string): { blocked: boolean; reason?: string 
   return { blocked: true, reason: b.reason }
 }
 
-function tripModelBreaker(model: string, reason: string): void {
+function tripModelBreaker(model: string, reason: string, kind: '429-hard-block' | 'timeout-hang' = '429-hard-block'): void {
   modelBlockBreakers.set(model, {
     blockedUntil: Date.now() + MODEL_BLOCK_BREAKER_MS,
     reason,
     detectedAt: Date.now(),
   })
-  console.warn(`[LLM] 🔴 CIRCUIT BREAKER TRIPPED: model ${model} bị NVIDIA NIM chặn cứng (429 instant trên mọi key) — fail-fast trong ${Math.round(MODEL_BLOCK_BREAKER_MS / 60000)} phút. Lý do: ${reason}`)
+  // FIX (breaker-audit #5): headline phải khớp loại trip — trước đây hardcode
+  // "429 instant trên mọi key" kể cả khi trip vì timeout-hang (log tự mâu
+  // thuẫn, user bị dẫn sai hướng đi check hạn mức NIM cho sự cố hang).
+  const headline = kind === 'timeout-hang'
+    ? `model ${model} HANG phía NVIDIA NIM (nhận request nhưng 0 bytes trả về; model khác vẫn chạy)`
+    : `model ${model} bị NVIDIA NIM chặn cứng (429 instant trên mọi key)`
+  console.warn(`[LLM] 🔴 CIRCUIT BREAKER TRIPPED (${kind}): ${headline} — fail-fast trong ${Math.round(MODEL_BLOCK_BREAKER_MS / 60000)} phút. Lý do: ${reason}`)
 }
 
 // ==================== TASK 22 — MODEL TIMEOUT HEALTH (fast-fail khi model HANG) ====================
@@ -2331,23 +2352,38 @@ function scaleTimeoutByMaxTokens(baseMs: number, maxTokens: number): number {
 }
 
 const modelTimeoutStrikes = new Map<string, number>()
+/** FIX (breaker-audit #4): timestamp strike gần nhất — strike chỉ còn giá trị
+ *  trong MODEL_TIMEOUT_STRIKE_WINDOW_MS (30'). Trước đây 2 timeout cách nhau
+ *  nhiều giờ/ngày vẫn cộng dồn thành "liên tiếp" → trip oan model đã hồi. */
+const modelTimeoutLastAt = new Map<string, number>()
+const MODEL_TIMEOUT_STRIKE_WINDOW_MS = Math.max(60_000, parseInt(process.env.MODEL_TIMEOUT_STRIKE_WINDOW_MS || '1800000', 10) || 1_800_000) // 30 phút
 
 /** Gọi SAU MỖI attempt — phân loại theo status của attemptNvidiaOnce. */
 function noteModelAttempt(model: string, status: string): void {
   if (status === 'timeout') {
+    const lastAt = modelTimeoutLastAt.get(model) ?? 0
+    if (lastAt && Date.now() - lastAt > MODEL_TIMEOUT_STRIKE_WINDOW_MS) {
+      // Strike cũ đã ngoài cửa sổ 30' — không còn "liên tiếp", tính lại từ 1
+      modelTimeoutStrikes.delete(model)
+      console.warn(`[LLM] ⏱ TIMEOUT-STRIKE window reset: strike cũ của ${model} đã ${Math.round((Date.now() - lastAt) / 60000)}' phút cũ — tính lại từ 1`)
+    }
+    modelTimeoutLastAt.set(model, Date.now())
     const strikes = (modelTimeoutStrikes.get(model) ?? 0) + 1
     modelTimeoutStrikes.set(model, strikes)
     console.warn(`[LLM] ⏱ TIMEOUT-STRIKE ${strikes}/${MODEL_TIMEOUT_STRIKES}: model ${model} hang (0 bytes) — ${strikes >= MODEL_TIMEOUT_STRIKES ? 'TRIP breaker, fail-fast sang model kế' : 'còn theo dõi'}`)
     if (strikes >= MODEL_TIMEOUT_STRIKES) {
       tripModelBreaker(
         model,
-        `TIMEOUT-BREAKER (Task 22): ${strikes} lần timeout liên tiếp — model HANG phía NVIDIA NIM (server nhận request nhưng 0 bytes trả về; các model khác vẫn chạy bình thường = sự cố model-level, không phải key/network). Đã block ${Math.round(MODEL_BLOCK_BREAKER_MS / 60000)} phút để fail-fast sang model kế; model tự quay lại sau khi hết block hoặc app restart.`,
+        `TIMEOUT-BREAKER (Task 22): ${strikes} lần timeout trong cửa sổ ${Math.round(MODEL_TIMEOUT_STRIKE_WINDOW_MS / 60000)} phút — model HANG phía NVIDIA NIM (server nhận request nhưng 0 bytes trả về; các model khác vẫn chạy bình thường = sự cố model-level, không phải key/network). Đã block ${Math.round(MODEL_BLOCK_BREAKER_MS / 60000)} phút để fail-fast sang model kế; model tự quay lại sau khi hết block hoặc app restart.`,
+        'timeout-hang',
       )
       modelTimeoutStrikes.delete(model)
+      modelTimeoutLastAt.delete(model)
     }
   } else if (status === 'success') {
     // Model hồi phục → xóa strikes
-    if (modelTimeoutStrikes.has(model)) modelTimeoutStrikes.delete(model)
+    modelTimeoutStrikes.delete(model)
+    modelTimeoutLastAt.delete(model)
   }
 }
 
@@ -2482,7 +2518,12 @@ async function callModelWithKeyRotation(
       // mọi key → chặn cứng đã được xác nhận → trip breaker, fail NGAY (không
       // đốt thêm 15' budget). Cooldown RPM thật đã có 30s để hồi — nếu 30s sau
       // vẫn instant-429 toàn bộ thì không phải RPM.
-      if (cooldownCycles >= 1 && instant429Keys.size >= validIndices.length) {
+      // FIX (breaker-audit #2): ngưỡng "mọi key" phải theo key CÒN SỐNG — key
+      // daily-quota/auth-dead đã bị loại khỏi vòng (deadKeys) nên không bao giờ
+      // vào instant429Keys; so với validIndices.length khiến breaker KHÔNG BAO
+      // GIỜ trip được khi ≥1 key chết (đúng lúc tối cần fail-fast: cạn quota).
+      const aliveKeyCount = validIndices.length - deadKeys.size
+      if (cooldownCycles >= 1 && aliveKeyCount > 0 && instant429Keys.size >= aliveKeyCount) {
         tripModelBreaker(
           model,
           `Xác nhận bằng live-test: cả ${validIndices.length} key đều 429-instant (${attemptMs}ms/lần) ngay cả sau cooldown ${cooldownCycles} lần — khả năng NVIDIA NIM chặn model ở tầng tài khoản/hạn mức. Kiểm tra tài khoản NIM (build.nvidia.com → Credits/Rate limits) hoặc thử model khác trên cùng key để xác nhận.`,
@@ -2526,7 +2567,7 @@ async function callModelWithKeyRotation(
         // the 429 rate limit (30-45s cooldown) was causing immediate failure instead of
         // waiting for a key to become available again.
         const waited = await waitForRateLimitCooldown(pool, options?.abortCheck)
-        if (waited) {
+        if (waited.recovered) {
           // A key became available — reset deadKeys and RESTART all rounds.
           // (fix 2026-08-27: trước đây chỉ `continue` inner-loop — nếu wait rơi vào
           // iteration cuối của round cuối thì vòng lặp kết thúc, key đã recovered
@@ -2534,7 +2575,10 @@ async function callModelWithKeyRotation(
           console.log(`[LLM] 🔄 ${model}: rate-limit cooldown expired — retrying with refreshed keys`)
           deadKeys.clear()
           for (const [k] of failuresByKey) failuresByKey.set(k, 0)
-          cooldownCycles++
+          // FIX (breaker-audit #1): chỉ đếm cooldown-cycle THẬT (đã ngủ ≥30s
+          // qua reset) — vacuous cycle (reset-time cũ → trả ngay, 0s) không
+          // đủ bằng chứng "đã qua cooldown mà vẫn 429" để arming breaker.
+          if (waited.waitedMs >= REAL_COOLDOWN_CYCLE_MIN_MS) cooldownCycles++
           instant429Keys.clear() // sweep mới bắt đầu — đếm lại 429-instant
           round = -1 // restart outer round loop
           break      // exit inner offset loop
@@ -2631,6 +2675,12 @@ async function callModelChainModelFirst(
     : (kimiKeyRotationCounter++) % validIndices.length
 
   const deadKeys = new Set<number>() // daily-quota / auth-dead trong CALL này
+  // FIX (breaker-audit #3): bad_request là deterministic THEO BODY — model đã
+  // trả 400/413/422/431 thì key khác retry cùng body cũng fail y hệt. Comment
+  // R2-a #7 vốn hứa "KHÔNG retry model này trên key khác" nhưng code cũ chỉ
+  // break vòng model → key kế vẫn chạy chuỗi lại từ đầu → đốt 4 key × 3 sweep
+  // attempt 400 vô nghĩa.
+  const badRequestModels = new Set<string>()
   const startedAt = Date.now()
   let attemptNo = 0
   let cooldownCycles = 0
@@ -2640,9 +2690,16 @@ async function callModelChainModelFirst(
 
   while (sweepNo < KEY_FAILURES_PER_KEY) {
     sweepNo++
-    // Instant-429 per model trong sweep này (input circuit breaker)
+    // Instant-429 + tập key THỰC SỰ THỬ per model trong sweep này (input circuit breaker)
+    // FIX (breaker-audit #2): ngưỡng trip so với attempted thay vì
+    // validIndices.length — key bị skip (dead/quota/break chuỗi sớm) không khiến
+    // phép so trở nên bất khả thi (kẹt vĩnh viễn không trip được).
     const sweepInstant429 = new Map<string, Set<number>>()
-    for (const m of activeChain) sweepInstant429.set(m, new Set())
+    const sweepAttemptedKeys = new Map<string, Set<number>>()
+    for (const m of activeChain) {
+      sweepInstant429.set(m, new Set())
+      sweepAttemptedKeys.set(m, new Set())
+    }
 
     for (let offset = 0; offset < validIndices.length; offset++) {
       const keyIdx = validIndices[(startIndex + offset) % validIndices.length]
@@ -2660,6 +2717,9 @@ async function callModelChainModelFirst(
       for (const model of activeChain) {
         // Model có thể bị trip breaker giữa sweep → bỏ qua
         if (isModelHardBlocked(model).blocked) continue
+        // FIX (breaker-audit #3): model đã bad_request ở key trước trong call
+        // này → deterministic theo body, key khác cũng fail y hệt → bỏ qua
+        if (badRequestModels.has(model)) continue
         // Người dùng bấm Dừng → cắt ngang chuỗi ngay
         if (options?.abortCheck && options.abortCheck()) {
           console.log(`[LLM] 🔗 ${taskLabel}: chuỗi bị HỦY (abortCheck) sau ${attemptNo} attempts`)
@@ -2672,6 +2732,7 @@ async function callModelChainModelFirst(
         }
 
         attemptNo++
+        sweepAttemptedKeys.get(model)!.add(keyIdx)
         const attemptStartedAt = Date.now()
         const attempt = await attemptNvidiaOnce({
           keyInfo: { key: keyInfo.key, keyIndex: keyIdx },
@@ -2724,6 +2785,7 @@ async function callModelChainModelFirst(
         // (lỗi body, không phải lỗi key) — chỉ chuyển MODEL kế (model khác có thể
         // nhận context dài hơn → đáng thử), KHÔNG retry model này trên key khác.
         if (attempt.status === 'bad_request') {
+          badRequestModels.add(model)
           console.warn(`[LLM] 🔗 ${taskLabel} ✗ ${model} key#${keyIdx + 1} → bad_request (HTTP ${attempt.httpStatus}) — body deterministic, model này không được retry trên key khác: ${attempt.errorMessage?.slice(0, 160)}`)
           chainFailedOnKey = true
           break
@@ -2745,10 +2807,15 @@ async function callModelChainModelFirst(
     // (đã qua ít nhất 1 cooldown cycle mà vẫn 429-instant trên MỌI key)
     if (cooldownCycles >= 1) {
       for (const model of activeChain) {
-        if (sweepInstant429.get(model)!.size >= validIndices.length) {
+        const instant429Count = sweepInstant429.get(model)!.size
+        const attemptedCount = sweepAttemptedKeys.get(model)!.size
+        // FIX (breaker-audit #2): mọi key ĐÃ THỬ model này đều 429-instant
+        // (≥2 key bằng chứng) thay vì >= validIndices.length (kẹt khi có key
+        // dead/skip).
+        if (attemptedCount >= 2 && instant429Count >= attemptedCount) {
           tripModelBreaker(
             model,
-            `Model-first sweep xác nhận: ${model} 429-instant trên cả ${validIndices.length} key ngay cả sau ${cooldownCycles} lần cooldown — khả năng NVIDIA NIM chặn model ở tầng tài khoản/hạn mức. Kiểm tra build.nvidia.com → Credits/Rate limits.`,
+            `Model-first sweep xác nhận: ${model} 429-instant trên ${instant429Count}/${attemptedCount} key đã thử ngay cả sau ${cooldownCycles} lần cooldown thật — khả năng NVIDIA NIM chặn model ở tầng tài khoản/hạn mức. Kiểm tra build.nvidia.com → Credits/Rate limits.`,
           )
         }
       }
@@ -2767,11 +2834,12 @@ async function callModelChainModelFirst(
     // Hết sweep nhưng còn key/key-model khả dụng → chờ rate-limit cooldown
     // (waitForRateLimitCooldown tự trả false nếu mọi key chết vĩnh viễn)
     const waited = await waitForRateLimitCooldown(pool, options?.abortCheck)
-    if (!waited) {
+    if (!waited.recovered) {
       console.warn(`[LLM] 🔗 ${taskLabel}: không còn key khả dụng sau sweep ${sweepNo} — dừng chuỗi (${attemptNo} attempts)`)
       return null
     }
-    cooldownCycles++
+    // FIX (breaker-audit #1): chỉ đếm cooldown-cycle THẬT (ngủ ≥30s qua reset)
+    if (waited.waitedMs >= REAL_COOLDOWN_CYCLE_MIN_MS) cooldownCycles++
     console.log(`[LLM] 🔗 ${taskLabel}: key hồi sau cooldown — sweep lại (sweep ${sweepNo + 1}/${KEY_FAILURES_PER_KEY})`)
   }
 
