@@ -499,7 +499,7 @@ Quyết định duyệt hay không duyệt (JSON).`
           reviewedAt: now,
         },
       })
-      if (dueNow) void triggerOrchestration(proposalId)
+      if (dueNow) void triggerOrchestration(proposalId, { dryRun: true })
       console.log(`[SelfDirection] Opus DUYỆT "${proposal.title}"${dueNow ? ' → kích hoạt triển khai' : ` (hẹn lịch ${proposal.scheduleAt?.toISOString()})`}: ${verdict.reason}`)
     } else {
       await db.selfDirectionProposal.update({
@@ -2005,12 +2005,15 @@ export async function promoteDueProposals(): Promise<string[]> {
     })
     for (const p of due) {
       await db.selfDirectionProposal.update({ where: { id: p.id }, data: { status: 'ready' } })
-      if (await triggerOrchestration(p.id)) triggered.push(p.id)
+      // Lượt quan sát 4 (user directive 2026-09-04): trigger nền mặc định DRY-RUN —
+      // chỉ user chủ động mới push thật (chỉ thị chỉ push TMO-backup; workspace
+      // origin đang trỏ repo TMO app — push nền sẽ bẩn repo app).
+      if (await triggerOrchestration(p.id, { dryRun: true })) triggered.push(p.id)
     }
     // 2) Ready nhưng chưa chạy (vd server restart ngay sau promote) → trigger lại
     const ready = await db.selfDirectionProposal.findMany({ where: { status: 'ready' }, select: { id: true } })
     for (const p of ready) {
-      if (await triggerOrchestration(p.id)) triggered.push(p.id)
+      if (await triggerOrchestration(p.id, { dryRun: true })) triggered.push(p.id)
     }
     // 3) Orchestration gián đoạn (PM2 restart/OOM) → failed + recoverable.
     //    TÍN HIỆU SỐNG: (a) in-process lock đang giữ = chắc chắn đang chạy;

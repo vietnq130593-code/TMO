@@ -1244,6 +1244,34 @@ export async function gitPush(args: {
     }
   }
 
+  // ── Lượt quan sát 4 (2026-09-04, user directive): PUSH ALLOWLIST ──
+  // Chỉ push THẬT lên repo trong allowlist (mặc định TMO-backup). Workspace
+  // hiện trỏ origin về repo TMO app — mọi push từ pipeline verify_and_push
+  // hay agent gọi trực tiếp git_push sẽ bẩn repo app, vi phạm chỉ thị
+  // "chỉ push TMO-backup". Chặn tại TẦNG TOOL (mọi đường gọi đều an toàn);
+  // đổi remote workspace sang repo được phép hoặc set SD_PUSH_REMOTE_ALLOWLIST
+  // để mở. Dry-run probe phía trên KHÔNG bị chặn (chỉ đọc).
+  {
+    const allowRaw = process.env.SD_PUSH_REMOTE_ALLOWLIST || 'TMO-backup'
+    const allowlist = allowRaw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+    let targetUrl = status.remoteUrl || ''
+    if (remoteName !== 'origin') {
+      targetUrl = (await execFileAsync('git', ['remote', 'get-url', remoteName], { cwd: root, timeout: 5_000 })
+        .then(r => r.stdout.trim())
+        .catch(() => '')) || targetUrl
+    }
+    if (allowlist.length > 0 && !allowlist.some(a => targetUrl.toLowerCase().includes(a))) {
+      console.warn(`[gitPush] ✘ CHẶN theo allowlist — remote "${targetUrl}" không nằm trong SD_PUSH_REMOTE_ALLOWLIST ("${allowRaw}") — commit giữ local (user directive 2026-09-04: chỉ push TMO-backup)`)
+      return {
+        success: false,
+        blocked: true,
+        error: `Push CHẶN theo allowlist: remote "${targetUrl}" không nằm trong SD_PUSH_REMOTE_ALLOWLIST (${allowRaw}) — user directive 2026-09-04: chỉ push TMO-backup. Commit giữ local trong workspace; đổi remote sang repo được phép để push thật.`,
+        branch: status.branch,
+        headCommit: status.headCommit,
+      }
+    }
+  }
+
   if (status.ahead === 0 && status.uncommitted.length === 0) {
     // Có thể chưa có upstream tracking — vẫn thử push (branch mới)
     const hasUpstream = await execFileAsync('git', ['config', `branch.${requestedBranch}.remote`], { cwd: root, timeout: 5_000 })

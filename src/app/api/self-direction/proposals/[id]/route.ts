@@ -75,7 +75,9 @@ export async function PATCH(
           reviewedAt: now,
         },
       })
-      if (dueNow) void triggerOrchestration(id)
+      // Lượt quan sát 4 (user directive 2026-09-04): trigger nền mặc định DRY-RUN —
+      // chỉ user chủ động qua deploy API mới push thật (chỉ thị chỉ push TMO-backup).
+      if (dueNow) void triggerOrchestration(id, { dryRun: true })
       console.log(`[SelfDirection] Mr. Architect DUYỆT "${proposal.title}"${dueNow ? ' → kích hoạt triển khai' : ` (hẹn lịch ${proposal.scheduleAt?.toISOString()})`}`)
       return NextResponse.json({ proposal: updated })
     }
