@@ -1,12 +1,12 @@
 /**
- * RESEARCH TEAM — KING DECOMPOSE (TB-07 playbook + council ① gate TC-13 + persist ResearchTask)
+ * RESEARCH TEAM — NEMESIS DECOMPOSE (TB-07 playbook + council ① gate TC-13 + persist ResearchTask)
  * ============================================================================================
  * Spec:
  *  - TB-07 §2 — DECOMPOSE mission → parts/tasks theo tier:
  *      T1 → 1 part · T2 → 1–2 parts · T3 → 2+ parts.
  *  - TB-07 §2.5 — Task .md template: header YAML + body sections + CHANGELOG append-only.
  *  - TB-07 §11 Q5 + TC-13 — Success Criteria BẮT BUỘC trước ASSIGN (gate council ① VETO nếu thiếu).
- *  - TB-06 §10.1 — council ① post-DECOMPOSE (pre-ASSIGN): KING verify Success Criteria.
+ *  - TB-06 §10.1 — council ① post-DECOMPOSE (pre-ASSIGN): NEMESIS verify Success Criteria.
  *  - TB-02 §7 — Transition TRIAGING → DECOMPOSING → (council ① PASS) → RESEARCHING.
  *
  * Fail-open policy (TB-13 §4 — NIM keys placeholder):
@@ -29,12 +29,12 @@ import { appendDecision } from './decision-log'
 import { runCouncil } from '../g1/engine'
 
 // ============================================================
-// §1. SYSTEM PROMPT — KING DECOMPOSE JD (TB-06 §2 RECEIVE → §3 DECOMPOSE)
+// §1. SYSTEM PROMPT — NEMESIS DECOMPOSE JD (TB-06 §2 RECEIVE → §3 DECOMPOSE)
 // ============================================================
 
 const KING_DECOMPOSE_SYSTEM_PROMPT = [
-  'Bạn là KING (TL — research team TMO). Position: TL (KHÔNG code).',
-  `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.KING)?.jd ?? 'Phân loại mission, chia nhỏ bài toán, kiểm soát chặt — không code'}.`,
+  'Bạn là NEMESIS (TL — research team TMO). Position: TL (KHÔNG code).',
+  `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.NEMESIS)?.jd ?? 'Phân loại mission, chia nhỏ bài toán, kiểm soát chặt — không code'}.`,
   '',
   'TASK: Phân tích mission request → chia thành parts.',
   '  - Mỗi part = 1 task .md (TB-07 §2.5 template): taskId + title + description +',
@@ -79,7 +79,7 @@ export interface DecomposeResult {
 /**
  * Decompose mission → parts/tasks (TB-07 §2 + §2.5):
  *  - Read mission (getMission).
- *  - Gọi callLLM với KING DECOMPOSE JD → sinh N parts theo tier (T1=1, T2=1-2, T3=2+).
+ *  - Gọi callLLM với NEMESIS DECOMPOSE JD → sinh N parts theo tier (T1=1, T2=1-2, T3=2+).
  *  - Mỗi part → renderTaskMd (task-md.ts) + persist ResearchTask (db.researchTask.create).
  *  - Council ① (post-DECOMPOSE, pre-ASSIGN): gọi g1/engine.runCouncil round=1.
  *    Gate TC-13: validateSuccessCriteria mỗi part — thiếu → VETO, KHÔNG ASSIGN.
@@ -101,9 +101,9 @@ export async function decomposeMission(missionId: string): Promise<DecomposeResu
         toStatus: 'DECOMPOSING',
         decision: {
           at: new Date().toISOString(),
-          agent: 'KING',
+          agent: 'NEMESIS',
           decision: 'DECOMPOSE',
-          reason: `KING DECOMPOSE start — tier=${mission.tier}, missionType=${mission.missionType}`,
+          reason: `NEMESIS DECOMPOSE start — tier=${mission.tier}, missionType=${mission.missionType}`,
         },
       })
     }
@@ -124,8 +124,8 @@ export async function decomposeMission(missionId: string): Promise<DecomposeResu
     llm = await callLLM(userPrompt, KING_DECOMPOSE_SYSTEM_PROMPT, 'king-decompose', {
       temperature: 0.2,
       maxTokens: 3000,
-      agentId: AGENT_ID.KING,
-      agentName: 'KING (Team Lead)',
+      agentId: AGENT_ID.NEMESIS,
+      agentName: 'NEMESIS (Team Lead)',
     })
   } catch (err) {
     return failOpenDecompose(missionId, `LLM call threw: ${err instanceof Error ? err.message : String(err)}`)
@@ -249,7 +249,7 @@ export async function decomposeMission(missionId: string): Promise<DecomposeResu
           toStatus: 'RESEARCHING',
           decision: {
             at: new Date().toISOString(),
-            agent: 'KING',
+            agent: 'NEMESIS',
             decision: 'CONTINUE',
             reason: `Council ① PASS — ${persistedParts.length} parts ready for G1/G2/G3 dispatch`,
           },
@@ -265,7 +265,7 @@ export async function decomposeMission(missionId: string): Promise<DecomposeResu
     // VETO → append decision log + escalate
     try {
       await appendDecision(missionId, {
-        agent: 'KING',
+        agent: 'NEMESIS',
         decision: 'REJECT',
         reason: `Council ① VETO (gate TC-13) — ${councilTranscript}`,
       })
@@ -473,7 +473,7 @@ function failOpenDecompose(missionId: string, reason: string): DecomposeResult {
   console.warn(`[Decompose] fail-open (LLM unavailable): ${reason}`)
   // Append decision log + escalate
   void appendDecision(missionId, {
-    agent: 'KING',
+    agent: 'NEMESIS',
     decision: 'ESCALATE',
     reason: `DECOMPOSE fail-open: ${reason} — manual decompose needed`,
   }).catch((err) => {

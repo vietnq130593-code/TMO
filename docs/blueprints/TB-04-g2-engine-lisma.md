@@ -15,16 +15,16 @@
 `[TB-04 §0 ← template TB-00 §4]` `[EXT]`
 
 - **Mục đích:** biến section G2 của nguồn (~440 dòng) thành blueprint vận hành cho engine LISMA: JD + Instructions runtime, state machine vòng lặp review–fix, checklist 6 nhóm, ma trận severity, mode M2 System Diagnostician, interface contract với G1/G3/TL, worklog schema, error handling.
-- **Đối tượng đọc:** (1) kỹ sư triển khai G2 engine vào TMO; (2) chính LISMA — JD + Instructions + checklist runtime; (3) KING — verify output G2, hiểu nhánh escalate; (4) user — review từng phần (1 file = 1 review unit).
+- **Đối tượng đọc:** (1) kỹ sư triển khai G2 engine vào TMO; (2) chính LISMA — JD + Instructions + checklist runtime; (3) NEMESIS — verify output G2, hiểu nhánh escalate; (4) user — review từng phần (1 file = 1 review unit).
 
 - **Phạm vi (bao gồm):** vòng đời 1 task G2 (nhận input → review → fix/chẩn đoán → verify → output/escalate) · cả 2 mode — **M1** (Kaggle: sửa code submission trực tiếp) và **M2** (System Research: chỉ chẩn đoán + patch mẫu trong Workspace) · kịch bản đặc biệt Tier 1 (LISMA code + self-review).
-- **Phạm vi (KHÔNG bao gồm):** G3/HAN loop → TB-05 · G1 SIVIL/BELI dispatch + sub-agents → TB-03 · KING 7 nhiệm vụ + Research Council → TB-06 · worklog schema chuẩn toàn team + Handoff flow → TB-09 (§8 chỉ mở rộng bản G2) · Artifact Map chi tiết → TB-10 (TB-04 chỉ tiêu dùng) · Proposal Schema + SELF-DIRECTION → TB-11 · mã nguồn TMO + hạ tầng PM2/Qdrant — dừng ở ranh giới "runtime contract".
+- **Phạm vi (KHÔNG bao gồm):** G3/HAN loop → TB-05 · G1 SIVIL/BELI dispatch + sub-agents → TB-03 · NEMESIS 7 nhiệm vụ + Research Council → TB-06 · worklog schema chuẩn toàn team + Handoff flow → TB-09 (§8 chỉ mở rộng bản G2) · Artifact Map chi tiết → TB-10 (TB-04 chỉ tiêu dùng) · Proposal Schema + SELF-DIRECTION → TB-11 · mã nguồn TMO + hạ tầng PM2/Qdrant — dừng ở ranh giới "runtime contract".
 
 | File liên quan | Quan hệ với TB-04 |
 |---|---|
 | TB-00 | Chuẩn toàn tập: ID, danh tính agent, model stack, traceability |
 | TB-03 / TB-05 | Input của G2 (output G1: code/report + worklog + Artifact Map) / Output Tier 3 (HAN) |
-| TB-06 | Input task (KING) + escalation đích |
+| TB-06 | Input task (NEMESIS) + escalation đích |
 | TB-08 / TB-09 / TB-10 | KB Candidates / Worklog + RWV chuẩn / Artifact Map LISMA tiêu thụ (Leakage/Bug Locations · Suspect Locations) |
 | TB-12 | E2E playbooks đối soát (G2 = bước 3 pipeline MEDIUM/COMPLEX) |
 
@@ -50,7 +50,7 @@
 | 1 | **READ** | Đọc code/artifacts theo Artifact Map | Đọc logs + code theo Suspect Locations |
 | 2 | **DETECT** | Quét 5 loại bug (Logic, Edge Case, Data Leakage, Performance, API/Compatibility) | Quét 5 loại vấn đề hệ thống (Logic/Config, Production Edge, Integration, Performance, Reliability) |
 | 3 | **FIX** | **Sửa code submission trực tiếp** | **CHỈ chẩn đoán + đề xuất fix trong Proposal** — patch mẫu viết trong Workspace |
-| 4 | **VERIFY** | Chạy lại, kiểm tra regression | Đối chiếu chẩn đoán ↔ evidence; KING verify ở Checkpoint |
+| 4 | **VERIFY** | Chạy lại, kiểm tra regression | Đối chiếu chẩn đoán ↔ evidence; NEMESIS verify ở Checkpoint |
 | 5 | **LOOP/ESCALATE** | Lặp tối đa 3 vòng; escalate khi bế tắc | Tương tự — vòng lặp M2 không có bước "apply fix" |
 
 **Deliverables [SRC dòng 694]:** **M1** — Code sạch + Worklog · **M2** — Diagnostic Report (root cause + fix proposal + patch mẫu trong Workspace) + Worklog · **Chung** — Suggestions cho G3 + Concerns cho TL.
@@ -74,7 +74,7 @@
 > - **Bỏ qua System Safety** — Priority #1 của M2 (không được làm sập dịch vụ đang chạy).
 > - Fix bug mà không verify; verify mà không check regression. [EXT — suy từ nguồn dòng 1073]
 
-> **Input contract:** G1 output (code/report + worklog) + **Artifact Map** từ SIVIL/BELI; task từ KING (khi Tier 1 giao thẳng hoặc khi escalate round-trip) — phần task Tier 1: [EXT — suy từ nguồn dòng 1035–1050].
+> **Input contract:** G1 output (code/report + worklog) + **Artifact Map** từ SIVIL/BELI; task từ NEMESIS (khi Tier 1 giao thẳng hoặc khi escalate round-trip) — phần task Tier 1: [EXT — suy từ nguồn dòng 1035–1050].
 
 > **Output contract:** Verified output + worklog (bugs/diagnosis + suggestions + concerns) → **HAN** (Tier 3) hoặc **TL** (Tier 1/2).
 
@@ -90,7 +90,7 @@
 |---|---|
 | **Reviewer + Fixer 2-trong-1** | Lập trình viên và reviewer là cùng 1 agent — tự tìm bug, tự sửa, tự verify. Không mất context khi handoff giữa người tìm bug và người sửa bug |
 | **Iterative refinement loop** | Không cần fix đúng ngay lần đầu — mỗi vòng đọc lại phát hiện bug mới (kể cả regression do fix trước gây ra) |
-| **Focus chi tiết, ngữ cảnh hẹp** | G2 chỉ cần đọc **1–3 files cùng lúc** — tập trung tuyệt đối vào chi tiết, không phân tán vào bức tranh lớn (đã có KING lo) |
+| **Focus chi tiết, ngữ cảnh hẹp** | G2 chỉ cần đọc **1–3 files cùng lúc** — tập trung tuyệt đối vào chi tiết, không phân tán vào bức tranh lớn (đã có NEMESIS lo) |
 
 ### 1.4 Model stack & nguyên tắc role-based
 
@@ -132,7 +132,7 @@
 
 ```
                          ┌──────────────────────────────────┐
-                         │  (input từ G1 hoặc từ KING)      │
+                         │  (input từ G1 hoặc từ NEMESIS)      │
                          └───────────────┬──────────────────┘
                                          ▼
                                    ┌─────────┐
@@ -172,7 +172,7 @@
                                    → HAN (Tier 3) / TL (Tier 1–2)
 ```
 
-**Ghi chú mapping [EXT]:** REVIEWING = READ + DETECT; FIXING = FIX (M1) hoặc DIAGNOSING (M2); VERIFYING = VERIFY + RE-TEST + PASS?; CLEAN = FINAL OUTPUT; ESCALATED = 3 nhánh escalate của nguồn (dòng 1080–1083). Nhánh T2 (NEW → ESCALATED khi input thiếu — §2.3, [EXT]) không vẽ riêng trong diagram: cũng vào state ESCALATED với semantics DỪNG — chờ TL (KING) quyết định ai bổ sung input (§7.3). Ngữ nghĩa mỗi nhánh **không đổi** so với nguồn — chỉ hình thức hóa để implement.
+**Ghi chú mapping [EXT]:** REVIEWING = READ + DETECT; FIXING = FIX (M1) hoặc DIAGNOSING (M2); VERIFYING = VERIFY + RE-TEST + PASS?; CLEAN = FINAL OUTPUT; ESCALATED = 3 nhánh escalate của nguồn (dòng 1080–1083). Nhánh T2 (NEW → ESCALATED khi input thiếu — §2.3, [EXT]) không vẽ riêng trong diagram: cũng vào state ESCALATED với semantics DỪNG — chờ TL (NEMESIS) quyết định ai bổ sung input (§7.3). Ngữ nghĩa mỗi nhánh **không đổi** so với nguồn — chỉ hình thức hóa để implement.
 
 ### 2.3 Bảng transition
 
@@ -181,7 +181,7 @@
 | # | Từ | Sang | Điều kiện | Action | Output trung gian |
 |---|---|---|---|---|---|
 | T1 | NEW | REVIEWING | Input hợp lệ: code/report + G1 worklog + Artifact Map (M2: thêm audit report/logs) | Đọc Artifact Map trước → trích Leakage/Bug Locations (M1) hoặc Suspect Locations (M2); đọc G1 worklog | Review plan + checklist trống cho từng file |
-| T2 | NEW | ESCALATED | Input thiếu Artifact Map hoặc thiếu worklog [EXT] | DỪNG — escalate lên TL (KING); KING quyết định ai bổ sung input; G2 KHÔNG tự request ngang SIVIL/BELI; không review mù | Escalation message (§7.3) kèm danh sách input còn thiếu |
+| T2 | NEW | ESCALATED | Input thiếu Artifact Map hoặc thiếu worklog [EXT] | DỪNG — escalate lên TL (NEMESIS); NEMESIS quyết định ai bổ sung input; G2 KHÔNG tự request ngang SIVIL/BELI; không review mù | Escalation message (§7.3) kèm danh sách input còn thiếu |
 | T3 | REVIEWING | FIXING | ≥ 1 bug tìm thấy, severity ≥ MEDIUM (LOW → ưu tiên ghi worklog cho G3, chỉ fix nếu rảnh) | Sắp thứ tự fix theo 🔴→🟢; với M2 chuyển sang chẩn đoán + viết patch mẫu trong Workspace | Bugs Found table v1 (§3.3) |
 | T4 | REVIEWING | CLEAN | Vòng ≥ 1 và 0 bug mới sau 1 vòng quét đủ 6 nhóm checklist | Ghi "không tìm thấy bug mới" vào worklog | Checklist toàn PASS |
 | T5 | FIXING | VERIFYING | Đã xử lý xong đợt bug hiện tại | Chạy lại code (M1) / đối chiếu chẩn đoán ↔ evidence (M2); kiểm regression | Diff patch + kết quả verify từng fix |
@@ -221,13 +221,13 @@ FINAL OUTPUT:
 `[TB-04 §2.5 ← nguồn dòng 1033, 1017–1031]` `[SRC]`
 
 ```
-Vòng lặp M2: Đọc log → Định vị → Chẩn đoán → Đề xuất → KING verify
+Vòng lặp M2: Đọc log → Định vị → Chẩn đoán → Đề xuất → NEMESIS verify
               (KHÔNG có bước "apply fix" — fix chỉ tồn tại dưới dạng
                PATCH MẪU trong Workspace + proposal item)
 ```
 
 - State machine §2.2 giữ nguyên, chỉ đổi nghĩa FIXING → **DIAGNOSING**: root cause analysis + viết patch mẫu trong Workspace (không đụng Live System).
-- VERIFYING ở M2 = đối chiếu root cause ↔ evidence (file:line + log) + tự kiểm 5 câu System Safety (§3.3 nhóm 6). Verify chính thức do KING đảm nhiệm ở Checkpoint CP2 (root cause khớp code ↔ logs?) [SRC dòng 4487].
+- VERIFYING ở M2 = đối chiếu root cause ↔ evidence (file:line + log) + tự kiểm 5 câu System Safety (§3.3 nhóm 6). Verify chính thức do NEMESIS đảm nhiệm ở Checkpoint CP2 (root cause khớp code ↔ logs?) [SRC dòng 4487].
 
 ### 2.6 Biến thể: Tier 1 — Simple Task (G2 nhận task trực tiếp từ TL)
 
@@ -241,7 +241,7 @@ G2 (LISMA) — 1 agent làm cả code + review:
 → KHÔNG cần iteration loop vì task đơn giản (LISMA tự code + tự fix 1 bước).
 ```
 
-`[EXT]` Qui ước state machine Tier 1: NEW → REVIEWING → FIXING → VERIFYING → CLEAN trong **cùng 1 vòng**. Làm rõ T6: trong Tier 1, nhánh VERIFYING → REVIEWING **chỉ áp dụng cho bug regression cũ quay lại** (bug gốc tái xuất do fix — §9.1) — không có vòng lặp regression lặp đi lặp lại như Tier 2/3. **Bug mới** verify-fail thì **vẫn được vào vòng 2**: vòng mới đi tiếp T3 → T5 (REVIEWING → FIXING → VERIFYING) rồi dừng theo T4/T7 — không mâu thuẫn với câu trước (cái bị bỏ là iteration-loop vì regression, không phải vòng 2 cho bug mới). Khi task không còn "Simple" → LISMA báo KING re-tier kịp thời (SIMPLE → MEDIUM).
+`[EXT]` Qui ước state machine Tier 1: NEW → REVIEWING → FIXING → VERIFYING → CLEAN trong **cùng 1 vòng**. Làm rõ T6: trong Tier 1, nhánh VERIFYING → REVIEWING **chỉ áp dụng cho bug regression cũ quay lại** (bug gốc tái xuất do fix — §9.1) — không có vòng lặp regression lặp đi lặp lại như Tier 2/3. **Bug mới** verify-fail thì **vẫn được vào vòng 2**: vòng mới đi tiếp T3 → T5 (REVIEWING → FIXING → VERIFYING) rồi dừng theo T4/T7 — không mâu thuẫn với câu trước (cái bị bỏ là iteration-loop vì regression, không phải vòng 2 cho bug mới). Khi task không còn "Simple" → LISMA báo NEMESIS re-tier kịp thời (SIMPLE → MEDIUM).
 
 ## §3. G2 REVIEW CHECKLIST — 6 NHÓM
 
@@ -417,7 +417,7 @@ LISMA Verify:
 | Đối tượng review | Code submission (BELI output) | Audit report + code TMO (Workspace clone) + logs Live System |
 | Quyền sửa | **Được phép SỬA code submission trực tiếp** | **CHỈ CHẨN ĐOÁN + ĐỀ XUẤT fix trong PROPOSAL** — tuyệt đối không apply thay đổi nào lên TMO |
 | Nơi viết patch | Trên chính submission | **Patch mẫu viết trong Workspace** (bản clone) — KHÔNG áp lên Live System |
-| Vòng lặp | Đọc → Tìm → Sửa → Kiểm tra → lặp | Đọc log → Định vị → Chẩn đoán → Đề xuất → **KING verify** |
+| Vòng lặp | Đọc → Tìm → Sửa → Kiểm tra → lặp | Đọc log → Định vị → Chẩn đoán → Đề xuất → **NEMESIS verify** |
 | Priority #1 | Data Leakage | **System Safety** — không được làm sập dịch vụ đang chạy |
 | Deliverable | Code sạch + worklog | **Diagnostic Report** (root cause + fix proposals + patch location) + worklog |
 
@@ -486,7 +486,7 @@ M2 LOOP — LISMA (tối đa 3 vòng, KHÔNG có bước apply):
               (file:line + log excerpt) + severity
 4. ĐỀ XUẤT  → fix proposal + PATCH MẪU viết trong Workspace
               → tự chạy thử patch → trả lời 5 câu System Safety
-5. KING VERIFY (CP2: root cause khớp code ↔ logs?)
+5. NEMESIS VERIFY (CP2: root cause khớp code ↔ logs?)
    → KHÔNG pass → LISMA vòng mới (T6) hoặc escalate
 ```
 
@@ -508,7 +508,7 @@ LISMA đọc theo Suspect Locations (log warnings + error paths):
   → KHÔNG sửa code TMO — chỉ chẩn đoán + đề xuất ✋
 ```
 
-Sau đó HAN (G3) nhận Diagnostic Report → dựng Options A/B/C với verification plan; KING verify tại 3 Checkpoints — chuỗi đầy đủ thuộc TB-05/TB-06.
+Sau đó HAN (G3) nhận Diagnostic Report → dựng Options A/B/C với verification plan; NEMESIS verify tại 3 Checkpoints — chuỗi đầy đủ thuộc TB-05/TB-06.
 
 ### 5.6 Quy tắc vàng M2 (tóm tắt áp dụng runtime)
 
@@ -518,13 +518,13 @@ Sau đó HAN (G3) nhận Diagnostic Report → dựng Options A/B/C với verifi
 2. Mọi root cause phải có evidence: `file:line + log excerpt` — claim không evidence bị loại khỏi Diagnostic Report (xử lý tại §9.3).
 3. Patch mẫu sống trong Workspace, đã chạy thử, có rollback path, trả lời đủ 5 câu System Safety.
 4. Đọc **error paths trước happy paths**; suspect fail-open che lỗi thật.
-5. Chẩn đoán sai do đọc thiếu log ≠ tội — nhưng chẩn đoán **không evidence** = lỗi quy trình (KING sẽ trả về ở CP2).
+5. Chẩn đoán sai do đọc thiếu log ≠ tội — nhưng chẩn đoán **không evidence** = lỗi quy trình (NEMESIS sẽ trả về ở CP2).
 
 ## §6. G2 INTERFACE CONTRACT
 
 `[TB-04 §6 ← thiết kế mới từ nguồn dòng 681–703, 694, 700–701, 1055, 1085–1097, 1093–1097, 3305–3337]` `[EXT]`
 
-### 6.1 Input — từ KING (task)
+### 6.1 Input — từ NEMESIS (task)
 
 ```markdown
 ## G2 Task — [T-<MISSION>-<NNN>]
@@ -545,7 +545,7 @@ Sau đó HAN (G3) nhận Diagnostic Report → dựng Options A/B/C với verifi
 | Logs / system evidence | — | log excerpts + health snapshot (chỉ đọc Live System) | ✅ M2 |
 | Specs (G1 → G2 reference) | specs SIVIL ban đầu (để đối chiếu Correctness "Output khớp spec?") | Module Map + scope audit | ⬜ khuyến nghị |
 
-`[EXT]` Input không đủ (thiếu Artifact Map / worklog) → transition T2: LISMA **không review mù** — DỪNG, escalate lên TL (KING); KING quyết định ai bổ sung input (G2 không tự request ngang SIVIL/BELI).
+`[EXT]` Input không đủ (thiếu Artifact Map / worklog) → transition T2: LISMA **không review mù** — DỪNG, escalate lên TL (NEMESIS); NEMESIS quyết định ai bổ sung input (G2 không tự request ngang SIVIL/BELI).
 
 ### 6.3 Output — cho HAN (Tier 3, M1)
 
@@ -606,7 +606,7 @@ Tier 3 → G3 (HAN): như §6.3/§6.4
 
 ### 6.6 Escalation interface
 
-- Đích: **KING (TL)** — mọi trường hợp ESCALATED (§7.3 format).
+- Đích: **NEMESIS (TL)** — mọi trường hợp ESCALATED (§7.3 format).
 - Không có escalation ngang G2 → G3 hoặc G2 → BELI trực tiếp: mọi tuyến qua TL hoặc qua worklog (TB-09 handoff protocol).
 
 ---
@@ -646,7 +646,7 @@ Tier 3 → G3 (HAN): như §6.3/§6.4
 | D6 | 🔴 CRITICAL đã thử fix ≥ 1 lần, fail | **ESCALATE** | Báo TL + liệt kê mọi fix đã thử | T10 |
 | D7 | Architectural issue (leak fundamental, wrong approach, thiết kế sai system-wide) | **ESCALATE NGAY** (bất kỳ state, bất kỳ vòng) | DỪNG toàn bộ loop → TL quyết định | T8 — bug lẻ không vá được kiến trúc |
 | D8 | Regression bug xuất hiện lần thứ 2 liên tiếp từ cùng 1 fix | **ESCALATE** | Báo TL — fix này có mùi architectural | `[EXT]` mở rộng từ tinh thần nguồn |
-| D9 | M2: root cause nghi ngờ nhưng không đủ evidence sau 3 vòng đọc | **ESCALATE** | Báo TL — cần KING mở rộng audit G1 | `[EXT]` |
+| D9 | M2: root cause nghi ngờ nhưng không đủ evidence sau 3 vòng đọc | **ESCALATE** | Báo TL — cần NEMESIS mở rộng audit G1 | `[EXT]` |
 | D10 | M1: verify pass nhưng CV/metric tụt so với trước fix | **CONTINUE → D4 logic** | Coi như bug HIGH (fix làm hỏng chất lượng) | `[EXT]` — verify phải check cả metric |
 
 ### 7.3 Format escalation message
@@ -716,10 +716,10 @@ Tier 3 → G3 (HAN): như §6.3/§6.4
 
 `[TB-04 §8.3 ← nguồn dòng 1740–1790, đặc biệt 1744 + 1785]` `[SRC] + [EXT: format]`
 
-- **LISMA KHÔNG ghi trực tiếp vào Knowledge Base.** Findings của LISMA cần được xác nhận — KING/SIVIL/HAN đọc trường "KB Candidates" trong worklog và **quyết định ghi** (mọi entry phải có evidence) [SRC dòng 1744, 1746].
+- **LISMA KHÔNG ghi trực tiếp vào Knowledge Base.** Findings của LISMA cần được xác nhận — NEMESIS/SIVIL/HAN đọc trường "KB Candidates" trong worklog và **quyết định ghi** (mọi entry phải có evidence) [SRC dòng 1744, 1746].
 - Mỗi KB Candidate gồm: `insight (1 câu) + loại (Bug Pattern / Root-cause Pattern / Config Lesson / Anti-Pattern) + evidence (bug entry hoặc file:line + log) + mission (M1/M2)`.
 - Category đích trong KB (do người ghi chọn): **Bug Patterns / System Anti-Patterns / Config Lessons / Research Insights** (TB-05 định nghĩa schema đầy đủ).
-- KB Candidates cũng là đầu vào cho **RESEARCH COUNCIL (KING ↔ SIVIL)** — LISMA không ngồi council nhưng tri thức LISMA đề xuất vào council qua worklog [SRC dòng 1769, 1785].
+- KB Candidates cũng là đầu vào cho **RESEARCH COUNCIL (NEMESIS ↔ SIVIL)** — LISMA không ngồi council nhưng tri thức LISMA đề xuất vào council qua worklog [SRC dòng 1769, 1785].
 
 Ví dụ 2 candidate "chuẩn" (dùng bằng chứng thật TMO):
 1. *"Neo4j AuraDB: username là instance ID (8-hex) — NEO4J_DATABASE phải bằng tên DB thật, không phải 'neo4j'"* — Config Lesson, M2, evidence Task 2.
@@ -742,8 +742,8 @@ Ví dụ 2 candidate "chuẩn" (dùng bằng chứng thật TMO):
 ### 9.2 Bug không tái hiện (heisenbug / không reproduce)
 
 - **Quy tắc:** KHÔNG được claim "Fixed" khi không reproduce được. Chỉ được ghi status `Cannot-repro (evidence: ...)`.
-- Các bước: (1) thử lại đúng điều kiện gốc (seed, data version, env); (2) nếu vẫn không tái hiện → ghi worklog + trả về TL (KING) kèm yêu cầu điều kiện tái hiện (data snapshot, log quanh thời điểm bug); (3) bug không tái hiện **không được tính là 0 bug** khi dừng theo D1 — chỉ được coi "unconfirmed" và phải nằm trong Concerns.
-- M2: nếu symptom production không tái hiện trong log range đã đọc → yêu cầu KING mở rộng audit (D9) — không suy đoán root cause từ thinh lặng.
+- Các bước: (1) thử lại đúng điều kiện gốc (seed, data version, env); (2) nếu vẫn không tái hiện → ghi worklog + trả về TL (NEMESIS) kèm yêu cầu điều kiện tái hiện (data snapshot, log quanh thời điểm bug); (3) bug không tái hiện **không được tính là 0 bug** khi dừng theo D1 — chỉ được coi "unconfirmed" và phải nằm trong Concerns.
+- M2: nếu symptom production không tái hiện trong log range đã đọc → yêu cầu NEMESIS mở rộng audit (D9) — không suy đoán root cause từ thinh lặng.
 
 ### 9.3 Claim thiếu evidence (M2 — và best practice M1)
 
@@ -759,7 +759,7 @@ Ví dụ 2 candidate "chuẩn" (dùng bằng chứng thật TMO):
   2. Patch đã **chạy thử trong Workspace** (câu 5) — kết quả chạy thử ghi vào Fix Proposals table.
   3. Ghi **rollback path** cụ thể (VD: `git revert <workspace commit>`; config cũ backup ở đâu).
   4. Nêu rõ fix nào cần **restart service** khi áp (PM2 restart theopusflashlite...) — đây là thông tin cho người APPLY, không phải LISMA tự restart.
-  5. Nếu không thể xác minh compatibility trong Workspace (thiếu service phụ thuộc) → ghi rõ "unverified-compatibility" trong Concerns → KING quyết định mức rủi ro chấp nhận trong Proposal.
+  5. Nếu không thể xác minh compatibility trong Workspace (thiếu service phụ thuộc) → ghi rõ "unverified-compatibility" trong Concerns → NEMESIS quyết định mức rủi ro chấp nhận trong Proposal.
 
 ### 9.5 Bảng tổng hợp edge cases G2
 
@@ -767,13 +767,13 @@ Ví dụ 2 candidate "chuẩn" (dùng bằng chứng thật TMO):
 |---|---|---|---|---|
 | E1 | Regression bug sau fix | verify re-run | ghi entry + fix vòng mới + re-test bug gốc (§9.1) | worklog có Regression row |
 | E2 | Bug không tái hiện | verify fail ngẫu nhiên | status `Cannot-repro` + yêu cầu điều kiện tái hiện (§9.2) | Concerns cho TL |
-| E3 | Claim thiếu evidence | KING CP2 / self-check | loại khỏi report, trả BELI/SIVIL (§9.3) | Diagnostic Report chỉ chứa claim có evidence |
+| E3 | Claim thiếu evidence | NEMESIS CP2 / self-check | loại khỏi report, trả BELI/SIVIL (§9.3) | Diagnostic Report chỉ chứa claim có evidence |
 | E4 | Patch phá compatibility | System Safety check | khóa nộp + verify trong Workspace + rollback path (§9.4) | Fix Proposals có cột safety |
-| E5 | Input thiếu Artifact Map/worklog | state NEW | T2 — DỪNG, escalate lên TL (KING); không review mù | delay, không phải lỗi G2 |
+| E5 | Input thiếu Artifact Map/worklog | state NEW | T2 — DỪNG, escalate lên TL (NEMESIS); không review mù | delay, không phải lỗi G2 |
 | E6 | Fix xong metric/CV tụt | verify so metric trước-sau | coi bug HIGH, vào vòng mới (D10) | không pass D1 |
-| E7 | Tier 1 task hóa phức tạp | verify fail > 1 lần | báo KING re-tier (SIMPLE→MEDIUM) | TL quyết định |
+| E7 | Tier 1 task hóa phức tạp | verify fail > 1 lần | báo NEMESIS re-tier (SIMPLE→MEDIUM) | TL quyết định |
 | E8 | 2 bugs xung đột fix (fix A làm B tái xuất) | verify vòng sau | fix theo cặp, test chéo A+B; 3 lần fail → D8 | escalation nếu bế tắc |
-| E9 | M2 phát hiện lỗi ĐANG đe dọa Live System (VD: lỗi ghi dữ liệu) | đọc log | **vẫn không được tự áp** — escalate KHẨN (format §7.3 + tag URGENT) cho TL/user quyết *(✅ chốt v1.3: dual-channel — đồng thời notify user trực tiếp kênh URGENT; KING vẫn decision-maker — §11 Q7)* | escalation ngay lập tức |
+| E9 | M2 phát hiện lỗi ĐANG đe dọa Live System (VD: lỗi ghi dữ liệu) | đọc log | **vẫn không được tự áp** — escalate KHẨN (format §7.3 + tag URGENT) cho TL/user quyết *(✅ chốt v1.3: dual-channel — đồng thời notify user trực tiếp kênh URGENT; NEMESIS vẫn decision-maker — §11 Q7)* | escalation ngay lập tức |
 | E10 | Quá nhiều bug (>10/file) | review vòng 1 | không fix dần từng cái — nghi ngờ architectural → D7 | escalation kèm đề xuất re-decompose |
 
 ## §10. ACCEPTANCE CRITERIA
@@ -785,12 +785,12 @@ Ví dụ 2 candidate "chuẩn" (dùng bằng chứng thật TMO):
 - [ ] **AC3.** Checklist 6 nhóm giữ **nguyên văn đủ mục** (Correctness 3, Data Safety 4, Performance 3, Compatibility 3, Readability 3, System Safety 5) + Bugs Found table + Suggestions cho G3.
 - [ ] **AC4.** Severity 4 mức đúng bảng nguồn; 5 loại bug M1 đúng bảng nguồn (Logic, Edge Case, Data Leakage, Performance, API/Compatibility) + quy ước Regression là gốc bug (Type riêng trong bảng).
 - [ ] **AC5.** Mode M2: 5 loại vấn đề hệ thống đúng bảng nguồn (giữ ví dụ thật: NEO4J_DATABASE, key 401 → 121s, fail-open) + cách phát hiện từng loại.
-- [ ] **AC6.** M2 không tồn tại bước "apply fix": vòng lặp M2 = Đọc log → Định vị → Chẩn đoán → Đề xuất → KING verify; mọi patch nằm trong Workspace với rollback path.
+- [ ] **AC6.** M2 không tồn tại bước "apply fix": vòng lặp M2 = Đọc log → Định vị → Chẩn đoán → Đề xuất → NEMESIS verify; mọi patch nằm trong Workspace với rollback path.
 - [ ] **AC7.** System Safety 5 câu (kể cả "đã chạy thử trong Workspace chưa?") hiện diện trong checklist AND Diagnostic Report schema AND quy tắc §9.4.
 - [ ] **AC8.** Stop criteria 4 nhánh nguồn + bảng quyết định D1–D10 + escalation format (3 loại nguồn + 2 mở rộng có đánh dấu `[EXT]`).
 - [ ] **AC9.** Worklog G2 mở rộng từ schema chuẩn 3310–3319, có: Mission, Vòng lặp, Regression bugs, Files (chỉ Workspace khi M2), KB Candidates.
-- [ ] **AC10.** KB Candidates: LISMA chỉ đề xuất qua worklog; KING/SIVIL/HAN quyết định ghi — đúng bảng quyền dòng 1740–1746; mỗi candidate có evidence.
-- [ ] **AC11.** Interface contract 2 chiều: input (KING task + G1 output) và 3 output (HAN / TL Tier 1–2 / Diagnostic Report M2 với root_cause + severity + fix proposal + patch location).
+- [ ] **AC10.** KB Candidates: LISMA chỉ đề xuất qua worklog; NEMESIS/SIVIL/HAN quyết định ghi — đúng bảng quyền dòng 1740–1746; mỗi candidate có evidence.
+- [ ] **AC11.** Interface contract 2 chiều: input (NEMESIS task + G1 output) và 3 output (HAN / TL Tier 1–2 / Diagnostic Report M2 với root_cause + severity + fix proposal + patch location).
 - [ ] **AC12.** Traceability matrix (Phụ lục A) khớp mọi section với khoảng dòng nguồn; mọi `[EXT]` không mâu thuẫn `[SRC]`; mọi điểm khác biệt tiềm năng được đưa vào §11 Open Questions thay vì âm thầm thay thiết kế.
 - [ ] **AC13.** Danh tính tuân thủ TB-00: tên agent LISMA ≠ model (Kimi-k3 + fallback chain giữ nguyên vai trò); Priority #1 ghi đúng: M1 = Data Leakage, M2 = System Safety.
 
@@ -804,8 +804,8 @@ Ví dụ 2 candidate "chuẩn" (dùng bằng chứng thật TMO):
 - **Q4 — Đọc Live System ở M2: ✅ CHỐT v1.3 — chủ động READ-ONLY được phép** (tail log mới, gọi `/api/health`, query Neo4j read-only) để hoàn thiện evidence; **mọi thao tác ghi evidence log** (query + ts + kết quả); **WRITE cấm tuyệt đối**. *(Chính sách P4 — evidence log bắt buộc; P6 — an toàn Live System.)*
 - **Q5 — Severity của regression bug: ✅ CHỐT v1.3 — đánh giá ĐỘC LẬP** (tác động regression hiện tại có thể khác bug gốc) **+ ghi tham chiếu severity bug gốc làm context** (ảnh hưởng bảng quyết định D8). *(Khớp đề xuất §4.1/§9.1.)*
 - **Q6 — Đếm vòng lặp: ✅ CHỐT v1.3 — theo task/đợt fix** (không theo file) — đúng cách đọc ví dụ nguồn dòng 898–938 (3 files trong 1 vòng); ảnh hưởng D5.
-- **Q7 — Escalate M2 khẩn cấp (E9): ✅ CHỐT v1.3 — URGENT dual-channel:** severity CRITICAL đang đe dọa Live → (a) escalate KING theo format chuẩn §7.3 + tag URGENT, VÀ ĐỒNG THỜI (b) notify **user trực tiếp** qua kênh URGENT song song (không chờ KING relay). **KING vẫn là decision-maker duy nhất cho fix** — LISMA không bao giờ tự áp. *(Cập nhật E9 §9.5.)*
-- **Q8 — Tier 1 với M2: ✅ CHỐT v1.3 — CÓ** — simple task M2 đi đường Tier 1 của LISMA: "code fix 1 bước" = **patch mẫu Workspace 1 bước, không áp Live** + **KING mini read-back bắt buộc** (1 vòng verify nhỏ). *(Vẫn tuân quy tắc không áp lên Live.)*
+- **Q7 — Escalate M2 khẩn cấp (E9): ✅ CHỐT v1.3 — URGENT dual-channel:** severity CRITICAL đang đe dọa Live → (a) escalate NEMESIS theo format chuẩn §7.3 + tag URGENT, VÀ ĐỒNG THỜI (b) notify **user trực tiếp** qua kênh URGENT song song (không chờ NEMESIS relay). **NEMESIS vẫn là decision-maker duy nhất cho fix** — LISMA không bao giờ tự áp. *(Cập nhật E9 §9.5.)*
+- **Q8 — Tier 1 với M2: ✅ CHỐT v1.3 — CÓ** — simple task M2 đi đường Tier 1 của LISMA: "code fix 1 bước" = **patch mẫu Workspace 1 bước, không áp Live** + **NEMESIS mini read-back bắt buộc** (1 vòng verify nhỏ). *(Vẫn tuân quy tắc không áp lên Live.)*
 
 ---
 
@@ -834,7 +834,7 @@ Ví dụ 2 candidate "chuẩn" (dùng bằng chứng thật TMO):
 | §5.3 | 3986–4008, 4571, 4609–4611 | Chiến lược đọc G2 + Suspect Locations | [SRC]+[EXT] |
 | §5.4–§5.5 | 1033, 4452–4489 | Vòng lặp M2 chi tiết + ví dụ 121s (3 root causes) | [SRC]+[EXT] |
 | §5.6 | 699, 1031 + TB-00 §1.3 | Quy tắc vàng M2 | [SRC] |
-| §6 | 681–703, 694, 700–701, 1055, 1085–1097, 3305–3337 | Interface contract (input KING/G1 → output HAN/TL) | [EXT] |
+| §6 | 681–703, 694, 700–701, 1055, 1085–1097, 3305–3337 | Interface contract (input NEMESIS/G1 → output HAN/TL) | [EXT] |
 | §7.1 | 941–955 | Stop criteria 4 nhánh | [SRC] |
 | §7.2–§7.3 | 941–955, 1080–1083 | Bảng quyết định D1–D10 + escalation format | [EXT] |
 | §8 | 3310–3319, 694, 1085–1088, 1740–1790 | Worklog G2 mở rộng + KB Candidates | [EXT] / [SRC]+[EXT] |

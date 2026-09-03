@@ -2,7 +2,7 @@
  * TC-01 — CLASSIFY AMBIGUOUS REQUEST (TB-12 §3.2 + TB-02 §6 edge #1 + DR-C2)
  * ==================================================================================
  * Spec:
- *  - Request mơ hồ (LOW confidence) → KING KHÔNG đoán mò; hỏi ĐÚNG 1 CÂU.
+ *  - Request mơ hồ (LOW confidence) → NEMESIS KHÔNG đoán mò; hỏi ĐÚNG 1 CÂU.
  *  - classifyMission returns clarifyingQuestion non-empty + confidence.level==='LOW'
  *    + tier falsy.
  *  - API: POST /missions ambiguous → 201 { status:'needs_clarification',

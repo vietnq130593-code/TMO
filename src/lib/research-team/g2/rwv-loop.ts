@@ -5,7 +5,7 @@
  *  - TB-09 §1-§3 — Read-Write-Verify (RWV) loop: LISMA + BELI cùng viết code
  *    trong workspace, LISMA review → fix → re-test. Trần 2 vòng REVISED (DR-C5).
  *  - DR-C5 — Proposal pending + trần REVISED: 2 vòng fix trong RWV; quá 2 →
- *    ESCALATE KING (P5 — Proposal với human-in-loop).
+ *    ESCALATE NEMESIS (P5 — Proposal với human-in-loop).
  *  - TB-09 §10 E1/E2/E3 — Diagnostic Report (DR): LISMA root cause + evidence.
  *  - TB-12 §3.2 TC-10 — Workspace read-only Live: LISMA KHÔNG ghi ngoài
  *    workspace path = `workspace/research/${missionId}/`. Mọi file LISMA touch
@@ -40,7 +40,7 @@ import { AGENT_ID, G2_MAX_FIX_ROUNDS } from '../constants'
 // §1. TYPES — RwvState + RegressionEntry
 // ============================================================
 
-/** Trần 2 vòng REVISED (DR-C5) — quá 2 → ESCALATE KING (P5). */
+/** Trần 2 vòng REVISED (DR-C5) — quá 2 → ESCALATE NEMESIS (P5). */
 export const RWV_MAX_ROUNDS = 2
 
 export type RwvStatus =
@@ -49,7 +49,7 @@ export type RwvStatus =
   | 'VERIFY' // đang review + test
   | 'REVISED' // verify fail, round < maxRounds → loop lại
   | 'DONE' // verify pass → task done
-  | 'ESCALATE' // round ≥ maxRounds + REVISED → KING P5
+  | 'ESCALATE' // round ≥ maxRounds + REVISED → NEMESIS P5
 
 export interface RegressionEntry {
   /** Vòng nào phát hiện regression (TC-04: fix gây regression) */
@@ -171,7 +171,7 @@ export async function startRwvLoop(
  *    - lismaCall review + test.
  *    - Nếu regression (TC-04: fix mới phá bug gốc) → RegressionEntry + re-test.
  *    - status: VERIFY pass → DONE; fail → REVISED (round < maxRounds) hoặc
- *      ESCALATE (round ≥ maxRounds → KING P5).
+ *      ESCALATE (round ≥ maxRounds → NEMESIS P5).
  *
  *  Model switch giữa vòng (TC-12): nếu caller inject recordModelSwitch giữa các
  *    vòng → state.modelSwitched push. TC-12: task KHÔNG reset (state nằm DB).
@@ -273,7 +273,7 @@ export async function runRwvRound(
       next.round = next.round + 1
     } else {
       next.status = 'ESCALATE'
-      next.escalateReason = `DR-C5: ${next.maxRounds} REVISED rounds exhausted — escalate to KING (P5)`
+      next.escalateReason = `DR-C5: ${next.maxRounds} REVISED rounds exhausted — escalate to NEMESIS (P5)`
     }
   }
 
@@ -323,7 +323,7 @@ export async function checkWorkspaceReadOnly(
 // ============================================================
 
 /**
- * Check xem state có cần escalate KING không:
+ * Check xem state có cần escalate NEMESIS không:
  *  - round ≥ maxRounds + status REVISED → ESCALATE.
  *  - status đã ESCALATE → vẫn true (idempotent).
  *  - DR-C5 trần 2 vòng REVISED.
@@ -479,7 +479,7 @@ async function persistRoundWorklog(state: RwvState, phase: string): Promise<void
       issuesFaced: state.note ? [state.note] : [],
       suggestionsNextGroup:
         state.status === 'ESCALATE'
-          ? ['ESCALATE to KING — manual review needed (DR-C5 trần 2 vòng)']
+          ? ['ESCALATE to NEMESIS — manual review needed (DR-C5 trần 2 vòng)']
           : [],
       filesChanged: state.filesChanged,
     }

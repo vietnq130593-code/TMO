@@ -207,7 +207,7 @@ export interface ArtifactMapValidation {
  *  - map.entries.length === 0 → invalid (empty map = no audit).
  *  - map.complete === false → invalid.
  *
- * SIVIL phải bổ sung map trước khi KING MONITOR pass.
+ * SIVIL phải bổ sung map trước khi NEMESIS MONITOR pass.
  */
 export function validateArtifactMap(map: ArtifactMap | null | undefined): ArtifactMapValidation {
   if (!map) {

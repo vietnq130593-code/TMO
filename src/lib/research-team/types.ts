@@ -124,10 +124,10 @@ export interface ConfidenceSignals {
   level: 'HIGH' | 'MEDIUM' | 'LOW'
 }
 
-// ---------- ResearchMission.decisionLogJson — Decision Log KING ----------
+// ---------- ResearchMission.decisionLogJson — Decision Log NEMESIS ----------
 export interface DecisionLogEntry {
   at: string // ISO timestamp
-  agent: 'KING' | 'SIVIL' | 'BELI' | 'LISMA' | 'HAN' | string
+  agent: 'NEMESIS' | 'SIVIL' | 'BELI' | 'LISMA' | 'HAN' | string
   decision: 'CONTINUE' | 'PIVOT' | 'ESCALATE' | 'DECOMPOSE' | 'REJECT' | 'RESEARCH' | string
   reason: string
   /** Ref evidence/trigger (worklog id, council transcript id, ...) */
@@ -195,7 +195,7 @@ export interface WorklogEntry {
   concernsForTl?: string[]
   artifactMap?: unknown // pointer — nội dung map do TB-10 định nghĩa (P6)
   nextSteps?: string[]
-  kbEntries?: string[] // KB entries mới (KING/SIVIL/HAN) — id refs
+  kbEntries?: string[] // KB entries mới (NEMESIS/SIVIL/HAN) — id refs
   kbCandidates?: string[] // BELI/LISMA đề xuất (TB-08)
   modelNote?: string // dòng model switched DR-C7 (model-switch.ts sinh)
 }

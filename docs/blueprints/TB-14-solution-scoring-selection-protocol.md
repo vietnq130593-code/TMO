@@ -19,9 +19,9 @@
 
 **Phạm vi IN:** sinh–chấm–chọn–thử–đánh giá–chốt giả thiết & giải pháp cho **cả M1 (Kaggle) lẫn M2 (System Research)**; tích hợp councils ①–⑤, KB, worklog, Decision Log.
 
-**Phạm vi OUT:** pipeline KING 7 nhiệm vụ (TB-06) · decomposition (TB-07) · RWV chi tiết (TB-09) · schema Proposal (TB-11) — TB-14 chỉ **gắn vào** các chỗ đó, không định nghĩa lại.
+**Phạm vi OUT:** pipeline NEMESIS 7 nhiệm vụ (TB-06) · decomposition (TB-07) · RWV chi tiết (TB-09) · schema Proposal (TB-11) — TB-14 chỉ **gắn vào** các chỗ đó, không định nghĩa lại.
 
-**Thảo luận giữa TL và ai [EXT — trả lời trực tiếp câu hỏi user]:** Council ⑤ = **KING (chủ trì) + SIVIL + BELI + LISMA + HAN** — đủ 4 vai: người sinh giả thiết, người viết spec thử nghiệm, người chạy thử, người giữ tri thức bối cảnh. Escalate thêm ESCALATED_USER khi verdict CONVERGE đi Proposal (route TB-11) hoặc khi 3 vòng không ra kết quả.
+**Thảo luận giữa TL và ai [EXT — trả lời trực tiếp câu hỏi user]:** Council ⑤ = **NEMESIS (chủ trì) + SIVIL + BELI + LISMA + HAN** — đủ 4 vai: người sinh giả thiết, người viết spec thử nghiệm, người chạy thử, người giữ tri thức bối cảnh. Escalate thêm ESCALATED_USER khi verdict CONVERGE đi Proposal (route TB-11) hoặc khi 3 vòng không ra kết quả.
 
 ---
 
@@ -50,7 +50,7 @@ WEAK       < 3.0   → LOẠI — không được vào Options; ghi worklog lý 
 
 ### 1.3 [EXT] Quy tắc chống gaming-rubric
 
-- **Chấm độc lập:** D4 không do chính SIVIL chấm — 2 SA blind do KING chỉ định (tái dùng cơ chế dual-audit TC-03).
+- **Chấm độc lập:** D4 không do chính SIVIL chấm — 2 SA blind do NEMESIS chỉ định (tái dùng cơ chế dual-audit TC-03).
 - **Evidence tối thiểu của điểm ≥3:** mọi chiều ≥3 phải dẫn 1 artifact (worklog entry / snapshot / log line) — điểm không có artifact = tự động về 1.
 - **Cấm cộng dồn chứng cứ trùng:** cùng 1 file:line không được dùng để lên điểm 2 chiều khác nhau.
 
@@ -92,7 +92,7 @@ Mỗi option có **2 scorecard B**: (1) *pre-experiment* — HAN ước lượng
 
 ```
 VÒNG 1 GENERATE     SIVIL sinh ≥3 giả thiết / 1 vấn đề (SA matrix TB-03 §5)
-                     │  ≤3 giả thiết sinh được → ESCALATE KING (hypothesis nghèo)
+                     │  ≤3 giả thiết sinh được → ESCALATE NEMESIS (hypothesis nghèo)
                      ▼
 VÒNG 2 SCORE-A      Chấm Rubric A độc lập (D4 bởi 2 SA blind)
                      │  WEAK → loại; top-2 đi tiếp; gap top-2 < 0.5 → cả 2 đi tiếp
@@ -106,7 +106,7 @@ VÒNG 4 EXPERIMENT   HAN dựng Options A/B/C — mỗi option kèm scorecard B 
                      LISMA triển khai POC top-2 trong workspace (branch riêng/option)
                      → đo → scorecard B thực đo → delta → lesson calibration KB
                      ▼
-VÒNG 5 COUNCIL ⑤    KING + SIVIL + BELI + LISMA + HAN (blocking) phê scorecards → verdict §6
+VÒNG 5 COUNCIL ⑤    NEMESIS + SIVIL + BELI + LISMA + HAN (blocking) phê scorecards → verdict §6
                      │  CONTINUE-ITERATE → quay lại vòng 1 (đém lượt: tối đa 3)
                      ▼
               CONVERGE / PIVOT / DROP
@@ -126,7 +126,7 @@ VÒNG 5 COUNCIL ⑤    KING + SIVIL + BELI + LISMA + HAN (blocking) phê scoreca
 
 | Việc xác minh | Cơ chế sẵn có dùng lại | TB-14 thêm |
 |---|---|---|
-| Chẩn đoán đúng | LISMA VERIFYING M2: đối chiếu root cause ↔ evidence (TB-04 §2.2) + KING CP2 | điểm D2 yêu cầu kill-test workspace (nâng chuẩn từ "khớp code ↔ logs" lên "vá → hết triệu chứng") |
+| Chẩn đoán đúng | LISMA VERIFYING M2: đối chiếu root cause ↔ evidence (TB-04 §2.2) + NEMESIS CP2 | điểm D2 yêu cầu kill-test workspace (nâng chuẩn từ "khớp code ↔ logs" lên "vá → hết triệu chứng") |
 | Fix/POC chạy đúng | RWV loop (TB-09) trong workspace branch | branch P-POC-<option> riêng từng option — tách bạch diff để council so |
 | Hiệu quả thật | Verification Plan (a) tay NGAY + (b) benchmark DEFERRED (TB-11 §7) | scorecard S6 bắt buộc cả (a)+(b) mới đủ 10 điểm chiều |
 | Điểm rubric đúng | Evidence log bắt buộc (DR: claim thiếu evidence bị loại) | anchor artifact cho mọi chiều ≥3 (§1.3) |
@@ -178,14 +178,14 @@ Mỗi pattern/lesson/baseline khi ghi KB **BẮT BUỘC** kèm khối `applicabi
 
 | Vai | Agent | Bắt buộc? |
 |---|---|---|
-| Chủ trì | KING | ✅ |
+| Chủ trì | NEMESIS | ✅ |
 | Giả thiết/evidence | SIVIL | ✅ |
 | Spec/POC design | BELI | ✅ (G1) |
 | Kết quả chạy thử | LISMA | ✅ (nếu vòng 4 đã chạy) |
 | KB/context-fit | HAN | ✅ |
 | User | ESCALATED_USER | khi verdict = CONVERGE → Proposal, hoặc DROP task T3 |
 
-**Quorum tối thiểu [EXT]:** KING + ít nhất 1 agent mỗi engine có mặt ở vòng đang xét. Thiếu → hoãn, không chấm bớt (thorough-first).
+**Quorum tối thiểu [EXT]:** NEMESIS + ít nhất 1 agent mỗi engine có mặt ở vòng đang xét. Thiếu → hoãn, không chấm bớt (thorough-first).
 
 ### 6.2 Agenda cố định (5 mục, theo thứ tự)
 
@@ -193,7 +193,7 @@ Mỗi pattern/lesson/baseline khi ghi KB **BẮT BUỘC** kèm khối `applicabi
 2. Rà kill-test: giả thiết thắng có thực sự CONFIRMED (D2=5)?
 3. Context-fit check lần cuối (§5.2) cho option thắng.
 4. Rà ngân sách vòng: còn lặp tournament không? (≤3).
-5. **Verdict** — 1 trong 4, ghi CouncilTranscript (kind=5) + Decision Log KING.
+5. **Verdict** — 1 trong 4, ghi CouncilTranscript (kind=5) + Decision Log NEMESIS.
 
 ### 6.3 Bảng verdict
 
@@ -273,7 +273,7 @@ model ExperimentRecord {
 
 | # | Tình huống | Xử lý |
 |---|---|---|
-| E1 | SIVIL sinh được <3 giả thiết | ESCALATE KING — "hypothesis nghèo" → KING nới rộng vấn đề hoặc hạ ambition (Decision Log) |
+| E1 | SIVIL sinh được <3 giả thiết | ESCALATE NEMESIS — "hypothesis nghèo" → NEMESIS nới rộng vấn đề hoặc hạ ambition (Decision Log) |
 | E2 | 2 SA blind chấm D4 lệch nhau >2 điểm | vòng 3 đánh giá lại từ đầu + SIVIL trình CẢ 2 bản chấm lên council ⑤ (khớp cơ chế TB-03 §5.3 dual-interpretation) |
 | E3 | Kill-test không thực hiện được (không tái tạo được triệu chứng) | D2 tối đa = 3 (chỉ cơ chế giải thích); giả thiết tối đa PROBABLE — không bao giờ CONFIRMED |
 | E4 | Scorecard thực đo thiếu (POC fail trước khi đo) | option về CONDITIONAL; nếu fail do infra → retry 1 lần; fail do bản chất → REJECTED + negative-evidence |
@@ -318,7 +318,7 @@ model ExperimentRecord {
 | Quyết định | Chốt |
 |---|---|
 | Rubric tồn tại ở đâu | 2 rubric riêng (A chẩn đoán / B giải pháp) — Phụ lục Z2 + TB-14, không trộn với TRIAGE 3 điểm (đó là chấm độ phức tạp task, việc khác) |
-| Ai chấm | SIVIL đề xuất + 2 SA blind chấm D4; HAN chấm B; council ⑤ phê chung — KING không tự chấm (chỉ chủ trì) |
+| Ai chấm | SIVIL đề xuất + 2 SA blind chấm D4; HAN chấm B; council ⑤ phê chung — NEMESIS không tự chấm (chỉ chủ trì) |
 | Bao nhiêu giả thiết | ≥3/vấn đề; top-2 đi tiếp; gap <0.5 → cả 2 |
 | Trần vòng | 3 lặp tournament; vòng 3 bắt buộc verdict cuối |
 | Tie-break cuối | S3 (rủi ro thấp) thắng — an toàn trước |

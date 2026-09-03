@@ -35,17 +35,16 @@ import {
   type DecodedResearchWorklog,
 } from '@/lib/research-team/types'
 import { filterClaimsWithEvidence } from '@/lib/research-team/g2/evidence-log'
+// FIX (Task 19 audit): dùng worklog-schema.ts (SSOT validation TB-09 §4.2) thay
+// vì inline duplicate 120 dòng — file này trước đây 0 import (dead code) dù route
+// tự viết lại y hệt logic.
+import { validateWorklogEntry } from '@/lib/research-team/worklog-schema'
 
 export const dynamic = 'force-dynamic'
 
 // ============================================================
-// §1. MANUAL VALIDATION — 8 required fields (TB-09 §4.2)
+// §1. VALIDATION — delegate worklog-schema.ts (SSOT — TB-09 §4.2)
 // ============================================================
-
-const VALID_MISSIONS = ['M1', 'M2', 'M3'] as const
-const VALID_STATUSES = ['IN_PROGRESS', 'COMPLETED', 'BLOCKED', 'ESCALATED'] as const
-const VALID_PHASES = ['G1', 'G2', 'G3'] as const
-const VALID_TL_READBACKS = ['VERIFIED', 'NEEDS-REVIEW', 'PIVOT-NEEDED'] as const
 
 interface ValidationResult {
   valid: boolean
@@ -53,86 +52,28 @@ interface ValidationResult {
 }
 
 /**
- * Manual validation 8 trường required (TB-09 §4.2):
- *  - mission ∈ {M1, M2, M3}
- *  - status ∈ {IN_PROGRESS, COMPLETED, BLOCKED, ESCALATED}
- *  - currentPhase ∈ {G1, G2, G3}
- *  - overallProgress ∈ [0, 100]
- *  - tlReadBack ∈ {VERIFIED, NEEDS-REVIEW, PIVOT-NEEDED}
- *  - done: string[]
- *  - issuesFaced: string[]
- *  - suggestionsNextGroup: string[]
- *  - filesChanged: string[]
- *
- * Trả về valid=false + error message nếu thiếu/invalid field.
+ * Validate 8 trường required — delegate validateWorklogEntry của worklog-schema.ts
+ * (trước đây route tự viết 120 dòng trùng lặp — dead-code duplication).
  */
-function validateWorklogEntry(entry: unknown): ValidationResult {
-  if (!entry || typeof entry !== 'object') {
-    return { valid: false, error: 'Entry phải là object (TB-09 §4.2 — 8 trường required)' }
+function validateEntry(entry: unknown): ValidationResult {
+  const result = validateWorklogEntry(entry)
+  if (!result.valid) {
+    return { valid: false, error: result.errors.join('; ') || 'Entry invalid (TB-09 §4.2)' }
   }
-  const e = entry as Record<string, unknown>
-
-  // 1. mission
-  if (typeof e.mission !== 'string' || !VALID_MISSIONS.includes(e.mission as (typeof VALID_MISSIONS)[number])) {
-    return { valid: false, error: `entry.mission phải là 1 trong ${VALID_MISSIONS.join('|')}` }
-  }
-
-  // 2. status
-  if (typeof e.status !== 'string' || !VALID_STATUSES.includes(e.status as (typeof VALID_STATUSES)[number])) {
-    return { valid: false, error: `entry.status phải là 1 trong ${VALID_STATUSES.join('|')}` }
-  }
-
-  // 3a. currentPhase
-  if (typeof e.currentPhase !== 'string' || !VALID_PHASES.includes(e.currentPhase as (typeof VALID_PHASES)[number])) {
-    return { valid: false, error: `entry.currentPhase phải là 1 trong ${VALID_PHASES.join('|')}` }
-  }
-
-  // 3b. overallProgress
-  if (typeof e.overallProgress !== 'number' || !Number.isFinite(e.overallProgress) || e.overallProgress < 0 || e.overallProgress > 100) {
-    return { valid: false, error: 'entry.overallProgress phải là số trong [0, 100]' }
-  }
-
-  // 4. tlReadBack
-  if (typeof e.tlReadBack !== 'string' || !VALID_TL_READBACKS.includes(e.tlReadBack as (typeof VALID_TL_READBACKS)[number])) {
-    return { valid: false, error: `entry.tlReadBack phải là 1 trong ${VALID_TL_READBACKS.join('|')}` }
-  }
-
-  // 5. done
-  if (!Array.isArray(e.done) || !e.done.every((x) => typeof x === 'string')) {
-    return { valid: false, error: 'entry.done phải là string[]' }
-  }
-
-  // 6. issuesFaced
-  if (!Array.isArray(e.issuesFaced) || !e.issuesFaced.every((x) => typeof x === 'string')) {
-    return { valid: false, error: 'entry.issuesFaced phải là string[]' }
-  }
-
-  // 7. suggestionsNextGroup
-  if (!Array.isArray(e.suggestionsNextGroup) || !e.suggestionsNextGroup.every((x) => typeof x === 'string')) {
-    return { valid: false, error: 'entry.suggestionsNextGroup phải là string[]' }
-  }
-
-  // 8. filesChanged
-  if (!Array.isArray(e.filesChanged) || !e.filesChanged.every((x) => typeof x === 'string')) {
-    return { valid: false, error: 'entry.filesChanged phải là string[]' }
-  }
-
   return { valid: true }
 }
 
 /**
  * TC-06 evidence gap check:
- *  - Collect claims từ entry.done[] + entry.findings[].finding (if present).
- *  - filterClaimsWithEvidence → nếu rejected.length > 0 → 400 'Evidence gap'.
+ *  - FIX (Task 19 audit A#2): claims CHỈ lấy từ entry.findings[] (claim thật của DR).
+ *  - done[] là progress text — KHÔNG phải claim cần evidence (coi done[] là claim
+ *    làm mọi POST hợp lệ bị 400 false-positive).
  */
 function checkEvidenceGapForEntry(
   entry: WorklogEntry,
   evidence: EvidenceItem[],
 ): { hasGap: boolean; gapClaims: string[] } {
   const claims: string[] = []
-  if (Array.isArray(entry.done)) {
-    claims.push(...entry.done.filter((d) => typeof d === 'string' && d.trim().length > 0))
-  }
   if (Array.isArray(entry.findings)) {
     for (const f of entry.findings) {
       if (f && typeof f.finding === 'string' && f.finding.trim().length > 0) {
@@ -242,8 +183,8 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // 2. Validate entry 8 trường
-  const entryValidation = validateWorklogEntry(body.entry)
+  // 2. Validate entry 8 trường (worklog-schema SSOT)
+  const entryValidation = validateEntry(body.entry)
   if (!entryValidation.valid) {
     return NextResponse.json(
       { status: 'error', error: entryValidation.error || 'Entry invalid (8 trường required TB-09 §4.2)' },

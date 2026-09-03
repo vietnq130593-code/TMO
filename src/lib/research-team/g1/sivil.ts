@@ -173,7 +173,7 @@ export async function runSivilExplore(
     status: conflicts.length > 0 ? 'ESCALATED' : failedCount === dispatchedPlan.saCount ? 'BLOCKED' : 'IN_PROGRESS',
     currentPhase: 'G1',
     overallProgress: clampProgress(Math.round((doneCount / Math.max(dispatchedPlan.saCount, 1)) * 60)), // G1 ~60% of pipeline
-    tlReadBack: conflicts.length > 0 ? 'PIVOT-NEEDED' : 'NEEDS-REVIEW', // KING review sau council ②
+    tlReadBack: conflicts.length > 0 ? 'PIVOT-NEEDED' : 'NEEDS-REVIEW', // NEMESIS review sau council ②
     done: [
       `SIVIL round ${round}: DECOMPOSE ${exploreDirections.length} directions → DISPATCH ${dispatchedPlan.saCount} SA (${doneCount} DONE, ${failedCount} FAILED)`,
       `SYNTHESIZE: ${synthesisResult.error ? '(deferred — LLM unavailable)' : 'top-K synthesis report ready'}`,
@@ -185,7 +185,7 @@ export async function runSivilExplore(
     suggestionsNextGroup: [
       'Council ② phải xác nhận specs trước khi BELI code (TC-07 order)',
       conflicts.length > 0
-        ? 'KHÔNG tự giải quyết conflict — đẩy KING qua council ③ (TB-03 §5.3 3B)'
+        ? 'KHÔNG tự giải quyết conflict — đẩy NEMESIS qua council ③ (TB-03 §5.3 3B)'
         : 'Specs draft sẵn sàng cho BELI sau council ②',
     ],
     filesChanged,

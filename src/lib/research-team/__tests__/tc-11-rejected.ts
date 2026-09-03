@@ -2,7 +2,7 @@
  * TC-11 — REJECTED → RESEARCHING (TB-12 §3.2 + TB-11 §2 + TB-06 §9.8)
  * ==================================================================================
  * Spec:
- *  - Proposal P-YYYYMMDD-NNN bị REJECTED kèm lý do → KING phân tích → quay lại
+ *  - Proposal P-YYYYMMDD-NNN bị REJECTED kèm lý do → NEMESIS phân tích → quay lại
  *    research (re-DECOMPOSE phần liên quan) hoặc đóng mission.
  *  - Trạng thái REJECTED → RESEARCHING; Decision log có lý do.
  *  - KHÔNG re-submit nguyên trạng.

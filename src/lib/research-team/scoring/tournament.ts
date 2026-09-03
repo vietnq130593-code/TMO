@@ -5,7 +5,7 @@
  *  - TB-14 §3 — Tournament 5 vòng trần 3 lặp:
  *      ① GENERATE → ② SCORE-A → ③ FALSIFY → ④ EXPERIMENT → ⑤ COUNCIL.
  *      Trần 3 lặp (iterations ≤3); vòng 3 bắt buộc verdict cuối (CONVERGE/DROP).
- *  - TB-14 §6 — Council ⑤ solution council (KING+SIVIL+BELI+LISMA+HAN):
+ *  - TB-14 §6 — Council ⑤ solution council (NEMESIS+SIVIL+BELI+LISMA+HAN):
  *      blocking=true · kind=5 · round=5 · verdict CONTINUE-ITERATE|CONVERGE|PIVOT|DROP.
  *  - TB-14 §7 — DIRECT-APPLY post-converge: 5 điều kiện hội ĐỦ → eligible.
  *  - TB-14 §9 — exit rules: E1 (<3 hypothesis escalate) · E3 (CONFIRMED cần killCriteria)
@@ -14,7 +14,7 @@
  *
  * DEPENDENCY INJECTION (TB-13 §1 nguyên tắc 7 — không NLP phức tạp, tái dùng hạ tầng):
  *  Tournament.ts KHÔNG import g1/sivil, g2/lisma, hay king/ trực tiếp (chúng build
- *  song song/separate). Caller (KING ở P5) inject các hàm thật qua TournamentAgents.
+ *  song song/separate). Caller (NEMESIS ở P5) inject các hàm thật qua TournamentAgents.
  *  Tournament.ts tự testable với mock agents (P7 E2E test cases).
  *
  * Fail-open (TB-13 §4): mỗi vòng catch error → ghi warning, tiếp tục nếu có thể.
@@ -39,7 +39,7 @@ import { checkContextFit, type ContextFitInput, type ContextFitResult, type Miss
 // §1. TYPES — DI Agents + Tournament I/O
 // ============================================================
 
-/** Callbacks caller (KING P5) inject — DI pattern. */
+/** Callbacks caller (NEMESIS P5) inject — DI pattern. */
 export interface TournamentAgents {
   /** Vòng 1: SIVIL sinh ≥3 hypothesis từ problem statement. */
   generateHypotheses: (problemStmt: string) => Promise<{ hypothesis: string; evidence: string[] }[]>
@@ -136,7 +136,7 @@ const GAP_THRESHOLD = 0.5 // tie-break: gap top-2 <0.5 → cả 2; tie-break cu�
  */
 async function generateKillCriteria(problemStmt: string, hypothesis: string): Promise<string | null> {
   const systemPrompt = [
-    'Bạn là KING (Team Lead — research team TMO), nhiệm vụ: sinh killCriteria cho hypothesis.',
+    'Bạn là NEMESIS (Team Lead — research team TMO), nhiệm vụ: sinh killCriteria cho hypothesis.',
     '',
     'TB-14 §3 vòng 3 FALSIFY: mỗi hypothesis cần killCriteria — evidence nào nếu quan sát được',
     'sẽ BÁC BỎ (falsify) hypothesis. CONFIRMED bắt buộc killCriteria (TC-15).',
@@ -323,9 +323,9 @@ export function evaluateDirectApply(params: {
 // ============================================================
 
 const COUNCIL_5_SYSTEM_PROMPT = [
-  'Bạn là KING (TL — research team TMO), chủ trì Council ⑤ solution council.',
+  'Bạn là NEMESIS (TL — research team TMO), chủ trì Council ⑤ solution council.',
   '',
-  'Council ⑤ (TB-14 §6.2) — 5 thành viên: KING + SIVIL + BELI + LISMA + HAN.',
+  'Council ⑤ (TB-14 §6.2) — 5 thành viên: NEMESIS + SIVIL + BELI + LISMA + HAN.',
   'Agenda 5 mục:',
   '  1. Hypothesis CONFIRMED/REJECTED/KILLED (D2 causal — kill-test pass?).',
   '  2. Experiment scorecard B: STRONG/RECOMMENDED/CONDITIONAL/REJECTED?',
@@ -538,7 +538,7 @@ async function persistExperiment(params: {
       data: {
         missionId: params.missionId,
         optionId: params.optionId,
-        hypothesisRef: params.hypothesisRef ?? null,
+        hypothesisRef: params.hypothesisRef || null, // FIX (Task 19 audit B#8): '' không phải nullish — `?? null` lưu chuỗi rỗng vào DB
         specPath: params.spec ?? null,
         branchName: params.branchName ?? null,
         metricsJson: params.metrics ? encodeJson(params.metrics) : null,
@@ -586,7 +586,7 @@ export async function runTournament(params: RunTournamentParams): Promise<Tourna
     }
     if (hypotheses.length < MIN_HYPOTHESES) {
       warnings.push(
-        `§9 E1: chỉ có ${hypotheses.length} hypothesis (< ${MIN_HYPOTHESES}) — escalate KING (LLM unavailable?)`,
+        `§9 E1: chỉ có ${hypotheses.length} hypothesis (< ${MIN_HYPOTHESES}) — escalate NEMESIS (LLM unavailable?)`,
       )
       if (isLast) {
         councilVerdict = 'DROP'

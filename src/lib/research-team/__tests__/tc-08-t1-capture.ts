@@ -2,7 +2,7 @@
  * TC-08 — T1 CAPTURE AT MONITOR/FINALIZE (TB-12 §3.2 + TB-08 §7 quy tắc vàng #2)
  * ==================================================================================
  * Spec:
- *  - Task tier T1 (M1/M2) — không qua G3 → Tri thức vẫn vào KB: KING ghi tại
+ *  - Task tier T1 (M1/M2) — không qua G3 → Tri thức vẫn vào KB: NEMESIS ghi tại
  *    MONITOR + FINALIZE (quy tắc vàng #2 — TB-08 §7); không để tri thức thất lạc.
  *  - captureAtMonitor pure-ish (DB side-effect) — capture lesson + baseline entries
  *    từ worklog + persist ResearchKBEntry rows.

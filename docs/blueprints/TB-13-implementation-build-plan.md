@@ -12,7 +12,7 @@
 **Mục đích:** Bất kỳ dev (người) hoặc agent (máy) cầm file này đều biết chính xác: code gì, đặt ở đâu, theo thứ tự nào, nghiệm thu bằng cách nào — **không phải tự suy đoán từ 14 blueprint**.
 
 **Phạm vi IN:**
-- Team research = 8 thành phần: Router/CLASSIFY, G1 (SIVIL+BELI), G2 (LISMA), G3 (HAN+KB), KING (TL engine), Councils ①–⑤, Solution Scoring & Selection (TB-14: Rubric A/B + Tournament + Context-Fit + DIRECT-APPLY), RWV/Handoff + Proposal/Self-Direction.
+- Team research = 8 thành phần: Router/CLASSIFY, G1 (SIVIL+BELI), G2 (LISMA), G3 (HAN+KB), NEMESIS (TL engine), Councils ①–⑤, Solution Scoring & Selection (TB-14: Rubric A/B + Tournament + Context-Fit + DIRECT-APPLY), RWV/Handoff + Proposal/Self-Direction.
 - Tích hợp vào TMO app hiện có (Next.js 16 App Router, Prisma SQLite, mini-services).
 
 **Phạm vi OUT (việc riêng, chờ lệnh):**
@@ -44,12 +44,12 @@ Thư mục mới trung tâm: **`src/lib/research-team/`** (mọi file mới củ
 
 | Blueprint | Module code sẽ tạo | Ghi chú |
 |---|---|---|
-| TB-01 Foundation/Roster/Model/Env | `src/lib/research-team/constants.ts` · `types.ts` · `model-switch.ts` | Roster research (KING/SIVIL/BELI/LISMA/HAN + SA), env đọc từ `.env` sẵn. Model switch format DR-C7 |
+| TB-01 Foundation/Roster/Model/Env | `src/lib/research-team/constants.ts` · `types.ts` · `model-switch.ts` | Roster research (NEMESIS/SIVIL/BELI/LISMA/HAN + SA), env đọc từ `.env` sẵn. Model switch format DR-C7 |
 | TB-02 Arch/Tier System | `src/lib/research-team/classify.ts` · `mission-store.ts` · `tier.ts` | CLASSIFY 3-tier, confidence counting DR-C2, tie-break UP |
 | TB-03 G1 SIVIL+BELI | `src/lib/research-team/g1/` — `sivil.ts` · `beli.ts` · `engine.ts` · `sub-agents.ts` | SA round-robin 20/25, council ① ②, dual-interpretation escalation |
 | TB-04 G2 LISMA | `src/lib/research-team/g2/` — `lisma.ts` · `rwv-loop.ts` · `evidence-log.ts` | RWV loop, Regression entry, KHÔNG auto-apply |
 | TB-05 G3 HAN+KB | `src/lib/research-team/g3/` — `han.ts` · `kb-store.ts` | KB 3 tầng DR-C6, curate kép 3 mốc, trần 3 vòng, cold-start seed |
-| TB-06 KING Engine | `src/lib/research-team/king/` — `engine.ts` · `councils.ts` · `decision-log.ts` · `escalation.ts` | VETO, PIVOT, timeout 48h/24h + nhắc 12h DR-C5, deputy SIVIL/HAN |
+| TB-06 NEMESIS Engine | `src/lib/research-team/king/` — `engine.ts` · `councils.ts` · `decision-log.ts` · `escalation.ts` | VETO, PIVOT, timeout 48h/24h + nhắc 12h DR-C5, deputy SIVIL/HAN |
 | TB-07 Decompose Playbook | `src/lib/research-team/king/decompose.ts` · `task-md.ts` | task .md template + Success Criteria gate (TC-13) |
 | TB-08 Knowledge Capture | `src/lib/research-team/g3/capture.ts` | Capture tại MONITOR/FINALIZE cho T1 (TC-08), pre-approval retire |
 | TB-09 RWV/Handoff | `src/lib/research-team/handoff.ts` · `worklog-schema.ts` | Gate Artifact Map E4 (TC-14), Confidence 8 trường, format model_switched |
@@ -65,7 +65,7 @@ Thư mục mới trung tâm: **`src/lib/research-team/`** (mọi file mới củ
 |---|---|---|
 | `/api/research/missions` | GET/POST | List/tạo mission (POST → CLASSIFY gán tier) |
 | `/api/research/missions/[id]` | GET/PATCH | Chi tiết + state transition (append-only event) |
-| `/api/research/missions/[id]/decompose` | POST | KING DECOMPOSE (gate council ①) |
+| `/api/research/missions/[id]/decompose` | POST | NEMESIS DECOMPOSE (gate council ①) |
 | `/api/research/missions/[id]/monitor` | POST | Vòng MONITOR + KB capture + PIVOT check |
 | `/api/research/missions/[id]/finalize` | POST | FINALIZE + KB capture + Council ④ |
 | `/api/research/tasks/[id]` | GET/PATCH | task .md + amendment CHANGELOG |
@@ -114,7 +114,7 @@ model ResearchMission {
   tier          String                     // T1 | T2 | T3
   status        String                     // CLASSIFY→RESEARCHING→...→FINALIZED (bảng TB-02 §7)
   confidenceJson String   @default("{}")   // tín hiệu C2: {signals, conflicts, level}
-  decisionLogJson String  @default("[]")   // Decision Log KING (mọi quyết định)
+  decisionLogJson String  @default("[]")   // Decision Log NEMESIS (mọi quyết định)
   changelogJson  String   @default("[]")   // CHANGELOG amendment DR-C3
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -257,7 +257,7 @@ model ExperimentRecord {
 | **P2b — Scoring/Tournament (TB-14)** | `scoring/*` — Rubric A/B + tournament 5 vòng + context-fit + council ⑤ kind=5 + ExperimentRecord POC branch | TC-15, TC-16, TC-17 pass |
 | **P3 — G2** | `g2/*` — RWV loop + evidence log + Regression entry + workspace clone (Live read-only) | TC-04, TC-06, TC-10 pass |
 | **P4 — G3+KB** | `g3/*` — KB 3 tầng (SQLite canonical + snapshot md + index) + cold-start seed + curate kép 3 mốc + trần 3 vòng | TC-05 pass |
-| **P5 — KING** | `king/*` — full lifecycle + councils ③ ④ + VETO + PIVOT + escalation deputy + timeout 48h/24h/12h | TC-09, TC-11 pass |
+| **P5 — NEMESIS** | `king/*` — full lifecycle + councils ③ ④ + VETO + PIVOT + escalation deputy + timeout 48h/24h/12h | TC-09, TC-11 pass |
 | **P6 — Handoff+Proposal** | `handoff.ts` gate Artifact Map + `proposal/*` P-YYYYMMDD-NNN git branch + self-direction bridge | TC-08, TC-13, TC-14 pass |
 | **P7 — E2E** | `__tests__/` 18 TC + golden-run script + verify toàn tập | **18/18 TC pass** |
 
@@ -267,7 +267,7 @@ model ExperimentRecord {
 
 | Hạ tầng có sẵn | Cách team research dùng |
 |---|---|
-| `src/lib/llm.ts` | Gọi model cho KING/SIVIL/BELI/LISMA/HAN + SA — truyền `taskLabel` để log đúng |
+| `src/lib/llm.ts` | Gọi model cho NEMESIS/SIVIL/BELI/LISMA/HAN + SA — truyền `taskLabel` để log đúng |
 | `src/lib/service-key-pool.ts` | Mẫu cho pool key SA (nếu cần tách pool riêng khỏi LLM chính) |
 | `src/lib/self-direction/orchestrator.ts` | Proposal APPROVED → bridge gọi orchestrator hiện có thực thi APPLY |
 | `src/lib/github-token-store.ts` + workspace git | `git-branch.ts` tạo branch P-*, merge sau APPROVED |
@@ -284,7 +284,7 @@ Mission tạo → workspace clone (đường dẫn: workspace/research/<mission-
   → mọi ghi của LISMA/BELI nằm TRONG clone (Live = read-only)
   → Proposal SUBMITTED: branch P-YYYYMMDD-NNN + diff summary
   → APPROVED → merge branch → APPLY qua self-direction
-  → REJECTED → KING Decision Log → re-DECOMPOSE phần liên quan (không re-submit nguyên trạng — TC-11)
+  → REJECTED → NEMESIS Decision Log → re-DECOMPOSE phần liên quan (không re-submit nguyên trạng — TC-11)
 ```
 
 ---

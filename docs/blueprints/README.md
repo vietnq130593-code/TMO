@@ -13,7 +13,7 @@
 | 5 | `TB-03-g1-engine-sivil-beli.md` | G1 — SIVIL (research) + BELI (spec) |
 | 6 | `TB-04-g2-engine-lisma.md` | G2 — LISMA (implement, RWV) |
 | 7 | `TB-05-g3-engine-han-knowledge-base.md` | G3 — HAN + Knowledge Base |
-| 8 | `TB-06-tl-engine-king.md` | KING — TL engine + 4 councils |
+| 8 | `TB-06-tl-engine-king.md` | NEMESIS — TL engine + 4 councils |
 | 9 | `TB-07-tl-decomposition-playbook.md` | Phân rã mission → parts/tasks |
 | 10 | `TB-08-knowledge-capture-protocol.md` | Capture tri thức mọi tier |
 | 11 | `TB-09-rwv-loop-handoff-protocol.md` | RWV loop + handoff gate |
@@ -30,7 +30,7 @@
 ```
 TB-00 (quy ước) → TB-13 (bản đồ code) → DECISION-RECORD-v1.3 (quyết định)
 → TB-01 + TB-02 (nền tảng) → engines TB-03/04/05/07/10 (theo phase P2-P4 ở TB-13 §5)
-→ TB-14 (scoring/tournament — phase P2b) → TB-06 (KING) → TB-09 + TB-11 (handoff/proposal)
+→ TB-14 (scoring/tournament — phase P2b) → TB-06 (NEMESIS) → TB-09 + TB-11 (handoff/proposal)
 → TB-12 (verify 18 TC) → tra cứu truy nguyên: ai-team-workflow.md (tìm [SRC] trong các TB)
 ```
 
@@ -57,4 +57,4 @@ TB-00 (quy ước) → TB-13 (bản đồ code) → DECISION-RECORD-v1.3 (quyế
 - ❌ Ghi vào Live System ngoài workspace clone (Live = read-only)
 
 ---
-*v1.5 — 2026-09-01 · Tạo Task 23 (Z.ai Code main): TB-14 + Phụ lục Z2 theo yêu cầu user. Muốn đảo bất kỳ quyết định nào: đọc `DECISION-RECORD-v1.3.md` §4 (quy ước sau chốt) — quyết định v1.5 đảo qua Decision Log KING + amend Phụ lục Z2.*
+*v1.5 — 2026-09-01 · Tạo Task 23 (Z.ai Code main): TB-14 + Phụ lục Z2 theo yêu cầu user. Muốn đảo bất kỳ quyết định nào: đọc `DECISION-RECORD-v1.3.md` §4 (quy ước sau chốt) — quyết định v1.5 đảo qua Decision Log NEMESIS + amend Phụ lục Z2.*

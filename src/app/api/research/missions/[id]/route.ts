@@ -162,7 +162,7 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
           decision: body.decision
             ? {
                 at: new Date().toISOString(),
-                agent: body.decision.agent || 'KING',
+                agent: body.decision.agent || 'NEMESIS',
                 decision: body.decision.decision || 'CONTINUE',
                 reason: body.decision.reason,
                 ref: body.decision.ref,

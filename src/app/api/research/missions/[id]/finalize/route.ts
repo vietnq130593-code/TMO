@@ -1,11 +1,11 @@
 /**
- * /api/research/missions/[id]/finalize — POST KING FINALIZE — TB-13 §2.2
+ * /api/research/missions/[id]/finalize — POST NEMESIS FINALIZE — TB-13 §2.2
  * ======================================================================
  * Spec:
- *  - TB-13 §2.2 — API route KING FINALIZE: tổng hợp final report + council ④ + KB capture.
+ *  - TB-13 §2.2 — API route NEMESIS FINALIZE: tổng hợp final report + council ④ + KB capture.
  *  - TB-06 §9 — FINALIZE phase: M1 final report / M2 Proposal.
  *  - TB-08 §7 quy tắc vàng #2 — TC-08: mọi tier đều capture tại FINALIZE.
- *  - DR-C5 §C5 — KING cấm tự duyệt Proposal (council ④ verify nhưng USER/deputy duyệt).
+ *  - DR-C5 §C5 — NEMESIS cấm tự duyệt Proposal (council ④ verify nhưng USER/deputy duyệt).
  *
  * Behavior:
  *  POST /api/research/missions/[id]/finalize
@@ -52,7 +52,7 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
       )
     }
 
-    // 3. Run KING FINALIZE
+    // 3. Run NEMESIS FINALIZE
     const result = await kingFinalize(id)
 
     return NextResponse.json({

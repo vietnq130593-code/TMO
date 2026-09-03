@@ -2,19 +2,19 @@
  * /api/research/proposals/[id]/review — POST ESCALATED_USER review (kèm deputy khi timeout) — TB-13 §2.2
  * ====================================================================================================
  * Spec:
- *  - TB-13 §2.2 — API route review (POST APPROVE/REJECT) — DR-C5 §C5 (KING cấm tự duyệt).
+ *  - TB-13 §2.2 — API route review (POST APPROVE/REJECT) — DR-C5 §C5 (NEMESIS cấm tự duyệt).
  *  - TB-11 §3 — Lifecycle: SUBMITTED → APPROVED (bridge self-direction) | REJECTED (TC-11).
  *  - DR-C5 §C5 — Proposal pending timeout 48h/24h + deputy SIVIL/HAN khi timeout.
- *      KING cấm tự duyệt Proposal (assertNotKingSelfApprove).
+ *      NEMESIS cấm tự duyệt Proposal (assertNotKingSelfApprove).
  *  - TB-12 §3.2 TC-11 — REJECT reason BẮT BUỘC non-empty.
  *
  * Behavior:
  *  POST /api/research/proposals/[id]/review { decision:'APPROVE'|'REJECT', reviewedBy, reason? }
  *    → 200 { status:'ok', proposal, applied?, applyError? }  (APPROVE — applied có thể false do orchestrator/git)
  *    → 200 { status:'ok', proposal }                          (REJECT)
- *    → 400 nếu KING self-approve (DR-C5 §C5)
+ *    → 400 nếu NEMESIS self-approve (DR-C5 §C5)
  *    → 400 nếu REJECT mà thiếu reason (TC-11)
- *    → 400 nếu deputy khi chưa timeout (chỉ USER/KING-approved deputy được)
+ *    → 400 nếu deputy khi chưa timeout (chỉ USER/NEMESIS-approved deputy được)
  *    → 404 nếu proposal null
  *    → 400 nếu status không phải SUBMITTED
  *
@@ -101,13 +101,13 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       )
     }
 
-    // 4. DR-C5 §C5 — KING cấm tự duyệt Proposal
-    if (reviewedBy === 'KING') {
+    // 4. DR-C5 §C5 — NEMESIS cấm tự duyệt Proposal
+    if (reviewedBy === 'NEMESIS') {
       return NextResponse.json(
         {
           status: 'error',
           error:
-            'DR-C5 §C5: KING cấm tự duyệt Proposal (recused). Deputy SIVIL/HAN hoặc USER phải duyệt thay.',
+            'DR-C5 §C5: NEMESIS cấm tự duyệt Proposal (recused). Deputy SIVIL/HAN hoặc USER phải duyệt thay.',
         },
         { status: 400 },
       )
@@ -158,8 +158,8 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     // 6. APPROVE / REJECT
     if (body.decision === 'APPROVE') {
       try {
-        // assertNotKingSelfApprove đã check ở bước 4 (reviewedBy === 'KING' trả 400)
-        // Pass 'USER' as escalateTo (deputy / user is approving — NOT KING self-approve)
+        // assertNotKingSelfApprove đã check ở bước 4 (reviewedBy === 'NEMESIS' trả 400)
+        // Pass 'USER' as escalateTo (deputy / user is approving — NOT NEMESIS self-approve)
         assertNotKingSelfApprove(reviewedBy, 'USER', id)
       } catch (err) {
         return NextResponse.json(

@@ -3078,6 +3078,207 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     }
   }, [messages, currentSessionId, setCurrentSessionId, setMessages, setInput, setIsLoading, selectedTeam])
 
+  // ===== RESEARCH TEAM WORKFLOW (Task 19 — user request 2026-09-03) =====
+  // Chat Smolab ↔ Team Research (mirror startWorkflow của team code): MỌI
+  // message team research điều qua /api/research-team/workflow SSE —
+  // CLASSIFY → mission MS-... → NEMESIS lifecycle stream (G1/G2/G3 realtime)
+  // → final report + Proposal duyệt qua prompt ("duyệt P-..."). Mọi thứ chuyển
+  // giao bằng prompt — KHÔNG cần màn hình Missions UI (user directive).
+  const startResearchWorkflow = useCallback(async (text: string) => {
+    // Auto-create session if none (mirror startWorkflow)
+    let sessionId = currentSessionId
+    if (!sessionId) {
+      sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+      skipMessageLoadRef.current = true
+      setCurrentSessionId(sessionId)
+    }
+
+    const userMsg: SmolabMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: text,
+      timestamp: new Date(),
+    }
+    setMessages(prev => [...prev, userMsg])
+    setInput('')
+    setIsLoading(true)
+
+    // AbortController — nút Dừng abort stream client-side (pipeline server tiếp
+    // tục nền — events đã persist DB, quay lại phiên vẫn thấy kết quả).
+    stoppingRef.current = false
+    timedOutRef.current = false
+    const controller = new AbortController()
+    chatAbortRef.current = controller
+    inFlightChatsRef.current.set(sessionId, controller)
+
+    const isActiveSession = () => currentSessionIdRef.current === sessionId
+
+    const startMsg: SmolabMessage = {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: '🔬 Research Team đang khởi động workflow...',
+      timestamp: new Date(),
+      isTeamMessage: true,
+      agentName: 'SYSTEM',
+      agentPosition: 'TL',
+      agentAvatar: '👑',
+    }
+    setMessages(prev => [...prev, startMsg])
+
+    try {
+      const chatMessages = [...messages, userMsg]
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map(m => ({ role: m.role, content: m.content }))
+
+      const res = await fetch('/api/research-team/workflow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: chatMessages,
+          sessionId,
+          userRequest: text,
+          teamName: 'research',
+        }),
+        signal: controller.signal,
+      })
+
+      if (!res.ok) {
+        throw new Error(`Research workflow API error: ${res.status}`)
+      }
+      if (!res.body) {
+        throw new Error('No response body')
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (trimmed.startsWith(':')) continue // heartbeat
+          if (!trimmed.startsWith('data: ')) continue
+
+          const jsonStr = trimmed.slice(6)
+          let event: Record<string, unknown>
+          try {
+            event = JSON.parse(jsonStr)
+          } catch {
+            continue
+          }
+
+          const eventType = event.type as string
+
+          switch (eventType) {
+            case 'workflow_start': {
+              if (isActiveSession()) setMessages(prev => prev.map(m =>
+                m.id === startMsg.id
+                  ? { ...m, content: `🚀 Research Team workflow đã bắt đầu (Session: ${(event.sessionId as string || '').slice(0, 8)}...)` }
+                  : m
+              ))
+              break
+            }
+
+            case 'agent_complete': {
+              // Mỗi agent_complete của research route là message hoàn chỉnh
+              // (stage NEMESIS / clarify / final report) — append bubble mới.
+              const content = event.content as string
+              if (!content || !content.trim()) break
+              const stageMsg: SmolabMessage = {
+                id: crypto.randomUUID(),
+                role: 'assistant',
+                content,
+                timestamp: new Date(),
+                isTeamMessage: true,
+                agentName: (event.agent as string) || 'NEMESIS',
+                agentPosition: (event.position as string) || 'TL',
+                agentAvatar: (event.avatar as string) || '👑',
+              }
+              if (isActiveSession()) setMessages(prev => [...prev, stageMsg])
+              break
+            }
+
+            case 'workflow_done': {
+              const totalDuration = event.totalDuration as number | undefined
+              const wfStatus = String(event.status || 'completed')
+              const durSuffix = totalDuration ? ` (${(totalDuration / 1000).toFixed(1)}s)` : ''
+              const missionCode = event.missionCode as string | undefined
+              let doneContent: string
+              let doneAvatar: string
+              if (wfStatus === 'completed') {
+                doneContent = `✅ Research Team hoàn thành mission${missionCode ? ` ${missionCode}` : ''}!${durSuffix}`
+                doneAvatar = '✅'
+              } else if (wfStatus === 'completed_with_errors') {
+                doneContent = `⚠️ Mission${missionCode ? ` ${missionCode}` : ''} hoàn thành kèm cảnh báo (fail-open — đọc các bước để biết chi tiết).${durSuffix}`
+                doneAvatar = '⚠️'
+              } else if (wfStatus === 'needs_clarification') {
+                doneContent = `❓ NEMESIS cần làm rõ — trả lời câu hỏi phía trên để mission tiếp tục.${durSuffix}`
+                doneAvatar = '❓'
+              } else if (wfStatus === 'failed') {
+                doneContent = `❌ Research Team workflow thất bại — đọc các bước phía trên để biết lỗi ở đâu.${durSuffix}`
+                doneAvatar = '❌'
+              } else {
+                doneContent = `⏹ Research Team workflow kết thúc (${wfStatus}).${durSuffix}`
+                doneAvatar = '⏹'
+              }
+              const doneMsg: SmolabMessage = {
+                id: crypto.randomUUID(),
+                role: 'assistant',
+                content: doneContent,
+                timestamp: new Date(),
+                isTeamMessage: true,
+                agentName: 'SYSTEM',
+                agentPosition: 'TL',
+                agentAvatar: doneAvatar,
+              }
+              if (isActiveSession()) setMessages(prev => [...prev, doneMsg])
+              break
+            }
+
+            case 'error': {
+              const errorMsg = event.message as string
+              const errorAgent = event.agent as string | undefined
+              const errMsg: SmolabMessage = {
+                id: crypto.randomUUID(),
+                role: 'error',
+                content: `❌ Research Team Error${errorAgent ? ` (${errorAgent})` : ''}: ${errorMsg}`,
+                timestamp: new Date(),
+              }
+              if (isActiveSession()) setMessages(prev => [...prev, errMsg])
+              break
+            }
+          }
+        }
+      }
+    } catch (err) {
+      if (stoppingRef.current || currentSessionIdRef.current !== sessionId) {
+        // User bấm Dừng hoặc đang ở phiên khác — im lặng (mirror startWorkflow)
+      } else {
+        const errorMsg = err instanceof Error ? err.message : String(err)
+        const errMsg: SmolabMessage = {
+          id: crypto.randomUUID(),
+          role: 'error',
+          content: `❌ Research workflow failed: ${errorMsg}`,
+          timestamp: new Date(),
+        }
+        setMessages(prev => [...prev, errMsg])
+      }
+    } finally {
+      inFlightChatsRef.current.delete(sessionId)
+      if (chatAbortRef.current === controller) chatAbortRef.current = null
+      stoppingRef.current = false
+      timedOutRef.current = false
+      setIsLoading(inFlightChatsRef.current.has(currentSessionIdRef.current))
+    }
+  }, [messages, currentSessionId, setCurrentSessionId, setMessages, setInput, setIsLoading])
+
   const sendMessage = useCallback(async (queryText?: string) => {
     const text = queryText || input.trim()
     if (!text || isLoading) return
@@ -3209,6 +3410,16 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         setIsLoading(false)
       }
       return // Always return after TL Assessment flow (success or failure)
+    }
+
+    // === RESEARCH TEAM WORKFLOW (Task 19 — user request 2026-09-03) ===
+    // Team research chat → MỌI message điều qua /api/research-team/workflow SSE
+    // (mirror team code): CLASSIFY → mission MS-... → NEMESIS lifecycle stream
+    // → final report. Duyệt Proposal = nhắn "duyệt P-..." / "từ chối P-...".
+    // Mọi thứ chuyển giao bằng prompt — KHÔNG cần màn hình Missions UI.
+    if (chatMode === 'multi' && selectedTeam === 'research') {
+      await startResearchWorkflow(text)
+      return
     }
 
     // Auto-create session if none

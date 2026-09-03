@@ -8,7 +8,7 @@
 
 ## §0. 🎯 MỤC ĐÍCH & PHẠM VI `[TB-09 §0 ← suy từ nguồn dòng 3285–3775 + TB-00 §2]` `[EXT]`
 
-- **Mục đích:** chuẩn hóa 2 thứ chạy xuyên suốt pipeline research: **(1) vật liệu giao tiếp** giữa KING ↔ Groups và Group ↔ Group (task .md, worklog); **(2) vòng lặp kiểm soát** READ-WRITE-VERIFY (RWV) giúp TL phát hiện sai hướng **sau mỗi group** thay vì cuối pipeline.
+- **Mục đích:** chuẩn hóa 2 thứ chạy xuyên suốt pipeline research: **(1) vật liệu giao tiếp** giữa NEMESIS ↔ Groups và Group ↔ Group (task .md, worklog); **(2) vòng lặp kiểm soát** READ-WRITE-VERIFY (RWV) giúp TL phát hiện sai hướng **sau mỗi group** thay vì cuối pipeline.
 - **Tính chất protocol ngang:** áp cho **mọi tier** (T1: 1 vòng · T2: 2 vòng · T3: 3 vòng ≈ số chu kỳ checkpoint — §2.4; nguồn ghi theo vòng iteration: T1 ~1–2 vòng · T2 ~2–3 vòng — dòng 3199/3220), **cả 2 mission** (M1 verify theo metric · M2 verify theo evidence), mọi luồng của TB-02.
 - **Ai đọc:** 5 agents runtime (Instructions của mỗi group) · kỹ sư triển khai (cài worklog + checkpoint hooks) · user (review cơ chế kiểm soát).
 - **Không chứa:** Directed Reading + Research Artifact Map chi tiết (→ TB-10); Research Council (→ TB-06 §10); decomposition + template task .md đầy đủ (→ TB-07 §3); quyết định nâng/hạ tier chi tiết (→ TB-06 §8).
@@ -46,11 +46,11 @@ Bảng phân vai điền `[EXT]`:
 
 | Trường | Ai điền | Bắt buộc | Ghi chú |
 |---|---|---|---|
-| Task / ID / Mission / Tier / Part / Status | KING (TRIAGE + DECOMPOSE + ASSIGN) | ✅ | Part chỉ khai với Complex (T3); ID theo TB-00 §1.4 |
-| Mô tả | KING | ✅ | CÁI GÀI cần làm — không phải cách làm (TB-07 §3.1) |
-| Input | KING | ✅ | Data/artifacts từ parts trước; M2: + Module Map + log range |
-| Output kỳ vọng | KING | ✅ | Kết quả đo được — điều kiện hoàn thành của group |
-| Constraints | KING | ✅ | MUST / SHOULD / AVOID — mỗi mức ≥ 1 dòng (TB-07 §3.1) |
+| Task / ID / Mission / Tier / Part / Status | NEMESIS (TRIAGE + DECOMPOSE + ASSIGN) | ✅ | Part chỉ khai với Complex (T3); ID theo TB-00 §1.4 |
+| Mô tả | NEMESIS | ✅ | CÁI GÀI cần làm — không phải cách làm (TB-07 §3.1) |
+| Input | NEMESIS | ✅ | Data/artifacts từ parts trước; M2: + Module Map + log range |
+| Output kỳ vọng | NEMESIS | ✅ | Kết quả đo được — điều kiện hoàn thành của group |
+| Constraints | NEMESIS | ✅ | MUST / SHOULD / AVOID — mỗi mức ≥ 1 dòng (TB-07 §3.1) |
 
 **Vị trí template:** TB-09 giữ đúng 4 block nguồn trên làm **handoff tối thiểu** (mọi tier dùng được). Template chuẩn hóa đầy đủ (thêm Research Direction, Hypotheses to Test, Experimental Design, Success Criteria, Decision Gate, Evidence Sources M2, KB References) → **TB-07 §3** — T3 NÊN dùng bản đầy đủ.
 
@@ -58,10 +58,10 @@ Bảng phân vai điền `[EXT]`:
 
 ```
 ┌──────────────────────── HANDOFF 2 CHIỀU ────────────────────────┐
-│  (1) XUỐNG — task .md:   KING ──▶ Group nhận (ASSIGN, routing   │
+│  (1) XUỐNG — task .md:   NEMESIS ──▶ Group nhận (ASSIGN, routing   │
 │      theo tier — TB-02 §5). M2: task luôn gắn Module Map +      │
 │      ràng buộc Live System (chỉ đọc) / Workspace (nghiên cứu).  │
-│  (2) LÊN — worklog:      Group xong phase ──▶ KING đọc tại      │
+│  (2) LÊN — worklog:      Group xong phase ──▶ NEMESIS đọc tại      │
 │      Checkpoint (§3); "Đề xuất cho group tiếp" ──▶ group kế     │
 │      đọc khi bắt đầu (G1 → G2 → G3 chạy nối tiếp trong tier).   │
 └──────────────────────────────────────────────────────────────────┘
@@ -89,11 +89,11 @@ Phân tích từng mũi tên `[EXT]`:
 
 | Mũi tên | Artifact kèm | Điều kiện handoff hợp lệ | Điểm kiểm soát |
 |---|---|---|---|
-| KING → G1 | task .md (4 block + protocol trích) | council ① đã duyệt — task LOCKED (TB-07 §8) | ASSIGN (TB-06 §6) |
+| NEMESIS → G1 | task .md (4 block + protocol trích) | council ① đã duyệt — task LOCKED (TB-07 §8) | ASSIGN (TB-06 §6) |
 | G1 → G2 | worklog G1 + draft code + Artifact Map cập nhật + issues + suggestions | **CP1 = CONTINUE** trước khi G2 bắt đầu (§3.2) | CP1 |
 | G2 → G3 | worklog G2 + code sạch + bugs table + suggestions G3 | **CP2 = CONTINUE** (leakage đã fix — M1 P#1) | CP2 |
-| G3 → KING | worklog G3 + output cuối (M1: optimized code + metrics · M2: proposal items + verification plan) + recommendations | **CP3 + FINAL VERIFY** | CP3 |
-| KING → next | Decision + protocol update | TL: Đọc → Kiểm tra → Quyết định → Next part hoặc DONE | DECIDE (TB-06 §8) |
+| G3 → NEMESIS | worklog G3 + output cuối (M1: optimized code + metrics · M2: proposal items + verification plan) + recommendations | **CP3 + FINAL VERIFY** | CP3 |
+| NEMESIS → next | Decision + protocol update | TL: Đọc → Kiểm tra → Quyết định → Next part hoặc DONE | DECIDE (TB-06 §8) |
 
 ### 1.4 Format worklog chuẩn `[TB-09 §1.4 ← nguồn dòng 3310–3319]` `[SRC]`
 
@@ -257,7 +257,7 @@ LƯU Ý (nguồn):
 
 ### 3.6 Bảng quyết định tại checkpoint `[TB-09 §3.6 ← hợp nhất nguồn dòng 3473–3514 + 3455]` `[SRC + EXT]`
 
-| CP | KING đọc gì | Câu hỏi then chốt | Quyết định | Output bắt buộc |
+| CP | NEMESIS đọc gì | Câu hỏi then chốt | Quyết định | Output bắt buộc |
 |---|---|---|---|---|
 | CP1 | G1 worklog + Artifact Map (+ council ② summary) | Đúng hướng? Hypotheses đúng cách? | CONTINUE → G2 · PIVOT nhỏ → giao lại G1 · ESCALATE | Protocol update + 1 dòng Decision log (TB-06 §13) |
 | CP2 | G2 worklog + Updated Map (+ bugs table) | Leakage fixed? Root cause khớp code+logs? | CONTINUE → G3 · trả lại G2 (còn CRITICAL) · ESCALATE | Protocol update (hypothesis + bug status) |
@@ -337,7 +337,7 @@ Tại mọi checkpoint: **council ④** diễn ra cùng lúc (TB-06 §10) + **Kn
 | Mission | ✅ | ✅ | quyết định verify theo metric hay evidence |
 | Status (IN_PROGRESS / COMPLETED / BLOCKED / ESCALATED) | ✅ | ✅ | BLOCKED = thiếu input / hết model stack (TB-01) |
 | Current Phase (G1/G2/G3) + Overall Progress % | ✅ | ✅ | TL nhìn nhanh tiến độ |
-| TL Read-Back (✅ / ⚠️ / 🔴) | ✅ | ✅ | **KING ghi khi READ+VERIFY xong** (§5.4) `[EXT]` |
+| TL Read-Back (✅ / ⚠️ / 🔴) | ✅ | ✅ | **NEMESIS ghi khi READ+VERIFY xong** (§5.4) `[EXT]` |
 | Đã làm | ✅ | ✅ | items kèm metric impact (M1) / finding ref (M2) |
 | Vấn đề gặp phải | ✅ | ✅ | kể cả bottleneck có bằng chứng |
 | Đề xuất cho group tiếp | ✅ | ✅ | handoff §1.3 |
@@ -350,7 +350,7 @@ Tại mọi checkpoint: **council ④** diễn ra cùng lúc (TB-06 §10) + **Kn
 | Concerns cần TL xác nhận | ✅ | ✅ | điều group không tự quyết được |
 | Research Artifact Map | ✅ | ✅ | pointer — nội dung map do TB-10 định nghĩa |
 | Next Steps / Next experiments | ✅ | ✅ | đầu vào UPDATE protocol |
-| KB entries mới / KB Candidates | ✅ | ✅ | TB-08: KING/SIVIL/HAN ghi entry; BELI/LISMA để candidate |
+| KB entries mới / KB Candidates | ✅ | ✅ | TB-08: NEMESIS/SIVIL/HAN ghi entry; BELI/LISMA để candidate |
 | Model note | optional | optional | dòng `model switched` (§4.3) `[EXT]` |
 
 ### 4.3 Dòng model switched `[TB-09 §4.3 ← giải [Q] mở Task 8-a; suy từ TB-00 §1.2]` `[EXT]` — ✅ DUYỆT v1.3 (DR-C7)
@@ -417,7 +417,7 @@ Task `T-HP-002` — House Prices Part 2: Feature Engineering (M1) — 3 entry li
 |---|---|---|
 | Metrics (bắt buộc M1) | G3 có CV 0.134 → 0.121 | G1/G2 thêm bảng Before/After (CP1/CP2 cần — ví dụ đầy đủ: §4.6, nguồn 3639–3757) |
 | Hypothesis Status | chưa có | G1 khai H1/H2/H3 + status (nguồn 3603–3608) |
-| TL Read-Back | chưa có | KING ghi sau mỗi CP (✅ VERIFIED cho cả 3 entry) |
+| TL Read-Back | chưa có | NEMESIS ghi sau mỗi CP (✅ VERIFIED cho cả 3 entry) |
 | KB entries / Candidates | Lessons learned của G3 | chuyển thành KB entry qua TB-08 (VD category Model Training) |
 | Artifact Map | Files | mở rộng theo format M1 `artifact:type:metric_impact` (TB-10) |
 
@@ -425,7 +425,7 @@ Ví dụ nguồn là **compact mode** (như MONITOR đọc trong TB-06 §7.5); r
 
 ### 4.6 Ví dụ RWV loop Part 2 — TL đọc worklog tại 3 checkpoint `[TB-09 §4.6 ← nguồn dòng 3639–3757 — rút gọn; số liệu + lệnh TL UPDATE Protocol nguyên văn]` `[SRC]`
 
-Cùng Part 2 Feature Engineering (M1) như §4.4, nhìn từ phía TL — mỗi checkpoint KING READ worklog → VERIFY → UPDATE Protocol:
+Cùng Part 2 Feature Engineering (M1) như §4.4, nhìn từ phía TL — mỗi checkpoint NEMESIS READ worklog → VERIFY → UPDATE Protocol:
 
 | CP | Chuỗi metric (CV) | TL VERIFY (rút) | TL UPDATE Protocol |
 |---|---|---|---|
@@ -433,7 +433,7 @@ Cùng Part 2 Feature Engineering (M1) như §4.4, nhìn từ phía TL — mỗi 
 | CP2 — sau G2 | **0.128 → 0.127** (-0.001 sau fix leakage) — "(CV score tăng nhẹ sau fix leakage — trước đó metric bị optimistic do leakage)" (nguyên văn nguồn) | CRITICAL leakage đã fix ✅ · CV tăng nhẹ sau fix = leakage fix đúng ✅ · 180 features vẫn nhiều → G3 cần feature selection | Ghi: "Leakage đã fix — target encoding an toàn" · Ghi: "G3 PHẢI feature selection + K-Fold encoding" · Giao G3 |
 | CP3 + FINAL VERIFY — sau G3 | **0.127 → 0.121** (tổng 0.134 → 0.121, giảm 9.7%) · Std 0.008 → 0.003 · Features 180 → 72 · Runtime 45 → 22 min | CV improvement ✅ · CV Std 0.003 — RẤT stable ✅ · 72 features hợp lý cho 1460 rows ✅ · No leakage concerns ✅ | Part 2 DONE ✅ → Chuyển sang Part 3 |
 
-- Điểm giảng dạy: metric theo CP không tuyến tính — CP2 ghi 0.128 → 0.127 là **honest score** sau khi fix leakage ("metric bị optimistic do leakage" trước đó); KING không hiểu nhầm G2 làm kết quả tệ — leakage đã được fix đúng (§6.6 PIVOT leakage).
+- Điểm giảng dạy: metric theo CP không tuyến tính — CP2 ghi 0.128 → 0.127 là **honest score** sau khi fix leakage ("metric bị optimistic do leakage" trước đó); NEMESIS không hiểu nhầm G2 làm kết quả tệ — leakage đã được fix đúng (§6.6 PIVOT leakage).
 - Lệnh UPDATE Protocol cụ thể hóa trách nhiệm group kế ("G2 PHẢI…" / "G3 PHẢI…") — Protocol là trường trong task .md (ghi chú §2.3); bản 3 box CP đầy đủ: nguồn dòng 3639–3757.
 
 ## §5. 🔍 VERIFY CHI TIẾT — BẢNG TIÊU CHÍ M1 vs M2 `[TB-09 §5 ← nguồn dòng 3448–3455, 3486–3514, 4591, 4598]` `[SRC + EXT: bảng]`
@@ -468,7 +468,7 @@ Cùng Part 2 Feature Engineering (M1) như §4.4, nhìn từ phía TL — mỗi 
 
 ### 5.4 TL Read-Back — ghi kết quả verify vào worklog `[TB-09 §5.4 ← nguồn dòng 3587]` `[SRC + EXT: ai ghi]`
 
-Sau READ + VERIFY, KING ghi 1 dòng vào Meta của worklog entry vừa đọc:
+Sau READ + VERIFY, NEMESIS ghi 1 dòng vào Meta của worklog entry vừa đọc:
 
 | Flag | Ý nghĩa | Hành động kế |
 |---|---|---|
@@ -476,7 +476,7 @@ Sau READ + VERIFY, KING ghi 1 dòng vào Meta của worklog entry vừa đọc:
 | ⚠️ NEEDS REVIEW | thiếu thông tin / cần bổ sung nhưng chưa đến mức trả lại | ghi rõ thiếu gì; cho phép group kế chạy với điều kiện kèm |
 | 🔴 PIVOT NEEDED | dính trigger §6 | PIVOT / ESCALATE theo §6.6 |
 
-Kèm mỗi flag: 1 dòng Decision log (TB-06 §13). `[DECIDED v1.3]` KING ghi flag khi READ xong (worklog là shared artifact theo §1.2 — đề xuất được duyệt).
+Kèm mỗi flag: 1 dòng Decision log (TB-06 §13). `[DECIDED v1.3]` NEMESIS ghi flag khi READ xong (worklog là shared artifact theo §1.2 — đề xuất được duyệt).
 
 ## §6. ⚠️ PIVOT TRIGGERS — KHI NÀO TL PHẢI ĐIỀU CHỈNH `[TB-09 §6 ← nguồn dòng 3523–3574, 4594–4597]` `[SRC]`
 
@@ -553,7 +553,7 @@ TL của Research Team = **Research Director** quản lý vòng lặp nghiên c�
            │
            ▼
    ┌── G1 WORK ── WRITE worklog+Map ── READ ── CP1 ── VERIFY ──┐
-   │            (KING đọc worklog)            │                 │
+   │            (NEMESIS đọc worklog)            │                 │
    │                                          │                 │
    │   CONTINUE ── UPDATE protocol ───────────┤                 │
    │   PIVOT nhỏ ── UPDATE ── giao lại G1 ────┤                 │
@@ -586,7 +586,7 @@ TL của Research Team = **Research Director** quản lý vòng lặp nghiên c�
 
 | Vai trò | Thời điểm | Đọc gì | KHÔNG đọc gì |
 |---|---|---|---|
-| **KING** (TL) | mọi CP | worklog + Research Artifact Map (+ Metrics / Findings) | code — trừ ESCALATE hoặc verify claim thiếu evidence (§5.3) |
+| **NEMESIS** (TL) | mọi CP | worklog + Research Artifact Map (+ Metrics / Findings) | code — trừ ESCALATE hoặc verify claim thiếu evidence (§5.3) |
 | **SIVIL** (G1) | trước khi nhận part | task .md + Artifact Map + worklog parts trước; M2: Module Map (TB-03 §6) | code chi tiết của parts trước — qua Map |
 | **BELI** | bắt đầu code | SPEC + Artifact Map vùng liên quan | — |
 | **LISMA** (G2) | bắt đầu G2 | **Leakage/Bug Locations (M1) / Suspect Locations (M2)** từ Map — selective, safety-first, Priority #1 | happy paths trước error paths (TB-04 §5.3) |
@@ -617,7 +617,7 @@ NEW ──ASSIGN──▶ ASSIGNED ──group nhận+đọc Map──▶ IN_PRO
 
 | From | Event | To | Action | Artifact sinh ra |
 |---|---|---|---|---|
-| NEW | KING viết task .md + council ① LOCKED | ASSIGNED | giao theo routing tier (TB-02 §5) | task .md v1 |
+| NEW | NEMESIS viết task .md + council ① LOCKED | ASSIGNED | giao theo routing tier (TB-02 §5) | task .md v1 |
 | ASSIGNED | group nhận, đọc Map, bắt đầu | IN_PROGRESS | — | — |
 | IN_PROGRESS | group xong phase → WRITE | CHECKPOINT | TL READ + VERIFY | worklog entry + Artifact Map update |
 | CHECKPOINT | verify pass, còn group kế | CONTINUE → ASSIGN group kế | UPDATE protocol | protocol update + Decision log |
@@ -625,17 +625,17 @@ NEW ──ASSIGN──▶ ASSIGNED ──group nhận+đọc Map──▶ IN_PRO
 | CHECKPOINT | verify fail nhỏ / trigger 🟡 | PIVOT → IN_PROGRESS | giao lại group; task .md changelog v+1 (§9.4) | changelog + Decision log |
 | CHECKPOINT | trigger 🔴 nghiêm trọng / bế tắc | ESCALATED | dừng + báo user + chờ | Decision log ESCALATE |
 | ESCALATED | user quyết định | IN_PROGRESS / DONE / hủy | ghi quyết định user | Decision log |
-| (bất kỳ) | thiếu input / cả model stack lỗi | BLOCKED | báo KING; KING gỡ hoặc ESCALATE | worklog entry BLOCKED |
+| (bất kỳ) | thiếu input / cả model stack lỗi | BLOCKED | báo NEMESIS; NEMESIS gỡ hoặc ESCALATE | worklog entry BLOCKED |
 
 ### 9.3 Đối chiếu 3 bộ status (nguồn vs lifecycle)
 
 | Task .md (nguồn 3295) | Lifecycle TB-09 §9.1 | Worklog Status (§4.1) | Ai ghi |
 |---|---|---|---|
-| Pending | NEW + ASSIGNED | — | KING |
+| Pending | NEW + ASSIGNED | — | NEMESIS |
 | In-Progress | IN_PROGRESS | IN_PROGRESS | group |
-| Review | CHECKPOINT (từng phase) | — (không có trạng thái Review) | KING verify |
-| Done | DONE | COMPLETED | KING + group |
-| — | ESCALATED | ESCALATED | KING |
+| Review | CHECKPOINT (từng phase) | — (không có trạng thái Review) | NEMESIS verify |
+| Done | DONE | COMPLETED | NEMESIS + group |
+| — | ESCALATED | ESCALATED | NEMESIS |
 | — | BLOCKED | BLOCKED | group |
 
 ### 9.4 Versioning task .md khi pivot — append, KHÔNG rewrite
@@ -662,12 +662,12 @@ NEW ──ASSIGN──▶ ASSIGNED ──group nhận+đọc Map──▶ IN_PRO
 | E2 | Worklog thiếu trường bắt buộc (Metrics M1 / Findings M2) | TL READ thấy thiếu | trả lại group bổ sung entry — protocol là bất biến, không phải gợi ý |
 | E3 | Task M2 không sinh được metric định lượng | tự nhiên (M2 ít số liệu) | dùng qualitative evidence: log excerpt before/after, bảng Performance Baselines (KB — TB-05 §5.1); vẫn phải evidence-based, không "cảm giác nhanh hơn" |
 | E4 | Group xong nhưng không cập nhật Artifact Map | CP check | không giao group kế (quy tắc nguồn 4613) — bắt buộc bổ sung Map rồi mới CONTINUE |
-| E5 | Checkpoint trễ / group treo (không có worklog mới) | MONITOR thiếu entry | KING nhắc qua DECIDE; treo quá ngưỡng → ESCALATE user `[DECIDED v1.3: nhắc 1 CP / treo 2 CP → ESCALATE — §12 Q3]` |
+| E5 | Checkpoint trễ / group treo (không có worklog mới) | MONITOR thiếu entry | NEMESIS nhắc qua DECIDE; treo quá ngưỡng → ESCALATE user `[DECIDED v1.3: nhắc 1 CP / treo 2 CP → ESCALATE — §12 Q3]` |
 | E6 | PIVOT lặp ≥ 2 lần lớn trên cùng 1 part | Decision log | ESCALATE user (khớp TB-06 E8) — dấu hiệu decompose sai hoặc bài toán ngoài khả năng |
 | E7 | Model fallback giữa phase | dòng model switched (§4.3) | task KHÔNG reset; role giữ nguyên; model reset về Kimi-k3 ở task mới |
-| E8 | Task status mâu thuẫn worklog (task .md Done nhưng worklog ESCALATED) | KING đọc | worklog là chuẩn trạng thái chạy; đồng bộ task .md qua changelog (§9.4) |
+| E8 | Task status mâu thuẫn worklog (task .md Done nhưng worklog ESCALATED) | NEMESIS đọc | worklog là chuẩn trạng thái chạy; đồng bộ task .md qua changelog (§9.4) |
 | E9 | Mission lẫn giữa chừng (task M1 sinh findings hệ thống / M2 sinh output kiểu Kaggle) | CP verify thấy loại output sai mission | quay CLASSIFY (TB-06 §2.5); không trộn output 2 mission trong 1 task |
-| E10 | KB Candidates trong worklog không ai duyệt sau 2 checkpoint | KING MONITOR | SLA TB-08 §8 K4 — KING xử lý bắt buộc tại checkpoint kế |
+| E10 | KB Candidates trong worklog không ai duyệt sau 2 checkpoint | NEMESIS MONITOR | SLA TB-08 §8 K4 — NEMESIS xử lý bắt buộc tại checkpoint kế |
 | E11 | ESCALATED chờ user quá lâu | pipeline đứng | pipeline task đó dừng toàn phần; parts khác độc lập vẫn chạy được `[DECIDED v1.3 → DR-C5: 48h/24h + nhắc 12h + deputy approver SIVIL/HAN (TB-06 §16 Q7)]` |
 | E12 | M2 cần POC nhưng Workspace chưa mở (user chưa mở bản clone) | part Design/Propose cần chạy POC (VD Part 3 — TB-07 §5) | evidence vẫn chạy (đọc Live System); POC hoãn + Proposal đánh cờ `POC-NEEDS-WORKSPACE` (quy ước TB-02 §6; xử lý chi tiết: TB-06 §14 E7 + TB-07 §9 E7; ghi chú ASSIGN task M2 — TB-06 §6.7) |
 
@@ -703,7 +703,7 @@ NEW ──ASSIGN──▶ ASSIGNED ──group nhận+đọc Map──▶ IN_PRO
 | Q5 | 3 ngưỡng CV-LB gap (0.005 / 0.01 / 0.02) — có cần bảng chuẩn hóa trong Research Protocol template? | **CÓ — bảng chuẩn hóa 0.005 minor / 0.01 notable / 0.02 instability-warning** vào Research Protocol template. | §5.1 |
 | Q6 | Format dòng model switched (§4.3) — user duyệt dạng chuẩn? | ✅ DR-C7 — **duyệt format §4.3** + thêm 2 trường `trigger` + `next check` (giải trọn [Q] Task 8-a). | giải [Q] Task 8-a |
 | Q7 | M2-T1 (verify-only, không qua pipeline 3 group) có cần vòng RWV rút gọn + Proposal 1-item? | ✅ DR-C1 — verify thuần túy: Verify-Report mini + KB entry, không Proposal; có đề xuất → mini-RWV + Proposal 1-item. | TB-11 |
-| Q8 | Ai ghi TL Read-Back (đề xuất: KING ghi khi READ xong) — worklog là shared artifact? | **KING ghi khi READ xong** (worklog shared artifact §1.2). | §5.4 |
+| Q8 | Ai ghi TL Read-Back (đề xuất: NEMESIS ghi khi READ xong) — worklog là shared artifact? | **NEMESIS ghi khi READ xong** (worklog shared artifact §1.2). | §5.4 |
 
 ## PHỤ LỤC A — TRACEABILITY MATRIX
 

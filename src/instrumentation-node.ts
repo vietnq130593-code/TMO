@@ -414,7 +414,7 @@ if (!globalForWs.__tmoWorkspaceBootstrapped) {
 // ============================================================================
 // RESEARCH TEAM SEED (Task 3-fix WORK 2 — audit fix)
 // ============================================================================
-// Seed 5 research agents (KING/SIVIL/BELI/LISMA/HAN) sau khi DB sẵn sàng.
+// Seed 5 research agents (NEMESIS/SIVIL/BELI/LISMA/HAN) sau khi DB sẵn sàng.
 // Lười-seed qua GET /api/agents cũng đã đảm bảo nhưng boot seed giúp Agents
 // module → Team Research section hiển thị đầy đủ NGAY khi user mở UI (không
 // đợi click Agents module). Fire-and-forget — KHÔNG chặn boot. globalThis
@@ -426,7 +426,7 @@ if (!globalForResearchSeed.__tmoResearchTeamSeeded) {
     .then(() => import('@/lib/research-team/agents'))
     .then(({ ensureResearchTeamAgents }) => ensureResearchTeamAgents())
     .then(() => {
-      console.log('[ResearchTeam] seed 5 agents (KING/SIVIL/BELI/LISMA/HAN) ensured')
+      console.log('[ResearchTeam] seed 5 agents (NEMESIS/SIVIL/BELI/LISMA/HAN) ensured')
     })
     .catch((err) => {
       console.warn(

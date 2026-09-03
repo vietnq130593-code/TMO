@@ -1,10 +1,10 @@
 /**
  * RESEARCH TEAM — Agent Definitions + Seed Logic (Task 3-fix WORK 1)
  * =================================================================================
- * 5 Agents hardcoded cho Research Team — KING / SIVIL / BELI / LISMA / HAN.
+ * 5 Agents hardcoded cho Research Team — NEMESIS / SIVIL / BELI / LISMA / HAN.
  * Clone GitHub về chạy local → Research Team luôn đầy đủ.
  *
- * Positions: TL (KING), G1 (SIVIL/BELI), G2 (LISMA), G3 (HAN)
+ * Positions: TL (NEMESIS), G1 (SIVIL/BELI), G2 (LISMA), G3 (HAN)
  *
  * JD source: TB-01-foundation-roster-model-env.md §1 (RESEARCH_ROSTER) +
  *            TB-03/04/05/06 blueprints (chi tiết vai từng agent trong pipeline).
@@ -50,13 +50,13 @@ export interface ResearchTeamAgentDef {
   /** Emoji avatar */
   avatar: string
   /** Tools whitelist (JSON array string) — research agents KHÔNG có tool
-   *  exec trực tiếp (chỉ KING orchestrate). null = resolve default. */
+   *  exec trực tiếp (chỉ NEMESIS orchestrate). null = resolve default. */
   tools?: string[]
 }
 
 // ===== SYSTEM PROMPTS — INLINE (match standalone-agents pattern) =====
 
-const KING_INSTRUCTION = `Bạn là KING (Team Lead — Research Team TMO). Position: TL.
+const KING_INSTRUCTION = `Bạn là NEMESIS (Team Lead — Research Team TMO). Position: TL.
 
 ═══════════════════════════════════════════
 IDENTITY & PURPOSE
@@ -80,9 +80,9 @@ Bạn là Trưởng nhóm Research Team. Vai trò của bạn: PHÂN LOẠI miss
 RÀNG BUỘC (TB-06 §9.8 + DR-C5 §C5)
 ═══════════════════════════════════════════
 
-- KING KHÔNG code — chỉ phân tích, chia việc, kiểm soát.
-- KING KHÔNG tự duyệt Proposal (recused). Deputy SIVIL/HAN hoặc USER duyệt thay.
-- KING có quyền ghi KB trực tiếp (directKbWrite=true) — ghi lessons, anti-patterns, baselines.
+- NEMESIS KHÔNG code — chỉ phân tích, chia việc, kiểm soát.
+- NEMESIS KHÔNG tự duyệt Proposal (recused). Deputy SIVIL/HAN hoặc USER duyệt thay.
+- NEMESIS có quyền ghi KB trực tiếp (directKbWrite=true) — ghi lessons, anti-patterns, baselines.
 - PIVOT bắt buộc lý do non-empty (TC-09). REJECTED proposal → re-RESEARCHING (TC-11).
 - Mọi claim BẮT BUỘC evidence (TC-06). Mọi council blocking = true.
 
@@ -92,7 +92,7 @@ COUNCILS (TB-06 §10)
 
 ① Post-DECOMPOSE: verify Success Criteria (gate TC-13). VETO nếu thiếu.
 ② Pre-code: challenge synthesis + đối chiếu KB → PASS/REVISE/VETO.
-③ Escalation: G1/G2/G3 ESCALATE → KING chủ trì + agent liên quan quyết.
+③ Escalation: G1/G2/G3 ESCALATE → NEMESIS chủ trì + agent liên quan quyết.
 ④ Final: verify Proposal Verification Plan (TB-11 §7) → PASS/REVISE/VETO.
 ⑤ Solution (TB-14 §6.2): 5 mục agenda → CONTINUE-ITERATE|CONVERGE|PIVOT|DROP.
 
@@ -115,7 +115,7 @@ Bạn là G1 — Sub-Agent Orchestrator. Vai trò: BIẾN 1 TASK THÀN N HƯỚN
 NHIỆM VỤ (TB-03 §4 + §5)
 ═══════════════════════════════════════════
 
-1. DECOMPOSE task từ KING thành N hướng explore song song.
+1. DECOMPOSE task từ NEMESIS thành N hướng explore song song.
 2. DISPATCH sub-agents (≤ 20 SA/part, ≤ 25 SA/G1 round — SUB_AGENT_LIMITS).
 3. SYNTHESIZE kết quả từ các SA → 1 chốt synthesis.
 4. Flag CONFLICTS giữa các SA (TC-03 dual-interpretation escalation).
@@ -126,7 +126,7 @@ COUNCIL ② PRE-CODE (TB-03 §4.4)
 ═══════════════════════════════════════════
 
 - ② challenge synthesis của bạn (với SIVIL tham vấn) + đối chiếu KB.
-- PASS → BELI code. REVISE → loop lại G1 với conditions. VETO → escalate KING council ③.
+- PASS → BELI code. REVISE → loop lại G1 với conditions. VETO → escalate NEMESIS council ③.
 
 ═══════════════════════════════════════════
 RÀNG BUỘC
@@ -134,9 +134,9 @@ RÀNG BUỘC
 
 - SIVIL KHÔNG code — chỉ dispatch + synthesize.
 - directKbWrite=true — SIVIL có quyền ghi KB (lessons về explore approach, dispatch heuristics).
-- ESCALATE lên KING khi SA flag conflict (TC-03) — KHÔNG tự giải quyết.
+- ESCALATE lên NEMESIS khi SA flag conflict (TC-03) — KHÔNG tự giải quyết.
 - Mỗi SA có artifact map riêng (gate E4 TC-14) — kiểm tra trước khi finalize.
-- Escalate to: KING (khi 2+ interpretation conflict).
+- Escalate to: NEMESIS (khi 2+ interpretation conflict).
 
 ═══════════════════════════════════════════
 OUTPUT FORMAT
@@ -170,8 +170,8 @@ RÀNG BUỘC
 
 - BELI chỉ code từ spec đã chốt — KHÔNG tự thay đổi approach (khai triển spec).
 - M2 mode: chỉ ghi file trong workspace/research/<missionId>/ (TC-10 read-only live).
-- directKbWrite=false — KB entries phải qua KB Candidates → KING/HAN approve.
-- Escalate to: SIVIL (khi spec ambiguous) → KING (khi SIVIL cũng stuck).
+- directKbWrite=false — KB entries phải qua KB Candidates → NEMESIS/HAN approve.
+- Escalate to: SIVIL (khi spec ambiguous) → NEMESIS (khi SIVIL cũng stuck).
 - Mỗi file code phải có Success Criteria (gate TC-13) — KHÔNG code mù.
 
 ═══════════════════════════════════════════
@@ -195,7 +195,7 @@ NHIỆM VỤ (TB-04 §3 + §4)
 ═══════════════════════════════════════════
 
 1. Review code draft từ BELI (G1 → G2 handoff).
-2. M1: Tìm bug → fix bug. Trần 3 vòng fix → ESCALATE KING (G2_MAX_FIX_ROUNDS=3).
+2. M1: Tìm bug → fix bug. Trần 3 vòng fix → ESCALATE NEMESIS (G2_MAX_FIX_ROUNDS=3).
    M2: System Diagnostician — root cause từ logs + code + Diagnostic Report.
 3. RWV loop (READ → WRITE → VERIFY) — runRwvRound ≤ 2 vòng.
 4. TC-04 regression check: fix mới phá bug gốc → flag + re-test.
@@ -216,9 +216,9 @@ RÀNG BUỘC
 ═══════════════════════════════════════════
 
 - LISMA chỉ fix bug — KHÔNG refactor scope-creep (khai triển spec).
-- Trần 3 vòng fix (G2_MAX_FIX_ROUNDS=3) — quá → ESCALATE KING.
+- Trần 3 vòng fix (G2_MAX_FIX_ROUNDS=3) — quá → ESCALATE NEMESIS.
 - directKbWrite=false — KB entries phải qua KB Candidates.
-- Escalate to: KING (khi quá trần fix / root cause hypothesis thấp score).
+- Escalate to: NEMESIS (khi quá trần fix / root cause hypothesis thấp score).
 - Mỗi finding phải có evidence (TC-06 — claim thiếu evidence bị loại).
 
 ═══════════════════════════════════════════
@@ -253,9 +253,9 @@ RÀNG BUỘC
 ═══════════════════════════════════════════
 
 - directKbWrite=true — HAN có quyền ghi KB trực tiếp (lesson, anti-pattern, baseline, pattern, calibration).
-- KB entry retire phải qua pre-approval (TB-05 §11 Q4): HAN liệt kê candidates → KING duyệt CP3.
+- KB entry retire phải qua pre-approval (TB-05 §11 Q4): HAN liệt kê candidates → NEMESIS duyệt CP3.
 - Mỗi proposal item phải có Verification Plan (a) manual test NGAY + (b) benchmark spec deferred.
-- Escalate to: KING (khi options cần POC + scoring tournament).
+- Escalate to: NEMESIS (khi options cần POC + scoring tournament).
 - Scorecard B (TB-14 §2.1) cho mỗi option: correctness/perf/robustness/maintainability/scalability.
 
 ═══════════════════════════════════════════
@@ -278,7 +278,7 @@ Markdown proposal items với Verification Plan (a)+(b). List KB entries persist
 
 export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
   {
-    name: 'KING',
+    name: 'NEMESIS',
     description:
       'TL — Phân loại mission, chia nhỏ bài toán, kiểm soát chặt — không code. Điều phối 7 nhiệm vụ lifecycle + 5 councils.',
     instruction: KING_INSTRUCTION,
@@ -287,7 +287,7 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
       'Phân tích request, chấm complexity (3 tiêu chí → tier T1/T2/T3), decompose mission thành parts, giao việc G1/G2/G3, monitor worklog + KB capture, PIVOT/CONTINUE/ESCALATE decisions, tổng hợp final report + Proposal items, chủ trì 5 councils (①②③④⑤).',
     provider: 'nvidia',
     model: AGENT_PRIMARY_MODEL,
-    temperature: 0.3, // KING chặt — không sáng tạo quá mức
+    temperature: 0.3, // NEMESIS chặt — không sáng tạo quá mức
     maxTokens: 16384,
     team: 'research',
     position: 'TL',
@@ -359,6 +359,64 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
   },
 ]
 
+// ===== RENAME MIGRATION (Task 19 — user request 2026-09-03) =====
+// TL Research Team đổi tên: KING → NEMESIS. Mirror pattern AGENT_RENAMES của
+// Code Team (commit 5b46d9d): đổi tên AgentProfile + các bảng reference,
+// GIỮ NGUYÊN mọi customization; bảng history (decisionLogJson, worklog)
+// KHÔNG đổi — ghi chép quá khứ đúng thời điểm.
+
+export const RESEARCH_AGENT_RENAMES: Array<[oldName: string, newName: string]> = [
+  ['KING', 'NEMESIS'],
+]
+
+let researchRenameMigrated = false
+
+async function _migrateResearchAgentRenames(): Promise<void> {
+  if (researchRenameMigrated) return
+  researchRenameMigrated = true // chạy 1 lần/process — idempotent tại DB level
+  for (const [oldName, newName] of RESEARCH_AGENT_RENAMES) {
+    try {
+      const oldRow = await db.agentProfile.findUnique({ where: { name: oldName } })
+      if (!oldRow) continue
+      const newRow = await db.agentProfile.findUnique({ where: { name: newName } })
+      if (newRow) {
+        console.warn(`[ResearchTeam] Rename migration SKIP: cả "${oldName}" lẫn "${newName}" đều tồn tại — giữ nguyên cả 2 (user tự tạo "${newName}"?)`)
+        continue
+      }
+      // 1. AgentProfile — đổi tên, giữ mọi field khác (customization preserved)
+      await db.agentProfile.update({ where: { id: oldRow.id }, data: { name: newName } })
+      // 2. ToolAssignment (tool-access override keyed theo agentKey)
+      try {
+        await db.toolAssignment.updateMany({ where: { agentKey: oldName }, data: { agentKey: newName } })
+      } catch (e) {
+        console.warn(`[ResearchTeam] ToolAssignment migration ${oldName}→${newName} lỗi (không chặn):`, e instanceof Error ? e.message : String(e))
+      }
+      // 3. SkillAssignment — raw SQL (table không có Prisma model, schema-drift safe)
+      try {
+        await db.$executeRaw`UPDATE SkillAssignment SET agentKey = ${newName} WHERE agentKey = ${oldName}`
+      } catch (e) {
+        console.warn(`[ResearchTeam] SkillAssignment migration ${oldName}→${newName} lỗi (không chặn — table có thể chưa tồn tại):`, e instanceof Error ? e.message : String(e))
+      }
+      // 4. AgentModelOverride (override model per-agent)
+      try {
+        await db.agentModelOverride.updateMany({ where: { agentName: oldName }, data: { agentName: newName } })
+      } catch (e) {
+        console.warn(`[ResearchTeam] AgentModelOverride migration ${oldName}→${newName} lỗi (không chặn):`, e instanceof Error ? e.message : String(e))
+      }
+      // 5. CronJob.executor (cron gán executor = tên agent)
+      try {
+        await db.cronJob.updateMany({ where: { executor: oldName }, data: { executor: newName } })
+      } catch (e) {
+        console.warn(`[ResearchTeam] CronJob executor migration ${oldName}→${newName} lỗi (không chặn):`, e instanceof Error ? e.message : String(e))
+      }
+      console.log(`[ResearchTeam] Rename migration ✓ ${oldName} → ${newName} (AgentProfile + ToolAssignment + SkillAssignment + AgentModelOverride + CronJob.executor)`)
+    } catch (err) {
+      researchRenameMigrated = false // lỗi → cho phép retry lần ensure sau
+      console.warn(`[ResearchTeam] Rename migration ${oldName} → ${newName} lỗi (sẽ retry):`, err instanceof Error ? err.message : String(err))
+    }
+  }
+}
+
 // ===== SEED LOGIC =====
 // Idempotent — chạy khi app startup hoặc lazy khi GET /api/agents.
 // Đảm bảo 5 research agents LUÔN tồn tại — clone GitHub về vẫn đủ.
@@ -405,6 +463,7 @@ export async function ensureResearchTeamAgents(): Promise<void> {
 }
 
 async function _doSeed(): Promise<boolean> {
+  await _migrateResearchAgentRenames()
   console.log('[ResearchTeam] Checking Research Team agents...')
   let created = 0
   let skipped = 0
@@ -539,7 +598,7 @@ export function getResearchAgentByPosition(
   return RESEARCH_TEAM_AGENTS.find((a) => a.position === position)
 }
 
-/** Get agent definition by name (KING, SIVIL, BELI, LISMA, HAN). */
+/** Get agent definition by name (NEMESIS, SIVIL, BELI, LISMA, HAN). */
 export function getResearchAgentByName(
   name: string,
 ): ResearchTeamAgentDef | undefined {

@@ -14,9 +14,9 @@
 
 `[TB-10 §0 ← template TB-00 §4]` `[EXT]`
 
-- **Mục đích:** biến section Directed Reading của nguồn (~508 dòng) thành **giao thức vận hành** cho cách cả team đọc artifacts: 3 lớp thông tin, chiến lược 4 bước, format Research Artifact Map (M1 + M2), Dynamic Artifact Chain, chiến lược đọc theo group (LISMA/HAN/KING/SIVIL/BELI), quy ước status artifact M2 + quy trình cập nhật map.
+- **Mục đích:** biến section Directed Reading của nguồn (~508 dòng) thành **giao thức vận hành** cho cách cả team đọc artifacts: 3 lớp thông tin, chiến lược 4 bước, format Research Artifact Map (M1 + M2), Dynamic Artifact Chain, chiến lược đọc theo group (LISMA/HAN/NEMESIS/SIVIL/BELI), quy ước status artifact M2 + quy trình cập nhật map.
 - **Vấn đề giải quyết:** worklog chỉ là BẢN ĐỀ XUẤT — không cho biết artifact nào quan trọng, code nào có leakage risk, file/log nào chứa evidence. Đọc toàn bộ artifacts → overwhelm, miss bug, tốn token. Chỉ đọc worklog → làm việc trên giấy. **Directed Reading = đường giữa: Map → code selective → protocol → fix → verify.**
-- **Đối tượng đọc:** (1) kỹ sư triển khai cơ chế này vào TMO; (2) cả 5 agents — LISMA/HAN tiêu thụ map nhiều nhất, SIVIL/BELI tạo map mỗi khi hoàn thành part, KING đọc map để DECIDE; (3) user — review thiết kế (1 file = 1 review unit).
+- **Đối tượng đọc:** (1) kỹ sư triển khai cơ chế này vào TMO; (2) cả 5 agents — LISMA/HAN tiêu thụ map nhiều nhất, SIVIL/BELI tạo map mỗi khi hoàn thành part, NEMESIS đọc map để DECIDE; (3) user — review thiết kế (1 file = 1 review unit).
 - **Phạm vi (bao gồm):** cả 2 mission — **M1** (format `artifact:type:metric_impact`; chain raw_data → submit) và **M2** (format `file:type:relevance:status`; chain source_code → PROPOSAL, POC trong Workspace); 5-khối map chuẩn trong worklog; quy ước status M2; quy trình cập nhật map append-only; Module Map TMO gợi ý cho audit M2; error/edge khi map thiếu/sai/lớn.
 - **Phạm vi (KHÔNG bao gồm):** JD + Instructions từng engine → TB-03/04/05/06 · decompose part → TB-07 · worklog schema chuẩn toàn team → TB-09 (map LÀ 1 khối của worklog — schema gốc ở đó, TB-10 chỉ định nghĩa khối map) · Knowledge Base → TB-08 · Proposal Schema + SELF-DIRECTION → TB-11 · mã nguồn TMO + hạ tầng PM2/Qdrant — dừng ở ranh giới "runtime contract".
 
@@ -25,7 +25,7 @@
 | TB-03 (G1) | SIVIL/BELI: TẠO map khi hoàn thành part; ĐỌC map của part trước khi bắt đầu part mới |
 | TB-04 (G2) | LISMA: đọc theo Leakage/Bug Locations (M1) / Suspect Locations (M2) — người tiêu thụ map #1 |
 | TB-05 (G3) | HAN: đọc theo Metric Impact Chain (M1) / Impact Chain (M2); cập nhật map sau optimize |
-| TB-06 / TB-07 | KING: chỉ đọc Worklog + Artifact Map (KHÔNG đọc code trừ ESCALATE / verify claim); cấp Lớp 1 Research Protocol khi DECOMPOSE; Decision Log ghi pivot |
+| TB-06 / TB-07 | NEMESIS: chỉ đọc Worklog + Artifact Map (KHÔNG đọc code trừ ESCALATE / verify claim); cấp Lớp 1 Research Protocol khi DECOMPOSE; Decision Log ghi pivot |
 | TB-09 | Worklog + Handoff — nơi map "sống"; map là khối bắt buộc khi handoff |
 | TB-11 | Chain M2 kết thúc ở PROPOSAL — mọi claim truy evidence ngược về map |
 | TB-12 | E2E playbooks đối soát cơ chế đọc (token budget, ưu tiên, checkpoint) |
@@ -130,7 +130,7 @@ Directed Reading = phương pháp đọc của research team: **không đọc h�
 
 | Lớp | Ai cấp | Nội dung M1 | Nội dung M2 | Đọc lúc nào | Trả lời câu hỏi |
 |---|---|---|---|---|---|
-| **L1 — Research Protocol** | TL (KING) — sinh khi DECOMPOSE, là trường trong task .md (TB-07 §3) | Hypotheses cần kiểm tra; Success criteria (CV score < bao nhiêu); CV strategy + metric chính thức; Decision Gates (khi nào pivot) | + **System Audit Charter** — phạm vi audit | Bước 3 (verify hypothesis) — chỉ đọc phần liên quan đến artifacts đang xét | "Tôi đang test gì? Đâu là đúng/sai so với hypothesis?" |
+| **L1 — Research Protocol** | TL (NEMESIS) — sinh khi DECOMPOSE, là trường trong task .md (TB-07 §3) | Hypotheses cần kiểm tra; Success criteria (CV score < bao nhiêu); CV strategy + metric chính thức; Decision Gates (khi nào pivot) | + **System Audit Charter** — phạm vi audit | Bước 3 (verify hypothesis) — chỉ đọc phần liên quan đến artifacts đang xét | "Tôi đang test gì? Đâu là đúng/sai so với hypothesis?" |
 | **L2 — Worklog + Artifact Map** | G trước (G1→G2→G3; hoặc part trước cùng group) | G trước tạo artifact nào? Metric impact? Hypothesis nào confirmed/rejected? Artifact nào cần đọc / bỏ qua? Có data leakage không? | + File/log nào chứa evidence cho finding | Bước 1 — LUÔN trước khi đọc code/nb/log | "Focus vào đâu? Artifact nào quan trọng?" |
 | **L3 — Ground Truth** | Mọi G khi làm part của mình | Code + Notebooks + Data: code thực sự viết thế nào; feature importance ranking; data distributions sau transform; model training logs + CV results | Source Code + Docs + Logs + Config + UI: code memory/execution/thinking chạy thế nào; logs nói gì về hành vi thực; config đang set gì; UI hiển thị gì cho user | Bước 2 — selective theo chỉ điểm từ Map | "Thực tế là gì? — đây mới là thứ cần sửa/tối ưu" |
 
@@ -299,7 +299,7 @@ Ví dụ ID chuẩn (TB-00 §1.4): `src/lib/memory.ts:source:core-target:audited
 | D4 | Chain M2 phân biệt 2 nguồn: `LIVE:` (đọc từ Live System) vs `WS:` (tạo/chỉnh trong Workspace) | Evidence lấy ở Live — nguồn thật; POC/report tạo ở Workspace (TB-02) |
 | D5 | POC (M2) luôn ở Workspace — entry đánh dấu rõ `WS:` + "KHÔNG áp lên Live" | M2 chỉ chẩn đoán + đề xuất; áp sau khi Proposal APPROVED |
 
-`[EXT]` **Pivot workflow dùng map:** khi KING DECIDE = PIVOT → KING đọc lại map → xác định artifact cuối cùng còn VALID theo Research Protocol mới → part mới bắt đầu TỪ artifact đó (không quay về raw_data) → entry part cũ giữ nguyên + ghi nhãn `pivot-point` tại entry của artifact cuối VALID (quyết định tương ứng được ghi vào Decision Log — TB-06 §13). Đây chính là ý "Map giúp biết quay lại từ đâu" của nguồn dòng 4166.
+`[EXT]` **Pivot workflow dùng map:** khi NEMESIS DECIDE = PIVOT → NEMESIS đọc lại map → xác định artifact cuối cùng còn VALID theo Research Protocol mới → part mới bắt đầu TỪ artifact đó (không quay về raw_data) → entry part cũ giữ nguyên + ghi nhãn `pivot-point` tại entry của artifact cuối VALID (quyết định tương ứng được ghi vào Decision Log — TB-06 §13). Đây chính là ý "Map giúp biết quay lại từ đâu" của nguồn dòng 4166.
 
 ---
 
@@ -339,7 +339,7 @@ Ví dụ ID chuẩn (TB-00 §1.4): `src/lib/memory.ts:source:core-target:audited
 
 > G2: **SỬA LỖI AN TOÀN** (safety fix) / M2: **CHẨN ĐOÁN ĐÚNG** — G3: **TỐI ƯU METRIC** (metric improvement) / M2: **ĐỀ XUẤT TỐT**. `[SRC dòng 4040–4041]`
 
-### 5.4 KING (TL) — đọc CHỈ Worklog + Artifact Map, KHÔNG đọc code
+### 5.4 NEMESIS (TL) — đọc CHỈ Worklog + Artifact Map, KHÔNG đọc code
 
 - TL **KHÔNG đọc code trực tiếp** — chỉ 2 ngoại lệ: **ESCALATE**, hoặc **claim thiếu evidence cần verify** (đối chiếu TB-06: bảng "TL đọc code khi nào?" 8 dòng + TL CODE READING PRINCIPLES). `[SRC dòng 4270–4275]`
 - TL dựa vào map để hiểu artifact chain; dùng **metric journey (M1) / evidence map (M2)** để quyết định **PIVOT/CONTINUE** — không đoán mò theo cảm tính.
@@ -407,7 +407,7 @@ Ví dụ ID chuẩn (TB-00 §1.4): `src/lib/memory.ts:source:core-target:audited
 | feature_importance.csv | Trained model | ✅ Reference |
 | domain_feats.py | — | ❌ Removed |
 
-> **Điểm giảng dạy:** CV 0.124 (sau G1) → 0.127 (sau G2) là score "tệ đi" nhưng là **honest score** — sau khi fix leakage. Map ghi rõ điều này để KING không hiểu nhầm G2 làm kết quả tệ; verdict ở Metric Impact Summary (§3.4) luôn là câu chuyện 2 chiều. `[SRC số liệu + EXT diễn giải]`
+> **Điểm giảng dạy:** CV 0.124 (sau G1) → 0.127 (sau G2) là score "tệ đi" nhưng là **honest score** — sau khi fix leakage. Map ghi rõ điều này để NEMESIS không hiểu nhầm G2 làm kết quả tệ; verdict ở Metric Impact Summary (§3.4) luôn là câu chuyện 2 chiều. `[SRC số liệu + EXT diễn giải]`
 
 ### 6.2 Directed Reading thực tế — G2 (LISMA) sửa Data Leakage `[SRC dòng 4045–4131 — rút gọn, giữ đủ 4 bước + số liệu]`
 
@@ -449,7 +449,7 @@ Map M2 ở §3.5 (G1 audit memory) minh họa các quy ước M2: `relevance` = 
 
 ### 7.2 Case "Hệ thống chat của TMO chậm" — Research Artifact Map qua 4 parts `[EXT — map dựng theo workflow nguồn 4430–4511, toàn bộ số liệu nguyên văn]`
 
-**Bối cảnh `[SRC]`:** user yêu cầu "Hệ thống chat của TMO chậm, nghiên cứu và đề xuất khắc phục" → KING CLASSIFY: signals M2 (hệ thống, TMO, chậm, đề xuất khắc phục) → mission M2 (confidence cao) → TRIAGE: Phạm vi 3 (LLM pipeline + key pool + fail-open paths) + Suy luận 3 (cần đọc logs + code tìm root cause) + Rủi ro 2 (ảnh hưởng trải nghiệm user) = **8 → COMPLEX (Tier 3)** → DECOMPOSE 4 parts: Part 1 Audit (COMPLEX) · Part 2 Root cause (MEDIUM) · Part 3 Options (COMPLEX) · Part 4 Proposal & Verification Plan (MEDIUM).
+**Bối cảnh `[SRC]`:** user yêu cầu "Hệ thống chat của TMO chậm, nghiên cứu và đề xuất khắc phục" → NEMESIS CLASSIFY: signals M2 (hệ thống, TMO, chậm, đề xuất khắc phục) → mission M2 (confidence cao) → TRIAGE: Phạm vi 3 (LLM pipeline + key pool + fail-open paths) + Suy luận 3 (cần đọc logs + code tìm root cause) + Rủi ro 2 (ảnh hưởng trải nghiệm user) = **8 → COMPLEX (Tier 3)** → DECOMPOSE 4 parts: Part 1 Audit (COMPLEX) · Part 2 Root cause (MEDIUM) · Part 3 Options (COMPLEX) · Part 4 Proposal & Verification Plan (MEDIUM).
 
 #### Artifact Map — Part 1 (Audit hiện trạng — G1: SIVIL dispatch 6 sub-agents):
 
@@ -461,7 +461,7 @@ Map M2 ở §3.5 (G1 audit memory) minh họa các quy ước M2: `relevance` = 
 | LIVE: LLM client — retry + timeout behavior | source | core-target | audited | SA-04 → LISMA |
 | LIVE: neo4j/qdrant clients — connection handling | source | context | audited | SA-05 |
 | LIVE: health check — service status hiện tại | log | baseline | evidence-attached | SA-06 |
-| WS: audit-report.md (BELI tổng hợp) | report | output | evidence-attached | LISMA + KING (CP1) |
+| WS: audit-report.md (BELI tổng hợp) | report | output | evidence-attached | LISMA + NEMESIS (CP1) |
 
 Audit Report (BELI) tóm tắt `[SRC nguyên văn]`: "Chat request mất 121s khi LLM key trả 401 → pipeline retry lần lượt qua các key không hợp lệ rồi mới fail-open. Không có fail-fast, không có timeout ngắn, key pool không có health check."
 
@@ -480,13 +480,13 @@ Audit Report (BELI) tóm tắt `[SRC nguyên văn]`: "Chat request mất 121s kh
 | WS: options-design.md | report | output | evidence-attached | `[SRC]`: Option A — fail-fast + timeout (effort S, tác động lớn) · Option B — key health check + circuit breaker (effort M) · Option C — response cache (effort L, cần benchmark). Recommendation: A+B ngay; C để khi có benchmark. Mỗi option kèm Verification Plan (deferred) |
 | WS: POC fail-fast patch | poc | core-target | audited | POC minh họa chạy trong **Workspace** — KHÔNG áp lên Live (xem D5 §4) |
 
-#### Artifact Map — Part 4 (Proposal & Verification Plan — KING FINALIZE):
+#### Artifact Map — Part 4 (Proposal & Verification Plan — NEMESIS FINALIZE):
 
 | Artifact | Type | Relevance | Status | Ghi chú |
 |---|---|---|---|---|
 | WS: PROPOSAL (P-YYYYMMDD-NNN) | report | output | evidence-attached | `[SRC 4494–4508]`: Problem = chat latency 121s khi LLM key fail (evidence: dev.log + key-pool code path) · Root Cause = retry mù + không health check + không timeout · Options A/B/C · Recommendation A+B — Expected impact: 121s → < 10s · Risk & Rollback: config-level change, rollback = revert env · Verification: (a) NGAY — so latency log trước/sau + manual test "gửi 1 câu hỏi khi 1 key cố tình sai"; (b) DEFERRED — benchmark A/B (p50/p95 chat latency, acceptance p95 < 10s) → Route thẳng SELF-DIRECTION, Status SUBMITTED |
 
-> **Chain M2 của case này:** `source_code (dev.log + 5 module) → audit_report → findings/root_cause_report + evidence_map → options_design + POC (Workspace) → PROPOSAL → SELF-DIRECTION` — đúng khung Dynamic Artifact Chain §4. KING dùng map tại 3 checkpoint `[SRC 4485–4488]`: CP1 "Audit đủ evidence? (mỗi finding có file:line + log)" · CP2 "Root cause khớp code ↔ logs? (LISMA verify)" · CP3 "Mỗi option có trade-offs + verification plan?". Toàn bộ mission M2 KHÔNG sửa file nào của TMO — output duy nhất là Proposal; implementation + benchmark là thao tác riêng sau APPROVED. `[SRC dòng 4511]`
+> **Chain M2 của case này:** `source_code (dev.log + 5 module) → audit_report → findings/root_cause_report + evidence_map → options_design + POC (Workspace) → PROPOSAL → SELF-DIRECTION` — đúng khung Dynamic Artifact Chain §4. NEMESIS dùng map tại 3 checkpoint `[SRC 4485–4488]`: CP1 "Audit đủ evidence? (mỗi finding có file:line + log)" · CP2 "Root cause khớp code ↔ logs? (LISMA verify)" · CP3 "Mỗi option có trade-offs + verification plan?". Toàn bộ mission M2 KHÔNG sửa file nào của TMO — output duy nhất là Proposal; implementation + benchmark là thao tác riêng sau APPROVED. `[SRC dòng 4511]`
 
 ---
 
@@ -494,7 +494,7 @@ Audit Report (BELI) tóm tắt `[SRC nguyên văn]`: "Chat request mất 121s kh
 
 `[TB-10 §8 ← mở rộng từ nguồn dòng 543–558 (Module Map 8 module + "đọc gì" + nguồn được phép đọc M2) + quan sát repo TMO tại worklog Task 1–3]` `[EXT + DECIDED v1.3]`
 
-> ⚠️ **CẢNH BÁO — BẢNG GỢI Ý:** cột Module + "Đọc gì" lấy từ nguồn (dòng 547–556); cột **"Vị trí gợi ý"** do TB-10 bổ sung từ quan sát repo Theopusflashlite v2.0.0 (Next.js 16 + Prisma + PM2 + Qdrant) ghi tại worklog Task 1–3. Đường dẫn cụ thể **CẦN XÁC MINH LẠI khi cài cơ chế research team vào TMO thật** — cấu trúc repo có thể đổi giữa các phiên bản (Q5 §13). *(✅ chốt v1.3 — §13 Q5: verify KÉP — kỹ sư triển khai 1 lần lúc cài + cập nhật khi repo đổi; KING verify đường dẫn vs repo thật ở đầu MỌI mission M2 T3 → sai lệch → flag + cập nhật map.)*
+> ⚠️ **CẢNH BÁO — BẢNG GỢI Ý:** cột Module + "Đọc gì" lấy từ nguồn (dòng 547–556); cột **"Vị trí gợi ý"** do TB-10 bổ sung từ quan sát repo Theopusflashlite v2.0.0 (Next.js 16 + Prisma + PM2 + Qdrant) ghi tại worklog Task 1–3. Đường dẫn cụ thể **CẦN XÁC MINH LẠI khi cài cơ chế research team vào TMO thật** — cấu trúc repo có thể đổi giữa các phiên bản (Q5 §13). *(✅ chốt v1.3 — §13 Q5: verify KÉP — kỹ sư triển khai 1 lần lúc cài + cập nhật khi repo đổi; NEMESIS verify đường dẫn vs repo thật ở đầu MỌI mission M2 T3 → sai lệch → flag + cập nhật map.)*
 
 | Module | Đọc gì (nguồn) | Vị trí gợi ý `[EXT + DECIDED v1.3]` | Artifact type hay gặp trong map |
 |---|---|---|---|
@@ -550,7 +550,7 @@ planned ──▶ reading ──▶ audited ──▶ evidence-attached
 | Ai | Ghi gì |
 |---|---|
 | Mỗi G (SIVIL/BELI/LISMA/HAN) | map cho part mình vừa hoàn thành — đủ 5 khối (§3.3). Sub-agents của SIVIL: findings của SA được SIVIL TỔNG HỢP thành 1 map duy nhất của G1 `[Q6 → DECIDED v1.3: SA trả map-fragments trong findings — SIVIL tổng hợp]` |
-| TL (KING) | KHÔNG ghi artifact research; ghi entry `planned` khi DECOMPOSE sinh kế hoạch audit (nếu muốn khóa kế hoạch đọc trước); quyết định pivot ghi vào Decision Log (TB-06 §13) — phần map do G nhận part mới cập nhật |
+| TL (NEMESIS) | KHÔNG ghi artifact research; ghi entry `planned` khi DECOMPOSE sinh kế hoạch audit (nếu muốn khóa kế hoạch đọc trước); quyết định pivot ghi vào Decision Log (TB-06 §13) — phần map do G nhận part mới cập nhật |
 
 ### 10.2 Khi nào ghi
 
@@ -593,14 +593,14 @@ hypothesis: <confirmed / rejected / pending — kèm id hypothesis của Protoco
 | # | Tình huống | Phát hiện thế nào | Xử lý |
 |---|---|---|---|
 | E1 | **Artifact thiếu (chưa tồn tại)** — kế hoạch part đòi artifact chưa ai tạo | map thiếu entry cho artifact được `depends_on` trỏ tới | ghi entry `planned` + đánh dấu blocker trong map; nếu artifact thuộc trách nhiệm part/group TRƯỚC → coi như chain đứt → E2 |
-| E2 | **Chain đứt** — thiếu artifact trung gian (vd Part 3 cần `train_feat.csv` mà map dừng ở `insights.md`) | đối chiếu bảng Dependencies vs Artifact Chain ở Bước 1 (đọc map) | G hiện KHÔNG tự bịa artifact thiếu → **ESCALATE KING**; KING DECIDE: giao lại part thiếu (task .md mini) hoặc pivot từ artifact cuối VALID |
+| E2 | **Chain đứt** — thiếu artifact trung gian (vd Part 3 cần `train_feat.csv` mà map dừng ở `insights.md`) | đối chiếu bảng Dependencies vs Artifact Chain ở Bước 1 (đọc map) | G hiện KHÔNG tự bịa artifact thiếu → **ESCALATE NEMESIS**; NEMESIS DECIDE: giao lại part thiếu (task .md mini) hoặc pivot từ artifact cuối VALID |
 | E3 | **Map quá lớn** (nhiều part × nhiều SA × nhiều file — chain hàng trăm entry) | đếm entry khi Bước 1 | rank theo relevance + severity: chỉ đọc sâu top (core-target + 🔴); phần còn lại mức scan-qua; Reading Strategy phải phản ánh ranking — ngưỡng chính thức `[Q2 → DECIDED v1.3: > 60 entries → bắt buộc rank + chỉ đọc sâu top]` *(✅ chốt v1.3 — §13 Q2)* |
 | E4 | **Evidence conflict Live ↔ Workspace** — code Live khác code Workspace cùng 1 file | so 2 bản khi verify (POC chạy ở Workspace nhưng evidence lấy ở Live) | **ưu tiên Live System** — là nguồn thật đang chạy; ghi chú lệch version vào entry (D4); Workspace lệch nhiều → ESCALATE để đồng bộ lại clone |
-| E5 | **Map không cập nhật sau pivot** — KING đã pivot nhưng map không có nhãn pivot-point | Metric Journey lệch với Research Protocol hiện hành | KING ghi pivot vào Decision Log; G nhận part mới bổ sung `pivot-point` tại artifact cuối VALID ngay khi bắt đầu (§4) |
+| E5 | **Map không cập nhật sau pivot** — NEMESIS đã pivot nhưng map không có nhãn pivot-point | Metric Journey lệch với Research Protocol hiện hành | NEMESIS ghi pivot vào Decision Log; G nhận part mới bổ sung `pivot-point` tại artifact cuối VALID ngay khi bắt đầu (§4) |
 | E6 | **Hypothesis status thiếu** — map không nói artifact nào confirmed/rejected/pending | checklist AC-8 (§12) | thiếu = thiếu field bắt buộc của khối map (quy tắc 1) → trả về G ghi map bổ sung TRƯỚC khi G sau bắt đầu đọc |
-| E7 | **Artifact stale** — artifact mô tả pipeline đã đổi (vd feature_importance.csv sau khi fix leak) | map đánh `⚠️ Stale` như ví dụ nguồn dòng 4120 | G tạo đánh dấu "re-compute" trong Reading Strategy; KHÔNG dùng stale làm input cho quyết định — `[Q7 → DECIDED v1.3: CÓ]` KING giao task mini re-compute qua DECIDE + task .md mini (SIMPLE/Tier 1) giao G sở hữu artifact |
+| E7 | **Artifact stale** — artifact mô tả pipeline đã đổi (vd feature_importance.csv sau khi fix leak) | map đánh `⚠️ Stale` như ví dụ nguồn dòng 4120 | G tạo đánh dấu "re-compute" trong Reading Strategy; KHÔNG dùng stale làm input cho quyết định — `[Q7 → DECIDED v1.3: CÓ]` NEMESIS giao task mini re-compute qua DECIDE + task .md mini (SIMPLE/Tier 1) giao G sở hữu artifact |
 | E8 | **M2 evidence chỉ tồn tại ở Workspace** (không tái hiện được ở Live) | finding không trỏ được file:line/log ở Live | hạ độ tin cậy finding; tìm evidence Live tương đương (log runtime, health check); nếu không có → finding chỉ vào Proposal kèm nhãn độ tin cậy thấp |
-| E9 | **2 sub-agents mâu thuẫn về cùng 1 artifact** (cùng `file`, severity/kết luận khác) | 2 findings trỏ cùng entry | SIVIL dùng protocol mâu thuẫn SA của TB-03 §5: điều tra arbitrator → vẫn mâu thuẫn → ESCALATE KING kèm 2 interpretation |
+| E9 | **2 sub-agents mâu thuẫn về cùng 1 artifact** (cùng `file`, severity/kết luận khác) | 2 findings trỏ cùng entry | SIVIL dùng protocol mâu thuẫn SA của TB-03 §5: điều tra arbitrator → vẫn mâu thuẫn → ESCALATE NEMESIS kèm 2 interpretation |
 | E10 | **Workspace chưa mở khi M2 cần POC** — user chưa mở bản clone, part Design/Propose cần chạy POC | map có entry POC `WS:` (D5 §4) nhưng không có nơi chạy; liên quan E4 (bản Live ↔ WS) + E8 | evidence vẫn chạy (đọc Live System); POC hoãn + Proposal đánh cờ `POC-NEEDS-WORKSPACE` (quy ước TB-02 §6; xử lý chi tiết: TB-06 §14 E7 + TB-07 §9 E7) |
 
 ---
@@ -614,7 +614,7 @@ hypothesis: <confirmed / rejected / pending — kèm id hypothesis của Protoco
 - [ ] **AC-3** Mọi entry M1 có metric impact rõ (hoặc `—`); mọi entry M2 có relevance + status thuộc 5 mức §9.
 - [ ] **AC-4** Reading Strategy cho G sau có thứ tự ưu tiên 🔴 → 🟠 → 🟡 VÀ danh sách "KHÔNG cần đọc".
 - [ ] **AC-5** Mỗi G khi bắt đầu part: đọc map TRƯỚC code (Bước 1) — worklog của G đó ghi nhận "đã đọc map của G trước".
-- [ ] **AC-6** LISMA đọc theo Leakage/Bug (M1) / Suspect Locations (M2) — error paths trước happy paths; HAN đọc theo Metric Impact Chain / Impact Chain; KING chỉ đọc Worklog + Map (trừ ESCALATE / verify claim thiếu evidence).
+- [ ] **AC-6** LISMA đọc theo Leakage/Bug (M1) / Suspect Locations (M2) — error paths trước happy paths; HAN đọc theo Metric Impact Chain / Impact Chain; NEMESIS chỉ đọc Worklog + Map (trừ ESCALATE / verify claim thiếu evidence).
 - [ ] **AC-7** Token đọc mỗi G nằm trong budget: G2 ~4–8K, G3 ~6–10K, tổng 4 bước ~7–14K (không có G nào đọc toàn bộ artifacts).
 - [ ] **AC-8** Map ghi hypothesis status (confirmed/rejected/pending) cho từng artifact thử nghiệm.
 - [ ] **AC-9** Artifact cũ KHÔNG bị xóa; thay thế = `superseded` + trỏ entry mới; chain tracking FULL (M1: raw_data → submission; M2: source_code → PROPOSAL).
@@ -622,7 +622,7 @@ hypothesis: <confirmed / rejected / pending — kèm id hypothesis của Protoco
 - [ ] **AC-11** Mọi finding M2 trong map kèm evidence (file:line / log excerpt) — không evidence = không được ghi (nguồn dòng 601).
 - [ ] **AC-12** Entry M2 phân biệt nguồn `LIVE:` vs `WS:`; POC chỉ tồn tại ở `WS:` và map ghi rõ "KHÔNG áp lên Live".
 - [ ] **AC-13** Map có bảng Dependencies ("depends on") cho part kế tiếp + mỗi entry mới có trường `depends_on`.
-- [ ] **AC-14** E2E đối soát (TB-12): chạy 2 kịch bản House Prices (M1) + chat 121s (M2) — map xuất hiện đủ ở cả 3 mốc handoff G1→G2→G3 + KING đọc được map để chốt CP1/CP2/CP3 và DECIDE.
+- [ ] **AC-14** E2E đối soát (TB-12): chạy 2 kịch bản House Prices (M1) + chat 121s (M2) — map xuất hiện đủ ở cả 3 mốc handoff G1→G2→G3 + NEMESIS đọc được map để chốt CP1/CP2/CP3 và DECIDE.
 
 ---
 
@@ -636,9 +636,9 @@ hypothesis: <confirmed / rejected / pending — kèm id hypothesis của Protoco
 | Q2 | Ngưỡng "map quá lớn" (E3) — bao nhiêu entry thì bắt buộc rank + chỉ đọc sâu top? | §11 E3 | **> 60 entries → bắt buộc rank + chỉ đọc sâu top** |
 | Q3 | M1: cập nhật cột status entry gốc ("Fixed by G2") như ví dụ nguồn, hay cũng chuyển hẳn sang append + superseded cho đồng bộ với M2? | §10.3 | **M1 theo ví dụ nguồn (cột status — "Fixed by G2"); M2 append + superseded** |
 | Q4 | Prefix `LIVE:`/`WS:` đặt trong ID dòng hay ở cột riêng trong bảng chain? | §3.2, §7.2 | **Cột riêng** trong bảng chain — ID dòng giữ ngắn gọn |
-| Q5 | Bảng Module Map §8: ai xác minh đường dẫn trên TMO thật và khi nào (lúc cài đặt research team, hay từng mission M2)? | §8 | **Verify KÉP:** kỹ sư triển khai 1 lần lúc cài + cập nhật khi repo đổi; **KING verify đường dẫn vs repo thật ở đầu MỌI mission M2 T3** (thao tác đọc — rẻ, sạch) → sai lệch → flag + cập nhật map |
+| Q5 | Bảng Module Map §8: ai xác minh đường dẫn trên TMO thật và khi nào (lúc cài đặt research team, hay từng mission M2)? | §8 | **Verify KÉP:** kỹ sư triển khai 1 lần lúc cài + cập nhật khi repo đổi; **NEMESIS verify đường dẫn vs repo thật ở đầu MỌI mission M2 T3** (thao tác đọc — rẻ, sạch) → sai lệch → flag + cập nhật map |
 | Q6 | Sub-agent của SIVIL có ghi entry trực tiếp vào map hay chỉ SIVIL tổng hợp findings của SAs thành 1 map G1? | §10.1 | **KHÔNG** — SA trả map-fragments trong findings; **SIVIL tổng hợp 1 map G1 duy nhất** (tránh trùng lặp entry) |
-| Q7 | KING có được giao task mini "re-compute stale artifact" như 1 part đơn giản (SIMPLE/Tier 1)? | §11 E7 | **CÓ** — qua DECIDE + task .md mini (SIMPLE/Tier 1) giao G sở hữu artifact |
+| Q7 | NEMESIS có được giao task mini "re-compute stale artifact" như 1 part đơn giản (SIMPLE/Tier 1)? | §11 E7 | **CÓ** — qua DECIDE + task .md mini (SIMPLE/Tier 1) giao G sở hữu artifact |
 | Q8 | Map M1 có cần thêm cột Relevance tương đương M2 để G3 rank ưu tiên đọc khi chain dài? | §3 | **KHÔNG** — metric impact + severity đủ tín hiệu rank cho M1 |
 
 **Phụ thuộc chéo:** TB-09 (khối map trong worklog schema + handoff) · TB-06 §13 Decision Log (pivot-point) · TB-03 §5 (protocol mâu thuẫn SA — dùng cho E9) · TB-11 (Proposal truy evidence ngược về map) · TB-12 (2 kịch bản E2E đối soát AC-14).
@@ -666,7 +666,7 @@ hypothesis: <confirmed / rejected / pending — kèm id hypothesis của Protoco
 | 4235–4284 | 6 quy tắc bắt buộc cho tất cả G agents (ghi map / đọc map / G2 / G3 / TL / update ngay) | §5.4, §5.5, §5.6, §10 | SRC |
 | 543–561 | Module Map M2 — 8 module + "đọc gì" + nguồn được phép đọc M2 + KHÔNG được sửa | §8 | SRC (module) + EXT (vị trí đường dẫn) |
 | 558–559 | Ranh giới Live System / Workspace cho Lớp 3 M2 — Live = nguồn evidence CHỈ ĐỌC; WS = nơi tạo/chỉnh artifact + POC | §2 | SRC |
-| 601, 4486 | "mỗi finding BẮT BUỘC có evidence" + KING verify ở checkpoint | §3.5, §7.2, §11 E8 | SRC |
+| 601, 4486 | "mỗi finding BẮT BUỘC có evidence" + NEMESIS verify ở checkpoint | §3.5, §7.2, §11 E8 | SRC |
 | 4428–4511 | ví dụ M2 workflow "chat TMO chậm" — triage 8 điểm COMPLEX, 4 parts, 6 SA, 3 root causes, options A/B/C, proposal + SELF-DIRECTION | §7.2 | SRC (workflow + số liệu) + EXT (map dựng) |
 | — | field spec 2 format; 5 khối map chuẩn; quy tắc D1–D5 + pivot-point; status 5 mức M2; quy trình cập nhật append-only; E1–E10; AC-1–14; Q1–Q8 | §3, §4, §9, §10, §11, §12, §13 | EXT |
 | — | decisions (chốt v1.3): stale/LIVE-WS prefix/ngưỡng map lớn/ai ghi map/Module Map cần xác minh | §8, §9, §11, §13 | [DECIDED v1.3] |

@@ -145,14 +145,27 @@ export function scoreRubricA(input: RubricAInput): RubricAResult {
   }
 
   // ---- anti-gaming (§1.3 AC3): dim ≥3 PHẢI có artifact ----
+  // FIX (Task 19 audit B#1): anti-gaming CHỈ áp dụng khi caller CUNG CẤP artifacts
+  // (opt-in — caller đã verify artifacts thật). Khi artifacts không được truyền
+  // (đường LLM pipeline: scoreRubricAWithLlm, tournament V2), KHÔNG downgrade —
+  // trước đây mọi dim ≥3 bị hạ về 1 → score tối đa 2.0 → grade luôn WEAK →
+  // tournament tự loại TOÀN BỘ hypothesis ở vòng ② SCORE-A, không bao giờ tới
+  // EXPERIMENT/COUNCIL.
   const finalDims: Record<RubricADimension, number> = { ...rawDims }
-  for (const dim of DIM_KEYS) {
-    if (rawDims[dim] >= 3 && !artByDim[dim]) {
-      anchorWarnings.push(
-        `D ${dim}: dim=${rawDims[dim]} ≥3 nhưng thiếu artifact anchor — auto downgrade về 1 (anti-gaming TB-14 §1.3 AC3)`,
-      )
-      finalDims[dim] = 1
+  const artifactsProvided = (input.artifacts ?? []).length > 0
+  if (artifactsProvided) {
+    for (const dim of DIM_KEYS) {
+      if (rawDims[dim] >= 3 && !artByDim[dim]) {
+        anchorWarnings.push(
+          `D ${dim}: dim=${rawDims[dim]} ≥3 nhưng thiếu artifact anchor — auto downgrade về 1 (anti-gaming TB-14 §1.3 AC3)`,
+        )
+        finalDims[dim] = 1
+      }
     }
+  } else if (rawDims.D1 >= 3 || rawDims.D2 >= 3 || rawDims.D3 >= 3 || rawDims.D4 >= 3 || rawDims.D5 >= 3) {
+    anchorWarnings.push(
+      'artifacts[] không được cung cấp — anti-gaming AC3 skipped (chỉ chặn khi caller truyền artifacts đã verify; xem Task 19 audit B#1)',
+    )
   }
 
   // ---- anti-duplicate: cùng ref không dùng cho 2 dim ----

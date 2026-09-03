@@ -1,17 +1,17 @@
 /**
- * RESEARCH TEAM — KING ESCALATION (DR-C5 timeout 48h/24h + nhắc 12h + deputy + KING cấm tự duyệt)
+ * RESEARCH TEAM — NEMESIS ESCALATION (DR-C5 timeout 48h/24h + nhắc 12h + deputy + NEMESIS cấm tự duyệt)
  * ============================================================================================
  * Spec:
  *  - DR-C5 §C5 — Proposal pending timeout 48h (T3) / 24h (T2/T1) + nhắc 12h (cron :3004).
  *      Mission M1 timeout 48h / M2 timeout 24h (mission-side cap khác proposal-side).
- *  - DR-C5 §C5 — Deputy: SIVIL (research tổng hợp) hoặc HAN (KB/G3-domain). KING KHÔNG tự duyệt
+ *  - DR-C5 §C5 — Deputy: SIVIL (research tổng hợp) hoặc HAN (KB/G3-domain). NEMESIS KHÔNG tự duyệt
  *      Proposal (DR-C5 §C5 — King cấm self-approve Proposal của mình).
  *  - DR-C5 §C5 — Khi timeout: escalate USER (block) HOẶC deputy duyệt thay (if king recused).
  *  - TB-13 §6 — Tích hợp cron-scheduler :3004 cho reminder 12h (optional — skip nếu service
  *      không chạy, log warning).
  *
  * Fail-open: cron registration fail → KHÔNG throw, log warning (escalation record vẫn persist).
- * Constraint violations (KING self-approve) → throw (caller API handle 400/500).
+ * Constraint violations (NEMESIS self-approve) → throw (caller API handle 400/500).
  */
 
 import { db } from '@/lib/db'
@@ -40,7 +40,7 @@ export interface EscalationRecord {
   proposalId?: string
   escalatedAt: string
   reason: string
-  escalateTo: 'USER' | 'KING'
+  escalateTo: 'USER' | 'NEMESIS'
   timeoutHours: number
   remindHours: number
   deputy?: 'SIVIL' | 'HAN'
@@ -75,7 +75,7 @@ export function computeTimeout(
     }
   }
   // Mission-side cap (M1=48h, M2=24h; M3 grand default 24h safe)
-  // tier không trực tiếp map cho mission — caller (KING) biết missionType; ở đây
+  // tier không trực tiếp map cho mission — caller (NEMESIS) biết missionType; ở đây
   // dùng heuristic: T1/T2 → 24h (medium missions), T3 → 48h (grand/research-heavy)
   const missionTimeout = tier === 'T3' ? 48 : 24
   return {
@@ -85,16 +85,16 @@ export function computeTimeout(
 }
 
 // ============================================================
-// §3. ASSIGN DEPUTY — DR-C5 §C5 (SIVIL | HAN; KING cấm tự duyệt)
+// §3. ASSIGN DEPUTY — DR-C5 §C5 (SIVIL | HAN; NEMESIS cấm tự duyệt)
 // ============================================================
 
 /**
  * Assign deputy — DR-C5 §C5:
  *  - domain='research' → SIVIL (default deputy — research tổng hợp).
  *  - domain='kb' → HAN (KB/G3-domain — HAN là KB Curator).
- *  - Constraint: deputy KHÔNG được là author proposal (caller check trước; nếu KING là author
+ *  - Constraint: deputy KHÔNG được là author proposal (caller check trước; nếu NEMESIS là author
  *      → escalate USER thay vì deputy).
- *  - KING cấm tự duyệt Proposal (DR-C5 §C5 — King recuse from self-approve).
+ *  - NEMESIS cấm tự duyệt Proposal (DR-C5 §C5 — King recuse from self-approve).
  *
  * Pure function — không side-effect.
  */
@@ -107,7 +107,7 @@ export function assignDeputy(
   const domainLabel = domain === 'kb' ? 'KB/G3-domain (HAN là KB Curator)' : 'research tổng hợp'
   return {
     deputy,
-    reason: `DR-C5 §C5 deputy assignment (kind=${kind}): ${deputy} — ${domainLabel}. KING cấm tự duyệt (recused).`,
+    reason: `DR-C5 §C5 deputy assignment (kind=${kind}): ${deputy} — ${domainLabel}. NEMESIS cấm tự duyệt (recused).`,
   }
 }
 
@@ -163,7 +163,7 @@ export async function escalateToUser(
   try {
     await appendDecisionLog(missionId, {
       at,
-      agent: 'KING',
+      agent: 'NEMESIS',
       decision: 'ESCALATE',
       reason: `[ESCALATE → USER] ${reason} (timeout=${timeoutHours}h, remind=${remindHours}h, ref=${ref})`,
       ref,
@@ -214,8 +214,12 @@ export async function escalateToUser(
     }
   }
 
-  // 3. Register cron job reminder (optional — TB-13 §6: cron-scheduler :3004)
-  //    Best-effort: nếu service không chạy → skip + log. KHÔNG throw.
+  // 3. Register cron job reminder (optional — TB-13 §6)
+  //    FIX (Task 19 — Task 18 audit): fetch tới `/api/research/_cron/reminder?XTransformPort=3004`
+  //    là PHANTOM route (không tồn tại trong codebase) → fetch luôn fail, lỗi bị
+  //    `.catch` nuốt im lặng. Cron-scheduler :3004 không được deploy cho research
+  //    team. Giờ escalation timeout xử lý LAZY qua checkTimeouts() (wire vào GET
+  //    /api/research/escalations + GET /api/research/proposals) — không còn fetch âm thầm fail.
   record.cronJobId = await registerCronReminder(missionId, ref, remindHours).catch((err) => {
     console.warn(
       '[Escalation] cron-scheduler registration failed (TB-13 §6 — optional, skip):',
@@ -287,13 +291,13 @@ export async function checkTimeouts(): Promise<{
 }
 
 // ============================================================
-// §6. RESOLVE ESCALATION — DR-C5 §C5 (KING cấm tự duyệt)
+// §6. RESOLVE ESCALATION — DR-C5 §C5 (NEMESIS cấm tự duyệt)
 // ============================================================
 
 /**
  * Resolve escalation — set status RESOLVED. Verify resolvedBy:
- *  - Nếu escalation là Proposal self-approve (resolvedBy='KING' và escalateTo='KING' vì
- *    KING là author proposal) → throw (DR-C5 §C5 — KING cấm tự duyệt).
+ *  - Nếu escalation là Proposal self-approve (resolvedBy='NEMESIS' và escalateTo='NEMESIS' vì
+ *    NEMESIS là author proposal) → throw (DR-C5 §C5 — NEMESIS cấm tự duyệt).
  *  - Else: append DecisionLogEntry decision='CONTINUE'/'FINALIZE' với resolvedBy.
  *
  * Caller (API) gọi khi user/deputy resolve.
@@ -303,12 +307,12 @@ export async function resolveEscalation(
   resolvedBy: string,
   decision: string,
 ): Promise<void> {
-  if (resolvedBy === 'KING') {
-    // DR-C5 §C5 — KING cấm tự duyệt Proposal. Allow KING resolve mission-level escalation
+  if (resolvedBy === 'NEMESIS') {
+    // DR-C5 §C5 — NEMESIS cấm tự duyệt Proposal. Allow NEMESIS resolve mission-level escalation
     // (không phải proposal self-approve). Caller API check context trước — nếu là proposal
     // self-approve → throw.
     console.warn(
-      '[Escalation] KING resolve — verify this is NOT proposal self-approve (DR-C5 §C5). ' +
+      '[Escalation] NEMESIS resolve — verify this is NOT proposal self-approve (DR-C5 §C5). ' +
         'If mission-level escalation, OK; if proposal, throw upstream.',
     )
   }
@@ -329,15 +333,15 @@ export async function resolveEscalation(
   }
 }
 
-/** Throw nếu KING cố tự duyệt Proposal — DR-C5 §C5. */
+/** Throw nếu NEMESIS cố tự duyệt Proposal — DR-C5 §C5. */
 export function assertNotKingSelfApprove(
   resolvedBy: string,
-  escalateTo: 'USER' | 'KING',
+  escalateTo: 'USER' | 'NEMESIS',
   proposalId?: string,
 ): void {
-  if (resolvedBy === 'KING' && escalateTo === 'KING' && proposalId) {
+  if (resolvedBy === 'NEMESIS' && escalateTo === 'NEMESIS' && proposalId) {
     throw new Error(
-      'DR-C5 §C5: KING cấm tự duyệt Proposal (recused). Deputy SIVIL/HAN hoặc USER phải duyệt thay.',
+      'DR-C5 §C5: NEMESIS cấm tự duyệt Proposal (recused). Deputy SIVIL/HAN hoặc USER phải duyệt thay.',
     )
   }
 }
@@ -347,46 +351,25 @@ export function assertNotKingSelfApprove(
 // ============================================================
 
 /**
- * Register cron reminder — TB-13 §6: gọi mini-service cron-scheduler :3004.
- * Best-effort: nếu service không chạy → throw (caller catch + skip).
- *
- * Implementation note: cron-scheduler :3004 chưa được deploy; function này dùng fetch
- * relative path với XTransformPort=3004 theo gateway contract (TB-13 §6 + main instructions).
+ * Register cron reminder — TB-13 §6.
+ * FIX (Task 19 — Task 18 audit): trước đây POST tới `/api/research/_cron/reminder?XTransformPort=3004`
+ * — route KHÔNG TỒN TẠI trong codebase (phantom) → lỗi 404/connection bị nuốt
+ * im lặng, reminder không bao giờ được đăng ký. Cron-scheduler mini-service
+ * không được deploy cho research team → hàm giờ là no-op có chủ đích (đổi tên
+ * behavior bằng comment rõ ràng); timeout reminder xử lý lazy qua checkTimeouts()
+ * được wire vào GET /api/research/escalations + GET /api/research/proposals.
  */
 async function registerCronReminder(
   missionId: string,
   ref: string,
   remindHours: number,
 ): Promise<string | undefined> {
-  // Cron service optional — best-effort. Skip nếu fetch fail.
-  const remindAtMs = Date.now() + remindHours * 60 * 60 * 1000
-
-  // Use relative path với XTransformPort (gateway contract — main instructions)
-  // Cron service optional — fetch timeout 2s, fail-open
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 2000)
-  try {
-    const resp = await fetch(
-      `/api/research/_cron/reminder?XTransformPort=3004`,
-      {
-        method: 'POST',
-        signal: controller.signal,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          missionId,
-          ref,
-          remindAt: new Date(remindAtMs).toISOString(),
-        }),
-      },
-    )
-    if (!resp.ok) {
-      throw new Error(`cron-scheduler :3004 returned ${resp.status}`)
-    }
-    const data = (await resp.json()) as { jobId?: string }
-    return data.jobId
-  } finally {
-    clearTimeout(timeoutId)
-  }
+  // No-op intentional (Task 19): cron-scheduler chưa deploy cho research team.
+  // Reminder lazy: checkTimeouts() chạy mỗi lần user/route query escalations/proposals.
+  console.log(
+    `[Escalation] cron reminder deferred (lazy mode) — mission ${missionId} ref ${ref} remind after ${remindHours}h (checkTimeouts sẽ xử lý)`,
+  )
+  return undefined
 }
 
 // ============================================================

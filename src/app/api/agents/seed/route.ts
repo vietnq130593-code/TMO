@@ -74,7 +74,7 @@ export async function GET() {
       },
       research: {
         message: researchMissing.length === 0
-          ? 'Research Team đầy đủ 5 agents (KING/SIVIL/BELI/LISMA/HAN)'
+          ? 'Research Team đầy đủ 5 agents (NEMESIS/SIVIL/BELI/LISMA/HAN)'
           : `Thiếu ${researchMissing.length} agents: ${researchMissing.join(', ')}`,
         total: RESEARCH_TEAM_AGENTS.length,
         existing: researchAgents.length,

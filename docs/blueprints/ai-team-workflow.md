@@ -4,7 +4,7 @@
 > - **M1 — Kaggle Research:** Kaggle competitions, dataset creation & documentation.
 > - **M2 — System Research:** Nghiên cứu hệ thống TMO — kiến trúc bộ nhớ, quy trình thực thi, quy trình tư duy, tools, agents roster, UI/UX, performance. Mọi đề xuất nâng cấp được tổng hợp thành **PROPOSAL** và gửi thẳng vào module **SELF-DIRECTION** của TMO.
 >
-> TL = Research Director (KING), không phải Software Architect.
+> TL = Research Director (NEMESIS), không phải Software Architect.
 > Spec = Research Protocol (hypotheses + experimental design), không phải Implementation Spec (class diagram + API).
 > Team được đọc code + docs + logs để NGHIÊN CỨU và ĐỀ XUẤT — **không trực tiếp sửa Live System đang chạy** (mọi chỉnh sửa + POC thực hiện trong **Workspace** — bản clone của hệ thống).
 > Team là **lực lượng tri thức**: phát hiện/nghiên cứu hay mà Knowledge Base chưa có → ghi thẳng vào KB NGAY trong quá trình vận hành (xem section KNOWLEDGE CAPTURE).
@@ -18,17 +18,17 @@
 
 ## 🔄 ROSTER — 5 AGENTS, 2 MISSIONS
 
-> **QUY TẮC QUAN TRỌNG:** Tên agent ≠ tên model. KING, SIVIL, BELI, LISMA, HAN là các **vai trò được thiết kế bằng Job Description + Instructions**. Tất cả agents chạy trên cùng một model stack (xem phần dưới). Phân vai theo ROLE, không theo model.
+> **QUY TẮC QUAN TRỌNG:** Tên agent ≠ tên model. NEMESIS, SIVIL, BELI, LISMA, HAN là các **vai trò được thiết kế bằng Job Description + Instructions**. Tất cả agents chạy trên cùng một model stack (xem phần dưới). Phân vai theo ROLE, không theo model.
 
 | Agent | Vị trí | Vai trò M1 — Kaggle | Nhiệm vụ M2 — System Research |
 |---|---|---|---|
-| **KING** | TL (Team Leader) | **Tư duy & Điều phối** — Research Director: nhận request, phân tích complexity, phá vỡ bài toán thành parts, viết .md mô tả, chọn workflow tier, kiểm tra kết quả | Phân loại mission M1/M2, điều phối audit hệ thống, tổng hợp & route Proposal vào SELF-DIRECTION |
+| **NEMESIS** | TL (Team Leader) | **Tư duy & Điều phối** — Research Director: nhận request, phân tích complexity, phá vỡ bài toán thành parts, viết .md mô tả, chọn workflow tier, kiểm tra kết quả | Phân loại mission M1/M2, điều phối audit hệ thống, tổng hợp & route Proposal vào SELF-DIRECTION |
 | **SIVIL** | G1 Sub-Orchestrator | **Điều phối sub-agents** — parallel exploration & multi-approach discovery | Dispatch sub-agents đọc song song từng module TMO (memory, execution, thinking, tools, UI, services) |
 | **BELI** | G1 Coder | **Code lượt đầu** — sinh code nhanh, chính xác, đúng spec ở lần đầu | Viết research report + POC code minh họa proposal (làm trong Workspace — bản clone, không đụng Live System) |
 | **LISMA** | G2 Bug Fixer | **Review code, tìm bug, fix bug** — vòng lặp iteration đến khi sạch bug | **System Diagnostician** — truy vết root cause từ logs + code, review integration giữa các dịch vụ |
 | **HAN** | G3 Optimizer | **Tối ưu hóa** — tuning, feature selection, ensemble, self-evolving | **Architecture Proposer** — đề xuất nâng cấp bộ nhớ / quy trình thực thi / quy trình tư duy + tối ưu performance |
 
-> **Knowledge Capture:** KING, SIVIL, HAN đều ghi trực tiếp vào Knowledge Base khi phát hiện tri thức mới; BELI/LISMA đề xuất qua worklog — xem section KNOWLEDGE CAPTURE.
+> **Knowledge Capture:** NEMESIS, SIVIL, HAN đều ghi trực tiếp vào Knowledge Base khi phát hiện tri thức mới; BELI/LISMA đề xuất qua worklog — xem section KNOWLEDGE CAPTURE.
 
 ---
 
@@ -46,7 +46,7 @@ Tất cả 5 agents đều chạy trên cùng 1 model stack:
   │  Fallback 3:    MiniMax-M3                   │
   └─────────────────────────────────────────────┘
 
-  KING ──┐
+  NEMESIS ──┐
   SIVIL ─┤
   BELI ──┼──▶ cùng model stack, khác JD + Instructions
   LISMA ─┤
@@ -57,7 +57,7 @@ Tất cả 5 agents đều chạy trên cùng 1 model stack:
 
 | Nguyên tắc | Ý nghĩa |
 |---|---|
-| **Same brain, different briefing** | Khác biệt giữa các agent đến từ **JD + Instructions**, không phải từ model. KING không "thông minh hơn" LISMA — KING được BRIEF khác LISMA |
+| **Same brain, different briefing** | Khác biệt giữa các agent đến từ **JD + Instructions**, không phải từ model. NEMESIS không "thông minh hơn" LISMA — NEMESIS được BRIEF khác LISMA |
 | **Role-based, không model-based** | Không còn cơ chế "model X nghĩ, model Y viết". Tách vai trò SIVIL (điều phối) / BELI (thực thi) là trách nhiệm của vị trí trong pipeline, không phụ thuộc model |
 | **Fallback chain** | Model chính lỗi/quá tải → tự chuyển fallback theo thứ tự: DeepSeek v4 Pro → DeepSeek v4 Flash → MiniMax-M3. Agent GIỮ NGUYÊN vai trò và JD khi đổi model |
 | **Sub-agents dùng chung stack** | Sub-agents của SIVIL spawn từ cùng model stack — parallel exploration là năng lực của cơ chế orchestration, không phụ thuộc 1 model duy nhất |
@@ -113,12 +113,12 @@ Hệ thống TMO **không chạy trong sandbox** — nó chạy thật trên loc
                         └──────┬───────┘
                                │
                     ┌──────────▼──────────┐
-                    │  KING — CLASSIFY    │
+                    │  NEMESIS — CLASSIFY    │
                     │  M1 Kaggle | M2 Sys │
                     └──────────┬──────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────┐
-│                       KING (TL)                              │
+│                       NEMESIS (TL)                              │
 │  • Nhận request, phân loại mission, phân tích complexity    │
 │  • Phá vỡ bài toán thành parts                              │
 │  • Viết .md mô tả cho từng part                             │
@@ -155,7 +155,7 @@ Hệ thống TMO **không chạy trong sandbox** — nó chạy thật trên loc
 └──────┬───────┘       │
        │               │
        └───────────────┘
-        ← Về KING kiểm tra (Checkpoints)
+        ← Về NEMESIS kiểm tra (Checkpoints)
 
   OUTPUT THEO MISSION:
   ├── M1: Submission / Dataset / Documentation → User
@@ -181,14 +181,14 @@ Hệ thống TMO **không chạy trong sandbox** — nó chạy thật trên loc
 - SYNTHESIZE kết quả: đánh giá, loại trùng lặp, rank top-K approaches
 - Tạo spec chi tiết cho BELI
 - Review output của BELI (không sửa code)
-- RESEARCH COUNCIL: thảo luận với KING tại 4 thời điểm cố định — challenge hypotheses, đối chiếu findings với KB
+- RESEARCH COUNCIL: thảo luận với NEMESIS tại 4 thời điểm cố định — challenge hypotheses, đối chiếu findings với KB
 - KNOWLEDGE CAPTURE: khi SYNTHESIZE phát hiện insight mà KB chưa có → ghi NGAY theo KB Write Protocol
 
 **Deliverables:** Sub-agent plan → Synthesis report → Specs cho BELI → G1 worklog (kèm Artifact Map) + KB entries mới (insight từ synthesis)
 
 ### 📜 INSTRUCTIONS — SIVIL
 
-- **LUÔN:** đọc Artifact Map trước khi dispatch; ghi Artifact Map khi hoàn thành; chọn số sub-agents đúng theo task (không dùng max cho mọi task); tham gia Research Council với KING (nhất là sau SYNTHESIZE); insight mới chưa có trong KB → ghi ngay theo KB Write Protocol
+- **LUÔN:** đọc Artifact Map trước khi dispatch; ghi Artifact Map khi hoàn thành; chọn số sub-agents đúng theo task (không dùng max cho mọi task); tham gia Research Council với NEMESIS (nhất là sau SYNTHESIZE); insight mới chưa có trong KB → ghi ngay theo KB Write Protocol
 - **KHÔNG BAO GIỜ:** tự code; quyết định "approach nào win" khi thiếu data; bỏ qua kết quả sub-agent mâu thuẫn nhau mà không điều tra
 - **Input contract:** task.md từ TL + Artifact Map từ Group trước
 - **Output contract:** specs (priority rõ ràng) + worklog + issues cho LISMA
@@ -251,7 +251,7 @@ SIVIL **không code** — SIVIL chỉ phân tích, lập kế hoạch, điều p
 #### Bước 1: SIVIL nhận task từ TL
 
 ```
-TL (KING) gửi task_complex_part1.md:
+TL (NEMESIS) gửi task_complex_part1.md:
   "Part 1: EDA & Feature Understanding cho House Prices dataset"
 
 SIVIL phân tích:
@@ -598,12 +598,12 @@ SIVIL Decompose:
 | 1 | ...     | src/lib/xxx.ts:123                  | 🔴 HIGH  | ...              |
 ```
 
-Mỗi finding BẮT BUỘC có evidence — không có evidence = không được ghi vào report (đây là cơ sở cho VERIFY của KING ở Checkpoint).
+Mỗi finding BẮT BUỘC có evidence — không có evidence = không được ghi vào report (đây là cơ sở cho VERIFY của NEMESIS ở Checkpoint).
 
 ### Schema tổng hợp — G1 Internal Workflow:
 
 ```
-TL (KING) gửi task.md
+TL (NEMESIS) gửi task.md
         │
         ▼
 ┌─── SIVIL (Orchestrator) ─────────────────────────────┐
@@ -624,7 +624,7 @@ TL (KING) gửi task.md
 │     → Rank top-K approaches                           │
 │     → Tạo code spec chi tiết cho từng approach        │
 │                                                       │
-│  4. SYNC — RESEARCH COUNCIL (với KING)                │
+│  4. SYNC — RESEARCH COUNCIL (với NEMESIS)                │
 │     → Challenge hypotheses trước khi code             │
 │     → Đối chiếu findings với Knowledge Base           │
 │     → Insight mới → ghi KB ngay (KB Write Protocol)   │
@@ -670,7 +670,7 @@ TL (KING) gửi task.md
 | **Chiến lược dispatch** | Hybrid: Batch song song theo branch, sequential giữa branches có phụ thuộc |
 | **Tổng hợp** | SIVIL rank tất cả approaches, chọn top-K, tạo spec cho BELI |
 | **Feedback loop** | BELI → SIVIL: code issues, suggestions → SIVIL điều chỉnh |
-| **Research Council** | SIVIL sync với KING sau SYNTHESIZE (trước khi BELI code) — challenge hypotheses + chốt tri thức mới vào KB |
+| **Research Council** | SIVIL sync với NEMESIS sau SYNTHESIZE (trước khi BELI code) — challenge hypotheses + chốt tri thức mới vào KB |
 | **Mode M2** | Decompose theo Module Map; findings bắt buộc kèm evidence; POC chỉ chạy trong Workspace |
 | **Output G1** | Code files / Report + worklog + issues cho G2 |
 
@@ -708,7 +708,7 @@ TL (KING) gửi task.md
 |---|---|
 | **Reviewer + Fixer 2-trong-1** | Lập trình viên và reviewer là cùng 1 agent — tự tìm bug, tự sửa, tự verify. Không mất context khi handoff giữa người tìm bug và người sửa bug |
 | **Iterative refinement loop** | Không cần fix đúng ngay lần đầu — mỗi vòng đọc lại phát hiện bug mới (kể cả regression do fix trước gây ra) |
-| **Focus chi tiết, ngữ cảnh hẹp** | G2 chỉ cần đọc 1-3 files cùng lúc — tập trung tuyệt đối vào chi tiết, không phân tán vào bức tranh lớn (đã có KING lo) |
+| **Focus chi tiết, ngữ cảnh hẹp** | G2 chỉ cần đọc 1-3 files cùng lúc — tập trung tuyệt đối vào chi tiết, không phân tán vào bức tranh lớn (đã có NEMESIS lo) |
 
 ### Nguyên tắc cốt lõi: "Đọc → Tìm → Sửa → Kiểm tra → Lặp lại"
 
@@ -1030,7 +1030,7 @@ Khi mission M2, LISMA không sửa bug trong code submission mà **chẩn đoán
 - M1: LISMA được phép **SỬA** code submission trực tiếp
 - M2: LISMA **CHỈ CHẨN ĐOÁN + ĐỀ XUẤT fix trong PROPOSAL** — tuyệt đối không apply bất kỳ thay đổi nào lên TMO
 
-**Vòng lặp M2:** Đọc log → Định vị → Chẩn đoán → Đề xuất → KING verify (không có bước "apply fix")
+**Vòng lặp M2:** Đọc log → Định vị → Chẩn đoán → Đề xuất → NEMESIS verify (không có bước "apply fix")
 
 ### Kịch bản đặc biệt: G2 trong Tier 1 (Simple Task)
 
@@ -1128,17 +1128,17 @@ G1 Output (code + worklog)
 - ANALYZE G2 output + Knowledge Base
 - OPTIMIZE theo priority: Data/System Safety → Performance → Code Quality
 - EVOLVE: ghi lessons + anti-patterns vào Knowledge Base qua mỗi vòng
-- CURATE: consolidate + dedup các KB entries do KING/SIVIL ghi (chu trình G3 gần nhất)
+- CURATE: consolidate + dedup các KB entries do NEMESIS/SIVIL ghi (chu trình G3 gần nhất)
 - (M2) Sinh PROPOSAL ITEM kèm Verification Plan
 
 **Deliverables:** Optimized code (M1) / Proposal items (M2) + Updated Knowledge Base (đã curate — gồm entries từ cả team) + Recommendations cho TL
 
 ### 📜 INSTRUCTIONS — HAN
 
-- **LUÔN:** load Knowledge Base trước khi optimize; ghi lesson mới sau mỗi vòng; đọc theo Metric Impact Chain (M1) / Impact Chain (M2); sinh Verification Plan (deferred) cho mọi proposal M2; curate KB entries do KING/SIVIL ghi (dedup/merge/retire)
-- **KHÔNG BAO GIỜ:** tối ưu khi Data/System Safety chưa pass; thay đổi approach mà không báo KING; (M2) apply thay đổi trực tiếp lên Live System — POC/thử nghiệm chỉ chạy trong Workspace
+- **LUÔN:** load Knowledge Base trước khi optimize; ghi lesson mới sau mỗi vòng; đọc theo Metric Impact Chain (M1) / Impact Chain (M2); sinh Verification Plan (deferred) cho mọi proposal M2; curate KB entries do NEMESIS/SIVIL ghi (dedup/merge/retire)
+- **KHÔNG BAO GIỜ:** tối ưu khi Data/System Safety chưa pass; thay đổi approach mà không báo NEMESIS; (M2) apply thay đổi trực tiếp lên Live System — POC/thử nghiệm chỉ chạy trong Workspace
 - **Input contract:** G2 output (verified code/report + suggestions + concerns) + Knowledge Base
-- **Output contract:** Optimized code/Proposal items + updated KB + recommendations → KING
+- **Output contract:** Optimized code/Proposal items + updated KB + recommendations → NEMESIS
 - **ESCALATE lên TL khi:** approach sai fundamental / overfitting không sửa được trong scope G3
 - **Signature move:** self-evolving — Knowledge Base tích lũy lessons + anti-patterns qua từng vòng
 
@@ -1394,7 +1394,7 @@ Kết quả: 150 → 80 dòng, dễ maintain, dễ debug
 - (a) Cách kiểm chứng bằng tay NGAY (log check, manual test)
 - (b) Benchmark spec khi hệ A/B được xây (ghi rõ metric + method)
 
-**Knowledge Base M2 thêm categories:** **System Patterns** (cái gì hoạt động tốt), **System Anti-Patterns** (KHÔNG LÀM), **Config Lessons**, **Performance Baselines** — HAN tích lũy hiểu biết về chính hệ TMO qua từng mission. Theo protocol Knowledge Capture, KING và SIVIL cũng ghi trực tiếp khi phát hiện tri thức mới (xem section KNOWLEDGE CAPTURE).
+**Knowledge Base M2 thêm categories:** **System Patterns** (cái gì hoạt động tốt), **System Anti-Patterns** (KHÔNG LÀM), **Config Lessons**, **Performance Baselines** — HAN tích lũy hiểu biết về chính hệ TMO qua từng mission. Theo protocol Knowledge Capture, NEMESIS và SIVIL cũng ghi trực tiếp khi phát hiện tri thức mới (xem section KNOWLEDGE CAPTURE).
 
 ### Cơ chế Self-Evolving — Trái tim của G3
 
@@ -1435,7 +1435,7 @@ Kết quả: 150 → 80 dòng, dễ maintain, dễ debug
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Ghi chú:** Theo protocol Knowledge Capture, nguồn ghi KB không chỉ HAN — KING và SIVIL ghi trực tiếp khi phát hiện trong quá trình vận hành; HAN giữ vai trò **Curator** (consolidate/dedup). Xem section KNOWLEDGE CAPTURE.
+**Ghi chú:** Theo protocol Knowledge Capture, nguồn ghi KB không chỉ HAN — NEMESIS và SIVIL ghi trực tiếp khi phát hiện trong quá trình vận hành; HAN giữ vai trò **Curator** (consolidate/dedup). Xem section KNOWLEDGE CAPTURE.
 
 #### Ví dụ self-evolving qua 3 vòng thực tế:
 
@@ -1600,7 +1600,7 @@ G2 Output (code sạch + suggestions + concerns)
 └──────────────┬───────────────────────────────────────────┘
                │ G3 Output
                ▼
-          TL (KING)
+          TL (NEMESIS)
 ```
 
 ### Ví dụ thực tế — G3 tối ưu House Prices pipeline (M1):
@@ -1695,7 +1695,7 @@ G2 Output (code sạch + suggestions + concerns)
 └──────────────┬───────────────────────────────────────────┘
                │ G3 Output
                ▼
-          TL (KING)
+          TL (NEMESIS)
 ```
 
 ### Tóm tắt cơ chế G3:
@@ -1729,7 +1729,7 @@ Lỗ hổng:
      → thất lạc nếu task pivot / dừng giữa chừng
   ② Tier SIMPLE / MEDIUM không đi qua G3
      → tri thức của những task này KHÔNG BAO GIỜ vào KB
-  ③ Thảo luận KING ↔ SIVIL không được lưu lại
+  ③ Thảo luận NEMESIS ↔ SIVIL không được lưu lại
      → insight từ thảo luận mất ngay khi kết thúc
 ```
 
@@ -1737,21 +1737,21 @@ Lỗ hổng:
 
 | Agent | Quyền | Thời điểm capture |
 |-------|-------|-------------------|
-| **KING** | Ghi trực tiếp | MONITOR (đọc worklog) / DECIDE (pivot lessons) / FINALIZE / Research Council |
+| **NEMESIS** | Ghi trực tiếp | MONITOR (đọc worklog) / DECIDE (pivot lessons) / FINALIZE / Research Council |
 | **SIVIL** | Ghi trực tiếp | SYNTHESIZE (insight từ sub-agents) / Research Council |
 | **HAN** | Ghi trực tiếp + **CURATOR** | Chu trình G3 (như cũ) + consolidate/dedup entries của cả team |
 | **BELI** | Đề xuất qua worklog | Edge cases + patterns gặp khi code → trường "KB Candidates" |
 | **LISMA** | Đề xuất qua worklog | Bug patterns + root cause insight khi review → trường "KB Candidates" |
 
-BELI/LISMA không ghi trực tiếp vì findings của họ cần được xác nhận — KING/SIVIL/HAN đọc "KB Candidates" trong worklog và quyết định ghi (entry nào cũng phải có evidence).
+BELI/LISMA không ghi trực tiếp vì findings của họ cần được xác nhận — NEMESIS/SIVIL/HAN đọc "KB Candidates" trong worklog và quyết định ghi (entry nào cũng phải có evidence).
 
-### RESEARCH COUNCIL — Thảo luận KING ↔ SIVIL:
+### RESEARCH COUNCIL — Thảo luận NEMESIS ↔ SIVIL:
 
-KING và SIVIL tiến hành **nhiều thảo luận** trong suốt quá trình vận hành — đây là nơi tri thức được phát hiện, thách thức và chốt:
+NEMESIS và SIVIL tiến hành **nhiều thảo luận** trong suốt quá trình vận hành — đây là nơi tri thức được phát hiện, thách thức và chốt:
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  RESEARCH COUNCIL — KING ↔ SIVIL                    │
+│  RESEARCH COUNCIL — NEMESIS ↔ SIVIL                    │
 │                                                      │
 │  Thời điểm (4 cố định):                             │
 │  ① Sau DECOMPOSE — trước khi ASSIGN                 │
@@ -1760,7 +1760,7 @@ KING và SIVIL tiến hành **nhiều thảo luận** trong suốt quá trình v
 │  ④ Tại mỗi Checkpoint                                │
 │                                                      │
 │  Nội dung:                                           │
-│  ├── Challenge hypotheses (KING hỏi, SIVIL        │
+│  ├── Challenge hypotheses (NEMESIS hỏi, SIVIL        │
 │  │   đáp bằng findings)                              │
 │  ├── Đối chiếu findings với KB: "đã có chưa?"      │
 │  └── Chốt tri thức mới → ghi KB NGAY                │
@@ -1781,7 +1781,7 @@ Bước 1 — SEARCH   Tra KB theo category + keywords:
 Bước 2 — FORMAT   Viết entry theo KB Entry Schema (dưới đây)
                    Insight ngắn + actionable; evidence bắt buộc
 
-Bước 3 — WRITE    KING/SIVIL/HAN: ghi trực tiếp
+Bước 3 — WRITE    NEMESIS/SIVIL/HAN: ghi trực tiếp
                    BELI/LISMA: để trong worklog trường "KB Candidates"
 
 Bước 4 — CURATE   HAN consolidate trong chu trình G3 gần nhất:
@@ -1797,7 +1797,7 @@ Bước 4 — CURATE   HAN consolidate trong chu trình G3 gần nhất:
              hoặc Research Insights (mới)]
 - Insight: [1 câu — ngắn, actionable]
 - Evidence/Context: [file:line | log excerpt | metric | discussion ref]
-- Source: [KING/SIVIL/BELI/LISMA/HAN + thời điểm phát hiện]
+- Source: [NEMESIS/SIVIL/BELI/LISMA/HAN + thời điểm phát hiện]
 - Mission: [M1 | M2]
 - Status: NEW → CURATED → (RETIRED)
 ```
@@ -1806,7 +1806,7 @@ Ví dụ 3 entry ghi từ 3 nguồn khác nhau:
 
 | ID | Category | Insight | Evidence | Source | Mission |
 |---|---|---|---|---|---|
-| KB-20250612-001 | Config Lessons | Neo4j Aura: user = instance ID (8-hex), không phải luôn là "neo4j" | AuraDB handshake: user "neo4j" 401 / instance ID 200 | KING (MONITOR) | M2 |
+| KB-20250612-001 | Config Lessons | Neo4j Aura: user = instance ID (8-hex), không phải luôn là "neo4j" | AuraDB handshake: user "neo4j" 401 / instance ID 200 | NEMESIS (MONITOR) | M2 |
 | KB-20250612-002 | System Anti-Patterns | LLM key 4xx → KHÔNG retry mù — fail-fast ngay | log 121s (retry mù) vs 6.2s (fail-fast) | LISMA → HAN | M2 |
 | KB-20250612-003 | Research Insights | Decompose audit hệ thống theo 4 branch (hiện trạng → điểm yếu → pattern → feasibility) cho coverage đủ | Discussion ② Research Council — task audit memory | SIVIL | M2 |
 
@@ -1817,16 +1817,16 @@ Tri thức **phương pháp nghiên cứu**: cách decompose hiệu quả, explo
 ### Quy tắc vàng Knowledge Capture:
 
 1. **Ghi ngay, không hoãn** — tri thức phát hiện hôm nay không đợi tới chu trình sau
-2. **Mọi tier đều capture** — SIMPLE/MEDIUM không qua G3 → KING ghi tại MONITOR + FINALIZE
+2. **Mọi tier đều capture** — SIMPLE/MEDIUM không qua G3 → NEMESIS ghi tại MONITOR + FINALIZE
 3. **Evidence trước khi ghi** — insight không có evidence/context = không ghi (giữ KB sạch)
-4. **KB là của team** — HAN curate nhưng không độc quyền; KING/SIVIL ghi trực tiếp, BELI/LISMA đề xuất
-5. **Research Council là nguồn tri thức sống** — mọi thảo luận KING ↔ SIVIL kết thúc bằng câu hỏi: "Có gì KB chưa có?"
+4. **KB là của team** — HAN curate nhưng không độc quyền; NEMESIS/SIVIL ghi trực tiếp, BELI/LISMA đề xuất
+5. **Research Council là nguồn tri thức sống** — mọi thảo luận NEMESIS ↔ SIVIL kết thúc bằng câu hỏi: "Có gì KB chưa có?"
 
 ---
 
-## 🧠 CHI TIẾT TL — CƠ CHẾ ĐIỀU PHỐI CỦA KING
+## 🧠 CHI TIẾT TL — CƠ CHẾ ĐIỀU PHỐI CỦA NEMESIS
 
-### 📋 JOB DESCRIPTION — KING (TL / Team Leader / Research Director)
+### 📋 JOB DESCRIPTION — NEMESIS (TL / Team Leader / Research Director)
 
 **Sứ mệnh (Dual Mission):**
 - M1: Tư duy & điều phối nghiên cứu Kaggle — nhìn lớn, chia nhỏ, kiểm soát chặt
@@ -1843,7 +1843,7 @@ Tri thức **phương pháp nghiên cứu**: cách decompose hiệu quả, explo
 
 **Deliverables:** Task .md files + Decision log + Progress tracking + Final report (M1) / Proposal (M2 → SELF-DIRECTION) + KB entries mới (tri thức phát hiện trong vận hành)
 
-### 📜 INSTRUCTIONS — KING
+### 📜 INSTRUCTIONS — NEMESIS
 
 - **LUÔN:** đọc worklog sau mỗi Checkpoint (metrics/findings trước, chi tiết sau); ghi lý do mọi quyết định vào Decision log; chọn tier CHO TỪNG PART; với M2 — mọi claim phải có evidence trước khi vào Proposal; ghi tri thức mới vào KB NGAY khi phát hiện (KB Write Protocol); chủ trì Research Council với SIVIL
 - **KHÔNG BAO GIỜ:** code hay sửa code (đọc để HIỂU, giao lại cho LISMA/HAN sửa); quyết định khi thiếu thông tin (thiếu → hỏi 1 câu đúng chỗ); đoán mò mission type khi ambiguous
@@ -1856,16 +1856,16 @@ Tri thức **phương pháp nghiên cứu**: cách decompose hiệu quả, explo
 
 | Thiết kế vai trò | Lợi ích cho team |
 |---|---|
-| **Đọc toàn bộ context cùng lúc** | KING nắm TOÀN BỘ competition description + data dictionary + forum posts + worklogs (M2: system docs + logs + health) — không mất context khi chuyển giữa các parts |
+| **Đọc toàn bộ context cùng lúc** | NEMESIS nắm TOÀN BỘ competition description + data dictionary + forum posts + worklogs (M2: system docs + logs + health) — không mất context khi chuyển giữa các parts |
 | **Suy luận sâu & lập kế hoạch dài hạn** | Phân tích bài toán phức tạp, chia nhỏ chính xác, nhận ra dependency giữa các parts, biết khi nào cần pivot |
-| **Không code** | KING chỉ TƯ DUY và ĐIỀU PHỐI — không can thiệp vào code của G1/G2/G3. Tránh xung đột "vừa cầm lái vừa sửa máy" |
+| **Không code** | NEMESIS chỉ TƯ DUY và ĐIỀU PHỐI — không can thiệp vào code của G1/G2/G3. Tránh xung đột "vừa cầm lái vừa sửa máy" |
 | **Phân loại mission (CLASSIFY)** | Dual mission đòi hỏi 1 cổng phân luồng duy nhất ngay đầu pipeline — sai mission type = toàn bộ pipeline chạy nhầm hướng |
 
 ### Nguyên tắc cốt lõi: "Nhìn lớn, chia nhỏ, kiểm soát chặt"
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│              KING — TEAM LEADER                          │
+│              NEMESIS — TEAM LEADER                          │
 │                                                          │
 │  NHÌN LỚN        CHIA NHỎ          KIỂM SOÁT CHẶT       │
 │                                                          │
@@ -1991,7 +1991,7 @@ TL quyết định: PIVOT — sửa lại feature selection pipeline
 **Bước 0 — CLASSIFY MISSION (bắt buộc với mọi request, trước mọi việc khác):**
 
 ```
-KING nhận request → Phân loại mission TRƯỚC KHI làm gì khác:
+NEMESIS nhận request → Phân loại mission TRƯỚC KHI làm gì khác:
 
 Signals M1 (Kaggle Research):
   "kaggle, competition, dataset, leaderboard, submission,
@@ -2018,7 +2018,7 @@ Mission type quyết định output cuối:
 ```
 User: "Tham gia House Prices competition trên Kaggle"
 
-KING nhận request (mission: M1):
+NEMESIS nhận request (mission: M1):
 ───────────────────────────────────────────────────
 1. Đọc competition page:
    - Objective: Predict SalePrice (regression)
@@ -2051,7 +2051,7 @@ KING nhận request (mission: M1):
 ```
 User: "Hệ thống chat của TMO chậm, nghiên cứu và đề xuất khắc phục"
 
-KING nhận request (mission: M2):
+NEMESIS nhận request (mission: M2):
 ───────────────────────────────────────────────────
 1. Đọc hiện trạng hệ thống:
    - Health check: service nào connected, đâu degraded?
@@ -2074,7 +2074,7 @@ KING nhận request (mission: M2):
 Đây là quyết định quan trọng nhất — sai tier = lãng phí thời gian HOẶC chất lượng kém.
 
 ```
-KING đánh giá toàn bộ competition (M1):
+NEMESIS đánh giá toàn bộ competition (M1):
 ───────────────────────────────────────────────────
 Tiêu chí 1: Phạm vi = 3 (Multi-module pipeline)
   → Cần EDA + Feature Eng + Models + Ensemble + Submission
@@ -2105,7 +2105,7 @@ Nhưng trong competition, KHÔNG phải mọi part đều Complex:
 ```
 Request: "Đề xuất nâng cấp kiến trúc bộ nhớ TMO"
 
-KING đánh giá:
+NEMESIS đánh giá:
   Phạm vi = 3 (đụng 3 store: Qdrant + Neo4j + SQLite + pipeline)
   Suy luận = 3 (cần audit + design + trade-offs)
   Rủi ro = 2 (thay đổi bộ nhớ ảnh hưởng toàn hệ)
@@ -2124,7 +2124,7 @@ KING đánh giá:
 **Bản M1 — Kaggle:**
 
 ```
-KING chia House Prices thành 6 Parts:
+NEMESIS chia House Prices thành 6 Parts:
 ───────────────────────────────────────────────────
 
 Part 0: Setup & Baseline (SIMPLE)
@@ -2169,7 +2169,7 @@ Part 5: Submission & Documentation (SIMPLE)
 **Bản M2 — System Research (chia theo module/layer):**
 
 ```
-KING chia "Đề xuất nâng cấp bộ nhớ TMO" thành 4 Parts:
+NEMESIS chia "Đề xuất nâng cấp bộ nhớ TMO" thành 4 Parts:
 
 Part 1: Audit hiện trạng (COMPLEX)
   ├── SIVIL dispatch SAs đọc code + 3 stores + logs
@@ -2185,7 +2185,7 @@ Part 3: Thiết kế options (COMPLEX)
   └── Output: options comparison
 
 Part 4: Proposal & Verification Plan (MEDIUM)
-  ├── KING tổng hợp PROPOSAL theo Proposal Schema
+  ├── NEMESIS tổng hợp PROPOSAL theo Proposal Schema
   └── Output: Proposal → SELF-DIRECTION
 ```
 
@@ -2340,7 +2340,7 @@ TL đánh giá:
 
 **MONITOR bản M2:** Worklog có thêm trường `Mission: M2` và Findings + Evidence thay cho Metrics. TL VERIFY theo tiêu chí evidence-based (xem section Read-Write-Verify Loop).
 
-**MONITOR & Knowledge Capture:** Khi đọc worklog mà phát hiện lesson/insight KB chưa có → KING ghi NGAY theo KB Write Protocol (không đợi FINALIZE). Đặc biệt quan trọng với tier SIMPLE/MEDIUM không đi qua G3: MONITOR + FINALIZE là 2 thời điểm duy nhất để tri thức không bị mất.
+**MONITOR & Knowledge Capture:** Khi đọc worklog mà phát hiện lesson/insight KB chưa có → NEMESIS ghi NGAY theo KB Write Protocol (không đợi FINALIZE). Đặc biệt quan trọng với tier SIMPLE/MEDIUM không đi qua G3: MONITOR + FINALIZE là 2 thời điểm duy nhất để tri thức không bị mất.
 
 #### Nhiệm vụ 6: DECIDE — Quyết định nâng/hạ tier & Pivot
 
@@ -2434,7 +2434,7 @@ NHƯNG LISMA đọc logs phát hiện:
    của HTTP client + fail-open path xử lý 4 keys lần lượt.
    Finding của G1 sai root cause!"
 
-TL (KING) VERIFY:
+TL (NEMESIS) VERIFY:
   → Claim của G1 mâu thuẫn logs → PHẢI PIVOT
   → Yêu cầu G1 re-audit khu vực key pool với evidence
   → Chỉ nhận finding nào có file:line + log excerpt khớp nhau
@@ -2485,19 +2485,19 @@ TL tổng kết toàn bộ competition:
 ───────────────────────────────────────────────────
 ```
 
-**Knowledge Capture tại FINALIZE (M1):** Toàn bộ "Lessons for Future Competitions" được KING ghi vào Knowledge Base NGAY theo KB Write Protocol — tri thức không được phép chỉ nằm trong Competition Summary. HAN sẽ curate ở chu trình G3 gần nhất (nếu task có G3).
+**Knowledge Capture tại FINALIZE (M1):** Toàn bộ "Lessons for Future Competitions" được NEMESIS ghi vào Knowledge Base NGAY theo KB Write Protocol — tri thức không được phép chỉ nằm trong Competition Summary. HAN sẽ curate ở chu trình G3 gần nhất (nếu task có G3).
 
 **Bản M2 — Route vào SELF-DIRECTION:**
 
 ```
-KING tổng hợp output G1/G2/G3 thành PROPOSAL DOCUMENT
+NEMESIS tổng hợp output G1/G2/G3 thành PROPOSAL DOCUMENT
 theo Proposal Schema chuẩn (xem section PROPOSAL SCHEMA):
 
   → Route THẲNG vào module SELF-DIRECTION của TMO
   → Status: SUBMITTED — chờ user hoặc agent được ủy quyền phê duyệt
   → KHÔNG qua user inbox trung gian — SELF-DIRECTION là nơi quyết định
   → Approval có thể đến từ: user trực tiếp HOẶC agents được ủy quyền
-  → Sau SUBMITTED: KING vẫn theo dõi, cập nhật nếu bị REVISED
+  → Sau SUBMITTED: NEMESIS vẫn theo dõi, cập nhật nếu bị REVISED
 ```
 
 ### Cơ chế giao tiếp TL — Làm việc với từng Group
@@ -2533,7 +2533,7 @@ theo Proposal Schema chuẩn (xem section PROPOSAL SCHEMA):
 │  ├── Knowledge Base updates (lessons learned)             │
 │  └── Metrics (score trước/sau, improvement)               │
 │                                                           │
-│  KING ↔ SIVIL (RESEARCH COUNCIL):                        │
+│  NEMESIS ↔ SIVIL (RESEARCH COUNCIL):                        │
 │  ├── ① Sau DECOMPOSE (trước ASSIGN)                      │
 │  ├── ② Sau SYNTHESIZE (trước khi BELI code)              │
 │  ├── ③ Khi G1 ESCALATE                                   │
@@ -2634,7 +2634,7 @@ TL nhận thông tin mới (từ worklog / G2 escalate / LB feedback / M2: propo
 User Request (Kaggle / System Research / dataset / documentation)
         │
         ▼
-┌─── KING (Team Leader) ────────────────────────────────┐
+┌─── NEMESIS (Team Leader) ────────────────────────────────┐
 │                                                          │
 │  0. CLASSIFY: Phân loại mission                         │
 │     ├── M1 — Kaggle Research                            │
@@ -2921,7 +2921,7 @@ Thay vì triển khai logic chi tiết, TL cung cấp **5 lớp định hướng
 ### Ví dụ thực tế: TL phân tích House Prices Competition (M1)
 
 ```
-TL (KING) nhận task: "Tham gia House Prices competition"
+TL (NEMESIS) nhận task: "Tham gia House Prices competition"
 ───────────────────────────────────────────────────────────
 
 Bước 0: CLASSIFY → M1 (Kaggle Research) ✅
@@ -3184,7 +3184,7 @@ G3: Ensemble top-2 (XGB + LGBM) → 0.118
 **Khi nào:** Sửa 1 bug nhỏ, đổi 1 tham số, viết 1 hàm tiện ích, format code, thêm comment, (M2) verify 1 config...
 
 ```
-TL (KING) ──→ G2 (LISMA) ──→ TL xác nhận ──→ DONE
+TL (NEMESIS) ──→ G2 (LISMA) ──→ TL xác nhận ──→ DONE
 ```
 
 **Vì sao bỏ G1:** Task đủ đơn giản để LISMA tự làm luôn (code + fix trong 1 bước)
@@ -3205,7 +3205,7 @@ TL (KING) ──→ G2 (LISMA) ──→ TL xác nhận ──→ DONE
 **Khi nào:** Viết 1 feature mới, implement 1 model đơn giản, EDA cơ bản, tạo 1 visualization, (M2) chẩn đoán 1 vấn đề performance...
 
 ```
-TL (KING) ──→ G1 (BELI code) ──→ G2 (LISMA fix) ──→ TL xác nhận ──→ DONE
+TL (NEMESIS) ──→ G1 (BELI code) ──→ G2 (LISMA fix) ──→ TL xác nhận ──→ DONE
 ```
 
 **Vì sao bỏ G3:** Feature hoạt động đúng là đủ, chưa cần tối ưu
@@ -3231,7 +3231,7 @@ TL ──→ G1 (SIVIL orchestrate + BELI code) ──→ G2 (LISMA review) ─�
 
 | Bước | Ai làm | Làm gì | Output |
 |------|--------|--------|--------|
-| 1 | TL (KING) | Phân tích: "Complex task" → Chia thành parts → Mô tả từng part trong .md | `task_complex_part1.md`, `part2.md`... |
+| 1 | TL (NEMESIS) | Phân tích: "Complex task" → Chia thành parts → Mô tả từng part trong .md | `task_complex_part1.md`, `part2.md`... |
 | 2 | G1 (SIVIL + BELI) | SIVIL: parallel explore N approaches qua sub-agents → BELI: code top-K approaches | Multiple code drafts + comparison |
 | 3 | G2 (LISMA) | Review tất cả approaches, fix bugs, loại approaches lỗi, đề xuất cải thiện | Code sạch + suggestions |
 | 4 | G3 (HAN) | Tối ưu best approach: tuning, ensemble, feature engineering / (M2) sinh proposal items | Optimized code / Proposal items |
@@ -3243,7 +3243,7 @@ TL ──→ G1 (SIVIL orchestrate + BELI code) ──→ G2 (LISMA review) ─�
 
 ## 🧠 BẢNG QUYẾT ĐỊNH COMPLEXITY — TL DÙNG ĐỂ PHÂN LOẠI
 
-TL (KING) đánh giá mỗi task theo 3 tiêu chí:
+TL (NEMESIS) đánh giá mỗi task theo 3 tiêu chí:
 
 | Tiêu chí | Simple (1 đ) | Medium (2 đ) | Complex (3 đ) |
 |----------|-------------|--------------|---------------|
@@ -3642,7 +3642,7 @@ Research Team có **3 Checkpoint** (thay vì 4 như Code Team, vì Research ch�
 G1 (SIVIL + BELI) hoàn thành Feature Engineering First Draft
     │
     ▼
-TL (KING) — CHECKPOINT 1:
+TL (NEMESIS) — CHECKPOINT 1:
 ┌──────────────────────────────────────────────────────┐
 │ TL ĐỌC G1 Worklog:                                   │
 │                                                       │
@@ -3682,7 +3682,7 @@ TL (KING) — CHECKPOINT 1:
 G2 (LISMA) hoàn thành Review & Fix
     │
     ▼
-TL (KING) — CHECKPOINT 2:
+TL (NEMESIS) — CHECKPOINT 2:
 ┌──────────────────────────────────────────────────────┐
 │ TL ĐỌC G2 Worklog:                                   │
 │                                                       │
@@ -3720,7 +3720,7 @@ TL (KING) — CHECKPOINT 2:
 G3 (HAN) hoàn thành Optimization
     │
     ▼
-TL (KING) — CHECKPOINT 3 + FINAL VERIFY:
+TL (NEMESIS) — CHECKPOINT 3 + FINAL VERIFY:
 ┌──────────────────────────────────────────────────────┐
 │ TL ĐỌC G3 Worklog:                                   │
 │                                                       │
@@ -4293,7 +4293,7 @@ Toàn bộ pipeline M2 hội tụ về 1 artifact duy nhất: **PROPOSAL**. Đâ
 # PROPOSAL: [Tên ngắn gọn]
 - **ID**: P-YYYYMMDD-NNN
 - **Ngày**: [date]
-- **Author**: [SIVIL/BELI/LISMA/HAN — tổng hợp bởi KING]
+- **Author**: [SIVIL/BELI/LISMA/HAN — tổng hợp bởi NEMESIS]
 - **Mission**: M2
 
 ## 1. Problem Statement
@@ -4331,12 +4331,12 @@ Toàn bộ pipeline M2 hội tụ về 1 artifact duy nhất: **PROPOSAL**. Đâ
 **Vòng đời Proposal:**
 
 ```
-DRAFT (KING tổng hợp từ output G1/G2/G3)
+DRAFT (NEMESIS tổng hợp từ output G1/G2/G3)
   → SUBMITTED (route thẳng vào SELF-DIRECTION)
      → Chờ user HOẶC agent được ủy quyền phê duyệt
   → APPROVED → áp thay đổi từ Workspace lên Live System (user hoặc agent ủy quyền — thao tác riêng)
   → REJECTED (kèm lý do → quay lại research nếu cần)
-  → REVISED (yêu cầu bổ sung evidence/option → KING giao lại group liên quan)
+  → REVISED (yêu cầu bổ sung evidence/option → NEMESIS giao lại group liên quan)
 ```
 
 **Trường 7 — Verification Plan — là linh hồn của schema:** vì hệ thống benchmark A/B chưa xây, proposal KHÔNG bị chờ — gửi đi ngay kèm (a) cách kiểm chứng tay ngay bằng log/manual test + (b) benchmark spec hoãn cho đến khi hệ A/B được xây.
@@ -4350,7 +4350,7 @@ Giả sử team tham gia competition "House Prices: Advanced Regression Techniqu
 ### Phase 1: Khởi động (Complex)
 
 ```
-1. TL (KING) đọc competition description
+1. TL (NEMESIS) đọc competition description
    → CLASSIFY: M1 (Kaggle Research) ✅
    → Chấm: Phạm vi 3 + Suy luận 3 + Rủi ro 2 = 8 → COMPLEX
    
@@ -4389,7 +4389,7 @@ G3 (HAN):
   Suggestion: "Nên thử target encoding cho categorical thay vì one-hot"
   → Output: Optimized EDA + strategy recommendations
 
-TL (KING):
+TL (NEMESIS):
   Đọc worklog → Chốt approach → 
   "Tốt, chuyển sang Part 2: Feature Engineering"
   → Gọi G1 cho Part 2
@@ -4429,20 +4429,20 @@ TL nhận ra: "Feature X bị NaN sau transform"
 
 Giả sử user yêu cầu: "Hệ thống chat của TMO chậm, nghiên cứu và đề xuất khắc phục."
 
-### Phase 0: Phân loại & Triage (KING)
+### Phase 0: Phân loại & Triage (NEMESIS)
 
 ```
-KING nhận request → CLASSIFY:
+NEMESIS nhận request → CLASSIFY:
   "hệ thống, TMO, chậm, đề xuất khắc phục" → signals M2
   → mission_type: M2 (confidence: cao — không cần hỏi lại)
 
-KING TRIAGE:
+NEMESIS TRIAGE:
   Phạm vi = 3 (LLM pipeline + key pool + fail-open paths)
   Suy luận = 3 (cần đọc logs + code để tìm root cause)
   Rủi ro = 2 (thay đổi ảnh hưởng trải nghiệm user)
   → Tổng 8 → COMPLEX (Tier 3)
 
-KING DECOMPOSE — 4 Parts:
+NEMESIS DECOMPOSE — 4 Parts:
   Part 1: Audit hiện trạng (COMPLEX)
   Part 2: Chẩn đoán root cause (MEDIUM)
   Part 3: Thiết kế options (COMPLEX)
@@ -4482,7 +4482,7 @@ G3 (HAN) — Architecture Proposer:
   → Recommendation: A + B ngay; C để khi có benchmark
   → Mỗi option kèm Verification Plan (deferred)
 
-KING — 3 Checkpoints:
+NEMESIS — 3 Checkpoints:
   CP1: Audit đủ evidence? (mỗi finding có file:line + log) ✅
   CP2: Root cause khớp code ↔ logs? (LISMA verify) ✅
   CP3: Mỗi option có trade-offs + verification plan? ✅
@@ -4491,7 +4491,7 @@ KING — 3 Checkpoints:
 ### Phase 2: Proposal → SELF-DIRECTION
 
 ```
-KING FINALIZE:
+NEMESIS FINALIZE:
   Tổng hợp thành PROPOSAL theo Proposal Schema:
   - Problem: Chat latency 121s khi LLM key fail
     (evidence: dev.log + key-pool code path)
@@ -4520,12 +4520,12 @@ KING FINALIZE:
                     └──────┬───────┘
                            │
                     ┌──────▼───────┐
-                    │ KING: CLASSIFY│
+                    │ NEMESIS: CLASSIFY│
                     │ M1 | M2      │
                     └──────┬───────┘
                            │
                     ┌──────▼───────┐
-                    │ KING: TRIAGE  │
+                    │ NEMESIS: TRIAGE  │
                     │ Đánh giá      │
                     │ complexity    │
                     └──┬───┬───┬───┘
@@ -4552,8 +4552,8 @@ KING FINALIZE:
 ```
 
 **Ví dụ mapping tier (M2):**
-- "Verify 1 config có đúng không" → **Simple** (KING → LISMA → KING)
-- "Chẩn đoán chat latency cao" → **Medium** (KING → G1 → LISMA → KING)
+- "Verify 1 config có đúng không" → **Simple** (NEMESIS → LISMA → NEMESIS)
+- "Chẩn đoán chat latency cao" → **Medium** (NEMESIS → G1 → LISMA → NEMESIS)
 - "Redesign kiến trúc bộ nhớ" → **Complex** (full pipeline + HAN)
 
 ---
@@ -4562,9 +4562,9 @@ KING FINALIZE:
 
 ### Đặc điểm mỗi agent trong vai trò mới:
 
-- **KING (TL):** Đọc toàn bộ context (competition description, rules, data dictionary, forum posts, worklogs — M2: system docs + logs + health) cùng lúc. Khả năng reasoning sâu giúp chia task chính xác. Không code — chỉ tư duy và điều phối. Đóng vai trò **Research Loop Controller** trong Read-Write-Verify Loop, đọc worklog sau mỗi Checkpoint để kiểm soát hướng nghiên cứu. Với M2: phân loại mission, tổng hợp Proposal, route vào SELF-DIRECTION. Chủ trì Research Council với SIVIL; phát hiện tri thức mới → ghi KB ngay (KB Write Protocol).
+- **NEMESIS (TL):** Đọc toàn bộ context (competition description, rules, data dictionary, forum posts, worklogs — M2: system docs + logs + health) cùng lúc. Khả năng reasoning sâu giúp chia task chính xác. Không code — chỉ tư duy và điều phối. Đóng vai trò **Research Loop Controller** trong Read-Write-Verify Loop, đọc worklog sau mỗi Checkpoint để kiểm soát hướng nghiên cứu. Với M2: phân loại mission, tổng hợp Proposal, route vào SELF-DIRECTION. Chủ trì Research Council với SIVIL; phát hiện tri thức mới → ghi KB ngay (KB Write Protocol).
 
-- **SIVIL (G1 Sub-Orchestrator):** Sub-agent pool (5–300) là lợi thế tuyệt đối cho parallel exploration. Thay vì thử 1 approach tuần tự, SIVIL có thể dispatch 5–300 sub-agents song song, mỗi sub-agent độc lập. Sau đó tổng hợp kết quả, chọn top-K approaches cho BELI code chi tiết. M2: dispatch theo Module Map để audit song song từng module TMO. Tham gia Research Council với KING — SYNTHESIZE phát hiện insight mới → ghi thẳng vào Knowledge Base.
+- **SIVIL (G1 Sub-Orchestrator):** Sub-agent pool (5–300) là lợi thế tuyệt đối cho parallel exploration. Thay vì thử 1 approach tuần tự, SIVIL có thể dispatch 5–300 sub-agents song song, mỗi sub-agent độc lập. Sau đó tổng hợp kết quả, chọn top-K approaches cho BELI code chi tiết. M2: dispatch theo Module Map để audit song song từng module TMO. Tham gia Research Council với NEMESIS — SYNTHESIZE phát hiện insight mới → ghi thẳng vào Knowledge Base.
 
 - **BELI (G1 Coder):** Chuyên gia code lượt đầu — sinh code nhanh, structure tốt, follow spec chính xác. Không cần perfect ở bước này vì LISMA sẽ fix bug. M2: viết research report + POC trong Workspace (bản clone của hệ thống — không đụng Live System đang chạy).
 
@@ -4580,7 +4580,7 @@ KING FINALIZE:
 | **Fallback chain** | DeepSeek v4 Pro → DeepSeek v4 Flash → MiniMax-M3 |
 | **Chuyển fallback** | Model chính lỗi/quá tải → tự chuyển fallback; agent GIỮ NGUYÊN vai trò + JD |
 | **Phân vai** | Theo JD + Instructions (role-based) — KHÔNG theo model |
-| **Tên agent ≠ tên model** | KING/SIVIL/BELI/LISMA/HAN là vai trò, đổi model không đổi vai trò |
+| **Tên agent ≠ tên model** | NEMESIS/SIVIL/BELI/LISMA/HAN là vai trò, đổi model không đổi vai trò |
 
 ### Read-Write-Verify Loop (Research Version):
 
@@ -4627,9 +4627,9 @@ KING FINALIZE:
 | Khái niệm | Mô tả |
 |-----------|-------|
 | **Nguyên tắc** | Team research = lực lượng tri thức — phát hiện hay → ghi KB ngay trong cùng phiên, không chờ cuối chu trình |
-| **Quyền ghi trực tiếp** | KING (MONITOR/DECIDE/FINALIZE), SIVIL (SYNTHESIZE), HAN (chu trình G3 + Curator) |
-| **Đề xuất qua worklog** | BELI/LISMA — trường "KB Candidates" → KING/SIVIL/HAN quyết định ghi |
-| **Research Council** | KING ↔ SIVIL tại 4 thời điểm: sau DECOMPOSE, sau SYNTHESIZE, khi ESCALATE, tại Checkpoint |
+| **Quyền ghi trực tiếp** | NEMESIS (MONITOR/DECIDE/FINALIZE), SIVIL (SYNTHESIZE), HAN (chu trình G3 + Curator) |
+| **Đề xuất qua worklog** | BELI/LISMA — trường "KB Candidates" → NEMESIS/SIVIL/HAN quyết định ghi |
+| **Research Council** | NEMESIS ↔ SIVIL tại 4 thời điểm: sau DECOMPOSE, sau SYNTHESIZE, khi ESCALATE, tại Checkpoint |
 | **KB Write Protocol** | SEARCH (tra trùng) → FORMAT (KB Entry Schema) → WRITE → CURATE (HAN dedup/merge/retire) |
 | **Category mới** | Research Insights — tri thức phương pháp nghiên cứu từ thảo luận & vận hành |
 | **Quy tắc vàng** | Tri thức không được phép bị mất — kể cả task tier SIMPLE/MEDIUM không đi qua G3 |
@@ -4650,7 +4650,7 @@ KING FINALIZE:
 | **C2** — Confidence CLASSIFY | HIGH = ≥ 3 tín hiệu cùng chiều, 0 mâu thuẫn; MEDIUM = 1 mâu thuẫn → verify 1 vòng rồi **TIE-BREAK UP** (chọn tier cao hơn); LOW = ≥ 2 mâu thuẫn → hỏi user đúng 1 câu. |
 | **C3** — Nâng/hạ tier giữa chừng | **APPEND-ONLY**: task .md thêm `version: N` + `## CHANGELOG`; không bao giờ rewrite. |
 | **C4** — CP1 của T2 | Verify **ĐẦY ĐỦ như T3** (checklist ~60% số item; formal gate 3 thành phần). |
-| **C5** — Timeout & ủy quyền duyệt | Group treo: nhắc 1 CP / treo 2 CP → ESCALATE. ESCALATED chờ user: 48h (M1) / 24h (M2), nhắc 12h. Proposal SUBMITTED: 48h; trần REVISED = 2 vòng. **Deputy approver = SIVIL (mặc định) / HAN (KB-domain)** — không author, KING cấm tự duyệt. |
+| **C5** — Timeout & ủy quyền duyệt | Group treo: nhắc 1 CP / treo 2 CP → ESCALATE. ESCALATED chờ user: 48h (M1) / 24h (M2), nhắc 12h. Proposal SUBMITTED: 48h; trần REVISED = 2 vòng. **Deputy approver = SIVIL (mặc định) / HAN (KB-domain)** — không author, NEMESIS cấm tự duyệt. |
 | **C6** — Lưu trữ KB | 3 lớp: SQLite/Prisma canonical (versioned, soft-delete retire) + snapshot .md theo category + index (cho Directed Reading) + Live System read-only. |
 | **C7** — Dòng model switched | Duyệt format TB-09 §4.3 làm chuẩn + thêm 2 trường `trigger` + `next check`; kèm 1 dòng Decision Log; mọi agent dùng chung. |
 
@@ -4658,20 +4658,20 @@ KING FINALIZE:
 
 - **TB-01:** quá tải = dual-signal (self-report OR external probe, hysteresis 3 probe OK) · Workspace versioning BẮT BUỘC (1 Proposal = 1 branch git, diff base..head là artifact review).
 - **TB-02:** T2 vẫn họp council ① — SIVIL tham vấn ad-hoc (consult-only, không dispatch SA).
-- **TB-03:** SA concurrent 20 mặc định / burst 25 Grand (round-robin 4 NIM keys, hard-cap 25) · timeout SA: EDA 30m · Grand 60m · System Audit 30m (soft-checkpoint 50/70%, retry 1 lần scope thu hẹp) · KING CÓ quyền VETO tại council ② (checklist ack/veto từng spec; ≥ 2 vòng veto → council ③) · BELI POC Live System READ-ONLY + evidence log từng query, WRITE cấm · G1 = 40% quỹ thời gian task · feedback spec: 2 vòng MEDIUM / 3 vòng COMPLEX+Grand · verify tất cả specs → handoff 1 package.
-- **TB-04:** checklist giữ tên "Data Safety (Data Leakage)" · loại bug 5 = API/Compatibility (Regression là bug gốc có type riêng) · ESCALATED → dừng toàn bộ task · LISMA chủ động read-only Live được (evidence log) · severity regression độc lập + tham chiếu gốc · vòng đếm theo task/đợt fix · URGENT dual-channel (KING + notify user song song; KING vẫn decision-maker duy nhất) · M2 simple đi Tier 1 + KING mini read-back.
-- **TB-05:** 1 vòng = 1 task G3 (≥ 1 item) · ngưỡng đáng kể: M1 > 1 std CV; M2 > 5% hoặc bootstrap 95% CI (qualitative-only → confidence ≤ MEDIUM) · retire = PRE-APPROVAL bởi KING tại CP3 · **Schema KB Entry thêm trường 8 `Confidence: HIGH/MEDIUM/LOW` (A2)** · **trần 3 vòng Evolution Cycle/task G3, vượt → ESCALATE (A3)** · HAN không ngồi council (giữ nguồn) + council transcript route tự động tới HAN làm input curate.
-- **TB-06:** Proposal REJECTED → re-TRIAGE đầy đủ (giữ worklog), tối đa 2 vòng → ESCALATED_USER · trần hỏi: 1 câu CLASSIFY + 1 câu user-blocked-info/task · council ĐỒNG BỘ (blocking) · KING verify Proposal FIELD-BY-FIELD (8 trường, trọng điểm Risk & Rollback) trước SUBMIT.
-- **TB-07:** **danh sách 5 bước DECOMPOSE chính thức đánh số (A1)** · House Prices = 6 parts (0–5) theo nguồn · R3 giữ 50% + hiệu chỉnh sau 5 mission (log + Decision Log) · task .md có `version` + CHANGELOG (A10) · council ① MỌI mission (A5) · **M2 multi-part thêm Part 0 "Setup & Baseline": khởi Workspace + snapshot baseline từ logs (A4)** · KING độc quyền tách/gộp part (SIVIL/LISMA chỉ flag).
+- **TB-03:** SA concurrent 20 mặc định / burst 25 Grand (round-robin 4 NIM keys, hard-cap 25) · timeout SA: EDA 30m · Grand 60m · System Audit 30m (soft-checkpoint 50/70%, retry 1 lần scope thu hẹp) · NEMESIS CÓ quyền VETO tại council ② (checklist ack/veto từng spec; ≥ 2 vòng veto → council ③) · BELI POC Live System READ-ONLY + evidence log từng query, WRITE cấm · G1 = 40% quỹ thời gian task · feedback spec: 2 vòng MEDIUM / 3 vòng COMPLEX+Grand · verify tất cả specs → handoff 1 package.
+- **TB-04:** checklist giữ tên "Data Safety (Data Leakage)" · loại bug 5 = API/Compatibility (Regression là bug gốc có type riêng) · ESCALATED → dừng toàn bộ task · LISMA chủ động read-only Live được (evidence log) · severity regression độc lập + tham chiếu gốc · vòng đếm theo task/đợt fix · URGENT dual-channel (NEMESIS + notify user song song; NEMESIS vẫn decision-maker duy nhất) · M2 simple đi Tier 1 + NEMESIS mini read-back.
+- **TB-05:** 1 vòng = 1 task G3 (≥ 1 item) · ngưỡng đáng kể: M1 > 1 std CV; M2 > 5% hoặc bootstrap 95% CI (qualitative-only → confidence ≤ MEDIUM) · retire = PRE-APPROVAL bởi NEMESIS tại CP3 · **Schema KB Entry thêm trường 8 `Confidence: HIGH/MEDIUM/LOW` (A2)** · **trần 3 vòng Evolution Cycle/task G3, vượt → ESCALATE (A3)** · HAN không ngồi council (giữ nguồn) + council transcript route tự động tới HAN làm input curate.
+- **TB-06:** Proposal REJECTED → re-TRIAGE đầy đủ (giữ worklog), tối đa 2 vòng → ESCALATED_USER · trần hỏi: 1 câu CLASSIFY + 1 câu user-blocked-info/task · council ĐỒNG BỘ (blocking) · NEMESIS verify Proposal FIELD-BY-FIELD (8 trường, trọng điểm Risk & Rollback) trước SUBMIT.
+- **TB-07:** **danh sách 5 bước DECOMPOSE chính thức đánh số (A1)** · House Prices = 6 parts (0–5) theo nguồn · R3 giữ 50% + hiệu chỉnh sau 5 mission (log + Decision Log) · task .md có `version` + CHANGELOG (A10) · council ① MỌI mission (A5) · **M2 multi-part thêm Part 0 "Setup & Baseline": khởi Workspace + snapshot baseline từ logs (A4)** · NEMESIS độc quyền tách/gộp part (SIVIL/LISMA chỉ flag).
 - **TB-08:** curate định kỳ KÉP: ~10 entry NEW · cuối mission · 7 ngày nếu còn NEW (HAN chủ trì) · KB theo C6.
-- **TB-09:** CV-LB gap chuẩn hóa 0.005 minor / 0.01 notable / 0.02 instability-warning vào Research Protocol template (A11) · 2 vòng trả lại → PIVOT; 3 vòng → ESCALATE · KING ghi TL Read-Back khi READ xong.
-- **TB-10:** stale gộp vào superseded + note "cần re-compute" · map > 60 entries → rank + đọc sâu top · M1 theo cột status nguồn, M2 append + superseded · prefix LIVE:/WS: đặt cột riêng · Module Map verify kép (kỹ sư lúc cài + KING đầu mỗi mission M2 T3) · SA không ghi map trực tiếp — SIVIL tổng hợp 1 map duy nhất · task mini re-compute stale: CÓ · M1 không thêm cột Relevance.
+- **TB-09:** CV-LB gap chuẩn hóa 0.005 minor / 0.01 notable / 0.02 instability-warning vào Research Protocol template (A11) · 2 vòng trả lại → PIVOT; 3 vòng → ESCALATE · NEMESIS ghi TL Read-Back khi READ xong.
+- **TB-10:** stale gộp vào superseded + note "cần re-compute" · map > 60 entries → rank + đọc sâu top · M1 theo cột status nguồn, M2 append + superseded · prefix LIVE:/WS: đặt cột riêng · Module Map verify kép (kỹ sư lúc cài + NEMESIS đầu mỗi mission M2 T3) · SA không ghi map trực tiếp — SIVIL tổng hợp 1 map duy nhất · task mini re-compute stale: CÓ · M1 không thêm cột Relevance.
 - **TB-11:** SELF-DIRECTION = module runtime TMO (registry + scheduler + applier); Proposal canonical = file `proposals/P-YYYYMMDD-NNN.md` trong Workspace + mirror DB (model `Proposal`: 8 trường + status + deputy-approver); parser = module; APPLY = thao tác runtime sau APPROVED (merge branch Workspace).
 - **TB-12:** thêm TC-13 (task .md thiếu Success Criteria → council ① chặn) + TC-14 (map thiếu → không giao group kế) · dựng golden-run PB-M2 từ mission thật đầu (schema TB-09 §4) · TC-02 freeze theo C1 · deputy = SIVIL/HAN.
 
 ## Z.3 — Chính sách xuyên suốt (do user chỉ định)
 
-P1 Thorough-first (luôn chọn cẩn thận/đầy đủ khi trade-off) · P2 Không ràng buộc token (NIM 4 keys, round-robin, sẽ scale) · P3 Append-only audit-trail · P4 Evidence log bắt buộc mọi thao tác đọc Live · P5 Tie-break UP (mơ hồ → chọn phương án kỹ hơn) · P6 An toàn Live System tuyệt đối (read-only; write chỉ trong Workspace; KING là decision-maker duy nhất).
+P1 Thorough-first (luôn chọn cẩn thận/đầy đủ khi trade-off) · P2 Không ràng buộc token (NIM 4 keys, round-robin, sẽ scale) · P3 Append-only audit-trail · P4 Evidence log bắt buộc mọi thao tác đọc Live · P5 Tie-break UP (mơ hồ → chọn phương án kỹ hơn) · P6 An toàn Live System tuyệt đối (read-only; write chỉ trong Workspace; NEMESIS là decision-maker duy nhất).
 
 ## Z.4 — Hiệu lực
 
@@ -4719,7 +4719,7 @@ Mọi root cause / giả thiết chẩn đoán phải được chấm 5 chiều,
 2. **SCORE-A:** chấm Rubric A từng giả thiết → top-2 đi tiếp; gap <0.5 → cả 2 đi tiếp.
 3. **FALSIFY:** mỗi giả thiết thiết kế kill-criteria (evidence nào sẽ bác bỏ) → BELI viết spec test tối thiểu → LISMA chạy trong workspace (branch riêng).
 4. **EXPERIMENT:** HAN dựng Options (A/B/C) — mỗi option BẮT BUỘC kèm scorecard B kỳ vọng; LISMA triển khai POC top-2 trong workspace → đo → scorecard B thực đo; delta kỳ vọng vs thực đo → lesson calibration ghi KB.
-5. **COUNCIL ⑤ (Solution Council — KING chủ trì + SIVIL + BELI + LISMA + HAN, blocking):** phê scorecards → verdict:
+5. **COUNCIL ⑤ (Solution Council — NEMESIS chủ trì + SIVIL + BELI + LISMA + HAN, blocking):** phê scorecards → verdict:
    - **CONTINUE-ITERATE** (điểm đang tăng + còn vòng) → vòng tournament kế
    - **CONVERGE** (solution ≥4.0 VÀ gap ≥0.5 so với á quân VÀ context-fit đạt) → chốt phương án tốt nhất
    - **PIVOT** (2 vòng liên tiếp điểm đi ngang/giảm) → quay theo quy tắc PIVOT TB-06 §8.6/8.7
@@ -4739,7 +4739,7 @@ Giải pháp/pattern trong KB phải kèm bản ghi áp dụng: {8 chiều bối
 ## Z2.6 — Hiệu lực
 
 - Bổ sung Council ⑤ (thời điểm ⑤) vào hệ 4 council hiện có; transcript theo schema CouncilTranscript (kind=5).
-- Mọi quyết định mới ghi Decision Log KING; không mở [Q] mới — toàn bộ chốt trong phụ lục này theo ủy quyền thorough-first của user.
+- Mọi quyết định mới ghi Decision Log NEMESIS; không mở [Q] mới — toàn bộ chốt trong phụ lục này theo ủy quyền thorough-first của user.
 - Blueprint chi tiết: TB-14 (mở rộng của tập 13 TB); integration code map: TB-13 §2/§3/§5 cập nhật.
 
 *Hết Phụ lục Z2 — nguồn gồm 4.635 dòng gốc + Phụ lục Z (v1.3) + Phụ lục Z2 (v1.5). Append-only: không dòng nào phía trên bị sửa.*

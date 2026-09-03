@@ -4,7 +4,7 @@
  * Spec:
  *  - TB-13 §2.2 — API route escalations: query timeout + nhắc (cron :3004 register).
  *  - DR-C5 §C5 — Proposal pending timeout 48h/24h + nhắc 12h + deputy SIVIL/HAN.
- *  - KING cấm tự duyệt Proposal (DR-C5 §C5 — assertNotKingSelfApprove).
+ *  - NEMESIS cấm tự duyệt Proposal (DR-C5 §C5 — assertNotKingSelfApprove).
  *
  * Behavior:
  *  GET /api/research/escalations?status=&missionId=
@@ -20,6 +20,7 @@ import {
   escalateToUser,
   queryEscalations,
   resolveEscalation,
+  checkTimeouts,
   assertNotKingSelfApprove,
 } from '@/lib/research-team/king/escalation'
 
@@ -35,6 +36,12 @@ export async function GET(req: NextRequest) {
     const status = url.searchParams.get('status') || undefined
     const missionId = url.searchParams.get('missionId') || undefined
 
+    // FIX (Task 19 — Task 18 audit): checkTimeouts() trước đây KHÔNG BAO GIỜ được
+    // gọi (JSDoc nói "cron job :3004 gọi mỗi giờ" nhưng cron-scheduler không
+    // deploy cho research team) → timeout escalation hoàn toàn passive. Giờ
+    // chạy lazy mỗi lần query (nhẹ — scan ≤100 missions, fail-open).
+    const { expired, dueReminder } = await checkTimeouts()
+
     const { escalations, total } = await queryEscalations({ status, missionId })
 
     return NextResponse.json({
@@ -42,6 +49,15 @@ export async function GET(req: NextRequest) {
       escalations,
       total,
       filter: { status: status || null, missionId: missionId || null },
+      timeouts: {
+        expired: expired.length,
+        dueReminder: dueReminder.length,
+        // FIX theo spec DR-C5: expired = deputy SIVIL/HAN được quyền duyệt thay
+        hint:
+          expired.length > 0
+            ? `${expired.length} escalation đã quá timeout — deputy SIVIL/HAN hoặc USER xử lý`
+            : undefined,
+      },
     })
   } catch (err) {
     console.error('[ResearchEscalations] GET error:', err)
@@ -95,11 +111,11 @@ export async function POST(req: NextRequest) {
           { status: 400 },
         )
       }
-      // DR-C5 §C5 — KING cấm tự duyệt Proposal (assertNotKingSelfApprove)
+      // DR-C5 §C5 — NEMESIS cấm tự duyệt Proposal (assertNotKingSelfApprove)
       try {
         assertNotKingSelfApprove(
           body.resolvedBy,
-          body.proposalId ? 'KING' : 'USER',
+          body.proposalId ? 'NEMESIS' : 'USER',
           body.proposalId,
         )
       } catch (err) {

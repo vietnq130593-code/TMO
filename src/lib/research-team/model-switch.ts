@@ -9,7 +9,7 @@
  * - Chuyển bậc KHÔNG phải pivot: research direction, hypothesis, tier giữ nguyên.
  * - Agent GIỮ NGUYÊN vai trò + JD — chỉ "bộ não" đổi.
  * - Mỗi task mới khởi động lại từ model chính (bậc 0).
- * - Cả stack lỗi → task BLOCKED, KING báo user (đó là mission-store/king's job,
+ * - Cả stack lỗi → task BLOCKED, NEMESIS báo user (đó là mission-store/king's job,
  *   không nằm ở file này).
  */
 

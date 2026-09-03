@@ -1,8 +1,8 @@
 /**
- * RESEARCH TEAM — KING DECISION LOG (TB-06 §13 Decision Log + D-NNN ID format TB-00 §1.4 + TC-09 PIVOT)
+ * RESEARCH TEAM — NEMESIS DECISION LOG (TB-06 §13 Decision Log + D-NNN ID format TB-00 §1.4 + TC-09 PIVOT)
  * ============================================================================================
  * Spec:
- *  - TB-06 §13 — Decision Log: append-only audit trail mọi quyết định KING (CONTINUE/PIVOT/
+ *  - TB-06 §13 — Decision Log: append-only audit trail mọi quyết định NEMESIS (CONTINUE/PIVOT/
  *    ESCALATE/DECOMPOSE/REJECT/RESEARCH/FINALIZE).
  *  - D-NNN format (TB-00 §1.4): D-001, D-002... đếm theo mission (1-based).
  *  - TC-09 (TB-12 §3.2) — PIVOT bắt buộc lý do (non-empty) — recordPivot throw nếu reason empty.
@@ -25,7 +25,7 @@ import type {
 // ============================================================
 
 export interface AppendDecisionParams {
-  agent?: 'KING' | 'SIVIL' | 'BELI' | 'LISMA' | 'HAN' | string
+  agent?: 'NEMESIS' | 'SIVIL' | 'BELI' | 'LISMA' | 'HAN' | string
   decision:
     | 'CONTINUE'
     | 'PIVOT'
@@ -62,7 +62,7 @@ export async function appendDecision(
 
   const newEntry: DecisionLogEntry = {
     at: new Date().toISOString(),
-    agent: entry.agent || 'KING',
+    agent: entry.agent || 'NEMESIS',
     decision: entry.decision,
     reason: entry.reason,
     ref,
@@ -97,13 +97,13 @@ export async function findDecisionsByType(
 
 /**
  * Format 1 DecisionLogEntry → 1 dòng text:
- *   `[D-NNN] (timestamp) KING: DECISION — reason (ref)`
+ *   `[D-NNN] (timestamp) NEMESIS: DECISION — reason (ref)`
  *
  * Pure function — không side-effect. Caller dùng cho UI/CLI render.
  */
 export function formatDecisionLine(entry: DecisionLogEntry): string {
   const at = entry.at || '(no-time)'
-  const agent = entry.agent || 'KING'
+  const agent = entry.agent || 'NEMESIS'
   const decision = entry.decision || 'UNKNOWN'
   const reason = entry.reason || '(no reason)'
   const ref = entry.ref ? ` (${entry.ref})` : ''
@@ -145,7 +145,7 @@ export async function recordPivot(
         : `(trigger: ${trigger})`
 
   return appendDecision(missionId, {
-    agent: 'KING',
+    agent: 'NEMESIS',
     decision: 'PIVOT',
     reason: `[PIVOT ${triggerLabel}] ${trimmed}`,
     ref,
@@ -176,7 +176,7 @@ export async function recordReject(
   }
 
   return appendDecision(missionId, {
-    agent: 'KING',
+    agent: 'NEMESIS',
     decision: 'REJECT',
     reason: `[TC-11 REJECTED] ${trimmed} — quay về RESEARCHING (KHÔNG FINALIZED, KHÔNG re-submit nguyên trạng)`,
     ref,

@@ -128,7 +128,7 @@ interface PostBody {
   // curate
   fromPhase?: 1 | 2 | 3
   toPhase?: 1 | 2 | 3
-  curator?: 'HAN' | 'KING'
+  curator?: 'HAN' | 'NEMESIS'
   // snapshot
   outputDir?: string
 }
@@ -280,9 +280,9 @@ export async function POST(req: NextRequest) {
           { status: 400 },
         )
       }
-      if (curator !== 'HAN' && curator !== 'KING') {
+      if (curator !== 'HAN' && curator !== 'NEMESIS') {
         return NextResponse.json(
-          { status: 'error', error: 'curator phải là "HAN" hoặc "KING"' },
+          { status: 'error', error: 'curator phải là "HAN" hoặc "NEMESIS"' },
           { status: 400 },
         )
       }

@@ -19,14 +19,14 @@
  *
  * Bất biến:
  *  - KHÔNG auto-apply (DR-C1 + TB-05 §8 I4) — POC chỉ trong Workspace, Live read-only.
- *  - Trần 3 vòng Evolution Cycle mỗi task G3 (TB-05 §11 Q7) — quá → ESCALATE KING.
+ *  - Trần 3 vòng Evolution Cycle mỗi task G3 (TB-05 §11 Q7) — quá → ESCALATE NEMESIS.
  *  - HAN directKbWrite=true (constants RESEARCH_ROSTER) → ghi KB trực tiếp qua
  *    kb-store.addEntry (category baseline/pattern/lesson).
  *  - M2: mỗi proposal item BẮT BUỘC kèm Verification Plan (a) manual + (b) benchmark.
  *
  * Fail-open policy (TB-13 §4 — NIM keys placeholder):
  *  - LLM error trong runHanOptimize → options=[], worklog.issuesFaced.push('LLM unavailable').
- *  - KHÔNG crash pipeline — caller (KING P5) handle escalate.
+ *  - KHÔNG crash pipeline — caller (NEMESIS P5) handle escalate.
  */
 
 import { callLLM } from '@/lib/llm'
@@ -71,9 +71,9 @@ export interface HanOption {
  * Result của runHanOptimize — output contract TB-05 §1.2:
  *  - options: HanOption[] (M1: có thể rỗng nếu no-op / M2: ≥1 option + proposalItems).
  *  - worklog: Partial<WorklogEntry> 8 trường (caller merge).
- *  - proposalItems: M2 — mỗi item kèm Verification Plan (TB-11 §1 schema — KING tổng hợp P6).
+ *  - proposalItems: M2 — mỗi item kèm Verification Plan (TB-11 §1 schema — NEMESIS tổng hợp P6).
  *  - kbEntries: id refs của KB entries HAN đã ghi trực tiếp (directKbWrite=true).
- *  - concerns: cho KING/TL.
+ *  - concerns: cho NEMESIS/TL.
  */
 export interface HanOptimizeResult {
   options: HanOption[]
@@ -134,7 +134,7 @@ const HAN_SYSTEM_PROMPT = [
   '### KB Entries (HAN ghi trực tiếp)',
   '- <category>: <title> — <evidence>',
   '',
-  '### Concerns for KING',
+  '### Concerns for NEMESIS',
   '- <concern>',
 ].join('\n')
 
@@ -226,7 +226,7 @@ export async function runHanOptimize(
     issuesFaced: parsed.concerns.length > 0 ? parsed.concerns.slice(0, 3) : [],
     suggestionsNextGroup: [
       ...(missionType === 'M2'
-        ? ['KING verify CP3 — mỗi option có Verification Plan (a)+(b)?']
+        ? ['NEMESIS verify CP3 — mỗi option có Verification Plan (a)+(b)?']
         : []),
       'Curate KB entries NEW — HAN consolidate trong chu trình G3 gần nhất',
     ],
@@ -438,7 +438,7 @@ function parseHanOutput(
     }
   }
 
-  // Parse Concerns — section "### Concerns for KING"
+  // Parse Concerns — section "### Concerns for NEMESIS"
   const concernsSection = content.match(/###\s+Concerns[\s\S]*?(?=\n###\s|$)/i)
   if (concernsSection) {
     const concernLines = concernsSection[0]
@@ -482,9 +482,9 @@ function parseScorecardDims(body: string): {
 
 /**
  * Fail-open HAN — LLM unavailable (TB-13 §4).
- * TB-05 §8 I7: ESCALATED state — KING điều hướng, KHÔNG tự mở khóa.
+ * TB-05 §8 I7: ESCALATED state — NEMESIS điều hướng, KHÔNG tự mở khóa.
  *
- * KHÔNG crash pipeline — caller (KING P5) handle escalate.
+ * KHÔNG crash pipeline — caller (NEMESIS P5) handle escalate.
  */
 function failOpenHan(
   missionId: string,

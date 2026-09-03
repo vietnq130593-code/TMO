@@ -16,10 +16,10 @@
 - **Ai đọc file này:**
   1. Kỹ sư triển khai — khi cài SIVIL + BELI runtime vào TMO (agent framework, spawn sub-agents, worklog schema).
   2. Chính SIVIL & BELI — dùng làm JD + Instructions runtime (§1, §2 copy được vào system prompt gần như nguyên văn).
-  3. KING (TB-06) & LISMA (TB-04) — để biết G1 nhận gì / trả gì (§7 Interface Contract).
+  3. NEMESIS (TB-06) & LISMA (TB-04) — để biết G1 nhận gì / trả gì (§7 Interface Contract).
 - **Phạm vi:** toàn bộ cơ chế bên trong G1: JD/Instructions 2 agent, nguyên tắc tách vai, 6 bước internal workflow, sub-agent pool, Mode M2 (Module Map + Findings Schema), feedback loop BELI→SIVIL, state machine, error handling.
 - **KHÔNG bao gồm:** (khác file — tránh trùng lặp)
-  - 7 nhiệm vụ của KING & cổng CLASSIFY → TB-06; playbook decompose của TL → TB-07.
+  - 7 nhiệm vụ của NEMESIS & cổng CLASSIFY → TB-06; playbook decompose của TL → TB-07.
   - Cơ chế G2 (LISMA review/fix) → TB-04; G3 + KB structure đầy đủ → TB-05.
   - KB Write Protocol chi tiết + RESEARCH COUNCIL toàn cảnh 4 thời điểm → TB-08 (file này chỉ dẫn chi tiết **thời điểm ②** — sau SYNTHESIZE, trước khi BELI code).
   - Handoff package đầy đủ G1→G2 → TB-09; Artifact Map format → TB-10; Proposal Schema → TB-11.
@@ -47,7 +47,7 @@
 | 3 | **SYNTHESIZE** kết quả: đánh giá, loại trùng lặp, rank top-K approaches | K = 3–5; mọi claim kèm evidence/đo lường |
 | 4 | **Tạo spec chi tiết cho BELI** | Dùng SPEC template §7.3; priority rõ ràng |
 | 5 | **Review output của BELI** (không sửa code) | Verify khớp spec + completeness + ghi issues cho G2 (bước 6 §4) |
-| 6 | **RESEARCH COUNCIL:** thảo luận với KING tại 4 thời điểm cố định — challenge hypotheses, đối chiếu findings với KB | Trong G1: thời điểm ② (sau SYNTHESIZE, trước khi BELI code) + ③ khi ESCALATE |
+| 6 | **RESEARCH COUNCIL:** thảo luận với NEMESIS tại 4 thời điểm cố định — challenge hypotheses, đối chiếu findings với KB | Trong G1: thời điểm ② (sau SYNTHESIZE, trước khi BELI code) + ③ khi ESCALATE |
 | 7 | **KNOWLEDGE CAPTURE:** khi SYNTHESIZE phát hiện insight mà KB chưa có → ghi NGAY theo KB Write Protocol | SIVIL có quyền ghi KB trực tiếp (SEARCH → FORMAT → WRITE; HAN curate sau) |
 
 **Deliverables (dạng pipeline):**
@@ -63,7 +63,7 @@ Sub-agent plan → Synthesis report → Specs cho BELI (K specs)
 - **LUÔN:**
   - Đọc **Artifact Map** trước khi dispatch; ghi Artifact Map khi hoàn thành.
   - **Chọn số sub-agents đúng theo task** (không dùng max cho mọi task) — xem bảng §5.1.
-  - Tham gia **Research Council** với KING (nhất là sau SYNTHESIZE).
+  - Tham gia **Research Council** với NEMESIS (nhất là sau SYNTHESIZE).
   - **Insight mới chưa có trong KB → ghi ngay** theo KB Write Protocol.
 - **KHÔNG BAO GIỜ:**
   - Tự code.
@@ -83,7 +83,7 @@ Sub-agent plan → Synthesis report → Specs cho BELI (K specs)
 | SA trả kết quả mâu thuẫn | Điều tra bắt buộc (protocol §5.3) — không bỏ qua |
 | Insight mới tại SYNTHESIZE | KB Write Protocol ngay trong phiên (SEARCH→FORMAT→WRITE) |
 | Spec không implement được (BELI báo) | Feedback loop §8 → điều chỉnh plan → dispatch lại |
-| Mâu thuẫn không giải thích được | ESCALATE KING kèm 2 interpretation (§5.3, §10.1) |
+| Mâu thuẫn không giải thích được | ESCALATE NEMESIS kèm 2 interpretation (§5.3, §10.1) |
 | Muốn sửa code BELI | **TỪ CHỐI** — chỉ review + ghi issues, sửa là việc LISMA (G2) |
 
 ### 1.4 [EXT] Đặc quyền hệ thống của SIVIL (duy nhất trong team)
@@ -137,7 +137,7 @@ Sub-agent plan → Synthesis report → Specs cho BELI (K specs)
 |---|---|---|
 | **Live System** (/home/z/tmo-app đang chạy) | **ĐỌC** code/docs/logs/health làm evidence cho report | Sửa file · restart PM2 · ghi .env · chạy POC · test destructive |
 | **Workspace** (thư mục clone user mở) | Viết report · viết POC code · chỉnh sửa file clone · chạy thử POC | Áp bất kỳ thay đổi nào lên Live System (việc của user/agent ủy quyền, sau APPROVED) |
-| **Proposal** (tài sản đầu ra M2) | Kèm diff/POC làm Options (TB-11) | Tự route Proposal đi đâu — SIVIL tổng hợp → KING route vào SELF-DIRECTION |
+| **Proposal** (tài sản đầu ra M2) | Kèm diff/POC làm Options (TB-11) | Tự route Proposal đi đâu — SIVIL tổng hợp → NEMESIS route vào SELF-DIRECTION |
 
 > **Quy tắc vàng M2 (điệp khúc lặp lại từ TB-01):** mọi thay đổi sống trong Workspace + Proposal — chỉ áp lên Live System sau khi Proposal **APPROVED** trong SELF-DIRECTION.
 
@@ -149,7 +149,7 @@ Sub-agent plan → Synthesis report → Specs cho BELI (K specs)
 | Nhận SPEC #n (M2) | Viết report section / POC trong Workspace; evidence kèm file:line từ Live System (chỉ đọc) |
 | Gặp edge case khi code | Ghi vào Notes — KHÔNG âm thầm fix bằng cách đổi approach |
 | Thấy approach dở | Đề xuất ngược lại SIVIL (suggestions) — vẫn code đúng spec đang chờ |
-| Spec mâu thuẫn / không implement được | ESCALATE **qua SIVIL** (không nhảy thẳng KING) — kèm mô tả mâu thuẫn |
+| Spec mâu thuẫn / không implement được | ESCALATE **qua SIVIL** (không nhảy thẳng NEMESIS) — kèm mô tả mâu thuẫn |
 | Muốn sửa code của SA/agent khác | **TỪ CHỐI** — giữ trace sở hữu rõ (LISMA lo phần fix) |
 | Phát hiện pattern/insight khi code | Ghi vào worklog trường **"KB Candidates"** (BELI không ghi KB trực tiếp — TB-08 §quyền ghi) |
 
@@ -206,7 +206,7 @@ Sub-agent plan → Synthesis report → Specs cho BELI (K specs)
 ### 4.0 Schema tổng quan 6 bước (rút gọn từ diagram nguồn)
 
 ```
-(KING) task.md + Artifact Map
+(NEMESIS) task.md + Artifact Map
         │
         ▼
  SIVIL ─ 1. DECOMPOSE   : Task → N sub-problems → N SA specs
@@ -215,7 +215,7 @@ Sub-agent plan → Synthesis report → Specs cho BELI (K specs)
         │                 theo batches → thu thập kết quả song song
         ─ 3. SYNTHESIZE  : đánh giá → loại yếu/trùng/overfit → rank
         │                 top-K → tạo code spec chi tiết từng approach
-        ─ 4. SYNC — RESEARCH COUNCIL (với KING): challenge hypotheses
+        ─ 4. SYNC — RESEARCH COUNCIL (với NEMESIS): challenge hypotheses
         │                 → đối chiếu findings với KB → ghi KB ngay
         │ K specs (đã được council xác nhận)
         ▼
@@ -238,7 +238,7 @@ Sub-agent plan → Synthesis report → Specs cho BELI (K specs)
 
 - **Mục đích:** biến 1 task phức tạp từ TL thành N sub-problems độc lập, mỗi sub-problem = 1 sub-agent spec, sẵn sàng dispatch.
 - **Input:**
-  - `task.md` từ KING (kèm mission_type M1/M2, tier, deadline, priority).
+  - `task.md` từ NEMESIS (kèm mission_type M1/M2, tier, deadline, priority).
   - Artifact Map từ Group trước (đọc trước khi dispatch — Instructions SIVIL).
 - **Thao tác:**
   1. Phân tích task: độ phức tạp, số khía cạnh, dữ liệu/module liên quan.
@@ -247,7 +247,7 @@ Sub-agent plan → Synthesis report → Specs cho BELI (K specs)
   4. Chọn N đúng theo bảng §5.1 (KHÔNG dùng max cho mọi task).
 - **Ví dụ nguồn (M1):**
   ```
-  TL (KING) gửi task_complex_part1.md:
+  TL (NEMESIS) gửi task_complex_part1.md:
     "Part 1: EDA & Feature Understanding cho House Prices dataset"
 
   SIVIL phân tích:
@@ -258,7 +258,7 @@ Sub-agent plan → Synthesis report → Specs cho BELI (K specs)
   ```
   *[SRC dòng 253–262]*
 - **Output:** `sub-agent plan` (N specs SA-01..SA-N, gom theo branches) — deliverable đầu tiên của SIVIL.
-- **Điều kiện sang bước kế:** N ≥ 1 và mỗi sub-problem có đủ: (a) phạm vi 1 dòng mô tả; (b) công cụ SA cần (code exec / web search / file read); (c) tiêu chí "kết quả hữu ích". Nếu task **không decompose được** (hypotheses của TL mơ hồ) → **ESCALATE KING** (Instructions SIVIL) — không tự bịa branch.
+- **Điều kiện sang bước kế:** N ≥ 1 và mỗi sub-problem có đủ: (a) phạm vi 1 dòng mô tả; (b) công cụ SA cần (code exec / web search / file read); (c) tiêu chí "kết quả hữu ích". Nếu task **không decompose được** (hypotheses của TL mơ hồ) → **ESCALATE NEMESIS** (Instructions SIVIL) — không tự bịa branch.
 
 ---
 
@@ -341,21 +341,21 @@ Sub-agent plan → Synthesis report → Specs cho BELI (K specs)
 
 ---
 
-### 4.4 ⬛ BƯỚC 4 — SYNC: RESEARCH COUNCIL (KING ↔ SIVIL)
+### 4.4 ⬛ BƯỚC 4 — SYNC: RESEARCH COUNCIL (NEMESIS ↔ SIVIL)
 
 **[TB-03 §4.4 ← nguồn dòng 627–630 + 1748–1771 (Research Council) + 184 (JD SIVIL) — [SRC]; thủ tục hội đồng [EXT] chi tiết nằm ở TB-08]**
 
-- **Mục đích:** trước khi BELI tiêu nguồn lực code, KING **challenge hypotheses** của synthesis và **đối chiếu findings với KB** — chốt tri thức mới ngay tại phiên council. Đây là **thời điểm council ②** trong 4 thời điểm cố định (① sau DECOMPOSE-TL, ② sau SYNTHESIZE-G1, ③ khi ESCALATE, ④ tại Checkpoint — TB-08).
+- **Mục đích:** trước khi BELI tiêu nguồn lực code, NEMESIS **challenge hypotheses** của synthesis và **đối chiếu findings với KB** — chốt tri thức mới ngay tại phiên council. Đây là **thời điểm council ②** trong 4 thời điểm cố định (① sau DECOMPOSE-TL, ② sau SYNTHESIZE-G1, ③ khi ESCALATE, ④ tại Checkpoint — TB-08).
 - **Input:** Synthesis report + K specs (draft) + KB (để đối chiếu) + danh sách insight ứng viên.
 - **Thao tác (SIVIL trong council):**
-  1. Trình bày top-K + evidence; KING hỏi — SIVIL **đáp bằng findings** (không đoán). [SRC dòng 1763–1765]
+  1. Trình bày top-K + evidence; NEMESIS hỏi — SIVIL **đáp bằng findings** (không đoán). [SRC dòng 1763–1765]
   2. Đối chiếu từng insight với KB: **"đã có chưa?"** — đã có → bỏ qua (hoặc bổ sung evidence làm entry mạnh hơn); chưa có → ứng viên ghi mới. [SRC dòng 1766, 1777–1779]
   3. Chốt tri thức mới → SIVIL ghi KB **NGAY** theo KB Write Protocol (SEARCH → FORMAT → WRITE; HAN curate ở chu kỳ G3 gần nhất). [SRC dòng 1766–1770, 1774–1789]
-  4. Ghi **discussion summary vào worklog** (vì lỗ hổng ③ thiết kế cũ: thảo luận KING↔SIVIL không lưu → insight mất ngay khi kết thúc). [SRC dòng 1732–1733, 1769]
+  4. Ghi **discussion summary vào worklog** (vì lỗ hổng ③ thiết kế cũ: thảo luận NEMESIS↔SIVIL không lưu → insight mất ngay khi kết thúc). [SRC dòng 1732–1733, 1769]
 - **Output:**
   - KB entries mới (KB-YYYYMMDD-NNN, category có thể là **Research Insights** — tri thức phương pháp nghiên cứu). [SRC dòng 1813–1815]
   - Council summary trong G1 worklog.
-  - K specs đã được KING xác nhận (hoặc chỉnh priority/scope).
+  - K specs đã được NEMESIS xác nhận (hoặc chỉnh priority/scope).
 - **Điều kiện sang bước kế:** council kết thúc = specs được xác nhận + mọi insight đã ghi KB. KHÔNG sang IMPLEMENT khi còn hypothesis chưa được challenge — council ② là **cổng bắt buộc** trước khi BELI code. [SRC dòng 1758]
 
 ---
@@ -387,7 +387,7 @@ Sub-agent plan → Synthesis report → Specs cho BELI (K specs)
   ```
   *[SRC dòng 315–327]*
 - **Output:** draft(s) + notes + suggestions (chuyển qua SIVIL review — bước 6, rồi LISMA).
-- **Điều kiện sang bước kế:** tất cả K specs đã submit. Nếu 1 spec **không implement được / mâu thuẫn** → BELI ESCALATE **qua SIVIL** (Instructions BELI) → SIVIL xử lý theo §8 hoặc ESCALATE KING (§10.1).
+- **Điều kiện sang bước kế:** tất cả K specs đã submit. Nếu 1 spec **không implement được / mâu thuẫn** → BELI ESCALATE **qua SIVIL** (Instructions BELI) → SIVIL xử lý theo §8 hoặc ESCALATE NEMESIS (§10.1).
 
 ---
 
@@ -474,9 +474,9 @@ Phát sinh từ Instructions SIVIL: *"bỏ qua kết quả sub-agent mâu thuẫ
 │   mâu thuẫn do context khác nhau → tách thành 2 claim       │
 │   điều kiện ("A đúng khi X, B đúng khi Y") → dùng khi       │
 │   rank top-K                                                │
-│ Bước 3B — KHÔNG GIẢI THÍCH ĐƯỢC → ESCALATE KING:            │
+│ Bước 3B — KHÔNG GIẢI THÍCH ĐƯỢC → ESCALATE NEMESIS:            │
 │   trình bày CẢ 2 INTERPRETATION + evidence từng bên +       │
-│   đề xuất thử nghiệm phân biệt (nếu có) → KING quyết        │
+│   đề xuất thử nghiệm phân biệt (nếu có) → NEMESIS quyết        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -602,11 +602,11 @@ SIVIL Decompose:
 
 *[SRC dòng 593–599 — giữ nguyên schema]*
 
-- **Quy tắc bắt buộc:** mỗi finding BẮT BUỘC có evidence — **không có evidence = không được ghi vào report** (đây là cơ sở cho VERIFY của KING ở Checkpoint). [SRC dòng 601]
+- **Quy tắc bắt buộc:** mỗi finding BẮT BUỘC có evidence — **không có evidence = không được ghi vào report** (đây là cơ sở cho VERIFY của NEMESIS ở Checkpoint). [SRC dòng 601]
 - Quy tắc hiệp thông với Knowledge Capture: insight không có evidence = không ghi KB (quy tắc vàng KB #3 — nguồn dòng 1821). Hai quy tắc này cùng một triết lý: **evidence-first toàn tuyến M2**.
 - [EXT] Thang Severity chuẩn hóa: 🔴 HIGH (chặn/dừng tính năng hoặc gây lỗi lặp lại) · 🟡 MEDIUM (giảm chất lượng/chậm nhưng không chết) · 🟢 LOW (cơ hội cải thiện, không lỗi). Cột `Cơ hội cải thiện` luôn viết dạng hành động + module đích (để HAN/TB-05 dùng làm input Proposal).
 - [EXT] **Mapping severity G1 → G2:** thang 3 mức trên là thang *tiền-chẩn-đoán* của SA (mới phát hiện, chưa xác minh). Khi findings đi tiếp sang LISMA (G2) và được chẩn đoán thành root cause, thang chuẩn **4 mức CRITICAL / HIGH / MEDIUM / LOW** của G2 (TB-04 §4.1) áp dụng cho cùng chuỗi evidence M2 này: HIGH (G1) → HIGH, hoặc CRITICAL nếu hậu quả dữ liệu/dịch vụ đủ nghiêm trọng (theo định nghĩa CRITICAL của TB-04); MEDIUM → MEDIUM; LOW → LOW. LISMA nâng/hạ mức theo evidence — severity G1 chỉ là giá trị khởi tạo.
-- [EXT] Mỗi dòng finding nhận id `F-NNN` (TB-00 §1.4) để LISMA/HAN/KING truy vấn chéo trong worklog + Proposal.
+- [EXT] Mỗi dòng finding nhận id `F-NNN` (TB-00 §1.4) để LISMA/HAN/NEMESIS truy vấn chéo trong worklog + Proposal.
 
 ---
 
@@ -618,10 +618,10 @@ SIVIL Decompose:
 
 | Nguồn | Artifact | Nội dung bắt buộc | Khi nào |
 |---|---|---|---|
-| **KING (TL)** | `task.md` (T-<MISSION>-<NNN>) | Mô tả part cần làm + mission_type (M1/M2) + tier + priority + deadline + expected output | Sau ASSIGN của TL (council ① đã xong ở cấp TL) |
-| **KING (TL)** | `Artifact Map` | Danh mục artifact từ Group trước / task trước: M1 `artifact:type:metric_impact` · M2 `file:type:relevance:status` (TB-10) | Kèm task.md — SIVIL PHẢI đọc trước dispatch |
+| **NEMESIS (TL)** | `task.md` (T-<MISSION>-<NNN>) | Mô tả part cần làm + mission_type (M1/M2) + tier + priority + deadline + expected output | Sau ASSIGN của TL (council ① đã xong ở cấp TL) |
+| **NEMESIS (TL)** | `Artifact Map` | Danh mục artifact từ Group trước / task trước: M1 `artifact:type:metric_impact` · M2 `file:type:relevance:status` (TB-10) | Kèm task.md — SIVIL PHẢI đọc trước dispatch |
 | **Group trước** | Artifacts vật lý (code/report/POC + worklog) | Files thực tế mà Artifact Map trỏ tới | M1: task phase trước; M2: audit module trước |
-| **User (qua TL)** | Workspace path (M2) | Đường dẫn thư mục clone — nơi BELI viết report/POC/chạy thử | Khi task M2 cần POC; nếu thiếu → SIVIL yêu cầu qua KING (§10.6) |
+| **User (qua TL)** | Workspace path (M2) | Đường dẫn thư mục clone — nơi BELI viết report/POC/chạy thử | Khi task M2 cần POC; nếu thiếu → SIVIL yêu cầu qua NEMESIS (§10.6) |
 | **KB (đọc)** | KB entries liên quan | Research Insights / System Patterns / Anti-Patterns áp dụng cho task | Trước DECOMPOSE + trong council ② |
 
 ### 7.2 Output — G1 trả gì
@@ -629,8 +629,8 @@ SIVIL Decompose:
 | Đích | Artifact | Nội dung bắt buộc |
 |---|---|---|
 | **LISMA (G2)** | G1 Output package | Code files (M1) / Research report + POC (M2) + worklog (issues ✅⚠️, notes edge case, suggestions, **KB Candidates** của BELI) + Artifact Map cập nhật |
-| **KING (TL)** | KB entries + council summary | KB-YYYYMMDD-NNN ghi trực tiếp tại SYNTHESIZE/council; council discussion summary (trong worklog, đánh dấu section `council`) |
-| **KING (TL)** | Escalation report (nếu có) | 2 interpretation trong SA-conflict (§5.3) / spec-blocked (§10.1) — kèm evidence từng bên |
+| **NEMESIS (TL)** | KB entries + council summary | KB-YYYYMMDD-NNN ghi trực tiếp tại SYNTHESIZE/council; council discussion summary (trong worklog, đánh dấu section `council`) |
+| **NEMESIS (TL)** | Escalation report (nếu có) | 2 interpretation trong SA-conflict (§5.3) / spec-blocked (§10.1) — kèm evidence từng bên |
 | **BELI (nội bộ G1)** | K specs | Template §7.3 — priority rõ ràng |
 | **HAN (G3, gián tiếp)** | Findings + POC + benchmarks | Input cho Proposal items (kèm Verification Plan — TB-11); HAN curate KB Candidates của BELI sau |
 
@@ -646,7 +646,7 @@ SIVIL Decompose:
 - Notes (BELI): edge cases
 - Suggestions (BELI → G2)
 - Issues cho LISMA: từng ⚠️/❌ + ngữ cảnh
-- KB Candidates (BELI): insight + evidence (chờ KING/SIVIL/HAN xác nhận ghi)
+- KB Candidates (BELI): insight + evidence (chờ NEMESIS/SIVIL/HAN xác nhận ghi)
 - Artifact Map cập nhật: entries mới + status
 ```
 
@@ -695,13 +695,13 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
 │   (b) spec lỗi nội bộ → sửa spec, giao lại BELI              │
 │   (c) hypothesis gốc sai → DISPATCH LẠI sub-agents cho       │
 │       nhánh liên quan (diagram nguồn dòng 244–245)           │
-│        ├── đủ nhỏ → không cần KING                           │
+│        ├── đủ nhỏ → không cần NEMESIS                           │
 │        └── đổi approach đã council-chốt → tái council ③ (TB-08)│
 └──────────────────────────────────────────────────────────────┘
 ```
 
 - **Phạm vi hợp lệ của feedback:** code issues (chậm, bug pattern, edge case cản trở) + suggestions (ý tưởng tốt hơn). **KHÔNG phải** BELI tự đổi approach — mọi thay đổi approach phải qua SIVIL (và council nếu ảnh hưởng hypothesis đã chốt). [SRC dòng 208, 215]
-- [EXT] Định dạng 1 feedback entry trong worklog: `{SPEC-ID, loại (a/b/c), mô tả, evidence, action của SIVIL}` — để LISMA/KING truy vết được "vì sao approach đổi giữa chừng".
+- [EXT] Định dạng 1 feedback entry trong worklog: `{SPEC-ID, loại (a/b/c), mô tả, evidence, action của SIVIL}` — để LISMA/NEMESIS truy vết được "vì sao approach đổi giữa chừng".
 - [EXT] Giới hạn vòng: nếu cùng 1 spec bị điều chỉnh **≥ 2 lần** do feedback → đó là tín hiệu hypothesis yếu → SIVIL chủ động escalate council ③ thay vì tiếp tục xoay vòng dispatch. *(✅ chốt v1.3: 2 vòng MEDIUM / 3 vòng COMPLEX+Grand — §12 Q6)*
 
 ---
@@ -713,7 +713,7 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
 ### 9.1 Diagram state machine
 
 ```
- (KING ASSIGN: task.md + Artifact Map)
+ (NEMESIS ASSIGN: task.md + Artifact Map)
                 │
                 ▼
          ┌─────────────┐   hypotheses không decompose được ──┐
@@ -729,9 +729,9 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
                 ▼                                       └──────┬──────┘
    ┌────▶ ┌─────────────┐                                      │
    │ re-  │ DISPATCHED  │ ◀─ re-dispatch: feedback §8 /         │ council ③:
-   │ disp └──────┬──────┘    K=0 yếu (§10.3) → quay lại đây    │ KING ↔ SIVIL
+   │ disp └──────┬──────┘    K=0 yếu (§10.3) → quay lại đây    │ NEMESIS ↔ SIVIL
    │             │                                        │ + ghi KB →
-   │             ▼ đủ SA trả kết quả                      │ KING quyết:
+   │             ▼ đủ SA trả kết quả                      │ NEMESIS quyết:
    │      ┌─────────────┐                                 │ DECOMPOSED /
    │      │ SYNTHESIZED │                                 │ DISPATCHED /
    │      └──────┬──────┘                                 │ SYNTHESIZED /
@@ -757,13 +757,13 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
 
 | Từ | Event | Sang | Điều kiện (guard) |
 |---|---|---|---|
-| — | KING ASSIGN task.md | **RECEIVED** | task.md + Artifact Map đầy đủ |
+| — | NEMESIS ASSIGN task.md | **RECEIVED** | task.md + Artifact Map đầy đủ |
 | RECEIVED | DECOMPOSE xong | **DECOMPOSED** | N ≥ 1 sub-problem; mỗi sub có spec |
-| RECEIVED | hypotheses không decompose được | **ESCALATED** | ESCALATE-KING (Instructions SIVIL) |
+| RECEIVED | hypotheses không decompose được | **ESCALATED** | ESCALATE-NEMESIS (Instructions SIVIL) |
 | DECOMPOSED | chọn strategy + spawn batch 1 | **DISPATCHED** | strategy ∈ {Sequential, Parallel, Hybrid}; batch ≤ giới hạn §5.4 |
 | DISPATCHED | đủ kết quả SA (hoặc stop condition) | **SYNTHESIZED** | không còn mâu thuẫn chưa điều tra (§5.3) |
 | DISPATCHED | mâu thuẫn SA không giải thích được | **ESCALATED** | sau bước 3B protocol §5.3 — kèm 2 interpretation |
-| SYNTHESIZED | council ② xong | **COUNCIL_DONE** | specs được KING xác nhận + insight mới đã ghi KB + council summary vào worklog |
+| SYNTHESIZED | council ② xong | **COUNCIL_DONE** | specs được NEMESIS xác nhận + insight mới đã ghi KB + council summary vào worklog |
 | SYNTHESIZED | K = 0 (kết quả rỗng/yếu) | **DISPATCHED** | re-dispatch plan điều chỉnh (giới hạn vòng §8) |
 | COUNCIL_DONE | giao K specs cho BELI | **IMPLEMENTING** | specs theo template §7.3 |
 | IMPLEMENTING | BELI submit đủ K drafts | **VERIFIED** | drafts + notes + suggestions đủ |
@@ -771,10 +771,10 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
 | IMPLEMENTING | spec mâu thuẫn/không implement được | **ESCALATED** | BELI escalate qua SIVIL (§10.1) |
 | DISPATCHED | stop condition S1 — ≥ 50% SA fail/timeout do lỗi hạ tầng ngoài tầm SIVIL | **ESCALATED** | kèm báo cáo kỹ thuật (§10.2) |
 | SYNTHESIZED | K = 0 sau 2 vòng re-dispatch | **ESCALATED** | trình "negative result có chứng cứ" → council ③ quyết (§10.3) |
-| RECEIVED/DECOMPOSED | workload vượt trần loại task (dấu hiệu tier sai) | **ESCALATED** | đề xuất KING nâng tier / DECOMPOSE lại ở cấp TL (§10.4) |
+| RECEIVED/DECOMPOSED | workload vượt trần loại task (dấu hiệu tier sai) | **ESCALATED** | đề xuất NEMESIS nâng tier / DECOMPOSE lại ở cấp TL (§10.4) |
 | VERIFIED | mọi spec ✅/⚠️ (⚠️ có issue-ghi-chú) | **HANDED_OFF** | G1 Output package §7.2 hoàn chỉnh → LISMA |
 | VERIFIED | spec ❌ sai spec | **IMPLEMENTING** | trả BELI làm lại theo feedback (không tự sửa — SIVIL chỉ ghi) |
-| ESCALATED | KING quyết | DECOMPOSED / DISPATCHED / SYNTHESIZED / hủy | tùy phán quyết; mọi quyết định ghi worklog |
+| ESCALATED | NEMESIS quyết | DECOMPOSED / DISPATCHED / SYNTHESIZED / hủy | tùy phán quyết; mọi quyết định ghi worklog |
 
 ### 9.3 Điều kiện ESCALATE (từ các state đang chạy — theo trigger)
 
@@ -785,9 +785,9 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
 3. Spec **mâu thuẫn / không thể implement đúng spec** — BELI escalate qua SIVIL, SIVIL không tự gỡ được (IMPLEMENTING). [SRC dòng 218]
 4. [EXT] Kết quả rỗng sau 2 vòng re-dispatch (SYNTHESIZED — §10.3); workload vượt trần loại task, dấu hiệu tier sai (RECEIVED/DECOMPOSED — §10.4); ≥ 50% SA trong batch fail/timeout do lỗi hạ tầng (DISPATCHED — stop S1 §10.2).
 
-> **mission_change (§10.5) KHÔNG thuộc tập ESCALATE:** đó là LỆNH TỪ KING — KING chủ động đổi mission (M1 ⇄ M2) giữa chừng, không phải G1 tự escalate lên KING. G1 xử lý ngay tại state hiện tại theo §10.5 (hủy plan / hoàn tất batch / đánh dấu `mission-changed`), không chuyển sang ESCALATED.
+> **mission_change (§10.5) KHÔNG thuộc tập ESCALATE:** đó là LỆNH TỪ NEMESIS — NEMESIS chủ động đổi mission (M1 ⇄ M2) giữa chừng, không phải G1 tự escalate lên NEMESIS. G1 xử lý ngay tại state hiện tại theo §10.5 (hủy plan / hoàn tất batch / đánh dấu `mission-changed`), không chuyển sang ESCALATED.
 
-> **ESCALATED không phải state chết:** council ③ (khi G1 ESCALATE) diễn ra tại đây — KING ↔ SIVIL thảo luận, ghi KB nếu có insight, rồi KING quyết hướng đi. [SRC dòng 1759]
+> **ESCALATED không phải state chết:** council ③ (khi G1 ESCALATE) diễn ra tại đây — NEMESIS ↔ SIVIL thảo luận, ghi KB nếu có insight, rồi NEMESIS quyết hướng đi. [SRC dòng 1759]
 
 ### 9.4 [EXT] Invariant (điều kiện luôn đúng mọi state)
 
@@ -812,8 +812,8 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
 | Triệu chứng | Xử lý | Ai quyết |
 |---|---|---|
 | 2 spec trong K đòi cùng 1 output khác nhau | SIVIL rà SYNTHESIZE log → spec nào đúng intent top-K → giữ 1, hủy 1, ghi worklog | SIVIL (nội bộ G1) |
-| Spec mâu thuẫn với ràng buộc hệ thống (M2) | BELI escalate QUA SIVIL kèm evidence file:line → SIVIL đổi spec → tái verify | SIVIL; nếu đổi hypothesis → council ③ + KING |
-| BELI KHÔNG THỂ implement đúng spec (thiếu tool/quyền) | ESCALATED → KING (phân bổ lại resource/đổi approach) | KING |
+| Spec mâu thuẫn với ràng buộc hệ thống (M2) | BELI escalate QUA SIVIL kèm evidence file:line → SIVIL đổi spec → tái verify | SIVIL; nếu đổi hypothesis → council ③ + NEMESIS |
+| BELI KHÔNG THỂ implement đúng spec (thiếu tool/quyền) | ESCALATED → NEMESIS (phân bổ lại resource/đổi approach) | NEMESIS |
 
 ### 10.2 SA timeout / fail
 
@@ -824,20 +824,20 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
 ### 10.3 Kết quả rỗng / SYNTHESIZE cho K = 0
 
 - Vòng 1: re-dispatch với spec điều chỉnh (nới scope, đổi khía cạnh, tăng N trong khoảng cho phép).
-- Vòng 2 vẫn rỗng → **ESCALATED**: trình KING bằng "negative result có chứng cứ" (đã thử gì, evidence rỗng ở đâu) — negative result vẫn là kết quả nghiên cứu hợp lệ → council quyết: đổi hypothesis / hạ scope / đóng task.
+- Vòng 2 vẫn rỗng → **ESCALATED**: trình NEMESIS bằng "negative result có chứng cứ" (đã thử gì, evidence rỗng ở đâu) — negative result vẫn là kết quả nghiên cứu hợp lệ → council quyết: đổi hypothesis / hạ scope / đóng task.
 - [EXT] Nếu negative result có giá trị phương pháp → ghi KB Research Insights (vd: "approach X không work với data đặc trưng Y vì Z").
 
 ### 10.4 Workload vượt giới hạn batch
 
-- N cần > trần loại task (vd EDA cần 40 SA — vượt 5–10) → dấu hiệu task bị phân loại tier sai → **ESCALATED** đề xuất KING nâng tier/DECOMPOSE lại ở cấp TL (chứ không tự vượt trần).
+- N cần > trần loại task (vd EDA cần 40 SA — vượt 5–10) → dấu hiệu task bị phân loại tier sai → **ESCALATED** đề xuất NEMESIS nâng tier/DECOMPOSE lại ở cấp TL (chứ không tự vượt trần).
 - N hợp lệ nhưng > 25 concurrent → chia batch con theo §5.4 (không cần escalate — thao tác nội bộ).
 
 ### 10.5 Mission đổi giữa chừng (M1 ⇄ M2)
 
-- KING gửi `mission_change` giữa khi G1 đang ở state bất kỳ:
+- NEMESIS gửi `mission_change` giữa khi G1 đang ở state bất kỳ:
   - **RECEIVED/DECOMPOSED** → hủy plan, decompose lại theo trục mới (approach ⇄ Module Map).
   - **DISPATCHED/SYNTHESIZED** → cho batch đang chạy hoàn tất (SA độc lập, kết quả vẫn dùng được làm evidence) → SYNTHESIZE theo schema mission MỚI.
-  - **COUNCIL_DONE/IMPLEMENTING** → dừng giao spec mới; specs đang code đến cùng; VERIFY theo spec cũ nhưng G1 Output đánh dấu `mission-changed` cho KING re-route.
+  - **COUNCIL_DONE/IMPLEMENTING** → dừng giao spec mới; specs đang code đến cùng; VERIFY theo spec cũ nhưng G1 Output đánh dấu `mission-changed` cho NEMESIS re-route.
 - [EXT] Bắt buộc: mốc chuyển mission + lý do ghi vào worklog (đối soát RWV loop TB-09); mọi KB entry ghi trước đó vẫn giữ Mission = mission CŨ (giá trị tri thức không đổi).
 
 ### 10.6 [EXT] Edge case biên G1
@@ -845,8 +845,8 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
 | Case | Hành vi chuẩn |
 |---|---|
 | SIVIL muốn sửa 1 dòng code "nhẹ" của BELI | **TỪ CHỐI** — ghi issue, LISMA sẽ fix (ranh giới cứng §3) |
-| KING không phản hồi council ② trong deadline nội bộ | SIVIL KHÔNG tự code — giữ state COUNCIL_DONE, gửi reminder + escalate timeout (chờ là chọn đúng hơn làm sai) |
-| M2: Workspace chưa được user mở | POC tạm "POC sketch" trong report (không chạy thử) + đánh dấu `blocked: no-workspace` (≙ cờ `POC-NEEDS-WORKSPACE` — quy ước toàn tập, TB-02 §6) cho KING xin workspace (§7.1) |
+| NEMESIS không phản hồi council ② trong deadline nội bộ | SIVIL KHÔNG tự code — giữ state COUNCIL_DONE, gửi reminder + escalate timeout (chờ là chọn đúng hơn làm sai) |
+| M2: Workspace chưa được user mở | POC tạm "POC sketch" trong report (không chạy thử) + đánh dấu `blocked: no-workspace` (≙ cờ `POC-NEEDS-WORKSPACE` — quy ước toàn tập, TB-02 §6) cho NEMESIS xin workspace (§7.1) |
 
 ---
 
@@ -860,10 +860,10 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
 - [ ] **AC4.** §4 đủ 6 bước đúng thứ tự DECOMPOSE → DISPATCH → SYNTHESIZE → SYNC → IMPLEMENT → VERIFY (nguồn dòng 605–662); mỗi bước đủ 5 phần: mục đích / input / thao tác / output / điều kiện sang bước kế; §4.2 đủ 3 chiến lược dispatch (hybrid recommended) đúng ưu/nhược nguồn.
 - [ ] **AC5.** §4.4 council ②: challenge hypotheses + đối chiếu KB + ghi KB ngay (KB Write Protocol) + council summary vào worklog; nêu rõ cổng bắt buộc trước khi BELI code.
 - [ ] **AC6.** §5.1 giữ nguyên bảng số sub-agents 5–300 theo loại task, KỂ CẢ dòng "System Audit M2 (1 module map) | 5-15".
-- [ ] **AC7.** §5.3 protocol mâu thuẫn SA: điều tra bắt buộc → vẫn mâu thuẫn → ESCALATE KING với 2 interpretation; §5.4 có ≥ 3 stop conditions + giới hạn batch (kích thước batch, retry, trần 300).
+- [ ] **AC7.** §5.3 protocol mâu thuẫn SA: điều tra bắt buộc → vẫn mâu thuẫn → ESCALATE NEMESIS với 2 interpretation; §5.4 có ≥ 3 stop conditions + giới hạn batch (kích thước batch, retry, trần 300).
 - [ ] **AC8.** §6 Module Map đủ 8 dòng module (Memory → Config & Deployment) + quy tắc đọc/không-được-phép M2 + ví dụ decompose 13 SAs / 4 branch cấu trúc nguyên bản.
 - [ ] **AC9.** §6.3 Findings Schema đúng 5 cột (# / Finding / Evidence / Severity / Cơ hội cải thiện) + quy tắc "không evidence = không ghi vào report".
-- [ ] **AC10.** §7 bảng input (từ KING: task.md + Artifact Map; từ Group trước) / output (cho LISMA: code/report + worklog + issues; cho KING: KB entries + council summary) + SPEC template đủ trường: id, nhiệm vụ, acceptance, files dự kiến, ràng buộc, deadline nội bộ (+ priority/approach/expected output theo ví dụ nguồn).
+- [ ] **AC10.** §7 bảng input (từ NEMESIS: task.md + Artifact Map; từ Group trước) / output (cho LISMA: code/report + worklog + issues; cho NEMESIS: KB entries + council summary) + SPEC template đủ trường: id, nhiệm vụ, acceptance, files dự kiến, ràng buộc, deadline nội bộ (+ priority/approach/expected output theo ví dụ nguồn).
 - [ ] **AC11.** §8 feedback loop 3 nhánh (a/b/c) + quy tắc BELI không tự đổi approach + tái council khi đổi hypothesis đã chốt.
 - [ ] **AC12.** §9 state machine đủ 8 state chính + ESCALATED: diagram + bảng transition + guard conditions; ≥ 5 invariant.
 - [ ] **AC13.** §10 đủ 5 nhóm error (spec mâu thuẫn, SA timeout/fail, kết quả rỗng, workload vượt batch, mission đổi giữa chừng); mọi section chính có `[TB-03 §n ← nguồn dòng a–b]` + dấu [SRC]/[EXT]/[Q] đúng quy ước TB-00 §5; không [EXT] nào mâu thuẫn nguồn, mọi điểm mơ hồ nằm trong §12.
@@ -878,7 +878,7 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
 |---|---|---|---|
 | Q1 | Số SA tối đa chạy đồng thời (§5.4 đặt 10–25) — hạ tầng agent framework thật giữ được bao nhiêu SA concurrent? | Perf + chi phí | **20 mặc định** (round-robin 4 NIM keys → 5 SA/key), **burst 25** cho Grand Competition; hard-cap 25 (giữ khoảng §5.4 nguồn 10–25). Thêm key sau này → ceiling tự tính 5 SA/key, vẫn ≤ 25 tới khi user nâng. Mọi điều chỉnh ghi worklog + Decision Log. |
 | Q2 | Timeout chuẩn cho 1 SA là bao lâu (theo loại task EDA vs Grand vs System Audit)? | Stop condition S5 | Theo loại task: **EDA 30 phút · Grand/Competition 60 phút · System Audit 30 phút**; soft-checkpoint 50%/70% (SA bắt buộc báo tiến độ); hard-kill tại timeout → **retry 1 lần (scope thu hẹp 50%)**; fail → findings rỗng + error entry (per §10). |
-| Q3 | Council ②: KING "xác nhận specs" bằng hành vi cụ thể nào (reply message? ack trong worklog? gate tự động trong runtime)? | Cổng COUNCIL_DONE | **KING CÓ quyền VETO** — checklist spec-by-spec trong worklog (mỗi spec 1 dòng `ack` / `veto: lý do`); veto → spec quay lại SIVIL revise; **≥ 2 vòng veto cùng spec → escalate council ③** (khớp §8). |
+| Q3 | Council ②: NEMESIS "xác nhận specs" bằng hành vi cụ thể nào (reply message? ack trong worklog? gate tự động trong runtime)? | Cổng COUNCIL_DONE | **NEMESIS CÓ quyền VETO** — checklist spec-by-spec trong worklog (mỗi spec 1 dòng `ack` / `veto: lý do`); veto → spec quay lại SIVIL revise; **≥ 2 vòng veto cùng spec → escalate council ③** (khớp §8). |
 | Q4 | Trong IMPLEMENT M2, BELI có được chạy thử POC trên dữ liệu thật của Live System (read-only query vào Qdrant/Neo4j) hay chỉ dữ liệu clone trong Workspace? | Ranh giới Live/Workspace (§2.3) | **READ-ONLY được phép** (query Qdrant/Neo4j, GET API — evidence phong phú hơn); MỌI query ghi **evidence log** (query + timestamp + số dòng trả về) trong worklog BELI; **WRITE cấm tuyệt đối** — mọi thao tác ghi chỉ trên Workspace clone. |
 | Q5 | Deadline nội bộ của spec tính bằng giờ hay theo tier deadline của TL (mối quan hệ budget G1 ↔ tier TB-02)? | SPEC template §7.3 | **G1 = 40% quỹ thời gian task** (theo tier deadline của TL); override qua Decision Log khi mission đặc biệt. |
 | Q6 | Feedback loop giới hạn "≥ 2 lần điều chỉnh spec → escalate council ③" (§8) — ngưỡng 2 có hợp lý cho Grand Competition (task M1 COMPLEX quy mô lớn — nhiều vòng tự nhiên hơn)? | Vòng feedback | **2 vòng cho MEDIUM; 3 vòng cho COMPLEX/Grand Competition** (task lớn cần nhiều vòng tự nhiên hơn); vượt ngưỡng → council ③ bắt buộc. |

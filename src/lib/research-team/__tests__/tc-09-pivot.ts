@@ -2,7 +2,7 @@
  * TC-09 — PIVOT TRIGGER (TB-12 §3.2 + TB-09 §6 + TB-06 §8.6/8.7)
  * ==================================================================================
  * Spec:
- *  - Giữa mission M2, KING đọc worklog thấy claim thiếu evidence (trigger 🔴) →
+ *  - Giữa mission M2, NEMESIS đọc worklog thấy claim thiếu evidence (trigger 🔴) →
  *    PIVOT — dừng part hiện tại, quay lại part liên quan / giao group bổ sung.
  *  - KHÔNG tiếp tục với claim không evidence.
  *  - Decision log có lý do pivot + part được quay lại.

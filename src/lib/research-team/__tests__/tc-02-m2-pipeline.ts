@@ -2,8 +2,8 @@
  * TC-02 — M2/T2 PIPELINE → PROPOSAL 1-MODULE (TB-12 §3.2 + TB-02 §5 routing matrix)
  * ==================================================================================
  * Spec:
- *  - Mission M2 tier T2 (vd "chẩn đoán chat latency cao") → pipeline KING → G1 →
- *    LISMA → KING; output = Proposal 1-module (KHÔNG final report user).
+ *  - Mission M2 tier T2 (vd "chẩn đoán chat latency cao") → pipeline NEMESIS → G1 →
+ *    LISMA → NEMESIS; output = Proposal 1-module (KHÔNG final report user).
  *  - TB-02 §5 routing matrix 9 ô — M2/T2 → Proposal (không User-report như M1).
  *  - TB-11 §1 — Proposal schema 8 trường; lifecycle DRAFT → SUBMITTED → APPROVED.
  *
@@ -39,7 +39,7 @@ async function run(): Promise<TestResult> {
       initialDecisionLog: [
         {
           at: new Date().toISOString(),
-          agent: 'KING',
+          agent: 'NEMESIS',
           decision: 'RESEARCH',
           reason: 'TC-02: M2/T2 HIGH confidence — chẩn đoán chat latency',
         },

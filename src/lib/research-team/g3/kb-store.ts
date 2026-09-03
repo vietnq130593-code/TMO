@@ -289,7 +289,7 @@ export async function queryKB(params: QueryKBParams = {}): Promise<ResearchKBEnt
  *  - REFUTED — bị vượt refute, evidence mới mâu thuẫn.
  *  - SUPERSEDED — có entry mới hơn, evidence mạnh hơn.
  *
- * TB-05 §11 Q4 — PRE-APPROVAL: HAN liệt kê retire-candidates → KING duyệt tại
+ * TB-05 §11 Q4 — PRE-APPROVAL: HAN liệt kê retire-candidates → NEMESIS duyệt tại
  * CP3 TRƯỚC khi retire có hiệu lực. Hàm này thực thi retire SAU khi đã được duyệt.
  */
 export async function retireEntry(
@@ -341,7 +341,7 @@ export async function curatePhase(
   id: string,
   fromPhase: 1 | 2 | 3,
   toPhase: 1 | 2 | 3,
-  curator: 'HAN' | 'KING',
+  curator: 'HAN' | 'NEMESIS',
   reason: string,
 ): Promise<ResearchKBEntry> {
   if (!KB_CURATE_PHASES.includes(fromPhase)) {

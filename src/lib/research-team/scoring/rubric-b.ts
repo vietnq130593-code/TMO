@@ -189,7 +189,7 @@ export function computeScorecardDelta(
 
   // Anti-pattern optimism bias — S2 lặp (caller check cross-mission; ở đây
   // chỉ emit warning khi |delta S2| > 1.0 — cross-mission tracking là việc
-  // của KING layer P5 khi tổng hợp KB search).
+  // của NEMESIS layer P5 khi tổng hợp KB search).
   const s2Delta = deltas.find((d) => d.dimension === 'S2')
   if (s2Delta && s2Delta.flag && s2Delta.delta < -1.0) {
     lessons.push(`KB-ANTIPATTERN-optimism-bias-S2-${Date.now()}`)

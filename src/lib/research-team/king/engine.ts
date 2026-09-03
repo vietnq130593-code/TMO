@@ -1,8 +1,8 @@
 /**
- * RESEARCH TEAM — KING ENGINE (TB-06 7 nhiệm vụ lifecycle + VETO/PIVOT/ESCALATE/REJECT)
+ * RESEARCH TEAM — NEMESIS ENGINE (TB-06 7 nhiệm vụ lifecycle + VETO/PIVOT/ESCALATE/REJECT)
  * ============================================================================================
  * Spec:
- *  - TB-06 §2-§9 — KING 7 nhiệm vụ lifecycle:
+ *  - TB-06 §2-§9 — NEMESIS 7 nhiệm vụ lifecycle:
  *      ① RECEIVE (tiếp nhận + phân tích request)
  *      ② TRIAGE (chấm complexity 3 tiêu chí + applyFloorRules → tier)
  *      ③ DECOMPOSE (chia parts + render task .md + council ① gate TC-13)
@@ -11,7 +11,7 @@
  *      ⑥ DECIDE (CONTINUE/PIVOT/ESCALATE — TC-09 PIVOT bắt buộc lý do)
  *      ⑦ FINALIZE (tổng hợp final report M1 / Proposal M2 + council ④ + KB capture)
  *  - TB-06 §8.6/8.7 — PIVOT: 🔴 fundamental → re-DECOMPOSE về G1; 🟡 scope creep → thu hẹp.
- *  - TB-06 §9.8 — KING cấm tự duyệt Proposal (DR-C5 §C5 — deputy/USER duyệt thay).
+ *  - TB-06 §9.8 — NEMESIS cấm tự duyệt Proposal (DR-C5 §C5 — deputy/USER duyệt thay).
  *  - TC-09 (TB-12 §3.2) — PIVOT BẮT BUỘC lý do (recordPivot throw nếu empty).
  *  - TC-11 (TB-12 §3.2) — REJECTED proposal → RESEARCHING (KHÔNG FINALIZED, KHÔNG re-submit
  *      nguyên trạng). kingReject append decision='REJECT' + transition FINALIZED→RESEARCHING.
@@ -26,10 +26,11 @@ import { RESEARCH_ROSTER, AGENT_ID } from '../constants'
 import type {
   DecodedResearchMission,
   DecisionLogEntry,
+  EvidenceItem,
   SuccessCriterion,
   WorklogEntry,
 } from '../types'
-import { decodeJsonArray } from '../types'
+import { decodeJsonArray, encodeJson } from '../types'
 import { getMission, transitionMission, isValidTransition } from '../mission-store'
 import { scoreComplexity, applyFloorRules, tieBreakUp } from '../tier'
 import { appendDecision, recordPivot, recordReject } from './decision-log'
@@ -42,28 +43,31 @@ import { captureAtMonitor, captureAtFinalize, ensureColdStart } from '../g3/capt
 // (LISMA + RWV loop) → G3 (HAN optimize + Tournament) thực sự chạy per-tier.
 import { runG1Pipeline } from '../g1/engine'
 import { runLismaReview } from '../g2/lisma'
-import { startRwvLoop } from '../g2/rwv-loop'
+import { startRwvLoop, runRwvRound } from '../g2/rwv-loop'
 import { runHanOptimize } from '../g3/han'
+import type { HanOptimizeResult } from '../g3/han'
 import { runTournament } from '../scoring/tournament'
 import type { TournamentAgents } from '../scoring/tournament'
+import type { MissionContext, ContextFitInput } from '../scoring/context-fit'
+import { createProposal } from '../proposal/store'
 import { performHandoff } from '../handoff'
 
 // ============================================================
-// §1. SYSTEM PROMPT — KING RECEIVE + FINALIZE
+// §1. SYSTEM PROMPT — NEMESIS RECEIVE + FINALIZE
 // ============================================================
 
 const KING_RECEIVE_SYSTEM_PROMPT = [
-  'Bạn là KING (TL — research team TMO). Position: TL (KHÔNG code).',
-  `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.KING)?.jd ?? 'Phân loại mission, chia nhỏ bài toán, kiểm soát chặt — không code'}.`,
+  'Bạn là NEMESIS (TL — research team TMO). Position: TL (KHÔNG code).',
+  `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.NEMESIS)?.jd ?? 'Phân loại mission, chia nhỏ bài toán, kiểm soát chặt — không code'}.`,
   '',
   'TASK: Phân tích mission request — tóm tắt ý chính + rủi ro + đề xuất hướng tiếp cận.',
-  '  - KHÔNG phân tích kỹ (TRIAGE sẽ làm); chỉ tổng quan để KING nắm context.',
+  '  - KHÔNG phân tích kỹ (TRIAGE sẽ làm); chỉ tổng quan để NEMESIS nắm context.',
   '  - Output 1 đoạn text 100-300 từ.',
 ].join('\n')
 
 const KING_FINALIZE_SYSTEM_PROMPT = [
-  'Bạn là KING (TL — research team TMO). Phase: FINALIZE.',
-  `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.KING)?.jd ?? 'Phân loại mission, chia nhỏ bài toán, kiểm soát chặt — không code'}.`,
+  'Bạn là NEMESIS (TL — research team TMO). Phase: FINALIZE.',
+  `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.NEMESIS)?.jd ?? 'Phân loại mission, chia nhỏ bài toán, kiểm soát chặt — không code'}.`,
   '',
   'TASK: Tổng hợp Final Report (M1) hoặc Proposal (M2) từ worklog + council ④ verdict.',
   '  - M1: Lessons + Anti-Patterns + Suggestions sections (TB-08 §7 capture).',
@@ -74,7 +78,7 @@ const KING_FINALIZE_SYSTEM_PROMPT = [
 ].join('\n')
 
 // ============================================================
-// §2. KING RECEIVE — TB-06 §2 (tiếp nhận + phân tích)
+// §2. NEMESIS RECEIVE — TB-06 §2 (tiếp nhận + phân tích)
 // ============================================================
 
 export interface KingReceiveResult {
@@ -83,8 +87,8 @@ export interface KingReceiveResult {
 }
 
 /**
- * KING RECEIVE — TB-06 §2: tiếp nhận + phân tích request.
- *  - Gọi callLLM với KING RECEIVE JD → phân tích ý chính + rủi ro + đề xuất.
+ * NEMESIS RECEIVE — TB-06 §2: tiếp nhận + phân tích request.
+ *  - Gọi callLLM với NEMESIS RECEIVE JD → phân tích ý chính + rủi ro + đề xuất.
  *  - Transition → TRIAGING (CLASSIFY đã làm ở P1 classify.ts).
  *
  * LLM error → fail-open: analysis='(LLM unavailable — analysis deferred)'.
@@ -104,8 +108,8 @@ export async function kingReceive(missionId: string): Promise<KingReceiveResult>
       {
         temperature: 0.2,
         maxTokens: 800,
-        agentId: AGENT_ID.KING,
-        agentName: 'KING (Receive)',
+        agentId: AGENT_ID.NEMESIS,
+        agentName: 'NEMESIS (Receive)',
       },
     )
     if (llm.error || !llm.content || llm.content.trim().length === 0) {
@@ -125,9 +129,9 @@ export async function kingReceive(missionId: string): Promise<KingReceiveResult>
         toStatus: 'TRIAGING',
         decision: {
           at: new Date().toISOString(),
-          agent: 'KING',
+          agent: 'NEMESIS',
           decision: 'CONTINUE',
-          reason: `KING RECEIVE — mission tiếp nhận + phân tích xong (tier=${mission.tier || '?'})`,
+          reason: `NEMESIS RECEIVE — mission tiếp nhận + phân tích xong (tier=${mission.tier || '?'})`,
         },
       })
     }
@@ -142,7 +146,7 @@ export async function kingReceive(missionId: string): Promise<KingReceiveResult>
 }
 
 // ============================================================
-// §3. KING TRIAGE — TB-06 §3 (chấm complexity + applyFloorRules)
+// §3. NEMESIS TRIAGE — TB-06 §3 (chấm complexity + applyFloorRules)
 // ============================================================
 
 export interface KingTriageResult {
@@ -152,7 +156,7 @@ export interface KingTriageResult {
 }
 
 /**
- * KING TRIAGE — TB-06 §3: chấm complexity 3 tiêu chí (tier.ts scoreComplexity) +
+ * NEMESIS TRIAGE — TB-06 §3: chấm complexity 3 tiêu chí (tier.ts scoreComplexity) +
  * applyFloorRules + tieBreakUp (DR-C2). Transition → DECOMPOSING.
  *
  * Default heuristic (không LLM — TB-13 §1 nguyên tắc 7 tái dùng tier.ts pure function):
@@ -191,7 +195,7 @@ export async function kingTriage(missionId: string): Promise<KingTriageResult> {
   // Transition → DECOMPOSING
   const decision: DecisionLogEntry = {
     at: new Date().toISOString(),
-    agent: 'KING',
+    agent: 'NEMESIS',
     decision: 'CONTINUE',
     reason: `TRIAGE: scope=${triageInput.scope} + reasoningDepth=${triageInput.reasoningDepth} + risk=${triageInput.risk} = ${score.total} → ${tier}. ${floor.adjusted ? floor.reason || '' : '(no floor-rule applied)'}`,
   }
@@ -205,7 +209,7 @@ export async function kingTriage(missionId: string): Promise<KingTriageResult> {
     } else {
       // Append decision log anyway (transition may be no-op if already DECOMPOSING)
       await appendDecision(missionId, {
-        agent: 'KING',
+        agent: 'NEMESIS',
         decision: 'CONTINUE',
         reason: decision.reason,
       })
@@ -230,7 +234,7 @@ export async function kingTriage(missionId: string): Promise<KingTriageResult> {
 }
 
 // ============================================================
-// §4. KING MONITOR — TB-06 §5 (đọc worklog + KB capture + PIVOT check)
+// §4. NEMESIS MONITOR — TB-06 §5 (đọc worklog + KB capture + PIVOT check)
 // ============================================================
 
 export interface KingMonitorResult {
@@ -241,7 +245,7 @@ export interface KingMonitorResult {
 }
 
 /**
- * KING MONITOR — TB-06 §5: đọc worklog G1/G2/G3 + KB capture (g3/capture.captureAtMonitor)
+ * NEMESIS MONITOR — TB-06 §5: đọc worklog G1/G2/G3 + KB capture (g3/capture.captureAtMonitor)
  * + PIVOT check.
  *
  * PIVOT triggers (TB-06 §8.6/8.7):
@@ -347,14 +351,14 @@ export async function kingMonitor(missionId: string): Promise<KingMonitorResult>
         toStatus: 'MONITORING',
         decision: {
           at: new Date().toISOString(),
-          agent: 'KING',
+          agent: 'NEMESIS',
           decision: pivotTriggered ? 'PIVOT' : 'CONTINUE',
           reason: decisionReason,
         },
       })
     } else {
       await appendDecision(missionId, {
-        agent: 'KING',
+        agent: 'NEMESIS',
         decision: pivotTriggered ? 'PIVOT' : 'CONTINUE',
         reason: decisionReason,
       })
@@ -392,11 +396,11 @@ export async function kingMonitor(missionId: string): Promise<KingMonitorResult>
 }
 
 // ============================================================
-// §5. KING DECIDE — TB-06 §6 (CONTINUE/PIVOT/ESCALATE)
+// §5. NEMESIS DECIDE — TB-06 §6 (CONTINUE/PIVOT/ESCALATE)
 // ============================================================
 
 /**
- * KING DECIDE — TB-06 §6:
+ * NEMESIS DECIDE — TB-06 §6:
  *  - CONTINUE → next part (continue pipeline).
  *  - PIVOT → recordPivot (TC-09 reason BẮT BUỘC) + re-DECOMPOSE phần liên quan
  *      (KHÔNG re-submit nguyên trạng — TC-11 spec applies to REJECTED not PIVOT, but
@@ -431,14 +435,14 @@ export async function kingDecide(
 
   // CONTINUE
   return appendDecision(missionId, {
-    agent: 'KING',
+    agent: 'NEMESIS',
     decision: 'CONTINUE',
     reason,
   })
 }
 
 // ============================================================
-// §6. KING FINALIZE — TB-06 §9 (tổng hợp final report + council ④ + KB capture)
+// §6. NEMESIS FINALIZE — TB-06 §9 (tổng hợp final report + council ④ + KB capture)
 // ============================================================
 
 export interface KingFinalizeResult {
@@ -449,8 +453,8 @@ export interface KingFinalizeResult {
 }
 
 /**
- * KING FINALIZE — TB-06 §9: tổng hợp final report (M1) / Proposal (M2).
- *  - Gọi callLLM với KING FINALIZE JD → sinh markdown final report.
+ * NEMESIS FINALIZE — TB-06 §9: tổng hợp final report (M1) / Proposal (M2).
+ *  - Gọi callLLM với NEMESIS FINALIZE JD → sinh markdown final report.
  *  - Council ④ (councils.runCouncil4) — verify final report + Proposal Verification Plan.
  *  - KB capture (g3/capture.captureAtFinalize) — TB-08 §7 quy tắc vàng #2.
  *  - Transition → FINALIZED.
@@ -521,8 +525,8 @@ export async function kingFinalize(missionId: string): Promise<KingFinalizeResul
       {
         temperature: 0.2,
         maxTokens: 3000,
-        agentId: AGENT_ID.KING,
-        agentName: 'KING (Finalize)',
+        agentId: AGENT_ID.NEMESIS,
+        agentName: 'NEMESIS (Finalize)',
       },
     )
 
@@ -578,9 +582,9 @@ export async function kingFinalize(missionId: string): Promise<KingFinalizeResul
           toStatus: 'FINALIZED',
           decision: {
             at: new Date().toISOString(),
-            agent: 'KING',
+            agent: 'NEMESIS',
             decision: 'FINALIZE',
-            reason: `KING FINALIZE — council ④ PASS, captured ${captured.length} KB entries`,
+            reason: `NEMESIS FINALIZE — council ④ PASS, captured ${captured.length} KB entries`,
           },
         })
       }
@@ -594,7 +598,7 @@ export async function kingFinalize(missionId: string): Promise<KingFinalizeResul
     // REVISE/VETO → append decision log + escalate (don't finalize)
     try {
       await appendDecision(missionId, {
-        agent: 'KING',
+        agent: 'NEMESIS',
         decision: council4Verdict === 'VETO' ? 'ESCALATE' : 'CONTINUE',
         reason: `Council ④ ${council4Verdict} — final report needs revision (or escalate USER if VETO)`,
       })
@@ -615,7 +619,7 @@ export async function kingFinalize(missionId: string): Promise<KingFinalizeResul
 }
 
 // ============================================================
-// §7. KING REJECT — TC-11 (REJECTED proposal → RESEARCHING)
+// §7. NEMESIS REJECT — TC-11 (REJECTED proposal → RESEARCHING)
 // ============================================================
 
 /**
@@ -654,7 +658,7 @@ export async function kingReject(
         toStatus: 'ESCALATED',
         decision: {
           at: new Date().toISOString(),
-          agent: 'KING',
+          agent: 'NEMESIS',
           decision: 'REJECT',
           reason: `TC-11 REJECTED — proposal bị reject, escalate để re-RESEARCHING (KHÔNG FINALIZED, KHÔNG re-submit nguyên trạng)`,
         },
@@ -667,7 +671,7 @@ export async function kingReject(
         toStatus: 'RESEARCHING',
         decision: {
           at: new Date().toISOString(),
-          agent: 'KING',
+          agent: 'NEMESIS',
           decision: 'CONTINUE',
           reason: `TC-11 re-RESEARCHING (proposal rejected) — reason: ${reason}`,
         },
@@ -684,7 +688,7 @@ export async function kingReject(
 }
 
 // ============================================================
-// §8. KING FULL LIFECYCLE — orchestrate all 7 missions
+// §8. NEMESIS FULL LIFECYCLE — orchestrate all 7 missions
 // ============================================================
 
 export interface KingFullLifecycleResult {
@@ -692,10 +696,40 @@ export interface KingFullLifecycleResult {
   finalReport?: string
   parts: number
   errors: string[]
+  /** FIX (Task 19 audit B#7): proposals DRAFT đã tạo (M2) — id + code + title. */
+  proposals?: Array<{ id: string; code: string; title: string }>
+}
+
+// ============================================================
+// §8a. LIFECYCLE EVENTS — hook cho caller (chat SSE workflow route)
+// ============================================================
+
+/**
+ * Event tiến độ lifecycle — workflow route (Task 19: chat Smolab ↔ Research Team)
+ * map sang SSE agent_complete để user thấy team đang làm gì trong khung chat.
+ */
+export interface KingLifecycleEvent {
+  type: 'stage' | 'part'
+  stage:
+    | 'receive'
+    | 'triage'
+    | 'decompose'
+    | 'assign'
+    | 'pipeline'
+    | 'monitor'
+    | 'decide'
+    | 'finalize'
+    | 'done'
+  message: string
+  data?: Record<string, unknown>
+}
+
+export interface KingLifecycleOptions {
+  onEvent?: (event: KingLifecycleEvent) => void
 }
 
 /**
- * Orchestrate full KING lifecycle: receive → triage → decompose → (G1/G2/G3 per tier)
+ * Orchestrate full NEMESIS lifecycle: receive → triage → decompose → (G1/G2/G3 per tier)
  * → monitor → decide → finalize.
  *
  * Per tier (TB-02 §3) — TASK 3-fix WORK 3 (audit B.7+B.8+B.15 fix):
@@ -710,8 +744,24 @@ export interface KingFullLifecycleResult {
  * LLM fail-open (NIM placeholder) → errors array ghi 'LLM unavailable' nhưng
  * pipeline structure đúng (đã chạy qua G1/G2/G3, không còn dead code).
  */
-export async function kingFullLifecycle(missionId: string): Promise<KingFullLifecycleResult> {
+export async function kingFullLifecycle(
+  missionId: string,
+  options: KingLifecycleOptions = {},
+): Promise<KingFullLifecycleResult> {
   const errors: string[] = []
+  const proposals: Array<{ id: string; code: string; title: string }> = []
+  const emit = (
+    type: 'stage' | 'part',
+    stage: KingLifecycleEvent['stage'],
+    message: string,
+    data?: Record<string, unknown>,
+  ) => {
+    try {
+      options.onEvent?.({ type, stage, message, data })
+    } catch {
+      // Listener fail-open — KHÔNG phá pipeline
+    }
+  }
   let mission: DecodedResearchMission | null = await getMission(missionId)
   if (!mission) {
     throw new Error(`kingFullLifecycle: mission ${missionId} không tồn tại`)
@@ -724,14 +774,21 @@ export async function kingFullLifecycle(missionId: string): Promise<KingFullLife
   try {
     const r = await kingReceive(missionId)
     mission = r.mission
+    emit('stage', 'receive', '① RECEIVE — NEMESIS đã tiếp nhận và phân tích mission')
   } catch (err) {
     errors.push(`RECEIVE: ${err instanceof Error ? err.message : String(err)}`)
   }
 
   // 2. TRIAGE
   try {
-    await kingTriage(missionId)
+    const t = await kingTriage(missionId)
     mission = await getMission(missionId)
+    emit(
+      'stage',
+      'triage',
+      `② TRIAGE — chấm complexity xong → tier ${t.tier} (score ${t.triageScore.total}/9)`,
+      { tier: t.tier, score: t.triageScore },
+    )
   } catch (err) {
     errors.push(`TRIAGE: ${err instanceof Error ? err.message : String(err)}`)
   }
@@ -740,6 +797,9 @@ export async function kingFullLifecycle(missionId: string): Promise<KingFullLife
   try {
     const d = await decomposeMission(missionId)
     partsCount = d.parts.length
+    emit('stage', 'decompose', `③ DECOMPOSE — chia mission thành ${partsCount} part(s) + council ① verify Success Criteria`, {
+      parts: partsCount,
+    })
     if (d.escalated) {
       errors.push(`DECOMPOSE escalated: ${d.worklog?.issuesFaced?.join('; ') || 'unknown'}`)
     }
@@ -758,6 +818,7 @@ export async function kingFullLifecycle(missionId: string): Promise<KingFullLife
         errors.push(`ASSIGN part ${p.partIdx}: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
+    emit('stage', 'assign', `④ ASSIGN — ${parts.length} part(s) giao cho G1 + transition RESEARCHING`)
     // Transition DECOMPOSING → RESEARCHING (TB-02 §7)
     mission = await getMission(missionId)
     if (mission && isValidTransition(mission.status, 'RESEARCHING')) {
@@ -765,9 +826,9 @@ export async function kingFullLifecycle(missionId: string): Promise<KingFullLife
         toStatus: 'RESEARCHING',
         decision: {
           at: new Date().toISOString(),
-          agent: 'KING',
+          agent: 'NEMESIS',
           decision: 'CONTINUE',
-          reason: `KING lifecycle — parts assigned to G1, starting per-tier pipeline (tier=${mission.tier})`,
+          reason: `NEMESIS lifecycle — parts assigned to G1, starting per-tier pipeline (tier=${mission.tier})`,
         },
       })
     }
@@ -789,6 +850,11 @@ export async function kingFullLifecycle(missionId: string): Promise<KingFullLife
         // Decode successCriteria từ part (gate TC-13 — assignPart đã verify non-empty)
         const sc = decodeJsonArray<SuccessCriterion>(part.successCriteriaJson)
         const partDescription = part.title || `(part ${part.partIdx})`
+        emit(
+          'part',
+          'pipeline',
+          `⑤ PIPELINE part ${part.partIdx}/${parts.length} (tier ${tier}) — G1/G2/G3 pipeline bắt đầu: ${partDescription.slice(0, 80)}`,
+        )
 
         try {
           await runPerTierPipeline({
@@ -800,6 +866,7 @@ export async function kingFullLifecycle(missionId: string): Promise<KingFullLife
             successCriteria: sc,
             successCriteriaStrings: sc.map((c) => c.criterion),
             errors,
+            emit: (event) => emit(event.type, event.stage, event.message, event.data),
           })
         } catch (err) {
           errors.push(
@@ -817,6 +884,15 @@ export async function kingFullLifecycle(missionId: string): Promise<KingFullLife
     const m = await kingMonitor(missionId)
     if (m.pivotTriggered) {
       errors.push(`MONITOR PIVOT: ${m.pivotReason || 'unknown'}`)
+      emit('stage', 'monitor', `⑥ MONITOR — ⚠️ PIVOT: ${m.pivotReason?.slice(0, 120) || 'unknown'}`, {
+        pivot: true,
+      })
+    } else {
+      emit(
+        'stage',
+        'monitor',
+        `⑥ MONITOR — đọc worklog G1/G2/G3 + KB capture xong (${m.captured.length} entries TC-08), không có PIVOT`,
+      )
     }
   } catch (err) {
     errors.push(`MONITOR: ${err instanceof Error ? err.message : String(err)}`)
@@ -824,28 +900,75 @@ export async function kingFullLifecycle(missionId: string): Promise<KingFullLife
 
   // 7. DECIDE — CONTINUE (default; caller can refine)
   try {
-    mission = await kingDecide(missionId, 'CONTINUE', 'KING full lifecycle auto-decide: CONTINUE')
+    mission = await kingDecide(missionId, 'CONTINUE', 'NEMESIS full lifecycle auto-decide: CONTINUE')
+    emit('stage', 'decide', '⑦ DECIDE — CONTINUE (không cần pivot)')
   } catch (err) {
     errors.push(`DECIDE: ${err instanceof Error ? err.message : String(err)}`)
   }
 
   // 8. FINALIZE
+  let finalizeResult: KingFinalizeResult | undefined
   try {
     const f = await kingFinalize(missionId)
+    finalizeResult = f
     finalReport = f.finalReport
     if (f.council4Verdict !== 'PASS') {
       errors.push(`FINALIZE council ④ ${f.council4Verdict}`)
     }
+    emit(
+      'stage',
+      'finalize',
+      `⑧ FINALIZE — council ④ ${f.council4Verdict} · ${f.captured.length} KB entries captured${
+        f.proposalItems?.length ? ` · ${f.proposalItems.length} proposal item(s)` : ''
+      }`,
+    )
   } catch (err) {
     errors.push(`FINALIZE: ${err instanceof Error ? err.message : String(err)}`)
   }
 
+  // 8.5 P6 — M2: tạo Proposal DRAFT từ proposalItems
+  // FIX (Task 19 audit B#7): createProposal trước đây KHÔNG BAO GIỜ được engine
+  // gọi (chỉ test tc-02 + API manual POST) → invariant TB-05 §11 Q1 "1 task G3
+  // sinh ≥1 proposal item" không enforce — mission T3/M2 chạy xong không sinh
+  // Proposal nào. Giờ lifecycle tự tạo DRAFT proposals từ final report.
+  try {
+    const fMission = await getMission(missionId)
+    if (fMission && fMission.missionType !== 'M1' && finalizeResult?.proposalItems?.length) {
+      for (const item of finalizeResult.proposalItems.slice(0, 5)) {
+        try {
+          const p = await createProposal({
+            missionId,
+            title: item.slice(0, 90),
+            summary: item,
+            changes: [item],
+            verificationPlan: [
+              '(a) Manual test NGAY theo final report (TB-11 §7 — council ④ đã verify)',
+              '(b) Benchmark spec deferred — chờ deputy/user duyệt',
+            ],
+          })
+          proposals.push({ id: p.id, code: p.schema?.code || p.id, title: item.slice(0, 90) })
+        } catch (err) {
+          errors.push(`PROPOSAL create: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+    }
+  } catch (err) {
+    errors.push(`PROPOSAL: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
   mission = await getMission(missionId)
+  emit(
+    'stage',
+    'done',
+    `Hoàn tất lifecycle — status ${mission?.status || '?'} · ${errors.length} cảnh báo`,
+    { errorsCount: errors.length, proposals: proposals.length },
+  )
   return {
     mission: mission!,
     finalReport,
     parts: partsCount,
     errors,
+    proposals: proposals.length > 0 ? proposals : undefined,
   }
 }
 
@@ -862,6 +985,8 @@ interface RunPerTierPipelineParams {
   successCriteria: SuccessCriterion[]
   successCriteriaStrings: string[]
   errors: string[]
+  /** Emit tiến độ lifecycle (chat SSE) — optional. */
+  emit?: KingLifecycleOptions['onEvent']
 }
 
 /**
@@ -877,6 +1002,25 @@ interface RunPerTierPipelineParams {
  */
 async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<void> {
   const { missionId, taskId, tier, missionType, errors } = params
+  const emit = params.emit
+  const emitLocal = (message: string, data?: Record<string, unknown>) => {
+    try {
+      emit?.({ type: 'part', stage: 'pipeline', message, data })
+    } catch {
+      /* listener fail-open */
+    }
+  }
+
+  // LISMA call dùng chung cho review + RWV rounds + POC (LLM-backed)
+  const lismaCall = async (prompt: string): Promise<string> => {
+    const r = await callLLM(prompt, RWV_ROUND_SYSTEM_PROMPT, `rwv-round-${taskId.slice(0, 12)}`, {
+      temperature: 0.2,
+      maxTokens: 2500,
+      agentId: AGENT_ID.LISMA,
+      agentName: 'LISMA (RWV round)',
+    })
+    return r.content || ''
+  }
 
   // ---------- T1: skip G1/G3 — LISMA fast track ----------
   if (tier === 'T1') {
@@ -890,6 +1034,14 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
         missionType,
         1,
       )
+      // FIX (Task 19 audit A#5): persist LISMA worklog + evidence — trước đây
+      // kết quả G2 (DR + evidence + worklog) KHÔNG được persist (biến mất sau
+      // khi pipeline chạy xong — audit-trail TB-04 §5 trống rỗng).
+      await persistPartialWorklog(missionId, taskId, lismaResult.worklog, 'RESEARCH', {
+        evidence: lismaResult.evidence,
+        findingsFromEvidence: lismaResult.evidence,
+      })
+      emitLocal(`T1 LISMA fast-track xong — ${lismaResult.escalated ? '⚠️ escalated' : 'OK'} · ${lismaResult.evidence.length} evidence item(s) (TC-06)`)
       if (lismaResult.escalated) {
         errors.push(
           `T1 LISMA escalated: ${lismaResult.escalateReason || 'unknown'}`,
@@ -942,9 +1094,12 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
 
   // Handoff G1 → G2 (gate E4 TC-14 — fail-open)
   try {
-    const handoff = await performHandoff(taskId, 'G1', 'G2')
+    const handoff = await performHandoff(taskId, 'G1', 'G2', missionType)
     if (!handoff.transitioned) {
       errors.push(`Handoff G1→G2 skipped: ${handoff.handoff.reason}`)
+      emitLocal(`Handoff G1→G2 bị chặn (TC-14): ${handoff.handoff.reason?.slice(0, 100) || 'unknown'}`)
+    } else {
+      emitLocal('Handoff G1→G2 PASSED (TC-14) — task chuyển sang G2')
     }
   } catch (err) {
     errors.push(
@@ -964,6 +1119,13 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
       1,
     )
     diagnosticReport = lisma.diagnosticReport || ''
+    // FIX (Task 19 audit A#5): persist LISMA worklog + evidence (DR + rubric
+    // score không còn thất lạc sau khi pipeline chạy xong).
+    await persistPartialWorklog(missionId, taskId, lisma.worklog, 'RESEARCH', {
+      evidence: lisma.evidence,
+      findingsFromEvidence: lisma.evidence,
+    })
+    emitLocal(`G2 LISMA review xong — ${lisma.escalated ? '⚠️ escalated' : 'OK'} · findings ${lisma.evidence.length} evidence (TC-06)${lisma.rubricScore ? ` · Rubric A ${lisma.rubricScore.score.toFixed(2)} (${lisma.rubricScore.grade})` : ''}`)
     if (lisma.escalated) {
       errors.push(
         `LISMA escalated: ${lisma.escalateReason || 'unknown'}`,
@@ -971,11 +1133,27 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
     }
 
     // RWV loop (READ → WRITE → VERIFY) — fail-open: LLM unavailable → ESCALATE
+    // FIX (Task 19 audit A#1): runRwvRound trước đây KHÔNG BAO GIỜ được gọi
+    // (startRwvLoop chỉ mkdir + return state; comment "state captured in DB via
+    // runRwvRound internal persist" sai sự thật — 522 dòng RWV = dead code).
+    // Giờ chạy vòng THẬT (lística lismaCall LLM-backed) tới DONE/ESCALATE,
+    // trần do state machine nội bộ (maxRounds=2, DR-C5) + safety guard 4.
     try {
-      const state = await startRwvLoop(missionId, taskId, undefined, g1Spec)
-      // Single round run (council ④ verify at finalize) — best-effort.
-      // Caller (KING MONITOR) will check worklogs for issues.
-      void state // state captured in DB via runRwvRound internal persist
+      let rwv = await startRwvLoop(missionId, taskId, undefined, g1Spec)
+      let safety = 0
+      while (safety < 4) {
+        rwv = await runRwvRound(rwv, lismaCall)
+        safety++
+        if (rwv.status === 'DONE' || rwv.status === 'ESCALATE') break
+      }
+      emitLocal(
+        `G2 RWV loop xong (vòng ${rwv.round}) — status ${rwv.status}${
+          rwv.filesChanged.length > 0 ? ` · ${rwv.filesChanged.length} file(s) trong workspace (TC-10)` : ''
+        }`,
+      )
+      if (rwv.status === 'ESCALATE') {
+        errors.push(`RWV: ${rwv.escalateReason || 'escalated'}`)
+      }
     } catch (err) {
       errors.push(
         `RWV: ${err instanceof Error ? err.message : String(err)}`,
@@ -992,9 +1170,12 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
 
   // Handoff G2 → G3 (gate E4 TC-14 — fail-open)
   try {
-    const handoff = await performHandoff(taskId, 'G2', 'G3')
+    const handoff = await performHandoff(taskId, 'G2', 'G3', missionType)
     if (!handoff.transitioned) {
       errors.push(`Handoff G2→G3 skipped: ${handoff.handoff.reason}`)
+      emitLocal(`Handoff G2→G3 bị chặn (TC-14): ${handoff.handoff.reason?.slice(0, 100) || 'unknown'}`)
+    } else {
+      emitLocal('Handoff G2→G3 PASSED (TC-14) — task chuyển sang G3')
     }
   } catch (err) {
     errors.push(
@@ -1004,8 +1185,9 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
 
   // G3 — HAN optimize
   let hanOptions = 0
+  let hanResult: HanOptimizeResult | null = null
   try {
-    const han = await runHanOptimize(
+    hanResult = await runHanOptimize(
       missionId,
       taskId,
       g1Code || '(no code draft)',
@@ -1013,7 +1195,18 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
       missionType,
       params.successCriteriaStrings,
     )
-    hanOptions = han.options.length
+    hanOptions = hanResult.options.length
+    // FIX (Task 19 audit B#7): persist HAN worklog — trước đây chỉ đếm
+    // options.length, worklog 8 trường + kbEntries + proposalItems của HAN
+    // bị discard (mission T3 không để lại audit-trail G3 nào).
+    await persistPartialWorklog(missionId, taskId, hanResult.worklog, 'RESEARCH', {
+      kbRefs: hanResult.kbEntries,
+    })
+    emitLocal(
+      `G3 HAN optimize xong — ${hanOptions} option(s) A/B/C${
+        hanResult.proposalItems.length > 0 ? ` · ${hanResult.proposalItems.length} proposal item(s)` : ''
+      }${hanResult.kbEntries.length > 0 ? ` · ${hanResult.kbEntries.length} KB entries` : ''}`,
+    )
     if (hanOptions === 0) {
       errors.push(`HAN: 0 options generated (LLM unavailable or M1 no-op)`)
     }
@@ -1047,13 +1240,22 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
       },
       runPoc: async (optionId, spec) => {
         try {
-          // Reuse RWV loop workspace — startRwvLoop đã setup branch.
-          // Best-effort: tạo state, không thực sự runRwvRound (LLM cost).
-          const state = await startRwvLoop(missionId, `${taskId}-${optionId}`, undefined, spec)
+          // FIX (Task 19 audit B#3 + A#11): POC chạy 1 vòng RWV THẬT trên taskId
+          // GỐC (taskId ghép `${taskId}-${optionId}` tạo FK ResearchWorklog
+          // không hợp lệ → persist fail bị nuốt); metrics thật (trạng thái RWV +
+          // số file); success chỉ true khi VERIFY pass — hết "optimistic fictional data".
+          const state = await startRwvLoop(missionId, taskId, undefined, spec)
+          const after = await runRwvRound(state, lismaCall)
+          emitLocal(`Tournament ④ EXPERIMENT — POC option ${optionId}: RWV ${after.status} (round ${after.round})`)
           return {
             branchName: state.branchName || `P-POC-${optionId}`,
-            metrics: {} as Record<string, unknown>,
-            success: true, // optimistic — council ⑤ will judge
+            metrics: {
+              rwvStatus: after.status,
+              rwvRound: after.round,
+              filesTouched: after.filesChanged.length,
+              regressions: after.regressionEntries.length,
+            } as Record<string, unknown>,
+            success: after.status === 'DONE',
           }
         } catch (err) {
           errors.push(
@@ -1078,6 +1280,38 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
       },
     }
 
+    // FIX (Task 19 audit B#2): truyền missionContext + patternContext cho
+    // tournament — trước đây 2 param luôn undefined → checkContextFit (TC-17)
+    // + evaluateDirectApply (TB-14 §7) là dead path, council ⑤ luôn "(no context-fit)".
+    // patternContext build từ option HAN đầu tiên (verifyPlan → preConditions,
+    // risks → contraindication) — dữ liệu thật của mission hiện hành.
+    const missionContext: MissionContext = {
+      module: missionType === 'M2' ? 'TMO system' : 'research workspace',
+      protocolTier: tier,
+      dataScale: 'unknown',
+      loadProfile: 'local',
+      dependencies: [],
+      environment: 'sandbox',
+      timeConstraint: 'none',
+      userPolicy: 'live-read-only (DR-C1)',
+    }
+    const hanFirst = hanResult?.options?.[0]
+    const patternContext: ContextFitInput | undefined = hanFirst
+      ? {
+          module: missionType === 'M2' ? 'TMO system' : 'research workspace',
+          protocolTier: tier,
+          dataScale: 'unknown',
+          loadProfile: 'local',
+          dependencies: [],
+          environment: 'both',
+          timeConstraint: 'none',
+          userPolicy: 'live-read-only (DR-C1)',
+          preConditions: (hanFirst.verifyPlan || []).slice(0, 5),
+          contraindication: (hanFirst.risks || []).slice(0, 5),
+          adaptationDelta: [],
+        }
+      : undefined
+
     const tournament = await runTournament({
       missionId,
       problemStmt: params.partDescription,
@@ -1085,12 +1319,19 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
       tier,
       successCriteria: params.successCriteriaStrings,
       agents,
+      missionContext,
+      patternContext,
       deployMode: 'proposal', // T3 → luôn Proposal (TB-14 §9 DIRECT-APPLY chỉ T1/T2 eligible)
     })
 
     if (tournament.councilVerdict === 'DROP') {
       errors.push(`Tournament verdict DROP — no hypothesis converged`)
     }
+    emitLocal(
+      `Tournament 5 vòng xong (iterations ${tournament.iterations}) — council ⑤ verdict: ${tournament.councilVerdict}${
+        tournament.winningOptionId ? ` · winner option ${tournament.winningOptionId}` : ''
+      }`,
+    )
   } catch (err) {
     errors.push(
       `Tournament: ${err instanceof Error ? err.message : String(err)}`,
@@ -1101,6 +1342,84 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
 // ============================================================
 // §8c. INTERNAL HELPERS — LLM-backed callbacks cho Tournament (DI)
 // ============================================================
+
+/**
+ * System prompt cho các vòng RWV (READ/WRITE/VERIFY) — LISMA thực thi.
+ * Ngắn gọn theo phase instruction trong user prompt của rwv-loop.ts.
+ */
+const RWV_ROUND_SYSTEM_PROMPT = [
+  'Bạn là LISMA (G2 — research team TMO). Đang thực hiện 1 phase của RWV loop',
+  '(READ → WRITE → VERIFY — TB-09 §1-§3).',
+  '- Tuân thủ CHÍNH XÁC instruction của phase trong prompt (output format, path trong workspace).',
+  '- TC-10: mọi file path PHẢI nằm trong workspace root — KHÔNG bao giờ đụng file ngoài.',
+  '- Output ngắn gọn, đúng format — KHÓNG giải thích thừa.',
+].join('\n')
+
+/**
+ * FIX (Task 19 audit A#5 + B#7): persist Partial<WorklogEntry> từ G2 LISMA /
+ * G3 HAN vào ResearchWorklog — trước đây kết quả review/optimizer KHÔNG được
+ * persist (0 dòng trong DB sau khi pipeline chạy xong) → audit-trail TB-04 §5
+ * trống rỗng + handoff gate không có evidence để check + NEMESIS MONITOR đọc
+ * không thấy gì của G2/G3.
+ *
+ * - Fill đủ 8 trường TB-09 §4.2 từ partial + default an toàn.
+ * - evidence[] persist vào evidenceJson (TC-06 — handoff gate check được).
+ * - findings build từ evidence items (claim đã có evidence → không tạo gap ảo).
+ *
+ * Fail-open: DB error → warn, KHÔNG throw (pipeline không crash).
+ */
+async function persistPartialWorklog(
+  missionId: string,
+  taskId: string,
+  partial: Partial<WorklogEntry>,
+  phase: string,
+  extras: {
+    evidence?: EvidenceItem[]
+    findingsFromEvidence?: EvidenceItem[]
+    kbRefs?: string[]
+  } = {},
+): Promise<void> {
+  try {
+    const findingsFromEvidence = extras.findingsFromEvidence || []
+    const entry: WorklogEntry = {
+      mission: (partial.mission as 'M1' | 'M2' | 'M3') || 'M2',
+      status: partial.status || 'IN_PROGRESS',
+      currentPhase: partial.currentPhase || 'G2',
+      overallProgress: typeof partial.overallProgress === 'number' ? partial.overallProgress : 50,
+      tlReadBack: partial.tlReadBack || 'NEEDS-REVIEW',
+      done: partial.done || [],
+      issuesFaced: partial.issuesFaced || [],
+      suggestionsNextGroup: partial.suggestionsNextGroup || [],
+      filesChanged: partial.filesChanged || [],
+      ...(findingsFromEvidence.length > 0
+        ? {
+            findings: findingsFromEvidence.map((e, i) => ({
+              no: i + 1,
+              finding: e.claim,
+              evidence: `${e.file}:${e.line}${e.excerpt ? ` — ${e.excerpt}` : ''}`,
+              severity: 'MEDIUM' as const,
+              proposal: '',
+            })),
+          }
+        : {}),
+      ...(extras.kbRefs && extras.kbRefs.length > 0 ? { kbEntries: extras.kbRefs } : {}),
+    }
+    await db.researchWorklog.create({
+      data: {
+        taskId,
+        missionId,
+        phase,
+        entryJson: encodeJson(entry),
+        evidenceJson: encodeJson(extras.evidence || []),
+      },
+    })
+  } catch (err) {
+    console.warn(
+      '[KingEngine] persistPartialWorklog failed (non-blocking):',
+      err instanceof Error ? err.message : String(err),
+    )
+  }
+}
 
 const HYPOTHESIS_GEN_SYSTEM_PROMPT = [
   'Bạn là SIVIL (G1 — Research Team TMO).',
@@ -1122,10 +1441,12 @@ const KILL_TEST_SYSTEM_PROMPT = [
 
 const BLIND_SCORE_SYSTEM_PROMPT = [
   'Bạn là SA blind scorer (TB-14 §1.3 AC5 — KHÔNG do SIVIL tự chấm).',
-  'Nhiệm vụ: chấm dim D4 reproducibility (0-10) cho hypothesis.',
+  'Nhiệm vụ: chấm dim D4 reproducibility (0-5, thang Rubric A) cho hypothesis.',
   '- D4 = reproducibility: hypothesis có thể tái lập qua experiment độc lập không?',
+  '- FIX (Task 19 audit B#6): thang 0-5 (khớp RubricAInput.blindSas) — trước đây',
+  '  prompt 0-10 mâu thuẫn contract rubric (clamp 5 → SA chấm 6-10 đều thành 5).',
   '',
-  'OUTPUT JSON-DUY-NAHAT: { "score": <0-10> }',
+  'OUTPUT JSON-DUY-NHAT: { "score": <0-5> }',
 ].join('\n')
 
 /** Generate ≥3 hypotheses via callLLM (SIVIL role). Fail-open: return []. */
@@ -1231,7 +1552,7 @@ async function llmScoreHypothesisBlind(
     `HYPOTHESIS: ${h.hypothesis}`,
     `EVIDENCE: ${h.evidence.join('; ') || '(none)'}`,
     '',
-    'Chấm D4 reproducibility (0-10):',
+    'Chấm D4 reproducibility (0-5):',
   ].join('\n')
   // 2 SA blind scorers (TB-14 §1.3 AC5 — KHÔNG do SIVIL tự chấm)
   const [r1, r2] = await Promise.all([
@@ -1241,7 +1562,8 @@ async function llmScoreHypothesisBlind(
   const parseScore = (r: LLMResult): number => {
     if (r.error || !r.content) return 0
     const m = r.content.match(/"score"\s*:\s*(\d+(?:\.\d+)?)/)
-    if (m) return Math.min(10, Math.max(0, parseFloat(m[1])))
+    // FIX (Task 19 audit B#6): clamp về thang 0-5 (RubricAInput.blindSas)
+    if (m) return Math.min(5, Math.max(0, parseFloat(m[1])))
     return 0
   }
   return { sa1: parseScore(r1), sa2: parseScore(r2) }

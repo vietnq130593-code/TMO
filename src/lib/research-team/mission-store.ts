@@ -112,7 +112,7 @@ export async function createMission(
     : [
         {
           at,
-          agent: 'KING',
+          agent: 'NEMESIS',
           decision: 'RESEARCH',
           reason: 'Mission created',
         },
@@ -265,7 +265,7 @@ export async function transitionMission(
     // Auto decision log nếu caller không cung cấp
     decisionLog.push({
       at: new Date().toISOString(),
-      agent: 'KING',
+      agent: 'NEMESIS',
       decision: 'CONTINUE',
       reason: `Status transition ${fromStatus}→${toStatus}`,
     })

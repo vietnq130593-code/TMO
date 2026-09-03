@@ -17,7 +17,7 @@
 - **Mục đích:** biến tài liệu mô tả 4.635 dòng thành 13 blueprint triển khai được — mỗi file = 1 review unit = 1 milestone = 1 lần phê duyệt.
 - **Đối tượng đọc:**
   1. Kỹ sư triển khai agents (khi cài đặt team research vào TMO)
-  2. Chính các agents KING/SIVIL/BELI/LISMA/HAN (dùng làm JD + Instructions runtime)
+  2. Chính các agents NEMESIS/SIVIL/BELI/LISMA/HAN (dùng làm JD + Instructions runtime)
   3. User (review thiết kế từng phần)
 - **Không thay đổi thiết kế** — chỉ chi tiết hóa: interfaces, schemas, state machines, error handling, acceptance criteria.
 - **Không bao gồm:** mã nguồn TMO, hạ tầng PM2/Qdrant — blueprint dừng ở ranh giới "runtime contract" của team research.
@@ -30,7 +30,7 @@
 
 | Agent | Vị trí | Vai trò M1 — Kaggle | Nhiệm vụ M2 — System Research |
 |---|---|---|---|
-| **KING** | TL | Research Director — nhìn lớn, chia nhỏ, kiểm soát chặt | Phân loại mission M1/M2, điều phối audit, tổng hợp Proposal → SELF-DIRECTION |
+| **NEMESIS** | TL | Research Director — nhìn lớn, chia nhỏ, kiểm soát chặt | Phân loại mission M1/M2, điều phối audit, tổng hợp Proposal → SELF-DIRECTION |
 | **SIVIL** | G1 Sub-Orchestrator | Điều phối sub-agents (5–300) explore song song | Dispatch SAs audit từng module TMO |
 | **BELI** | G1 Coder | Code lượt đầu theo spec | Research report + POC (trong Workspace) |
 | **LISMA** | G2 | Review, tìm bug, fix bug | System Diagnostician — root cause từ logs + code |
@@ -76,7 +76,7 @@ Tiếng Việt · Markdown · bảng + ASCII box + emoji section headers (như n
 | TB-03 | `TB-03-g1-engine-sivil-beli.md` | G1 Engine — SIVIL & BELI | 170–678 | 926 | L | B | ✅ |
 | TB-04 | `TB-04-g2-engine-lisma.md` | G2 Engine — LISMA | 679–1118 | 848 | L | B | ✅ |
 | TB-05 | `TB-05-g3-engine-han-knowledge-base.md` | G3 Engine — HAN & Team Knowledge Base | 1119–1717 | 1.034 | L | B | ✅ |
-| TB-06 | `TB-06-tl-engine-king.md` | TL Engine — KING (7 nhiệm vụ + Council) | 1827–2708 | 1.269 | L | B | ✅ |
+| TB-06 | `TB-06-tl-engine-king.md` | TL Engine — NEMESIS (7 nhiệm vụ + Council) | 1827–2708 | 1.269 | L | B | ✅ |
 | TB-07 | `TB-07-tl-decomposition-playbook.md` | TL Research Decomposition Playbook | 2709–3173 | 763 | M | B | ✅ |
 | TB-08 | `TB-08-knowledge-capture-protocol.md` | Knowledge Capture Protocol | 1718–1826 | 225 | S | C | ✅ |
 | TB-09 | `TB-09-rwv-loop-handoff-protocol.md` | RWV Loop & Handoff Protocol | 3285–3779 | 724 | M | C | ✅ |
@@ -109,9 +109,9 @@ Tiếng Việt · Markdown · bảng + ASCII box + emoji section headers (như n
    │  G1     │  G2     │ G3+KB   │Decompose│ ReadMap │
    └────┬────┴────┬────┴────┬────┴────┬────┴────┬────┘
         └─────────┴────┬────┴─────────┴─────────┘
-                       ▼  (KING cần biết cả 3 engines)
+                       ▼  (NEMESIS cần biết cả 3 engines)
                   ┌─────────┐
-                  │  TB-06  │ KING Engine
+                  │  TB-06  │ NEMESIS Engine
                   └────┬────┘
                        ▼
                   ┌─────────┐         ┌──────────┐
@@ -187,4 +187,4 @@ Mỗi section blueprint phải ghi nguồn dạng `[TB-XX §n ← nguồn dòng 
 
 *Đợt F — CODE KIT v1.4 (2026-09-01): đáp ứng yêu cầu "docs/blueprints tự chứa mọi file cần để code team research" — bổ TB-13 (implementation build plan: bản đồ module `src/lib/research-team/`, 7 model Prisma, 12 API route `/api/research/*`, 8 build phase P0–P7, map 14 TC verify, risk register, DoD 14 mục) + bản sao nguồn `ai-team-workflow.md` (4.682 dòng, kèm Phụ lục Z) + bản sao `DECISION-RECORD-v1.3.md` + `README.md` folder guide. Tập hiện 17 file. Trạng thái: READY-TO-CODE — chờ user khởi động P0.*
 
-*Đợt G — SOLUTION SCORING v1.5 (2026-09-01): theo yêu cầu user (trace 1a05c01e7a9f66f9) bổ chức năng "tiêu chí chấm điểm giải pháp/chẩn đoán chính xác + xác minh + áp dụng theo bối cảnh + loop thảo luận go/no-go → triển khai luôn hoặc gửi đề xuất": (1) nguồn amend **Phụ lục Z2** (4.682 → 4.745 dòng, append-only: Z2.1 Rubric A chẩn đoán 5 chiều 30/25/15/15/15 · Z2.2 Rubric B giải pháp 6 chiều · Z2.3 Tournament 5 vòng trần 3 lặp · Z2.4 ma trận context-fit 8 chiều 3 gate · Z2.5 rule DIRECT-APPLY 5 điều kiện vs Proposal · Z2.6 council ⑤ kind=5); (2) **TB-14** blueprint chi tiết (~270 dòng, 12 section + Phụ lục A, 13 AC, 0 [Q] mở); (3) TB-12 §3.2 thêm TC-15→TC-18 (14 → **18 TC**); (4) TB-13 bổ module scoring/tournament/experiment + 2 model Prisma (HypothesisRecord, ExperimentRecord) + phase P2b; (5) TB-00 index/tracker cập nhật. Loop thảo luận = KING + SIVIL + BELI + LISMA + HAN (Council ⑤, blocking — trả lời câu hỏi "TL thảo luận với ai").*
+*Đợt G — SOLUTION SCORING v1.5 (2026-09-01): theo yêu cầu user (trace 1a05c01e7a9f66f9) bổ chức năng "tiêu chí chấm điểm giải pháp/chẩn đoán chính xác + xác minh + áp dụng theo bối cảnh + loop thảo luận go/no-go → triển khai luôn hoặc gửi đề xuất": (1) nguồn amend **Phụ lục Z2** (4.682 → 4.745 dòng, append-only: Z2.1 Rubric A chẩn đoán 5 chiều 30/25/15/15/15 · Z2.2 Rubric B giải pháp 6 chiều · Z2.3 Tournament 5 vòng trần 3 lặp · Z2.4 ma trận context-fit 8 chiều 3 gate · Z2.5 rule DIRECT-APPLY 5 điều kiện vs Proposal · Z2.6 council ⑤ kind=5); (2) **TB-14** blueprint chi tiết (~270 dòng, 12 section + Phụ lục A, 13 AC, 0 [Q] mở); (3) TB-12 §3.2 thêm TC-15→TC-18 (14 → **18 TC**); (4) TB-13 bổ module scoring/tournament/experiment + 2 model Prisma (HypothesisRecord, ExperimentRecord) + phase P2b; (5) TB-00 index/tracker cập nhật. Loop thảo luận = NEMESIS + SIVIL + BELI + LISMA + HAN (Council ⑤, blocking — trả lời câu hỏi "TL thảo luận với ai").*

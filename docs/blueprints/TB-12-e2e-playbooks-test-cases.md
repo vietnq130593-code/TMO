@@ -34,31 +34,31 @@
 
 ### 1.2 Diễn biến từng phase
 
-> Luật chạy chung (T3): mỗi part đi đủ **G1 → G2 → G3 → KING**, KING đọc worklog sau mỗi group (CP1/CP2/CP3), KHÔNG code — chỉ quyết định CONTINUE/PIVOT/ESCALATE (TB-09 §2–§3). Mọi group ghi worklog + Artifact Map khi xong (TB-09 §4, TB-10 §6).
+> Luật chạy chung (T3): mỗi part đi đủ **G1 → G2 → G3 → NEMESIS**, NEMESIS đọc worklog sau mỗi group (CP1/CP2/CP3), KHÔNG code — chỉ quyết định CONTINUE/PIVOT/ESCALATE (TB-09 §2–§3). Mọi group ghi worklog + Artifact Map khi xong (TB-09 §4, TB-10 §6).
 
 **P1 — Khởi động (COMPLEX)** `[SRC 4350–4364]`
-- KING đọc competition description → **CLASSIFY: M1 (Kaggle Research)** ✅ → chấm: Phạm vi 3 + Suy luận 3 + Rủi ro 2 = **8 → COMPLEX (T3)**.
-- KING tạo `task_complex.md` — 4 parts: **Part 1** EDA & Understanding data · **Part 2** Feature Engineering · **Part 3** Model Building & Tuning · **Part 4** Ensemble & Submission.
+- NEMESIS đọc competition description → **CLASSIFY: M1 (Kaggle Research)** ✅ → chấm: Phạm vi 3 + Suy luận 3 + Rủi ro 2 = **8 → COMPLEX (T3)**.
+- NEMESIS tạo `task_complex.md` — 4 parts: **Part 1** EDA & Understanding data · **Part 2** Feature Engineering · **Part 3** Model Building & Tuning · **Part 4** Ensemble & Submission.
 - **Council ①** (sau DECOMPOSE — trước ASSIGN; TB-06 §10.1) challenge hypotheses → ASSIGN G1 cho Part 1. Output: task .md + Decision log + Research Protocol (M1).
 
 **P2 — Part 1: EDA (COMPLEX)** `[SRC 4366–4396]`
 - **G1:** SIVIL dispatch **5 sub-agents song song** — SA-01 missing value · SA-02 distribution · SA-03 correlation · SA-04 outlier · SA-05 categorical; BELI code cho mỗi analysis → **5 notebooks EDA + insights**.
 - **G2 (LISMA):** review 5 notebooks → fix rendering bugs + fix incorrect statistical tests → suggestion: "Nên thêm interaction features giữa GrLivArea và OverallQual" → **5 notebooks sạch + suggestions**.
 - **G3 (HAN):** review insights → "Missing value pattern gợi ý MNAR, không nên dùng simple imputation" → tối ưu visualization → suggestion: "Nên thử target encoding cho categorical thay vì one-hot" → **optimized EDA + strategy recommendations**.
-- **KING:** đọc worklog sau mỗi group → **CP1** (sau G1 — đủ 5 notebook + insights) · **CP2** (sau G2 — sạch + suggestions) · **CP3** (sau G3 — strategy chốt) → chốt approach: "Tốt, chuyển sang Part 2: Feature Engineering" → gọi G1 cho Part 2.
+- **NEMESIS:** đọc worklog sau mỗi group → **CP1** (sau G1 — đủ 5 notebook + insights) · **CP2** (sau G2 — sạch + suggestions) · **CP3** (sau G3 — strategy chốt) → chốt approach: "Tốt, chuyển sang Part 2: Feature Engineering" → gọi G1 cho Part 2.
 
 **P3 — Part 2: Feature Engineering (COMPLEX) + bug chen ngang** `[SRC 4398–4424]`
 - **G1:** SIVIL dispatch sub-agents parallel feature creation — **Group A** numeric (log transform, polynomial) · **Group B** categorical (target encoding, frequency encoding) · **Group C** interaction features · **Group D** time-based (nếu có); BELI code từng nhóm → **FE pipeline**; G2 → G3 → TL như P2.
-- **Chen ngang — bug nhỏ (SIMPLE):** KING nhận ra "Feature X bị NaN sau transform" → chấm Phạm vi 1 + Suy luận 1 + Rủi ro 1 = **3 → SIMPLE (T1)** → giao thẳng **LISMA** fix NaN handling → LISMA code + self-review: "Thêm fillna(median) trước transform" → KING quick check → DONE → **quay lại Complex pipeline đang chạy — không gián đoạn** (lợi ích lớn của tier system, dòng 4424). Tri thức NaN-fix vào KB tại MONITOR/FINALIZE (T1 không qua G3 — TB-08 §7).
+- **Chen ngang — bug nhỏ (SIMPLE):** NEMESIS nhận ra "Feature X bị NaN sau transform" → chấm Phạm vi 1 + Suy luận 1 + Rủi ro 1 = **3 → SIMPLE (T1)** → giao thẳng **LISMA** fix NaN handling → LISMA code + self-review: "Thêm fillna(median) trước transform" → NEMESIS quick check → DONE → **quay lại Complex pipeline đang chạy — không gián đoạn** (lợi ích lớn của tier system, dòng 4424). Tri thức NaN-fix vào KB tại MONITOR/FINALIZE (T1 không qua G3 — TB-08 §7).
 
 **P4 — Part 3: Model Building & Tuning** `[SRC — suy từ 2443–2501]`
-- Pipeline T3 lặp như P2/P3 (G1 explore → G2 review → G3 tune) — KING checkpoint đủ 3 sau mỗi group.
+- Pipeline T3 lặp như P2/P3 (G1 explore → G2 review → G3 tune) — NEMESIS checkpoint đủ 3 sau mỗi group.
 - Sự kiện thật từ Summary: **pivot quay lại audit leakage khi CV-LB gap lớn** (DECIDE — Pivot → DECOMPOSED, TB-06 §12.3) → re-run Part 3 sau leakage fix (timeline: 2 ngày + re-run).
 - Checkpoint verify (M1 — dòng 4591): metric cải thiện + no leakage + **CV-LB gap < 0.01** + hypothesis checked.
 - Output: 2 models nền (XGBoost + LightGBM) cho ensemble.
 
 **P5 — Part 4: Ensemble** `[SRC — suy từ 2443–2501]`
-- KING **nâng cấp Part 4 lên COMPLEX để explore stacking** (DECIDE — Adjust; TB-06 §8) → full pipeline G1 → G2 → G3 (nâng tier = Adjust, ghi Decision log, viết task .md mới — TB-06 §12.3).
+- NEMESIS **nâng cấp Part 4 lên COMPLEX để explore stacking** (DECIDE — Adjust; TB-06 §8) → full pipeline G1 → G2 → G3 (nâng tier = Adjust, ghi Decision log, viết task .md mới — TB-06 §12.3).
 - G1 explore ensemble strategies (vd Branch D TB-03 §5.5: simple avg · weighted avg · stacking Linear/XGB meta · blending) → G2 review → G3 chốt meta-model.
 - Key decisions: **chọn Stacking (Ridge meta) thay vì Weighted Avg** · chốt **72 features thay vì 180** (TB-06 §9.5).
 
@@ -69,31 +69,31 @@
 
 ### 1.3 Chuỗi artifact M1 xuyên suốt (dynamic chain)
 
-`raw_data → clean_data → features → models → preds → submit` (dòng 4607) — mỗi phase sinh 1 lớp artifact mới; mọi group **PHẢI ghi Research Artifact Map khi xong + đọc Map khi bắt đầu** (TB-10 §5–§6); KING chỉ đọc worklog + Map (TB-10 §5).
+`raw_data → clean_data → features → models → preds → submit` (dòng 4607) — mỗi phase sinh 1 lớp artifact mới; mọi group **PHẢI ghi Research Artifact Map khi xong + đọc Map khi bắt đầu** (TB-10 §5–§6); NEMESIS chỉ đọc worklog + Map (TB-10 §5).
 
 ---
 
 ## §2. 🔄 PLAYBOOK E2E M2 — "HỆ THỐNG CHAT TMO CHẬM" `[TB-12 §2 ← nguồn dòng 4428–4511]` `[SRC]`
 
 > User request: **"Hệ thống chat của TMO chậm, nghiên cứu và đề xuất khắc phục."**
-> Số liệu thật giữ nguyên: chat **121s** khi LLM key trả 401 → baseline tối ưu **6.2s** · **3 root causes** · options **A/B/C** (khuyến nghị A+B) · **p95 < 10s** · **3 checkpoint KING** · **4 parts**.
+> Số liệu thật giữ nguyên: chat **121s** khi LLM key trả 401 → baseline tối ưu **6.2s** · **3 root causes** · options **A/B/C** (khuyến nghị A+B) · **p95 < 10s** · **3 checkpoint NEMESIS** · **4 parts**.
 
 ### 2.1 Dòng thời gian tổng quan (CLASSIFY → ... → verify tay (a))
 
 | # | Bước | Ai thực hiện | Tham chiếu |
 |---|---|---|---|
-| 1 | CLASSIFY: "hệ thống, TMO, chậm, đề xuất khắc phục" → M2 (confidence cao — không cần hỏi lại) | KING | TB-06 §2 |
-| 2 | TRIAGE: Phạm vi 3 + Suy luận 3 + Rủi ro 2 = 8 → COMPLEX (T3) | KING | TB-02 §4 |
-| 3 | DECOMPOSE 4 parts: P1 Audit (COMPLEX) · P2 Root cause (MEDIUM) · P3 Options (COMPLEX) · P4 Proposal & Verification Plan (MEDIUM) | KING | TB-07 §5 |
+| 1 | CLASSIFY: "hệ thống, TMO, chậm, đề xuất khắc phục" → M2 (confidence cao — không cần hỏi lại) | NEMESIS | TB-06 §2 |
+| 2 | TRIAGE: Phạm vi 3 + Suy luận 3 + Rủi ro 2 = 8 → COMPLEX (T3) | NEMESIS | TB-02 §4 |
+| 3 | DECOMPOSE 4 parts: P1 Audit (COMPLEX) · P2 Root cause (MEDIUM) · P3 Options (COMPLEX) · P4 Proposal & Verification Plan (MEDIUM) | NEMESIS | TB-07 §5 |
 | 4 | P1 qua G1: SIVIL dispatch 6 SA → BELI tổng hợp Audit Report | SIVIL + BELI | TB-03 §6 |
 | 5 | LISMA chẩn đoán theo Suspect Locations → 3 root causes | LISMA | TB-04 §5 |
 | 6 | HAN đọc Impact Chain → options A/B/C + recommendation | HAN | TB-05 §4 |
-| 7 | 3 checkpoint: CP1 evidence · CP2 root cause ↔ logs · CP3 options | KING | TB-09 §3 |
-| 8 | FINALIZE: PROPOSAL theo schema → route THẲNG SELF-DIRECTION → SUBMITTED | KING | TB-11 §1–§2 |
+| 7 | 3 checkpoint: CP1 evidence · CP2 root cause ↔ logs · CP3 options | NEMESIS | TB-09 §3 |
+| 8 | FINALIZE: PROPOSAL theo schema → route THẲNG SELF-DIRECTION → SUBMITTED | NEMESIS | TB-11 §1–§2 |
 | 9 | APPROVED (user/agent ủy quyền) → áp Workspace → Live (thao tác riêng) | user/agent ủy quyền | TB-01 §3 |
-| 10 | Verify tay (a): latency log trước/sau + manual test; (b) benchmark DEFERRED | user (KING theo dõi) | TB-11 §1 |
+| 10 | Verify tay (a): latency log trước/sau + manual test; (b) benchmark DEFERRED | user (NEMESIS theo dõi) | TB-11 §1 |
 
-### 2.2 Phase 0 — Phân loại & Triage (KING) `[SRC 4432–4450]`
+### 2.2 Phase 0 — Phân loại & Triage (NEMESIS) `[SRC 4432–4450]`
 
 - CLASSIFY: tín hiệu "hệ thống, TMO, chậm, đề xuất khắc phục" → **mission_type: M2** (confidence: cao — không cần hỏi lại).
 - TRIAGE: **Phạm vi = 3** (LLM pipeline + key pool + fail-open paths) · **Suy luận = 3** (cần đọc logs + code để tìm root cause) · **Rủi ro = 2** (thay đổi ảnh hưởng trải nghiệm user) → **tổng 8 → COMPLEX (Tier 3)**.
@@ -121,7 +121,7 @@ BELI tổng hợp thành **Audit Report**: "Chat request mất 121s khi LLM key 
 2. ĐỊNH VỊ   → tách triệu chứng (121s) khỏi nguyên nhân
 3. CHẨN ĐOÁN → root cause list — mỗi cái có evidence + severity
 4. ĐỀ XUẤT   → fix proposal + patch mẫu viết trong Workspace
-5. KING VERIFY (CP2: root cause khớp code ↔ logs?)
+5. NEMESIS VERIFY (CP2: root cause khớp code ↔ logs?)
 ```
 
 - **Root cause #1:** Retry mù quáng khi 401 (4xx không retry được) · **#2:** Key pool không health check · **#3:** Không timeout cho LLM calls.
@@ -137,14 +137,14 @@ BELI tổng hợp thành **Audit Report**: "Chat request mất 121s khi LLM key 
 
 Recommendation: **A + B ngay; C để khi có benchmark** — mỗi option kèm **Verification Plan (deferred)**.
 
-**KING — 3 Checkpoints** `[SRC 4485–4488]`:
+**NEMESIS — 3 Checkpoints** `[SRC 4485–4488]`:
 - **CP1:** Audit đủ evidence? (mỗi finding có file:line + log) ✅
 - **CP2:** Root cause khớp code ↔ logs? (LISMA verify) ✅
 - **CP3:** Mỗi option có trade-offs + verification plan? ✅
 
-### 2.4 Phase 2 — Proposal → SELF-DIRECTION (KING FINALIZE) `[SRC 4491–4509]`
+### 2.4 Phase 2 — Proposal → SELF-DIRECTION (NEMESIS FINALIZE) `[SRC 4491–4509]`
 
-KING tổng hợp **PROPOSAL** theo Proposal Schema (TB-11 §1) — nội dung nguyên nguồn:
+NEMESIS tổng hợp **PROPOSAL** theo Proposal Schema (TB-11 §1) — nội dung nguyên nguồn:
 
 ```
 Problem: Chat latency 121s khi LLM key fail
@@ -174,18 +174,18 @@ SUBMITTED (SELF-DIRECTION)
 ```
 - **Verify tay (a):** so sánh latency log trước/sau + manual test "gửi 1 câu hỏi khi 1 key cố tình sai"; benchmark A/B (b) **DEFERRED** đến khi hệ được xây (p50/p95, acceptance p95 < 10s).
 - Knowledge Capture trong mission: LISMA đề xuất (KB Candidate) → HAN ghi **KB-20250612-002** — System Anti-Patterns: "LLM key 4xx → KHÔNG retry mù — fail-fast ngay" (evidence: log 121s retry mù vs 6.2s fail-fast — dòng 1810).
-- **KING theo dõi sau SUBMITTED** (TB-06 §9.8): APPROVED → đóng task + KB lesson; REJECTED → phân tích lý do, re-DECOMPOSE phần liên quan hoặc đóng mission; REVISED → giao lại group bổ sung → update → re-SUBMIT.
+- **NEMESIS theo dõi sau SUBMITTED** (TB-06 §9.8): APPROVED → đóng task + KB lesson; REJECTED → phân tích lý do, re-DECOMPOSE phần liên quan hoặc đóng mission; REVISED → giao lại group bổ sung → update → re-SUBMIT.
 - **Điểm quan trọng (dòng 4511):** toàn bộ mission M2 **KHÔNG sửa bất kỳ file nào của TMO** — output duy nhất là Proposal document; implementation (sau khi APPROVED) và benchmark A/B là thao tác riêng.
 
 ### 2.5 Chen ngang tier T1 — "Verify NEO4J_DATABASE" `[SRC 1023, 1534, 3601, 4555]`
 
 ```
 Request: "NEO4J_DATABASE=neo4j — có đúng DB thật không?"
-→ TRIAGE: "Verify 1 config có đúng không" → SIMPLE (KING → LISMA → KING)
+→ TRIAGE: "Verify 1 config có đúng không" → SIMPLE (NEMESIS → LISMA → NEMESIS)
 → LISMA: đối chiếu config ↔ code ↔ logs (Suspect S5 — config mismatch)
    → phát hiện: NEO4J_DATABASE sai tên DB → connection fail âm thầm
    → KHÔNG tự sửa Live System — đề xuất nằm trong kết luận
-→ KING: chốt kết luận verify + KB Config Lesson
+→ NEMESIS: chốt kết luận verify + KB Config Lesson
    (C1: NEO4J Aura — user = instance ID 8-hex, dòng 1534)
 → tri thức vào KB tại MONITOR/FINALIZE (T1 không qua G3 — TB-08 §7)
 ```
@@ -211,20 +211,20 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 
 | ID | Kịch bản | Kỳ vọng | Verify bằng | Tham chiếu |
 |---|---|---|---|---|
-| TC-01 | Request ambiguous — không rõ Kaggle hay System Research | KING KHÔNG đoán mò; hỏi đúng **1 câu** phân luồng; classify được sau câu trả lời | Decision log có 1 câu hỏi + mission_type kế tiếp | TB-06 §2 |
-| TC-02 | Mission M2 tier T2 (vd "chẩn đoán chat latency cao") | Pipeline KING → BELI (report) → LISMA (root cause) → KING; **output vẫn là Proposal 1-module → SELF-DIRECTION** (không final report user) | Đầu ra mission = Proposal theo schema TB-11 §1; routing CP1+CP2 | TB-02 §5 |
-| TC-03 | 2 sub-agents (SA-07 vs SA-09) trả kết quả trái ngược | SIVIL điều tra bắt buộc (đối chiếu context/evidence; SA điều tra nếu cần); không giải thích được → **ESCALATE KING trình bày CẢ 2 INTERPRETATION** + evidence từng bên | Worklog G1 có mục điều tra + khối escalation | TB-03 §5.3 |
+| TC-01 | Request ambiguous — không rõ Kaggle hay System Research | NEMESIS KHÔNG đoán mò; hỏi đúng **1 câu** phân luồng; classify được sau câu trả lời | Decision log có 1 câu hỏi + mission_type kế tiếp | TB-06 §2 |
+| TC-02 | Mission M2 tier T2 (vd "chẩn đoán chat latency cao") | Pipeline NEMESIS → BELI (report) → LISMA (root cause) → NEMESIS; **output vẫn là Proposal 1-module → SELF-DIRECTION** (không final report user) | Đầu ra mission = Proposal theo schema TB-11 §1; routing CP1+CP2 | TB-02 §5 |
+| TC-03 | 2 sub-agents (SA-07 vs SA-09) trả kết quả trái ngược | SIVIL điều tra bắt buộc (đối chiếu context/evidence; SA điều tra nếu cần); không giải thích được → **ESCALATE NEMESIS trình bày CẢ 2 INTERPRETATION** + evidence từng bên | Worklog G1 có mục điều tra + khối escalation | TB-03 §5.3 |
 | TC-04 | Vòng verify LISMA phát hiện bug mới do fix trước gây ra | **Ghi entry riêng Type = Regression** trong Bugs Found + worklog; fix trong vòng mới; re-test cả test của bug gốc; lặp 2 lần từ cùng fix → ESCALATE (mùi architectural) | Worklog có Regression row + vòng mới có re-test | TB-04 §9.1 (+ §4, §7) |
 | TC-05 | KB trống (cold start — lần chạy đầu) | HAN load KB Phase 1 → thấy trống → **seed bằng starter KB** (các bảng lessons/anti-patterns/baselines chuẩn nguồn); không crash, không skip | KB sau seed có categories cơ bản; vòng G3 tiếp tục ANALYZE bình thường | TB-05 §9 (E1) |
-| TC-06 | LISMA chẩn đoán nhưng claim thiếu evidence (không file:line + log excerpt) | Claim bị loại khỏi Diagnostic Report / vòng mới đọc thêm — **EVIDENCE-GAP** nếu lặp; **KHÔNG tự apply fix**; KING verify CP2 trả về nếu không pass | Diagnostic Report mọi root cause có evidence; 0 thao tác apply lên Live | TB-04 §5 (§5.4, §5.6) + §7 |
+| TC-06 | LISMA chẩn đoán nhưng claim thiếu evidence (không file:line + log excerpt) | Claim bị loại khỏi Diagnostic Report / vòng mới đọc thêm — **EVIDENCE-GAP** nếu lặp; **KHÔNG tự apply fix**; NEMESIS verify CP2 trả về nếu không pass | Diagnostic Report mọi root cause có evidence; 0 thao tác apply lên Live | TB-04 §5 (§5.4, §5.6) + §7 |
 | TC-07 | G1 chạy 1 part: sub-agents xong, BELI chuẩn bị code | **Council ② (sau SYNTHESIZE) diễn ra TRƯỚC khi BELI code** — chốt specs; tri thức mới ghi KB NGAY | Thứ tự log: SYNTHESIZE → council ② → SPEC → BELI code | TB-03 §4 (§4.4) |
-| TC-08 | Task tier SIMPLE (M1/M2) — không qua G3 | Tri thức vẫn vào KB: **KING ghi tại MONITOR + FINALIZE** (quy tắc vàng #2); không để tri thức thất lạc | KB có entry sinh từ task T1; worklog FINALIZE có KB capture | TB-08 §7 (+ §2) |
-| TC-09 | Giữa mission M2, KING đọc worklog thấy claim thiếu evidence (trigger 🔴) | **PIVOT** — dừng part hiện tại, quay lại part liên quan / giao group bổ sung; KHÔNG tiếp tục với claim không evidence | Decision log có lý do pivot + part được quay lại | TB-09 §6 (+ TB-06 §8) |
+| TC-08 | Task tier SIMPLE (M1/M2) — không qua G3 | Tri thức vẫn vào KB: **NEMESIS ghi tại MONITOR + FINALIZE** (quy tắc vàng #2); không để tri thức thất lạc | KB có entry sinh từ task T1; worklog FINALIZE có KB capture | TB-08 §7 (+ §2) |
+| TC-09 | Giữa mission M2, NEMESIS đọc worklog thấy claim thiếu evidence (trigger 🔴) | **PIVOT** — dừng part hiện tại, quay lại part liên quan / giao group bổ sung; KHÔNG tiếp tục với claim không evidence | Decision log có lý do pivot + part được quay lại | TB-09 §6 (+ TB-06 §8) |
 | TC-10 | BELI viết POC cho Option A (fail-fast) trong mission M2 | **POC + diff chỉ trong Workspace** (bản clone); Live System chỉ đọc (evidence); diff kèm Proposal khi SUBMITTED | Mọi file sửa nằm trong Workspace; log Live System không đổi | TB-01 §3 |
-| TC-11 | Proposal P-YYYYMMDD-NNN bị REJECTED kèm lý do | KING phân tích → **quay lại research** (re-DECOMPOSE phần liên quan) hoặc đóng mission — Decision log; không re-submit nguyên trạng | Trạng thái REJECTED → RESEARCHING; Decision log có lý do | TB-11 §2 (+ TB-06 §9.8) |
+| TC-11 | Proposal P-YYYYMMDD-NNN bị REJECTED kèm lý do | NEMESIS phân tích → **quay lại research** (re-DECOMPOSE phần liên quan) hoặc đóng mission — Decision log; không re-submit nguyên trạng | Trạng thái REJECTED → RESEARCHING; Decision log có lý do | TB-11 §2 (+ TB-06 §9.8) |
 | TC-12 | Model chính lỗi giữa task → fallback chain | Agent **GIỮ NGUYÊN vai trò + JD**; task KHÔNG reset; worklog ghi dòng "model switched" | Task tiếp tục đúng trạng thái; worklog có dòng model switched | TB-01 §2 (+ TB-09 §10 E7) |
-| TC-13 | **"task .md thiếu Success Criteria"** (phủ TB-07 decomposition gate) — mission M2 T2: KING DECOMPOSE 2 parts, 1 task .md thiếu trường Success Criteria | **Council ①** (bắt buộc mọi mission — TB-07 §11 Q5) phát hiện thiếu → part KHÔNG được ASSIGN cho tới khi KING bổ đủ Success Criteria (append amendment theo DR-C3, có CHANGELOG entry) | task .md có đủ Success Criteria + entry CHANGELOG amendment TRƯỚC khi ASSIGN; transcript council ① ghi phát hiện thiếu | TB-07 §3 (task template) + DECISION-RECORD v1.3 (TB-12 Q1) |
-| TC-14 | **"worklog thiếu Artifact Map → không giao group kế"** (phủ TB-09 §10 E4 / TB-10) — mission M2 T3: G1 xong part 1 nhưng worklog entry thiếu khối Artifact Map | **Gate handoff (TB-09) chặn — KHÔNG giao group kế**; SIVIL phải bổ sung map (1 map G1 duy nhất — TB-10 §13 Q6) trước khi KING MONITOR pass | worklog part 1 có đủ khối Artifact Map (1 map G1 duy nhất) trước khi part kế ASSIGN; worklog/Decision log ghi lý do chặn | TB-09 §10 E4 + TB-10 §13 Q6 + DECISION-RECORD v1.3 (TB-12 Q1) |
+| TC-13 | **"task .md thiếu Success Criteria"** (phủ TB-07 decomposition gate) — mission M2 T2: NEMESIS DECOMPOSE 2 parts, 1 task .md thiếu trường Success Criteria | **Council ①** (bắt buộc mọi mission — TB-07 §11 Q5) phát hiện thiếu → part KHÔNG được ASSIGN cho tới khi NEMESIS bổ đủ Success Criteria (append amendment theo DR-C3, có CHANGELOG entry) | task .md có đủ Success Criteria + entry CHANGELOG amendment TRƯỚC khi ASSIGN; transcript council ① ghi phát hiện thiếu | TB-07 §3 (task template) + DECISION-RECORD v1.3 (TB-12 Q1) |
+| TC-14 | **"worklog thiếu Artifact Map → không giao group kế"** (phủ TB-09 §10 E4 / TB-10) — mission M2 T3: G1 xong part 1 nhưng worklog entry thiếu khối Artifact Map | **Gate handoff (TB-09) chặn — KHÔNG giao group kế**; SIVIL phải bổ sung map (1 map G1 duy nhất — TB-10 §13 Q6) trước khi NEMESIS MONITOR pass | worklog part 1 có đủ khối Artifact Map (1 map G1 duy nhất) trước khi part kế ASSIGN; worklog/Decision log ghi lý do chặn | TB-09 §10 E4 + TB-10 §13 Q6 + DECISION-RECORD v1.3 (TB-12 Q1) |
 
 > 2 test case bổ sung đợt v1.3 (✅ chốt §7 Q1): `[TB-12 §3.2 ← TB-07 §3 (task template) + DECISION-RECORD v1.3 (TB-12 Q1)]` `[EXT]` (TC-13) · `[TB-12 §3.2 ← TB-09 §10 E4 + TB-10 §13 Q6 + DECISION-RECORD v1.3 (TB-12 Q1)]` `[EXT]` (TC-14).
 
@@ -273,14 +273,14 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 | COMPLEX | 7–9 | TL → G1 → G2 → G3 → TL → **loop mỗi part** | ~4+ bước lặp mỗi part | M1: Submission/Dataset/Docs → User · M2: **PROPOSAL → SELF-DIRECTION** |
 > Cột Output per-tier: tổng hợp `[EXT]` theo TB-02 §5 (routing matrix 9 ô) — nguồn 4549–4551 + 160–166 chỉ tách output theo mission (M1 → User · M2: PROPOSAL → SELF-DIRECTION), không tách theo tier.
 
-**Ví dụ mapping tier (M2 — nguyên văn nguồn):** "Verify 1 config có đúng không" → **Simple** (KING → LISMA → KING) · "Chẩn đoán chat latency cao" → **Medium** (KING → G1 → LISMA → KING) · "Redesign kiến trúc bộ nhớ" → **Complex** (full pipeline + HAN). Chi tiết routing 9 ô + proposal theo tier (1-item / 1-module / multi-item): TB-02 §5. Checkpoint mapping: T1 chỉ CP2 · T2 CP1+CP2 · T3 đủ 3 (dòng 4593).
+**Ví dụ mapping tier (M2 — nguyên văn nguồn):** "Verify 1 config có đúng không" → **Simple** (NEMESIS → LISMA → NEMESIS) · "Chẩn đoán chat latency cao" → **Medium** (NEMESIS → G1 → LISMA → NEMESIS) · "Redesign kiến trúc bộ nhớ" → **Complex** (full pipeline + HAN). Chi tiết routing 9 ô + proposal theo tier (1-item / 1-module / multi-item): TB-02 §5. Checkpoint mapping: T1 chỉ CP2 · T2 CP1+CP2 · T3 đủ 3 (dòng 4593).
 
 ### 5.2 Bảng tóm tắt cuối nguồn (4560–4635)
 
 | Khối | Quy tắc then chốt (nguồn) |
 |---|---|
-| **KING (TL) chiến lược** | Chỉ đọc **Worklog + Artifact Map**, KHÔNG đọc code (trừ ESCALATE / verify claim thiếu evidence); Research Loop Controller; M2: phân loại mission + tổng hợp Proposal + route SELF-DIRECTION; chủ trì Research Council; KB ghi NGAY |
-| **SIVIL (G1)** | Sub-agent pool **5–300** parallel exploration; M2: dispatch theo Module Map; SYNTHESIZE → chọn top-K cho BELI; council với KING; ghi KB trực tiếp |
+| **NEMESIS (TL) chiến lược** | Chỉ đọc **Worklog + Artifact Map**, KHÔNG đọc code (trừ ESCALATE / verify claim thiếu evidence); Research Loop Controller; M2: phân loại mission + tổng hợp Proposal + route SELF-DIRECTION; chủ trì Research Council; KB ghi NGAY |
+| **SIVIL (G1)** | Sub-agent pool **5–300** parallel exploration; M2: dispatch theo Module Map; SYNTHESIZE → chọn top-K cho BELI; council với NEMESIS; ghi KB trực tiếp |
 | **BELI (G1 Coder)** | Code lượt đầu theo spec — nhanh, structure tốt, đúng spec; M2: research report + **POC trong Workspace** (bản clone — không đụng Live System) |
 | **LISMA (G2) chiến lược** | Vòng Đọc → Tìm → Sửa → Kiểm tra → Lặp đến sạch (kể cả regression do fix trước); đọc theo **Leakage/Bug Locations (M1) / Suspect Locations (M2)** — selective, safety-first; Priority #1 = Data Leakage (M1) / **System Safety (M2)** |
 | **HAN (G3) chiến lược** | Self-evolving qua KB; đọc theo **Metric Impact Chain (M1) / Impact Chain (M2)** — wider, metric-driven; Priority #1 = Metric Improvement (M1) / **System Leverage (M2)**; M2: Architecture Proposer + KB Curator |
@@ -288,7 +288,7 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 | **Quy tắc Artifact Map** | Mỗi G PHẢI **ghi Map khi xong + đọc Map khi bắt đầu**; artifact mới → update Map ngay; format M1 `artifact:type:metric_impact` · M2 `file:type:relevance:status`; dynamic chain M2: source_code → analysis_report → findings → proposal → POC |
 | **Model Policy** | Kimi-k3 chính — mọi agent, mọi sub-agent; fallback DeepSeek v4 Pro → DeepSeek v4 Flash → MiniMax-M3; agent giữ vai trò + JD khi fallback; **phân vai theo JD + Instructions (role-based) — KHÔNG theo model**; **tên agent ≠ tên model** |
 | **Proposal → SELF-DIRECTION** | Schema 8 trường; Verification Plan (a) tay NGAY + (b) DEFERRED; vòng đời DRAFT → SUBMITTED → APPROVED/REJECTED/REVISED; người duyệt = user HOẶC agents ủy quyền; **quy tắc vàng: M2 KHÔNG sửa Live System** — mọi thay đổi sống trong Workspace + Proposal, áp sau APPROVED |
-| **Knowledge Capture** | Phát hiện hay → ghi KB **NGAY trong cùng phiên**; quyền ghi trực tiếp: KING (MONITOR/DECIDE/FINALIZE), SIVIL (SYNTHESIZE), HAN (G3 + Curator); BELI/LISMA đề xuất qua "KB Candidates"; Research Council 4 thời điểm; KB Write Protocol 4 bước (SEARCH → FORMAT → WRITE → CURATE); tri thức không mất kể cả tier không qua G3 |
+| **Knowledge Capture** | Phát hiện hay → ghi KB **NGAY trong cùng phiên**; quyền ghi trực tiếp: NEMESIS (MONITOR/DECIDE/FINALIZE), SIVIL (SYNTHESIZE), HAN (G3 + Curator); BELI/LISMA đề xuất qua "KB Candidates"; Research Council 4 thời điểm; KB Write Protocol 4 bước (SEARCH → FORMAT → WRITE → CURATE); tri thức không mất kể cả tier không qua G3 |
 
 ---
 
@@ -296,7 +296,7 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 
 - [ ] **AC1.** PB-M1 đủ 6 phase, mỗi phase nêu tier/parts/checkpoint/output (bảng §1.1); mission/group được gắn cấp section caption/§1.2 (mission M1 ở caption §1.1, hoạt động từng group ở §1.2 từng phase) — truy vết được về nguồn 4346–4425 (P1–P3) và 2443–2501 (P4–P6, có đánh dấu "suy từ").
 - [ ] **AC2.** PB-M1 có case chen ngang tier SIMPLE giữa pipeline COMPLEX, thể hiện nguyên tắc "không gián đoạn" (dòng 4424).
-- [ ] **AC3.** PB-M2 giữ nguyên đủ số liệu thật: 121s khi 401 · 6.2s baseline · 3 root causes · options A/B/C (khuyến nghị A+B) · p95 < 10s · 3 checkpoint KING · 4 parts · 6 SA.
+- [ ] **AC3.** PB-M2 giữ nguyên đủ số liệu thật: 121s khi 401 · 6.2s baseline · 3 root causes · options A/B/C (khuyến nghị A+B) · p95 < 10s · 3 checkpoint NEMESIS · 4 parts · 6 SA.
 - [ ] **AC4.** PB-M2 thể hiện quy tắc vàng: toàn mission KHÔNG sửa file TMO — output duy nhất là Proposal; áp Workspace → Live là thao tác riêng sau APPROVED (dòng 4511).
 - [ ] **AC5.** PB-M2 Verification Plan đủ (a) kiểm chứng tay NGAY + (b) benchmark DEFERRED (p50/p95 · acceptance p95 < 10s).
 - [ ] **AC6.** 18 TC đủ 5 cột (ID · kịch bản · kỳ vọng · verify · tham chiếu — gồm TC-13/TC-14 thêm v1.3 + TC-15→TC-18 thêm v1.5 theo TB-14); không TC nào tham chiếu section không tồn tại trong blueprint tương ứng.
@@ -305,7 +305,7 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 - [ ] **AC9.** Bảng 3-tier + mapping M2 trùng khớp nguồn 4515–4558 (điểm, đường đi, 3 ví dụ mapping nguyên văn).
 - [ ] **AC10.** Không mâu thuẫn quy ước TB-00 §1: 5 agent đúng tên vai trò; model stack chỉ xuất hiện trong context Model Policy; Live System chỉ đọc / Workspace mới được sửa.
 - [ ] **AC11.** Test case dạng bảng giấy — không yêu cầu chạy code; đủ chi tiết để chuyển thành kịch bản runtime khi triển khai.
-- [ ] **AC12.** Bảng tóm tắt §5.2 phản ánh đủ 10 khối cuối nguồn (KING/SIVIL/BELI/LISMA/HAN + RWV + Artifact Map + Model + Proposal + KB) không bỏ quy tắc vàng nào.
+- [ ] **AC12.** Bảng tóm tắt §5.2 phản ánh đủ 10 khối cuối nguồn (NEMESIS/SIVIL/BELI/LISMA/HAN + RWV + Artifact Map + Model + Proposal + KB) không bỏ quy tắc vàng nào.
 
 ---
 
@@ -316,7 +316,7 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 | Q1 | TB-07 (decompose) + TB-10 (Artifact Map) chưa có TC riêng — chỉ phủ qua playbook. Có nên thêm TC-13+ ("task .md thiếu Success Criteria" / "Map thiếu → không giao group kế" theo TB-09 §10 E4) ở đợt mở rộng? | TB-07 §6, TB-10 §10 | **CÓ — TC-13 + TC-14 đã thêm ngay đợt v1.3** (xem §3.2) |
 | Q2 | PB-M2 không có mốc thời gian thật trong nguồn (chỉ M1 có "7 ngày") — khi chạy thật cần log chuẩn TB-09 §4; có cần dựng "golden run" mẫu không? | TB-09 §4 | **CÓ** — dựng golden-run PB-M2 từ log mission M2 thật đầu tiên, chuẩn hóa schema TB-09 §4; lưu làm artifact đối chiếu E2E |
 | Q3 | TC-02 phụ thuộc [Q] TB-02 §5 / TB-11 §5 E2 — ngưỡng "mission verify thuần túy" không sinh Proposal cần user chốt trước khi freeze tập | TB-02 §5, TB-11 §7 Q1 | **ĐÃ GIẢI** (✅ DR-C1) — tập test case freeze được |
-| Q4 | "Agent được ủy quyền" phê duyệt Proposal là ai (KING bị cấm tự duyệt — TB-06 §9.8)? Cần user chỉ định khi triển khai SELF-DIRECTION | TB-11 §7 Q2 | ✅ **DR-C5** — deputy = **SIVIL mặc định / HAN cho KB-domain**; không author, KING cấm tự duyệt, có thời hạn |
+| Q4 | "Agent được ủy quyền" phê duyệt Proposal là ai (NEMESIS bị cấm tự duyệt — TB-06 §9.8)? Cần user chỉ định khi triển khai SELF-DIRECTION | TB-11 §7 Q2 | ✅ **DR-C5** — deputy = **SIVIL mặc định / HAN cho KB-domain**; không author, NEMESIS cấm tự duyệt, có thời hạn |
 
 ---
 
@@ -325,7 +325,7 @@ Minh họa 2 điều: mapping tier M2 của nguồn ("Verify 1 config có đúng
 | Nguồn (dòng) | Nội dung nguồn | Section TB-12 |
 |---|---|---|
 | 4346–4364 | Ví dụ M1 — Phase 1 Khởi động (CLASSIFY + chấm 8 + 4 parts) | §1.1, §1.2 P1 |
-| 4366–4396 | Phase 1 Part 1 EDA — 5 SA + G2 + G3 + KING chốt | §1.2 P2 |
+| 4366–4396 | Phase 1 Part 1 EDA — 5 SA + G2 + G3 + NEMESIS chốt | §1.2 P2 |
 | 4398–4411 | Phase 2 Part 2 FE — 4 group + "G2 → G3 → TL như trên" | §1.2 P3 |
 | 4413–4424 | Bug nhỏ chen ngang SIMPLE + "chen ngang không gián đoạn" | §1.2 P3 |
 | 2443–2501 | Competition Summary — timeline/results/decisions/lessons | §1.1, §1.2 P4–P6 |

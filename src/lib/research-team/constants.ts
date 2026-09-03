@@ -14,7 +14,7 @@
 // ============================================================
 
 export const AGENT_ID = {
-  KING: 'KING',
+  NEMESIS: 'NEMESIS',
   SIVIL: 'SIVIL',
   BELI: 'BELI',
   LISMA: 'LISMA',
@@ -30,14 +30,14 @@ export interface AgentRosterEntry {
   /** JD 1 câu (TB-01 §4 Runtime Identity Card) */
   jd: string
   /** Đường ESCALATE (TB-01 §4) */
-  escalateTo: 'USER' | 'KING' | 'SIVIL'
+  escalateTo: 'USER' | 'NEMESIS' | 'SIVIL'
   /** Ai được ghi trực tiếp KB (TB-08; BELI/LISMA chỉ đề xuất qua KB Candidates) */
   directKbWrite: boolean
 }
 
 export const RESEARCH_ROSTER: readonly AgentRosterEntry[] = [
   {
-    id: 'KING',
+    id: 'NEMESIS',
     position: 'TL',
     jd: 'Phân loại mission, chia nhỏ bài toán, kiểm soát chặt — không code',
     escalateTo: 'USER',
@@ -47,7 +47,7 @@ export const RESEARCH_ROSTER: readonly AgentRosterEntry[] = [
     id: 'SIVIL',
     position: 'G1',
     jd: 'Biến 1 task thành N hướng explore song song (5–300 sub-agents)',
-    escalateTo: 'KING',
+    escalateTo: 'NEMESIS',
     directKbWrite: true,
   },
   {
@@ -61,14 +61,14 @@ export const RESEARCH_ROSTER: readonly AgentRosterEntry[] = [
     id: 'LISMA',
     position: 'G2',
     jd: 'Review–tìm–fix lặp đến sạch bug (M1) / System Diagnostician root cause (M2)',
-    escalateTo: 'KING',
+    escalateTo: 'NEMESIS',
     directKbWrite: false,
   },
   {
     id: 'HAN',
     position: 'G3',
     jd: 'Tối ưu + self-evolving qua KB (M1) / Architecture Proposer + tối ưu perf (M2) — kiêm KB Curator',
-    escalateTo: 'KING',
+    escalateTo: 'NEMESIS',
     directKbWrite: true,
   },
 ] as const
@@ -144,7 +144,7 @@ export const SUB_AGENT_LIMITS = {
   perG1Round: 25,
 } as const
 
-/** LISMA vòng fix: tối đa 3 — quá → ESCALATE KING (TB-01 §1 JD) */
+/** LISMA vòng fix: tối đa 3 — quá → ESCALATE NEMESIS (TB-01 §1 JD) */
 export const G2_MAX_FIX_ROUNDS = 3
 
 /** KB curate kép: 3 mốc phase 1→2→3 (DR-C6) */
@@ -193,7 +193,7 @@ export const RESEARCH_MODULE_REGISTRY: readonly ModuleRegistryEntry[] = [
   { path: 'src/lib/research-team/g2/', phase: 'P3', spec: 'TB-04' },
   // P4 — G3 + KB
   { path: 'src/lib/research-team/g3/', phase: 'P4', spec: 'TB-05 + TB-08' },
-  // P5 — KING
+  // P5 — NEMESIS
   { path: 'src/lib/research-team/king/', phase: 'P5', spec: 'TB-06 + TB-07' },
   // P6 — Handoff + Proposal
   { path: 'src/lib/research-team/handoff.ts', phase: 'P6', spec: 'TB-09' },

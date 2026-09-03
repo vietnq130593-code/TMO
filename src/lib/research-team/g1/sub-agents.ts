@@ -5,7 +5,7 @@
  *  - TB-03 §5.1 — Bảng số sub-agents theo loại task (5–300 / 5–15 / 5–15 ...).
  *  - TB-03 §5.2 — Chiến lược batch (Sequential / Parallel / Hybrid).
  *  - TB-03 §5.3 — SA conflict resolution protocol: 2 SA cùng chủ đề trái ngược →
- *    điều tra bắt buộc; không giải thích được → ESCALATE KING kèm 2 interpretation.
+ *    điều tra bắt buộc; không giải thích được → ESCALATE NEMESIS kèm 2 interpretation.
  *  - TB-03 §5.4 — Stop conditions (S1–S5) + batch cap ≤ 25/round (TB-01 §2 Q1).
  *  - constants.ts SUB_AGENT_LIMITS = { perPart: 20, perG1Round: 25 }.
  *
@@ -336,7 +336,7 @@ export interface ConflictDetectionResult {
  *  - Nếu result có cùng chủ đề (overlap keyword ≥ 30%) + chứa cặp đối lập → conflict.
  *
  * HEURISTIC là tiền-chẩn-đoán (TB-03 §6.3) — engine.ts sẽ ESCALATE nếu không giải
- * thích được; không tự xử lý (TB-03 §5.3 3B: SIVIL flag, KING quyết).
+ * thích được; không tự xử lý (TB-03 §5.3 3B: SIVIL flag, NEMESIS quyết).
  *
  * Note: KHÔNG cần NLP phức tạp — keyword match đủ cho gate TC-03 (tabletop test).
  */
@@ -399,7 +399,10 @@ function detectConflictPair(a: SubAgent, b: SubAgent): string | null {
     const bPos = posGroup.some((w) => tb.includes(w))
 
     // 1 SA nói "nên" + 1 SA nói "không nên" → conflict
-    if ((aPos && bNeg && !aNeg) || (aNeg && bPos && !bPos)) {
+    // FIX (Task 19 audit A#4): nhánh 2 cũ `aNeg && bPos && !bPos` = mâu thuẫn
+    // logic (bPos && !bPos luôn false) — mất nửa chiều conflict (a âm, b dương)
+    // → TC-03 gate mù. Đúng phải là `!bNeg` (b thuần dương) mirror nhánh 1.
+    if ((aPos && bNeg && !aNeg) || (aNeg && bPos && !bNeg)) {
       const aWord = aPos ? posGroup.find((w) => ta.includes(w)) : negGroup.find((w) => ta.includes(w))
       const bWord = bNeg ? negGroup.find((w) => tb.includes(w)) : posGroup.find((w) => tb.includes(w))
       return (

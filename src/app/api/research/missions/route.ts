@@ -123,7 +123,7 @@ export async function POST(req: NextRequest) {
       initialDecisionLog: [
         {
           at: new Date().toISOString(),
-          agent: 'KING',
+          agent: 'NEMESIS',
           decision: 'RESEARCH',
           reason: `Classified as ${classify.missionType}${
             classify.tier ? `/${classify.tier}` : '/?'

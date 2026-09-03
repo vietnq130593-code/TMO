@@ -3,14 +3,14 @@
  * =================================================================================
  * Spec:
  *  - TB-08 §2 — Bảng quyền ghi KB 5 agents:
- *      KING/SIVIL/HAN — ghi trực tiếp (directKbWrite=true).
+ *      NEMESIS/SIVIL/HAN — ghi trực tiếp (directKbWrite=true).
  *      BELI/LISMA — đề xuất qua "KB Candidates" (TB-08 §8 pre-approval).
  *  - TB-08 §7 quy tắc vàng #2 — Mọi tier đều capture: T1/T2 không qua G3 →
- *      KING ghi tại MONITOR + FINALIZE (không để tri thức thất lạc).
- *  - TB-08 §8 — Flow "KB Candidates": BELI/LISMA → 3 cổng duyệt (KING/SIVIL/HAN)
+ *      NEMESIS ghi tại MONITOR + FINALIZE (không để tri thức thất lạc).
+ *  - TB-08 §8 — Flow "KB Candidates": BELI/LISMA → 3 cổng duyệt (NEMESIS/SIVIL/HAN)
  *      → GHI (promote phase=1) / BỎ (retire) / YÊU CẦU BỔ SUNG EVIDENCE.
  *  - TB-12 §3.2 TC-08 — Task tier SIMPLE (M1/M2) không qua G3 → tri thức vẫn vào
- *      KB: KING ghi tại MONITOR + FINALIZE. Worklog FINALIZE có KB capture.
+ *      KB: NEMESIS ghi tại MONITOR + FINALIZE. Worklog FINALIZE có KB capture.
  *  - TB-12 §3.2 TC-05 — KB cold-start seed (ensureColdStart wrapper cho kb-store.seedKB).
  *
  * Bất biến:
@@ -37,6 +37,7 @@ import {
   seedKB,
   exportSnapshot,
   retireEntry,
+  queryKB,
   type KBEntryInput,
 } from './kb-store'
 
@@ -46,7 +47,7 @@ import {
 
 /** Result captureAtMonitor — TB-08 §2 + §7 quy tắc #2. */
 export interface CaptureAtMonitorResult {
-  /** KB entry IDs đã persist (HAN/KING/SIVIL direct writes). */
+  /** KB entry IDs đã persist (HAN/NEMESIS/SIVIL direct writes). */
   captured: string[]
   /** KB Candidate IDs từ BELI/LISMA (đợi pre-approval — TB-08 §8). */
   kbCandidates: string[]
@@ -75,17 +76,42 @@ export interface PreApprovalResult {
 /**
  * Capture tại pha MONITOR — TB-08 §7 quy tắc vàng #2:
  *  - Mọi tier (T1/T2/T3) đều capture — đặc biệt T1/T2 không qua G3 (nguồn 2343).
- *  - KING/SIVIL/HAN ghi trực tiếp (directKbWrite=true).
+ *  - NEMESIS/SIVIL/HAN ghi trực tiếp (directKbWrite=true).
  *  - BELI/LISMA đề xuất qua KB Candidates (TB-08 §8 flow).
  *
  * Parse worklog.done/findings/metrics → sinh KB entries (lesson/baseline/pattern)
  * + KB candidates (BELI/LISMA suggestions chờ pre-approval).
  *
- * TB-08 §4 KB Write Protocol: SEARCH (caller check existing) → FORMAT → WRITE.
- * Hàm này lo FORMAT + WRITE; SEARCH caller làm trước (nhẹ — queryKB).
+ * TB-08 §4 KB Write Protocol: SEARCH (isDuplicateKbTitle — bên trong) → FORMAT →
+ * WRITE. FIX Task 19: SEARCH giờ chạy ngay trong hàm (caller trước đây không
+ * hề SEARCH → KB flooding trùng lặp).
  *
  * Fail-open: parse/persist error → KHÔNG throw, bỏ qua entry lỗi (chỉ log).
  */
+/**
+ * FIX (Task 19 audit B#5 — TB-08 §4 SEARCH step): dedup trước khi addEntry.
+ * captureAtMonitor trước đây chỉ FORMAT → WRITE (comment tự nhận "SEARCH caller
+ * làm trước" nhưng NEMESIS MONITOR không hề SEARCH) → mỗi lần monitor re-insert
+ * cùng lessons của 10 worklog mới nhất → KB phình vô hạn trùng lặp.
+ * Dedup: query KB theo title (LIKE) + so khớp title EXACT (case-insensitive).
+ */
+async function isDuplicateKbTitle(title: string, category: string): Promise<boolean> {
+  try {
+    const needle = title.slice(0, 60).trim()
+    if (!needle) return false
+    const existing = await queryKB({
+      category,
+      search: needle,
+      limit: 20,
+      includeRetired: true, // DUPLICATE retire rồi vẫn tính trùng (TB-05 §6.3)
+    })
+    const t = title.trim().toLowerCase()
+    return existing.some((e) => (e.title || '').trim().toLowerCase() === t)
+  } catch {
+    return false // SEARCH fail-open — không chặn capture
+  }
+}
+
 export async function captureAtMonitor(
   missionId: string,
   taskId: string,
@@ -96,15 +122,16 @@ export async function captureAtMonitor(
   const captured: string[] = []
   const kbCandidates: string[] = []
 
-  // 1. Extract lesson candidates từ worklog (KING ghi trực tiếp)
+  // 1. Extract lesson candidates từ worklog (NEMESIS ghi trực tiếp)
   const lessonCandidates = extractLessonsFromWorklog(worklog)
   for (const c of lessonCandidates) {
     try {
+      if (await isDuplicateKbTitle(c.title, c.category)) continue // TB-08 §4 SEARCH — dedup
       const { id } = await addEntry(
         {
           category: c.category,
           title: c.title,
-          content: `${c.content}\nSource: KING (MONITOR capture — TB-08 §2).\nMission: ${missionType}.\nTier: ${tier}.\nTaskId: ${taskId}.`,
+          content: `${c.content}\nSource: NEMESIS (MONITOR capture — TB-08 §2).\nMission: ${missionType}.\nTier: ${tier}.\nTaskId: ${taskId}.`,
           sourceMission: missionId,
         },
         1, // phase=1 NEW — chờ HAN curate
@@ -122,11 +149,12 @@ export async function captureAtMonitor(
   const baselineCandidates = extractBaselinesFromMetrics(worklog, missionType)
   for (const b of baselineCandidates) {
     try {
+      if (await isDuplicateKbTitle(b.title, 'baseline')) continue // TB-08 §4 SEARCH — dedup
       const { id } = await addEntry(
         {
           category: 'baseline',
           title: b.title,
-          content: `${b.content}\nSource: KING (MONITOR capture — TB-08 §2).\nMission: ${missionType}.\nTier: ${tier}.\nTaskId: ${taskId}.`,
+          content: `${b.content}\nSource: NEMESIS (MONITOR capture — TB-08 §2).\nMission: ${missionType}.\nTier: ${tier}.\nTaskId: ${taskId}.`,
           sourceMission: missionId,
         },
         1,
@@ -144,11 +172,12 @@ export async function captureAtMonitor(
   const patternCandidates = extractPatternsFromFindings(worklog, missionType)
   for (const p of patternCandidates) {
     try {
+      if (await isDuplicateKbTitle(p.title, 'pattern')) continue // TB-08 §4 SEARCH — dedup
       const { id } = await addEntry(
         {
           category: 'pattern',
           title: p.title,
-          content: `${p.content}\nSource: KING (MONITOR capture — TB-08 §2).\nMission: ${missionType}.\nTier: ${tier}.\nTaskId: ${taskId}.`,
+          content: `${p.content}\nSource: NEMESIS (MONITOR capture — TB-08 §2).\nMission: ${missionType}.\nTier: ${tier}.\nTaskId: ${taskId}.`,
           sourceMission: missionId,
         },
         1,
@@ -163,7 +192,7 @@ export async function captureAtMonitor(
   }
 
   // 4. BELI/LISMA KB Candidates — worklog.kbCandidates đã có (TB-09 §4)
-  // Caller (KING/SIVIL/HAN) duyệt sau qua preApprovalRetire.
+  // Caller (NEMESIS/SIVIL/HAN) duyệt sau qua preApprovalRetire.
   if (worklog.kbCandidates && Array.isArray(worklog.kbCandidates)) {
     for (const candidateId of worklog.kbCandidates) {
       if (typeof candidateId === 'string' && candidateId.length > 0) {
@@ -202,7 +231,7 @@ export async function captureAtFinalize(
         {
           category: l.category,
           title: l.title,
-          content: `${l.content}\nSource: KING (FINALIZE capture — TB-08 §7).\nMission: ${missionType}.\nTier: ${tier}.`,
+          content: `${l.content}\nSource: NEMESIS (FINALIZE capture — TB-08 §7).\nMission: ${missionType}.\nTier: ${tier}.`,
           sourceMission: missionId,
         },
         1, // phase=1 NEW
@@ -242,9 +271,9 @@ export async function captureAtFinalize(
  *  - approved=false → retire (soft-delete — DR-C6) với lý do + approver.
  *
  * DECISION-RECORD v1.3 Q4 — PRE-APPROVAL (chặt hơn):
- *  - HAN KHÔNG tự retire entries do KING/SIVIL ghi khi chưa được duyệt.
- *  - KING duyệt tại CP3 TRƯỚC khi retire có hiệu lực.
- *  - KING tự retire được (kèm Decision Log).
+ *  - HAN KHÔNG tự retire entries do NEMESIS/SIVIL ghi khi chưa được duyệt.
+ *  - NEMESIS duyệt tại CP3 TRƯỚC khi retire có hiệu lực.
+ *  - NEMESIS tự retire được (kèm Decision Log).
  *
  * Append-only audit: mọi thao tác ghi note vào content (KHÔNG rewrite — DR-C3).
  *
@@ -253,7 +282,7 @@ export async function captureAtFinalize(
 export async function preApprovalRetire(
   kbCandidateId: string,
   approved: boolean,
-  approver: 'KING' | 'HAN',
+  approver: 'NEMESIS' | 'HAN',
   reason: string,
 ): Promise<PreApprovalResult> {
   // Fetch entry
@@ -327,19 +356,14 @@ export function extractLessonsFromWorklog(worklog: WorklogEntry): LessonCandidat
     for (const d of worklog.done) {
       if (typeof d !== 'string' || d.trim().length === 0) continue
       // Heuristic: dòng có "lesson:" / "insight:" prefix → high-quality
-      const isLesson = /lesson|insight|pattern|learn/i.test(d)
+      // FIX (Task 19 audit B#5): bỏ nhánh "done[] item dài > 30 ký tự → lesson"
+      // (biến mọi progress text thành KB entry — flooding + noise).
+      const isLesson = /lesson|insight|pattern|learn|bài học|học được|rút ra/i.test(d)
       if (isLesson) {
         candidates.push({
           category: 'lesson',
           title: truncate(d.replace(/^(lesson|insight):\s*/i, ''), 100),
           content: `Insight: ${d}\nEvidence: worklog.done[] (task ${worklog.taskId ?? '(unknown)'}).`,
-        })
-      } else if (d.length > 30) {
-        // Generic done item → lesson (MEDIUM confidence)
-        candidates.push({
-          category: 'lesson',
-          title: truncate(d, 100),
-          content: `Insight: ${d}\nEvidence: worklog.done[] (task ${worklog.taskId ?? '(unknown)'}).\nConfidence: MEDIUM.`,
         })
       }
     }
@@ -451,7 +475,7 @@ function extractLessonsFromFinalReport(
       candidates.push({
         category: 'lesson',
         title: truncate(text, 100),
-        content: `Insight: ${text}\nEvidence: final report (mission ${missionType}).\nSource: KING (FINALIZE capture).`,
+        content: `Insight: ${text}\nEvidence: final report (mission ${missionType}).\nSource: NEMESIS (FINALIZE capture).`,
       })
     }
   }
@@ -468,7 +492,7 @@ function extractLessonsFromFinalReport(
       candidates.push({
         category: 'anti-pattern',
         title: truncate(text, 100),
-        content: `Anti-Pattern: ${text}\nEvidence: final report (mission ${missionType}).\nSource: KING (FINALIZE capture).`,
+        content: `Anti-Pattern: ${text}\nEvidence: final report (mission ${missionType}).\nSource: NEMESIS (FINALIZE capture).`,
       })
     }
   }

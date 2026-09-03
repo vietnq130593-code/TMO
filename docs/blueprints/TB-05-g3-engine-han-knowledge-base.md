@@ -15,19 +15,19 @@
 `[TB-05 §0 ← template TB-00 §4]` `[EXT]`
 
 - **Mục đích:** biến section G3 của nguồn (~599 dòng) thành blueprint vận hành cho engine HAN trên cả 2 nhiệm vụ — **M1** (Kaggle: Optimizer + Learner, 5 lĩnh vực tối ưu) và **M2** (System Research TMO: Architecture Proposer, 5 lĩnh vực hệ thống, mỗi vòng sinh 1 Proposal Item kèm Verification Plan deferred); đồng thời đặc tả **TEAM KNOWLEDGE BASE (KB)** — tài sản chung của team mà HAN kiêm **Curator** (consolidate/dedup/retire).
-- **Đối tượng đọc:** (1) kỹ sư triển khai G3 engine + KB store vào TMO; (2) chính HAN — dùng JD + Instructions + KB Write/Curate protocol làm runtime briefing; (3) KING — verify Checkpoint CP3 (sau G3), tiêu thụ recommendations; (4) user — review từng phần (1 file = 1 review unit = 1 milestone).
+- **Đối tượng đọc:** (1) kỹ sư triển khai G3 engine + KB store vào TMO; (2) chính HAN — dùng JD + Instructions + KB Write/Curate protocol làm runtime briefing; (3) NEMESIS — verify Checkpoint CP3 (sau G3), tiêu thụ recommendations; (4) user — review từng phần (1 file = 1 review unit = 1 milestone).
 
 - **Phạm vi (bao gồm):** JD + Instructions đầy đủ HAN · optimization priority Data/System Safety → Performance → Code Quality · vòng 3 phases ANALYZE → OPTIMIZE → EVOLVE · Self-Evolving Engine (APPLY → EXPERIMENT → MEASURE → LEARN → REPEAT) · 5 lĩnh vực tối ưu M1 + 5 lĩnh vực tối ưu M2 · cấu trúc đầy đủ TEAM KNOWLEDGE BASE (9 categories) · Curator duty (consolidate/dedup/retire) · KB Interface (READ/WRITE/schema) · state machine vòng G3 · error & edge cases · acceptance criteria.
-- **Phạm vi (KHÔNG bao gồm):** G1 SIVIL/BELI + sub-agents → TB-03 · G2 LISMA review/fix loop → TB-04 · KING 7 nhiệm vụ + Research Council (4 thời điểm) → TB-06 · Knowledge Capture protocol toàn team (3 lỗ hổng thiết kế cũ, nội dung council, 5 quy tắc vàng) → TB-08 (TB-05 chỉ **tiêu thụ**: bảng quyền ghi KB, KB Write Protocol, KB Entry Schema) · Worklog schema chuẩn + Handoff flow → TB-09 · Artifact Map chi tiết → TB-10 (TB-05 chỉ tiêu thụ chiến lược đọc Metric Impact Chain / Impact Chain) · Proposal Schema 8 trường + vòng đời + SELF-DIRECTION → TB-11 (TB-05 sinh **proposal items** — hạt của Proposal) · mã nguồn TMO, hạ tầng PM2/Qdrant/Neo4j — dừng ở ranh giới "runtime contract".
+- **Phạm vi (KHÔNG bao gồm):** G1 SIVIL/BELI + sub-agents → TB-03 · G2 LISMA review/fix loop → TB-04 · NEMESIS 7 nhiệm vụ + Research Council (4 thời điểm) → TB-06 · Knowledge Capture protocol toàn team (3 lỗ hổng thiết kế cũ, nội dung council, 5 quy tắc vàng) → TB-08 (TB-05 chỉ **tiêu thụ**: bảng quyền ghi KB, KB Write Protocol, KB Entry Schema) · Worklog schema chuẩn + Handoff flow → TB-09 · Artifact Map chi tiết → TB-10 (TB-05 chỉ tiêu thụ chiến lược đọc Metric Impact Chain / Impact Chain) · Proposal Schema 8 trường + vòng đời + SELF-DIRECTION → TB-11 (TB-05 sinh **proposal items** — hạt của Proposal) · mã nguồn TMO, hạ tầng PM2/Qdrant/Neo4j — dừng ở ranh giới "runtime contract".
 
 | File liên quan | Quan hệ với TB-05 |
 |---|---|
 | TB-00 | Chuẩn toàn tập: ID (KB-YYYYMMDD-NNN), danh tính agent, model stack, traceability |
 | TB-03 / TB-04 | Input của G3 = output G2 (LISMA verified code/report + suggestions + concerns); KB Candidates của BELI/LISMA nằm trong worklog G1/G2 |
-| TB-06 | KING verify CP3 sau G3; DECIDE tiêu thụ recommendations; ESCALATE đích của G3 |
+| TB-06 | NEMESIS verify CP3 sau G3; DECIDE tiêu thụ recommendations; ESCALATE đích của G3 |
 | TB-08 | Knowledge Capture protocol — quyền ghi KB, Research Council, 5 quy tắc vàng (TB-05 dùng bảng + protocol của nó) |
 | TB-09 / TB-10 | Worklog schema G3 + G3 chiến lược đọc (Metric Impact Chain / Impact Chain) |
-| TB-11 | Proposal items của HAN là input cho Proposal Schema tổng hợp bởi KING |
+| TB-11 | Proposal items của HAN là input cho Proposal Schema tổng hợp bởi NEMESIS |
 | TB-12 | E2E playbooks đối soát (G3 = group 3 — chỉ chạy ở pipeline T3/COMPLEX, bước 4; T1/T2 không qua G3 — nguồn 3203–3211, 3229) |
 
 ---
@@ -52,7 +52,7 @@
 | 1 | **ANALYZE** | Đọc G2 output + Knowledge Base |
 | 2 | **OPTIMIZE** | Theo priority: Data/System Safety → Performance → Code Quality |
 | 3 | **EVOLVE** | Ghi lessons + anti-patterns vào Knowledge Base qua mỗi vòng |
-| 4 | **CURATE** | Consolidate + dedup các KB entries do KING/SIVIL ghi (chu trình G3 gần nhất) |
+| 4 | **CURATE** | Consolidate + dedup các KB entries do NEMESIS/SIVIL ghi (chu trình G3 gần nhất) |
 | 5 | **(M2) PROPOSE** | Sinh PROPOSAL ITEM kèm Verification Plan |
 
 **Deliverables `[SRC dòng 1134]`:**
@@ -60,10 +60,10 @@
 ```
 - Optimized code (M1) / Proposal items (M2)
 - Updated Knowledge Base (đã curate — gồm entries từ cả team)
-- Recommendations cho TL (KING)
+- Recommendations cho TL (NEMESIS)
 ```
 
-> ✗ M2 **KHÔNG** có deliverable "upgraded system" — HAN sinh proposal items (kèm Verification Plan deferred), KING tổng hợp thành Proposal, route SELF-DIRECTION. Áp lên Live System chỉ sau **APPROVED**.
+> ✗ M2 **KHÔNG** có deliverable "upgraded system" — HAN sinh proposal items (kèm Verification Plan deferred), NEMESIS tổng hợp thành Proposal, route SELF-DIRECTION. Áp lên Live System chỉ sau **APPROVED**.
 
 ### 1.2 📜 Instructions — HAN (đầy đủ, dùng làm runtime briefing)
 
@@ -74,16 +74,16 @@
 > - **Ghi lesson mới sau mỗi vòng** (EVOLVE).
 > - Đọc theo **Metric Impact Chain** (M1) / **Impact Chain** (M2) — xem §1.4.
 > - **Sinh Verification Plan (deferred)** cho mọi proposal M2.
-> - **Curate KB entries do KING/SIVIL ghi** (dedup/merge/retire).
+> - **Curate KB entries do NEMESIS/SIVIL ghi** (dedup/merge/retire).
 
 > **KHÔNG BAO GIỜ:**
 > - **Tối ưu khi Data/System Safety chưa pass** — Priority #1 luôn được verify trước.
-> - **Thay đổi approach mà không báo KING.**
+> - **Thay đổi approach mà không báo NEMESIS.**
 > - **(M2) Apply thay đổi trực tiếp lên Live System** — POC/thử nghiệm chỉ chạy trong **Workspace**.
 
 > **Input contract:** G2 output (verified code/report + suggestions + concerns) + Knowledge Base.
 >
-> **Output contract:** Optimized code/Proposal items + updated KB + recommendations → **KING**.
+> **Output contract:** Optimized code/Proposal items + updated KB + recommendations → **NEMESIS**.
 >
 > **ESCALATE lên TL khi:** approach sai fundamental / overfitting không sửa được trong scope G3.
 >
@@ -133,7 +133,7 @@
 
 **Chuỗi đọc M2 — Impact Chain:** đọc theo chuỗi **component → dependencies → user-facing effect** để tìm **điểm đòn bẩy** (system leverage) — ví dụ: key pool → LLM calls → user latency (§4.3).
 
-**Runtime contract (model stack)** `[EXT theo TB-01 §2]`: HAN chạy model chính Kimi-k3; fallback DeepSeek v4 Pro → DeepSeek v4 Flash → MiniMax-M3; khi fallback, HAN GIỮ NGUYÊN vai trò + JD (role-based — same brain, different briefing), ghi dòng `model switched` vào worklog; cả 4 bậc lỗi → BLOCKED và báo KING.
+**Runtime contract (model stack)** `[EXT theo TB-01 §2]`: HAN chạy model chính Kimi-k3; fallback DeepSeek v4 Pro → DeepSeek v4 Flash → MiniMax-M3; khi fallback, HAN GIỮ NGUYÊN vai trò + JD (role-based — same brain, different briefing), ghi dòng `model switched` vào worklog; cả 4 bậc lỗi → BLOCKED và báo NEMESIS.
 
 ---
 
@@ -170,7 +170,7 @@ Phase 1: ANALYZE
 └────────────────────────────────────────────────┘
 ```
 
-Lưu ý runtime `[EXT]`: mục "G2 concerns (TL có xác nhận không?)" — nếu concern chưa được KING xác nhận, HAN không dùng nó làm căn cứ quyết định cốt lõi (chỉ liệt kê, flag trong report; xem §9 E9).
+Lưu ý runtime `[EXT]`: mục "G2 concerns (TL có xác nhận không?)" — nếu concern chưa được NEMESIS xác nhận, HAN không dùng nó làm căn cứ quyết định cốt lõi (chỉ liệt kê, flag trong report; xem §9 E9).
 
 ### 2.3 Phase 2 — OPTIMIZE (theo priority)
 
@@ -219,7 +219,7 @@ Output:
 
         │ G3 Output
         ▼
-    TL (KING)
+    TL (NEMESIS)
 ```
 
 ### 2.5 Quy tắc M2 — mỗi vòng output = 1 PROPOSAL ITEM + Verification Plan
@@ -233,7 +233,7 @@ Output:
 Mini-template Proposal Item `[EXT — hợp nhất từ quy tắc trên + ví dụ nguồn dòng 4477–4483; schema đầy đủ 8 trường là của TB-11]`:
 
 ```markdown
-### PROPOSAL ITEM — <tên ngắn> (hạt của Proposal — KING tổng hợp, schema đầy đủ: TB-11)
+### PROPOSAL ITEM — <tên ngắn> (hạt của Proposal — NEMESIS tổng hợp, schema đầy đủ: TB-11)
 - Lĩnh vực: <1 trong 5 lĩnh vực M2 — xem §4>
 - Problem/Gap: <hiện trạng + evidence (file:line | log | metric)>
 - Proposed change: <cấu trúc mới / policy / config / pipeline>
@@ -352,7 +352,7 @@ G2 Output (code sạch + suggestions + concerns)
 └──────────────┬────────────────────────────────────────┘
                │ G3 Output
                ▼
-          TL (KING)
+          TL (NEMESIS)
 ```
 
 ### 2.9 Bảng tóm tắt cơ chế G3
@@ -418,7 +418,7 @@ G2 Output (code sạch + suggestions + concerns)
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Ghi chú `[SRC dòng 1438]`:** theo protocol Knowledge Capture, nguồn ghi KB không chỉ HAN — KING và SIVIL ghi trực tiếp khi phát hiện trong quá trình vận hành; HAN giữ vai trò **Curator** (consolidate/dedup). Xem §6 và TB-08.
+**Ghi chú `[SRC dòng 1438]`:** theo protocol Knowledge Capture, nguồn ghi KB không chỉ HAN — NEMESIS và SIVIL ghi trực tiếp khi phát hiện trong quá trình vận hành; HAN giữ vai trò **Curator** (consolidate/dedup). Xem §6 và TB-08.
 
 ### 3.2 Ví dụ self-evolving qua 3 vòng thực tế
 
@@ -476,12 +476,12 @@ Cycle của nguồn (APPLY → EXPERIMENT → MEASURE → LEARN → REPEAT) + B�
   3. MEASURE    ── so sánh kết quả trước/sau
   4. LEARN      ── cải thiện → lesson mới / xấu đi → anti-pattern
   5. CURATE     ── [EXT tích hợp] HAN consolidate/dedup/retire TOÀN KB:
-                   entries NEW do KING/SIVIL/HAN ghi từ chu trình trước
+                   entries NEW do NEMESIS/SIVIL/HAN ghi từ chu trình trước
                    + entries NEW của chính vòng này → status CURATED
   6. REPEAT     ── vòng sau: APPLY trên KB sạch hơn, mạnh hơn
 ```
 
-Lợi ích thiết kế: (1) KB mà APPLY tiêu thụ ở vòng kế luôn ở trạng thái đã curate — giảm trùng lặp, tăng chất lượng evidence; (2) entries do KING/SIVIL ghi giữa 2 chu trình G3 (theo protocol Knowledge Capture) không bao giờ tồn đọng quá 1 chu trình G3 ở status NEW; (3) Curator duty (§6) có thời điểm chạy cố định — state CURATING của state machine §8.
+Lợi ích thiết kế: (1) KB mà APPLY tiêu thụ ở vòng kế luôn ở trạng thái đã curate — giảm trùng lặp, tăng chất lượng evidence; (2) entries do NEMESIS/SIVIL ghi giữa 2 chu trình G3 (theo protocol Knowledge Capture) không bao giờ tồn đọng quá 1 chu trình G3 ở status NEW; (3) Curator duty (§6) có thời điểm chạy cố định — state CURATING của state machine §8.
 
 ---
 
@@ -529,13 +529,13 @@ G3 (HAN) — Architecture Proposer:
   → Mỗi option kèm Verification Plan (deferred)
 ```
 
-Nhận xét `[EXT]`: Recommendation của HAN **xếp hạng options theo effort × tác động** — Option C "cần benchmark" bị hoãn đúng theo quy tắc 2.5 (b): benchmark chưa có → Verification Plan deferred. KING verify CP3: "Mỗi option có trade-offs + verification plan?" (nguồn dòng 4488).
+Nhận xét `[EXT]`: Recommendation của HAN **xếp hạng options theo effort × tác động** — Option C "cần benchmark" bị hoãn đúng theo quy tắc 2.5 (b): benchmark chưa có → Verification Plan deferred. NEMESIS verify CP3: "Mỗi option có trade-offs + verification plan?" (nguồn dòng 4488).
 
 ### 4.4 Knowledge Base M2 — categories bổ sung
 
 `[TB-05 §4.4 ← nguồn dòng 1397]` `[SRC]`
 
-> KB M2 thêm categories: **System Patterns** (cái gì hoạt động tốt), **System Anti-Patterns** (KHÔNG LÀM), **Config Lessons**, **Performance Baselines** — HAN tích lũy hiểu biết về chính hệ TMO qua từng mission. Theo protocol Knowledge Capture, KING và SIVIL cũng ghi trực tiếp khi phát hiện tri thức mới (xem section KNOWLEDGE CAPTURE → TB-08; cấu trúc đầy đủ ở §5).
+> KB M2 thêm categories: **System Patterns** (cái gì hoạt động tốt), **System Anti-Patterns** (KHÔNG LÀM), **Config Lessons**, **Performance Baselines** — HAN tích lũy hiểu biết về chính hệ TMO qua từng mission. Theo protocol Knowledge Capture, NEMESIS và SIVIL cũng ghi trực tiếp khi phát hiện tri thức mới (xem section KNOWLEDGE CAPTURE → TB-08; cấu trúc đầy đủ ở §5).
 
 ---
 
@@ -630,15 +630,15 @@ Nhận xét `[EXT]`: Recommendation của HAN **xếp hạng options theo effort
 
 | Category | Mission | Người ghi chính | Dùng lúc nào |
 |---|---|---|---|
-| Data Preprocessing (5) | M1 | HAN (EVOLVE) / KING, SIVIL (capture) | Phase 1 ANALYZE + Phase 2 (P2) |
-| Model Training (5) | M1 | HAN / KING, SIVIL | Phase 1 + P2 tuning |
-| Ensemble (4) | M1 | HAN / KING, SIVIL | Phase 1 + P2 ensemble |
+| Data Preprocessing (5) | M1 | HAN (EVOLVE) / NEMESIS, SIVIL (capture) | Phase 1 ANALYZE + Phase 2 (P2) |
+| Model Training (5) | M1 | HAN / NEMESIS, SIVIL | Phase 1 + P2 tuning |
+| Ensemble (4) | M1 | HAN / NEMESIS, SIVIL | Phase 1 + P2 ensemble |
 | Anti-Patterns A1–A5 (5) | M1 | HAN (LEARN — xấu đi) | Phase 1 (tránh) + P1 verify |
-| System Patterns S1–S4 (4) | M2 | HAN / KING, SIVIL | Phase 1 M2 + sinh proposal items |
-| System Anti-Patterns AS1–AS3 (3) | M2 | HAN / KING, SIVIL | Phase 1 M2 (tránh) + P1 system safety |
-| Config Lessons C1–C3 (3) | M2 | HAN / KING, SIVIL / LISMA (đề xuất) | Phase 1 M2 + evidence cho proposal |
-| Performance Baselines (3) | M2 | HAN / KING | Baseline trước/sau khi sinh metric proposal (§4.2) |
-| Research Insights (mở) | M1+M2 | SIVIL / KING (council) / HAN | Phase 1 — strategy nghiên cứu, decompose |
+| System Patterns S1–S4 (4) | M2 | HAN / NEMESIS, SIVIL | Phase 1 M2 + sinh proposal items |
+| System Anti-Patterns AS1–AS3 (3) | M2 | HAN / NEMESIS, SIVIL | Phase 1 M2 (tránh) + P1 system safety |
+| Config Lessons C1–C3 (3) | M2 | HAN / NEMESIS, SIVIL / LISMA (đề xuất) | Phase 1 M2 + evidence cho proposal |
+| Performance Baselines (3) | M2 | HAN / NEMESIS | Baseline trước/sau khi sinh metric proposal (§4.2) |
+| Research Insights (mở) | M1+M2 | SIVIL / NEMESIS (council) / HAN | Phase 1 — strategy nghiên cứu, decompose |
 
 > Quy ước đọc theo mission: category M2 "chỉ dùng cho mission System Research" (nguồn dòng 1516) — guard chống áp nhầm lesson M1 vào M2 (chi tiết §9 E8).
 
@@ -650,7 +650,7 @@ Nhận xét `[EXT]`: Recommendation của HAN **xếp hạng options theo effort
 
 ### 6.1 Vai trò & phạm vi
 
-- **Curator = HAN** (kiêm, không độc quyền): consolidate + dedup + retire KB entries **do KING/SIVIL ghi trong chu trình G3 gần nhất** + entries do chính HAN ghi (EVOLVE) + entries từ "KB Candidates" của BELI/LISMA đã được KING/SIVIL/HAN chấp nhận ghi.
+- **Curator = HAN** (kiêm, không độc quyền): consolidate + dedup + retire KB entries **do NEMESIS/SIVIL ghi trong chu trình G3 gần nhất** + entries do chính HAN ghi (EVOLVE) + entries từ "KB Candidates" của BELI/LISMA đã được NEMESIS/SIVIL/HAN chấp nhận ghi.
 - HAN **không xóa entry** — chỉ đánh dấu RETIRED (giữ toàn bộ audit trail; ID không bao giờ tái sử dụng).
 - Curator KHÔNG phải "người biên tập nội dung": khi merge, insight giữ nguyên ý gốc (chọn bản ngắn + actionable nhất), chỉ dồn evidence — không viết lại kết luận.
 
@@ -679,7 +679,7 @@ B3 — MERGE    Nhóm trùng/bổ trợ → giữ 1 entry gốc (Insight mạnh 
 
 B4 — TAG      Entry đã qua B3 + entry NEW đúng chuẩn → status CURATED.
               Ghi curator note vào worklog G3: mục lục thay đổi
-              (merged/retired/curated) — KING review ở CP3 (§6.5).
+              (merged/retired/curated) — NEMESIS review ở CP3 (§6.5).
 ```
 
 ### 6.3 RETIRE — điều kiện đánh dấu RETIRED
@@ -693,7 +693,7 @@ B4 — TAG      Entry đã qua B3 + entry NEW đúng chuẩn → status CURATED.
 | **REFUTED** | Bị vượt refute — evidence mới mâu thuẫn trực tiếp và mạnh hơn | Lesson "KFold đủ tốt cho dataset nhỏ" bị StratifiedKFold + std thấp hơn bác |
 | **SUPERSEDED** | Có entry mới hơn cùng chủ đề, evidence mạnh hơn hẳn | Baseline 121s được thay bằng baseline mới sau khi tối ưu |
 
-> Quy tắc: RETIRED entry **vẫn nằm lại trong KB** (không xóa dòng) — các vòng sau bỏ qua khi APPLY nhưng vẫn đọc được khi đối chiếu. Người retire = HAN (Curator), giữ nguyên quyền này với entries của MỌI writer (kể cả KING/SIVIL) — xem giới hạn ở §6.4.
+> Quy tắc: RETIRED entry **vẫn nằm lại trong KB** (không xóa dòng) — các vòng sau bỏ qua khi APPLY nhưng vẫn đọc được khi đối chiếu. Người retire = HAN (Curator), giữ nguyên quyền này với entries của MỌI writer (kể cả NEMESIS/SIVIL) — xem giới hạn ở §6.4.
 
 ### 6.4 Tần suất & quyền hạn
 
@@ -703,8 +703,8 @@ B4 — TAG      Entry đã qua B3 + entry NEW đúng chuẩn → status CURATED.
 |---|---|
 | **Tần suất** | Mỗi chu trình G3 (state CURATING của state machine §8; Bước 4 của KB Write Protocol: "HAN consolidate trong chu trình G3 gần nhất") |
 | **Không xóa** | HAN KHÔNG xóa entry — chỉ đánh dấu RETIRED (4 lý do §6.3) |
-| **Retire entry của KING/SIVIL** | Được phép, nhưng BẮT BUỘC kèm lý do + evidence; mọi thao tác retire được liệt kê trong report G3 để KING review ở Checkpoint CP3 *(✅ chốt v1.3 — §11 Q4: nâng lên PRE-APPROVAL — KING duyệt tại CP3 TRƯỚC khi retire có hiệu lực; KING tự retire được kèm Decision Log)* |
-| **Không curate phán đoán** | Entries mâu thuẫn không phân định được bằng evidence → KHÔNG tự retire cả hai — flag CONFLICT vào report cho KING (§9 E2) |
+| **Retire entry của NEMESIS/SIVIL** | Được phép, nhưng BẮT BUỘC kèm lý do + evidence; mọi thao tác retire được liệt kê trong report G3 để NEMESIS review ở Checkpoint CP3 *(✅ chốt v1.3 — §11 Q4: nâng lên PRE-APPROVAL — NEMESIS duyệt tại CP3 TRƯỚC khi retire có hiệu lực; NEMESIS tự retire được kèm Decision Log)* |
+| **Không curate phán đoán** | Entries mâu thuẫn không phân định được bằng evidence → KHÔNG tự retire cả hai — flag CONFLICT vào report cho NEMESIS (§9 E2) |
 | **Giữ nguyên schema** | Mọi thao tác curate tôn trọng KB Entry Schema §7.4 — không thêm/xóa trường ngoài chuẩn |
 
 ### 6.5 Output của Curator (đưa vào report G3)
@@ -713,11 +713,11 @@ B4 — TAG      Entry đã qua B3 + entry NEW đúng chuẩn → status CURATED.
 
 ```markdown
 ## KB CURATION REPORT (chu trình G3 <task-id>, ngày <date>)
-- Entries NEW đầu chu trình: <n> (KING: <a> · SIVIL: <b> · HAN: <c> · từ KB Candidates: <d>)
+- Entries NEW đầu chu trình: <n> (NEMESIS: <a> · SIVIL: <b> · HAN: <c> · từ KB Candidates: <d>)
 - Merged: <n> nhóm → liệt kê: <ID giữ> ← [<ID gộp>, ...] (lý do DUPLICATE)
 - Retired: <n> → liệt kê: <ID> (lý do OUTDATED/REFUTED/SUPERSEDED + evidence)
 - Curated: <n> entries đạt status CURATED
-- Conflict flags: <n> → liệt kê cặp ID mâu thuẫn, chờ KING quyết
+- Conflict flags: <n> → liệt kê cặp ID mâu thuẫn, chờ NEMESIS quyết
 - Tổng KB sau chu trình: <m> active / <k> retired
 ```
 
@@ -752,7 +752,7 @@ B4 — TAG      Entry đã qua B3 + entry NEW đúng chuẩn → status CURATED.
 | Agent | Thời điểm load | Mục đích | Bắt buộc? |
 |---|---|---|---|
 | **HAN** | **Phase 1 ANALYZE** — trước mọi thao tác optimize | Trích lessons/anti-patterns liên quan (lọc theo Mission + category + lĩnh vực) để APPLY | **BẮT BUỘC** (Instructions LUÔN: "load Knowledge Base trước khi optimize") |
-| **KING** | MONITOR / DECIDE / FINALIZE / Research Council | Bước 1 SEARCH của KB Write Protocol — đối chiếu "đã có chưa?" trước khi ghi; quyết định DECIDE có dựa trên lessons | Bắt buộc khi ghi / khuyến nghị khi DECIDE |
+| **NEMESIS** | MONITOR / DECIDE / FINALIZE / Research Council | Bước 1 SEARCH của KB Write Protocol — đối chiếu "đã có chưa?" trước khi ghi; quyết định DECIDE có dựa trên lessons | Bắt buộc khi ghi / khuyến nghị khi DECIDE |
 | **SIVIL** | SYNTHESIZE / Research Council | Đối chiếu findings của sub-agents với KB: "đã có chưa?" (nguồn dòng 1765) | Bắt buộc khi ghi / khi SYNTHESIZE |
 | **BELI / LISMA** | Khi code / review | Tham khảo lessons + anti-patterns (tránh lỗi đã biết) | Tùy chọn `[EXT]` — nguồn không bắt buộc 2 agent này load |
 | Mọi agent | Trước khi đề xuất KB Candidate | Bước 1 SEARCH — đề xuất chỉ khi "chưa có" hoặc evidence mạnh hơn | Bắt buộc theo KB Write Protocol |
@@ -767,13 +767,13 @@ B4 — TAG      Entry đã qua B3 + entry NEW đúng chuẩn → status CURATED.
 
 | Agent | Quyền | Thời điểm capture |
 |-------|-------|-------------------|
-| **KING** | Ghi trực tiếp | MONITOR (đọc worklog) / DECIDE (pivot lessons) / FINALIZE / Research Council |
+| **NEMESIS** | Ghi trực tiếp | MONITOR (đọc worklog) / DECIDE (pivot lessons) / FINALIZE / Research Council |
 | **SIVIL** | Ghi trực tiếp | SYNTHESIZE (insight từ sub-agents) / Research Council |
 | **HAN** | Ghi trực tiếp + **CURATOR** | Chu trình G3 (như cũ) + consolidate/dedup entries của cả team |
 | **BELI** | Đề xuất qua worklog | Edge cases + patterns gặp khi code → trường "KB Candidates" |
 | **LISMA** | Đề xuất qua worklog | Bug patterns + root cause insight khi review → trường "KB Candidates" |
 
-> Nguồn dòng 1746: BELI/LISMA không ghi trực tiếp vì findings của họ cần được xác nhận — KING/SIVIL/HAN đọc "KB Candidates" trong worklog và quyết định ghi (**entry nào cũng phải có evidence**).
+> Nguồn dòng 1746: BELI/LISMA không ghi trực tiếp vì findings của họ cần được xác nhận — NEMESIS/SIVIL/HAN đọc "KB Candidates" trong worklog và quyết định ghi (**entry nào cũng phải có evidence**).
 
 **KB WRITE PROTOCOL — 4 bước (trích nguyên văn TB-08 §4 — bản chuẩn toàn tập; nguồn gốc: dòng 1776–1789; cross-ref nội bộ điều chỉnh theo ngữ cảnh TB-05: Entry Schema → §7.4, duyệt candidate → TB-08 §8; chi tiết Bước 4 curator → §6):**
 
@@ -785,7 +785,7 @@ BƯỚC 1 — SEARCH   Tra KB theo category + keywords:
 BƯỚC 2 — FORMAT   Viết entry theo KB Entry Schema (§7.4):
                      insight ngắn + actionable;
                      evidence BẮT BUỘC
-BƯỚC 3 — WRITE    KING/SIVIL/HAN: ghi trực tiếp
+BƯỚC 3 — WRITE    NEMESIS/SIVIL/HAN: ghi trực tiếp
                      BELI/LISMA: để trong worklog trường
                      "KB Candidates" (duyệt — TB-08 §8)
 BƯỚC 4 — CURATE   HAN consolidate trong chu trình G3 gần
@@ -804,7 +804,7 @@ BƯỚC 4 — CURATE   HAN consolidate trong chu trình G3 gần
              hoặc Research Insights (mới)]
 - Insight: [1 câu — ngắn, actionable]
 - Evidence/Context: [file:line | log excerpt | metric | discussion ref]
-- Source: [KING/SIVIL/BELI/LISMA/HAN + thời điểm phát hiện]
+- Source: [NEMESIS/SIVIL/BELI/LISMA/HAN + thời điểm phát hiện]
 - Mission: [M1 | M2]
 - Status: NEW → CURATED → (RETIRED)
 ```
@@ -813,14 +813,14 @@ BƯỚC 4 — CURATE   HAN consolidate trong chu trình G3 gần
 
 | ID | Category | Insight | Evidence | Source | Mission |
 |---|---|---|---|---|---|
-| KB-20250612-001 | Config Lessons | Neo4j Aura: user = instance ID (8-hex), không phải luôn là "neo4j" | AuraDB handshake: user "neo4j" 401 / instance ID 200 | KING (MONITOR) | M2 |
+| KB-20250612-001 | Config Lessons | Neo4j Aura: user = instance ID (8-hex), không phải luôn là "neo4j" | AuraDB handshake: user "neo4j" 401 / instance ID 200 | NEMESIS (MONITOR) | M2 |
 | KB-20250612-002 | System Anti-Patterns | LLM key 4xx → KHÔNG retry mù — fail-fast ngay | log 121s (retry mù) vs 6.2s (fail-fast) | LISMA → HAN | M2 |
 | KB-20250612-003 | Research Insights | Decompose audit hệ thống theo 4 branch (hiện trạng → điểm yếu → pattern → feasibility) cho coverage đủ | Discussion ② Research Council — task audit memory | SIVIL | M2 |
 
 **Vòng đời status `[EXT — hình thức hóa từ chuỗi NEW → CURATED → (RETIRED)]`:**
 
 ```
-  [KING/SIVIL/HAN ghi trực tiếp]           [HAN — Bước 3+4, mỗi chu trình G3]
+  [NEMESIS/SIVIL/HAN ghi trực tiếp]           [HAN — Bước 3+4, mỗi chu trình G3]
   ┌─────────────── WRITE ───────────────┐   ┌────────── CURATE ────────────────┐
   │                                     │   │                                  │
   ▼                                     │   ▼                                  │
@@ -828,7 +828,7 @@ BƯỚC 4 — CURATE   HAN consolidate trong chu trình G3 gần
   ▲           │                                                               │
   │           ├── DUPLICATE/OUTDATED/REFUTED/SUPERSEDED ──▶ RETIRED (§6.3)    │
   │           │                                                               │
-  └── BELI/LISMA "KB Candidates" (worklog) ── KING/SIVIL/HAN chấp nhận ──────┘
+  └── BELI/LISMA "KB Candidates" (worklog) ── NEMESIS/SIVIL/HAN chấp nhận ──────┘
 ```
 
 > Entry RETIRED không xóa (§6.4); entry NEW quá 1 chu trình G3 mà chưa curate → được ưu tiên xử lý ở CURATING kế tiếp (không để tồn đọng — nguyên tắc §3.4).
@@ -867,7 +867,7 @@ G2 Output (code sạch + suggestions + concerns) — Tier 3 routing
 │   │                        │                │              │
 │   │                        ▼                ▼              │
 │   │                   LEARNING           ESCALATED          │
-│   │     (lessons / anti-patterns /     (chờ KING xử lý —   │
+│   │     (lessons / anti-patterns /     (chờ NEMESIS xử lý —   │
 │   │      confidence → ghi KB)           verify/điều hướng; │
 │   │                                     xong → IDLE — T15) │
 │   │                        │                               │
@@ -879,7 +879,7 @@ G2 Output (code sạch + suggestions + concerns) — Tier 3 routing
 │   │                        ▼                               │
 │   └──G3 output──▶ REPORTING                               │
 │     (optimized code / proposal items + updated KB +        │
-│      recommendations → KING — verify CP3)                  │
+│      recommendations → NEMESIS — verify CP3)                  │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -893,15 +893,15 @@ G2 Output (code sạch + suggestions + concerns) — Tier 3 routing
 | T4 | ANALYZING | phân tích xong | xác định ≥ 1 lĩnh vực tối ưu áp dụng được | lập danh sách cơ hội + xếp priority | OPTIMIZING |
 | T5 | ANALYZING | không tìm được cơ hội | P1 pass, không gì cải thiện được | ghi "no-op" + lý do vào report | CURATING (vẫn curate KB, rồi REPORTING) |
 | T6 | OPTIMIZING | P1 Data/System Safety FAIL | G2 fix chưa đạt | DỪNG tối ưu (không đụng P2/P3); chuẩn bị evidence | ESCALATED |
-| T7 | OPTIMIZING | cần đổi approach | **đã báo KING trước** (Instructions: không đổi approach không báo) | ghi lý do đổi + phê duyệt vào worklog | OPTIMIZING (tiếp tục với approach mới) |
+| T7 | OPTIMIZING | cần đổi approach | **đã báo NEMESIS trước** (Instructions: không đổi approach không báo) | ghi lý do đổi + phê duyệt vào worklog | OPTIMIZING (tiếp tục với approach mới) |
 | T8 | OPTIMIZING | approach sai fundamental / overfitting ngoài scope G3 | — | chuẩn bị escalation message | ESCALATED |
 | T9 | OPTIMIZING | tối ưu xong (M1) | P1 PASS, có metric trước/sau | tổng hợp kết quả + lessons thô | LEARNING |
 | T10 | OPTIMIZING | sinh xong proposal items (M2) | **mỗi item có Verification Plan (a) + (b)** | đóng gói items theo §2.5 | LEARNING |
 | T11 | OPTIMIZING | proposal item thiếu (a) kiểm chứng tay | — | trả lại — self-fix 1 vòng (§9 E4) | OPTIMIZING |
 | T12 | LEARNING | ghi xong entries | mỗi entry có evidence | ghi KB (status NEW) + update confidence | CURATING |
 | T13 | CURATING | consolidate/dedup/retire xong | mọi thao tác có lý do + evidence | đánh dấu CURATED/RETIRED + Curation Report §6.5 | REPORTING |
-| T14 | REPORTING | output package xong | đủ output contract (§1.2) | gửi G3 output → KING (verify CP3) | IDLE |
-| T15 | ESCALATED | KING xử lý xong | — | ghi kết luận + điều hướng vào worklog | IDLE (hoặc quay lại trạng thái KING chỉ định) |
+| T14 | REPORTING | output package xong | đủ output contract (§1.2) | gửi G3 output → NEMESIS (verify CP3) | IDLE |
+| T15 | ESCALATED | NEMESIS xử lý xong | — | ghi kết luận + điều hướng vào worklog | IDLE (hoặc quay lại trạng thái NEMESIS chỉ định) |
 
 ### 8.3 Invariants (bất biến vòng G3)
 
@@ -912,8 +912,8 @@ G2 Output (code sạch + suggestions + concerns) — Tier 3 routing
 | I3 | M2: không rời OPTIMIZING → LEARNING nếu chưa có ≥ 1 proposal item kèm Verification Plan (a)+(b) | Quy tắc M2 (dòng 1393–1395) |
 | I4 | HAN **không ghi/apply bất kỳ thay đổi nào lên Live System** — POC/thử nghiệm chỉ trong Workspace | Instructions: "KHÔNG BAO GIỜ (M2) apply lên Live System" |
 | I5 | Rời CURATING khi đã xong Bước 4 KB Write Protocol; HAN **không xóa entry** — chỉ đánh dấu RETIRED | Nguồn dòng 1787–1788 |
-| I6 | Đổi approach phải **báo KING trước** khi tiếp tục tối ưu | Instructions: "KHÔNG BAO GIỜ thay đổi approach mà không báo KING" |
-| I7 | ESCALATED là trạng thái chờ — HAN không tự mở khóa; KING điều hướng kết quả | ESCALATE contract (dòng 1142) |
+| I6 | Đổi approach phải **báo NEMESIS trước** khi tiếp tục tối ưu | Instructions: "KHÔNG BAO GIỜ thay đổi approach mà không báo NEMESIS" |
+| I7 | ESCALATED là trạng thái chờ — HAN không tự mở khóa; NEMESIS điều hướng kết quả | ESCALATE contract (dòng 1142) |
 | I8 | ESCALATE chỉ dùng 2 điều kiện nguồn: approach sai fundamental / overfitting không sửa được trong scope G3 (+ P1 FAIL — T6 `[EXT]`) | Dòng 1142 + §2.1 guard |
 
 ---
@@ -925,15 +925,15 @@ G2 Output (code sạch + suggestions + concerns) — Tier 3 routing
 | # | Tình huống | Hành động chuẩn | Nguồn gốc / liên kết |
 |---|---|---|---|
 | **E1** | **KB trống (cold start)** — lần chạy G3 đầu tiên, chưa có entries | Seed bằng **starter KB = toàn bộ bảng nguồn §5** (9 categories, đã ở status CURATED). Ghi cảnh báo "cold-start" vào worklog; các vòng sau EVOLVE bổ sung dần | §5; [EXT] |
-| **E2** | **Entries mâu thuẫn** — 2 entries cùng category kết luận ngược nhau | So **sức mạnh evidence** (file:line + log/metric > mô tả; nhiều nguồn > 1 nguồn) → retire cái yếu hơn, lý do REFUTED (§6.3). Nếu ngang sức → KHÔNG retire cả hai — flag CONFLICT trong report G3, KING quyết ở CP3 (hoặc đưa lên Research Council — TB-08) | §6; task spec |
+| **E2** | **Entries mâu thuẫn** — 2 entries cùng category kết luận ngược nhau | So **sức mạnh evidence** (file:line + log/metric > mô tả; nhiều nguồn > 1 nguồn) → retire cái yếu hơn, lý do REFUTED (§6.3). Nếu ngang sức → KHÔNG retire cả hai — flag CONFLICT trong report G3, NEMESIS quyết ở CP3 (hoặc đưa lên Research Council — TB-08) | §6; task spec |
 | **E3** | **Metric không đo được** (M2 — hệ benchmark A/B chưa xây) | Dùng đánh giá **định tính** (logic, kinh nghiệm, analogy pattern S1–S4) + proposal item **PHẢI** kèm Verification Plan (b) benchmark spec deferred (metric + method + ngưỡng). Confidence của lesson liên quan ≤ MEDIUM cho tới khi có số liệu | Nguồn dòng 1393–1395 |
-| **E4** | **Proposal item thiếu (a) kiểm chứng tay** | Trả lại — HAN self-fix 1 vòng trong OPTIMIZING: tự viết (a) log check / manual test cụ thể. Vẫn thiếu sau 1 vòng → **không submit item**, ghi vào concerns của report G3 (KING quyết bỏ/hoàn thiện) | [EXT] từ quy tắc 2.5 |
+| **E4** | **Proposal item thiếu (a) kiểm chứng tay** | Trả lại — HAN self-fix 1 vòng trong OPTIMIZING: tự viết (a) log check / manual test cụ thể. Vẫn thiếu sau 1 vòng → **không submit item**, ghi vào concerns của report G3 (NEMESIS quyết bỏ/hoàn thiện) | [EXT] từ quy tắc 2.5 |
 | **E5** | **P1 Data/System Safety FAIL** — G2 output "verified" nhưng HAN tìm thấy lỗ hổng safety | Dừng tối ưu ngay (I2) → ESCALATED kèm evidence (LISMA claimed clean nhưng chưa đạt — có thể là regression hoặc verify G2 sơ hở). KHÔNG tự sửa thay LISMA (đúng lớp trách nhiệm §1.3) | [EXT] từ Instructions + I2 |
-| **E6** | **Overfitting không sửa được trong scope G3** (M1) | ESCALATE lên KING đúng điều kiện nguồn; kèm: metric trước/sau, các hướng đã thử, anti-patterns ghi nhận được | Dòng 1142 |
-| **E7** | **Đã đổi approach mà chưa báo KING** (phát hiện self-audit hoặc KING hỏi) | Tạm dừng OPTIMIZING; báo KING NGAY (message + lý do + rủi ro); chỉ tiếp tục khi KING xác nhận; ghi vi phạm vào worklog | Instructions: KHÔNG BAO GIỜ; I6 |
+| **E6** | **Overfitting không sửa được trong scope G3** (M1) | ESCALATE lên NEMESIS đúng điều kiện nguồn; kèm: metric trước/sau, các hướng đã thử, anti-patterns ghi nhận được | Dòng 1142 |
+| **E7** | **Đã đổi approach mà chưa báo NEMESIS** (phát hiện self-audit hoặc NEMESIS hỏi) | Tạm dừng OPTIMIZING; báo NEMESIS NGAY (message + lý do + rủi ro); chỉ tiếp tục khi NEMESIS xác nhận; ghi vi phạm vào worklog | Instructions: KHÔNG BAO GIỜ; I6 |
 | **E8** | **Lesson sai mission** — lesson M1 bị APPLY vào mission M2 (hoặc ngược) | Guard khi APPLY: lọc entries theo trường Mission; category "System Patterns (M2 — chỉ dùng cho mission System Research)" không nạp cho M1. Nếu đã áp nhầm → revert, ghi anti-pattern "cross-mission lesson leakage" | Nguồn dòng 1516; [EXT] guard |
-| **E9** | **G2 concerns chưa được KING xác nhận** | Không dùng làm căn cứ quyết định cốt lõi — chỉ liệt kê trong ANALYZE + flag trong report; hỏi KING qua recommendations | [EXT] từ dòng 1558 |
-| **E10** | **Nhiều lĩnh vực cần tối ưu cùng lúc** (workload lớn — ví dụ cả 5 lĩnh vực M1 đều có cơ hội) | Ưu tiên theo P1→P2→P3 rồi theo **expected impact** (metric impact chain); làm trọn vẹn ít lĩnh vực hơn là làm dở nhiều; phần còn lại ghi vào recommendations cho KING (có thể decompose tiếp — TB-07) | [EXT] |
+| **E9** | **G2 concerns chưa được NEMESIS xác nhận** | Không dùng làm căn cứ quyết định cốt lõi — chỉ liệt kê trong ANALYZE + flag trong report; hỏi NEMESIS qua recommendations | [EXT] từ dòng 1558 |
+| **E10** | **Nhiều lĩnh vực cần tối ưu cùng lúc** (workload lớn — ví dụ cả 5 lĩnh vực M1 đều có cơ hội) | Ưu tiên theo P1→P2→P3 rồi theo **expected impact** (metric impact chain); làm trọn vẹn ít lĩnh vực hơn là làm dở nhiều; phần còn lại ghi vào recommendations cho NEMESIS (có thể decompose tiếp — TB-07) | [EXT] |
 | **E11** | **Model fallback giữa vòng G3** | HAN giữ nguyên JD + Instructions (role-based); ghi dòng `model switched` vào worklog; KHÔNG restart vòng từ đầu — tiếp tục phase đang chạy nếu context còn; nếu mất context → quay về LOADING_KB | TB-01 §2; [EXT] |
 | **E12** | **KB entry có evidence yếu / thiếu** (vi phạm quy tắc "evidence trước khi ghi") | Curator (CURATING): KHÔNG xóa — trả về writer qua report G3 để bổ sung evidence; nếu không bổ sung được trong 1 chu trình kế tiếp → retire lý do REFUTED (evidence không đủ) | Quy tắc vàng KB (dòng 1821); [EXT] |
 
@@ -970,13 +970,13 @@ G2 Output (code sạch + suggestions + concerns) — Tier 3 routing
 | Q1 | **"Mỗi vòng tối ưu" của quy tắc M2 (dòng 1393) đếm thế nào** — 1 lần chạy state machine G3, hay 1 lần lặp Evolution Cycle trong 1 chu trình G3? | **1 vòng = 1 task G3** (1 lần vào OPTIMIZING); mỗi task sinh ≥ 1 proposal item. |
 | Q2 | **Ngưỡng "cải thiện đáng kể" để ghi lesson** (§3.3) — cụ thể là bao nhiêu (1 std? 0.5 std? % cố định?) | **M1: > 1 std của CV** (định lượng). **M2: > 5% cải thiện metric chuẩn hóa HOẶC vượt bootstrap 95% CI** so baseline; qualitative-only → chỉ ghi lesson với **confidence ≤ MEDIUM** (giữ E3). |
 | Q3 | **KB lưu 1 file hay nhiều file** (§7.1)? | ✅ **DR-C6** — snapshot **multi-file + index** theo category; canonical là DB (SQLite/Prisma, versioned, soft-delete retire) — không còn giới hạn 500 entries. |
-| Q4 | **HAN retire entries do KING/SIVIL ghi có cần đồng ý trước của KING không** (§6.4)? | **PRE-APPROVAL (chặt hơn):** HAN liệt kê retire-candidates trong report/proposal G3 → **KING duyệt tại CP3 TRƯỚC** khi retire có hiệu lực; KING tự retire được (kèm Decision Log). HAN KHÔNG tự retire entries do KING/SIVIL ghi khi chưa được duyệt. Đánh đổi tốc độ — chấp nhận theo P1 (thorough-first). |
+| Q4 | **HAN retire entries do NEMESIS/SIVIL ghi có cần đồng ý trước của NEMESIS không** (§6.4)? | **PRE-APPROVAL (chặt hơn):** HAN liệt kê retire-candidates trong report/proposal G3 → **NEMESIS duyệt tại CP3 TRƯỚC** khi retire có hiệu lực; NEMESIS tự retire được (kèm Decision Log). HAN KHÔNG tự retire entries do NEMESIS/SIVIL ghi khi chưa được duyệt. Đánh đổi tốc độ — chấp nhận theo P1 (thorough-first). |
 | Q5 | **KB đặt ở đâu trong hạ tầng** — file trong Workspace, trong repo TMO, hay store riêng (Qdrant/SQLite)? | ✅ **DR-C6** — kiến trúc 3 lớp: **SQLite/Prisma canonical** (versioned, soft-delete retire) + **snapshot .md theo category** + **Live System read-only**; mọi write qua KB Write Protocol. *(Giải luôn câu hỏi liên file TB-08/TB-09 theo cùng cụm C6.)* |
 | Q6 | **Trường Confidence có nằm trong KB Entry Schema chuẩn không** (§7.1)? | **CÓ** — thêm `Confidence: HIGH/MEDIUM/LOW` làm **trường 8** KB Entry Schema; amend nguồn trước (Phụ lục Z — A2, quy tắc số 1). |
 | Q7 | **Trần số vòng G3** — G2 có trần 3 vòng review; G3 nguồn không nêu trần | **Trần 3 vòng Evolution Cycle mỗi task G3** (đối xứng G2); vượt → ESCALATE. Amend nguồn (Phụ lục Z — A3). |
-| Q8 | **HAN có tham gia Research Council không?** | **Giữ thiết kế nguồn: HAN KHÔNG ngồi council** (council = KING ↔ SIVIL). [EXT bổ sung, không mâu thuẫn:] council transcript/output được **route tự động tới HAN như input** để curate — HAN nhận đủ thông tin mà không phải thành viên. |
+| Q8 | **HAN có tham gia Research Council không?** | **Giữ thiết kế nguồn: HAN KHÔNG ngồi council** (council = NEMESIS ↔ SIVIL). [EXT bổ sung, không mâu thuẫn:] council transcript/output được **route tự động tới HAN như input** để curate — HAN nhận đủ thông tin mà không phải thành viên. |
 
-**Phụ thuộc chờ các file khác:** TB-08 (Knowledge Capture chi tiết — 3 lỗ hổng, council output, 5 quy tắc vàng) · TB-09 (worklog schema chuẩn trường "KB Candidates" mà §7.3 tiêu thụ) · TB-11 (Proposal Schema 8 trường — mini-template §2.5 phải khớp khi KING tổng hợp) · TB-10 (Artifact Map nguồn của chuỗi đọc Metric Impact Chain / Impact Chain).
+**Phụ thuộc chờ các file khác:** TB-08 (Knowledge Capture chi tiết — 3 lỗ hổng, council output, 5 quy tắc vàng) · TB-09 (worklog schema chuẩn trường "KB Candidates" mà §7.3 tiêu thụ) · TB-11 (Proposal Schema 8 trường — mini-template §2.5 phải khớp khi NEMESIS tổng hợp) · TB-10 (Artifact Map nguồn của chuỗi đọc Metric Impact Chain / Impact Chain).
 
 ---
 
@@ -1032,4 +1032,4 @@ G2 Output (code sạch + suggestions + concerns) — Tier 3 routing
 
 ---
 
-*TB-05 hoàn thành nhóm B — Engines. Cả 5 file engines (TB-03 G1 · TB-04 G2 · TB-05 G3+KB · TB-06 KING · TB-07 Decompose) đã đủ. Theo build order TB-00 §3: tiếp theo nhóm C (TB-08 Knowledge Capture, TB-09 RWV/Handoff, TB-10 Directed Reading) → nhóm D (TB-11 Proposal Schema, TB-12 E2E Playbooks). Tracker TB-00 §6: đánh TB-05 ✅ khi user duyệt.*
+*TB-05 hoàn thành nhóm B — Engines. Cả 5 file engines (TB-03 G1 · TB-04 G2 · TB-05 G3+KB · TB-06 NEMESIS · TB-07 Decompose) đã đủ. Theo build order TB-00 §3: tiếp theo nhóm C (TB-08 Knowledge Capture, TB-09 RWV/Handoff, TB-10 Directed Reading) → nhóm D (TB-11 Proposal Schema, TB-12 E2E Playbooks). Tracker TB-00 §6: đánh TB-05 ✅ khi user duyệt.*

@@ -1,8 +1,8 @@
 /**
- * /api/research/missions/[id]/decompose — POST KING DECOMPOSE — TB-13 §2.2
+ * /api/research/missions/[id]/decompose — POST NEMESIS DECOMPOSE — TB-13 §2.2
  * ==============================================================================
  * Spec:
- *  - TB-13 §2.2 — API route KING DECOMPOSE mission → parts/tasks.
+ *  - TB-13 §2.2 — API route NEMESIS DECOMPOSE mission → parts/tasks.
  *  - TB-07 §2 + §2.5 — decompose playbook + task .md template.
  *  - Gate council ① (TC-13 — Success Criteria BẮT BUỘC trước ASSIGN).
  *

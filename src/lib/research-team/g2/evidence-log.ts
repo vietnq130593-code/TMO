@@ -198,11 +198,11 @@ export async function checkEvidenceGap(
     const entry = decodeJsonObject<WorklogEntry>(row.entryJson)
     const evidence = decodeJsonArray<EvidenceItem>(row.evidenceJson)
 
-    // Collect claims: done[] + findings[].finding (M2)
+    // FIX (Task 19 audit A#2): claims CHỈ lấy từ findings[] (M2 — DR/claim thật).
+    // done[] là progress text ("LISMA round 1 — M2 review") — KHÔNG phải claim
+    // cần evidence; coi done[] là claim làm checkEvidenceGap LUÔN hasGap=true →
+    // handoff gate TC-14 chặn 100% + POST /worklog 400 mọi entry hợp lệ.
     const claims: string[] = []
-    if (Array.isArray(entry.done)) {
-      claims.push(...entry.done.filter((d) => typeof d === 'string' && d.trim().length > 0))
-    }
     if (Array.isArray(entry.findings)) {
       for (const f of entry.findings as WorklogFinding[]) {
         if (f && typeof f.finding === 'string' && f.finding.trim().length > 0) {

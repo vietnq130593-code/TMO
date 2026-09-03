@@ -4,12 +4,12 @@
  * Spec:
  *  - TB-03 §4 — G1 Internal Workflow 6 bước:
  *      DECOMPOSE → DISPATCH → SYNTHESIZE → SYNC (council ②) → IMPLEMENT → VERIFY.
- *  - TB-03 §4.4 — council ② pre-code: KING challenge hypotheses + đối chiếu KB
+ *  - TB-03 §4.4 — council ② pre-code: NEMESIS challenge hypotheses + đối chiếu KB
  *    → chốt specs trước khi BELI code (cổng bắt buộc — TC-07).
  *  - TB-06 §10.1 — council ① post-DECOMPOSE (TL level): verify Success Criteria
  *    → VETO nếu thiếu (gate TC-13 — task .md phải có Success Criteria trước ASSIGN).
  *  - TB-03 §5.3 — dual-interpretation: 2 SA conflict không giải thích được →
- *    ESCALATE KING kèm 2 interpretation (TC-03 gate).
+ *    ESCALATE NEMESIS kèm 2 interpretation (TC-03 gate).
  *  - TB-03 §8 — feedback loop: REVISE → loop (max 3 vòng TB-03 §8 + §12 Q6).
  *
  * TC-07 ORDER (TB-12 §3.2): Council ① (post-DECOMPOSE) → SIVIL SYNTHESIZE →
@@ -82,12 +82,12 @@ export interface G1RoundResult {
 }
 
 // ============================================================
-// §2. SYSTEM PROMPT — Council (KING chủ trì + SIVIL tham vấn)
+// §2. SYSTEM PROMPT — Council (NEMESIS chủ trì + SIVIL tham vấn)
 // ============================================================
 
 const COUNCIL_SYSTEM_PROMPT = [
-  'Bạn là KING (Team Lead — research team TMO), chủ trì Research Council.',
-  `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.KING)?.jd ?? 'Phân loại mission, chia nhỏ bài toán, kiểm soát chặt — không code'}.`,
+  'Bạn là NEMESIS (Team Lead — research team TMO), chủ trì Research Council.',
+  `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.NEMESIS)?.jd ?? 'Phân loại mission, chia nhỏ bài toán, kiểm soát chặt — không code'}.`,
   '',
   'RESEARCH COUNCIL (TB-08 + TB-03 §4.4):',
   '- ① post-DECOMPOSE: verify Success Criteria → VETO nếu thiếu (gate TC-13).',
@@ -99,7 +99,7 @@ const COUNCIL_SYSTEM_PROMPT = [
   '- PASS → chốt specs → BELI code.',
   '',
   'NGUYÊN TẮC (TB-06 + TB-08):',
-  '- KING KHÔNG code — chỉ challenge + chốt.',
+  '- NEMESIS KHÔNG code — chỉ challenge + chốt.',
   '- Mọi insight mới → ghi KB NGAY (KB Write Protocol — SIVIL thực thi).',
   '- Challenge hypotheses bằng findings, KHÔNG đoán.',
   '',
@@ -136,7 +136,7 @@ export async function runCouncil(input: CouncilInput): Promise<CouncilResult> {
       // VETO — gate TC-13 fail
       const transcript =
         `COUNCIL ① VETO (gate TC-13): ${scValidation.reason}\n` +
-        `KING yêu cầu bổ sung Success Criteria trước khi ASSIGN (TB-07 §11 Q5).`
+        `NEMESIS yêu cầu bổ sung Success Criteria trước khi ASSIGN (TB-07 §11 Q5).`
       const result: CouncilResult = {
         verdict: 'VETO',
         transcript,
@@ -156,8 +156,8 @@ export async function runCouncil(input: CouncilInput): Promise<CouncilResult> {
     llm = await callLLM(userPrompt, COUNCIL_SYSTEM_PROMPT, `g1-council-${round}`, {
       temperature: 0.2,
       maxTokens: 2000,
-      agentId: 'KING',
-      agentName: 'KING (Team Lead)',
+      agentId: 'NEMESIS',
+      agentName: 'NEMESIS (Team Lead)',
     })
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
@@ -262,7 +262,7 @@ function failOpenCouncil(missionId: string, round: number, reason: string): Coun
   const transcript =
     `Council ${round} ${round === 1 ? '①' : '②'} DEFERRED (LLM unavailable):\n` +
     `${reason}\n` +
-    `KHÔNG crash — verdict REVISE (cần manual review). Pipeline chặn (blocking=true) cho tới khi user/KING xác nhận.`
+    `KHÔNG crash — verdict REVISE (cần manual review). Pipeline chặn (blocking=true) cho tới khi user/NEMESIS xác nhận.`
   // Persist trong background — fire-and-forget (caller nhận result đồng bộ)
   const result: CouncilResult = {
     verdict: 'REVISE',
@@ -325,7 +325,7 @@ export async function runG1Round(
   orderLog.push(`① council verdict: ${council1.verdict} (transcriptId=${council1.transcriptId || 'n/a'})`)
 
   if (council1.verdict === 'VETO') {
-    // Gate TC-13 fail → KHÔNG chạy SIVIL → escalate KING
+    // Gate TC-13 fail → KHÔNG chạy SIVIL → escalate NEMESIS
     const worklog: Partial<WorklogEntry> = {
       mission: missionType,
       status: 'ESCALATED',
@@ -334,7 +334,7 @@ export async function runG1Round(
       tlReadBack: 'PIVOT-NEEDED',
       done: [
         `Council ① VETO — Success Criteria thiếu (gate TC-13)`,
-        'KHÔNG chạy SIVIL — escalate KING bổ sung Success Criteria (DR-C3 append-only)',
+        'KHÔNG chạy SIVIL — escalate NEMESIS bổ sung Success Criteria (DR-C3 append-only)',
       ],
       issuesFaced: [council1.transcript],
       suggestionsNextGroup: ['Bổ sung Success Criteria theo TB-07 §3 task .md template'],
@@ -364,7 +364,7 @@ export async function runG1Round(
   orderLog.push(`② SIVIL SYNTHESIZE done: ${sivilResult.exploreDirections.length} directions, ${sivilResult.conflicts.length} conflicts`)
 
   // TC-03 — dual-interpretation escalation (TB-03 §5.3 3B):
-  // engine.ts chỉ FLAG; KING xử lý ở P5 (council ③). KHÔNG tự giải quyết.
+  // engine.ts chỉ FLAG; NEMESIS xử lý ở P5 (council ③). KHÔNG tự giải quyết.
   if (sivilResult.conflicts.length > 0) {
     const conflictSummaries = sivilResult.conflictReport.conflictPairs
       .map((p) => p.summary)
@@ -384,7 +384,7 @@ export async function runG1Round(
         conflictSummaries,
       ],
       suggestionsNextGroup: [
-        'KING council ③ quyết: 2 interpretation → tách claim điều kiện / đổi approach / hủy task',
+        'NEMESIS council ③ quyết: 2 interpretation → tách claim điều kiện / đổi approach / hủy task',
         'KHÔNG tiếp tục BELI code với synthesis chưa chốt',
       ],
       filesChanged: sivilResult.worklog.filesChanged || [],
@@ -403,7 +403,7 @@ export async function runG1Round(
       worklog,
       conflicts: sivilResult.conflicts,
       escalated: true,
-      escalateReason: `TC-03 dual-interpretation escalation: ${sivilResult.conflicts.length} SA conflict — KING xử lý ở council ③ (P5)`,
+      escalateReason: `TC-03 dual-interpretation escalation: ${sivilResult.conflicts.length} SA conflict — NEMESIS xử lý ở council ③ (P5)`,
       artifactMap: sivilResult.artifactMap,
       sivilResult,
     }
@@ -438,7 +438,7 @@ export async function runG1Round(
           : [`Council ② REVISE — conditions: ${(council2.conditions || []).join('; ')}`],
       suggestionsNextGroup:
         council2.verdict === 'VETO'
-          ? ['KING council ③ quyết: revise approach / hủy task / pivot']
+          ? ['NEMESIS council ③ quyết: revise approach / hủy task / pivot']
           : [`Loop G1 round ${round + 1} với conditions: ${council2.conditions?.join('; ')}`],
       filesChanged: sivilResult.worklog.filesChanged || [],
       header: orderLog.join('\n'),
@@ -547,7 +547,7 @@ const MAX_REVISE_ROUNDS = 3
  *
  * Persist ResearchWorklog row mỗi round (entryJson=encodeJson(worklog)).
  * Gate E4 TC-14: nếu artifactMap empty → log warning (KHÔNG chặn — gate
- * thực sự chặn ở KING MONITOR P5).
+ * thực sự chặn ở NEMESIS MONITOR P5).
  */
 export async function runG1Pipeline(
   missionId: string,
@@ -629,7 +629,7 @@ async function persistWorklog(
 ): Promise<void> {
   try {
     // Validate artifact map (gate E4 TC-14 — log warning, KHÔNG chặn ở P2;
-    // gate thực sự chặn ở KING MONITOR P5)
+    // gate thực sự chặn ở NEMESIS MONITOR P5)
     const validation = validateArtifactMap(artifactMap)
     if (!validation.valid) {
       console.warn(
@@ -706,7 +706,7 @@ function toStringArray(value: unknown): string[] {
 }
 
 // ============================================================
-// §7. RE-EXPORTS — convenience for callers (P5 KING engine)
+// §7. RE-EXPORTS — convenience for callers (P5 NEMESIS engine)
 // ============================================================
 
 export { COUNCIL_ROUNDS } from '../types'

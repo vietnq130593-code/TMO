@@ -3,7 +3,7 @@
  * ==================================================================================
  * Spec:
  *  - Worklog thiếu Artifact Map → gate handoff chặn — KHÔNG giao group kế.
- *  - SIVIL phải bổ sung map (1 map G1 duy nhất — TB-10 §13 Q6) trước khi KING
+ *  - SIVIL phải bổ sung map (1 map G1 duy nhất — TB-10 §13 Q6) trước khi NEMESIS
  *    MONITOR pass.
  *  - validateArtifactMap pure: null/undefined → invalid, reason mentions 'Artifact Map'.
  *  - checkHandoffGate with task having no worklog → passed=false, reason mentions 'worklog'.

@@ -2,7 +2,7 @@
  * RESEARCH TEAM — HANDOFF (TB-09 §1.3 handoff protocol + §10 E4 gate TC-14)
  * =====================================================================================
  * Spec:
- *  - TB-09 §1.3 — Handoff protocol giữa groups: G1 → G2 → G3 → KING.
+ *  - TB-09 §1.3 — Handoff protocol giữa groups: G1 → G2 → G3 → NEMESIS.
  *    Mỗi handoff cần: (1) artifact map hoàn chỉnh, (2) success criteria met (nếu ASSIGNED),
  *    (3) evidence complete (TC-06 — không gap).
  *  - TB-09 §10 E4 + TB-12 §3.2 TC-14 — Handoff gate: worklog thiếu Artifact Map
@@ -26,7 +26,7 @@
  */
 
 import { db } from '@/lib/db'
-import { encodeJson, decodeJsonArray, decodeJsonObject, decodeWorklog } from './types'
+import { encodeJson, decodeJson, decodeJsonArray, decodeJsonObject, decodeWorklog } from './types'
 import type { DecodedResearchWorklog, SuccessCriterion, WorklogEntry } from './types'
 import { validateArtifactMap } from './g1/artifact-map'
 import { checkEvidenceGap } from './g2/evidence-log'
@@ -36,7 +36,7 @@ import { checkEvidenceGap } from './g2/evidence-log'
 // ============================================================
 
 export type ResearchGroup = 'G1' | 'G2' | 'G3'
-export type HandoffTarget = ResearchGroup | 'KING'
+export type HandoffTarget = ResearchGroup | 'NEMESIS'
 
 export interface HandoffGate {
   taskId: string
@@ -76,7 +76,7 @@ export interface HandoffGate {
 export async function checkHandoffGate(
   taskId: string,
   fromGroup: ResearchGroup,
-  toGroup: HandoffTarget = 'KING',
+  toGroup: HandoffTarget = 'NEMESIS',
 ): Promise<HandoffGate> {
   const gate: HandoffGate = {
     taskId,
@@ -105,9 +105,35 @@ export async function checkHandoffGate(
     const decoded = decodeWorklog(latest)
 
     // 2. (a) Artifact Map present + valid (TC-14 gate E4)
-    const mapValidation = validateArtifactMap(
+    // FIX (Task 19 audit A#2a/A#6): map do G1 build MỘT LẦN và persist ở worklog
+    // G1; các worklog sau (LISMA review, RWV round, handoff receipt cũ không copy)
+    // không mang map. Đọc "worklog mới nhất" tuyệt đối → gate chặn ở vòng
+    // handoff G2→G3 dù map hợp lệ vẫn tồn tại ở worklog G1. Scan tối đa 10
+    // worklog mới nhất của task, dùng map HỢP LỆ gần nhất.
+    let mapValidation = validateArtifactMap(
       decoded.artifactMap as Parameters<typeof validateArtifactMap>[0],
     )
+    if (!mapValidation.valid) {
+      try {
+        const recent = await db.researchWorklog.findMany({
+          where: { taskId },
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+          select: { artifactMapJson: true },
+        })
+        for (const w of recent) {
+          if (!w.artifactMapJson) continue
+          const candidate = decodeJson(w.artifactMapJson, null) as Parameters<typeof validateArtifactMap>[0]
+          const v = validateArtifactMap(candidate)
+          if (v.valid) {
+            mapValidation = v
+            break
+          }
+        }
+      } catch {
+        // Scan fail-open — giữ kết quả validate ban đầu
+      }
+    }
     gate.artifactMapPresent = mapValidation.valid
     if (!mapValidation.valid) {
       gate.reason = `Artifact Map missing — handoff blocked (TC-14): ${mapValidation.reason || 'map null/empty'}`
@@ -125,17 +151,22 @@ export async function checkHandoffGate(
       return gate
     }
 
-    // If task ASSIGNED → check every criterion has met=true
+    // If task ASSIGNED → check criteria: CHỈ chặn khi có criterion bị đánh dấu
+    // met === false một cách TỤÆNG (đã review + fail). met undefined = chưa được
+    // đánh giá ở group hiện tại — KHÔNG chặn handoff giữa các group (FIX Task 19
+    // audit A#2c: pipeline không bao giờ set met → `every(c => c.met === true)`
+    // chặn 100% handoff, mission không bao giờ qua được G1→G2→G3).
     if (task.status === 'ASSIGNED') {
       const criteria = decodeJsonArray<SuccessCriterion>(task.successCriteriaJson)
       if (criteria.length === 0) {
         // No success criteria — TC-13 would have blocked at ASSIGN; safe to pass here
         gate.successCriteriaMet = true
       } else {
-        gate.successCriteriaMet = criteria.every((c) => c.met === true)
+        const failedCriteria = criteria.filter((c) => c.met === false)
+        gate.successCriteriaMet = failedCriteria.length === 0
         if (!gate.successCriteriaMet && !gate.reason) {
-          const unmet = criteria.filter((c) => c.met !== true).map((c) => c.id || c.criterion.slice(0, 30))
-          gate.reason = `Handoff blocked (TC-14): success criteria chưa met — ${unmet.join(', ')}`
+          const unmet = failedCriteria.map((c) => c.id || c.criterion.slice(0, 30))
+          gate.reason = `Handoff blocked (TC-14): success criteria bị đánh dấu KHÔNG đạt — ${unmet.join(', ')}`
         }
       }
     } else {
@@ -191,6 +222,7 @@ export async function performHandoff(
   taskId: string,
   fromGroup: ResearchGroup,
   toGroup: HandoffTarget,
+  missionType: 'M1' | 'M2' | 'M3' = 'M2',
 ): Promise<HandoffResult> {
   const handoff = await checkHandoffGate(taskId, fromGroup, toGroup)
 
@@ -215,23 +247,26 @@ export async function performHandoff(
     await db.researchTask.update({
       where: { id: taskId },
       data: {
-        assignedGroup: toGroup === 'KING' ? null : toGroup, // KING = no group,finalize
+        assignedGroup: toGroup === 'NEMESIS' ? null : toGroup, // NEMESIS = no group,finalize
         status: newStatus,
       },
     })
 
     // Persist handoff ResearchWorklog entry (phase='VERIFY' khi G1→G2/G2→G3;
-    // phase='FINALIZE' khi →KING)
-    const phase = toGroup === 'KING' ? 'FINALIZE' : 'VERIFY'
+    // phase='FINALIZE' khi →NEMESIS). FIX (Task 19 audit A#6): receipt COPY
+    // artifactMapJson từ worklog gần nhất — nếu không, receipt (không có map)
+    // trở thành "worklog mới nhất" và handoff kế tiếp bị chặn
+    // "Artifact Map missing" vĩnh viễn.
+    const phase = toGroup === 'NEMESIS' ? 'FINALIZE' : 'VERIFY'
     const handoffEntry: WorklogEntry = {
-      mission: 'M2', // Handoff entry — caller (engine) biết mission type; safe default M2
+      mission: missionType, // FIX (Task 19 audit A#13): caller truyền missionType thật
       status: 'COMPLETED',
-      currentPhase: toGroup === 'KING' ? 'G3' : (toGroup as 'G1' | 'G2' | 'G3'),
+      currentPhase: toGroup === 'NEMESIS' ? 'G3' : (toGroup as 'G1' | 'G2' | 'G3'),
       overallProgress: 100,
       tlReadBack: 'VERIFIED',
       done: [
         `Handoff ${fromGroup} → ${toGroup} PASSED (TC-14)`,
-        `Task ${taskId} assignedGroup updated to ${toGroup === 'KING' ? '(null — finalize)' : toGroup}`,
+        `Task ${taskId} assignedGroup updated to ${toGroup === 'NEMESIS' ? '(null — finalize)' : toGroup}`,
       ],
       issuesFaced: [],
       suggestionsNextGroup: [],
@@ -241,6 +276,21 @@ export async function performHandoff(
     }
 
     try {
+      // FIX (Task 19 audit A#6): COPY artifactMapJson từ worklog gần nhất của task
+      // sang receipt — gate checkHandoffGate đọc "worklog MỚI NHẤT" nên receipt
+      // không có map sẽ chặn handoff kế tiếp vĩnh viễn.
+      let inheritedArtifactMap: string | null = null
+      try {
+        const latestRow = await db.researchWorklog.findFirst({
+          where: { taskId },
+          orderBy: { createdAt: 'desc' },
+          select: { artifactMapJson: true },
+        })
+        inheritedArtifactMap = latestRow?.artifactMapJson ?? null
+      } catch {
+        inheritedArtifactMap = null
+      }
+
       await db.researchWorklog.create({
         data: {
           taskId,
@@ -257,6 +307,7 @@ export async function performHandoff(
               evidenceComplete: handoff.evidenceComplete,
             },
           }),
+          artifactMapJson: inheritedArtifactMap,
         },
       })
     } catch (err) {

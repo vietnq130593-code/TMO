@@ -5,10 +5,10 @@
  *  - TB-11 §1 — Proposal schema: code (P-YYYYMMDD-NNN) + title + summary + changes[]
  *    + verificationPlan[] (§7 (a)+(b)) + pocRef? + diffSummary?.
  *  - TB-11 §3 — Lifecycle: DRAFT → SUBMITTED (tạo branch + timeoutAt) → APPROVED
- *    (DR-C5 — KING cấm tự duyệt) → APPLIED (merge branch).
- *      REJECTED (TC-11 — reason BẮT BUỘC, KING re-DECOMPOSE phần liên quan).
+ *    (DR-C5 — NEMESIS cấm tự duyệt) → APPLIED (merge branch).
+ *      REJECTED (TC-11 — reason BẮT BUỘC, NEMESIS re-DECOMPOSE phần liên quan).
  *  - DR-C5 §C5 — Proposal pending timeout 48h (T3) / 24h (T2/T1) + nhắc 12h. Deputy SIVIL/HAN
- *    khi timeout. KING KHÔNG tự duyệt Proposal của mình.
+ *    khi timeout. NEMESIS KHÔNG tự duyệt Proposal của mình.
  *  - DR-C3 — Append-only: review decision append vào mission.decisionLogJson.
  *  - Bridge to self-direction (TB-13 §6 — bridge): khi Proposal APPROVED → gọi
  *    triggerOrchestration(proposalId) hoặc createSelfDirectionProposal(...) từ
@@ -16,7 +16,7 @@
  *    proposal APPROVED; applied=false nhưng status=APPROVED.
  *
  * Fail-open: LLM/orchestrator/git fail → status giữ nguyên, applied=false, error logged.
- * Constraint violations (KING self-approve, REJECT empty reason) → throw (caller 400).
+ * Constraint violations (NEMESIS self-approve, REJECT empty reason) → throw (caller 400).
  */
 
 import { db } from '@/lib/db'
@@ -132,7 +132,7 @@ export async function createProposal(
   try {
     await appendDecisionLog(input.missionId, {
       at: new Date().toISOString(),
-      agent: 'KING',
+      agent: 'NEMESIS',
       decision: 'RESEARCH',
       reason: `[PROPOSAL DRAFT] ${code} — "${schema.title}" (${schema.changes.length} changes, ${schema.verificationPlan.length} verification steps)`,
       ref: code,
@@ -309,7 +309,7 @@ export async function submitProposal(
   try {
     await appendDecisionLog(proposal.missionId, {
       at: new Date().toISOString(),
-      agent: 'KING',
+      agent: 'NEMESIS',
       decision: 'RESEARCH',
       reason: `[PROPOSAL SUBMITTED] ${proposal.code} — branch=${branchName || '(git failed — synthetic)'} timeout=${timeoutHours}h${branchError ? ` (branch error: ${branchError.slice(0, 100)})` : ''}`,
       ref: proposal.code,
@@ -329,16 +329,16 @@ export async function submitProposal(
 // ============================================================
 
 /**
- * Approve proposal — TB-11 §3 (SUBMITTED → APPROVED) + DR-C5 §C5 (KING cấm tự duyệt):
+ * Approve proposal — TB-11 §3 (SUBMITTED → APPROVED) + DR-C5 §C5 (NEMESIS cấm tự duyệt):
  *  1. assertNotKingSelfApprove(reviewedBy, escalateTo, proposalId) — DR-C5 §C5 throw
- *      nếu KING self-approve Proposal.
+ *      nếu NEMESIS self-approve Proposal.
  *  2. Set decidedAt, reviewedBy, status='APPROVED'.
  *  3. Bridge to self-direction (TB-13 §6): gọi triggerOrchestration(id) từ
  *      '@/lib/self-direction/orchestrator'. Wrap try/catch — orchestrator fail
  *      → applied=false nhưng proposal vẫn APPROVED.
  *  4. Append mission decision log 'APPROVE Proposal'.
  *
- * Throw nếu proposal null / không ở SUBMITTED / KING self-approve.
+ * Throw nếu proposal null / không ở SUBMITTED / NEMESIS self-approve.
  */
 export async function approveProposal(
   id: string,
@@ -358,9 +358,9 @@ export async function approveProposal(
     )
   }
 
-  // DR-C5 §C5 — KING cấm tự duyệt Proposal
-  // escalateTo='KING' khi reviewedBy='KING' và proposal được duyệt bởi chính KING (author)
-  assertNotKingSelfApprove(reviewedBy, 'KING', id)
+  // DR-C5 §C5 — NEMESIS cấm tự duyệt Proposal
+  // escalateTo='NEMESIS' khi reviewedBy='NEMESIS' và proposal được duyệt bởi chính NEMESIS (author)
+  assertNotKingSelfApprove(reviewedBy, 'NEMESIS', id)
 
   const now = new Date()
 
@@ -472,14 +472,14 @@ export async function approveProposal(
 }
 
 // ============================================================
-// §6. REJECT PROPOSAL — TC-11 reason BẮT BUỘC (KING re-DECOMPOSE)
+// §6. REJECT PROPOSAL — TC-11 reason BẮT BUỘC (NEMESIS re-DECOMPOSE)
 // ============================================================
 
 /**
  * Reject proposal — TB-11 §3 + TC-11 (REJECTED — reason BẮT BUỘC non-empty):
  *  1. Validate reason non-empty (TC-11 pattern).
- *  2. assertNotKingSelfApprove (DR-C5 §C5 — KING cũng cấm tự reject? Spec nói cấm
- *      approve; reject thì KING được — nhưng pass qua để giữ consistency).
+ *  2. assertNotKingSelfApprove (DR-C5 §C5 — NEMESIS cũng cấm tự reject? Spec nói cấm
+ *      approve; reject thì NEMESIS được — nhưng pass qua để giữ consistency).
  *  3. status='REJECTED', decidedAt, reviewedBy.
  *  4. Append mission decision log 'REJECT Proposal' + reason.
  *
@@ -509,8 +509,8 @@ export async function rejectProposal(
     )
   }
 
-  // DR-C5 §C5 — KING cũng cấm tự reject (consistent with approve — KING recused)
-  assertNotKingSelfApprove(reviewedBy, 'KING', id)
+  // DR-C5 §C5 — NEMESIS cũng cấm tự reject (consistent with approve — NEMESIS recused)
+  assertNotKingSelfApprove(reviewedBy, 'NEMESIS', id)
 
   const now = new Date()
 
@@ -622,7 +622,7 @@ export async function applyProposal(
   try {
     await appendDecisionLog(proposal.missionId, {
       at: new Date().toISOString(),
-      agent: 'KING',
+      agent: 'NEMESIS',
       decision: merged ? 'FINALIZE' : 'CONTINUE',
       reason: merged
         ? `[PROPOSAL APPLIED] ${proposal.code} — merged branch ${proposal.branchName}`

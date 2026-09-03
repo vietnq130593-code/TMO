@@ -138,7 +138,7 @@ async function runE2EMission(): Promise<E2EMissionResult> {
         status: 'TRIAGING',
         tier: 'T2',
         decision: {
-          agent: 'KING',
+          agent: 'NEMESIS',
           decision: 'CONTINUE',
           reason: 'Golden-run: user clarify — chẩn đoán chat latency 121s',
         },
@@ -166,7 +166,7 @@ async function runE2EMission(): Promise<E2EMissionResult> {
         body: JSON.stringify({
           status: target,
           decision: {
-            agent: 'KING',
+            agent: 'NEMESIS',
             decision: 'CONTINUE',
             reason: `Golden-run: transition to ${target}`,
           },
@@ -278,7 +278,7 @@ async function runE2EMission(): Promise<E2EMissionResult> {
           result.proposalStatus = submitBody.proposal?.status ?? result.proposalStatus
           steps.push(`POST /proposals submit → ${result.proposalStatus}`)
 
-          // Approve by user (NOT KING — DR-C5 §C5)
+          // Approve by user (NOT NEMESIS — DR-C5 §C5)
           const reviewResp = await fetch(
             `${BASE}/api/research/proposals/${body.proposal.id}/review`,
             {

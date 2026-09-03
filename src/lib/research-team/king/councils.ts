@@ -1,11 +1,11 @@
 /**
- * RESEARCH TEAM — KING COUNCILS (TB-06 councils ①②③④⑤ + TB-14 council ⑤ agenda 5 mục)
+ * RESEARCH TEAM — NEMESIS COUNCILS (TB-06 councils ①②③④⑤ + TB-14 council ⑤ agenda 5 mục)
  * ============================================================================================
  * Spec:
  *  - TB-06 §10.1 — council ① post-DECOMPOSE (verify Success Criteria gate TC-13).
  *  - TB-06 §10.2 — council ② pre-code (challenge synthesis — gate TC-07).
- *  - TB-06 §8 — council ③ escalation (G1/G2/G3 ESCALATE → KING chủ trì + agent liên quan).
- *  - TB-06 §9.8 — council ④ final (FINALIZE — KING + all agents, verify proposal Verification Plan).
+ *  - TB-06 §8 — council ③ escalation (G1/G2/G3 ESCALATE → NEMESIS chủ trì + agent liên quan).
+ *  - TB-06 §9.8 — council ④ final (FINALIZE — NEMESIS + all agents, verify proposal Verification Plan).
  *  - TB-14 §6.2 — council ⑤ solution council (5 mục agenda: hypothesis/experiment/calibration/
  *    context-fit/verdict) — CONTINUE-ITERATE|CONVERGE|PIVOT|DROP.
  *
@@ -33,8 +33,8 @@ import { runCouncil5 as runTournamentCouncil5 } from '../scoring/tournament'
 export const COUNCIL_AGENDAS = {
   council1: '① post-DECOMPOSE — verify Success Criteria (gate TC-13). VETO nếu thiếu.',
   council2: '② pre-code — challenge synthesis + đối chiếu KB → PASS/REVISE/VETO (gate TC-07).',
-  council3: '③ escalation — KING chủ trì + agent liên quan quyết: revise / hủy task / pivot.',
-  council4: '④ final — KING + all agents. Verify proposal Verification Plan (TB-11 §7) → PASS/REVISE/VETO.',
+  council3: '③ escalation — NEMESIS chủ trì + agent liên quan quyết: revise / hủy task / pivot.',
+  council4: '④ final — NEMESIS + all agents. Verify proposal Verification Plan (TB-11 §7) → PASS/REVISE/VETO.',
   council5:
     '⑤ solution — TB-14 §6.2 5 mục agenda: (1) hypothesis status; (2) experiment scorecard B; (3) calibration delta TC-16; (4) context-fit TC-17; (5) verdict cuối CONTINUE-ITERATE|CONVERGE|PIVOT|DROP.',
 } as const
@@ -44,35 +44,35 @@ export const COUNCIL_AGENDAS = {
 // ============================================================
 
 const COUNCIL_3_SYSTEM_PROMPT = [
-  'Bạn là KING (TL — research team TMO), chủ trì Council ③ escalation.',
-  `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.KING)?.jd ?? 'Phân loại mission, chia nhỏ bài toán, kiểm soát chặt — không code'}.`,
+  'Bạn là NEMESIS (TL — research team TMO), chủ trì Council ③ escalation.',
+  `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.NEMESIS)?.jd ?? 'Phân loại mission, chia nhỏ bài toán, kiểm soát chặt — không code'}.`,
   '',
-  'COUNCIL ③ (TB-06 §8 — escalation): G1/G2/G3 ESCALATE → KING chủ trì + agent liên quan.',
+  'COUNCIL ③ (TB-06 §8 — escalation): G1/G2/G3 ESCALATE → NEMESIS chủ trì + agent liên quan.',
   '  - Quyết: revise approach / hủy task / pivot / escalate USER.',
   '  - VETO → escalate USER (block). REVISE → loop lại G1/G2/G3 với conditions.',
   '  - PASS → tiếp tục pipeline (escalate resolved).',
   '',
   'NGUYÊN TẮC:',
-  '  - KING KHÔNG code — chỉ quyết định hướng.',
+  '  - NEMESIS KHÔNG code — chỉ quyết định hướng.',
   '  - Mọi quyết định ghi Decision Log (TC-09 — PIVOT BẮT BUỘC lý do).',
-  '  - Deputy SIVIL/HAN có thể được chỉ định khi KING recuse (DR-C5 §C5).',
+  '  - Deputy SIVIL/HAN có thể được chỉ định khi NEMESIS recuse (DR-C5 §C5).',
   '',
   'OUTPUT JSON-DUY-NAHAT:',
   '{"verdict": "PASS"|"REVISE"|"VETO", "transcript": "<tóm tắt lý do>", "deputy": "SIVIL"|"HAN"|null}',
 ].join('\n')
 
 const COUNCIL_4_SYSTEM_PROMPT = [
-  'Bạn là KING (TL — research team TMO), chủ trì Council ④ final.',
-  `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.KING)?.jd ?? 'Phân loại mission, chia nhỏ bài toán, kiểm soát chặt — không code'}.`,
+  'Bạn là NEMESIS (TL — research team TMO), chủ trì Council ④ final.',
+  `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.NEMESIS)?.jd ?? 'Phân loại mission, chia nhỏ bài toán, kiểm soát chặt — không code'}.`,
   '',
-  'COUNCIL ④ (TB-06 §9.8 FINALIZE): KING + SIVIL + BELI + LISMA + HAN.',
+  'COUNCIL ④ (TB-06 §9.8 FINALIZE): NEMESIS + SIVIL + BELI + LISMA + HAN.',
   '  - Verify final report (M1) / Proposal (M2) đầy đủ + chính xác.',
   '  - Verify Proposal items có Verification Plan (TB-11 §7 — (a) manual + (b) benchmark).',
   '  - PASS → FINALIZE. REVISE → loop lại (M1: G2 fix bug; M2: G3 revise options).',
   '  - VETO → escalate USER (proposal không đạt — TC-11 REJECTED).',
   '',
   'NGUYÊN TẮC:',
-  '  - KING KHÔNG tự duyệt Proposal (DR-C5 §C5 — recused; deputy/USER duyệt thay).',
+  '  - NEMESIS KHÔNG tự duyệt Proposal (DR-C5 §C5 — recused; deputy/USER duyệt thay).',
   '  - Mọi claim BẮT BUỘC evidence (TC-06).',
   '  - Final report phải có: Lessons + Anti-Patterns + Suggestions sections (TB-08 §7 capture).',
   '',
@@ -97,11 +97,11 @@ export interface Council3Result {
 }
 
 /**
- * Council ③ escalation (TB-06 §8) — KING chủ trì + agent liên quan:
+ * Council ③ escalation (TB-06 §8) — NEMESIS chủ trì + agent liên quan:
  *  - Gọi callLLM với Council ③ system prompt + escalation context.
  *  - Persist CouncilTranscript round=3 kind=3 blocking=true.
  *  - Verdict VETO → ESCALATE USER. REVISE → loop lại. PASS → tiếp tục.
- *  - Deputy có thể được chỉ định (SIVIL/HAN) nếu KING recuse.
+ *  - Deputy có thể được chỉ định (SIVIL/HAN) nếu NEMESIS recuse.
  *
  * LLM error → fail-open REVISE + transcript 'council deferred — LLM unavailable'.
  */
@@ -129,8 +129,8 @@ export async function runCouncil3(
     llm = await callLLM(prompt, COUNCIL_3_SYSTEM_PROMPT, 'council-3-escalation', {
       temperature: 0.2,
       maxTokens: 1500,
-      agentId: AGENT_ID.KING,
-      agentName: 'KING (Council ③)',
+      agentId: AGENT_ID.NEMESIS,
+      agentName: 'NEMESIS (Council ③)',
     })
   } catch (err) {
     return failOpenCouncil3(missionId, `LLM call threw: ${err instanceof Error ? err.message : String(err)}`)
@@ -170,7 +170,7 @@ export interface Council4Result {
 }
 
 /**
- * Council ④ final (TB-06 §9.8 FINALIZE) — KING + all agents:
+ * Council ④ final (TB-06 §9.8 FINALIZE) — NEMESIS + all agents:
  *  - Verify final report (M1) / Proposal (M2) đầy đủ + chính xác.
  *  - Verify Proposal items có Verification Plan (TB-11 §7).
  *  - Persist CouncilTranscript round=4 kind=4 blocking=true.
@@ -206,8 +206,8 @@ export async function runCouncil4(
     llm = await callLLM(prompt, COUNCIL_4_SYSTEM_PROMPT, 'council-4-final', {
       temperature: 0.2,
       maxTokens: 3000,
-      agentId: AGENT_ID.KING,
-      agentName: 'KING (Council ④)',
+      agentId: AGENT_ID.NEMESIS,
+      agentName: 'NEMESIS (Council ④)',
     })
   } catch (err) {
     return failOpenCouncil4(missionId, `LLM call threw: ${err instanceof Error ? err.message : String(err)}`, finalizeContext.finalReport)
@@ -244,7 +244,7 @@ export interface Council5Result {
 }
 
 /**
- * Council ⑤ solution (TB-14 §6.2) — Wrapper cho KING gọi:
+ * Council ⑤ solution (TB-14 §6.2) — Wrapper cho NEMESIS gọi:
  *  - Delegate to scoring/tournament.runCouncil5 (P2b đã code — đã persist CouncilTranscript
  *      round=5 kind=5). KHÔNG double-persist.
  *  - Extract hypotheses/experiments/contextFit từ tournamentResult (defensive cast).
@@ -281,7 +281,7 @@ export async function runCouncil5(
 }
 
 // ============================================================
-// §6. RE-EXPORT — g1 council ① ② (caller P5 KING engine dùng)
+// §6. RE-EXPORT — g1 council ① ② (caller P5 NEMESIS engine dùng)
 // ============================================================
 
 export { runCouncil } from '../g1/engine'

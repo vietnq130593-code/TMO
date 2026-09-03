@@ -1,4 +1,4 @@
-# TB-07 — TL RESEARCH DECOMPOSITION PLAYBOOK (KING)
+# TB-07 — TL RESEARCH DECOMPOSITION PLAYBOOK (NEMESIS)
 
 > 🔬 **TECHNICAL BLUEPRINT — AI RESEARCH TEAM (DUAL MISSION: M1 KAGGLE + M2 SYSTEM RESEARCH TMO)**
 > Source of Truth: `upload/ai-team-workflow.md` — section "🔬 TL RESEARCH DECOMPOSITION — PHÂN TÍCH SÂU CHO RESEARCH TEAM" (dòng 2709–3172) + "Nhiệm vụ 3: DECOMPOSE" & ASSIGN templates (dòng 2122–2289) + 7-nhiệm-vụ box (dòng 2639–2686) + TRIAGE per-part (dòng 2091–2120) + Module Map (dòng 543–601) + RESEARCH COUNCIL (dòng 1748–1772) + ví dụ M2 (dòng 4428–4511)
@@ -14,22 +14,22 @@
 
 `[TB-07 §0 ← template TB-00 §4]` `[EXT]`
 
-- **Mục đích:** biến nhiệm vụ **3 DECOMPOSE** của KING (1 trong 7 nhiệm vụ TL, TB-06) thành playbook vận hành chi tiết: khi nào phải decompose, phân tích theo kiểu Research Director thế nào, quy trình 5 bước, template task .md chuẩn hóa, ví dụ đầy đủ M1 + M2, checklist chất lượng, anti-patterns, state machine của artifact decompose.
-- **Tách khỏi TB-06 (theo phê duyệt chia 13 file):** TB-06 giữ tổng quan 7 nhiệm vụ + Research Council của KING; TB-07 đi sâu RIÊNG nhiệm vụ 3 để TB-06 gọn. TB-07 = "cẩm nang tay" KING gọi mỗi lần decompose.
-- **Đối tượng đọc:** (1) kỹ sư triển khai logic DECOMPOSE vào TMO; (2) chính KING — runtime briefing khi decompose; (3) SIVIL — hiểu part nhận được sinh ra thế nào (input cho council ①); (4) user — review thiết kế (1 file = 1 review unit).
+- **Mục đích:** biến nhiệm vụ **3 DECOMPOSE** của NEMESIS (1 trong 7 nhiệm vụ TL, TB-06) thành playbook vận hành chi tiết: khi nào phải decompose, phân tích theo kiểu Research Director thế nào, quy trình 5 bước, template task .md chuẩn hóa, ví dụ đầy đủ M1 + M2, checklist chất lượng, anti-patterns, state machine của artifact decompose.
+- **Tách khỏi TB-06 (theo phê duyệt chia 13 file):** TB-06 giữ tổng quan 7 nhiệm vụ + Research Council của NEMESIS; TB-07 đi sâu RIÊNG nhiệm vụ 3 để TB-06 gọn. TB-07 = "cẩm nang tay" NEMESIS gọi mỗi lần decompose.
+- **Đối tượng đọc:** (1) kỹ sư triển khai logic DECOMPOSE vào TMO; (2) chính NEMESIS — runtime briefing khi decompose; (3) SIVIL — hiểu part nhận được sinh ra thế nào (input cho council ①); (4) user — review thiết kế (1 file = 1 review unit).
 - **Phân biệt 2 tầng decompose (QUAN TRỌNG):**
 
 | Tầng | Ai làm | Input → Output | Blueprint |
 |---|---|---|---|
-| **Mission → Parts** | **KING (TL)** | request đã TRIAGE → bộ task .md (parts) | **TB-07 (file này)** |
-| **Part → sub-agent specs** | **SIVIL (G1)** | task .md từ KING → N specs cho sub-agents (M1: theo approach / M2: theo Module Map) | TB-03 §4–5 |
+| **Mission → Parts** | **NEMESIS (TL)** | request đã TRIAGE → bộ task .md (parts) | **TB-07 (file này)** |
+| **Part → sub-agent specs** | **SIVIL (G1)** | task .md từ NEMESIS → N specs cho sub-agents (M1: theo approach / M2: theo Module Map) | TB-03 §4–5 |
 
 - **Phạm vi (bao gồm):** tiêu chí đơn giản vs phức tạp · quy trình 5 bước · Research Protocol 5 lớp · template task .md hợp nhất M1+M2 · playbook M2 theo Module Map · checklist + anti-patterns + state machine + error handling.
 - **Phạm vi (KHÔNG bao gồm):** TRIAGE chấm điểm → TB-06/TB-02 · ASSIGN chọn workflow per tier → TB-06 · SIVIL decompose nội bộ G1 → TB-03 · worklog schema + Handoff → TB-09 · Artifact Map đọc code → TB-10 · Proposal Schema → TB-11.
 
 | File liên quan | Quan hệ với TB-07 |
 |---|---|
-| TB-06 | Bố mẹ logic — nhiệm vụ 3 DECOMPOSE nằm trong 7 nhiệm vụ KING; TB-07 chi tiết hóa |
+| TB-06 | Bố mẹ logic — nhiệm vụ 3 DECOMPOSE nằm trong 7 nhiệm vụ NEMESIS; TB-07 chi tiết hóa |
 | TB-02 | Tier system + bảng complexity (input tier dự kiến cho từng part) |
 | TB-03 | Người tiêu thụ task .md (SIVIL); Module Map + Findings Schema M2 |
 | TB-08 | KB references trong task .md + council ① ghi KB |
@@ -110,7 +110,7 @@ TRIAGE score mission
 
 `[TB-07 §1.4 ← nguồn dòng 3105–3135]` `[SRC]`
 
-KING phân tích SÂU ở mức:
+NEMESIS phân tích SÂU ở mức:
 - ✅ "Bài toán này cần K-Fold CV vì small data"
 - ✅ "Target encoding có risk leakage → phải K-Fold encode"
 - ✅ "GBM mạnh nhưng CatBoost có thể yếu trên 1460 samples"
@@ -118,7 +118,7 @@ KING phân tích SÂU ở mức:
 - ✅ "CV-LB gap cần monitor sát vì small data"
 - ✅ (M2) "Latency cao → check fail-open paths + key pool"
 
-KING KHÔNG phân tích chi tiết ở mức:
+NEMESIS KHÔNG phân tích chi tiết ở mức:
 - ❌ "Dùng category_encoders.TargetEncoder(smoothing=0.3)"
 - ❌ "XGBoost params: lr=0.01, depth=5, n_estimators=3000"
 - ❌ "Pipeline: step1 → step2 → step3 → step4"
@@ -183,7 +183,7 @@ TRIAGE xong (mission = COMPLEX — decompose; MEDIUM: 1 task_medium.md nguyên k
 
 `[TB-07 §2.1 ← nguồn dòng 2929–2935, 2023–2046, 2056–2069]` `[SRC]`
 
-- **Làm gì:** KING dùng output RECEIVE (đã đọc ở nhiệm vụ 1): M1 — competition page + data dictionary + forum top posts + phân tích ban đầu; M2 — health check + dev.log + system docs (.env.example, README) + scope ước tính (1 module hay toàn pipeline).
+- **Làm gì:** NEMESIS dùng output RECEIVE (đã đọc ở nhiệm vụ 1): M1 — competition page + data dictionary + forum top posts + phân tích ban đầu; M2 — health check + dev.log + system docs (.env.example, README) + scope ước tính (1 module hay toàn pipeline).
 - **Câu hỏi then chốt:** "Bài toán thuộc loại gì? Data/logs đặc điểm gì? Có số đo cụ thể chưa?" [SRC 2808–2824, 2066–2068]
 - **Output:** context brief (dữ kiện thô: 1460 rows × 79 features, metric RMSE log, outliers Id 524/1299 · M2: service nào degraded, latency patterns).
 - **Lưu ý:** Bước 1 KHÔNG lặp lại RECEIVE — chỉ chuẩn hóa lại dữ kiện thành đầu vào cho Lớp 1 [EXT].
@@ -231,7 +231,7 @@ TRIAGE xong (mission = COMPLEX — decompose; MEDIUM: 1 task_medium.md nguyên k
 - **Làm gì:**
   1. Viết 1 task .md cho TỪNG part theo template §3 (đủ 9 trường nguồn + 5 trường mở rộng).
   2. Sắp xếp **priority & thứ tự** theo dependency DAG (critical path trước).
-  3. Gọi **RESEARCH COUNCIL ①** — KING ↔ SIVIL, "sau DECOMPOSE — trước khi ASSIGN" [SRC 2537]: challenge hypotheses (KING hỏi, SIVIL đáp bằng findings/KB), đối chiếu KB "đã có chưa?", chốt tri thức mới → ghi KB NGAY (KB Write Protocol, TB-08). Output: discussion summary (vào worklog) + KB entries mới.
+  3. Gọi **RESEARCH COUNCIL ①** — NEMESIS ↔ SIVIL, "sau DECOMPOSE — trước khi ASSIGN" [SRC 2537]: challenge hypotheses (NEMESIS hỏi, SIVIL đáp bằng findings/KB), đối chiếu KB "đã có chưa?", chốt tri thức mới → ghi KB NGAY (KB Write Protocol, TB-08). Output: discussion summary (vào worklog) + KB entries mới.
 - **Câu hỏi then chốt:** "Hypotheses nào yếu nhất cần bị thách thức trước khi tốn công? Lesson nào trong KB làm thay đổi cách chia part?"
 - **Output:** bộ task .md status `DRAFTED` → council review → `LOCKED` → giao ASSIGN (TB-06). State machine: §8.
 
@@ -281,7 +281,7 @@ TRIAGE xong (mission = COMPLEX — decompose; MEDIUM: 1 task_medium.md nguyên k
 
 > **Quy tắc hợp nhất:** trường nào có sẵn trong template nguồn (ID, Mission, Tier, Part, Status, Mô tả, Input, Output kỳ vọng, Constraints) GIỮ NGUYÊN câu chữ làm heading; 5 trường Research Direction → Decision Gate lấy từ RESEARCH TEAM SPEC [3071–3103] gắn vào MỌI part từ MEDIUM trở lên. Part SIMPLE được phép rút gọn: 4 trường đầu + Constraints (như code fence nguồn dòng 2220–2254) [SRC + EXT].
 >
-> **Đối chiếu thuật ngữ với TB-06 [EXT]:** TB-06 §5 gọi gói định hướng KING viết cho từng part là **Research Protocol (M1) / System Audit Charter (M2)** — trong TB-07, gói đó = 5 trường `## Research Direction` → `## Decision Gate` (+ `## Evidence Sources` M2) nằm ngay trong task .md. Không phải artifact riêng — tránh 1 part 2 file.
+> **Đối chiếu thuật ngữ với TB-06 [EXT]:** TB-06 §5 gọi gói định hướng NEMESIS viết cho từng part là **Research Protocol (M1) / System Audit Charter (M2)** — trong TB-07, gói đó = 5 trường `## Research Direction` → `## Decision Gate` (+ `## Evidence Sources` M2) nằm ngay trong task .md. Không phải artifact riêng — tránh 1 part 2 file.
 
 ### 3.3 🧪 Ví dụ điền đầy đủ — M1 (House Prices · Part 2/6)
 
@@ -404,7 +404,7 @@ Winning pattern: fail-fast + key health check + circuit breaker.
 - Rollback path cho mọi thay đổi đề xuất
 
 ## Decision Gate
-- Root cause không khớp code ↔ logs → PIVOT re-audit (KING)
+- Root cause không khớp code ↔ logs → PIVOT re-audit (NEMESIS)
 - Phát hiện > 3 root cause không liên quan → tách mission mới
 - Scope mở sang UI module → council ① đánh giá lại parts
 
@@ -503,7 +503,7 @@ Part 1 (EDA) ──insights──► Part 2 (Features) ──features──► P
 `[TB-07 §5.1 ← nguồn dòng 2169–2190, 4445–4449]` `[SRC]`
 
 ```
-KING chia "Đề xuất nâng cấp bộ nhớ TMO" thành 4 Parts:
+NEMESIS chia "Đề xuất nâng cấp bộ nhớ TMO" thành 4 Parts:
 
 Part 1: Audit hiện trạng (COMPLEX)
   ├── SIVIL dispatch SAs đọc code + 3 stores + logs
@@ -519,7 +519,7 @@ Part 3: Thiết kế options (COMPLEX)
   └── Output: options comparison
 
 Part 4: Proposal & Verification Plan (MEDIUM)
-  ├── KING tổng hợp PROPOSAL theo Proposal Schema
+  ├── NEMESIS tổng hợp PROPOSAL theo Proposal Schema
   └── Output: Proposal → SELF-DIRECTION
 ```
 
@@ -542,7 +542,7 @@ Part 4: Proposal & Verification Plan (MEDIUM)
 | **Performance** (SA-07) | dev.log, PM2 logs, latency, token usage | Latency spike, token waste | Benchmark A/B (deferred), cache |
 | **Config & Deployment** (SA-08) | .env, ecosystem config, health check | Env override, config drift | Config schema + validation |
 
-> Quy ước [EXT]: cột "Part 2/3" là GỢI Ý TRỌNG TÂM audit, không phải giới hạn — root cause cuối cùng do LISMA xác định bằng evidence; options do HAN đề xuất. Part 4 luôn do KING tổng hợp.
+> Quy ước [EXT]: cột "Part 2/3" là GỢI Ý TRỌNG TÂM audit, không phải giới hạn — root cause cuối cùng do LISMA xác định bằng evidence; options do HAN đề xuất. Part 4 luôn do NEMESIS tổng hợp.
 
 ### 5.3 📏 Quy tắc chọn số part
 
@@ -593,7 +593,7 @@ Branch D: FEASIBILITY    (ràng buộc hệ đang chạy + effort từng option)
 
 `[TB-07 §6 ← tổng hợp nguồn dòng 2220–2254, 3071–3103, 596–601, 3126–3134]` `[EXT — 12 tiêu chí]`
 
-KING tự đối chiếu 12 tiêu chí khi viết xong bộ drafts — mọi ✅ mới chuyển `DECOMPOSING → DRAFTED` (gate vị trí §8.1/§8.2; sau đó council ① review nằm ở `DRAFTED → COUNCIL_REVIEWED`):
+NEMESIS tự đối chiếu 12 tiêu chí khi viết xong bộ drafts — mọi ✅ mới chuyển `DECOMPOSING → DRAFTED` (gate vị trí §8.1/§8.2; sau đó council ① review nằm ở `DRAFTED → COUNCIL_REVIEWED`):
 
 - [ ] **C1 — Một mục tiêu/part:** mỗi part trả lời ĐÚNG 1 câu hỏi nghiên cứu chính (Mô tả không chứa 2 mục tiêu nối bằng "và").
 - [ ] **C2 — Input/Output rõ:** mọi part khai báo Input cụ thể + Output kỳ vọng đo/xem được được.
@@ -634,17 +634,17 @@ KING tự đối chiếu 12 tiêu chí khi viết xong bộ drafts — mọi ✅
 ### 8.1 🔀 Diagram
 
 ```
-              (KING bắt đầu nhiệm vụ 3)
+              (NEMESIS bắt đầu nhiệm vụ 3)
                        │
                        ▼
                ┌───────────────┐
-        ┌─────►│ DECOMPOSING   │ KING chạy 5 bước §2 (viết parts)
+        ┌─────►│ DECOMPOSING   │ NEMESIS chạy 5 bước §2 (viết parts)
         │      └───────┬───────┘
         │              ▼ mọi task .md đủ 12 tiêu chí §6
         │      ┌───────────────┐
         │      │ DRAFTED       │ bộ task .md hoàn chỉnh, status Pending
         │      └───────┬───────┘
-        │              ▼ Council ① (KING ↔ SIVIL, TRƯỚC ASSIGN)
+        │              ▼ Council ① (NEMESIS ↔ SIVIL, TRƯỚC ASSIGN)
         │      ┌───────────────┐
         │      │COUNCIL_REVIEWED│ hypotheses đã bị challenge; KB đối chiếu
         │      └───────┬───────┘
@@ -662,15 +662,15 @@ KING tự đối chiếu 12 tiêu chí khi viết xong bộ drafts — mọi ✅
 
 | Từ → Đến | Trigger | Ai kích hoạt | Hành động + ghi chú |
 |---|---|---|---|
-| → DECOMPOSING | TRIAGE kết luận COMPLEX | KING | Bắt đầu 5 bước §2 (MEDIUM → 1 task .md nguyên khối — không vào state machine này) |
-| DECOMPOSING → DRAFTED | Đủ parts + đủ 12 tiêu chí §6 | KING | Không qua ASSIGN khi chưa DRAFTED |
-| DRAFTED → COUNCIL_REVIEWED | Council ① họp xong (sau DECOMPOSE, trước ASSIGN) [SRC 2537] | KING + SIVIL | Discussion summary vào worklog + KB entries mới [SRC 1768–1770] |
-| COUNCIL_REVIEWED → LOCKED | Mọi challenge được xử lý (sửa H / thêm gate / tách part) | KING | ASSIGN chỉ nhận bộ LOCKED |
-| **COUNCIL_REVIEWED → DECOMPOSING** | Council ① bác hypotheses lớn / thiếu coverage / có A1–A8 | SIVIL challenge | KING sửa rồi quay DRAFTED (đi lại vòng) |
-| **LOCKED → DECOMPOSING (part cục bộ)** | DECIDE: nâng/hạ tier part · pivot quay lại parts trước [SRC 2366, 2419] · M2 claim thiếu evidence → re-audit [SRC 2574] · G2 ESCALATE architectural [SRC 2555] | KING (qua DECIDE) | Chỉ mở khóa các part ảnh hưởng; các part đã chạy tốt giữ LOCKED; part thay đổi có suffix `-b` [EXT] |
-| **LOCKED → DECOMPOSING (toàn bộ)** | Proposal bị REVISED từ SELF-DIRECTION cần nghiên cứu bổ sung [SRC 2577–2579] | SELF-DIRECTION | KING giao lại group liên quan — re-decompose scope phần REVISED |
+| → DECOMPOSING | TRIAGE kết luận COMPLEX | NEMESIS | Bắt đầu 5 bước §2 (MEDIUM → 1 task .md nguyên khối — không vào state machine này) |
+| DECOMPOSING → DRAFTED | Đủ parts + đủ 12 tiêu chí §6 | NEMESIS | Không qua ASSIGN khi chưa DRAFTED |
+| DRAFTED → COUNCIL_REVIEWED | Council ① họp xong (sau DECOMPOSE, trước ASSIGN) [SRC 2537] | NEMESIS + SIVIL | Discussion summary vào worklog + KB entries mới [SRC 1768–1770] |
+| COUNCIL_REVIEWED → LOCKED | Mọi challenge được xử lý (sửa H / thêm gate / tách part) | NEMESIS | ASSIGN chỉ nhận bộ LOCKED |
+| **COUNCIL_REVIEWED → DECOMPOSING** | Council ① bác hypotheses lớn / thiếu coverage / có A1–A8 | SIVIL challenge | NEMESIS sửa rồi quay DRAFTED (đi lại vòng) |
+| **LOCKED → DECOMPOSING (part cục bộ)** | DECIDE: nâng/hạ tier part · pivot quay lại parts trước [SRC 2366, 2419] · M2 claim thiếu evidence → re-audit [SRC 2574] · G2 ESCALATE architectural [SRC 2555] | NEMESIS (qua DECIDE) | Chỉ mở khóa các part ảnh hưởng; các part đã chạy tốt giữ LOCKED; part thay đổi có suffix `-b` [EXT] |
+| **LOCKED → DECOMPOSING (toàn bộ)** | Proposal bị REVISED từ SELF-DIRECTION cần nghiên cứu bổ sung [SRC 2577–2579] | SELF-DIRECTION | NEMESIS giao lại group liên quan — re-decompose scope phần REVISED |
 
-> **Nguyên tắc khóa [EXT]:** trạng thái LOCKED không có nghĩa "bất biến" — nó có nghĩa "mọi thay đổi phải đi qua DECIDE của KING và để lại dấu vết trong Decision log + task .md v2" (nguồn: "Decision log — mọi quyết định + lý do", dòng 2682). Task Status từng part (Pending→...) là lifecycle runtime khác — xem TB-09.
+> **Nguyên tắc khóa [EXT]:** trạng thái LOCKED không có nghĩa "bất biến" — nó có nghĩa "mọi thay đổi phải đi qua DECIDE của NEMESIS và để lại dấu vết trong Decision log + task .md v2" (nguồn: "Decision log — mọi quyết định + lý do", dòng 2682). Task Status từng part (Pending→...) là lifecycle runtime khác — xem TB-09.
 
 ---
 
@@ -680,7 +680,7 @@ KING tự đối chiếu 12 tiêu chí khi viết xong bộ drafts — mọi ✅
 
 | # | Tình huống | Xử lý | Theo nguồn |
 |---|---|---|---|
-| E1 | **Task KHÔNG decompose được** (mọi cách chia đều gãy dependency hoặc parts chỉ 1 mục tiêu duy) | KING thử 2 nhánh chia (theo dependency / theo câu hỏi) → vẫn gãy → **ESCALATE user**: trình 2 phương án — (a) chạy nguyên khối ở tier thấp hơn, (b) user làm rõ scope; KHÔNG tự pha loãng scope | Mở rộng từ "Ambiguous → hỏi user ĐÚNG 1 CÂU" [2007] + G1 blocking → TL quyết [2522–2524] |
+| E1 | **Task KHÔNG decompose được** (mọi cách chia đều gãy dependency hoặc parts chỉ 1 mục tiêu duy) | NEMESIS thử 2 nhánh chia (theo dependency / theo câu hỏi) → vẫn gãy → **ESCALATE user**: trình 2 phương án — (a) chạy nguyên khối ở tier thấp hơn, (b) user làm rõ scope; KHÔNG tự pha loãng scope | Mở rộng từ "Ambiguous → hỏi user ĐÚNG 1 CÂU" [2007] + G1 blocking → TL quyết [2522–2524] |
 | E2 | **2 parts phụ thuộc vòng** | Ưu tiên tách phần dùng chung làm part chạy trước; nếu không tách được → gộp 1 part; ghi nguyên do trong Mô tả | §7-A3 |
 | E3 | **Hypotheses không test được** (không có dữ kiện nào chứng minh được sai) | Council ① bắt buộc bắt (C5); nếu lọt qua → LISMA/verify CP phát hiện "claim thiếu evidence" → PIVOT re-audit | Challenge hypotheses [2537, 1763] + M2 claim thiếu evidence → pivot [2574] |
 | E4 | **Decompose xong phát hiện sai mission** (M1 hóa ra là M2) | Quay CLASSIFY (Bước 0), re-TRIAGE, re-DECOMPOSE — toàn bộ parts cũ đánh dấu void; ghi Decision log | TB-02 §6 (sai mission → pivot về CLASSIFY) |
@@ -689,7 +689,7 @@ KING tự đối chiếu 12 tiêu chí khi viết xong bộ drafts — mọi ✅
 | E7 | **M2: Workspace chưa mở** | Part 3 POC không thực thi được → đánh cờ `POC-NEEDS-WORKSPACE` trong part (tiêu dùng bởi Proposal, TB-02 §6) | TB-02 quy ước |
 | E8 | **Deadline áp giữa decompose** | Hạ số part: gộp parts cùng chủ đề, chỉ giữ CRITICAL; mọi hypothesis dưới MEDIUM cho vào backlog | "Deadline áp → hạ tier, chỉ giữ CRITICAL parts" [2568–2569] |
 | E9 | **Decompose M2 nhiều module quá trần** | Áp R3 (§5.3): tách mission, báo user nếu scope ban đầu là 1 yêu cầu | Trần SA 5–15 [TB-03 §5] |
-| E10 | **Council ① bất đồng kéo dài** (≥ 2 vòng không chốt) | KING quyết theo Decision Framework (ảnh hưởng → rủi ro → Proceed/Adjust/Pivot/Drop); ghi 2 interpretation vào worklog như TB-03 SA-arbitration | Decision Framework [2584–2629] |
+| E10 | **Council ① bất đồng kéo dài** (≥ 2 vòng không chốt) | NEMESIS quyết theo Decision Framework (ảnh hưởng → rủi ro → Proceed/Adjust/Pivot/Drop); ghi 2 interpretation vào worklog như TB-03 SA-arbitration | Decision Framework [2584–2629] |
 
 ---
 
@@ -710,7 +710,7 @@ KING tự đối chiếu 12 tiêu chí khi viết xong bộ drafts — mọi ✅
 - [ ] **AC11** — State machine §8: 4 trạng thái + council ① nằm TRƯỚC ASSIGN + điều kiện quay lại DECOMPOSING ghi rõ.
 - [ ] **AC12** — §9 có đủ 3 tình huống bắt buộc: không decompose được (ESCALATE user), dependency vòng, hypotheses không test được.
 - [ ] **AC13** — Mọi section chính ghi `[TB-07 §n ← nguồn dòng a–b]` + dấu [SRC]/[EXT]/[Q].
-- [ ] **AC14** — Danh tính: KING (TL), SIVIL, BELI, LISMA, HAN — không lẫn tên model làm tên agent; Live System chỉ đọc / Workspace là nơi POC.
+- [ ] **AC14** — Danh tính: NEMESIS (TL), SIVIL, BELI, LISMA, HAN — không lẫn tên model làm tên agent; Live System chỉ đọc / Workspace là nơi POC.
 
 ---
 
@@ -724,7 +724,7 @@ KING tự đối chiếu 12 tiêu chí khi viết xong bộ drafts — mọi ✅
 - **[Q4] Version field trong task .md khi re-decompose: ✅ CHỐT v1.3 — CÓ** — task .md có `version: N` + `## CHANGELOG` block chính thức (✅ DR-C3; đồng bộ TB-09 §9.4).
 - **[Q5] Council ① với mission chỉ có parts SIMPLE/MEDIUM: ✅ CHỐT v1.3 — BẮT BUỘC council ① cho MỌI mission** (giữ nguyên nguồn).
 - **[Q6] M2 cần Part 0 "Setup & Baseline": ✅ CHỐT v1.3 — CÓ — thêm Part 0 "Setup & Baseline"** cho mission M2 multi-part (≥ 2 parts hoặc tier ≥ T2): khởi Workspace + snapshot baseline từ logs + chốt số liệu so sánh; mission 1-part T1 bỏ (amend nguồn — A4).
-- **[Q7] Ai được đề xuất tách/gộp part ngoài KING: ✅ CHỐT v1.3 — KING độc quyền quyết tách/gộp**; SIVIL (council ①) và LISMA (verify) chỉ FLAG đề xuất qua worklog.
+- **[Q7] Ai được đề xuất tách/gộp part ngoài NEMESIS: ✅ CHỐT v1.3 — NEMESIS độc quyền quyết tách/gộp**; SIVIL (council ①) và LISMA (verify) chỉ FLAG đề xuất qua worklog.
 
 ---
 
@@ -767,4 +767,4 @@ KING tự đối chiếu 12 tiêu chí khi viết xong bộ drafts — mọi ✅
 
 ---
 
-> 🔒 **Kết thúc TB-07.** File này là playbook nhiệm vụ 3 DECOMPOSE của KING — được sử dụng kèm TB-06 (7 nhiệm vụ tổng quan) và TB-03 (SIVIL tiêu thụ task .md). Mọi thay đổi thiết kế: cập nhật nguồn `ai-team-workflow.md` TRƯỚC, blueprint SAU (quy tắc số 1).
+> 🔒 **Kết thúc TB-07.** File này là playbook nhiệm vụ 3 DECOMPOSE của NEMESIS — được sử dụng kèm TB-06 (7 nhiệm vụ tổng quan) và TB-03 (SIVIL tiêu thụ task .md). Mọi thay đổi thiết kế: cập nhật nguồn `ai-team-workflow.md` TRƯỚC, blueprint SAU (quy tắc số 1).

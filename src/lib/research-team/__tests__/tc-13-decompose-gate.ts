@@ -3,7 +3,7 @@
  * ==================================================================================
  * Spec:
  *  - task .md thiếu Success Criteria → council ① (post-DECOMPOSE, mandatory mọi mission)
- *    phát hiện thiếu → part KHÔNG được ASSIGN cho tới khi KING bổ đủ Success Criteria
+ *    phát hiện thiếu → part KHÔNG được ASSIGN cho tới khi NEMESIS bổ đủ Success Criteria
  *    (append amendment theo DR-C3, có CHANGELOG entry).
  *  - validateSuccessCriteria pure: empty array → invalid, reason mentions 'Success Criteria'.
  *

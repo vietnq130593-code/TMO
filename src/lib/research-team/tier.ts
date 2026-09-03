@@ -255,7 +255,7 @@ export async function changeTier(
   const decisionLog = decodeJsonArray<DecisionLogEntry>(row.decisionLogJson)
   decisionLog.push({
     at,
-    agent: agent || 'KING',
+    agent: agent || 'NEMESIS',
     decision: 'PIVOT',
     reason:
       `tier ${isUpgrade ? 'nâng' : 'hạ'} ${oldTier}→${newTier}: ${reason}`,

@@ -12,7 +12,7 @@
  *
  * Bất biến:
  *  - KHÔNG auto-apply (DR-C1) — mọi fix nằm workspace (caller RWV loop persist).
- *  - Trần G2_MAX_FIX_ROUNDS=3 (constants.ts) — quá → ESCALATE KING.
+ *  - Trần G2_MAX_FIX_ROUNDS=3 (constants.ts) — quá → ESCALATE NEMESIS.
  *  - M1: review code → tìm bug → fix bug (≤3 vòng → ESCALATE).
  *  - M2: System Diagnostician — root cause từ logs + code + Diagnostic Report.
  *  - Mọi finding BẮT BUỘC evidence (TC-06 — filterClaimsWithEvidence loại gap).
@@ -20,7 +20,7 @@
  * Fail-open policy (TB-13 §4 — NIM keys placeholder):
  *  - LLM error trong runLismaReview → diagnosticReport='(LLM unavailable)',
  *    escalated=true, escalateReason='LLM unavailable — manual review needed'.
- *  - KHÔNG crash pipeline — caller (KING P5) handle escalate.
+ *  - KHÔNG crash pipeline — caller (NEMESIS P5) handle escalate.
  */
 
 import { callLLM } from '@/lib/llm'
@@ -55,7 +55,7 @@ export interface LismaReviewResult {
   worklog: Partial<WorklogEntry>
   /** Evidence items (TC-06 — claim bắt buộc evidence) */
   evidence: EvidenceItem[]
-  /** Concerns cho KING/TL (issues_found + concerns_for_tl) */
+  /** Concerns cho NEMESIS/TL (issues_found + concerns_for_tl) */
   concerns: string[]
   /** TC-04: nếu fix gây regression → flag true + re-test bug gốc */
   regressionFound: boolean
@@ -80,7 +80,7 @@ const LISMA_SYSTEM_PROMPT = [
   `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.LISMA)?.jd ?? 'Review–tìm–fix lặp đến sạch bug (M1) / System Diagnostician root cause (M2)'}.`,
   '',
   'MODE OPERATION:',
-  '- M1 (verify): review code → tìm bug → fix bug. Trần 3 vòng fix → ESCALATE KING.',
+  '- M1 (verify): review code → tìm bug → fix bug. Trần 3 vòng fix → ESCALATE NEMESIS.',
   '- M2 (change): System Diagnostician — root cause từ logs + code + Diagnostic Report.',
   '',
   'EVIDENCE POLICY (TB-04 §5 + TC-06):',
@@ -154,12 +154,12 @@ export async function runLismaReview(
       '[LISMA] callLLM threw (non-blocking — fail-open):',
       err instanceof Error ? err.message : String(err),
     )
-    return failOpenLisma(missionId, taskId, round, `LLM call threw: ${err instanceof Error ? err.message : String(err)}`)
+    return failOpenLisma(missionId, taskId, round, `LLM call threw: ${err instanceof Error ? err.message : String(err)}`, missionType)
   }
 
   if (llm.error || !llm.content || llm.content.trim().length === 0) {
     console.warn('[LISMA] LLM error/empty content — fail-open:', llm.error ?? 'empty content')
-    return failOpenLisma(missionId, taskId, round, llm.error ?? 'LLM unavailable — empty content')
+    return failOpenLisma(missionId, taskId, round, llm.error ?? 'LLM unavailable — empty content', missionType)
   }
 
   // Parse Diagnostic Report từ LLM output
@@ -173,12 +173,21 @@ export async function runLismaReview(
   const acceptedFindings = findings.filter((f) => accepted.includes(f.finding))
   const evidenceGapClaims = rejected
 
-  // TC-04: regression check — heuristic parse từ LLM output
-  const lowerContent = llm.content.toLowerCase()
-  const regressionFound =
-    lowerContent.includes('regression') ||
-    lowerContent.includes('broke') ||
-    lowerContent.includes('broke existing')
+  // TC-04: regression check — FIX (Task 19 audit A#3): parse GIÁ TRỊ section
+  // "### Regression Check" thay vì includes('regression') toàn văn — chính
+  // system prompt BẮT BUỘC output section header đó nên mọi DR đúng format đều
+  // bị flag regressionFound=true (false-positive → mọi review escalated).
+  const regressionSection = llm.content.match(
+    /###\s*Regression\s*Check\s*\n[\s\S]*?(?=\n###|\n##|$)/i,
+  )
+  const regressionText = (regressionSection?.[1] || regressionSection?.[0] || '')
+    .replace(/^\s*###\s*Regression\s*Check\s*/i, '')
+    .trim()
+  const isRegressionVerdict =
+    /\bREGRESSION\b/i.test(regressionText) ||
+    /\bFAIL\b/i.test(regressionText) ||
+    /\bbroke\s+(?:existing|the\s+original)\b/i.test(regressionText)
+  const regressionFound = isRegressionVerdict
 
   // Rubric A score cho root cause hypothesis (M2)
   let rubricScore: RubricAResult | undefined
@@ -219,13 +228,13 @@ export async function runLismaReview(
       ...(regressionFound ? ['TC-04: regression detected — re-test bug gốc'] : []),
     ],
     suggestionsNextGroup: [
-      ...(round >= G2_MAX_FIX_ROUNDS ? ['ESCALATE KING — trần fix rounds (G2_MAX_FIX_ROUNDS=3)'] : []),
+      ...(round >= G2_MAX_FIX_ROUNDS ? ['ESCALATE NEMESIS — trần fix rounds (G2_MAX_FIX_ROUNDS=3)'] : []),
       ...(evidenceGapClaims.length > 0 ? ['Cần bổ sung evidence cho gap claims'] : []),
     ],
     filesChanged: parsed.filesChanged,
   }
 
-  // Concerns cho KING/TL
+  // Concerns cho NEMESIS/TL
   const concerns: string[] = []
   if (evidenceGapClaims.length > 0) {
     concerns.push(`TC-06 evidence gap: ${evidenceGapClaims.length} claims thiếu evidence`)
@@ -234,14 +243,14 @@ export async function runLismaReview(
     concerns.push('TC-04 regression: fix mới có thể phá bug gốc — cần re-test')
   }
   if (round >= G2_MAX_FIX_ROUNDS) {
-    concerns.push(`Trần fix rounds đạt (${G2_MAX_FIX_ROUNDS}) — ESCALATE KING`)
+    concerns.push(`Trần fix rounds đạt (${G2_MAX_FIX_ROUNDS}) — ESCALATE NEMESIS`)
   }
 
   const escalated = round >= G2_MAX_FIX_ROUNDS || regressionFound
   const escalateReason = escalated
     ? regressionFound
       ? 'TC-04 regression detected — manual review needed'
-      : `Trần ${G2_MAX_FIX_ROUNDS} fix rounds — ESCALATE KING (P5)`
+      : `Trần ${G2_MAX_FIX_ROUNDS} fix rounds — ESCALATE NEMESIS (P5)`
     : undefined
 
   return {
@@ -389,7 +398,7 @@ function buildLismaUserPrompt(
     '',
     '## Instruction',
     missionType === 'M1'
-      ? 'M1 mode: review code → tìm bug → đề xuất fix. Trần 3 vòng → ESCALATE KING.'
+      ? 'M1 mode: review code → tìm bug → đề xuất fix. Trần 3 vòng → ESCALATE NEMESIS.'
       : 'M2 mode: System Diagnostician — root cause từ logs + code + Diagnostic Report.',
     '',
     'Output theo format Diagnostic Report ở system prompt. MỌI finding PHẢI có evidence (file:line — excerpt).',
@@ -483,18 +492,19 @@ function parseDiagnosticReport(content: string): ParsedDiagnosticReport {
 
 /**
  * Fail-open LISMA review — LLM unavailable (TB-13 §4).
- * KHÔNG crash pipeline — caller (KING P5) handle escalate.
+ * KHÔNG crash pipeline — caller (NEMESIS P5) handle escalate.
  */
 function failOpenLisma(
   missionId: string,
   taskId: string,
   round: number,
   reason: string,
+  missionType: 'M1' | 'M2' | 'M3' = 'M2',
 ): LismaReviewResult {
   return {
     diagnosticReport: '(LLM unavailable — Diagnostic Report deferred)',
     worklog: {
-      mission: 'M2',
+      mission: missionType,
       status: 'ESCALATED',
       currentPhase: 'G2',
       overallProgress: Math.min(round * 30, 80),

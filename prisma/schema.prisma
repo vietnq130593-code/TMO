@@ -1873,7 +1873,7 @@ model ResearchMission {
   tier            String // T1 | T2 | T3
   status          String // CLASSIFY→RESEARCHING→...→FINALIZED (bảng TB-02 §7)
   confidenceJson  String   @default("{}") // tín hiệu C2: {signals, conflicts, level}
-  decisionLogJson String   @default("[]") // Decision Log KING (mọi quyết định)
+  decisionLogJson String   @default("[]") // Decision Log NEMESIS (mọi quyết định)
   changelogJson   String   @default("[]") // CHANGELOG amendment DR-C3
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -1886,7 +1886,7 @@ model ResearchMission {
   @@index([tier, status])
 }
 
-/// Task do KING DECOMPOSE sinh — part .md (TB-07)
+/// Task do NEMESIS DECOMPOSE sinh — part .md (TB-07)
 model ResearchTask {
   id                  String          @id @default(cuid())
   missionId           String
@@ -1968,7 +1968,7 @@ model ResearchProposal {
 /// Sự kiện chuyển model — format DR-C7 (TB-01 §2 fallback)
 model ModelSwitchEvent {
   id        String   @id @default(cuid())
-  agentId   String // KING|SIVIL|BELI|LISMA|HAN|SA-*
+  agentId   String // NEMESIS|SIVIL|BELI|LISMA|HAN|SA-*
   fromModel String
   toModel   String
   trigger   String // DR-C7: lý do (429/5xx/timeout/dual-signal...)

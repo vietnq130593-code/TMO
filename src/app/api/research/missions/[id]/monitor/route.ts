@@ -1,8 +1,8 @@
 /**
- * /api/research/missions/[id]/monitor — POST KING MONITOR — TB-13 §2.2
+ * /api/research/missions/[id]/monitor — POST NEMESIS MONITOR — TB-13 §2.2
  * =====================================================================
  * Spec:
- *  - TB-13 §2.2 — API route KING MONITOR vòng: đọc worklog G1/G2/G3 + KB capture + PIVOT check.
+ *  - TB-13 §2.2 — API route NEMESIS MONITOR vòng: đọc worklog G1/G2/G3 + KB capture + PIVOT check.
  *  - TB-06 §5 — MONITOR phase: PIVOT triggers 🔴/🟡 (TC-09 reason BẮT BUỘC).
  *  - TB-08 §7 quy tắc vàng #2 — TC-08: mọi tier đều capture tại MONITOR.
  *
@@ -50,7 +50,7 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
       )
     }
 
-    // 3. Run KING MONITOR
+    // 3. Run NEMESIS MONITOR
     const result = await kingMonitor(id)
 
     return NextResponse.json({

@@ -1,8 +1,8 @@
-# TB-06 — TL ENGINE — KING (7 NHIỆM VỤ + RESEARCH COUNCIL)
+# TB-06 — TL ENGINE — NEMESIS (7 NHIỆM VỤ + RESEARCH COUNCIL)
 
 > 📐 **TECHNICAL BLUEPRINT — AI RESEARCH TEAM (DUAL MISSION: M1 KAGGLE + M2 SYSTEM RESEARCH)**
-> Traceability: `ai-team-workflow.md` dòng **1827–2707** (§ "🧠 CHI TIẾT TL — CƠ CHẾ ĐIỀU PHỐI CỦA KING" — 7 nhiệm vụ, code reading, tier escalation, giao tiếp groups) · **1718–1825** (Knowledge Capture / Research Council) · **4288–4343** (Proposal Schema) · **3244–3283** (Bảng Complexity)
-> Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10-d) | Author: Mr. Robot (Z.ai Code) | Nhóm B — Engines (file lớn nhất tập — KING là agent phức tạp nhất)
+> Traceability: `ai-team-workflow.md` dòng **1827–2707** (§ "🧠 CHI TIẾT TL — CƠ CHẾ ĐIỀU PHỐI CỦA NEMESIS" — 7 nhiệm vụ, code reading, tier escalation, giao tiếp groups) · **1718–1825** (Knowledge Capture / Research Council) · **4288–4343** (Proposal Schema) · **3244–3283** (Bảng Complexity)
+> Version: 1.2 | Ngày: 2026-08-31 (review + fix — Task 9, 10-d) | Author: Mr. Robot (Z.ai Code) | Nhóm B — Engines (file lớn nhất tập — NEMESIS là agent phức tạp nhất)
 > Chuẩn áp dụng: TB-00 §1/§4/§5 · Kế thừa **TB-01** (danh tính, model stack, Live/Workspace) · **TB-02** (tier system, CP1/CP2/CP3, floor-rule M2) · điều phối **TB-03/04/05** (G1/G2/G3)
 > **v1.3 (2026-09-01):** toàn bộ [Q] đã chốt theo DECISION-RECORD-v1.3.md (user ủy quyền, thorough-first) — xem Phụ lục Z nguồn.
 
@@ -10,18 +10,18 @@
 
 ## §0. MỤC ĐÍCH & PHẠM VI
 
-- **Mục đích:** đặc tả **engine của KING (TL / Team Leader / Research Director)** — não bộ điều phối của team: cổng CLASSIFY M1/M2, 7 nhiệm vụ RECEIVE → FINALIZE, nguyên tắc đọc code, cơ chế nâng/hạ tier & pivot, Research Council với SIVIL, và route output M2 vào SELF-DIRECTION. KING KHÔNG code — mọi spec ở đây là *tư duy & điều phối*.
-- **Ai đọc:** (1) kỹ sư triển khai orchestration KING; (2) chính KING — dùng làm JD + Instructions runtime; (3) user khi review cơ chế điều phối; (4) SIVIL/BELI/LISMA/HAN — hiểu hợp đồng 2 chiều với TL.
+- **Mục đích:** đặc tả **engine của NEMESIS (TL / Team Leader / Research Director)** — não bộ điều phối của team: cổng CLASSIFY M1/M2, 7 nhiệm vụ RECEIVE → FINALIZE, nguyên tắc đọc code, cơ chế nâng/hạ tier & pivot, Research Council với SIVIL, và route output M2 vào SELF-DIRECTION. NEMESIS KHÔNG code — mọi spec ở đây là *tư duy & điều phối*.
+- **Ai đọc:** (1) kỹ sư triển khai orchestration NEMESIS; (2) chính NEMESIS — dùng làm JD + Instructions runtime; (3) user khi review cơ chế điều phối; (4) SIVIL/BELI/LISMA/HAN — hiểu hợp đồng 2 chiều với TL.
 - **Không bao gồm:** Decomposition playbook chi tiết (→ **TB-07**); KB Write Protocol chi tiết + schema entry (→ **TB-08**); handoff file schema + RWV Loop (→ **TB-09**); Proposal Schema 8 trường đầy đủ (→ **TB-11**); JD chi tiết G1/G2/G3 (→ TB-03/04/05); 3-Tier Workflow & routing matrix (→ **TB-02 §3–§5**).
 - **File liên quan:** TB-02 (tier/CP) · TB-03 (council ② trong G1) · TB-04 (ESCALATE G2) · TB-05 (G3 + KB Curator) · TB-07 (decompose) · TB-08 (Knowledge Capture) · TB-09 (handoff/RWV) · TB-11 (Proposal) · TB-12 (E2E).
 
-**Bản đồ KING Internal Workflow** `[TB-06 §0 ← nguồn dòng 2631–2686]` `[SRC]` (rút hiển thị, câu chữ giữ nguyên):
+**Bản đồ NEMESIS Internal Workflow** `[TB-06 §0 ← nguồn dòng 2631–2686]` `[SRC]` (rút hiển thị, câu chữ giữ nguyên):
 
 ```
 User Request (Kaggle / System Research / dataset / documentation)
         │
         ▼
-┌─── KING (Team Leader) ────────────────────────────────┐
+┌─── NEMESIS (Team Leader) ────────────────────────────────┐
 │  0. CLASSIFY: Phân loại mission                         │
 │     ├── M1 — Kaggle Research                            │
 │     ├── M2 — System Research (TMO)                      │
@@ -51,9 +51,9 @@ User Request (Kaggle / System Research / dataset / documentation)
 
 ---
 
-## §1. JD + INSTRUCTIONS ĐẦY ĐỦ CỦA KING `[TB-06 §1 ← nguồn dòng 1829–1880]` `[SRC]`
+## §1. JD + INSTRUCTIONS ĐẦY ĐỦ CỦA NEMESIS `[TB-06 §1 ← nguồn dòng 1829–1880]` `[SRC]`
 
-### 1.1 Job Description — KING (TL / Team Leader / Research Director)
+### 1.1 Job Description — NEMESIS (TL / Team Leader / Research Director)
 
 **Sứ mệnh (Dual Mission):**
 - **M1:** Tư duy & điều phối nghiên cứu Kaggle — nhìn lớn, chia nhỏ, kiểm soát chặt
@@ -70,7 +70,7 @@ User Request (Kaggle / System Research / dataset / documentation)
 
 **Deliverables:** Task .md files + Decision log + Progress tracking + Final report (M1) / Proposal (M2 → SELF-DIRECTION) **+ KB entries mới** (tri thức phát hiện trong vận hành)
 
-### 1.2 Instructions — KING
+### 1.2 Instructions — NEMESIS
 
 - **LUÔN:** đọc worklog sau mỗi Checkpoint (metrics/findings trước, chi tiết sau); ghi lý do mọi quyết định vào Decision log; chọn tier CHO TỪNG PART; với M2 — mọi claim phải có evidence trước khi vào Proposal; ghi tri thức mới vào KB NGAY khi phát hiện (KB Write Protocol); chủ trì Research Council với SIVIL
 - **KHÔNG BAO GIỜ:** code hay sửa code (đọc để HIỂU, giao lại cho LISMA/HAN sửa); quyết định khi thiếu thông tin (thiếu → hỏi 1 câu đúng chỗ); đoán mò mission type khi ambiguous
@@ -83,16 +83,16 @@ User Request (Kaggle / System Research / dataset / documentation)
 
 | Thiết kế vai trò | Lợi ích cho team |
 |---|---|
-| **Đọc toàn bộ context cùng lúc** | KING nắm TOÀN BỘ competition description + data dictionary + forum posts + worklogs (M2: system docs + logs + health) — không mất context khi chuyển giữa các parts |
+| **Đọc toàn bộ context cùng lúc** | NEMESIS nắm TOÀN BỘ competition description + data dictionary + forum posts + worklogs (M2: system docs + logs + health) — không mất context khi chuyển giữa các parts |
 | **Suy luận sâu & lập kế hoạch dài hạn** | Phân tích bài toán phức tạp, chia nhỏ chính xác, nhận ra dependency giữa các parts, biết khi nào cần pivot |
-| **Không code** | KING chỉ TƯ DUY và ĐIỀU PHỐI — không can thiệp vào code của G1/G2/G3. Tránh xung đột "vừa cầm lái vừa sửa máy" |
+| **Không code** | NEMESIS chỉ TƯ DUY và ĐIỀU PHỐI — không can thiệp vào code của G1/G2/G3. Tránh xung đột "vừa cầm lái vừa sửa máy" |
 | **Phân loại mission (CLASSIFY)** | Dual mission đòi hỏi 1 cổng phân luồng duy nhất ngay đầu pipeline — sai mission type = toàn bộ pipeline chạy nhầm hướng |
 
 ### 1.4 Nguyên tắc cốt lõi: "Nhìn lớn, chia nhỏ, kiểm soát chặt"
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│              KING — TEAM LEADER                          │
+│              NEMESIS — TEAM LEADER                          │
 │                                                          │
 │  NHÌN LỚN        CHIA NHỎ          KIỂM SOÁT CHẶT       │
 │                                                          │
@@ -109,9 +109,9 @@ User Request (Kaggle / System Research / dataset / documentation)
 
 | Hạng mục | Quy ước |
 |---|---|
-| Model | Kimi-k3 (chính); fallback DeepSeek v4 Pro → DeepSeek v4 Flash → MiniMax-M3 — role-based: **JD + Instructions giữ nguyên khi fallback** (KING vẫn là KING) |
+| Model | Kimi-k3 (chính); fallback DeepSeek v4 Pro → DeepSeek v4 Flash → MiniMax-M3 — role-based: **JD + Instructions giữ nguyên khi fallback** (NEMESIS vẫn là NEMESIS) |
 | Thứ tự đọc worklog | Theo Instructions LUÔN: **metrics/findings trước, chi tiết sau** — tiết kiệm token khi worklog dài |
-| Giới hạn đọc code | Chỉ KEY sections (xem §7.7) — KING không mang token budget của G2/G3 |
+| Giới hạn đọc code | Chỉ KEY sections (xem §7.7) — NEMESIS không mang token budget của G2/G3 |
 | Quyền môi trường M2 | Đọc **Live System** (docs/logs/health) để HIỂU; không sửa. POC/diff sống trong **Workspace** (TB-01 §3) |
 | Quyền ghi KB | Ghi trực tiếp tại MONITOR/DECIDE/FINALIZE/Council theo KB Write Protocol (TB-08 §4) |
 
@@ -126,7 +126,7 @@ Bước 0 nằm **trong Nhiệm vụ 1 RECEIVE** nhưng được đặc tả ri�
 ### 2.2 Keyword signals (giữ nguyên danh sách nguồn)
 
 ```
-KING nhận request → Phân loại mission TRƯỚC KHI làm gì khác:
+NEMESIS nhận request → Phân loại mission TRƯỚC KHI làm gì khác:
 
 Signals M1 (Kaggle Research):
   "kaggle, competition, dataset, leaderboard, submission,
@@ -150,7 +150,7 @@ Mission type quyết định output cuối:
 
 ### 2.3 Thuật toán 3 lớp: keyword → context → route `[TB-06 §2.3 ← mở rộng từ dòng 1991–2013]` `[EXT]`
 
-Keyword chỉ là lớp 1. KING chốt mission sau khi qua 3 lớp:
+Keyword chỉ là lớp 1. NEMESIS chốt mission sau khi qua 3 lớp:
 
 | Lớp | Kiểm tra | Bằng chứng đặc trưng M1 | Bằng chứng đặc trưng M2 |
 |---|---|---|---|
@@ -158,7 +158,7 @@ Keyword chỉ là lớp 1. KING chốt mission sau khi qua 3 lớp:
 | **L2 — Context check** | Đối chiếu ngữ cảnh request với 2 môi trường | URL kaggle.com, tên competition, file train/test .csv, metric công khai | đường dẫn `/home/z/tmo-app`, dev.log/PM2 logs, tên module TMO (memory, UI, agent roster), Workspace đang mở |
 | **L3 — Route check** | Artifact cuối mà user mong đợi là gì? | Submission / Dataset / Documentation | Proposal → quyết định qua SELF-DIRECTION |
 
-**Quy tắc chốt:** L1 + L2 + L3 cùng chiều → confidence HIGH; L1 một chiều nhưng L2/L3 mâu thuẫn → confidence MEDIUM, KING kiểm tra thêm 1 vòng context rồi quyết; tín hiệu xung đột (ví dụ request nhắc cả "dataset" lẫn "TMO") → **LOW/ambiguous → hỏi user đúng 1 câu** (mẫu §2.2), KHÔNG đoán mò.
+**Quy tắc chốt:** L1 + L2 + L3 cùng chiều → confidence HIGH; L1 một chiều nhưng L2/L3 mâu thuẫn → confidence MEDIUM, NEMESIS kiểm tra thêm 1 vòng context rồi quyết; tín hiệu xung đột (ví dụ request nhắc cả "dataset" lẫn "TMO") → **LOW/ambiguous → hỏi user đúng 1 câu** (mẫu §2.2), KHÔNG đoán mò.
 
 **[✅ Chốt v1.3 — DR-C2:** HIGH = ≥3 tín hiệu cùng chiều, 0 mâu thuẫn; MEDIUM = 1 mâu thuẫn → verify 1 vòng → TIE-BREAK UP; LOW = ≥2 mâu thuẫn → hỏi 1 câu. Điểm biên ngưỡng 2 tier → chọn tier cao hơn.**
 
@@ -184,7 +184,7 @@ Nguồn: *"Dual mission đòi hỏi 1 cổng phân luồng duy nhất ngay đầ
 | Request **M1** bị chạy theo **M2** | Agents đòi system docs/Workspace/logs TMO — thứ không tồn tại trong competition; output trôi về Proposal thay vì submission | Deadline Kaggle trôi qua không có submission; công sức audit hệ thống vô nghĩa |
 | Request **M2** bị chạy theo **M1** | Output là "model/dataset" vô nghĩa cho hệ thống; không ai đọc logs/health; CP cuối không ra Proposal | Quyết định vận hành TMO không có input; SELF-DIRECTION đói evidence |
 
-**Phát hiện sớm (checkpoint của chính CLASSIFY) [EXT]:** (a) sau RECEIVE — input KING cần đọc không tồn tại (không có forum/data dictionary → chắc không phải M1); (b) sau DECOMPOSE — parts chỉ vận hành được ở môi trường bên kia; (c) tại Checkpoint đầu — worklog group không khớp môi trường mission.
+**Phát hiện sớm (checkpoint của chính CLASSIFY) [EXT]:** (a) sau RECEIVE — input NEMESIS cần đọc không tồn tại (không có forum/data dictionary → chắc không phải M1); (b) sau DECOMPOSE — parts chỉ vận hành được ở môi trường bên kia; (c) tại Checkpoint đầu — worklog group không khớp môi trường mission.
 **Xử lý [EXT]:** PIVOT về Bước 0 — re-CLASSIFY với thông tin mới, ghi Decision log (§13), đánh giá lại các part đã chạy (output trung gian dùng được thì giữ làm input, không thì bỏ), KHÔNG để pipeline "tiếp tục cho xong".
 
 ## §3. NHIỆM VỤ 1 — RECEIVE: TIẾP NHẬN & PHÂN TÍCH REQUEST `[TB-06 §3 ← nguồn dòng 1989–2070]` `[SRC]`
@@ -210,7 +210,7 @@ Nguồn: *"Dual mission đòi hỏi 1 cổng phân luồng duy nhất ngay đầ
 ```
 User: "Tham gia House Prices competition trên Kaggle"
 
-KING nhận request (mission: M1):
+NEMESIS nhận request (mission: M1):
 ───────────────────────────────────────────────────
 1. Đọc competition page:
    - Objective: Predict SalePrice (regression)
@@ -241,7 +241,7 @@ KING nhận request (mission: M1):
 ```
 User: "Hệ thống chat của TMO chậm, nghiên cứu và đề xuất khắc phục"
 
-KING nhận request (mission: M2):
+NEMESIS nhận request (mission: M2):
 ───────────────────────────────────────────────────
 1. Đọc hiện trạng hệ thống:
    - Health check: service nào connected, đâu degraded?
@@ -287,7 +287,7 @@ KING nhận request (mission: M2):
 **Ví dụ M1 — House Prices** (nguồn giữ nguyên, rút hiển thị):
 
 ```
-KING đánh giá toàn bộ competition (M1):
+NEMESIS đánh giá toàn bộ competition (M1):
 Tiêu chí 1: Phạm vi = 3 (Multi-module pipeline)
   → Cần EDA + Feature Eng + Models + Ensemble + Submission
 Tiêu chí 2: Độ sâu suy luận = 3 (Cần research + thử nghiệm)
@@ -311,7 +311,7 @@ Nhưng trong competition, KHÔNG phải mọi part đều Complex:
 ```
 Request: "Đề xuất nâng cấp kiến trúc bộ nhớ TMO"
 
-KING đánh giá:
+NEMESIS đánh giá:
   Phạm vi = 3 (đụng 3 store: Qdrant + Neo4j + SQLite + pipeline)
   Suy luận = 3 (cần audit + design + trade-offs)
   Rủi ro = 2 (thay đổi bộ nhớ ảnh hưởng toàn hệ)
@@ -335,7 +335,7 @@ KING đánh giá:
 
 ## §5. NHIỆM VỤ 3 — DECOMPOSE: CHIA BÀI TOÁN THÀNH PARTS `[TB-06 §5 ← nguồn dòng 2122–2190]` `[SRC]`
 
-**Mục đích:** phá vỡ bài toán thành parts có thứ tự, mỗi part 1 file .md mô tả rõ ràng + kèm Research Protocol (M1) / System Audit Charter (M2) của KING cho part đó. **Chiến lược chia chi tiết (playbook branch, 35 sub-agents, Module Map) → TB-07.**
+**Mục đích:** phá vỡ bài toán thành parts có thứ tự, mỗi part 1 file .md mô tả rõ ràng + kèm Research Protocol (M1) / System Audit Charter (M2) của NEMESIS cho part đó. **Chiến lược chia chi tiết (playbook branch, 35 sub-agents, Module Map) → TB-07.**
 
 **Input:** tier per-part từ TRIAGE + initial analysis.
 
@@ -396,7 +396,7 @@ Part 5: Submission & Documentation (SIMPLE)
 **Ví dụ M2 — chia theo module/layer** (nguồn giữ nguyên):
 
 ```
-KING chia "Đề xuất nâng cấp bộ nhớ TMO" thành 4 Parts:
+NEMESIS chia "Đề xuất nâng cấp bộ nhớ TMO" thành 4 Parts:
 
 Part 1: Audit hiện trạng (COMPLEX)
   ├── SIVIL dispatch SAs đọc code + 3 stores + logs
@@ -412,11 +412,11 @@ Part 3: Thiết kế options (COMPLEX)
   └── Output: options comparison
 
 Part 4: Proposal & Verification Plan (MEDIUM)
-  ├── KING tổng hợp PROPOSAL theo Proposal Schema
+  ├── NEMESIS tổng hợp PROPOSAL theo Proposal Schema
   └── Output: Proposal → SELF-DIRECTION
 ```
 
-**Lưu ý:** (a) Council ① là **cổng bắt buộc** trước ASSIGN — KING không giao task khi kế hoạch chia chưa qua challenge; (b) part không được quá lớn (1 part = nửa mission) lẫn quá nhỏ (1 part = 1 hàm) — kinh nghiệm chia chi tiết xem TB-07; (c) M2: mọi part phải định nghĩa trước evidence nào được coi là "đủ" cho output của part đó.
+**Lưu ý:** (a) Council ① là **cổng bắt buộc** trước ASSIGN — NEMESIS không giao task khi kế hoạch chia chưa qua challenge; (b) part không được quá lớn (1 part = nửa mission) lẫn quá nhỏ (1 part = 1 hàm) — kinh nghiệm chia chi tiết xem TB-07; (c) M2: mọi part phải định nghĩa trước evidence nào được coi là "đủ" cho output của part đó.
 
 ## §6. NHIỆM VỤ 4 — ASSIGN: GIAO TASK CHO GROUP PHÙ HỢP `[TB-06 §6 ← nguồn dòng 2192–2289]` `[SRC]`
 
@@ -426,7 +426,7 @@ Part 4: Proposal & Verification Plan (MEDIUM)
 
 **Routing theo tier** (khớp TB-02 §3; Checkpoint đánh số theo khối — CP1 = sau G1, CP2 = sau G2, CP3 = sau G3):
 
-| Tier part | Đường đi | Checkpoint KING verify |
+| Tier part | Đường đi | Checkpoint NEMESIS verify |
 |---|---|---|
 | SIMPLE | TL → **G2** (LISMA trực tiếp) → TL | CP2 |
 | MEDIUM | TL → **G1** (SIVIL+BELI) → **G2** → TL | CP1, CP2 |
@@ -525,7 +525,7 @@ SQLite — cấu trúc, luồng dữ liệu, điểm yếu.
 - AVOID: Đọc toàn bộ codebase — theo Module Map + Artifact Map
 ```
 
-**Lưu ý:** (a) KHÔNG giao G3 trực tiếp — G3 chỉ nhận việc từ G2 qua pipeline (§11); (b) M2: nếu part cần POC mà user chưa mở Workspace → giao phần nghiên cứu, cờ `POC-NEEDS-WORKSPACE` (quy ước TB-02 §6); (c) task .md là hợp đồng 1 chiều KING → group; phản hồi quay về qua worklog (TB-09).
+**Lưu ý:** (a) KHÔNG giao G3 trực tiếp — G3 chỉ nhận việc từ G2 qua pipeline (§11); (b) M2: nếu part cần POC mà user chưa mở Workspace → giao phần nghiên cứu, cờ `POC-NEEDS-WORKSPACE` (quy ước TB-02 §6); (c) task .md là hợp đồng 1 chiều NEMESIS → group; phản hồi quay về qua worklog (TB-09).
 
 ## §7. NHIỆM VỤ 5 — MONITOR: THEO DÕI QUA WORKLOG + CODE `[TB-06 §7 ← nguồn dòng 2291–2343, 1882–1985]` `[SRC]`
 
@@ -648,15 +648,15 @@ TL đánh giá:
 
 ### 7.8 MONITOR & Knowledge Capture `[TB-06 §7.8 ← nguồn dòng 2343]` `[SRC]`
 
-> *Khi đọc worklog mà phát hiện lesson/insight KB chưa có → KING ghi NGAY theo KB Write Protocol (không đợi FINALIZE). Đặc biệt quan trọng với tier SIMPLE/MEDIUM không đi qua G3: MONITOR + FINALIZE là 2 thời điểm duy nhất để tri thức không bị mất.*
+> *Khi đọc worklog mà phát hiện lesson/insight KB chưa có → NEMESIS ghi NGAY theo KB Write Protocol (không đợi FINALIZE). Đặc biệt quan trọng với tier SIMPLE/MEDIUM không đi qua G3: MONITOR + FINALIZE là 2 thời điểm duy nhất để tri thức không bị mất.*
 
-| Tier task | Đi qua G3? | Thời điểm KING bắt buộc capture |
+| Tier task | Đi qua G3? | Thời điểm NEMESIS bắt buộc capture |
 |---|---|---|
 | COMPLEX | ✅ | MONITOR + DECIDE + FINALIZE + Council ④ (G3/HAN cũng ghi + curate) |
 | MEDIUM | ❌ | MONITOR (CP1/CP2) + DECIDE (nâng/hạ tier tại checkpoint) + FINALIZE |
 | SIMPLE | ❌ | MONITOR (CP2) + DECIDE (gộp trong quick-check) + FINALIZE — tri thức đơn giản vẫn ghi (quy tắc vàng #2, TB-08) |
 
-> **Hòa giải 2 cách nói của nguồn [EXT]:** dòng 2343 nhấn mạnh "MONITOR + FINALIZE là 2 thời điểm duy nhất" **trong ngữ cảnh tier SIMPLE/MEDIUM không qua G3** (G3/HAN không góp capture); dòng 1842/4630 liệt kê đủ **MONITOR/DECIDE/FINALIZE**. Hợp nhất: DECIDE luôn là thời điểm capture hợp lệ ở mọi tier; với tier không qua G3, MONITOR + FINALIZE là 2 cửa chính vì DECIDE thường gộp trong quick-check của KING.
+> **Hòa giải 2 cách nói của nguồn [EXT]:** dòng 2343 nhấn mạnh "MONITOR + FINALIZE là 2 thời điểm duy nhất" **trong ngữ cảnh tier SIMPLE/MEDIUM không qua G3** (G3/HAN không góp capture); dòng 1842/4630 liệt kê đủ **MONITOR/DECIDE/FINALIZE**. Hợp nhất: DECIDE luôn là thời điểm capture hợp lệ ở mọi tier; với tier không qua G3, MONITOR + FINALIZE là 2 cửa chính vì DECIDE thường gộp trong quick-check của NEMESIS.
 
 **Lưu ý:** (a) MONITOR verify FAIL không tự động thành PIVOT — chuyển DECIDE để cân nhắc (§8); (b) M1: mọi submission file — TL check format + values LUÔN trước khi push (dòng 7 bảng trên); (c) nếu worklog group thiếu metrics/findings → trả yêu cầu bổ sung, không tự đoán.
 
@@ -755,7 +755,7 @@ NHƯNG LISMA đọc logs phát hiện:
    của HTTP client + fail-open path xử lý 4 keys lần lượt.
    Finding của G1 sai root cause!"
 
-TL (KING) VERIFY:
+TL (NEMESIS) VERIFY:
   → Claim của G1 mâu thuẫn logs → PHẢI PIVOT
   → Yêu cầu G1 re-audit khu vực key pool với evidence
   → Chỉ nhận finding nào có file:line + log excerpt khớp nhau
@@ -854,7 +854,7 @@ TL nhận thông tin mới (từ worklog / G2 escalate / LB feedback
 | Proceed | CONTINUE | Kế hoạch giữ nguyên |
 | Adjust | CONTINUE (có tier change) | Nâng/hạ tier, thêm bước — không quay lại parts trước |
 | Pivot | PIVOT | Dừng part hiện tại, quay lại parts trước / re-audit |
-| Drop / (ngoài Framework) | CONTINUE (backlog) / ESCALATE | Bỏ nice-to-have tập trung CRITICAL / lên USER — vượt quyền KING (§1.2) |
+| Drop / (ngoài Framework) | CONTINUE (backlog) / ESCALATE | Bỏ nice-to-have tập trung CRITICAL / lên USER — vượt quyền NEMESIS (§1.2) |
 
 **Lưu ý:** (a) mọi quyết định DECIDE đều ghi Decision log kèm lý do + evidence ref (§13) — Instructions LUÔN; (b) pivot lặp > 2 lần trên cùng part → nghi ngờ triết approach sai → cân nhắc ESCALATE user hoặc Council mở rộng; (c) M2 pivot luôn kèm yêu cầu evidence cụ thể (file:line + log excerpt khớp nhau).
 
@@ -912,14 +912,14 @@ TL nhận thông tin mới (từ worklog / G2 escalate / LB feedback
 
 ### 9.6 Knowledge Capture tại FINALIZE (M1) `[TB-06 §9.6 ← nguồn dòng 2488]` `[SRC]`
 
-> *Toàn bộ "Lessons for Future Competitions" được KING ghi vào Knowledge Base NGAY theo KB Write Protocol — tri thức không được phép chỉ nằm trong Competition Summary. HAN sẽ curate ở chu trình G3 gần nhất (nếu task có G3).*
+> *Toàn bộ "Lessons for Future Competitions" được NEMESIS ghi vào Knowledge Base NGAY theo KB Write Protocol — tri thức không được phép chỉ nằm trong Competition Summary. HAN sẽ curate ở chu trình G3 gần nhất (nếu task có G3).*
 
 Tương tự M2: "Lessons for Future Audits" (cách audit hiệu quả, anti-pattern phát hiện, cách verify claim) — mục Category `Research Insights` (TB-08).
 
 ### 9.7 M2 — Route vào SELF-DIRECTION (nguồn giữ nguyên)
 
 ```
-KING tổng hợp output G1/G2/G3 thành PROPOSAL DOCUMENT
+NEMESIS tổng hợp output G1/G2/G3 thành PROPOSAL DOCUMENT
 theo Proposal Schema chuẩn (xem TB-11 — 8 trường:
 Problem Statement / Root Cause / Options / Recommendation /
 Expected Impact / Risk & Rollback / Verification Plan / Effort):
@@ -928,32 +928,32 @@ Expected Impact / Risk & Rollback / Verification Plan / Effort):
   → Status: SUBMITTED — chờ user hoặc agent được ủy quyền phê duyệt
   → KHÔNG qua user inbox trung gian — SELF-DIRECTION là nơi quyết định
   → Approval có thể đến từ: user trực tiếp HOẶC agents được ủy quyền
-  → Sau SUBMITTED: KING vẫn theo dõi, cập nhật nếu bị REVISED
+  → Sau SUBMITTED: NEMESIS vẫn theo dõi, cập nhật nếu bị REVISED
 ```
 
-**Điều kiện vào SUBMITTED (gate KING tự kiểm trước khi route) [EXT]:** (1) mọi claim đã có evidence (Instructions LUÔN — M2); (2) Options có ≥ 2 lựa chọn kèm trade-offs; (3) Risk & Rollback có rollback path cho mọi thay đổi đụng dịch vụ đang chạy (§8.9 cổng 2); (4) Verification Plan có (a) kiểm chứng tay ngay + (b) benchmark spec DEFERRED (TB-11).
+**Điều kiện vào SUBMITTED (gate NEMESIS tự kiểm trước khi route) [EXT]:** (1) mọi claim đã có evidence (Instructions LUÔN — M2); (2) Options có ≥ 2 lựa chọn kèm trade-offs; (3) Risk & Rollback có rollback path cho mọi thay đổi đụng dịch vụ đang chạy (§8.9 cổng 2); (4) Verification Plan có (a) kiểm chứng tay ngay + (b) benchmark spec DEFERRED (TB-11).
 
 ### 9.8 Theo dõi sau SUBMITTED `[TB-06 §9.8 ← nguồn dòng 4331–4340, 2577–2579]` `[SRC]`
 
-| Trạng thái Proposal | KING làm gì |
+| Trạng thái Proposal | NEMESIS làm gì |
 |---|---|
-| **APPROVED** | Đóng task M2; thay đổi áp từ Workspace lên Live System do user/agent ủy quyền (thao tác riêng — không phải KING). Ghi KB lesson nếu có |
+| **APPROVED** | Đóng task M2; thay đổi áp từ Workspace lên Live System do user/agent ủy quyền (thao tác riêng — không phải NEMESIS). Ghi KB lesson nếu có |
 | **REJECTED** (kèm lý do) | Phân tích lý do → quyết định quay lại research (re-DECOMPOSE phần liên quan) hay đóng mission — ghi Decision log; xem §14 E4 |
 | **REVISED** (yêu cầu bổ sung evidence/option) | Giao lại group liên quan bổ sung → cập nhật Proposal → re-SUBMIT (kịch bản trong Tier Escalation Matrix §8.8 dòng cuối) |
 
-**Lưu ý:** (a) FINALIZE không xóa task .md/worklog — giữ làm evidence truy vết; (b) M1 report gửi user kèm đề xuất next competition nếu có lesson đáng giá; (c) M2: KING không tự phê duyệt Proposal của chính mình — phê duyệt thuộc SELF-DIRECTION (user/agent ủy quyền).
+**Lưu ý:** (a) FINALIZE không xóa task .md/worklog — giữ làm evidence truy vết; (b) M1 report gửi user kèm đề xuất next competition nếu có lesson đáng giá; (c) M2: NEMESIS không tự phê duyệt Proposal của chính mình — phê duyệt thuộc SELF-DIRECTION (user/agent ủy quyền).
 
 ---
 
-## §10. RESEARCH COUNCIL — KING CHỦ TRÌ `[TB-06 §10 ← nguồn dòng 1748–1771, 2536–2541]` `[SRC]`
+## §10. RESEARCH COUNCIL — NEMESIS CHỦ TRÌ `[TB-06 §10 ← nguồn dòng 1748–1771, 2536–2541]` `[SRC]`
 
 ### 10.1 Bản chất & 4 thời điểm
 
-KING và SIVIL tiến hành **nhiều thảo luận** trong suốt quá trình vận hành — nơi tri thức được **phát hiện, thách thức và chốt**:
+NEMESIS và SIVIL tiến hành **nhiều thảo luận** trong suốt quá trình vận hành — nơi tri thức được **phát hiện, thách thức và chốt**:
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  RESEARCH COUNCIL — KING ↔ SIVIL                    │
+│  RESEARCH COUNCIL — NEMESIS ↔ SIVIL                    │
 │                                                      │
 │  Thời điểm (4 cố định):                             │
 │  ① Sau DECOMPOSE — trước khi ASSIGN                 │
@@ -962,7 +962,7 @@ KING và SIVIL tiến hành **nhiều thảo luận** trong suốt quá trình v
 │  ④ Tại mỗi Checkpoint                                │
 │                                                      │
 │  Nội dung:                                           │
-│  ├── Challenge hypotheses (KING hỏi, SIVIL           │
+│  ├── Challenge hypotheses (NEMESIS hỏi, SIVIL           │
 │  │   đáp bằng findings)                              │
 │  ├── Đối chiếu findings với KB: "đã có chưa?"      │
 │  └── Chốt tri thức mới → ghi KB NGAY                │
@@ -984,10 +984,10 @@ KING và SIVIL tiến hành **nhiều thảo luận** trong suốt quá trình v
 
 ```markdown
 ## YYYY-MM-DD HH:MM — RESEARCH COUNCIL — [T-<MISSION>-<NNN>] — thời điểm ①/②/③/④
-- Tham dự: KING (chủ trì), SIVIL
+- Tham dự: NEMESIS (chủ trì), SIVIL
 - Đề tài: [câu hỏi nghiên cứu đưa vào council]
 - Tranh luận:
-  - KING challenge: [hypothesis được hỏi]
+  - NEMESIS challenge: [hypothesis được hỏi]
   - SIVIL đáp (bằng findings): [evidence/sub-agent ref]
   - Điểm chưa chốt: [nếu có — ai phụ trách xác nhận]
 - Kết luận: [tri thức/quyết định được chốt]
@@ -998,8 +998,8 @@ KING và SIVIL tiến hành **nhiều thảo luận** trong suốt quá trình v
 ### 10.3 Quy tắc vận hành `[TB-06 §10.3 ← nguồn dòng 1817–1823 (quy tắc vàng 5) + 1732–1733 (lỗ hổng ③)]` `[SRC]`
 
 - Mọi thảo luận kết thúc bằng câu hỏi: **"Có gì KB chưa có?"** (quy tắc vàng #5 — council là nguồn tri thức sống).
-- Council **không quyết định thay DECIDE** — council chốt tri thức + challenge; quyết định pipeline vẫn là KING (Decision log).
-- Discussion summary phải vào worklog NGAY (vá lỗ hổng thiết kế cũ: "thảo luận KING ↔ SIVIL không được lưu lại → insight mất ngay khi kết thúc").
+- Council **không quyết định thay DECIDE** — council chốt tri thức + challenge; quyết định pipeline vẫn là NEMESIS (Decision log).
+- Discussion summary phải vào worklog NGAY (vá lỗ hổng thiết kế cũ: "thảo luận NEMESIS ↔ SIVIL không được lưu lại → insight mất ngay khi kết thúc").
 - KB entries từ council đi qua KB Write Protocol đầy đủ (SEARCH → FORMAT → WRITE → CURATE — chi tiết TB-08 §4); Category `Research Insights` là nơi lưu chính kết quả council.
 
 ## §11. CƠ CHẾ GIAO TIẾP TL ↔ GROUPS `[TB-06 §11 ← nguồn dòng 2503–2544]` `[SRC]`
@@ -1035,7 +1035,7 @@ KING và SIVIL tiến hành **nhiều thảo luận** trong suốt quá trình v
 │  ├── Knowledge Base updates (lessons learned)             │
 │  └── Metrics (score trước/sau, improvement)               │
 │                                                           │
-│  KING ↔ SIVIL (RESEARCH COUNCIL):                        │
+│  NEMESIS ↔ SIVIL (RESEARCH COUNCIL):                        │
 │  ├── ① Sau DECOMPOSE (trước ASSIGN)                      │
 │  ├── ② Sau SYNTHESIZE (trước khi BELI code)              │
 │  ├── ③ Khi G1 ESCALATE                                   │
@@ -1049,11 +1049,11 @@ Diễn giải hợp đồng 2 chiều `[TB-06 §11 ← suy từ nguồn + TB-02 
 
 | Kênh | Tải chính | Tải phản hồi | Vi phạm điển hình → xử lý |
 |---|---|---|---|
-| TL → G1 | task .md (per part) | G1 worklog (blocking issues, council ②③) | KING chỉ cách làm → tự sửa lại task .md chỉ WHAT không HOW |
+| TL → G1 | task .md (per part) | G1 worklog (blocking issues, council ②③) | NEMESIS chỉ cách làm → tự sửa lại task .md chỉ WHAT không HOW |
 | TL → G2 / G3 | G2: task .md SIMPLE trực tiếp; G3: KHÔNG giao trực tiếp | G2: worklog + ESCALATE 3 loại; G3: recommendations + metrics + KB | Giao MEDIUM/COMPLEX thẳng G2 → chuyển qua G1; giao thẳng G3 → chuyển về qua G2 |
-| G1/G2/G3 → user | — | — | Chỉ KING ESCALATE lên user (§1.2); group không nhảy cấp |
+| G1/G2/G3 → user | — | — | Chỉ NEMESIS ESCALATE lên user (§1.2); group không nhảy cấp |
 
-## §12. STATE MACHINE CỦA KING THEO MISSION `[TB-06 §12 ← hình thức hóa pipeline nguồn dòng 2631–2686 + 4331–4340]` `[EXT]`
+## §12. STATE MACHINE CỦA NEMESIS THEO MISSION `[TB-06 §12 ← hình thức hóa pipeline nguồn dòng 2631–2686 + 4331–4340]` `[EXT]`
 
 ### 12.1 M1 — Kaggle Research
 
@@ -1140,7 +1140,7 @@ RECEIVING → CLASSIFIED:M2 → TRIAGED → DECOMPOSED → ASSIGNED
 
 ## §13. DECISION LOG — FORMAT `[TB-06 §13 ← hình thức hóa Instructions "ghi lý do mọi quyết định" dòng 1848 + Deliverables dòng 1844]` `[EXT]`
 
-**Mỗi quyết định = 1 dòng** (append-only, KING ghi trong suốt mission):
+**Mỗi quyết định = 1 dòng** (append-only, NEMESIS ghi trong suốt mission):
 
 ```
 D-NNN | [timestamp] | [T-<MISSION>-<NNN> / Part k] | [MISSION: M1|M2]
@@ -1165,11 +1165,11 @@ D-012 | 2025-06-12 09:40 | T-M2-001/Part 1 | M2
       | EVIDENCE: dev.log 121s vs code path key-pool (LISMA report)
 ```
 
-**Quy tắc:** (1) 1 quyết định 1 dòng — không paragraph; (2) không có dòng nào không có LÝ DO hoặc EVIDENCE ref; (3) log là append-only — quyết định sửa quyết định trước thì ghi dòng mới (không edit dòng cũ); (4) Decision log là 1 trong Deliverables bắt buộc của KING (§1.1) — FINALIZE kèm chốt số dòng.
+**Quy tắc:** (1) 1 quyết định 1 dòng — không paragraph; (2) không có dòng nào không có LÝ DO hoặc EVIDENCE ref; (3) log là append-only — quyết định sửa quyết định trước thì ghi dòng mới (không edit dòng cũ); (4) Decision log là 1 trong Deliverables bắt buộc của NEMESIS (§1.1) — FINALIZE kèm chốt số dòng.
 
 ## §14. ERROR & EDGE CASES `[TB-06 §14 ← suy từ nguồn dòng 1862, 1991–2013, 2546–2582, 4338–4339, TB-02 §6]` `[EXT]`
 
-| # | Tình huống | Triệu chứng | Xử lý của KING |
+| # | Tình huống | Triệu chứng | Xử lý của NEMESIS |
 |---|---|---|---|
 | **E1** | Request ambiguous (CLASSIFY LOW confidence) | Keyword xung đột M1/M2 (vd "Kiểm tra bug trong code pipeline") | Hỏi user ĐÚNG 1 CÂU (mẫu §2.2) — KHÔNG đoán mò; sau câu trả lời classify lại và ghi log |
 | **E2** | Classified sai mission (phát hiện giữa chừng) | Input của mission này không tồn tại; parts chỉ vận hành được ở môi trường bên kia; CP đầu không ra artifact đúng loại | PIVOT về Bước 0 (§2.5): re-CLASSIFY, ghi Decision log, đánh giá output trung gian (giữ nếu dùng được), KHÔNG "tiếp tục cho xong" |
@@ -1188,7 +1188,7 @@ D-012 | 2025-06-12 09:40 | T-M2-001/Part 1 | M2
 
 Verify TB-06 đạt chuẩn khi:
 
-- [ ] **AC1** §1 giữ nguyên văn JD + Instructions KING: dual mission, 7 nhiệm vụ, KHÔNG code (đọc để HIỂU), Deliverables có **KB entries mới**, 6 khối Instructions đủ (LUÔN/KHÔNG BAO GIỜ/Input/Output contract/ESCALATE 3 tình huống/Signature move).
+- [ ] **AC1** §1 giữ nguyên văn JD + Instructions NEMESIS: dual mission, 7 nhiệm vụ, KHÔNG code (đọc để HIỂU), Deliverables có **KB entries mới**, 6 khối Instructions đủ (LUÔN/KHÔNG BAO GIỜ/Input/Output contract/ESCALATE 3 tình huống/Signature move).
 - [ ] **AC2** Bảng "Tại sao TL thiết kế như vậy" 4 dòng + box "Nhìn lớn, chia nhỏ, kiểm soát chặt" + box Nguyên tắc TL (NHÌN LỚN/CHIA NHỎ/KIỂM SOÁT CHẶT) nguyên bản nguồn.
 - [ ] **AC3** §2 CLASSIFY: 2 danh sách signals nguyên văn + câu hỏi ambiguous đúng nguyên văn + thuật toán 3 lớp [EXT] + bảng ví dụ ≥ 8 dòng + hệ quả sai mission (2 hướng) + cách phát hiện + pivot về CLASSIFY.
 - [ ] **AC4** §3–§9 đủ 7 nhiệm vụ, mỗi nhiệm vụ có: mục đích / input / các bước đánh số / output / ví dụ nguồn / lưu ý.
@@ -1196,24 +1196,24 @@ Verify TB-06 đạt chuẩn khi:
 - [ ] **AC6** §7.7: bảng "TL đọc code khi nào?" đầy đủ **8 dòng** nguyên văn + TL CODE READING PRINCIPLES 5 nguyên tắc (TRUST FIRST / READ BY EXCEPTION / READ SELECTIVELY / READ TO UNDERSTAND, NOT TO FIX / READ OUTPUT FIRST) + 3 tình huống đọc code.
 - [ ] **AC7** §8.8 Tier Escalation Matrix giữ nguyên 8 signals; §8.9 Decision Framework đủ 2 cổng + 4 quyết định (Proceed/Adjust/Pivot/Drop); có ánh xạ sang CONTINUE/PIVOT/ESCALATE.
 - [ ] **AC8** §7.8 + §9.6: MONITOR & Knowledge Capture + FINALIZE Knowledge Capture (lessons phải vào KB, note tier SIMPLE/MEDIUM không qua G3) nguyên ý nguồn.
-- [ ] **AC9** §9.7: M2 route THẲNG vào SELF-DIRECTION — status SUBMITTED, KHÔNG qua user inbox trung gian, phê duyệt bởi user hoặc agent ủy quyền, KING theo dõi nếu REVISED.
+- [ ] **AC9** §9.7: M2 route THẲNG vào SELF-DIRECTION — status SUBMITTED, KHÔNG qua user inbox trung gian, phê duyệt bởi user hoặc agent ủy quyền, NEMESIS theo dõi nếu REVISED.
 - [ ] **AC10** §10 Council: 4 thời điểm ①–④ + nội dung (challenge hypotheses / đối chiếu KB / chốt tri thức) + output (discussion summary vào worklog + KB entries) + template Council Summary [EXT].
-- [ ] **AC11** §11: box giao tiếp TL ↔ Groups nguyên bản 7 kênh (TL→G1/G2/G3, G1/G2/G3→TL, KING↔SIVIL Council).
+- [ ] **AC11** §11: box giao tiếp TL ↔ Groups nguyên bản 7 kênh (TL→G1/G2/G3, G1/G2/G3→TL, NEMESIS↔SIVIL Council).
 - [ ] **AC12** §12 state machine: M1 đủ 8 trạng thái chính theo tên quy ước (RECEIVING→CLASSIFIED(M1)→TRIAGED→DECOMPOSED→ASSIGNED→MONITORING→DECIDING→FINALIZED + side state ESCALATED_USER); M2 thêm PROPOSAL_DRAFTING → SUBMITTED → (APPROVED/REJECTED/REVISED loop); bảng transition ≥ 15 dòng.
 - [ ] **AC13** §13 Decision Log: 1 dòng schema (timestamp/task/decision/lý do/evidence ref) + ≥ 2 ví dụ; §14 ≥ 8 edge cases; §15 ≥ 10 items; §16 có Decisions (chốt v1.3).
 - [ ] **AC14** Không mâu thuẫn nguồn và không mâu thuẫn TB-02/03/04 (CP1=sau G1, CP2=sau G2, CP3=sau G3; floor-rule M2; council ② sau SYNTHESIZE); các phần [EXT] không phát minh cơ chế trái nguồn.
-- [ ] **AC15** Tên agent đúng KING/SIVIL/BELI/LISMA/HAN; model stack Kimi-k3 + fallback 3 bậc (role-based) — không lẫn tên model làm tên agent.
+- [ ] **AC15** Tên agent đúng NEMESIS/SIVIL/BELI/LISMA/HAN; model stack Kimi-k3 + fallback 3 bậc (role-based) — không lẫn tên model làm tên agent.
 
 ## §16. DECISIONS — [Q] ĐÃ CHỐT (v1.3) `[TB-06 §16 ← đã chốt v1.3 theo DECISION-RECORD + Phụ lục Z]` `[DECIDED v1.3]`
 
-- **Q1 — Ngưỡng confidence CLASSIFY: ✅ CHỐT v1.3 — DR-C2:** HIGH = ≥ 3 tín hiệu độc lập cùng chiều, **0 mâu thuẫn**; MEDIUM = đúng 1 mâu thuẫn → KING verify thêm 1 vòng context → vẫn mâu thuẫn → **TIE-BREAK UP** (chọn tier cao hơn) + Decision Log; LOW = ≥ 2 mâu thuẫn hoặc thiếu tín hiệu → hỏi user đúng 1 câu. Điểm biên ngưỡng 2 tier (±1 điểm) → chọn tier cao hơn. *(Đồng bộ TB-02 §8.)*
-- **Q2 — Hành vi council ②: ✅ CHỐT v1.3 — KING VETO được:** checklist ack/veto từng spec trong worklog (mỗi spec 1 dòng `ack` hoặc `veto: lý do`); veto → spec quay lại SIVIL revise; ≥ 2 vòng veto cùng spec → escalate council ③. *(Đồng bộ TB-03 §12 Q3.)*
+- **Q1 — Ngưỡng confidence CLASSIFY: ✅ CHỐT v1.3 — DR-C2:** HIGH = ≥ 3 tín hiệu độc lập cùng chiều, **0 mâu thuẫn**; MEDIUM = đúng 1 mâu thuẫn → NEMESIS verify thêm 1 vòng context → vẫn mâu thuẫn → **TIE-BREAK UP** (chọn tier cao hơn) + Decision Log; LOW = ≥ 2 mâu thuẫn hoặc thiếu tín hiệu → hỏi user đúng 1 câu. Điểm biên ngưỡng 2 tier (±1 điểm) → chọn tier cao hơn. *(Đồng bộ TB-02 §8.)*
+- **Q2 — Hành vi council ②: ✅ CHỐT v1.3 — NEMESIS VETO được:** checklist ack/veto từng spec trong worklog (mỗi spec 1 dòng `ack` hoặc `veto: lý do`); veto → spec quay lại SIVIL revise; ≥ 2 vòng veto cùng spec → escalate council ③. *(Đồng bộ TB-03 §12 Q3.)*
 - **Q3 — Proposal REJECTED → tier gì: ✅ CHỐT v1.3 — Re-TRIAGE đầy đủ từ đầu** (nghi ngờ mis-tier — không giữ tier mặc định), GIỮ toàn bộ worklog/context làm input; **tối đa 2 vòng REJECTED → research; vòng 3 → ESCALATED_USER**.
 - **Q4 — Nâng/hạ tier giữa chừng: ✅ CHỐT v1.3 — DR-C3: append-only:** task .md thêm trường `version: N` + block `## CHANGELOG`; mọi nâng/hạ tier = 1 amendment entry (version n → n+1 | ai quyết | tier cũ → mới | lý do | evidence ref) — KHÔNG bao giờ rewrite. *(Đồng bộ TB-09 Handoff — cập nhật E5 §14.)*
 - **Q5 — Giới hạn "hỏi 1 câu": ✅ CHỐT v1.3 — 1 câu CLASSIFY (chỉ khi confidence LOW) + tối đa 1 câu user-blocked-info mỗi task**; vượt hạn mức → quyết theo tie-break UP (DR-C2) + ghi Decision Log, không hỏi thêm. *(Chốt đúng đề xuất ban đầu.)*
 - **Q6 — Council đồng bộ hay bất đồng bộ: ✅ CHỐT v1.3 — ĐỒNG BỘ (blocking):** mọi council ①②③④ chặn pipeline chờ hoàn tất; chất lượng > latency (P1 thorough-first, P2 không ràng buộc token — không race-condition trên quyết định).
-- **Q7 — ESCALATED_USER: ✅ CHỐT v1.3 — DR-C5:** timeout **48h (M1) / 24h (M2)** wall-clock, nhắc mỗi **12h**, tối đa **3 nhắc**; hết hạn → pipeline task đó dừng toàn phần (parts khác độc lập). Ủy quyền **deputy approver SIVIL/HAN có thời hạn** (không được là author; KING cấm tự duyệt — §9.8), ghi Decision Log + worklog. *(Cập nhật ghi chú §12.)*
-- **Q8 — Verify Proposal trước SUBMIT: ✅ CHỐT v1.3 — CÓ, bắt buộc field-by-field:** KING verify đủ **8 trường** (checklist từng trường lưu Decision Log), trọng điểm **Risk & Rollback (trường 7 — "linh hồn Proposal")** trước khi route vào SELF-DIRECTION; gate §9.7 giữ nguyên + bước verify này thành điều kiện SUBMIT.
+- **Q7 — ESCALATED_USER: ✅ CHỐT v1.3 — DR-C5:** timeout **48h (M1) / 24h (M2)** wall-clock, nhắc mỗi **12h**, tối đa **3 nhắc**; hết hạn → pipeline task đó dừng toàn phần (parts khác độc lập). Ủy quyền **deputy approver SIVIL/HAN có thời hạn** (không được là author; NEMESIS cấm tự duyệt — §9.8), ghi Decision Log + worklog. *(Cập nhật ghi chú §12.)*
+- **Q8 — Verify Proposal trước SUBMIT: ✅ CHỐT v1.3 — CÓ, bắt buộc field-by-field:** NEMESIS verify đủ **8 trường** (checklist từng trường lưu Decision Log), trọng điểm **Risk & Rollback (trường 7 — "linh hồn Proposal")** trước khi route vào SELF-DIRECTION; gate §9.7 giữ nguyên + bước verify này thành điều kiện SUBMIT.
 
 ---
 
@@ -1222,7 +1222,7 @@ Verify TB-06 đạt chuẩn khi:
 | Section TB-06 | Section nguồn (ai-team-workflow.md) | Dòng | Mức |
 |---|---|---|---|
 | §0 Bản đồ Internal Workflow | Schema tổng hợp — TL Internal Workflow | 2631–2686 | [SRC] |
-| §1.1–§1.2 JD + Instructions | JOB DESCRIPTION + INSTRUCTIONS — KING | 1829–1853 | [SRC] |
+| §1.1–§1.2 JD + Instructions | JOB DESCRIPTION + INSTRUCTIONS — NEMESIS | 1829–1853 | [SRC] |
 | §1.3 Thiết kế vai trò | Tại sao vị trí TL được thiết kế như vậy? | 1855–1862 | [SRC] |
 | §1.4 Nguyên tắc + §1.5 runtime [EXT] | Nhìn lớn, chia nhỏ, kiểm soát chặt + TB-00/TB-01 | 1864–1880 | [SRC] + [EXT] |
 | §2.2 Signals + output CLASSIFY | Bước 0 — CLASSIFY MISSION | 1991–2013 | [SRC] |
@@ -1269,4 +1269,4 @@ Verify TB-06 đạt chuẩn khi:
 
 ---
 
-*TB-06 hoàn tất — KING Engine đủ chi tiết để triển khai orchestration + dùng làm JD/Instructions runtime. Chờ user review; cập nhật Status Tracker TB-00 §6 sau phê duyệt. File kế tiếp theo build order: TB-09 (RWV Loop & Handoff) — TB-07 (Decompose playbook) và TB-05 (G3+KB) do task song song đảm nhiệm.*
+*TB-06 hoàn tất — NEMESIS Engine đủ chi tiết để triển khai orchestration + dùng làm JD/Instructions runtime. Chờ user review; cập nhật Status Tracker TB-00 §6 sau phê duyệt. File kế tiếp theo build order: TB-09 (RWV Loop & Handoff) — TB-07 (Decompose playbook) và TB-05 (G3+KB) do task song song đảm nhiệm.*

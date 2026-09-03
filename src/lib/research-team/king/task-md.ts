@@ -1,5 +1,5 @@
 /**
- * RESEARCH TEAM — KING TASK .MD (TB-07 §2.5 task .md template + DR-C3 append-only + TC-13 gate)
+ * RESEARCH TEAM — NEMESIS TASK .MD (TB-07 §2.5 task .md template + DR-C3 append-only + TC-13 gate)
  * ============================================================================================
  * Spec:
  *  - TB-07 §2.5 — Task .md template: header YAML (version/taskId/mission/tier/partIdx) +
@@ -30,7 +30,7 @@ import type {
  *  - taskId: T-<MISSION>-<NNN>.
  *  - mission: code mission (MS-YYYYMMDD-NNN).
  *  - tier: T1|T2|T3 (lưu để trace).
- *  - partIdx: số part (1..N — KING DECOMPOSE).
+ *  - partIdx: số part (1..N — NEMESIS DECOMPOSE).
  *  - successCriteria: BẮT BUỘC trước ASSIGN (gate TC-13).
  *  - changelog: append-only — mọi amendment ghi thêm (KHÔNG rewrite).
  *  - researchProtocol / systemAuditCharter: optional (M2 chỉ — TB-07 §2.5).

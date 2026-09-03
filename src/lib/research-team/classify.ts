@@ -55,7 +55,7 @@ export interface ClassifyResult {
 // ============================================================
 
 const CLASSIFY_SYSTEM_PROMPT = [
-  'Bạn là KING (Team Lead). Phân loại request nghiên cứu.',
+  'Bạn là NEMESIS (Team Lead). Phân loại request nghiên cứu.',
   '',
   'MISSION TYPE:',
   '- M1 = Kaggle/dataset competition (nhắc đến dataset/competition/CV/leaderboard/metric)',
@@ -165,8 +165,8 @@ export async function classifyMission(
     llmResult = await callLLM(userPrompt, CLASSIFY_SYSTEM_PROMPT, 'research-classify', {
       temperature: 0.1,
       maxTokens: 1500,
-      agentId: 'KING',
-      agentName: 'KING (Team Lead)',
+      agentId: 'NEMESIS',
+      agentName: 'NEMESIS (Team Lead)',
     })
   } catch (err) {
     console.error(
