@@ -484,3 +484,25 @@ if (!globalForProber.__tmoLlmProberBootHookRan) {
       )
     })
 }
+
+// ============================================================================
+// AGENT RENAME INSTRUCTION FIX (Task 20 — 2026-09-03)
+// ============================================================================
+// Dọn tên cũ (KING/APEX/CORTEX/BOLT) còn sót trong AgentProfile.instruction +
+// description của các agent ĐÃ SEED trước các migration rename (migration chỉ
+// đổi name/assignment, không dọn persona text → chat NEMESIS bị tự xướng
+// "Tôi là KING"). Word-boundary, giữ customization, idempotent (no-op khi
+// sạch), chạy mỗi boot — self-heal. Fire-and-forget, fail-open.
+const globalForNameFix = globalThis as unknown as { __tmoAgentNameFixRan?: boolean }
+if (!globalForNameFix.__tmoAgentNameFixRan) {
+  globalForNameFix.__tmoAgentNameFixRan = true
+  void ensureDbReady()
+    .then(() => import('@/lib/agent-rename-instruction-fix'))
+    .then(({ fixStaleAgentNamesInInstructions }) => fixStaleAgentNamesInInstructions())
+    .catch((err) => {
+      console.warn(
+        '[AgentRenameFix] lỗi (không chặn boot):',
+        err instanceof Error ? err.message : String(err),
+      )
+    })
+}
