@@ -3661,7 +3661,10 @@ async function getZaiSdkInstance(): Promise<ZaiSdkInstance | null> {
 //       transient "try again later", chờ rồi retry là đúng ngữ nghĩa.
 function zaiRateLimits(): { minIntervalMs: number; max429Retries: number; backoffBaseMs: number } {
   return {
-    minIntervalMs: Math.max(0, parseInt(process.env.ZAI_MIN_INTERVAL_MS || '1200', 10)),
+    // Lượt quan sát 4: 1200→2000ms — llm-mode steps bắn ~40 call/phút (2 call
+    // mỗi bước 3s) đẩy gateway vào cửa sổ 429 kéo dài; 2s/call (~30/phút) an
+    // toàn hơn mà không chậm đáng kể (LLM response ~1-5s mỗi call).
+    minIntervalMs: Math.max(0, parseInt(process.env.ZAI_MIN_INTERVAL_MS || '2000', 10)),
     max429Retries: Math.max(0, parseInt(process.env.ZAI_429_MAX_RETRIES || '3', 10)),
     backoffBaseMs: Math.max(500, parseInt(process.env.ZAI_429_BACKOFF_MS || '5000', 10)),
   }
@@ -3685,6 +3688,43 @@ async function acquireZaiPacingSlot(taskLabel: string): Promise<void> {
 
 function isRateLimitError(msg: string): boolean {
   return /status 429|too many requests|rate.?limit/i.test(msg)
+}
+
+// ── Lượt quan sát 4 (2026-09-04): 429 KÉO DÀI (không còn burst đơn lẻ) ──
+// Hiện tượng 20:06:25→20:10:00 (3.5 phút): gateway rate-limit bền vững sau
+// chuỗi chạy dày — mỗi call cháy hết 3 retry in-call (35s) vẫn 429. Nếu chỉ
+// để từng call tự cháy, orchestration đốt attempt budget mù (b03sdel5 run
+// trước may mắn vượt qua nhờ attempt-backoff). Circuit breaker chia sẻ:
+//   • Call cháy hết retry 429 → trip cooldown TOÀN CỤC 60s ×2^trips (cap 5')
+//   • Call sau vào lúc cooldown đang mở: chat/utility (user-facing) FAIL
+//     FAST với lý do rõ; agent/extraction (background orchestration) CHỜ
+//     đến khi đóng (cap 120s/lần chờ) rồi gọi lại — pipeline TẠM DỪNG sạch
+//     thay vì đốt attempts.
+//   • Call thành công → reset trips (traffic khỏe tự mở lại mạch).
+const ZAI_429_COOLDOWN_BASE_MS = 60_000
+const ZAI_429_COOLDOWN_MAX_MS = 300_000
+const ZAI_429_WAIT_CAP_MS = 120_000
+
+type Zai429Global = { __tmoZai429Until?: number; __tmoZai429Trips?: number }
+
+/** Trip circuit sau khi 429 kéo dài — trả về cooldown áp dụng (ms). */
+function tripZai429Cooldown(): number {
+  const g = globalThis as unknown as Zai429Global
+  g.__tmoZai429Trips = (g.__tmoZai429Trips ?? 0) + 1
+  const cd = Math.min(ZAI_429_COOLDOWN_MAX_MS, ZAI_429_COOLDOWN_BASE_MS * 2 ** (g.__tmoZai429Trips - 1))
+  g.__tmoZai429Until = Date.now() + cd
+  return cd
+}
+
+/** Call thành công → traffic khỏe, xóa trips (cooldown hiện tại vẫn tôn trọng). */
+function resetZai429Trips(): void {
+  ;(globalThis as unknown as Zai429Global).__tmoZai429Trips = 0
+}
+
+/** Circuit 429 còn mở? Trả về số ms còn lại (0 = đã đóng). */
+function zai429RemainingMs(): number {
+  const g = globalThis as unknown as Zai429Global
+  return g.__tmoZai429Until ? Math.max(0, g.__tmoZai429Until - Date.now()) : 0
 }
 
 /**
@@ -3721,6 +3761,22 @@ async function callZaiProvider(
     // Người dùng bấm Dừng → không đốt call (kiểm lại sau mỗi backoff)
     if (options?.abortCheck && options.abortCheck()) {
       return { content: '', provider: 'zai-sdk', model: 'zai', error: `Task "${taskLabel}" aborted by user` }
+    }
+
+    // ── Circuit 429 đang mở (call khác vừa trip): tôn trọng cửa sổ nghỉ ──
+    const remain = zai429RemainingMs()
+    if (remain > 0) {
+      if (callerKind === 'chat' || callerKind === 'utility') {
+        return { content: '', provider: 'zai-sdk', model: 'zai', error: `ZAI rate-limited (429 circuit còn ${Math.ceil(remain / 1000)}s) — thử lại sau` }
+      }
+      // background (agent/extraction): chờ cho cửa sổ đóng (cap 120s/lần chờ)
+      const wait = Math.min(remain, ZAI_429_WAIT_CAP_MS)
+      console.warn(`[ZAI] ${callerKind}:"${taskLabel}" chờ 429 circuit đóng (còn ${Math.ceil(remain / 1000)}s, chờ tối đa ${Math.ceil(wait / 1000)}s)`)
+      await new Promise(r => setTimeout(r, wait))
+      if (zai429RemainingMs() > 0) {
+        // cooldown dài hơn cap chờ → trả lỗi rõ lý do, caller tự retry theo nhịp riêng
+        return { content: '', provider: 'zai-sdk', model: 'zai', error: `ZAI rate-limited (429 circuit còn ${Math.ceil(zai429RemainingMs() / 1000)}s sau khi chờ)` }
+      }
     }
 
     await acquireZaiPacingSlot(taskLabel)
@@ -3771,6 +3827,7 @@ async function callZaiProvider(
     }
 
     console.log(`[ZAI] ${callerKind}:"${taskLabel}" OK — ${content.length} chars, model ${model}${totalTokens ? `, ${totalTokens} tokens` : ''}`)
+    resetZai429Trips()
     return {
       content,
       provider: 'zai-sdk',
@@ -3788,6 +3845,13 @@ async function callZaiProvider(
       console.warn(`[ZAI] ${callerKind}:"${taskLabel}" 429 rate-limit (lần ${attempt429 + 1}/${max429Retries}) — retry sau ${Math.round(waitMs / 100) / 10}s`)
       await new Promise(r => setTimeout(r, waitMs))
       continue
+    }
+    // ── Lượt quan sát 4: 429 KÉO DÀI (hết retry in-call) → trip circuit toàn
+    // cục — các call sau nghỉ cửa sổ cooldown thay vì tự cháy lặp lại.
+    if (isRateLimitError(msg)) {
+      const cd = tripZai429Cooldown()
+      console.warn(`[ZAI] ${callerKind}:"${taskLabel}" 429 kéo dài sau ${max429Retries} retry — trip circuit cooldown ${Math.round(cd / 1000)}s (background callers sẽ chờ)`)
+      return { content: '', provider: 'zai-sdk', model: 'zai', error: `ZAI rate-limited (429 kéo dài — circuit cooldown ${Math.round(cd / 1000)}s)` }
     }
     console.warn(`[ZAI] ${callerKind}:"${taskLabel}" THẤT BẠI:`, msg)
     return { content: '', provider: 'zai-sdk', model: 'zai', error: `ZAI (z-ai-sdk) call failed: ${msg}` }

@@ -1510,10 +1510,60 @@ export function isOrchestrating(proposalId: string): boolean {
   return runningOrchestrations.has(proposalId)
 }
 
+// ── Lượt quan sát 4 (2026-09-04): llm-mode proposal đòi THỰC THI VẬT LÝ ──
+// Hiện tượng: gq5jtob7 (domain:weak_domains, llm) fail bước 6 "Tích hợp
+// entity vào hệ thống" 4 lần — agent llm-mode KHÔNG CÓ TOOL nên không thể
+// tích hợp/test thật; trung thực khai "mới test 30%" → evaluator (chấm đúng)
+// trượt → 4 attempts lặp vô nghiệm. Ngược lại mirror_episode_drift llm-mode
+// "Chạy script backfill" ĐẠT trong 3 GIÂY = bịa báo cáo (perverse incentive:
+// agent bịa thì đậu, agent thật thà thì trượt). ALISTA proposal được tạo
+// executionMode=llm mặc định dù công việc là backfill/integrate/sync thật.
+// Fix: classifier tại trigger — CÁCH TRIỂN KHAI (implementation) khớp động từ
+// thực thi + mục tiêu hệ thống/dữ liệu → nâng cấp run lên code-workflow
+// (agents có tool thật, receipts đối chiếu, pipeline verify cuối).
+const EXECUTION_DEMAND_RE = new RegExp(
+  [
+    // (1) động từ tạo/sửa code + mục tiêu code (mirror CODE_CHANGE_ACTION_RE scan.ts)
+    String.raw`\b(sửa|sua|fix|patch|refactor|viết|viet|rewrite|thêm|them|add|tạo|tao|create|xây|xay|build|implement|commit|push|deploy|xóa|xoa|remove|bổ sung|bo sung)\b`,
+    String.raw`[^\n.]{0,60}`,
+    String.raw`\b(code|hàm|ham|function|component|module|script|route|api|endpoint|schema|model|prisma|tool|test|hook|middleware|type|interface|file|library|package|bug|lỗi|loi)\b`,
+    // (2) động từ THỰC THI + mục tiêu hệ thống/dữ liệu (chạy script, backfill DB,
+    // tích hợp vào hệ thống, sync, cài đặt, nạp entity...)
+    String.raw`|\b(chạy|run|thực thi|execute|backfill|migrate|migration|import|nạp|nap|seed|sync|đồng bộ|dong bo|cài đặt|cai dat|install|áp dụng|ap dung|integrate|tích hợp|tich hop)\b`,
+    String.raw`[^\n.]{0,60}`,
+    String.raw`\b(script|database|db|sqlite|neo4j|prisma|bảng|bang|table|record|entity|hệ thống|he thong|system|pipeline|cron|job|queue|api|endpoint)\b`,
+  ].join(''),
+  'i',
+)
+
+/** Classifier lượt 4: kế hoạch triển khai có đòi thực thi vật lý không? */
+function planNeedsRealExecution(p: {
+  category?: string | null
+  problem?: string | null
+  solution?: string | null
+  implementation?: string | null
+}): boolean {
+  const category = String(p.category || '').trim()
+  if (category === 'kb_contradiction') return false // tri thức thuần — không nâng cấp
+  const text = `${p.problem || ''}\n${p.solution || ''}\n${p.implementation || ''}`
+  return EXECUTION_DEMAND_RE.test(text)
+}
+
 async function runOrchestration(proposalId: string, opts?: { dryRun?: boolean }): Promise<void> {
   // FIX review GĐ2 #2: code-workflow → serialize qua mutex workspace (XEM
   // serializeCodeWorkflow). Đọc executionMode TRƯỚC để quyết định có cần mutex.
-  const pre = await db.selfDirectionProposal.findUnique({ where: { id: proposalId }, select: { executionMode: true } })
+  const pre = await db.selfDirectionProposal.findUnique({
+    where: { id: proposalId },
+    select: { executionMode: true, category: true, problem: true, solution: true, implementation: true },
+  })
+  // Lượt quan sát 4: llm-mode nhưng CÁCH TRIỂN KHAI đòi chạy/sửa code thật
+  // (backfill script, tích hợp vào database, chạy cron...) → nâng cấp lên
+  // code-workflow cho run này + persist để UI/reflection thấy đúng chế độ.
+  if (pre && pre.executionMode !== 'code-workflow' && planNeedsRealExecution(pre)) {
+    await db.selfDirectionProposal.update({ where: { id: proposalId }, data: { executionMode: 'code-workflow' } })
+    console.log(`[SelfDirection] Nâng cấp executionMode llm → code-workflow (CÁCH TRIỂN KHAI đòi thực thi code/dữ liệu thật — agents sẽ có tool + receipts, chống báo cáo ảo)`)
+    pre.executionMode = 'code-workflow'
+  }
   if (pre?.executionMode === 'code-workflow') {
     await serializeCodeWorkflow(() => runOrchestrationInner(proposalId, opts))
     return
