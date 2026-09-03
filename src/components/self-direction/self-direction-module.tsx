@@ -16,6 +16,7 @@
  *   GET    /api/self-direction/proposals           → { proposals, settings }
  *   GET    /api/self-direction/proposals/{id}      → { proposal, steps }
  *   PATCH  /api/self-direction/proposals/{id}      → { proposal }  (approve|reject|notes|reschedule)
+ *   DELETE /api/self-direction/proposals/{id}      → { ok, deletedId }  (xóa hẳn khỏi Lịch sử)
  *   POST   /api/self-direction/delegation          → { settings }  ({ enabled })
  *   POST   /api/self-direction/scan                → { created, proposals }
  *   POST   /api/self-direction/proposals/{id}/deploy → { ok, proposal }
@@ -47,11 +48,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Calendar } from '@/components/ui/calendar'
+import type { DateRange } from 'react-day-picker'
 import { toast } from '@/hooks/use-toast'
 import {
   AlertTriangle,
   BookOpen,
   Bot,
+  CalendarIcon,
   CheckCircle2,
   Compass,
   ExternalLink,
@@ -67,11 +72,13 @@ import {
   Sparkles,
   Target,
   TrendingUp,
+  Trash2,
   Wrench,
   XCircle,
   Zap,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
+import type { CSSProperties } from 'react'
 
 // ==================== Types (mirror API contract — prefix `Sd` tránh trùng Prisma model) ====================
 
@@ -127,6 +134,8 @@ export interface SdProposal {
   updatedAt: string
   stepCount: number
   doneSteps: number
+  /** Đang có orchestration chạy trong process (list API trả kèm) — khóa xóa */
+  orchestrating?: boolean
 }
 
 export interface SdStep {
@@ -242,6 +251,26 @@ function firstLine(text: string): string {
   return (idx === -1 ? text : text.slice(0, idx)).trim()
 }
 
+/** Format Date → "dd/MM/yyyy" (nhãn khoảng thời gian lọc Lịch sử) */
+function fmtDay(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`
+}
+
+/** 00:00:00.000 của ngày (mốc from khi lọc) */
+function startOfDayMs(d: Date): number {
+  const x = new Date(d)
+  x.setHours(0, 0, 0, 0)
+  return x.getTime()
+}
+
+/** 23:59:59.999 của ngày (mốc to khi lọc — inclusive cả ngày cuối) */
+function endOfDayMs(d: Date): number {
+  const x = new Date(d)
+  x.setHours(23, 59, 59, 999)
+  return x.getTime()
+}
+
 function errMsg(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback
 }
@@ -252,6 +281,27 @@ async function readApiError(res: Response): Promise<string> {
 }
 
 // ==================== Small sub-components (module-level — identity ổn định) ====================
+
+/**
+ * USER REQUEST 2026-10-15 — nút chọn khoảng thời gian (từ ngày → đến ngày)
+ * cho tab Lịch sử. Nguyên tắc: bấm 2 lần (chọn ngày bắt đầu → ngày kết thúc)
+ * xong popover TỰ ĐÓNG. Calendar shadcn dựa trên biến theme CSS (bg-primary…)
+ * — override scoped để khớp theme tối amber của module (không đổi theme toàn app).
+ */
+const RANGE_CALENDAR_THEME = {
+  '--background': '#0b0e14',
+  '--popover': '#0b0e14',
+  '--popover-foreground': '#e7e5e4',
+  '--primary': '#d97706',
+  '--primary-foreground': '#1c1917',
+  '--accent': '#292524',
+  '--accent-foreground': '#f5f5f4',
+  '--muted': '#1c1917',
+  '--muted-foreground': '#a8a29e',
+  '--border': '#44403c',
+  '--input': '#44403c',
+  '--ring': '#d97706',
+} as CSSProperties
 
 function CategoryBadge({ category, compact = false }: { category: SdCategory; compact?: boolean }) {
   const meta = CATEGORY_META[category] ?? { label: category, icon: Sparkles }
@@ -445,6 +495,16 @@ export default function SelfDirectionModule() {
   // ----- Lịch sử filter -----
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all')
 
+  // ----- Lịch sử: khoảng thời gian (từ ngày → đến ngày) -----
+  // USER REQUEST 2026-10-15: bấm 2 lần chọn khoảng (ngày bắt đầu → ngày kết
+  // thúc) xong popover TỰ ĐÓNG. Chỉ có from (đóng popover sớm) → lọc mở từ from.
+  const [historyRange, setHistoryRange] = useState<DateRange | undefined>(undefined)
+  const [rangePickerOpen, setRangePickerOpen] = useState(false)
+
+  // ----- Xóa đề xuất trong Lịch sử (2 bước xác nhận inline) -----
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const confirmDeleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   // ----- Detail dialog -----
   const [detailId, setDetailId] = useState<string | null>(null)
   const [detailHeader, setDetailHeader] = useState<SdProposal | null>(null) // từ list — có ngay khi mở dialog
@@ -496,6 +556,7 @@ export default function SelfDirectionModule() {
     const timersById = flashTimersRef.current
     return () => {
       Object.values(timersById).forEach((timers) => timers.forEach(clearTimeout))
+      if (confirmDeleteTimerRef.current) clearTimeout(confirmDeleteTimerRef.current)
     }
   }, [])
 
@@ -645,6 +706,61 @@ export default function SelfDirectionModule() {
     [markBusy, clearBusy, fetchList],
   )
 
+  // ==================== Xóa đề xuất trong Lịch sử (user request 2026-10-15) ====================
+
+  const deleteProposal = useCallback(
+    async (p: SdProposal) => {
+      const key = `delete:${p.id}`
+      if (busyRef.current[key]) return
+      markBusy(key)
+      try {
+        const res = await fetch(`/api/self-direction/proposals/${p.id}`, { method: 'DELETE' })
+        if (!res.ok) throw new Error(await readApiError(res))
+        setProposals((prev) => prev.filter((x) => x.id !== p.id))
+        // Đang mở dialog chi tiết đúng proposal này → đóng luôn cho nhất quán
+        setDetailId((cur) => (cur === p.id ? null : cur))
+        setDetailHeader((cur) => (cur && cur.id === p.id ? null : cur))
+        setDetailError(null)
+        setDetailLoading(false)
+        toast({ title: 'Đã xóa đề xuất', description: p.title })
+        void fetchList(true)
+      } catch (err) {
+        toast({
+          title: 'Không xóa được đề xuất',
+          description: errMsg(err, 'Xóa đề xuất thất bại'),
+          variant: 'destructive',
+        })
+      } finally {
+        clearBusy(key)
+      }
+    },
+    [markBusy, clearBusy, fetchList],
+  )
+
+  /** Xác nhận 2 bước: bấm 1 → nút đỏ "Xóa?" (tự hủy sau 4s), bấm 2 → xóa thật */
+  const handleDeleteClick = useCallback(
+    (p: SdProposal) => {
+      if (busyRef.current[`delete:${p.id}`]) return
+      if (p.orchestrating) return // đang chạy — nút đã disabled, guard thêm
+      if (confirmDeleteId !== p.id) {
+        setConfirmDeleteId(p.id)
+        if (confirmDeleteTimerRef.current) clearTimeout(confirmDeleteTimerRef.current)
+        confirmDeleteTimerRef.current = setTimeout(
+          () => setConfirmDeleteId((cur) => (cur === p.id ? null : cur)),
+          4_000,
+        )
+        return
+      }
+      if (confirmDeleteTimerRef.current) {
+        clearTimeout(confirmDeleteTimerRef.current)
+        confirmDeleteTimerRef.current = null
+      }
+      setConfirmDeleteId(null)
+      void deleteProposal(p)
+    },
+    [confirmDeleteId, deleteProposal],
+  )
+
   // ==================== Quét hệ thống ====================
 
   const runScan = useCallback(async () => {
@@ -787,9 +903,49 @@ export default function SelfDirectionModule() {
           if (historyFilter === 'rejected') return p.status === 'rejected'
           return p.status === 'failed'
         })
+        // Khoảng thời gian (user request 2026-10-15): from..to inclusive cả 2
+        // đầu ngày; chỉ from → lọc mở (>= from). Lọc trên updatedAt — đúng thứ
+        // tự thời gian Lịch sử đang hiển thị.
+        .filter((p) => {
+          if (!historyRange?.from) return true
+          const t = new Date(p.updatedAt).getTime()
+          if (Number.isNaN(t)) return true
+          const from = startOfDayMs(historyRange.from)
+          const to = historyRange.to ? endOfDayMs(historyRange.to) : Number.POSITIVE_INFINITY
+          return t >= from && t <= to
+        })
         .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
-    [proposals, historyFilter],
+    [proposals, historyFilter, historyRange],
   )
+
+  /** Nhãn nút khoảng thời gian: null khi chưa lọc */
+  const rangeLabel = useMemo(() => {
+    if (!historyRange?.from) return null
+    if (!historyRange.to) return `từ ${fmtDay(historyRange.from)}`
+    // react-day-picker v9: click 1 cho range 1 NGÀY (from === to) — hiển thị gọn
+    if (historyRange.to.getTime() === historyRange.from.getTime()) return fmtDay(historyRange.from)
+    return `${fmtDay(historyRange.from)} → ${fmtDay(historyRange.to)}`
+  }, [historyRange])
+
+  /**
+   * 2 CLICK → TỰ ĐÓNG (user request 2026-10-15).react-day-picker v9 semantics:
+   *   click 1 (range rỗng)  → { from: X, to: X }   (range 1 NGÀY — chưa đóng)
+   *   click 2 (ngày khác X)  → { from: min, to: max } (range thật → ĐÓNG)
+   * Đóng chỉ khi from ≠ to (range nhiều ngày hoàn tất ở click thứ 2);
+   * range 1 ngày giữ popover mở chờ click 2 (user đóng tay → lọc đúng 1 ngày).
+   */
+  const handleRangeSelect = useCallback((r: DateRange | undefined) => {
+    const normalized =
+      r?.from && r.to && r.to.getTime() < r.from.getTime() ? { from: r.to, to: r.from } : r
+    setHistoryRange(normalized)
+    if (
+      normalized?.from &&
+      normalized.to &&
+      normalized.to.getTime() > normalized.from.getTime()
+    ) {
+      setTimeout(() => setRangePickerOpen(false), 120)
+    }
+  }, [])
 
   const sortedSteps = useMemo(() => {
     if (!detail?.steps) return []
@@ -1022,28 +1178,80 @@ export default function SelfDirectionModule() {
 
                 {/* ==================== TAB 2: Lịch sử ==================== */}
                 <TabsContent value="history" className="space-y-3">
-                  {/* Filter */}
+                  {/* Filter + khoảng thời gian (user request 2026-10-15) */}
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-[11px] text-stone-500">
-                      {historyProposals.length} đề xuất
+                      {historyProposals.length} đề xuất{rangeLabel ? ` • ${rangeLabel}` : ''}
                     </span>
-                    <Select
-                      value={historyFilter}
-                      onValueChange={(v) => setHistoryFilter(v as HistoryFilter)}
-                    >
-                      <SelectTrigger
-                        size="sm"
-                        className="h-8 w-[150px] text-xs border-stone-700 bg-slate-950/60 text-stone-300"
+                    <div className="flex items-center gap-2">
+                      {/* Nút chọn từ ngày → đến ngày: bấm 2 lần chọn khoảng, xong tự đóng */}
+                      <Popover open={rangePickerOpen} onOpenChange={setRangePickerOpen}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            aria-label="Chọn khoảng thời gian lọc lịch sử"
+                            className={`h-8 px-3 text-xs border-stone-700 bg-slate-950/60 text-stone-300 hover:bg-slate-900/60 hover:border-amber-400/40 ${
+                              rangeLabel ? 'border-amber-500/50 text-amber-300' : ''
+                            }`}
+                          >
+                            <CalendarIcon className="h-3.5 w-3.5 text-amber-400/80" />
+                            {rangeLabel ?? 'Khoảng thời gian'}
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          align="end"
+                          className="w-auto p-0 border-stone-700 bg-slate-950 text-stone-200 shadow-xl"
+                          style={RANGE_CALENDAR_THEME}
+                        >
+                          <div className="flex items-center justify-between gap-3 px-3 pt-2.5">
+                            <p className="text-[10px] uppercase tracking-wider text-stone-500">
+                              Từ ngày → đến ngày
+                            </p>
+                            {historyRange?.from && (
+                              <button
+                                type="button"
+                                className="text-[10px] text-stone-400 hover:text-red-300 transition-colors cursor-pointer"
+                                onClick={() => setHistoryRange(undefined)}
+                              >
+                                Bỏ lọc
+                              </button>
+                            )}
+                          </div>
+                          <Calendar
+                            mode="range"
+                            numberOfMonths={1}
+                            selected={historyRange}
+                            onSelect={handleRangeSelect}
+                            defaultMonth={historyRange?.from ?? new Date()}
+                          />
+                          <p className="px-3 pb-2.5 text-[10px] text-stone-500">
+                            {!historyRange?.from
+                              ? 'Bấm chọn ngày bắt đầu...'
+                              : !historyRange.to || historyRange.to.getTime() === historyRange.from.getTime()
+                                ? 'Bấm chọn ngày kết thúc — chọn xong tự đóng.'
+                                : `Khoảng: ${fmtDay(historyRange.from)} → ${fmtDay(historyRange.to)}`}
+                          </p>
+                        </PopoverContent>
+                      </Popover>
+                      <Select
+                        value={historyFilter}
+                        onValueChange={(v) => setHistoryFilter(v as HistoryFilter)}
                       >
-                        <SelectValue placeholder="Lọc" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-slate-950 border-stone-700 text-stone-200">
-                        <SelectItem value="all" className="text-xs">Tất cả</SelectItem>
-                        <SelectItem value="approved" className="text-xs">Đã duyệt</SelectItem>
-                        <SelectItem value="rejected" className="text-xs">Không duyệt</SelectItem>
-                        <SelectItem value="failed" className="text-xs">Thất bại</SelectItem>
-                      </SelectContent>
-                    </Select>
+                        <SelectTrigger
+                          size="sm"
+                          className="h-8 w-[150px] text-xs border-stone-700 bg-slate-950/60 text-stone-300"
+                        >
+                          <SelectValue placeholder="Lọc" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-slate-950 border-stone-700 text-stone-200">
+                          <SelectItem value="all" className="text-xs">Tất cả</SelectItem>
+                          <SelectItem value="approved" className="text-xs">Đã duyệt</SelectItem>
+                          <SelectItem value="rejected" className="text-xs">Không duyệt</SelectItem>
+                          <SelectItem value="failed" className="text-xs">Thất bại</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
 
                   {historyProposals.length === 0 ? (
@@ -1055,6 +1263,7 @@ export default function SelfDirectionModule() {
                   ) : (
                     historyProposals.map((p) => {
                       const deploying = !!busy[`deploy:${p.id}`]
+                      const deleting = !!busy[`delete:${p.id}`]
                       return (
                         <Card key={p.id} className="border-stone-800/80 bg-slate-950/40 p-3.5 gap-2.5">
                           {/* Hàng đầu: status + reviewer + updatedAt + Mở đề xuất */}
@@ -1074,6 +1283,40 @@ export default function SelfDirectionModule() {
                               onClick={() => openDetail(p)}
                             >
                               <ExternalLink className="h-3.5 w-3.5" /> Mở đề xuất
+                            </Button>
+                            {/* USER REQUEST 2026-10-15: nút Xóa — 2 bước xác nhận
+                                inline (bấm 1 → "Xóa?" đỏ tự hủy 4s, bấm 2 → xóa thật).
+                                Khóa khi orchestration đang chạy trong process
+                                (p.orchestrating do list API trả kèm). */}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className={`h-7 px-2.5 text-[11px] ${
+                                confirmDeleteId === p.id
+                                  ? 'border-red-500/60 text-red-300 hover:bg-red-950/40 animate-pulse'
+                                  : 'border-stone-700 text-stone-400 hover:text-red-300 hover:border-red-500/40 hover:bg-red-950/30'
+                              }`}
+                              onClick={() => handleDeleteClick(p)}
+                              disabled={deleting || p.orchestrating === true}
+                              aria-label={
+                                p.orchestrating
+                                  ? 'Đề xuất đang triển khai — không xóa được lúc này'
+                                  : `Xóa đề xuất: ${p.title}`
+                              }
+                              title={
+                                p.orchestrating
+                                  ? 'Đề xuất đang được Omega triển khai — chờ hoàn tất mới xóa được'
+                                  : confirmDeleteId === p.id
+                                    ? 'Bấm lần nữa để xóa hẳn đề xuất này'
+                                    : 'Xóa hẳn đề xuất khỏi lịch sử'
+                              }
+                            >
+                              {deleting ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              )}
+                              {confirmDeleteId === p.id ? 'Xóa?' : 'Xóa'}
                             </Button>
                           </div>
 

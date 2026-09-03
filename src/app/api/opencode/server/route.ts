@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { isOpenCodeOnline, getOpenCodeInfo } from '@/lib/opencode'
-import { execSync } from 'child_process'
+import { execSync, spawn } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
 import { resolve } from 'path'
 import { getProjectRoot } from '@/lib/paths'
@@ -11,6 +11,67 @@ export const dynamic = 'force-dynamic'
 // We use PID file for reliable targeting, with pkill as fallback
 const OPENCODE_PID_FILE = resolve(getProjectRoot(), 'mini-services', 'opencode-server', '.pid')
 const OPENCODE_DIR = resolve(getProjectRoot(), 'mini-services', 'opencode-server')
+const IS_WIN = process.platform === 'win32'
+const OPENCODE_PORT = parseInt(process.env.OPENCODE_SERVER_PORT || '18790', 10)
+
+/**
+ * FIX 2026-10-15 (local Windows): tìm PID đang LISTEN port — CROSS-PLATFORM.
+ * Windows: netstat -ano (lsof/fuser không tồn tại). Unix: lsof, fallback ss.
+ */
+function findPortHolderPids(port: number): number[] {
+  const pids = new Set<number>()
+  try {
+    if (IS_WIN) {
+      const out = execSync('netstat -ano -p tcp', { encoding: 'utf8', timeout: 5000, windowsHide: true })
+      for (const line of out.split('\n')) {
+        const cols = line.trim().split(/\s+/)
+        if (cols.length < 5 || !/^tcp$/i.test(cols[0])) continue
+        const localAddr = cols[1] || ''
+        const state = cols[3] || ''
+        const pidStr = cols[cols.length - 1]
+        const portMatch = localAddr.match(/:(\d+)$/)
+        if (
+          portMatch &&
+          parseInt(portMatch[1], 10) === port &&
+          /^LISTENING$/i.test(state) &&
+          /^\d+$/.test(pidStr)
+        ) {
+          pids.add(parseInt(pidStr, 10))
+        }
+      }
+    } else {
+      try {
+        const out = execSync(`lsof -ti :${port} 2>/dev/null || true`, { encoding: 'utf-8', timeout: 3000 })
+        for (const s of out.split('\n')) {
+          const v = s.trim()
+          if (/^\d+$/.test(v)) pids.add(parseInt(v, 10))
+        }
+      } catch { /* lsof unavailable */ }
+      if (pids.size === 0) {
+        try {
+          const out = execSync('ss -ltnp 2>/dev/null || true', { encoding: 'utf-8', timeout: 3000 })
+          for (const line of out.split('\n')) {
+            if (!line.includes(`:${port} `)) continue
+            const pidMatch = line.match(/pid=(\d+)/)
+            if (pidMatch) pids.add(parseInt(pidMatch[1], 10))
+          }
+        } catch { /* ss unavailable */ }
+      }
+    }
+  } catch { /* non-fatal */ }
+  return [...pids]
+}
+
+function killPid(pid: number): void {
+  if (pid === process.pid) return
+  try {
+    if (IS_WIN) {
+      execSync(`taskkill /F /T /PID ${pid}`, { timeout: 5000, windowsHide: true, stdio: 'ignore' })
+    } else {
+      process.kill(pid, 'SIGKILL')
+    }
+  } catch { /* already dead */ }
+}
 
 function killOpenCodeServer(): boolean {
   // Strategy 1: Use PID file (most reliable)
@@ -19,7 +80,7 @@ function killOpenCodeServer(): boolean {
       const pid = parseInt(readFileSync(OPENCODE_PID_FILE, 'utf-8').trim())
       if (pid && !isNaN(pid)) {
         try {
-          process.kill(pid, 'SIGTERM')
+          killPid(pid) // FIX 2026-10-15: taskkill /F /T trên Windows
           return true
         } catch {
           // Process may have already exited
@@ -28,19 +89,35 @@ function killOpenCodeServer(): boolean {
     }
   } catch { /* ignore */ }
 
-  // Strategy 2: pkill with actual command pattern
-  try {
-    execSync('pkill -f "bun server.ts" 2>/dev/null || true', { timeout: 5000 })
-    return true
-  } catch { /* ignore */ }
+  // Strategy 2: pkill with actual command pattern (Unix)
+  if (!IS_WIN) {
+    try {
+      execSync('pkill -f "bun server.ts" 2>/dev/null || true', { timeout: 5000 })
+      return true
+    } catch { /* ignore */ }
+  }
 
-  // Strategy 3: Kill by port
-  try {
-    execSync('fuser -k 18790/tcp 2>/dev/null || true', { timeout: 5000 })
-    return true
-  } catch { /* ignore */ }
+  // Strategy 3: Kill by port — CROSS-PLATFORM (netstat + taskkill on Windows)
+  const pids = findPortHolderPids(OPENCODE_PORT)
+  for (const pid of pids) {
+    if (pid === process.pid) continue
+    killPid(pid)
+  }
+  return pids.length > 0
+}
 
-  return false
+/**
+ * Spawn opencode-server DETACHED (nohup-equivalent cross-platform):
+ * Windows không có nohup — dùng spawn detached + stdio ignore + unref.
+ */
+function startServerDetached(): void {
+  const child = spawn('bun', ['server.ts'], {
+    cwd: OPENCODE_DIR,
+    detached: true,
+    stdio: 'ignore',
+    shell: IS_WIN,
+  })
+  child.unref()
 }
 
 /**
@@ -86,11 +163,8 @@ export async function POST(request: Request) {
           killOpenCodeServer()
           await new Promise(r => setTimeout(r, 1500))
         }
-        // Start the server
-        execSync(`cd ${OPENCODE_DIR} && nohup bun server.ts > /tmp/opencode-server.log 2>&1 &`, {
-          timeout: 5000,
-          stdio: 'ignore',
-        })
+        // Start the server (cross-platform detached spawn — no nohup on Windows)
+        startServerDetached()
         // Wait for startup
         await new Promise(r => setTimeout(r, 3000))
         const nowOnline = await isOpenCodeOnline()
@@ -114,10 +188,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ message: 'Server already running', online: true, serverInfo })
       }
       try {
-        execSync(`cd ${OPENCODE_DIR} && nohup bun server.ts > /tmp/opencode-server.log 2>&1 &`, {
-          timeout: 5000,
-          stdio: 'ignore',
-        })
+        startServerDetached()
         await new Promise(r => setTimeout(r, 3000))
         const nowOnline = await isOpenCodeOnline()
         const serverInfo = nowOnline ? await getOpenCodeInfo() : null

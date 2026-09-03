@@ -108,8 +108,23 @@ app.use('*', async (c, next) => {
 })
 
 // HEALTH CHECK
+// FIX 2026-10-15 (multi-instance guard): trả kèm IDENTITY (pid + root =
+// thư mục app của server này + workspace + port). Manager (index.ts) probe
+// /health trước khi kill port-holder: cùng root = orphan cũ của chính thư
+// mục đó (kill được); khác root (vd TMO-main vs TMO-clone chạy song song) =
+// instance khác → KHÔNG kill, tránh ping-pong giành port.
 app.get('/health', (c) => {
-  return c.json({ ok: true, status: 'live', timestamp: new Date().toISOString() })
+  return c.json({
+    ok: true,
+    status: 'live',
+    timestamp: new Date().toISOString(),
+    version: SERVER_VERSION,
+    pid: process.pid,
+    port: PORT,
+    root: resolve(__dirname, '..', '..'),
+    workspace: WORKSPACE,
+    uptimeMs: Date.now() - START_TIME,
+  })
 })
 
 // SERVER INFO
@@ -394,11 +409,23 @@ console.log(`[OpenCode Server] LSP: ${lspAvailable}`)
 console.log(`[OpenCode Server] Version: ${SERVER_VERSION}`)
 
 // Use Bun's native server — more stable than @hono/node-server with Bun
-const server = Bun.serve({
-  port: PORT,
-  hostname: '127.0.0.1',
-  fetch: app.fetch,
-})
+// FIX 2026-10-15: bắt lỗi bind (EADDRINUSE throw SYNC từ Bun.serve) → exit
+// code 47 làm marker cho manager: manager biết chắc port-conflict → dọn port
+// CROSS-PLATFORM (netstat + taskkill trên Windows — lsof không tồn tại) rồi
+// restart với backoff (3s→30s) — thay vì crash-loop 3s vô hạn như trước.
+const EXIT_PORT_BUSY = 47
+try {
+  Bun.serve({
+    port: PORT,
+    hostname: '127.0.0.1',
+    fetch: app.fetch,
+  })
+} catch (err) {
+  console.error(`[OpenCode Server] ❌ Không bind được 127.0.0.1:${PORT} — port đang bận (EADDRINUSE?)`)
+  console.error('[OpenCode Server] Lỗi:', err instanceof Error ? err.message : String(err))
+  console.error(`[OpenCode Server] Exit ${EXIT_PORT_BUSY} — manager sẽ dọn port + backoff restart`)
+  process.exit(EXIT_PORT_BUSY)
+}
 
 console.log(`[OpenCode Server] ✅ Running on http://127.0.0.1:${PORT}`)
 
