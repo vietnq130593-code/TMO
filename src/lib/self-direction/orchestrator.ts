@@ -57,6 +57,12 @@ import { getAgentRuns } from '@/lib/agent-run-tracker'
 // nằm trong module graph của app qua chat routes; không có vòng import).
 import { executeTool } from '@/lib/code-team/tool-executor'
 import { runPrePushVerification, type PrePushResult } from '@/lib/code-team/pre-push-verify'
+// FIX (2026-09-03, Task 23 — E2E quét hệ thống): code-workflow agents đi lạc
+// path vì không biết workspace root — import resolver (active workspace qua
+// WorkspaceManager, fallback OPENCODE_WORKSPACE/cwd, 5s cache) để chèn hint
+// định hướng vào system prompt của bước code-workflow.
+import { resolveWorkspaceRoot } from '@/lib/code-team/workspace-root'
+import { readdir } from 'fs/promises'
 import { parseToolCallsFromOutput, formatMessagesForLLM } from '@/lib/tool-calls'
 import { Prisma } from '@prisma/client'
 // USER DECISION #3 (2026-09-30): ủy quyền phê duyệt SELF-DIRECTION chuyển từ
@@ -563,34 +569,70 @@ ${text}
 Lập kế hoạch triển khai (JSON).`
 
   try {
-    const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 1600, temperature: 0.4, label: 'OmegaPlan' })
-    const jsonStr = findBalancedJson(raw.replace(/```(?:json)?/g, ''), 'steps')
-    if (jsonStr) {
-      const obj = JSON.parse(jsonStr) as Record<string, unknown>
-      const rawSteps = Array.isArray(obj.steps) ? obj.steps : []
-      let steps: SdPlanStep[] = rawSteps
-        .filter((s): s is Record<string, unknown> => !!s && typeof s === 'object')
-        .slice(0, MAX_PLAN_STEPS)
-        .map(s => ({
-          title: String(s.title || 'Bước').slice(0, 150),
-          description: String(s.description || '').slice(0, 800),
-          assignee: normalizeAssignee(typeof s.assignee === 'string' ? s.assignee : null, names),
-        }))
-      if (steps.length > 0) {
-        // CI-6 B5: kế hoạch code-workflow PHẢI kết thúc bằng verify_and_push (Omega)
-        if (isCodeWorkflow) steps = ensureFinalVerifyStep(steps)
-        // Mọi step kế thừa executionMode của proposal (per-step flag)
-        steps = steps.map(s => ({ ...s, executionMode: proposal.executionMode }))
-        return {
-          planSummary: String(obj.planSummary || `Kế hoạch ${steps.length} bước do Omega lập`).slice(0, 500),
-          steps,
-        }
-      }
+    // FIX (2026-09-03, Task 23 — E2E quét hệ thống): LLM (glm-4-plus qua ZAI)
+    // trả plan JSON malformed giữa chừng ("Expected ',' or ']' after array
+    // element at position 1938") → rơi kế hoạch generic 5 bước, mất chi tiết
+    // phân công của Omega. 2 cải thiện: (1) maxTokens 1600 → 2400 — plan 5-6
+    // bước × description dài dễ vượt ngân sách; (2) thử tối đa 2 LẦN — lần 2
+    // nhiệt độ thấp (0.2) + lưu ý cú pháp chặt, LLM models thường trả JSON
+    // sạch ở lần retry. Vẫn fail → default plan như cũ (fail-open).
+    let plan: SdWorkPlan | null = null
+    for (let attempt = 1; attempt <= 2 && !plan; attempt++) {
+      const raw = await callBrain({
+        prompt: userPrompt,
+        systemPrompt:
+          attempt === 2
+            ? `${systemPrompt}\n\n⚠️ LẦN THỬ LẠI: lần trước JSON bị lỗi cú pháp (thiếu dấu phẩy/ngoặc). Lần này output CHỈ gồm JSON hợp lệ, mô tả mỗi bước ≤400 ký tự, kiểm tra kỹ dấu phẩy giữa các phần tử và đóng đủ ngoặc "}]}.`
+            : systemPrompt,
+        maxTokens: 2400,
+        temperature: attempt === 2 ? 0.2 : 0.4,
+        label: 'OmegaPlan',
+      })
+      plan = parsePlanJson(raw, names, isCodeWorkflow, proposal.executionMode)
     }
-    throw new Error('Plan JSON rỗng/sai shape')
+    if (plan) return plan
+    throw new Error('Plan JSON rỗng/sai shape sau 2 lần thử')
   } catch (err) {
     console.warn('[SelfDirection] OmegaPlan lỗi — dùng kế hoạch mặc định:', err instanceof Error ? err.message : String(err))
     return defaultPlan(proposal.title, names, proposal.executionMode)
+  }
+}
+
+/**
+ * FIX (2026-09-03, Task 23): tách parse plan JSON ra helper riêng để retry được
+ * (trước đây parse inline trong generateWorkPlan — fail là bỏ luôn, không thử
+ * lại). Trả null khi JSON rỗng/sai shape (caller quyết retry hay default).
+ */
+function parsePlanJson(
+  raw: string,
+  names: string[],
+  isCodeWorkflow: boolean,
+  executionMode: string,
+): SdWorkPlan | null {
+  try {
+    const jsonStr = findBalancedJson(raw.replace(/```(?:json)?/g, ''), 'steps')
+    if (!jsonStr) return null
+    const obj = JSON.parse(jsonStr) as Record<string, unknown>
+    const rawSteps = Array.isArray(obj.steps) ? obj.steps : []
+    let steps: SdPlanStep[] = rawSteps
+      .filter((s): s is Record<string, unknown> => !!s && typeof s === 'object')
+      .slice(0, MAX_PLAN_STEPS)
+      .map(s => ({
+        title: String(s.title || 'Bước').slice(0, 150),
+        description: String(s.description || '').slice(0, 800),
+        assignee: normalizeAssignee(typeof s.assignee === 'string' ? s.assignee : null, names),
+      }))
+    if (steps.length === 0) return null
+    // CI-6 B5: kế hoạch code-workflow PHẢI kết thúc bằng verify_and_push (Omega)
+    if (isCodeWorkflow) steps = ensureFinalVerifyStep(steps)
+    // Mọi step kế thừa executionMode của proposal (per-step flag)
+    steps = steps.map(s => ({ ...s, executionMode }))
+    return {
+      planSummary: String(obj.planSummary || `Kế hoạch ${steps.length} bước do Omega lập`).slice(0, 500),
+      steps,
+    }
+  } catch {
+    return null
   }
 }
 
@@ -746,12 +788,36 @@ async function executeCodeStepWithTools(params: {
   const persona = await agentPersona(step.assignee)
   const sessionId = `sd-${proposal.id}`
 
+  // FIX (2026-09-03, Task 23 — E2E quét hệ thống, ROOT CAUSE chính của failure
+  // "Mở rộng thư viện kỹ năng"): cả 3 bước đi lạc path — 22 tool call vô nghĩa
+  // (../lib, lib/skills, src/lib/skills — path escape bị chặn + ENOENT lặp lại
+  // qua 3 attempts × 3 agents) vì system prompt KHÔNG cho agent biết workspace
+  // root là gì và bên trong có gì. Chèn hint định hướng: root tuyệt đối +
+  // listing top-level thật + cảnh báo khi workspace gần trống. Fail-open:
+  // lỗi resolve → hint rỗng, giữ hành vi cũ.
+  let workspaceHint = ''
+  try {
+    const root = await resolveWorkspaceRoot()
+    const entries = await readdir(root, { withFileTypes: true })
+    const names = entries.slice(0, 30).map(e => `${e.name}${e.isDirectory() ? '/' : ''}`)
+    const onlyHidden = entries.length > 0 && entries.every(e => e.name.startsWith('.'))
+    workspaceHint = `
+
+WORKSPACE ROOT (mọi đường dẫn tương đối tính TỪ ĐÂY — "../" BỊ CHẶN, path escape bị từ chối): ${root}
+Nội dung top-level hiện có: ${names.length > 0 ? names.join(', ') : '(trống)'}${
+      onlyHidden
+        ? `\n⚠️ Workspace GẦN TRỐNG (chỉ thư mục ẩn như .git) — KHÔNG có source có sẵn. ĐỪNG cố tìm "lib/", "src/", "skills/" không tồn tại — nếu bước cần cấu trúc mới, hãy TẠO file mới bằng file_write với đường dẫn tương đối từ root. Báo cáo trung thực nếu phạm vi công việc VƯỢT KHÔNG GIAN workspace (khai báo rõ trong output để người đánh giá xử lý).`
+        : ''
+    }`
+  } catch { /* fail-open: không hint */ }
+
   const systemPrompt = `${persona.systemPrompt}
 
 ═══════════════════════════════════════════
  CHẾ ĐỘ CODE-WORKFLOW — THỰC THI WORKSPACE THẬT (SELF-DIRECTION)
 ═══════════════════════════════════════════
 Bạn đang thực hiện 1 bước kế hoạch cần THAY ĐỔI CODE THẬT trong workspace active. Bạn có TOOL THẬT — mọi tool call thực thi thật trên hệ thống file và git của workspace.
+${workspaceHint}
 
 Cú pháp tool call (1 hoặc nhiều trong 1 lượt, mỗi call 1 dòng):
 tool_call: tên_tool({"tham_số": "giá trị"})
@@ -854,6 +920,36 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
         content: '⚠️ Đã dùng hết ngân sách tool call của bước. Viết báo cáo output cuối NGAY (text thuần, KHÔNG tool_call): đã làm gì, file đã sửa, bằng chứng, còn thiếu gì.',
       })
     }
+  }
+
+  if (!output && toolCallsLog.length > 0) {
+    // FIX (2026-09-03, Task 23 — E2E quét hệ thống): agent hết lượt ReAct
+    // (MAX_TURNS) hoặc hết budget tool call TRƯỚC khi viết báo cáo — thực tế
+    // thấy: SHOCWAVE "Agent không viết báo cáo tổng kết (hết lượt LLM)" →
+    // evaluator chỉ có tool-log thô để đánh giá, chất lượng đánh giá kém.
+    // Reserve 1 lượt "final report" RIÊNG NGOÀI vòng ReAct: gửi lại toàn bộ
+    // conversation + yêu cầu tổng kết. Nếu LLM fail hoặc vẫn đòi tool_call →
+    // bỏ, giữ fallback tổng hợp trung thực như cũ (fail-open).
+    try {
+      const finalMessages: Array<{ role: 'user' | 'assistant' | 'tool'; content: string }> = [
+        ...messages,
+        {
+          role: 'user',
+          content: '⚠️ Đã kết thúc ngân sách tool call/LLM của bước. NGAY BÂY GIỜ viết BÁO CÁO OUTPUT CUỐI (text thuần, KHÔNG tool_call, ~150 từ): đã làm gì, file nào đã sửa/tạo (đường dẫn tương đối từ workspace root), bằng chứng kiểm chứng (file_read/lint/type_check), còn vấn đề gì. Đây là output DUY NHẤT người đánh giá sẽ xem.',
+        },
+      ]
+      const final = await callStepBrain({
+        prompt: formatMessagesForLLM(finalMessages),
+        systemPrompt,
+        brain: persona.brain,
+        agentName: step.assignee,
+        label: `CodeStep ${step.stepOrder} final`,
+      })
+      // Chỉ chấp nhận báo cáo text thuần — LLM vẫn đòi tool_call thì bỏ
+      if (final && final.trim() && parseToolCallsFromOutput(final).length === 0) {
+        output = final.trim()
+      }
+    } catch { /* giữ fallback tổng hợp dưới */ }
   }
 
   if (!output) {
@@ -971,12 +1067,28 @@ async function evaluateStep(params: {
   step: { stepOrder: number; title: string; description: string; assignee: string }
   output: string
   attempt: number
+  /**
+   * FIX (2026-09-03, Task 23): receipts tool THẬT của bước code-workflow —
+   * evaluator trước đây chỉ thấy output tự tổng hợp của agent (dễ bị đánh
+   * lừa: "5/6 file_list✓" được chấm ĐẠT như "triển khai phần lõi"). Giờ nhận
+   * thêm bằng chứng tool thô + tiêu chí bắt buộc: bước đòi sửa code mà không
+   * có tool sửa file nào thành công → complete PHẢI false. Null/undefined =
+   * bước llm-mode (không có receipts) — giữ hành vi cũ.
+   */
+  codeReceipts?: Array<{ tool: string; success: boolean }> | null
 }): Promise<SdStepEvaluation> {
   const { systemPrompt, reviewerName } = await getReviewerSystemPrompt('evaluate')
 
+  const receiptsBlock = params.codeReceipts
+    ? `\nTOOL ĐÃ THỰC THI TRONG BƯỚC (bằng chứng THẬT từ tool executor, không bịa): ${
+        params.codeReceipts.length > 0
+          ? params.codeReceipts.map(t => `${t.tool}${t.success ? '✓' : '✗'}`).join(', ')
+          : '(không có tool call nào)'}\nTIÊU CHÍ BẮT BUỘC (code-workflow): nếu MÔ TẢ công việc đòi THAY ĐỔI/TẠO code hay file thì CHỈ complete=true khi có ít nhất 1 tool sửa file THÀNH CÔNG (file_write/file_edit/file_multi_edit ✓, hoặc git/shell tạo-sửa file ✓). Chỉ khảo sát/liệt kê file (file_list/grep/file_read) KHÔNG đủ cho bước triển khai. Bước có mô tả thuần phân tích/khảo sát thì đánh giá trên chất lượng phân tích.\n`
+    : ''
+
   const userPrompt = `BƯỚC ${params.step.stepOrder}: ${params.step.title} (agent thực hiện: ${params.step.assignee})
 MÔ TẢ CÔNG VIỆC: ${params.step.description}
-
+${receiptsBlock}
 OUTPUT AGENT BÀN GIAO (lần thử ${params.attempt}/${MAX_STEP_ATTEMPTS}):
 ${params.output.slice(0, 2000)}
 
@@ -1349,6 +1461,11 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
       if (attempt > 1) {
         await db.proposalStep.update({ where: { id: stepRow.id }, data: { attempts: { increment: 1 } } })
       }
+      // FIX (2026-09-03, Task 23): reset receipt mỗi attempt (attempt llm-mode
+      // sau attempt code-workflow không giữ receipt cũ) + truyền receipts cho
+      // evaluateStep làm bằng chứng bắt buộc (bước triển khai không có tool
+      // sửa file thành công → KHÔNG ĐẠT).
+      lastReceipt = null
       if (isCodeWorkflow) {
         // CI-6 B5 — bước GIỮA: agent persona ReAct qua TOOL THẬT trong workspace
         const r = await executeCodeStepWithTools({
@@ -1371,6 +1488,8 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
         step: { ...stepDef, stepOrder: i + 1 },
         output: lastOutput,
         attempt,
+        // FIX (2026-09-03, Task 23): bằng chứng tool thật cho evaluator
+        codeReceipts: isCodeWorkflow && lastReceipt ? lastReceipt.toolCalls : null,
       })
       lastEvaluation = evaluation.evaluation
       if (evaluation.complete) {
