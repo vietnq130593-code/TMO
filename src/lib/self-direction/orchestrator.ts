@@ -127,9 +127,14 @@ const VERIFY_AND_PUSH_TITLE_RE = /verify_and_push|pipeline|kiểm định/i
  * FIX (2026-09-03, Task 24 — quan sát E2E): 8 calls / 6 turns quá chặt — agent
  * tốn 2-4 call khảo sát (file_list/file_read) + cần 2-4 call ghi file; hết
  * ngân sách giữa chừng → bỏ dở implementation → evaluator fail (3 attempts
- * đều thế). Nới lên 12 calls / 8 turns (mỗi turn ~5-25s ZAI — chấp nhận được). */
-const SD_CODE_STEP_MAX_TOOL_CALLS = 12
-const SD_CODE_STEP_MAX_TURNS = 8
+ * đều thế). Nới lên 12 calls / 8 turns (mỗi turn ~5-25s ZAI — chấp nhận được).
+ * FIX (2026-09-03, lượt quan sát 2 — Run 4 E2E): 12 calls VẪN bị cạn vì agent
+ * đốt ngân sách vào khảo sát (thực đo 54/72 call là file_read/file_list, chỉ
+ * 7 call ghi file) — các bước implementation lớn (3-4 file) hết budget trước
+ * khi ghi xong → 2-3 attempts mới đạt. Nới 18 calls / 10 turns + thêm nudge
+ * mid-loop khi agent chỉ đọc không ghi (xem SD_MUTATING_TOOLS dưới đây). */
+const SD_CODE_STEP_MAX_TOOL_CALLS = 18
+const SD_CODE_STEP_MAX_TURNS = 10
 /** Cap ký tự tool-result đẩy vào conversation (chống context nổ) */
 const SD_CODE_TOOL_RESULT_CAP = 4000
 /**
@@ -142,6 +147,14 @@ const SD_CODE_TOOL_ALLOWLIST = new Set([
   'grep', 'shell', 'run_tests', 'lint', 'type_check', 'lsp_diagnostics',
   'git_status', 'git_diff', 'git_log', 'todo_write',
 ])
+
+/**
+ * FIX (2026-09-03, lượt quan sát 2 — Run 4 E2E): tool SỬA workspace — dùng cho
+ * nudge mid-loop: nếu agent đã dùng ≥8 tool call mà CHƯA có call sửa file nào
+ * (toàn file_read/file_list) → nhắc chuyển sang ghi file NGAY (không đợi hết
+ * 18 calls mới kết luận "chưa làm gì").
+ */
+const SD_MUTATING_TOOLS = new Set(['file_write', 'file_edit', 'file_multi_edit', 'file_delete', 'shell'])
 
 /**
  * FIX review GĐ2 #3 (MEDIUM): shell nằm trong allowlist nhưng KHÔNG được dùng
@@ -159,10 +172,14 @@ function sdShellCommandAllowed(command: unknown): boolean {
   return !SD_SHELL_DENY_PATTERNS.some(re => re.test(command))
 }
 
-/** Receipt 1 bước GIỮA code-workflow — log tool calls đã THỰC THI thật */
+/** Receipt 1 bước GIỮA code-workflow — log tool calls đã THỰC THI thật.
+ * FIX (2026-09-03, lượt quan sát 2 — Run 4 E2E): thêm `detail` (path file +
+ * size/số edit) cho tool sửa/đọc file — evaluator trước đây chỉ thấy
+ * "file_write✓" KHÔNG biết file NÀO → không đối chiếu được claim của agent
+ * ("đã tạo skills/csv.py") với bằng chứng thật. */
 export interface SdToolBatchReceipt {
   kind: 'tool-batch'
-  toolCalls: Array<{ tool: string; success: boolean }>
+  toolCalls: Array<{ tool: string; success: boolean; detail?: string }>
   executedAt: string
 }
 
@@ -796,6 +813,8 @@ async function executeCodeStepWithTools(params: {
   step: { stepOrder: number; title: string; description: string; assignee: string }
   previousOutputs: Array<{ title: string; output: string }>
   reworkFeedback?: string | null
+  /** FIX (2026-09-03, lượt quan sát 2): true khi orchestration chạy lại đề xuất đã fail trước đó — prompt sẽ nhắc agent tận dụng file còn sót */
+  isRetry?: boolean
 }): Promise<{ output: string; receipt: SdToolBatchReceipt }> {
   const { proposal, step, previousOutputs, reworkFeedback } = params
   const persona = await agentPersona(step.assignee)
@@ -846,12 +865,14 @@ Tools khả dụng + THAM SỐ BẮT BUỘC:
 - lint() / type_check() / run_tests() — kiểm định.
 
 FORMAT FENCE-BLOCK cho file_write (KHUYÊN DÙNG khi ghi file code — không cần escape gì cả):
-tool_call: file_write({"path": "duong/dan/file.py", "mode": "overwrite"})
+tool_call: file_write({"path": "<đường dẫn file THẬT trong workspace của bạn>", "mode": "overwrite"})
 \`\`\`python
 <nội dung file GỐC — nhiều dòng, dấu " tự do, KHÔNG cần escape>
 \`\`\`
+(Lưu ý: path ở trên là placeholder — thay bằng đường dẫn thật của dự án, KHÔNG tạo thư mục literal từ ví dụ.)
 
 Quy tắc:
+- KHẢO SÁT GỌN: tối đa ~5 lượt file_read/file_list/git_status ĐẦU bước — sau đó PHẢI bắt đầu tạo/sửa file. Ưu tiên file_write (overwrite lần đầu + append các lần sau) — file_edit chỉ dùng khi đã file_read và copy old_str NGUYÊN VĂN (bất khớp whitespace = fail).
 - Đọc file trước khi sửa (file_read). Tạo file mới/file lớn: file_write chia phần (~200-400 dòng/lần, lần đầu mode "overwrite", các lần sau "append").
 - KHÔNG commit/push/pull (bị chặn ở bước này) — pipeline kiểm định ở bước CUỐI sẽ commit + push mọi thay đổi.
 - Giới hạn ${SD_CODE_STEP_MAX_TOOL_CALLS} tool call cho bước này — làm phần việc CHÍNH, gọn.
@@ -866,7 +887,7 @@ Quy tắc:
 VẤN ĐỀ GỐC: ${proposal.problem.slice(0, 600)}
 GIẢI PHÁP ĐÃ DUYỆT: ${proposal.solution.slice(0, 600)}
 ${proposal.userNotes ? `GHI CHÚ MR. ARCHITECT (bắt buộc tuân thủ): ${proposal.userNotes.slice(0, 400)}` : ''}
-
+${params.isRetry ? `\n⚠️ LẦN CHẠY LẠI: đề xuất này đã thất bại ít nhất 1 lần trước đó — workspace CÓ THỂ còn file từ lần chạy trước (dùng git_status/file_list xem trước khi tạo mới). KHÔNG xóa file cũ — tiếp tục/phát triển trên nền hiện có khi có ích. Chỉ khai báo file do BẠN tạo/sửa trong BƯỚC NÀY (theo tool receipt của bước này).\n` : ''}
 KẾT QUẢ BÀN GIAO TỪ CÁC BƯỚC TRƯỚC:
 ${handover}
 
@@ -879,7 +900,7 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
   const messages: Array<{ role: 'user' | 'assistant' | 'tool'; content: string }> = [
     { role: 'user', content: userPrompt },
   ]
-  const toolCallsLog: Array<{ tool: string; success: boolean }> = []
+  const toolCallsLog: Array<{ tool: string; success: boolean; detail?: string }> = []
   let lastAssistant = ''
   let output = ''
   // FIX 2026-10-15: đếm lượt LLM fail — tổng hợp vào output trung thực khi cả
@@ -892,6 +913,9 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
   // FIX (2026-09-03, Task 24 — run#3): số nudge "tiếp tục đi, chưa xong thì
   // đừng kết luận" — cap 2/attempt.
   let incompleteNudges = 0
+  // FIX (2026-09-03, lượt quan sát 2 — Run 4 E2E): đã nhắc "chuyển sang ghi file"
+  // khi agent đốt budget vào khảo sát (chỉ đọc không ghi)? Cap 1 lần/bước.
+  let surveyNudged = false
 
   for (let turn = 1; turn <= SD_CODE_STEP_MAX_TURNS; turn++) {
     const formatted = formatMessagesForLLM(messages)
@@ -977,8 +1001,38 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
       // THỰC THI THẬT trong workspace active — executeTool của tool-executor
       // (context mirror agent-goal-loop: agentName + sessionId sd-<proposalId>)
       const res = await executeTool(tc.name, tc.args, { agentName: step.assignee, sessionId })
-      toolCallsLog.push({ tool: tc.name, success: res.success })
+      // FIX (2026-09-03, lượt quan sát 2 — Run 4 E2E): receipt kèm detail (path +
+      // size/số edit) — evaluator + báo cáo đối chiếu được claim của agent với
+      // file THẬT đã ghi. Result là object (file tools) hoặc string (error).
+      let detail = ''
+      try {
+        const r = res.result as unknown
+        if (r && typeof r === 'object') {
+          const ro = r as Record<string, unknown>
+          if (typeof ro.path === 'string') {
+            detail = `${ro.path}${typeof ro.bytesWritten === 'number' ? ` (${ro.bytesWritten}B)` : typeof ro.editsApplied === 'number' ? ` (${ro.editsApplied} edit)` : ''}`
+          } else if (typeof ro.error === 'string') {
+            detail = ro.error.replace(/\s+/g, ' ').slice(0, 100)
+          }
+        } else if (typeof r === 'string') {
+          detail = r.replace(/\s+/g, ' ').slice(0, 100)
+        }
+      } catch { /* detail rỗng — không quan trọng */ }
+      toolCallsLog.push(detail ? { tool: tc.name, success: res.success, detail: detail.slice(0, 120) } : { tool: tc.name, success: res.success })
       messages.push({ role: 'tool', content: sdToolResultToMessage(tc.name, res.success, res.result) })
+    }
+
+    // FIX (2026-09-03, lượt quan sát 2 — Run 4 E2E): agent đốt budget vào khảo
+    // sát (thực đo 54/72 call là read/list) → bước implementation hết ngân sách
+    // trước khi ghi file nào → evaluator fail. Nếu đã ≥8 tool call mà CHƯA có
+    // call SỬA file nào thành công → nhắc (1 lần/bước) chuyển sang ghi NGAY.
+    const mutatingOk = toolCallsLog.some(t => SD_MUTATING_TOOLS.has(t.tool) && t.success)
+    if (!mutatingOk && !surveyNudged && toolCallsLog.length >= 8 && toolCallsLog.length < SD_CODE_STEP_MAX_TOOL_CALLS) {
+      surveyNudged = true
+      messages.push({
+        role: 'user',
+        content: '⚠️ Bạn đã dùng nhiều lượt tool cho KHẢO SÁT (đọc/liệt kê) mà chưa tạo/sửa file nào. Nếu bước này cần thay đổi code/file: chuyển sang file_write NGAY (dùng format fence-block, chia append nếu dài). Nếu bước THẬT SỰ chỉ mang tính phân tích/khảo sát thì cứ tiếp tục và kết luận bằng báo cáo text thuần.',
+      })
     }
 
     if (toolCallsLog.length >= SD_CODE_STEP_MAX_TOOL_CALLS) {
@@ -1039,7 +1093,7 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
     // trung thực (mirror executeStep llm-mode) — evaluateStep thấy output KHÔNG
     // trống + rõ nguyên nhân → step failed đúng nghĩa, KHÔNG đánh lừa completed.
     output = toolCallsLog.length > 0
-      ? `Đã thực thi ${toolCallsLog.length} tool call trong workspace thật (${toolCallsLog.filter(t => t.success).length} thành công): ${toolCallsLog.map(t => `${t.tool}${t.success ? '✓' : '✗'}`).join(', ')}. Agent không viết báo cáo tổng kết (hết lượt LLM) — xem chi tiết tool receipts trong workspaceReceipt.`
+      ? `Đã thực thi ${toolCallsLog.length} tool call trong workspace thật (${toolCallsLog.filter(t => t.success).length} thành công): ${toolCallsLog.map(t => `${t.tool}${t.success ? '✓' : '✗'}${t.detail ? `(${t.detail})` : ''}`).join(', ')}. Agent không viết báo cáo tổng kết (hết lượt LLM) — xem chi tiết tool receipts trong workspaceReceipt.`
       : lastAssistant || `[${step.assignee} chưa tạo được output do LLM call thất bại${llmFailTurns > 0 ? ` (${llmFailTurns} lượt fail — chuỗi NVIDIA kimi-k3 → fallback chain đều lỗi, kiểm tra NVIDIA_API_KEY_1..4 trong .env / timeout / model)` : ''} — cần retry]`
   }
   console.log(`[SelfDirection] CodeStep ${step.stepOrder} [${step.assignee}] thực thi THẬT ${toolCallsLog.length} tool call (${toolCallsLog.filter(t => t.success).length} ok)${llmFailTurns > 0 ? ` — ${llmFailTurns} lượt LLM fail` : ''}`)
@@ -1111,7 +1165,16 @@ export async function executeVerifyAndPushStep(params: {
     ...result.steps.map(s => `- ${s.name}: ${s.status}${typeof s.durationMs === 'number' ? ` (${Math.round(s.durationMs / 100) / 10}s)` : ''} — ${(s.detail || '').slice(0, 160)}`),
   ]
   if (result.commitHash) lines.push(`Commit: ${result.commitHash}`)
-  else if (result.success) lines.push('Không có commit — cây làm việc sạch, không có gì để commit (đề xuất có thể chỉ mang tính phân tích/tư vấn).')
+  else if (result.success) {
+    // FIX (2026-09-03, lượt quan sát 2 — Run 4): dry-run bỏ commit thật →
+    // commitHash luôn rỗng — không được nói "cây làm việc sạch" khi thực tế
+    // có N file chờ commit (Run 4: 19 file). Phân biệt 2 trường hợp rõ ràng.
+    lines.push(
+      dryRun
+        ? 'Không commit — DRY-RUN: mọi kiểm định PASS, commit/push bị bỏ theo chế độ dry-run (file thay đổi vẫn còn trong working tree)'
+        : 'Không có commit — cây làm việc sạch, không có gì để commit (đề xuất có thể chỉ mang tính phân tích/tư vấn).',
+    )
+  }
   lines.push(`Push: ${result.pushed ? 'đã push lên remote' : 'không push (skip/thất bại)'}`)
   lines.push(`Pull verify: ${result.pulled ? 'đã pull ff-only xác nhận đồng bộ' : 'không pull (skip/thất bại)'}`)
   if (result.error) lines.push(`Lỗi pipeline: ${result.error}`)
@@ -1150,16 +1213,18 @@ async function evaluateStep(params: {
    * thêm bằng chứng tool thô + tiêu chí bắt buộc: bước đòi sửa code mà không
    * có tool sửa file nào thành công → complete PHẢI false. Null/undefined =
    * bước llm-mode (không có receipts) — giữ hành vi cũ.
+   * FIX (2026-09-03, lượt quan sát 2): receipt giờ kèm `detail` (path file +
+   * size/số edit) — đối chiếu claim của agent với file THẬT đã ghi.
    */
-  codeReceipts?: Array<{ tool: string; success: boolean }> | null
+  codeReceipts?: Array<{ tool: string; success: boolean; detail?: string }> | null
 }): Promise<SdStepEvaluation> {
   const { systemPrompt, reviewerName } = await getReviewerSystemPrompt('evaluate')
 
   const receiptsBlock = params.codeReceipts
-    ? `\nTOOL ĐÃ THỰC THI TRONG BƯỚC (bằng chứng THẬT từ tool executor, không bịa): ${
+    ? `\nTOOL ĐÃ THỰC THI TRONG BƯỚC (bằng chứng THẬT từ tool executor, không bịa — detail là path file + size/số edit): ${
         params.codeReceipts.length > 0
-          ? params.codeReceipts.map(t => `${t.tool}${t.success ? '✓' : '✗'}`).join(', ')
-          : '(không có tool call nào)'}\nTIÊU CHÍ BẮT BUỘC (code-workflow): nếu MÔ TẢ công việc đòi THAY ĐỔI/TẠO code hay file thì CHỈ complete=true khi có ít nhất 1 tool sửa file THÀNH CÔNG (file_write/file_edit/file_multi_edit ✓, hoặc git/shell tạo-sửa file ✓). Chỉ khảo sát/liệt kê file (file_list/grep/file_read) KHÔNG đủ cho bước triển khai. Bước có mô tả thuần phân tích/khảo sát thì đánh giá trên chất lượng phân tích.\n`
+          ? params.codeReceipts.map(t => `${t.tool}${t.success ? '✓' : '✗'}${t.detail ? `(${t.detail})` : ''}`).join(', ')
+          : '(không có tool call nào)'}\nTIÊU CHÍ BẮT BUỘC (code-workflow): nếu MÔ TẢ công việc đòi THAY ĐỔI/TẠO code hay file thì CHỈ complete=true khi có ít nhất 1 tool sửa file THÀNH CÔNG (file_write/file_edit/file_multi_edit ✓ — kèm path trong detail). Đối chiếu CLAIM của agent ("đã tạo file X") với receipt: file KHÔNG có trong receipt = KHÔNG tính. Chỉ khảo sát/liệt kê file (file_list/grep/file_read) KHÔNG đủ cho bước triển khai. Bước có mô tả thuần phân tích/khảo sát thì đánh giá trên chất lượng phân tích.\n`
     : ''
 
   const userPrompt = `BƯỚC ${params.step.stepOrder}: ${params.step.title} (agent thực hiện: ${params.step.assignee})
@@ -1439,9 +1504,22 @@ async function runOrchestration(proposalId: string, opts?: { dryRun?: boolean })
 
 async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boolean }): Promise<void> {
   // === Phase 1: PLAN ===
-  await db.selfDirectionProposal.update({ where: { id: proposalId }, data: { status: 'planning' } })
+  // FIX (2026-09-03, lượt quan sát 2 — Run 4): chạy lại đề xuất đã fail → xóa
+  // completedAt/decisionReason cũ NGAY lúc vào planning — tránh trạng thái sai
+  // "status=executing nhưng completedAt còn của lần fail trước" (quan sát:
+  // bu58c4 completedAt=16:33 trong khi run 4 executing từ 16:50 — UI hiển thị
+  // sai ngày hoàn tất suốt 30 phút chạy).
+  const preRow = await db.selfDirectionProposal.findUnique({ where: { id: proposalId }, select: { completedAt: true, executedAt: true, decisionReason: true } })
+  await db.selfDirectionProposal.update({
+    where: { id: proposalId },
+    data: { status: 'planning', ...(preRow?.completedAt || preRow?.decisionReason ? { completedAt: null, decisionReason: null } : {}) },
+  })
   const proposal = await db.selfDirectionProposal.findUnique({ where: { id: proposalId } })
   if (!proposal) throw new Error('Proposal biến mất')
+  // FIX (2026-09-03, lượt quan sát 2): đây có phải lần chạy LẠI (đề xuất đã từng
+  // được triển khai) không — truyền vào executeCodeStepWithTools để nhắc agent
+  // tận dụng file còn sót từ lần trước thay vì dựng lại từ đầu.
+  const isRetry = !!preRow?.executedAt
 
   // Retry → xóa steps cũ
   await db.proposalStep.deleteMany({ where: { proposalId } })
@@ -1485,12 +1563,16 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
     })
 
     // ── CI-6 B5: bước CUỐI code-workflow → pipeline verify_and_push THẬT ──
-    // Single-shot (KHÔNG rework loop): mỗi lần chạy pipeline = lint + typecheck
-    // + tests (~40s+) + có thể commit/push thật. Thành công của bước = pipeline
-    // PASS (đánh giá deterministic — không cần Omega chấm lại); cây sạch →
-    // "không có gì để commit" vẫn ĐẠT (đề xuất có thể chỉ phân tích).
+    // Thành công của bước = pipeline PASS (đánh giá deterministic — không cần
+    // Omega chấm lại); cây sạch → "không có gì để commit" vẫn ĐẠT.
+    // FIX (2026-09-03, lượt quan sát 2 — Run 2 tử vong vì 1 lỗi lint): pipeline
+    // fail ở bước kiểm định SỬA ĐƯỢC (lint/type_check/run_tests — lỗi code thật
+    // trong workspace) → TRƯỚC ĐÂY single-shot fail luôn cả proposal dù 11/12
+    // bước đã đạt. Giờ: 1 chu kỳ REPAIR — RAMPAGE nhận chi tiết lỗi, sửa code
+    // thật, rồi chạy lại pipeline (tối đa 2 lần chạy / bước). Pipeline fail do
+    // git/secret/smoke (không sửa bằng code thường) → giữ hành vi cũ (fail).
     if (isCodeWorkflow && isVerifyAndPushStep(stepDef, i === totalSteps - 1)) {
-      const result = await executeVerifyAndPushStep({
+      const runPipeline = () => executeVerifyAndPushStep({
         proposal: { id: proposal.id, title: proposal.title },
         planSummary: plan.planSummary,
         // FIX 2026-09-02 (audit #2): dryRun tùy chọn từ caller (route deploy đọc
@@ -1498,19 +1580,66 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
         // (yêu cầu Mr. Architect: chức năng push code từ workspace phải hoạt động thật).
         dryRun: opts?.dryRun === true,
       })
+      let result = await runPipeline()
+      const fixableFail = !result.success && result.receipt.steps.some(s => s.status === 'fail' && ['lint', 'type_check', 'run_tests'].includes(s.name))
+      if (fixableFail) {
+        const failDetail = result.receipt.steps
+          .filter(s => s.status === 'fail')
+          .map(s => `${s.name} FAIL: ${s.detail || '(không chi tiết)'}`)
+          .join('\n')
+          .slice(0, 1500)
+        console.warn(`[SelfDirection] Bước ${i + 1}/${totalSteps} verify_and_push fail ở bước kiểm định SỬA ĐƯỢC — giao RAMPAGE sửa code rồi chạy lại pipeline (lần 2/2)`)
+        await db.proposalStep.update({
+          where: { id: stepRow.id },
+          data: {
+            attempts: { increment: 1 },
+            status: 'in_progress',
+            output: result.output,
+            evaluation: `Pipeline lần 1 THẤT BẠI (bước kiểm định sửa được) — REPAIR đang chạy: ${failDetail.slice(0, 200)}`,
+            workspaceReceipt: result.receipt as unknown as Prisma.InputJsonValue,
+          },
+        })
+        const repair = await executeCodeStepWithTools({
+          proposal,
+          step: {
+            stepOrder: i + 1,
+            title: 'Sửa lỗi kiểm định (repair verify_and_push)',
+            description: `Pipeline kiểm định cuối (verify_and_push) THẤT BẠI ở các bước:\n${failDetail}\nNHIỆM VỤ: đọc file liên quan theo thông báo lỗi, sửa lỗi lint/type/test THẬT trong workspace bằng tool (file_edit/file_write). KHÔNG commit/push — pipeline sẽ tự chạy lại sau khi bạn xong.`,
+            assignee: 'RAMPAGE',
+          },
+          previousOutputs: doneOutputs.slice(-3),
+          isRetry,
+        })
+        await db.proposalStep.update({
+          where: { id: stepRow.id },
+          data: {
+            output: `${result.output}\n\n[REPAIR RAMPAGE]: ${repair.output.slice(0, 1500)}`.slice(0, 3000),
+            workspaceReceipt: repair.receipt as unknown as Prisma.InputJsonValue,
+          },
+        })
+        result = await runPipeline()
+      }
       if (result.success) {
+        const evalNote = result.receipt.commitHash
+          ? ` — commit ${result.receipt.commitHash.slice(0, 7)}`
+          : opts?.dryRun === true
+            ? ' — [DRY-RUN] mọi kiểm định PASS (bỏ commit/push thật theo chế độ dry-run)'
+            : ' — cây làm việc sạch, không có gì để commit'
         await db.proposalStep.update({
           where: { id: stepRow.id },
           data: {
             status: 'done',
             output: result.output,
-            evaluation: `Pipeline kiểm định ${result.receipt.steps.length} bước PASS${result.receipt.commitHash ? ` — commit ${result.receipt.commitHash.slice(0, 7)}` : ' — cây làm việc sạch, không có gì để commit'}`,
+            evaluation: `Pipeline kiểm định ${result.receipt.steps.length} bước PASS${evalNote}`,
             workspaceReceipt: result.receipt as unknown as Prisma.InputJsonValue,
             finishedAt: new Date(),
           },
         })
         doneOutputs.push({ title: stepDef.title, output: result.output })
-        console.log(`[SelfDirection] Bước ${i + 1}/${totalSteps} verify_and_push [Omega] ĐẠT — pipeline PASS${result.receipt.commitHash ? ` (commit ${result.receipt.commitHash.slice(0, 7)}, pushed=${result.receipt.pushed === true})` : ' (cây sạch — không có gì để commit)'}`)
+        // FIX (2026-09-03, lượt quan sát 2 — Run 4): dry-run KHÔNG có commitHash
+        // (bỏ commit thật) — log cũ in "cây sạch, không có gì để commit" là SAI
+        // sự thật (Run 4 dry-run có 19 file chờ commit nhưng log vẫn nói cây sạch).
+        console.log(`[SelfDirection] Bước ${i + 1}/${totalSteps} verify_and_push [Omega] ĐẠT — pipeline PASS${result.receipt.commitHash ? ` (commit ${result.receipt.commitHash.slice(0, 7)}, pushed=${result.receipt.pushed === true})` : opts?.dryRun === true ? ' [DRY-RUN — bỏ commit/push thật]' : ' (cây sạch — không có gì để commit)'}`)
         continue
       }
       await db.proposalStep.update({
@@ -1549,6 +1678,7 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
           step: { ...stepDef, stepOrder: i + 1 },
           previousOutputs: doneOutputs.slice(-3),
           reworkFeedback: attempt > 1 ? lastEvaluation : null,
+          isRetry,
         })
         lastOutput = r.output
         lastReceipt = r.receipt

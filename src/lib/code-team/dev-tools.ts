@@ -209,8 +209,17 @@ export async function fileEdit(args: {
     const matches = (content.match(countRegex) || []).length
 
     if (matches === 0) {
+      // FIX (2026-09-03, lượt quan sát agents 2 — E2E Run 4): 100% file_edit fail
+      // vì LLM "bịa" old_str từ trí nhớ thay vì copy nguyên văn (quan sát: 10/11
+      // call fail đều "0 matches") — error cũ KHÔNG cho nội dung file thật →
+      // agent không có gì để copy, tiếp tục bịa ở call sau. Giờ kèm excerpt nội
+      // dung thật (≤35 dòng đầu, cap 1200 ký tự) để agent copy chính xác + gợi ý
+      // file_write overwrite cho thay đổi lớn. Excerpt nằm trong Error message
+      // → executeTool catch → đẩy về agent như tool-result (self-correct 1 lượt).
+      const lineCount = original.split('\n').length
+      const excerpt = original.split('\n').slice(0, 35).join('\n').slice(0, 1200)
       throw new Error(
-        `0 matches for old_str (length ${edit.old_str.length}). The file content does not contain the exact string — whitespace/indentation must match exactly.`
+        `0 matches for old_str (length ${edit.old_str.length}). File hiện có ${lineCount} dòng — KHÔNG chứa chuỗi này (whitespace/indent phải khớp CHÍNH XÁC, copy nguyên văn). Phần đầu file THẬT hiện tại:\n---\n${excerpt}\n---\n→ Phát lại file_edit với old_str copy NGUYÊN VĂN từ file (hoặc file_read phần liên quan), hoặc dùng file_write mode=overwrite cho thay đổi lớn.`
       )
     }
     if (matches > 1 && !args.replace_all && !args.edits) {
