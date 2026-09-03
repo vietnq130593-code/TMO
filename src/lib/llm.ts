@@ -2144,7 +2144,11 @@ async function attemptNvidiaOnce(params: {
     try { errBody = (await response.text()).slice(0, 300) } catch { /* ignore */ }
     // FIX (R2-a #7): 4xx deterministic (body hỏng/quá lớn) → 'bad_request' —
     // caller fail-fast thay vì xoay 4 key × 3 sweep retry cùng body vô nghĩa.
-    const isDeterministic4xx = response.status === 400 || response.status === 413 || response.status === 414 || response.status === 422 || response.status === 431
+    // FIX (audit 2026-10-15): thêm 404 — model-not-found là deterministic THEO
+    // MODEL (NIM đã 404 glm-5.3, deepseek-v4-pro bản cũ 2026-08-27): key khác
+    // retry cùng model-name cũng 404 y hệt. Trước đây 404 rơi vào 'server_error'
+    // → đốt tới 12 attempts + soft-mark cooldown oan 4 key trước khi fail.
+    const isDeterministic4xx = response.status === 400 || response.status === 404 || response.status === 413 || response.status === 414 || response.status === 422 || response.status === 431
     return {
       status: isDeterministic4xx ? 'bad_request' : 'server_error',
       httpStatus: response.status,
