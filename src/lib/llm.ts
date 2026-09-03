@@ -3703,7 +3703,10 @@ function isRateLimitError(msg: string): boolean {
 //   • Call thành công → reset trips (traffic khỏe tự mở lại mạch).
 const ZAI_429_COOLDOWN_BASE_MS = 60_000
 const ZAI_429_COOLDOWN_MAX_MS = 300_000
-const ZAI_429_WAIT_CAP_MS = 120_000
+// Lượt quan sát 4 (chỉnh tiếp): cap chờ = cooldown max — background call chờ
+// TRỌN cửa sổ circuit rồi gọi (thay vì fail ở 120s rồi đốt vòng attempt + eval
+// mù). Step timeout 600s (SD_LLM_TIMEOUT_MS) chứa vừa 300s chờ + ~35s retry.
+const ZAI_429_WAIT_CAP_MS = 300_000
 
 type Zai429Global = { __tmoZai429Until?: number; __tmoZai429Trips?: number }
 
