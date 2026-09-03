@@ -59,8 +59,11 @@ import { getAgentRoster, invalidateRosterCache } from '@/lib/agent-roster'
 const ADVISORY_MAX_CHARS = 2600
 /** maxTokens cho 1 lần consult Omega */
 const CONSULT_MAX_TOKENS = 1100
-/** Timeout 1 consult LLM call */
-const CONSULT_TIMEOUT_MS = 3 * 60_000
+/** Timeout 1 consult LLM call
+ *  Task 20 (2026-09-03): 180s cũ giết chuỗi fallback TRƯỚC khi tới lượt
+ *  minimax-m3 khi 3 lõi đầu hang NIM (chuỗi cần ~460s). 600s ≥ worst-case;
+ *  prober (llm.ts) trip breaker cho lõi hang nên consult thường ~giây. */
+const CONSULT_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.OMEGA_CONSULT_TIMEOUT_MS || '600000', 10) || 600_000)
 
 /** Omega fallback khi DB không có profile (fail-open, vẫn tư vấn được) */
 const OMEGA_FALLBACK = { provider: 'nvidia', model: 'moonshotai/kimi-k3' }

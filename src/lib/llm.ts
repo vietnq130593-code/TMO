@@ -2405,6 +2405,144 @@ export function getModelBlockBreakers(): Array<{ model: string; blockedUntil: nu
     .map(([model, b]) => ({ model, blockedUntil: b.blockedUntil, reason: b.reason }))
 }
 
+// ==================== MODEL HEALTH PROBER (Task 20 — 2026-09-03) ====================
+// Root-cause "chờ một lúc rồi Agents không tạo được output do LLM call thất bại"
+// (user report 2026-09-03): khi các lõi đầu chuỗi HANG phía NIM (0 bytes — sự cố
+// model-level đã verify live: kimi-k3/v4-pro/v4-flash timeout trên mọi key,
+// minimax-m3 200OK trên cùng key), chuỗi MODEL-FIRST phải đốt 3 × timeout
+// (~450s) trước khi tới lượt minimax-m3 — nhưng CALLER giết chuỗi bằng timeout
+// ngoài SỚM HƠN (self-direction 120s, alista 60s, checkpoint-verify 30s, omega
+// consult 180s...) → minimax KHÔNG BAO GIỜ được gọi dù vẫn khỏe.
+//
+// Prober (nhánh 1 của Task 20): probe nền định kỳ 6 lõi (chuỗi agent 4 + lõi
+// extraction 2) bằng request nhỏ 16 token, mỗi lõi 1 key khác nhau (phân tải
+// RPM). Timeout 0-byte trên request nhỏ = bằng chứng hang unambiguous → TRIP
+// breaker NGAY (không chờ 2 strike như call thật) — call thật sau đó skip model
+// hang trong ~ms và nhảy thẳng tới lõi khỏe (minimax trả lời ~1.5s). Probe
+// THÀNH CÔNG → xóa breaker + strikes ngay (model hồi phục nhanh, không đợi
+// hết 10' window). 429/5xx/auth/quota trên probe = transient/key-level → KHÔNG
+// kết luận gì về model.
+//
+// Nhánh 2: caller outer-timeout nâng ≥ worst-case chuỗi (600s, env-overridable)
+// — xem orchestrator/scan/alista/omega/workflow-engine. Transition window
+// (~2 phút sau boot, trước probe đầu) chuỗi vẫn được phép chạy đủ 3×timeout
+// để tới minimax thay vì bị caller giết giữa chừng.
+//
+// Env: LLM_MODEL_PROBER (default on) · LLM_PROBE_INTERVAL_MS (300000) ·
+//      LLM_PROBE_TIMEOUT_MS (90000 — dư dả cho reasoning model khỏe; model
+//      cần >90s cho câu trả lời 16 token là model chậm, block 10' là đúng
+//      chính sách latency-first) · LLM_PROBER_BOOT_DELAY_MS (30000).
+// Fail-open tuyệt đối; timer unref'd (không giữ process); globalThis guard
+// chống double-register khi Next dev HMR reload.
+
+const PROBER_ENABLED = (process.env.LLM_MODEL_PROBER ?? '1').trim().toLowerCase() !== 'false'
+const PROBE_INTERVAL_MS = Math.max(60_000, parseInt(process.env.LLM_PROBE_INTERVAL_MS || '300000', 10) || 300_000)
+const PROBE_TIMEOUT_MS = Math.max(10_000, parseInt(process.env.LLM_PROBE_TIMEOUT_MS || '90000', 10) || 90_000)
+const PROBER_BOOT_DELAY_MS = Math.max(0, parseInt(process.env.LLM_PROBER_BOOT_DELAY_MS || '30000', 10) || 30_000)
+
+/** 6 lõi được probe: lõi chính + chuỗi fallback (agent) + 2 lõi extraction */
+function probeTargets(): string[] {
+  const targets = [
+    KIMI_K3_MODEL,
+    ...AGENT_FALLBACK_CHAIN,
+    EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0],
+    NVIDIA_EXTRACTION_MODELS[1],
+  ]
+  return [...new Set(targets)]
+}
+
+/** Probe 1 model bằng request nhỏ. Trả về 'ok' | 'hang' | 'skip' (transient). */
+async function probeModelOnce(model: string, slot: number): Promise<'ok' | 'hang' | 'skip'> {
+  const pool = nvidiaPool
+  // Key theo slot (0..3) — getKeyByIndex tự fallback sang key khả dụng kế
+  // khi slot rỗng/rate-limited; hết key → skip cycle này (fail-open).
+  const keyInfo = pool.getKeyByIndex(slot % MAX_KEYS)
+  if (!keyInfo || !keyInfo.key) return 'skip'
+  const startedAt = Date.now()
+  let attempt: Awaited<ReturnType<typeof attemptNvidiaOnce>>
+  try {
+    attempt = await attemptNvidiaOnce({
+      keyInfo: { key: keyInfo.key, keyIndex: keyInfo.keyIndex },
+      model,
+      prompt: 'Health probe — reply with exactly: OK',
+      systemPrompt: undefined,
+      temperature: 0,
+      maxTokens: 16,
+      timeoutMs: PROBE_TIMEOUT_MS,
+    })
+  } catch {
+    return 'skip' // network throw ngoài dự kiến — không kết luận model
+  }
+  const ms = Date.now() - startedAt
+  if (attempt.status === 'success') {
+    // Model khỏe / đã hồi phục → xóa breaker + strikes NGAY (không đợi 10')
+    const hadBreaker = modelBlockBreakers.has(model)
+    modelBlockBreakers.delete(model)
+    modelTimeoutStrikes.delete(model)
+    modelTimeoutLastAt.delete(model)
+    if (hadBreaker) {
+      console.log(`[LLM-Prober] 🟢 ${model} ĐÃ HỒI PHỤC (probe ✓ ${ms}ms) — xóa circuit breaker, call thật trở lại model này`)
+    }
+    return 'ok'
+  }
+  if (attempt.status === 'timeout') {
+    // 0-byte trên request nhỏ 16 token = hang unambiguous → trip breaker NGAY
+    // (call thật skip model này trong ~ms; probe kế (5') sẽ tự mở lại nếu hồi)
+    tripModelBreaker(
+      model,
+      `PROBE HANG: request nhỏ (16 token) chờ ${Math.round(PROBE_TIMEOUT_MS / 1000)}s vẫn 0 bytes — model HANG phía NVIDIA NIM (model khác cùng key vẫn chạy = sự cố model-level, không phải key/network). Prober sẽ tự mở lại khi model hồi phục (probe mỗi ${Math.round(PROBE_INTERVAL_MS / 60000)} phút).`,
+      'timeout-hang',
+    )
+    return 'hang'
+  }
+  // 429/5xx/auth/daily-quota/bad_request/empty — transient hoặc key-level,
+  // không đủ bằng chứng kết luận model. Log 1 dòng để theo dõi.
+  console.log(`[LLM-Prober] ⚪ ${model} → ${attempt.status} (transient/key — không trip)`)
+  return 'skip'
+}
+
+let probeCycleRunning = false
+
+/** 1 chu kỳ probe: tất cả lõi song song (mỗi lõi 1 key). */
+async function runProbeCycle(): Promise<void> {
+  if (probeCycleRunning) return
+  probeCycleRunning = true
+  try {
+    const targets = probeTargets()
+    const results = await Promise.all(targets.map((m, i) => probeModelOnce(m, i)))
+    const ok = results.filter(r => r === 'ok').length
+    const hang = results.filter(r => r === 'hang').length
+    const skip = results.filter(r => r === 'skip').length
+    console.log(`[LLM-Prober] chu kỳ xong: ${ok} ok · ${hang} hang (đã trip breaker) · ${skip} skip — chuỗi agent sẽ đi thẳng lõi khỏe`)
+  } catch (err) {
+    console.warn('[LLM-Prober] chu kỳ lỗi (fail-open):', err instanceof Error ? err.message : String(err))
+  } finally {
+    probeCycleRunning = false
+  }
+}
+
+/** Khởi động prober (gọi 1 lần từ instrumentation-node lúc boot). Idempotent. */
+export function startModelHealthProber(): void {
+  const globalForProber = globalThis as unknown as { __tmoLlmProberStarted?: boolean }
+  if (globalForProber.__tmoLlmProberStarted) return
+  globalForProber.__tmoLlmProberStarted = true
+  if (!PROBER_ENABLED) {
+    console.log('[LLM-Prober] TẮT (LLM_MODEL_PROBER=false) — call thật tự dò strike/breaker như cũ')
+    return
+  }
+  if (nvidiaPool.keyCount === 0) {
+    console.log('[LLM-Prober] không có NVIDIA key nào (NVIDIA_API_KEY_1..4) — bỏ prober')
+    return
+  }
+  const bootTimer = setTimeout(() => {
+    void runProbeCycle() // probe đầu tiên: dò luôn trạng thái NIM sau boot
+    const interval = setInterval(() => { void runProbeCycle() }, PROBE_INTERVAL_MS)
+    interval.unref?.()
+  }, PROBER_BOOT_DELAY_MS)
+  bootTimer.unref?.()
+  console.log(`[LLM-Prober] khởi động: probe ${probeTargets().length} lõi mỗi ${Math.round(PROBE_INTERVAL_MS / 60000)} phút (timeout ${Math.round(PROBE_TIMEOUT_MS / 1000)}s/lõi, bắt đầu sau ${Math.round(PROBER_BOOT_DELAY_MS / 1000)}s)`)
+}
+
 async function callModelWithKeyRotation(
   model: string,
   prompt: string,

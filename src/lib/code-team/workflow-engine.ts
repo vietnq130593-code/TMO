@@ -363,10 +363,10 @@ function parseTscErrors(output: string): { count: number; sample: string[] } {
  *  (goal-loop có timeout riêng 21') và CHECKPOINT_VERIFY_TIMEOUT_MS bên dưới
  *  (TL verify là quyết định ngắn — giữ 30s). Exported cho smoke test (14-d). */
 export const AGENT_STEP_TIMEOUT_MS =
-  Math.max(1_000, parseInt(process.env.AGENT_STEP_TIMEOUT_MS || '480000', 10) || 480_000) // 8 minutes per LLM call — REVIEW 14-g L1: Math.max chống giá trị âm/0 ('-5' truthy → setTimeout âm = timeout tức thì mọi call)
+  Math.max(1_000, parseInt(process.env.AGENT_STEP_TIMEOUT_MS || '600000', 10) || 600_000) // 10 phút per LLM call — Task 20 (2026-09-03) nâng từ 480s: worst-case chuỗi fallback khi 3 lõi đầu hang NIM = ~460s (3 × 150s timeout + minimax ~5s) — 480s cũ chỉ chừa 20s margin; 600s chừa dư dả. Prober (llm.ts) trip breaker cho lõi hang nên step thường trở lại ~giây. REVIEW 14-g L1: Math.max chống giá trị âm/0 ('-5' truthy → setTimeout âm = timeout tức thì mọi call)
 
 /** Shorter timeout for TL checkpoint verification calls — these are brief decisions, not long code generation. */
-const CHECKPOINT_VERIFY_TIMEOUT_MS = 30_000 // 30 seconds for checkpoint verify
+const CHECKPOINT_VERIFY_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.CHECKPOINT_VERIFY_TIMEOUT_MS || '300000', 10) || 300_000) // Task 20 (2026-09-03): 30s → 300s — TL verify chạy trên kimi-k3 (reasoning, có khi >120s trong pha suy luận) + khi 3 lõi đầu hang NIM cần ~460s mới tới minimax; 30s cũ gần như LUÔN timeout → rơi rule-based. 300s + fallback rule-based giữ nguyên (fail-open).
 
 /** CI-5 B6 (Task 14-d) — RETRY LLM call transient trong 1 iteration của ReAct
  *  loop của step: tối đa 2 lần retry (tổng 3 attempts), backoff 5s → 15s

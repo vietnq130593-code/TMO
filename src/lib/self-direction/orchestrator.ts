@@ -93,7 +93,11 @@ export interface SdStepEvaluation {
 // ==================== CONSTANTS ====================
 
 const OMEGA_FALLBACK_BRAIN = { provider: 'nvidia', model: 'moonshotai/kimi-k3' }
-const LLM_TIMEOUT_MS = 120_000
+// Task 20 (2026-09-03): 120s cũ giết chuỗi fallback TRƯỚC khi tới lượt
+// minimax-m3 khi 3 lõi đầu hang phía NIM (mỗi lõi đốt 150s timeout — cần
+// ~460s mới tới minimax). 600s ≥ worst-case chuỗi; LLM Prober (llm.ts) đã tự
+// trip breaker cho lõi hang nên phần lớn call trở lại tốc độ ~giây.
+const LLM_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.SD_LLM_TIMEOUT_MS || '600000', 10) || 600_000)
 const MAX_PLAN_STEPS = 12
 const MAX_STEP_ATTEMPTS = 3
 

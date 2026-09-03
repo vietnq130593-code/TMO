@@ -30,6 +30,11 @@
 import { callLLMForAgent } from '@/lib/llm'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
 
+// Task 20 (2026-09-03): outer timeout của evaluator — phải ≥ worst-case chuỗi
+// fallback NVIDIA (~460s khi 3 lõi đầu hang; prober sẽ trip breaker cho lõi
+// hang nên thường call về trong ~giây). Env-overridable.
+const DELEGATION_EVAL_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.DELEGATION_EVAL_TIMEOUT_MS || '600000', 10) || 600_000)
+
 /** Verdict của trọng tài delegation độc lập */
 export interface DelegationEvaluation {
   /** true = kết quả delegation ĐẠT theo task + acceptance criteria */
@@ -123,7 +128,11 @@ SUB-AGENT KẾT THÚC BỞI: ${endedBy}
         abortCheck,
       }),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('DelegationEvaluator timed out after 90s')), 90_000),
+        // Task 20 (2026-09-03): 90s cũ giết chuỗi fallback trước khi tới minimax —
+        // nâng 600s ≥ worst-case (~460s khi 3 lõi đầu hang NIM); prober trip
+        // breaker cho lõi hang nên evaluation thường trở lại ~giây. Fail-open
+        // giữ nguyên (timeout → null).
+        setTimeout(() => reject(new Error(`DelegationEvaluator timed out after ${Math.round(DELEGATION_EVAL_TIMEOUT_MS / 1000)}s`)), DELEGATION_EVAL_TIMEOUT_MS),
       ),
     ])
     if (!result?.content) return null

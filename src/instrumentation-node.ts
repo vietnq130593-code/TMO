@@ -459,3 +459,25 @@ if (!globalForCodeTeamSeed.__tmoCodeTeamSeeded) {
       )
     })
 }
+
+// ============================================================================
+// LLM MODEL HEALTH PROBER (Task 20 — 2026-09-03)
+// ============================================================================
+// Root-cause "Agents không tạo được output do LLM call thất bại": 3 lõi đầu
+// chuỗi HANG phía NIM → chuỗi đốt ~450s trước khi tới minimax-m3, trong khi
+// caller timeout ngoài (60-180s) giết chuỗi giữa chừng. Prober (llm.ts) probe
+// nền 6 lõi mỗi 5 phút: lõi hang → trip breaker NGAY (call thật skip trong ms,
+// đi thẳng lõi khỏe); lõi hồi phục → xóa breaker NGAY. Fire-and-forget —
+// KHÔNG chặn boot; fail-open; globalThis guard chống double-register HMR.
+const globalForProber = globalThis as unknown as { __tmoLlmProberStarted?: boolean }
+if (!globalForProber.__tmoLlmProberStarted) {
+  globalForProber.__tmoLlmProberStarted = true
+  void import('@/lib/llm')
+    .then(({ startModelHealthProber }) => startModelHealthProber())
+    .catch((err) => {
+      console.warn(
+        '[LLM-Prober] khởi động lỗi (không chặn boot):',
+        err instanceof Error ? err.message : String(err),
+      )
+    })
+}

@@ -27,7 +27,10 @@ import { STEP_LABELS, baseKeyOf } from './types'
 
 const ALISTA_AGENT_NAME = 'ALISTA'
 const ALISTA_BRAIN = { provider: 'nvidia', model: 'moonshotai/kimi-k3' }
-const LLM_TIMEOUT_MS = 60_000 // mỗi LLM call có timeout riêng — chống kẹt >6h
+// Task 20 (2026-09-03): 60s cũ giết chuỗi fallback trước khi tới lượt
+// minimax-m3 khi 3 lõi đầu hang NIM — nâng 600s ≥ worst-case chuỗi (~460s);
+// prober (llm.ts) trip breaker cho lõi hang nên call thường trở lại ~giây.
+const LLM_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.ALISTA_LLM_TIMEOUT_MS || '600000', 10) || 600_000)
 const MAX_PROPOSALS_PER_CHECK = 3
 const DEDUPE_WINDOW_DAYS = 7
 

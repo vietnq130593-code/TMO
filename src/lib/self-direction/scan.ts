@@ -66,7 +66,9 @@ interface SystemSnapshot {
 
 const SCAN_WINDOW_HOURS = 72
 const MAX_PROPOSALS_PER_SCAN = 5
-const LLM_TIMEOUT_MS = 120_000
+// Task 20 (2026-09-03): 120s cũ giết chuỗi fallback trước khi tới lượt
+// minimax-m3 khi 3 lõi đầu hang NIM — nâng 600s ≥ worst-case chuỗi (~460s).
+const LLM_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.SD_SCAN_LLM_TIMEOUT_MS || '600000', 10) || 600_000)
 const OMEGA_FALLBACK_BRAIN = { provider: 'nvidia', model: 'moonshotai/kimi-k3' }
 const VALID_CATEGORIES = ['gap', 'kb_contradiction', 'tool_failure', 'missing_skill', 'missing_test', 'improvement', 'long_term']
 
