@@ -41,6 +41,14 @@
  *   không round-robin (single-core + failover directives).
  *
  * Token tracking: NVIDIA NIM (single provider)
+ *
+ * TEMPORARY Z-AI SDK PROVIDER (Task 21 — user directive 2026-09-03: "Tạm
+ * thời hãy thiết lập Z-ai-sdk cho các agents, tôi cần thử nghiệm một số
+ * chức năng của app"): LLM_PROVIDER=zai → TOÀN BỘ lõi (agent + chat +
+ * utility + extraction) route qua z-ai-web-dev-sdk (GLM gateway sandbox,
+ * không cần key NVIDIA — gateway tự chọn model). Default (không set /
+ * =nim) vẫn NIM-only như cũ; sdk init fail tự fallback về chuỗi NIM.
+ * Xem section "Z-AI SDK PROVIDER — OPT-IN QUA ENV" phía dưới.
  */
 
 // ==================== TOKEN EVENT EMITTER (SSE REALTIME) ====================
@@ -3405,6 +3413,20 @@ export async function callLLMSlot(
   const temp = options?.temperature
   const maxTok = options?.maxTokens
 
+  // ===== Z-AI SDK PROVIDER (Task 21 — opt-in LLM_PROVIDER=zai) =====
+  // Slot key NVIDIA vô nghĩa với zai — extraction defaults giữ nguyên (0.1 /
+  // 16384) như chuỗi NIM phía dưới; document được gán key sẽ bỏ qua khi zai bật.
+  if (isZaiProviderEnabled()) {
+    const zai = await callZaiProvider(
+      prompt,
+      systemPrompt,
+      `extraction:${taskLabel}`,
+      { ...options, temperature: options?.temperature ?? 0.1, maxTokens: options?.maxTokens ?? 16384 },
+      'extraction',
+    )
+    if (zai) return zai
+  }
+
   // slotIndex -1 (hoặc invalid) = không có key riêng → round-robin mọi key hợp lệ.
   // (Trước đây caller phải fallback sang callLLM() khi slotIndex=-1 — callLLM()
   // giờ là kimi-k3 theo Kimi-only policy → VI PHẠM directive "extraction không
@@ -3503,6 +3525,19 @@ export async function callUtilityLLM(
 
   console.log(`[LLM] Utility core Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
 
+  // ===== Z-AI SDK PROVIDER (Task 21 — opt-in LLM_PROVIDER=zai) =====
+  // Utility defaults giữ nguyên như chuỗi NIM (0.1 / 4096) để hành vi nhất quán.
+  if (isZaiProviderEnabled()) {
+    const zai = await callZaiProvider(
+      prompt,
+      systemPrompt,
+      `utility:${taskLabel}`,
+      { ...options, temperature: options?.temperature ?? 0.1, maxTokens: options?.maxTokens ?? 4096 },
+      'utility',
+    )
+    if (zai) return zai
+  }
+
   const primaryModel = EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0]
   const fallbackModel =
     EXTRACTION_FALLBACK_MODEL_OVERRIDE === 'none' || EXTRACTION_FALLBACK_MODEL_OVERRIDE === ''
@@ -3555,14 +3590,157 @@ export async function callUtilityLLM(
 
 // ==================== LEGACY CALL (for chat, health, etc.) ====================
 
-// ━━ REMOVED 2026-10-15 (user directive): gỡ bỏ TOÀN BỘ fallback z-ai-web-dev-sdk ━━
-// z-ai-web-dev-sdk chỉ tồn tại trong sandbox triển khai — KHÔNG có trên máy local
-// của user (không nằm trong package.json) → mỗi lần chuỗi NVIDIA fail, app lại
-// mất thêm 15-20s import sdk thất bại trước khi trả error. Đã xóa:
-// getZaiSdk/tryZaiSdk + 2 call-site (callLLMForAgent enforced path + callLLM
-// legacy path). Chuỗi LLM giờ CHỈ là NVIDIA NIM (kimi-k3 → fallback chain
-// model-first + xoay 4 key + timeout-breaker) — lỗi hiện diện NGAY trong
-// LLMResult.error (thẳng thắn, không che dấu).
+// ━━ Z-AI SDK PROVIDER — OPT-IN QUA ENV (Task 21, 2026-09-03) ━━
+// USER DIRECTIVE (Task 21): "Tạm thời hãy thiết lập Z-ai-sdk cho các agents,
+// tôi cần thử nghiệm một số chức năng của app" — NIM đang outage 3/4 lõi
+// (Task 15/16/20) trong khi user cần app chạy để test. Đây là sự đảo ngược
+// CÓ ĐIỀU KIỆN của directive gỡ sdk (2026-10-15, "sdk chỉ tồn tại trong
+// sandbox"): giờ sdk nằm ĐÚNG trong package.json (bun add — public npm) và
+// provider hoàn toàn OPT-IN:
+//   • LLM_PROVIDER=zai  → TOÀN BỘ lõi (agent + chat + utility + extraction)
+//     route qua z-ai-web-dev-sdk (GLM gateway sandbox — KHÔNG cần key NVIDIA;
+//     gateway tự chọn model, label trả về thường là glm-4-plus).
+//   • LLM_PROVIDER=nim / không set → NVIDIA NIM như cũ (default — máy local
+//     không có .z-ai-config không bao giờ chạm sdk).
+//   • SDK init fail (thiếu package / thiếu config) → tự fall về chuỗi NIM —
+//     init-fail được cache + cooldown 60s (không kẹt lặp import mỗi call).
+// Chi tiết kiến trúc:
+//   - KHÔNG truyền tools/tool_choice (sdk text-only như giai đoạn ecae418 —
+//     ENABLE_NATIVE_FC=dual tự fallback regex parse tool_call từ text).
+//   - Circuit breaker/prober/key-rotation NIM KHÔNG áp cho zai — 1 call
+//     thẳng, timeout riêng ZAI_TIMEOUT_MS (default 240s, env override).
+//   - Token tracking đầy đủ (per-provider 'zai-sdk' + per-agent attribution).
+
+function isZaiProviderEnabled(): boolean {
+  const v = (process.env.LLM_PROVIDER || '').trim().toLowerCase()
+  return v === 'zai' || v === 'zai-sdk' || v === 'z-ai'
+}
+
+/** Minimal structural type cho instance z-ai-sdk (không phụ thuộc type chi tiết của package) */
+type ZaiSdkInstance = { chat: { completions: { create: (body: Record<string, unknown>) => Promise<unknown> } } }
+
+/** Cooldown retry sau init fail — không đốt lại import mỗi call */
+const ZAI_INIT_RETRY_COOLDOWN_MS = 60_000
+
+/** Singleton cache trên globalThis — Turbopack dev tách module instance theo
+ *  route-graph (bài học Task 20 #2) → state dùng globalThis để chia sẻ. */
+async function getZaiSdkInstance(): Promise<ZaiSdkInstance | null> {
+  const g = globalThis as unknown as {
+    __tmoZaiSdkInstance?: ZaiSdkInstance | null
+    __tmoZaiInitPromise?: Promise<ZaiSdkInstance | null> | null
+    __tmoZaiInitFailedAt?: number
+  }
+  if (g.__tmoZaiSdkInstance) return g.__tmoZaiSdkInstance
+  if (g.__tmoZaiInitPromise) return g.__tmoZaiInitPromise
+  if (g.__tmoZaiInitFailedAt && Date.now() - g.__tmoZaiInitFailedAt < ZAI_INIT_RETRY_COOLDOWN_MS) return null
+  g.__tmoZaiInitPromise = (async () => {
+    try {
+      const mod = (await import('z-ai-web-dev-sdk')) as unknown as { default: { create: () => Promise<unknown> } }
+      const inst = (await mod.default.create()) as ZaiSdkInstance
+      g.__tmoZaiSdkInstance = inst
+      console.log('[ZAI] z-ai-sdk khởi tạo OK — provider=zai ACTIVE (model do gateway chọn, thinking disabled)')
+      return inst
+    } catch (err) {
+      g.__tmoZaiInitFailedAt = Date.now()
+      console.warn('[ZAI] z-ai-sdk init THẤT BẠI (thiếu package hoặc .z-ai-config — thử lại sau 60s):', err instanceof Error ? err.message : String(err))
+      return null
+    } finally {
+      g.__tmoZaiInitPromise = null
+    }
+  })()
+  return g.__tmoZaiInitPromise
+}
+
+/**
+ * Gọi z-ai-sdk khi LLM_PROVIDER=zai. Trả về:
+ *   - LLMResult THÀNH CÔNG (content + token tracking đầy đủ)
+ *   - LLMResult LỖI khi call thật sự fail (timeout/network/empty) — caller
+ *     thấy nguyên nhân NGAY, không đốt thêm ~460s chuỗi NIM đang outage
+ *   - null khi sdk KHÔNG khả dụng (chưa cài / thiếu config) → caller fall
+ *     về chuỗi NIM mặc định (bảo vệ máy local không set LLM_PROVIDER)
+ */
+async function callZaiProvider(
+  prompt: string,
+  systemPrompt: string | undefined,
+  taskLabel: string,
+  options: LLMCallOptions | undefined,
+  callerKind: 'agent' | 'chat' | 'utility' | 'extraction',
+): Promise<LLMResult | null> {
+  // Người dùng bấm Dừng → không đốt call
+  if (options?.abortCheck && options.abortCheck()) {
+    return { content: '', provider: 'zai-sdk', model: 'zai', error: `Task "${taskLabel}" aborted by user` }
+  }
+
+  const sdk = await getZaiSdkInstance()
+  if (!sdk) return null
+
+  const timeoutMs = parseInt(process.env.ZAI_TIMEOUT_MS || '240000', 10)
+  const messages = [
+    ...(systemPrompt ? [{ role: 'system', content: sanitizeLoneSurrogates(systemPrompt) }] : []),
+    { role: 'user', content: sanitizeLoneSurrogates(prompt) },
+  ]
+
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const res = (await Promise.race([
+      sdk.chat.completions.create({
+        messages,
+        thinking: { type: 'disabled' }, // app-test ưu tiên tốc độ; gateway tự chọn model
+        ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+        ...(options?.maxTokens ? { max_tokens: options.maxTokens } : {}),
+      }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`timeout ${timeoutMs / 1000}s (ZAI_TIMEOUT_MS)`)), timeoutMs)
+      }),
+    ])) as {
+      choices?: Array<{
+        message?: { content?: string; tool_calls?: LLMToolCall[] }
+        finish_reason?: string | null
+      }>
+      model?: string
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+    }
+    if (timer) clearTimeout(timer)
+
+    const content = res?.choices?.[0]?.message?.content ?? ''
+    const nativeToolCalls = res?.choices?.[0]?.message?.tool_calls
+    const model = res?.model || 'zai-glm'
+
+    if (!content && !(nativeToolCalls && nativeToolCalls.length > 0)) {
+      return { content: '', provider: 'zai-sdk', model, error: `ZAI empty response (${callerKind}:"${taskLabel}")` }
+    }
+
+    // Token tracking — mirror attemptNvidiaOnce (per-provider + per-agent)
+    const totalTokens = res?.usage?.total_tokens ?? ((res?.usage?.prompt_tokens ?? 0) + (res?.usage?.completion_tokens ?? 0))
+    if (totalTokens > 0) addTokensUsed(totalTokens, 'zai-sdk', undefined, model)
+    if (totalTokens > 0 && options?.agentId && options.agentName) {
+      addTokensUsedByAgent(
+        totalTokens,
+        res?.usage?.prompt_tokens ?? 0,
+        res?.usage?.completion_tokens ?? 0,
+        'zai-sdk',
+        model,
+        options.agentId,
+        options.agentName,
+      )
+    }
+
+    console.log(`[ZAI] ${callerKind}:"${taskLabel}" OK — ${content.length} chars, model ${model}${totalTokens ? `, ${totalTokens} tokens` : ''}`)
+    return {
+      content,
+      provider: 'zai-sdk',
+      model,
+      tokensUsed: totalTokens || undefined,
+      tool_calls: nativeToolCalls && nativeToolCalls.length > 0 ? nativeToolCalls : undefined,
+      finish_reason: res?.choices?.[0]?.finish_reason ?? null,
+    }
+  } catch (err) {
+    if (timer) clearTimeout(timer)
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(`[ZAI] ${callerKind}:"${taskLabel}" THẤT BẠI:`, msg)
+    return { content: '', provider: 'zai-sdk', model: 'zai', error: `ZAI (z-ai-sdk) call failed: ${msg}` }
+  }
+}
 
 /**
  * Legacy LLM call — NVIDIA NIM only (z-ai-sdk fallback đã gỡ bỏ 2026-10-15).
@@ -3581,6 +3759,14 @@ export async function callLLM(
   const aId = options?.agentId
   const aName = options?.agentName
   console.log(`[LLM] (NVIDIA) Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
+
+  // ===== Z-AI SDK PROVIDER (Task 21 — opt-in LLM_PROVIDER=zai) =====
+  // Toàn bộ general chat/health/eval route qua z-ai-sdk khi bật. SDK không
+  // khả dụng → null → rơi về chuỗi NIM phía dưới (máy local an toàn).
+  if (isZaiProviderEnabled()) {
+    const zai = await callZaiProvider(prompt, systemPrompt, taskLabel, options, 'chat')
+    if (zai) return zai
+  }
 
   // Phase 4 SMOLAB Prop 11' — explicit model override: try ONLY the requested
   // model. Used by the eval harness (judges must not silently fall back to a
@@ -3718,6 +3904,14 @@ export async function callLLMForAgent(
   options?: LLMCallOptions
 ): Promise<LLMResult> {
   const { provider, model } = agentConfig
+
+  // ===== Z-AI SDK PROVIDER (Task 21 — opt-in LLM_PROVIDER=zai) =====
+  // Agent calls (goal-loop, research team, code-team, smolab...) route qua
+  // z-ai-sdk khi bật — model NIM cấu hình bị bỏ qua (gateway tự chọn GLM).
+  if (isZaiProviderEnabled()) {
+    const zai = await callZaiProvider(prompt, systemPrompt, `agent:${model}`, options, 'agent')
+    if (zai) return zai
+  }
 
   // ===== KIMI-K3 CHÍNH + FALLBACK CHAIN MODEL-FIRST (directive 2026-09-06) =====
   // "deepseek v4 pro, deepseek v4 flash, minimax lần lượt làm fall back cho k3" —
