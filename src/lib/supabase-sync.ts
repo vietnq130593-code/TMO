@@ -863,6 +863,20 @@ export async function pullFromSupabase(): Promise<FullSyncResult> {
             // Name conflict — skip this record (keep existing local agent)
             continue
           }
+          // FIX (2026-09-03, Task 23 — E2E quét hệ thống): row local TỒN TẠI
+          // (cùng id/name) → upsert với update RỖNG (no-op) — KHÔNG đè field
+          // nào. Bản cũ update { model, enabled: a.enabled } từ cloud backup
+          // đã re-enable 7 agent trùm cũ (KING/APEX/VIGIL/BOLT/CORTEX/SENTRY/
+          // HOWENT) mà Task 21 đã tắt ở SQLite — vì backup cloud là trạng thái
+          // CŨ (enabled=true), push trước lúc disable. `enabled` là QUYẾT ĐỊNH
+          // VẬN HÀNH LOCAL (user disable agent trong UI/DB) — cloud restore
+          // không có quyền bật lại; model/instruction cũng là customization
+          // local cần giữ. Giữ upsert (chứ không đổi thành create thường) để
+          // branch create vẫn dựng row CÙNG id từ backup — preserve FK links
+          // (agent_profile_id trong AgentMemory restore) cho use-case gốc:
+          // sandbox reset (local rỗng) → mọi row create mới từ backup.
+          // Mirror tinh thần "user customizations preserved" của
+          // standalone-agents/code-team seed.
           await db.agentProfile.upsert({
             where: { id: a.id },
             create: {
@@ -882,10 +896,7 @@ export async function pullFromSupabase(): Promise<FullSyncResult> {
               enabled: a.enabled ?? true,
               isSystem: a.isSystem ?? false,
             },
-            update: {
-              model: a.model,
-              enabled: a.enabled,
-            },
+            update: {},
           })
           pulled++
         } catch (e) { /* skip individual conflict */ }
