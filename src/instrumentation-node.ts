@@ -469,9 +469,12 @@ if (!globalForCodeTeamSeed.__tmoCodeTeamSeeded) {
 // nền 6 lõi mỗi 5 phút: lõi hang → trip breaker NGAY (call thật skip trong ms,
 // đi thẳng lõi khỏe); lõi hồi phục → xóa breaker NGAY. Fire-and-forget —
 // KHÔNG chặn boot; fail-open; globalThis guard chống double-register HMR.
-const globalForProber = globalThis as unknown as { __tmoLlmProberStarted?: boolean }
-if (!globalForProber.__tmoLlmProberStarted) {
-  globalForProber.__tmoLlmProberStarted = true
+// FIX Task 20: guard instrumentation dùng flag RIÊNG (__tmoLlmProberBootHookRan)
+// — không đụng flag __tmoLlmProberStarted bên trong startModelHealthProber()
+// (đụng nhau thì hàm early-return → prober không bao giờ start).
+const globalForProber = globalThis as unknown as { __tmoLlmProberBootHookRan?: boolean }
+if (!globalForProber.__tmoLlmProberBootHookRan) {
+  globalForProber.__tmoLlmProberBootHookRan = true
   void import('@/lib/llm')
     .then(({ startModelHealthProber }) => startModelHealthProber())
     .catch((err) => {

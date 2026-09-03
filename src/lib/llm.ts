@@ -2311,7 +2311,18 @@ const INSTANT_429_MS = 3000
  *  thể trip oan model khỏe trên 429 RPM tạm thời của pool key dùng chung. */
 const REAL_COOLDOWN_CYCLE_MIN_MS = 30_000
 
-const modelBlockBreakers = new Map<string, { blockedUntil: number; reason: string; detectedAt: number }>()
+// Task 20: breaker + strike state GẮN globalThis — llm.ts có thể được đánh giá
+// nhiều instance trong 1 process (Turbopack dev: instrumentation graph tách
+// khỏi route graphs — log "Provider pool" in 3 lần lúc boot là bằng chứng).
+// Prober chạy từ instrumentation context phải trip breaker cho MỌI instance
+// thấy được (call thật từ API routes) — pattern globalThis-singleton giống
+// TokenTracker.
+const gLlmBreakerState = globalThis as unknown as {
+  __tmoModelBlockBreakers?: Map<string, { blockedUntil: number; reason: string; detectedAt: number }>
+  __tmoModelTimeoutStrikes?: Map<string, number>
+  __tmoModelTimeoutLastAt?: Map<string, number>
+}
+const modelBlockBreakers = gLlmBreakerState.__tmoModelBlockBreakers ?? (gLlmBreakerState.__tmoModelBlockBreakers = new Map<string, { blockedUntil: number; reason: string; detectedAt: number }>())
 
 function isModelHardBlocked(model: string): { blocked: boolean; reason?: string } {
   const b = modelBlockBreakers.get(model)
@@ -2361,11 +2372,11 @@ function scaleTimeoutByMaxTokens(baseMs: number, maxTokens: number): number {
   return Math.max(baseMs, Math.ceil(maxTokens * LLM_TIMEOUT_MS_PER_TOKEN))
 }
 
-const modelTimeoutStrikes = new Map<string, number>()
+const modelTimeoutStrikes = gLlmBreakerState.__tmoModelTimeoutStrikes ?? (gLlmBreakerState.__tmoModelTimeoutStrikes = new Map<string, number>())
 /** FIX (breaker-audit #4): timestamp strike gần nhất — strike chỉ còn giá trị
  *  trong MODEL_TIMEOUT_STRIKE_WINDOW_MS (30'). Trước đây 2 timeout cách nhau
  *  nhiều giờ/ngày vẫn cộng dồn thành "liên tiếp" → trip oan model đã hồi. */
-const modelTimeoutLastAt = new Map<string, number>()
+const modelTimeoutLastAt = gLlmBreakerState.__tmoModelTimeoutLastAt ?? (gLlmBreakerState.__tmoModelTimeoutLastAt = new Map<string, number>())
 const MODEL_TIMEOUT_STRIKE_WINDOW_MS = Math.max(60_000, parseInt(process.env.MODEL_TIMEOUT_STRIKE_WINDOW_MS || '1800000', 10) || 1_800_000) // 30 phút
 
 /** Gọi SAU MỖI attempt — phân loại theo status của attemptNvidiaOnce. */
