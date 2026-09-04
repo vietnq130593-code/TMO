@@ -1810,7 +1810,11 @@ console.log(`[LLM] Provider pool: NVIDIA=${nvidiaPool.keyCount} keys (${NVIDIA_M
 // test dòng này chỉ là nhiễu cấu hình, không mang thông tin kết quả test.
 // App runtime bình thường (không set env) vẫn log đầy đủ như cũ.
 if (!process.env.LLM_QUIET_INIT) {
-  console.log(`[LLM] NVIDIA: agent/chat minimax-m3 (chính — TẠM THỜI, user directive 2026-10-16: duy nhất khả dụng) + FALLBACK CHAIN [${NVIDIA_AGENT_MODELS.slice(1).join(' → ')}] + 2 extraction cores (nemotron-550b chính → gpt-oss-120b fallback [410 GONE từ 2026-10-16] — lõi agent KHÔNG dùng cho extraction, user directive 2026-09-05)`)
+  // NOTE: KHÔNG bọc danh sách model trong [...] ngay sau chữ — pipeline ghi
+  // dev.log strip ANSI ăn mất chuỗi "[m" (SGR reset rỗng) → "[moonshotai/..."
+  // thành "oonshotai/..." (đã từng gây hiểu lầm cấu hình sai trong rà soát
+  // 2026-09-04). Dùng ": model1 → model2" không bracket.
+  console.log(`[LLM] NVIDIA: agent/chat minimax-m3 (chính — TẠM THỜI, user directive 2026-10-16: duy nhất khả dụng) + FALLBACK CHAIN: ${NVIDIA_AGENT_MODELS.slice(1).join(' → ')} + 2 extraction cores (nemotron-550b chính → gpt-oss-120b fallback [410 GONE từ 2026-10-16] — lõi agent KHÔNG dùng cho extraction, user directive 2026-09-05)`)
 }
 
 // ==================== KIMI K3 MODEL POLICY + NVIDIA KEY ROTATION ====================
@@ -2851,7 +2855,8 @@ async function callModelChainModelFirst(
   let cooldownCycles = 0
   let sweepNo = 0
 
-  console.log(`[LLM] 🔗 ${taskLabel}: MODEL-FIRST [${activeChain.join(' → ')}] × ${validIndices.length} key — model fallback trước, chỉ chuyển key khi cả chuỗi fail (tối đa ${KEY_FAILURES_PER_KEY} sweep)`)
+  // NOTE: không bracket trước tên model (dev.log strip ANSI ăn "[m") — xem ghi chú banner phía trên.
+  console.log(`[LLM] 🔗 ${taskLabel}: MODEL-FIRST: ${activeChain.join(' → ')} × ${validIndices.length} key — model fallback trước, chỉ chuyển key khi cả chuỗi fail (tối đa ${KEY_FAILURES_PER_KEY} sweep)`)
 
   while (sweepNo < KEY_FAILURES_PER_KEY) {
     sweepNo++
@@ -3733,7 +3738,8 @@ export async function callLLMForAgent(
   // chuỗi mới chuyển key (callAgentModelWithFallbackChain).
   if (isKimiK3Enforced()) {
     if (model !== KIMI_K3_MODEL) {
-      console.log(`[LLM] MODEL POLICY: agent cấu hình ${provider}/${model} → override → ${KIMI_K3_MODEL} (lõi chính) + fallback chain [${AGENT_FALLBACK_CHAIN.join(' → ')}]`)
+      // NOTE: không bracket trước tên model (dev.log strip ANSI ăn "[m") — xem ghi chú banner phía trên.
+      console.log(`[LLM] MODEL POLICY: agent cấu hình ${provider}/${model} → override → ${KIMI_K3_MODEL} (lõi chính) + fallback chain: ${AGENT_FALLBACK_CHAIN.join(' → ')}`)
     }
     const result = await callAgentModelWithFallbackChain(prompt, systemPrompt, options, `agent:${model}`)
     const tcCount = result.tool_calls?.length ?? 0

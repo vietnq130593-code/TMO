@@ -402,14 +402,21 @@ async function agentPersona(name: string): Promise<{ systemPrompt: string; brain
  * 'report'   → systemPrompt CHỈ là phần persona mở đầu; writeFinalReport ghép
  *   tiếp khung báo cáo (khung cũ giữ nguyên).
  */
-async function getReviewerSystemPrompt(_kind: 'evaluate' | 'report'): Promise<{ systemPrompt: string; reviewerName: string }> {
-  void _kind
+async function getReviewerSystemPrompt(kind: 'evaluate' | 'report'): Promise<{ systemPrompt: string; reviewerName: string }> {
   // USER DIRECTIVE 2026-09-04: Omega là người đánh giá từng bước + viết báo
   // cáo hoàn thiện — KHÔNG phân nhánh opusDelegated nữa (Opus chỉ duyệt đề
   // xuất khi ủy quyền + xem "Ý kiến & đề xuất khác" — opusReviewReportSuggestions).
+  // FIX 2026-09-04 (rà soát sau triển khai — regression Task 31): khôi phục
+  // nhánh kind — nhánh 'report' phải trả persona NGẮN để writeFinalReport ghép
+  // khung báo cáo markdown. Bản gộp trước trả nhầm prompt JSON đánh giá bước
+  // cho 'report' → system prompt báo cáo chứa 2 chỉ thị mâu thuẫn ("output
+  // DUY NHẤT JSON" + khung markdown) → báo cáo có thể ra JSON, phá trích
+  // section "Ý kiến & đề xuất khác" cho Opus follow-up.
   return {
     systemPrompt:
-      'Bạn là OMEGA — orchestrator, phụ trách ĐÁNH GIÁ chất lượng công việc các agent bàn giao trong module Self-direction.\nĐánh giá THỰC TẾ, không khắt khe quá mức: output CHẤP NHẬN ĐƯỢC nếu agent đã làm phần việc chính của bước (kể cả chưa hoàn hảo mọi chi tiết). CHỈ đánh giá chưa đạt khi output (a) bỏ sót phần việc chính, (b) sai hướng với mô tả công việc, hoặc (c) quá chung chung/khung suông không có kết quả cụ thể nào.\n\nOutput DUY NHẤT một JSON hợp lệ (KHÔNG markdown fence):\n{"complete": true|false, "evaluation": "nhận xét ngắn (1-3 câu, tiếng Việt): điểm đạt; nếu chưa đạt — nêu rõ CẦN BỔ SUNG GÌ cụ thể"}',
+      kind === 'evaluate'
+        ? 'Bạn là OMEGA — orchestrator, phụ trách ĐÁNH GIÁ chất lượng công việc các agent bàn giao trong module Self-direction.\nĐánh giá THỰC TẾ, không khắt khe quá mức: output CHẤP NHẬN ĐƯỢC nếu agent đã làm phần việc chính của bước (kể cả chưa hoàn hảo mọi chi tiết). CHỈ đánh giá chưa đạt khi output (a) bỏ sót phần việc chính, (b) sai hướng với mô tả công việc, hoặc (c) quá chung chung/khung suông không có kết quả cụ thể nào.\n\nOutput DUY NHẤT một JSON hợp lệ (KHÔNG markdown fence):\n{"complete": true|false, "evaluation": "nhận xét ngắn (1-3 câu, tiếng Việt): điểm đạt; nếu chưa đạt — nêu rõ CẦN BỔ SUNG GÌ cụ thể"}'
+        : 'Bạn là OMEGA — orchestrator.',
     reviewerName: 'Omega',
   }
 }
@@ -659,7 +666,11 @@ ${pendingTitles.length > 0 ? pendingTitles.map(p => `- ${p.title}`).join('\n') :
 
 Quyết định (JSON).`
 
-    const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 900, temperature: 0.3, label: `OpusFollowUp ${proposal.id.slice(0, 8)}` })
+    // maxTokens 1400 (FIX 2026-09-04 — nâng từ 900): JSON create=true chứa
+    // nguyên đề xuất 4 trường (implementation "từng việc cụ thể" dễ dài) —
+    // 900 làm JSON bị cắt giữa chừng → parse fail → sweep retry 60s vô hạn
+    // với kết quả gần như xác định (temp thấp). 1400 = ngang writeFinalReport.
+    const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 1400, temperature: 0.3, label: `OpusFollowUp ${proposal.id.slice(0, 8)}` })
     const jsonStr = findBalancedJson(raw.replace(/```(?:json)?/g, ''), 'create')
     if (!jsonStr) throw new Error('Không parse được verdict JSON')
     const obj = JSON.parse(jsonStr) as Record<string, unknown>
@@ -734,12 +745,16 @@ export function sweepOpusFollowUpReviews(): void {
   g.__tmoSdFollowUpSweepAt = nowMs
   void (async () => {
     try {
+      // FIX 2026-09-04 (rà soát): KHÔNG lọc followUpDepth ở đây — đề xuất
+      // depth-2 hoàn tất mà hook bị restart giết cũng phải được sweep tới để
+      // opusReviewReportSuggestions đánh dấu "đã đạt độ sâu tối đa" (không
+      // tốn LLM) — tránh kẹt opusFollowUpAt null vĩnh viễn (UI hiện "Opus sẽ
+      // xem..." mãi cho đề xuất sẽ không bao giờ được review).
       const candidates = await db.selfDirectionProposal.findMany({
         where: {
           status: { in: ['completed', 'failed'] },
           omegaReport: { not: null },
           opusFollowUpAt: null,
-          followUpDepth: { lt: MAX_FOLLOW_UP_DEPTH },
         },
         select: { id: true },
         orderBy: { completedAt: 'asc' }, // cũ nhất trước — hồi tố trước, mới sau
