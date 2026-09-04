@@ -1648,13 +1648,26 @@ model SelfDirectionProposal {
   executedAt       DateTime?
   completedAt      DateTime?
 
+  // ===== OPUS FOLLOW-UP (user directive 2026-09-04) =====
+  // Sau khi đề xuất hoàn tất (completed/failed) và Omega viết BÁO CÁO HOÀN
+  // THIỆN, OPUS (CTO) xem phần "Ý kiến & đề xuất khác" trong báo cáo → tự
+  // quyết định có tạo ĐỀ XUẤT PHÁI SINH tới SELF-DIRECTION hay không.
+  /// Thời điểm Opus đã xem xét ý kiến & đề xuất khác trong báo cáo (null = chưa)
+  opusFollowUpAt        DateTime?
+  /// Kết quả xem xét của Opus (trace ngắn: tạo đề xuất phái sinh <id> / lý do không tạo)
+  opusFollowUpResult    String?
+  /// Đề xuất cha nếu đây là đề xuất phái sinh do Opus tạo từ báo cáo (null = đề xuất gốc)
+  followUpParentId      String?
+  /// Độ sâu chuỗi phái sinh (gốc=0) — cap chống vòng lặp vô hạn
+  followUpDepth         Int       @default(0)
+
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
   steps            ProposalStep[]
 
   @@index([status])
-  @@index([category])
+  @@index([opusFollowUpAt])
   @@index([createdAt])
   @@map("self_direction_proposals")
 }
@@ -1697,9 +1710,11 @@ model SelfDirectionSettings {
   id             String    @id @default("singleton")
   /// OPUS POWER TRANSFER (user decision #3, 2026-09-30): chức năng ủy quyền
   /// phê duyệt SELF-DIRECTION chuyển từ Omega sang OPUS (CTO). true = Opus
-  /// duyệt/không duyệt thay Mr. Architect. Công việc sau ủy quyền vốn của
-  /// Omega (đánh giá bước, viết báo cáo hoàn thiện) cũng chuyển cho Opus —
-  /// việc TRIỂN KHAI + cách triển khai VẪN của Omega (orchestrator chạy plan).
+  /// duyệt/không duyệt thay Mr. Architect (kể cả đề xuất do chính Opus tạo —
+  /// user directive 2026-09-04).
+  /// USER DIRECTIVE 2026-09-04: đánh giá từng bước + viết BÁO CÁO HOÀN THIỆN
+  /// LUÔN thuộc OMEGA (Opus không tham gia, kể cả khi ủy quyền bật) — ủy
+  /// quyền chỉ điều khiển QUYỀN DUYỆT. Việc TRIỂN KHAI vẫn của Omega.
   /// Cột cũ omegaDelegated đã đổi tên — giá trị cũ không còn ý nghĩa.
   opusDelegated  Boolean   @default(false)
   delegatedAt    DateTime?

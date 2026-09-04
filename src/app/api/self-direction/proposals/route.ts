@@ -3,7 +3,9 @@
  * ====================================
  * GET  /api/self-direction/proposals          — Danh sách đề xuất + settings
  *      (kèm side-effects: promote đề xuất đến hạn, kick Opus auto-review
- *       nếu ủy quyền đang bật — fire-and-forget, không block response)
+ *       nếu ủy quyền đang bật, sweep Opus xem "Ý kiến & đề xuất khác" trong
+ *       các báo cáo hoàn thiện chưa được xem — user directive 2026-09-04;
+ *       fire-and-forget, không block response)
  * POST /api/self-direction/proposals          — Tạo đề xuất mới (user/agent)
  */
 
@@ -13,6 +15,7 @@ import {
   getSelfDirectionSettings,
   promoteDueProposals,
   autoReviewPendingIfDelegated,
+  sweepOpusFollowUpReviews,
   validateProposalInput,
   isOrchestrating,
   createSelfDirectionProposal,
@@ -33,6 +36,11 @@ async function serializeProposals(rows: Array<{
   createdAt: Date; updatedAt: Date
   /** CI-6 B5: llm | code-workflow (spread ...r truyền đủ field về UI) */
   executionMode?: string
+  /** OPUS FOLLOW-UP (user directive 2026-09-04): Opus xem "Ý kiến & đề xuất khác" */
+  opusFollowUpAt?: Date | null
+  opusFollowUpResult?: string | null
+  followUpParentId?: string | null
+  followUpDepth?: number
 }>) {
   const ids = rows.map(r => r.id)
   const steps = ids.length > 0
@@ -59,9 +67,12 @@ async function serializeProposals(rows: Array<{
 export async function GET() {
   try {
     // Side-effects (fire-and-forget, fail-open): promote đến hạn + Opus auto-review
-    // (user decision #3: ủy quyền duyệt chuyển từ Omega sang Opus)
+    // (user decision #3: ủy quyền duyệt chuyển từ Omega sang Opus) + sweep Opus
+    // Follow-up (user directive 2026-09-04: Opus xem "Ý kiến & đề xuất khác"
+    // trong các báo cáo hoàn thiện chưa được xem — 1 cái/60s, hồi tố cả báo cáo cũ)
     void promoteDueProposals()
     void autoReviewPendingIfDelegated()
+    sweepOpusFollowUpReviews()
 
     const rows = await db.selfDirectionProposal.findMany({
       orderBy: [{ createdAt: 'desc' }],

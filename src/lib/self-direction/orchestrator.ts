@@ -7,18 +7,27 @@
  * Đề xuất được duyệt → ORCHESTRATION:
  *   1. Omega lập kế hoạch (bao nhiêu bước? agent nào làm gì?)
  *   2. Từng bước giao agent thực hiện (persona từ AgentProfile)
- *   3. Người đánh giá output từng bước — đạt mới bàn giao bước kế tiếp,
- *      không đạt → phản hồi + thử lại (max 3 lần). Khi ủy quyền bật
- *      (opusDelegated=true) → OPUS đánh giá thay Omega (user decision #3);
- *      khi tắt → Omega như cũ.
- *   4. Hoàn tất → người đánh giá viết báo cáo hoàn thiện (Opus khi ủy quyền
- *      bật, Omega khi tắt): đã làm gì, làm thế nào, kết quả từng bước,
- *      kết quả sau cùng, đề xuất thêm.
+ *   3. OMEGA đánh giá output từng bước — đạt mới bàn giao bước kế tiếp,
+ *      không đạt → phản hồi + thử lại (max 4 lần).
+ *   4. Hoàn tất → OMEGA viết báo cáo hoàn thiện: đã làm gì, làm thế nào,
+ *      kết quả từng bước, kết quả sau cùng, đề xuất thêm.
+ *
+ * USER DIRECTIVE 2026-09-04 (PHÂN CÔNG MỚI — GHI ĐÈ phần đánh giá/báo cáo
+ * của user decision #3): OPUS KHÔNG tham gia đánh giá từng bước — OMEGA là
+ * agent đánh giá từng bước VÀ thực hiện BÁO CÁO HOÀN THIỆN, kể cả khi ủy
+ * quyền bật. Opus giữ 2 vai trò:
+ *   - DUYỆT đề xuất thay Mr. Architect khi ủy quyền (opusDelegated=true)
+ *     bật — KỂ CẢ đề xuất do chính Opus tạo (tự phê duyệt, user cho phép
+ *     tường minh 2026-09-04).
+ *   - XEM XÉT phần "## Ý kiến & đề xuất khác" trong BÁO CÁO HOÀN THIỆN do
+ *     Omega viết (opusReviewReportSuggestions): tự quyết định có tạo thêm
+ *     ĐỀ XUẤT PHÁI SINH tới SELF-DIRECTION hay không. Đề xuất phái sinh ở
+ *     status pending — nếu ủy quyền bật, Opus được phê duyệt ngay chính
+ *     đề xuất của mình; nếu tắt, chờ Mr. Architect duyệt như đề xuất thường.
  *
  * USER DECISION #3 (2026-09-30, PHÊ DUYỆT — KHÔNG THAY ĐỔI) — PHÂN QUYỀN:
  *   - Ủy quyền phê duyệt (SelfDirectionSettings.opusDelegated): OPUS (CTO)
- *     duyệt/không duyệt đề xuất thay Mr. Architect + nhận các công việc sau
- *     ủy quyền vốn của Omega: ĐÁNH GIÁ bước & VIẾT BÁO CÁO hoàn thiện.
+ *     duyệt/không duyệt đề xuất thay Mr. Architect (kể cả đề xuất của Opus).
  *   - TRIỂN KHAI (generateWorkPlan / executeStep / code-workflow / verify_
  *     and_push) VẪN CỦA OMEGA mọi lúc — việc nội tại orchestration, không
  *     phải ủy quyền.
@@ -280,9 +289,11 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
 /**
  * USER DECISION #3 (2026-09-30): cột ủy quyền cũ (thời Omega) đã ĐỔI TÊN
  * opusDelegated (Prisma db push xong — xem prisma/schema.prisma). true = Opus
- * (CTO) duyệt/không duyệt đề xuất thay Mr. Architect + nhận đánh giá bước &
- * báo cáo hoàn thiện. Triển khai vẫn của Omega mọi lúc. Fail-open: DB lỗi →
- * coi như chưa ủy quyền.
+ * (CTO) duyệt/không duyệt đề xuất thay Mr. Architect (kể cả đề xuất do chính
+ * Opus tạo — user directive 2026-09-04). USER DIRECTIVE 2026-09-04: đánh giá
+ * bước + báo cáo hoàn thiện LUÔN của Omega (không còn chuyển cho Opus khi ủy
+ * quyền). Triển khai vẫn của Omega mọi lúc. Fail-open: DB lỗi → coi như chưa
+ * ủy quyền.
  */
 export async function getSelfDirectionSettings(): Promise<{ opusDelegated: boolean; delegatedAt: Date | null }> {
   try {
@@ -379,14 +390,11 @@ async function agentPersona(name: string): Promise<{ systemPrompt: string; brain
 // ==================== PERSONA ỦY QUYỀN (USER DECISION #3) ====================
 
 /**
- * USER DECISION #3 (2026-09-30, phê duyệt): ủy quyền phê duyệt SELF-DIRECTION
- * chuyển từ Omega sang OPUS (CTO). Helper chọn persona hệ thống cho các vai
- * trò nhận ủy quyền (đánh giá bước / viết báo cáo hoàn thiện):
- *   - opusDelegated=true  → OPUS: system prompt = OPUS_INSTRUCTION + vai trò
- *     hiện tại (ghi đè output format §X bằng format riêng của nhiệm vụ).
- *   - opusDelegated=false → giữ nguyên persona Omega cũ (đánh giá bước +
- *     báo cáo là việc NỘI TẠC orchestration của Omega — không phải ủy quyền).
- * Lập kế hoạch + triển khai + verify_and_push LUÔN của Omega (không đổi).
+ * USER DIRECTIVE 2026-09-04: persona ĐÁNH GIÁ BƯỚC + VIẾT BÁO CÁO HOÀN THIỆN
+ * LUÔN LÀ OMEGA — Opus không tham gia 2 việc này kể cả khi ủy quyền bật
+ * (ghi đè phần "chuyển vai trò khi ủy quyền" của user decision #3 — ủy quyền
+ * giờ chỉ điều khiển quyền DUYỆT đề xuất). Lập kế hoạch + triển khai +
+ * verify_and_push cũng LUÔN của Omega (không đổi).
  *
  * 'evaluate' → systemPrompt là prompt HOÀN CHỈNH (persona + tiêu chí + output
  *   format JSON {"complete","evaluation"} — giữ nguyên format để logic rework
@@ -394,35 +402,14 @@ async function agentPersona(name: string): Promise<{ systemPrompt: string; brain
  * 'report'   → systemPrompt CHỈ là phần persona mở đầu; writeFinalReport ghép
  *   tiếp khung báo cáo (khung cũ giữ nguyên).
  */
-async function getReviewerSystemPrompt(kind: 'evaluate' | 'report'): Promise<{ systemPrompt: string; reviewerName: string }> {
-  const { opusDelegated } = await getSelfDirectionSettings()
-  if (opusDelegated) {
-    const role =
-      kind === 'evaluate'
-        ? `Bạn là ${OPUS_AGENT_NAME} — CTO của TMO, đang được ủy quyền ĐÁNH GIÁ chất lượng công việc các agent bàn giao trong module Self-direction (thay Mr. Architect — user decision #3; Omega vẫn phụ trách triển khai).
-Đánh giá THỰC TẾ, không khắt khe quá mức: output CHẤP NHẬN ĐƯỢC nếu agent đã làm phần việc chính của bước (kể cả chưa hoàn hảo mọi chi tiết). CHỈ đánh giá chưa đạt khi output (a) bỏ sót phần việc chính, (b) sai hướng với mô tả công việc, hoặc (c) quá chung chung/khung suông không có kết quả cụ thể nào. Phán quyết bằng bằng chứng — đối chiếu output với mô tả công việc (§II.1).
-
-Output DUY NHẤT một JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích ngoài — GHI ĐÈ format §X cho nhiệm vụ này):
-{"complete": true|false, "evaluation": "nhận xét ngắn (1-3 câu, tiếng Việt): điểm đạt; nếu chưa đạt — nêu rõ CẦN BỔ SUNG GÌ cụ thể"}`
-        : `Bạn là ${OPUS_AGENT_NAME} — CTO của TMO, đang được ủy quyền viết BÁO CÁO HOÀN THIỆN cho đề xuất Self-direction sau khi orchestration của Omega chạy xong (thay Mr. Architect — user decision #3). Viết bằng tiếng Việt, markdown đơn giản (chỉ dùng ## và **, KHÔNG bảng) — BÁO CÁO VĂN BẢN, KHÔNG phải JSON (GHI ĐÈ format §X cho nhiệm vụ này).`
-    return {
-      systemPrompt: `${OPUS_INSTRUCTION}
-
-━━━ VAI TRÒ HIỆN TẠI (USER DECISION #3 — GHI ĐÈ FORMAT §X CHO NHIỆM VỤ NÀY) ━━━
-${role}`,
-      reviewerName: OPUS_AGENT_NAME,
-    }
-  }
-  // KHÔNG ủy quyền → persona Omega cũ giữ nguyên (việc nội tại orchestration)
+async function getReviewerSystemPrompt(_kind: 'evaluate' | 'report'): Promise<{ systemPrompt: string; reviewerName: string }> {
+  void _kind
+  // USER DIRECTIVE 2026-09-04: Omega là người đánh giá từng bước + viết báo
+  // cáo hoàn thiện — KHÔNG phân nhánh opusDelegated nữa (Opus chỉ duyệt đề
+  // xuất khi ủy quyền + xem "Ý kiến & đề xuất khác" — opusReviewReportSuggestions).
   return {
     systemPrompt:
-      kind === 'evaluate'
-        ? `Bạn là OMEGA — orchestrator, phụ trách ĐÁNH GIÁ chất lượng công việc các agent bàn giao trong module Self-direction.
-Đánh giá THỰC TẾ, không khắt khe quá mức: output CHẤP NHẬN ĐƯỢC nếu agent đã làm phần việc chính của bước (kể cả chưa hoàn hảo mọi chi tiết). CHỈ đánh giá chưa đạt khi output (a) bỏ sót phần việc chính, (b) sai hướng với mô tả công việc, hoặc (c) quá chung chung/khung suông không có kết quả cụ thể nào.
-
-Output DUY NHẤT một JSON hợp lệ (KHÔNG markdown fence):
-{"complete": true|false, "evaluation": "nhận xét ngắn (1-3 câu, tiếng Việt): điểm đạt; nếu chưa đạt — nêu rõ CẦN BỔ SUNG GÌ cụ thể"}`
-        : 'Bạn là OMEGA — orchestrator.',
+      'Bạn là OMEGA — orchestrator, phụ trách ĐÁNH GIÁ chất lượng công việc các agent bàn giao trong module Self-direction.\nĐánh giá THỰC TẾ, không khắt khe quá mức: output CHẤP NHẬN ĐƯỢC nếu agent đã làm phần việc chính của bước (kể cả chưa hoàn hảo mọi chi tiết). CHỈ đánh giá chưa đạt khi output (a) bỏ sót phần việc chính, (b) sai hướng với mô tả công việc, hoặc (c) quá chung chung/khung suông không có kết quả cụ thể nào.\n\nOutput DUY NHẤT một JSON hợp lệ (KHÔNG markdown fence):\n{"complete": true|false, "evaluation": "nhận xét ngắn (1-3 câu, tiếng Việt): điểm đạt; nếu chưa đạt — nêu rõ CẦN BỔ SUNG GÌ cụ thể"}',
     reviewerName: 'Omega',
   }
 }
@@ -527,6 +514,244 @@ Quyết định duyệt hay không duyệt (JSON).`
  * / agents song song (13-b/c) đang phát triển song song.
  */
 export const omegaReviewPending = opusReviewPending
+
+// ==================== 1b. OPUS FOLLOW-UP — xem "Ý kiến & đề xuất khác" trong BÁO CÁO HOÀN THIỆN (user directive 2026-09-04) ====================
+
+/**
+ * USER DIRECTIVE 2026-09-04: sau khi orchestration kết thúc (completed/failed)
+ * và OMEGA viết BÁO CÁO HOÀN THIỆN (đánh giá từng bước + báo cáo đều của Omega
+ * — Opus KHÔNG tham gia 2 việc đó), OPUS (CTO) phải xem phần "## Ý kiến & đề
+ * xuất khác" trong báo cáo → TỰ QUYẾT ĐỊNH có tạo thêm ĐỀ XUẤT PHÁI SINH tới
+ * SELF-DIRECTION hay không:
+ *   - Đề xuất phái sinh: status pending, source 'agent', createdBy 'Opus',
+ *     followUpParentId = đề xuất cha, followUpDepth = depth cha + 1.
+ *   - Ủy quyền (opusDelegated) ĐANG BẬT → Opus được PHÊ DUYỆT CHÍNH ĐỀ XUẤT
+ *     CỦA MÌNH ngay (user cho phép tường minh — opusReviewPending, quyền như
+ *     Mr. Architect). Ủy quyền TẮT → chờ Mr. Architect duyệt tab "Chờ phê duyệt".
+ *
+ * Chống lặp/vòng lặp: (1) marker opusFollowUpAt — mỗi báo cáo Opus chỉ xem 1
+ * lần (user bấm "Thử lại" → triggerOrchestration reset marker → báo cáo MỚI
+ * được xem lại); (2) cap độ sâu chuỗi MAX_FOLLOW_UP_DEPTH; (3) in-process lock
+ * reviewingFollowUps; (4) sweep rate-limit 60s/lần kick.
+ * LLM lỗi → KHÔNG đánh dấu đã xem (fail-open như OpusReview — sweep thử lại).
+ */
+
+/** Trần độ sâu chuỗi phái sinh: gốc(0) → phái sinh(1) → phái sinh²(2) — dừng. */
+const MAX_FOLLOW_UP_DEPTH = 2
+/** Sweep chỉ kick 1 review mỗi 60s (poll UI 4s gọi liên tục — tránh LLM storm) */
+const FOLLOW_UP_SWEEP_MIN_INTERVAL_MS = 60_000
+
+const globalForFollowUp = globalThis as unknown as {
+  __tmoSdReviewingFollowUps?: Set<string>
+  __tmoSdFollowUpSweepAt?: number
+}
+const reviewingFollowUps: Set<string> = (globalForFollowUp.__tmoSdReviewingFollowUps ??= new Set())
+
+/** Trích 1 section "## <tiêu đề chứa re>" từ báo cáo markdown (đến ## kế hoặc hết). Trả null nếu không có/rỗng. */
+function extractReportSection(report: string, headingRe: RegExp): string | null {
+  const lines = report.split('\n')
+  let startIdx = -1
+  for (let i = 0; i < lines.length; i++) {
+    if (/^##\s/.test(lines[i]) && headingRe.test(lines[i])) {
+      startIdx = i + 1
+      break
+    }
+  }
+  if (startIdx === -1) return null
+  const body: string[] = []
+  for (let i = startIdx; i < lines.length; i++) {
+    if (/^##\s/.test(lines[i])) break
+    body.push(lines[i])
+  }
+  const text = body.join('\n').trim()
+  return text || null
+}
+
+/**
+ * OPUS xem xét "Ý kiến & đề xuất khác" trong báo cáo hoàn thiện của 1 đề xuất
+ * đã kết thúc → quyết định tạo/không tạo đề xuất phái sinh. Fire-and-forget
+ * friendly: caller dùng void opusReviewReportSuggestions(id).
+ */
+export async function opusReviewReportSuggestions(proposalId: string): Promise<void> {
+  if (reviewingFollowUps.has(proposalId)) return
+  reviewingFollowUps.add(proposalId)
+  try {
+    const proposal = await db.selfDirectionProposal.findUnique({
+      where: { id: proposalId },
+      select: {
+        id: true, title: true, status: true, omegaReport: true, executionMode: true,
+        followUpDepth: true, opusFollowUpAt: true,
+      },
+    })
+    if (!proposal) return
+    if (!['completed', 'failed'].includes(proposal.status)) return
+    if (proposal.opusFollowUpAt) return // đã xem xét (Thử lại sẽ reset marker)
+    if (!proposal.omegaReport) {
+      // Không có báo cáo (stall-kill chưa kịp viết...) — đánh dấu rỗng, không retry
+      await db.selfDirectionProposal.update({
+        where: { id: proposalId },
+        data: { opusFollowUpAt: new Date(), opusFollowUpResult: 'Đề xuất kết thúc không kịp có báo cáo hoàn thiện — không có gì để Opus xem xét' },
+      })
+      return
+    }
+    if (proposal.followUpDepth >= MAX_FOLLOW_UP_DEPTH) {
+      await db.selfDirectionProposal.update({
+        where: { id: proposalId },
+        data: {
+          opusFollowUpAt: new Date(),
+          opusFollowUpResult: `Không xem xét thêm — chuỗi phái sinh đã đạt độ sâu tối đa (${proposal.followUpDepth}/${MAX_FOLLOW_UP_DEPTH}, chống vòng lặp)`,
+        },
+      })
+      return
+    }
+
+    // Lưu ý regex: "đề" = U+1EC1 (ề), KHÔNG phải U+1EC7 (ệ) — mở lớp ký tự
+    // đủ biến thể để chống sai dấu (đã từng bug: match ệ → MISS oan).
+    const opinions = extractReportSection(proposal.omegaReport, /đ[ềệe]\s*xu[ấậa]t\s*kh[áa]c/i)
+    const finalOutcome = extractReportSection(proposal.omegaReport, /k[ếệe]t\s*qu[ảa]\s*sau\s*c[ùu]ng/i)
+    if (!opinions) {
+      await db.selfDirectionProposal.update({
+        where: { id: proposalId },
+        data: {
+          opusFollowUpAt: new Date(),
+          opusFollowUpResult: 'Báo cáo không có phần "Ý kiến & đề xuất khác" — không có gì để xem xét',
+        },
+      })
+      console.log(`[SelfDirection] OpusFollowUp "${proposal.title}": báo cáo không có phần ý kiến — bỏ qua`)
+      return
+    }
+
+    // Danh sách đề xuất đang chờ duyệt — cho Opus tránh tạo trùng lặp
+    const pendingTitles = await db.selfDirectionProposal.findMany({
+      where: { status: 'pending' },
+      select: { title: true },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+    }).catch(() => [] as Array<{ title: string }>)
+
+    const systemPrompt = `${OPUS_INSTRUCTION}
+
+━━━ VAI TRÒ HIỆN TẠI (USER DIRECTIVE 2026-09-04 — GHI ĐÈ FORMAT §X CHO NHIỆM VỤ NÀY) ━━━
+Bạn là ${OPUS_AGENT_NAME} — CTO của TMO. Agent OMEGA vừa kết thúc orchestration đề xuất Self-direction và viết BÁO CÁO HOÀN THIỆN. Phần "Ý kiến & đề xuất khác" trong báo cáo DO OMEGA TẠO RA — bạn phải xem và TỰ QUYẾT ĐỊNH: có đáng tạo thêm MỘT ĐỀ XUẤT KHÁC tới SELF-DIRECTION dựa trên ý kiến đó không.
+Nguyên tắc quyết định:
+- CHỈ tạo khi ý kiến CỤ THỂ, HÀNH ĐỘNG ĐƯỢC, có giá trị thật cho hệ thống (vấn đề thật + hướng giải rõ ràng).
+- KHÔNG tạo khi: ý kiến chung chung/khung suông, đã có đề xuất tương tự đang chờ duyệt (đối chiếu danh sách bên dưới), hoặc việc đã được đề xuất gốc giải quyết xong.
+- Ý kiến trong BÁO CÁO THẤT BẠI (khắc phục nguyên nhân thất bại) vẫn có giá trị — cân nhắc nếu nguyên nhân nằm trong kiểm soát hệ thống.
+- Đề xuất mới phải ĐỘC LẬP, đầy đủ rõ 4 phần, KHÔNG tham chiếu "như trên / bên trên / thấy ở báo cáo".
+
+Output DUY NHẤT một JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích ngoài):
+{"create": true|false, "reason": "lý do ngắn gọn (1-2 câu, tiếng Việt)",
+ "proposal": {"title": "tiêu đề ngắn", "category": "gap|kb_contradiction|tool_failure|missing_skill|missing_test|improvement|long_term", "priority": "low|medium|high|critical",
+ "problem": "Vấn đề là gì? (2-4 câu cụ thể)", "solution": "Giải quyết như thế nào? (2-4 câu)", "implementation": "Triển khai như thế nào? (từng việc cụ thể, agent làm được)",
+ "impact": "Tác động kỳ vọng (1 câu)", "executionMode": "llm" }}
+("proposal" chỉ cần khi create=true; executionMode "code-workflow" nếu việc cần agents sửa CODE THẬT trong workspace; create=true mà proposal thiếu/sai format → hệ thống coi như create=false)`
+
+    const userPrompt = `ĐỀ XUẤT VỪA KẾT THÚC: ${proposal.title} (kết quả: ${proposal.status === 'completed' ? 'HOÀN TẤT' : 'THẤT BẠI'}, chế độ: ${proposal.executionMode})
+
+PHẦN "KẾT QUẢ SAU CÙNG" TRONG BÁO CÁO (ngữ cảnh, do Omega viết):
+${(finalOutcome || '(không có)').slice(0, 600)}
+
+PHẦN "Ý KIẾN & ĐỀ XUẤT KHÁC" DO OMEGA TẠO RA (bạn đang xem xét):
+${opinions.slice(0, 1600)}
+
+CÁC ĐỀ XUẤT ĐANG CHỜ DUYỆT (tránh tạo trùng lặp):
+${pendingTitles.length > 0 ? pendingTitles.map(p => `- ${p.title}`).join('\n') : '(không có)'}
+
+Quyết định (JSON).`
+
+    const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 900, temperature: 0.3, label: `OpusFollowUp ${proposal.id.slice(0, 8)}` })
+    const jsonStr = findBalancedJson(raw.replace(/```(?:json)?/g, ''), 'create')
+    if (!jsonStr) throw new Error('Không parse được verdict JSON')
+    const obj = JSON.parse(jsonStr) as Record<string, unknown>
+    const create = obj.create === true
+    const reason = typeof obj.reason === 'string' ? obj.reason.slice(0, 500) : ''
+
+    let childId: string | null = null
+    if (create && obj.proposal && typeof obj.proposal === 'object') {
+      const p = obj.proposal as Record<string, unknown>
+      const validated = validateProposalInput({
+        title: p.title, problem: p.problem, solution: p.solution, implementation: p.implementation,
+        category: p.category, priority: p.priority, impact: p.impact, executionMode: p.executionMode,
+        scheduleAt: null, source: 'agent', createdBy: 'Opus',
+      })
+      if (validated.ok) {
+        const originNote = `Đề xuất phái sinh do Opus (CTO) xem xét "Ý kiến & đề xuất khác" trong BÁO CÁO HOÀN THIỆN của đề xuất "${proposal.title}" (${proposal.id}) do Omega viết.`
+        const child = await createSelfDirectionProposal({
+          ...validated.data,
+          status: 'pending',
+          followUpParentId: proposal.id,
+          followUpDepth: proposal.followUpDepth + 1,
+          impact: validated.data.impact ? `${originNote} ${validated.data.impact}` : originNote,
+        })
+        childId = child.id
+        console.log(`[SelfDirection] OpusFollowUp: Opus TẠO ĐỀ XUẤT PHÁI SINH "${child.title}" (${child.id.slice(0, 10)}, depth ${proposal.followUpDepth + 1}) từ báo cáo "${proposal.title}" — ${reason}`)
+      } else {
+        console.warn(`[SelfDirection] OpusFollowUp: đề xuất phái sinh của Opus không hợp lệ (${validated.error}) — coi như không tạo`)
+      }
+    }
+
+    // Ủy quyền đang bật → Opus PHÊ DUYỆT CHÍNH ĐỀ XUẤT CỦA MÌNH (user directive
+    // 2026-09-04 cho phép tường minh). Fire-and-forget: duyệt xong tự kích
+    // triển khai (dry-run nền — đúng pattern trigger nền hiện có).
+    if (childId) {
+      const settings = await getSelfDirectionSettings()
+      if (settings.opusDelegated) {
+        console.log(`[SelfDirection] OpusFollowUp: ủy quyền ĐANG BẬT → Opus phê duyệt đề xuất của chính mình (${childId.slice(0, 10)})`)
+        void opusReviewPending(childId)
+      }
+    }
+
+    await db.selfDirectionProposal.update({
+      where: { id: proposalId },
+      data: {
+        opusFollowUpAt: new Date(),
+        opusFollowUpResult: childId
+          ? `Opus đã tạo đề xuất phái sinh ${childId.slice(0, 10)} từ "Ý kiến & đề xuất khác" — ${reason}`
+          : `Opus xem xét "Ý kiến & đề xuất khác" — KHÔNG tạo đề xuất mới: ${reason || '(không nêu lý do)'}`,
+      },
+    })
+    console.log(`[SelfDirection] OpusFollowUp "${proposal.title}": ${childId ? 'đã tạo đề xuất phái sinh' : 'không tạo đề xuất mới'} — ${reason.slice(0, 160)}`)
+  } catch (err) {
+    // LLM/parse lỗi → KHÔNG đánh dấu đã xem (opusFollowUpAt giữ null) — sweep
+    // GET proposals sẽ thử lại khi LLM hồi phục (fail-open như OpusReview).
+    console.warn(`[SelfDirection] OpusFollowUp ${proposalId} lỗi (sẽ thử lại qua sweep):`, err instanceof Error ? err.message : String(err))
+  } finally {
+    reviewingFollowUps.delete(proposalId)
+  }
+}
+
+/**
+ * Sweep Opus Follow-up (gọi từ GET /api/self-direction/proposals — poll UI):
+ * tìm đề xuất completed/failed CÓ báo cáo CHƯA được Opus xem xét ý kiến → kick
+ * review (1 cái/lần, tối thiểu 60s giữa 2 lần kick). Restart-resilient: hook
+ * hoàn thiện có thể bị PM2 restart giết giữa chừng → sweep bắt lại; đồng thời
+ * phủ HỒI TỐ các báo cáo hoàn thành trước khi tính năng ra đời.
+ */
+export function sweepOpusFollowUpReviews(): void {
+  const g = globalForFollowUp
+  const nowMs = Date.now()
+  if (g.__tmoSdFollowUpSweepAt && nowMs - g.__tmoSdFollowUpSweepAt < FOLLOW_UP_SWEEP_MIN_INTERVAL_MS) return
+  g.__tmoSdFollowUpSweepAt = nowMs
+  void (async () => {
+    try {
+      const candidates = await db.selfDirectionProposal.findMany({
+        where: {
+          status: { in: ['completed', 'failed'] },
+          omegaReport: { not: null },
+          opusFollowUpAt: null,
+          followUpDepth: { lt: MAX_FOLLOW_UP_DEPTH },
+        },
+        select: { id: true },
+        orderBy: { completedAt: 'asc' }, // cũ nhất trước — hồi tố trước, mới sau
+        take: 1,
+      })
+      if (candidates.length === 0) return
+      const target = candidates[0]
+      if (reviewingFollowUps.has(target.id) || runningOrchestrations.has(target.id)) return
+      void opusReviewReportSuggestions(target.id)
+    } catch { /* fail-open — poll kế thử lại */ }
+  })()
+}
 
 // ==================== 2. PLAN — Omega lập kế hoạch triển khai ====================
 
@@ -1205,11 +1430,10 @@ function tagEvaluation(reviewerName: string, text: string): string {
 }
 
 /**
- * USER DECISION #3: khi ủy quyền bật (opusDelegated=true) → OPUS (CTO) chấm
- * bước đạt/chưa đạt (system prompt = OPUS_INSTRUCTION + context đánh giá);
- * khi tắt → Omega chấm như cũ (việc nội tại orchestration). Output format
- * {"complete","evaluation"} GIỮ NGUYÊN cả 2 nhánh → logic rework
- * (MAX_STEP_ATTEMPTS + reworkFeedback) không đổi.
+ * USER DIRECTIVE 2026-09-04: OMEGA LUÔN chấm bước đạt/chưa đạt (kể cả khi ủy
+ * quyền bật — Opus không tham gia đánh giá từng bước; system prompt persona
+ * Omega + context đánh giá). Output format {"complete","evaluation"} GIỮ
+ * NGUYÊN → logic rework (MAX_STEP_ATTEMPTS + reworkFeedback) không đổi.
  */
 async function evaluateStep(params: {
   step: { stepOrder: number; title: string; description: string; assignee: string }
@@ -1293,7 +1517,7 @@ ${params.output.slice(0, 2000)}
   }
 }
 
-// ==================== 5. REPORT — báo cáo hoàn thiện (Opus khi ủy quyền bật, Omega khi tắt) ====================
+// ==================== 5. REPORT — báo cáo hoàn thiện (LUÔN do Omega viết — user directive 2026-09-04) ====================
 
 /** Rút gọn receipt pipeline thành text đan vào prompt báo cáo (CI-6 B5) */
 function pipelineReceiptToText(r: SdPipelineReceiptSummary): string {
@@ -1313,9 +1537,9 @@ async function writeFinalReport(params: {
   /** CI-6 B5: receipt pipeline verify_and_push (tồn tại khi có bước chạy workspace thật) */
   pipelineReceipt?: SdPipelineReceiptSummary | null
 }): Promise<string> {
-  // USER DECISION #3: ủy quyền bật → OPUS (CTO) viết báo cáo hoàn thiện (kèm
-  // prefix "Báo cáo của Opus"); tắt → Omega như cũ. Triển khai vẫn của Omega —
-  // các chỗ hardcode "Omega" trong template cũ dùng biến reviewerName.
+  // USER DIRECTIVE 2026-09-04: OMEGA luôn viết báo cáo hoàn thiện (Opus không
+  // tham gia — kể cả khi ủy quyền bật). Triển khai vẫn của Omega — các chỗ
+  // hardcode "Omega" trong template cũ dùng biến reviewerName.
   const { systemPrompt: reviewerPersona, reviewerName } = await getReviewerSystemPrompt('report')
   const stepsText = params.steps.map(s =>
     `Bước ${s.stepOrder} — ${s.title} [${s.assignee}] (${s.status === 'done' ? 'đạt' : s.status}):\n  Output: ${(s.output || '(trống)').slice(0, 600)}\n  Đánh giá ${reviewerName}: ${s.evaluation || '(không có)'}`
@@ -1357,8 +1581,9 @@ ${stepsText.slice(0, 4000)}
 ${params.pipelineReceipt ? `\nKẾT QUẢ PIPELINE KIỂM ĐỊNH & TRIỂN KHAI CODE (bước verify_and_push — dữ liệu THẬT):\n${pipelineReceiptToText(params.pipelineReceipt)}\n` : ''}
 Viết báo cáo hoàn thiện.`
 
-  // USER DECISION #3: Opus viết báo cáo khi ủy quyền bật → prefix danh nghĩa
-  const reportPrefix = reviewerName === OPUS_AGENT_NAME ? `**Báo cáo của ${reviewerName}**\n\n` : ''
+  // USER DIRECTIVE 2026-09-04: Omega luôn viết → không còn prefix danh nghĩa
+  // Opus (log cũ của các vòng trước vẫn có prefix — dữ liệu lịch sử, giữ nguyên).
+  const reportPrefix = ''
 
   try {
     const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 1400, temperature: 0.4, label: `${reviewerName}Report` })
@@ -1435,7 +1660,17 @@ export async function triggerOrchestration(
     // restart. Check-and-add phía trên đã chống double-trigger in-process.
     if (proposal.status !== 'ready') {
       try {
-        await db.selfDirectionProposal.update({ where: { id: proposalId }, data: { status: 'ready' } })
+        await db.selfDirectionProposal.update({
+          where: { id: proposalId },
+          data: {
+            status: 'ready',
+            // USER DIRECTIVE 2026-09-04: retry chạy lại → BÁO CÁO HOÀN THIỆN MỚI
+            // sẽ được viết → reset marker để OPUS xem lại "Ý kiến & đề xuất khác"
+            // của báo cáo mới (giữ opusFollowUpResult cũ làm lịch sử cho tới khi
+            // được ghi đè).
+            opusFollowUpAt: null,
+          },
+        })
         console.log(`[SelfDirection] Proposal "${proposal.title}" ${proposal.status} → ready (trigger — sẽ tự chạy lại nếu process restart giữa chừng)`)
       } catch { /* best-effort — không chặn trigger */ }
     }
@@ -1875,6 +2110,11 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
         console.warn('[SelfDirection] ALISTA follow-up hook fail (sweep 60s sẽ bắt lại):', err instanceof Error ? err.message : String(err))
       })
   }
+  // USER DIRECTIVE 2026-09-04: OPUS xem phần "Ý kiến & đề xuất khác" trong
+  // BÁO CÁO HOÀN THIỆN vừa lưu (do Omega viết) → tự quyết định tạo đề xuất
+  // phái sinh tới SELF-DIRECTION hay không. Fire-and-forget — nếu process
+  // restart giữa chừng, sweep GET proposals sẽ bắt lại (opusFollowUpAt null).
+  void opusReviewReportSuggestions(proposalId)
   console.log(`[SelfDirection] "${proposal.title}" ${failed ? `THẤT BẠI: ${failReason}` : `HOÀN TẤT ${finalSteps.length} bước — báo cáo hoàn thiện đã lưu`}`)
 }
 
@@ -2129,7 +2369,10 @@ export async function promoteDueProposals(): Promise<string[]> {
   return triggered
 }
 
-/** Ủy quyền đang bật → Opus tự review mọi proposal pending (gọi từ GET proposals) — user decision #3 */
+/** Ủy quyền đang bật → Opus tự review mọi proposal pending (gọi từ GET proposals) —
+ * user decision #3. USER DIRECTIVE 2026-09-04: "mọi proposal pending" bao gồm
+ * CẢ ĐỀ XUẤT PHÁI SINH DO CHÍNH OPUS TẠO (opusReviewReportSuggestions) — Opus
+ * được phép phê duyệt đề xuất của mình khi ủy quyền bật (user cho phép tường minh). */
 export async function autoReviewPendingIfDelegated(): Promise<number> {
   try {
     const settings = await getSelfDirectionSettings()

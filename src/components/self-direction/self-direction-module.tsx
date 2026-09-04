@@ -11,6 +11,11 @@
  *     sang Opus CTO; orchestration/implementation vẫn của Omega).
  *   - Được duyệt → Omega lập kế hoạch từng bước, giao agents thực hiện, đánh giá
  *     và viết báo cáo hoàn thiện — xem trong Detail Dialog.
+ *   - USER DIRECTIVE 2026-09-04: Omega LUÔN đánh giá từng bước + viết BÁO CÁO
+ *     HOÀN THIỆN (Opus không tham gia 2 việc đó, kể cả khi ủy quyền bật). Opus
+ *     xem phần "Ý kiến & đề xuất khác" trong báo cáo → tự quyết định tạo ĐỀ
+ *     XUẤT PHÁI SINH (badge "Phái sinh (Opus)") — tự phê duyệt chính đề xuất
+ *     của mình khi ủy quyền bật, chờ Mr. Architect khi tắt.
  *
  * API contract (backend /api/self-direction/*):
  *   GET    /api/self-direction/proposals           → { proposals, settings }
@@ -60,6 +65,7 @@ import {
   CheckCircle2,
   Compass,
   ExternalLink,
+  Eye,
   FlaskConical,
   GitBranch,
   Lightbulb,
@@ -70,6 +76,7 @@ import {
   RotateCcw,
   Route,
   Sparkles,
+  Split,
   Target,
   TrendingUp,
   Trash2,
@@ -128,6 +135,12 @@ export interface SdProposal {
   reviewedAt: string | null
   planSummary: string | null
   omegaReport: string | null
+  /** USER DIRECTIVE 2026-09-04: Opus xem "Ý kiến & đề xuất khác" trong báo cáo hoàn thiện */
+  opusFollowUpAt?: string | null
+  opusFollowUpResult?: string | null
+  /** Đề xuất cha nếu đây là đề xuất phái sinh do Opus tạo từ báo cáo (null = gốc) */
+  followUpParentId?: string | null
+  followUpDepth?: number
   executedAt: string | null
   completedAt: string | null
   createdAt: string
@@ -382,6 +395,21 @@ function CodeWorkflowBadge({ compact = false }: { compact?: boolean }) {
     >
       <GitBranch className="h-3 w-3" />
       Code-workflow
+    </Badge>
+  )
+}
+
+/** USER DIRECTIVE 2026-09-04: đề xuất phái sinh do OPUS tạo từ "Ý kiến & đề xuất
+ *  khác" trong BÁO CÁO HOÀN THIỆN của Omega (followUpParentId != null). */
+function FollowUpBadge({ compact = false }: { compact?: boolean }) {
+  return (
+    <Badge
+      variant="outline"
+      className={`bg-violet-950/30 text-violet-300 border-violet-500/40 ${compact ? 'text-[9px] h-4 px-1.5' : 'text-[10px]'}`}
+      title="Đề xuất phái sinh do Opus (CTO) xem xét “Ý kiến & đề xuất khác” trong BÁO CÁO HOÀN THIỆN do Omega viết — Opus được tự phê duyệt khi ủy quyền bật"
+    >
+      <Split className="h-3 w-3" />
+      Phái sinh (Opus)
     </Badge>
   )
 }
@@ -1007,7 +1035,10 @@ export default function SelfDirectionModule() {
             </div>
           </div>
 
-          {/* ===== Ủy quyền duyệt cho Opus (user decision #3: chuyển từ Omega sang Opus CTO) ===== */}
+          {/* ===== Ủy quyền duyệt cho Opus (user decision #3: chuyển từ Omega sang Opus CTO).
+              USER DIRECTIVE 2026-09-04: ủy quyền CHỈ điều khiển QUYỀN DUYỆT (kể
+              cả tự phê duyệt đề xuất phái sinh của chính Opus) — đánh giá từng
+              bước + BÁO CÁO HOÀN THIỆN luôn thuộc Omega. ===== */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-slate-950/40 border border-stone-800/80 px-3 py-2">
             <Switch
               id="sd-opus-delegation"
@@ -1018,6 +1049,7 @@ export default function SelfDirectionModule() {
             <label
               htmlFor="sd-opus-delegation"
               className="text-xs text-stone-300 select-none cursor-pointer"
+              title="Bật: Opus (CTO) duyệt mọi đề xuất chờ thay Mr. Architect (kể cả đề xuất phái sinh do chính Opus tạo). Đánh giá từng bước + Báo cáo hoàn thiện luôn do Omega thực hiện."
             >
               Ủy quyền duyệt cho Opus
             </label>
@@ -1027,6 +1059,12 @@ export default function SelfDirectionModule() {
                 ⚖️ Opus duyệt thay Mr. Architect
               </Badge>
             )}
+            {/* USER DIRECTIVE 2026-09-04: Opus luôn xem “Ý kiến & đề xuất khác”
+                trong BÁO CÁO HOÀN THIỆN của Omega → tự quyết định tạo đề xuất
+                phái sinh (tự phê duyệt chỉ khi ủy quyền bật). */}
+            <span className="text-[10px] text-stone-500 ml-auto hidden md:inline">
+              Omega đánh giá từng bước &amp; viết Báo cáo hoàn thiện · Opus xem “Ý kiến &amp; đề xuất khác”
+            </span>
           </div>
 
           {/* ===== Body ===== */}
@@ -1103,6 +1141,7 @@ export default function SelfDirectionModule() {
                             <CategoryBadge category={p.category} />
                             <PriorityBadge priority={p.priority} />
                             {p.executionMode === 'code-workflow' && <CodeWorkflowBadge />}
+                            {p.followUpParentId && <FollowUpBadge />}
                             <span className="text-[10px] text-stone-500 ml-auto">
                               {p.source}/{p.createdBy} • {fmtDateTime(p.createdAt)}
                             </span>
@@ -1278,6 +1317,7 @@ export default function SelfDirectionModule() {
                           <div className="flex flex-wrap items-center gap-1.5">
                             <StatusBadge status={p.status} />
                             {p.reviewer && <ReviewerBadge reviewer={p.reviewer} />}
+                            {p.followUpParentId && <FollowUpBadge compact />}
                             <span className="text-[10px] text-stone-500 ml-auto hidden sm:inline">
                               {fmtDateTime(p.updatedAt)}
                             </span>
@@ -1574,9 +1614,10 @@ export default function SelfDirectionModule() {
 
               {/* 3. Báo cáo hoàn thiện — hiện cho CẢ completed lẫn failed
                   (FIX 2026-09-02, Omega audit #3: báo cáo thất bại chứa phân
-                  tích nguyên nhân + đề xuất khắc phục có giá trị; tác giả của
-                  báo cáo ghi ngay dòng đầu prefix "**Báo cáo của Opus**" khi
-                  ủy quyền bật — title giữ trung tính). */}
+                  tích nguyên nhân + đề xuất khắc phục có giá trị). USER
+                  DIRECTIVE 2026-09-04: OMEGA luôn là tác giả báo cáo (Opus
+                  không tham gia viết — kể cả khi ủy quyền bật; các báo cáo
+                  cũ có prefix "**Báo cáo của Opus**" là dữ liệu lịch sử). */}
               {(detail.proposal.status === 'completed' || detail.proposal.status === 'failed') && detail.proposal.omegaReport && (
                 <section className="space-y-1.5">
                   <p
@@ -1587,7 +1628,7 @@ export default function SelfDirectionModule() {
                     }`}
                   >
                     <BookOpen className={`h-3.5 w-3.5 ${detail.proposal.status === 'failed' ? 'text-red-400' : 'text-emerald-400'}`} />
-                    Báo cáo hoàn thiện
+                    Báo cáo hoàn thiện (Omega)
                   </p>
                   <div
                     className={`border p-4 rounded max-h-96 overflow-y-auto custom-scrollbar ${
@@ -1600,6 +1641,29 @@ export default function SelfDirectionModule() {
                       {detail.proposal.omegaReport}
                     </p>
                   </div>
+
+                  {/* USER DIRECTIVE 2026-09-04: Opus (CTO) xem phần "Ý kiến &
+                      đề xuất khác" trong báo cáo do Omega viết → tự quyết định
+                      tạo đề xuất phái sinh. Hiển thị kết quả xem xét ngay dưới
+                      báo cáo để user theo dõi. */}
+                  {detail.proposal.opusFollowUpAt ? (
+                    <div className="border border-amber-500/30 bg-amber-950/15 p-3 rounded">
+                      <p className="text-[10px] uppercase tracking-wider text-amber-300/90 flex items-center gap-1.5 mb-1">
+                        <Eye className="h-3 w-3" />
+                        Opus đã xem “Ý kiến & đề xuất khác” — {fmtDateTime(detail.proposal.opusFollowUpAt)}
+                      </p>
+                      <p className="text-xs text-stone-300 whitespace-pre-wrap break-words">
+                        {detail.proposal.opusFollowUpResult || '(không có ghi nhận)'}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="border border-stone-700/60 bg-slate-950/30 p-3 rounded">
+                      <p className="text-[10px] uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
+                        <Eye className="h-3 w-3" />
+                        Opus sẽ xem “Ý kiến & đề xuất khác” trong báo cáo này (tự động — quét 60s/lần)
+                      </p>
+                    </div>
+                  )}
                 </section>
               )}
 
