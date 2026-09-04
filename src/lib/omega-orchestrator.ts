@@ -66,7 +66,7 @@ const CONSULT_MAX_TOKENS = 1100
 const CONSULT_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.OMEGA_CONSULT_TIMEOUT_MS || '600000', 10) || 600_000)
 
 /** Omega fallback khi DB không có profile (fail-open, vẫn tư vấn được) */
-const OMEGA_FALLBACK = { provider: 'nvidia', model: 'moonshotai/kimi-k3' }
+const OMEGA_FALLBACK = { provider: 'nvidia', model: 'minimaxai/minimax-m3' } // 2026-10-16: lõi chính tạm thời
 
 /**
  * FIX (review 2026-09-08 — directive 2026-09-05): 2 model dưới là LÕI EXTRACTION
@@ -74,7 +74,7 @@ const OMEGA_FALLBACK = { provider: 'nvidia', model: 'moonshotai/kimi-k3' }
  * Omega tạo (agent chat bằng extraction core = chất lượng tệ + sai directive).
  */
 const EXTRACTION_ONLY_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b', 'openai/gpt-oss-120b'])
-const CHAT_MODEL_HINT = 'moonshotai/kimi-k3 (mạnh, khuyến nghị) | deepseek-ai/deepseek-v4-pro-0813 | deepseek-ai/deepseek-v4-flash-0731 (nhanh) | minimaxai/minimax-m3'
+const CHAT_MODEL_HINT = 'minimaxai/minimax-m3 (lõi chính tạm thời 2026-10-16 — khuyến nghị) | moonshotai/kimi-k3 | deepseek-ai/deepseek-v4-pro-0813 | deepseek-ai/deepseek-v4-flash-0731 (3 lõi sau hiện HANG phía NIM — fallback)'
 
 /** Toolset mặc định cho agent mới nếu Omega không chỉ định — luôn kèm
  *  escalate_problem (agent mới được hỏi Omega khi kẹt — đúng cơ chế
@@ -373,7 +373,7 @@ export async function createAgentByOmega(params: {
   if (!VALID_PROVIDERS.includes(providerValue)) {
     return { success: false, error: `Provider "${providerValue}" không hợp lệ. Chọn: ${VALID_PROVIDERS.join(', ')}` }
   }
-  const modelValue = model || 'moonshotai/kimi-k3'
+  const modelValue = model || 'minimaxai/minimax-m3'
   const models = PROVIDER_MODELS[providerValue] || []
   if (!models.some(m => m.id === modelValue)) {
     return { success: false, error: `Model "${modelValue}" không thuộc provider "${providerValue}". Models khả dụng: ${models.map(m => m.id).join(', ')}` }

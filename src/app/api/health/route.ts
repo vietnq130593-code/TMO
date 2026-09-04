@@ -38,7 +38,7 @@ function checkLLMHealthSync(): Record<string, { available: boolean; model: strin
 
   result.nvidia = {
     available: hasNvidiaKeys,
-    model: getNvidiaModels()[0] || 'moonshotai/kimi-k3',
+    model: getNvidiaModels()[0] || 'minimaxai/minimax-m3',
     error: !hasNvidiaKeys ? 'No NVIDIA API keys configured' : undefined,
   }
 

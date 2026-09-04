@@ -283,17 +283,18 @@ export async function ensureOpusAgent(): Promise<void> {
       }
     }
 
-    // MODEL SYNC (fix 2026-08-31 — USER DIRECTIVE kimi-k3): row Opus seed từ
-    // default cũ 2026-09-30 (minimax-m3) → sync về kimi-k3; model user tự chọn
-    // giữ nguyên. (Update-block của upsert KHÔNG đụng model — tôn trọng config.)
+    // MODEL SYNC (2026-10-16 — USER DIRECTIVE minimax-m3 tạm làm lõi chính): row
+    // Opus seed từ default cũ 2026-08-31 (kimi-k3 — giá trị do CODE sync, không
+    // phải user chọn) → sync về minimax-m3; model user tự chọn giữ nguyên.
+    // (Update-block của upsert KHÔNG đụng model — tôn trọng config.)
     try {
       const opusRow = await db.agentProfile.findUnique({ where: { name: OPUS_AGENT_NAME } })
-      if (opusRow?.model === 'minimaxai/minimax-m3') {
+      if (opusRow?.model === 'moonshotai/kimi-k3') {
         await db.agentProfile.update({
           where: { name: OPUS_AGENT_NAME },
-          data: { model: 'moonshotai/kimi-k3' },
+          data: { model: 'minimaxai/minimax-m3' },
         })
-        console.log('[Opus] Model sync: minimax-m3 (default cũ 2026-09-30) → moonshotai/kimi-k3 (lõi chính mới)')
+        console.log('[Opus] Model sync: moonshotai/kimi-k3 (lõi chính cũ 2026-08-31) → minimaxai/minimax-m3 (lõi chính tạm thời 2026-10-16)')
       }
     } catch { /* fail-open — model chỉ là hiển thị + legacy path */ }
 
@@ -315,9 +316,9 @@ export async function ensureOpusAgent(): Promise<void> {
         capable: OPUS_CAPABLE,
         domain: OPUS_DOMAIN,
         provider: 'nvidia',
-        // UPDATE 2026-08-31 (USER DIRECTIVE): kimi-k3 lại là lõi chính
-        // (2026-09-30 tạm minimax-m3 do NIM HANG — kết thúc theo chỉ định user)
-        model: 'moonshotai/kimi-k3',
+        // 2026-10-16 (USER DIRECTIVE): minimax-m3 tạm làm lõi chính (duy nhất
+        // khả dụng — kimi/ds HANG phía NIM, matrix test 09:11 UTC)
+        model: 'minimaxai/minimax-m3',
         temperature: 0.4, // CTO phán đoán — nhiệt thấp, nhất quán
         maxTokens: 16384,
         team: null, // meta-agent — không thuộc team nào

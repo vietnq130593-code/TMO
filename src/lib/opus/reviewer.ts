@@ -342,8 +342,8 @@ export async function runOpusReview(
     const agentConfig = profile
       ? { provider: profile.provider, model: profile.model }
       : // getOpusProfile chỉ null khi DB lỗi — fallback cấu hình khai báo của Opus
-        // (llm.ts vẫn override về chain kimi-k3 toàn hệ thống nên vô hại)
-        { provider: 'nvidia', model: 'moonshotai/kimi-k3' }
+        // (llm.ts vẫn override về AGENT_PRIMARY_MODEL toàn hệ thống nên vô hại)
+        { provider: 'nvidia', model: 'minimaxai/minimax-m3' }
 
     const dossier = await buildOpusDossier(sessionId, messageId)
     const dossierPrompt =

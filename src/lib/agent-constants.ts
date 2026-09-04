@@ -54,14 +54,14 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string }
   nvidia: [
     // Extraction cores (2 lõi — chỉ trích xuất dữ liệu, user directive 2026-09-05)
     { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction chính)' },
-    { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (extraction fallback)' },
-    // Agent/Chat cores — kimi-k3 lõi chính + 3 lõi fallback tuần tự (user
-    // directive 2026-08-28: "deepseek v4 pro, deepseek v4 flash, minimax lần
-    // lượt làm fall back cho k3"):
-    { id: 'moonshotai/kimi-k3', label: 'kimi-k3 (lõi chính)' },
-    { id: 'deepseek-ai/deepseek-v4-pro-0813', label: 'deepseek-v4-pro (fallback #1)' },
-    { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash (fallback #2)' },
-    { id: 'minimaxai/minimax-m3', label: 'minimax-m3 (fallback #3)' },
+    { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (extraction fallback — EOL 410)' },
+    // Agent/Chat cores — minimax-m3 lõi chính (TẠM THỜI — user directive
+    // 2026-10-16: duy nhất khả dụng sau matrix test 4 lõi × 4 key) + 3 lõi
+    // fallback: kimi-k3 (#1 — NIM hồi tự dùng lại) → ds-pro (#2) → ds-flash (#3):
+    { id: 'minimaxai/minimax-m3', label: 'minimax-m3 (lõi chính — tạm thời)' },
+    { id: 'moonshotai/kimi-k3', label: 'kimi-k3 (fallback #1)' },
+    { id: 'deepseek-ai/deepseek-v4-pro-0813', label: 'deepseek-v4-pro (fallback #2)' },
+    { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash (fallback #3)' },
   ],
 }
 

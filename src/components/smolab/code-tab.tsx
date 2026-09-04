@@ -124,9 +124,9 @@ export function CodeTabContent() {
   }>>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [newSessionPrompt, setNewSessionPrompt] = useState('')
-  // MODEL POLICY 2026-08-27: kimi-k3 mặc định ('deepseek/deepseek-chat' là ID
-  // provider đã chết — single-provider NVIDIA architecture)
-  const [newSessionModel, setNewSessionModel] = useState('moonshotai/kimi-k3')
+  // MODEL POLICY 2026-10-16: minimax-m3 mặc định (lõi chính tạm thời — duy nhất
+  // khả dụng; kimi/ds HANG phía NIM theo matrix test 4 lõi × 4 key)
+  const [newSessionModel, setNewSessionModel] = useState('minimaxai/minimax-m3')
   const [creatingSession, setCreatingSession] = useState(false)
 
   // MCP Bridge
@@ -1973,12 +1973,13 @@ export function CodeTabContent() {
     { label: 'Optimize', icon: Zap, prompt: 'Optimize this code for better performance' },
   ]
 
-  // Model options — NVIDIA NIM only (user directive 2026-08-28: kimi-k3 là lõi
-  // CHÍNH; deepseek-v4-pro-0813 / deepseek-v4-flash / minimax-m3 là fallback
-  // chain TỰ ĐỘNG phía server — selector vẫn 1 lựa chọn vì server override mọi
-  // agent về kimi-k3 rồi tự chuyển lõi khi kimi cạn key)
+  // Model options — NVIDIA NIM only (user directive 2026-10-16: minimax-m3 là
+  // lõi CHÍNH TẠM THỜI — duy nhất khả dụng sau matrix test; kimi-k3 /
+  // ds-v4-pro / ds-v4-flash là fallback chain TỰ ĐỘNG phía server — selector
+  // vẫn 1 lựa chọn vì server override mọi agent về minimax-m3 rồi tự chuyển
+  // lõi khi minimax cạn key/429)
   const MODEL_OPTIONS = [
-    { value: 'moonshotai/kimi-k3', label: 'Kimi K3 (lõi chính + fallback tự động)' },
+    { value: 'minimaxai/minimax-m3', label: 'MiniMax M3 (lõi chính tạm thời + fallback tự động)' },
   ]
 
   return (

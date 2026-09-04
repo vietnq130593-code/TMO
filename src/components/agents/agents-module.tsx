@@ -338,8 +338,8 @@ export function AgentsModule() {
           {agent.model}
         </Badge>
         {/* Đề xuất 3 (2026-08-25): badge "mặc định/backup" trực quan hóa MODEL POLICY —
-            kimi-k3 = lõi mặc định (emerald), lõi khác = backup (slate). */}
-        {agent.model === 'moonshotai/kimi-k3' ? (
+            minimax-m3 = lõi chính tạm thời 2026-10-16 (emerald), lõi khác = backup (slate). */}
+        {agent.model === 'minimaxai/minimax-m3' ? (
           <Badge variant="outline" className="text-[8px] h-4 px-1.5 bg-emerald-950/50 text-emerald-300 border-emerald-500/55 font-semibold">⭐ mặc định</Badge>
         ) : (
           <Badge variant="outline" className="text-[8px] h-4 px-1.5 bg-slate-950/50 text-stone-500 border-stone-600/55">↩️ backup</Badge>

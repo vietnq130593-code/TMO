@@ -1506,8 +1506,8 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           model: {
             type: 'string',
             description:
-              'Model ID (CHAT models — lõi extraction nemotron/gpt-oss BỊ CẤM cho agent chat). Khả dụng: moonshotai/kimi-k3 (lõi chính, mạnh) | ' +
-              'deepseek-ai/deepseek-v4-pro-0813 | deepseek-ai/deepseek-v4-flash-0731 (nhanh) | minimaxai/minimax-m3',
+              'Model ID (CHAT models — lõi extraction nemotron/gpt-oss BỊ CẤM cho agent chat). Khả dụng: minimaxai/minimax-m3 (lõi chính tạm thời 2026-10-16 — duy nhất khỏe) | ' +
+              'moonshotai/kimi-k3 | deepseek-ai/deepseek-v4-pro-0813 | deepseek-ai/deepseek-v4-flash-0731 (nhanh — 3 lõi này hiện HANG phía NIM, dùng làm fallback)',
           },
           team: { type: 'string', enum: ['code', 'research'], description: 'Team (null/omit = standalone agent)' },
           position: {

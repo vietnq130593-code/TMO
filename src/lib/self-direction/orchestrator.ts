@@ -98,7 +98,7 @@ export interface SdStepEvaluation {
 
 // ==================== CONSTANTS ====================
 
-const OMEGA_FALLBACK_BRAIN = { provider: 'nvidia', model: 'moonshotai/kimi-k3' }
+const OMEGA_FALLBACK_BRAIN = { provider: 'nvidia', model: 'minimaxai/minimax-m3' } // 2026-10-16: lõi chính tạm thời
 // Task 20 (2026-09-03): 120s cũ giết chuỗi fallback TRƯỚC khi tới lượt
 // minimax-m3 khi 3 lõi đầu hang phía NIM (mỗi lõi đốt 150s timeout — cần
 // ~460s mới tới minimax). 600s ≥ worst-case chuỗi; LLM Prober (llm.ts) đã tự
@@ -367,7 +367,7 @@ async function agentPersona(name: string): Promise<{ systemPrompt: string; brain
     })
     if (p) {
       const base = p.instruction || `Bạn là ${name}${p.position ? ` (${p.position})` : ''}. ${p.description || ''}`
-      return { systemPrompt: base, brain: { provider: p.provider || 'nvidia', model: p.model || 'moonshotai/kimi-k3' } }
+      return { systemPrompt: base, brain: { provider: p.provider || 'nvidia', model: p.model || 'minimaxai/minimax-m3' } }
     }
   } catch { /* fail-open */ }
   return {

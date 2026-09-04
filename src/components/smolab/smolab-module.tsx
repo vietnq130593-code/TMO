@@ -737,9 +737,9 @@ export const SMOLAB_MODEL_GROUPS = [
       // 2 extraction cores (user directive 2026-09-05 — kimi-k3 bị cấm cho extraction)
       { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction chính)' },
       { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (extraction fallback)' },
-      // FIX 2026-09-30 (NIM model-level HANG): minimax-m3 = lõi chính (healthy) —
-      // kimi-k3 + deepseek-v4 pro/flash xuống làm fallback trong chuỗi.
-      { id: 'minimaxai/minimax-m3', label: 'MiniMax M3 (lõi chính — healthy)' },
+      // FIX 2026-09-30 → 2026-10-16 (USER DIRECTIVE): minimax-m3 = lõi chính
+      // TẠM THỜI (duy nhất khả dụng) — kimi-k3 + deepseek-v4 xuống fallback.
+      { id: 'minimaxai/minimax-m3', label: 'MiniMax M3 (lõi chính — tạm thời)' },
       { id: 'moonshotai/kimi-k3', label: 'Kimi K3 (fallback #1)' },
       { id: 'deepseek-ai/deepseek-v4-pro-0813', label: 'DeepSeek V4 Pro (fallback #2)' },
       { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash (fallback #3)' },
@@ -841,9 +841,9 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   const [messages, setMessages] = useState<SmolabMessage[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  // MODEL POLICY 2026-08-27: kimi-k3 là mặc định (agents độc lập + chat);
-  // deepseek → minimax là failover backup (GLM 5.2/5.3 không dùng được trên NIM)
-  const [selectedModel, setSelectedModel] = useState(restoredCtx.selectedModel || 'moonshotai/kimi-k3')
+  // MODEL POLICY 2026-10-16: minimax-m3 là mặc định (agents độc lập + chat —
+  // lõi chính tạm thời, duy nhất khả dụng); kimi/ds là failover backup
+  const [selectedModel, setSelectedModel] = useState(restoredCtx.selectedModel || 'minimaxai/minimax-m3')
   const [activeSmolabTab, setActiveSmolabTab] = useState('knowledge')
   const [gatewayOnline, setGatewayOnline] = useState(false)
   const [sessions, setSessions] = useState<SmolabSession[]>([])

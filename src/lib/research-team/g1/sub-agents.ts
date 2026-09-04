@@ -14,13 +14,13 @@
  *  - dispatchPlan không bao giờ reject toàn plan vì 1 SA fail — Promise.allSettled
  *    thu tất cả kết quả; SA FAILED đánh dấu ❌ trong registry, batch tiếp tục.
  *
- * NOTE: Sub-agent là instance model stack chung (kimi-k3 + fallback chain — TB-01 §2).
- * SA dùng callLLM (kimi-k3 agent core + fallback chain) vì là agent logic;
- * nếu cần deep reasoning sẽ qua callLLM (sivil.ts SYNTHESIZE + council engine.ts).
+ * NOTE: Sub-agent là instance model stack chung (AGENT_PRIMARY_MODEL + fallback
+ * chain — TB-01 §2). SA dùng callLLM (agent core + fallback chain) vì là agent
+ * logic; nếu cần deep reasoning sẽ qua callLLM (sivil.ts SYNTHESIZE + council engine.ts).
  * callUtilityLLM (extraction cores nemotron/gpt-oss) CHỈ dùng cho trích xuất tài liệu — KHÔNG cho agent logic.
  */
 
-import { callLLM } from '@/lib/llm'
+import { callLLM, AGENT_PRIMARY_MODEL } from '@/lib/llm'
 import type { LLMResult } from '@/lib/llm'
 import { SUB_AGENT_LIMITS } from '../constants'
 import { recordModelSwitch } from '../model-switch'
@@ -163,15 +163,16 @@ export async function dispatchSubAgent(
   const result = (llmResult.content || '').trim()
   const evidence = extractEvidenceLines(result)
 
-  // Record model switch nếu LLM trả model khác primary (kimi-k3) — DR-C7
+  // Record model switch nếu LLM trả model khác primary — DR-C7
   // Non-blocking: nếu record fail, không ảnh hưởng SA result.
+  // (2026-10-16: so với AGENT_PRIMARY_MODEL thay vì hardcode 'kimi-k3' — tránh
+  // spam ModelSwitch record khi lõi chính đổi sang minimax-m3.)
   const modelUsed = llmResult.model || 'unknown'
-  // (Heuristic: nếu modelUsed không chứa 'kimi-k3' → có thể đã fallback.)
-  if (modelUsed && !modelUsed.includes('kimi-k3') && !modelUsed.includes('none')) {
+  if (modelUsed && modelUsed !== AGENT_PRIMARY_MODEL && !modelUsed.includes('none')) {
     try {
       await recordModelSwitch({
         agentId: 'SIVIL',
-        fromModel: 'moonshotai/kimi-k3',
+        fromModel: AGENT_PRIMARY_MODEL,
         toModel: modelUsed,
         trigger: `SA ${sa.id} LLM fallback (TB-01 §2 chain)`,
         nextCheck: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // +1h

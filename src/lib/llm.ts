@@ -248,35 +248,40 @@ function getRotatedModels(provider: string, models: string[]): string[] {
  */
 const NVIDIA_EXTRACTION_MODELS = [
   'nvidia/nemotron-3-ultra-550b-a55b',
+  // ⚠️ 2026-10-16: openai/gpt-oss-120b → HTTP 410 GONE trên cả 4 key (matrix
+  // test) — NIM đã EOL model này. Giữ trong mảng theo user directive 2026-09-05
+  // (extraction chỉ dùng nemotron + gpt-oss); fallback fail-fast 410 ~0.1s,
+  // sweep vẫn hoàn tất qua nemotron (4/4 key OK). Chờ user chỉ đạo thay lõi.
   'openai/gpt-oss-120b',
 ]
 
-/** NVIDIA NIM AGENT/CHAT models — KIMI-K3 CHÍNH + FALLBACK CHAIN (mới nhất):
- *  USER DIRECTIVE 2026-08-28: "thiết lập deepseek v4 pro (đã kiểm tra trên
- *  build.nvidia.com), deepseek v4 flash, minimax lần lượt làm fall back cho k3"
- *  — kết thúc chính sách Kimi-only "KHÔNG fallback model khác" (2026-08-31 cũ).
- *  Thứ tự cố định (không rotation): kimi-k3 chính, sau đó fallback tuần tự.
+/** NVIDIA NIM AGENT/CHAT models — MINIMAX-M3 CHÍNH (user directive 2026-10-16:
+ *  minimax-m3 tạm làm lõi chính — duy nhất khả dụng sau matrix test 4 lõi × 4
+ *  key 09:11 UTC: kimi/ds-pro/ds-flash đều HANG 0 bytes sau 60s). Thứ tự cố
+ *  định (không rotation): minimax-m3 chính, fallback tuần tự kimi-k3 → ds-pro
+ *  → ds-flash (directive gốc 2026-08-28 về fallback được bảo toàn).
  *
  *  Verified LIVE 2026-08-28 qua GET /v1/models (84 models):
  *    moonshotai/kimi-k3 ✓ | deepseek-ai/deepseek-v4-pro-0813 ✓ (BẢN MỚI —
  *    bản cũ không suffix đã 404 từ 2026-08-27) | deepseek-ai/deepseek-v4-flash-0731 ✓
  *    | minimaxai/minimax-m3 ✓
- *  Verified 2026-08-25: kimi-k3 ~16s | deepseek ~27s | minimax ~0.3s */
+ *  Verified 2026-08-25: kimi-k3 ~16s | deepseek ~27s | minimax ~0.3s
+ *  Matrix 2026-10-16: minimax-m3 4/4 key OK (6-44s) · 3 lõi kia HANG */
 const NVIDIA_AGENT_MODELS = [
+  'minimaxai/minimax-m3',
   'moonshotai/kimi-k3',
   'deepseek-ai/deepseek-v4-pro-0813',
   'deepseek-ai/deepseek-v4-flash-0731',
-  'minimaxai/minimax-m3',
 ]
 
 /**
- * NVIDIA_MODELS (updated 2026-08-28): = NVIDIA_AGENT_MODELS (4 lõi chat —
- * kimi-k3 chính + 3 lõi fallback theo user directive 2026-08-28).
+ * NVIDIA_MODELS (updated 2026-10-16): = NVIDIA_AGENT_MODELS (4 lõi chat —
+ * minimax-m3 chính + 3 lõi fallback kimi-k3/ds-pro/ds-flash).
  * nemotron-3-ultra-550b KHÔNG thuộc danh sách này — lõi extraction duy nhất.
  * Deprecated (404): kimi-k2.6 (đã quay lại catalog, không dùng), glm-5.1,
  * minimax-m2.7, qwen3.5-397b; deepseek-v4-pro bản cũ (bản mới: -0813)
  */
-// Alias of NVIDIA_AGENT_MODELS — same 3 chat cores, same failover order.
+// Alias of NVIDIA_AGENT_MODELS — same 4 chat cores, same failover order.
 // (Kept as a separate export because getNvidiaModels() + the pool log line
 // reference NVIDIA_MODELS.)
 const NVIDIA_MODELS = [...NVIDIA_AGENT_MODELS]
@@ -1805,7 +1810,7 @@ console.log(`[LLM] Provider pool: NVIDIA=${nvidiaPool.keyCount} keys (${NVIDIA_M
 // test dòng này chỉ là nhiễu cấu hình, không mang thông tin kết quả test.
 // App runtime bình thường (không set env) vẫn log đầy đủ như cũ.
 if (!process.env.LLM_QUIET_INIT) {
-  console.log(`[LLM] NVIDIA: agent/chat kimi-k3 (chính) + FALLBACK CHAIN [${NVIDIA_AGENT_MODELS.slice(1).join(' → ')}] (user directive 2026-08-28) + 2 extraction cores (nemotron-550b chính → gpt-oss-120b fallback — kimi-k3 KHÔNG dùng cho extraction, user directive 2026-09-05)`)
+  console.log(`[LLM] NVIDIA: agent/chat minimax-m3 (chính — TẠM THỜI, user directive 2026-10-16: duy nhất khả dụng) + FALLBACK CHAIN [${NVIDIA_AGENT_MODELS.slice(1).join(' → ')}] + 2 extraction cores (nemotron-550b chính → gpt-oss-120b fallback [410 GONE từ 2026-10-16] — lõi agent KHÔNG dùng cho extraction, user directive 2026-09-05)`)
 }
 
 // ==================== KIMI K3 MODEL POLICY + NVIDIA KEY ROTATION ====================
@@ -1840,28 +1845,24 @@ if (!process.env.LLM_QUIET_INIT) {
 
 /** Lõi CHÍNH cho MỌI agents, MỌI tác vụ.
  *
- *  ⚠️ FIX 2026-09-30 (sự cố NIM model-level HANG — user report "agents thường
- *  lỗi khi được Omega gọi hỗ trợ"): audit live xác minh moonshotai/kimi-k3 +
- *  deepseek-v4-pro-0813 + deepseek-v4-flash-0731 đều HANG (server nhận request
- *  rồi 0 bytes — 3/4 model đầu chuỗi chết → MỖI call cháy 3×150s trước khi
- *  chạm minimax-m3; các tầng timeout ngắn (TL bridge 15s, evaluator 90s) chết
- *  sạch; process trước đây còn 401 → rơi z-ai-sdk → tool-call JSON hỏng cú pháp
- *  → sub-agent error). minimax-m3 verified live HTTP 200 trong 1.8s.
- *  → Lõi chính mặc định đổi sang minimaxai/minimax-m3; kimi-k3 + deepseek-v4
- *  trở thành backup trong chuỗi fallback (NIM hồi thì tự dùng lại qua fallback
- *  hoặc user đổi AGENT_PRIMARY_MODEL về moonshotai/kimi-k3).
+ *  ⚠️ USER DIRECTIVE 2026-10-16 (TẠM THỜI): "minimax-m3 làm lõi AI chính cho
+ *  tất cả các Agents — thiết lập tạm thời, minimax-M3 hiện là lựa chọn duy
+ *  nhất". Ma trận test 4 lõi × 4 key (scripts-tmp/nim-matrix.ts, HTTP trực
+ *  tiếp NIM, 09:11 UTC): kimi-k3 0/4 key (HANG 60s 0 bytes) · ds-v4-pro 0/4
+ *  (HANG) · ds-v4-flash 0/4 (HANG) · minimax-m3 4/4 key OK (6-44s).
+ *  → Lõi chính = minimaxai/minimax-m3; kimi-k3 + deepseek-v4 xuống chuỗi
+ *  fallback (NIM hồi thì tự dùng lại qua fallback, hoặc user đổi
+ *  AGENT_PRIMARY_MODEL về moonshotai/kimi-k3 khi chỉ đạo).
  *  Override qua env: AGENT_PRIMARY_MODEL.
  *
- *  ⚠️ UPDATE 2026-08-31 (USER DIRECTIVE — khôi phục kimi-k3 làm lõi chính):
- *  user chỉ định lại moonshotai/kimi-k3 làm lõi chính cho TẤT CẢ agents, chuỗi
- *  fallback đúng thứ tự: deepseek-v4-pro → deepseek-v4-flash → minimax-m3
- *  (trùng directive 2026-08-28/2026-09-06). Nếu NIM kimi-k3 tái HANG →
- *  timeout-breaker + chuỗi fallback tự chuyển lõi kế (không chết cứng như
- *  giai đoạn Kimi-only); z-ai-sdk vẫn là fallback cuối. Đổi lại bất kỳ lúc
- *  nào qua env AGENT_PRIMARY_MODEL / AGENT_FALLBACK_CHAIN (không cần sửa code).
+ *  (Lịch sử) 2026-09-30: 3 lõi đầu NIM HANG — từng tạm đổi minimax làm chính.
+ *  (Lịch sử) 2026-08-31: user chỉ định kimi-k3 làm lõi chính + chain
+ *  ds-v4-pro → ds-v4-flash → minimax-m3 (directive 2026-08-28/2026-09-06).
+ *  Đổi lại bất kỳ lúc nào qua env AGENT_PRIMARY_MODEL / AGENT_FALLBACK_CHAIN
+ *  (không cần sửa code).
  */
 export const AGENT_PRIMARY_MODEL =
-  process.env.AGENT_PRIMARY_MODEL?.trim() || 'moonshotai/kimi-k3'
+  process.env.AGENT_PRIMARY_MODEL?.trim() || 'minimaxai/minimax-m3'
 
 /** @deprecated alias (2026-09-30) — KIMI_K3_MODEL giờ = AGENT_PRIMARY_MODEL
  *  (nhiều import dùng tên cũ; ngữ nghĩa "lõi chính" giữ nguyên). */
@@ -1869,14 +1870,13 @@ export const KIMI_K3_MODEL = AGENT_PRIMARY_MODEL
 
 /** Chuỗi fallback tuần tự cho lõi chính (failover MODEL-FIRST — từng model trên
  *  cùng key trước khi chuyển key).
- *  FIX 2026-09-30: minimax-m3 tạm làm lõi chính (healthy) khi 3 lõi kia HANG.
- *  UPDATE 2026-08-31 (USER DIRECTIVE): kimi-k3 lại là lõi chính → chuỗi fallback
- *  về đúng thứ tự directive 2026-08-28: deepseek-v4-pro (fallback #1) →
- *  deepseek-v4-flash (fallback #2) → minimax-m3 (fallback #3). Override qua env
- *  AGENT_FALLBACK_CHAIN (CSV — vd "deepseek-ai/deepseek-v4-pro-0813,minimaxai/minimax-m3").
- *  kimi-k3 fail → chuyển NGAY lõi fallback kế trên CÙNG key; chỉ khi cả chuỗi
- *  fail trên key đó mới chuyển key (chain restart từ lõi chính).
- *  deepseek-v4-pro-0813 = bản verified live 2026-08-28 qua GET /v1/models. */
+ *  USER DIRECTIVE 2026-10-16: minimax-m3 là lõi chính (duy nhất khả dụng) →
+ *  chuỗi fallback = kimi-k3 (fallback #1 — khi NIM hồi, kimi là lõi mạnh nhất
+ *  tự phục hồi trước) → deepseek-v4-pro-0813 (#2) → deepseek-v4-flash-0731 (#3).
+ *  Override qua env AGENT_FALLBACK_CHAIN (CSV — vd "moonshotai/kimi-k3,
+ *  deepseek-ai/deepseek-v4-pro-0813"). Lõi chính fail → chuyển NGAY lõi fallback
+ *  kế trên CÙNG key; chỉ khi cả chuỗi fail trên key đó mới chuyển key (chain
+ *  restart từ lõi chính). deepseek-v4-pro-0813 = bản verified live 2026-08-28. */
 export const AGENT_FALLBACK_CHAIN: string[] = (() => {
   const csv = process.env.AGENT_FALLBACK_CHAIN?.trim()
   if (csv) {
@@ -1884,9 +1884,9 @@ export const AGENT_FALLBACK_CHAIN: string[] = (() => {
     if (parsed.length > 0) return parsed
   }
   return [
+    'moonshotai/kimi-k3',
     'deepseek-ai/deepseek-v4-pro-0813',
     'deepseek-ai/deepseek-v4-flash-0731',
-    'minimaxai/minimax-m3',
   ]
 })()
 

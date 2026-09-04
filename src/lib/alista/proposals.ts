@@ -26,7 +26,8 @@ import { STEP_LABELS, baseKeyOf } from './types'
 // ==================== CONSTANTS ====================
 
 const ALISTA_AGENT_NAME = 'ALISTA'
-const ALISTA_BRAIN = { provider: 'nvidia', model: 'moonshotai/kimi-k3' }
+// 2026-10-16 (USER DIRECTIVE): minimax-m3 tạm làm lõi chính — duy nhất khả dụng
+const ALISTA_BRAIN = { provider: 'nvidia', model: 'minimaxai/minimax-m3' }
 // Task 20 (2026-09-03): 60s cũ giết chuỗi fallback trước khi tới lượt
 // minimax-m3 khi 3 lõi đầu hang NIM — nâng 600s ≥ worst-case chuỗi (~460s);
 // prober (llm.ts) trip breaker cho lõi hang nên call thường trở lại ~giây.

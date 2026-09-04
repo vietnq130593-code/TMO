@@ -41,10 +41,10 @@ export const NVIDIA_CORE_CONFIG = {
     headerBg: 'bg-amber-950/60',
     barColor: '#f59e0b',
     models: [
-      { key: 'moonshotai/kimi-k3', label: 'kimi-k3 (lõi chính)' },
-      { key: 'deepseek-ai/deepseek-v4-pro-0813', label: 'deepseek-v4-pro (fallback #1)' },
-      { key: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash (fallback #2)' },
-      { key: 'minimaxai/minimax-m3', label: 'minimax-m3 (fallback #3)' },
+      { key: 'minimaxai/minimax-m3', label: 'minimax-m3 (lõi chính — tạm thời)' },
+      { key: 'moonshotai/kimi-k3', label: 'kimi-k3 (fallback #1)' },
+      { key: 'deepseek-ai/deepseek-v4-pro-0813', label: 'deepseek-v4-pro (fallback #2)' },
+      { key: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash (fallback #3)' },
     ],
   },
 } as const

@@ -887,7 +887,7 @@ export async function pullFromSupabase(): Promise<FullSyncResult> {
               capable: a.capable || '',
               domain: a.domain || 'mixed',
               provider: a.provider || 'nvidia',
-              model: a.model || 'moonshotai/kimi-k3',
+              model: a.model || 'minimaxai/minimax-m3',
               team: a.team || null,
               position: a.position || null,
               avatar: a.avatar || '🤖',
