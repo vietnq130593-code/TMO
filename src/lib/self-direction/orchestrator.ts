@@ -1422,6 +1422,24 @@ export async function triggerOrchestration(
     if (!proposal) return false
     if (!['ready', 'approved', 'failed'].includes(proposal.status)) return false
 
+    // ━━ Lượt quan sát 5 (2026-09-04): TRIGGER = "sẵn sàng chạy" ━━
+    // Hiện tượng: deploy đề xuất failed → runOrchestration xếp hàng mutex
+    // serializeCodeWorkflow (chờ run code-workflow trước xong) → PM2 restart
+    // giết waiter TRƯỚC khi runOrchestrationInner kịp chạy → proposal kẹt
+    // 'failed' vĩnh viễn — sweep "Ready nhưng chưa chạy" (section 2 dưới)
+    // chỉ re-trigger status='ready' → run bị MẤT ÂM THẦM không hồi phục
+    // (quan sát: mirror_lesson_drift re-deploy 20:16:25UTC, restart 20:45:21UTC
+    // giết waiter — proposal về failed, không bao giờ chạy lại). Fix: flip
+    // status sang 'ready' NGAY khi trigger (trước khi xếp hàng mutex) → nếu
+    // process chết khi waiter đang chờ, sweep section 2 tự re-trigger sau
+    // restart. Check-and-add phía trên đã chống double-trigger in-process.
+    if (proposal.status !== 'ready') {
+      try {
+        await db.selfDirectionProposal.update({ where: { id: proposalId }, data: { status: 'ready' } })
+        console.log(`[SelfDirection] Proposal "${proposal.title}" ${proposal.status} → ready (trigger — sẽ tự chạy lại nếu process restart giữa chừng)`)
+      } catch { /* best-effort — không chặn trigger */ }
+    }
+
     // ━━━ AUTOMATION FAST-PATH (user request 2026-09-13) ━━━
     // Proposal category='automation' (agent đề xuất qua propose_automation,
     // Omega forward) là hành động CƠ KHÍ — tạo cron job / webhook / standing
@@ -2070,7 +2088,40 @@ export async function promoteDueProposals(): Promise<string[]> {
         where: { id: p.id },
         data: { status: 'failed', decisionReason: 'Triển khai bị gián đoạn (server restart?) — bấm "Thử lại" để Omega tiếp tục' },
       })
-      console.warn(`[SelfDirection] Proposal ${p.id} đánh dấu failed (stalled > 10 phút, không còn tín hiệu sống)`)
+      // Lượt quan sát 5: chốt LUÔN step in_progress mồ côi — bản cũ chỉ đánh
+      // dấu proposal failed mà bỏ step đang chạy → step kẹt "in_progress"
+      // vĩnh viễn trong proposal đã thất bại (UI hiển thị sai "đang tiến
+      // hành" mãi mãi — quan sát mirror_episode_drift sau restart 20:45UTC)
+      const killed = await db.proposalStep.updateMany({
+        where: { proposalId: p.id, status: 'in_progress' },
+        data: { status: 'failed', finishedAt: new Date() },
+      })
+      if (killed.count > 0) {
+        console.warn(`[SelfDirection] Proposal ${p.id} đánh dấu failed (stalled > 10 phút, không còn tín hiệu sống) + chốt ${killed.count} step mồ côi in_progress → failed`)
+      } else {
+        console.warn(`[SelfDirection] Proposal ${p.id} đánh dấu failed (stalled > 10 phút, không còn tín hiệu sống)`)
+      }
+    }
+
+    // 4) STEP MỒ CÔI "in_progress" trong proposal KHÔNG còn chạy (lượt 5).
+    //    Nguồn: (a) run bị restart giết khi waiter chờ mutex TRƯỚC khi inner
+    //    kịp deleteMany steps cũ (mirror_lesson_drift); (b) reset thủ công
+    //    proposal về failed mà step cũ chưa kịp chốt. Proposal không ở trạng
+    //    thái planning/executing thì chắc chắn KHÔNG có step nào đang chạy
+    //    hợp lệ → chốt thành failed để UI hết hiển thị "đang tiến hành".
+    const orphaned = await db.selfDirectionProposal.findMany({
+      where: { status: { notIn: ['planning', 'executing'] }, steps: { some: { status: 'in_progress' } } },
+      select: { id: true, title: true },
+    })
+    for (const p of orphaned) {
+      if (isOrchestrating(p.id)) continue // đang chạy/chờ mutex trong process này — inner sẽ tự reset steps
+      const r = await db.proposalStep.updateMany({
+        where: { proposalId: p.id, status: 'in_progress' },
+        data: { status: 'failed', finishedAt: new Date() },
+      })
+      if (r.count > 0) {
+        console.warn(`[SelfDirection] Chốt ${r.count} step mồ côi "in_progress" → failed (proposal "${p.title}" không còn chạy — gián đoạn bởi restart/reset)`)
+      }
     }
   } catch (err) {
     console.warn('[SelfDirection] promoteDueProposals lỗi (fail-open):', err instanceof Error ? err.message : String(err))
@@ -2097,7 +2148,16 @@ export async function autoReviewPendingIfDelegated(): Promise<number> {
     })
     const inProcess = activeOrchestrations.filter(p => runningOrchestrations.has(p.id))
     if (inProcess.length > 0) {
-      console.log(`[SelfDirection] Opus KHÔNG duyệt thêm — ${inProcess.length} đề xuất đang tiến hành orchestration (chờ xong mới duyệt cái kế)`)
+      // Lượt quan sát 5: log dedupe — hàm này chạy trên MỌI poll UI (~4s khi
+      // module Self-Direction đang mở) → spam "KHÔNG duyệt thêm" mỗi 4 giây
+      // suốt thời gian orchestration chạy (quan sát 01:49-01:51UTC: ~40 dòng
+      // trong 2.5 phút). Giới hạn 1 dòng/phút — ngữ nghĩa không đổi, chỉ bớt noise.
+      const g = globalThis as { __tmoSdDelegHoldLogAt?: number }
+      const nowMs = Date.now()
+      if (!g.__tmoSdDelegHoldLogAt || nowMs - g.__tmoSdDelegHoldLogAt > 60_000) {
+        g.__tmoSdDelegHoldLogAt = nowMs
+        console.log(`[SelfDirection] Opus KHÔNG duyệt thêm — ${inProcess.length} đề xuất đang tiến hành orchestration (chờ xong mới duyệt cái kế)`)
+      }
       return 0
     }
 

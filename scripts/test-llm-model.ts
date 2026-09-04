@@ -239,3 +239,10 @@ main().catch((err) => {
   console.error('[TEST-MODEL] Lỗi không mong đợi:', err)
   process.exit(1)
 })
+
+// Lượt quan sát 5 (2026-09-04): file này là global script (không top-level
+// import/export — dynamic import bên trong hàm) → \`main\` top-level dính
+// TS2393 "Duplicate function implementation" khi program tsc gộp global scope
+// với ambient declaration khác. \`export {}\` biến file thành module — vô hại
+// với `bun scripts/test-llm-model.ts` (chỉ đánh dấu module scope).
+export {}
