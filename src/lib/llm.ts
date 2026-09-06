@@ -42,11 +42,13 @@
  *
  * Token tracking: NVIDIA NIM (single provider)
  *
- * (2026-09-04) Z-AI SDK PROVIDER (Task 21 tạm thời) đã GỠ BỎ theo user
- * directive (gateway ZAI 429 kéo dài 8+ giờ) — quay lại kiến trúc NVIDIA
- * NIM-only: gỡ 4 điểm gọi provider + toàn bộ section ZAI trong file này,
- * gỡ dependency z-ai-web-dev-sdk khỏi package.json, xóa LLM_PROVIDER
- * khỏi .env.
+ * (2026-09-04) Z-AI SDK PROVIDER (Task 21 tạm thời) đã gỡ bỏ khi gateway
+ * ZAI 429 kéo dài 8+ giờ.
+ * (2026-09-06) DỰNG LẠI theo user directive ("Z-AI SDK đã hoạt động trở
+ * lại thì thiết lập tất cả các agents đều sử dụng Z-ai-sdk"): LLM_PROVIDER=zai
+ * → TOÀN BỘ lõi (agent + chat + utility + extraction) route qua
+ * z-ai-web-dev-sdk (GLM gateway). Xem section "Z-AI SDK PROVIDER — OPT-IN
+ * QUA ENV" gần cuối file. LLM_PROVIDER=nim / không set → NIM như cũ.
  */
 
 // ==================== TOKEN EVENT EMITTER (SSE REALTIME) ====================
@@ -3416,6 +3418,20 @@ export async function callLLMSlot(
   const temp = options?.temperature
   const maxTok = options?.maxTokens
 
+  // ===== Z-AI SDK PROVIDER (dựng lại 2026-09-06 — opt-in LLM_PROVIDER=zai) =====
+  // Slot key NVIDIA vô nghĩa với zai — extraction defaults giữ nguyên (0.1 /
+  // 16384) như chuỗi NIM phía dưới; document được gán key sẽ bỏ qua khi zai bật.
+  if (isZaiProviderEnabled()) {
+    const zai = await callZaiProvider(
+      prompt,
+      systemPrompt,
+      `extraction:${taskLabel}`,
+      { ...options, temperature: options?.temperature ?? 0.1, maxTokens: options?.maxTokens ?? 16384 },
+      'extraction',
+    )
+    if (zai) return zai
+  }
+
   // slotIndex -1 (hoặc invalid) = không có key riêng → round-robin mọi key hợp lệ.
   // (Trước đây caller phải fallback sang callLLM() khi slotIndex=-1 — callLLM()
   // giờ là kimi-k3 theo Kimi-only policy → VI PHẠM directive "extraction không
@@ -3514,6 +3530,19 @@ export async function callUtilityLLM(
 
   console.log(`[LLM] Utility core Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
 
+  // ===== Z-AI SDK PROVIDER (dựng lại 2026-09-06 — opt-in LLM_PROVIDER=zai) =====
+  // Utility defaults giữ nguyên như chuỗi NIM (0.1 / 4096) để hành vi nhất quán.
+  if (isZaiProviderEnabled()) {
+    const zai = await callZaiProvider(
+      prompt,
+      systemPrompt,
+      `utility:${taskLabel}`,
+      { ...options, temperature: options?.temperature ?? 0.1, maxTokens: options?.maxTokens ?? 4096 },
+      'utility',
+    )
+    if (zai) return zai
+  }
+
   const primaryModel = EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0]
   const fallbackModel =
     EXTRACTION_FALLBACK_MODEL_OVERRIDE === 'none' || EXTRACTION_FALLBACK_MODEL_OVERRIDE === ''
@@ -3566,14 +3595,292 @@ export async function callUtilityLLM(
 
 // ==================== LEGACY CALL (for chat, health, etc.) ====================
 
-// ━━ (2026-09-04) Z-AI SDK PROVIDER — ĐÃ GỠ BỎ theo user directive ━━
-// Task 21 (2026-09-03) từng route toàn bộ lõi qua z-ai-web-dev-sdk khi
-// LLM_PROVIDER=zai (NIM outage thời điểm đó). Gateway ZAI rate-limit 429
-// kéo dài 8+ giờ (2026-09-04, ping standalone xác nhận 429 fast-fail kể
-// cả khi app im lặng) → user directive quay lại NVIDIA NIM và gỡ toàn bộ
-// thiết lập ZAI: provider code (section này + 4 điểm gọi phía trên),
-// dependency z-ai-web-dev-sdk trong package.json, LLM_PROVIDER trong .env.
-// Các env ZAI_* (TIMEOUT / MIN_INTERVAL / 429_*) không còn hiệu lực.
+// ━━ Z-AI SDK PROVIDER — OPT-IN QUA ENV (Task 21 dựng lại 2026-09-06) ━━
+// USER DIRECTIVE (2026-09-06): "Z-AI SDK đã hoạt động trở lại thì thiết lập
+// tất cả các agents đều sử dụng Z-ai-sdk" — NIM flaky kéo dài (minimax-m3
+// chu kỳ ~7' khỏe / ~8' hang — Task 33/34 dừng 2 dry-run vì lõi hang),
+// trong khi z-ai gateway đã ổn định lại (Task 35 verify: 3 lượt OK
+// 222-931ms, glm-4-plus, không 429). Kiến trúc OPT-IN giữ nguyên như Task 21
+// (đã live-proven qua 5 lượt quan sát 2026-09-03/04):
+//   • LLM_PROVIDER=zai  → TOÀN BỘ lõi (agent + chat + utility + extraction)
+//     route qua z-ai-web-dev-sdk (GLM gateway sandbox — KHÔNG cần key NVIDIA;
+//     gateway tự chọn model, label trả về thường là glm-4-plus).
+//   • LLM_PROVIDER=nim / không set → NVIDIA NIM như cũ (default — máy local
+//     không có .z-ai-config không bao giờ chạm sdk).
+//   • SDK init fail (thiếu package / thiếu config) → tự fall về chuỗi NIM —
+//     init-fail được cache + cooldown 60s (không kẹt lặp import mỗi call).
+// Chi tiết kiến trúc:
+//   - KHÔNG truyền tools/tool_choice (sdk text-only như giai đoạn ecae418 —
+//     ENABLE_NATIVE_FC=dual tự fallback regex parse tool_call từ text).
+//   - Circuit breaker/prober/key-rotation NIM KHÔNG áp cho zai — pacing gate
+//     riêng + 429 circuit riêng (lượt quan sát 3-4), timeout riêng
+//     ZAI_TIMEOUT_MS (default 240s, env override).
+//   - Token tracking đầy đủ (per-provider 'zai-sdk' + per-agent attribution).
+//   - Lịch sử: gỡ 2026-09-04 (gateway 429 kéo dài 8+ giờ) → dựng lại
+//     2026-09-06 khi gateway đã lành (Task 35 verify 3 lượt ổn định).
+
+function isZaiProviderEnabled(): boolean {
+  const v = (process.env.LLM_PROVIDER || '').trim().toLowerCase()
+  return v === 'zai' || v === 'zai-sdk' || v === 'z-ai'
+}
+
+/** Minimal structural type cho instance z-ai-sdk (không phụ thuộc type chi tiết của package) */
+type ZaiSdkInstance = { chat: { completions: { create: (body: Record<string, unknown>) => Promise<unknown> } } }
+
+/** Cooldown retry sau init fail — không đốt lại import mỗi call */
+const ZAI_INIT_RETRY_COOLDOWN_MS = 60_000
+
+/** Singleton cache trên globalThis — Turbopack dev tách module instance theo
+ *  route-graph (bài học Task 20 #2) → state dùng globalThis để chia sẻ. */
+async function getZaiSdkInstance(): Promise<ZaiSdkInstance | null> {
+  const g = globalThis as unknown as {
+    __tmoZaiSdkInstance?: ZaiSdkInstance | null
+    __tmoZaiInitPromise?: Promise<ZaiSdkInstance | null> | null
+    __tmoZaiInitFailedAt?: number
+  }
+  if (g.__tmoZaiSdkInstance) return g.__tmoZaiSdkInstance
+  if (g.__tmoZaiInitPromise) return g.__tmoZaiInitPromise
+  if (g.__tmoZaiInitFailedAt && Date.now() - g.__tmoZaiInitFailedAt < ZAI_INIT_RETRY_COOLDOWN_MS) return null
+  g.__tmoZaiInitPromise = (async () => {
+    try {
+      const mod = (await import('z-ai-web-dev-sdk')) as unknown as { default: { create: () => Promise<unknown> } }
+      const inst = (await mod.default.create()) as ZaiSdkInstance
+      g.__tmoZaiSdkInstance = inst
+      console.log('[ZAI] z-ai-sdk khởi tạo OK — provider=zai ACTIVE (model do gateway chọn, thinking disabled)')
+      return inst
+    } catch (err) {
+      g.__tmoZaiInitFailedAt = Date.now()
+      console.warn('[ZAI] z-ai-sdk init THẤT BẠI (thiếu package hoặc .z-ai-config — thử lại sau 60s):', err instanceof Error ? err.message : String(err))
+      return null
+    } finally {
+      g.__tmoZaiInitPromise = null
+    }
+  })()
+  return g.__tmoZaiInitPromise
+}
+
+// ==================== ZAI RATE-LIMIT DEFENSE (lượt quan sát 3 — 2026-09-04) ====================
+// Hiện tượng: b03sdel5 fail 3 attempt CÙNG 1 GIÂY (18:08:22) — z-ai gateway
+// burst-limit 429 "Too many requests" khi 2 orchestration chạy song song
+// (~10 call/19s). Trước đây 429 bubble thẳng lên caller → đốt hết attempt
+// budget tức thời. Fix 2 lớp:
+//   (a) Pacing: min-interval giữa START 2 request liên tiếp (chống burst)
+//   (b) 429-aware retry: exponential backoff 5s→10s→20s (+jitter) — 429 là
+//       transient "try again later", chờ rồi retry là đúng ngữ nghĩa.
+function zaiRateLimits(): { minIntervalMs: number; max429Retries: number; backoffBaseMs: number } {
+  return {
+    // Lượt quan sát 4: 1200→2000ms — llm-mode steps bắn ~40 call/phút (2 call
+    // mỗi bước 3s) đẩy gateway vào cửa sổ 429 kéo dài; 2s/call (~30/phút) an
+    // toàn hơn mà không chậm đáng kể (LLM response ~1-5s mỗi call).
+    minIntervalMs: Math.max(0, parseInt(process.env.ZAI_MIN_INTERVAL_MS || '2000', 10)),
+    max429Retries: Math.max(0, parseInt(process.env.ZAI_429_MAX_RETRIES || '3', 10)),
+    backoffBaseMs: Math.max(500, parseInt(process.env.ZAI_429_BACKOFF_MS || '5000', 10)),
+  }
+}
+
+/** Pacing gate — serialize START của các request ZAI cách nhau ≥ minIntervalMs
+ *  (state trên globalThis — Turbopack tách module instance theo route-graph). */
+async function acquireZaiPacingSlot(taskLabel: string): Promise<void> {
+  const { minIntervalMs } = zaiRateLimits()
+  if (minIntervalMs === 0) return
+  const g = globalThis as unknown as { __tmoZaiLastReqAt?: number; __tmoZaiPaceChain?: Promise<void> }
+  const run = async () => {
+    const wait = (g.__tmoZaiLastReqAt ?? 0) + minIntervalMs - Date.now()
+    if (wait > 0) await new Promise(r => setTimeout(r, wait))
+    g.__tmoZaiLastReqAt = Date.now()
+  }
+  g.__tmoZaiPaceChain = (g.__tmoZaiPaceChain ?? Promise.resolve()).then(run, run)
+  await g.__tmoZaiPaceChain
+  void taskLabel
+}
+
+function isRateLimitError(msg: string): boolean {
+  return /status 429|too many requests|rate.?limit/i.test(msg)
+}
+
+// ── Lượt quan sát 4 (2026-09-04): 429 KÉO DÀI (không còn burst đơn lẻ) ──
+// Hiện tượng 20:06:25→20:10:00 (3.5 phút): gateway rate-limit bền vững sau
+// chuỗi chạy dày — mỗi call cháy hết 3 retry in-call (35s) vẫn 429. Nếu chỉ
+// để từng call tự cháy, orchestration đốt attempt budget mù (b03sdel5 run
+// trước may mắn vượt qua nhờ attempt-backoff). Circuit breaker chia sẻ:
+//   • Call cháy hết retry 429 → trip cooldown TOÀN CỤC 60s ×2^trips (cap 5')
+//   • Call sau vào lúc cooldown đang mở: chat/utility (user-facing) FAIL
+//     FAST với lý do rõ; agent/extraction (background orchestration) CHỜ
+//     đến khi đóng (cap 300s/lần chờ) rồi gọi lại — pipeline TẠM DỪNG sạch
+//     thay vì đốt attempts.
+//   • Call thành công → reset trips (traffic khỏe tự mở lại mạch).
+const ZAI_429_COOLDOWN_BASE_MS = 60_000
+const ZAI_429_COOLDOWN_MAX_MS = 300_000
+// Lượt quan sát 4 (chỉnh tiếp): cap chờ = cooldown max — background call chờ
+// TRỌN cửa sổ circuit rồi gọi (thay vì fail ở 120s rồi đốt vòng attempt + eval
+// mù). Step timeout 600s (SD_LLM_TIMEOUT_MS) chứa vừa 300s chờ + ~35s retry.
+const ZAI_429_WAIT_CAP_MS = 300_000
+
+type Zai429Global = { __tmoZai429Until?: number; __tmoZai429Trips?: number }
+
+/** Trip circuit sau khi 429 kéo dài — trả về cooldown áp dụng (ms). */
+function tripZai429Cooldown(): number {
+  const g = globalThis as unknown as Zai429Global
+  g.__tmoZai429Trips = (g.__tmoZai429Trips ?? 0) + 1
+  const cd = Math.min(ZAI_429_COOLDOWN_MAX_MS, ZAI_429_COOLDOWN_BASE_MS * 2 ** (g.__tmoZai429Trips - 1))
+  g.__tmoZai429Until = Date.now() + cd
+  return cd
+}
+
+/** Call thành công → traffic khỏe, xóa trips (cooldown hiện tại vẫn tôn trọng). */
+function resetZai429Trips(): void {
+  ;(globalThis as unknown as Zai429Global).__tmoZai429Trips = 0
+}
+
+/** Circuit 429 còn mở? Trả về số ms còn lại (0 = đã đóng). */
+function zai429RemainingMs(): number {
+  const g = globalThis as unknown as Zai429Global
+  return g.__tmoZai429Until ? Math.max(0, g.__tmoZai429Until - Date.now()) : 0
+}
+
+/** Trạng thái circuit ZAI cho health/diagnostics UI. */
+export function getZai429Status(): { active: boolean; remainingMs: number; trips: number } {
+  const g = globalThis as unknown as Zai429Global
+  const remaining = zai429RemainingMs()
+  return { active: remaining > 0, remainingMs: remaining, trips: g.__tmoZai429Trips ?? 0 }
+}
+
+/** Kiểm tra LLM_PROVIDER route qua z-ai (dùng cho health/diagnostics). */
+export function isZaiRoutingEnabled(): boolean {
+  return isZaiProviderEnabled()
+}
+
+/**
+ * Gọi z-ai-sdk khi LLM_PROVIDER=zai. Trả về:
+ *   - LLMResult THÀNH CÔNG (content + token tracking đầy đủ)
+ *   - LLMResult LỖI khi call thật sự fail (timeout/network/empty) — caller
+ *     thấy nguyên nhân NGAY, không đốt thêm ~460s chuỗi NIM đang outage
+ *   - null khi sdk KHÔNG khả dụng (chưa cài / thiếu config) → caller fall
+ *     về chuỗi NIM mặc định (bảo vệ máy local không set LLM_PROVIDER)
+ *
+ * Lượt quan sát 3: 429 → retry backoff (5s→10s→20s + jitter, tối đa
+ * ZAI_429_MAX_RETRIES=3 lần); mỗi request vào qua pacing gate
+ * (ZAI_MIN_INTERVAL_MS=2000 mặc định). abortCheck được kiểm lại sau mỗi
+ * lần chờ — user bấm Dừng không bị kẹt trong vòng retry.
+ */
+async function callZaiProvider(
+  prompt: string,
+  systemPrompt: string | undefined,
+  taskLabel: string,
+  options: LLMCallOptions | undefined,
+  callerKind: 'agent' | 'chat' | 'utility' | 'extraction',
+): Promise<LLMResult | null> {
+  const { max429Retries, backoffBaseMs } = zaiRateLimits()
+  const sdk = await getZaiSdkInstance()
+  if (!sdk) return null
+
+  const timeoutMs = parseInt(process.env.ZAI_TIMEOUT_MS || '240000', 10)
+  const messages = [
+    ...(systemPrompt ? [{ role: 'system', content: sanitizeLoneSurrogates(systemPrompt) }] : []),
+    { role: 'user', content: sanitizeLoneSurrogates(prompt) },
+  ]
+
+  for (let attempt429 = 0; ; attempt429++) {
+    // Người dùng bấm Dừng → không đốt call (kiểm lại sau mỗi backoff)
+    if (options?.abortCheck && options.abortCheck()) {
+      return { content: '', provider: 'zai-sdk', model: 'zai', error: `Task "${taskLabel}" aborted by user` }
+    }
+
+    // ── Circuit 429 đang mở (call khác vừa trip): tôn trọng cửa sổ nghỉ ──
+    const remain = zai429RemainingMs()
+    if (remain > 0) {
+      if (callerKind === 'chat' || callerKind === 'utility') {
+        return { content: '', provider: 'zai-sdk', model: 'zai', error: `ZAI rate-limited (429 circuit còn ${Math.ceil(remain / 1000)}s) — thử lại sau` }
+      }
+      // background (agent/extraction): chờ cho cửa sổ đóng (cap 300s/lần chờ)
+      const wait = Math.min(remain, ZAI_429_WAIT_CAP_MS)
+      console.warn(`[ZAI] ${callerKind}:"${taskLabel}" chờ 429 circuit đóng (còn ${Math.ceil(remain / 1000)}s, chờ tối đa ${Math.ceil(wait / 1000)}s)`)
+      await new Promise(r => setTimeout(r, wait))
+      if (zai429RemainingMs() > 0) {
+        // cooldown dài hơn cap chờ → trả lỗi rõ lý do, caller tự retry theo nhịp riêng
+        return { content: '', provider: 'zai-sdk', model: 'zai', error: `ZAI rate-limited (429 circuit còn ${Math.ceil(zai429RemainingMs() / 1000)}s sau khi chờ)` }
+      }
+    }
+
+    await acquireZaiPacingSlot(taskLabel)
+
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const res = (await Promise.race([
+        sdk.chat.completions.create({
+          messages,
+          thinking: { type: 'disabled' }, // ưu tiên tốc độ; gateway tự chọn model
+          ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+          ...(options?.maxTokens ? { max_tokens: options.maxTokens } : {}),
+        }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`timeout ${timeoutMs / 1000}s (ZAI_TIMEOUT_MS)`)), timeoutMs)
+        }),
+      ])) as {
+        choices?: Array<{
+          message?: { content?: string; tool_calls?: LLMToolCall[] }
+          finish_reason?: string | null
+        }>
+        model?: string
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+      }
+      if (timer) clearTimeout(timer)
+
+      const content = res?.choices?.[0]?.message?.content ?? ''
+      const nativeToolCalls = res?.choices?.[0]?.message?.tool_calls
+      const model = res?.model || 'zai-glm'
+
+      if (!content && !(nativeToolCalls && nativeToolCalls.length > 0)) {
+        return { content: '', provider: 'zai-sdk', model, error: `ZAI empty response (${callerKind}:"${taskLabel}")` }
+      }
+
+      // Token tracking — mirror attemptNvidiaOnce (per-provider + per-agent)
+      const totalTokens = res?.usage?.total_tokens ?? ((res?.usage?.prompt_tokens ?? 0) + (res?.usage?.completion_tokens ?? 0))
+      if (totalTokens > 0) addTokensUsed(totalTokens, 'zai-sdk', undefined, model)
+      if (totalTokens > 0 && options?.agentId && options.agentName) {
+        addTokensUsedByAgent(
+          totalTokens,
+          res?.usage?.prompt_tokens ?? 0,
+          res?.usage?.completion_tokens ?? 0,
+          'zai-sdk',
+          model,
+          options.agentId,
+          options.agentName,
+        )
+      }
+
+      console.log(`[ZAI] ${callerKind}:"${taskLabel}" OK — ${content.length} chars, model ${model}${totalTokens ? `, ${totalTokens} tokens` : ''}`)
+      resetZai429Trips()
+      return {
+        content,
+        provider: 'zai-sdk',
+        model,
+        tokensUsed: totalTokens || undefined,
+        tool_calls: nativeToolCalls && nativeToolCalls.length > 0 ? nativeToolCalls : undefined,
+        finish_reason: res?.choices?.[0]?.finish_reason ?? null,
+      }
+    } catch (err) {
+      if (timer) clearTimeout(timer)
+      const msg = err instanceof Error ? err.message : String(err)
+      // ── Lượt quan sát 3: 429 là transient — backoff + retry thay vì bubble
+      if (isRateLimitError(msg) && attempt429 < max429Retries) {
+        const waitMs = backoffBaseMs * 2 ** attempt429 + Math.floor(Math.random() * 700)
+        console.warn(`[ZAI] ${callerKind}:"${taskLabel}" 429 rate-limit (lần ${attempt429 + 1}/${max429Retries}) — retry sau ${Math.round(waitMs / 100) / 10}s`)
+        await new Promise(r => setTimeout(r, waitMs))
+        continue
+      }
+      // ── Lượt quan sát 4: 429 KÉO DÀI (hết retry in-call) → trip circuit toàn
+      // cục — các call sau nghỉ cửa sổ cooldown thay vì tự cháy lặp lại.
+      if (isRateLimitError(msg)) {
+        const cd = tripZai429Cooldown()
+        console.warn(`[ZAI] ${callerKind}:"${taskLabel}" 429 kéo dài sau ${max429Retries} retry — trip circuit cooldown ${Math.round(cd / 1000)}s (background callers sẽ chờ)`)
+        return { content: '', provider: 'zai-sdk', model: 'zai', error: `ZAI rate-limited (429 kéo dài — circuit cooldown ${Math.round(cd / 1000)}s)` }
+      }
+      console.warn(`[ZAI] ${callerKind}:"${taskLabel}" THẤT BẠI:`, msg)
+      return { content: '', provider: 'zai-sdk', model: 'zai', error: `ZAI (z-ai-sdk) call failed: ${msg}` }
+    }
+  } // for attempt429
+}
 
 
 /**
@@ -3593,6 +3900,14 @@ export async function callLLM(
   const aId = options?.agentId
   const aName = options?.agentName
   console.log(`[LLM] (NVIDIA) Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
+
+  // ===== Z-AI SDK PROVIDER (dựng lại 2026-09-06 — opt-in LLM_PROVIDER=zai) =====
+  // Toàn bộ general chat/health/eval route qua z-ai-sdk khi bật. SDK không
+  // khả dụng → null → rơi về chuỗi NIM phía dưới (máy local an toàn).
+  if (isZaiProviderEnabled()) {
+    const zai = await callZaiProvider(prompt, systemPrompt, taskLabel, options, 'chat')
+    if (zai) return zai
+  }
 
   // Phase 4 SMOLAB Prop 11' — explicit model override: try ONLY the requested
   // model. Used by the eval harness (judges must not silently fall back to a
@@ -3730,6 +4045,14 @@ export async function callLLMForAgent(
   options?: LLMCallOptions
 ): Promise<LLMResult> {
   const { provider, model } = agentConfig
+
+  // ===== Z-AI SDK PROVIDER (dựng lại 2026-09-06 — opt-in LLM_PROVIDER=zai) =====
+  // Agent calls (goal-loop, research team, code-team, smolab...) route qua
+  // z-ai-sdk khi bật — model NIM cấu hình bị bỏ qua (gateway tự chọn GLM).
+  if (isZaiProviderEnabled()) {
+    const zai = await callZaiProvider(prompt, systemPrompt, `agent:${model}`, options, 'agent')
+    if (zai) return zai
+  }
 
   // ===== KIMI-K3 CHÍNH + FALLBACK CHAIN MODEL-FIRST (directive 2026-09-06) =====
   // "deepseek v4 pro, deepseek v4 flash, minimax lần lượt làm fall back cho k3" —

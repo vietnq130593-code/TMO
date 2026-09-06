@@ -13,7 +13,7 @@ import { checkNeo4jHealth } from '@/lib/neo4j'
 import { checkR2Health } from '@/lib/r2-storage'
 import { checkSupabaseHealth } from '@/lib/supabase-sync'
 import { db } from '@/lib/db'
-import { getNvidiaModels, getProviderDiagnostics, getDailyQuotaStatus, getModelBlockBreakers } from '@/lib/llm'
+import { getNvidiaModels, getProviderDiagnostics, getDailyQuotaStatus, getModelBlockBreakers, isZaiRoutingEnabled, getZai429Status } from '@/lib/llm'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,14 +32,31 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
 }
 
 // LLM health check (lightweight — just checks env var availability, no API calls)
-function checkLLMHealthSync(): Record<string, { available: boolean; model: string; error?: string }> {
+function checkLLMHealthSync(): Record<string, { available: boolean; model: string; error?: string; active?: boolean; note?: string }> {
   const hasNvidiaKeys = !!(process.env.NVIDIA_API_KEY_1 || process.env.NVIDIA_API_KEY_2 || process.env.NVIDIA_API_KEY_3 || process.env.NVIDIA_API_KEY_4)
-  const result: Record<string, { available: boolean; model: string; error?: string }> = {}
+  const result: Record<string, { available: boolean; model: string; error?: string; active?: boolean; note?: string }> = {}
+
+  // ━━ Z-AI SDK provider (dựng lại 2026-09-06 — LLM_PROVIDER=zai) ━━
+  // Khi bật: TOÀN BỘ lõi (agent + chat + utility + extraction) route qua
+  // z-ai-web-dev-sdk (GLM gateway). NIM giữ làm fallback (sdk init fail →
+  // tự fall về chuỗi NIM). Circuit 429 ZAI cũng được expose để theo dõi.
+  const zaiActive = isZaiRoutingEnabled()
+  result['zai-sdk'] = {
+    available: zaiActive,
+    model: 'glm-4-plus (gateway chọn)',
+    active: zaiActive,
+    error: zaiActive ? undefined : 'LLM_PROVIDER != zai — không bật (NIM-only)',
+    note: zaiActive
+      ? `ĐANG ĐIỀU HÀNH toàn bộ lõi (agent+chat+utility+extraction) · 429-circuit: ${getZai429Status().active ? `MỞ (còn ${Math.ceil(getZai429Status().remainingMs / 1000)}s, trips=${getZai429Status().trips})` : 'đóng (không rate-limit)'}`
+      : undefined,
+  }
 
   result.nvidia = {
     available: hasNvidiaKeys,
     model: getNvidiaModels()[0] || 'minimaxai/minimax-m3',
+    active: !zaiActive,
     error: !hasNvidiaKeys ? 'No NVIDIA API keys configured' : undefined,
+    note: zaiActive && hasNvidiaKeys ? 'fallback (sdk init fail → NIM chain)' : undefined,
   }
 
   return result

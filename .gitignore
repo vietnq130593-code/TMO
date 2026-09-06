@@ -87,6 +87,8 @@ worklog.md
 !/scripts/pm2-start.sh
 # NGOẠI LỆ: script test model NIM (user-facing — bun scripts/test-llm-model.ts)
 !/scripts/test-llm-model.ts
+# NGOẠI LỆ: script test agent/chat/utility qua Z-AI SDK (bun scripts/test-agent-zai.ts)
+!/scripts/test-agent-zai.ts
 
 # Tool results (dev artifacts)
 /tool-results/

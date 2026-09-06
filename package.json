@@ -88,7 +88,8 @@
     "tailwind-merge": "^3.3.1",
     "tailwindcss-animate": "^1.0.7",
     "three": "^0.185.1",
-    "vaul": "^1.1.2"
+    "vaul": "^1.1.2",
+    "z-ai-web-dev-sdk": "0.0.18"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
