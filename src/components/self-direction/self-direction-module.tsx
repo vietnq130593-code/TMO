@@ -514,6 +514,10 @@ export default function SelfDirectionModule() {
   const [scanning, setScanning] = useState(false)
   const [delegating, setDelegating] = useState(false)
   const [busy, setBusy] = useState<Record<string, boolean>>({})
+  // Lượt quan sát 1 (2026-09-06): dialog xác nhận Triển khai — mặc định THẬT
+  // (commit+push theo directive "Triển khai ngay"), dry-run là tùy chọn.
+  const [deployConfirm, setDeployConfirm] = useState<SdProposal | null>(null)
+  const [deployDryRun, setDeployDryRun] = useState(false)
   const busyRef = useRef<Record<string, boolean>>({})
 
   // ----- Flash "Đã lưu ✓" per-proposal (show → fade → remove) -----
@@ -702,13 +706,14 @@ export default function SelfDirectionModule() {
   )
 
   // ==================== Deploy ngay / Thử lại ====================
-  // FIX (2026-09-03, Task 24 — user directive "từ giờ không push code", giai
-  // đoạn thử nghiệm): UI deploy mặc định DRY-RUN — orchestration + tools +
-  // pipeline kiểm định chạy THẬT nhưng KHÔNG commit/push workspace (workspace
-  // đang trỏ remote về repo TMO app — push thật sẽ bẩn repo app trong lúc
-  // test). Muốn push thật: gọi API trực tiếp POST /deploy body {"dryRun": false}.
+  // LƯỢT QUAN SÁT 1 (2026-09-06) — FIX dry-run hardcode: UI cũ luôn gửi
+  // {dryRun: true} (directive cũ 2026-09-03 "từ giờ không push code" — giai
+  // đoạn thử nghiệm). Directive mới 2026-09-06: "yêu cầu Triển khai ngay" —
+  // giờ nút Triển khai mở dialog xác nhận: mặc định THẬT (Omega pipeline chạy
+  // + commit/push workspace lên GitHub), dry-run chỉ khi chủ động chọn
+  // (chạy thật mọi bước nhưng KHÔNG commit/push).
   const deployProposal = useCallback(
-    async (p: SdProposal) => {
+    async (p: SdProposal, dryRun: boolean) => {
       const key = `deploy:${p.id}`
       if (busyRef.current[key]) return
       markBusy(key)
@@ -716,7 +721,7 @@ export default function SelfDirectionModule() {
         const res = await fetch(`/api/self-direction/proposals/${p.id}/deploy`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dryRun: true }),
+          body: JSON.stringify({ dryRun }),
         })
         if (!res.ok) throw new Error(await readApiError(res))
         const data = (await res.json().catch(() => ({}))) as { ok?: boolean; proposal?: SdProposal }
@@ -725,8 +730,10 @@ export default function SelfDirectionModule() {
           setProposals((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))
         }
         toast({
-          title: 'Đã kích hoạt triển khai (dry-run)',
-          description: 'Omega bắt đầu triển khai — chạy thật nhưng KHÔNG commit/push workspace',
+          title: dryRun ? 'Đã kích hoạt triển khai (dry-run)' : 'Đã kích hoạt triển khai THẬT',
+          description: dryRun
+            ? 'Omega chạy pipeline nhưng KHÔNG commit/push workspace'
+            : 'Omega chạy pipeline + commit & push code lên GitHub khi mọi kiểm định ĐẠT',
         })
         void fetchList(true)
       } catch (err) {
@@ -1423,16 +1430,16 @@ export default function SelfDirectionModule() {
                                 variant="ghost"
                                 size="sm"
                                 className="h-7 px-2.5 text-[11px] text-amber-300 hover:text-amber-200 hover:bg-amber-950/30"
-                                onClick={() => void deployProposal(p)}
+                                onClick={() => setDeployConfirm(p)}
                                 disabled={deploying}
-                                title="Chạy orchestration + tools thật, KHÔNG commit/push workspace"
+                                title="Xác nhận triển khai (THẬT hoặc dry-run)"
                               >
                                 {deploying ? (
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                 ) : (
                                   <Play className="h-3.5 w-3.5" />
                                 )}
-                                Triển khai ngay (dry-run)
+                                Triển khai ngay
                               </Button>
                             </div>
                           )}
@@ -1443,16 +1450,16 @@ export default function SelfDirectionModule() {
                               <Button
                                 size="sm"
                                 className="h-7 px-2.5 text-[11px] bg-amber-600 hover:bg-amber-500 text-stone-950 font-semibold"
-                                onClick={() => void deployProposal(p)}
+                                onClick={() => setDeployConfirm(p)}
                                 disabled={deploying}
-                                title="Chạy orchestration + tools thật, KHÔNG commit/push workspace"
+                                title="Xác nhận triển khai (THẬT hoặc dry-run)"
                               >
                                 {deploying ? (
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                 ) : (
                                   <Play className="h-3.5 w-3.5" />
                                 )}
-                                Triển khai ngay (dry-run)
+                                Triển khai ngay
                               </Button>
                             </div>
                           )}
@@ -1467,16 +1474,16 @@ export default function SelfDirectionModule() {
                                 variant="outline"
                                 size="sm"
                                 className="h-7 px-2.5 text-[11px] border-red-500/40 text-red-300 hover:bg-red-950/30"
-                                onClick={() => void deployProposal(p)}
+                                onClick={() => setDeployConfirm(p)}
                                 disabled={deploying}
-                                title="Chạy lại orchestration (dry-run — không commit/push workspace)"
+                                title="Xác nhận chạy lại orchestration (THẬT hoặc dry-run)"
                               >
                                 {deploying ? (
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                 ) : (
                                   <RotateCcw className="h-3.5 w-3.5" />
                                 )}
-                                Thử lại (dry-run)
+                                Thử lại
                               </Button>
                             </div>
                           )}
@@ -1527,6 +1534,85 @@ export default function SelfDirectionModule() {
           </div>
         </CardContent>
       </Card>
+
+      {/* ==================== DEPLOY CONFIRM DIALOG (lượt 1 — 2026-09-06) ==================== */}
+      {/* Directive "Triển khai ngay": mặc định THẬT (commit+push khi Omega kiểm
+          định ĐẠT). Dry-run là tùy chọn chủ động (thử nghiệm không push). */}
+      <Dialog
+        open={deployConfirm !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeployConfirm(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md bg-slate-950 border-amber-400/35 text-stone-200">
+          <DialogHeader>
+            <DialogTitle className="text-stone-100">Xác nhận triển khai</DialogTitle>
+            <DialogDescription className="text-xs text-stone-400 break-words">
+              {deployConfirm?.title}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label className="flex items-start gap-2.5 cursor-pointer rounded-md border border-amber-500/25 bg-amber-950/20 p-3">
+              <input
+                type="radio"
+                name="deploy-mode"
+                checked={!deployDryRun}
+                onChange={() => setDeployDryRun(false)}
+                className="mt-0.5 accent-amber-500"
+              />
+              <span className="text-xs">
+                <span className="text-amber-200 font-semibold">Triển khai THẬT (mặc định)</span>
+                <br />
+                <span className="text-stone-400">
+                  Agents chạy pipeline đủ 9 bước; Omega kiểm định (lint/type/test) — ĐẠT thì commit &amp; push
+                  code lên GitHub, sau đó pull về production.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2.5 cursor-pointer rounded-md border border-stone-700/60 bg-stone-900/40 p-3">
+              <input
+                type="radio"
+                name="deploy-mode"
+                checked={deployDryRun}
+                onChange={() => setDeployDryRun(true)}
+                className="mt-0.5 accent-stone-400"
+              />
+              <span className="text-xs">
+                <span className="text-stone-200 font-semibold">Dry-run (thử nghiệm)</span>
+                <br />
+                <span className="text-stone-500">
+                  Chạy thật mọi bước + tools nhưng KHÔNG commit/push — dùng để quan sát/kiểm thử.
+                </span>
+              </span>
+            </label>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-stone-400"
+              onClick={() => setDeployConfirm(null)}
+            >
+              Hủy
+            </Button>
+            <Button
+              size="sm"
+              className={deployDryRun
+                ? 'bg-stone-700 hover:bg-stone-600 text-stone-100'
+                : 'bg-amber-600 hover:bg-amber-500 text-stone-950 font-semibold'}
+              onClick={() => {
+                const target = deployConfirm
+                if (!target) return
+                setDeployConfirm(null)
+                void deployProposal(target, deployDryRun)
+              }}
+            >
+              <Play className="h-3.5 w-3.5" />
+              {deployDryRun ? 'Chạy dry-run' : 'Triển khai THẬT'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ==================== DETAIL DIALOG (dùng chung) ==================== */}
       <Dialog

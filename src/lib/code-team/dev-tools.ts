@@ -546,7 +546,38 @@ export async function fileList(args: {
     return result
   }
 
-  const entries = await walk(resolvedPath, 1)
+  // Lượt quan sát 1 (2026-09-06): graceful ENOENT/ENOTDIR — agent hay list
+  // đường dẫn chưa tồn tại (logs/ không có trong fresh clone) hoặc list trỏ
+  // vào FILE thay vì dir (ecosystem.config.cjs) → trước đây throw error
+  // ([ToolExecutor] Error executing file_list: ENOENT...) cháy cả tool call.
+  // Giờ trả kết quả THÀNH CÔNG với danh sách rỗng + note rõ lý do — agent
+  // đọc note và tự điều hướng (tạo dir / list thư mục cha) thay vì nhận lỗi.
+  let entries: Array<{ name: string; type: string; size: number; mtime: string; symlink?: boolean }>
+  try {
+    entries = await walk(resolvedPath, 1)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code || ''
+    const msg = err instanceof Error ? err.message : String(err)
+    if (code === 'ENOENT') {
+      return {
+        success: true,
+        path: target,
+        entries: [],
+        total: 0,
+        note: `Thư mục "${target}" KHÔNG tồn tại trong workspace. Dùng file_list thư mục cha để xem cấu trúc thật, hoặc file_write để tạo đường dẫn này nếu bước công việc cần.`,
+      }
+    }
+    if (code === 'ENOTDIR') {
+      return {
+        success: true,
+        path: target,
+        entries: [],
+        total: 0,
+        note: `"${target}" là FILE chứ không phải thư mục — dùng file_read để đọc nó, hoặc file_list thư mục cha.`,
+      }
+    }
+    throw new Error(`file_list "${target}" lỗi: ${msg}`)
+  }
   return { success: true, path: target, entries, total: entries.length }
 }
 

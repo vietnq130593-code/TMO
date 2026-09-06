@@ -1122,6 +1122,7 @@ tool_call: file_write({"path": "<đường dẫn file THẬT trong workspace c�
 
 Quy tắc:
 - KHẢO SÁT GỌN: tối đa ~5 lượt file_read/file_list/git_status ĐẦU bước — sau đó PHẢI bắt đầu tạo/sửa file. Ưu tiên file_write (overwrite lần đầu + append các lần sau) — file_edit chỉ dùng khi đã file_read và copy old_str NGUYÊN VĂN (bất khớp whitespace = fail).
+- ⚠️ KHÔNG ĐOÁN ĐƯỜNG DẪN (lượt quan sát 1 — 10/18 call fail vì đoán path không tồn tại): trước khi file_read một path CHƯA XÁC NHẬN, hãy grep (tên symbol/file) hoặc file_list thư mục cha TRƯỚC. Chỉ file_read khi path đã thấy trong kết quả list/grep/git_status, hoặc khi chấp nhận miss. Đặc biệt: package.json và mọi JSON đã có cấu trúc — KHÔNG append text vào sau ký tự "}" cuối (JSON vỡ); muốn thêm script/field thì file_read toàn file rồi file_write lại NGUYÊN file JSON hợp lệ.
 - Đọc file trước khi sửa (file_read). Tạo file mới/file lớn: file_write chia phần (~200-400 dòng/lần, lần đầu mode "overwrite", các lần sau "append").
 - KHÔNG commit/push/pull (bị chặn ở bước này) — pipeline kiểm định ở bước CUỐI sẽ commit + push mọi thay đổi.
 - Giới hạn ${SD_CODE_STEP_MAX_TOOL_CALLS} tool call cho bước này — làm phần việc CHÍNH, gọn.
