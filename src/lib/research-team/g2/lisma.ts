@@ -23,9 +23,10 @@
  *  - KHÔNG crash pipeline — caller (NEMESIS P5) handle escalate.
  */
 
-import { callLLM } from '@/lib/llm'
+import { callLLMForAgent } from '@/lib/llm'
 import type { LLMResult } from '@/lib/llm'
 import { AGENT_ID, RESEARCH_ROSTER, G2_MAX_FIX_ROUNDS } from '../constants'
+import { resolveResearchBrain } from '../agents'
 import type {
   EvidenceItem,
   MissionTypeValue,
@@ -143,7 +144,9 @@ export async function runLismaReview(
 
   let llm: LLMResult
   try {
-    llm = await callLLM(userPrompt, LISMA_SYSTEM_PROMPT, `lisma-review-${missionType.toLowerCase()}`, {
+    // Task 4 — route LISMA qua Zen khi DB provider='zen' (fail-open → NIM).
+    const lismaBrain = await resolveResearchBrain('LISMA')
+    llm = await callLLMForAgent(userPrompt, lismaBrain, LISMA_SYSTEM_PROMPT, {
       temperature: 0.2,
       maxTokens: 3000,
       agentId: AGENT_ID.LISMA,

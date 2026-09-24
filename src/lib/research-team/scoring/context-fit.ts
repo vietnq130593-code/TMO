@@ -23,7 +23,8 @@
  * Pure checkContextFit + formatWorklogLine KHÔNG gọi LLM/DB — testable.
  */
 
-import { callLLM } from '@/lib/llm'
+import { callLLMForAgent } from '@/lib/llm'
+import { resolveResearchBrain } from '../agents'
 
 // ============================================================
 // §1. TYPES
@@ -301,7 +302,14 @@ export async function checkContextFitWithLlm(
 
   let result
   try {
-    result = await callLLM(prompt, CONTEXT_FIT_SYSTEM_PROMPT, 'context-fit-match', { temperature: 0.2, maxTokens: 600 })
+    // Task 4 — judge → NEMESIS brain (TL chấm điểm default — fail-open → NIM).
+    const judgeBrain = await resolveResearchBrain('NEMESIS')
+    result = await callLLMForAgent(prompt, judgeBrain, CONTEXT_FIT_SYSTEM_PROMPT, {
+      temperature: 0.2,
+      maxTokens: 600,
+      agentId: 'NEMESIS',
+      agentName: 'NEMESIS (Context Fit Judge)',
+    })
   } catch (err) {
     console.warn(
       '[ContextFit] callLLM threw (non-blocking — fail-open → TOURNAMENT):',

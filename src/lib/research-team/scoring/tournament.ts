@@ -22,8 +22,9 @@
  */
 
 import { db } from '@/lib/db'
-import { callLLM } from '@/lib/llm'
+import { callLLMForAgent } from '@/lib/llm'
 import { encodeJson, COUNCIL_ROUNDS } from '../types'
+import { resolveResearchBrain } from '../agents'
 import {
   scoreRubricA,
   scoreRubricAWithLlm,
@@ -148,7 +149,14 @@ async function generateKillCriteria(problemStmt: string, hypothesis: string): Pr
   ].join('\n')
   const prompt = `PROBLEM: ${problemStmt}\n\nHYPOTHESIS: ${hypothesis}\n\nSinh killCriteria:`
   try {
-    const result = await callLLM(prompt, systemPrompt, 'tournament-killcriteria', { temperature: 0.3, maxTokens: 200 })
+    // Task 4 — route NEMESIS qua Zen khi DB provider='zen' (fail-open → NIM).
+    const nemesisBrain = await resolveResearchBrain('NEMESIS')
+    const result = await callLLMForAgent(prompt, nemesisBrain, systemPrompt, {
+      temperature: 0.3,
+      maxTokens: 200,
+      agentId: 'NEMESIS',
+      agentName: 'NEMESIS (KillCriteria)',
+    })
     if (result.error || !result.content || result.content.trim().length === 0) return null
     const out = result.content.trim().slice(0, 500)
     return out
@@ -189,7 +197,14 @@ async function generateOptions(
     'Sinh 3 option specs (A/B/C):',
   ].join('\n')
   try {
-    const result = await callLLM(prompt, systemPrompt, 'tournament-options', { temperature: 0.4, maxTokens: 800 })
+    // Task 4 — route HAN qua Zen khi DB provider='zen' (fail-open → NIM).
+    const hanBrain = await resolveResearchBrain('HAN')
+    const result = await callLLMForAgent(prompt, hanBrain, systemPrompt, {
+      temperature: 0.4,
+      maxTokens: 800,
+      agentId: 'HAN',
+      agentName: 'HAN (Architecture Proposer)',
+    })
     if (result.error || !result.content || result.content.trim().length === 0) return []
     // parse JSON array
     const content = result.content.trim()
@@ -384,7 +399,14 @@ export async function runCouncil5(params: {
 
   let result
   try {
-    result = await callLLM(prompt, COUNCIL_5_SYSTEM_PROMPT, 'council-5-solution', { temperature: 0.2, maxTokens: 800 })
+    // Task 4 — council ⑤ NEMESIS chủ trì → NEMESIS brain (fail-open → NIM).
+    const nemesisBrain = await resolveResearchBrain('NEMESIS')
+    result = await callLLMForAgent(prompt, nemesisBrain, COUNCIL_5_SYSTEM_PROMPT, {
+      temperature: 0.2,
+      maxTokens: 800,
+      agentId: 'NEMESIS',
+      agentName: 'NEMESIS (Council ⑤)',
+    })
   } catch (err) {
     console.warn(
       '[Council5] callLLM threw (non-blocking — fail-open DROP):',

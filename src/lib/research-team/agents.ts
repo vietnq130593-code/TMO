@@ -609,3 +609,46 @@ export function getResearchAgentByName(
 export function getResearchPositionsInOrder(): string[] {
   return ['TL', 'G1', 'G2', 'G3']
 }
+
+// ===== RUNTIME BRAIN RESOLVER (Task 4 — Zen routing) =====
+// Mirror pattern `resolveOmegaBrain` (omega-orchestrator.ts:121-137): fetch DB
+// AgentProfile by name → return { provider, model }. Fallback NIM minimax-m3
+// khi DB lookup fail (placeholder key, schema drift, agent disabled...).
+//
+// 23+ callsites trong src/lib/research-team/ (king/g1/g2/g3/scoring/classify)
+// đã refactor từ callLLM() sang callLLMForAgent(prompt, brain, ...) — giờ 5
+// research agents (NEMESIS/SIVIL/BELI/LISMA/HAN) route qua đúng provider DB
+// (zen) thay vì legacy NIM global pool. Fail-open: DB error → fallback NIM
+// minimax-m3 (kimi-k3 chain safety net trong callLLMForAgent).
+
+/** Fallback brain khi DB lookup fail — mirror OMEGA_FALLBACK pattern. */
+export const RESEARCH_FALLBACK_BRAIN = {
+  provider: 'nvidia',
+  model: 'minimaxai/minimax-m3',
+} as const
+
+/**
+ * Resolve Research Team agent brain từ DB AgentProfile.
+ *
+ * @param name AgentProfile.name — 'NEMESIS' | 'SIVIL' | 'BELI' | 'LISMA' | 'HAN'
+ * @returns { provider, model } — dùng cho callLLMForAgent(prompt, brain, ...)
+ *
+ * Fail-open: DB error / agent not found / disabled / missing fields → fallback
+ * NIM minimax-m3. KHÔNG throw — caller dùng brain trực tiếp.
+ */
+export async function resolveResearchBrain(
+  name: string,
+): Promise<{ provider: string; model: string }> {
+  try {
+    const agent = await db.agentProfile.findFirst({
+      where: { name, enabled: true },
+      select: { provider: true, model: true },
+    })
+    if (agent && agent.provider && agent.model) {
+      return { provider: agent.provider, model: agent.model }
+    }
+  } catch {
+    /* fail-open — return fallback NIM below */
+  }
+  return { provider: RESEARCH_FALLBACK_BRAIN.provider, model: RESEARCH_FALLBACK_BRAIN.model }
+}

@@ -20,9 +20,10 @@
  * callUtilityLLM (extraction cores nemotron/gpt-oss) CHỈ dùng cho trích xuất tài liệu — KHÔNG cho agent logic.
  */
 
-import { callLLM, AGENT_PRIMARY_MODEL } from '@/lib/llm'
+import { callLLMForAgent, AGENT_PRIMARY_MODEL } from '@/lib/llm'
 import type { LLMResult } from '@/lib/llm'
 import { SUB_AGENT_LIMITS } from '../constants'
+import { resolveResearchBrain } from '../agents'
 import { recordModelSwitch } from '../model-switch'
 
 // ============================================================
@@ -130,7 +131,10 @@ export async function dispatchSubAgent(
 
   let llmResult: LLMResult
   try {
-    llmResult = await callLLM(prompt, systemPrompt, `g1-sa-${sa.id}`, {
+    // Task 4 — route SIVIL qua Zen khi DB provider='zen' (fail-open → NIM).
+    // SA dispatch dùng SIVIL brain (sub-agent orchestrator).
+    const sivilBrain = await resolveResearchBrain('SIVIL')
+    llmResult = await callLLMForAgent(prompt, sivilBrain, systemPrompt, {
       temperature: 0.2,
       maxTokens: 2000, // SA output nhỏ — claim + evidence ngắn
       agentId: 'SIVIL',

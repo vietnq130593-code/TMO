@@ -50,6 +50,31 @@ export const NVIDIA_CORE_CONFIG = {
 } as const
 
 
+/** OpenCode Zen model configuration — free coding models (2026-09-24 user directive)
+ *  2 free cores: nemotron-3-ultra-free (TL/Omega/Opus orchestration) +
+ *  muse-spark-1.3-contributor-free (G1-G3/ALISTA implementation).
+ *  Zen check runs BEFORE model-first policy; Zen fail → NIM kimi-k3 chain. */
+export const ZEN_CORE_CONFIG = {
+  nemotron: {
+    label: 'Nemotron 3 Ultra Free',
+    icon: '🧠',
+    color: 'text-emerald-400',
+    headerBg: 'bg-emerald-950/60',
+    barColor: '#10b981',
+    model: 'nemotron-3-ultra-free',
+    role: 'TL / Omega / Opus (orchestration + reasoning)',
+  },
+  muse: {
+    label: 'Muse Spark 1.3 Free',
+    icon: '⚡',
+    color: 'text-fuchsia-400',
+    headerBg: 'bg-fuchsia-950/60',
+    barColor: '#d946ef',
+    model: 'muse-spark-1.3-contributor-free',
+    role: 'G1-G3 / ALISTA (coding + implementation)',
+  },
+} as const
+
 /** NVIDIA key color map */
 export const KEY_COLORS = ['#22c55e', '#3b82f6', '#a855f7', '#f97316']
 
@@ -100,8 +125,9 @@ export function TokenUsageSection({ health }: { health: HealthResponse | null })
   // Determine which data to show (selected date or today)
   const displayData = selectedDate ? selectedDateUsage : todayUsage
 
-  // Get NVIDIA models data from display data
+  // Get models data from display data (per-provider)
   const nvidiaModels = displayData?.models?.['nvidia'] || {}
+  const zenModels = displayData?.models?.['zen'] || {}
 
   // Calculate per-group totals
   const extractionTotal = NVIDIA_CORE_CONFIG.extraction.models.reduce(
@@ -110,6 +136,9 @@ export function TokenUsageSection({ health }: { health: HealthResponse | null })
   const agentTotal = NVIDIA_CORE_CONFIG.agent.models.reduce(
     (sum, m) => sum + (nvidiaModels[m.key] || 0), 0
   )
+  const zenNemotronTokens = zenModels['nemotron-3-ultra-free'] || 0
+  const zenMuseTokens = zenModels['muse-spark-1.3-contributor-free'] || 0
+  const zenTotal = zenNemotronTokens + zenMuseTokens
 
   // Get NVIDIA key data
   const nvidiaKeys = displayData?.slots?.['nvidia'] || {}
@@ -251,6 +280,52 @@ export function TokenUsageSection({ health }: { health: HealthResponse | null })
               </div>
             </div>
           )}
+
+          {/* OpenCode Zen provider — 2 free models (nemotron + muse-spark) */}
+          <div className="nc-panel nc-sm nc-border-lime overflow-hidden">
+            <div className="px-3 py-2.5 bg-emerald-950/60 border-b border-emerald-400/35">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm">🌿</span>
+                  <span className="text-xs font-bold text-emerald-400">OpenCode Zen</span>
+                  <span className="text-[9px] text-stone-500">(2 free models — 13 agents)</span>
+                </div>
+                <span className="text-[10px] font-bold tabular-nums text-stone-300">{zenTotal > 0 ? formatNumber(zenTotal) : '—'}</span>
+              </div>
+            </div>
+            <div className="divide-y divide-stone-700/50">
+              {Object.values(ZEN_CORE_CONFIG).map((cfg) => {
+                const tokens = cfg.model === 'nemotron-3-ultra-free' ? zenNemotronTokens : zenMuseTokens
+                const pct = zenTotal > 0 ? (tokens / zenTotal) * 100 : 0
+                return (
+                  <div key={cfg.model} className="px-3 py-2.5 hover:bg-slate-950/60 transition-colors">
+                    <div className="flex items-center justify-between gap-1.5">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-sm flex-shrink-0">{cfg.icon}</span>
+                        <div className="min-w-0">
+                          <p className="text-[10px] text-stone-300 truncate font-medium" title={cfg.model}>{cfg.label}</p>
+                          <p className="text-[8px] text-stone-500 truncate" title={cfg.role}>{cfg.role}</p>
+                        </div>
+                      </div>
+                      <span className={`text-[10px] font-semibold tabular-nums flex-shrink-0 ${tokens > 0 ? 'text-stone-200' : 'text-stone-500'}`}>
+                        {tokens > 0 ? formatNumber(tokens) : '—'}
+                      </span>
+                    </div>
+                    {tokens > 0 && (
+                      <div className="mt-1.5 w-full h-1.5 rounded-full bg-white/5 overflow-hidden">
+                        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.max(pct, 3)}%`, backgroundColor: cfg.barColor }} />
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            <div className="px-3 py-1.5 bg-slate-950/40 border-t border-stone-700/40">
+              <p className="text-[8px] text-stone-500">
+                Zen fail → fallback NIM kimi-k3 chain (safety net). Free models = limited-time, fair-use soft limits.
+              </p>
+            </div>
+          </div>
 
           {/* Token theo nhóm lõi — 2 cột: Trích xuất + Agent/Chat */}
           <div className="grid grid-cols-2 gap-3">

@@ -21,9 +21,10 @@
  *    KHÔNG tự sinh spec thay thế.
  */
 
-import { callLLM } from '@/lib/llm'
+import { callLLMForAgent } from '@/lib/llm'
 import type { LLMResult } from '@/lib/llm'
 import { RESEARCH_ROSTER, AGENT_ID } from '../constants'
+import { resolveResearchBrain } from '../agents'
 import type { WorklogEntry } from '../types'
 
 // ============================================================
@@ -169,7 +170,9 @@ export async function runBeliSpec(
 
   let llm: LLMResult
   try {
-    llm = await callLLM(user, system, `g1-beli-spec-${missionType}`, {
+    // Task 4 — route BELI qua Zen khi DB provider='zen' (fail-open → NIM).
+    const beliBrain = await resolveResearchBrain('BELI')
+    llm = await callLLMForAgent(user, beliBrain, system, {
       temperature: 0.3, // first-pass accuracy — thấp temperature cho deterministic
       maxTokens: 4000,
       agentId: 'BELI',

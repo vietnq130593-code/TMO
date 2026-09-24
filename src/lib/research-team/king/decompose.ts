@@ -15,9 +15,10 @@
  */
 
 import { db } from '@/lib/db'
-import { callLLM } from '@/lib/llm'
+import { callLLMForAgent } from '@/lib/llm'
 import type { LLMResult } from '@/lib/llm'
 import { RESEARCH_ROSTER, AGENT_ID } from '../constants'
+import { resolveResearchBrain } from '../agents'
 import { encodeJson, type SuccessCriterion, type WorklogEntry, type ResearchTask } from '../types'
 import { getMission, transitionMission, isValidTransition } from '../mission-store'
 import {
@@ -121,7 +122,9 @@ export async function decomposeMission(missionId: string): Promise<DecomposeResu
 
   let llm: LLMResult
   try {
-    llm = await callLLM(userPrompt, KING_DECOMPOSE_SYSTEM_PROMPT, 'king-decompose', {
+    // Task 4 — route NEMESIS qua Zen khi DB provider='zen' (fail-open → NIM).
+    const nemesisBrain = await resolveResearchBrain('NEMESIS')
+    llm = await callLLMForAgent(userPrompt, nemesisBrain, KING_DECOMPOSE_SYSTEM_PROMPT, {
       temperature: 0.2,
       maxTokens: 3000,
       agentId: AGENT_ID.NEMESIS,

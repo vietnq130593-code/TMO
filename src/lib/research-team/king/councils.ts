@@ -19,9 +19,10 @@
  */
 
 import { db } from '@/lib/db'
-import { callLLM } from '@/lib/llm'
+import { callLLMForAgent } from '@/lib/llm'
 import type { LLMResult } from '@/lib/llm'
 import { RESEARCH_ROSTER, AGENT_ID } from '../constants'
+import { resolveResearchBrain } from '../agents'
 import { COUNCIL_ROUNDS } from '../types'
 import { runCouncil } from '../g1/engine'
 import { runCouncil5 as runTournamentCouncil5 } from '../scoring/tournament'
@@ -126,7 +127,9 @@ export async function runCouncil3(
 
   let llm: LLMResult
   try {
-    llm = await callLLM(prompt, COUNCIL_3_SYSTEM_PROMPT, 'council-3-escalation', {
+    // Task 4 — route NEMESIS qua Zen khi DB provider='zen' (fail-open → NIM).
+    const nemesisBrain = await resolveResearchBrain('NEMESIS')
+    llm = await callLLMForAgent(prompt, nemesisBrain, COUNCIL_3_SYSTEM_PROMPT, {
       temperature: 0.2,
       maxTokens: 1500,
       agentId: AGENT_ID.NEMESIS,
@@ -203,7 +206,9 @@ export async function runCouncil4(
 
   let llm: LLMResult
   try {
-    llm = await callLLM(prompt, COUNCIL_4_SYSTEM_PROMPT, 'council-4-final', {
+    // Task 4 — route NEMESIS qua Zen khi DB provider='zen' (fail-open → NIM).
+    const nemesisBrain = await resolveResearchBrain('NEMESIS')
+    llm = await callLLMForAgent(prompt, nemesisBrain, COUNCIL_4_SYSTEM_PROMPT, {
       temperature: 0.2,
       maxTokens: 3000,
       agentId: AGENT_ID.NEMESIS,

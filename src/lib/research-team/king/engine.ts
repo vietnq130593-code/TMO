@@ -20,9 +20,10 @@
  */
 
 import { db } from '@/lib/db'
-import { callLLM } from '@/lib/llm'
+import { callLLMForAgent } from '@/lib/llm'
 import type { LLMResult } from '@/lib/llm'
 import { RESEARCH_ROSTER, AGENT_ID } from '../constants'
+import { resolveResearchBrain } from '../agents'
 import type {
   DecodedResearchMission,
   DecisionLogEntry,
@@ -101,10 +102,12 @@ export async function kingReceive(missionId: string): Promise<KingReceiveResult>
 
   let analysis = ''
   try {
-    const llm = await callLLM(
+    // Task 4 — route NEMESIS qua Zen khi DB provider='zen' (fail-open → NIM).
+    const nemesisBrain = await resolveResearchBrain('NEMESIS')
+    const llm = await callLLMForAgent(
       `MISSION: ${mission.code}\nREQUEST:\n${mission.request}`,
+      nemesisBrain,
       KING_RECEIVE_SYSTEM_PROMPT,
-      'king-receive',
       {
         temperature: 0.2,
         maxTokens: 800,
@@ -508,7 +511,9 @@ export async function kingFinalize(missionId: string): Promise<KingFinalizeResul
       .join('\n')
       .slice(0, 4000)
 
-    const llm = await callLLM(
+    // Task 4 — route NEMESIS qua Zen khi DB provider='zen' (fail-open → NIM).
+    const nemesisBrain = await resolveResearchBrain('NEMESIS')
+    const llm = await callLLMForAgent(
       [
         `MISSION: ${mission.code} (tier=${tier}, type=${missionType})`,
         '',
@@ -520,8 +525,8 @@ export async function kingFinalize(missionId: string): Promise<KingFinalizeResul
         '',
         'Tổng hợp Final Report theo system prompt. M2 mode: kèm Proposal items + Verification Plan (TB-11 §7).',
       ].join('\n'),
+      nemesisBrain,
       KING_FINALIZE_SYSTEM_PROMPT,
-      'king-finalize',
       {
         temperature: 0.2,
         maxTokens: 3000,
@@ -1013,7 +1018,9 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
 
   // LISMA call dùng chung cho review + RWV rounds + POC (LLM-backed)
   const lismaCall = async (prompt: string): Promise<string> => {
-    const r = await callLLM(prompt, RWV_ROUND_SYSTEM_PROMPT, `rwv-round-${taskId.slice(0, 12)}`, {
+    // Task 4 — route LISMA qua Zen khi DB provider='zen' (fail-open → NIM).
+    const lismaBrain = await resolveResearchBrain('LISMA')
+    const r = await callLLMForAgent(prompt, lismaBrain, RWV_ROUND_SYSTEM_PROMPT, {
       temperature: 0.2,
       maxTokens: 2500,
       agentId: AGENT_ID.LISMA,
@@ -1458,7 +1465,9 @@ async function llmGenerateHypotheses(
     '',
     'Sinh ≥3 hypothesis (mỗi hypothesis kèm ≥1 evidence):',
   ].join('\n')
-  const llm = await callLLM(prompt, HYPOTHESIS_GEN_SYSTEM_PROMPT, 'tournament-hypotheses', {
+  // Task 4 — route SIVIL qua Zen khi DB provider='zen' (fail-open → NIM).
+  const sivilBrain = await resolveResearchBrain('SIVIL')
+  const llm = await callLLMForAgent(prompt, sivilBrain, HYPOTHESIS_GEN_SYSTEM_PROMPT, {
     temperature: 0.5,
     maxTokens: 1200,
     agentId: AGENT_ID.SIVIL,
@@ -1506,7 +1515,9 @@ async function llmRunKillTest(
     '',
     'Chạy kill-test — evidence quan sát được thỏa killCriteria không?',
   ].join('\n')
-  const llm = await callLLM(prompt, KILL_TEST_SYSTEM_PROMPT, 'tournament-killtest', {
+  // Task 4 — route LISMA qua Zen khi DB provider='zen' (fail-open → NIM).
+  const lismaBrain = await resolveResearchBrain('LISMA')
+  const llm = await callLLMForAgent(prompt, lismaBrain, KILL_TEST_SYSTEM_PROMPT, {
     temperature: 0.2,
     maxTokens: 400,
     agentId: AGENT_ID.LISMA,
@@ -1555,9 +1566,21 @@ async function llmScoreHypothesisBlind(
     'Chấm D4 reproducibility (0-5):',
   ].join('\n')
   // 2 SA blind scorers (TB-14 §1.3 AC5 — KHÔNG do SIVIL tự chấm)
+  // Task 4 — blind judge → NEMESIS brain (TL chấm điểm default — fail-open → NIM).
+  const blindBrain = await resolveResearchBrain('NEMESIS')
   const [r1, r2] = await Promise.all([
-    callLLM(prompt, BLIND_SCORE_SYSTEM_PROMPT, 'tournament-blind-sa1', { temperature: 0.2, maxTokens: 200 }),
-    callLLM(prompt, BLIND_SCORE_SYSTEM_PROMPT, 'tournament-blind-sa2', { temperature: 0.2, maxTokens: 200 }),
+    callLLMForAgent(prompt, blindBrain, BLIND_SCORE_SYSTEM_PROMPT, {
+      temperature: 0.2,
+      maxTokens: 200,
+      agentId: AGENT_ID.NEMESIS,
+      agentName: 'NEMESIS (Blind SA1)',
+    }),
+    callLLMForAgent(prompt, blindBrain, BLIND_SCORE_SYSTEM_PROMPT, {
+      temperature: 0.2,
+      maxTokens: 200,
+      agentId: AGENT_ID.NEMESIS,
+      agentName: 'NEMESIS (Blind SA2)',
+    }),
   ])
   const parseScore = (r: LLMResult): number => {
     if (r.error || !r.content) return 0

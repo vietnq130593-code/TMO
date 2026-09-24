@@ -29,9 +29,10 @@
  *  - KHÔNG crash pipeline — caller (NEMESIS P5) handle escalate.
  */
 
-import { callLLM } from '@/lib/llm'
+import { callLLMForAgent } from '@/lib/llm'
 import type { LLMResult } from '@/lib/llm'
 import { AGENT_ID, RESEARCH_ROSTER } from '../constants'
+import { resolveResearchBrain } from '../agents'
 import type {
   MissionTypeValue,
   WorklogEntry,
@@ -167,7 +168,9 @@ export async function runHanOptimize(
 
   let llm: LLMResult
   try {
-    llm = await callLLM(user, system, `han-optimize-${missionType.toLowerCase()}`, {
+    // Task 4 — route HAN qua Zen khi DB provider='zen' (fail-open → NIM).
+    const hanBrain = await resolveResearchBrain('HAN')
+    llm = await callLLMForAgent(user, hanBrain, system, {
       temperature: 0.2,
       maxTokens: 4000,
       agentId: AGENT_ID.HAN,

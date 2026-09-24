@@ -21,9 +21,10 @@
  *  - SA dispatch đã handle fail-open trong sub-agents.ts (status FAILED).
  */
 
-import { callLLM } from '@/lib/llm'
+import { callLLMForAgent } from '@/lib/llm'
 import type { LLMResult } from '@/lib/llm'
 import { RESEARCH_ROSTER, AGENT_ID } from '../constants'
+import { resolveResearchBrain } from '../agents'
 import type { WorklogEntry } from '../types'
 import { buildArtifactMap, type ArtifactMap } from './artifact-map'
 import {
@@ -232,7 +233,9 @@ async function callSivilDecompose(
 
   let llm: LLMResult
   try {
-    llm = await callLLM(userPrompt, SIVIL_DECOMPOSE_SYSTEM_PROMPT, 'g1-sivil-decompose', {
+    // Task 4 — route SIVIL qua Zen khi DB provider='zen' (fail-open → NIM).
+    const sivilBrain = await resolveResearchBrain('SIVIL')
+    llm = await callLLMForAgent(userPrompt, sivilBrain, SIVIL_DECOMPOSE_SYSTEM_PROMPT, {
       temperature: 0.3,
       maxTokens: 1500,
       agentId: 'SIVIL',
@@ -289,7 +292,9 @@ async function callSivilSynthesize(
 
   let llm: LLMResult
   try {
-    llm = await callLLM(userPrompt, SIVIL_SYNTHESIZE_SYSTEM_PROMPT, 'g1-sivil-synthesize', {
+    // Task 4 — route SIVIL qua Zen khi DB provider='zen' (fail-open → NIM).
+    const sivilBrain = await resolveResearchBrain('SIVIL')
+    llm = await callLLMForAgent(userPrompt, sivilBrain, SIVIL_SYNTHESIZE_SYSTEM_PROMPT, {
       temperature: 0.3,
       maxTokens: 3000,
       agentId: 'SIVIL',

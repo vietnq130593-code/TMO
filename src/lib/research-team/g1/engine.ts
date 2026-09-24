@@ -22,9 +22,10 @@
  */
 
 import { db } from '@/lib/db'
-import { callLLM } from '@/lib/llm'
+import { callLLMForAgent } from '@/lib/llm'
 import type { LLMResult } from '@/lib/llm'
 import { RESEARCH_ROSTER, AGENT_ID } from '../constants'
+import { resolveResearchBrain } from '../agents'
 import { encodeJson, type WorklogEntry, type SuccessCriterion } from '../types'
 import {
   runSivilExplore,
@@ -153,7 +154,9 @@ export async function runCouncil(input: CouncilInput): Promise<CouncilResult> {
 
   let llm: LLMResult
   try {
-    llm = await callLLM(userPrompt, COUNCIL_SYSTEM_PROMPT, `g1-council-${round}`, {
+    // Task 4 — route NEMESIS qua Zen khi DB provider='zen' (fail-open → NIM).
+    const nemesisBrain = await resolveResearchBrain('NEMESIS')
+    llm = await callLLMForAgent(userPrompt, nemesisBrain, COUNCIL_SYSTEM_PROMPT, {
       temperature: 0.2,
       maxTokens: 2000,
       agentId: 'NEMESIS',

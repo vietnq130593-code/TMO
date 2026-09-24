@@ -27,7 +27,8 @@
  * Pure scoreRubricA KHÔNG gọi LLM/DB — testable standalone.
  */
 
-import { callLLM } from '@/lib/llm'
+import { callLLMForAgent } from '@/lib/llm'
+import { resolveResearchBrain } from '../agents'
 import type { ScoreAResult } from '../types'
 
 // ============================================================
@@ -328,7 +329,14 @@ export async function scoreRubricAWithLlm(
 
   let result
   try {
-    result = await callLLM(prompt, RUBRIC_A_SYSTEM_PROMPT, 'rubric-a-score', { temperature: 0.2, maxTokens: 800 })
+    // Task 4 — judge → NEMESIS brain (TL chấm điểm default — fail-open → NIM).
+    const judgeBrain = await resolveResearchBrain('NEMESIS')
+    result = await callLLMForAgent(prompt, judgeBrain, RUBRIC_A_SYSTEM_PROMPT, {
+      temperature: 0.2,
+      maxTokens: 800,
+      agentId: 'NEMESIS',
+      agentName: 'NEMESIS (Rubric A Judge)',
+    })
   } catch (err) {
     console.warn(
       '[RubricA] callLLM threw (non-blocking — fail-open):',

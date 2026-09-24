@@ -19,8 +19,9 @@
  * KHÔNG throw. Caller (API route) đảm bảo mission vẫn persist với status 'CLASSIFY'.
  */
 
-import { callLLM } from '@/lib/llm'
+import { callLLMForAgent } from '@/lib/llm'
 import type { LLMResult } from '@/lib/llm'
+import { resolveResearchBrain } from './agents'
 import {
   scoreComplexity,
   applyFloorRules,
@@ -162,7 +163,10 @@ export async function classifyMission(
 
   let llmResult: LLMResult
   try {
-    llmResult = await callLLM(userPrompt, CLASSIFY_SYSTEM_PROMPT, 'research-classify', {
+    // Task 4 — route qua Zen provider khi AgentProfile NEMESIS có provider='zen'.
+    // resolveResearchBrain fail-open → fallback NIM minimax-m3.
+    const brain = await resolveResearchBrain('NEMESIS')
+    llmResult = await callLLMForAgent(userPrompt, brain, CLASSIFY_SYSTEM_PROMPT, {
       temperature: 0.1,
       maxTokens: 1500,
       agentId: 'NEMESIS',

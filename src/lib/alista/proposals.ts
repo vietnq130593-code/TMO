@@ -26,8 +26,27 @@ import { STEP_LABELS, baseKeyOf } from './types'
 // ==================== CONSTANTS ====================
 
 const ALISTA_AGENT_NAME = 'ALISTA'
-// 2026-10-16 (USER DIRECTIVE): minimax-m3 tạm làm lõi chính — duy nhất khả dụng
-const ALISTA_BRAIN = { provider: 'nvidia', model: 'minimaxai/minimax-m3' }
+// 2026-09-24 (USER DIRECTIVE): ALISTA → zen/muse-spark-1.3-contributor-free.
+// Fail-open: DB error → fallback NIM minimax-m3 (giá trị cũ).
+const ALISTA_FALLBACK_BRAIN = { provider: 'nvidia', model: 'minimaxai/minimax-m3' }
+
+/**
+ * Resolve ALISTA brain from DB AgentProfile (mirror resolveOmegaBrain pattern).
+ * Reads provider/model từ DB (set = zen/muse-spark-1.3-contributor-free).
+ * Fail-open: DB error → fallback NIM minimax-m3.
+ */
+async function resolveAlistaBrain(): Promise<{ provider: string; model: string }> {
+  try {
+    const alista = await db.agentProfile.findFirst({
+      where: { name: ALISTA_AGENT_NAME, enabled: true },
+      select: { provider: true, model: true },
+    })
+    if (alista && alista.provider && alista.model) {
+      return { provider: alista.provider, model: alista.model }
+    }
+  } catch { /* fail-open */ }
+  return ALISTA_FALLBACK_BRAIN
+}
 // Task 20 (2026-09-03): 60s cũ giết chuỗi fallback trước khi tới lượt
 // minimax-m3 khi 3 lõi đầu hang NIM — nâng 600s ≥ worst-case chuỗi (~460s);
 // prober (llm.ts) trip breaker cho lõi hang nên call thường trở lại ~giây.
@@ -146,10 +165,11 @@ async function synthesizeWithLLM(
   let raw: string | null = null
   let source: 'kimi' | 'template' = 'template'
 
-  // Lần 1: callLLMForAgent (kimi-k3 enforced + fallback chain)
+  // Lần 1: callLLMForAgent (Zen muse-spark free → fallback NIM kimi-k3 chain)
   try {
+    const brain = await resolveAlistaBrain()
     const result = await withTimeout(
-      callLLMForAgent(userPrompt, ALISTA_BRAIN, systemPrompt, {
+      callLLMForAgent(userPrompt, brain, systemPrompt, {
         agentName: ALISTA_AGENT_NAME,
         agentId: 'alista',
         temperature: 0.3,

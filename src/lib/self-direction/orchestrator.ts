@@ -108,6 +108,20 @@ export interface SdStepEvaluation {
 // ==================== CONSTANTS ====================
 
 const OMEGA_FALLBACK_BRAIN = { provider: 'nvidia', model: 'minimaxai/minimax-m3' } // 2026-10-16: lõi chính tạm thời
+// 2026-09-24 (USER DIRECTIVE): Self-Direction review/eval/report path dùng Opus
+// (CTO) brain từ DB → zen/nemotron-3-ultra-free. Fail-open: DB error → NIM fallback.
+async function resolveOpusBrainForSelfDirection(): Promise<{ provider: string; model: string }> {
+  try {
+    const opus = await db.agentProfile.findFirst({
+      where: { name: 'Opus', enabled: true },
+      select: { provider: true, model: true },
+    })
+    if (opus && opus.provider && opus.model) {
+      return { provider: opus.provider, model: opus.model }
+    }
+  } catch { /* fail-open */ }
+  return OMEGA_FALLBACK_BRAIN
+}
 // Task 20 (2026-09-03): 120s cũ giết chuỗi fallback TRƯỚC khi tới lượt
 // minimax-m3 khi 3 lõi đầu hang phía NIM (mỗi lõi đốt 150s timeout — cần
 // ~460s mới tới minimax). 600s ≥ worst-case chuỗi; LLM Prober (llm.ts) đã tự
@@ -244,19 +258,20 @@ async function callBrain(params: {
 }): Promise<string> {
   const { prompt, systemPrompt, temperature = 0.3, maxTokens = 1200, label } = params
   try {
-    // callLLMForAgent: NVIDIA chain (kimi-k3 → fallback chain model-first,
-    // xoay 4 key) — z-ai-sdk fallback đã gỡ (2026-10-15).
+    // 2026-09-24: resolve Opus brain từ DB → zen/nemotron-3-ultra-free (fail-open NIM).
+    // callLLMForAgent: Zen fail → fallback NIM kimi-k3 chain (safety net).
+    const brain = await resolveOpusBrainForSelfDirection()
     const result = await withTimeout(
-      callLLMForAgent(prompt, OMEGA_FALLBACK_BRAIN, systemPrompt, {
+      callLLMForAgent(prompt, brain, systemPrompt, {
         agentName: 'SelfDirection',
         temperature,
         maxTokens,
       }),
       LLM_TIMEOUT_MS,
-      `${label} (NVIDIA chain)`,
+      `${label} (${brain.provider}/${brain.model})`,
     )
     if (result.content && result.content.trim()) return result.content.trim()
-    console.warn(`[SelfDirection] ${label}: chuỗi NVIDIA không trả content — error: ${(result.error || '(không có error detail)').slice(0, 200)}`)
+    console.warn(`[SelfDirection] ${label}: chuỗi LLM không trả content — error: ${(result.error || '(không có error detail)').slice(0, 200)}`)
   } catch (err) {
     console.warn(`[SelfDirection] ${label}: chuỗi LLM lỗi (timeout/backend):`, err instanceof Error ? err.message : String(err))
   }
