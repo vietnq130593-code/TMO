@@ -285,8 +285,8 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     domain: 'meta_cognitive',
     capable:
       'Phân tích request, chấm complexity (3 tiêu chí → tier T1/T2/T3), decompose mission thành parts, giao việc G1/G2/G3, monitor worklog + KB capture, PIVOT/CONTINUE/ESCALATE decisions, tổng hợp final report + Proposal items, chủ trì 5 councils (①②③④⑤).',
-    provider: 'nvidia',
-    model: AGENT_PRIMARY_MODEL,
+    provider: 'zen',
+    model: 'nemotron-3-ultra-free',
     temperature: 0.3, // NEMESIS chặt — không sáng tạo quá mức
     maxTokens: 16384,
     team: 'research',
@@ -301,8 +301,8 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     domain: 'mixed',
     capable:
       'Decompose task thành N hướng explore, dispatch sub-agents (≤20/part, ≤25/round), synthesize kết quả SA, flag dual-interpretation conflicts (TC-03), chuẩn bị spec cho BELI, ghi KB lessons về explore approach.',
-    provider: 'nvidia',
-    model: AGENT_PRIMARY_MODEL,
+    provider: 'zen',
+    model: 'muse-spark-1.3-contributor-free',
     temperature: 0.5, // SIVIL sáng tạo — explore nhiều hướng
     maxTokens: 16384,
     team: 'research',
@@ -317,8 +317,8 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     domain: 'programming',
     capable:
       'Code TypeScript/React/Next.js đúng spec, viết research report M2, tạo POC trong workspace/research/<missionId>/, G1→G2 handoff, đề xuất KB candidates (lesson/anti-pattern) qua KB Candidates flow.',
-    provider: 'nvidia',
-    model: AGENT_PRIMARY_MODEL,
+    provider: 'zen',
+    model: 'muse-spark-1.3-contributor-free',
     temperature: 0.2, // BELI chặt — code đúng spec
     maxTokens: 16384,
     team: 'research',
@@ -333,8 +333,8 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     domain: 'programming',
     capable:
       'Code review TypeScript/React/Next.js, tìm bug + fix bug (trần 3 vòng), System Diagnostician root cause (M2), RWV loop (READ→WRITE→VERIFY), TC-04 regression check, TC-06 evidence gate, đề xuất KB candidates anti-patterns.',
-    provider: 'nvidia',
-    model: AGENT_PRIMARY_MODEL,
+    provider: 'zen',
+    model: 'muse-spark-1.3-contributor-free',
     temperature: 0.2, // LISMA chặt — review nghiêm ngặt
     maxTokens: 16384,
     team: 'research',
@@ -349,8 +349,8 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     domain: 'ml',
     capable:
       'Tối ưu performance + refactor, Architecture Proposer (sinh 3 option A/B/C + Verification Plan), KB Curator (consolidate + dedup + retire), tuning + ensemble + feature engineering (M1), ghi KB trực tiếp (lesson/anti-pattern/baseline/pattern/calibration), curate phase 1→2→3.',
-    provider: 'nvidia',
-    model: AGENT_PRIMARY_MODEL,
+    provider: 'zen',
+    model: 'muse-spark-1.3-contributor-free',
     temperature: 0.4, // HAN cân bằng — creative nhưng chính xác
     maxTokens: 16384,
     team: 'research',

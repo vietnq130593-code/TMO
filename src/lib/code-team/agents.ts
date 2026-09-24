@@ -53,8 +53,8 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     instruction: '', // Loaded dynamically from getAgentPrompt('TL')
     domain: 'programming',
     capable: 'Phân tích thị giác, routing decision, code UI/UX, verify kết quả, điều phối team',
-    provider: 'nvidia',
-    model: 'minimaxai/minimax-m3',
+    provider: 'zen',
+    model: 'nemotron-3-ultra-free',
     temperature: 0.5,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -92,8 +92,8 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     instruction: '',
     domain: 'programming',
     capable: 'Thiết kế kiến trúc, DB schema, API design, component tree, state management, security architecture',
-    provider: 'nvidia',
-    model: 'minimaxai/minimax-m3',
+    provider: 'zen',
+    model: 'muse-spark-1.3-contributor-free',
     temperature: 0.4,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -111,8 +111,8 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     instruction: '',
     domain: 'programming',
     capable: 'Code TypeScript/React/Next.js, implement API, database operations, error handling',
-    provider: 'nvidia',
-    model: 'minimaxai/minimax-m3',
+    provider: 'zen',
+    model: 'muse-spark-1.3-contributor-free',
     temperature: 0.3,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -132,8 +132,8 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     instruction: '',
     domain: 'security',
     capable: 'Code review, tìm bugs, kiểm tra security, fix bugs, iterative refinement',
-    provider: 'nvidia',
-    model: 'minimaxai/minimax-m3',
+    provider: 'zen',
+    model: 'muse-spark-1.3-contributor-free',
     temperature: 0.2,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -157,8 +157,8 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     instruction: '',
     domain: 'programming',
     capable: 'Tối ưu performance, refactor code, scalability, best practices, UI+Backend integration',
-    provider: 'nvidia',
-    model: 'minimaxai/minimax-m3',
+    provider: 'zen',
+    model: 'muse-spark-1.3-contributor-free',
     temperature: 0.3,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',

@@ -4023,6 +4023,209 @@ async function callLLMWithSpecificProvider(
   return result
 }
 
+// ==================== OPENCODE ZEN PROVIDER (2026-09-24) ====================
+// OpenCode Zen — curated free coding models (OpenAI-compatible API).
+// Base URL: https://opencode.ai/zen/v1 (chat/completions)
+// Auth: Bearer token (ZEN_API_KEY_1, ZEN_API_KEY_2 — 2-key rotation pool)
+//
+// Free models used by TMO agents (user directive 2026-09-24):
+//   - nemotron-3-ultra-free  (NVIDIA 550B/55B MoE — orchestration + reasoning)
+//     → Omega, Opus, MEGATRON (Code Team TL), NEMESIS (Research Team TL)
+//   - muse-spark-1.3-contributor-free  (Meta — coding/implementation)
+//     → G1/G2/G3 agents (both teams) + ALISTA
+//
+// Routing: callLLMForAgent checks provider==='zen' BEFORE model-first policy
+// (kimi-k3/minimax-m3 enforcement) → zen-routed agents use their configured
+// model, not the NIM override. On Zen failure (429/5xx/timeout), falls back
+// to the existing NIM kimi-k3 fallback chain (callAgentModelWithFallbackChain).
+//
+// Known caveats (verified 2026-09-24):
+//   - Free models = limited-time promotion, fair-use soft limits (not truly unlimited)
+//   - GitHub issue #38028 (Jul 2026): nemotron-3-ultra-free + muse-spark free
+//     had transient HTTP 500 failures → NIM fallback chain is mandatory safety net.
+
+const ZEN_BASE_URL = process.env.ZEN_BASE_URL?.trim() || 'https://opencode.ai/zen/v1'
+const ZEN_API_KEYS: string[] = [
+  process.env.ZEN_API_KEY_1?.trim() || '',
+  process.env.ZEN_API_KEY_2?.trim() || '',
+].filter(k => k.length > 0)
+
+let zenKeyIndex = 0
+// Per-key 429 cooldown timestamp (0 = not rate-limited)
+const zenKey429Until: number[] = ZEN_API_KEYS.map(() => 0)
+
+/** Zen is ready to serve calls (at least 1 key configured). */
+function isZenConfigured(): boolean {
+  return ZEN_API_KEYS.length > 0
+}
+
+/** Pick next available Zen key (skip rate-limited; round-robin otherwise). */
+function getZenKey(): { key: string; index: number } | null {
+  if (ZEN_API_KEYS.length === 0) return null
+  const now = Date.now()
+  for (let i = 0; i < ZEN_API_KEYS.length; i++) {
+    const idx = (zenKeyIndex + i) % ZEN_API_KEYS.length
+    if (zenKey429Until[idx] <= now) {
+      zenKeyIndex = (idx + 1) % ZEN_API_KEYS.length
+      return { key: ZEN_API_KEYS[idx], index: idx }
+    }
+  }
+  // All keys rate-limited — pick the one with soonest reset (fail-open, still try)
+  let soonest = 0
+  let soonestAt = zenKey429Until[0]
+  for (let i = 1; i < zenKey429Until.length; i++) {
+    if (zenKey429Until[i] < soonestAt) { soonest = i; soonestAt = zenKey429Until[i] }
+  }
+  return { key: ZEN_API_KEYS[soonest], index: soonest }
+}
+
+/** Mark a Zen key as rate-limited (60s cooldown). */
+function markZenKey429(index: number): void {
+  zenKey429Until[index] = Date.now() + 60000
+}
+
+/**
+ * Call OpenCode Zen provider (OpenAI-compatible API).
+ * Used when agent's configured provider === 'zen'.
+ * Returns LLMResult with empty content + error on failure (caller falls back to NIM).
+ */
+async function callZenProvider(
+  prompt: string,
+  systemPrompt: string | undefined,
+  model: string,
+  options: LLMCallOptions | undefined,
+  taskLabel: string,
+): Promise<LLMResult | null> {
+  const keyInfo = getZenKey()
+  if (!keyInfo) {
+    console.warn('[ZEN] No API keys configured (set ZEN_API_KEY_1 / ZEN_API_KEY_2 in .env)')
+    return null
+  }
+
+  const timeoutMs = parseInt(process.env.ZEN_TIMEOUT_MS || '120000', 10)
+  const maxTokens = options?.maxTokens ?? 16384
+  const temperature = options?.temperature ?? 0.4
+
+  const messages = [
+    ...(systemPrompt ? [{ role: 'system', content: sanitizeLoneSurrogates(systemPrompt) }] : []),
+    { role: 'user', content: sanitizeLoneSurrogates(prompt) },
+  ]
+
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    max_tokens: maxTokens,
+    temperature,
+  }
+  if (options?.tools && options.tools.length > 0) {
+    try {
+      body.tools = sanitizeToolSchemasDeep(options.tools)
+    } catch {
+      body.tools = options.tools
+    }
+    body.tool_choice = options.tool_choice ?? 'auto'
+  }
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const response = await fetch(`${ZEN_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${keyInfo.key}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+
+    if (response.status === 429) {
+      markZenKey429(keyInfo.index)
+      let errBody = ''
+      try { errBody = await response.text() } catch { /* ignore */ }
+      console.warn(`[ZEN] ${taskLabel} 429 rate-limited (key #${keyInfo.index + 1}) — cooldown 60s: ${errBody.slice(0, 120)}`)
+      return { content: '', provider: 'zen', model, error: `Zen 429 rate-limited (key #${keyInfo.index + 1})` }
+    }
+
+    if (!response.ok) {
+      let errBody = ''
+      try { errBody = await response.text() } catch { /* ignore */ }
+      console.warn(`[ZEN] ${taskLabel} HTTP ${response.status}: ${errBody.slice(0, 200)}`)
+      return { content: '', provider: 'zen', model, error: `Zen HTTP ${response.status}: ${errBody.slice(0, 150)}` }
+    }
+
+    const data = await response.json() as {
+      choices?: Array<{
+        message?: { content?: string; tool_calls?: LLMToolCall[] }
+        finish_reason?: string | null
+      }>
+      model?: string
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+    }
+
+    const choice = data.choices?.[0]
+    const content = choice?.message?.content ?? ''
+    const nativeToolCalls = choice?.message?.tool_calls
+    const finishReason = choice?.finish_reason ?? null
+    const actualModel = data.model || model
+    const totalTokens = data.usage?.total_tokens ?? ((data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0))
+
+    if (!content && !(nativeToolCalls && nativeToolCalls.length > 0)) {
+      return { content: '', provider: 'zen', model: actualModel, error: `Zen empty response (${taskLabel})` }
+    }
+
+    // Token tracking — per-provider + per-agent (mirror NIM pattern)
+    if (totalTokens > 0) addTokensUsed(totalTokens, 'zen', keyInfo.index, actualModel)
+    if (totalTokens > 0 && options?.agentId && options?.agentName) {
+      addTokensUsedByAgent(
+        totalTokens,
+        data.usage?.prompt_tokens ?? 0,
+        data.usage?.completion_tokens ?? 0,
+        'zen',
+        actualModel,
+        options.agentId,
+        options.agentName,
+      )
+    }
+
+    console.log(`[ZEN] ${taskLabel} OK — ${content.length} chars, model ${actualModel}${totalTokens ? `, ${totalTokens} tokens` : ''}`)
+    return {
+      content,
+      provider: 'zen',
+      model: actualModel,
+      tokensUsed: totalTokens || undefined,
+      tool_calls: nativeToolCalls && nativeToolCalls.length > 0 ? nativeToolCalls : undefined,
+      finish_reason: finishReason,
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(`[ZEN] ${taskLabel} THẤT BẠI:`, msg)
+    return { content: '', provider: 'zen', model, error: `Zen call failed: ${msg}` }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Health/status info for Zen provider (used by /api/health + Database module UI). */
+export function getZenStatus(): {
+  configured: boolean
+  keyCount: number
+  availableKeys: number
+  rateLimitedKeys: number
+  models: string[]
+} {
+  const now = Date.now()
+  const rateLimited = zenKey429Until.filter((t, i) => i < ZEN_API_KEYS.length && t > now).length
+  return {
+    configured: ZEN_API_KEYS.length > 0,
+    keyCount: ZEN_API_KEYS.length,
+    availableKeys: ZEN_API_KEYS.length - rateLimited,
+    rateLimitedKeys: rateLimited,
+    models: ['nemotron-3-ultra-free', 'muse-spark-1.3-contributor-free'],
+  }
+}
+
 /**
  * Call LLM using Agent's configured provider/model first,
  * then fallback to global pool if agent's provider fails.
@@ -4045,6 +4248,29 @@ export async function callLLMForAgent(
   options?: LLMCallOptions
 ): Promise<LLMResult> {
   const { provider, model } = agentConfig
+
+  // ===== OPENCODE ZEN PROVIDER (2026-09-24 — user directive) =====
+  // Agents configured with provider='zen' route to OpenCode Zen (free coding
+  // models: nemotron-3-ultra-free for TL/Omega/Opus, muse-spark-1.3-contributor-free
+  // for generators). Zen check runs BEFORE model-first policy (kimi-k3 enforcement)
+  // so zen-routed agents use their configured model. On Zen failure → fall back
+  // to the existing NIM kimi-k3 fallback chain (safety net for transient Zen 429/5xx).
+  if (provider === 'zen' && isZenConfigured()) {
+    const zen = await callZenProvider(prompt, systemPrompt, model, options, `agent:${model}`)
+    if (zen && (zen.content || (zen.tool_calls && zen.tool_calls.length > 0))) {
+      const tcCount = zen.tool_calls?.length ?? 0
+      console.log(`[LLM] Agent dùng Zen ${model} ✓ (${tcCount} tool_calls, ${zen.tokensUsed ?? 0} tokens)`)
+      return zen
+    }
+    // Zen failed → fall back to NIM kimi-k3 chain (existing safety net)
+    console.warn(`[LLM] Agent Zen ${model} thất bại — fallback NIM kimi-k3 chain: ${(zen?.error || 'unknown').slice(0, 150)}`)
+    const nimFallback = await callAgentModelWithFallbackChain(prompt, systemPrompt, options, `agent:${model}-zen-fallback`)
+    const tcCount = nimFallback.tool_calls?.length ?? 0
+    if (nimFallback.content || tcCount > 0) {
+      console.log(`[LLM] Agent fallback NIM ${nimFallback.model} ✓ (${tcCount} tool_calls) — Zen ${model} đã fail`)
+    }
+    return nimFallback
+  }
 
   // ===== Z-AI SDK PROVIDER (dựng lại 2026-09-06 — opt-in LLM_PROVIDER=zai) =====
   // Agent calls (goal-loop, research team, code-team, smolab...) route qua

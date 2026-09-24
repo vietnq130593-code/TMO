@@ -360,12 +360,11 @@ LEARNING & MEMORY
     domain: 'mixed',
     capable:
       'Tìm kiếm web, phân tích thông tin, thảo luận triết học, thuật toán, brainstorming đa lĩnh vực, code & tools, skill installation, research sâu, creative ideation',
-    provider: 'nvidia',
-    // 2026-10-16 (USER DIRECTIVE): minimax-m3 tạm làm lõi chính (duy nhất khả
-    // dụng — kimi/ds HANG phía NIM). Runtime callLLMForAgent override về lõi
-    // chính anyway (AGENT_PRIMARY_MODEL), giá trị này giữ đồng bộ hiển thị UI
-    // + legacy path.
-    model: 'minimaxai/minimax-m3',
+    provider: 'zen',
+    // 2026-09-24 (USER DIRECTIVE): Omega là tổng chỉ huy on-demand → chạy
+    // trên Nemotron 3 Ultra free (OpenCode Zen) — orchestration + reasoning.
+    // llm.ts callLLMForAgent route provider='zen' trước model-first policy.
+    model: 'nemotron-3-ultra-free',
     temperature: 0.7,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: null,
@@ -549,11 +548,11 @@ LEARNING & MEMORY
       + 'auto-learn health, KnowledgeGraph sync, token anomaly, DB storage, cron/queue stuck), '
       + 'viết proposal bảo trì 4 phần chuẩn Self-Direction kèm tiêu chí xác nhận hiệu quả '
       + '(metric + target + recheck window) — machine-checkable',
-    provider: 'nvidia',
-    // MODEL POLICY (2026-10-16): minimax-m3 enforced toàn hệ thống
-    // (llm.ts:callLLMForAgent) — giá trị profile này chỉ là khai báo, runtime
-    // override → minimax-m3 + fallback chain (kimi → ds-pro → ds-flash).
-    model: 'minimaxai/minimax-m3',
+    provider: 'zen',
+    // 2026-09-24 (USER DIRECTIVE): ALISTA là kỹ sư chẩn đoán + đề xuất → chạy
+    // trên Muse Spark 1.3 Contributor free (OpenCode Zen) — coding/implementation.
+    // llm.ts callLLMForAgent route provider='zen' trước model-first policy.
+    model: 'muse-spark-1.3-contributor-free',
     temperature: 0.3, // chẩn đoán cần chính xác, ít sáng tạo
     maxTokens: 16384,
     team: null, // standalone — không thuộc team nào

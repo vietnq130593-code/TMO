@@ -13,7 +13,7 @@ import { checkNeo4jHealth } from '@/lib/neo4j'
 import { checkR2Health } from '@/lib/r2-storage'
 import { checkSupabaseHealth } from '@/lib/supabase-sync'
 import { db } from '@/lib/db'
-import { getNvidiaModels, getProviderDiagnostics, getDailyQuotaStatus, getModelBlockBreakers, isZaiRoutingEnabled, getZai429Status } from '@/lib/llm'
+import { getNvidiaModels, getProviderDiagnostics, getDailyQuotaStatus, getModelBlockBreakers, isZaiRoutingEnabled, getZai429Status, getZenStatus } from '@/lib/llm'
 
 export const dynamic = 'force-dynamic'
 
@@ -57,6 +57,21 @@ function checkLLMHealthSync(): Record<string, { available: boolean; model: strin
     active: !zaiActive,
     error: !hasNvidiaKeys ? 'No NVIDIA API keys configured' : undefined,
     note: zaiActive && hasNvidiaKeys ? 'fallback (sdk init fail → NIM chain)' : undefined,
+  }
+
+  // ━━ OpenCode Zen provider (2026-09-24 — user directive) ━━
+  // Free coding models (nemotron-3-ultra-free + muse-spark-1.3-contributor-free).
+  // Agents configured provider='zen' route here BEFORE model-first policy.
+  // 2-key rotation pool; Zen fail → NIM kimi-k3 fallback chain.
+  const zenStatus = getZenStatus()
+  result.zen = {
+    available: zenStatus.configured,
+    model: zenStatus.models.join(' + '),
+    active: zenStatus.configured,
+    error: !zenStatus.configured ? 'No ZEN_API_KEY configured' : undefined,
+    note: zenStatus.configured
+      ? `${zenStatus.keyCount} key(s) · ${zenStatus.availableKeys} available · ${zenStatus.rateLimitedKeys} rate-limited · nemotron-3-ultra-free (TL/Omega/Opus) + muse-spark-1.3-contributor-free (G1-G3/ALISTA)`
+      : undefined,
   }
 
   return result

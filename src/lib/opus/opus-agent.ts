@@ -283,18 +283,18 @@ export async function ensureOpusAgent(): Promise<void> {
       }
     }
 
-    // MODEL SYNC (2026-10-16 — USER DIRECTIVE minimax-m3 tạm làm lõi chính): row
-    // Opus seed từ default cũ 2026-08-31 (kimi-k3 — giá trị do CODE sync, không
-    // phải user chọn) → sync về minimax-m3; model user tự chọn giữ nguyên.
-    // (Update-block của upsert KHÔNG đụng model — tôn trọng config.)
+    // MODEL SYNC (2026-09-24 — USER DIRECTIVE: Opus → Zen nemotron-3-ultra-free):
+    // Row Opus seed từ default cũ (kimi-k3 / minimax-m3 — giá trị do CODE sync,
+    // không phải user chọn) → sync về zen/nemotron-3-ultra-free; model+provider
+    // user tự chọn giữ nguyên. (Update-block của upsert KHÔNG đụng model — tôn trọng config.)
     try {
       const opusRow = await db.agentProfile.findUnique({ where: { name: OPUS_AGENT_NAME } })
-      if (opusRow?.model === 'moonshotai/kimi-k3') {
+      if (opusRow && (opusRow.model === 'moonshotai/kimi-k3' || opusRow.model === 'minimaxai/minimax-m3')) {
         await db.agentProfile.update({
           where: { name: OPUS_AGENT_NAME },
-          data: { model: 'minimaxai/minimax-m3' },
+          data: { provider: 'zen', model: 'nemotron-3-ultra-free' },
         })
-        console.log('[Opus] Model sync: moonshotai/kimi-k3 (lõi chính cũ 2026-08-31) → minimaxai/minimax-m3 (lõi chính tạm thời 2026-10-16)')
+        console.log(`[Opus] Model sync: ${opusRow.model} (lõi NIM cũ) → zen/nemotron-3-ultra-free (OpenCode Zen — user directive 2026-09-24)`)
       }
     } catch { /* fail-open — model chỉ là hiển thị + legacy path */ }
 
@@ -315,10 +315,10 @@ export async function ensureOpusAgent(): Promise<void> {
         instruction: OPUS_INSTRUCTION,
         capable: OPUS_CAPABLE,
         domain: OPUS_DOMAIN,
-        provider: 'nvidia',
-        // 2026-10-16 (USER DIRECTIVE): minimax-m3 tạm làm lõi chính (duy nhất
-        // khả dụng — kimi/ds HANG phía NIM, matrix test 09:11 UTC)
-        model: 'minimaxai/minimax-m3',
+        provider: 'zen',
+        // 2026-09-24 (USER DIRECTIVE): Opus (CTO) → Nemotron 3 Ultra free
+        // (OpenCode Zen) — orchestration + reasoning cho meta-agent.
+        model: 'nemotron-3-ultra-free',
         temperature: 0.4, // CTO phán đoán — nhiệt thấp, nhất quán
         maxTokens: 16384,
         team: null, // meta-agent — không thuộc team nào
