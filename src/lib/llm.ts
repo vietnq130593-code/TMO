@@ -4268,7 +4268,15 @@ async function callOpenCodeCLIProvider(
     const child = spawn(OPENCODE_CLI_BIN, args, {
       cwd: process.env.OPENCODE_WORKSPACE || process.cwd(),
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, NO_COLOR: '1', TERM: 'dumb' },
+      env: {
+        ...process.env,
+        NO_COLOR: '1',
+        TERM: 'dumb',
+        // Pass TMO context to custom tools (.opencode/tools/*.ts read these)
+        TMO_BASE_URL: process.env.TMO_BASE_URL || 'http://localhost:3000',
+        TMO_AGENT_NAME: options?.agentName || 'opencode-bridge',
+        TMO_SESSION_ID: '',
+      },
       timeout: OPENCODE_CLI_TIMEOUT_MS,
     })
     // Close stdin immediately — signal non-interactive mode (prevent TTY wait)
@@ -4285,6 +4293,9 @@ async function callOpenCodeCLIProvider(
     let actualModel = model
     let finishReason: string | null = null
     let resolved = false
+    // Collect tool_use events — OpenCode emits these when LLM calls custom tools
+    // (tmo_delegate, tmo_file_list, etc.). Map tmo_* prefix → TMO tool names.
+    const collectedToolCalls: LLMToolCall[] = []
 
     const finishTimer = setTimeout(() => {
       if (!resolved) {
@@ -4311,6 +4322,14 @@ async function callOpenCodeCLIProvider(
               text?: string
               tokens?: { total?: number; input?: number; output?: number; reasoning?: number }
               reason?: string
+              // Tool use event shape (OpenCode CLI emits these for custom tools)
+              name?: string
+              tool?: string
+              input?: unknown
+              state?: { input?: unknown; output?: string; status?: string }
+              tool_call_id?: string
+              callID?: string
+              callId?: string
             }
             timestamp?: number
           }
@@ -4321,6 +4340,41 @@ async function callOpenCodeCLIProvider(
               reasoningParts.push(evt.part.text)
             } else {
               contentParts.push(evt.part.text)
+            }
+          }
+          // Parse tool_use events — OpenCode CLI calls custom tmo_* tools
+          // Event shape: part.tool = tool name, part.state.input = args, part.state.output = result
+          if ((evt.type === 'tool_use' || evt.type === 'tool_result') && (evt.part?.name || evt.part?.tool)) {
+            const toolName = evt.part.name || evt.part.tool || ''
+            const toolCallId = evt.part.tool_call_id || evt.part.callID || evt.part.callId || ''
+            // Explicit mapping (tmo_* filename → TMO executeTool name)
+            const toolMap: Record<string, string> = {
+              'tmo_delegate': 'delegate_task',
+              'tmo_dispatch': 'dispatch_agent',
+              'tmo_escalate': 'escalate_problem',
+              'tmo_knowledge_search': 'knowledge_search',
+              'tmo_knowledge_graph': 'knowledge_graph',
+              'tmo_file_list': 'file_list',
+              'tmo_file_read': 'file_read',
+              'tmo_grep': 'grep',
+              'tmo_shell': 'shell',
+              'tmo_todo': 'todo_write',
+              'tmo_request_code_team': 'request_code_team',
+              'tmo_web_search': 'web_search',
+            }
+            const mappedName = toolMap[toolName] || toolName
+            // Only collect on tool_use (not tool_result — result is already executed by OpenCode)
+            if (evt.type === 'tool_use') {
+              const inputArgs = evt.part.input || evt.part.state?.input || {}
+              collectedToolCalls.push({
+                id: toolCallId || `occli_${Date.now()}_${collectedToolCalls.length}`,
+                type: 'function',
+                function: {
+                  name: mappedName,
+                  arguments: typeof inputArgs === 'string' ? inputArgs : JSON.stringify(inputArgs),
+                },
+              })
+              console.log(`[OC-CLI] ${taskLabel} tool_use: ${toolName} → ${mappedName}`)
             }
           }
           if (evt.type === 'step_finish' && evt.part?.tokens) {
@@ -4384,20 +4438,28 @@ async function callOpenCodeCLIProvider(
         console.warn(`[OC-CLI] ${taskLabel} tool_call parse skipped:`, parseErr instanceof Error ? parseErr.message : String(parseErr))
       }
 
+      // Merge collectedToolCalls (from OpenCode tool_use events) + parsedToolCalls (from text)
+      // OpenCode custom tools (tmo_*) → already mapped to TMO names in collectedToolCalls.
+      // Text-based tool_call (legacy TMO syntax) → parsedToolCalls.
+      const allToolCalls: LLMToolCall[] | undefined =
+        (collectedToolCalls.length > 0 || (parsedToolCalls && parsedToolCalls.length > 0))
+          ? [...collectedToolCalls, ...(parsedToolCalls || [])]
+          : undefined
+
       // Token tracking
       if (totalTokens > 0) addTokensUsed(totalTokens, 'zen-cli', 0, actualModel)
       if (totalTokens > 0 && options?.agentId && options?.agentName) {
         addTokensUsedByAgent(totalTokens, inputTokens, outputTokens, 'zen-cli', actualModel, options.agentId, options.agentName)
       }
 
-      console.log(`[OC-CLI] ${taskLabel} OK — ${content.length} chars${reasoning ? `, ${reasoning.length} reasoning chars` : ''}${totalTokens ? `, ${totalTokens} tokens` : ''}${parsedToolCalls ? `, ${parsedToolCalls.length} tool_calls` : ''}`)
+      console.log(`[OC-CLI] ${taskLabel} OK — ${content.length} chars${reasoning ? `, ${reasoning.length} reasoning chars` : ''}${totalTokens ? `, ${totalTokens} tokens` : ''}${allToolCalls ? `, ${allToolCalls.length} tool_calls` : ''}`)
 
       resolve({
         content: cleanedContent,
         provider: 'zen-cli',
         model: actualModel,
         tokensUsed: totalTokens || undefined,
-        tool_calls: parsedToolCalls,
+        tool_calls: allToolCalls,
         finish_reason: finishReason,
       })
     })

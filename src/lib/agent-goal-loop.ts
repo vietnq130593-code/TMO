@@ -1700,7 +1700,31 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
       lastContent = result.content
       recordAgentThought(agentSessionId, result.content, totalIterations)
 
-      const toolCalls = parseToolCallsFromOutput(result.content)
+      // 2026-09-25 HYBRID BRIDGE FIX: OpenCode CLI provider returns tool_calls
+      // directly in LLMResult (parsed from tool_use events). Use these native
+      // tool_calls FIRST — only fallback to text-based parseToolCallsFromOutput
+      // when result.tool_calls is empty (legacy NIM/zai providers).
+      let toolCalls = result.tool_calls && result.tool_calls.length > 0
+        ? result.tool_calls.map((tc, idx) => {
+            // Convert LLMToolCall → ParsedToolCall shape (id, name, args object)
+            let args: Record<string, unknown> = {}
+            try {
+              args = typeof tc.function.arguments === 'string'
+                ? JSON.parse(tc.function.arguments)
+                : (tc.function.arguments as Record<string, unknown>) || {}
+            } catch { /* keep empty args */ }
+            return {
+              id: tc.id || `native_${idx}`,
+              name: tc.function.name,
+              args,
+            }
+          })
+        : parseToolCallsFromOutput(result.content)
+
+      // Log khi native tool_calls được dùng (hybrid bridge active)
+      if (result.tool_calls && result.tool_calls.length > 0) {
+        console.log(`[GoalLoop] ${agentName} dùng ${result.tool_calls.length} native tool_calls từ provider=${result.provider} (hybrid bridge)`)
+      }
       if (toolCalls.length === 0) {
         // 21-d FIX SILENT PARSE-DROP: output CÓ dấu hiệu tool call ("tool_call:"
         // hoặc ```json chứa "name") nhưng parse thất bại (JSON bị cắt cụt giữa
