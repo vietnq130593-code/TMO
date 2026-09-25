@@ -4207,6 +4207,176 @@ async function callZenProvider(
   }
 }
 
+// ==================== OPENCODE CLI PROVIDER (2026-09-24 — FreeTierError workaround) ====================
+// OpenCode Zen free models (suffix -free) chỉ gọi được từ TRONG OpenCode platform.
+// External HTTP API → FreeTierError 403. Workaround: spawn `opencode run` CLI
+// subprocess — CLI auth khác HTTP auth, free models CHẠY THẬT (verified 2026-09-24).
+//
+// Output format: `--format json` stream events (step_start, text, step_finish).
+// Parse text events → accumulate content + reasoning + tokens.
+// Fallback: CLI fail → caller (callLLMForAgent) fallback NIM kimi-k3 chain.
+
+const OPENCODE_CLI_BIN = process.env.OPENCODE_CLI_BIN?.trim() || '/home/z/.opencode/bin/opencode'
+const OPENCODE_CLI_ENABLED = (process.env.OPENCODE_CLI_ENABLED || 'true').trim().toLowerCase() !== 'false'
+const OPENCODE_CLI_TIMEOUT_MS = parseInt(process.env.OPENCODE_CLI_TIMEOUT_MS || '120000', 10)
+
+/** Check if OpenCode CLI binary exists + enabled. */
+function isOpenCodeCLIAvailable(): boolean {
+  if (!OPENCODE_CLI_ENABLED) return false
+  try {
+    // Quick sync check — existsSync is cheap
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs')
+    return fs.existsSync(OPENCODE_CLI_BIN)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Call OpenCode Zen free model via CLI subprocess (bypasses FreeTierError).
+ * Spawns `opencode run "prompt" --model opencode/<model> --format json`.
+ * Returns LLMResult with content + tokens. On failure → null (caller falls back).
+ */
+async function callOpenCodeCLIProvider(
+  prompt: string,
+  systemPrompt: string | undefined,
+  model: string,
+  options: LLMCallOptions | undefined,
+  taskLabel: string,
+): Promise<LLMResult | null> {
+  if (!isOpenCodeCLIAvailable()) {
+    console.warn(`[OC-CLI] Binary không tồn tại tại ${OPENCODE_CLI_BIN} — set OPENCODE_CLI_BIN hoặc cài opencode CLI`)
+    return null
+  }
+
+  const { spawn } = await import('child_process')
+  const fullPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt
+  const cliModel = `opencode/${model}`
+
+  console.log(`[OC-CLI] ${taskLabel} — spawn opencode run --model ${cliModel}`)
+
+  return new Promise<LLMResult | null>((resolve) => {
+    // CLI syntax: `opencode run "<message>" --model opencode/<model> --format json`
+    // message as positional arg. Long prompts with newlines → pipe via stdin.
+    const args = [
+      'run', fullPrompt,
+      '--model', cliModel,
+      '--format', 'json',
+    ]
+    const child = spawn(OPENCODE_CLI_BIN, args, {
+      cwd: process.env.OPENCODE_WORKSPACE || process.cwd(),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, NO_COLOR: '1', TERM: 'dumb' },
+      timeout: OPENCODE_CLI_TIMEOUT_MS,
+    })
+    // Close stdin immediately — signal non-interactive mode (prevent TTY wait)
+    child.stdin?.end()
+    child.stdin?.on('error', () => { /* ignore EPIPE if child exits early */ })
+
+    let stdout = ''
+    let stderr = ''
+    let contentParts: string[] = []
+    let reasoningParts: string[] = []
+    let totalTokens = 0
+    let inputTokens = 0
+    let outputTokens = 0
+    let actualModel = model
+    let finishReason: string | null = null
+    let resolved = false
+
+    const finishTimer = setTimeout(() => {
+      if (!resolved) {
+        try { child.kill('SIGKILL') } catch { /* ignore */ }
+        console.warn(`[OC-CLI] ${taskLabel} timeout ${OPENCODE_CLI_TIMEOUT_MS}ms — kill`)
+        resolve(null)
+        resolved = true
+      }
+    }, OPENCODE_CLI_TIMEOUT_MS)
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString()
+      // Parse JSON lines (NDJSON stream)
+      const lines = stdout.split('\n')
+      stdout = lines.pop() || '' // keep incomplete line in buffer
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        try {
+          const evt = JSON.parse(trimmed) as {
+            type?: string
+            part?: {
+              type?: string
+              text?: string
+              tokens?: { total?: number; input?: number; output?: number; reasoning?: number }
+              reason?: string
+            }
+            timestamp?: number
+          }
+          if (evt.type === 'text' && evt.part?.text) {
+            // First text often is reasoning; later text is output.
+            // Heuristic: reasoning tokens tracked separately if part.type === 'reasoning'
+            if (evt.part.type === 'reasoning') {
+              reasoningParts.push(evt.part.text)
+            } else {
+              contentParts.push(evt.part.text)
+            }
+          }
+          if (evt.type === 'step_finish' && evt.part?.tokens) {
+            totalTokens += evt.part.tokens.total || 0
+            inputTokens += evt.part.tokens.input || 0
+            outputTokens += evt.part.tokens.output || 0
+            if (evt.part.reason) finishReason = evt.part.reason
+          }
+        } catch { /* not JSON line — ignore (CLI banner etc) */ }
+      }
+    })
+
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString()
+    })
+
+    child.on('error', (err) => {
+      if (resolved) return
+      resolved = true
+      clearTimeout(finishTimer)
+      console.warn(`[OC-CLI] ${taskLabel} spawn error:`, err.message)
+      resolve(null)
+    })
+
+    child.on('close', (code) => {
+      if (resolved) return
+      resolved = true
+      clearTimeout(finishTimer)
+
+      const content = contentParts.join('').trim()
+      const reasoning = reasoningParts.join('').trim()
+
+      if (!content && code !== 0) {
+        console.warn(`[OC-CLI] ${taskLabel} exit ${code} — no content. stderr: ${stderr.slice(0, 200)}`)
+        resolve(null)
+        return
+      }
+
+      // Token tracking
+      if (totalTokens > 0) addTokensUsed(totalTokens, 'zen-cli', 0, actualModel)
+      if (totalTokens > 0 && options?.agentId && options?.agentName) {
+        addTokensUsedByAgent(totalTokens, inputTokens, outputTokens, 'zen-cli', actualModel, options.agentId, options.agentName)
+      }
+
+      console.log(`[OC-CLI] ${taskLabel} OK — ${content.length} chars${reasoning ? `, ${reasoning.length} reasoning chars` : ''}${totalTokens ? `, ${totalTokens} tokens` : ''}`)
+
+      resolve({
+        content,
+        provider: 'zen-cli',
+        model: actualModel,
+        tokensUsed: totalTokens || undefined,
+        finish_reason: finishReason,
+      })
+    })
+  })
+}
+
 /** Health/status info for Zen provider (used by /api/health + Database module UI). */
 export function getZenStatus(): {
   configured: boolean
@@ -4262,8 +4432,17 @@ export async function callLLMForAgent(
       console.log(`[LLM] Agent dùng Zen ${model} ✓ (${tcCount} tool_calls, ${zen.tokensUsed ?? 0} tokens)`)
       return zen
     }
-    // Zen failed → fall back to NIM kimi-k3 chain (existing safety net)
-    console.warn(`[LLM] Agent Zen ${model} thất bại — fallback NIM kimi-k3 chain: ${(zen?.error || 'unknown').slice(0, 150)}`)
+    // Zen HTTP failed (FreeTierError 403 / 429 / 5xx) → try OpenCode CLI provider
+    // (free models chỉ gọi được qua CLI, không qua HTTP API)
+    console.warn(`[LLM] Agent Zen HTTP ${model} thất bại — thử OpenCode CLI provider: ${(zen?.error || 'unknown').slice(0, 100)}`)
+    const cliResult = await callOpenCodeCLIProvider(prompt, systemPrompt, model, options, `agent:${model}`)
+    if (cliResult && (cliResult.content || (cliResult.tool_calls && cliResult.tool_calls.length > 0))) {
+      const tcCount = cliResult.tool_calls?.length ?? 0
+      console.log(`[LLM] Agent dùng OpenCode CLI ${model} ✓ (${tcCount} tool_calls, ${cliResult.tokensUsed ?? 0} tokens)`)
+      return cliResult
+    }
+    // Both Zen HTTP + CLI failed → fall back to NIM kimi-k3 chain (safety net)
+    console.warn(`[LLM] Agent Zen ${model} thất bại cả HTTP + CLI — fallback NIM kimi-k3 chain`)
     const nimFallback = await callAgentModelWithFallbackChain(prompt, systemPrompt, options, `agent:${model}-zen-fallback`)
     const tcCount = nimFallback.tool_calls?.length ?? 0
     if (nimFallback.content || tcCount > 0) {

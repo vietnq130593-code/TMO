@@ -126,8 +126,10 @@ export function TokenUsageSection({ health }: { health: HealthResponse | null })
   const displayData = selectedDate ? selectedDateUsage : todayUsage
 
   // Get models data from display data (per-provider)
+  // zen-cli = OpenCode CLI subprocess provider (free models chạy được qua CLI)
+  // zen = HTTP API provider (FreeTierError 403 → luôn 0 tokens)
   const nvidiaModels = displayData?.models?.['nvidia'] || {}
-  const zenModels = displayData?.models?.['zen'] || {}
+  const zenModels = displayData?.models?.['zen-cli'] || {}
 
   // Calculate per-group totals
   const extractionTotal = NVIDIA_CORE_CONFIG.extraction.models.reduce(
@@ -322,7 +324,7 @@ export function TokenUsageSection({ health }: { health: HealthResponse | null })
             </div>
             <div className="px-3 py-1.5 bg-slate-950/40 border-t border-stone-700/40">
               <p className="text-[8px] text-stone-500">
-                Zen fail → fallback NIM kimi-k3 chain (safety net). Free models = limited-time, fair-use soft limits.
+                Provider: OpenCode CLI subprocess (zen-cli) — free models gọi qua CLI bypass FreeTierError 403. Zen fail → fallback NIM kimi-k3 chain.
               </p>
             </div>
           </div>
