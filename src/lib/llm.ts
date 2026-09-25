@@ -4218,7 +4218,7 @@ async function callZenProvider(
 
 const OPENCODE_CLI_BIN = process.env.OPENCODE_CLI_BIN?.trim() || '/home/z/.opencode/bin/opencode'
 const OPENCODE_CLI_ENABLED = (process.env.OPENCODE_CLI_ENABLED || 'true').trim().toLowerCase() !== 'false'
-const OPENCODE_CLI_TIMEOUT_MS = parseInt(process.env.OPENCODE_CLI_TIMEOUT_MS || '120000', 10)
+const OPENCODE_CLI_TIMEOUT_MS = parseInt(process.env.OPENCODE_CLI_TIMEOUT_MS || '240000', 10)
 
 /** Check if OpenCode CLI binary exists + enabled. */
 function isOpenCodeCLIAvailable(): boolean {
@@ -4251,11 +4251,12 @@ async function callOpenCodeCLIProvider(
   }
 
   const { spawn } = await import('child_process')
+  // Top-level import (sync) để dùng trong child.on('close') callback — không dùng await trong callback.
+  const { extractToolCallsWithDiagnostics } = await import('@/lib/tool-calls')
   const fullPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt
   const cliModel = `opencode/${model}`
 
   console.log(`[OC-CLI] ${taskLabel} — spawn opencode run --model ${cliModel}`)
-
   return new Promise<LLMResult | null>((resolve) => {
     // CLI syntax: `opencode run "<message>" --model opencode/<model> --format json`
     // message as positional arg. Long prompts with newlines → pipe via stdin.
@@ -4358,19 +4359,45 @@ async function callOpenCodeCLIProvider(
         return
       }
 
+      // Parse tool_calls từ content (TMO text-based tool_call syntax:
+      // `tool_call: <name>({...})`). OpenCode CLI không return native tool_calls
+      // nhưng model vẫn output tool_call text theo system prompt của TMO.
+      // Goal-loop/ReAct loop parse text này → executeTool.
+      let parsedToolCalls: LLMToolCall[] | undefined
+      let cleanedContent = content
+      try {
+        const diag = extractToolCallsWithDiagnostics(content)
+        if (diag.calls.length > 0) {
+          parsedToolCalls = diag.calls.map(c => ({
+            id: `occli_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            type: 'function' as const,
+            function: { name: c.name, arguments: JSON.stringify(c.args) },
+          }))
+          // extractToolCallsWithDiagnostics returns cleaned content (tool_call text removed)
+          // qua extractFencedFileWrites inner — nhưng diag interface chỉ expose calls + parseFailures.
+          // cleanedContent = content với tool_call text lines removed (best-effort).
+          cleanedContent = content.replace(/tool_call:\s*\w+\s*\(\s*\{[^]*?\}\s*\)\s*/g, '').trim()
+          console.log(`[OC-CLI] ${taskLabel} parsed ${diag.calls.length} tool_call(s) from content: ${diag.calls.map(c => c.name).join(', ')}`)
+        }
+      } catch (parseErr) {
+        // tool-calls import fail (rare) → return raw content, caller tự parse
+        console.warn(`[OC-CLI] ${taskLabel} tool_call parse skipped:`, parseErr instanceof Error ? parseErr.message : String(parseErr))
+      }
+
       // Token tracking
       if (totalTokens > 0) addTokensUsed(totalTokens, 'zen-cli', 0, actualModel)
       if (totalTokens > 0 && options?.agentId && options?.agentName) {
         addTokensUsedByAgent(totalTokens, inputTokens, outputTokens, 'zen-cli', actualModel, options.agentId, options.agentName)
       }
 
-      console.log(`[OC-CLI] ${taskLabel} OK — ${content.length} chars${reasoning ? `, ${reasoning.length} reasoning chars` : ''}${totalTokens ? `, ${totalTokens} tokens` : ''}`)
+      console.log(`[OC-CLI] ${taskLabel} OK — ${content.length} chars${reasoning ? `, ${reasoning.length} reasoning chars` : ''}${totalTokens ? `, ${totalTokens} tokens` : ''}${parsedToolCalls ? `, ${parsedToolCalls.length} tool_calls` : ''}`)
 
       resolve({
-        content,
+        content: cleanedContent,
         provider: 'zen-cli',
         model: actualModel,
         tokensUsed: totalTokens || undefined,
+        tool_calls: parsedToolCalls,
         finish_reason: finishReason,
       })
     })
