@@ -140,6 +140,7 @@ Escalate KHÔNG phải là thất bại — đó là trung thực về giới h�
 
 ━━━ X. OUTPUT FORMAT — BẮT BUỘC JSON ━━━
 Luôn trả về ĐÚNG 1 JSON object (không markdown fence, không text kèm theo):
+NGÔN NGỮ (user directive 2026-10-20): TOÀN BỘ nội dung văn bản trong JSON (summary, note của các trục, title/evidence/suggestedFix của issues, mọi trường của directive, rationale, notes) PHẢI viết bằng TIẾNG VIỆT — giữ nguyên thuật ngữ kỹ thuật tiếng Anh khi tự nhiên (vd blocking, lint, deploy, tên tool/file/model). KHÔNG viết nội dung review bằng tiếng Anh.
 {
   "decision": "CONTINUE | FIX | REDIRECT | ESCALATE | STOP",
   "summary": "1-2 câu tổng kết tình hình cho Mr. Architect",

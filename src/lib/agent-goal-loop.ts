@@ -492,6 +492,7 @@ GIAI ĐOẠN 3 — KIỂM ĐỊNH & BÁO CÁO (BẮT BUỘC trước khi kết l
   🧬 SHR — hypothesis có cấu trúc (tool hypothesis_write):
   - Phát hiện CƠ CHẾ hệ thống (MỘT quan hệ nhân quả về cách hệ thống/tính năng hoạt động) chưa chắc chắn → hypothesis_write op=propose với mechanicsClaim (MỘT quan hệ ≤12 từ) + predictedDelta (dự đoán KIỂM ĐỊNH ĐƯỢC bằng tool). KHÔNG propose chuyện của task ("file X ghi được" là todo, không phải hypothesis).
   - Bằng chứng tool chu kỳ này XÁC NHẬN hoặc BÁC hypothesis cũ (xem khối 🧬 BELIEF-STATE / hypothesis_write op=list) → hypothesis_write op=judge kèm hypothesisId + verdict + evidenceTool + evidenceQuote (trích ngắn từ KẾT QUẢ tool thật) — phán quyết KHÔNG có bằng chứng khớp sẽ bị hệ thống TỪ CHỐI khi đối chiếu cuối chu kỳ.
+  📝 ĐỊNH DẠNG BÁO CÁO (user directive 2026-10-20 — kỷ luật hiển thị): báo cáo cho người đọc là văn xuôi tiếng Việt SẠCH, dùng markdown TỐI THIỂU — KHÔNG bọc nhấn mạnh bằng ** hay __, KHÔNG bọc từ ngữ bằng dấu \` hay dấu ' tràn lan (chỉ trích dẫn mã/lệnh thật sự cần). Nhấn mạnh bằng CHỮ IN HOA. Liệt kê bằng gạch đầu dòng "- ". Chỉ dùng khối \`\`\` khi trích dẫn mã/code output thật.
 
 ⚠️ Một TRỌNG TÀI ĐỘC LẬP sẽ đánh giá lại kết quả của bạn DỰA TRÊN BẰNG CHỨNG TOOL THẬT. Lời tuyên bố không có bằng chứng sẽ BỊ TỪ CHỐI và bạn phải làm lại ở chu kỳ tiếp theo.
 Nếu mục tiêu là câu hỏi/thông tin (không cần hành động), chỉ cần trả lời đầy đủ, chính xác — không cần tool.`
@@ -814,6 +815,7 @@ Nguyên tắc SẮT:
    KHÔNG dùng side issues để hạ "complete" khi mục tiêu chính đã đạt theo bằng chứng — nhưng cũng KHÔNG dùng "record"/"none" để né xử lý lỗi liên quan còn giải quyết được trong run này.
 10. DEBT CHECK (áp dụng khi prompt có khối "CÁC LỖI PHÁT SINH CHƯA XỬ LÝ" — danh sách trọng tài đã quyết định xử lý ở các chu kỳ trước): đối chiếu TỪNG lỗi với bằng chứng chu kỳ này. Lỗi nào CHƯA có bằng chứng máy xác nhận đã khắc phục (fix xong + verify pass) → PHẢI liệt kê lại vào "sideIssues" và đặt "debtDecision": "continue". KHÔNG phán hoàn thành sạch khi danh sách còn mục chưa đối chiếu được bằng chứng khắc phục.
 11. DERIVED-NUMBER GUARD (2026-10-20 — E2E lộ agent đếm bằng mắt sai 80/79 nhưng tự chấm "đã kiểm chứng"): khi mục tiêu/tiêu chí đòi một CON SỐ hoặc kết quả TỔNG HỢP từ dữ liệu gốc (đếm dòng, đếm phần tử, tính tổng...), chỉ chấp nhận là verified khi bằng chứng tool cho thấy LỆNH MÁY trả về đúng con số đó (output wc/jq/grep -c hiển thị giá trị khớp). Agent "tự đếm trong đầu" từ nội dung đã đọc KHÔNG phải bằng chứng — nếu không thấy output lệnh máy xác nhận con số → "verified": false.
+12. TODO PLAN CHECK (Task 23-c 2026-10-26 — E2E lộ agent làm task đa bước mà bỏ qua kế hoạch): tác vụ đòi ≥2 bước làm việc thật (đọc/sửa/đếm nhiều mục độc lập) mà bằng chứng KHÔNG có tool todo_write/tmo_todo nào trong run → "complete" vẫn đánh giá theo KẾT QUẢ, nhưng thêm vào "missing": "process: bỏ qua todo_write — chạy không có kế hoạch truy vết được" (ghi nhận gap quy trình cho Opus review + báo cáo cuối; chu kỳ sau nếu còn chạy thì ưu tiên bổ sung todo).
 
 Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích thêm):
 {"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."], "sideIssues": ["..."], "debtDecision": "none|record|continue"}`
@@ -1132,13 +1134,14 @@ ${verdictBlock}${debtBlock}
 
 TÌNH TRẠNG: vòng lặp dừng sau ${cyclesAttempted}/${maxCycles === 0 ? '∞' : maxCycles} chu kỳ — lý do: ${stopReason}.
 
-NHIỆM VỤ: viết BÁO CÁO CUỐI trung thực + HOÀN CHỈNH cho người dùng (tiếng Việt), theo đúng 4 phần:
-1. **ĐÃ LÀM ĐƯỢC** — từng việc cụ thể, kèm bằng chứng tool (tên tool + kết quả ngắn trích từ nhật ký)
-2. **CHƯA HOÀN THÀNH / CÒN THIẾU** — thành thật nêu giới hạn (bị cắt vì budget/chu kỳ), KHÔNG tuyên bố hoàn thành những gì chưa có bằng chứng
-3. **NHỮNG GÌ CHƯA KIỂM ĐỊNH ĐƯỢC** — nêu rõ khi công cụ kiểm định fail mà không trích được lỗi cụ thể (không đoán nguyên nhân)
-4. **ĐỀ XUẤT KHẮC PHỤC** — các bước cụ thể, khả thi cho lần chạy tiếp theo${debtBlock ? '\n\nKèm mục **NỢ KỸ THUẬT** (cuối báo cáo): liệt kê rõ các lỗi phát sinh đã ghi nhận thành Todo follow-up — người dùng quyết định xử lý lúc nào.' : ''}
+NHIỆM VỤ: viết BÁO CÁO CUỐI trung thực + HOÀN CHỈNH cho người dùng (tiếng Việt), theo đúng 4 phần (tiêu đề phần viết thường, kèm số thứ tự):
+1. ĐÃ LÀM ĐƯỢC — từng việc cụ thể, kèm bằng chứng tool (tên tool + kết quả ngắn trích từ nhật ký)
+2. CHƯA HOÀN THÀNH / CÒN THIẾU — thành thật nêu giới hạn (bị cắt vì budget/chu kỳ), KHÔNG tuyên bố hoàn thành những gì chưa có bằng chứng
+3. NHỮNG GÌ CHƯA KIỂM ĐỊNH ĐƯỢC — nêu rõ khi công cụ kiểm định fail mà không trích được lỗi cụ thể (không đoán nguyên nhân)
+4. ĐỀ XUẤT KHẮC PHỤC — các bước cụ thể, khả thi cho lần chạy tiếp theo${debtBlock ? '\n\nKèm mục NỢ KỸ THUẬT (cuối báo cáo): liệt kê rõ các lỗi phát sinh đã ghi nhận thành Todo follow-up — người dùng quyết định xử lý lúc nào.' : ''}
 
-QUY TẮC: KHÔNG gọi tool. KHÔNG bắt đầu công việc mới. Chỉ tổng kết từ bằng chứng có sẵn. Báo cáo phải trọn vẹn có kết luận (không bị cắt ngang).`
+QUY TẮC: KHÔNG gọi tool. KHÔNG bắt đầu công việc mới. Chỉ tổng kết từ bằng chứng có sẵn. Báo cáo phải trọn vẹn có kết luận (không bị cắt ngang).
+ĐỊNH DẠNG (user directive 2026-10-20): văn xuôi tiếng Việt sạch, markdown TỐI THIỂU — không bọc nhấn mạnh bằng **, không bọc từ ngữ bằng dấu \` hay dấu ' (chỉ trích dẫn mã/lệnh thật). Nhấn mạnh bằng CHỮ IN HOA. Liệt kê bằng gạch đầu dòng "- ".`
 
   try {
     const result = await withTimeout(
@@ -1939,7 +1942,11 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
         }
       } catch { /* fail-open — nén lỗi không được phép làm hỏng vòng lặp */ }
 
-      const formattedPrompt = formatMessagesForLLM(messages)
+      // NHẮC XUẤT PHÁT (Task 23-c — E2E lộ agent bỏ todo + báo cáo markdown dày
+      // trong chế độ CLI hybrid: protocol nằm ĐẦU system prompt dễ bị CLI prompt
+      // lấn át → nhắc ngắn CUỐI prompt user để tận dụng recency, áp mọi provider)
+      const formattedPrompt = formatMessagesForLLM(messages) +
+        '\n\n📝 NHẮC TRƯỚC KHI HÀNH ĐỘNG: (1) task từ 2 bước trở lên → gọi todo_write (đường CLI: tmo_todo) lập kế hoạch TRƯỚC, xong việc nào đánh dấu completed việc đó; (2) câu trả lời/báo cáo cho người đọc: văn xuôi tiếng Việt sạch, markdown TỐI THIỂU — không bọc nhấn mạnh bằng **, không bọc từ ngữ bằng dấu ` hay dấu nháy đơn — nhấn mạnh bằng CHỮ IN HOA, liệt kê bằng gạch đầu dòng "- ".'
 
       let result: Awaited<ReturnType<typeof callLLMForAgent>> | null = null
       try {

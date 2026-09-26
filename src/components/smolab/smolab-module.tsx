@@ -24,6 +24,7 @@ import { LearningTabContent } from '@/components/smolab/learning-tab'
 import { ChannelsTabContent } from '@/components/smolab/channels-tab'
 import { SkillsTabContent } from '@/components/smolab/skills-tab'
 import { AutomationTabContent } from '@/components/smolab/automation-tab'
+import MarkdownText from './markdown-text'
 
 
 // ==================== SMOLAB MODULE (Phase 1: Chat Tab) ====================
@@ -4581,7 +4582,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                         ) : msg.suggestionRejected ? (
                           <p className="text-base text-stone-300 italic">{msg.content}</p>
                         ) : (
-                          <p className="text-base whitespace-pre-wrap leading-relaxed text-stone-100">{msg.content}</p>
+                          <MarkdownText content={msg.content} className="text-sm leading-relaxed text-stone-100" />
                         )}
                         {msg.toolCallInfo && (
                           <div className="mt-2 p-2 rounded-lg bg-slate-950/50 border border-stone-700/50 text-[11px] text-stone-300">
@@ -4605,8 +4606,8 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                             </span>
                           )}
                         </div>
-                        <div className="text-[11px] text-stone-200 whitespace-pre-wrap leading-relaxed custom-scrollbar max-h-72 overflow-y-auto">
-                          {msg.content}
+                        <div className="text-[11px] text-stone-200 leading-relaxed custom-scrollbar max-h-72 overflow-y-auto">
+                          <MarkdownText content={msg.content} />
                         </div>
                         {msg.metadata.triggerMode === 'auto' && (
                           <div className="text-[9px] text-amber-400/60 mt-1.5">Opus hành động thay Mr. Architect</div>
@@ -4676,9 +4677,9 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                         </div>
                       )}
 
-                      {/* Content — chat font +2px LẦN 2 (user request 2026-09-10: 14px → 16px + chữ sáng hơn) */}
+                      {/* Content — báo cáo agent: 14px (user request 2026-10-20: giảm 2px) + markdown render sạch (không hiện thô **, `, *) */}
                       {msg.role !== 'tool_call' && (
-                        <p className="text-base whitespace-pre-wrap leading-relaxed text-stone-100">{msg.content}</p>
+                        <MarkdownText content={msg.content} className="text-sm leading-relaxed text-stone-100" />
                       )}
 
                       {/* Sources */}
