@@ -63,6 +63,7 @@ import {
   endAgentRun,
   recordAgentThought,
   recordAgentRunTodos,
+  recordAgentRunTool,
   isSessionCancelled,
 } from '@/lib/agent-run-tracker'
 // CI-2 (Task 11-a) — auto-complete todo theo bằng chứng tool giữa chừng run
@@ -469,7 +470,7 @@ GIAI ĐOẠN 0 — QUAN SÁT & PHÂN TÍCH (BẮT BUỘC trước mọi hành đ
 - XÁC ĐỊNH việc chu kỳ này: PHẢI là việc MỚI có tiến triển — không lặp lại việc đã THÀNH CÔNG, không lặp y hệt việc đã THẤT BẠI (đổi tool / đổi args / đổi cách tiếp cận).
 
 GIAI ĐOẠN 1 — XÁC ĐỊNH VẤN ĐỀ & LẬP KẾ HOẠCH:
-- Nếu task hơn 1 bước: gọi todo_write chia nhỏ CÓ TRUY VẾT: MỖI tiêu chí nghiệm thu PHẢI có ít nhất 1 todo tương ứng (ghi "[Nghiệm thu n]" trong nội dung) + các todo THU THẬP DỮ LIỆU từ bước biên độ dữ liệu đứng TRƯỚC. Mỗi todo viết dạng KIỂM ĐỊNH ĐƯỢC (xong = kiểm tra/chạy gì để biết đạt) — đừng viết todo mơ hồ kiểu "xử lý phần X".
+- BƯỚC ĐẦU TIÊN của mọi task từ 2 bước trở lên (gần như MỌI task làm việc): gọi todo_write (trên đường CLI là tool tmo_todo) chia nhỏ kế hoạch TRƯỚC KHI hành động — mỗi tiêu chí nghiệm thu ít nhất 1 todo tương ứng (ghi "[Nghiệm thu n]" trong nội dung) + các todo THU THẬP DỮ LIỆU từ bước biên độ dữ liệu. Mỗi todo viết dạng KIỂM ĐỊNH ĐƯỢC (xong = kiểm tra/chạy gì để biết đạt) — đừng viết todo mơ hồ kiểu "xử lý phần X". Bỏ qua todo_write chỉ khi task ĐÚNG 1 bước (một câu hỏi đơn lẻ trả lời ngay).
 - KỶ LUẬT TODO (bắt buộc): todo làm XONG phải được đánh dấu completed NGAY trong lần todo_write kế tiếp TRƯỚC KHI thêm todo mới (đóng việc cũ rồi mới mở việc mới — danh sách luôn phản ánh trạng thái thật). Việc phức tạp cần phân rã tiếp → tạo TODO CON: gọi todo_write với "id" của todo cha trong trường "parentId" của todo con (hiển thị lồng nhau trong panel — KHÔNG viết phẳng trùng nội dung). Cập nhật todo cũ — KHÔNG viết lại từ đầu.
 
 GIAI ĐOẠN 2 — TRIỂN KHAI (mỗi hành động đều có suy nghĩ):
@@ -690,33 +691,47 @@ export function assembleGoalLoopSystemPrompt(params: {
  * nguyên tắc R2 "belief-state nén xuống R1" của SELF_REFLECTION_DESIGN —
  * trạng thái kế hoạch phải đi cùng agent qua chu kỳ).
  *
- * Fix: trước khi inject continuation directive, đọc todo MỞ (pending/
- * in_progress/blocked) của ĐÚNG run này từ DB → render khối "📋 TODO HIỆN
- * TẠI" đính kèm directive. Fail-open tuyệt đối (DB lỗi → block rỗng, hành
+ * Fix: trước khi inject continuation directive, đọc todo của ĐÚNG run này từ
+ * DB → render khối "📋 TODO HIỆN TẠI" (chỉ dòng MỞ, thụt lề theo cây cha–con —
+ * TASK 21-d) đính kèm directive. Fail-open tuyệt đối (DB lỗi → block rỗng, hành
  * vi cũ). Chỉ hiện tối đa 15 todo mở — đủ bức tranh, không phình context.
  */
 async function buildRunTodosBlock(sessionId: string | null | undefined, runId: string | null | undefined): Promise<string> {
   if (!sessionId || !runId) return ''
   try {
     const { db } = await import('@/lib/db')
-    const todos = await db.todo.findMany({
-      where: {
-        sessionId,
-        runId,
-        status: { in: ['pending', 'in_progress', 'blocked'] },
-      },
+    // TASK 21-d (rà soát sau triển khai): load TẤT CẢ todo của run (không chỉ
+    // mở) — cần cả todo completed để tính độ sâu cha–con (todo mở có cha đã
+    // xong vẫn hiển thị thụt đúng cấp). Render: chỉ dòng MỞ, indent theo cây.
+    const all = await db.todo.findMany({
+      where: { sessionId, runId },
       orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
-      take: 15,
+      take: 40,
     })
-    if (todos.length === 0) return ''
+    if (all.length === 0) return ''
+    const byId = new Map(all.map(t => [t.id, t]))
+    const depthOf = (t: { id: string; parentId: string | null }, seen = new Set<string>()): number => {
+      let d = 0
+      let cur = t
+      while (cur.parentId && byId.has(cur.parentId) && !seen.has(cur.parentId) && d < 4) {
+        seen.add(cur.parentId)
+        cur = byId.get(cur.parentId)!
+        d++
+      }
+      return d
+    }
+    const open = all.filter(t => t.status === 'pending' || t.status === 'in_progress' || t.status === 'blocked')
+    if (open.length === 0) return ''
     // Ops log (2026-10-20 Task 20): xác nhận TODO block thực sự render —
     // quan sát được trong dev.log khi audit hành vi đa chu kỳ.
-    console.log(`[GoalLoop] TODO block: ${todos.length} todo mở của run ${runId} → đính kèm directive chu kỳ sau`)
-    const lines = todos.map(t => {
+    const nested = open.filter(t => depthOf(t) > 0).length
+    console.log(`[GoalLoop] TODO block: ${open.length} todo mở (${nested} con lồng nhau) của run ${runId} → đính kèm directive chu kỳ sau`)
+    const lines = open.map(t => {
       const tag = t.status === 'in_progress' ? '[ĐANG LÀM] ' : t.status === 'blocked' ? '[KẸT] ' : ''
-      return `- ${tag}${t.content.slice(0, 140)}`
+      const d = depthOf(t)
+      return `${'  '.repeat(d)}${d > 0 ? '↳ ' : '- '}${tag}${t.content.slice(0, 140)}`
     })
-    return `\n\n📋 TODO HIỆN TẠI CỦA RUN (trạng thái kế hoạch còn mở — cập nhật bằng todo_write: đóng mục xong, KHÔNG viết lại từ đầu):\n${lines.join('\n')}`
+    return `\n\n📋 TODO HIỆN TẠI CỦA RUN (trạng thái kế hoạch còn mở — cập nhật bằng todo_write: đóng mục xong, KHÔNG viết lại từ đầu; việc lồng nhau thụt lề là TODO CON của việc trên nó):\n${lines.join('\n')}`
   } catch { return '' /* fail-open — todo không được phép làm hỏng loop */ }
 }
 
@@ -2092,6 +2107,27 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
           success: ok,
           text: outPreview || (ok ? 'đã thực thi trong CLI inner loop (tmo_* bridge / native)' : 'thất bại trong CLI inner loop'),
         })
+        // FIX (rà soát sau Task 21 — E2E lộ gap V16): tool native chạy trong
+        // CLI inner loop KHÔNG qua executeTool TMO → recordAgentRunTool (trong
+        // recordActivity của executor) không bao giờ được gọi → Thought Progress
+        // panel trống tool events dù agent đã chạy thật (E2E thực tế: 2 tool
+        // file_read chạy trong CLI nhưng tracker 0 tools). Ghi TRỰC TIẾP vào
+        // tracker để panel hiện đúng những gì agent làm. BỎ QUA tool tmo_* —
+        // bridge đã POST /api/tools/execute (server-side recordActivity tự ghi
+        // event cùng session) → ghi lại lần nữa sẽ duplicate trên panel.
+        const cliOriginName = (executedRaw.find(x => (x.id || '') === etc.id)?.function?.name) || ''
+        if (!cliOriginName.startsWith('tmo_')) {
+          try {
+            recordAgentRunTool(agentSessionId, {
+              tool: etc.name,
+              argsSummary: compactToolArgs(etc.args),
+              success: ok,
+              durationMs: er?.durationMs ?? 0,
+              resultPreview: outPreview ? outPreview.slice(0, 200) : undefined,
+              iteration: totalIterations,
+            })
+          } catch { /* display-only — fail-open */ }
+        }
         cliBatchLines.push(`- ${etc.name} → ${ok ? 'THÀNH CÔNG' : 'THẤT BẠI'}${outPreview ? `: ${outPreview}` : ''}`)
 
         // 2026-10-20 TASK 20 — MIRROR todo từ inner loop CLI vào TMO DB.
@@ -2439,6 +2475,7 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
               content: t.content,
               status: t.status,
               priority: t.priority,
+              parentId: t.parentId ?? null,
             })))
             recordAgentThought(
               agentSessionId,

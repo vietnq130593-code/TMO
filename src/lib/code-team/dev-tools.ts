@@ -3431,7 +3431,9 @@ export async function todoWrite(args: {
 
   const VALID_STATUS = new Set(['pending', 'in_progress', 'blocked', 'completed', 'failed'])
   const VALID_PRIORITY = new Set(['low', 'medium', 'high'])
-  const upserted: Array<{ id: string; content: string; status: string; priority: string }> = []
+  // TASK 21-d — upserted có parentId: snapshot Thought Progress (lastTodos)
+  // cần parentId để render CÂY (todo con lồng todo cha) trên đường fallback.
+  const upserted: Array<{ id: string; content: string; status: string; priority: string; parentId?: string | null }> = []
 
   for (const t of args.todos) {
     if (!t.content || typeof t.content !== 'string') {
@@ -3470,6 +3472,7 @@ export async function todoWrite(args: {
         content: updated.content,
         status: updated.status,
         priority: updated.priority,
+        parentId: updated.parentId,
       })
       continue
     }
@@ -3485,6 +3488,7 @@ export async function todoWrite(args: {
           content: existing.content,
           status: existing.status,
           priority: existing.priority,
+          parentId: existing.parentId,
         })
         continue
       }
@@ -3519,6 +3523,7 @@ export async function todoWrite(args: {
           content: updated.content,
           status: updated.status,
           priority: updated.priority,
+          parentId: updated.parentId,
         })
         continue
       }
@@ -3542,6 +3547,7 @@ export async function todoWrite(args: {
       content: created.content,
       status: created.status,
       priority: created.priority,
+      parentId: created.parentId,
     })
   }
 
@@ -3754,7 +3760,7 @@ export async function autoCompleteRunTodosByEvidence(params: {
   runId: string | null
   /** Chuỗi bằng chứng: đường dẫn file / lệnh shell từ tool call thành công */
   evidence: string[]
-}): Promise<{ completed: number; todos: Array<{ id: string; content: string; status: string; priority: string; position: number }> }> {
+}): Promise<{ completed: number; todos: Array<{ id: string; content: string; status: string; priority: string; position: number; parentId: string | null }> }> {
   const { sessionId, runId, evidence } = params
   try {
     if (!sessionId || !runId || !Array.isArray(evidence) || evidence.length === 0) {
@@ -3780,10 +3786,11 @@ export async function autoCompleteRunTodosByEvidence(params: {
       completed++
     }
     // Trả danh sách todo HIỆN TẠI của run (sau update) để caller snapshot
+    // TASK 21-d: kèm parentId — snapshot Thought Progress render cây được.
     const todos = await db.todo.findMany({
       where: { sessionId, runId },
       orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
-      select: { id: true, content: true, status: true, priority: true, position: true },
+      select: { id: true, content: true, status: true, priority: true, position: true, parentId: true },
     })
     if (completed > 0) {
       console.log(`[Todo CI-2] Auto-completed ${completed} in_progress todo(s) theo bằng chứng tool trong run ${runId}`)

@@ -104,6 +104,24 @@ function norm(s: string): string {
 }
 
 /**
+ * Chuẩn hóa TÊN TOOL khi so khớp bằng chứng λ-verify (rà soát sau Task 21 —
+ * E2E-2 lộ: agent trên đường CLI biết tool dưới tên `tmo_shell` nhưng evidence
+ * của harness ghi tên ĐÃ RESOLVE `shell` → so khớp thất bại → phán quyết ĐÚNG
+ * bị TỪ CHỐI oan). Chuẩn hóa cả 2 phía: strip prefix tmo_ + map alias native
+ * (bash→shell, read→file_read...) — giống TOOL_NAME_ALIASES của executor.
+ */
+const EVIDENCE_TOOL_ALIASES: Record<string, string> = {
+  bash: 'shell', sh: 'shell', read: 'file_read', write: 'file_write',
+  edit: 'file_edit', multiedit: 'file_multi_edit', multi_edit: 'file_multi_edit',
+  todowrite: 'todo_write', todoread: 'todo_read', glob: 'file_list', ls: 'file_list',
+}
+function normalizeEvidenceToolName(name: string): string {
+  const n = (name || '').toLowerCase().trim()
+  const stripped = n.startsWith('tmo_') ? n.slice(4) : n
+  return EVIDENCE_TOOL_ALIASES[stripped] ?? EVIDENCE_TOOL_ALIASES[n] ?? stripped
+}
+
+/**
  * So khớp MỜ trích dẫn bằng chứng với text kết quả tool (thực tế result bị
  * cut 400 chars nên exact substring thường fail): ≥50% token (≥4 ký tự) của
  * quote xuất hiện trong result → khớp. Exact substring luôn thắng.
@@ -162,10 +180,12 @@ export async function proposeHypothesis(args: ProposeHypothesisArgs): Promise<Pr
     })
     for (const h of alive) {
       const mechSim = jaccard(mechanics, h.mechanicsClaim)
-      if (mechSim >= 0.95) {
-        return { ok: true, kind: 'duplicate', id: h.id, note: `Trùng hypothesis hiện có (Jaccard cơ chế ${mechSim.toFixed(2)}) — không tạo bản sao` }
-      }
       if (mechSim >= SHR_CONSTANTS.PARROT_MECH_JACCARD) {
+        // FIX (rà soát sau Task 21 — lộ nhờ test A4): duplicate-check ≥0.95 đặt
+        // TRƯỚC parrot-check ≥0.9 → parrot không bao giờ kích hoạt (mọi cặp
+        // trùng cơ chế ≥0.95 đều bị nuốt bởi nhánh duplicate). Thứ tự đúng:
+        // parrot là điều kiện CỤ THỂ HƠN (cơ chế trùng ∧ ngữ cảnh LỆCH) →
+        // kiểm tra TRƯỚC; chỉ khi ngữ cảnh còn khớp mới là duplicate thật.
         const ctxSim = jaccard(contextSig, h.contextSig)
         if (ctxSim <= 1 - SHR_CONSTANTS.PARROT_CTX_DISTANCE) {
           await db.structuredHypothesis.update({
@@ -176,6 +196,9 @@ export async function proposeHypothesis(args: ProposeHypothesisArgs): Promise<Pr
             ok: true, kind: 'parrot', id: h.id,
             note: `Nghi vẹt (parrot_suspect): cơ chế trùng (${mechSim.toFixed(2)}) nhưng ngữ cảnh lệch — hypothesis cũ bị gắn cờ, cần test lại ở ngữ cảnh này`,
           }
+        }
+        if (mechSim >= 0.95) {
+          return { ok: true, kind: 'duplicate', id: h.id, note: `Trùng hypothesis hiện có (Jaccard cơ chế ${mechSim.toFixed(2)}) — không tạo bản sao` }
         }
       }
     }
@@ -228,10 +251,22 @@ export async function recordJudgment(args: JudgeHypothesisArgs): Promise<{ ok: b
     const h = await db.structuredHypothesis.findFirst({
       where: { id: args.hypothesisId, sessionId: args.sessionId },
     })
-    if (!h) return { ok: false, error: `Hypothesis không tồn tại trong session: ${args.hypothesisId}` }
-    if (h.status === 'demoted') return { ok: false, error: 'Hypothesis đã bị demote — không nhận phán quyết nữa' }
+    // FIX (rà soát sau Task 21): agent có thể trích id RÚT GỌN (UI/evidence
+    // preview hiện 6 ký tự cuối — "id ab12cd") → exact match fail oan. Fallback:
+    // nếu không tìm thấy id chính xác, thử suffix-match (id thật KẾT THÚC bằng
+    // chuỗi agent đưa, ≥6 ký tự) trong CÙNG session — chỉ 1 kết quả duy nhất
+    // mới chấp nhận (không mơ hồ).
+    let hyp = h
+    if (!hyp && args.hypothesisId.length >= 6 && args.hypothesisId.length < 20) {
+      const suffixCandidates = await db.structuredHypothesis.findMany({
+        where: { sessionId: args.sessionId, id: { endsWith: args.hypothesisId } },
+      })
+      if (suffixCandidates.length === 1) hyp = suffixCandidates[0]
+    }
+    if (!hyp) return { ok: false, error: `Hypothesis không tồn tại trong session: ${args.hypothesisId}` }
+    if (hyp.status === 'demoted') return { ok: false, error: 'Hypothesis đã bị demote — không nhận phán quyết nữa' }
     await db.structuredHypothesis.update({
-      where: { id: h.id },
+      where: { id: hyp.id },
       data: {
         pendingJudgment: JSON.stringify({
           verdict: args.verdict,
@@ -284,9 +319,12 @@ export async function verifyPendingJudgments(sessionId: string, cycleEvidence: C
         await db.structuredHypothesis.update({ where: { id: h.id }, data: { pendingJudgment: null } }).catch(() => null)
         continue
       }
-      // λ-check: tool phảI chạy thành công + quote khớp kết quả
+      // λ-check: tool phải chạy thành công + quote khớp kết quả.
+      // FIX tên tool: so khớp SAU KHI chuẩn hóa 2 phía (tmo_shell ≡ shell ≡ bash;
+      // agent trích tên CLI, evidence ghi tên TMO resolve — đều hợp lệ).
+      const jt = normalizeEvidenceToolName(judgment.evidenceTool)
       const candidates = judgment.evidenceTool
-        ? okEvidence.filter(e => e.tool.toLowerCase() === judgment!.evidenceTool.toLowerCase())
+        ? okEvidence.filter(e => normalizeEvidenceToolName(e.tool) === jt)
         : okEvidence
       const matched = candidates.some(e => evidenceQuoteMatches(judgment!.evidenceQuote, e.text))
       if (!matched) {
@@ -464,13 +502,22 @@ export async function compressCycleToSample(args: CotCompressionArgs): Promise<C
       }
     }
 
-    // Kraft budget — đầy thì xóa mẩu KÉM NHẤT (posterior thấp nhất, lâu chưa truy hồi nhất)
+    // Kraft budget — đầy thì xóa mẩu KÉM NHẤT (posterior thấp nhất, lâu chưa truy hồi nhất).
+    // FIX (rà soát sau Task 21): mọi mẫu đều drifted → findFirst(where drifted:false)
+    // trả null → KHÔNG xóa → vượt budget. Giờ fallback xóa tồi nhất trong TẤT CẢ
+    // (kể cả drifted — drifted chỉ cấm truy hồi/làm cha, vẫn xóa được khi cần chỗ).
     const count = await db.cotSample.count({ where: { sessionId: args.sessionId } })
     if (count >= SHR_CONSTANTS.COT_BUDGET) {
-      const worst = await db.cotSample.findFirst({
+      let worst = await db.cotSample.findFirst({
         where: { sessionId: args.sessionId, drifted: false },
         orderBy: [{ posterior: 'asc' }, { lastRetrievedAt: 'asc' }, { hitCount: 'asc' }],
       })
+      if (!worst) {
+        worst = await db.cotSample.findFirst({
+          where: { sessionId: args.sessionId },
+          orderBy: [{ posterior: 'asc' }, { lastRetrievedAt: 'asc' }, { hitCount: 'asc' }],
+        })
+      }
       if (worst) await db.cotSample.delete({ where: { id: worst.id } }).catch(() => null)
     }
 

@@ -158,7 +158,7 @@ export interface AgentRunEventData {
   resultPreview?: string
   success?: boolean
   durationMs?: number
-  todos?: Array<{ id: string; content: string; status: string; priority?: string }>
+  todos?: Array<{ id: string; content: string; status: string; priority?: string; parentId?: string | null }>
   /** USER REQUEST 2026-08-31: run_end bị dừng bởi người dùng (bấm nút Dừng) */
   cancelled?: boolean
 }
@@ -187,7 +187,7 @@ export interface AgentRunData {
   status: 'running' | 'done' | 'error' | 'cancelled'
   events: AgentRunEventData[]
   counters: AgentRunCountersData
-  lastTodos?: Array<{ id: string; content: string; status: string; priority?: string }>
+  lastTodos?: Array<{ id: string; content: string; status: string; priority?: string; parentId?: string | null }>
   /** CI-2 (Task 11-a): todo DB của ĐÚNG runId này (orderBy position, kèm theo
    *  mỗi run item từ GET /api/agent-run) — panel Thought Process (11-b) ưu
    *  tiên nguồn này thay vì danh sách session-wide. Fail-open [] khi lỗi DB. */
@@ -1853,7 +1853,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       if (todosRes?.ok) {
         const td = await todosRes.json().catch(() => null) as {
           ok?: boolean
-          todos?: Array<{ id: string; content: string; status: string; priority?: string; runId?: string | null; archivedAt?: string | null }>
+          todos?: Array<{ id: string; content: string; status: string; priority?: string; parentId?: string | null; runId?: string | null; archivedAt?: string | null }>
         } | null
         if (td?.ok && Array.isArray(td.todos)) {
           setSessionTodos(td.todos.map(t => ({
@@ -1861,6 +1861,8 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
             content: String(t.content || ''),
             status: String(t.status || 'pending'),
             priority: t.priority ? String(t.priority) : undefined,
+            // TASK 21-d — giữ parentId (render cây todo con lồng todo cha)
+            parentId: t.parentId != null ? String(t.parentId) : null,
             // CI-2 (11-a): giữ runId + archivedAt — panel dùng để lọc chỉ còn
             // todo legacy (runId=null) làm fallback + ẩn todo đã lưu trữ
             runId: t.runId != null ? String(t.runId) : null,

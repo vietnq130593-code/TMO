@@ -2047,13 +2047,14 @@ export async function executeTool(
       }, context?.delegationRunId || undefined)
       // todo_write thành công → snapshot todo list (panel Todos trong chat)
       if (toolName === 'todo_write' && success) {
-        const r = result as { todos?: Array<{ id?: string; content?: string; status?: string; priority?: string }> } | null
+        const r = result as { todos?: Array<{ id?: string; content?: string; status?: string; priority?: string; parentId?: string | null }> } | null
         if (r && Array.isArray(r.todos)) {
           recordAgentRunTodos(context?.sessionId ?? null, r.todos.map((t, i) => ({
             id: String(t.id ?? `todo_${i}`),
             content: String(t.content ?? ''),
             status: String(t.status ?? 'pending'),
             priority: t.priority ? String(t.priority) : undefined,
+            parentId: t.parentId != null ? String(t.parentId) : null,
           })), context?.delegationRunId || undefined)
         }
       }

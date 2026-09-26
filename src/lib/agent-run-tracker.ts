@@ -48,6 +48,8 @@ export interface AgentRunTodo {
   content: string
   status: string
   priority?: string
+  /** TASK 21-d — todo cha (lồng nhau): Thought Progress render CÂY qua parentId */
+  parentId?: string | null
 }
 
 export type AgentRunEventType =
@@ -636,6 +638,8 @@ export function recordAgentRunTodos(
       content: String(t.content || '').slice(0, 160),
       status: String(t.status || 'pending'),
       priority: t.priority ? String(t.priority) : undefined,
+      // TASK 21-d — giữ parentId để panel render todo CON lồng đúng chỗ
+      parentId: t.parentId ? String(t.parentId) : null,
     }))
     pushEvent(run, {
       id: nextEventId(),
