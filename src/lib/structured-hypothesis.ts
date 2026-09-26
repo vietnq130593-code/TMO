@@ -650,6 +650,9 @@ export async function upsertRunContext(params: {
    *  lúc run START) — preserve-on-null như các field khác (end-of-cycle upsert
    *  không truyền → không đè giá trị đã stash từ đầu run). */
   acceptanceCriteria?: string | null
+  /** UNCERTAINTY LEDGER: JSON array string [{text, firstSeenCycle}] — mục ❓
+   *  của chu kỳ (đã merge aging). Preserve-on-null tương tự. */
+  uncertainItems?: string | null
 }): Promise<void> {
   try {
     if (!params.runId || !params.sessionId) return
@@ -658,6 +661,7 @@ export async function upsertRunContext(params: {
     if (params.goalDigest) data.goalDigest = params.goalDigest
     if (params.contextKeywords) data.contextKeywords = params.contextKeywords
     if (params.acceptanceCriteria) data.acceptanceCriteria = params.acceptanceCriteria
+    if (params.uncertainItems) data.uncertainItems = params.uncertainItems
     await db.runContext.upsert({
       where: { runId: params.runId },
       create: {
@@ -666,6 +670,7 @@ export async function upsertRunContext(params: {
         goalDigest: params.goalDigest ?? null,
         contextKeywords: params.contextKeywords ?? null,
         acceptanceCriteria: params.acceptanceCriteria ?? null,
+        uncertainItems: params.uncertainItems ?? null,
       },
       update: data,
     })
@@ -673,14 +678,127 @@ export async function upsertRunContext(params: {
 }
 
 /** Đọc RunContext — trả null nếu chưa có (chu kỳ 1 chưa xong) */
-export async function getRunContext(runId: string): Promise<{ dataScope: string | null; goalDigest: string | null; contextKeywords: string | null; acceptanceCriteria: string | null } | null> {
+export async function getRunContext(runId: string): Promise<{ dataScope: string | null; goalDigest: string | null; contextKeywords: string | null; acceptanceCriteria: string | null; uncertainItems: string | null } | null> {
   try {
     if (!runId) return null
     const rc = await db.runContext.findUnique({ where: { runId } })
     if (!rc) return null
-    return { dataScope: rc.dataScope, goalDigest: rc.goalDigest, contextKeywords: rc.contextKeywords, acceptanceCriteria: rc.acceptanceCriteria }
+    return { dataScope: rc.dataScope, goalDigest: rc.goalDigest, contextKeywords: rc.contextKeywords, acceptanceCriteria: rc.acceptanceCriteria, uncertainItems: rc.uncertainItems }
   } catch {
     return null
+  }
+}
+
+// ==================== UNCERTAINTY LEDGER — phản chiếu là năng lực TRONG QUY TRÌNH (2026-10-22) ====================
+//
+// User directive: "xác định biên độ dữ liệu và tự phản chiếu là năng lực nằm
+// trong quy trình xử lý chứ không phải ở trong 1 báo cáo nghiệm thu nào hết".
+// 📐 đã là năng lực trong quy trình (parse → RunContext → render lại → coverage).
+// Giờ phản chiếu được cùng xử lý: dòng ❓ "Còn CHƯA CHẮC" KHÔNG chỉ là chữ trong
+// báo cáo — harness trích thành ledger sống theo run, re-render directive chu
+// kỳ sau (như 📐), mục treo ≥2 chu kỳ bị nhắc ưu tiên (chống "phản chiếu cho
+// đẹp" rồi quên). Cùng họ λ-GROUNDED: không tin tự khai — theo dõi deterministic.
+
+/** 1 mục trong ledger ❓ */
+export interface UncertainItem {
+  text: string
+  /** chu kỳ đầu tiên mục này xuất hiện (aging ≥2 chu kỳ → cảnh báo) */
+  firstSeenCycle: number
+}
+
+/** Số mục ❓ tối đa trong ledger (chống phình directive) */
+export const UNCERTAIN_LEDGER_MAX = 3
+/** Jaccard ≥ ngưỡng này giữa mục mới ↔ mục cũ = CÙNG một điều chưa chắc */
+export const UNCERTAIN_MATCH_JACCARD = 0.55
+
+/**
+ * Trích các mục ❓ "còn chưa chắc" từ báo cáo chu kỳ. Ưu tiên dòng có chữ
+ * "chưa chắc" (protocol GĐ3) — chống nhặt nhầm ❓ xuất hiện rải rác trong văn
+ * bản khác (BELIEF-STATE, todo...). Tách mục theo dấu ; / · / " - ". Trả về
+ * tối đa UNCERTAIN_LEDGER_MAX mục, mỗi mục ≤200 ký tự.
+ */
+export function parseUncertainItems(report: string): string[] {
+  if (!report) return []
+  const lines = report.split('\n')
+  // (1) dòng ❓ có chữ "chưa chắc" (dòng REFLECT đúng protocol) — ưu tiên
+  const preferred: string[] = []
+  const rest: string[] = []
+  for (const line of lines) {
+    const m = line.match(/❓[^:\n]{0,80}:\s*(.+)/)
+    if (!m) continue
+    if (/chưa\s*chắc/i.test(line) || /còn\s*chưa/i.test(line)) preferred.push(m[1])
+    else rest.push(m[1])
+  }
+  const pool = preferred.length > 0 ? preferred : rest.slice(0, 1)
+  // (2) tách mục: "; " / " · " / " - " (mục dài chứa "," tiếng Việt — không tách theo ",")
+  const items: string[] = []
+  for (const raw of pool) {
+    for (const part of raw.split(/\s*[;·]\s*|\s+-\s+/)) {
+      const t = part.trim().slice(0, 200)
+      if (t.length >= 8) items.push(t)
+      if (items.length >= UNCERTAIN_LEDGER_MAX) return items
+    }
+  }
+  return items
+}
+
+/**
+ * Merge mục ❓ mới với ledger cũ — mục trùng (Jaccard ≥ UNCERTAIN_MATCH_JACCARD)
+ * giữ firstSeenCycle gốc (aging), mục mới nhận firstSeenCycle = chu kỳ hiện tại.
+ * Pure function (test được) — caller chịu trách nhiệm persist.
+ */
+export function mergeUncertainLedger(
+  prevJson: string | null | undefined,
+  newItems: string[],
+  cycle: number,
+): string {
+  let prev: UncertainItem[] = []
+  if (prevJson) {
+    try {
+      const parsed = JSON.parse(prevJson) as unknown
+      if (Array.isArray(parsed)) {
+        prev = parsed
+          .filter((x): x is UncertainItem => !!x && typeof (x as UncertainItem).text === 'string')
+          .map(x => ({ text: String(x.text).slice(0, 200), firstSeenCycle: Number(x.firstSeenCycle) || cycle }))
+          .slice(0, UNCERTAIN_LEDGER_MAX)
+      }
+    } catch { /* JSON hỏng → coi như ledger trống */ }
+  }
+  const merged: UncertainItem[] = newItems.slice(0, UNCERTAIN_LEDGER_MAX).map(text => {
+    // mục mới trùng mục cũ → KẾ THỪA firstSeenCycle (đây chính là aging)
+    let firstSeen = cycle
+    for (const p of prev) {
+      if (jaccard(text, p.text) >= UNCERTAIN_MATCH_JACCARD) {
+        firstSeen = Math.min(p.firstSeenCycle, cycle)
+        break
+      }
+    }
+    return { text, firstSeenCycle: firstSeen }
+  })
+  return JSON.stringify(merged)
+}
+
+/**
+ * Render block directive từ ledger ❓ — chu kỳ sau THẤY các giả thuyết chưa
+ * kiểm chứng + tuổi của chúng (≥2 chu kỳ → nhắc ưu tiên xử lý). Trả '' khi
+ * ledger rỗng/hỏng (fail-open).
+ */
+export function renderUncertainLedgerBlock(uncertainItemsJson: string | null | undefined, currentCycle: number): string {
+  if (!uncertainItemsJson) return ''
+  try {
+    const parsed = JSON.parse(uncertainItemsJson) as unknown
+    if (!Array.isArray(parsed) || parsed.length === 0) return ''
+    const items = parsed
+      .filter((x): x is UncertainItem => !!x && typeof (x as UncertainItem).text === 'string')
+      .slice(0, UNCERTAIN_LEDGER_MAX)
+    if (items.length === 0) return ''
+    const lines = items.map(it => {
+      const age = currentCycle - (Number(it.firstSeenCycle) || currentCycle)
+      return `- ${it.text}${age >= 1 ? ` (chưa kiểm chứng từ chu kỳ ${it.firstSeenCycle}${age >= 2 ? ' — ⚠️ treo ≥2 chu kỳ: ƯU TIÊN kiểm định bằng tool hoặc bác bỏ ngay chu kỳ này' : ''})` : ''}`
+    })
+    return `\n\n❓ CÒN CHƯA CHẮC (tự phản chiếu chu kỳ trước — giả thuyết CHƯA kiểm chứng, KHÔNG dùng làm tiền đề kết luận; ưu tiên kiểm định bằng tool hoặc bác bỏ và bỏ khỏi danh sách):\n${lines.join('\n')}`
+  } catch {
+    return ''
   }
 }
 

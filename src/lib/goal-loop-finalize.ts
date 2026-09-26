@@ -130,8 +130,23 @@ export interface AgentRunMessageSummary {
   editsMade: number
   durationMs?: number
   todos?: unknown
-  /** Thought steps compact — persist qua restart (cap 80 events × 400 chars) */
-  events: Array<{ type: string; ts: number; text: string }>
+  /** Thought steps compact — persist qua restart (cap 150 events).
+   * FIX 2026-10-22 (user bug report "không thấy tên tool — chỉ có ký hiệu"):
+   * tool event trong tracker KHÔNG có field `text` (chỉ tool/argsSummary/
+   * success/resultPreview) → mapping cũ persist text='' → timeline sau reload
+   * hiện mỗi hàng 🔧 trống. Giờ: tool event mang ĐẦY ĐỦ trường (tên tool mono,
+   * args, ✓/✗, duration, result preview) — AgentRunSummaryBar render lại
+   * ĐÚNG như panel live. `text` vẫn được tổng hợp (backward compat UI cũ). */
+  events: Array<{
+    type: string
+    ts: number
+    text: string
+    tool?: string
+    args?: string
+    ok?: boolean
+    dur?: number
+    result?: string
+  }>
 }
 
 /**
@@ -160,11 +175,31 @@ export function buildAgentRunSummaryForMessage(
       editsMade: run.counters.editsMade,
       durationMs: run.endedAt ? run.endedAt - run.startedAt : undefined,
       todos: run.lastTodos,
-      events: run.events.slice(-80).map(e => ({
-        type: e.type,
-        ts: e.ts,
-        text: typeof e.text === 'string' ? e.text.slice(0, 400) : '',
-      })),
+      // FIX 2026-10-22: cap 80 → 150 events; tool event mang đầy đủ trường để
+      // timeline sau reload hiện TÊN TOOL + args + ✓/✗ + kết quả (trước đây
+      // chỉ 🔧 + text rỗng). Thought giữ 400 ký tự như cũ.
+      events: run.events.slice(-150).map(e => {
+        if (e.type === 'tool') {
+          const tool = typeof e.tool === 'string' ? e.tool.slice(0, 40) : ''
+          const args = typeof e.argsSummary === 'string' ? e.argsSummary.slice(0, 160) : ''
+          return {
+            type: e.type,
+            ts: e.ts,
+            // text tổng hợp — UI cũ chỉ đọc text vẫn thấy tên tool
+            text: `${tool}${args ? ` ${args}` : ''}`.trim().slice(0, 300),
+            ...(tool ? { tool } : {}),
+            ...(args ? { args } : {}),
+            ok: e.success !== false,
+            ...(typeof e.durationMs === 'number' ? { dur: e.durationMs } : {}),
+            ...(typeof e.resultPreview === 'string' && e.resultPreview ? { result: e.resultPreview.slice(0, 240) } : {}),
+          }
+        }
+        return {
+          type: e.type,
+          ts: e.ts,
+          text: typeof e.text === 'string' ? e.text.slice(0, 400) : '',
+        }
+      }),
     }
   } catch { return undefined }
 }

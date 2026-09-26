@@ -207,8 +207,19 @@ export interface AgentRunSummaryData {
   durationMs?: number
   todos?: Array<{ id: string; content: string; status: string; priority?: string }>
   /** THOUGHT STEPS PERSIST (fix 2026-09-08): quá trình thực thi được lưu vào
-   * message metadata → sau reload/app-restart vẫn xem được Thought Process */
-  events?: Array<{ type: string; ts?: number; text: string }>
+   * message metadata → sau reload/app-restart vẫn xem được Thought Process.
+   * FIX 2026-10-22: tool event mang thêm tool/args/ok/dur/result — render
+   * timeline ĐẦY ĐỦ như panel live (trước đây chỉ 🔧 + text rỗng). */
+  events?: Array<{
+    type: string
+    ts?: number
+    text: string
+    tool?: string
+    args?: string
+    ok?: boolean
+    dur?: number
+    result?: string
+  }>
 }
 
 
@@ -511,12 +522,48 @@ export function AgentRunSummaryBar({ summary }: { summary: AgentRunSummaryData }
           <summary className="cursor-pointer text-[11px] text-violet-300/90 hover:text-violet-200 select-none">
             🧠 Xem quá trình thực thi ({events.length} bước — đã lưu, survives restart)
           </summary>
-          <div className="mt-1 max-h-64 overflow-y-auto text-[11px] leading-relaxed text-stone-300 border border-stone-700/40 rounded bg-stone-900/40 p-1.5 space-y-0.5">
-            {events.map((e, i) => (
-              <div key={i} className={e.type === 'tool' ? 'text-cyan-300/90' : e.type === 'thought' ? 'text-stone-300' : 'text-stone-400'}>
-                {e.type === 'tool' ? '🔧' : e.type === 'thought' ? '💭' : '•'} {e.text}
-              </div>
-            ))}
+          {/* FIX 2026-10-22 (user bug report "Thought Progress biến mất / không
+              thấy tên tool"): render timeline ĐẦY ĐỦ như panel live — tool event
+              có TÊN TOOL (mono) + args + ✓/✗ + duration + kết quả preview;
+              thought event dạng khối 💭. Bản ghi CŨ (chỉ có text) → fallback
+              render 1 dòng như trước (không mất dữ liệu). */}
+          <div className="mt-1 max-h-72 overflow-y-auto space-y-1 border border-stone-700/40 rounded bg-stone-900/40 p-1.5" style={{ scrollbarWidth: 'thin' }}>
+            {events.map((e, i) => {
+              // Tool event ĐẦY ĐỦ (bản ghi mới 2026-10-22) — có tên tool
+              if (e.type === 'tool' && e.tool) {
+                return (
+                  <div key={i} className="px-2 py-1.5 rounded bg-slate-900/40 border-l-2 border-cyan-500/40">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[12px] flex-shrink-0">{RUN_TOOL_ICONS[e.tool] || '🔧'}</span>
+                      <span className="text-[11px] font-mono text-cyan-200 flex-shrink-0">{e.tool}</span>
+                      {e.args && <span className="text-[11px] text-stone-300 truncate max-w-[45%]">{e.args}</span>}
+                      <span className={`text-[11px] flex-shrink-0 ${e.ok ? 'text-emerald-400' : 'text-red-400'}`}>{e.ok ? '✓' : '✗'}</span>
+                      {e.dur != null && <span className="text-[10px] text-stone-500 ml-auto flex-shrink-0">{fmtRunDuration(e.dur)}</span>}
+                    </div>
+                    {e.result && (
+                      <pre className="mt-1 text-[11px] leading-4 text-stone-400 whitespace-pre-wrap max-h-20 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>{e.result}</pre>
+                    )}
+                  </div>
+                )
+              }
+              // Thought event — khối 💭 như panel live
+              if (e.type === 'thought') {
+                return (
+                  <div key={i} className="px-2 py-1.5 rounded bg-slate-900/50 border-l-2 border-violet-500/50">
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="text-[11px] text-violet-300">💭 Suy nghĩ</span>
+                    </div>
+                    <p className="text-[12px] leading-5 text-stone-300 italic whitespace-pre-wrap line-clamp-6">{e.text}</p>
+                  </div>
+                )
+              }
+              // Bản ghi CŨ (không có tool name) / sự kiện khác — fallback 1 dòng
+              return (
+                <div key={i} className="text-[11px] leading-relaxed text-stone-300 px-1">
+                  {e.type === 'tool' ? '🔧' : e.type === 'thought' ? '💭' : '•'} {e.text || (e.type === 'tool' ? '(bản ghi cũ — thiếu tên tool)' : '')}
+                </div>
+              )
+            })}
           </div>
         </details>
       )}

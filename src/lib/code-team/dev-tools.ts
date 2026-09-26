@@ -3580,14 +3580,25 @@ export async function todoWrite(args: {
     } catch { /* fail-open */ }
   }
 
+  // ===== PROBLEM-HANDLING HINT (2026-10-22 — Flaw→Resolver, SDA_ENT_054/055)
+  // =====
+  // Agent vừa đánh dấu todo failed/blocked → đính nhắc QUY TRÌNH xử lý vấn đề
+  // vào result (determinstic — không tin agent tự nhớ protocol GĐ2): chẩn đoán
+  // theo phân loại rồi chọn resolver tương ứng, không thử lặp y hệt. Im lặng
+  // khi không có todo nào failed/blocked (chống nhiễu).
+  const flaggedCount = upserted.filter(t => t.status === 'failed' || t.status === 'blocked').length
+
   return {
     success: true,
     sessionId,
     runId,
-    // coverage đặt TRƯỚC todos: bridge CLI (callTmoTool) cap kết quả 2000 ký
-    // tự và cắt CUỐI — warning coverage phải sống sót kể cả khi danh sách
+    // coverage + problemHint đặt TRƯỚC todos: bridge CLI (callTmoTool) cap kết
+    // quả 2000 ký tự và cắt CUỐI — warning phải sống sót kể cả khi danh sách
     // todo dài (agent CLI cần thấy yêu cầu bổ sung ngay).
     ...(coverage !== undefined ? { coverage } : {}),
+    ...(flaggedCount > 0 ? {
+      problemHint: `🔧 ${flaggedCount} todo failed/blocked — XỬ LÝ THEO QUY TRÌNH (không thử lặp y hệt >2 lần): (1) chẩn đoán nguyên nhân bằng bằng chứng (đọc error, grep, file_read); (2) chọn resolver: thu thập dữ liệu / tách todo con phần hỏng / ĐỔI HƯỚNG nếu hướng hiện tại không thể đạt; (3) tạo todo con kế hoạch xử lý hoặc ghi rõ phương án thay thế trong todo. Todo failed/blocked không có hướng xử lý sẽ bị evaluator chấm thiếu ở cuối chu kỳ.`,
+    } : {}),
     upserted: upserted.length,
     todos: upserted,
   }

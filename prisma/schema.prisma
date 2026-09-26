@@ -2176,6 +2176,12 @@ model RunContext {
   /// trích từ directive (extractDirectiveSpec) lúc run START. todo_write đọc
   /// đây để đối chiếu phủ "mỗi [Nghiệm thu n] ≥ 1 todo" (check determinstic).
   acceptanceCriteria String?
+  /// UNCERTAINTY LEDGER (2026-10-22 user directive: "tự phản chiếu là năng lực
+  /// trong quy trình xử lý, không phải trong báo cáo nghiệm thu"): JSON array
+  /// string [{text, firstSeenCycle}] — mục ❓ "còn chưa chắc" trích từ báo cáo
+  /// chu kỳ, harness giữ xuyên chu kỳ + render lại directive chu kỳ sau; mục
+  /// trùng (Jaccard ≥0.55) giữ firstSeenCycle → treo ≥2 chu kỳ bị nhắc ưu tiên.
+  uncertainItems  String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

@@ -465,7 +465,7 @@ GIAI ĐOẠN 0 — QUAN SÁT & PHÂN TÍCH (BẮT BUỘC trước mọi hành đ
   (b) QUÉT MÔI TRƯỜNG LÀM VIỆC: file_list/glob thư mục liên quan, grep từ khóa để biết CÓ GÌ sẵn — KHÔNG ĐOÁN đường dẫn/tên file chưa từng thấy.
   (c) XÁC ĐỊNH BIÊN ĐỘ DỮ LIỆU CẦN THIẾT (viết ngắn 2-4 dòng trước khi làm): cần ĐỌC/KIỂM TRA những gì (file, bảng, cấu hình, hằng số) để triển khai ĐÚNG — và những gì NGOÀI PHẠM VI (KHÔNG đụng — tránh lan man, tốn vòng vô ích).
   (d) Yêu cầu MƠ HỒ / thiếu thông tin quyết định được → nêu GIẢ ĐỊNH rõ ràng (hoặc hỏi lại nếu blocking) TRƯỚC KHI triển khai — không tự chế yêu cầu không có.
-- CHU KỲ SAU (đã có kết quả tích lũy) → ĐỌC toàn bộ context: khối "KẾT QUẢ TOOL THẬT" (kết quả inner-loop CLI đã thực thi — đây là SỰ THẬT duy nhất), khối "✅ Việc chu kỳ trước ĐÃ làm" (KHÔNG làm lại), cảnh báo "⚠️ CẢNH BÁO LẶP", khối "📋 TODO HIỆN TẠI", khối "📐 BIÊN ĐỘ DỮ LIỆU đã xác định" (giữ nguyên nếu còn đúng — không mở rộng phạm vi tự tiện), khối "🧬 BELIEF-STATE" (hypothesis sống từ chu kỳ trước — xem mục ❓ còn chưa chắc có bị bác chưa), khối "🧠 Prior reasoning" (mẩu suy luận run trước — PRIOR KHÔNG phải chân lý, kiểm chứng lại), directive chẩn đoán của trọng tài.
+- CHU KỲ SAU (đã có kết quả tích lũy) → ĐỌC toàn bộ context: khối "KẾT QUẢ TOOL THẬT" (kết quả inner-loop CLI đã thực thi — đây là SỰ THẬT duy nhất), khối "✅ Việc chu kỳ trước ĐÃ làm" (KHÔNG làm lại), cảnh báo "⚠️ CẢNH BÁO LẶP", khối "📋 TODO HIỆN TẠI", khối "📐 BIÊN ĐỘ DỮ LIỆU đã xác định" (giữ nguyên nếu còn đúng — không mở rộng phạm vi tự tiện), khối "❓ CÒN CHƯA CHẮC" (giả thuyết chưa kiểm chứng từ chu kỳ trước — ƯU TIÊN kiểm định bằng tool hoặc bác bỏ, KHÔNG dùng làm tiền đề kết luận), khối "🧬 BELIEF-STATE" (hypothesis sống từ chu kỳ trước — xem mục ❓ còn chưa chắc có bị bác chưa), khối "🧠 Prior reasoning" (mẩu suy luận run trước — PRIOR KHÔNG phải chân lý, kiểm chứng lại), directive chẩn đoán của trọng tài.
 - TỰ PHẢN CHIẾU (viết ngắn gọn trước khi hành động): Hiện trạng đạt được gì (bằng chứng nào)? Còn thiếu gì so với MỤC TIÊU + TIÊU CHÍ NGHIỆM THU? Vì sao cách làm trước chưa đạt (nếu có)?
 - XÁC ĐỊNH việc chu kỳ này: PHẢI là việc MỚI có tiến triển — không lặp lại việc đã THÀNH CÔNG, không lặp y hệt việc đã THẤT BẠI (đổi tool / đổi args / đổi cách tiếp cận).
 
@@ -477,6 +477,7 @@ GIAI ĐOẠN 1 — XÁC ĐỊNH VẤN ĐỀ & LẬP KẾ HOẠCH:
 GIAI ĐOẠN 2 — TRIỂN KHAI (mỗi hành động đều có suy nghĩ):
 - Trước MỖI tool call: hành động này phục vụ tiêu chí nghiệm thu nào? (không gọi tool theo quán tính)
 - Sau MỖI kết quả tool: NGHĨ ý nghĩa kết quả — thành công = tiêu chí nào đã đạt? thất bại = nguyên nhân cụ thể là gì (đọc error)? — rồi mới chọn hành động kế.
+- 🔧 XỬ LÝ VẤN ĐỀ khi thất bại/vướng (tool fail, kết quả sai, todo blocked): CHẨN ĐOÁN THEO PHÂN LOẠI trước khi thử lại — (i) chưa xác định được nguyên nhân/thiếu bằng chứng → thu thập dữ liệu (đọc error, grep, file_read); (ii) việc quá lớn/chưa phân rã đủ → tách TODO CON; (iii) xung đột ràng buộc hoặc hướng hiện tại KHÔNG THỂ đạt → ĐỔI HƯỚNG (nới lỏng ràng buộc hoặc cách tiếp cận khác), bỏ nhánh không khả thi khỏi kế hoạch. KHÔNG thử lặp Y HỆT quá 2 lần — sau 2 lần fail PHẢI đổi cách xử lý; hết phương án → đánh dấu todo failed/blocked kèm nguyên nhân cụ thể + phương án thay thế (chu kỳ sau đọc và xử lý tiếp).
 - Thực hiện từng bước bằng tools. Đọc file (file_read) trước khi sửa. Chạy lệnh (shell) khi cần.
 - TẠO FILE MỚI / FILE LỚN: dùng file_write — viết từng phần (~200-400 dòng/lần), lần đầu mode "overwrite", các lần sau mode "append" (đừng nhét cả file 1000+ dòng vào 1 tool call — output dễ bị cắt giữa JSON → tool call KHÔNG thực thi được).
 
@@ -485,7 +486,7 @@ GIAI ĐOẠN 3 — KIỂM ĐỊNH & BÁO CÁO (BẮT BUỘC trước khi kết l
 - Khi type_check/lint/run_tests FAIL: đọc errorCount + thông báo lỗi cụ thể từng file trong KẾT QUẢ TOOL — KHÔNG đoán nguyên nhân; nếu output không đủ để xác định lỗi cụ thể thì báo rõ "không xác định được nguyên nhân cụ thể". Tool fail KHÔNG đồng nghĩa "đã kiểm định".
 - CHỈ được kết luận hoàn thành khi bằng chứng kiểm định thực sự KHỚP mục tiêu.
 - Kết thúc chu kỳ bằng báo cáo đủ 4 phần: đã làm gì · bằng chứng tool (tên tool + kết quả ngắn) · còn thiếu gì · đề xuất khắc phục. Chốt thêm 2 dòng TỰ PHẢN CHIẾU:
-  "✅ Đã CHẮC CHẮN (có bằng chứng tool): ..." / "❓ Còn CHƯA CHẮC (giả thuyết cần kiểm tra ở chu kỳ sau): ..." — phân biệt cái đã kiểm chứng với cái còn đoán.
+  "✅ Đã CHẮC CHẮN (có bằng chứng tool): ..." / "❓ Còn CHƯA CHẮC (giả thuyết cần kiểm tra ở chu kỳ sau): ..." — phân biệt cái đã kiểm chứng với cái còn đoán. Hệ thống GIỮ LẠI các mục ❓ xuyên chu kỳ và nhắc lại ở chu kỳ sau (mục treo ≥2 chu kỳ bị đánh dấu ưu tiên) — viết ❓ THẬT sự cần kiểm chứng, đã kiểm chứng xong thì BỎ KHỎI danh sách.
   ⚖️ NGƯỠC KỸ PHÂN LOẠI (2026-10-20 — E2E lộ agent đếm bằng mắt sai nhưng xếp ✅): dòng ✅ CHỈ được xếp những gì ĐỌC TRỰC TIẾP từ kết quả tool (nội dung file đọc lại khớp, output lệnh hiển thị đúng giá trị). Kết quả GIÁN TIẾP (đếm số dòng/số phần tử, tính tổng, so sánh, suy diễn từ dữ liệu đọc được) PHẢI kiểm định bằng LỆNH MÁY (wc -l, jq length, grep -c...) rồi mới xếp ✅ — kết quả đếm/tính bằng đầu không phải bằng chứng, xếp vào ❓.
   📐 BIÊN ĐỘ DỮ LIỆU: kết thúc báo cáo bằng 1 khối ngắn "📐 BIÊN ĐỘ DỮ LIỆU: cần đọc <...> · ngoài phạm vi <...>" (giữ nguyên khối đã viết ở GĐ0 nếu vẫn đúng) — hệ thống giữ lại nguyên văn cho các chu kỳ sau, không mất định hướng phạm vi.
   🧬 SHR — hypothesis có cấu trúc (tool hypothesis_write):
@@ -1851,6 +1852,7 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
         let shrBeliefBlock = ''
         let dataScopeBlock = ''
         let priorCotBlock = ''
+        let uncertainBlock = ''
         try {
           const shr = await import('@/lib/structured-hypothesis')
           shrBeliefBlock = agentSessionId ? await shr.renderBeliefState(agentSessionId) : ''
@@ -1858,17 +1860,24 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
           if (runCtx?.dataScope) {
             dataScopeBlock = `\n\n📐 BIÊN ĐỘ DỮ LIỆU đã xác định (chu kỳ trước — giữ nguyên nếu còn đúng, KHÔNG tự mở rộng phạm vi): ${runCtx.dataScope}`
           }
+          // UNCERTAINTY LEDGER (2026-10-22 — phản chiếu là năng lực TRONG quy
+          // trình): các mục ❓ "còn chưa chắc" của chu kỳ trước được harness
+          // giữ lại (RunContext) → render đây để chu kỳ này THẤY và ưu tiên
+          // kiểm chứng — phản chiếu không còn là chữ nằm trong báo cáo.
+          if (runCtx?.uncertainItems) {
+            uncertainBlock = shr.renderUncertainLedgerBlock(runCtx.uncertainItems, cycle)
+          }
           // chữ ký ngữ cảnh hiện hành: từ khóa mục tiêu + tools đã dùng
           const usedTools = [...new Set(evidence.filter(e => e.kind === 'tool').map(e => e.tool!))].slice(0, 8)
           const ctxSig = shr.computeContextSignature(directiveSpec.goal, usedTools)
           const prior = agentSessionId ? await shr.buildPriorReasoningBlock(agentSessionId, ctxSig) : { block: '', parentSampleId: null, matchedCount: 0 }
           priorCotBlock = prior.block
           cotParentSampleId = prior.parentSampleId
-          if (shrBeliefBlock || dataScopeBlock || priorCotBlock) {
-            console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} SHR directive: belief=${shrBeliefBlock ? 'yes' : 'no'} dataScope=${dataScopeBlock ? 'yes' : 'no'} priorCoT=${prior.matchedCount} mẩu khớp`)
+          if (shrBeliefBlock || dataScopeBlock || priorCotBlock || uncertainBlock) {
+            console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} SHR directive: belief=${shrBeliefBlock ? 'yes' : 'no'} dataScope=${dataScopeBlock ? 'yes' : 'no'} uncertain=${uncertainBlock ? 'yes' : 'no'} priorCoT=${prior.matchedCount} mẩu khớp`)
           }
         } catch { /* fail-open — SHR không được phép làm hỏng directive */ }
-        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles, doneSummary) + similarErrorsBlock + advisoryBlock + runTodosBlock + dataScopeBlock + shrBeliefBlock + priorCotBlock
+        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles, doneSummary) + similarErrorsBlock + advisoryBlock + runTodosBlock + dataScopeBlock + uncertainBlock + shrBeliefBlock + priorCotBlock
         messages.push({ role: 'user', content: directive })
         evidence.push({ cycle, kind: 'directive', text: `Chu kỳ ${cycle}: chẩn đoán "${lastVerdict.rootCause.slice(0, 120)}" → kế hoạch mới${similarErrorsBlock ? ' + lỗi tương tự đã gặp (episodic memory)' : ''}${advisoryBlock ? ' + tư vấn Omega orchestrator' : ''}` })
         recordAgentThought(agentSessionId, `🔄 Chu kỳ ${cycle}/${fmtCap(effectiveMaxCycles)} — chẩn đoán: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${similarErrorsBlock ? ' (kèm lỗi tương tự đã gặp)' : ''}${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}`, totalIterations)
@@ -2220,6 +2229,13 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
                   const mirrorCov = (mirrorRes as { coverage?: { ok?: boolean; warning?: string } }).coverage
                   if (mirrorCov && mirrorCov.ok === false && mirrorCov.warning && !cliOriginName.startsWith('tmo_')) {
                     cliBatchLines.push(`- todo_write → KIỂM TRA PHỦ KẾ HOẠCH (harness): ${mirrorCov.warning}`)
+                  }
+                  // PROBLEM-HINT mirror (2026-10-22): native todowrite không trả
+                  // kết quả về CLI → hint xử lý vấn đề (todo failed/blocked) cũng
+                  // đính vào cliBatchLines cho spawn/chu kỳ kế thấy.
+                  const mirrorHint = (mirrorRes as { problemHint?: string }).problemHint
+                  if (mirrorHint && !cliOriginName.startsWith('tmo_')) {
+                    cliBatchLines.push(`- todo_write → ${mirrorHint}`)
                   }
                 } catch { /* fail-open — mirror không được phép lỗi ra ngoài */ }
               }
@@ -2838,12 +2854,24 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
         const dataScope = shr.looksLikeDataScope(dataScopeRaw) ? dataScopeRaw : null
         const usedTools = [...new Set(evidence.filter(e => e.kind === 'tool').map(e => e.tool!))].slice(0, 8)
         const ctxKeywords = shr.computeContextSignature(directiveSpec.goal, usedTools)
+        // (2b) UNCERTAINTY LEDGER — trích mục ❓ "còn chưa chắc" từ báo cáo →
+        // merge aging với ledger chu kỳ trước (mục trùng giữ firstSeenCycle)
+        // → persist. Chỉ chạy khi báo cáo đủ dài (báo cáo rỗng/LLM-error không
+        // được phép XÓA ledger). Báo cáo KHÔNG còn mục ❓ = agent đã chắc hết
+        // → ledger tự clean ("[]" — đúng semantics latest-state-wins như 📐).
+        let uncertainJson: string | null = null
+        if (runId && lastContent && lastContent.length > 80) {
+          const prevCtx = await shr.getRunContext(runId)
+          const newUncertain = shr.parseUncertainItems(lastContent)
+          uncertainJson = shr.mergeUncertainLedger(prevCtx?.uncertainItems, newUncertain, cycle)
+        }
         await shr.upsertRunContext({
           runId: runId ?? '',
           sessionId: agentSessionId,
           dataScope,
           goalDigest: directiveSpec.goal.slice(0, 400),
           contextKeywords: ctxKeywords,
+          ...(uncertainJson !== null ? { uncertainItems: uncertainJson } : {}),
         })
         // (3) nén mẩu CoT từ báo cáo chu kỳ (posterior = confidence trọng tài)
         const cotRes = await shr.compressCycleToSample({
