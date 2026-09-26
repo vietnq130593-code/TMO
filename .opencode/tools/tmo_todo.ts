@@ -11,7 +11,8 @@ export default tool({
     "Write/update the todo list for the current agent task (DB-backed, visible in TMO UI Thought Process panel). " +
     "Batch upsert: item có id → update item đó; không id → create. " +
     "Nesting: đặt parentId = id của todo cha để tạo TODO CON (hiển thị lồng nhau). " +
-    "Kỷ luật: todo xong đánh dấu completed TRƯỚC KHI thêm todo mới.",
+    "Kỷ luật: todo xong đánh dấu completed TRƯỚC KHI thêm todo mới. " +
+    "Kết quả có trường coverage (kiểm tra phủ determinstic): nếu warning liệt kê tiêu chí nghiệm thu / mục 📐 còn thiếu → gọi lại tool này BỔ SUNG đúng các todo thiếu ngay.",
   args: {
     todos: tool.schema.string().describe(
       'JSON array: [{"content":"step","status":"pending|in_progress|completed|failed|blocked","priority":"low|medium|high","id":"<todo id khi update>","parentId":"<id todo cha khi tạo todo con>"}] — activeForm tùy chọn (bỏ qua)',

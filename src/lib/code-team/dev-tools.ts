@@ -3551,10 +3551,43 @@ export async function todoWrite(args: {
     })
   }
 
+  // ===== TODO-COVERAGE (2026-10-22 hướng 1+2) — kiểm tra phủ kế hoạch =====
+  // determinstic NGAY trong todo_write: (1) mỗi [Nghiệm thu n] của directive
+  // (RunContext.acceptanceCriteria — stash lúc run start) ≥1 todo · (2) mỗi
+  // mục "cần đọc" trong 📐 (RunContext.dataScope) ≥1 todo thu thập. Thiếu →
+  // đính ⚠️ block vào RESULT (agent thấy ở lượt LLM kế — bổ sung trong CÙNG
+  // chu kỳ). Đủ → dòng ✅ xác nhận. Không có RunContext/nghiệm thu/📐 (task
+  // đơn giản, self-direction sd-*, run legacy) → KHÔNG đính (chống nhiễu).
+  // Fail-open: lỗi check không được phép làm hỏng todo_write.
+  let coverage: unknown = undefined
+  if (runId) {
+    try {
+      const { checkRunTodoCoverage } = await import('@/lib/todo-coverage')
+      const report = await checkRunTodoCoverage({ sessionId, runId })
+      if (report) {
+        coverage = {
+          ok: report.ok,
+          acceptance: report.acceptanceTotal > 0 ? `${report.acceptanceCovered}/${report.acceptanceTotal}` : null,
+          dataScope: report.dataScopeTotal > 0 ? `${report.dataScopeCovered}/${report.dataScopeTotal}` : null,
+          warning: report.warning,
+        }
+        if (!report.ok) {
+          console.log(`[TodoCoverage] run ${runId}: CHƯA PHỦ — nghiệm thu ${report.acceptanceCovered}/${report.acceptanceTotal}, 📐 ${report.dataScopeCovered}/${report.dataScopeTotal} → đã cảnh báo agent bổ sung`)
+        } else {
+          console.log(`[TodoCoverage] run ${runId}: PHỦ ĐỦ — nghiệm thu ${report.acceptanceCovered}/${report.acceptanceTotal}, 📐 ${report.dataScopeCovered}/${report.dataScopeTotal}`)
+        }
+      }
+    } catch { /* fail-open */ }
+  }
+
   return {
     success: true,
     sessionId,
     runId,
+    // coverage đặt TRƯỚC todos: bridge CLI (callTmoTool) cap kết quả 2000 ký
+    // tự và cắt CUỐI — warning coverage phải sống sót kể cả khi danh sách
+    // todo dài (agent CLI cần thấy yêu cầu bổ sung ngay).
+    ...(coverage !== undefined ? { coverage } : {}),
     upserted: upserted.length,
     todos: upserted,
   }

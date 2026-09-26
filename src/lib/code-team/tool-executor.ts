@@ -4250,6 +4250,15 @@ function summarizeToolResult(toolName: string, result: unknown): string {
       }
       case 'todo_write': {
         const n = typeof r.upserted === 'number' ? r.upserted : (Array.isArray(r.todos) ? r.todos.length : 0)
+        // TODO-COVERAGE — hiện trạng phủ kế hoạch lên result preview
+        const cov = r.coverage as { ok?: boolean; acceptance?: string | null; dataScope?: string | null } | undefined
+        if (cov) {
+          const parts: string[] = []
+          if (cov.acceptance) parts.push(`nghiệm thu ${cov.acceptance}`)
+          if (cov.dataScope) parts.push(`📐 ${cov.dataScope}`)
+          const sum = parts.length > 0 ? parts.join(' · ') : ''
+          return `Đã ghi ${n} todo${sum ? ` — phủ: ${sum}` : ''}${cov.ok === false ? ' · ⚠️ còn thiếu → xem warning' : ' · ✅ phủ đầy đủ'}`
+        }
         return `Đã ghi ${n} todo`
       }
       case 'hypothesis_write': {

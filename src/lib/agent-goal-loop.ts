@@ -472,6 +472,7 @@ GIAI ĐOẠN 0 — QUAN SÁT & PHÂN TÍCH (BẮT BUỘC trước mọi hành đ
 GIAI ĐOẠN 1 — XÁC ĐỊNH VẤN ĐỀ & LẬP KẾ HOẠCH:
 - BƯỚC ĐẦU TIÊN của mọi task từ 2 bước trở lên (gần như MỌI task làm việc): gọi todo_write (trên đường CLI là tool tmo_todo) chia nhỏ kế hoạch TRƯỚC KHI hành động — mỗi tiêu chí nghiệm thu ít nhất 1 todo tương ứng (ghi "[Nghiệm thu n]" trong nội dung) + các todo THU THẬP DỮ LIỆU từ bước biên độ dữ liệu. Mỗi todo viết dạng KIỂM ĐỊNH ĐƯỢC (xong = kiểm tra/chạy gì để biết đạt) — đừng viết todo mơ hồ kiểu "xử lý phần X". Bỏ qua todo_write chỉ khi task ĐÚNG 1 bước (một câu hỏi đơn lẻ trả lời ngay).
 - KỶ LUẬT TODO (bắt buộc): todo làm XONG phải được đánh dấu completed NGAY trong lần todo_write kế tiếp TRƯỚC KHI thêm todo mới (đóng việc cũ rồi mới mở việc mới — danh sách luôn phản ánh trạng thái thật). Việc phức tạp cần phân rã tiếp → tạo TODO CON: gọi todo_write với "id" của todo cha trong trường "parentId" của todo con (hiển thị lồng nhau trong panel — KHÔNG viết phẳng trùng nội dung). Cập nhật todo cũ — KHÔNG viết lại từ đầu.
+- 🔍 KIỂM TRA PHỦ KẾ HOẠCH (harness — determinstic, chạy tự động trong mọi todo_write): hệ thống đối chiếu kế hoạch của bạn với (a) từng tiêu chí NGHIỆM THU của directive — mỗi "[Nghiệm thu n]" phải có ≥1 todo nhắm tới, (b) từng mục "cần đọc" trong khối 📐 — mỗi mục phải có ≥1 todo thu thập dữ liệu. Kết quả nằm trong trường "coverage" của kết quả todo_write: thiếu mục nào sẽ liệt kê CỤ THỂ kèm yêu cầu bổ sung → gọi todo_write BỔ SUNG đúng các mục thiếu ngay (KHÔNG viết lại danh sách); phủ đủ sẽ có dòng ✅. Đây là kiểm tra máy (không tin tự khai) — bỏ qua cảnh báo này khiến evaluator chấm thiếu tiêu chí ở cuối chu kỳ.
 
 GIAI ĐOẠN 2 — TRIỂN KHAI (mỗi hành động đều có suy nghĩ):
 - Trước MỖI tool call: hành động này phục vụ tiêu chí nghiệm thu nào? (không gọi tool theo quán tính)
@@ -1622,6 +1623,9 @@ export async function runGoalDrivenLoop(params: {
   let lastVerdictStagnationSig = ''
   /** Task 21 — SHR: id mẩu CoT được truy hồi chu kỳ này (cha của mẩu chu kỳ sau — chuỗi nguồn gốc ≤3 thế hệ) */
   let cotParentSampleId: string | null = null
+  /** TODO-COVERAGE (2026-10-22) — khối 📐 gần nhất đã stash vào RunContext
+   * (dedupe: chỉ ghi DB khi nội dung đổi — tránh write mỗi vòng ReAct). */
+  let lastStashedDataScope = ''
   const noteToolSignature = (cycleNum: number, name: string, args: Record<string, unknown>, ok: boolean): void => {
     try {
       const sig = `${name}:${JSON.stringify(args).slice(0, 300)}`
@@ -1734,6 +1738,24 @@ export async function runGoalDrivenLoop(params: {
   // + tiêu chí nghiệm thu có cấu trúc (evaluator đối chiếu TỪNG tiêu chí thay
   // vì slice 2000 chars đầu của directive 16k — xem extractDirectiveSpec).
   const directiveSpec = extractDirectiveSpec(userMessage)
+
+  // ===== TODO-COVERAGE (2026-10-22 hướng 1) — stash nghiệm thu lúc RUN START =====
+  // RunContext.acceptanceCriteria = JSON array tiêu chí → todo_write (cả đường
+  // ReAct lẫn CLI bridge tmo_todo → /api/tools/execute) đọc lại để đối chiếu
+  // phủ "mỗi [Nghiệm thu n] ≥ 1 todo" NGAY trong kết quả tool. Stash sớm (không
+  // đợi hết chu kỳ 1 như dataScope) vì tiêu chí có sẵn từ directive. Fail-open.
+  if (agentSessionId && runId && directiveSpec.acceptance.length > 0) {
+    try {
+      const shr = await import('@/lib/structured-hypothesis')
+      void shr.upsertRunContext({
+        runId,
+        sessionId: agentSessionId,
+        acceptanceCriteria: JSON.stringify(directiveSpec.acceptance),
+        goalDigest: directiveSpec.goal.slice(0, 400),
+      }).catch(() => { /* fail-open */ })
+      console.log(`[GoalLoop] ${agentName} stash ${directiveSpec.acceptance.length} tiêu chí nghiệm thu vào RunContext (todo-coverage sẽ đối chiếu)`)
+    } catch { /* fail-open */ }
+  }
 
   // ================== OUTER CYCLE LOOP ==================
   // CI-1 (0 = UNLIMITED): MAX_CYCLES = 0 → KHÔNG trần chu kỳ (loop chỉ dừng
@@ -1967,6 +1989,33 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
       }
       recordAgentThought(agentSessionId, result.content, totalIterations)
 
+      // ===== TODO-COVERAGE (2026-10-22 hướng 2) — stash 📐 MID-CYCLE =====
+      // Agent viết khối 📐 ở GĐ0(c) RỒI mới gọi todo_write (GĐ1) — trước đây
+      // dataScope chỉ được parse CUỐI chu kỳ (từ báo cáo) → todo_write đầu
+      // chu kỳ 1 không có gì để đối chiếu phủ. Giờ parse 📐 ngay từ response
+      // đang xử lý (cả text ReAct lẫn output cuối của CLI spawn) → stash vào
+      // RunContext TRƯỚC khi batch tool calls (có thể chứa todo_write) thực
+      // thi → coverage check trong todo_write thấy 📐 NGAY chu kỳ 1 đường
+      // ReAct. Giới hạn đường CLI: 📐 trong CÙNG spawn CLI đầu vẫn chưa kịp
+      // stash (CLI chạy kín quá trình inner loop) — check 📐 áp dụng từ
+      // spawn/chu kỳ sau. Dedupe bằng lastStashedDataScope (1 write/đổi nội
+      // dung). Fail-open tuyệt đối.
+      try {
+        const shrMid = await import('@/lib/structured-hypothesis')
+        const scopeMid = shrMid.parseDataScopeBlock(result.content)
+        // Gate looksLikeDataScope: chỉ stash khối 📐 CÓ marker phạm vi ("cần
+        // đọc"/"ngoài phạm vi") — chống nhặt nhầm đoạn text chỉ NHẮC TỚI 📐
+        // (nội dung todo/báo cáo trung gian — lộ E2E todo-coverage).
+        if (scopeMid && scopeMid !== lastStashedDataScope && shrMid.looksLikeDataScope(scopeMid) && agentSessionId && runId) {
+          lastStashedDataScope = scopeMid
+          void shrMid.upsertRunContext({
+            runId,
+            sessionId: agentSessionId,
+            dataScope: scopeMid,
+          }).catch(() => { /* fail-open */ })
+        }
+      } catch { /* fail-open — stash 📐 không được phép làm hỏng vòng lặp */ }
+
       // 2026-09-25 HYBRID BRIDGE FIX: OpenCode CLI provider returns tool_calls
       // directly in LLMResult (parsed from tool_use events). Use these native
       // tool_calls FIRST — only fallback to text-based parseToolCallsFromOutput
@@ -2161,7 +2210,17 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
               if (todos.length > 0) {
                 try {
                   const { todoWrite } = await import('@/lib/code-team/dev-tools')
-                  await todoWrite({ sessionId: agentSessionId, runId: runId ?? undefined, agentRole: agentName, todos })
+                  const mirrorRes = await todoWrite({ sessionId: agentSessionId, runId: runId ?? undefined, agentRole: agentName, todos })
+                  // TODO-COVERAGE (2026-10-22): native todowrite KHÔNG trả kết
+                  // quả về CLI (storage nội bộ) → agent không thấy warning phủ
+                  // kế hoạch trong spawn này. Đính warning vào cliBatchLines
+                  // (đẩy vào transcript ngay sau batch) để spawn/chu kỳ KẾ TIẾP
+                  // thấy yêu cầu bổ sung. Bỏ qua tmo_todo — bridge đã trả
+                  // coverage trực tiếp trong kết quả tool (tránh lặp noise).
+                  const mirrorCov = (mirrorRes as { coverage?: { ok?: boolean; warning?: string } }).coverage
+                  if (mirrorCov && mirrorCov.ok === false && mirrorCov.warning && !cliOriginName.startsWith('tmo_')) {
+                    cliBatchLines.push(`- todo_write → KIỂM TRA PHỦ KẾ HOẠCH (harness): ${mirrorCov.warning}`)
+                  }
                 } catch { /* fail-open — mirror không được phép lỗi ra ngoài */ }
               }
             }
@@ -2772,8 +2831,11 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
           console.log(`[GoalLoop] ${agentName} SHR verify chu kỳ ${cycle}: applied=${verifyRes.applied.length} rejected=${verifyRes.rejected.length} promoted=${verifyRes.promoted.length} demoted=${verifyRes.demoted.length}`)
           bestMechanics = verifyRes.applied[0]?.claim ?? null
         }
-        // (2) 📐 parse + persist RunContext
-        const dataScope = shr.parseDataScopeBlock(lastContent)
+        // (2) 📐 parse + persist RunContext — gate looksLikeDataScope (chống
+        // nhặt nhầm đoạn text nhắc TỚI 📐: parse ra null → upsert preserve
+        // giá trị tốt đã stash trước đó, không đè bằng rác)
+        const dataScopeRaw = shr.parseDataScopeBlock(lastContent)
+        const dataScope = shr.looksLikeDataScope(dataScopeRaw) ? dataScopeRaw : null
         const usedTools = [...new Set(evidence.filter(e => e.kind === 'tool').map(e => e.tool!))].slice(0, 8)
         const ctxKeywords = shr.computeContextSignature(directiveSpec.goal, usedTools)
         await shr.upsertRunContext({

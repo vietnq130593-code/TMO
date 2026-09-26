@@ -2172,6 +2172,10 @@ model RunContext {
   goalDigest      String?
   /// từ khóa ngữ cảnh space-joined — signature truy hồi mẩu CoT
   contextKeywords String?
+  /// TODO-COVERAGE (2026-10-22): JSON array string — tiêu chí nghiệm thu đã
+  /// trích từ directive (extractDirectiveSpec) lúc run START. todo_write đọc
+  /// đây để đối chiếu phủ "mỗi [Nghiệm thu n] ≥ 1 todo" (check determinstic).
+  acceptanceCriteria String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

@@ -598,15 +598,39 @@ export async function buildPriorReasoningBlock(sessionId: string, contextSig: st
 /**
  * Parse khối "📐 BIÊN ĐỘ DỮ LIỆU: ..." từ báo cáo agent. Agent viết ở GĐ0(c)
  * và chốt lại trong báo cáo GĐ3 (protocol yêu cầu) — harness trích xuất.
+ *
+ * FIX 2026-10-22 (lộ E2E todo-coverage): quét TẤT CẢ khối 📐 trong text và
+ * ƯU TIÊN khối CÓ marker phạm vi ("cần đọc"/"ngoài phạm vi"...) — khối 📐
+ * thật theo protocol luôn có marker. Trước đây regex lấy match ĐẦU TIÊN →
+ * khi agent NHẮC TỚI "📐 BIÊN ĐỘ DỮ LIỆU" trong nội dung todo/báo cáo
+ * trung gian (không phải khối 📐), parser nhặt nhầm đoạn đó (E2E thực tế:
+ * dataScope bị stash từ nội dung todo "[Nghiệm thu 4] Báo cáo cuối với 📐
+ * BIÊN ĐỘ DỮ LIỆU + ✅/❓" thay vì khối 📐 thật cuối báo cáo).
  */
+const DATA_SCOPE_MARKER_RE = /(cần\s*đọc|cần\s*kiểm\s*tra|ngoài\s*phạm\s*vi|ngoại\s*phạm\s*vi|out\s*of\s*scope)/i
+
+/** Khối 📐 hợp lệ về hình thức: có marker phạm vi (dùng gate khi stash —
+ *  chống nhặt nhầm đoạn text chỉ NHẮC TỚI 📐). */
+export function looksLikeDataScope(scope: string | null | undefined): boolean {
+  if (!scope) return false
+  return DATA_SCOPE_MARKER_RE.test(scope)
+}
+
 export function parseDataScopeBlock(report: string): string | null {
   if (!report) return null
-  const m = report.match(/📐\s*BIÊN\s*ĐỘ\s*DỮ\s*LIỆU\s*:?\s*([\s\S]{10,700}?)(?=\n\s*\n|\n[✅❓📋🎯🔍⚖️🧬]|$)/i)
-  if (m) {
+  // (1) Quét mọi khối "📐 BIÊN ĐỘ DỮ LIỆU ..." — ưu tiên khối có marker
+  const re = /📐\s*BIÊN\s*ĐỘ\s*DỮ\s*LIỆU\s*:?\s*([\s\S]{10,700}?)(?=\n\s*\n|\n[✅❓📋🎯🔍⚖️🧬]|$)/gi
+  let first: string | null = null
+  let m: RegExpExecArray | null
+  while ((m = re.exec(report)) !== null) {
     const scope = m[1].replace(/\s+/g, ' ').trim()
-    if (scope.length >= 10) return scope.slice(0, 500)
+    if (scope.length < 10) continue
+    const capped = scope.slice(0, 500)
+    if (!first) first = capped
+    if (DATA_SCOPE_MARKER_RE.test(capped)) return capped // khối 📐 thật (có marker)
   }
-  // Fallback lỏng: dòng có chữ "biên độ" + 4 dòng kế
+  if (first) return first // không khối nào có marker → giữ match đầu (hành vi cũ)
+  // (2) Fallback lỏng: dòng có chữ "biên độ" + 4 dòng kế
   const lines = report.split('\n')
   const idx = lines.findIndex(l => /biên\s*độ\s*dữ\s*liệu/i.test(l))
   if (idx >= 0) {
@@ -622,6 +646,10 @@ export async function upsertRunContext(params: {
   dataScope?: string | null
   goalDigest?: string | null
   contextKeywords?: string | null
+  /** TODO-COVERAGE: JSON array string tiêu chí nghiệm thu (extractDirectiveSpec
+   *  lúc run START) — preserve-on-null như các field khác (end-of-cycle upsert
+   *  không truyền → không đè giá trị đã stash từ đầu run). */
+  acceptanceCriteria?: string | null
 }): Promise<void> {
   try {
     if (!params.runId || !params.sessionId) return
@@ -629,6 +657,7 @@ export async function upsertRunContext(params: {
     if (params.dataScope) data.dataScope = params.dataScope
     if (params.goalDigest) data.goalDigest = params.goalDigest
     if (params.contextKeywords) data.contextKeywords = params.contextKeywords
+    if (params.acceptanceCriteria) data.acceptanceCriteria = params.acceptanceCriteria
     await db.runContext.upsert({
       where: { runId: params.runId },
       create: {
@@ -636,6 +665,7 @@ export async function upsertRunContext(params: {
         dataScope: params.dataScope ?? null,
         goalDigest: params.goalDigest ?? null,
         contextKeywords: params.contextKeywords ?? null,
+        acceptanceCriteria: params.acceptanceCriteria ?? null,
       },
       update: data,
     })
@@ -643,12 +673,12 @@ export async function upsertRunContext(params: {
 }
 
 /** Đọc RunContext — trả null nếu chưa có (chu kỳ 1 chưa xong) */
-export async function getRunContext(runId: string): Promise<{ dataScope: string | null; goalDigest: string | null; contextKeywords: string | null } | null> {
+export async function getRunContext(runId: string): Promise<{ dataScope: string | null; goalDigest: string | null; contextKeywords: string | null; acceptanceCriteria: string | null } | null> {
   try {
     if (!runId) return null
     const rc = await db.runContext.findUnique({ where: { runId } })
     if (!rc) return null
-    return { dataScope: rc.dataScope, goalDigest: rc.goalDigest, contextKeywords: rc.contextKeywords }
+    return { dataScope: rc.dataScope, goalDigest: rc.goalDigest, contextKeywords: rc.contextKeywords, acceptanceCriteria: rc.acceptanceCriteria }
   } catch {
     return null
   }
