@@ -369,11 +369,14 @@ export async function createAgentByOmega(params: {
     return { success: false, error: `Hướng dẫn chi tiết quá dài (>${AGENT_INSTRUCTION_MAX} ký tự).` }
   }
 
-  const providerValue = provider || 'nvidia'
+  // FIX 2026-09-25 (E2E tool audit): default provider → zen (13/13 agents đang chạy
+  // zen; nvidia keys chết — agent mới tạo với nvidia sẽ không gọi được LLM).
+  // Default model theo provider: zen → nemotron-3-ultra-free, nvidia → minimax-m3.
+  const providerValue = provider || 'zen'
   if (!VALID_PROVIDERS.includes(providerValue)) {
     return { success: false, error: `Provider "${providerValue}" không hợp lệ. Chọn: ${VALID_PROVIDERS.join(', ')}` }
   }
-  const modelValue = model || 'minimaxai/minimax-m3'
+  const modelValue = model || (providerValue === 'zen' ? 'nemotron-3-ultra-free' : 'minimaxai/minimax-m3')
   const models = PROVIDER_MODELS[providerValue] || []
   if (!models.some(m => m.id === modelValue)) {
     return { success: false, error: `Model "${modelValue}" không thuộc provider "${providerValue}". Models khả dụng: ${models.map(m => m.id).join(', ')}` }

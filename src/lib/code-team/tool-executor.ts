@@ -1112,6 +1112,31 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       },
     },
   },
+  // ===== Task 21 (2026-10-21) — SHR structured hypothesis (SELF_REFLECTION_DESIGN §2) =====
+  hypothesis_write: {
+    type: 'function',
+    function: {
+      name: 'hypothesis_write',
+      description: 'SHR — hypothesis có cấu trúc sống XUYÊN CHU KỲ (đường CLI mỗi chu kỳ spawn mới). op=propose: sinh hypothesis về CƠ CHẾ hệ thống (MỘT quan hệ nhân quả, không phải task trivia) — α=β=0, posterior 0.5. op=judge: ghi phán quyết confirmed/refuted kèm bằng chứng — hệ thống đối chiếu bằng chứng tool THẬT cuối chu kỳ rồi mới cập nhật α/β (khớp mới tính). op=list: xem hypothesis sống. Promote posterior≥0.80 ∧ ≥4 quan sát → vào belief-state chu kỳ sau; demote ≤0.35 → loại.',
+      parameters: {
+        type: 'object',
+        properties: {
+          op: { type: 'string', enum: ['propose', 'judge', 'list'], description: 'propose = sinh hypothesis mới · judge = phán quyết có bằng chứng · list = liệt kê' },
+          mechanicsClaim: { type: 'string', description: '[propose] MỘT quan hệ nhân quả về cơ chế hệ thống, ≤ 12 từ (vd: "qdrant collection phải tồn tại trước khi upsert points")' },
+          contextSig: { type: 'string', description: '[propose] từ khóa ngữ cảnh phân tách khoảng trắng (vd: "prisma sqlite schema migration")' },
+          intervention: { type: 'string', description: '[propose] hành động can thiệp do(X) (vd: "chạy prisma db push sau khi sửa schema")' },
+          predictedDelta: { type: 'string', description: '[propose] hệ quả dự kiến — KIỂM ĐỊNH ĐƯỢC bằng tool (vd: "bảng mới xuất hiện trong sqlite_master")' },
+          sourceCycle: { type: 'number', description: '[propose] chu kỳ hiện tại (optional)' },
+          hypothesisId: { type: 'string', description: '[judge] id hypothesis (lấy từ kết quả propose/list)' },
+          verdict: { type: 'string', enum: ['confirmed', 'refuted'], description: '[judge] confirmed = bằng chứng ủng hộ (α+=1) · refuted = bằng chứng bác (β+=1)' },
+          evidenceTool: { type: 'string', description: '[judge] TÊN tool đã chạy và cho bằng chứng (vd: shell, file_read) — phải là tool THẬT đã chạy thành công chu kỳ này' },
+          evidenceQuote: { type: 'string', description: '[judge] trích đoạn ngắn từ KẾT QUẢ tool đó (bằng chứng cụ thể)' },
+          status: { type: 'string', description: '[list] lọc theo status (candidate|promoted|demoted|parrot_suspect) — bỏ trống = tất cả' },
+        },
+        required: ['op'],
+      },
+    },
+  },
   // ===== Dynamic skill + MCP enumeration (user request 2026-08-29) =====
   list_skills: {
     type: 'function',
@@ -1878,6 +1903,50 @@ export function getBuiltinToolDefinition(name: string): ToolDefinition | null {
   return ALL_TOOL_DEFINITIONS[name] ?? null
 }
 
+// ==================== TOOL NAME ALIASES (OpenCode CLI-native → TMO) ====================
+// 2026-09-26 FIX (Tool health audit): model trong inner loop OpenCode CLI hay phát
+// tool call bằng tên CLI-native (bash/read/write/todowrite/glob/ls/edit) — TMO dùng
+// tên riêng (shell/file_read/file_write/todo_write/file_list/file_edit). Trước đây
+// các tên này rơi thẳng vào default: → "Unknown tool: bash" (23 lỗi/24h trong
+// ToolMetric — session c4onvx + live2). Map tại MỌI cửa vào executeTool (API route
+// /api/tools/execute, goal-loop hybrid bridge, text-protocol parse).
+export const TOOL_NAME_ALIASES: Record<string, string> = {
+  bash: 'shell',
+  sh: 'shell',
+  read: 'file_read',
+  write: 'file_write',
+  edit: 'file_edit',
+  multiedit: 'file_multi_edit',
+  multi_edit: 'file_multi_edit',
+  todowrite: 'todo_write',
+  todoread: 'todo_read',
+  glob: 'file_list',
+  ls: 'file_list',
+}
+
+/**
+ * Resolve tool alias + chuẩn hóa args cho tên CLI-native.
+ * - bash/sh → shell (args {command} tương thích trực tiếp)
+ * - read/write/edit → file_read/file_write/file_edit — CLI dùng filePath/file_path,
+ *   TMO dùng path → copy sang `path` (giữ các field khác).
+ * - todowrite/todoread → todo_write/todo_read (args tương thích)
+ * - glob/ls → file_list ({pattern} bị bỏ qua — best-effort, {path} giữ nguyên)
+ * Trả về {name, args} — name đổi KHI có alias khớp, args đổi KHI cần chuẩn hóa.
+ */
+export function resolveToolAlias(
+  name: string,
+  args: Record<string, unknown>,
+): { name: string; args: Record<string, unknown> } {
+  const mapped = TOOL_NAME_ALIASES[name]
+  if (!mapped) return { name, args }
+  const filePath = args.filePath ?? args.file_path
+  if (typeof filePath === 'string' && filePath && !args.path) {
+    const { filePath: _fp1, file_path: _fp2, ...rest } = args
+    return { name: mapped, args: { ...rest, path: filePath } }
+  }
+  return { name: mapped, args }
+}
+
 // ==================== TOOL EXECUTION ====================
 
 export interface ToolExecutionResult {
@@ -1914,6 +1983,36 @@ export async function executeTool(
   }
 ): Promise<ToolExecutionResult> {
   const startTime = Date.now()
+
+  // 2026-09-26 FIX (Tool health audit): tên tool CLI-native (bash/read/write/
+  // todowrite/glob/ls/edit...) → alias về tên TMO + chuẩn hóa args (filePath→path).
+  // Áp TRƯỚC recordActivity để ToolMetric/Agent Activity ghi ĐÚNG tên TMO (thống
+  // nhất với bridge tmo_*). Defense-in-depth: mọi caller (goal-loop text-protocol,
+  // subagent, API route) đều được phủ.
+  const aliasResolved = resolveToolAlias(toolName, args)
+  if (aliasResolved.name !== toolName) {
+    console.log(`[ToolExecutor] Alias ${toolName} → ${aliasResolved.name} (CLI-native name)`)
+    toolName = aliasResolved.name
+    args = aliasResolved.args
+  }
+
+  // 2026-10-20 TASK 20 (fix GAP runId CLI bridge) — CONTEXT STAMPING cho todo
+  // tools: merge context.sessionId/runId vào args KHI THIẾU (mirror semantics
+  // injection của goal-loop). Trước đây chỉ goal-loop tự inject trước khi gọi
+  // executeTool; các đường KHÁC (CLI bridge tmo_todo → /api/tools/execute,
+  // /api/openclaw/chat) tới todo_write với args trống sessionId/runId → todos
+  // lưu runId=null → buildRunTodosBlock + autoCompleteRunTodosByEvidence
+  // (query sessionId+runId) KHÔNG thấy → TODO block chu kỳ sau rỗng trên đường
+  // CLI. Điều kiện: chỉ set khi args CHƯA có (agent tự khai → tôn trọng).
+  if (toolName === 'todo_write' || toolName === 'todo_read' ||
+      toolName === 'decompose_task' || toolName === 'create_task' ||
+      toolName === 'update_task' || toolName === 'get_plan' ||
+      // Task 21 — SHR hypothesis_write cùng cơ chế context-merge (sessionId
+      // scope hypothesis; runId lưu sourceRunId khi propose)
+      toolName === 'hypothesis_write') {
+    if (context?.sessionId && !args.sessionId) args.sessionId = context.sessionId
+    if (context?.runId && !args.runId) args.runId = context.runId
+  }
 
   // Mỗi tool call đều được ghi vào Agent Activity Log (ring buffer in-memory)
   // → GET /api/agent-activity → Terminal UI poll 2.5s và echo `$ [AI] ...`.
@@ -2599,6 +2698,47 @@ export async function executeTool(
         }
         result = await executeTodoReadFn(args as any)
         break
+      // ===== Task 21 (2026-10-21) — SHR structured hypothesis (R2 self-reflection) =====
+      case 'hypothesis_write': {
+        const op = String(args.op ?? '')
+        const sessionId = String(args.sessionId ?? context?.sessionId ?? '')
+        if (!sessionId) {
+          result = { success: false, error: 'hypothesis_write cần sessionId (context)' }
+          break
+        }
+        const shr = await import('@/lib/structured-hypothesis')
+        if (op === 'propose') {
+          const res = await shr.proposeHypothesis({
+            sessionId,
+            agentName: context?.agentName ?? null,
+            runId: (typeof args.runId === 'string' && args.runId) ? args.runId : null,
+            contextSig: String(args.contextSig ?? ''),
+            intervention: String(args.intervention ?? ''),
+            predictedDelta: String(args.predictedDelta ?? ''),
+            mechanicsClaim: String(args.mechanicsClaim ?? ''),
+            sourceCycle: typeof args.sourceCycle === 'number' ? args.sourceCycle : null,
+          })
+          result = res.ok
+            ? { success: true, kind: res.kind, id: res.id, posterior: res.posterior, note: res.note }
+            : res
+        } else if (op === 'judge') {
+          const res = await shr.recordJudgment({
+            sessionId,
+            hypothesisId: String(args.hypothesisId ?? ''),
+            verdict: args.verdict === 'refuted' ? 'refuted' : 'confirmed',
+            evidenceTool: String(args.evidenceTool ?? ''),
+            evidenceQuote: String(args.evidenceQuote ?? ''),
+          })
+          result = res.ok ? { success: true, ...res } : res
+        } else if (op === 'list') {
+          const status = typeof args.status === 'string' && args.status ? args.status : undefined
+          const rows = await shr.listHypotheses(sessionId, status)
+          result = { success: true, total: rows.length, hypotheses: rows }
+        } else {
+          result = { success: false, error: 'op phải là propose | judge | list' }
+        }
+        break
+      }
       // ===== Dynamic skill + MCP enumeration (user request 2026-08-29) =====
       case 'list_skills': {
         result = await executeListSkillsFn(args as any)
@@ -4026,6 +4166,12 @@ function summarizeToolCall(toolName: string, args: Record<string, unknown>): str
       return `${s(args.branch) || 'HEAD'} ← remote${args.force ? ' (force)' : ''}`
     case 'todo_write':
       return `${Array.isArray(args.todos) ? args.todos.length : '?'} bước`
+    case 'hypothesis_write': {
+      const op = s(args.op)
+      if (op === 'propose') return `đề xuất hypothesis: "${s(args.mechanicsClaim).slice(0, 90)}"`
+      if (op === 'judge') return `phán quyết ${s(args.verdict)} + bằng chứng ${s(args.evidenceTool)}`
+      return `liệt kê hypothesis${args.status ? ` (${s(args.status)})` : ''}`
+    }
     case 'knowledge_search':
     case 'tavily':
     case 'serper':
@@ -4065,6 +4211,13 @@ function summarizeToolResult(toolName: string, result: unknown): string {
       return trunc(String(result), 300)
     }
     const r = result as Record<string, unknown>
+    // 2026-09-26 FIX (Tool health audit): tool FAIL trả {success:false, error}
+    // → hiện ERROR THẬT thay vì summary per-tool. Trước đây todo_write fail
+    // "todos[] is required" hiện "Đã ghi 0 todo" — errorTag ToolMetric gây hiểu
+    // nhầm (đã ghi thành công 0 mục?) trong khi đó là validation error.
+    if (r.success === false && typeof r.error === 'string' && r.error) {
+      return trunc(`❌ ${r.error}`, 400)
+    }
     switch (toolName) {
       case 'shell':
       case 'run_bg': {
@@ -4097,6 +4250,17 @@ function summarizeToolResult(toolName: string, result: unknown): string {
       case 'todo_write': {
         const n = typeof r.upserted === 'number' ? r.upserted : (Array.isArray(r.todos) ? r.todos.length : 0)
         return `Đã ghi ${n} todo`
+      }
+      case 'hypothesis_write': {
+        const kind = typeof r.kind === 'string' ? r.kind : (typeof r.total === 'number' ? `${r.total} hypothesis` : '')
+        const note = typeof r.note === 'string' ? r.note : ''
+        const errStr = typeof r.error === 'string' ? r.error : ''
+        if (r.success === false) return trunc(`❌ ${errStr}`, 300)
+        if (kind === 'created') return trunc(`Đã sinh hypothesis α=0 β=0 (id ${String(r.id).slice(-6)}) — chờ bằng chứng judge`, 240)
+        if (kind === 'duplicate') return trunc(`Trùng hypothesis hiện có — không tạo bản sao`, 200)
+        if (kind === 'parrot') return trunc(`Nghi vẹt: cơ chế trùng nhưng ngữ cảnh lệch — cần test lại`, 200)
+        if (kind) return trunc(kind, 200)
+        return trunc(note || JSON.stringify(result), 240)
       }
       case 'todo_read': {
         const total = typeof r.total === 'number' ? r.total : 0

@@ -17,6 +17,12 @@ const AGENT_NAME = process.env.TMO_AGENT_NAME || 'opencode-bridge'
 /** Session ID for tool events persistence (passed via env from callOpenCodeCLIProvider). */
 const SESSION_ID = process.env.TMO_SESSION_ID || null
 
+/** 2026-10-20 TASK 20 — Run ID của agent run đang chạy (env từ
+ * callOpenCodeCLIProvider). Truyền vào context để todo_write từ inner loop
+ * CLI được gắn ĐÚNG run — buildRunTodosBlock (TODO block chu kỳ sau) +
+ * autoCompleteRunTodosByEvidence đều query theo sessionId+runId. */
+const RUN_ID = process.env.TMO_RUN_ID || null
+
 /**
  * Call TMO executeTool via HTTP.
  * Returns stringified result (compact for LLM context).
@@ -35,6 +41,7 @@ export async function callTmoTool(
         context: {
           agentName: AGENT_NAME,
           sessionId: SESSION_ID,
+          runId: RUN_ID,
         },
       }),
       signal: AbortSignal.timeout(60000), // 60s timeout

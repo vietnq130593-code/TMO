@@ -350,7 +350,10 @@ export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTod
 
       {open && (
         <div className="px-3 pb-2.5 space-y-2 border-t border-stone-700/40 pt-2">
-          {/* Todos */}
+          {/* Todos — TASK 21-d (user request 2026-10-21): hiển thị TẤT CẢ todo
+              dạng CÂY (todo con lồng dưới todo cha qua parentId), todo hoàn
+              thành đánh dấu ✓ + gạch ngang ("đóng" — việc đã xong rõ ràng,
+              việc đang sống nổi bật), giữ nguyên thứ tự position của agent. */}
           {todoList.length > 0 && (
             <div>
               <div className="flex items-center gap-1.5 mb-1">
@@ -364,24 +367,54 @@ export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTod
                   />
                 </div>
               </div>
-              <div className="max-h-40 overflow-y-auto space-y-0.5 pr-1" style={{ scrollbarWidth: 'thin' }}>
-                {todoList.map(t => {
-                  // 'archived' đã bị lọc ở trên (todoList) — nhánh dưới chỉ phòng thủ
-                  const st = t.status
-                  const icon = st === 'completed' ? '✓' : st === 'in_progress' ? '◐' : st === 'failed' ? '✗' : st === 'blocked' ? '⚠' : '○'
-                  const color = st === 'completed' ? 'text-emerald-400' : st === 'in_progress' ? 'text-amber-300' : st === 'failed' ? 'text-red-400' : st === 'blocked' ? 'text-orange-400' : st === 'archived' ? 'text-stone-500' : 'text-stone-400'
+              <div className="max-h-64 overflow-y-auto space-y-0.5 pr-1" style={{ scrollbarWidth: 'thin' }}>
+                {(() => {
+                  // Xây cây từ danh sách phẳng: todo con (parentId trỏ todo cha
+                  // cùng run) lồng dưới cha; parent lạc (không có trong list)
+                  // được nâng lên làm gốc — không mất todo nào.
+                  const byId = new Map(todoList.map(t => [t.id, t]))
+                  const childrenOf = new Map<string, RunTodoData[]>()
+                  const roots: RunTodoData[] = []
+                  for (const t of todoList) {
+                    if (t.parentId && byId.has(t.parentId)) {
+                      const arr = childrenOf.get(t.parentId) || []
+                      arr.push(t)
+                      childrenOf.set(t.parentId, arr)
+                    } else {
+                      roots.push(t)
+                    }
+                  }
+                  const renderNode = (t: RunTodoData, depth: number): React.ReactNode => {
+                    const st = t.status
+                    const icon = st === 'completed' ? '✓' : st === 'in_progress' ? '◐' : st === 'failed' ? '✗' : st === 'blocked' ? '⚠' : '○'
+                    const color = st === 'completed' ? 'text-emerald-500' : st === 'in_progress' ? 'text-amber-300' : st === 'failed' ? 'text-red-400' : st === 'blocked' ? 'text-orange-400' : 'text-stone-400'
+                    const kids = childrenOf.get(t.id) || []
+                    return (
+                      <div key={t.id}>
+                        <div
+                          className="flex items-start gap-1.5 py-0.5 pr-1"
+                          style={{ paddingLeft: depth > 0 ? `${depth * 18 + 2}px` : '2px' }}
+                        >
+                          {depth > 0 && <span className="text-[11px] leading-5 text-stone-600 flex-shrink-0 select-none">└</span>}
+                          <span className={`text-[13px] leading-5 flex-shrink-0 ${color} ${st === 'in_progress' ? 'animate-pulse' : ''}`}>{icon}</span>
+                          <span className={`text-[12px] leading-5 flex-1 break-words ${st === 'completed' ? 'text-stone-500 line-through' : 'text-stone-200'}`}>{t.content}</span>
+                          {kids.length > 0 && <span className="text-[10px] leading-5 text-stone-500 flex-shrink-0">{kids.length}</span>}
+                        </div>
+                        {kids.map(k => renderNode(k, depth + 1))}
+                      </div>
+                    )
+                  }
                   return (
-                    <div key={t.id} className="flex items-start gap-2 px-1 py-0.5">
-                      <span className={`text-[13px] leading-5 flex-shrink-0 ${color} ${st === 'in_progress' ? 'animate-pulse' : ''}`}>{icon}</span>
-                      <span className={`text-[12px] leading-5 flex-1 ${st === 'completed' ? 'text-stone-400 line-through' : 'text-stone-200'}`}>{t.content}</span>
-                    </div>
+                    <>
+                      {roots.map(r => renderNode(r, 0))}
+                      {/* CI-2 — todo đã lưu trữ của run này (bị run sau archive hoặc
+                          crash-close): gọn 1 dòng xám, không chiếm chỗ */}
+                      {archivedCount > 0 && (
+                        <div className="px-1 py-0.5 text-[11px] text-stone-500">▸ {archivedCount} đã lưu trữ</div>
+                      )}
+                    </>
                   )
-                })}
-                {/* CI-2 — todo đã lưu trữ của run này (bị run sau archive hoặc
-                    crash-close): gọn 1 dòng xám, không chiếm chỗ */}
-                {archivedCount > 0 && (
-                  <div className="px-1 py-0.5 text-[11px] text-stone-500">▸ {archivedCount} đã lưu trữ</div>
-                )}
+                })()}
               </div>
             </div>
           )}

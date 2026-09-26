@@ -32,7 +32,13 @@ export function proxy(req: NextRequest) {
   const token =
     req.headers.get('authorization')?.replace('Bearer ', '') ||
     req.cookies.get('tmo_api_token')?.value ||
-    req.headers.get('x-tmo-api-token')
+    req.headers.get('x-tmo-api-token') ||
+    // FIX 2026-09-25 (preview iframe 401): EventSource KHÔNG set được header.
+    // Trong cross-site iframe (preview panel) cookie SameSite=Lax cũng bị
+    // chặn → terminal/preview stream 401 mãi. Chấp nhận thêm token qua query
+    // ?token= cho EventSource. Trade-off: token xuất hiện trong access log —
+    // chấp nhận được với local dev tool (token đã nằm trong .env cùng máy).
+    req.nextUrl.searchParams.get('token')
 
   // Auto-provision (cached trong module — không tốn fs mỗi request).
   // Trả null chỉ khi cả env lẫn file đều không thiết lập được (FS lỗi).

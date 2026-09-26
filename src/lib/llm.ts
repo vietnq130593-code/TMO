@@ -113,9 +113,28 @@ export interface LLMResult {
    *  Populated only when the caller passes `tools` in LLMCallOptions
    *  AND the model emits a tool_calls array. Empty/undefined otherwise. */
   tool_calls?: LLMToolCall[]
+  /** EXECUTED tool calls — phân biệt nguồn khi provider chạy qua OpenCode CLI:
+   *  - tool_calls: merge (native collected + text-protocol parsed) — caller
+   *    cũ (goal-loop hybrid bridge) dùng để đếm evidence.
+   *  - executed_tool_calls: CHỈ những tool ĐÃ ĐƯỢC inner loop của OpenCode CLI
+   *    thực thi thật (native write/bash/read + tmo_* bridge gọi /api/tools/execute).
+   *    Caller cần bằng chứng THỰC THI (vd self-direction receipts) dùng field
+   *    này — KHÔNG thực thi lại (chống double-execution). (fix 2026-09-25) */
+  executed_tool_calls?: LLMToolCall[]
   /** OpenAI-style finish_reason: 'stop' | 'tool_calls' | 'length' | 'content_filter' | null
    *  Useful for Phase 1c dual-mode logic (workflow-engine.ts). */
   finish_reason?: string | null
+  /** 2026-10 PROCESS INTEGRITY — reasoning/thinking parts từ OpenCode CLI
+   *  (trước đây parse xong CHỈ log rồi vứt — Thought Process panel mất hết
+   *  suy nghĩ trung gian của agent chạy qua CLI). */
+  reasoning?: string
+  /** 2026-10 PROCESS INTEGRITY — kết quả THẬT của tool inner loop CLI đã thực
+   *  thi (tên TMO + output/error/status thật). Trước đây goal-loop MÙ về kết
+   *  quả CLI: hard-code success=true cho mọi call → stall brake vô hiệu +
+   *  evaluator chỉ thấy chuỗi generic → lặp chu kỳ không tiến triển + đánh
+   *  giá hời hợt (user report 2026-10). Giờ: kết quả thật về evidence +
+   *  transcript của vòng sau. */
+  executed_tool_results?: ExecutedToolResult[]
 }
 
 /** OpenAI-style tool/function schema passed to the LLM via the `tools` API param.
@@ -144,6 +163,33 @@ export interface LLMToolCall {
   }
 }
 
+/** 2026-10 PROCESS INTEGRITY — kết quả 1 tool call đã được inner loop
+ *  OpenCode CLI thực thi (event shape probe 2026-09-25: part.tool +
+ *  part.state.{status,input,output,error,time}). Goal-loop dùng để ghi
+ *  evidence đúng success/fail + đẩy kết quả về transcript. */
+export interface ExecutedToolResult {
+  /** callId gốc từ CLI (tool_call_id) — rỗng nếu CLI không phát. Goal-loop
+   *  match kết quả với call theo id TRƯỚC (chính xác kể cả 2 call cùng tên
+   *  khác args), fallback theo tên TMO. (2026-10) */
+  callId: string
+  /** Tên tool chuẩn TMO (đã map alias tmo_ prefix + native qua toolMap) */
+  name: string
+  /** Tên tool gốc CLI (bash/write/tmo_shell...) — debug/truy vết */
+  cliName: string
+  /** Args đã chạy (object đã parse) */
+  args: Record<string, unknown>
+  /** Output thật (bounded ~2000 chars) */
+  output: string
+  /** Error text khi status='error' */
+  error?: string
+  /** status từ CLI ('completed' | 'error' | 'running' | ...) */
+  status: string
+  /** success = status !== 'error' && không có error */
+  success: boolean
+  /** Thời lượng (ms) — từ state.time.start/end khi CLI báo */
+  durationMs: number
+}
+
 export interface LLMCallOptions {
   temperature?: number
   maxTokens?: number
@@ -167,6 +213,21 @@ export interface LLMCallOptions {
    *  ngay lập tức (ví dụ: người dùng bấm Dừng tác vụ → ReAct loop hủy mọi LLM call
    *  đang chờ). Không bắt buộc — undefined = xoay vòng chạy đủ chu kỳ. */
   abortCheck?: () => boolean
+  /** FIX 2026-09-25 (E2E tool audit): callLLMForAgent đã thử zen HTTP + CLI fail
+   *  rồi mới fallback callLLM('agent-fallback') — set cờ này để KHÔNG spawn thêm
+   *  CLI lần 2 trong utility zen path (tiết kiệm ~40-60s + RAM). */
+  skipZenUtility?: boolean
+  /** 2026-09-26 FIX (Tool health audit): sessionId của agent run đang chạy —
+   *  truyền qua env TMO_SESSION_ID cho OpenCode CLI bridge (.opencode/tools/
+   *  _tmo-common.ts) để tool tmo_* thực thi trong inner loop CLI ghi ToolMetric
+   *  ĐÚNG session (trước đây luôn '' → metrics rơi vào session 'unknown', tách
+   *  khỏi run thật — thấy rõ trong Database > Analytics > Tool health). */
+  sessionId?: string | null
+  /** 2026-10-20 TASK 20 (fix GAP runId): runId của agent run đang chạy — truyền
+   *  qua env TMO_RUN_ID cho CLI bridge để todo_write từ inner loop CLI được gắn
+   *  ĐÚNG run (buildRunTodosBlock + auto-complete query theo sessionId+runId;
+   *  trước đây todos CLI lưu runId=null → TODO block chu kỳ sau LUÔN RỖNG). */
+  runId?: string | null
 }
 
 // ==================== CONSTANTS ====================
@@ -3530,6 +3591,26 @@ export async function callUtilityLLM(
 
   console.log(`[LLM] Utility core Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
 
+  // ===== OPENCODE ZEN UTILITY PATH (FIX 2026-09-25 — E2E tool audit) =====
+  // Trước đây chỉ có NIM (key chết) → goal-loop-context-compression /
+  // memory-extraction / writeback-extraction mỗi lần đốt ~60s chờ cooldown
+  // NIM rồi fail-open. Route qua Zen HTTP → OpenCode CLI như callLLM.
+  if (isZenConfigured() && !options?.skipZenUtility) {
+    const utilModel = process.env.UTILITY_ZEN_MODEL || 'nemotron-3.5-lightning-free'
+    const zen = await callZenProvider(prompt, systemPrompt, utilModel, options, `utility-core:${taskLabel}`)
+    if (zen && zen.content) {
+      console.log(`[LLM] Utility-core dùng Zen ${utilModel} ✓ (${zen.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
+      return zen
+    }
+    console.warn(`[LLM] Utility-core Zen HTTP ${utilModel} thất bại — thử OpenCode CLI: ${(zen?.error || 'unknown').slice(0, 100)}`)
+    const cliResult = await callOpenCodeCLIProvider(prompt, systemPrompt, utilModel, options, `utility-core:${taskLabel}`)
+    if (cliResult && cliResult.content) {
+      console.log(`[LLM] Utility-core dùng OpenCode CLI ${utilModel} ✓ (${cliResult.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
+      return cliResult
+    }
+    console.warn(`[LLM] Utility-core Zen ${utilModel} thất bại cả HTTP + CLI — fallback NIM legacy — task: ${taskLabel}`)
+  }
+
   // ===== Z-AI SDK PROVIDER (dựng lại 2026-09-06 — opt-in LLM_PROVIDER=zai) =====
   // Utility defaults giữ nguyên như chuỗi NIM (0.1 / 4096) để hành vi nhất quán.
   if (isZaiProviderEnabled()) {
@@ -3926,6 +4007,29 @@ export async function callLLM(
     }
   }
 
+  // ===== OPENCODE ZEN UTILITY PATH (FIX 2026-09-25 — E2E tool audit) =====
+  // decompose_task/summarize/synthesize và các utility callLLM() trước đây chỉ có
+  // đường NIM (key placeholder chết) → mất ~60s rồi trả content rỗng
+  // ("LLM did not return valid JSON" / summary:""). Giờ route qua Zen HTTP →
+  // OpenCode CLI (cùng chuỗi callLLMForAgent dùng) TRƯỚC khi rơi về NIM legacy.
+  // Model utility mặc định: nemotron-3.5-lightning-free (nhanh, JSON ổn định) —
+  // override qua env UTILITY_ZEN_MODEL. skipZenUtility: caller đã thử zen xong.
+  if (isZenConfigured() && !options?.skipZenUtility) {
+    const utilModel = process.env.UTILITY_ZEN_MODEL || 'nemotron-3.5-lightning-free'
+    const zen = await callZenProvider(prompt, systemPrompt, utilModel, options, `utility:${taskLabel}`)
+    if (zen && zen.content) {
+      console.log(`[LLM] Utility dùng Zen ${utilModel} ✓ (${zen.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
+      return zen
+    }
+    console.warn(`[LLM] Utility Zen HTTP ${utilModel} thất bại — thử OpenCode CLI: ${(zen?.error || 'unknown').slice(0, 100)}`)
+    const cliResult = await callOpenCodeCLIProvider(prompt, systemPrompt, utilModel, options, `utility:${taskLabel}`)
+    if (cliResult && cliResult.content) {
+      console.log(`[LLM] Utility dùng OpenCode CLI ${utilModel} ✓ (${cliResult.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
+      return cliResult
+    }
+    console.warn(`[LLM] Utility Zen ${utilModel} thất bại cả HTTP + CLI — fallback NIM legacy (key chết → sẽ trả lỗi) — task: ${taskLabel}`)
+  }
+
   // ===== KIMI-K3 CHÍNH + FALLBACK CHAIN MODEL-FIRST (directive 2026-09-06) =====
   // kimi-k3 fail → fallback tuần tự v4-pro → v4-flash → minimax-m3 NGAY (cùng
   // key); hết cả chuỗi trên key mới chuyển key (callModelChainModelFirst).
@@ -4233,6 +4337,131 @@ function isOpenCodeCLIAvailable(): boolean {
   }
 }
 
+// ==================== CLI-NATIVE TOOL ACTIVITY → AGENT ACTIVITY LOG ====================
+// (user request 2026-09-25: "agent viết đến đâu code hiện đến đấy" + Terminal
+// hiện lệnh/kết quả thật) — tool CLI-native (bash/write/edit/read/glob/grep/
+// todowrite) chạy BÊN TRONG inner loop của OpenCode CLI process, KHÔNG đi qua
+// executeTool() của app → trước đây hoàn toàn VÔ HÌNH ở Code tab: không có
+// terminal echo, không reload file tree, tab editor mở sẵn giữ content STALE.
+//
+// Giải pháp: mỗi tool_use event của CLI-native tool được ghi vào agent-activity
+// ring buffer (choke-point mà Terminal UI poll 2.5s) với tên tool MAPPED về tên
+// TMO tương đương (bash→shell, write→file_write...) → các logic sẵn có bên
+// client (FILE_MUTATING_TOOLS reload tree, echo format `$ [AI·x]`/`⎿ result`,
+// live tab refresh mới) tự động ăn theo — hoạt động ở MỌI mode (GoalLoop chat,
+// Self-Direction steps, subagent, cron) vì tất cả đều chảy qua provider này.
+//
+// KHÔNG ghi cho tmo_* bridge tools — các tool đó đã được executeTool() ghi qua
+// POST /api/tools/execute (tránh double entry cho cùng 1 hành động).
+const CLI_NATIVE_ACTIVITY_TOOL_MAP: Record<string, string> = {
+  bash: 'shell',
+  write: 'file_write',
+  edit: 'file_edit',
+  read: 'file_read',
+  glob: 'file_list',
+  ls: 'file_list',
+  grep: 'grep',
+  todowrite: 'todo_write',
+}
+
+/** State shape của tool_use event (verified thực tế 2026-09-25 bằng probe CLI). */
+interface CliToolState {
+  status?: string
+  input?: unknown
+  output?: string
+  error?: string
+  time?: { start?: number; end?: number }
+}
+
+async function recordCliNativeToolActivity(
+  cliToolName: string,
+  state: CliToolState | undefined,
+  agentName: string | undefined,
+  sessionId?: string | null,
+): Promise<void> {
+  try {
+    if (cliToolName.startsWith('tmo_')) return // đã ghi bởi executeTool qua bridge
+    const tmoName = CLI_NATIVE_ACTIVITY_TOOL_MAP[cliToolName]
+    if (!tmoName) return // tool lạ ('invalid', plugin khác...) — bỏ
+    const input = (state?.input && typeof state.input === 'object' ? state.input : {}) as Record<string, unknown>
+    const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+    let detail = ''
+    if (tmoName === 'shell') {
+      detail = str(input.command)
+    } else if (tmoName === 'file_write' || tmoName === 'file_edit' || tmoName === 'file_read') {
+      detail = str(input.filePath) || str(input.path) || str(input.file_path)
+    } else if (tmoName === 'grep' || tmoName === 'file_list') {
+      detail = str(input.pattern) || str(input.path) || '.'
+    } else if (tmoName === 'todo_write') {
+      detail = `todo list (${Array.isArray(input.todos) ? input.todos.length : '?'} mục)`
+    }
+    const dur = typeof state?.time?.start === 'number' && typeof state?.time?.end === 'number'
+      ? Math.max(0, state.time.end - state.time.start)
+      : 0
+    const ok = state?.status !== 'error'
+    const resultPreview = ok
+      ? (typeof state?.output === 'string' && state.output ? state.output.slice(0, 900) : undefined)
+      : `ERROR: ${typeof state?.error === 'string' ? state.error : 'tool call lỗi/bị từ chối'}`
+    const { recordAgentActivity } = await import('@/lib/agent-activity-log')
+    recordAgentActivity({
+      agentName,
+      tool: tmoName,
+      detail,
+      success: ok,
+      durationMs: dur,
+      // 2026-09-26 FIX (Tool health audit): truyền sessionId thật của agent run
+      // (trước đây null cứng → ToolMetric rơi vào session 'unknown' — Tool health
+      // không truy vết được run nào gọi tool native CLI)
+      sessionId: sessionId || null,
+      resultPreview,
+    })
+  } catch { /* fail-open — hiển thị activity không được phép crash LLM call */ }
+}
+
+/** 2026-10 — map tên tool CLI (tmo_* filename + native) → tên TMO executeTool.
+ *  Trước đây khai báo LẶP bên trong stream handler; đưa ra module-level để
+ *  collector kết quả (executedResultMap) + collector tool_calls dùng chung. */
+const OC_CLI_TOOL_MAP: Record<string, string> = {
+  'tmo_delegate': 'delegate_task',
+  'tmo_dispatch': 'dispatch_agent',
+  'tmo_escalate': 'escalate_problem',
+  'tmo_knowledge_search': 'knowledge_search',
+  'tmo_knowledge_graph': 'knowledge_graph',
+  'tmo_file_list': 'file_list',
+  'tmo_file_read': 'file_read',
+  'tmo_grep': 'grep',
+  'tmo_shell': 'shell',
+  'tmo_todo': 'todo_write',
+  'tmo_request_code_team': 'request_code_team',
+  'tmo_web_search': 'web_search',
+  // 2026-09-25 SKILLS BRIDGE — 2 bridge tools trong .opencode/tools/ cho CLI
+  // gọi list_skills/read_skill của app (per-agent SkillAssignment filter vẫn
+  // áp dụng vì context.agentName = TMO_AGENT_NAME).
+  'tmo_list_skills': 'list_skills',
+  'tmo_read_skill': 'read_skill',
+  // Task 21 (2026-10-21) — SHR bridge tool
+  'tmo_hypothesis': 'hypothesis_write',
+  // 2026-10 FIX MATCH TÊN — native CLI tool names → TMO names (mirror
+  // TOOL_NAME_ALIASES trong code-team/tool-executor.ts). QUAN TRỌNG:
+  // executed_tool_calls (function.name = mappedName) được goal-loop đưa qua
+  // resolveToolAlias → 'bash' trở thành 'shell'; executed_tool_results dùng
+  // CÙNG map này nên 2 bên ĐỒNG NHẤT tên khi goal-loop match kết quả thật
+  // (findIndex r.name === etc.name). Trước đây native giữ nguyên 'bash' trong
+  // results trong khi calls thành 'shell' → match FAIL → evidence mất output
+  // thật → evaluator mù → chu kỳ lặp (đã lộ ra trong E2E procint cycle 1-15).
+  bash: 'shell',
+  sh: 'shell',
+  read: 'file_read',
+  write: 'file_write',
+  edit: 'file_edit',
+  multiedit: 'file_multi_edit',
+  multi_edit: 'file_multi_edit',
+  todowrite: 'todo_write',
+  todoread: 'todo_read',
+  glob: 'file_list',
+  ls: 'file_list',
+}
+
 /**
  * Call OpenCode Zen free model via CLI subprocess (bypasses FreeTierError).
  * Spawns `opencode run "prompt" --model opencode/<model> --format json`.
@@ -4254,7 +4483,20 @@ async function callOpenCodeCLIProvider(
   // Top-level import (sync) để dùng trong child.on('close') callback — không dùng await trong callback.
   const { extractToolCallsWithDiagnostics } = await import('@/lib/tool-calls')
   const fullPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt
-  const cliModel = `opencode/${model}`
+  // MULTI-KEY ROTATION (fix 2026-09-25): opencode.json định nghĩa 3 provider
+  // alias trùng baseURL https://opencode.ai/zen/v1, khác API key:
+  //   - opencode    → key repo (mặc định, quota riêng)
+  //   - opencode-k1 → ZEN_API_KEY_1   ┐ pool round-robin DÙNG CHUNG với
+  //   - opencode-k2 → ZEN_API_KEY_2   ┘ Zen HTTP path (getZenKey)
+  // Chọn prefix theo pool state → CLI không còn phụ thuộc 1 key duy nhất;
+  // key nào bị HTTP path đánh dấu 429-cooldown sẽ tự bị bỏ qua ở lần spawn sau.
+  // Không có env key → dùng alias mặc định `opencode` (auth.json/opencode.json).
+  let cliProviderPrefix = 'opencode'
+  try {
+    const keyInfo = getZenKey()
+    if (keyInfo) cliProviderPrefix = `opencode-k${keyInfo.index + 1}`
+  } catch { /* giữ prefix mặc định */ }
+  const cliModel = `${cliProviderPrefix}/${model}`
 
   console.log(`[OC-CLI] ${taskLabel} — spawn opencode run --model ${cliModel}`)
   return new Promise<LLMResult | null>((resolve) => {
@@ -4275,7 +4517,14 @@ async function callOpenCodeCLIProvider(
         // Pass TMO context to custom tools (.opencode/tools/*.ts read these)
         TMO_BASE_URL: process.env.TMO_BASE_URL || 'http://localhost:3000',
         TMO_AGENT_NAME: options?.agentName || 'opencode-bridge',
-        TMO_SESSION_ID: '',
+        // 2026-09-26 FIX: truyền sessionId thật (trước đây '' → bridge ghi
+        // ToolMetric session 'unknown', tách khỏi run — Tool health khó truy vết)
+        TMO_SESSION_ID: options?.sessionId || '',
+        // 2026-10-20 TASK 20: truyền runId thật — todo_write từ inner loop CLI
+        // (tmo_todo bridge) gắn đúng run → TODO block + auto-complete hoạt động
+        // trên đường CLI (trước đây todos CLI luôn runId=null → kế hoạch MẤT
+        // giữa các chu kỳ dù F4 đã render — gap phát hiện khi rà soát Task 19)
+        TMO_RUN_ID: options?.runId || '',
       },
       timeout: OPENCODE_CLI_TIMEOUT_MS,
     })
@@ -4296,12 +4545,36 @@ async function callOpenCodeCLIProvider(
     // Collect tool_use events — OpenCode emits these when LLM calls custom tools
     // (tmo_delegate, tmo_file_list, etc.). Map tmo_* prefix → TMO tool names.
     const collectedToolCalls: LLMToolCall[] = []
+    // 2026-10 PROCESS INTEGRITY — thu KẾT QUẢ THẬT của tool CLI đã thực thi
+    // (state.{status,output,error,time} có trong event — trước đây bị bỏ).
+    // Map theo callId; snapshot sau GHI ĐÈ snapshot trước (giữ state mới nhất).
+    const executedResultMap = new Map<string, ExecutedToolResult>()
+    const seenCallIds = new Set<string>()
+
 
     const finishTimer = setTimeout(() => {
       if (!resolved) {
         try { child.kill('SIGKILL') } catch { /* ignore */ }
         console.warn(`[OC-CLI] ${taskLabel} timeout ${OPENCODE_CLI_TIMEOUT_MS}ms — kill`)
-        resolve(null)
+        // (fix 2026-09-25) PARTIAL-ON-TIMEOUT: inner loop CLI có thể ĐÃ thực thi
+        // nhiều tool trước khi bị kill (E2E 2026-09-25: SENTINEL edit+bash thật
+        // nhưng resolve(null) vứt bỏ toàn bộ → evaluator kết luận oan "không có
+        // tool call nào"). Giờ trả partial: content rỗng + executed_tool_calls
+        // đã thu thập → callLLMForAgent pass (tool_calls non-empty) → caller
+        // (self-direction receipts bridge) ghi nhận bằng chứng việc đã làm;
+        // content trống → caller tổng hợp output trung thực từ receipts.
+        resolve({
+          content: '',
+          provider: 'zen-cli',
+          model: actualModel,
+          tokensUsed: totalTokens || undefined,
+          error: `timeout ${OPENCODE_CLI_TIMEOUT_MS}ms (partial — ${collectedToolCalls.length} tool đã thực thi trước khi kill)`,
+          tool_calls: collectedToolCalls.length > 0 ? collectedToolCalls : undefined,
+          executed_tool_calls: collectedToolCalls.length > 0 ? collectedToolCalls : undefined,
+          executed_tool_results: executedResultMap.size > 0 ? [...executedResultMap.values()] : undefined,
+          reasoning: reasoningParts.join('').trim() || undefined,
+          finish_reason: 'timeout',
+        })
         resolved = true
       }
     }, OPENCODE_CLI_TIMEOUT_MS)
@@ -4326,7 +4599,7 @@ async function callOpenCodeCLIProvider(
               name?: string
               tool?: string
               input?: unknown
-              state?: { input?: unknown; output?: string; status?: string }
+              state?: { input?: unknown; output?: string; status?: string; error?: string; time?: { start?: number; end?: number } }
               tool_call_id?: string
               callID?: string
               callId?: string
@@ -4347,24 +4620,42 @@ async function callOpenCodeCLIProvider(
           if ((evt.type === 'tool_use' || evt.type === 'tool_result') && (evt.part?.name || evt.part?.tool)) {
             const toolName = evt.part.name || evt.part.tool || ''
             const toolCallId = evt.part.tool_call_id || evt.part.callID || evt.part.callId || ''
-            // Explicit mapping (tmo_* filename → TMO executeTool name)
-            const toolMap: Record<string, string> = {
-              'tmo_delegate': 'delegate_task',
-              'tmo_dispatch': 'dispatch_agent',
-              'tmo_escalate': 'escalate_problem',
-              'tmo_knowledge_search': 'knowledge_search',
-              'tmo_knowledge_graph': 'knowledge_graph',
-              'tmo_file_list': 'file_list',
-              'tmo_file_read': 'file_read',
-              'tmo_grep': 'grep',
-              'tmo_shell': 'shell',
-              'tmo_todo': 'todo_write',
-              'tmo_request_code_team': 'request_code_team',
-              'tmo_web_search': 'web_search',
-            }
-            const mappedName = toolMap[toolName] || toolName
-            // Only collect on tool_use (not tool_result — result is already executed by OpenCode)
-            if (evt.type === 'tool_use') {
+            // Explicit mapping (tmo_* filename → TMO executeTool name) — module-level
+            // OC_CLI_TOOL_MAP (2026-10: dùng chung cho collector kết quả + collector
+            // tool_calls, không khai báo lặp trong handler)
+            const mappedName = OC_CLI_TOOL_MAP[toolName] || toolName
+            // 2026-10 — thu kết quả thật từ MỌI tool event (use + result).
+            // Fail-open: parse state lỗi không được phép crash stream parse.
+            try {
+              const st = evt.part.state
+              const inputRaw = evt.part.input || st?.input || {}
+              const inputArgs = (inputRaw && typeof inputRaw === 'object' ? inputRaw : {}) as Record<string, unknown>
+              const key = toolCallId || `${toolName}#${executedResultMap.size}`
+              const prev = executedResultMap.get(key)
+              const status = typeof st?.status === 'string' && st.status ? st.status : (evt.type === 'tool_result' ? 'completed' : 'unknown')
+              const output = typeof st?.output === 'string' ? st.output.slice(0, 2000) : (prev?.output || '')
+              const error = typeof st?.error === 'string' ? st.error.slice(0, 1000) : prev?.error
+              const dur = typeof st?.time?.start === 'number' && typeof st?.time?.end === 'number'
+                ? Math.max(0, st.time.end - st.time.start)
+                : (prev?.durationMs ?? 0)
+              executedResultMap.set(key, {
+                callId: toolCallId || '',
+                name: mappedName,
+                cliName: toolName,
+                args: Object.keys(inputArgs).length > 0 ? inputArgs : (prev?.args ?? {}),
+                output: output || prev?.output || '',
+                error,
+                status,
+                success: status !== 'error' && !error,
+                durationMs: dur,
+              })
+            } catch { /* fail-open — parse state không crash stream */ }
+            // Only collect on tool_use (not tool_result — result is already executed by OpenCode).
+            // 2026-10: dedup theo callId KHÔNG rỗng — CLI có thể phát nhiều snapshot
+            // cho cùng 1 call (running → completed); trước đây mỗi snapshot push 1
+            // entry → tool bị đếm nhiều lần trong collectedToolCalls.
+            if (evt.type === 'tool_use' && !(toolCallId && seenCallIds.has(toolCallId))) {
+              if (toolCallId) seenCallIds.add(toolCallId)
               const inputArgs = evt.part.input || evt.part.state?.input || {}
               collectedToolCalls.push({
                 id: toolCallId || `occli_${Date.now()}_${collectedToolCalls.length}`,
@@ -4375,6 +4666,11 @@ async function callOpenCodeCLIProvider(
                 },
               })
               console.log(`[OC-CLI] ${taskLabel} tool_use: ${toolName} → ${mappedName}`)
+              // 2026-09-25: CLI-native tools (bash/write/edit...) → agent-activity
+              // log (Terminal echo + tree reload + live tab refresh ở Code tab).
+              // Fire-and-forget — không chặn stream parse.
+              // 2026-09-26: truyền sessionId (Tool health attribution).
+              void recordCliNativeToolActivity(toolName, evt.part.state as CliToolState | undefined, options?.agentName, options?.sessionId)
             }
           }
           if (evt.type === 'step_finish' && evt.part?.tokens) {
@@ -4460,6 +4756,13 @@ async function callOpenCodeCLIProvider(
         model: actualModel,
         tokensUsed: totalTokens || undefined,
         tool_calls: allToolCalls,
+        // (fix 2026-09-25) executed-only: tool calls inner loop CLI ĐÃ CHẠY THẬT
+        // (tmo_* bridge + native). Text-protocol parsed calls KHÔNG nằm đây —
+        // chúng chưa chạy và do caller (ReAct loop) thực thi theo protocol.
+        executed_tool_calls: collectedToolCalls.length > 0 ? collectedToolCalls : undefined,
+        // 2026-10 — kết quả thật + reasoning (xem interface ExecutedToolResult)
+        executed_tool_results: executedResultMap.size > 0 ? [...executedResultMap.values()] : undefined,
+        reasoning: reasoning || undefined,
         finish_reason: finishReason,
       })
     })
@@ -4585,8 +4888,9 @@ export async function callLLMForAgent(
   }
 
   // Step 2: Fallback to global pool
+  // (FIX 2026-09-25: skipZenUtility — zen HTTP + CLI đã thử ở trên, không lặp lại)
   console.log(`[LLM] Agent provider ${provider}/${model} failed, falling back to global pool`)
-  return callLLM(prompt, systemPrompt, 'agent-fallback', options)
+  return callLLM(prompt, systemPrompt, 'agent-fallback', { ...options, skipZenUtility: true })
 }
 
 // ==================== UTILITY EXPORTS ====================

@@ -1,0 +1,2945 @@
+shard_metadata:
+  shard_id: "SHD_NAS_EVOLUTION_002"
+  shard_name: "Neural Architecture Search (NAS)"
+  domain: "AutoML / Architecture Engineering"
+  version: "1.0.0"
+  parent_link: "SHD_GEN_CAUSAL_HYPER_001" # Kết nối với Shard Causal Hypernetworks
+  status: "Active / Seed_Phase"
+  tags: ["NAS", "Supernet", "DARTS", "Reinforcement Learning", "Search Space"]
+
+layers:
+  layer_1:
+NODE_ID: NAS_001
+ENTITY_NAME: Neural Architecture Search (NAS)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Quy trình tự động hóa việc thiết kế các kiến trúc mạng nơ-ron nhân tạo tối ưu.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Search Space
+    LINK_TYPE: Chứa đựng
+  - TARGET_NODE: Search Strategy
+    LINK_TYPE: Điều phối
+  - TARGET_NODE: Performance Estimation Strategy
+    LINK_TYPE: Điều phối
+ATTRIBUTES: Tự động hóa, hiệu suất SOTA, chi phí tính toán cao [1, 4, 5].
+
+NODE_ID: NAS_002
+ENTITY_NAME: Search Space
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Tập hợp tất cả các kiến trúc mạng khả thi mà thuật toán có thể khám phá.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Operations
+    LINK_TYPE: Chứa đựng
+  - TARGET_NODE: Directed Acyclic Graph (DAG)
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Độ phức tạp, tính linh hoạt, inductive bias [6-9].
+
+NODE_ID: NAS_003
+ENTITY_NAME: Search Strategy
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Thuật toán điều hướng trong không gian tìm kiếm để tìm ra kiến trúc tốt nhất.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Controller
+    LINK_TYPE: Điều phối
+  - TARGET_NODE: Child Network
+    LINK_TYPE: Sinh ra
+ATTRIBUTES: Thỏa hiệp khám phá-khai thác, tốc độ hội tụ [6, 10-12].
+
+NODE_ID: NAS_004
+ENTITY_NAME: Performance Estimation Strategy
+SPECIALIST_DOMAIN: Data Scientist
+DESCRIPTION_SHORT: Phương pháp ước tính hiệu suất của một kiến trúc ứng viên mà không huấn luyện đầy đủ.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Supernet
+    LINK_TYPE: Điều phối
+  - TARGET_NODE: Surrogate Model
+    LINK_TYPE: Điều phối
+ATTRIBUTES: Chi phí tính toán, độ chính xác xấp xỉ, tính khả thi [6, 13-15].
+
+NODE_ID: NAS_005
+ENTITY_NAME: Macro Search Space
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Không gian tìm kiếm định nghĩa cấu trúc toàn cục của mạng nơ-ron.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Chain-structured Search Space
+    LINK_TYPE: Chứa đựng
+ATTRIBUTES: Độ sâu lớp, số lượng kênh, kết nối nhảy bậc [16-18].
+
+NODE_ID: NAS_006
+ENTITY_NAME: Micro Search Space (Cell-based)
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Không gian tìm kiếm tập trung vào các khối (cells/modules) lặp lại trong mạng.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Normal Cell
+    LINK_TYPE: Chứa đựng
+  - TARGET_NODE: Reduction Cell
+    LINK_TYPE: Chứa đựng
+ATTRIBUTES: Khả năng chuyển đổi task, giảm độ phức tạp tìm kiếm [16, 19, 20].
+
+NODE_ID: NAS_007
+ENTITY_NAME: Hierarchical Search Space
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Không gian tìm kiếm đa cấp độ từ các phép toán cơ bản đến các motif phức tạp.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Motif
+    LINK_TYPE: Chứa đựng
+ATTRIBUTES: Tính biểu diễn cao, cấu trúc phân cấp [21-24].
+
+NODE_ID: NAS_008
+ENTITY_NAME: Chain-structured Search Space
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Kiến trúc mạng dạng chuỗi tuyến tính đơn giản, lớp sau nhận đầu vào lớp trước.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Layer
+    LINK_TYPE: Chứa đựng
+ATTRIBUTES: Dễ thực thi, giới hạn về cấu trúc [25-28].
+
+NODE_ID: NAS_009
+ENTITY_NAME: Directed Acyclic Graph (DAG)
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Mô hình toán học biểu diễn luồng dữ liệu và các phép toán trong một ô (cell).
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Node
+    LINK_TYPE: Chứa đựng
+  - TARGET_NODE: Edge
+    LINK_TYPE: Chứa đựng
+ATTRIBUTES: Thứ tự tính toán, không chu trình [20, 29-31].
+
+NODE_ID: NAS_010
+ENTITY_NAME: Normal Cell
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Khối tính toán duy trì độ phân giải không gian của dữ liệu đầu vào.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Micro Search Space
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Stride = 1, trích xuất đặc trưng [32-35].
+
+NODE_ID: NAS_011
+ENTITY_NAME: Reduction Cell
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Khối tính toán làm giảm độ phân giải không gian và tăng số lượng kênh đặc trưng.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Micro Search Space
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Stride = 2, nén thông tin [32-35].
+
+NODE_ID: NAS_012
+ENTITY_NAME: Node (in DAG)
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Đại diện cho các bản đồ đặc trưng (feature maps) hoặc trạng thái ẩn trong một cell.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Edge
+    LINK_TYPE: Liên kết tới
+ATTRIBUTES: Kích thước tensor, số lượng kênh [30, 31, 36, 37].
+
+NODE_ID: NAS_013
+ENTITY_NAME: Edge (in DAG)
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Đại diện cho các phép toán (operations) biến đổi dữ liệu giữa các nút.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Operations
+    LINK_TYPE: Chứa đựng
+ATTRIBUTES: Tham số kiến trúc (alpha), phép toán hỗn hợp [31, 36-38].
+
+NODE_ID: NAS_014
+ENTITY_NAME: Search Phase
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Giai đoạn thuật toán thực hiện khám phá không gian để tìm ra kiến trúc ứng viên tốt nhất.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Evaluation Phase
+    LINK_TYPE: Liên kết tới
+ATTRIBUTES: Thời gian tìm kiếm (GPU-days), tiêu tốn tài nguyên [39-42].
+
+NODE_ID: NAS_015
+ENTITY_NAME: Evaluation Phase (Retraining)
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Giai đoạn huấn luyện lại từ đầu kiến trúc tốt nhất tìm được để xác định hiệu suất thực tế.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Search Phase
+    LINK_TYPE: Liên kết tới
+ATTRIBUTES: Độ chính xác cuối cùng, tính ổn định [39-42].
+
+NODE_ID: NAS_016
+ENTITY_NAME: Reinforcement Learning (RL)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Phương pháp coi việc thiết kế kiến trúc là một quá trình ra quyết định tuần tự. [1], [2]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Controller
+    LINK_TYPE: Chứa đựng
+  - TARGET_NODE: Reward Signal
+    LINK_TYPE: Điều phối
+ATTRIBUTES: Khám phá tuần tự, chi phí GPU cao, linh hoạt.
+
+NODE_ID: NAS_017
+ENTITY_NAME: Evolutionary Algorithm (EA)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Thuật toán tìm kiếm dựa trên các nguyên tắc đột biến và chọn lọc tự nhiên. [3], [4]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Population
+    LINK_TYPE: Chứa đựng
+  - TARGET_NODE: Mutation
+    LINK_TYPE: Sinh ra
+ATTRIBUTES: Tính đa dạng kiến trúc, độ trễ hội tụ, ổn định.
+
+NODE_ID: NAS_018
+ENTITY_NAME: Gradient-based NAS (Differentiable NAS)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Phương pháp nới lỏng không gian rời rạc thành liên tục để tối ưu bằng gradient. [5], [6]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Architecture Parameters (alpha)
+    LINK_TYPE: Điều phối
+  - TARGET_NODE: DARTS
+    LINK_TYPE: Chứa đựng
+ATTRIBUTES: Tốc độ cực nhanh, hiệu quả bộ nhớ, rủi ro sụp đổ.
+
+NODE_ID: NAS_019
+ENTITY_NAME: Bayesian Optimization (BO)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Phương pháp tối ưu hóa hiệu quả mẫu dựa trên mô hình xác suất và hàm thu nạp. [7], [8]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Surrogate Model
+    LINK_TYPE: Chứa đựng
+  - TARGET_NODE: Acquisition Function
+    LINK_TYPE: Chứa đựng
+ATTRIBUTES: Hiệu quả mẫu, xử lý hộp đen, chi phí tính toán hàm nhân.
+
+NODE_ID: NAS_020
+ENTITY_NAME: Controller
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Thành phần sinh ra các kiến trúc ứng viên để đánh giá. [9], [10]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Child Network
+    LINK_TYPE: Sinh ra
+  - TARGET_NODE: Search Strategy
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: RNN, Transformer, chính sách lấy mẫu.
+
+NODE_ID: NAS_021
+ENTITY_NAME: Agent (NAS Agent)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Thực thể học chính sách để lấy mẫu các kiến trúc hiệu quả thông qua phản hồi. [1], [2]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Reinforcement Learning (RL)
+    LINK_TYPE: Là thành phần của
+  - TARGET_NODE: Reward Signal
+    LINK_TYPE: Nhận phản hồi từ
+ATTRIBUTES: Khám phá-khai thác, hàm mục tiêu phần thưởng.
+
+NODE_ID: NAS_022
+ENTITY_NAME: Population
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Tập hợp các kiến trúc ứng viên được duy trì trong tìm kiếm tiến hóa. [11], [4]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Evolutionary Algorithm (EA)
+    LINK_TYPE: Là thành phần của
+  - TARGET_NODE: Mutation
+    LINK_TYPE: Trải qua
+ATTRIBUTES: Quy mô quần thể, tính thích nghi (fitness).
+
+NODE_ID: NAS_023
+ENTITY_NAME: Mutation Operator
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Phép toán thay đổi ngẫu nhiên một kiến trúc cha để tạo ra con. [11], [12]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Population
+    LINK_TYPE: Tác động lên
+  - TARGET_NODE: Child Network
+    LINK_TYPE: Sinh ra
+ATTRIBUTES: Tỷ lệ đột biến, tính đa dạng topo.
+
+NODE_ID: NAS_024
+ENTITY_NAME: Supernet (One-Shot Model)
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Mạng siêu cấp chứa tất cả các kiến trúc ứng viên dưới dạng đồ thị con. [13], [14]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Weight Sharing
+    LINK_TYPE: Chứa đựng
+  - TARGET_NODE: Child Network
+    LINK_TYPE: Chứa đựng
+ATTRIBUTES: Chia sẻ trọng số, tiết kiệm tài nguyên, sai số xếp hạng.
+
+NODE_ID: NAS_025
+ENTITY_NAME: Hypernetwork
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Mạng nơ-ron phụ trợ có nhiệm vụ sinh trọng số cho mạng mục tiêu. [15], [16]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Primary Network
+    LINK_TYPE: Điều phối
+  - TARGET_NODE: SMASH
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Sinh tham số tức thời, khả năng thích ứng cấu trúc.
+
+NODE_ID: NAS_026
+ENTITY_NAME: Architecture Parameters (alpha)
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Các tham số liên tục biểu thị mức độ ưu tiên của các phép toán ứng viên. [17], [18]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Gradient-based NAS
+    LINK_TYPE: Là thành phần của
+  - TARGET_NODE: Softmax
+    LINK_TYPE: Chứa đựng
+ATTRIBUTES: Khả vi, trọng số hỗn hợp, ma trận trị riêng Hessian.
+
+NODE_ID: NAS_027
+ENTITY_NAME: Performance Predictor (Surrogate Model)
+SPECIALIST_DOMAIN: Data Scientist
+DESCRIPTION_SHORT: Mô hình học máy dự đoán hiệu suất kiến trúc mà không cần huấn luyện lại. [19], [20]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Bayesian Optimization (BO)
+    LINK_TYPE: Là thành phần của
+  - TARGET_NODE: Architecture Encoding
+    LINK_TYPE: Sử dụng
+ATTRIBUTES: Độ chính xác dự báo, chi phí gán nhãn dữ liệu.
+
+NODE_ID: NAS_028
+ENTITY_NAME: Acquisition Function
+SPECIALIST_DOMAIN: Data Scientist
+DESCRIPTION_SHORT: Hàm toán học cân bằng giữa khám phá và khai thác để chọn kiến trúc tiếp theo. [21], [8]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Bayesian Optimization (BO)
+    LINK_TYPE: Là thành phần của
+  - TARGET_NODE: Expected Improvement (EI)
+    LINK_TYPE: Chứa đựng
+ATTRIBUTES: Upper Confidence Bound (UCB), Entropy.
+
+NODE_ID: NAS_029
+ENTITY_NAME: Child Network (Subnet)
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Một kiến trúc cụ thể được trích xuất từ không gian tìm kiếm hoặc supernet. [13], [22]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Supernet
+    LINK_TYPE: Là thành phần của
+  - TARGET_NODE: Controller
+    LINK_TYPE: Được sinh ra bởi
+ATTRIBUTES: Độ chính xác validation, FLOPs, số lượng tham số.
+
+NODE_ID: NAS_030
+ENTITY_NAME: Reward Signal
+SPECIALIST_DOMAIN: Data Scientist
+DESCRIPTION_SHORT: Tín hiệu phản hồi (thường là độ chính xác) để cập nhật chiến lược tìm kiếm. [9], [10]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Reinforcement Learning (RL)
+    LINK_TYPE: Điều phối
+  - TARGET_NODE: Agent
+    LINK_TYPE: Tác động lên
+ATTRIBUTES: Độ nhiễu, tính phi hàm, độ trễ phản hồi.
+
+NODE_ID: NAS_031
+ENTITY_NAME: Skip-connection (Identity Mapping)
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Kết nối trực tiếp cho phép dòng chảy thông tin bỏ qua các lớp trung gian. [5-8]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Normal Cell
+    LINK_TYPE: Là thành phần của
+  - TARGET_NODE: Performance Collapse
+    LINK_TYPE: Có thể gây ra
+ATTRIBUTES: Không tham số, hỗ trợ truyền gradient, rủi ro chiếm ưu thế sớm. [9-11]
+
+NODE_ID: NAS_032
+ENTITY_NAME: Pooling Layer (Max/Average)
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Phép toán lấy mẫu con để giảm độ phân giải không gian của đặc trưng. [6, 12-15]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Operation Set (Ops)
+    LINK_TYPE: Là thành phần của
+  - TARGET_NODE: Reduction Cell
+    LINK_TYPE: Thường được sử dụng trong
+ATTRIBUTES: Kernel size, stride, tính bất biến không gian. [12, 16, 17]
+
+NODE_ID: NAS_033
+ENTITY_NAME: Dilated Convolution (Atrous Convolution)
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Phép tích chập với các lỗ hổng để mở rộng trường tiếp nhận (receptive field). [6, 12, 18, 19]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Operation Set (Ops)
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Dilation rate, chi phí tính toán, độ bao phủ thông tin. [6, 12, 15]
+
+NODE_ID: NAS_034
+ENTITY_NAME: Depthwise Separable Convolution
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Phép tích chập tách biệt chiều sâu và điểm để giảm thiểu tham số. [6, 12, 18]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: MobileNetV3 Search Space
+    LINK_TYPE: Là thành phần cốt lõi của
+ATTRIBUTES: Hiệu quả bộ nhớ, tốc độ suy diễn (latency). [6, 16, 20]
+
+NODE_ID: NAS_035
+ENTITY_NAME: Inverted Bottleneck Residual (MBConv)
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Khối cấu trúc mở rộng kênh ở giữa và kết nối tắt ở hai đầu. [21-25]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Macro Search Space
+    LINK_TYPE: Là thành phần của
+  - TARGET_NODE: ProxylessNAS
+    LINK_TYPE: Được sử dụng trong
+ATTRIBUTES: Expansion ratio, kernel size, tối ưu cho thiết bị di động. [26-29]
+
+NODE_ID: NAS_036
+ENTITY_NAME: Batch Normalization (BN)
+SPECIALIST_DOMAIN: Data Scientist
+DESCRIPTION_SHORT: Kỹ thuật chuẩn hóa đầu vào của mỗi lớp để ổn định quá trình huấn luyện. [21, 30, 31]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Primitive Operation
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Mean, variance, học tham số affine (gamma, beta). [25, 32, 33]
+
+NODE_ID: NAS_037
+ENTITY_NAME: Activation Function (ReLU/Sigmoid)
+SPECIALIST_DOMAIN: Data Scientist
+DESCRIPTION_SHORT: Hàm phi tuyến tính xác định đầu ra của một nút thần kinh. [10, 21, 30, 34]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Operation/Primitive
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Tính phi tuyến, đạo hàm, vùng bão hòa. [6, 10, 21]
+
+NODE_ID: NAS_038
+ENTITY_NAME: Feature Map (Latent Representation)
+SPECIALIST_DOMAIN: Data Scientist
+DESCRIPTION_SHORT: Đại diện cho dữ liệu ẩn được biến đổi qua các phép toán trong mạng. [13, 35-37]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Node (in DAG)
+    LINK_TYPE: Được đại diện bởi
+ATTRIBUTES: Chiều cao, chiều rộng, số lượng kênh. [35, 38, 39]
+
+NODE_ID: NAS_039
+ENTITY_NAME: Stride
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Bước nhảy của bộ lọc khi trượt qua dữ liệu đầu vào. [12, 13, 17, 30]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Reduction Cell
+    LINK_TYPE: Điều phối tính chất của
+ATTRIBUTES: Giảm kích thước không gian, tăng trường tiếp nhận. [13, 17, 40]
+
+NODE_ID: NAS_040
+ENTITY_NAME: Kernel Size
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Kích thước của cửa sổ trượt trong các phép toán tích chập hoặc pooling. [12, 18, 27, 41]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Search Space
+    LINK_TYPE: Là biến số của
+ATTRIBUTES: 3x3, 5x5, 7x7, số lượng tham số. [6, 15, 18, 27]
+
+NODE_ID: NAS_041
+ENTITY_NAME: Channel (Width/Filter)
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Số lượng bộ lọc hoặc độ sâu của bản đồ đặc trưng trong một lớp. [12, 30, 42, 43]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Macro Search Space
+    LINK_TYPE: Là biến số của
+ATTRIBUTES: Dung lượng mạng, chi phí bộ nhớ, độ phức tạp tính toán. [12, 44, 45]
+
+NODE_ID: NAS_042
+ENTITY_NAME: Zero Operation (None/Identity)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Phép toán đại diện cho việc không có kết nối giữa hai nút. [6, 13, 15, 46]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Operation Set (Ops)
+    LINK_TYPE: Là thành phần của
+  - TARGET_NODE: Topology
+    LINK_TYPE: Điều phối
+ATTRIBUTES: Không tham số, thay đổi cấu trúc đồ thị (pruning). [6, 46, 47]
+
+NODE_ID: NAS_043
+ENTITY_NAME: Fully Connected (FC) Layer / Dense Layer
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Lớp mạng nơi mọi nút đầu vào kết nối với mọi nút đầu ra. [12, 48-50]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Macro Search Space
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Phân loại cuối cùng, số lượng tham số lớn. [12, 51, 52]
+
+NODE_ID: NAS_044
+ENTITY_NAME: Stem Layer
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Lớp xử lý đầu tiên của mạng để chuẩn bị dữ liệu cho các cells. [30, 33, 52]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Child Network
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Tiền xử lý, trích xuất đặc trưng thô. [30, 52]
+
+NODE_ID: NAS_045
+ENTITY_NAME: Motif
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Một tổ hợp con các phép toán lặp lại trong kiến trúc mạng. [8, 22, 53, 54]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Hierarchical Search Space
+    LINK_TYPE: Là thành phần của
+  - TARGET_NODE: Cell
+    LINK_TYPE: Có thể cấu thành
+ATTRIBUTES: Tính biểu diễn cao, giảm độ phức tạp tìm kiếm. [8, 53, 54]
+
+NODE_ID: NAS_046
+ENTITY_NAME: Performance Predictor (Surrogate Model)
+SPECIALIST_DOMAIN: Data Scientist
+DESCRIPTION_SHORT: Mô hình học máy ước tính hiệu suất kiến trúc để tránh huấn luyện thực tế [1, 2].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Global Architecture Encoding
+    LINK_TYPE: Sử dụng
+  - TARGET_NODE: Rank Disorder
+    LINK_TYPE: Giảm thiểu
+ATTRIBUTES: Độ chính xác dự báo (Kendall’s Tau), hiệu quả mẫu.
+
+NODE_ID: NAS_047
+ENTITY_NAME: Global Architecture Encoding
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Biểu diễn toàn diện bao gồm cả ngữ cảnh vĩ mô và tương tác giữa các cells [3, 4].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Shared Architecture Encoder
+    LINK_TYPE: Là thành phần của
+  - TARGET_NODE: Micro Search Space
+    LINK_TYPE: Điều phối
+ATTRIBUTES: Tính nhất quán cấu trúc, độ bao phủ thông tin.
+
+NODE_ID: NAS_048
+ENTITY_NAME: Hardware-aware NAS (HW-NAS)
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Quy trình tìm kiếm tích hợp trực tiếp các ràng buộc phần cứng vào mục tiêu [5, 6].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Latency Constraint
+    LINK_TYPE: Chứa đựng
+  - TARGET_NODE: FLOPs Penalty
+    LINK_TYPE: Chứa đựng
+ATTRIBUTES: Tối ưu đa mục tiêu, tính khả thi triển khai.
+
+NODE_ID: NAS_049
+ENTITY_NAME: Sparsity Constraint
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Ràng buộc toán học để thu được các giải pháp kiến trúc thưa và khả thi [7].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: ISTA-NAS
+    LINK_TYPE: Được sử dụng trong
+  - TARGET_NODE: Target Network
+    LINK_TYPE: Điều phối cấu trúc
+ATTRIBUTES: Tính chuẩn tắc L1, độ thưa của đồ thị.
+
+NODE_ID: NAS_050
+ENTITY_NAME: Rank Disorder (Ranking Inconsistency)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Hiện tượng thứ hạng hiệu suất trong supernet không tương quan với huấn luyện độc lập [8, 9].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Weight Sharing
+    LINK_TYPE: Hệ quả của
+  - TARGET_NODE: Supernet
+    LINK_TYPE: Rủi ro đối với
+ATTRIBUTES: Độ lệch thứ hạng, tính đánh lừa của proxy.
+
+NODE_ID: NAS_051
+ENTITY_NAME: Performance Collapse (Skip-connection Dominance)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Sự sụt đổ hiệu suất khi thuật toán ưu tiên quá mức các kết nối tắt [10, 11].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Skip-connection
+    LINK_TYPE: Do sự áp đảo của
+  - TARGET_NODE: DARTS
+    LINK_TYPE: Rủi ro đối với
+ATTRIBUTES: Ma trận Hessian, độ gồ ghề của bề mặt mất mát.
+
+NODE_ID: NAS_052
+ENTITY_NAME: Early Stopping Strategy
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Cơ chế dừng tìm kiếm khi đạt đến điểm bão hòa hoặc bắt đầu quá khớp [12, 13].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: DARTS+
+    LINK_TYPE: Là thành phần cốt lõi của
+ATTRIBUTES: Ngưỡng bão hòa, tiết kiệm chi phí GPU.
+
+NODE_ID: NAS_053
+ENTITY_NAME: Zero-Shot NAS (Training-free NAS)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Phương pháp đánh giá kiến trúc dựa trên các chỉ số lý thuyết không cần huấn luyện [14, 15].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Neural Tangent Kernel (NTK)
+    LINK_TYPE: Sử dụng
+  - TARGET_NODE: Expressivity Node
+    LINK_TYPE: Sử dụng
+ATTRIBUTES: Thời gian tìm kiếm cực ngắn, độ nhiễu cao.
+
+NODE_ID: NAS_054
+ENTITY_NAME: Discretization Gap
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Sai số phát sinh khi chuyển đổi kiến trúc từ không gian liên tục sang rời rạc [8, 16].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Continuous Relaxation
+    LINK_TYPE: Hệ quả từ
+  - TARGET_NODE: Evaluation Phase
+    LINK_TYPE: Tác động lên
+ATTRIBUTES: Độ lệch hiệu suất, tính nhất quán cấu trúc.
+
+NODE_ID: NAS_055
+ENTITY_NAME: Multi-objective Optimization
+SPECIALIST_DOMAIN: Data Scientist
+DESCRIPTION_SHORT: Tối ưu hóa đồng thời các mục tiêu mâu thuẫn như độ chính xác và tài nguyên [5, 17].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Pareto Front
+    LINK_TYPE: Sinh ra
+ATTRIBUTES: Trọng số mục tiêu (lambda), sự thỏa hiệp (trade-off).
+
+NODE_ID: NAS_056
+ENTITY_NAME: NAS Benchmark (Tabular/Surrogate)
+SPECIALIST_DOMAIN: Data Scientist
+DESCRIPTION_SHORT: Tập dữ liệu cung cấp hiệu suất được tính toán sẵn cho hàng ngàn kiến trúc [18, 19].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: NAS-Bench-101
+    LINK_TYPE: Ví dụ tiêu biểu
+  - TARGET_NODE: NAS-Bench-201
+    LINK_TYPE: Ví dụ tiêu biểu
+ATTRIBUTES: Tính tái lập, chi phí truy vấn thấp.
+
+NODE_ID: NAS_057
+ENTITY_NAME: FLOPs (Floating Point Operations)
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Chỉ số đo lường khối lượng tính toán lý thuyết của mô hình mạng [20, 21].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Hardware-aware NAS
+    LINK_TYPE: Ràng buộc trong
+ATTRIBUTES: Độ phức tạp tính toán, mức tiêu thụ năng lượng.
+
+NODE_ID: NAS_058
+ENTITY_NAME: Latency Constraint
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Giới hạn về thời gian phản hồi thực tế của mô hình trên thiết bị [5, 22].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: ProxylessNAS
+    LINK_TYPE: Tối ưu hóa trong
+ATTRIBUTES: Miliseconds, thông lượng (throughput).
+
+NODE_ID: NAS_059
+ENTITY_NAME: Weight Sharing Strategy
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Cơ chế cho phép hàng triệu kiến trúc ứng viên sử dụng chung bộ tham số [23, 24].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Supernet
+    LINK_TYPE: Điều phối tính chất của
+  - TARGET_NODE: ENAS
+    LINK_TYPE: Là cơ chế cốt lõi của
+ATTRIBUTES: Tốc độ huấn luyện, nhiễu tham số.
+
+NODE_ID: NAS_060
+ENTITY_NAME: Proxy Dataset/Task
+SPECIALIST_DOMAIN: Data Scientist
+DESCRIPTION_SHORT: Tập dữ liệu hoặc tác vụ nhỏ dùng để tăng tốc quá trình đánh giá kiến trúc [25, 26].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Performance Estimation Strategy
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Tính đại diện, sai số chuyển đổi (transfer error).
+
+NODE_ID: NAS_061
+ENTITY_NAME: Bilevel Optimization
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Khung toán học tối ưu hóa đồng thời tham số kiến trúc (cấp cao) và trọng số (cấp thấp) [27, 28].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Architecture Parameters (alpha)
+    LINK_TYPE: Biến số cấp trên
+  - TARGET_NODE: Network Weights (w)
+    LINK_TYPE: Biến số cấp dưới
+ATTRIBUTES: Đạo hàm bậc hai (Hessian), độ hội tụ.
+
+NODE_ID: NAS_062
+ENTITY_NAME: DARTS (Differentiable Architecture Search)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Thuật toán NAS tiên phong sử dụng cơ chế nới lỏng liên tục không gian tìm kiếm. [1-3]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Continuous Relaxation
+    LINK_TYPE: Sử dụng
+  - TARGET_NODE: Performance Collapse
+    LINK_TYPE: Rủi ro đối với
+ATTRIBUTES: Tốc độ cao, chi phí GPU thấp, tính khả vi.
+
+NODE_ID: NAS_063
+ENTITY_NAME: ENAS (Efficient Neural Architecture Search)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Phương pháp tối ưu hóa hiệu quả thông qua việc chia sẻ trọng số trong Supernet. [4, 5]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Weight Sharing Strategy
+    LINK_TYPE: Sử dụng
+  - TARGET_NODE: Controller
+    LINK_TYPE: Điều phối
+ATTRIBUTES: 0.5 GPU-days, tiết kiệm tài nguyên.
+
+NODE_ID: NAS_064
+ENTITY_NAME: ProxylessNAS
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Thuật toán tìm kiếm trực tiếp trên task mục tiêu và phần cứng mà không dùng proxy. [6, 7]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Hardware-aware NAS
+    LINK_TYPE: Là thành phần của
+  - TARGET_NODE: Binary Gate
+    LINK_TYPE: Sử dụng
+ATTRIBUTES: Độ trễ thấp, không dùng proxy dataset, tiết kiệm bộ nhớ.
+
+NODE_ID: NAS_065
+ENTITY_NAME: Monte Carlo Tree Search (MCTS)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Chiến lược tìm kiếm dựa trên cây quyết định và lấy mẫu ngẫu nhiên có hướng. [8, 9]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Search Strategy
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Cân bằng khám phá-khai thác, tính ngẫu nhiên.
+
+NODE_ID: NAS_066
+ENTITY_NAME: Network Morphism
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Kỹ thuật biến đổi cấu trúc mạng nhưng vẫn duy trì các chức năng toán học. [10, 11]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Search Strategy
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Thay đổi topology, bảo toàn trọng số.
+
+NODE_ID: NAS_067
+ENTITY_NAME: Block / Module
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Đơn vị cấu trúc gồm một nhóm các lớp hoặc phép toán lặp lại. [12, 13]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Cell
+    LINK_TYPE: Tương tự như
+  - TARGET_NODE: Macro Search Space
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Tính module, khả năng tái sử dụng.
+
+NODE_ID: NAS_068
+ENTITY_NAME: Adjacency Matrix Encoding
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Phương thức mã hóa cấu trúc DAG của cell dưới dạng ma trận kề. [14, 15]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Architecture Encoding
+    LINK_TYPE: Là thành phần của
+  - TARGET_NODE: Directed Acyclic Graph (DAG)
+    LINK_TYPE: Biểu diễn
+ATTRIBUTES: Định dạng nhị phân, cố định kích thước.
+
+NODE_ID: NAS_069
+ENTITY_NAME: Path Encoding
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Biểu diễn kiến trúc dựa trên tập hợp tất cả các đường dẫn từ input đến output. [16, 17]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Architecture Encoding
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Tính thưa (sparsity), độ phức tạp tổ hợp.
+
+NODE_ID: NAS_070
+ENTITY_NAME: Kendall’s Tau
+SPECIALIST_DOMAIN: Data Scientist
+DESCRIPTION_SHORT: Chỉ số thống kê đo lường độ tương quan thứ hạng giữa supernet và retraining. [18, 19]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Rank Disorder
+    LINK_TYPE: Đo lường
+ATTRIBUTES: Hệ số tương quan thứ hạng, độ tin cậy.
+
+NODE_ID: NAS_071
+ENTITY_NAME: Catastrophic Forgetting (Multi-model forgetting)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Hiện tượng Supernet quên hiệu suất của các kiến trúc cũ khi cập nhật kiến trúc mới. [20, 21]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: One-Shot NAS
+    LINK_TYPE: Rủi ro đối với
+  - TARGET_NODE: Weight Sharing Strategy
+    LINK_TYPE: Hệ quả của
+ATTRIBUTES: Suy giảm chính xác, mất ổn định huấn luyện.
+
+NODE_ID: NAS_072
+ENTITY_NAME: Low-fidelity Estimation
+SPECIALIST_DOMAIN: Data Scientist
+DESCRIPTION_SHORT: Kỹ thuật tăng tốc đánh giá bằng cách dùng ảnh nhỏ, ít epoch hoặc tập dữ liệu con. [10, 22]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Performance Estimation Strategy
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Tốc độ cao, độ nhiễu lớn.
+
+NODE_ID: NAS_073
+ENTITY_NAME: Random Search
+SPECIALIST_DOMAIN: Data Scientist
+DESCRIPTION_SHORT: Chiến lược tìm kiếm lấy mẫu ngẫu nhiên trong không gian kiến trúc. [23, 24]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Search Strategy
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Baseline mạnh, không cần học chính sách.
+
+NODE_ID: NAS_074
+ENTITY_NAME: Pareto Front
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Tập hợp các kiến trúc tối ưu nhất khi cân bằng giữa nhiều mục tiêu mâu thuẫn. [22, 25, 26]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Multi-objective Optimization
+    LINK_TYPE: Kết quả của
+ATTRIBUTES: Trade-off, tính không áp đảo (non-dominated).
+
+NODE_ID: NAS_075
+ENTITY_NAME: Gumbel-Softmax Strategy
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Cơ chế lấy mẫu vi phân để chọn các phép toán rời rạc trong quá trình tìm kiếm. [27-29]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Gradient-based NAS
+    LINK_TYPE: Sử dụng
+  - TARGET_NODE: Operation Set (Ops)
+    LINK_TYPE: Tác động lên
+ATTRIBUTES: Tham số nhiệt độ (temperature), tính khả vi.
+
+NODE_ID: NAS_076
+ENTITY_NAME: Neural Tangent Kernel (NTK)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Chỉ số lý thuyết dùng để dự đoán tốc độ hội tụ của mạng mà không cần huấn luyện. [30, 31]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Zero-Shot NAS
+    LINK_TYPE: Sử dụng
+ATTRIBUTES: Độ chính xác toán học, chi phí tính toán ma trận hạt nhân.
+
+NODE_ID: NAS_077
+ENTITY_NAME: GDAS (Gumbel-Max Differentiable Architecture Search)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Thuật toán NAS khả vi sử dụng Gumbel-Softmax để lấy mẫu đường dẫn rời rạc.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Gumbel-Softmax Strategy
+    LINK_TYPE: Sử dụng
+  - TARGET_NODE: Gradient-based NAS
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Hiệu quả bộ nhớ, tính ngẫu nhiên khả vi.
+
+NODE_ID: NAS_078
+ENTITY_NAME: SNAS (Stochastic Neural Architecture Search)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Khung NAS dựa trên gradient với cơ chế lấy mẫu xác suất để tối ưu hóa.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Continuous Relaxation
+    LINK_TYPE: Sử dụng
+  - TARGET_NODE: DARTS
+    LINK_TYPE: Tương tự như
+ATTRIBUTES: Trọng số kiến trúc hội tụ, tính ổn định.
+
+NODE_ID: NAS_079
+ENTITY_NAME: ISTA-NAS (Sparse Coding NAS)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Phương pháp coi NAS là bài toán mã hóa thưa để đảm bảo tính nhất quán.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Sparsity Constraint
+    LINK_TYPE: Sử dụng
+  - TARGET_NODE: One-stage NAS
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Ràng buộc thưa tức thời, tính khả vi thưa.
+
+NODE_ID: NAS_080
+ENTITY_NAME: DropNAS (Grouped Operation Dropout)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Kỹ thuật dropout theo nhóm phép toán để giảm thiểu sự đồng thích nghi.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Supernet
+    LINK_TYPE: Tác động lên
+  - TARGET_NODE: Co-adaption Problem
+    LINK_TYPE: Giải quyết
+ATTRIBUTES: Tính ổn định Supernet, độ đa dạng phép toán.
+
+NODE_ID: NAS_081
+ENTITY_NAME: UNAS (Unified Neural Architecture Search)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Phương pháp hợp nhất tìm kiếm dựa trên Gradient và Reinforcement Learning.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Factorized Cell
+    LINK_TYPE: Chứa đựng
+  - TARGET_NODE: Bi-level Optimization
+    LINK_TYPE: Sử dụng
+ATTRIBUTES: Tốc độ tìm kiếm, hiệu suất Top-1 cao.
+
+NODE_ID: NAS_082
+ENTITY_NAME: Path Binarization
+SPECIALIST_DOMAIN: Engineer
+DESCRIPTION_SHORT: Cơ chế nhị phân hóa các đường dẫn để giảm đáng kể bộ nhớ GPU.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: ProxylessNAS
+    LINK_TYPE: Là cơ chế cốt lõi của
+  - TARGET_NODE: GPU Memory
+    LINK_TYPE: Điều phối
+ATTRIBUTES: Bộ nhớ O(1), cho phép tìm kiếm trên tập dữ liệu lớn.
+
+NODE_ID: NAS_083
+ENTITY_NAME: Cross-Edge Normalization (CEN)
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Chiến lược chuẩn hóa trọng số giữa các cạnh để giải quyết ưu thế phi lý.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Architecture Parameters (alpha)
+    LINK_TYPE: Tác động lên
+  - TARGET_NODE: Performance Collapse
+    LINK_TYPE: Giảm thiểu
+ATTRIBUTES: Tính công bằng trong tìm kiếm, cân bằng dòng chảy gradient.
+
+NODE_ID: NAS_084
+ENTITY_NAME: Global Average Pooling (GAP)
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Lớp pooling tính trung bình toàn cục đặc trưng trước khi phân loại.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Fully Connected Layer
+    LINK_TYPE: Liên kết tới
+  - TARGET_NODE: Operation Set (Ops)
+    LINK_TYPE: Là thành phần của
+ATTRIBUTES: Giảm số lượng tham số, tính bất biến không gian.
+
+NODE_ID: NAS_085
+ENTITY_NAME: Topology Encoding Node (Key Node 1)
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Nút mô tả ma trận kề của DAG cho Hypernetwork hiểu cấu trúc liên kết.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Directed Acyclic Graph (DAG)
+    LINK_TYPE: Biểu diễn
+  - TARGET_NODE: Hypernetwork
+    LINK_TYPE: Đầu vào cho
+ATTRIBUTES: Mã hóa cấu trúc, skip-connection mapping.
+
+NODE_ID: NAS_086
+ENTITY_NAME: Operation Type Node (Key Node 2)
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Nút nhúng các loại phép toán tại mỗi cạnh để định hình hạt nhân trọng số.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Operation Set (Ops)
+    LINK_TYPE: Biểu diễn
+  - TARGET_NODE: Hypernetwork
+    LINK_TYPE: Đầu vào cho
+ATTRIBUTES: Weight kernel shape, embedding vector.
+
+NODE_ID: NAS_087
+ENTITY_NAME: Dimensionality Metadata Node (Key Node 3)
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Nút chứa thông tin kênh và kích thước để điều phối dung lượng Hypernetwork.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Channel (Width)
+    LINK_TYPE: Biểu diễn
+  - TARGET_NODE: Hypernetwork
+    LINK_TYPE: Đầu vào cho
+ATTRIBUTES: Kích thước bản đồ đặc trưng, dung lượng mô hình.
+
+NODE_ID: NAS_088
+ENTITY_NAME: Positional Embedding Node (Key Node 4)
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Nút xác định vị trí của lớp/ô trong tổng thể mạng vĩ mô.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Macro Search Space
+    LINK_TYPE: Liên kết tới
+  - TARGET_NODE: Hypernetwork
+    LINK_TYPE: Đầu vào cho
+ATTRIBUTES: Thứ tự lớp, đặc trưng cấp thấp/cao.
+
+NODE_ID: NAS_089
+ENTITY_NAME: Hardware Context Node (Key Node 5)
+SPECIALIST_DOMAIN: Systems Thinker
+DESCRIPTION_SHORT: Nút chứa tham số phần cứng mục tiêu để sinh trọng số thích nghi.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Hardware-aware NAS
+    LINK_TYPE: Liên kết tới
+  - TARGET_NODE: Hypernetwork
+    LINK_TYPE: Đầu vào cho
+ATTRIBUTES: Bit-width, cache size, kiến trúc thiết bị biên.
+
+NODE_ID: NAS_090
+ENTITY_NAME: Co-adaption Problem
+SPECIALIST_DOMAIN: Scientist
+DESCRIPTION_SHORT: Hiện tượng các phép toán phụ thuộc lẫn nhau trong supernet gây nhiễu alpha.
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Supernet
+    LINK_TYPE: Rủi ro đối với
+  - TARGET_NODE: DropNAS
+    LINK_TYPE: Được giải quyết bởi
+ATTRIBUTES: Độ tin cậy alpha, sai số xếp hạng.
+
+--------------------------------------------------------------------------------
+
+layer_2:
+
+RULE_ID: RUL_NAS_001
+RULE_NAME: Bi-level Optimization Law
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: |
+  min_{α ∈ A} L_val(w*(α), α) 
+  s.t. w*(α) = argmin_w L_train(w, α)
+LOGICAL_LINKS:
+  - TARGET_RULE: Weight Sharing Consistency
+    RELATION: Tiền đề
+  - TARGET_RULE: Discretization Gap
+    RELATION: Hệ quả
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Differentiable NAS (DARTS)
+  LINK_LOGIC: Đây là khung toán học cốt lõi biến tìm kiếm kiến trúc thành bài toán tối ưu hóa kép giữa trọng số mạng (w) và tham số kiến trúc (alpha). [1-4]
+
+RULE_ID: RUL_NAS_002
+RULE_NAME: Resource-Accuracy Pareto Law
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: Pareto Front = {a ∈ A | nexists a' ∈ A: Acc(a') > Acc(a) ∧ Cost(a') < Cost(a)}
+LOGICAL_LINKS:
+  - TARGET_RULE: Hardware Resource Thresholding
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: STRATEGIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Multi-objective NAS
+  LINK_LOGIC: Định luật này xác lập rằng không có kiến trúc nào tối ưu tuyệt đối; mọi sự tăng cường độ chính xác đều phải đánh đổi bằng tài nguyên (latency, FLOPs) trừ khi nằm trên đường biên Pareto. [5-8]
+
+RULE_ID: RUL_NAS_003
+RULE_NAME: DAG Topology Acyclicity Constraint
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: G = (V, E) must be a Directed Acyclic Graph (DAG).
+LOGICAL_LINKS:
+  - TARGET_RULE: Bi-level Optimization Law
+    RELATION: Tiền đề
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Cell-based Search Space
+  LINK_LOGIC: Mạng phải không có chu trình để đảm bảo thứ tự tính toán và dòng chảy thông tin tuyến tính từ input đến output. [9-13]
+
+RULE_ID: RUL_NAS_004
+RULE_NAME: 37% Optimal Stopping Law (Secretary Problem)
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: Hồi quy thăm dò τ_π ≅ 0.368 (tức 1/e) tổng không gian tìm kiếm.
+LOGICAL_LINKS:
+  - TARGET_RULE: Good Enough Policy (GEP)
+    RELATION: Đối nghịch
+SPECIALIST_DOMAIN: STRATEGIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Random Search NAS
+  LINK_LOGIC: Để tìm được kiến trúc tốt nhất với xác suất cao nhất trong tìm kiếm ngẫu nhiên, thuật toán phải thăm dò và bác bỏ 37% ứng viên đầu tiên để thiết lập ngưỡng chuẩn. [14-16]
+
+RULE_ID: RUL_NAS_005
+RULE_NAME: Matthew Effect (Skip-connection Dominance)
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: Grad(Skip) >> Grad(Conv) in early stages -> α_skip increases unfairly.
+LOGICAL_LINKS:
+  - TARGET_RULE: Performance Collapse
+    RELATION: Tiền đề
+  - TARGET_RULE: Cross-Edge Normalization (CEN)
+    RELATION: Đối nghịch
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: One-shot NAS / DARTS
+  LINK_LOGIC: Các phép toán không tham số (skip-connection) có lợi thế lan truyền gradient nhanh, dễ dàng chiếm ưu thế sớm và "bóp nghẹt" sự phát triển của các lớp tích chập phức tạp. [2, 17-21]
+
+RULE_ID: RUL_NAS_006
+RULE_NAME: Hardware Resource Thresholding
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: |
+  |P(a)| < F_Th (Flash Memory)
+  |T(a)| < R_Th (RAM)
+  FLOPs(a) < FLOPs_Th (Compute)
+LOGICAL_LINKS:
+  - TARGET_RULE: Resource-Accuracy Pareto Law
+    RELATION: Tiền đề
+SPECIALIST_DOMAIN: ENGINEER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Hardware-aware NAS (HW-NAS)
+  LINK_LOGIC: Các ngưỡng phần cứng cố định (boundary conditions) bắt buộc kiến trúc phải thưa hóa hoặc giảm kênh để có thể chạy được trên vi điều khiển (MCU). [22-25]
+
+RULE_ID: RUL_NAS_007
+RULE_NAME: Weight Sharing Consistency Hypothesis
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: Corr(Acc_supernet, Acc_standalone) -> 1
+LOGICAL_LINKS:
+  - TARGET_RULE: Rank Disorder
+    RELATION: Đối nghịch
+SPECIALIST_DOMAIN: DATA SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: One-Shot NAS / ENAS
+  LINK_LOGIC: Giả định rằng hiệu suất của một kiến trúc con trong Supernet phải tương quan thuận với hiệu suất khi nó được huấn luyện độc lập. [26-30]
+
+RULE_ID: RUL_NAS_008
+RULE_NAME: Discretization Gap Boundary
+CONSTRAINT_TYPE: Soft
+MATHEMATICAL_LOGIC: Δ = |Perf(Continuous_α) - Perf(Argmax_α)|
+LOGICAL_LINKS:
+  - TARGET_RULE: Bi-level Optimization Law
+    RELATION: Hệ quả
+  - TARGET_RULE: Sparsity-Consistency Principle
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Differentiable NAS
+  LINK_LOGIC: Sai số phát sinh khi chuyển đổi từ tổ hợp trọng số mềm (softmax) sang chọn lựa cứng (one-hot) phép toán duy nhất. [31-35]
+
+RULE_ID: RUL_NAS_009
+RULE_NAME: Search Space Bias-Efficiency Trade-off
+CONSTRAINT_TYPE: Soft
+MATHEMATICAL_LOGIC: If Bias ↑ then Efficiency ↑ but Novelty ↓
+LOGICAL_LINKS:
+  - TARGET_RULE: Resource-Accuracy Pareto Law
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Cell-based vs Macro Search Space
+  LINK_LOGIC: Việc lồng ghép kiến thức con người (human bias) vào không gian tìm kiếm giúp giảm thời gian tìm kiếm nhưng hạn chế khả năng phát hiện các motif mới. [31, 36-38]
+
+RULE_ID: RUL_NAS_010
+RULE_NAME: Simplex Constraint on Architecture Parameters
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: α_e ∈ Δ^|O|-1 => ∑_{o∈O} α_{o,e} = 1 ∧ α_{o,e} ≥ 0
+LOGICAL_LINKS:
+  - TARGET_RULE: Bi-level Optimization Law
+    RELATION: Tiền đề
+  - TARGET_RULE: Matthew Effect
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Gradient-based NAS
+  LINK_LOGIC: Ràng buộc toán học bắt buộc các trọng số kiến trúc trên mỗi cạnh phải nằm trên một đơn hình (simplex) để đảm bảo tính xác suất và khả vi. [39-42]
+RULE_ID: RUL_NAS_011
+RULE_NAME: Sparsity-Consistency Principle
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: |
+  min_{z} 1/2 ||Ajz - bj||^2_2 + λ||z||_1
+  s.t. ||z||_0 = s (Sparsity inherent at each update)
+LOGICAL_LINKS:
+  - TARGET_RULE: Bi-level Optimization Law
+    RELATION: Bổ trợ
+  - TARGET_RULE: Discretization Gap Boundary
+    RELATION: Đối nghịch
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: ISTA-NAS
+  LINK_LOGIC: ISTA-NAS sử dụng mã hóa thưa để đảm bảo kiến trúc tìm kiếm luôn thưa và nhất quán với kiến trúc đánh giá cuối cùng, loại bỏ sai số hậu xử lý. [1, 2]
+
+RULE_ID: RUL_NAS_012
+RULE_NAME: Entropy Minimization Law (Sharpening Logic)
+CONSTRAINT_TYPE: Soft
+MATHEMATICAL_LOGIC: |
+  L_total = L_val + λ * H(p)
+  H(p) = - ∑ p_o * log(p_o) (Controlled by Temperature Annealing)
+LOGICAL_LINKS:
+  - TARGET_RULE: Discretization Gap Boundary
+    RELATION: Hệ quả
+SPECIALIST_DOMAIN: DATA SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: EL-DARTS / FX-DARTS
+  LINK_LOGIC: Giảm dần entropy của phân phối alpha thông qua ủ nhiệt (Temperature Annealing) để ép thuật toán hội tụ vào một phép toán duy nhất, giảm nhiễu khi discretization. [3-5]
+
+RULE_ID: RUL_NAS_013
+RULE_NAME: Multi-model Forgetting Constraint
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: Degradation of Standalone_Acc(a_i) after updating Supernet Weights w for a_j.
+LOGICAL_LINKS:
+  - TARGET_RULE: Weight Sharing Consistency Hypothesis
+    RELATION: Đối nghịch
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: One-Shot NAS / Continual Learning NAS
+  LINK_LOGIC: Hiện tượng các kiến trúc con ghi đè trọng số của nhau trong supernet, làm suy giảm độ tin cậy của việc ước tính hiệu suất. [6-8]
+
+RULE_ID: RUL_NAS_014
+RULE_NAME: Criterion-based Early Stopping (Saturated Search)
+CONSTRAINT_TYPE: Soft
+MATHEMATICAL_LOGIC: |
+  Stop if Count(Skip-connect) > Threshold (e.g., 2)
+  OR Rank(alpha) is stable for N epochs.
+LOGICAL_LINKS:
+  - TARGET_RULE: Matthew Effect
+    RELATION: Đối nghịch
+SPECIALIST_DOMAIN: ENGINEER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: DARTS+
+  LINK_LOGIC: Cơ chế dừng tìm kiếm ngay khi đạt đến điểm bão hòa hoặc khi các phép toán skip-connection bắt đầu chiếm ưu thế phi lý để tránh sụp đổ hiệu suất. [9-11]
+
+RULE_ID: RUL_NAS_015
+RULE_NAME: Path Binarization Memory Boundary
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: Active_Paths = 1 => Memory Complexity O(1) w.r.t search space size.
+LOGICAL_LINKS:
+  - TARGET_RULE: Hardware Resource Thresholding
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: ENGINEER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: ProxylessNAS
+  LINK_LOGIC: Bằng cách nhị phân hóa các đường dẫn và chỉ kích hoạt một đường dẫn tại mỗi bước, thuật toán có thể tìm kiếm trực tiếp trên tập dữ liệu lớn mà không nổ bộ nhớ GPU. [12-14]
+
+RULE_ID: RUL_NAS_016
+RULE_NAME: Co-adaptation Interference Law
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: Shared_Weights w become biased towards Ops with fewer parameters/faster convergence.
+LOGICAL_LINKS:
+  - TARGET_RULE: Matthew Effect
+    RELATION: Tiền đề
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: DropNAS / Few-shot NAS
+  LINK_LOGIC: Các phép toán trong supernet phụ thuộc lẫn nhau, khiến các lớp phức tạp (Conv) không có cơ hội thể hiện năng lực trước khi bị alpha loại bỏ. [15-17]
+
+RULE_ID: RUL_NAS_017
+RULE_NAME: Bilinear Coupling Constraint
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: x_j = ∑_{i<j} β_l * α_{l,m} * o_{l,m}(x_i) (Coupling of Edge beta and Op alpha)
+LOGICAL_LINKS:
+  - TARGET_RULE: Bi-level Optimization Law
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: IDARTS
+  LINK_LOGIC: Thừa nhận sự phụ thuộc lẫn nhau giữa việc chọn cạnh (beta) và chọn phép toán (alpha), yêu cầu cơ chế backtracking để tối ưu hóa đồng thời. [18-20]
+
+RULE_ID: RUL_NAS_018
+RULE_NAME: Rank Disorder Statistical Law
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: Kendall’s Tau(Rank_Supernet, Rank_Standalone) < Threshold_Reliability.
+LOGICAL_LINKS:
+  - TARGET_RULE: Weight Sharing Consistency Hypothesis
+    RELATION: Đối nghịch
+SPECIALIST_DOMAIN: DATA SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Performance Estimators
+  LINK_LOGIC: Xác định rủi ro khi thứ hạng kiến trúc trong Supernet bị đảo lộn so với thực tế, dẫn đến việc chọn nhầm kiến trúc "ký sinh". [21-23]
+
+RULE_ID: RUL_NAS_019
+RULE_NAME: Weight Symmetry Regularization
+CONSTRAINT_TYPE: Soft
+MATHEMATICAL_LOGIC: Incorporating permutation and scaling symmetries to reduce generator parameter redundancy.
+LOGICAL_LINKS:
+  - TARGET_RULE: Search Space Redundancy Law
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Hypernetwork / GHN
+  LINK_LOGIC: Áp dụng các tính chất đối xứng của trọng số mạng để nén dung lượng Hypernetwork và tăng khả năng tổng quát hóa. [24]
+
+RULE_ID: RUL_NAS_020
+RULE_NAME: Collaborative Competition Rule
+CONSTRAINT_TYPE: Soft
+MATHEMATICAL_LOGIC: Use independent Sigmoids for each Op weight instead of exclusive Softmax.
+LOGICAL_LINKS:
+  - TARGET_RULE: Matthew Effect
+    RELATION: Đối nghịch
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: FairDARTS
+  LINK_LOGIC: Phá vỡ sự cạnh tranh "một mất một còn" của Softmax, cho phép các phép toán khác nhau phát triển độc lập trước khi bị so sánh. [25-27]
+
+RULE_ID: RUL_NAS_021
+RULE_NAME: SynFlow (L1 Path-norm) Principle
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: |
+  S_{SynFlow} = \sum_{\text{paths}} \prod_{w \in \text{path}} |w|
+  (Data-independent evaluation of gradient flow)
+LOGICAL_LINKS:
+  - TARGET_RULE: Zero-shot/One-shot Transferability Bias
+    RELATION: Hệ quả
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Zero-Shot NAS (Training-free)
+  LINK_LOGIC: SynFlow cho phép đánh giá kiến trúc mà không cần dữ liệu, dựa trên khả năng bảo toàn dòng chảy synaptic qua các đường dẫn từ đầu vào đến đầu ra [1-3].
+
+RULE_ID: RUL_NAS_022
+RULE_NAME: NTK Trainability Boundary
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: |
+  K_N = \lambda_{max} / \lambda_{min}
+  Correlation(K_N, Acc) \approx -0.42
+LOGICAL_LINKS:
+  - TARGET_RULE: Linear Region Expressivity Law
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: DATA SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Neural Tangent Kernel (NTK)
+  LINK_LOGIC: Chỉ số này xác định giới hạn khả năng huấn luyện; tỷ số trị riêng Hessian/Jacobian càng lớn, mạng càng khó hội tụ bằng gradient descent [4, 5].
+
+RULE_ID: RUL_NAS_023
+RULE_NAME: Linear Region Expressivity Law
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: |
+  R_N \propto \text{Count}(\text{Activation Patterns})
+  Correlation(R_N, Acc) \approx 0.50
+LOGICAL_LINKS:
+  - TARGET_RULE: NTK Trainability Boundary
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Zero-Shot NAS
+  LINK_LOGIC: Expressivity đo lường khả năng biểu diễn các hàm số phức tạp dựa trên số lượng vùng tuyến tính cục bộ mà mạng ReLU có thể tạo ra [6, 7].
+
+RULE_ID: RUL_NAS_024
+RULE_NAME: NDCG Ranking Priority (Top-heavy Logic)
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: |
+  NDCG = DCG / IDCG
+  DCG = \sum (2^{rel_i} - 1) / \log_2(i + 1)
+LOGICAL_LINKS:
+  - TARGET_RULE: Rank Disorder Statistical Law
+    RELATION: Đối nghịch
+SPECIALIST_DOMAIN: STRATEGIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: AceNAS / Performance Estimators
+  LINK_LOGIC: Thay vì coi trọng mọi thứ hạng, quy tắc này ưu tiên việc xếp hạng đúng các kiến trúc "Ace" (tốt nhất), giúp giảm bớt sự khắt khe không cần thiết ở các vùng hiệu suất thấp [8-10].
+
+RULE_ID: RUL_NAS_025
+RULE_NAME: MCU Deployment Hard Constraint
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: |
+  Flash\_Usage(a) < F_{Th} \wedge RAM\_Usage(a) < R_{Th}
+  (e.g., peak intermediate tensor size limits)
+LOGICAL_LINKS:
+  - TARGET_RULE: Hardware Resource Thresholding
+    RELATION: Hệ quả
+SPECIALIST_DOMAIN: ENGINEER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Hardware-aware NAS (HW-NAS)
+  LINK_LOGIC: Các giới hạn vật lý của vi điều khiển (MCU) bắt buộc kiến trúc phải tuân thủ ngưỡng bộ nhớ Flash và RAM nghiêm ngặt ngay trong quá trình tìm kiếm [11-13].
+
+RULE_ID: RUL_NAS_026
+RULE_NAME: Connectivity Conservation Rule
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: \forall \text{Node } n \in \text{Cell}, \exists \text{Path}(n \to \text{Output})
+LOGICAL_LINKS:
+  - TARGET_RULE: DAG Topology Acyclicity Constraint
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Cell-based Search Space
+  LINK_LOGIC: Quy tắc bảo toàn kết nối đảm bảo không có nút nào bị cô lập, mọi phép toán trong ô đều phải đóng góp vào bản đồ đặc trưng cuối cùng [14].
+
+RULE_ID: RUL_NAS_027
+RULE_NAME: ISTA Structural Transition Law
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: z = \text{soft-thresholding}(A^T b, \lambda)
+LOGICAL_LINKS:
+  - TARGET_RULE: Sparsity-Consistency Principle
+    RELATION: Tiền đề
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: ISTA-NAS
+  LINK_LOGIC: Quy tắc này điều khiển việc chuyển đổi từ không gian nén sang kiến trúc thưa, đảm bảo cấu trúc mạng trong khi tìm kiếm và đánh giá là hoàn toàn nhất quán [15, 16].
+
+RULE_ID: RUL_NAS_028
+RULE_NAME: Zero-shot Capacity Bias
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: \text{Score}(a) \propto \text{Params}(a) \vee \text{Width}(a)
+LOGICAL_LINKS:
+  - TARGET_RULE: Collaborative Competition Rule
+    RELATION: Đối nghịch
+SPECIALIST_DOMAIN: DATA SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Zero-Shot NAS
+  LINK_LOGIC: Các proxy không cần huấn luyện thường có xu hướng ưu tiên các mô hình lớn hoặc kênh rộng, tạo ra sai lệch cần được điều chỉnh bằng các phương pháp chuẩn hóa [2, 17].
+
+RULE_ID: RUL_NAS_029
+RULE_NAME: Multi-Task Preference Simplex Constraint
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: r \in S^N \Rightarrow \sum_{i=1}^N r_i = 1 \wedge r_i \geq 0
+LOGICAL_LINKS:
+  - TARGET_RULE: Resource-Accuracy Pareto Law
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: STRATEGIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Multi-objective NAS / MTL
+  LINK_LOGIC: Ràng buộc này ép các vector ưu tiên tác vụ nằm trên một đơn hình, cho phép Hypernetwork sinh trọng số thích nghi với các điểm cân bằng khác nhau trên đường biên Pareto [18, 19].
+
+RULE_ID: RUL_NAS_030
+RULE_NAME: Genotype-Phenotype Separation Law
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: \Theta = \mathcal{H}(C; \Phi) \wedge \text{Weights } \Theta \notin \text{Learnable Set}
+LOGICAL_LINKS:
+  - TARGET_RULE: Bi-level Optimization Law
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Hypernetwork / GHN
+  LINK_LOGIC: Xác lập rằng trọng số của mạng mục tiêu (phenotype) không được học trực tiếp mà là kết quả của quy tắc sinh tham số (genotype) từ Hypernetwork [20].
+
+RULE_ID: RUL_NAS_031
+RULE_NAME: Normalization Parameter Modulation Rule
+CONSTRAINT_TYPE: Soft
+MATHEMATICAL_LOGIC: \{\hat{\beta}, \hat{\gamma}\} = h_{weight}(r, c; \phi)
+LOGICAL_LINKS:
+  - TARGET_RULE: Weight Symmetry Regularization
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: ENGINEER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Preference Conditioned Hypernetworks
+  LINK_LOGIC: Thay vì sinh toàn bộ trọng số, quy tắc này chỉ điều phối các tham số chuẩn hóa (BN) để thích ứng mạng với các tác vụ hoặc phần cứng khác nhau, giúp giảm độ phức tạp của Hypernetwork [21, 22].
+
+RULE_ID: RUL_NAS_032
+RULE_NAME: Kendall’s Tau Reliability Threshold
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: \tau = \frac{(\text{concordant pairs} - \text{discordant pairs})}{n(n-1)/2}
+LOGICAL_LINKS:
+  - TARGET_RULE: Rank Disorder Statistical Law
+    RELATION: Tiền đề
+SPECIALIST_DOMAIN: DATA SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Performance Estimators / Benchmarks
+  LINK_LOGIC: Đây là thước đo logic chuẩn để xác định độ tin cậy của bất kỳ phương pháp ước tính hiệu suất nào so với thực tế huấn luyện độc lập [23-25].
+
+RULE_ID: RUL_NAS_033
+RULE_NAME: Expected Latency Additivity Rule
+CONSTRAINT_TYPE: Soft
+MATHEMATICAL_LOGIC: |
+  E[Latency_Total] = ∑_{i=1}^N E[latency_i]
+  E[latency_i] = ∑_{j} p_{i,j} × F(o_{i,j})
+LOGICAL_LINKS:
+  - TARGET_RULE: MCU Deployment Hard Constraint
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: ENGINEER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Hardware-aware NAS (ProxylessNAS)
+  LINK_LOGIC: Quy tắc này cho phép biến độ trễ (latency) thành một hàm khả vi bằng cách tính tổng kỳ vọng độ trễ của từng khối, giúp tối ưu hóa trực tiếp bằng gradient. [1-3]
+
+RULE_ID: RUL_NAS_034
+RULE_NAME: Generalization Gap Regularization
+CONSTRAINT_TYPE: Soft
+MATHEMATICAL_LOGIC: L_search = L_train + λ |L_train - L_val|
+LOGICAL_LINKS:
+  - TARGET_RULE: Bi-level Optimization Law
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Unified NAS (UNAS)
+  LINK_LOGIC: Quy tắc này bổ sung một số hạng vào hàm loss để ngăn thuật toán chọn các kiến trúc quá khớp (overfitting) bằng cách đo lường khoảng cách hiệu suất giữa tập train và validation ngay khi tìm kiếm. [4]
+
+RULE_ID: RUL_NAS_035
+RULE_NAME: Complexity-Proportional Sampling Rule
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: P(sampling a_i) ∝ Params(a_i)
+LOGICAL_LINKS:
+  - TARGET_RULE: Multi-model Forgetting Constraint
+    RELATION: Đối nghịch
+SPECIALIST_DOMAIN: DATA SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: NAO-V2 / One-Shot NAS
+  LINK_LOGIC: Thay vì lấy mẫu đồng nhất, quy tắc này ưu tiên cập nhật các kiến trúc lớn và phức tạp hơn để bù đắp sự thiếu hụt trong quá trình hội tụ của chúng trong Supernet. [5, 6]
+
+RULE_ID: RUL_NAS_036
+RULE_NAME: Weight Plasticity Loss Constraint
+CONSTRAINT_TYPE: Soft
+MATHEMATICAL_LOGIC: L_plasticity = ∑ ‖w_new - w_old‖^2 (regularized by importance)
+LOGICAL_LINKS:
+  - TARGET_RULE: Multi-model Forgetting Constraint
+    RELATION: Hệ quả
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: One-Shot NAS / NSAS
+  LINK_LOGIC: Ràng buộc này ép việc cập nhật trọng số supernet không được làm suy giảm đột ngột hiệu suất của các kiến trúc đã học trước đó, giữ cho thứ hạng ổn định. [7-9]
+
+RULE_ID: RUL_NAS_037
+RULE_NAME: Gradient Matching Trajectory Rule
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: ∇_{θ} L_{task} ≈ ∇_{w} L_{task} ⋅ ∂w/∂θ
+LOGICAL_LINKS:
+  - TARGET_RULE: Genotype-Phenotype Separation Law
+    RELATION: Tiền đề
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: HyperNet Fields
+  LINK_LOGIC: Quy tắc này bắt buộc Hypernetwork không chỉ sinh trọng số tĩnh mà phải mô phỏng được quỹ đạo tối ưu hóa của mạng đích thông qua việc khớp các gradient cục bộ. [10, 11]
+
+RULE_ID: RUL_NAS_038
+RULE_NAME: Strong Convexity Condition for Implicit Gradient (IG)
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: ∇^2_{w,w} L_train(w, α) must be Positive Definite.
+LOGICAL_LINKS:
+  - TARGET_RULE: Bi-level Optimization Law
+    RELATION: Tiền đề
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Differentiable NAS (DARTS)
+  LINK_LOGIC: Đây là điều kiện biên toán học để gradient ẩn (IG) tồn tại và có thể tính toán được thông qua Định lý Hàm ẩn; nếu không thỏa mãn, quá trình tìm kiếm sẽ mất ổn định. [12, 13]
+
+RULE_ID: RUL_NAS_039
+RULE_NAME: Dimension-Capacity Scaling Law for Hypernets
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: If Width_Hypernet → ∞, output dimension must increase to maintain convexity.
+LOGICAL_LINKS:
+  - TARGET_RULE: Genotype-Phenotype Separation Law
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Theoretical Hypernetworks
+  LINK_LOGIC: Định luật này xác định rằng việc mở rộng chiều rộng của Hypernetwork là không đủ để hội tụ về cực tiểu toàn cục trừ khi chiều không gian đầu ra (output dimensionality) được tăng cường tương ứng. [14, 15]
+
+RULE_ID: RUL_NAS_040
+RULE_NAME: Context Chunking Integration Rule
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: Update_Composite = Concatenate(LoRA_chunk_1, ..., LoRA_chunk_N)
+LOGICAL_LINKS:
+  - TARGET_RULE: Genotype-Phenotype Separation Law
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: ENGINEER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Scalable Hypernetworks (SHINE / Doc-to-LoRA)
+  LINK_LOGIC: Quy tắc xử lý khi ngữ cảnh đầu vào (context) vượt quá cửa sổ của Hypernetwork, yêu cầu chia nhỏ và hợp nhất các bản cập nhật trọng số theo chiều hạng (rank dimension). [10, 16]
+
+RULE_ID: RUL_NAS_041
+RULE_NAME: Global Stability Regularization Law
+CONSTRAINT_TYPE: Soft
+MATHEMATICAL_LOGIC: L_total = L_val + λ(μ - mean(α))^2
+LOGICAL_LINKS:
+  - TARGET_RULE: Simplex Constraint on Architecture Parameters
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: SR-DARTS (Robust Differentiable NAS)
+  LINK_LOGIC: Quy tắc này áp đặt một ràng buộc toàn cục lên phân phối của tham số kiến trúc (alpha), giúp ổn định quá trình tối ưu hóa và ngăn chặn việc hội tụ vào các giải pháp quá đặc thù cho tập dữ liệu [5, 6].
+
+RULE_ID: RUL_NAS_042
+RULE_NAME: Structural Isomerism Rule
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: Acc(a_i) ≠ Acc(a_j) while Resource(a_i) = Resource(a_j) (Common in Transformers)
+LOGICAL_LINKS:
+  - TARGET_RULE: Resource-Accuracy Pareto Law
+    RELATION: Hệ quả
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: PreNAS / Vision Transformers
+  LINK_LOGIC: Trong các kiến trúc Transformer, việc thay đổi thứ tự các khối có thể giữ nguyên tài nguyên tiêu thụ (FLOPs/Params) nhưng thay đổi hiệu suất, đòi hỏi bộ chọn zero-cost phải có khả năng phân biệt các cấu trúc đồng phân này [7, 8].
+
+RULE_ID: RUL_NAS_043
+RULE_NAME: Proxy Task Transferability Law
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: Rank(a, D_proxy) ≈ Rank(a, D_target) (e.g., CIFAR-10 to ImageNet)
+LOGICAL_LINKS:
+  - TARGET_RULE: Rank Disorder Statistical Law
+    RELATION: Tiền đề
+SPECIALIST_DOMAIN: DATA SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: NASNet / DARTS Pipeline
+  LINK_LOGIC: Định luật này xác lập tính khả thi của việc tìm kiếm trên các tác vụ đại diện nhỏ hơn để áp dụng cho các tác vụ mục tiêu lớn hơn, giảm chi phí tính toán từ hàng nghìn xuống còn vài ngày GPU [9, 10].
+
+RULE_ID: RUL_NAS_044
+RULE_NAME: Gumbel-TopK Sequential Sampling Logic
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: r_{k+1} = r_k + log(1 - h_k) (Iterative sampling of exclusive paths)
+LOGICAL_LINKS:
+  - TARGET_RULE: Simplex Constraint on Architecture Parameters
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: ENGINEER
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Gumbel-based NAS
+  LINK_LOGIC: Quy tắc này cho phép lấy mẫu tuần tự các phép toán rời rạc từ supernet mà vẫn duy trì tính khả vi, giúp giảm nhiễu so với việc nới lỏng softmax thông thường [11, 12].
+
+RULE_ID: RUL_NAS_045
+RULE_NAME: Adversarial Robustness-Resource Trade-off
+CONSTRAINT_TYPE: Statistical
+MATHEMATICAL_LOGIC: If Model_Compactness ↑ then Vulnerability_to_Perturbation ↑
+LOGICAL_LINKS:
+  - TARGET_RULE: Resource-Accuracy Pareto Law
+    RELATION: Đối nghịch
+SPECIALIST_DOMAIN: STRATEGIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Hardware-aware NAS / Traffic Classification
+  LINK_LOGIC: Trong các môi trường bị ràng buộc tài nguyên, việc nén mô hình quá mức có thể làm suy giảm khả năng chống lại các cuộc tấn công đối nghịch (adversarial attacks), đòi hỏi một hàm mục tiêu đa mục tiêu mới [13, 14].
+
+RULE_ID: RUL_NAS_046
+RULE_NAME: System-1 vs System-2 Thinking Boundary
+CONSTRAINT_TYPE: Soft
+MATHEMATICAL_LOGIC: Task_Allocation = f(Latency_Threshold, Logic_Complexity)
+LOGICAL_LINKS:
+  - TARGET_RULE: Expected Latency Additivity Rule
+    RELATION: Bổ trợ
+SPECIALIST_DOMAIN: STRATEGIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Plan-SOFAI Framework
+  LINK_LOGIC: Quy tắc này điều phối việc phân chia nhiệm vụ giữa các mạch nơ-ron hiệu quả (System-1) và các bộ học luật biểu tượng có độ trễ cao (System-2) trong các kiến trúc nhận thức thích nghi [15].
+
+RULE_ID: RUL_NAS_047
+RULE_NAME: Meta-Cognitive Breaking Rule
+CONSTRAINT_TYPE: Soft
+MATHEMATICAL_LOGIC: Execute(α_suboptimal) if Contextual_Novelty > Threshold
+LOGICAL_LINKS:
+  - TARGET_RULE: Search Space Bias-Efficiency Trade-off
+    RELATION: Đối nghịch
+SPECIALIST_DOMAIN: STRATEGIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Self-Evolving Cognitive Architectures
+  LINK_LOGIC: Một cơ chế meta-cognition cho phép hệ thống NAS phá bỏ các quy tắc tìm kiếm thông thường khi gặp ngữ cảnh mới, nhằm đảm bảo sự cân bằng giữa độ tin cậy hệ thống và trí tuệ thích nghi [15].
+
+RULE_ID: RUL_NAS_048
+RULE_NAME: Implicit Function Theorem Convergence Boundary
+CONSTRAINT_TYPE: Hard
+MATHEMATICAL_LOGIC: Fixed-point iteration T(w, α) must be a contraction mapping.
+LOGICAL_LINKS:
+  - TARGET_RULE: Strong Convexity Condition for Implicit Gradient
+    RELATION: Tiền đề
+SPECIALIST_DOMAIN: SCIENTIST
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Hypergradient-based NAS
+  LINK_LOGIC: Đây là rào cản toán học đảm bảo quá trình tính toán gradient ẩn (IG) sẽ hội tụ; nếu không, các bản cập nhật tham số kiến trúc sẽ bị phân kỳ và làm hỏng supernet [16, 17].
+
+--------------------------------------------------------------------------------
+
+layer_3:
+
+DYNAMIC_ID: DYN_NAS_001
+CAUSAL_CHAIN: "Nếu Search Space mở rộng theo hàm mũ, thì tín hiệu thưởng và gradient trở nên thưa thớt, dẫn đến xác suất hội tụ của Search Strategy giảm mạnh."
+LOOP_TYPE: Linear
+NODES_INVOLVED: [Search Space, Search Strategy, Reward Signal]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_010
+  RELATION_TYPE: Tiền đề
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+
+DYNAMIC_ID: DYN_NAS_002
+CAUSAL_CHAIN: "Nếu áp dụng cơ chế Weight Sharing, thì thời gian huấn luyện giảm từ hàng nghìn ngày xuống dưới 1 ngày GPU, nhưng gây ra hiện tượng nhiễu tương quan thứ hạng (Rank Disorder)."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Weight Sharing Strategy, Supernet, Rank Disorder]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_012
+  RELATION_TYPE: Tương hỗ
+SPECIALIST_DOMAIN: ENGINEER
+
+DYNAMIC_ID: DYN_NAS_003
+CAUSAL_CHAIN: "Nếu phép toán skip-connection được ưu tiên quá mức trong giai đoạn đầu (Matthew Effect), thì dòng chảy gradient sẽ bỏ qua các lớp tích chập, dẫn đến sự sụp đổ hiệu suất (Performance Collapse)."
+LOOP_TYPE: Reinforcing
+NODES_INVOLVED: [Skip-connection, Matthew Effect, Performance Collapse]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_013
+  RELATION_TYPE: Đối nghịch
+SPECIALIST_DOMAIN: SCIENTIST
+
+DYNAMIC_ID: DYN_NAS_004
+CAUSAL_CHAIN: "Vòng lặp Controller-Evaluator: Controller sinh mẫu kiến trúc -> Evaluator chấm điểm hiệu suất -> Cập nhật Policy Gradient cho Controller để sinh mẫu tốt hơn."
+LOOP_TYPE: Reinforcing
+NODES_INVOLVED: [Controller, Child Network, Reward Signal, RL-based NAS]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_001
+  RELATION_TYPE: Tiền đề
+SPECIALIST_DOMAIN: STRATEGIST
+
+DYNAMIC_ID: DYN_NAS_005
+CAUSAL_CHAIN: "Vòng lặp Tiến hóa: Quần thể kiến trúc -> Đột biến/Lai ghép -> Đánh giá độ thích nghi (Fitness) -> Chọn lọc cá thể ưu tú cho thế hệ sau."
+LOOP_TYPE: Reinforcing
+NODES_INVOLVED: [Evolutionary Algorithm, Population, Mutation, Fitness evaluation]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_011
+  RELATION_TYPE: Tương hỗ
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+
+DYNAMIC_ID: DYN_NAS_006
+CAUSAL_CHAIN: "Động lực Tối ưu hóa Hai tầng (Bi-level): Trọng số mạng (w) cập nhật trên tập huấn luyện -> Tham số kiến trúc (alpha) cập nhật trên tập kiểm định -> Sự tương tác qua lại thúc đẩy hội tụ kiến trúc."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Bi-level Optimization, Architecture Parameters, Network Weights]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_007
+  RELATION_TYPE: Tiền đề
+SPECIALIST_DOMAIN: SCIENTIST
+
+DYNAMIC_ID: DYN_NAS_007
+CAUSAL_CHAIN: "Nếu nới lỏng liên tục (Continuous Relaxation) kết thúc, thì tham số alpha được rời rạc hóa (Discretization), dẫn đến sai số hiệu suất (Discretization Gap) do sự khác biệt giữa Supernet dày đặc và Target-net thưa."
+LOOP_TYPE: Linear
+NODES_INVOLVED: [Continuous Relaxation, Discretization Gap, Search Phase, Evaluation Phase]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_008
+  RELATION_TYPE: Đối nghịch
+SPECIALIST_DOMAIN: ENGINEER
+
+DYNAMIC_ID: DYN_NAS_008
+CAUSAL_CHAIN: "Nếu sử dụng ISTA-NAS, thì ràng buộc thưa (Sparsity) được áp dụng tại mỗi bước cập nhật, giúp triệt tiêu Discretization Gap và đảm bảo tính nhất quán cấu trúc."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [ISTA-NAS, Sparsity Constraint, Discretization Gap]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_007
+  RELATION_TYPE: Đối nghịch
+SPECIALIST_DOMAIN: SCIENTIST
+
+DYNAMIC_ID: DYN_NAS_009
+CAUSAL_CHAIN: "Nếu Hypernetwork nhận mô tả kiến trúc (Key Nodes), thì nó sinh trọng số thích nghi tức thời, giúp đánh giá hàng triệu kiến trúc mà không cần huấn luyện lại."
+LOOP_TYPE: Linear
+NODES_INVOLVED: [Hypernetwork, Key Nodes, Weight Generation]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_015
+  RELATION_TYPE: Tương hỗ
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+
+DYNAMIC_ID: DYN_NAS_010
+CAUSAL_CHAIN: "Nếu áp dụng Chiến lược Dừng sớm (Early Stopping), thì quá trình tìm kiếm dừng lại trước khi skip-connection chiếm ưu thế, giúp bảo vệ tính đa dạng của các khối tích chập."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Early Stopping Strategy, Performance Collapse, Skip-connection]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_003
+  RELATION_TYPE: Đối nghịch
+SPECIALIST_DOMAIN: ENGINEER
+
+DYNAMIC_ID: DYN_NAS_011
+CAUSAL_CHAIN: "Nếu tìm kiếm trên Proxy Task, thì chi phí GPU giảm, nhưng nảy sinh rủi ro sai số chuyển đổi (Transfer error) khi áp dụng vào Task mục tiêu lớn."
+LOOP_TYPE: Linear
+NODES_INVOLVED: [Proxy Dataset, Target Task, Search Phase]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_019
+  RELATION_TYPE: Tiền đề
+SPECIALIST_DOMAIN: DATA SCIENTIST
+
+DYNAMIC_ID: DYN_NAS_012
+CAUSAL_CHAIN: "Hiện tượng Multi-model Forgetting: Khi Supernet cập nhật trọng số cho kiến trúc mới, thì hiệu suất của các kiến trúc đã học trước đó bị suy giảm, làm sai lệch tín hiệu phần thưởng."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Catastrophic Forgetting, Supernet, Weight Sharing Strategy]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_002
+  RELATION_TYPE: Hệ quả
+SPECIALIST_DOMAIN: SCIENTIST
+
+DYNAMIC_ID: DYN_NAS_013
+CAUSAL_CHAIN: "Nếu áp dụng Cạnh tranh Hợp tác (Collaborative Competition), thì các phép toán được huấn luyện độc lập (ví dụ qua Sigmoid thay vì Softmax), giúp loại bỏ ưu thế phi lý của các lớp không tham số."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Collaborative Competition, FairDARTS, Matthew Effect]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_003
+  RELATION_TYPE: Đối nghịch
+SPECIALIST_DOMAIN: SCIENTIST
+
+DYNAMIC_ID: DYN_NAS_014
+CAUSAL_CHAIN: "Nếu Latency Constraint thắt chặt, thì Search Strategy hướng việc lấy mẫu vào các kiến trúc thưa hoặc kênh hẹp, đẩy Pareto Front về phía tối ưu tài nguyên."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Latency Constraint, Hardware-aware NAS, Pareto Front]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_017
+  RELATION_TYPE: Tiền đề
+SPECIALIST_DOMAIN: ENGINEER
+
+DYNAMIC_ID: DYN_NAS_015
+CAUSAL_CHAIN: "Nếu sử dụng Zero-Shot Proxies (NTK, SynFlow), thì kiến trúc được đánh giá ngay lập tức dựa trên đặc điểm topo mà không cần huấn luyện, giúp tăng tốc độ tìm kiếm lên hàng nghìn lần."
+LOOP_TYPE: Linear
+NODES_INVOLVED: [Zero-Shot NAS, NTK, SynFlow, Search Strategy]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_001
+  RELATION_TYPE: Đối nghịch
+SPECIALIST_DOMAIN: DATA SCIENTIST
+
+DYNAMIC_ID: DYN_NAS_016
+CAUSAL_CHAIN: "Nếu áp dụng Entropy Regularization, thì phân phối tham số alpha bị ép hội tụ nhanh hơn vào một phép toán duy nhất, giúp làm sắc nét (sharpening) quyết định kiến trúc."
+LOOP_TYPE: Reinforcing
+NODES_INVOLVED: [Entropy Minimization Law, Architecture Parameters, Discretization Gap]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_007
+  RELATION_TYPE: Tương hỗ
+SPECIALIST_DOMAIN: DATA SCIENTIST
+
+DYNAMIC_ID: DYN_NAS_017
+CAUSAL_CHAIN: "Nếu nhị phân hóa đường dẫn (Path Binarization), thì chỉ có một phần rất nhỏ Supernet được nạp vào bộ nhớ tại mỗi bước, cho phép tìm kiếm trên các kiến trúc vĩ mô cực lớn."
+LOOP_TYPE: Linear
+NODES_INVOLVED: [Path Binarization, GPU Memory, ProxylessNAS]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_014
+  RELATION_TYPE: Tiền đề
+SPECIALIST_DOMAIN: ENGINEER
+
+DYNAMIC_ID: DYN_NAS_018
+CAUSAL_CHAIN: "Nếu Rankin inconsistency đạt ngưỡng cao (Kendall’s Tau thấp), thì quá trình tìm kiếm sẽ chọn nhầm các kiến trúc 'ký sinh' có hiệu suất ảo trong Supernet, làm hỏng kết quả cuối cùng."
+LOOP_TYPE: Linear
+NODES_INVOLVED: [Rank Disorder, Kendall’s Tau, Performance Predictor]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_002
+  RELATION_TYPE: Hệ quả
+SPECIALIST_DOMAIN: DATA SCIENTIST
+
+DYNAMIC_ID: DYN_NAS_019
+CAUSAL_CHAIN: "Sự sụt giảm tính đại diện: Nếu khoảng cách giữa Search Phase (ít layer, ảnh nhỏ) và Evaluation Phase (nhiều layer, ảnh lớn) quá xa, thì thứ hạng kiến trúc sẽ bị đảo lộn hoàn toàn."
+LOOP_TYPE: Linear
+NODES_INVOLVED: [Search Phase, Evaluation Phase, Proxy Dataset]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_011
+  RELATION_TYPE: Tiền đề
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+
+DYNAMIC_ID: DYN_NAS_020
+CAUSAL_CHAIN: "Nếu người dùng thay đổi Preference Vector, thì Hypernetwork điều chỉnh trọng số sinh ra để dịch chuyển mô hình dọc theo Pareto Front (giữa Accuracy và Resource)."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Hypernetwork, Multi-Task Preference, Pareto Front]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_009
+  RELATION_TYPE: Tương hỗ
+SPECIALIST_DOMAIN: STRATEGIST
+
+DYNAMIC_ID: DYN_NAS_021
+CAUSAL_CHAIN: "Nếu điều kiện hàm ẩn (Implicit Function Theorem) không được thỏa mãn, thì gradient ẩn (Implicit Gradient) sẽ phân kỳ, làm mất ổn định việc cập nhật tham số kiến trúc alpha."
+LOOP_TYPE: Linear
+NODES_INVOLVED: [Bilevel Optimization, Strong Convexity Condition]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_006
+  RELATION_TYPE: Tiền đề
+SPECIALIST_DOMAIN: SCIENTIST
+
+DYNAMIC_ID: DYN_NAS_022
+CAUSAL_CHAIN: "Hiện tượng Rò rỉ thông tin (Information Bypass Leakage): Nếu nhiều phép toán song song cùng truyền tải thông tin trong Supernet, thì sau khi discretization (chỉ giữ 1 path), mạng mục tiêu sẽ bị hụt dung lượng trầm trọng."
+LOOP_TYPE: Linear
+NODES_INVOLVED: [Information Bypass Leakage, Discretization Gap, Supernet]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_007
+  RELATION_TYPE: Tương hỗ
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+
+DYNAMIC_ID: DYN_NAS_023
+CAUSAL_CHAIN: "Chiến lược Ace Selection: Nếu ưu tiên xếp hạng đúng các kiến trúc 'Ace' (Top-K) thay vì toàn bộ không gian, thì chi phí huấn luyện mẫu giảm mạnh mà vẫn đảm bảo tìm được kiến trúc tốt nhất."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [AceNAS, NDCG Ranking Priority, Performance Predictor]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_018
+  RELATION_TYPE: Đối nghịch
+SPECIALIST_DOMAIN: STRATEGIST
+
+DYNAMIC_ID: DYN_NAS_024
+CAUSAL_CHAIN: "Động lực học Đồng phân cấu trúc (Structural Isomerism): Trong Transformer, việc thay đổi thứ tự khối (giữ nguyên Ops/Params) vẫn làm thay đổi hiệu suất, buộc Zero-Shot NAS phải có khả năng phân biệt các topo tương đương."
+LOOP_TYPE: Linear
+NODES_INVOLVED: [Structural Isomerism Rule, Vision Transformers, Zero-Shot NAS]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_015
+  RELATION_TYPE: Tương hỗ
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+
+DYNAMIC_ID: DYN_NAS_025
+CAUSAL_CHAIN: "Cơ chế Tự tiến hóa Nhận thức (Meta-Cognitive): Nếu hệ thống gặp ngữ cảnh mới (Novelty), thì nó tự phá vỡ quy tắc tìm kiếm cũ để thích nghi, cân bằng giữa độ tin cậy và trí tuệ thích nghi."
+LOOP_TYPE: Reinforcing
+NODES_INVOLVED: [Meta-Cognitive Breaking Rule, Self-Evolving Cognitive Architectures, Contextual Novelty]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_004
+  RELATION_TYPE: Tương hỗ
+SPECIALIST_DOMAIN: STRATEGIST
+
+DYNAMIC_ID: DYN_NAS_026
+CAUSAL_CHAIN: "Nếu GCN Encoder được chia sẻ giữa Neural Predictor và Hypernetwork, thì đặc trưng kiến trúc được tinh chỉnh đồng thời bởi hai tác vụ, dẫn đến biểu diễn kiến trúc toàn cục (Global Encoding) chính xác hơn."
+LOOP_TYPE: Reinforcing
+NODES_INVOLVED: [GCN Encoder, Neural Predictor, Hypernetwork, Global Architecture Encoding]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_009
+  RELATION_TYPE: Tương hỗ
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+SOURCES: [1-4]
+
+DYNAMIC_ID: DYN_NAS_027
+CAUSAL_CHAIN: "Nếu áp dụng Chuẩn hóa Xuyên cạnh (Cross-Edge Normalization - CEN), thì sự cạnh tranh giữa các phép toán khác loại bị triệt tiêu, dẫn đến việc loại bỏ ưu thế phi lý của các phép toán không tham số (skip-connect)."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Cross-Edge Normalization, Skip-connection, Operation Set]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_013
+  RELATION_TYPE: Bổ trợ
+SPECIALIST_DOMAIN: SCIENTIST
+SOURCES: [5-7]
+
+DYNAMIC_ID: DYN_NAS_028
+CAUSAL_CHAIN: "Nếu sử dụng Chuyển đổi Cấu trúc Cường bức (Induced Structural Transition - IST), thì một mô hình phụ trợ sẽ cầu nối cấu trúc giữa supernet dày đặc và kiến trúc thưa, dẫn đến giảm thiểu Structure Gap."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Induced Structural Transition, Supernet, Discretization Gap]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_008
+  RELATION_TYPE: Tương hỗ
+SPECIALIST_DOMAIN: ENGINEER
+SOURCES: [8-10]
+
+DYNAMIC_ID: DYN_NAS_029
+CAUSAL_CHAIN: "Động lực học Khớp cặp Song tuyến (Bilinear Coupling): Nếu chọn sai phép toán (alpha) trên một cạnh, thì việc chọn cạnh (beta) bị sai lệch và ngược lại, dẫn đến nhu cầu về cơ chế Backtracking để sửa lỗi tối ưu hóa."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Bilinear Optimization, Architecture Parameters, Edge parameters (beta)]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_021
+  RELATION_TYPE: Tiền đề
+SPECIALIST_DOMAIN: SCIENTIST
+SOURCES: [11-13]
+
+DYNAMIC_ID: DYN_NAS_030
+CAUSAL_CHAIN: "Nếu áp dụng Bộ chọn Kiến trúc Ưu tiên (Preferred Selector) dựa trên zero-shot proxy trước khi train, thì không gian tìm kiếm supernet được thu hẹp vào các vùng tiềm năng, dẫn đến hiệu quả hội tụ tăng vọt."
+LOOP_TYPE: Reinforcing
+NODES_INVOLVED: [Preferred Search Space, Zero-Shot NAS, Supernet training]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_015
+  RELATION_TYPE: Tiền đề
+SPECIALIST_DOMAIN: STRATEGIST
+SOURCES: [14-16]
+
+DYNAMIC_ID: DYN_NAS_031
+CAUSAL_CHAIN: "Nếu sử dụng Gumbel-TopK Sampler để sinh các single-path sub-graphs loại trừ lẫn nhau, thì bộ nhớ GPU được tối ưu hóa đồng thời với việc duy trì tính đa dạng kiến trúc trong mỗi bước cập nhật."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Gumbel-Softmax Strategy, Path Binarization, GPU Memory]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_017
+  RELATION_TYPE: Bổ trợ
+SPECIALIST_DOMAIN: ENGINEER
+SOURCES: [17-19]
+
+DYNAMIC_ID: DYN_NAS_032
+CAUSAL_CHAIN: "Nếu thêm số hạng Ổn định hóa (Stability Regularization) vào validation loss, thì phương sai của tham số alpha giảm, dẫn đến quá trình tìm kiếm ít nhạy cảm hơn với nhiễu dữ liệu."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Stability Regularization, Architecture Parameters, Search Strategy]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_006
+  RELATION_TYPE: Bổ trợ
+SPECIALIST_DOMAIN: SCIENTIST
+SOURCES: [20, 21]
+
+DYNAMIC_ID: DYN_NAS_033
+CAUSAL_CHAIN: "Động lực học Tự chú ý Hypergraph (HGNN-AS): Nếu tích hợp self-attention vào liên kết hyperedge, thì hệ thống phân biệt được các nút lân cận bị mislinked (nhiễu), dẫn đến biểu diễn nút chính xác hơn cho NAS trên đồ thị."
+LOOP_TYPE: Reinforcing
+NODES_INVOLVED: [Hypergraph Neural Network, Self-attention mechanism, Node representation]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_026
+  RELATION_TYPE: Tương hỗ
+SPECIALIST_DOMAIN: DATA SCIENTIST
+SOURCES: [22-25]
+
+DYNAMIC_ID: DYN_NAS_034
+CAUSAL_CHAIN: "Hiện tượng Nhầm lẫn Proxy (Proxy Confusion): Nếu sử dụng gradient-based proxy (như SNIP) mà không có layer normalization trên các isomers, thì điểm số bị lệch do độ sâu lớp, dẫn đến việc chọn nhầm các kiến trúc tệ nhất."
+LOOP_TYPE: Linear
+NODES_INVOLVED: [Zero-Shot Proxies, Normalization, Transformer Search Space]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_018
+  RELATION_TYPE: Hệ quả
+SPECIALIST_DOMAIN: DATA SCIENTIST
+SOURCES: [15, 26]
+
+DYNAMIC_ID: DYN_NAS_035
+CAUSAL_CHAIN: "Nếu áp dụng Lấy mẫu dựa trên Tính mới (Novelty Driven Sampling), thì agent ưu tiên thăm dò các vùng không gian chưa biết thay vì các vùng có điểm cao hiện tại, dẫn đến việc giảm thiểu Multi-model Forgetting trong Supernet."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Novelty Search, Supernet, Catastrophic Forgetting]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_012
+  RELATION_TYPE: Đối nghịch
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+SOURCES: [27-29]
+
+DYNAMIC_ID: DYN_NAS_036
+CAUSAL_CHAIN: "Nếu sử dụng Không gian tìm kiếm Phân cấp (Hierarchical), thì bài toán tìm kiếm được phân rã thành các cấp độ Motif lặp lại, dẫn đến giảm độ phức tạp tổ hợp nhưng yêu cầu cơ chế căn chỉnh (alignment) đa tầng."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Hierarchical Search Space, Motif, Search Strategy]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_001
+  RELATION_TYPE: Đối nghịch
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+SOURCES: [1-4]
+
+DYNAMIC_ID: DYN_NAS_037
+CAUSAL_CHAIN: "Động lực học Căn chỉnh Huấn luyện Động (Dynamic Epoch Scaling): Nếu một kiến trúc ứng viên có số lượng tham số lớn hơn, thì hệ thống tự động tăng số lượng epoch huấn luyện tương ứng, dẫn đến duy trì tính ổn định của tương quan thứ hạng (Ranking Stability)."
+LOOP_TYPE: Reinforcing
+NODES_INVOLVED: [Dynamic Learning Rankings, Parameters, Training Protocol]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_018
+  RELATION_TYPE: Đối nghịch
+SPECIALIST_DOMAIN: DATA SCIENTIST
+SOURCES: [5-7]
+
+DYNAMIC_ID: DYN_NAS_038
+CAUSAL_CHAIN: "Nếu các Ràng buộc phần cứng cứng (Hard Constraints) được kích hoạt ngay trong Search Phase, thì thuật toán thực hiện cắt tỉa (Pruning) tức thời các nhánh vi phạm VRAM/Flash, dẫn đến thu hẹp không gian tìm kiếm thực tế về phía vùng khả thi (Feasible Region)."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Hardware Resource Thresholding, Search Space, Path-level Pruning]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_014
+  RELATION_TYPE: Tương hỗ
+SPECIALIST_DOMAIN: ENGINEER
+SOURCES: [8-10]
+
+DYNAMIC_ID: DYN_NAS_039
+CAUSAL_CHAIN: "Động lực học Hội tụ Đơn tầng (One-stage ISTA): Nếu áp dụng mã hóa thưa ISTA trong một mạng duy nhất cho cả tìm kiếm và đánh giá, thì các khoảng cách về Depth/Width/Batch-size bị triệt tiêu, dẫn đến việc thu được kiến trúc và trọng số tối ưu đồng thời."
+LOOP_TYPE: Linear
+NODES_INVOLVED: [One-stage ISTA-NAS, Sparsity-Consistency Principle, Optimization Gap]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_008
+  RELATION_TYPE: Tương hỗ
+SPECIALIST_DOMAIN: SCIENTIST
+SOURCES: [11-13]
+
+DYNAMIC_ID: DYN_NAS_040
+CAUSAL_CHAIN: "Vòng lặp Phân nhánh dựa trên Ái lực (Task Affinity Branching): Nếu ái lực giữa các tác vụ (Task Affinity) thấp ở các tầng cao, thì Hypernet kích hoạt cơ chế Branching Regularization để tách biệt các luồng xử lý, dẫn đến tối ưu hóa tài nguyên cho từng tác vụ riêng biệt."
+LOOP_TYPE: Balancing
+NODES_INVOLVED: [Branching Regularization, Task Affinity, Multi-Task Preference]
+POTENTIAL_CONNECTIONS:
+  TARGET_DYNAMIC_NODE: DYN_NAS_020
+  RELATION_TYPE: Bổ trợ
+SPECIALIST_DOMAIN: STRATEGIST
+SOURCES: [14-16]
+
+--------------------------------------------------------------------------------
+
+
+layer_4:
+
+NODE_ID: SEM_NAS_001
+SEMANTIC_DESCRIPTION: "Bản chất của sự đánh đổi giữa việc khai thác các vùng kiến trúc đã biết và khám phá các motif mới lạ trong không gian tìm kiếm khổng lồ [1, 2]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Lý thuyết Thăm dò/Khai thác (Exploration-Exploitation)"
+  ASPECT: "Sự cân bằng trong chiến lược điều hướng"
+  DIFFERENT_IN: "Áp dụng trên không gian đồ thị của các phép toán nơ-ron thay vì các hành động RL đơn thuần"
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_002
+    TYPE: Opposite
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Quản trị chiến lược doanh nghiệp"
+  LINK_LOGIC: "Cân bằng giữa việc tối ưu hóa sản phẩm hiện có và R&D cho sản phẩm đột phá."
+SPECIALIST_SUGGESTION: STRATEGIST
+
+NODE_ID: SEM_NAS_002
+SEMANTIC_DESCRIPTION: "Sự giới hạn do kiến thức con người áp đặt lên không gian tìm kiếm, giúp tăng hiệu quả nhưng làm giảm khả năng khám phá các khối xây dựng mới [1, 3, 4]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Thành kiến xác nhận (Confirmation Bias)"
+  ASPECT: "Giới hạn sự sáng tạo trong một khuôn mẫu có sẵn"
+  DIFFERENT_IN: "Đây là sự đánh đổi có tính toán để giảm chi phí tính toán trong NAS."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_014
+    TYPE: Opposite
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Thiết kế kiến trúc đô thị"
+  LINK_LOGIC: "Sử dụng các module mẫu giáo để xây dựng nhanh nhưng hạn chế kiến trúc phá cách."
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+
+NODE_ID: SEM_NAS_003
+SEMANTIC_DESCRIPTION: "Độ tin cậy của việc ước tính hiệu suất trong Supernet so với khi huấn luyện độc lập; cốt lõi của bài toán chia sẻ trọng số [5-7]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Sự phản chiếu qua gương nhiễu"
+  ASPECT: "Độ tương quan giữa hình ảnh (Supernet) và thực thể (Retraining)"
+  DIFFERENT_IN: "Đo lường bằng các chỉ số thống kê như Kendall's Tau."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_006
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Đánh giá nhân sự (HR)"
+  LINK_LOGIC: "Độ tương quan giữa điểm số bài test nhanh và hiệu suất làm việc thực tế của nhân viên."
+SPECIALIST_SUGGESTION: DATA SCIENTIST
+
+NODE_ID: SEM_NAS_004
+SEMANTIC_DESCRIPTION: "Quá trình làm mịn không gian rời rạc thành liên tục để áp dụng gradient descent, biến việc thiết kế thành một dòng chảy toán học [8-10]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Sự chuyển pha từ rắn sang lỏng"
+  ASPECT: "Biến các thực thể cứng nhắc thành trạng thái có thể uốn nắn được"
+  DIFFERENT_IN: "Trạng thái lỏng chỉ là tạm thời để tìm ra điểm tối ưu cho cấu trúc rắn."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_008
+    TYPE: Evolution
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Đàm phán ngoại giao"
+  LINK_LOGIC: "Nới lỏng các điều khoản cứng nhắc thành các vùng thảo luận mềm để tìm điểm đồng thuận tối ưu."
+SPECIALIST_SUGGESTION: SCIENTIST
+
+NODE_ID: SEM_NAS_005
+SEMANTIC_DESCRIPTION: "Khả năng của hệ thống NAS duy trì hiệu suất vượt trội khi chuyển đổi từ tác vụ nhỏ (proxy) sang tác vụ lớn (target) hoặc phần cứng mới [11-13]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Tính di truyền (Heritability)"
+  ASPECT: "Sự bảo toàn các đặc điểm ưu việt qua các môi trường khác nhau"
+  DIFFERENT_IN: "Được định lượng bằng độ lệch độ chính xác (Transfer accuracy gap)."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_009
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Sinh học tiến hóa"
+  LINK_LOGIC: "Khả năng của một loài thích nghi với các hệ sinh thái khác nhau mà vẫn giữ được ưu thế sinh tồn."
+SPECIALIST_SUGGESTION: ENGINEER
+
+NODE_ID: SEM_NAS_006
+SEMANTIC_DESCRIPTION: "Cơ chế mà tất cả các kiến trúc ứng viên cùng đóng góp vào một bộ tham số chung, tạo nên một thực thể tri thức tập thể [6, 14, 15]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Trí nhớ tập thể (Collective Memory)"
+  ASPECT: "Chia sẻ kinh nghiệm để giảm thiểu chi phí học lại từ đầu"
+  DIFFERENT_IN: "Có thể dẫn đến sự ghi đè tri thức (catastrophic forgetting)."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_012
+    TYPE: Evolution
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Kinh tế chia sẻ (Sharing Economy)"
+  LINK_LOGIC: "Tối ưu hóa tài nguyên thông qua việc nhiều người dùng chung một hạ tầng kỹ thuật."
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+
+NODE_ID: SEM_NAS_007
+SEMANTIC_DESCRIPTION: "Bản chất toán học của việc tối ưu hóa đồng thời cấu trúc (cấp cao) và trọng số (cấp thấp), tạo nên sự tương tác nhân quả phức tạp [16-18]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Mối quan hệ Chủ-Tớ (Principal-Agent)"
+  ASPECT: "Hai tầng ra quyết định ảnh hưởng lẫn nhau"
+  DIFFERENT_IN: "Mục tiêu cuối cùng là sự hợp nhất hiệu suất chứ không phải mâu thuẫn lợi ích."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_004
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Chính sách công"
+  LINK_LOGIC: "Chính phủ (cấp trên) ra luật để điều chỉnh hành vi thị trường (cấp dưới) nhằm tối ưu phúc lợi xã hội."
+SPECIALIST_SUGGESTION: SCIENTIST
+
+NODE_ID: SEM_NAS_008
+SEMANTIC_DESCRIPTION: "Sai số nảy sinh khi chuyển đổi từ biểu diễn liên tục (alpha) về kiến trúc rời rạc cuối cùng; điểm đứt gãy giữa lý thuyết và thực thi [7, 9, 19]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Mất mát khi số hóa (Quantization Loss)"
+  ASPECT: "Sự khác biệt giữa thế giới thực (liên tục) và mô hình (rời rạc)"
+  DIFFERENT_IN: "Xảy ra tại thời điểm quyết định cấu trúc (argmax)."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_004
+    TYPE: Opposite
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Sản xuất công nghiệp"
+  LINK_LOGIC: "Sự sai lệch giữa bản vẽ thiết kế 3D hoàn hảo và sản phẩm vật lý được đúc ra."
+SPECIALIST_SUGGESTION: ENGINEER
+
+NODE_ID: SEM_NAS_009
+SEMANTIC_DESCRIPTION: "Việc tích hợp trực tiếp các ràng buộc vật lý (độ trễ, bộ nhớ) vào hàm mục tiêu tìm kiếm, biến NAS thành một nghệ nhân may đo kiến trúc [20-22]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Kiến trúc theo ngữ cảnh (Contextual Architecture)"
+  ASPECT: "Thiết kế dựa trên giới hạn của địa hình và vật liệu"
+  DIFFERENT_IN: "Sử dụng các số liệu thực thi trên chip thay vì các tiêu chí thẩm mỹ."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_010
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Thiết kế sản phẩm (Industrial Design)"
+  LINK_LOGIC: "Thiết kế thiết bị cầm tay dựa trên kích thước lòng bàn tay và thời lượng pin tối đa."
+SPECIALIST_SUGGESTION: ENGINEER
+
+NODE_ID: SEM_NAS_010
+SEMANTIC_DESCRIPTION: "Tập hợp các giải pháp tối ưu nơi không thể cải thiện một chỉ số (như độ chính xác) mà không làm tệ đi chỉ số khác (như tốc độ) [23-25]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Sự thỏa hiệp hoàn hảo (The Perfect Trade-off)"
+  ASPECT: "Trạng thái cân bằng không thể tối ưu thêm"
+  DIFFERENT_IN: "Trong NAS, đường biên này dịch chuyển dựa trên không gian tìm kiếm và thuật toán."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_009
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Kinh tế học vĩ mô"
+  LINK_LOGIC: "Sự đánh đổi giữa lạm phát và thất nghiệp trong các mô hình tăng trưởng."
+SPECIALIST_SUGGESTION: STRATEGIST
+
+NODE_ID: SEM_NAS_011
+SEMANTIC_DESCRIPTION: "Quá trình nén và mã hóa các đặc trưng cấu trúc toàn cục (macro) và cục bộ (micro) vào một không gian latent để máy tính có thể 'hiểu' kiến trúc [24, 26, 27]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Bản đồ gen (Genome Mapping)"
+  ASPECT: "Mã hóa thông tin phức tạp thành chuỗi ký tự chức năng"
+  DIFFERENT_IN: "Phục vụ cho việc dự báo hiệu suất thay vì sinh sản sinh học."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_012
+    TYPE: Evolution
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Ngôn ngữ học"
+  LINK_LOGIC: "Cách các từ ngữ và cú pháp được nhúng vào vector để máy hiểu ngữ nghĩa câu."
+SPECIALIST_SUGGESTION: SCIENTIST
+
+NODE_ID: SEM_NAS_012
+SEMANTIC_DESCRIPTION: "Sự phân tách giữa bộ máy sinh tham số (genotype) và các trọng số thực thi (phenotype), cho phép hệ thống tự điều chỉnh mà không cần huấn luyện lại [22, 28, 29]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Phần mềm và Phần cứng"
+  ASPECT: "Sự tách biệt giữa logic điều khiển và thực thể vận hành"
+  DIFFERENT_IN: "Ở đây cả hai đều là mạng nơ-ron, nhưng một bên sinh ra bên kia."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_006
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Lý thuyết điều khiển"
+  LINK_LOGIC: "Bộ điều biến sinh ra các tín hiệu điều chỉnh cho động cơ dựa trên phản hồi môi trường."
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+
+NODE_ID: SEM_NAS_013
+SEMANTIC_DESCRIPTION: "Khả năng của hệ thống NAS phát hiện các cấu trúc có hình dáng khác nhau nhưng mang lại hiệu suất tương đương, giảm thiểu sự lặp lại vô ích [30, 31]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Đồng phân hóa (Isomerism) trong hóa học"
+  ASPECT: "Cùng công thức hóa học nhưng cấu trúc không gian khác nhau"
+  DIFFERENT_IN: "Được áp dụng để cắt tỉa (pruning) không gian tìm kiếm."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_002
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Hóa dược"
+  LINK_LOGIC: "Phát hiện các phân tử có cấu trúc khác nhau nhưng cùng tác động lên một thụ thể mục tiêu."
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+
+NODE_ID: SEM_NAS_014
+SEMANTIC_DESCRIPTION: "Việc theo đuổi các cấu trúc hoàn toàn mới lạ, không dựa trên các khối xây dựng truyền thống, nhằm vượt qua các giới hạn hiện tại của con người [1, 32, 33]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Đột biến sinh học (Biological Mutation)"
+  ASPECT: "Sự xuất hiện ngẫu nhiên của các đặc điểm chưa từng có"
+  DIFFERENT_IN: "Được hướng dẫn bởi các chiến lược tìm kiếm tính mới (Novelty Search)."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_002
+    TYPE: Opposite
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Nghệ thuật đương đại"
+  LINK_LOGIC: "Phá bỏ các quy tắc hội họa truyền thống để tạo ra các trường phái biểu đạt mới."
+SPECIALIST_SUGGESTION: CREATIVE EXPLORER
+
+NODE_ID: SEM_NAS_015
+SEMANTIC_DESCRIPTION: "Khả năng đánh giá kiến trúc 'ngay lập tức' dựa trên các chỉ số lý thuyết (như dòng chảy gradient) mà không cần tốn một epoch huấn luyện nào [34-36]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Trực giác thiên tài"
+  ASPECT: "Nhận diện khả năng thành công mà không cần thử nghiệm thực tế"
+  DIFFERENT_IN: "Dựa trên các nền tảng toán học khắt khe như Neural Tangent Kernel."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_001
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Đầu tư mạo hiểm (VC)"
+  LINK_LOGIC: "Đánh giá tiềm năng của một startup dựa trên mô hình kinh doanh và đội ngũ trước khi giải ngân."
+SPECIALIST_SUGGESTION: STRATEGIST
+
+NODE_ID: SEM_NAS_016
+SEMANTIC_DESCRIPTION: "Độ trung thực của 'hồ sơ năng lực' kiến trúc bên trong Supernet; bản chất của việc liệu một ứng viên có thực sự giỏi hay chỉ đang hưởng lợi từ trọng số chia sẻ [7, 8]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Sự minh bạch trong đánh giá năng lực"
+  ASPECT: "Mối tương quan giữa biểu hiện trong nhóm (Supernet) và năng lực độc lập (Stand-alone)"
+  DIFFERENT_IN: "Đo lường bằng các hệ số tương quan thứ hạng như Kendall’s Tau thay vì cảm tính [9, 10]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_003
+    TYPE: Evolution
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Quản trị nhân sự và Tài năng"
+  LINK_LOGIC: "Phân biệt giữa thành công của cá nhân và thành công do hệ thống hỗ trợ."
+SPECIALIST_SUGGESTION: DATA SCIENTIST
+
+NODE_ID: SEM_NAS_017
+SEMANTIC_DESCRIPTION: "Sự thấu hiểu thời điểm bão hòa tri thức để dừng tìm kiếm, ngăn chặn việc thuật toán 'sa đà' vào các kết nối tắt vô ích [11, 12]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Luật lợi nhuận giảm dần (Law of Diminishing Returns)"
+  ASPECT: "Điểm mà nỗ lực bỏ thêm không còn mang lại giá trị tương xứng"
+  DIFFERENT_IN: "Sử dụng các tiêu chí toán học như số lượng skip-connect hoặc sự ổn định của alpha [6, 13]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_001
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Lý thuyết trò chơi và Đầu tư chứng khoán"
+  LINK_LOGIC: "Xác định điểm chốt lời tối ưu trước khi thị trường đảo chiều (sụp đổ hiệu suất)."
+SPECIALIST_SUGGESTION: STRATEGIST
+
+NODE_ID: SEM_NAS_018
+SEMANTIC_DESCRIPTION: "Khả năng bảo toàn bản sắc kiến trúc trước các biến động dữ liệu hoặc các cuộc tấn công đối nghịch có chủ đích [14, 15]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Hệ thống miễn dịch sinh học"
+  ASPECT: "Duy trì chức năng cốt lõi trước các tác nhân gây nhiễu bên ngoài"
+  DIFFERENT_IN: "Tối ưu hóa thông qua các vòng lặp huấn luyện đối nghịch (Adversarial Training) [16, 17]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_005
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "An ninh mạng và Hạ tầng trọng yếu"
+  LINK_LOGIC: "Thiết kế hệ thống có khả năng tự phục hồi hoặc chống chịu sai số."
+SPECIALIST_SUGGESTION: SCIENTIST
+
+NODE_ID: SEM_NAS_019
+SEMANTIC_DESCRIPTION: "Sự nhất quán giữa cấu trúc topo lý thuyết và khả năng thực thi vật lý trên các thiết bị giới hạn tài nguyên (MCU, NPU) [18, 19]."
+ANALOGY_HUB:
+  SIMILAR_TO: "May đo theo kích thước cơ thể (Bespoke Tailoring)"
+  ASPECT: "Mọi đường nét kiến trúc phải khớp hoàn hảo với 'số đo' phần cứng"
+  DIFFERENT_IN: "Sử dụng độ trễ (latency) làm phản hồi trực tiếp thay vì các số liệu lý thuyết [20, 21]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_009
+    TYPE: Evolution
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Quy hoạch đô thị thông minh"
+  LINK_LOGIC: "Thiết kế hạ tầng giao thông dựa trên giới hạn quỹ đất và ngân sách thực tế."
+SPECIALIST_SUGGESTION: ENGINEER
+
+NODE_ID: SEM_NAS_020
+SEMANTIC_DESCRIPTION: "Rủi ro về sự phai nhạt tri thức cũ khi hệ thống nỗ lực học các kiến trúc hoặc tác vụ mới trong Supernet [22, 23]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Sự mỏng manh của ký ức (Memory Fragility)"
+  ASPECT: "Thông tin mới chèn ép và xóa bỏ thông tin cũ"
+  DIFFERENT_IN: "Giải quyết bằng các cơ chế lưu trữ bộ nhớ (Experience Replay) hoặc đóng băng tham số [24, 25]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_006
+    TYPE: Opposite
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Quản trị tri thức tổ chức (KM)"
+  LINK_LOGIC: "Ngăn chặn việc mất mát kinh nghiệm khi nhân sự thay đổi hoặc tái cấu trúc."
+SPECIALIST_SUGGESTION: PSYCHOLOGIST
+
+NODE_ID: SEM_NAS_021
+SEMANTIC_DESCRIPTION: "Tư duy module hóa kiến trúc, nơi các motif nhỏ lặp lại tạo nên một chỉnh thể phức tạp nhưng dễ quản lý [26-28]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Trò chơi Lego"
+  ASPECT: "Sử dụng các viên gạch tiêu chuẩn để xây dựng các kỳ quan đa dạng"
+  DIFFERENT_IN: "Các khối (cells) có thể tự tiến hóa cấu trúc bên trong thay vì cố định [29, 30]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_002
+    TYPE: Evolution
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Sản xuất công nghiệp hiện đại"
+  LINK_LOGIC: "Sử dụng các nền tảng (platform) dùng chung để tùy biến nhiều dòng sản phẩm."
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+
+NODE_ID: SEM_NAS_022
+SEMANTIC_DESCRIPTION: "Bản chất của việc điều hướng dòng chảy thông tin qua các đường dẫn ưu tiên, biến mạng nơ-ron thành một thực thể sống động có chọn lọc [31, 32]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Sự điều phối dòng chảy thủy lợi"
+  ASPECT: "Đóng nhánh này để tăng cường áp lực và lưu lượng cho nhánh kia"
+  DIFFERENT_IN: "Tối ưu hóa dựa trên gradient để chọn ra con đường hiệu quả nhất [33, 34]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_004
+    TYPE: Evolution
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Logistics và Quản trị chuỗi cung ứng"
+  LINK_LOGIC: "Tối ưu hóa lộ trình vận chuyển dựa trên lưu lượng và chi phí biến đổi."
+SPECIALIST_SUGGESTION: ENGINEER
+
+NODE_ID: SEM_NAS_023
+SEMANTIC_DESCRIPTION: "Sự thấu thị tiên tri về hiệu suất mà không cần trải nghiệm thực tế; đỉnh cao của lý thuyết ước tính kiến trúc [35, 36]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Khả năng đọc vị tương lai"
+  ASPECT: "Dự đoán kết quả dựa trên các dấu hiệu toán học tiềm ẩn (như NTK) [37, 38]."
+  DIFFERENT_IN: "Dựa hoàn toàn vào dữ liệu cấu trúc thay vì dữ liệu huấn luyện [26, 39]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_015
+    TYPE: Evolution
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Thẩm định dự án đầu tư"
+  LINK_LOGIC: "Đánh giá khả năng thành công của dự án dựa trên cấu trúc mô hình kinh doanh."
+SPECIALIST_SUGGESTION: SCIENTIST
+
+NODE_ID: SEM_NAS_024
+SEMANTIC_DESCRIPTION: "Khả năng nới lỏng các quy tắc cứng nhắc để thúc đẩy sự sáng tạo kiến trúc vượt ngoài mong đợi của con người [40, 41]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Sự phá vỡ khuôn mẫu (Paradigm Shift)"
+  ASPECT: "Thử nghiệm các tổ hợp 'phi lý' để tìm ra sự đột phá"
+  DIFFERENT_IN: "Vẫn duy trì tính khả thi toán học thông qua các ràng buộc mềm [42, 43]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_014
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "R&D và Sáng tạo nghệ thuật"
+  LINK_LOGIC: "Khuyến khích các thử nghiệm 'sai số' để phát hiện các nguyên lý mới."
+SPECIALIST_SUGGESTION: CREATIVE EXPLORER
+
+NODE_ID: SEM_NAS_025
+SEMANTIC_DESCRIPTION: "Sự đồng bộ hóa giữa biểu diễn kiến trúc toàn cục và hạt nhân sinh trọng số, tạo nên một hệ sinh thái tri thức nhất quán [44-46]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Sự hòa hợp giữa Thân và Tâm"
+  ASPECT: "Ý chí (kiến trúc) và hành động (trọng số) phải phản ánh lẫn nhau"
+  DIFFERENT_IN: "Sử dụng Graph Neural Networks để bắc cầu giữa không gian topo và không gian tham số [44, 46]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_011
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Triết học hệ thống"
+  LINK_LOGIC: "Sự thống nhất giữa lý thuyết tổng quát và thực thi chi tiết."
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+
+NODE_ID: SEM_NAS_026
+SEMANTIC_DESCRIPTION: "Bản chất của việc 'học cách để thiết kế', biến kinh nghiệm từ các lần tìm kiếm thất bại thành trí tuệ cho các thế hệ sau [47, 48]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Sự tích lũy văn minh"
+  ASPECT: "Thế hệ sau không phải bắt đầu lại từ con số không"
+  DIFFERENT_IN: "Mã hóa tri thức thành các bộ dự báo (predictors) hoặc meta-weights [49, 50]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_007
+    TYPE: Evolution
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Giáo dục và Đào tạo"
+  LINK_LOGIC: "Xây dựng các chương trình học thích nghi dựa trên phản hồi của người học."
+SPECIALIST_SUGGESTION: STRATEGIST
+
+NODE_ID: SEM_NAS_027
+SEMANTIC_DESCRIPTION: "Đặc tính về sự công bằng trong cạnh tranh giữa các phép toán, loại bỏ ưu thế sinh bẩm sinh của các kết nối đơn giản [51-53]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Sân chơi bình đẳng (Level Playing Field)"
+  ASPECT: "Mọi ứng viên đều có cơ hội thể hiện tiềm năng thực sự"
+  DIFFERENT_IN: "Sử dụng hàm Sigmoid độc lập thay vì Softmax để phá vỡ sự kìm kẹp lẫn nhau [53, 54]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_016
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Chính sách kinh tế chống độc quyền"
+  LINK_LOGIC: "Ngăn chặn các thực thể lớn (skip-connect) chèn ép các thực thể mới nổi (conv)."
+SPECIALIST_SUGGESTION: DATA SCIENTIST
+
+NODE_ID: SEM_NAS_028
+SEMANTIC_DESCRIPTION: "Khả năng của hệ thống tự cấu trúc lại để giải quyết các tác vụ đa mục tiêu đồng thời, tìm kiếm điểm cân bằng tối ưu trên đường biên Pareto [55, 56]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Kỹ năng đa nhiệm (Multitasking Mastery)"
+  ASPECT: "Cân bằng giữa nhiều mục tiêu mâu thuẫn (Độ chính xác vs Tốc độ)"
+  DIFFERENT_IN: "Tự động phân nhánh kiến trúc dựa trên sự tương đồng của tác vụ [57, 58]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_010
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Quản trị dự án đa mục tiêu"
+  LINK_LOGIC: "Phân bổ nguồn lực tối ưu cho các dự án có yêu cầu kỹ thuật khác nhau."
+SPECIALIST_SUGGESTION: STRATEGIST
+
+NODE_ID: SEM_NAS_029
+SEMANTIC_DESCRIPTION: "Sự chuyển dịch từ việc thiết kế các thực thể tĩnh sang việc thiết kế các 'quy trình sinh trưởng' kiến trúc tự động [59, 60]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Từ chế tạo máy móc sang nuôi cấy sinh vật"
+  ASPECT: "Kiến trúc tự 'mọc' ra dựa trên các quy tắc di truyền"
+  DIFFERENT_IN: "Được điều khiển bởi các hàm loss và entropy thay vì DNA hóa học [41, 59]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_012
+    TYPE: Evolution
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Sinh học tổng hợp"
+  LINK_LOGIC: "Lập trình các phản ứng hóa sinh để tạo ra các cấu trúc hữu cơ mong muốn."
+SPECIALIST_SUGGESTION: SCIENTIST
+
+NODE_ID: SEM_NAS_030
+SEMANTIC_DESCRIPTION: "Trạng thái bão hòa của tri thức kiến trúc, nơi hệ thống NAS đạt đến giới hạn biểu diễn của không gian tìm kiếm hiện tại [6, 60]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Sự trưởng thành hoàn toàn"
+  ASPECT: "Không còn chỗ cho những cải tiến nhỏ lẻ mang tính đột phá"
+  DIFFERENT_IN: "Là tín hiệu để mở rộng Search Space hoặc thay đổi paradigm tìm kiếm [61, 62]."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_002
+    TYPE: Evolution
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Phát triển bản thân và Tổ chức"
+  LINK_LOGIC: "Nhận biết khi nào cần thay đổi môi trường hoặc tư duy để vượt qua ngưỡng bão hòa."
+SPECIALIST_SUGGESTION: STRATEGIST
+
+NODE_ID: SEM_NAS_031
+SEMANTIC_DESCRIPTION: "Bản chất của việc chia tách không gian tìm kiếm thành các vùng độc lập để giảm thiểu sự nhiễu loạn tri thức giữa các nhóm kiến trúc [1, 2]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Sự phân ngăn trong kho lưu trữ (Compartmentalization)"
+  ASPECT: "Cô lập các thực thể để tránh lây lan sai số hoặc nhiễu"
+  DIFFERENT_IN: "Mục tiêu là tăng độ chính xác của việc ước tính hiệu suất cục bộ thay vì bảo mật."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_020
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Quản trị rủi ro tài chính"
+  LINK_LOGIC: "Chia nhỏ danh mục đầu tư vào các quỹ tách biệt để ngăn chặn sự sụp đổ dây chuyền."
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+
+NODE_ID: SEM_NAS_032
+SEMANTIC_DESCRIPTION: "Sự xóa bỏ ranh giới giữa giai đoạn tìm kiếm và giai đoạn đánh giá, biến hai thực thể thành một chỉnh thể duy nhất không thể tách rời [3-5]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Sự hóa nhộng (Chrysalis)"
+  ASPECT: "Quá trình biến đổi bên trong mạng nơ-ron nơi cấu trúc và trọng số cùng trưởng thành đồng thời"
+  DIFFERENT_IN: "Dựa trên logic toán học của Batch Normalization và mã hóa thưa."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_004
+    TYPE: Evolution
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Thiết kế và Chế tạo tích hợp (Integrated Design)"
+  LINK_LOGIC: "Quy trình in 3D nơi thiết kế hình dáng và đặc tính vật liệu được quyết định cùng lúc."
+SPECIALIST_SUGGESTION: SCIENTIST
+
+NODE_ID: SEM_NAS_033
+SEMANTIC_DESCRIPTION: "Khả năng của hệ thống tự động phân nhánh chức năng dựa trên sự tương đồng về đặc trưng của các nhiệm vụ khác nhau [6, 7]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Sự biệt hóa tế bào gốc (Cell Differentiation)"
+  ASPECT: "Từ một gốc chung, các nhánh phát triển chuyên biệt tùy theo tín hiệu môi trường"
+  DIFFERENT_IN: "Điều phối bởi hàm loss điều hòa phân nhánh (Branching Regularization)."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_028
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Cơ cấu tổ chức tập đoàn đa ngành"
+  LINK_LOGIC: "Sử dụng chung bộ phận hỗ trợ (back-office) nhưng tách biệt các đơn vị kinh doanh chiến lược."
+SPECIALIST_SUGGESTION: STRATEGIST
+
+NODE_ID: SEM_NAS_034
+SEMANTIC_DESCRIPTION: "Đặc tính bảo tồn trật tự logic của các trạng thái kiến trúc qua không gian latent, đảm bảo Hypernetwork hiểu được trình tự các lớp [8, 9]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Tính mạch lạc của dòng thời gian (Chronological Coherence)"
+  ASPECT: "Đảm bảo sự kiện trước và sau luôn giữ đúng vị trí tương đối"
+  DIFFERENT_IN: "Sử dụng Temporal Position Preservation để tránh việc Hypernet bị 'loạn thị' cấu trúc."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_025
+    TYPE: Complementary
+OPERATIONAL_IDENTITY: Stable
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Phục dựng khảo cổ học"
+  LINK_LOGIC: "Sắp xếp các mảnh vỡ dựa trên tầng địa chất để hiểu đúng quy trình lịch sử."
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+
+NODE_ID: SEM_NAS_035
+SEMANTIC_DESCRIPTION: "Bản chất của bộ máy chuyển đổi ngôn ngữ đồ thị (DAG) sang không gian vector, đóng vai trò là cầu nối tri thức giữa cấu trúc và tham số [10-12]."
+ANALOGY_HUB:
+  SIMILAR_TO: "Đá Rosetta (Rosetta Stone)"
+  ASPECT: "Giải mã thông tin từ một hệ thống ký hiệu này sang hệ thống ý nghĩa khác"
+  DIFFERENT_IN: "Thực hiện thông qua các lớp Graph Convolutional Networks (GCN) lặp lại."
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: SEM_NAS_011
+    TYPE: Evolution
+OPERATIONAL_IDENTITY: Transformative
+CROSS_DOMAIN_POTENTIAL:
+  POTENTIAL_FIELD: "Dịch thuật máy và Ngôn ngữ học"
+  LINK_LOGIC: "Chuyển đổi cấu trúc cú pháp của một ngôn ngữ sang biểu diễn ngữ nghĩa trừu tượng."
+SPECIALIST_SUGGESTION: DATA SCIENTIST
+
+--------------------------------------------------------------------------------
+
+layer_5:
+
+METRIC_ID: MET_NAS_001
+METRIC_NAME: Top-1/Top-5 Accuracy
+CALCULATION_METHOD: Tỷ lệ phần trăm dự đoán đúng trên tập dữ liệu kiểm tra (ImageNet/CIFAR) sau khi kiến trúc đã được huấn luyện đầy đủ [1-3].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Parameter Size
+    RELATION: Tỉ lệ thuận (thông thường mô hình lớn có độ chính xác cao hơn) [4].
+  - TARGET_METRIC: Latency
+    RELATION: Tỉ lệ nghịch (Đánh đổi Pareto giữa độ chính xác và tốc độ) [5, 6].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Performance Estimator
+  LINK_LOGIC: Đây là chỉ số mục tiêu tối thượng mà mọi bộ dự báo hiệu suất phải hướng tới để đạt được sai số thấp nhất [7, 8].
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+
+METRIC_ID: MET_NAS_002
+METRIC_NAME: Kendall’s Tau Correlation (Rank Correlation)
+CALCULATION_METHOD: Hệ số đo lường sự tương quan thứ hạng giữa hiệu suất ước tính trong Supernet và hiệu suất thực tế khi huấn luyện độc lập [9-11].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Rank Disorder
+    RELATION: Điều kiện cần (Hệ số Tau thấp là chỉ báo trực tiếp của hiện tượng rối loạn thứ hạng) [12-14].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: One-Shot NAS / Weight Sharing
+  LINK_LOGIC: Chỉ số này quyết định tính khả thi của cơ chế chia sẻ trọng số; nếu Tau quá thấp, việc tìm kiếm dựa trên supernet sẽ vô nghĩa [15-17].
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+
+METRIC_ID: MET_NAS_003
+METRIC_NAME: Search Cost (GPU-Days/Hours)
+CALCULATION_METHOD: Tổng tài nguyên tính toán tiêu tốn cho quá trình tìm kiếm, thường đo bằng số ngày chạy trên một GPU NVIDIA V100/GTX 1080Ti [3, 18, 19].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Search Space Complexity
+    RELATION: Tỉ lệ thuận (Không gian tìm kiếm càng lớn, chi phí càng cao) [20, 21].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Efficiency-driven NAS (DARTS/ENAS)
+  LINK_LOGIC: Đây là chỉ số ROI chính để chứng minh tính ưu việt của các thuật toán NAS hiện đại so với các phương pháp RL sơ khai [22-24].
+SPECIALIST_SUPERVISOR: STRATEGIST
+
+METRIC_ID: MET_NAS_004
+METRIC_NAME: Latency (Inference Speed)
+CALCULATION_METHOD: Thời gian phản hồi thực tế (ms) của mô hình trên phần cứng mục tiêu, đo trực tiếp hoặc thông qua bảng tra cứu (lookup table) [3, 24, 25].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: FLOPs
+    RELATION: Tỉ lệ thuận (nhưng không hoàn toàn do cấu trúc phần cứng và tính song song) [3, 9].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Hardware-aware NAS (HW-NAS)
+  LINK_LOGIC: Là ràng buộc "sống còn" khi triển khai mô hình trên các thiết bị di động hoặc thiết bị biên [26-28].
+SPECIALIST_SUPERVISOR: ENGINEER
+
+METRIC_ID: MET_NAS_005
+METRIC_NAME: FLOPs (Floating Point Operations)
+CALCULATION_METHOD: Số lượng các phép toán dấu phẩy động cần thiết cho một lượt suy diễn, tính toán dựa trên cấu trúc các lớp mạng [2, 3, 24].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Energy Consumption
+    RELATION: Tỉ lệ thuận (Mô hình nhiều phép tính tiêu tốn nhiều điện năng hơn) [3, 27].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Resource-constrained NAS
+  LINK_LOGIC: Dùng làm proxy lý thuyết cho độ phức tạp tính toán trước khi đo đạc trên phần cứng thực tế [29, 30].
+SPECIALIST_SUPERVISOR: ENGINEER
+
+METRIC_ID: MET_NAS_006
+METRIC_NAME: Stability Variance (Standard Deviation)
+CALCULATION_METHOD: Độ lệch chuẩn của hiệu suất kiến trúc tìm được qua nhiều lần chạy với các random seeds khác nhau [18, 31, 32].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Search Strategy Reliability
+    RELATION: Tỉ lệ nghịch (Phương sai càng cao, thuật toán càng kém ổn định) [33, 34].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Gradient-based NAS
+  LINK_LOGIC: Kiểm chứng liệu thuật toán có xu hướng hội tụ vào các cực trị cục bộ do nhiễu khởi tạo hay không [35, 36].
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+
+METRIC_ID: MET_NAS_007
+METRIC_NAME: NDCG (Normalized Discounted Cumulative Gain)
+CALCULATION_METHOD: Chỉ số đánh giá chất lượng xếp hạng tập trung vào các kiến trúc tốt nhất (Top-K) thay vì toàn bộ không gian [14, 37].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Kendall’s Tau
+    RELATION: Đối trọng (NDCG ưu tiên độ chính xác ở vùng đỉnh Pareto hơn là sự nhất quán toàn cục) [38, 39].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: AceNAS / Performance Predictors
+  LINK_LOGIC: Quan trọng đối với các hệ thống cần tìm ra "nhà vô địch" thay vì phân loại mọi ứng viên [14, 40].
+SPECIALIST_SUPERVISOR: STRATEGIST
+
+METRIC_ID: MET_NAS_008
+METRIC_NAME: Peak Intermediate Tensor Size (RAM Usage)
+CALCULATION_METHOD: Kích thước bộ nhớ lớn nhất cần thiết để lưu trữ các bản đồ đặc trưng ẩn trong quá trình suy diễn [41-43].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: MCU Deployment Hard Constraint
+    RELATION: Điều kiện cần (Mô hình phải nhỏ hơn dung lượng RAM của chip) [22, 44].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Micro-controller NAS
+  LINK_LOGIC: Chỉ số quyết định việc một kiến trúc có thể "vừa" với các vi điều khiển giá rẻ hay không [27, 42].
+SPECIALIST_SUPERVISOR: ENGINEER
+
+METRIC_ID: MET_NAS_009
+METRIC_NAME: Relative Improvement (RI)
+CALCULATION_METHOD: RI = 100 * (Acc_NAS - Acc_Random) / Acc_Random; đo lường giá trị gia tăng của thuật toán so với tìm kiếm ngẫu nhiên [45].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Search Space Inductive Bias
+    RELATION: Tỉ lệ nghịch (Không gian được thiết kế quá tốt làm giảm RI của thuật toán tìm kiếm) [45].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: NAS Search Strategy
+  LINK_LOGIC: Dùng để xác định xem sự thành công của NAS đến từ thuật toán hay do không gian tìm kiếm đã được tối ưu sẵn bởi con người [45].
+SPECIALIST_SUPERVISOR: SCIENTIST
+
+METRIC_ID: MET_NAS_010
+METRIC_NAME: Model Size (Parameter Count)
+CALCULATION_METHOD: Tổng số lượng các trọng số có thể học được (weights) trong mô hình mạng [3, 18, 24].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Flash Memory Limit
+    RELATION: Điều kiện cần (Quyết định khả năng lưu giữ mô hình trên thiết bị) [42].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Mobile/Edge AI
+  LINK_LOGIC: Thông số cơ bản để đánh giá tính gọn nhẹ và khả năng triển khai thực tế [29, 30].
+SPECIALIST_SUPERVISOR: ENGINEER
+
+METRIC_ID: MET_NAS_011
+METRIC_NAME: Zero-Shot Score (NTK/SynFlow)
+CALCULATION_METHOD: Chỉ số đánh giá kiến trúc dựa trên cấu trúc topo mà không cần huấn luyện (training-free) [46, 47].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Search Efficiency
+    RELATION: Tỉ lệ thuận (Tăng tốc tìm kiếm lên hàng nghìn lần) [47].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Training-free NAS
+  LINK_LOGIC: Đây là trọng số thông tin "tức thời" giúp Hypernetwork thực hiện sàng lọc sơ bộ kiến trúc [48, 49].
+SPECIALIST_SUPERVISOR: SCIENTIST
+
+METRIC_ID: MET_NAS_012
+METRIC_NAME: R2 Score (Predictor Reliability)
+CALCULATION_METHOD: Hệ số xác định đo lường khả năng giải thích biến thiên của bộ dự báo đối với dữ liệu thực tế [50, 51].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Prediction Accuracy
+    RELATION: Tỉ lệ thuận [50].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Neural Predictors
+  LINK_LOGIC: Đánh giá xem bộ dự báo đã thực sự học được quy luật kiến trúc hay chỉ đang ghi nhớ dữ liệu [50].
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+
+METRIC_ID: MET_NAS_013
+METRIC_NAME: Task Affinity Weight
+CALCULATION_METHOD: Chỉ số đo lường mức độ tương đồng giữa các tác vụ để điều phối việc chia sẻ trọng số trong Multi-task NAS [52].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Branching Regularization
+    RELATION: Tỉ lệ nghịch (Ái lực thấp dẫn đến việc phân nhánh sớm) [52].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Multi-task Learning (MTL)
+  LINK_LOGIC: Điều phối cấu trúc Supernet để tránh xung đột gradient giữa các nhiệm vụ khác nhau [52].
+SPECIALIST_SUPERVISOR: STRATEGIST
+
+METRIC_ID: MET_NAS_014
+METRIC_NAME: Discretization Error Gap
+CALCULATION_METHOD: Độ lệch hiệu suất giữa mô hình liên tục (Softmax) và mô hình rời rạc (Argmax) cuối cùng [53, 54].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Sparsity Constraint
+    RELATION: Tỉ lệ nghịch (Ràng buộc thưa giúp giảm khoảng cách này) [55].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Differentiable NAS (DARTS)
+  LINK_LOGIC: Chỉ số quan trọng nhất để đánh giá tính nhất quán của quá trình tối ưu hóa liên tục [56, 57].
+SPECIALIST_SUPERVISOR: SCIENTIST
+
+METRIC_ID: MET_NAS_015
+METRIC_NAME: Query Cost (Samples)
+CALCULATION_METHOD: Số lượng kiến trúc ứng viên cần được đánh giá thực tế để bộ dự báo đạt được độ chính xác mục tiêu [1, 18, 58].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Generalization Capability
+    RELATION: Tỉ lệ nghịch (Thuật toán tốt cần ít mẫu hơn để hiểu không gian) [1, 12].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Few-shot NAS
+  LINK_LOGIC: Đo lường tính hiệu quả của các cơ chế học tăng cường biểu diễn như HyperNAS [1, 59].
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+
+METRIC_ID: MET_NAS_016
+METRIC_NAME: Preference Factor (q)
+CALCULATION_METHOD: Tham số điều khiển trọng số giữa các nhiệm vụ (Ví dụ: Accuracy vs Parameter Generation) trong hàm loss đa mục tiêu [60, 61].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Multi-task Balance
+    RELATION: Điều phối [62, 63].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Adaptive Multi-task Objective
+  LINK_LOGIC: Cho phép tùy chỉnh sự tập trung của hệ thống NAS vào các điểm khác nhau trên đường biên Pareto [1, 5, 64].
+SPECIALIST_SUPERVISOR: STRATEGIST
+
+METRIC_ID: MET_NAS_017
+METRIC_NAME: mBR (mean Best Rank)
+CALCULATION_METHOD: Thứ hạng trung bình của kiến trúc tốt nhất được chọn bởi bộ dự báo so với thứ hạng thực tế của nó [65].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: NDCG
+    RELATION: Tương hỗ [65].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Zero-cost Proxies
+  LINK_LOGIC: Đánh giá năng lực của các proxy trong việc xác định chính xác ứng viên tiềm năng nhất [65].
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+
+METRIC_ID: MET_NAS_018
+METRIC_NAME: Memory Consumption (Peak VRAM)
+CALCULATION_METHOD: Lượng bộ nhớ GPU lớn nhất bị chiếm dụng trong quá trình huấn luyện Supernet [66, 67].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Search Depth
+    RELATION: Tỉ lệ thuận [67, 68].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Differentiable NAS
+  LINK_LOGIC: Ràng buộc vật lý ngăn cản việc tìm kiếm các kiến trúc quá lớn trên phần cứng hạn chế [69, 70].
+SPECIALIST_SUPERVISOR: ENGINEER
+
+METRIC_ID: MET_NAS_019
+METRIC_NAME: Transfer Accuracy Gap
+CALCULATION_METHOD: Khoảng cách hiệu suất khi một kiến trúc được tìm thấy trên tác vụ proxy nhưng áp dụng trên tác vụ mục tiêu (target task) [58, 71].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Generalization ability
+    RELATION: Tỉ lệ thuận [58].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: ProxylessNAS
+  LINK_LOGIC: Đánh giá giá trị của việc tìm kiếm trực tiếp trên tập dữ liệu đích so với việc dùng proxy [72, 73].
+SPECIALIST_SUPERVISOR: SCIENTIST
+
+METRIC_ID: MET_NAS_020
+METRIC_NAME: Inference Speedup Ratio
+CALCULATION_METHOD: Tỷ lệ cải thiện tốc độ suy diễn của mô hình NAS so với mô hình thiết kế thủ công có cùng độ chính xác [74].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Significance & ROI
+    RELATION: Tỉ lệ thuận [74].
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Industrial NAS Applications
+  LINK_LOGIC: Chỉ số then chốt để chứng minh giá trị kinh tế và kỹ thuật của NAS trong môi trường sản xuất [74, 75].
+SPECIALIST_SUPERVISOR: STRATEGIST
+
+METRIC_ID: MET_NAS_021
+METRIC_NAME: Hypervolume (HV) Metric
+CALCULATION_METHOD: Đo lường kích thước của vùng bị áp đảo bởi tập hợp các giải pháp Pareto so với một điểm tham chiếu p trong không gian mục tiêu [1, 2].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Top-1/Top-5 Accuracy
+    RELATION: Tương hỗ (HV cao hơn chỉ ra sự cân bằng tốt hơn giữa Accuracy và Resource).
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Multi-objective NAS
+  LINK_LOGIC: Đây là chỉ số quan trọng nhất để đánh giá hiệu quả của các bộ điều khiển Hypernetwork khi tối ưu hóa đồng thời nhiều mục tiêu mâu thuẫn.
+SPECIALIST_SUPERVISOR: STRATEGIST
+
+METRIC_ID: MET_NAS_022
+METRIC_NAME: Uniformity Score
+CALCULATION_METHOD: Chỉ số đo lường mức độ phân bổ đều của các giải pháp trên đường biên Pareto Front để tránh sự tập trung quá mức vào một vùng đặc thù [3, 4].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Preference Factor (q)
+    RELATION: Tỉ lệ thuận (Khả năng đáp ứng linh hoạt các Preference khác nhau).
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Preference Conditioned Hypernetworks
+  LINK_LOGIC: Đảm bảo Hypernetwork có khả năng sinh ra các kiến trúc đa dạng tương ứng với mọi yêu cầu của người dùng.
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+
+METRIC_ID: MET_NAS_023
+METRIC_NAME: Dominant Eigenvalue of Hessian (λ_max)
+CALCULATION_METHOD: Trị riêng lớn nhất của ma trận Hessian của hàm mất mát đối với tham số kiến trúc alpha [5, 6].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Performance Collapse
+    RELATION: Tỉ lệ thuận (λ_max tăng đột ngột là dấu hiệu của bề mặt mất mát gồ ghề và sụp đổ hiệu suất).
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Differentiable NAS (DARTS)
+  LINK_LOGIC: Chỉ số này đóng vai trò là "hệ thống cảnh báo sớm" để kích hoạt các cơ chế dừng sớm (Early Stopping).
+SPECIALIST_SUPERVISOR: SCIENTIST
+
+METRIC_ID: MET_NAS_024
+METRIC_NAME: Training MSE Loss (Predictor Loss)
+CALCULATION_METHOD: Sai số bình phương trung bình giữa hiệu suất dự đoán của Surrogate Model và hiệu suất thực tế trên tập tập huấn [7].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: R2 Score
+    RELATION: Tỉ lệ nghịch.
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Neural Predictors / HyperNAS
+  LINK_LOGIC: Trọng số chính để huấn luyện hạt nhân GCN Encoder trong việc học biểu diễn kiến trúc.
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+
+METRIC_ID: MET_NAS_025
+METRIC_NAME: Pruning Ratio (p%)
+CALCULATION_METHOD: Tỷ lệ các phép toán hoặc kênh bị loại bỏ khỏi mô hình dày đặc ban đầu để đạt được mô hình thưa mục tiêu [8, 9].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Model Size (Params)
+    RELATION: Tỉ lệ nghịch.
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: ISTA-NAS / Sparse Coding
+  LINK_LOGIC: Tham số điều khiển độ thưa của cấu trúc cuối cùng trong các phương pháp tối ưu hóa một giai đoạn (one-stage).
+SPECIALIST_SUPERVISOR: ENGINEER
+
+METRIC_ID: MET_NAS_026
+METRIC_NAME: Accuracy Span (Δ Acc)
+CALCULATION_METHOD: Khoảng cách hiệu suất giữa kiến trúc tốt nhất và tệ nhất trong một nhóm kiến trúc có cùng quy mô tài nguyên [10, 11].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Search Space Complexity
+    RELATION: Tỉ lệ thuận.
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: NAS Benchmarking
+  LINK_LOGIC: Đánh giá chất lượng của không gian tìm kiếm; khoảng cách này càng lớn thì vai trò của thuật toán tìm kiếm càng quan trọng.
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+
+METRIC_ID: MET_NAS_027
+METRIC_NAME: Gumbel Temperature (ζ)
+CALCULATION_METHOD: Tham số điều khiển mức độ "cứng" của quyết định lấy mẫu đường dẫn trong Gumbel-Softmax [12, 13].
+SIGNIFICANCE_LEVEL: Low
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Discretization Error Gap
+    RELATION: Điều phối (Nhiệt độ thấp giúp giảm sai số khi rời rạc hóa).
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Gradient-based NAS / GDAS
+  LINK_LOGIC: Trọng số siêu tham số quyết định sự ổn định của dòng chảy gradient qua các đường dẫn rời rạc.
+SPECIALIST_SUPERVISOR: SCIENTIST
+
+METRIC_ID: MET_NAS_028
+METRIC_NAME: Confidence Interval (95% CI)
+CALCULATION_METHOD: Khoảng tin cậy thống kê cho độ chính xác trung bình sau nhiều lần chạy với các random seeds khác nhau [14].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Stability Variance
+    RELATION: Tương hỗ.
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Performance Estimators / HGNN-AS
+  LINK_LOGIC: Xác định độ tin cậy của các báo cáo hiệu suất khi so sánh các thuật toán SOTA.
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+
+METRIC_ID: MET_NAS_029
+METRIC_NAME: Standard Deviation of Kendall’s Tau
+CALCULATION_METHOD: Độ lệch chuẩn của hệ số tương quan thứ hạng, đo lường sự biến động của độ tin cậy supernet qua các vùng không gian khác nhau [15, 16].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Rank Disorder
+    RELATION: Tỉ lệ thuận.
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Few-shot NAS / Supernet Splitting
+  LINK_LOGIC: Chỉ số then chốt để quyết định khi nào cần chia nhỏ Supernet thành các vùng cục bộ (sub-regions) để giảm nhiễu.
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+
+METRIC_ID: MET_NAS_030
+METRIC_NAME: Branching Regularization Weight (λA, λI)
+CALCULATION_METHOD: Các hệ số điều khiển sự đánh đổi giữa chia sẻ đặc trưng tác vụ (Active Loss) và hạn chế sử dụng tài nguyên (Inactive Loss) [17, 18].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Task Affinity Weight
+    RELATION: Điều phối.
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Tree-structured Multi-task NAS
+  LINK_LOGIC: Quyết định hình thái của cấu trúc cây kiến trúc dựa trên sự tương đồng giữa các nhiệm vụ.
+SPECIALIST_SUPERVISOR: STRATEGIST
+
+METRIC_ID: MET_NAS_031
+METRIC_NAME: RSA Affinity Score (Representational Similarity Analysis)
+CALCULATION_METHOD: Chỉ số đo lường mức độ tương đồng giữa các đặc trưng của các tác vụ khác nhau để điều phối việc chia sẻ nút trong cấu trúc cây [1, 2].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Task Affinity Weight
+    RELATION: Điều kiện cần.
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Tree-structured Multi-task NAS
+  LINK_LOGIC: RSA cung cấp căn cứ định lượng để Hypernetwork quyết định khi nào nên phân nhánh kiến trúc dựa trên bản chất dữ liệu tác vụ.
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+
+METRIC_ID: MET_NAS_032
+METRIC_NAME: Weight Plasticity Loss
+CALCULATION_METHOD: Hàm mất mát điều hòa được sử dụng để giảm thiểu hiện tượng multi-model forgetting bằng cách giới hạn sự thay đổi của các trọng số quan trọng [3].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Stability Variance
+    RELATION: Tỉ lệ nghịch (Giảm plasticity loss giúp tăng độ ổn định của Supernet).
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: One-Shot NAS / Continual Learning
+  LINK_LOGIC: Chỉ số này bảo vệ tính toàn vẹn của tri thức tập thể trong quá trình huấn luyện Supernet.
+SPECIALIST_SUPERVISOR: SCIENTIST
+
+METRIC_ID: MET_NAS_033
+METRIC_NAME: Successive Halving Budget Ratio
+CALCULATION_METHOD: Tỷ lệ phân bổ tài nguyên cho các kiến trúc tiềm năng qua từng vòng sàng lọc trong thuật toán NOSH [4].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Search Cost
+    RELATION: Tỉ lệ thuận.
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Efficiency-driven NAS (NOSH/RANK-NOSH)
+  LINK_LOGIC: Điều phối ngân sách tính toán để loại bỏ sớm các kiến trúc yếu, tối ưu hóa ROI của quá trình tìm kiếm.
+SPECIALIST_SUPERVISOR: STRATEGIST
+
+METRIC_ID: MET_NAS_034
+METRIC_NAME: Gradient Trajectory Matching Score
+CALCULATION_METHOD: Chỉ số đo lường độ khớp giữa quỹ đạo cập nhật trọng số của Hypernetwork và mạng mục tiêu thực tế [5].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Predictor Reliability
+    RELATION: Tỉ lệ thuận.
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: HyperNet Fields
+  LINK_LOGIC: Đánh giá khả năng của Hypernetwork trong việc mô phỏng quá trình tối ưu hóa động thay vì chỉ sinh trọng số tĩnh.
+SPECIALIST_SUPERVISOR: SCIENTIST
+
+METRIC_ID: MET_NAS_035
+METRIC_NAME: Ranking Stability Epochs
+CALCULATION_METHOD: Số lượng epoch liên tiếp mà thứ hạng của các tham số kiến trúc alpha không thay đổi [6].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Performance Collapse
+    RELATION: Chỉ báo (Sự ổn định quá lâu của thứ hạng có thể là dấu hiệu bão hòa hoặc sắp sụp đổ).
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: DARTS+ / Early Stopping
+  LINK_LOGIC: Trọng số thời gian quyết định điểm "Saturated Search Point" để dừng tìm kiếm một cách tối ưu.
+SPECIALIST_SUPERVISOR: ENGINEER
+
+METRIC_ID: MET_NAS_036
+METRIC_NAME: Expected Novelty Score
+CALCULATION_METHOD: Giá trị trung bình khoảng cách giữa một kiến trúc mới và K láng giềng gần nhất trong kho lưu trữ archive [7, 8].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Search Space Complexity
+    RELATION: Điều phối.
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Novelty Driven NAS (EN2AS)
+  LINK_LOGIC: Chỉ số này điều hướng chiến lược tìm kiếm thoát khỏi các vùng không gian đã quá tải (crowded regions).
+SPECIALIST_SUPERVISOR: CREATIVE EXPLORER
+
+METRIC_ID: MET_NAS_037
+METRIC_NAME: Information Bypass Leakage Factor
+CALCULATION_METHOD: Định lượng lượng thông tin dự báo được truyền qua các đường dẫn song song trọng số thấp trong giai đoạn tìm kiếm liên tục [9].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Discretization Error Gap
+    RELATION: Tỉ lệ thuận.
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Differentiable NAS (DARTS)
+  LINK_LOGIC: Chỉ số này giải thích tại sao hiệu suất giảm đột ngột sau khi rời rạc hóa (discretization).
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+
+METRIC_ID: MET_NAS_038
+METRIC_NAME: Drop Path Rate (r)
+CALCULATION_METHOD: Tham số điều khiển xác suất loại bỏ một phép toán trên cạnh trong quá trình huấn luyện Supernet để giảm sự đồng thích nghi (co-adaptation) [10, 11].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Rank Correlation
+    RELATION: Tỉ lệ thuận (với giá trị r tối ưu, Kendall’s Tau sẽ cao hơn).
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: DropNAS
+  LINK_LOGIC: Trọng số điều hòa quan trọng nhất để phá vỡ sự phụ thuộc lẫn nhau giữa các lớp trong Supernet.
+SPECIALIST_SUPERVISOR: SCIENTIST
+
+METRIC_ID: MET_NAS_039
+METRIC_NAME: Recall Probability (CBP)
+CALCULATION_METHOD: Xác suất tìm thấy kiến trúc trong Top-10 dựa trên chính sách "Call Back" của Modern Secretary Problem [12, 13].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Search Efficiency
+    RELATION: Tương hỗ.
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: Optimal Stopping NAS
+  LINK_LOGIC: Xác lập niềm tin thống kê cho việc dừng tìm kiếm sớm mà vẫn đảm bảo độ bao phủ không gian tối thiểu (thường là 4%).
+SPECIALIST_SUPERVISOR: STRATEGIST
+
+METRIC_ID: MET_NAS_040
+METRIC_NAME: Structure Gap Bridge Indicator
+CALCULATION_METHOD: Mức độ tương quan giữa hiệu suất của mô hình phụ trợ (auxiliary model) trong IST và mô hình retraining [14, 15].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  - TARGET_METRIC: Kendall’s Tau
+    RELATION: Bổ trợ.
+POTENTIAL_GROUP_LINKAGE:
+  TARGET_GROUP: ISTA-NAS / EC-DARTS
+  LINK_LOGIC: Chỉ số đo lường hiệu quả của việc thu hẹp khoảng cách cấu trúc giữa giai đoạn tìm kiếm và đánh giá.
+SPECIALIST_SUPERVISOR: ENGINEER

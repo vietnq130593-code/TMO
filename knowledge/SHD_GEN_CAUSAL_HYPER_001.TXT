@@ -1,0 +1,3569 @@
+shard_metadata:
+  shard_id: "SHD_GEN_CAUSAL_HYPER_001"
+  shard_name: "Generative Causal Graph Neural Hypernetworks"
+  domain: "Causal AI / Deep Learning"
+  version: "1.0.0"
+  architect: "Mr. Architect"
+
+  layer: 1
+  description: "Core Entities of Generative Causal Graph Neural Hypernetworks"
+
+  - DYNAMIC_ID: "DYN_HYPER_WEIGHT_STEERING"
+  CAUSAL_CHAIN: "Nếu mã ẩn (Latent Code) trong không gian ẩn thay đổi, thì hàm sinh trọng số của Hypernetwork sẽ điều chỉnh các tham số của mạng mục tiêu, dẫn đến việc tái cấu trúc các phương trình chức năng trong SCM [1-3]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Latent Space", "Hypernetworks", "Weight-generating Functions", "Structural Causal Models (SCM)"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Latent Variables"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+    - NODE: "Neural SCM"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+
+- DYNAMIC_ID: "DYN_ACYCLICITY_SELF_CORRECTION"
+  CAUSAL_CHAIN: "Nếu ma trận kề trọng số xuất hiện chu trình (h(A) > 0), thì hình phạt Augmented Lagrangian sẽ tăng mạnh, ép các trọng số cạnh không hợp lệ về không thông qua tối ưu hóa gradient cho đến khi đồ thị đạt trạng thái DAG [4-6]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Adjacency Matrices", "Acyclicity Constraint", "DAGs", "Augmented Lagrangian"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "NOTEARS Algorithm"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+    - NODE: "Backpropagation"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_ELBO_REFINEMENT_LOOP"
+  CAUSAL_CHAIN: "Nếu sai số tái tạo giảm, thì giá trị ELBO tăng, dẫn đến việc thu hẹp phân kỳ KL giữa phân phối hậu nghiệm và tiên nghiệm, kết quả là biểu diễn trong không gian ẩn trở nên nhất quán hơn với cơ chế nhân quả thực [7-9]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Evidence Lower Bound (ELBO)", "KL-Divergence", "Latent Space", "VAEs"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Variational Inference"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+    - NODE: "Information Bottleneck"
+      RELATION_TYPE: "Đối nghịch"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+
+- DYNAMIC_ID: "DYN_ATTENTIVE_COUPLING_EMERGENCE"
+  CAUSAL_CHAIN: "Nếu cơ chế chú ý nhận diện sự gia tăng của tương tác động, thì hệ số attention (at) sẽ tăng, làm cực đại hóa Attentive Transfer Entropy (ATEn) và giúp phân biệt chính xác các cạnh nhân quả yếu khỏi nhiễu nền [10-12]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Graph Attention Mechanisms", "Transfer Entropy", "Mutual Information", "Coupling Attention"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Transformer Architecture"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+    - NODE: "Granger Causality"
+      RELATION_TYPE: "Đối nghịch"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+
+- NODE_ID: ENT_VC_061
+  ENTITY_NAME: Vapnik-Chervonenkis (VC) Dimension
+  SYNONYMS: VC Capacity
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Độ đo khả năng của một lớp hàm có thể được phân tách bởi các tập điểm dữ liệu. [1]
+  ATTRIBUTES: ["Capacity measure", "Finite sample guarantee", "Complexity bound"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Empirical Risk Minimization
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_SYN_062
+  ENTITY_NAME: Syndrome Vector
+  SYNONYMS: z = Hr
+  SPECIALIST_DOMAIN: Engineer
+  DESCRIPTION_SHORT: Vector chỉ thị sự vi phạm các ràng buộc chẵn lẻ trong mã hóa sửa lỗi. [2, 3]
+  ATTRIBUTES: ["Error pointer", "Linear operation", "Parity check result"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Parity-check Matrix
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_MCMC_064
+  ENTITY_NAME: Markov Chain Monte Carlo
+  SYNONYMS: MCMC
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Phương pháp lấy mẫu từ các phân phối phức tạp bằng cách xây dựng một xích Markov. [4]
+  ATTRIBUTES: ["Stochastic simulation", "Equilibrium distribution", "State transition"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Metropolis-Hastings
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_TUR_065
+  ENTITY_NAME: Turbo Codes
+  SYNONYMS: Concatenated Convolutional Codes
+  SPECIALIST_DOMAIN: Engineer
+  DESCRIPTION_SHORT: Lớp mã sửa lỗi hiệu suất cao sử dụng giải mã lặp qua các trellis song song. [5, 6]
+  ATTRIBUTES: ["Iterative decoding", "Interleaving", "Near-Shannon limit"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Belief Propagation
+      RELATION_TYPE: Tương hỗ
+
+- DYNAMIC_ID: "DYN_ANI_RECEPTIVE_FIELD_EXPANSION"
+  CAUSAL_CHAIN: "Nếu độ sâu mạng GNN tăng, thì trường thụ cảm (Receptive Field) mở rộng, cho phép tích hợp thông tin từ các lân cận bậc cao để điều chỉnh nhiễu mạng lưới (Network Confounding) thông qua cơ chế ANI [13-15]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Graph Neural Networks (GNN)", "Receptive Field", "Message-passing", "Nodes"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Approximate Neighborhood Interference (ANI)"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+    - NODE: "SUTVA Assumption"
+      RELATION_TYPE: "Đối nghịch"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+
+- DYNAMIC_ID: "DYN_MDL_PARSIMONY_ADJUSTMENT"
+  CAUSAL_CHAIN: "Nếu độ phức tạp của đồ thị học được tăng quá mức, thì nguyên lý MDL sẽ tăng hàm phạt độ dài mô tả, ép hệ thống lựa chọn cấu trúc tối giản nhất nhằm loại bỏ các tương quan giả và ảo giác [16-18]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Minimum Description Length (MDL)", "Shannon Entropy", "Kolmogorov Complexity", "Structural Minimality"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Occam's Razor"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+    - NODE: "Causal Discovery"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_LATENT_INTERVENTION_MIXING"
+  CAUSAL_CHAIN: "Nếu dữ liệu mới xuất hiện mà không rõ nguồn gốc, thì quá trình Dirichlet Process sẽ cập nhật các cluster can thiệp ẩn, tạo ra các mã nhúng can thiệp (uk) mới để điều phối lại phân phối xác suất của mô hình hỗn hợp [19-21]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Interventions", "Stochastic Processes", "Latent Variables", "Normalizing Flows"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Dirichlet Process Mixture"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+    - NODE: "Cluster Analysis"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+
+- DYNAMIC_ID: "DYN_BACKDOOR_DECONFOUNDING_FLOW"
+  CAUSAL_CHAIN: "Nếu nhận diện được đường dẫn cửa sau, thì hệ thống sẽ chọn tập điều chỉnh Z phù hợp, dẫn đến việc khử nhiễu (deconfounding) và cho phép ước tính ACE chính xác từ dữ liệu quan sát [22-24]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Adjustment Sets", "Confounders", "Backdoor Criterion", "Causal Discovery"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "do-operator"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+    - NODE: "Decision Analysis"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+- DYNAMIC_ID: "DYN_COUNTERFACTUAL_IMAGINATION"
+  CAUSAL_CHAIN: "Nếu một cơ chế cụ thể trong SCM bị thay đổi (Abduction-Action), thì các giá trị hạ nguồn trong mô hình bị 'cắt tỉa' (mutilated graph) sẽ thay đổi, kết quả là tạo ra một dự báo Phản thực tế (Imagining) [1, 2]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Counterfactuals", "Structural Causal Models (SCM)", "do-operator", "Interventions"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Abduction-Action-Prediction"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+    - NODE: "Mutilated Graphs"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+
+- DYNAMIC_ID: "DYN_DOMAIN_ADAPTATION_TRANSFER"
+  CAUSAL_CHAIN: "Nếu một cơ chế nhân quả có tính tự trị cao (ICM), thì nó sẽ giữ nguyên tính bất biến (invariance) khi môi trường thay đổi, dẫn đến việc chuyển giao tri thức (Transfer Learning) từ miền nguồn sang miền đích hiệu quả [3-5]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Independent Causal Mechanisms (ICM)", "Structural Causal Models (SCM)", "Endogenous Variables"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Invariant Prediction"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+    - NODE: "Domain Adaptation"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_HIERARCHICAL_LATENT_STEERING"
+  CAUSAL_CHAIN: "Nếu một đặc trưng toàn cục ở lớp ẩn trên cùng (z1) bị can thiệp, thì nó sẽ điều phối các biến thể ở lớp dưới, kết quả là tạo ra sự thay đổi đồng nhất trong dữ liệu sinh cao chiều (như nhận diện chữ số MNIST) [6, 7]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Latent Space", "Encoder & Decoder", "Interventions", "Nodes"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Latent Hierarchical Models"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+    - NODE: "Representation Learning"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "CREATIVE EXPLORER"
+
+- DYNAMIC_ID: "DYN_HYPERGRAPH_COMPLEXITY_CHAIN"
+  CAUSAL_CHAIN: "Nếu kích thước batch (Batch Size) thay đổi, thì nhiễu gradient sẽ biến thiên, làm thay đổi độ sắc nhọn của cực tiểu (minima sharpness) và độ phức tạp mô hình, cuối cùng ảnh hưởng đến khả năng tổng quát hóa (Generalization) [8, 9]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Hypergraphs", "Hypernetworks", "Structural Causal Models (SCM)", "do-operator"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Deep Structural Causal Models (DSCM)"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+    - NODE: "Optimization Dynamics"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_BELIEF_PROPAGATION_EQUILIBRIUM"
+  CAUSAL_CHAIN: "Nếu dữ liệu mới được quan sát tại một nút lá, thì các thông điệp (pi và lambda) sẽ lan truyền qua cấu trúc cây, kết quả là toàn bộ mạng lưới đạt đến một trạng thái cân bằng niềm tin mới [10, 11]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Message-passing", "Nodes", "Edges", "Directed Acyclic Graphs (DAGs)"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Belief Propagation"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+    - NODE: "Conditional Independence"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "PSYCHOLOGIST"
+
+- DYNAMIC_ID: "DYN_JOINT_INFLUENCE_IDENTIFICATION"
+  CAUSAL_CHAIN: "Nếu các tương tác đa biến (joint causal influences) được mô hình hóa rõ ràng trong Hypergraph, thì hệ thống sẽ cung cấp thông tin chỉ báo bổ sung, giúp Classifier nhận diện được các cạnh nhân quả yếu vốn bị bỏ sót bởi phương pháp cặp biến thông thường [12-14]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Hyperedges", "Hypergraphs", "Graph Attention Mechanisms", "Mutual Information"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "High-order Causalities"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+    - NODE: "Causality Disappearing Problem"
+      RELATION_TYPE: "Đối nghịch"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_LATENT_CONFOUNDER_STOCHASTIC_FLOW"
+  CAUSAL_CHAIN: "Nếu hệ thống được xác định là 'mở' (không tự trị), thì chất lượng dự báo sẽ phụ thuộc vào các phân phối bên ngoài, dẫn đến việc chuyển đổi từ toán tử FP định tính sang toán tử FP ngẫu nhiên được giám sát bởi Jensen-Shannon Divergence [15, 16]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Latent Variables", "Jensen-Shannon Divergence (JSD)", "Stochastic Processes", "KL-Divergence"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Frobenius-Perron Operator"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+    - NODE: "Forecastability Quality Metric (FQM)"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_CAUSAL_PARROT_POSTERIOR_CORRECTION"
+  CAUSAL_CHAIN: "Nếu hệ thống LLM biểu hiện hành vi 'ghi nhớ vẹt' (Causal Parrot), thì giao thức Novel Science Benchmarking sẽ kích hoạt cơ chế hiệu đính hậu kỳ, kết quả là bẻ gãy các niềm tin sai lệch và khôi phục tính trung thực của đồ thị [17, 18]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Structural Hamming Distance (SHD)", "Skeleton", "Nodes", "Edges"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Hallucination Mitigation"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+    - NODE: "Linked Message Technique"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "CREATIVE EXPLORER"
+
+- DYNAMIC_ID: "DYN_BATCH_STOCHASTICITY_SHARPNESS"
+  CAUSAL_CHAIN: "Nếu kích thước Batch giảm, thì nhiễu Gradient (Gradient Noise) tăng, dẫn đến việc làm phẳng cực tiểu (Minima Sharpness), kết quả là khả năng tổng quát hóa (Generalization) của Hypernetwork được cải thiện [1-3]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Hypernetworks", "Gradient Noise", "Minima Sharpness", "Generalization"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "HGCNet Framework"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+    - NODE: "Model Complexity"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_RL_AGENT_GRAPH_CONSTRUCTION"
+  CAUSAL_CHAIN: "Nếu các tác nhân RL (Causal Controllers) thực hiện các bước quyết định tuần tự, thì chúng thiết lập các liên kết 'vật thể-đến-lực' động, kết quả là xây dựng được một đồ thị nhân quả quá trình (Causal Process Graph) thay vì đồ thị tĩnh [4-6]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Hypernetworks", "Nodes", "Edges", "Stochastic Processes"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Interaction Scope Controller"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+    - NODE: "Causal Process Model (CPM)"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+
+- DYNAMIC_ID: "DYN_INFORMATION_GAIN_PATH_DISTILLATION"
+  CAUSAL_CHAIN: "Nếu tri thức đạt đến quy mô hàng tỷ sự kiện (Path Explosion), thì cơ chế Information Gain sẽ lọc các lân cận có ích nhất, kết quả là chưng cất thành các chuỗi tri thức giá trị cao phù hợp với cửa sổ ngữ cảnh của LLM [7, 8]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Information Gain", "Nodes", "Shannon Entropy", "Transformer Architecture"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Path-Retrieval"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+    - NODE: "Cognitive Load Management"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "PSYCHOLOGIST"
+
+- DYNAMIC_ID: "DYN_CROSS_MODAL_STRUCTURE_PRESERVATION"
+  CAUSAL_CHAIN: "Nếu dữ liệu đa phương thức (Multi-modal) thay đổi, thì hàm mất mát đa nhất quán (Multi-consistency Loss) sẽ ép buộc sự tương đồng về cấu trúc nhân quả, kết quả là bảo toàn được bản sắc thực thể qua các không gian biểu diễn khác nhau [9, 10]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Latent Space", "Structural Causal Models (SCM)", "KL-Divergence", "Evidence Lower Bound (ELBO)"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "CARL Framework"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+    - NODE: "Image-to-Text Mapping"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "CREATIVE EXPLORER"
+
+- DYNAMIC_ID: "DYN_ABDUCTIVE_HALLUCINATION_PRUNING"
+  CAUSAL_CHAIN: "Nếu một giả thuyết nhân quả vi phạm nguyên lý nén (MDL), thì hệ thống suy luận diễn dịch sẽ gán hàm phạt cao, kết quả là bẻ gãy các chuỗi logic ảo giác (Hallucinations) không có căn cứ thực nghiệm [11, 12]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Minimum Description Length (MDL)", "Nodes", "Edges", "Counterfactuals"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Factual Grounding"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+    - NODE: "Logic Consistency Check"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+
+- NODE_ID: ENT_SCM_001
+  ENTITY_NAME: Structural Causal Models
+  SYNONYMS: SCM, Functional Causal Models
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Hệ thống các hàm cấu trúc xác định cơ chế gán biến và phân tách nhiễu [1].
+  ATTRIBUTES: ["Modularity", "Autonomy", "Functional invariance"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Directed Acyclic Graphs
+      RELATION_TYPE: Tiền đề
+    - NODE: do-operator
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_GM_066
+  ENTITY_NAME: Generator Matrix (G)
+  SYNONYMS: Encoding Matrix
+  SPECIALIST_DOMAIN: Engineer
+  DESCRIPTION_SHORT: Ma trận dùng để ánh xạ thông tin nguồn vào không gian mã có tính dư thừa để chống nhiễu. [1, 2]
+  ATTRIBUTES: ["Linear mapping", "Redundancy injection", "Basis vectors"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Parity-check Matrix
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_TRE_068
+  ENTITY_NAME: Trellis Graph
+  SYNONYMS: State-transition Diagram
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Đồ thị biểu diễn các trạng thái thay đổi theo thời gian của một mã, dùng cho giải mã Viterbi. [3, 4]
+  ATTRIBUTES: ["Time-indexed states", "Path enumeration", "Recursive structure"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Viterbi Algorithm
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_HAM_069
+  ENTITY_NAME: Hamming Distance
+  SYNONYMS: d(x, y), Bit-flip count
+  SPECIALIST_DOMAIN: Engineer
+  DESCRIPTION_SHORT: Số lượng các vị trí bit khác nhau giữa hai chuỗi, dùng để đo lường sai số. [1, 5]
+  ATTRIBUTES: ["Metric", "Error detection bound", "Bitwise comparison"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Structural Hamming Distance
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_CAP_070
+  ENTITY_NAME: Channel Capacity (C)
+  SYNONYMS: Shannon Limit
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Tốc độ truyền tin tối đa có thể đạt được qua một kênh nhiễu với xác suất lỗi triệt tiêu. [6, 7]
+  ATTRIBUTES: ["Fundamental limit", "Mutual information max", "Noise tolerance"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Noisy-Channel Coding Theorem
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_PCM_071
+  ENTITY_NAME: Parity-check Matrix (H)
+  SYNONYMS: Check Matrix
+  SPECIALIST_DOMAIN: Engineer
+  DESCRIPTION_SHORT: Ma trận kiểm tra các ràng buộc chẵn lẻ, nơi Syndrome được tính bằng z = Hx. [1, 8]
+  ATTRIBUTES: ["Constraint encoding", "Linear dependency", "Sparse structure"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Syndrome Vector
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_JTS_072
+  ENTITY_NAME: Jointly-typical Set
+  SYNONYMS: Typical input-output pairs
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Tập hợp các cặp chuỗi (input, output) có xác suất xuất hiện cao dưới một mô hình kênh. [9, 10]
+  ATTRIBUTES: ["AEP property", "Joint entropy bound", "Convergence"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Asymptotic Equipartition Property
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_DAG_002
+  ENTITY_NAME: Directed Acyclic Graphs
+  SYNONYMS: DAGs, Causal Graphs
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Đồ thị có hướng không chu trình biểu diễn các giả định độc lập nhân quả [1, 2].
+  ATTRIBUTES: ["Acyclicity", "d-separation", "Edge orientation"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Adjacency Matrices
+      RELATION_TYPE: Tiền đề
+    - NODE: CPDAG
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_LAT_003
+  ENTITY_NAME: Latent Variables
+  SYNONYMS: Hidden Variables, Unobserved Confounders
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Các biến không được quan sát trực tiếp gây ra tương quan giả trong dữ liệu [1, 3].
+  ATTRIBUTES: ["Unobservability", "Confounding", "Latent projection"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Latent Space
+      RELATION_TYPE: Tương hỗ
+    - NODE: Variational Autoencoders
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_EXO_004
+  ENTITY_NAME: Exogenous Variables
+  SYNONYMS: U, Noise Terms, Error Variables
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Biến được xác định bởi các yếu tố bên ngoài, đại diện cho nhiễu độc lập [1, 4].
+  ATTRIBUTES: ["Independence", "External determination", "Stochasticity"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Endogenous Variables
+      RELATION_TYPE: Tiền đề
+    - NODE: Structural Causal Models
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_END_005
+  ENTITY_NAME: Endogenous Variables
+  SYNONYMS: V, Observed Variables
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Biến có giá trị được xác định bởi các biến khác trong mô hình [1, 4].
+  ATTRIBUTES: ["Internal dependency", "Observability"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Parents
+      RELATION_TYPE: Tiền đề
+    - NODE: Structural Causal Models
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_INT_006
+  ENTITY_NAME: Interventions
+  SYNONYMS: do-operator, Manipulation, Atomic Intervention
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Thao tác thay đổi giá trị biến để bẻ gãy cơ chế tự nhiên [1, 5].
+  ATTRIBUTES: ["Mutilation", "Causal effect identification", "do-calculus"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Counterfactuals
+      RELATION_TYPE: Tiền đề
+    - NODE: Mutilated Graphs
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_COU_007
+  ENTITY_NAME: Counterfactuals
+  SYNONYMS: Potential Outcomes, Imagining
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Các kịch bản "nếu-thì" phản thực tế dựa trên can thiệp cụ thể [1, 6].
+  ATTRIBUTES: ["Layer 3 reasoning", "Abduction-Action-Prediction"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: do-operator
+      RELATION_TYPE: Tiền đề
+    - NODE: Structural Causal Models
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_ADM_008
+  ENTITY_NAME: Acyclic Directed Mixed Graphs
+  SYNONYMS: ADMG, Mixed Graphs
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Đồ thị chứa cả cạnh có hướng và cạnh hai chiều biểu diễn biến ẩn [3, 7].
+  ATTRIBUTES: ["Bidirected edges", "Latent confounding", "m-separation"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Maximal Ancestral Graph
+      RELATION_TYPE: Tương hỗ
+    - NODE: Nested Markov Models
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_MAG_009
+  ENTITY_NAME: Maximal Ancestral Graph
+  SYNONYMS: MAG
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Đồ thị hỗn hợp đại diện cho lớp các DAG có chung quan hệ tổ tiên [8, 9].
+  ATTRIBUTES: ["Ancestrality", "Markov equivalence"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Partial Ancestral Graph
+      RELATION_TYPE: Tương hỗ
+    - NODE: FCI Algorithm
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_PAG_010
+  ENTITY_NAME: Partial Ancestral Graph
+  SYNONYMS: PAG
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Đại diện cho một lớp tương đương Markov của các MAG [8, 10].
+  ATTRIBUTES: ["Edge marks", "Markov Equivalence Class (MEC)"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Causal Discovery
+      RELATION_TYPE: Tương hỗ
+    - NODE: dcFCI Algorithm
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_COL_011
+  ENTITY_NAME: Colliders
+  SYNONYMS: v-structure, Immorality, Head-to-head
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Nút có hai hoặc nhiều mũi tên hội tụ, gây nhiễu khi điều kiện hóa [11, 12].
+  ATTRIBUTES: ["v-structure", "Berkson's paradox", "Path opening"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: d-separation
+      RELATION_TYPE: Đối nghịch
+    - NODE: Adjustment Sets
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_ADJ_012
+  ENTITY_NAME: Adjustment Sets
+  SYNONYMS: Covariate Adjustment, Z-set
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Tập hợp biến dùng để khử nhiễu khi ước tính tác động nhân quả [1, 13].
+  ATTRIBUTES: ["Backdoor blocking", "Deconfounding"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Confounders
+      RELATION_TYPE: Tiền đề
+    - NODE: Average Causal Effect
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_INS_013
+  ENTITY_NAME: Instrumental Variables
+  SYNONYMS: IV, Proxy Variables
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Biến Z dùng để nhận dạng quan hệ X->Y khi có nhiễu ẩn [14, 15].
+  ATTRIBUTES: ["Relevance", "Exclusion restriction", "Instrumental inequality"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Latent Variables
+      RELATION_TYPE: Đối nghịch
+    - NODE: Identifiability
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_SKE_014
+  ENTITY_NAME: Skeleton
+  SYNONYMS: Causal Skeleton, Undirected Graph
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Phiên bản không hướng của đồ thị nhân quả biểu diễn các phụ thuộc thô [16, 17].
+  ATTRIBUTES: ["Adjacency without direction", "Constraint-based discovery"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: DAG
+      RELATION_TYPE: Tiền đề
+    - NODE: SPOT Algorithm
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_MAT_015
+  ENTITY_NAME: Adjacency Matrices
+  SYNONYMS: A, Connection Matrix, Weighted Adjacency
+  SPECIALIST_DOMAIN: Engineer
+  DESCRIPTION_SHORT: Ma trận biểu diễn các kết nối và trọng số giữa các nút trong đồ thị [18, 19].
+  ATTRIBUTES: ["Binary/Weighted", "Square matrix", "Differentiability"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Graph Neural Networks
+      RELATION_TYPE: Tiền đề
+    - NODE: Acyclicity Constraint
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_HYP_016
+  ENTITY_NAME: Hyperedges
+  SYNONYMS: Multi-node Links, Joint Influences
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Cạnh kết nối đồng thời nhiều nút, biểu thị tương tác bậc cao [20, 21].
+  ATTRIBUTES: ["Higher-order interactions", "Multi-variable union"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Hypergraphs
+      RELATION_TYPE: Tiền đề
+    - NODE: Joint Causal Influences
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_MEC_017
+  ENTITY_NAME: Markov Equivalence Class
+  SYNONYMS: MEC
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Tập hợp các DAG có cùng tập các độc lập thống kê [8, 22].
+  ATTRIBUTES: ["Skeleton equivalence", "v-structure preservation"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: CPDAG
+      RELATION_TYPE: Tương hỗ
+    - NODE: Identifiability
+      RELATION_TYPE: Đối nghịch
+
+- NODE_ID: ENT_FAI_018
+  ENTITY_NAME: Faithfulness Assumption
+  SYNONYMS: Stability
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Giả định rằng mọi độc lập thống kê đều do cấu trúc đồ thị [23, 24].
+  ATTRIBUTES: ["Non-cancellation of paths", "Structural minimality"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: d-separation
+      RELATION_TYPE: Tiền đề
+    - NODE: Causal Discovery
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_MIN_019
+  ENTITY_NAME: Causal Minimality
+  SYNONYMS: Structural Minimality
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Quy tắc chọn đồ thị đơn giản nhất vẫn thỏa mãn phân phối xác suất [7, 25].
+  ATTRIBUTES: ["Parsimony", "Edge reduction"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Minimum Description Length
+      RELATION_TYPE: Tương hỗ
+    - NODE: Faithfulness
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_IDE_020
+  ENTITY_NAME: Identifiability
+  SYNONYMS: Model Identification, Recoverability
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Khả năng xác định duy nhất cấu trúc nhân quả từ dữ liệu quan sát [3, 26].
+  ATTRIBUTES: ["Uniqueness", "Mathematical guarantee"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Structural Causal Models
+      RELATION_TYPE: Tương hỗ
+    - NODE: Markov Equivalence Class
+      RELATION_TYPE: Đối nghịch
+
+- NODE_ID: ENT_VAE_021
+  ENTITY_NAME: Variational Autoencoders
+  SYNONYMS: VAEs
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Kiến trúc thần kinh sử dụng suy diễn biến phân để học phân phối các biến ẩn [1, 2].
+  ATTRIBUTES: ["Latent representation learning", "Stochastic encoding", "Generative capability"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Evidence Lower Bound (ELBO)
+      RELATION_TYPE: Tiền đề
+    - NODE: Latent Space
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_GAN_022
+  ENTITY_NAME: Generative Adversarial Networks
+  SYNONYMS: GANs
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Hệ thống đối đầu giữa Generator và Discriminator để sinh dữ liệu nhân quả [3, 4].
+  ATTRIBUTES: ["Adversarial training", "Distribution matching", "Counterfactual synthesis"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Counterfactuals
+      RELATION_TYPE: Tương hỗ
+    - NODE: Neural SCM
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_LTS_023
+  ENTITY_NAME: Latent Space
+  SYNONYMS: Latent Manifold, Hidden Representation Space
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Không gian vector đa chiều chứa các biểu diễn nén của các biến ẩn nhân quả [2, 5].
+  ATTRIBUTES: ["Differentiability", "Dimensionality reduction", "Disentanglement"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Latent Variables
+      RELATION_TYPE: Tiền đề
+    - NODE: Encoder & Decoder
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_ENC_024
+  ENTITY_NAME: Encoder & Decoder
+  SYNONYMS: Inference & Generative Networks
+  SPECIALIST_DOMAIN: Engineer
+  DESCRIPTION_SHORT: Các khối mạng đối xứng dùng để nén dữ liệu và tái cấu trúc tín hiệu [6, 7].
+  ATTRIBUTES: ["Non-linear mapping", "Bottleneck structure", "Parameter sharing"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Variational Autoencoders
+      RELATION_TYPE: Tiền đề
+    - NODE: Message-passing
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_HYP_025
+  ENTITY_NAME: Hypernetworks
+  SYNONYMS: Meta-networks, Weight-generators
+  SPECIALIST_DOMAIN: Engineer
+  DESCRIPTION_SHORT: Mạng thần kinh có chức năng sinh ra trọng số cho một mạng mục tiêu khác [8, 9].
+  ATTRIBUTES: ["Meta-learning", "Dynamic parameter generation", "Context-awareness"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Weight-generating Functions
+      RELATION_TYPE: Tiền đề
+    - NODE: Structural Causal Models
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_WGF_026
+  ENTITY_NAME: Weight-generating Functions
+  SYNONYMS: Mapping Functions, Parameter Generators
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Các hàm toán học ánh xạ từ không gian ẩn sang không gian trọng số mạng [9].
+  ATTRIBUTES: ["High-dimensional output", "Conditioning", "Non-linearity"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Hypernetworks
+      RELATION_TYPE: Tiền đề
+    - NODE: Latent Space
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_GNN_027
+  ENTITY_NAME: Graph Neural Networks
+  SYNONYMS: GNNs, Deep Learning on Graphs
+  SPECIALIST_DOMAIN: Engineer
+  DESCRIPTION_SHORT: Mô hình thần kinh hoạt động trực tiếp trên cấu trúc và topo của đồ thị [10, 11].
+  ATTRIBUTES: ["Permutation invariance", "Neighborhood aggregation", "Structural awareness"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Adjacency Matrices
+      RELATION_TYPE: Tiền đề
+    - NODE: Message-passing
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_MSG_028
+  ENTITY_NAME: Message-passing
+  SYNONYMS: Belief Propagation, Neighborhood Aggregation
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Giao thức truyền tin giữa các nút lân cận để cập nhật trạng thái mạng [12, 13].
+  ATTRIBUTES: ["Iterative updating", "Local interaction", "Distributed computation"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Graph Neural Networks
+      RELATION_TYPE: Tiền đề
+    - NODE: Receptive Field
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_TRA_029
+  ENTITY_NAME: Transformer Architecture
+  SYNONYMS: Attention-based Models, ViT (Vision Transformer)
+  SPECIALIST_DOMAIN: Engineer
+  DESCRIPTION_SHORT: Kiến trúc dựa trên cơ chế chú ý để học phụ thuộc động giữa các thực thể [6, 14].
+  ATTRIBUTES: ["Self-attention", "Parallelism", "Long-range dependencies"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Graph Attention Mechanisms
+      RELATION_TYPE: Tiền đề
+    - NODE: Evidence Lower Bound (ELBO)
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_GAT_030
+  ENTITY_NAME: Graph Attention Mechanisms
+  SYNONYMS: GAT, Attentive Coupling
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Kỹ thuật gán trọng số động cho các cạnh dựa trên mức độ quan trọng [14].
+  ATTRIBUTES: ["Edge weighting", "Dynamic attention scores", "Feature selection"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Transformer Architecture
+      RELATION_TYPE: Tiền đề
+    - NODE: Attentive Transfer Entropy
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_NOR_031
+  ENTITY_NAME: Normalizing Flows
+  SYNONYMS: Flow-based Models
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Chuỗi các hàm khả nghịch dùng để mô hình hóa các mật độ xác suất phức tạp [15].
+  ATTRIBUTES: ["Invertibility", "Jacobian computation", "Exact density estimation"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Structural Causal Models
+      RELATION_TYPE: Tương hỗ
+    - NODE: Latent Space
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_AUT_032
+  ENTITY_NAME: Autoregressive Flows
+  SYNONYMS: AF, IAF (Inverse Autoregressive Flows)
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Biến thể của flows cho phép phân tách xác suất theo chuỗi nhân quả [15].
+  ATTRIBUTES: ["Causal ordering", "Sequential computation", "Conditioning"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Neural ADMG
+      RELATION_TYPE: Tương hỗ
+    - NODE: Directed Acyclic Graphs
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_ELB_033
+  ENTITY_NAME: Evidence Lower Bound
+  SYNONYMS: ELBO, Variational Lower Bound
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Hàm mục tiêu chặn dưới cho log-likelihood trong suy diễn biến phân [1, 16].
+  ATTRIBUTES: ["Optimization objective", "KL regularization", "Reconstruction fidelity"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Variational Autoencoders
+      RELATION_TYPE: Tiền đề
+    - NODE: KL-Divergence
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_KLD_034
+  ENTITY_NAME: KL-Divergence
+  SYNONYMS: Relative Entropy, Kullback-Leibler Divergence
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Thước đo sự sai khác giữa hai phân phối xác suất [17, 18].
+  ATTRIBUTES: ["Asymmetry", "Information loss measure", "Regularization term"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Evidence Lower Bound (ELBO)
+      RELATION_TYPE: Tiền đề
+    - NODE: Shannon Entropy
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_INF_035
+  ENTITY_NAME: Information Bottleneck
+  SYNONYMS: IB, Vittle (Visual Instruction Bottleneck)
+  SPECIALIST_DOMAIN: Strategist
+  DESCRIPTION_SHORT: Nguyên lý nén thông tin dư thừa để giữ lại đặc trưng dự báo cốt lõi [2, 19].
+  ATTRIBUTES: ["Compression-prediction trade-off", "Feature distillation", "Robustness"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Latent Space
+      RELATION_TYPE: Tương hỗ
+    - NODE: Mutual Information
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_REC_036
+  ENTITY_NAME: Receptive Field
+  SYNONYMS: Perception Field, Local Neighborhood
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Vùng không gian mạng lưới mà một nút có thể thu thập thông tin [11, 20].
+  ATTRIBUTES: ["Radius of influence", "Aggregation scope", "Network interference limits"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Graph Neural Networks
+      RELATION_TYPE: Tiền đề
+    - NODE: Approximate Neighborhood Interference (ANI)
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_MLP_037
+  ENTITY_NAME: Multilayer Perceptrons
+  SYNONYMS: MLP, Feedforward Neural Networks
+  SPECIALIST_DOMAIN: Engineer
+  DESCRIPTION_SHORT: Các mạng truyền thẳng đóng vai trò hàm xấp xỉ phi tuyến trong SCM [21, 22].
+  ATTRIBUTES: ["Universal approximation", "Layered structure", "Backpropagation"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Neural SCM
+      RELATION_TYPE: Tiền đề
+    - NODE: Activation Functions
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_NSM_038
+  ENTITY_NAME: Neural SCM
+  SYNONYMS: Deep Structural Causal Models, Neural ADMG Learning
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Mô hình nhân quả cấu trúc được tham số hóa bằng mạng thần kinh sâu [15, 23].
+  ATTRIBUTES: ["Gradient-based CD", "Non-parametric mechanisms", "High-dimensional scaling"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Structural Causal Models
+      RELATION_TYPE: Tiền đề
+    - NODE: Adjacency Matrices
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_ANI_039
+  ENTITY_NAME: Approximate Neighborhood Interference
+  SYNONYMS: ANI Model
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Ràng buộc quy định ảnh hưởng mạng lưới suy giảm theo khoảng cách đồ thị [11, 20].
+  ATTRIBUTES: ["Interference decay", "Sparsity assumption", "Peer-effect analysis"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Receptive Field
+      RELATION_TYPE: Tương hỗ
+    - NODE: Graph Neural Networks
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_STO_040
+  ENTITY_NAME: Stochastic Processes
+  SYNONYMS: Random Processes, Temporal Dynamics
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Các quá trình ngẫu nhiên biểu diễn sự tiến hóa của hệ thống theo thời gian [24, 25].
+  ATTRIBUTES: ["Time-dependence", "Ergodicity", "Transition operators"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Time Series
+      RELATION_TYPE: Tiền đề
+    - NODE: Forecastability Quality Metric (FQM)
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_MUT_041
+  ENTITY_NAME: Mutual Information
+  SYNONYMS: MI, Statistical Dependence
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Thước đo lượng thông tin chia sẻ giữa hai biến ngẫu nhiên [1, 2].
+  ATTRIBUTES: ["Statistical dependence", "Symmetry", "Non-negativity"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Shannon Entropy
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_SHA_042
+  ENTITY_NAME: Shannon Entropy
+  SYNONYMS: S(x), Average Information, Uncertainty
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Độ không chắc chắn trung bình của một phân phối xác suất [3, 4].
+  ATTRIBUTES: ["Uncertainty measure", "Logarithmic scale", "Character-level stability"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Mutual Information
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_JSD_043
+  ENTITY_NAME: Jensen-Shannon Divergence
+  SYNONYMS: JSD
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Độ đo phân kỳ đối xứng và bị chặn giữa các phân phối [5].
+  ATTRIBUTES: ["Symmetry", "Square root is a metric", "Boundedness"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: KL-Divergence
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_TE_044
+  ENTITY_NAME: Transfer Entropy
+  SYNONYMS: TE, Directed Information
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Độ đo luồng thông tin định hướng và phi đối xứng giữa các chuỗi [1].
+  ATTRIBUTES: ["Directionality", "Time-dependence", "Information flow"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Attentive Transfer Entropy
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_ATE_045
+  ENTITY_NAME: Attentive Transfer Entropy
+  SYNONYMS: ATEn
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Biến thể của TE tích hợp cơ chế chú ý để nhận diện tương tác động [1].
+  ATTRIBUTES: ["Attention assignment", "Transient coupling", "Generalization"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Transformer Architecture
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_SHD_046
+  ENTITY_NAME: Structural Hamming Distance
+  SYNONYMS: SHD
+  SPECIALIST_DOMAIN: Engineer
+  DESCRIPTION_SHORT: Số lượng thao tác cạnh cần để biến đổi đồ thị học được thành thực tế [6].
+  ATTRIBUTES: ["Edge correction", "Graph comparison", "Metric"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Directed Acyclic Graphs
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_MDL_047
+  ENTITY_NAME: Minimum Description Length
+  SYNONYMS: MDL, Principle of Parsimony
+  SPECIALIST_DOMAIN: Strategist
+  DESCRIPTION_SHORT: Nguyên lý chọn mô hình dựa trên khả năng nén dữ liệu tốt nhất [7, 8].
+  ATTRIBUTES: ["Occam's razor", "Compression", "Model selection"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Causal Minimality
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_GCO_048
+  ENTITY_NAME: G-computation Formula
+  SYNONYMS: Extended g-formula
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Thuật toán đệ quy tính toán phân phối can thiệp từ dữ liệu quan sát [9].
+  ATTRIBUTES: ["Recursion", "Identifiability", "do-calculus"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: do-operator
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_BAC_049
+  ENTITY_NAME: Back-door Criterion
+  SYNONYMS: Backdoor Adjustment
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Tiêu chuẩn đồ thị để xác định tập điều chỉnh khử nhiễu [10, 11].
+  ATTRIBUTES: ["Path blocking", "Conditioning", "Confounder control"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Confounders
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_FRO_050
+  ENTITY_NAME: Front-door Criterion
+  SYNONYMS: Frontdoor Adjustment
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Nhận dạng tác động nhân quả qua biến trung gian khi có nhiễu ẩn [12].
+  ATTRIBUTES: ["Mediator requirement", "Hidden confounding", "Adjustment"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Structural Causal Models
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_INI_051
+  ENTITY_NAME: Instrumental Inequality
+  SYNONYMS: IV Constraint
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Bất đẳng thức ràng buộc tính hợp lệ của biến công cụ [13].
+  ATTRIBUTES: ["Hard constraint", "Testability", "Identifiability"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Instrumental Variables
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_POT_052
+  ENTITY_NAME: Potential Outcomes
+  SYNONYMS: Rubin Causal Model, PO framework
+  SPECIALIST_DOMAIN: Scientist
+  DESCRIPTION_SHORT: Khung khái niệm định nghĩa các giá trị kết quả dưới các can thiệp [14, 15].
+  ATTRIBUTES: ["Counterfactual basis", "Hypothetical treatment", "Consistency"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Counterfactuals
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_ACE_053
+  ENTITY_NAME: Average Causal Effect
+  SYNONYMS: ACE, Total Effect
+  SPECIALIST_DOMAIN: Strategist
+  DESCRIPTION_SHORT: Tác động nhân quả trung bình của X lên Y trên toàn quần thể [16].
+  ATTRIBUTES: ["Estimand", "Quantitative results", "Policy evaluation"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Interventions
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_SLR_054
+  ENTITY_NAME: Structured-Low-Rank Precision Split
+  SYNONYMS: Mixed Confounding Decomposition
+  SPECIALIST_DOMAIN: Data Scientist
+  DESCRIPTION_SHORT: Phân tách nhiễu mạng lưới thành thành phần cấu trúc và cú sốc hệ thống [17, 18].
+  ATTRIBUTES: ["Matrix decomposition", "Mixed confounding", "Correlated noise"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Adjacency Matrices
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_CAT_055
+  ENTITY_NAME: Coupling Attention
+  SYNONYMS: Attention Mechanism in ATEn
+  SPECIALIST_DOMAIN: Engineer
+  DESCRIPTION_SHORT: Cơ chế gán trọng số chú ý động dựa trên lực tương tác tức thời [1, 19].
+  ATTRIBUTES: ["Dynamic weighting", "Transient coupling", "Feature selection"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Graph Attention Mechanisms
+      RELATION_TYPE: Tiền đề
+
+- NODE_ID: ENT_COT_056
+  ENTITY_NAME: Chain of Thought Prompting
+  SYNONYMS: CoT, Step-by-step Reasoning
+  SPECIALIST_DOMAIN: Creative Explorer
+  DESCRIPTION_SHORT: Kỹ thuật gợi ý giúp mô hình suy luận từng bước qua chuỗi logic [20, 21].
+  ATTRIBUTES: ["Step-by-step", "Reasoning rationales", "LLM performance"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Causal Discovery
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_NSB_057
+  ENTITY_NAME: Novel Science Benchmarking
+  SYNONYMS: Post-cut-off Data Evaluation
+  SPECIALIST_DOMAIN: Strategist
+  DESCRIPTION_SHORT: Giao thức đánh giá bằng tài liệu xuất bản sau ngày cắt dữ liệu của LLM [6].
+  ATTRIBUTES: ["Memory avoidance", "True reasoning test", "Scientific accuracy"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Markov Equivalence Class
+      RELATION_TYPE: Đối nghịch
+
+- NODE_ID: ENT_ROI_058
+  ENTITY_NAME: Return on Investment (Causal)
+  SYNONYMS: Causal ROI, Value Surplus
+  SPECIALIST_DOMAIN: Strategist
+  DESCRIPTION_SHORT: Thước đo hiệu quả tài chính từ việc áp dụng AI nhân quả [22, 23].
+  ATTRIBUTES: ["Quantifiable gains", "Regret minimization", "+347% ROI"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: EBITDA Impact
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_EBI_059
+  ENTITY_NAME: EBITDA Impact
+  SYNONYMS: Earnings growth via Causal AI
+  SPECIALIST_DOMAIN: Strategist
+  DESCRIPTION_SHORT: Tăng trưởng lợi nhuận nhờ hệ thống nhân quả cấu trúc [23].
+  ATTRIBUTES: ["12-15% increase", "Business decision-making", "Competitive advantage"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Structural Causal Models
+      RELATION_TYPE: Tương hỗ
+
+- NODE_ID: ENT_MGR_060
+  ENTITY_NAME: Missingness Graphs
+  SYNONYMS: m-graphs
+  SPECIALIST_DOMAIN: Systems Thinker
+  DESCRIPTION_SHORT: Đồ thị mã hóa các giả định về quá trình tạo ra dữ liệu bị thiếu [24].
+  ATTRIBUTES: ["Recoverability", "MNAR mechanism", "Testability"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: Directed Acyclic Graphs
+      RELATION_TYPE: Tương hỗ
+
+--------------------------------------------------------------------------------
+
+  layer: 2
+  description: "Laws, Constraints, Axioms, and Boundary Conditions related to the architecture of Generative Causal Graphs, Neural Hypernetworks"
+
+	- RULE_ID: RUL_DAG_001
+  RULE_NAME: "Differentiable Acyclicity Constraint (Ràng buộc không chu trình khả vi)"
+  MATHEMATICAL_FORMULATION: "h(A) = Tr(e^A) - d = 0 (với A là ma trận kề trọng số, d là số nút) [1-3]"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Gumbel-Softmax Acyclicity Relaxation"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Cung cấp điều kiện cứng để các phương pháp nới lỏng liên tục hội tụ về một đồ thị hợp lệ [4]."
+    - TARGET_RULE: "Global Markov Property"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Tính không chu trình là điều kiện cần để định nghĩa các tập phân tách d-separation trong đồ thị có hướng [5]."
+  FAILURE_CONSEQUENCE: "Nếu h(A) > 0, hệ thống sẽ chứa vòng lặp nhân quả tức thời, phá vỡ tính đệ quy của mô hình cấu trúc và khiến việc lấy mẫu tổ tiên (ancestral sampling) bị lỗi [6, 7]."
+
+- RULE_ID: RUL_LAP_061
+  RULE_NAME: "Laplace’s Rule of Succession"
+  MATHEMATICAL_FORMULATION: "P(next=heads | data) = (Fa + 1) / (Fa + Fb + 2)"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Bayesian Inference"
+      RELATION: "Hệ quả"
+      DESCRIPTION: "Cung cấp cách ước tính xác suất khi số lượng mẫu quan sát còn ít. [13]"
+  FAILURE_CONSEQUENCE: "Hệ thống sẽ gán xác suất 0 cho các sự kiện chưa quan sát thấy, gây lỗi chia cho không hoặc mất tính tổng quát."
+
+- RULE_ID: RUL_KRA_066
+  RULE_NAME: "Kraft Inequality"
+  MATHEMATICAL_FORMULATION: "$\sum 2^{-l_i} \le 1$"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Symbol Codes Consistency"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Điều kiện cần và đủ cho sự tồn tại của một mã tiền tố với các độ dài từ mã cho trước. [11, 12]"
+  FAILURE_CONSEQUENCE: "Nếu vi phạm, mã hóa tri thức sẽ không có tính giải mã duy nhất, gây nhập nhằng trong truy xuất."
+
+- RULE_ID: RUL_NCC_067
+  RULE_NAME: "Noisy-Channel Coding Theorem"
+  MATHEMATICAL_FORMULATION: "$R < C \implies P(error) \to 0$"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Channel Capacity"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Khẳng định khả năng truyền tin tin cậy tuyệt đối nếu tốc độ dưới giới hạn vật lý. [13, 14]"
+  FAILURE_CONSEQUENCE: "Hệ thống sẽ không thể hội tụ về tri thức thực nếu tốc độ nạp dữ liệu vượt quá dung lượng kênh ẩn."
+
+- RULE_ID: RUL_UNI_068
+  RULE_NAME: "Union Bound"
+  MATHEMATICAL_FORMULATION: "$P(\cup A_i) \le \sum P(A_i)$"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Average Error Probability"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Ràng buộc chặn trên cho xác suất lỗi tổng quát trong các hệ thống giải mã đa kịch bản. [15]"
+  FAILURE_CONSEQUENCE: "Dẫn đến việc đánh giá thấp xác suất xảy ra ảo giác trong các chuỗi suy luận dài."
+
+- RULE_ID: RUL_MAX_069
+  RULE_NAME: "Maximum Entropy Principle"
+  MATHEMATICAL_FORMULATION: "$max H(P) \text{ subject to constraints}$"
+  CONSTRAINT_TYPE: "Soft"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Bayesian Inference"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Nguyên lý chọn phân phối ít định kiến nhất thỏa mãn các ràng buộc đã biết. [16, 17]"
+  FAILURE_CONSEQUENCE: "Hệ thống sẽ trở nên quá tự tin vào những giả định không có căn cứ, gây sai lệch CD."
+
+- RULE_ID: RUL_AEP_070
+  RULE_NAME: "Asymptotic Equipartition Property (AEP)"
+  MATHEMATICAL_FORMULATION: "$-1/N \log P(X_1...X_N) \to H(X)$"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Joint Typicality"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Khẳng định rằng các chuỗi dữ liệu hầu như đều thuộc về 'tập điển hình' có xác suất bằng nhau. [18]"
+  FAILURE_CONSEQUENCE: "Làm tê liệt khả năng nén và mã hóa tri thức trong các mạng nơ-ron sâu."
+
+- RULE_ID: RUL_LIK_071
+  RULE_NAME: "Likelihood Principle"
+  MATHEMATICAL_FORMULATION: "$L(\theta) = P(Data|\theta)$"
+  CONSTRAINT_TYPE: "Axiom"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Stopping Rules Independence"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Mọi suy diễn chỉ được phụ thuộc vào dữ liệu thực tế, không phụ thuộc vào ý định của người quan sát. [19]"
+  FAILURE_CONSEQUENCE: "Kết luận nhân quả sẽ bị chệch bởi các yếu tố phi thực nghiệm (như quy tắc dừng thí nghiệm)."
+
+- RULE_ID: RUL_PIG_072
+  RULE_NAME: "Pigeon-hole Principle"
+  MATHEMATICAL_FORMULATION: "$|Input| > |Output| \implies \text{Non-injective}$"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Information Bottleneck"
+      RELATION: "Giới hạn"
+      DESCRIPTION: "Ràng buộc logic ngăn cản việc nén không mất mát xuống dưới mức entropy. [20]"
+  FAILURE_CONSEQUENCE: "Gây hiện tượng sụp đổ thông tin (information collapse) khi cố nén dữ liệu quá mức."
+
+- RULE_ID: RUL_UNI_062
+  RULE_NAME: "Uniform Law of Large Numbers"
+  MATHEMATICAL_FORMULATION: "lim P(sup |R[f] - Rn_emp[f]| > ε) = 0"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "VC Dimension"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Đảm bảo tính nhất quán của việc tối ưu hóa rủi ro thực nghiệm trên toàn bộ lớp hàm F. [8, 14]"
+  FAILURE_CONSEQUENCE: "Mô hình sẽ 'học vẹt' dữ liệu huấn luyện (overfitting) mà không bao giờ hội tụ về rủi ro thực tế."
+
+- RULE_ID: RUL_DET_063
+  RULE_NAME: "Detailed Balance in MCMC"
+  MATHEMATICAL_FORMULATION: "T(x'|x)P(x) = T(x|x')P(x')"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Metropolis-Hastings"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Điều kiện cần để xích Markov đạt đến trạng thái cân bằng mục tiêu. [15]"
+  FAILURE_CONSEQUENCE: "Các mẫu lấy ra từ không gian ẩn sẽ bị chệch, không đại diện đúng cho tri thức nhân quả thực tế."
+
+- RULE_ID: RUL_MAR_002
+  RULE_NAME: "Global Markov Property (Tính chất Markov toàn cục)"
+  MATHEMATICAL_FORMULATION: "(X ⊥_G Y | Z) ⇒ (X ⊥_P Y | Z) [5, 8, 9]"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Faithfulness Assumption"
+      RELATION: "Đối ngẫu"
+      DESCRIPTION: "Markov Property đảm bảo đồ thị là một I-map (bản đồ độc lập) của phân phối xác suất [10, 11]."
+    - TARGET_RULE: "D-separation Criterion"
+      RELATION: "Hệ quả"
+      DESCRIPTION: "Sử dụng các quy tắc đồ thị để đọc ra các độc lập thống kê trong dữ liệu [9]."
+  FAILURE_CONSEQUENCE: "Nếu vi phạm, cấu trúc đồ thị không còn là đại diện hợp lệ cho phân phối dữ liệu, dẫn đến việc suy diễn các quan hệ nhân quả sai lệch hoàn toàn so với thực tế [12, 13]."
+
+- RULE_ID: RUL_FAI_003
+  RULE_NAME: "Faithfulness Assumption (Tiên đề tính trung thực)"
+  MATHEMATICAL_FORMULATION: "(X ⊥_P Y | Z) ⇒ (X ⊥_G Y | Z) [8, 14, 15]"
+  CONSTRAINT_TYPE: "Axiom"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Global Markov Property"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Faithfulness biến đồ thị từ một I-map đơn thuần thành một D-map (bản đồ phụ thuộc) hoàn chỉnh [10]."
+    - TARGET_RULE: "Causal Minimality"
+      RELATION: "Giới hạn"
+      DESCRIPTION: "Faithfulness là một điều kiện mạnh hơn Minimality, ngăn chặn việc các đường dẫn nhân quả triệt tiêu lẫn nhau về mặt toán học [15, 16]."
+  FAILURE_CONSEQUENCE: "Nếu vi phạm (ví dụ: tác động dương và âm triệt tiêu nhau), hệ thống sẽ bỏ sót các cạnh nhân quả thực sự vì chúng biểu hiện như độc lập thống kê trong dữ liệu [8, 17]."
+
+- RULE_ID: RUL_CHT_004
+  RULE_NAME: "Causal Hierarchy Theorem - CHT (Định luật phân cấp nhân quả)"
+  MATHEMATICAL_FORMULATION: "L1 (Association) ⊂ L2 (Intervention) ⊂ L3 (Counterfactuals) [18-20]"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Rules of do-Calculus"
+      RELATION: "Hệ quả"
+      DESCRIPTION: "CHT xác lập nhu cầu cần do-calculus để 'leo thang' từ dữ liệu quan sát (L1) lên can thiệp (L2) [21]."
+    - TARGET_RULE: "Counterfactual Consistency"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Consistency là cầu nối logic để kiểm tra tính nhất quán giữa các tầng của phân cấp [22]."
+  FAILURE_CONSEQUENCE: "Nếu cố gắng suy diễn tầng cao hơn từ tầng thấp hơn mà không có giả định cấu trúc, hệ thống sẽ trở thành 'vẹt nhân quả' (causal parrot) - chỉ khớp mẫu thay vì hiểu cơ chế [18, 23]."
+
+- RULE_ID: RUL_BOW_005
+  RULE_NAME: "Bow-free Constraint (Ràng buộc không hình cung)"
+  MATHEMATICAL_FORMULATION: "D_ij * B_ij = 0 (với D: cạnh hướng, B: cạnh hai chiều) [3, 24, 25]"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "ADMG Identifiability Conditions"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Đảm bảo cấu trúc ADMG có thể nhận dạng được từ dữ liệu quan sát [24, 26]."
+    - TARGET_RULE: "Verma Constraint"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Đơn giản hóa việc tìm kiếm các ràng buộc đa thức phức tạp trong đồ thị hỗn hợp [27]."
+  FAILURE_CONSEQUENCE: "Nếu tồn tại cả X -> Y và X <-> Y đồng thời, tác động nhân quả từ X đến Y sẽ trở nên không thể nhận dạng (non-identifiable), gây bế tắc cho các thuật toán tối ưu hóa [24, 27]."
+
+- RULE_ID: RUL_ICM_006
+  RULE_NAME: "Independent Causal Mechanisms - ICM (Nguyên lý cơ chế độc lập)"
+  MATHEMATICAL_FORMULATION: "P(V) = Π P(Vi | PAi); I(Mechanisms) = 0 [6, 28, 29]"
+  CONSTRAINT_TYPE: "Axiom"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Truncated Factorization"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Tính độc lập của các cơ chế cho phép can thiệp vào một nút mà không làm thay đổi các hàm cấu trúc khác [30, 31]."
+    - TARGET_RULE: "Minimum Description Length (MDL)"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Sử dụng độ nén thông tin để đo lường độ độc lập thuật toán giữa các cơ chế [28, 32]."
+  FAILURE_CONSEQUENCE: "Nếu các cơ chế bị vướng víu (entangled), hệ thống mất tính mô-đun (modularity); can thiệp cục bộ sẽ gây ra 'sụp đổ dây chuyền' không kiểm soát được trong toàn bộ mô hình [6, 33]."
+
+- RULE_ID: RUL_DOC_007
+  RULE_NAME: "Rules of do-Calculus (Ba định luật can thiệp của Pearl)"
+  MATHEMATICAL_FORMULATION: |
+    Rule 1: P(y|do(x), z, w) = P(y|do(x), w) if (Y ⊥ Z | X, W) in G_X_bar
+    Rule 2: P(y|do(x), do(z), w) = P(y|do(x), z, w) if (Y ⊥ Z | X, W) in G_X_bar_Z_under
+    Rule 3: P(y|do(x), do(z), w) = P(y|do(x), w) if (Y ⊥ Z | X, W) in G_X_bar_Z_bar(W) [31, 34, 35]
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Back-door Criterion"
+      RELATION: "Giới hạn"
+      DESCRIPTION: "Tiêu chuẩn Back-door là một trường hợp thực thi cụ thể của Rule 2 [36]."
+    - TARGET_RULE: "Identifiability"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Là động cơ toán học chính để chứng minh một truy vấn nhân quả có thể giải được từ dữ liệu quan sát [34]."
+  FAILURE_CONSEQUENCE: "Hệ thống sẽ không thể chuyển đổi các biểu thức can thiệp thành các xác suất quan sát được, làm tê liệt khả năng dự báo 'What-if' từ dữ liệu phi thực nghiệm [34]."
+
+- RULE_ID: RUL_ELB_008
+  RULE_NAME: "ELBO Optimization Bound (Điều kiện biên tối ưu biến phân)"
+  MATHEMATICAL_FORMULATION: "L(θ, φ; x) = E_q[log p(x|z)] - KL(q(z|x) || p(z)) [26, 37, 38]"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Information Bottleneck (IB)"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Cân bằng giữa độ chính xác tái tạo và độ nén thông tin trong không gian ẩn nhân quả [39, 40]."
+    - TARGET_RULE: "Structural Consistency"
+      RELATION: "Hệ quả"
+      DESCRIPTION: "Tối ưu hóa ELBO dẫn đến việc phục hồi cấu trúc ADMG thực trong giới hạn dữ liệu vô hạn [24, 41]."
+  FAILURE_CONSEQUENCE: "Nếu không đạt được ELBO tối ưu, mô hình sẽ gặp hiện tượng 'sụp đổ hậu nghiệm' (posterior collapse) hoặc học các biểu diễn ẩn không có ý nghĩa nhân quả [42, 43]."
+
+- RULE_ID: RUL_BAC_009
+  RULE_NAME: "Back-door Criterion (Tiêu chuẩn cửa sau)"
+  MATHEMATICAL_FORMULATION: "Z chặn mọi đường dẫn giữa X và Y chứa mũi tên hướng vào X; Z không chứa hậu duệ của X [44-46]"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Adjustment Set Selection"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Định nghĩa tập biến cần thiết để khử nhiễu (deconfounding) [47, 48]."
+    - TARGET_RULE: "do-Calculus Rule 2"
+      RELATION: "Hệ quả"
+      DESCRIPTION: "Cung cấp cơ sở đồ thị để thực hiện việc tráo đổi giữa can thiệp 'do' và quan sát 'see' [36]."
+  FAILURE_CONSEQUENCE: "Nếu chọn tập điều chỉnh vi phạm tiêu chuẩn này, ước tính tác động nhân quả sẽ bị chệch nghiêm trọng do các tương quan giả từ confounders [44, 49]."
+
+- RULE_ID: RUL_IBN_010
+  RULE_NAME: "Information Bottleneck - IB (Ràng buộc điểm nghẽn thông tin)"
+  MATHEMATICAL_FORMULATION: "min [I(X; Z) - β I(Z; Y)] [50-53]"
+  CONSTRAINT_TYPE: "Soft"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Minimal Sufficient Representation"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Ép buộc hệ thống chỉ giữ lại các đặc trưng tối giản nhưng đủ để dự báo [54]."
+    - TARGET_RULE: "ELBO Optimization Bound"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Phần KL-divergence trong ELBO hoạt động như một bottleneck để nén thông tin ẩn [39, 40]."
+  FAILURE_CONSEQUENCE: "Mô hình sẽ bị 'quá khớp' với nhiễu bề mặt (superficial noise) của dữ liệu đầu vào, làm mất khả năng tổng quát hóa khi gặp miền dữ liệu mới hoặc các can thiệp lạ [52, 55]."
+
+- RULE_ID: RUL_FRO_011
+  RULE_NAME: "Front-door Criterion (Tiêu chuẩn cửa trước)"
+  MATHEMATICAL_FORMULATION: "P(y|do(x)) = ∑z P(z|x) ∑x' P(y|z, x') P(x')"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Back-door Criterion"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Cung cấp lộ trình thay thế để nhận dạng tác động khi không thể đo lường tất cả các biến gây nhiễu backdoor [1, 2]."
+    - TARGET_RULE: "Rules of do-Calculus"
+      RELATION: "Hệ quả"
+      DESCRIPTION: "Đây là một ứng dụng lặp của Rule 2 và Rule 3 trong do-calculus để khử nhiễu ẩn [2]."
+  FAILURE_CONSEQUENCE: "Nếu cơ chế trung gian Z không thỏa mãn điều kiện (không bị nhiễu bởi X và chặn mọi đường dẫn từ Z đến Y), hệ thống sẽ không thể ước tính tác động nhân quả trong các mô hình có biến ẩn không quan sát được [3]."
+
+- RULE_ID: RUL_VER_012
+  RULE_NAME: "Verma Constraint (Ràng buộc đa thức Verma)"
+  MATHEMATICAL_FORMULATION: "∑b P(d|a, b, c) P(b|a) = f(a, c, d) (độc lập với b)"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Global Markov Property"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Bắt lấy các ràng buộc thống kê trong đồ thị có biến ẩn mà d-separation thông thường bỏ sót [4, 5]."
+    - TARGET_RULE: "Identifiability"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Là điều kiện cần để phân biệt các cấu trúc đồ thị không tương đương Markov nhưng có cùng độc lập thống kê [4]."
+  FAILURE_CONSEQUENCE: "Nếu bỏ qua ràng buộc này, hệ thống có thể kết luận sai về cấu trúc đồ thị hỗn hợp (ADMG), dẫn đến việc nhận dạng sai các cơ chế phản thực tế [4]."
+
+- RULE_ID: RUL_IV_013
+  RULE_NAME: "Instrumental Variable Exclusion Restriction (Ràng buộc loại trừ biến công cụ)"
+  MATHEMATICAL_FORMULATION: "Y(z, t) = Y(t); Z ⊥ εY"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Identifiability"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Đảm bảo biến công cụ Z chỉ ảnh hưởng đến kết quả Y thông qua nguyên nhân T [6, 7]."
+    - TARGET_RULE: "Instrumental Inequality"
+      RELATION: "Hệ quả"
+      DESCRIPTION: "Ràng buộc cấu trúc này dẫn đến các giới hạn kiểm chứng được trong dữ liệu quan sát [8]."
+  FAILURE_CONSEQUENCE: "Nếu Z tác động trực tiếp lên Y (vi phạm exclusion), mọi ước tính nhân quả dựa trên IV sẽ bị chệch (biased) và không còn giá trị pháp lý hoặc khoa học [6, 9]."
+
+- RULE_ID: RUL_SEL_014
+  RULE_NAME: "s-Recoverability / Selection Bias Constraint (Ràng buộc phục hồi sai lệch chọn lọc)"
+  MATHEMATICAL_FORMULATION: "P(y|x) = P(y|x, S=1); Cần tìm tập Z sao cho (Y ⊥ S | X, Z)"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Back-door Criterion"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Mở rộng tiêu chuẩn backdoor để bao gồm cả nút chọn lọc S [10, 11]."
+    - TARGET_RULE: "do-Calculus Rule 1"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Dùng để loại bỏ biến S ra khỏi phân phối can thiệp nếu các điều kiện đồ thị thỏa mãn [10]."
+  FAILURE_CONSEQUENCE: "Nếu không thỏa mãn s-recoverability, hệ thống sẽ đưa ra kết luận nhân quả dựa trên dữ liệu bị lọc (filtered), dẫn đến các chính sách sai lầm cho quần thể chung [10, 11]."
+
+- RULE_ID: RUL_TRA_015
+  RULE_NAME: "Transportability / External Validity (Tính khả chuyển của tri thức)"
+  MATHEMATICAL_FORMULATION: "P*(y|do(x)) = ∑z P(y|do(x), s, z) P*(z)"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Rules of do-Calculus"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Sử dụng do-calculus để xác định công thức chuyển đổi (transport formula) giữa miền nguồn và miền đích [12, 13]."
+    - TARGET_RULE: "Independent Causal Mechanisms (ICM)"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Tính khả chuyển dựa trên giả định rằng một số cơ chế nhân quả là bất biến giữa các môi trường [14, 15]."
+  FAILURE_CONSEQUENCE: "Hệ thống sẽ không thể áp dụng các bài học từ thử nghiệm lâm sàng (nguồn) sang bệnh nhân thực tế (đích) nếu các khác biệt về phân phối không được điều chỉnh qua transport formula [13, 15]."
+
+- RULE_ID: RUL_CON_016
+  RULE_NAME: "Counterfactual Consistency Axiom (Tiên đề nhất quán phản thực tế)"
+  MATHEMATICAL_FORMULATION: "(X = x) ⟹ (Y_x = Y)"
+  CONSTRAINT_TYPE: "Axiom"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Causal Hierarchy Theorem (CHT)"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Là nền tảng để gán dữ liệu thực tế vào các truy vấn tầng 3 (Counterfactuals) [16, 17]."
+    - TARGET_RULE: "Structural Causal Models (SCM)"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Xác định cách các hàm cấu trúc phản ứng khi biến can thiệp khớp với biến quan sát [18, 19]."
+  FAILURE_CONSEQUENCE: "Nếu vi phạm, logic về 'nguyên nhân thực sự' (actual causation) bị sụp đổ; hệ thống không thể học từ sai lầm trong quá khứ [18, 20]."
+
+- RULE_ID: RUL_GUM_017
+  RULE_NAME: "Gumbel-Softmax Acyclicity Relaxation (Nới lỏng không chu trình liên tục)"
+  MATHEMATICAL_FORMULATION: "M ~ σ((log π + g)/τ); h(M) ≤ ε"
+  CONSTRAINT_TYPE: "Soft"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Differentiable Acyclicity Constraint"
+      RELATION: "Giới hạn"
+      DESCRIPTION: "Cung cấp cơ chế gradient để tối ưu hóa điều kiện h(A)=0 trong không gian liên tục [21, 22]."
+    - TARGET_RULE: "Neural SCM"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Cho phép huấn luyện các mạng thần kinh nhân quả bằng phương pháp lan truyền ngược [21, 23]."
+  FAILURE_CONSEQUENCE: "Nếu tham số nhiệt độ τ không hội tụ, cấu trúc đồ thị sẽ bị 'mờ' (fuzzy), chứa các chu trình siêu vi làm sai lệch dòng thông tin nhân quả [21]."
+
+- RULE_ID: RUL_ANI_018
+  RULE_NAME: "Approximate Neighborhood Interference (ANI)"
+  MATHEMATICAL_FORMULATION: "Cov(Yi, Yj | D, X, A) → 0 khi d(i, j) → ∞"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Graph Neural Networks (GNN)"
+      RELATION: "Giới hạn"
+      DESCRIPTION: "Quy định độ sâu tối ưu của GNN để xử lý nhiễu mạng lưới mà không bị over-smoothing [24, 25]."
+    - TARGET_RULE: "Global Markov Property"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Xác lập giới hạn vật lý cho sự lan truyền ảnh hưởng trong các mạng lưới dày đặc [26, 27]."
+  FAILURE_CONSEQUENCE: "Nếu ảnh hưởng mạng lưới không suy giảm (decay), các ước tính tác động can thiệp sẽ không thể hội tụ, dẫn đến sai số hệ thống trong phân tích peer-effects [24, 25]."
+
+- RULE_ID: RUL_POS_019
+  RULE_NAME: "Positivity Requirement (Điều kiện biên xác suất dương)"
+  MATHEMATICAL_FORMULATION: "P(x|z) > 0 với mọi x, z thỏa mãn P(z) > 0"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Identifiability"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Đảm bảo mẫu số trong các thuật toán điều chỉnh (adjustment) không bằng không [28, 29]."
+    - TARGET_RULE: "Back-door Criterion"
+      RELATION: "Giới hạn"
+      DESCRIPTION: "Giới hạn phạm vi của các can thiệp có thể ước tính được từ dữ liệu quan sát [29]."
+  FAILURE_CONSEQUENCE: "Hệ thống sẽ gặp lỗi 'chia cho không' (division by zero) hoặc tạo ra các ước tính có phương sai vô hạn khi gặp các tổ hợp biến hiếm gặp [28]."
+
+- RULE_ID: RUL_KRA_020
+  RULE_NAME: "Kraft Inequality (Ràng buộc mã hóa tối ưu)"
+  MATHEMATICAL_FORMULATION: "∑ 2^(-li) ≤ 1"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Minimum Description Length (MDL)"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Xác lập giới hạn lý thuyết cho việc nén đồ thị tri thức [30, 31]."
+    - TARGET_RULE: "Information Bottleneck (IB)"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Ràng buộc độ dài mô tả của các biểu diễn ẩn trong quá trình học [30]."
+  FAILURE_CONSEQUENCE: "Nếu vi phạm, hệ thống mã hóa tri thức sẽ không có tính giải mã duy nhất (non-uniquely decodable), dẫn đến sự nhập nhằng trong việc truy xuất logic [30]."
+
+- RULE_ID: RUL_COD_021
+  RULE_NAME: "Shannon's Noisy-Channel Coding Theorem (Định luật mã hóa kênh nhiễu)"
+  MATHEMATICAL_FORMULATION: "R < C; P(error) → 0 khi N → ∞"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Kraft Inequality"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Khả năng truyền tin không lỗi chỉ tồn tại nếu việc mã hóa thỏa mãn các giới hạn về độ dài từ mã [1]."
+    - TARGET_RULE: "Information Bottleneck - IB"
+      RELATION: "Giới hạn"
+      DESCRIPTION: "Xác lập dung lượng tối đa mà một mã ẩn có thể truyền tải từ input đến output."
+  FAILURE_CONSEQUENCE: "Nếu tốc độ truyền tri thức R vượt quá dung lượng kênh C, hệ thống sẽ gặp hiện tượng nhiễu loạn thông tin, dẫn đến các kết nối đồ thị bị sai lệch hoặc mất mát đặc trưng."
+
+- RULE_ID: RUL_OCC_022
+  RULE_NAME: "Bayesian Occam's Razor (Nguyên lý dao cạo Occam trong xác suất)"
+  MATHEMATICAL_FORMULATION: "P(D|H) = ∫ P(D|w, H)P(w|H)dw"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Minimum Description Length (MDL)"
+      RELATION: "Hệ quả"
+      DESCRIPTION: "Các mô hình phức tạp bị phạt bởi 'Yếu tố Occam' do phải phân bổ xác suất trên không gian tham số lớn hơn [2, 3]."
+    - TARGET_RULE: "Faithfulness Assumption"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Ưu tiên cấu trúc đồ thị đơn giản nhất mà vẫn giải thích được các độc lập thống kê."
+  FAILURE_CONSEQUENCE: "Nếu bỏ qua, hệ thống sẽ ưu tiên các mô hình 'quá khớp' (overfitting), tạo ra các quan hệ nhân quả ảo giác (hallucinations) cực kỳ phức tạp nhưng không có giá trị dự báo."
+
+- RULE_ID: RUL_SEQ_023
+  RULE_NAME: "Sequential Truncated Factorization (Định luật cắt tỉa chuỗi can thiệp)"
+  MATHEMATICAL_FORMULATION: "P(z1, z3, y | do(x), do(z2)) = P(z1)P(z3|z1, z2)P(y|z2, z3, x)"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Rules of do-Calculus"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Mở rộng toán tử do cho các can thiệp đa biến hoặc theo thời gian [4, 5]."
+    - TARGET_RULE: "Causal Hierarchy Theorem (CHT)"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Cung cấp thuật toán để thực hiện các truy vấn can thiệp ở Tầng 2 trên các hệ thống động."
+  FAILURE_CONSEQUENCE: "Hệ thống sẽ không thể tính toán tác động của các chiến dịch can thiệp dài hạn (như điều trị y tế nhiều giai đoạn), dẫn đến dự báo kết quả can thiệp sai lầm."
+
+- RULE_ID: RUL_DET_024
+  RULE_NAME: "Detailed Balance / Reversibility (Ràng buộc cân bằng chi tiết)"
+  MATHEMATICAL_FORMULATION: "T(x'|x)P(x) = T(x|x')P(x')"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "ELBO Optimization Bound"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Đảm bảo các thuật toán lấy mẫu MCMC hội tụ về đúng phân phối mục tiêu trong không gian ẩn [6]."
+    - TARGET_RULE: "Gumbel-Softmax Acyclicity Relaxation"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Giữ cho quá trình tối ưu hóa gradient luôn ổn định và không bị lệch khỏi manifold nhân quả."
+  FAILURE_CONSEQUENCE: "Nếu vi phạm, quá trình học biểu diễn ẩn sẽ không bao giờ đạt đến trạng thái ổn định, khiến đồ thị nhân quả sinh ra thay đổi hỗn loạn sau mỗi bước huấn luyện."
+
+- RULE_ID: RUL_AMC_025
+  RULE_NAME: "Algorithmic Markov Condition - AMC (Nguyên lý Markov thuật toán)"
+  MATHEMATICAL_FORMULATION: "K(X, Y) ≈ K(X) + K(Y|X*)"
+  CONSTRAINT_TYPE: "Axiom"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Independent Causal Mechanisms (ICM)"
+      RELATION: "Hệ quả"
+      DESCRIPTION: "Thay thế tính độc lập thống kê bằng sự độc lập về độ phức tạp Kolmogorov giữa các cơ chế [7, 8]."
+    - TARGET_RULE: "Minimum Description Length (MDL)"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Sử dụng AMC để chưng cất đồ thị nhân quả tối ưu nhất trong bối cảnh ít dữ liệu."
+  FAILURE_CONSEQUENCE: "Hệ thống sẽ không thể phân biệt được hướng nhân quả (X→Y hay Y→X) trong các trường hợp hai biến có tương quan thống kê hoàn hảo, làm tê liệt khả năng CD."
+
+- RULE_ID: RUL_SUT_026
+  RULE_NAME: "Stable Unit Treatment Value Assumption - SUTVA (Tiên đề giá trị xử lý ổn định)"
+  MATHEMATICAL_FORMULATION: "Y_i(d) ⊥ d_j với mọi j ≠ i"
+  CONSTRAINT_TYPE: "Axiom"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Approximate Neighborhood Interference (ANI)"
+      RELATION: "Giới hạn"
+      DESCRIPTION: "SUTVA là trường hợp lý tưởng; ANI là sự nới lỏng thực tế khi có nhiễu mạng lưới [9, 10]."
+    - TARGET_RULE: "Back-door Criterion"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Ước tính ACE chỉ hợp lệ nếu can thiệp vào một đơn vị không gây ra hiệu ứng lan truyền không kiểm soát."
+  FAILURE_CONSEQUENCE: "Nếu vi phạm (do hiệu ứng peer-effects), các kết luận về hiệu quả can thiệp sẽ bị chệch, vì kết quả của đơn vị này phụ thuộc vào việc đơn vị lân cận có bị can thiệp hay không."
+
+- RULE_ID: RUL_ENT_027
+  RULE_NAME: "Entropy Preservation in SENT (Ràng buộc bảo toàn entropy lập luận)"
+  MATHEMATICAL_FORMULATION: "Maximize H(tokens) tại các điểm quyết định logic"
+  CONSTRAINT_TYPE: "Soft"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Information Bottleneck - IB"
+      RELATION: "Đối nghịch"
+      DESCRIPTION: "Ngăn chặn hiện tượng 'Entropy Collapse' (sụp đổ entropy) khiến mô hình đưa ra kết quả lập luận lặp lại vô hồn [11]."
+    - TARGET_RULE: "ELBO Optimization Bound"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Sử dụng tín hiệu entropy để hướng dẫn quá trình curriculum học sâu."
+  FAILURE_CONSEQUENCE: "Mô hình sẽ rơi vào trạng thái 'deterministic collapse', chỉ có thể đưa ra một lộ trình suy luận duy nhất, làm mất khả năng sáng tạo và khám phá các giả thuyết nhân quả mới."
+
+- RULE_ID: RUL_LYA_028
+  RULE_NAME: "Lyapunov Convergence for Neural Energy (Ràng buộc hội tụ năng lượng Lyapunov)"
+  MATHEMATICAL_FORMULATION: "dE/dt ≤ 0; E(x) = -1/2 ∑ J_mn x_m x_n"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Graph Acyclicity Constraint"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Đảm bảo sự ổn định của mạng Hopfield hoặc các mạng thần kinh hồi quy khi thực hiện truy xuất bộ nhớ nhân quả [12, 13]."
+    - TARGET_RULE: "Detailed Balance / Reversibility"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Sự tồn tại của hàm Lyapunov đảm bảo hệ thống đạt đến trạng thái cân bằng ổn định."
+  FAILURE_CONSEQUENCE: "Hệ thống sẽ bị kẹt trong các vòng lặp vô hạn hoặc dao động không ngừng, khiến việc tìm kiếm cấu trúc đồ thị tối ưu không thể kết thúc."
+
+- RULE_ID: RUL_FRE_029
+  RULE_NAME: "Fréchet Bounds for PAG Scoring (Giới hạn Fréchet cho điểm số PAG)"
+  MATHEMATICAL_FORMULATION: "SP_lower ≤ Score(PAG) ≤ SP_upper"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Global Markov Property"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Sử dụng các giới hạn xác suất để đánh giá độ tương thích giữa dữ liệu và các đồ thị có biến ẩn [14]."
+    - TARGET_RULE: "Verma Constraint"
+      RELATION: "Hệ quả"
+      DESCRIPTION: "Thu hẹp khoảng cách giữa các giới hạn để xác định tính nhận dạng của PAG."
+  FAILURE_CONSEQUENCE: "Nếu điểm số vượt ra ngoài giới hạn Fréchet, hệ thống sẽ báo lỗi 'Cấu trúc đồ thị không tương thích với bằng chứng thực nghiệm', dẫn đến việc bác bỏ giả thuyết sai."
+
+- RULE_ID: RUL_BPC_030
+  RULE_NAME: "Boundary Conditions for Belief Propagation (Điều kiện biên lan truyền niềm tin)"
+  MATHEMATICAL_FORMULATION: "λ = (1,1...1) cho nút dự báo; λ = (0...1...0) cho nút dữ liệu thực"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Global Markov Property"
+      RELATION: "Hệ quả"
+      DESCRIPTION: "Đảm bảo thông tin từ dữ liệu quan sát được chuyển hóa chính xác thành niềm tin hậu nghiệm trên cây nhân quả [15]."
+    - TARGET_RULE: "Rules of do-Calculus"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Cung cấp trạng thái ban đầu cho việc mô phỏng các can thiệp 'What-if'."
+  FAILURE_CONSEQUENCE: "Việc thiết lập sai điều kiện biên sẽ khiến tri thức 'chảy ngược' không chính xác trong mạng lưới, dẫn đến việc gán nhầm nguyên nhân cho những kết quả không liên quan."
+
+- RULE_ID: RUL_PUR_031
+  RULE_NAME: "Pure Children Condition (Điều kiện con thuần túy)"
+  MATHEMATICAL_FORMULATION: "∥Mi,: ⊙ ∏_{j≠i} (1 - Mj,:)∥_1 ≥ 2 ∀i (với M là ma trận kề lớp ẩn)"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Identifiability of Latent Hierarchical Models"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Đảm bảo mỗi biến ẩn có ít nhất 2 con thuần túy để cấu trúc phân cấp có thể nhận dạng được từ dữ liệu quan sát [1, 2]."
+  FAILURE_CONSEQUENCE: "Nếu vi phạm, hệ thống không thể phân tách được ảnh hưởng của các biến ẩn chồng lấn, dẫn đến ma trận kề học được bị nhập nhằng về mặt định danh [3]."
+
+- RULE_ID: RUL_MIR_032
+  RULE_NAME: "Bidirectional Mirroring Constraint (Ràng buộc đối xứng gương)"
+  MATHEMATICAL_FORMULATION: "E(Ot_i, Ft+1_j) ∈ G ⇔ E(Ft+1_j, Ot+1_i) ∈ G (trong mô hình CPM)"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Causal Process Models (CPM)"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Đảm bảo tính nhất quán thời gian: nếu vật thể tác động vào lực tại t, lực đó phải phản hồi lại vật thể tại t+1 [4]."
+  FAILURE_CONSEQUENCE: "Phá vỡ tính bảo toàn của luồng nhân quả trong các bài toán động lực học vật thể, khiến robot hoặc agent RL không hiểu được hệ quả của hành động mình vừa thực hiện [5]."
+
+- RULE_ID: RUL_REC_033
+  RULE_NAME: "Recanting District Criterion (Tiêu chuẩn vùng rút lời)"
+  MATHEMATICAL_FORMULATION: "∃D ∈ 𝒟(G_X): {Ni, Oi} ⊆ Pa(D) ∩ A (với A là tập can thiệp)"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Path-specific Effect Identifiability"
+      RELATION: "Giới hạn"
+      DESCRIPTION: "Xác định giới hạn của việc tính toán tác động theo đường dẫn (PDE); nếu tồn tại vùng 'recanting', PDE sẽ không thể nhận dạng [6, 7]."
+  FAILURE_CONSEQUENCE: "Hệ thống sẽ đưa ra các ước tính tác động mâu thuẫn khi cố gắng tách biệt các lộ trình sinh học hoặc tài chính phức tạp có biến gây nhiễu trung gian [8]."
+
+- RULE_ID: RUL_SAD_034
+  RULE_NAME: "S-admissibility (Tính chấp nhận được theo sơ đồ chọn lọc)"
+  MATHEMATICAL_FORMULATION: "(X ⊥ Y | Z, S) trong G_s-mutilated"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Transportability / External Validity"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Điều kiện cần để một tập điều chỉnh Z cho phép chuyển giao tri thức từ môi trường thực nghiệm sang môi trường đích [9, 10]."
+  FAILURE_CONSEQUENCE: "Các suy luận can thiệp học được từ phòng thí nghiệm sẽ hoàn toàn sai lệch khi áp dụng vào thực tế nếu tập Z không chặn được các đường dẫn sai lệch chọn lọc [11]."
+
+- RULE_ID: RUL_COL_035
+  RULE_NAME: "Collection Sparse Loss (Ràng buộc thưa theo nhóm)"
+  MATHEMATICAL_FORMULATION: "min ∑_i (λ1 ∥Ai,:∥_1 + λ2 ∥Ai,:∥_2)"
+  CONSTRAINT_TYPE: "Soft"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Structural Minimality"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Sử dụng phạt hỗn hợp L1/L2 để ép các hàng trong ma trận kề về không, giúp tự động xác định số lượng biến thực tế [12]."
+  FAILURE_CONSEQUENCE: "Đồ thị sẽ chứa quá nhiều 'nút rác' và cạnh yếu, làm tăng tải lượng tính toán và giảm độ tường minh của mô hình (interpretability) [13]."
+
+- RULE_ID: RUL_MAP_036
+  RULE_NAME: "Strict Convexity of Log-Bernoulli Loss (Ràng buộc lồi tuyệt đối)"
+  MATHEMATICAL_FORMULATION: "d^2/da^2 [-log(1-a)] = 1/(1-a)^2 > 0"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Convex MAP-estimate with Exact Sparsity"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Đảm bảo hàm mất mát có một cực tiểu toàn cục duy nhất cho việc học ma trận kề dưới dạng MAP [14, 15]."
+  FAILURE_CONSEQUENCE: "Quá trình tối ưu hóa gradient sẽ bị kẹt ở các điểm yên ngựa (saddle points) hoặc cực tiểu địa phương, khiến đồ thị sinh ra không ổn định qua các lần chạy [15]."
+
+- RULE_ID: RUL_MUL_037
+  RULE_NAME: "Multi-consistency Loss Boundary (Ràng buộc đa nhất quán)"
+  MATHEMATICAL_FORMULATION: "L_multi = ∥Z_img - Z_txt∥_2 + KL(q(Z)|p(Z))"
+  CONSTRAINT_TYPE: "Soft"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Causal Representation Learning (CARL)"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Ép buộc không gian ẩn của các phương thức khác nhau (ảnh/văn bản) phải ánh xạ về cùng một cấu trúc nhân quả [16, 17]."
+  FAILURE_CONSEQUENCE: "Hệ thống gặp hiện tượng 'desync ngữ nghĩa', nơi mô tả văn bản không khớp với logic vận hành của các đối tượng trong hình ảnh [18]."
+
+- RULE_ID: RUL_POS_038
+  RULE_NAME: "Strict Positivity for Observational Equivalence (Ràng buộc dương nghiêm ngặt)"
+  MATHEMATICAL_FORMULATION: "P(v) > 0 ∀v ∈ Val(V)"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Identifiability of Structural Assignments"
+      RELATION: "Hệ quả"
+      DESCRIPTION: "Là điều kiện biên để các mô hình SCM có cùng dữ liệu quan sát không đưa ra kết quả can thiệp đa biến khác nhau [19]."
+  FAILURE_CONSEQUENCE: "Nếu tồn tại các tổ hợp biến có xác suất bằng 0, thuật toán ID có thể thất bại trong việc chứng minh tính nhận dạng, làm tê liệt hệ thống suy diễn can thiệp [19]."
+
+RULE_ID: RUL_GFO_039
+  RULE_NAME: "Truncated Factorization Product (g-formula)"
+  MATHEMATICAL_FORMULATION: "P(v | do(x)) = ∏_{i | Vi ∉ X} P(vi | pai)"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Independent Causal Mechanisms (ICM)"
+      RELATION: "Hệ quả"
+      DESCRIPTION: "Cụ thể hóa việc tính toán can thiệp dựa trên tính độc lập của các cơ chế thành phần [1]."
+  FAILURE_CONSEQUENCE: "Nếu không thỏa mãn, hệ thống không thể biểu diễn xác suất can thiệp dưới dạng các phân phối quan sát được, làm tê liệt do-calculus."
+
+- RULE_ID: RUL_SREC_040
+  RULE_NAME: "s-Recoverability Condition"
+  MATHEMATICAL_FORMULATION: "(Y ⊥ S | X, Z) trong G_s"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Back-door Criterion"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Yêu cầu sự tồn tại của tập Z để chặn mọi đường dẫn giữa biến chọn lọc S và biến đích Y [2, 3]."
+  FAILURE_CONSEQUENCE: "Hệ thống sẽ không thể phục hồi dữ liệu từ các mẫu bị sai lệch chọn lọc, dẫn đến kết luận nhân quả bị chệch."
+
+- RULE_ID: RUL_ADM_041
+  RULE_NAME: "Admissibility Heuristic Constraint (A* Search)"
+  MATHEMATICAL_FORMULATION: "h(n) ≤ h*(n) (với h* là chi phí tối ưu thực tế)"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Consistency Property (Search)"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Đảm bảo thuật toán tìm kiếm đường dẫn tri thức (Path-finding) luôn hội tụ về giải pháp tối ưu [4]."
+  FAILURE_CONSEQUENCE: "Nếu h(n) > h*(n), hệ thống có thể bỏ qua lộ trình nhân quả ngắn nhất/chính xác nhất, dẫn đến suy luận dưới mức tối ưu."
+
+- RULE_ID: RUL_CONS_042
+  RULE_NAME: "Consistency Property (Search Strategy)"
+  MATHEMATICAL_FORMULATION: "h(n) ≤ c(n, n') + h(n')"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Admissibility Heuristic"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Đảm bảo rằng một khi một Node tri thức đã được mở rộng (CLOSED), nó sẽ không bao giờ cần phải mở lại [5, 6]."
+  FAILURE_CONSEQUENCE: "Gây ra việc lặp lại tính toán vô ích (redundant computation) trong các mạng lưới tri thức khổng lồ."
+
+- RULE_ID: RUL_STAR_043
+  RULE_NAME: "Star-decomposability Condition"
+  MATHEMATICAL_FORMULATION: "pij * pik / pi ≤ x ≤ pij * pik / pi + σj * σk(ρjk - ρij * ρik)"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Global Markov Property"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Điều kiện cần và đủ để các tương quan bậc hai hỗ trợ việc phân tách một đồ thị thành cấu trúc cây có biến ẩn [7, 8]."
+  FAILURE_CONSEQUENCE: "Hệ thống không thể 'mọc' thêm các nút ẩn (hidden causes) để giải thích các tương quan phức tạp giữa các thực thể quan sát được."
+
+- RULE_ID: RUL_MSEP_044
+  RULE_NAME: "M-separation in PAGs"
+  MATHEMATICAL_FORMULATION: "Z blocks all definite m-connecting paths between X and Y"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "D-separation"
+      RELATION: "Mở rộng"
+      DESCRIPTION: "Quy tắc chặn đường dẫn trong đồ thị tổ tiên bộ phận (PAG) có tính đến cả các cạnh vòng tròn (circle marks) [9]."
+  FAILURE_CONSEQUENCE: "Nhận diện sai các độc lập thống kê trong môi trường có biến ẩn, dẫn đến việc xây dựng cấu trúc PAG sai lệch."
+
+- RULE_ID: RUL_RFAI_045
+  RULE_NAME: "Residual Faithfulness Condition"
+  MATHEMATICAL_FORMULATION: "∀gi, gj , [(xi - gi(x−i)) ⊥̸ (xj - gj(x−j))]"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Faithfulness Assumption"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Đảm bảo rằng sai số của các hàm hồi quy vẫn giữ lại thông tin về các cạnh nhân quả thực [10]."
+  FAILURE_CONSEQUENCE: "Mô hình N-ADMG sẽ xóa nhầm các cạnh quan trọng nếu phần dư (residuals) biểu hiện như nhiễu trắng độc lập giả tạo."
+
+- RULE_ID: RUL_INVA_046
+  RULE_NAME: "Invariance of Treatment Assignment"
+  MATHEMATICAL_FORMULATION: "Ti ⊥ (Yi(d), Xi, Ai) | ϕ"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "SUTVA Assumption"
+      RELATION: "Hệ quả"
+      DESCRIPTION: "Định nghĩa tính không bị nhiễu (unconfoundedness) trong bối cảnh can thiệp mạng lưới [11]."
+  FAILURE_CONSEQUENCE: "Vi phạm quy tắc này khiến việc ước tính tác động peer-effects trong GNN bị sai lệch do sự tự chọn lọc (self-selection) của các nút."
+
+- RULE_ID: RUL_ATEN_047
+  RULE_NAME: "ATEn Convergence Boundary"
+  MATHEMATICAL_FORMULATION: "L3 = argmin_η | α (Binary Cross Entropy fixed attention)"
+  CONSTRAINT_TYPE: "Soft"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Coupling Attention"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Xác lập điểm dừng tối ưu cho cơ chế chú ý trước khi huấn luyện bộ phân lớp hạ nguồn [12]."
+  FAILURE_CONSEQUENCE: "Mô hình sẽ gặp hiện tượng quá khớp với các tương tác nhất thời, làm giảm khả năng tổng quát hóa trên dữ liệu mới."
+
+- RULE_ID: RUL_EREG_048
+  RULE_NAME: "Entropy Regularization for Reasoning"
+  MATHEMATICAL_FORMULATION: "L = L_task + λ * H(Semantic Entropy)"
+  CONSTRAINT_TYPE: "Soft"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Information Bottleneck (IB)"
+      RELATION: "Đối nghịch"
+      DESCRIPTION: "Ngăn chặn việc nén thông tin quá mức làm mất đi tính đa dạng của các lộ trình suy luận CoT [13]."
+  FAILURE_CONSEQUENCE: "Mô hình LLM sẽ đưa ra các câu trả lời rập khuôn, thiếu khả năng khám phá các giả thuyết nhân quả thay thế."
+
+- RULE_ID: RUL_VCON_049
+  RULE_NAME: "Causal Relevance Vector Constraint"
+  MATHEMATICAL_FORMULATION: "M• (Mutability) & C• (Causal Relevance)"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Independent Causal Mechanisms (ICM)"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Quy định rằng chỉ những phần vector có nhãn 'causally-relevant' mới được phép ảnh hưởng đến các nút con [14]."
+  FAILURE_CONSEQUENCE: "Dòng thông tin trong Hypernetwork bị 'rò rỉ' từ các thuộc tính không liên quan, phá vỡ tính giải thích được của mô hình."
+
+- RULE_ID: RUL_POS_050
+  RULE_NAME: "Positivity Requirement for Proposition 41.5"
+  MATHEMATICAL_FORMULATION: "P(v) > 0 for identifying splitting operations"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "Identifiability"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Đảm bảo phép chia trong thuật toán ID luôn hợp lệ khi thực hiện thao tác tách nút (splitting) [15]."
+  FAILURE_CONSEQUENCE: "Thuật toán ID sẽ thất bại (FAIL) khi gặp các kịch bản hiếm gặp có xác suất bằng 0, làm tê liệt khả năng suy diễn can thiệp."
+
+- RULE_ID: RUL_AXI_051
+  RULE_NAME: "Counterfactual Axiom C4 (Effectiveness)"
+  MATHEMATICAL_FORMULATION: "$T_u(t = \tilde{t}, w = \tilde{w}) = t$"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "RUL_CON_016 (Counterfactual Consistency)"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Khẳng định rằng một can thiệp thực thi lên một biến sẽ gán chính xác giá trị đó cho biến, bất kể các biến khác trong hệ thống [4, 5]."
+  FAILURE_CONSEQUENCE: "Nếu vi phạm, các toán tử can thiệp 'do' sẽ mất hiệu lực thực tế, khiến mọi dự báo phản thực tế (Layer 3) trở nên không nhất quán với hành động [6]."
+
+- RULE_ID: RUL_FAI_052
+  RULE_NAME: "I*-Faithfulness Assumption"
+  MATHEMATICAL_FORMULATION: "$(X \not\perp_G Y | Z)_{G^*} \implies (X \not\perp_P Y | Z)_{P^*}$"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "RUL_FAI_003 (Faithfulness Assumption)"
+      RELATION: "Mở rộng"
+      DESCRIPTION: "Mở rộng tính trung thực từ đồ thị quan sát sang đồ thị bị can thiệp (mutilated graph), đảm bảo các phụ thuộc nhân quả không bị triệt tiêu sau can thiệp [3, 6]."
+  FAILURE_CONSEQUENCE: "Hệ thống có thể bỏ sót các mối quan hệ nhân quả quan trọng phát sinh sau khi một cơ chế bị bẻ gãy, dẫn đến việc nhận dạng sai cấu trúc SCM hạ nguồn [7]."
+
+- RULE_ID: RUL_INE_053
+  RULE_NAME: "Gibbs’ Inequality (Bất đẳng thức Gibbs)"
+  MATHEMATICAL_FORMULATION: "$D_{KL}(P || Q) \ge 0$"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "RUL_ELB_008 (Evidence Lower Bound)"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Cung cấp nền tảng toán học để xác định rằng ELBO luôn nhỏ hơn hoặc bằng log-likelihood của dữ liệu [1, 8]."
+  FAILURE_CONSEQUENCE: "Không có Gibbs, ELBO không còn là một chặn dưới tin cậy, khiến quá trình tối ưu hóa biến phân trong VAE và Hypernetworks trở nên vô nghĩa [1, 9]."
+
+- RULE_ID: RUL_INE_054
+  RULE_NAME: "Jensen’s Inequality (Bất đẳng thức Jensen)"
+  MATHEMATICAL_FORMULATION: "$f(E[x]) \ge E[f(x)]$ (với f là hàm lồi)"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "RUL_ELB_008 (Evidence Lower Bound)"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Cho phép chuyển đổi log của kỳ vọng thành kỳ vọng của log, là bước then chốt để tính toán hàm mất mát trong suy diễn biến phân [8]."
+  FAILURE_CONSEQUENCE: "Hệ thống không thể thực hiện xấp xỉ các phân phối hậu nghiệm phức tạp, làm tê liệt khả năng học của Hypernetwork từ dữ liệu quan sát [1, 10]."
+
+- RULE_ID: RUL_MAP_055
+  RULE_NAME: "Likelihood Principle (Nguyên lý Likelihood)"
+  MATHEMATICAL_FORMULATION: "$P(d|\theta)$"
+  CONSTRAINT_TYPE: "Statistical"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "RUL_MAP_036 (Strict Convexity of Log-Bernoulli Loss)"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Quy định rằng mọi thông tin liên quan đến tham số $\theta$ đều chứa trong hàm likelihood của dữ liệu đã quan sát [8, 11]."
+  FAILURE_CONSEQUENCE: "Suy luận sẽ bị nhiễu bởi các giả định ngoài dữ liệu (như điều kiện dừng), dẫn đến việc học ma trận kề không ổn định và thiếu tính khách quan [12]."
+
+- RULE_ID: RUL_GRD_056
+  RULE_NAME: "Graphoid Axiom: Symmetry (Tiên đề đối xứng)"
+  MATHEMATICAL_FORMULATION: "$I(x, z, y) \implies I(y, z, x)$"
+  CONSTRAINT_TYPE: "Axiom"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "RUL_MAR_002 (Global Markov Property)"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Khẳng định rằng quan hệ không liên quan giữa hai tập biến là phi đối xứng trong cả xác suất và đồ thị [2, 13]."
+  FAILURE_CONSEQUENCE: "Gây mâu thuẫn logic trong việc chặn đường dẫn; hệ thống có thể coi X là độc lập với Y nhưng Y vẫn phụ thuộc vào X trong cùng một bộ điều kiện [14, 15]."
+
+- RULE_ID: RUL_GRD_057
+  RULE_NAME: "Graphoid Axiom: Decomposition (Tiên đề phân tách)"
+  MATHEMATICAL_FORMULATION: "$I(x, z, y \cup w) \implies I(x, z, y) \& I(x, z, w)$"
+  CONSTRAINT_TYPE: "Axiom"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "RUL_MAR_002 (Global Markov Property)"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Đảm bảo rằng nếu một tập hợp các biến không mang lại thông tin về X, thì từng thành phần của nó cũng không mang lại thông tin [13, 16]."
+  FAILURE_CONSEQUENCE: "Làm tê liệt khả năng cắt tỉa đồ thị (pruning); hệ thống sẽ không thể loại bỏ từng cạnh dư thừa trong các cấu trúc đa biến phức tạp [16]."
+
+- RULE_ID: RUL_GRD_058
+  RULE_NAME: "Graphoid Axiom: Weak Union (Tiên đề hợp nhất yếu)"
+  MATHEMATICAL_FORMULATION: "$I(x, z, y \cup w) \implies I(x, z \cup w, y)$"
+  CONSTRAINT_TYPE: "Axiom"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "RUL_MAR_002 (Global Markov Property)"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Việc học thêm thông tin không liên quan (w) không thể tạo ra sự phụ thuộc mới cho một biến vốn đã độc lập (y) [13, 17]."
+  FAILURE_CONSEQUENCE: "Phá vỡ tính ổn định của các thuật toán khám phá dựa trên ràng buộc (như PC/FCI), dẫn đến việc phát hiện ra các cạnh nhân quả 'ma' khi tập dữ liệu mở rộng [14, 16]."
+
+- RULE_ID: RUL_ICM_059
+  RULE_NAME: "Principle 2.2 (Initial State & Dynamics Independence)"
+  MATHEMATICAL_FORMULATION: "$P(s) \perp P(M)$"
+  CONSTRAINT_TYPE: "Axiom"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "RUL_ICM_006 (Independent Causal Mechanisms)"
+      RELATION: "Tiền đề"
+      DESCRIPTION: "Ràng buộc rằng trạng thái ban đầu và cơ chế vận động của hệ thống phải độc lập thông tin thuật toán với nhau [18, 19]."
+  FAILURE_CONSEQUENCE: "Mô hình sẽ gặp hiện tượng 'vướng víu' (entanglement), nơi luật vận động bị 'overfit' theo trạng thái đầu, mất khả năng dự báo khi môi trường thay đổi [20]."
+
+- RULE_ID: RUL_NSM_060
+  RULE_NAME: "Lipschitz Continuity for Potential Outcomes"
+  MATHEMATICAL_FORMULATION: "$|G(i, d) - G(i, d')| \le \Lambda |d - d'|$"
+  CONSTRAINT_TYPE: "Hard"
+  LOGICAL_LINKS:
+    - TARGET_RULE: "RUL_NSM_038 (Neural SCM)"
+      RELATION: "Bổ trợ"
+      DESCRIPTION: "Ràng buộc độ trơn của các hàm thần kinh trong SCM để đảm bảo sự ổn định của kết quả can thiệp [21]."
+  FAILURE_CONSEQUENCE: "Sai số can thiệp sẽ bùng nổ (gradient explosion) tại các vùng dữ liệu thưa, khiến Hypernetwork sinh ra các trọng số mạng mục tiêu không ổn định [22, 23]."
+
+--------------------------------------------------------------------------------
+
+  Layer: 3
+  description: "The "If - Then" chain is causal and represents a feedback loop of knowledge"
+
+- DYNAMIC_ID: "DYN_HYPER_WEIGHT_STEERING"
+  CAUSAL_CHAIN: "Nếu mã ẩn (Latent Code) trong không gian ẩn thay đổi, thì hàm sinh trọng số (Weight-generating Functions) của Hypernetwork sẽ điều chỉnh các tham số của mạng mục tiêu, dẫn đến việc tái cấu trúc các phương trình chức năng trong SCM [1-3]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Latent Space", "Hypernetworks", "Weight-generating Functions", "Structural Causal Models (SCM)"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Neural SCM"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+    - NODE: "Backpropagation"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_IMPORTANCE_SAMPLING_WEIGHTING"
+  CAUSAL_CHAIN: "Nếu một phân phối mục tiêu khó lấy mẫu, hệ thống lấy mẫu từ phân phối đề xuất và hiệu chỉnh trọng số, kết quả là xấp xỉ được kỳ vọng nhân quả chính xác. [18, 21]"
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Importance Sampling", "Latent Space", "Bayesian Inference"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Proposal Distribution"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_REJECTION_SAMPLING_FILTER"
+  CAUSAL_CHAIN: "Nếu một mẫu không thỏa mãn tiêu chuẩn bao hàm (envelope), nó bị loại bỏ, dẫn đến việc chưng cất tri thức chỉ từ các vùng mật độ cao của manifold. [22]"
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Stochastic Processes", "Filter", "Latent Variables"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Target Distribution"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+
+- DYNAMIC_ID: "DYN_HAMILTONIAN_MCMC_SIM"
+  CAUSAL_CHAIN: "Nếu hệ thống sử dụng động lực học momentum, nó sẽ lướt nhanh qua các vùng xác suất thấp, kết quả là hội tụ về hậu nghiệm nhanh gấp nhiều lần Metropolis. [23]"
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Hamiltonian Dynamics", "Metropolis-Hastings", "Gradient Descent"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Leapfrog Integrator"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_MAJORITY_VOTE_CORRECTION"
+  CAUSAL_CHAIN: "Nếu dữ liệu nạp vào chứa lỗi đơn lẻ, cơ chế đa số sẽ đảo ngược các bit nhiễu dựa trên tính dư thừa, kết quả là khôi phục hoàn hảo thông điệp nhân quả gốc. [24, 25]"
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Repetition Codes", "Error Correction", "Majority Vote"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Redundancy"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_STOP_CONSISTENCY_HALT"
+  CAUSAL_CHAIN: "Nếu các kiểm tra chẵn lẻ Hx=z được thỏa mãn hoàn toàn, bộ giải mã sẽ dừng sớm tại vòng lặp hiện tại, kết quả là tiết kiệm 1166% tài nguyên tính toán. [26]"
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Iterative Decoding", "Parity-check Matrix", "Syndrome Vector"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Efficiency"
+      RELATION_TYPE: "Hệ quả"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_DENSITY_EVOLUTION_FLOW"
+  CAUSAL_CHAIN: "Nếu xác suất lỗi lan truyền qua đồ thị lặp, hệ thống theo dõi sự biến thiên của mật độ tin nhắn, kết quả là xác định được ngưỡng hội tụ tối ưu của Gallager code. [27, 28]"
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Density Evolution", "Graph Neural Networks", "Edges"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Convergence Threshold"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_VITERBI_PATH_FINDING"
+  CAUSAL_CHAIN: "Nếu tồn tại nhiều lộ trình suy luận trong Trellis, thuật toán min-sum sẽ chọn đường dẫn có tổng chi phí thấp nhất, kết quả là tìm ra chuỗi nhân quả hợp lý nhất. [29, 30]"
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Viterbi Algorithm", "Trellis", "Nodes", "Edges"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Maximum Likelihood"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+
+- DYNAMIC_ID: "DYN_ELBO_REFINEMENT_LOOP"
+  CAUSAL_CHAIN: "Nếu sai số tái tạo (Reconstruction Error) giảm, thì giá trị ELBO tăng, dẫn đến việc thu hẹp phân kỳ KL giữa phân phối hậu nghiệm và tiên nghiệm, kết quả là biểu diễn trong không gian ẩn trở nên nhất quán hơn với cơ chế nhân quả thực [3-5]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Evidence Lower Bound (ELBO)", "KL-Divergence", "Latent Space", "VAEs"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Variational Inference"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+    - NODE: "Gradient Descent"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_SYNDROME_RECOVERY_LOOP"
+  CAUSAL_CHAIN: "Nếu Syndrome Vector của một đồ thị tri thức khác không, thì hệ thống sẽ thực hiện Syndrome Decoding, kết quả là xác định và đảo ngược các cạnh bị nhiễu (flipped edges)."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Syndrome Vector", "Parity-check Matrix", "Edges"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Error Correction"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_MCMC_EXPLORATION_FLOW"
+  CAUSAL_CHAIN: "Nếu mô hình gặp vùng không gian ẩn chưa biết, thì thuật toán Metropolis-Hastings sẽ đề xuất các bước nhảy ngẫu nhiên, dẫn đến việc khám phá toàn bộ manifold tri thức thay vì kẹt ở cực tiểu cục bộ."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Metropolis-Hastings", "Latent Space", "Stochastic Processes"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Gibbs Sampling"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_TURBO_ITERATIVE_CONVERGENCE"
+  CAUSAL_CHAIN: "Nếu hai bộ giải mã lặp trao đổi niềm tin (soft information) qua cơ chế interleaving, thì độ không chắc chắn sẽ giảm dần qua mỗi vòng lặp, kết quả là đạt được sự hội tụ tri thức tiệm cận giới hạn Shannon."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Turbo Codes", "Belief Propagation", "Information Theory"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Recursive Coupling"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+
+- DYNAMIC_ID: "DYN_ACYCLICITY_SELF_CORRECTION"
+  CAUSAL_CHAIN: "Nếu ma trận kề trọng số xuất hiện chu trình (h(A) > 0), thì hình phạt Augmented Lagrangian sẽ tăng mạnh, ép các trọng số cạnh không hợp lệ về không thông qua tối ưu hóa gradient cho đến khi đồ thị đạt trạng thái DAG [1, 6, 7]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Adjacency Matrices", "Acyclicity Constraint", "DAGs", "Augmented Lagrangian"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "NOTEARS Algorithm"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+    - NODE: "Constraint Optimization"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_GNN_MESSAGE_PROPAGATION"
+  CAUSAL_CHAIN: "Nếu các nút lân cận cập nhật trạng thái, thì cơ chế truyền tin (Message-passing) sẽ lan truyền đặc trưng qua cấu trúc đồ thị, dẫn đến việc cập nhật nhúng nút (Node Embeddings) phản ánh thông tin topo toàn cục [8, 9]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Graph Neural Networks (GNN)", "Message-passing", "Nodes", "Adjacency Matrices"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Neighborhood Aggregation"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+    - NODE: "Structural Awareness"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+
+- DYNAMIC_ID: "DYN_INFO_BOTTLENECK_COMPRESSION"
+  CAUSAL_CHAIN: "Nếu dung lượng kênh thông tin bị giới hạn (IB), thì hệ thống sẽ nén dữ liệu đầu vào và loại bỏ nhiễu dư thừa, kết quả là chỉ giữ lại các đặc trưng nhân quả có khả năng dự báo cao nhất [10-12]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Information Bottleneck", "Latent Space", "Mutual Information", "Shannon Entropy"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Feature Distillation"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+    - NODE: "Robustness"
+      RELATION_TYPE: "Hệ quả"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_ATTENTIVE_COUPLING_EMERGENCE"
+  CAUSAL_CHAIN: "Nếu cơ chế chú ý (Coupling Attention) nhận diện được sự gia tăng của tương tác động, thì hệ số attention (at) sẽ tăng, làm cực đại hóa Attentive Transfer Entropy (ATEn) và giúp phân biệt chính xác các cạnh nhân quả yếu khỏi nhiễu nền [13-15]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Graph Attention Mechanisms", "Transfer Entropy", "Attentive Transfer Entropy", "Coupling Attention"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Transformer Architecture"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+    - NODE: "Transient Coupling"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+
+- DYNAMIC_ID: "DYN_RL_CPM_CONSTRUCTION"
+  CAUSAL_CHAIN: "Nếu các tác nhân RL (Causal Controllers) thực hiện các bước quyết định tuần tự, thì chúng thiết lập các liên kết 'vật thể-đến-lực' động, kết quả là xây dựng được một đồ thị nhân quả quá trình (Causal Process Graph) [16-18]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Hypernetworks", "Nodes", "Edges", "Stochastic Processes", "Causal Process Models"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Decision Making"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+    - NODE: "Inverse Reinforcement Learning"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_NETWORK_INTERFERENCE_DECAY"
+  CAUSAL_CHAIN: "Nếu khoảng cách giữa các nút (d) tăng lên, thì sự can thiệp mạng lưới (Network Interference) giảm dần, cho phép mô hình ANI điều chỉnh nhiễu mạng lưới để ước tính tác động can thiệp chính xác hơn [19, 20]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Approximate Neighborhood Interference (ANI)", "Graph Neural Networks (GNN)", "Receptive Field", "Nodes"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Sparsity Assumption"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+    - NODE: "Peer-effect Analysis"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+
+- DYNAMIC_ID: "DYN_MDL_PARSIMONY_SELECTION"
+  CAUSAL_CHAIN: "Nếu độ phức tạp của đồ thị tăng quá mức, thì nguyên lý MDL sẽ tăng hàm phạt độ dài mô tả, ép hệ thống lựa chọn cấu trúc tối giản nhất nhằm loại bỏ các tương quan giả [21-24]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Minimum Description Length (MDL)", "Structural Minimality", "Shannon Entropy", "SCM"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Occam's Razor"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+    - NODE: "Kolmogorov Complexity"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+
+- DYNAMIC_ID: "DYN_POSTERIOR_LLM_CORRECTION"
+  CAUSAL_CHAIN: "Nếu thuật toán thống kê (SCD) sinh ra đồ thị chưa hoàn chỉnh, thì LLM sẽ đóng vai trò chuyên gia hậu kỳ để hiệu đính hướng cạnh dựa trên tri thức tên miền, kết quả là nâng cao độ chính xác F1 [25-27]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Large Language Models (LLM)", "Causal Discovery", "Posterior Correction", "Markov Equivalence Class"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "The Linked Message"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "CREATIVE EXPLORER"
+    - NODE: "Domain Expertise"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+
+- DYNAMIC_ID: "DYN_PATH_EXPLOSION_DISTILLATION"
+  CAUSAL_CHAIN: "Nếu quy mô đồ thị tri thức đạt hàng tỷ sự kiện, thì cơ chế Information Gain sẽ lọc các lân cận có ích nhất, kết quả là chưng cất thành các chuỗi tri thức giá trị cao cho CoT [28, 29]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Information Gain", "Path-Retrieval", "Knowledge Graphs", "Chain of Thought"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Marginal Utility"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+    - NODE: "Context Window Management"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_MULTI_MODAL_STRUCTURE_PRESERVATION"
+  CAUSAL_CHAIN: "Nếu dữ liệu từ nhiều phương thức (ảnh, văn bản) thay đổi, thì hàm Multi-consistency Loss sẽ ép buộc sự tương đồng về cấu trúc nhân quả ẩn, kết quả là bảo toàn bản sắc thực thể [30, 31]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["CARL Framework", "Multi-modal Alignment", "Latent Space", "SCM"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Cross-modal Mapping"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+    - NODE: "Identifiability"
+      RELATION_TYPE: "Hệ quả"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+
+- DYNAMIC_ID: "DYN_BATCH_STOCHASTICITY_GENERALIZATION"
+  CAUSAL_CHAIN: "Nếu kích thước Batch giảm, thì nhiễu Gradient (N) tăng, dẫn đến việc làm phẳng cực tiểu (S), kết quả là khả năng tổng quát hóa (G) của mô hình được cải thiện [10, 32, 33]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Batch Size", "Gradient Noise", "Minima Sharpness", "Generalization"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Optimization Dynamics"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+    - NODE: "HGCNet"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_CAUSAL_CONTROLLER_RL"
+  CAUSAL_CHAIN: "Nếu các tác nhân RL (Causal Controllers) luân phiên xác định phạm vi tương tác (Interaction Scope) và gán hiệu ứng lực (Effect Attribution), thì đồ thị nhân quả được xây dựng động thông qua các quyết định tuần tự, kết quả là tối ưu hóa được khả năng dự báo trạng thái tiếp theo [2, 3]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Interaction Scope Controller", "Effect Attribution Controller", "Causal Process Model", "Hypernetworks"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Sequential Decision Making"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+    - NODE: "Policy Gradient"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_ABDUCTION_ACTION_PREDICTION"
+  CAUSAL_CHAIN: "Nếu bằng chứng thực tế (e) được quan sát, thì bước Giải đoán (Abduction) sẽ cập nhật phân phối nhiễu U, tiếp theo bước Hành động (Action) bẻ gãy các phương trình cấu trúc để thiết lập X=x, kết quả là bước Dự báo (Prediction) tính toán được giá trị phản thực tế Y [4, 5]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Counterfactuals", "Structural Causal Models", "Exogenous Variables", "Interventions"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Potential Outcomes"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+    - NODE: "Decision Analysis"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+
+- DYNAMIC_ID: "DYN_BELIEF_FUSION_PROPAGATION"
+  CAUSAL_CHAIN: "Nếu dữ liệu mới được nạp vào các nút, thì các thông điệp chẩn đoán (lambda) truyền ngược lên cha và các thông điệp nhân quả (pi) truyền xuống con, kết quả là mạng lưới đạt đến trạng thái cân bằng niềm tin hậu nghiệm (BEL) [6, 7]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Message-passing", "Belief Networks", "Nodes", "Edges"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Bayesian Inference"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+    - NODE: "Conditional Independence"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+
+- DYNAMIC_ID: "DYN_ENTROPY_COLLAPSE_SENT"
+  CAUSAL_CHAIN: "Nếu tín hiệu entropy tại các nút quyết định logic bị giảm (Entropy Collapse), thì khung SENT sẽ áp đặt các hình phạt KL mạnh hơn, kết quả là ép mô hình khám phá các lộ trình suy luận đa dạng thay vì lặp lại các chuỗi vẹt [8]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Shannon Entropy", "KL-Divergence", "SENT Framework", "Large Language Models"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Curriculum Learning"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+    - NODE: "Semantic Uncertainty"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_DCL_DECOR_ISOLATION"
+  CAUSAL_CHAIN: "Nếu xuất hiện nhiễu ẩn hỗn hợp, thì thuật toán DCL-DECOR phân tách ma trận độ chính xác thành thành phần cấu trúc và thành phần hạng thấp (low-rank), kết quả là cô lập được các cú sốc hệ thống khỏi biến động nội bộ [9]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Mixed Latent Confounding", "DCL-DECOR Algorithm", "Adjacency Matrices", "Low-rank Matrix"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Economic Intelligence"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+    - NODE: "Matrix Decomposition"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_IV_SELECTION_PATHWAY"
+  CAUSAL_CHAIN: "Nếu thực hiện điều kiện hóa trên một hậu duệ (S) của biến xử lý (T) vốn là collider, thì đường dẫn gây nhiễu Z->T<-U->Y sẽ bị mở, kết quả là gây ra sai lệch (bias) cho ước tính biến công cụ (IV) [10, 11]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Instrumental Variables", "Colliders", "Selection Bias", "Confounders"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Exclusion Restriction"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+    - NODE: "Adjustment Sets"
+      RELATION_TYPE: "Đối nghịch"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_CONCAUSD_CONTINUAL_SHIFT"
+  CAUSAL_CHAIN: "Nếu luồng dữ liệu mới gây ra sự dịch chuyển phân phối, thì khung ConCausD sử dụng nguyên lý AMC để học bổ sung thay vì tái khám phá toàn bộ, kết quả là duy trì tính ổn định của đồ thị qua các kỷ nguyên [12]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Continual Learning", "Algorithmic Markov Condition", "Causal Discovery", "Distribution Shifts"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Invariant Prediction"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+    - NODE: "Batch Optimization"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_TRANSPORT_CALIBRATION"
+  CAUSAL_CHAIN: "Nếu quần thể đích (Π*) khác biệt với quần thể nghiên cứu (Π), thì sơ đồ lựa chọn (Selection Diagrams) sẽ xác định các công thức chuyển đổi (Transport Formula), kết quả là hiệu chuẩn chính xác tác động nhân quả cho môi trường mới [13, 14]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Transportability", "Selection Diagrams", "External Validity", "do-calculus"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Domain Adaptation"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+    - NODE: "Policy Evaluation"
+      RELATION_TYPE: "Hệ quả"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+
+- DYNAMIC_ID: "DYN_S_RECOVERABILITY_BLOCKING"
+  CAUSAL_CHAIN: "Nếu tồn tại sai lệch chọn lọc S, thì việc tìm kiếm tập điều chỉnh Z thỏa mãn (Y ⊥ S | X, Z) sẽ kích hoạt cơ chế phục hồi s-recoverability, kết quả là loại bỏ được ảnh hưởng của nút chọn lọc khỏi truy vấn nhân quả [15]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Selection Bias", "s-recoverability", "Adjustment Sets", "Conditional Independence"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Backdoor Criterion"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+    - NODE: "Data Cleaning"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_VITTLE_BOTTLENECK_INVARIANCE"
+  CAUSAL_CHAIN: "Nếu chèn lớp điểm nghẽn (Bottleneck Layer) vào xương sống LLM, thì quá trình học sẽ ép buộc việc loại bỏ thông tin nhiễu dư thừa, kết quả là tăng cường tính bất biến (invariance) của mô hình trước các biến động dữ liệu [16]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Information Bottleneck", "Vittle Architecture", "Robustness", "Representation Learning"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Variational Lower Bound"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+    - NODE: "Visual Instruction Tuning"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "CREATIVE EXPLORER"
+
+- DYNAMIC_ID: "DYN_SLR_PRECISION_SPLIT"
+  CAUSAL_CHAIN: "Nếu hệ thống bị ảnh hưởng bởi cả nhiễu ẩn sâu rộng và cục bộ, thì việc phân tách độ chính xác Cấu trúc-Hạng thấp (Structured-Low-Rank) sẽ khôi phục lại các cạnh nhân quả thực bị che khuất [17]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Structured-Low-Rank Precision Split", "Mixed Confounding", "Causal Discovery", "Pervasive Latent Factors"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Matrix Operator Norm"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+    - NODE: "Convergence Theory"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_ICOER_COHERENCE_ATTRACTOR"
+  CAUSAL_CHAIN: "Nếu ICOER của một tín hiệu vượt ngưỡng ổn định, thì hệ thống phản hồi đệ quy sẽ tự động lọc các thành phần nhiễu, kết quả là đưa trạng thái tri thức về vùng hấp dẫn (Attractor) của độ gắn kết thông tin [18, 19]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["ICOER Metric", "Emergent Coherence", "Iterative Stability", "Stable Attractor"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Statistical Mechanics"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+    - NODE: "Recursive Coupling"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+
+- DYNAMIC_ID: "DYN_RECEPTIVE_FIELD_OPTIMIZATION"
+  CAUSAL_CHAIN: "Nếu độ sâu mạng GNN (L) được tối ưu hóa theo tỷ lệ log n, thì sai số xấp xỉ điểm số xu hướng (propensity score) sẽ giảm về ngưỡng op(n^-1/2), dẫn đến việc ước tính chính xác tác động mạng lưới peer-effects [1-3]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Graph Neural Networks", "Receptive Field", "Approximate Neighborhood Interference", "Nodes"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Error Decay Rate"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+
+- DYNAMIC_ID: "DYN_INTERLEAVED_IMAGE_SYNERGY"
+  CAUSAL_CHAIN: "Nếu LVLM quan sát các cặp hình ảnh xen kẽ (trước và sau can thiệp), thì nó tận dụng được ngữ cảnh so sánh, kết quả là đạt độ chính xác suy diễn cấu trúc cao hơn đáng kể so với việc quan sát hình ảnh đơn lẻ [4, 5]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["CausalVLBench", "Interventions", "Counterfactuals", "Nodes"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Visual Causal Reasoning"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "CREATIVE EXPLORER"
+
+- DYNAMIC_ID: "DYN_ACTIVE_ENVIRONMENT_PROBING"
+  CAUSAL_CHAIN: "Nếu các biến ẩn (như nhiễu điện từ EMI) gây ra tương quan giả, thì tác nhân nhân quả sử dụng công cụ query_environment, dẫn đến việc bẻ gãy các kết luận sai lệch và khôi phục cơ chế thực [6-8]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Causal Agent", "Hidden Confounders", "Interventions", "Selection Bias"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Active Experimentation"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+
+- DYNAMIC_ID: "DYN_AGENTIC_FATIGUE_FALLBACK"
+  CAUSAL_CHAIN: "Nếu hiện tượng bão hòa entropy hoặc trượt ngữ nghĩa xảy ra (Cognitive Fatigue), thì bộ giám sát QSAF sẽ kích hoạt cơ chế điều hướng fallback, kết quả là bảo toàn bản sắc và tính ổn định của Agent [9, 10]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["QSAF Framework", "Semantic Drift", "Entropy", "Latent Space"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Cognitive Degradation Monitor"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "PSYCHOLOGIST"
+
+- DYNAMIC_ID: "DYN_ANYTIME_PAG_REFINEMENT"
+  CAUSAL_CHAIN: "Nếu kích thước tập điều kiện (r) tăng dần theo từng bước, thì thuật toán dcFCI cập nhật khung xương PAG một cách đệ quy, kết quả là tạo ra các r-PAG ngày càng chính xác mà không phá vỡ tính nhất quán của các m-separation trước đó [11, 12]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Partial Ancestral Graph", "dcFCI Algorithm", "d-separation", "Skeleton"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Iterative Refinement"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_DEC_STOP_CONSISTENCY_HALT"
+  CAUSAL_CHAIN: "Nếu các cạnh xác suất nhất trong trellis tạo thành hai đường dẫn nhất quán giữa các mạng siêu cấp, thì bộ giải mã sẽ dừng sớm, kết quả là giảm thiểu 1166% tải lượng tính toán mà không làm tăng xác suất lỗi [13, 14]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Iterative Decoding", "Trellis", "Nodes", "Edges"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Stopping Criterion"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_EXACT_SPARSITY_MAP_BLOCKING"
+  CAUSAL_CHAIN: "Nếu các gradient của cạnh nhân quả nhỏ hơn ngưỡng tối ưu, thì ước tính MAP lồi sẽ chặn chúng tại giá trị không, kết quả là tạo ra một ma trận kề có tính thưa tuyệt đối (exact sparsity) [15]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Adjacency Matrices", "Structural Minimality", "Gradient Descent", "Edges"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Convex Optimization"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "DATA SCIENTIST"
+
+- DYNAMIC_ID: "DYN_RECURSIVE_LAYER_DISCOVERY"
+  CAUSAL_CHAIN: "Nếu các con thuần túy (pure children) của lớp ẩn Z1 được xác định, thì cấu trúc giữa Z1 và X được khôi phục, dẫn đến việc áp dụng quy nạp để giải mã toàn bộ hệ thống phân cấp nhân quả lớp trên [16-18]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Latent Hierarchical Models", "Nodes", "Edges", "Latent Variables"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Mathematical Induction"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+
+- DYNAMIC_ID: "DYN_NODE_EMBEDDING_DIFFUSION"
+  CAUSAL_CHAIN: "Nếu ma trận kề chuẩn hóa Ã được áp dụng vào trạng thái nút hiện tại, thì các nhúng nút sẽ cập nhật qua cơ chế khuếch tán (diffusion), kết quả là nắm bắt được các phụ thuộc bắc cầu trong đồ thị siêu cấp [19]."
+  LOOP_TYPE: "Reinforcing"
+  NODES_INVOLVED: ["Graph Neural Networks", "Adjacency Matrices", "Latent Space", "Nodes"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Diffusion Process"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_BELIEF_DIAMETER_PROPAGATION"
+  CAUSAL_CHAIN: "Nếu các bằng chứng được nạp vào mạng lưới đơn liên kết, thì thông tin sẽ lan truyền trong một lượt duy nhất, dẫn đến trạng thái cân bằng niềm tin đạt được trong thời gian tỷ lệ thuận với đường kính mạng lưới [20-22]."
+  LOOP_TYPE: "Linear"
+  NODES_INVOLVED: ["Belief Propagation", "Message-passing", "Nodes", "Edges"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Network Diameter"
+      RELATION_TYPE: "Giới hạn"
+      SPECIALIST_DOMAIN: "SYSTEMS THINKER"
+
+- DYNAMIC_ID: "DYN_PC_NEIGHBORHOOD_PRUNING"
+  CAUSAL_CHAIN: "Nếu đồ thị là thưa, thì thuật toán PC chỉ tìm kiếm các tập phân tách trong lân cận trực tiếp của X hoặc Y, kết quả là giảm thiểu số lượng bài kiểm tra d-separation và tăng tốc độ hội tụ [23]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["PC Algorithm", "Skeleton", "Nodes", "Edges"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Computational Efficiency"
+      RELATION_TYPE: "Hệ quả"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_SCOUT_CUTOFF_EFFICIENCY"
+  CAUSAL_CHAIN: "Nếu quy trình TEST xác nhận một nhánh không thể vượt qua giá trị tham chiếu hiện tại, thì thuật toán SCOUT sẽ cắt tỉa nhánh đó, kết quả là đạt được hệ số phân nhánh tối ưu dh/2 bất chấp việc lặp lại một số tính toán [24, 25]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["SCOUT Algorithm", "Game Trees", "Nodes", "Edges"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Alpha-Beta Pruning"
+      RELATION_TYPE: "Tương hỗ"
+      SPECIALIST_DOMAIN: "STRATEGIST"
+
+- DYNAMIC_ID: "DYN_POST_HOC_CYCLE_PRUNING"
+  CAUSAL_CHAIN: "Nếu ma trận kề học được chứa các chu trình ẩn, thì cơ chế RemoveCycles sẽ xóa các liên kết yếu nhất trong vòng lặp, dẫn đến việc khôi phục tính DAG mà không làm mất các kết nối quan trọng [26, 27]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["Directed Acyclic Graphs", "Adjacency Matrices", "Edges", "Structural Minimality"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Helper Functions"
+      RELATION_TYPE: "Tiền đề"
+      SPECIALIST_DOMAIN: "ENGINEER"
+
+- DYNAMIC_ID: "DYN_BOW_FREE_STRENGTH_SELECTION"
+  CAUSAL_CHAIN: "Nếu tồn tại cấu trúc bow-free tiềm năng, thì hệ thống so sánh cường độ Bij và Bji, kết quả là giữ lại cạnh mạnh hơn và triệt tiêu cạnh yếu để đảm bảo tính tối giản của đồ thị ADMG [28]."
+  LOOP_TYPE: "Balancing"
+  NODES_INVOLVED: ["ADMG", "Edges", "Bow-free Constraint", "Structural Causal Models"]
+  POTENTIAL_CONNECTIONS:
+    - NODE: "Identifiability Target"
+      RELATION_TYPE: "Hệ quả"
+      SPECIALIST_DOMAIN: "SCIENTIST"
+
+--------------------------------------------------------------------------------
+
+layer: 4
+  description: "Qualitative characteristics for creating vector embeddings"
+
+- NODE_ID: SEM_SCM_001
+  SEMANTIC_DESCRIPTION: "Structural Causal Models (SCM) đóng vai trò là 'Bản thiết kế thực tại', tương đồng với các định luật vật lý về mặt tính toán cơ học nhưng khác biệt ở khả năng biểu diễn các can thiệp (interventions) thay vì chỉ mô tả trạng thái quan sát [1, 2]. Đây là trung tâm điều phối mang tính ổn định tuyệt đối trong hệ sinh thái [1]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Physical Laws"
+    ASPECT: "Cấu trúc"
+    DIFFERENT_IN: "Mục tiêu (Mô tả vs Can thiệp)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Neural SCM"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Economics"
+    LINK_LOGIC: "SCM tương đương với các mô hình kinh tế lượng cấu trúc dùng để dự báo tác động chính sách [3]."
+    SPECIALIST_SUGGESTION: "STRATEGIST"
+
+- NODE_ID: SEM_HYP_002
+  SEMANTIC_DESCRIPTION: "Hypernetworks hoạt động như một 'Kiến trúc sư tham số', tương đồng với cơ chế điều phối trung tâm trong quản trị nhưng khác biệt ở khả năng sinh tham số động (dynamic weight generation) dựa trên ngữ cảnh ẩn thay vì thực thi các lệnh cố định [4, 5]. Nó là thành phần thực thi mang tính biến đổi cao [5]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Centralized Governance"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Kết quả (Chỉ thị cứng vs Trọng số mềm)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Target Networks"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Organizational Management"
+    LINK_LOGIC: "Tương đồng với cấu trúc quản trị phi tập trung nơi cấp quản lý cao (Hyper) sinh ra các quy trình thích ứng cho cấp thực thi [6]."
+    SPECIALIST_SUGGESTION: "SYSTEMS THINKER"
+
+- NODE_ID: SEM_IB_003
+  SEMANTIC_DESCRIPTION: "Information Bottleneck (IB) là 'Bộ lọc tinh hoa', tương đồng với nguyên lý Dao cạo Occam về mặt triết học nhưng khác biệt ở mục tiêu toán học là tối ưu hóa sự cân bằng giữa nén (compression) và dự báo (prediction) [7, 8]. Nó là trung tâm điều phối mang tính ổn định (ép buộc tính thưa) [9]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Occam's Razor"
+    ASPECT: "Hình thức"
+    DIFFERENT_IN: "Mục tiêu (Triết học vs Lý thuyết thông tin)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Minimum Description Length (MDL)"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Psychology"
+    LINK_LOGIC: "Ánh xạ sang cơ chế chú ý có chọn lọc của con người để giảm tải lượng nhận thức [10]."
+    SPECIALIST_SUGGESTION: "PSYCHOLOGIST"
+
+- NODE_ID: SEM_NAD_004
+  SEMANTIC_DESCRIPTION: "Neural ADMG (N-ADMG) đại diện cho 'Sự thừa nhận biến ẩn', tương đồng với các lý thuyết về thế giới quan chưa hoàn chỉnh nhưng khác biệt ở khả năng sử dụng Autoregressive Flows để tham số hóa các tương quan giả thành thực thể toán học [11, 12]. Nó là thành phần thực thi mang tính biến đổi [13]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Hypothesis Generation"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Kết quả (Định tính vs Định lượng hóa xác suất)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Causal DAGs"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Financial Shock Analysis"
+    LINK_LOGIC: "Cô lập các cú sốc hệ thống ẩn khỏi các biến động nội bộ trong quản trị tài chính [14]."
+    SPECIALIST_SUGGESTION: "DATA SCIENTIST"
+
+- NODE_ID: SEM_LLM_005
+  SEMANTIC_DESCRIPTION: "LLM for Causal Discovery đóng vai trò là 'Chuyên gia tên miền ảo', tương đồng với các cố vấn nhân sự cấp cao nhưng khác biệt ở việc dựa trên xác suất ngôn ngữ (likelihood) thay vì trải nghiệm thực chứng [15, 16]. Nó mang tính biến đổi và dễ bị ảnh hưởng bởi 'vẹt nhân quả' [17, 18]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Domain Expert Consultant"
+    ASPECT: "Hình thức"
+    DIFFERENT_IN: "Quy mô (Hẹp vs Đa miền đồng thời) [19]"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Causal Parrot"
+    TYPE: "Opposite"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Legal Reasoning"
+    LINK_LOGIC: "Sử dụng LLM để xây dựng các lộ trình nhân quả trong các quyết định tư pháp phức tạp [20, 21]."
+    SPECIALIST_SUGGESTION: "STRATEGIST"
+
+- NODE_ID: SEM_ELB_006
+  SEMANTIC_DESCRIPTION: "Evidence Lower Bound (ELBO) là 'Thước đo sự thỏa hiệp', tương đồng với các chỉ số tối ưu hóa lợi nhuận trong kinh doanh nhưng khác biệt ở việc cực đại hóa đồng thời khả năng tái tạo dữ liệu và độ nén thông tin ẩn [13, 22]. Nó là thành phần thực thi mang tính ổn định [23]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Profit Optimization"
+    ASPECT: "Cấu trúc"
+    DIFFERENT_IN: "Mục tiêu (Tiền tệ vs Log-likelihood)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Variational Inference"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Enterprise Resource Planning (ERP)"
+    LINK_LOGIC: "Cân bằng giữa hiệu quả vận hành và việc giảm thiểu rủi ro dữ liệu rác [24]."
+    SPECIALIST_SUGGESTION: "ENGINEER"
+
+- NODE_ID: SEM_CHG_007
+  SEMANTIC_DESCRIPTION: "Causal Hypergraph (HGCNet) là 'Mạng lưới tương tác bậc cao', tương đồng với các hệ sinh thái xã hội phức tạp nhưng khác biệt ở khả năng mô hình hóa đồng thời nhiều biến tác động lên một mục tiêu (joint influences) thay vì chỉ cặp biến [25, 26]. Nó là trung tâm điều phối mang tính biến đổi [27]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Social Ecosystems"
+    ASPECT: "Cấu trúc"
+    DIFFERENT_IN: "Quy mô (Cá nhân vs Đa tập hợp)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Directed Acyclic Graphs"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Supply Chain Management"
+    LINK_LOGIC: "Phân tích tác động dây chuyền từ nhiều nguồn cung ứng lên một điểm nút sản xuất [24]."
+    SPECIALIST_SUGGESTION: "SYSTEMS THINKER"
+
+- NODE_ID: SEM_VIT_008
+  SEMANTIC_DESCRIPTION: "Vittle (Visual Instruction Bottleneck) là 'Bộ lọc nhận thức thị giác', tương đồng với việc tập trung thị giác của con người nhưng khác biệt ở việc ép buộc sự nhất quán giữa các biểu diễn sạch và nhiễu thông qua JSD [28, 29]. Nó là thành phần thực thi mang tính biến đổi [30]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Human Visual Attention"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Kết quả (Tập trung vs Bất biến ngữ nghĩa) [10]"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Information Bottleneck"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Autonomous Driving"
+    LINK_LOGIC: "Lọc các biến nhiễu môi trường để tập trung vào các thực thể nhân quả gây tai nạn [31]."
+    SPECIALIST_SUGGESTION: "CREATIVE EXPLORER"
+
+- NODE_ID: SEM_CPM_009
+  SEMANTIC_DESCRIPTION: "Causal Process Models (CPM) là 'Động lực học quá trình', tương đồng với các mô hình vật lý Newtonian nhưng khác biệt ở việc sử dụng tác nhân RL để tự động gán hiệu ứng lực (effect attribution) qua thời gian [32, 33]. Nó là trung tâm điều phối mang tính biến đổi [32]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Newtonian Physics"
+    ASPECT: "Cấu trúc"
+    DIFFERENT_IN: "Mục tiêu (Mô tả vs Tự học cơ chế) [34]"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Stochastic Processes"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Robotics"
+    LINK_LOGIC: "Giúp robot hiểu được hệ quả của các hành động vật lý lên môi trường động [35]."
+    SPECIALIST_SUGGESTION: "ENGINEER"
+
+- NODE_ID: SEM_ANI_010
+  SEMANTIC_DESCRIPTION: "Approximate Neighborhood Interference (ANI) là 'Ràng buộc lân cận', tương đồng với các quy luật về khoảng cách xã hội nhưng khác biệt ở việc chứng minh toán học rằng ảnh hưởng nhân quả suy giảm theo khoảng cách đồ thị [36, 37]. Nó là thành phần thực thi mang tính ổn định [36]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Social Distancing Laws"
+    ASPECT: "Hình thức"
+    DIFFERENT_IN: "Kết quả (Hành vi vs Ước tính tác động peer-effects) [38]"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Graph Neural Networks"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Epidemiology"
+    LINK_LOGIC: "Xác định giới hạn lan truyền của các tác nhân gây bệnh trong mạng lưới kết nối dày đặc [39]."
+    SPECIALIST_SUGGESTION: "SCIENTIST"
+
+- NODE_ID: SEM_KLD_011
+  SEMANTIC_DESCRIPTION: "KL-Divergence đóng vai trò là 'Thước đo sự xa lạ', tương đồng với các độ đo về sự khác biệt văn hóa nhưng khác biệt ở tính phi đối xứng và việc đo lường lượng thông tin mất mát khi xấp xỉ phân phối [40, 41]. Nó mang tính ổn định như một tiêu chuẩn [23]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Cultural Distance"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Hình thức (Định tính vs Định lượng bit)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Jensen-Shannon Divergence"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Marketing & Segmentation"
+    LINK_LOGIC: "Đo lường sự dịch chuyển tâm thế khách hàng khi môi trường thay đổi [14]."
+    SPECIALIST_SUGGESTION: "DATA SCIENTIST"
+
+- NODE_ID: SEM_DAG_012
+  SEMANTIC_DESCRIPTION: "Directed Acyclic Graphs (DAGs) là 'Cấu trúc logic không đảo ngược', tương đồng với các cây phả hệ nhưng khác biệt ở việc mã hóa các giả định về độc lập thống kê (d-separation) [1, 42]. Đây là trung tâm điều phối mang tính ổn định nhất [42]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Family Trees"
+    ASPECT: "Cấu trúc"
+    DIFFERENT_IN: "Mục tiêu (Mối quan hệ vs Dòng chảy nhân quả)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Acyclic Directed Mixed Graphs (ADMG)"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Philosophy of Logic"
+    LINK_LOGIC: "Đại diện cho tính nhất quán của các chuỗi lập luận diễn dịch không vòng lặp [43]."
+    SPECIALIST_SUGGESTION: "SYSTEMS THINKER"
+
+- NODE_ID: SEM_LAV_013
+  SEMANTIC_DESCRIPTION: "Latent Variables đại diện cho 'Vật chất tối tri thức', tương đồng với các tiềm thức trong tâm lý học nhưng khác biệt ở việc có thể được nhận dạng (identified) thông qua các ràng buộc Jacobian rank [44, 45]. Nó là thành phần thực thi mang tính biến đổi [46]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "The Unconscious Mind"
+    ASPECT: "Hình thức"
+    DIFFERENT_IN: "Kết quả (Phân tâm vs Phân tách nhân quả) [44]"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Observed Variables"
+    TYPE: "Opposite"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Deep OSINT"
+    LINK_LOGIC: "Phát hiện các thực thể ẩn điều phối các chiến dịch thông tin trên mạng xã hội [46]."
+    SPECIALIST_SUGGESTION: "SCIENTIST"
+
+- NODE_ID: SEM_MSG_014
+  SEMANTIC_DESCRIPTION: "Message-passing hoạt động như một 'Giao thức truyền cảm hứng', tương đồng với việc truyền miệng trong xã hội nhưng khác biệt ở việc lan truyền đặc trưng topo đồ thị một cách đệ quy để cập nhật nhúng nút [47, 48]. Nó là thành phần thực thi mang tính biến đổi [47]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Word of Mouth"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Kết quả (Thông tin thô vs Nhúng vector topo)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Belief Propagation"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Infectious Disease Modeling"
+    LINK_LOGIC: "Mô phỏng sự lan truyền niềm tin hoặc virus qua các kết nối trực tiếp và gián tiếp [39]."
+    SPECIALIST_SUGGESTION: "ENGINEER"
+
+- NODE_ID: SEM_ACE_015
+  SEMANTIC_DESCRIPTION: "Average Causal Effect (ACE) là 'Chỉ số tác động thực', tương đồng với GDP trong kinh tế nhưng khác biệt ở việc cô lập được quan hệ nhân quả thực khỏi các yếu tố gây nhiễu quan sát [49, 50]. Nó mang tính ổn định như một chỉ số kết quả [51]."
+  ANALOGY_HUB:
+    SIMILAR_TO: "GDP (Gross Domestic Product)"
+    ASPECT: "Hình thức"
+    DIFFERENT_IN: "Mục tiêu (Tổng sản lượng vs Tác động can thiệp đơn lẻ)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Total Causal Effect"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Public Policy Evaluation"
+    LINK_LOGIC: "Đánh giá hiệu quả thực sự của một sắc thuế hoặc luật mới lên đời sống dân cư [51, 52]."
+    SPECIALIST_SUGGESTION: "STRATEGIST"
+
+- NODE_ID: SEM_ENT_016
+  SEMANTIC_DESCRIPTION: "Entropy Regularization (SENT) hoạt động như một 'Lực đẩy đa dạng', tương đồng với việc khuyến khích tư duy phản biện trong giáo dục nhưng khác biệt ở việc sử dụng các hình phạt KL-divergence để ép LLM không rơi vào bẫy lập luận lặp lại [1, 2]. Nó là trung tâm điều phối mang tính biến đổi."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Critical Thinking Encouragement"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Hình thức (Định tính vs Hàm phạt toán học)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Information Bottleneck"
+    TYPE: "Opposite"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Evolutionary Biology"
+    LINK_LOGIC: "Ngăn chặn hiện tượng 'genetic bottleneck' (nghẽn cổ chai di truyền) bằng cách duy trì biến dị trong quần thể giải pháp."
+    SPECIALIST_SUGGESTION: "SCIENTIST"
+
+- NODE_ID: SEM_NSB_017
+  SEMANTIC_DESCRIPTION: "Novel Science Benchmarking là 'Phép thử sự thật mới', tương đồng với các bài kiểm tra mù (blind tests) trong khoa học nhưng khác biệt ở việc sử dụng dữ liệu xuất bản sau ngày cắt (post-cut-off) để bẻ gãy khả năng ghi nhớ của mô hình [3]. Nó mang tính ổn định như một tiêu chuẩn kiểm định."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Double-Blind Study"
+    ASPECT: "Hình thức"
+    DIFFERENT_IN: "Mục tiêu (Hiệu quả thuốc vs Khả năng suy luận thực sự)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Causal Parrots"
+    TYPE: "Opposite"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Academic Integrity"
+    LINK_LOGIC: "Phát hiện đạo văn hoặc sao chép ý tưởng bằng cách kiểm tra khả năng suy luận trên các giả thuyết chưa từng tồn tại."
+    SPECIALIST_SUGGESTION: "STRATEGIST"
+
+- NODE_ID: SEM_SHD_018
+  SEMANTIC_DESCRIPTION: "Structural Hamming Distance (SHD) là 'Thước đo sai số cấu trúc', tương đồng với lỗi chính tả trong ngôn ngữ nhưng khác biệt ở việc đếm số lượng thao tác cạnh cần thiết để khớp với đồ thị chân lý [4, 5]. Nó là thành phần thực thi mang tính ổn định."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Edit Distance (Levenshtein)"
+    ASPECT: "Cấu trúc"
+    DIFFERENT_IN: "Quy mô (Chuỗi ký tự vs Đồ thị nhân quả)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Causal Discovery"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Linguistics"
+    LINK_LOGIC: "Đánh giá mức độ sai lệch ngữ nghĩa giữa bản dịch máy và bản gốc thông qua cấu trúc cây logic."
+    SPECIALIST_SUGGESTION: "DATA SCIENTIST"
+
+- NODE_ID: SEM_INV_019
+  SEMANTIC_DESCRIPTION: "Instrumental Variables (IV) đại diện cho 'Đòn bẩy gián tiếp', tương đồng với việc sử dụng các quan sát vệ tinh để đoán định hoạt động dưới mặt đất nhưng khác biệt ở các ràng buộc toán học về Exclusion Restriction [6, 7]. Nó là thành phần thực thi mang tính biến đổi."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Proxy Indicators"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Kết quả (Tương quan vs Ước tính nhân quả không chệch)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Latent Confounders"
+    TYPE: "Opposite"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Astrophysics"
+    LINK_LOGIC: "Sử dụng sự nhiễu loạn quỹ đạo của các hành tinh đã biết để xác định vị trí của các thiên thể ẩn."
+    SPECIALIST_SUGGESTION: "SCIENTIST"
+
+- NODE_ID: SEM_SRE_020
+  SEMANTIC_DESCRIPTION: "s-Recoverability là 'Máy lọc sai lệch', tương đồng với việc hiệu chuẩn camera bị lệch góc nhưng khác biệt ở khả năng toán học hóa việc chọn lọc dữ liệu mẫu để khôi phục phân phối quần thể chung [8, 9]. Nó mang tính ổn định cao."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Lens Calibration"
+    ASPECT: "Hình thức"
+    DIFFERENT_IN: "Mục tiêu (Hình ảnh vs Suy diễn thống kê)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Selection Bias"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Sociology"
+    LINK_LOGIC: "Điều chỉnh các kết quả khảo sát dư luận bị lệch do chỉ thu thập dữ liệu từ các nhóm dân cư thuận tiện."
+    SPECIALIST_SUGGESTION: "SYSTEMS THINKER"
+
+- NODE_ID: SEM_MDL_021
+  SEMANTIC_DESCRIPTION: "Minimum Description Length (MDL) là 'Nguyên lý nén tối thượng', tương đồng với việc tóm tắt văn bản nhưng khác biệt ở chỗ nó coi cấu trúc nhân quả tốt nhất là cấu trúc nén dữ liệu hiệu quả nhất [3, 10]. Nó là trung tâm điều phối mang tính ổn định."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Summarization"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Mục tiêu (Ngôn ngữ vs Độ phức tạp Kolmogorov)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Causal Minimality"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Information Theory"
+    LINK_LOGIC: "Xác định giới hạn lý thuyết cho việc truyền tải tri thức qua các kênh nhiễu."
+    SPECIALIST_SUGGESTION: "ENGINEER"
+
+- NODE_ID: SEM_QSA_022
+  SEMANTIC_DESCRIPTION: "QSAF Framework (Cognitive Degradation Monitor) là 'Hệ thống cảnh báo sớm', tương đồng với đèn báo lỗi động cơ xe hơi nhưng khác biệt ở khả năng phát hiện sự trôi dạt ngữ nghĩa và sụp đổ entropy của Agent [11]. Nó là thành phần thực thi mang tính ổn định."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Engine Warning System"
+    ASPECT: "Hình thức"
+    DIFFERENT_IN: "Kết quả (Sửa chữa cơ khí vs Bảo toàn bản sắc Agent)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Semantic Drift"
+    TYPE: "Opposite"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Mental Health Monitoring"
+    LINK_LOGIC: "Theo dõi các dấu hiệu suy giảm nhận thức hoặc burnout thông qua sự thay đổi cấu trúc ngôn ngữ hàng ngày."
+    SPECIALIST_SUGGESTION: "PSYCHOLOGIST"
+
+- NODE_ID: SEM_HAS_041
+  SEMANTIC_DESCRIPTION: "Hash logic đóng vai trò là 'Semantic Checksum', đảm bảo tính toàn vẹn của tri thức khi chuyển giao giữa các Agent mà không cần truyền tải toàn bộ dữ liệu. [31, 32]"
+  ANALOGY_HUB:
+    SIMILAR_TO: "Digital Fingerprint"
+    ASPECT: "Hình thức"
+    DIFFERENT_IN: "Mục tiêu (Bảo mật vs Nhất quán tri thức)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "ICOER Metric"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Blockchain Auditing"
+    LINK_LOGIC: "Xác minh các khối tri thức nhân quả bằng chữ ký số băm."
+    SPECIALIST_SUGGESTION: "ENGINEER"
+
+- NODE_ID: SEM_SAM_042
+  SEMANTIC_DESCRIPTION: "Selective Attention tương đồng với Importance Sampling. Cả hai đều tập trung tài nguyên vào những vùng không gian mang lại giá trị thông tin cao nhất cho dự báo. [18]"
+  ANALOGY_HUB:
+    SIMILAR_TO: "Spotlight Effect"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Quy mô (Tâm lý vs Toán học)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Information Gain"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Cognitive Psychology"
+    LINK_LOGIC: "Giải thích cách não bộ lọc nhiễu để tập trung vào nguyên nhân thực sự."
+    SPECIALIST_SUGGESTION: "PSYCHOLOGIST"
+
+- NODE_ID: SEM_EXP_043
+  SEMANTIC_DESCRIPTION: "Creative Exploration tương đồng với MCMC Jumps. Các bước nhảy ngẫu nhiên giúp Agent thoát khỏi 'cực tiểu cục bộ' của tư duy cũ để tìm giả thuyết mới. [22]"
+  ANALOGY_HUB:
+    SIMILAR_TO: "Brainstorming"
+    ASPECT: "Cấu trúc"
+    DIFFERENT_IN: "Kết quả (Ý tưởng vs Phân phối xác suất)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Maximum Entropy Exploration"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Innovation Management"
+    LINK_LOGIC: "Mô phỏng quá trình đổi mới sáng tạo như một chuỗi xích Markov."
+    SPECIALIST_SUGGESTION: "CREATIVE EXPLORER"
+
+- NODE_ID: SEM_CON_044
+  SEMANTIC_DESCRIPTION: "Turbo Decoding tương đồng với 'Cooperative Reasoning'. Việc trao đổi niềm tin giữa các bộ giải mã song song giúp đạt được sự đồng thuận tri thức tiệm cận chân lý. [33, 34]"
+  ANALOGY_HUB:
+    SIMILAR_TO: "Social Consensus"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Hình thức (Bit vs Ý kiến)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Belief Propagation"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Political Science"
+    LINK_LOGIC: "Mô hình hóa sự hội tụ quan điểm trong một cộng đồng qua giao tiếp lặp."
+    SPECIALIST_SUGGESTION: "STRATEGIST"
+
+- NODE_ID: SEM_LIM_045
+  SEMANTIC_DESCRIPTION: "Kraft Inequality đại diện cho 'Cognitive Budget'. Nó xác lập giới hạn vật lý về số lượng khái niệm mà một hệ thống có thể định nghĩa một cách không chồng chéo. [11]"
+  ANALOGY_HUB:
+    SIMILAR_TO: "Storage Limit"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Hình thức (Bất đẳng thức vs Dung lượng GB)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Information Bottleneck"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Linguistics"
+    LINK_LOGIC: "Xác định giới hạn độ phức tạp của một ngôn ngữ để đảm bảo tính thông hiểu."
+    SPECIALIST_SUGGESTION: "SCIENTIST"
+
+- NODE_ID: SEM_ILL_047
+  SEMANTIC_DESCRIPTION: "Simpson's Paradox tương đồng với 'Spurious Perception'. Một tương quan có vẻ đúng ở mức cục bộ nhưng hoàn toàn sai khi nhìn vào cấu trúc nhân quả tổng thể. [35, 36]"
+  ANALOGY_HUB:
+    SIMILAR_TO: "Optical Illusion"
+    ASPECT: "Hình thức"
+    DIFFERENT_IN: "Quy mô (Thị giác vs Thống kê)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Hidden Confounders"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Public Health"
+    LINK_LOGIC: "Cảnh báo các kết luận sai lầm về hiệu quả thuốc khi không phân nhóm đúng."
+    SPECIALIST_SUGGESTION: "STRATEGIST"
+
+- NODE_ID: SEM_TYP_048
+  SEMANTIC_DESCRIPTION: "Joint Typicality đại diện cho 'Logical Coherence'. Một chuỗi lập luận chỉ được coi là có ý nghĩa khi nó nằm trong vùng điển hình của phân phối tri thức hệ thống. [9]"
+  ANALOGY_HUB:
+    SIMILAR_TO: "Grammatical Correctness"
+    ASPECT: "Hình thức"
+    DIFFERENT_IN: "Mục tiêu (Ngôn ngữ vs Logic nhân quả)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Asymptotic Equipartition Property"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Philosophy of Logic"
+    LINK_LOGIC: "Định nghĩa tính gắn kết của các hệ thống niềm tin."
+    SPECIALIST_SUGGESTION: "SYSTEMS THINKER"
+
+- NODE_ID: SEM_PRU_049
+  SEMANTIC_DESCRIPTION: "Alpha-Beta Pruning tương đồng với 'Strategic Focus'. Việc loại bỏ các nhánh không khả thi giúp Agent tập trung tài nguyên vào các lộ trình nhân quả tiềm năng nhất. [37, 38]"
+  ANALOGY_HUB:
+    SIMILAR_TO: "Tunnel Vision (Positive)"
+    ASPECT: "Cấu trúc"
+    DIFFERENT_IN: "Mục tiêu (Trò chơi vs Suy luận thế giới thực)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "SCOUT Algorithm"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Military Strategy"
+    LINK_LOGIC: "Cắt tỉa các phương án tác chiến yếu để tối ưu hóa hậu cần và tấn công."
+    SPECIALIST_SUGGESTION: "STRATEGIST"
+
+- NODE_ID: SEM_IGA_023
+  SEMANTIC_DESCRIPTION: "Information Gain (Active Exploration) là 'Sự tò mò toán học', tương đồng với việc thăm dò địa chất nhưng khác biệt ở mục tiêu cực đại hóa phần thưởng dự báo thông qua các hành động can thiệp [12, 13]. Nó mang tính biến đổi cao."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Geological Exploration"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Kết quả (Khoáng sản vs Giảm thiểu sự không chắc chắn)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Exploration-Exploitation Trade-off"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Strategic Intelligence"
+    LINK_LOGIC: "Thiết lập các chiến dịch tình báo để thu thập thông tin tại những điểm nút có 'giá trị thông tin' cao nhất."
+    SPECIALIST_SUGGESTION: "STRATEGIST"
+
+- NODE_ID: SEM_EBI_024
+  SEMANTIC_DESCRIPTION: "EBITDA Impact Weight là 'Chỉ số niềm tin tài chính', tương đồng với các báo cáo kiểm toán nhưng khác biệt ở việc định lượng trực tiếp giá trị thặng dư (12-15%) do AI nhân quả mang lại [14, 15]. Nó là thành phần kết quả mang tính ổn định."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Audit Report"
+    ASPECT: "Hình thức"
+    DIFFERENT_IN: "Mục tiêu (Tuân thủ vs Tối ưu hóa lợi nhuận)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Causal ROI"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Corporate Strategy"
+    LINK_LOGIC: "Xác lập cơ sở khoa học cho việc phân bổ ngân sách đầu tư vào công nghệ AI thế hệ mới."
+    SPECIALIST_SUGGESTION: "STRATEGIST"
+
+- NODE_ID: SEM_DCL_025
+  SEMANTIC_DESCRIPTION: "DCL-DECOR (Precision Split) là 'Bộ phân tách nhiễu', tương đồng với việc lọc tạp âm trong kỹ thuật âm thanh nhưng khác biệt ở khả năng tách biệt các cú sốc hệ thống ẩn (low-rank) khỏi các biến động nội bộ [16, 17]. Nó là thành phần thực thi mang tính biến đổi."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Noise Cancellation"
+    ASPECT: "Cấu trúc"
+    DIFFERENT_IN: "Quy mô (Sóng âm vs Ma trận độ chính xác tài chính)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Mixed Latent Confounding"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Financial Risk Management"
+    LINK_LOGIC: "Cô lập ảnh hưởng của các cuộc khủng hoảng kinh tế toàn cầu khỏi các sai sót quản trị nội bộ của doanh nghiệp."
+    SPECIALIST_SUGGESTION: "DATA SCIENTIST"
+
+- NODE_ID: SEM_CAR_026
+  SEMANTIC_DESCRIPTION: "CARL (Causal Representation Learning) là 'Người bảo tồn cấu trúc ẩn', tương đồng với việc bảo tồn di tích cổ nhưng khác biệt ở việc ép buộc không gian nhúng (embeddings) phải tuân thủ các quy luật nhân quả thực thay vì chỉ khớp các đặc trưng thị giác [18, 19]. Nó là trung tâm điều phối mang tính biến đổi."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Historical Preservation"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Kết quả (Di sản vật thể vs Nhất quán tri thức)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Latent Space"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Digital Twin Construction"
+    LINK_LOGIC: "Đảm bảo các bản sao kỹ thuật số của các hệ thống vật lý vận hành đúng theo các quy luật nhân quả thực tế."
+    SPECIALIST_SUGGESTION: "ENGINEER"
+
+- NODE_ID: SEM_JCI_027
+  SEMANTIC_DESCRIPTION: "Joint Causal Influence (Hypergraph) là 'Sự hợp tác cộng sinh', tương đồng với cơ chế ra quyết định của một hội đồng nhưng khác biệt ở khả năng mô hình hóa các tương tác bậc cao không thể phân tách thành các cặp biến [20, 21]. Nó mang tính biến đổi."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Board of Directors Decision"
+    ASPECT: "Cấu trúc"
+    DIFFERENT_IN: "Quy mô (Số lượng thành viên vs Hàng triệu thực thể dữ liệu)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Causal Hypergraph"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Complexity Science"
+    LINK_LOGIC: "Phân tích các hiện tượng đột sinh (emergence) trong các hệ thống phức tạp như thời tiết hoặc mạng lưới thần kinh."
+    SPECIALIST_SUGGESTION: "SYSTEMS THINKER"
+
+- NODE_ID: SEM_COT_028
+  SEMANTIC_DESCRIPTION: "Chain of Thought (CoT) là 'Dấu vết lập luận', tương đồng với việc học sinh viết các bước giải toán nhưng khác biệt ở khả năng trích xuất các chuỗi nhân quả tiềm ẩn (latent reasoning chains) để kiểm soát ảo giác [4, 22, 23]. Nó mang tính biến đổi cao."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Mathematical Workings"
+    ASPECT: "Hình thức"
+    DIFFERENT_IN: "Mục tiêu (Kết quả đúng vs Khả năng giải thích cơ chế)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Latent Reasoning Chain Extraction"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Education Technology"
+    LINK_LOGIC: "Phân tích lỗ hổng tư duy của học sinh bằng cách so sánh chuỗi CoT của họ với đồ thị kiến thức chuẩn."
+    SPECIALIST_SUGGESTION: "CREATIVE EXPLORER"
+
+- NODE_ID: SEM_BPE_029
+  SEMANTIC_DESCRIPTION: "Belief Propagation Equilibrium là 'Sự đồng thuận tri thức', tương đồng với việc đạt được thỏa ước trong đàm phán chính trị nhưng khác biệt ở việc sử dụng lan truyền thông điệp đệ quy để đạt trạng thái niềm tin hậu nghiệm ổn định [24-26]. Nó là trung tâm điều phối mang tính ổn định."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Political Consensus"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Kết quả (Thỏa hiệp lợi ích vs Xác suất chính xác tối ưu)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Message-passing"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Social Network Analysis"
+    LINK_LOGIC: "Dự báo cách một thông tin sai lệch (fake news) đạt đến trạng thái bão hòa trong một cộng đồng trực tuyến."
+    SPECIALIST_SUGGESTION: "SYSTEMS THINKER"
+
+- NODE_ID: SEM_LMT_030
+  SEMANTIC_DESCRIPTION: "The Linked Message (Causal Storytelling) là 'Sợi chỉ đỏ ngữ nghĩa', tương đồng với cốt truyện trong tiểu thuyết nhưng khác biệt ở khả năng trích xuất trực tiếp các đồ thị nhân quả từ văn bản chuyên môn để thuyết phục các nhà ra quyết định [27-29]. Nó mang tính biến đổi cao."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Novel Plotline"
+    ASPECT: "Hình thức"
+    DIFFERENT_IN: "Mục tiêu (Giải trí vs Thuyết phục chiến lược dựa trên dữ liệu)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Posterior LLM Correction"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Marketing & PR"
+    LINK_LOGIC: "Xây dựng các chiến dịch truyền thông 'không thể chối từ' bằng cách kết nối trực tiếp nỗi đau của khách hàng với giải pháp thông qua logic nhân quả."
+    SPECIALIST_SUGGESTION: "CREATIVE EXPLORER"
+
+- NODE_ID: SEM_CRY_001
+  SEMANTIC_DESCRIPTION: "Causal Discovery tương đồng với Cryptanalysis (phá mã). Cả hai đều tìm cách khôi phục một cấu trúc ẩn (plaintext/causal graph) từ các biểu hiện nhiễu (ciphertext/observational data). Nó là trung tâm điều phối mang tính biến đổi."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Codebreaking (Enigma)"
+    ASPECT: "Logic"
+    DIFFERENT_IN: "Mục tiêu (Bảo mật vs Khoa học)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Causal Discovery"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Intelligence Analysis"
+    LINK_LOGIC: "Sử dụng kỹ thuật 'crib' trong phá mã để định vị các mấu chốt nhân quả trong dữ liệu tình báo."
+    SPECIALIST_SUGGESTION: "STRATEGIST"
+
+- NODE_ID: SEM_ERR_002
+  SEMANTIC_DESCRIPTION: "Error Correction trong Hypernetworks tương đồng với hệ thống miễn dịch sinh học. Nó không chỉ phát hiện sự xâm nhập của nhiễu mà còn chủ động khôi phục bản sắc gốc của tri thức. Nó là thành phần thực thi mang tính ổn định."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Biological Immune System"
+    ASPECT: "Cấu trúc"
+    DIFFERENT_IN: "Quy mô (Tế bào vs Bit tri thức)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Syndrome Vector"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Digital Forensics"
+    LINK_LOGIC: "Khôi phục các chuỗi sự kiện nhân quả từ dữ liệu số bị hư hỏng hoặc bị xóa."
+    SPECIALIST_SUGGESTION: "ENGINEER"
+
+- NODE_ID: SEM_CHT_051
+  SEMANTIC_DESCRIPTION: "Causal Hierarchy Theorem (CHT) định nghĩa các cấp độ năng lực của trí tuệ từ Quan sát (L1) đến Can thiệp (L2) và Phản thực tế (L3). Nó tương đồng với Tháp nhu cầu Maslow về mặt phân cấp thứ bậc nhưng khác biệt hoàn toàn về mục tiêu tối ưu hóa (Nhu cầu sinh tồn vs Khả năng suy luận nhân quả)."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Maslow's Hierarchy of Needs"
+    ASPECT: "Cấu trúc (Phân cấp thứ bậc)"
+    DIFFERENT_IN: "Mục tiêu (Sinh học vs Trí tuệ nhận thức)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Pearl's Hierarchy"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Management Science"
+    LINK_LOGIC: "Phân loại năng lực ra quyết định của cấp quản lý từ mức độ 'theo dõi số liệu' đến 'thiết kế chính sách'."
+    SPECIALIST_SUGGESTION: "STRATEGIST"
+
+- NODE_ID: SEM_MKB_052
+  SEMANTIC_DESCRIPTION: "Markov Blanket đại diện cho 'Ranh giới thông tin tối thiểu' của một thực thể, tương đồng với các khu dân cư khép kín (Gated Communities) về mặt cấu trúc ngăn cách nhưng khác biệt ở mục tiêu là bảo toàn tính độc lập thống kê thay vì an ninh vật lý."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Gated Communities"
+    ASPECT: "Cấu trúc (Ranh giới ngăn cách)"
+    DIFFERENT_IN: "Mục tiêu (An ninh vs Độc lập thống kê)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "d-separation"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Sociology"
+    LINK_LOGIC: "Mô hình hóa phạm vi ảnh hưởng của cá nhân trong các vòng tròn xã hội."
+    SPECIALIST_SUGGESTION: "SYSTEMS THINKER"
+
+- NODE_ID: SEM_SEP_053
+  SEMANTIC_DESCRIPTION: "d-separation/m-separation đóng vai trò là 'Cơ chế lọc logic', tương đồng với quy trình cấp quyền truy cập (Security Clearances) trong tổ chức nhưng khác biệt ở chỗ nó tự động chặn dòng thông tin dựa trên trạng thái quan sát thay vì quy tắc hành chính."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Security Clearances"
+    ASPECT: "Logic (Kiểm soát dòng chảy)"
+    DIFFERENT_IN: "Hình thức (Quy tắc người dùng vs Trạng thái đồ thị)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Markov Blanket"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Information Security"
+    LINK_LOGIC: "Thiết kế các rào cản thông tin tự động trong kiến trúc mạng zero-trust."
+    SPECIALIST_SUGGESTION: "ENGINEER"
+
+- NODE_ID: SEM_VIT_054
+  SEMANTIC_DESCRIPTION: "Vittle (Visual Instruction Bottleneck) hoạt động như 'Lớp khiên ngữ nghĩa', tương đồng với tai nghe chống ồn (Noise-cancelling Headphones) về mặt logic lọc nhiễu nhưng khác biệt ở kết quả là bảo toàn tính bất biến của hình ảnh dưới các can thiệp thị giác."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Noise-cancelling Headphones"
+    ASPECT: "Logic (Lọc thành phần nhiễu)"
+    DIFFERENT_IN: "Kết quả (Âm thanh sạch vs Bất biến ngữ nghĩa thị giác)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Information Bottleneck"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Computer Vision"
+    LINK_LOGIC: "Tăng cường khả năng nhận diện đối tượng trong môi trường khắc nghiệt (sương mù, nhiễu điện từ)."
+    SPECIALIST_SUGGESTION: "CREATIVE EXPLORER"
+
+- NODE_ID: SEM_TCR_055
+  SEMANTIC_DESCRIPTION: "The Chinese Room (Searle) là 'Phép thử bản chất trí tuệ', tương đồng với các vụ giả mạo danh tính (Deepfake Identity) về mặt hình thức mô phỏng hoàn hảo nhưng khác biệt ở mục tiêu triết học là đặt câu hỏi về sự tồn tại của sự hiểu biết thực sự."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Deepfake Identity"
+    ASPECT: "Hình thức (Mô phỏng bề mặt)"
+    DIFFERENT_IN: "Mục tiêu (Lừa đảo vs Phân tích triết học về AI)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Causal Parrots"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Philosophy of Mind"
+    LINK_LOGIC: "Đánh giá xem LLM thực sự hiểu nhân quả hay chỉ đang khớp các chuỗi token xác suất cao."
+    SPECIALIST_SUGGESTION: "PSYCHOLOGIST"
+
+- NODE_ID: SEM_MET_056
+  SEMANTIC_DESCRIPTION: "Metropolis-Hastings (MCMC) là 'Trinh sát manifold', tương đồng với kỹ thuật thử sai A/B Testing trong marketing về mặt logic thăm dò nhưng khác biệt ở quy mô tìm kiếm không gian xác suất đa chiều vô hạn."
+  ANALOGY_HUB:
+    SIMILAR_TO: "A/B Testing"
+    ASPECT: "Logic (Thăm dò và lựa chọn)"
+    DIFFERENT_IN: "Quy mô (2 biến thể vs Không gian ẩn đa chiều)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Stochastic Processes"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Urban Planning"
+    LINK_LOGIC: "Mô phỏng sự di chuyển của cư dân để tìm ra các điểm nút giao thông tối ưu."
+    SPECIALIST_SUGGESTION: "DATA SCIENTIST"
+
+- NODE_ID: SEM_ATT_057
+  SEMANTIC_DESCRIPTION: "Coherence Attractor (ICOER) đóng vai trò là 'Hố đen ngữ nghĩa', tương đồng với giếng trọng lực (Gravity Well) về mặt hình thức thu hút các quỹ đạo thông tin nhưng khác biệt ở kết quả là tạo ra sự ổn định cho lập luận thay vì tích tụ vật chất."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Gravity Well"
+    ASPECT: "Hình thức (Thu hút về trung tâm)"
+    DIFFERENT_IN: "Kết quả (Vật chất vs Độ gắn kết thông tin)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "ICOER Metric"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Statistical Mechanics"
+    LINK_LOGIC: "Ứng dụng các điểm hấp dẫn trong hệ thống động lực để dự báo sự hội tụ tri thức."
+    SPECIALIST_SUGGESTION: "SCIENTIST"
+
+- NODE_ID: SEM_SLD_058
+  SEMANTIC_DESCRIPTION: "Semantic Solder (NODE_MARK) là 'Chất keo chiến lược', tương đồng với mô liên kết trong cơ thể về mặt cấu trúc gắn kết các bộ phận nhưng khác biệt ở mục tiêu là tạo ra một thông điệp nhân quả không thể chối từ trong tiếp thị."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Connective Tissue"
+    ASPECT: "Cấu trúc (Gắn kết các thành phần)"
+    DIFFERENT_IN: "Mục tiêu (Sinh lý vs Thuyết phục chiến lược)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "The Linked Message"
+    TYPE: "Complementary"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Brand Strategy"
+    LINK_LOGIC: "Gắn kết giá trị thương hiệu với nỗi đau khách hàng thông qua logic nhân quả thực chứng."
+    SPECIALIST_SUGGESTION: "CREATIVE EXPLORER"
+
+- NODE_ID: SEM_PIG_059
+  SEMANTIC_DESCRIPTION: "Pigeon-hole Principle là 'Giới hạn vật lý của trí nhớ', tương đồng với trò chơi ghế âm nhạc (Musical Chairs) về mặt hình thức cạnh tranh không gian nhưng khác biệt ở hệ quả là gây ra sự sụp đổ thông tin (information collapse) khi cố nén dữ liệu quá mức."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Musical Chairs"
+    ASPECT: "Hình thức (Nguồn lực hữu hạn)"
+    DIFFERENT_IN: "Kết quả (Loại cuộc chơi vs Sụp đổ thông tin)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Information Bottleneck"
+    TYPE: "Opposite"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Linguistics"
+    LINK_LOGIC: "Xác định giới hạn số lượng từ vựng cần thiết để biểu diễn một miền tri thức không gây nhập nhằng."
+    SPECIALIST_SUGGESTION: "SCIENTIST"
+
+- NODE_ID: SEM_ORD_060
+  SEMANTIC_DESCRIPTION: "Causal Ordering tương đồng với học phần tiên quyết (Prerequisites) trong giáo dục về mặt cấu trúc tuần tự nhưng khác biệt ở kết quả là xác định dòng chảy nhân quả (flow) thay vì lộ trình học tập hành chính."
+  ANALOGY_HUB:
+    SIMILAR_TO: "Academic Prerequisites"
+    ASPECT: "Cấu trúc (Tuần tự hóa)"
+    DIFFERENT_IN: "Kết quả (Lộ trình đào tạo vs Manifold nhân quả)"
+  SEMANTIC_RELATIONS:
+    TARGET_NODE: "Topological Ordering"
+    TYPE: "Evolution"
+  CROSS_DOMAIN_POTENTIAL:
+    POTENTIAL_FIELD: "Supply Chain Engineering"
+    LINK_LOGIC: "Tối ưu hóa thứ tự lắp ráp sản phẩm dựa trên sự phụ thuộc vật lý của các linh kiện."
+    SPECIALIST_SUGGESTION: "SYSTEMS THINKER"
+
+--------------------------------------------------------------------------------
+
+layer: 5
+  description: "Metrics, Confidence Scores, Significance, and Information Gain relate to entities and rules"
+
+- METRIC_ID: MET_SHD_001
+  METRIC_NAME: "Structural Hamming Distance (SHD)"
+  CALCULATION_METHOD: "Đếm số lượng thao tác cạnh (thêm, xóa, đảo ngược) cần thiết để biến đồ thị học được thành đồ thị chân lý [1, 2]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Đánh giá độ chính xác cấu trúc đồ thị)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Structural Intervention Distance (SID)"
+    RELATION: "Tỉ lệ thuận (SHD thấp thường dẫn đến SID thấp, nhưng không tuyệt đối)"
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_PVAL_002
+  METRIC_NAME: "p-Value (Statistical Significance)"
+  CALCULATION_METHOD: "Xác suất thu được kết quả quan sát (hoặc cực đoan hơn) giả định rằng giả thuyết không (null hypothesis - độc lập) là đúng [3, 4]."
+  APPLICATION_SCOPE: "Quy tắc (Quyết định xóa cạnh trong Constraint-based CD)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Decision Threshold (Alpha)"
+    RELATION: "Điều kiện cần (p-value < alpha để bác bỏ độc lập)"
+  SPECIALIST_SUPERVISOR: "SCIENTIST"
+
+- METRIC_ID: MET_ELBO_003
+  METRIC_NAME: "Evidence Lower Bound (ELBO)"
+  CALCULATION_METHOD: "Hiệu số giữa kỳ vọng log-likelihood và phân kỳ KL giữa hậu nghiệm biến phân và tiên nghiệm [5, 6]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Hàm mục tiêu tối ưu hóa cho Hypernetworks và VAEs)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "KL-Divergence"
+    RELATION: "Tỉ lệ nghịch (KL giảm giúp ELBO tiệm cận log-likelihood)"
+  SPECIALIST_SUPERVISOR: "ENGINEER"
+
+- METRIC_ID: MET_EPIG_004
+  METRIC_NAME: "Expected Predictive Information Gain (Causal-EPIG)"
+  CALCULATION_METHOD: "Định lượng mức độ giảm bất định về tác động nhân quả mục tiêu (CATE) sau một quan sát hoặc can thiệp mới [7]."
+  APPLICATION_SCOPE: "Node thực thể (Ưu tiên các điểm nút để thăm dò/active learning)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Shannon Entropy"
+    RELATION: "Tỉ lệ thuận (Entropy cao cung cấp dư địa cho Information Gain lớn)"
+  SPECIALIST_SUPERVISOR: "STRATEGIST"
+
+- METRIC_ID: MET_ROI_005
+  METRIC_NAME: "Causal ROI (EBITDA Impact)"
+  CALCULATION_METHOD: "Tỷ lệ lợi nhuận ròng trên chi phí đầu tư AI, hiệu chỉnh qua các deconfounding algorithms để cô lập tác động thực (+347% ROI) [8, 9]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Đo lường giá trị kinh tế thặng dư)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Average Causal Effect (ACE)"
+    RELATION: "Tỉ lệ thuận (ACE chính xác giúp tối ưu hóa chiến lược sinh lời)"
+  SPECIALIST_SUPERVISOR: "STRATEGIST"
+
+- METRIC_ID: MET_ICOER_006
+  METRIC_NAME: "ICOER (Information Coherence Metric)"
+  CALCULATION_METHOD: "Tích của trọng số Entropy Gaussian (W(S)), suppression factor và hàm Resonance R(x) [10, 11]."
+  APPLICATION_SCOPE: "Quy tắc (Giám sát độ ổn định và gắn kết của lập luận Agent)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Semantic Drift"
+    RELATION: "Tỉ lệ nghịch (ICOER cao đảm bảo Agent không bị trôi dạt ngữ nghĩa)"
+  SPECIALIST_SUPERVISOR: "PSYCHOLOGIST"
+
+- METRIC_ID: MET_TPNNZ_007
+  METRIC_NAME: "True Positives per Non-Zero Predictions (TP/NNZ)"
+  CALCULATION_METHOD: "Tỷ lệ các cạnh dự báo đúng trên tổng số các cạnh được dự báo (khác không) [12]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Đo lường độ chính xác/precision của mô hình sinh đồ thị)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "False Discovery Rate (FDR)"
+    RELATION: "Tỉ lệ nghịch (TP/NNZ cao tương ứng với FDR thấp)"
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_JSD_008
+  METRIC_NAME: "Jensen-Shannon Divergence (JSD)"
+  CALCULATION_METHOD: "Căn bậc hai của trung bình cộng phân kỳ KL giữa hai phân phối và phân phối trung bình của chúng [13]."
+  APPLICATION_SCOPE: "Node thực thể (Đo lường sự bất biến ngữ nghĩa giữa các biểu diễn nhiễu và sạch)"
+  SIGNIFICANCE_LEVEL: "Medium"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Mutual Information"
+    RELATION: "Điều kiện cần (Dùng để chặn giới hạn thông tin trong Vittle)"
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_ALPHA_009
+  METRIC_NAME: "Decision Threshold (Alpha Cut-off)"
+  CALCULATION_METHOD: "Giá trị biên cố định (thường là 0.05 hoặc 1e-3) dùng để chấp nhận/bác bỏ giả thuyết độc lập thống kê [14, 15]."
+  APPLICATION_SCOPE: "Quy tắc (Ranh giới thực thi của các thuật toán PC/IGSP)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "p-Value"
+    RELATION: "Điều kiện cần (Alpha là ngưỡng so sánh cho p-value)"
+  SPECIALIST_SUPERVISOR: "SCIENTIST"
+
+- METRIC_ID: MET_VC_010
+  METRIC_NAME: "VC Dimension"
+  CALCULATION_METHOD: "Số lượng điểm lớn nhất mà một lớp hàm có thể phân tách (shatter) hoàn toàn [VC Dimension context]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Xác định dung lượng và rủi ro quá khớp của mô hình)"
+  SIGNIFICANCE_LEVEL: "Medium"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Empirical Risk"
+    RELATION: "Tỉ lệ thuận (VC cao tăng khả năng khớp nhưng dễ gây chệch rủi ro thực)"
+  SPECIALIST_SUPERVISOR: "SCIENTIST"
+
+- METRIC_ID: MET_BIC_011
+  METRIC_NAME: "Bayesian Information Criterion (BIC)"
+  CALCULATION_METHOD: "$-2 \ln(L) + k \ln(n)$, phạt độ phức tạp của mô hình dựa trên số tham số và cỡ mẫu [16]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Lựa chọn mô hình nhân quả tối ưu)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Maximum Likelihood"
+    RELATION: "Tỉ lệ thuận (BIC bù trừ cho sự tăng trưởng Likelihood ảo do quá nhiều tham số)"
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_ATE_012
+  METRIC_NAME: "Average Treatment Effect (ATE)"
+  CALCULATION_METHOD: "Kỳ vọng của sự khác biệt giữa kết quả khi có can thiệp và không có can thiệp trên toàn quần thể [17, 18]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Chỉ số tác động thực thi cuối cùng)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Identifiability"
+    RELATION: "Điều kiện cần (Phải nhận dạng được cấu trúc mới tính được ATE không chệch)"
+  SPECIALIST_SUPERVISOR: "SCIENTIST"
+
+- METRIC_ID: MET_MRR_013
+  METRIC_NAME: "Mean Reciprocal Rank (MRR)"
+  CALCULATION_METHOD: "Trung bình cộng của nghịch đảo thứ hạng của các mẫu tham chiếu đúng trong không gian nhúng [19]."
+  APPLICATION_SCOPE: "Node thực thể (Đánh giá khả năng truy xuất quan hệ nhân quả của Agent)"
+  SIGNIFICANCE_LEVEL: "Medium"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Hit-at-One"
+    RELATION: "Tỉ lệ thuận (MRR cao thường đi kèm Hit@1 cao)"
+  SPECIALIST_SUPERVISOR: "ENGINEER"
+
+- METRIC_ID: MET_LAGR_014
+  METRIC_NAME: "Augmented Lagrangian Penalty"
+  CALCULATION_METHOD: "Hàm phạt kết hợp nhân tử Lagrange và hình phạt bình phương để ép buộc ràng buộc h(A)=0 (tính DAG) [20]."
+  APPLICATION_SCOPE: "Quy tắc (Ép buộc cấu trúc đồ thị không chu trình trong quá trình học)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Acyclicity Constraint h(A)"
+    RELATION: "Tỉ lệ thuận (Khi h(A) > 0, penalty tăng để ép cạnh về 0)"
+  SPECIALIST_SUPERVISOR: "ENGINEER"
+
+- METRIC_ID: MET_MSE_015
+  METRIC_NAME: "Mean Squared Error (MSE) in GNN"
+  CALCULATION_METHOD: "Trung bình bình phương sai số dự báo propensity score hoặc outcome regression [21]."
+  APPLICATION_SCOPE: "Node thực thể (Đánh giá độ hội tụ của các GNN xử lý nhiễu mạng lưới)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Convergence Rate"
+    RELATION: "Tỉ lệ nghịch (MSE giảm báo hiệu sự hội tụ của mô hình)"
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_SID_016
+  METRIC_NAME: "Structural Intervention Distance (SID)"
+  CALCULATION_METHOD: "Đếm số lượng các cặp (X, Y) mà tác động can thiệp p(y|do(x)) bị ước tính sai dựa trên cấu trúc đồ thị học được."
+  APPLICATION_SCOPE: "Toàn hệ thống (Đánh giá độ tin cậy của các truy vấn can thiệp L2)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Structural Hamming Distance (SHD)"
+    RELATION: "Tỉ lệ thuận (SHD thấp thường dẫn đến SID thấp, nhưng SID đo lường sai số chức năng thay vì sai số hình học) [1, 2]"
+  SPECIALIST_SUPERVISOR: "SCIENTIST"
+
+- METRIC_ID: MET_FDR_017
+  METRIC_NAME: "False Discovery Rate (FDR)"
+  CALCULATION_METHOD: "Tỷ lệ các cạnh nhân quả dự báo sai (False Positives) trên tổng số các cạnh được dự báo tồn tại [3, 4]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Kiểm soát 'ảo giác' kết nối trong đồ thị quy mô lớn)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "True Positive Rate (TPR)"
+    RELATION: "Tỉ lệ nghịch (Thỏa hiệp giữa độ nhạy và độ đặc hiệu) [3]"
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_F1_018
+  METRIC_NAME: "F1-Score (Causal Reconstruction)"
+  CALCULATION_METHOD: "Trung bình điều hòa giữa Precision và Recall của các cạnh nhân quả [5-7]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Đặc biệt dùng cho Novel Science Benchmarking để đánh giá khả năng suy luận thực)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Memorization Index (M1-M3)"
+    RELATION: "Tỉ lệ nghịch (F1 cao trên dữ liệu mới trong khi Memorization thấp chứng tỏ tư duy nhân quả thực sự) [6, 8]"
+  SPECIALIST_SUPERVISOR: "STRATEGIST"
+
+- METRIC_ID: MET_NLL_019
+  METRIC_NAME: "Negative Log-Likelihood (NLL)"
+  CALCULATION_METHOD: "Giá trị âm của log xác suất của dữ liệu quan sát dưới mô hình tham số hiện tại [9]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Giám sát quá trình hội tụ của Hypernetworks)"
+  SIGNIFICANCE_LEVEL: "Medium"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Acyclicity Constraint h(A)"
+    RELATION: "Tỉ lệ thuận (Trong giai đoạn cuối, việc ép cấu trúc DAG thường làm tăng nhẹ NLL do đánh đổi tính thưa) [9]"
+  SPECIALIST_SUPERVISOR: "ENGINEER"
+
+- METRIC_ID: MET_BIC_020
+  METRIC_NAME: "Bayesian Information Criterion (BIC)"
+  CALCULATION_METHOD: "L = -2ln(Likelihood) + k*ln(n), nơi k là số tham số và n là cỡ mẫu [10]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Lựa chọn mô hình nhân quả tối ưu, phạt các đồ thị quá dày đặc)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Structural Minimality"
+    RELATION: "Điều kiện cần (BIC thấp củng cố nguyên lý nén MDL) [10, 11]"
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_AUROC_021
+  METRIC_NAME: "AUROC / AUPRC (Hypergraph Discovery)"
+  CALCULATION_METHOD: "Diện tích dưới đường cong ROC hoặc Precision-Recall cho việc dự báo sự tồn tại của hyperedges (Joint Causal Influences) [12]."
+  APPLICATION_SCOPE: "Node thực thể (Đánh giá khả năng bắt lấy các tương tác nhân quả bậc cao)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Joint Causal Influence strength"
+    RELATION: "Tỉ lệ thuận (Cường độ tương tác càng mạnh, AUROC càng cao) [12]"
+  SPECIALIST_SUPERVISOR: "SCIENTIST"
+
+- METRIC_ID: MET_BIDC_022
+  METRIC_NAME: "Bidirectionality (b) & Cyclicity (c)"
+  CALCULATION_METHOD: "b = số dự báo hai chiều / k; c = Tr(e^A * A) - n. Đo lường lỗi hướng và lỗi vòng lặp của LVLM [13]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Phát hiện sự thất bại của mô hình trong việc phân biệt chiều nhân quả)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Causal Hierarchy L1-L3"
+    RELATION: "Điều kiện cần (b và c phải bằng 0 để đạt được suy luận L2/L3 hợp lệ) [13, 14]"
+  SPECIALIST_SUPERVISOR: "CREATIVE EXPLORER"
+
+- METRIC_ID: MET_BRF_023
+  METRIC_NAME: "Optimal Branching Factor (r_TEST)"
+  CALCULATION_METHOD: "d^(1/2) đối với các tìm kiếm định hướng trong cây trò chơi hoặc đồ thị tri thức [15, 16]."
+  APPLICATION_SCOPE: "Quy tắc (Tối ưu hóa thuật toán SCOUT và A* trong việc tìm kiếm lộ trình nhân quả)"
+  SIGNIFICANCE_LEVEL: "Medium"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Expected Inspections (z_n)"
+    RELATION: "Tỉ lệ thuận (Branching factor thấp giúp giảm số nút cần kiểm tra) [17, 18]"
+  SPECIALIST_SUPERVISOR: "SYSTEMS THINKER"
+
+- METRIC_ID: MET_VIT_024
+  METRIC_NAME: "Vittle Regularization Strength (beta)"
+  CALCULATION_METHOD: "Tham số điều chỉnh trọng số của phân kỳ KL trong hàm mục tiêu Information Bottleneck (mặc định 0.1/d) [19, 20]."
+  APPLICATION_SCOPE: "Node thực thể (Cân bằng giữa tính bất biến ngữ nghĩa và độ nhạy đặc trưng)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Robustness to Distribution Shifts"
+    RELATION: "Tỉ lệ thuận (beta phù hợp giúp tăng khả năng chống nhiễu môi trường) [20, 21]"
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_CAP_025
+  METRIC_NAME: "Channel Capacity (C)"
+  CALCULATION_METHOD: "C = max I(X; Y), giới hạn thông tin tối đa có thể truyền tải qua lớp ẩn nhân quả [22, 23]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Xác định giới hạn vật lý của việc nén tri thức)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Transmission Rate (R)"
+    RELATION: "Điều kiện cần (R < C để đảm bảo tri thức không bị lỗi/ảo giác) [22, 24]"
+  SPECIALIST_SUPERVISOR: "SCIENTIST"
+
+- METRIC_ID: MET_EBITDA_026
+  METRIC_NAME: "EBITDA Impact Growth"
+  CALCULATION_METHOD: "Đo lường mức tăng lợi nhuận trước thuế và khấu hao nhờ tối ưu hóa quyết định bằng AI nhân quả (12-15%) [25]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Chỉ số giá trị thực tiễn cho cấp C-suite)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Regret Minimization"
+    RELATION: "Tỉ lệ nghịch (Giảm thiểu hối tiếc trong đầu tư dẫn đến tăng EBITDA) [25]"
+  SPECIALIST_SUPERVISOR: "STRATEGIST"
+
+- METRIC_ID: MET_HAC_027
+  METRIC_NAME: "HAC-type Variance Estimator"
+  CALCULATION_METHOD: "Ước tính phương sai nhất quán và không âm cho các bộ lọc nhiễu mạng lưới trong GNN [26]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Đảm bảo khoảng tin cậy của các ước tính peer-effects)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Bandwidth (b_n)"
+    RELATION: "Tỉ lệ thuận (Băng thông điều chỉnh cho sai số ước tính giai đoạn đầu) [26]"
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_RECD_028
+  METRIC_NAME: "Recanting District Presence"
+  CALCULATION_METHOD: "Kiểm tra sự tồn tại của một district D có cả Ni và Oi là cha mẹ trong đồ thị can thiệp [27, 28]."
+  APPLICATION_SCOPE: "Quy tắc (Ngưỡng quyết định tính không thể nhận dạng - Non-identifiability)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Path-specific Effect Identifiability"
+    RELATION: "Điều kiện cần (Sự xuất hiện của recanting district làm tê liệt suy luận lộ trình) [28, 29]"
+  SPECIALIST_SUPERVISOR: "SCIENTIST"
+
+- METRIC_ID: MET_SURV_029
+  METRIC_NAME: "Survival Rate (Tỷ lệ sinh tồn của Agent)"
+  CALCULATION_METHOD: "Tỷ lệ số lượng drone/tác nhân hoàn thành nhiệm vụ thành công trên tổng số lần triển khai trong môi trường SCM [4, 5]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Đo lường hiệu quả thực thi của Agent nhân quả)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Mission Success Threshold"
+    RELATION: "Điều kiện cần (Survival Rate >= 75% để được coi là thành công) [6, 7]."
+  SPECIALIST_SUPERVISOR: "STRATEGIST"
+
+- METRIC_ID: MET_PAGS_030
+  METRIC_NAME: "MEC-targeted PAG Score"
+  CALCULATION_METHOD: "Xác suất hậu nghiệm của một đồ thị tổ tiên bộ phận (PAG) dựa trên tập dữ liệu D và danh sách ứng viên L(r) [8, 9]."
+  APPLICATION_SCOPE: "Quy tắc (Định hướng việc tinh chỉnh đồ thị nhân quả qua từng bậc r)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Fréchet Bounds"
+    RELATION: "Điều kiện cần (Điểm số phải nằm trong khoảng chặn Fréchet để đảm bảo tính nhất quán) [8]."
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_BEL_031
+  METRIC_NAME: "Belief Distribution Update (BEL)"
+  CALCULATION_METHOD: "BEL(B_i) = α * λ(B_i) * π(B_i). Tích của thông điệp chẩn đoán (λ) và thông điệp nhân quả (π) [10, 11]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Trạng thái niềm tin hiện tại của mạng lưới)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Network Diameter"
+    RELATION: "Tỉ lệ thuận (Thời gian đạt cân bằng niềm tin tỷ lệ với đường kính mạng lưới) [12]."
+  SPECIALIST_SUPERVISOR: "SCIENTIST"
+
+- METRIC_ID: MET_MEM_032
+  METRIC_NAME: "Memorization Index (Chỉ số ghi nhớ M1-M3)"
+  CALCULATION_METHOD: "Đo lường khả năng khôi phục các Nodes và Edges của đồ thị BNLearn mà không cần dữ liệu mới, nhằm phát hiện 'Causal Parrots' [13, 14]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Kiểm tra xem Agent đang suy luận hay đang nhớ vẹt)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "F1-Score (Causal Reconstruction)"
+    RELATION: "Tỉ lệ nghịch (Memorization cao làm giảm độ tin cậy của F1 trên dữ liệu mới) [14]."
+  SPECIALIST_SUPERVISOR: "CREATIVE EXPLORER"
+
+- METRIC_ID: MET_BAND_033
+  METRIC_NAME: "Bandwidth (b_n) for HAC Estimator"
+  CALCULATION_METHOD: "Tham số xác định phạm vi lân cận tối ưu để tính toán phương sai nhất quán trong các mô hình can thiệp mạng lưới [15, 16]."
+  APPLICATION_SCOPE: "Node thực thể (Điều chỉnh độ nhạy của GNN đối với nhiễu mạng lưới)"
+  SIGNIFICANCE_LEVEL: "Medium"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Network Interference Decay"
+    RELATION: "Điều kiện cần (b_n phải được chọn sao cho bắt được sự suy giảm ảnh hưởng theo khoảng cách) [17]."
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_COH_034
+  METRIC_NAME: "ICOER Resonance Factor (R(x))"
+  CALCULATION_METHOD: "Thành phần đo lường sự cộng hưởng thông tin dựa trên các marker ngữ nghĩa Φ và trọng số w [18]."
+  APPLICATION_SCOPE: "Quy tắc (Xác định tính đột sinh của sự gắn kết ngữ nghĩa)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Entropy Weighting W(S)"
+    RELATION: "Tỉ lệ thuận (Cộng hưởng cao kết hợp với entropy ổn định tạo ra ICOER tối ưu) [18]."
+  SPECIALIST_SUPERVISOR: "PSYCHOLOGIST"
+
+- METRIC_ID: MET_KRF_035
+  METRIC_NAME: "Kraft Sum (S)"
+  CALCULATION_METHOD: "S = Σ 2^(-l_i). Tổng lũy thừa âm của độ dài từ mã [19]."
+  APPLICATION_SCOPE: "Quy tắc (Đảm bảo mã hóa tri thức có tính giải mã duy nhất)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Source Entropy H(X)"
+    RELATION: "Điều kiện cần (S <= 1 là bắt buộc để mã hóa không mất mát) [19]."
+  SPECIALIST_SUPERVISOR: "ENGINEER"
+
+- METRIC_ID: MET_WIN_036
+  METRIC_NAME: "Winning Probability (P_n) for Game Trees"
+  CALCULATION_METHOD: "P_n = f(d, P_0), nơi P_n hội tụ về hàm bước (step-function) khi độ sâu n tiến tới vô cùng [20, 21]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Dự báo khả năng thành công của một chiến lược suy luận)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Branching Factor (d)"
+    RELATION: "Tỉ lệ nghịch (d tăng làm giảm tốc độ hội tụ của P_n) [20]."
+  SPECIALIST_SUPERVISOR: "SCIENTIST"
+
+- METRIC_ID: MET_EQU_037
+  METRIC_NAME: "Equivocation (H(x|y))"
+  CALCULATION_METHOD: "Lượng thông tin của nguồn x bị mất đi hoặc không chắc chắn sau khi đã quan sát tín hiệu y tại đầu thu [22]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Đo lường độ nhiễu của kênh truyền tải tri thức)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Channel Capacity (C)"
+    RELATION: "Tỉ lệ nghịch (Equivocation thấp giúp hệ thống tiệm cận giới hạn Shannon) [22]."
+  SPECIALIST_SUPERVISOR: "ENGINEER"
+
+- METRIC_ID: MET_OP_NORM_038
+  METRIC_NAME: "Matrix Operator Norm"
+  CALCULATION_METHOD: "Sử dụng để chặn sai số hội tụ trong việc phân tách ma trận độ chính xác Structured-Low-Rank [15]."
+  APPLICATION_SCOPE: "Node thực thể (Đảm bảo tính ổn định của việc cô lập nhiễu ẩn)"
+  SIGNIFICANCE_LEVEL: "Medium"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Convergence Rate"
+    RELATION: "Tỉ lệ thuận (Norm nhỏ đảm bảo tốc độ hội tụ nhanh hơn) [15]."
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_BRN_039
+  METRIC_NAME: "Optimal Branching Factor (r_TEST)"
+  CALCULATION_METHOD: "Giá trị d^(1/2) cho các thủ tục SCOUT, đảm bảo hiệu suất tìm kiếm tối ưu trên cây tri thức [2, 23]."
+  APPLICATION_SCOPE: "Quy tắc (Tối ưu hóa tài nguyên cho các thuật toán Heuristic CD)"
+  SIGNIFICANCE_LEVEL: "Medium"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Search Complexity"
+    RELATION: "Tỉ lệ nghịch (Duy trì r_TEST giúp giảm độ phức tạp tìm kiếm) [2]."
+  SPECIALIST_SUPERVISOR: "SYSTEMS THINKER"
+
+- METRIC_ID: MET_BOW_041
+  METRIC_NAME: "Post-hoc Bow Reconciliation Constant (c)"
+  CALCULATION_METHOD: "So sánh cường độ tín hiệu hướng Bi,j với tương quan nhiễu chuẩn hóa [Gamma]i,j. Giữ cạnh hướng nếu max{|B_ij|, |B_ji|} >= c * (corr_nhiễu)."
+  APPLICATION_SCOPE: "Quy tắc (Khử bow-patterns để đạt tính nhận dạng trong ADMG)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Identifiability Target"
+    RELATION: "Điều kiện cần (c=1 là ngưỡng mặc định để bẻ gãy sự mập mờ nhân quả)"
+  SPECIALIST_SUPERVISOR: "SCIENTIST"
+
+- METRIC_ID: MET_MEM_ALPHA_042
+  METRIC_NAME: "Memorization Test Cut-off (alpha %)"
+  CALCULATION_METHOD: "Tỷ lệ phần trăm Nodes/Edges được cung cấp trong prompt (0%, 25%, 50%, 75%) để đo lường khả năng tái cấu trúc đồ thị của LLM."
+  APPLICATION_SCOPE: "Toàn hệ thống (Phát hiện rò rỉ dữ liệu huấn luyện/Data Leakage)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "F1-Score (Novel Science)"
+    RELATION: "Tỉ lệ nghịch (Alpha thấp mà F1 cao báo hiệu sự ghi nhớ vẹt thay vì suy luận)"
+  SPECIALIST_SUPERVISOR: "STRATEGIST"
+
+- METRIC_ID: MET_APL_043
+  METRIC_NAME: "Average Path Length L(A)"
+  CALCULATION_METHOD: "Trung bình cộng độ dài đường đi giữa mọi cặp nút trong thành phần kết nối lớn nhất của đồ thị mạng lưới."
+  APPLICATION_SCOPE: "Node thực thể (Xác định bán kính nhiễu mạng lưới trong mô hình ANI)"
+  SIGNIFICANCE_LEVEL: "Medium"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Bandwidth (b_n)"
+    RELATION: "Tỉ lệ thuận (L(A) dùng để tính toán băng thông b_n cho bộ ước tính HAC)"
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_MEC_SIZE_044
+  METRIC_NAME: "MEC Reduction Ratio"
+  CALCULATION_METHOD: "Tỷ lệ số lượng cấu trúc đồ thị khả thi sau khi áp dụng tri thức chuyên gia (LLM/Expert) so với kích thước Markov Equivalence Class ban đầu."
+  APPLICATION_SCOPE: "Toàn hệ thống (Đo lường giá trị thông tin của sự can thiệp chuyên gia)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Risk Tolerance (eta)"
+    RELATION: "Điều kiện cần (Tối ưu hóa min|ME| thỏa mãn xác suất chứa đồ thị thực G* >= 1-eta)"
+  SPECIALIST_SUPERVISOR: "SYSTEMS THINKER"
+
+- METRIC_ID: MET_RP_045
+  METRIC_NAME: "Relative Performance (RP)"
+  CALCULATION_METHOD: "Điểm số hiệu suất chuẩn hóa của các LLM trên các bộ dữ liệu giàu siêu dữ liệu (Metadata-rich) so với các phương pháp CD truyền thống."
+  APPLICATION_SCOPE: "Toàn hệ thống (Xác định ưu thế của Hybrid AI)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "True Positive Rate (TPR)"
+    RELATION: "Tỉ lệ thuận (RP cao phản ánh khả năng tận dụng Metadata để tăng TPR)"
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_WITNESS_046
+  METRIC_NAME: "Minimal Separator Witness p-Value"
+  CALCULATION_METHOD: "Thực hiện kiểm tra độc lập có điều kiện trên tập phân tách tối giản (Witness set) cho từng cạnh sống sót sau thuật toán PC."
+  APPLICATION_SCOPE: "Quy tắc (Cắt tỉa hậu kỳ các cạnh ngoại lai/extraneous edges)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Structural Hamming Distance (SHD)"
+    RELATION: "Tỉ lệ nghịch (Việc sắp xếp theo p-value tăng dần giúp loại bỏ các cạnh có độ tin cậy thấp, giảm SHD)"
+  SPECIALIST_SUPERVISOR: "SCIENTIST"
+
+- METRIC_ID: MET_PS_047
+  METRIC_NAME: "Probability of Sufficiency (PS)"
+  CALCULATION_METHOD: "P(Y_x = y | X = x', Y = y'). Xác suất kết quả y sẽ xảy ra nếu có nguyên nhân x, biết rằng thực tế cả hai đều chưa xảy ra."
+  APPLICATION_SCOPE: "Toàn hệ thống (Đánh giá năng lực của các tác nhân can thiệp)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Probability of Necessity (PN)"
+    RELATION: "Bổ trợ (PS kết hợp với PN để định nghĩa 'Nguyên nhân cần và đủ')"
+  SPECIALIST_SUPERVISOR: "SCIENTIST"
+
+- METRIC_ID: MET_LAYER_048
+  METRIC_NAME: "Optimal Bottleneck Layer Index"
+  CALCULATION_METHOD: "Vị trí tầng tối ưu (thường là tầng thứ 24/32 trong mô hình 7B) để chèn lớp điểm nghẽn thông tin (Bottleneck) nhằm đạt cân bằng Invariance/Sensitivity."
+  APPLICATION_SCOPE: "Node thực thể (Cấu trúc xương sống của Vittle)"
+  SIGNIFICANCE_LEVEL: "High"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Language Modeling Loss"
+    RELATION: "Điều kiện cần (Chèn quá sớm gây lỗi hội tụ, chèn quá muộn làm hỏng định dạng đầu ra)"
+  SPECIALIST_SUPERVISOR: "ENGINEER"
+
+- METRIC_ID: MET_OVERLAP_049
+  METRIC_NAME: "Treatment Overlap Threshold (gamma)"
+  CALCULATION_METHOD: "Giá trị bậc của nút (degree) tối thiểu để đảm bảo sự tồn tại của cả đơn vị được xử lý và không được xử lý trong cùng một phân vùng quan sát (thường gamma >= 2)."
+  APPLICATION_SCOPE: "Toàn hệ thống (Điều kiện biên cho tính nhận dạng của tác động mạng lưới)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Propensity Score Consistency"
+    RELATION: "Điều kiện cần (Nếu gamma nhỏ hơn ngưỡng, việc ước tính peer-effects sẽ bị chệch do thiếu dữ liệu đối chứng)"
+  SPECIALIST_SUPERVISOR: "DATA SCIENTIST"
+
+- METRIC_ID: MET_SPEAR_050
+  METRIC_NAME: "Spearman Rank Correlation (Benchmark Synergy)"
+  CALCULATION_METHOD: "Hệ số tương quan thứ bậc giữa các bài kiểm tra Agent Causal với các bài kiểm tra năng lực khác (SWE Coding, Human Exam, Vending)."
+  APPLICATION_SCOPE: "Toàn hệ thống (Đo lường tính đột sinh của trí tuệ nhân quả so với trí tuệ logic thông thường)"
+  SIGNIFICANCE_LEVEL: "Medium"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Non-Hallucination Rate"
+    RELATION: "Tỉ lệ thuận (Tương quan cao với tư duy lập trình thường đi kèm tỷ lệ ảo giác thấp)"
+  SPECIALIST_SUPERVISOR: "PSYCHOLOGIST"
+
+- METRIC_ID: MET_PN_040
+  METRIC_NAME: "Probability of Necessity (PN)"
+  CALCULATION_METHOD: "P(Y_x' = y' | X = x, Y = y). Xác suất kết quả y' sẽ xảy ra nếu không có nguyên nhân x, biết rằng thực tế x và y đã xảy ra [24, 25]."
+  APPLICATION_SCOPE: "Toàn hệ thống (Cơ sở pháp lý cho việc gán trách nhiệm/credit-blame)"
+  SIGNIFICANCE_LEVEL: "Critical"
+  INTER-METRIC_DEPENDENCY:
+    TARGET_METRIC: "Probability of Sufficiency (PS)"
+    RELATION: "Bổ trợ (PN và PS cùng định nghĩa quan hệ nguyên nhân thực sự) [24, 26]."
+  SPECIALIST_SUPERVISOR: "SCIENTIST"

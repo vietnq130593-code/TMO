@@ -17,11 +17,15 @@
 
 import { db } from '@/lib/db'
 
-/** Độ dài tối đa errorTag (dòng đầu message lỗi) */
-const ERROR_TAG_MAX = 64
+/** Độ dài tối đa errorTag (dòng đầu message lỗi)
+ *  2026-09-26 FIX (Tool health audit): 64 → 200. Trước đây cắt sớm khiến mất
+ *  thông tin chẩn đoán quan trọng — VD "Access denied: path escapes workspace
+ *  root (/home/z/" bị cụt ngay trước phần PATH vi phạm (không biết agent đã
+ *  thử đọc file nào), "File not found: src/lib/agent-goal-loo" mất đuôi file. */
+const ERROR_TAG_MAX = 200
 
 /**
- * Rút errorTag từ message lỗi: dòng đầu, trim, cắt 64 ký tự.
+ * Rút errorTag từ message lỗi: dòng đầu, trim, cắt ERROR_TAG_MAX ký tự.
  * VD: "Error: ENOENT: no such file or directory, open '/x/y'\n  at ..." →
  *     "Error: ENOENT: no such file or directory, open '/x/y'"
  */

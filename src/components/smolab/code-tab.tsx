@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Dialog } from '@/components/ui/dialog'
 import { toast } from '@/hooks/use-toast'
-import { authedFetch } from '@/lib/api-auth'
+import { authedFetch, getApiToken } from '@/lib/api-auth'
 import { CodeEditor, detectLanguage, type OpenFile } from '@/components/code-editor/CodeEditor'
 import { DiffViewer } from '@/components/code-editor/DiffViewer'
 import { PendingEditModal } from '@/components/code-editor/PendingEditModal'
@@ -45,6 +45,28 @@ export interface FileNode {
   extension?: string
   children?: FileNode[]
 }
+
+// ===== MULTI-TERMINAL (user request 2026-09-25: "có thể mở thêm được terminal
+// chứ không chỉ dùng 1 terminal hay không") =====
+/** Tab id cố định của feed hoạt động agents (read-only, luôn hiện diện). */
+const AGENT_FEED_TAB_ID = 'agents'
+/** Một tab terminal: feed agents hoặc 1 persistent shell session riêng. */
+interface TermTab {
+  id: string
+  kind: 'agents' | 'shell'
+  title: string
+  output: string[]
+  alive: boolean
+}
+/** Số shell session đồng thời tối đa (chống mở tràn). */
+const MAX_TERMINALS = 6
+/** Cap số dòng output mỗi tab (ring). */
+const TERM_OUTPUT_CAP = 600
+/** Custom event: poll agent-activity phát khi agents vừa sửa/xóa file —
+ *  listener (khai báo sau handleFileSelect) refresh/open/close tab editor.
+ *  Dùng event thay vì ref-sync vì React Compiler lint cấm gán ref sau effect
+ *  đã đọc nó (react-hooks/immutability). */
+const AGENT_FILE_EVENT_NAME = 'tmo-agent-file-event'
 
 
 // ===== PREVIEW SESSION PERSISTENCE (user request 2026-10-15) =====
@@ -145,20 +167,102 @@ export function CodeTabContent() {
   // Todos VẪN được agents ghi qua todo_write + workflow auto-todo (DB) —
   // chỉ gỡ phần hiển thị panel ở tab Code.
 
-  // Terminal
-  const [terminalOutput, setTerminalOutput] = useState<string[]>([])
+  // Terminal — MULTI-TERMINAL (user request 2026-09-25):
+  //   Tab '🤖 Agents' — feed READ-ONLY mọi tool call của agents (poll
+  //                    /api/agent-activity 2.5s + workflow SSE echo): lệnh
+  //                    shell + kết quả thật + ghi/sửa file, tập trung 1 chỗ.
+  //   Tab 'bash N'    — persistent interactive shell riêng (SSE + ô nhập),
+  //                    tối đa 6 sessions đồng thời, độc lập cwd/env nhau.
+  const [termTabs, setTermTabs] = useState<TermTab[]>([
+    { id: AGENT_FEED_TAB_ID, kind: 'agents', title: '🤖 Agents', output: [], alive: true },
+  ])
+  const [activeTermId, setActiveTermId] = useState<string>(AGENT_FEED_TAB_ID)
+  const termTabsRef = useRef<TermTab[]>([])
+  useEffect(() => { termTabsRef.current = termTabs }, [termTabs])
+  const activeTermIdRef = useRef<string>(AGENT_FEED_TAB_ID)
+  useEffect(() => { activeTermIdRef.current = activeTermId }, [activeTermId])
+  const activeTermTab: TermTab | undefined = termTabs.find(t => t.id === activeTermId) || termTabs[0]
   const [terminalLoading, setTerminalLoading] = useState(false)
   const [terminalCommand, setTerminalCommand] = useState('')
   const [terminalRunning, setTerminalRunning] = useState(false)
   const [terminalHeight, setTerminalHeight] = useState(192)
   const terminalDragRef = useRef<{ startY: number; startH: number } | null>(null)
-  // Phase 4: persistent interactive shell (bash -i) session + SSE stream refs
-  const terminalSessionIdRef = useRef<string | null>(null)
-  const terminalEvtRef = useRef<EventSource | null>(null)
-  const terminalBufferRef = useRef<string>('')
+  // Per-session SSE streams + partial-line buffers (keyed by terminal tab id)
+  const termStreamsRef = useRef<Map<string, EventSource>>(new Map())
+  const termBuffersRef = useRef<Map<string, string>>(new Map())
+  const termCounterRef = useRef(0)
   const terminalPrevRootRef = useRef<string | null>(null)
   // Phase 7: scroll anchor for the terminal output panel (AI command echo)
   const terminalViewRef = useRef<HTMLDivElement | null>(null)
+
+  // --- Terminal helpers (định nghĩa sớm — poll effect + loadTerminal dùng) ---
+  const scrollTermView = useCallback(() => {
+    try { terminalViewRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' }) } catch { /* ignore */ }
+  }, [])
+
+  /** Append dòng hoàn chỉnh vào 1 tab (chỉ auto-scroll nếu tab đó đang active). */
+  const appendTermLines = useCallback((tabId: string, lines: string[]) => {
+    if (lines.length === 0) return
+    setTermTabs(prev => prev.map(t => (t.id === tabId ? { ...t, output: [...t.output, ...lines].slice(-TERM_OUTPUT_CAP) } : t)))
+    if (activeTermIdRef.current === tabId) scrollTermView()
+  }, [scrollTermView])
+
+  /** Append 1 raw SSE chunk — dòng dở giữ trong buffer per-tab. */
+  const appendTermChunk = useCallback((tabId: string, chunk: string) => {
+    const clean = chunk.replace(/\r/g, '')
+    const combined = (termBuffersRef.current.get(tabId) ?? '') + clean
+    const lines = combined.split('\n')
+    termBuffersRef.current.set(tabId, lines.pop() ?? '')
+    if (lines.length > 0) appendTermLines(tabId, lines)
+  }, [appendTermLines])
+
+  /** Đóng SSE stream của 1 tab (không kill session server). */
+  const closeTermStream = useCallback((tabId: string) => {
+    const es = termStreamsRef.current.get(tabId)
+    if (es) {
+      try { es.close() } catch { /* ignore */ }
+      termStreamsRef.current.delete(tabId)
+    }
+  }, [])
+
+  /** Xử lý 1 SSE frame của terminal session (init replay / chunk / exit). */
+  const handleTermFrame = useCallback((tabId: string, parsed: { type?: string; data?: string; code?: number | null } | null) => {
+    if (!parsed) return
+    if (parsed.type === 'init') {
+      // Replay: thay toàn bộ output tab bằng cumulative output server-side
+      termBuffersRef.current.set(tabId, '')
+      const replayLines = String(parsed.data || '').replace(/\r/g, '').split('\n')
+      while (replayLines.length > 0 && replayLines[replayLines.length - 1] === '') replayLines.pop()
+      setTermTabs(prev => prev.map(t => (t.id === tabId ? { ...t, output: replayLines.slice(-TERM_OUTPUT_CAP), alive: true } : t)))
+    } else if (parsed.type === 'chunk' && parsed.data) {
+      appendTermChunk(tabId, String(parsed.data))
+    } else if (parsed.type === 'exit') {
+      // Shell chết — đóng stream + đánh dấu tab (lệnh kế tiếp tự spawn lại)
+      closeTermStream(tabId)
+      termBuffersRef.current.delete(tabId)
+      setTermTabs(prev => prev.map(t => (t.id === tabId ? { ...t, alive: false, output: [...t.output, `[exit ${parsed.code ?? 'null'}]`].slice(-TERM_OUTPUT_CAP) } : t)))
+    }
+  }, [appendTermChunk, closeTermStream])
+
+  /** Mở SSE stream cho 1 terminal session tab. */
+  const openTermStream = useCallback((tabId: string) => {
+    closeTermStream(tabId)
+    try {
+      // EventSource cannot set headers — cookie từ /api/auth/setup là đường chính.
+      // FIX 2026-09-25 (preview iframe): cookie bị chặn trong cross-site iframe →
+      // append token từ localStorage qua query (proxy.ts chấp nhận ?token=).
+      const tk = getApiToken()
+      const tkQ = tk ? `&token=${encodeURIComponent(tk)}` : ''
+      const es = new EventSource(`/api/opencode/terminal/stream?sessionId=${encodeURIComponent(tabId)}${tkQ}`)
+      termStreamsRef.current.set(tabId, es)
+      es.onmessage = (ev: MessageEvent<string>) => {
+        let parsed: { type?: string; data?: string; code?: number | null } | null = null
+        try { parsed = JSON.parse(ev.data) } catch { return }
+        handleTermFrame(tabId, parsed)
+      }
+      // onerror: EventSource auto-reconnect tự xử lý transient drops
+    } catch { /* ignore */ }
+  }, [closeTermStream, handleTermFrame])
 
   // File Explorer resize
   const [fileExplorerHeight, setFileExplorerHeight] = useState(400)
@@ -657,17 +761,22 @@ export function CodeTabContent() {
       const res = await authedFetch('/api/opencode/terminal')
       const data = await res.json()
       // FIX 2026-08-27: KHÔNG wipe terminal khi server không có output —
-      // trước đây `setTerminalOutput([])` xóa luôn các dòng Agent Activity
-      // echo (`$ [AI·Omega] ...`) do poll effect ghi vào ngay trước đó
-      // (race on mount). Chỉ overwrite khi thực sự có PTY output để restore.
+      // trước đây wipe xóa luôn các dòng Agent Activity echo do poll effect
+      // ghi vào ngay trước đó (race on mount). Chỉ overwrite khi thực sự có
+      // PTY output để restore.
+      // (2026-09-25 multi-terminal: ghi vào tab '🤖 Agents', không đụng tab bash)
+      let restored: string[] | null = null
       if (data.output && Array.isArray(data.output) && data.output.length > 0) {
-        setTerminalOutput(data.output)
+        restored = data.output
       } else if (data.terminals) {
         const allLines: string[] = []
         for (const lines of Object.values(data.terminals) as string[][]) {
           allLines.push(...lines)
         }
-        if (allLines.length > 0) setTerminalOutput(allLines)
+        if (allLines.length > 0) restored = allLines
+      }
+      if (restored && restored.length > 0) {
+        setTermTabs(prev => prev.map(t => (t.id === AGENT_FEED_TAB_ID ? { ...t, output: restored!.slice(-TERM_OUTPUT_CAP) } : t)))
       }
       // else: giữ nguyên nội dung hiện tại (AI echo lines / user lines)
     } catch {
@@ -846,6 +955,8 @@ export function CodeTabContent() {
         if (!d?.ok || !Array.isArray(d.entries) || d.entries.length === 0 || cancelled) return
 
         const lines: string[] = []
+        // LIVE FILE TAB REFRESH — path các file agents vừa sửa/xóa (lấy từ detail)
+        const fileEvents: Array<{ tool: string; path: string }> = []
         let maxTs = agentActivityTsRef.current
         for (const e of d.entries) {
           if (!e || typeof e.id !== 'string' || seenAgentActRef.current.has(e.id)) continue
@@ -883,6 +994,8 @@ export function CodeTabContent() {
             const icon = e.tool === 'file_delete' ? '🗑️' : e.tool === 'file_write' ? '📝' : '✏️'
             lines.push(`[AI] ${icon} ${e.tool === 'file_multi_edit' ? 'file_multi_edit' : e.tool} ${cmd.slice(0, 110)}`)
             lines.push(...resultBlock)
+            // LIVE FILE TAB REFRESH: detail của các tool này chính là path file
+            if (cmd) fileEvents.push({ tool: e.tool, path: cmd })
           }
         }
         agentActivityTsRef.current = maxTs
@@ -898,12 +1011,17 @@ export function CodeTabContent() {
             try { loadFileTreeRef.current() } catch { /* offline — bỏ qua */ }
           }, 1500)
         }
+        // ===== LIVE FILE TAB REFRESH (user request 2026-09-25: "agent viết
+        // đến đâu code hiện đến đấy") — phát event kèm path các file agents
+        // vừa sửa/xóa; listener (khai báo sau handleFileSelect — có closure
+        // mới nhất) sẽ: (1) file đang mở + không dirty → refetch NGAY,
+        // (2) file dirty → chỉ toast (bảo vệ chỉnh sửa chưa lưu), (3) file
+        // chưa mở → auto-open + activate, (4) file bị xóa → đóng tab.
+        if (fileEvents.length > 0) {
+          try { window.dispatchEvent(new CustomEvent(AGENT_FILE_EVENT_NAME, { detail: fileEvents })) } catch { /* ignore */ }
+        }
         if (lines.length > 0) {
-          setTerminalOutput(prev => {
-            const next = [...prev, ...lines]
-            return next.length > 600 ? next.slice(-600) : next
-          })
-          try { terminalViewRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' }) } catch { /* ignore */ }
+          appendTermLines(AGENT_FEED_TAB_ID, lines)
         }
       } catch { /* offline — retry ở interval sau */ }
     }
@@ -916,7 +1034,7 @@ export function CodeTabContent() {
       clearInterval(interval)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [])
+  }, [appendTermLines])
 
   // Reload file tree when workspace root changes
   // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect)
@@ -1059,7 +1177,12 @@ export function CodeTabContent() {
       const baseUrl = workspaceRoot
         ? `/api/opencode/files/read?path=${encodeURIComponent(path)}&root=${encodeURIComponent(workspaceRoot)}`
         : `/api/opencode/files/read?path=${encodeURIComponent(path)}`
-      const url = opts?.refresh ? `${baseUrl}&_=${Date.now()}` : baseUrl
+      // FIX 2026-09-25 (live tab refresh): LUÔN LUÔN cache-bust (&_=timestamp).
+      // Trước đây chỉ bust khi opts.refresh — đường auto-open (agent vừa ghi
+      // file, tab chưa mở) dùng URL trần → nếu lần đầu ăn 401 (race cookie
+      // auth lúc mount) hoặc content cũ, browser CÓ THỂ cache response và
+      // replay mãi → tab không bao giờ mở/content stale vĩnh viễn.
+      const url = `${baseUrl}&_=${Date.now()}`
       const res = await authedFetch(url)
       const data = await res.json()
       if (data.content !== undefined) {
@@ -1101,6 +1224,14 @@ export function CodeTabContent() {
           description: `${data?.error || `HTTP ${res.status}`} — ${path.split(/[\\/]/).pop()}`,
           variant: 'destructive',
         })
+        // FIX 2026-09-26: 404 = file KHÔNG TỒN TẠI trên đĩa nhưng vẫn nằm trong
+        // file tree (tree cache stale — VD file test E2E đã bị dọn dẹp, hoặc
+        // AI/tiến trình ngoài đã xóa file sau lần load tree cuối). Refresh tree
+        // để ghost entry biến mất ngay — trước đây entry chết ở lại tree, click
+        // bao nhiêu lần toast lỗi bấy nhiêu lần (console error user báo).
+        if (res.status === 404) {
+          void loadFileTree()
+        }
       }
     } catch (err) {
       // FIX 2026-08-28: network/parse exception cũng hiện lỗi (trước đây swallow)
@@ -1109,7 +1240,7 @@ export function CodeTabContent() {
     } finally {
       setFileLoading(false)
     }
-  }, [workspaceRoot])
+  }, [workspaceRoot, loadFileTree])
 
   const handleCreateSession = useCallback(async () => {
     if (!newSessionPrompt.trim()) return
@@ -1173,43 +1304,17 @@ export function CodeTabContent() {
     }
   }, [loadSessions])
 
-  // Phase 4: append a raw SSE chunk as complete lines (partial line stays buffered)
-  const appendTerminalChunk = useCallback((chunk: string) => {
-    const clean = chunk.replace(/\r/g, '')
-    terminalBufferRef.current += clean
-    const lines = terminalBufferRef.current.split('\n')
-    terminalBufferRef.current = lines.pop() ?? ''
-    if (lines.length > 0) {
-      setTerminalOutput(prev => [...prev, ...lines].slice(-500))
-    }
-  }, [])
+  // (2026-09-25 multi-terminal) — appendTerminalChunk/handleTerminalFrame đã
+  // chuyển lên khối helpers đầu component (per-tab, nhận tabId).
 
-  // Phase 4: handle one SSE frame from the terminal stream
-  const handleTerminalFrame = useCallback((parsed: { type?: string; data?: string; code?: number | null } | null) => {
-    if (!parsed) return
-    if (parsed.type === 'init') {
-      // Replay: replace the panel with the server-side cumulative output
-      terminalBufferRef.current = ''
-      setTerminalOutput([])
-      if (parsed.data) appendTerminalChunk(String(parsed.data))
-    } else if (parsed.type === 'chunk' && parsed.data) {
-      appendTerminalChunk(String(parsed.data))
-    } else if (parsed.type === 'exit') {
-      // Shell died — close SSE + clear ref so the next command spawns a fresh shell
-      try { terminalEvtRef.current?.close() } catch { /* ignore */ }
-      terminalEvtRef.current = null
-      terminalSessionIdRef.current = null
-      const rest = terminalBufferRef.current
-      terminalBufferRef.current = ''
-      setTerminalOutput(prev => [...prev, ...(rest ? [rest] : []), `[exit ${parsed.code ?? 'null'}]`].slice(-500))
-    }
-  }, [appendTerminalChunk])
+  // ===== Multi-terminal: quản lý các tab shell =====
 
-  // Phase 4: lazily create the persistent shell session + open its SSE stream.
-  // Waits for the FIRST init frame (≤2s) before returning so the local `$ cmd`
-  // echo isn't immediately wiped by the init replay.
-  const ensureTerminalSession = useCallback(async (): Promise<string | null> => {
-    if (terminalSessionIdRef.current) return terminalSessionIdRef.current
+  /** Tạo terminal MỚI (nút "+ Terminal") — spawn session eager + mở SSE. */
+  const handleNewTerminal = useCallback(async () => {
+    if (termTabsRef.current.filter(t => t.kind === 'shell').length >= MAX_TERMINALS) {
+      toast({ title: 'Đã đạt giới hạn', description: `Tối đa ${MAX_TERMINALS} terminal đồng thời`, variant: 'destructive' })
+      return
+    }
     try {
       const res = await authedFetch('/api/opencode/terminal/start', {
         method: 'POST',
@@ -1219,96 +1324,152 @@ export function CodeTabContent() {
       const data = await res.json()
       if (!res.ok || !data?.sessionId) throw new Error(data?.error || 'start failed')
       const sid: string = data.sessionId
-      terminalSessionIdRef.current = sid
-
-      // Open the SSE stream; resolve once the init frame lands (or 2s timeout)
-      await new Promise<void>(resolve => {
-        let settled = false
-        const finish = (): void => { if (!settled) { settled = true; resolve() } }
-        const timer = setTimeout(finish, 2000)
-        try {
-          // EventSource cannot set headers — auth relies on the HttpOnly
-          // tmo_api_token cookie set by /api/auth/setup on mount.
-          const es = new EventSource(`/api/opencode/terminal/stream?sessionId=${encodeURIComponent(sid)}`)
-          terminalEvtRef.current = es
-          es.onmessage = (ev: MessageEvent<string>) => {
-            let parsed: { type?: string; data?: string; code?: number | null } | null = null
-            try { parsed = JSON.parse(ev.data) } catch { return }
-            if (!settled && parsed?.type === 'init') {
-              clearTimeout(timer)
-              finish()
-            }
-            handleTerminalFrame(parsed)
-          }
-          es.onerror = () => {
-            // auto-reconnect handles transient drops; just stop waiting
-            clearTimeout(timer)
-            finish()
-          }
-        } catch {
-          clearTimeout(timer)
-          finish()
-        }
-      })
-      return sid
+      termCounterRef.current += 1
+      setTermTabs(prev => [...prev, { id: sid, kind: 'shell', title: `bash ${termCounterRef.current}`, output: [], alive: true }])
+      setActiveTermId(sid)
+      openTermStream(sid)
     } catch (err) {
-      console.error('Terminal session start failed:', err)
-      terminalSessionIdRef.current = null
+      toast({ title: 'Không mở được terminal', description: err instanceof Error ? err.message : String(err), variant: 'destructive' })
+    }
+  }, [workspaceRoot, openTermStream])
+
+  /** Đóng 1 tab shell (kill session server + remove tab). Tab Agents không đóng. */
+  const handleCloseTerminal = useCallback((tabId: string) => {
+    if (tabId === AGENT_FEED_TAB_ID) return
+    closeTermStream(tabId)
+    void authedFetch('/api/opencode/terminal/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: tabId }),
+    }).catch(() => { /* best-effort */ })
+    const current = termTabsRef.current
+    const idx = current.findIndex(t => t.id === tabId)
+    if (idx < 0) return
+    const next = current.filter(t => t.id !== tabId)
+    setTermTabs(next)
+    if (activeTermIdRef.current === tabId) {
+      setActiveTermId(next[Math.max(0, idx - 1)]?.id ?? AGENT_FEED_TAB_ID)
+    }
+  }, [closeTermStream])
+
+  /** Đảm bảo session của tab shell active còn sống — nếu chết, spawn lại CÙNG
+   *  id (server create() thay thế session cũ) + reattach SSE. Trả về id. */
+  const ensureActiveTermSession = useCallback(async (): Promise<string | null> => {
+    const tabId = activeTermIdRef.current
+    if (!tabId || tabId === AGENT_FEED_TAB_ID) return null
+    const tab = termTabsRef.current.find(t => t.id === tabId)
+    if (tab?.alive) return tabId
+    try {
+      const res = await authedFetch('/api/opencode/terminal/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: tabId, cwd: workspaceRoot || undefined }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data?.sessionId) throw new Error(data?.error || 'start failed')
+      setTermTabs(prev => prev.map(t => (t.id === tabId ? { ...t, alive: true } : t)))
+      openTermStream(tabId)
+      return tabId
+    } catch (err) {
+      console.error('Terminal session restart failed:', err)
       return null
     }
-  }, [workspaceRoot, handleTerminalFrame])
+  }, [workspaceRoot, openTermStream])
 
-  // Phase 4: workspace changed — tear down the terminal session (SSE + shell)
-  // so the next command spawns a fresh shell in the NEW cwd.
+  // Restore các shell session còn sống khi Code tab mount lại (rời tab rồi
+  // quay lại — sessions sống trong TerminalSessionManager server-side). SSE
+  // init frame replay trả lại toàn bộ cumulative output của từng session.
+  const termRestoreAttemptedRef = useRef(false)
+  useEffect(() => {
+    if (termRestoreAttemptedRef.current) return
+    termRestoreAttemptedRef.current = true
+    const restore = async () => {
+      try {
+        const res = await authedFetch('/api/opencode/terminal/sessions')
+        if (!res.ok) return
+        const d = await res.json().catch(() => null) as { ok?: boolean; sessions?: Array<{ id: string }> } | null
+        if (!d?.ok || !Array.isArray(d.sessions) || d.sessions.length === 0) return
+        const existing = new Set(termTabsRef.current.map(t => t.id))
+        const additions: TermTab[] = []
+        for (const s of d.sessions) {
+          if (!s?.id || existing.has(s.id)) continue
+          termCounterRef.current += 1
+          additions.push({ id: s.id, kind: 'shell', title: `bash ${termCounterRef.current}`, output: [], alive: true })
+        }
+        if (additions.length > 0) {
+          setTermTabs(prev => [...prev, ...additions])
+          for (const a of additions) openTermStream(a.id)
+        }
+      } catch { /* offline */ }
+    }
+    void restore()
+  }, [openTermStream])
+
+  // Workspace changed — tear down MỌI shell session (lệnh kế tiếp chạy với
+  // cwd mới của workspace vừa chọn). Feed Agents giữ nguyên.
   useEffect(() => {
     const prevRoot = terminalPrevRootRef.current
     terminalPrevRootRef.current = workspaceRoot
     if (prevRoot === workspaceRoot) return
-    const oldSid = terminalSessionIdRef.current
-    if (!oldSid) return
-    terminalSessionIdRef.current = null
-    try { terminalEvtRef.current?.close() } catch { /* ignore */ }
-    terminalEvtRef.current = null
-    void authedFetch('/api/opencode/terminal/stop', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: oldSid }),
-    }).catch(() => { /* best-effort */ })
-  }, [workspaceRoot])
-
-  // Phase 4: unmount — stop listening (server session reaped by idle cleanup)
-  useEffect(() => {
-    return () => {
-      try { terminalEvtRef.current?.close() } catch { /* ignore */ }
-      terminalEvtRef.current = null
-    }
-  }, [])
-
-  // Phase 4: kill the shell session now; it is lazily re-created on next command
-  const handleTerminalRestart = useCallback(() => {
-    const oldSid = terminalSessionIdRef.current
-    terminalSessionIdRef.current = null
-    try { terminalEvtRef.current?.close() } catch { /* ignore */ }
-    terminalEvtRef.current = null
-    if (oldSid) {
+    const shellTabs = termTabsRef.current.filter(t => t.kind === 'shell')
+    if (shellTabs.length === 0) return
+    const activeWasShell = shellTabs.some(t => t.id === activeTermIdRef.current)
+    for (const tab of shellTabs) {
+      closeTermStream(tab.id)
       void authedFetch('/api/opencode/terminal/stop', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: oldSid }),
+        body: JSON.stringify({ sessionId: tab.id }),
       }).catch(() => { /* best-effort */ })
     }
-    setTerminalOutput(prev => [...prev, '[terminal restarted]'])
-    toast({ title: 'Terminal đã dừng', description: 'Shell mới sẽ khởi động ở lệnh kế tiếp' })
+    setTermTabs(prev => prev.filter(t => t.kind !== 'shell'))
+    if (activeWasShell) setActiveTermId(AGENT_FEED_TAB_ID)
+    termCounterRef.current = 0
+  }, [workspaceRoot, closeTermStream])
+
+  // Unmount — đóng mọi SSE stream (session sống phía server — restore khi
+  // mount lại qua /api/opencode/terminal/sessions)
+  useEffect(() => {
+    return () => {
+      for (const es of termStreamsRef.current.values()) {
+        try { es.close() } catch { /* ignore */ }
+      }
+      termStreamsRef.current.clear()
+    }
   }, [])
+
+  // Restart shell của tab active (giữ cùng id — session cũ bị thay thế ngay)
+  const handleTerminalRestart = useCallback(async () => {
+    const tabId = activeTermIdRef.current
+    if (!tabId || tabId === AGENT_FEED_TAB_ID) return
+    closeTermStream(tabId)
+    try {
+      const res = await authedFetch('/api/opencode/terminal/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: tabId, cwd: workspaceRoot || undefined }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data?.sessionId) throw new Error(data?.error || 'start failed')
+      termBuffersRef.current.delete(tabId)
+      setTermTabs(prev => prev.map(t => (t.id === tabId ? { ...t, output: ['[terminal restarted]'], alive: true } : t)))
+      openTermStream(tabId)
+      toast({ title: 'Terminal đã khởi động lại' })
+    } catch (err) {
+      toast({ title: 'Không khởi động lại được terminal', description: err instanceof Error ? err.message : String(err), variant: 'destructive' })
+    }
+  }, [workspaceRoot, openTermStream, closeTermStream])
 
   const handleExecuteCommand = useCallback(async () => {
     if (!terminalCommand.trim()) return
+    const tabId = activeTermIdRef.current
+    if (!tabId || tabId === AGENT_FEED_TAB_ID) return // feed Agents là read-only
     setTerminalRunning(true)
     const cmd = terminalCommand
     setTerminalCommand('')
-    // Phase 4: persistent shell — cwd/env/background jobs survive between commands
-    const sid = await ensureTerminalSession()
-    setTerminalOutput(prev => [...prev, `$ ${cmd}`])
+    // Phase 4: persistent shell — cwd/env/background jobs survive giữa các lệnh
+    const sid = await ensureActiveTermSession()
+    appendTermLines(tabId, [`$ ${cmd}`])
     // BUG FIX 2026-09-06 (user report: "nhập lệnh mà không thấy chạy lệnh gì
     // hết"): path persistent-shell thành công trước đây `return` NGAY mà
     // KHÔNG reset terminalRunning → ô nhập + nút Run bị disable VĨNH VIỄN sau
@@ -1325,7 +1486,7 @@ export function CodeTabContent() {
           if (res.ok) {
             const data = await res.json()
             if (data?.ok) {
-              return // output streams in via SSE (terminalEvtRef)
+              return // output streams qua SSE của tab này
             }
           }
         } catch { /* fall through to legacy one-shot execute */ }
@@ -1339,22 +1500,21 @@ export function CodeTabContent() {
         })
         const data = await res.json()
         if (data.output) {
-          setTerminalOutput(prev => [...prev, ...data.output.split('\n')])
+          appendTermLines(tabId, data.output.split('\n'))
         }
         if (data.error && !data.success) {
-          setTerminalOutput(prev => [...prev, `Error (exit ${data.exitCode ?? 1}): ${data.error}`])
+          appendTermLines(tabId, [`Error (exit ${data.exitCode ?? 1}): ${data.error}`])
         }
         if (data.source === 'local-exec') {
-          // Show source indicator for local execution
-          setTerminalOutput(prev => prev.length > 0 && prev[prev.length - 1] !== '' ? prev : [...prev, `[local-exec]`])
+          appendTermLines(tabId, ['[local-exec]'])
         }
       } catch {
-        setTerminalOutput(prev => [...prev, 'Error: Failed to execute command'])
+        appendTermLines(tabId, ['Error: Failed to execute command'])
       }
     } finally {
       setTerminalRunning(false)
     }
-  }, [terminalCommand, workspaceRoot, ensureTerminalSession])
+  }, [terminalCommand, workspaceRoot, ensureActiveTermSession, appendTermLines])
 
   // Phase 3: subscribe to the dev-server log SSE stream for a workspace root
   const startPreviewLogStream = useCallback((root: string) => {
@@ -1362,9 +1522,12 @@ export function CodeTabContent() {
     previewEventSrcRef.current = null
     setPreviewLogs([])
     try {
-      // EventSource cannot set headers — auth relies on the HttpOnly
-      // tmo_api_token cookie set by /api/auth/setup on mount.
-      const es = new EventSource(`/api/opencode/preview/stream?root=${encodeURIComponent(root)}`)
+      // EventSource cannot set headers — cookie từ /api/auth/setup là đường chính.
+      // FIX 2026-09-25 (preview iframe): cookie bị chặn trong cross-site iframe →
+      // append token từ localStorage qua query (proxy.ts chấp nhận ?token=).
+      const tk = getApiToken()
+      const tkQ = tk ? `&token=${encodeURIComponent(tk)}` : ''
+      const es = new EventSource(`/api/opencode/preview/stream?root=${encodeURIComponent(root)}${tkQ}`)
       previewEventSrcRef.current = es
       es.onmessage = (ev: MessageEvent<string>) => {
         try {
@@ -1707,8 +1870,7 @@ export function CodeTabContent() {
           case 'file_edit': case 'file_multi_edit': if (absPath) { void handleFileSelect(absPath); toast({ title: `✏️ AI đang sửa ${fileName}` }) } break
           case 'shell': {
             const cmd = (typeof detail?.command === 'string' ? detail.command : null) || extractJsonStringField(rawDetail, 'command') || rawDetail
-            setTerminalOutput(prev => [...prev, `$ [AI] ${String(cmd).slice(0, 120)}`])
-            try { terminalViewRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' }) } catch { /* ignore */ }
+            appendTermLines(AGENT_FEED_TAB_ID, [`$ [AI] ${String(cmd).slice(0, 120)}`])
             toast({ title: '▶️ AI chạy lệnh', description: String(cmd).slice(0, 60) })
             break
           }
@@ -1719,8 +1881,7 @@ export function CodeTabContent() {
               toast({ title: action === 'read' ? `📖 AI đang đọc ${fileName}` : `✏️ AI đang sửa ${fileName}` })
             } else if (action === 'bash') {
               const cmd = (typeof detail?.command === 'string' ? detail.command : null) || extractJsonStringField(rawDetail, 'command') || rawDetail
-              setTerminalOutput(prev => [...prev, `$ [AI] ${String(cmd).slice(0, 120)}`])
-              try { terminalViewRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' }) } catch { /* ignore */ }
+              appendTermLines(AGENT_FEED_TAB_ID, [`$ [AI] ${String(cmd).slice(0, 120)}`])
               toast({ title: '▶️ AI chạy lệnh', description: String(cmd).slice(0, 60) })
             }
             break
@@ -1749,7 +1910,7 @@ export function CodeTabContent() {
         }
       }
     } catch (err) { console.warn('[ai-tool-event]', err) }
-  }, [workspaceRoot, handleFileSelect, loadFileTree, loadPendingEdits, openAiPreview])
+  }, [workspaceRoot, handleFileSelect, loadFileTree, loadPendingEdits, openAiPreview, appendTermLines])
 
   // Phase 7: subscribe CodeTabContent to AI tool events dispatched by the
   // chat submit handler's workflow SSE reader.
@@ -1760,6 +1921,63 @@ export function CodeTabContent() {
     window.addEventListener(AI_TOOL_EVENT_NAME, listener)
     return () => { window.removeEventListener(AI_TOOL_EVENT_NAME, listener) }
   }, [handleAIToolEvent])
+
+  // ===== LIVE FILE TAB REFRESH (user request 2026-09-25: "agent viết đến đâu
+  // code hiện đến đấy") — listener cho event do poll agent-activity phát:
+  //   (1) file đang mở + KHÔNG dirty → refetch content NGAY (~2.5s sau khi
+  //       agent ghi) — editor hiện code mới nhất agents vừa viết.
+  //   (2) file đang mở + dirty (user đang sửa) → KHÔNG đụng nội dung, chỉ
+  //       toast (bảo vệ chỉnh sửa chưa lưu của user).
+  //   (3) file CHƯA mở → auto-open + activate (max 3/batch chống tràn tab khi
+  //       agent scaffold nhiều file) — agent đang viết file nào thì editor
+  //       hiện file đó (giống SSE path của workflow mode).
+  //   (4) file bị DELETE → đóng tab editor tương ứng.
+  useEffect(() => {
+    const onFileEvents = (e: Event) => {
+      try {
+        const detail = (e as CustomEvent).detail as Array<{ tool: string; path: string }> | undefined
+        if (!Array.isArray(detail) || detail.length === 0) return
+        const resolveAbs = (p: string): string => {
+          if (p.startsWith('/') || p.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(p)) return p
+          return workspaceRoot ? `${workspaceRoot.replace(/\/+$/, '')}/${p}` : p
+        }
+        let autoOpened = 0
+        const dirtyNotified = new Set<string>()
+        const handled = new Set<string>()
+        for (const fe of detail) {
+          const abs = resolveAbs(fe.path)
+          if (!abs || handled.has(abs)) continue
+          handled.add(abs)
+          if (fe.tool === 'file_delete') {
+            const idx = openFilesRef.current.findIndex(f => f.path === abs)
+            if (idx >= 0) {
+              handleCloseFile(idx)
+              toast({ title: `🗑️ AI đã xóa ${baseNameOf(abs)}`, description: 'Tab editor đã đóng' })
+            }
+            continue
+          }
+          const existing = openFilesRef.current.find(f => f.path === abs)
+          if (existing) {
+            if (existing.isDirty) {
+              if (!dirtyNotified.has(abs)) {
+                dirtyNotified.add(abs)
+                toast({ title: `🤖 AI đã sửa ${baseNameOf(abs)}`, description: 'Tab có chỉnh sửa chưa lưu — không tự làm mới (Revert/đóng tab để xem bản mới)' })
+              }
+            } else {
+              void handleFileSelect(abs, { refresh: true })
+            }
+          } else if (autoOpened < 3) {
+            autoOpened++
+            // refresh:true → cache-bust URL (file vừa được agent ghi, không
+            // bao giờ đọc bản cache của trình duyệt)
+            void handleFileSelect(abs, { refresh: true })
+          }
+        }
+      } catch { /* fail-open */ }
+    }
+    window.addEventListener(AGENT_FILE_EVENT_NAME, onFileEvents)
+    return () => { window.removeEventListener(AGENT_FILE_EVENT_NAME, onFileEvents) }
+  }, [workspaceRoot, handleFileSelect, handleCloseFile])
 
   // Refresh iframe (for auto-refresh after file changes)
   const handlePreviewRefresh = useCallback(() => {
@@ -2603,10 +2821,10 @@ export function CodeTabContent() {
       )}
 
 
-      {/* ===== Section 2: Terminal ===== */}
+      {/* ===== Section 2: Terminal — MULTI-TERMINAL (user request 2026-09-25) ===== */}
       <div className="nc-wrap nc-emerald">
         <div className="nc-panel nc-sm nc-border-emerald p-4">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <TerminalIcon className="h-4 w-4 text-emerald-400" />
               <span className="text-sm font-semibold text-stone-100">Terminal</span>
@@ -2617,21 +2835,28 @@ export function CodeTabContent() {
               )}
             </div>
             <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-6 text-[9px] text-stone-500 hover:text-stone-300 gap-1"
-                title="Dừng shell hiện tại — shell mới sẽ khởi động ở lệnh kế tiếp"
-                onClick={handleTerminalRestart}
-              >
-                <RotateCcw className="h-3 w-3" />
-                Khởi động lại
-              </Button>
+              {activeTermTab?.kind === 'shell' && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 text-[9px] text-stone-500 hover:text-stone-300 gap-1"
+                  title="Khởi động lại shell của tab này (giữ nguyên tab)"
+                  onClick={() => { void handleTerminalRestart() }}
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Khởi động lại
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="ghost"
                 className="h-6 text-[9px] text-stone-500 hover:text-stone-300"
-                onClick={() => setTerminalOutput([])}
+                onClick={() => {
+                  const id = activeTermTab?.id
+                  if (!id) return
+                  termBuffersRef.current.delete(id)
+                  setTermTabs(prev => prev.map(t => (t.id === id ? { ...t, output: [] } : t)))
+                }}
               >
                 Clear
               </Button>
@@ -2639,22 +2864,74 @@ export function CodeTabContent() {
                 size="sm"
                 variant="ghost"
                 className="h-6 text-[9px] text-stone-500 hover:text-stone-300"
-                onClick={() => { navigator.clipboard.writeText(terminalOutput.join('\n')); toast({ title: 'Copied to clipboard' }) }}
+                onClick={() => { navigator.clipboard.writeText((activeTermTab?.output ?? []).join('\n')); toast({ title: 'Copied to clipboard' }) }}
               >
                 Copy
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 text-[9px] text-emerald-400 hover:text-emerald-300 gap-1 border border-emerald-500/25"
+                title={`Mở terminal mới (tối đa ${MAX_TERMINALS} terminal đồng thời)`}
+                onClick={() => { void handleNewTerminal() }}
+              >
+                <Plus className="h-3 w-3" />
+                Terminal
               </Button>
             </div>
           </div>
 
-          <div ref={terminalViewRef} className={`bg-slate-950/80 rounded-lg border border-emerald-500/10 p-3 overflow-y-auto font-mono text-[11px]`} style={{ scrollbarWidth: 'thin', height: `${terminalHeight}px` }}>
-            {terminalOutput.length > 0 ? (
-              terminalOutput.map((line, i) => (
+          {/* Terminal tabs: 1 tab feed Agents (read-only) + N tab bash sessions */}
+          <div className="flex items-end gap-1 overflow-x-auto" style={{ scrollbarWidth: 'thin' }} role="tablist" aria-label="Terminal tabs">
+            {termTabs.map(tab => {
+              const isActive = tab.id === activeTermId
+              return (
+                <div
+                  key={tab.id}
+                  role="tab"
+                  aria-selected={isActive}
+                  tabIndex={0}
+                  onClick={() => setActiveTermId(tab.id)}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveTermId(tab.id) } }}
+                  className={`group flex items-center gap-1.5 px-2.5 h-7 rounded-t-md text-[11px] font-mono border border-b-0 cursor-pointer select-none transition-colors flex-shrink-0 ${isActive ? 'bg-slate-950/80 border-emerald-500/30 text-emerald-300' : 'bg-slate-900/40 border-stone-700/50 text-stone-400 hover:text-stone-200 hover:bg-slate-900/70'}`}
+                >
+                  {tab.kind === 'agents' ? (
+                    <span className="text-[10px]" title="Feed hoạt động của Agents (read-only)">🤖</span>
+                  ) : (
+                    <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${tab.alive ? 'bg-emerald-400' : 'bg-stone-600'}`} title={tab.alive ? 'shell đang chạy' : 'shell đã thoát'}></span>
+                  )}
+                  <span className="max-w-[120px] truncate">{tab.title}</span>
+                  {tab.kind === 'shell' && (
+                    <span
+                      role="button"
+                      aria-label={`Đóng ${tab.title}`}
+                      className="opacity-0 group-hover:opacity-100 text-stone-500 hover:text-red-400 transition-opacity cursor-pointer"
+                      onClick={e => { e.stopPropagation(); handleCloseTerminal(tab.id) }}
+                    >
+                      <X className="h-3 w-3" />
+                    </span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Output của tab đang active */}
+          <div ref={terminalViewRef} className={`bg-slate-950/80 rounded-lg border border-emerald-500/10 p-3 overflow-y-auto font-mono text-[11px] -mt-px`} style={{ scrollbarWidth: 'thin', height: `${terminalHeight}px` }}>
+            {(activeTermTab?.output ?? []).length > 0 ? (
+              (activeTermTab?.output ?? []).map((line, i) => (
                 <div key={i} className={`whitespace-pre-wrap break-all ${line.startsWith('$') ? 'text-emerald-400' : line.startsWith('Error') || line.startsWith('✗') ? 'text-red-400' : line.startsWith('✓') ? 'text-emerald-300' : line.startsWith('⎿') ? 'text-stone-500 pl-3 text-[10px]' : line.startsWith('[AI') ? 'text-cyan-400/80' : line.startsWith('[local-exec]') ? 'text-stone-600 text-[9px]' : 'text-stone-400'}`}>
                   {line}
                 </div>
               ))
             ) : (
-              <span className="text-stone-600">Terminal sẵn sàng. Nhập lệnh bên dưới để thực thi trên máy local.</span>
+              <span className="text-stone-600">
+                {activeTermTab?.kind === 'agents'
+                  ? 'Feed hoạt động của Agents — mọi lệnh shell / ghi-đọc file các agents chạy sẽ hiện ở đây kèm kết quả thật (cập nhật mỗi 2.5s).'
+                  : activeTermTab?.alive
+                    ? 'Terminal sẵn sàng. Nhập lệnh bên dưới để thực thi trên máy local.'
+                    : 'Shell đã thoát — gõ lệnh để tự khởi động lại shell trong tab này.'}
+              </span>
             )}
           </div>
 
@@ -2672,26 +2949,32 @@ export function CodeTabContent() {
             <GripHorizontal className="h-3 w-4 text-stone-600 group-hover:text-emerald-400 transition-colors" />
           </div>
 
-          {/* Command input */}
-          <div className="mt-2 flex gap-2">
-            <div className="flex items-center gap-1 text-emerald-400 text-[11px] font-mono flex-shrink-0 mt-1.5">$</div>
-            <Input
-              placeholder="Enter command..."
-              value={terminalCommand}
-              onChange={e => setTerminalCommand(e.target.value)}
-              className="flex-1 h-8 text-[11px] font-mono bg-slate-950/50 border-emerald-400/35"
-              onKeyDown={e => { if (e.key === 'Enter') handleExecuteCommand() }}
-              disabled={terminalRunning}
-            />
-            <Button
-              size="sm"
-              className="h-8 text-[10px] bg-emerald-600 hover:bg-emerald-500 text-white"
-              onClick={handleExecuteCommand}
-              disabled={terminalRunning || !terminalCommand.trim()}
-            >
-              {terminalRunning ? <Loader2 className="h-3 w-3 animate-spin" /> : <PlayIcon className="h-3 w-3" />}
-            </Button>
-          </div>
+          {/* Command input — chỉ với tab shell (tab Agents là feed read-only) */}
+          {activeTermTab?.kind === 'shell' ? (
+            <div className="mt-2 flex gap-2">
+              <div className="flex items-center gap-1 text-emerald-400 text-[11px] font-mono flex-shrink-0 mt-1.5">$</div>
+              <Input
+                placeholder="Enter command..."
+                value={terminalCommand}
+                onChange={e => setTerminalCommand(e.target.value)}
+                className="flex-1 h-8 text-[11px] font-mono bg-slate-950/50 border-emerald-400/35"
+                onKeyDown={e => { if (e.key === 'Enter') handleExecuteCommand() }}
+                disabled={terminalRunning}
+              />
+              <Button
+                size="sm"
+                className="h-8 text-[10px] bg-emerald-600 hover:bg-emerald-500 text-white"
+                onClick={handleExecuteCommand}
+                disabled={terminalRunning || !terminalCommand.trim()}
+              >
+                {terminalRunning ? <Loader2 className="h-3 w-3 animate-spin" /> : <PlayIcon className="h-3 w-3" />}
+              </Button>
+            </div>
+          ) : (
+            <div className="mt-2 text-[10px] text-stone-600">
+              📖 Tab này là feed read-only của Agents. Bấm <span className="text-emerald-500 font-medium">+ Terminal</span> để mở terminal riêng và gõ lệnh.
+            </div>
+          )}
         </div>
       </div>
 

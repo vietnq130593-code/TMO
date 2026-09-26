@@ -1,0 +1,2245 @@
+shard_metadata:
+  shard_id: "SHD_OPT_CONVEX_003"
+  shard_name: "Convex Optimization (Tối ưu hóa lồi)"
+  domain: "Mathematical Optimization / Computational Science"
+  version: "1.0.0"
+  parent_link: "SHD_GEN_CAUSAL_HYPER_001" # Liên kết trực tiếp với Causal Graph để xử lý tối ưu hóa cấu trúc
+  status: "Active / Initial_Seeding"
+  tags: [
+    "Convexity", 
+    "Duality_Theory", 
+    "KKT_Conditions", 
+    "Gradient_Descent", 
+    "Interior_Point_Methods", 
+    "Lagrangian_Relaxation", 
+    "Global_Optimality"
+  ]
+
+Layers: 
+layer_1: 
+NODE_ID: OPT_ENT_001
+ENTITY_NAME: Objective Function
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Hàm số đo lường hiệu quả hoặc chi phí cần được tối thiểu hóa hoặc tối đa hóa trong một bài toán tối ưu. [1, 2]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Decision Variables
+    RELATION: Chứa đựng
+  - TARGET_NODE: Feasible Region
+    RELATION: Ảnh hưởng
+ATTRIBUTES: Tính lồi (Convexity), Tính khả vi (Differentiability)
+
+---
+NODE_ID: OPT_ENT_002
+ENTITY_NAME: Feasible Region
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Tập hợp tất cả các điểm hoặc giải pháp thỏa mãn toàn bộ hệ thống ràng buộc của bài toán. [1, 3]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Constraints
+    RELATION: Được định nghĩa bởi
+  - TARGET_NODE: State Space
+    RELATION: Là thành phần của
+ATTRIBUTES: Tính lồi, Tính liên thông (Connectedness)
+
+---
+NODE_ID: OPT_ENT_003
+ENTITY_NAME: Decision Variables
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Các tham số có thể điều khiển được nhằm tìm ra giá trị tối ưu cho hàm mục tiêu. [1, 4, 5]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Objective Function
+    RELATION: Là thành phần của
+  - TARGET_NODE: Constraints
+    RELATION: Chứa đựng
+ATTRIBUTES: Tính liên tục (Continuity), Tính rời rạc (Discreteness)
+
+---
+NODE_ID: OPT_ENT_004
+ENTITY_NAME: Constraints
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Các giới hạn hoặc yêu cầu (đẳng thức hoặc bất đẳng thức) đặt lên các biến quyết định. [1, 2]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Feasible Region
+    RELATION: Là thành phần của
+  - TARGET_NODE: Slack Variables
+    RELATION: Chứa đựng
+ATTRIBUTES: Tính khả thi (Primal Feasibility)
+
+---
+NODE_ID: OPT_ENT_005
+ENTITY_NAME: Directed Acyclic Graph (DAG)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Đồ thị có hướng không chu trình dùng để mô hình hóa trình tự các bước hoặc cấu trúc ràng buộc phân cấp. [6, 7]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Search Process
+    RELATION: Điều phối
+  - TARGET_NODE: Constraints
+    RELATION: Là thành phần của
+ATTRIBUTES: Độ phức tạp O(V+E)
+
+---
+NODE_ID: OPT_ENT_006
+ENTITY_NAME: Search Tree
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+DESCRIPTION_SHORT: Cấu trúc dữ liệu dạng cây biểu diễn các lộ trình khám phá không gian trạng thái trong quá trình tìm kiếm. [8, 9]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Search Process
+    RELATION: Chứa đựng
+  - TARGET_NODE: Heuristics
+    RELATION: Ảnh hưởng
+ATTRIBUTES: Độ sâu (Depth), Hệ số nhánh (Branching Factor)
+
+---
+NODE_ID: OPT_ENT_007
+ENTITY_NAME: State Space (Decision Space)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Không gian chứa tất cả các cấu hình biến số có thể có, trước khi áp dụng các ràng buộc. [10, 11]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Feasible Region
+    RELATION: Chứa đựng
+  - TARGET_NODE: Objective Space
+    RELATION: Ảnh hưởng
+ATTRIBUTES: Số chiều (Dimensionality)
+
+---
+NODE_ID: OPT_ENT_008
+ENTITY_NAME: Latent Variables
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Các biến ẩn không quan sát trực tiếp nhưng ảnh hưởng đến kết quả của mô hình tối ưu. [8, 12]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Decision Variables
+    RELATION: Ảnh hưởng
+  - TARGET_NODE: Likelihood
+    RELATION: Là thành phần của
+ATTRIBUTES: Tính ngẫu nhiên (Stochasticity)
+
+---
+NODE_ID: OPT_ENT_009
+ENTITY_NAME: Slack Variables
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Các biến phụ được thêm vào để chuyển đổi ràng buộc bất đẳng thức thành đẳng thức. [13, 14]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Constraints
+    RELATION: Là thành phần của
+  - TARGET_NODE: Dual Variables
+    RELATION: Ảnh hưởng
+ATTRIBUTES: Tính không âm (Non-negativity)
+
+---
+NODE_ID: OPT_ENT_010
+ENTITY_NAME: Shadow Prices (Lagrange Multipliers)
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Phản ánh giá trị gia tăng của hàm mục tiêu khi nới lỏng một đơn vị ràng buộc. [15-17]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Constraints
+    RELATION: Ảnh hưởng
+  - TARGET_NODE: Dual Problem
+    RELATION: Là thành phần của
+ATTRIBUTES: Độ nhạy (Sensitivity)
+
+---
+NODE_ID: OPT_ENT_011
+ENTITY_NAME: Heuristics
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+DESCRIPTION_SHORT: Các quy tắc ngón tay cái giúp tìm kiếm giải pháp nhanh chóng mà không cần chứng minh toán học. [18, 19]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Search Process
+    RELATION: Điều phối
+  - TARGET_NODE: Search Tree
+    RELATION: Ảnh hưởng
+ATTRIBUTES: Hiệu quả thời gian (Time-efficiency)
+
+---
+NODE_ID: OPT_ENT_012
+ENTITY_NAME: Meta-heuristics
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+DESCRIPTION_SHORT: Các chiến lược tìm kiếm bậc cao (như GA, PSO) điều phối các heuristics cấp thấp. [20-22]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Search Process
+    RELATION: Điều phối
+  - TARGET_NODE: Population
+    RELATION: Chứa đựng
+ATTRIBUTES: Tính ngẫu nhiên, Khả năng thoát cực trị địa phương
+
+---
+NODE_ID: OPT_ENT_013
+ENTITY_NAME: Prior Probability
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Phân phối xác suất giả định cho các tham số trước khi có dữ liệu quan sát. [23, 24]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Posterior
+    RELATION: Là thành phần của
+  - TARGET_NODE: Bayesian Inference
+    RELATION: Chứa đựng
+ATTRIBUTES: Tính lồi log (Log-concavity)
+
+---
+NODE_ID: OPT_ENT_014
+ENTITY_NAME: Likelihood
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Hàm đo lường mức độ dữ liệu thực tế ủng hộ các tham số mô hình khác nhau. [23, 25]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Posterior
+    RELATION: Là thành phần của
+  - TARGET_NODE: Gradient
+    RELATION: Ảnh hưởng
+ATTRIBUTES: Tính khả vi (Differentiability)
+
+---
+NODE_ID: OPT_ENT_015
+ENTITY_NAME: Posterior
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Xác suất được cập nhật sau khi kết hợp bằng chứng (Likelihood) và niềm tin cũ (Prior). [26]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Search Process
+    RELATION: Điều phối
+  - TARGET_NODE: KL Divergence
+    RELATION: Ảnh hưởng
+ATTRIBUTES: Tính chuẩn hóa
+
+---
+NODE_ID: OPT_ENT_016
+ENTITY_NAME: Gradient
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Vectơ đạo hàm riêng chỉ ra hướng dốc nhất để thay đổi biến số nhằm tối ưu hóa. [27, 28]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Search Process
+    RELATION: Điều phối
+  - TARGET_NODE: Hessian Matrix
+    RELATION: Là thành phần của
+ATTRIBUTES: Tính liên tục (Continuity)
+
+---
+NODE_ID: OPT_ENT_017
+ENTITY_NAME: Hessian Matrix
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Ma trận các đạo hàm riêng bậc hai phản ánh độ cong của không gian hàm số. [29, 30]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Search Process
+    RELATION: Điều phối
+  - TARGET_NODE: Gradient
+    RELATION: Điều phối
+ATTRIBUTES: Tính xác định dương (Positive Definiteness)
+
+---
+NODE_ID: OPT_ENT_018
+ENTITY_NAME: Local Minimum
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Điểm có giá trị hàm mục tiêu thấp nhất trong một lân cận cục bộ. [31, 32]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Search Process
+    RELATION: Ảnh hưởng
+  - TARGET_NODE: Stationary Point
+    RELATION: Là thành phần của
+ATTRIBUTES: Tính tối ưu địa phương
+
+---
+NODE_ID: OPT_ENT_019
+ENTITY_NAME: Global Maximum
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Giá trị lớn nhất tuyệt đối mà hàm mục tiêu đạt được trên toàn bộ miền khả thi. [1, 33]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Feasible Region
+    RELATION: Chứa đựng
+  - TARGET_NODE: Optimization Process
+    RELATION: Ảnh hưởng
+ATTRIBUTES: Tính duy nhất (Uniqueness)
+
+---
+NODE_ID: OPT_ENT_020
+ENTITY_NAME: Saddle Point
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Điểm dừng nơi các hướng khác nhau có độ cong (Hessian) trái dấu, gây bẫy cho các thuật toán bậc một. [34-36]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Hessian Matrix
+    RELATION: Được định danh bởi
+  - TARGET_NODE: Search Process
+    RELATION: Ảnh hưởng
+ATTRIBUTES: Chỉ số (Index - tỷ lệ trị riêng âm)
+
+---
+NODE_ID: OPT_ENT_021
+ENTITY_NAME: Pareto Optimal
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Trạng thái không thể cải thiện một mục tiêu mà không làm tổn hại đến mục tiêu khác. [37-39]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Pareto Frontier
+    RELATION: Là thành phần của
+  - TARGET_NODE: Multicriterion Optimization
+    RELATION: Được định nghĩa bởi
+ATTRIBUTES: Tính không bị thống trị (Non-dominance)
+
+---
+NODE_ID: OPT_ENT_022
+ENTITY_NAME: Weakly Pareto Optimal
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Điểm mà không có điểm nào khác tốt hơn nghiêm ngặt về TẤT CẢ các mục tiêu. [40, 41]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Pareto Optimal
+    RELATION: Chứa đựng
+  - TARGET_NODE: Scalarization
+    RELATION: Ảnh hưởng
+ATTRIBUTES: Tính tối ưu yếu
+
+---
+NODE_ID: OPT_ENT_023
+ENTITY_NAME: Dual Variables
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Các biến trong bài toán đối ngẫu, đại diện cho giá trị của các ràng buộc. [42, 43]
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Primal Variables
+    RELATION: Ảnh hưởng
+  - TARGET_NODE: Lagrangian
+    RELATION: Là thành phần của
+ATTRIBUTES: Tính không âm (Non-negativity)
+
+NODE_ID: OPT_ENT_024
+ENTITY_NAME: Karush-Kuhn-Tucker (KKT) Conditions
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Tập hợp các điều kiện cần (và đôi khi đủ) để một điểm là tối ưu cục bộ trong bài toán có ràng buộc [1-3].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Stationarity
+    RELATION: Chứa đựng
+  - TARGET_NODE: Complementary Slackness
+    RELATION: Chứa đựng
+  - TARGET_NODE: Primal Feasibility
+    RELATION: Điều phối
+ATTRIBUTES: Tính xác thực (Necessary/Sufficient), Độ phức tạp tính toán [1, 3]
+
+---
+NODE_ID: OPT_ENT_025
+ENTITY_NAME: Lagrangian Function
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Hàm kết hợp hàm mục tiêu và các ràng buộc thông qua các hệ số nhân, dùng để chuyển bài toán ràng buộc thành không ràng buộc [4-6].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Objective Function
+    RELATION: Là thành phần của
+  - TARGET_NODE: Constraints
+    RELATION: Chứa đựng
+  - TARGET_NODE: Dual Variables
+    RELATION: Điều phối
+ATTRIBUTES: Tính khả vi, Tính lồi (trong các bài toán lồi) [4, 7]
+
+---
+NODE_ID: OPT_ENT_026
+ENTITY_NAME: Strong Duality
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Trạng thái khi giá trị tối ưu của bài toán gốc (Primal) bằng đúng giá trị tối ưu của bài toán đối ngẫu (Dual) [1, 8].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Duality Gap
+    RELATION: Triệt tiêu
+  - TARGET_NODE: Slater's Condition
+    RELATION: Được đảm bảo bởi
+ATTRIBUTES: Khoảng cách đối ngẫu bằng 0 [1]
+
+---
+NODE_ID: OPT_ENT_027
+ENTITY_NAME: Duality Gap
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Hiệu số giữa giá trị hàm mục tiêu bài toán gốc và bài toán đối ngẫu; bằng 0 khi có đối ngẫu mạnh [1, 8].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Strong Duality
+    RELATION: Ảnh hưởng
+  - TARGET_NODE: Optimization Process
+    RELATION: Điều phối (dùng làm tiêu chí dừng)
+ATTRIBUTES: Tính không âm [1, 8]
+
+---
+NODE_ID: OPT_ENT_028
+ENTITY_NAME: Complementary Slackness
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Điều kiện bắt buộc hệ số nhân Lagrange phải bằng 0 nếu ràng buộc tương ứng không hoạt động (inactive) [9-11].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: KKT Conditions
+    RELATION: Là thành phần của
+  - TARGET_NODE: Dual Variables
+    RELATION: Ảnh hưởng
+ATTRIBUTES: Logic "Hoặc-Hoặc" (Multiplier=0 hoặc Constraint=0) [9, 10]
+
+---
+NODE_ID: OPT_ENT_029
+ENTITY_NAME: Stationarity
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Trạng thái khi gradient của hàm Lagrangian triệt tiêu, cho thấy điểm đó không thể cải thiện thêm trong miền khả thi [9, 10, 12].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: KKT Conditions
+    RELATION: Là thành phần của
+  - TARGET_NODE: Gradient
+    RELATION: Điều phối
+ATTRIBUTES: Gradient = 0 [10, 12]
+
+---
+NODE_ID: OPT_ENT_030
+ENTITY_NAME: Pareto Frontier (Pareto Front)
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Tập hợp các hình ảnh của tất cả các giải pháp tối ưu Pareto trong không gian mục tiêu [13-16].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Objective Space
+    RELATION: Nằm trong
+  - TARGET_NODE: Pareto Optimal Set
+    RELATION: Là thành phần của
+ATTRIBUTES: Hình dạng (Convex/Concave), Tính liên tục [13, 17]
+
+---
+NODE_ID: OPT_ENT_031
+ENTITY_NAME: Non-dominated Set (Pareto Set)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Tập hợp các giải pháp trong không gian quyết định mà không có giải pháp nào khác tốt hơn ở mọi mục tiêu [13, 18, 19].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Decision Space
+    RELATION: Nằm trong
+  - TARGET_NODE: Pareto Frontier
+    RELATION: Ảnh hưởng (ánh xạ tới)
+ATTRIBUTES: Tính đa dạng, Độ bao phủ [16, 18]
+
+---
+NODE_ID: OPT_ENT_032
+ENTITY_NAME: Preference Vector (Weight Vector)
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Vectơ xác định tầm quan trọng tương đối của các mục tiêu khác nhau, hướng dẫn quá trình tìm kiếm điểm cụ thể trên Pareto front [20-23].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Scalarization
+    RELATION: Điều phối
+  - TARGET_NODE: Hypernetwork
+    RELATION: Ảnh hưởng (đầu vào)
+ATTRIBUTES: Tổng bằng 1 (Normalization), Tính chủ quan [20, 23]
+
+---
+NODE_ID: OPT_ENT_033
+ENTITY_NAME: Hypervolume (HV)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Chỉ số đo lường kích thước của không gian mục tiêu bị thống trị bởi tập giải pháp; phản ánh cả tính hội tụ và đa dạng [15, 24-26].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Pareto Frontier
+    RELATION: Ảnh hưởng (đánh giá chất lượng)
+  - TARGET_NODE: Reference Point
+    RELATION: Phụ thuộc vào
+ATTRIBUTES: Tính đơn điệu, Độ phức tạp tính toán cao (super-polynomial) [15, 25, 27]
+
+---
+NODE_ID: OPT_ENT_034
+ENTITY_NAME: Linear Scalarization (Weighted Sum)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Phương pháp gộp các hàm mục tiêu thành một hàm duy nhất bằng tổng có trọng số [28-31].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Objective Function
+    RELATION: Điều phối
+  - TARGET_NODE: Pareto Frontier
+    RELATION: Ảnh hưởng (chỉ tìm được vùng lồi)
+ATTRIBUTES: Tính đơn giản, Hạn chế với miền không lồi [30, 31]
+
+---
+NODE_ID: OPT_ENT_035
+ENTITY_NAME: Tchebycheff Scalarization
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Phương pháp tối ưu dựa trên khoảng cách lớn nhất đến điểm lý tưởng, có khả năng tìm điểm trên mọi dạng Pareto front (kể cả không lồi) [31-33].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Ideal Point
+    RELATION: Phụ thuộc vào
+  - TARGET_NODE: Pareto Frontier
+    RELATION: Điều phối (tìm giải pháp Pareto yếu)
+ATTRIBUTES: Tính đầy đủ (Pareto-complete), Tính không khả vi (tại các điểm max) [34, 35]
+
+---
+NODE_ID: OPT_ENT_036
+ENTITY_NAME: Ideal Point (Utopia Point)
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Điểm trong không gian mục tiêu chứa các giá trị tối ưu của từng mục tiêu riêng lẻ (thường không thể đạt được đồng thời) [30, 33, 36, 37].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Objective Space
+    RELATION: Nằm trong
+  - TARGET_NODE: Tchebycheff Scalarization
+    RELATION: Ảnh hưởng
+ATTRIBUTES: Điểm cận dưới (trong bài toán tối thiểu hóa) [37]
+
+---
+NODE_ID: OPT_ENT_037
+ENTITY_NAME: Nadir Vector
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Vectơ chứa các giá trị tệ nhất của các giải pháp tối ưu Pareto, định nghĩa ranh giới trên của tập Pareto [30, 38].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Pareto Frontier
+    RELATION: Ảnh hưởng (định ranh giới)
+  - TARGET_NODE: Objective Space
+    RELATION: Nằm trong
+ATTRIBUTES: Điểm cận trên [30]
+
+---
+NODE_ID: OPT_ENT_038
+ENTITY_NAME: Bayesian Optimization (BO)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Phương pháp tối ưu hóa dựa trên mô hình cho các hàm "đen" (black-box) tốn kém kinh phí đánh giá [39, 40].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Surrogate Model
+    RELATION: Chứa đựng
+  - TARGET_NODE: Acquisition Function
+    RELATION: Điều phối
+ATTRIBUTES: Hiệu quả mẫu (Sample efficiency) [40]
+
+---
+NODE_ID: OPT_ENT_039
+ENTITY_NAME: Surrogate Model (Gaussian Process)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Mô hình toán học (thường là GP) dùng để xấp xỉ hàm mục tiêu thực tế nhằm giảm chi phí tính toán [40-42].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Bayesian Optimization
+    RELATION: Là thành phần của
+  - TARGET_NODE: Objective Function
+    RELATION: Ảnh hưởng (xấp xỉ)
+ATTRIBUTES: Độ không chắc chắn (Uncertainty estimation) [42]
+
+---
+NODE_ID: OPT_ENT_040
+ENTITY_NAME: Chance Constrained Programming (CCP)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Tối ưu hóa trong điều kiện không chắc chắn, trong đó các ràng buộc chỉ cần thỏa mãn với một xác suất nhất định [43-45].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Constraints
+    RELATION: Chứa đựng (dạng xác suất)
+  - TARGET_NODE: Feasible Region
+    RELATION: Điều phối
+ATTRIBUTES: Tính bền vững (Robustness), Độ tin cậy (Reliability) [43, 45]
+
+---
+NODE_ID: OPT_ENT_041
+ENTITY_NAME: Stein Variational Gradient Descent (SVGD)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Thuật toán dựa trên các hạt (particles) để xấp xỉ phân phối mục tiêu bằng cách sử dụng thông tin gradient [46-49].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Gradient
+    RELATION: Điều phối
+  - TARGET_NODE: Kernel Function
+    RELATION: Chứa đựng (tạo lực đẩy)
+ATTRIBUTES: Tính phi tham số, Khả năng duy trì sự đa dạng hạt [46, 48, 50]
+
+---
+NODE_ID: OPT_ENT_042
+ENTITY_NAME: Newton's Method
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Thuật toán tối ưu hóa bậc hai sử dụng Hessian để đạt tốc độ hội tụ nhanh (bình phương) khi gần điểm cực trị [51-54].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Hessian Matrix
+    RELATION: Điều phối
+  - TARGET_NODE: Search Process
+    RELATION: Điều phối
+ATTRIBUTES: Hội tụ bậc hai (Quadratic convergence), Chi phí tính toán cao [53-55]
+
+---
+NODE_ID: OPT_ENT_043
+ENTITY_NAME: Quasi-Newton Methods (BFGS / L-BFGS)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Các phương pháp xấp xỉ ma trận Hessian từ các cập nhật gradient để giảm chi phí bộ nhớ và tính toán [56-58].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Hessian Matrix
+    RELATION: Ảnh hưởng (xấp xỉ)
+  - TARGET_NODE: Gradient
+    RELATION: Là thành phần của
+ATTRIBUTES: Tiết kiệm bộ nhớ (L-BFGS), Tốc độ hội tụ siêu tuyến tính [56, 59]
+
+---
+NODE_ID: OPT_ENT_044
+ENTITY_NAME: Augmented Lagrangian
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Phiên bản nâng cao của Lagrangian thêm các thành phần phạt (penalty) để cải thiện tính hội tụ và xử lý các ràng buộc không lồi [60, 61].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Lagrangian Function
+    RELATION: Chứa đựng
+  - TARGET_NODE: Constraints
+    RELATION: Ảnh hưởng
+ATTRIBUTES: Tính ổn định hội tụ cao [60, 61]
+
+---
+NODE_ID: OPT_ENT_045
+ENTITY_NAME: Mixed-Integer Programming (MIP)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Bài toán tối ưu hóa trong đó một số biến bắt buộc phải nhận giá trị nguyên, thường dùng trong lập lịch và phân bổ nguồn lực [62-64].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Decision Variables
+    RELATION: Chứa đựng (biến rời rạc)
+  - TARGET_NODE: Feasible Region
+    RELATION: Điều phối (không lồi)
+ATTRIBUTES: Độ phức tạp NP-hard [65, 66]
+
+NODE_ID: OPT_ENT_046
+ENTITY_NAME: Central Path
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Tập hợp các điểm tối ưu của các bài toán rào cản (barrier sub-problems) dẫn dắt thuật toán từ điểm khả thi bất kỳ đến nghiệm tối ưu thực sự của bài toán gốc [1].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Barrier Function
+    RELATION: Được định nghĩa bởi
+  - TARGET_NODE: Interior-point Methods
+    RELATION: Là thành phần của
+ATTRIBUTES: Tính khả vi liên tục, Tính hội tụ tiệm cận [2].
+
+---
+NODE_ID: OPT_ENT_047
+ENTITY_NAME: Barrier Function (Log-Barrier)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Hàm số được thêm vào mục tiêu để xấp xỉ các ràng buộc bất đẳng thức, tạo ra một "bức tường" giá trị vô hạn tại ranh giới miền khả thi [3, 4].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Constraints
+    RELATION: Chứa đựng (xấp xỉ)
+  - TARGET_NODE: Central Path
+    RELATION: Điều phối
+ATTRIBUTES: Tính lồi, Tính tự điều hòa (Self-concordance) [3].
+
+---
+NODE_ID: OPT_ENT_048
+ENTITY_NAME: Schur Complement
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Cấu trúc ma trận phát sinh khi loại bỏ một nhóm biến trong hệ phương trình KKT, giúp giảm độ phức tạp tính toán của bước Newton [5, 6].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Hessian Matrix
+    RELATION: Là thành phần của (phân rã)
+  - TARGET_NODE: KKT Conditions
+    RELATION: Ảnh hưởng (giải hệ phương trình)
+ATTRIBUTES: Tính xác định dương, Hiệu quả tính toán O(n^3) [7, 8].
+
+---
+NODE_ID: OPT_ENT_049
+ENTITY_NAME: Relational Tensor
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Cấu trúc dữ liệu biểu diễn các mối quan hệ toàn cục giữa tất cả các cặp thực thể trong mạng, vượt qua giới hạn của lan truyền tin nhắn cục bộ trong GNN [9].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: FloydNet
+    RELATION: Là thành phần của
+  - TARGET_NODE: DAG
+    RELATION: Chứa đựng (quan hệ cấu trúc)
+ATTRIBUTES: Tính quan hệ toàn cục, Độ phức tạp 3-WL [9].
+
+---
+NODE_ID: OPT_ENT_050
+ENTITY_NAME: Krylov Subspace
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Không gian con được tạo bởi các lũy thừa của ma trận Hessian tác động lên gradient, dùng để xấp xỉ các hướng tối ưu bậc hai mà không cần lưu trữ toàn bộ ma trận [10, 11].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Hessian Matrix
+    RELATION: Là thành phần của (xấp xỉ)
+  - TARGET_NODE: Saddle Free Newton
+    RELATION: Điều phối
+ATTRIBUTES: Tính tiết kiệm bộ nhớ, Hiệu quả trong bài toán cao chiều [11].
+
+--------------------------------------------------------------------------------
+
+layer_2: 
+RULE_ID: RUL_NAS_001
+RULE_NAME: Dirichlet Routing Factorization
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_FORMULA: "p(z, θ | x) = ∏ Bernoulli(zi | πi(x)) × Dir(θ | α(z))"
+DESCRIPTION_SHORT: Phân rã quá trình định tuyến (routing) thành hai thành phần độc lập: lựa chọn thực thể (Binary selection) và phân bổ đóng góp (Dirichlet contribution) [1], [2].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Sparsity Regularization
+  RELATION_TYPE: Tiền đề (Cung cấp biến số để áp dụng mức phạt thưa) [3]
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Latent Variables
+  LINK_LOGIC: Biến ẩn z điều khiển việc kích hoạt các "expert" cụ thể trong không gian tìm kiếm [4].
+
+---
+NODE_ID: RUL_NAS_002
+RULE_NAME: Bayes' Rule for Architecture Belief
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_FORMULA: "P(Arch | Performance) ∝ P(Performance | Arch) P(Arch)"
+DESCRIPTION_SHORT: Cập nhật niềm tin (Posterior) về hiệu suất của một kiến trúc dựa trên dữ liệu quan sát được từ Surrogate Model [5], [6].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Dirichlet Routing Factorization
+  RELATION_TYPE: Bổ trợ (Giúp tối ưu hóa tham số của các phân phối định tuyến) [1].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Gaussian Process
+  LINK_LOGIC: Sử dụng làm mô hình đại diện để ước lượng phân phối hiệu suất của kiến trúc [7], [8].
+
+---
+NODE_ID: RUL_NAS_003
+RULE_NAME: Stein Repulsive Force
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_FORMULA: "∇φ k(Fi, Fj) (Lực đẩy hạt)"
+DESCRIPTION_SHORT: Quy tắc tạo ra lực đẩy giữa các giải pháp (hạt) trong không gian kiến trúc để duy trì tính đa dạng, tránh sụp đổ vào một cực trị địa phương đơn lẻ [9], [10].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Pareto Optimality
+  RELATION_TYPE: Bổ trợ (Đảm bảo độ bao phủ rộng trên Pareto Front) [10], [11].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Meta-heuristics
+  LINK_LOGIC: Điều phối các thuật toán bầy đàn để khám phá không gian trạng thái hiệu quả hơn [12].
+
+---
+NODE_ID: RUL_NAS_004
+RULE_NAME: Monotone Sparsity Control (Simpson Index)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_FORMULA: "f(λ) := E[H(p)] (Hàm giảm nghiêm ngặt theo λ)"
+DESCRIPTION_SHORT: Định luật xác định rằng độ thưa (Simpson Index) là một hàm đơn điệu của hệ số tập trung Dirichlet, cho phép điều khiển độ thưa bằng một "nút vặn" λ duy nhất [13], [14].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Dirichlet Routing Factorization
+  RELATION_TYPE: Tiền đề (Xác định cấu trúc phân phối trước khi chọn λ) [15].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Decision Variables
+  LINK_LOGIC: λ điều chỉnh trực tiếp số lượng các biến quyết định được kích hoạt tích cực trong mạng [16].
+PHẦN 2: Ràng buộc Tối ưu hóa (Optimization Constraints)
+RULE_ID: RUL_NAS_005
+RULE_NAME: Lagrangian Hard Guardrails
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_FORMULA: "L(x, λ) = f0(x) + ∑ λi fi(x) (s.t. λi ≥ 0)"
+DESCRIPTION_SHORT: Chuyển đổi các ràng buộc an toàn hoặc tài nguyên (như giới hạn bộ nhớ) thành các mức phạt cứng trong hàm mục tiêu thông qua đối ngẫu Lagrangian [17], [18].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Complementary Slackness
+  RELATION_TYPE: Tiền đề (Quy định khi nào ràng buộc được kích hoạt) [19], [20].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Resource Constraints
+  LINK_LOGIC: Thực thi các giới hạn vật lý nghiêm ngặt (như dung lượng HBM) trong quá trình huấn luyện [21].
+
+---
+RULE_ID: RUL_NAS_006
+RULE_NAME: Pareto Frontier Dominance
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_FORMULA: "∀j: uj ≥ ui and fj ≥ fi (and ∃ strict inequality)"
+DESCRIPTION_SHORT: Quy tắc loại bỏ các kiến trúc bị "thống trị" bởi các kiến trúc khác tốt hơn về cả độ chính xác lẫn chi phí tính toán [22], [23].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Stein Repulsive Force
+  RELATION_TYPE: Đối nghịch (Dominance muốn thu hẹp về Front, Repulsive muốn đẩy rộng Front) [10].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Multi-objective Optimization
+  LINK_LOGIC: Cốt lõi của việc cân bằng giữa Knowledge Gain và Compute Cost [24].
+
+---
+RULE_ID: RUL_NAS_007
+RULE_NAME: Chance Constraint Reliability
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_FORMULA: "P(h(x, ξ) ≥ 0) ≥ 1 - ϵ"
+DESCRIPTION_SHORT: Ràng buộc cho phép vi phạm giới hạn thiết kế với xác suất cực nhỏ ϵ, giúp mô hình NAS linh hoạt hơn trong môi trường nhiễu [25], [26].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Lagrangian Hard Guardrails
+  RELATION_TYPE: Bổ trợ (Làm mềm các ràng buộc quá khắt khe) [27].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Uncertainty Quantification
+  LINK_LOGIC: Sử dụng ϵ để thiết kế biên độ an toàn cho các ứng dụng thực tế [28].
+PHẦN 3: Quy tắc Cấu trúc (Structural Rules)
+RULE_ID: RUL_NAS_008
+RULE_NAME: DAG Acyclicity Constraint
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_FORMULA: "Tr(e^A) = d (Ràng buộc NOTEARS)"
+DESCRIPTION_SHORT: Đảm bảo luồng thông tin trong mạng nơ-ron không tạo thành vòng lặp, cho phép thực hiện sắp xếp topo và lan truyền ngược [29].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Input-Output Consistency
+  RELATION_TYPE: Tiền đề (Phải không chu trình mới đảm bảo nhất quán luồng) [30].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Directed Acyclic Graph (DAG)
+  LINK_LOGIC: Cấu trúc cơ bản biểu diễn các Cells và Nodes trong không gian tìm kiếm NAS [31].
+
+---
+RULE_ID: RUL_NAS_009
+RULE_NAME: Weight Sharing Protocol
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_FORMULA: "θ = h(λ; ϕ) (Hypernetwork weights mapping)"
+DESCRIPTION_SHORT: Quy tắc sử dụng một bộ tham số chung (Hypernetwork) để sinh ra trọng số cho nhiều kiến trúc khác nhau, giảm chi phí huấn luyện NAS [32], [33].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Pareto Frontier Dominance
+  RELATION_TYPE: Bổ trợ (Giúp đánh giá nhanh hàng ngàn điểm trên Pareto Front) [34].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Decision Variables
+  LINK_LOGIC: Giảm số lượng biến quyết định thực sự cần tối ưu hóa bằng cách chia sẻ tài nguyên [35].
+
+---
+RULE_ID: RUL_NAS_010
+RULE_NAME: Inter-layer Token Affinity
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_FORMULA: "P(Expert l+1 | Expert l) (Xác suất chuyển tầng)"
+DESCRIPTION_SHORT: Quy tắc quan sát thấy các mã tin (tokens) đi qua một chuyên gia ở tầng l có xu hướng đi vào một tập hợp chuyên gia cố định ở tầng l+1 [36], [37].
+INTRA_RULE_RELATION:
+  TARGET_RULE: DAG Acyclicity Constraint
+  RELATION_TYPE: Bổ trợ (Xác định luồng thông tin tối ưu trong DAG) [38].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Optimization Process
+  LINK_LOGIC: Sử dụng để tối ưu hóa vị trí đặt các expert trên GPU nhằm giảm độ trễ truyền tin (All-to-All) [39], [40].
+
+RULE_ID: RUL_NAS_011
+RULE_NAME: Selective Loss Masking (SLM)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_FORMULA: "ℒ_SLM = ∑_{k ≠ k_decision} ℓ_k (Loại bỏ token quyết định)"
+DESCRIPTION_SHORT: Quy tắc ngăn chặn sự sụp đổ của ranh giới quyết định trong huấn luyện RL bằng cách che giấu tổn thất của token kích hoạt CoT, [1, 2].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Meta-Reasoning Decision Boundary
+  RELATION_TYPE: Tiền đề (Giúp duy trì tính ổn định cho ranh giới quyết định)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Optimization Process
+  LINK_LOGIC: Ổn định hóa quá trình hội tụ của chính sách (policy convergence) trong NAS, [3].
+
+---
+RULE_ID: RUL_NAS_012
+RULE_NAME: Chinchilla Scaling Law
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_FORMULA: "N ∝ D (Tỷ lệ 1:1 giữa tham số và dữ liệu)"
+DESCRIPTION_SHORT: Định luật xác định cấu hình tối ưu về tính toán: để đạt hiệu suất cao nhất, số lượng tham số và số lượng token huấn luyện phải tăng theo tỷ lệ tương đương, [4, 5].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Information Bottleneck Principle
+  RELATION_TYPE: Bổ trợ (Định hướng quy mô nén dữ liệu tối ưu)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Resource Constraints
+  LINK_LOGIC: Xác định ngân sách Compute-optimal cho các dự án AGI quy mô lớn, [4].
+
+---
+RULE_ID: RUL_NAS_013
+RULE_NAME: Information Bottleneck Principle
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_FORMULA: "min I(X;Z) s.t. I(Z;Y) ≥ β"
+DESCRIPTION_SHORT: Quy tắc nén thông tin đầu vào X thành đại diện Z sao cho giữ lại tối đa thông tin về mục tiêu Y nhưng loại bỏ nhiễu không liên quan, [4, 6].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Chinchilla Scaling Law
+  RELATION_TYPE: Tiền đề (Lý giải tại sao việc tăng dữ liệu giúp nén tri thức hiệu quả hơn)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Latent Variables
+  LINK_LOGIC: Tối ưu hóa không gian biến ẩn Z để tăng khả năng tổng quát hóa, [4].
+
+---
+RULE_ID: RUL_NAS_014
+RULE_NAME: Expert Capacity Constraint
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_FORMULA: "Capacity = c ⋅ (Tokens / Experts)"
+DESCRIPTION_SHORT: Ràng buộc giới hạn số lượng token tối đa mà một chuyên gia trong MoE có thể xử lý để tránh quá tải và đảm bảo cân bằng tải, [7, 8].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Auxiliary-Loss-Free Load Balancing
+  RELATION_TYPE: Ràng buộc chéo (Capacity thực thi giới hạn vật lý cho load balancing)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Slack Variables
+  LINK_LOGIC: Các token "vượt ngưỡng" (overflow) được coi là biến dư thừa và bị bỏ qua hoặc chuyển tầng, [8, 9].
+
+---
+RULE_ID: RUL_NAS_015
+RULE_NAME: Auxiliary-Loss-Free Load Balancing
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_FORMULA: "Bias-based routing adjustment (Không dùng hàm phạt)"
+DESCRIPTION_SHORT: Quy tắc cân bằng tải trọng giữa các experts bằng cách điều chỉnh bias của router thay vì thêm thành phần phạt vào hàm mục tiêu, giúp tối ưu hiệu suất thực tế, [10].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Expert Capacity Constraint
+  RELATION_TYPE: Bổ trợ (Giúp đạt được sự cân bằng mà không làm nhiễu hàm loss chính)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Shadow Prices
+  LINK_LOGIC: Việc điều chỉnh bias có thể được coi là sự thay đổi "giá trị" (shadow price) của việc chọn một expert, [10].
+
+---
+RULE_ID: RUL_NAS_016
+RULE_NAME: Reuse Fragmentation Penalty
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_FORMULA: "R_moe = B_moe * (k/E) (Giảm hiệu suất tái sử dụng trọng số)"
+DESCRIPTION_SHORT: Định luật xác định rằng kiến trúc MoE chịu hình phạt kép tại thời điểm suy luận do việc phân mảnh batch và giảm khả năng tái sử dụng trọng số tại HBM, [11, 12].
+INTRA_RULE_RELATION:
+  TARGET_RULE: KV-Cache/HBM Headroom Rule
+  RELATION_TYPE: Tiền đề (Fragmentation dẫn đến việc chiếm dụng bộ nhớ kém hiệu quả)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Decision Variables
+  LINK_LOGIC: Ảnh hưởng đến việc lựa chọn số lượng experts (E) và số chuyên gia kích hoạt (k).
+
+---
+RULE_ID: RUL_NAS_017
+RULE_NAME: KV-Cache/HBM Headroom Rule
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_FORMULA: "Budget = (HBM_cap - Reserved) * (1 - Safety_factor)"
+DESCRIPTION_SHORT: Ràng buộc thiết kế yêu cầu phải duy trì khoảng trống bộ nhớ cho KV-cache, vốn bị thu hẹp đáng kể trong các mô hình MoE khổng lồ, [11, 13].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Reuse Fragmentation Penalty
+  RELATION_TYPE: Bổ trợ (Gia tăng áp lực lên hiệu suất suy luận batch lớn)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Resource Constraints
+  LINK_LOGIC: Giới hạn trực tiếp chiều dài ngữ cảnh (context length) mà mạng nơ-ron có thể xử lý, [14].
+
+---
+RULE_ID: RUL_NAS_018
+RULE_NAME: Constitutional AI Guardrails
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_FORMULA: "AI-Critique(Revision) ⊧ Principles_Set"
+DESCRIPTION_SHORT: Quy tắc sử dụng một tập hợp các nguyên tắc (hiến pháp) để hướng dẫn mô hình tự phê bình và sửa đổi hành vi nhằm đạt được sự an toàn mà không cần dán nhãn thủ công, [15, 16].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Lagrangian Hard Guardrails
+  RELATION_TYPE: Tiền đề (Cung cấp nội dung logic cho các ràng buộc an toàn)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Objective Function
+  LINK_LOGIC: Tích hợp các giá trị đạo đức thành các thành phần tối ưu hóa trong hàm mục tiêu, [17].
+
+---
+RULE_ID: RUL_NAS_019
+RULE_NAME: Least-Privilege Execution
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_FORMULA: "Access(Agent) = min{Required_Permissions}"
+DESCRIPTION_SHORT: Ràng buộc kiến trúc yêu cầu các tác vụ (như gọi API, thực thi code) chỉ được cấp quyền tối thiểu cần thiết để giảm thiểu rủi ro khi mô hình bị chiếm quyền, [18].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Constitutional AI Guardrails
+  RELATION_TYPE: Bổ trợ (Thực thi vật lý các nguyên tắc an toàn logic)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Feasible Region
+  LINK_LOGIC: Thu hẹp miền khả thi của hành động để đảm bảo an toàn hệ thống, [17].
+
+---
+RULE_ID: RUL_NAS_020
+RULE_NAME: Sample Average Approximation (SAA)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_FORMULA: "Prob(g(x,h) ≥ 0) ≈ 1/L ∑ ℓ_0/1(g(x, h_l))"
+DESCRIPTION_SHORT: Quy tắc xấp xỉ các ràng buộc xác suất bằng cách lấy trung bình mẫu từ phân phối thực tế, chuyển bài toán CCP thành bài toán tất định có thể giải được, [19, 20].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Chance Constraint Reliability
+  RELATION_TYPE: Tiền đề (Cung cấp phương pháp tính toán xác suất vi phạm)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Feasible Region
+  LINK_LOGIC: Định nghĩa biên giới thực nghiệm của miền khả thi trong môi trường nhiễu, [21].
+
+---
+RULE_ID: RUL_NAS_021
+RULE_NAME: Normal Boundary Intersection (NBI) Protocol
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_FORMULA: "max t s.t. Φβ + t·n = F(x)"
+DESCRIPTION_SHORT: Quy tắc tạo ra các điểm tối ưu Pareto phân bổ đều bằng cách tìm giao điểm dốc nhất từ mặt phẳng nối các cực trị đơn mục tiêu đến Pareto front, [22, 23].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Pareto Frontier Dominance
+  RELATION_TYPE: Bổ trợ (Đảm bảo tính đa dạng và bao phủ toàn diện của Front)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Ideal Point
+  LINK_LOGIC: Sử dụng Utopia Point làm điểm gốc để xuất phát các vectơ pháp tuyến, [23].
+
+---
+RULE_ID: RUL_NAS_022
+RULE_NAME: Voronoi Simplex Partitioning
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_FORMULA: "Partition(Δ^K) via Genetic Optimization"
+DESCRIPTION_SHORT: Quy tắc phân chia không gian trọng số mục tiêu thành các vùng Voronoi đồng nhất để đảm bảo mọi khu vực trên Pareto front đều được khám phá, [24, 25].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Stein Repulsive Force
+  RELATION_TYPE: Bổ trợ (Định hướng vị trí các hạt để che phủ Front đồng đều)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Search Tree
+  LINK_LOGIC: Cấu trúc hóa quá trình tìm kiếm không gian mục tiêu theo các ô tế bào (cells), [25].
+
+---
+RULE_ID: RUL_NAS_023
+RULE_NAME: Stein Variational Annealing Schedule
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_FORMULA: "γ(t) = mod(t, Tj) / Tj (Răng cưa hoặc giảm dần)"
+DESCRIPTION_SHORT: Quy tắc điều chỉnh nhiệt độ huấn luyện để kiểm soát lực đẩy Stein, giúp các giải pháp ban đầu khám phá rộng và sau đó hội tụ chính xác vào Pareto front, [24, 26].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Stein Repulsive Force
+  RELATION_TYPE: Điều phối (Kiểm soát cường độ của lực đẩy theo thời gian)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Local Minimum
+  LINK_LOGIC: Ngăn chặn việc các hạt bị kẹt sớm trong các cực tiểu địa phương nghèo nàn, [26].
+
+---
+RULE_ID: RUL_NAS_024
+RULE_NAME: Second-Order Transformer Convergence
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_FORMULA: "1 Layer ≈ 1 Newton Iteration"
+DESCRIPTION_SHORT: Định luật xác nhận rằng một tầng Transformer (chú ý + MLP) có khả năng thực hiện cấu trúc toán học tương đương một bước lặp Newton, cho phép hội tụ bậc hai, [27, 28].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Weight Sharing Protocol
+  RELATION_TYPE: Đối nghịch (Hội tụ nhanh đòi hỏi cấu trúc tham số tinh vi hơn là chia sẻ thô)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Hessian Matrix
+  LINK_LOGIC: Transformer ngầm định học cách xấp xỉ ma trận Hessian để tối ưu hóa context, [27].
+
+---
+RULE_ID: RUL_NAS_025
+RULE_NAME: Decision-Span Consistency (Span Property)
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_FORMULA: "ŵ_t ∈ Span{x_1, ..., x_t}"
+DESCRIPTION_SHORT: Quy tắc toán học chứng minh rằng vectơ trọng số do Transformer học được luôn nằm trong không gian được tạo bởi các ví dụ ngữ cảnh trước đó, [29].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Inter-layer Token Affinity
+  RELATION_TYPE: Tiền đề (Affinity phản ánh sự phụ thuộc trong không gian Span này)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Decision Variables
+  LINK_LOGIC: Giới hạn không gian tìm kiếm của các biến quyết định vào dữ liệu quan sát được.
+
+---
+RULE_ID: RUL_NAS_026
+RULE_NAME: Markov Condition (CMDP Stability)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_FORMULA: "P(s_{t+1} | s_t, a_t) (Độc lập quá khứ)"
+DESCRIPTION_SHORT: Quy tắc giả định rằng trạng thái tiếp theo chỉ phụ thuộc vào trạng thái và hành động hiện tại, là nền tảng để áp dụng quy hoạch động và tìm kiếm cây, [30].
+INTRA_RULE_RELATION:
+  TARGET_RULE: DAG Acyclicity Constraint
+  RELATION_TYPE: Tiền đề (Tính Markov cho phép phân rã DAG thành các bước tối ưu độc lập)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: State Space
+  LINK_LOGIC: Định nghĩa cách thức chuyển dịch giữa các điểm trong không gian trạng thái, [31].
+
+---
+RULE_ID: RUL_NAS_027
+RULE_NAME: D-separation (Structural Independence)
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_FORMULA: "Independence ⊥ DAG Paths"
+DESCRIPTION_SHORT: Quy tắc xác định sự độc lập có điều kiện giữa các biến dựa trên cấu trúc đồ thị mạng, giúp tối ưu hóa luồng dữ liệu và giảm nhiễu, [32, 33].
+INTRA_RULE_RELATION:
+  TARGET_RULE: DAG Acyclicity Constraint
+  RELATION_TYPE: Bổ trợ (Xác định tính hợp lệ của luồng thông tin trong DAG)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Latent Variables
+  LINK_LOGIC: Loại bỏ các biến ẩn không đóng góp vào kết quả mục tiêu thông qua phân tích đồ thị.
+
+---
+RULE_ID: RUL_NAS_028
+RULE_NAME: Residual Connection Update Law
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_FORMULA: "h_{l+1} = h_l + f(h_l) (Phép cộng bảo toàn gradient)"
+DESCRIPTION_SHORT: Quy tắc cốt lõi của Transformer giúp gradient chảy qua hàng trăm tầng mạng mà không bị triệt tiêu, cho phép xây dựng kiến trúc cực sâu, [34].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Second-Order Transformer Convergence
+  RELATION_TYPE: Bổ trợ (Tạo cơ sở cho các bước cập nhật additive trong thuật toán tối ưu)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Gradient
+  LINK_LOGIC: Duy trì tính khả vi và dòng chảy thông tin ổn định cho Gradient Descent, [34].
+
+---
+RULE_ID: RUL_NAS_029
+RULE_NAME: KD-Tree Search Complexity Rule
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_FORMULA: "O(log N) (Complexity for nearest neighbor)"
+DESCRIPTION_SHORT: Quy tắc áp dụng cấu trúc cây KD để tăng tốc độ tìm kiếm lân cận gần nhất trong không gian mục tiêu, cải thiện hiệu suất phân vùng Pareto, [25].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Voronoi Simplex Partitioning
+  RELATION_TYPE: Bổ trợ (Giúp thực thi phân vùng Voronoi với chi phí tính toán thấp)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Search Process
+  LINK_LOGIC: Tối ưu hóa tốc độ truy vấn trong quá trình tìm kiếm kiến trúc hoặc giải pháp Pareto, [25].
+
+---
+RULE_ID: RUL_NAS_030
+RULE_NAME: Meta-Reasoning Decision Boundary
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_FORMULA: "Decision = HasReasoning(complexity_assessment)"
+DESCRIPTION_SHORT: Quy tắc yêu cầu mô hình thực hiện một bước tự đánh giá độ phức tạp của câu hỏi trước khi quyết định kích hoạt CoT, giúp tối ưu hóa tài nguyên token, [35, 36].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Selective Loss Masking (SLM)
+  RELATION_TYPE: Đối nghịch (Meta-reasoning tăng token, SLM giúp ổn định việc học logic này)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Objective Function
+  LINK_LOGIC: Cân bằng trực tiếp giữa Task Accuracy và Compute Cost (token count), [37].
+
+RULE_ID: RUL_NAS_031
+RULE_NAME: Lipschitz Continuity for Constraints
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_FORMULA: "||g(x, h) - g(x, h')|| ≤ Lx ||h - h'||"
+DESCRIPTION_SHORT: Quy tắc đảm bảo rằng các ràng buộc không thay đổi quá đột ngột khi các tham số ngẫu nhiên biến động, là tiền đề cho tính ổn định của CCP [12, 13].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Chance Constraint Reliability
+  RELATION_TYPE: Tiền đề (Đảm bảo sự tồn tại của biên độ an toàn)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Feasible Region
+  LINK_LOGIC: Lx xác định độ nhạy của miền khả thi đối với nhiễu môi trường [14].
+
+---
+RULE_ID: RUL_NAS_032
+RULE_NAME: Schur Complement Reduction Law
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_FORMULA: "S = A22 - A21 A11^-1 A12"
+DESCRIPTION_SHORT: Định luật cho phép phân rã các bài toán tối ưu quy mô lớn thành các bài toán nhỏ hơn bằng cách loại bỏ biến có cấu trúc thưa hoặc khối [5, 15].
+INTRA_RULE_RELATION:
+  TARGET_RULE: KKT Conditions
+  RELATION_TYPE: Bổ trợ (Tăng tốc độ giải hệ KKT)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Efficiency
+  LINK_LOGIC: Giảm chi phí nạp trọng số từ HBM bằng cách tối ưu hóa nghịch đảo khối [8].
+
+---
+RULE_ID: RUL_NAS_033
+RULE_NAME: Expert Specialization Law (Semantic Focus)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_FORMULA: "P(Token_Subclass | Expert_i) >> P(Token_Subclass | Expert_j)"
+DESCRIPTION_SHORT: Định luật quan sát thấy rằng trong các cấu trúc MoE không bị cưỡng ép load-balancing quá mức, các chuyên gia sẽ tự động hội tụ vào các tiểu quần thể mã tin cụ thể (ví dụ: dấu câu, toán học) [16, 17].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Dirichlet Routing Factorization
+  RELATION_TYPE: Hệ quả (Phân rã routing dẫn đến sự chuyên môn hóa này)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Interpretability
+  LINK_LOGIC: Tạo ra các ranh giới ngữ nghĩa rõ ràng cho việc phân tích "mind-map" của AI [17].
+
+---
+RULE_ID: RUL_NAS_034
+RULE_NAME: Spike-and-Slab Variable Selection Rule
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_FORMULA: "z ~ Bernoulli(π); θ ~ Dir(α)"
+DESCRIPTION_SHORT: Quy tắc mô hình hóa quá trình chọn expert bằng cách tách biệt biến nhị phân "có/không" (Spike) và biến phân bổ liên tục (Slab) [18, 19].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Dirichlet Routing Factorization
+  RELATION_TYPE: Tiền đề (Cung cấp cấu trúc toán học cho routing)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Sparsity Regularization
+  LINK_LOGIC: Cho phép áp dụng hình phạt thưa trực tiếp lên thành phần nhị phân mà không làm nhiễu gradient của thành phần liên tục [20, 21].
+
+---
+RULE_ID: RUL_NAS_035
+RULE_NAME: Self-Concordance Complexity Bound
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_FORMULA: "m(μ - 1 - log μ) / γ + c"
+DESCRIPTION_SHORT: Ràng buộc xác định số lượng bước lặp Newton tối đa cần thiết để đạt độ chính xác ε, độc lập với thang đo của biến số [4, 22].
+INTRA_RULE_RELATION:
+  TARGET_RULE: Karush-Kuhn-Tucker Conditions
+  RELATION_TYPE: Bổ trợ (Định ranh giới thời gian chạy cho các thuật toán điểm trong)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Global Convergence Guarantee
+  LINK_LOGIC: Cung cấp chứng chỉ về độ phức tạp thời gian thực thi (worst-case complexity) cho các hệ thống an toàn [23].
+------------------------------------------------------------------------------------------------------
+
+layers_3:
+
+DYNAMIC_ID: DYN_OPT_NAS_001
+CAUSAL_CHAIN: "Nếu bài toán tìm kiếm rời rạc được thư giãn (Relaxation) thành không gian liên tục (ví dụ qua Dirichlet/Softmax), thì bài toán trở nên khả vi, dẫn đến việc có thể sử dụng các thuật toán dựa trên Gradient để tăng tốc độ tìm kiếm kiến trúc gấp nhiều lần."
+LOOP_TYPE: Linear
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [Decision Variables, Objective Function, Gradient, Dirichlet Routing Factorization]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_004
+  RELATION: Kích hoạt (Cung cấp cơ chế để Gradient Accuracy tác động đến thứ hạng)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: OPT_FRM_007
+  LINK_LOGIC: Là logic vận hành chính đằng sau kiến trúc DirMoE để duy trì tính khả vi toàn phần.
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_002
+CAUSAL_CHAIN: "Nếu Step Size vượt quá bán kính hội tụ Taylor (xác định bởi các điểm kỳ dị 'Ghosts of Softmax'), thì mô hình đại diện cục bộ không còn tin cậy, dẫn đến sự sụp đổ của quá trình tối ưu hóa (Divergence) bất kể độ cong Hessian."
+LOOP_TYPE: Linear
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [Gradient, Hessian Matrix, Objective Function]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_005
+  RELATION: Điều tiết (Giới hạn tốc độ cập nhật của các specialist routers)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: OPT_ENT_042
+  LINK_LOGIC: Buộc phương pháp Newton phải áp dụng các cơ chế giảm chấn (damping) để tránh bước nhảy quá lớn.
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_003
+CAUSAL_CHAIN: "Nếu độ thưa (Sparsity) tăng quá cao để giảm chi phí tính toán, thì khả năng biểu diễn của mạng bị thu hẹp, dẫn đến việc kích hoạt Vòng lặp Cân bằng để điều chỉnh lại Regularization nhằm bảo toàn độ chính xác."
+LOOP_TYPE: Balancing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [Sparsity Constraints, Objective Function, Pareto Optimal]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_006
+  RELATION: Triệt tiêu (Sự mất cân bằng Sparsity có thể làm rộng Duality Gap)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: RUL_NAS_004
+  LINK_LOGIC: Sử dụng Simpson Index để kiểm soát đơn điệu sự đánh đổi này.
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_004
+CAUSAL_CHAIN: "Nếu Gradient Accuracy tăng (thông qua lấy mẫu tốt hơn), thì Architecture Ranking trở nên chính xác hơn, dẫn đến việc optimizer tập trung tài nguyên vào các vùng hứa hẹn, từ đó lại tiếp tục cải thiện chất lượng Gradient."
+LOOP_TYPE: Reinforcing
+SPECIALIST_DOMAIN: DATA SCIENTIST
+NODES_INVOLVED: [Gradient, Search Process, Search Tree]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_001
+  RELATION: Kích hoạt (Làm cho chuỗi thư giãn liên tục hoạt động hiệu quả hơn)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: OPT_FRM_015
+  LINK_LOGIC: Kết nối với cơ chế khuếch tán (Diffusion) để hướng dẫn việc lấy mẫu hạt trong không gian kiến trúc.
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_005
+CAUSAL_CHAIN: "Nếu cấu trúc mạng phân mảnh (MoE), thì router phải sử dụng thông tin độ cong (Hessian bậc hai), dẫn đến việc ổn định các dao động định hướng (routing oscillations) và đạt được sự hội tụ chuyên môn hóa nhanh hơn."
+LOOP_TYPE: Reinforcing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [Hessian Matrix, Decision Variables, Second-Order Transformer Convergence]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_002
+  RELATION: Điều tiết (Hessian giúp xác định Step Size an toàn hơn cho router)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: OPT_FRM_006
+  LINK_LOGIC: Cơ sở để áp dụng LRSFN nhằm thoát khỏi các điểm yên ngựa trong không gian router.
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_006
+CAUSAL_CHAIN: "Nếu khoảng cách đối ngẫu (Duality Gap) hội tụ về mức tiệm cận nhỏ, thì giải pháp hiện tại gần như tối ưu toàn cục (trong miền lồi hóa), dẫn đến việc kích hoạt tín hiệu dừng vòng lặp tìm kiếm để tiết kiệm tài nguyên."
+LOOP_TYPE: Balancing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [Duality Gap, Strong Duality, KKT Conditions]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_003
+  RELATION: Kích hoạt (Xác nhận trạng thái cân bằng giữa Sparsity và Accuracy đã đạt được)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: OPT_ENT_027
+  LINK_LOGIC: Sử dụng Duality Gap làm chứng chỉ (certificate) về độ cận tối ưu cho các hệ thống AGI tự trị.
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_007
+CAUSAL_CHAIN: "Nếu optimizer tiến gần đến một điểm yên ngựa (Saddle Point), thì cơ chế đẩy (Repulsive Force) dựa trên trị tuyệt đối Hessian sẽ đảo ngược dấu hướng lên thành hướng xuống, dẫn đến việc thoát nhanh khỏi các vùng plateau có lỗi cao."
+LOOP_TYPE: Balancing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [Saddle Point, Hessian Matrix, Stein Repulsive Force]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_005
+  RELATION: Kích hoạt (Sử dụng thông tin Hessian để thực hiện cú hích Repulsive)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: OPT_FRM_001
+  LINK_LOGIC: Động lực cốt lõi trong SVH-MOL để duy trì tính đa dạng của tập Pareto.
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_008
+CAUSAL_CHAIN: "Nếu hệ thống được siêu tham số hóa (Overparameterization), thì cảnh quan lỗi được làm phẳng (smoothing), dẫn đến việc Gradient Descent có xu hướng hội tụ vào các 'lòng chảo phẳng' (flat basins) có khả năng tổng quát hóa cao."
+LOOP_TYPE: Reinforcing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [Decision Variables, Local Minimum, Global Maximum]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_004
+  RELATION: Điều tiết (Làm cho độ chính xác Gradient ít nhạy cảm hơn với nhiễu tại các vùng phẳng)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: OPT_ENT_018
+  LINK_LOGIC: Giải thích tại sao trong NAS, các kiến trúc lớn thường dễ huấn luyện hơn dù không gian tìm kiếm rộng hơn.
+
+DYNAMIC_ID: DYN_OPT_NAS_009
+CAUSAL_CHAIN: "Nếu cường độ lực đẩy Stein (α) quá lớn trong các epoch cuối, thì quá trình hội tụ bị cản trở bởi sự nhiễu loạn giữa các hạt, dẫn đến việc kích hoạt Vòng lặp Cân bằng (Annealing) để giảm dần α nhằm ổn định giải pháp tại vùng tối ưu Pareto [1-3]."
+LOOP_TYPE: Balancing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [Stein Repulsive Force, Stein Variational Annealing Schedule, Pareto Frontier, Local Minimum]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_007
+  RELATION: Điều tiết (Kiểm soát pha thoát plateau chuyển sang pha hội tụ chính xác)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: OPT_FRM_001
+  LINK_LOGIC: Cơ chế "Exploratory vs. Exploitative phase" giúp SVH-MOL không bị sụp đổ phương sai (variance collapse) [4, 5].
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_010
+CAUSAL_CHAIN: "Nếu ranh giới quyết định CoT bị sụp đổ (collapse) trong quá trình RL, thì mô hình sẽ mặc định kích hoạt CoT cho mọi câu hỏi, dẫn đến việc áp dụng Selective Loss Masking (SLM) để triệt tiêu tín hiệu lỗi tại token quyết định, từ đó bảo toàn tính thích nghi [6-8]."
+LOOP_TYPE: Balancing
+SPECIALIST_DOMAIN: STRATEGIST
+NODES_INVOLVED: [Selective Loss Masking, Meta-Reasoning Decision Boundary, Objective Function, Proximal Policy Optimization]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_004
+  RELATION: Kích hoạt (Đảm bảo thứ hạng kiến trúc/chính sách không bị sai lệch bởi bias của token quyết định)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: OPT_FRM_003
+  LINK_LOGIC: SLM là "chốt chặn" kỹ thuật giúp AdaCoT duy trì hiệu suất 96% của mô hình gốc trong khi giảm 70% token [9, 10].
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_011
+CAUSAL_CHAIN: "Nếu số lượng chuyên gia (Experts) tăng lên để mở rộng năng lực mạng, thì microbatch bị phân mảnh và khả năng tái sử dụng trọng số tại HBM giảm (qs inequality), dẫn đến một Vòng lặp Củng cố tiêu cực làm tăng lưu lượng truyền tin và đẩy hệ thống vào ngưỡng nghẽn băng thông (bandwidth-bound) [11-13]."
+LOOP_TYPE: Reinforcing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [Expert Capacity Constraint, Reuse Fragmentation Penalty, Resource Constraints, High-Bandwidth Memory]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_005
+  RELATION: Điều tiết (Buộc router phải tối ưu hóa để giảm thiểu sự phân mảnh microbatch)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: OPT_FRM_017
+  LINK_LOGIC: Kích hoạt thuật toán Selective Loading để nạp expert theo nhu cầu batch thay vì nạp toàn bộ expert pool [14, 15].
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_012
+CAUSAL_CHAIN: "Nếu cấu trúc chú ý (Attention) của Transformer học được cách xấp xỉ ma trận hiệp phương sai dữ liệu, thì các tầng kế tiếp sẽ thực hiện các bước tương đương phép lặp Newton, dẫn đến tốc độ hội tụ siêu tuyến tính và khả năng xử lý dữ liệu xấu (ill-conditioned) tốt hơn nhiều so với Gradient Descent [16-19]."
+LOOP_TYPE: Linear
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [Hessian Matrix, Second-Order Transformer Convergence, Decision-Span Consistency, Ordinary Least Squares]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_001
+  RELATION: Kích hoạt (Cung cấp bằng chứng thực nghiệm cho việc ICL thực chất là một quá trình tối ưu hóa bậc hai ngầm định)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: OPT_ENT_042
+  LINK_LOGIC: Chứng minh toán học rằng k tầng Transformer có thể thực hiện k bước lặp Newton [17, 20].
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_013
+CAUSAL_CHAIN: "Nếu nhiệt độ nghịch đảo (β) trong khung khuếch tán tiến tới vô hạn, thì các hạt mẫu sẽ tập trung mật độ tại các điểm có giá trị hàm mục tiêu thấp nhất, dẫn đến việc tìm thấy cực tiểu toàn cục trong miền hỗ trợ của dữ liệu với sai số tối ưu được kiểm soát [21-23]."
+LOOP_TYPE: Linear
+SPECIALIST_DOMAIN: DATA SCIENTIST
+NODES_INVOLVED: [Boltzmann Distribution, GGDOpt, Global Maximum, Feasible Region]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_008
+  RELATION: Kích hoạt (Sử dụng cấu trúc smoothing của khuếch tán để tìm các lòng chảo phẳng tối ưu)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: RUL_NAS_020
+  LINK_LOGIC: Kết hợp với SAA để xử lý các bài toán ràng buộc xác suất thông qua lấy mẫu hạt điều hướng bởi gradient [24, 25].
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_014
+CAUSAL_CHAIN: "Nếu Step Size (Δt) được thiết kế nhỏ hơn nghịch đảo trị riêng lớn nhất của Hessian cập nhật, thì sai lệch (deviation) giữa dòng chảy tối ưu hóa rời rạc và liên tục được giới hạn, dẫn đến trạng thái ổn định tuyến tính cho các optimizer bậc hai trong môi trường nhiễu [26, 27]."
+LOOP_TYPE: Balancing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [Hessian Matrix, Gradient, Newton's Method, LRSFN]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_002
+  RELATION: Triệt tiêu (Damping/Divergence prevention)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: OPT_ENT_043
+  LINK_LOGIC: Cơ sở để các phương pháp Quasi-Newton tự điều chỉnh bước nhảy dựa trên độ cong quan sát được [28, 29].
+
+NODE_ID: OPT_FRM_021
+ENTITY_NAME: MOEA/D (Multi-objective Evolutionary Algorithm based on Decomposition)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Khung phân rã bài toán đa mục tiêu thành nhiều bài toán đơn mục tiêu và tối ưu hóa chúng đồng thời thông qua sự tương tác giữa các giải pháp lân cận [1, 2].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Tchebycheff Scalarization
+    RELATION: Điều phối (Dùng làm hàm khoảng cách chính)
+  - TARGET_NODE: Pareto Frontier
+    RELATION: Ảnh hưởng (Tạo ra các điểm giải pháp phân bổ đều)
+ATTRIBUTES: Tính song song hóa cao, Hiệu quả với các Front không lồi.
+
+---
+NODE_ID: OPT_FRM_022
+ENTITY_NAME: PHN-HVI (Pareto Hypernetwork with Hypervolume Indicator)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Kiến trúc Hypernetwork tối ưu hóa trực tiếp chỉ số Hypervolume (HV) để học tập toàn bộ tập Pareto mà không cần hàm scalarization truyền thống [2, 3].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Hypervolume (HV)
+    RELATION: Điều phối (Lấy HV làm hàm mục tiêu)
+  - TARGET_NODE: Stein Repulsive Force
+    RELATION: Đối nghịch (HVI tự duy trì đa dạng, không cần lực đẩy Stein)
+ATTRIBUTES: Hiệu quả hội tụ cao, Chi phí tính toán HVI lớn.
+
+---
+NODE_ID: OPT_FRM_023
+ENTITY_NAME: RLAIF (Reinforcement Learning from AI Feedback)
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Khung căn chỉnh an toàn (Alignment) sử dụng mô hình AI phản hồi dựa trên "Hiến pháp" để thay thế hoặc bổ trợ cho phản hồi từ con người (RLHF) [4, 5].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Constitutional AI Guardrails
+    RELATION: Chứa đựng
+  - TARGET_NODE: Proximal Policy Optimization (PPO)
+    RELATION: Điều phối (Sử dụng PPO để cập nhật chính sách từ feedback)
+ATTRIBUTES: Tính tự trị, Khả năng mở rộng giám sát.
+
+---
+NODE_ID: OPT_FRM_024
+ENTITY_NAME: FloydNet
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Kiến trúc mạng nơ-ron tích hợp Relational Tensor để mô hình hóa các phụ thuộc toàn cục, thường được dùng để giải các bài toán tối ưu trên đồ thị phức tạp [Từ thực thể L1: 049].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Relational Tensor
+    RELATION: Chứa đựng
+  - TARGET_NODE: Directed Acyclic Graph (DAG)
+    RELATION: Ảnh hưởng (Xử lý thông tin cấu trúc đồ thị)
+ATTRIBUTES: Độ phức tạp 3-WL, Khả năng suy luận quan hệ.
+
+---
+NODE_ID: OPT_FRM_025
+ENTITY_NAME: L1-RL (Reasoning Length Controller)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Khung học tăng cường chuyên biệt để kiểm soát độ dài của chuỗi suy luận (CoT), ngăn chặn việc mô hình "suy nghĩ quá mức" (overthinking) ở các tác vụ đơn giản [6].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Selective Loss Masking (SLM)
+    RELATION: Bổ trợ (SLM giúp ổn định việc học độ dài này)
+  - TARGET_NODE: Average Response Tokens
+    RELATION: Điều phối (Trực tiếp giảm số lượng token)
+ATTRIBUTES: Tiết kiệm tài nguyên, Tăng tốc độ phản hồi.
+
+DYNAMIC_ID: DYN_OPT_NAS_015
+CAUSAL_CHAIN: "Nếu ranh giới quyết định của meta-reasoning không ổn định, thì mô hình sẽ rơi vào bẫy homogeneous behavior (luôn hoặc không bao giờ CoT), dẫn đến sự sụp đổ của khả năng thích nghi (Decision Boundary Collapse) [7, 8]."
+LOOP_TYPE: Balancing
+SPECIALIST_DOMAIN: STRATEGIST
+NODES_INVOLVED: [Meta-Reasoning, Selective Loss Masking, Decision Boundary Collapse]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_010
+  RELATION: Điều tiết (Sử dụng SLM để ngăn chặn sự sụp đổ này)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_OPT_017
+  LINK_LOGIC: Phép ẩn dụ về 'Bác sĩ sàng lọc' cần ranh giới ổn định để không phân loại sai bệnh nhân.
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_016
+CAUSAL_CHAIN: "Nếu áp dụng lịch trình rèn (Annealing Schedule), thì hệ thống chuyển từ pha Khám phá (predominant repulsive force) sang pha Khai thác (driving force dominant), dẫn đến việc phát hiện các vùng Pareto tốt hơn mà không bị mất ổn định [9, 10]."
+LOOP_TYPE: Reinforcing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [Annealing Schedule, Stein Repulsive Force, Driving Force]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_009
+  RELATION: Kích hoạt (Kiểm soát tiến trình hội tụ đa mục tiêu)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_OPT_014
+  LINK_LOGIC: Phép ẩn dụ rèn thép (nung nóng để uốn, làm nguội để tôi cứng).
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_017
+CAUSAL_CHAIN: "Nếu bài toán tối ưu có ràng buộc rào cản (Log-Barrier), thì miền khả thi được bao bọc bởi một 'bức tường gạch' (Brick wall), dẫn đến việc thuật toán Newton chỉ có thể di chuyển trong vùng an toàn nội tại (Interior point) [11, 12]."
+LOOP_TYPE: Balancing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [Barrier Function, Central Path, Feasible Region]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_006
+  RELATION: Điều tiết (Dẫn dắt central path tiến tới tối ưu)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_OPT_009
+  LINK_LOGIC: Liên kết với Slater's Condition để đảm bảo 'căn phòng' có khoảng trống ở giữa.
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_018
+CAUSAL_CHAIN: "Nếu Transformer thực hiện ICL, thì vectơ trọng số học được luôn nằm trong không gian Span của các ví dụ trước đó (Span Property), dẫn đến việc giới hạn phạm vi suy luận vào dữ liệu ngữ cảnh hiện tại [13, 14]."
+LOOP_TYPE: Linear
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [Decision-Span Consistency, In-Context Learning, Weight Sharing Protocol]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_012
+  RELATION: Tiền đề (Span property là cơ sở hình học cho hội tụ Newton trong Transformer)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: OPT_ENT_050
+  LINK_LOGIC: Không gian Span tương đồng với không gian Krylov trong việc xấp xỉ Hessian.
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_019
+CAUSAL_CHAIN: "Nếu số tầng Transformer tăng tuyến tính (ℓ), thì số bước lặp Newton tương đương cũng tăng theo, dẫn đến việc đạt được độ chính xác hội tụ bậc hai với chi phí O(ℓ) lớp mạng [15]."
+LOOP_TYPE: Reinforcing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [Second-Order Transformer Convergence, Iterative Newton's Method]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_001
+  RELATION: Kích hoạt (Chứng minh rằng độ sâu mạng tỉ lệ thuận với độ tinh khiết của giải pháp tối ưu)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_OPT_029
+  LINK_LOGIC: Dùng để giải thích bậc hội tụ siêu tuyến tính của LLM.
+
+---
+DYNAMIC_ID: DYN_OPT_NAS_020
+CAUSAL_CHAIN: "Nếu xuất hiện các điểm yên ngựa giả (Pseudo-local optima) do mô hình đại diện bị phân mảnh, thì lực đẩy Stein sẽ tạo ra các 'cú hích' hạt, dẫn đến việc thoát khỏi các bẫy không chắc chắn này [16, 17]."
+LOOP_TYPE: Balancing
+SPECIALIST_DOMAIN: DATA SCIENTIST
+NODES_INVOLVED: [Saddle Point, Stein Repulsive Force, Surrogate Model]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_OPT_NAS_007
+  RELATION: Bổ trợ (Tăng cường khả năng thoát bẫy cho các optimizer bậc thấp)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_OPT_012
+  LINK_LOGIC: Phép ẩn dụ nam châm cùng cực giúp duy trì sự tỉnh táo trước các bẫy cục bộ.
+--------------------------------------------------------------------------------
+
+layers_4: 
+
+NODE_ID: SEM_OPT_001
+SEMANTIC_IDENTITY: Anchor Node
+SEMANTIC_DESCRIPTION: "Tính lồi (Convexity) là 'đường phân thủy' của lý thuyết tối ưu, nơi mọi cực tiểu địa phương đồng nhất với cực tiểu toàn cầu, loại bỏ hoàn toàn sự không chắc chắn trong việc tìm kiếm giải pháp tốt nhất."
+ANALOGY_STRUCTURE:
+  CONCEPT: Convexity
+  SIMILAR_TO: Một chiếc bát khổng lồ trong trọng trường
+  SIMILARITY_ASPECT: "Cấu trúc logic (Dù thả quả bóng ở đâu, nó luôn lăn về điểm đáy duy nhất)."
+  DIFFERENCE_ASPECT: "Mục tiêu (Bát vật lý dựa trên trọng lực, tính lồi toán học dựa trên tổ hợp tuyến tính của tập hợp điểm)."
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Global Convergence Guarantee
+    TYPE: Transformative (Biến bài toán tìm kiếm thành bài toán xác nhận)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Uniqueness
+  LINK_LOGIC: Tính lồi nghiêm ngặt tạo ra một vector 'Sự tin cậy tuyệt đối' cho hệ thống ra quyết định AGI.
+
+---
+NODE_ID: SEM_OPT_002
+SEMANTIC_IDENTITY: Bridge Node
+SEMANTIC_DESCRIPTION: "Đối ngẫu Lagrangian (Lagrangian Duality) cung cấp một 'góc nhìn soi chiếu' (Mirroring), chuyển đổi bài toán từ không gian biến số thực sang không gian áp lực của các ràng buộc."
+ANALOGY_STRUCTURE:
+  CONCEPT: Lagrangian Duality
+  SIMILAR_TO: Một chiếc gương lộn ngược (Flipped Mirror)
+  SIMILARITY_ASPECT: "Cấu trúc (Hình ảnh trong gương phản ánh đúng vật thể nhưng đảo ngược hướng tối ưu: Primal minimize, Dual maximize)."
+  DIFFERENCE_ASPECT: "Hệ quả (Gương vật lý chỉ quan sát, đối ngẫu toán học cho phép giải bài toán khó qua bài toán dễ hơn)."
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Strong Duality
+    TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Shadow Prices
+  LINK_LOGIC: Tạo Vector 'Economic Reasoning' trong AI bằng cách kết nối sự soi chiếu này với giá trị biên của tài nguyên.
+
+---
+NODE_ID: SEM_OPT_003
+SEMANTIC_IDENTITY: Anchor Node
+SEMANTIC_DESCRIPTION: "Shadow Prices (Giá bóng) là bản chất định tính của sự nhạy cảm, định nghĩa giá trị kinh tế hoặc hệ quả của việc nới lỏng một ràng buộc an toàn."
+ANALOGY_STRUCTURE:
+  CONCEPT: Shadow Prices
+  SIMILAR_TO: Thuế phạt vi phạm hành chính
+  SIMILARITY_ASPECT: "Logic (Khi vi phạm càng nặng hoặc ràng buộc càng thắt chặt, chi phí/hình phạt tăng lên tương ứng)."
+  DIFFERENCE_ASPECT: "Mục tiêu (Thuế vật lý để thu ngân sách, Shadow Price toán học để điều phối hướng hội tụ của thuật toán)."
+SPECIALIST_SUGGESTION: STRATEGIST
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Constraints
+    TYPE: Transformative (Chuyển ràng buộc cứng thành áp lực chi phí mềm)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Sensitivity Analysis
+  LINK_LOGIC: Kết nối để tạo ra Vector 'Resource Intelligence' giúp AI hiểu giá trị thực của các giới hạn vật lý.
+
+---
+NODE_ID: SEM_OPT_004
+SEMANTIC_IDENTITY: Anchor Node
+SEMANTIC_DESCRIPTION: "Strong Duality (Đối ngẫu mạnh) là trạng thái hài hòa lý tưởng, nơi khoảng cách giữa ước lượng dưới và giá trị thực triệt tiêu về không."
+ANALOGY_STRUCTURE:
+  CONCEPT: Strong Duality
+  SIMILAR_TO: Một cuộc thương lượng đạt được sự nhất trí tuyệt đối (Consensus)
+  SIMILARITY_ASPECT: "Logic (Bên bán muốn giá cao nhất - Dual, bên mua muốn giá thấp nhất - Primal, gặp nhau tại một điểm duy nhất)."
+  DIFFERENCE_ASPECT: "Mục tiêu (Thương lượng xã hội có thể có sự thỏa hiệp, đối ngẫu mạnh là sự trùng khớp toán học chính xác)."
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Duality Gap
+    TYPE: Opposite
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Slater's Condition
+  LINK_LOGIC: Hình thành Vector 'Mathematical Certifiability' đảm bảo hệ thống luôn tìm được điểm cân bằng.
+
+---
+NODE_ID: SEM_OPT_005
+SEMANTIC_IDENTITY: Bridge Node
+SEMANTIC_DESCRIPTION: "KKT Stationarity (Tính dừng KKT) là bản chất của sự cân bằng lực, nơi hướng cải thiện hiệu suất bị chặn đứng hoàn toàn bởi 'pháp lực' của các rào cản an toàn."
+ANALOGY_STRUCTURE:
+  CONCEPT: KKT Stationarity
+  SIMILAR_TO: Trạng thái cân bằng của một quả bóng đặt giữa hai bức tường áp lực
+  SIMILARITY_ASPECT: "Cấu trúc (Tổng các vectơ lực tác động lên vật thể bằng không)."
+  DIFFERENCE_ASPECT: "Mục tiêu (Lực vật lý giữ vật thể đứng yên, KKT Stationarity xác nhận tính tối ưu của một quyết định)."
+SPECIALIST_SUGGESTION: ENGINEER
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Gradient
+    TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Safety Guardrails
+  LINK_LOGIC: Tạo Vector 'Stable Control' cho các robot AGI hoạt động trong môi trường có ràng buộc vật lý.
+
+---
+NODE_ID: SEM_OPT_006
+SEMANTIC_IDENTITY: Anchor Node
+SEMANTIC_DESCRIPTION: "Complementary Slackness (Độ chùng bổ sung) là nguyên tắc 'Không dư thừa', định nghĩa rằng một rào cản an toàn chỉ gây áp lực khi thực thể nằm sát biên giới của nó."
+ANALOGY_STRUCTURE:
+  CONCEPT: Complementary Slackness
+  SIMILAR_TO: Cảm biến va chạm trên ô tô
+  SIMILARITY_ASPECT: "Logic (Nếu không chạm biên, hệ thống không cảnh báo; khi cảnh báo kích hoạt, nghĩa là khoảng cách bằng không)."
+  DIFFERENCE_ASPECT: "Hệ quả (Cảm biến vật lý để tránh va chạm, Slackness toán học để loại bỏ các biến không hoạt động khỏi tính toán)."
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Dual Variables
+    TYPE: Transformative
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Efficiency
+  LINK_LOGIC: Kết nối để tạo Vector 'Zero-waste Optimization' (Tối ưu hóa không lãng phí).
+
+---
+NODE_ID: SEM_OPT_007
+SEMANTIC_IDENTITY: Anchor Node
+SEMANTIC_DESCRIPTION: "Global Convergence Guarantee là lời hứa toán học về sự thành công tuyệt đối, đảm bảo rằng dù xuất phát từ đâu, hệ thống cũng sẽ tìm thấy giải pháp tốt nhất."
+ANALOGY_STRUCTURE:
+  CONCEPT: Global Convergence
+  SIMILAR_TO: Một chiếc la bàn luôn chỉ đúng về cực Bắc bất kể vị trí của người đi rừng
+  SIMILARITY_ASPECT: "Logic (Cung cấp một hướng đi đúng đắn không phụ thuộc vào trạng thái khởi đầu)."
+  DIFFERENCE_ASPECT: "Mục tiêu (La bàn vật lý chỉ hướng, Convergence toán học thực sự đưa bạn đến đích)."
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Stability
+    TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Reliability
+  LINK_LOGIC: Xây dựng Vector 'Operational Trust' (Sự tin cậy vận hành) cho các hệ thống AGI quan trọng.
+
+---
+NODE_ID: SEM_OPT_008
+SEMANTIC_IDENTITY: Bridge Node
+SEMANTIC_DESCRIPTION: "Dikin Ellipsoid (Hình elip Dikin) định nghĩa hình học cục bộ của sự tự tin, tạo ra một vùng an toàn bên trong miền khả thi dựa trên độ cong của hàm rào cản."
+ANALOGY_STRUCTURE:
+  CONCEPT: Dikin Ellipsoid
+  SIMILAR_TO: Một bong bóng bảo vệ xung quanh thợ lặn dưới nước
+  SIMILARITY_ASPECT: "Cấu trúc (Xác định không gian di chuyển an toàn mà không chạm vào ranh giới nguy hiểm)."
+  DIFFERENCE_ASPECT: "Logic (Bong bóng vật lý dựa trên áp suất khí, Dikin dựa trên ma trận Hessian của hàm log-barrier)."
+SPECIALIST_SUGGESTION: CREATIVE EXPLORER
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Hessian Matrix
+    TYPE: Transformative
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Search Process
+  LINK_LOGIC: Tạo Vector 'Local Confidence Space' giúp AI điều chỉnh bước nhảy (step size) một cách thông minh.
+
+---
+NODE_ID: SEM_OPT_009
+SEMANTIC_IDENTITY: Bridge Node
+SEMANTIC_DESCRIPTION: "Slater's Condition là bản chất của 'Tiềm năng khả thi', yêu cầu sự tồn tại của một điểm nằm sâu bên trong vùng an toàn để đảm bảo các công cụ đối ngẫu hoạt động chính xác."
+ANALOGY_STRUCTURE:
+  CONCEPT: Slater's Condition
+  SIMILAR_TO: Một căn phòng có khoảng trống ở giữa thay vì chỉ là những bức tường sát nhau
+  SIMILARITY_ASPECT: "Cấu trúc (Đảm bảo có không gian để vận động trước khi chạm ranh giới)."
+  DIFFERENCE_ASPECT: "Hệ quả (Phòng vật lý để ở, Slater toán học để đảm bảo khoảng cách đối ngẫu bằng không)."
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Strong Duality
+    TYPE: Transformative (Là tiền đề để kích hoạt Đối ngẫu mạnh)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Feasible Region
+  LINK_LOGIC: Hình thành Vector 'Inherent Solvability' (Tính có thể giải được nội tại).
+
+---
+NODE_ID: SEM_OPT_010
+SEMANTIC_IDENTITY: Anchor Node
+SEMANTIC_DESCRIPTION: "Self-Concordance (Tính tự điều hòa) là bản chất của sự độc lập về quy mô, đảm bảo hiệu suất tối ưu không bị ảnh hưởng bởi cách chúng ta đặt tên hay đơn vị cho các biến số."
+ANALOGY_STRUCTURE:
+  CONCEPT: Self-Concordance
+  SIMILAR_TO: Một bản nhạc giữ nguyên giai điệu dù chơi ở tông cao hay tông thấp
+  SIMILARITY_ASPECT: "Cấu trúc (Mối quan hệ giữa các nốt nhạc/đạo hàm bậc cao được bảo toàn)."
+  DIFFERENCE_ASPECT: "Mục tiêu (Nhạc để thưởng thức, Self-concordance để giải bài toán mà không cần biết các hằng số chưa biết)."
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Newton's Method
+    TYPE: Transformative (Cho phép phân tích hội tụ mà không cần tham số lạ)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Efficiency
+  LINK_LOGIC: Kết nối để tạo Vector 'Scale-Invariant Intelligence' (Trí tuệ bất biến quy mô).
+
+NODE_ID: SEM_OPT_011
+SEMANTIC_IDENTITY: Anchor Node
+SEMANTIC_DESCRIPTION: "Pareto Optimality (Tối ưu Pareto) là bản chất của sự thỏa hiệp thông minh, nơi hệ thống đạt đến ranh giới hiệu suất tối đa mà không thể cải thiện mục tiêu này mà không hy sinh mục tiêu khác [1], [2]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Pareto Optimality
+  SIMILAR_TO: Một nghệ sĩ nhào lộn giữ thăng bằng trên dây với hai xô nước ở hai đầu gánh.
+  SIMILARITY_ASPECT: "Cấu trúc (Sự cân bằng động: muốn xô này cao hơn thì xô kia phải hạ xuống)."
+  DIFFERENCE_ASPECT: "Mục tiêu (Nghệ sĩ tránh ngã vật lý, Pareto toán học định nghĩa tập hợp các điểm hiệu quả nhất trong không gian mục tiêu [1], [3])."
+SPECIALIST_SUGGESTION: STRATEGIST
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Pareto Frontier
+    TYPE: Transformative (Tạo ra hình thái địa lý cho không gian mục tiêu [1])
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Fairness-Utility Trade-off
+  LINK_LOGIC: Kết nối để tạo Vector 'Ethical Balance' trong các mô hình Generative AI [4].
+
+---
+NODE_ID: SEM_OPT_012
+SEMANTIC_IDENTITY: Bridge Node
+SEMANTIC_DESCRIPTION: "Stein Repulsive Force (Lực đẩy Stein) là bản chất của sự đa dạng hóa, ngăn chặn các thực thể (hạt) sụp đổ vào một trạng thái duy nhất, thúc đẩy việc khám phá toàn diện không gian giải pháp [5], [6]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Stein Repulsive Force
+  SIMILAR_TO: Các nam châm cùng cực đặt gần nhau.
+  SIMILARITY_ASPECT: "Logic (Càng gần nhau thì lực đẩy càng mạnh, buộc các thực thể phải giãn cách)."
+  DIFFERENCE_ASPECT: "Hệ quả (Nam châm đẩy vật lý, Stein Force điều hướng gradient để duy trì độ bao phủ xác suất [7], [8])."
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Driving Force
+    TYPE: Opposite (Lực đẩy duy trì đa dạng, lực kéo hội tụ về tối ưu [5], [8])
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Exploration-Exploitation
+  LINK_LOGIC: Hình thành Vector 'Population Intelligence' cho các hệ thuật toán bầy đàn.
+
+---
+NODE_ID: SEM_OPT_013
+SEMANTIC_IDENTITY: Anchor Node
+SEMANTIC_DESCRIPTION: "Chance Constrained Reliability (Độ tin cậy ràng buộc xác suất) là bản chất của sự linh hoạt trong rủi ro, cho phép hệ thống vận hành sát giới hạn an toàn với một xác suất vi phạm nhỏ được kiểm soát [9], [10]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Chance Constraints
+  SIMILAR_TO: Một hợp đồng bảo hiểm.
+  SIMILARITY_ASPECT: "Cấu trúc (Chấp nhận một rủi ro cực nhỏ để đổi lấy sự tự do vận hành trong hầu hết thời gian)."
+  DIFFERENCE_ASPECT: "Mục tiêu (Bảo hiểm đền bù thiệt hại, Chance Constraints tối ưu hóa hiệu suất trong môi trường không chắc chắn [11], [12])."
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Feasible Region
+    TYPE: Transformative (Làm 'mềm' biên giới cứng của miền khả thi [10])
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Stochastic Robustness
+  LINK_LOGIC: Tạo Vector 'Risk-Aware Autonomy' cho các hệ thống AGI tự điều khiển [13].
+
+---
+NODE_ID: SEM_OPT_014
+SEMANTIC_IDENTITY: Bridge Node
+SEMANTIC_DESCRIPTION: "Annealing Schedule (Lịch trình luyện) là bản chất của sự ổn định hóa theo thời gian, chuyển dịch hệ thống từ trạng thái hỗn loạn khám phá sang trạng thái trật tự hội tụ [14], [15]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Annealing
+  SIMILAR_TO: Quy trình rèn thép (Thép được nung nóng để uốn nắn và làm nguội để tôi cứng).
+  SIMILARITY_ASPECT: "Logic (Nhiệt độ cao/α lớn cho phép di chuyển tự do, nhiệt độ thấp/α nhỏ cố định cấu trúc [16], [17])."
+  DIFFERENCE_ASPECT: "Hệ quả (Thép cứng về mặt vật lý, Annealing trong NAS giúp các routers chuyên môn hóa chính xác [6], [18])."
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Stein Repulsive Force
+    TYPE: Transformative (Kiểm soát cường độ lực đẩy theo giai đoạn huấn luyện [19], [15])
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Convergence Stability
+  LINK_LOGIC: Xây dựng Vector 'Curated Learning' đảm bảo hệ thống không bị sụp đổ phương sai.
+
+---
+NODE_ID: SEM_OPT_015
+SEMANTIC_IDENTITY: Anchor Node
+SEMANTIC_DESCRIPTION: "Information Bottleneck (Nút thắt cổ chai thông tin) là bản chất của sự tinh lọc tri thức, ép hệ thống phải vứt bỏ nhiễu để giữ lại đại diện nén tối ưu nhất cho mục tiêu [20], [21]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Information Bottleneck
+  SIMILAR_TO: Một chiếc đồng hồ cát.
+  SIMILARITY_ASPECT: "Cấu trúc (Lượng dữ liệu khổng lồ đi qua phần eo hẹp, chỉ những gì quan trọng nhất mới lọt qua)."
+  DIFFERENCE_ASPECT: "Mục tiêu (Đồng hồ cát đo thời gian, Bottleneck toán học tối ưu hóa khả năng tổng quát hóa của mô hình [20])."
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Latent Variables
+    TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Scaling Laws
+  LINK_LOGIC: Kết nối để tạo Vector 'Representation Efficiency' giúp xác định quy mô nén tri thức tối ưu [22].
+
+---
+NODE_ID: SEM_OPT_016
+SEMANTIC_IDENTITY: Bridge Node
+SEMANTIC_DESCRIPTION: "Reuse Principle (Nguyên tắc tái sử dụng) định nghĩa hiệu suất thực tế của các mạng nơ-ron quy mô lớn, nơi chi phí nạp dữ liệu từ bộ nhớ chi phối tốc độ tính toán [23], [24]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Weight Reuse
+  SIMILAR_TO: Một cuốn sách trong thư viện công cộng.
+  SIMILARITY_ASPECT: "Logic (Càng nhiều người đọc cùng một cuốn sách - microbatch lớn, chi phí mua sách trên mỗi lượt đọc càng rẻ - amortization [23], [25])."
+  DIFFERENCE_ASPECT: "Hệ quả (Sách vật lý bị hao mòn, trọng số nơ-ron nạp vào cache giúp tăng tốc độ suy luận theo cấp số nhân [26])."
+SPECIALIST_SUGGESTION: ENGINEER
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: High-Bandwidth Memory (HBM)
+    TYPE: Opposite (Reuse fragmentation gây nghẽn băng thông HBM [26], [27])
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Inference Throughput
+  LINK_LOGIC: Hình thành Vector 'Structural Amortization' để tối ưu hóa chi phí vận hành LLM/MoE.
+
+---
+NODE_ID: SEM_OPT_017
+SEMANTIC_IDENTITY: Bridge Node
+SEMANTIC_DESCRIPTION: "Meta-Reasoning (Siêu suy luận) là bản chất của sự tự nhận thức về tài nguyên, cho phép hệ thống quyết định khi nào cần 'tư duy sâu' (CoT) dựa trên độ khó của nhiệm vụ [28], [29]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Meta-Reasoning
+  SIMILAR_TO: Bác sĩ sàng lọc (Triage) tại phòng cấp cứu.
+  SIMILARITY_ASPECT: "Cấu trúc (Đánh giá sơ bộ độ phức tạp của bệnh nhân/câu hỏi trước khi phân bổ nguồn lực phẫu thuật/GPU [29])."
+  DIFFERENCE_ASPECT: "Hệ quả (Bác sĩ cứu người, Meta-reasoning tối ưu hóa điểm Pareto giữa độ chính xác và chi phí token [30], [31])."
+SPECIALIST_SUGGESTION: STRATEGIST
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Selective Loss Masking (SLM)
+    TYPE: Complementary (SLM bảo vệ ranh giới quyết định của meta-reasoning [32], [33])
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Adaptive Computation
+  LINK_LOGIC: Tạo Vector 'Cognitive Economy' cho các tác nhân AGI tự trị.
+
+---
+NODE_ID: SEM_OPT_018
+SEMANTIC_IDENTITY: Anchor Node
+SEMANTIC_DESCRIPTION: "Hessian Curvature (Độ cong Hessian) cung cấp bản đồ địa hình của không gian hàm số, chỉ ra không chỉ hướng đi mà cả độ 'hiểm trở' của cảnh quan tối ưu [34], [35]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Hessian Matrix
+  SIMILAR_TO: Một bản đồ địa hình 3D độ phân giải cao.
+  SIMILARITY_ASPECT: "Cấu trúc (Cho biết vùng nào là thung lũng dốc, vùng nào là cao nguyên phẳng [36], [37])."
+  DIFFERENCE_ASPECT: "Mục tiêu (Bản đồ vật lý để thám hiểm, Hessian toán học để điều chỉnh bước nhảy (step size) an toàn [38], [39])."
+SPECIALIST_SUGGESTION: DATA SCIENTIST
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Newton's Method
+    TYPE: Transformative (Biến thông tin độ cong thành tốc độ hội tụ bậc hai [40], [41])
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Saddle Point Avoidance
+  LINK_LOGIC: Xây dựng Vector 'Geometric Intelligence' giúp AI thoát khỏi các bẫy plateau [42], [43].
+
+---
+NODE_ID: SEM_OPT_019
+SEMANTIC_IDENTITY: Bridge Node
+SEMANTIC_DESCRIPTION: "Constitutional Guardrails (Rào chắn hiến pháp) là bản chất của sự an toàn tự trị, tích hợp các nguyên tắc đạo đức và logic trực tiếp vào quá trình tối ưu hóa chính sách [44], [45]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Constitutional AI
+  SIMILAR_TO: Hiến pháp của một quốc gia.
+  SIMILARITY_ASPECT: "Logic (Một bộ quy tắc gốc mà mọi hành động/phản hồi sau đó phải tuân thủ nghiêm ngặt [46], [47])."
+  DIFFERENCE_ASPECT: "Hệ quả (Hiến pháp chính trị cần tòa án, hiến pháp AI được thực thi bằng hàm thưởng và đối ngẫu Lagrangian [48], [49])."
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Lagrangian Duality
+    TYPE: Transformative (Chuyển nguyên tắc an toàn thành các biến đối ngẫu áp lực [50], [51])
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Safety-Critical Control
+  LINK_LOGIC: Tạo Vector 'Intrinsic Safety' cho các mô hình AI phục vụ cộng đồng [52], [53].
+
+---
+NODE_ID: SEM_OPT_020
+SEMANTIC_IDENTITY: Anchor Node
+SEMANTIC_DESCRIPTION: "Global Convergence (Hội tụ toàn cầu) là lời hứa tối thượng của tối ưu hóa lồi, xác nhận rằng đích đến cuối cùng là duy nhất và chắc chắn đạt được [37], [54]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Global Convergence
+  SIMILAR_TO: Sự rơi của một quả bóng vào đáy bát.
+  SIMILARITY_ASPECT: "Cấu trúc (Dù thả bóng ở bất cứ đâu trên thành bát, trọng lực luôn đưa nó về điểm thấp nhất duy nhất [37])."
+  DIFFERENCE_ASPECT: "Hệ quả (Bóng rơi là tất yếu vật lý, hội tụ toán học là nền tảng cho sự tin cậy của các quyết định AGI [11], [55])."
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  - TARGET_NODE: Strong Duality
+    TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Mathematical Certifiability
+  LINK_LOGIC: Hình thành Vector 'Operational Truth' (Sự thật vận hành) cho các hệ thống AI quan trọng [56], [57].
+
+NODE_ID: OPT_FRM_021
+ENTITY_NAME: MOEA/D (Multi-objective Evolutionary Algorithm based on Decomposition)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Khung phân rã bài toán đa mục tiêu thành nhiều bài toán đơn mục tiêu và tối ưu hóa chúng đồng thời thông qua sự tương tác giữa các giải pháp lân cận [1, 2].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Tchebycheff Scalarization
+    RELATION: Điều phối (Dùng làm hàm khoảng cách chính)
+  - TARGET_NODE: Pareto Frontier
+    RELATION: Ảnh hưởng (Tạo ra các điểm giải pháp phân bổ đều)
+ATTRIBUTES: Tính song song hóa cao, Hiệu quả với các Front không lồi.
+
+---
+NODE_ID: OPT_FRM_022
+ENTITY_NAME: PHN-HVI (Pareto Hypernetwork with Hypervolume Indicator)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Kiến trúc Hypernetwork tối ưu hóa trực tiếp chỉ số Hypervolume (HV) để học tập toàn bộ tập Pareto mà không cần hàm scalarization truyền thống [2, 3].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Hypervolume (HV)
+    RELATION: Điều phối (Lấy HV làm hàm mục tiêu)
+  - TARGET_NODE: Stein Repulsive Force
+    RELATION: Đối nghịch (HVI tự duy trì đa dạng, không cần lực đẩy Stein)
+ATTRIBUTES: Hiệu quả hội tụ cao, Chi phí tính toán HVI lớn.
+
+---
+NODE_ID: OPT_FRM_023
+ENTITY_NAME: RLAIF (Reinforcement Learning from AI Feedback)
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Khung căn chỉnh an toàn (Alignment) sử dụng mô hình AI phản hồi dựa trên "Hiến pháp" để thay thế hoặc bổ trợ cho phản hồi từ con người (RLHF) [4, 5].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Constitutional AI Guardrails
+    RELATION: Chứa đựng
+  - TARGET_NODE: Proximal Policy Optimization (PPO)
+    RELATION: Điều phối (Sử dụng PPO để cập nhật chính sách từ feedback)
+ATTRIBUTES: Tính tự trị, Khả năng mở rộng giám sát.
+
+---
+NODE_ID: OPT_FRM_024
+ENTITY_NAME: FloydNet
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Kiến trúc mạng nơ-ron tích hợp Relational Tensor để mô hình hóa các phụ thuộc toàn cục, thường được dùng để giải các bài toán tối ưu trên đồ thị phức tạp [Từ thực thể L1: 049].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Relational Tensor
+    RELATION: Chứa đựng
+  - TARGET_NODE: Directed Acyclic Graph (DAG)
+    RELATION: Ảnh hưởng (Xử lý thông tin cấu trúc đồ thị)
+ATTRIBUTES: Độ phức tạp 3-WL, Khả năng suy luận quan hệ.
+
+---
+NODE_ID: OPT_FRM_025
+ENTITY_NAME: L1-RL (Reasoning Length Controller)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Khung học tăng cường chuyên biệt để kiểm soát độ dài của chuỗi suy luận (CoT), ngăn chặn việc mô hình "suy nghĩ quá mức" (overthinking) ở các tác vụ đơn giản [6].
+INTRA_LAYER_LINKS:
+  - TARGET_NODE: Selective Loss Masking (SLM)
+    RELATION: Bổ trợ (SLM giúp ổn định việc học độ dài này)
+  - TARGET_NODE: Average Response Tokens
+    RELATION: Điều phối (Trực tiếp giảm số lượng token)
+ATTRIBUTES: Tiết kiệm tài nguyên, Tăng tốc độ phản hồi.
+--------------------------------------------------------------------------------
+
+layer_5:
+
+METRIC_ID: MET_OPT_001
+METRIC_NAME: Duality Gap (Khoảng cách đối ngẫu)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Hiệu số giữa giá trị hàm mục tiêu của bài toán gốc (Primal) và bài toán đối ngẫu (Dual) [1, 2].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Global Optimality
+  RELATION: Tỉ lệ nghịch (Duality Gap tiến về 0 xác lập tính tối ưu toàn cầu) [2, 3].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Strong Duality
+  LINK_LOGIC: Dùng làm chứng chỉ (certificate) xác thực giải pháp cuối cùng trong các hệ thống an toàn [2, 4].
+
+---
+METRIC_ID: MET_OPT_002
+METRIC_NAME: Condition Number (Số điều kiện κ)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Tỷ lệ giữa trị riêng lớn nhất và nhỏ nhất của ma trận Hessian (λmax / λmin) [5, 6].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Convergence Rate
+  RELATION: Tỉ lệ nghịch (κ càng lớn, tốc độ hội tụ của Gradient Descent càng giảm mạnh) [5, 6].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Hessian Matrix
+  LINK_LOGIC: Đo lường độ "hiểm trở" của không gian mục tiêu để điều chỉnh thuật toán bậc hai [5, 7].
+
+---
+METRIC_ID: MET_OPT_003
+METRIC_NAME: KKT Residuals (Sai số điều kiện KKT)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Tổng bình phương sai số của các điều kiện: tính dừng, tính khả thi sơ cấp/đối ngẫu và độ chùng bổ sung [4, 8, 9].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Local Optimality Gap
+  RELATION: Tỉ lệ thuận (Residual thấp đảm bảo điểm đang xét gần điểm tối ưu cục bộ) [8, 9].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Karush-Kuhn-Tucker Conditions
+  LINK_LOGIC: Là thước đo trực tiếp để kiểm chứng tính an toàn của các chính sách AGI [8, 10].
+
+---
+METRIC_ID: MET_OPT_004
+METRIC_NAME: Hypervolume (HV)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: Độ đo Lebesgue của vùng không gian mục tiêu bị thống trị bởi tập Pareto và bị chặn bởi điểm tham chiếu [11-13].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Pareto Diversity
+  RELATION: Tỉ lệ thuận (HV tăng phản ánh cả sự hội tụ và tính đa dạng của giải pháp) [11, 14].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Pareto Frontier
+  LINK_LOGIC: Chỉ số chính để đánh giá hiệu quả của các khung học tập đa mục tiêu như SVH-MOL [15, 16].
+
+---
+METRIC_ID: MET_OPT_005
+METRIC_NAME: Simpson Index (Chỉ số thưa)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: Tổng bình phương các xác suất định tuyến của các chuyên gia trong MoE [17, 18].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Computational Complexity
+  RELATION: Tỉ lệ nghịch (Simpson Index càng cao, mạng càng thưa, chi phí tính toán càng thấp) [17, 18].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Dirichlet Routing Factorization
+  LINK_LOGIC: Sử dụng làm "nút vặn" (knob) λ để điều khiển độ chuyên môn hóa của các experts [19, 20].
+
+---
+METRIC_ID: MET_OPT_006
+METRIC_NAME: Log Hypervolume Difference (LHD)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: Logarit của hiệu số giữa HV của Front thực tế (ground truth) và HV của Front học được [16, 21].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Approximation Accuracy
+  RELATION: Tỉ lệ thuận (LHD nhỏ cho thấy sự tương đồng cao với tối ưu thực tế) [21, 22].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SVH-PSL
+  LINK_LOGIC: Chỉ số ổn định số học dùng để so sánh các thuật toán MOBO khác nhau [21, 22].
+
+---
+METRIC_ID: MET_OPT_007
+METRIC_NAME: Mean Euclidean Distance (MED)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: Trung bình khoảng cách Euclidean giữa giải pháp sinh ra bởi Hypernetwork và giải pháp Pareto thực tương ứng [23-25].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Preference Alignment
+  RELATION: Tỉ lệ nghịch (MED thấp nghĩa là giải pháp bám sát vectơ ưu tiên của người dùng) [26, 27].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Preference Vector
+  LINK_LOGIC: Đo lường khả năng "điều khiển được" (controllability) của các mạng nơ-ron đa mục tiêu [15, 28].
+
+---
+METRIC_ID: MET_OPT_008
+METRIC_NAME: Δ-Spread (Chỉ số phân bổ)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Thước đo tính đồng nhất và độ bao phủ của các điểm giải pháp dọc theo Pareto Front [29, 30].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Uniformity
+  RELATION: Tỉ lệ nghịch (Δ-Spread thấp phản ánh sự phân bổ đều đặn và không có vùng trống) [29, 31].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Voronoi Simplex Partitioning
+  LINK_LOGIC: Dùng để tối ưu hóa việc phân chia không gian trọng số nhằm tránh sụp đổ ranh giới [14, 30].
+
+---
+METRIC_ID: MET_OPT_009
+METRIC_NAME: Gradient Norm (Độ lớn Gradient)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Độ dài vectơ đạo hàm riêng tại bước lặp hiện tại [32, 33].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Convergence Stability
+  RELATION: Ngưỡng chặn (Gradient Norm tiến về 0 báo hiệu sự hội tụ tại điểm dừng) [32, 33].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Stationary Point
+  LINK_LOGIC: Giúp xác định các pha Annealing để ổn định hóa quá trình huấn luyện [32, 34].
+
+---
+METRIC_ID: MET_OPT_010
+METRIC_NAME: Robustness to Noise (Độ vững chãi xác suất)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Xác suất thỏa mãn ràng buộc (1-ρ) dưới tác động của nhiễu trong khung Chance Constrained [35, 36].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Feasible Region Size
+  RELATION: Tỉ lệ nghịch (Yêu cầu độ tin cậy càng cao, miền khả thi thực tế càng thu hẹp) [35, 37].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Chance Constrained Programming
+  LINK_LOGIC: Định nghĩa biên giới an toàn cho các tác vụ điều khiển robot hoặc tài chính [38, 39].
+
+METRIC_ID: MET_OPT_011
+METRIC_NAME: Spacing (SP)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: Độ lệch chuẩn của khoảng cách giữa các giải pháp kế cận trên tập Pareto front ước lượng [1, 2].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Δ-Spread
+  RELATION: Tỉ lệ thuận (SP cao phản ánh sự phân bổ không đều, gây sụp đổ ranh giới).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Stein Repulsive Force
+  LINK_LOGIC: SP được dùng để hiệu chỉnh cường độ lực đẩy Stein nhằm duy trì mật độ hạt đồng nhất [3, 4].
+
+---
+METRIC_ID: MET_OPT_012
+METRIC_NAME: CoT Triggering Rate (TR)
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+CALCULATION_METHOD: Tỷ lệ phần trăm các phản hồi mà mô hình quyết định kích hoạt cơ chế suy luận từng bước (Chain-of-Thought) [5, 6].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Average Response Tokens
+  RELATION: Tỉ lệ thuận (TR tăng trực tiếp kéo theo số lượng token tiêu thụ tăng).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Meta-Reasoning Decision Boundary
+  LINK_LOGIC: TR là chỉ số then chốt để xác định vị trí của mô hình trên Pareto front giữa Accuracy và Cost [5, 7].
+
+---
+METRIC_ID: MET_OPT_013
+METRIC_NAME: Average Response Tokens
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Số lượng token trung bình được sinh ra trên mỗi truy vấn trong môi trường thực tế [5, 8].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Inference Efficiency
+  RELATION: Tỉ lệ nghịch (Số token càng thấp, chi phí vận hành và độ trễ càng giảm).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Resource Constraints
+  LINK_LOGIC: Dùng để tính toán "Trọng số Động" cho việc nới lỏng hoặc thắt chặt hình phạt CoT [5].
+
+---
+METRIC_ID: MET_OPT_014
+METRIC_NAME: Reuse Factor (R)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Số lượng token chia sẻ chung một lần nạp trọng số từ HBM (R ≈ B·k/E cho MoE; R ≈ B cho Dense) [9, 10].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Memory Bandwidth Utilization
+  RELATION: Tỉ lệ thuận (R càng thấp, hệ thống càng bị nghẽn băng thông nạp trọng số).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Reuse Fragmentation Penalty
+  LINK_LOGIC: R xác định ngưỡng "qs inequality" để quyết định khi nào MoE kém hiệu quả hơn mô hình Dense [11, 12].
+
+---
+METRIC_ID: MET_OPT_015
+METRIC_NAME: qs Inequality Ratio
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+CALCULATION_METHOD: Tỷ số 1/(q·s) phản ánh mức độ bất lợi của MoE so với mô hình Dense tương đương chất lượng (q: hệ số tương đương, s: độ thưa) [12].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Throughput Speedup
+  RELATION: Tỉ lệ nghịch (Tỷ số này < 1 báo hiệu sự sụp đổ hiệu suất suy luận của MoE).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Global Convergence Guarantee
+  LINK_LOGIC: Giúp đánh giá tính khả thi kinh tế của việc triển khai các hệ thống AGI quy mô lớn [9, 13].
+
+---
+METRIC_ID: MET_OPT_016
+METRIC_NAME: Tail Latency (P99 Latency)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Thời gian thực thi lâu nhất của một worker/GPU tại mỗi tầng (thường do stragglers trong MoE) [14, 15].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: End-to-End Speedup
+  RELATION: Tỉ lệ nghịch (Độ trễ đuôi càng lớn, tốc độ tổng thể của hệ thống càng bị kéo thấp).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Expert Placement Optimizer
+  LINK_LOGIC: Dùng làm hàm mục tiêu cho ILP để tối ưu hóa vị trí đặt expert trên mạng GPU [14, 16].
+
+---
+METRIC_ID: MET_OPT_017
+METRIC_NAME: End-to-End Speedup
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Tỷ lệ giữa thời gian hoàn thành một batch của phương pháp cơ sở so với phương pháp tối ưu (ví dụ: MoETuner) [14, 17].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Token Processing Time
+  RELATION: Tỉ lệ thuận (Giảm thời gian xử lý token dẫn đến tăng tốc độ hệ thống).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Multi-node Multi-GPU Cluster
+  LINK_LOGIC: Đánh giá khả năng mở rộng (Scalability) của các thuật toán phân bổ expert [14, 18].
+
+---
+METRIC_ID: MET_OPT_018
+METRIC_NAME: Arithmetic Intensity Factor (AIF)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Tỷ lệ giữa FLOPs tính toán và lưu lượng dữ liệu di chuyển (Compute FLOPs / Data movement) [19].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Peak Throughput
+  RELATION: Ngưỡng chặn (Hệ thống phải đạt AIF đủ cao để không bị giới hạn bởi bộ nhớ).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Block Size Selection
+  LINK_LOGIC: Quyết định kích thước khối (block size) tối ưu trong thuật toán nhân ma trận khối (BWMM) [19, 20].
+
+---
+METRIC_ID: MET_OPT_019
+METRIC_NAME: Padding Overhead
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Hiệu số giữa năng lực tính toán đã cấp phát và năng lực tính toán thực tế cần thiết (Provisioned - Actual) [19, 21].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Compute Utilization
+  RELATION: Tỉ lệ nghịch (Overhead cao làm giảm hiệu suất sử dụng GPU).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Dropless MoE
+  LINK_LOGIC: Chỉ số này được dùng để cân bằng giữa việc không làm rơi token và việc lãng phí tài nguyên tính toán [22, 23].
+
+---
+METRIC_ID: MET_OPT_020
+METRIC_NAME: Expert Activation Skew (Skewness)
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+CALCULATION_METHOD: Độ lệch trong phân phối số lượng token được gửi đến các chuyên gia khác nhau [24, 25].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Load Balancing Loss
+  RELATION: Tỉ lệ thuận (Skew cao dẫn đến mất cân bằng tải nghiêm trọng).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Auxiliary-Loss-Free Load Balancing
+  LINK_LOGIC: Dùng để điều chỉnh "Expert Bias" nhằm đẩy token sang các chuyên gia ít hoạt động hơn [26, 27].
+
+---
+METRIC_ID: MET_OPT_021
+METRIC_NAME: Granularity (G)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: Tỷ lệ giữa kích thước tầng FFN chuẩn và kích thước ẩn của một expert (G = d_ff / d_expert) [28].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Final Validation Loss
+  RELATION: Tỉ lệ thuận theo luật lũy thừa (Tăng G giúp giảm loss cho đến khi chi phí routing chiếm ưu thế) [29, 30].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Scaling Laws
+  LINK_LOGIC: Thành phần chính trong công thức dự đoán hiệu năng MoE: L(N, D, G) [31, 32].
+
+---
+METRIC_ID: MET_OPT_022
+METRIC_NAME: Expansion Rate (E)
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+CALCULATION_METHOD: Tỷ lệ giữa tổng tham số MoE và tham số FFN gốc (E = N_moe / N_ff) [33, 34].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Active Parameter Count
+  RELATION: Ngưỡng chặn (E xác định mức tăng năng lực mô hình mà không làm tăng chi phí tính toán mỗi bước) [35, 36].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Memory Footprint
+  LINK_LOGIC: Dùng để tính toán giới hạn HBM cho KV-cache trong các mô hình dài context [37, 38].
+
+---
+METRIC_ID: MET_OPT_023
+METRIC_NAME: Newton Decrement (λ(x))
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Căn bậc hai của (∇fᵀ H⁻¹ ∇f), đo lường khoảng cách đến điểm tối ưu theo chuẩn Hessian [39].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Stopping Criterion
+  RELATION: Ngưỡng chặn (λ²/2 < ε báo hiệu quá trình Newton đã hội tụ đủ) [40].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Dikin Ellipsoid
+  LINK_LOGIC: Xác định bán kính vùng tin cậy xung quanh điểm hiện tại để thực hiện bước nhảy Newton an toàn [39].
+
+---
+METRIC_ID: MET_OPT_024
+METRIC_NAME: Knowledge Gain (Tomographic Gain)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: Hiệu số giữa độ hữu dụng dự đoán (predicted utility) và độ hữu dụng nhận thức (perceived utility) sau các phép thử [41].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: TOMO Trials
+  RELATION: Tỉ lệ thuận (Càng nhiều lần thử nghiệm, lượng tri thức thu được càng cao).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Quantum Knowledge Seeking Agent (QKSA)
+  LINK_LOGIC: Trọng số chính điều phối hành vi khám phá (exploration) của các tác nhân AI [41, 42].
+
+---
+METRIC_ID: MET_OPT_025
+METRIC_NAME: Utility Gap (Actual Environment)
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+CALCULATION_METHOD: Khoảng cách Trace (Trace distance) giữa trạng thái môi trường ước lượng hiện tại và môi trường thực tế [41].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Approximation Deviation (aest)
+  RELATION: Tỉ lệ thuận (Sai số xấp xỉ càng cao, khoảng cách hữu dụng càng lớn) [43].
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Self-replication Threshold
+  LINK_LOGIC: Quyết định thời điểm tác nhân AI đã hiểu đủ về môi trường để tự sao chép (Quine) [44].
+
+---
+METRIC_ID: MET_OPT_026
+METRIC_NAME: Program Description Length (lest)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: Ước lượng độ dài bit của chương trình thuật toán (có thể dùng nén không mất dữ liệu hoặc BDM) [43].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Complexity Bound
+  RELATION: Tỉ lệ nghịch (Chương trình càng dài, độ phức tạp tính toán và bộ nhớ càng cao).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Hypothesis Space
+  LINK_LOGIC: Dùng để xếp hạng các giả thuyết trong không gian tìm kiếm tri thức của AGI [42].
+
+---
+METRIC_ID: MET_OPT_027
+METRIC_NAME: Bandwidth Reduction (%)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Tỷ lệ băng thông bộ nhớ được tiết kiệm khi dùng thuật toán nạp chọn lọc (1 - experts_loaded / num_experts) [45].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Batch Size
+  RELATION: Tỉ lệ nghịch (Batch size càng lớn, khả năng tiết kiệm băng thông càng giảm).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Selective Loading Algorithm
+  LINK_LOGIC: Xác định ngưỡng chuyển đổi (Switch threshold) sang thuật toán All-Experts [45, 46].
+
+---
+METRIC_ID: MET_OPT_028
+METRIC_NAME: Empirical Outage Probability
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+CALCULATION_METHOD: Xác suất vi phạm ràng buộc (ví dụ: rate-outage) được tính toán trên các mẫu kênh thực tế (CSI) [47].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Robustness to Noise
+  RELATION: Tỉ lệ thuận (Xác suất vi phạm thấp xác thực độ vững chãi của hệ thống).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Chance Constrained Programming (CCP)
+  LINK_LOGIC: Chứng minh tính khả thi của giải pháp GGDOpt bên ngoài vùng hạn chế lồi [48, 49].
+
+---
+METRIC_ID: MET_OPT_029
+METRIC_NAME: Convergence Order Index (p)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: Tham số p trong công thức ||xₖ₊₁ - x*|| ≤ C·||xₖ - x*||ᵖ (ví dụ: p=1 cho GD, p=2 cho Newton) [50, 51].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Number of Iterations
+  RELATION: Tỉ lệ nghịch (Bậc hội tụ càng cao, số vòng lặp cần thiết càng ít).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: In-Context Learning (ICL)
+  LINK_LOGIC: Dùng để chứng minh Transformer thực hiện tối ưu hóa bậc hai ngầm định trong context [52, 53].
+
+---
+METRIC_ID: MET_OPT_030
+METRIC_NAME: Training Throughput (TFLOP/s/GPU)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Tốc độ xử lý tính toán thực tế trên mỗi GPU trong quá trình huấn luyện [54].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Wall-clock Time
+  RELATION: Tỉ lệ nghịch (Thông lượng càng cao, thời gian huấn luyện càng ngắn).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DirMoE Architecture
+  LINK_LOGIC: Xác thực rằng các cơ chế định tuyến mới không tạo ra nút thắt cổ chai tính toán so với MoE truyền thống [54, 55].
+METRIC_ID: MET_OPT_031
+METRIC_NAME: Log Hypervolume Difference (LHVD)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: Giá trị logarit của khoảng cách giữa HV thực tế và HV ước lượng [18].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Hypervolume (HV)
+  RELATION: Tỉ lệ nghịch (LHVD nhỏ nghĩa là HV tiến sát tối ưu)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SVH-MOL
+  LINK_LOGIC: Dùng để vẽ đồ thị hội tụ cho các bài toán tối ưu đắt đỏ (EMOPs).
+
+---
+METRIC_ID: MET_OPT_032
+METRIC_NAME: CoT Triggering Rate (T(θ))
+SPECIALIST_SUPERVISOR: STRATEGIST
+CALCULATION_METHOD: Tỷ lệ phần trăm các phản hồi chứa các bước suy luận CoT thực tế (ví dụ: nằm trong thẻ <think>) [19].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Average Response Tokens
+  RELATION: Tỉ lệ thuận (Trực tiếp chi phối chi phí suy luận)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: AdaCoT
+  LINK_LOGIC: Chỉ số trung tâm để điều chỉnh 'nút vặn' Pareto giữa Accuracy và Cost.
+
+---
+METRIC_ID: MET_OPT_033
+METRIC_NAME: Lipschitz Sensitivity (Lx)
+SPECIALIST_SUPERVISOR: SCIENTIST
+CALCULATION_METHOD: Hằng số Lipschitz đo lường mức độ thay đổi của ràng buộc g(x, h) theo các tham số ngẫu nhiên h [20].
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Robustness to Noise
+  RELATION: Tỉ lệ nghịch (Lx càng cao, hệ thống càng nhạy cảm và kém vững chãi)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Chance Constrained Programming (CCP)
+  LINK_LOGIC: Xác định độ dốc của biên giới an toàn trong môi trường nhiễu.
+
+---
+METRIC_ID: MET_OPT_034
+METRIC_NAME: Expert Bias Skewness
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Độ lệch chuẩn của phân phối token qua các expert trong MoE [21].
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Tail Latency
+  RELATION: Tỉ lệ thuận (Skewness cao gây ra hiện tượng stragglers và tăng độ trễ đuôi)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MoETuner
+  LINK_LOGIC: Đầu vào để thuật toán ILP thực hiện tái phân bổ expert clusters.
+
+---
+METRIC_ID: MET_OPT_035
+METRIC_NAME: P99 Tail Latency
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: Thời gian phản hồi của 1% số yêu cầu chậm nhất, thường do nghẽn truyền tin trong Expert Parallelism [22].
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: End-to-End Speedup
+  RELATION: Tỉ lệ nghịch (Độ trễ đuôi là rào cản chính của việc tăng tốc hệ thống)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: Inter-layer Token Affinity
+  LINK_LOGIC: Tận dụng Affinity để giảm lưu lượng All-to-All, từ đó hạ thấp P99 Latency.

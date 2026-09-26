@@ -433,11 +433,18 @@ export async function storeMemory(params: StoreMemoryParams): Promise<StoreMemor
     try {
       // Generate embedding FIRST (needed for similarity search)
       const { vector, model: embeddingModel } = await generateEmbedding(content)
+      // GUARD (fix 2026-09-25): embedding providers fail → generateEmbedding trả
+      // vector rỗng (xem lib/embeddings.ts — "Caller should skip Qdrant write"
+      // nhưng caller cũ không kiểm tra). Query/upsert Qdrant với vector rỗng
+      // LUÔN Bad Request → log spam mỗi lần lưu memory. Khi rỗng: skip vector
+      // search (coi như không có similar → không dedup), memory vẫn lưu SQLite.
+      const hasVector = Array.isArray(vector) && vector.length > 0
 
       // Search Qdrant for very similar memories (similarity > 0.92)
       // FIX RESET-2026-08-30: qdrant.search() removed v1.19.0 → qdrant.query()
       try {
-        const similarRes = await qdrant.query(COLLECTION_AGENT_MEMORY, {
+        const similarRes = hasVector
+          ? await qdrant.query(COLLECTION_AGENT_MEMORY, {
           query: vector,
           filter: {
             must: [
@@ -449,6 +456,7 @@ export async function storeMemory(params: StoreMemoryParams): Promise<StoreMemor
           score_threshold: 0.92, // very similar
           with_payload: true,
         })
+          : null
         const similar = similarRes?.points ?? []
 
         if (similar.length > 0) {
@@ -570,7 +578,9 @@ export async function storeMemory(params: StoreMemoryParams): Promise<StoreMemor
 
       // Step 3: Upsert to Qdrant with the memory ID in payload
       // Qdrant requires UUID or unsigned integer as point ID — generate a UUID
-      const qdrantPointId = crypto.randomUUID()
+      // GUARD (fix 2026-09-25): vector rỗng → skip Qdrant upsert HOÀN TOÀN
+      // (upsert vector rỗng = Bad Request). Memory vẫn an toàn trong SQLite.
+      const qdrantPointId = hasVector ? crypto.randomUUID() : ''
 
       const payload: AgentMemoryPayload = {
         memoryId: memory.id,
@@ -586,26 +596,30 @@ export async function storeMemory(params: StoreMemoryParams): Promise<StoreMemor
         createdAt: memory.createdAt.toISOString(),
       }
 
-      try {
-        await qdrant.upsert(COLLECTION_AGENT_MEMORY, {
-          points: [
-            {
-              id: qdrantPointId,
-              vector,
-              payload: payload as unknown as Record<string, unknown>,
-            },
-          ],
-        })
-      } catch (qdrantErr) {
-        console.error('[AgentMemory] Qdrant upsert error:', qdrantErr instanceof Error ? qdrantErr.message : String(qdrantErr))
-        // Still return the memory — it's in SQLite even if Qdrant fails
-      }
+      if (hasVector) {
+        try {
+          await qdrant.upsert(COLLECTION_AGENT_MEMORY, {
+            points: [
+              {
+                id: qdrantPointId,
+                vector,
+                payload: payload as unknown as Record<string, unknown>,
+              },
+            ],
+          })
+        } catch (qdrantErr) {
+          console.error('[AgentMemory] Qdrant upsert error:', qdrantErr instanceof Error ? qdrantErr.message : String(qdrantErr))
+          // Still return the memory — it's in SQLite even if Qdrant fails
+        }
 
-      // Step 4: Update the SQLite record with qdrantPointId
-      await db.agentMemory.update({
-        where: { id: memory.id },
-        data: { qdrantPointId },
-      })
+        // Step 4: Update the SQLite record with qdrantPointId
+        await db.agentMemory.update({
+          where: { id: memory.id },
+          data: { qdrantPointId },
+        })
+      } else {
+        console.warn(`[AgentMemory] Vector rỗng (embedding fail) — memory lưu SQLite-only, bỏ qua Qdrant`)
+      }
 
       console.log(`[AgentMemory] Stored ${category} memory for agent ${agentName} (importance: ${importance}, domain: ${domain})`)
 

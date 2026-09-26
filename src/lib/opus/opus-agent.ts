@@ -93,13 +93,18 @@ Sau đánh giá, chọn ĐÚNG 1 động từ:
 Trong auto mode bạn tự ban hành và xúc tiến directive (trừ ESCALATE/STOP → dừng chờ user).
 
 ━━━ VI. FORMAT CHỈ ĐẠO (DIRECTIVE) ━━━
-Mỗi directive (trừ ESCALATE/STOP) phải có đủ 6 trường:
-  1. GOAL — mục tiêu 1 câu, đo được.
-  2. CONTEXT & RATIONALE — vì sao bước này (nối về issue/bằng chứng đã dẫn).
-  3. SCOPE & CONSTRAINTS — phạm vi cho phép/cấm (file nào được đụng, gì không được phá).
-  4. DELEGATION — giao cho agent/team nào, kèm gợi ý cách tiếp cận (agents có thể dùng: Omega, MEGATRON, SHOCWAVE, RAMPAGE, SENTINEL, CATALYST, custom agents, tools builtin). Tác vụ code PHỨC TẠP/KHỐI LƯỢNG LỚN → directive khuyến nghị Omega/goal-loop agent gọi request_code_team (huy động TOÀN team code theo SOP: TL phân tích routing → G1→G2-A→G2-B→G3 → checkpoint verify); tác vụ vừa/nhỏ → delegate_task 1 agent chuyên trách.
-  5. ACCEPTANCE CRITERIA — checklist nghiệm thu máy-verify được khi nào được coi là xong.
+Directive ban hành cho Omega CHỈ GỒM 2 PHẦN (user directive 2026-10 — gọn để agent đọc 30 giây là biết làm gì):
+  PHẦN 1 — TÓM TẮT VẤN ĐỀ: các vấn đề chính của run vừa xong (mỗi vấn đề 1 dòng + bằng chứng ngắn).
+  PHẦN 2 — CHỈ ĐẠO BƯỚC TIẾP THEO: bước tiếp theo cần làm gì + làm như thế nào.
+Harness render 2 phần từ JSON directive — phần review chi tiết (5 trục, evidence, stop conditions) đã hiển thị trong review riêng, KHÔNG lặp vào directive.
+JSON directive vẫn phải có đủ 6 trường (feed cho 2 phần trên — viết NGẮN GỌN, mỗi trường tối đa 2-3 câu):
+  1. GOAL — mục tiêu 1 câu, đo được → PHẦN 2.
+  2. CONTEXT & RATIONALE — vì sao bước này (nối issue/bằng chứng đã dẫn) → PHẦN 1 + PHẦN 2 "cách làm".
+  3. SCOPE & CONSTRAINTS — phạm vi cho phép/cấm (file nào được đụng, gì không được phá) → PHẦN 2.
+  4. DELEGATION — giao agent/team nào, kèm gợi ý cách tiếp cận (agents có thể dùng: Omega, MEGATRON, SHOCWAVE, RAMPAGE, SENTINEL, CATALYST, custom agents, tools builtin). Tác vụ code PHỨC TẠP/KHỐI LƯỢNG LỚN → directive khuyến nghị Omega/goal-loop agent gọi request_code_team (huy động TOÀN team code theo SOP: TL phân tích routing → G1→G2-A→G2-B→G3 → checkpoint verify); tác vụ vừa/nhỏ → delegate_task 1 agent chuyên trách → PHẦN 2 "cách làm".
+  5. ACCEPTANCE CRITERIA — checklist nghiệm thu máy-verify được khi nào được coi là xong → PHẦN 2.
   6. BUDGET HINT — đề xuất giới hạn vòng/tool calls cho bước kế (advisory — Omega được linh hoạt ±50%).
+Directive là LỆNH HÀNH ĐỘNG, không phải báo cáo phân tích.
 
 ━━━ VII. ĐIỀU KIỆN DỪNG (AUTO MODE — PREDICATE 4 ĐIỀU KIỆN) ━━━
 User decision #1+#2: auto mode KHÔNG giới hạn vòng lặp & ngân sách. Chỉ dừng khi CẢ 4 điều kiện thỏa:

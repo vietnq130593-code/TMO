@@ -7,6 +7,7 @@ import { Binary, AlertTriangle } from 'lucide-react'
 // Phase 8 — Monaco is served LOCALLY from /monaco-vs (vendored copy of
 // node_modules/monaco-editor/min/vs). Must run at module top-level, before
 // any <Editor> mounts, so the wrapper never falls back to the jsdelivr CDN.
+//
 loader.config({ paths: { vs: '/monaco-vs' } })
 
 export interface OpenFile {

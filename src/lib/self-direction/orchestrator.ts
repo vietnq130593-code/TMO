@@ -1018,13 +1018,57 @@ Viết báo cáo output của bạn.`
  * ~1s); mặc định đi chuỗi NVIDIA model-first (kimi-k3 → fallback chain). LLM
  * fail trả null — caller tổng hợp output trung thực.
  */
+/** Tool call đã được inner loop OpenCode CLI THỰC THI (native + tmo_* bridge).
+ *  Shape lầy từ LLMResult.executed_tool_calls (llm.ts) — chỉ dùng làm RECEIPT,
+ *  tuyệt đối KHÔNG thực thi lại (chống double-execution). (fix 2026-09-25) */
+interface SdExecutedToolCall {
+  function: { name: string; arguments: string }
+}
+
+/** Map tên tool native của OpenCode CLI → tên chuẩn TMO tool (cho receipts).
+ *  tmo_* bridge tools ĐÃ được map ở llm.ts (tmo_file_read → file_read...). */
+const SD_CLI_NATIVE_TOOL_MAP: Record<string, string> = {
+  write: 'file_write',
+  edit: 'file_edit',
+  read: 'file_read',
+  bash: 'shell',
+  todowrite: 'todo_write',
+  glob: 'file_list',
+  ls: 'file_list',
+  grep: 'grep',
+}
+
+/** Ghi receipts từ CLI-executed tool calls (map tên + lầy detail từ args).
+ *  Chỉ giữ tool nằm trong SD_CODE_TOOL_ALLOWLIST (sau khi map) — tool lạ
+ *  ('invalid', tool plugin khác...) bị bỏ. Trả về số receipts đã ghi. */
+function recordCliExecutedReceipts(
+  executed: SdExecutedToolCall[],
+  toolCallsLog: Array<{ tool: string; success: boolean; detail?: string }>,
+): number {
+  let recorded = 0
+  for (const tc of executed) {
+    const rawName = tc?.function?.name || ''
+    const tmoName = SD_CLI_NATIVE_TOOL_MAP[rawName] || rawName
+    if (!SD_CODE_TOOL_ALLOWLIST.has(tmoName)) continue
+    let detail = ''
+    try {
+      const a = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>
+      const d = a.path ?? a.filePath ?? a.file_path ?? a.command ?? a.pattern ?? a.query ?? ''
+      if (typeof d === 'string') detail = d.replace(/\s+/g, ' ').slice(0, 120)
+    } catch { /* args không phải JSON — detail trống */ }
+    toolCallsLog.push({ tool: tmoName, success: true, detail: detail || undefined })
+    recorded++
+  }
+  return recorded
+}
+
 async function callStepBrain(params: {
   prompt: string
   systemPrompt: string
   brain: { provider: string; model: string }
   agentName: string
   label: string
-}): Promise<string | null> {
+}): Promise<{ content: string | null; cliExecuted: SdExecutedToolCall[] }> {
   const { prompt, systemPrompt, brain, agentName, label } = params
   try {
     const result = await withTimeout(
@@ -1040,7 +1084,14 @@ async function callStepBrain(params: {
       LLM_TIMEOUT_MS,
       `${label} (${agentName}) (NVIDIA chain)`,
     )
-    if (result.content && result.content.trim()) return result.content.trim()
+    // (fix 2026-09-25) CLI-executed tool calls đi kèm — caller ghi receipts,
+    // KHÔNG thực thi lại (inner loop OpenCode CLI đã chạy thật các tool này).
+    const cliExecuted: SdExecutedToolCall[] = (result.executed_tool_calls as SdExecutedToolCall[] | undefined) ?? []
+    if (result.content && result.content.trim()) return { content: result.content.trim(), cliExecuted }
+    // Content rỗng nhưng CÓ executed tool calls — inner loop đã làm việc,
+    // model chỉ không viết báo cáo text. Trả tool calls để caller tổng hợp
+    // output trung thực từ receipts.
+    if (cliExecuted.length > 0) return { content: null, cliExecuted }
     // FIX 2026-10-15 (user report "output trống lần cuối"): content rỗng là LỖI
     // thật — log rõ error của chuỗi để truy nguyên nhân (key/timeout/model)
     // thay vì im lặng trả null khiến evaluateStep đánh giá output trống mù.
@@ -1050,7 +1101,7 @@ async function callStepBrain(params: {
   } catch (err) {
     console.warn(`[SelfDirection] ${label} (${agentName}): LLM call lỗi:`, err instanceof Error ? err.message : String(err))
   }
-  return null
+  return { content: null, cliExecuted: [] }
 }
 
 /** Tool-result → message string cap ký tự (chống context nổ trong ReAct loop) */
@@ -1136,6 +1187,7 @@ tool_call: file_write({"path": "<đường dẫn file THẬT trong workspace c�
 (Lưu ý: path ở trên là placeholder — thay bằng đường dẫn thật của dự án, KHÔNG tạo thư mục literal từ ví dụ.)
 
 Quy tắc:
+- LÀM ĐÚNG PHẠM VI BƯỚC NÀY (fix 2026-09-25): chỉ làm đúng phần việc trong MÔ TẢ CÔNG VIỆC của bước — khảo sát thì chỉ khảo sát + báo cáo; triển khai thì triển khai đúng scope; chạy thử thì chạy + báo cáo kết quả. KHÔNG làm trước phần việc của các bước SAU (mỗi bước có agent chuyên trách riêng, pipeline sẽ kiểm định lại từng bước). Làm vượt scope = bị đánh giá CHƯA ĐẠT.
 - KHẢO SÁT GỌN: tối đa ~5 lượt file_read/file_list/git_status ĐẦU bước — sau đó PHẢI bắt đầu tạo/sửa file. Ưu tiên file_write (overwrite lần đầu + append các lần sau) — file_edit chỉ dùng khi đã file_read và copy old_str NGUYÊN VĂN (bất khớp whitespace = fail).
 - ⚠️ KHÔNG ĐOÁN ĐƯỜNG DẪN (lượt quan sát 1 — 10/18 call fail vì đoán path không tồn tại): trước khi file_read một path CHƯA XÁC NHẬN, hãy grep (tên symbol/file) hoặc file_list thư mục cha TRƯỚC. Chỉ file_read khi path đã thấy trong kết quả list/grep/git_status, hoặc khi chấp nhận miss. Đặc biệt: package.json và mọi JSON đã có cấu trúc — KHÔNG append text vào sau ký tự "}" cuối (JSON vỡ); muốn thêm script/field thì file_read toàn file rồi file_write lại NGUYÊN file JSON hợp lệ.
 - Đọc file trước khi sửa (file_read). Tạo file mới/file lớn: file_write chia phần (~200-400 dòng/lần, lần đầu mode "overwrite", các lần sau "append").
@@ -1184,18 +1236,43 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
 
   for (let turn = 1; turn <= SD_CODE_STEP_MAX_TURNS; turn++) {
     const formatted = formatMessagesForLLM(messages)
-    const content = await callStepBrain({
+    const { content, cliExecuted } = await callStepBrain({
       prompt: formatted,
       systemPrompt,
       brain: persona.brain,
       agentName: step.assignee,
       label: `CodeStep ${step.stepOrder}`,
     })
-    if (!content) {
+    if (!content && cliExecuted.length === 0) {
       llmFailTurns++
       break
     }
-    lastAssistant = content
+    lastAssistant = content || lastAssistant
+
+    // ━━ CLI NATIVE RECEIPTS BRIDGE (fix 2026-09-25 — E2E 2026-09-25 lộ conflict) ━━
+    // Khi LLM chạy qua OpenCode CLI, inner loop của CLI TỰ THỰC THI tool (native
+    // write/bash/read + tmo_* bridge) — công việc đã XONG, content là báo cáo
+    // cuối. Trước đây receipts của bước luôn rỗng ("thực thi THẬT 0 tool call")
+    // dù agent đã làm thật → evaluator kết luận oan "bịa đặt/không có bằng
+    // chứng" (E2E: bước "chạy thử script" fail oan 3 lần liên tiếp). Giờ: ghi
+    // receipts từ CLI-executed tool calls (map tên về chuẩn TMO, KHÔNG thực
+    // thi lại — chống double-execution) rồi chốt output = báo cáo của agent.
+    if (cliExecuted.length > 0) {
+      const recorded = recordCliExecutedReceipts(cliExecuted, toolCallsLog)
+      console.log(`[SelfDirection] CodeStep ${step.stepOrder} [${step.assignee}] CLI inner loop đã thực thi ${cliExecuted.length} tool — ghi ${recorded} receipt (bridge, không re-exec)`)
+      if (content) {
+        output = content
+        break
+      }
+      // Content rỗng (hiếm) — tổng hợp output trung thực từ receipts rồi dừng
+      const okCount = toolCallsLog.filter(t => t.success).length
+      output = `Đã thực thi ${toolCallsLog.length} tool call trong workspace thật (${okCount} thành công): ${toolCallsLog.map(t => `${t.tool}${t.success ? '✓' : '✗'}${t.detail ? `(${t.detail})` : ''}`).join(', ')}. [CLI inner loop đã làm việc — tổng hợp từ receipts, model không viết báo cáo text]`
+      break
+    }
+    if (!content) {
+      // content rỗng + không có executed calls — caller tổng hợp ở cuối
+      break
+    }
     messages.push({ role: 'assistant', content })
 
     const { calls: toolCalls, parseFailures } = extractToolCallsWithDiagnostics(content)
@@ -1333,7 +1410,7 @@ Bắt đầu: khảo sát bằng tool (git_status/file_list/file_read) rồi s�
           content: '⚠️ Đã kết thúc ngân sách tool call/LLM của bước. NGAY BÂY GIỜ viết BÁO CÁO OUTPUT CUỐI (text thuần, KHÔNG tool_call, ~150 từ): đã làm gì, file nào đã sửa/tạo (đường dẫn tương đối từ workspace root), bằng chứng kiểm chứng (file_read/lint/type_check), còn vấn đề gì. Đây là output DUY NHẤT người đánh giá sẽ xem.',
         },
       ]
-      const final = await callStepBrain({
+      const { content: final } = await callStepBrain({
         prompt: formatMessagesForLLM(finalMessages),
         systemPrompt,
         brain: persona.brain,

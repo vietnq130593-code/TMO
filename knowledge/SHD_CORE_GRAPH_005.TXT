@@ -1,0 +1,3598 @@
+shard_metadata:
+  shard_id: "SHD_CORE_GRAPH_005"
+  shard_name: "Graph-Centric Paradigm (Tư duy Đồ thị Hệ thống)"
+  domain: "Graph Theory / Knowledge Engineering / Network Science"
+  version: "1.0.0"
+  parent_link: "ROOT_NEXUS_SYSTEM" # Đây là Shard nền tảng, kết nối trực tiếp với nhân hệ thống
+  status: "Active / Structural_Foundation"
+  tags: [
+    "Property_Graphs",
+    "Knowledge_Graph_RAG",
+    "Topology_Aware",
+    "Multi-hop_Reasoning",
+    "Node_Edge_Logic",
+    "Graph_Embeddings",
+    "Vector_Graph_Hybrid",
+    "Semantic_Connectivity"
+  ]
+
+layers:
+layer_1:
+
+NODE_ID: SDA_ENT_001
+ENTITY_NAME: Stock
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Kho lưu trữ các giá trị trạng thái hoặc tài nguyên tích lũy trong hệ thống.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Flow
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Kết hợp với Entropy để đo lường mức độ hỗn loạn của tài nguyên tri thức tích lũy.
+
+---
+NODE_ID: SDA_ENT_002
+ENTITY_NAME: Flow
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Tốc độ thay đổi và sự di chuyển năng lượng hoặc thông tin giữa các Stock.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Stock
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Tích hợp với Feedback Controllers để tự động hóa tốc độ dòng chảy dữ liệu.
+
+---
+NODE_ID: SDA_ENT_003
+ENTITY_NAME: Auxiliary Variables
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Các biến trung gian hỗ trợ tính toán luồng chảy từ các biến trạng thái.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Flow
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Kết nối với Heuristics để tinh chỉnh các tham số vận hành hệ thống thời gian thực.
+
+---
+NODE_ID: SDA_ENT_004
+ENTITY_NAME: Delay element
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Độ trễ trong việc truyền tín hiệu hoặc thực thi phản hồi trong hệ thống.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Stability Margin
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Sử dụng để mô phỏng tính kiên trì của tín hiệu trước khi kích hoạt phản hồi mới.
+
+---
+NODE_ID: SDA_ENT_005
+ENTITY_NAME: Master Equation
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Phương trình vi phân mô tả sự tiến hóa theo thời gian của các xác suất.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Equilibrium
+  RELATION: Cấu trúc hóa
+  POTENTIAL_LINKAGE: Liên kết với State-Space Models để dự báo quỹ đạo tiến hóa của mạng lưới tri thức.
+
+---
+NODE_ID: SDA_ENT_006
+ENTITY_NAME: Directed Acyclic Graph (DAG)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Cấu trúc đồ thị có hướng không chu trình biểu diễn các giả định nhân quả.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Latent Variables
+  RELATION: Cấu trúc hóa
+  POTENTIAL_LINKAGE: Kết hợp với Prior Probability để thực hiện suy luận nhân quả Bayesian tự chủ.
+
+---
+NODE_ID: SDA_ENT_007
+ENTITY_NAME: C-component
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Nhóm các biến bị ảnh hưởng bởi cùng một tập hợp các biến nhiễu ẩn.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: DAG
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Tích hợp vào cơ chế tự sửa lỗi (Self-aware) để xác định các lỗ hổng tri thức.
+
+---
+NODE_ID: SDA_ENT_008
+ENTITY_NAME: Latent Variables
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Các biến trạng thái ẩn không thể quan sát trực tiếp nhưng ảnh hưởng hệ thống.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: DAG
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Sử dụng trong State-Space Models để ước lượng trạng thái nội tại của tác tử (Agent).
+
+---
+NODE_ID: SDA_ENT_009
+ENTITY_NAME: State-Space
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Tập hợp tất cả các cấu hình trạng thái khả thi của một hệ thống động lực.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Attractors
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Kết nối với Actuators để điều hướng Agent di chuyển giữa các trạng thái mục tiêu.
+
+---
+NODE_ID: SDA_ENT_010
+ENTITY_NAME: Prior Probability
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Niềm tin hoặc xác suất tiên nghiệm về trạng thái hệ thống trước quan sát.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Autonomous Decision
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Là đầu vào cho Feedback Controllers để tối ưu hóa chiến lược can thiệp (Intervention).
+
+---
+NODE_ID: SDA_ENT_011
+ENTITY_NAME: Heuristic Function
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Quy tắc kinh nghiệm giúp giảm không gian tìm kiếm và tối ưu hóa điều hướng.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Policy
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Kết hợp với Feedback Controllers để tạo ra hành vi tự chủ lai (Hybrid Autonomy).
+
+---
+NODE_ID: SDA_ENT_012
+ENTITY_NAME: Feedback Controller
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Cơ chế điều chỉnh sai số dựa trên phản hồi để duy trì mục tiêu.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Flow
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Tích hợp với Stability Margin để đảm bảo hệ thống không rơi vào trạng thái mất kiểm soát.
+
+---
+NODE_ID: SDA_ENT_013
+ENTITY_NAME: Agent Action (Intervention)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Các tác động vật lý hoặc logic thực hiện bởi tác tử lên môi trường.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: DAG
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Liên kết với Actuators để thực thi các can thiệp (do-operator) trên đồ thị nhân quả.
+
+---
+NODE_ID: SDA_ENT_014
+ENTITY_NAME: Policy
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Chiến lược hoặc quy tắc ra quyết định dựa trên trạng thái hiện tại.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Heuristic Function
+  RELATION: Cấu trúc hóa
+  POTENTIAL_LINKAGE: Tích hợp với Reinforcement Learning để tự động hóa việc tiến hóa chiến lược khám phá.
+
+---
+NODE_ID: SDA_ENT_015
+ENTITY_NAME: Fixed Point Equilibrium
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Trạng thái dừng của hệ thống nơi các biến không còn thay đổi.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: State-Space
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Kết nối với Attractors để định danh các điểm cân bằng ổn định trong mạng lưới.
+
+---
+NODE_ID: SDA_ENT_016
+ENTITY_NAME: Stability Margin
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Khoảng cách an toàn trước khi hệ thống chuyển sang trạng thái mất ổn định.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Feedback Controller
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Sử dụng làm tham số ràng buộc trong các bộ điều khiển MPC (Model Predictive Control).
+
+---
+NODE_ID: SDA_ENT_017
+ENTITY_NAME: Basin of Attraction
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Vùng trong không gian trạng thái mà mọi quỹ đạo đều dẫn tới Attractor.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Attractors
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Tích hợp với Heuristics để xác định vùng hội tụ tối ưu cho Agent.
+
+---
+NODE_ID: SDA_ENT_018
+ENTITY_NAME: Limit Cycle
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Quỹ đạo đóng ổn định thể hiện hành vi dao động tuần hoàn.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Equilibrium
+  RELATION: Cấu trúc hóa
+  POTENTIAL_LINKAGE: Mô tả các "làn sóng" tri thức hoặc dịch bệnh lặp lại trong hệ thống động lực.
+
+---
+NODE_ID: SDA_ENT_019
+ENTITY_NAME: Structural Entropy
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Thước đo độ hỗn loạn dựa trên cấu trúc liên kết của mạng lưới.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: DAG
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Cân bằng với Semantic Entropy để duy trì trạng thái "Criticality" cho sự khám phá.
+
+---
+NODE_ID: SDA_ENT_020
+ENTITY_NAME: Semantic Entropy
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Độ đa dạng và phong phú về mặt ý nghĩa trong không gian nhúng.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Structural Entropy
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Đóng vai trò là "reservoir" tiềm năng sáng tạo cho các hệ thống Agentic Reasoning.
+
+NODE_ID: SDA_L1_001
+ENTITY_NAME: Node (Vertex)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Đơn vị nguyên tử đại diện cho các thực thể độc lập trong đồ thị. [1, 2]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Edge
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Kết hợp với Uniqueness constraints để quản trị định danh thực thể duy nhất. [3]
+
+---
+NODE_ID: SDA_L1_002
+ENTITY_NAME: Edge (Relationship)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Liên kết có hướng hoặc vô hướng biểu diễn quan hệ giữa các nút. [1, 2]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Cấu trúc hóa
+  POTENTIAL_LINKAGE: Tích hợp thuộc tính (Property) để tạo mô hình Property Graph chi tiết. [4, 5]
+
+---
+NODE_ID: SDA_L1_003
+ENTITY_NAME: Property (Attribute)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Cặp khóa-giá trị cung cấp thông tin mô tả cho Node hoặc Edge. [6, 7]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Sử dụng làm biến đầu vào cho các thuật toán phân loại (Node Classification). [8]
+
+---
+NODE_ID: SDA_L1_004
+ENTITY_NAME: Label (Entity Type)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Thẻ định danh phân loại nhóm thực thể theo vai trò ngữ nghĩa. [9, 10]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Cấu trúc hóa
+  POTENTIAL_LINKAGE: Tạo ra chỉ mục (Index) để tối ưu hóa tốc độ truy vấn theo loại. [11]
+
+---
+NODE_ID: SDA_L1_005
+ENTITY_NAME: Subject-Predicate-Object (SPO) Triple
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Cấu trúc bộ ba nguyên tử tạo nên một phát biểu tri thức hoàn chỉnh. [6, 12, 13]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Edge
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Chuyển đổi thành các con trỏ vật lý trong hệ thống Index-free Adjacency. [14]
+
+---
+NODE_ID: SDA_L1_006
+ENTITY_NAME: Literal
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Dữ liệu thô dưới dạng chuỗi văn bản không cấu trúc trong RDF. [13, 15]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Object
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Phân mảnh thông qua Semantic Chunking để làm giàu tri thức từ văn bản. [16]
+
+---
+NODE_ID: SDA_L1_007
+ENTITY_NAME: Blank Node
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Nút không có định danh cụ thể, dùng để biểu diễn các quan hệ phức tạp. [17, 18]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Reification
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Tự động chuyển đổi thành nút định danh (Named Node) qua pipeline Entity Resolution. [19]
+
+---
+NODE_ID: SDA_L1_008
+ENTITY_NAME: Stock
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Kho lưu trữ tích lũy trạng thái hoặc tài nguyên trong hệ thống động lực.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Flow
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Đo lường mức độ hội tụ tri thức tại các cụm (Dense Clusters). [19]
+
+---
+NODE_ID: SDA_L1_009
+ENTITY_NAME: Flow
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Tốc độ thay đổi và di chuyển thông tin giữa các kho lưu trữ.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Stock
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Tích hợp với Feedback Controllers để tự cân bằng tải dữ liệu.
+
+---
+NODE_ID: SDA_L1_010
+ENTITY_NAME: Auxiliary Variable
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Biến trung gian hỗ trợ tính toán các luồng chảy từ biến trạng thái.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Flow
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Kết hợp với Heuristics để tinh chỉnh hành vi khám phá của tác tử (Agent).
+
+---
+NODE_ID: SDA_L1_011
+ENTITY_NAME: Delay element
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Độ trễ thời gian trong việc truyền tín hiệu hoặc thực thi phản hồi.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Stability Margin
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Sử dụng để mô phỏng tính kiên trì của tri thức trước khi cập nhật.
+
+---
+NODE_ID: SDA_L1_012
+ENTITY_NAME: Feedback Controller
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Cơ chế tự động điều chỉnh sai số hệ thống dựa trên dữ liệu phản hồi.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Flow
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Tạo ra hành vi tự chủ lai khi kết hợp với quy tắc Heuristic. [20]
+
+---
+NODE_ID: SDA_L1_013
+ENTITY_NAME: Actuator
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Thành phần thực thi các hành động can thiệp (Interventions) lên môi trường đồ thị.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Thực hiện các hành động do-operator trong mạng lưới nhân quả. [21]
+
+---
+NODE_ID: SDA_L1_014
+ENTITY_NAME: Directed Acyclic Graph (DAG)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Đồ thị có hướng không chu trình biểu diễn các giả định nhân quả. [22, 23]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Latent Variables
+  RELATION: Cấu trúc hóa
+  POTENTIAL_LINKAGE: Là nền tảng cho suy luận Layer 2 (Can thiệp) và Layer 3 (Phản thực tại). [23]
+
+---
+NODE_ID: SDA_L1_015
+ENTITY_NAME: Latent Variable
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Biến ẩn không quan sát trực tiếp nhưng ảnh hưởng đến biến quan sát. [24]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: DAG
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Sử dụng trong State-Space Models để ước lượng trạng thái nội tại hệ thống.
+
+---
+NODE_ID: SDA_L1_016
+ENTITY_NAME: Counterfactual
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Suy luận về các kịch bản đối chứng "nếu-thì" trong quá khứ. [23]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: DAG
+  RELATION: Cấu trúc hóa
+  POTENTIAL_LINKAGE: Hỗ trợ khả năng giải thích (Explainability) của AI thông qua lập luận phản thực tại. [25]
+
+---
+NODE_ID: SDA_L1_017
+ENTITY_NAME: Interventional (do-operator)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Thao tác toán học thay đổi cơ chế sinh dữ liệu của một biến. [23, 26]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Kiểm chứng tính bền vững của các liên kết tri thức thông qua thử nghiệm giả lập.
+
+---
+NODE_ID: SDA_L1_018
+ENTITY_NAME: Structural Causal Model (SCM)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Khung toán học hợp nhất cấu trúc đồ thị và các hàm cơ chế. [22, 27]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: DAG
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Tạo ra các phân phối xác suất đáp ứng mọi tầng của Pearl Causal Hierarchy. [28]
+
+---
+NODE_ID: SDA_L1_019
+ENTITY_NAME: Collider Rule
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Quy tắc d-separation nơi hai nguyên nhân cùng dẫn đến một kết quả. [29]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Phát hiện các quan hệ phụ thuộc giả khi thực hiện quan sát biến kết quả.
+
+---
+NODE_ID: SDA_L1_020
+ENTITY_NAME: Chain Rule (Causal)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Cấu trúc nhân quả tuần tự A ảnh hưởng B, B ảnh hưởng C. [29]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Truy vết dòng chảy ảnh hưởng trong các chuỗi cung ứng hoặc lập luận logic.
+
+---
+NODE_ID: SDA_L1_021
+ENTITY_NAME: Fork Rule
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Một nguyên nhân chung tạo ra sự tương quan giữa các kết quả độc lập. [29]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Khử nhiễu các tương quan giả thông qua điều kiện hóa nguyên nhân chung.
+
+---
+NODE_ID: SDA_L1_022
+ENTITY_NAME: Markov Property
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Giả định một nút chỉ phụ thuộc vào các nút cha trực tiếp của nó. [24]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: DAG
+  RELATION: Cấu trúc hóa
+  POTENTIAL_LINKAGE: Giảm độ phức tạp tính toán của các mô hình xác suất quy mô lớn.
+
+---
+NODE_ID: SDA_L1_023
+ENTITY_NAME: Degree (Centrality)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Số lượng kết nối trực tiếp gắn vào một nút cụ thể. [30, 31]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Hub
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Xác định các thực thể trọng tâm (Topical Centrality) trong mạng lưới tri thức. [30]
+
+---
+NODE_ID: SDA_L1_024
+ENTITY_NAME: Hub
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Các nút có số lượng kết nối vượt trội so với trung bình hệ thống. [32, 33]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Nguy cơ tạo ra Supernodes gây nghẽn hiệu suất truy vấn nếu không được cắt tỉa. [19]
+
+---
+NODE_ID: SDA_L1_025
+ENTITY_NAME: Bridge (Edge)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Cạnh kết nối giữa hai cụm tri thức rời rạc. [34, 35]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Community
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Duy trì tính liên thông (Connectivity) toàn cục và giảm đường đi ngắn nhất. [36]
+
+---
+NODE_ID: SDA_L1_026
+ENTITY_NAME: Structural Hole
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Các vùng trống ngăn cách giữa các nguồn thông tin không dư thừa. [37, 38]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Tối ưu hóa việc đặt các tác tử tại hố cấu trúc để kiểm soát luồng tin.
+
+---
+NODE_ID: SDA_L1_027
+ENTITY_NAME: Clique
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Tập hợp các nút mà mọi cặp đều có liên kết trực tiếp với nhau. [39, 40]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Định danh các nhóm khái niệm có sự thống nhất ngữ nghĩa tuyệt đối.
+
+---
+NODE_ID: SDA_L1_028
+ENTITY_NAME: K-core
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Đồ thị con lớn nhất nơi mọi nút có ít nhất K láng giềng. [30, 41]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Phân cấp độ ổn định và độ nén tri thức (Backbone of knowledge). [42]
+
+---
+NODE_ID: SDA_L1_029
+ENTITY_NAME: K-shell
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Tập hợp các nút có core number chính xác bằng K. [41]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: K-core
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Hỗ trợ thuật toán lấy mẫu Round-Robin để tối ưu hóa Token khi tóm tắt. [43]
+
+---
+NODE_ID: SDA_L1_030
+ENTITY_NAME: Supernode
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Nút đại diện cho cả một cộng đồng hoặc đồ thị con ở cấp cao. [44, 45]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Community
+  RELATION: Cấu trúc hóa
+  POTENTIAL_LINKAGE: Cho phép thực hiện các truy vấn vĩ mô (Global Sensemaking) quy mô corpus. [46]
+
+---
+NODE_ID: SDA_L1_031
+ENTITY_NAME: Superedge
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Liên kết đại diện cho các quan hệ giữa hai Supernodes. [45, 47]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Supernode
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Rút gọn cấu trúc đồ thị phức tạp thành mô hình phân cấp dễ hiểu.
+
+---
+NODE_ID: SDA_L1_032
+ENTITY_NAME: Community
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Nhóm các thực thể có liên kết nội bộ mạnh mẽ hơn liên kết ngoài. [44, 48]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Là đơn vị cơ sở để LLM tạo ra các bản tóm tắt cộng đồng (Community Reports). [49]
+
+---
+NODE_ID: SDA_L1_033
+ENTITY_NAME: Cluster
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Tập hợp các nút có sự tương đồng ngữ nghĩa hoặc cấu trúc. [50, 51]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Dùng trong các thuật toán Clustering-based triple candidate generation. [52]
+
+---
+NODE_ID: SDA_L1_034
+ENTITY_NAME: URI (Uniform Resource Identifier)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Chuỗi ký tự định danh duy nhất toàn cầu cho các tài nguyên Web. [53, 54]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Đảm bảo tính nhất quán của tri thức khi tích hợp từ các nguồn dữ liệu mở.
+
+---
+NODE_ID: SDA_L1_035
+ENTITY_NAME: Workspace
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Không gian làm việc thiết lập phạm vi hiển thị và kiểm soát truy cập. [55, 56]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Info Item
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Phân mảnh tri thức thành các silo an toàn cho nhiều nhóm người dùng khác nhau.
+
+---
+NODE_ID: SDA_L1_036
+ENTITY_NAME: Taxonomy
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Hệ thống phân loại phân cấp các thuật ngữ và khái niệm. [57, 58]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Cấu trúc hóa
+  POTENTIAL_LINKAGE: Hỗ trợ duyệt đồ thị theo cấp bậc từ tổng quát đến chi tiết (Drill-down). [49]
+
+---
+NODE_ID: SDA_L1_037
+ENTITY_NAME: Ontology
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Mô hình biểu diễn tri thức phong phú về các đối tượng và quan hệ. [57, 59]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Taxonomy
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Làm nền tảng cho các công cụ suy luận (Reasoning engines) tự động. [59]
+
+---
+NODE_ID: SDA_L1_038
+ENTITY_NAME: Path
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Dãy các nút và cạnh liên tiếp nối liền hai thực thể. [60, 61]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Phân tích đường đi ngắn nhất (Shortest Path) để tìm kiếm sự tương quan gián tiếp. [62]
+
+---
+NODE_ID: SDA_L1_039
+ENTITY_NAME: Feedback Loop (Causal)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Cấu trúc nhân quả vòng lặp nơi kết quả quay lại ảnh hưởng nguyên nhân. [63]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: DAG
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Duy trì trạng thái cân bằng nội môi (Homeostasis) trong hệ thống tri thức.
+
+---
+NODE_ID: SDA_L1_040
+ENTITY_NAME: Feed-Forward Loop (FFL)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Motif gồm 3 nút giúp lọc nhiễu và tạo xung tín hiệu ổn định. [63]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Cấu trúc hóa
+  POTENTIAL_LINKAGE: Tối ưu hóa việc truyền dẫn tin cậy trong các mạng thần kinh đồ thị (GNN).
+
+---
+NODE_ID: SDA_L1_041
+ENTITY_NAME: Equilibrium
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Điểm cân bằng nơi các biến trạng thái không còn thay đổi theo thời gian. [64, 65]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: State-Space
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Xác định các cấu trúc tri thức đã đạt đến độ chín muồi và ổn định.
+
+---
+NODE_ID: SDA_L1_042
+ENTITY_NAME: Stability Margin
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Khoảng cách an toàn trước khi hệ thống rơi vào trạng thái hỗn loạn. [66]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Equilibrium
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Đánh giá độ tin cậy của mạng lưới trước các thông tin sai lệch (Noise).
+
+---
+NODE_ID: SDA_L1_043
+ENTITY_NAME: Attractor
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Tập hợp các trạng thái mà hệ thống có xu hướng tiến về lâu dài. [67]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: State-Space
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Dự báo xu hướng tiến hóa của các chủ đề tri thức trong tương lai.
+
+---
+NODE_ID: SDA_L1_044
+ENTITY_NAME: Basin of Attraction
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Vùng trong không gian trạng thái dẫn đến một Attractor cụ thể. [68]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Attractor
+  RELATION: Chứa đựng
+  POTENTIAL_LINKAGE: Phân vùng các Agent vào các quỹ đạo mục tiêu khác nhau.
+
+---
+NODE_ID: SDA_L1_045
+ENTITY_NAME: Structural Entropy
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Thước đo độ phức tạp và hỗn loạn dựa trên cấu trúc liên kết. [69-71]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Node
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Tối thiểu hóa để tự động phân loại thông tin thành các mô-đun ổn định. [72]
+
+---
+NODE_ID: SDA_L1_046
+ENTITY_NAME: Semantic Entropy
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Thước đo độ đa dạng và phong phú về ý nghĩa trong không gian nhúng. [71, 73, 74]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Structural Entropy
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Duy trì ưu thế so với Structural Entropy để thúc đẩy sự khám phá liên tục. [75]
+
+---
+NODE_ID: SDA_L1_047
+ENTITY_NAME: Critical Discovery Parameter (D)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Tham số không chiều định lượng sự cân bằng giữa cấu trúc và ngữ nghĩa. [74, 75]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Semantic Entropy
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Chỉ báo về trạng thái "Criticality" giúp hệ thống tự tổ chức để sáng tạo. [74]
+
+---
+NODE_ID: SDA_L1_048
+ENTITY_NAME: Surprising Edge (Semantic Link)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Liên kết giữa các khái niệm xa nhau về ngữ nghĩa nhưng gần về cấu trúc. [74, 76]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Edge
+  RELATION: Là trạng thái của
+  POTENTIAL_LINKAGE: Động lực cho những phát kiến liên ngành và kết nối tầm xa (Long-range links). [36]
+
+---
+NODE_ID: SDA_L1_049
+ENTITY_NAME: Prior Probability
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Niềm tin tiên nghiệm về trạng thái hệ thống trước khi có quan sát mới. [77]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Autonomous Decision
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Là đầu vào cho các bộ điều khiển Bayesian để tối ưu hóa can thiệp.
+
+---
+NODE_ID: SDA_L1_050
+ENTITY_NAME: Heuristic Function
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Quy tắc kinh nghiệm giúp giảm không gian tìm kiếm và tăng tốc độ xử lý. [20, 70]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Actuator
+  RELATION: Điều tiết
+  POTENTIAL_LINKAGE: Điều hướng các tác tử di chuyển trong không gian tri thức đa chiều hiệu quả. [78]
+
+---------------------------------------------------------------------------------------------------
+
+layer_2:
+
+RULE_ID: RUL_GRA_001
+RULE_NAME: Fork Rule (D-separation)
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [A <- B -> C], thì [A và C độc lập khi biết B]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Bayes' Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_021
+  LINK_LOGIC: Khử nhiễu tương quan giả để Agent tập trung vào nguyên nhân thực sự trong GraphRAG.
+
+---
+RULE_ID: RUL_GRA_002
+RULE_NAME: Chain Rule (D-separation)
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [A -> B -> C], thì [A và C độc lập nếu biết B]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Path Consistency
+  RELATION_TYPE: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_020
+  LINK_LOGIC: Chặn sự lan truyền tin nhắn dư thừa khi thực hiện truy vấn multi-hop.
+
+---
+RULE_ID: RUL_GRA_003
+RULE_NAME: Collider Rule (V-structure)
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [A -> C <- B], thì [A và B phụ thuộc nhau khi C hoặc hậu duệ của C được quan sát]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Acyclicity Constraints
+  RELATION_TYPE: Ràng buộc chéo
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_019
+  LINK_LOGIC: Kích hoạt "explaining away" để giảm xác suất các nguyên nhân đối trọng khi đã biết kết quả.
+
+---
+RULE_ID: RUL_GRA_004
+RULE_NAME: Markov Blanket Constraint
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Node X nằm trong mền MB(X)], thì [X độc lập với toàn bộ đồ thị bên ngoài MB(X)]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: D-separation
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_022
+  LINK_LOGIC: Cô lập không gian tính toán cục bộ cho Agent, giúp xử lý đồ thị hàng tỷ nút song song.
+
+---
+RULE_ID: RUL_GRA_005
+RULE_NAME: Bayes' Rule (Belief Update)
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Có bằng chứng mới E], thì [Trọng số cạnh và niềm tin tại nút được cập nhật theo P(H|E)]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Fork Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_049
+  LINK_LOGIC: Tự động điều chỉnh độ tin cậy của các liên kết tri thức dựa trên dữ liệu thời gian thực.
+
+---
+RULE_ID: RUL_GRA_006
+RULE_NAME: Acyclicity Constraints (DAG)
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Đồ thị là DAG], thì [Không tồn tại chu trình nhân quả nào mà node là nguyên nhân của chính nó]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Path Consistency
+  RELATION_TYPE: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_014
+  LINK_LOGIC: Ngăn chặn vòng lặp vô hạn (Infinite Loops) trong các pipeline suy luận tự trị.
+
+---
+RULE_ID: RUL_GRA_007
+RULE_NAME: Triadic Closure Law
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+LOGICAL_ASSERTION: "Nếu [A liên kết B và B liên kết C], thì [Xác suất A liên kết C tăng cao]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Blending Constraints
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_039
+  LINK_LOGIC: Tự động dự đoán các liên kết thiếu (Link Prediction) để hoàn thiện mạng lưới tri thức.
+
+---
+RULE_ID: RUL_GRA_008
+RULE_NAME: Schema Alignment Rule
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu [Thực thể mới được thêm vào], thì [Cấu trúc thuộc tính phải tuân thủ Schema/Ontology mẫu]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Cardinality Constraints
+  RELATION_TYPE: Ràng buộc chéo
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_036
+  LINK_LOGIC: Đảm bảo tính nhất quán dữ liệu khi tích hợp tri thức từ nhiều nguồn khác nhau.
+
+---
+RULE_ID: RUL_GRA_009
+RULE_NAME: Path Consistency Law
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Có nhiều đường đi từ A đến B], thì [Các thông điệp truyền tải không được mâu thuẫn về mặt logic]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Acyclicity Constraints
+  RELATION_TYPE: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_038
+  LINK_LOGIC: Xác thực chéo (Cross-validation) các tuyên bố tri thức từ các hướng suy luận khác nhau.
+
+---
+RULE_ID: RUL_GRA_010
+RULE_NAME: Cardinality Constraints
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Quan hệ X được định nghĩa], thì [Số lượng liên kết tối đa/tối thiểu phải nằm trong dải cho phép]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Schema Alignment Rule
+  RELATION_TYPE: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_031
+  LINK_LOGIC: Ngăn chặn hiện tượng bùng nổ Supernodes gây nghẽn hệ thống.
+
+---
+RULE_ID: RUL_GRA_011
+RULE_NAME: Blending Constraints (Node Fusion)
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Hai nút được xác định là trùng lặp], thì [Thuộc tính của chúng được gộp theo quy tắc ưu tiên tri thức mới]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Triadic Closure Law
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_033
+  LINK_LOGIC: Phân giải thực thể (Entity Resolution) để duy trì một "Single Source of Truth".
+
+---
+RULE_ID: RUL_GRA_012
+RULE_NAME: Index-free Adjacency Law
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Thực hiện duyệt đồ thị], thì [Mỗi nút lưu trữ trực tiếp con trỏ đến láng giềng thay vì quét chỉ mục trung tâm]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Cardinality Constraints
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_001
+  LINK_LOGIC: Tối ưu hóa tốc độ truy xuất GraphRAG, giúp duyệt hàng triệu quan hệ trong mili giây.
+
+---
+RULE_ID: RUL_GRA_013
+RULE_NAME: 2D Structural Entropy Minimization
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu [Hệ thống tự tổ chức], thì [Nó xu hướng tối thiểu hóa độ hỗn loạn cấu trúc để hình thành mô-đun]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Triadic Closure Law
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_045
+  LINK_LOGIC: Tự động phân cụm tri thức (Community Detection) mà không cần can thiệp thủ công.
+
+---
+RULE_ID: RUL_GRA_014
+RULE_NAME: GraphSAGE Aggregation Rule
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Cập nhật embedding của nút], thì [Thông tin được tổng hợp từ các mẫu láng giềng thay vì toàn bộ đồ thị]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Index-free Adjacency Law
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_033
+  LINK_LOGIC: Tạo ra các embedding nhận biết cấu trúc (Topology-aware) cho các nút mới thêm vào.
+
+---
+RULE_ID: RUL_GRA_015
+RULE_NAME: Monotonicity of Constraints (PCH)
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Tầng suy luận tăng lên (L1 -> L3)], thì [Tập hợp các ràng buộc cấu trúc sẽ bao hàm và mở rộng các tầng dưới]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: D-separation
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_018
+  LINK_LOGIC: Đảm bảo tính nhất quán logic khi Agent chuyển từ quan sát sang can thiệp.
+
+---
+RULE_ID: RUL_GRA_016
+RULE_NAME: Causal Sufficiency Assumption
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Thực hiện suy luận], thì [Mọi biến gây nhiễu chung (Confounders) phải được đưa vào mô hình]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Markov Blanket Constraint
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_021
+  LINK_LOGIC: Tránh các kết luận nhân quả sai lầm do thiếu thông tin ẩn.
+
+---
+RULE_ID: RUL_GRA_017
+RULE_NAME: Stability of Structurally Stable Constraints
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Tham số hệ thống thay đổi nhẹ], thì [Các độc lập cấu trúc trong SEM-RR vẫn phải được bảo toàn]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Acyclicity Constraints
+  RELATION_TYPE: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_042
+  LINK_LOGIC: Đảm bảo mô hình tri thức bền vững trước các nhiễu dữ liệu nhỏ.
+
+---
+RULE_ID: RUL_GRA_018
+RULE_NAME: Individual Level Exclusion Restriction
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Can thiệp vào các biến không phải cha của Y], thì [Giá trị của Y không thay đổi]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Causal Sufficiency Assumption
+  RELATION_TYPE: Ràng buộc chéo
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_013
+  LINK_LOGIC: Xác định phạm vi ảnh hưởng chính xác của các hành động can thiệp (Interventions).
+
+---
+RULE_ID: RUL_GRA_019
+RULE_NAME: Semantic Dominance Principle
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+LOGICAL_ASSERTION: "Nếu [Hệ thống tiến hóa liên tục], thì [Entropy ngữ nghĩa phải luôn cao hơn Entropy cấu trúc]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: 2D Structural Entropy Minimization
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_047
+  LINK_LOGIC: Duy trì trạng thái "Criticality" để kích thích các phát kiến tri thức mới.
+
+---
+RULE_ID: RUL_GRA_020
+RULE_NAME: Surprising Edge Rule (12% Threshold)
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+LOGICAL_ASSERTION: "Nếu [Duy trì tỷ lệ ~12% liên kết tầm xa], thì [Mạng lưới đạt cấu trúc Small-world tối ưu cho truyền tin]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Triadic Closure Law
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_048
+  LINK_LOGIC: Kết nối các cụm tri thức rời rạc, tạo ra các liên kết liên ngành đột phá.
+
+---
+RULE_ID: RUL_GRA_021
+RULE_NAME: SWIG Factorization Rule
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Xây dựng đồ thị can thiệp đơn thế giới], thì [Phân phối chung phải phân rã được theo cấu trúc đồ thị]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Markov Property
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_017
+  LINK_LOGIC: Công cụ toán học để Agent tính toán kết quả của hành động trước khi thực hiện.
+
+---
+RULE_ID: RUL_GRA_022
+RULE_NAME: ACID Compliance Constraint
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Thực hiện thay đổi đồ thị], thì [Các tính chất Nguyên tử, Nhất quán, Cô lập, Bền vững phải được đảm bảo]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Schema Alignment Rule
+  RELATION_TYPE: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_035
+  LINK_LOGIC: Bảo vệ sự toàn vẹn của tri thức trong môi trường đa tác tử (Multi-agent) ghi đồng thời.
+
+---
+RULE_ID: RUL_GRA_023
+RULE_NAME: PageRank Centrality Law
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_ASSERTION: "Nếu [Một nút có nhiều liên kết từ các nút quan trọng khác], thì [Tầm quan trọng (Authority) của nút đó tăng lên]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Surprising Edge Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_023
+  LINK_LOGIC: Ưu tiên truy xuất các thực thể "trụ cột" trong các câu hỏi mang tính tổng quan.
+
+---
+RULE_ID: RUL_GRA_024
+RULE_NAME: Leiden Modularity Optimization
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu [Phân cụm tri thức], thì [Cộng đồng phải đạt độ gắn kết nội bộ tối đa và liên kết ngoài tối thiểu]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: 2D Structural Entropy Minimization
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_032
+  LINK_LOGIC: Cơ sở để tạo ra các báo cáo cộng đồng (Community Reports) chính xác trong GraphRAG.
+
+---
+RULE_ID: RUL_GRA_025
+RULE_NAME: Steiner Tree Isolation Rule
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Truy xuất tri thức cho câu hỏi], thì [Chỉ cô lập subgraph nhỏ nhất kết nối tất cả thực thể liên quan]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Index-free Adjacency Law
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_038
+  LINK_LOGIC: Giảm thiểu Token và nhiễu ngữ cảnh khi gửi dữ liệu đồ thị sang LLM.
+
+---
+RULE_ID: RUL_GRA_026
+RULE_NAME: Transitive Relationship Inference
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+LOGICAL_ASSERTION: "Nếu [A enables B và B drives C], thì [Hệ thống có thể tự động suy luận A influences C]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Triadic Closure Law
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_039
+  LINK_LOGIC: Làm giàu đồ thị bằng các mối quan hệ logic ngầm định từ văn bản.
+
+---
+RULE_ID: RUL_GRA_027
+RULE_NAME: Property Sharding Law
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Phân mảnh đồ thị lớn], thì [Tách rời topology (cấu trúc) và data (thuộc tính) để tối ưu bộ nhớ đệm]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Index-free Adjacency Law
+  RELATION_TYPE: Ràng buộc chéo
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_030
+  LINK_LOGIC: Cho phép mở rộng đồ thị lên quy mô tỷ nút mà vẫn duy trì độ trễ thấp.
+
+---
+RULE_ID: RUL_GRA_028
+RULE_NAME: Back-door Criterion Rule
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Tập biến Z chặn mọi đường đi 'cửa sau' giữa X và Y], thì [Tác động nhân quả của X lên Y có thể xác định từ dữ liệu quan sát]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: D-separation
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_021
+  LINK_LOGIC: Khả năng tự động điều chỉnh sai lệch (Bias adjustment) trong các báo cáo phân tích.
+
+---
+RULE_ID: RUL_GRA_029
+RULE_NAME: Front-door Criterion Rule
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Tồn tại biến trung gian M chặn mọi đường đi từ X tới Y và không có đường cửa sau từ M tới Y], thì [Nhân quả có thể xác định dù có confounders không quan sát được]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Back-door Criterion Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_015
+  LINK_LOGIC: Thực hiện suy luận nhân quả trong môi trường dữ liệu thiếu hụt hoặc có biến ẩn.
+
+---
+RULE_ID: RUL_GRA_030
+RULE_NAME: Consistency Restriction (Pearl)
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Parent X của Y được quan sát giá trị x], thì [Giá trị Y phải bằng với giá trị Y thu được khi can thiệp do(X=x)]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: SWIG Factorization Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_016
+  LINK_LOGIC: Cầu nối quan trọng nhất kết nối dữ liệu thực tế và các kịch bản giả định (Counterfactuals).
+
+---
+RULE_ID: RUL_GRA_031
+RULE_NAME: PMI-based Sparsification Rule
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Điểm tin cậy liên kết dựa trên Pointwise Mutual Information thấp], thì [Cạnh đó sẽ bị thưa hóa (Pruning) để giảm nhiễu cấu trúc]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Cardinality Constraints
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_042
+  LINK_LOGIC: Loại bỏ các liên kết ngẫu nhiên hoặc không quan trọng, tăng tính cô đọng của tri thức.
+
+---
+RULE_ID: RUL_GRA_032
+RULE_NAME: Hierarchy of Falsifiability
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Tầng suy luận càng cao], thì [Giả định càng mạnh và càng khó bị bác bỏ bằng thực nghiệm]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Monotonicity of Constraints (PCH)
+  RELATION_TYPE: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_018
+  LINK_LOGIC: Cảnh báo Agent về độ tin cậy của các suy luận phản thực tại khi không có đủ dữ liệu thử nghiệm.
+
+---
+RULE_ID: RUL_GRA_033
+RULE_NAME: Do-Calculus Rules (Rule 1-3)
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Cấu trúc đồ thị thỏa mãn các điều kiện chặn], thì [Có thể chuyển đổi biểu thức can thiệp thành biểu thức quan sát thuần túy]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: D-separation
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_017
+  LINK_LOGIC: "Xương sống" của bộ máy suy luận nhân quả tự trị, cho phép AI học từ kinh nghiệm quan sát.
+
+---
+RULE_ID: RUL_GRA_034
+RULE_NAME: Federated Subgraph Learning Rule
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_ASSERTION: "Nếu [Tri thức phân tán trên các Shards], thì [Cấu trúc cục bộ phải được điều tiết bởi tri thức toàn cầu (Global-Knowledge-Guided)]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Property Sharding Law
+  RELATION_TYPE: Ràng buộc chéo
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_030
+  LINK_LOGIC: Duy trì sự thống nhất tri thức xuyên suốt các trung tâm dữ liệu khác nhau.
+
+---
+RULE_ID: RUL_GRA_035
+RULE_NAME: Semantic Chunking Overlap Rule
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Phân đoạn văn bản], thì [Phải duy trì sự chồng lấp (Overlap) để bảo toàn các liên kết tri thức tại ranh giới]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Schema Alignment Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_005
+  LINK_LOGIC: Đảm bảo không bỏ sót các bộ ba SPO quan trọng do việc cắt mảnh văn bản ngẫu nhiên.
+
+RULE_ID: RUL_GRA_036
+RULE_NAME: Exclusion Restrictions (CTFBN)
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Can thiệp vào các biến không phải cha của Y], thì [Phân phối tiềm năng của Y không thay đổi]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Consistency Restrictions
+  RELATION_TYPE: Ràng buộc chéo
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_018
+  LINK_LOGIC: Xác định các biến không liên quan để thu hẹp không gian suy luận nhân quả [1], [2].
+
+---
+RULE_ID: RUL_GRA_037
+RULE_NAME: Local Consistency Restriction
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Biến cha X của Y được quan sát tại giá trị x], thì [Giá trị của Y phải khớp với kịch bản can thiệp do(X=x)]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Exclusion Restrictions
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_016
+  LINK_LOGIC: Cầu nối toán học cho phép AI học từ dữ liệu thực tế để dự đoán kịch bản giả định [1], [2].
+
+---
+RULE_ID: RUL_GRA_038
+RULE_NAME: SWIG Node Splitting Rule
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Thực hiện can thiệp do(x)], thì [Node X được tách thành thành phần ngẫu nhiên X và thành phần cố định x]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: SWIG Factorization Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_017
+  LINK_LOGIC: Biến cấu trúc đồ thị tĩnh thành đồ thị can thiệp để tính toán tác động nhân quả trực tiếp [3].
+
+---
+RULE_ID: RUL_GRA_039
+RULE_NAME: AMWN Construction Algorithm
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Cần kiểm tra độc lập phản thực tại], thì [Phải xây dựng mạng đa thế giới tổ tiên (AMWN) từ các nút liên quan]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: D-separation
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_022
+  LINK_LOGIC: Cho phép thực hiện thuật toán d-separation trên các biến ở các thế giới song song [4], [5].
+
+---
+RULE_ID: RUL_GRA_040
+RULE_NAME: Nash Equilibrium for Community Stability
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu [Không nút nào có thể giảm entropy hệ thống bằng cách chuyển cụm], thì [Cấu trúc cộng đồng đạt trạng thái ổn định]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: 2D Structural Entropy Minimization
+  RELATION_TYPE: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_032
+  LINK_LOGIC: Đảm bảo các báo cáo cộng đồng (Community Reports) phản ánh đúng cấu trúc tự nhiên của tri thức [6].
+
+---
+RULE_ID: RUL_GRA_041
+RULE_NAME: 2D Entropy Stopping Criterion
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Độ giảm entropy trung bình dưới ngưỡng DeltaT], thì [Quá trình phân cụm tự động dừng lại]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Nash Equilibrium for Community Stability
+  RELATION_TYPE: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_045
+  LINK_LOGIC: Tối ưu hóa tài nguyên tính toán, ngăn chặn việc lặp vô hạn trong phân cụm quy mô lớn [7].
+
+---
+RULE_ID: RUL_GRA_042
+RULE_NAME: Overlapping Threshold Rule
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu [Giá trị DeltaO của nút vượt ngưỡng trung bình cộng đồng], thì [Nút đó được phép thuộc về nhiều cụm]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: 2D Structural Entropy Minimization
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_032
+  LINK_LOGIC: Phát hiện các thực thể "đa năng" (Bridging entities) kết nối các lĩnh vực tri thức khác nhau [8], [9].
+
+---
+RULE_ID: RUL_GRA_043
+RULE_NAME: Small-world Path Law (L ~ log N)
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Số lượng nút N tăng theo hàm mũ], thì [Đường đi trung bình L chỉ tăng theo hàm logarit]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Surprising Edge Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_038
+  LINK_LOGIC: Đảm bảo mọi thông tin trong đồ thị đều có thể truy xuất nhanh chóng qua vài "bước nhảy" [10].
+
+---
+RULE_ID: RUL_GRA_044
+RULE_NAME: Preferential Attachment Law (Rich-get-richer)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu [Một nút đã có độ bậc cao], thì [Xác suất nó nhận được liên kết mới từ các nút mới thêm vào sẽ cao hơn]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: PageRank Centrality Law
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_024
+  LINK_LOGIC: Giải thích sự hình thành các Hub tri thức tự nhiên trong quá trình phát triển đồ thị [11].
+
+---
+RULE_ID: RUL_GRA_045
+RULE_NAME: Vertex Copying Constraint
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Tác giả tạo liên kết mới], thì [Họ có xu hướng sao chép các liên kết từ một nút có sẵn cùng chủ đề]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Preferential Attachment Law
+  RELATION_TYPE: Ràng buộc chéo
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_039
+  LINK_LOGIC: Mô phỏng hành vi dẫn nguồn và kế thừa tri thức trong các mạng lưới khoa học [10], [11].
+
+---
+RULE_ID: RUL_GRA_046
+RULE_NAME: K-core Pruning Law
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Nút có độ bậc thấp hơn k], thì [Nút đó bị loại bỏ cho đến khi toàn bộ đồ thị đạt cấu trúc k-core]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Acyclicity Constraints
+  RELATION_TYPE: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_028
+  LINK_LOGIC: Cô lập "xương sống" tri thức quan trọng nhất, loại bỏ các thông tin nhiễu ở rìa mạng lưới [12], [13].
+
+---
+RULE_ID: RUL_GRA_047
+RULE_NAME: Skip-connection Convergence Rule
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Sử dụng kết nối tắt giữa các tầng GNN], thì [Tốc độ hội tụ của mô hình tăng dù độ chính xác không đổi đáng kể]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: GraphSAGE Aggregation Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_042
+  LINK_LOGIC: Giúp huấn luyện các mạng nơ-ron đồ thị sâu mà không bị triệt tiêu gradient [14].
+
+---
+RULE_ID: RUL_GRA_048
+RULE_NAME: Neighborhood Sampling Constraint (GraphSAGE)
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Cập nhật nút quy mô lớn], thì [Chỉ lấy mẫu một tập hợp con láng giềng cố định thay vì toàn bộ]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Index-free Adjacency Law
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_009
+  LINK_LOGIC: Duy trì hiệu suất thời gian thực cho Agent khi làm việc với đồ thị tri thức khổng lồ [15], [16].
+
+---
+RULE_ID: RUL_GRA_049
+RULE_NAME: Injective Aggregator Rule (GIN)
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Sử dụng hàm tổng hợp đa tập hợp (Multiset)], thì [Khả năng phân biệt cấu trúc láng giềng đạt mức tối đa]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: GraphSAGE Aggregation Rule
+  RELATION_TYPE: Ràng buộc chéo
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_033
+  LINK_LOGIC: Đảm bảo các embedding nút phản ánh chính xác sự khác biệt nhỏ nhất trong cấu trúc kề [17].
+
+---
+RULE_ID: RUL_GRA_050
+RULE_NAME: ScaNN Anisotropic Quantization Law
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Tìm kiếm vector tầm xa], thì [Sử dụng định lượng không đẳng hướng để giảm sai số cho các vector có chuẩn lớn]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Index-free Adjacency Law
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_034
+  LINK_LOGIC: Tối ưu hóa điểm thâm nhập (entry points) cho GraphRAG trên AlloyDB [18], [19].
+
+---
+RULE_ID: RUL_GRA_051
+RULE_NAME: Property-Node Segregation Law (LPG)
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Sử dụng mô hình Property Graph], thì [Thuộc tính (Property) không được phép chứa các nút (Nodes)]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Schema Alignment Rule
+  RELATION_TYPE: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_003
+  LINK_LOGIC: Duy trì ranh giới rõ ràng giữa dữ liệu mô tả và cấu trúc topology [20], [21].
+
+---
+RULE_ID: RUL_GRA_052
+RULE_NAME: Relationship Non-Directional Traversal Rule
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_ASSERTION: "Nếu [Một quan hệ được thiết lập], thì [Nó không nhất thiết hàm ý khả năng duyệt theo cả hai hướng vật lý]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Index-free Adjacency Law
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_002
+  LINK_LOGIC: Kiểm soát dòng chảy tri thức một chiều trong các quy trình logic nghiêm ngặt [22], [23].
+
+---
+RULE_ID: RUL_GRA_053
+RULE_NAME: Order-free RDF Transformation Rule
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Chuyển từ RDF sang LPG], thì [Các bộ ba SPO không có thứ tự phải được chuyển thành cấu trúc phụ thuộc nút]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Schema Alignment Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_005
+  LINK_LOGIC: Đảm bảo tính toàn vẹn ngữ nghĩa khi tích hợp dữ liệu từ các kho tri thức mở [24], [25].
+
+---
+RULE_ID: RUL_GRA_054
+RULE_NAME: SPOGI Index Integrity Law
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Lưu trữ đồ thị RDF], thì [Phải duy trì chỉ mục 5 thành phần (Subject, Predicate, Object, Graph, ID)]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Index-free Adjacency Law
+  RELATION_TYPE: Ràng buộc chéo
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_034
+  LINK_LOGIC: Cho phép quản trị nhiều đồ thị tri thức (Namespaces) đồng thời trong một hệ thống [26], [27].
+
+---
+RULE_ID: RUL_GRA_055
+RULE_NAME: Consensus Matrix Initialization Law
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Theo dõi sự tiến hóa đồ thị], thì [Ma trận đồng thuận CM phải được khởi tạo để ghi lại sự tồn tại của cạnh qua các snapshot thời gian]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Nash Equilibrium for Community Stability
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_043
+  LINK_LOGIC: Phát hiện các xu hướng tri thức bền vững thay vì các liên kết tạm thời [28].
+
+---
+RULE_ID: RUL_GRA_056
+RULE_NAME: Steiner Tree Retrieval Minimization
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Truy xuất ngữ cảnh cho LLM], thì [Thuật toán phải cô lập subgraph nhỏ nhất kết nối các thực thể truy vấn]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Path Consistency Law
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_038
+  LINK_LOGIC: Giảm thiểu nhiễu và chi phí Token bằng cách chỉ gửi phần tri thức cô đọng nhất [29], [30].
+
+---
+RULE_ID: RUL_GRA_057
+RULE_NAME: Event-Sequence Sequentiality Rule
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_ASSERTION: "Nếu [Chính sách bảo mật được thực thi], thì [Các hành vi (Events) phải xảy ra theo đúng trình tự thời gian quy định]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Acyclicity Constraints
+  RELATION_TYPE: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_040
+  LINK_LOGIC: Tạo ra các pipeline kiểm tra tuân thủ (Compliance) tự động trên đồ thị tri thức [31], [32].
+
+---
+RULE_ID: RUL_GRA_058
+RULE_NAME: Logical Dependency Persistence Law
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu [Tri thức chính sách được nạp], thì [Các hàm phân giải ngữ nghĩa và thông tin mặc định phải được lưu trữ bền vững]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Schema Alignment Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_035
+  LINK_LOGIC: Đảm bảo khả năng tái lập các suy luận logic mà không cần nạp lại dữ liệu thô [33], [34].
+
+---
+RULE_ID: RUL_GRA_059
+RULE_NAME: Multi-hop Join Penalty Law (RDBMS limitation)
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Thực hiện truy vấn sâu trên RDBMS], thì [Hiệu năng giảm theo cấp số nhân do chi phí JOIN bùng nổ]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Index-free Adjacency Law
+  RELATION_TYPE: Ràng buộc chéo
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_030
+  LINK_LOGIC: Căn cứ kỹ thuật để chuyển dịch sang kiến trúc Graph-Centric cho GraphRAG [35], [36].
+
+---
+RULE_ID: RUL_GRA_060
+RULE_NAME: Index-free Adjacency Memory Law
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Duyệt đồ thị trên Graph-Centric DB], thì [Hệ thống truy cập bộ nhớ trực tiếp qua con trỏ thay vì quét chỉ mục trung tâm]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Multi-hop Join Penalty Law
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_001
+  LINK_LOGIC: Đảm bảo tốc độ truy vấn ổn định ngay cả khi đồ thị tri thức mở rộng đến quy mô tỷ nút [35], [37], [38].
+
+---
+RULE_ID: RUL_GRA_061
+RULE_NAME: Conflict Reconciliation Rule (DCILP)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Nhiều đồ thị con nhân quả có xung đột], thì [Sử dụng lập trình tuyến tính nguyên để tìm cấu trúc toàn cầu tối ưu nhất]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Markov Blanket Constraint
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_014
+  LINK_LOGIC: Duy trì tính nhất quán của "xương sống" nhân quả khi hợp nhất tri thức từ nhiều nguồn [39], [40].
+
+---
+RULE_ID: RUL_GRA_062
+RULE_NAME: V-structure Spouse Relation Rule
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Hai nút cùng dẫn đến một kết quả chung], thì [Chúng được coi là 'vợ chồng' (spouses) trong mền Markov]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Collider Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_022
+  LINK_LOGIC: Thuật toán xác định phạm vi ảnh hưởng trực tiếp (MB) để tối ưu hóa việc học cấu trúc [41], [42].
+
+---
+RULE_ID: RUL_GRA_063
+RULE_NAME: Front-door LTF Product Decomposition
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Có biến trung gian M thỏa mãn Front-door], thì [Nhân quả được phân rã thành tích của các xác suất quan sát được]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Front-door Criterion Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_015
+  LINK_LOGIC: Cho phép AI thực hiện các can thiệp giả định mà không cần thực hiện thí nghiệm vật lý [43], [44].
+
+---
+RULE_ID: RUL_GRA_064
+RULE_NAME: Non-reversible Markov Chain Laplacian
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu [Đồ thị là có hướng], thì [Sử dụng ma trận Laplacian từ chuỗi Markov không thuận nghịch để phân cụm]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Leiden Modularity Optimization
+  RELATION_TYPE: Ràng buộc chéo
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_045
+  LINK_LOGIC: Nền tảng toán học cho việc phát hiện cộng đồng trong mạng lưới tri thức có hướng phức tạp [45].
+
+---
+RULE_ID: RUL_GRA_065
+RULE_NAME: Hyperedge Cardinality Constraint
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Sử dụng Hypergraph], thì [Số lượng nút tối đa/tối thiểu trong một hyperedge phải được kiểm soát để tránh bùng nổ quan hệ]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Cardinality Constraints
+  RELATION_TYPE: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_031
+  LINK_LOGIC: Quản trị các mối quan hệ đa bên (ví dụ: một dự án có nhiều thành viên, công cụ và kết quả) [46], [47].
+
+---
+RULE_ID: RUL_GRA_066
+RULE_NAME: Federated Knowledge Injection Rule
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_ASSERTION: "Nếu [Tri thức phân tán], thì [Các shard cục bộ phải được 'tiêm' tri thức toàn cầu để duy trì sự thống nhất ngữ nghĩa]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Federated Subgraph Learning Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_030
+  LINK_LOGIC: Ngăn chặn tình trạng AI đưa ra các câu trả lời mâu thuẫn khi truy vấn trên các phân vùng dữ liệu khác nhau [48].
+
+---
+RULE_ID: RUL_GRA_067
+RULE_NAME: PMI-based Edge Sparsification
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Đồ thị quá dày đặc], thì [Loại bỏ các cạnh có thông tin tương hỗ điểm thấp để làm thưa đồ thị]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Cardinality Constraints
+  RELATION_TYPE: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_042
+  LINK_LOGIC: Tăng hiệu suất duyệt và giảm độ nhiễu cho các thuật toán phân tích đường đi [49], [48].
+
+---
+RULE_ID: RUL_GRA_068
+RULE_NAME: Triple ID Reification Constraint
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu [Cần thêm thuộc tính cho một cạnh], thì [Phải sử dụng cơ chế Reification (định danh bộ ba) hoặc Property Graph]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Schema Alignment Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_007
+  LINK_LOGIC: Cho phép lưu trữ ngữ cảnh của tri thức (Ví dụ: "Ai đã khẳng định điều này?", "Nó đúng vào lúc nào?") [50], [29].
+
+---
+RULE_ID: RUL_GRA_069
+RULE_NAME: Transitive Relationship Inference Logic
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+LOGICAL_ASSERTION: "Nếu [A enables B và B drives C], thì [Hệ thống có thể suy luận logic A influences C]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Triadic Closure Law
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_039
+  LINK_LOGIC: Tự động làm giàu đồ thị bằng các liên kết ngầm định từ văn bản không cấu trúc [51], [52].
+
+---
+RULE_ID: RUL_GRA_070
+RULE_NAME: RDFS Class-Index Mapping Law
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu [Bộ ba sử dụng cấu trúc lớp RDFS], thì [Có thể sử dụng các lớp này làm chỉ mục cấp cao trong đồ thị thuộc tính]"
+INTRA_RULE_RELATION:
+  TARGET_RULE: Schema Alignment Rule
+  RELATION_TYPE: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_L1_036
+  LINK_LOGIC: Hỗ trợ duyệt tri thức theo cấp bậc từ tổng quát đến chi tiết một cách hiệu quả [53], [54].
+
+---------------------------------------------------------------------------------------------------
+
+layer_3:
+
+DYNAMIC_ID: DYN_GRA_001
+CAUSAL_CHAIN: "Nếu [Thêm node mới vào hệ thống], thì [Xác suất kết nối tỷ lệ thuận với bậc của node hiện có (Π(ki))], dẫn đến [Sự hình thành Hub và cấu trúc Scale-free]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_023, SDA_L1_024, RUL_GRA_044]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_003
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_015
+  LINK_LOGIC: Hub hình thành nhanh tạo ra các lối tắt (Shortcuts) giúp giảm đường đi trung bình trong GraphRAG [1, 2].
+
+---
+DYNAMIC_ID: DYN_GRA_002
+CAUSAL_CHAIN: "Nếu [Mật độ liên kết vượt ngưỡng tới hạn (<k> > 1)], thì [Các cụm nhỏ hợp nhất], dẫn đến [Sự xuất hiện của Thành phần khổng lồ (Giant Component)]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_032, SDA_L1_041]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_001
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_022
+  LINK_LOGIC: Giant component cho phép suy luận xuyên suốt toàn bộ Shard dữ liệu mà không bị ngắt quãng [3, 4].
+
+---
+DYNAMIC_ID: DYN_GRA_003
+CAUSAL_CHAIN: "Nếu [Node A đạt vị thế Hub], thì [Khả năng thu hút tri thức mới tăng vọt (Rich-get-richer)], dẫn đến [Sự thống trị của một vài thực thể trọng tâm]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: STRATEGIST
+NODES_INVOLVED: [SDA_L1_024, RUL_GRA_044, RUL_GRA_023]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_006
+  RELATION: Ứng chế
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_010
+  LINK_LOGIC: Hub formation cung cấp các điểm thâm nhập (Entry points) tối ưu cho các truy vấn vĩ mô [5, 6].
+
+---
+DYNAMIC_ID: DYN_GRA_004
+CAUSAL_CHAIN: "Nếu [Mật độ liên kết tại một cụm quá cao], thì [Entropy cấu trúc tăng mạnh], dẫn đến [Kích hoạt thuật toán cắt tỉa Pruning để bảo toàn tính tinh gọn]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_045, RUL_GRA_013, RUL_GRA_031]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_012
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_045
+  LINK_LOGIC: Cân bằng giữa mật độ và hiệu suất, ngăn chặn tình trạng bùng nổ Token khi gửi ngữ cảnh cho LLM [7, 8].
+
+---
+DYNAMIC_ID: DYN_GRA_005
+CAUSAL_CHAIN: "Nếu [Trọng số của Node A tăng do quan sát mới], thì [Kích hoạt lan truyền ảnh hưởng (Spreading Activation) qua các cạnh liên kết], dẫn đến [Cập nhật niềm tin (Belief Update) trên toàn bộ mền Markov]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_015, SDA_L1_022, RUL_GRA_005]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_008
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_033
+  LINK_LOGIC: Tự động điều chỉnh trọng số cạnh giúp hệ thống GraphRAG "nhạy cảm" với các bằng chứng mới nhất [9, 10].
+
+---
+DYNAMIC_ID: DYN_GRA_006
+CAUSAL_CHAIN: "Nếu [Mạng lưới đạt cấu trúc Star-like với một Supernode duy nhất], thì [Tính ổn định hệ thống giảm (λmax ~ √N)], dẫn đến [Kích hoạt cơ chế phân rã mô-đun để tăng độ bền vững]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_030, SDA_L1_042, RUL_GRA_024]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_001
+  RELATION: Ứng chế
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_052
+  LINK_LOGIC: Chuyển đổi từ Star sang Modular giúp hệ thống chống chịu tốt hơn trước các cuộc tấn công có mục tiêu vào Hub [11, 12].
+
+---
+DYNAMIC_ID: DYN_GRA_007
+CAUSAL_CHAIN: "Nếu [Một cạnh nhân quả bị ngắt], thì [Thực hiện kiểm tra tính D-separation dọc theo các đường đi], dẫn đến [Cô lập luồng suy luận của các nhánh không còn liên quan logic]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_014, RUL_GRA_002, RUL_GRA_033]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_011
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_028
+  LINK_LOGIC: Giảm chi phí tính toán bằng cách chặn các dòng chảy thông tin không còn giá trị nhân quả [13, 14].
+
+---
+DYNAMIC_ID: DYN_GRA_008
+CAUSAL_CHAIN: "Nếu [Thêm thực thể mới vào đồ thị], thì [Thuật toán GraphSAGE lấy mẫu láng giềng và tổng hợp đặc trưng (AGGREGATE)], dẫn đến [Tạo ra Topology-aware Embedding mà không cần huấn luyện lại]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_001, RUL_GRA_014, RUL_GRA_048]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_005
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_019
+  LINK_LOGIC: Cho phép hệ thống "hiểu" vị trí cấu trúc của khái niệm mới ngay khi nạp dữ liệu [15, 16].
+
+---
+DYNAMIC_ID: DYN_GRA_009
+CAUSAL_CHAIN: "Nếu [Thực hiện can thiệp do-operator lên Node X], thì [Xóa bỏ các cạnh dẫn đến X và áp đặt giá trị cố định], dẫn đến [Sự thay đổi phân phối xác suất tại các node hậu duệ]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_017, RUL_GRA_033, RUL_GRA_038]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_007
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_030
+  LINK_LOGIC: Cơ sở để AI chạy giả lập kịch bản "Nếu tôi làm X thì điều gì xảy ra?" trong quá trình ra quyết định [17, 18].
+
+---
+DYNAMIC_ID: DYN_GRA_010
+CAUSAL_CHAIN: "Nếu [Hai cộng đồng có nhiều liên kết chung tiềm năng], thì [Kích hoạt cơ chế Triadic Closure], dẫn đến [Sự xuất hiện của các cạnh cầu (Bridge edges) kết nối các miền tri thức rời rạc]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+NODES_INVOLVED: [SDA_L1_025, SDA_L1_039, RUL_GRA_007]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_002
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_040
+  LINK_LOGIC: Tạo ra các liên kết "Bất ngờ" (Surprising edges) giúp thúc đẩy sự khám phá liên ngành [19, 20].
+
+---
+DYNAMIC_ID: DYN_GRA_011
+CAUSAL_CHAIN: "Nếu [Hệ thống phát hiện lỗi logic tại một cụm], thì [Phản hồi ngược về các node cha để điều chỉnh tham số Heuristic], dẫn đến [Sự tự sửa lỗi của cấu trúc đồ thị]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_012, SDA_L1_050, RUL_GRA_009]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_007
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_060
+  LINK_LOGIC: Duy trì tính nhất quán tri thức (Consistency) khi có dữ liệu mâu thuẫn được nạp vào [9, 21].
+
+---
+DYNAMIC_ID: DYN_GRA_012
+CAUSAL_CHAIN: "Nếu [Thực hiện K-core Decomposition], thì [Liên tiếp loại bỏ các node có bậc thấp hơn K], dẫn đến [Cô lập 'xương sống' tri thức bền vững (Backbone)]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_028, RUL_GRA_046, RUL_GRA_031]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_004
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_048
+  LINK_LOGIC: Loại bỏ nhiễu ở rìa mạng lưới để LLM chỉ tập trung vào các thông tin cốt lõi nhất [22, 23].
+
+---
+DYNAMIC_ID: DYN_GRA_013
+CAUSAL_CHAIN: "Nếu [Đồ thị nạp thêm dữ liệu từ nhiều Shard], thì [Hợp nhất node trùng thông qua Blending Constraints], dẫn đến [Sự cô đọng hóa tri thức và giảm hiện tượng đa thực thể]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_011, RUL_GRA_011, RUL_GRA_022]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_008
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_035
+  LINK_LOGIC: Đảm bảo "Single Source of Truth" xuyên suốt các đơn vị lưu trữ phân tán [24, 25].
+
+---
+DYNAMIC_ID: DYN_GRA_014
+CAUSAL_CHAIN: "Nếu [Entropy ngữ nghĩa luôn cao hơn Entropy cấu trúc], thì [Hệ thống duy trì trạng thái 'Criticality'], dẫn đến [Khả năng khám phá tri thức mới liên tục mà không bị bão hòa]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_046, SDA_L1_047, RUL_GRA_019]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_010
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_066
+  LINK_LOGIC: Nền tảng cho sự sáng tạo tự thân (Autonomous Discovery) của các tác tử AGI [26, 27].
+
+---
+DYNAMIC_ID: DYN_GRA_015
+CAUSAL_CHAIN: "Nếu [Tăng cường các liên kết tầm xa (Small-world property)], thì [Đường đi trung bình (L) giảm theo logarit của N], dẫn đến [Tốc độ truy xuất tri thức multi-hop tăng vọt]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_038, RUL_GRA_043, RUL_GRA_020]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_001
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_025
+  LINK_LOGIC: Cho phép Agent tìm thấy câu trả lời chỉ sau 2-3 bước nhảy (hops) trong không gian tỷ node [28, 29].
+
+---
+DYNAMIC_ID: DYN_GRA_016
+CAUSAL_CHAIN: "Nếu [Một phần của mạng lưới bị tấn công vào các Hub], thì [Xác suất ngắt kết nối toàn cục tăng cao (Achilles' Heel)], dẫn đến [Sự phân rã đồ thị thành các mảnh đơn lẻ]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_024, SDA_L1_042, RUL_GRA_046]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_006
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_055
+  LINK_LOGIC: Cảnh báo hệ thống cần sao lưu hoặc tăng cường liên kết tại các nút xung yếu [30, 31].
+
+---
+DYNAMIC_ID: DYN_GRA_017
+CAUSAL_CHAIN: "Nếu [Node X xuất hiện trong Mền Markov của Node Y], thì [Mọi thay đổi của X ảnh hưởng trực tiếp đến Y], dẫn đến [Sự hình thành các cụm phụ thuộc chức năng chặt chẽ]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_022, RUL_GRA_004, RUL_GRA_062]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_005
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_024
+  LINK_LOGIC: Giúp khoanh vùng không gian tính toán cho Agent, tăng tốc độ suy luận cục bộ [21, 32].
+
+---
+DYNAMIC_ID: DYN_GRA_018
+CAUSAL_CHAIN: "Nếu [Cộng đồng đạt trạng thái Nash Equilibrium về Entropy], thì [Không node nào muốn chuyển sang cộng đồng khác], dẫn đến [Sự ổn định của cấu trúc phân cấp tri thức]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_032, SDA_L1_045, RUL_GRA_040]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_012
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_023
+  LINK_LOGIC: Cơ sở để tạo ra các báo cáo cộng đồng bền vững, không thay đổi sau mỗi lần nạp nhẹ dữ liệu [33, 34].
+
+---
+DYNAMIC_ID: DYN_GRA_019
+CAUSAL_CHAIN: "Nếu [Sử dụng mô hình Property Graph], thì [Topology shard và Property shard được tách rời], dẫn đến [Khả năng mở rộng chiều ngang (Horizontal scaling) mà không làm chậm việc duyệt cạnh]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_003, RUL_GRA_027, RUL_GRA_051]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_008
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_070
+  LINK_LOGIC: Tối ưu hóa hiệu năng AlloyDB cho các tác vụ GraphRAG quy mô doanh nghiệp [35, 36].
+
+---
+DYNAMIC_ID: DYN_GRA_020
+CAUSAL_CHAIN: "Nếu [Tỷ lệ surprising edges được duy trì ở mức ~12%], thì [Hệ thống đạt sự cân bằng tối ưu giữa trật tự và hỗn loạn], dẫn đến [Cấu trúc Small-world bền vững]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+NODES_INVOLVED: [SDA_L1_048, RUL_GRA_020, RUL_GRA_019]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_015
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_066
+  LINK_LOGIC: Kích thích sự sáng tạo của AI bằng cách kết nối các miền tri thức có vẻ không liên quan [37, 38].
+
+---
+DYNAMIC_ID: DYN_GRA_021
+CAUSAL_CHAIN: "Nếu [Quan sát bằng chứng tại node Letter L], thì [Làm tăng xác suất niềm tin tại node Grade G], dẫn đến [Kích hoạt cơ chế 'Explaining away' cho các nguyên nhân đối thủ (Difficulty và Intelligence)]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_019, RUL_GRA_003, RUL_GRA_062]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_005
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_033
+  LINK_LOGIC: Logic cốt lõi cho chẩn đoán lỗi tự động: Khi biết nguyên nhân A đúng, xác suất nguyên nhân B giảm xuống [9, 39].
+
+---
+DYNAMIC_ID: DYN_GRA_022
+CAUSAL_CHAIN: "Nếu [Thực hiện duyệt đồ thị Index-free Adjacency], thì [Hệ thống truy cập bộ nhớ trực tiếp qua con trỏ], dẫn đến [Thời gian truy vấn (O(1)) độc lập với kích thước toàn bộ đồ thị]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_002, RUL_GRA_012, RUL_GRA_060]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_015
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_019
+  LINK_LOGIC: Đảm bảo GraphRAG phản hồi trong mili giây ngay cả trên mạng lưới hàng tỷ thực thể [40, 41].
+
+---
+DYNAMIC_ID: DYN_GRA_023
+CAUSAL_CHAIN: "Nếu [Tri thức mới được nạp vào Shard cục bộ], thì [Lớp Global Relation Graph thực hiện suy luận quy nạp (Inductive Completion)], dẫn đến [Cập nhật tri thức toàn cầu cho toàn hệ thống]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: STRATEGIST
+NODES_INVOLVED: [SDA_L1_030, RUL_GRA_034, RUL_GRA_066]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_013
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_061
+  LINK_LOGIC: Đảm bảo Agent ở Shard A có thể sử dụng tri thức vừa được học ở Shard B [25, 42].
+
+---
+DYNAMIC_ID: DYN_GRA_024
+CAUSAL_CHAIN: "Nếu [Mạng lưới là có hướng (Digraph)], thì [Sử dụng chuỗi Markov không thuận nghịch], dẫn đến [Sự phân cụm dựa trên dòng chảy tri thức (Flow-based communities) thay vì chỉ mật độ cạnh]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_014, RUL_GRA_064, RUL_GRA_024]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_018
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_045
+  LINK_LOGIC: Phản ánh chính xác các quy trình logic và chuỗi cung ứng trong đồ thị tri thức [43, 44].
+
+---
+DYNAMIC_ID: DYN_GRA_025
+CAUSAL_CHAIN: "Nếu [Đồ thị đạt trạng thái Bose-Einstein Condensation], thì [Hầu hết các cạnh crowd tập trung vào một Energy Level thấp nhất (Fittest node)], dẫn đến [Sự biến mất của cấu trúc scale-free và thay bằng Hub-and-spoke tuyệt đối]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_043, SDA_L1_041, RUL_GRA_044]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_001
+  RELATION: Ứng chế
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_068
+  LINK_LOGIC: Mô tả sự thống trị độc quyền của một chủ đề tri thức trong hệ thống (Winner-takes-all) [45, 46].
+
+---
+DYNAMIC_ID: DYN_GRA_026
+CAUSAL_CHAIN: "Nếu [Node có Betweenness Centrality cao], thì [Nó kết nối các láng giềng có sự đa dạng ngữ nghĩa lớn (Semantic Diversity)], dẫn đến [Vai trò là 'người gác cổng' tri thức giữa các lĩnh vực]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+NODES_INVOLVED: [SDA_L1_023, SDA_L1_026, RUL_GRA_023]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_010
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_040
+  LINK_LOGIC: Các nút này là nơi tốt nhất để Agent tìm kiếm sự đổi mới và kết nối liên ngành [37, 47].
+
+---
+DYNAMIC_ID: DYN_GRA_027
+CAUSAL_CHAIN: "Nếu [Thực hiện truy vấn câu hỏi multi-hop], thì [Hệ thống cô lập Steiner Tree nhỏ nhất kết nối các thực thể], dẫn đến [Giảm thiểu Token và tăng độ chính xác của câu trả lời từ LLM]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_038, RUL_GRA_025, RUL_GRA_056]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_022
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_048
+  LINK_LOGIC: Chiến lược truy xuất ngữ cảnh tinh gọn nhất cho các hệ thống GraphRAG hiện đại [48, 49].
+
+---
+DYNAMIC_ID: DYN_GRA_028
+CAUSAL_CHAIN: "Nếu [Có nhiều đường đi nhân quả mâu thuẫn từ A đến B], thì [Kích hoạt Path Consistency Law], dẫn đến [Loại bỏ các đường đi không logic và duy trì tính nhất quán của tuyên bố tri thức]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_014, RUL_GRA_009, RUL_GRA_061]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_007
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_035
+  LINK_LOGIC: Ngăn chặn AI đưa ra các kết luận tự mâu thuẫn khi tổng hợp tri thức từ nhiều nguồn [21, 50].
+
+---
+DYNAMIC_ID: DYN_GRA_029
+CAUSAL_CHAIN: "Nếu [Giá trị initial attractiveness A tăng], thì [Độ dốc degree exponent γ tăng], dẫn đến [Mạng lưới trở nên đồng nhất hơn (Homogeneous) và hub nhỏ lại]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_024, RUL_GRA_044, RUL_GRA_031]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_001
+  RELATION: Ứng chế
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_052
+  LINK_LOGIC: Cơ chế để kiểm soát sự bùng nổ của các Supernode gây nghẽn hệ thống [51, 52].
+
+---
+DYNAMIC_ID: DYN_GRA_030
+CAUSAL_CHAIN: "Nếu [Hệ thống tự động hóa lập luận phản thực tại (Counterfactual)], thì [Giả lập sự thay đổi tại tầng can thiệp (L2)], dẫn đến [Sự tiến hóa niềm tin tại tầng L3 (Phản thực tại)]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_016, SDA_L1_017, RUL_GRA_015]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_009
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_033
+  LINK_LOGIC: Cho phép AI hiểu được nguyên nhân gốc rễ và học từ những kịch bản chưa bao giờ xảy ra [53, 54].
+
+---
+DYNAMIC_ID: DYN_GRA_031
+CAUSAL_CHAIN: "Nếu [Sử dụng cơ chế Vertex Copying (Kumar et al.)], thì [Các node mới sao chép liên kết từ các node cùng chủ đề], dẫn đến [Sự gia tăng Modularity và hình thành các cộng đồng tri thức chuyên biệt]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_032, RUL_GRA_045, RUL_GRA_007]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_001
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_018
+  LINK_LOGIC: Mô phỏng hành vi kế thừa và trích dẫn tri thức trong các mạng lưới khoa học [6, 55].
+
+---
+DYNAMIC_ID: DYN_GRA_032
+CAUSAL_CHAIN: "Nếu [Xóa bỏ node ngẫu nhiên với tỷ lệ r cao], thì [Mạng lưới trải qua pha chuyển tới hạn (Phase transition)], dẫn đến [Sự sụp đổ của thành phần khổng lồ thành các cụm li ti (Exponential network)]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_041, SDA_L1_042, RUL_GRA_046]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_002
+  RELATION: Ứng chế
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_055
+  LINK_LOGIC: Xác định ngưỡng chịu lỗi của hệ thống tri thức trước các sự cố mất dữ liệu [56, 57].
+
+---
+DYNAMIC_ID: DYN_GRA_033
+CAUSAL_CHAIN: "Nếu [Thực hiện lan truyền lỗi (Failure Propagation)], thì [Node i thất bại nếu một tỷ lệ φ láng giềng thất bại], dẫn đến [Hiện tượng sụp đổ dây chuyền (Cascading failures) trong mạng lưới tri thức]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_012, RUL_GRA_017, RUL_GRA_042]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_005
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_060
+  LINK_LOGIC: Mô phỏng cách một thông tin sai lệch (Noise) có thể làm hỏng toàn bộ một cụm tri thức liên quan [10, 58].
+
+---
+DYNAMIC_ID: DYN_GRA_034
+CAUSAL_CHAIN: "Nếu [Áp dụng cơ chế Aging (Lão hóa node)], thì [Xác suất thu hút liên kết mới giảm dần theo thời gian (k.τ^-ν)], dẫn đến [Sự xuất hiện của các Hub mới và ngăn chặn sự độc quyền vĩnh viễn của node cũ]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: STRATEGIST
+NODES_INVOLVED: [SDA_L1_024, SDA_L1_011, RUL_GRA_044]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_003
+  RELATION: Ứng chế
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_040
+  LINK_LOGIC: Đảm bảo đồ thị tri thức luôn tươi mới và ưu tiên các khám phá hiện đại [59, 60].
+
+---
+DYNAMIC_ID: DYN_GRA_035
+CAUSAL_CHAIN: "Nếu [Dữ liệu interaction giữa các Agent quá thưa (Sparse)], thì [Sử dụng Inductive Graph Learning để dự đoán cạnh thiếu], dẫn đến [Sự hoàn thiện tự động của đồ thị (Knowledge Graph Completion)]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_002, RUL_GRA_007, RUL_GRA_026]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_010
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_013
+  LINK_LOGIC: Khả năng tự lấp đầy lỗ hổng tri thức mà không cần sự can thiệp của con người [61, 62].
+
+DYNAMIC_ID: DYN_GRA_036
+CAUSAL_CHAIN: "Nếu [Hệ thống tự tổ chức (Self-organizing)], thì [Cấu trúc và nội dung ngữ nghĩa tự phát tiến về trạng thái tới hạn (Critical state)], dẫn đến [Sự duy trì khả năng khám phá liên tục mà không rơi vào hỗn loạn hoặc trật tự cứng nhắc]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_047, RUL_GRA_019, RUL_GRA_020]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_037
+  RELATION: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_070
+  LINK_LOGIC: Trạng thái tới hạn giúp Agent nhận diện các "lỗ hổng tri thức" tiềm năng để tự bổ sung thông tin [1-3].
+
+---
+DYNAMIC_ID: DYN_GRA_037
+CAUSAL_CHAIN: "Nếu [Vượt qua ngưỡng tới hạn tại iteration ~400], thì [Tương quan chéo giữa Entropy cấu trúc và ngữ nghĩa chuyển từ dương sang âm], dẫn đến [Sự phân tách động lực (Divergence) nơi ngữ nghĩa dẫn dắt sự tiến hóa của cấu trúc]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_045, SDA_L1_046, RUL_GRA_019]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_038
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_041
+  LINK_LOGIC: Sự phân tách này cho phép hệ thống "sáng tạo" ra các cấu trúc mới để chứa đựng các ý tưởng phức tạp [4, 5].
+
+---
+DYNAMIC_ID: DYN_GRA_038
+CAUSAL_CHAIN: "Nếu [Duy trì tỷ lệ liên kết bất ngờ (Surprising edges) ~12%], thì [Hệ thống sở hữu một 'kho lưu trữ' tiềm năng sáng tạo], dẫn đến [Khả năng hình thành các kết nối liên ngành đột phá]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+NODES_INVOLVED: [SDA_L1_048, RUL_GRA_020, RUL_GRA_026]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_036
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_066
+  LINK_LOGIC: Các cạnh bất ngờ đóng vai trò là "lối tắt" cho suy luận nhảy vọt (Jump reasoning) [5, 6].
+
+---
+DYNAMIC_ID: DYN_GRA_039
+CAUSAL_CHAIN: "Nếu [Node di chuyển giữa các cụm để tối đa hóa mức giảm entropy (Δ)], thì [Cấu trúc cộng đồng tiến dần về trạng thái ổn định], dẫn đến [Đạt trạng thái cân bằng Nash (Nash Equilibrium)]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_032, RUL_GRA_040, RUL_GRA_041]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_046
+  RELATION: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_018
+  LINK_LOGIC: Đảm bảo các báo cáo tri thức vĩ mô không bị thay đổi liên tục bởi các nhiễu nhỏ [7, 8].
+
+---
+DYNAMIC_ID: DYN_GRA_040
+CAUSAL_CHAIN: "Nếu [Hệ thống gặp bài toán có độ phức tạp đa tầng], thì [Đồ thị tự phát sinh cấu trúc phân cấp lồng nhau (Nested communities)], dẫn đến [Sự hình thành các đa tỉ lệ khái niệm (Multi-scale organization)]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_030, SDA_L1_036, RUL_GRA_008]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_036
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_052
+  LINK_LOGIC: Phân cấp đa tầng giúp Agent thực hiện truy vấn từ tổng quát đến chi tiết (Drill-down) [9, 10].
+
+---
+DYNAMIC_ID: DYN_GRA_041
+CAUSAL_CHAIN: "Nếu [Hành động thêm node/edge tạo ra giá trị mới về ngữ nghĩa], thì [Hệ thống nhận phần thưởng dương từ bộ điều phối RL], dẫn đến [Sự củng cố hành vi tìm kiếm các không gian ngữ nghĩa phong phú hơn]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_050, RUL_GRA_019, RUL_GRA_067]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_037
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_067
+  LINK_LOGIC: Tối ưu hóa chính sách khám phá (Exploration policy) của Agent để đạt được phát kiến tri thức nhanh nhất [11, 12].
+
+---
+DYNAMIC_ID: DYN_GRA_042
+CAUSAL_CHAIN: "Nếu [Sử dụng mô hình Fitness (Bianconi-Barabási)], thì [Các node có 'năng lực' cao sẽ thu hút liên kết nhanh hơn tuổi thọ của chúng], dẫn đến [Sự thay đổi thứ hạng Hub liên tục (Rank dynamics)]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_024, RUL_GRA_044, RUL_GRA_045]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_001
+  RELATION: Ứng chế
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_034
+  LINK_LOGIC: Phản ánh đúng thực tế khi một công nghệ mới (late-comer) có thể nhanh chóng trở thành trung tâm tri thức [13, 14].
+
+---
+DYNAMIC_ID: DYN_GRA_043
+CAUSAL_CHAIN: "Nếu [Một lỗi logic lan truyền qua các node láng giềng], thì [Kích hoạt cơ chế tự kiểm tra mền Markov], dẫn đến [Cô lập vùng dữ liệu bị hỏng trước khi sụp đổ dây chuyền]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_022, RUL_GRA_004, RUL_GRA_017]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_011
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_016
+  LINK_LOGIC: Tăng tính tự phục hồi (Resilience) của mạng lưới trước các cuộc tấn công thông tin [15, 16].
+
+---
+DYNAMIC_ID: DYN_GRA_044
+CAUSAL_CHAIN: "Nếu [Một Agent thực hiện can thiệp do-operator], thì [Mọi đường đi cửa sau (back-door) bị chặn], dẫn đến [Sự xác định tác động nhân quả thuần túy mà không bị nhiễu bởi các biến ẩn]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_017, RUL_GRA_028, RUL_GRA_033]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_009
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_030
+  LINK_LOGIC: Cho phép AI thực hiện các hành động thử-sai trong môi trường giả lập (Sandboxing) [17, 18].
+
+---
+DYNAMIC_ID: DYN_GRA_045
+CAUSAL_CHAIN: "Nếu [LLM tạo ra các mã định danh tri thức (Reasoning tokens)], thì [Pipeline trích xuất SPO sẽ ánh xạ chúng vào đồ thị hiện có], dẫn đến [Sự mở rộng đồ thị tại chỗ (In-situ knowledge expansion)]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_005, RUL_GRA_014, RUL_GRA_035]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_008
+  RELATION: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_013
+  LINK_LOGIC: Tự động hóa quá trình học máy từ văn bản mà không cần con người dán nhãn [19, 20].
+
+---
+DYNAMIC_ID: DYN_GRA_046
+CAUSAL_CHAIN: "Nếu [Sự thay đổi entropy trung bình Δsum/M nhỏ hơn ngưỡng τn], thì [Quá trình tinh chỉnh cộng đồng dừng lại], dẫn đến [Sự hội tụ của kiến trúc tri thức]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_045, RUL_GRA_040, RUL_GRA_041]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_039
+  RELATION: Kiểm soát biên
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_018
+  LINK_LOGIC: Ngăn chặn việc lãng phí tài nguyên tính toán cho các thay đổi cấu trúc không đáng kể [21, 22].
+
+---
+DYNAMIC_ID: DYN_GRA_047
+CAUSAL_CHAIN: "Nếu [Candidate triples có khoảng cách embedding > ngưỡng τ], thì [Chúng bị loại bỏ khỏi không gian kiểm chứng], dẫn đến [Sự gia tăng độ chính xác của GraphRAG]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: DATA SCIENTIST
+NODES_INVOLVED: [SDA_L1_003, RUL_GRA_011, RUL_GRA_031]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_004
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_027
+  LINK_LOGIC: Giảm nhiễu ngữ cảnh giúp LLM đưa ra câu trả lời tập trung và sắc bén hơn [23, 24].
+
+---
+DYNAMIC_ID: DYN_GRA_048
+CAUSAL_CHAIN: "Nếu [Hệ thống nhận câu hỏi đa bước (Multi-hop)], thì [Kích hoạt cơ chế duyệt tuần tự qua các node trung gian], dẫn đến [Sự thu thập ngữ cảnh ẩn không xuất hiện trong câu hỏi gốc]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_038, RUL_GRA_012, RUL_GRA_056]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_015
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_025
+  LINK_LOGIC: Giải quyết các truy vấn phức tạp như "Mối liên hệ gián tiếp giữa A và C là gì?" [25, 26].
+
+---
+DYNAMIC_ID: DYN_GRA_049
+CAUSAL_CHAIN: "Nếu [Sử dụng constrained decoding dựa trên đồ thị], thì [LLM chỉ sinh ra các token tương ứng với các cạnh vật lý thực tại], dẫn đến [Triệt tiêu hoàn toàn hiện tượng ảo giác (Hallucination)]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_001, RUL_GRA_022, RUL_GRA_070]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_047
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_019
+  LINK_LOGIC: Đảm bảo mọi câu trả lời của AI đều được "mỏ neo" vào sự thật cấu trúc [27-29].
+
+---
+DYNAMIC_ID: DYN_GRA_050
+CAUSAL_CHAIN: "Nếu [Một node được gán Fitness cực cao trong một cộng đồng hẹp], thì [Nó có xu hướng hút hết liên kết cục bộ], dẫn đến [Sự xuất hiện của 'Rank Sink' gây nghẽn dòng chảy thông tin]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: STRATEGIST
+NODES_INVOLVED: [SDA_L1_024, RUL_GRA_044, RUL_GRA_023]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_003
+  RELATION: Ứng chế
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_006
+  RELATION: Kích hoạt cơ chế phân mảnh để giải tỏa tắc nghẽn [30, 31].
+
+---
+DYNAMIC_ID: DYN_GRA_051
+CAUSAL_CHAIN: "Nếu [Người dùng sửa lỗi cho một liên kết tri thức], thì [Thông tin này được phản hồi ngược về KG], dẫn đến [Sự cập nhật trọng số cạnh và tiến hóa tri thức động]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_012, SDA_L1_049, RUL_GRA_005]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_011
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_023
+  LINK_LOGIC: Tạo ra vòng lặp học tập liên tục (Human-in-the-loop) để tối ưu hóa hệ thống [32].
+
+---
+DYNAMIC_ID: DYN_GRA_052
+CAUSAL_CHAIN: "Nếu [Áp dụng reranking dựa trên thời gian thực (Chronological)], thì [Các chuỗi sự kiện được LLM ưu tiên xử lý đúng trình tự], dẫn đến [Sự gia tăng độ chính xác trong suy luận thời gian]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: STRATEGIST
+NODES_INVOLVED: [SDA_L1_011, RUL_GRA_057, RUL_GRA_009]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_041
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_027
+  LINK_LOGIC: Cực kỳ quan trọng cho các ứng dụng phân tích dữ liệu lịch sử hoặc log hệ thống [33, 34].
+
+---
+DYNAMIC_ID: DYN_GRA_053
+CAUSAL_CHAIN: "Nếu [Thực hiện Graph Augmentation bằng cách ngẫu nhiên drop node/edge], thì [Tính bền vững (Robustness) của mô hình GNN tăng lên], dẫn đến [Sự giảm thiểu hiện tượng Overfitting]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: DATA SCIENTIST
+NODES_INVOLVED: [SDA_L1_042, RUL_GRA_047, RUL_GRA_031]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_017
+  RELATION: Ứng chế
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_016
+  LINK_LOGIC: Giúp hệ thống vẫn hoạt động tốt ngay cả khi tri thức đầu vào bị thiếu hụt [35, 36].
+
+---
+DYNAMIC_ID: DYN_GRA_054
+CAUSAL_CHAIN: "Nếu [Cấu trúc Ego-graph được tuần tự hóa (Serialization)], thì [LLM có thể xử lý topology đồ thị như một chuỗi văn bản], dẫn đến [Khả năng trả lời các câu hỏi trắc nghiệm phức tạp về quan hệ]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_001, SDA_L1_002, RUL_GRA_014]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_045
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_049
+  LINK_LOGIC: Cầu nối kỹ thuật quan trọng giữa cấu trúc đồ thị phi tuyến và bản chất tuần tự của LLM [37].
+
+---
+DYNAMIC_ID: DYN_GRA_055
+CAUSAL_CHAIN: "Nếu [Xây dựng đồ thị dựa trên gán nhãn vai trò ngữ nghĩa (SRL)], thì [Các nút sẽ đại diện cho hành động và tác nhân], dẫn đến [Sự mô phỏng các kịch bản hành vi chính xác hơn]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_013, RUL_GRA_005, RUL_GRA_057]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_044
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_061
+  LINK_LOGIC: Hỗ trợ Agent trong việc lập kế hoạch hành động đa bước (Multi-step planning) [38, 39].
+
+---
+DYNAMIC_ID: DYN_GRA_056
+CAUSAL_CHAIN: "Nếu [Hệ thống liên tục triệu hồi các giao diện đồ thị (Graph interfaces)], thì [Nó có thể tự động thu thập đủ thông tin để kết luận], dẫn đến [Sự tự trị trong quá trình thu thập tri thức]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_050, RUL_GRA_012, RUL_GRA_054]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_048
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_067
+  LINK_LOGIC: Cơ sở cho các tác tử "Never-ending Learning" (Học không ngừng nghỉ) [40].
+
+---
+DYNAMIC_ID: DYN_GRA_057
+CAUSAL_CHAIN: "Nếu [Áp dụng lượng hóa không đẳng hướng ScaNN], thì [Các vector dài được ưu tiên độ chính xác cao hơn], dẫn đến [Sự cải thiện hiệu năng tìm kiếm các thực thể quan trọng nhất]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_003, RUL_GRA_050, RUL_GRA_060]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_019
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_022
+  LINK_LOGIC: Tối ưu hóa hạ tầng AlloyDB cho GraphRAG quy mô doanh nghiệp [41, 42].
+
+---
+DYNAMIC_ID: DYN_GRA_058
+CAUSAL_CHAIN: "Nếu [Duyệt qua cây phân cấp (Dendrogram)], thì [Hệ thống có thể tìm thấy mức độ trừu tượng tri thức phù hợp nhất], dẫn đến [Sự tối ưu hóa độ dài ngữ cảnh cho LLM]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_036, RUL_GRA_024, RUL_GRA_070]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_018
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_040
+  LINK_LOGIC: Giúp Agent "thu phóng" (Zoom) giữa cái nhìn tổng quát và chi tiết kỹ thuật [43, 44].
+
+---
+DYNAMIC_ID: DYN_GRA_059
+CAUSAL_CHAIN: "Nếu [Sử dụng Laplacian từ chuỗi Markov không thuận nghịch], thì [Thông tin lan truyền theo đúng chiều nhân quả trên đồ thị siêu cấp], dẫn đến [Sự phân cụm dựa trên dòng chảy (Flow-based clustering)]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_014, RUL_GRA_064, RUL_GRA_065]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_024
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_060
+  LINK_LOGIC: Phát hiện các "nút thắt cổ chai" (Bottlenecks) trong các quy trình logic phức tạp [45, 46].
+
+---
+DYNAMIC_ID: DYN_GRA_060
+CAUSAL_CHAIN: "Nếu [Tích hợp bộ nhớ Transformer vào hypergraph], thì [Hệ thống có khả năng ghi nhớ các mẫu quan hệ phức tạp theo thời gian], dẫn đến [Sự hoàn thiện đồ thị siêu cấp tự động]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: DATA SCIENTIST
+NODES_INVOLVED: [SDA_L1_007, RUL_GRA_014, RUL_GRA_065]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_035
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_041
+  LINK_LOGIC: Cho phép AI "nhớ" được các liên kết mờ mà trước đây chỉ có thể suy luận qua văn bản [47].
+
+---
+DYNAMIC_ID: DYN_GRA_061
+CAUSAL_CHAIN: "Nếu [Thực hiện gỡ rối ngữ nghĩa tương phản (Contrastive disentanglement)], thì [Các thuộc tính gây nhiễu bị tách khỏi đặc trưng cốt lõi], dẫn đến [Sự gia tăng độ bền vững của Embedding thực thể]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_003, RUL_GRA_011, RUL_GRA_049]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_013
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_053
+  LINK_LOGIC: Giúp hệ thống phân biệt được các thực thể có tên giống nhau nhưng bản chất khác nhau [48].
+
+---
+DYNAMIC_ID: DYN_GRA_062
+CAUSAL_CHAIN: "Nếu [Tính toán tương tác giữa láng giềng ngữ nghĩa và láng giềng cấu trúc], thì [Hệ thống bù đắp được sự thưa thớt của dữ liệu liên kết], dẫn đến [Sự cải thiện Link Prediction lên đến 7.3%]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: DATA SCIENTIST
+NODES_INVOLVED: [SDA_L1_023, RUL_GRA_007, RUL_GRA_026]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_010
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_035
+  LINK_LOGIC: Tối ưu hóa việc làm giàu đồ thị (KG Enrichment) từ các nguồn dữ liệu nghèo nàn [49].
+
+---
+DYNAMIC_ID: DYN_GRA_063
+CAUSAL_CHAIN: "Nếu [Áp dụng căn chỉnh đa phương thức (Multi-modal alignment)], thì [Hình ảnh và văn bản của cùng một thực thể được đưa về một không gian chung], dẫn đến [Sự hiểu biết tri thức trực quan]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_006, RUL_GRA_008, RUL_GRA_053]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_054
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_068
+  LINK_LOGIC: Nền tảng cho các hệ thống AGI có thể "thấy" và "đọc" tri thức đồng thời [50].
+
+---
+DYNAMIC_ID: DYN_GRA_064
+CAUSAL_CHAIN: "Nếu [Phát hiện hiện tượng trôi dạt thực thể (Entity Drift)], thì [Hệ thống thực hiện cập nhật embedding gia tăng mà không cần huấn luyện lại toàn bộ], dẫn đến [Sự thích nghi thời gian thực]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_042, RUL_GRA_014, RUL_GRA_017]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_051
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_052
+  LINK_LOGIC: Duy trì tính tươi mới của tri thức trong các lĩnh vực biến động nhanh như tài chính hoặc tin tức [51].
+
+---
+DYNAMIC_ID: DYN_GRA_065
+CAUSAL_CHAIN: "Nếu [Sử dụng tổng hợp đặc trưng phân cấp (DA-HFA)], thì [Tri thức từ tầng vi mô được nén lên tầng vĩ mô một cách bảo toàn], dẫn đến [Sự tóm tắt cộng đồng không bị mất mát thông tin quan trọng]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_030, SDA_L1_036, RUL_GRA_070]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_040
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_023
+  LINK_LOGIC: Tạo ra các bản tóm tắt Global Sensemaking chất lượng cao cho người dùng [52].
+
+---
+DYNAMIC_ID: DYN_GRA_066
+CAUSAL_CHAIN: "Nếu [Hệ thống tự chưng cất tri thức dựa trên sự tự tin (Self-distillation)], thì [Nó loại bỏ các liên kết có độ không chắc chắn cao], dẫn đến [Sự tinh lọc cốt lõi tri thức]."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_049, RUL_GRA_031, RUL_GRA_032]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_012
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_043
+  LINK_LOGIC: Giảm thiểu rủi ro lan truyền thông tin sai lệch (Misinformation) [53].
+
+---
+DYNAMIC_ID: DYN_GRA_067
+CAUSAL_CHAIN: "Nếu [Sử dụng Monte Carlo Tree Search (MCTS) để 'đi bộ' trên đồ thị], thì [Agent tìm thấy đường đi tối ưu đến mục tiêu thông qua thử nghiệm], dẫn đến [Sự tối ưu hóa quy trình lập luận]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_L1_038, SDA_L1_050, RUL_GRA_012]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_041
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_048
+  LINK_LOGIC: Giảm số bước nhảy cần thiết để tìm câu trả lời, tăng tốc độ phản hồi của hệ thống [54].
+
+---
+DYNAMIC_ID: DYN_GRA_068
+CAUSAL_CHAIN: "Nếu [Hệ thống học được các quy tắc logic khả vi (Differentiable logic)], thì [Nó có thể thực hiện suy luận biểu tượng bằng mạng nơ-ron], dẫn đến [Sự hợp nhất Neuro-symbolic]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_L1_014, RUL_GRA_033, RUL_GRA_037]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_044
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_069
+  LINK_LOGIC: AI có khả năng giải thích "tại sao" nó đưa ra kết luận thông qua các quy tắc logic tường minh [55].
+
+---
+DYNAMIC_ID: DYN_GRA_069
+CAUSAL_CHAIN: "Nếu [Phân tích sự tiến hóa của surprising edges qua thời gian], thì [Hệ thống có thể dự báo các điểm bùng phát sáng tạo (Innovation peaks)], dẫn đến [Sự điều phối tài nguyên nghiên cứu tối ưu]."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: STRATEGIST
+NODES_INVOLVED: [SDA_L1_048, RUL_GRA_019, RUL_GRA_020]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_037
+  RELATION: Đồng bộ hóa
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_070
+  LINK_LOGIC: Cho phép doanh nghiệp đón đầu các xu hướng tri thức mới trước khi chúng trở nên phổ biến [4].
+
+---
+DYNAMIC_ID: DYN_GRA_070
+CAUSAL_CHAIN: "Nếu [Đồ thị đạt trạng thái tự nhận thức (Self-aware)], thì [Nó có thể tự thực hiện suy luận quy nạp xuyên miền (Cross-domain synergy)], dẫn đến [Sự trỗi dậy của Trí tuệ Nhân tạo Tổng quát thực thụ (AGI)]."
+LOOP_STRUCTURE: Evolutionary
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_L1_041, RUL_GRA_034, RUL_GRA_066]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_GRA_036
+  RELATION: Bổ trợ
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_GRA_014
+  LINK_LOGIC: Đỉnh cao của hệ sinh thái POLYOPUS_AGI, nơi tri thức tự sinh và tự tối ưu hóa [56].
+
+-------------------------------------------------------------------------------------------------------
+
+layer_4:
+
+NODE_ID: SEM_GRA_001
+SEMANTIC_DESCRIPTION: "Connectivity (Tính kết nối) là điểm neo (Anchor Node) cơ bản, định nghĩa khả năng truy cập tri thức thông qua các bước nhảy (hops). Nó biến đồ thị thành một thực thể sống thay vì các silo dữ liệu [1, 2]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Connectivity
+  SIMILAR_TO: Mạng lưới thần kinh
+  SIMILARITY_ASPECT: Cấu trúc liên kết dày đặc để truyền dẫn tín hiệu
+  DIFFERENCE_ASPECT: Định nghĩa chính xác ý nghĩa của từng sợi dây liên kết thay vì chỉ truyền dẫn hóa học
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Centrality
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_015
+  LINK_LOGIC: Kết hợp với Path Efficiency để tạo Vector về 'Tốc độ lan truyền tri thức'.
+
+---
+NODE_ID: SEM_GRA_002
+SEMANTIC_DESCRIPTION: "Centrality (Tầm quan trọng vị thế) xác định các Hub tri thức đóng vai trò là mỏ neo ngữ nghĩa, nơi các luồng thông tin hội tụ và được phân phối lại [3, 4]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Centrality
+  SIMILAR_TO: Thủ đô của một quốc gia
+  SIMILARITY_ASPECT: Là nơi tập trung mọi tuyến giao thông và tài nguyên lớn
+  DIFFERENCE_ASPECT: Có thể tồn tại nhiều thủ đô (Multi-hub) đồng đẳng trong cùng một không gian tri thức
+SPECIALIST_DOMAIN: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Connectivity
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_032
+  LINK_LOGIC: Kết hợp với PageRank để xác định 'Điểm thâm nhập tối ưu' cho GraphRAG.
+
+---
+NODE_ID: SEM_GRA_003
+SEMANTIC_DESCRIPTION: "Sparsity (Độ thưa tri thức) phản ánh các 'Hố đen' hoặc lỗ hổng trong mạng lưới, đóng vai trò là Cầu nối tiềm ẩn (Latent Bridge) thúc đẩy việc bổ sung thông tin [5, 6]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Sparsity
+  SIMILAR_TO: Các chòm sao trên bầu trời
+  SIMILARITY_ASPECT: Các điểm sáng rải rác giữa khoảng không vô định
+  DIFFERENCE_ASPECT: Khoảng không (sparsity) trong đồ thị mang tính mời gọi suy luận thay vì chỉ là hư không vật lý
+SPECIALIST_DOMAIN: DATA SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Density
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_045
+  LINK_LOGIC: Sử dụng làm trọng số cho Vector 'Tiềm năng khám phá'.
+
+---
+NODE_ID: SEM_GRA_004
+SEMANTIC_DESCRIPTION: "Modularity (Tính mô-đun hóa) là khả năng tự tổ chức thành các cộng đồng tri thức độc lập nhưng liên thông, giúp giảm entropy hệ thống [4, 7]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Modularity
+  SIMILAR_TO: Các mô-đun trong một trạm vũ trụ
+  SIMILARITY_ASPECT: Có thể hoạt động độc lập và tháo rời khi cần
+  DIFFERENCE_ASPECT: Các mô-đun tri thức có ranh giới mờ và thường xuyên trao đổi 'gen' ngữ nghĩa
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Resilience
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_050
+  LINK_LOGIC: Kết hợp với Resilience để định hình Vector 'Khả năng phục hồi hệ thống qua phân mảnh'.
+
+---
+NODE_ID: SEM_GRA_005
+SEMANTIC_DESCRIPTION: "Topology-aware (Cảm quan hình thái) là bản sắc ngữ nghĩa giúp Embedding hiểu được 'vị trí' của mình trong bức tranh tổng thể, không chỉ dựa vào văn bản [8, 9]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Topology-aware
+  SIMILAR_TO: Hệ thống định vị GPS
+  SIMILARITY_ASPECT: Xác định tọa độ dựa trên khoảng cách đến các điểm mỏ neo lân cận
+  DIFFERENCE_ASPECT: GPS đo khoảng cách vật lý, Topology-aware đo 'khoảng cách ý niệm' và 'bối cảnh quan hệ'
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Contextual Embedding
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_060
+  LINK_LOGIC: Tích hợp với GraphSAGE để tạo ra các 'Vector Embedding nhận biết bối cảnh'.
+
+---
+NODE_ID: SEM_GRA_006
+SEMANTIC_DESCRIPTION: "Structural Entropy (Entropy cấu trúc) định lượng độ hỗn loạn của mạng lưới liên kết. Nó là mỏ neo (Anchor Node) để điều chỉnh mức độ ổn định của hệ thống [10, 11]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Structural Entropy
+  SIMILAR_TO: Độ xáo trộn của một bộ bài
+  SIMILARITY_ASPECT: Đo lường mức độ khó dự đoán của thứ tự tiếp theo
+  DIFFERENCE_ASPECT: Trong đồ thị, entropy cao có thể là dấu hiệu của sự sáng tạo vượt biên giới thay vì chỉ là sự lộn xộn
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Semantic Entropy
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_008
+  LINK_LOGIC: Cân bằng với Semantic Entropy để xác định 'Điểm tới hạn của tri thức'.
+
+---
+NODE_ID: SEM_GRA_007
+SEMANTIC_DESCRIPTION: "Semantic Entropy (Entropy ngữ nghĩa) đo lường sự đa dạng của các khái niệm trong không gian nhúng. Nó đại diện cho 'reservoir' tiềm năng của ý tưởng [10, 12]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Semantic Entropy
+  SIMILAR_TO: Đa dạng sinh học trong rừng nhiệt đới
+  SIMILARITY_ASPECT: Càng nhiều loài (ý tưởng), hệ sinh thái càng phong phú và bền vững
+  DIFFERENCE_ASPECT: Ý tưởng có thể lai tạo tức thì để tạo ra 'loài' mới (khái niệm mới) mà không cần tiến hóa sinh học
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Structural Entropy
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_019
+  LINK_LOGIC: Dùng để định lượng 'Chỉ số đổi mới' của một Shard tri thức.
+
+---
+NODE_ID: SEM_GRA_008
+SEMANTIC_DESCRIPTION: "Criticality (Trạng thái tới hạn) là cầu nối tiềm ẩn (Latent Bridge) nơi hệ thống đạt được sự cân bằng hoàn hảo giữa trật tự và hỗn loạn [10, 13]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Criticality
+  SIMILAR_TO: Trạng thái bão hòa của tinh thể
+  SIMILARITY_ASPECT: Một sự thay đổi nhỏ có thể dẫn đến sự hình thành cấu trúc lớn
+  DIFFERENCE_ASPECT: Trong đồ thị, trạng thái này được duy trì chủ động để đảm bảo sự khám phá không ngừng
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Stability
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_047
+  LINK_LOGIC: Định hình Vector 'Tiềm năng bùng nổ sáng tạo'.
+
+---
+NODE_ID: SEM_GRA_009
+SEMANTIC_DESCRIPTION: "Index-free Adjacency (Lân cận không chỉ mục) là bản chất 'vật lý' của mô hình Graph-centric, cho phép truy cập tri thức với vận tốc hằng số [14, 15]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Index-free Adjacency
+  SIMILAR_TO: Danh bạ liên lạc trực tiếp (Speed Dial)
+  SIMILARITY_ASPECT: Không cần quét qua danh sách để tìm người cần gọi
+  DIFFERENCE_ASPECT: Mọi 'số điện thoại' (node) đều được kết nối sẵn thông qua các con trỏ bộ nhớ vật lý
+SPECIALIST_DOMAIN: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Traversal Speed
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_012
+  LINK_LOGIC: Tối ưu hóa Vector 'Hiệu năng truy vấn quy mô lớn'.
+
+---
+NODE_ID: SEM_GRA_010
+SEMANTIC_DESCRIPTION: "Community Membership (Tư cách cộng đồng) soi chiếu bản sắc của một Node thông qua 'vòng tròn xã hội' của nó, giúp LLM tóm tắt tri thức vĩ mô [3, 16]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Community Membership
+  SIMILAR_TO: Thuộc về một bang hội hoặc bộ tộc
+  SIMILARITY_ASPECT: Các thành viên chia sẻ chung văn hóa, ngôn ngữ và mục tiêu
+  DIFFERENCE_ASPECT: Một thực thể tri thức có thể thuộc về nhiều cộng đồng (Overlapping) cùng lúc mà không bị chia xẻ lòng trung thành
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Modularity
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_024
+  LINK_LOGIC: Kết hợp với Leiden Algorithm để tạo Vector 'Đặc trưng cộng đồng'.
+
+---
+NODE_ID: SEM_GRA_011
+SEMANTIC_DESCRIPTION: "Surprising Edge (Liên kết bất ngờ) là các cầu nối tiềm ẩn (Latent Bridges) nối liền các miền tri thức xa lạ, là động lực của tư duy liên ngành [10, 17]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Surprising Edge
+  SIMILAR_TO: Lỗ sâu (Wormhole) trong không gian
+  SIMILARITY_ASPECT: Rút ngắn khoảng cách giữa hai điểm cực kỳ xa nhau
+  DIFFERENCE_ASPECT: Liên kết này dựa trên sự logic ngầm định thay vì bẻ cong không-thời gian vật lý
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Cross-domain Synergy
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_066
+  LINK_LOGIC: Tạo Vector 'Khả năng nhảy vọt tri thức (Jump Reasoning)'.
+
+---
+NODE_ID: SEM_GRA_012
+SEMANTIC_DESCRIPTION: "Schema-free Flexibility (Tính linh hoạt phi lược đồ) cho phép hệ thống tiến hóa hữu cơ như một sinh vật sống thay vì một kiến trúc cứng nhắc [15, 18]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Schema-free
+  SIMILAR_TO: Một bãi đất trống cho phép xây dựng tự do
+  SIMILARITY_ASPECT: Không có bản thiết kế cố định từ trước
+  DIFFERENCE_ASPECT: Đồ thị tự 'mọc' ra cấu trúc dựa trên nhu cầu của dữ liệu thực tế thay vì ý muốn của kiến trúc sư
+SPECIALIST_DOMAIN: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Data Integrity
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_013
+  LINK_LOGIC: Hình thành Vector 'Khả năng thích ứng cấu trúc'.
+
+---
+NODE_ID: SEM_GRA_013
+SEMANTIC_DESCRIPTION: "Evolutionary Consistency (Sự nhất quán tiến hóa) đảm bảo rằng khi tri thức thay đổi, các mối quan hệ lõi vẫn giữ vững bản sắc [19, 20]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Evolutionary Consistency
+  SIMILAR_TO: Sự bảo tồn DNA qua các thế hệ
+  SIMILARITY_ASPECT: Giữ lại những đặc điểm cốt lõi dù hình thái bên ngoài thay đổi
+  DIFFERENCE_ASPECT: Tri thức có thể 'đột biến' chủ động để phù hợp với các bằng chứng mới nhất
+SPECIALIST_DOMAIN: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Knowledge Update
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_035
+  LINK_LOGIC: Tạo Vector 'Độ tin cậy của lịch sử tri thức'.
+
+---
+NODE_ID: SEM_GRA_014
+SEMANTIC_DESCRIPTION: "Semantic Dominance (Sự thống trị ngữ nghĩa) là đặc tính khi ý nghĩa của thông tin dẫn dắt sự hình thành của cấu trúc đồ thị [10, 11]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Semantic Dominance
+  SIMILAR_TO: Nhu cầu của người dân tạo ra các con đường trong thành phố
+  SIMILARITY_ASPECT: Cấu trúc hạ tầng phục vụ cho mục đích sử dụng thực tế
+  DIFFERENCE_ASPECT: Trong AGI, quá trình này xảy ra tự động và ở quy mô micro-second
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Structural Stability
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_070
+  LINK_LOGIC: Kết hợp với Criticality để tạo Vector 'Động lực tự tổ chức'.
+
+---
+NODE_ID: SEM_GRA_015
+SEMANTIC_DESCRIPTION: "Multi-hop Reasoning Path (Đường dẫn lập luận đa cấp) là 'hệ thống mạch máu' cho phép AI kết nối các mảnh bằng chứng rời rạc [21, 22]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Multi-hop Reasoning
+  SIMILAR_TO: Cuộc điều tra phá án (Detective Work)
+  SIMILARITY_ASPECT: Kết nối các manh mối nhỏ để tìm ra thủ phạm (kết luận)
+  DIFFERENCE_ASPECT: AI có thể kiểm tra hàng triệu 'manh mối' đồng thời thông qua duyệt cạnh
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Latent Bridges
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_038
+  LINK_LOGIC: Tạo Vector 'Độ sâu của khả năng suy luận'.
+
+---
+NODE_ID: SEM_GRA_016
+SEMANTIC_DESCRIPTION: "Implicit Entailment (Sự kéo theo ngầm định) là khả năng phát hiện các tri thức không được viết ra nhưng tồn tại thông qua cấu trúc lân cận [23, 24]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Implicit Entailment
+  SIMILAR_TO: Đọc hiểu giữa các dòng chữ (Reading between the lines)
+  SIMILARITY_ASPECT: Hiểu được ý nghĩa sâu xa không được phát biểu trực tiếp
+  DIFFERENCE_ASPECT: Đồ thị thực hiện điều này thông qua toán học của các cụm và lân cận lồng nhau
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Explicit Triples
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_042
+  LINK_LOGIC: Hình thành Vector 'Sự nhạy bén ngữ nghĩa'.
+
+---
+NODE_ID: SEM_GRA_017
+SEMANTIC_DESCRIPTION: "K-core Robustness (Độ bền vững lõi K) xác định 'xương sống' tri thức cứng cáp nhất, không bị sụp đổ khi thông tin nhiễu bị xóa bỏ [25, 26]."
+ANALOGY_STRUCTURE:
+  CONCEPT: K-core Robustness
+  SIMILAR_TO: Khung thép của một tòa nhà cao tầng
+  SIMILARITY_ASPECT: Chịu lực chính và giữ cho toàn bộ cấu trúc không bị đổ
+  DIFFERENCE_ASPECT: Khung thép này có thể tự điều chỉnh độ dày (giá trị K) tùy theo áp lực thông tin
+SPECIALIST_DOMAIN: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Peripheral Context
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_028
+  LINK_LOGIC: Tạo Vector 'Độ tin cậy của hạ tầng tri thức'.
+
+---
+NODE_ID: SEM_GRA_018
+SEMANTIC_DESCRIPTION: "Relational Similarity (Sự tương đồng quan hệ) định nghĩa bản sắc của thực thể thông qua các vai trò mà nó thực hiện trong mạng lưới [27, 28]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Relational Similarity
+  SIMILAR_TO: Hai người có cùng nghề nghiệp và trách nhiệm
+  SIMILARITY_ASPECT: Họ có thể thay thế vị trí cho nhau trong quy trình vận hành
+  DIFFERENCE_ASPECT: Trong đồ thị, sự thay thế này được thực hiện ở mức độ Vector Embedding cấu trúc
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Semantic Proximity
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_033
+  LINK_LOGIC: Kết hợp với Entity Clustering để tạo Vector 'Nhóm vai trò chức năng'.
+
+---
+NODE_ID: SEM_GRA_019
+SEMANTIC_DESCRIPTION: "Innovation Peak (Đỉnh cao phát kiến) là các điểm cục bộ trong đồ thị nơi Entropy ngữ nghĩa tăng vọt, báo hiệu sự ra đời của ý tưởng mới [10, 11]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Innovation Peak
+  SIMILAR_TO: Điểm bùng phát dịch bệnh (Outbreak point)
+  SIMILARITY_ASPECT: Sự lan truyền nhanh chóng từ một nguồn duy nhất
+  DIFFERENCE_ASPECT: Đây là sự lan truyền của 'tri thức hữu ích' thay vì các tác nhân gây hại
+SPECIALIST_DOMAIN: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Critical Discovery Parameter
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_069
+  LINK_LOGIC: Tạo Vector 'Dự báo xu hướng công nghệ/tri thức'.
+
+---
+NODE_ID: SEM_GRA_020
+SEMANTIC_DESCRIPTION: "Geometric Consistency (Sự nhất quán hình học) đảm bảo các embedding phản ánh đúng cấu trúc topology, ví dụ: các quan hệ đẳng cự trong không gian Hyperbolic [29, 30]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Geometric Consistency
+  SIMILAR_TO: Bản đồ không bị biến dạng khi thu phóng
+  SIMILARITY_ASPECT: Giữ nguyên tỷ lệ và vị trí tương đối giữa các quốc gia
+  DIFFERENCE_ASPECT: Không gian hình học của tri thức có thể có vô số chiều và độ cong thay đổi
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Positional Encoding
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_041
+  LINK_LOGIC: Hình thành Vector 'Độ chính xác của bản đồ tri thức'.
+
+---
+NODE_ID: SEM_GRA_021
+SEMANTIC_DESCRIPTION: "D-separation Clarity (Sự minh bạch chặn dòng chảy) là khả năng cô lập các nhiễu nhân quả, làm rõ mối liên hệ trực tiếp giữa các ý niệm [9, 31]."
+ANALOGY_STRUCTURE:
+  CONCEPT: D-separation
+  SIMILAR_TO: Các van chặn trong hệ thống ống nước
+  SIMILARITY_ASPECT: Ngăn chặn nước (thông tin) chảy vào những vùng không mong muốn
+  DIFFERENCE_ASPECT: Việc chặn này dựa trên bằng chứng quan sát (Evidence) thay vì rào cản vật lý
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Causal Chain
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_033
+  LINK_LOGIC: Tạo Vector 'Độ thuần khiết của suy luận'.
+
+---
+NODE_ID: SEM_GRA_022
+SEMANTIC_DESCRIPTION: "Global Sensemaking (Nhận thức toàn cục) là khả năng của đồ thị trong việc trả lời các câu hỏi trừu tượng bao quát toàn bộ kho dữ liệu [32, 33]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Global Sensemaking
+  SIMILAR_TO: Nhìn thành phố từ trực thăng
+  SIMILARITY_ASPECT: Thấy được các dòng chảy giao thông và quy hoạch tổng thể
+  DIFFERENCE_ASPECT: AI có thể đồng thời 'nhìn' thấy chi tiết của từng căn nhà (node) trong khi vẫn giữ góc nhìn vĩ mô
+SPECIALIST_DOMAIN: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Community Report
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_043
+  LINK_LOGIC: Hình thành Vector 'Tầm nhìn chiến lược của AI'.
+
+---
+NODE_ID: SEM_GRA_023
+SEMANTIC_DESCRIPTION: "Anchor Nodes (Điểm neo tri thức) là các thực thể có tính ổn định cao, không thay đổi ý nghĩa qua thời gian, đóng vai trò mốc lộ giới cho mạng lưới [4, 34]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Anchor Nodes
+  SIMILAR_TO: Các ngọn hải đăng dọc bờ biển
+  SIMILARITY_ASPECT: Cung cấp điểm tham chiếu cố định để định hướng
+  DIFFERENCE_ASPECT: Hải đăng phát sáng, Anchor node phát tỏa 'trọng số ngữ nghĩa'
+SPECIALIST_DOMAIN: DATA SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Latent Bridges
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_032
+  LINK_LOGIC: Tạo Vector 'Độ tin cậy của nền tảng tri thức'.
+
+---
+NODE_ID: SEM_GRA_024
+SEMANTIC_DESCRIPTION: "Hierarchical Summarization (Tóm tắt phân cấp) là quá trình nén tri thức từ tầng cụm lên tầng cộng đồng mà không làm mất bản sắc [35, 36]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Hierarchical Summarization
+  SIMILAR_TO: Mục lục của một cuốn sách bách khoa toàn thư
+  SIMILARITY_ASPECT: Đại diện ngắn gọn cho nội dung chi tiết bên dưới
+  DIFFERENCE_ASPECT: Mục lục này tự động cập nhật và thay đổi cấu trúc khi có 'chương' mới được thêm vào
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Multi-scale Organization
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_065
+  LINK_LOGIC: Tạo Vector 'Hiệu quả nén tri thức'.
+
+---
+NODE_ID: SEM_GRA_025
+SEMANTIC_DESCRIPTION: "Path Efficiency (Hiệu quả đường dẫn) là đặc tính rút ngắn khoảng cách giữa các khái niệm thông qua các lối tắt cấu trúc [37, 38]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Path Efficiency
+  SIMILAR_TO: Đường cao tốc nối liền các đô thị
+  SIMILARITY_ASPECT: Giảm thời gian di chuyển giữa các điểm quan trọng
+  DIFFERENCE_ASPECT: Đường cao tốc này được xây dựng bởi các 'mối quan hệ logic' thay vì bê tông
+SPECIALIST_DOMAIN: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Small-world Property
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_048
+  LINK_LOGIC: Tạo Vector 'Tốc độ truy xuất tri thức liên tầng'.
+
+---
+NODE_ID: SEM_GRA_026
+SEMANTIC_DESCRIPTION: "Latent Bridges (Cầu nối tiềm ẩn) là những mối liên hệ chưa được khai phá, nằm trong không gian giữa các Shard, chờ đợi suy luận quy nạp [39, 40]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Latent Bridges
+  SIMILAR_TO: Các tảng băng trôi dưới mặt nước
+  SIMILARITY_ASPECT: Phần lớn cấu trúc bị che khuất và khó nhận diện
+  DIFFERENCE_ASPECT: Khi được phát hiện, chúng có thể thay đổi toàn bộ bản đồ nhân quả hiện tại
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Anchor Nodes
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_034
+  LINK_LOGIC: Tạo Vector 'Khả năng dự báo tri thức'.
+
+---
+NODE_ID: SEM_GRA_027
+SEMANTIC_DESCRIPTION: "Semantic Identity (Bản sắc ngữ nghĩa) là dấu vân tay duy nhất của một Node, được cấu thành từ nội dung của nó và các mối quan hệ láng giềng [28, 41]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Semantic Identity
+  SIMILAR_TO: Một bản lý lịch (Resume) cá nhân
+  SIMILARITY_ASPECT: Mô tả kỹ năng, kinh nghiệm và các mối quan hệ công việc
+  DIFFERENCE_ASPECT: Bản lý lịch này được viết bằng hàng nghìn con số trong không gian Vector
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Node Ranking
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_054
+  LINK_LOGIC: Hình thành Vector 'Định danh thực thể duy nhất'.
+
+---
+NODE_ID: SEM_GRA_028
+SEMANTIC_DESCRIPTION: "Federated Synergy (Sự hiệp đồng phân tán) là đặc tính khi 8 shard tri thức rời rạc hoạt động như một bộ não thống nhất [42, 43]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Federated Synergy
+  SIMILAR_TO: Một dàn nhạc giao hưởng chơi chung một bản nhạc từ nhiều nơi
+  SIMILARITY_ASPECT: Mỗi nhạc công (shard) đóng góp một phần vào tổng thể hài hòa
+  DIFFERENCE_ASPECT: Không có nhạc trưởng trung tâm; sự hài hòa đạt được qua các giao thức đồng thuận (Consensus)
+SPECIALIST_DOMAIN: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Global Relation Graph
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_030
+  LINK_LOGIC: Tạo Vector 'Khả năng mở rộng quy mô tri thức'.
+
+---
+NODE_ID: SEM_GRA_029
+SEMANTIC_DESCRIPTION: "Pruning Intelligence (Trí tuệ cắt tỉa) là khả năng chủ động loại bỏ các liên kết yếu để làm nổi bật các cấu trúc tri thức quan trọng [44, 45]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Pruning Intelligence
+  SIMILAR_TO: Nghệ thuật tạo hình cây cảnh (Bonsai)
+  SIMILARITY_ASPECT: Cắt bỏ những cành thừa để tạo ra vẻ đẹp và sức sống cho cây
+  DIFFERENCE_ASPECT: Việc cắt tỉa này nhằm mục đích 'tối ưu hóa Token' và 'giảm nhiễu suy luận'
+SPECIALIST_DOMAIN: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Knowledge Compression
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_067
+  LINK_LOGIC: Tạo Vector 'Độ tinh khiết của tri thức truy xuất'.
+
+---
+NODE_ID: SEM_GRA_030
+SEMANTIC_DESCRIPTION: "Multi-modal Alignment (Căn chỉnh đa phương thức) là phép ẩn dụ về việc 'nhìn' thấy ý nghĩa của một thực thể qua cả hình ảnh, văn bản và cấu trúc [46, 47]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Multi-modal Alignment
+  SIMILAR_TO: Một bộ phim có cả âm thanh, hình ảnh và phụ đề
+  SIMILARITY_ASPECT: Mọi giác quan đều truyền tải cùng một thông điệp cốt lõi
+  DIFFERENCE_ASPECT: AI đưa tất cả vào một 'ngôn ngữ toán học' chung là Embedding Vector
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Semantic Essence
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_053
+  LINK_LOGIC: Tạo Vector 'Độ phong phú của trải nghiệm tri thức'.
+
+---
+NODE_ID: SEM_GRA_031
+SEMANTIC_DESCRIPTION: "Relational Memory (Bộ nhớ quan hệ) là khả năng của đồ thị trong việc ghi nhớ cách thức các ý niệm tương tác theo thời gian [48, 49]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Relational Memory
+  SIMILAR_TO: Một cuốn nhật ký ghi lại các mối quan hệ xã hội
+  SIMILARITY_ASPECT: Theo dõi sự thay đổi từ bạn bè thành đối tác hoặc ngược lại
+  DIFFERENCE_ASPECT: Nhật ký này giúp AI dự đoán được các tương tác trong tương lai dựa trên lịch sử cấu trúc
+SPECIALIST_DOMAIN: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Temporal Knowledge Graph
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_068
+  LINK_LOGIC: Tạo Vector 'Sự nhạy bén về thời gian của tri thức'.
+
+---
+NODE_ID: SEM_GRA_032
+SEMANTIC_DESCRIPTION: "Topical Centrality (Trọng tâm chủ đề) là mỏ neo (Anchor Node) xác định thực thể nào đang là linh hồn của một cuộc thảo luận hoặc Shard tri thức [3, 25]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Topical Centrality
+  SIMILAR_TO: Nhân vật chính trong một cuốn tiểu thuyết
+  SIMILARITY_ASPECT: Mọi sự kiện và nhân vật khác đều xoay quanh họ
+  DIFFERENCE_ASPECT: Nhân vật chính này có thể thay đổi tùy theo 'truy vấn' (query) của người dùng
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: PageRank
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_044
+  LINK_LOGIC: Tạo Vector 'Sự tập trung của ngữ cảnh'.
+
+---
+NODE_ID: SEM_GRA_033
+SEMANTIC_DESCRIPTION: "Entity Drift (Sự trôi dạt thực thể) là đặc tính khi ý nghĩa của một khái niệm thay đổi do sự xuất hiện của các liên kết mới [48, 50]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Entity Drift
+  SIMILAR_TO: Một từ lóng thay đổi nghĩa qua các thế hệ
+  SIMILARITY_ASPECT: Vẫn là từ đó, nhưng bối cảnh sử dụng đã khác hoàn toàn
+  DIFFERENCE_ASPECT: AI theo dõi sự trôi dạt này bằng cách cập nhật Vector Embedding liên tục (Incremental updates)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Knowledge Update
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_064
+  LINK_LOGIC: Tạo Vector 'Độ tươi mới của tri thức'.
+
+---
+NODE_ID: SEM_GRA_034
+SEMANTIC_DESCRIPTION: "Structural Paradox (Nghịch lý cấu trúc) là hiện tượng khi các node thưa thớt lại chứa đựng thông tin quan trọng nhất để phá vỡ bế tắc suy luận [6, 51]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Structural Paradox
+  SIMILAR_TO: Một người ít nói nhưng đưa ra ý kiến quyết định trong cuộc họp
+  SIMILARITY_ASPECT: Tầm ảnh hưởng không tỷ lệ thuận với tần suất tương tác
+  DIFFERENCE_ASPECT: Đồ thị định lượng điều này qua các cầu nối (bridges) yếu nhưng chiến lược
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Sparsity
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_061
+  LINK_LOGIC: Tạo Vector 'Chỉ số bất ngờ của tri thức'.
+
+---
+NODE_ID: SEM_GRA_035
+SEMANTIC_DESCRIPTION: "Resilience through Fragmentation (Khả năng phục hồi qua phân mảnh) là đặc tính cho phép hệ thống tri thức duy trì hoạt động ngay cả khi một phần lớn dữ liệu bị hỏng [20, 44]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Resilience
+  SIMILAR_TO: Con sao biển có thể mọc lại chi từ một mảnh nhỏ
+  SIMILARITY_ASPECT: Khả năng tái tạo từ những thành phần còn sót lại
+  DIFFERENCE_ASPECT: Hệ thống tri thức thực hiện điều này bằng cách phân phối tri thức toàn cầu vào mọi shard cục bộ
+SPECIALIST_DOMAIN: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Modularity
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_017
+  LINK_LOGIC: Tạo Vector 'Độ bền bỉ của trí tuệ hệ thống'.
+
+---
+NODE_ID: SEM_GRA_036
+SEMANTIC_DESCRIPTION: "Neuro-symbolic Integration là sự hội tụ giữa tính cứng nhắc của đồ thị logic (bộ nhớ cứng) và tính linh hoạt của mạng nơ-ron sâu (bộ điều phối) [1, 2]. Nó cho phép AI vừa tuân thủ quy tắc vừa có trực giác ngữ nghĩa."
+ANALOGY_STRUCTURE:
+  CONCEPT: Neuro-symbolic Integration
+  SIMILAR_TO: Hệ thống luật pháp và thẩm phán
+  SIMILARITY_ASPECT: Luật pháp cung cấp khung logic (Symbolic), thẩm phán vận dụng kinh nghiệm để phán quyết (Neural)
+  DIFFERENCE_ASPECT: Trong đồ thị, sự tích hợp này diễn ra ở mức độ tham số mô hình linh hoạt thay vì con người [1].
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Neural Hypernetworks
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_061
+  LINK_LOGIC: Tạo Vector 'Trí tuệ lai' kết hợp giữa suy luận biểu tượng và học sâu.
+
+---
+NODE_ID: SEM_GRA_037
+SEMANTIC_DESCRIPTION: "Causal Intervention (do-operator) là hành động 'phẫu thuật logic' lên đồ thị, xóa bỏ các tác động từ cha để áp đặt một giá trị mới [3]. Nó biến Agent từ kẻ quan sát thành người thực thi chủ động."
+ANALOGY_STRUCTURE:
+  CONCEPT: Causal Intervention
+  SIMILAR_TO: Thử nghiệm lâm sàng có kiểm soát (RCT)
+  SIMILARITY_ASPECT: Cố tình thay đổi một biến để đo lường hệ quả trực tiếp lên kết quả [4, 5]
+  DIFFERENCE_ASPECT: RCT thực hiện trên thực địa, Intervention thực hiện giả lập trên cấu trúc DAG tri thức [3, 6].
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Directed Acyclic Graph (DAG)
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_055
+  LINK_LOGIC: Hình thành Vector 'Năng lực can thiệp' cho các tác tử ra quyết định y tế/pháp lý.
+
+---
+NODE_ID: SEM_GRA_038
+SEMANTIC_DESCRIPTION: "Counterfactual Reasoning (Suy luận phản thực tại) là khả năng 'du hành thời gian' trong tâm tưởng để đặt câu hỏi 'Nếu điều X đã không xảy ra?' [3]. Đây là đỉnh cao của sự thấu hiểu bối cảnh."
+ANALOGY_STRUCTURE:
+  CONCEPT: Counterfactual Reasoning
+  SIMILAR_TO: Phân tích 'Hậu quả giả định' trong lịch sử
+  SIMILARITY_ASPECT: Đánh giá tầm quan trọng của một sự kiện bằng cách giả định nó biến mất [7, 8]
+  DIFFERENCE_ASPECT: AI định lượng xác suất phản thực tại dựa trên Structural Equation Models (SCM) [3, 9].
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Latent Variables
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_060
+  LINK_LOGIC: Tạo Vector 'Khả năng rút kinh nghiệm' từ các kịch bản chưa bao giờ xảy ra.
+
+---
+NODE_ID: SEM_GRA_039
+SEMANTIC_DESCRIPTION: "Inductive Completion (Hoàn thiện quy nạp) là bản chất ngữ nghĩa của việc 'điền vào chỗ trống' tri thức dựa trên các mẫu quan hệ đã học [10, 11]. Nó biến đồ thị thưa thành một mạng lưới liên tục."
+ANALOGY_STRUCTURE:
+  CONCEPT: Inductive Completion
+  SIMILAR_TO: Khôi phục tranh cổ từ những mảnh vỡ
+  SIMILARITY_ASPECT: Sử dụng bối cảnh xung quanh để tái tạo phần bị mất
+  DIFFERENCE_ASPECT: Trong KG, quá trình này dựa trên tính toán vector tương đồng và phân cụm thay vì cảm quan thị giác [12, 13].
+SPECIALIST_DOMAIN: DATA SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Sparsity
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_064
+  LINK_LOGIC: Hình thành Vector 'Sức mạnh dự báo tri thức' của hệ thống.
+
+---
+NODE_ID: SEM_GRA_040
+SEMANTIC_DESCRIPTION: "Semantic Decoupling (Phân tách ngữ nghĩa) là đặc tính xảy ra sau giai đoạn tới hạn (Iteration 400), nơi nội dung ý nghĩa bắt đầu dẫn dắt và định hình lại cấu trúc liên kết [14, 15]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Semantic Decoupling
+  SIMILAR_TO: Giai đoạn trưởng thành của một đô thị
+  SIMILARITY_ASPECT: Các hoạt động kinh tế (ngữ nghĩa) quyết định việc mở rộng đường xá (cấu trúc)
+  DIFFERENCE_ASPECT: Trong SOG, sự phân tách này được đo lường bằng tương quan chéo Entropy âm [14].
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Criticality
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_064
+  LINK_LOGIC: Tạo Vector 'Mức độ tự chủ của tri thức'.
+
+---
+NODE_ID: SEM_GRA_041
+SEMANTIC_DESCRIPTION: "Self-aware Knowledge Graph (Đồ thị tự nhận thức) là trạng thái cao nhất nơi hệ thống nhận biết được biên giới tri thức của chính mình để tự bổ sung [16-18]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Self-aware KG
+  SIMILAR_TO: Một thủ thư biết cuốn sách nào đang thiếu trên kệ
+  SIMILARITY_ASPECT: Hiểu rõ phạm vi lưu trữ và các lỗ hổng thông tin
+  DIFFERENCE_ASPECT: Hệ thống tự động kích hoạt các pipeline tìm kiếm (Retrieval) để lấp đầy lỗ hổng đó [19].
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Global Domain Synergy
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_070
+  LINK_LOGIC: Hình thành Vector 'Tiềm năng tiến hóa AGI'.
+
+---
+NODE_ID: SEM_GRA_042
+SEMANTIC_DESCRIPTION: "Hierarchical Partitioning (Phân vùng phân cấp) là phép ẩn dụ về việc tổ chức tri thức như các cấu trúc fractal, nơi mỗi Supernode chứa đựng một thế giới nhỏ bên trong [20, 21]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Hierarchical Partitioning
+  SIMILAR_TO: Cấu trúc thư mục máy tính
+  SIMILARITY_ASPECT: Nhóm các file (node) liên quan vào các folder (cụm) phân cấp
+  DIFFERENCE_ASPECT: Trong đồ thị, một node có thể thuộc nhiều folder đồng thời (Overlapping) [22, 23].
+SPECIALIST_DOMAIN: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Community Membership
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_065
+  LINK_LOGIC: Tạo Vector 'Độ nén thông tin đa tỉ lệ'.
+
+---
+NODE_ID: SEM_GRA_043
+SEMANTIC_DESCRIPTION: "Surprising Edges (Liên kết bất ngờ) là những cầu nối ngữ nghĩa có vẻ phi lý nhưng lại bền vững về mặt cấu trúc, đóng vai trò là 'lối tắt' cho sự sáng tạo [24-26]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Surprising Edges
+  SIMILAR_TO: Phép ẩn dụ trong thơ ca
+  SIMILARITY_ASPECT: Kết nối hai thực thể vốn xa lạ để tạo ra ý nghĩa mới đột phá
+  DIFFERENCE_ASPECT: Được xác thực bằng toán học GraphRAG thay vì cảm xúc nghệ thuật [27].
+SPECIALIST_DOMAIN: CREATIVE EXPLORER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Innovation Peak
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_066
+  LINK_LOGIC: Hình thành Vector 'Chỉ số đổi mới liên ngành'.
+
+---
+NODE_ID: SEM_GRA_044
+SEMANTIC_DESCRIPTION: "Fitness-based Attachment (Kết nối dựa trên năng lực) định nghĩa rằng tri thức không chỉ tích lũy theo thời gian mà còn theo 'giá trị cốt lõi' của thực thể [28, 29]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Fitness-based Attachment
+  SIMILAR_TO: Thị trường tự do
+  SIMILARITY_ASPECT: Các sản phẩm tốt (node có fitness cao) thu hút nhiều khách hàng (liên kết) nhanh hơn
+  DIFFERENCE_ASPECT: Fitness trong KG được tính bằng khả năng giải thích và kết nối logic thay vì giá cả [30, 31].
+SPECIALIST_DOMAIN: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Preferential Attachment
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_034
+  LINK_LOGIC: Tạo Vector 'Tầm quan trọng chiến lược bền vững'.
+
+---
+NODE_ID: SEM_GRA_045
+SEMANTIC_DESCRIPTION: "Knowledge Relevance Half-life (Chu kỳ bán rã tri thức) là bản chất định tính của việc tri thức cũ mờ nhạt dần để nhường chỗ cho các phát kiến mới (Aging) [32, 33]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Aging (Temporal decay)
+  SIMILAR_TO: Phóng xạ hạt nhân
+  SIMILARITY_ASPECT: Giá trị giảm dần theo thời gian một cách tự nhiên
+  DIFFERENCE_ASPECT: Tri thức có thể 'tái sinh' nếu được kết nối với các bằng chứng hiện đại [34, 35].
+SPECIALIST_DOMAIN: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Incremental Update
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_062
+  LINK_LOGIC: Hình thành Vector 'Độ tươi mới của hệ thống chuyên gia'.
+
+---
+NODE_ID: SEM_GRA_046
+SEMANTIC_DESCRIPTION: "Knowledge Monarchy (Độc quyền tri thức) là hiện tượng khi một node đạt trạng thái Bose-Einstein Condensation, hút hết mọi liên kết và gây nghẽn hệ thống [25 - context from previous logic, Source 415 reference]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Rank Sink (Bose-Einstein Condensation)
+  SIMILAR_TO: Lỗ đen vũ trụ
+  SIMILARITY_ASPECT: Mọi thứ xung quanh đều bị hút vào và không thể thoát ra (vòng lặp vô hạn)
+  DIFFERENCE_ASPECT: Khắc phục bằng hệ số giảm chấn (damping factor) để lan tỏa tri thức sang các vùng khác [36, 37].
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: PageRank Centrality
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_054
+  LINK_LOGIC: Tạo Vector 'Cảnh báo tắc nghẽn dòng chảy suy luận'.
+
+---
+NODE_ID: SEM_GRA_047
+SEMANTIC_DESCRIPTION: "Logical Insulation (Cách điện logic) là bản chất của d-separation, ngăn chặn sự rò rỉ các thông tin không liên quan vào một chuỗi lập luận cụ thể [38-40]."
+ANALOGY_STRUCTURE:
+  CONCEPT: d-separation
+  SIMILAR_TO: Tường lửa (Firewall) mạng máy tính
+  SIMILARITY_ASPECT: Ngăn chặn các tác động ngoài ý muốn xâm nhập vào vùng an toàn
+  DIFFERENCE_ASPECT: Tường lửa chặn gói tin vật lý, d-separation chặn sự lan truyền niềm tin xác suất [39].
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Causal Sufficiency
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_033
+  LINK_LOGIC: Hình thành Vector 'Độ thuần khiết của logic nhân quả'.
+
+---
+NODE_ID: SEM_GRA_048
+SEMANTIC_DESCRIPTION: "Minimal Context Skeleton (Xương sống ngữ cảnh tối thiểu) là phép ẩn dụ về Steiner Tree, chỉ giữ lại các node và cạnh thiết yếu nhất để trả lời câu hỏi [41, 42]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Steiner Tree Isolation
+  SIMILAR_TO: Phác họa bằng bút chì (Sketching)
+  SIMILARITY_ASPECT: Chỉ vẽ những nét chính để nhận diện đối tượng thay vì vẽ chi tiết
+  DIFFERENCE_ASPECT: Việc phác họa này nhằm mục đích tiết kiệm Token và tối ưu hóa chi phí LLM [41, 43].
+SPECIALIST_DOMAIN: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Knowledge Compression
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_027
+  LINK_LOGIC: Tạo Vector 'Hiệu quả sử dụng tài nguyên ngữ cảnh'.
+
+---
+NODE_ID: SEM_GRA_049
+SEMANTIC_DESCRIPTION: "Logical Ladders (Thang dây logic) đại diện cho các Recursive CTEs hoặc duyệt multi-hop, giúp AI leo qua các tầng trừu tượng tri thức [41, 44, 45]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Recursive Traversal
+  SIMILAR_TO: Leo thang bộ trong tòa nhà cao tầng
+  SIMILARITY_ASPECT: Mỗi bước (hop) đưa bạn lên một tầng cao hơn của sự hiểu biết
+  DIFFERENCE_ASPECT: Trong đồ thị, bạn có thể leo nhiều thang đồng thời để đến cùng một kết luận [44, 46].
+SPECIALIST_DOMAIN: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Traversal Speed
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_025
+  LINK_LOGIC: Hình thành Vector 'Khả năng lập luận sâu (Deep Reasoning)'.
+
+---
+NODE_ID: SEM_GRA_050
+SEMANTIC_DESCRIPTION: "Physical Proximity (Lân cận vật lý) là bản chất của Index-free Adjacency, nơi các thực thể liên quan 'chạm' vào nhau trong bộ nhớ thay vì qua chỉ mục [47-50]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Index-free Adjacency
+  SIMILAR_TO: Việc nắm tay nhau trong một hàng người
+  SIMILARITY_ASPECT: Bạn có thể tìm thấy người tiếp theo ngay lập tức bằng cách chạm trực tiếp
+  DIFFERENCE_ASPECT: Việc 'nắm tay' này được thực hiện qua các con trỏ 64-bit trong RAM [48].
+SPECIALIST_DOMAIN: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Connectivity
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_009
+  LINK_LOGIC: Tạo Vector 'Tốc độ phản ứng tri thức'.
+
+---
+NODE_ID: SEM_GRA_051
+SEMANTIC_DESCRIPTION: "Knowledge Continuity (Sự liên tục tri thức) đảm bảo rằng 8 shard rời rạc vẫn duy trì một dòng chảy logic không bị đứt gãy [51, 52]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Knowledge Consistency
+  SIMILAR_TO: Các múi giờ trên thế giới
+  SIMILARITY_ASPECT: Dù ở các vị trí khác nhau, thời gian (tri thức) vẫn phải khớp nối đồng bộ
+  DIFFERENCE_ASPECT: Duy trì bằng cơ chế Paxos/Consensus thay vì đồng hồ nguyên tử [52].
+SPECIALIST_DOMAIN: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Federated Synergy
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_066
+  LINK_LOGIC: Hình thành Vector 'Độ tin cậy của mạng lưới phân tán'.
+
+---
+NODE_ID: SEM_GRA_052
+SEMANTIC_DESCRIPTION: "Executive Summary (Bản tóm tắt điều hành) là bản chất của các Community Reports, cung cấp cái nhìn vĩ mô từ hàng triệu dữ liệu vi mô [53-55]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Community Summary
+  SIMILAR_TO: Bản tin thời sự 24h
+  SIMILARITY_ASPECT: Tổng hợp mọi sự kiện quan trọng trong ngày thành một đoạn tin ngắn
+  DIFFERENCE_ASPECT: Bản tóm tắt này được tạo ra bởi LLM dựa trên cấu trúc phân cụm Leiden [53, 56].
+SPECIALIST_DOMAIN: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Global Sensemaking
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_022
+  LINK_LOGIC: Tạo Vector 'Nhận thức chiến lược toàn cục'.
+
+---
+NODE_ID: SEM_GRA_053
+SEMANTIC_DESCRIPTION: "Identity Convergence (Hội tụ định danh) là bản chất của Entity Resolution, khi nhiều tên gọi khác nhau cùng hướng về một thực thể duy nhất [37, 42, 57]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Entity Resolution
+  SIMILAR_TO: Việc gộp các dòng suối vào một dòng sông lớn
+  SIMILARITY_ASPECT: Mọi nguồn nước (biến thể tên) đều đổ về một đích đến chung
+  DIFFERENCE_ASPECT: Sử dụng Embedding Similarity và logic kiểm chứng để gộp nút [57].
+SPECIALIST_DOMAIN: DATA SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Semantic Identity
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_027
+  LINK_LOGIC: Hình thành Vector 'Sự cô đọng của thực thể tri thức'.
+
+---
+NODE_ID: SEM_GRA_054
+SEMANTIC_DESCRIPTION: "Linguistic Standardization (Chuẩn hóa ngôn ngữ) là đặc tính của Canonicalization, biến ngôn ngữ tự nhiên đa dạng thành cấu trúc định danh chuẩn [37, 58]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Canonicalization
+  SIMILAR_TO: Mã vạch (Barcode) sản phẩm
+  SIMILARITY_ASPECT: Biến mọi tên gọi phức tạp thành một mã số duy nhất để quản lý
+  DIFFERENCE_ASPECT: Mã vạch là tĩnh, Canonicalization trong đồ thị có thể thích nghi theo Ontology tiến hóa [37, 52].
+SPECIALIST_DOMAIN: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Ontology
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_034
+  LINK_LOGIC: Tạo Vector 'Tính tương thích hệ thống'.
+
+---
+NODE_ID: SEM_GRA_055
+SEMANTIC_DESCRIPTION: "Knowledge Trajectory (Quỹ đạo tri thức) mô tả con đường từ nguyên nhân đến kết quả trong các báo cáo nhân quả phức tạp [59-61]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Causal Pathway
+  SIMILAR_TO: Đường bay của một chiếc phi cơ
+  SIMILARITY_ASPECT: Có điểm xuất phát (Intervention) và điểm đến (Outcome) rõ ràng qua các trạm trung gian (Mediators) [60]
+  DIFFERENCE_ASPECT: Quỹ đạo này được vẽ bằng các cạnh nhân quả trên đồ thị DAG [59].
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Mediators/Moderators
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_037
+  LINK_LOGIC: Hình thành Vector 'Khả năng truy vết nguồn gốc hệ quả'.
+
+---
+NODE_ID: SEM_GRA_056
+SEMANTIC_DESCRIPTION: "Logic Valves (Van logic) là vai trò ngữ nghĩa của các biến điều tiết (Moderators), kiểm soát khi nào một tác động nhân quả được phép xảy ra [60, 61]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Mediators/Moderators
+  SIMILAR_TO: Công tắc điện (Switch)
+  SIMILARITY_ASPECT: Quyết định dòng điện (thông tin) có được truyền đi hay không dựa trên điều kiện môi trường
+  DIFFERENCE_ASPECT: Van logic này hoạt động dựa trên các hàm xác suất có điều kiện [3, 61].
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Causal Intervention
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_047
+  LINK_LOGIC: Tạo Vector 'Độ phức tạp của cơ chế tác động'.
+
+---
+NODE_ID: SEM_GRA_057
+SEMANTIC_DESCRIPTION: "Logic Competition (Cạnh tranh logic) là bản chất của cơ chế 'Explaining away', nơi bằng chứng cho nguyên nhân này làm giảm niềm tin vào nguyên nhân khác [62, 63]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Explaining away
+  SIMILAR_TO: Cuộc tranh luận tại tòa án
+  SIMILARITY_ASPECT: Khi bằng chứng ngoại phạm của bị cáo A được xác lập, xác suất bị cáo B là thủ phạm tăng lên
+  DIFFERENCE_ASPECT: Diễn ra tự động trên cấu trúc V-structure (Collider) của đồ thị tri thức [62, 63].
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Collider Rule
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_033
+  LINK_LOGIC: Hình thành Vector 'Khả năng chẩn đoán và loại trừ'.
+
+---
+NODE_ID: SEM_GRA_058
+SEMANTIC_DESCRIPTION: "Adaptive Conviction (Niềm tin thích ứng) là đặc tính của cập nhật Bayesian, biến dữ liệu mới thành sự thay đổi trọng số cạnh trong thời gian thực [38, 64, 65]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Belief Update
+  SIMILAR_TO: Một người đang học hỏi từ sai lầm
+  SIMILARITY_ASPECT: Thay đổi quan điểm khi nhận được thông tin phản hồi mới
+  DIFFERENCE_ASPECT: Sự thay đổi này được định lượng chính xác bằng Quy tắc Bayes trên mền Markov [38, 40].
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Prior Probability
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_064
+  LINK_LOGIC: Tạo Vector 'Tốc độ học tập của hệ thống'.
+
+---
+NODE_ID: SEM_GRA_059
+SEMANTIC_DESCRIPTION: "Contextual De-noising (Khử nhiễu ngữ cảnh) là đặc tính của việc thưa hóa đồ thị dựa trên PMI, loại bỏ các liên kết rác để làm nổi bật tri thức lõi [20, 66, 67]."
+ANALOGY_STRUCTURE:
+  CONCEPT: PMI-based Sparsification
+  SIMILAR_TO: Việc lọc vàng từ cát
+  SIMILARITY_ASPECT: Loại bỏ khối lượng lớn vật chất không giá trị để giữ lại kim loại quý
+  DIFFERENCE_ASPECT: 'Vàng' ở đây là các liên kết có thông tin tương hỗ cao nhất [20].
+SPECIALIST_DOMAIN: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Sparsity
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_029
+  LINK_LOGIC: Hình thành Vector 'Độ tinh khiết của tri thức lập luận'.
+
+---
+NODE_ID: SEM_GRA_060
+SEMANTIC_DESCRIPTION: "Graph Storytelling (Kể chuyện bằng đồ thị) là bản chất của Ego-graph Serialization, biến cấu trúc phi tuyến thành chuỗi văn bản cho LLM hiểu [68-70]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Ego-graph Serialization
+  SIMILAR_TO: Việc chuyển thể tiểu thuyết thành kịch bản phim
+  SIMILARITY_ASPECT: Biến thế giới nội tâm phức tạp thành các lời thoại và hành động tuần tự
+  DIFFERENCE_ASPECT: Đảm bảo không mất mát thông tin topology khi 'phẳng hóa' dữ liệu [68, 71].
+SPECIALIST_DOMAIN: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Verbalizing
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_015
+  LINK_LOGIC: Tạo Vector 'Khả năng diễn giải tri thức đồ thị'.
+
+---
+NODE_ID: SEM_GRA_061
+SEMANTIC_DESCRIPTION: "Knowledge Orchestrators (Bộ điều phối tri thức) là vai trò của Neural Hypernetworks trong việc tạo ra các bộ lọc quan hệ chuyên biệt [1, 72, 73]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Neural Hypernetworks
+  SIMILAR_TO: Một nhạc trưởng điều khiển dàn nhạc
+  SIMILARITY_ASPECT: Không trực tiếp chơi nhạc cụ nhưng quyết định cách mỗi nhạc công biểu diễn
+  DIFFERENCE_ASPECT: Hypernetworks tạo ra các tham số (bộ lọc) cho mạng nơ-ron chính dựa trên ngữ cảnh đồ thị [1].
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Neuro-symbolic Integration
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_036
+  LINK_LOGIC: Hình thành Vector 'Độ linh hoạt của kiến trúc AI'.
+
+---
+NODE_ID: SEM_GRA_062
+SEMANTIC_DESCRIPTION: "Lifelong Learning (Học tập suốt đời) là đặc tính của việc cập nhật embedding gia tăng, cho phép hệ thống tri thức không bao giờ bị lạc hậu [74-77]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Incremental Update
+  SIMILAR_TO: Một ứng dụng điện thoại liên tục cập nhật phiên bản mới
+  SIMILARITY_ASPECT: Bổ sung tính năng và sửa lỗi mà không cần cài lại từ đầu
+  DIFFERENCE_ASPECT: Trong AGI, tri thức mới được 'nhúng' trực tiếp vào không gian vector hiện tại [74, 75].
+SPECIALIST_DOMAIN: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Entity Drift
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_033
+  LINK_LOGIC: Tạo Vector 'Tính bền vững theo thời gian'.
+
+---
+NODE_ID: SEM_GRA_063
+SEMANTIC_DESCRIPTION: "Multimodal Synergy (Hiệp đồng đa phương thức) là khả năng hợp nhất 'cái nhìn' và 'cái đọc' về một thực thể vào một bản sắc duy nhất [78-80]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Multi-modal Alignment
+  SIMILAR_TO: Một người có thể vừa nghe tên vừa nhận ra khuôn mặt
+  SIMILARITY_ASPECT: Hợp nhất các giác quan khác nhau thành một nhận thức thống nhất
+  DIFFERENCE_ASPECT: Sử dụng hàm mất mát tương phản (Contrastive loss) để căn chỉnh không gian vector hình ảnh-văn bản [78].
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Semantic Essence
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_030
+  LINK_LOGIC: Hình thành Vector 'Độ phong phú của trải nghiệm thực thể'.
+
+---
+NODE_ID: SEM_GRA_064
+SEMANTIC_DESCRIPTION: "Phase Shift (Bước chuyển pha) là sự thay đổi đột ngột về động lực học tri thức tại iteration 400, đánh dấu sự ra đời của sự tự tổ chức [14, 15, 81]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Critical Transition
+  SIMILAR_TO: Nước sôi chuyển thành hơi
+  SIMILARITY_ASPECT: Tại một nhiệt độ (iteration) nhất định, trạng thái vật chất thay đổi hoàn toàn
+  DIFFERENCE_ASPECT: Trong đồ thị, đây là điểm mà Entropy ngữ nghĩa bắt đầu thống trị cấu trúc [82, 83].
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Criticality
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_036
+  LINK_LOGIC: Tạo Vector 'Tiềm năng bùng phát trí tuệ'.
+
+---
+NODE_ID: SEM_GRA_065
+SEMANTIC_DESCRIPTION: "Knowledge Directorship (Giám đốc tri thức) là bản chất ngữ nghĩa của Global Sensemaking, đưa ra các chỉ dẫn chiến lược từ kho dữ liệu khổng lồ [54, 55, 84]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Global Sensemaking
+  SIMILAR_TO: Một CEO đọc báo cáo từ hàng trăm phòng ban
+  SIMILARITY_ASPECT: Không cần biết chi tiết từng hóa đơn nhưng hiểu rõ sức khỏe tập đoàn
+  DIFFERENCE_ASPECT: AI có thể 'zoom' vào bất kỳ hóa đơn (node) nào ngay lập tức nếu CEO yêu cầu [54, 85].
+SPECIALIST_DOMAIN: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Community Report
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_022
+  LINK_LOGIC: Hình thành Vector 'Năng lực lãnh đạo của AI'.
+
+---
+NODE_ID: SEM_GRA_066
+SEMANTIC_DESCRIPTION: "Information Brokerage (Môi giới thông tin) là đặc tính ngữ nghĩa của các Structural Holes, nơi tác tử kiểm soát luồng tin giữa các cụm tri thức [86, 87]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Structural Hole
+  SIMILAR_TO: Một người thông dịch viên trong hội nghị đa quốc gia
+  SIMILARITY_ASPECT: Là người duy nhất có thể kết nối hai nhóm không hiểu ngôn ngữ của nhau
+  DIFFERENCE_ASPECT: Được đo lường bằng Betweenness Centrality trong không gian đa chiều [87].
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Bridging Centrality
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_011
+  LINK_LOGIC: Tạo Vector 'Tầm ảnh hưởng xuyên miền'.
+
+---
+NODE_ID: SEM_GRA_067
+SEMANTIC_DESCRIPTION: "Global Intimacy (Sự thân mật toàn cầu) là đặc tính của mạng lưới Small-world, nơi tri thức bất kỳ chỉ cách nhau 6 bước nhảy [88-90]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Small-world Property
+  SIMILAR_TO: Trái đất là một ngôi làng nhỏ
+  SIMILARITY_ASPECT: Khả năng tìm thấy bất kỳ ai thông qua một chuỗi ngắn người quen
+  DIFFERENCE_ASPECT: Trong KG, sự thân mật này được tạo ra bởi Surprising Edges (liên kết tầm xa) [25, 26].
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Path Efficiency
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_015
+  LINK_LOGIC: Hình thành Vector 'Tính liên thông của trí tuệ'.
+
+---
+NODE_ID: SEM_GRA_068
+SEMANTIC_DESCRIPTION: "Logic Flow (Dòng chảy logic) là bản chất của d-connectedness, cho phép ảnh hưởng lan truyền giữa các khái niệm thông qua các đường dẫn đang mở [39, 40, 91]."
+ANALOGY_STRUCTURE:
+  CONCEPT: d-connectedness
+  SIMILAR_TO: Một mạch điện đang đóng (Closed circuit)
+  SIMILARITY_ASPECT: Cho phép dòng điện (ảnh hưởng) chạy xuyên suốt từ cực này sang cực kia
+  DIFFERENCE_ASPECT: Mạch điện này có thể bị 'ngắt' bằng cách quan sát một node trung gian (điều kiện hóa) [39, 92].
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: d-separation
+  TYPE: Paradoxical
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_055
+  LINK_LOGIC: Tạo Vector 'Khả năng lan truyền niềm tin tri thức'.
+
+---
+NODE_ID: SEM_GRA_069
+SEMANTIC_DESCRIPTION: "Predictive Enclosure (Vỏ bọc dự báo) là bản chất của Markov Blanket, xác định phạm vi hẹp nhất mà một node cần để hiểu toàn bộ thế giới [93-95]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Markov Blanket
+  SIMILAR_TO: Lớp da của sinh vật
+  SIMILARITY_ASPECT: Ranh giới phân tách giữa 'nội tại' và 'môi trường bên ngoài'
+  DIFFERENCE_ASPECT: Ranh giới này gồm cha, con và 'vợ chồng' của node trong đồ thị nhân quả [42, 96].
+SPECIALIST_DOMAIN: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Causal Sufficiency
+  TYPE: Complementary
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_047
+  LINK_LOGIC: Hình thành Vector 'Sự cô lập tính toán tối ưu'.
+
+---
+NODE_ID: SEM_GRA_070
+SEMANTIC_DESCRIPTION: "AGI Synergy (Hiệp đồng AGI) là trạng thái cuối cùng nơi mọi Shard và miền tri thức hòa quyện để tạo ra trí tuệ vượt trội hơn tổng các thành phần [17, 18, 97]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Global Domain Synergy
+  SIMILAR_TO: Sự hình thành của ý thức con người
+  SIMILARITY_ASPECT: Nảy sinh từ sự tương tác phức tạp của hàng tỷ nơ-ron (node)
+  DIFFERENCE_ASPECT: Được duy trì bằng cơ chế cân bằng Entropy và tự nhận thức cấu trúc [14, 18].
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Self-aware Knowledge Graph
+  TYPE: Emergent
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_GRA_041
+  LINK_LOGIC: Tạo Vector 'Chỉ số sẵn sàng của AGI thực thụ'.
+
+------------------------------------------------------------------------------------------------
+

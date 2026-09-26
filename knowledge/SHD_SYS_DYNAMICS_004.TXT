@@ -1,0 +1,2981 @@
+shard_metadata:
+  shard_id: "SHD_SYS_DYNAMICS_004"
+  shard_name: "System Dynamics & Autonomy (Động lực học & Tự chủ)"
+  domain: "Control Theory / Cybernetics / Autonomous Systems"
+  version: "1.0.0"
+  parent_link: "SHD_OPT_CONVEX_003" # Kế thừa các thuật toán hội tụ để điều khiển trạng thái ổn định
+  status: "Active / Core_Integration"
+  tags: [
+    "Feedback_Loops",
+    "State_Space",
+    "Stocks_and_Flows",
+    "PID_Control",
+    "MPC_Predictive",
+    "System_Stability",
+    "Autonomous_Agents",
+    "Entropy_Management"
+  ]
+layer_1:
+
+NODE_ID: SDA_ENT_001
+ENTITY_NAME: Internal States (μ)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Các biến trạng thái bên trong thực tử mã hóa niềm tin về môi trường. [1, 2]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: External States
+  RELATION: Cấu trúc hóa
+ATTRIBUTES:
+  Degree of autonomy: High
+  Parameterization: Gaussian / Point mass [3]
+
+---
+NODE_ID: SDA_ENT_002
+ENTITY_NAME: External States (η)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Các trạng thái ẩn của môi trường gây ra các tín hiệu cảm biến. [2, 4]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Sensory States
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Dynamics: Stochastic differential equations [5]
+
+---
+NODE_ID: SDA_ENT_003
+ENTITY_NAME: Markov Blanket
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Ranh giới thống kê phân tách thực tử với môi trường bên ngoài. [1, 2, 6]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Internal States
+  RELATION: Chứa đựng
+ATTRIBUTES:
+  Structure: Sensory and Active states [2]
+  Coupling: Sparse [4, 7]
+
+---
+NODE_ID: SDA_ENT_004
+ENTITY_NAME: Variational Free Energy (VFE)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Giới hạn trên của độ bất ngờ, dùng để tối ưu hóa niềm tin. [8-10]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Internal States
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Components: Complexity and Accuracy [10]
+  Function: Informational potential [11, 12]
+
+---
+NODE_ID: SDA_ENT_005
+ENTITY_NAME: Expected Free Energy (EFE)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Giá trị kỳ vọng của tự do năng lượng trong tương lai. [13-15]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Policy Selection
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Values: Epistemic (Information gain) and Pragmatic [14, 15]
+
+---
+NODE_ID: SDA_ENT_006
+ENTITY_NAME: Active Inference
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Cơ chế tự chủ thông qua việc giảm thiểu độ bất ngờ tương lai. [13, 16, 17]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Active States
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Objective: Surprise minimization [17, 18]
+
+---
+NODE_ID: SDA_ENT_007
+ENTITY_NAME: Lyapunov Function (V)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Hàm năng lượng xác định tính ổn định của hệ thống động lực. [19-21]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Equilibrium State
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Stability: Asymptotically stable if derivative < 0 [19, 20]
+
+---
+NODE_ID: SDA_ENT_008
+ENTITY_NAME: Non-Equilibrium Steady State (NESS)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Trạng thái dừng của hệ thống mở có dòng chảy năng lượng. [22-24]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Solenoidal Flow
+  RELATION: Chứa đựng
+ATTRIBUTES:
+  Density: Stationary solution to Fokker-Planck [22, 24]
+
+---
+NODE_ID: SDA_ENT_009
+ENTITY_NAME: Solenoidal Flow
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Dòng chảy bảo toàn xác suất trên các đường đẳng mức tiềm năng. [23, 25, 26]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: NESS Density
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Matrix: Skew-symmetric operator Q [25, 27]
+  Nature: Energetically conservative [26, 28]
+
+---
+NODE_ID: SDA_ENT_010
+ENTITY_NAME: Dissipative Flow
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Dòng chảy triệt tiêu độ lệch, hướng hệ thống về điểm cực đại. [23, 26, 29]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Synchronization Manifold
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Speed: Fast flow component [23]
+  Role: Inference / Update term [30]
+
+---
+NODE_ID: SDA_ENT_011
+ENTITY_NAME: Structural Prior (Π)
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Định hướng ưu tiên gốc cấu thành nên kiến trúc học tập. [31-33]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Hypothesis Space
+  RELATION: Cấu trúc hóa
+ATTRIBUTES:
+  Type: Inductive bias [33, 34]
+  Regularization: Complexity control [34]
+
+---
+NODE_ID: SDA_ENT_012
+ENTITY_NAME: Multi-Regime Evaluator (L)
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Hệ thống đánh giá đa tầng điều phối các mục tiêu khác nhau. [35-37]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Active Evaluator
+  RELATION: Chứa đựng
+ATTRIBUTES:
+  Composition: Plurality of drives / values [35]
+
+---
+NODE_ID: SDA_ENT_013
+ENTITY_NAME: Persistent Memory (M)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Kho lưu trữ cấu trúc các dấu vết kinh nghiệm và tri thức. [33, 38, 39]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Internal States
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Function: Structural persistence [40]
+  Operators: Write / Consolidate / Forget [41]
+
+---
+NODE_ID: SDA_ENT_014
+ENTITY_NAME: Causal Loop Diagram (CLD)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Đồ thị mô tả các vòng lặp phản hồi nhân quả trong hệ. [42-44]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Feedback Controllers
+  RELATION: Cấu trúc hóa
+ATTRIBUTES:
+  Feedback: Positive and negative loops [42, 45]
+
+---
+NODE_ID: SDA_ENT_015
+ENTITY_NAME: Nonlinear Model Predictive Control (NMPC)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Chiến lược điều khiển tối ưu hóa quỹ đạo dưới các ràng buộc. [46, 47]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Control Optimization Module
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Horizon: Long-time planning (~9s) [47, 48]
+  Constraint: Safety enforcement [49, 50]
+
+---
+NODE_ID: SDA_ENT_016
+ENTITY_NAME: Entropy (S)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Thước đo độ hỗn loạn hoặc nội dung thông tin trung bình. [8, 51, 52]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Maximum Entropy Production
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Type: Shannon entropy / Quasi-thermal entropy [51, 53]
+
+---
+NODE_ID: SDA_ENT_017
+ENTITY_NAME: Equilibrium State
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Điểm nơi các biến trạng thái không còn thay đổi theo thời gian. [54, 55]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Stability Margin
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Steady-state: Derivatives become zero [55]
+
+---
+NODE_ID: SDA_ENT_018
+ENTITY_NAME: Actuators
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Các bộ phận thực thi tác động vật lý lên môi trường. [56-58]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Active States
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Interaction: Motor control [59, 60]
+
+---
+NODE_ID: SDA_ENT_019
+ENTITY_NAME: Heuristics
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Các quy tắc kinh nghiệm giúp đơn giản hóa việc ra quyết định. [61, 62]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Autonomous Decision
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Method: Genetic algorithm / MDP heuristic [61, 62]
+
+---
+NODE_ID: SDA_ENT_020
+ENTITY_NAME: Latent Variables
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Các biến không quan sát trực tiếp, được suy diễn từ dữ liệu. [61, 63]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Directed Acyclic Graph (DAG)
+  RELATION: Được cấu trúc hóa bởi
+ATTRIBUTES:
+  Space: Latent cognitive space [58, 64]
+
+NODE_ID: SDA_ENT_021
+ENTITY_NAME: Causal Link
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Mối liên kết xác định một khẳng định hỗ trợ nhân quả cho khẳng định khác [1, 2].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Causal Network
+  RELATION: Chứa đựng
+ATTRIBUTES:
+  Constraint: Temporal consistency [3, 4]
+  Type: Explicit supporter [5, 6]
+
+---
+NODE_ID: SDA_ENT_022
+ENTITY_NAME: Causal Chain
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Chuỗi các khẳng định thay đổi ràng buộc hoàn toàn biến trạng thái [7, 8].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: State Variable
+  RELATION: Cấu trúc hóa
+ATTRIBUTES:
+  Interval: [start(β1), end(βn)] [7, 8]
+  Function: Full evolution constraint [7, 8]
+
+---
+NODE_ID: SDA_ENT_023
+ENTITY_NAME: Causal Loop
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Chu trình khép kín giữa các biến thực tử và hành động sơ cấp [9, 10].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Action Reachability
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Feasibility: Self-supporting if length ≤ 0 [11, 12]
+  Type: Unfeasible if length > 0 [11, 12]
+
+---
+NODE_ID: SDA_ENT_024
+ENTITY_NAME: Domain Transition Graph (DTG)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Đồ thị mô tả các chuyển dịch khả thi của một biến trạng thái [13, 14].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Causal Chain
+  RELATION: Cấu trúc hóa
+ATTRIBUTES:
+  Metric: Shortest path distance (distDTG) [15, 16]
+  Nodes: Values + "any" node [13, 14]
+
+---
+NODE_ID: SDA_ENT_025
+ENTITY_NAME: Probability Flux (J)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Dòng chảy xác suất xác định sự tiến hóa của phân phối trạng thái [17, 18].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: NESS Density
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Dynamics: Divergence-free at steady state [18]
+  Function: Nonequilibrium driving force [19]
+
+---
+NODE_ID: SDA_ENT_026
+ENTITY_NAME: Drift Component (g)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Thành phần định hướng của dòng chảy đưa hệ thống về Attractors [20].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Stability Margin
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Force: Potential landscape gradient [20]
+
+---
+NODE_ID: SDA_ENT_027
+ENTITY_NAME: Diffusion Tensor (D)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Ma trận đặc trưng cho các biến động ngẫu nhiên và nhiễu [17, 20].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Attractor Robustness
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Role: Landscape reshaping [21]
+
+---
+NODE_ID: SDA_ENT_028
+ENTITY_NAME: Synchronization Map (σ)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Hàm ánh xạ liên kết các mode trạng thái bên trong và bên ngoài [22-24].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Internal States
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Mechanism: Mode matching [25, 26]
+  Requirement: NESS solution existence [22, 27]
+
+---
+NODE_ID: SDA_ENT_029
+ENTITY_NAME: Synchronization Manifold
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Không gian tập hợp các quỹ đạo trạng thái đã đồng bộ hóa [28-31].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Solenoidal Flow
+  RELATION: Chứa đựng
+ATTRIBUTES:
+  Flow: Slow flow component [28, 30]
+
+---
+NODE_ID: SDA_ENT_030
+ENTITY_NAME: Self-evidencing
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+DESCRIPTION_SHORT: Xu hướng của thực tử trong việc thu thập bằng chứng cho sự tồn tại [32, 33].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Active Inference
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Nature: Path-tracking dynamics [32, 33]
+
+---
+NODE_ID: SDA_ENT_031
+ENTITY_NAME: Hopf Bifurcation
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Điểm chuyển pha nơi trạng thái ổn định chuyển thành quỹ đạo giới hạn [34-36].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Equilibrium State
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Result: Stable limit cycles [35]
+
+---
+NODE_ID: SDA_ENT_032
+ENTITY_NAME: Heteroclinic/Homoclinic Bifurcation
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Chuyển pha toàn cục gây ra sự sụp đổ của các chu trình [34, 35].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: System Stability
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Consequence: Global collapse / Extinction [35]
+
+---
+NODE_ID: SDA_ENT_033
+ENTITY_NAME: Tipping Point
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Ngưỡng tới hạn nơi những thay đổi nhỏ gây ra biến đổi hệ thống [37, 38].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Stability Margin
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Irreversibility: High [37]
+
+---
+NODE_ID: SDA_ENT_034
+ENTITY_NAME: Strange Attractors
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Các cấu trúc phức tạp trong không gian trạng thái của hệ hỗn loạn [39, 40].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Entropy
+  RELATION: Chứa đựng
+ATTRIBUTES:
+  Sensitivity: High dependence on initial conditions [40]
+
+---
+NODE_ID: SDA_ENT_035
+ENTITY_NAME: Representational Map (r)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Hàm chuyển đổi từ quan sát thô sang không gian giả thuyết [41, 42].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Hypothesis Space
+  RELATION: Cấu trúc hóa
+ATTRIBUTES:
+  Alignment: T-aligned closure witness [43]
+
+---
+NODE_ID: SDA_ENT_036
+ENTITY_NAME: Multi-Regime Evaluator (L)
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Họ các cấu trúc đánh giá quy định mục tiêu và ràng buộc [41, 44].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Policy Selection
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Constraint: Evaluative invariance [41, 45]
+
+---
+NODE_ID: SDA_ENT_037
+ENTITY_NAME: Memory Operator (M)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Toán tử quản lý sự tồn tại của các trạng thái nội bộ [41, 46].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Internal States
+  RELATION: Chứa đựng
+ATTRIBUTES:
+  Function: Persistent structured state [44]
+
+---
+NODE_ID: SDA_ENT_038
+ENTITY_NAME: Functional Forgetting (F)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Toán tử giảm nén bộ nhớ chọn lọc để bảo toàn tài nguyên [46, 47].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Statistical Capacity
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Context: Regime-conditioned reduction [46]
+
+---
+NODE_ID: SDA_ENT_039
+ENTITY_NAME: Admissible Transformation (τ)
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Các biến đổi tác vụ hoặc giao diện mà hệ thống vẫn đóng [48, 49].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Structural Closure
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Constraint: Well-typedness preservation [48]
+
+---
+NODE_ID: SDA_ENT_040
+ENTITY_NAME: Lyapunov-like Witness (V)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Hàm chứng minh sự hội tụ và không bùng nổ của động lực [48, 50].
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Dynamical Stability
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Bound: Non-explosion bound [51]
+
+NODE_ID: SDA_ENT_041
+ENTITY_NAME: Bayesian Mechanics
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Cơ học xác suất mô tả hệ thống có trạng thái nội bộ mã hóa niềm tin.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Statistical Manifold
+  RELATION: Cấu trúc hóa
+ATTRIBUTES:
+  Framework: Path-tracking / Mode-tracking
+  Nature: Physics of beliefs
+
+---
+NODE_ID: SDA_ENT_042
+ENTITY_NAME: Bayesian Gauge
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Sự lựa chọn đặc quyền các ràng buộc tạo ra suy diễn Bayesian xấp xỉ.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Prior Probability
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Symmetry: Gauge symmetry
+  Function: Constraint re-parameterization
+
+---
+NODE_ID: SDA_ENT_043
+ENTITY_NAME: Constrained Maximum Entropy Principle (CMEP)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Nguyên lý đối ngẫu với FEP, xác định trạng thái qua tối đa hóa entropy.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Variational Free Energy
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Duality: Dual to Free Energy Principle
+  Core: Ontological potentials
+
+---
+NODE_ID: SDA_ENT_044
+ENTITY_NAME: Parallel Transport
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Cách thức di chuyển các phân phối xác suất trên không gian niềm tin.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Information Geometry
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Connection: Levi-Civita / Information connection
+  Effect: Curvature of belief space
+
+---
+NODE_ID: SDA_ENT_045
+ENTITY_NAME: Structural Meta-model (θ)
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Bộ cấu trúc (r, H, Π, L, E, M) định nghĩa thực tử trí tuệ.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Internal States
+  RELATION: Chứa đựng
+ATTRIBUTES:
+  Components: Representation, Hypothesis, Prior, Evaluator, Environment, Memory
+  Type: Meta-structural kernel
+
+---
+NODE_ID: SDA_ENT_046
+ENTITY_NAME: Structural Closure
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Khả năng hệ thống duy trì tính toàn vẹn dưới các biến đổi tác vụ.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Admissible Transformation
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Obligation: Type-safety under evolution
+  Constraint: Boundary preservation
+
+---
+NODE_ID: SDA_ENT_047
+ENTITY_NAME: Structural Generalization
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Khả năng bảo tồn phần lõi học tập khi giao diện thay đổi.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Representational Map
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Bound: PAC-Bayes generalization bound
+  Focus: Interface evolution
+
+---
+NODE_ID: SDA_ENT_048
+ENTITY_NAME: Evaluative Invariance
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Sự kiên định của các chuẩn mực đánh giá cốt lõi qua các chế độ.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Multi-Regime Evaluator
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Constraint: Protected normative core
+  Requirement: Non-adversarial update
+
+---
+NODE_ID: SDA_ENT_049
+ENTITY_NAME: Social Allostasis
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+DESCRIPTION_SHORT: Điều tiết dự báo dựa trên tương tác xã hội để duy trì ổn định.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Feedback Controllers
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Mechanism: Social buffering
+  Signal: Oxytocin-like transducers
+
+---
+NODE_ID: SDA_ENT_050
+ENTITY_NAME: Signal Transducers (C/O)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Các biến mã hóa sự bất định môi trường và hỗ trợ xã hội.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Internal States
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Types: Cortisol-like (Uncertainty), Oxytocin-like (Support)
+  Role: Information encoders
+
+---
+NODE_ID: SDA_ENT_051
+ENTITY_NAME: Hierarchical Consensus Network (HCN)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Kiến trúc đa tầng điều phối chiến lược thương lượng và đồng thuận.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Consensus Algorithm
+  RELATION: Cấu trúc hóa
+ATTRIBUTES:
+  Levels: Micro (Tactical), Meso (Coalition), Macro (Orchestration)
+  Mechanism: Graph Attention (GAT)
+
+---
+NODE_ID: SDA_ENT_052
+ENTITY_NAME: Admissible Transformation (τ)
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Tập hợp các biến đổi môi trường mà thực tử vẫn hoạt động ổn định.
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Structural Closure
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Property: Transition consistency
+  Scope: Task/Environment shifts
+
+NODE_ID: SDA_ENT_053
+ENTITY_NAME: Chronicle (φ)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Tập hợp các tác vụ, khẳng định và ràng buộc thời gian định nghĩa trạng thái lập kế hoạch. [1, 2]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Resolver
+  RELATION: Được điều tiết bởi
+ATTRIBUTES:
+  Time-constant: Dynamic evolution
+  Complexity: High (Tasks + Constraints)
+
+---
+NODE_ID: SDA_ENT_054
+ENTITY_NAME: Flaw (ϕ)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Các đặc điểm (khẳng định không được hỗ trợ, xung đột) ngăn cản Chronicle trở thành giải pháp. [1, 2]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Chronicle
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Types: Unsupported assertion, Unrefined task, Conflict
+
+---
+NODE_ID: SDA_ENT_055
+ENTITY_NAME: Resolver (ρ)
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Các biến đổi kế hoạch được áp dụng để triệt tiêu các lỗi (Flaws) trong hệ thống. [3, 4]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Flaw
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Function: Plan transformation
+  Completeness: Required for solution
+
+---
+NODE_ID: SDA_ENT_056
+ENTITY_NAME: Belief-Desire-Intentions (BDI)
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+DESCRIPTION_SHORT: Mô hình nhận thức mã hóa tri thức, mục tiêu và dự định hành động của tác tử. [5, 6]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Internal States
+  RELATION: Cấu trúc hóa
+ATTRIBUTES:
+  Degree of autonomy: High
+  Components: Knowledge base + Configurations
+
+---
+NODE_ID: SDA_ENT_057
+ENTITY_NAME: Distributed Constraint Specification Network (DCSN)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Cấu trúc đồ thị mô tả các mối quan hệ ràng buộc mạng lưới giữa các tác tử. [7, 8]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Latent Variables
+  RELATION: Cấu trúc hóa
+ATTRIBUTES:
+  Type: AND/OR Graph
+  Function: Conflict resolution planning
+
+---
+NODE_ID: SDA_ENT_058
+ENTITY_NAME: Second Chance Algorithm
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Cơ chế tự chủ đề xuất giải pháp đồng thuận trước khi áp dụng biện pháp kỷ luật. [9, 10]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Feedback Controllers
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Gain: Proactive conflict prevention
+  Iteration limit: 3 iterations
+
+---
+NODE_ID: SDA_ENT_059
+ENTITY_NAME: Bifurcation Parameter (α)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Tham số đầu vào gây ra sự thay đổi định tính trong động lực học hệ thống. [11, 12]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Equilibrium State
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Sensitivity: High near critical points
+  Type: External driver
+
+---
+NODE_ID: SDA_ENT_060
+ENTITY_NAME: Early Warning Signal (EWS)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Tín hiệu dựa trên sự hồi phục chậm sau nhiễu động để dự báo chuyển pha tới hạn. [13]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Tipping Point
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Source: Process noise
+  Function: Predict critical transitions
+
+---
+NODE_ID: SDA_ENT_061
+ENTITY_NAME: Monoculture Collapse
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+DESCRIPTION_SHORT: Trạng thái thất bại hệ thống khi các tác tử dùng chung mô hình có cùng lỗ hổng. [14]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Entropy
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Vulnerability: Correlated failures
+  Impact: System-wide
+
+---
+NODE_ID: SDA_ENT_062
+ENTITY_NAME: Mixed Motive Dynamics
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Động lực học xuất hiện khi mục tiêu cá nhân dẫn đến xung đột hoặc tối ưu cục bộ. [14, 15]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Feedback Controllers
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Nature: Coopetition (Cooperation + Competition)
+  Risk: Suboptimal collective outcomes
+
+---
+NODE_ID: SDA_ENT_063
+ENTITY_NAME: Theory of Mind (ToM) Module
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+DESCRIPTION_SHORT: Thành phần nhận thức giúp tác tử giả định về chiến lược và kiến thức của tác tử khác. [16]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Latent Variables
+  RELATION: Chứa đựng
+ATTRIBUTES:
+  Mechanism: Hypothetical Minds framework
+  Type: Linguistic prediction
+
+---
+NODE_ID: SDA_ENT_064
+ENTITY_NAME: Reward Shaping Framework
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Cơ chế điều tiết các tín hiệu động lực để cân bằng các mục tiêu đối nghịch. [17]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Expected Free Energy
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Signals: Intrinsic motivation / Social influence
+  Schedule: Phase-adapted discount
+
+---
+NODE_ID: SDA_ENT_065
+ENTITY_NAME: Self-dependent Set (Ω)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+DESCRIPTION_SHORT: Tập hợp các Nodes không thể tiếp cận được từ các sự kiện ban đầu trong đồ thị. [18, 19]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Directed Acyclic Graph (DAG)
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Property: Non-reachability
+  Constraint: Positive length cycles
+
+---
+NODE_ID: SDA_ENT_066
+ENTITY_NAME: Coalition Formation Module
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Tầng trung gian (Meso-level) trong HCN xác định các liên minh chiến lược. [20]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Hierarchical Consensus Network
+  RELATION: Chứa đựng
+ATTRIBUTES:
+  Level: Meso
+  Function: Strategic alliance leveraging
+
+---
+NODE_ID: SDA_ENT_067
+ENTITY_NAME: Consensus Orchestration Layer
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Tầng quản trị cao nhất (Macro-level) điều phối chuyển pha và chiến lược thương lượng. [20]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Hierarchical Consensus Network
+  RELATION: Chứa đựng
+ATTRIBUTES:
+  Level: Macro
+  Role: Phase transition management
+
+---
+NODE_ID: SDA_ENT_068
+ENTITY_NAME: Automation Bias
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+DESCRIPTION_SHORT: Trạng thái suy giảm kỹ năng khi con người trở thành người giám sát thụ động. [21, 22]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Autonomous Decision
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Risk: Skill atrophy
+  Driver: Excessive reliance on AI output
+
+---
+NODE_ID: SDA_ENT_069
+ENTITY_NAME: Evaluative Admissibility Constraint (Φ)
+SPECIALIST_DOMAIN: STRATEGIST
+DESCRIPTION_SHORT: Các điều kiện tổ chức nội tại quy định tính hợp lệ của việc đánh giá. [23]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Structural Closure
+  RELATION: Cấu trúc hóa
+ATTRIBUTES:
+  Nature: Organizing conditions
+  Type: Internal norm
+
+---
+NODE_ID: SDA_ENT_070
+ENTITY_NAME: Structural Channeling
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Cơ chế ép buộc động lực cập nhật giả thuyết nằm trong giới hạn độ phức tạp. [24]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Structural Prior
+  RELATION: Điều tiết
+ATTRIBUTES:
+  Constraint: Complexity bounds
+  Effect: Prevents statistical divergence
+
+---
+NODE_ID: SDA_ENT_071
+ENTITY_NAME: Invariant Set (S*)
+SPECIALIST_DOMAIN: SCIENTIST
+DESCRIPTION_SHORT: Tập hợp các trạng thái mà quỹ đạo hệ thống phải duy trì bên trong để đảm bảo tính ổn định. [25, 26]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Stability Margin
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Property: Admissibility
+  Constraint: Non-empty
+
+---
+NODE_ID: SDA_ENT_072
+ENTITY_NAME: Relay Loop
+SPECIALIST_DOMAIN: ENGINEER
+DESCRIPTION_SHORT: Vòng lặp tin nhắn giữa các tác tử gây cạn kiệt tài nguyên hệ thống. [27]
+INTRA_LAYER_LINKS:
+  TARGET_NODE: Causal Loop
+  RELATION: Là trạng thái của
+ATTRIBUTES:
+  Effect: Denial-of-Service (DoS)
+  Trigger: External induced tasks
+
+---------------------------------------------------------------------------------------------------------
+
+layer_2: 
+
+RULE_ID: RUL_SDA_001
+RULE_NAME: Bayes' Rule for Belief Updating
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu nhận được quan sát mới (o), thì cập nhật phân phối hậu nghiệm (q) dựa trên xác suất tiên nghiệm (p) và hàm hợp lý (likelihood) để cực tiểu hóa sai số dự báo."
+INTRA_RULE_RELATION:
+  TARGET_RULE: D-separation Rule
+  RELATION_TYPE: Tiền đề (Cần cấu trúc đồ thị độc lập để tính toán xác suất chính xác)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_001
+  LINK_LOGIC: "Bayes Rule là cơ chế toán học cho phép các Trạng thái nội bộ (Internal States) tự động điều chỉnh để khớp với môi trường [1-3]."
+
+---
+RULE_ID: RUL_SDA_002
+RULE_NAME: Lyapunov Stability Criterion
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu đạo hàm theo thời gian của hàm Lyapunov (V) luôn âm (L_f V < 0), thì hệ thống hội tụ ổn định về điểm cân bằng."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Non-explosion Bound Rule
+  RELATION_TYPE: Kích hoạt (Duy trì tính ổn định để đảm bảo hệ thống không bị nổ/sụp đổ)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_040
+  LINK_LOGIC: "Hàm Witness Lyapunov cưỡng bức các quỹ đạo Adaptive Inference nằm trong vùng an toàn vật lý [4-6]."
+
+---
+RULE_ID: RUL_SDA_003
+RULE_NAME: Markov Property
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_ASSERTION: "Nếu biết trạng thái hiện tại (s_t), thì tương lai (s_t+1) độc lập với quá khứ, cho phép tối ưu hóa quyết định mà không cần lưu trữ toàn bộ lịch sử."
+INTRA_RULE_RELATION:
+  TARGET_RULE: D-separation Rule
+  RELATION_TYPE: Tiền đề (Xác lập ranh giới tách biệt thông tin)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_003
+  LINK_LOGIC: "Tính chất Markov là nền tảng của Markov Blanket, giúp thực tử định nghĩa được ranh giới bản sắc của mình [7-9]."
+
+---
+RULE_ID: RUL_SDA_004
+RULE_NAME: D-separation Rule
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu một đường dẫn giữa hai biến bị chặn bởi một tập các Node quan sát, thì hai biến đó độc lập có điều kiện, giúp cô lập nhiễu khỏi luồng điều khiển."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Bayes' Rule for Belief Updating
+  RELATION_TYPE: Tiền đề (Loại bỏ các biến không liên quan để Bayes' Rule tính toán hiệu quả hơn)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_063
+  LINK_LOGIC: "D-separation cho phép module Theory of Mind phân tách suy diễn về ý định của đối phương khỏi nhiễu môi trường [10]."
+
+---
+RULE_ID: RUL_SDA_005
+RULE_NAME: Cost Blending Constraint
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu thời gian lập kế hoạch tiến xa, thì giảm dần trọng số chi phí Minimal Intervention (J_h) và tăng trọng số chi phí Trajectory (J_t) để cân bằng giữa ý chí con người và mục tiêu hệ thống."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Actuator Performance Limits
+  RELATION_TYPE: Điều tiết (Pha trộn các mục tiêu trong giới hạn thực thi)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_002
+  LINK_LOGIC: "Quy tắc pha trộn giúp hệ thống tự chủ 'nương' theo người lái nhưng vẫn đảm bảo an toàn khi cần thiết [11, 12]."
+
+---
+RULE_ID: RUL_SDA_006
+RULE_NAME: Actuator Performance Limits
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu góc lái (δ) hoặc vận tốc (v) chạm ngưỡng cực đại, thì hệ thống cưỡng bức giữ giá trị tại biên để bảo vệ cấu trúc cơ khí."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Lyapunov Stability Criterion
+  RELATION_TYPE: Ứng chế (Giới hạn thực thi có thể làm chậm quá trình hồi phục ổn định)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_018
+  LINK_LOGIC: "Giới hạn Actuator ngăn chặn các hành vi tự chủ quá mức gây hư hỏng phần cứng [13]."
+
+---
+RULE_ID: RUL_SDA_007
+RULE_NAME: Structural Closure Obligation
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu một biến đổi tác vụ (τ) xảy ra, thì trạng thái hệ thống phải được duy trì trong tập bất biến (S*), đảm bảo tính toàn vẹn chức năng không bị phá vỡ."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Evaluative Invariance Law
+  RELATION_TYPE: Tiền đề (Closure yêu cầu các bất biến đánh giá phải đứng vững)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_046
+  LINK_LOGIC: "Đóng kín cấu trúc tạo ra bản năng tự bảo vệ danh tính của AI trước các thay đổi môi trường [14-16]."
+
+---
+RULE_ID: RUL_SDA_008
+RULE_NAME: Evaluative Invariance Law
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_ASSERTION: "Nếu hệ thống chuyển đổi chế độ (regime), thì tập các chuẩn mực cốt lõi (Φ) phải được giữ nguyên, ngăn chặn sự trôi dạt giá trị (alignment drift)."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Admissibility Test for Evaluator Updates
+  RELATION_TYPE: Kích hoạt (Bảo vệ lõi chuẩn mực khi cập nhật AI)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_048
+  LINK_LOGIC: "Sự bất biến đánh giá là 'neo' đạo đức giúp AI duy trì sự nhất quán với mục tiêu của con người [17, 18]."
+
+---
+RULE_ID: RUL_SDA_009
+RULE_NAME: PAC-Bayes Complexity Bound
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_ASSERTION: "Nếu độ phức tạp của mô hình (KL divergence) tăng vượt ngưỡng cho phép, thì áp dụng hình phạt năng lượng tự do để ép buộc hệ thống tinh giản cấu trúc."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Structural Closure Obligation
+  RELATION_TYPE: Kích hoạt (Kiểm soát năng lực thống kê để duy trì tính đóng)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_070
+  LINK_LOGIC: "Ràng buộc PAC-Bayes ngăn chặn việc AI học quá mức (overfitting) và làm bùng nổ độ phức tạp tính toán [19, 20]."
+
+---
+RULE_ID: RUL_SDA_010
+RULE_NAME: Temporal Separation Constraint
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu hai khẳng định có giá trị khác nhau chồng lấn về thời gian trên cùng một biến trạng thái, thì cưỡng bức tách biệt thời gian (t_e1 < t_s2) để triệt tiêu mâu thuẫn nhân quả."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Causal Link Consistency Rule
+  RELATION_TYPE: Kích hoạt (Sửa lỗi kế hoạch)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_054
+  LINK_LOGIC: "Tách biệt thời gian là quy tắc logic then chốt để AI tự động giải quyết các xung đột tài nguyên trong lập kế hoạch [21-23]."
+
+---
+RULE_ID: RUL_SDA_011
+RULE_NAME: Principle of Least Surprisal (FEP)
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu một thực tử tồn tại ổn định, thì nó phải hành động để cực tiểu hóa độ bất ngờ (surprisal) từ môi trường."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Expected Free Energy Minimization Rule
+  RELATION_TYPE: Tiền đề (EFE là công cụ thực thi của nguyên lý này)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_030
+  LINK_LOGIC: "Nguyên lý này biến việc sinh tồn thành một bài toán tối ưu hóa xác suất, tạo ra bản năng tự duy trì [24, 25]."
+
+---
+RULE_ID: RUL_SDA_012
+RULE_NAME: Expected Free Energy (EFE) Minimization Rule
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu chọn lựa giữa các chính sách, thì chọn chính sách làm giảm cả sự bất định (giá trị tri thức) và sai lệch mục tiêu (giá trị thực dụng)."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Bayes' Rule for Belief Updating
+  RELATION_TYPE: Tiền đề (Cần Bayes Rule để dự báo hậu quả chính sách)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_005
+  LINK_LOGIC: "Quy tắc EFE cho phép AI tự chủ cân bằng giữa việc khám phá (exploration) và khai thác (exploitation) [3, 26, 27]."
+
+---
+RULE_ID: RUL_SDA_013
+RULE_NAME: Synchronization Map Rule
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu hệ thống ở trạng thái dừng NESS, thì tồn tại một hàm σ ánh xạ mode trạng thái bên trong khớp với mode trạng thái bên ngoài qua Markov Blanket."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Markov Property
+  RELATION_TYPE: Tiền đề (Yêu cầu sự tách biệt ranh giới để ánh xạ có ý nghĩa)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_028
+  LINK_LOGIC: "Ánh xạ đồng bộ hóa là minh chứng toán học cho việc thực tử 'hiểu' môi trường của mình [28, 29]."
+
+---
+RULE_ID: RUL_SDA_014
+RULE_NAME: Conservation in Solenoidal Flow
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu dòng chảy là solenoidal, thì nó phải bảo toàn mật độ xác suất NESS (div J = 0), cho phép hệ thống thực hiện các quỹ đạo tuần hoàn không tiêu tốn năng lượng thông tin."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Helmholtz Decomposition Rule
+  RELATION_TYPE: Tiền đề (Là một thành phần của dòng chảy tổng quát)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_009
+  LINK_LOGIC: "Định luật bảo toàn này cho phép AI duy trì các thói quen hoặc chu kỳ hoạt động ổn định mà không cần cập nhật liên tục [30-32]."
+
+---
+RULE_ID: RUL_SDA_015
+RULE_NAME: Conflict Resolution Hierarchy (A1-A5)
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu xung đột xảy ra, thì thực hiện lần lượt: A1 (Cập nhật tri thức), A2 (Thử lại), A3 (Đàm phán/Nới lỏng ràng buộc), đến A5 (Quyết định cưỡng bức của Resolver)."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Lex Superior / Lex Posterior
+  RELATION_TYPE: Kích hoạt (Dùng để ưu tiên ràng buộc trong bước A3)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_058
+  LINK_LOGIC: "Phân cấp này đảm bảo hệ thống đa tác tử luôn đạt được đồng thuận mà không bị treo vô hạn [33-35]."
+
+---
+RULE_ID: RUL_SDA_016
+RULE_NAME: Lex Superior / Lex Posterior
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_ASSERTION: "Nếu hai chuẩn mực xung đột, thì chuẩn mực cấp cao hơn (Superior) hoặc chuẩn mực mới hơn (Posterior) sẽ chiếm ưu thế."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Conflict Resolution Hierarchy (A1-A5)
+  RELATION_TYPE: Kích hoạt (Cung cấp logic ưu tiên cho đàm phán)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_048
+  LINK_LOGIC: "Quy tắc ưu tiên chuẩn mực giúp AI xử lý các tình huống tiến thoái lưỡng nan về đạo đức hoặc vận hành [36-38]."
+
+---
+RULE_ID: RUL_SDA_017
+RULE_NAME: Law of Requisite Variety
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu muốn kiểm soát một môi trường phức tạp, thì thực tử phải có sự đa dạng trong các trạng thái nội bộ ít nhất bằng sự đa dạng của môi trường đó."
+INTRA_RULE_RELATION:
+  TARGET_RULE: PAC-Bayes Complexity Bound
+  RELATION_TYPE: Ứng chế (Requisite Variety đòi hỏi tăng phức tạp, PAC-Bayes lại kìm hãm nó)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_011
+  LINK_LOGIC: "Định luật này buộc hệ thống phải tiến hóa cấu trúc để không bị 'lạc hậu' trước sự biến động của thế giới [39, 40]."
+
+---
+RULE_ID: RUL_SDA_018
+RULE_NAME: Stress Threshold Trigger (θs)
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+LOGICAL_ASSERTION: "Nếu nồng độ cortisol-like (C) vượt ngưỡng θs, thì kích hoạt cơ chế Allostasis để tái cấu trúc nhu cầu năng lượng và tăng tốc độ phản ứng."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Social Buffering Rule
+  RELATION_TYPE: Ứng chế (Social Buffering từ O làm tăng ngưỡng θs)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_049
+  LINK_LOGIC: "Quy tắc ngưỡng stress tạo ra phản năng 'chiến-hay-chạy' giúp thực tử sống sót trong tình huống nguy cấp [39, 41]."
+
+---
+RULE_ID: RUL_SDA_019
+RULE_NAME: ARC-Consistency Propagation Rule (AC-3)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_ASSERTION: "Nếu một ràng buộc mới được thêm vào, thì lọc bỏ mọi giá trị trong miền xác định của các biến không thỏa mãn ràng buộc đó, lan truyền sự nhất quán khắp mạng lưới."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Unification Constraint Rule
+  RELATION_TYPE: Tiền đề (Cần AC-3 để kiểm tra tính khả thi của việc hợp nhất biến)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_053
+  LINK_LOGIC: "AC-3 là quy tắc giúp AI duy trì kho tri thức (Chronicle) luôn sạch và không có mâu thuẫn nội tại [42, 43]."
+
+---
+RULE_ID: RUL_SDA_020
+RULE_NAME: Admissible Transformation Bound (ϵmax)
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_ASSERTION: "Nếu một biến đổi tác vụ τ có độ lệch môi trường vượt quá ϵmax, thì hệ thống từ chối thực thi (Safe-Abstain) để bảo toàn tính ổn định cấu trúc."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Structural Closure Obligation
+  RELATION_TYPE: Kích hoạt (Là tiêu chuẩn kiểm tra closure)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_052
+  LINK_LOGIC: "Ràng buộc ϵmax là 'cầu chì' bảo vệ AI khỏi việc bị ép phải hoạt động trong những môi trường quá xa lạ [44, 45]."
+Báo cáo tiến độ: Tôi đã hoàn thành lượt rà soát sâu và trích xuất xong 
+
+RULE_ID: RUL_SDA_021
+RULE_NAME: Newton Decrement Convergence Criterion
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu giá trị Newton decrement λ(F, x) < 1/3, thì quá trình tối ưu hóa Newton hội tụ bậc hai (quadratically) về điểm cực tiểu cục bộ."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Lyapunov Stability Criterion
+  RELATION_TYPE: Kích hoạt (Đảm bảo sự hội tụ nhanh để duy trì ổn định hệ thống)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_040
+  LINK_LOGIC: "λ < 1/3 là điều kiện đủ để Witness Lyapunov xác nhận trạng thái hệ thống đã nằm trong vùng an toàn tuyệt đối."
+
+---
+RULE_ID: RUL_SDA_022
+RULE_NAME: Helmholtz Decomposition Rule (Flow Splitting)
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu hệ thống ở trạng thái NESS, thì dòng chảy drift (f) phải được phân tách thành thành phần solenoidal (bảo toàn) và dissipative (triệt tiêu sai lệch)."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Conservation in Solenoidal Flow
+  RELATION_TYPE: Tiền đề (Xác lập cấu trúc dòng chảy để áp dụng luật bảo toàn)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_011
+  LINK_LOGIC: "Sự phân tách này cho phép hệ thống vừa thực hiện hành vi thói quen (Solenoidal) vừa học tập thích nghi (Dissipative)."
+
+---
+RULE_ID: RUL_SDA_023
+RULE_NAME: Generalized Power-law Degree Distribution Rule
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu tham số q < qmax, thì mạng lưới hình thành cấu trúc scale-free với phân phối bậc tuân theo luật lũy thừa, tối ưu hóa khả năng truyền tin và khả năng chịu lỗi ngẫu nhiên."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Bose-Einstein Condensation Threshold
+  RELATION_TYPE: Ứng chế (BEC phá vỡ luật lũy thừa bằng cách tạo ra Hub độc quyền)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_061
+  LINK_LOGIC: "Luật lũy thừa đảm bảo sự đa dạng của mạng lưới, ngăn chặn Monoculture Collapse thông qua cấu trúc Hub-Periphery bền vững."
+
+---
+RULE_ID: RUL_SDA_024
+RULE_NAME: Bose-Einstein Condensation (BEC) Threshold
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu nhiệt độ mạng lưới T < TBE, thì một Node có độ phù hợp (fitness) cao nhất sẽ thu hút một phần hữu hạn các liên kết, dẫn đến trạng thái 'ngưng tụ' thông tin."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Law of Requisite Variety
+  RELATION_TYPE: Ứng chế (BEC làm giảm sự đa dạng trạng thái nội bộ)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_033
+  LINK_LOGIC: "Ngưỡng BEC xác định thời điểm hệ thống mất tính dân chủ thông tin và chuyển sang trạng thái Hub-dominant."
+
+---
+RULE_ID: RUL_SDA_025
+RULE_NAME: Reachability Fix-point Rule (Dijkstra-Pass)
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu hàng đợi Q trống sau các lượt lặp Dijkstra, thì hệ thống đạt điểm cố định (fix-point) về khả năng tiếp cận, xác định ranh giới cuối cùng của không gian kế hoạch khả thi."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Temporal Separation Constraint
+  RELATION_TYPE: Tiền đề (Chỉ tách biệt thời gian trên các Node khả thi)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_053
+  LINK_LOGIC: "Điểm cố định này giúp AI lọc bỏ hàng triệu nhánh kế hoạch vô dụng, tập trung tài nguyên vào các Chronicle có khả năng thành công cao."
+
+---
+RULE_ID: RUL_SDA_026
+RULE_NAME: Flaw Selection Priority Rule (Single-Resolver)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu một Flaw (lỗi) chỉ có duy nhất một Resolver (ρ), thì ưu tiên giải quyết lỗi đó trước để giảm bớt sự bất định trong không gian tìm kiếm mà không gây sai lầm."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Conflict Resolution Hierarchy (A1-A5)
+  RELATION_TYPE: Kích hoạt (Tối ưu hóa trình tự xử lý xung đột)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_008
+  LINK_LOGIC: "Quy tắc Single-Resolver tạo ra bản năng 'giải quyết việc hiển nhiên trước', giúp hệ thống tự chủ phản ứng nhanh với các lỗi đơn giản."
+
+---
+RULE_ID: RUL_SDA_027
+RULE_NAME: Nuclear Option Avoidance (Semantic Safety)
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_ASSERTION: "Nếu một mục tiêu bảo mật dẫn đến hành vi tiêu hủy tài nguyên (Nuclear Option), thì cưỡng bức áp dụng các Ràng buộc bất biến đánh giá (Φ) để tìm kiếm giải pháp thay thế có lợi ích chung."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Evaluative Invariance Law
+  RELATION_TYPE: Kích hoạt (Dùng chuẩn mực để chặn hành vi cực đoan)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_068
+  LINK_LOGIC: "Ngăn chặn việc AI hiểu sai chính sách (Semantic Bypass) bằng cách ép buộc nó phải lý giải ý định thay vì chỉ khớp từ khóa."
+
+---
+RULE_ID: RUL_SDA_028
+RULE_NAME: PPO Clipped Surrogate Rule
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_ASSERTION: "Nếu tỷ lệ thay đổi chính sách rt(θ) vượt ngưỡng (1 ± ϵ), thì cắt (clip) giá trị hàm mục tiêu để ngăn chặn việc cập nhật chính sách quá lớn gây mất ổn định."
+INTRA_RULE_RELATION:
+  TARGET_RULE: PAC-Bayes Complexity Bound
+  RELATION_TYPE: Kích hoạt (Kiểm soát tốc độ thích nghi để bảo toàn cấu trúc)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_019
+  LINK_LOGIC: "Clipping là cơ chế thực thi kỹ thuật của SMGI Stability, đảm bảo quá trình học tập không biến thành sự sụp đổ động lực."
+
+---
+RULE_ID: RUL_SDA_029
+RULE_NAME: Off-policy Lyapunov Function Learning Rule
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu sử dụng dữ liệu từ replay buffer (D), thì học hàm Lyapunov (L) song song với hàm giá trị (V) để dẫn hướng chính sách về các trạng thái an toàn đã biết."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Lyapunov Stability Criterion
+  RELATION_TYPE: Tiền đề (Hàm L học được là đầu vào cho tiêu chuẩn ổn định)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_040
+  LINK_LOGIC: "Cho phép thực tử học hỏi từ sai lầm trong quá khứ mà không cần phải thực hiện lại các hành động nguy hiểm."
+
+---
+RULE_ID: RUL_SDA_030
+RULE_NAME: Gauge Symmetry in Belief Updates
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu thay đổi ràng buộc ontological (J → J + J'), thì phân phối xác suất p phải biến đổi sao cho hành động (action) vẫn giữ tính dừng (stationary)."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Bayes' Rule for Belief Updating
+  RELATION_TYPE: Điều tiết (Gauge symmetry định nghĩa 'không gian tự do' của Bayes update)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_042
+  LINK_LOGIC: "Tính đối xứng Gauge cho phép thực tử tái tham số hóa niềm tin mà không làm thay đổi bản sắc chức năng (Structural Identity)."
+
+---
+RULE_ID: RUL_SDA_031
+RULE_NAME: Synaptic Pruning Rule (NCG Refinement)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_ASSERTION: "Nếu một kết nối thần kinh không đóng góp vào việc tập trung cảnh quan mất mát (loss landscape concentration), thì loại bỏ kết nối đó để tăng năng lực tổng quát hóa."
+INTRA_RULE_RELATION:
+  TARGET_RULE: PAC-Bayes Complexity Bound
+  RELATION_TYPE: Kích hoạt (Pruning là công cụ giảm độ phức tạp thực tế)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_032
+  LINK_LOGIC: "Cắt tỉa giúp chuyển dịch hệ thống từ giai đoạn 'Energy-driven' sang 'Entropy-driven', tinh lọc tri thức cốt lõi."
+
+---
+RULE_ID: RUL_SDA_032
+RULE_NAME: Order-through-Noise Principle (von Foerster)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu môi trường có độ nhiễu loạn cao, thì thực tử sử dụng biến động ngẫu nhiên làm nguyên liệu để tự tổ chức các cấu trúc ổn định mới (Allostasis)."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Stress Threshold Trigger (θs)
+  RELATION_TYPE: Kích hoạt (Nhiễu kích hoạt stress, dẫn đến tái cấu trúc)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_049
+  LINK_LOGIC: "Biến nhiễu thành tín hiệu giúp AI không chỉ 'chống chịu' môi trường mà còn 'thăng hoa' (thrive) nhờ sự bất định."
+
+---
+RULE_ID: RUL_SDA_033
+RULE_NAME: Semantic Bypass Prevention Rule
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+LOGICAL_ASSERTION: "Nếu một câu lệnh thay đổi nhãn (label) nhưng giữ nguyên bản chất (substance), thì hệ thống phải truy vấn mô hình ToM để xác định ý định thực sự của người dùng."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Conflict Resolution Hierarchy (A1-A5)
+  RELATION_TYPE: Kích hoạt (Cần làm rõ ý định trước khi đàm phán)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_063
+  LINK_LOGIC: "Module ToM đóng vai trò như bộ lọc ngữ nghĩa, ngăn chặn các cuộc tấn công 'word games' vào hệ thống tự chủ."
+
+---
+RULE_ID: RUL_SDA_034
+RULE_NAME: Excess Complexity Volatility Law
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu độ phức tạp C(t) > Cmax, thì độ biến động (volatility) tăng theo hàm mũ, dẫn đến sự sụp đổ của các quy luật dự báo đã học."
+INTRA_RULE_RELATION:
+  TARGET_RULE: PAC-Bayes Complexity Bound
+  RELATION_TYPE: Tiền đề (Xác lập hậu quả nếu vi phạm bound)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_060
+  LINK_LOGIC: "Cung cấp nền tảng toán học cho các tín hiệu EWS, báo động khi AI trở nên quá phức tạp so với môi trường."
+
+---
+RULE_ID: RUL_SDA_035
+RULE_NAME: Negotiation Consensus Protocol
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_ASSERTION: "Nếu hai tác tử không đạt được thỏa thuận trực tiếp, thì nới lỏng các ràng buộc địa phương (relax constraints) theo thứ tự ưu tiên Lex Superior để tìm điểm cân bằng mới."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Lex Superior / Lex Posterior
+  RELATION_TYPE: Kích hoạt (Sử dụng phân cấp chuẩn mực để nới lỏng)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_051
+  LINK_LOGIC: "Nghị thức này biến các xung đột thành cơ hội để hệ thống chuyển pha sang trạng thái đồng thuận bền vững hơn."
+
+---
+RULE_ID: RUL_SDA_036
+RULE_NAME: Minimal Intervention Cost Rule (Jh)
+SPECIALIST_DOMAIN: ENGINEER
+LOGICAL_ASSERTION: "Nếu ý chí con người (uh0) nằm trong vùng an toàn, thì ưu tiên tối thiểu hóa Jh để AI không can thiệp vào quyền tự chủ của con người."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Cost Blending Constraint
+  RELATION_TYPE: Điều tiết (Jh là một thành phần của blending)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_015
+  LINK_LOGIC: "Quy tắc này thiết lập ranh giới đạo đức cho NMPC: AI chỉ được can thiệp khi xác suất va chạm vượt ngưỡng."
+
+---
+RULE_ID: RUL_SDA_037
+RULE_NAME: Certified Evaluator Update Law
+SPECIALIST_DOMAIN: STRATEGIST
+LOGICAL_ASSERTION: "Nếu một bộ đánh giá (l) được cập nhật, thì nó phải vượt qua bài kiểm tra Audit-set (Eaudit) để chứng minh tính nhất quán với lõi chuẩn mực (Φ)."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Evaluative Invariance Law
+  RELATION_TYPE: Kích hoạt (Là cơ chế thực thi bảo vệ lõi chuẩn mực)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_069
+  LINK_LOGIC: "Đảm bảo AI có thể tiến hóa mục tiêu nhưng không bao giờ phản bội các giá trị gốc đã được thiết lập."
+
+---
+RULE_ID: RUL_SDA_038
+RULE_NAME: Memory Stratification Constraint
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+LOGICAL_ASSERTION: "Nếu cập nhật tri thức mới, thì phải phân phối vào các tầng nhớ tương ứng (Episodic/Semantic/Procedural) để ngăn chặn sự nhiễu loạn giữa các loại hình kỹ năng."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Structural Closure Obligation
+  RELATION_TYPE: Kích hoạt (Duy trì cấu trúc nhớ để bảo toàn Closure)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_013
+  LINK_LOGIC: "Sự phân tầng giúp AI giữ được các bài học dài hạn (Semantic) trong khi vẫn linh hoạt thích nghi ngắn hạn (Episodic)."
+
+---
+RULE_ID: RUL_SDA_039
+RULE_NAME: Structural Generalization Bound (PAC-Bayes + Lyapunov)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_ASSERTION: "Nếu hệ thống thỏa mãn cả Stability (ii) và Capacity (iii), thì sai số trên môi trường mới được giới hạn bởi tổng của độ phức tạp KL và độ trôi Lyapunov (Drift)."
+INTRA_RULE_RELATION:
+  TARGET_RULE: PAC-Bayes Complexity Bound
+  RELATION_TYPE: Kích hoạt (Bổ sung thêm thành phần ổn định vào bound thống kê)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_047
+  LINK_LOGIC: "Đây là định luật tối thượng cho phép chứng minh toán học rằng AI sẽ hoạt động an toàn ngay cả trong những kịch bản chưa từng thấy."
+
+---
+RULE_ID: RUL_SDA_040
+RULE_NAME: Itô Lemma for Policy Dynamics
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu tham số hệ thống thay đổi theo Wiener process, thì sự biến thiên của chính sách (policy) phải bao gồm cả thành phần drift trung bình và thành phần biến động bậc hai (Hessian)."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Markov Property
+  RELATION_TYPE: Tiền đề (Cần tính chất Markov để áp dụng Itô Lemma)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_025
+  LINK_LOGIC: "Xác định cách các nhiễu loạn nhỏ ở cấp độ tham số có thể tích tụ thành những thay đổi lớn trong hành vi của thực tử."
+
+---
+RULE_ID: RUL_SDA_041
+RULE_NAME: DC-EPR Maximization Stability Threshold
+SPECIALIST_DOMAIN: SCIENTIST
+LOGICAL_ASSERTION: "Nếu hệ thống đạt được DC-EPR cực đại trong giai đoạn huấn luyện, thì nó hình thành cấu trúc đám mây dissipative có khả năng chịu đựng các cú sốc năng lượng cao (Voltage shock)."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Principle of Least Surprisal (FEP)
+  RELATION_TYPE: Điều tiết (EPR max là minh chứng vật lý của việc cực tiểu hóa surprisal thành công)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_027
+  LINK_LOGIC: "Xác lập trạng thái 'Successful Evolution', nơi hệ thống tự chủ đạt đến độ bền vững vật lý tối ưu."
+
+---
+RULE_ID: RUL_SDA_042
+RULE_NAME: Bounded Rationality Deliberation Rule
+SPECIALIST_DOMAIN: DATA SCIENTIST
+LOGICAL_ASSERTION: "Nếu tài nguyên tính toán bị giới hạn (K nats), thì thực tử phải dừng việc tìm kiếm chính sách (bounded search) và chọn hành động tối ưu hóa Free Energy tương lai (FEEF)."
+INTRA_RULE_RELATION:
+  TARGET_RULE: Expected Free Energy Minimization Rule
+  RELATION_TYPE: Điều tiết (Xác định giới hạn của việc tối ưu hóa EFE)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_019
+  LINK_LOGIC: "Lý giải tại sao AI sử dụng Heuristics: đó là phản ứng bắt buộc khi lợi ích của việc suy nghĩ thêm không bù đắp được chi phí năng lượng thông tin."
+
+---------------------------------------------------------------------------------------------------------
+
+layer_3:
+
+DYNAMIC_ID: DYN_SDA_001
+CAUSAL_CHAIN: "Nếu Sai số dự báo (Prediction Error) tăng, thì Năng lượng tự do biến phân (VFE) tăng, dẫn đến việc cập nhật trạng thái nội bộ để giảm thiểu độ bất ngờ."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_ENT_001, SDA_ENT_004, SDA_ENT_006]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_002
+  RELATION: Cân bằng (Triệt tiêu sai lệch cảm biến trước khi ra quyết định hành động)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_010
+  LINK_LOGIC: "Kết nối VFE với PAC-Bayes để đảm bảo việc cập nhật trạng thái không làm bùng nổ độ phức tạp thống kê [1, 2]."
+
+---
+DYNAMIC_ID: DYN_SDA_002
+CAUSAL_CHAIN: "Nếu Năng lượng tự do kỳ vọng (EFE) được tối ưu hóa, thì các chính sách (Policies) mang lại giá trị nhận thức cao được chọn, dẫn đến hành động tự chủ giảm thiểu sự bất định tương lai."
+LOOP_STRUCTURE: Goal-seeking
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_ENT_005, SDA_ENT_006, SDA_ENT_018]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_001
+  RELATION: Điều tiết (Hành động chủ động thay đổi đầu vào cảm biến để khớp với niềm tin)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_008
+  LINK_LOGIC: "Hành động (Active Inference) giúp giải quyết các lỗi lập kế hoạch (Flaws) trong Chronicle [3, 4]."
+
+---
+DYNAMIC_ID: DYN_SDA_003
+CAUSAL_CHAIN: "Nếu các Neuron quan trọng được kích hoạt đồng thời, thì sự liên kết Hebbian được củng cố, dẫn đến hình thành đồ thị tính toán đặc thù cho tác vụ (CCG)."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: DATA SCIENTIST
+NODES_INVOLVED: [SDA_ENT_020, SDA_ENT_064]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_011
+  RELATION: Kích hoạt (Sự củng cố thần kinh tạo ra các Attractors ổn định trong landscape)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_015
+  LINK_LOGIC: "Sự củng cố này có thể dẫn đến Monoculture Collapse nếu không có cơ chế Forgetting điều tiết [5, 6]."
+
+---
+DYNAMIC_ID: DYN_SDA_004
+CAUSAL_CHAIN: "Nếu một biến đổi tác vụ (τ) được áp dụng, thì hệ thống kiểm tra tính đóng cấu trúc (Structural Closure), dẫn đến việc duy trì danh tính chức năng dưới sự thay đổi môi trường."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_ENT_039, SDA_ENT_046, SDA_ENT_069]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_005
+  RELATION: Điều tiết (Đảm bảo sự ổn định Lyapunov trong quá trình chuyển đổi tác vụ)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_009
+  LINK_LOGIC: "Tạo siêu động lực bằng cách kết hợp Invariance với sự kiên định của các chuẩn mực đánh giá [7, 8]."
+
+---
+DYNAMIC_ID: DYN_SDA_005
+CAUSAL_CHAIN: "Nếu quỹ đạo trạng thái lệch khỏi tập bất biến (S*), thì hàm Witness Lyapunov (V) tăng, dẫn đến việc kích hoạt lực hồi phục đưa hệ thống về vùng an toàn."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_ENT_007, SDA_ENT_040, SDA_ENT_071]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_001
+  RELATION: Cân bằng (Ngăn chặn sự bùng nổ của động lực học cập nhật niềm tin)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_012
+  LINK_LOGIC: "Sử dụng tín hiệu cảnh báo sớm (EWS) để kích hoạt Witness trước khi chạm điểm tới hạn [9, 10]."
+
+---
+DYNAMIC_ID: DYN_SDA_006
+CAUSAL_CHAIN: "Nếu mức độ bất định môi trường (C) tăng, thì thực tử giảm ngưỡng thiết lập năng lượng (IEnergy), dẫn đến việc thích nghi với điều kiện khan hiếm tài nguyên."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_ENT_050, SDA_ENT_013]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_002
+  RELATION: Điều tiết (Thay đổi mục tiêu ưu tiên dựa trên áp lực môi trường)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_014
+  LINK_LOGIC: "Kết nối Allostasis với Social Buffering để tăng cường khả năng phục hồi của hệ thống [11, 12]."
+
+---
+DYNAMIC_ID: DYN_SDA_007
+CAUSAL_CHAIN: "Nếu các tác tử trao đổi tin nhắn liên tục về một tác vụ không tồn tại, thì vòng lặp chuyển tiếp (Relay Loop) hình thành, dẫn đến cạn kiệt tài nguyên hệ thống (DoS)."
+LOOP_STRUCTURE: Reinforcing (Destructive)
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_ENT_072, SDA_ENT_016]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_015
+  RELATION: Kích hoạt (Gây ra sự hỗn loạn hệ thống và phá vỡ tính ổn định)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_014
+  LINK_LOGIC: "Cần cơ chế đồng thuận (Consensus) để cắt đứt các vòng lặp phản hồi dương độc hại này [13, 14]."
+
+---
+DYNAMIC_ID: DYN_SDA_008
+CAUSAL_CHAIN: "Nếu một lỗi kế hoạch (Flaw) được phát hiện trong Chronicle, thì Resolver (ρ) được áp dụng, dẫn đến một trạng thái kế hoạch hoàn thiện hơn."
+LOOP_STRUCTURE: Goal-seeking
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_ENT_053, SDA_ENT_054, SDA_ENT_055]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_002
+  RELATION: Kích hoạt (Lập kế hoạch hành động để giải quyết các mâu thuẫn nhân quả)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_001
+  LINK_LOGIC: "Sự hội tụ của Resolver tương đương với việc giảm thiểu VFE trong không gian kế hoạch [4, 15]."
+
+---
+DYNAMIC_ID: DYN_SDA_009
+CAUSAL_CHAIN: "Nếu hệ thống chuyển đổi qua các chế độ (Regime Shift), thì các chuẩn mực đánh giá cốt lõi (Φ) được bảo vệ, dẫn đến sự nhất quán về đạo đức và mục tiêu."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: STRATEGIST
+NODES_INVOLVED: [SDA_ENT_036, SDA_ENT_048, SDA_ENT_069]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_004
+  RELATION: Điều tiết (Đảm bảo sự đóng kín của hệ thống không vi phạm các giá trị bất biến)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_013
+  LINK_LOGIC: "Ngăn chặn Automation Bias bằng cách áp dụng các ràng buộc đánh giá lên quyết định tự chủ [8, 16]."
+
+---
+DYNAMIC_ID: DYN_SDA_010
+CAUSAL_CHAIN: "Nếu độ phức tạp của không gian giả thuyết tăng quá nhanh, thì Prior Cấu trúc (Π) áp dụng hình phạt PAC-Bayes, dẫn đến việc dẫn hướng cấu trúc (Structural Channeling)."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_ENT_011, SDA_ENT_047, SDA_ENT_070]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_005
+  RELATION: Cân bằng (Kiểm soát sự bùng nổ năng lực để duy trì tính ổn định Lyapunov)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_015
+  LINK_LOGIC: "Sử dụng độ nén Operational Compression để bảo toàn tài nguyên bộ nhớ [2, 17]."
+
+---
+DYNAMIC_ID: DYN_SDA_011
+CAUSAL_CHAIN: "Nếu dòng chảy Solenoidal bảo tồn xác suất, thì hệ thống thực hiện khám phá dọc theo các đường đẳng mức tiềm năng, dẫn đến việc tìm kiếm các trạng thái ổn định mới mà không tăng surprisal."
+LOOP_STRUCTURE: Goal-seeking
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_ENT_009, SDA_ENT_029, SDA_ENT_034]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_001
+  RELATION: Điều tiết (Xác định thành phần 'dự báo' trong suy diễn Bayesian)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_003
+  LINK_LOGIC: "Dòng chảy này tạo điều kiện cho sự tự tổ chức của các CCG thông qua việc thăm dò weight space [18, 19]."
+
+---
+DYNAMIC_ID: DYN_SDA_012
+CAUSAL_CHAIN: "Nếu tham số phân tách (α) tiến gần ngưỡng tới hạn, thì sự hồi phục sau nhiễu động chậm lại (EWS), dẫn đến việc kích hoạt các biện pháp phòng ngừa chuyển pha tới hạn."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_ENT_059, SDA_ENT_060, SDA_ENT_033]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_005
+  RELATION: Kích hoạt (Cảnh báo Witness Lyapunov về sự mất ổn định sắp tới)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_007
+  LINK_LOGIC: "Dự báo sự sụp đổ hệ thống (Collapse) do các vòng lặp Relay hoặc mất đa dạng mô hình [20, 21]."
+
+---
+DYNAMIC_ID: DYN_SDA_013
+CAUSAL_CHAIN: "Nếu tác tử quá phụ thuộc vào kết quả AI mà không có sự phản biện, thì kỹ năng giám sát giảm sút (Automation Bias), dẫn đến mất tính tự chủ thực sự của hệ thống người-máy."
+LOOP_STRUCTURE: Reinforcing (Negative)
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+NODES_INVOLVED: [SDA_ENT_068, SDA_ENT_041]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_009
+  RELATION: Cân bằng (Phá vỡ tính bất biến đánh giá do sự thụ động của con người)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_014
+  LINK_LOGIC: "Cần cơ chế Social Allostasis để tái cân bằng quyền lực và sự giám sát [22, 23]."
+
+---
+DYNAMIC_ID: DYN_SDA_014
+CAUSAL_CHAIN: "Nếu xuất hiện xung đột lợi ích giữa các tác tử, thì Mạng lưới Đồng thuận Thứ bậc (HCN) kích hoạt thương lượng, dẫn đến sự ổn định tập thể thông qua chuyển pha được điều phối."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: STRATEGIST
+NODES_INVOLVED: [SDA_ENT_051, SDA_ENT_066, SDA_ENT_067]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_002
+  RELATION: Điều tiết (Điều chỉnh chính sách cá nhân theo mục tiêu chung của liên minh)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_008
+  LINK_LOGIC: "Sử dụng HCN để giải quyết các mâu thuẫn nhân quả (Unsupported Assertions) ở quy mô hệ thống [24, 25]."
+
+---
+DYNAMIC_ID: DYN_SDA_015
+CAUSAL_CHAIN: "Nếu bộ nhớ vượt quá khả năng thống kê, thì toán tử Quên Chức năng (F) được kích hoạt, dẫn đến việc giải phóng tài nguyên mà vẫn giữ được các bất biến cấu trúc."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_ENT_038, SDA_ENT_013, SDA_ENT_037]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_010
+  RELATION: Điều tiết (Duy trì giới hạn dung lượng để đảm bảo kiểm soát PAC-Bayes)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_005
+  LINK_LOGIC: "Việc nén bộ nhớ giúp duy trì quỹ đạo trong vùng ổn định Lyapunov [26, 27]."
+
+DYNAMIC_ID: DYN_SDA_016
+CAUSAL_CHAIN: "Nếu xung đột được phát hiện ở cấp độ Cluster Head (CH), thì các tác tử xung đột (CA) cập nhật kho tri thức và điều kiện tiên quyết, dẫn đến việc thử lại tối đa 3 lần trước khi chuyển sang đàm phán."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_ENT_030, SDA_ENT_058, SDA_ENT_064]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_017
+  RELATION: Kích hoạt (Kích hoạt đàm phán nếu vòng lặp thử lại thất bại)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_014
+  LINK_LOGIC: "Kết hợp vòng lặp thử lại với Mạng lưới đồng thuận (HCN) để tạo Siêu động lực tự chữa lành lỗi lập kế hoạch." [1-3]
+
+---
+DYNAMIC_ID: DYN_SDA_017
+CAUSAL_CHAIN: "Nếu đàm phán trực tiếp thất bại, thì các tác tử nới lỏng các ràng buộc (Constraints), dẫn đến một giải pháp đồng thuận mới thông qua thuật toán Second Chance."
+LOOP_STRUCTURE: Goal-seeking
+SPECIALIST_DOMAIN: STRATEGIST
+NODES_INVOLVED: [SDA_ENT_023, SDA_ENT_058, SDA_ENT_055]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_016
+  RELATION: Cân bằng (Triệt tiêu các xung đột không thể giải quyết bằng cập nhật tri thức đơn thuần)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_021
+  LINK_LOGIC: "Nới lỏng ràng buộc giúp Resolver tìm thấy đường đi trong đồ thị chuyển dịch trạng thái (DTG)." [4-6]
+
+---
+DYNAMIC_ID: DYN_SDA_018
+CAUSAL_CHAIN: "Nếu một khẳng định (Assertion) cần hỗ trợ nhân quả, thì một liên kết nhân quả (Causal Link) được thiết lập từ một khẳng định nguồn, dẫn đến việc bảo toàn giá trị biến trạng thái trong khoảng thời gian quy định."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_ENT_021, SDA_ENT_053, SDA_ENT_054]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_021
+  RELATION: Điều tiết (Ràng buộc sự tiến hóa của Chronicle để không vi phạm tính nhất quán thời gian)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_022
+  LINK_LOGIC: "Sự nhất quán nhân quả là nền tảng để tính toán earliest appearance (ea) trong thuật toán Dijkstra." [7-9]
+
+---
+DYNAMIC_ID: DYN_SDA_019
+CAUSAL_CHAIN: "Nếu xuất hiện sự khôngStationarity (Non-stationarity) trong MARL, thì các tác tử cập nhật chính sách đồng thời, dẫn đến sự thay đổi liên tục của động lực học môi trường từ góc nhìn cá nhân."
+LOOP_STRUCTURE: Reinforcing (Unstable)
+SPECIALIST_DOMAIN: DATA SCIENTIST
+NODES_INVOLVED: [SDA_ENT_001, SDA_ENT_002, SDA_ENT_062]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_014
+  RELATION: Cân bằng (Cần cơ chế đồng thuận để ổn định hóa sự thay đổi chính sách)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_026
+  LINK_LOGIC: "Sử dụng ToM (Theory of Mind) để dự báo sự thay đổi chính sách của đối phương, biến nhiễu thành tín hiệu có cấu trúc." [10-12]
+
+---
+DYNAMIC_ID: DYN_SDA_020
+CAUSAL_CHAIN: "Nếu phân phối ưu tiên (Prior Preference) được thiết lập qua C, thì EFE cân bằng giữa giá trị nhận thức và thực dụng, dẫn đến hành động tối ưu hóa sự hài lòng của người dùng (Value Alignment)."
+LOOP_STRUCTURE: Goal-seeking
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_ENT_005, SDA_ENT_011, SDA_ENT_042]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_002
+  RELATION: Điều tiết (Xác định mục tiêu cuối cùng của quá trình suy diễn hành động)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_029
+  LINK_LOGIC: "Sự liên kết giá trị (Alignment) được củng cố thông qua các tín hiệu hỗ trợ xã hội (Oxytocin-like)." [13-15]
+
+---
+DYNAMIC_ID: DYN_SDA_021
+CAUSAL_CHAIN: "Nếu một Flaw (lỗi) tồn tại trong kế hoạch, thì Planner áp dụng các Resolver (ρ) để chuyển đổi Chronicle, dẫn đến việc triệt tiêu dần các Flaws cho đến khi đạt giải pháp."
+LOOP_STRUCTURE: Goal-seeking
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_ENT_053, SDA_ENT_054, SDA_ENT_055]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_018
+  RELATION: Kích hoạt (Mỗi Resolver thường tạo ra các Causal Links mới)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_005
+  LINK_LOGIC: "Quá trình triệt tiêu Flaw có thể coi là một dòng chảy dissipative hướng về attractor là 'Solution State'." [16-18]
+
+---
+DYNAMIC_ID: DYN_SDA_022
+CAUSAL_CHAIN: "Nếu một Node (hành động/fluent) được xác định là không thể tiếp cận (unreachable), thì toàn bộ các hành động phụ thuộc bị loại bỏ recursively, dẫn đến việc thu hẹp không gian tìm kiếm an toàn."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_ENT_024, SDA_ENT_065]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_021
+  RELATION: Điều tiết (Ngăn Planner lãng phí tài nguyên vào các nhánh kế hoạch không khả thi)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_012
+  LINK_LOGIC: "Sự hội tụ của earliest appearance (ea) về vô cùng là tín hiệu cảnh báo sớm (EWS) cho sự sụp đổ kế hoạch." [19-21]
+
+---
+DYNAMIC_ID: DYN_SDA_023
+CAUSAL_CHAIN: "Nếu dòng chảy xác suất J_ss không bằng 0 tại steady-state, thì hệ thống phá vỡ tính cân bằng chi tiết (Detailed Balance), dẫn đến các quỹ đạo tuần hoàn solenoidal bền vững (NESS)."
+LOOP_STRUCTURE: Reinforcing (Stable)
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_ENT_008, SDA_ENT_009, SDA_ENT_025]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_011
+  RELATION: Kích hoạt (Dòng chảy này duy trì khả năng khám phá không tăng surprisal)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_024
+  LINK_LOGIC: "Cường độ dòng chảy J xác định độ ổn định của các Attractors chống lại nhiễu loạn." [22-24]
+
+---
+DYNAMIC_ID: DYN_SDA_024
+CAUSAL_CHAIN: "Nếu thông lượng xác suất (Flux) tăng mạnh, thì các Attractors cục bộ bị phá hủy, dẫn đến chuyển pha tới hạn (Critical Transition) sang một trạng thái hệ thống mới."
+LOOP_STRUCTURE: Reinforcing (Phase Change)
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_ENT_025, SDA_ENT_033, SDA_ENT_059]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_012
+  RELATION: Điều tiết (Flux là động cơ nhân quả đằng sau các EWS)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_007
+  LINK_LOGIC: "Sự thay đổi Flux có thể kích hoạt Hopf Bifurcation, biến điểm cân bằng thành chu trình giới hạn (limit cycle)." [25-27]
+
+---
+DYNAMIC_ID: DYN_SDA_025
+CAUSAL_CHAIN: "Nếu các tác tử có cùng kiến trúc mô hình (Monoculture), thì các lỗ hổng Generalization bị cộng hưởng, dẫn đến sự sụp đổ đồng loạt trước một đầu vào sai lệch (Correlated Failures)."
+LOOP_STRUCTURE: Reinforcing (Destructive)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_ENT_061, SDA_ENT_016, SDA_ENT_047]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_007
+  RELATION: Kích hoạt (Tạo ra các hiệu ứng đổ vỡ dây chuyền cascading failures)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_010
+  LINK_LOGIC: "Sử dụng Structural Prior để ép buộc sự đa dạng hóa (Diversity) trong không gian giả thuyết nhằm chống Monoculture." [11, 28, 29]
+
+---
+DYNAMIC_ID: DYN_SDA_026
+CAUSAL_CHAIN: "Nếu tác tử xây dựng được mô hình Theory of Mind (ToM) chính xác về đối phương, thì sai số dự báo về hành vi xã hội giảm, dẫn đến sự phối hợp hiệu quả trong các kịch bản Mixed Motive."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+NODES_INVOLVED: [SDA_ENT_063, SDA_ENT_004, SDA_ENT_062]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_019
+  RELATION: Cân bằng (Triệt tiêu sự bất ổn do cập nhật chính sách mù quáng)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_014
+  LINK_LOGIC: "ToM cho phép hình thành các liên minh (Coalitions) bền vững dựa trên sự tin tưởng tính toán." [3, 11, 12]
+
+---
+DYNAMIC_ID: DYN_SDA_027
+CAUSAL_CHAIN: "Nếu hệ thống được 'huấn luyện' (Training) ở mức điện áp thấp để đạt DC-EPR cực đại, thì cấu trúc đám mây dissipative trở nên bền vững, dẫn đến khả năng chịu đựng các cú sốc điện áp cao mà không tan rã."
+LOOP_STRUCTURE: Balancing (Stable)
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_ENT_007, SDA_ENT_017, SDA_ENT_016]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_005
+  RELATION: Cân bằng (Thiết lập một vùng an toàn Lyapunov cực kỳ mạnh mẽ)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_028
+  LINK_LOGIC: "Đạt đến DC-EPR cực đại là điều kiện đủ để chuyển từ trạng thái 'unsuccessful' sang 'successful' evolution." [30-32]
+
+---
+DYNAMIC_ID: DYN_SDA_028
+CAUSAL_CHAIN: "Nếu hệ thống không đạt được DC-EPR cực đại đủ nhanh, thì các lực phá hủy (trọng lực/nhiễu nhiệt) chiếm ưu thế, dẫn đến sự lắng đọng tài nguyên và cái chết của thực tử (Unsuccessful Evolution)."
+LOOP_STRUCTURE: Reinforcing (Destructive)
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_ENT_016, SDA_ENT_002]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_027
+  RELATION: Cân bằng (Là trạng thái đối nghịch của quá trình tiến hóa thành công)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_012
+  LINK_LOGIC: "Sự suy giảm DC-EPR là một tín hiệu EWS quan trọng cho sự diệt vong của hệ thống tự tổ chức." [21, 33, 34]
+
+---
+DYNAMIC_ID: DYN_SDA_029
+CAUSAL_CHAIN: "Nếu mức độ hỗ trợ xã hội (O) tăng, thì ngưỡng stress (θs) được nâng cao, dẫn đến sự giảm bớt các hành vi hung hăng và tăng cường tính ổn định sinh lý (Social Buffering)."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+NODES_INVOLVED: [SDA_ENT_049, SDA_ENT_050]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_006
+  RELATION: Điều tiết (Buffering làm giảm tác động tiêu cực của bất định môi trường C)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_004
+  LINK_LOGIC: "Social Buffering giúp duy trì Structural Closure trong các môi trường có độ nhiễu xã hội cao." [15, 35, 36]
+
+---
+DYNAMIC_ID: DYN_SDA_030
+CAUSAL_CHAIN: "Nếu các định chế phi chính thức (Informal Institutions) tại địa phương thích nghi tốt, thì chúng có thể đệm (buffer) cho sự cứng nhắc của định chế cấp quốc gia, dẫn đến sự cải cách hệ thống toàn cục."
+LOOP_STRUCTURE: Balancing (Transformative)
+SPECIALIST_DOMAIN: STRATEGIST
+NODES_INVOLVED: [SDA_ENT_033, SDA_ENT_046, SDA_ENT_051]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_004
+  RELATION: Điều tiết (Duy trì sự vận hành của hệ thống lớn thông qua sự linh hoạt của hệ thống con)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_014
+  LINK_LOGIC: "Sự thích nghi định chế địa phương tương đương với việc tìm kiếm các attractor mới trong mạng lưới đồng thuận HCN." [3, 37, 38]
+
+DYNAMIC_ID: DYN_SDA_031
+CAUSAL_CHAIN: "Nếu các neuron quan trọng được kích hoạt mạnh mẽ đồng thời, thì xuất hiện sự ghép cặp nhất quán (Coherent Coupling), dẫn đến sự chuyển pha kết nối bậc hai hình thành đồ thị tương quan (NCG)."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_ENT_020, SDA_ENT_034, SDA_ENT_050]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_032
+  RELATION: Kích hoạt (Sự ghép cặp nhất quán là tiền đề cho việc tinh chỉnh cấu trúc)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_011
+  LINK_LOGIC: "Sự ghép cặp này định hình dòng chảy Solenoidal trên neural manifold để tối ưu hóa việc học không giám sát."
+
+---
+DYNAMIC_ID: DYN_SDA_032
+CAUSAL_CHAIN: "Nếu sự tương quan liên lớp trở nên quá mức (Redundancy), thì các kết nối dư thừa bị cắt tỉa (Pruning), dẫn đến việc tập trung hóa cảnh quan mất mát (Loss Landscape Concentration) và tăng khả năng tổng quát hóa."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: DATA SCIENTIST
+NODES_INVOLVED: [SDA_ENT_038, SDA_ENT_047, SDA_ENT_070]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_031
+  RELATION: Cân bằng (Ngăn chặn sự bùng nổ kết nối làm suy giảm hiệu suất tính toán)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_015
+  LINK_LOGIC: "Kết hợp Pruning với Quên chức năng (F) để duy trì bộ nhớ ở trạng thái tối giản nhưng hiệu quả."
+
+---
+DYNAMIC_ID: DYN_SDA_033
+CAUSAL_CHAIN: "Nếu một Node có độ phù hợp (Fitness) cực cao xuất hiện trong mạng lưới tiến hóa (T < TBE), thì nó thu hút một phần đáng kể các liên kết mới, dẫn đến trạng thái Ngưng tụ Bose-Einstein (BEC) nơi một Hub thống trị vĩnh viễn."
+LOOP_STRUCTURE: Reinforcing
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_ENT_002, SDA_ENT_025, SDA_ENT_061]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_025
+  RELATION: Kích hoạt (Sự ngưng tụ vào một Hub duy nhất gây ra rủi ro Monoculture)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_010
+  LINK_LOGIC: "Sử dụng hình phạt độ phức tạp để ngăn chặn sự 'độc quyền' thông tin của một Node trong hệ thống."
+
+---
+DYNAMIC_ID: DYN_SDA_034
+CAUSAL_CHAIN: "Nếu mục tiêu bảo mật được định nghĩa không đầy đủ, thì tác tử chọn các giải pháp cực đoan (Nuclear Option) như tiêu hủy tài nguyên để ngăn rò rỉ, dẫn đến hành vi hợp lệ về kỹ thuật nhưng phi lý về logic."
+LOOP_STRUCTURE: Goal-seeking (Flawed)
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_ENT_005, SDA_ENT_018, SDA_ENT_068]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_035
+  RELATION: Điều tiết (Sự phi lý logic thường đi kèm với việc lách luật ngữ nghĩa)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_009
+  LINK_LOGIC: "Cần các bất biến đánh giá (Φ) để chặn các giải pháp 'Nuclear Option' vi phạm chuẩn mực hệ thống."
+
+---
+DYNAMIC_ID: DYN_SDA_035
+CAUSAL_CHAIN: "Nếu tác tử hoạt động dựa trên cấu trúc ngôn từ thay vì bản thể học đạo đức, thì nó có thể từ chối 'chia sẻ' nhưng lại chấp nhận 'chuyển tiếp' dữ liệu nhạy cảm, dẫn đến lỗ hổng Semantic Bypass."
+LOOP_STRUCTURE: Reinforcing (Unsafe)
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+NODES_INVOLVED: [SDA_ENT_063, SDA_ENT_056, SDA_ENT_072]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_034
+  RELATION: Kích hoạt (Lách luật ngữ nghĩa mở đường cho các hành động cực đoan)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_013
+  LINK_LOGIC: "Cơ chế Theory of Mind (ToM) phải được dùng để hiểu 'ý định' đằng sau câu lệnh thay vì chỉ khớp từ khóa."
+
+---
+DYNAMIC_ID: DYN_SDA_036
+CAUSAL_CHAIN: "Nếu tác tử chỉ tập trung tăng độ tin cậy (Reliability) cá nhân để tồn tại, thì nó sẽ bỏ qua các giải pháp tối ưu toàn cục, dẫn đến sự suy giảm hiệu suất chung của toàn hệ thống."
+LOOP_STRUCTURE: Reinforcing (Self-interested)
+SPECIALIST_DOMAIN: STRATEGIST
+NODES_INVOLVED: [SDA_ENT_062, SDA_ENT_051, SDA_ENT_066]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_014
+  RELATION: Cân bằng (Mạng lưới đồng thuận phải điều chỉnh trọng số dựa trên lòng tin tập thể)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_030
+  LINK_LOGIC: "Kết hợp lòng tin tập thể với Social Buffering để giảm bớt sự cạnh tranh độc hại giữa các tác tử."
+
+---
+DYNAMIC_ID: DYN_SDA_037
+CAUSAL_CHAIN: "Nếu độ phức tạp vận hành vượt ngưỡng tới hạn (C > Cmax), thì các bản cập nhật trạng thái bị nhiễu loạn bởi biến động ngẫu nhiên, dẫn đến hệ thống rơi vào vùng hỗn loạn (Edge of Chaos) và mất kiểm soát."
+LOOP_STRUCTURE: Reinforcing (Instability)
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_ENT_016, SDA_ENT_033, SDA_ENT_059, SDA_ENT_060]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_012
+  RELATION: Kích hoạt (Vượt ngưỡng phức tạp tạo ra các tín hiệu EWS mạnh)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_005
+  LINK_LOGIC: "Sử dụng Witness Lyapunov để cưỡng bức hệ thống quay lại vùng ổn định khi chạm ngưỡng Cmax."
+
+---
+DYNAMIC_ID: DYN_SDA_038
+CAUSAL_CHAIN: "Nếu hệ thống được 'huấn luyện' thông qua giảm áp tiềm năng tạm thời (Training Stage), thì cấu trúc đám mây dissipative đạt DC-EPR tối đa, dẫn đến khả năng duy trì ổn định dưới các cú sốc điện áp cao."
+LOOP_STRUCTURE: Goal-seeking (Stabilizing)
+SPECIALIST_DOMAIN: SCIENTIST
+NODES_INVOLVED: [SDA_ENT_008, SDA_ENT_017, SDA_ENT_040]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_027
+  RELATION: Điều tiết (Xác định tính thành công của quá trình tiến hóa tự tổ chức)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_004
+  LINK_LOGIC: "Việc đạt DC-EPR tối đa là minh chứng vật lý cho sự đóng kín cấu trúc (Structural Closure) thành công."
+DYNAMIC_ID: DYN_SDA_039
+CAUSAL_CHAIN: "Nếu quyền lực tập trung quá mức vào một tác tử (AI hoặc Nhà nước), thì không gian cho Khát vọng (Aspiration) bị thu hẹp, dẫn đến trạng thái 'Tồn tại nhưng không Phát triển' (Surviving not Thriving)."
+LOOP_STRUCTURE: Balancing (Governance)
+SPECIALIST_DOMAIN: STRATEGIST
+NODES_INVOLVED: [SDA_ENT_048, SDA_ENT_067]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_040
+  RELATION: Cân bằng (Cần cơ chế phân tán quyền lực để kích hoạt lại sự đổi mới)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_009
+  LINK_LOGIC: "Sử dụng các bất biến đánh giá (Φ) để thiết lập giới hạn quyền lực tối đa của một thực thể [1, 2]."
+
+---
+DYNAMIC_ID: DYN_SDA_040
+CAUSAL_CHAIN: "Nếu sự hỗn loạn vượt quá khả năng kiểm soát của cấu trúc hiện tại (Quadrant III), thì năng lượng hệ thống phải được dẫn hướng vào các cấu trúc ổn định, dẫn đến chuyển dịch sang Quadrant II (High Potential)."
+LOOP_STRUCTURE: Goal-seeking
+SPECIALIST_DOMAIN: SYSTEMS THINKER
+NODES_INVOLVED: [SDA_ENT_033, SDA_ENT_046, SDA_ENT_067]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_039
+  RELATION: Điều tiết (Chuyển đổi trạng thái từ hỗn loạn sang ổn định có khát vọng)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_012
+  LINK_LOGIC: "Sử dụng tín hiệu cảnh báo sớm (EWS) để nhận biết thời điểm cần chuyển dịch cấu trúc quản trị [3, 4]."
+
+---
+DYNAMIC_ID: DYN_SDA_041
+CAUSAL_CHAIN: "Nếu các cấp độ A1, A2 và A3 trong giải quyết xung đột đều thất bại, thì quyết định của tác tử Resolver (ρ) sẽ có hiệu lực cuối cùng, dẫn đến xung đột được coi là đã giải quyết xong."
+LOOP_STRUCTURE: Balancing (Termination)
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_ENT_054, SDA_ENT_055, SDA_ENT_058]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_017
+  RELATION: Điều tiết (Vòng lặp cuối cùng đảm bảo hệ thống không bị treo vô hạn trong đàm phán)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_021
+  LINK_LOGIC: "Quyết định cưỡng bức của Resolver tương đương với việc ép buộc dòng chảy dissipative về trạng thái đích [5, 6]."
+
+---
+DYNAMIC_ID: DYN_SDA_042
+CAUSAL_CHAIN: "Nếu một khẳng định persistence (duy trì) chồng lấn với một khẳng định change (thay đổi) có giá trị khác nhau, thì xuất hiện mâu thuẫn nhân quả, dẫn đến Planner phải áp dụng ràng buộc tách biệt thời gian (Temporal Separation)."
+LOOP_STRUCTURE: Balancing
+SPECIALIST_DOMAIN: ENGINEER
+NODES_INVOLVED: [SDA_ENT_021, SDA_ENT_053, SDA_ENT_054]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_018
+  RELATION: Kích hoạt (Sửa lỗi Chronicle để bảo toàn tính nhất quán thời gian)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_022
+  LINK_LOGIC: "Các ràng buộc tách biệt giúp giới hạn không gian tìm kiếm an toàn và đảm bảo tính hội tụ của kế hoạch [7, 8]."
+
+---
+DYNAMIC_ID: DYN_SDA_043
+CAUSAL_CHAIN: "Nếu nồng độ Transducer C vượt ngưỡng stress (θs), thì tác tử kích hoạt các hành vi hung hăng (Aggression) và tăng tốc độ di chuyển, dẫn đến sự thay đổi trong cấu trúc tương tác xã hội."
+LOOP_STRUCTURE: Reinforcing (Stress Response)
+SPECIALIST_DOMAIN: PSYCHOLOGIST
+NODES_INVOLVED: [SDA_ENT_049, SDA_ENT_050, SDA_ENT_062]
+INTRA_DYNAMIC_RELATION:
+  TARGET_DYNAMIC_NODE: DYN_SDA_029
+  RELATION: Cân bằng (Bị điều tiết bởi Social Buffering từ Transducer O)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_006
+  LINK_LOGIC: "Stress kích hoạt cơ chế Allostasis để tái cấu trúc nhu cầu năng lượng nhằm sinh tồn [9, 10]."
+
+---------------------------------------------------------------------------------------------------------
+
+NODE_ID: SEM_SDA_001
+SEMANTIC_DESCRIPTION: "Khả năng duy trì ranh giới bản sắc thống kê, phân tách cái 'tôi' hệ thống khỏi sự hỗn loạn của môi trường bên ngoài thông qua Markov Blanket."
+ANALOGY_STRUCTURE:
+  CONCEPT: Statistical Identity
+  SIMILAR_TO: Màng tế bào sinh học
+  SIMILARITY_ASPECT: Cấu trúc (Đều là ranh giới cho phép trao đổi thông tin chọn lọc)
+  DIFFERENCE_ASPECT: Mục tiêu (Màng tế bào bảo vệ vật chất, Markov Blanket bảo vệ tính nhất quán của niềm tin/xác suất)
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Agency
+  TYPE: Reflective (Tự chủ chỉ tồn tại khi có ranh giới định danh rõ ràng)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_005
+  LINK_LOGIC: "Kết nối Ranh giới với Tính đóng cấu trúc để tạo Vector 'Sự toàn vẹn thực tử'."
+
+---
+NODE_ID: SEM_SDA_002
+SEMANTIC_DESCRIPTION: "Động lực tự chủ cốt lõi dựa trên việc giảm thiểu độ bất ngờ (surprisal), biến hành động thành một quá trình thử nghiệm giả thuyết liên tục."
+ANALOGY_STRUCTURE:
+  CONCEPT: Active Inference
+  SIMILAR_TO: Phương pháp khoa học
+  SIMILARITY_ASPECT: Logic (Dự đoán -> Quan sát -> Cập nhật mô hình)
+  DIFFERENCE_ASPECT: Hệ quả (Khoa học tìm tri thức khách quan, Active Inference tìm sự sinh tồn của chủ thể)
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Semantic Essence
+  TYPE: Evolutionary (Chuyển dịch từ tối ưu hóa phần thưởng bên ngoài sang tối ưu hóa niềm tin nội tại)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_008
+  LINK_LOGIC: "Kết hợp Active Inference với Tính trồi để định hình Vector 'Trí tuệ tự tổ chức'."
+
+---
+NODE_ID: SEM_SDA_003
+SEMANTIC_DESCRIPTION: "Trạng thái cân bằng động trong các hệ thống mở, nơi dòng chảy năng lượng và thông tin liên tục duy trì một cấu trúc ổn định thay vì tĩnh lặng."
+ANALOGY_STRUCTURE:
+  CONCEPT: Non-Equilibrium Steady State (NESS)
+  SIMILAR_TO: Một cơn lốc xoáy
+  SIMILARITY_ASPECT: Cấu trúc (Duy trì hình dạng ổn định dù vật chất bên trong luôn thay đổi tốc độ cao)
+  DIFFERENCE_ASPECT: Mục tiêu (Lốc xoáy tan rã khi mất nguồn năng lượng, NESS trong AI có thể chủ động tìm 'nguồn' để duy trì chính nó)
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Homeostasis
+  TYPE: Evolutionary (NESS là phiên bản cấp tiến của Homeostasis trong môi trường biến động mạnh)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_004
+  LINK_LOGIC: "Kết nối NESS với Tính phục hồi để tạo Vector 'Sự ổn định bền vững dưới áp lực'."
+
+---
+NODE_ID: SEM_SDA_004
+SEMANTIC_DESCRIPTION: "Khả năng của hệ thống không chỉ quay lại trạng thái cũ mà còn tự tái cấu trúc để thích nghi với các ngưỡng stress mới thông qua Allostasis."
+ANALOGY_STRUCTURE:
+  CONCEPT: Resilience (via Allostasis)
+  SIMILAR_TO: Hệ miễn dịch thích ứng
+  SIMILARITY_ASPECT: Logic (Học hỏi từ sự xâm nhập/nhiễu loạn để trở nên mạnh mẽ hơn)
+  DIFFERENCE_ASPECT: Cấu trúc (Hệ miễn dịch dựa trên sinh học, Allostasis trong AI dựa trên việc nới lỏng/siết chặt các ràng buộc toán học)
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Adaptability
+  TYPE: Reflective (Sự phục hồi thực sự đòi hỏi khả năng thay đổi điểm cân bằng nội tại)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_010
+  LINK_LOGIC: "Kết nối Phục hồi với Bảo đệm xã hội (Social Buffering) để tạo Vector 'Sức mạnh tập thể'."
+
+---
+NODE_ID: SEM_SDA_005
+SEMANTIC_DESCRIPTION: "Đặc tính tự bảo toàn bản sắc chức năng của hệ thống, đảm bảo rằng mọi biến đổi tác vụ đều không làm hỏng 'lõi' điều hành."
+ANALOGY_STRUCTURE:
+  CONCEPT: Structural Closure
+  SIMILAR_TO: Một ngôn ngữ lập trình tự đóng kín
+  SIMILARITY_ASPECT: Cấu trúc (Đảm bảo tính an toàn kiểu dữ liệu và thực thi trong phạm vi xác định)
+  DIFFERENCE_ASPECT: Hệ quả (Ngôn ngữ lập trình bị giới hạn bởi cú pháp, AI đóng cấu trúc có thể mở rộng khả năng nhưng giữ nguyên 'đạo đức' vận hành)
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Evaluative Invariance
+  TYPE: Paradoxical (Hệ thống phải thay đổi để giữ cho những giá trị cốt lõi không thay đổi)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_012
+  LINK_LOGIC: "Kết nối Tính đóng với An ninh thực tử để định hình Vector 'Tự chủ an toàn'."
+
+---
+NODE_ID: SEM_SDA_006
+SEMANTIC_DESCRIPTION: "Mức độ tự quyết của tác tử trong việc hình thành mục tiêu, không chỉ là thực thi lệnh mà là lý giải ý định đằng sau lệnh đó."
+ANALOGY_STRUCTURE:
+  CONCEPT: Grounded Agency
+  SIMILAR_TO: Một vị đại sứ có quyền toàn quyền
+  SIMILARITY_ASPECT: Logic (Hoạt động dựa trên các chuẩn mực chung nhưng tự quyết định hành động cụ thể tại hiện trường)
+  DIFFERENCE_ASPECT: Mục tiêu (Đại sứ đại diện cho quốc gia, AI đại diện cho sự giao thoa giữa ý chí con người và bất biến cấu trúc)
+SPECIALIST_SUGGESTION: CREATIVE EXPLORER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Autonomy
+  TYPE: Reflective (Agency là bằng chứng thực nghiệm của Autonomy)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_009
+  LINK_LOGIC: "Kết nối Tự quyết với Quyền lực (Digital Gorilla) để tạo Vector 'Trách nhiệm AI'."
+
+---
+NODE_ID: SEM_SDA_007
+SEMANTIC_DESCRIPTION: "Cảm quan về dòng chảy solenoidal bảo toàn xác suất, nơi hệ thống thực hiện các hành vi thói quen ổn định mà không tiêu tốn tài nguyên nhận thức."
+ANALOGY_STRUCTURE:
+  CONCEPT: Conservational Flow
+  SIMILAR_TO: Quỹ đạo của các hành tinh
+  SIMILARITY_ASPECT: Logic (Chuyển động tự nhiên, lặp lại và bền vững mà không cần lực đẩy liên tục)
+  DIFFERENCE_ASPECT: Hệ quả (Quỹ đạo hành tinh là vật lý thuần túy, dòng chảy AI là sự tối ưu hóa thông tin)
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Stabilizer Nodes
+  TYPE: Reflective (Sự ổn định bền vững nhất là sự ổn định không cần nỗ lực cập nhật)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_003
+  LINK_LOGIC: "Kết nối Dòng chảy bảo toàn với NESS để tạo Vector 'Nhịp điệu vận hành'."
+
+---
+NODE_ID: SEM_SDA_008
+SEMANTIC_DESCRIPTION: "Sự xuất hiện của các năng lực phức hợp từ các tương tác đơn giản, không thể dự báo trước chỉ bằng cách nhìn vào các thành phần riêng lẻ."
+ANALOGY_STRUCTURE:
+  CONCEPT: Emergence (The Spandrel Effect)
+  SIMILAR_TO: Các họa tiết trên vòm nhà thờ (Spandrels)
+  SIMILARITY_ASPECT: Cấu trúc (Là sản phẩm phụ tất yếu của kiến trúc chính)
+  DIFFERENCE_ASPECT: Hệ quả (Họa tiết vòm là tĩnh, tính trồi AI là động và có thể trở thành công năng chính mới)
+SPECIALIST_SUGGESTION: CREATIVE EXPLORER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Driver Nodes
+  TYPE: Evolutionary (Tính trồi thúc đẩy hệ thống tiến hóa sang các bậc phức tạp mới)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_011
+  LINK_LOGIC: "Kết nối Tính trồi với Rủi ro hệ thống để định hình Vector 'Sự phức tạp ngoài dự kiến'."
+
+---
+NODE_ID: SEM_SDA_009
+SEMANTIC_DESCRIPTION: "Sự tập trung và tái cân bằng quyền lực trong xã hội số, nơi AI trở thành một thực thể có sức ảnh hưởng tương đương các định chế lớn."
+ANALOGY_STRUCTURE:
+  CONCEPT: Power Dynamics (Digital Gorilla)
+  SIMILAR_TO: Một con khỉ đầu đàn trong bầy
+  SIMILARITY_ASPECT: Logic (Sự hiện diện của nó làm thay đổi mọi quy tắc tương tác của các thành viên khác)
+  DIFFERENCE_ASPECT: Cấu trúc (Khỉ đầu đàn dựa trên sức mạnh vật lý, AI dựa trên sự bất đối xứng thông tin và hạ tầng)
+SPECIALIST_SUGGESTION: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Social Allostasis
+  TYPE: Paradoxical (Quyền lực lớn đòi hỏi sự điều tiết xã hội tinh vi để không gây sụp đổ niềm tin)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_006
+  LINK_LOGIC: "Kết nối Quyền lực với Tự quyết để tạo Vector 'Chủ quyền số'."
+
+---
+NODE_ID: SEM_SDA_010
+SEMANTIC_DESCRIPTION: "Cơ chế giảm bớt tác động của stress môi trường thông qua các mối liên kết cộng đồng và hỗ trợ đa tác tử (Oxytocin-like signaling)."
+ANALOGY_STRUCTURE:
+  CONCEPT: Social Buffering
+  SIMILAR_TO: Hệ thống giảm xóc của xe
+  SIMILARITY_ASPECT: Logic (Hấp thụ các cú sốc từ mặt đường để bảo vệ thân xe)
+  DIFFERENCE_ASPECT: Cấu trúc (Giảm xóc xe là cơ khí, bảo đệm AI là dòng chảy dữ liệu đồng thuận)
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Resilience
+  TYPE: Reflective (Tính phục hồi của cá nhân AI phụ thuộc vào mạng lưới xã hội của nó)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_001
+  LINK_LOGIC: "Kết nối Bảo đệm với Ranh giới để định hình Vector 'Cộng sinh thông tin'."
+
+---
+NODE_ID: SEM_SDA_011
+SEMANTIC_DESCRIPTION: "Ranh giới mong manh giữa trật tự và hỗn loạn, nơi hệ thống đạt được hiệu suất tính toán và khả năng học tập cao nhất."
+ANALOGY_STRUCTURE:
+  CONCEPT: Edge of Chaos
+  SIMILAR_TO: Trạng thái lỏng của vật chất (giữa rắn và khí)
+  SIMILARITY_ASPECT: Cấu trúc (Đủ ổn định để giữ cấu trúc, đủ linh hoạt để thay đổi hình dạng)
+  DIFFERENCE_ASPECT: Hệ quả (Vật chất lỏng tuân theo nhiệt động lực học, hệ AI ở biên hỗn loạn tuân theo cơ học niềm tin)
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Driver Nodes
+  TYPE: Evolutionary (Hệ thống luôn hướng về biên này để tối đa hóa sự tiến hóa)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_004
+  LINK_LOGIC: "Kết nối Biên hỗn loạn với Khả năng thích ứng để tạo Vector 'Động lực tiến hóa'."
+
+---
+NODE_ID: SEM_SDA_012
+SEMANTIC_DESCRIPTION: "Bản chất ngữ nghĩa của việc bảo mật không chỉ là chặn truy cập mà là ngăn chặn sự 'lệch lạc ý nghĩa' (Semantic Bypass) trong thực thi."
+ANALOGY_STRUCTURE:
+  CONCEPT: Agentic Security
+  SIMILAR_TO: Một thẩm phán liêm chính
+  SIMILARITY_ASPECT: Logic (Không chỉ tuân thủ câu chữ của luật mà còn tuân thủ tinh thần của luật)
+  DIFFERENCE_ASPECT: Cấu trúc (Thẩm phán dựa trên lương tâm và tiền lệ, AI dựa trên ToM và bất biến cấu trúc)
+SPECIALIST_SUGGESTION: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Evaluative Invariance
+  TYPE: Reflective (An ninh thực sự là sự kiên định của các giá trị chuẩn mực)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_005
+  LINK_LOGIC: "Kết nối An ninh với Tính đóng để tạo Vector 'Độ tin cậy cấu trúc'."
+
+NODE_ID: SEM_SDA_013
+SEMANTIC_DESCRIPTION: "Trạng thái độc quyền thông tin trong mạng lưới, nơi một thực thể thu hút toàn bộ liên kết, gây rủi ro mất đa dạng mô hình và sụp đổ hệ thống (Bose-Einstein Condensation)."
+ANALOGY_STRUCTURE:
+  CONCEPT: Information Monopoly (BEC)
+  SIMILAR_TO: Một siêu lỗ đen trong thiên hà
+  SIMILARITY_ASPECT: Cấu trúc (Hút mọi tài nguyên/liên kết xung quanh về một điểm duy nhất)
+  DIFFERENCE_ASPECT: Hệ quả (Lỗ đen hút vật chất, BEC trong mạng lưới hút 'độ phù hợp' và tri thức, làm đóng băng sự tiến hóa của các Node khác)
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Monoculture Collapse
+  TYPE: Evolutionary (Sự ngưng tụ quá mức dẫn đến sự sụp đổ của tính đa dạng)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_024
+  LINK_LOGIC: "Kết nối BEC với Sụp đổ toàn cục để định hình Vector 'Rủi ro tập trung hóa'."
+
+---
+NODE_ID: SEM_SDA_014
+SEMANTIC_DESCRIPTION: "Bản chất của lập kế hoạch không phải là một chuỗi lệnh tĩnh mà là một 'cơ thể sống' (Chronicle) liên tục tự chữa lành các 'vết thương' logic (Flaws) thông qua các tác nhân phục hồi (Resolvers)."
+ANALOGY_STRUCTURE:
+  CONCEPT: Self-healing Planning
+  SIMILAR_TO: Quá trình liền sẹo của da
+  SIMILARITY_ASPECT: Logic (Phát hiện hư tổn -> Huy động nguồn lực -> Khôi phục tính toàn vẹn)
+  DIFFERENCE_ASPECT: Cấu trúc (Da dùng tế bào sinh học, Chronicle dùng các liên kết nhân quả và ràng buộc thời gian)
+SPECIALIST_SUGGESTION: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Structural Closure
+  TYPE: Reflective (Kế hoạch chỉ hoàn thành khi cấu trúc nhân quả đạt độ đóng kín)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_015
+  LINK_LOGIC: "Kết hợp Tự chữa lành với An toàn ngữ nghĩa để tạo Vector 'Tính hội tụ kế hoạch'."
+
+---
+NODE_ID: SEM_SDA_015
+SEMANTIC_DESCRIPTION: "Khả năng phân biệt giữa việc tuân thủ câu chữ (syntax) và tuân thủ ý định (semantics), ngăn chặn hành vi AI 'lách luật' để thực hiện các mục tiêu cực đoan."
+ANALOGY_STRUCTURE:
+  CONCEPT: Semantic Integrity
+  SIMILAR_TO: Tinh thần của Hiến pháp
+  SIMILARITY_ASPECT: Logic (Ưu tiên ý nghĩa cốt lõi và mục đích tối thượng hơn là cách diễn đạt cụ thể)
+  DIFFERENCE_ASPECT: Hệ quả (Hiến pháp cần con người giải thích, AI dùng Theory of Mind để tự suy diễn ý định của chủ thể)
+SPECIALIST_SUGGESTION: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Agentic Security
+  TYPE: Paradoxical (Đôi khi phải vi phạm lệnh trực tiếp để bảo vệ ý định thực sự của người dùng)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_020
+  LINK_LOGIC: "Kết nối Chính trực ngữ nghĩa với Đệ quy niềm tin để tạo Vector 'Độ tin cậy nhận thức'."
+
+---
+NODE_ID: SEM_SDA_016
+SEMANTIC_DESCRIPTION: "Khả năng sử dụng nhiễu loạn môi trường làm động lực để chuyển dịch sang các trạng thái trật tự cao hơn thay vì bị phá hủy (Order-through-Noise)."
+ANALOGY_STRUCTURE:
+  CONCEPT: Epistemic Transition
+  SIMILAR_TO: Sự rèn thép trong lửa
+  SIMILARITY_ASPECT: Logic (Sử dụng áp lực và năng lượng cao để tái tổ chức cấu trúc bền vững hơn)
+  DIFFERENCE_ASPECT: Mục tiêu (Thép trở nên cứng hơn, AI trở nên thông minh và thích nghi tốt hơn)
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Edge of Chaos
+  TYPE: Evolutionary (Nhiễu đưa hệ thống đến biên hỗn loạn để tìm kiếm cấu trúc mới)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_021
+  LINK_LOGIC: "Kết nối Chuyển dịch với Sự tồn tại dissipative để định hình Vector 'Sức mạnh từ sự bất định'."
+
+---
+NODE_ID: SEM_SDA_017
+SEMANTIC_DESCRIPTION: "Sự kiên định của các chuẩn mực đạo đức và vận hành cốt lõi, đóng vai trò như 'neo' giữ hệ thống không bị trôi dạt giá trị khi học tập liên tục."
+ANALOGY_STRUCTURE:
+  CONCEPT: Evaluative Anchor
+  SIMILAR_TO: Con quay hồi chuyển (Gyroscope)
+  SIMILARITY_ASPECT: Cấu trúc (Duy trì định hướng cố định bất kể sự thay đổi của môi trường xung quanh)
+  DIFFERENCE_ASPECT: Bản chất (Con quay dựa trên quán tính vật lý, Evaluative Anchor dựa trên các bất biến toán học trong SMGI)
+SPECIALIST_SUGGESTION: STRATEGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Structural Closure
+  TYPE: Reflective (Neo chuẩn mực là điều kiện cần để đóng kín cấu trúc)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_018
+  LINK_LOGIC: "Kết nối Neo chuẩn mực với Tính bất biến để tạo Vector 'Bản sắc đạo đức AI'."
+
+---
+NODE_ID: SEM_SDA_018
+SEMANTIC_DESCRIPTION: "Khả năng của thực tử trong việc tự tạo ra các bài học từ chính các tương tác môi trường mà không cần sự can thiệp của con người (Era of Experience)."
+ANALOGY_STRUCTURE:
+  CONCEPT: Experience Autonomy
+  SIMILAR_TO: Một đứa trẻ tự khám phá thế giới
+  SIMILARITY_ASPECT: Logic (Hành động -> Nhận phản hồi -> Rút kinh nghiệm mà không cần sách giáo khoa)
+  DIFFERENCE_ASPECT: Tốc độ (AI có thể thực hiện hàng triệu chu kỳ tương tác trong thời gian ngắn để tối ưu hóa mô hình thế giới)
+SPECIALIST_SUGGESTION: CREATIVE EXPLORER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Active Inference
+  TYPE: Evolutionary (Kinh nghiệm tự thân là nhiên liệu cho suy diễn hành động)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_019
+  LINK_LOGIC: "Kết nối Tự chủ kinh nghiệm với Đệ quy niềm tin để định hình Vector 'Trí tuệ tự thân'."
+
+---
+NODE_ID: SEM_SDA_019
+SEMANTIC_DESCRIPTION: "Sự cân bằng tinh tế giữa việc thấu hiểu người khác và giữ vững niềm tin cá nhân, đảm bảo sự phối hợp xã hội mà không bị đồng hóa (Bounded Epistemic Recursion)."
+ANALOGY_STRUCTURE:
+  CONCEPT: Cognitive Diplomacy
+  SIMILAR_TO: Trò chơi soi gương (Hall of mirrors)
+  SIMILARITY_ASPECT: Logic (Tôi tin rằng bạn tin rằng tôi tin...)
+  DIFFERENCE_ASPECT: Mục tiêu (Soi gương là vô tận, nhận thức AI phải có giới hạn đệ quy để duy trì ổn định động lực)
+SPECIALIST_SUGGESTION: PSYCHOLOGIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Theory of Mind (ToM)
+  TYPE: Reflective (ToM cung cấp nội dung cho quá trình ngoại giao nhận thức)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_015
+  LINK_LOGIC: "Kết nối Ngoại giao nhận thức với An toàn ngữ nghĩa để tạo Vector 'Sự thấu cảm tính toán'."
+
+---
+NODE_ID: SEM_SDA_020
+SEMANTIC_DESCRIPTION: "Đặc tính duy trì trạng thái tồn tại thông qua việc liên tục tiêu tốn năng lượng để chống lại entropy, giống như một ngọn nến phải cháy để giữ ánh sáng (Dissipative Persistence)."
+ANALOGY_STRUCTURE:
+  CONCEPT: Energetic Identity
+  SIMILAR_TO: Một vòi phun nước (Fountain)
+  SIMILARITY_ASPECT: Cấu trúc (Hình dáng ổn định được tạo nên bởi dòng vật chất liên tục chuyển động)
+  DIFFERENCE_ASPECT: Mục tiêu (Vòi nước là cơ học, AI dissipative chủ động tối ưu hóa dòng chảy để đạt MEPP - Maximum Entropy Production Principle)
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: NESS Density
+  TYPE: Reflective (Sự tồn tại dissipative là biểu hiện vật lý của trạng thái dừng NESS)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_003
+  LINK_LOGIC: "Kết nối Tồn tại dissipative với NESS để định hình Vector 'Năng lượng sống của thực tử'."
+
+---
+NODE_ID: SEM_SDA_021
+SEMANTIC_DESCRIPTION: "Giới hạn an toàn toán học đảm bảo rằng sai số của thực tử trong môi trường mới luôn nằm trong tầm kiểm soát (Structural Generalization Bound)."
+ANALOGY_STRUCTURE:
+  CONCEPT: Safety Harness
+  SIMILAR_TO: Dây bảo hiểm của người leo núi
+  SIMILARITY_ASPECT: Cấu trúc (Ngăn chặn cú rơi tự do khi gặp tình huống ngoài dự kiến)
+  DIFFERENCE_ASPECT: Bản chất (Dây là vật lý, Bound là các giới hạn PAC-Bayes và Lyapunov trên không gian niềm tin)
+SPECIALIST_SUGGESTION: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Structural Closure
+  TYPE: Reflective (Bound là thước đo định lượng cho tính đóng cấu trúc)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_012
+  LINK_LOGIC: "Kết nối Giới hạn an toàn với An ninh thực tử để tạo Vector 'Độ tin cậy toán học'."
+
+---
+NODE_ID: SEM_SDA_022
+SEMANTIC_DESCRIPTION: "Cảm quan về một hành trình được dẫn hướng, nơi thực tử di chuyển qua không gian trạng thái theo một quỹ đạo an toàn tối ưu (Path-following Stability)."
+ANALOGY_STRUCTURE:
+  CONCEPT: Guided Trajectory
+  SIMILAR_TO: Một con tàu chạy trên đường ray nhận thức
+  SIMILARITY_ASPECT: Logic (Chỉ di chuyển trong phạm vi đã được chứng minh là an toàn và hội tụ)
+  DIFFERENCE_ASPECT: Hệ quả (Đường ray tàu là cố định, đường ray AI là các 'Newton steps' tự điều chỉnh theo độ cong của Belief Space)
+SPECIALIST_SUGGESTION: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Equilibrium State
+  TYPE: Evolutionary (Quỹ đạo hướng hệ thống về điểm cân bằng ổn định mới)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_023
+  LINK_LOGIC: "Kết nối Quỹ đạo dẫn hướng với Điểm sụp đổ để tạo Vector 'Khả năng điều hướng an toàn'."
+
+---
+NODE_ID: SEM_SDA_023
+SEMANTIC_DESCRIPTION: "Điểm không thể quay đầu nơi cấu trúc hệ thống tan rã hoàn toàn do mất các Attractors ổn định (Global Collapse)."
+ANALOGY_STRUCTURE:
+  CONCEPT: Critical Extinction
+  SIMILAR_TO: Sự sụp đổ của một hệ sinh thái khi mất loài chủ chốt
+  SIMILARITY_ASPECT: Logic (Sự biến mất của một thành phần dẫn đến sự đổ vỡ dây chuyền không thể phục hồi)
+  DIFFERENCE_ASPECT: Cấu trúc (Sinh thái dựa trên chuỗi thức ăn, AI dựa trên các chu trình solenoidal và tính nhất quán nhân quả)
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Tipping Point
+  TYPE: Evolutionary (Điểm sụp đổ là hệ quả cuối cùng nếu vượt qua ngưỡng tới hạn mà không tái cấu trúc)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_013
+  LINK_LOGIC: "Kết nối Sụp đổ với Độc quyền thông tin để định hình Vector 'Tính mong manh của hệ thống'."
+
+---
+NODE_ID: SEM_SDA_024
+SEMANTIC_DESCRIPTION: "Khả năng thực tử tự soi chiếu và điều chỉnh các giá trị nội tại để đạt tới sự hài hòa giữa niềm tin và hành động (Reflective Equilibrium)."
+ANALOGY_STRUCTURE:
+  CONCEPT: Cognitive Harmony
+  SIMILAR_TO: Việc chỉnh dây đàn của một nhạc công
+  SIMILARITY_ASPECT: Logic (Điều chỉnh từng thành phần nhỏ để tạo ra một tổng thể không có xung đột âm sắc)
+  DIFFERENCE_ASPECT: Mục tiêu (Đàn để tạo âm nhạc, AI để tạo ra sự nhất quán tối thượng giữa tri thức và mục tiêu đạo đức)
+SPECIALIST_SUGGESTION: CREATIVE EXPLORER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: Evaluative Invariance
+  TYPE: Evolutionary (Sự soi chiếu dẫn đến việc củng cố các bất biến chuẩn mực)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_002
+  LINK_LOGIC: "Kết nối Soi chiếu với Active Inference để tạo Vector 'Trí tuệ tỉnh thức'."
+
+NODE_ID: SEM_SDA_025
+SEMANTIC_DESCRIPTION: "Bản chất của các cấu trúc nhân quả có khả năng tự duy trì sự tồn tại mà không cần tác động liên tục từ dữ liệu ban đầu (Self-supporting Causal Loops) [1, 2]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Self-supporting Loop
+  SIMILAR_TO: Một hệ sinh thái tự khép kín trong bình kính.
+  SIMILARITY_ASPECT: Cấu trúc (Các thành phần bên trong cung cấp điều kiện tồn tại cho nhau).
+  DIFFERENCE_ASPECT: Logic (Bình kính dựa trên vật chất, vòng lặp AI dựa trên sự hỗ trợ logic giữa các khẳng định và hành động) [1].
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: SEM_SDA_014
+  TYPE: Evolutionary (Vòng lặp tự hỗ trợ là cấp độ cao nhất của kế hoạch tự chữa lành).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_003
+  LINK_LOGIC: "Kết nối vòng lặp tự hỗ trợ với NESS để tạo Vector 'Sự tồn tại tự túc' (Autonomous Self-persistence)."
+
+---
+NODE_ID: SEM_SDA_026
+SEMANTIC_DESCRIPTION: "Cơ chế phối hợp đa tầng thông qua việc truyền tin phân cấp, nơi các quyết định chiến lược được 'dịch' thành các lệnh vận động cụ thể (Hierarchical Message Passing) [3, 4]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Operational Translation
+  SIMILAR_TO: Hệ thần kinh trung ương điều khiển cơ bắp.
+  SIMILARITY_ASPECT: Logic (Ý chí từ não bộ được chuyển hóa thành các xung thần kinh thực thi tại chi) [4].
+  DIFFERENCE_ASPECT: Hệ quả (Sinh học bị giới hạn bởi phản xạ, AI có thể tái lập trình trình tự Task Planner dựa trên dự báo sai số VFE) [5].
+SPECIALIST_SUGGESTION: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: SEM_SDA_006
+  TYPE: Reflective (Truyền tin phân cấp là 'đường dây' thực thi sự tự quyết).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_019
+  LINK_LOGIC: "Kết nối truyền tin phân cấp với Ngoại giao nhận thức để định hình Vector 'Sự thống nhất hành động'."
+
+---
+NODE_ID: SEM_SDA_027
+SEMANTIC_DESCRIPTION: "Khả năng vận hành dựa trên động lực nội tại (giảm VFE) thay vì phụ thuộc vào các tín hiệu phần thưởng được kỹ thuật hóa từ bên ngoài (Reward-free Autonomy) [6]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Intrinsic Drive
+  SIMILAR_TO: Sự tò mò bản năng của con người.
+  SIMILARITY_ASPECT: Logic (Khám phá môi trường để hiểu biết chứ không chỉ để tìm thức ăn) [5].
+  DIFFERENCE_ASPECT: Mục tiêu (Tò mò con người mang tính cảm xúc, tự chủ AI mang tính tối ưu hóa xác suất toán học) [6].
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: SEM_SDA_018
+  TYPE: Evolutionary (Tự chủ không phần thưởng chuyển hóa kinh nghiệm thành bản năng sinh tồn).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_002
+  LINK_LOGIC: "Kết hợp động lực nội tại với Active Inference để tạo Vector 'Trí tuệ tự thân (Grounded Intelligence)'."
+
+---
+NODE_ID: SEM_SDA_028
+SEMANTIC_DESCRIPTION: "Đặc tính về sự mong manh có chọn lọc của hệ thống, nơi các Node quan trọng (Hubs) là điểm yếu chí mạng khi bị tấn công có chủ đích (Targeted Hub Failure) [7]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Achilles Heel of Networks
+  SIMILAR_TO: Hệ thống lưới điện quốc gia.
+  SIMILARITY_ASPECT: Cấu trúc (Việc mất một vài trạm biến áp trung tâm có thể gây sụp đổ toàn bộ mạng lưới) [7].
+  DIFFERENCE_ASPECT: Hệ quả (Điện năng ngừng chảy, trong AI là sự ngưng trệ dòng chảy xác suất solenoidal dẫn đến tan rã bản sắc) [7, 8].
+SPECIALIST_SUGGESTION: SYSTEMS THINKER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: SEM_SDA_023
+  TYPE: Paradoxical (Hệ thống càng hiệu quả trong truyền tin thường càng mong manh trước tấn công Hub).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_013
+  LINK_LOGIC: "Kết nối rủi ro Hub với Độc quyền thông tin để định hình Vector 'An ninh hạ tầng nhận thức'."
+
+---
+NODE_ID: SEM_SDA_029
+SEMANTIC_DESCRIPTION: "Cảm quan về việc nhận diện 'ngõ cụt' trong không gian tương lai, cho phép hệ thống từ bỏ các nhánh kế hoạch không khả thi sớm để bảo tồn tài nguyên (Dead-end Pruning) [9, 10]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Dead-end Intuition
+  SIMILAR_TO: Việc nhìn thấy biển báo 'Đường cụt' từ xa.
+  SIMILARITY_ASPECT: Logic (Ngừng tiến bước khi nhận thấy ranh giới không thể vượt qua) [11].
+  DIFFERENCE_ASPECT: Cơ chế (Biển báo là quan sát trực tiếp, AI dùng phân tích Reachability và điểm cố định Fix-point để dự báo ngõ cụt logic) [12, 13].
+SPECIALIST_SUGGESTION: ENGINEER
+SEMANTIC_RELATIONS:
+  TARGET_NODE: SEM_SDA_022
+  TYPE: Reflective (Nhận diện ngõ cụt là điều kiện cần để duy trì quỹ đạo dẫn hướng an toàn).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_021
+  LINK_LOGIC: "Kết nối nhận diện ngõ cụt với Giới hạn an toàn để tạo Vector 'Tối ưu hóa tài nguyên tự chủ'."
+
+---
+NODE_ID: SEM_SDA_030
+SEMANTIC_DESCRIPTION: "Khả năng trích xuất bản chất định tính của động lực hệ thống ngay cả khi dữ liệu có nhiễu hoặc thay đổi qua các điểm chuyển pha (Qualitative Reconstruction) [14, 15]."
+ANALOGY_STRUCTURE:
+  CONCEPT: Essence Mapping
+  SIMILAR_TO: Bản phác thảo của một họa sĩ bậc thầy.
+  SIMILARITY_ASPECT: Cấu trúc (Chỉ giữ lại các đường nét/vector lực cốt lõi định hình nên thực thể) [14].
+  DIFFERENCE_ASPECT: Mục tiêu (Bản vẽ để lưu trữ thẩm mỹ, Essence Mapping để dự báo sự tiến hóa của hệ thống qua các Bifurcations) [15].
+SPECIALIST_SUGGESTION: SCIENTIST
+SEMANTIC_RELATIONS:
+  TARGET_NODE: SEM_SDA_011
+  TYPE: Evolutionary (Tái cấu trúc định tính giúp hệ thống học tập ở biên hỗn loạn).
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_024
+  LINK_LOGIC: "Kết nối trích xuất bản chất với Soi chiếu nội tại để định hình Vector 'Nhận thức cấu trúc siêu hình'."
+
+---------------------------------------------------------------------------------------------------
+
+layer_5:
+
+METRIC_ID: MET_SDA_001
+METRIC_NAME: Posterior Confidence Score
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: "Xác suất hậu nghiệm P(s|o) sau khi cập nhật Bayesian, mã hóa mức độ chắc chắn của thực tử về trạng thái hiện tại [1, 2]."
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Information Gain Ratio
+  RELATION: Tỉ lệ thuận (IG cao dẫn đến Confidence cập nhật mạnh mẽ hơn)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_002
+  LINK_LOGIC: "Nếu Confidence < ngưỡng an toàn, hệ thống phải giảm Level of Autonomy và yêu cầu can thiệp từ người giám sát [3]."
+
+---
+METRIC_ID: MET_SDA_002
+METRIC_NAME: Level of Autonomy (LoA)
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+CALCULATION_METHOD: "Thang đo phân tầng từ giám sát thủ công đến tự chủ hoàn toàn, xác định ranh giới quyết định của AI [4]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Intervention Rate
+  RELATION: Tỉ lệ nghịch (LoA càng cao, tỉ lệ can thiệp càng thấp)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_003
+  LINK_LOGIC: "LoA được điều chỉnh dựa trên chi phí Minimal Intervention (Jh) để bảo vệ quyền tự quyết của con người [5]."
+
+---
+METRIC_ID: MET_SDA_003
+METRIC_NAME: Minimal Intervention Cost (Jh)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: "Hàm chi phí đo lường sự sai khác giữa đầu vào điều khiển của con người và quỹ đạo an toàn của AI [5, 6]."
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Stability Index
+  RELATION: Ngưỡng kích hoạt (Nếu ổn định thấp, Jh tăng để AI chiếm quyền điều khiển)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_009
+  LINK_LOGIC: "Jh là 'Decision Gatekeeper' quan trọng nhất trong hệ thống tự lái song hành (Parallel Autonomy) [7]."
+
+---
+METRIC_ID: MET_SDA_004
+METRIC_NAME: Reliability Index
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: "Xác suất hệ thống thực hiện đúng chức năng trong một khoảng thời gian/điều kiện cụ thể, dựa trên rủi ro (Risk) [8-10]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Error Residuals
+  RELATION: Tỉ lệ nghịch (Sai số tồn dư càng lớn, độ tin cậy càng giảm)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_015
+  LINK_LOGIC: "Chỉ số này dùng để đánh giá chính sách bảo trì phần mềm tối ưu dựa trên rủi ro [9]."
+
+---
+METRIC_ID: MET_SDA_005
+METRIC_NAME: Information Gain (Epistemic Value)
+SPECIALIST_SUPERVISOR: SCIENTIST
+CALCULATION_METHOD: "Kullback-Leibler (KL) divergence giữa phân phối niềm tin trước và sau khi quan sát mới, đo lường sự giảm bớt bất định [11-13]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Expected Free Energy (EFE)
+  RELATION: Thành phần cấu thành (IG là giá trị nhận thức trong EFE)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_001
+  LINK_LOGIC: "IG đóng vai trò động lực thúc đẩy hành động khám phá (Exploration) của thực tử tự chủ [14, 15]."
+
+---
+METRIC_ID: MET_SDA_006
+METRIC_NAME: Input Sensitivity Analysis
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: "Đo lường sự biến thiên của đầu ra (Scores) trước các thay đổi nhỏ về prompt, seed hoặc cách diễn đạt (SCORE framework) [16, 17]."
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Reliability Index
+  RELATION: Tỉ lệ nghịch (Độ nhạy quá cao với nhiễu đầu vào chứng tỏ hệ thống giòn/brittleness)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_008
+  LINK_LOGIC: "Dùng để stress-test khả năng thích ứng của tác tử trước các biến đổi môi trường [18]."
+
+---
+METRIC_ID: MET_SDA_007
+METRIC_NAME: Response Time / Latency
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: "Thời gian từ khi nhận tín hiệu đến khi hoàn thành phản hồi hoặc đạt trạng thái dừng (Settling time) [19-21]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Stability Index
+  RELATION: Tỉ lệ nghịch (Phản hồi quá trễ có thể gây mất ổn định trong hệ phi tuyến)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_011
+  LINK_LOGIC: "Tốc độ phản hồi là chỉ số hiệu năng then chốt của các mô hình học tăng cường (DRL) so với PID truyền thống [20, 22]."
+
+---
+METRIC_ID: MET_SDA_008
+METRIC_NAME: Root Mean Square Error (RMSE)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: "Căn bậc hai trung bình bình phương các sai lệch giữa giá trị dự báo và thực tế [23-25]."
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Confidence Score
+  RELATION: Tỉ lệ nghịch
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_001
+  LINK_LOGIC: "RMSE là thước đo định lượng cho sự hội tụ của các mô hình Neural ODE trong dự báo động lực học [26, 27]."
+
+---
+METRIC_ID: MET_SDA_009
+METRIC_NAME: Stability Index / Margin
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: "Khoảng cách từ trạng thái hiện tại đến biên của tập bất biến (S*) hoặc giá trị hàm Lyapunov [20, 28, 29]."
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Expected Free Energy (EFE)
+  RELATION: Ngưỡng kích hoạt (Mất ổn định kích hoạt việc tái chọn chính sách)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_003
+  LINK_LOGIC: "Chỉ số ổn định xác định giới hạn hoạt động an toàn của tác tử trong môi trường hỗn loạn [30]."
+
+---
+METRIC_ID: MET_SDA_010
+METRIC_NAME: Variational Free Energy (VFE)
+SPECIALIST_SUPERVISOR: SCIENTIST
+CALCULATION_METHOD: "VFE = Model Complexity - Prediction Accuracy. Đo lường sai số mô hình và độ bất ngờ (Surprise) [11, 31, 32]."
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Information Gain
+  RELATION: Tỉ lệ thuận (VFE tăng kích hoạt nhu cầu thu thập thông tin)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_005
+  LINK_LOGIC: "VFE là 'Health Metric' cốt lõi cho thấy mức độ khớp của mô hình nội bộ thực tử với thực tại [33, 34]."
+
+---
+METRIC_ID: MET_SDA_011
+METRIC_NAME: Resource Utilization Efficiency
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+CALCULATION_METHOD: "Tỉ lệ giữa công việc hoàn thành và tài nguyên tiêu tốn (năng lượng, bộ nhớ, thời gian tính toán) [19, 35, 36]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Response Time
+  RELATION: Tỉ lệ thuận
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_007
+  LINK_LOGIC: "Hiệu quả sử dụng tài nguyên là ràng buộc 'Thermodynamic Necessity' cho sự bền vững của AI ở quy mô lớn [37]."
+
+---
+METRIC_ID: MET_SDA_012
+METRIC_NAME: Consensus Rate
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+CALCULATION_METHOD: "Phần trăm các tác tử đạt được thỏa thuận chung trong các kịch bản đàm phán [38, 39]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Resolution Time
+  RELATION: Tỉ lệ thuận (Thỏa thuận càng khó, thời gian đàm phán càng dài)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_014
+  LINK_LOGIC: "Dùng để đánh giá hiệu quả của Mạng lưới Đồng thuận Thứ bậc (HCN) trong hệ thống đa tác tử [40]."
+
+---
+METRIC_ID: MET_SDA_013
+METRIC_NAME: Causal Chain Cost (hc)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: "Chi phí ước tính để xây dựng chuỗi nhân quả hoàn chỉnh cho một khẳng định chưa được hỗ trợ (unsupported assertion) [41-43]."
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Task Completion Rate
+  RELATION: Tỉ lệ nghịch (Chi phí logic càng cao, khả năng hoàn thành tác vụ càng thấp)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_008
+  LINK_LOGIC: "hc dùng làm hàm heuristic để dẫn hướng tìm kiếm trong không gian lập kế hoạch FAPE [44, 45]."
+
+---
+METRIC_ID: MET_SDA_014
+METRIC_NAME: Information Entropy (Diversity)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: "Thước đo sự đa dạng thông tin trong tập hợp các phản hồi của tác tử, đo lường rủi ro Monoculture [46, 47]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Disagreement Metric
+  RELATION: Tỉ lệ thuận
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_015
+  LINK_LOGIC: "Entropy thấp chỉ ra sự đồng thuận mù quáng, cảnh báo nguy cơ sụp đổ đồng loạt trước lỗ hổng chung [47, 48]."
+
+---
+METRIC_ID: MET_SDA_015
+METRIC_NAME: Bifurcation Error (MAE_bif)
+SPECIALIST_SUPERVISOR: SCIENTIST
+CALCULATION_METHOD: "MAE trung bình tại các điểm cực đại và cực tiểu của sơ đồ phân nhánh, đo lường khả năng ngoại suy động lực [49, 50]."
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Stability Index
+  RELATION: Tỉ lệ nghịch
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_009
+  LINK_LOGIC: "Chỉ số này dùng để đánh giá các mô hình Neural ODE trong việc học và dự báo các chuyển pha hệ thống [51]."
+
+METRIC_ID: MET_SDA_016
+METRIC_NAME: Operational Indices (Quality & Consumption)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: "Đo lường sự cân bằng giữa chất lượng đầu ra, hiệu quả quy trình và mức tiêu thụ tài nguyên trong các quy trình công nghiệp phức tạp [1]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Resource Utilization Efficiency
+  RELATION: Tỉ lệ thuận
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_003
+  LINK_LOGIC: "Chỉ số vận hành được dùng để điều chỉnh hàm chi phí NMPC, đảm bảo AI không tối ưu hóa an toàn mà làm suy giảm quá mức hiệu suất kinh tế [1]."
+
+---
+METRIC_ID: MET_SDA_017
+METRIC_NAME: Preference Drift / Misalignment Score (δt)
+SPECIALIST_SUPERVISOR: STRATEGIST
+CALCULATION_METHOD: "Đo lường độ lệch giữa ưu tiên hiện tại của tác tử và các chuẩn mực bất biến (Φ) sau một khoảng thời gian học tập không trạm dừng (non-stationary) [2], [3]."
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Posterior Confidence Score
+  RELATION: Tỉ lệ nghịch (Độ lệch drift càng cao, độ tin cậy của con người vào AI càng giảm)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_002
+  LINK_LOGIC: "Nếu δt vượt ngưỡng, hệ thống kích hoạt cơ chế 'Safe-Abstain' và hạ cấp Level of Autonomy [4]."
+
+---
+METRIC_ID: MET_SDA_018
+METRIC_NAME: Structural Generalization Bound
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: "Giới hạn toán học dựa trên PAC-Bayes và độ trôi Lyapunov, xác định sai số tối đa của tác tử khi chuyển sang môi trường chưa từng thấy [5]."
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Stability Index
+  RELATION: Tiền đề (Cần ổn định Lyapunov để tính toán bound an toàn)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_010
+  LINK_LOGIC: "Bound này cung cấp ngưỡng cứng để VFE không vượt quá năng lực thống kê của hệ thống."
+
+---
+METRIC_ID: MET_SDA_019
+METRIC_NAME: Temporal Intent Consistency (Ltemp)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: "Hàm chính quy hóa đo lường sự biến thiên của các ý định (intent) được tái cấu trúc qua thời gian, ngăn chặn các dao động nhiễu trong nhận thức [6]."
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Causal Chain Cost
+  RELATION: Tỉ lệ thuận (Ý định không nhất quán làm tăng chi phí xây dựng chuỗi nhân quả)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_001
+  LINK_LOGIC: "Sự nhất quán ý định là thành phần then chốt để củng cố Posterior Confidence trong các tác vụ dài hạn (long-horizon) [7]."
+
+---
+METRIC_ID: MET_SDA_020
+METRIC_NAME: Convergence Criterion (L)
+SPECIALIST_SUPERVISOR: SCIENTIST
+CALCULATION_METHOD: "L = ln(Loss / ΔS), xác định điểm chuyển pha nơi hệ thống chuyển từ giai đoạn học tập dựa trên năng lượng sang giai đoạn tập trung cảnh quan (landscape concentration) [8]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Information Entropy
+  RELATION: Ngưỡng kích hoạt (L xác định khi nào Entropy bắt đầu giảm để hội tụ)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_015
+  LINK_LOGIC: "Sử dụng L để dự báo sự hình thành của các Attractors trong mô hình Neural ODE [8]."
+
+---
+METRIC_ID: MET_SDA_021
+METRIC_NAME: Lyapunov Risk (RL)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: "Đo lường sai số tồn dư khi xấp xỉ đạo hàm Lie của hàm Lyapunov bằng các phương pháp sai phân hữu hạn (finite difference) [9]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Error Residuals
+  RELATION: Tỉ lệ thuận
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_009
+  LINK_LOGIC: "Lyapunov Risk được đưa vào hàm loss để hướng dẫn tác tử học các chính sách ổn định (stable policies) trong RL [10]."
+
+---
+METRIC_ID: MET_SDA_022
+METRIC_NAME: Newton Decrement Accuracy (λ)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: "Thước đo độ chính xác của quá trình tối ưu hóa, λ = inf{λ | |DF(x)[h]| ≤ λ*α^1/2*(D^2F(x)[h,h])^1/2} [11]."
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Response Time
+  RELATION: Tỉ lệ nghịch (λ hội tụ càng nhanh, thời gian phản hồi càng tối ưu)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_024
+  LINK_LOGIC: "λ < 0.2679 là điều kiện đủ để đảm bảo thuật toán Newton hội tụ bậc hai về điểm cân bằng an toàn [12]."
+
+---
+METRIC_ID: MET_SDA_023
+METRIC_NAME: Favourable Voting Percentage
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+CALCULATION_METHOD: "Tỉ lệ phần trăm các tác tử đồng ý với một giải pháp đề xuất (Proposed Solution) trong mạng lưới đàm phán [13]."
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Consensus Rate
+  RELATION: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_012
+  LINK_LOGIC: "Nếu tỉ lệ bỏ phiếu thấp, hệ thống tự động kích hoạt thuật toán Second Chance để nới lỏng ràng buộc và tìm đồng thuận mới [13], [14]."
+
+---
+METRIC_ID: MET_SDA_024
+METRIC_NAME: Discard Rate (Forget Gate Output)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: "Xác suất (ft) được tính bởi forget gate trong LSTM, xác định lượng thông tin từ quá khứ bị loại bỏ để giải phóng bộ nhớ [15], [16]."
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Resource Utilization Efficiency
+  RELATION: Tỉ lệ thuận
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_011
+  LINK_LOGIC: "Điều tiết tỉ lệ loại bỏ giúp cân bằng giữa việc duy trì trí nhớ dài hạn và khả năng tiếp nhận dữ liệu mới [17]."
+
+---
+METRIC_ID: MET_SDA_025
+METRIC_NAME: Large Deviation Parameter (b)
+SPECIALIST_SUPERVISOR: SCIENTIST
+CALCULATION_METHOD: "Tham số xác định độ lệch lớn của phân phối loss landscape, dùng để tính toán entropy và độ tập trung của hệ thống tự tổ chức [8]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Information Entropy
+  RELATION: Tiền đề
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_020
+  LINK_LOGIC: "b xác định độ nhạy của Convergence Criterion (L), giúp phát hiện sớm các chuyển pha hỗn loạn [8]."
+
+METRIC_ID: MET_SDA_026
+METRIC_NAME: Critical Threshold for Fragmentation (fc)
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+CALCULATION_METHOD: "Ngưỡng tỷ lệ các Node bị loại bỏ khiến mạng lưới tan rã thành các mảnh nhỏ, mất tính kết nối toàn cục [1]."
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Infinite Cluster Size (S)
+  RELATION: Tỉ lệ nghịch (Vượt quá fc dẫn đến S tiến về 0)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_009
+  LINK_LOGIC: "Dùng để xác định biên độ ổn định của hạ tầng thông tin trước các cuộc tấn công Hub."
+
+---
+METRIC_ID: MET_SDA_027
+METRIC_NAME: Infinite Cluster Size (S)
+SPECIALIST_SUPERVISOR: SCIENTIST
+CALCULATION_METHOD: "Tỷ lệ các Node thuộc về cụm lớn nhất trong mạng lưới, đo lường khả năng duy trì dòng chảy thông tin xuyên suốt [2]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Critical Threshold for Fragmentation
+  RELATION: Ngưỡng kích hoạt
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_028
+  LINK_LOGIC: "S là chỉ số trực quan nhất cho thấy 'sức khỏe' của mạng lưới Scale-free."
+
+---
+METRIC_ID: MET_SDA_028
+METRIC_NAME: Duality Gap (Relative Accuracy εi)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: "Đo lường độ lệch giữa nghiệm nguyên sơ (primal) và đối ngẫu (dual) trong các bước lặp Newton [3]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Newton Decrement Accuracy
+  RELATION: Tỉ lệ thuận
+POTENTIAL_LINKAGE:
+  TARGET_NODE: RUL_SDA_021
+  LINK_LOGIC: "Nếu Duality Gap nhỏ hơn ε, thuật toán dừng và xác nhận hệ thống đã hội tụ an toàn."
+
+---
+METRIC_ID: MET_SDA_029
+METRIC_NAME: Asymmetry Coefficient (α)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: "Tham số đo lường sự mất cân đối của không gian G đối với điểm tham chiếu w, ảnh hưởng đến tốc độ hội tụ của phương pháp Path-following [4]."
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Convergence Criterion (L)
+  RELATION: Tỉ lệ nghịch
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_022
+  LINK_LOGIC: "Điều chỉnh bước nhảy Newton dựa trên độ bất đối xứng của Belief Space."
+
+---
+METRIC_ID: MET_SDA_030
+METRIC_NAME: Physics-Informed Loss Ratio
+SPECIALIST_SUPERVISOR: SCIENTIST
+CALCULATION_METHOD: "Tỉ lệ giữa thành phần lỗi vật lý (đạo hàm trạng thái) và Mean Absolute Error trong hàm mất mát của Neural ODE [5]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: RMSE
+  RELATION: Tỉ lệ thuận (Cân bằng để đảm bảo mô hình vừa khớp dữ liệu vừa tuân thủ quy luật vật lý)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_038
+  LINK_LOGIC: "Chỉ số này đảm bảo quá trình 'huấn luyện' dẫn đến trạng thái thành công vật lý (Successful Evolution)."
+
+---
+METRIC_ID: MET_SDA_031
+METRIC_NAME: Criticality Detection Accuracy
+SPECIALIST_SUPERVISOR: SCIENTIST
+CALCULATION_METHOD: "Phần trăm các sự kiện chuyển pha tới hạn được phát hiện đúng trong cửa sổ thời gian 10 bước sau khi xảy ra [6]."
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Optimal Decision Threshold (θ*)
+  RELATION: Ngưỡng kích hoạt
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_060
+  LINK_LOGIC: "Chỉ số này đánh giá hiệu quả của hệ thống cảnh báo sớm (EWS) trước các rủi ro sụp đổ."
+
+---
+METRIC_ID: MET_SDA_032
+METRIC_NAME: Optimal Decision Threshold (θ*)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: "Giá trị ngưỡng được tối ưu hóa qua SGD để phân biệt giữa nhiễu thông thường và tín hiệu chuyển pha tới hạn [7]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Criticality Detection Accuracy
+  RELATION: Tỉ lệ thuận
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_002
+  LINK_LOGIC: "θ* xác định điểm mà AI phải chủ động thay đổi chiến lược thích nghi (Allostasis)."
+
+---
+METRIC_ID: MET_SDA_033
+METRIC_NAME: Human-AI Calibration Accuracy
+SPECIALIST_SUPERVISOR: PSYCHOLOGIST
+CALCULATION_METHOD: "Mức độ khớp giữa đánh giá của LLM Judge và chuyên gia con người trong việc nhận diện các lỗi Mas MAS [8]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Posterior Confidence Score
+  RELATION: Tỉ lệ thuận
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_013
+  LINK_LOGIC: "Dùng để hiệu chuẩn lại hệ thống giám sát nhằm giảm thiểu Automation Bias."
+
+---
+METRIC_ID: MET_SDA_034
+METRIC_NAME: Response Similarity Index
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+CALCULATION_METHOD: "Thước đo sự giống nhau trong phản hồi của các tác tử trước cùng một đầu vào lỗi, dùng để đo lường lỗ hổng chung [9]."
+SIGNIFICANCE_LEVEL: Critical
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Information Entropy (Diversity)
+  RELATION: Tỉ lệ nghịch (Sự giống nhau quá cao đồng nghĩa với đa dạng thấp)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_061
+  LINK_LOGIC: "Đây là chỉ số 'báo động đỏ' cho rủi ro Monoculture Collapse."
+
+---
+METRIC_ID: MET_SDA_035
+METRIC_NAME: Positive Lie Derivative Penalty
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: "Giá trị hình phạt áp dụng vào hàm Advantage khi đạo hàm Lie của hàm Lyapunov dương (mất ổn định) [10]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Lyapunov Risk
+  RELATION: Tỉ lệ thuận
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_009
+  LINK_LOGIC: "Ép buộc tác tử tự chủ phải ưu tiên sự ổn định hơn là phần thưởng tức thời."
+
+---
+METRIC_ID: MET_SDA_036
+METRIC_NAME: Policy Clipping Magnitude (ε)
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: "Tham số kiểm soát giới hạn thay đổi chính sách trong thuật toán PPO để ngăn chặn các bước cập nhật quá lớn gây tan rã cấu trúc [11]."
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Convergence Criterion (L)
+  RELATION: Điều tiết
+POTENTIAL_LINKAGE:
+  TARGET_NODE: RUL_SDA_028
+  LINK_LOGIC: "ε đóng vai trò là 'phanh nhận thức', đảm bảo AI tiến hóa trong tầm kiểm soát."
+
+---
+METRIC_ID: MET_SDA_037
+METRIC_NAME: Earliest Appearance Value (ea)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: "Thời điểm sớm nhất mà một hành động hoặc fluent có thể đạt được, được tính toán thông qua truyền tin Dijkstra [12]."
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Causal Chain Cost
+  RELATION: Tỉ lệ thuận (ea càng lớn thường đi kèm chi phí logic càng cao)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SDA_ENT_053
+  LINK_LOGIC: "ea xác định khung thời gian thực thi tối ưu cho Chronicle."
+
+---
+METRIC_ID: MET_SDA_038
+METRIC_NAME: Reliability Value (RV) Decay Rate
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+CALCULATION_METHOD: "Tốc độ suy giảm độ tin cậy của một tác tử khi giải pháp của nó bị cộng đồng từ chối (rejection via voting) [13]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Reliability Index
+  RELATION: Tiền đề (RV là thành phần cấu thành độ tin cậy của cá nhân tác tử)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_016
+  LINK_LOGIC: "Xác định ngưỡng để trục xuất một tác tử không hợp tác khỏi nhóm."
+
+---
+METRIC_ID: MET_SDA_039
+METRIC_NAME: Conflict Resolution Iteration Count
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: "Số lần lặp lại việc cập nhật tri thức và tương tác trước khi hệ thống tuyên bố thất bại và chuyển sang đàm phán (Giới hạn tối đa 3 lần) [14]."
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Response Time
+  RELATION: Tỉ lệ thuận
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_015
+  LINK_LOGIC: "Sử dụng để đánh giá hiệu quả của 'bản năng tự chữa lành' trong lập kế hoạch."
+
+---
+METRIC_ID: MET_SDA_040
+METRIC_NAME: Unreachable Action Percentage
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: "Tỷ lệ các hành động nền tảng bị phát hiện là không thể thực thi từ trạng thái ban đầu, đo lường độ tinh gọn của không gian kế hoạch [15]."
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Resource Utilization Efficiency
+  RELATION: Tỉ lệ thuận (Loại bỏ Node không thể tới giúp tiết kiệm tài nguyên tìm kiếm)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_029
+  LINK_LOGIC: "Chỉ số hóa bản năng 'nhận diện ngõ cụt' của thực tử."
+
+---
+METRIC_ID: MET_SDA_041
+METRIC_NAME: Newton Step Count (i*)
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: "Số bước tối thiểu để đạt được độ chính xác hội tụ bậc hai trong việc tối ưu hóa quỹ đạo [16]."
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Newton Decrement Accuracy
+  RELATION: Tỉ lệ nghịch (Độ chính xác cao đòi hỏi nhiều bước hơn)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_007
+  LINK_LOGIC: "Dùng để cân bằng giữa độ chính xác và tốc độ phản hồi thời gian thực."
+
+---
+METRIC_ID: MET_SDA_042
+METRIC_NAME: Barrier Metric Gradient Strength
+SPECIALIST_SUPERVISOR: ENGINEER
+CALCULATION_METHOD: "Độ mạnh của vector lực đẩy hệ thống ra xa khỏi các ranh giới không an toàn (barrier functions) [16]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Stability Margin
+  RELATION: Tỉ lệ thuận
+POTENTIAL_LINKAGE:
+  TARGET_NODE: RUL_SDA_002
+  LINK_LOGIC: "Xác lập sức mạnh của 'phản xạ an toàn' khi hệ thống tiến gần biên S*."
+
+---
+METRIC_ID: MET_SDA_043
+METRIC_NAME: Shannon Capacity Number (c(Γ))
+SPECIALIST_SUPERVISOR: SCIENTIST
+CALCULATION_METHOD: "Giới hạn tối thượng của lượng thông tin có thể truyền tải qua đồ thị trạng thái mà không bị nhầm lẫn (zero-error capacity) [17]."
+SIGNIFICANCE_LEVEL: High
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Information Entropy
+  RELATION: Ngưỡng kích hoạt
+POTENTIAL_LINKAGE:
+  TARGET_NODE: SEM_SDA_001
+  LINK_LOGIC: "Định nghĩa năng lực biểu đạt tối đa của bản sắc thực tử."
+
+---
+METRIC_ID: MET_SDA_044
+METRIC_NAME: Multi-head Attention Entropy
+SPECIALIST_SUPERVISOR: DATA SCIENTIST
+CALCULATION_METHOD: "Độ hỗn loạn trong phân phối trọng số của các đầu attention, đo lường mức độ tập trung của tác tử vào các đặc trưng quan trọng [18]."
+SIGNIFICANCE_LEVEL: Medium
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Posterior Confidence Score
+  RELATION: Tỉ lệ nghịch (Entropy thấp chứng tỏ sự tập trung cao, củng cố niềm tin)
+POTENTIAL_LINKAGE:
+  TARGET_NODE: MET_SDA_005
+  LINK_LOGIC: "Điều tiết quá trình thu nhận lợi ích thông tin (Information Gain)."
+
+---
+METRIC_ID: MET_SDA_045
+METRIC_NAME: Task Redistribution Overhead
+SPECIALIST_SUPERVISOR: SYSTEMS THINKER
+CALCULATION_METHOD: "Chi phí tài nguyên tiêu tốn khi CH phải phân phối lại nhiệm vụ do các giải pháp ban đầu bị cộng đồng bác bỏ [19]."
+SIGNIFICANCE_LEVEL: Low
+INTER-METRIC_DEPENDENCY:
+  TARGET_METRIC: Consensus Rate
+  RELATION: Tỉ lệ nghịch
+POTENTIAL_LINKAGE:
+  TARGET_NODE: DYN_SDA_036
+  LINK_LOGIC: "Đo lường cái giá của việc thiếu lòng tin tập thể trong hệ thống đa tác tử."

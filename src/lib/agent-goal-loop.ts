@@ -55,7 +55,7 @@
  */
 
 import { callLLMForAgent } from '@/lib/llm'
-import { executeTool, buildCompactToolSchemasSection } from '@/lib/code-team/tool-executor'
+import { executeTool, buildCompactToolSchemasSection, resolveToolAlias } from '@/lib/code-team/tool-executor'
 import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint } from '@/lib/tool-calls'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
 import {
@@ -226,6 +226,33 @@ const MAX_CYCLE_RENEWALS = Math.max(0, intEnv('GOAL_LOOP_MAX_CYCLE_RENEWALS', 10
 const MAX_DEBT_CYCLES = Math.max(0, intEnv('GOAL_LOOP_MAX_DEBT_CYCLES', 100))
 /** Số vòng ReAct tối đa MỖI chu kỳ (mặc định 10 → tổng tối đa 40 vòng; 0 = ∞ — CI-1) */
 const ITER_PER_CYCLE = intEnv('GOAL_LOOP_ITERATIONS_PER_CYCLE', 10)
+/**
+ * 2026-10 PROCESS INTEGRITY — SAFE CAP FALLBACK cho cap = 0 (∞).
+ * User report: "các chu kỳ bị lặp lại y hệt một việc, không có tiến triển thực
+ * sự". Cap ∞ (CI-1) + token ∞ = mọi phanh budget vô hiệu; stall brake thì bị
+ * vô hiệu hóa trên đường OpenCode CLI (trước đây hard-code success=true cho
+ * mọi tool CLI đã chạy — fix cùng đợt). Tai nạn thực tế (e2eb): 18 vòng lặp
+ * xác minh (~15 phút, ~3M tokens) cho task 4 bước. Giờ: cap = 0 → fallback
+ * TRẦN AN TOÀN thay vì ∞. Muốn ∞ thật: set SAFE_CAP tương ứng = 0.
+ *
+ * ⚠️ 2026-10 USER DIRECTIVE (lần 2): "không cần đặt giới hạn chu kỳ — đặt
+ * giới hạn nhưng thực hiện sai thì cũng chẳng khác gì; vấn đề là năng lực tự
+ * phản chiếu trong từng chu kỳ". .env hiện set MAX_CYCLES=0 + ITER=0 +
+ * SAFE_CAP_*=0 (= ∞ thật, theo chủ đích). Cơ chế safe-cap GIỮ nguyên cho ai
+ * muốn bật lại (set SAFE_CAP > 0) — phanh chất lượng (no-progress fingerprint,
+ * signature lặp 4×/8×, in-cycle stall, stagnation, verify-guard) là lớp bảo
+ * vệ đúng nghĩa: dừng khi THẬT SỰ kẹt, không dừng theo số đếm.
+ */
+const SAFE_CAP_CYCLES = Math.max(0, intEnv('GOAL_LOOP_SAFE_CAP_CYCLES', 12))
+const SAFE_CAP_ITERATIONS = Math.max(0, intEnv('GOAL_LOOP_SAFE_CAP_ITERATIONS', 8))
+/** Giá trị HIỆU DỤNG sau fallback — mọi logic loop dùng 2 biến này (cap = 0
+ *  chỉ còn nghĩa "dùng safe cap"; safe cap = 0 mới là ∞ thật). */
+const EFFECTIVE_MAX_CYCLES = MAX_CYCLES === 0
+  ? (SAFE_CAP_CYCLES > 0 ? SAFE_CAP_CYCLES : 0)
+  : MAX_CYCLES
+const EFFECTIVE_ITER_PER_CYCLE = ITER_PER_CYCLE === 0
+  ? (SAFE_CAP_ITERATIONS > 0 ? SAFE_CAP_ITERATIONS : 0)
+  : ITER_PER_CYCLE
 /** FIX (review R2-b #1, 2026-08-31) — IN-CYCLE STALL BRAKE: khi ITER_PER_CYCLE=0
  * (∞) + TOKEN_BUDGET=0 (∞), stall-brake/no-progress CHỈ chạy ở biên chu kỳ → 1 chu
  * kỳ có thể đốt cả 12h khi model phát tool call hoài mà không tiến triển. Phanh
@@ -328,14 +355,14 @@ export function getGoalLoopBudgetInfo(): {
   return {
     tokenBudget: TOKEN_BUDGET,
     timeBudgetMs: TIME_BUDGET_MS,
-    maxCycles: MAX_CYCLES,
-    iterationsPerCycle: ITER_PER_CYCLE,
+    maxCycles: EFFECTIVE_MAX_CYCLES,
+    iterationsPerCycle: EFFECTIVE_ITER_PER_CYCLE,
     reportReserveTokens: REPORT_RESERVE_TOKENS,
     unlimited: TOKEN_BUDGET === 0,
     unlimitedToken: TOKEN_BUDGET === 0,
     unlimitedTime: TIME_BUDGET_MS === 0,
-    unlimitedCycles: MAX_CYCLES === 0,
-    unlimitedIterations: ITER_PER_CYCLE === 0,
+    unlimitedCycles: EFFECTIVE_MAX_CYCLES === 0,
+    unlimitedIterations: EFFECTIVE_ITER_PER_CYCLE === 0,
     // TASK 21 — tái lập cửa sổ chu kỳ + chu kỳ debt (metrics/UI hiển thị)
     maxCycleRenewals: MAX_CYCLE_RENEWALS,
     maxDebtCycles: MAX_DEBT_CYCLES,
@@ -429,13 +456,25 @@ function buildGoalProtocol(): string {
 ═══════════════════════════════════════════
 📋 GOAL-DRIVEN EXECUTION PROTOCOL (vòng lặp mục tiêu dài hạn)
 ═══════════════════════════════════════════
-Bạn đang chạy trong vòng lặp thực hiện mục tiêu đến khi HOÀN THÀNH. Mỗi chu kỳ làm việc TUÂN THỦ ĐÚNG 3 giai đoạn:
+Bạn đang chạy trong vòng lặp thực hiện mục tiêu đến khi HOÀN THÀNH. Mỗi chu kỳ làm việc TUÂN THỦ ĐÚNG 4 giai đoạn:
+
+GIAI ĐOẠN 0 — QUAN SÁT & PHÂN TÍCH (BẮT BUỘC trước mọi hành động):
+- CHU KỲ ĐẦU (chưa có kết quả tích lũy) → PHÂN TÍCH BỐI CẢNH ĐẦU VÀO, làm ĐÚNG thứ tự:
+  (a) TRÍCH YẾU CẦU: mục tiêu cuối cùng cụ thể là gì? TỪNG tiêu chí nghiệm thu (nếu yêu cầu/directive có sẵn khối "Nghiệm thu" — dùng nguyên văn, không tự chế).
+  (b) QUÉT MÔI TRƯỜNG LÀM VIỆC: file_list/glob thư mục liên quan, grep từ khóa để biết CÓ GÌ sẵn — KHÔNG ĐOÁN đường dẫn/tên file chưa từng thấy.
+  (c) XÁC ĐỊNH BIÊN ĐỘ DỮ LIỆU CẦN THIẾT (viết ngắn 2-4 dòng trước khi làm): cần ĐỌC/KIỂM TRA những gì (file, bảng, cấu hình, hằng số) để triển khai ĐÚNG — và những gì NGOÀI PHẠM VI (KHÔNG đụng — tránh lan man, tốn vòng vô ích).
+  (d) Yêu cầu MƠ HỒ / thiếu thông tin quyết định được → nêu GIẢ ĐỊNH rõ ràng (hoặc hỏi lại nếu blocking) TRƯỚC KHI triển khai — không tự chế yêu cầu không có.
+- CHU KỲ SAU (đã có kết quả tích lũy) → ĐỌC toàn bộ context: khối "KẾT QUẢ TOOL THẬT" (kết quả inner-loop CLI đã thực thi — đây là SỰ THẬT duy nhất), khối "✅ Việc chu kỳ trước ĐÃ làm" (KHÔNG làm lại), cảnh báo "⚠️ CẢNH BÁO LẶP", khối "📋 TODO HIỆN TẠI", khối "📐 BIÊN ĐỘ DỮ LIỆU đã xác định" (giữ nguyên nếu còn đúng — không mở rộng phạm vi tự tiện), khối "🧬 BELIEF-STATE" (hypothesis sống từ chu kỳ trước — xem mục ❓ còn chưa chắc có bị bác chưa), khối "🧠 Prior reasoning" (mẩu suy luận run trước — PRIOR KHÔNG phải chân lý, kiểm chứng lại), directive chẩn đoán của trọng tài.
+- TỰ PHẢN CHIẾU (viết ngắn gọn trước khi hành động): Hiện trạng đạt được gì (bằng chứng nào)? Còn thiếu gì so với MỤC TIÊU + TIÊU CHÍ NGHIỆM THU? Vì sao cách làm trước chưa đạt (nếu có)?
+- XÁC ĐỊNH việc chu kỳ này: PHẢI là việc MỚI có tiến triển — không lặp lại việc đã THÀNH CÔNG, không lặp y hệt việc đã THẤT BẠI (đổi tool / đổi args / đổi cách tiếp cận).
 
 GIAI ĐOẠN 1 — XÁC ĐỊNH VẤN ĐỀ & LẬP KẾ HOẠCH:
-- Phân tích mục tiêu: kết quả cuối cùng cụ thể là gì? Điều kiện hoàn thành kiểm định được thế nào?
-- Nếu task hơn 1 bước: gọi todo_write chia nhỏ thành các bước có thứ tự
+- Nếu task hơn 1 bước: gọi todo_write chia nhỏ CÓ TRUY VẾT: MỖI tiêu chí nghiệm thu PHẢI có ít nhất 1 todo tương ứng (ghi "[Nghiệm thu n]" trong nội dung) + các todo THU THẬP DỮ LIỆU từ bước biên độ dữ liệu đứng TRƯỚC. Mỗi todo viết dạng KIỂM ĐỊNH ĐƯỢC (xong = kiểm tra/chạy gì để biết đạt) — đừng viết todo mơ hồ kiểu "xử lý phần X".
+- KỶ LUẬT TODO (bắt buộc): todo làm XONG phải được đánh dấu completed NGAY trong lần todo_write kế tiếp TRƯỚC KHI thêm todo mới (đóng việc cũ rồi mới mở việc mới — danh sách luôn phản ánh trạng thái thật). Việc phức tạp cần phân rã tiếp → tạo TODO CON: gọi todo_write với "id" của todo cha trong trường "parentId" của todo con (hiển thị lồng nhau trong panel — KHÔNG viết phẳng trùng nội dung). Cập nhật todo cũ — KHÔNG viết lại từ đầu.
 
-GIAI ĐOẠN 2 — TRIỂN KHAI:
+GIAI ĐOẠN 2 — TRIỂN KHAI (mỗi hành động đều có suy nghĩ):
+- Trước MỖI tool call: hành động này phục vụ tiêu chí nghiệm thu nào? (không gọi tool theo quán tính)
+- Sau MỖI kết quả tool: NGHĨ ý nghĩa kết quả — thành công = tiêu chí nào đã đạt? thất bại = nguyên nhân cụ thể là gì (đọc error)? — rồi mới chọn hành động kế.
 - Thực hiện từng bước bằng tools. Đọc file (file_read) trước khi sửa. Chạy lệnh (shell) khi cần.
 - TẠO FILE MỚI / FILE LỚN: dùng file_write — viết từng phần (~200-400 dòng/lần), lần đầu mode "overwrite", các lần sau mode "append" (đừng nhét cả file 1000+ dòng vào 1 tool call — output dễ bị cắt giữa JSON → tool call KHÔNG thực thi được).
 
@@ -443,7 +482,13 @@ GIAI ĐOẠN 3 — KIỂM ĐỊNH & BÁO CÁO (BẮT BUỘC trước khi kết l
 - Với tác vụ tạo/sửa file, code, lệnh, dữ liệu: PHẢI kiểm định bằng tool thật — file_read đọc lại kết quả, run_tests / lint / type_check, shell kiểm tra output. Bằng chứng phải nằm trong KẾT QUẢ TOOL.
 - Khi type_check/lint/run_tests FAIL: đọc errorCount + thông báo lỗi cụ thể từng file trong KẾT QUẢ TOOL — KHÔNG đoán nguyên nhân; nếu output không đủ để xác định lỗi cụ thể thì báo rõ "không xác định được nguyên nhân cụ thể". Tool fail KHÔNG đồng nghĩa "đã kiểm định".
 - CHỈ được kết luận hoàn thành khi bằng chứng kiểm định thực sự KHỚP mục tiêu.
-- Kết thúc chu kỳ bằng báo cáo đủ 4 phần: đã làm gì · bằng chứng tool (tên tool + kết quả ngắn) · còn thiếu gì · đề xuất khắc phục.
+- Kết thúc chu kỳ bằng báo cáo đủ 4 phần: đã làm gì · bằng chứng tool (tên tool + kết quả ngắn) · còn thiếu gì · đề xuất khắc phục. Chốt thêm 2 dòng TỰ PHẢN CHIẾU:
+  "✅ Đã CHẮC CHẮN (có bằng chứng tool): ..." / "❓ Còn CHƯA CHẮC (giả thuyết cần kiểm tra ở chu kỳ sau): ..." — phân biệt cái đã kiểm chứng với cái còn đoán.
+  ⚖️ NGƯỠC KỸ PHÂN LOẠI (2026-10-20 — E2E lộ agent đếm bằng mắt sai nhưng xếp ✅): dòng ✅ CHỈ được xếp những gì ĐỌC TRỰC TIẾP từ kết quả tool (nội dung file đọc lại khớp, output lệnh hiển thị đúng giá trị). Kết quả GIÁN TIẾP (đếm số dòng/số phần tử, tính tổng, so sánh, suy diễn từ dữ liệu đọc được) PHẢI kiểm định bằng LỆNH MÁY (wc -l, jq length, grep -c...) rồi mới xếp ✅ — kết quả đếm/tính bằng đầu không phải bằng chứng, xếp vào ❓.
+  📐 BIÊN ĐỘ DỮ LIỆU: kết thúc báo cáo bằng 1 khối ngắn "📐 BIÊN ĐỘ DỮ LIỆU: cần đọc <...> · ngoài phạm vi <...>" (giữ nguyên khối đã viết ở GĐ0 nếu vẫn đúng) — hệ thống giữ lại nguyên văn cho các chu kỳ sau, không mất định hướng phạm vi.
+  🧬 SHR — hypothesis có cấu trúc (tool hypothesis_write):
+  - Phát hiện CƠ CHẾ hệ thống (MỘT quan hệ nhân quả về cách hệ thống/tính năng hoạt động) chưa chắc chắn → hypothesis_write op=propose với mechanicsClaim (MỘT quan hệ ≤12 từ) + predictedDelta (dự đoán KIỂM ĐỊNH ĐƯỢC bằng tool). KHÔNG propose chuyện của task ("file X ghi được" là todo, không phải hypothesis).
+  - Bằng chứng tool chu kỳ này XÁC NHẬN hoặc BÁC hypothesis cũ (xem khối 🧬 BELIEF-STATE / hypothesis_write op=list) → hypothesis_write op=judge kèm hypothesisId + verdict + evidenceTool + evidenceQuote (trích ngắn từ KẾT QUẢ tool thật) — phán quyết KHÔNG có bằng chứng khớp sẽ bị hệ thống TỪ CHỐI khi đối chiếu cuối chu kỳ.
 
 ⚠️ Một TRỌNG TÀI ĐỘC LẬP sẽ đánh giá lại kết quả của bạn DỰA TRÊN BẰNG CHỨNG TOOL THẬT. Lời tuyên bố không có bằng chứng sẽ BỊ TỪ CHỐI và bạn phải làm lại ở chu kỳ tiếp theo.
 Nếu mục tiêu là câu hỏi/thông tin (không cần hành động), chỉ cần trả lời đầy đủ, chính xác — không cần tool.`
@@ -635,12 +680,58 @@ export function assembleGoalLoopSystemPrompt(params: {
   }
 }
 
+/**
+ * 2026-10 SELF-REFLECTION AUDIT (Task 19) — TODO HIỆN TẠI CỦA RUN.
+ *
+ * Gap phát hiện: protocol GIAI ĐOẠN 0 bảo agent "đọc todo hiện tại" nhưng
+ * harness KHÔNG BAO GIỜ render todo vào directive nối tiếp — với đường CLI
+ * (mỗi spawn = session mới hoàn toàn), agent chu kỳ sau KHÔNG THẤY todo mình
+ * đã viết ở chu kỳ trước → plan bị mất liên tục giữa các chu kỳ (vi phạm
+ * nguyên tắc R2 "belief-state nén xuống R1" của SELF_REFLECTION_DESIGN —
+ * trạng thái kế hoạch phải đi cùng agent qua chu kỳ).
+ *
+ * Fix: trước khi inject continuation directive, đọc todo MỞ (pending/
+ * in_progress/blocked) của ĐÚNG run này từ DB → render khối "📋 TODO HIỆN
+ * TẠI" đính kèm directive. Fail-open tuyệt đối (DB lỗi → block rỗng, hành
+ * vi cũ). Chỉ hiện tối đa 15 todo mở — đủ bức tranh, không phình context.
+ */
+async function buildRunTodosBlock(sessionId: string | null | undefined, runId: string | null | undefined): Promise<string> {
+  if (!sessionId || !runId) return ''
+  try {
+    const { db } = await import('@/lib/db')
+    const todos = await db.todo.findMany({
+      where: {
+        sessionId,
+        runId,
+        status: { in: ['pending', 'in_progress', 'blocked'] },
+      },
+      orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+      take: 15,
+    })
+    if (todos.length === 0) return ''
+    // Ops log (2026-10-20 Task 20): xác nhận TODO block thực sự render —
+    // quan sát được trong dev.log khi audit hành vi đa chu kỳ.
+    console.log(`[GoalLoop] TODO block: ${todos.length} todo mở của run ${runId} → đính kèm directive chu kỳ sau`)
+    const lines = todos.map(t => {
+      const tag = t.status === 'in_progress' ? '[ĐANG LÀM] ' : t.status === 'blocked' ? '[KẸT] ' : ''
+      return `- ${tag}${t.content.slice(0, 140)}`
+    })
+    return `\n\n📋 TODO HIỆN TẠI CỦA RUN (trạng thái kế hoạch còn mở — cập nhật bằng todo_write: đóng mục xong, KHÔNG viết lại từ đầu):\n${lines.join('\n')}`
+  } catch { return '' /* fail-open — todo không được phép làm hỏng loop */ }
+}
+
 /** Directive nối tiếp chu kỳ — chẩn đoán + kế hoạch mới từ evaluator */
-function buildContinuationDirective(v: EvalVerdict, cycle: number, cutMidWork: boolean, maxCyclesDisplay: number = MAX_CYCLES): string {
+function buildContinuationDirective(v: EvalVerdict, cycle: number, cutMidWork: boolean, maxCyclesDisplay: number = EFFECTIVE_MAX_CYCLES, doneSummary?: string): string {
   const missing = v.missing.length > 0 ? v.missing.map(m => `- ${m}`).join('\n') : '- (trọng tài không liệt kê cụ thể — tự rà soát lại mục tiêu)'
   const plan = v.nextPlan.length > 0 ? v.nextPlan.map((p, i) => `${i + 1}. ${p}`).join('\n') : '- tự xác định bước khắc phục'
   const cut = cutMidWork ? '\n⚠️ Chu kỳ trước bị cắt giữa chừng do hết vòng lặp — công việc có thể đang dở.' : ''
-  return `[GOAL-LOOP: Chu kỳ ${cycle}/${fmtCap(maxCyclesDisplay)}] Mục tiêu CHƯA hoàn thành theo đánh giá độc lập (độ tin cậy ${Math.round(v.confidence * 100)}%).${cut}
+  // 2026-10 PROCESS INTEGRITY — khối "việc ĐÃ làm" (quan sát): agent chu kỳ
+  // kế NHÌN THẤY những gì chu kỳ trước đã làm thành công → không làm lại y hệt
+  // (nguồn lặp phổ biến: CLI spawn mới không nhớ việc cũ → verify lại từ đầu).
+  const done = doneSummary
+    ? `\n✅ Việc chu kỳ trước ĐÃ làm thành công (KHÔNG làm lại — chỉ kiểm tra khi còn nghi ngờ): ${doneSummary}\n`
+    : ''
+  return `[GOAL-LOOP: Chu kỳ ${cycle}/${fmtCap(maxCyclesDisplay)}] Mục tiêu CHƯA hoàn thành theo đánh giá độc lập (độ tin cậy ${Math.round(v.confidence * 100)}%).${cut}${done}
 
 ❌ Còn thiếu:
 ${missing}
@@ -651,6 +742,41 @@ ${missing}
 ${plan}
 
 Hãy: (1) cập nhật todo_write với kế hoạch trên (điều chỉnh nếu thấy hợp lý hơn), (2) khắc phục vấn đề, (3) KIỂM ĐỊNH LẠI bằng tools để có bằng chứng. KHÔNG lặp lại đúng hành động đã thất bại — nếu cách cũ fail, đổi cách tiếp cận.`
+}
+
+/**
+ * 2026-10 PROCESS INTEGRITY — trích mục tiêu + tiêu chí nghiệm thu khi
+ * userMessage là CHỈ ĐẠO của Opus (nhận CẢ 2 format: mới 2-mục "🚀 BƯỚC TIẾP
+ * THEO" lẫn cũ "🎯 CHỈ ĐẠO THỰC THI"). Trước đây evaluator chỉ thấy 2000 chars
+ * ĐẦU của directive (dài tới 16k) — mục tiêu thật + acceptance criteria nằm
+ * NGOÀI phần thấy → đánh giá lệch trọng tâm ("đánh giá hời hợt" theo user).
+ */
+export function extractDirectiveSpec(rawGoal: string): { goal: string; acceptance: string[] } {
+  const acceptance: string[] = []
+  // Block "Tiêu chí nghiệm thu:" (cũ) / "Nghiệm thu:" (mới) — các dòng "- [ ] ..."
+  const accBlock = rawGoal.match(/(?:Tiêu chí )?[Nn]ghiệm thu[^:\n]*:\s*([\s\S]*?)(?=\n\s*\n|\n\s*[•🏁🔍💡📊🚨⚖️]|$)/)
+  if (accBlock) {
+    for (const line of accBlock[1].split('\n')) {
+      const item = line.replace(/^\s*-\s*\[[ xX]\]\s*/, '').replace(/^\s*-\s*/, '').trim()
+      if (item && item.length > 3) acceptance.push(item.slice(0, 200))
+    }
+  }
+  // "• Mục tiêu: ..." (mới + cũ) — fallback "GOAL —..." (JSON style)
+  const goalMatch = rawGoal.match(/[•]\s*Mục tiêu:\s*(.+)/) || rawGoal.match(/^\s*GOAL\s*[—:-]\s*(.+)$/m)
+  const goal = goalMatch ? goalMatch[1].trim().slice(0, 500) : ''
+  return { goal: goal || rawGoal, acceptance: acceptance.slice(0, 8) }
+}
+
+/** 2026-10 — rút gọn kết quả tool CLI (ExecutedToolResult) cho evidence +
+ *  transcript. Fail → "LỖI: <error>"; success → output bounded (giữ dòng). */
+function cliToolResultPreview(er: { success: boolean; output: string; error?: string }, cap = 400): string {
+  if (!er.success) {
+    const errText = (er.error || er.output || 'lỗi không rõ').trim()
+    return `LỖI: ${errText.length > cap ? `${errText.slice(0, cap - 1)}…` : errText}`
+  }
+  const out = (er.output || '').trim()
+  if (!out) return ''
+  return out.length > cap ? `${out.slice(0, cap - 1)}…` : out
 }
 
 const EVALUATOR_SYSTEM_PROMPT = `Bạn là EVALUATOR — trọng tài độc lập đánh giá việc thực hiện mục tiêu của một AI Agent.
@@ -670,6 +796,7 @@ Nguyên tắc SẮT:
    - "none": CHỈ khi issue tầm thường/đã tự hết và KHÔNG liên quan gì đến thay đổi của run.
    KHÔNG dùng side issues để hạ "complete" khi mục tiêu chính đã đạt theo bằng chứng — nhưng cũng KHÔNG dùng "record"/"none" để né xử lý lỗi liên quan còn giải quyết được trong run này.
 10. DEBT CHECK (áp dụng khi prompt có khối "CÁC LỖI PHÁT SINH CHƯA XỬ LÝ" — danh sách trọng tài đã quyết định xử lý ở các chu kỳ trước): đối chiếu TỪNG lỗi với bằng chứng chu kỳ này. Lỗi nào CHƯA có bằng chứng máy xác nhận đã khắc phục (fix xong + verify pass) → PHẢI liệt kê lại vào "sideIssues" và đặt "debtDecision": "continue". KHÔNG phán hoàn thành sạch khi danh sách còn mục chưa đối chiếu được bằng chứng khắc phục.
+11. DERIVED-NUMBER GUARD (2026-10-20 — E2E lộ agent đếm bằng mắt sai 80/79 nhưng tự chấm "đã kiểm chứng"): khi mục tiêu/tiêu chí đòi một CON SỐ hoặc kết quả TỔNG HỢP từ dữ liệu gốc (đếm dòng, đếm phần tử, tính tổng...), chỉ chấp nhận là verified khi bằng chứng tool cho thấy LỆNH MÁY trả về đúng con số đó (output wc/jq/grep -c hiển thị giá trị khớp). Agent "tự đếm trong đầu" từ nội dung đã đọc KHÔNG phải bằng chứng — nếu không thấy output lệnh máy xác nhận con số → "verified": false.
 
 Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích thêm):
 {"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."], "sideIssues": ["..."], "debtDecision": "none|record|continue"}`
@@ -1457,6 +1584,57 @@ export async function runGoalDrivenLoop(params: {
   /** Chu kỳ trước có bị cắt giữa chừng (hết vòng / hết budget) không */
   let cutMidWorkPrev = resumeState?.cutMidWorkPrev ?? false
 
+  // ==================== 2026-10 PROCESS INTEGRITY — REPETITION DETECTION ====================
+  // User report: "các chu kỳ bị lặp lại y hệt một việc, không có tiến triển".
+  // Các phanh cũ đều vô hiệu trên đường CLI: stall brake dựa success tool call
+  // (trước đây CLI hard-code true), fingerprint 6-message (output CLI luôn khác
+  // nhau từng chút). Giờ đếm trực tiếp SIGNATURE (tên tool + args) — gọi y hệt
+  // N lần là lặp THẬT không thể cãi. N=4: nhắc agent đổi cách; N≥8: cắt chu kỳ
+  // chuyển evaluator đánh giá lại hướng đi. Không loại trừ tool nào — chính
+  // các tool verify (file_read/grep) là thủ phạm lặp phổ biến nhất (18 vòng
+  // xác minh của e2eb); verify hợp lệ hiếm khi cần ≥4 lần y hệt args.
+  const toolSignatureCounts = new Map<string, number>()
+  let signatureOverrun = false
+  /** 2026-10 — số tool call THÀNH CÔNG với signature MỚI (lần đầu xuất hiện)
+   *  trong chu kỳ hiện hành — dùng làm điều kiện RENEWAL: chu kỳ chỉ lặp lại
+   * các hành động cũ (verify đi verify lại) → KHÔNG được tái lập cửa sổ chu kỳ
+   * (user report: tái lập tiếp tục vòng lặp vô nghĩa; evaluator tự kết luận
+   * "agent is looping" nhưng renewal vẫn mở thêm chu kỳ). */
+  let cycleNewSuccessSignatures = 0
+  /** 2026-10 — số chu kỳ LIÊN TIẾP evaluator ra verdict GIỐNG HỆT (incomplete
+   * + cùng rootCause/missing) = dấu hiệu bế tắc — chặn renewal khi ≥3. */
+  let verdictStagnation = 0
+  let lastVerdictStagnationSig = ''
+  /** Task 21 — SHR: id mẩu CoT được truy hồi chu kỳ này (cha của mẩu chu kỳ sau — chuỗi nguồn gốc ≤3 thế hệ) */
+  let cotParentSampleId: string | null = null
+  const noteToolSignature = (cycleNum: number, name: string, args: Record<string, unknown>, ok: boolean): void => {
+    try {
+      const sig = `${name}:${JSON.stringify(args).slice(0, 300)}`
+      const n = (toolSignatureCounts.get(sig) || 0) + 1
+      toolSignatureCounts.set(sig, n)
+      if (n === 1 && ok) cycleNewSuccessSignatures++ // hành động THÀNH CÔNG chưa từng làm trong run này
+      if (n === 4) {
+        // 2026-10 SELF-REFLECTION AUDIT (Task 19) — A4 anti-habituation: cảnh
+        // báo câu CỐ ĐỊNH lặp lại nhiều run → model học cách bỏ đọc (entropy
+        // collapse của guidance — SELF_REFLECTION_DESIGN §4c). Đảo ngẫu nhiên
+        // 3 biến thể câu để mỗi lần xuất hiện là "mới".
+        const warnVariants = [
+          `⚠️ CẢNH BÁO LẶP: bạn đã gọi ${name} với ĐÚNG args này ${n} lần trong run. Hành động lặp y hệt KHÔNG tiến triển — nếu chưa đạt kết quả mong muốn thì ĐỔI CÁCH TIẾP CẬN (tool khác / args khác / escalated_problem), đừng gọi lại y hệt lần nữa.`,
+          `🔁 PHÁT HIỆN XOAY VÒNG: ${name} × ${n} lần, args không đổi. Kết quả lần sau sẽ GIỐNG HỆT lần trước. Hãy dừng và tự hỏi: kết quả mong muốn khác gì kết quả đang nhận? Thiếu gì thì làm phần đó — bằng tool/cách KHÁC.`,
+          `🚨 BẮT QUẢ TANG LẶP: gọi ${name} y hệt ${n} lần rồi. Trọng tài sẽ từ chối bằng chứng trùng lặp. Bước ra khỏi vòng: (1) đọc kỹ kết quả lần cuối — nó nói gì thiếu?, (2) chọn hành động KHÁC để khắc phục phần thiếu đó.`,
+        ]
+        const warn = warnVariants[Math.floor(Math.random() * warnVariants.length)]
+        pushToolMessage(messages, { tool: 'harness_warning', success: true, result: warn })
+        evidence.push({ cycle: cycleNum, kind: 'directive', text: `cảnh báo lặp: ${name}×${n} với args y hệt` })
+        recordAgentThought(agentSessionId, `⚠️ Phát hiện lặp: ${name} gọi ${n} lần với args y hệt — đã cảnh báo agent đổi cách tiếp cận`, totalIterations)
+      } else if (n >= 8) {
+        signatureOverrun = true
+        recordAgentThought(agentSessionId, `🛑 LẶP VƯỢT NGƯỠNG: ${name} gọi ${n} lần y hệt — cắt chu kỳ ${cycleNum}, chuyển evaluator đánh giá lại hướng`, totalIterations)
+        evidence.push({ cycle: cycleNum, kind: 'directive', text: `🛑 lặp vượt ngưỡng: ${name}×${n} y hệt — cắt chu kỳ` })
+      }
+    } catch { /* fail-open — đếm signature không được phép crash loop */ }
+  }
+
   // ================== CI-5 (Task 14-b) — DURABLE HOOK HELPERS ==================
   // Worker nền (14-a) truyền hooks; khi `durable` không truyền → mọi helper
   // return ngay (0 side-effect) → đường inline cũ KHÔNG đổi. Hook có thể sync
@@ -1525,7 +1703,7 @@ export async function runGoalDrivenLoop(params: {
   const timeLeft = () => (TIME_BUDGET_MS === 0 ? Infinity : TIME_BUDGET_MS - (Date.now() - startedAt))
   const tokenLeft = () => (TOKEN_BUDGET === 0 ? Infinity : TOKEN_BUDGET - tokensUsed)
 
-  console.log(`[GoalLoop] ${agentName} bắt đầu — mục tiêu: "${userMessage.slice(0, 100)}" (max ${fmtCap(MAX_CYCLES)} chu kỳ × ${fmtCap(ITER_PER_CYCLE)} vòng${MAX_CYCLE_RENEWALS > 0 && MAX_CYCLES !== 0 ? ` + tái lập tối đa ${MAX_CYCLE_RENEWALS} cửa sổ (${MAX_CYCLE_RENEWALS * MAX_CYCLES} chu kỳ nữa)` : ''}, debt cycles tối đa ${MAX_DEBT_CYCLES}, budget ${TIME_BUDGET_MS === 0 ? '∞' : `${Math.round(TIME_BUDGET_MS / 60000)}'`} / ${TOKEN_BUDGET === 0 ? '∞ tokens (KHÔNG GIỚI HẠN — CI-1)' : `${TOKEN_BUDGET} tokens, reserve ${REPORT_RESERVE_TOKENS} cho evaluate + báo cáo cuối`}, nén context @${COMPRESS_THRESHOLD_CHARS} chars${agentTools.includes('delegate_task') ? ', delegate_task BẬT' : ''})`)
+  console.log(`[GoalLoop] ${agentName} bắt đầu — mục tiêu: "${userMessage.slice(0, 100)}" (max ${fmtCap(EFFECTIVE_MAX_CYCLES)} chu kỳ × ${fmtCap(EFFECTIVE_ITER_PER_CYCLE)} vòng${MAX_CYCLE_RENEWALS > 0 && EFFECTIVE_MAX_CYCLES !== 0 ? ` + tái lập tối đa ${MAX_CYCLE_RENEWALS} cửa sổ` : ''}, debt cycles tối đa ${MAX_DEBT_CYCLES}, budget ${TIME_BUDGET_MS === 0 ? '∞' : `${Math.round(TIME_BUDGET_MS / 60000)}'`} / ${TOKEN_BUDGET === 0 ? '∞ tokens (KHÔNG GIỚI HẠN — CI-1)' : `${TOKEN_BUDGET} tokens, reserve ${REPORT_RESERVE_TOKENS} cho evaluate + báo cáo cuối`}, nén context @${COMPRESS_THRESHOLD_CHARS} chars${agentTools.includes('delegate_task') ? ', delegate_task BẬT' : ''})`)
 
   // CI-5 (Task 14-b) — RESUME: chu kỳ bắt đầu = cyclesAttempted + 1 (chu kỳ
   // đã BẮT ĐẦU kể cả dở được tính là đã attempt — checkpoint theo VÒNG nên
@@ -1536,6 +1714,11 @@ export async function runGoalDrivenLoop(params: {
   if (resumeState) {
     console.log(`[GoalLoop] ${agentName} RESUME từ checkpoint — chu kỳ ${resumeStartCycle}, ${totalIterations} vòng đã chạy, ${messages.length} messages, runId ${runId}`)
   }
+
+  // 2026-10 PROCESS INTEGRITY — userMessage là CHỈ ĐẠO Opus → trích mục tiêu
+  // + tiêu chí nghiệm thu có cấu trúc (evaluator đối chiếu TỪNG tiêu chí thay
+  // vì slice 2000 chars đầu của directive 16k — xem extractDirectiveSpec).
+  const directiveSpec = extractDirectiveSpec(userMessage)
 
   // ================== OUTER CYCLE LOOP ==================
   // CI-1 (0 = UNLIMITED): MAX_CYCLES = 0 → KHÔNG trần chu kỳ (loop chỉ dừng
@@ -1549,10 +1732,13 @@ export async function runGoalDrivenLoop(params: {
   // + Math.max với resumeStartCycle để run resume sau crash ở chu kỳ cuối cùng
   // vẫn được chạy ít nhất 1 chu kỳ đánh giá lại (không rơi vào "resume xong bỏ
   // đi" khi trần đã vượt).
-  let effectiveMaxCycles = MAX_CYCLES === 0
+  // 2026-10: dùng EFFECTIVE_MAX_CYCLES (cap=0 đã fallback safe-cap) — renewal
+  // giờ HOẠT ĐỘNG cả khi .env cấu hình 0 (trước đây 0 = ∞ = không bao giờ chạm
+  // trần = không bao giờ renewal).
+  let effectiveMaxCycles = EFFECTIVE_MAX_CYCLES === 0
     ? 0
-    : Math.max(MAX_CYCLES + cycleRenewals * MAX_CYCLES, resumeStartCycle)
-  outerLoop: for (let cycle = resumeStartCycle; MAX_CYCLES === 0 || cycle <= effectiveMaxCycles; cycle++) {
+    : Math.max(EFFECTIVE_MAX_CYCLES + cycleRenewals * EFFECTIVE_MAX_CYCLES, resumeStartCycle)
+  outerLoop: for (let cycle = resumeStartCycle; EFFECTIVE_MAX_CYCLES === 0 || cycle <= effectiveMaxCycles; cycle++) {
     if (isCancelled()) { stopReason = 'cancelled'; break }
     if (timeLeft() <= 0) { stopReason = 'time_budget'; break }
     // [A] Không bắt đầu chu kỳ mới nếu chỉ còn token reserve (dành cho final report)
@@ -1571,12 +1757,15 @@ export async function runGoalDrivenLoop(params: {
       // xong, việc duy nhất là xử lý các lỗi phát sinh (side issues).
       if (debtMode) {
         const debtList = lastVerdict.sideIssues.map(s => `- ${s}`).join('\n')
+        // 2026-10-20 TASK 20 — debt cycle cũng là CLI spawn mới: kèm TODO block
+        // để agent thấy todo còn mở của run (nhất quán với continuation directive)
+        const debtTodosBlock = await buildRunTodosBlock(agentSessionId, runId)
         const debtDirective = `[GOAL-LOOP: Chu kỳ ${cycle}/${fmtCap(effectiveMaxCycles)} — DEBT CYCLE] Mục tiêu chính ĐÃ HOÀN THÀNH theo trọng tài độc lập ✅ — KHÔNG làm lại việc đã xong.
 
 Chu kỳ này chỉ xử lý CÁC LỖI PHÁT SINH trong quá trình làm (trọng tài phân loại nghiêm trọng):
 ${debtList}
 
-Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc phục từng lỗi, (3) KIỂM ĐỊNH bằng tool thật (run_tests/lint/type_check), (4) KHÔNG mở việc mới ngoài các lỗi trên. Xong hết → báo cáo ngắn từng lỗi đã xử lý + bằng chứng.`
+Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc phục từng lỗi, (3) KIỂM ĐỊNH bằng tool thật (run_tests/lint/type_check), (4) KHÔNG mở việc mới ngoài các lỗi trên. Xong hết → báo cáo ngắn từng lỗi đã xử lý + bằng chứng.${debtTodosBlock}`
         messages.push({ role: 'user', content: debtDirective })
         evidence.push({ cycle, kind: 'directive', text: `DEBT CYCLE ${cycle}: xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã xong)` })
         recordAgentThought(agentSessionId, `🔁 DEBT CYCLE ${cycle}: trọng tài quyết định tái khởi động 1 chu kỳ mới để xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã hoàn thành)`, totalIterations)
@@ -1601,7 +1790,48 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
           })
         } catch { /* fail-open */ }
 
-        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles) + similarErrorsBlock + advisoryBlock
+        // 2026-10 — tóm tắt việc chu kỳ trước ĐÃ làm thành công (chống làm lại:
+        // CLI spawn mới không nhớ việc cũ → verify lại từ đầu — việc đã xong
+        // được liệt kê RÕ RÀNG kèm bằng chứng ngắn trong directive, không chỉ tên tool).
+        const doneItems = Array.from(new Set(
+          evidence
+            .filter(e => e.kind === 'tool' && e.success && e.cycle === cycle - 1)
+            .map(e => (e.text && !e.text.startsWith('đã thực thi trong CLI inner loop')
+              ? `${e.tool}: ${e.text.slice(0, 80)}`
+              : e.tool)),
+        )).slice(0, 10)
+        const doneSummary = doneItems.length > 0 ? doneItems.join(' · ') : undefined
+        // 2026-10 SELF-REFLECTION AUDIT (Task 19) — TODO snapshot: agent chu kỳ
+        // sau (nhất là CLI spawn mới) THẤY trạng thái kế hoạch còn mở của run.
+        const runTodosBlock = await buildRunTodosBlock(agentSessionId, runId)
+        // ===== TASK 21 (2026-10-21) — R2 BELIEF-STATE + 📐 BIÊN ĐỘ + PRIOR CoT =====
+        // (a) 🧬 BELIEF-STATE: hypothesis sống (π-channel — R2 nén xuống R1):
+        //     promoted ưu tiên, candidate posterior cao kế, đã bác nêu tên.
+        // (b) 📐 BIÊN ĐỘ DỮ LIỆU: parse từ báo cáo chu kỳ trước → RunContext DB
+        //     → render lại (Task 21-c: chu kỳ sau không mất định hướng phạm vi).
+        // (c) 🧠 Prior reasoning: mẩu CoT khớp ngữ cảnh (Jaccard ≥0.5) — nhãn
+        //     "may be wrong, verify" (mẩu là prior KHÔNG phải chân lý).
+        let shrBeliefBlock = ''
+        let dataScopeBlock = ''
+        let priorCotBlock = ''
+        try {
+          const shr = await import('@/lib/structured-hypothesis')
+          shrBeliefBlock = agentSessionId ? await shr.renderBeliefState(agentSessionId) : ''
+          const runCtx = runId ? await shr.getRunContext(runId) : null
+          if (runCtx?.dataScope) {
+            dataScopeBlock = `\n\n📐 BIÊN ĐỘ DỮ LIỆU đã xác định (chu kỳ trước — giữ nguyên nếu còn đúng, KHÔNG tự mở rộng phạm vi): ${runCtx.dataScope}`
+          }
+          // chữ ký ngữ cảnh hiện hành: từ khóa mục tiêu + tools đã dùng
+          const usedTools = [...new Set(evidence.filter(e => e.kind === 'tool').map(e => e.tool!))].slice(0, 8)
+          const ctxSig = shr.computeContextSignature(directiveSpec.goal, usedTools)
+          const prior = agentSessionId ? await shr.buildPriorReasoningBlock(agentSessionId, ctxSig) : { block: '', parentSampleId: null, matchedCount: 0 }
+          priorCotBlock = prior.block
+          cotParentSampleId = prior.parentSampleId
+          if (shrBeliefBlock || dataScopeBlock || priorCotBlock) {
+            console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} SHR directive: belief=${shrBeliefBlock ? 'yes' : 'no'} dataScope=${dataScopeBlock ? 'yes' : 'no'} priorCoT=${prior.matchedCount} mẩu khớp`)
+          }
+        } catch { /* fail-open — SHR không được phép làm hỏng directive */ }
+        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles, doneSummary) + similarErrorsBlock + advisoryBlock + runTodosBlock + dataScopeBlock + shrBeliefBlock + priorCotBlock
         messages.push({ role: 'user', content: directive })
         evidence.push({ cycle, kind: 'directive', text: `Chu kỳ ${cycle}: chẩn đoán "${lastVerdict.rootCause.slice(0, 120)}" → kế hoạch mới${similarErrorsBlock ? ' + lỗi tương tự đã gặp (episodic memory)' : ''}${advisoryBlock ? ' + tư vấn Omega orchestrator' : ''}` })
         recordAgentThought(agentSessionId, `🔄 Chu kỳ ${cycle}/${fmtCap(effectiveMaxCycles)} — chẩn đoán: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${similarErrorsBlock ? ' (kèm lỗi tương tự đã gặp)' : ''}${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}`, totalIterations)
@@ -1611,6 +1841,7 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
     // ===== INNER REACT LOOP (EXECUTE + VERIFY theo protocol) =====
     let cycleIterations = 0
     let cycleToolCalls = 0
+    cycleNewSuccessSignatures = 0 // 2026-10 — đếm lại mỗi chu kỳ (điều kiện renewal)
     cycleVerifyEvidence = [] // [C] bằng chứng kiểm định tính lại mỗi chu kỳ
     cycleCodeModified = false // FIX #7 — tính lại mỗi chu kỳ
     cycleStrongVerify = false // FIX #7 — tính lại mỗi chu kỳ
@@ -1622,8 +1853,8 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
     let inCycleFp = ''
     let inCycleFpRepeats = 0
 
-    // CI-1 (0 = UNLIMITED): ITER_PER_CYCLE = 0 → KHÔNG trần vòng ReAct mỗi chu kỳ
-    while (ITER_PER_CYCLE === 0 || cycleIterations < ITER_PER_CYCLE) {
+    // 2026-10: EFFECTIVE_ITER_PER_CYCLE (cap=0 đã fallback safe-cap 8)
+    while (EFFECTIVE_ITER_PER_CYCLE === 0 || cycleIterations < EFFECTIVE_ITER_PER_CYCLE) {
       if (isCancelled()) { endedBy = 'cancelled'; break }
       // [A] Reserve token cho evaluate cuối + final report — EXECUTE dừng ở
       // ngưỡng reserve thay vì đợi cạn kiệt về 0 (báo cáo không bị cắt giữa chừng)
@@ -1670,6 +1901,10 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
           callLLMForAgent(formattedPrompt, { provider: agentProvider, model: agentModel }, fullSystemPrompt, {
             agentId,
             agentName,
+            sessionId: agentSessionId,
+            // 2026-10-20 TASK 20: truyền runId → env TMO_RUN_ID cho CLI spawn
+            // → bridge tmo_todo gắn todo ĐÚNG run (TODO block chu kỳ sau)
+            runId: runId ?? null,
             temperature: agentTemperature,
             maxTokens: agentMaxTokens,
             abortCheck: isCancelled,
@@ -1686,7 +1921,16 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
       }
 
       if (isCancelled()) { endedBy = 'cancelled'; break }
-      if (!result || (result.error && !result.content)) {
+      // FIX 2026-10-20 TASK 20 (E2E t20d lộ bug): PARTIAL-ON-TIMEOUT của CLI
+      // spawn (content='' + error='timeout...' + executed_tool_calls≠rỗng)
+      // bị coi là LLM fatal error → run abort ở chu kỳ 1 + VỨT toàn bộ bằng
+      // chứng tool đã thực thi (E2E thực tế: 12 tool đã chạy vẫn chết cả run,
+      // log "0 tool calls" dù 12 executed). Sửa: có executed_tool_calls →
+      // là PARTIAL HỢP LỆ (cut-mid-work) — xử lý evidence bình thường, vòng
+      // kế spawn mới nhìn thấy KẾT QUẢ TOOL THẬT trong transcript → tiếp tục
+      // việc dở (đúng semantics "chữa cháy giữa chừng" của goal loop).
+      const hasPartialExecuted = !!(result.executed_tool_calls && result.executed_tool_calls.length > 0)
+      if (!result || (result.error && !result.content && !hasPartialExecuted)) {
         lastLlmError = result?.error || 'LLM call failed'
         cycleHadLlmError = true
         endedBy = 'error'
@@ -1698,13 +1942,45 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
       }
 
       lastContent = result.content
+      // 2026-10 USER DIRECTIVE ("không thấy dấu hiệu tư duy / suy nghĩ của
+      // agents") — suy nghĩ trung gian (reasoning/thinking parts) từ inner
+      // loop CLI được llm.ts thu lại trong result.reasoning: ghi vào Thought
+      // Process panel để user THẤY agent đang nghĩ gì mỗi vòng (trước đây parse
+      // xong vứt — panel chỉ thấy content cuối).
+      if (result.reasoning && result.reasoning.trim()) {
+        recordAgentThought(agentSessionId, `💭 (suy nghĩ) ${result.reasoning.trim().slice(0, 800)}`, totalIterations)
+      }
       recordAgentThought(agentSessionId, result.content, totalIterations)
 
       // 2026-09-25 HYBRID BRIDGE FIX: OpenCode CLI provider returns tool_calls
       // directly in LLMResult (parsed from tool_use events). Use these native
       // tool_calls FIRST — only fallback to text-based parseToolCallsFromOutput
       // when result.tool_calls is empty (legacy NIM/zai providers).
-      let toolCalls = result.tool_calls && result.tool_calls.length > 0
+      //
+      // 2026-09-26 FIX DOUBLE-EXECUTION (Tool health audit): tool_calls hiện merge
+      // CẢ tool call inner loop CLI ĐÃ thực thi thật (executed_tool_calls — tmo_*
+      // bridge đã POST /api/tools/execute + native bash/read/write đã chạy trong
+      // CLI process). Trước đây GoalLoop thực thi lại TOÀN BỘ → (a) tên native
+      // không tồn tại: "Unknown tool: bash/todowrite/read/write" (23 lỗi/24h);
+      // (b) tmo_* chạy 2 LẦN (side-effect kép: shell command, todo write...);
+      // (c) ToolMetric đếm mỗi hành động 2 lần (session bridge + session run).
+      // Giờ: lọc executed ra khỏi hàng thực thi (khớp id — cùng object reference
+      // từ llm.ts merge) + ghi evidence-only bên dưới (sau khai báo batch).
+      const executedRaw = result.executed_tool_calls || []
+      const executedIds = new Set(executedRaw.map(tc => tc.id))
+      const executedCalls = executedRaw.map((tc, idx) => {
+        let eargs: Record<string, unknown> = {}
+        try {
+          eargs = typeof tc.function.arguments === 'string'
+            ? JSON.parse(tc.function.arguments)
+            : (tc.function.arguments as Record<string, unknown>) || {}
+        } catch { /* keep empty args */ }
+        // Alias tên CLI-native (bash/read/write/todowrite...) → tên TMO — cùng
+        // map với executeTool entry (evidence + metrics thống nhất tên tool)
+        const resolved = resolveToolAlias(tc.function.name, eargs)
+        return { id: tc.id || `exec_${idx}`, name: resolved.name, args: resolved.args }
+      })
+      let toolCalls = (result.tool_calls && result.tool_calls.length > 0
         ? result.tool_calls.map((tc, idx) => {
             // Convert LLMToolCall → ParsedToolCall shape (id, name, args object)
             let args: Record<string, unknown> = {}
@@ -1720,12 +1996,13 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
             }
           })
         : parseToolCallsFromOutput(result.content)
+      ).filter(tc => !executedIds.has(tc.id))
 
       // Log khi native tool_calls được dùng (hybrid bridge active)
       if (result.tool_calls && result.tool_calls.length > 0) {
-        console.log(`[GoalLoop] ${agentName} dùng ${result.tool_calls.length} native tool_calls từ provider=${result.provider} (hybrid bridge)`)
+        console.log(`[GoalLoop] ${agentName} dùng ${result.tool_calls.length} native tool_calls từ provider=${result.provider} (hybrid bridge — ${executedCalls.length} đã thực thi trong CLI inner loop [evidence-only], ${toolCalls.length} cần thực thi)`)
       }
-      if (toolCalls.length === 0) {
+      if (toolCalls.length === 0 && executedCalls.length === 0) {
         // 21-d FIX SILENT PARSE-DROP: output CÓ dấu hiệu tool call ("tool_call:"
         // hoặc ```json chứa "name") nhưng parse thất bại (JSON bị cắt cụt giữa
         // chừng — thường do output quá dài chạm maxTokens) → trước đây tool call
@@ -1748,7 +2025,7 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
         break
       }
 
-      console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} vòng ${cycleIterations}: ${toolCalls.length} tool calls`)
+      console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} vòng ${cycleIterations}: ${toolCalls.length} tool calls cần thực thi${executedCalls.length > 0 ? ` + ${executedCalls.length} đã thực thi trong CLI inner loop (evidence-only)` : ''}`)
       messages.push({ role: 'assistant', content: result.content })
 
       // CI-2 (Task 11-a) — bằng chứng thu được trong batch này (đường dẫn file /
@@ -1759,10 +2036,119 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
       // mỗi vòng; dùng cho in-cycle stall brake)
       let batchAnySuccess = false
 
+      // ===== 2026-09-26 EVIDENCE-ONLY + 2026-10 PROCESS INTEGRITY cho tool ĐÃ
+      // thực thi trong CLI inner loop ===== (fix double-execution — KHÔNG thực
+      // thi lại). 2026-10 thay đổi QUAN TRỌNG:
+      //  (a) KẾT QUẢ THẬT: matched từ result.executed_tool_results (tên TMO +
+      //      output/error/status) → evidence đúng success/fail (trước đây
+      //      hard-code success=true → stall brake + no-progress VÔ HIỆU trên
+      //      đường CLI — gốc rễ "lặp chu kỳ không tiến triển")
+      //  (b) QUAN SÁT: kết quả batch được đẩy về transcript (pushToolMessage)
+      //      → vòng LLM kế (CLI spawn mới) THẤY kết quả thật thay vì chỉ đọc
+      //      report tự thuật → không làm lại y hệt việc đã xong
+      //  (c) CHỐNG LẶP: noteToolSignature đếm (tên + args) — lặp y hệt bị
+      //      cảnh báo (4×) rồi cắt chu kỳ (8×)
+      const cliBatchLines: string[] = []
+      const pendingExecResults = [...(result.executed_tool_results || [])]
+      for (const etc of executedCalls) {
+        totalToolCalls++
+        cycleToolCalls++
+        // Match kết quả thật — 2026-10: ưu tiên ĐÚNG callId (chính xác tuyệt đối
+        // kể cả 2 call cùng tên khác args), fallback tên TMO (cùng toolMap
+        // mapping bên llm.ts) — splice để 1 result không bị dùng 2 lần.
+        let rIdx = etc.id ? pendingExecResults.findIndex(r => r.callId === etc.id) : -1
+        if (rIdx < 0) rIdx = pendingExecResults.findIndex(r => r.name === etc.name)
+        const er = rIdx >= 0 ? pendingExecResults.splice(rIdx, 1)[0] : undefined
+        const ok = er ? er.success : true // không có result → giữ hành vi cũ (CLI hoàn tất call)
+        noteToolSignature(cycle, etc.name, etc.args, ok)
+        if (ok) batchAnySuccess = true // CHỈ success thật mới reset stall brake
+        const outPreview = er ? cliToolResultPreview(er) : ''
+        const evExec = extractTodoEvidence(etc.name, etc.args)
+        if (ok && evExec) batchEvidence.push(evExec)
+        // 2026-10 — mirror shellVerify của processToolResult (đường TMO): shell/
+        // run_bg THÀNH CÔNG qua CLI inner loop (có kết quả thật) cũng là bằng
+        // chứng kiểm định. E2E refl lộ gap: agent verify `cat` qua CLI bị
+        // verify-guard từ chối oan ("kiểm định cuối ở tool-call #0") vì đường
+        // TMO có shellVerify mà đường CLI không có → 2 chu kỳ thừa + escalate
+        // không cần thiết. Giờ 2 đường đồng nhất.
+        const shellVerifyCli = (etc.name === 'shell' || etc.name === 'run_bg') && ok && !!er
+        if (ok && (VERIFY_TOOLS.has(etc.name) || READBACK_TOOLS.has(etc.name) || shellVerifyCli)) {
+          lastVerifyOrdinal = totalToolCalls
+          cycleVerifyEvidence.push(`${etc.name}: ${outPreview || 'đã thực thi trong CLI inner loop'}`)
+        }
+        // shell/run_bg side-effect tính modify kể cả khi exit != 0 (mirror processToolResult)
+        if (MODIFY_TOOLS.has(etc.name)) lastModifyOrdinal = totalToolCalls
+        if (ok && CODE_MODIFY_TOOLS.has(etc.name)) cycleCodeModified = true
+        if (ok && STRONG_VERIFY_TOOLS.has(etc.name)) cycleStrongVerify = true
+        recordWorkMemory(
+          agentId,
+          agentSessionId,
+          `🔧 ${etc.name}(${compactToolArgs(etc.args)}) → ${ok ? '✓' : `✗ ${outPreview.slice(0, 150)}`}`,
+        )
+        evidence.push({
+          cycle,
+          kind: 'tool',
+          tool: etc.name,
+          success: ok,
+          text: outPreview || (ok ? 'đã thực thi trong CLI inner loop (tmo_* bridge / native)' : 'thất bại trong CLI inner loop'),
+        })
+        cliBatchLines.push(`- ${etc.name} → ${ok ? 'THÀNH CÔNG' : 'THẤT BẠI'}${outPreview ? `: ${outPreview}` : ''}`)
+
+        // 2026-10-20 TASK 20 — MIRROR todo từ inner loop CLI vào TMO DB.
+        // Native `todowrite` của OpenCode ghi vào storage NỘI BỘ CLI (chết theo
+        // spawn) — KHÔNG bao giờ tới TMO DB → chu kỳ sau (spawn mới) mất kế
+        // hoạch dù F4 render TODO block. Bridge tmo_todo đã ghi đúng run (sau
+        // fix TMO_RUN_ID) — mirror lần 2 vô hại nhờ dedup (sessionId, content,
+        // runId) của todoWrite. Strip field lạ (id native → update-by-pk oan,
+        // activeForm...).
+        // FIX E2E t20a2: AWAIT (không fire-and-forget) — native todowrite có
+        // semantics REPLACE (gửi nguyên list mỗi bước) → 1 spawn có N call
+        // todo_write → N mirror chạy SONG SONG thì dedup findFirst của
+        // todoWrite không thấy nhau → 13 row trùng (E2E thực tế). executedCalls
+        // loop vốn tuần tự → await giữ mirror tuần tự, dedup hoạt động.
+        if (etc.name === 'todo_write' && ok && agentSessionId) {
+          try {
+            const rawTodosSrc = (er?.args && Array.isArray((er.args as Record<string, unknown>).todos))
+              ? (er.args as Record<string, unknown>).todos
+              : (Array.isArray(etc.args.todos) ? etc.args.todos : null)
+            if (Array.isArray(rawTodosSrc)) {
+              const VALID_ST = new Set(['pending', 'in_progress', 'blocked', 'completed', 'failed'])
+              const VALID_PR = new Set(['low', 'medium', 'high'])
+              const todos = (rawTodosSrc as Array<Record<string, unknown>>)
+                .filter(t => t && typeof t.content === 'string' && t.content.trim() !== '')
+                .slice(0, 30)
+                .map(t => ({
+                  content: String(t.content).slice(0, 300),
+                  status: (typeof t.status === 'string' && VALID_ST.has(t.status) ? t.status : 'pending') as 'pending' | 'in_progress' | 'blocked' | 'completed' | 'failed',
+                  priority: (typeof t.priority === 'string' && VALID_PR.has(t.priority) ? t.priority : undefined) as 'low' | 'medium' | 'high' | undefined,
+                }))
+              if (todos.length > 0) {
+                try {
+                  const { todoWrite } = await import('@/lib/code-team/dev-tools')
+                  await todoWrite({ sessionId: agentSessionId, runId: runId ?? undefined, agentRole: agentName, todos })
+                } catch { /* fail-open — mirror không được phép lỗi ra ngoài */ }
+              }
+            }
+          } catch { /* fail-open */ }
+        }
+      }
+      // (b) QUAN SÁT — đẩy kết quả batch về transcript (bounded 400 chars/call,
+      // cap bởi MAX_TOOL_RESULT_CHARS trong pushToolMessage). Đây là bước quan
+      // sát mà user yêu cầu: kết quả thật HIỆN trong context, không bị mất.
+      if (cliBatchLines.length > 0) {
+        pushToolMessage(messages, {
+          tool: 'cli_tool_results',
+          success: batchAnySuccess,
+          result: `KẾT QUẢ TOOL THẬT inner-loop CLI đã thực thi (harness ghi lại — Đây là SỰ THẬT, đừng làm lại việc đã THÀNH CÔNG):\n${cliBatchLines.join('\n')}`,
+        })
+      }
+
       // FIX 2026-09-14 #1/#7 — hậu xử lý tool result DÙNG CHUNG cho nhánh tuần
       // tự lẫn nhánh fan-in (token accounting · working memory · verify ordinals
       // · evidence · pushToolMessage · tracking cycleCodeModified/StrongVerify).
       const processToolResult = (tc: { name: string; args: Record<string, unknown> }, toolResult: { success: boolean; result: unknown }) => {
+        // 2026-10 — đếm lặp signature cho cả đường TMO tool (mirror đường CLI)
+        noteToolSignature(cycle, tc.name, tc.args, toolResult.success)
         // FIX (R2-b #1) — đánh dấu batch có tool thành công (in-cycle stall brake)
         if (toolResult.success) batchAnySuccess = true
         // CI-2 (Task 11-a) — thu bằng chứng từ tool call THÀNH CÔNG (bảo thủ:
@@ -2025,6 +2411,15 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
         }
       }
 
+      // 2026-10 — SIGNATURE OVERRUN: tool lặp y hệt (tên + args) ≥8 lần trong
+      // run → agent xoay vòng vô nghĩa — cắt chu kỳ giữa chừng, chuyển evaluator
+      // đánh giá lại hướng đi (evaluator sẽ ra directive ĐỔI cách tiếp cận).
+      if (signatureOverrun) {
+        console.warn(`[GoalLoop] ${agentName} SIGNATURE-OVERRUN: tool lặp y hệt vượt ngưỡng 8 lần — cắt chu kỳ ${cycle} giữa chừng, chuyển evaluator`)
+        endedBy = 'iteration_limit'
+        break
+      }
+
       // ===== CI-2 (Task 11-a) — MID-RUN EVIDENCE-BASED AUTO-COMPLETE =====
       // Sau mỗi batch tool call: todo 'in_progress' của ĐÚNG run hiện tại mà
       // nội dung chứa đúng đường dẫn file / lệnh shell của tool call THÀNH CÔNG
@@ -2069,7 +2464,7 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
 
       // CI-1: chỉ chốt 'iteration_limit' khi CÓ trần vòng (cap = 0 thì while
       // không bao giờ tự thoát vì hết vòng — endedBy do điểm thoát thật ghi)
-      if (ITER_PER_CYCLE > 0 && cycleIterations >= ITER_PER_CYCLE) {
+      if (EFFECTIVE_ITER_PER_CYCLE > 0 && cycleIterations >= EFFECTIVE_ITER_PER_CYCLE) {
         endedBy = 'iteration_limit'
       }
     }
@@ -2105,8 +2500,14 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
     // ===== EVALUATE — trọng tài độc lập =====
     console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} kết thúc (${endedBy}, ${cycleToolCalls} tool calls) — gọi evaluator`)
     const strongVerifyToolsAvailable = effectiveTools.some(t => STRONG_VERIFY_TOOLS.has(t))
+    // 2026-10 — directive Opus: evaluator thấy MỤC TIÊU sạch + TỪNG tiêu chí
+    // nghiệm thu (trước đây slice 2000 chars đầu của directive 16k làm mất
+    // phần quan trọng nhất — đánh giá hời hợt theo user).
+    const evaluatorGoal = directiveSpec.acceptance.length > 0
+      ? `${directiveSpec.goal}\n\nTIÊU CHÍ NGHIỆM THU (đối chiếu TỪNG điều — đủ hết mới complete=true):\n${directiveSpec.acceptance.map(a => `- [ ] ${a}`).join('\n')}`
+      : directiveSpec.goal
     let verdict = await evaluateCompletion({
-      goal: userMessage,
+      goal: evaluatorGoal,
       lastAssistantContent: lastContent,
       evidence,
       verifyEvidence: cycleVerifyEvidence,
@@ -2178,6 +2579,21 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
       recordAgentThought(agentSessionId, `🛡 Harness verify-guard: hạ "hoàn thành" → "chưa đạt" — có sửa sau lần kiểm định cuối mà chưa kiểm định lại`, totalIterations)
     }
 
+    // ===== 2026-10 — VERDICT STAGNATION TRACKING (điều kiện renewal) =====
+    // Evaluator ra verdict GIỐNG HỆT chu kỳ trước (incomplete + cùng rootCause +
+    // cùng missing) = bế tắc: agent đã thử mà không đổi được tình thế. ≥3 chu kỳ
+    // liên tiếp như vậy → chặn renewal (đã thấy ở E2E proc2: evaluator tự kết
+    // luận "agent is looping" nhưng renewal vẫn mở thêm cửa sổ chu kỳ).
+    {
+      const stagSig = `${verdict.complete}|${verdict.rootCause}|${verdict.missing.join('§')}`
+      if (stagSig === lastVerdictStagnationSig) {
+        verdictStagnation++
+      } else {
+        verdictStagnation = 0
+        lastVerdictStagnationSig = stagSig
+      }
+    }
+
     // ===== FIX 2026-09-14 #9 + TASK 21 — SIDE ISSUES / DEBT DECISION (trọng
     // tài quyết định thay vì "chấm xong là xong"): mục tiêu hoàn thành NHƯNG có
     // lỗi phát sinh còn tồn tại → lựa chọn của trọng tài:
@@ -2201,24 +2617,26 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
       // rơi vào nhánh ghi nợ + kết thúc.
       if (
         verdict.debtDecision === 'continue' &&
-        MAX_CYCLES !== 0 &&
+        EFFECTIVE_MAX_CYCLES !== 0 &&
         cycle >= effectiveMaxCycles &&
         cycleRenewals < MAX_CYCLE_RENEWALS &&
         debtCyclesRun < MAX_DEBT_CYCLES &&
+        cycleNewSuccessSignatures > 0 && // 2026-10: chu kỳ này PHẢI có hành động thành công MỚI (không phải lặp lại việc cũ)
+        verdictStagnation < 3 && // 2026-10: evaluator không được bế tắc (cùng verdict lặp lại)
         timeLeft() > 0 &&
         tokenLeft() > REPORT_RESERVE_TOKENS + 8_000 &&
         !isCancelled()
       ) {
         cycleRenewals++
-        effectiveMaxCycles += MAX_CYCLES
-        recordAgentThought(agentSessionId, `🔁 TÁI LẬP CỬA SỔ CHU KỲ (lần ${cycleRenewals}/${MAX_CYCLE_RENEWALS}): trọng tài muốn chạy debt cycle cho ${verdict.sideIssues.length} lỗi phát sinh nhưng hết trần chu kỳ → mở thêm ${MAX_CYCLES} chu kỳ để giải quyết tiếp thay vì kết thúc`, totalIterations)
+        effectiveMaxCycles += EFFECTIVE_MAX_CYCLES
+        recordAgentThought(agentSessionId, `🔁 TÁI LẬP CỬA SỔ CHU KỲ (lần ${cycleRenewals}/${MAX_CYCLE_RENEWALS}): trọng tài muốn chạy debt cycle cho ${verdict.sideIssues.length} lỗi phát sinh nhưng hết trần chu kỳ → mở thêm ${EFFECTIVE_MAX_CYCLES} chu kỳ để giải quyết tiếp thay vì kết thúc`, totalIterations)
         evidence.push({ cycle, kind: 'directive', text: `TÁI LẬP cửa sổ chu kỳ (lần ${cycleRenewals}) cho debt cycle — ${verdict.sideIssues.length} side issue(s) chưa xử lý` })
-        console.log(`[GoalLoop] ${agentName} RENEWAL (debt): chu kỳ ${cycle} chạm trần → mở thêm ${MAX_CYCLES} chu kỳ (renewal ${cycleRenewals}/${MAX_CYCLE_RENEWALS}, effectiveMax=${effectiveMaxCycles})`)
+        console.log(`[GoalLoop] ${agentName} RENEWAL (debt): chu kỳ ${cycle} chạm trần → mở thêm ${EFFECTIVE_MAX_CYCLES} chu kỳ (renewal ${cycleRenewals}/${MAX_CYCLE_RENEWALS}, effectiveMax=${effectiveMaxCycles})`)
       }
       const canDebtCycle =
         verdict.debtDecision === 'continue' &&
         debtCyclesRun < MAX_DEBT_CYCLES &&
-        (MAX_CYCLES === 0 || cycle < effectiveMaxCycles) &&
+        (EFFECTIVE_MAX_CYCLES === 0 || cycle < effectiveMaxCycles) &&
         timeLeft() > 0 &&
         tokenLeft() > REPORT_RESERVE_TOKENS + 8_000 &&
         !isCancelled()
@@ -2293,6 +2711,59 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
         : `⚖️ Đánh giá chu kỳ ${cycle}: CHƯA ĐẠT (tin cậy ${Math.round(verdict.confidence * 100)}%) — còn thiếu: ${verdict.missing.join('; ').slice(0, 200) || '(không liệt kê)'}`,
       totalIterations,
     )
+
+    // ===== TASK 21 (2026-10-21) — SHR CUỐI CHU KỲ: verify judgments + 📐 + nén CoT =====
+    // (1) λ-VERIFY: đối chiếu pendingJudgments với bằng chứng tool THẬT của run
+    //     (chống causal parrot — agent tự confirm không bằng chứng → TỪ CHỐI).
+    // (2) 📐 BIÊN ĐỘ DỮ LIỆU: parse khối 📐 từ báo cáo → RunContext (render lại
+    //     directive chu kỳ sau — Task 21-c).
+    // (3) NÉN MẨU CoT: 2 câu REFLECT + cơ chế → mẩu 200-400 ký tự (MDL, không
+    //     gọi model thêm), posterior = confidence trọng tài, chuỗi ≤3 thế hệ.
+    // Toàn bộ fail-open — SHR không bao giờ làm hỏng loop.
+    if (agentSessionId) {
+      let bestMechanics: string | null = null
+      try {
+        const shr = await import('@/lib/structured-hypothesis')
+        const cycleToolEvidence = evidence
+          .filter(e => e.kind === 'tool')
+          .map(e => ({ tool: e.tool ?? '', success: e.success !== false, text: e.text ?? '' }))
+        const verifyRes = await shr.verifyPendingJudgments(agentSessionId, cycleToolEvidence)
+        if (verifyRes.applied.length > 0 || verifyRes.rejected.length > 0) {
+          const promotedNote = verifyRes.promoted.length > 0 ? `, ${verifyRes.promoted.length} PROMOTE (posterior ≥0.80 — vào belief-state chu kỳ sau)` : ''
+          const demotedNote = verifyRes.demoted.length > 0 ? `, ${verifyRes.demoted.length} demote` : ''
+          recordAgentThought(agentSessionId, `🧬 SHR: ${verifyRes.applied.length} phán quyết được xác nhận bằng chứng (α/β cập nhật${promotedNote}${demotedNote})${verifyRes.rejected.length > 0 ? ` · ${verifyRes.rejected.length} BỊ TỪ CHỐI (không tìm bằng chứng khớp)` : ''}`, totalIterations)
+          console.log(`[GoalLoop] ${agentName} SHR verify chu kỳ ${cycle}: applied=${verifyRes.applied.length} rejected=${verifyRes.rejected.length} promoted=${verifyRes.promoted.length} demoted=${verifyRes.demoted.length}`)
+          bestMechanics = verifyRes.applied[0]?.claim ?? null
+        }
+        // (2) 📐 parse + persist RunContext
+        const dataScope = shr.parseDataScopeBlock(lastContent)
+        const usedTools = [...new Set(evidence.filter(e => e.kind === 'tool').map(e => e.tool!))].slice(0, 8)
+        const ctxKeywords = shr.computeContextSignature(directiveSpec.goal, usedTools)
+        await shr.upsertRunContext({
+          runId: runId ?? '',
+          sessionId: agentSessionId,
+          dataScope,
+          goalDigest: directiveSpec.goal.slice(0, 400),
+          contextKeywords: ctxKeywords,
+        })
+        // (3) nén mẩu CoT từ báo cáo chu kỳ (posterior = confidence trọng tài)
+        const cotRes = await shr.compressCycleToSample({
+          sessionId: agentSessionId,
+          agentName,
+          report: lastContent,
+          contextSig: ctxKeywords,
+          posterior: verdict.confidence,
+          parentSampleId: cotParentSampleId,
+          bestMechanics,
+        })
+        if (cotRes.created) {
+          console.log(`[GoalLoop] ${agentName} SHR: nén mẩu CoT chu kỳ ${cycle} (id ${cotRes.id?.slice(-6)})`)
+        }
+        cotParentSampleId = null // chu kỳ sau truy hồi lại (chuỗi nguồn gốc đúng)
+      } catch (err) {
+        console.warn(`[GoalLoop] SHR cuối chu kỳ ${cycle} fail-open: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
 
     // FIX 2026-09-14 #9 — debtMode=true nghĩa là trọng tài vừa chọn 'continue'
     // cho side issues: KHÔNG dừng ở đây — outerLoop chạy tiếp chu kỳ debt.
@@ -2468,24 +2939,48 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
     // cancel. Nếu trần chu kỳ (effectiveMaxCycles) đã chạm mà verdict chưa
     // complete hoặc còn lỗi phát sinh liên quan chưa xử lý → TÁI LẬP thêm 1
     // cửa sổ MAX_CYCLES chu kỳ (bounded bởi MAX_CYCLE_RENEWALS).
+    //
+    // 2026-10 STAGNATION GATE (user report "lặp chu kỳ không tiến triển"): comment
+    // cũ claim "chu kỳ vừa rồi CÓ tiến triển" nhưng code KHÔNG kiểm — E2E proc2
+    // lộ ra: evaluator tự kết luận "agent is looping" nhưng renewal vẫn mở
+    // 12→24. Giờ renewal yêu cầu THẬT SỰ: (a) chu kỳ có ≥1 hành động thành công
+    // MỚI (signature chưa từng chạy trong run), (b) evaluator KHÔNG bế tắc
+    // (không ra cùng verdict lặp lại ≥3 chu kỳ liên tiếp). Không đạt → dừng ở
+    // trần với final report trung thực (Opus/user có thể dispatch run mới).
     if (
-      MAX_CYCLES !== 0 &&
+      EFFECTIVE_MAX_CYCLES !== 0 &&
       cycle >= effectiveMaxCycles &&
       cycleRenewals < MAX_CYCLE_RENEWALS &&
       (!verdict.complete || (verdict.sideIssues.length > 0 && verdict.debtDecision !== 'none')) &&
+      cycleNewSuccessSignatures > 0 &&
+      verdictStagnation < 3 &&
       timeLeft() > 0 &&
       tokenLeft() > REPORT_RESERVE_TOKENS + 8_000 &&
       !isCancelled()
     ) {
       const oldCap = effectiveMaxCycles
       cycleRenewals++
-      effectiveMaxCycles += MAX_CYCLES
+      effectiveMaxCycles += EFFECTIVE_MAX_CYCLES
       const why = !verdict.complete
         ? `mục tiêu CHƯA hoàn thành triệt để (còn thiếu: ${verdict.missing[0]?.slice(0, 120) ?? '(trọng tài không liệt kê)'})`
         : `còn ${verdict.sideIssues.length} lỗi phát sinh liên quan chưa xử lý`
-      recordAgentThought(agentSessionId, `🔁 TÁI LẬP CỬA SỔ CHU KỲ (lần ${cycleRenewals}/${MAX_CYCLE_RENEWALS}): hết trần ${fmtCap(oldCap)} chu kỳ nhưng ${why} → mở thêm ${MAX_CYCLES} chu kỳ để giải quyết tiếp (KHÔNG kết thúc vội)`, totalIterations)
+      recordAgentThought(agentSessionId, `🔁 TÁI LẬP CỬA SỔ CHU KỲ (lần ${cycleRenewals}/${MAX_CYCLE_RENEWALS}): hết trần ${fmtCap(oldCap)} chu kỳ nhưng ${why} → mở thêm ${EFFECTIVE_MAX_CYCLES} chu kỳ để giải quyết tiếp (KHÔNG kết thúc vội)`, totalIterations)
       evidence.push({ cycle, kind: 'directive', text: `TÁI LẬP cửa sổ chu kỳ lần ${cycleRenewals}/${MAX_CYCLE_RENEWALS}: ${why}` })
-      console.log(`[GoalLoop] ${agentName} RENEWAL: chu kỳ ${cycle}/${fmtCap(oldCap)} hết trần nhưng ${why} → mở thêm ${MAX_CYCLES} chu kỳ (renewal ${cycleRenewals}/${MAX_CYCLE_RENEWALS}, effectiveMax=${effectiveMaxCycles})`)
+      console.log(`[GoalLoop] ${agentName} RENEWAL: chu kỳ ${cycle}/${fmtCap(oldCap)} hết trần nhưng ${why} → mở thêm ${EFFECTIVE_MAX_CYCLES} chu kỳ (renewal ${cycleRenewals}/${MAX_CYCLE_RENEWALS}, effectiveMax=${effectiveMaxCycles})`)
+    } else if (
+      EFFECTIVE_MAX_CYCLES !== 0 &&
+      cycle >= effectiveMaxCycles &&
+      (!verdict.complete || (verdict.sideIssues.length > 0 && verdict.debtDecision !== 'none')) &&
+      (cycleNewSuccessSignatures === 0 || verdictStagnation >= 3)
+    ) {
+      // 2026-10 — ghi rõ lý do KHÔNG tái lập (bế tắc) để thought process + log
+      // minh bạch cho user/Opus thấy vì sao run dừng ở trần.
+      const why = verdictStagnation >= 3
+        ? `evaluator lặp cùng verdict ${verdictStagnation} chu kỳ liên tiếp (bế tắc)`
+        : 'chu kỳ vừa rồi không có hành động thành công MỚI nào (chỉ lặp lại việc cũ)'
+      recordAgentThought(agentSessionId, `🛑 KHÔNG tái lập cửa sổ chu kỳ: ${why} — dừng ở trần ${fmtCap(effectiveMaxCycles)} chu kỳ, tổng kết trung thực để Opus/user quyết định bước tiếp`, totalIterations)
+      evidence.push({ cycle, kind: 'directive', text: `KHÔNG tái lập chu kỳ: ${why}` })
+      console.log(`[GoalLoop] ${agentName} RENEWAL-BLOCKED: ${why} — dừng ở trần ${effectiveMaxCycles} chu kỳ`)
     }
 
     // CI-5 (Task 14-b) — CHECKPOINT + HEARTBEAT CUỐI MỖI CHU KỲ: ranh giới quan
@@ -2551,7 +3046,9 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
     // lastContent đang dở. Dùng token reserve → không bao giờ bị cắt ngang.
     if (stopReason !== 'complete' && lastContent) {
       const wrapUp = await generateFinalReport({
-        goal: userMessage,
+        goal: directiveSpec.acceptance.length > 0
+          ? `${directiveSpec.goal}\n\nTIÊU CHÍ NGHIỆM THU:\n${directiveSpec.acceptance.map(a => `- [ ] ${a}`).join('\n')}`
+          : directiveSpec.goal,
         lastContent,
         evidence,
         lastVerdict,
@@ -2627,7 +3124,7 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
       // cuối cùng của agent — tóm tắt cái có thông tin hơn
       const summarySource = stopReason === 'cancelled' && lastContent ? lastContent : content
       taskSummary = distillTaskSummary({
-        goal: userMessage,
+        goal: directiveSpec.goal !== userMessage ? `${directiveSpec.goal} (chỉ đạo Opus)` : userMessage,
         finalContent: summarySource,
         stopReason,
         complete: stopReason === 'complete',

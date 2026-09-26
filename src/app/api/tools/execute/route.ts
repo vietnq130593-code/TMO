@@ -10,7 +10,7 @@
  * Security: validates tool name against builtin + custom registries (no arbitrary execution).
  */
 import { NextRequest, NextResponse } from 'next/server'
-import { executeTool, isBuiltinTool, getAllBuiltinToolNames, getBuiltinToolDefinition } from '@/lib/code-team/tool-executor'
+import { executeTool, isBuiltinTool, getAllBuiltinToolNames, getBuiltinToolDefinition, resolveToolAlias } from '@/lib/code-team/tool-executor'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,11 +31,19 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // 2026-09-26 FIX (Tool health audit): tên CLI-native (bash/read/write/todowrite...)
+    // → alias về tên TMO + chuẩn hóa args TRƯỚC validation. Trước đây route trả 404
+    // "Tool bash not found" ngay cả khi executeTool có thể xử lý (bridge CLI dùng tên
+    // native trong 1 số call — 23 lỗi "Unknown tool" trong ToolMetric 24h).
+    const aliasResolved = resolveToolAlias(tool, args)
+    const effectiveTool = aliasResolved.name
+    const effectiveArgs = aliasResolved.args
+
     // Security: only allow builtin + custom tools. Reject arbitrary names.
-    if (!isBuiltinTool(tool)) {
+    if (!isBuiltinTool(effectiveTool)) {
       try {
         const { isCustomToolRegistered } = await import('@/lib/custom-tool-registry')
-        if (!isCustomToolRegistered(tool)) {
+        if (!isCustomToolRegistered(effectiveTool)) {
           return NextResponse.json(
             { error: `Tool "${tool}" not found in builtin or custom registry` },
             { status: 404 },
@@ -49,7 +57,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const result = await executeTool(tool, args, {
+    const result = await executeTool(effectiveTool, effectiveArgs, {
       agentName: context?.agentName || 'opencode-bridge',
       sessionId: context?.sessionId ?? null,
       runId: context?.runId ?? null,
@@ -59,7 +67,8 @@ export async function POST(request: NextRequest) {
       success: result.success,
       result: result.result,
       duration: result.duration,
-      tool,
+      tool: effectiveTool,
+      ...(effectiveTool !== tool ? { aliasFrom: tool } : {}),
     })
   } catch (err) {
     return NextResponse.json(

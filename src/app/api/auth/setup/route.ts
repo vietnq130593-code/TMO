@@ -29,7 +29,14 @@ export async function GET() {
       { status: 503 },
     )
   }
-  const res = NextResponse.json({ ok: true, expiry: '30d' })
+  // FIX 2026-09-25 (preview iframe 401): trả token trong body để client lưu
+  // localStorage (x-tmo-api-token header qua authedFetch). Cookie SameSite=Lax
+  // bị browser chặn trong cross-site iframe (preview panel) → mọi request
+  // /api/opencode/* bị 401 mãi dù route này trả 200. Header không bị luật
+  // SameSite ràng buộc → đường localStorage hoạt động ở MỌI context.
+  // Cross-site attacker KHÔNG đọc được body này (no CORS) — chỉ same-origin
+  // (chính app) đọc được, tương đương quyền cookie cũ.
+  const res = NextResponse.json({ ok: true, token, expiry: '30d' })
   res.cookies.set('tmo_api_token', token, {
     httpOnly: true,
     sameSite: 'lax',

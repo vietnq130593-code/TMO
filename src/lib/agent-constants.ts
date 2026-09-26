@@ -51,6 +51,17 @@ export const EXTRACTION_MODELS: Record<string, Array<{ id: string; label: string
  *  Deprecated (410): z-ai/glm-5.2 | glm-5.3: không tồn tại (verified 2026-08-27)
  */
 export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string }>> = {
+  // ===== OPENCODE ZEN (FIX 2026-09-25 — E2E tool audit) =====
+  // 13/13 agents thực tế đang chạy provider='zen' (Task 8 migration) nhưng
+  // VALID_PROVIDERS trước đây chỉ có 'nvidia' → create_agent (Omega Agent
+  // Factory) KHÔNG tạo được agent zen — mọi agent mới sinh ra đều dính provider
+  // nvidia với key chết. Thêm zen + 4 model free ĐÃ VERIFY chạy được (Task 5-7).
+  zen: [
+    { id: 'nemotron-3-ultra-free', label: 'nemotron-3-ultra-free (550B MoE — lõi chính, TL/Omega/Opus)' },
+    { id: 'nemotron-3.5-lightning-free', label: 'nemotron-3.5-lightning-free (30B MoE — nhanh, utility)' },
+    { id: 'mimo-v2.6-flash-free', label: 'mimo-v2.6-flash-free (nhẹ — small_model CLI)' },
+    { id: 'space-bunny-free', label: 'space-bunny-free (phụ)' },
+  ],
   nvidia: [
     // Extraction cores (2 lõi — chỉ trích xuất dữ liệu, user directive 2026-09-05)
     { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction chính)' },
@@ -67,6 +78,12 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string }
 
 export const PROVIDER_DATA = [
   {
+    key: 'zen',
+    label: 'OpenCode Zen (free — qua CLI)',
+    icon: '⚡',
+    models: PROVIDER_MODELS.zen,
+  },
+  {
     key: 'nvidia',
     label: 'NVIDIA NIM',
     icon: '🎮',
@@ -76,7 +93,7 @@ export const PROVIDER_DATA = [
 
 // ==================== VALIDATION CONSTANTS ====================
 
-export const VALID_PROVIDERS = ['nvidia']
+export const VALID_PROVIDERS = ['zen', 'nvidia']
 export const VALID_DOMAINS = ['programming', 'algorithm', 'ml', 'meta_cognitive', 'linux', 'security', 'ux_ui', 'mixed']
 // G4 (user request 2026-09-08 — Omega Agent Factory/dispatch): vị trí MỞ RỘNG cho
 // team code — TL/G1/G2-A/G2-B/G3 đã được 5 agent hệ thống (MEGATRON/SHOCWAVE/RAMPAGE/

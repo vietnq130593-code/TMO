@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tooltip as StatusTooltip, TooltipTrigger as StatusTooltipTrigger, TooltipContent as StatusTooltipContent } from '@/components/ui/tooltip'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { toast } from '@/hooks/use-toast'
+import { setApiToken } from '@/lib/api-auth'
 // [perf-split] SelfDirectionModule → next/dynamic (xem dưới)
 import { toast as sonnerToast } from 'sonner'
 // [perf-split] RuntimeMetricsPanel → next/dynamic (xem dưới)
@@ -1374,6 +1375,10 @@ export default function Home() {
   // Phase 2 fix: set tmo_api_token HttpOnly cookie ngay khi page mount.
   // Cookie được tự gửi kèm mọi request /api/workspace + /api/opencode/*
   // → middleware chấp nhận (cookie path) — không cần token trong localStorage.
+  // FIX 2026-09-25 (preview iframe 401): cookie SameSite=Lax bị chặn trong
+  // cross-site iframe (preview panel) → authedFetch 401 mãi. Setup giờ trả
+  // token trong body → lưu localStorage để authedFetch gửi header
+  // x-tmo-api-token (header hoạt động ở mọi context, kể cả iframe).
   useEffect(() => {
     let cancelled = false
     fetch('/api/auth/setup', { credentials: 'same-origin' })
@@ -1381,6 +1386,10 @@ export default function Home() {
       .then(data => {
         if (!cancelled && data?.ok) {
           // Cookie đã set — các request tiếp theo tự mang theo.
+          // Token lưu localStorage cho đường header (iframe-safe).
+          if (typeof data.token === 'string' && data.token.length >= 16) {
+            setApiToken(data.token)
+          }
         }
       })
       .catch(err => console.warn('[auth/setup] cookie setup failed:', err))

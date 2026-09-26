@@ -96,80 +96,54 @@ export async function setOpusKilled(killed: boolean): Promise<OpusSettings> {
 const DIRECTIVE_MESSAGE_CAP = 16000
 
 /**
- * Render verdict thành text tiếng Việt đẹp để chèn vào chat (role='user' —
- * Opus nói vào phiên với danh mình) và làm goal cho agent run kế (auto-dispatch).
+ * Render verdict thành text tiếng Việt để chèn vào chat (role='user' — Opus
+ * nói vào phiên với danh mình) và làm goal cho agent run kế (auto-dispatch).
+ *
+ * 2026-10 USER DIRECTIVE — Chỉ đạo ban hành cho Omega CHỈ GỒM 2 MỤC:
+ *   MỤC 1 — TÓM TẮT VẤN ĐỀ: các vấn đề chính của run vừa xong.
+ *   MỤC 2 — CHỈ ĐẠO BƯỚC TIẾP THEO: cần làm gì + làm như thế nào.
+ * Trước đây 8 sections (mục tiêu/lý do/phạm vi/phân công/nghiệm thu/ngân sách
+ * + 5 trục đánh giá + issues + evidence + điều kiện dừng) dài tới 16k chars —
+ * agent bị loãng trọng tâm. Phần review chi tiết (5 trục, evidence, stop
+ * conditions) Opus đã trình bày trong OpusReview panel riêng — KHÔNG lặp lại
+ * trong directive. Verdict JSON (metadata) vẫn GIỮ ĐỦ trường cho UI +
+ * auto-gate; chỉ đổi văn bản ban hành.
  */
 export function formatDirectiveMessage(verdict: OpusVerdict): string {
+  const d = verdict.directive
   const lines: string[] = []
   lines.push(`⚖️ OPUS — CHỈ ĐẠO [${verdict.decision}]`)
-  if (verdict.summary) lines.push(`\n📋 TÓM TẮT: ${verdict.summary}`)
 
-  // ━━ E33 FIX: CHỈ ĐẠO THỰC THI trước, chi tiết đánh giá sau ━━
-  // Trước đây: axes + issues render trước → directive block (chứa goal/scope/
-  // acceptance criteria) ở CUỐI → truncation 16k chars cắt MẤT acceptance
-  // criteria (phần quan trọng nhất cho agent hành động). Giờ directive block
-  // render NGAY sau summary → truncation chỉ cắt verbose axes/issues notes.
-  const d = verdict.directive
+  // ━━ MỤC 1 — TÓM TẮT VẤN ĐỀ ━━
+  const issueLines = verdict.issues.length > 0
+    ? verdict.issues.slice(0, 5).map((iss, i) => {
+        const evi = iss.evidence && iss.evidence !== '(model không dẫn bằng chứng — tự ghi nhận là điểm trừ report honesty)'
+          ? ` (bằng chứng: ${iss.evidence})`
+          : ''
+        return `${i + 1}. [${iss.severity.toUpperCase()}] ${iss.title}${evi}`
+      }).join('\n')
+    : ''
   lines.push('')
-  lines.push('🎯 CHỈ ĐẠO THỰC THI:')
-  lines.push(`• Mục tiêu: ${d.goal || '(không nêu)'}`)
-  lines.push(`• Lý do: ${d.rationale || '(không nêu)'}`)
-  lines.push(`• Phạm vi: ${d.scope || '(không nêu)'}`)
-  lines.push(`• Phân công: ${d.delegation || '(không nêu)'}`)
+  lines.push('📋 TÓM TẮT VẤN ĐỀ:')
+  if (verdict.summary) lines.push(verdict.summary)
+  lines.push(issueLines || '(không có vấn đề blocking — run đạt yêu cầu theo review)')
+
+  // ━━ MỤC 2 — CHỈ ĐẠO BƯỚC TIẾP THEO ━━
+  lines.push('')
+  lines.push('🚀 BƯỚC TIẾP THEO:')
+  if (d.goal) lines.push(`• Mục tiêu: ${d.goal}`)
+  // Cách làm: gộp rationale (cách tiếp cận/vì sao) + delegation (giao ai)
+  const howParts = [d.rationale, d.delegation].filter(Boolean).join(' — ')
+  if (howParts) lines.push(`• Cách làm: ${howParts}`)
+  if (d.scope) lines.push(`• Phạm vi: ${d.scope}`)
   if (d.acceptanceCriteria.length > 0) {
-    lines.push('• Tiêu chí nghiệm thu:')
-    for (const c of d.acceptanceCriteria) lines.push(`   - [ ] ${c}`)
+    lines.push('• Nghiệm thu:')
+    for (const c of d.acceptanceCriteria.slice(0, 6)) lines.push(`   - [ ] ${c}`)
   }
-  if (d.budgetHint) lines.push(`• Ngân sách đề xuất: ${d.budgetHint}`)
-
-  if (verdict.rationale) {
-    lines.push('')
-    lines.push(`💡 LÝ DO QUYẾT ĐỊNH: ${verdict.rationale}`)
-  }
-
-  const a = verdict.axes
-  lines.push('')
-  lines.push('📊 ĐÁNH GIÁ 5 TRỤC (0-10):')
-  lines.push(`• Tuân thủ spec: ${a.specCompliance.score}/10 — ${a.specCompliance.note}`)
-  lines.push(`• Chất lượng quá trình: ${a.processQuality.score}/10 — ${a.processQuality.note}`)
-  lines.push(`• Trạng thái kiểm định: ${a.verification.score}/10 — ${a.verification.note}`)
-  lines.push(`• Rủi ro & nợ kỹ thuật: ${a.riskDebt.score}/10 — ${a.riskDebt.note}`)
-  lines.push(`• Trung thực báo cáo: ${a.reportHonesty.score}/10 — ${a.reportHonesty.note}`)
-
-  if (verdict.issues.length > 0) {
-    lines.push('')
-    lines.push(`🚨 VẤN ĐỀ GHI NHẬN (${verdict.issues.length}):`)
-    verdict.issues.forEach((issue, i) => {
-      lines.push(`${i + 1}. [${issue.severity.toUpperCase()}] ${issue.title}`)
-      if (issue.evidence) lines.push(`   ⟩ Bằng chứng: ${issue.evidence}`)
-      if (issue.suggestedFix) lines.push(`   ⟩ Gợi ý sửa: ${issue.suggestedFix}`)
-    })
-  }
-
-  if (verdict.evidenceRefs.length > 0) {
-    lines.push('')
-    lines.push(`🔍 BẰNG CHỨNG ĐÃ DÙNG: ${verdict.evidenceRefs.join(' · ')}`)
-  }
-
-  const st = verdict.stopAssessment
-  const mark = (b: boolean) => (b ? '✓' : '✗')
-  lines.push('')
-  lines.push(
-    `🏁 ĐIỀU KIỆN DỪNG: ledger sạch ${mark(st.ledgerClean)} · kiểm định xanh ${mark(st.verificationGreen)} · ` +
-      `spec đạt ${mark(st.specSatisfied)} · không blocking mới ${mark(st.noNewBlocking)} → ` +
-      (verdict.decision === 'STOP'
-        ? st.allMet
-          ? 'ĐỦ 4/4 — STOP hợp lệ'
-          : 'CHƯA đủ 4 điều kiện — chưa đủ cơ sở kết thúc theo §VII (tác vụ còn vấn đề tồn; auto mode đã đính chính review lại — model vẫn insist STOP, xem rationale)'
-        : st.allMet
-          ? 'ĐỦ 4/4'
-          : 'CHƯA đủ — vòng lặp tiếp tục')
-  )
-  if (st.notes) lines.push(`   Ghi chú: ${st.notes}`)
 
   const text = lines.join('\n')
   if (text.length <= DIRECTIVE_MESSAGE_CAP) return text
-  return `${text.slice(0, DIRECTIVE_MESSAGE_CAP)}\n[…Opus chỉ đạo bị lược bớt do vượt cap ${DIRECTIVE_MESSAGE_CAP} ký tự — phần CHỈ ĐẠO THỰC THI ở đầu đã giữ nguyên, chỉ verbose đánh giá/issues bị cắt]`
+  return `${text.slice(0, DIRECTIVE_MESSAGE_CAP)}\n[…chỉ đạo bị lược bớt do vượt cap ${DIRECTIVE_MESSAGE_CAP} ký tự]`
 }
 
 // ==================== SERIALIZE (cho API) ====================
@@ -516,11 +490,18 @@ const DISPATCHABLE_DECISIONS: readonly string[] = ['CONTINUE', 'FIX', 'REDIRECT'
  *     tạm dừng chờ user)
  *   - CONTINUE/FIX/REDIRECT + autoDispatch=true → enqueue goal-loop job kế
  * Trả về message đã insert (null khi session đã bị xóa — tombstone).
+ *
+ * noDispatchReason (FIX 2026-09-25 — Omega↔Opus loop vô hạn): khi verdict
+ * dispatchable NHƯNG harness quyết định KHÔNG auto-dispatch (spec đã đạt +
+ * không blocking mới, hoặc vượt circuit breaker) → message vẫn chèn (giá trị
+ * review cho user) kèm footer lý do + metadata opusTerminal=true. Signal C
+ * (directive treo) của auto gate BỎ QUA directive có marker này — đó là
+ * điểm kết có chủ đích, không phải dispatch chết.
  */
 export async function applyOpusVerdict(
   review: { id: string; sessionId: string; triggerMode?: string },
   verdict: OpusVerdict,
-  opts?: { autoDispatch?: boolean; triggerMode?: 'manual' | 'auto' }
+  opts?: { autoDispatch?: boolean; triggerMode?: 'manual' | 'auto'; noDispatchReason?: string }
 ): Promise<ChatMessage | null> {
   // TOMBSTONE GUARD — session đã xóa thì không chèn (không hồi sinh phiên)
   try {
@@ -530,7 +511,11 @@ export async function applyOpusVerdict(
     }
   } catch { /* fail-open — vẫn chèn */ }
 
-  const content = formatDirectiveMessage(verdict)
+  const noDispatchReason = opts?.noDispatchReason?.trim() || ''
+  let content = formatDirectiveMessage(verdict)
+  if (noDispatchReason) {
+    content += `\n\n🛑 TỰ ĐỘNG DỪNG VÒNG LẶP (không dispatch): ${noDispatchReason}`
+  }
   const triggerMode = opts?.triggerMode ?? review.triggerMode ?? 'manual'
   const message = await db.chatMessage.create({
     data: {
@@ -539,6 +524,7 @@ export async function applyOpusVerdict(
       content,
       metadata: JSON.stringify({
         opusDirective: true,
+        opusTerminal: noDispatchReason ? true : undefined,
         opusReviewId: review.id,
         decision: verdict.decision,
         triggerMode, // REVIEW 13-f #5: UI footer "Opus hành động thay Mr. Architect" khi auto
@@ -556,7 +542,7 @@ export async function applyOpusVerdict(
     .catch(() => {})
 
   console.log(
-    `[Opus][pipeline] Directive message ${message.id} đã chèn vào session ${review.sessionId} (decision=${verdict.decision}, ${content.length} chars)`
+    `[Opus][pipeline] Directive message ${message.id} đã chèn vào session ${review.sessionId} (decision=${verdict.decision}, ${content.length} chars${noDispatchReason ? ', KHÔNG dispatch — terminal' : ''})`
   )
 
   if (opts?.autoDispatch && DISPATCHABLE_DECISIONS.includes(verdict.decision)) {
@@ -643,6 +629,46 @@ export async function dispatchDirectiveForReview(reviewId: string): Promise<Chat
 
 /** Chống double-fire: không review session này trong 45s sau review gần nhất */
 const AUTO_REVIEW_DEDUPE_MS = 45_000
+
+/**
+ * CIRCUIT BREAKER (FIX 2026-09-25 — Omega↔Opus loop vô hạn): số directive
+ * auto-dispatch tối đa liên tiếp sau tin nhắn user THẬT gần nhất. Vượt ngưỡng
+ * → auto loop tạm dừng, trả quyền quyết định cho user. Đếm từ tin user thật
+ * cuối cùng để user gửi yêu cầu mới = reset chu kỳ làm việc mới.
+ */
+const MAX_AUTO_DIRECTIVE_ROUNDS = 8
+
+/** Đếm số directive auto đã chèn trong chu kỳ làm việc hiện tại (sau tin user thật cuối cùng). */
+async function countAutoDirectivesThisCycle(sessionId: string): Promise<number> {
+  try {
+    // Tin user thật gần nhất (KHÔNG phải directive của Opus).
+    // LƯU Ý SQL 3-valued logic: metadata NULL (tin user gốc) KHÔNG match
+    // `NOT { metadata: { contains } }` (NULL LIKE → NULL → NOT NULL → NULL →
+    // bị lọc) — phải OR thêm `metadata: null` mới đúng.
+    const lastRealUser = await db.chatMessage.findFirst({
+      where: {
+        sessionId,
+        role: 'user',
+        OR: [
+          { metadata: null },
+          { metadata: { not: { contains: '"opusDirective":true' } } },
+        ],
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: { createdAt: true },
+    })
+    return await db.chatMessage.count({
+      where: {
+        sessionId,
+        role: 'user',
+        metadata: { contains: '"opusDirective":true' },
+        ...(lastRealUser ? { createdAt: { gt: lastRealUser.createdAt } } : {}),
+      },
+    })
+  } catch {
+    return 0 // fail-open — không để lỗi đếm chặn luồng review chính
+  }
+}
 
 /**
  * REVIEW 13-f: ngưỡng "tín hiệu treo" — directive đã ban hành mà không có
@@ -746,7 +772,9 @@ async function passesAutoGate(sessionId: string): Promise<{ pass: boolean; reaso
   if (lastMsg && lastMsg.role === 'user' && now - lastMsg.createdAt.getTime() > STALLED_DIRECTIVE_MS) {
     const meta = parseMetadata(lastMsg.metadata)
     const decision = typeof meta?.decision === 'string' ? meta.decision : ''
-    if (meta?.opusDirective === true && DISPATCHABLE_DECISIONS.includes(decision)) {
+    // FIX 2026-09-25: opusTerminal = điểm kết CÓ CHỦ ĐÍCH (SATISFIED-SPEC
+    // GUARD / CIRCUIT BREAKER) — không phải dispatch chết → không re-review.
+    if (meta?.opusDirective === true && !meta?.opusTerminal && DISPATCHABLE_DECISIONS.includes(decision)) {
       const activeJob = await db.goalLoopJob.findFirst({
         where: { sessionId, status: { in: ['queued', 'running'] } },
         select: { id: true, status: true },
@@ -867,6 +895,54 @@ async function runAutoReviewInner(
     if (await isKilled()) {
       console.log(`[Opus][auto] session=${sessionId} KILL SWITCH bật giữa review — KHÔNG ban hành directive`)
       return
+    }
+
+    // ===== SATISFIED-SPEC GUARD (user report 2026-09-25 — Omega↔Opus loop vô hạn) =====
+    // Predicate §VII yêu cầu verificationGreen mới được STOP — nhưng với task
+    // user ĐÃ WAIVE verification (VD read-only Q&A) hoặc không có machine-check
+    // khả thi, verificationGreen KHÔNG BAO GIỜ true → Opus bị protocol ép
+    // CONTINUE mãi trên deliverable ĐÃ ĐẠT SPEC (tự nó kết luận "task complete,
+    // budget 0, no further action") → mỗi CONTINUE dispatch job → Omega chạy
+    // lại task đã xong → review lại → CONTINUE... (quan sát thật: e2eb trả lời
+    // đúng 18:51, sau đó 5 re-run 20:38→21:02 chỉ vì §VII cấm STOP).
+    // Giải pháp: verdict dispatchable NHƯNG stopAssessment nói spec ĐÃ đạt +
+    // review KHÔNG tạo blocking issue mới → KHÔNG dispatch (directive vẫn chèn
+    // informational, loop kết thúc — các issue còn lại là process-quality debt
+    // cho FUTURE task / user quyết định, không phải việc re-run deliverable).
+    if (DISPATCHABLE_DECISIONS.includes(verdict.decision)) {
+      const st = verdict.stopAssessment
+      if (st.specSatisfied && st.noNewBlocking) {
+        console.log(
+          `[Opus][auto] session=${sessionId} SATISFIED-SPEC GUARD: decision=${verdict.decision} nhưng specSatisfied=true + noNewBlocking=true → KHÔNG dispatch (task đã đạt spec; issues còn lại là process-debt cho future task)`
+        )
+        await applyOpusVerdict(review, verdict, {
+          autoDispatch: false,
+          triggerMode: 'auto',
+          noDispatchReason:
+            'spec gốc đã được đáp ứng (specSatisfied=true) và review không phát hiện blocking issue mới (noNewBlocking=true) — ' +
+            'không còn việc khả thi nào cho agent ở deliverable này; các issue còn mở là process-quality debt cho các task sau.',
+        })
+        return
+      }
+
+      // ===== CIRCUIT BREAKER — giới hạn số vòng auto liên tiếp =====
+      // Bất kể predicate thế nào, auto loop KHÔNG được chạy không giới hạn
+      // (bảo vệ chống mọi pathology loop khác: FIX sinh issue mới → chạy lại →
+      // issue mới...). Vượt ngưỡng → dừng vòng auto, trả quyền cho user.
+      const autoRounds = await countAutoDirectivesThisCycle(sessionId)
+      if (autoRounds >= MAX_AUTO_DIRECTIVE_ROUNDS) {
+        console.warn(
+          `[Opus][auto] session=${sessionId} CIRCUIT BREAKER: đã auto-dispatch ${autoRounds}/${MAX_AUTO_DIRECTIVE_ROUNDS} vòng liên tiếp → tạm dừng auto loop, chờ user`
+        )
+        await applyOpusVerdict(review, verdict, {
+          autoDispatch: false,
+          triggerMode: 'auto',
+          noDispatchReason:
+            `auto loop đã chạy ${autoRounds} vòng liên tiếp (giới hạn ${MAX_AUTO_DIRECTIVE_ROUNDS}) — tạm dừng để tránh lặp vô hạn; ` +
+            'user xem lại ledger/issues rồi chủ động yêu cầu chạy tiếp nếu cần.',
+        })
+        return
+      }
     }
 
     await applyOpusVerdict(review, verdict, {

@@ -1492,6 +1492,26 @@ model ToolAssignment {
   @@index([agentKey])
 }
 
+/// FIX 2026-09-25 (E2E tool audit): skill-access.ts truy vấn SkillAssignment
+/// bằng raw SQL nhưng table chưa từng được tạo trong schema (mọi list_skills/
+/// read_skill đều log lỗi Prisma "no such table: SkillAssignment" dù fail-open).
+/// Thêm model (mirror ToolAssignment, đổi toolName → slug) để Prisma client có
+/// delegate + table thật — per-agent skill gating hoạt động sạch.
+model SkillAssignment {
+  id        String   @id @default(cuid())
+  /// 'MEGATRON'|'SHOCWAVE'|'RAMPAGE'|'SENTINEL'|'CATALYST'|'OMEGA'|'NEW_AGENT'
+  agentKey  String
+  slug      String
+  enabled   Boolean
+  /// 'user' | 'omega' | 'system'
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([agentKey, slug])
+  @@index([agentKey])
+}
+
 /// ToolConfig (Task 21-c): override MÔ TẢ tool builtin — đưa vào prompt LLM
 /// (def.description) + hiển thị UI Tools Registry. KHÔNG đổi executor code.
 model ToolConfig {
@@ -2045,4 +2065,115 @@ model ExperimentRecord {
 
   @@index([missionId, optionId])
   @@index([status])
+}
+
+// ============================================================================
+// SELF-REFLECTION R2 (Task 21 — 2026-10-21) — theo knowledge/SELF_REFLECTION_DESIGN.md
+// SHR structured hypothesis + kho mẩu CoT + RunContext (biên độ dữ liệu xuyên chu kỳ).
+// Đường CLI (OpenCode spawn mới mỗi chu kỳ) mất toàn bộ in-memory state →
+// 3 bảng này là belief-state bền vững: hypothesis sống qua chu kỳ (R2 tier B),
+// mẩu CoT nén tái dùng (trụ cột 3), biên độ dữ liệu chu kỳ 1 render lại (Task 21-c).
+// ============================================================================
+
+/// SHR — Structured Hypothesis Record (SELF_REFLECTION_DESIGN §2). Mỗi hypothesis
+/// = 1 SCM mini: contextSig (biến điều kiện) + intervention (can thiệp do(X)) +
+/// predictedDelta (hệ quả dự kiến — KIỂM ĐỊNH ĐƯỢC) + mechanicsClaim (MỘT quan hệ
+/// nhân quả ≤12 từ — đúng ICM: quan hệ tách bạch để sai không lây sang level khác).
+/// posterior Laplace = (α+1)/(α+β+2). Vòng đời ĐÓNG BĂNG BẰNG CÔNG THỨC:
+///   sinh α=β=0 (posterior 0.5 MaxEnt) · xác nhận α+=1 · bác β+=1
+///   promote: posterior ≥ 0.80 ∧ α+β ≥ 4 → vào belief-state prompt ưu tiên
+///   demote: posterior ≤ 0.35 ∧ α+β ≥ 3 → ra khỏi belief-state
+/// Judgment KHÔNG tự áp dụng ngay — ghi pendingJudgment, harness đối chiếu
+/// bằng chứng tool thật cuối chu kỳ (λ-grounded, chống causal parrot: agent
+/// tự xác nhận không có bằng chứng → bị từ chối).
+model StructuredHypothesis {
+  id             String   @id @default(cuid())
+  sessionId      String
+  agentName      String?
+  /// runId của run sinh ra hypothesis (null = cross-run/legacy)
+  sourceRunId    String?
+  /// chữ ký ngữ cảnh — từ khóa phân tách khoảng trắng (vd "auth jwt token")
+  contextSig     String
+  /// can thiệp — hành động đưa ra giả thuyết (do(X))
+  intervention   String
+  /// hệ quả dự kiến — phải là dự đoán kiểm định được bằng tool
+  predictedDelta String
+  /// MỘT quan hệ nhân quả, ≤ 12 từ khóa
+  mechanicsClaim String
+  alpha          Int      @default(0)
+  beta           Int      @default(0)
+  /// candidate | promoted | demoted | parrot_suspect
+  status         String   @default("candidate")
+  /// JSON {verdict, evidenceTool, evidenceQuote, judgedAt} — chờ harness verify
+  /// đối chiếu bằng chứng tool cuối chu kỳ; rỗng = không có judgment treo
+  pendingJudgment String?
+  /// con trỏ CotSample.id (null = chưa có mẩu nén liên kết)
+  cotRef         String?
+  sourceCycle    Int?
+  lastRenderedAt DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([sessionId, status])
+  @@index([sessionId, contextSig])
+  @@index([status, alpha, beta])
+}
+
+/// KHO MẨU CoT (SELF_REFLECTION_DESIGN §5) — mẩu suy luận nén 200-400 ký tự,
+/// truy hồi theo chữ ký ngữ cảnh (Jaccard ≥ 0.5), nạp tối đa 2 mẩu posterior
+/// cao nhất dưới nhãn "Prior reasoning (may be wrong, verify)". Ngân sách
+/// Kraft: ≤ 64 mẩu/session — đầy thì ghi đè mẩu posterior thấp nhất VÀ lâu
+/// chưa truy hồi nhất (LRU×quality). Chuỗi nguồn gốc ≤ 3 thế hệ (union bound
+/// RUL_UNI_068: sai lệch tích luỹ qua "mẩu dẫn mẩu" = trôi ngữ nghĩa) — thế hệ
+/// 3 = tail, không sinh mẩu thế hệ 4. Drift: Jaccard(con, gốc chuỗi) < 0.4 →
+/// drifted = cấm tái dùng nhánh.
+model CotSample {
+  id              String   @id @default(cuid())
+  sessionId       String
+  agentName       String?
+  /// từ khóa ngữ cảnh (space-joined) — tính Jaccard khi truy hồi
+  contextSig      String
+  /// câu cơ chế chốt (1 câu — nguyên liệu "mech:")
+  mechanics       String
+  /// câu kết luận (dòng ✅ REFLECT — nguyên liệu "concl:")
+  conclusion      String
+  /// mẩu nén đầy đủ: [<id> | ctx: ... | mech: ... | concl: ... | conf: x.xx]
+  sampleText      String
+  /// thế hệ chuỗi nguồn gốc (1..3); 3 = tail
+  generation      Int      @default(1)
+  /// CotSample.id cha (null = gốc)
+  parentRef       String?
+  /// posterior tại thời điểm sinh (hypothesis liên kết hoặc confidence chu kỳ)
+  posterior       Float    @default(0.5)
+  /// true = cấm tái dùng + cấm sinh con (drift/parrot)
+  drifted         Boolean  @default(false)
+  hitCount        Int      @default(0)
+  lastRetrievedAt DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([sessionId, drifted])
+  @@index([sessionId, posterior])
+}
+
+/// TASK 21-c — ngữ cảnh run sống XUYÊN CHU KỲ. Gap Task 19: GĐ0(c) xác định
+/// BIÊN ĐỘ DỮ LIỆU ở chu kỳ 1 nhưng continuation directive KHÔNG render lại →
+/// CLI spawn chu kỳ sau mất định hướng phạm vi (đoán mò path/param quay lại).
+/// Harness parse khối "📐 BIÊN ĐỘ DỮ LIỆU" từ báo cáo chu kỳ → upsert đây →
+/// render lại directive chu kỳ sau. contextKeywords = signature cho CoT retrieval.
+model RunContext {
+  id              String   @id @default(cuid())
+  /// 1-1 với runId của goal-loop run
+  runId           String   @unique
+  sessionId       String
+  /// biên độ dữ liệu đã xác định (nguyên văn khối 📐 từ báo cáo agent)
+  dataScope       String?
+  /// tóm tắt mục tiêu run (từ directive spec — dùng khi render lại)
+  goalDigest      String?
+  /// từ khóa ngữ cảnh space-joined — signature truy hồi mẩu CoT
+  contextKeywords String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([sessionId])
 }
