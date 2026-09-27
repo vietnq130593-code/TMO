@@ -23,8 +23,14 @@
  *      prompt nhỏ) — join('') tái tạo đúng chuỗi ghép gốc.
  *   5. Fail-open tuyệt đối: lỗi bất kỳ → trả prompt KHÔNG cut.
  *
- * Env: SYSTEM_PROMPT_BUDGET_CHARS (default 24000 chars ~ 6k tokens; 0 = không
- * giới hạn) — đọc 1 LẦN ở module level theo chỉ dẫn CI-3 B7.
+ * Env: SYSTEM_PROMPT_BUDGET_CHARS (default 24000 chars ~ 6k tokens; -1 hoặc
+ * 0 = không giới hạn) — đọc 1 LẦN ở module level theo chỉ dẫn CI-3 B7.
+ *
+ * 2026-10-27 (user directive): -1 là sentinel KHÔNG GIỚI HẠN chính thức (giá trị
+ * user dùng) — mọi giá trị âm đều được chuẩn hóa về -1. Ngoài biến môi trường
+ * (mặc định toàn hệ thống), trần prompt còn là LỰA CHỌN THEO TÁC VỤ: caller
+ * truyền promptBudgetChars (-1 = không giới hạn cho đúng tác vụ đó) qua
+ * runGoalDrivenLoop → assembleGoalLoopSystemPrompt → applyPromptBudget.
  */
 
 /** 1 block góp vào system prompt — đơn vị budget */
@@ -62,11 +68,16 @@ const MIN_BLOCK_CUT_CHARS = 500
 /** Độ dài tối đa của marker "…[budget-cut 123456/1234567 chars]" — dùng làm overhead khi tính water-fill */
 const MARKER_MAX_CHARS = 40
 
+/** Sentinel KHÔNG GIỚI HẠN — mọi budget ≤ 0 (kể cả -1) đều có nghĩa unlimited */
+export const PROMPT_BUDGET_UNLIMITED = -1
+
 function readBudgetFromEnv(): number {
   const raw = process.env.SYSTEM_PROMPT_BUDGET_CHARS
   if (raw === undefined || raw.trim() === '') return DEFAULT_BUDGET_CHARS
   const v = Number(raw)
-  if (!Number.isFinite(v) || v < 0) return DEFAULT_BUDGET_CHARS
+  if (!Number.isFinite(v)) return DEFAULT_BUDGET_CHARS
+  // -1 (hoặc bất kỳ giá trị âm nào) = KHÔNG GIỚI HẠN — chuẩn hóa về -1
+  if (v < 0) return PROMPT_BUDGET_UNLIMITED
   return Math.floor(v)
 }
 
@@ -254,8 +265,24 @@ export function applyPromptBudget(
  * tuyệt đối: không bao giờ throw (lỗi → chuỗi ghép KHÔNG cut).
  */
 export function budgetPrompt(blocks: PromptBlock[], context?: string): string {
+  return budgetPromptWith(blocks, undefined, context)
+}
+
+/**
+ * 2026-10-27 (user directive — trần prompt THEO TÁC VỤ): budgetPrompt nhận
+ * override theo tác vụ. budgetOverride <= 0 (-1 = unlimited) → KHÔNG cắt;
+ * undefined/NaN → dùng mặc định hệ thống (SYSTEM_PROMPT_BUDGET_CHARS).
+ */
+export function budgetPromptWith(
+  blocks: PromptBlock[],
+  budgetOverride?: number,
+  context?: string,
+): string {
   try {
-    return applyPromptBudget(blocks, SYSTEM_PROMPT_BUDGET_CHARS, context).prompt
+    const budget = typeof budgetOverride === 'number' && Number.isFinite(budgetOverride)
+      ? Math.floor(budgetOverride)
+      : SYSTEM_PROMPT_BUDGET_CHARS
+    return applyPromptBudget(blocks, budget, context).prompt
   } catch {
     return blocks.map(b => (typeof b?.content === 'string' ? b.content : '')).join('')
   }

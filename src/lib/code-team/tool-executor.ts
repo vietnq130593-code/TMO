@@ -2687,7 +2687,22 @@ export async function executeTool(
             duration: Date.now() - startTime,
           }
         }
-        result = await executeTodoWriteFn(args as any)
+        // 2026-10-27 FIX (E2E Task 26 lộ): bridge tmo_todo (CLI inner loop) POST
+        // /api/tools/execute truyền sessionId/runId qua CONTEXT (env
+        // TMO_SESSION_ID/TMO_RUN_ID của CLI spawn) chứ KHÔNG qua args → trước đây
+        // todoWrite không thấy → todos rơi session 'default' → Thought Progress
+        // panel + buildRunTodosBlock (TODO block chu kỳ sau) + buildPendingDebtBlock
+        // (nợ kỹ thuật đầu run) KHÔNG thấy todos của run. Merge context → args khi
+        // args thiếu (đường goal-loop TMO đã inject sẵn trong args — không đổi).
+        {
+          const todoArgs = args as Record<string, unknown>
+          const merged = {
+            ...todoArgs,
+            ...(!todoArgs.sessionId && context?.sessionId ? { sessionId: context.sessionId } : {}),
+            ...(!todoArgs.runId && context?.runId ? { runId: context.runId } : {}),
+          }
+          result = await executeTodoWriteFn(merged as any)
+        }
         break
       case 'todo_read':
         if (!isFlagEnabled('ENABLE_TODO_TOOL')) {
@@ -2697,7 +2712,16 @@ export async function executeTool(
             duration: Date.now() - startTime,
           }
         }
-        result = await executeTodoReadFn(args as any)
+        // 2026-10-27 FIX (đồng bộ todo_write): bridge truyền sessionId qua
+        // context — merge vào args khi thiếu để todo_read đọc ĐÚNG session run.
+        {
+          const todoReadArgs = args as Record<string, unknown>
+          const mergedRead = {
+            ...todoReadArgs,
+            ...(!todoReadArgs.sessionId && context?.sessionId ? { sessionId: context.sessionId } : {}),
+          }
+          result = await executeTodoReadFn(mergedRead as any)
+        }
         break
       // ===== Task 21 (2026-10-21) — SHR structured hypothesis (R2 self-reflection) =====
       case 'hypothesis_write': {

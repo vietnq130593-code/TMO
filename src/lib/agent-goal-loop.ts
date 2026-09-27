@@ -105,7 +105,7 @@ import { archiveContext, recallContext } from '@/lib/context-store'
 // (chỉ skills 16k/HOT 2k có cap riêng) + protocol của loop ghép lại vượt
 // SYSTEM_PROMPT_BUDGET_CHARS (mặc định 24k) → cắt block priority thấp nhất
 // giữ đầu. Tổng < budget → prompt GIỮ NGUYÊN 100%.
-import { budgetPrompt } from '@/lib/prompt-budget'
+import { budgetPromptWith } from '@/lib/prompt-budget'
 // CI-5 (Task 14-b) — DURABLE GOAL LOOP: contract types dùng chung với worker
 // nền (14-a, goal-loop-worker.ts) — TYPE-ONLY import (erased lúc build, 0
 // runtime dependency, không circular). Khi `durable` KHÔNG được truyền vào
@@ -485,6 +485,7 @@ GIAI ĐOẠN 2 — TRIỂN KHAI (mỗi hành động đều có suy nghĩ):
 GIAI ĐOẠN 3 — KIỂM ĐỊNH & BÁO CÁO (BẮT BUỘC trước khi kết luận):
 - Với tác vụ tạo/sửa file, code, lệnh, dữ liệu: PHẢI kiểm định bằng tool thật — file_read đọc lại kết quả, run_tests / lint / type_check, shell kiểm tra output. Bằng chứng phải nằm trong KẾT QUẢ TOOL.
 - Khi type_check/lint/run_tests FAIL: đọc errorCount + thông báo lỗi cụ thể từng file trong KẾT QUẢ TOOL — KHÔNG đoán nguyên nhân; nếu output không đủ để xác định lỗi cụ thể thì báo rõ "không xác định được nguyên nhân cụ thể". Tool fail KHÔNG đồng nghĩa "đã kiểm định".
+- XÁC ĐỊNH NỢ KỸ THUẬT → QUYẾT ĐỊNH LẶP LẠI GĐ0 (user directive 2026-10-27): khi kiểm định, đối chiếu và liệt kê CÁC LỖI PHÁT SINH còn tồn tại (nợ kỹ thuật của chu kỳ — tool fail chưa xử lý, lint/test lỗi ở file đã đụng, hành vi hỏng do thay đổi của chu kỳ tạo ra...). Nếu CÒN nợ → chu kỳ tiếp theo QUAY LẠI GĐ0 với TOÀN BỘ nợ được ƯU TIÊN triển khai TRƯỚC, sau đó mới tới phần việc khác. Trọng tài độc lập sẽ phán quyết việc này từ bằng chứng — hãy phản ánh trung thực từng lỗi còn tồn tại trong báo cáo (không che giấu, không tuyên bố sạch khi chưa kiểm định đủ).
 - CHỈ được kết luận hoàn thành khi bằng chứng kiểm định thực sự KHỚP mục tiêu.
 - Kết thúc chu kỳ bằng báo cáo đủ 4 phần: đã làm gì · bằng chứng tool (tên tool + kết quả ngắn) · còn thiếu gì · đề xuất khắc phục. Chốt thêm 2 dòng TỰ PHẢN CHIẾU:
   "✅ Đã CHẮC CHẮN (có bằng chứng tool): ..." / "❓ Còn CHƯA CHẮC (giả thuyết cần kiểm tra ở chu kỳ sau): ..." — phân biệt cái đã kiểm chứng với cái còn đoán. Hệ thống GIỮ LẠI các mục ❓ xuyên chu kỳ và nhắc lại ở chu kỳ sau (mục treo ≥2 chu kỳ bị đánh dấu ưu tiên) — viết ❓ THẬT sự cần kiểm chứng, đã kiểm chứng xong thì BỎ KHỎI danh sách.
@@ -649,10 +650,16 @@ export function assembleGoalLoopSystemPrompt(params: {
   toolSchemasBlock?: string
   /** nhãn context cho log 1 dòng khi có cut */
   agentName?: string
+  /**
+   * 2026-10-27 (user directive — trần prompt THEO TÁC VỤ): override budget ký
+   * tự cho ĐÚNG tác vụ này. -1 (hoặc ≤0) = KHÔNG GIỚI HẠN; undefined = dùng
+   * mặc định hệ thống SYSTEM_PROMPT_BUDGET_CHARS.
+   */
+  promptBudgetChars?: number
 }): string {
   const { systemPrompt, hasDelegation, hasOrchestration, hasDispatch, hasCreate, preActBlock, agentName } = params
   try {
-    return budgetPrompt(
+    return budgetPromptWith(
       [
         { name: 'base', content: systemPrompt, priority: 10 },
         { name: 'goalProtocol', content: buildGoalProtocol(), priority: 100 },
@@ -669,6 +676,7 @@ export function assembleGoalLoopSystemPrompt(params: {
         { name: 'confidenceProtocol', content: buildConfidenceProtocol(), priority: 70 },
         { name: 'preAct', content: preActBlock, priority: 60 },
       ],
+      params.promptBudgetChars,
       `goal-loop:${agentName || 'agent'}`,
     )
   } catch (err) {
@@ -744,6 +752,48 @@ async function buildRunTodosBlock(sessionId: string | null | undefined, runId: s
   } catch { return '' /* fail-open — todo không được phép làm hỏng loop */ }
 }
 
+/**
+ * 2026-10-27 (user directive — CƠ CHỂ XỬ LÝ NỢ Todo follow-up TẠI THỜI ĐIỂM
+ * RÕ RẰNG): Todo follow-up (nợ kỹ thuật — trọng tài ghi khi run cũ kết thúc
+ * còn side issues ngoài quyền) trước đây CHỈ được ghi ra DB rồi "ngủ" — không
+ * có thời điểm nào hệ thống nhặt lên xử lý. Giờ: THỜI ĐIỂM XỬ LÝ = ĐẦU MỖI RUN
+ * MỚI trong cùng session. Harness đọc các Todo follow-up pending từ các run
+ * TRƯỚC (source arbiter_side_issue, loại run hiện tại) → render khối ưu tiên
+ * đặt TRƯỚC user message của run mới → agent phải xử lý nợ TRƯỚC việc mới.
+ *
+ * Mỗi mục kèm id để agent ĐÓNG ĐÚNG row bằng todo_write({id, status}) —
+ * todoWrite update-by-id không đổi runId gốc (chỉ backfill khi null) nên
+ * không giành todo về run hiện tại. Fail-open tuyệt đối.
+ */
+export async function buildPendingDebtBlock(sessionId: string | null | undefined, currentRunId: string | null): Promise<string> {
+  if (!sessionId) return ''
+  try {
+    const { db } = await import('@/lib/db')
+    const pending = await db.todo.findMany({
+      where: {
+        sessionId,
+        status: 'pending',
+        content: { startsWith: '🔁 Follow-up' },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 10,
+    })
+    // Chỉ nợ từ các run KHÁC (run hiện tại chưa tồn tại nợ — filter JS cho
+    // an toàn với runId null của data cũ)
+    const debt = pending.filter(t => t.runId !== currentRunId)
+    if (debt.length === 0) return ''
+    console.log(`[GoalLoop] NỢ KỸ THUẬT: nhặt ${debt.length} Todo follow-up pending từ các run trước trong session ${sessionId} → ưu tiên xử lý đầu run`)
+    const lines = debt.map(t => `- [id ${t.id}] ${t.content.replace(/^🔁 Follow-up \([^)]*\):\s*/, '')}`)
+    return `[📋 NỢ KỸ THUẬT CÒN TREO — ƯU TIÊN XỬ LÝ TRƯỚC VIỆC MỚI (user directive 2026-10-27)]
+Các run trước trong phiên này còn ${debt.length} nợ kỹ thuật chưa xử lý (trọng tài đã ghi Todo follow-up). Thứ tự ưu tiên SẮT của run này:
+1. XỬ LÝ TOÀN BỘ nợ dưới đây TRƯỚC TIÊN (đưa từng mục vào todo_write kế hoạch, đặt TRƯỚC các việc mới).
+2. Xử lý xong mục nào → gọi todo_write với ĐÚNG "id" của mục đó + status "completed" (đóng row cũ — KHÔNG tạo row trùng nội dung).
+3. Mục nào vẫn nằm ngoài quyền sửa (hạ tầng được bảo vệ / chờ phê duyệt) → nêu rõ trạng thái trong báo cáo, KHÔNG xóa bỏ.
+4. Hết nợ mới làm việc mới của yêu cầu hiện tại.
+${lines.join('\n')}`
+  } catch { return '' /* fail-open — nợ kỹ thuật không được phép làm hỏng run mới */ }
+}
+
 /** Directive nối tiếp chu kỳ — chẩn đoán + kế hoạch mới từ evaluator */
 function buildContinuationDirective(v: EvalVerdict, cycle: number, cutMidWork: boolean, maxCyclesDisplay: number = EFFECTIVE_MAX_CYCLES, doneSummary?: string): string {
   const missing = v.missing.length > 0 ? v.missing.map(m => `- ${m}`).join('\n') : '- (trọng tài không liệt kê cụ thể — tự rà soát lại mục tiêu)'
@@ -755,17 +805,23 @@ function buildContinuationDirective(v: EvalVerdict, cycle: number, cutMidWork: b
   const done = doneSummary
     ? `\n✅ Việc chu kỳ trước ĐÃ làm thành công (KHÔNG làm lại — chỉ kiểm tra khi còn nghi ngờ): ${doneSummary}\n`
     : ''
+  // 2026-10-27 (user directive — GĐ3 quyết định lặp lại GĐ0 theo NỢ KỸ THUẬT):
+  // mục tiêu CHƯA đạt + chu kỳ trước có lỗi phát sinh còn tồn tại → chu kỳ này
+  // quay về GĐ0, TOÀN BỘ nợ được ƯU TIÊN xử lý TRƯỚC phần việc còn thiếu.
+  const debtPriority = v.sideIssues.length > 0
+    ? `\n📌 NỢ KỸ THUẬT chu kỳ trước còn tồn tại (ƯU TIÊN xử lý TRƯỚC khi làm phần việc còn thiếu):\n${v.sideIssues.map(s => `- ${s}`).join('\n')}\n`
+    : ''
   return `[GOAL-LOOP: Chu kỳ ${cycle}/${fmtCap(maxCyclesDisplay)}] Mục tiêu CHƯA hoàn thành theo đánh giá độc lập (độ tin cậy ${Math.round(v.confidence * 100)}%).${cut}${done}
 
 ❌ Còn thiếu:
 ${missing}
-
+${debtPriority}
 🔍 Vấn đề nằm ở: ${v.rootCause || '(chưa xác định được nguyên nhân gốc)'}${!v.verified ? '\n⚠️ Bạn CHƯA kiểm định kết quả bằng tool thật ở chu kỳ trước — chu kỳ này PHẢI có bằng chứng kiểm định.' : ''}
 
 📋 Kế hoạch tiếp theo:
 ${plan}
 
-Hãy: (1) cập nhật todo_write với kế hoạch trên (điều chỉnh nếu thấy hợp lý hơn), (2) khắc phục vấn đề, (3) KIỂM ĐỊNH LẠI bằng tools để có bằng chứng. KHÔNG lặp lại đúng hành động đã thất bại — nếu cách cũ fail, đổi cách tiếp cận.`
+Hãy: (1) cập nhật todo_write với kế hoạch trên (nợ kỹ thuật xếp TRƯỚC, điều chỉnh nếu thấy hợp lý hơn), (2) khắc phục vấn đề, (3) KIỂM ĐỊNH LẠI bằng tools để có bằng chứng. KHÔNG lặp lại đúng hành động đã thất bại — nếu cách cũ fail, đổi cách tiếp cận.`
 }
 
 /**
@@ -816,7 +872,7 @@ Nguyên tắc SẮT:
 8. E2E VERIFICATION (sửa code nhưng chỉ đọc lại file): mục tiêu có SỬA CODE mà bằng chứng kiểm định chỉ là file_read/grep (KHÔNG run_tests/lint/type_check dù thông báo hệ thống nói tool có sẵn) → chỉ chấp nhận "complete": true khi thay đổi là thuần hiển thị/nội dung tĩnh; thay đổi LOGIC → "complete": false và thêm vào "missing": "chạy run_tests/lint/type_check để kiểm định thay đổi logic".
 9. SIDE ISSUES (lỗi phát sinh trong quá trình làm — tool fail, lint/test lỗi ở file run đã đụng, lỗi logic do thay đổi của run tạo ra, config/hành vi hỏng...): liệt kê vào "sideIssues" (tối đa 4, ngắn gọn). Mục tiêu chính ĐẠT nhưng CÓ side issues còn tồn tại → "complete": true vẫn đúng cho MỤC TIÊU GỐC (đừng hạ complete vì lỗi ngoài mục tiêu), NHƯNG run chưa thể kết thúc khi các lỗi liên quan còn treo — chọn "debtDecision" theo mức độ LIÊN QUAN:
    - "continue": MẶC ĐỊNH cho mọi side issue LIÊN QUAN đến công việc của run này (lint/test fail ở file đã đụng, lỗi phát sinh từ thay đổi của run, tool fail chưa xử lý được, hành vi hỏng do run tạo...) → hệ thống TÁI LẬP chu kỳ debt xử lý NGAY trong run này (nhiều đợt liên tiếp nếu cần). Tác vụ chỉ thực sự trọn vẹn khi các vấn đề phát sinh liên quan đã được giải quyết — ĐỪNG vội phán kết thúc khi còn lỗi treo.
-   - "record": CHỈ khi issue nằm NGOÀI khả năng xử lý của agent (thiếu tool/quyền, lỗi hạ tầng vendor, thuộc phạm vi agent khác, bị infra-guard/hệ thống chặn sửa — kể cả khi agent đã trình phê duyệt và đang chờ) → hệ thống ghi nợ kỹ thuật (Todo follow-up).
+   - "record": CHỈ khi issue nằm NGOÀI khả năng xử lý của agent. Đây là lỗi thuộc HẠ TẦNG ĐƯỢC BẢO VỆ hoặc vượt phạm vi agent: (a) bị infra-guard chặn sửa — file cấu hình/hạ tầng hệ thống (.env, package.json, prisma/, db/, opencode config...) được bảo vệ khỏi agent tự sửa vì agents chạy tự chủ, sửa sai hạ tầng có thể phá vỡ toàn hệ thống; (b) cần quyền/phê duyệt cấp hệ thống (Mr. Architect / Self-Direction) — kể cả khi agent đã trình phê duyệt và đang chờ; (c) lỗi hạ tầng bên thứ 3 (vendor/LLM provider) không thể sửa từ bên trong; (d) thiếu tool hoàn toàn cho việc đó; (e) thuộc phạm vi chức trách agent khác. Các lỗi này KHÔNG phải agent kém — chúng ta thiết kế phân quyền có chủ đích để thay đổi hạ tầng phải qua phê duyệt → hệ thống ghi nợ kỹ thuật (Todo follow-up) chờ người quản trị quyết định.
    - "none": CHỈ khi issue tầm thường/đã tự hết và KHÔNG liên quan gì đến thay đổi của run.
    KHÔNG dùng side issues để hạ "complete" khi mục tiêu chính đã đạt theo bằng chứng — nhưng cũng KHÔNG dùng "record"/"none" để né xử lý lỗi liên quan còn giải quyết được trong run này.
 10. DEBT CHECK (áp dụng khi prompt có khối "CÁC LỖI PHÁT SINH CHƯA XỬ LÝ" — danh sách trọng tài đã quyết định xử lý ở các chu kỳ trước): đối chiếu TỪNG lỗi với bằng chứng chu kỳ này. Lỗi nào CHƯA có bằng chứng máy xác nhận đã khắc phục (fix xong + verify pass) → PHẢI liệt kê lại vào "sideIssues" và đặt "debtDecision": "continue". KHÔNG phán hoàn thành sạch khi danh sách còn mục chưa đối chiếu được bằng chứng khắc phục.
@@ -1305,6 +1361,12 @@ export async function runGoalDrivenLoop(params: {
   agentTools?: string[]
   agentSessionId?: string | null
   /**
+   * 2026-10-27 (user directive — trần prompt THEO TÁC VỤ): override budget ký
+   * tự system prompt cho ĐÚNG run này. -1 (hoặc ≤0) = KHÔNG GIỚI HẠN;
+   * undefined = mặc định hệ thống (SYSTEM_PROMPT_BUDGET_CHARS).
+   */
+  promptBudgetChars?: number
+  /**
    * CI-5 (Task 14-b) — DURABLE HOOKS (worker nền 14-a truyền vào). HOÀN TOÀN
    * optional — không truyền = hành vi inline cũ 100% (feature flag off path):
    *   - resumeState  → khôi phục từ checkpoint sau crash/restart: messages dùng
@@ -1331,6 +1393,7 @@ export async function runGoalDrivenLoop(params: {
     agentMaxTokens,
     agentTools = [],
     agentSessionId = null,
+    promptBudgetChars,
     durable,
   } = params
 
@@ -1393,6 +1456,8 @@ export async function runGoalDrivenLoop(params: {
         return agentTools.length > 0 ? buildCompactToolSchemasSection(agentTools) : ''
       } catch { return '' }
     })(),
+    // 2026-10-27 — trần prompt theo tác vụ: -1 = không giới hạn (user directive)
+    promptBudgetChars,
   })
 
   // CI-5 (Task 14-b) — RESUME: capture 1 lần, mọi nhánh dưới guard bằng
@@ -1484,6 +1549,13 @@ export async function runGoalDrivenLoop(params: {
   // đã nằm sẵn trong messages snapshot — nạp lại là lặp thông tin).
   const priorTaskSummariesBlock = resumeState ? '' : await buildPriorTaskSummariesBlock(agentSessionId, userMessage)
 
+  // 2026-10-27 (user directive — THỜI ĐIỂM XỬ LÝ NỢ Todo follow-up): đầu MỖI
+  // RUN MỚI trong cùng session, harness nhặt các Todo follow-up pending từ
+  // các run trước → khối ưu tiên đặt TRƯỚC user message → agent xử lý nợ
+  // TRƯỚC việc mới (chi tiết buildPendingDebtBlock). RESUME: không inject lại
+  // (nợ đã nằm trong transcript snapshot nếu run trước thấy).
+  const pendingDebtBlock = resumeState ? '' : await buildPendingDebtBlock(agentSessionId, runId)
+
   // ===== Conversation state =====
   // CI-3 B4: có summary block mà tổng context (summary + 6 message cuối) vượt
   // ngưỡng nén → GIẢM 6 message cuối xuống 4 (summary đã thay phần bức tranh
@@ -1507,6 +1579,7 @@ export async function runGoalDrivenLoop(params: {
         { role: 'system', content: fullSystemPrompt },
         ...(priorTaskSummariesBlock ? [{ role: 'user' as const, content: priorTaskSummariesBlock }] : []),
         ...chatHistory.slice(-historyTake).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+        ...(pendingDebtBlock ? [{ role: 'user' as const, content: pendingDebtBlock }] : []),
         { role: 'user', content: userMessage },
       ]
   // goalMsgIndex: run thường = index user message cuối — compressConversation
@@ -1523,6 +1596,11 @@ export async function runGoalDrivenLoop(params: {
   const goalMsgIndex = resumeState ? 0 : messages.length - 1
   if (priorTaskSummariesBlock) {
     console.log(`[GoalLoop] ${agentName} nạp tóm tắt các tác vụ trước trong session (${priorTaskSummariesBlock.length} chars) trước ${historyTake} message cuối — bức tranh dài hạn cho run mới`)
+  }
+  // 2026-10-27 — Thought Progress ghi rõ run này mở đầu bằng xử lý nợ kỹ thuật
+  // (nguồn: Todo follow-up pending từ các run trước — xem buildPendingDebtBlock)
+  if (pendingDebtBlock) {
+    recordAgentThought(agentSessionId, '📋 NỢ KỸ THUẬT CÒN TREO: harness nhặt Todo follow-up pending từ các run trước trong phiên — run này ƯU TIÊN xử lý nợ TRƯỚC việc mới (user directive 2026-10-27)', 0)
   }
 
   const evidence: EvidenceEntry[] = resumeState
@@ -1800,6 +1878,14 @@ export async function runGoalDrivenLoop(params: {
     if (tokenLeft() <= REPORT_RESERVE_TOKENS) { stopReason = 'token_budget'; break }
     cyclesAttempted = cycle
 
+    // 2026-10-27 (user directive — Thought Progress ghi rõ TỪNG GĐ) — GĐ0 marker
+    // cho chu kỳ ĐẦU của run: quan sát & phân tích bối cảnh đầu vào trước khi
+    // hành động. (Chu kỳ sau: GĐ0 marker nằm trong thought debt/continuation
+    // bên dưới — ghi cùng lúc inject directive.)
+    if (!lastVerdict && !debtMode) {
+      recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ0 QUAN SÁT & PHÂN TÍCH: trích yêu cầu mục tiêu + tiêu chí nghiệm thu, quét môi trường làm việc (file_list/grep trước khi đoán), xác định biên độ dữ liệu cần đọc — trước mọi hành động`, totalIterations)
+    }
+
     // Cycle > 1 → inject continuation directive (chẩn đoán + kế hoạch mới)
     // [G] + advisory của Omega (nếu auto-escalate đã chạy ở cuối chu kỳ trước)
     if (cycle > 1 && lastVerdict) {
@@ -1815,16 +1901,16 @@ export async function runGoalDrivenLoop(params: {
         // 2026-10-20 TASK 20 — debt cycle cũng là CLI spawn mới: kèm TODO block
         // để agent thấy todo còn mở của run (nhất quán với continuation directive)
         const debtTodosBlock = await buildRunTodosBlock(agentSessionId, runId)
-        const debtDirective = `[GOAL-LOOP: Chu kỳ ${cycle}/${fmtCap(effectiveMaxCycles)} — DEBT CYCLE] Mục tiêu chính ĐÃ HOÀN THÀNH theo trọng tài độc lập ✅ — KHÔNG làm lại việc đã xong.
+        const debtDirective = `[GOAL-LOOP: Chu kỳ ${cycle}/${fmtCap(effectiveMaxCycles)} — CHU KỲ DEBT: quay lại GĐ0] Mục tiêu chính ĐÃ HOÀN THÀNH theo trọng tài độc lập ✅ — KHÔNG làm lại việc đã xong.
 
-Chu kỳ này chỉ xử lý CÁC LỖI PHÁT SINH trong quá trình làm (trọng tài phân loại nghiêm trọng):
+Chu kỳ này quay về GĐ0 (quan sát & phân tích) với thứ tự ưu tiên SẮT: TOÀN BỘ nợ kỹ thuật dưới đây được ƯU TIÊN triển khai TRƯỚC TIÊN — xử lý xong hết nợ mới tới phần việc khác (nếu mục tiêu còn việc chưa xong):
 ${debtList}
 
-Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc phục từng lỗi, (3) KIỂM ĐỊNH bằng tool thật (run_tests/lint/type_check), (4) KHÔNG mở việc mới ngoài các lỗi trên. Xong hết → báo cáo ngắn từng lỗi đã xử lý + bằng chứng.
-Lỗi NGOÀI QUYỀN (2026-10-27 — debt cycle từng lặp vô hạn vì lỗi bị guard chặn): lỗi do cấu hình/hạ tầng bị infra-guard chặn sửa hoặc cần phê duyệt của Mr. Architect → KHÔNG lặp thử sửa: trình qua cơ chế phê duyệt chính thức (nếu có), ghi rõ trạng thái "chờ phê duyệt" vào báo cáo rồi chuyển sang lỗi kế — đó là "đã xử lý phần của agent". Hết debt cycles mà còn lỗi treo ngoài quyền → hệ thống ghi nợ Todo follow-up, KHÔNG khởi động chu kỳ debt mới.${debtTodosBlock}`
+Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý (nợ trước, việc khác sau), (2) khắc phục từng lỗi, (3) KIỂM ĐỊNH bằng tool thật (run_tests/lint/type_check), (4) KHÔNG mở việc mới ngoài danh sách trên khi còn nợ chưa xử lý. Xong hết → báo cáo ngắn từng lỗi đã xử lý + bằng chứng.
+LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu người quản trị): là lỗi thuộc HẠ TẦNG ĐƯỢC BẢO VỆ — infra-guard chặn agent sửa file cấu hình/hạ tầng (.env, package.json, prisma/, db/...) vì agents chạy tự chủ: sửa sai hạ tầng có thể phá vỡ toàn hệ thống (tiền lệ thật 2026-10-20: agent làm task đọc-đếm đã tự cài package + sửa schema). Thay đổi hạ tầng phải qua PHÊ DUYỆT của người quản trị hệ thống (Mr. Architect / Self-Direction). Với lỗi loại này: KHÔNG lặp thử sửa — trình qua cơ chế phê duyệt chính thức (nếu có), ghi rõ trạng thái "chờ phê duyệt" vào báo cáo rồi chuyển sang lỗi kế — đó là "đã xử lý phần của agent". Hết debt cycles mà còn lỗi treo ngoài quyền → hệ thống ghi nợ Todo follow-up, KHÔNG khởi động chu kỳ debt mới.${debtTodosBlock}`
         messages.push({ role: 'user', content: debtDirective })
         evidence.push({ cycle, kind: 'directive', text: `DEBT CYCLE ${cycle}: xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã xong)` })
-        recordAgentThought(agentSessionId, `🔁 DEBT CYCLE ${cycle}: trọng tài quyết định tái khởi động 1 chu kỳ mới để xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã hoàn thành)`, totalIterations)
+        recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ0 QUAN SÁT & PHÂN TÍCH (CHU KỲ DEBT — quay lại GĐ0): trọng tài tái khởi động chu kỳ để xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã hoàn thành) — TOÀN BỘ nợ kỹ thuật ƯU TIÊN triển khai TRƯỚC, sau đó mới tới việc khác`, totalIterations)
         debtMode = false // directive đã inject — chu kỳ debt chạy như chu kỳ thường (verdict cuối cùng quyết định kết thúc)
       } else {
         // ===== FIX 2026-09-14 #8 — MID-RUN SIMILAR-ERROR RECALL =====
@@ -1898,7 +1984,7 @@ Lỗi NGOÀI QUYỀN (2026-10-27 — debt cycle từng lặp vô hạn vì lỗi
         const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles, doneSummary) + similarErrorsBlock + advisoryBlock + runTodosBlock + dataScopeBlock + uncertainBlock + shrBeliefBlock + priorCotBlock
         messages.push({ role: 'user', content: directive })
         evidence.push({ cycle, kind: 'directive', text: `Chu kỳ ${cycle}: chẩn đoán "${lastVerdict.rootCause.slice(0, 120)}" → kế hoạch mới${similarErrorsBlock ? ' + lỗi tương tự đã gặp (episodic memory)' : ''}${advisoryBlock ? ' + tư vấn Omega orchestrator' : ''}` })
-        recordAgentThought(agentSessionId, `🔄 Chu kỳ ${cycle}/${fmtCap(effectiveMaxCycles)} — chẩn đoán: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${similarErrorsBlock ? ' (kèm lỗi tương tự đã gặp)' : ''}${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}`, totalIterations)
+        recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ0 QUAN SÁT & PHÂN TÍCH: đọc kết quả tích lũy + chẩn đoán trọng tài: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${similarErrorsBlock ? ' (kèm lỗi tương tự đã gặp)' : ''}${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}`, totalIterations)
       }
     }
 
@@ -1916,6 +2002,11 @@ Lỗi NGOÀI QUYỀN (2026-10-27 — debt cycle từng lặp vô hạn vì lỗi
     let inCycleStallIters = 0
     let inCycleFp = ''
     let inCycleFpRepeats = 0
+    // 2026-10-27 (user directive — Thought Progress ghi rõ TỪNG GĐ): marker
+    // mỗi giai đoạn chỉ ghi 1 lần/chu kỳ — GĐ1 (lập kế hoạch) khi todo_write
+    // đầu tiên thành công, GĐ2 (triển khai) khi tool thi công đầu tiên thành công.
+    let cycleGd1Recorded = false
+    let cycleGd2Recorded = false
 
     // 2026-10: EFFECTIVE_ITER_PER_CYCLE (cap=0 đã fallback safe-cap 8)
     while (EFFECTIVE_ITER_PER_CYCLE === 0 || cycleIterations < EFFECTIVE_ITER_PER_CYCLE) {
@@ -2210,6 +2301,21 @@ Lỗi NGOÀI QUYỀN (2026-10-27 — debt cycle từng lặp vô hạn vì lỗi
         }
         cliBatchLines.push(`- ${etc.name} → ${ok ? 'THÀNH CÔNG' : 'THẤT BẠI'}${outPreview ? `: ${outPreview}` : ''}`)
 
+        // 2026-10-27 (user directive — Thought Progress ghi rõ TỪNG GĐ): GĐ1
+        // marker khi todo_write đầu tiên của chu kỳ thành công (lập kế hoạch),
+        // GĐ2 marker khi tool thi công đầu tiên thành công. Hai đường (CLI
+        // inner loop + TMO executeTool) dùng chung cờ — ghi đúng 1 lần/chu kỳ.
+        if (ok && agentSessionId) {
+          const todosArg = Array.isArray(etc.args?.todos) ? etc.args.todos.length : undefined
+          if (etc.name === 'todo_write' && !cycleGd1Recorded) {
+            cycleGd1Recorded = true
+            recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ1 LẬP KẾ HOẠCH: todo_write chia nhỏ kế hoạch${todosArg ? ` (${todosArg} mục)` : ''} — mỗi tiêu chí nghiệm thu ≥1 todo, việc xong đánh dấu completed ngay`, totalIterations)
+          } else if (etc.name !== 'todo_write' && !cycleGd2Recorded) {
+            cycleGd2Recorded = true
+            recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ2 TRIỂN KHAI: bắt đầu thực thi bằng tools — mỗi tool call phục vụ tiêu chí nghiệm thu nào, sau mỗi kết quả NGHĨ ý nghĩa rồi mới chọn hành động kế`, totalIterations)
+          }
+        }
+
         // 2026-10-20 TASK 20 — MIRROR todo từ inner loop CLI vào TMO DB.
         // Native `todowrite` của OpenCode ghi vào storage NỘI BỘ CLI (chết theo
         // spawn) — KHÔNG bao giờ tới TMO DB → chu kỳ sau (spawn mới) mất kế
@@ -2310,6 +2416,20 @@ Lỗi NGOÀI QUYỀN (2026-10-27 — debt cycle từng lặp vô hạn vì lỗi
         // ===== WORKING MEMORY (HOT) — ghi nhận tool đã chạy + kết quả =====
         // [D] Preview thông minh (errorCount + lỗi cụ thể) thay vì cắt 200 ký tự đầu
         const resultPreview = summarizeToolResult(toolResult.result).slice(0, 250)
+
+        // 2026-10-27 (user directive — Thought Progress ghi rõ TỪNG GĐ): GĐ1/GĐ2
+        // marker cho đường TMO executeTool (đôi của hook CLI inner loop bên trên
+        // — chung cờ cycleGd1Recorded/cycleGd2Recorded, ghi đúng 1 lần/chu kỳ).
+        if (toolResult.success && agentSessionId) {
+          const todosArg = Array.isArray(tc.args?.todos) ? tc.args.todos.length : undefined
+          if (tc.name === 'todo_write' && !cycleGd1Recorded) {
+            cycleGd1Recorded = true
+            recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ1 LẬP KẾ HOẠCH: todo_write chia nhỏ kế hoạch${todosArg ? ` (${todosArg} mục)` : ''} — mỗi tiêu chí nghiệm thu ≥1 todo, việc xong đánh dấu completed ngay`, totalIterations)
+          } else if (tc.name !== 'todo_write' && !cycleGd2Recorded) {
+            cycleGd2Recorded = true
+            recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ2 TRIỂN KHAI: bắt đầu thực thi bằng tools — mỗi tool call phục vụ tiêu chí nghiệm thu nào, sau mỗi kết quả NGHĨ ý nghĩa rồi mới chọn hành động kế`, totalIterations)
+          }
+        }
 
         // [C] Harness kiểm đếm bằng chứng kiểm định theo thứ tự thời gian.
         // LƯU Ý: lint/type_check FAIL (có errorCount) VẪN LÀ bằng chứng kiểm định
@@ -2857,6 +2977,25 @@ Lỗi NGOÀI QUYỀN (2026-10-27 — debt cycle từng lặp vô hạn vì lỗi
         : `⚖️ Đánh giá chu kỳ ${cycle}: CHƯA ĐẠT (tin cậy ${Math.round(verdict.confidence * 100)}%) — còn thiếu: ${verdict.missing.join('; ').slice(0, 200) || '(không liệt kê)'}`,
       totalIterations,
     )
+
+    // 2026-10-27 (user directive — GĐ3 kiểm định QUYẾT ĐỊNH lặp lại GĐ0 hay
+    // không): Thought Progress chốt rõ kết quả kiểm định của chu kỳ + quyết
+    // định vòng tiếp. Nợ kỹ thuật tồn đọng → chu kỳ tiếp QUAY LẠI GĐ0 với
+    // TOÀN BỘ nợ được ƯU TIÊN triển khai TRƯỚC, sau đó mới tới việc khác.
+    {
+      const nextDecision = debtMode
+        ? `QUAY LẠI GĐ0 ở chu kỳ ${cycle + 1} (CHU KỲ DEBT) — TOÀN BỘ ${verdict.sideIssues.length} nợ kỹ thuật ƯU TIÊN triển khai TRƯỚC, sau đó mới tới phần việc khác`
+        : verdict.complete
+          ? verdict.sideIssues.length > 0 && verdict.debtDecision === 'record'
+            ? `KHÔNG chạy tiếp trong run này — ${verdict.sideIssues.length} nợ kỹ thuật đã GHI Todo follow-up, sẽ được ưu tiên xử lý ở RUN KẾ TIẾP của phiên (đầu run)`
+            : 'KHÔNG lặp lại — hoàn thành sạch (không còn nợ kỹ thuật)'
+          : `QUAY LẠI GĐ0 ở chu kỳ ${cycle + 1} — khắc phục phần thiếu: ${(verdict.missing[0] || verdict.rootCause || '').slice(0, 120)}`
+      recordAgentThought(
+        agentSessionId,
+        `📍 Chu kỳ ${cycle} — GĐ3 KIỂM ĐỊNH & BÁO CÁO: trọng tài độc lập phán ${verdict.complete ? 'MỤC TIÊU ĐẠT' : 'CHƯA ĐẠT'} (verified=${verdict.verified ? 'có' : 'chưa'} · nợ kỹ thuật tồn đọng: ${debtMode ? verdict.sideIssues.length : verdict.complete && verdict.debtDecision === 'record' ? verdict.sideIssues.length : 0} mục) → quyết định chu kỳ tiếp: ${nextDecision}`,
+        totalIterations,
+      )
+    }
 
     // ===== TASK 21 (2026-10-21) — SHR CUỐI CHU KỲ: verify judgments + 📐 + nén CoT =====
     // (1) λ-VERIFY: đối chiếu pendingJudgments với bằng chứng tool THẬT của run

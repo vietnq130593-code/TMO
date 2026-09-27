@@ -361,7 +361,15 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { messages: clientMessages, model, sessionId, stream, systemPromptAdditions,
             agentInstruction, agentTemperature, agentMaxTokens, agentProfileId, agentProfileName,
-            agentProvider, agentModel, teamMode, teamName } = body
+            agentProvider, agentModel, teamMode, teamName, promptBudgetChars } = body
+
+    // 2026-10-27 (user directive — trần prompt THEO TÁC VỤ): request có thể ghi
+    // đè trần ký tự system prompt cho đúng tác vụ này. -1 (hoặc ≤0) = KHÔNG
+    // GIỚI HẠN; số dương = trần cụ thể; thiếu/NaN = mặc định hệ thống.
+    const effectivePromptBudget: number | undefined =
+      typeof promptBudgetChars === 'number' && Number.isFinite(promptBudgetChars)
+        ? Math.floor(promptBudgetChars)
+        : undefined
 
     if (!clientMessages || !Array.isArray(clientMessages) || clientMessages.length === 0) {
       return NextResponse.json(
@@ -982,6 +990,8 @@ export async function POST(request: NextRequest) {
                 agentMaxTokens,
                 agentTools,
                 agentSessionId: sessionId,
+                // 2026-10-27 — trần prompt theo tác vụ (user directive): -1 = unlimited
+                promptBudgetChars: effectivePromptBudget,
               },
             })
           } catch (enqueueErr) {
@@ -1065,6 +1075,8 @@ export async function POST(request: NextRequest) {
           agentMaxTokens,
           agentTools,
           agentSessionId: sessionId || null,
+          // 2026-10-27 — trần prompt theo tác vụ (user directive): -1 = unlimited
+          promptBudgetChars: effectivePromptBudget,
         })
 
         const content = reactResult.content

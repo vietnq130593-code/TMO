@@ -922,6 +922,9 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   const [messages, setMessages] = useState<SmolabMessage[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  // 2026-10-27 (user directive — trần prompt THEO TÁC VỤ): 'auto' = trần mặc
+  // định hệ thống; 'unlimited' = -1 KHÔNG GIỚI HẠN cho đúng tác vụ sắp gửi.
+  const [promptBudgetMode, setPromptBudgetMode] = useState<'auto' | 'unlimited'>('auto')
   // MODEL POLICY 2026-10-16: minimax-m3 là mặc định (agents độc lập + chat —
   // lõi chính tạm thời, duy nhất khả dụng); kimi/ds là failover backup
   const [selectedModel, setSelectedModel] = useState(restoredCtx.selectedModel || 'minimaxai/minimax-m3')
@@ -3559,6 +3562,8 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         sessionId,
         stream: false,
       }
+      // 2026-10-27 — trần prompt theo tác vụ: bật ∞ → gửi -1 (không giới hạn)
+      if (promptBudgetMode === 'unlimited') chatBody.promptBudgetChars = -1
 
       // Phase D: Inject agent instruction
       if (chatMode === 'single' && selectedAgentId) {
@@ -4876,6 +4881,24 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                 </div>
               )}
               <div className="flex items-center gap-2">
+                {/* 2026-10-27 (user directive) — trần prompt THEO TÁC VỤ: nút nhỏ
+                    cạnh ô nhập. Mặc định (AUTO) = trần hệ thống; bật ∞ = KHÔNG GIỚI
+                    HẠN (-1) cho tác vụ sắp gửi — hợp task lớn cần đầy đủ context. */}
+                <button
+                  type="button"
+                  onClick={() => setPromptBudgetMode(m => (m === 'auto' ? 'unlimited' : 'auto'))}
+                  title={promptBudgetMode === 'auto'
+                    ? 'Trần prompt: MẶC ĐỊNH hệ thống — bấm để chuyển sang KHÔNG GIỚI HẠN (-1) cho tác vụ này'
+                    : 'Trần prompt: KHÔNG GIỚI HẠN (-1) — bấm để quay về MẶC ĐỊNH hệ thống'}
+                  aria-label="Chuyển trần prompt của tác vụ"
+                  className={`chamfer-sm h-8 px-2 shrink-0 text-[10px] font-semibold tracking-wide border transition-colors ${
+                    promptBudgetMode === 'unlimited'
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-400/50 hover:bg-amber-500/30'
+                      : 'bg-slate-950/60 text-stone-400 border-cyan-400/30 hover:text-stone-200 hover:border-cyan-400/50'
+                  }`}
+                >
+                  {promptBudgetMode === 'unlimited' ? 'PROMPT ∞' : 'PROMPT AUTO'}
+                </button>
                 <input
                   ref={chatInputRef}
                   type="text"

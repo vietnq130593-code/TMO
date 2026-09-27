@@ -3735,6 +3735,13 @@ export async function archiveStaleRunTodos(sessionId: string): Promise<number> {
         runId: { not: null },
         ...(activeRunId ? { runId: { not: activeRunId } } : {}),
         status: { in: ['pending', 'in_progress', 'blocked'] },
+        // 2026-10-27 (user directive — NỢ KỸ THUẬT sống qua archive): Todo
+        // follow-up ("🔁 Follow-up...") là NỢ KỸ THUẬT hệ thống ghi ở cuối run
+        // cho RUN SAU xử lý — KHÔNG phải todo task của run cũ. Nếu archive chúng
+        // ở đầu run mới thì buildPendingDebtBlock (cơ chế xử lý nợ đầu run —
+        // user directive 2026-10-27) không bao giờ thấy → nợ ngủ vĩnh viễn.
+        // Giữ nguyên pending; agent xử lý xong tự đánh completed qua todo_write.
+        NOT: { content: { startsWith: '🔁 Follow-up' } },
       },
       data: { status: 'archived', archivedAt: new Date() },
     })

@@ -528,6 +528,8 @@ class GoalLoopWorker {
         agentMaxTokens: jobInput.agentMaxTokens,
         agentTools: jobInput.agentTools ?? [],
         agentSessionId: jobInput.agentSessionId ?? null,
+        // 2026-10-27 — trần prompt theo tác vụ (user directive): -1 = unlimited
+        promptBudgetChars: jobInput.promptBudgetChars,
         durable: {
           resumeState,
           onCheckpoint,
