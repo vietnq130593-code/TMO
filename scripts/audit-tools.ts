@@ -383,15 +383,49 @@ async function main() {
   skip('create_agent', 'native', '', 'tạo agent thật (LLM/KIMI call + DB write) — đã E2E task 20-b')
   skip('dispatch_agent', 'native', '', 'chạy agent loop thật (nhiều LLM call) — đã E2E task 20-b')
 
-  console.log(BOLD('\n── Nhóm flag OFF (SKIP — executor chặn trước khi chạy) ──'))
-  skip('lsp_diagnostics', 'native', 'ENABLE_LSP_DIAGNOSTICS=off', 'flag OFF — executor tốt (get_diagnostics OK), chỉ cần flip .env')
-  skip('browser_screenshot', 'native', 'ENABLE_BROWSER_SCREENSHOT=off', 'flag OFF — cần Playwright chromium')
-  skip('lint', 'native', 'ENABLE_LINT=off', 'flag OFF — executor ESLint json parser sẵn sàng')
-  skip('type_check', 'native', 'ENABLE_TYPE_CHECK=off', 'flag OFF — executor tsc parser sẵn sàng')
-  skip('test_coverage', 'native', 'ENABLE_TEST_COVERAGE=off', 'flag OFF — executor bun test --coverage sẵn sàng')
-  skip('db_query', 'native', 'ENABLE_DB_QUERY=off', 'flag OFF — read-only Prisma $queryRawUnsafe guard sẵn sàng')
-  skip('exit_plan_mode', 'native', 'ENABLE_PLAN_MODE=off', 'flag OFF — cần UI plan-mode approve flow')
-  skip('cron', 'native', 'ENABLE_CRON_TOOL=off', 'flag OFF (cron-scheduler mini-service đang chạy 3004 — chỉ cần flip .env)')
+  // FIX 2026-09-28 (3-tầng audit): skip-list cũ HARDCODE "flag OFF" cho
+  // lsp/lint/type_check/test_coverage/browser_screenshot dù .env hiện đã bật
+  // → báo cáo sai lệch trạng thái thật. Giờ đọc flag THẬT từ process.env
+  // (script đã nạp .env ở trên — chỉ DATABASE_URL bị override): flag ON →
+  // CHẠY THẬT tool trong workspace audit (chứng minh executor + flag wired
+  // end-to-end); flag OFF → skip với note chính xác.
+  console.log(BOLD('\n── Nhóm flag-gated (đọc flag THẬT từ .env — chạy nếu bật) ──'))
+  const flagOn = (name: string) => {
+    const v = (process.env[name] || '').toLowerCase().trim()
+    return v === 'true' || v === '1' || v === 'yes' || v === 'on'
+  }
+  if (flagOn('ENABLE_LSP_DIAGNOSTICS')) {
+    await call('lsp_diagnostics', 'native', 'ENABLE_LSP_DIAGNOSTICS=on', { path: 'src/lib/db.ts' }, { timeoutMs: 300_000, note: 'flag ON — tsc thật (workspace audit: file không có → empty diagnostics vẫn OK)' })
+  } else {
+    skip('lsp_diagnostics', 'native', 'ENABLE_LSP_DIAGNOSTICS=off', 'flag OFF — executor tốt (get_diagnostics OK), chỉ cần flip .env')
+  }
+  if (flagOn('ENABLE_BROWSER_SCREENSHOT')) {
+    await call('browser_screenshot', 'native', 'ENABLE_BROWSER_SCREENSHOT=on', { url: 'http://127.0.0.1:3000/api/health' }, { timeoutMs: 90_000, note: 'flag ON — Playwright chromium chụp app đang chạy (cần binary: bunx playwright install chromium)' })
+  } else {
+    skip('browser_screenshot', 'native', 'ENABLE_BROWSER_SCREENSHOT=off', 'flag OFF — cần Playwright chromium + flip .env')
+  }
+  if (flagOn('ENABLE_LINT')) {
+    await call('lint', 'native', 'ENABLE_LINT=on', {}, { timeoutMs: 180_000, note: 'flag ON — ESLint thật trong workspace audit (repo thật đã live-verify qua /api/tools/execute)' })
+  } else {
+    skip('lint', 'native', 'ENABLE_LINT=off', 'flag OFF — executor ESLint json parser sẵn sàng')
+  }
+  if (flagOn('ENABLE_TYPE_CHECK')) {
+    await call('type_check', 'native', 'ENABLE_TYPE_CHECK=on', {}, { timeoutMs: 300_000, note: 'flag ON — tsc thật trong workspace audit' })
+  } else {
+    skip('type_check', 'native', 'ENABLE_TYPE_CHECK=off', 'flag OFF — executor tsc parser sẵn sàng')
+  }
+  if (flagOn('ENABLE_TEST_COVERAGE')) {
+    await call('test_coverage', 'native', 'ENABLE_TEST_COVERAGE=on', {}, { timeoutMs: 300_000, note: 'flag ON — bun test thật trong workspace audit' })
+  } else {
+    skip('test_coverage', 'native', 'ENABLE_TEST_COVERAGE=off', 'flag OFF — executor bun test --coverage sẵn sàng')
+  }
+  if (flagOn('ENABLE_DB_QUERY')) {
+    await call('db_query', 'native', 'ENABLE_DB_QUERY=on', { query: 'SELECT 1 AS audit_ok' }, { timeoutMs: 30_000, note: 'flag ON — read-only SELECT trên DB audit cô lập' })
+  } else {
+    skip('db_query', 'native', 'ENABLE_DB_QUERY=off', 'flag OFF (mặc định .env — chủ đích an toàn) — read-only Prisma $queryRawUnsafe guard sẵn sàng')
+  }
+  skip('exit_plan_mode', 'native', `ENABLE_PLAN_MODE=${flagOn('ENABLE_PLAN_MODE') ? 'on' : 'off'}`, 'cần UI plan-mode approve flow — không test độc lập được')
+  skip('cron', 'native', `ENABLE_CRON_TOOL=${flagOn('ENABLE_CRON_TOOL') ? 'on' : 'off'}`, 'cron-scheduler mini-service riêng (port 3004) — tool chỉ flip .env khi cần')
 
   // ==================== 3. REPORT ====================
   const ok = rows.filter(r => r.status === 'OK').length
@@ -449,9 +483,24 @@ function buildMarkdownReport(rows: AuditRow[], counts: { ok: number; fail: numbe
   lines.push('## 1. Tổng quan')
   lines.push('')
   lines.push(`- **${counts.ok} OK** / **${counts.fail} FAIL** / **${counts.skip} SKIP** — tổng ${rows.length} tool được audit (61 builtin gốc + \`file_write\` MỚI của Task 21-d + 1 custom tool tự tạo \`audit_hello\` để test hot-register).`)
-  lines.push('- **Tất cả 6 FAIL đều là gateway tools** (gateway_tool + 5 wrapper) — nguyên nhân cấu hình (flag OFF + bridge 18791 down theo on-demand), KHÔNG phải bug executor.')
-  lines.push('- ⚠️ **CẢNH BÁO API KEYS (phát hiện reality)**: cả 3 Tavily key + 3 Jina key trong `.env` đều bị **401 Unauthorized** (hết hạn/thu hồi) — tavily/jina/web_search/web_fetch hiện chỉ chạy nhờ **z-ai-sdk fallback** (CHỈ có trong sandbox z.ai). Trên máy Windows/local không có SDK → 4 tool web này sẽ FAIL cho tới khi thay key mới. Serper vốn 0 key (SDK fallback luôn).')
-  lines.push('- 🐛 **Bug tìm thấy + fix ngay trong 21-d**: `run_tests` (bun path) chạy `bun math.test.ts` thay vì `bun test math.test.ts` (argv.slice(1) làm mất chữ "test") → mọi invocation có target đều fail "Cannot use test outside of the test runner". Đã fix dev-tools.ts — audit sau fix: OK.')
+  // FIX 2026-09-28: các dòng tổng quan dưới đây từng là static text từ Task 21-d
+  // (cảnh báo 401 keys + z-ai-sdk fallback — SDK đã gỡ 2026-10-15, keys mới đã
+  // điền Task 37) → báo cáo mới chạy trên máy có key tốt vẫn in cảnh báo cũ.
+  // Giờ sinh DYNAMIC theo failRows/rows thật của chính lần chạy này.
+  const gatewayFails = failRows.filter(r => r.tool.startsWith('gateway_'))
+  const otherFails = failRows.filter(r => !r.tool.startsWith('gateway_'))
+  if (failRows.length > 0) {
+    const otherFailsText = otherFails.length > 0 ? ` · **${otherFails.length} FAIL khác**: [${otherFails.map(r => r.tool).join(', ')}] (xem nguyên nhân bên dưới)` : ''
+    lines.push(`- ${gatewayFails.length > 0 ? `**${gatewayFails.length} FAIL là gateway tools** (flag ENABLE_GATEWAY_TOOLS=off + bridge 18791 down theo on-demand — cấu hình, KHÔNG phải bug executor)` : 'Không FAIL nào thuộc nhóm gateway.'}${otherFailsText}`)
+  }
+  const webTools = ['tavily', 'serper', 'jina', 'web_search', 'web_fetch'] as const
+  const webFailing = webTools.filter(t => rows.find(r => r.tool === t)?.status === 'FAIL')
+  if (webFailing.length > 0) {
+    lines.push(`- ⚠️ **CẢNH BÁO API KEYS**: [${webFailing.join(', ')}] FAIL trong lần chạy này — kiểm tra TAVILY_API_KEY_1..3 / SERPER_API_KEY_1 / JINA_API_KEY_1..3 trong .env (401 = key hết hạn/thu hồi; chuỗi search/read CHỈ dùng API keys trực tiếp — z-ai-sdk fallback đã gỡ 2026-10-15).`)
+  } else {
+    lines.push(`- ✅ **API keys web (Tavily/Serper/Jina) hoạt động** — cả ${webTools.length} tool web search/read đều PASS trong lần chạy này.`)
+  }
+  lines.push('- 📜 *Lịch sử 21-d*: bug `run_tests` (argv.slice(1) làm mất chữ "test" → "Cannot use test outside of the test runner") đã fix ngay trong 21-d — audit các lần sau: OK.')
   lines.push('')
 
   if (failRows.length > 0) {
