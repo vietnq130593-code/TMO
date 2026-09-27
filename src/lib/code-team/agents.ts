@@ -67,6 +67,10 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     position: 'TL',
     avatar: '👑',
     tools: ['opencode', 'knowledge_search', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'db_query', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'open_workspace', 'verify_and_push', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
+      // Task 42 (user audit Playwright): TL cần browser_screenshot để verify UI
+      // tại checkpoint (start_preview → chụp http://127.0.0.1:<port>) thay vì
+      // chỉ đọc worklog — evidence trực quan cho quyết định CONTINUE/PIVOT.
+      'browser_screenshot',
       // CI-4 B3-B5 (Task 11-c) — structured git tools: khảo sát repo + branch/clone.
       // MEGATRON (TL) có đủ 5 tool — điều phối và tự verify.
       'git_status', 'git_diff', 'git_log', 'git_branch', 'git_clone',
@@ -414,6 +418,24 @@ async function _doSeed(): Promise<boolean> {
             console.log(`[CodeTeam] Phiên-8 prompt refresh: ${def.name} (bỏ branding model cũ + dạy native function calling — Task 39)`)
           } catch (migErr) {
             console.warn(`[CodeTeam] Phiên-8 prompt refresh ${def.name} thất bại (không chặn boot):`, migErr)
+          }
+        }
+        // TASK 42 (user audit "agents có biết gọi Playwright không") — BROWSER
+        // TOOL sync: def có browser_screenshot nhưng row DB có whitelist riêng
+        // (JSON) mà thiếu tool → ADD-IF-MISSING (union — KHÔNG xóa tool khác
+        // user đã cấu hình; rows tools=null tự fallback def nên không cần).
+        if (def.tools.includes('browser_screenshot') && existing.tools) {
+          try {
+            const parsedTools = JSON.parse(existing.tools)
+            if (Array.isArray(parsedTools) && !parsedTools.includes('browser_screenshot')) {
+              await db.agentProfile.update({
+                where: { id: existing.id },
+                data: { tools: JSON.stringify([...parsedTools, 'browser_screenshot']) },
+              })
+              console.log(`[CodeTeam] Task-42 sync: ${def.name} +browser_screenshot (verify UI tại checkpoint — audit Playwright)`)
+            }
+          } catch (syncErr) {
+            console.warn(`[CodeTeam] Task-42 browser sync ${def.name} thất bại (không chặn boot):`, syncErr)
           }
         }
         // FIX 2026-09-15 #10 (P4 — audit Team Code): marker-migration cho

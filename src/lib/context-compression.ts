@@ -27,6 +27,8 @@
  * FAIL-OPEN TUYỆT ĐỐI — nén là tối ưu, không phải chức năng bắt buộc.
  */
 
+import { createHash } from 'node:crypto'
+
 import { callUtilityLLM } from '@/lib/llm'
 
 // ==================== CONSTANTS (giá trị exact như goal-loop trước tách) ====================
@@ -87,6 +89,13 @@ export interface CompressionResult {
   digestChars: number
   savedChars: number
   method: 'llm' | 'heuristic'
+  /**
+   * SUMMARIZER RECEIPT (Task 42) — biên lai xác nhận nội dung đã được tóm tắt:
+   * sha256 của transcript đầu vào + digest đầu ra (12 hex), số message đã nén,
+   * range index gốc, số ký tự trước→sau, phương pháp. Gắn kèm cuối digest
+   * message để agent + user đối chiếu được "đã nén gì, nén từ bao nhiêu".
+   */
+  receipt?: string
 }
 
 // ==================== HELPERS ====================
@@ -344,9 +353,20 @@ export async function compressConversation(params: {
 
   if (!digest) return null
 
+  // ===== SUMMARIZER RECEIPT (Task 42) =====
+  // Biên lai của lần tóm tắt: hash đầu vào (transcript đã nén) + hash đầu ra
+  // (digest) + metadata phạm vi nén — giúp trace/audit được nội dung nào đã
+  // được thay bằng digest (chống "nén xong mất dấu"). Fail-safe tuyệt đối:
+  // createHash là thuần synchronous CPU, không thể fail theo ngữ cảnh thường.
+  const sha12 = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 12)
+  const receipt =
+    `🧾 DIGEST RECEIPT sha256(in)=${sha12(transcript)} sha256(out)=${sha12(digest)}` +
+    ` · nén ${compressible.length} messages (#${workStart}–#${compressEnd - 1})` +
+    ` · ${removedChars}→${digest.length} chars · method=${method}`
+
   const digestMessage: CompressionMessage = {
     role: 'user',
-    content: buildDigestMessageContent(digest),
+    content: `${buildDigestMessageContent(digest)}\n\n${receipt}`,
   }
 
   messages.splice(workStart, compressEnd - workStart, digestMessage)
@@ -376,5 +396,6 @@ export async function compressConversation(params: {
     digestChars: digestMessage.content.length,
     savedChars: removedChars - digestMessage.content.length,
     method,
+    receipt,
   }
 }

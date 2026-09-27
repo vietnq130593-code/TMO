@@ -93,6 +93,14 @@ worklog.md
 # thiếu file này thì `bun run setup` trên fresh clone fail ở bước 3 (Task 36,
 # user report 2026-10: setup fail "Cannot find module scripts/setup-hooks.mjs").
 !/scripts/setup-hooks.mjs
+# NGOẠI LỆ: setup-playwright.mjs được package.json "setup"/"setup:playwright"
+# gọi (Task 42 — cài chromium binary cho tool browser_screenshot; best-effort,
+# thiếu thì setup vẫn xong nhưng browser tool không chạy trên fresh clone).
+!/scripts/setup-playwright.mjs
+# NGOẠI LỆ: check-imports.mjs được quality-gate stage 'imports' + package.json
+# "check:imports" gọi (Task 42 — cross-import gate: boundary src↔mini-services
+# + circular import tĩnh; thiếu thì pre-push hook FAIL "Cannot find module").
+!/scripts/check-imports.mjs
 
 # Tool results (dev artifacts)
 /tool-results/

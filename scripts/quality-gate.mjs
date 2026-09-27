@@ -8,14 +8,16 @@
  * Stages (chạy tuần tự):
  *   1. type_check  — bunx tsc --noEmit          (TypeScript strict)
  *   2. lint        — bun run lint               (ESLint toàn repo)
- *   3. tests       — bun test trên DB TEST CÔ LẬP              (không đụng db/custom.db!)
+ *   3. imports     — bun scripts/check-imports.mjs (Task 42 — import
+ *                    boundary src↔mini-services + circular import tĩnh)
+ *   4. tests       — bun test trên DB TEST CÔ LẬP              (không đụng db/custom.db!)
  *                    (fresh schema qua `prisma db push` vào file SQLite riêng,
  *                     rồi chạy bun test với DATABASE_URL ghi đè)
- *   4. build       — bunx next build với distDir riêng (.next-qa)
+ *   5. build       — bunx next build với distDir riêng (.next-qa)
  *                    (build THỬ — không đụng .next của dev server đang chạy)
  *
  * Usage:
- *   bun scripts/quality-gate.mjs                  # full gate (4 stage)
+ *   bun scripts/quality-gate.mjs                  # full gate (5 stage)
  *   bun scripts/quality-gate.mjs --skip-build     # bỏ stage build
  *   bun scripts/quality-gate.mjs --quick          # chỉ type_check + lint
  *   bun scripts/quality-gate.mjs --stage=tests    # chạy stage cụ thể (comma-separated)
@@ -125,6 +127,14 @@ const stages = [
     run: () => runStage('lint', {
       cmd: 'bun', args: ['run', 'lint'],
       timeoutMs: 10 * 60_000,
+    }),
+  },
+  {
+    name: 'imports',
+    desc: 'Import boundary (src ↔ mini-services) + circular import tĩnh (Task 42 — cross-import gate)',
+    run: () => runStage('imports', {
+      cmd: 'bun', args: ['scripts/check-imports.mjs'],
+      timeoutMs: 2 * 60_000,
     }),
   },
   {

@@ -39,7 +39,7 @@ console.log('✅ [setup-hooks] Git hooks ĐÃ BẬT (core.hooksPath=scripts/hook
 console.log('   • pre-push          — chặn push nếu quality gate FAIL')
 console.log('   • pre-merge-commit  — chặn merge nếu quality gate FAIL')
 console.log('')
-console.log('   Gate gồm: type_check (tsc) → lint (eslint) → tests (bun test, DB cô lập) → build thử (distDir riêng).')
+console.log('   Gate gồm: type_check (tsc) → lint (eslint) → imports (boundary + circular) → tests (bun test, DB cô lập) → build thử (distDir riêng).')
 console.log('   Máy yếu / đang chạy dev server: tạo file .quality-gate.local với dòng skipBuild=true')
 console.log('   (GitHub Actions vẫn chạy full gate trên mọi push nên không có gì lọt kiểm duyệt).')
 

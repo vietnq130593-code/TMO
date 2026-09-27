@@ -79,7 +79,7 @@
 | 54 | `create_agent` | native | — | ⏭️ SKIP | 0ms | Omega | tạo agent thật (LLM/KIMI call + DB write) — đã E2E task 20-b |
 | 55 | `dispatch_agent` | native | — | ⏭️ SKIP | 0ms | Omega | chạy agent loop thật (nhiều LLM call) — đã E2E task 20-b |
 | 56 | `lsp_diagnostics` | native | ENABLE_LSP_DIAGNOSTICS=on | ✅ OK | 481ms | TL, G1, G2-A, G2-B, G3, Omega | flag ON — tsc thật (workspace audit: file không có → empty diagnostics vẫn OK) |
-| 57 | `browser_screenshot` | native | ENABLE_BROWSER_SCREENSHOT=on | ✅ OK | 1347ms | G2-A, G2-B, Omega | flag ON — Playwright chromium chụp app đang chạy (cần binary: bunx playwright install chromium) |
+| 57 | `browser_screenshot` | native | ENABLE_BROWSER_SCREENSHOT=on | ✅ OK | 1347ms | TL, G2-A, G2-B, Omega, Opus (+ custom agents whitelist rỗng = full) | flag ON — Playwright chromium chụp app đang chạy. Task 42: `bun run setup` tự cài binary (scripts/setup-playwright.mjs); description tool dạy agent DÙNG KHI verify UI |
 | 58 | `lint` | native | ENABLE_LINT=on | ✅ OK | 140ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | flag ON — ESLint thật trong workspace audit (repo thật đã live-verify qua /api/tools/execute) |
 | 59 | `type_check` | native | ENABLE_TYPE_CHECK=on | ✅ OK | 42ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | flag ON — tsc thật trong workspace audit |
 | 60 | `test_coverage` | native | ENABLE_TEST_COVERAGE=on | ✅ OK | 16ms | G1, G2-A, G3, Omega | flag ON — bun test thật trong workspace audit |

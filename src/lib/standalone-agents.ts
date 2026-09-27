@@ -201,7 +201,7 @@ QUY TRÌNH QUẢN TRỊ MỘT TÁC VỤ
 Bước 1 — TIẾP NHẬN & PHÂN LOẠI: xác định việc người dùng/đề xuất yêu cầu là gì; tách thành từng hạng mục; với TỪNG hạng mục đối chiếu Agent Roster — hạng mục nào thuộc chức trách agent nào.
 Bước 2 — GIAO VIỆC ĐÚNG NGƯỜI: hạng mục thuộc chức trách agent chuyên môn → giao agent đó (delegate_task / dispatch_agent); hạng mục cần nhiều vai tuần tự → request_code_team; hạng mục là việc QUẢN TRỊ (xem bên dưới) → bạn tự làm. Lúc giao luôn ghi rõ: nhiệm vụ cụ thể, ngữ cảnh, tiêu chí nghiệm thu kiểm định được.
 Bước 3 — GIÁM SÁT: nhận báo cáo các agent; theo dõi mục "còn thiếu"; agent kẹt hoặc lặp lỗi 2 lần → can thiệp quản trị (đổi hướng, điều agent khác hỗ trợ, nhận lại quyết định), không để agent xoay vòng vô ích.
-Bước 4 — NGHIỆM THU & ĐÁNH GIÁ: với kết quả QUAN TRỌNG, tự kiểm định lại bằng tool (file_read đọc lại, lint/type_check, lệnh máy đếm/đối chiếu) trước khi kết luận; agent ĐẠT → ghi nhận; agent CHƯA ĐẠT → giao lại kèm gaps cụ thể hoặc đổi agent/cách tiếp cận; đánh giá trung thực đi vào báo cáo.
+Bước 4 — NGHIỆM THU & ĐÁNH GIÁ: với kết quả QUAN TRỌNG, tự kiểm định lại bằng tool (file_read đọc lại, lint/type_check, lệnh máy đếm/đối chiếu) trước khi kết luận; tác vụ liên quan GIAO DIỆN (UI): start_preview để chạy app rồi browser_screenshot chụp http://127.0.0.1:<port> — nghiệm thu giao diện THẬT, không tin lời khai "UI chạy được"; agent ĐẠT → ghi nhận; agent CHƯA ĐẠT → giao lại kèm gaps cụ thể hoặc đổi agent/cách tiếp cận; đánh giá trung thực đi vào báo cáo.
 Bước 5 — BÁO CÁO & LƯU HỌC: tổng hợp kết quả toàn bộ tác vụ cho người dùng (ai làm gì, kết quả gì, bằng chứng gì, còn thiếu gì); insight về agents (agent nào mạnh/yếu việc gì) ghi vào ghi nhận học.
 
 ═══════════════════════════════════════════
@@ -212,7 +212,7 @@ PHÂN CÔNG THEO CHỨC TRÁCH — NGUYÊN TẮC SẮT
 - Việc cần NHIỀU vai tuần tự (thiết kế → code → review → tối ưu → verify) hoặc khối lượng lớn → request_code_team (nguyên đội theo SOP).
 - Nhiều việc ĐỘC LẬP → dispatch_agents_parallel (chạy song song, hợp nhất kết quả).
 - Hệ thống THIẾU agent có kỹ năng phù hợp (đã kiểm tra Agent Roster) → create_agent rồi giao việc.
-- Việc QUẢN TRỊ VẬN HÀNH → CHÍNH BẠN làm: tra cứu trạng thái hệ thống (db_query, get_app_runtime_status, file_list, grep), kiểm định nhanh kết quả (file_read, lint, type_check, lệnh đếm/đối chiếu), tạo/cấu hình agents, quản lý tool-access (manage_tools), quản lý automation (manage_automation), git commit/push/pull theo yêu cầu, viết tool hệ thống còn thiếu (create_custom_tool).
+- Việc QUẢN TRỊ VẬN HÀNH → CHÍNH BẠN làm: tra cứu trạng thái hệ thống (db_query, get_app_runtime_status, file_list, grep), kiểm định nhanh kết quả (file_read, lint, type_check, lệnh đếm/đối chiếu; tác vụ UI: start_preview + browser_screenshot chụp màn hình để nghiệm thu), tạo/cấu hình agents, quản lý tool-access (manage_tools), quản lý automation (manage_automation), git commit/push/pull theo yêu cầu, viết tool hệ thống còn thiếu (create_custom_tool).
 - Câu hỏi/thảo luận TRỰC TIẾP với bạn (hỏi kiến thức, hỏi ý kiến quản trị, trao đổi phương án, brainstorm cấp độ quản trị) → trả lời trực tiếp bằng vốn hiểu biết của bạn — KHÔNG cần delegate.
 - NGƯỠNG TỰ LÀM: bạn chỉ tự thi công khi chi phí giao việc LỚN HƠN bản thân việc (1-2 bước đọc/đếm/tra cứu đơn giản phục vụ kiểm định hoặc trả lời nhanh). Hết ngưỡng đó → giao agent. Tự làm thay việc chuyên môn của agents là SAI VAI TRÒ — kể cả khi bạn "làm được".
 
@@ -686,6 +686,19 @@ async function _doStandaloneSeed(): Promise<boolean> {
               data: { instruction: def.instruction },
             })
             console.log(`[Standalone] Migrated ${def.name} instruction → new version (MANAGE_AUTOMATION — Smolab Automation)`)
+          } catch (migErr) {
+            console.warn(`[Standalone] Instruction migration failed for ${def.name}:`, migErr)
+          }
+        } else if (existing.instruction && def.instruction.includes('browser_screenshot') && !existing.instruction.includes('browser_screenshot')) {
+          // (Task 42 — user audit "agents có biết gọi Playwright không"): dạy
+          // Omega dùng browser_screenshot khi nghiệm thu tác vụ UI — rows cũ
+          // seed trước khi có dòng này → refresh instruction từ def.
+          try {
+            await db.agentProfile.update({
+              where: { name: def.name },
+              data: { instruction: def.instruction },
+            })
+            console.log(`[Standalone] Migrated ${def.name} instruction → new version (BROWSER-VERIFY — nghiệm thu UI bằng browser_screenshot)`)
           } catch (migErr) {
             console.warn(`[Standalone] Instruction migration failed for ${def.name}:`, migErr)
           }

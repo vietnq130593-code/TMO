@@ -728,7 +728,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'browser_screenshot',
-      description: 'Chụp screenshot URL (Playwright headless chromium). Trả base64 PNG cho agent consumption. Tùy chọn: full_page, viewport, wait_until, wait_ms, selector (chỉ chụp element).',
+      description: 'Chụp screenshot URL (Playwright headless chromium) → base64 PNG. DÙNG KHI: (1) verify UI/preview sau khi code — gọi start_preview trước rồi chụp http://127.0.0.1:<port> để nghiệm thu giao diện thật thay vì tin lời khai "UI chạy được"; (2) so sánh kết quả render với mockup/spec; (3) debug lỗi hiển thị; (4) user yêu cầu xem giao diện. Tùy chọn: full_page, viewport, wait_until, wait_ms, selector (chỉ chụp element).',
       parameters: {
         type: 'object',
         properties: {

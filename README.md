@@ -115,6 +115,9 @@ cp .env.example .env
 #   or OPENROUTER_API_KEY_1=your-key-here
 
 # 3. Initialize database (creates SQLite tables)
+#    (cuối setup tự cài Playwright chromium — browser binary cho tool
+#     browser_screenshot của agents; nếu mạng chậm bị bỏ qua, chạy tay:
+#     `bunx playwright install chromium`)
 bun run setup
 
 # 4. (Optional) Start Qdrant for Knowledge Base features
