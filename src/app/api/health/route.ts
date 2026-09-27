@@ -41,13 +41,18 @@ function checkLLMHealthSync(): Record<string, { available: boolean; model: strin
 
   // ━━ OpenCode Zen — LÕI DUY NHẤT cho agents/utility/extraction (Task 33) ━━
   const zenStatus = getZenStatus()
+  // TASK 34 — model bị cache chặn free-tier (policy Zen ~25-26/09: model free
+  // chặn oc_sk API key ở cả HTTP lẫn CLI; các cặp này tự skip → ZEN FAILOVER)
+  const blockedNote = zenStatus.freeTierBlocked.length > 0
+    ? ` · 🚫 ${zenStatus.freeTierBlocked.length} cặp model:transport bị chặn free-tier (cache TTL 15p → failover): ${zenStatus.freeTierBlocked.slice(0, 4).join(', ')}`
+    : ''
   result.zen = {
     available: zenStatus.configured,
     model: zenStatus.models.join(' + '),
     active: zenStatus.configured,
     error: !zenStatus.configured ? 'No ZEN_API_KEY configured' : undefined,
     note: zenStatus.configured
-      ? `${zenStatus.keyCount} key(s) · ${zenStatus.availableKeys} available · ${zenStatus.rateLimitedKeys} rate-limited · nemotron-3-ultra-free (Omega/Opus/TL) + muse-spark-1.3-contributor-free (generators) + space-bunny-free (SENTINEL/LISMA debug + failover)`
+      ? `${zenStatus.keyCount} key(s) · ${zenStatus.availableKeys} available · ${zenStatus.rateLimitedKeys} rate-limited · nemotron-3-ultra-free (Omega/Opus/TL) + muse-spark-1.3-contributor-free (generators) + space-bunny-free (SENTINEL/LISMA debug + failover)${blockedNote}`
       : undefined,
   }
 

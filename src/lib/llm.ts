@@ -3851,6 +3851,41 @@ function markZenKey429(index: number): void {
   zenKey429Until[index] = Date.now() + 60000
 }
 
+// ==================== ZEN FREE-TIER BLOCK CACHE (Task 34 — 2026-09-27) ====================
+// THỰC NGHIỆM 2026-09-27 (trả lời câu hỏi user "tại sao TMO không gọi được Zen
+// trong khi opencode ở công ty vẫn chạy"): OpenCode Zen ĐỔI POLICY server-side
+// ~25-26/09 — các model free (TRỪ space-bunny-free) trả 403 FreeTierError
+// "free tier can only be used from within OpenCode" cho:
+//   (a) HTTP trực tiếp với oc_sk API key — đã test 11 model free: chỉ space-bunny-free 200
+//   (b) CHÍNH opencode CLI v1.18.32 (mới nhất npm) với auth type:api cùng key — vẫn 403
+//   (c) Replicate đủ header client thật (User-Agent: opencode/1.18.32 ai-sdk/...;
+//       x-opencode-client: cli; x-opencode-session/request/project — bắt từ capture
+//       request CLI thật) qua curl + bun fetch — VẪN 403 → check ở TẦNG CREDENTIAL
+//       (account OAuth / key có credit), không spoof được bằng header.
+// → Model free giờ chỉ chạy với credential ĐĂNG NHẬP account (opencode auth login
+//   → type oauth) hoặc key đã nạp credit; oc_sk type:api bị chặn ở mọi transport.
+// Cache trạng thái chặn per (transport, model) TTL 15 phút: lần đầu gặp 403 đánh
+// dấu → các lần sau skip ngay (không lặp HTTP ~1s + CLI spawn ~5-10s mỗi call),
+// caller đi thẳng ZEN FAILOVER. Override: ZEN_FREE_TIER_CACHE_MS (ms; 0 = tắt).
+const ZEN_FREE_TIER_CACHE_MS = parseInt(process.env.ZEN_FREE_TIER_CACHE_MS || '900000', 10)
+const zenFreeTierBlockedUntil = new Map<string, number>() // key `${transport}:${model}`
+
+function isZenFreeTierBlocked(transport: 'http' | 'cli', model: string): boolean {
+  if (!(ZEN_FREE_TIER_CACHE_MS > 0)) return false
+  const until = zenFreeTierBlockedUntil.get(`${transport}:${model}`) || 0
+  return Date.now() < until
+}
+
+function markZenFreeTierBlocked(transport: 'http' | 'cli', model: string, reason: string, ttlMs?: number): void {
+  const ttl = ttlMs ?? ZEN_FREE_TIER_CACHE_MS
+  if (!(ttl > 0)) return
+  const key = `${transport}:${model}`
+  const prev = zenFreeTierBlockedUntil.get(key) || 0
+  if (Date.now() < prev) return // đã chặn rồi — không spam log
+  zenFreeTierBlockedUntil.set(key, Date.now() + ttl)
+  console.warn(`[ZEN] 🚫 Đánh dấu chặn ${transport}:${model} đến ${new Date(Date.now() + ttl).toLocaleTimeString('vi-VN')} — ${reason}`)
+}
+
 // ==================== ZEN REASONING EFFORT — CHẾ ĐỘ CAO NHẤT (Task 33) ====================
 // USER DIRECTIVE 2026-09-27: "2 model của zen là Nemotron 3 Ultra và Muse-Spark
 // 1.3 Contributor — chế độ cao nhất cho tôi (tôi chỉ biết model có Max nhưng
@@ -3909,6 +3944,12 @@ async function callZenProvider(
     return null
   }
 
+  // TASK 34 — free-tier block cache: model đã bị chặn ở HTTP (gặp FreeTierError
+  // trong 15 phút) → skip fetch thẳng để caller sang CLI/failover NGAY
+  if (isZenFreeTierBlocked('http', model)) {
+    return { content: '', provider: 'zen', model, error: 'Zen HTTP free-tier blocked (cached — model bị Zen chặn với API key, policy ~2026-09-25)' }
+  }
+
   const timeoutMs = parseInt(process.env.ZEN_TIMEOUT_MS || '120000', 10)
   const maxTokens = options?.maxTokens ?? 16384
   const temperature = options?.temperature ?? 0.4
@@ -3962,6 +4003,16 @@ async function callZenProvider(
     if (!response.ok) {
       let errBody = ''
       try { errBody = await response.text() } catch { /* ignore */ }
+      // TASK 34 — các lỗi POLICY/model-level (không phải lỗi tạm thời) → mark
+      // cache bỏ qua các lần sau: FreeTierError (model free chặn API key),
+      // RegionError (geo-block), 402 (hết credit cho model trả phí)
+      if (response.status === 403 && (errBody.includes('FreeTierError') || errBody.toLowerCase().includes('free tier'))) {
+        markZenFreeTierBlocked('http', model, `HTTP 403 FreeTierError — model free bị Zen chặn với API key (policy ~2026-09-25; chỉ space-bunny-free còn mở API) — dùng failover / opencode auth login / nạp credit`)
+      } else if (response.status === 403 && (errBody.includes('RegionError') || /not available in your region/i.test(errBody))) {
+        markZenFreeTierBlocked('http', model, 'HTTP 403 RegionError — model geo-block tại vùng máy chủ này')
+      } else if (response.status === 402) {
+        markZenFreeTierBlocked('http', model, 'HTTP 402 — tài khoản không đủ credit cho model trả phí này (nạp credit để dùng)')
+      }
       console.warn(`[ZEN] ${taskLabel} HTTP ${response.status}: ${errBody.slice(0, 200)}`)
       return { content: '', provider: 'zen', model, error: `Zen HTTP ${response.status}: ${errBody.slice(0, 150)}` }
     }
@@ -4019,29 +4070,87 @@ async function callZenProvider(
 }
 
 // ==================== OPENCODE CLI PROVIDER (2026-09-24 — FreeTierError workaround) ====================
-// OpenCode Zen free models (suffix -free) chỉ gọi được từ TRONG OpenCode platform.
-// External HTTP API → FreeTierError 403. Workaround: spawn `opencode run` CLI
-// subprocess — CLI auth khác HTTP auth, free models CHẠY THẬT (verified 2026-09-24).
+// OpenCode Zen free models (suffix -free) bị chặn "from within OpenCode" với
+// oc_sk API key. Ngày 24-25/09 CLI còn chạy được free models; TỪ ~25-26/09/2026
+// Zen chặn CẢ CLI với auth type:api (verified 2026-09-27 — opencode v1.18.32
+// mới nhất nhận FreeTierError 403). Đường CLI giờ cần auth oauth (opencode
+// auth login đăng nhập account) hoặc key đã nạp credit.
 //
 // Output format: `--format json` stream events (step_start, text, step_finish).
 // Parse text events → accumulate content + reasoning + tokens.
-// Fallback: CLI fail → caller (callLLMForAgent) fallback NIM kimi-k3 chain.
+// Fallback: CLI fail → caller (callLLMForAgent) chuyển ZEN FAILOVER (Task 33+).
+// TASK 34 (2026-09-27): free models qua CLI với auth type:api cũng bị Zen chặn
+// (policy mới ~25-26/09) — CLI chỉ còn hiệu lực với auth oauth (opencode auth
+// login) hoặc key có credit; kết quả FreeTierError được cache để skip nhanh.
 
-const OPENCODE_CLI_BIN = process.env.OPENCODE_CLI_BIN?.trim() || '/home/z/.opencode/bin/opencode'
+// ==================== OPENCODE CLI BINARY RESOLVER (Task 34 — đa nền tảng) ====================
+// Trước đây: const OPENCODE_CLI_BIN = env || '/home/z/.opencode/bin/opencode'
+// (mặc định là path sandbox Linux) — máy Windows local của user set env theo
+// .env mẫu từ sandbox → binary "không tồn tại" → CLI fallback chết cứng dù
+// opencode ĐÃ cài (log user 2026-09-27: "Binary không tồn tại tại /home/z/...").
+// Giờ: resolver thử theo thứ tự env → vị trí chuẩn theo OS (homedir) → npm
+// global (Windows) → tìm trong PATH (which/where). Kết quả cache 60s (nhận
+// opencode được cài sau khi app đã chạy mà không cần restart).
 const OPENCODE_CLI_ENABLED = (process.env.OPENCODE_CLI_ENABLED || 'true').trim().toLowerCase() !== 'false'
 const OPENCODE_CLI_TIMEOUT_MS = parseInt(process.env.OPENCODE_CLI_TIMEOUT_MS || '240000', 10)
+let ocCliBinCache: { bin: string | null; at: number } | null = null
+let lastCliMissingWarnAt = 0
+
+/** Tìm binary opencode CLI đa nền tảng (Linux/macOS/Windows). null = không thấy. */
+function resolveOpenCodeCliBin(): string | null {
+  const now = Date.now()
+  if (ocCliBinCache && now - ocCliBinCache.at < 60_000) return ocCliBinCache.bin
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require('fs') as typeof import('fs')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const path = require('path') as typeof import('path')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const os = require('os') as typeof import('os')
+  const isWin = process.platform === 'win32'
+  const tried: string[] = []
+  const candidates: string[] = []
+  const envBin = process.env.OPENCODE_CLI_BIN?.trim()
+  if (envBin) candidates.push(envBin)
+  const exe = isWin ? 'opencode.exe' : 'opencode'
+  candidates.push(path.join(os.homedir(), '.opencode', 'bin', exe))
+  if (isWin && process.env.APPDATA) candidates.push(path.join(process.env.APPDATA, 'npm', 'opencode.cmd'))
+  if (isWin && process.env.LOCALAPPDATA) candidates.push(path.join(process.env.LOCALAPPDATA, 'npm', 'opencode.cmd'))
+  for (const c of candidates) {
+    tried.push(c)
+    try {
+      if (fs.existsSync(c)) {
+        ocCliBinCache = { bin: c, at: now }
+        return c
+      }
+    } catch { /* ignore per-candidate error */ }
+  }
+  // PATH lookup — existsSync không thấy được binary trong PATH → which/where
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { execSync } = require('child_process') as typeof import('child_process')
+    const out = execSync(isWin ? 'where opencode' : 'which opencode', {
+      timeout: 5000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }) as string
+    const first = out.split('\n').map(l => l.trim()).filter(Boolean)[0]
+    if (first && fs.existsSync(first)) {
+      ocCliBinCache = { bin: first, at: now }
+      return first
+    }
+  } catch { /* không có trong PATH */ }
+  ocCliBinCache = { bin: null, at: now }
+  // Log gate 5 phút — tránh spam mỗi LLM call khi CLI chưa cài (trước đây in
+  // MỖI call, log user lo lắng không cần thiết)
+  if (now - lastCliMissingWarnAt > 300_000) {
+    lastCliMissingWarnAt = now
+    console.warn(`[OC-CLI] Không tìm thấy opencode CLI (đã thử: ${tried.join(' ; ')} ; PATH). Cài: npm i -g opencode-ai (Windows: irm https://opencode.ai/install.ps1 | iex — Linux/mac: curl -fsSL https://opencode.ai/install | bash), hoặc set OPENCODE_CLI_BIN trỏ đúng binary. LƯU Ý: thiếu CLI KHÔNG làm hỏng agent stack — mọi call vẫn chạy qua Zen HTTP + ZEN FAILOVER (space-bunny-free). CLI chỉ cần khi muốn dùng model free bị chặn API key (cần 'opencode auth login' đăng nhập account OpenCode).`)
+  }
+  return null
+}
 
 /** Check if OpenCode CLI binary exists + enabled. */
 function isOpenCodeCLIAvailable(): boolean {
   if (!OPENCODE_CLI_ENABLED) return false
-  try {
-    // Quick sync check — existsSync is cheap
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require('fs')
-    return fs.existsSync(OPENCODE_CLI_BIN)
-  } catch {
-    return false
-  }
+  return resolveOpenCodeCliBin() !== null
 }
 
 // ==================== CLI-NATIVE TOOL ACTIVITY → AGENT ACTIVITY LOG ====================
@@ -4175,9 +4284,11 @@ const OC_CLI_TOOL_MAP: Record<string, string> = {
 }
 
 /**
- * Call OpenCode Zen free model via CLI subprocess (bypasses FreeTierError).
- * Spawns `opencode run "prompt" --model opencode/<model> --format json`.
- * Returns LLMResult with content + tokens. On failure → null (caller falls back).
+ * Call OpenCode Zen model via CLI subprocess (prompt truyền qua STDIN — Task 34).
+ * Spawns `opencode run --model opencode/<model> --format json` + stdin prompt.
+ * Returns LLMResult with content + tokens. On failure → null (caller falls back
+ * to ZEN FAILOVER). Lưu ý: với auth type:api, model free nhận FreeTierError từ
+ * ~2026-09-25 — cần `opencode auth login` (account) để CLI chạy được free models.
  */
 async function callOpenCodeCLIProvider(
   prompt: string,
@@ -4186,9 +4297,16 @@ async function callOpenCodeCLIProvider(
   options: LLMCallOptions | undefined,
   taskLabel: string,
 ): Promise<LLMResult | null> {
-  if (!isOpenCodeCLIAvailable()) {
-    console.warn(`[OC-CLI] Binary không tồn tại tại ${OPENCODE_CLI_BIN} — set OPENCODE_CLI_BIN hoặc cài opencode CLI`)
+  if (!OPENCODE_CLI_ENABLED) return null
+  // TASK 34 — free-tier block cache: model đã bị Zen chặn ở transport CLI
+  // (verified 2026-09-27: chính opencode CLI với auth type:api nhận
+  // FreeTierError 403) → skip thẳng, không tốn 5-10s spawn mỗi call
+  if (isZenFreeTierBlocked('cli', model)) {
     return null
+  }
+  const cliBin = resolveOpenCodeCliBin()
+  if (!cliBin) {
+    return null // đã warn trong resolver (gate 5 phút — không spam mỗi call)
   }
 
   const { spawn } = await import('child_process')
@@ -4210,12 +4328,15 @@ async function callOpenCodeCLIProvider(
   } catch { /* giữ prefix mặc định */ }
   const cliModel = `${cliProviderPrefix}/${model}`
 
-  console.log(`[OC-CLI] ${taskLabel} — spawn opencode run --model ${cliModel}`)
+  console.log(`[OC-CLI] ${taskLabel} — spawn opencode run --model ${cliModel} (bin: ${cliBin})`)
   return new Promise<LLMResult | null>((resolve) => {
-    // CLI syntax: `opencode run "<message>" --model opencode/<model> --format json`
-    // message as positional arg. Long prompts with newlines → pipe via stdin.
+    // TASK 34 — PROMPT QUA STDIN (verified opencode v1.18.32 đọc stdin khi
+    // không có message arg — test exit 0 trả lời đúng): (a) Windows giới hạn
+    // command line ~32K chars — prompt TMO thường 30-100KB → truyền argv fail;
+    // (b) npm Windows cài opencode.cmd shim — spawn .cmd bắt buộc shell:true,
+    // chỉ an toàn khi args chứa HOÀN TOÀN flags (không có nội dung prompt).
     const args = [
-      'run', fullPrompt,
+      'run',
       '--model', cliModel,
       '--format', 'json',
     ]
@@ -4225,33 +4346,62 @@ async function callOpenCodeCLIProvider(
     // (nemotron/lightning/mimo) → không truyền (truyền giá trị lạ bị CLI từ chối).
     const cliEffort = zenReasoningEffortForModel(model)
     if (cliEffort) args.push('--variant', cliEffort)
-    const child = spawn(OPENCODE_CLI_BIN, args, {
-      cwd: process.env.OPENCODE_WORKSPACE || process.cwd(),
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        NO_COLOR: '1',
-        TERM: 'dumb',
-        // Pass TMO context to custom tools (.opencode/tools/*.ts read these)
-        TMO_BASE_URL: process.env.TMO_BASE_URL || 'http://localhost:3000',
-        TMO_AGENT_NAME: options?.agentName || 'opencode-bridge',
-        // 2026-09-26 FIX: truyền sessionId thật (trước đây '' → bridge ghi
-        // ToolMetric session 'unknown', tách khỏi run — Tool health khó truy vết)
-        TMO_SESSION_ID: options?.sessionId || '',
-        // 2026-10-20 TASK 20: truyền runId thật — todo_write từ inner loop CLI
-        // (tmo_todo bridge) gắn đúng run → TODO block + auto-complete hoạt động
-        // trên đường CLI (trước đây todos CLI luôn runId=null → kế hoạch MẤT
-        // giữa các chu kỳ dù F4 đã render — gap phát hiện khi rà soát Task 19)
-        TMO_RUN_ID: options?.runId || '',
-      },
-      timeout: OPENCODE_CLI_TIMEOUT_MS,
-    })
-    // Close stdin immediately — signal non-interactive mode (prevent TTY wait)
-    child.stdin?.end()
+    const isCmdShim = /\.(cmd|bat)$/i.test(cliBin)
+    const child = isCmdShim
+      ? spawn(cliBin, args, {
+          cwd: process.env.OPENCODE_WORKSPACE || process.cwd(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: {
+            ...process.env,
+            NO_COLOR: '1',
+            TERM: 'dumb',
+            // Pass TMO context to custom tools (.opencode/tools/*.ts read these)
+            TMO_BASE_URL: process.env.TMO_BASE_URL || 'http://localhost:3000',
+            TMO_AGENT_NAME: options?.agentName || 'opencode-bridge',
+            // 2026-09-26 FIX: truyền sessionId thật (trước đây '' → bridge ghi
+            // ToolMetric session 'unknown', tách khỏi run — Tool health khó truy vết)
+            TMO_SESSION_ID: options?.sessionId || '',
+            // 2026-10-20 TASK 20: truyền runId thật — todo_write từ inner loop CLI
+            // (tmo_todo bridge) gắn đúng run → TODO block + auto-complete hoạt động
+            // trên đường CLI (trước đây todos CLI luôn runId=null → kế hoạch MẤT
+            // giữa các chu kỳ dù F4 đã render — gap phát hiện khi rà soát Task 19)
+            TMO_RUN_ID: options?.runId || '',
+          },
+          timeout: OPENCODE_CLI_TIMEOUT_MS,
+          shell: true, // .cmd/.bat shim chỉ chạy được qua shell (Node spawn chặn trực tiếp)
+        })
+      : spawn(cliBin, args, {
+          cwd: process.env.OPENCODE_WORKSPACE || process.cwd(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: {
+            ...process.env,
+            NO_COLOR: '1',
+            TERM: 'dumb',
+            // Pass TMO context to custom tools (.opencode/tools/*.ts read these)
+            TMO_BASE_URL: process.env.TMO_BASE_URL || 'http://localhost:3000',
+            TMO_AGENT_NAME: options?.agentName || 'opencode-bridge',
+            // 2026-09-26 FIX: truyền sessionId thật (trước đây '' → bridge ghi
+            // ToolMetric session 'unknown', tách khỏi run — Tool health khó truy vết)
+            TMO_SESSION_ID: options?.sessionId || '',
+            // 2026-10-20 TASK 20: truyền runId thật — todo_write từ inner loop CLI
+            // (tmo_todo bridge) gắn đúng run → TODO block + auto-complete hoạt động
+            // trên đường CLI (trước đây todos CLI luôn runId=null → kế hoạch MẤT
+            // giữa các chu kỳ dù F4 đã render — gap phát hiện khi rà soát Task 19)
+            TMO_RUN_ID: options?.runId || '',
+          },
+          timeout: OPENCODE_CLI_TIMEOUT_MS,
+        })
+    // TASK 34 — prompt qua stdin (xem comment khối args ở trên); đóng stdin
+    // ngay sau write → signal non-interactive mode (prevent TTY wait)
     child.stdin?.on('error', () => { /* ignore EPIPE if child exits early */ })
+    child.stdin?.write(fullPrompt)
+    child.stdin?.end()
 
     let stdout = ''
     let stderr = ''
+    // TASK 34 — raw output head (64KB đầu) để phát hiện error event FreeTierError
+    // của CLI (event error xuất hiện sớm trong stream, trước text events)
+    let rawHead = ''
     let contentParts: string[] = []
     let reasoningParts: string[] = []
     let totalTokens = 0
@@ -4298,7 +4448,9 @@ async function callOpenCodeCLIProvider(
     }, OPENCODE_CLI_TIMEOUT_MS)
 
     child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString()
+      const chunkStr = chunk.toString()
+      if (rawHead.length < 65536) rawHead += chunkStr
+      stdout += chunkStr
       // Parse JSON lines (NDJSON stream)
       const lines = stdout.split('\n')
       stdout = lines.pop() || '' // keep incomplete line in buffer
@@ -4422,6 +4574,23 @@ async function callOpenCodeCLIProvider(
       const reasoning = reasoningParts.join('').trim()
 
       if (!content && code !== 0) {
+        // TASK 34 — các lỗi model-level dai dẳng từ CLI → mark cache để các lần
+        // sau skip CLI thẳng failover (không tốn 5-10s spawn mỗi call):
+        //   FreeTierError/RegionError/Insufficient = policy-level (TTL chuẩn
+        //   15 phút); UnknownError "Unexpected server error" = model-level
+        //   (vd muse-spark geo-block trả UnknownError — verified 2026-09-27)
+        //   → TTL ngắn 5 phút (tự retry định kỳ phòng lỗi server tạm thời).
+        //   Lỗi timeout/hang/spawn KHÔNG cache (có thể tạm thời).
+        const raw = rawHead + '\n' + stderr
+        if (raw.includes('FreeTierError') || raw.includes('free tier can only be used from within OpenCode')) {
+          markZenFreeTierBlocked('cli', model, 'CLI nhận FreeTierError 403 — model free bị Zen chặn với API key type:api (policy ~2026-09-25; cần `opencode auth login` account hoặc key có credit)')
+        } else if (raw.includes('RegionError') || /not available in your region/i.test(raw)) {
+          markZenFreeTierBlocked('cli', model, 'CLI nhận RegionError — model geo-block tại vùng máy chủ này')
+        } else if (/Insufficient (account )?(funds|credits?)/i.test(raw)) {
+          markZenFreeTierBlocked('cli', model, 'CLI nhận lỗi Insufficient funds — tài khoản không đủ credit cho model này')
+        } else if (raw.includes('Unexpected server error') || raw.includes('"UnknownError"')) {
+          markZenFreeTierBlocked('cli', model, 'CLI nhận UnknownError "Unexpected server error" (model-level — vd geo-block)', Math.min(ZEN_FREE_TIER_CACHE_MS, 300000))
+        }
         console.warn(`[OC-CLI] ${taskLabel} exit ${code} — no content. stderr: ${stderr.slice(0, 200)}`)
         resolve(null)
         return
@@ -4494,14 +4663,20 @@ export function getZenStatus(): {
   availableKeys: number
   rateLimitedKeys: number
   models: string[]
+  /** TASK 34 — các cặp transport:model đang bị cache chặn free-tier (TTL 15 phút) */
+  freeTierBlocked: string[]
 } {
   const now = Date.now()
   const rateLimited = zenKey429Until.filter((t, i) => i < ZEN_API_KEYS.length && t > now).length
+  const freeTierBlocked = [...zenFreeTierBlockedUntil.entries()]
+    .filter(([, until]) => until > now)
+    .map(([k]) => k)
   return {
     configured: ZEN_API_KEYS.length > 0,
     keyCount: ZEN_API_KEYS.length,
     availableKeys: ZEN_API_KEYS.length - rateLimited,
     rateLimitedKeys: rateLimited,
+    freeTierBlocked,
     models: [
       'nemotron-3-ultra-free',
       'muse-spark-1.3-contributor-free',
