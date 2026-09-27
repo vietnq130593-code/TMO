@@ -3512,37 +3512,46 @@ export async function todoWrite(args: {
     if (t.id) {
       // CI-2 — đọc runId hiện tại để backfill: chỉ set runId khi row đang null
       // (không giành todo của run khác về run hiện tại)
+      // FIX prisma:error P2025 (user report): trước đây LUÔN gọi update rồi
+      // trông chờ P2025 ném "No record was found for an update" khi id không
+      // tồn tại (agent hay tự chế id) — .catch(() => null) nuốt được lỗi nhưng
+      // Prisma client vẫn in prisma:error ồn ra console. Giờ chỉ update khi
+      // findUnique THẤY row; id không tồn tại → healNote thẳng, KHÔNG đụng DB
+      // → P2025 không bao giờ xảy ra ở luồng này nữa.
       const existingById = await db.todo.findUnique({
         where: { id: t.id },
         select: { runId: true },
       }).catch(() => null)
-      const updated = await db.todo.update({
-        where: { id: t.id },
-        data: {
-          content: t.content,
-          status: t.status || undefined,
-          priority: t.priority || undefined,
-          parentId: t.parentId || undefined,
-          ...(runId && !existingById?.runId ? { runId } : {}),
-        },
-      }).catch(() => null)
-      if (updated) {
-        upserted.push({
-          id: updated.id,
-          content: updated.content,
-          status: updated.status,
-          priority: updated.priority,
-          parentId: updated.parentId,
-        })
-        continue
+      if (existingById) {
+        const updated = await db.todo.update({
+          where: { id: t.id },
+          data: {
+            content: t.content,
+            status: t.status || undefined,
+            priority: t.priority || undefined,
+            parentId: t.parentId || undefined,
+            ...(runId && !existingById.runId ? { runId } : {}),
+          },
+        }).catch(() => null) // race guard: row bị xóa giữa find & update (hiếm)
+        if (updated) {
+          upserted.push({
+            id: updated.id,
+            content: updated.content,
+            status: updated.status,
+            priority: updated.priority,
+            parentId: updated.parentId,
+          })
+          continue
+        }
       }
-      // SELF-HEAL 2026-09-27 (fix E2E T29-A): id KHÔNG tồn tại — trước đây
-      // return error làm CẢ call fail → agent không ghi được kế hoạch, STALL
-      // 3 chu kỳ liên tiếp, run chết no_progress (bằng chứng: session E2E
-      // T29-A todo_write "audit-1" → "Todo not found"). Giờ: đánh dấu heal và
-      // rơi xuống đường upsert-theo-nội dung/idempotency bên dưới — khớp
-      // content trong (sessionId, runId) → update row thật; không khớp → tạo
-      // mới. healNote cho agent biết id thật (chống lặp lại id chế).
+      // SELF-HEAL 2026-09-27 (fix E2E T29-A): id KHÔNG tồn tại (hoặc update
+      // race fail) — trước đây return error làm CẢ call fail → agent không
+      // ghi được kế hoạch, STALL 3 chu kỳ liên tiếp, run chết no_progress
+      // (bằng chứng: session E2E T29-A todo_write "audit-1" → "Todo not
+      // found"). Giờ: đánh dấu heal và rơi xuống đường upsert-theo-nội
+      // dung/idempotency bên dưới — khớp content trong (sessionId, runId) →
+      // update row thật; không khớp → tạo mới. healNote cho agent biết id
+      // thật (chống lặp lại id chế).
       healNotes.push(`id '${t.id}' không tồn tại — đã xử lý như upsert theo nội dung`)
     }
 

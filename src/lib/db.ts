@@ -26,9 +26,36 @@ const globalForPrisma = globalThis as unknown as {
 
 export const db =
   globalForPrisma.prisma ??
-  new PrismaClient({
-    log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
-  })
+  (() => {
+    // FIX prisma:error P2025 (user report): Prisma client in prisma:error ra
+    // console cho MỌI lỗi query — kể cả P2025 "No record was found for an
+    // update/delete" mà app chủ ĐỢI như control-flow (todo_write/upsert các
+    // nơi đều .catch(() => null) khi agent truyền id không tồn tại). Chuyển
+    // 'error' sang event emitter và LỌC đúng họ P2025 (record not found) —
+    // im lặng vì caller đã xử lý; MỌI lỗi khác (connection, SQL, P2002...)
+    // vẫn in prisma:error như cũ. 'warn' giữ stdout (dev only) như trước.
+    const client = new PrismaClient({
+      log: [
+        ...(process.env.NODE_ENV === 'development'
+          ? [{ emit: 'stdout' as const, level: 'warn' as const }]
+          : []),
+        { emit: 'event' as const, level: 'error' as const },
+      ],
+    })
+    client.$on('error', (e) => {
+      // Họ P2025: "No record was found for an update" /
+      // "An operation failed because it depends on one or more records that
+      //  were required but not found." — luồng CÓ DỰ KIẾN, caller tự xử lý.
+      if (
+        /\bno record was found\b/i.test(e.message) ||
+        /records? that (were |was )?required but not found/i.test(e.message)
+      ) {
+        return
+      }
+      console.error('prisma:error', e.message)
+    })
+    return client
+  })()
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db
 
