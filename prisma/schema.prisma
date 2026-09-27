@@ -1681,6 +1681,26 @@ model SelfDirectionProposal {
   /// Độ sâu chuỗi phái sinh (gốc=0) — cap chống vòng lặp vô hạn
   followUpDepth         Int       @default(0)
 
+  // ===== TASK 32 (2026-09-27) — 2 CƠ CHẾ MỚI CHO SELF-DIRECTION =====
+  // (1) Opus duyệt 3 MỨC (mechanism 1): approve (cần thiết toàn bộ) |
+  //     approve_partial (chỉ 1 phần cần làm → Opus TỰ CHỈNH SỬA nội dung đề
+  //     xuất thu hẹp về đúng phần cần thiết RỒI duyệt bản đã chỉnh) | reject.
+  //     reviewEdits lưu lịch sử chỉnh sửa khi duyệt (before/after + scopeNote)
+  //     — audit đầy đủ cho Mr. Architect đối chiếu.
+  /// Lịch sử Opus chỉnh sửa đề xuất khi duyệt approve_partial (JSON array:
+  /// [{at, reason, scopeNote, before:{title,problem,solution,implementation,impact},
+  ///   after:{...}}])
+  reviewEdits     Json?
+  // (2) Omega re-plan giữa chừng (mechanism 2): sau MỖI bước hoàn thành, Omega
+  //     đánh giá lại các bước CÒN LẠI — keep (giữ) | adjust (đổi nội dung công
+  //     việc HOẶC đổi agent) | drop (bước thừa) | newSteps (việc mới phát
+  //     sinh). replanHistory lưu mỗi lần điều chỉnh THẬT (sau bước nào, đổi
+  //     gì, tại sao) — traceability đầy đủ.
+  /// Lịch sử Omega điều chỉnh kế hoạch sau mỗi bước hoàn thành (JSON array:
+  /// [{at, afterStepOrder, afterStepTitle, afterStepAssignee, reason,
+  ///   changes:[{action, stepOrder?, old?, new?, rationale}]}])
+  replanHistory   Json?
+
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 

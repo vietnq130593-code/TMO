@@ -51,6 +51,23 @@
  * secret-scan→commit→push→pull). Receipts lưu ProposalStep.workspaceReceipt;
  * báo cáo hoàn thiện đan thêm section "Kết quả kiểm định & triển khai code".
  * Mặc định 'llm' giữ nguyên hành vi thuần hội thoại (tương thích ngược).
+ *
+ * TASK 32 (2026-09-27) — 2 CƠ CHẾ MỚI (user directive):
+ *   (1) OPUS DUYỆT 3 MỨC (khi ủy quyền bật — thay phán quyết nhị phân):
+ *       - approve         : vấn đề cần thiết TOÀN BỘ → duyệt nguyên bản
+ *       - approve_partial : vấn đề có thật nhưng chỉ MỘT PHẦN đáng làm → Opus
+ *                           TỰ CHỈNH SỬA 4 phần nội dung đề xuất (thu hẹp về
+ *                           đúng phần cần thiết, kèm scopeNote giữ/bỏ) rồi duyệt
+ *                           BẢN ĐÃ CHỈNH — ghi đè proposal + lưu audit
+ *                           before/after vào reviewEdits (UI hiển thị)
+ *       - reject          : không cần thiết → từ chối kèm lý do
+ *       Triển khai sau khi duyệt chạy trên BẢN ĐÃ CHỈNH (nếu partial).
+ *   (2) OMEGA RE-PLAN GIỮA CHỪNG: sau khi MỖI bước hoàn thành (đạt), Omega
+ *       đánh giá lại các bước CÒN LẠI — keep / adjust (đổi nội dung công việc
+ *       HOẶC đổi agent) / drop (bước thừa) / newSteps (việc mới phát sinh).
+ *       Thay đổi áp dụng lên ProposalStep trong DB (renumber tuần tự) + lưu
+ *       replanHistory (UI hiển thị). Bước verify_and_push cuối được bảo vệ
+ *       tuyệt đối. Fail-open: lỗi → giữ kế hoạch cũ, không giết pipeline.
  */
 
 import { db } from '@/lib/db'
@@ -96,8 +113,21 @@ export interface SdWorkPlan {
 }
 
 export interface SdReviewVerdict {
-  decision: 'approve' | 'reject'
+  /** TASK 32 (mechanism 1): 3 mức — approve (cần thiết toàn bộ) |
+   * approve_partial (Opus TỰ CHỈNH SỬA nội dung thu hẹp phạm vi rồi duyệt) |
+   * reject */
+  decision: 'approve' | 'approve_partial' | 'reject'
   reason: string
+  /** approve_partial: phần nào GIỮ, phần nào BỎ (bắt buộc khi approve_partial) */
+  scopeNote?: string
+  /** approve_partial: nội dung 4 phần đã được Opus chỉnh sửa */
+  edited?: {
+    title: string
+    problem: string
+    solution: string
+    implementation: string
+    impact?: string
+  }
 }
 
 export interface SdStepEvaluation {
@@ -441,11 +471,52 @@ async function getReviewerSystemPrompt(kind: 'evaluate' | 'report'): Promise<{ s
 // khi ủy quyền (opusDelegated) bật, OPUS duyệt thay Mr. Architect.
 
 /**
- * Opus review 1 đề xuất đang pending (khi được ủy quyền) → approve/reject.
+ * Opus review 1 đề xuất đang pending (khi được ủy quyền) → approve /
+ * approve_partial (TỰ CHỈNH SỬA thu hẹp phạm vi rồi duyệt — Task 32) / reject.
  * Persona = OPUS_INSTRUCTION (CTO) + vai trò duyệt; quyết định ghi danh nghĩa
  * Opus (reviewer='opus', decisionReason "Opus duyệt/không duyệt: ...").
  * Fire-and-forget friendly: caller dùng void opusReviewPending(id).
  */
+
+/** TASK 32 (mechanism 1): parse verdict 3 mức từ output LLM — null khi không
+ * parse được JSON (caller quyết định throw/retry). Chịu đựng decision lạ
+ * (coi như reject) và object edited thiếu trường (caller validate tiếp). */
+function parseOpusReviewVerdict(raw: string): SdReviewVerdict | null {
+  try {
+    const jsonStr = findBalancedJson(raw.replace(/```(?:json)?/g, ''), 'decision')
+    if (!jsonStr) return null
+    const obj = JSON.parse(jsonStr) as Record<string, unknown>
+    const d = String(obj.decision || '')
+    const decision: SdReviewVerdict['decision'] =
+      d === 'approve' ? 'approve' : d === 'approve_partial' ? 'approve_partial' : 'reject'
+    let edited: SdReviewVerdict['edited'] | undefined
+    if (obj.edited && typeof obj.edited === 'object') {
+      const e = obj.edited as Record<string, unknown>
+      edited = {
+        title: String(e.title || '').trim().slice(0, 200),
+        problem: String(e.problem || '').trim().slice(0, 4000),
+        solution: String(e.solution || '').trim().slice(0, 4000),
+        implementation: String(e.implementation || '').trim().slice(0, 4000),
+        impact: typeof e.impact === 'string' ? e.impact.trim().slice(0, 1000) : undefined,
+      }
+    }
+    return {
+      decision,
+      reason: typeof obj.reason === 'string' ? obj.reason.slice(0, 600) : '',
+      scopeNote: typeof obj.scopeNote === 'string' ? obj.scopeNote.slice(0, 800) : undefined,
+      edited,
+    }
+  } catch {
+    return null
+  }
+}
+
+/** TASK 32 (mechanism 1): object edited hợp lệ = 4 phần đều có nội dung */
+function isValidEditedProposal(e: SdReviewVerdict['edited'] | undefined): boolean {
+  if (!e) return false
+  return !!(e.title && e.problem && e.solution && e.implementation)
+}
+
 export async function opusReviewPending(proposalId: string): Promise<void> {
   if (reviewingProposals.has(proposalId)) return
   reviewingProposals.add(proposalId)
@@ -453,17 +524,34 @@ export async function opusReviewPending(proposalId: string): Promise<void> {
     const proposal = await db.selfDirectionProposal.findUnique({ where: { id: proposalId } })
     if (!proposal || proposal.status !== 'pending') return
 
+    // TASK 32 (mechanism 1 — 2026-09-27): duyệt 3 MỨC thay vì nhị phân —
+    //   approve         : vấn đề CẦN THIẾT TOÀN BỘ → duyệt nguyên bản
+    //   approve_partial : vấn đề CÓ THẬT nhưng chỉ MỘT PHẦN đáng làm → Opus
+    //                     TỰ CHỈNH SỬA 4 phần nội dung (thu hẹp về đúng phần
+    //                     cần thiết, kèm scopeNote giữ/bỏ) rồi duyệt BẢN ĐÃ CHỈNH
+    //   reject          : không cần thiết → từ chối kèm lý do
     const systemPrompt = `${OPUS_INSTRUCTION}
 
 ━━━ VAI TRÒ HIỆN TẠI (USER DECISION #3 — GHI ĐÈ FORMAT §X CHO NHIỆM VỤ NÀY) ━━━
 Bạn là ${OPUS_AGENT_NAME} — CTO của TMO, đang duyệt đề xuất SELF-DIRECTION thay Mr. Architect (được ủy quyền — user decision #3).
-Quyết định của bạn có giá trị như quyết định của Mr. Architect. Hãy cân nhắc kỹ lưỡng:
-- Đề xuất có giải quyết vấn đề thật không? Kế hoạch triển khai khả thi không?
-- Ưu tiên càng cao càng cần triển khai sớm; đề xuất mơ hồ/lợi ích không rõ → từ chối kèm lý do để agent đề xuất lại.
-- Sau khi duyệt, việc TRIỂN KHAI vẫn do orchestration của Omega đảm nhận — bạn chỉ quyết định duyệt hay không duyệt.
+Quyết định của bạn có giá trị như quyết định của Mr. Architect. Hãy cân nhắc kỹ lưỡng và chọn 1 trong 3 mức:
+
+1. "approve" — Vấn đề CẦN THIẾT và đáng làm TOÀN BỘ: giải quyết vấn đề thật, cách triển khai khả thi, phạm vi hợp lý → duyệt nguyên bản.
+
+2. "approve_partial" — Vấn đề CÓ THẬT nhưng chỉ MỘT PHẦN đáng làm (phần còn lại chưa cần thiết / vượt phạm vi hợp lý / rủi ro cao chưa đáng). Khi đó bạn PHẢI TỰ CHỈNH SỬA đề xuất cho phù hợp rồi duyệt BẢN ĐÃ CHỈNH:
+   - Viết lại ĐỦ 4 phần title/problem/solution/implementation thu hẹp về ĐÚNG phần cần làm — cụ thể, hành động được, KHÔNG tham chiếu "như trên/bên trên".
+   - Bắt buộc "scopeNote": nêu rõ phần nào GIỮ, phần nào BỎ, vì sao.
+   - KHÔNG dùng approve_partial khi phần cần làm quá nhỏ, không đáng thành đề xuất riêng → khi đó dùng reject.
+
+3. "reject" — KHÔNG cần thiết / mơ hồ / lợi ích không rõ / không khả thi → từ chối kèm lý do để agent đề xuất lại.
+
+Ưu tiên càng cao càng cần triển khai sớm. Sau khi duyệt, việc TRIỂN KHAI vẫn do orchestration của Omega đảm nhận — bạn chỉ quyết định duyệt hay không duyệt.
 
 Output DUY NHẤT một JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích ngoài — GHI ĐÈ format §X cho nhiệm vụ này):
-{"decision": "approve" | "reject", "reason": "lý do ngắn gọn (1-3 câu, tiếng Việt)"}`
+{"decision": "approve" | "approve_partial" | "reject", "reason": "lý do ngắn gọn (1-3 câu, tiếng Việt)",
+ "scopeNote": "phần giữ/bỏ (BẮT BUỘC khi approve_partial)",
+ "edited": {"title": "...", "problem": "...", "solution": "...", "implementation": "...", "impact": "..."}}
+("edited" chỉ cần khi approve_partial — 4 phần title/problem/solution/implementation mỗi phần tối thiểu 1 câu cụ thể.)`
 
     const userPrompt = `ĐỀ XUẤT CẦN DUYỆT:
 Tiêu đề: ${proposal.title}
@@ -486,30 +574,103 @@ ${(proposal.userNotes || '(không có)').slice(0, 800)}
 
 Quyết định duyệt hay không duyệt (JSON).`
 
-    const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 400, label: `OpusReview ${proposal.id.slice(0, 8)}` })
-    const jsonStr = findBalancedJson(raw.replace(/```(?:json)?/g, ''), 'decision')
-    if (!jsonStr) throw new Error('Không parse được verdict JSON')
-    const obj = JSON.parse(jsonStr) as Record<string, unknown>
-    const verdict: SdReviewVerdict = {
-      decision: obj.decision === 'approve' ? 'approve' : 'reject',
-      reason: typeof obj.reason === 'string' ? obj.reason.slice(0, 600) : '',
+    // maxTokens 3000 (Task 32 — từ 400): nhánh approve_partial kèm nguyên object
+    // edited (4 phần nội dung ~2200+ ký tự) QUA REASONING MODEL (space-bunny
+    // failover) — model tiêu token reasoning nội bộ trước khi trả JSON; 1800
+    // làm JSON bị cắt giữa chừng → parse fail (quan sát E2E: raw sạch 2233 ký
+    // tự ở prompt ngắn OK, prompt thật dài hơn thì cắt). 3000 đủ dư chỗ.
+    const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 3000, label: `OpusReview ${proposal.id.slice(0, 8)}` })
+    let parsed = parseOpusReviewVerdict(raw)
+    // JSON parse fail (bị cắt/lạc format) → thử lại 1 lần với nhắc chặt + temp
+    // thấp (pattern giống generateWorkPlan); vẫn hỏng → throw (fail-open giữ
+    // pending — Mr. Architect vẫn duyệt thủ công được).
+    if (!parsed) {
+      console.warn('[SelfDirection] OpusReview: verdict JSON không parse được — thử lại lần 2 (temp thấp + nhắc JSON-only)')
+      const retryRaw = await callBrain({
+        prompt: `${userPrompt}\n\n⚠️ LẦN THỬ LẠI: lần trước output KHÔNG phải JSON hợp lệ (bị cắt/lạc format). Lần này output CHỈ gồm JSON DUY NHẤT ở dòng đầu tiên, không giải thích trước/sau, các chuỗi văn bản giữ NGẮN GỌN (mỗi phần tối đa 3 câu), đảm bảo đóng đủ mọi ngoặc.`,
+        systemPrompt,
+        maxTokens: 3000,
+        temperature: 0.2,
+        label: `OpusReview-jsonretry ${proposal.id.slice(0, 8)}`,
+      })
+      parsed = parseOpusReviewVerdict(retryRaw)
+      if (!parsed) throw new Error('Không parse được verdict JSON sau 2 lần thử')
+    }
+    let verdict: SdReviewVerdict = parsed
+    // approve_partial mà edited thiếu nội dung hợp lệ → thử lại 1 lần (nhắc
+    // chặt); vẫn hỏng → HẠ XUỐNG reject (an toàn hơn duyệt toàn bộ thứ Opus
+    // vừa kết luận chỉ đáng làm 1 phần) — agent nhận lý do rõ để đề xuất lại bản thu hẹp.
+    if (verdict.decision === 'approve_partial' && !isValidEditedProposal(verdict.edited)) {
+      console.warn('[SelfDirection] OpusReview: approve_partial thiếu object edited hợp lệ — thử lại lần 2 (nhắc chặt)')
+      const retryRaw = await callBrain({
+        prompt: `${userPrompt}\n\n⚠️ LẦN THỬ LẠI: lần trước trả "approve_partial" nhưng object "edited" thiếu/thiếu nội dung (title/problem/solution/implementation đều BẮT BUỘC, mỗi phần ≥ 1 câu cụ thể). Trả lại JSON đầy đủ.`,
+        systemPrompt,
+        maxTokens: 3000,
+        temperature: 0.2,
+        label: `OpusReview-retry ${proposal.id.slice(0, 8)}`,
+      })
+      const retryParsed = parseOpusReviewVerdict(retryRaw)
+      if (retryParsed) verdict = retryParsed
+      if (verdict.decision === 'approve_partial' && !isValidEditedProposal(verdict.edited)) {
+        verdict = {
+          decision: 'reject',
+          reason: `${verdict.reason} — Opus định thu hẹp phạm vi nhưng bản chỉnh sửa không hợp lệ; agent đề xuất lại BẢN THU HẸP phần cần thiết`.slice(0, 600),
+        }
+      }
     }
 
     const now = new Date()
     const dueNow = !proposal.scheduleAt || proposal.scheduleAt.getTime() <= now.getTime()
-    if (verdict.decision === 'approve') {
-      await db.selfDirectionProposal.update({
-        where: { id: proposalId },
-        data: {
-          status: dueNow ? 'ready' : 'approved',
-          // USER DECISION #3: duyệt chuyển từ Omega sang Opus — danh nghĩa Opus
-          reviewer: 'opus',
-          decisionReason: `Opus duyệt: ${verdict.reason}`,
-          reviewedAt: now,
-        },
-      })
+    if (verdict.decision === 'approve' || verdict.decision === 'approve_partial') {
+      const isPartial = verdict.decision === 'approve_partial'
+      // TASK 32 (mechanism 1): approve_partial → GHI ĐÈ nội dung đề xuất bằng
+      // bản Opus đã chỉnh + lưu audit before/after vào reviewEdits (Mr.
+      // Architect đối chiếu trong UI). Triển khai chạy trên BẢN ĐÃ THU HẸP.
+      if (isPartial && verdict.edited) {
+        const before = {
+          title: proposal.title, problem: proposal.problem, solution: proposal.solution,
+          implementation: proposal.implementation, impact: proposal.impact,
+        }
+        const after = {
+          title: verdict.edited.title, problem: verdict.edited.problem, solution: verdict.edited.solution,
+          implementation: verdict.edited.implementation,
+          impact: [verdict.edited.impact, verdict.scopeNote ? `Phạm vi đã thu hẹp khi duyệt: ${verdict.scopeNote}` : null]
+            .filter(Boolean).join(' — ') || null,
+        }
+        const existingEdits = Array.isArray(proposal.reviewEdits) ? (proposal.reviewEdits as unknown[]) : []
+        const editRecord = {
+          at: now.toISOString(), reason: verdict.reason, scopeNote: verdict.scopeNote ?? null, before, after,
+        }
+        await db.selfDirectionProposal.update({
+          where: { id: proposalId },
+          data: {
+            status: dueNow ? 'ready' : 'approved',
+            reviewer: 'opus',
+            decisionReason: `Opus duyệt (đã thu hẹp phạm vi): ${verdict.reason}${verdict.scopeNote ? ` — Phạm vi: ${verdict.scopeNote}` : ''}`,
+            reviewedAt: now,
+            title: after.title,
+            problem: after.problem,
+            solution: after.solution,
+            implementation: after.implementation,
+            impact: after.impact,
+            reviewEdits: [...existingEdits, editRecord] as unknown as Prisma.InputJsonValue,
+          },
+        })
+        console.log(`[SelfDirection] Opus DUYỆT (THU HẸP PHẠM VI) "${proposal.title}" → "${after.title}"${dueNow ? ' → kích hoạt triển khai' : ` (hẹn lịch ${proposal.scheduleAt?.toISOString()})`}: ${verdict.reason}${verdict.scopeNote ? ` | Phạm vi: ${verdict.scopeNote}` : ''}`)
+      } else {
+        await db.selfDirectionProposal.update({
+          where: { id: proposalId },
+          data: {
+            status: dueNow ? 'ready' : 'approved',
+            // USER DECISION #3: duyệt chuyển từ Omega sang Opus — danh nghĩa Opus
+            reviewer: 'opus',
+            decisionReason: `Opus duyệt: ${verdict.reason}`,
+            reviewedAt: now,
+          },
+        })
+        console.log(`[SelfDirection] Opus DUYỆT "${proposal.title}"${dueNow ? ' → kích hoạt triển khai' : ` (hẹn lịch ${proposal.scheduleAt?.toISOString()})`}: ${verdict.reason}`)
+      }
       if (dueNow) void triggerOrchestration(proposalId, { dryRun: true })
-      console.log(`[SelfDirection] Opus DUYỆT "${proposal.title}"${dueNow ? ' → kích hoạt triển khai' : ` (hẹn lịch ${proposal.scheduleAt?.toISOString()})`}: ${verdict.reason}`)
     } else {
       await db.selfDirectionProposal.update({
         where: { id: proposalId },
@@ -685,7 +846,10 @@ Quyết định (JSON).`
     // nguyên đề xuất 4 trường (implementation "từng việc cụ thể" dễ dài) —
     // 900 làm JSON bị cắt giữa chừng → parse fail → sweep retry 60s vô hạn
     // với kết quả gần như xác định (temp thấp). 1400 = ngang writeFinalReport.
-    const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 1400, temperature: 0.3, label: `OpusFollowUp ${proposal.id.slice(0, 8)}` })
+    // FIX Task 32 (E2E 2026-09-27): 1400 → 2800 — ZEN FAILOVER space-bunny là
+    // reasoning model đốt 1400-4000 token nội bộ trước khi trả JSON; 1400 làm
+    // JSON đề xuất phái sinh bị cắt → sweep retry 60s vô hạn.
+    const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 2800, temperature: 0.3, label: `OpusFollowUp ${proposal.id.slice(0, 8)}` })
     const jsonStr = findBalancedJson(raw.replace(/```(?:json)?/g, ''), 'create')
     if (!jsonStr) throw new Error('Không parse được verdict JSON')
     const obj = JSON.parse(jsonStr) as Record<string, unknown>
@@ -948,6 +1112,261 @@ function defaultPlan(title: string, validNames: string[], executionMode = 'llm')
   }
 }
 
+// ==================== 2b. RE-PLAN — Omega đánh giá lại các bước còn lại sau mỗi bước hoàn thành (TASK 32 — mechanism 2) ====================
+
+/**
+ * TASK 32 (2026-09-27, user directive): sau khi MỖI bước hoàn thành (đạt),
+ * OMEGA check lại các bước CÒN LẠI của kế hoạch có còn phù hợp với kết quả
+ * thực tế vừa có không — đúng yêu cầu "thay đổi nội dung công việc, thay đổi
+ * agent, thậm chí thay đổi lại công việc khác phù hợp hơn":
+ *   - keep    : bước còn đúng → giữ nguyên (mặc định an toàn)
+ *   - adjust  : đổi nội dung công việc (title/description) HOẶC đổi agent
+ *               (assignee) cho khớp kết quả bước vừa xong
+ *   - drop    : bước đã bị kết quả bước trước giải quyết trọn / thừa → bỏ
+ *   - newSteps: việc MỚI phát sinh → chèn TRƯỚC bước verify_and_push cuối
+ * Bước verify_and_push cuối (code-workflow) được BẢO VỆ tuyệt đối (force keep
+ * — pipeline kiểm định là đường duy nhất đẩy code). Mọi thay đổi áp dụng lên
+ * ProposalStep trong DB (renumber tuần tự tiếp sau các bước đã xong) + lưu
+ * proposal.replanHistory (UI hiển thị) + console log.
+ *
+ * Fail-open tuyệt đối: LLM/parse/DB lỗi → trả null (giữ nguyên kế hoạch cũ) —
+ * re-plan là CẢI THIỆN, không bao giờ được phép giết pipeline.
+ *
+ * Trả về: hàng đợi MỚI (toàn bộ — gồm cả prefix các bước đã xong) khi có ít
+ * nhất 1 thay đổi thật; null khi không còn bước nào / không đổi gì / lỗi.
+ */
+export async function maybeReplanAfterStepCompletion(params: {
+  proposal: { id: string; title: string; problem: string; solution: string; executionMode: string }
+  currentQueue: SdPlanStep[]
+  doneIndex: number
+  doneOutputs: Array<{ title: string; output: string }>
+  isCodeWorkflow: boolean
+}): Promise<SdPlanStep[] | null> {
+  const { proposal, currentQueue, doneIndex, doneOutputs, isCodeWorkflow } = params
+  try {
+    // Nguồn chân lý các bước còn lại: DB (status pending) — mang stepOrder thật
+    // (đã renumber qua các lần re-plan trước nếu có).
+    const pendingRows = await db.proposalStep.findMany({
+      where: { proposalId: proposal.id, status: 'pending' },
+      orderBy: { stepOrder: 'asc' },
+    })
+    if (pendingRows.length === 0) return null
+
+    // Tối ưu chi phí: bước còn lại DUY NHẤT là verify_and_push (pipeline cố
+    // định của Omega — không có gì để đánh giá lại) → bỏ qua LLM call.
+    const lastPending = pendingRows[pendingRows.length - 1]
+    if (isCodeWorkflow && pendingRows.length === 1 && isVerifyAndPushStep({ title: lastPending.title, assignee: lastPending.assignee }, true)) {
+      return null
+    }
+
+    const justDone = currentQueue[doneIndex]
+    if (!justDone) return null
+    const justDoneOutput = doneOutputs[doneOutputs.length - 1]?.output || '(trống)'
+    const { names } = await rosterInfo()
+
+    const systemPrompt = `Bạn là OMEGA — orchestrator của hệ thống multi-agent TMO. Một bước trong kế hoạch triển khai VỪA HOÀN THÀNH với kết quả cụ thể. Nhiệm vụ: ĐÁNH GIÁ LẠI các bước CÒN LẠI cho khớp với kết quả thực tế vừa có.
+
+Nguyên tắc:
+- keep: bước còn phù hợp → giữ nguyên (mặc định an toàn).
+- adjust: bước còn cần nhưng nội dung công việc HOẶC agent được giao không còn phù hợp với kết quả vừa có → cung cấp ĐẦY ĐỦ title + description + assignee MỚI.
+- drop: bước đã bị kết quả bước vừa xong giải quyết trọn / trở nên thừa → bỏ, kèm rationale.
+- newSteps: việc MỚI phát sinh từ kết quả bước vừa xong mà kế hoạch chưa đề cập (mảng rỗng nếu không có).
+- Bước verify_and_push / pipeline kiểm định cuối KHÔNG bao giờ drop hay adjust.
+- KHÔNG bịa việc vô ích để "cho có thay đổi" — kế hoạch đã ổn thì replanNeeded=false.
+
+Output DUY NHẤT một JSON hợp lệ (KHÔNG markdown fence):
+{"replanNeeded": true|false, "reason": "tóm tắt 1-3 câu (tiếng Việt)",
+ "steps": [{"stepOrder": <số bước còn lại>, "action": "keep"|"adjust"|"drop", "title": "(khi adjust)", "description": "(khi adjust)", "assignee": "(khi adjust)", "rationale": "(khi adjust/drop)"}],
+ "newSteps": [{"title": "...", "description": "...", "assignee": "TÊN agent", "rationale": "..."}]}
+(steps chỉ gồm các bước CÒN LẠI; keep chỉ cần stepOrder; replanNeeded=false khi giữ nguyên tất cả.)`
+
+    const remainingText = pendingRows
+      .map(r => `Bước ${r.stepOrder}. [${r.assignee}] ${r.title} — ${r.description.slice(0, 250)}`)
+      .join('\n')
+    const doneContext = doneOutputs.slice(-3)
+      .map(p => `• [${p.title}]: ${p.output.slice(0, 300)}`)
+      .join('\n') || '(chưa có)'
+
+    const userPrompt = `ĐỀ XUẤT ĐANG TRIỂN KHAI: ${proposal.title}
+VẤN ĐỀ: ${proposal.problem.slice(0, 400)}
+GIẢI PHÁP ĐÃ DUYỆT: ${proposal.solution.slice(0, 400)}
+
+BƯỚC VỪA HOÀN THÀNH: ${justDone.title} [${justDone.assignee}]
+KẾT QUẢ BÀN GIAO CỦA BƯỚC ĐÓ:
+${justDoneOutput.slice(0, 1200)}
+
+NGỮ CẢNH CÁC BƯỚC TRƯỚC ĐÓ:
+${doneContext}
+
+CÁC BƯỚC CÒN LẠI CỦA KẾ HOẠCH:
+${remainingText}
+
+AGENT ROSTER (chọn assignee từ đây): ${names.join(', ')}
+
+Đánh giá lại các bước còn lại (JSON).`
+
+    const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 2400, temperature: 0.3, label: `OmegaRePlan ${proposal.id.slice(0, 8)}` })
+    const jsonStr = findBalancedJson(raw.replace(/```(?:json)?/g, ''), 'replanNeeded')
+    if (!jsonStr) return null
+    const obj = JSON.parse(jsonStr) as Record<string, unknown>
+    if (obj.replanNeeded !== true) {
+      console.log(`[SelfDirection] RePlan sau bước ${doneIndex + 1}: Omega KHÔNG điều chỉnh (${typeof obj.reason === 'string' ? obj.reason.slice(0, 140) : 'kế hoạch còn phù hợp'})`)
+      return null
+    }
+    const reason = typeof obj.reason === 'string' ? obj.reason.slice(0, 600) : ''
+    const rawStepDecisions = Array.isArray(obj.steps) ? obj.steps : []
+    const rawNewSteps = Array.isArray(obj.newSteps) ? obj.newSteps : []
+
+    // stepOrder → decision (bỏ entry lạ)
+    const decisionMap = new Map<number, { action: 'keep' | 'adjust' | 'drop'; title?: string; description?: string; assignee?: string; rationale?: string }>()
+    for (const d of rawStepDecisions) {
+      if (!d || typeof d !== 'object') continue
+      const rec = d as Record<string, unknown>
+      const order = Number(rec.stepOrder)
+      if (!Number.isFinite(order)) continue
+      const action = rec.action === 'adjust' ? 'adjust' : rec.action === 'drop' ? 'drop' : 'keep'
+      decisionMap.set(order, {
+        action,
+        title: typeof rec.title === 'string' ? rec.title.slice(0, 150) : undefined,
+        description: typeof rec.description === 'string' ? rec.description.slice(0, 800) : undefined,
+        assignee: typeof rec.assignee === 'string' ? rec.assignee : undefined,
+        rationale: typeof rec.rationale === 'string' ? rec.rationale.slice(0, 400) : undefined,
+      })
+    }
+
+    const doneCount = doneIndex + 1
+    const changes: Array<Record<string, unknown>> = []
+    const survivorRowIds: string[] = []
+    const survivorDefs: SdPlanStep[] = []
+
+    for (let j = 0; j < pendingRows.length; j++) {
+      const row = pendingRows[j]
+      const d = decisionMap.get(row.stepOrder)
+      // BẢO VỆ verify_and_push cuối (code-workflow): force keep mọi trường hợp
+      const isProtectedVerify = isCodeWorkflow && j === pendingRows.length - 1
+        && isVerifyAndPushStep({ title: row.title, assignee: row.assignee }, true)
+      const action = isProtectedVerify ? 'keep' : (d?.action ?? 'keep')
+
+      if (action === 'drop') {
+        await db.proposalStep.delete({ where: { id: row.id } })
+        changes.push({
+          action: 'drop', stepOrder: row.stepOrder,
+          old: { title: row.title, description: row.description, assignee: row.assignee },
+          rationale: d?.rationale || '',
+        })
+        continue
+      }
+
+      if (action === 'adjust' && d?.title && d?.description) {
+        const newAssignee = normalizeAssignee(d.assignee, names)
+        await db.proposalStep.update({
+          where: { id: row.id },
+          data: { title: d.title, description: d.description, assignee: newAssignee },
+        })
+        changes.push({
+          action: 'adjust', stepOrder: row.stepOrder,
+          old: { title: row.title, description: row.description, assignee: row.assignee },
+          new: { title: d.title, description: d.description, assignee: newAssignee },
+          rationale: d?.rationale || '',
+        })
+        survivorRowIds.push(row.id)
+        survivorDefs.push({ title: d.title, description: d.description, assignee: newAssignee, executionMode: proposal.executionMode })
+        continue
+      }
+
+      if (action === 'adjust') {
+        console.warn(`[SelfDirection] RePlan: adjust bước ${row.stepOrder} thiếu title/description — giữ nguyên (an toàn)`)
+      }
+      // keep (mặc định an toàn — gồm cả trường hợp LLM không nhắc tới bước này)
+      survivorRowIds.push(row.id)
+      survivorDefs.push({ title: row.title, description: row.description, assignee: row.assignee, executionMode: proposal.executionMode })
+    }
+
+    // newSteps — cap tổng ≤ MAX_PLAN_STEPS, chèn TRƯỚC verify_and_push cuối
+    const slots = Math.max(0, MAX_PLAN_STEPS - doneCount - survivorDefs.length)
+    const newDefs: SdPlanStep[] = []
+    const newRowIds: string[] = []
+    for (const ns of rawNewSteps) {
+      if (newDefs.length >= slots) break
+      if (!ns || typeof ns !== 'object') continue
+      const rec = ns as Record<string, unknown>
+      const title = typeof rec.title === 'string' ? rec.title.trim().slice(0, 150) : ''
+      const description = typeof rec.description === 'string' ? rec.description.trim().slice(0, 800) : ''
+      if (!title || !description) continue
+      const assignee = normalizeAssignee(typeof rec.assignee === 'string' ? rec.assignee : null, names)
+      newDefs.push({ title, description, assignee, executionMode: proposal.executionMode })
+      changes.push({
+        action: 'new',
+        new: { title, description, assignee },
+        rationale: typeof rec.rationale === 'string' ? rec.rationale.slice(0, 400) : '',
+      })
+    }
+
+    if (changes.length === 0) {
+      console.log(`[SelfDirection] RePlan sau bước ${doneCount}: Omega giữ nguyên toàn bộ ${pendingRows.length} bước còn lại — ${reason.slice(0, 140)}`)
+      return null
+    }
+
+    // Vị trí chèn newSteps: trước verify_and_push cuối (code-workflow), không
+    // thì chèn cuối danh sách.
+    let insertAt = survivorDefs.length
+    if (isCodeWorkflow && survivorDefs.length > 0) {
+      const lastDef = survivorDefs[survivorDefs.length - 1]
+      if (isVerifyAndPushStep({ title: lastDef.title, assignee: lastDef.assignee }, true)) insertAt = survivorDefs.length - 1
+    }
+
+    // Tạo rows mới (order tạm cao — được renumber ngay sau) theo đúng thứ tự chèn
+    for (const nd of newDefs) {
+      const created = await db.proposalStep.create({
+        data: {
+          proposalId: proposal.id,
+          stepOrder: doneCount + 500 + newRowIds.length,
+          title: nd.title, description: nd.description, assignee: nd.assignee,
+          status: 'pending',
+        },
+      })
+      newRowIds.push(created.id)
+    }
+
+    // Hàng đợi cuối cùng (đúng thứ tự) + renumber tuần tự từ doneCount+1
+    const finalDefs = [...survivorDefs]
+    finalDefs.splice(insertAt, 0, ...newDefs)
+    const finalRowIds = [...survivorRowIds]
+    finalRowIds.splice(insertAt, 0, ...newRowIds)
+    for (let k = 0; k < finalRowIds.length; k++) {
+      await db.proposalStep.update({ where: { id: finalRowIds[k] }, data: { stepOrder: doneCount + 1 + k } })
+    }
+
+    // Lịch sử re-plan (UI hiển thị) — chỉ ghi khi có thay đổi THẬT
+    const entry = {
+      at: new Date().toISOString(),
+      afterStepOrder: doneCount,
+      afterStepTitle: justDone.title,
+      afterStepAssignee: justDone.assignee,
+      reason: reason || '(không nêu)',
+      changes,
+    }
+    const cur = await db.selfDirectionProposal.findUnique({ where: { id: proposal.id }, select: { replanHistory: true } })
+    const history = Array.isArray(cur?.replanHistory) ? (cur?.replanHistory as unknown[]) : []
+    await db.selfDirectionProposal.update({
+      where: { id: proposal.id },
+      data: { replanHistory: [...history, entry] as unknown as Prisma.InputJsonValue },
+    })
+
+    const changeSummary = changes.map(c =>
+      c.action === 'drop' ? `bỏ bước ${c.stepOrder}`
+      : c.action === 'adjust' ? `đổi bước ${c.stepOrder} → "${(c.new as { title?: string })?.title}" [${(c.new as { assignee?: string })?.assignee}]`
+      : `thêm "${(c.new as { title?: string })?.title}" [${(c.new as { assignee?: string })?.assignee}]`,
+    ).join('; ')
+    console.log(`[SelfDirection] RePlan sau bước ${doneCount}/${doneCount + finalDefs.length} "${justDone.title}": ${changeSummary} — lý do: ${reason.slice(0, 200)}`)
+    return [...currentQueue.slice(0, doneIndex + 1), ...finalDefs]
+  } catch (err) {
+    // Fail-open: lỗi bất kỳ → giữ nguyên kế hoạch, KHÔNG giết pipeline
+    console.warn(`[SelfDirection] RePlan sau bước ${doneIndex + 1} lỗi (fail-open — giữ kế hoạch hiện tại):`, err instanceof Error ? err.message : String(err))
+    return null
+  }
+}
+
 // ==================== 3. EXECUTE — agent thực hiện 1 bước ====================
 
 async function executeStep(params: {
@@ -991,7 +1410,10 @@ Viết báo cáo output của bạn.`
       callLLMForAgent(userPrompt, persona.brain, systemPrompt, {
         agentName: step.assignee,
         temperature: 0.5,
-        maxTokens: 900,
+        // FIX Task 32 (E2E 2026-09-27): 900 → 2500 — reasoning model failover
+        // (space-bunny) đốt token nội bộ; 900 làm output agent bị cắt cụt giữa
+        // chừng (quan sát: 149 chars trả về sau 3997 tokens tổng).
+        maxTokens: 2500,
       }),
       LLM_TIMEOUT_MS,
       `StepExec ${step.assignee} (NVIDIA chain)`,
@@ -1578,7 +2000,12 @@ ${params.output.slice(0, 2000)}
 
   let evalErrMsg = ''
   try {
-    const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 350, temperature: 0.2, label: `StepEval ${params.step.stepOrder}` })
+    // FIX Task 32 (E2E 2026-09-27): 350 → 2000 — evaluator QUA reasoning
+    // model failover cần chỗ cho token reasoning nội bộ; 350 làm JSON
+    // {complete,evaluation} bị cắt/mất → "không đánh giá được" 4 lần liên tiếp
+    // → step fail oan (quan sát E2E bước 1/4 MEGATRON). Trần cao vô hại với
+    // model non-reasoning (tự dừng sớm).
+    const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 2000, temperature: 0.2, label: `StepEval ${params.step.stepOrder}` })
     const jsonStr = findBalancedJson(raw.replace(/```(?:json)?/g, ''), 'complete')
     if (jsonStr) {
       const obj = JSON.parse(jsonStr) as Record<string, unknown>
@@ -1694,7 +2121,10 @@ Viết báo cáo hoàn thiện.`
   const reportPrefix = ''
 
   try {
-    const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 1400, temperature: 0.4, label: `${reviewerName}Report` })
+    // FIX Task 32 (E2E 2026-09-27): 1400 → 3000 — báo cáo hoàn thiện 5 section
+    // markdown QUA reasoning model failover cần chỗ cho token nội bộ; 1400 cắt
+    // giữa chừng (báo cáo cụt, mất section cuối).
+    const raw = await callBrain({ prompt: userPrompt, systemPrompt, maxTokens: 3000, temperature: 0.4, label: `${reviewerName}Report` })
     return `${reportPrefix}${raw.slice(0, 6000)}`
   } catch (err) {
     console.warn(`[SelfDirection] ${reviewerName}Report lỗi — dùng báo cáo deterministic:`, err instanceof Error ? err.message : String(err))
@@ -1979,11 +2409,14 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
   const isCodeWorkflow = proposal.executionMode === 'code-workflow'
   let failed = false
   let failReason = ''
-  const totalSteps = plan.steps.length
+  // TASK 32 (mechanism 2): hàng đợi bước LINH ĐỘNG — sau mỗi bước hoàn thành,
+  // Omega re-plan các bước còn lại (adjust nội dung/agent, drop bước thừa,
+  // thêm việc mới) → queue thay thế phần còn lại của vòng lặp này.
+  let stepsQueue: SdPlanStep[] = plan.steps
   const doneOutputs: Array<{ title: string; output: string }> = []
 
-  for (let i = 0; i < totalSteps; i++) {
-    const stepDef = plan.steps[i]
+  for (let i = 0; i < stepsQueue.length; i++) {
+    const stepDef = stepsQueue[i]
     const stepRow = await db.proposalStep.findFirst({ where: { proposalId, stepOrder: i + 1 } })
     if (!stepRow) continue
 
@@ -2001,7 +2434,7 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
     // bước đã đạt. Giờ: 1 chu kỳ REPAIR — RAMPAGE nhận chi tiết lỗi, sửa code
     // thật, rồi chạy lại pipeline (tối đa 2 lần chạy / bước). Pipeline fail do
     // git/secret/smoke (không sửa bằng code thường) → giữ hành vi cũ (fail).
-    if (isCodeWorkflow && isVerifyAndPushStep(stepDef, i === totalSteps - 1)) {
+    if (isCodeWorkflow && isVerifyAndPushStep(stepDef, i === stepsQueue.length - 1)) {
       const runPipeline = () => executeVerifyAndPushStep({
         proposal: { id: proposal.id, title: proposal.title },
         planSummary: plan.planSummary,
@@ -2018,7 +2451,7 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
           .map(s => `${s.name} FAIL: ${s.detail || '(không chi tiết)'}`)
           .join('\n')
           .slice(0, 1500)
-        console.warn(`[SelfDirection] Bước ${i + 1}/${totalSteps} verify_and_push fail ở bước kiểm định SỬA ĐƯỢC — giao RAMPAGE sửa code rồi chạy lại pipeline (lần 2/2)`)
+        console.warn(`[SelfDirection] Bước ${i + 1}/${stepsQueue.length} verify_and_push fail ở bước kiểm định SỬA ĐƯỢC — giao RAMPAGE sửa code rồi chạy lại pipeline (lần 2/2)`)
         await db.proposalStep.update({
           where: { id: stepRow.id },
           data: {
@@ -2069,7 +2502,7 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
         // FIX (2026-09-03, lượt quan sát 2 — Run 4): dry-run KHÔNG có commitHash
         // (bỏ commit thật) — log cũ in "cây sạch, không có gì để commit" là SAI
         // sự thật (Run 4 dry-run có 19 file chờ commit nhưng log vẫn nói cây sạch).
-        console.log(`[SelfDirection] Bước ${i + 1}/${totalSteps} verify_and_push [Omega] ĐẠT — pipeline PASS${result.receipt.commitHash ? ` (commit ${result.receipt.commitHash.slice(0, 7)}, pushed=${result.receipt.pushed === true})` : opts?.dryRun === true ? ' [DRY-RUN — bỏ commit/push thật]' : ' (cây sạch — không có gì để commit)'}`)
+        console.log(`[SelfDirection] Bước ${i + 1}/${stepsQueue.length} verify_and_push [Omega] ĐẠT — pipeline PASS${result.receipt.commitHash ? ` (commit ${result.receipt.commitHash.slice(0, 7)}, pushed=${result.receipt.pushed === true})` : opts?.dryRun === true ? ' [DRY-RUN — bỏ commit/push thật]' : ' (cây sạch — không có gì để commit)'}`)
         continue
       }
       await db.proposalStep.update({
@@ -2084,7 +2517,7 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
       })
       failed = true
       failReason = `Bước ${i + 1} "${stepDef.title}" (verify_and_push pipeline) THẤT BẠI: ${result.receipt.error || 'có bước kiểm định không đạt'}`
-      console.warn(`[SelfDirection] Bước ${i + 1}/${totalSteps} verify_and_push THẤT BẠI: ${result.receipt.error || 'xem steps trong workspaceReceipt'}`)
+      console.warn(`[SelfDirection] Bước ${i + 1}/${stepsQueue.length} verify_and_push THẤT BẠI: ${result.receipt.error || 'xem steps trong workspaceReceipt'}`)
       break // dừng cả pipeline — KHÔNG push code chưa qua kiểm định
     }
 
@@ -2141,9 +2574,9 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
         })
         doneOutputs.push({ title: stepDef.title, output: lastOutput })
         stepDone = true
-        console.log(`[SelfDirection] Bước ${i + 1}/${totalSteps} "${stepDef.title}" [${stepDef.assignee}] ĐẠT (lần ${attempt})`)
+        console.log(`[SelfDirection] Bước ${i + 1}/${stepsQueue.length} "${stepDef.title}" [${stepDef.assignee}] ĐẠT (lần ${attempt})`)
       } else {
-        console.warn(`[SelfDirection] Bước ${i + 1}/${totalSteps} [${stepDef.assignee}] CHƯA ĐẠT (lần ${attempt}): ${lastEvaluation.slice(0, 150)}`)
+        console.warn(`[SelfDirection] Bước ${i + 1}/${stepsQueue.length} [${stepDef.assignee}] CHƯA ĐẠT (lần ${attempt}): ${lastEvaluation.slice(0, 150)}`)
         // ── Lượt quan sát 3 (2026-09-04): LỖI PROVIDER ≠ lỗi chất lượng —
         // không đốt 4 attempts trong 1 giây khi z-ai gateway 429/timeout.
         // Phát hiện qua output (LLM unavailable/thất bại) hoặc evaluation
@@ -2180,6 +2613,22 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
       failed = true
       failReason = `Bước ${i + 1} "${stepDef.title}" (agent ${stepDef.assignee}) không đạt sau ${MAX_STEP_ATTEMPTS} lần thử`
       break // dừng cả pipeline
+    }
+
+    // ── TASK 32 (mechanism 2): OMEGA ĐÁNH GIÁ LẠI CÁC BƯỚC CÒN LẠI sau mỗi
+    // bước hoàn thành — kết quả bước vừa có có thể làm các bước sau cần đổi
+    // nội dung, đổi agent, bỏ bớt (đã giải quyết xong) hoặc thêm việc mới.
+    // Fail-open: lỗi → giữ nguyên kế hoạch, KHÔNG bao giờ giết pipeline.
+    // (Bước cuối không có bước sau → không gọi.)
+    if (i < stepsQueue.length - 1) {
+      const replannedQueue = await maybeReplanAfterStepCompletion({
+        proposal,
+        currentQueue: stepsQueue,
+        doneIndex: i,
+        doneOutputs,
+        isCodeWorkflow,
+      })
+      if (replannedQueue) stepsQueue = replannedQueue
     }
   }
 

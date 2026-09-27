@@ -75,6 +75,7 @@ import {
   RefreshCw,
   RotateCcw,
   Route,
+  Scissors,
   Sparkles,
   Split,
   Target,
@@ -141,6 +142,12 @@ export interface SdProposal {
   /** Đề xuất cha nếu đây là đề xuất phái sinh do Opus tạo từ báo cáo (null = gốc) */
   followUpParentId?: string | null
   followUpDepth?: number
+  /** TASK 32 (mechanism 1): lịch sử Opus TỰ CHỈNH SỬA đề xuất khi duyệt approve_partial
+   * (thu hẹp phạm vi về phần cần thiết) — audit before/after cho Mr. Architect */
+  reviewEdits?: SdReviewEdit[] | null
+  /** TASK 32 (mechanism 2): lịch sử Omega điều chỉnh kế hoạch sau mỗi bước
+   * hoàn thành (adjust nội dung/agent, drop bước thừa, thêm việc mới) */
+  replanHistory?: SdReplanEntry[] | null
   executedAt: string | null
   completedAt: string | null
   createdAt: string
@@ -163,6 +170,34 @@ export interface SdStep {
   attempts: number
   startedAt: string | null
   finishedAt: string | null
+}
+
+/** TASK 32 (mechanism 1): 1 lần Opus chỉnh sửa đề xuất khi duyệt approve_partial */
+export interface SdReviewEdit {
+  at: string
+  reason: string
+  scopeNote?: string | null
+  before: { title: string; problem: string; solution: string; implementation: string; impact?: string | null }
+  after: { title: string; problem: string; solution: string; implementation: string; impact?: string | null }
+}
+
+/** TASK 32 (mechanism 2): 1 thay đổi trong 1 lần Omega re-plan kế hoạch */
+export interface SdReplanChange {
+  action: 'adjust' | 'drop' | 'new'
+  stepOrder?: number
+  rationale?: string
+  old?: { title: string; description: string; assignee: string }
+  new?: { title: string; description: string; assignee: string }
+}
+
+/** TASK 32 (mechanism 2): 1 lần Omega đánh giá lại các bước còn lại sau một bước hoàn thành */
+export interface SdReplanEntry {
+  at: string
+  afterStepOrder: number
+  afterStepTitle: string
+  afterStepAssignee: string
+  reason: string
+  changes: SdReplanChange[]
 }
 
 export interface SdSettings {
@@ -1675,6 +1710,39 @@ export default function SelfDirectionModule() {
                 </section>
               )}
 
+              {/* 1.5 TASK 32 (mechanism 1): Opus đã TỰ CHỈNH SỬA đề xuất khi duyệt
+                  approve_partial — hiển thị lý do + phạm vi giữ/bỏ + nội dung
+                  GỐC trước chỉnh sửa để Mr. Architect đối chiếu. */}
+              {!!detail.proposal.reviewEdits?.length && (
+                <section className="space-y-2">
+                  <p className="text-[10px] uppercase tracking-wider text-amber-300/80 flex items-center gap-1.5">
+                    <Scissors className="h-3 w-3" />
+                    Opus đã chỉnh sửa đề xuất khi duyệt ({detail.proposal.reviewEdits.length} lần)
+                  </p>
+                  {detail.proposal.reviewEdits.map((e, idx) => (
+                    <div key={idx} className="border border-amber-500/30 bg-amber-950/15 p-3 rounded space-y-1.5">
+                      <p className="text-xs text-stone-300 whitespace-pre-wrap break-words">{e.reason}</p>
+                      {e.scopeNote && (
+                        <p className="text-xs text-amber-200/90 whitespace-pre-wrap break-words">
+                          Phạm vi: {e.scopeNote}
+                        </p>
+                      )}
+                      <details className="group">
+                        <summary className="text-[10px] uppercase tracking-wider text-stone-500 cursor-pointer select-none hover:text-stone-400">
+                          Nội dung TRƯỚC khi chỉnh sửa
+                        </summary>
+                        <div className="mt-1.5 space-y-1 text-xs text-stone-400">
+                          <p className="break-words"><span className="text-stone-500">Tiêu đề:</span> {e.before.title}</p>
+                          <p className="whitespace-pre-wrap break-words"><span className="text-stone-500">Vấn đề:</span> {e.before.problem}</p>
+                          <p className="whitespace-pre-wrap break-words"><span className="text-stone-500">Giải pháp:</span> {e.before.solution}</p>
+                          <p className="whitespace-pre-wrap break-words"><span className="text-stone-500">Triển khai:</span> {e.before.implementation}</p>
+                        </div>
+                      </details>
+                    </div>
+                  ))}
+                </section>
+              )}
+
               {/* 2. Các bước triển khai */}
               <section className="space-y-2.5">
                 <p className="text-[10px] uppercase tracking-wider text-stone-500">
@@ -1697,6 +1765,40 @@ export default function SelfDirectionModule() {
                   </div>
                 )}
               </section>
+
+              {/* 2.5 TASK 32 (mechanism 2): Omega đã điều chỉnh kế hoạch giữa
+                  chừng sau mỗi bước hoàn thành — traceability đầy đủ:
+                  adjust (đổi nội dung/agent) / drop (bỏ bước thừa) / new (thêm việc). */}
+              {!!detail.proposal.replanHistory?.length && (
+                <section className="space-y-2">
+                  <p className="text-[10px] uppercase tracking-wider text-violet-300/80 flex items-center gap-1.5">
+                    <GitBranch className="h-3 w-3" />
+                    Omega đã điều chỉnh kế hoạch ({detail.proposal.replanHistory.length} lần)
+                  </p>
+                  {detail.proposal.replanHistory.map((r, idx) => (
+                    <div key={idx} className="border border-violet-500/30 bg-violet-950/20 p-3 rounded space-y-1.5">
+                      <p className="text-xs text-stone-300">
+                        Sau bước {r.afterStepOrder} “{r.afterStepTitle}” [{r.afterStepAssignee}]
+                      </p>
+                      <p className="text-xs text-stone-400 whitespace-pre-wrap break-words">{r.reason}</p>
+                      <ul className="space-y-1">
+                        {r.changes.map((c, cIdx) => (
+                          <li key={cIdx} className="text-xs text-stone-400 break-words">
+                            {c.action === 'drop' ? (
+                              <span className="text-red-300/90">Bỏ bước {c.stepOrder} (thừa/đã giải quyết)</span>
+                            ) : c.action === 'adjust' ? (
+                              <span className="text-amber-300/90">Đổi bước {c.stepOrder} thành “{c.new?.title}” [{c.new?.assignee}]</span>
+                            ) : (
+                              <span className="text-emerald-300/90">Thêm bước mới “{c.new?.title}” [{c.new?.assignee}]</span>
+                            )}
+                            {c.rationale ? ` — ${c.rationale}` : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </section>
+              )}
 
               {/* 3. Báo cáo hoàn thiện — hiện cho CẢ completed lẫn failed
                   (FIX 2026-09-02, Omega audit #3: báo cáo thất bại chứa phân
