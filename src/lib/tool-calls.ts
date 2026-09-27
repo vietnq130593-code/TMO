@@ -45,7 +45,12 @@ export interface ToolCallParseResult {
  * chars trong string + strip trailing comma (string-aware, không đụng nội dung
  * string) — fail-open, parse được thì dùng, không thì giữ đếm failure như cũ.
  */
-function tryParseLooseJson(raw: string): Record<string, unknown> | null {
+/**
+ * TASK 43 — export cho workflow-engine (parser bản địa của nó thiếu lớp
+ * loose-repair này: JSON args bị dính raw newline/tab trong chuỗi hoặc dấu
+ * phẩy thừa → JSON.parse thuần fail → tool call bị BỎ QUA im lặng).
+ */
+export function tryParseLooseJson(raw: string): Record<string, unknown> | null {
   try {
     const obj = JSON.parse(raw)
     return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : null

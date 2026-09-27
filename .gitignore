@@ -175,3 +175,6 @@ db/.quality-gate-test.db*
 # Stray Windows-path artifact (from cross-platform git operations)
 E:\\APP\\
 docs/TMO_WEEKLY_REPORT.md
+
+# Task 43 — agent-harness workspace (artifact kiểm định on-demand, không track)
+.tmo-harness/

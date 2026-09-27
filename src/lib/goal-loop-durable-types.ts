@@ -222,6 +222,18 @@ export const GOAL_LOOP_CHECKPOINT_MIN_INTERVAL_MS = Math.max(0, intEnvWithDefaul
 /** Throttle ghi heartbeat (ms) */
 export const GOAL_LOOP_HEARTBEAT_MIN_INTERVAL_MS = Math.max(0, intEnvWithDefault('GOAL_LOOP_HEARTBEAT_MIN_INTERVAL_MS', 15000))
 
+// ==================== TASK 43 — ADAPTIVE CONCURRENCY (AUTO-SCALING) ====================
+
+/**
+ * Auto-scale số job chạy song song trong khoảng [1, GOAL_LOOP_MAX_CONCURRENT]:
+ *   - SCALE UP khi queue depth > số job đang chạy (còn slot trần, không stall)
+ *   - SCALE DOWN khi có job stall-heartbeat (bảo vệ tải — KHÔNG kill job)
+ * 'off' → cố định GOAL_LOOP_MAX_CONCURRENT (hành vi cũ tĩnh).
+ */
+export const GOAL_LOOP_ADAPTIVE_CONCURRENCY = process.env.GOAL_LOOP_ADAPTIVE_CONCURRENCY !== 'off'
+/** Ngưỡng hàng đợi cảnh báo backpressure (số job queued — KHÔNG reject, chỉ warn + event) */
+export const GOAL_LOOP_QUEUE_WARN_THRESHOLD = Math.max(1, intEnvWithDefault('GOAL_LOOP_QUEUE_WARN_THRESHOLD', 25))
+
 // ==================== JOB STATUS (DB string constants) ====================
 
 export type GoalLoopJobStatus =

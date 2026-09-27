@@ -36,11 +36,16 @@ import {
   GOAL_LOOP_MAX_CONCURRENT,
   GOAL_LOOP_STALL_WARN_MS,
   GOAL_LOOP_WORKER_TICK_MS,
+  GOAL_LOOP_ADAPTIVE_CONCURRENCY,
+  GOAL_LOOP_QUEUE_WARN_THRESHOLD,
   type GoalLoopCheckpoint,
   type GoalLoopDurableHooks,
   type GoalLoopJobInput,
   type GoalLoopJobStatus,
 } from '@/lib/goal-loop-durable-types'
+// TASK 43 — Agent Event Bus: sự kiện vòng đời job phát lên bus hợp nhất
+// (GET /api/agent-events). Fail-open tuyệt đối bên trong emit.
+import { emitAgentEvent } from '@/lib/agent-event-bus'
 
 // ==================== TYPES ====================
 
@@ -125,6 +130,76 @@ class GoalLoopWorker {
   private started = false
   private intervalHandle: ReturnType<typeof setInterval> | null = null
 
+  // -------------------- TASK 43 — ADAPTIVE CONCURRENCY (AUTO-SCALING) --------------------
+
+  /** Cap hiện hành ∈ [1, GOAL_LOOP_MAX_CONCURRENT] — adapt theo queue depth + stall */
+  private adaptiveCap = GOAL_LOOP_MAX_CONCURRENT
+  /** Throttle đổi capacity (≥60s giữa 2 lần đổi — tránh dao động) */
+  private lastCapacityChangeAt = 0
+  /** Queue depth lần đo gần nhất (GET /api/agent-events expose) */
+  private lastQueuedCount = 0
+  /** Throttle cảnh báo backpressure (≥60s/lần) */
+  private lastBackpressureWarnAt = 0
+
+  /**
+   * TASK 43 — điều chỉnh capacity mỗi tick (fail-open — lỗi thì giữ nguyên):
+   *   - BACKPRESSURE: queued ≥ ngưỡng → warn + event (KHÔNG reject — job vẫn queued)
+   *   - SCALE DOWN: có job stall-heartbeat → giảm cap (bảo vệ tải, không kill)
+   *   - SCALE UP: queued > running và còn slot trần → tăng cap
+   */
+  private async adjustCapacity(): Promise<void> {
+    try {
+      const queued = await db.goalLoopJob.count({ where: { status: 'queued' } })
+      this.lastQueuedCount = queued
+      const now = Date.now()
+
+      if (queued >= GOAL_LOOP_QUEUE_WARN_THRESHOLD && now - this.lastBackpressureWarnAt > 60_000) {
+        this.lastBackpressureWarnAt = now
+        console.warn(`[GoalLoopWorker] BACKPRESSURE: ${queued} job đang queued (≥ ${GOAL_LOOP_QUEUE_WARN_THRESHOLD}) — worker chạy ${this.running.size}/${this.adaptiveCap}`)
+        emitAgentEvent('queue_backpressure', {
+          data: { queued, running: this.running.size, capacity: this.adaptiveCap, threshold: GOAL_LOOP_QUEUE_WARN_THRESHOLD },
+        })
+      }
+
+      if (!GOAL_LOOP_ADAPTIVE_CONCURRENCY) return
+
+      // SCALE DOWN — job đang stall (heartbeat stale > ngưỡng, đã từng ghi)
+      const stalledRunning = Array.from(this.running.values())
+        .filter(m => m.lastHeartbeatWrite > 0 && now - m.lastHeartbeatWrite > GOAL_LOOP_STALL_WARN_MS)
+        .length
+      if (stalledRunning > 0 && this.adaptiveCap > 1 && now - this.lastCapacityChangeAt > 60_000) {
+        const from = this.adaptiveCap
+        this.adaptiveCap--
+        this.lastCapacityChangeAt = now
+        console.warn(`[GoalLoopWorker] AUTO-SCALE DOWN: ${from}→${this.adaptiveCap} (${stalledRunning} job stall-heartbeat — tạm giảm job mới song song, KHÔNG kill job đang chạy)`)
+        emitAgentEvent('capacity_changed', { data: { from, to: this.adaptiveCap, reason: 'stall-heartbeat', stalledRunning } })
+        return
+      }
+
+      // SCALE UP — hàng đợi sâu hơn số job đang chạy, còn slot trần
+      if (queued > this.running.size && this.adaptiveCap < GOAL_LOOP_MAX_CONCURRENT && now - this.lastCapacityChangeAt > 60_000) {
+        const from = this.adaptiveCap
+        this.adaptiveCap++
+        this.lastCapacityChangeAt = now
+        console.log(`[GoalLoopWorker] AUTO-SCALE UP: ${from}→${this.adaptiveCap} (queued=${queued} > running=${this.running.size})`)
+        emitAgentEvent('capacity_changed', { data: { from, to: this.adaptiveCap, reason: 'queue-depth', queued } })
+      }
+    } catch { /* fail-open — capacity tuning không được phép chết tick */ }
+  }
+
+  /** TASK 43 — observability: capacity hiện tại của worker (/api/agent-events). */
+  getCapacityInfo(): Record<string, unknown> {
+    return {
+      maxConcurrent: GOAL_LOOP_MAX_CONCURRENT,
+      adaptiveCap: this.adaptiveCap,
+      adaptiveEnabled: GOAL_LOOP_ADAPTIVE_CONCURRENCY,
+      running: this.running.size,
+      queuedLastSeen: this.lastQueuedCount,
+      tickMs: GOAL_LOOP_WORKER_TICK_MS,
+      queueWarnThreshold: GOAL_LOOP_QUEUE_WARN_THRESHOLD,
+    }
+  }
+
   // -------------------- ENQUEUE --------------------
 
   /**
@@ -145,9 +220,13 @@ class GoalLoopWorker {
         input: JSON.stringify(input.jobInput),
       },
     })
-    console.log(
-      `[GoalLoopWorker] enqueue job ${job.id} — session ${input.sessionId} — goal: "${input.jobInput.userMessage.slice(0, 80)}"`
-    )
+    console.log(`[GoalLoopWorker] enqueue job ${job.id} — session ${input.sessionId} — goal: "${input.jobInput.userMessage.slice(0, 80)}"`)
+    emitAgentEvent('job_enqueued', {
+      jobId: job.id,
+      sessionId: input.sessionId,
+      agentName: input.jobInput.agentName,
+      data: { goal: input.jobInput.userMessage.slice(0, 160), model: input.jobInput.agentModel },
+    })
     return job.id
   }
 
@@ -162,7 +241,7 @@ class GoalLoopWorker {
       return
     }
     console.log(
-      `[GoalLoopWorker] start — tick mỗi ${GOAL_LOOP_WORKER_TICK_MS}ms, tối đa ${GOAL_LOOP_MAX_CONCURRENT} job song song, stall-warn ${GOAL_LOOP_STALL_WARN_MS}ms, max-attempts ${GOAL_LOOP_MAX_ATTEMPTS}`
+      `[GoalLoopWorker] start — tick mỗi ${GOAL_LOOP_WORKER_TICK_MS}ms, tối đa ${GOAL_LOOP_MAX_CONCURRENT} job song song (${GOAL_LOOP_ADAPTIVE_CONCURRENCY ? 'adaptive auto-scale BẬT' : 'cố định'}), stall-warn ${GOAL_LOOP_STALL_WARN_MS}ms, max-attempts ${GOAL_LOOP_MAX_ATTEMPTS}`
     )
     // Tick handler KHÔNG throw (tick wrap try/catch toàn bộ bên trong) —
     // interval không bao giờ chết vì lỗi 1 tick.
@@ -190,6 +269,8 @@ class GoalLoopWorker {
     try {
       await this.sweepOrphans()
       await this.claimQueued()
+      // TASK 43 — auto-scale capacity + backpressure warn (fail-open)
+      await this.adjustCapacity()
       // OPUS RECONCILIATION SWEEP (REVIEW 13-f): lưới an toàn cho auto loop —
       // bắt mọi stall mà hook sự kiện bỏ sót (job nhanh < 45s dedupe, PM2
       // restart giữa review, dispatch chết, verdict rơi rớt…). Throttle nội
@@ -297,7 +378,7 @@ class GoalLoopWorker {
 
   /** Claim job queued theo số slot trống (atomic qua updateMany conditional). */
   private async claimQueued(): Promise<void> {
-    const freeSlots = GOAL_LOOP_MAX_CONCURRENT - this.running.size
+    const freeSlots = this.adaptiveCap - this.running.size
     if (freeSlots <= 0) return
     const queuedJobs = await db.goalLoopJob.findMany({
       where: { status: 'queued' },
@@ -348,8 +429,13 @@ class GoalLoopWorker {
         })
         if (claimed.count === 1) {
           console.log(
-            `[GoalLoopWorker] claim job ${job.id} — session ${job.sessionId} (slot ${this.running.size + 1}/${GOAL_LOOP_MAX_CONCURRENT}, attempts ${job.attempts})`
+            `[GoalLoopWorker] claim job ${job.id} — session ${job.sessionId} (slot ${this.running.size + 1}/${this.adaptiveCap}${this.adaptiveCap < GOAL_LOOP_MAX_CONCURRENT ? ` của trần ${GOAL_LOOP_MAX_CONCURRENT}` : ''}, attempts ${job.attempts})`
           )
+          emitAgentEvent('job_claimed', {
+            jobId: job.id,
+            sessionId: job.sessionId,
+            data: { slot: this.running.size + 1, capacity: this.adaptiveCap, attempts: job.attempts },
+          })
           // Fire-and-forget — executeJob tự xử lý mọi outcome; phần chạy đồng
           // bộ đầu hàm (running.set) chạy NGAY trước cả await kế tiếp nên slot
           // accounting không bị race với tick khác.
@@ -558,6 +644,11 @@ class GoalLoopWorker {
         console.log(
           `[GoalLoopWorker] job ${job.id} CANCELLED — nút Dừng qua DB flag (chu kỳ ${result.goalLoop?.cycles ?? job.cyclesDone}, ${result.iterations} vòng đã chạy)`
         )
+        emitAgentEvent('job_terminal', {
+          jobId: job.id,
+          sessionId: job.sessionId,
+          data: { status: 'cancelled', iterations: result.iterations, cycles: result.goalLoop?.cycles ?? job.cyclesDone },
+        })
         // REVIEW 14-g H2 — CANCELLED cũng được finalize (mirror đường inline:
         // user bấm Dừng vẫn có todo honest-close CI-2 + partial answer lưu DB).
         // Trước đây return ngay → todo treo in_progress + phiên reload mất
@@ -597,6 +688,11 @@ class GoalLoopWorker {
       console.log(
         `[GoalLoopWorker] job ${job.id} COMPLETED — ${result.iterations} vòng, ${result.toolCallsExecuted} tool calls, stopReason=${result.goalLoop?.stopReason ?? 'n/a'}`
       )
+      emitAgentEvent('job_terminal', {
+        jobId: job.id,
+        sessionId: job.sessionId,
+        data: { status: 'completed', iterations: result.iterations, toolCalls: result.toolCallsExecuted, stopReason: result.goalLoop?.stopReason ?? null },
+      })
 
       // 10. FINALIZE SEAM (Task 14-c implement goal-loop-finalize.ts): lưu
       //     ChatMessage assistant vào phiên chat gốc SAU KHI job đã completed.
@@ -654,6 +750,12 @@ class GoalLoopWorker {
    */
   private async markFailed(jobId: string, error: string, crashContext?: { sessionId: string; runId: string | null }): Promise<void> {
     console.error(`[GoalLoopWorker] job ${jobId} FAILED: ${error.slice(0, 300)}`)
+    emitAgentEvent('job_terminal', {
+      jobId,
+      sessionId: crashContext?.sessionId,
+      runId: crashContext?.runId,
+      data: { status: 'failed', error: error.slice(0, 300) },
+    })
     await db.goalLoopJob
       .updateMany({
         where: { id: jobId, status: 'running' },

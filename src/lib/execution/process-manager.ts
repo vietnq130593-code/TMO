@@ -11,7 +11,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import * as path from 'node:path'
-import { detectError } from '@/lib/error-handling'
+// TASK 43 cleanup — bỏ import chết `detectError` (không dùng trong file này)
 
 // ==================== TYPES ====================
 

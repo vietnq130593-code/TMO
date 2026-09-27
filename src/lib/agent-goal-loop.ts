@@ -57,6 +57,9 @@
 import { callLLMForAgent, type LLMTool } from '@/lib/llm'
 import { executeTool, buildCompactToolSchemasSection, resolveToolAlias, getToolDefinitions, getAllBuiltinToolNames } from '@/lib/code-team/tool-executor'
 import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint } from '@/lib/tool-calls'
+// TASK 43 — Agent Event Bus: emit sự kiện vòng đời run lên bus hợp nhất
+// (GET /api/agent-events) — fail-open tuyệt đối bên trong emit (try/catch).
+import { emitAgentEvent } from '@/lib/agent-event-bus'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
 import {
   startAgentRun,
@@ -510,6 +513,23 @@ Nếu mục tiêu là câu hỏi kiến thức chung thuần túy (không đòi 
 }
 
 /**
+ * TASK 43 — OODA PROTOCOL (user audit "vòng OODA: quan sát → định vị → dự
+ * đoán → thích ứng"). Khung ra quyết định TỪNG VÒNG hành động — ánh xạ tăng
+ * cường lên 4 giai đoạn GĐ0-GĐ3 đã có của goal protocol (không thay thế):
+ * mỗi vòng ReAct là 1 vòng OODA hoàn chỉnh, tránh hành động theo quán tính.
+ */
+function buildOodaProtocol(): string {
+  return `
+
+🔄 VÒNG OODA (QUAN SÁT → ĐỊNH VỊ → DỰ ĐOÁN → THÍCH ỨNG — áp cho TỪNG vòng hành động):
+- QUAN SÁT (Observe): đọc KẾT QUẢ TOOL vừa về + trạng thái todo + context hiện tại — sự thật mới là gì?
+- ĐỊNH VỊ (Orient): kết quả đó thay đổi hiểu biết gì về vấn đề? Đang ở đâu so với mục tiêu + tiêu chí nghiệm thu? Bằng chứng mới mâu thuẫn định kiến chu kỳ trước → bỏ định kiến đó.
+- DỰ ĐOÁN (Decide/Predict): hành động kế tiếp DỰ ĐOÁN kết quả gì (kỳ vọng kiểm định được)? Nếu kết quả khác dự đoán — nghĩa là gì, đo từ đâu để biết? Hành động không nói được dự đoán → chưa đáng làm (quán tính).
+- THÍCH ỨNG (Adapt): bằng chứng mâu thuẫn giả thuyết → ĐỔI hành động/kế hoạch NGAY — không bám kế hoạch cũ chỉ vì đã viết ra. Đổi hướng sớm rẻ hơn chữa sau.
+Vòng OODA rỗng (quan sát mà không định vị / hành động mà không dự đoán) = hành động theo quán tính — sẽ bị cảnh báo lặp phát hiện và trọng tài từ chối bằng chứng.`
+}
+
+/**
  * [H] INFRA SELF-SERVICE protocol (user directive 2026-10-27 phiên 4) — quy
  * trình xử lý LỖI HẠ TẦNG / THIẾU TOOL / THIẾU AGENT. Agents giờ ĐƯỢC PHÉP
  * tự cài package + sửa schema + tự xây tool; việc thuộc chức trách agent khác
@@ -539,7 +559,7 @@ function buildDelegationProtocol(): string {
   return `
 
 📦 PHÂN CÔNG SUB-AGENT (delegate_task — Code Team chuyên trách):
-- RAMPAGE: implement code · SENTINEL: review/bug/security · CATALYST: tối ưu/refactor · SHOCWAVE: thiết kế kiến trúc/DB/API · MEGATRON: phân tích + verify tổng thể.
+- RAMPAGE: implement code · SENTINEL: review/bug/security · CATALYST: tối ưu/refactor · SHOCWAVE: thiết kế kiến trúc/DB/API · MEGATRON: phân tích + verify tổng thể · FORGE: full-stack builder END-TO-END (UI + API + DB + tự kiểm định + preview verify) — tính năng trọn gói tự chứa.
 - Cú pháp: tool_call: delegate_task({"agent": "RAMPAGE", "task": "Nhiệm vụ cụ thể...", "context": "file liên quan, ràng buộc...", "acceptance_criteria": "điều kiện hoàn thành kiểm định được"})
 - NÊN delegate khi: task cần đọc/sửa NHIỀU file (làm trực tiếp sẽ phình context của bạn), cần chuyên môn sâu, hoặc task giao trọn được cho 1 agent.
 - KHÔNG delegate việc 1-2 bước đơn giản — tự làm nhanh hơn.
@@ -692,6 +712,8 @@ export function assembleGoalLoopSystemPrompt(params: {
       [
         { name: 'base', content: systemPrompt, priority: 10 },
         { name: 'goalProtocol', content: buildGoalProtocol(), priority: 100 },
+        // TASK 43 — OODA: khung ra quyết định từng vòng (áp MỌI agents goal-loop)
+        { name: 'oodaProtocol', content: buildOodaProtocol(), priority: 95 },
         // 2026-10-27 (E2E lộ bug): toolSchemas phải cùng tier bảo vệ CAO NHẤT với
         // goalProtocol — budget chật từng stub block này (log: "cut ...toolSchemas...")
         // → agent KHÔNG còn biết tool nào để gọi → run 0 tool calls, đứng im trả
@@ -720,6 +742,7 @@ export function assembleGoalLoopSystemPrompt(params: {
       systemPrompt +
       (params.toolSchemasBlock ? '\n' + params.toolSchemasBlock : '') +
       buildGoalProtocol() +
+      buildOodaProtocol() +
       buildInfraSelfServiceProtocol() +
       (hasDelegation ? buildDelegationProtocol() : '') +
       (params.hasCodeTeamRequest === true ? buildCodeTeamProtocol() : '') +
@@ -941,7 +964,15 @@ function buildDelegationOutcomeThought(cycle: number, tc: { name: string; args: 
 /** Directive nối tiếp chu kỳ — chẩn đoán + kế hoạch mới từ evaluator */
 function buildContinuationDirective(v: EvalVerdict, cycle: number, cutMidWork: boolean, maxCyclesDisplay: number = EFFECTIVE_MAX_CYCLES, doneSummary?: string): string {
   const missing = v.missing.length > 0 ? v.missing.map(m => `- ${m}`).join('\n') : '- (trọng tài không liệt kê cụ thể — tự rà soát lại mục tiêu)'
-  const plan = v.nextPlan.length > 0 ? v.nextPlan.map((p, i) => `${i + 1}. ${p}`).join('\n') : '- tự xác định bước khắc phục'
+  // TASK 43 — COUNTERFACTUAL: dòng nextPlan bắt đầu "CF:" là hướng PHẢN THỰC
+  // do trọng tài đề xuất (nếu làm lại từ đầu — làm gì KHÁC thay vì cách đã
+  // fail). Tách riêng khối để agent KHÔNG trộn với bước khắc phục thường.
+  const cfItems = v.nextPlan.filter(p => /^CF\s*:/i.test(p.trim()))
+  const planItems = v.nextPlan.filter(p => !/^CF\s*:/i.test(p.trim()))
+  const plan = planItems.length > 0 ? planItems.map((p, i) => `${i + 1}. ${p}`).join('\n') : '- tự xác định bước khắc phục'
+  const cfBlock = cfItems.length > 0
+    ? `\n🔄 HƯỚNG PHẢN THỰC (COUNTERFACTUAL — cân nhắc TRƯỚC khi bám kế hoạch cũ):\n${cfItems.map(p => `- ${p.replace(/^CF\s*:/i, '').trim()}`).join('\n')}\n`
+    : ''
   const cut = cutMidWork ? '\n⚠️ Chu kỳ trước bị cắt giữa chừng do hết vòng lặp — công việc có thể đang dở.' : ''
   // 2026-10 PROCESS INTEGRITY — khối "việc ĐÃ làm" (quan sát): agent chu kỳ
   // kế NHÌN THẤY những gì chu kỳ trước đã làm thành công → không làm lại y hệt
@@ -964,7 +995,7 @@ ${debtPriority}
 
 📋 Kế hoạch tiếp theo:
 ${plan}
-
+${cfBlock}
 Hãy: (1) cập nhật todo_write với kế hoạch trên (nợ kỹ thuật xếp TRƯỚC, điều chỉnh nếu thấy hợp lý hơn), (2) khắc phục vấn đề, (3) KIỂM ĐỊNH LẠI bằng tools để có bằng chứng. KHÔNG lặp lại đúng hành động đã thất bại — nếu cách cũ fail, đổi cách tiếp cận.`
 }
 
@@ -1025,6 +1056,7 @@ Nguyên tắc SẮT:
 12. TODO PLAN CHECK (Task 23-c 2026-10-26 — E2E lộ agent làm task đa bước mà bỏ qua kế hoạch): tác vụ đòi ≥2 bước làm việc thật (đọc/sửa/đếm nhiều mục độc lập) mà bằng chứng KHÔNG có tool todo_write/tmo_todo nào trong run → "complete" vẫn đánh giá theo KẾT QUẢ, nhưng thêm vào "missing": "process: bỏ qua todo_write — chạy không có kế hoạch truy vết được" (ghi nhận gap quy trình cho Opus review + báo cáo cuối; chu kỳ sau nếu còn chạy thì ưu tiên bổ sung todo).
 13. FACT-GATHERING GUARD (2026-10-27 — E2E lộ agent trả về 1 câu ý định mà evaluator vẫn chấm hoàn thành): mục tiêu đòi dữ liệu thật về hệ thống/file/database (khảo sát, rà soát, đánh giá hiện trạng, đếm, liệt kê, kiểm tra...) → KHÔNG phải câu hỏi kiến thức chung: "complete": true KHI VÀ CHỈ KHI run CÓ tool call thu thập dữ liệu thật (file_read/grep/shell/query/delegation...) và kết quả khớp mục tiêu. Run 0 tool calls, hoặc nội dung cuối chỉ là Ý ĐỊNH/KẾ HOẠCH ("tôi sẽ...") thay vì báo cáo dữ liệu → "complete": false, "verified": false, rootCause ghi rõ: thiếu bằng chứng thu thập dữ liệu thật.
 14. DEBT READINESS (user directive 2026-10-27 phiên 4 — GĐ3 xác định lại khả năng xử lý nợ ở chu kỳ kế): khi có side issues còn tồn tại, XÁC ĐỊNH LẠI xem chu kỳ kế tiếp ĐÃ CÓ THỂ TIẾN HÀNH XỬ LÝ được các nợ này chưa — đối chiếu từng nợ với năng lực tự phục vụ hiện có: tool sẵn có hoặc tự xây được (create_custom_tool), package tự cài được (manage_packages/bun add), schema tự sửa được (prisma + db push), việc thuộc chức trách agent có sẵn trong roster (dispatch được), không phụ thuộc điều kiện ngoài. TẤT CẢ nợ có đường xử lý → "debtReadiness": "ready" (chu kỳ kế quay GĐ0 xử lý được ngay). Nợ chờ phê duyệt Self-Direction / chờ vendor / chờ agent chưa tồn tại / thiếu điều kiện ngoài tầm với → "debtReadiness": "blocked" + "debtBlockedReason" nêu CỤ THỂ điều kiện còn thiếu (1 câu). KHÔNG phán "ready" khi nợ cần điều kiện chưa có — quay GĐ0 khi chưa thể xử lý chỉ đốt chu kỳ vô ích.
+15. COUNTERFACTUAL CHECK (Task 43 — chất lượng quyết định chu kỳ kế): khi "complete": false và run đã từng thất bại ít nhất 1 hướng tiếp cận (tool fail / verify fail / hướng đã thử không đạt), "nextPlan" PHẢI chứa ĐÚNG 1 dòng bắt đầu bằng "CF: " — 1 hướng làm KHÁC căn bản đáng giá nhất (nếu làm lại từ đầu sẽ thử gì thay vì cách đã fail) + vì sao hướng đó có thể thắng đúng chỗ cách cũ gục. KHÔNG để nextPlan lặp nguyên văn kế hoạch đã fail — đó là tín hiệu xoay vòng.
 
 Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích thêm):
 {"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."], "sideIssues": ["..."], "debtDecision": "none|record|continue", "debtReadiness": "ready|blocked", "debtBlockedReason": "..."}`
@@ -1698,6 +1730,15 @@ export async function runGoalDrivenLoop(params: {
     if (runEnded) return
     runEnded = true
     endAgentRun(agentSessionId, runId, status, `${totalIterations} vòng · ${totalToolCalls} tool calls · ${cyclesDone} chu kỳ hoàn thành${cyclesAttempted > cyclesDone ? ` (chu kỳ ${cyclesAttempted} dở)` : ''}`)
+    // TASK 43 — event bus: sự kiện terminal của run (status tracker + stopReason
+    // loop + counters). Fail-open bên trong emit.
+    emitAgentEvent('run_terminal', {
+      agentName,
+      agentId,
+      sessionId: agentSessionId,
+      runId,
+      data: { status, stopReason, cyclesDone, cyclesAttempted, totalIterations, totalToolCalls, tokensUsed, compressions, delegations, escalations },
+    })
   }
   // CI-5 (Task 14-b) — worker override cancel check (DB flag cancelRequestedAt
   // — nút Dừng sống qua restart/app-reload). Không truyền durable.cancelCheck
@@ -1997,6 +2038,22 @@ export async function runGoalDrivenLoop(params: {
   const tokenLeft = () => (TOKEN_BUDGET === 0 ? Infinity : TOKEN_BUDGET - tokensUsed)
 
   console.log(`[GoalLoop] ${agentName} bắt đầu — mục tiêu: "${userMessage.slice(0, 100)}" (max ${fmtCap(EFFECTIVE_MAX_CYCLES)} chu kỳ × ${fmtCap(EFFECTIVE_ITER_PER_CYCLE)} vòng${MAX_CYCLE_RENEWALS > 0 && EFFECTIVE_MAX_CYCLES !== 0 ? ` + tái lập tối đa ${MAX_CYCLE_RENEWALS} cửa sổ` : ''}, debt cycles tối đa ${MAX_DEBT_CYCLES}, budget ${TIME_BUDGET_MS === 0 ? '∞' : `${Math.round(TIME_BUDGET_MS / 60000)}'`} / ${TOKEN_BUDGET === 0 ? '∞ tokens (KHÔNG GIỚI HẠN — CI-1)' : `${TOKEN_BUDGET} tokens, reserve ${REPORT_RESERVE_TOKENS} cho evaluate + báo cáo cuối`}, nén context @${COMPRESS_THRESHOLD_CHARS} chars${agentTools.includes('delegate_task') ? ', delegate_task BẬT' : ''})`)
+  // TASK 43 — event bus: run bắt đầu (mọi agents goal-loop — inline + durable)
+  emitAgentEvent('run_started', {
+    agentName,
+    agentId,
+    sessionId: agentSessionId,
+    runId,
+    data: {
+      goal: userMessage.slice(0, 200),
+      maxCycles: EFFECTIVE_MAX_CYCLES,
+      iterPerCycle: EFFECTIVE_ITER_PER_CYCLE,
+      timeBudgetMs: TIME_BUDGET_MS,
+      tokenBudget: TOKEN_BUDGET,
+      resumed: !!resumeState,
+      toolCount: effectiveTools.length,
+    },
+  })
 
   // CI-5 (Task 14-b) — RESUME: chu kỳ bắt đầu = cyclesAttempted + 1 (chu kỳ
   // đã BẮT ĐẦU kể cả dở được tính là đã attempt — checkpoint theo VÒNG nên
@@ -2055,6 +2112,22 @@ export async function runGoalDrivenLoop(params: {
     // [A] Không bắt đầu chu kỳ mới nếu chỉ còn token reserve (dành cho final report)
     if (tokenLeft() <= REPORT_RESERVE_TOKENS) { stopReason = 'token_budget'; break }
     cyclesAttempted = cycle
+
+    // TASK 43 FIX (bug audit) — signatureOverrun KHÔNG BAO GIỜ được reset sau
+    // khi set (agent-goal-loop v trước): 1 tool lặp 8 lần ở chu kỳ N cắt chu kỳ
+    // N, RỒI MỌI chu kỳ sau cũng bị cắt ngay vòng đầu (flag dính mãi) → run suy
+    // biến thành chu kỳ 1-vòng, đánh giá lại liên tục không hành động. Sửa: reset
+    // flag mỗi chu kỳ — chu kỳ mới có 1 cơ hội làm việc MỚI; nếu lặp lại đúng
+    // signature cũ (map toolSignatureCounts vẫn còn) thì n≥8 tái kích hoạt NGAY
+    // tại lần gọi kế → cắt lại lần nữa (không mất phanh chống lặp).
+    signatureOverrun = false
+    // TASK 43 — event bus: chu kỳ mới bắt đầu
+    emitAgentEvent('cycle_started', {
+      agentName,
+      sessionId: agentSessionId,
+      runId,
+      data: { cycle, effectiveMaxCycles, debtMode, resumedFromCycle: cycle === resumeStartCycle && !!resumeState },
+    })
 
     // 2026-10-27 (user directive — Thought Progress ghi rõ TỪNG GĐ) — GĐ0 marker
     // cho chu kỳ ĐẦU của run: quan sát & phân tích bối cảnh đầu vào trước khi
@@ -2223,6 +2296,13 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           recordAgentThought(agentSessionId, `📦 Nén context #${compressions}: tiết kiệm ~${Math.round(comp.savedChars / 1000)}k ký tự (${comp.method === 'llm' ? 'LLM digest' : 'heuristic'}) — phần cũ đã thành tóm tắt, message gần nhất giữ nguyên`, totalIterations)
           // CI-5 (14-b) — heartbeat sau lần nén context THÀNH CÔNG
           fireSignal('compression')
+          // TASK 43 — event bus: nén context đã áp dụng (kèm receipt metadata)
+          emitAgentEvent('compression_applied', {
+            agentName,
+            sessionId: agentSessionId,
+            runId,
+            data: { nth: compressions, method: comp.method, savedChars: comp.savedChars },
+          })
         }
       } catch { /* fail-open — nén lỗi không được phép làm hỏng vòng lặp */ }
 
@@ -2357,7 +2437,12 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
               args = typeof tc.function.arguments === 'string'
                 ? JSON.parse(tc.function.arguments)
                 : (tc.function.arguments as Record<string, unknown>) || {}
-            } catch { /* keep empty args */ }
+            } catch {
+              // TASK 43 — strict-parse: args native hỏng KHÔNG còn im lặng — log
+              // rõ (args giữ {} → executor strict-parse sẽ trả lỗi schema kèm
+              // hướng dẫn phát lại đúng cho LLM tự sửa ở lượt kế).
+              console.warn(`[GoalLoop] ${agentName} native tool_call "${tc.function.name}" — args JSON.parse FAILED (giữ args {} — executor sẽ trả lỗi schema kèm hướng dẫn) raw=${tc.function.arguments.slice(0, 120)}`)
+            }
             return {
               id: tc.id || `native_${idx}`,
               name: tc.function.name,
@@ -2571,6 +2656,30 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       const processToolResult = (tc: { name: string; args: Record<string, unknown> }, toolResult: { success: boolean; result: unknown }) => {
         // 2026-10 — đếm lặp signature cho cả đường TMO tool (mirror đường CLI)
         noteToolSignature(cycle, tc.name, tc.args, toolResult.success)
+        // TASK 43 — event bus: mọi tool result phát lên bus hợp nhất
+        // (/api/agent-events). Delegation/escalate có event riêng để lọc nhanh.
+        emitAgentEvent('tool_executed', {
+          agentName,
+          sessionId: agentSessionId,
+          runId,
+          data: { cycle, tool: tc.name, success: toolResult.success },
+        })
+        if (tc.name === 'delegate_task' || tc.name === 'dispatch_agent' || tc.name === 'dispatch_agents_parallel') {
+          emitAgentEvent('delegation_completed', {
+            agentName,
+            sessionId: agentSessionId,
+            runId,
+            data: { cycle, target: String(tc.args.agent ?? tc.args.agentName ?? ''), success: toolResult.success },
+          })
+        }
+        if (tc.name === 'escalate_problem') {
+          emitAgentEvent('escalation', {
+            agentName,
+            sessionId: agentSessionId,
+            runId,
+            data: { cycle, kind: 'tool', success: toolResult.success },
+          })
+        }
         // FIX (R2-b #1) — đánh dấu batch có tool thành công (in-cycle stall brake)
         if (toolResult.success) batchAnySuccess = true
         // CI-2 (Task 11-a) — thu bằng chứng từ tool call THÀNH CÔNG (bảo thủ:
@@ -2752,7 +2861,17 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       }
 
       for (const [tcIdx, tc] of toolCalls.entries()) {
-        if (isCancelled()) break
+        if (isCancelled()) {
+          // TASK 43 FIX (bug audit) — cancel giữa batch: trước đây break NGAY
+          // không đẩy stub response cho các tool_call còn lại trong batch →
+          // transcript có tool_call mồ côi (không có tool reply). Mirror đường
+          // budget-cạn: stub cho TẤT CẢ call còn lại (kể cả current) rồi thoát.
+          for (const rest of toolCalls.slice(tcIdx)) {
+            pushToolMessage(messages, { tool: rest.name, success: false, result: 'Bỏ qua — run đã bị HỦY giữa batch (người dùng bấm Dừng).' })
+          }
+          endedBy = 'cancelled'
+          break
+        }
 
         // ===== FAN-IN consumer — delegation đã chạy song song ở trên: await kết
         // quả (thường đã resolve) + xử lý ĐÚNG như nhánh tuần tự (giữ thứ tự
@@ -3374,6 +3493,14 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           omegaConsulted = true
           escalations++
           omegaAdvisory = consult.text
+          // TASK 43 — event bus: auto-escalate đã hỏi Omega (đường manual qua
+          // tool escalate_problem phát ở processToolResult)
+          emitAgentEvent('escalation', {
+            agentName,
+            sessionId: agentSessionId,
+            runId,
+            data: { cycle, kind: 'auto-escalate', severity: 'high', tokens: consult.tokensUsed },
+          })
           evidence.push({ cycle, kind: 'directive', text: `AUTO-ESCALATE → Omega orchestrator tư vấn giải pháp (kèm cho chu kỳ ${cycle + 1})` })
           recordAgentThought(agentSessionId, `🧠 AUTO-ESCALATE: chu kỳ ${cycle} chưa kiểm định được → đã hỏi Omega orchestrator (${consult.tokensUsed} tokens) — tư vấn sẽ dẫn đường chu kỳ ${cycle + 1}`, totalIterations)
           console.log(`[GoalLoop] ${agentName} auto-escalate (unverified cycle ${cycle}) → Omega consult OK (${consult.tokensUsed} tokens)`)

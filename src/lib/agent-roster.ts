@@ -22,6 +22,9 @@
  */
 
 import { db } from '@/lib/db'
+// TASK 43 — CacheStore abstraction (Redis-ready): thay globalThis cache thủ
+// công bằng TmoCache — stats quan sát được qua GET /api/agent-events (caches).
+import { TmoCache } from '@/lib/cache-store'
 
 // ==================== TYPES ====================
 
@@ -35,6 +38,9 @@ export interface RosterEntry {
   position: string | null
   domain: string
   isSystem: boolean
+  /** TASK 43 — model agent đang chạy (roster line hiển thị — agent giao việc
+   * biết đồng nghiệp chạy model gì, hỗ trợ quyết định dispatch). */
+  model: string
 }
 
 export interface AgentRoster {
@@ -45,24 +51,22 @@ export interface AgentRoster {
   probedAt: string
 }
 
-// ==================== CACHE ====================
+// ==================== CACHE (TASK 43 — TmoCache Redis-ready) ====================
 
 const ROSTER_CACHE_TTL_MS = 60_000
-const globalForRoster = globalThis as unknown as {
-  __tmoAgentRosterCache?: { roster: AgentRoster; at: number }
-}
+const rosterCache = new TmoCache<AgentRoster>('agent-roster', ROSTER_CACHE_TTL_MS)
 
 /** Invalidate roster cache — gọi sau create_agent/dispatch_long_term/agents CRUD */
 export function invalidateRosterCache(): void {
-  globalForRoster.__tmoAgentRosterCache = undefined
+  rosterCache.invalidate()
 }
 
 // ==================== FETCH ====================
 
 export async function getAgentRoster(): Promise<AgentRoster> {
-  const cached = globalForRoster.__tmoAgentRosterCache
-  if (cached && Date.now() - cached.at < ROSTER_CACHE_TTL_MS) {
-    return cached.roster
+  const cached = rosterCache.get()
+  if (cached) {
+    return cached
   }
 
   const roster: AgentRoster = {
@@ -88,6 +92,9 @@ export async function getAgentRoster(): Promise<AgentRoster> {
       select: {
         id: true, name: true, avatar: true, description: true, capable: true,
         team: true, position: true, domain: true, isSystem: true,
+        // TASK 43 — thêm model vào roster line (agent giao việc biết đồng nghiệp
+        // chạy model gì — hỗ trợ quyết định dispatch).
+        model: true,
       },
       orderBy: [{ team: 'asc' }, { position: 'asc' }, { createdAt: 'desc' }],
       take: 200,
@@ -104,6 +111,7 @@ export async function getAgentRoster(): Promise<AgentRoster> {
         position: p.position,
         domain: p.domain,
         isSystem: p.isSystem,
+        model: p.model || '',
       }
       if (!p.team) {
         roster.standalone.push(entry)
@@ -124,7 +132,7 @@ export async function getAgentRoster(): Promise<AgentRoster> {
   }
 
   if (!dbFetchFailed) {
-    globalForRoster.__tmoAgentRosterCache = { roster, at: Date.now() }
+    rosterCache.set(roster)
   }
   return roster
 }
@@ -135,7 +143,8 @@ function entryLine(e: RosterEntry, maxLen = 170): string {
   const skills = (e.capable || e.description || '').replace(/\s+/g, ' ').trim()
   const trimmed = skills.length > maxLen ? skills.slice(0, maxLen) + '…' : skills
   const pos = e.position ? ` [${e.position}]` : ''
-  return `- ${e.name} ${e.avatar}${pos}: ${trimmed}`
+  const model = e.model ? ` · ${e.model}` : ''
+  return `- ${e.name} ${e.avatar}${pos}${model}: ${trimmed}`
 }
 
 /**

@@ -124,6 +124,84 @@ export interface ToolDefinition {
   }
 }
 
+// ==================== TASK 43 — STRICT-PARSE: ARG SCHEMA VALIDATION ====================
+//
+// (user audit "strict-parse"): trước đây args đến executor dạng `as any` — LLM
+// phát args sai type/thiếu required → tool fail BÊN TRONG với error mơ hồ (hoặc
+// tệ hơn: chạy sai ngữ nghĩa). Giờ validate tại dispatcher theo ToolDefinition
+// schema — sai trả NGAY lỗi rõ ràng kèm schema đính kèm → LLM tự sửa ở lượt kế
+// (feedback loop như Claude Code). NGUYÊN TẮC:
+//   - CHỈ kiểm required-missing + type-of-provided + enum — KHÔNG chặn extra
+//     props (lenient — context stamping chèn sessionId/runId hợp lệ)
+//   - Kill-switch: DISABLE_TOOL_ARG_VALIDATION=on → tắt hoàn toàn
+//   - Custom tool (không có def) — KHÔNG bị chặn
+
+/** Kiểm tra 1 giá trị khớp JSON-Schema type primitive không (lenient). */
+function matchesSchemaType(value: unknown, schemaType: unknown): boolean {
+  switch (schemaType) {
+    case 'string':
+      return typeof value === 'string'
+    case 'number':
+      return typeof value === 'number'
+    case 'integer':
+      return typeof value === 'number' && Number.isInteger(value)
+    case 'boolean':
+      return typeof value === 'boolean'
+    case 'array':
+      return Array.isArray(value)
+    case 'object':
+      return typeof value === 'object' && value !== null && !Array.isArray(value)
+    default:
+      return true // type lạ/null → không chặn (lenient)
+  }
+}
+
+/**
+ * Validate args theo ToolDefinition.parameters. Trả về chuỗi lỗi (không null =
+ * sai) — message tiếng Việt kèm schema prop vi phạm để LLM phát lại đúng.
+ */
+export function validateToolArgsStrict(
+  def: ToolDefinition,
+  args: Record<string, unknown>,
+): string | null {
+  try {
+    const params = def.function.parameters
+    if (!params || typeof params !== 'object') return null
+    const props = (params.properties ?? {}) as Record<string, Record<string, unknown>>
+    const required = Array.isArray(params.required) ? params.required : []
+    const problems: string[] = []
+
+    for (const req of required) {
+      const v = args[req]
+      if (v === undefined || v === null || v === '') {
+        problems.push(`thiếu tham số bắt buộc "${req}"${props[req] ? ` (${JSON.stringify(props[req]).slice(0, 200)})` : ''}`)
+      }
+    }
+
+    for (const [key, value] of Object.entries(args)) {
+      if (value === undefined || value === null) continue
+      const schema = props[key]
+      if (!schema) continue // extra prop — lenient
+      const t = schema.type
+      if (t && !matchesSchemaType(value, t)) {
+        problems.push(`tham số "${key}" sai kiểu — cần ${t}, nhận ${Array.isArray(value) ? 'array' : typeof value}${schema.description ? ` (${String(schema.description).slice(0, 120)})` : ''}`)
+        continue
+      }
+      if (Array.isArray(schema.enum) && !schema.enum.some(e => String(e) === String(value))) {
+        problems.push(`tham số "${key}" nhận "${String(value).slice(0, 60)}" — giá trị hợp lệ: ${schema.enum.join(' | ')}`)
+      }
+    }
+
+    if (problems.length === 0) return null
+    return (
+      `INVALID ARGUMENTS cho tool "${def.function.name}": ${problems.join('; ')}. ` +
+      `Phát lại tool_call với args JSON đúng schema (chỉ liệt kê các tham số của tool này, giá trị đúng kiểu).`
+    )
+  } catch {
+    return null // fail-open — validator lỗi không chặn tool
+  }
+}
+
 // ==================== CI-4 B6 (Task 11-c): MCP MOCK DE-ADVERTISE ====================
 //
 // mcp-bridge.ts ship 4 built-in servers (filesystem/github/postgres/puppeteer)
@@ -1433,13 +1511,14 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
         'Dùng khi: (1) task code lớn cần implement/review/tối ưu chuyên sâu, (2) muốn giảm tải context của bạn — ' +
         'sub-agent đọc nhiều file mà context của bạn KHÔNG phình, (3) cần góc nhìn chuyên trách (security review, arch design). ' +
         'KHÔNG dùng cho task 1-2 bước đơn giản — tự làm nhanh hơn. Chọn đúng agent: MEGATRON=phân tích/verify tổng thể, ' +
-        'SHOCWAVE=thiết kế kiến trúc/DB/API, RAMPAGE=implement code, SENTINEL=review/bug/security, CATALYST=tối ưu/refactor.',
+        'SHOCWAVE=thiết kế kiến trúc/DB/API, RAMPAGE=implement code, SENTINEL=review/bug/security, CATALYST=tối ưu/refactor, ' +
+        'FORGE=full-stack builder END-TO-END (UI + API + DB + tự kiểm định + preview verify — tính năng trọn gói tự chứa).',
       parameters: {
         type: 'object',
         properties: {
           agent: {
             type: 'string',
-            enum: ['MEGATRON', 'SHOCWAVE', 'RAMPAGE', 'SENTINEL', 'CATALYST'],
+            enum: ['MEGATRON', 'SHOCWAVE', 'RAMPAGE', 'SENTINEL', 'CATALYST', 'FORGE'],
             description: 'Agent chuyên trách sẽ nhận task',
           },
           task: {
@@ -2094,6 +2173,26 @@ export async function executeTool(
           }
         }
       } catch { /* fail-open — không bao giờ làm hỏng tool vì check quyền lỗi */ }
+    }
+
+    // ━━━ TASK 43 — STRICT-PARSE: validate args theo schema TRƯỚC dispatch ━━━
+    // LLM phát args thiếu required / sai kiểu / sai enum → trả lỗi rõ ràng kèm
+    // schema để LLM phát lại đúng ở lượt kế (không để tool fail mơ hồ bên trong).
+    // Lenient: KHÔNG chặn extra props (context stamping chèn sessionId/runId).
+    // Kill-switch: DISABLE_TOOL_ARG_VALIDATION=on. Custom tool (không def) tự do.
+    if (process.env.DISABLE_TOOL_ARG_VALIDATION !== 'on') {
+      const def = ALL_TOOL_DEFINITIONS[toolName]
+      if (def) {
+        const argErr = validateToolArgsStrict(def, args)
+        if (argErr) {
+          recordActivity(false, argErr)
+          return {
+            success: false,
+            result: argErr,
+            duration: Date.now() - startTime,
+          }
+        }
+      }
     }
 
     switch (toolName) {

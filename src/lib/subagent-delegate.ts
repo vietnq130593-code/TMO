@@ -76,13 +76,17 @@ const SUBAGENT_TOOL_RESULT_CHARS = 4000
 /** Cap ký tự báo cáo trả về PARENT */
 const REPORT_MAX_CHARS = 3500
 
-/** Map tên agent → position trong Code Team (resolveAgent nhận position) */
-const POSITION_BY_NAME: Record<string, string> = {
+/** Map tên agent → position trong Code Team (resolveAgent nhận position).
+ * TASK 43 — export cho eval/agent-harness (resolve profile theo tên Code Team). */
+export const POSITION_BY_NAME: Record<string, string> = {
   MEGATRON: 'TL',
   SHOCWAVE: 'G1',
   RAMPAGE: 'G2-A',
   SENTINEL: 'G2-B',
   CATALYST: 'G3',
+  // TASK 43 — FORGE: full-stack-developer subagent (builder tổng lực
+  // end-to-end UI+API+DB). Vị trí 'FS' ngoài pipeline SOP — chỉ delegate.
+  FORGE: 'FS',
 }
 
 /**
@@ -116,6 +120,7 @@ export const DELEGATABLE_AGENTS: Array<{ name: string; role: string; bestFor: st
   { name: 'RAMPAGE', role: 'G2-A — Code Execution', bestFor: 'implement code TypeScript/React/Next.js, viết API, database operations' },
   { name: 'SENTINEL', role: 'G2-B — Review & Fix', bestFor: 'code review, tìm bug, security check, fix lỗi, iterative refinement' },
   { name: 'CATALYST', role: 'G3 — Tối ưu', bestFor: 'performance optimization, refactor, scalability, best practices' },
+  { name: 'FORGE', role: 'FS — Full-Stack Developer', bestFor: 'tính năng full-stack END-TO-END tự chủ theo spec trọn gói: UI + API + DB + tự kiểm định (lint/type_check/run_tests) + preview verify' },
 ]
 
 /**
@@ -126,7 +131,7 @@ export function resolveDelegationTarget(input: unknown): string | null {
   const key = String(input ?? '').trim().toUpperCase()
   if (!key) return null
   if (POSITION_BY_NAME[key]) return POSITION_BY_NAME[key]
-  if (['TL', 'G1', 'G2-A', 'G2-B', 'G3'].includes(key)) return key
+  if (['TL', 'G1', 'G2-A', 'G2-B', 'G3', 'FS'].includes(key)) return key
   return null
 }
 

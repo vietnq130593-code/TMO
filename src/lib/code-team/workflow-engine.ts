@@ -42,6 +42,10 @@ import {
 } from './worklog'
 // FIX 2026-08-29: import pure utility trực tiếp (không qua worklog) để giảm coupling
 import { findBalancedJson as findBalancedJsonUtil } from './find-balanced-json'
+// TASK 43 — strict-parse: parser bản địa dùng chung lớp loose-repair với
+// tool-calls.ts (escape control chars trong string + strip trailing comma
+// string-aware) — trước đây JSON.parse thuần fail → tool call bị BỎ QUA im lặng.
+import { tryParseLooseJson } from '@/lib/tool-calls'
 import {
   executeTool,
 } from './tool-executor'
@@ -3205,15 +3209,16 @@ function parseToolCallsFromOutput(output: string): Array<{ id: string; name: str
     if (braceStart === -1) continue
     const jsonStr = findBalancedJsonUtil(output.slice(braceStart), '')
     if (jsonStr) {
-      try {
-        const args = JSON.parse(jsonStr)
+      // TASK 43 — loose-repair trước khi bỏ cuộc (mirror tool-calls.ts)
+      const args = tryParseLooseJson(jsonStr)
+      if (args) {
         calls.push({
           id: `tc_${Date.now()}_${calls.length}`,
           name: toolName,
           args,
         })
-      } catch {
-        // JSON parse failed, skip this tool call
+      } else {
+        console.warn(`[WorkflowEngine] tool call "${toolName}" — args JSON hỏng KỂ CẢ SAU loose-repair (bỏ qua, đếm ở parse-diagnostics nếu có) raw=${jsonStr.slice(0, 100)}`)
       }
     }
   }
@@ -3239,15 +3244,16 @@ function parseToolCallsFromOutput(output: string): Array<{ id: string; name: str
       if (braceStart === -1) continue
       const jsonStr = findBalancedJsonUtil(output.slice(braceStart), '')
       if (jsonStr) {
-        try {
-          const args = JSON.parse(jsonStr)
+        // TASK 43 — loose-repair trước khi bỏ cuộc (mirror tool-calls.ts)
+        const args = tryParseLooseJson(jsonStr)
+        if (args) {
           calls.push({
             id: `tc_${Date.now()}_${calls.length}`,
             name: toolName,
             args,
           })
-        } catch {
-          // JSON parse failed
+        } else {
+          console.warn(`[WorkflowEngine] tool call "${toolName}" (pattern-2) — args JSON hỏng KỂ CẢ SAU loose-repair (bỏ qua) raw=${jsonStr.slice(0, 100)}`)
         }
       }
     }
