@@ -59,6 +59,16 @@ if [ -n "$HOLDER" ] && [ "$HOLDER" != "$$" ]; then
   echo "[pm2-start] Port ${PORT} đã được giải phóng."
 fi
 
+# =============================================================================
+# DỌN RÁC /tmp (fix 2026-10-21 Task 24 — đĩa từng đầy 100% vì loại rác này):
+# mỗi lần bun spawn (opencode CLI, script test...) có thể để lại file compile
+# cache ~5.4MB dạng /tmp/.bcd9*.so và KHÔNG tự dọn → tích lũy vài GB → SQLite/
+# Next.js không ghi được đĩa (nguyên nhân một phần các vụ OOM-crash trước).
+# Xóa các file cũ hơn 60 phút (file đang được process giữ vẫn an toàn trên Linux).
+# =============================================================================
+find /tmp -maxdepth 1 -name '.bcd9*.so' -mmin +60 -delete 2>/dev/null
+find /tmp -maxdepth 1 -type d -name '.*.node-gyp' -mmin +60 -exec rm -rf {} + 2>/dev/null
+
 # Khởi động Next.js — exec để PM2 sở hữu trực tiếp process node next
 cd "$(dirname "$0")/.."
 exec node node_modules/next/dist/bin/next dev -p "$PORT"

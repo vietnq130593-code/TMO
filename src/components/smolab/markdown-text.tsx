@@ -7,6 +7,9 @@
 // đúng y hệt <p whitespace-pre-wrap> cũ (giữ line break + blank line).
 // Hỗ trợ đủ dùng cho báo cáo agents: fence code block, heading, **bold**,
 // `code`, *italic* (quy tắc chặt), list ul/ol, [link](http…).
+// Fix theo rà soát Task 24: (1) chuẩn hóa CRLF trước parse, (2) ***bold
+// italic*** render đúng strong+em, (3) <ol start={n}> khi list ngắt giữa
+// chừng, (4) link scheme case-insensitive.
 // ========================================================================
 
 import React from 'react'
@@ -18,14 +21,17 @@ type Block =
   | { type: 'code'; content: string }
   | { type: 'heading'; level: number; text: string }
   | { type: 'ulist'; items: string[] }
-  | { type: 'olist'; items: string[] }
+  | { type: 'olist'; items: string[]; start: number }
   | { type: 'table'; header: string[]; rows: string[][] }
   | { type: 'para'; text: string }
 
 const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/
 const HEADING_RE = /^\s{0,3}(#{1,6})\s+(.+)$/
 const ULIST_RE = /^\s{0,3}[-*]\s+(.+)$/
-const OLIST_RE = /^\s{0,3}\d{1,9}\.\s+(.+)$/
+// Fix #3 (rà soát Task 24): capture số thứ tự — số của item ĐẦU block quyết
+// định <ol start={n}> để list bị ngắt giữa chừng (vd fence chen giữa `1.` và
+// `3.`) không bị đánh số lại từ 1
+const OLIST_RE = /^\s{0,3}(\d{1,9})\.\s+(.+)$/
 // Bảng pipe: dòng |...| + dòng phân cách |---|---| (cho phép :---:)
 const TABLE_ROW_RE = /^\s{0,3}\|.*\|\s*$/
 const TABLE_SEP_RE = /^\s{0,3}\|[\s:|-]+\|\s*$/
@@ -43,7 +49,11 @@ function isClosingFence(line: string, marker: string, openLen: number): boolean 
 
 /** Tách content thành block theo dòng — fence ưu tiên cao nhất, list gom nhóm liên tiếp */
 function parseBlocks(content: string): Block[] {
-  const lines = content.split('\n')
+  // Fix #1 (rà soát Task 24): chuẩn hóa CRLF/CR → LF ở ĐẦU, duy nhất 1 chỗ.
+  // Regex block dùng `.` (không match \r) nên content Windows (\r\n hoặc dòng
+  // kết thúc \r) làm heading/list KHÔNG nhận diện — gộp hết thành 1 para. Chuẩn
+  // hóa trước rồi mới split → mọi block regex sau đó xử lý chuỗi sạch.
+  const lines = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
   const blocks: Block[] = []
   let para: string[] = []
 
@@ -110,13 +120,16 @@ function parseBlocks(content: string): Block[] {
       flushPara()
       const isUl = Boolean(ulMatch)
       const items: string[] = []
+      // Fix #3 (rà soát Task 24): lấy số của item ĐẦU block → ol start — giữ
+      // số gốc của tác giả khi list bị ngắt giữa chừng, không reset về 1
+      const start = olMatch ? parseInt(olMatch[1], 10) : 1
       while (i < lines.length) {
         const m = lines[i].match(isUl ? ULIST_RE : OLIST_RE)
         if (!m) break
-        items.push(m[1])
+        items.push(isUl ? m[1] : m[2]) // OLIST_RE giờ có 2 group: số + nội dung
         i++
       }
-      blocks.push(isUl ? { type: 'ulist', items } : { type: 'olist', items })
+      blocks.push(isUl ? { type: 'ulist', items } : { type: 'olist', items, start })
       continue
     }
 
@@ -135,7 +148,8 @@ const WORD_CHAR = /[A-Za-z0-9_]/
 
 /**
  * Render markdown inline của 1 đoạn text: quét trái→phải theo vị trí xuất hiện,
- * ưu tiên: `code` → **bold** → [link](url) → *italic*. Nội dung code span là
+ * ưu tiên: `code` → ***bold-italic*** → **bold** → [link](url) → *italic*
+ * (Fix #2 rà soát Task 24: *** phải kiểm TRƯỚC **). Nội dung code span là
  * literal (không parse tiếp). Text không match gì → giữ nguyên chuỗi gốc.
  */
 function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
@@ -178,6 +192,26 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
       continue
     }
 
+    // ***bold-italic*** — Fix #2 (rà soát Task 24): kiểm TRIPLE trước `**`.
+    // Nếu không, nhánh ** khớp dấu đóng ngay tại dấu * thứ 3 →
+    // <strong>*chữ</strong>* (ký tự * thô rơi vãi — đúng triệu chứng component
+    // sinh ra để trị). Boundary rule giữ như nhánh ** (marker * không cần
+    // boundary 2 bên); inner vẫn renderInline đệ quy để hỗ trợ `code` lồng.
+    if (ch === '*' && text.startsWith('***', i)) {
+      const close = text.indexOf('***', i + 3)
+      const inner = close === -1 ? '' : text.slice(i + 3, close)
+      if (close !== -1 && inner !== '' && !inner.includes('\n')) {
+        push(
+          <strong className="font-semibold text-stone-50">
+            <em className="italic">{renderInline(inner, `${keyPrefix}-bi${seq}`)}</em>
+          </strong>
+        )
+        i = close + 3
+        continue
+      }
+      // không đóng được / inner rỗng → rơi xuống nhánh ** / * / literal như cũ
+    }
+
     // **bold** / __bold__ — __ thêm boundary 2 bên (chống nuốt some__var__name)
     if ((ch === '*' || ch === '_') && text[i + 1] === ch) {
       const close = text.indexOf(ch + ch, i + 2)
@@ -204,7 +238,13 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
       if (closeBracket > i + 1 && text[closeBracket + 1] === '(') {
         const closeParen = text.indexOf(')', closeBracket + 2)
         const url = closeParen === -1 ? '' : text.slice(closeBracket + 2, closeParen)
-        if (closeParen !== -1 && /^https?:\/\//.test(url) && !/\s/.test(url)) {
+        // Fix #4 (rà soát Task 24): scheme case-insensitive (chuẩn RFC 3986 —
+        // scheme không phân biệt hoa/thường). Trước đây HTTPS://… rơi ra ngoài
+        // allowlist → hiển thị thô [x](HTTPS://…). Vẫn là allowlist http/https
+        // nên javascript:/data:… bị chặn ở MỌI cách viết hoa/thường. href giữ
+        // NGUYÊN VĂN url của tác giả (trình duyệt tự hiểu scheme viết hoa).
+        const lowerUrl = url.toLowerCase()
+        if (closeParen !== -1 && (lowerUrl.startsWith('http://') || lowerUrl.startsWith('https://')) && !/\s/.test(url)) {
           const linkText = text.slice(i + 1, closeBracket)
           push(
             <a href={url} target="_blank" rel="noopener noreferrer" className="text-cyan-300 underline">
@@ -280,8 +320,10 @@ function renderBlock(block: Block, index: number, key: number): React.ReactNode 
         </ul>
       )
     case 'olist':
+      // Fix #3 (rà soát Task 24): start={n} khi block không bắt đầu từ 1 —
+      // React KHÔNG xuất attr khi undefined → HTML sạch khi start là 1
       return (
-        <ol key={key} className="list-decimal list-inside space-y-0.5 my-1">
+        <ol key={key} start={block.start !== 1 ? block.start : undefined} className="list-decimal list-inside space-y-0.5 my-1">
           {block.items.map((item, j) => (
             <li key={j}>{renderInline(item, `o${key}-${j}`)}</li>
           ))}

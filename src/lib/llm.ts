@@ -4441,6 +4441,11 @@ const OC_CLI_TOOL_MAP: Record<string, string> = {
   'tmo_read_skill': 'read_skill',
   // Task 21 (2026-10-21) — SHR bridge tool
   'tmo_hypothesis': 'hypothesis_write',
+  // Task 24 (2026-10-21) — file-op bridges (native write/edit/bash bị deny qua
+  // opencode.json permission; agent viết/sửa file qua 2 bridge này → server
+  // INFRA GUARD kiểm soát protected paths + audit ToolMetric)
+  'tmo_file_write': 'file_write',
+  'tmo_file_edit': 'file_edit',
   // 2026-10 FIX MATCH TÊN — native CLI tool names → TMO names (mirror
   // TOOL_NAME_ALIASES trong code-team/tool-executor.ts). QUAN TRỌNG:
   // executed_tool_calls (function.name = mappedName) được goal-loop đưa qua

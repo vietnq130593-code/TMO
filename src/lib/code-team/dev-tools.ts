@@ -27,6 +27,13 @@ import { isFlagEnabled } from '@/lib/feature-flags'
 import { getActiveRunId } from '@/lib/agent-run-tracker'
 // TOMBSTONE GUARD (fix review 2026-09-08): chặn todo_write cho session đã xóa
 import { isSessionDeleted } from '@/lib/session-tombstone'
+// INFRA GUARD (Task 24, 2026-10-21): chặn agent tự sửa hạ tầng runtime TMO
+// (package.json/lockfiles/prisma/db/.env/.opencode...) — bài học E2E run 2.
+import {
+  guardShellCommand,
+  isProtectedInfraPathSync,
+  buildFileOpBlockedMessage,
+} from '@/lib/protected-paths'
 // Phase 6/7 (rebuild) — workspace root now follows the USER's ACTIVE workspace
 // (SQLite Workspace table) instead of process.cwd(); 5s cache.
 import { resolveWorkspaceRoot } from './workspace-root'
@@ -181,6 +188,15 @@ export async function fileEdit(args: {
   dry_run?: boolean     // Phase 2.2 — preview diff without writing
 }): Promise<unknown> {
   const resolvedPath = await resolveWithinWorkspace(args.path)
+  // INFRA GUARD (Task 24): chặn sửa file hạ tầng runtime (prisma/schema, .env,
+  // .opencode bridges...) — agent cần thay đổi thì escalate cho operator.
+  {
+    const root = await resolveWorkspaceRoot()
+    const verdict = isProtectedInfraPathSync(resolvedPath, root)
+    if (verdict.protected) {
+      return { success: false, error: buildFileOpBlockedMessage(verdict.matched || args.path), blocked: true, path: args.path }
+    }
+  }
   const original = await fs.readFile(resolvedPath, 'utf-8')
 
   // Batch mode: apply all edits atomically (all-or-nothing)
@@ -319,6 +335,13 @@ export async function fileWrite(args: {
 
     const resolvedPath = await resolveWithinWorkspace(args.path)
     const root = await resolveWorkspaceRoot()
+    // INFRA GUARD (Task 24): chặn ghi đè file hạ tầng runtime.
+    {
+      const verdict = isProtectedInfraPathSync(resolvedPath, root)
+      if (verdict.protected) {
+        return { success: false, error: buildFileOpBlockedMessage(verdict.matched || args.path), blocked: true, path: args.path }
+      }
+    }
     if (resolvedPath === root) {
       return { success: false, error: 'Refusing to write to the workspace root — path phải trỏ tới FILE, không phải thư mục gốc.' }
     }
@@ -385,6 +408,13 @@ export async function fileDelete(args: {
 }): Promise<unknown> {
   const resolvedPath = await resolveWithinWorkspace(args.path)
   const root = await resolveWorkspaceRoot()
+  // INFRA GUARD (Task 24): chặn xoá file/thư mục hạ tầng runtime.
+  {
+    const verdict = isProtectedInfraPathSync(resolvedPath, root)
+    if (verdict.protected) {
+      return { success: false, error: buildFileOpBlockedMessage(verdict.matched || args.path), blocked: true, path: args.path }
+    }
+  }
   if (resolvedPath === root) {
     return { error: 'Refusing to delete the workspace root' }
   }
@@ -3263,6 +3293,25 @@ export async function shell(args: {
   // cũng được (user request 2026-08-29 — không khóa cwd trong root).
   const root = await resolveWorkspaceRoot()
   const cwd = args.cwd ? path.resolve(args.cwd) : root
+
+  // INFRA GUARD (Task 24, 2026-10-21 — bài học E2E run 2: agent task đọc-đếm
+  // tự ý `bun add better-sqlite3` + rewrite prisma/schema.prisma → app OOM-crash
+  // 97 restarts). Chặn lệnh chạm hạ tầng runtime khi chạy trong TMO workspace;
+  // task ở workspace khác (/tmp/...) không bị ảnh hưởng. Tắt qua TMO_INFRA_GUARD=off.
+  const guard = guardShellCommand(command, cwd, root)
+  if (guard.blocked) {
+    console.warn(`[INFRA-GUARD] shell blocked: ${guard.reason}`)
+    return {
+      success: false,
+      exit_code: -1,
+      stdout: '',
+      stderr: guard.message || 'TỪ CHỐI (infra-guard)',
+      duration_ms: 0,
+      truncated: false,
+      cwd,
+      blocked: true,
+    }
+  }
 
   // Timeout: 5min default, 10min max
   const timeoutMs = Math.min(Math.max(args.timeout_ms ?? 300_000, 1_000), 600_000)
