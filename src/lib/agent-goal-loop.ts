@@ -442,6 +442,15 @@ interface EvalVerdict {
    * không chặn hoàn thành) · 'continue' = nghiêm trọng → đề xuất 1 chu kỳ
    * debt mới xử lý ngay (nếu còn chu kỳ + budget). */
   debtDecision: 'none' | 'record' | 'continue'
+  /** 2026-10-27 (user directive phiên 4 — GĐ3 readiness): trọng tài xác định
+   * lại xem các nợ còn tồn tại ĐÃ CÓ THỂ xử lý ở chu kỳ kế tiếp hay chưa.
+   * 'ready' = có đường xử lý trong tầm agent (tool/package/schema/delegate) →
+   * quay GĐ0 có ý nghĩa. 'blocked' = chờ điều kiện ngoài (phê duyệt, vendor,
+   * agent chưa tạo được) → ghi follow-up chờ điều kiện thay vì debt cycle.
+   * Fail-open: thiếu field → coi như 'ready' (giữ hành vi cũ). */
+  debtReadiness: 'ready' | 'blocked'
+  /** Lý do cụ thể nợ chưa thể xử lý ở chu kỳ kế (khi debtReadiness='blocked'). */
+  debtBlockedReason: string
   raw: string
 }
 
@@ -485,7 +494,7 @@ GIAI ĐOẠN 2 — TRIỂN KHAI (mỗi hành động đều có suy nghĩ):
 GIAI ĐOẠN 3 — KIỂM ĐỊNH & BÁO CÁO (BẮT BUỘC trước khi kết luận):
 - Với tác vụ tạo/sửa file, code, lệnh, dữ liệu: PHẢI kiểm định bằng tool thật — file_read đọc lại kết quả, run_tests / lint / type_check, shell kiểm tra output. Bằng chứng phải nằm trong KẾT QUẢ TOOL.
 - Khi type_check/lint/run_tests FAIL: đọc errorCount + thông báo lỗi cụ thể từng file trong KẾT QUẢ TOOL — KHÔNG đoán nguyên nhân; nếu output không đủ để xác định lỗi cụ thể thì báo rõ "không xác định được nguyên nhân cụ thể". Tool fail KHÔNG đồng nghĩa "đã kiểm định".
-- XÁC ĐỊNH NỢ KỸ THUẬT → QUYẾT ĐỊNH LẶP LẠI GĐ0 (user directive 2026-10-27): khi kiểm định, đối chiếu và liệt kê CÁC LỖI PHÁT SINH còn tồn tại (nợ kỹ thuật của chu kỳ — tool fail chưa xử lý, lint/test lỗi ở file đã đụng, hành vi hỏng do thay đổi của chu kỳ tạo ra...). Nếu CÒN nợ → chu kỳ tiếp theo QUAY LẠI GĐ0 với TOÀN BỘ nợ được ƯU TIÊN triển khai TRƯỚC, sau đó mới tới phần việc khác. Trọng tài độc lập sẽ phán quyết việc này từ bằng chứng — hãy phản ánh trung thực từng lỗi còn tồn tại trong báo cáo (không che giấu, không tuyên bố sạch khi chưa kiểm định đủ).
+- XÁC ĐỊNH NỢ KỸ THUẬT → ĐÁNH GIÁ KHẢ NĂNG XỬ LÝ → QUYẾT ĐỊNH LẶP LẠI GĐ0 (user directive 2026-10-27): khi kiểm định, đối chiếu và liệt kê CÁC LỖI PHÁT SINH còn tồn tại (nợ kỹ thuật của chu kỳ — tool fail chưa xử lý, lint/test lỗi ở file đã đụng, hành vi hỏng do thay đổi của chu kỳ tạo ra...). Với từng nợ, XÁC ĐỊNH LẠI xem chu kỳ kế tiếp ĐÃ CÓ THỂ TIẾN HÀNH XỬ LÝ ĐƯỢC CHƯA (đủ tool? đủ quyền? thuộc chức trách mình hay agent khác? còn phụ thuộc điều kiện ngoài — chờ phê duyệt/vendor?): nợ CÓ THỂ xử lý → chu kỳ tiếp QUAY LẠI GĐ0 với TOÀN BỘ nợ được ƯU TIÊN triển khai TRƯỚC, sau đó mới tới phần việc khác; nợ KHÔNG THỂ xử lý được ở chu kỳ kế (thiếu điều kiện ngoài tầm với) → nêu rõ ĐIỀU KIỆN CẦN trong báo cáo để hệ thống ghi nợ follow-up chờ điều kiện thay vì quay GĐ0 vô ích. Trọng tài độc lập sẽ phán quyết việc này từ bằng chứng — hãy phản ánh trung thực từng lỗi còn tồn tại trong báo cáo (không che giấu, không tuyên bố sạch khi chưa kiểm định đủ).
 - CHỈ được kết luận hoàn thành khi bằng chứng kiểm định thực sự KHỚP mục tiêu.
 - Kết thúc chu kỳ bằng báo cáo đủ 4 phần: đã làm gì · bằng chứng tool (tên tool + kết quả ngắn) · còn thiếu gì · đề xuất khắc phục. Chốt thêm 2 dòng TỰ PHẢN CHIẾU:
   "✅ Đã CHẮC CHẮN (có bằng chứng tool): ..." / "❓ Còn CHƯA CHẮC (giả thuyết cần kiểm tra ở chu kỳ sau): ..." — phân biệt cái đã kiểm chứng với cái còn đoán. Hệ thống GIỮ LẠI các mục ❓ xuyên chu kỳ và nhắc lại ở chu kỳ sau (mục treo ≥2 chu kỳ bị đánh dấu ưu tiên) — viết ❓ THẬT sự cần kiểm chứng, đã kiểm chứng xong thì BỎ KHỎI danh sách.
@@ -498,6 +507,26 @@ GIAI ĐOẠN 3 — KIỂM ĐỊNH & BÁO CÁO (BẮT BUỘC trước khi kết l
 
 ⚠️ Một TRỌNG TÀI ĐỘC LẬP sẽ đánh giá lại kết quả của bạn DỰA TRÊN BẰNG CHỨNG TOOL THẬT. Lời tuyên bố không có bằng chứng sẽ BỊ TỪ CHỐI và bạn phải làm lại ở chu kỳ tiếp theo.
 Nếu mục tiêu là câu hỏi kiến thức chung thuần túy (không đòi dữ liệu thật từ hệ thống/file/DB — vd hỏi khái niệm, giải thích, gợi ý) thì chỉ cần trả lời đầy đủ, chính xác — không cần tool. Còn mục tiêu đòi dữ liệu thật (khảo sát/đánh giá/đếm/kiểm tra hiện trạng) → PHẢI thu thập bằng tool, trả lời không bằng chứng sẽ bị trọng tài từ chối.`
+}
+
+/**
+ * [H] INFRA SELF-SERVICE protocol (user directive 2026-10-27 phiên 4) — quy
+ * trình xử lý LỖI HẠ TẦNG / THIẾU TOOL / THIẾU AGENT. Agents giờ ĐƯỢC PHÉP
+ * tự cài package + sửa schema + tự xây tool; việc thuộc chức trách agent khác
+ * → delegate; thiếu agent → escalate Omega tạo agent mới. Inject cho MỌI agent
+ * chạy goal-loop (nội dung tự điều chỉnh theo tool có trong whitelist).
+ */
+function buildInfraSelfServiceProtocol(): string {
+  return `
+
+🔧 XỬ LÝ LỖI HẠ TẦNG & THIẾU TOOL/AGENT (chính sách 2026-10-27 — TỰ PHỤC VỤ theo thứ tự):
+Khi vướng lỗi hạ tầng / thiếu thư viện / thiếu tool / việc ngoài chức trách của bạn — xử lý THEO THỨ TỰ sau (KHÔNG dừng ở bước đầu):
+1. THIẾU PACKAGE (module not found, dependency lỗi) → TỰ CÀI: tool_call: manage_packages({"action":"add","packages":["tên-package"]}) hoặc shell "bun add tên-package" — ĐÃ ĐƯỢC PHÉP tự làm (chính sách 2026-10-27).
+2. CẦN SỬA DB SCHEMA (thiếu bảng/cột cho việc đang làm) → TỰ SỬA: file_edit/file_write prisma/schema.prisma → shell "bun run db:push" → shell "bun run db:generate" (regenerate client). KHÔNG ghi tay file trong db/ (data) — chỉ qua prisma.
+3. THIẾU TOOL HOÀN TOẢN (không có tool nào làm được việc này) → xác định CHÍNH XÁC loại tool thiếu là gì → TỰ XÂY: tool_call: list_custom_tools({}) kiểm tra chưa có → tool_call: create_custom_tool({"name":"...","description":"...","parameters":{...},"handlerCode":"function handler(args){...}"}) → tool mới ĐĂNG KÝ VÀO hệ thống TMO (tab Tools/Skills của module Smolab) và GỌI ĐƯỢC NGAY: tool_call: tên_tool({...}) — dùng triển khai tiếp công việc làm dở, không cần restart.
+4. VIỆC THUỘC CHỨC TRÁCH AGENT KHÁC (code/review/research/tối ưu/thiết kế — đối chiếu Agent Roster) → GỌI AGENT đó: delegate_task / dispatch_agent kèm nhiệm vụ + tiêu chí nghiệm thu rõ ràng.
+5. CHƯA CÓ AGENT thuộc chức trách đó (đã kiểm tra Agent Roster) → tool_call: escalate_problem({"problem":"...","context":"..."}) — OMEGA sẽ phân tích và TẠO AGENT MỚI có chức trách xử lý vấn đề (agent mới tự cập nhật vào module Agents + Agent Roster) rồi điều phối xử lý.
+CHỈ escalate chờ phê duyệt đối với phần VẪN ĐƯỢC BẢO VỆ: .env/keys, file data db/, opencode.json, .opencode/, mini-services/, config hệ thống — phần này KHÔNG tự sửa.`
 }
 
 /**
@@ -670,6 +699,9 @@ export function assembleGoalLoopSystemPrompt(params: {
         // không bao giờ được hy sinh để tiết kiệm token.
         { name: 'toolSchemas', content: params.toolSchemasBlock ?? '', priority: 100 },
         { name: 'delegationProtocol', content: hasDelegation ? buildDelegationProtocol() : '', priority: 90 },
+        // 2026-10-27 (user directive phiên 4): INFRA SELF-SERVICE — quy trình xử
+        // lý lỗi hạ tầng/thiếu tool/thiếu agent cho MỌI agent goal-loop.
+        { name: 'infraSelfService', content: buildInfraSelfServiceProtocol(), priority: 89 },
         { name: 'codeTeamProtocol', content: params.hasCodeTeamRequest === true ? buildCodeTeamProtocol() : '', priority: 88 },
         { name: 'orchestrationProtocol', content: hasOrchestration ? buildOrchestrationProtocol(hasDispatch, hasCreate) : '', priority: 80 },
         { name: 'automationProtocol', content: buildAutomationProtocol(params.hasAutomationDirect === true, params.hasAutomationPropose === true), priority: 78 },
@@ -688,6 +720,7 @@ export function assembleGoalLoopSystemPrompt(params: {
       systemPrompt +
       (params.toolSchemasBlock ? '\n' + params.toolSchemasBlock : '') +
       buildGoalProtocol() +
+      buildInfraSelfServiceProtocol() +
       (hasDelegation ? buildDelegationProtocol() : '') +
       (params.hasCodeTeamRequest === true ? buildCodeTeamProtocol() : '') +
       (hasOrchestration ? buildOrchestrationProtocol(hasDispatch, hasCreate) : '') +
@@ -792,7 +825,7 @@ export async function buildPendingDebtBlock(sessionId: string | null | undefined
 Các run trước trong phiên này còn ${debt.length} nợ kỹ thuật chưa xử lý (trọng tài đã ghi Todo follow-up). Thứ tự ưu tiên SẮT của run này:
 1. XỬ LÝ TOÀN BỘ nợ dưới đây TRƯỚC TIÊN (đưa từng mục vào todo_write kế hoạch, đặt TRƯỚC các việc mới).
 2. Xử lý xong mục nào → gọi todo_write với ĐÚNG "id" của mục đó + status "completed" (đóng row cũ — KHÔNG tạo row trùng nội dung).
-3. Mục nào vẫn nằm ngoài quyền sửa (hạ tầng được bảo vệ / chờ phê duyệt) → nêu rõ trạng thái trong báo cáo, KHÔNG xóa bỏ.
+3. Mục nào vẫn nằm ngoài quyền sửa (phần hạ tầng VẪN ĐƯỢC BẢO VỆ: .env/keys, file data db/, opencode.json, .opencode/, mini-services/ — hoặc chờ phê duyệt / vendor bên thứ 3) → trước khi kết luận ngoài quyền, HÃY KIỂM TRA đã thử đủ đường tự phục vụ chưa: cài package (manage_packages), sửa schema (file_edit prisma/schema.prisma + bun run db:push), tự xây tool thiếu (create_custom_tool), gọi agent đúng chức trách (dispatch_agent), escalate Omega tạo agent mới (escalate_problem). Chỉ khi THẬT SỰ thiếu điều kiện ngoài tầm với → nêu rõ trạng thái + ĐIỀU KIỆN CẦN trong báo cáo, KHÔNG xóa bỏ.
 4. Hết nợ mới làm việc mới của yêu cầu hiện tại.
 ${lines.join('\n')}`
   } catch { return '' /* fail-open — nợ kỹ thuật không được phép làm hỏng run mới */ }
@@ -970,7 +1003,8 @@ function cliToolResultPreview(er: { success: boolean; output: string; error?: st
   return out.length > cap ? `${out.slice(0, cap - 1)}…` : out
 }
 
-const EVALUATOR_SYSTEM_PROMPT = `Bạn là EVALUATOR — trọng tài độc lập đánh giá việc thực hiện mục tiêu của một AI Agent.
+// (2026-10-27 phiên 4) export cho test — rule debtReadiness + parser verdict
+export const EVALUATOR_SYSTEM_PROMPT = `Bạn là EVALUATOR — trọng tài độc lập đánh giá việc thực hiện mục tiêu của một AI Agent.
 
 Nguyên tắc SẮT:
 1. Bạn KHÔNG tin vào lời tuyên bố của agent ("tôi đã hoàn thành", "file đã tạo"...). Bạn CHỈ tin vào BẰNG CHỨNG trong kết quả tool thật: output lệnh, kết quả test, nội dung file đọc lại.
@@ -983,16 +1017,17 @@ Nguyên tắc SẮT:
 8. E2E VERIFICATION (sửa code nhưng chỉ đọc lại file): mục tiêu có SỬA CODE mà bằng chứng kiểm định chỉ là file_read/grep (KHÔNG run_tests/lint/type_check dù thông báo hệ thống nói tool có sẵn) → chỉ chấp nhận "complete": true khi thay đổi là thuần hiển thị/nội dung tĩnh; thay đổi LOGIC → "complete": false và thêm vào "missing": "chạy run_tests/lint/type_check để kiểm định thay đổi logic".
 9. SIDE ISSUES (lỗi phát sinh trong quá trình làm — tool fail, lint/test lỗi ở file run đã đụng, lỗi logic do thay đổi của run tạo ra, config/hành vi hỏng...): liệt kê vào "sideIssues" (tối đa 4, ngắn gọn). Mục tiêu chính ĐẠT nhưng CÓ side issues còn tồn tại → "complete": true vẫn đúng cho MỤC TIÊU GỐC (đừng hạ complete vì lỗi ngoài mục tiêu), NHƯNG run chưa thể kết thúc khi các lỗi liên quan còn treo — chọn "debtDecision" theo mức độ LIÊN QUAN:
    - "continue": MẶC ĐỊNH cho mọi side issue LIÊN QUAN đến công việc của run này (lint/test fail ở file đã đụng, lỗi phát sinh từ thay đổi của run, tool fail chưa xử lý được, hành vi hỏng do run tạo...) → hệ thống TÁI LẬP chu kỳ debt xử lý NGAY trong run này (nhiều đợt liên tiếp nếu cần). Tác vụ chỉ thực sự trọn vẹn khi các vấn đề phát sinh liên quan đã được giải quyết — ĐỪNG vội phán kết thúc khi còn lỗi treo.
-   - "record": CHỈ khi issue nằm NGOÀI khả năng xử lý của agent. Đây là lỗi thuộc HẠ TẦNG ĐƯỢC BẢO VỆ hoặc vượt phạm vi agent: (a) bị infra-guard chặn sửa — file cấu hình/hạ tầng hệ thống (.env, package.json, prisma/, db/, opencode config...) được bảo vệ khỏi agent tự sửa vì agents chạy tự chủ, sửa sai hạ tầng có thể phá vỡ toàn hệ thống; (b) cần quyền/phê duyệt cấp hệ thống (Mr. Architect / Self-Direction) — kể cả khi agent đã trình phê duyệt và đang chờ; (c) lỗi hạ tầng bên thứ 3 (vendor/LLM provider) không thể sửa từ bên trong; (d) thiếu tool hoàn toàn cho việc đó; (e) thuộc phạm vi chức trách agent khác. Các lỗi này KHÔNG phải agent kém — chúng ta thiết kế phân quyền có chủ đích để thay đổi hạ tầng phải qua phê duyệt → hệ thống ghi nợ kỹ thuật (Todo follow-up) chờ người quản trị quyết định.
+   - "record": CHỈ khi issue THẬT SỰ ngoài khả năng xử lý của agent NGAY CẢ SAU khi đã thử đường tự phục vụ. Chính sách 2026-10-27 (phiên 4): agent ĐÃ ĐƯỢC PHÉP (a1) tự cài package (manage_packages / shell bun add) và (a2) tự sửa DB schema (file_edit prisma/schema.prisma + shell bun run db:push) — hai hạng mục này KHÔNG còn là lý do "record"; (a3) thiếu tool hoàn toàn → agent tự xây + đăng ký qua create_custom_tool rồi dùng tiếp; (a4) việc thuộc chức trách agent khác → delegate_task/dispatch_agent; (a5) chưa có agent chức trách đó → escalate_problem (Omega tạo agent mới). Chỉ còn "record" khi: (b) phần hạ tầng VẪN ĐƯỢC BẢO VỆ (.env/keys, file data db/, opencode.json, .opencode/, mini-services/, config hệ thống) mà agent đã thử đường chính thống vẫn kẹt; (c) cần quyền/phê duyệt cấp hệ thống (Mr. Architect / Self-Direction) — kể cả khi agent đã trình phê duyệt và đang chờ; (d) lỗi hạ tầng bên thứ 3 (vendor/LLM provider) không thể sửa từ bên trong; (e) thiếu điều kiện ngoài tầm với sau khi đã thử đủ đường tự phục vụ. Các lỗi này KHÔNG phải agent kém — hệ thống ghi nợ kỹ thuật (Todo follow-up) chờ điều kiện/người quản trị quyết định.
    - "none": CHỈ khi issue tầm thường/đã tự hết và KHÔNG liên quan gì đến thay đổi của run.
    KHÔNG dùng side issues để hạ "complete" khi mục tiêu chính đã đạt theo bằng chứng — nhưng cũng KHÔNG dùng "record"/"none" để né xử lý lỗi liên quan còn giải quyết được trong run này.
 10. DEBT CHECK (áp dụng khi prompt có khối "CÁC LỖI PHÁT SINH CHƯA XỬ LÝ" — danh sách trọng tài đã quyết định xử lý ở các chu kỳ trước): đối chiếu TỪNG lỗi với bằng chứng chu kỳ này. Lỗi nào CHƯA có bằng chứng máy xác nhận đã khắc phục (fix xong + verify pass) → PHẢI liệt kê lại vào "sideIssues" và đặt "debtDecision": "continue". KHÔNG phán hoàn thành sạch khi danh sách còn mục chưa đối chiếu được bằng chứng khắc phục.
 11. DERIVED-NUMBER GUARD (2026-10-20 — E2E lộ agent đếm bằng mắt sai 80/79 nhưng tự chấm "đã kiểm chứng"): khi mục tiêu/tiêu chí đòi một CON SỐ hoặc kết quả TỔNG HỢP từ dữ liệu gốc (đếm dòng, đếm phần tử, tính tổng...), chỉ chấp nhận là verified khi bằng chứng tool cho thấy LỆNH MÁY trả về đúng con số đó (output wc/jq/grep -c hiển thị giá trị khớp). Agent "tự đếm trong đầu" từ nội dung đã đọc KHÔNG phải bằng chứng — nếu không thấy output lệnh máy xác nhận con số → "verified": false.
 12. TODO PLAN CHECK (Task 23-c 2026-10-26 — E2E lộ agent làm task đa bước mà bỏ qua kế hoạch): tác vụ đòi ≥2 bước làm việc thật (đọc/sửa/đếm nhiều mục độc lập) mà bằng chứng KHÔNG có tool todo_write/tmo_todo nào trong run → "complete" vẫn đánh giá theo KẾT QUẢ, nhưng thêm vào "missing": "process: bỏ qua todo_write — chạy không có kế hoạch truy vết được" (ghi nhận gap quy trình cho Opus review + báo cáo cuối; chu kỳ sau nếu còn chạy thì ưu tiên bổ sung todo).
 13. FACT-GATHERING GUARD (2026-10-27 — E2E lộ agent trả về 1 câu ý định mà evaluator vẫn chấm hoàn thành): mục tiêu đòi dữ liệu thật về hệ thống/file/database (khảo sát, rà soát, đánh giá hiện trạng, đếm, liệt kê, kiểm tra...) → KHÔNG phải câu hỏi kiến thức chung: "complete": true KHI VÀ CHỈ KHI run CÓ tool call thu thập dữ liệu thật (file_read/grep/shell/query/delegation...) và kết quả khớp mục tiêu. Run 0 tool calls, hoặc nội dung cuối chỉ là Ý ĐỊNH/KẾ HOẠCH ("tôi sẽ...") thay vì báo cáo dữ liệu → "complete": false, "verified": false, rootCause ghi rõ: thiếu bằng chứng thu thập dữ liệu thật.
+14. DEBT READINESS (user directive 2026-10-27 phiên 4 — GĐ3 xác định lại khả năng xử lý nợ ở chu kỳ kế): khi có side issues còn tồn tại, XÁC ĐỊNH LẠI xem chu kỳ kế tiếp ĐÃ CÓ THỂ TIẾN HÀNH XỬ LÝ được các nợ này chưa — đối chiếu từng nợ với năng lực tự phục vụ hiện có: tool sẵn có hoặc tự xây được (create_custom_tool), package tự cài được (manage_packages/bun add), schema tự sửa được (prisma + db push), việc thuộc chức trách agent có sẵn trong roster (dispatch được), không phụ thuộc điều kiện ngoài. TẤT CẢ nợ có đường xử lý → "debtReadiness": "ready" (chu kỳ kế quay GĐ0 xử lý được ngay). Nợ chờ phê duyệt Self-Direction / chờ vendor / chờ agent chưa tồn tại / thiếu điều kiện ngoài tầm với → "debtReadiness": "blocked" + "debtBlockedReason" nêu CỤ THỂ điều kiện còn thiếu (1 câu). KHÔNG phán "ready" khi nợ cần điều kiện chưa có — quay GĐ0 khi chưa thể xử lý chỉ đốt chu kỳ vô ích.
 
 Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích thêm):
-{"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."], "sideIssues": ["..."], "debtDecision": "none|record|continue"}`
+{"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."], "sideIssues": ["..."], "debtDecision": "none|record|continue", "debtReadiness": "ready|blocked", "debtBlockedReason": "..."}`
 
 // ==================== HELPERS ====================
 
@@ -1009,8 +1044,9 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
   }
 }
 
-/** Parse JSON verdict từ output evaluator (chống markdown fence + text thừa) */
-function parseEvalVerdict(raw: string): EvalVerdict | null {
+/** Parse JSON verdict từ output evaluator (chống markdown fence + text thừa)
+ * (2026-10-27 phiên 4) export cho test — parse debtReadiness/debtBlockedReason */
+export function parseEvalVerdict(raw: string): EvalVerdict | null {
   try {
     const text = raw.replace(/```(?:json)?/g, '')
     const jsonStr = findBalancedJson(text, 'complete')
@@ -1025,7 +1061,11 @@ function parseEvalVerdict(raw: string): EvalVerdict | null {
     // FIX 2026-09-14 #9 — side issues + quyết định xử lý nợ kỹ thuật của trọng tài
     const sideIssues = Array.isArray(obj.sideIssues) ? obj.sideIssues.map(s => String(s).slice(0, 200)).filter(Boolean).slice(0, 4) : []
     const debtDecision = obj.debtDecision === 'record' || obj.debtDecision === 'continue' ? obj.debtDecision : 'none'
-    return { complete, confidence, verified, missing, rootCause, nextPlan, sideIssues, debtDecision, raw: raw.slice(0, 400) }
+    // 2026-10-27 (phiên 4) — DEBT READINESS: nợ có thể xử lý ở chu kỳ kế không?
+    // Fail-open: field thiếu/sai → 'ready' (giữ hành vi cũ — debt cycle vẫn chạy).
+    const debtReadiness = obj.debtReadiness === 'blocked' ? 'blocked' : 'ready'
+    const debtBlockedReason = typeof obj.debtBlockedReason === 'string' ? obj.debtBlockedReason.slice(0, 300) : ''
+    return { complete, confidence, verified, missing, rootCause, nextPlan, sideIssues, debtDecision, debtReadiness, debtBlockedReason, raw: raw.slice(0, 400) }
   } catch {
     return null
   }
@@ -1795,6 +1835,8 @@ export async function runGoalDrivenLoop(params: {
         nextPlan: resumeState.verdict.nextPlan,
         sideIssues: resumeState.verdict.sideIssues ?? [],
         debtDecision: resumeState.verdict.debtDecision ?? 'none',
+        debtReadiness: resumeState.verdict.debtReadiness === 'blocked' ? 'blocked' : 'ready',
+        debtBlockedReason: resumeState.verdict.debtBlockedReason ?? '',
         raw: '',
       }
     : null
@@ -1883,6 +1925,8 @@ export async function runGoalDrivenLoop(params: {
           nextPlan: lastVerdict.nextPlan,
           sideIssues: lastVerdict.sideIssues,
           debtDecision: lastVerdict.debtDecision,
+          debtReadiness: lastVerdict.debtReadiness,
+          debtBlockedReason: lastVerdict.debtBlockedReason,
         }
       : null,
     fingerprint: prevFingerprint,
@@ -2018,7 +2062,7 @@ Chu kỳ này quay về GĐ0 (quan sát & phân tích) với thứ tự ưu tiê
 ${debtList}
 
 Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý (nợ trước, việc khác sau), (2) khắc phục từng lỗi, (3) KIỂM ĐỊNH bằng tool thật (run_tests/lint/type_check), (4) KHÔNG mở việc mới ngoài danh sách trên khi còn nợ chưa xử lý. Xong hết → báo cáo ngắn từng lỗi đã xử lý + bằng chứng.
-LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu người quản trị): là lỗi thuộc HẠ TẦNG ĐƯỢC BẢO VỆ — infra-guard chặn agent sửa file cấu hình/hạ tầng (.env, package.json, prisma/, db/...) vì agents chạy tự chủ: sửa sai hạ tầng có thể phá vỡ toàn hệ thống (tiền lệ thật 2026-10-20: agent làm task đọc-đếm đã tự cài package + sửa schema). Thay đổi hạ tầng phải qua PHÊ DUYỆT của người quản trị hệ thống (Mr. Architect / Self-Direction). Với lỗi loại này: KHÔNG lặp thử sửa — trình qua cơ chế phê duyệt chính thức (nếu có), ghi rõ trạng thái "chờ phê duyệt" vào báo cáo rồi chuyển sang lỗi kế — đó là "đã xử lý phần của agent". Hết debt cycles mà còn lỗi treo ngoài quyền → hệ thống ghi nợ Todo follow-up, KHÔNG khởi động chu kỳ debt mới.${debtTodosBlock}`
+LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PHỤC VỤ HẠ TẦNG): bạn ĐÃ ĐƯỢC PHÉP (1) tự cài package — manage_packages hoặc shell "bun add <pkg>"; (2) tự sửa DB schema — file_edit/file_write prisma/schema.prisma → shell "bun run db:push" → shell "bun run db:generate"; (3) tự xây tool còn thiếu — list_custom_tools kiểm tra → create_custom_tool đăng ký vào hệ thống (tab Tools/Skills module Smolab) rồi GỌI NGAY tool mới; (4) việc thuộc chức trách agent khác → delegate_task/dispatch_agent; (5) chưa có agent chức trách đó → escalate_problem (Omega tạo agent mới — agent mới tự cập nhật vào module Agents). Hai hạng mục (1)+(2) KHÔNG còn bị chặn — ĐỪNG kết luận "ngoài quyền sửa" khi chưa thử. Chỉ phần VẪN ĐƯỢC BẢO VỆ mới phải chờ phê duyệt: .env/keys, file data trong db/, opencode.json, .opencode/, mini-services/, config hệ thống — với các lỗi này: KHÔNG lặp thử sửa, ghi rõ trạng thái "chờ phê duyệt" + ĐIỀU KIỆN CẦN vào báo cáo rồi chuyển sang lỗi kế — đó là "đã xử lý phần của agent". Hết debt cycles mà còn lỗi treo ngoài quyền → hệ thống ghi nợ Todo follow-up kèm điều kiện, KHÔNG khởi động chu kỳ debt mới.${debtTodosBlock}`
         messages.push({ role: 'user', content: debtDirective })
         evidence.push({ cycle, kind: 'directive', text: `DEBT CYCLE ${cycle}: xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã xong)` })
         recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ0 QUAN SÁT & PHÂN TÍCH (CHU KỲ DEBT — quay lại GĐ0): trọng tài tái khởi động chu kỳ để xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã hoàn thành) — TOÀN BỘ nợ kỹ thuật ƯU TIÊN triển khai TRƯỚC, sau đó mới tới việc khác`, totalIterations)
@@ -2954,7 +2998,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu ngư
     //  - có tool call nhưng không đánh giá được → chưa hoàn thành (đánh giá lại chu kỳ sau)
     if (!verdict) {
       if (cycleToolCalls === 0 && pendingDebtIssues.length === 0) {
-        verdict = { complete: true, confidence: 0.6, verified: false, missing: [], rootCause: '', nextPlan: [], sideIssues: [], debtDecision: 'none', raw: '(evaluator unavailable — pure answer accepted)' }
+        verdict = { complete: true, confidence: 0.6, verified: false, missing: [], rootCause: '', nextPlan: [], sideIssues: [], debtDecision: 'none', debtReadiness: 'ready', debtBlockedReason: '', raw: '(evaluator unavailable — pure answer accepted)' }
       } else {
         // FIX (R2-b #4): evaluator hỏng mà debt issues còn TREO → KHÔNG phán
         // complete (nhánh complete sẽ xóa pendingDebtIssues chìm). Giữ
@@ -2974,6 +3018,8 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu ngư
           nextPlan: [],
           sideIssues: hasPendingDebt ? pendingDebtIssues.slice() : [],
           debtDecision: hasPendingDebt ? 'record' : 'none',
+          debtReadiness: 'ready',
+          debtBlockedReason: '',
           raw: '(evaluator unavailable)',
         }
       }
@@ -3064,7 +3110,11 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu ngư
         (EFFECTIVE_MAX_CYCLES === 0 || cycle < effectiveMaxCycles) &&
         timeLeft() > 0 &&
         tokenLeft() > REPORT_RESERVE_TOKENS + 8_000 &&
-        !isCancelled()
+        !isCancelled() &&
+        // 2026-10-27 (user directive phiên 4 — GĐ3 READINESS GATE): trọng tài
+        // xác định lại nợ CHƯA THỂ xử lý ở chu kỳ kế (chờ phê duyệt / vendor /
+        // điều kiện ngoài) → KHÔNG quay GĐ0 vô ích — ghi follow-up kèm điều kiện.
+        verdict.debtReadiness !== 'blocked'
       // 2026-10-27 — STAGNANT DEBT GUARD: fingerprint side issues (sort + normalize
       // lowercase + cắt 60 ký tự/issue). Debt cycle mới mà tập issue GIỐNG HỆT đợt
       // trước → stagnation++. 3 đợt liên tiếp không tiến triển → ép GHI NỢ (record)
@@ -3096,18 +3146,26 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu ngư
           try {
             const { db } = await import('@/lib/db')
             for (const issue of verdict.sideIssues) {
+              // 2026-10-27 (phiên 4): nợ bị BLOCKED (chưa thể xử lý chu kỳ kế) →
+              // đính kèm ĐIỀU KIỆN CẦN vào nội dung follow-up để run nhặt nợ
+              // (buildPendingDebtBlock) và người quản trị thấy ngay còn thiếu gì.
+              const condSuffix = verdict.debtReadiness === 'blocked' && verdict.debtBlockedReason
+                ? ` — điều kiện xử lý: ${verdict.debtBlockedReason.slice(0, 120)}`
+                : ''
               await db.todo.create({
                 data: {
                   sessionId: agentSessionId,
-                  content: `🔁 Follow-up (nợ kỹ thuật từ run ${runId?.slice(0, 18) ?? '-'}): ${issue}`.slice(0, 480),
+                  content: `🔁 Follow-up (nợ kỹ thuật từ run ${runId?.slice(0, 18) ?? '-'}): ${issue}${condSuffix}`.slice(0, 480),
                   status: 'pending',
                   priority: 'medium',
                   ...(runId ? { runId } : {}),
-                  taskMetaJson: JSON.stringify({ source: 'arbiter_side_issue', cycle, debtDecision: verdict.debtDecision }),
+                  taskMetaJson: JSON.stringify({ source: 'arbiter_side_issue', cycle, debtDecision: verdict.debtDecision, debtReadiness: verdict.debtReadiness }),
                 },
               }).catch(() => { /* fail-open từng item */ })
             }
-            const whyNoDebt = verdict.debtDecision === 'continue'
+            const whyNoDebt = verdict.debtReadiness === 'blocked'
+              ? `NỢ CHƯA THỂ xử lý ở chu kỳ kế — trọng tài xác định còn thiếu điều kiện: ${verdict.debtBlockedReason.slice(0, 160) || '(không nêu lý do)'} → ghi follow-up kèm điều kiện, KHÔNG quay GĐ0 vô ích`
+              : verdict.debtDecision === 'continue'
               ? debtCyclesRun >= MAX_DEBT_CYCLES
                 ? `hết lượt debt cycle (${debtCyclesRun}/${MAX_DEBT_CYCLES})`
                 : 'hết budget/chu kỳ nên không chạy debt cycle'
@@ -3155,11 +3213,18 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu ngư
     // định vòng tiếp. Nợ kỹ thuật tồn đọng → chu kỳ tiếp QUAY LẠI GĐ0 với
     // TOÀN BỘ nợ được ƯU TIÊN triển khai TRƯỚC, sau đó mới tới việc khác.
     {
+      // 2026-10-27 (phiên 4) — GĐ3 readiness hiển thị trong quyết định chu kỳ tiếp:
+      // trọng tài đã XÁC ĐỊNH LẠI nợ có thể xử lý ở chu kỳ kế chưa (ready/blocked).
+      const readinessNote = verdict.sideIssues.length > 0
+        ? verdict.debtReadiness === 'blocked'
+          ? ` — nợ CHƯA THỂ xử lý ở chu kỳ kế (còn thiếu điều kiện: ${verdict.debtBlockedReason.slice(0, 140) || 'không nêu'})`
+          : ' — nợ ĐÃ CÓ THỂ xử lý ở chu kỳ kế (đủ tool/đường tự phục vụ)'
+        : ''
       const nextDecision = debtMode
-        ? `QUAY LẠI GĐ0 ở chu kỳ ${cycle + 1} (CHU KỲ DEBT) — TOÀN BỘ ${verdict.sideIssues.length} nợ kỹ thuật ƯU TIÊN triển khai TRƯỚC, sau đó mới tới phần việc khác`
+        ? `QUAY LẠI GĐ0 ở chu kỳ ${cycle + 1} (CHU KỲ DEBT) — TOÀN BỘ ${verdict.sideIssues.length} nợ kỹ thuật ƯU TIÊN triển khai TRƯỚC, sau đó mới tới phần việc khác (trọng tài xác nhận nợ SẴN SÀNG xử lý)${readinessNote}`
         : verdict.complete
           ? justRecordedFollowUps > 0
-            ? `KHÔNG chạy tiếp trong run này — ${justRecordedFollowUps} nợ kỹ thuật đã GHI Todo follow-up, sẽ được ưu tiên xử lý ở RUN KẾ TIẾP của phiên (đầu run)`
+            ? `KHÔNG chạy tiếp trong run này — ${justRecordedFollowUps} nợ kỹ thuật đã GHI Todo follow-up${readinessNote}, sẽ được ưu tiên xử lý ở RUN KẾ TIẾP của phiên (đầu run)`
             : 'KHÔNG lặp lại — hoàn thành sạch (không còn nợ kỹ thuật)'
           : `QUAY LẠI GĐ0 ở chu kỳ ${cycle + 1} — khắc phục phần thiếu: ${(verdict.missing[0] || verdict.rootCause || '').slice(0, 120)}`
       recordAgentThought(

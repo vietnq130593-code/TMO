@@ -4838,6 +4838,28 @@ export async function callLLMForAgent(
       console.log(`[LLM] Agent dùng OpenCode CLI ${model} ✓ (${tcCount} tool_calls, ${cliResult.tokensUsed ?? 0} tokens)`)
       return cliResult
     }
+    // 2026-10-27 (phiên 4) — ZEN MODEL FAILOVER: model zen cấu hình fail cả
+    // HTTP + CLI (vd muse-spark-1.3-contributor-free bị RegionError geo-block
+    // trên server ngoài VN; chạy trực tiếp OK ở môi trường local VN của user)
+    // → thử 1 model zen dự phòng KHÁC (default space-bunny-free) trước khi rơi
+    // xuống NIM. Giữ agents sống ngay cả khi model chính không khả dụng ở vùng
+    // này — model cấu hình vẫn là model chính (agent dùng model dự phòng chỉ
+    // khi model chính thất bại hoàn toàn, có log rõ ràng để truy vết).
+    const zenFailoverModel = process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free'
+    if (model !== zenFailoverModel) {
+      console.warn(`[LLM] Agent Zen ${model} thất bại cả HTTP + CLI — thử ZEN FAILOVER model ${zenFailoverModel}`)
+      const foHttp = await callZenProvider(prompt, systemPrompt, zenFailoverModel, options, `agent-failover:${zenFailoverModel}`)
+      if (foHttp && (foHttp.content || (foHttp.tool_calls && foHttp.tool_calls.length > 0))) {
+        console.log(`[LLM] Agent dùng ZEN FAILOVER ${zenFailoverModel} ✓ (model chính ${model} không khả dụng ở vùng này) — ${foHttp.tool_calls?.length ?? 0} tool_calls`)
+        return foHttp
+      }
+      const foCli = await callOpenCodeCLIProvider(prompt, systemPrompt, zenFailoverModel, options, `agent-failover:${zenFailoverModel}`)
+      if (foCli && (foCli.content || (foCli.tool_calls && foCli.tool_calls.length > 0))) {
+        console.log(`[LLM] Agent dùng ZEN FAILOVER (CLI) ${zenFailoverModel} ✓ (model chính ${model} không khả dụng ở vùng này) — ${foCli.tool_calls?.length ?? 0} tool_calls`)
+        return foCli
+      }
+      console.warn(`[LLM] ZEN FAILOVER ${zenFailoverModel} cũng thất bại — xuống NIM chain`)
+    }
     // Both Zen HTTP + CLI failed → fall back to NIM kimi-k3 chain (safety net)
     console.warn(`[LLM] Agent Zen ${model} thất bại cả HTTP + CLI — fallback NIM kimi-k3 chain`)
     const nimFallback = await callAgentModelWithFallbackChain(prompt, systemPrompt, options, `agent:${model}-zen-fallback`)

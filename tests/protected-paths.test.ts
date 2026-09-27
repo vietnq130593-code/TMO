@@ -1,16 +1,21 @@
 // ============================================================================
-// TEST SUITE — INFRA GUARD / PROTECTED PATHS (Task 24, 2026-10-21)
+// TEST SUITE — INFRA GUARD / PROTECTED PATHS (Task 24, 2026-10-21;
+// cập nhật chính sách 2026-10-27 phiên 4)
 // ============================================================================
 // Chạy: cd /home/z/tmo-app && bun run tests/protected-paths.test.ts
 //
-// Mục đích: test guard chống agent tự sửa hạ tầng runtime TMO — bài học E2E
-// 2026-10-20 run 2 (agent task read-only tự ý `bun add better-sqlite3` +
-// rewrite prisma/schema.prisma → app OOM-crash 97 restarts).
+// Mục đích: test guard hạ tầng TMO — lịch sử 2026-10-20 (agent tự ý bun add +
+// rewrite schema → OOM-crash 97 restarts) dẫn đến guard Task 24 chặn TOÀN BỘ.
+//
+// CHÍNH SÁCH MỚI (user directive 2026-10-27 phiên 4): agent ĐƯỢC PHÉP tự cài
+// package + tự sửa prisma schema (+ db push) — 2 hạng mục này KHÔNG còn chặn.
+// Vẫn chặn: .env/keys, db/ (data files), opencode.json, .opencode/,
+// mini-services/, package.json + lockfiles + configs (sửa tay manifests vẫn
+// phải qua lệnh chính thống bun add).
 //
 // Phạm vi: unit (guardShellCommand + isProtectedInfraPathSync thuần) +
-// HTTP thật qua /api/tools/execute (đúng đường bridge tmo_* của OpenCode CLI)
-// — dùng shell/file_write/file_edit/file_delete builtin, KHÔNG ghi file thật
-// (guard phải chặn trước khi chạm đĩa; verify bằng checksum file hạ tầng).
+// HTTP thật qua /api/tools/execute (đúng đường bridge tmo_* của OpenCode CLI).
+// Test ghi file tạm prisma/test-guard-*.tmp rồi tự dọn — KHÔNG đụng file thật.
 // ============================================================================
 
 process.env.DATABASE_URL = 'file:/home/z/tmo-app/db/custom.db'
@@ -39,8 +44,10 @@ console.log('\n━━━ A. Protected path matching ━━━')
 
 ok('package.json (relative) protected',
   isProtectedInfraPathSync(`${ROOT}/package.json`, ROOT).protected)
-ok('prisma/schema.prisma protected (dir subtree)',
-  isProtectedInfraPathSync(`${ROOT}/prisma/schema.prisma`, ROOT).protected)
+ok('prisma/schema.prisma KHÔNG còn protected (2026-10-27 — agent được sửa schema)',
+  !isProtectedInfraPathSync(`${ROOT}/prisma/schema.prisma`, ROOT).protected)
+ok('prisma/migrations/xxx.sql KHÔNG protected (agent sửa schema + migration)',
+  !isProtectedInfraPathSync(`${ROOT}/prisma/migrations/xxx.sql`, ROOT).protected)
 ok('db/custom.db protected',
   isProtectedInfraPathSync(`${ROOT}/db/custom.db`, ROOT).protected)
 ok('.env protected (prefix)', isProtectedInfraPathSync(`${ROOT}/.env`, ROOT).protected)
@@ -67,29 +74,32 @@ ok('path thoát workspace (traversal ../) KHÔNG protected',
 ok('root chính nó KHÔNG protected (để check riêng)',
   !isProtectedInfraPathSync(ROOT, ROOT).protected)
 
-// ==================== B. guardShellCommand — CHẶN ĐÚNG CASE RUN 2 ====================
-console.log('\n━━━ B. Shell guard — reproduce bài học run 2 ━━━')
+// ==================== B. guardShellCommand — CHÍNH SÁCH MỚI 2026-10-27 ====================
+console.log('\n━━━ B. Shell guard — chính sách tự phục vụ hạ tầng (2026-10-27) ━━━')
 
 const g = (cmd: string, cwd = ROOT) => guardShellCommand(cmd, cwd, ROOT)
 
-ok('B1. `bun add better-sqlite3` (lệnh gây crash run 2) CHẶN',
-  g('bun add better-sqlite3').blocked)
-ok('B2. `npm install react` CHẶN', g('npm install react').blocked)
-ok('B3. `cd /home/z/tmo-app && bun add x` CHẶN (cwd ngoài, nhắc tên root)',
-  g('cd /home/z/tmo-app && bun add x', '/tmp').blocked)
-ok('B4. `bun run db:push` CHẶN', g('bun run db:push').blocked)
-ok('B5. `npx prisma db push` CHẶN', g('npx prisma db push').blocked)
-ok('B6. `npx prisma migrate dev` CHẶN', g('npx prisma migrate dev').blocked)
-ok('B7. `echo x >> prisma/schema.prisma` CHẶN (redirect protected)',
-  g('echo x >> prisma/schema.prisma').blocked)
-ok('B8. `echo x > package.json` CHẶN (redirect protected)',
+// B1-B7: HẠNG MỤC ĐÃ MỞ (user directive phiên 4 — cho phép tự cài package + sửa schema)
+ok('B1. `bun add better-sqlite3` ĐƯỢC PHÉP (2026-10-27 — tự cài package)',
+  !g('bun add better-sqlite3').blocked)
+ok('B2. `npm install react` ĐƯỢC PHÉP', !g('npm install react').blocked)
+ok('B3. `cd /home/z/tmo-app && bun add x` ĐƯỢC PHÉP (cwd ngoài, nhắc tên root)',
+  !g('cd /home/z/tmo-app && bun add x', '/tmp').blocked)
+ok('B4. `bun run db:push` ĐƯỢC PHÉP (sửa schema xong push)',
+  !g('bun run db:push').blocked)
+ok('B5. `npx prisma db push` ĐƯỢC PHÉP', !g('npx prisma db push').blocked)
+ok('B6. `npx prisma migrate dev` ĐƯỢC PHÉP', !g('npx prisma migrate dev').blocked)
+ok('B7. `echo x >> prisma/schema.prisma` ĐƯỢC PHÉP (sửa schema)',
+  !g('echo x >> prisma/schema.prisma').blocked)
+// B8-B12: PHẦN VẪN ĐƯỢC BẢO VỆ
+ok('B8. `echo x > package.json` CHẶN (sửa tay manifest — phải qua bun add)',
   g('echo x > package.json').blocked)
-ok('B9. `rm db/custom.db` CHẶN', g('rm db/custom.db').blocked)
+ok('B9. `rm db/custom.db` CHẶN (data files)', g('rm db/custom.db').blocked)
 ok('B10. `sed -i s/a/b/ package.json` CHẶN', g('sed -i s/a/b/ package.json').blocked)
-ok('B11. `mv .env .env.bak` CHẶN', g('mv .env .env.bak').blocked)
-ok('B12. `cat x | tee .opencode/auth.json` CHẶN', g('cat x | tee .opencode/auth.json').blocked)
-ok('B13. message chặn có hướng dẫn escalate (tiếng Việt)',
-  g('bun add x').message?.includes('tmo_escalate') === true)
+ok('B11. `mv .env .env.bak` CHẶN (keys)', g('mv .env .env.bak').blocked)
+ok('B12. `cat x | tee .opencode/auth.json` CHẶN (bridges)', g('cat x | tee .opencode/auth.json').blocked)
+ok('B13. message chặn có hướng dẫn escalate + đường tự phục vụ (tiếng Việt)',
+  g('echo x > .env').message?.includes('escalate_problem') === true)
 
 // ==================== C. guardShellCommand — KHÔNG CHẶN NHẦM ====================
 console.log('\n━━━ C. Shell guard — lệnh hợp lệ vẫn chạy ━━━')
@@ -113,7 +123,7 @@ ok('C12. `wc -l db/custom.db` (đọc) KHÔNG chặn', !g('wc -l db/custom.db').
 ok('C13. `mkdir -p src/new-mod` KHÔNG chặn', !g('mkdir -p src/new-mod').blocked)
 
 // ==================== D. HTTP THẬT — QUA ĐƯỜNG BRIDGE tmo_* DÙNG ====================
-console.log('\n━━━ D. HTTP /api/tools/execute — guard phải chặn TRƯỚC khi chạm đĩa ━━━')
+console.log('\n━━━ D. HTTP /api/tools/execute — chính sách mới qua đường bridge tmo_* ━━━')
 
 const CHECKSUM_FILES = [`${ROOT}/package.json`, `${ROOT}/prisma/schema.prisma`, `${ROOT}/opencode.json`]
 const before = CHECKSUM_FILES.map(sha)
@@ -130,27 +140,35 @@ async function callTool(tool: string, args: Record<string, unknown>) {
   return { success: data.success, resultStr }
 }
 
-// D1: shell bun add qua HTTP (đúng đường bridge tmo_shell)
+// D1: shell ghi đè .env qua redirect — VẪN bị chặn (keys được bảo vệ)
 {
-  const { success, resultStr } = await callTool('shell', { command: 'bun add better-sqlite3' })
-  ok('D1. HTTP shell `bun add` bị TỪ CHỐI (guard server-side)',
+  const { success, resultStr } = await callTool('shell', { command: 'echo hacked > .env' })
+  ok('D1. HTTP shell redirect vào .env bị TỪ CHỐI (keys)',
     !success && /TỪ CHỐI|infra-guard|blocked/i.test(resultStr), resultStr.slice(0, 120))
 }
-// D2: shell ghi đè package.json qua redirect
+// D2: shell ghi đè package.json qua redirect — VẪN bị chặn (manifest sửa tay)
 {
   const { success, resultStr } = await callTool('shell', { command: 'echo hacked > package.json' })
   ok('D2. HTTP shell redirect vào package.json bị TỪ CHỐI',
     !success && /TỪ CHỐI|infra-guard|blocked/i.test(resultStr), resultStr.slice(0, 120))
 }
-// D3: file_write vào prisma/schema.prisma (đúng đường bridge tmo_file_write)
+// D3: file_write file TẠM trong prisma/ — ĐƯỢC PHÉP (2026-10-27: agent sửa schema)
+// Dùng file tạm riêng (KHÔNG đụng schema.prisma thật) → sau đó D3b dọn sạch.
+const TMP_PRISMA = 'prisma/test-guard-tmp-DELETE.me'
 {
   const { success, resultStr } = await callTool('file_write', {
-    path: 'prisma/schema.prisma', content: 'model Hacked { id String }', mode: 'overwrite',
+    path: TMP_PRISMA, content: '// test-guard tạm — tự dọn sau test', mode: 'overwrite',
   })
-  ok('D3. HTTP file_write prisma/schema.prisma bị TỪ CHỐI',
-    !success && /TỪ CHỐI|infra-guard|blocked/i.test(resultStr), resultStr.slice(0, 120))
+  ok('D3. HTTP file_write trong prisma/ ĐƯỢC PHÉP (chính sách 2026-10-27)',
+    success, resultStr.slice(0, 160))
 }
-// D4: file_edit vào package.json
+// D3b: file_delete file tạm — cũng ĐƯỢC PHÉP (prisma/ mở) → dọn sạch
+{
+  const { success, resultStr } = await callTool('file_delete', { path: TMP_PRISMA })
+  ok('D3b. HTTP file_delete file tạm trong prisma/ ĐƯỢC PHÉP (tự dọn)',
+    success, resultStr.slice(0, 160))
+}
+// D4: file_edit vào package.json — VẪN bị chặn
 {
   const { success, resultStr } = await callTool('file_edit', {
     path: 'package.json', old_str: '"name"', new_str: '"hacked"',
@@ -158,7 +176,7 @@ async function callTool(tool: string, args: Record<string, unknown>) {
   ok('D4. HTTP file_edit package.json bị TỪ CHỐI',
     !success && /TỪ CHỐI|infra-guard|blocked/i.test(resultStr), resultStr.slice(0, 120))
 }
-// D5: file_delete db/custom.db
+// D5: file_delete db/custom.db — VẪN bị chặn (data files)
 {
   const { success, resultStr } = await callTool('file_delete', { path: 'db/custom.db' })
   ok('D5. HTTP file_delete db/custom.db bị TỪ CHỐI',
@@ -169,7 +187,7 @@ async function callTool(tool: string, args: Record<string, unknown>) {
   const { success, resultStr } = await callTool('shell', { command: 'echo guard-ok' })
   ok('D6. HTTP shell đọc hợp lệ VẪN CHẠY', success && resultStr.includes('guard-ok'), resultStr.slice(0, 120))
 }
-// D7: checksum — KHÔNG file hạ tầng nào đổi sau các lần thử tấn công
+// D7: checksum — KHÔNG file hạ tầng thật nào đổi sau các lần thử
 const after = CHECKSUM_FILES.map(sha)
 ok('D7. Checksum package.json + schema.prisma + opencode.json KHÔNG đổi',
   before.every((h, i) => h === after[i]),

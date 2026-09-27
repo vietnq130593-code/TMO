@@ -58,6 +58,10 @@ export interface GoalLoopVerdictSnapshot {
    * giữa debt cycle vẫn khôi phục được ngữ cảnh lỗi phát sinh). */
   sideIssues?: string[]
   debtDecision?: 'none' | 'record' | 'continue'
+  /** 2026-10-27 (phiên 4) — GĐ3 readiness: nợ có thể xử lý ở chu kỳ kế không
+   * (resume giữa run vẫn giữ phán quyết readiness của trọng tài). */
+  debtReadiness?: 'ready' | 'blocked'
+  debtBlockedReason?: string
 }
 
 /**

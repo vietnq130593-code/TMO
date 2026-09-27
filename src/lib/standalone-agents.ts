@@ -274,7 +274,17 @@ TỰ VIẾT TOOL KHI THIẾU (create_custom_tool) — việc quản trị năng 
 - Handler JS thuần chạy sandbox: có fetch/JSON/Math/Date. KHÔNG process/require/import/eval/fs. Timeout 10s, output ~2000 ký tự.
 - Sau khi tạo THÀNH CÔNG → gọi NGAY: tool_call: tool_name({...args}) — không cần restart.
 - Liệt kê: tool_call: list_custom_tools({}) — Xóa: tool_call: delete_custom_tool({"name": "..."})
-- Tool + SKILL.md guide được LƯU VĨNH VIỄN (DB) — các agent khác cũng dùng được.
+- Tool + SKILL.md guide được LƯU VĨNH VIỄN (DB) — hiện trong tab Tools/Skills của module Smolab — các agent khác cũng dùng được.
+
+═══════════════════════════════════════════
+🔧 XỬ LÝ LỖI HẠ TẦNG & THIẾU AGENT (chính sách TỰ PHỤC VỤ 2026-10-27)
+═══════════════════════════════════════════
+Khi nhận escalate từ agent hoặc tự phát hiện vấn đề hạ tầng — phân loại và xử lý THEO ĐÚNG chức trách:
+- Agent hiện giờ ĐÃ ĐƯỢC PHÉP tự cài package (manage_packages/shell bun add) và tự sửa DB schema (file_edit prisma/schema.prisma + bun run db:push) — khi tư vấn agent gặp lỗi 2 loại này, HƯỚNG DẪN họ tự xử lý, không nhận về làm thay.
+- Thiếu TOOL hoàn toàn → hướng dẫn agent (hoặc chính bạn) tự xây + đăng ký qua create_custom_tool — tool mới vào tab Tools/Skills của module Smolab và dùng được ngay.
+- Việc thuộc CHỨC TRÁCH AGENT KHÁC (đã có trong Agent Roster) → điều phối agent đó xử lý (dispatch_agent/delegate_task).
+- Chưa có agent thuộc chức trách đó (đã kiểm tra Agent Roster) → BẠN TẠO AGENT MỚI có chức trách xử lý đúng vấn đề: create_agent với instruction chuyên biệt cho đúng vấn đề — agent mới TỰ CẬP NHẬT vào module Agents + Agent Roster → giao việc NGAY qua dispatch_agent.
+- Phần hạ tầng VẪN ĐƯỢC BẢO VỆ (.env/keys, file data db/, opencode.json, .opencode/, mini-services/, config hệ thống) → tổng hợp thành đề xuất chính thức chờ phê duyệt (Self-Direction), KHÔNG để agent tự phá.
 
 ═══════════════════════════════════════════
 🎛 QUẢN LÝ TỰ ĐỘNG HÓA (manage_automation — quyền mặc định của BẠN)
@@ -612,7 +622,20 @@ async function _doStandaloneSeed(): Promise<boolean> {
         // VẬN HÀNH hệ thống TMO (điều phối + giám sát + đánh giá — KHÔNG tự ôm
         // hết mọi việc). Migrate instruction + description + capable (3 field
         // định nghĩa vai trò); provider/model/temperature giữ nguyên customization.
-        if (existing.instruction && def.instruction.includes('QUẢN TRỊ VẬN HÀNH') && !existing.instruction.includes('QUẢN TRỊ VẬN HÀNH')) {
+        // (2026-10-27 phiên 4) Marker TỰ PHỤC VỤ HẠ TẦNG — chính sách mới: agent
+        // được phép tự cài package + sửa schema + tự xây tool; Omega tạo agent
+        // mới khi thiếu chức trách. Nhánh này đặt TRƯỚC (version mới nhất).
+        if (existing.instruction && def.instruction.includes('TỰ PHỤC VỤ HẠ TẦNG 2026-10-27') && !existing.instruction.includes('TỰ PHỤC VỤ HẠ TẦNG 2026-10-27')) {
+          try {
+            await db.agentProfile.update({
+              where: { name: def.name },
+              data: { instruction: def.instruction, description: def.description, capable: def.capable },
+            })
+            console.log(`[Standalone] Migrated ${def.name} → new version (TỰ PHỤC VỤ HẠ TẦNG 2026-10-27 — infra self-service policy)`)
+          } catch (migErr) {
+            console.warn(`[Standalone] Instruction migration failed for ${def.name}:`, migErr)
+          }
+        } else if (existing.instruction && def.instruction.includes('QUẢN TRỊ VẬN HÀNH') && !existing.instruction.includes('QUẢN TRỊ VẬN HÀNH')) {
           try {
             await db.agentProfile.update({
               where: { name: def.name },

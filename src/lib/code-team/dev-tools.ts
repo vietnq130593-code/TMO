@@ -27,8 +27,11 @@ import { isFlagEnabled } from '@/lib/feature-flags'
 import { getActiveRunId } from '@/lib/agent-run-tracker'
 // TOMBSTONE GUARD (fix review 2026-09-08): chặn todo_write cho session đã xóa
 import { isSessionDeleted } from '@/lib/session-tombstone'
-// INFRA GUARD (Task 24, 2026-10-21): chặn agent tự sửa hạ tầng runtime TMO
-// (package.json/lockfiles/prisma/db/.env/.opencode...) — bài học E2E run 2.
+// INFRA GUARD (Task 24, 2026-10-21; chính sách mới 2026-10-27 phiên 4): chặn
+// agent sửa phần hạ tầng VẪN ĐƯỢC BẢO VỆ (.env/keys, db/ data files, .opencode,
+// mini-services/, manifests/config). Từ 2026-10-27 agent ĐÃ ĐƯỢC PHÉP tự cài
+// package (bun add qua shell/manage_packages) + tự sửa prisma/schema.prisma +
+// chạy db push — các hạng mục đó KHÔNG còn bị chặn (xem protected-paths.ts).
 import {
   guardShellCommand,
   isProtectedInfraPathSync,
@@ -335,7 +338,8 @@ export async function fileWrite(args: {
 
     const resolvedPath = await resolveWithinWorkspace(args.path)
     const root = await resolveWorkspaceRoot()
-    // INFRA GUARD (Task 24): chặn ghi đè file hạ tầng runtime.
+    // INFRA GUARD: chặn ghi đè file hạ tầng VẪN ĐƯỢC BẢO VỆ (2026-10-27: prisma/schema.prisma
+    // giờ ĐƯỢC PHÉP sửa — agent tự chỉnh schema + db push theo chính sách tự phục vụ).
     {
       const verdict = isProtectedInfraPathSync(resolvedPath, root)
       if (verdict.protected) {
@@ -408,7 +412,8 @@ export async function fileDelete(args: {
 }): Promise<unknown> {
   const resolvedPath = await resolveWithinWorkspace(args.path)
   const root = await resolveWorkspaceRoot()
-  // INFRA GUARD (Task 24): chặn xoá file/thư mục hạ tầng runtime.
+  // INFRA GUARD: chặn xoá file/thư mục hạ tầng VẪN ĐƯỢC BẢO VỆ (2026-10-27: prisma/ đã
+  // mở cho agent sửa schema — db/ data files vẫn bảo vệ tuyệt đối).
   {
     const verdict = isProtectedInfraPathSync(resolvedPath, root)
     if (verdict.protected) {
@@ -3294,10 +3299,11 @@ export async function shell(args: {
   const root = await resolveWorkspaceRoot()
   const cwd = args.cwd ? path.resolve(args.cwd) : root
 
-  // INFRA GUARD (Task 24, 2026-10-21 — bài học E2E run 2: agent task đọc-đếm
-  // tự ý `bun add better-sqlite3` + rewrite prisma/schema.prisma → app OOM-crash
-  // 97 restarts). Chặn lệnh chạm hạ tầng runtime khi chạy trong TMO workspace;
-  // task ở workspace khác (/tmp/...) không bị ảnh hưởng. Tắt qua TMO_INFRA_GUARD=off.
+  // INFRA GUARD (Task 24, 2026-10-21; cập nhật chính sách 2026-10-27 phiên 4):
+  // chặn lệnh chạm hạ tầng VẪN ĐƯỢC BẢO VỆ khi chạy trong TMO workspace; task ở
+  // workspace khác (/tmp/...) không bị ảnh hưởng. Từ 2026-10-27: lệnh cài package
+  // (bun add/npm install) + prisma db push/migrate ĐÃ ĐƯỢC PHÉP (audit log qua
+  // guardShellCommand). Tắt toàn bộ qua TMO_INFRA_GUARD=off.
   const guard = guardShellCommand(command, cwd, root)
   if (guard.blocked) {
     console.warn(`[INFRA-GUARD] shell blocked: ${guard.reason}`)

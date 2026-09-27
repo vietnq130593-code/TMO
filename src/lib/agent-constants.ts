@@ -58,6 +58,11 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string }
   // nvidia với key chết. Thêm zen + 4 model free ĐÃ VERIFY chạy được (Task 5-7).
   zen: [
     { id: 'nemotron-3-ultra-free', label: 'nemotron-3-ultra-free (550B MoE — lõi chính, TL/Omega/Opus)' },
+    // 2026-10-27 (user directive phiên 4): Muse Spark 1.3 Contributor làm model
+    // chính cho các agent KHÔNG phải Omega/Opus/TL (9 generator agents). Chạy
+    // trực tiếp ở môi trường local VN của user; trên server geo-blocked → chuỗi
+    // fallback NIM (safety net) đảm bảo agent vẫn vận hành.
+    { id: 'muse-spark-1.3-contributor-free', label: 'muse-spark-1.3-contributor-free (generators — G1-G3 code/research + ALISTA)' },
     { id: 'nemotron-3.5-lightning-free', label: 'nemotron-3.5-lightning-free (30B MoE — nhanh, utility)' },
     { id: 'mimo-v2.6-flash-free', label: 'mimo-v2.6-flash-free (nhẹ — small_model CLI)' },
     { id: 'space-bunny-free', label: 'space-bunny-free (phụ)' },

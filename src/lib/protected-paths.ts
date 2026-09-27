@@ -1,17 +1,31 @@
 /**
- * PROTECTED PATHS — Guard hạ tầng runtime của TMO (Task 24, 2026-10-21).
+ * PROTECTED PATHS — Guard hạ tầng runtime của TMO (Task 24, 2026-10-21;
+ * chính sách cập nhật 2026-10-27 theo user directive phiên 4).
  *
- * BÀI HỌC E2E 2026-10-20 run 2 (Task 23-c): agent được giao task READ-ONLY
- * ("kiểm tra sức khỏe dự án") đã TỰ Ý chạy `bun add better-sqlite3` (sửa
- * package.json + bun.lock) và rewrite `prisma/schema.prisma` — khiến app
- * OOM-crash 97 lần restart, phải git restore thủ công.
+ * LỊCH SỬ: E2E 2026-10-20 run 2 (Task 23-c) — agent task READ-ONLY tự ý
+ * `bun add` + rewrite prisma/schema.prisma → app OOM-crash 97 restarts.
+ * Guard Task 24 chặn TOÀN BỘ hạ tầng.
  *
- * Nguyên tắc: agent làm task KHÔNG được tự ý sửa HẠ TẦNG RUNTIME của chính
- * hệ thống TMO (dependency manifests, lockfiles, prisma schema, SQLite DB,
- * .env, bridges .opencode, gateway config). src/** và docs/** KHÔNG bị
- * khóa — code team vẫn viết code bình thường (git rollback được, không phá
- * runtime). Nếu task THẬT SỰ cần thay đổi hạ tầng → agent phải escalate
- * (tmo_escalate) xin phép operator, KHÔNG tự làm.
+ * CHÍNH SÁCH MỚI (user directive 2026-10-27): "lỗi hạ tầng được hệ thống
+ * bảo vệ, cho phép agent tự cài package và sửa schema" — agents giờ ĐƯỢC
+ * PHÉP tự phục vụ hạ tầng ở 2 hạng mục:
+ *   ✅ CÀI/GỠ PACKAGE: bun add / bun remove / npm install... (qua shell
+ *      hoặc tool manage_packages — có audit ToolMetric)
+ *   ✅ SỬA SCHEMA: file_write/file_edit prisma/schema.prisma + prisma
+ *      migrations + chạy `prisma db push` / `bun run db:push` / `prisma
+ *      generate` (regenerate client sau khi sửa schema)
+ *
+ * VẪN ĐƯỢC BẢO VỆ (agent KHÔNG tự sửa — phải escalate xin phê duyệt):
+ *   ❌ .env* (API keys, credentials) · opencode.json (provider keys +
+ *      permission policy) · .opencode/ (CLI auth + tool bridges)
+ *   ❌ db/ (SQLite DATA files — dữ liệu vận hành; thay đổi DB phải qua
+ *      prisma db push từ schema, không ghi tay file DB)
+ *   ❌ mini-services/ (dịch vụ phụ chạy port riêng)
+ *   ❌ package.json + lockfiles + tsconfig/next/tailwind/postcss/eslint/
+ *      components config + Caddyfile + AGENTS.md (manifest/config hệ thống
+ *      — cài package phải qua LỆNH bun add chính thống, không sửa tay)
+ *
+ * src/** và docs/** không khóa (code team viết code bình thường).
  *
  * Guard áp tại 2 lớp:
  *   1. Server-side: shell() + fileWrite/fileEdit/fileDelete trong
@@ -50,10 +64,12 @@ export const INFRA_PROTECTED_FILES: readonly string[] = [
   'agent.md',
 ]
 
-/** Thư mục con (relative root) — bảo vệ toàn bộ subtree. */
+/** Thư mục con (relative root) — bảo vệ toàn bộ subtree.
+ * 2026-10-27 (user directive): BỎ 'prisma' khỏi danh sách — agent được phép
+ * sửa schema (prisma/schema.prisma + migrations) kèm chạy db push. DB DATA
+ * (db/) vẫn bảo vệ — thay đổi cấu trúc phải đi qua prisma chính thống. */
 export const INFRA_PROTECTED_DIRS: readonly string[] = [
-  'prisma', // schema + migrations
-  'db', // SQLite data files
+  'db', // SQLite data files — KHÔNG ghi tay; chỉ qua prisma db push
   '.opencode', // CLI auth + tool bridges (agent sửa bridge = tự hack quyền)
   'mini-services', // dịch vụ phụ chạy port riêng
 ]
@@ -103,10 +119,14 @@ export interface ShellGuardVerdict {
   message?: string
 }
 
-/** Regex các lệnh package-manager cài/gỡ nâng cấp — chỉ chặn trong TMO context. */
+// 2026-10-27 (user directive): PKG_MGR_RE + PRISMA_MUTATE_RE ĐÃ BỎ CHẶN —
+// agent ĐƯỢC PHÉP tự cài package (bun add/npm install...) và sửa schema
+// (prisma db push / bun run db:push / migrate). Regex giữ lại chỉ để AUDIT
+// LOG (biết agent đang đụng hạ tầng nào) — không còn trả verdict blocked.
+/** Regex các lệnh package-manager cài/gỡ — AUDIT LOG (không chặn từ 2026-10-27). */
 const PKG_MGR_RE = /\b(?:bun|npm|pnpm|yarn)\s+(?:add|remove|rm|uninstall|install|i|update|upgrade|ci)\b/
 
-/** Regex các lệnh mutate schema/DB. */
+/** Regex các lệnh mutate schema/DB — AUDIT LOG (không chặn từ 2026-10-27). */
 const PRISMA_MUTATE_RE = /\b(?:prisma\s+(?:db\s+push|db\s+seed|migrate|studio)|bun\s+run\s+db:push)\b/
 
 /** Các lệnh ghi/xoá file nguy hiểm — kết hợp với token protected phía dưới. */
@@ -134,7 +154,8 @@ const PROTECTED_TOKEN_RE = new RegExp(
       'components\\.json',
       'Caddyfile',
       'AGENTS?\\.md',
-      'prisma/\\S*',
+      // 2026-10-27: bỏ 'prisma/\S*' — agent được phép sửa schema qua
+      // file_write/file_edit + lệnh prisma chính thống.
       'db/\\S*',
       '\\.opencode/\\S*',
       'mini-services/\\S*',
@@ -147,14 +168,18 @@ const PROTECTED_TOKEN_RE = new RegExp(
 /** Redirect ghi file: `> target` / `>> target`. */
 const REDIRECT_RE = />{1,2}\s*([^\s|;&)]+)/g
 
-/** Message chung cho agent khi bị chặn. */
+/** Message chung cho agent khi bị chặn (2026-10-27 — cập nhật chính sách:
+ *  cài package + sửa schema giờ ĐÃ ĐƯỢC PHÉP tự làm; phần còn bảo vệ phải
+ *  escalate. Kèm hướng dẫn đường tự phục vụ để agent không kẹt oan). */
 function buildBlockedMessage(detail: string): string {
   return (
-    `TỪ CHỐI (infra-guard): lệnh/thao tác này chạm HẠ TẦNG RUNTIME của hệ thống TMO ` +
-    `(${detail}). Bài học 2026-10-20: agent tự ý bun add + sửa prisma/schema.prisma đã khiến app crash 97 lần. ` +
-    `Nếu task THẬT SỰ cần thay đổi này (cài package, sửa schema, đổi .env...), hãy dùng tool tmo_escalate ` +
-    `(hoặc escalate_problem) để TRÌNH BÀY lý do + thay đổi cụ thể cho operator phê duyệt — KHÔNG tự sửa. ` +
-    `Với task bình thường: chỉ ĐỌC (file_read/grep/shell đọc) hoặc ghi code trong src/ (tmo_file_write/tmo_file_edit).`
+    `TỪ CHỐI (infra-guard): thao tác này chạm phần hạ tầng VẪN ĐƯỢC BẢO VỆ (${detail}) — ` +
+    `.env/keys, db/ (data files), opencode.json, .opencode/, mini-services/, config hệ thống. ` +
+    `LƯU Ý chính sách 2026-10-27: bạn ĐƯỢC PHÉP tự cài package (manage_packages hoặc shell bun add) ` +
+    `và tự sửa schema (file_write/file_edit prisma/schema.prisma → shell "bun run db:push") — hai hạng mục này KHÔNG bị chặn. ` +
+    `Thiếu tool → tự xây qua create_custom_tool. Việc thuộc chức trách agent khác → dispatch_agent/delegate_task. ` +
+`Chưa có agent phù hợp → escalate_problem (Omega sẽ tạo agent mới). ` +
+    `Phần còn bảo vệ (keys/.env, data DB, bridges): dùng escalate_problem để TRÌNH BÀY lý do + thay đổi cụ thể chờ phê duyệt — KHÔNG tự sửa. `
   )
 }
 
@@ -176,24 +201,16 @@ export function guardShellCommand(command: string, cwd: string, root: string): S
   const tmoContext = cwdInRoot || mentionsRoot
   if (!tmoContext) return { blocked: false }
 
-  // 1) Package manager cài/gỡ — chặn (thay đổi manifests + node_modules runtime).
+  // 2026-10-27 (user directive): (1) package-manager cài/gỡ và (2) prisma
+  // db push/migrate KHÔNG CÒN BỊ CHẶN — agent được phép tự cài package + sửa
+  // schema. Chỉ AUDIT LOG 1 dòng để operator truy vết được ai đụng hạ tầng.
   if (PKG_MGR_RE.test(command)) {
     const m = command.match(PKG_MGR_RE)
-    return {
-      blocked: true,
-      reason: `package-manager mutation: ${m?.[0]}`,
-      message: buildBlockedMessage(m?.[0] || 'package manager install/remove'),
-    }
+    console.log(`[InfraGuard] AUDIT: cho phép lệnh package-manager (2026-10-27 policy): ${m?.[0]} — cwd=${cwd}`)
   }
-
-  // 2) Prisma mutate — chặn.
   if (PRISMA_MUTATE_RE.test(command)) {
     const m = command.match(PRISMA_MUTATE_RE)
-    return {
-      blocked: true,
-      reason: `prisma mutation: ${m?.[0]}`,
-      message: buildBlockedMessage(m?.[0] || 'prisma migrate/db push'),
-    }
+    console.log(`[InfraGuard] AUDIT: cho phép lệnh prisma mutate (2026-10-27 policy): ${m?.[0]} — cwd=${cwd}`)
   }
 
   // 3) Ghi/xoá nhắm protected path — theo redirect target hoặc token trong lệnh.
