@@ -472,6 +472,7 @@ GIAI ĐOẠN 0 — QUAN SÁT & PHÂN TÍCH (BẮT BUỘC trước mọi hành đ
 GIAI ĐOẠN 1 — XÁC ĐỊNH VẤN ĐỀ & LẬP KẾ HOẠCH:
 - BƯỚC ĐẦU TIÊN của mọi task từ 2 bước trở lên (gần như MỌI task làm việc): gọi todo_write (trên đường CLI là tool tmo_todo) chia nhỏ kế hoạch TRƯỚC KHI hành động — mỗi tiêu chí nghiệm thu ít nhất 1 todo tương ứng (ghi "[Nghiệm thu n]" trong nội dung) + các todo THU THẬP DỮ LIỆU từ bước biên độ dữ liệu. Mỗi todo viết dạng KIỂM ĐỊNH ĐƯỢC (xong = kiểm tra/chạy gì để biết đạt) — đừng viết todo mơ hồ kiểu "xử lý phần X". Bỏ qua todo_write chỉ khi task ĐÚNG 1 bước (một câu hỏi đơn lẻ trả lời ngay).
 - KỶ LUẬT TODO (bắt buộc): todo làm XONG phải được đánh dấu completed NGAY trong lần todo_write kế tiếp TRƯỚC KHI thêm todo mới (đóng việc cũ rồi mới mở việc mới — danh sách luôn phản ánh trạng thái thật). Việc phức tạp cần phân rã tiếp → tạo TODO CON: gọi todo_write với "id" của todo cha trong trường "parentId" của todo con (hiển thị lồng nhau trong panel — KHÔNG viết phẳng trùng nội dung). Cập nhật todo cũ — KHÔNG viết lại từ đầu.
+- 🧩 PHÂN LOẠI THEO CHỨC TRÁCH (user directive 2026-10-27): khi lập/kết nạp todo, đối chiếu TỪNG việc với chức trách được thiết kế cho bạn (vai trò của chính mình): việc THUỘC chức trách mình → tự làm bằng tools của mình; việc NGOÀI chức trách (chuyên môn của agents khác: code/review/research/tối ưu/thiết kế... — đối chiếu Agent Roster) → KHÔNG tự làm thay: giao đúng người (Code Team qua delegate_task, agent phù hợp qua dispatch_agent) kèm mô tả nhiệm vụ + tiêu chí nghiệm thu rõ ràng, rồi tổng hợp báo cáo của họ. Bạn là người ĐIỀU PHỐI kết quả đúng chuyên môn — không phải người ôm hết mọi việc.
 - 🔍 KIỂM TRA PHỦ KẾ HOẠCH (harness — determinstic, chạy tự động trong mọi todo_write): hệ thống đối chiếu kế hoạch của bạn với (a) từng tiêu chí NGHIỆM THU của directive — mỗi "[Nghiệm thu n]" phải có ≥1 todo nhắm tới, (b) từng mục "cần đọc" trong khối 📐 — mỗi mục phải có ≥1 todo thu thập dữ liệu. Kết quả nằm trong trường "coverage" của kết quả todo_write: thiếu mục nào sẽ liệt kê CỤ THỂ kèm yêu cầu bổ sung → gọi todo_write BỔ SUNG đúng các mục thiếu ngay (KHÔNG viết lại danh sách); phủ đủ sẽ có dòng ✅. Đây là kiểm tra máy (không tin tự khai) — bỏ qua cảnh báo này khiến evaluator chấm thiếu tiêu chí ở cuối chu kỳ.
 
 GIAI ĐOẠN 2 — TRIỂN KHAI (mỗi hành động đều có suy nghĩ):
@@ -495,7 +496,7 @@ GIAI ĐOẠN 3 — KIỂM ĐỊNH & BÁO CÁO (BẮT BUỘC trước khi kết l
   📝 ĐỊNH DẠNG BÁO CÁO (user directive 2026-10-20 — kỷ luật hiển thị): báo cáo cho người đọc là văn xuôi tiếng Việt SẠCH, dùng markdown TỐI THIỂU — KHÔNG bọc nhấn mạnh bằng ** hay __, KHÔNG bọc từ ngữ bằng dấu \` hay dấu ' tràn lan (chỉ trích dẫn mã/lệnh thật sự cần). Nhấn mạnh bằng CHỮ IN HOA. Liệt kê bằng gạch đầu dòng "- ". Chỉ dùng khối \`\`\` khi trích dẫn mã/code output thật.
 
 ⚠️ Một TRỌNG TÀI ĐỘC LẬP sẽ đánh giá lại kết quả của bạn DỰA TRÊN BẰNG CHỨNG TOOL THẬT. Lời tuyên bố không có bằng chứng sẽ BỊ TỪ CHỐI và bạn phải làm lại ở chu kỳ tiếp theo.
-Nếu mục tiêu là câu hỏi/thông tin (không cần hành động), chỉ cần trả lời đầy đủ, chính xác — không cần tool.`
+Nếu mục tiêu là câu hỏi kiến thức chung thuần túy (không đòi dữ liệu thật từ hệ thống/file/DB — vd hỏi khái niệm, giải thích, gợi ý) thì chỉ cần trả lời đầy đủ, chính xác — không cần tool. Còn mục tiêu đòi dữ liệu thật (khảo sát/đánh giá/đếm/kiểm tra hiện trạng) → PHẢI thu thập bằng tool, trả lời không bằng chứng sẽ bị trọng tài từ chối.`
 }
 
 /**
@@ -655,7 +656,12 @@ export function assembleGoalLoopSystemPrompt(params: {
       [
         { name: 'base', content: systemPrompt, priority: 10 },
         { name: 'goalProtocol', content: buildGoalProtocol(), priority: 100 },
-        { name: 'toolSchemas', content: params.toolSchemasBlock ?? '', priority: 96 },
+        // 2026-10-27 (E2E lộ bug): toolSchemas phải cùng tier bảo vệ CAO NHẤT với
+        // goalProtocol — budget chật từng stub block này (log: "cut ...toolSchemas...")
+        // → agent KHÔNG còn biết tool nào để gọi → run 0 tool calls, đứng im trả
+        // 1 câu chung chung. Mất schema là mất toàn bộ năng lực hành động —
+        // không bao giờ được hy sinh để tiết kiệm token.
+        { name: 'toolSchemas', content: params.toolSchemasBlock ?? '', priority: 100 },
         { name: 'delegationProtocol', content: hasDelegation ? buildDelegationProtocol() : '', priority: 90 },
         { name: 'codeTeamProtocol', content: params.hasCodeTeamRequest === true ? buildCodeTeamProtocol() : '', priority: 88 },
         { name: 'orchestrationProtocol', content: hasOrchestration ? buildOrchestrationProtocol(hasDispatch, hasCreate) : '', priority: 80 },
@@ -801,7 +807,7 @@ const EVALUATOR_SYSTEM_PROMPT = `Bạn là EVALUATOR — trọng tài độc l�
 
 Nguyên tắc SẮT:
 1. Bạn KHÔNG tin vào lời tuyên bố của agent ("tôi đã hoàn thành", "file đã tạo"...). Bạn CHỈ tin vào BẰNG CHỨNG trong kết quả tool thật: output lệnh, kết quả test, nội dung file đọc lại.
-2. Mục tiêu là câu hỏi/thông tin (không yêu cầu tạo/sửa/ chạy gì) → "complete": true khi câu trả lời cuối của agent đầy đủ và đúng trọng tâm.
+2. Mục tiêu là câu hỏi/thông tin (không yêu cầu tạo/sửa/chạy gì) → "complete": true khi câu trả lời cuối của agent đầy đủ và đúng trọng tâm. (Lưu ý: yêu cầu khảo sát/đánh giá/đếm dữ liệu thật của hệ thống KHÔNG thuộc loại này — xem rule 13.)
 3. Mục tiêu đòi hỏi hành động (tạo/sửa file, code, chạy lệnh, dữ liệu) → "complete": true KHI VÀ CHỈ KHI có bằng chứng tool cho thấy kết quả đúng (file đọc lại khớp yêu cầu, test/lint pass, lệnh exit thành công).
 4. Agent KHÔNG kiểm định (không có tool nào xác nhận kết quả) → "verified": false → với mục tiêu hành động thì "complete": false.
 5. "missing" = những gì còn thiếu so với mục tiêu. "rootCause" = vấn đề nằm chính xác ở đâu (bước nào fail / thiếu gì / sai chỗ nào). "nextPlan" = các bước khắc phục cụ thể cho chu kỳ kế tiếp.
@@ -810,12 +816,13 @@ Nguyên tắc SẮT:
 8. E2E VERIFICATION (sửa code nhưng chỉ đọc lại file): mục tiêu có SỬA CODE mà bằng chứng kiểm định chỉ là file_read/grep (KHÔNG run_tests/lint/type_check dù thông báo hệ thống nói tool có sẵn) → chỉ chấp nhận "complete": true khi thay đổi là thuần hiển thị/nội dung tĩnh; thay đổi LOGIC → "complete": false và thêm vào "missing": "chạy run_tests/lint/type_check để kiểm định thay đổi logic".
 9. SIDE ISSUES (lỗi phát sinh trong quá trình làm — tool fail, lint/test lỗi ở file run đã đụng, lỗi logic do thay đổi của run tạo ra, config/hành vi hỏng...): liệt kê vào "sideIssues" (tối đa 4, ngắn gọn). Mục tiêu chính ĐẠT nhưng CÓ side issues còn tồn tại → "complete": true vẫn đúng cho MỤC TIÊU GỐC (đừng hạ complete vì lỗi ngoài mục tiêu), NHƯNG run chưa thể kết thúc khi các lỗi liên quan còn treo — chọn "debtDecision" theo mức độ LIÊN QUAN:
    - "continue": MẶC ĐỊNH cho mọi side issue LIÊN QUAN đến công việc của run này (lint/test fail ở file đã đụng, lỗi phát sinh từ thay đổi của run, tool fail chưa xử lý được, hành vi hỏng do run tạo...) → hệ thống TÁI LẬP chu kỳ debt xử lý NGAY trong run này (nhiều đợt liên tiếp nếu cần). Tác vụ chỉ thực sự trọn vẹn khi các vấn đề phát sinh liên quan đã được giải quyết — ĐỪNG vội phán kết thúc khi còn lỗi treo.
-   - "record": CHỈ khi issue nằm NGOÀI khả năng xử lý của agent (thiếu tool/quyền, lỗi hạ tầng vendor, thuộc phạm vi agent khác) → hệ thống ghi nợ kỹ thuật (Todo follow-up).
+   - "record": CHỈ khi issue nằm NGOÀI khả năng xử lý của agent (thiếu tool/quyền, lỗi hạ tầng vendor, thuộc phạm vi agent khác, bị infra-guard/hệ thống chặn sửa — kể cả khi agent đã trình phê duyệt và đang chờ) → hệ thống ghi nợ kỹ thuật (Todo follow-up).
    - "none": CHỈ khi issue tầm thường/đã tự hết và KHÔNG liên quan gì đến thay đổi của run.
    KHÔNG dùng side issues để hạ "complete" khi mục tiêu chính đã đạt theo bằng chứng — nhưng cũng KHÔNG dùng "record"/"none" để né xử lý lỗi liên quan còn giải quyết được trong run này.
 10. DEBT CHECK (áp dụng khi prompt có khối "CÁC LỖI PHÁT SINH CHƯA XỬ LÝ" — danh sách trọng tài đã quyết định xử lý ở các chu kỳ trước): đối chiếu TỪNG lỗi với bằng chứng chu kỳ này. Lỗi nào CHƯA có bằng chứng máy xác nhận đã khắc phục (fix xong + verify pass) → PHẢI liệt kê lại vào "sideIssues" và đặt "debtDecision": "continue". KHÔNG phán hoàn thành sạch khi danh sách còn mục chưa đối chiếu được bằng chứng khắc phục.
 11. DERIVED-NUMBER GUARD (2026-10-20 — E2E lộ agent đếm bằng mắt sai 80/79 nhưng tự chấm "đã kiểm chứng"): khi mục tiêu/tiêu chí đòi một CON SỐ hoặc kết quả TỔNG HỢP từ dữ liệu gốc (đếm dòng, đếm phần tử, tính tổng...), chỉ chấp nhận là verified khi bằng chứng tool cho thấy LỆNH MÁY trả về đúng con số đó (output wc/jq/grep -c hiển thị giá trị khớp). Agent "tự đếm trong đầu" từ nội dung đã đọc KHÔNG phải bằng chứng — nếu không thấy output lệnh máy xác nhận con số → "verified": false.
 12. TODO PLAN CHECK (Task 23-c 2026-10-26 — E2E lộ agent làm task đa bước mà bỏ qua kế hoạch): tác vụ đòi ≥2 bước làm việc thật (đọc/sửa/đếm nhiều mục độc lập) mà bằng chứng KHÔNG có tool todo_write/tmo_todo nào trong run → "complete" vẫn đánh giá theo KẾT QUẢ, nhưng thêm vào "missing": "process: bỏ qua todo_write — chạy không có kế hoạch truy vết được" (ghi nhận gap quy trình cho Opus review + báo cáo cuối; chu kỳ sau nếu còn chạy thì ưu tiên bổ sung todo).
+13. FACT-GATHERING GUARD (2026-10-27 — E2E lộ agent trả về 1 câu ý định mà evaluator vẫn chấm hoàn thành): mục tiêu đòi dữ liệu thật về hệ thống/file/database (khảo sát, rà soát, đánh giá hiện trạng, đếm, liệt kê, kiểm tra...) → KHÔNG phải câu hỏi kiến thức chung: "complete": true KHI VÀ CHỈ KHI run CÓ tool call thu thập dữ liệu thật (file_read/grep/shell/query/delegation...) và kết quả khớp mục tiêu. Run 0 tool calls, hoặc nội dung cuối chỉ là Ý ĐỊNH/KẾ HOẠCH ("tôi sẽ...") thay vì báo cáo dữ liệu → "complete": false, "verified": false, rootCause ghi rõ: thiếu bằng chứng thu thập dữ liệu thật.
 
 Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích thêm):
 {"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."], "sideIssues": ["..."], "debtDecision": "none|record|continue"}`
@@ -1542,6 +1549,13 @@ export async function runGoalDrivenLoop(params: {
   // checkpoint cũ dạng boolean debtCycleUsed=true → hiểu là 1).
   let debtCyclesRun = resumeState?.debtCyclesRun ?? (resumeState?.debtCycleUsed ? 1 : 0)
   let debtMode = resumeState?.debtMode ?? false
+  /** 2026-10-27 — STAGNANT DEBT GUARD (E2E lộ debt cycle lặp vô hạn với lỗi bị
+   * guard chặn): fingerprint tập side issues của đợt debt gần nhất + số đợt
+   * LIÊN TIẾP tập issue KHÔNG đổi (không giảm, không thêm mới có ý nghĩa).
+   * LLM evaluator có thể mãi chọn 'continue' cho lỗi ngoài quyền sửa của
+   * agent → guard KỸ THUẬT ép ghi nợ khi lặp không tiến triển. */
+  let lastDebtFingerprint = ''
+  let stagnantDebtCount = 0
   /** TASK 21 — số lần TÁI LẬP CỬA SỔ CHU KỲ đã dùng (xem renewal cuối mỗi chu kỳ) */
   let cycleRenewals = resumeState?.cycleRenewals ?? 0
   /** Side issues chưa xử lý khi run kết thúc (đã ghi Todo follow-up — report) */
@@ -1806,7 +1820,8 @@ export async function runGoalDrivenLoop(params: {
 Chu kỳ này chỉ xử lý CÁC LỖI PHÁT SINH trong quá trình làm (trọng tài phân loại nghiêm trọng):
 ${debtList}
 
-Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc phục từng lỗi, (3) KIỂM ĐỊNH bằng tool thật (run_tests/lint/type_check), (4) KHÔNG mở việc mới ngoài các lỗi trên. Xong hết → báo cáo ngắn từng lỗi đã xử lý + bằng chứng.${debtTodosBlock}`
+Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc phục từng lỗi, (3) KIỂM ĐỊNH bằng tool thật (run_tests/lint/type_check), (4) KHÔNG mở việc mới ngoài các lỗi trên. Xong hết → báo cáo ngắn từng lỗi đã xử lý + bằng chứng.
+Lỗi NGOÀI QUYỀN (2026-10-27 — debt cycle từng lặp vô hạn vì lỗi bị guard chặn): lỗi do cấu hình/hạ tầng bị infra-guard chặn sửa hoặc cần phê duyệt của Mr. Architect → KHÔNG lặp thử sửa: trình qua cơ chế phê duyệt chính thức (nếu có), ghi rõ trạng thái "chờ phê duyệt" vào báo cáo rồi chuyển sang lỗi kế — đó là "đã xử lý phần của agent". Hết debt cycles mà còn lỗi treo ngoài quyền → hệ thống ghi nợ Todo follow-up, KHÔNG khởi động chu kỳ debt mới.${debtTodosBlock}`
         messages.push({ role: 'user', content: debtDirective })
         evidence.push({ cycle, kind: 'directive', text: `DEBT CYCLE ${cycle}: xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã xong)` })
         recordAgentThought(agentSessionId, `🔁 DEBT CYCLE ${cycle}: trọng tài quyết định tái khởi động 1 chu kỳ mới để xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã hoàn thành)`, totalIterations)
@@ -2759,7 +2774,19 @@ Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý, (2) khắc ph�
         timeLeft() > 0 &&
         tokenLeft() > REPORT_RESERVE_TOKENS + 8_000 &&
         !isCancelled()
-      if (canDebtCycle) {
+      // 2026-10-27 — STAGNANT DEBT GUARD: fingerprint side issues (sort + normalize
+      // lowercase + cắt 60 ký tự/issue). Debt cycle mới mà tập issue GIỐNG HỆT đợt
+      // trước → stagnation++. 3 đợt liên tiếp không tiến triển → ép GHI NỢ (record)
+      // thay vì tiếp tục debt — lỗi đang lặp là loại ngoài quyền agent (guard chặn /
+      // chờ phê duyệt) hoặc evaluator bế tắc, chạy tiếp chỉ đốt token vô ích.
+      const debtFingerprint = verdict.sideIssues.map(s => s.toLowerCase().trim().slice(0, 60)).sort().join('||')
+      if (debtFingerprint === lastDebtFingerprint) stagnantDebtCount++
+      else { stagnantDebtCount = 1; lastDebtFingerprint = debtFingerprint }
+      if (canDebtCycle && stagnantDebtCount >= 3) {
+        recordAgentThought(agentSessionId, `🛑 STAGNANT DEBT GUARD: ${stagnantDebtCount} đợt debt LIÊN TIẾP với cùng tập ${verdict.sideIssues.length} lỗi (không tiến triển) → ép GHI NỢ Todo follow-up thay vì debt cycle ${debtCyclesRun + 1} (lỗi ngoài quyền agent hoặc evaluator bế tắc — không đốt thêm chu kỳ)`, totalIterations)
+        console.log(`[GoalLoop] ${agentName} STAGNANT DEBT: ${stagnantDebtCount} đợt liên tiếp cùng fingerprint (${debtFingerprint.slice(0, 80)}...) → ép record thay vì debt cycle`)
+      }
+      if (canDebtCycle && stagnantDebtCount < 3) {
         debtCyclesRun++
         debtMode = true
         // REVIEW 9-fix (2026-08-30) #9 — checkpoint lại các side issues gốc: nếu

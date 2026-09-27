@@ -4582,7 +4582,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                         ) : msg.suggestionRejected ? (
                           <p className="text-base text-stone-300 italic">{msg.content}</p>
                         ) : (
-                          <MarkdownText content={msg.content} className="text-sm leading-relaxed text-stone-100" />
+                          <MarkdownText content={msg.content} className="text-xs leading-relaxed text-stone-100" />
                         )}
                         {msg.toolCallInfo && (
                           <div className="mt-2 p-2 rounded-lg bg-slate-950/50 border border-stone-700/50 text-[11px] text-stone-300">
@@ -4606,7 +4606,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                             </span>
                           )}
                         </div>
-                        <div className="text-[11px] text-stone-200 leading-relaxed custom-scrollbar max-h-72 overflow-y-auto">
+                        <div className="text-xs text-stone-200 leading-relaxed custom-scrollbar max-h-72 overflow-y-auto">
                           <MarkdownText content={msg.content} />
                         </div>
                         {msg.metadata.triggerMode === 'auto' && (
@@ -4677,9 +4677,9 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                         </div>
                       )}
 
-                      {/* Content — báo cáo agent: 14px (user request 2026-10-20: giảm 2px) + markdown render sạch (không hiện thô **, `, *) */}
+                      {/* Content — báo cáo agent: 12px (user request: giảm về 12px) + markdown render sạch (không hiện thô **, `, *) */}
                       {msg.role !== 'tool_call' && (
-                        <MarkdownText content={msg.content} className="text-sm leading-relaxed text-stone-100" />
+                        <MarkdownText content={msg.content} className="text-xs leading-relaxed text-stone-100" />
                       )}
 
                       {/* Sources */}
