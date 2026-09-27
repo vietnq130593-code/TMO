@@ -34,7 +34,8 @@
  */
 
 import { callLLMForAgent } from '@/lib/llm'
-import { executeTool, buildCompactToolSchemasSection } from '@/lib/code-team/tool-executor'
+import { executeTool, buildCompactToolSchemasSection, getToolDefinitions } from '@/lib/code-team/tool-executor'
+import type { LLMTool } from '@/lib/llm'
 import { parseToolCallsFromOutput, detectBrokenToolCallHint } from '@/lib/tool-calls'
 import { resolveAgent } from '@/lib/code-team/agent-resolver'
 import { isSessionCancelled, registerDelegationRun, endAgentRun } from '@/lib/agent-run-tracker'
@@ -362,12 +363,17 @@ export async function runSubAgentForProfile(params: {
     // tool vào ĐẦU transcript (user message riêng, chỉ 1 lần — context của
     // sub-agent vẫn isolated với parent). Fail-open: schema lỗi → prompt cũ.
     let toolSchemaMsg: string | null = null
+    // TASK 39 — NATIVE FC schemas: truyền schema ĐẦY ĐỦ của whitelist qua API
+    // (body.tools) — sub-agent emit tool_calls chuẩn thay vì text protocol.
+    // Fail-open: lỗi build → mảng rỗng (text protocol vẫn hoạt động).
+    let nativeToolSchemas: LLMTool[] = []
     try {
       const schemaSection = buildCompactToolSchemasSection(allowedTools)
       if (schemaSection) {
-        toolSchemaMsg = `${schemaSection}\n\n(Trên đây là schema ĐẦY ĐỦ của các tool bạn được dùng — tham chiếu mỗi khi gọi tool; KHÔNG đoán tên param.)`
+        toolSchemaMsg = `${schemaSection}\n\n(Trên đây là schema ĐẦY ĐỦ của các tool bạn được dùng — tham chiếu mỗi khi gọi tool; KHÔNG đoán tên param. Tools cũng ĐÃ ĐƯỢC TRUYỀN QUA API native function calling — ƯU TIÊN emit tool_calls qua API, chỉ viết text tool_call: khi API không hỗ trợ.)`
         transcript.push({ role: 'user', content: toolSchemaMsg })
       }
+      nativeToolSchemas = getToolDefinitions(allowedTools) as LLMTool[]
     } catch (schemaErr) {
       console.warn(`[SubAgent] Tool schema injection fail-open:`, schemaErr instanceof Error ? schemaErr.message : String(schemaErr))
     }
@@ -400,7 +406,12 @@ export async function runSubAgentForProfile(params: {
               agentId: profile.id || `subagent:${profile.name}`,
               agentName: `${profile.name} (sub-agent)`,
               temperature: profile.temperature,
-              maxTokens: Math.min(profile.maxTokens, 16384), // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
+              // TASK 39 — bỏ cap 16384: maxTokens <= 0 (-1) = KHÔNG giới hạn
+              // (callZenProvider omit max_tokens → model output max 512k);
+              // > 0 giữ nguyên giá trị profile (cap không phải target).
+              maxTokens: profile.maxTokens,
+              // TASK 39 — NATIVE FC: schema tools qua API → model emit tool_calls
+              ...(nativeToolSchemas.length > 0 ? { tools: nativeToolSchemas, tool_choice: 'auto' as const } : {}),
               abortCheck: isCancelled,
             }),
             // CI-1: timeout tổng = 0 (unlimited) → per-call timeout standalone
@@ -424,7 +435,21 @@ export async function runSubAgentForProfile(params: {
         addTokens(result.tokensUsed)
         if (timedOut) { return } // LLM về nhưng timeout đã nổ — không chạy tool nữa
 
-        const toolCalls = parseToolCallsFromOutput(result.content)
+        // TASK 39 — NATIVE FC: ưu tiên tool_calls từ API (space-bunny trả chuẩn
+        // OpenAI khi body có tools); fallback text protocol như cũ.
+        const nativeCalls = (result.tool_calls && result.tool_calls.length > 0
+          ? result.tool_calls.map((tc, idx) => {
+              let args: Record<string, unknown> = {}
+              try {
+                args = typeof tc.function.arguments === 'string'
+                  ? JSON.parse(tc.function.arguments)
+                  : (tc.function.arguments as Record<string, unknown>) || {}
+              } catch { /* keep empty args */ }
+              return { id: tc.id || `native_${idx}`, name: tc.function.name, args }
+            })
+          : []
+        ).filter(tc => allowedTools.includes(tc.name))
+        const toolCalls = nativeCalls.length > 0 ? nativeCalls : parseToolCallsFromOutput(result.content)
         if (toolCalls.length === 0) {
           // 21-d FIX silent parse-drop: output CÓ dấu hiệu tool call ("tool_call:"
           // hoặc ```json chứa "name") nhưng parse THẤT BẠI (JSON bị cắt cụt giữa

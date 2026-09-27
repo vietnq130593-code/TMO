@@ -38,7 +38,7 @@ export function AgentsModule() {
   const [formProvider, setFormProvider] = useState('nvidia')
   const [formModel, setFormModel] = useState('')
   const [formTemperature, setFormTemperature] = useState(0.7)
-  const [formMaxTokens, setFormMaxTokens] = useState(4096)
+  const [formMaxTokens, setFormMaxTokens] = useState(-1) // -1 = unlimited (Task 39)
   const [formTeam, setFormTeam] = useState<string | null>(null)
   const [formPosition, setFormPosition] = useState<string | null>(null)
   const [formAvatar, setFormAvatar] = useState('🤖')
@@ -129,7 +129,7 @@ export function AgentsModule() {
     setFormProvider(agent.provider || 'nvidia')
     setFormModel(agent.model || '')
     setFormTemperature(agent.temperature ?? 0.7)
-    setFormMaxTokens(agent.maxTokens ?? 4096)
+    setFormMaxTokens(agent.maxTokens ?? -1)
     setFormTeam(agent.team || null)
     setFormPosition(agent.position || null)
     setFormAvatar(agent.avatar || '🤖')
@@ -163,7 +163,9 @@ export function AgentsModule() {
     if (!formProvider) return 'Vui lòng chọn Provider'
     if (!formModel) return 'Vui lòng chọn Model'
     if (formTemperature < 0 || formTemperature > 2) return 'Temperature phải từ 0.0 đến 2.0'
-    if (formMaxTokens < 256 || formMaxTokens > 32768) return 'Max Tokens phải từ 256 đến 32768'
+    // TASK 39: -1 = KHÔNG giới hạn (Zen omit max_tokens → model output max
+    // 512k); > 0 phải trong khoảng 256..524288
+    if (formMaxTokens !== -1 && (formMaxTokens < 256 || formMaxTokens > 524288)) return 'Max Tokens phải từ 256 đến 524288 (hoặc -1 = không giới hạn)'
     if (formTeam && !formPosition) return 'Vui lòng chọn vị trí trong Team'
     return null
   }, [formName, formDescription, formInstruction, formProvider, formModel, formTemperature, formMaxTokens, formTeam, formPosition])
@@ -349,7 +351,7 @@ export function AgentsModule() {
       {/* Stats */}
       <div className="flex items-center gap-3 mb-2.5 text-[10px] text-stone-500">
         <span>🌡️ {agent.temperature ?? 0.7}</span>
-        <span>📦 {(agent.maxTokens ?? 4096).toLocaleString()}</span>
+        <span>📦 {agent.maxTokens != null && agent.maxTokens < 0 ? '∞ tokens' : (agent.maxTokens ?? 4096).toLocaleString()}</span>
       </div>
 
       {/* Actions */}
@@ -769,15 +771,23 @@ export function AgentsModule() {
               </div>
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-stone-300">Max Tokens</label>
+              <label className="text-xs font-medium text-stone-300 flex items-center justify-between">
+                <span>Max Tokens</span>
+                {/* TASK 39 — -1 = unlimited: Zen bỏ max_tokens → model output tối đa 512k */}
+                <span className="text-fuchsia-400 font-mono">{formMaxTokens < 0 ? '∞ không giới hạn' : formMaxTokens.toLocaleString()}</span>
+              </label>
               <Input
                 type="number"
                 value={formMaxTokens}
                 onChange={(e) => setFormMaxTokens(Number(e.target.value))}
-                min={256}
-                max={32768}
+                min={-1}
+                max={524288}
                 className="text-xs h-8 bg-slate-950/50 border-fuchsia-400/35 text-stone-200 focus:border-fuchsia-500/50 w-28"
               />
+              <div className="flex justify-between text-[9px] text-stone-600">
+                <button type="button" className="hover:text-fuchsia-400" onClick={() => setFormMaxTokens(-1)}>-1 = ∞ tùy ý</button>
+                <span>256 → 524288</span>
+              </div>
             </div>
           </div>
 

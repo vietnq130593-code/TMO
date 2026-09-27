@@ -291,7 +291,10 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     // policy Zen ~25-26/09 (nemotron-ultra/muse-spark → 403 FreeTierError).
     model: 'space-bunny-free',
     temperature: 0.3, // NEMESIS chặt — không sáng tạo quá mức
-    maxTokens: 16384,
+    // TASK 39 (phiên 8) — maxTokens = -1 = KHÔNG GIỚI HẠN (callZenProvider omit
+    // max_tokens → model output tối đa 512k) — user directive "agents dùng lượng
+    // token tùy ý".
+    maxTokens: -1,
     team: 'research',
     position: 'TL',
     avatar: '👑',
@@ -308,7 +311,8 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note NEMESIS).
     model: 'space-bunny-free',
     temperature: 0.5, // SIVIL sáng tạo — explore nhiều hướng
-    maxTokens: 16384,
+    // TASK 39 (phiên 8) — -1 = unlimited (xem note NEMESIS).
+    maxTokens: -1,
     team: 'research',
     position: 'G1',
     avatar: '🔍',
@@ -325,7 +329,8 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note NEMESIS).
     model: 'space-bunny-free',
     temperature: 0.2, // BELI chặt — code đúng spec
-    maxTokens: 16384,
+    // TASK 39 (phiên 8) — -1 = unlimited (xem note NEMESIS).
+    maxTokens: -1,
     team: 'research',
     position: 'G1',
     avatar: '⚙️',
@@ -344,7 +349,8 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     // reasoning model, ctx 1M/out 512k, effort max) thay vì muse-spark.
     model: 'space-bunny-free',
     temperature: 0.2, // LISMA chặt — review nghiêm ngặt
-    maxTokens: 16384,
+    // TASK 39 (phiên 8) — -1 = unlimited (xem note NEMESIS).
+    maxTokens: -1,
     team: 'research',
     position: 'G2',
     avatar: '🛡️',
@@ -361,7 +367,8 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note NEMESIS).
     model: 'space-bunny-free',
     temperature: 0.4, // HAN cân bằng — creative nhưng chính xác
-    maxTokens: 16384,
+    // TASK 39 (phiên 8) — -1 = unlimited (xem note NEMESIS).
+    maxTokens: -1,
     team: 'research',
     position: 'G3',
     avatar: '📚',
@@ -526,6 +533,22 @@ async function _doSeed(): Promise<boolean> {
             console.log(`[ResearchTeam] Phiên-7 sync: ${def.name} ${existing.model} → ${def.model} (Task 37 — tất cả agents dùng space-bunny-free)`)
           } catch (syncErr) {
             console.warn(`[ResearchTeam] Phiên-7 sync ${def.name} thất bại (không chặn boot):`, syncErr)
+          }
+        }
+        // PHIÊN 8 (2026-09-28 — TASK 39, user directive "agents dùng lượng token
+        // TÙY Ý"): row còn maxTokens mặc định cũ của CODE (4096/8192/16384/32768/
+        // 65536 — do seed sync các thời kỳ, KHÔNG phải user tự đặt) → sync -1
+        // (unlimited). Giá trị user TỰ CHỌN khác các default cũ → GIỮ NGUYÊN.
+        const OLD_MAXTOKENS_DEFAULTS = new Set([4096, 8192, 16384, 32768, 65536])
+        if (OLD_MAXTOKENS_DEFAULTS.has(existing.maxTokens) && def.maxTokens !== existing.maxTokens) {
+          try {
+            await db.agentProfile.update({
+              where: { id: existing.id },
+              data: { maxTokens: def.maxTokens },
+            })
+            console.log(`[ResearchTeam] Phiên-8 sync: ${def.name} maxTokens ${existing.maxTokens} → ${def.maxTokens} (Task 39 — unlimited tokens, user directive)`)
+          } catch (syncErr) {
+            console.warn(`[ResearchTeam] Phiên-8 sync ${def.name} thất bại (không chặn boot):`, syncErr)
           }
         }
         skipped++

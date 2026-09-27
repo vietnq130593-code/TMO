@@ -54,8 +54,8 @@
  * (chat route) có fallback /api/query như cũ.
  */
 
-import { callLLMForAgent } from '@/lib/llm'
-import { executeTool, buildCompactToolSchemasSection, resolveToolAlias } from '@/lib/code-team/tool-executor'
+import { callLLMForAgent, type LLMTool } from '@/lib/llm'
+import { executeTool, buildCompactToolSchemasSection, resolveToolAlias, getToolDefinitions, getAllBuiltinToolNames } from '@/lib/code-team/tool-executor'
 import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint } from '@/lib/tool-calls'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
 import {
@@ -1555,6 +1555,29 @@ export async function runGoalDrivenLoop(params: {
   const effectiveTools = agentTools.length > 0
     ? agentTools
     : ['delegate_task', 'escalate_problem', 'dispatch_agent', 'create_agent', 'dispatch_agents_parallel']
+  // ━━━ TASK 39 — NATIVE FUNCTION CALLING qua API (root-cause fix
+  // "agents nghĩ nhiều mà không gọi tools") ━━━
+  // Từ Phiên 7 mọi agent chạy space-bunny-free qua HTTP trực tiếp — nhưng
+  // call EXECUTE trước đây KHÔNG truyền `tools` → model không có native FC,
+  // phải tự viết text `tool_call: {...}` theo protocol (model reasoning max
+  // thường viết văn xuôi phân tích → gần như không bao giờ gọi tool — trước
+  // Phiên 7 tools chạy được là nhờ HTTP 403 → rơi xuống CLI path có native
+  // tools sẵn). Test 2026-09-28: space-bunny-free trả `tool_calls` chuẩn
+  // OpenAI khi body có `tools` (finish_reason=tool_calls). callZenProvider
+  // đã hỗ trợ options.tools (body.tools + tool_choice) và parse tool_calls
+  // về result — goal-loop cũng đã xử lý result.tool_calls (hybrid bridge).
+  // Giờ: build schema ĐẦY ĐỦ từ whitelist (getToolDefinitions); agent KHÔNG
+  // khai báo whitelist ([] = mọi tool đều được phép) → truyền HẾT builtin
+  // (76 tools ~15k tokens — space-bunny ctx 1M + prompt caching chấp nhận
+  // được). Fail-open: lỗi build → [] (giữ text-protocol như cũ).
+  const nativeToolSchemas: LLMTool[] = (() => {
+    try {
+      const names = agentTools.length > 0 ? agentTools : getAllBuiltinToolNames()
+      return getToolDefinitions(names) as LLMTool[]
+    } catch {
+      return [] // fail-open — text protocol vẫn hoạt động
+    }
+  })()
   const hasDelegation = effectiveTools.includes('delegate_task')
   const hasOrchestration = effectiveTools.includes('escalate_problem') || effectiveTools.includes('dispatch_agent') || effectiveTools.includes('create_agent')
   // AUTOMATION (user request 2026-09-13) — protocol block khi agent có tool
@@ -2221,6 +2244,11 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             runId: runId ?? null,
             temperature: agentTemperature,
             maxTokens: agentMaxTokens,
+            // TASK 39 — NATIVE FC: truyền schema tools qua API → model emit
+            // tool_calls chuẩn (không phải đoán text protocol). Goal-loop xử
+            // lý result.tool_calls ở hybrid bridge bên dưới (ưu tiên native,
+            // fallback parseToolCallsFromOutput cho provider không FC).
+            ...(nativeToolSchemas.length > 0 ? { tools: nativeToolSchemas, tool_choice: 'auto' as const } : {}),
             abortCheck: isCancelled,
           }),
           LLM_TIMEOUT_MS,

@@ -1880,7 +1880,7 @@ export function buildCompactToolSchemasSection(toolNames: string[]): string {
     return cut
   }
   const lines: string[] = []
-  lines.push('━━━ TOOL SCHEMAS — gọi ĐÚNG format: tool_call: <tên>({...}) với ĐÚNG tên param (* = bắt buộc) ━━━')
+  lines.push('━━━ TOOL SCHEMAS — các tool này ĐÃ ĐƯỢC TRUYỀN QUA API native function calling: ƯU TIÊN emit tool_calls qua API (chuẩn OpenAI). Chỉ khi API không hỗ trợ mới viết text: tool_call: <tên>({...}) với ĐÚNG tên param (* = bắt buộc) ━━━')
   for (const d of defs) {
     const f = d.function
     const props = (f.parameters?.properties ?? {}) as Record<string, { type?: string; description?: string }>

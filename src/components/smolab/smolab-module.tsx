@@ -4400,11 +4400,11 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                 <div className="mt-2 px-2.5 py-1.5 text-[12px] text-stone-400 bg-slate-950/30 border border-stone-700/20">
                   {chatMode === 'single' && selectedAgentId && (() => {
                     const a = smolabAgents.find((ag: any) => ag.id === selectedAgentId)
-                    return a ? `🤖 Model: ${a.model} (${a.provider}) • T: ${a.temperature} • 📦 ${a.maxTokens} tokens` : ''
+                    return a ? `🤖 Model: ${a.model} (${a.provider}) • T: ${a.temperature} • 📦 ${a.maxTokens != null && a.maxTokens < 0 ? '∞ tokens' : `${a.maxTokens} tokens`}` : ''
                   })()}
                   {chatMode === 'multi' && selectedTeam && (() => {
                     const tl = smolabAgents.find((ag: any) => ag.team === selectedTeam && ag.position === 'TL' && ag.enabled)
-                    return tl ? `👥 TL Model: ${tl.model} (${tl.provider}) • T: ${tl.temperature} • 📦 ${tl.maxTokens} tokens` : `⚠️ Team ${selectedTeam === 'code' ? 'Code' : 'Research'} chưa có Team Lead (TL)`
+                    return tl ? `👥 TL Model: ${tl.model} (${tl.provider}) • T: ${tl.temperature} • 📦 ${tl.maxTokens != null && tl.maxTokens < 0 ? '∞ tokens' : `${tl.maxTokens} tokens`}` : `⚠️ Team ${selectedTeam === 'code' ? 'Code' : 'Research'} chưa có Team Lead (TL)`
                   })()}
                 </div>
               )}

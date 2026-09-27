@@ -117,7 +117,9 @@ function validateTemperature(temp: number): string | null {
 }
 
 function validateMaxTokens(tokens: number): string | null {
-  if (tokens < AGENT_MAX_TOKENS_MIN || tokens > AGENT_MAX_TOKENS_MAX) return `Max Tokens phải từ ${AGENT_MAX_TOKENS_MIN} đến ${AGENT_MAX_TOKENS_MAX}`
+  // TASK 39 (phiên 8): -1 = KHÔNG GIỚI HẠN (unlimited — Zen omit max_tokens)
+  if (tokens === -1) return null
+  if (tokens < AGENT_MAX_TOKENS_MIN || tokens > AGENT_MAX_TOKENS_MAX) return `Max Tokens phải từ ${AGENT_MAX_TOKENS_MIN} đến ${AGENT_MAX_TOKENS_MAX} (hoặc -1 = không giới hạn)`
   return null
 }
 
@@ -272,8 +274,8 @@ export async function POST(request: NextRequest) {
     const tempError = validateTemperature(tempValue)
     if (tempError) return NextResponse.json({ error: tempError }, { status: 400 })
 
-    // Validate maxTokens
-    const tokensValue = maxTokens ?? 4096
+    // Validate maxTokens (TASK 39: -1 = unlimited — default cho agent mới)
+    const tokensValue = maxTokens ?? -1
     const tokensError = validateMaxTokens(tokensValue)
     if (tokensError) return NextResponse.json({ error: tokensError }, { status: 400 })
 

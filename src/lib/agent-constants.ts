@@ -119,7 +119,12 @@ export const AGENT_INSTRUCTION_MAX = 50000
 export const AGENT_TEMPERATURE_MIN = 0.0
 export const AGENT_TEMPERATURE_MAX = 2.0
 export const AGENT_MAX_TOKENS_MIN = 256
-export const AGENT_MAX_TOKENS_MAX = 32768
+// TASK 39 (phiên 8 — 2026-09-28): nâng trần 32768 → 524288 (space-bunny-free
+// output tối đa 512k) + hỗ trợ -1 = KHÔNG GIỚI HẠN (callZenProvider omit
+// max_tokens → provider dùng max output của model) — user directive "agents
+// dùng lượng token tùy ý".
+export const AGENT_MAX_TOKENS_MAX = 524288
+export const AGENT_MAX_TOKENS_UNLIMITED = -1
 
 // Domain options (for UI)
 export const AGENT_DOMAINS = [

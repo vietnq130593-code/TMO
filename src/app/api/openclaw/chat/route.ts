@@ -1321,7 +1321,9 @@ export async function POST(request: NextRequest) {
             sessionId,
             stream: false,
             temperature: agentTemperature,
-            max_tokens: agentMaxTokens,
+            // TASK 39: -1 (unlimited) KHÔNG hợp lệ với gateway — chỉ truyền
+            // max_tokens khi agent cấu hình giá trị dương.
+            ...(agentMaxTokens != null && agentMaxTokens > 0 ? { max_tokens: agentMaxTokens } : {}),
             tools: [
               {
                 type: 'function',

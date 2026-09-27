@@ -3952,6 +3952,10 @@ async function callZenProvider(
   }
 
   const timeoutMs = parseInt(process.env.ZEN_TIMEOUT_MS || '120000', 10)
+  // Task 39 — UNLIMITED TOKEN MODE: maxTokens <= 0 (vd -1 từ AgentProfile
+  // "tùy ý") → KHÔNG gửi max_tokens → provider dùng giới hạn output tối đa
+  // của model (space-bunny-free: 512k out). Verified 2026-09-28: Zen API chấp
+  // nhận request không có max_tokens kèm reasoning_effort=max.
   const maxTokens = options?.maxTokens ?? 16384
   const temperature = options?.temperature ?? 0.4
 
@@ -3963,7 +3967,7 @@ async function callZenProvider(
   const body: Record<string, unknown> = {
     model,
     messages,
-    max_tokens: maxTokens,
+    ...(maxTokens > 0 ? { max_tokens: maxTokens } : {}),
     temperature,
   }
   // TASK 33 — chế độ reasoning CAO NHẤT theo model (muse-spark=xhigh,

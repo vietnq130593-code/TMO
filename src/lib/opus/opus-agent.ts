@@ -305,6 +305,20 @@ export async function ensureOpusAgent(): Promise<void> {
       }
     } catch { /* fail-open — model chỉ là hiển thị + legacy path */ }
 
+    // PHIÊN 8 (2026-09-28 — TASK 39): row còn maxTokens mặc định cũ của CODE
+    // (4096/8192/16384/32768/65536) → sync -1 (unlimited — user directive
+    // "agents dùng lượng token tùy ý"); giá trị user tự chọn khác → giữ nguyên.
+    try {
+      const opusRow2 = await db.agentProfile.findUnique({ where: { name: OPUS_AGENT_NAME } })
+      if (opusRow2 && [4096, 8192, 16384, 32768, 65536].includes(opusRow2.maxTokens)) {
+        await db.agentProfile.update({
+          where: { name: OPUS_AGENT_NAME },
+          data: { maxTokens: -1 },
+        })
+        console.log(`[Opus] Phiên-8 sync: maxTokens ${opusRow2.maxTokens} → -1 (Task 39 — unlimited tokens, user directive)`)
+      }
+    } catch { /* fail-open — không chặn boot */ }
+
     await db.agentProfile.upsert({
       where: { name: OPUS_AGENT_NAME },
       update: {
@@ -327,7 +341,8 @@ export async function ensureOpusAgent(): Promise<void> {
         // (model free duy nhất mở cho oc_sk API key sau policy Zen ~25-26/09).
         model: 'space-bunny-free',
         temperature: 0.4, // CTO phán đoán — nhiệt thấp, nhất quán
-        maxTokens: 16384,
+        // TASK 39 (phiên 8) — -1 = unlimited (user directive).
+        maxTokens: -1,
         team: null, // meta-agent — không thuộc team nào
         position: null,
         avatar: OPUS_AVATAR,
