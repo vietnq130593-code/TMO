@@ -3793,16 +3793,25 @@ export async function closeRunTodosAtEnd(params: {
     // runId khi startAgentRun thành công) nên vẫn được đóng đúng.
     const scope: { sessionId: string; runId: string | null } = { sessionId, runId }
 
+    // 2026-10-27 (rà soát Task 27-a — BUG nợ tự đóng): Todo follow-up
+    // ("🔁 Follow-up...") là NỢ KỸ THUẬT hệ thống ghi ở cuối run (nhánh
+    // complete + ghi nợ) cho RUN SAU xử lý — nếu bulk-close dưới đây ép chúng
+    // thành completed/failed/archived thì buildPendingDebtBlock (chỉ nhặt nợ
+    // còn treo) không bao giờ thấy → nợ ngủ vĩnh viễn (bằng chứng DB thật:
+    // 2 todo arbiter_side_issue bị completed sau +74ms). Giữ nguyên mọi trạng
+    // thái; agent xử lý xong tự đánh completed qua todo_write update-by-id.
+    const KEEP_DEBT = { NOT: { content: { startsWith: '🔁 Follow-up' } } } as const
+
     // 1) in_progress → completed (đạt) | failed (chưa đạt / crash)
     // FIX review GĐ2 LOW#4: 'blocked' đóng cùng nhóm in_progress (đã bắt tay,
     // bị chặn — verdict cuối quyết định completed/failed, không để kẹt mãi)
     const ip = await db.todo.updateMany({
-      where: { ...scope, status: 'in_progress' },
+      where: { ...scope, status: 'in_progress', ...KEEP_DEBT },
       data: { status: goalComplete ? 'completed' : 'failed' },
     })
     out.inProgressClosed = ip.count
     const bl = await db.todo.updateMany({
-      where: { ...scope, status: 'blocked' },
+      where: { ...scope, status: 'blocked', ...KEEP_DEBT },
       data: { status: goalComplete ? 'completed' : 'failed' },
     })
     out.inProgressClosed += bl.count
@@ -3811,14 +3820,14 @@ export async function closeRunTodosAtEnd(params: {
     if (goalComplete) {
       // Mục tiêu đạt → kế hoạch được coi là hoàn thành trọn vẹn
       const pc = await db.todo.updateMany({
-        where: { ...scope, status: 'pending' },
+        where: { ...scope, status: 'pending', ...KEEP_DEBT },
         data: { status: 'completed' },
       })
       out.pendingCompleted = pc.count
     } else if (crash) {
       // Run chết giữa chừng → archived ngay (không thể resume)
       const pa = await db.todo.updateMany({
-        where: { ...scope, status: 'pending' },
+        where: { ...scope, status: 'pending', ...KEEP_DEBT },
         data: { status: 'archived', archivedAt: new Date() },
       })
       out.pendingArchived = pa.count
@@ -3826,7 +3835,7 @@ export async function closeRunTodosAtEnd(params: {
       // Chưa đạt nhưng report trung thực: pending giữ nguyên (chưa làm gì sai)
       // + archivedAt để ẩn khỏi run kế tiếp
       const pa = await db.todo.updateMany({
-        where: { ...scope, status: 'pending' },
+        where: { ...scope, status: 'pending', ...KEEP_DEBT },
         data: { archivedAt: new Date() },
       })
       out.pendingArchived = pa.count

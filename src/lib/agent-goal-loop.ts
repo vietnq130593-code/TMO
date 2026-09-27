@@ -772,7 +772,11 @@ export async function buildPendingDebtBlock(sessionId: string | null | undefined
     const pending = await db.todo.findMany({
       where: {
         sessionId,
-        status: 'pending',
+        // 2026-10-27 (rà soát Task 27-a): nhặt cả nợ đang 'in_progress'/'blocked'
+        // — run trước chết giữa lúc xử lý nợ thì nợ kẹt ở trạng thái đó, không
+        // archive được (được bảo vệ) cũng không pending → không được bỏ lại ngủ
+        // vĩnh viễn; run mới nhặt lại và xử lý tiếp.
+        status: { in: ['pending', 'in_progress', 'blocked'] },
         content: { startsWith: '🔁 Follow-up' },
       },
       orderBy: { createdAt: 'asc' },
@@ -782,7 +786,7 @@ export async function buildPendingDebtBlock(sessionId: string | null | undefined
     // an toàn với runId null của data cũ)
     const debt = pending.filter(t => t.runId !== currentRunId)
     if (debt.length === 0) return ''
-    console.log(`[GoalLoop] NỢ KỸ THUẬT: nhặt ${debt.length} Todo follow-up pending từ các run trước trong session ${sessionId} → ưu tiên xử lý đầu run`)
+    console.log(`[GoalLoop] NỢ KỸ THUẬT: nhặt ${debt.length} Todo follow-up còn treo từ các run trước trong session ${sessionId} → ưu tiên xử lý đầu run`)
     const lines = debt.map(t => `- [id ${t.id}] ${t.content.replace(/^🔁 Follow-up \([^)]*\):\s*/, '')}`)
     return `[📋 NỢ KỸ THUẬT CÒN TREO — ƯU TIÊN XỬ LÝ TRƯỚC VIỆC MỚI (user directive 2026-10-27)]
 Các run trước trong phiên này còn ${debt.length} nợ kỹ thuật chưa xử lý (trọng tài đã ghi Todo follow-up). Thứ tự ưu tiên SẮT của run này:
@@ -792,6 +796,113 @@ Các run trước trong phiên này còn ${debt.length} nợ kỹ thuật chưa 
 4. Hết nợ mới làm việc mới của yêu cầu hiện tại.
 ${lines.join('\n')}`
   } catch { return '' /* fail-open — nợ kỹ thuật không được phép làm hỏng run mới */ }
+}
+
+// ==================== 2026-10-27 (user directive phiên 3) — DELEGATION LOG ====================
+// Trong 1 chu kỳ, MỖI LẦN agent gọi agent khác xử lý một công việc/tác vụ phải
+// ghi rõ vào Thought Progress 3 thông tin: (1) gọi agent nào, (2) xử lý tác vụ
+// gì, (3) agent đó đã triển khai tác vụ đó NHƯ THẾ NÀO (vòng ReAct / tool
+// calls / tokens / tóm tắt kết quả). Thought 📤 ghi NGAY TRƯỚC khi launch,
+// thought 📥 ghi khi sub-agent hoàn tất (kết quả đầy đủ) — người quản trị theo
+// dõi được toàn bộ chuỗi giao-việc mà không phải mở log server.
+const DELEGATION_LOG_TOOLS = new Set(['delegate_task', 'dispatch_agent', 'dispatch_agents_parallel', 'request_code_team'])
+
+/** Nén chuỗi hiển thị: trim + gộp whitespace + cắt n ký tự */
+function dlClip(s: unknown, n = 160): string {
+  return typeof s === 'string' && s.trim() ? s.trim().replace(/\s+/g, ' ').slice(0, n) : ''
+}
+
+/** Thought 📤 — ghi NGAY TRƯỚC khi launch delegation (ai giao ai làm gì) */
+function buildDelegationDispatchThought(cycle: number, parentAgent: string, tc: { name: string; args: Record<string, unknown> }): string | null {
+  if (tc.name === 'delegate_task' || tc.name === 'dispatch_agent') {
+    const agent = String(tc.args?.agent ?? tc.args?.agentName ?? '?')
+    const task = dlClip(tc.args?.task ?? tc.args?.description)
+    if (!task) return null
+    const acc = dlClip(tc.args?.acceptance_criteria, 120)
+    return `📤 Chu kỳ ${cycle} — PHÂN CÔNG: ${parentAgent} gửi agent [${agent}] xử lý "${task}"${acc ? ` — tiêu chí nghiệm thu: ${acc}` : ''} — chờ sub-agent tự chủ triển khai, kết quả sẽ ghi nhận khi hoàn tất`
+  }
+  if (tc.name === 'dispatch_agents_parallel') {
+    const tasks = Array.isArray(tc.args?.tasks) ? (tc.args.tasks as Array<Record<string, unknown>>) : []
+    const lines = tasks
+      .map(x => {
+        const t = dlClip(x.task, 90)
+        return t ? `[${String(x.agent ?? '?')}] "${t}"` : ''
+      })
+      .filter(Boolean)
+      .slice(0, 4)
+    if (lines.length === 0) return null
+    return `📤 Chu kỳ ${cycle} — PHÂN CÔNG SONG SONG: ${parentAgent} gửi ${tasks.length} agent cùng lúc — ${lines.join(' · ')}`
+  }
+  if (tc.name === 'request_code_team') {
+    const task = dlClip(tc.args?.task)
+    if (!task) return null
+    return `📤 Chu kỳ ${cycle} — HUY ĐỘNG CODE TEAM: ${parentAgent} gửi toàn team code (TL phân tích routing, pipeline 5-7 bước) xử lý "${task}"`
+  }
+  return null
+}
+
+/** Thought ⛔ — phân công bị từ chối (budget/permission) — giám sát cần biết việc giao không tới được agent */
+function buildDelegationRefusedThought(cycle: number, parentAgent: string, tc: { name: string; args: Record<string, unknown> }, reason: string): string | null {
+  if (!DELEGATION_LOG_TOOLS.has(tc.name)) return null
+  const agent = String(tc.args?.agent ?? tc.args?.agentName ?? (Array.isArray(tc.args?.tasks) ? `${(tc.args.tasks as unknown[]).length} agent` : 'code-team'))
+  const task = dlClip(tc.args?.task ?? tc.args?.description, 100)
+  return `⛔ Chu kỳ ${cycle} — PHÂN CÔNG BỊ TỪ CHỐI: ${parentAgent} định gửi [${agent}] "${task}" — ${reason}`
+}
+
+/** Thought 📥 — sub-agent đã triển khai tác vụ như thế nào (kết quả đầy đủ) */
+function buildDelegationOutcomeThought(cycle: number, tc: { name: string; args: Record<string, unknown> }, toolResult: { success: boolean; result: unknown }): string | null {
+  const fmtTokens = (n: unknown) => (typeof n === 'number' && n > 0 ? `${Math.round(n / 100) / 10}k` : '0')
+  const r = (toolResult.result !== null && typeof toolResult.result === 'object')
+    ? (toolResult.result as Record<string, unknown>)
+    : null
+  if (!r) return null
+  const taskShort = dlClip(tc.args?.task ?? tc.args?.description, 90)
+
+  // delegate_task / dispatch_agent — 1 sub-agent outcome đầy đủ
+  if (tc.name === 'delegate_task' || tc.name === 'dispatch_agent') {
+    const agent = String(r.agent ?? tc.args?.agent ?? '?')
+    const it = typeof r.iterations === 'number' ? r.iterations : 0
+    const tl = typeof r.toolCalls === 'number' ? r.toolCalls : 0
+    const ended = String(r.endedBy ?? '-')
+    const evalPass = r.evaluation && typeof r.evaluation === 'object'
+      ? (typeof (r.evaluation as Record<string, unknown>).pass === 'boolean'
+          ? ` · trọng tài độc lập: ${(r.evaluation as Record<string, unknown>).pass ? 'ĐẠT' : 'CHƯA ĐẠT'}`
+          : '')
+      : ''
+    const report = dlClip(r.report, 220)
+    const err = toolResult.success ? '' : (dlClip(r.error, 120) ? ` · lỗi: ${dlClip(r.error, 120)}` : '')
+    return `📥 Chu kỳ ${cycle} — KẾT QUẢ PHÂN CÔNG: agent [${agent}] ${toolResult.success ? 'HOÀN THÀNH' : 'CHƯA ĐẠT'} "${taskShort}" — triển khai: ${it} vòng ReAct · ${tl} tool calls · ${fmtTokens(r.tokensUsed)} tokens · kết thúc bởi ${ended}${evalPass}${err}${report ? `; báo cáo: ${report}` : ''}`
+  }
+
+  // dispatch_agents_parallel — fan-out nhiều agent
+  if (tc.name === 'dispatch_agents_parallel') {
+    const total = typeof r.total === 'number' ? r.total : 0
+    const ok = typeof r.succeeded === 'number' ? r.succeeded : 0
+    const results = Array.isArray(r.results) ? (r.results as Array<Record<string, unknown>>) : []
+    const lines = results.slice(0, 4).map(x => {
+      const s = x.success === true
+      return `[${String(x.agent ?? '?')}] ${s ? 'HOÀN THÀNH' : 'CHƯA ĐẠT'} · ${typeof x.iterations === 'number' ? x.iterations : 0} vòng · ${typeof x.toolCalls === 'number' ? x.toolCalls : 0} tools${dlClip(x.report, 90) ? ` — ${dlClip(x.report, 90)}` : ''}`
+    })
+    return `📥 Chu kỳ ${cycle} — KẾT QUẢ PHÂN CÔNG SONG SONG: ${ok}/${total} agent hoàn thành · tổng ${fmtTokens(r.tokensUsed)} tokens${lines.length > 0 ? `\n${lines.map(l => `  - ${l}`).join('\n')}` : ''}`
+  }
+
+  // request_code_team — pipeline cả team theo SOP
+  if (tc.name === 'request_code_team') {
+    const status = String(r.status ?? (toolResult.success ? 'completed' : 'failed'))
+    const steps = Array.isArray(r.steps) ? (r.steps as Array<Record<string, unknown>>) : []
+    const dur = typeof r.durationMs === 'number' ? Math.round(r.durationMs / 1000) : 0
+    const lines = steps.slice(0, 5).map(s => `[${String(s.position ?? '?')}·${String(s.agent ?? '?')}] ${dlClip(s.summary, 90)}${typeof s.toolsTotal === 'number' && s.toolsTotal > 0 ? ` (${s.toolsOk}/${s.toolsTotal} tools)` : ''}`)
+    return `🏭 Chu kỳ ${cycle} — KẾT QUẢ CODE TEAM [${status}]: ${steps.length} bước pipeline · ${dur}s${lines.length > 0 ? `\n${lines.map(l => `  - ${l}`).join('\n')}` : ''}${dlClip(r.report, 160) ? `\n  Tổng hợp: ${dlClip(r.report, 160)}` : ''}`
+  }
+
+  // escalate_problem auto-apply — Omega tự điều động agent theo khuyến nghị
+  if (tc.name === 'escalate_problem' && r.autoApplied && typeof r.autoApplied === 'object') {
+    const ap = r.autoApplied as Record<string, unknown>
+    const agent = String(ap.agent ?? '?')
+    const report = dlClip(ap.report, 160)
+    return `🔄 Chu kỳ ${cycle} — ESCALATE + TỰ ĐIỀU ĐỘNG: Omega tư vấn vấn đề rồi tự điều động agent [${agent}] xử lý — ${ap.success === true ? 'HOÀN THÀNH' : 'CHƯA ĐẠT'}${report ? `; báo cáo: ${report}` : ''}`
+  }
+  return null
 }
 
 /** Directive nối tiếp chu kỳ — chẩn đoán + kế hoạch mới từ evaluator */
@@ -2431,6 +2542,18 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu ngư
           }
         }
 
+        // 2026-10-27 (user directive phiên 3) — DELEGATION LOG 📥: sub-agent
+        // đã triển khai tác vụ như thế nào (kết quả đầy đủ: vòng ReAct · tool
+        // calls · tokens · tóm tắt báo cáo). Cả 2 đường (fan-in song song +
+        // tuần tự) đều đi qua processToolResult → 1 chỗ ghi dùng chung.
+        // escalate_problem có auto-dispatch của Omega cũng ghi (autoApplied).
+        if (agentSessionId && (DELEGATION_LOG_TOOLS.has(tc.name) || tc.name === 'escalate_problem')) {
+          try {
+            const t = buildDelegationOutcomeThought(cycle, tc, toolResult)
+            if (t) recordAgentThought(agentSessionId, t, totalIterations)
+          } catch { /* display-only — fail-open */ }
+        }
+
         // [C] Harness kiểm đếm bằng chứng kiểm định theo thứ tự thời gian.
         // LƯU Ý: lint/type_check FAIL (có errorCount) VẪN LÀ bằng chứng kiểm định
         // hợp lệ — agent thấy được số lỗi cụ thể. Chỉ tool không chạy được
@@ -2507,6 +2630,11 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu ngư
             if (delegationRank >= maxLaunch) {
               // Vượt cap budget → pre-flight fail cho delegation này (kết quả
               // vẫn về đúng vị trí message — KHÔNG sập batch).
+              if (agentSessionId) {
+                // 2026-10-27 (user directive phiên 3) — DELEGATION LOG ⛔
+                const t = buildDelegationRefusedThought(cycle, agentName, tc, `vượt cap budget launch song song (chỉ đủ ${maxLaunch} delegation)`)
+                if (t) recordAgentThought(agentSessionId, t, totalIterations)
+              }
               delegationPromises.set(i, Promise.resolve({
                 tcIdx: i,
                 preFlightFail: `Từ chối delegate (thứ ${delegationRank + 1} trong batch song song) — budget token của vòng lặp chỉ đủ chạy ${maxLaunch} delegation đồng thời (mỗi sub-agent tiêu ~${SUBAGENT_TOKEN_ESTIMATE / 1000}k). Hãy TỰ LÀM phần việc này ngắn gọn, hoặc delegate lại lẻ ở vòng sau khi budget cho phép.`,
@@ -2516,13 +2644,31 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu ngư
             delegationPromises.set(i, (async () => {
               // DELEGATE PRE-FLIGHT (mirror nhánh tuần tự — check TRƯỚC khi launch)
               if (tokenLeft() <= REPORT_RESERVE_TOKENS + 10_000) {
+                if (agentSessionId) {
+                  // 2026-10-27 (user directive phiên 3) — DELEGATION LOG ⛔
+                  const t = buildDelegationRefusedThought(cycle, agentName, tc, 'budget token của vòng lặp gần cạn (≤ reserve + 10k)')
+                  if (t) recordAgentThought(agentSessionId, t, totalIterations)
+                }
                 return { tcIdx: i, preFlightFail: 'Từ chối delegate — budget token của vòng lặp gần cạn (≤ reserve + 10k). Hãy TỰ LÀM phần việc còn lại ngắn gọn thay vì delegate.' }
               }
               if (agentTools.length > 0 && !agentTools.includes(tc.name)) {
+                if (agentSessionId) {
+                  // 2026-10-27 (user directive phiên 3) — DELEGATION LOG ⛔
+                  const t = buildDelegationRefusedThought(cycle, agentName, tc, `agent không có quyền dùng tool ${tc.name}`)
+                  if (t) recordAgentThought(agentSessionId, t, totalIterations)
+                }
                 return { tcIdx: i, permissionFail: `Tool "${tc.name}" not available for this agent. Available: ${agentTools.join(', ')}` }
               }
               try {
-                const r = await executeTool(tc.name, { ...tc.args }, { agentName, sessionId: agentSessionId, runId })
+                // 2026-10-27 (user directive phiên 3) — DELEGATION LOG 📤: ghi
+                // NGAY TRƯỚC khi launch sub-agent — người quản trị thấy ngay việc
+                // đang được giao cho agent nào (sub-agent có thể chạy nhiều phút,
+                // không đợi xong mới biết đã phân công gì)
+                if (agentSessionId) {
+                  const t = buildDelegationDispatchThought(cycle, agentName, tc)
+                  if (t) recordAgentThought(agentSessionId, t, totalIterations)
+                }
+                const r = await executeTool(tc.name, { ...tc.args }, { agentName, sessionId: agentSessionId, runId, promptBudgetChars })
                 return { tcIdx: i, toolResult: r }
               } catch (err) {
                 // No-throwError: exception của 1 delegation → kết quả fail riêng
@@ -2578,6 +2724,11 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu ngư
         // riêng 40k token — không bắn khi vòng lặp cha gần cạn (sub-agent
         // chạy xong mà cha không còn token đọc báo cáo = tiền mất tật mang).
         if ((tc.name === 'delegate_task' || tc.name === 'dispatch_agent') && tokenLeft() <= REPORT_RESERVE_TOKENS + 10_000) {
+          if (agentSessionId) {
+            // 2026-10-27 (user directive phiên 3) — DELEGATION LOG ⛔
+            const t = buildDelegationRefusedThought(cycle, agentName, tc, 'budget token của vòng lặp gần cạn (≤ reserve + 10k)')
+            if (t) recordAgentThought(agentSessionId, t, totalIterations)
+          }
           pushToolMessage(messages, { tool: tc.name, success: false, result: 'Từ chối delegate — budget token của vòng lặp gần cạn (≤ reserve + 10k). Hãy TỰ LÀM phần việc còn lại ngắn gọn thay vì delegate.' })
           evidence.push({ cycle, kind: 'tool', tool: tc.name, success: false, text: 'từ chối (budget cha gần cạn)' })
           continue
@@ -2593,6 +2744,11 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu ngư
           isCustomTool = isCustomToolRegistered(tc.name)
         } catch { /* fail-open */ }
         if (agentTools.length > 0 && !agentTools.includes(tc.name) && !isCustomTool) {
+          if (agentSessionId && DELEGATION_LOG_TOOLS.has(tc.name)) {
+            // 2026-10-27 (user directive phiên 3) — DELEGATION LOG ⛔
+            const t = buildDelegationRefusedThought(cycle, agentName, tc, `agent không có quyền dùng tool ${tc.name}`)
+            if (t) recordAgentThought(agentSessionId, t, totalIterations)
+          }
           pushToolMessage(messages, { tool: tc.name, success: false, result: `Tool "${tc.name}" not available for this agent. Available: ${agentTools.join(', ')}` })
           evidence.push({ cycle, kind: 'tool', tool: tc.name, success: false, text: `bị từ chối (không có quyền)` })
           continue
@@ -2618,7 +2774,16 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu ngư
         // DELEGATION CONTRACT (fix 2026-09-12): truyền runId vào context —
         // delegate_task đọc context.runId làm parentRunId (Thought Process panel
         // hiển thị "delegated bởi run_X").
-        const toolResult = await executeTool(tc.name, toolArgs, { agentName, sessionId: agentSessionId, runId })
+        // 2026-10-27 (user directive phiên 3) — DELEGATION LOG 📤: ghi NGAY
+        // TRƯỚC khi launch sub-agent (ai giao ai làm gì — không đợi xong mới biết)
+        if (agentSessionId && DELEGATION_LOG_TOOLS.has(tc.name)) {
+          const t = buildDelegationDispatchThought(cycle, agentName, tc)
+          if (t) recordAgentThought(agentSessionId, t, totalIterations)
+        }
+        // 2026-10-27 (rà soát Task 27-a): truyền trần prompt THEO TÁC VỤ vào
+        // context — request_code_team chuyển tiếp cho workflow steps (PROMPT ∞
+        // áp đồng bộ cả chuỗi delegation của tác vụ).
+        const toolResult = await executeTool(tc.name, toolArgs, { agentName, sessionId: agentSessionId, runId, promptBudgetChars })
 
         processToolResult(tc, toolResult)
       }
@@ -2865,6 +3030,12 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu ngư
     //   (pending) + báo cáo cuối nêu rõ
     //   'none' → hoàn thành sạch (side issues tầm thường)
     // =====
+    // 2026-10-27 (rà soát Task 27-a — BUG GĐ3 marker): cờ số nợ VỪA GHI ở nhánh
+    // else dưới (complete + không debt cycle được → ghi Todo follow-up). Trước
+    // đây marker GĐ3 chỉ nhìn debtDecision==='record' → nhánh 'continue' mà hết
+    // lượt/budget (hoặc STAGNANT GUARD ép ghi nợ) bị phán sai "hoàn thành sạch,
+    // nợ tồn đọng 0" dù nợ vừa tạo. Khai báo NGOÀI khối if để GĐ3 marker đọc được.
+    let justRecordedFollowUps = 0
     if (verdict.complete && verdict.sideIssues.length > 0 && verdict.debtDecision !== 'none') {
       // TASK 21 — RENEW-FOR-DEBT: debt cycle cần chạy mà trần chu kỳ hiện hành
       // đã chặn → tái lập cửa sổ chu kỳ mới (nếu còn lượt + budget) thay vì để
@@ -2920,6 +3091,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu ngư
         // Hoàn thành + GHI NỢ kỹ thuật: mỗi side issue 1 Todo follow-up —
         // không chặn completion nhưng việc phát sinh KHÔNG bị lãng quên.
         unresolvedDebt = verdict.sideIssues
+        justRecordedFollowUps = verdict.sideIssues.length
         if (agentSessionId) {
           try {
             const { db } = await import('@/lib/db')
@@ -2986,13 +3158,13 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 — làm rõ theo yêu cầu ngư
       const nextDecision = debtMode
         ? `QUAY LẠI GĐ0 ở chu kỳ ${cycle + 1} (CHU KỲ DEBT) — TOÀN BỘ ${verdict.sideIssues.length} nợ kỹ thuật ƯU TIÊN triển khai TRƯỚC, sau đó mới tới phần việc khác`
         : verdict.complete
-          ? verdict.sideIssues.length > 0 && verdict.debtDecision === 'record'
-            ? `KHÔNG chạy tiếp trong run này — ${verdict.sideIssues.length} nợ kỹ thuật đã GHI Todo follow-up, sẽ được ưu tiên xử lý ở RUN KẾ TIẾP của phiên (đầu run)`
+          ? justRecordedFollowUps > 0
+            ? `KHÔNG chạy tiếp trong run này — ${justRecordedFollowUps} nợ kỹ thuật đã GHI Todo follow-up, sẽ được ưu tiên xử lý ở RUN KẾ TIẾP của phiên (đầu run)`
             : 'KHÔNG lặp lại — hoàn thành sạch (không còn nợ kỹ thuật)'
           : `QUAY LẠI GĐ0 ở chu kỳ ${cycle + 1} — khắc phục phần thiếu: ${(verdict.missing[0] || verdict.rootCause || '').slice(0, 120)}`
       recordAgentThought(
         agentSessionId,
-        `📍 Chu kỳ ${cycle} — GĐ3 KIỂM ĐỊNH & BÁO CÁO: trọng tài độc lập phán ${verdict.complete ? 'MỤC TIÊU ĐẠT' : 'CHƯA ĐẠT'} (verified=${verdict.verified ? 'có' : 'chưa'} · nợ kỹ thuật tồn đọng: ${debtMode ? verdict.sideIssues.length : verdict.complete && verdict.debtDecision === 'record' ? verdict.sideIssues.length : 0} mục) → quyết định chu kỳ tiếp: ${nextDecision}`,
+        `📍 Chu kỳ ${cycle} — GĐ3 KIỂM ĐỊNH & BÁO CÁO: trọng tài độc lập phán ${verdict.complete ? 'MỤC TIÊU ĐẠT' : 'CHƯA ĐẠT'} (verified=${verdict.verified ? 'có' : 'chưa'} · nợ kỹ thuật tồn đọng: ${debtMode ? verdict.sideIssues.length : justRecordedFollowUps} mục) → quyết định chu kỳ tiếp: ${nextDecision}`,
         totalIterations,
       )
     }

@@ -162,7 +162,7 @@ export async function buildAgentRosterPromptBlock(excludeName?: string): Promise
   const custom = roster.custom.filter(ex)
 
   if (standalone.length > 0) {
-    parts.push('■ STANDALONE (trợ lý đa năng):')
+    parts.push('■ STANDALONE (agents độc lập — Omega là người quản trị vận hành):')
     for (const e of standalone) parts.push(entryLine(e))
   }
 

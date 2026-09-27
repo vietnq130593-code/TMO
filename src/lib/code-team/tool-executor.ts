@@ -1980,6 +1980,13 @@ export async function executeTool(
      * ghi vào run của sub-agent (chứ không trộn vào parent run).
      */
     delegationRunId?: string | null
+    /**
+     * 2026-10-27 (rà soát Task 27-a — trần prompt THEO TÁC VỤ cho cả chuỗi
+     * delegation): budget override của run cha (-1 = unlimited). request_code_team
+     * chuyển tiếp cho workflow steps — PROMPT ∞ của tác vụ áp đồng bộ cả team
+     * code thay vì mỗi step bị cắt theo mặc định hệ thống.
+     */
+    promptBudgetChars?: number
   }
 ): Promise<ToolExecutionResult> {
   const startTime = Date.now()
@@ -2009,7 +2016,11 @@ export async function executeTool(
       toolName === 'update_task' || toolName === 'get_plan' ||
       // Task 21 — SHR hypothesis_write cùng cơ chế context-merge (sessionId
       // scope hypothesis; runId lưu sourceRunId khi propose)
-      toolName === 'hypothesis_write') {
+      toolName === 'hypothesis_write' ||
+      // 2026-10-27 (rà soát Task 27-a — thiếu sót cùng lớp bug session
+      // 'default'): exit_plan_mode tạo PlanApproval theo sessionId — đường
+      // bridge/goal-loop không truyền sessionId thì plan rơi 'default' vô hình
+      toolName === 'exit_plan_mode') {
     if (context?.sessionId && !args.sessionId) args.sessionId = context.sessionId
     if (context?.runId && !args.runId) args.runId = context.runId
   }
@@ -3683,7 +3694,7 @@ interface CodeTeamStepSummary {
  */
 async function executeCodeTeamRequest(
   args: Record<string, unknown>,
-  context?: { agentName?: string; sessionId?: string | null; runId?: string | null },
+  context?: { agentName?: string; sessionId?: string | null; runId?: string | null; promptBudgetChars?: number },
 ): Promise<unknown> {
   const parentSessionId = context?.sessionId ?? null
   if (parentSessionId && parentSessionId.startsWith('ct-req-')) {
@@ -3709,7 +3720,7 @@ async function executeCodeTeamRequest(
 
 async function executeCodeTeamRequestInner(
   args: Record<string, unknown>,
-  context?: { agentName?: string; sessionId?: string | null; runId?: string | null },
+  context?: { agentName?: string; sessionId?: string | null; runId?: string | null; promptBudgetChars?: number },
 ): Promise<unknown> {
   const { db: dbClient } = await import('@/lib/db')
   const { runWorkflow } = await import('@/lib/code-team/workflow-engine')
@@ -3846,7 +3857,12 @@ async function executeCodeTeamRequestInner(
       },
       collectorEmit,
       abortController.signal,
-      { continueOnDisconnect: true },
+      {
+        continueOnDisconnect: true,
+        // 2026-10-27 (rà soát Task 27-a): chuyển tiếp trần prompt THEO TÁC VỤ
+        // của run cha cho workflow steps (PROMPT ∞ áp đồng bộ cả team code)
+        promptBudgetChars: context?.promptBudgetChars,
+      },
     )
     if (hardDeadline > 0) {
       await Promise.race([

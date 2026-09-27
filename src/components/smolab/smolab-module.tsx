@@ -4619,8 +4619,11 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                         )}
                       </div>
                     ) : msg.role === 'user' ? (
+                      /* 2026-10-27 (user directive phiên 3): font tin nhắn người
+                         dùng giảm về 12px — đồng bộ cỡ chữ với nội dung agent
+                         (Task 25-a) cho nhất quán toàn khung chat. */
                       <div className="max-w-[85%] p-2.5 bg-gradient-to-r from-cyan-600/80 to-teal-700/80 text-white">
-                        <p className="text-base whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                        <p className="text-xs whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                       </div>
                     ) : (msg.goalLoopJobId && goalLoopJobs[msg.goalLoopJobId]
                         && (goalLoopJobs[msg.goalLoopJobId].status === 'queued' || goalLoopJobs[msg.goalLoopJobId].status === 'running')) ? (
