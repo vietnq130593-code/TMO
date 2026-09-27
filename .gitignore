@@ -162,3 +162,4 @@ db/.quality-gate-test.db*
 
 # Stray Windows-path artifact (from cross-platform git operations)
 E:\\APP\\
+docs/TMO_WEEKLY_REPORT.md
