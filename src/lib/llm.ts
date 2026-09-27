@@ -4841,10 +4841,12 @@ export async function callLLMForAgent(
     // 2026-10-27 (phiên 4) — ZEN MODEL FAILOVER: model zen cấu hình fail cả
     // HTTP + CLI (vd muse-spark-1.3-contributor-free bị RegionError geo-block
     // trên server ngoài VN; chạy trực tiếp OK ở môi trường local VN của user)
-    // → thử 1 model zen dự phòng KHÁC (default space-bunny-free) trước khi rơi
-    // xuống NIM. Giữ agents sống ngay cả khi model chính không khả dụng ở vùng
-    // này — model cấu hình vẫn là model chính (agent dùng model dự phòng chỉ
-    // khi model chính thất bại hoàn toàn, có log rõ ràng để truy vết).
+    // → thử 1 model zen dự phòng KHÁC (default space-bunny-free — stealth model
+    // ẩn danh, ctx 1M, zero-retention; KHÔNG phải model chính của agent nào,
+    // chỉ là safety net) trước khi rơi xuống NIM. Giữ agents sống ngay cả khi
+    // model chính không khả dụng ở vùng này — model cấu hình vẫn là model chính
+    // (agent dùng model dự phòng chỉ khi model chính thất bại hoàn toàn, có log
+    // rõ ràng để truy vết).
     const zenFailoverModel = process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free'
     if (model !== zenFailoverModel) {
       console.warn(`[LLM] Agent Zen ${model} thất bại cả HTTP + CLI — thử ZEN FAILOVER model ${zenFailoverModel}`)

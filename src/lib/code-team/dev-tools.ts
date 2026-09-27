@@ -3427,8 +3427,13 @@ export async function shell(args: {
  * agents invoked via /api/openclaw/chat (which calls executeTool directly) reach
  * this function. The sessionId scopes each conversation's todo list independently.
  *
- * Semantics (Claude Code-compatible):
- *   - If `id` provided  → update existing todo by primary key (404 if not found)
+ * Semantics (Claude Code-compatible + self-heal 2026-09-27):
+ *   - If `id` provided và tồn tại → update existing todo by primary key
+ *   - SELF-HEAL (fix E2E T29-A): nếu `id` KHÔNG tồn tại (agent tự chế id kiểu
+ *     "audit-1" thay vì DB id — lỗi lặp lại từ Task 28, từng làm run kẹt
+ *     STAGNANT 3 chu kỳ vì CẢ call fail) → KHÔNG fail call; rơi xuống đường
+ *     upsert-theo-nội dung bên dưới (khớp content → update row thật; không
+ *     khớp → tạo mới) + trả healNote chứa id thật để agent tự sửa lần sau
  *   - If `idempotencyKey` provided and exists → return existing (no duplicate)
  *   - Otherwise → create new
  *   - Max 200 todos per session (guard against runaway agents)
@@ -3489,6 +3494,8 @@ export async function todoWrite(args: {
   // TASK 21-d — upserted có parentId: snapshot Thought Progress (lastTodos)
   // cần parentId để render CÂY (todo con lồng todo cha) trên đường fallback.
   const upserted: Array<{ id: string; content: string; status: string; priority: string; parentId?: string | null }> = []
+  // SELF-HEAL 2026-09-27 — note ánh xạ id-giết → id-thật để trả cho agent
+  const healNotes: string[] = []
 
   for (const t of args.todos) {
     if (!t.content || typeof t.content !== 'string') {
@@ -3519,17 +3526,24 @@ export async function todoWrite(args: {
           ...(runId && !existingById?.runId ? { runId } : {}),
         },
       }).catch(() => null)
-      if (!updated) {
-        return { success: false, error: `Todo not found: ${t.id}` }
+      if (updated) {
+        upserted.push({
+          id: updated.id,
+          content: updated.content,
+          status: updated.status,
+          priority: updated.priority,
+          parentId: updated.parentId,
+        })
+        continue
       }
-      upserted.push({
-        id: updated.id,
-        content: updated.content,
-        status: updated.status,
-        priority: updated.priority,
-        parentId: updated.parentId,
-      })
-      continue
+      // SELF-HEAL 2026-09-27 (fix E2E T29-A): id KHÔNG tồn tại — trước đây
+      // return error làm CẢ call fail → agent không ghi được kế hoạch, STALL
+      // 3 chu kỳ liên tiếp, run chết no_progress (bằng chứng: session E2E
+      // T29-A todo_write "audit-1" → "Todo not found"). Giờ: đánh dấu heal và
+      // rơi xuống đường upsert-theo-nội dung/idempotency bên dưới — khớp
+      // content trong (sessionId, runId) → update row thật; không khớp → tạo
+      // mới. healNote cho agent biết id thật (chống lặp lại id chế).
+      healNotes.push(`id '${t.id}' không tồn tại — đã xử lý như upsert theo nội dung`)
     }
 
     // Idempotent create by idempotencyKey
@@ -3545,6 +3559,9 @@ export async function todoWrite(args: {
           priority: existing.priority,
           parentId: existing.parentId,
         })
+        if (healNotes.length > 0 && healNotes[healNotes.length - 1].startsWith(`id '${t.id}'`)) {
+          healNotes[healNotes.length - 1] = `id '${t.id}' không tồn tại → khớp idempotencyKey, dùng lại row thật ${existing.id} (dùng id này cho lần sau)`
+        }
         continue
       }
     }
@@ -3580,6 +3597,9 @@ export async function todoWrite(args: {
           priority: updated.priority,
           parentId: updated.parentId,
         })
+        if (healNotes.length > 0 && healNotes[healNotes.length - 1].startsWith(`id '${t.id || ''}'`)) {
+          healNotes[healNotes.length - 1] = `id '${t.id}' không tồn tại → khớp nội dung, đã update row thật ${updated.id} (dùng id này cho lần sau)`
+        }
         continue
       }
     }
@@ -3604,6 +3624,9 @@ export async function todoWrite(args: {
       priority: created.priority,
       parentId: created.parentId,
     })
+    if (healNotes.length > 0 && healNotes[healNotes.length - 1].startsWith(`id '${t.id || ''}'`)) {
+      healNotes[healNotes.length - 1] = `id '${t.id}' không tồn tại → đã TẠO MỚI todo ${created.id} (dùng id này cho lần sau, đừng tự chế id)`
+    }
   }
 
   // ===== TODO-COVERAGE (2026-10-22 hướng 1+2) — kiểm tra phủ kế hoạch =====
@@ -3647,10 +3670,11 @@ export async function todoWrite(args: {
     success: true,
     sessionId,
     runId,
-    // coverage + problemHint đặt TRƯỚC todos: bridge CLI (callTmoTool) cap kết
-    // quả 2000 ký tự và cắt CUỐI — warning phải sống sót kể cả khi danh sách
-    // todo dài (agent CLI cần thấy yêu cầu bổ sung ngay).
+    // coverage + healNotes + problemHint đặt TRƯỚC todos: bridge CLI (callTmoTool)
+    // cap kết quả 2000 ký tự và cắt CUỐI — warning phải sống sót kể cả khi danh
+    // sách todo dài (agent CLI cần thấy yêu cầu bổ sung ngay).
     ...(coverage !== undefined ? { coverage } : {}),
+    ...(healNotes.length > 0 ? { healNotes } : {}),
     ...(flaggedCount > 0 ? {
       problemHint: `🔧 ${flaggedCount} todo failed/blocked — XỬ LÝ THEO QUY TRÌNH (không thử lặp y hệt >2 lần): (1) chẩn đoán nguyên nhân bằng bằng chứng (đọc error, grep, file_read); (2) chọn resolver: thu thập dữ liệu / tách todo con phần hỏng / ĐỔI HƯỚNG nếu hướng hiện tại không thể đạt; (3) tạo todo con kế hoạch xử lý hoặc ghi rõ phương án thay thế trong todo. Todo failed/blocked không có hướng xử lý sẽ bị evaluator chấm thiếu ở cuối chu kỳ.`,
     } : {}),

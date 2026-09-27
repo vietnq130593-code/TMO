@@ -57,15 +57,20 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string }
   // Factory) KHÔNG tạo được agent zen — mọi agent mới sinh ra đều dính provider
   // nvidia với key chết. Thêm zen + 4 model free ĐÃ VERIFY chạy được (Task 5-7).
   zen: [
-    { id: 'nemotron-3-ultra-free', label: 'nemotron-3-ultra-free (550B MoE — lõi chính, TL/Omega/Opus)' },
-    // 2026-10-27 (user directive phiên 4): Muse Spark 1.3 Contributor làm model
-    // chính cho các agent KHÔNG phải Omega/Opus/TL (9 generator agents). Chạy
-    // trực tiếp ở môi trường local VN của user; trên server geo-blocked → chuỗi
-    // fallback NIM (safety net) đảm bảo agent vẫn vận hành.
-    { id: 'muse-spark-1.3-contributor-free', label: 'muse-spark-1.3-contributor-free (generators — G1-G3 code/research + ALISTA)' },
+    // 2026-10-27 (user directive phiên 5 — chốt chính sách model zen):
+    //   - Omega / Opus / TL (MEGATRON code, NEMESIS research) = nemotron-3-ultra-free
+    //     (550B MoE open-weights NVIDIA, ctx 1M / out 128k)
+    //   - 9 generator agents (G1-G3 code/research + ALISTA) = muse-spark-1.3-contributor-free
+    //     (Meta — chạy trực tiếp ở môi trường local VN của user; server hiện tại
+    //     geo-blocked → ZEN FAILOVER space-bunny-free giữ agent sống)
+    //   - space-bunny-free = stealth model ẩn danh (zen không công bố model gốc,
+    //     ctx 1M / out 512k, zero-retention) — CHỈ dùng làm ZEN FAILOVER dự phòng,
+    //     không phải model chính của agent nào.
+    { id: 'nemotron-3-ultra-free', label: 'nemotron-3-ultra-free (550B MoE — Omega/Opus/TL)' },
+    { id: 'muse-spark-1.3-contributor-free', label: 'muse-spark-1.3-contributor-free (generators — G1-G3 + ALISTA)' },
     { id: 'nemotron-3.5-lightning-free', label: 'nemotron-3.5-lightning-free (30B MoE — nhanh, utility)' },
     { id: 'mimo-v2.6-flash-free', label: 'mimo-v2.6-flash-free (nhẹ — small_model CLI)' },
-    { id: 'space-bunny-free', label: 'space-bunny-free (phụ)' },
+    { id: 'space-bunny-free', label: 'space-bunny-free (stealth ẩn danh — chỉ ZEN FAILOVER dự phòng)' },
   ],
   nvidia: [
     // Extraction cores (2 lõi — chỉ trích xuất dữ liệu, user directive 2026-09-05)
