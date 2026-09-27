@@ -68,6 +68,8 @@ import {
   listSkills as executeListSkillsFn,
   readSkill as executeReadSkillFn,
   mcpListServers as executeMcpListServersFn,
+  // TASK 41 — abs path server-resolved cho Agent Activity Log (UI auto-open file)
+  resolveUiAbsPath,
 } from './dev-tools'
 // v2.1 Phase 3.6 — MCP bridge (separate module)
 import { mcpCall as executeMcpCallFn } from '@/lib/mcp/mcp-bridge'
@@ -2112,6 +2114,29 @@ export async function executeTool(
   //   1. Terminal hiện KẾT QUẢ THẬT (resultPreview) chứ không chỉ lệnh
   //   2. Agent Run Tracker ghi tool event vào khối Thought Process trong chat
   //   3. todo_write → capture snapshot todo list cho panel Todos
+  //
+  // TASK 41 (fix "[FileSelect] read failed: /home/z/.tmo-harness/task-1.txt"):
+  // trước khi ghi activity, resolve abs path THEO WORKSPACE ROOT THẬT của server
+  // cho các tool có tham số path/filePath. `detail` chỉ chứa path RAW (thường
+  // tương đối — VD ".tmo-harness/task-1.txt") → UI phải đoán abs path bằng
+  // workspaceRoot localStorage (có thể LỆCH với root server: VD localStorage
+  // "/home/z" trong khi server root "/home/z/tmo-app") → auto-open tab đọc
+  // "/home/z/.tmo-harness/task-1.txt" KHÔNG TỒN TẠI → 404 + toast đỏ.
+  // Ghi `path` (server-resolved absolute) vào entry — client ưu tiên field này.
+  // Chỉ resolve khi args CÓ path (file tools + vài tool khác có path arg —
+  // resolve thêm cũng vô hại); resolveWorkspaceRoot cache 5s nên chi phí ~0.
+  // Fail-open: lỗi resolve (path ngoài workspace...) → undefined, giữ fallback cũ.
+  let uiAbsPath: string | undefined
+  {
+    const rawToolPath = typeof (args as Record<string, unknown> | undefined)?.path === 'string'
+      ? String((args as Record<string, unknown>).path)
+      : typeof (args as Record<string, unknown> | undefined)?.filePath === 'string'
+        ? String((args as Record<string, unknown>).filePath)
+        : ''
+    if (rawToolPath) {
+      uiAbsPath = await resolveUiAbsPath(rawToolPath)
+    }
+  }
   const recordActivity = (success: boolean, result?: unknown) => {
     try {
       const resultPreview = summarizeToolResult(toolName, result)
@@ -2123,6 +2148,7 @@ export async function executeTool(
         durationMs: Date.now() - startTime,
         sessionId: context?.sessionId ?? null,
         resultPreview,
+        path: uiAbsPath,
       })
       // Thought Process panel trong chat — ghi vào run đang active của session.
       // DELEGATION CONTRACT (fix 2026-09-12): context.delegationRunId (sub-agent

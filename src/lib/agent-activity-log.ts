@@ -46,6 +46,19 @@ export interface AgentActivityEntry {
    * thật để nhận biết kết quả thực tế chứ không phải giả.
    */
   resultPreview?: string
+  /**
+   * TASK 41 (fix "[FileSelect] read failed: /home/z/.tmo-harness/task-1.txt"):
+   * Đường dẫn TUYỆT ĐỐI server-resolved của file mà tool vừa thao tác (file_read/
+   * file_edit/file_write/file_delete/file_multi_edit/opencode read-write).
+   * `detail` giữ nguyên path RAW như agent truyền (thường TƯƠNG ĐỐI — VD
+   * ".tmo-harness/task-1.txt") → client phải ĐOÁN abs path bằng workspaceRoot
+   * trong localStorage, mà localStorage có thể LỆCH với workspace root thật của
+   * server (DB active workspace → OPENCODE_WORKSPACE → cwd). Đoán sai → auto-open
+   * tab đọc path không tồn tại → 404 + console error + toast đỏ.
+   * Server là source of truth: ghi abs path ĐÃ RESOLVE đúng theo workspace root
+   * mà tool thực thi. Client ưu tiên field này (fallback: đoán như cũ).
+   */
+  path?: string
 }
 
 const MAX_ENTRIES = 300
@@ -76,6 +89,8 @@ export function recordAgentActivity(entry: {
   durationMs: number
   sessionId?: string | null
   resultPreview?: string
+  /** TASK 41 — abs path server-resolved (file tools) — xem comment ở interface */
+  path?: string
 }): AgentActivityEntry {
   const buf = buffer()
   const recorded: AgentActivityEntry = {
@@ -90,6 +105,7 @@ export function recordAgentActivity(entry: {
     resultPreview: entry.resultPreview
       ? String(entry.resultPreview).slice(0, MAX_RESULT_PREVIEW)
       : undefined,
+    path: entry.path ? String(entry.path).slice(0, 500) : undefined,
   }
   buf.push(recorded)
   if (buf.length > MAX_ENTRIES) {

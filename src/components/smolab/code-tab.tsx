@@ -384,6 +384,33 @@ export function CodeTabContent() {
     }
   }, [workspaceRoot])
 
+  // TASK 41 (fix lệch workspace root client↔server): sync workspaceRoot với
+  // ACTIVE WORKSPACE trên server lúc mount. Server tools (file_read/file_edit/
+  // shell...) resolve path theo active workspace (DB → OPENCODE_WORKSPACE →
+  // cwd); localStorage chỉ là CACHE phía client — khi lệch (localStorage bị
+  // clear, đổi browser, hoặc lần đăng ký workspace fail) thì mọi auto-open
+  // file từ tool event đọc SAI path → 404 "Không đọc được file". DB là source
+  // of truth: có active workspace mà khác localStorage → adopt. KHÔNG đụng gì
+  // khi server không có active (giữ nguyên lựa chọn local của user).
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await authedFetch('/api/workspace')
+        if (!res.ok || cancelled) return
+        const data = await res.json().catch(() => null) as {
+          data?: { active?: { rootPath?: string } | null }
+        } | null
+        const activeRoot = data?.data?.active?.rootPath
+        if (!cancelled && typeof activeRoot === 'string' && activeRoot.trim()) {
+          setWorkspaceRoot(prev => (prev === activeRoot ? prev : activeRoot))
+        }
+      } catch { /* offline — giữ nguyên localStorage */ }
+    })()
+    return () => { cancelled = true }
+    // Chạy 1 lần lúc mount — intent: resume đúng workspace active cuối cùng.
+  }, [])
+
   // Phase 2: folder picker commit — set local workspace + sync to DB as ACTIVE
   // workspace (POST /api/workspace; 409 conflict → PATCH existing → active).
   const handleWorkspaceSelect = useCallback(async (folderPath: string) => {
@@ -950,7 +977,7 @@ export function CodeTabContent() {
         if (!res.ok || cancelled) return
         const d = await res.json().catch(() => null) as {
           ok?: boolean
-          entries?: Array<{ id: string; ts: number; agentName?: string; tool: string; detail?: string; success?: boolean; durationMs?: number; resultPreview?: string }>
+          entries?: Array<{ id: string; ts: number; agentName?: string; tool: string; detail?: string; success?: boolean; durationMs?: number; resultPreview?: string; path?: string }>
         } | null
         if (!d?.ok || !Array.isArray(d.entries) || d.entries.length === 0 || cancelled) return
 
@@ -994,8 +1021,14 @@ export function CodeTabContent() {
             const icon = e.tool === 'file_delete' ? '🗑️' : e.tool === 'file_write' ? '📝' : '✏️'
             lines.push(`[AI] ${icon} ${e.tool === 'file_multi_edit' ? 'file_multi_edit' : e.tool} ${cmd.slice(0, 110)}`)
             lines.push(...resultBlock)
-            // LIVE FILE TAB REFRESH: detail của các tool này chính là path file
-            if (cmd) fileEvents.push({ tool: e.tool, path: cmd })
+            // LIVE FILE TAB REFRESH: detail của các tool này chính là path file.
+            // TASK 41: ưu tiên `path` — abs path SERVER-RESOLVED theo workspace
+            // root thật của server (agent truyền path tương đối VD ".tmo-harness/
+            // task-1.txt" → đoán bằng workspaceRoot localStorage có thể SAI root
+            // → auto-open toast đỏ "Không đọc được file"). cmd (detail RAW) chỉ
+            // là fallback cho entry cũ do server trước Task 41 ghi (không có path).
+            const evPath = (typeof e.path === 'string' && e.path) ? e.path : cmd
+            if (evPath) fileEvents.push({ tool: e.tool, path: evPath })
           }
         }
         agentActivityTsRef.current = maxTs
@@ -1844,7 +1877,7 @@ export function CodeTabContent() {
    *    tool_result start_preview (OK)     → openAiPreview(port, root)
    *    tool_result stop_preview  (OK)     → tear the preview panel down
    *  Fully defensive — any parsing failure is swallowed (never break the UI). */
-  const handleAIToolEvent = useCallback((ev: {type?: string; tool?: string; detail?: string; result?: string}) => {
+  const handleAIToolEvent = useCallback((ev: {type?: string; tool?: string; detail?: string; result?: string; absPath?: string}) => {
     try {
       if (!ev || (ev.type !== 'tool_call' && ev.type !== 'tool_result')) return
       const tool = typeof ev.tool === 'string' ? ev.tool : ''
@@ -1859,10 +1892,15 @@ export function CodeTabContent() {
       const pathFromDetail = argPath || deletedPath || extractJsonStringField(rawDetail, 'path') || extractJsonStringField(rawDetail, 'deleted')
       const resolveAbs = (p?: string | null): string | null => {
         if (typeof p !== 'string' || !p) return null
-        if (p.startsWith('/')) return p
+        if (p.startsWith('/') || p.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(p)) return p
         return workspaceRoot ? `${workspaceRoot.replace(/\/+$/, '')}/${p}` : p
       }
-      const absPath = resolveAbs(pathFromDetail)
+      // TASK 41 — ưu tiên absPath SERVER-RESOLVED (workspace root thật của server,
+      // gửi kèm SSE event từ Task 41): path trong detail thường TƯƠNG ĐỐI → đoán
+      // bằng workspaceRoot localStorage có thể SAI ROOT (VD localStorage "/home/z"
+      // trong khi server root "/home/z/tmo-app" → auto-open đọc path không tồn
+      // tại → toast đỏ "Không đọc được file"). absPath là absolute → dùng trực tiếp.
+      const absPath = resolveAbs(typeof ev.absPath === 'string' && ev.absPath ? ev.absPath : pathFromDetail)
       const fileName = pathFileName(absPath || pathFromDetail)
       if (ev.type === 'tool_call') {
         switch (tool) {

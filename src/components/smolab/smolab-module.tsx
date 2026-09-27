@@ -2939,6 +2939,10 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                   tool: event.tool,
                   detail: typeof event.detail === 'string' ? event.detail : undefined,
                   result: typeof event.result === 'string' ? event.result : undefined,
+                  // TASK 41 — abs path server-resolved (file tools): UI mở ĐÚNG file
+                  // agents vừa đọc/sửa theo workspace root thật của server (không
+                  // đoán bằng localStorage workspaceRoot — có thể lệch root).
+                  absPath: typeof event.absPath === 'string' ? event.absPath : undefined,
                 },
               }))
             } catch { /* never break the stream */ }

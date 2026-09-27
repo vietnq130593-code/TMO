@@ -54,6 +54,9 @@ import { startAgentRun, endAgentRun, recordAgentThought, recordAgentRunTodos, is
 import { flagMode, isFlagEnabled } from '@/lib/feature-flags'
 // Phase 6/7 (rebuild) — workspace root follows the USER's ACTIVE workspace
 import { resolveWorkspaceRoot } from './workspace-root'
+// TASK 41 — abs path server-resolved cho tool_call/tool_result SSE event (UI
+// auto-open file đúng workspace root thật của server — xem dev-tools.resolveUiAbsPath)
+import { resolveUiAbsPath } from './dev-tools'
 // 2026-08-29 — Team Code agents cũng cần biết workspace root + cấu trúc cấp 1
 // (user request: mọi agents + team code đều nắm được thư mục đã chọn).
 import { buildWorkspaceContext } from '@/lib/workspace/workspace-context'
@@ -2394,12 +2397,28 @@ export async function runAgentStep(params: {
       totalToolCalls++
       const toolStartTime = Date.now()
 
+      // TASK 41 — abs path server-resolved của file tool đang gọi (theo workspace
+      // root THẬT của server). UI (handleAIToolEvent) dùng absPath này thay vì đoán
+      // abs path từ args RAW (tương đối) + workspaceRoot localStorage (có thể lệch
+      // root với server → auto-open toast đỏ "Không đọc được file"). Fail-open:
+      // undefined → UI giữ hành vi fallback cũ.
+      let tcAbsPath: string | undefined
+      {
+        const tcArgs = (tc.args || {}) as Record<string, unknown>
+        const tcRawPath = typeof tcArgs.path === 'string' ? tcArgs.path
+          : typeof tcArgs.filePath === 'string' ? tcArgs.filePath : ''
+        if (tcRawPath) {
+          try { tcAbsPath = await resolveUiAbsPath(tcRawPath) } catch { /* bỏ qua */ }
+        }
+      }
+
       emit({
         type: 'tool_call',
         agent: agent.name,
         position,
         tool: tc.name,
         detail: JSON.stringify(tc.args).slice(0, 200),
+        ...(tcAbsPath ? { absPath: tcAbsPath } : {}),
       })
 
       // ===== FIX (R2-c #1) — DEPTH GUARD: tool huy động bị từ chối tại executor =====
@@ -2506,6 +2525,7 @@ export async function runAgentStep(params: {
         result: toolResult.success ? 'OK' : 'Error',
         detail: JSON.stringify(toolResult.result).slice(0, 500),
         duration: toolDuration,
+        ...(tcAbsPath ? { absPath: tcAbsPath } : {}),
       })
 
       // ━━━ FIX 2026-09-15 #3 (P2 — audit Team Code) — TOOL-FAILURE THRESHOLD GUARD ━━━

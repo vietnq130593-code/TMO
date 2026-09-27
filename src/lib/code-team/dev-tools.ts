@@ -163,6 +163,28 @@ async function resolveWithinWorkspace(filePath: string): Promise<string> {
   return resolved
 }
 
+/**
+ * TASK 41 (fix "[FileSelect] read failed: /home/z/.tmo-harness/task-1.txt"):
+ * Resolve path RAW của tool call → đường dẫn TUYỆT ĐỐI theo workspace root
+ * THẬT mà server tools đang dùng (DB active workspace → OPENCODE_WORKSPACE →
+ * cwd). Dùng cho Agent Activity Log + workflow SSE tool_call event để UI mở
+ * ĐÚNG file agents vừa đụng tới — client không còn phải đoán abs path bằng
+ * workspaceRoot localStorage (có thể lệch với root thật của server).
+ *
+ * Fail-open: path ngoài workspace / lỗi resolve → undefined (caller giữ hành
+ * vi fallback cũ). KHÔNG throw — chỉ dùng cho hiển thị, không được phép làm
+ * hỏng tool execution hay workflow emit.
+ */
+export async function resolveUiAbsPath(rawPath: string): Promise<string | undefined> {
+  const p = typeof rawPath === 'string' ? rawPath.trim() : ''
+  if (!p) return undefined
+  try {
+    return await resolveWithinWorkspace(p)
+  } catch {
+    return undefined
+  }
+}
+
 /** Truncate output to a token-budget-friendly size with a clear flag. */
 function truncateOutput(text: string, maxChars = 50_000): { output: string; truncated: boolean; totalChars: number } {
   const totalChars = text.length
