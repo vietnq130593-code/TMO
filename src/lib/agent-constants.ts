@@ -33,9 +33,11 @@
  *  Đã bỏ nemotron-4-340b-instruct (404 NOT FOUND — deprecated)
  */
 export const EXTRACTION_MODELS: Record<string, Array<{ id: string; label: string }>> = {
-  nvidia: [
-    { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (chính)' },
-    { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (fallback)' },
+  // TASK 33 (2026-09-27): extraction (trích xuất tài liệu KB) đã chuyển sang
+  // ZEN (callLLMSlot → nemotron-3-ultra-free, override EXTRACTION_ZEN_MODEL).
+  // 2 lõi NIM cũ (nemotron-550b + gpt-oss-120b) đã gỡ — NIM chỉ còn lõi embed.
+  zen: [
+    { id: 'nemotron-3-ultra-free', label: 'nemotron-3-ultra-free (extraction chính — zen)' },
   ],
 }
 
@@ -57,45 +59,40 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string }
   // Factory) KHÔNG tạo được agent zen — mọi agent mới sinh ra đều dính provider
   // nvidia với key chết. Thêm zen + 4 model free ĐÃ VERIFY chạy được (Task 5-7).
   zen: [
-    // 2026-10-27 (user directive phiên 5 — chốt chính sách model zen):
+    // 2026-09-27 (user directive phiên 6 — TASK 33, chốt chính sách model zen):
     //   - Omega / Opus / TL (MEGATRON code, NEMESIS research) = nemotron-3-ultra-free
-    //     (550B MoE open-weights NVIDIA, ctx 1M / out 128k)
+    //     (550B MoE open-weights NVIDIA, ctx 1M / out 128k — KHÔNG có effort knob,
+    //     reasoning always-on)
     //   - 9 generator agents (G1-G3 code/research + ALISTA) = muse-spark-1.3-contributor-free
-    //     (Meta — chạy trực tiếp ở môi trường local VN của user; server hiện tại
-    //     geo-blocked → ZEN FAILOVER space-bunny-free giữ agent sống)
-    //   - space-bunny-free = stealth model ẩn danh (zen không công bố model gốc,
-    //     ctx 1M / out 512k, zero-retention) — CHỈ dùng làm ZEN FAILOVER dự phòng,
-    //     không phải model chính của agent nào.
+    //     (Meta — effort xhigh CAO NHẤT của model này)
+    //   - 2 agent chuyên debug: SENTINEL (code G2-B) + LISMA (research G2)
+    //     = space-bunny-free (stealth reasoning — effort max CAO NHẤT toàn Zen)
+    //   - NIM đã GỠ khỏi tác vụ agents (Task 33) — NVIDIA_API_KEY chỉ còn dùng cho
+    //     LÕI EMBED (embeddings.ts nemotron-3-embed-1b)
     { id: 'nemotron-3-ultra-free', label: 'nemotron-3-ultra-free (550B MoE — Omega/Opus/TL)' },
     { id: 'muse-spark-1.3-contributor-free', label: 'muse-spark-1.3-contributor-free (generators — G1-G3 + ALISTA)' },
+    { id: 'space-bunny-free', label: 'space-bunny-free (debug SENTINEL/LISMA + ZEN FAILOVER)' },
     { id: 'nemotron-3.5-lightning-free', label: 'nemotron-3.5-lightning-free (30B MoE — nhanh, utility)' },
     { id: 'mimo-v2.6-flash-free', label: 'mimo-v2.6-flash-free (nhẹ — small_model CLI)' },
-    { id: 'space-bunny-free', label: 'space-bunny-free (stealth ẩn danh — chỉ ZEN FAILOVER dự phòng)' },
   ],
   nvidia: [
-    // Extraction cores (2 lõi — chỉ trích xuất dữ liệu, user directive 2026-09-05)
-    { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction chính)' },
-    { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (extraction fallback — EOL 410)' },
-    // Agent/Chat cores — minimax-m3 lõi chính (TẠM THỜI — user directive
-    // 2026-10-16: duy nhất khả dụng sau matrix test 4 lõi × 4 key) + 3 lõi
-    // fallback: kimi-k3 (#1 — NIM hồi tự dùng lại) → ds-pro (#2) → ds-flash (#3):
-    { id: 'minimaxai/minimax-m3', label: 'minimax-m3 (lõi chính — tạm thời)' },
-    { id: 'moonshotai/kimi-k3', label: 'kimi-k3 (fallback #1)' },
-    { id: 'deepseek-ai/deepseek-v4-pro-0813', label: 'deepseek-v4-pro (fallback #2)' },
-    { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash (fallback #3)' },
+    // TASK 33 (2026-09-27): NIM ĐÃ GỠ khỏi tác vụ agents — provider này giữ lại
+    // CHỈ để tương thích UI/DB cũ; không còn lõi LLM nào chạy trên NIM. Lõi embed
+    // (nemotron-3-embed-1b) là cấu hình env riêng (embeddings.ts), không nằm đây.
+    { id: 'nvidia/nemotron-3-embed-1b', label: 'nemotron-3-embed-1b (CHỈ lõi embed — không phải LLM agent)' },
   ],
 }
 
 export const PROVIDER_DATA = [
   {
     key: 'zen',
-    label: 'OpenCode Zen (free — qua CLI)',
+    label: 'OpenCode Zen (lõi agents — Task 33)',
     icon: '⚡',
     models: PROVIDER_MODELS.zen,
   },
   {
     key: 'nvidia',
-    label: 'NVIDIA NIM',
+    label: 'NVIDIA NIM (CHỈ lõi embed — Task 33)',
     icon: '🎮',
     models: PROVIDER_MODELS.nvidia,
   },

@@ -703,20 +703,20 @@ async function _doStandaloneSeed(): Promise<boolean> {
           }
         }
 
-        // MODEL SYNC (2026-10-16 — USER DIRECTIVE minimax-m3 tạm làm lõi chính):
-        // rows seed từ default cũ 2026-08-31 (kimi-k3 — giá trị do CODE sync)
-        // → đồng bộ về def.model (minimax-m3). Model khác (user tự cấu hình)
-        // giữ nguyên. Runtime callLLMForAgent enforce AGENT_PRIMARY_MODEL anyway
-        // — sync này chỉ để hiển thị UI + legacy path khớp lõi chính.
-        if (existing.model === 'moonshotai/kimi-k3' && def.model !== existing.model) {
+        // TASK 33 (2026-09-27) — NIM→ZEN MIGRATION (mirror Code/Research team):
+        // rows còn sót provider NIM hoặc model NIM (id chứa '/') là giá trị cũ
+        // từ thời NIM (kimi-k3/minimax-m3/deepseek...), KHÔNG phải lựa chọn user
+        // → normalize về def (zen). Model zen khác user tự chọn → GIỮ NGUYÊN.
+        const isNimModelId = (m: string) => m.includes('/')
+        if ((existing.provider !== 'zen' || isNimModelId(existing.model)) && (existing.provider !== def.provider || existing.model !== def.model)) {
           try {
             await db.agentProfile.update({
               where: { name: def.name },
-              data: { model: def.model },
+              data: { provider: def.provider, model: def.model },
             })
-            console.log(`[Standalone] Model sync: ${def.name} moonshotai/kimi-k3 (lõi chính cũ 2026-08-31) → ${def.model} (lõi chính tạm thời 2026-10-16)`)
+            console.log(`[Standalone] NIM→Zen sync: ${def.name} ${existing.provider}/${existing.model} → ${def.provider}/${def.model} (Task 33 — NIM removed khỏi agents)`)
           } catch (syncErr) {
-            console.warn(`[Standalone] Model sync ${def.name} thất bại (không chặn boot):`, syncErr)
+            console.warn(`[Standalone] NIM→Zen sync ${def.name} thất bại (không chặn boot):`, syncErr)
           }
         }
 

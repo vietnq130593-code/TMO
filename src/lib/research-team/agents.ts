@@ -334,7 +334,10 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     capable:
       'Code review TypeScript/React/Next.js, tìm bug + fix bug (trần 3 vòng), System Diagnostician root cause (M2), RWV loop (READ→WRITE→VERIFY), TC-04 regression check, TC-06 evidence gate, đề xuất KB candidates anti-patterns.',
     provider: 'zen',
-    model: 'muse-spark-1.3-contributor-free',
+    // TASK 33 (2026-09-27 — user directive): LISMA là 1 trong 2 agent CHUYÊN
+    // DEBUG (cùng SENTINEL của code team) → dùng space-bunny-free (stealth
+    // reasoning model, ctx 1M/out 512k, effort max) thay vì muse-spark.
+    model: 'space-bunny-free',
     temperature: 0.2, // LISMA chặt — review nghiêm ngặt
     maxTokens: 16384,
     team: 'research',
@@ -474,7 +477,34 @@ async function _doSeed(): Promise<boolean> {
       const existing = await db.agentProfile.findUnique({ where: { name: def.name } })
 
       if (existing) {
-        // Agent exists → SKIP entirely (preserve user customizations)
+        // TASK 33 (2026-09-27) — NIM→ZEN MIGRATION + debug specialist sync
+        // (mirror ensureCodeTeamAgents): rows còn sót provider NIM hoặc model
+        // NIM (id chứa '/') là giá trị cũ từ thời NIM, KHÔNG phải lựa chọn user
+        // → normalize về def. Model zen khác user tự chọn → GIỮ NGUYÊN.
+        // LISMA (agent chuyên debug) còn muse-spark mặc định cũ → sync space-bunny.
+        const isNimModelId = (m: string) => m.includes('/')
+        if ((existing.provider !== 'zen' || isNimModelId(existing.model)) && (existing.provider !== def.provider || existing.model !== def.model)) {
+          try {
+            await db.agentProfile.update({
+              where: { id: existing.id },
+              data: { provider: def.provider, model: def.model },
+            })
+            console.log(`[ResearchTeam] NIM→Zen sync: ${def.name} ${existing.provider}/${existing.model} → ${def.provider}/${def.model} (Task 33 — NIM removed khỏi agents)`)
+          } catch (syncErr) {
+            console.warn(`[ResearchTeam] NIM→Zen sync ${def.name} thất bại (không chặn boot):`, syncErr)
+          }
+        }
+        if (def.name === 'LISMA' && existing.model === 'muse-spark-1.3-contributor-free' && def.model !== existing.model) {
+          try {
+            await db.agentProfile.update({
+              where: { id: existing.id },
+              data: { model: def.model },
+            })
+            console.log(`[ResearchTeam] Debug specialist sync: LISMA muse-spark → ${def.model} (Task 33 — agent chuyên debug dùng space-bunny)`)
+          } catch (syncErr) {
+            console.warn(`[ResearchTeam] LISMA debug sync thất bại (không chặn boot):`, syncErr)
+          }
+        }
         skipped++
         console.log(
           `[ResearchTeam] Agent already exists: ${def.name} (${def.position}) — skipping, user customizations preserved`,

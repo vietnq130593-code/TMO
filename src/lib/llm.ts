@@ -42,13 +42,13 @@
  *
  * Token tracking: NVIDIA NIM (single provider)
  *
- * (2026-09-04) Z-AI SDK PROVIDER (Task 21 tạm thời) đã gỡ bỏ khi gateway
- * ZAI 429 kéo dài 8+ giờ.
- * (2026-09-06) DỰNG LẠI theo user directive ("Z-AI SDK đã hoạt động trở
- * lại thì thiết lập tất cả các agents đều sử dụng Z-ai-sdk"): LLM_PROVIDER=zai
- * → TOÀN BỘ lõi (agent + chat + utility + extraction) route qua
- * z-ai-web-dev-sdk (GLM gateway). Xem section "Z-AI SDK PROVIDER — OPT-IN
- * QUA ENV" gần cuối file. LLM_PROVIDER=nim / không set → NIM như cũ.
+ * (2026-09-27 TASK 33 — USER DIRECTIVE) Z-AI SDK PROVIDER GỠ BỎ TOÀN BỘN
+ * ("bỏ luôn cả z-ai" — z-ai-web-dev-sdk chỉ tồn tại trong sandbox, không có
+ * trên máy local). NIM không còn dùng cho TÁC VỤ AGENTS / utility / extraction
+ * — NVIDIA NIM giờ CHỈ giữ đúng 1 vai trò: LÕI EMBED (src/lib/embeddings.ts,
+ * nemotron-3-embed-1b). Mọi lõi LLM của hệ thống (agents + chat + utility +
+ * extraction) đều route qua OPENCODE ZEN (HTTP → CLI → ZEN FAILOVER
+ * space-bunny → error, KHÔNG còn fallback NIM).
  */
 
 // ==================== TOKEN EVENT EMITTER (SSE REALTIME) ====================
@@ -1910,40 +1910,34 @@ if (!process.env.LLM_QUIET_INIT) {
 //      callLLMSlot, TUYỆT ĐỐI không dùng kimi-k3; override bằng env
 //      EXTRACTION_MODEL / EXTRACTION_FALLBACK_MODEL nếu muốn.
 
-/** Lõi CHÍNH cho MỌI agents, MỌI tác vụ.
+/** Lõi model CHÍNH của AGENT STACK (mặc định ZEN — user directive Task 33
+ *  2026-09-27: NIM bỏ hoàn toàn khỏi tác vụ agents).
  *
- *  ⚠️ USER DIRECTIVE 2026-10-16 (TẠM THỜI): "minimax-m3 làm lõi AI chính cho
- *  tất cả các Agents — thiết lập tạm thời, minimax-M3 hiện là lựa chọn duy
- *  nhất". Ma trận test 4 lõi × 4 key (scripts-tmp/nim-matrix.ts, HTTP trực
- *  tiếp NIM, 09:11 UTC): kimi-k3 0/4 key (HANG 60s 0 bytes) · ds-v4-pro 0/4
- *  (HANG) · ds-v4-flash 0/4 (HANG) · minimax-m3 4/4 key OK (6-44s).
- *  → Lõi chính = minimaxai/minimax-m3; kimi-k3 + deepseek-v4 xuống chuỗi
- *  fallback (NIM hồi thì tự dùng lại qua fallback, hoặc user đổi
- *  AGENT_PRIMARY_MODEL về moonshotai/kimi-k3 khi chỉ đạo).
- *  Override qua env: AGENT_PRIMARY_MODEL.
+ *  ⚠️ USER DIRECTIVE 2026-09-27 (TASK 33 — CHỐT CHÍNH SÁCH MODEL ZEN PHIÊN 6):
+ *  "Không dùng các model của NVIDIA NIM cho các tác vụ agents nữa — riêng lõi
+ *  embed tôi vẫn dùng của NVIDIA NIM; bỏ luôn cả z-ai." Toàn bộ agents chạy
+ *  trên OpenCode Zen:
+ *    - Omega / Opus / TL (MEGATRON code, NEMESIS research) = nemotron-3-ultra-free
+ *    - 9 generator agents (G1-G3 2 team + ALISTA) = muse-spark-1.3-contributor-free
+ *    - 2 agent chuyên debug: SENTINEL (code G2-B) + LISMA (research G2) = space-bunny-free
+ *    - ZEN FAILOVER (model dự phòng khi model chính fail cả HTTP + CLI) = space-bunny-free
  *
- *  (Lịch sử) 2026-09-30: 3 lõi đầu NIM HANG — từng tạm đổi minimax làm chính.
- *  (Lịch sử) 2026-08-31: user chỉ định kimi-k3 làm lõi chính + chain
- *  ds-v4-pro → ds-v4-flash → minimax-m3 (directive 2026-08-28/2026-09-06).
- *  Đổi lại bất kỳ lúc nào qua env AGENT_PRIMARY_MODEL / AGENT_FALLBACK_CHAIN
- *  (không cần sửa code).
+ *  AGENT_PRIMARY_MODEL ở đây = bậc 0 của stack dùng cho model-switch (research
+ *  team DR-C7) + hiển thị health — KHÔNG còn ý nghĩa "override mọi agent về 1
+ *  lõi" (callLLMForAgent giờ tôn trọng model zen cấu hình từng agent).
+ *  Override qua env: AGENT_PRIMARY_MODEL (đặt rỗng/bỏ trong .env để dùng mặc định).
  */
 export const AGENT_PRIMARY_MODEL =
-  process.env.AGENT_PRIMARY_MODEL?.trim() || 'minimaxai/minimax-m3'
+  process.env.AGENT_PRIMARY_MODEL?.trim() || 'muse-spark-1.3-contributor-free'
 
-/** @deprecated alias (2026-09-30) — KIMI_K3_MODEL giờ = AGENT_PRIMARY_MODEL
- *  (nhiều import dùng tên cũ; ngữ nghĩa "lõi chính" giữ nguyên). */
+/** @deprecated alias — giữ cho các import cũ; ngữ nghĩa "lõi chính của stack". */
 export const KIMI_K3_MODEL = AGENT_PRIMARY_MODEL
 
-/** Chuỗi fallback tuần tự cho lõi chính (failover MODEL-FIRST — từng model trên
- *  cùng key trước khi chuyển key).
- *  USER DIRECTIVE 2026-10-16: minimax-m3 là lõi chính (duy nhất khả dụng) →
- *  chuỗi fallback = kimi-k3 (fallback #1 — khi NIM hồi, kimi là lõi mạnh nhất
- *  tự phục hồi trước) → deepseek-v4-pro-0813 (#2) → deepseek-v4-flash-0731 (#3).
- *  Override qua env AGENT_FALLBACK_CHAIN (CSV — vd "moonshotai/kimi-k3,
- *  deepseek-ai/deepseek-v4-pro-0813"). Lõi chính fail → chuyển NGAY lõi fallback
- *  kế trên CÙNG key; chỉ khi cả chuỗi fail trên key đó mới chuyển key (chain
- *  restart từ lõi chính). deepseek-v4-pro-0813 = bản verified live 2026-08-28. */
+/** Chuỗi fallback ZEN của agent stack (bậc 1-3 — dùng cho model-switch DR-C7
+ *  research team + hiển thị; runtime failover thật của callLLMForAgent là
+ *  HTTP → CLI → ZEN FAILOVER space-bunny, không phải chuỗi này).
+ *  Task 33 (2026-09-27): chuyển từ chuỗi NIM (kimi/deepseek/minimax) sang chuỗi
+ *  zen thuần — NIM không còn dùng cho agents. */
 export const AGENT_FALLBACK_CHAIN: string[] = (() => {
   const csv = process.env.AGENT_FALLBACK_CHAIN?.trim()
   if (csv) {
@@ -1951,9 +1945,9 @@ export const AGENT_FALLBACK_CHAIN: string[] = (() => {
     if (parsed.length > 0) return parsed
   }
   return [
-    'moonshotai/kimi-k3',
-    'deepseek-ai/deepseek-v4-pro-0813',
-    'deepseek-ai/deepseek-v4-flash-0731',
+    'space-bunny-free',
+    'nemotron-3.5-lightning-free',
+    'mimo-v2.6-flash-free',
   ]
 })()
 
@@ -1969,10 +1963,9 @@ const KEY_ROTATION_BUDGET_MS = parseInt(process.env.KEY_ROTATION_BUDGET_MS || '9
 /** Model trích xuất — override được qua env (mặc định giữ nemotron-550b) */
 const EXTRACTION_MODEL_OVERRIDE = process.env.EXTRACTION_MODEL || ''
 
-/** Chính sách Kimi k3 có đang bật không? (mặc định BẬT — user directive 2026-08-31) */
-export function isKimiK3Enforced(): boolean {
-  return (process.env.ENFORCE_KIMI_K3 ?? 'true').trim().toLowerCase() !== 'false'
-}
+/** (TASK 33 — 2026-09-27) isKimiK3Enforced ĐÃ GỠ: chính sách override mọi agent
+ *  về 1 lõi NIM chung không còn tồn tại — agents dùng đúng model zen cấu hình
+ *  riêng (DB AgentProfile), runtime chỉ còn đường Zen (HTTP → CLI → failover). */
 
 /** (KHÔI PHỤC 2026-08-28) Chuỗi backup cores deepseek/minimax ĐƯỢC DÙNG ở
  *  enforced path qua callAgentModelWithFallbackChain() — xem AGENT_FALLBACK_CHAIN
@@ -2519,7 +2512,10 @@ export function getModelBlockBreakers(): Array<{ model: string; blockedUntil: nu
 // Fail-open tuyệt đối; timer unref'd (không giữ process); globalThis guard
 // chống double-register khi Next dev HMR reload.
 
-const PROBER_ENABLED = (process.env.LLM_MODEL_PROBER ?? '1').trim().toLowerCase() !== 'false'
+// TASK 33 (2026-09-27): default OFF — prober chỉ probe lõi NIM (kimi/deepseek/
+// minimax/nemotron-550b/gpt-oss) mà agents không còn dùng nữa. Bật lại bằng
+// LLM_MODEL_PROBER=true nếu quay về dùng NIM cho LLM.
+const PROBER_ENABLED = (process.env.LLM_MODEL_PROBER ?? '0').trim().toLowerCase() === 'true'
 const PROBE_INTERVAL_MS = Math.max(60_000, parseInt(process.env.LLM_PROBE_INTERVAL_MS || '300000', 10) || 300_000)
 const PROBE_TIMEOUT_MS = Math.max(10_000, parseInt(process.env.LLM_PROBE_TIMEOUT_MS || '90000', 10) || 90_000)
 const PROBER_BOOT_DELAY_MS = Math.max(0, parseInt(process.env.LLM_PROBER_BOOT_DELAY_MS || '30000', 10) || 30_000)
@@ -3476,83 +3472,65 @@ export async function callLLMSlot(
   options?: LLMCallOptions
 ): Promise<LLMResult> {
   const taskLabel = task || 'general'
-  const temp = options?.temperature
-  const maxTok = options?.maxTokens
 
-  // ===== Z-AI SDK PROVIDER (dựng lại 2026-09-06 — opt-in LLM_PROVIDER=zai) =====
-  // Slot key NVIDIA vô nghĩa với zai — extraction defaults giữ nguyên (0.1 /
-  // 16384) như chuỗi NIM phía dưới; document được gán key sẽ bỏ qua khi zai bật.
-  if (isZaiProviderEnabled()) {
-    const zai = await callZaiProvider(
+  // ===== TASK 33 (2026-09-27) — EXTRACTION QUA OPENCODE ZEN =====
+  // USER DIRECTIVE: NIM bỏ hoàn toàn khỏi LLM (chỉ giữ lõi embed). Chuỗi trích
+  // xuất tài liệu cũ (nemotron-3-ultra-550b → gpt-oss-120b trên NIM key) đã gỡ —
+  // giờ: Zen HTTP → OpenCode CLI → ZEN FAILOVER space-bunny → error.
+  // Model trích xuất mặc định: nemotron-3-ultra-free (550B MoE — reasoning mạnh,
+  // ctx 1M, output 128k đủ JSON trích xuất dài) — override qua EXTRACTION_ZEN_MODEL.
+  // slotIndex giữ tương thích signature (document key assignment NIM cũ) — không
+  // còn ý nghĩa với zen (2 key round-robin pool dùng chung).
+  void slotIndex
+  if (isZenConfigured()) {
+    const extractModel = process.env.EXTRACTION_ZEN_MODEL?.trim() || 'nemotron-3-ultra-free'
+    const zen = await callZenProvider(
       prompt,
       systemPrompt,
-      `extraction:${taskLabel}`,
+      extractModel,
       { ...options, temperature: options?.temperature ?? 0.1, maxTokens: options?.maxTokens ?? 16384 },
-      'extraction',
+      `extraction:${taskLabel}`,
     )
-    if (zai) return zai
-  }
-
-  // slotIndex -1 (hoặc invalid) = không có key riêng → round-robin mọi key hợp lệ.
-  // (Trước đây caller phải fallback sang callLLM() khi slotIndex=-1 — callLLM()
-  // giờ là kimi-k3 theo Kimi-only policy → VI PHẠM directive "extraction không
-  // dùng kimi-k3". Giờ callLLMSlot tự xử lý -1 nên không còn đường rò đó.)
-  if (slotIndex >= 0 && slotIndex >= MAX_KEYS) {
-    console.warn(`[LLM] Invalid key index ${slotIndex} for task "${taskLabel}" — falling back to round-robin key selection`)
-  }
-  const startKeyIndex = slotIndex >= 0 && slotIndex < MAX_KEYS ? slotIndex : -1
-
-  console.log(`[LLM] Key ${startKeyIndex >= 0 ? startKeyIndex : 'RR'} (NVIDIA) Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
-
-  // ===== MODEL-FIRST CHAIN (USER DIRECTIVE 2026-09-06) =====
-  // nemotron-3-ultra-550b fail → gọi gpt-oss-120b NGAY (cùng key); cả 2 lõi
-  // fail trên key đó MỚI chuyển key (chain khởi động lại từ lõi chính).
-  // Key GÁN cho document được thử TRƯỚC, rồi xoay vòng các key còn lại.
-  const primaryModel = EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0]
-  const fallbackModel =
-    EXTRACTION_FALLBACK_MODEL_OVERRIDE === 'none' || EXTRACTION_FALLBACK_MODEL_OVERRIDE === ''
-      ? (NVIDIA_EXTRACTION_MODELS[1] || '')
-      : EXTRACTION_FALLBACK_MODEL_OVERRIDE
-
-  const chain = fallbackModel && fallbackModel !== primaryModel
-    ? [primaryModel, fallbackModel]
-    : [primaryModel]
-
-  const result = await callModelChainModelFirst(
-    chain,
-    prompt,
-    systemPrompt,
-    options,
-    {
-      startKeyIndex,
-      taskLabel: `extraction:${taskLabel}`,
-      timeoutMs: 300000, // 300s — nemotron-550b là reasoning model
-      maxTokens: maxTok ?? 16384, // EXTRACTION MAX_TOKENS FIX 2026-08-27 — CoT + JSON không bị cắt
-      temperature: temp ?? 0.1,
-    },
-  )
-  if (result?.content) {
-    return result
-  }
-
-  // Người dùng bấm Dừng → nhiệm vụ đã bị hủy
-  if (options?.abortCheck && options.abortCheck()) {
-    console.log(`[LLM] Extraction "${taskLabel}": bị HỦY (abortCheck)`)
+    if (zen && zen.content) {
+      console.log(`[LLM] Extraction dùng Zen ${extractModel} ✓ (${zen.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
+      return zen
+    }
+    console.warn(`[LLM] Extraction Zen HTTP ${extractModel} thất bại — thử OpenCode CLI: ${(zen?.error || 'unknown').slice(0, 100)}`)
+    const cliResult = await callOpenCodeCLIProvider(
+      prompt,
+      systemPrompt,
+      extractModel,
+      { ...options, temperature: options?.temperature ?? 0.1, maxTokens: options?.maxTokens ?? 16384 },
+      `extraction:${taskLabel}`,
+    )
+    if (cliResult && cliResult.content) {
+      console.log(`[LLM] Extraction dùng OpenCode CLI ${extractModel} ✓ (${cliResult.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
+      return cliResult
+    }
+    const zenFailoverModel = process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free'
+    if (extractModel !== zenFailoverModel) {
+      console.warn(`[LLM] Extraction Zen ${extractModel} thất bại cả HTTP + CLI — thử ZEN FAILOVER ${zenFailoverModel} — task: ${taskLabel}`)
+      const foHttp = await callZenProvider(prompt, systemPrompt, zenFailoverModel, { ...options, temperature: options?.temperature ?? 0.1, maxTokens: options?.maxTokens ?? 16384 }, `extraction-failover:${taskLabel}`)
+      if (foHttp && foHttp.content) {
+        console.log(`[LLM] Extraction dùng ZEN FAILOVER ${zenFailoverModel} ✓ — task: ${taskLabel}`)
+        return foHttp
+      }
+    }
+    console.warn(`[LLM] Extraction "${taskLabel}": Zen thất bại toàn chuỗi — document sẽ retry sau`)
     return {
       content: '',
-      provider: 'none',
-      model: 'none',
-      error: `Extraction "${taskLabel}" aborted by user`,
+      provider: 'zen',
+      model: extractModel,
+      error: `Extraction "${taskLabel}" thất bại toàn chuỗi Zen (${extractModel} HTTP + CLI${extractModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''}) — NIM đã ngừng dùng cho LLM (Task 33)`,
     }
   }
 
-  // Cả 2 lõi đều thất bại sau đủ số sweep model-first
-  console.warn(`[LLM] Extraction "${taskLabel}": CẢ HAI lõi (${primaryModel}${fallbackModel ? ` + ${fallbackModel}` : ''}) đều thất bại sau ${KEY_FAILURES_PER_KEY} sweep model-first — document will be retried later`)
+  console.warn(`[LLM] Extraction "${taskLabel}": Zen chưa cấu hình — NIM đã gỡ (Task 33)`)
   return {
     content: '',
     provider: 'none',
     model: 'none',
-    error: `Extraction failed on BOTH cores (${primaryModel}${fallbackModel ? ` + fallback ${fallbackModel}` : ''}) — mọi NVIDIA key đều fail (model-first: mỗi sweep chạy đủ chuỗi lõi trên từng key, ${KEY_FAILURES_PER_KEY} sweep)`,
+    error: 'OpenCode Zen chưa cấu hình (set ZEN_API_KEY_1/2 trong .env) — extraction không còn đường NIM (Task 33)',
   }
 }
 
@@ -3608,50 +3586,23 @@ export async function callUtilityLLM(
       console.log(`[LLM] Utility-core dùng OpenCode CLI ${utilModel} ✓ (${cliResult.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
       return cliResult
     }
-    console.warn(`[LLM] Utility-core Zen ${utilModel} thất bại cả HTTP + CLI — fallback NIM legacy — task: ${taskLabel}`)
-  }
-
-  // ===== Z-AI SDK PROVIDER (dựng lại 2026-09-06 — opt-in LLM_PROVIDER=zai) =====
-  // Utility defaults giữ nguyên như chuỗi NIM (0.1 / 4096) để hành vi nhất quán.
-  if (isZaiProviderEnabled()) {
-    const zai = await callZaiProvider(
-      prompt,
-      systemPrompt,
-      `utility:${taskLabel}`,
-      { ...options, temperature: options?.temperature ?? 0.1, maxTokens: options?.maxTokens ?? 4096 },
-      'utility',
-    )
-    if (zai) return zai
-  }
-
-  const primaryModel = EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0]
-  const fallbackModel =
-    EXTRACTION_FALLBACK_MODEL_OVERRIDE === 'none' || EXTRACTION_FALLBACK_MODEL_OVERRIDE === ''
-      ? (NVIDIA_EXTRACTION_MODELS[1] || '')
-      : EXTRACTION_FALLBACK_MODEL_OVERRIDE
-
-  // ===== MODEL-FIRST CHAIN (USER DIRECTIVE 2026-09-06) =====
-  // nemotron-3-ultra-550b fail → gpt-oss-120b NGAY (cùng key, round-robin start);
-  // cả chuỗi fail trên key mới chuyển key.
-  const chain = fallbackModel && fallbackModel !== primaryModel
-    ? [primaryModel, fallbackModel]
-    : [primaryModel]
-
-  const result = await callModelChainModelFirst(
-    chain,
-    prompt,
-    systemPrompt,
-    options,
-    {
-      startKeyIndex: -1, // round-robin — utility không sở hữu slot key nào
-      taskLabel: `utility:${taskLabel}`,
-      timeoutMs: 180000, // 180s — utility prompts nhỏ, không cần 300s như extraction chunk lớn
-      maxTokens: options?.maxTokens ?? 4096, // utility output nhỏ (JSON phân loại/chưng cất)
-      temperature: options?.temperature ?? 0.1,
-    },
-  )
-  if (result?.content) {
-    return result
+    // TASK 33 — ZEN FAILOVER cho utility-core (mirror callLLMForAgent)
+    const zenFailoverModel = process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free'
+    if (utilModel !== zenFailoverModel) {
+      console.warn(`[LLM] Utility-core Zen ${utilModel} thất bại cả HTTP + CLI — thử ZEN FAILOVER ${zenFailoverModel} — task: ${taskLabel}`)
+      const foHttp = await callZenProvider(prompt, systemPrompt, zenFailoverModel, options, `utility-core-failover:${taskLabel}`)
+      if (foHttp && foHttp.content) {
+        console.log(`[LLM] Utility-core dùng ZEN FAILOVER ${zenFailoverModel} ✓ — task: ${taskLabel}`)
+        return foHttp
+      }
+    }
+    console.warn(`[LLM] Utility-core "${taskLabel}": Zen thất bại toàn chuỗi — caller sẽ fail-open (NIM removed — Task 33)`)
+    return {
+      content: '',
+      provider: 'zen',
+      model: utilModel,
+      error: `Utility-core "${taskLabel}" thất bại toàn chuỗi Zen (${utilModel} HTTP + CLI${utilModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''}) — NIM đã ngừng dùng cho LLM (Task 33)`,
+    }
   }
 
   // abortCheck (nếu caller truyền)
@@ -3664,309 +3615,20 @@ export async function callUtilityLLM(
     }
   }
 
-  // Cả 2 lõi đều thất bại — utility là fail-open: caller tự bỏ qua
-  console.warn(`[LLM] Utility "${taskLabel}": CẢ HAI lõi (${primaryModel}${fallbackModel ? ` + ${fallbackModel}` : ''}) đều thất bại — caller sẽ fail-open`)
+  // Zen chưa cấu hình — trả lỗi rõ ràng (utility là fail-open: caller tự bỏ qua)
+  console.warn(`[LLM] Utility "${taskLabel}": Zen chưa cấu hình — NIM đã gỡ (Task 33)`)
   return {
     content: '',
     provider: 'none',
     model: 'none',
-    error: `Utility "${taskLabel}" failed on BOTH cores (${primaryModel}${fallbackModel ? ` + fallback ${fallbackModel}` : ''})`,
+    error: 'OpenCode Zen chưa cấu hình (set ZEN_API_KEY_1/2 trong .env) — utility không còn đường NIM (Task 33)',
   }
-}
-
-// ==================== LEGACY CALL (for chat, health, etc.) ====================
-
-// ━━ Z-AI SDK PROVIDER — OPT-IN QUA ENV (Task 21 dựng lại 2026-09-06) ━━
-// USER DIRECTIVE (2026-09-06): "Z-AI SDK đã hoạt động trở lại thì thiết lập
-// tất cả các agents đều sử dụng Z-ai-sdk" — NIM flaky kéo dài (minimax-m3
-// chu kỳ ~7' khỏe / ~8' hang — Task 33/34 dừng 2 dry-run vì lõi hang),
-// trong khi z-ai gateway đã ổn định lại (Task 35 verify: 3 lượt OK
-// 222-931ms, glm-4-plus, không 429). Kiến trúc OPT-IN giữ nguyên như Task 21
-// (đã live-proven qua 5 lượt quan sát 2026-09-03/04):
-//   • LLM_PROVIDER=zai  → TOÀN BỘ lõi (agent + chat + utility + extraction)
-//     route qua z-ai-web-dev-sdk (GLM gateway sandbox — KHÔNG cần key NVIDIA;
-//     gateway tự chọn model, label trả về thường là glm-4-plus).
-//   • LLM_PROVIDER=nim / không set → NVIDIA NIM như cũ (default — máy local
-//     không có .z-ai-config không bao giờ chạm sdk).
-//   • SDK init fail (thiếu package / thiếu config) → tự fall về chuỗi NIM —
-//     init-fail được cache + cooldown 60s (không kẹt lặp import mỗi call).
-// Chi tiết kiến trúc:
-//   - KHÔNG truyền tools/tool_choice (sdk text-only như giai đoạn ecae418 —
-//     ENABLE_NATIVE_FC=dual tự fallback regex parse tool_call từ text).
-//   - Circuit breaker/prober/key-rotation NIM KHÔNG áp cho zai — pacing gate
-//     riêng + 429 circuit riêng (lượt quan sát 3-4), timeout riêng
-//     ZAI_TIMEOUT_MS (default 240s, env override).
-//   - Token tracking đầy đủ (per-provider 'zai-sdk' + per-agent attribution).
-//   - Lịch sử: gỡ 2026-09-04 (gateway 429 kéo dài 8+ giờ) → dựng lại
-//     2026-09-06 khi gateway đã lành (Task 35 verify 3 lượt ổn định).
-
-function isZaiProviderEnabled(): boolean {
-  const v = (process.env.LLM_PROVIDER || '').trim().toLowerCase()
-  return v === 'zai' || v === 'zai-sdk' || v === 'z-ai'
-}
-
-/** Minimal structural type cho instance z-ai-sdk (không phụ thuộc type chi tiết của package) */
-type ZaiSdkInstance = { chat: { completions: { create: (body: Record<string, unknown>) => Promise<unknown> } } }
-
-/** Cooldown retry sau init fail — không đốt lại import mỗi call */
-const ZAI_INIT_RETRY_COOLDOWN_MS = 60_000
-
-/** Singleton cache trên globalThis — Turbopack dev tách module instance theo
- *  route-graph (bài học Task 20 #2) → state dùng globalThis để chia sẻ. */
-async function getZaiSdkInstance(): Promise<ZaiSdkInstance | null> {
-  const g = globalThis as unknown as {
-    __tmoZaiSdkInstance?: ZaiSdkInstance | null
-    __tmoZaiInitPromise?: Promise<ZaiSdkInstance | null> | null
-    __tmoZaiInitFailedAt?: number
-  }
-  if (g.__tmoZaiSdkInstance) return g.__tmoZaiSdkInstance
-  if (g.__tmoZaiInitPromise) return g.__tmoZaiInitPromise
-  if (g.__tmoZaiInitFailedAt && Date.now() - g.__tmoZaiInitFailedAt < ZAI_INIT_RETRY_COOLDOWN_MS) return null
-  g.__tmoZaiInitPromise = (async () => {
-    try {
-      const mod = (await import('z-ai-web-dev-sdk')) as unknown as { default: { create: () => Promise<unknown> } }
-      const inst = (await mod.default.create()) as ZaiSdkInstance
-      g.__tmoZaiSdkInstance = inst
-      console.log('[ZAI] z-ai-sdk khởi tạo OK — provider=zai ACTIVE (model do gateway chọn, thinking disabled)')
-      return inst
-    } catch (err) {
-      g.__tmoZaiInitFailedAt = Date.now()
-      console.warn('[ZAI] z-ai-sdk init THẤT BẠI (thiếu package hoặc .z-ai-config — thử lại sau 60s):', err instanceof Error ? err.message : String(err))
-      return null
-    } finally {
-      g.__tmoZaiInitPromise = null
-    }
-  })()
-  return g.__tmoZaiInitPromise
-}
-
-// ==================== ZAI RATE-LIMIT DEFENSE (lượt quan sát 3 — 2026-09-04) ====================
-// Hiện tượng: b03sdel5 fail 3 attempt CÙNG 1 GIÂY (18:08:22) — z-ai gateway
-// burst-limit 429 "Too many requests" khi 2 orchestration chạy song song
-// (~10 call/19s). Trước đây 429 bubble thẳng lên caller → đốt hết attempt
-// budget tức thời. Fix 2 lớp:
-//   (a) Pacing: min-interval giữa START 2 request liên tiếp (chống burst)
-//   (b) 429-aware retry: exponential backoff 5s→10s→20s (+jitter) — 429 là
-//       transient "try again later", chờ rồi retry là đúng ngữ nghĩa.
-function zaiRateLimits(): { minIntervalMs: number; max429Retries: number; backoffBaseMs: number } {
-  return {
-    // Lượt quan sát 4: 1200→2000ms — llm-mode steps bắn ~40 call/phút (2 call
-    // mỗi bước 3s) đẩy gateway vào cửa sổ 429 kéo dài; 2s/call (~30/phút) an
-    // toàn hơn mà không chậm đáng kể (LLM response ~1-5s mỗi call).
-    minIntervalMs: Math.max(0, parseInt(process.env.ZAI_MIN_INTERVAL_MS || '2000', 10)),
-    max429Retries: Math.max(0, parseInt(process.env.ZAI_429_MAX_RETRIES || '3', 10)),
-    backoffBaseMs: Math.max(500, parseInt(process.env.ZAI_429_BACKOFF_MS || '5000', 10)),
-  }
-}
-
-/** Pacing gate — serialize START của các request ZAI cách nhau ≥ minIntervalMs
- *  (state trên globalThis — Turbopack tách module instance theo route-graph). */
-async function acquireZaiPacingSlot(taskLabel: string): Promise<void> {
-  const { minIntervalMs } = zaiRateLimits()
-  if (minIntervalMs === 0) return
-  const g = globalThis as unknown as { __tmoZaiLastReqAt?: number; __tmoZaiPaceChain?: Promise<void> }
-  const run = async () => {
-    const wait = (g.__tmoZaiLastReqAt ?? 0) + minIntervalMs - Date.now()
-    if (wait > 0) await new Promise(r => setTimeout(r, wait))
-    g.__tmoZaiLastReqAt = Date.now()
-  }
-  g.__tmoZaiPaceChain = (g.__tmoZaiPaceChain ?? Promise.resolve()).then(run, run)
-  await g.__tmoZaiPaceChain
-  void taskLabel
-}
-
-function isRateLimitError(msg: string): boolean {
-  return /status 429|too many requests|rate.?limit/i.test(msg)
-}
-
-// ── Lượt quan sát 4 (2026-09-04): 429 KÉO DÀI (không còn burst đơn lẻ) ──
-// Hiện tượng 20:06:25→20:10:00 (3.5 phút): gateway rate-limit bền vững sau
-// chuỗi chạy dày — mỗi call cháy hết 3 retry in-call (35s) vẫn 429. Nếu chỉ
-// để từng call tự cháy, orchestration đốt attempt budget mù (b03sdel5 run
-// trước may mắn vượt qua nhờ attempt-backoff). Circuit breaker chia sẻ:
-//   • Call cháy hết retry 429 → trip cooldown TOÀN CỤC 60s ×2^trips (cap 5')
-//   • Call sau vào lúc cooldown đang mở: chat/utility (user-facing) FAIL
-//     FAST với lý do rõ; agent/extraction (background orchestration) CHỜ
-//     đến khi đóng (cap 300s/lần chờ) rồi gọi lại — pipeline TẠM DỪNG sạch
-//     thay vì đốt attempts.
-//   • Call thành công → reset trips (traffic khỏe tự mở lại mạch).
-const ZAI_429_COOLDOWN_BASE_MS = 60_000
-const ZAI_429_COOLDOWN_MAX_MS = 300_000
-// Lượt quan sát 4 (chỉnh tiếp): cap chờ = cooldown max — background call chờ
-// TRỌN cửa sổ circuit rồi gọi (thay vì fail ở 120s rồi đốt vòng attempt + eval
-// mù). Step timeout 600s (SD_LLM_TIMEOUT_MS) chứa vừa 300s chờ + ~35s retry.
-const ZAI_429_WAIT_CAP_MS = 300_000
-
-type Zai429Global = { __tmoZai429Until?: number; __tmoZai429Trips?: number }
-
-/** Trip circuit sau khi 429 kéo dài — trả về cooldown áp dụng (ms). */
-function tripZai429Cooldown(): number {
-  const g = globalThis as unknown as Zai429Global
-  g.__tmoZai429Trips = (g.__tmoZai429Trips ?? 0) + 1
-  const cd = Math.min(ZAI_429_COOLDOWN_MAX_MS, ZAI_429_COOLDOWN_BASE_MS * 2 ** (g.__tmoZai429Trips - 1))
-  g.__tmoZai429Until = Date.now() + cd
-  return cd
-}
-
-/** Call thành công → traffic khỏe, xóa trips (cooldown hiện tại vẫn tôn trọng). */
-function resetZai429Trips(): void {
-  ;(globalThis as unknown as Zai429Global).__tmoZai429Trips = 0
-}
-
-/** Circuit 429 còn mở? Trả về số ms còn lại (0 = đã đóng). */
-function zai429RemainingMs(): number {
-  const g = globalThis as unknown as Zai429Global
-  return g.__tmoZai429Until ? Math.max(0, g.__tmoZai429Until - Date.now()) : 0
-}
-
-/** Trạng thái circuit ZAI cho health/diagnostics UI. */
-export function getZai429Status(): { active: boolean; remainingMs: number; trips: number } {
-  const g = globalThis as unknown as Zai429Global
-  const remaining = zai429RemainingMs()
-  return { active: remaining > 0, remainingMs: remaining, trips: g.__tmoZai429Trips ?? 0 }
-}
-
-/** Kiểm tra LLM_PROVIDER route qua z-ai (dùng cho health/diagnostics). */
-export function isZaiRoutingEnabled(): boolean {
-  return isZaiProviderEnabled()
 }
 
 /**
- * Gọi z-ai-sdk khi LLM_PROVIDER=zai. Trả về:
- *   - LLMResult THÀNH CÔNG (content + token tracking đầy đủ)
- *   - LLMResult LỖI khi call thật sự fail (timeout/network/empty) — caller
- *     thấy nguyên nhân NGAY, không đốt thêm ~460s chuỗi NIM đang outage
- *   - null khi sdk KHÔNG khả dụng (chưa cài / thiếu config) → caller fall
- *     về chuỗi NIM mặc định (bảo vệ máy local không set LLM_PROVIDER)
- *
- * Lượt quan sát 3: 429 → retry backoff (5s→10s→20s + jitter, tối đa
- * ZAI_429_MAX_RETRIES=3 lần); mỗi request vào qua pacing gate
- * (ZAI_MIN_INTERVAL_MS=2000 mặc định). abortCheck được kiểm lại sau mỗi
- * lần chờ — user bấm Dừng không bị kẹt trong vòng retry.
- */
-async function callZaiProvider(
-  prompt: string,
-  systemPrompt: string | undefined,
-  taskLabel: string,
-  options: LLMCallOptions | undefined,
-  callerKind: 'agent' | 'chat' | 'utility' | 'extraction',
-): Promise<LLMResult | null> {
-  const { max429Retries, backoffBaseMs } = zaiRateLimits()
-  const sdk = await getZaiSdkInstance()
-  if (!sdk) return null
-
-  const timeoutMs = parseInt(process.env.ZAI_TIMEOUT_MS || '240000', 10)
-  const messages = [
-    ...(systemPrompt ? [{ role: 'system', content: sanitizeLoneSurrogates(systemPrompt) }] : []),
-    { role: 'user', content: sanitizeLoneSurrogates(prompt) },
-  ]
-
-  for (let attempt429 = 0; ; attempt429++) {
-    // Người dùng bấm Dừng → không đốt call (kiểm lại sau mỗi backoff)
-    if (options?.abortCheck && options.abortCheck()) {
-      return { content: '', provider: 'zai-sdk', model: 'zai', error: `Task "${taskLabel}" aborted by user` }
-    }
-
-    // ── Circuit 429 đang mở (call khác vừa trip): tôn trọng cửa sổ nghỉ ──
-    const remain = zai429RemainingMs()
-    if (remain > 0) {
-      if (callerKind === 'chat' || callerKind === 'utility') {
-        return { content: '', provider: 'zai-sdk', model: 'zai', error: `ZAI rate-limited (429 circuit còn ${Math.ceil(remain / 1000)}s) — thử lại sau` }
-      }
-      // background (agent/extraction): chờ cho cửa sổ đóng (cap 300s/lần chờ)
-      const wait = Math.min(remain, ZAI_429_WAIT_CAP_MS)
-      console.warn(`[ZAI] ${callerKind}:"${taskLabel}" chờ 429 circuit đóng (còn ${Math.ceil(remain / 1000)}s, chờ tối đa ${Math.ceil(wait / 1000)}s)`)
-      await new Promise(r => setTimeout(r, wait))
-      if (zai429RemainingMs() > 0) {
-        // cooldown dài hơn cap chờ → trả lỗi rõ lý do, caller tự retry theo nhịp riêng
-        return { content: '', provider: 'zai-sdk', model: 'zai', error: `ZAI rate-limited (429 circuit còn ${Math.ceil(zai429RemainingMs() / 1000)}s sau khi chờ)` }
-      }
-    }
-
-    await acquireZaiPacingSlot(taskLabel)
-
-    let timer: ReturnType<typeof setTimeout> | undefined
-    try {
-      const res = (await Promise.race([
-        sdk.chat.completions.create({
-          messages,
-          thinking: { type: 'disabled' }, // ưu tiên tốc độ; gateway tự chọn model
-          ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
-          ...(options?.maxTokens ? { max_tokens: options.maxTokens } : {}),
-        }),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`timeout ${timeoutMs / 1000}s (ZAI_TIMEOUT_MS)`)), timeoutMs)
-        }),
-      ])) as {
-        choices?: Array<{
-          message?: { content?: string; tool_calls?: LLMToolCall[] }
-          finish_reason?: string | null
-        }>
-        model?: string
-        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
-      }
-      if (timer) clearTimeout(timer)
-
-      const content = res?.choices?.[0]?.message?.content ?? ''
-      const nativeToolCalls = res?.choices?.[0]?.message?.tool_calls
-      const model = res?.model || 'zai-glm'
-
-      if (!content && !(nativeToolCalls && nativeToolCalls.length > 0)) {
-        return { content: '', provider: 'zai-sdk', model, error: `ZAI empty response (${callerKind}:"${taskLabel}")` }
-      }
-
-      // Token tracking — mirror attemptNvidiaOnce (per-provider + per-agent)
-      const totalTokens = res?.usage?.total_tokens ?? ((res?.usage?.prompt_tokens ?? 0) + (res?.usage?.completion_tokens ?? 0))
-      if (totalTokens > 0) addTokensUsed(totalTokens, 'zai-sdk', undefined, model)
-      if (totalTokens > 0 && options?.agentId && options.agentName) {
-        addTokensUsedByAgent(
-          totalTokens,
-          res?.usage?.prompt_tokens ?? 0,
-          res?.usage?.completion_tokens ?? 0,
-          'zai-sdk',
-          model,
-          options.agentId,
-          options.agentName,
-        )
-      }
-
-      console.log(`[ZAI] ${callerKind}:"${taskLabel}" OK — ${content.length} chars, model ${model}${totalTokens ? `, ${totalTokens} tokens` : ''}`)
-      resetZai429Trips()
-      return {
-        content,
-        provider: 'zai-sdk',
-        model,
-        tokensUsed: totalTokens || undefined,
-        tool_calls: nativeToolCalls && nativeToolCalls.length > 0 ? nativeToolCalls : undefined,
-        finish_reason: res?.choices?.[0]?.finish_reason ?? null,
-      }
-    } catch (err) {
-      if (timer) clearTimeout(timer)
-      const msg = err instanceof Error ? err.message : String(err)
-      // ── Lượt quan sát 3: 429 là transient — backoff + retry thay vì bubble
-      if (isRateLimitError(msg) && attempt429 < max429Retries) {
-        const waitMs = backoffBaseMs * 2 ** attempt429 + Math.floor(Math.random() * 700)
-        console.warn(`[ZAI] ${callerKind}:"${taskLabel}" 429 rate-limit (lần ${attempt429 + 1}/${max429Retries}) — retry sau ${Math.round(waitMs / 100) / 10}s`)
-        await new Promise(r => setTimeout(r, waitMs))
-        continue
-      }
-      // ── Lượt quan sát 4: 429 KÉO DÀI (hết retry in-call) → trip circuit toàn
-      // cục — các call sau nghỉ cửa sổ cooldown thay vì tự cháy lặp lại.
-      if (isRateLimitError(msg)) {
-        const cd = tripZai429Cooldown()
-        console.warn(`[ZAI] ${callerKind}:"${taskLabel}" 429 kéo dài sau ${max429Retries} retry — trip circuit cooldown ${Math.round(cd / 1000)}s (background callers sẽ chờ)`)
-        return { content: '', provider: 'zai-sdk', model: 'zai', error: `ZAI rate-limited (429 kéo dài — circuit cooldown ${Math.round(cd / 1000)}s)` }
-      }
-      console.warn(`[ZAI] ${callerKind}:"${taskLabel}" THẤT BẠI:`, msg)
-      return { content: '', provider: 'zai-sdk', model: 'zai', error: `ZAI (z-ai-sdk) call failed: ${msg}` }
-    }
-  } // for attempt429
-}
-
-
-/**
- * Legacy LLM call — NVIDIA NIM only (z-ai-sdk fallback đã gỡ bỏ 2026-10-15).
- * Uses round-robin key selection (keyIndex=-1).
+ * Legacy LLM call — giờ route qua OPENCODE ZEN (Task 33 — NIM đã gỡ khỏi
+ * tác vụ agents/utility; NIM chỉ còn lõi embed). Chuỗi: (model override nếu
+ * có) → Zen HTTP → OpenCode CLI → ZEN FAILOVER space-bunny → error.
  * Use this for non-extraction tasks (chat queries, classification, health checks).
  */
 export async function callLLM(
@@ -3976,26 +3638,18 @@ export async function callLLM(
   options?: LLMCallOptions
 ): Promise<LLMResult> {
   const taskLabel = task || 'general'
-  const temp = options?.temperature
-  const maxTok = options?.maxTokens
-  const aId = options?.agentId
-  const aName = options?.agentName
-  console.log(`[LLM] (NVIDIA) Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
-
-  // ===== Z-AI SDK PROVIDER (dựng lại 2026-09-06 — opt-in LLM_PROVIDER=zai) =====
-  // Toàn bộ general chat/health/eval route qua z-ai-sdk khi bật. SDK không
-  // khả dụng → null → rơi về chuỗi NIM phía dưới (máy local an toàn).
-  if (isZaiProviderEnabled()) {
-    const zai = await callZaiProvider(prompt, systemPrompt, taskLabel, options, 'chat')
-    if (zai) return zai
-  }
+  console.log(`[LLM] Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
 
   // Phase 4 SMOLAB Prop 11' — explicit model override: try ONLY the requested
   // model. Used by the eval harness (judges must not silently fall back to a
   // rotated model — that would reintroduce circular bias between the answer
-  // generator and the judges). No pool-rotation fallback — nhưng vẫn XOAY VÒNG
-  // ĐẦY ĐỦ 4 key × 3 lần (user directive 2026-08-31) trước khi trả error.
+  // generator and the judges). Model zen → qua Zen provider; model NIM → xoay
+  // vòng key NIM (eval tool tự cấu hình key riêng).
   if (options?.model) {
+    if (isZenModelId(options.model) && isZenConfigured()) {
+      const zenOverride = await callZenProvider(prompt, systemPrompt, options.model, options, `override:${options.model}`)
+      if (zenOverride && zenOverride.content) return zenOverride
+    }
     const specific = await callModelWithKeyRotation(options.model, prompt, systemPrompt, options, { taskLabel: `override:${options.model}` })
     if (specific) return specific
     console.log(`[LLM] Model override "${options.model}" failed for task "${taskLabel}" — returning error (no rotation fallback)`)
@@ -4003,7 +3657,7 @@ export async function callLLM(
       content: '',
       provider: 'none',
       model: options.model,
-      error: `NVIDIA NIM model "${options.model}" failed`,
+      error: `Model "${options.model}" failed`,
     }
   }
 
@@ -4011,7 +3665,7 @@ export async function callLLM(
   // decompose_task/summarize/synthesize và các utility callLLM() trước đây chỉ có
   // đường NIM (key placeholder chết) → mất ~60s rồi trả content rỗng
   // ("LLM did not return valid JSON" / summary:""). Giờ route qua Zen HTTP →
-  // OpenCode CLI (cùng chuỗi callLLMForAgent dùng) TRƯỚC khi rơi về NIM legacy.
+  // OpenCode CLI (cùng chuỗi callLLMForAgent dùng).
   // Model utility mặc định: nemotron-3.5-lightning-free (nhanh, JSON ổn định) —
   // override qua env UTILITY_ZEN_MODEL. skipZenUtility: caller đã thử zen xong.
   if (isZenConfigured() && !options?.skipZenUtility) {
@@ -4027,28 +3681,37 @@ export async function callLLM(
       console.log(`[LLM] Utility dùng OpenCode CLI ${utilModel} ✓ (${cliResult.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
       return cliResult
     }
-    console.warn(`[LLM] Utility Zen ${utilModel} thất bại cả HTTP + CLI — fallback NIM legacy (key chết → sẽ trả lỗi) — task: ${taskLabel}`)
+    // TASK 33 — ZEN FAILOVER cho utility (mirror callLLMForAgent): model utility
+    // chính fail cả HTTP + CLI → thử space-bunny trước khi trả lỗi.
+    const zenFailoverModel = process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free'
+    if (utilModel !== zenFailoverModel) {
+      console.warn(`[LLM] Utility Zen ${utilModel} thất bại cả HTTP + CLI — thử ZEN FAILOVER ${zenFailoverModel} — task: ${taskLabel}`)
+      const foHttp = await callZenProvider(prompt, systemPrompt, zenFailoverModel, options, `utility-failover:${taskLabel}`)
+      if (foHttp && foHttp.content) {
+        console.log(`[LLM] Utility dùng ZEN FAILOVER ${zenFailoverModel} ✓ — task: ${taskLabel}`)
+        return foHttp
+      }
+      const foCli = await callOpenCodeCLIProvider(prompt, systemPrompt, zenFailoverModel, options, `utility-failover:${taskLabel}`)
+      if (foCli && foCli.content) {
+        console.log(`[LLM] Utility dùng ZEN FAILOVER (CLI) ${zenFailoverModel} ✓ — task: ${taskLabel}`)
+        return foCli
+      }
+    }
+    console.warn(`[LLM] Utility Zen thất bại toàn chuỗi (HTTP + CLI${utilModel !== (process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free') ? ' + failover' : ''}) — trả lỗi (NIM removed — Task 33) — task: ${taskLabel}`)
+    return {
+      content: '',
+      provider: 'zen',
+      model: utilModel,
+      error: `Utility "${taskLabel}" thất bại toàn chuỗi Zen (${utilModel} HTTP + CLI + failover) — NIM đã ngừng dùng cho LLM (Task 33)`,
+    }
   }
 
-  // ===== KIMI-K3 CHÍNH + FALLBACK CHAIN MODEL-FIRST (directive 2026-09-06) =====
-  // kimi-k3 fail → fallback tuần tự v4-pro → v4-flash → minimax-m3 NGAY (cùng
-  // key); hết cả chuỗi trên key mới chuyển key (callModelChainModelFirst).
-  if (isKimiK3Enforced()) {
-    return callAgentModelWithFallbackChain(prompt, systemPrompt, options, taskLabel)
-  }
-
-  // ===== LEGACY PATH (ENFORCE_KIMI_K3=false) — hành vi cũ =====
-  // Try NVIDIA only (single provider)
-  const result = await tryNvidia(prompt, systemPrompt, temp, maxTok, aId, aName)
-  if (result?.content) return result
-
-  console.log(`[LLM] NVIDIA failed for task "${taskLabel}" — no fallback (z-ai-sdk removed 2026-10-15)`)
-
+  // Zen chưa cấu hình (không có ZEN_API_KEY nào) — trả lỗi rõ ràng
   return {
     content: '',
     provider: 'none',
     model: 'none',
-    error: 'NVIDIA NIM failed (chuỗi NVIDIA + fallback chain đều lỗi — kiểm tra NVIDIA_API_KEY_1..4 trong .env)',
+    error: 'OpenCode Zen chưa cấu hình (set ZEN_API_KEY_1/2 trong .env) — NIM đã ngừng dùng cho LLM (Task 33), chỉ còn vai trò lõi embed',
   }
 }
 
@@ -4188,6 +3851,46 @@ function markZenKey429(index: number): void {
   zenKey429Until[index] = Date.now() + 60000
 }
 
+// ==================== ZEN REASONING EFFORT — CHẾ ĐỘ CAO NHẤT (Task 33) ====================
+// USER DIRECTIVE 2026-09-27: "2 model của zen là Nemotron 3 Ultra và Muse-Spark
+// 1.3 Contributor — chế độ cao nhất cho tôi (tôi chỉ biết model có Max nhưng
+// nếu có cao hơn thì thiết lập)".
+// Kiểm chứng metadata models.dev + test thực tế API (space-bunny reasoning_effort
+// max hoạt động thật — 36 reasoning tokens cho câu hỏi nhỏ; giá trị không hợp lệ
+// bị BỎ QUA ÂM THẦM — nên map sai = mất effort, không báo lỗi):
+//   - muse-spark-1.3-contributor-free : effort minimal|low|medium|high|xhigh
+//     → CAO NHẤT = xhigh (model KHÔNG có mức max)
+//   - muse-spark-1.2-contributor-free : effort như trên → xhigh
+//   - space-bunny-free               : effort low|medium|high|xhigh|max
+//     → CAO NHẤT = max (mức cao nhất toàn hệ Zen)
+//   - nemotron-3-ultra-free / nemotron-3.5-lightning-free / mimo: KHÔNG có
+//     effort knob (reasoning always-on, interleaved reasoning_content) — không
+//     gửi reasoning_effort (gửi cũng bị bỏ qua âm thầm).
+// Override toàn cục qua env ZEN_REASONING_EFFORT (vd "high" để tiết kiệm token
+// khi cần; đặt "none" để tắt hẳn) — mặc định dùng map chế độ cao nhất theo model.
+export function zenReasoningEffortForModel(model: string): string | undefined {
+  const forced = process.env.ZEN_REASONING_EFFORT?.trim().toLowerCase()
+  if (forced === 'none') return undefined
+  if (forced) return forced
+  if (model.startsWith('muse-spark-')) return 'xhigh' // cao nhất của muse-spark
+  if (model === 'space-bunny-free') return 'max' // cao nhất của space-bunny
+  return undefined // nemotron/lightning/mimo: không có effort knob
+}
+
+/** Danh sách model zen hợp lệ (dùng normalize agent DB cũ NIM → zen). */
+const ZEN_KNOWN_MODELS = new Set([
+  'nemotron-3-ultra-free',
+  'muse-spark-1.3-contributor-free',
+  'muse-spark-1.2-contributor-free',
+  'nemotron-3.5-lightning-free',
+  'mimo-v2.6-flash-free',
+  'space-bunny-free',
+])
+
+function isZenModelId(model: string): boolean {
+  return ZEN_KNOWN_MODELS.has(model.trim())
+}
+
 /**
  * Call OpenCode Zen provider (OpenAI-compatible API).
  * Used when agent's configured provider === 'zen'.
@@ -4221,6 +3924,10 @@ async function callZenProvider(
     max_tokens: maxTokens,
     temperature,
   }
+  // TASK 33 — chế độ reasoning CAO NHẤT theo model (muse-spark=xhigh,
+  // space-bunny=max; nemotron không có knob). Xem zenReasoningEffortForModel.
+  const effort = zenReasoningEffortForModel(model)
+  if (effort) body.reasoning_effort = effort
   if (options?.tools && options.tools.length > 0) {
     try {
       body.tools = sanitizeToolSchemasDeep(options.tools)
@@ -4512,6 +4219,12 @@ async function callOpenCodeCLIProvider(
       '--model', cliModel,
       '--format', 'json',
     ]
+    // TASK 33 — chế độ reasoning cao nhất qua --variant (CLI flag chính thống:
+    // "model variant (provider-specific reasoning effort, e.g., high, max, minimal)").
+    // Map cùng HTTP path: muse-spark=xhigh, space-bunny=max; model không có knob
+    // (nemotron/lightning/mimo) → không truyền (truyền giá trị lạ bị CLI từ chối).
+    const cliEffort = zenReasoningEffortForModel(model)
+    if (cliEffort) args.push('--variant', cliEffort)
     const child = spawn(OPENCODE_CLI_BIN, args, {
       cwd: process.env.OPENCODE_WORKSPACE || process.cwd(),
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -4789,7 +4502,13 @@ export function getZenStatus(): {
     keyCount: ZEN_API_KEYS.length,
     availableKeys: ZEN_API_KEYS.length - rateLimited,
     rateLimitedKeys: rateLimited,
-    models: ['nemotron-3-ultra-free', 'muse-spark-1.3-contributor-free'],
+    models: [
+      'nemotron-3-ultra-free',
+      'muse-spark-1.3-contributor-free',
+      'space-bunny-free',
+      'nemotron-3.5-lightning-free',
+      'mimo-v2.6-flash-free',
+    ],
   }
 }
 
@@ -4816,110 +4535,87 @@ export async function callLLMForAgent(
 ): Promise<LLMResult> {
   const { provider, model } = agentConfig
 
-  // ===== OPENCODE ZEN PROVIDER (2026-09-24 — user directive) =====
-  // Agents configured with provider='zen' route to OpenCode Zen (free coding
-  // models: nemotron-3-ultra-free for TL/Omega/Opus, muse-spark-1.3-contributor-free
-  // for generators). Zen check runs BEFORE model-first policy (kimi-k3 enforcement)
-  // so zen-routed agents use their configured model. On Zen failure → fall back
-  // to the existing NIM kimi-k3 fallback chain (safety net for transient Zen 429/5xx).
-  if (provider === 'zen' && isZenConfigured()) {
-    const zen = await callZenProvider(prompt, systemPrompt, model, options, `agent:${model}`)
-    if (zen && (zen.content || (zen.tool_calls && zen.tool_calls.length > 0))) {
-      const tcCount = zen.tool_calls?.length ?? 0
-      console.log(`[LLM] Agent dùng Zen ${model} ✓ (${tcCount} tool_calls, ${zen.tokensUsed ?? 0} tokens)`)
-      return zen
+  // ===== OPENCODE ZEN — LÕI DUY NHẤT CỦA AGENTS (TASK 33 — 2026-09-27) =====
+  // USER DIRECTIVE: "Không dùng các model của NVIDIA NIM cho các tác vụ agents
+  // nữa — riêng lõi embed tôi vẫn dùng của NVIDIA NIM; bỏ luôn cả z-ai."
+  // Toàn bộ agent call (goal-loop, research team, code-team, smolab, chat
+  // agents, self-direction...) route qua OpenCode Zen với model zen cấu hình
+  // TỪNG AGENT (DB AgentProfile). DB cũ còn sót provider='nvidia' +
+  // model NIM (kimi-k3/minimax/deepseek...) → normalize sang zen theo vai trò
+  // (seed migration cũng sửa DB lúc boot — đây là lớp an toàn runtime cho row
+  // chưa kịp migrate).
+  if (!isZenConfigured()) {
+    return {
+      content: '',
+      provider: 'zen',
+      model,
+      error: 'OpenCode Zen chưa cấu hình (ZEN_API_KEY_1/2 trong .env) — NIM đã ngừng dùng cho agents (Task 33), KHÔNG có fallback NIM',
     }
-    // Zen HTTP failed (FreeTierError 403 / 429 / 5xx) → try OpenCode CLI provider
-    // (free models chỉ gọi được qua CLI, không qua HTTP API)
-    console.warn(`[LLM] Agent Zen HTTP ${model} thất bại — thử OpenCode CLI provider: ${(zen?.error || 'unknown').slice(0, 100)}`)
-    const cliResult = await callOpenCodeCLIProvider(prompt, systemPrompt, model, options, `agent:${model}`)
-    if (cliResult && (cliResult.content || (cliResult.tool_calls && cliResult.tool_calls.length > 0))) {
-      const tcCount = cliResult.tool_calls?.length ?? 0
-      console.log(`[LLM] Agent dùng OpenCode CLI ${model} ✓ (${tcCount} tool_calls, ${cliResult.tokensUsed ?? 0} tokens)`)
-      return cliResult
-    }
-    // 2026-10-27 (phiên 4) — ZEN MODEL FAILOVER: model zen cấu hình fail cả
-    // HTTP + CLI (vd muse-spark-1.3-contributor-free bị RegionError geo-block
-    // trên server ngoài VN; chạy trực tiếp OK ở môi trường local VN của user)
-    // → thử 1 model zen dự phòng KHÁC (default space-bunny-free — stealth model
-    // ẩn danh, ctx 1M, zero-retention; KHÔNG phải model chính của agent nào,
-    // chỉ là safety net) trước khi rơi xuống NIM. Giữ agents sống ngay cả khi
-    // model chính không khả dụng ở vùng này — model cấu hình vẫn là model chính
-    // (agent dùng model dự phòng chỉ khi model chính thất bại hoàn toàn, có log
-    // rõ ràng để truy vết).
-    const zenFailoverModel = process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free'
-    if (model !== zenFailoverModel) {
-      console.warn(`[LLM] Agent Zen ${model} thất bại cả HTTP + CLI — thử ZEN FAILOVER model ${zenFailoverModel}`)
-      const foHttp = await callZenProvider(prompt, systemPrompt, zenFailoverModel, options, `agent-failover:${zenFailoverModel}`)
-      if (foHttp && (foHttp.content || (foHttp.tool_calls && foHttp.tool_calls.length > 0))) {
-        console.log(`[LLM] Agent dùng ZEN FAILOVER ${zenFailoverModel} ✓ (model chính ${model} không khả dụng ở vùng này) — ${foHttp.tool_calls?.length ?? 0} tool_calls`)
-        return foHttp
-      }
-      const foCli = await callOpenCodeCLIProvider(prompt, systemPrompt, zenFailoverModel, options, `agent-failover:${zenFailoverModel}`)
-      if (foCli && (foCli.content || (foCli.tool_calls && foCli.tool_calls.length > 0))) {
-        console.log(`[LLM] Agent dùng ZEN FAILOVER (CLI) ${zenFailoverModel} ✓ (model chính ${model} không khả dụng ở vùng này) — ${foCli.tool_calls?.length ?? 0} tool_calls`)
-        return foCli
-      }
-      console.warn(`[LLM] ZEN FAILOVER ${zenFailoverModel} cũng thất bại — xuống NIM chain`)
-    }
-    // Both Zen HTTP + CLI failed → fall back to NIM kimi-k3 chain (safety net)
-    console.warn(`[LLM] Agent Zen ${model} thất bại cả HTTP + CLI — fallback NIM kimi-k3 chain`)
-    const nimFallback = await callAgentModelWithFallbackChain(prompt, systemPrompt, options, `agent:${model}-zen-fallback`)
-    const tcCount = nimFallback.tool_calls?.length ?? 0
-    if (nimFallback.content || tcCount > 0) {
-      console.log(`[LLM] Agent fallback NIM ${nimFallback.model} ✓ (${tcCount} tool_calls) — Zen ${model} đã fail`)
-    }
-    return nimFallback
   }
 
-  // ===== Z-AI SDK PROVIDER (dựng lại 2026-09-06 — opt-in LLM_PROVIDER=zai) =====
-  // Agent calls (goal-loop, research team, code-team, smolab...) route qua
-  // z-ai-sdk khi bật — model NIM cấu hình bị bỏ qua (gateway tự chọn GLM).
-  if (isZaiProviderEnabled()) {
-    const zai = await callZaiProvider(prompt, systemPrompt, `agent:${model}`, options, 'agent')
-    if (zai) return zai
+  let zenModel = model
+  if (provider !== 'zen') {
+    // Model NIM cũ (chứa '/') hoặc id lạ → map về model zen theo vai trò agent:
+    // leadership (Omega/Opus/TL) = nemotron-3-ultra-free; còn lại = muse-spark.
+    const agentName = (options?.agentName || '').toUpperCase()
+    const isLeadership = /OMEGA|OPUS|MEGATRON|NEMESIS/.test(agentName)
+    zenModel = isZenModelId(model)
+      ? model
+      : isLeadership ? 'nemotron-3-ultra-free' : 'muse-spark-1.3-contributor-free'
+    console.warn(`[LLM] Agent cấu hình provider "${provider}/${model}" không còn dùng cho agents (NIM removed — Task 33) → route Zen ${zenModel}${options?.agentName ? ` (agent: ${options.agentName})` : ''}`)
   }
 
-  // ===== KIMI-K3 CHÍNH + FALLBACK CHAIN MODEL-FIRST (directive 2026-09-06) =====
-  // "deepseek v4 pro, deepseek v4 flash, minimax lần lượt làm fall back cho k3" —
-  // cấu hình model riêng của agent vẫn bị override về kimi-k3 (lõi chính); khi
-  // kimi-k3 fail → fallback tuần tự qua 3 lõi kia NGAY (cùng key), chỉ hết cả
-  // chuỗi mới chuyển key (callAgentModelWithFallbackChain).
-  if (isKimiK3Enforced()) {
-    if (model !== KIMI_K3_MODEL) {
-      // NOTE: không bracket trước tên model (dev.log strip ANSI ăn "[m") — xem ghi chú banner phía trên.
-      console.log(`[LLM] MODEL POLICY: agent cấu hình ${provider}/${model} → override → ${KIMI_K3_MODEL} (lõi chính) + fallback chain: ${AGENT_FALLBACK_CHAIN.join(' → ')}`)
+  // Zen HTTP (kèm reasoning_effort chế độ cao nhất — Task 33)
+  const zen = await callZenProvider(prompt, systemPrompt, zenModel, options, `agent:${zenModel}`)
+  if (zen && (zen.content || (zen.tool_calls && zen.tool_calls.length > 0))) {
+    const tcCount = zen.tool_calls?.length ?? 0
+    console.log(`[LLM] Agent dùng Zen ${zenModel} ✓ (${tcCount} tool_calls, ${zen.tokensUsed ?? 0} tokens)`)
+    return zen
+  }
+  // Zen HTTP failed (FreeTierError 403 / 429 / 5xx) → try OpenCode CLI provider
+  // (free models chỉ gọi được qua CLI, không qua HTTP API)
+  console.warn(`[LLM] Agent Zen HTTP ${zenModel} thất bại — thử OpenCode CLI provider: ${(zen?.error || 'unknown').slice(0, 100)}`)
+  const cliResult = await callOpenCodeCLIProvider(prompt, systemPrompt, zenModel, options, `agent:${zenModel}`)
+  if (cliResult && (cliResult.content || (cliResult.tool_calls && cliResult.tool_calls.length > 0))) {
+    const tcCount = cliResult.tool_calls?.length ?? 0
+    console.log(`[LLM] Agent dùng OpenCode CLI ${zenModel} ✓ (${tcCount} tool_calls, ${cliResult.tokensUsed ?? 0} tokens)`)
+    return cliResult
+  }
+  // 2026-10-27 (phiên 4) — ZEN MODEL FAILOVER: model zen cấu hình fail cả
+  // HTTP + CLI (vd muse-spark-1.3-contributor-free bị RegionError geo-block
+  // trên server ngoài VN; chạy trực tiếp OK ở môi trường local VN của user)
+  // → thử 1 model zen dự phòng KHÁC (default space-bunny-free — stealth model
+  // ẩn danh, ctx 1M, zero-retention; CHÍNH THỨC là model của 2 agent debug
+  // SENTINEL/LISMA từ Task 33, đồng thời là safety net cho agent khác) trước
+  // khi trả lỗi. Giữ agents sống ngay cả khi model chính không khả dụng ở
+  // vùng này — model cấu hình vẫn là model chính (agent dùng model dự phòng
+  // chỉ khi model chính thất bại hoàn toàn, có log rõ ràng để truy vết).
+  const zenFailoverModel = process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free'
+  if (zenModel !== zenFailoverModel) {
+    console.warn(`[LLM] Agent Zen ${zenModel} thất bại cả HTTP + CLI — thử ZEN FAILOVER model ${zenFailoverModel}`)
+    const foHttp = await callZenProvider(prompt, systemPrompt, zenFailoverModel, options, `agent-failover:${zenFailoverModel}`)
+    if (foHttp && (foHttp.content || (foHttp.tool_calls && foHttp.tool_calls.length > 0))) {
+      console.log(`[LLM] Agent dùng ZEN FAILOVER ${zenFailoverModel} ✓ (model chính ${zenModel} không khả dụng ở vùng này) — ${foHttp.tool_calls?.length ?? 0} tool_calls`)
+      return foHttp
     }
-    const result = await callAgentModelWithFallbackChain(prompt, systemPrompt, options, `agent:${model}`)
-    const tcCount = result.tool_calls?.length ?? 0
-    if (result.content || tcCount > 0) {
-      console.log(`[LLM] Agent dùng lõi ${result.model} ✓ (${tcCount} tool_calls) — agent cấu hình gốc: ${provider}/${model}`)
-      return result
+    const foCli = await callOpenCodeCLIProvider(prompt, systemPrompt, zenFailoverModel, options, `agent-failover:${zenFailoverModel}`)
+    if (foCli && (foCli.content || (foCli.tool_calls && foCli.tool_calls.length > 0))) {
+      console.log(`[LLM] Agent dùng ZEN FAILOVER (CLI) ${zenFailoverModel} ✓ (model chính ${zenModel} không khả dụng ở vùng này) — ${foCli.tool_calls?.length ?? 0} tool_calls`)
+      return foCli
     }
-    // (2026-10-15) z-ai-sdk fallback đã GỠ BỎ theo user directive — trả thẳng
-    // LLMResult lỗi của chuỗi NVIDIA để caller nhìn thấy nguyên nhân thật
-    // (key/timeout/model) thay vì mất thêm 15-20s chờ import sdk thất bại.
-    console.warn(`[LLM] Agent chain NVIDIA thất bại (no fallback — z-ai-sdk removed 2026-10-15): ${(result.error || 'unknown error').slice(0, 200)}`)
-    return result
+    console.warn(`[LLM] ZEN FAILOVER ${zenFailoverModel} cũng thất bại — TRẢ LỖI (fallback NIM đã gỡ bỏ theo user directive Task 33)`)
   }
-
-  // ===== LEGACY PATH (ENFORCE_KIMI_K3=false) — tôn trọng cấu hình per-agent =====
-  // Step 1: Try agent's configured provider+model
-  // Phase 1c fix: when native FC is enabled, models may return empty content
-  // with finish_reason='tool_calls'. The success check must consider tool_calls
-  // too — otherwise valid tool_calls responses would be treated as failure
-  // and unnecessarily fall back to the global pool (which drops the tools param).
-  const agentResult = await callLLMWithSpecificProvider(prompt, provider, model, systemPrompt, options)
-  if (agentResult && (agentResult.content || (agentResult.tool_calls && agentResult.tool_calls.length > 0))) {
-    const tcCount = agentResult.tool_calls?.length ?? 0
-    console.log(`[LLM] Agent used configured provider: ${provider}/${model} ✓ (${tcCount} tool_calls)`)
-    return agentResult
+  // TASK 33: hết chuỗi Zen (HTTP → CLI → failover) → trả lỗi rõ ràng cho
+  // caller nhìn thấy nguyên nhân thật. KHÔNG còn fallback NIM kimi-k3 chain —
+  // NIM chỉ còn vai trò lõi embed (embeddings.ts).
+  const lastError = zen?.error || cliResult?.error || 'unknown'
+  console.warn(`[LLM] Agent Zen ${zenModel} thất bại toàn chuỗi (HTTP + CLI${zenModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''}) — trả lỗi (NIM removed): ${String(lastError).slice(0, 200)}`)
+  return {
+    content: '',
+    provider: 'zen',
+    model: zenModel,
+    error: `Zen model "${zenModel}" thất bại toàn chuỗi (HTTP + CLI${zenModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''}): ${String(lastError).slice(0, 300)} — NIM đã ngừng dùng cho agents (Task 33)`,
   }
-
-  // Step 2: Fallback to global pool
-  // (FIX 2026-09-25: skipZenUtility — zen HTTP + CLI đã thử ở trên, không lặp lại)
-  console.log(`[LLM] Agent provider ${provider}/${model} failed, falling back to global pool`)
-  return callLLM(prompt, systemPrompt, 'agent-fallback', { ...options, skipZenUtility: true })
 }
 
 // ==================== UTILITY EXPORTS ====================

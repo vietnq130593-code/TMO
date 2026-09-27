@@ -133,7 +133,10 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'security',
     capable: 'Code review, tìm bugs, kiểm tra security, fix bugs, iterative refinement',
     provider: 'zen',
-    model: 'muse-spark-1.3-contributor-free',
+    // TASK 33 (2026-09-27 — user directive): SENTINEL là 1 trong 2 agent CHUYÊN
+    // DEBUG (cùng LISMA của research team) → dùng space-bunny-free (stealth
+    // reasoning model, ctx 1M/out 512k, effort max) thay vì muse-spark.
+    model: 'space-bunny-free',
     temperature: 0.2,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -307,21 +310,38 @@ async function _doSeed(): Promise<boolean> {
       const existing = await db.agentProfile.findUnique({ where: { name: def.name } })
 
       if (existing) {
-        // MODEL SYNC (2026-10-16 — USER DIRECTIVE minimax-m3 tạm làm lõi chính):
-        // rows seed từ default cũ 2026-08-31 (kimi-k3 — giá trị do CODE sync,
-        // không phải user chọn) → đồng bộ về def.model (minimax-m3). Model KHÁC
-        // (user tự cấu hình) giữ nguyên — tôn trọng customization. Runtime
-        // callLLMForAgent enforce AGENT_PRIMARY_MODEL anyway — sync này chỉ để
-        // hiển thị UI + legacy path (ENFORCE_KIMI_K3=false) khớp lõi chính.
-        if (existing.model === 'moonshotai/kimi-k3' && def.model !== existing.model) {
+        // TASK 33 (2026-09-27) — NIM→ZEN MIGRATION (chạy mỗi boot, idempotent):
+        // rows còn sót provider NIM hoặc model NIM (kimi-k3/minimax-m3/deepseek/
+        // nemotron-550b/gpt-oss — id NIM luôn chứa '/') là giá trị do CODE sync
+        // hoặc DB cũ từ thời NIM, KHÔNG phải lựa chọn của user (user directive
+        // 2026-09-27: NIM bỏ hoàn toàn khỏi tác vụ agents) → normalize về def
+        // (provider zen + model zen theo vai trò). Model zen KHÁC user tự chọn →
+        // GIỮ NGUYÊN (tôn trọng customization — chỉ sửa giá trị NIM sót).
+        const isNimModelId = (m: string) => m.includes('/')
+        if ((existing.provider !== 'zen' || isNimModelId(existing.model)) && (existing.provider !== def.provider || existing.model !== def.model)) {
+          try {
+            await db.agentProfile.update({
+              where: { id: existing.id },
+              data: { provider: def.provider, model: def.model },
+            })
+            console.log(`[CodeTeam] NIM→Zen sync: ${def.name} ${existing.provider}/${existing.model} → ${def.provider}/${def.model} (Task 33 — NIM removed khỏi agents)`)
+          } catch (syncErr) {
+            console.warn(`[CodeTeam] NIM→Zen sync ${def.name} thất bại (không chặn boot):`, syncErr)
+          }
+        }
+        // TASK 33 — debug specialist sync: SENTINEL đổi model chính sang
+        // space-bunny-free (user directive). Row còn model mặc định cũ
+        // muse-spark (do CODE seed Task 28, không phải user chọn) → sync lên
+        // def.model. Model zen khác do user cấu hình → giữ nguyên.
+        if (def.name === 'SENTINEL' && existing.model === 'muse-spark-1.3-contributor-free' && def.model !== existing.model) {
           try {
             await db.agentProfile.update({
               where: { id: existing.id },
               data: { model: def.model },
             })
-            console.log(`[CodeTeam] Model sync: ${def.name} moonshotai/kimi-k3 (lõi chính cũ 2026-08-31) → ${def.model} (lõi chính tạm thời 2026-10-16)`)
+            console.log(`[CodeTeam] Debug specialist sync: SENTINEL muse-spark → ${def.model} (Task 33 — agent chuyên debug dùng space-bunny)`)
           } catch (syncErr) {
-            console.warn(`[CodeTeam] Model sync ${def.name} thất bại (không chặn boot):`, syncErr)
+            console.warn(`[CodeTeam] SENTINEL debug sync thất bại (không chặn boot):`, syncErr)
           }
         }
         // FIX 2026-09-15 #10 (P4 — audit Team Code): marker-migration cho

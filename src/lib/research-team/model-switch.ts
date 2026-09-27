@@ -20,9 +20,14 @@ import type { ModelSwitchEntry } from './types'
 import type { AgentId } from './constants'
 
 /**
- * Stack đầy đủ theo thứ tự bậc (TB-01 §2):
- * bậc 0 = model chính (SSOT: AGENT_PRIMARY_MODEL từ llm.ts),
- * bậc 1–3 = fallback chain (SSOT: AGENT_FALLBACK_CHAIN từ llm.ts).
+ * Stack đầy đủ theo thứ tự bậc (TB-01 §2) — ZEN THUẦN (Task 33 — 2026-09-27:
+ * NIM đã gỡ khỏi tác vụ agents, chỉ còn lõi embed):
+ * bậc 0 = model chính (SSOT: AGENT_PRIMARY_MODEL từ llm.ts — muse-spark zen),
+ * bậc 1–3 = fallback chain (SSOT: AGENT_FALLBACK_CHAIN — space-bunny →
+ * lightning → mimo, toàn bộ zen).
+ * Lưu ý: đây là stack MODEL-SWITCH quan sát (DR-C7 — record khi LLM trả model
+ * khác primary); runtime failover thật của callLLMForAgent là HTTP → CLI →
+ * ZEN FAILOVER space-bunny (llm.ts), không chạy qua stack này.
  */
 export function getModelStack(): string[] {
   return [AGENT_PRIMARY_MODEL, ...AGENT_FALLBACK_CHAIN]

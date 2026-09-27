@@ -13,7 +13,7 @@ import { checkNeo4jHealth } from '@/lib/neo4j'
 import { checkR2Health } from '@/lib/r2-storage'
 import { checkSupabaseHealth } from '@/lib/supabase-sync'
 import { db } from '@/lib/db'
-import { getNvidiaModels, getProviderDiagnostics, getDailyQuotaStatus, getModelBlockBreakers, isZaiRoutingEnabled, getZai429Status, getZenStatus } from '@/lib/llm'
+import { getProviderDiagnostics, getDailyQuotaStatus, getModelBlockBreakers, getZenStatus } from '@/lib/llm'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,33 +36,10 @@ function checkLLMHealthSync(): Record<string, { available: boolean; model: strin
   const hasNvidiaKeys = !!(process.env.NVIDIA_API_KEY_1 || process.env.NVIDIA_API_KEY_2 || process.env.NVIDIA_API_KEY_3 || process.env.NVIDIA_API_KEY_4)
   const result: Record<string, { available: boolean; model: string; error?: string; active?: boolean; note?: string }> = {}
 
-  // ━━ Z-AI SDK provider (dựng lại 2026-09-06 — LLM_PROVIDER=zai) ━━
-  // Khi bật: TOÀN BỘ lõi (agent + chat + utility + extraction) route qua
-  // z-ai-web-dev-sdk (GLM gateway). NIM giữ làm fallback (sdk init fail →
-  // tự fall về chuỗi NIM). Circuit 429 ZAI cũng được expose để theo dõi.
-  const zaiActive = isZaiRoutingEnabled()
-  result['zai-sdk'] = {
-    available: zaiActive,
-    model: 'glm-4-plus (gateway chọn)',
-    active: zaiActive,
-    error: zaiActive ? undefined : 'LLM_PROVIDER != zai — không bật (NIM-only)',
-    note: zaiActive
-      ? `ĐANG ĐIỀU HÀNH toàn bộ lõi (agent+chat+utility+extraction) · 429-circuit: ${getZai429Status().active ? `MỞ (còn ${Math.ceil(getZai429Status().remainingMs / 1000)}s, trips=${getZai429Status().trips})` : 'đóng (không rate-limit)'}`
-      : undefined,
-  }
+  // (2026-09-27 TASK 33) z-ai-sdk provider ĐÃ GỠ BỎ toàn bộ theo user directive
+  // ("bỏ luôn cả z-ai" — sdk chỉ tồn tại trong sandbox, không có trên máy local).
 
-  result.nvidia = {
-    available: hasNvidiaKeys,
-    model: getNvidiaModels()[0] || 'minimaxai/minimax-m3',
-    active: !zaiActive,
-    error: !hasNvidiaKeys ? 'No NVIDIA API keys configured' : undefined,
-    note: zaiActive && hasNvidiaKeys ? 'fallback (sdk init fail → NIM chain)' : undefined,
-  }
-
-  // ━━ OpenCode Zen provider (2026-09-24 — user directive) ━━
-  // Free coding models (nemotron-3-ultra-free + muse-spark-1.3-contributor-free).
-  // Agents configured provider='zen' route here BEFORE model-first policy.
-  // 2-key rotation pool; Zen fail → NIM kimi-k3 fallback chain.
+  // ━━ OpenCode Zen — LÕI DUY NHẤT cho agents/utility/extraction (Task 33) ━━
   const zenStatus = getZenStatus()
   result.zen = {
     available: zenStatus.configured,
@@ -70,8 +47,17 @@ function checkLLMHealthSync(): Record<string, { available: boolean; model: strin
     active: zenStatus.configured,
     error: !zenStatus.configured ? 'No ZEN_API_KEY configured' : undefined,
     note: zenStatus.configured
-      ? `${zenStatus.keyCount} key(s) · ${zenStatus.availableKeys} available · ${zenStatus.rateLimitedKeys} rate-limited · nemotron-3-ultra-free (TL/Omega/Opus) + muse-spark-1.3-contributor-free (G1-G3/ALISTA)`
+      ? `${zenStatus.keyCount} key(s) · ${zenStatus.availableKeys} available · ${zenStatus.rateLimitedKeys} rate-limited · nemotron-3-ultra-free (Omega/Opus/TL) + muse-spark-1.3-contributor-free (generators) + space-bunny-free (SENTINEL/LISMA debug + failover)`
       : undefined,
+  }
+
+  // ━━ NVIDIA NIM — CHỈ còn lõi EMBED (Task 33) ━━
+  result.nvidia = {
+    available: hasNvidiaKeys,
+    model: 'nvidia/nemotron-3-embed-1b (embed only)',
+    active: hasNvidiaKeys,
+    error: !hasNvidiaKeys ? 'No NVIDIA API keys configured (embed sẽ không chạy)' : undefined,
+    note: hasNvidiaKeys ? 'CHỈ dùng cho lõi embed (generateEmbedding) — NIM đã gỡ khỏi tác vụ agents/utility/extraction (Task 33)' : undefined,
   }
 
   return result

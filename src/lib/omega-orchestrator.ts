@@ -65,16 +65,19 @@ const CONSULT_MAX_TOKENS = 1100
  *  prober (llm.ts) trip breaker cho lõi hang nên consult thường ~giây. */
 const CONSULT_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.OMEGA_CONSULT_TIMEOUT_MS || '600000', 10) || 600_000)
 
-/** Omega fallback khi DB không có profile (fail-open, vẫn tư vấn được) */
-const OMEGA_FALLBACK = { provider: 'nvidia', model: 'minimaxai/minimax-m3' } // 2026-10-16: lõi chính tạm thời
+/** Omega fallback khi DB không có profile (fail-open, vẫn tư vấn được)
+ *  TASK 33 (2026-09-27): đổi từ nvidia/minimax-m3 (NIM đã gỡ khỏi agents) sang
+ *  zen/nemotron-3-ultra-free — lõi chuẩn của Omega theo chính sách model phiên 6. */
+const OMEGA_FALLBACK = { provider: 'zen', model: 'nemotron-3-ultra-free' }
 
 /**
- * FIX (review 2026-09-08 — directive 2026-09-05): 2 model dưới là LÕI EXTRACTION
- * (chỉ phục vụ trích xuất tài liệu KB) — CẤM dùng làm model chat cho agent do
- * Omega tạo (agent chat bằng extraction core = chất lượng tệ + sai directive).
+ * FIX (review 2026-09-08 — directive 2026-09-05): 2 model dưới là lõi extraction
+ * NIM cũ — CẤM dùng làm model chat cho agent do Omega tạo (agent chat bằng
+ * extraction core = chất lượng tệ + sai directive). Task 33: NIM đã gỡ khỏi
+ * agents — giữ Set này để chặn cả giá trị sót từ DB/instruction cũ.
  */
 const EXTRACTION_ONLY_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b', 'openai/gpt-oss-120b'])
-const CHAT_MODEL_HINT = 'minimaxai/minimax-m3 (lõi chính tạm thời 2026-10-16 — khuyến nghị) | moonshotai/kimi-k3 | deepseek-ai/deepseek-v4-pro-0813 | deepseek-ai/deepseek-v4-flash-0731 (3 lõi sau hiện HANG phía NIM — fallback)'
+const CHAT_MODEL_HINT = 'nemotron-3-ultra-free (Omega/Opus/TL — khuyến nghị) | muse-spark-1.3-contributor-free (generators) | space-bunny-free (debug SENTINEL/LISMA) — toàn bộ qua provider zen (Task 33)'
 
 /** Toolset mặc định cho agent mới nếu Omega không chỉ định — luôn kèm
  *  escalate_problem (agent mới được hỏi Omega khi kẹt — đúng cơ chế
