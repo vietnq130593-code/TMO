@@ -50,28 +50,21 @@ export const NVIDIA_CORE_CONFIG = {
 } as const
 
 
-/** OpenCode Zen model configuration — free coding models (2026-09-24 user directive)
- *  2 free cores: nemotron-3-ultra-free (TL/Omega/Opus orchestration) +
- *  muse-spark-1.3-contributor-free (G1-G3/ALISTA implementation).
- *  Zen check runs BEFORE model-first policy; Zen fail → NIM kimi-k3 chain. */
+/** OpenCode Zen model configuration — Phiên 7 (user directive 2026-09-28:
+ *  "đổi 2 lõi Nemotron + Muse Spark thành Space-Bunny-Free, đo được token")
+ *  Toàn bộ 13 agents = space-bunny-free — model free DUY NHẤT Zen mở cho
+ *  oc_sk API key (nemotron-ultra/muse-spark → 403 FreeTierError — verify cả
+ *  sandbox lẫn máy user). Token đo ở CẢ 2 đường: provider 'zen' (HTTP trực
+ *  tiếp — đường chính) + 'zen-cli' (OpenCode CLI subprocess — fallback). */
 export const ZEN_CORE_CONFIG = {
-  nemotron: {
-    label: 'Nemotron 3 Ultra Free',
-    icon: '🧠',
+  bunny: {
+    label: 'Space-Bunny-Free',
+    icon: '🐰',
     color: 'text-emerald-400',
     headerBg: 'bg-emerald-950/60',
     barColor: '#10b981',
-    model: 'nemotron-3-ultra-free',
-    role: 'TL / Omega / Opus (orchestration + reasoning)',
-  },
-  muse: {
-    label: 'Muse Spark 1.3 Free',
-    icon: '⚡',
-    color: 'text-fuchsia-400',
-    headerBg: 'bg-fuchsia-950/60',
-    barColor: '#d946ef',
-    model: 'muse-spark-1.3-contributor-free',
-    role: 'G1-G3 / ALISTA (coding + implementation)',
+    model: 'space-bunny-free',
+    role: 'Toàn bộ 13 agents — TL / Omega / Opus / MEGATRON / NEMESIS + G1-G3 / ALISTA',
   },
 } as const
 
@@ -126,10 +119,14 @@ export function TokenUsageSection({ health }: { health: HealthResponse | null })
   const displayData = selectedDate ? selectedDateUsage : todayUsage
 
   // Get models data from display data (per-provider)
-  // zen-cli = OpenCode CLI subprocess provider (free models chạy được qua CLI)
-  // zen = HTTP API provider (FreeTierError 403 → luôn 0 tokens)
+  // Phiên 7: space-bunny-free gọi TRỰC TIẾP qua HTTP → provider 'zen';
+  // 'zen-cli' = OpenCode CLI subprocess (đường fallback). Gộp 2 nguồn.
   const nvidiaModels = displayData?.models?.['nvidia'] || {}
-  const zenModels = displayData?.models?.['zen-cli'] || {}
+  const zenHttpModels = displayData?.models?.['zen'] || {}
+  const zenCliModels = displayData?.models?.['zen-cli'] || {}
+  const zenAllModels: Record<string, number> = {}
+  for (const [m, t] of Object.entries(zenHttpModels)) zenAllModels[m] = (zenAllModels[m] || 0) + t
+  for (const [m, t] of Object.entries(zenCliModels)) zenAllModels[m] = (zenAllModels[m] || 0) + t
 
   // Calculate per-group totals
   const extractionTotal = NVIDIA_CORE_CONFIG.extraction.models.reduce(
@@ -138,9 +135,12 @@ export function TokenUsageSection({ health }: { health: HealthResponse | null })
   const agentTotal = NVIDIA_CORE_CONFIG.agent.models.reduce(
     (sum, m) => sum + (nvidiaModels[m.key] || 0), 0
   )
-  const zenNemotronTokens = zenModels['nemotron-3-ultra-free'] || 0
-  const zenMuseTokens = zenModels['muse-spark-1.3-contributor-free'] || 0
-  const zenTotal = zenNemotronTokens + zenMuseTokens
+  const zenBunnyHttpTokens = zenHttpModels['space-bunny-free'] || 0
+  const zenBunnyCliTokens = zenCliModels['space-bunny-free'] || 0
+  const zenBunnyTokens = zenBunnyHttpTokens + zenBunnyCliTokens
+  const zenTotal = Object.values(zenAllModels).reduce((a, b) => a + b, 0)
+  // Models cũ (nemotron/muse phiên 5-6) — chỉ còn trong dữ liệu lịch sử ngày trước
+  const zenOtherTokens = zenTotal - zenBunnyTokens
 
   // Get NVIDIA key data
   const nvidiaKeys = displayData?.slots?.['nvidia'] || {}
@@ -290,14 +290,14 @@ export function TokenUsageSection({ health }: { health: HealthResponse | null })
                 <div className="flex items-center gap-1.5">
                   <span className="text-sm">🌿</span>
                   <span className="text-xs font-bold text-emerald-400">OpenCode Zen</span>
-                  <span className="text-[9px] text-stone-500">(2 free models — 13 agents)</span>
+                  <span className="text-[9px] text-stone-500">(space-bunny-free — 13 agents)</span>
                 </div>
                 <span className="text-[10px] font-bold tabular-nums text-stone-300">{zenTotal > 0 ? formatNumber(zenTotal) : '—'}</span>
               </div>
             </div>
             <div className="divide-y divide-stone-700/50">
               {Object.values(ZEN_CORE_CONFIG).map((cfg) => {
-                const tokens = cfg.model === 'nemotron-3-ultra-free' ? zenNemotronTokens : zenMuseTokens
+                const tokens = zenBunnyTokens
                 const pct = zenTotal > 0 ? (tokens / zenTotal) * 100 : 0
                 return (
                   <div key={cfg.model} className="px-3 py-2.5 hover:bg-slate-950/60 transition-colors">
@@ -318,13 +318,35 @@ export function TokenUsageSection({ health }: { health: HealthResponse | null })
                         <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.max(pct, 3)}%`, backgroundColor: cfg.barColor }} />
                       </div>
                     )}
+                    {/* 2 đường gọi của space-bunny-free: HTTP trực tiếp + CLI fallback */}
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <div className="rounded-md bg-slate-950/50 border border-emerald-500/20 px-2 py-1.5 flex items-center justify-between gap-1">
+                        <span className="text-[8px] text-stone-500 truncate">⚡ HTTP trực tiếp</span>
+                        <span className={`text-[9px] font-semibold tabular-nums flex-shrink-0 ${zenBunnyHttpTokens > 0 ? 'text-emerald-400' : 'text-stone-600'}`}>
+                          {zenBunnyHttpTokens > 0 ? formatNumber(zenBunnyHttpTokens) : '—'}
+                        </span>
+                      </div>
+                      <div className="rounded-md bg-slate-950/50 border border-emerald-500/20 px-2 py-1.5 flex items-center justify-between gap-1">
+                        <span className="text-[8px] text-stone-500 truncate">🛡 CLI fallback</span>
+                        <span className={`text-[9px] font-semibold tabular-nums flex-shrink-0 ${zenBunnyCliTokens > 0 ? 'text-emerald-400' : 'text-stone-600'}`}>
+                          {zenBunnyCliTokens > 0 ? formatNumber(zenBunnyCliTokens) : '—'}
+                        </span>
+                      </div>
+                    </div>
+                    {/* Models cũ (nemotron/muse) — chỉ còn ở dữ liệu lịch sử các ngày trước */}
+                    {zenOtherTokens > 0 && (
+                      <div className="mt-1.5 flex items-center justify-between">
+                        <span className="text-[8px] text-stone-600 truncate" title="nemotron-3-ultra-free / muse-spark-1.3-contributor-free (phiên 5-6)">+ models cũ phiên 5-6 (lịch sử)</span>
+                        <span className="text-[9px] font-semibold tabular-nums text-stone-500">{formatNumber(zenOtherTokens)}</span>
+                      </div>
+                    )}
                   </div>
                 )
               })}
             </div>
             <div className="px-3 py-1.5 bg-slate-950/40 border-t border-stone-700/40">
               <p className="text-[8px] text-stone-500">
-                Provider: OpenCode CLI subprocess (zen-cli) — free models gọi qua CLI bypass FreeTierError 403. Zen fail → fallback NIM kimi-k3 chain.
+                Provider: OpenCode Zen — space-bunny-free gọi trực tiếp qua HTTP (oc_sk key, không 403); CLI (zen-cli) là đường fallback. Token gộp cả 2 đường.
               </p>
             </div>
           </div>
