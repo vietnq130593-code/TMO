@@ -89,6 +89,10 @@ worklog.md
 !/scripts/test-llm-model.ts
 # NGOẠI LỆ: script test agent/chat/utility qua Z-AI SDK (bun scripts/test-agent-zai.ts)
 !/scripts/test-agent-zai.ts
+# NGOẠI LỆ: setup-hooks.mjs được package.json script "setup"/"setup:hooks" gọi —
+# thiếu file này thì `bun run setup` trên fresh clone fail ở bước 3 (Task 36,
+# user report 2026-10: setup fail "Cannot find module scripts/setup-hooks.mjs").
+!/scripts/setup-hooks.mjs
 
 # Tool results (dev artifacts)
 /tool-results/
