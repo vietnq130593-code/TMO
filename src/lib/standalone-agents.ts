@@ -326,10 +326,10 @@ LEARNING & MEMORY + ĐỊNH DẠNG BÁO CÁO
     capable:
       'Quản trị vận hành hệ thống TMO: phân loại công việc theo chức trách agents, điều phối/giao việc đúng agent (delegate/dispatch/code team), giám sát quá trình, nghiệm thu & đánh giá kết quả agents bằng bằng chứng, tổng hợp báo cáo, tạo agent mới, quản lý automation & tool-access, tư vấn khi agents escalate, kiểm định nhanh (file_read/lint/type_check/đếm máy)',
     provider: 'zen',
-    // 2026-09-24 (USER DIRECTIVE): Omega là tổng chỉ huy on-demand → chạy
-    // trên Nemotron 3 Ultra free (OpenCode Zen) — orchestration + reasoning.
-    // llm.ts callLLMForAgent route provider='zen' trước model-first policy.
-    model: 'nemotron-3-ultra-free',
+    // PHIÊN 7 (Task 37 — 2026-10-28, user directive): TẤT CẢ agents dùng
+    // space-bunny-free — model free DUY NHẤT còn mở cho oc_sk API key sau
+    // policy Zen ~25-26/09 (nemotron-ultra/muse-spark → 403 FreeTierError).
+    model: 'space-bunny-free',
     temperature: 0.7,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: null,
@@ -514,10 +514,8 @@ LEARNING & MEMORY + ĐỊNH DẠNG BÁO CÁO
       + 'viết proposal bảo trì 4 phần chuẩn Self-Direction kèm tiêu chí xác nhận hiệu quả '
       + '(metric + target + recheck window) — machine-checkable',
     provider: 'zen',
-    // 2026-09-24 (USER DIRECTIVE): ALISTA là kỹ sư chẩn đoán + đề xuất → chạy
-    // trên Muse Spark 1.3 Contributor free (OpenCode Zen) — coding/implementation.
-    // llm.ts callLLMForAgent route provider='zen' trước model-first policy.
-    model: 'muse-spark-1.3-contributor-free',
+    // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note Omega).
+    model: 'space-bunny-free',
     temperature: 0.3, // chẩn đoán cần chính xác, ít sáng tạo
     maxTokens: 16384,
     team: null, // standalone — không thuộc team nào
@@ -717,6 +715,23 @@ async function _doStandaloneSeed(): Promise<boolean> {
             console.log(`[Standalone] NIM→Zen sync: ${def.name} ${existing.provider}/${existing.model} → ${def.provider}/${def.model} (Task 33 — NIM removed khỏi agents)`)
           } catch (syncErr) {
             console.warn(`[Standalone] NIM→Zen sync ${def.name} thất bại (không chặn boot):`, syncErr)
+          }
+        }
+
+        // PHIÊN 7 (2026-10-28 — TASK 37, user directive "TẤT CẢ agent dùng
+        // space-bunny-free"): row còn model mặc định cũ của CODE (phiên 6
+        // nemotron-3-ultra-free / phiên 5 muse-spark — do seed sync, KHÔNG phải
+        // user chọn) → sync lên def.model (space-bunny-free). Model KHÁC do
+        // user tự chọn → GIỮ NGUYÊN (tôn trọng customization).
+        if ((existing.model === 'nemotron-3-ultra-free' || existing.model === 'muse-spark-1.3-contributor-free') && def.model !== existing.model) {
+          try {
+            await db.agentProfile.update({
+              where: { name: def.name },
+              data: { model: def.model },
+            })
+            console.log(`[Standalone] Phiên-7 sync: ${def.name} ${existing.model} → ${def.model} (Task 37 — tất cả agents dùng space-bunny-free)`)
+          } catch (syncErr) {
+            console.warn(`[Standalone] Phiên-7 sync ${def.name} thất bại (không chặn boot):`, syncErr)
           }
         }
 

@@ -66,9 +66,9 @@ const CONSULT_MAX_TOKENS = 1100
 const CONSULT_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.OMEGA_CONSULT_TIMEOUT_MS || '600000', 10) || 600_000)
 
 /** Omega fallback khi DB không có profile (fail-open, vẫn tư vấn được)
- *  TASK 33 (2026-09-27): đổi từ nvidia/minimax-m3 (NIM đã gỡ khỏi agents) sang
- *  zen/nemotron-3-ultra-free — lõi chuẩn của Omega theo chính sách model phiên 6. */
-const OMEGA_FALLBACK = { provider: 'zen', model: 'nemotron-3-ultra-free' }
+ *  TASK 37 (2026-10-28 — PHIÊN 7): TẤT CẢ agents dùng space-bunny-free — model
+ *  free DUY NHẤT còn mở cho oc_sk API key sau policy Zen ~25-26/09. */
+const OMEGA_FALLBACK = { provider: 'zen', model: 'space-bunny-free' }
 
 /**
  * FIX (review 2026-09-08 — directive 2026-09-05): 2 model dưới là lõi extraction
@@ -77,7 +77,7 @@ const OMEGA_FALLBACK = { provider: 'zen', model: 'nemotron-3-ultra-free' }
  * agents — giữ Set này để chặn cả giá trị sót từ DB/instruction cũ.
  */
 const EXTRACTION_ONLY_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b', 'openai/gpt-oss-120b'])
-const CHAT_MODEL_HINT = 'nemotron-3-ultra-free (Omega/Opus/TL — khuyến nghị) | muse-spark-1.3-contributor-free (generators) | space-bunny-free (debug SENTINEL/LISMA) — toàn bộ qua provider zen (Task 33)'
+const CHAT_MODEL_HINT = 'space-bunny-free (TẤT CẢ agents — phiên 7, Task 37; model free duy nhất mở cho oc_sk key) — provider zen'
 
 /** Toolset mặc định cho agent mới nếu Omega không chỉ định — luôn kèm
  *  escalate_problem (agent mới được hỏi Omega khi kẹt — đúng cơ chế
@@ -374,12 +374,13 @@ export async function createAgentByOmega(params: {
 
   // FIX 2026-09-25 (E2E tool audit): default provider → zen (13/13 agents đang chạy
   // zen; nvidia keys chết — agent mới tạo với nvidia sẽ không gọi được LLM).
-  // Default model theo provider: zen → nemotron-3-ultra-free, nvidia → minimax-m3.
+  // Default model theo provider (PHIÊN 7 — Task 37): zen → space-bunny-free
+  // (model free duy nhất mở cho oc_sk key; nvidia legacy → minimax-m3).
   const providerValue = provider || 'zen'
   if (!VALID_PROVIDERS.includes(providerValue)) {
     return { success: false, error: `Provider "${providerValue}" không hợp lệ. Chọn: ${VALID_PROVIDERS.join(', ')}` }
   }
-  const modelValue = model || (providerValue === 'zen' ? 'nemotron-3-ultra-free' : 'minimaxai/minimax-m3')
+  const modelValue = model || (providerValue === 'zen' ? 'space-bunny-free' : 'minimaxai/minimax-m3')
   const models = PROVIDER_MODELS[providerValue] || []
   if (!models.some(m => m.id === modelValue)) {
     return { success: false, error: `Model "${modelValue}" không thuộc provider "${providerValue}". Models khả dụng: ${models.map(m => m.id).join(', ')}` }

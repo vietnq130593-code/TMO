@@ -54,7 +54,10 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'programming',
     capable: 'Phân tích thị giác, routing decision, code UI/UX, verify kết quả, điều phối team',
     provider: 'zen',
-    model: 'nemotron-3-ultra-free',
+    // PHIÊN 7 (Task 37 — 2026-10-28, user directive): TẤT CẢ agents dùng
+    // space-bunny-free — model free DUY NHẤT còn mở cho oc_sk API key sau
+    // policy Zen ~25-26/09 (nemotron-ultra/muse-spark → 403 FreeTierError).
+    model: 'space-bunny-free',
     temperature: 0.5,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -93,7 +96,8 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'programming',
     capable: 'Thiết kế kiến trúc, DB schema, API design, component tree, state management, security architecture',
     provider: 'zen',
-    model: 'muse-spark-1.3-contributor-free',
+    // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note MEGATRON).
+    model: 'space-bunny-free',
     temperature: 0.4,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -112,7 +116,8 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'programming',
     capable: 'Code TypeScript/React/Next.js, implement API, database operations, error handling',
     provider: 'zen',
-    model: 'muse-spark-1.3-contributor-free',
+    // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note MEGATRON).
+    model: 'space-bunny-free',
     temperature: 0.3,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -161,7 +166,8 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     domain: 'programming',
     capable: 'Tối ưu performance, refactor code, scalability, best practices, UI+Backend integration',
     provider: 'zen',
-    model: 'muse-spark-1.3-contributor-free',
+    // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note MEGATRON).
+    model: 'space-bunny-free',
     temperature: 0.3,
     maxTokens: 32768, // 21-d: nâng cap để agent viết file lớn (file_write append) — cap không phải target
     team: 'code',
@@ -342,6 +348,23 @@ async function _doSeed(): Promise<boolean> {
             console.log(`[CodeTeam] Debug specialist sync: SENTINEL muse-spark → ${def.model} (Task 33 — agent chuyên debug dùng space-bunny)`)
           } catch (syncErr) {
             console.warn(`[CodeTeam] SENTINEL debug sync thất bại (không chặn boot):`, syncErr)
+          }
+        }
+        // PHIÊN 7 (2026-10-28 — TASK 37, user directive "TẤT CẢ agent dùng
+        // space-bunny-free"): row còn model mặc định cũ của CODE (phiên 6
+        // nemotron-3-ultra-free / phiên 5 muse-spark — do seed sync, KHÔNG phải
+        // user chọn) → sync lên def.model (space-bunny-free). Model KHÁC do
+        // user tự chọn (vd sau 'opencode auth login' quay lại nemotron) →
+        // GIỮ NGUYÊN (tôn trọng customization).
+        if ((existing.model === 'nemotron-3-ultra-free' || existing.model === 'muse-spark-1.3-contributor-free') && def.model !== existing.model) {
+          try {
+            await db.agentProfile.update({
+              where: { id: existing.id },
+              data: { model: def.model },
+            })
+            console.log(`[CodeTeam] Phiên-7 sync: ${def.name} ${existing.model} → ${def.model} (Task 37 — tất cả agents dùng space-bunny-free)`)
+          } catch (syncErr) {
+            console.warn(`[CodeTeam] Phiên-7 sync ${def.name} thất bại (không chặn boot):`, syncErr)
           }
         }
         // FIX 2026-09-15 #10 (P4 — audit Team Code): marker-migration cho

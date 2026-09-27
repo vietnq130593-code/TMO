@@ -286,7 +286,10 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     capable:
       'Phân tích request, chấm complexity (3 tiêu chí → tier T1/T2/T3), decompose mission thành parts, giao việc G1/G2/G3, monitor worklog + KB capture, PIVOT/CONTINUE/ESCALATE decisions, tổng hợp final report + Proposal items, chủ trì 5 councils (①②③④⑤).',
     provider: 'zen',
-    model: 'nemotron-3-ultra-free',
+    // PHIÊN 7 (Task 37 — 2026-10-28, user directive): TẤT CẢ agents dùng
+    // space-bunny-free — model free DUY NHẤT còn mở cho oc_sk API key sau
+    // policy Zen ~25-26/09 (nemotron-ultra/muse-spark → 403 FreeTierError).
+    model: 'space-bunny-free',
     temperature: 0.3, // NEMESIS chặt — không sáng tạo quá mức
     maxTokens: 16384,
     team: 'research',
@@ -302,7 +305,8 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     capable:
       'Decompose task thành N hướng explore, dispatch sub-agents (≤20/part, ≤25/round), synthesize kết quả SA, flag dual-interpretation conflicts (TC-03), chuẩn bị spec cho BELI, ghi KB lessons về explore approach.',
     provider: 'zen',
-    model: 'muse-spark-1.3-contributor-free',
+    // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note NEMESIS).
+    model: 'space-bunny-free',
     temperature: 0.5, // SIVIL sáng tạo — explore nhiều hướng
     maxTokens: 16384,
     team: 'research',
@@ -318,7 +322,8 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     capable:
       'Code TypeScript/React/Next.js đúng spec, viết research report M2, tạo POC trong workspace/research/<missionId>/, G1→G2 handoff, đề xuất KB candidates (lesson/anti-pattern) qua KB Candidates flow.',
     provider: 'zen',
-    model: 'muse-spark-1.3-contributor-free',
+    // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note NEMESIS).
+    model: 'space-bunny-free',
     temperature: 0.2, // BELI chặt — code đúng spec
     maxTokens: 16384,
     team: 'research',
@@ -353,7 +358,8 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     capable:
       'Tối ưu performance + refactor, Architecture Proposer (sinh 3 option A/B/C + Verification Plan), KB Curator (consolidate + dedup + retire), tuning + ensemble + feature engineering (M1), ghi KB trực tiếp (lesson/anti-pattern/baseline/pattern/calibration), curate phase 1→2→3.',
     provider: 'zen',
-    model: 'muse-spark-1.3-contributor-free',
+    // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note NEMESIS).
+    model: 'space-bunny-free',
     temperature: 0.4, // HAN cân bằng — creative nhưng chính xác
     maxTokens: 16384,
     team: 'research',
@@ -503,6 +509,23 @@ async function _doSeed(): Promise<boolean> {
             console.log(`[ResearchTeam] Debug specialist sync: LISMA muse-spark → ${def.model} (Task 33 — agent chuyên debug dùng space-bunny)`)
           } catch (syncErr) {
             console.warn(`[ResearchTeam] LISMA debug sync thất bại (không chặn boot):`, syncErr)
+          }
+        }
+        // PHIÊN 7 (2026-10-28 — TASK 37, user directive "TẤT CẢ agent dùng
+        // space-bunny-free"): row còn model mặc định cũ của CODE (phiên 6
+        // nemotron-3-ultra-free / phiên 5 muse-spark — do seed sync, KHÔNG phải
+        // user chọn) → sync lên def.model (space-bunny-free). Model KHÁC do
+        // user tự chọn → GIỮ NGUYÊN (tôn trọng customization — vd sau
+        // 'opencode auth login' user quay lại nemotron cho agent lãnh đạo).
+        if ((existing.model === 'nemotron-3-ultra-free' || existing.model === 'muse-spark-1.3-contributor-free') && def.model !== existing.model) {
+          try {
+            await db.agentProfile.update({
+              where: { id: existing.id },
+              data: { model: def.model },
+            })
+            console.log(`[ResearchTeam] Phiên-7 sync: ${def.name} ${existing.model} → ${def.model} (Task 37 — tất cả agents dùng space-bunny-free)`)
+          } catch (syncErr) {
+            console.warn(`[ResearchTeam] Phiên-7 sync ${def.name} thất bại (không chặn boot):`, syncErr)
           }
         }
         skipped++

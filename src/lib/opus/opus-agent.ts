@@ -289,18 +289,19 @@ export async function ensureOpusAgent(): Promise<void> {
       }
     }
 
-    // MODEL SYNC (2026-09-24 — USER DIRECTIVE: Opus → Zen nemotron-3-ultra-free):
-    // Row Opus seed từ default cũ (kimi-k3 / minimax-m3 — giá trị do CODE sync,
-    // không phải user chọn) → sync về zen/nemotron-3-ultra-free; model+provider
-    // user tự chọn giữ nguyên. (Update-block của upsert KHÔNG đụng model — tôn trọng config.)
+    // MODEL SYNC (PHIÊN 7 — Task 37, user directive "TẤT CẢ agent dùng
+    // space-bunny-free"): Row Opus seed từ default cũ (kimi-k3 / minimax-m3
+    // thời NIM, hoặc nemotron-3-ultra-free phiên 6 — giá trị do CODE sync,
+    // không phải user chọn) → sync về zen/space-bunny-free; model+provider
+    // user tự chọn giữ nguyên. (Update-block của upsert KHÔNG đụng model.)
     try {
       const opusRow = await db.agentProfile.findUnique({ where: { name: OPUS_AGENT_NAME } })
-      if (opusRow && (opusRow.model === 'moonshotai/kimi-k3' || opusRow.model === 'minimaxai/minimax-m3')) {
+      if (opusRow && (opusRow.model === 'moonshotai/kimi-k3' || opusRow.model === 'minimaxai/minimax-m3' || opusRow.model === 'nemotron-3-ultra-free')) {
         await db.agentProfile.update({
           where: { name: OPUS_AGENT_NAME },
-          data: { provider: 'zen', model: 'nemotron-3-ultra-free' },
+          data: { provider: 'zen', model: 'space-bunny-free' },
         })
-        console.log(`[Opus] Model sync: ${opusRow.model} (lõi NIM cũ) → zen/nemotron-3-ultra-free (OpenCode Zen — user directive 2026-09-24)`)
+        console.log(`[Opus] Model sync: ${opusRow.model} (lõi cũ) → zen/space-bunny-free (PHIÊN 7 — Task 37, tất cả agents dùng space-bunny-free)`)
       }
     } catch { /* fail-open — model chỉ là hiển thị + legacy path */ }
 
@@ -322,9 +323,9 @@ export async function ensureOpusAgent(): Promise<void> {
         capable: OPUS_CAPABLE,
         domain: OPUS_DOMAIN,
         provider: 'zen',
-        // 2026-09-24 (USER DIRECTIVE): Opus (CTO) → Nemotron 3 Ultra free
-        // (OpenCode Zen) — orchestration + reasoning cho meta-agent.
-        model: 'nemotron-3-ultra-free',
+        // PHIÊN 7 (Task 37 — 2026-10-28): TẤT CẢ agents = space-bunny-free
+        // (model free duy nhất mở cho oc_sk API key sau policy Zen ~25-26/09).
+        model: 'space-bunny-free',
         temperature: 0.4, // CTO phán đoán — nhiệt thấp, nhất quán
         maxTokens: 16384,
         team: null, // meta-agent — không thuộc team nào

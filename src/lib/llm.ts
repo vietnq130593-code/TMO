@@ -1913,13 +1913,14 @@ if (!process.env.LLM_QUIET_INIT) {
 /** Lõi model CHÍNH của AGENT STACK (mặc định ZEN — user directive Task 33
  *  2026-09-27: NIM bỏ hoàn toàn khỏi tác vụ agents).
  *
- *  ⚠️ USER DIRECTIVE 2026-09-27 (TASK 33 — CHỐT CHÍNH SÁCH MODEL ZEN PHIÊN 6):
- *  "Không dùng các model của NVIDIA NIM cho các tác vụ agents nữa — riêng lõi
- *  embed tôi vẫn dùng của NVIDIA NIM; bỏ luôn cả z-ai." Toàn bộ agents chạy
- *  trên OpenCode Zen:
- *    - Omega / Opus / TL (MEGATRON code, NEMESIS research) = nemotron-3-ultra-free
- *    - 9 generator agents (G1-G3 2 team + ALISTA) = muse-spark-1.3-contributor-free
- *    - 2 agent chuyên debug: SENTINEL (code G2-B) + LISMA (research G2) = space-bunny-free
+ *  ⚠️ USER DIRECTIVE 2026-10-28 (TASK 37 — CHỐT CHÍNH SÁCH MODEL ZEN PHIÊN 7):
+ *  "Thiết lập lại để TẤT CẢ các agent đều sử dụng space-bunny-free" — sau
+ *  policy Zen ~25-26/09 (verified thực nghiệm 28/10: HTTP oc_sk key → chỉ
+ *  space-bunny-free trả 200; nemotron-3-ultra-free/muse-spark/lightning
+ *  đều 403 FreeTierError ở cả 2 key). Toàn bộ 13 agents chạy space-bunny-free
+ *  (stealth reasoning, ctx 1M / out 512k, effort max — cao nhất toàn Zen).
+ *  Muốn dùng lại model free khác: 'opencode auth login' (account oauth) trên
+ *  máy chạy app + đường OpenCode CLI — xem callOpenCodeCLIProvider.
  *    - ZEN FAILOVER (model dự phòng khi model chính fail cả HTTP + CLI) = space-bunny-free
  *
  *  AGENT_PRIMARY_MODEL ở đây = bậc 0 của stack dùng cho model-switch (research
@@ -1928,7 +1929,7 @@ if (!process.env.LLM_QUIET_INIT) {
  *  Override qua env: AGENT_PRIMARY_MODEL (đặt rỗng/bỏ trong .env để dùng mặc định).
  */
 export const AGENT_PRIMARY_MODEL =
-  process.env.AGENT_PRIMARY_MODEL?.trim() || 'muse-spark-1.3-contributor-free'
+  process.env.AGENT_PRIMARY_MODEL?.trim() || 'space-bunny-free'
 
 /** @deprecated alias — giữ cho các import cũ; ngữ nghĩa "lõi chính của stack". */
 export const KIMI_K3_MODEL = AGENT_PRIMARY_MODEL
@@ -1945,7 +1946,6 @@ export const AGENT_FALLBACK_CHAIN: string[] = (() => {
     if (parsed.length > 0) return parsed
   }
   return [
-    'space-bunny-free',
     'nemotron-3.5-lightning-free',
     'mimo-v2.6-flash-free',
   ]
@@ -3795,16 +3795,17 @@ async function callLLMWithSpecificProvider(
 // Base URL: https://opencode.ai/zen/v1 (chat/completions)
 // Auth: Bearer token (ZEN_API_KEY_1, ZEN_API_KEY_2 — 2-key rotation pool)
 //
-// Free models used by TMO agents (user directive 2026-09-24):
-//   - nemotron-3-ultra-free  (NVIDIA 550B/55B MoE — orchestration + reasoning)
-//     → Omega, Opus, MEGATRON (Code Team TL), NEMESIS (Research Team TL)
-//   - muse-spark-1.3-contributor-free  (Meta — coding/implementation)
-//     → G1/G2/G3 agents (both teams) + ALISTA
+// Free models used by TMO agents (PHIÊN 7 — user directive 2026-10-28, Task 37):
+//   - space-bunny-free  (stealth reasoning, ctx 1M / out 512k, effort max)
+//     → TẤT CẢ 13 agents (Omega, Opus, ALISTA + 5 code team + 5 research team)
+//     — model free DUY NHẤT còn mở cho oc_sk API key sau policy Zen ~25-26/09
+//     (verified 28/10: nemotron-ultra/muse-spark/lightning → 403 FreeTierError)
+//   - Muốn dùng lại nemotron-3-ultra-free / muse-spark-1.3-contributor-free:
+//     'opencode auth login' (account oauth) + đường OpenCode CLI dưới.
 //
 // Routing: callLLMForAgent checks provider==='zen' BEFORE model-first policy
-// (kimi-k3/minimax-m3 enforcement) → zen-routed agents use their configured
-// model, not the NIM override. On Zen failure (429/5xx/timeout), falls back
-// to the existing NIM kimi-k3 fallback chain (callAgentModelWithFallbackChain).
+// → zen-routed agents use their configured model. Chuỗi failover runtime:
+//   Zen HTTP → OpenCode CLI (oauth) → ZEN FAILOVER (space-bunny-free).
 //
 // Known caveats (verified 2026-09-24):
 //   - Free models = limited-time promotion, fair-use soft limits (not truly unlimited)
@@ -4678,9 +4679,9 @@ export function getZenStatus(): {
     rateLimitedKeys: rateLimited,
     freeTierBlocked,
     models: [
+      'space-bunny-free',
       'nemotron-3-ultra-free',
       'muse-spark-1.3-contributor-free',
-      'space-bunny-free',
       'nemotron-3.5-lightning-free',
       'mimo-v2.6-flash-free',
     ],
@@ -4730,13 +4731,9 @@ export async function callLLMForAgent(
 
   let zenModel = model
   if (provider !== 'zen') {
-    // Model NIM cũ (chứa '/') hoặc id lạ → map về model zen theo vai trò agent:
-    // leadership (Omega/Opus/TL) = nemotron-3-ultra-free; còn lại = muse-spark.
-    const agentName = (options?.agentName || '').toUpperCase()
-    const isLeadership = /OMEGA|OPUS|MEGATRON|NEMESIS/.test(agentName)
-    zenModel = isZenModelId(model)
-      ? model
-      : isLeadership ? 'nemotron-3-ultra-free' : 'muse-spark-1.3-contributor-free'
+    // Model NIM cũ (chứa '/') hoặc id lạ → map về model zen PHIÊN 7: space-bunny-free
+    // cho TẤT CẢ agent (Task 37 — model free duy nhất mở cho oc_sk API key).
+    zenModel = isZenModelId(model) ? model : 'space-bunny-free'
     console.warn(`[LLM] Agent cấu hình provider "${provider}/${model}" không còn dùng cho agents (NIM removed — Task 33) → route Zen ${zenModel}${options?.agentName ? ` (agent: ${options.agentName})` : ''}`)
   }
 
