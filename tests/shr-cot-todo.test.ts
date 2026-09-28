@@ -354,4 +354,22 @@ if (fail > 0) {
 await cleanup()
 console.log(`\n🧹 Đã dọn sạch dữ liệu test (session ${SID})`)
 await db.$disconnect()
-process.exit(fail > 0 ? 1 : 0)
+
+// ==================== Task 54 FIX: suite-safe exit ====================
+// File script-style (top-level, đếm pass/fail riêng) nhưng tên .test.ts → bun
+// test nhặt vào suite. process.exit() cũ GIẾT cả suite ngay tại đây → các test
+// file sau không bao giờ được chạy (phát hiện khi quan sát agents chạy thật:
+// run_tests chỉ thấy 2/6 file). Giờ: trong suite bun test → đăng ký 1 test thật
+// (fail được đếm đúng trong summary chung); chạy trực tiếp `bun run <file>` →
+// giữ semantics exit-code như cũ.
+{
+  let registered = false
+  try {
+    const { test } = await import('bun:test')
+    test(`script-summary: ${pass} pass / ${fail} fail`, () => {
+      if (fail > 0) throw new Error(`${fail} check thất bại:\n${fails.map(f => `  ❌ ${f}`).join('\n')}`)
+    })
+    registered = true
+  } catch { /* chạy trực tiếp — bun:test không khả dụng */ }
+  if (!registered) process.exit(fail > 0 ? 1 : 0)
+}

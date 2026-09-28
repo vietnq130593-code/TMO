@@ -3255,17 +3255,16 @@ export async function managePackages(args: {
  */
 export async function gatewayTool(args: { name: string; args?: Record<string, unknown> }): Promise<unknown> {
   if (!args.name) return { error: 'name is required (one of the 36 gateway tools)' }
-  const bridgeUrl = process.env.OPENCLAW_GATEWAY_URL
-    ? 'http://127.0.0.1:18791' // gateway-bridge is always on 18791
-    : 'http://127.0.0.1:18791'
+  const bridgeUrl = process.env.OPENCLAW_BRIDGE_URL || 'http://127.0.0.1:18791'
 
-  try {
-    const res = await fetch(`${bridgeUrl}/tools/invoke`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: args.name, args: args.args || {} }),
-      signal: AbortSignal.timeout(30_000),
-    })
+  const invoke = (): Promise<Response> => fetch(`${bridgeUrl}/tools/invoke`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: args.name, args: args.args || {} }),
+    signal: AbortSignal.timeout(30_000),
+  })
+
+  const parseResponse = async (res: Response): Promise<unknown> => {
     if (!res.ok) {
       const text = await res.text().catch(() => 'unknown')
       return { success: false, error: `gateway-bridge ${res.status}: ${text.slice(0, 200)}` }
@@ -3275,10 +3274,42 @@ export async function gatewayTool(args: { name: string; args?: Record<string, un
       return { success: false, error: `Tool error: ${data.error.message}` }
     }
     return { success: true, tool: args.name, result: data.result ?? data }
+  }
+
+  try {
+    // Fast path — bridge đang chạy (chỉ ~ms)
+    const first = await parseResponse(await invoke()) as { success?: boolean; error?: string }
+    // Bridge trả 500 "bridge not available" = bridge process sống nhưng mất WS
+    // gateway (gateway restart/crash giữa chừng) → thử tự chữa 1 lần (case a
+    // của ensureBridgeRunning) thay vì trả lỗi vĩnh viễn cho agent.
+    if (first && first.success === false && /bridge not available|gateway-bridge 5\d\d/i.test(String(first.error || ''))) {
+      const { ensureBridgeRunning } = await import('@/lib/openclaw-ondemand')
+      const g = await ensureBridgeRunning({ timeoutMs: 45_000 })
+      if (g.online) return await parseResponse(await invoke())
+      return { success: false, error: `${first.error} — tự chữa bridge on-demand thất bại: ${g.error || 'unknown reason'}` }
+    }
+    return first
   } catch (err) {
-    return {
-      success: false,
-      error: `gateway-bridge unreachable (port 18791): ${err instanceof Error ? err.message : String(err)}. Ensure the app is running — gateway-bridge is auto-spawned.`,
+    // Task 54 FIX: bridge chưa lên (on-demand idle-shutdown 10' / app restart /
+    // bridge crash trong khi gateway vẫn sống) → ensureBridgeRunning() spawn
+    // bridge (18791) + gateway (18789) nếu cần rồi retry 1 lần. Trước đây fail
+    // ngay "unreachable" dù message lại nói "auto-spawned" — agent không bao
+    // giờ dùng được tool này trừ khi gateway tình cờ đang chạy.
+    try {
+      const { ensureBridgeRunning } = await import('@/lib/openclaw-ondemand')
+      const g = await ensureBridgeRunning({ timeoutMs: 45_000 })
+      if (!g.online) {
+        return {
+          success: false,
+          error: `gateway-bridge unreachable (port 18791): ${err instanceof Error ? err.message : String(err)} — đã thử auto-spawn bridge on-demand nhưng thất bại: ${g.error || 'unknown reason'}`,
+        }
+      }
+      return await parseResponse(await invoke())
+    } catch (ensureErr) {
+      return {
+        success: false,
+        error: `gateway-bridge unreachable (port 18791): ${err instanceof Error ? err.message : String(err)}. Auto-spawn failed: ${ensureErr instanceof Error ? ensureErr.message : String(ensureErr)}`,
+      }
     }
   }
 }

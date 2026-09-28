@@ -268,8 +268,22 @@ ok('G6 basename match: todo "package.json"/"config.json" phủ 2/2 mục 📐', 
 // ==================== CLEANUP + SUMMARY ====================
 await cleanup()
 console.log(`\n━━━ KẾT QUẢ: ${pass} pass · ${fail} fail ━━━`)
-if (fail > 0) {
-  console.log('FAILED:', fails.join(' | '))
-  process.exit(1)
+
+// ==================== Task 54 FIX: suite-safe exit ====================
+// File script-style nhưng tên .test.ts → bun test nhặt vào suite.
+// process.exit() cũ GIẾT cả suite → các test file sau không bao giờ chạy.
+// Trong suite → đăng ký test thật; chạy trực tiếp → giữ exit-code.
+{
+  let registered = false
+  try {
+    const { test } = await import('bun:test')
+    test(`script-summary: ${pass} pass / ${fail} fail`, () => {
+      if (fail > 0) throw new Error(`${fail} check thất bại:\n${fails.map(f => `  ❌ ${f}`).join('\n')}`)
+    })
+    registered = true
+  } catch { /* chạy trực tiếp — bun:test không khả dụng */ }
+  if (!registered) {
+    if (fail > 0) process.exit(1)
+    process.exit(0)
+  }
 }
-process.exit(0)

@@ -10,7 +10,18 @@ import { db } from '../src/lib/db'
 import { checkRunTodoCoverage } from '../src/lib/todo-coverage'
 import { looksLikeDataScope } from '../src/lib/structured-hypothesis'
 
-const sessionId = readFileSync('/tmp/e2e-cov-session.txt', 'utf-8').trim()
+// Task 54 FIX (skip-guard): bun test (không filter) cũng nhặt file này trong
+// tests/ — /tmp session file không tồn tại (máy/sandbox khác) → readFileSync
+// throw làm cả suite crash. Guard: thiếu file → SKIP + exit 0. (Không dùng
+// existsSync trong import — cuối file có `const { existsSync } = await import('fs')`
+// block-scoped → xung đột TS2440/2448.)
+const SESSION_FILE = '/tmp/e2e-cov-session.txt'
+let sessionId = ''
+try { sessionId = readFileSync(SESSION_FILE, 'utf-8').trim() } catch { sessionId = '' }
+if (!sessionId) {
+  console.log(`\n━━━ E2E COV VERIFY — SKIP ━━━\n${SESSION_FILE} không tồn tại (chưa chạy e2e-cov-send.ts trên máy này).`)
+  process.exit(0)
+}
 console.log(`Session E2E: ${sessionId}`)
 
 // ── Poll AgentRunRecord đến khi run kết thúc (tối đa 8 phút) ──

@@ -11,7 +11,15 @@ import { readFileSync, existsSync } from 'fs'
 import { db } from '../src/lib/db'
 import { parseUncertainItems, renderUncertainLedgerBlock } from '../src/lib/structured-hypothesis'
 
-const sessionId = readFileSync('/tmp/e2e-unc-session.txt', 'utf-8').trim()
+// Task 54 FIX (skip-guard): bun test (không filter) cũng nhặt file này trong
+// tests/ — /tmp session file không tồn tại (máy/sandbox khác) → readFileSync
+// throw làm cả suite crash. Guard: thiếu file → SKIP + exit 0.
+const SESSION_FILE = '/tmp/e2e-unc-session.txt'
+if (!existsSync(SESSION_FILE)) {
+  console.log(`\n━━━ E2E UNC VERIFY — SKIP ━━━\n${SESSION_FILE} không tồn tại (chưa chạy e2e-unc-send.ts trên máy này).`)
+  process.exit(0)
+}
+const sessionId = readFileSync(SESSION_FILE, 'utf-8').trim()
 console.log(`Session E2E: ${sessionId}`)
 
 // ── Poll AgentRunRecord đến khi run kết thúc (tối đa 8 phút) ──

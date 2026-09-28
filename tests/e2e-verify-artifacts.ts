@@ -28,6 +28,21 @@ const msgs = await db.chatMessage.findMany({
   where: { sessionId, role: 'assistant' },
   orderBy: { createdAt: 'asc' },
 })
+
+// Task 54 FIX (skip-guard): script post-mortem cho session lịch sử — bun test
+// (không có filter) cũng nhặt file này trong tests/ và chạy. Trên DB mới/reset
+// session không còn → 13/14 check fail + process.exit(1) GIẾT cả suite trước
+// khi 4 test file thật chạy xong (run_tests tool của agent báo fail giả).
+// Giờ: session mặc định không có dữ liệu → SKIP + exit 0 (an toàn trong suite).
+// Verify thủ công session khác: bun run tests/e2e-verify-artifacts.ts <sessionId>
+if (msgs.length === 0 && !process.argv[2]) {
+  console.log(`\n━━━ E2E VERIFY — SKIP ━━━`)
+  console.log(`Session lịch sử ${sessionId} không còn trong DB (DB mới/reset/sandbox mới).`)
+  console.log(`Script này chỉ verify post-mortem 1 session đã chạy. Để verify session khác:`)
+  console.log(`  bun run tests/e2e-verify-artifacts.ts <sessionId>`)
+  await db.$disconnect()
+  process.exit(0)
+}
 const lastAssistant = msgs[msgs.length - 1]
 ok(`V1 có báo cáo cuối của Omega (${msgs.length} assistant msgs)`, !!lastAssistant)
 const report = lastAssistant?.content || ''

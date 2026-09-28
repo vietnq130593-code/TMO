@@ -80,6 +80,10 @@ worklog.md
 # Dùng wildcard (không phải /scripts/) để vẫn re-include được file deployment:
 # git bỏ qua re-include nếu chính thư mục cha bị exclude.
 /scripts/*
+# NGOẠI LỆ: watch-agents.ts — trạm quan sát vận hành agents (Task 54): xem
+# runs/jobs/messages/reviews mới + phát hiện stuck/failed — ops theo dõi
+# agents chạy thật: DATABASE_URL=... bun scripts/watch-agents.ts --since-min 60
+!/scripts/watch-agents.ts
 # NGOẠI LỆ: PM2 start wrapper là script DEPLOYMENT (được ecosystem.config.cjs
 # tham chiếu: script: 'scripts/pm2-start.sh') — phải đi kèm repo để fresh clone
 # chạy được `pm2 start ecosystem.config.cjs` (wrapper tự dọn orphan process giữ

@@ -237,6 +237,91 @@ export async function shutdownIdleGateway(reason = 'idle shutdown'): Promise<voi
 
 // ==================== ENSURE RUNNING ====================
 
+/**
+ * Probe health gateway-bridge (18791) — phân biệt 3 trạng thái:
+ *  - 'connected':    bridge chạy VÀ đã kết nối WS gateway (tool dùng được)
+ *  - 'disconnected': bridge process sống nhưng mất kết nối gateway (tool 500
+ *                    "bridge not available") — cần reconnect, KHÔNG spawn lại
+ *  - 'down':         không phản hồi /health — cần spawn
+ */
+async function probeBridgeState(timeoutMs = 2000): Promise<'connected' | 'disconnected' | 'down'> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/health`, { signal: controller.signal })
+    const data = await res.json().catch(() => null) as { ok?: boolean; bridge?: { status?: string } } | null
+    if (res.ok && data?.ok === true && data.bridge?.status === 'connected') return 'connected'
+    if (res.ok && data?.ok === true) return 'disconnected'
+    return 'down'
+  } catch {
+    return 'down'
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Task 54 FIX: đảm bảo BRIDGE (18791) chạy VÀ kết nối gateway — tự chữa đủ
+ * các tình huống gặp khi quan sát agents chạy thật:
+ *
+ *  (a) Gateway sống + bridge sống nhưng mất WS (gateway restart/crash giữa
+ *      chừng) → cũ: tool 500 "bridge not available" vĩnh viễn; giờ: POST
+ *      /reconnect của bridge (disconnect + connect ngay — khỏi chờ backoff
+ *      5s-120s của bridge tự thân).
+ *  (b) Gateway sống (orphan do spawn thủ công) + bridge down → cũ:
+ *      ensureGatewayRunning() trả online:true NGAY (chỉ check 18789) mà
+ *      bridge vẫn DOWN → tool "unreachable"; giờ: spawn bridge.
+ *  (c) Cả hai down (idle-shutdown 10' / app restart) → đi qua
+ *      ensureGatewayRunning() đầy đủ (spawn gateway rồi bridge).
+ */
+export async function ensureBridgeRunning(opts?: { timeoutMs?: number }): Promise<{ online: boolean; started?: boolean; error?: string }> {
+  const s = getState()
+  s.lastUsed = Date.now() // caller có ý định dùng bridge → reset đồng hồ idle
+
+  // 1. Bridge đã usable?
+  if ((await probeBridgeState(2000)) === 'connected') {
+    s.lastProbeOk = Date.now()
+    return { online: true }
+  }
+
+  // 2. Gateway phải chạy trước (bridge là ws client của gateway)
+  if (!(await probeGateway(2500))) {
+    const g = await ensureGatewayRunning(opts)
+    if (!g.online) return { online: false, error: `gateway (18789) down: ${g.error || 'spawn thất bại'}` }
+    // spawnAndWait đã spawn bridge kèm gateway
+  } else {
+    // Gateway lên (có thể orphan do spawn thủ công) → adopt cho idle-watchdog
+    // quản dọn cả hai khi hết dùng
+    s.running = true
+    s.lastProbeOk = Date.now()
+  }
+
+  // 3. Bridge process sống nhưng mất kết nối → force reconnect; bridge down → spawn
+  const st = await probeBridgeState(1500)
+  if (st === 'disconnected') {
+    try {
+      await fetch(`http://127.0.0.1:${BRIDGE_PORT}/reconnect`, { method: 'POST', signal: AbortSignal.timeout(10_000) })
+      console.log('[openclaw-ondemand] Bridge mất WS gateway → đã POST /reconnect')
+    } catch { /* bridge chết giữa chừng — poll bên dưới sẽ không lên → fail rõ ràng */ }
+  } else if (st === 'down') {
+    s.bridgeChild = spawnService('mini-services/gateway-bridge', {})
+    if (!s.bridgeChild) {
+      return { online: false, error: 'spawn gateway-bridge (18791) thất bại' }
+    }
+  }
+
+  // 4. Poll đến khi bridge CONNECTED (không chỉ /health OK)
+  const deadline = Date.now() + (opts?.timeoutMs ?? 20_000)
+  while (Date.now() < deadline) {
+    if ((await probeBridgeState(1500)) === 'connected') {
+      console.log('[openclaw-ondemand] Bridge (18791) CONNECTED (ensureBridgeRunning)')
+      return { online: true, started: true }
+    }
+    await new Promise(r => setTimeout(r, 1000))
+  }
+  return { online: false, error: 'bridge (18791) không connect-OK sau timeout' }
+}
+
 async function spawnAndWait(timeoutMs: number): Promise<{ online: boolean; started?: boolean; error?: string }> {
   const s = getState()
 

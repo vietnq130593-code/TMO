@@ -196,5 +196,22 @@ ok('D7. Checksum package.json + schema.prisma + opencode.json KHÔNG đổi',
 // ==================== KẾT QUẢ ====================
 console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 console.log(`KẾT QUẢ: ${pass} PASS · ${fail} FAIL / ${pass + fail} test`)
-if (fail > 0) { console.log('FAILS:', fails.join(' | ')); process.exit(1) }
-process.exit(0)
+
+// ==================== Task 54 FIX: suite-safe exit ====================
+// File script-style nhưng tên .test.ts → bun test nhặt vào suite.
+// process.exit() cũ GIẾT cả suite → các test file sau không bao giờ chạy.
+// Trong suite → đăng ký test thật; chạy trực tiếp → giữ exit-code.
+{
+  let registered = false
+  try {
+    const { test } = await import('bun:test')
+    test(`script-summary: ${pass} pass / ${fail} fail`, () => {
+      if (fail > 0) throw new Error(`${fail} check thất bại:\n${fails.map(f => `  ❌ ${f}`).join('\n')}`)
+    })
+    registered = true
+  } catch { /* chạy trực tiếp — bun:test không khả dụng */ }
+  if (!registered) {
+    if (fail > 0) process.exit(1)
+    process.exit(0)
+  }
+}
