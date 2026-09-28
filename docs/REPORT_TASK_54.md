@@ -24,6 +24,8 @@ Phân tích toàn diện hệ thống TMO trong quá trình thực thi của age
 | 8 | DB thật | 4 bản ghi Workspace "Test Workspace" trỏ /tmp (isActive=0) còn sót từ các lần chạy trước khi có lớp cô lập | Thấp | CHƯA XÓA — nằm trong dữ liệu được bảo vệ, cần phê duyệt |
 | 9 | Log | Opus auto-review SKIP lặp 336 dòng trong dev.log | Thấp | CHƯA SỬA |
 | 10 | Memory | LearningLog, AgentInsight, AgentCorrection, JobQueue đều 0 bản ghi dù code đã wire | Trung bình | CHƯA SỬA (chưa chẩn đoán) |
+| 11 | Utility LLM | callUtilityLLM gọi model trả 403 FreeTier vĩnh viễn 15/15 lần, nhánh failover kế thừa reasoning effort max nuốt hết maxTokens 700 → content rỗng, finish_reason length, HTTP vẫn 200 — đường fail âm thầm không ghi log | Cao | ĐÃ SỬA (thêm reasoningEffort override + đổi mặc định utility path sang space-bunny-free effort low + log EMPTY RESPONSE; maxTokens 700→2000) |
+| 12 | DB | DATABASE_URL bị env leak từ project khác, cộng đường dẫn file: tương đối resolve lệch (Prisma CLI theo schema, client runtime theo cwd) → watch-agents.ts lỗi CANTOPEN | Cao | ĐÃ SỬA (guard env leak trong db.ts + chuẩn hóa đường dẫn tuyệt đối theo schema; watch-agents.ts nhân bản logic) |
 
 ---
 
@@ -93,7 +95,23 @@ Xác nhận độc lập bằng kênh audit HTTP của app (ALISTA gọi trực 
 
 ---
 
-## 7. GIỚI HẠN KIỂM ĐỊNH
+## 7. PHỤ LỤC — 2 LỖI ĐÃ KHẮC PHỤC Ở COMMIT 8c6b793 (TASK 55)
+
+Hai lỗi dưới đây đã được sửa và commit trước khi báo cáo này chốt, nhưng mục 2 (lỗi đã phát hiện) chưa ghi nhận nên bổ sung ở đây để báo cáo đầy đủ. Số liệu lấy nguyên văn từ git show 8c6b793.
+
+7.1 Utility LLM fail-open âm thầm 100% — Mức CAO, ĐÃ SỬA. callUtilityLLM mặc định gọi nemotron-3.5-lightning-free, model này trả 403 FreeTierError vĩnh viễn nên 15/15 lần gọi đều rơi xuống nhánh failover. Tệ hơn, nhánh failover kế thừa reasoning effort mặc định là max trong khi maxTokens của caller chỉ 700, nên reasoning nuốt hết budget, content trả về rỗng, finish_reason là length, HTTP vẫn 200 — đây là đường fail âm thầm duy nhất không ghi log. Kiểm chứng thực nghiệm trong commit: prompt 120 nghìn ký tự với effort max và maxTokens 700 cho reasoning_tokens bằng đúng 700 và content bằng 0; đổi sang effort low thì reasoning còn 88 và digest sinh ra bình thường.
+
+Cách khắc phục: thêm trường reasoningEffort vào LLMCallOptions và cho callZenProvider tôn trọng giá trị override; hai call site của utility path chuyển mặc định sang space-bunny-free với effort low vì đây là tác vụ cơ khí; thêm log EMPTY RESPONSE in đủ finish_reason, max_tokens, reasoning_effort và usage để không còn đường fail không dấu vết; context-compression.ts tăng maxTokens từ 700 lên 2000 vì 700 vẫn bị cắt giữa chừng. Kiểm định end-to-end sau sửa: callUtilityLLM với prompt 35 nghìn ký tự trả về space-bunny dùng 14782 token trong 15,8 giây; compressConversation trên 115 tin nhắn cho method là llm, digest dài 914 ký tự, tiết kiệm 138 nghìn ký tự (trước đó rơi về heuristic).
+
+7.2 DATABASE_URL sai lớp làm watch-agents lỗi CANTOPEN — Mức CAO, ĐÃ SỬA. Có hai nguyên nhân chồng lên nhau. Một là shell sandbox xuất DATABASE_URL của một project khác (my-project, file không tồn tại) và bun không override biến môi trường đã được set trong .env, nên script mở nhầm một DB chết. Hai là Prisma CLI resolve đường dẫn file theo schema.prisma còn client runtime resolve theo thư mục làm việc hiện tại, nên giá trị file:../db/custom.db trỏ tới /home/z/db/... và sinh lỗi CANTOPEN.
+
+Cách khắc phục: db.ts thêm guard chống env leak (nếu biến môi trường kế thừa trỏ tới file không tồn tại thì ưu tiên giá trị trong .env của project, còn env override có chủ đích trỏ DB thật vẫn được giữ nguyên nên /tmp test DB của preload vẫn an toàn) và chuẩn hóa đường dẫn tương đối thành tuyệt đối theo schema; watch-agents.ts nhân bản cùng logic để chạy lại được không cần export biến môi trường thủ công. Kết quả kiểm định trong commit: typecheck 0 lỗi, lint 0 lỗi và 0 warning, bun test 191 pass 0 fail.
+
+Hai lỗi này có điểm chung đáng lưu ý cho nâng cấp: cả hai đều lỗi KHÔNG raise exception, chỉ biểu hiện bằng kết quả rỗng hoặc dữ liệu sai. Loại lỗi này nguy hiểm hơn lỗi throw vì hệ thống vẫn chạy và báo cáo thành công. Đề xuất thêm một nguyên tắc kiểm định bắt buộc: mọi đường ghi dữ liệu và mọi lời gọi LLM phải có phát hiện kết quả rỗng bất thường để log cảnh báo, không coi HTTP 200 là bằng chứng thành công.
+
+---
+
+## 8. GIỚI HẠN KIỂM ĐỊNH
 
 - Chưa xác minh được nguyên nhân chính xác khiến các bảng memory rỗng (chưa chẩn đoán tới điểm ghi).
 - Chưa đọc được log runtime của tiến trình theopusflashlite (sai đường dẫn ~/.pm2/logs).
