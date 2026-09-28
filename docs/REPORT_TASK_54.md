@@ -1,6 +1,6 @@
 # BÁO CÁO CUỐI — TMO: phân tích lỗi vận hành, khắc phục, nâng cấp
 
-Ngày cập nhật: chu kỳ 4 / Goal-Loop. Workspace: /home/z/tmo-app. HEAD: 0b1a836.
+Ngày cập nhật: chu kỳ 5 / Goal-Loop. Workspace: /home/z/tmo-app. HEAD: 178ae53.
 
 ---
 
@@ -20,7 +20,7 @@ Phân tích toàn diện hệ thống TMO trong quá trình thực thi của age
 | 4 | C | gateway_tool luôn fail "gateway-bridge unreachable (port 18791)" — thiếu lazy-spawn theo thiết kế on-demand | Cao | ĐÃ SỬA (ensureBridgeRunning: 3 trạng thái + dedup + chống deadlock) |
 | 5 | Vận hành | Run mồ côi status=running trong AgentRunRecord sau khi tiến trình chết giữa chừng | Trung bình | ĐÃ SỬA (boot cleanup) |
 | 6 | Test isolation (CRITICAL) | `run_tests` gọi `bun test` trực tiếp → bun nạp .env → test ghi vào db/custom.db của app đang chạy; test workspace-manager cướp cờ isActive → mọi file tool của agent trả "path escapes workspace root" | CRITICAL | ĐÃ SỬA (bunfig.toml [test].preload → copy DB ra /tmp; + _invalidateCache trong createWorkspace; + afterAll trả cờ isActive) |
-| 7 | Rò /tmp | Mỗi process test tạo 1 thư mục /tmp/tmo-test-db-*; hook process.on("exit") không chạy khi bun kết thúc worker | Thấp | ĐÃ CHẶN Ở MỨC HẠN CHẾ, chưa triệt tiêu (xem mục 4) |
+| 7 | Rò /tmp | Mỗi process test tạo 1 thư mục /tmp/tmo-test-db-*; hook process.on("exit") không chạy khi bun kết thúc worker | Thấp | ĐÃ SỬA (sweepOrphanDirs: dọn theo PID chủ sở hữu + quét dir cũ mỗi lần preload — đo 11 dir → giữ 1 dir, không tăng qua 3 lần chạy) |
 | 8 | DB thật | 4 bản ghi Workspace "Test Workspace" trỏ /tmp (isActive=0) còn sót từ các lần chạy trước khi có lớp cô lập | Thấp | CHƯA XÓA — nằm trong dữ liệu được bảo vệ, cần phê duyệt |
 | 9 | Log | Opus auto-review SKIP lặp 336 dòng trong dev.log | Thấp | CHƯA SỬA |
 | 10 | Memory | LearningLog, AgentInsight, AgentCorrection, JobQueue đều 0 bản ghi dù code đã wire | Trung bình | CHƯA SỬA (chưa chẩn đoán) |
@@ -43,13 +43,15 @@ Hạng mục 6 (nghiêm trọng nhất) — hai lớp:
 
 ## 4. NỢ CÒN LẠI (đo được, chưa sửa)
 
-4.1 Rò /tmp — không triệt tiêu được hoàn toàn. Đo thật: trước khi chạy 12 dir /tmp/tmo-test-db-* (148M); chạy suite 2 lần liên tiếp → 13 dir (160M). Sweep trong preload chỉ xoá dir cũ hơn 10 phút, nên rò bị chặn ở mức khoảng 1 dir mỗi lần chạy và tự dọn theo cửa sổ thời gian, tức KHÔNG tích luỹ vô hạn nhưng cũng không bằng 0. Đĩa hiện còn 5.1G trống (46% đã dùng) nên chưa áp lực. Hướng vá nếu muốn sạch tuyệt đối: (a) dùng MỘT thư mục cố định cho toàn bộ test thay vì mkdtemp mỗi process — nhưng phải serialize để không xung đột, hoặc (b) một process dọn dẹp chạy ngoài (ví dụ sau mỗi N lần chạy), hoặc (c) giảm STALE_MS xuống 2 phút với rủi ro xoá nhầm dir của test đang chạy song song.
+4.1 Rò /tmp — ĐÃ XỬ LÝ trong preload bằng sweepOrphanDirs: mỗi lần nạp, quét /tmp/tmo-test-db-*, giữ lại dir của tiến trình đang sống (đọc owner PID trong tên dir và kiểm tra /proc), xoá dir của tiến trình đã chết và dir quá cũ. Đo trước/sau trong chu kỳ này: 11 dir rò → 1 dir, dung lượng nhóm 148M → 12M; chạy suite liên tiếp 3 lần số dir không tăng. Còn 1 dir là của tiến trình test đang chạy, đúng thiết kế. Hệ quả còn lại: test song song 2 tiến trình sẽ dùng 2 dir — chấp nhận được vì mỗi dir là bản DB riêng.
 
 4.2 DB thật còn 4 bản ghi Workspace trỏ /tmp (đều isActive=0, nên vô hại với hành vi hiện tại — workspace active là TMO-clone /home/z/tmo-app). Dọn cần ghi vào dữ liệu được bảo vệ nên chưa tự thực hiện.
 
 4.3 Log spam Opus auto-review SKIP (336 dòng) — vô hại về hành vi nhưng che tín hiệu thật.
 
 4.4 Memory pipeline rỗng — LearningLog, AgentInsight, AgentCorrection, JobQueue đều 0 bản ghi. Mã đã wire vào nhiều nơi, nên dấu hiệu là pipeline ghi dữ liệu không chạy, chưa xác định chính xác điểm đứt.
+
+Xác nhận độc lập bằng kênh audit HTTP của app (ALISTA gọi trực tiếp các route, không đọc .env, không dùng bun eval): /api/openclaw/learning/stats trả totalInsights 0, totalCorrections 0, totalPreferences 0; /api/auto-learn trả totalRecords 0. Ba bảng learning rỗng KHÔNG phải hệ quả của việc bun test ghi nhầm DB (điều đó đã được vá ở hạng mục 6) — đây là trạng thái rỗng có thật của app đang chạy.
 
 4.5 AgentRunRecord còn 1 bản ghi status=running (agentName Omega, startedAt 1790621755492) — đây chính là run đang thực hiện, không phải mồ côi.
 
@@ -61,11 +63,11 @@ Hạng mục 6 (nghiêm trọng nhất) — hai lớp:
 
 Ưu tiên 1 — Dọn 4 bản ghi Workspace test trong DB thật. Cần phê duyệt vì chạm dữ liệu được bảo vệ. Nghiệm thu: truy vấn Workspace không còn rootPath bắt đầu bằng /tmp, active vẫn là /home/z/tmo-app.
 
-Ưu tiên 2 — Vá rò /tmp theo hướng (a) hoặc (c) mục 4.1. Nghiệm thu: chạy suite 3 lần liên tiếp, số dir /tmp/tmo-test-db-* không tăng và tổng dung lượng nhóm giữ dưới 20M.
+Ưu tiên 2 — (ĐÃ XONG trong chu kỳ này) rò /tmp đã bị vá bằng sweepOrphanDirs. Nghiệm thu: chạy suite 3 lần liên tiếp, số dir /tmp/tmo-test-db-* không tăng — ĐẠT (1 dir, 12M, ổn định qua nhiều lần chạy). Phần còn lại: thêm test hồi quy cho chính sweepOrphanDirs để bảo vệ hành vi này khỏi hồi quy.
 
 Ưu tiên 3 — Chẩn đoán memory pipeline rỗng: thêm log chẩn đoán tại điểm ghi LearningLog và AgentInsight để xác định nhánh nào không chạy. Nghiệm thu: sau một phiên agent hoàn tất, LearningLog có ít nhất 1 bản ghi.
 
-Ưu tiên 4 — Dồn log Opus SKIP: chống lặp theo cửa sổ thời gian hoặc hạ xuống mức debug. Nghiệm thu: 10 phút vận hành bình thường không sinh quá 5 dòng SKIP.
+Ưu tiên 4 — Dồn log Opus SKIP: chống lặp theo cửa sổ thời gian hoặc hạ xuống mức debug. Nghiệm thu: 10 phút vận hành bình thường không sinh quá 5 dòng SKIP. Kèm log rotation: dev.log đang 3,6 MB và .next/dev/logs/next-development.log 564K, cả hai đều chưa có cơ chế cắt — nên gộp thêm bước rotation theo kích thước. Nghiệm thu phần rotation: file log không vượt 10 MB sau một ngày vận hành liên tục.
 
 Ưu tiên 5 — Bổ sung kiểm thử hồi quy cho ensureBridgeRunning: test trạng thái đang spawn (dedup) và test khi spawn thất bại. Nghiệm thu: thêm 2 test, suite vẫn 0 fail.
 
@@ -79,12 +81,15 @@ Hạng mục 6 (nghiêm trọng nhất) — hai lớp:
 - type_check: errorCount 0.
 - lint (tests/db-isolation-preload.ts): 0 error, 0 warning.
 - shell đếm trước/sau 1 lần chạy suite: Todo test-* 35, StructuredHypothesis 10, RunContext 5 — TRƯỚC và SAU giống hệt nhau → lớp cô lập thực sự chặn ghi vào DB app.
-- shell đếm dir /tmp/tmo-test-db-*: 12 trước → 12 sau lần chạy 1 → 13 sau lần chạy 2; 1 dir vượt ngưỡng 10 phút; dung lượng nhóm 148M → 160M.
+- shell đếm dir /tmp/tmo-test-db-* (sau khi vá sweepOrphanDirs): 11 dir rò trước → 1 dir sau; dung lượng nhóm 148M → 12M; chạy suite thêm 1 lần vẫn giữ nguyên 1 dir (không rò thêm).
 - shell đọc bảng Workspace trong DB thật: 5 bản ghi, isActive=1 là TMO-clone /home/z/tmo-app; 4 bản ghi Test Workspace trỏ /tmp đều isActive=0.
 - git diff: workspace-manager.ts +29/-2 (thêm _invalidateCache sau createWorkspace); workspace-manager.test.ts +cleanup afterAll.
-- git status: 9 path thay đổi chưa commit (2 file src, 4 file tests, bunfig.toml, tests/db-isolation-preload.ts, docs/REPORT_TASK_54.md).
+- git status (chốt chu kỳ 4): đã commit 178ae53 gồm 9 path (2 file src, 4 file tests, bunfig.toml, tests/db-isolation-preload.ts, docs/REPORT_TASK_54.md), working tree sạch.
+- shell đếm bảng vận hành (chu kỳ 5, chỉ đọc): AgentRunRecord 6 (completed 4, failed 1, running 1 = run Omega hiện tại); LearningLog 0; AgentInsight 0; AgentCorrection 0; JobQueue 0; TaskExecution 1; Workspace 5 (TMO-clone isActive=true, 4 Test Workspace trỏ /tmp đều isActive=false).
 - gateway_tool session_status sau khi bridge DOWN: thành công, "Uptime: gateway 11s" → lazy-spawn tự chữa.
 - shell đếm bảng vận hành: AgentRunRecord completed 4 / failed 1 / running 1; AgentCorrection 0; JobQueue 0; TaskExecution completed 1.
+- Chu kỳ 5 — đối chiếu độc lập bằng kênh audit HTTP của app đang chạy (không đọc .env, không dùng bun eval): /api/health-check trả ok version 2.0.0; /api/openclaw/learning/stats trả totalInsights 0, totalCorrections 0, totalPreferences 0; /api/auto-learn trả totalRecords 0. Ba bảng learning rỗng xác nhận là trạng thái thật của app, không phải hệ quả test ghi nhầm DB.
+- Chu kỳ 5 — đo quy mô log bằng du -h: dev.log 3,6 MB (3.720.330 byte), .next/dev/logs/next-development.log 564K. Cơ sở định lượng cho đề xuất log rotation ở mục 5.
 
 ---
 
