@@ -178,3 +178,6 @@ docs/TMO_WEEKLY_REPORT.md
 
 # Task 43 — agent-harness workspace (artifact kiểm định on-demand, không track)
 .tmo-harness/
+
+# Aider chat history (Task 46 — không track chat history cá nhân vào repo)
+.aider*
