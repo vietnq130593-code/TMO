@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getAllCustomTools } from '@/lib/custom-tool-registry'
+import { isOnDemandEnabled } from '@/lib/openclaw-ondemand'
 import { tavilyKeyPool, jinaKeyPool, serperKeyPool } from '@/lib/service-key-pool'
 import type { CustomTool } from '@prisma/client'
 
@@ -228,6 +229,20 @@ export async function GET(request: NextRequest) {
       // Bridge unavailable — ok
     }
 
+    // ===== ON-DEMAND awareness (fix: báo sai 18 tool "unavailable") =====
+    // gateway-bridge chạy LAZY (src/lib/openclaw-ondemand.ts): idle quá
+    // OPENCLAW_IDLE_SHUTDOWN_MS thì tự tắt để tiết kiệm ~38MB RAM, và được
+    // spawn lại ngay khi agent gọi tool đầu tiên (ensureBridgeRunning).
+    //
+    // BUG CŨ: khi bridge đang ngủ, route gán accessMode='unavailable' cho 18
+    // session-context tools → /api/tools báo 18 tool chết, accessibleTotal 85→67,
+    // dù gọi tool là chạy được ngay (đã kiểm chứng: gọi 1 bridge tool → online).
+    // Sửa: phân biệt "đang ngủ on-demand" với "thật sự hỏng". Route KHÔNG gọi
+    // ensure* (sẽ phá idle-shutdown và gây spawn loop — xem openclaw-ondemand.ts).
+    const onDemand = isOnDemandEnabled()
+    const bridgeAsleep = !bridgeOnline && onDemand
+    const bridgeUsable = bridgeOnline || bridgeAsleep
+
     // ===== Build local tools list =====
     const localTools = LOCAL_TOOLS.map(t => ({
       name: t.name,
@@ -247,8 +262,13 @@ export async function GET(request: NextRequest) {
       const isSessionContext = SESSION_CONTEXT_TOOLS.has(t.name)
       const isHttpAccessible = HTTP_ACCESSIBLE_TOOLS.has(t.name)
       const accessMode = isSessionContext
-        ? (bridgeOnline ? 'bridge' : 'unavailable')
+        ? (bridgeUsable ? 'bridge' : 'unavailable')
         : 'http'
+      // Trạng thái bridge thật sự lúc gọi: online / asleep (sẽ tự spawn khi
+      // dùng) / down (hỏng thật — on-demand tắt hoặc spawn thất bại).
+      const bridgeState = isSessionContext
+        ? (bridgeOnline ? 'online' : bridgeAsleep ? 'asleep' : 'down')
+        : 'n/a'
 
       return {
         name: t.name,
@@ -256,7 +276,9 @@ export async function GET(request: NextRequest) {
         description: t.description,
         source: 'gateway' as const,
         accessMode,
+        bridgeState,
         sessionContext: isSessionContext,
+        httpAccessible: isHttpAccessible,
         dangerous: isSessionContext && ['exec', 'write', 'edit', 'apply_patch', 'code_execution', 'process'].includes(t.name),
         implemented: true,
         apiKeyEnv: '',
@@ -412,6 +434,7 @@ export async function GET(request: NextRequest) {
     const gatewayHttp = allTools.filter(t => t.accessMode === 'http').length
     const gatewayBridge = allTools.filter(t => t.accessMode === 'bridge').length
     const custom = allTools.filter(t => t.source === 'custom').length
+    const bridgeAsleepTools = allTools.filter(t => t.accessMode === 'bridge' && t.bridgeState === 'asleep').length
     const unavailable = allTools.filter(t => t.accessMode === 'unavailable').length
     const categories = [...new Set(allTools.map(t => t.category as string))]
 
@@ -420,11 +443,18 @@ export async function GET(request: NextRequest) {
       total: toolsWithPermissions.length,
       bridge: {
         online: bridgeOnline,
+        onDemand,
+        asleep: bridgeAsleep,
+        // Ngủ on-demand KHÔNG phải lỗi — tool tự chạy khi agent gọi.
+        note: bridgeAsleep
+          ? 'gateway-bridge đang ngủ (on-demand) — sẽ tự spawn khi agent gọi tool đầu tiên'
+          : undefined,
       },
       stats: {
         local,
         gatewayHttp,
         gatewayBridge,
+        bridgeAsleep: bridgeAsleepTools,
         custom,
         unavailable,
         total: allTools.length,
