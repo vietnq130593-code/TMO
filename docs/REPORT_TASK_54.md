@@ -1,6 +1,6 @@
 # BÁO CÁO CUỐI — TMO: phân tích lỗi vận hành, khắc phục, nâng cấp
 
-Ngày cập nhật: chu kỳ 6 / Goal-Loop. Workspace: /home/z/tmo-app. Commit phụ lục lần trước: 4760526; bản sửa số liệu log và bổ sung phát hiện cache build nằm ngay sau đó.
+Ngày cập nhật: chu kỳ 6 / Goal-Loop; cap nhat them o muc 9 (chu ky 7). Workspace: /home/z/tmo-app. Commit phụ lục lần trước: 4760526; bản sửa số liệu log và bổ sung phát hiện cache build nằm ngay sau đó.
 
 ---
 
@@ -123,3 +123,45 @@ Hai lỗi này có điểm chung đáng lưu ý cho nâng cấp: cả hai đều
 - Chưa đọc được log runtime của tiến trình theopusflashlite (sai đường dẫn ~/.pm2/logs).
 - Chưa chạy kiểm thử hồi quy cho ensureBridgeRunning; xác nhận hiện tại dựa trên kiểm định end-to-end một lần với bridge DOWN.
 - Chưa xoá 4 bản ghi Workspace test trong DB thật (dữ liệu được bảo vệ).
+
+---
+
+## 9. BỔ SUNG CHU KỲ 7 — ĐƯỜNG GHI TOOLMETRIC KHÔNG ĐI QUA LỚP CÔ LẬP DB
+
+Nội dung mục này nối tiếp các mục 2 (bảng lỗi), 4 (nợ còn lại), 5 (ưu tiên nâng cấp) và 6 (bằng chứng) ở trên. Vì bảng và các mục kia đã được chốt ở chu kỳ trước, phần bổ sung được ghi ở đây theo cùng cấu trúc để không phá vỡ bản ghi cũ.
+
+### 9.1 Mục 14 của bảng lỗi (bổ sung cho mục 2)
+
+Hạng mục 14 — Test isolation còn sót. Lớp cô lập DB ở hạng mục 6 chỉ áp dụng cho tiến trình test. Các test gọi HTTP vào app đang chạy thì chính tiến trình app ghi ToolMetric vào DB thật. Đo quanh một lần chạy suite: tổng 1184 sang 1194, tức 10 dòng, phân rã opencode-bridge 156 sang 159 và test-infra-guard 266 sang 273. Mức độ Thấp, trạng thái CHƯA SỬA, đề xuất ưu tiên 8.
+
+### 9.2 Thí nghiệm tên đại diện — bằng chứng quyết định
+
+Gọi POST http://127.0.0.1:3000/api/tools/execute với body đúng theo route, gồm context.agentName = probe-iso-1790628752, trả HTTP 200 với kết quả file_list. Trước đó probe đầu tiên gửi sai tên field nên nhận HTTP 400 với lỗi thiếu tool, tức không tạo được dòng metric nào. Sau khi sửa payload, truy vấn /api/tools/analytics cho tổng 1161 sang 1164 và xuất hiện đúng một tên đại diện mới với giá trị 1.
+
+Kết luận bằng máy: tiến trình test không gì ra DB thật, chính tiến trình app ghi. Nếu bản ghi đó do tiến trình test tạo ra thì nó sẽ không xuất hiện trong số liệu analytics của app.
+
+### 9.3 Đo lại delta bằng snapshot trước và sau trong cùng một lệnh
+
+Đo đầu tiên của chu kỳ cho con số 7 dòng, nhưng phép so sánh đó lấy hai thời điểm khác nhau nên không đáng tin. Đo lại bằng cách chụp totalCalls trước khi chạy bun test và sau khi chạy, cùng một lệnh:
+
+- Lần đo 1: 1173 sang 1183, chênh 10, kèm bun test 191 pass, 0 fail, 405 expect, 12 file, 2.10 giây.
+- Lần đo 2: 1184 sang 1194, chênh 10, kèm bun test 191 pass, 0 fail, 405 expect, 12 file, 2.03 giây.
+
+Hai lần đo độc lập cùng cho delta 10, nên con số chắc chắn hơn ước lượng 7 ban đầu. Đính chính này được ghi lại để tránh dùng nhầm số liệu cũ.
+
+### 9.4 Đọc route xác nhận cơ chế ghi
+
+src/app/api/tools/execute/route.ts dài 102 dòng. Route nhận context.agentName rồi truyền thẳng vào executeTool cùng sessionId và runId. Không có cờ nào để tắt việc ghi metric, và không có cách nào cho tầng HTTP biết request đến từ môi trường test. Đây là lý do cơ chế cô lập ở tầng tiến trình không thể chặn đường ghi này.
+
+### 9.5 Nợ còn lại bổ sung cho mục 4
+
+Mục 4.7 — Lớp cô lập DB chặn đúng tiến trình test nhưng không chặn được test gọi HTTP vào app đang chạy. Mức độ Thấp vì chỉ làm bẩn bảng chỉ số, không gây hỏng hành vi. Hệ quả thật sự là số liệu phân tích vận hành sai: mọi phân tích dựa trên ToolMetric đều phải trừ 10 dòng mỗi lần chạy suite, và nếu không biết thì sẽ quy kết sai nguyên nhân tăng trưởng. Đây là nợ dài hạn, không phải sự cố một lần.
+
+### 9.6 Đề xuất nâng cấp ưu tiên 8
+
+Tách đường ghi metric của app khỏi đường gọi của test. Hai hướng đều nhỏ: hướng một là cho route nhận một cờ suppressMetric trong context và các script kiểm định tự bật khi chạy; hướng hai là ghi ToolMetric theo sessionId riêng cho môi trường test rồi lọc khi truy vấn analytics. Nghiệm thu: chạy bun test một lần, delta totalCalls của DB thật bằng 0, đo bằng snapshot trước và sau trong cùng một lệnh như ở mục 9.3.
+
+### 9.7 Bổ sung cho mục 8, giới hạn kiểm định
+
+- Chưa thử sửa thử nghiệm cờ suppressMetric vì nhiệm vụ chốt là chỉ đọc và phân tích, không sửa thêm. Việc sửa cần đi qua luồng thay đổi mã thường lệ.
+- Chưa xác định được script nào trong suite gọi HTTP vào app. Biết tổng cộng 10 dòng với test-infra-guard chiếm 7 và opencode-bridge chiếm 3, nhưng chưa quy được 10 dòng đó về từng test cụ thể.
