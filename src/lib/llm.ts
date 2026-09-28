@@ -228,6 +228,16 @@ export interface LLMCallOptions {
    *  ĐÚNG run (buildRunTodosBlock + auto-complete query theo sessionId+runId;
    *  trước đây todos CLI lưu runId=null → TODO block chu kỳ sau LUÔN RỖNG). */
   runId?: string | null
+  /** TASK 55 (2026-09-28): override reasoning_effort cho Zen reasoning models
+   *  (space-bunny: low|medium|high|xhigh|max; muse-spark: low..xhigh).
+   *  'none' = KHÔNG gửi reasoning_effort. Undefined = map mặc định theo model
+   *  (zenReasoningEffortForModel — agents giữ chế độ cao nhất).
+   *  Context: utility call (digest/phân loại/JSON) gửi maxTokens nhỏ (700-2k)
+   *  kèm effort=max → reasoning nuốt TOÀN BỘ budget → content rỗng, finish=length,
+   *  response 200 OK (đường fail ÂM THẦM duy nhất của callZenProvider — verified
+   *  thực nghiệm 28/09: prompt 120k chars + max_effort + mt700 → content '';
+   *  cùng prompt + effort low → reasoning chỉ 88 tokens, digest đủ dùng). */
+  reasoningEffort?: string
 }
 
 // ==================== CONSTANTS ====================
@@ -3573,15 +3583,32 @@ export async function callUtilityLLM(
   // Trước đây chỉ có NIM (key chết) → goal-loop-context-compression /
   // memory-extraction / writeback-extraction mỗi lần đốt ~60s chờ cooldown
   // NIM rồi fail-open. Route qua Zen HTTP → OpenCode CLI như callLLM.
+  //
+  // TASK 55 (2026-09-28): mặc định ĐỔI nemotron-3.5-lightning-free →
+  // space-bunny-free. Lý do: nemotron-lightning 403 FreeTierError VĨNH VIỄN
+  // với oc_sk key (verified 28/10 — chỉ space-bunny-free còn mở API) → 100%
+  // utility call rơi xuống failover. Cộng thêm failover chạy effort=max (map
+  // mặc định) kèm maxTokens nhỏ của caller (compression 700) → reasoning nuốt
+  // hết budget → content rỗng → TOÀN BỘ utility LLM fail-open âm thầm
+  // (compression LLM 0/15 thành công — heuristic cứu). Giờ: model chính =
+  // space-bunny + effort='low' (tác vụ cơ khí — verified: prompt 120k chars,
+  // reasoning chỉ 88 tokens, digest đủ dùng, nhanh gấp ~2-4x effort max).
+  // Override qua env UTILITY_ZEN_MODEL (đặt model khác nếu policy Zen đổi).
   if (isZenConfigured() && !options?.skipZenUtility) {
-    const utilModel = process.env.UTILITY_ZEN_MODEL || 'nemotron-3.5-lightning-free'
-    const zen = await callZenProvider(prompt, systemPrompt, utilModel, options, `utility-core:${taskLabel}`)
+    const utilModel = process.env.UTILITY_ZEN_MODEL || 'space-bunny-free'
+    // TASK 55: utility = tác vụ cơ khí (digest/JSON/phân loại) — effort low;
+    // tôn trọng reasoningEffort caller truyền (nếu có), KHÔNG đè lên 'none'.
+    const utilOptions: LLMCallOptions = {
+      ...options,
+      reasoningEffort: options?.reasoningEffort || 'low',
+    }
+    const zen = await callZenProvider(prompt, systemPrompt, utilModel, utilOptions, `utility-core:${taskLabel}`)
     if (zen && zen.content) {
       console.log(`[LLM] Utility-core dùng Zen ${utilModel} ✓ (${zen.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
       return zen
     }
     console.warn(`[LLM] Utility-core Zen HTTP ${utilModel} thất bại — thử OpenCode CLI: ${(zen?.error || 'unknown').slice(0, 100)}`)
-    const cliResult = await callOpenCodeCLIProvider(prompt, systemPrompt, utilModel, options, `utility-core:${taskLabel}`)
+    const cliResult = await callOpenCodeCLIProvider(prompt, systemPrompt, utilModel, utilOptions, `utility-core:${taskLabel}`)
     if (cliResult && cliResult.content) {
       console.log(`[LLM] Utility-core dùng OpenCode CLI ${utilModel} ✓ (${cliResult.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
       return cliResult
@@ -3590,7 +3617,7 @@ export async function callUtilityLLM(
     const zenFailoverModel = process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free'
     if (utilModel !== zenFailoverModel) {
       console.warn(`[LLM] Utility-core Zen ${utilModel} thất bại cả HTTP + CLI — thử ZEN FAILOVER ${zenFailoverModel} — task: ${taskLabel}`)
-      const foHttp = await callZenProvider(prompt, systemPrompt, zenFailoverModel, options, `utility-core-failover:${taskLabel}`)
+      const foHttp = await callZenProvider(prompt, systemPrompt, zenFailoverModel, utilOptions, `utility-core-failover:${taskLabel}`)
       if (foHttp && foHttp.content) {
         console.log(`[LLM] Utility-core dùng ZEN FAILOVER ${zenFailoverModel} ✓ — task: ${taskLabel}`)
         return foHttp
@@ -3666,17 +3693,24 @@ export async function callLLM(
   // đường NIM (key placeholder chết) → mất ~60s rồi trả content rỗng
   // ("LLM did not return valid JSON" / summary:""). Giờ route qua Zen HTTP →
   // OpenCode CLI (cùng chuỗi callLLMForAgent dùng).
-  // Model utility mặc định: nemotron-3.5-lightning-free (nhanh, JSON ổn định) —
-  // override qua env UTILITY_ZEN_MODEL. skipZenUtility: caller đã thử zen xong.
+  // TASK 55 (2026-09-28): model utility mặc định ĐỔI nemotron-3.5-lightning-free →
+  // space-bunny-free + effort 'low' — xem giải thích đầy đủ ở callUtilityLLM
+  // (nemotron 403 vĩnh viễn; failover effort=max + maxTokens nhỏ = rỗng).
+  // Override qua env UTILITY_ZEN_MODEL. skipZenUtility: caller đã thử zen xong.
   if (isZenConfigured() && !options?.skipZenUtility) {
-    const utilModel = process.env.UTILITY_ZEN_MODEL || 'nemotron-3.5-lightning-free'
-    const zen = await callZenProvider(prompt, systemPrompt, utilModel, options, `utility:${taskLabel}`)
+    const utilModel = process.env.UTILITY_ZEN_MODEL || 'space-bunny-free'
+    // TASK 55: effort low cho tác vụ cơ khí (tôn trọng caller nếu đã set)
+    const utilOptions: LLMCallOptions = {
+      ...options,
+      reasoningEffort: options?.reasoningEffort || 'low',
+    }
+    const zen = await callZenProvider(prompt, systemPrompt, utilModel, utilOptions, `utility:${taskLabel}`)
     if (zen && zen.content) {
       console.log(`[LLM] Utility dùng Zen ${utilModel} ✓ (${zen.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
       return zen
     }
     console.warn(`[LLM] Utility Zen HTTP ${utilModel} thất bại — thử OpenCode CLI: ${(zen?.error || 'unknown').slice(0, 100)}`)
-    const cliResult = await callOpenCodeCLIProvider(prompt, systemPrompt, utilModel, options, `utility:${taskLabel}`)
+    const cliResult = await callOpenCodeCLIProvider(prompt, systemPrompt, utilModel, utilOptions, `utility:${taskLabel}`)
     if (cliResult && cliResult.content) {
       console.log(`[LLM] Utility dùng OpenCode CLI ${utilModel} ✓ (${cliResult.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
       return cliResult
@@ -3686,12 +3720,12 @@ export async function callLLM(
     const zenFailoverModel = process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free'
     if (utilModel !== zenFailoverModel) {
       console.warn(`[LLM] Utility Zen ${utilModel} thất bại cả HTTP + CLI — thử ZEN FAILOVER ${zenFailoverModel} — task: ${taskLabel}`)
-      const foHttp = await callZenProvider(prompt, systemPrompt, zenFailoverModel, options, `utility-failover:${taskLabel}`)
+      const foHttp = await callZenProvider(prompt, systemPrompt, zenFailoverModel, utilOptions, `utility-failover:${taskLabel}`)
       if (foHttp && foHttp.content) {
         console.log(`[LLM] Utility dùng ZEN FAILOVER ${zenFailoverModel} ✓ — task: ${taskLabel}`)
         return foHttp
       }
-      const foCli = await callOpenCodeCLIProvider(prompt, systemPrompt, zenFailoverModel, options, `utility-failover:${taskLabel}`)
+      const foCli = await callOpenCodeCLIProvider(prompt, systemPrompt, zenFailoverModel, utilOptions, `utility-failover:${taskLabel}`)
       if (foCli && foCli.content) {
         console.log(`[LLM] Utility dùng ZEN FAILOVER (CLI) ${zenFailoverModel} ✓ — task: ${taskLabel}`)
         return foCli
@@ -3972,7 +4006,12 @@ async function callZenProvider(
   }
   // TASK 33 — chế độ reasoning CAO NHẤT theo model (muse-spark=xhigh,
   // space-bunny=max; nemotron không có knob). Xem zenReasoningEffortForModel.
-  const effort = zenReasoningEffortForModel(model)
+  // TASK 55: options.reasoningEffort override (caller utility truyền 'low' —
+  // tác vụ cơ khí; 'none' = tắt hẳn) — chống reasoning nuốt maxTokens nhỏ.
+  const effortOverride = options?.reasoningEffort?.trim().toLowerCase()
+  const effort = effortOverride === 'none'
+    ? undefined
+    : (effortOverride || zenReasoningEffortForModel(model))
   if (effort) body.reasoning_effort = effort
   if (options?.tools && options.tools.length > 0) {
     try {
@@ -4039,7 +4078,13 @@ async function callZenProvider(
     const totalTokens = data.usage?.total_tokens ?? ((data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0))
 
     if (!content && !(nativeToolCalls && nativeToolCalls.length > 0)) {
-      return { content: '', provider: 'zen', model: actualModel, error: `Zen empty response (${taskLabel})` }
+      // TASK 55: đường fail ÂM THẦM duy nhất của callZenProvider — 200 OK nhưng
+      // content rỗng. Từng KHÔNG log gì → khối ngầm.utility đợi heuristic fallback
+      // mà không ai biết lý do (compression LLM fail 15/15 lần không dấu vết).
+      // finish_reason=length + max_tokens nhỏ + reasoning_effort cao = reasoning
+      // nuốt hết budget → xem reasoningEffort trong LLMCallOptions.
+      console.warn(`[ZEN] ${taskLabel} EMPTY RESPONSE — finish_reason=${finishReason ?? 'null'}, max_tokens=${(body.max_tokens as number | undefined) ?? 'unlimited'}, reasoning_effort=${(body.reasoning_effort as string | undefined) ?? 'none'}, usage=${JSON.stringify((data.usage as Record<string, unknown> | undefined)?.completion_tokens_details ?? {})} — model trả 200 nhưng 0 content (reasoning starvation?)`)
+      return { content: '', provider: 'zen', model: actualModel, error: `Zen empty response, finish_reason=${finishReason ?? 'null'} (${taskLabel})` }
     }
 
     // Token tracking — per-provider + per-agent (mirror NIM pattern)

@@ -1,8 +1,68 @@
 /**
  * WATCH-AGENTS — Trạm quan sát vận hành agents (Task 54)
- * Chạy: DATABASE_URL="file:/home/z/tmo-app/db/custom.db" bun scripts/watch-agents.ts [--since-min N]
+ * Chạy: bun scripts/watch-agents.ts [--since-min N]
+ * (Task 55: tự chuẩn hóa DATABASE_URL — chống env leak sandbox + URL tương đối;
+ * logic mirror src/lib/db.ts — script giữ tự chứa, không import app module)
  * In ra: runs / jobs / messages / reviews mới trong cửa sổ thời gian + trạng thái treo/lỗi
  */
+import fs from 'fs'
+import path from 'path'
+
+// ---- DATABASE_URL resolution (mirror src/lib/db.ts — Task 55) ----
+function findProjectRoot(): string {
+  let root = process.cwd()
+  for (let i = 0; i < 6 && !fs.existsSync(path.join(root, 'prisma', 'schema.prisma')); i++) {
+    root = path.dirname(root)
+  }
+  return root
+}
+
+function readEnvFileDatabaseUrl(envPath: string): string {
+  if (!fs.existsSync(envPath)) return ''
+  try {
+    let value = ''
+    for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+      const m = line.match(/^\s*(?:export\s+)?DATABASE_URL\s*=\s*(.*)$/)
+      if (m) {
+        let v = m[1].trim().replace(/\s+#.*$/, '').trim()
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1)
+        value = v
+      }
+    }
+    return value
+  } catch {
+    return ''
+  }
+}
+
+;(function resolveDatabaseUrl() {
+  const root = findProjectRoot()
+  const inherited = (process.env.DATABASE_URL || '').trim()
+  const envUrl = readEnvFileDatabaseUrl(path.join(root, '.env'))
+  // Lớp 1: env leak guard — env kế thừa trỏ file không tồn tại → ưu tiên .env
+  if (envUrl && inherited) {
+    const ip = inherited.match(/^file:(.+)$/)?.[1]?.trim()
+    if (ip) {
+      const abs = path.isAbsolute(ip) ? ip : path.resolve(process.cwd(), ip)
+      if (!fs.existsSync(abs)) {
+        console.warn(`[DB] ⚠️ DATABASE_URL kế thừa ("${inherited}") trỏ file KHÔNG tồn tại — ưu tiên .env: "${envUrl}"`)
+        process.env.DATABASE_URL = envUrl
+      }
+    }
+  } else if (envUrl && !inherited) {
+    process.env.DATABASE_URL = envUrl
+  }
+  // Lớp 2: tương đối → tuyệt đối (schema-relative — cùng ngữ nghĩa Prisma CLI)
+  const m = (process.env.DATABASE_URL || '').match(/^file:(.+)$/)
+  if (m) {
+    const p = m[1].trim()
+    const isAbs = p && (p.startsWith('/') || p.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(p))
+    if (p && !isAbs) {
+      process.env.DATABASE_URL = 'file:' + path.resolve(path.join(root, 'prisma'), p)
+    }
+  }
+})()
+
 import { PrismaClient } from '@prisma/client'
 const db = new PrismaClient()
 

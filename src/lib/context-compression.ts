@@ -323,7 +323,12 @@ export async function compressConversation(params: {
     const res = await withTimeout(
       callUtilityLLM(buildDigestPrompt(transcript), undefined, llmContext || 'context-compression', {
         temperature: 0.2,
-        maxTokens: 700,
+        // TASK 55: 700 → 2000. Trước đây model utility là nemotron-lightning
+        // (không reasoning) nên 700 đủ. Giờ space-bunny-free (reasoning model,
+        // effort low) cần chừa headroom cho reasoning tokens + digest trọn vẹn
+        // (verified: effort low + mt700 → finish=length, digest bị cắt giữa
+        // chừng 1236 chars; mt2000 → dư dả, vẫn rẻ).
+        maxTokens: 2000,
       }),
       DIGEST_LLM_TIMEOUT_MS,
       'Context compression LLM',

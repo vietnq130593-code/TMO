@@ -1,12 +1,106 @@
 import { PrismaClient } from '@prisma/client'
+import fs from 'fs'
+import path from 'path'
+
+// ==================== DATABASE_URL RESOLUTION (TASK 55 — 2026-09-28) ====================
+// 2 lớp giải quyết 2 sự cố vận hành THẬT (đã gặp trong sandbox):
+//
+// (1) ENV LEAK GUARD — shell sandbox xuất DATABASE_URL của project KHÁC
+//     (vd file:/home/z/my-project/db/custom.db — file KHÔNG tồn tại); bun
+//     không override env đã set bằng .env → mọi process chạy từ shell mở nhầm
+//     DB chết (Error code 14: CANTOPEN). pm2-start.sh đã `unset DATABASE_URL`
+//     cho app; guard này bảo vệ thêm đường `bun run dev` thủ công + script.
+//     Chính sách: env kế thừa trỏ file TỒN TẠI → GIỮ NGUYÊN (override chủ đích
+//     của người dùng — 12-factor; /tmp test DB của tests/db-isolation-preload
+//     cũng tự nhiên an toàn vì file tồn tại). Trỏ file KHÔNG tồn tại → ưu tiên
+//     DATABASE_URL trong .env của project này (nguồn sự thật cho project).
+//
+// (2) RELATIVE → ABSOLUTE — Prisma CLI (db push / migrate) resolve `file:`
+//     tương đối theo prisma/schema.prisma, nhưng CLIENT runtime resolve theo
+//     CWD → `file:../db/custom.db` từ CWD=/home/z/tmo-app trỏ /home/z/db/...
+//     (không tồn tại) → CANTOPEN. Chuẩn hóa về schema-relative tuyệt đối —
+//     chạy đúng từ BẤT KỲ CWD nào (scripts, bun test, pm2 start mới, next dev).
+let __dbUrlWasRelative = false
+
+function findProjectRoot(): string {
+  let root = process.cwd()
+  for (let i = 0; i < 6 && !fs.existsSync(path.join(root, 'prisma', 'schema.prisma')); i++) {
+    root = path.dirname(root)
+  }
+  return root
+}
+
+/** Đọc DATABASE_URL= từ file .env (bỏ qua comment; strip quote). '' = không khai báo. */
+function readEnvFileDatabaseUrl(envPath: string): string {
+  if (!fs.existsSync(envPath)) return ''
+  try {
+    const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/)
+    let value = ''
+    for (const line of lines) {
+      const m = line.match(/^\s*(?:export\s+)?DATABASE_URL\s*=\s*(.*)$/)
+      if (m) {
+        let v = m[1].trim()
+        v = v.replace(/\s+#.*$/, '').trim() // strip trailing comment
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+          v = v.slice(1, -1)
+        }
+        value = v
+      }
+    }
+    return value
+  } catch {
+    return ''
+  }
+}
+
+(function resolveDatabaseUrl() {
+  const inherited = (process.env.DATABASE_URL || '').trim()
+  const envUrl = readEnvFileDatabaseUrl(path.join(findProjectRoot(), '.env'))
+
+  // ---- Lớp 1: env leak guard ----
+  if (envUrl && inherited) {
+    const inheritedPath = inherited.match(/^file:(.+)$/)?.[1]?.trim()
+    if (inheritedPath) {
+      const inheritedAbs = path.isAbsolute(inheritedPath)
+        ? inheritedPath
+        : path.resolve(process.cwd(), inheritedPath)
+      if (!fs.existsSync(inheritedAbs)) {
+        console.warn(
+          `[DB] ⚠️ DATABASE_URL kế thừa từ môi trường ("${inherited}") trỏ file KHÔNG tồn tại — ưu tiên .env của project: "${envUrl}"`,
+        )
+        process.env.DATABASE_URL = envUrl
+      }
+    }
+  } else if (envUrl && !inherited) {
+    process.env.DATABASE_URL = envUrl
+  }
+
+  // ---- Lớp 2: chuẩn hóa tương đối → tuyệt đối (schema-relative) ----
+  const url = process.env.DATABASE_URL || ''
+  const m = url.match(/^file:(.+)$/)
+  if (m) {
+    const rawPath = m[1].trim()
+    const isAbsolute =
+      rawPath && (rawPath.startsWith('/') || rawPath.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(rawPath))
+    if (rawPath && !isAbsolute) {
+      const resolved = path.resolve(path.join(findProjectRoot(), 'prisma'), rawPath)
+      __dbUrlWasRelative = true // cho warnIfAbsoluteDbPath dưới — không cảnh báo nhầm
+      process.env.DATABASE_URL = `file:${resolved}`
+      console.log(`[DB] DATABASE_URL tương đối chuẩn hóa: ${url} → file:${resolved} (schema-relative)`)
+    }
+  }
+})(); // <- semicolon BẮT BUỘC: IIFE sau này sẽ bị nối chuỗi thành call trên undefined
 
 // ==================== PORTABILITY CHECK (2026-08-31) ====================
-// Nếu DATABASE_URL dùng đường dẫn TUYỆT ĐỐI (vd: file:/home/z/tmo-app/db/custom.db
+// Nếu DATABASE_URL (.env gốc) dùng đường dẫn TUYỆT ĐỐI (vd: file:/home/z/tmo-app/db/custom.db
 // hoặc file:C:/Users/.../db/custom.db), việc copy thư mục app sang vị trí khác
 // sẽ KHÔNG mang theo dữ liệu — bản copy vẫn đọc/ghi DB ở vị trí CŨ.
 // Khuyến nghị: dùng đường dẫn TƯƠNG ĐỐI `file:../db/custom.db` (tương đối với
 // prisma/schema.prisma) để bản copy tự dùng file DB riêng của nó.
+// (TASK 55: URL tương đối được normalize ở trên — cảnh báo dưới chỉ dành cho
+// trường hợp .env gốc THỰC SỰ tuyệt đối do người dùng tự viết.)
 (function warnIfAbsoluteDbPath() {
+  if (__dbUrlWasRelative) return // .env gốc là tương đối (đúng khuyến nghị) — im lặng
   const url = process.env.DATABASE_URL || ''
   const m = url.match(/^file:(\/|\\|[A-Za-z]:[\\/])/)
   if (m) {
@@ -17,7 +111,7 @@ import { PrismaClient } from '@prisma/client'
       `Lưu ý: stop app trước khi copy (WAL mode — dữ liệu mới nhất có thể nằm trong custom.db-wal).`
     )
   }
-})()
+})();
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
