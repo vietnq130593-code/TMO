@@ -12,6 +12,13 @@
  *     beforeId     (optional) — Cursor (id của message CŨ NHẤT đang hiển thị)
  *                                → load N lượt trao đổi cũ hơn nữa.
  *                                Chỉ có tác dụng khi `exchanges` được set.
+ *     afterId      (optional) — TASK 53 (realtime heartbeat): delta mode —
+ *                                chỉ trả những message MỚI HƠN cursor (id của
+ *                                message MỚI NHẤT client đang có). Dùng cho
+ *                                heartbeat append khi Opus auto loop tạo
+ *                                message mới server-side — KHÔNG reload tail
+ *                                (giữ history + scroll user). Response:
+ *                                { messages } theo thứ tự thời gian tăng dần.
  *   Response (lazy-load mode):
  *     { messages, hasMore, oldestId } — messages theo thứ tự thời gian tăng dần
  *
@@ -110,6 +117,30 @@ export async function GET(request: NextRequest) {
         { error: 'sessionId is required' },
         { status: 400 }
       )
+    }
+
+    // ===== Delta mode (TASK 53 — realtime heartbeat): message MỚI HƠN cursor =====
+    // Cursor composite (createdAt, id) — mirror walkBack nhưng đi XUỐI (asc).
+    // Cursor không hợp lệ (đã bị xóa / thuộc phiên khác) → trả rỗng: client
+    // phát hiện qua fingerprint đổi liên tục mà delta rỗng → tự full reload.
+    const afterId = searchParams.get('afterId')
+    if (afterId) {
+      const cursorMsg = await db.chatMessage.findUnique({ where: { id: afterId } })
+      if (!cursorMsg || cursorMsg.sessionId !== sessionId) {
+        return NextResponse.json({ messages: [] })
+      }
+      const messages = await db.chatMessage.findMany({
+        where: {
+          sessionId,
+          OR: [
+            { createdAt: { gt: cursorMsg.createdAt } },
+            { createdAt: cursorMsg.createdAt, id: { gt: afterId } },
+          ],
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: 200, // safety cap — 1 vòng auto loop tối đa vài message
+      })
+      return NextResponse.json({ messages })
     }
 
     // ===== Lazy-load mode (user request 2026-09-01) =====

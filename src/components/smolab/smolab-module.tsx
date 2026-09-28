@@ -999,6 +999,19 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   const lastStoppedAtRef = useRef(0)
   useEffect(() => { currentSessionIdRef.current = currentSessionId })
 
+  // ===== TASK 53 — REALTIME HEARTBEAT refs (user request 2026-09-28) =====
+  // latestDbMessageRef: message DB (id cuid — KHÔNG chứa '-') MỚI NHẤT client
+  // đang hiển thị = cursor afterId cho delta fetch của heartbeat realtime.
+  // CHỈ được cập nhật bởi đường load TỪ DB (loadSessionTail / delta append) —
+  // message client tự append (crypto.randomUUID, có '-') không tính.
+  const latestDbMessageRef = useRef<{ id: string } | null>(null)
+  // loadSessionTail đang fetch/replace state — heartbeat NGHỈ trong lúc đó
+  // để không đua append-delta với replace-tail (mất message vừa append).
+  const sessionTailLoadingRef = useRef(false)
+  // Thời điểm user vừa bấm đổi mode/kill Opus ở client — heartbeat không đè
+  // optimistic update trong cửa sổ 5s này (PATCH đang bay)
+  const lastOpusModeActionRef = useRef(0)
+
   // Restore persisted Smolab tab AFTER mount to avoid hydration mismatch.
   const smolabTabRestoredRef = useRef(false)
   useEffect(() => {
@@ -1464,13 +1477,65 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     return out
   }, [])
 
+  // ===== TASK 53 — RE-ATTACH durable goal-loop jobs của session (idempotent) =====
+  // Trích từ loadSessionTail (GĐ4 CI-5 14-e) để heartbeat realtime tái sử dụng:
+  // fetch danh sách job queued/running của session → merge state + chèn
+  // placeholder "⏳ Tác vụ nền" đúng chỗ (ngay sau user message khởi tạo job).
+  // Job terminal KHÔNG attach (assistant message do worker finalize đã nằm
+  // trong DB tail/delta).
+  const attachSessionGoalLoopJobs = useCallback(async (sid: string) => {
+    try {
+      const jobsRes = await fetch(`/api/goal-loop-jobs?sessionId=${encodeURIComponent(sid)}`)
+      if (!jobsRes.ok) return
+      const jobsData = await jobsRes.json().catch(() => null) as { ok?: boolean; jobs?: GoalLoopJobApiData[] } | null
+      const toAttach = (jobsData?.ok && Array.isArray(jobsData.jobs))
+        ? jobsData.jobs.filter(j => !!j?.id && (j.status === 'queued' || j.status === 'running'))
+        : []
+      if (toAttach.length === 0 || currentSessionIdRef.current !== sid) return
+      setGoalLoopJobs(prev => {
+        const next = { ...prev }
+        for (const j of toAttach) {
+          next[j.id] = {
+            ...j,
+            result: j.result ?? null,
+            agentName: prev[j.id]?.agentName || j.result?.agentName,
+          }
+        }
+        return next
+      })
+      // Placeholder message trong khung chat (nếu chưa có) — chèn NGAY
+      // SAU user message khởi tạo job (job.messageId = id ChatMessage DB)
+      // để đúng dòng chat; không tìm thấy anchor → append cuối.
+      setMessages(prev => {
+        let next = prev
+        for (const j of toAttach) {
+          if (next.some(m => m.goalLoopJobId === j.id)) continue
+          const placeholderMsg: SmolabMessage = {
+            id: `glj_${j.id}`,
+            role: 'assistant',
+            content: '⏳ Tác vụ nền đang chạy…',
+            timestamp: new Date(j.startedAt || j.createdAt || Date.now()),
+            goalLoopJobId: j.id,
+          }
+          const anchorIdx = j.messageId ? next.findIndex(m => m.id === j.messageId) : -1
+          next = anchorIdx >= 0
+            ? [...next.slice(0, anchorIdx + 1), placeholderMsg, ...next.slice(anchorIdx + 1)]
+            : [...next, placeholderMsg]
+        }
+        return next
+      })
+    } catch { /* best-effort — job attach thất bại không chặn gì */ }
+  }, [])
+
   const loadSessionTail = useCallback(async (sid: string, opts?: { silent?: boolean }) => {
     if (!sid) {
       setMessages([])
       setHasMoreMessages(false)
       oldestLoadedIdRef.current = null
+      latestDbMessageRef.current = null
       return
     }
+    sessionTailLoadingRef.current = true // TASK 53 — heartbeat nghỉ trong lúc replace tail
     if (!opts?.silent) setLoadingMessages(true)
     try {
       const [msgRes, fbRes] = await Promise.all([
@@ -1539,6 +1604,8 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         setMessages(loaded)
         setHasMoreMessages(!!data.hasMore)
         oldestLoadedIdRef.current = data.oldestId || loaded[0]?.id || null
+        // TASK 53 — cursor delta cho heartbeat realtime (message DB mới nhất)
+        latestDbMessageRef.current = loaded.length > 0 ? { id: loaded[loaded.length - 1].id } : null
 
         // ===== MERGE Thought Process panels (bug fix 2026-09-06) =====
         // Fetch runs của session + chèn panel vào đúng vị trí (ngay sau user
@@ -1564,6 +1631,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         setMessages([])
         setHasMoreMessages(false)
         oldestLoadedIdRef.current = null
+        latestDbMessageRef.current = null
       }
       isNearBottomRef.current = true // mở session → đứng ở cuối
       lastScrollTopRef.current = 0 // chống false-trigger load-older khi scrollTop bị clamp về 0 (nội dung mới ngắn hơn)
@@ -1572,7 +1640,9 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       setMessages([])
       setHasMoreMessages(false)
       oldestLoadedIdRef.current = null
+      latestDbMessageRef.current = null
     } finally {
+      sessionTailLoadingRef.current = false // TASK 53 — heartbeat hoạt động lại
       if (!opts?.silent) setLoadingMessages(false)
 
       // ===== RESUME TÁC VỤ NỀN (user request 2026-09-01) =====
@@ -1592,58 +1662,11 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       } catch { /* best-effort */ }
 
       // ===== GĐ4 CI-5 (14-e) — RE-ATTACH durable goal-loop jobs của session =====
-      // Mở lại phiên (reload / restart / đổi phiên về) mà còn job nền
-      // queued/running → panel "Tác vụ nền" hiện lại + poll jobId tiếp tục
-      // (đóng tab trước đó KHÔNG mất tác vụ — B8-b). Idempotent: silent reload
-      // của agent-run poller cũng chạy qua đây → placeholder bị replace bởi
-      // DB tail sẽ được chèn lại đúng chỗ nếu job vẫn đang chạy. Job đã
-      // terminal KHÔNG re-attach (assistant message do worker finalize lưu
-      // DB — nằm trong tail vừa load phía trên).
-      try {
-        const jobsRes = await fetch(`/api/goal-loop-jobs?sessionId=${encodeURIComponent(sid)}`)
-        if (jobsRes.ok) {
-          const jobsData = await jobsRes.json().catch(() => null) as { ok?: boolean; jobs?: GoalLoopJobApiData[] } | null
-          const toAttach = (jobsData?.ok && Array.isArray(jobsData.jobs))
-            ? jobsData.jobs.filter(j => !!j?.id && (j.status === 'queued' || j.status === 'running'))
-            : []
-          if (toAttach.length > 0 && currentSessionIdRef.current === sid) {
-            setGoalLoopJobs(prev => {
-              const next = { ...prev }
-              for (const j of toAttach) {
-                next[j.id] = {
-                  ...j,
-                  result: j.result ?? null,
-                  agentName: prev[j.id]?.agentName || j.result?.agentName,
-                }
-              }
-              return next
-            })
-            // Placeholder message trong khung chat (nếu chưa có) — chèn NGAY
-            // SAU user message khởi tạo job (job.messageId = id ChatMessage DB)
-            // để đúng dòng chat; không tìm thấy anchor → append cuối.
-            setMessages(prev => {
-              let next = prev
-              for (const j of toAttach) {
-                if (next.some(m => m.goalLoopJobId === j.id)) continue
-                const placeholderMsg: SmolabMessage = {
-                  id: `glj_${j.id}`,
-                  role: 'assistant',
-                  content: '⏳ Tác vụ nền đang chạy…',
-                  timestamp: new Date(j.startedAt || j.createdAt || Date.now()),
-                  goalLoopJobId: j.id,
-                }
-                const anchorIdx = j.messageId ? next.findIndex(m => m.id === j.messageId) : -1
-                next = anchorIdx >= 0
-                  ? [...next.slice(0, anchorIdx + 1), placeholderMsg, ...next.slice(anchorIdx + 1)]
-                  : [...next, placeholderMsg]
-              }
-              return next
-            })
-          }
-        }
-      } catch { /* best-effort — job re-attach thất bại không chặn session load */ }
+      // (TASK 53: trích thành attachSessionGoalLoopJobs — heartbeat realtime
+      // cũng gọi lại khi phát hiện job mới của phiên)
+      attachSessionGoalLoopJobs(sid).catch(() => { /* best-effort */ })
     }
-  }, [mergeAgentRunPanels])
+  }, [mergeAgentRunPanels, attachSessionGoalLoopJobs])
 
   // Kéo lên đầu chat → load thêm N lượt trao đổi CŨ hơn (prepend + giữ vị trí đọc)
   const loadOlderMessages = useCallback(async () => {
@@ -2267,6 +2290,26 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     setOpusStatusLoading(false)
   }, [])
 
+  // TASK 53 — fetch reviews của phiên (trích từ effect dưới để heartbeat
+  // realtime tái sử dụng khi fingerprint báo có review mới do auto loop tạo
+  // server-side — Review Card hiện ngay dưới message được review)
+  const fetchOpusReviews = useCallback(async (sid: string) => {
+    try {
+      const res = await fetch(`/api/opus/reviews?sessionId=${encodeURIComponent(sid)}&limit=20`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (Array.isArray(data.reviews)) {
+        setOpusReviews(prev => {
+          const next = new Map(prev)
+          for (const rv of data.reviews) {
+            if (rv?.messageId) next.set(rv.messageId, rv as OpusReviewSerialized)
+          }
+          return next
+        })
+      }
+    } catch { /* best-effort — review cũ không tải được thì coi như chưa review */ }
+  }, [])
+
   // Reset state review theo phiên + fetch status + khôi phục review cũ của phiên
   // (GET /api/opus/reviews — Review Card + trạng thái "đã review" sống sót qua F5)
   useEffect(() => {
@@ -2275,48 +2318,216 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     setOpusReviewLoading(null)
     if (!currentSessionId) return
     void fetchOpusStatus(currentSessionId)
-    void (async () => {
-      try {
-        const res = await fetch(`/api/opus/reviews?sessionId=${encodeURIComponent(currentSessionId)}&limit=20`)
-        if (!res.ok) return
-        const data = await res.json()
-        if (Array.isArray(data.reviews)) {
-          setOpusReviews(prev => {
-            const next = new Map(prev)
-            for (const rv of data.reviews) {
-              if (rv?.messageId) next.set(rv.messageId, rv as OpusReviewSerialized)
-            }
-            return next
-          })
-        }
-      } catch { /* best-effort — review cũ không tải được thì coi như chưa review */ }
-    })()
-  }, [currentSessionId, fetchOpusStatus])
+    void fetchOpusReviews(currentSessionId)
+  }, [currentSessionId, fetchOpusStatus, fetchOpusReviews])
 
-  // Poll status 8s KHI auto mode — bắt killed / đổi mode từ nơi khác (dọn
-  // interval đúng pattern poller của file: clearInterval trong cleanup)
-  useEffect(() => {
-    if (opusMode !== 'auto') return
-    const interval = setInterval(async () => {
-      try {
-        const sid = currentSessionIdRef.current
-        if (!sid) return
-        const res = await fetch(`/api/opus/status?sessionId=${encodeURIComponent(sid)}`)
-        if (res.ok) {
-          const data = await res.json()
-          setOpusMode(data.mode === 'auto' ? 'auto' : 'manual')
-          setOpusKilled(!!data.killed)
+  // ==================== TASK 53 — REALTIME HEARTBEAT (user request 2026-09-28) ====================
+  // "Mở chế độ Tự động review của Opus thì phải chuyển module khác rồi quay
+  // lại mới thấy review mới nhất + những gì agents triển khai" — nguyên nhân:
+  // mọi dữ liệu (messages/reviews/jobs/runs) trước đây chỉ fetch MỘT LẦN khi
+  // mở session, trong khi vòng auto chạy hoàn toàn server-side (review →
+  // directive message → goal-loop job → agent run). Heartbeat poll 1 endpoint
+  // fingerprint nhẹ /api/opus/activity mỗi 3s (auto) / 8s (manual); phần nào
+  // của fingerprint đổi → refresh ĐÚNG phần đó:
+  //   message mới → delta fetch afterId | review mới → refetch reviews
+  //   job mới    → attach placeholder    | run mới   → refreshAgentRuns
+  //   mode/killed → sync header (THAY poller /api/opus/status 8s cũ ở trên)
+  type OpusActivityData = {
+    ok?: boolean
+    mode?: string
+    killed?: boolean
+    messageCount?: number
+    latestMessageAt?: string | null
+    reviewCount?: number
+    latestReviewAt?: string | null
+    activeJobIds?: string[]
+    activeRunCount?: number
+    latestRunAt?: number | null
+  }
+  type ActivitySnapshot = { mc: number; ma: string; rc: number; ra: string; jobs: string; runs: number; runAt: number }
+  // Fingerprint lần beat gần nhất (null = chưa có baseline — beat đầu vẫn chạy
+  // 1 vòng check để bắt message đến giữa lúc loadSessionTail và beat đầu)
+  const activitySnapshotRef = useRef<ActivitySnapshot | null>(null)
+  // Delta liên tục rỗng dù fingerprint báo message mới (cursor hết hạn — message
+  // bị xóa giữa chừng) → sau 2 lần → full tail reload tự chữa
+  const emptyDeltaStreakRef = useRef(0)
+
+  // ===== Delta append: message MỚI HƠN cursor (KHÔNG reload tail) =====
+  // Giữ nguyên history user đã kéo lên + không giật scroll (auto-follow chỉ
+  // khi user đang ở cuối — effect scroll hiện có xử lý qua isNearBottomRef).
+  // Dedupe 2 lớp:
+  //   (a) theo id — message DB đã hiển thị (từ tail load / delta trước đó)
+  //   (b) ADOPT client copy — message client tự append sau khi gửi chat / job
+  //       hoàn tất có id crypto.randomUUID() (chứa '-'); DB copy cùng
+  //       role+content đến sau → THAY client copy (nâng cấp metadata:
+  //       sources / agentRun / Opus directive card) thay vì nhân đôi bong bóng.
+  const appendDeltaMessages = useCallback(async (sid: string): Promise<boolean> => {
+    const afterId = latestDbMessageRef.current?.id
+    if (!afterId) return false
+    const res = await fetch(`/api/chat-messages?sessionId=${encodeURIComponent(sid)}&afterId=${encodeURIComponent(afterId)}`)
+    if (!res.ok) return false
+    const data = await res.json().catch(() => null) as {
+      messages?: Array<{
+        id: string
+        role: string
+        content: string
+        model?: string | null
+        provider?: string | null
+        metadata?: string | null
+        createdAt: string
+      }>
+    } | null
+    const rows = Array.isArray(data?.messages) ? data!.messages! : []
+    if (rows.length === 0) return false
+
+    const mapped: SmolabMessage[] = rows.map(m => {
+      let parsedMeta: Record<string, unknown> | undefined
+      if (m.metadata) {
+        try {
+          const first = JSON.parse(m.metadata)
+          // Double-stringified (legacy) → parse thêm 1 lần — mirror loadSessionTail
+          parsedMeta = typeof first === 'string' ? JSON.parse(first) : first
+        } catch { /* ignore */ }
+      }
+      return {
+        id: m.id,
+        role: (['user', 'assistant', 'tool_call', 'error'].includes(m.role) ? m.role : 'assistant') as SmolabMessage['role'],
+        content: m.content,
+        timestamp: new Date(m.createdAt),
+        model: m.model || undefined,
+        provider: m.provider || undefined,
+        sources: parsedMeta?.sources as Array<{ type: string; content: string; documentTitle?: string }> | undefined,
+        confidence: parsedMeta?.confidence as number | undefined,
+        toolName: parsedMeta?.toolName as string | undefined,
+        toolCallInfo: parsedMeta?.toolCallInfo as { tool: string; detail: string } | undefined,
+        agentName: parsedMeta?.agentName as string | undefined,
+        agentPosition: parsedMeta?.agentPosition as string | undefined,
+        isTeamMessage: parsedMeta?.isTeamMessage as boolean | undefined,
+        agentRunSummary: parsedMeta?.agentRun as SmolabMessage['agentRunSummary'],
+        metadata: parsedMeta as SmolabMessage['metadata'],
+        feedback: null,
+      }
+    })
+
+    setMessages(prev => {
+      if (currentSessionIdRef.current !== sid) return prev
+      let next = prev
+      for (const msg of mapped) {
+        if (next.some(x => x.id === msg.id)) continue // (a) id-dedupe
+        const adoptIdx = next.findIndex(x => x.id.includes('-') && x.role === msg.role && x.content === msg.content)
+        if (adoptIdx >= 0) {
+          next = [...next]
+          next[adoptIdx] = { ...msg, feedback: next[adoptIdx].feedback ?? null } // (b) adopt
+          continue
         }
-      } catch { /* poll lỗi — bỏ qua vòng này */ }
-    }, 8000)
+        next = [...next, msg]
+      }
+      return next
+    })
+    latestDbMessageRef.current = { id: rows[rows.length - 1].id }
+    return true
+  }, [])
+
+  // ===== 1 beat: fetch fingerprint → so sánh với beat trước → refresh đúng phần đổi =====
+  const heartbeatOnce = useCallback(async () => {
+    const sid = currentSessionIdRef.current
+    if (!sid || document.hidden) return
+    if (sessionTailLoadingRef.current) return // đang load/replace tail — không đua append
+    try {
+      const res = await fetch(`/api/opus/activity?sessionId=${encodeURIComponent(sid)}`)
+      if (!res.ok) return
+      const d = await res.json().catch(() => null) as OpusActivityData | null
+      if (!d?.ok) return
+
+      // mode/killed: server là nguồn sự thật — trừ 5s sau khi user vừa bấm
+      // đổi mode/kill ở client (optimistic đang chờ PATCH về)
+      if (Date.now() - lastOpusModeActionRef.current > 5000) {
+        if (d.mode) setOpusMode(d.mode === 'auto' ? 'auto' : 'manual')
+        if (typeof d.killed === 'boolean') setOpusKilled(d.killed)
+      }
+
+      const snap: ActivitySnapshot = {
+        mc: Number(d.messageCount ?? 0),
+        ma: String(d.latestMessageAt ?? ''),
+        rc: Number(d.reviewCount ?? 0),
+        ra: String(d.latestReviewAt ?? ''),
+        jobs: Array.isArray(d.activeJobIds) ? d.activeJobIds.join(',') : '',
+        runs: Number(d.activeRunCount ?? 0),
+        runAt: Number(d.latestRunAt ?? 0),
+      }
+      const hadBaseline = activitySnapshotRef.current !== null
+      const prev: ActivitySnapshot = activitySnapshotRef.current ?? { mc: 0, ma: '', rc: 0, ra: '', jobs: '', runs: 0, runAt: 0 }
+      activitySnapshotRef.current = snap
+      if (hadBaseline &&
+          prev.mc === snap.mc && prev.ma === snap.ma && prev.rc === snap.rc &&
+          prev.ra === snap.ra && prev.jobs === snap.jobs && prev.runs === snap.runs && prev.runAt === snap.runAt) {
+        return // không đổi gì
+      }
+
+      // 1) MESSAGES — message mới (auto loop directive / kết quả agent) hoặc bị xóa
+      if (prev.mc !== snap.mc || prev.ma !== snap.ma) {
+        const cursorId = latestDbMessageRef.current?.id
+        if (!cursorId || snap.mc < prev.mc) {
+          // Chưa có cursor (session trống ở client) hoặc message bị XÓA → full tail
+          emptyDeltaStreakRef.current = 0
+          await loadSessionTail(sid, { silent: true })
+        } else if (!inFlightChatsRef.current.has(sid)) {
+          // Client đang tự gửi chat trong phiên này → bỏ lượt delta (client tự
+          // append response; beat sau sẽ adopt DB copy thay client copy)
+          const productive = await appendDeltaMessages(sid)
+          if (productive) {
+            emptyDeltaStreakRef.current = 0
+            setSessionsRefreshTick(t => t + 1) // preview danh sách session cập nhật
+            refreshAgentRuns().catch(() => {}) // Thought Process panel của run mới
+          } else if (hadBaseline) {
+            // Fingerprint đổi mà delta rỗng 2 lần liên tiếp → cursor lệch → full reload tự chữa
+            emptyDeltaStreakRef.current++
+            if (emptyDeltaStreakRef.current >= 2) {
+              emptyDeltaStreakRef.current = 0
+              await loadSessionTail(sid, { silent: true })
+            }
+          }
+        }
+      }
+      // 2) REVIEWS — Opus review mới (auto loop review xong → Review Card)
+      if (prev.rc !== snap.rc || prev.ra !== snap.ra) {
+        await fetchOpusReviews(sid)
+      }
+      // 3) JOBS — goal-loop job mới do server enqueue → attach placeholder + poll
+      if (prev.jobs !== snap.jobs) {
+        await attachSessionGoalLoopJobs(sid)
+      }
+      // 4) RUNS — run mới bắt đầu/kết thúc giữa 2 beat → refresh panels + todos
+      if (prev.runs !== snap.runs || prev.runAt !== snap.runAt) {
+        refreshAgentRuns().catch(() => {})
+      }
+    } catch { /* offline / server restart — thử lại ở beat sau */ }
+  }, [loadSessionTail, appendDeltaMessages, fetchOpusReviews, attachSessionGoalLoopJobs, refreshAgentRuns])
+
+  // Reset baseline khi đổi phiên (fingerprint mới; loadSessionTail nạp state)
+  useEffect(() => {
+    activitySnapshotRef.current = null
+    emptyDeltaStreakRef.current = 0
+  }, [currentSessionId])
+
+  // Poll interval: 3s khi auto mode (realtime — review 30-120s, directive /
+  // job / run cập nhật ≤3s), 8s khi manual (bắt tác vụ nền khởi tạo từ nơi
+  // khác). Ẩn tab → skip beat (mirror poller agent-run); dọn interval khi
+  // unmount / đổi phiên / đổi mode.
+  useEffect(() => {
+    if (!currentSessionId) return
+    const beat = () => { heartbeatOnce().catch(() => {}) }
+    beat() // baseline ngay khi mở session + bắt gap từ lúc tail load xong
+    const interval = setInterval(beat, opusMode === 'auto' ? 3000 : 8000)
     return () => clearInterval(interval)
-  }, [opusMode])
+  }, [currentSessionId, opusMode, heartbeatOnce])
 
   // Đổi chế độ review: PATCH /api/opus/review-mode — optimistic update +
   // revert khi lỗi + toast (bật auto → server tự unkill)
   const handleOpusModeChange = useCallback(async (mode: 'manual' | 'auto') => {
     setShowOpusModeMenu(false)
     if (!currentSessionId || mode === opusMode) return
+    lastOpusModeActionRef.current = Date.now() // TASK 53 — heartbeat không đè optimistic 5s
     const prevMode = opusMode
     const prevKilled = opusKilled
     setOpusMode(mode) // optimistic
@@ -2355,6 +2566,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
 
   // Kill switch (phanh khẩn cấp auto mode): POST /api/opus/kill
   const handleOpusKill = useCallback(async (action: 'kill' | 'reset') => {
+    lastOpusModeActionRef.current = Date.now() // TASK 53 — heartbeat không đè optimistic 5s
     try {
       const res = await fetch('/api/opus/kill', {
         method: 'POST',
