@@ -383,6 +383,17 @@ export type GoalStopReason =
   | 'no_progress'
   | 'cancelled'
   | 'error'
+  /**
+   * TASK 48 (đánh giá Multi-step Reasoning Loop — gap fix): mục tiêu bị chặn
+   * DUY NHẤT bởi thông tin/ủy quyền/phê duyệt CHỈ người dùng cung cấp được
+   * (trọng tài đánh dấu needsInput=true — rule 16 evaluator). Loop dừng SỚM
+   * thay vì đốt 2-3 chu kỳ thừa: câu hỏi của agent được trả thẳng về user
+   * (lastContent), user trả lời trong chat → run mới bootstrap với câu trả
+   * lời trong chat history. Đặc biệt quan trọng cho agent security (Linh
+   * Sickyx — ethics rule 4: "không chắc có ủy quyền → HỎI LẠI trước khi hành
+   * động") và mọi agent cần credentials/quyết định của user.
+   */
+  | 'needs_input'
 
 export interface GoalLoopResult {
   content: string
@@ -454,6 +465,14 @@ interface EvalVerdict {
   debtReadiness: 'ready' | 'blocked'
   /** Lý do cụ thể nợ chưa thể xử lý ở chu kỳ kế (khi debtReadiness='blocked'). */
   debtBlockedReason: string
+  /**
+   * TASK 48 (gap fix — NEEDS-INPUT): trọng tài xác định phần còn thiếu nằm
+   * NGOÀI hệ thống — CHỈ người dùng trả lời được (thiếu ủy quyền/scope
+   * pentest, credentials, quyết định phương án, thông tin không có trong
+   * hệ thống...). true → loop dừng 'needs_input' trả câu hỏi về user.
+   * Fail-open: field thiếu/sai → false (giữ hành vi cũ).
+   */
+  needsInput: boolean
   raw: string
 }
 
@@ -559,7 +578,7 @@ function buildDelegationProtocol(): string {
   return `
 
 📦 PHÂN CÔNG SUB-AGENT (delegate_task — Code Team chuyên trách):
-- RAMPAGE: implement code · SENTINEL: review/bug/security · CATALYST: tối ưu/refactor · SHOCWAVE: thiết kế kiến trúc/DB/API · MEGATRON: phân tích + verify tổng thể · FORGE: full-stack builder END-TO-END (UI + API + DB + tự kiểm định + preview verify) — tính năng trọn gói tự chứa · RAVAGE: security engineer (pentest/red team trong scope ủy quyền, security code review, hardening/fix lỗ hổng, DFIR, crypto).
+- RAMPAGE: implement code · SENTINEL: review/bug/security · CATALYST: tối ưu/refactor · SHOCWAVE: thiết kế kiến trúc/DB/API · MEGATRON: phân tích + verify tổng thể · FORGE: full-stack builder END-TO-END (UI + API + DB + tự kiểm định + preview verify) — tính năng trọn gói tự chứa. (TASK 48: agent security "Linh Sickyx" giờ là standalone ĐỘC LẬP — KHÔNG nằm trong delegate_task; cần security work → dispatch_agent.)
 - Cú pháp: tool_call: delegate_task({"agent": "RAMPAGE", "task": "Nhiệm vụ cụ thể...", "context": "file liên quan, ràng buộc...", "acceptance_criteria": "điều kiện hoàn thành kiểm định được"})
 - NÊN delegate khi: task cần đọc/sửa NHIỀU file (làm trực tiếp sẽ phình context của bạn), cần chuyên môn sâu, hoặc task giao trọn được cho 1 agent.
 - KHÔNG delegate việc 1-2 bước đơn giản — tự làm nhanh hơn.
@@ -1057,9 +1076,10 @@ Nguyên tắc SẮT:
 13. FACT-GATHERING GUARD (2026-10-27 — E2E lộ agent trả về 1 câu ý định mà evaluator vẫn chấm hoàn thành): mục tiêu đòi dữ liệu thật về hệ thống/file/database (khảo sát, rà soát, đánh giá hiện trạng, đếm, liệt kê, kiểm tra...) → KHÔNG phải câu hỏi kiến thức chung: "complete": true KHI VÀ CHỈ KHI run CÓ tool call thu thập dữ liệu thật (file_read/grep/shell/query/delegation...) và kết quả khớp mục tiêu. Run 0 tool calls, hoặc nội dung cuối chỉ là Ý ĐỊNH/KẾ HOẠCH ("tôi sẽ...") thay vì báo cáo dữ liệu → "complete": false, "verified": false, rootCause ghi rõ: thiếu bằng chứng thu thập dữ liệu thật.
 14. DEBT READINESS (user directive 2026-10-27 phiên 4 — GĐ3 xác định lại khả năng xử lý nợ ở chu kỳ kế): khi có side issues còn tồn tại, XÁC ĐỊNH LẠI xem chu kỳ kế tiếp ĐÃ CÓ THỂ TIẾN HÀNH XỬ LÝ được các nợ này chưa — đối chiếu từng nợ với năng lực tự phục vụ hiện có: tool sẵn có hoặc tự xây được (create_custom_tool), package tự cài được (manage_packages/bun add), schema tự sửa được (prisma + db push), việc thuộc chức trách agent có sẵn trong roster (dispatch được), không phụ thuộc điều kiện ngoài. TẤT CẢ nợ có đường xử lý → "debtReadiness": "ready" (chu kỳ kế quay GĐ0 xử lý được ngay). Nợ chờ phê duyệt Self-Direction / chờ vendor / chờ agent chưa tồn tại / thiếu điều kiện ngoài tầm với → "debtReadiness": "blocked" + "debtBlockedReason" nêu CỤ THỂ điều kiện còn thiếu (1 câu). KHÔNG phán "ready" khi nợ cần điều kiện chưa có — quay GĐ0 khi chưa thể xử lý chỉ đốt chu kỳ vô ích.
 15. COUNTERFACTUAL CHECK (Task 43 — chất lượng quyết định chu kỳ kế): khi "complete": false và run đã từng thất bại ít nhất 1 hướng tiếp cận (tool fail / verify fail / hướng đã thử không đạt), "nextPlan" PHẢI chứa ĐÚNG 1 dòng bắt đầu bằng "CF: " — 1 hướng làm KHÁC căn bản đáng giá nhất (nếu làm lại từ đầu sẽ thử gì thay vì cách đã fail) + vì sao hướng đó có thể thắng đúng chỗ cách cũ gục. KHÔNG để nextPlan lặp nguyên văn kế hoạch đã fail — đó là tín hiệu xoay vòng.
+16. NEEDS-INPUT CHECK (Task 48 — chống đốt chu kỳ vô ích): xác định xem mục tiêu có đang bị chặn DUY NHẤT bởi thông tin/ủy quyền/phê duyệt mà CHỈ NGƯỜI DÙNG cung cấp được không (agent đã hỏi trong lời kết luận — vd: thiếu scope/ủy quyền pentest, thiếu credentials, cần user chọn giữa các phương án, thông tin không có trong hệ thống...). ĐÚNG → "needsInput": true + "complete": false + "missing" nêu RÕ thông tin cụ thể cần user trả lời. KHÔNG dùng needsInput cho việc agent TỰ làm được bằng tool/tự phục vụ (xem rule 9a — đó là trốn tránh, không phải thiếu thông tin); cũng KHÔNG dùng khi agent chưa hề hỏi hoặc còn đường tấn công khả thi chưa thử. needsInput=true → hệ thống DỪNG vòng lặp ngay và trả câu hỏi về user (không chạy thêm chu kỳ).
 
 Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích thêm):
-{"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."], "sideIssues": ["..."], "debtDecision": "none|record|continue", "debtReadiness": "ready|blocked", "debtBlockedReason": "..."}`
+{"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."], "sideIssues": ["..."], "debtDecision": "none|record|continue", "debtReadiness": "ready|blocked", "debtBlockedReason": "...", "needsInput": true|false}"`
 
 // ==================== HELPERS ====================
 
@@ -1097,7 +1117,9 @@ export function parseEvalVerdict(raw: string): EvalVerdict | null {
     // Fail-open: field thiếu/sai → 'ready' (giữ hành vi cũ — debt cycle vẫn chạy).
     const debtReadiness = obj.debtReadiness === 'blocked' ? 'blocked' : 'ready'
     const debtBlockedReason = typeof obj.debtBlockedReason === 'string' ? obj.debtBlockedReason.slice(0, 300) : ''
-    return { complete, confidence, verified, missing, rootCause, nextPlan, sideIssues, debtDecision, debtReadiness, debtBlockedReason, raw: raw.slice(0, 400) }
+    // TASK 48 — NEEDS-INPUT: fail-open false (field thiếu/sai → giữ hành vi cũ).
+    const needsInput = obj.needsInput === true
+    return { complete, confidence, verified, missing, rootCause, nextPlan, sideIssues, debtDecision, debtReadiness, debtBlockedReason, needsInput, raw: raw.slice(0, 400) }
   } catch {
     return null
   }
@@ -1901,6 +1923,7 @@ export async function runGoalDrivenLoop(params: {
         debtDecision: resumeState.verdict.debtDecision ?? 'none',
         debtReadiness: resumeState.verdict.debtReadiness === 'blocked' ? 'blocked' : 'ready',
         debtBlockedReason: resumeState.verdict.debtBlockedReason ?? '',
+        needsInput: resumeState.verdict.needsInput === true, // TASK 48 — resume giữ phán quyết needs-input
         raw: '',
       }
     : null
@@ -1991,6 +2014,7 @@ export async function runGoalDrivenLoop(params: {
           debtDecision: lastVerdict.debtDecision,
           debtReadiness: lastVerdict.debtReadiness,
           debtBlockedReason: lastVerdict.debtBlockedReason,
+          needsInput: lastVerdict.needsInput, // TASK 48 — snapshot giữ needs-input qua checkpoint
         }
       : null,
     fingerprint: prevFingerprint,
@@ -3145,7 +3169,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     //  - có tool call nhưng không đánh giá được → chưa hoàn thành (đánh giá lại chu kỳ sau)
     if (!verdict) {
       if (cycleToolCalls === 0 && pendingDebtIssues.length === 0) {
-        verdict = { complete: true, confidence: 0.6, verified: false, missing: [], rootCause: '', nextPlan: [], sideIssues: [], debtDecision: 'none', debtReadiness: 'ready', debtBlockedReason: '', raw: '(evaluator unavailable — pure answer accepted)' }
+        verdict = { complete: true, confidence: 0.6, verified: false, missing: [], rootCause: '', nextPlan: [], sideIssues: [], debtDecision: 'none', debtReadiness: 'ready', debtBlockedReason: '', needsInput: false, raw: '(evaluator unavailable — pure answer accepted)' }
       } else {
         // FIX (R2-b #4): evaluator hỏng mà debt issues còn TREO → KHÔNG phán
         // complete (nhánh complete sẽ xóa pendingDebtIssues chìm). Giữ
@@ -3167,6 +3191,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           debtDecision: hasPendingDebt ? 'record' : 'none',
           debtReadiness: 'ready',
           debtBlockedReason: '',
+          needsInput: false, // TASK 48 — heuristic fallback: không tin needsInput khi evaluator hỏng
           raw: '(evaluator unavailable)',
         }
       }
@@ -3447,6 +3472,26 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       } catch (err) {
         console.warn(`[GoalLoop] SHR cuối chu kỳ ${cycle} fail-open: ${err instanceof Error ? err.message : String(err)}`)
       }
+    }
+
+    // ===== TASK 48 (đánh giá Multi-step Reasoning Loop — gap fix) =====
+    // NEEDS-INPUT STOP: trọng tài xác định mục tiêu bị chặn DUY NHẤT bởi
+    // thông tin/ủy quyền/phê duyệt CHỈ người dùng cung cấp được (rule 16 —
+    // agent đã hỏi trong lastContent). Trước đây không có stop reason cho
+    // trường hợp này: loop cứ chạy tiếp chu kỳ với continuation directive
+    // "khắc phục phần còn thiếu" — nhưng agent KHÔNG THỂ tự khắc phục (câu
+    // trả lời nằm ngoài hệ thống) → đốt 2-3 chu kỳ + evaluator calls rồi mới
+    // dừng ở max_cycles với câu hỏi bị chôn dưới wrapper "chưa hoàn thành".
+    // Giờ: dừng NGAY sau chu kỳ đầu tiên có needsInput → lastContent (câu
+    // hỏi của agent) được trả thẳng về user; user trả lời trong chat → run
+    // mới bootstrap với câu trả lời trong history (context bootstrap đã có
+    // sẵn). KHÔNG cần cancel/budget — đây là kết thúc CÓ MỤC ĐÍCH.
+    if (!verdict.complete && verdict.needsInput) {
+      stopReason = 'needs_input'
+      evidence.push({ cycle, kind: 'directive', text: `NEEDS-INPUT: trọng tài xác định phần còn thiếu (${verdict.missing[0]?.slice(0, 120) || 'thông tin từ người dùng'}) CHỈ người dùng trả lời được → dừng vòng lặp, trả câu hỏi về user` })
+      recordAgentThought(agentSessionId, `⏸️ Trọng tài: mục tiêu bị chặn bởi thông tin/ủy quyền CHỈ người dùng cung cấp được → TẠM DỪNG vòng lặp ở chu kỳ ${cycle} (không đốt thêm chu kỳ vô ích) — câu hỏi đã trả về user, chờ trả lời để tiếp tục`, totalIterations)
+      console.log(`[GoalLoop] ${agentName} NEEDS-INPUT: chu kỳ ${cycle} — trọng tài xác định blocker ngoài hệ thống (chỉ user trả lời được) → dừng chờ input`)
+      break outerLoop
     }
 
     // FIX 2026-09-14 #9 — debtMode=true nghĩa là trọng tài vừa chọn 'continue'
@@ -3736,7 +3781,9 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     // mà chưa complete: tổng hợp 1 báo cáo HOÀN CHỈNH từ bằng chứng đã thu
     // (đã làm · bằng chứng tool · còn thiếu · ĐỀ XUẤT KHẮC PHỤC) thay vì trả
     // lastContent đang dở. Dùng token reserve → không bao giờ bị cắt ngang.
-    if (stopReason !== 'complete' && lastContent) {
+    // TASK 48 — NGOẠI LỆ needs_input: KHÔNG wrap-up — lastContent chính là CÂU
+    // HỎI agent hỏi user (wrap-up tổng hợp sẽ làm loãng/chôn câu hỏi).
+    if (stopReason !== 'complete' && stopReason !== 'needs_input' && lastContent) {
       const wrapUp = await generateFinalReport({
         goal: directiveSpec.acceptance.length > 0
           ? `${directiveSpec.goal}\n\nTIÊU CHÍ NGHIỆM THU:\n${directiveSpec.acceptance.map(a => `- [ ] ${a}`).join('\n')}`
@@ -3771,6 +3818,8 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         token_budget: `hết budget token (${TOKEN_BUDGET === 0 ? '∞' : TOKEN_BUDGET} — có thể tăng qua env GOAL_LOOP_TOKEN_BUDGET, hoặc đặt GOAL_LOOP_TOKEN_BUDGET=0 để chạy KHÔNG giới hạn)`,
         no_progress: 'phát hiện bế tắc không tiến triển (lặp lại hành động cũ theo fingerprint, hoặc 3 chu kỳ liên tiếp không có tool call thành công nào — stall brake CI-1)',
         error: 'lỗi LLM',
+        // TASK 48 — gap fix: chờ thông tin/ủy quyền CHỈ user cung cấp được
+        needs_input: 'trọng tài xác định phần còn thiếu nằm NGOÀI hệ thống — cần thông tin/ủy quyền/phê duyệt của BẠN (người dùng) để tiếp tục',
       }
       if (usedFinalReport) {
         // Báo cáo tổng hợp đã có "còn thiếu" + "đề xuất" — chỉ append dòng trạng thái
@@ -3778,7 +3827,14 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       } else {
         const missing = lastVerdict?.missing?.length ? lastVerdict.missing.map(m => `- ${m}`).join('\n') : '(chưa đánh giá được chi tiết — xem tiến trình ở trên)'
         const rootCause = lastVerdict?.rootCause ? `\n🔍 **Vấn đề xác định:** ${lastVerdict.rootCause}` : ''
-        content += `\n\n---\n⚠️ **Vòng lặp mục tiêu dừng sau ${cyclesAttempted}/${fmtCap(effectiveMaxCycles)} chu kỳ — chưa hoàn thành trọn vẹn** (${reasonText[stopReason] || stopReason}).\n❌ **Còn thiếu:**\n${missing}${rootCause}\n\nBạn có thể yêu cầu tiếp tục để tôi khắc phục phần còn thiếu.`
+        if (stopReason === 'needs_input') {
+          // TASK 48 — needs_input: câu hỏi của agent (lastContent) là phần
+          // chính — chỉ append dòng trạng thái ngắn + câu còn thiếu (thông tin
+          // user cần trả lời), KHÔNG wrapper "chưa hoàn thành trọn vẹn".
+          content += `\n\n---\n⏸️ **Tạm dừng chờ bạn** (${reasonText.needs_input}).\n📌 **Cần từ bạn:**\n${missing}\n\n→ Hãy trả lời câu hỏi phía trên — tôi sẽ tiếp tục ngay.`
+        } else {
+          content += `\n\n---\n⚠️ **Vòng lặp mục tiêu dừng sau ${cyclesAttempted}/${fmtCap(effectiveMaxCycles)} chu kỳ — chưa hoàn thành trọn vẹn** (${reasonText[stopReason] || stopReason}).\n❌ **Còn thiếu:**\n${missing}${rootCause}\n\nBạn có thể yêu cầu tiếp tục để tôi khắc phục phần còn thiếu.`
+        }
       }
     }
   }

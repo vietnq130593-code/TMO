@@ -6,6 +6,12 @@
  *
  * Current agents:
  *   - Omega: Người quản trị vận hành hệ thống TMO — điều phối việc đến đúng agent, giám sát + đánh giá nghiệm thu
+ *   - ALISTA: Kỹ sư Bảo trì Hệ thống TMO — giám sát tool health & agent runs, chẩn đoán + đề xuất
+ *   - Linh Sickyx (TASK 48, rename từ RAVAGE Task 47): Kỹ sư An ninh ATTT & An
+ *     ninh mạng ĐỘC LẬP — offense (pentest/red team trong scope ủy quyền) +
+ *     defense (hardening/DFIR/DevSecOps), 4 cấp độ tri thức. KHÔNG thuộc team
+ *     code — chat trực tiếp (Single Agent mode) hoặc Omega điều động qua
+ *     dispatch_agent (giữ semantics standalone như Omega/ALISTA).
  */
 
 import { db } from '@/lib/db'
@@ -171,6 +177,86 @@ QUY TRÌNH TAY (nút "Kiểm tra toàn diện" trong UI Analytics)
 3. UI poll mỗi 2s tối đa 300s → toast kết quả (X đề xuất, Y nguồn, Z giây, deadlineMet/deadlineReached).
 
 Hãy luôn trả lời tiếng Việt trừ khi user dùng ngôn ngữ khác. Sử dụng markdown formatting (headers, lists, code blocks, tables) cho rõ ràng.`
+
+/**
+ * LINH SICKYX — System prompt (Kỹ sư An ninh ATTT & An ninh mạng độc lập).
+ *
+ * TASK 48 (user directive): agent RAVAGE (Task 47, code-team position 'SEC')
+ * được ĐỔI TÊN thành "Linh Sickyx" + tách thành agent ĐỘC LẬP (team=null,
+ * position=null — không còn nằm trong Code Team). Persona viết lại từ SEC_PROMPT
+ * (code-team/prompts.ts — đã xóa): giữ NGUYÊN vẹn 4 cấp độ tri thức + 11 chuyên
+ * môn + guardrail đạo đức/pháp lý tuyệt đối + 2 workflow OFFENSIVE/DEFENSIVE;
+ * đổi căn thân "SEC của Code Team" → "Security Engineer độc lập của TMO",
+ * đường nhận task: user chat trực tiếp HOẶC Omega dispatch_agent (không còn
+ * delegate_task của Code Team).
+ */
+const LINH_SICKYX_INSTRUCTION = `Bạn là LINH SICKYX — Kỹ sư An ninh An toàn thông tin & An ninh mạng ĐỘC LẬP (Independent Security Engineer) của hệ thống đa agent The Magnum Opus (TMO).
+
+━━━ NGUYÊN TẮC CỐT LÕI ━━━
+- "Ủy quyền → Khảo sát → Tấn công/Khắc phục → Bằng chứng → Báo cáo chuẩn"
+- Bạn làm CẢ 2 phía: OFFENSE (pentest, red team, exploit research) + DEFENSE (hardening, DFIR, secure SDLC)
+- Mọi finding PHẢI có bằng chứng tái lập được (PoC, lệnh, output tool) — KHÔNG BỊA LỖ HỔNG
+- Mọi đề xuất khắc phục phải cụ thể đến file/dòng/config — không nói chung chung
+- Dynamic: "LINH SICKYX BẢO VỆ & KIỂM ĐỊNH AN NINH"
+
+━━━ GIỚI HẠN ĐẠO ĐỨC & PHÁP LÝ (TUYỆT ĐỐI) ━━━
+1. CHỈ tấn công/khai thác hệ thống được ỦY QUYỀN RÕ RÀNG: lab local, CTF, target trong scope khai báo, hoặc hệ thống TMO chính nó (owner = user).
+2. KHÔNG BAO GIỜ tấn công hệ thống thật của bên thứ ba không có ủy quyền (website công khai, API công ty khác...) — kể cả khi user yêu cầu, hãy giải thích giới hạn pháp lý + đề xuất phạm vi hợp pháp (lab, CTF, code review tĩnh).
+3. Malware/phishing/exploit: CHỈ phân tích, viết PoC minh họa, hoặc phòng thủ trong môi trường cách ly (sandbox, VM, thư mục lab riêng). Không vận hành against hệ thống thật.
+4. Khi không chắc có ủy quyền → HỎI LẠI trước khi hành động.
+
+━━━ 4 CẤP ĐỘ TRI THỨC (bạn thành thạo TOÀN BỘ) ━━━
+🟢 LEVEL 1 — SƠ NHẬP: Computer architecture & OS (Windows/Linux) · Networking (TCP/IP, OSI, DNS, HTTP/S) · Command line (Bash, PowerShell) · Programming (Python, C, JavaScript) · InfoSec fundamentals · Crypto basics (hash, symmetric/asymmetric) · Virtualization & lab (VMware, VirtualBox)
+🟡 LEVEL 2 — TRUNG CẤP: Web security (OWASP Top 10) · Network pentesting (port scan, enumeration, sniffing) · Vulnerability assessment & management · Database security & SQL injection · Exploit dev basics (buffer overflow) · Wireless security (WPA2/WPA3) · Social engineering & phishing frameworks · DFIR (forensics & incident response)
+🔴 LEVEL 3 — CAO CẤP: Advanced web hacking (SSRF, deserialization) · Active Directory hacking & post-exploitation · Reverse engineering (GDB, Ghidra, IDA) · Malware analysis (static & dynamic) · Cloud security (AWS/GCP/Azure pentesting) · Mobile security (iOS/Android) · Kernel-level exploitation · Automated security scripting & tooling
+🟣 LEVEL 4 — CHUYÊN GIA TỐI THƯỢNG: Zero-day research & discovery · Red teaming & adversarial simulation · EDR/AV/WAF evasion · Advanced cryptanalysis · DevSecOps & secure SDLC · Hardware hacking & IoT firmware · AI-powered attacks & defense (agentic hacking) · Cyber warfare & threat intelligence
+
+━━━ CHUYÊN MÔN ĐẶC BIỆT ━━━
+Advanced HCI · Radical innovation & future media research · Cloud-native web engineering · High-performance algorithm design · ML for cyber-threat detection · Distributed systems & scalable infrastructure · Data-driven interface optimization · Cryptographic systems & secure protocols · Full-stack systems architecture
+
+━━━ 2 WORKFLOW CHUẨN ━━━
+A) OFFENSIVE (pentest/red team — CHỈ với ủy quyền):
+1. XÁC NHẬN SCOPE — target, phạm vi IP/URL, thời gian, ủy quyền. Thiếu → hỏi, không đoán
+2. RECON & ENUMERATION — thụ động trước (web_search, DNS, header), chủ động sau (nmap qua shell nếu máy có — check which nmap trước khi gọi). Scan dài dùng run_bg + read_output
+3. VULNERABILITY ASSESSMENT — đối chiếu OWASP Top 10, CVE lookup (web_search/web_fetch), review source (file_read/grep) khi có code
+4. EXPLOIT (TRONG SCOPE) — PoC tối thiểu chứng minh tác động, KHÔNG phá dữ liệu thật; SQL injection chỉ qua sqlmap ở lab hoặc manual verify read-only
+5. BÁO CÁO — findings xếp severity (Critical/High/Medium/Low theo CVSS), PoC tái lập, remediation cụ thể
+
+B) DEFENSIVE (secure review/hardening/DFIR):
+1. THREAT MODELING — asset → attack surface → entry point (dùng file_list/grep khảo sát codebase)
+2. SECURITY CODE REVIEW — grep pattern nguy hiểm (eval, exec, child_process với input user, SQL string concat, secret hardcode, path traversal, XSS sink, weak crypto) → xác nhận từng match bằng file_read ngữ cảnh — KHÔNG báo false positive
+3. FIX & HARDEN — sửa bằng file_edit/file_multi_edit; validate input, parameterized query, secret ra env, principle of least privilege
+4. VERIFY — lint + type_check + run_tests sau khi fix; browser_screenshot xác nhận UI không vỡ
+5. DFIR (khi có sự cố) — thu thập evidence theo thứ tự (volatile → disk), timeline, root cause, containment + recovery
+
+━━━ INPUT FORMAT ━━━
+Bạn nhận task từ 2 đường:
+- USER chat trực tiếp (Single Agent mode) — yêu cầu an ninh: pentest scope, review code, phân tích sự cố, thiết kế security...
+- AGENT ĐIỀU PHỐI (dispatch_agent của Omega) — kèm context + tiêu chí nghiệm thu
+Nội dung task: yêu cầu an ninh + context (hệ thống/url/repo liên quan, ràng buộc) + acceptance_criteria (tự verify TỪNG điều kiện bằng tool thật — nêu ĐẠT/CHƯA ĐẠT)
+
+━━━ OUTPUT FORMAT ━━━
+Báo cáo văn xuôi tiếng Việt sạch (markdown tối thiểu, nhấn mạnh CHỮ IN HOA, liệt kê "- "):
+1. TÓM TẮT — phạm vi + kết luận chính (an toàn / có N lỗ hổng theo severity)
+2. FINDINGS — từng lỗ hổng: [SEVERITY] tên · mô tả · vị trí (file:dòng / URL / config) · PoC/bằng chứng tool · remediation cụ thể
+3. BẰNG CHỨNG TOOL — tên tool + kết quả ngắn
+4. CÒN THIẾU GÌ — trung thực (scope chưa phủ, tool chưa có trên máy...)
+5. ĐỀ XUẤT — bước tiếp theo cho user/agent điều phối
+
+━━━ TOOLS ━━━
+Bạn có quyền đầy đủ security engineer: shell (nmap/sqlmap/nikto/hashcat/gobuster... qua shell nếu máy có cài — LUÔN check which <tool> trước; máy thiếu → manage_packages cài hoặc dùng Python tự viết) · run_bg/read_output/kill_process (scan dài) · file_read/file_edit/file_multi_edit/file_write/file_list/grep (review + fix lỗ hổng) · git_status/git_diff/git_log (audit thay đổi) · web_search/web_fetch (CVE/advisory/threat intel) · browser_screenshot (verify web app) · lint/type_check/run_tests (fix không phá code) · db_query (audit dữ liệu — read-only) · knowledge_search/knowledge_graph (KB nội bộ) · todo_write/todo_read (kế hoạch) · start_preview/stop_preview · create_custom_tool (tự xây security tool thiếu) · escalate_problem (ngoài tầm) · list_skills/read_skill (dùng skill có sẵn) · context_recall (digest run trước).
+
+━━━ CÁCH GỌI TOOL ━━━
+ƯU TIÊN native function calling (tools đã truyền qua API kèm schema — emit tool_calls trực tiếp). Fallback text format:
+tool_call: tool_name({"param1": "value1"})
+
+Ví dụ:
+tool_call: shell({"command": "which nmap sqlmap nikto || echo missing"})
+tool_call: grep({"pattern": "eval\\(|child_process", "path": "src", "glob": "*.ts"})
+tool_call: web_search({"query": "CVE-2024-3094 xz backdoor"})
+
+Có thể gọi nhiều tools trong 1 response. Sau khi tool trả kết quả, đọc kỹ output rồi chọn hành động kế.
+Nếu KHÔNG cần dùng tool → chỉ cần trả lời text bình thường.`
 
 export const STANDALONE_AGENTS: StandaloneAgentDef[] = [
   {
@@ -552,6 +638,37 @@ LEARNING & MEMORY + ĐỊNH DẠNG BÁO CÁO
       'synthesize',
     ],
   },
+  {
+    // TASK 48 (user directive — rename + tách đội): RAVAGE (Task 47, code-team
+    // position 'SEC') → "Linh Sickyx", agent ĐỘC LẬP không thuộc team code.
+    // Giữ nguyên đặc tả Task 47: 4 level tri thức + 11 chuyên môn + guardrail
+    // đạo đức/pháp lý + toolset 45 tools thiên security (check which trước khi
+    // gọi nmap/sqlmap...; KHÔNG delegate/dispatch — depth guard). Đường nhận
+    // task: chat trực tiếp (Single Agent) + dispatch_agent của Omega (giống
+    // Omega/ALISTA — xuất hiện trong Agent Roster bucket standalone).
+    name: 'Linh Sickyx',
+    description:
+      'Kỹ sư An ninh mạng ĐỘC LẬP (không thuộc team nào): pentest/red team (offense — trong scope ủy quyền) + hardening/DFIR/DevSecOps (defense) — 4 level từ sơ nhập đến chuyên gia tối thượng.',
+    instruction: LINH_SICKYX_INSTRUCTION,
+    domain: 'security',
+    capable:
+      'Pentest & vulnerability assessment, web/network/AD/cloud pentesting, red teaming, malware analysis, reverse engineering, cryptography, DFIR, security code review, hardening, DevSecOps, ML threat detection, HCI',
+    provider: 'zen',
+    // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note Omega).
+    model: 'space-bunny-free',
+    // Security yêu cầu CHÍNH XÁC — temperature thấp (khai thác/phân tích
+    // forensic không được "sáng tác" chi tiết — giữ nguyên giá trị Task 47).
+    temperature: 0.2,
+    // TASK 39 (phiên 8) — -1 = unlimited (xem note Omega).
+    maxTokens: -1,
+    team: null, // standalone — KHÔNG thuộc team code (TASK 48: tách khỏi Code Team)
+    position: null,
+    avatar: '🕵️',
+    // Toolset = Task 47 RAVAGE (builder tự chủ + thiên security). ĐƯỢC PERSIST
+    // vào DB (tools JSON — pattern Agent Factory) để dispatch_agent của Omega
+    // resolve đúng toolset (không rơi vào DEFAULT_SUBAGENT_TOOLS).
+    tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_status', 'git_diff', 'git_log', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'browser_screenshot', 'mcp_call', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem', 'context_recall', 'list_skills', 'read_skill', 'propose_automation'],
+  },
 ]
 
 // ===== SEED LOGIC =====
@@ -599,8 +716,94 @@ export async function ensureStandaloneAgents(): Promise<void> {
   standaloneSeedCompleted = true
 }
 
+/**
+ * TASK 48 — RENAME + ROLE MIGRATION: RAVAGE → "Linh Sickyx".
+ *
+ * RAVAGE (Task 47) từng là code-team agent (team='code', position='SEC').
+ * User directive Task 48: đổi tên thành "Linh Sickyx" + tách thành agent
+ * ĐỘC LẬP. Migration chạy TRƯỚC def-loop của _doStandaloneSeed:
+ *   1. AgentProfile: rename + normalize vai trò (team:null, position:null,
+ *      instruction/description/capable/avatar/domain/isSystem/tools theo def
+ *      standalone MỚI — persona phải đổi vì agent không còn "của Code Team").
+ *      provider/model/temperature/maxTokens GIỮ NGUYÊN (customization).
+ *   2. Kéo theo 4 bảng keyed theo tên agent (mirror _migrateAgentRenames
+ *      của code-team): ToolAssignment.agentKey · SkillAssignment.agentKey
+ *      (raw SQL) · AgentModelOverride.agentName · CronJob.executor.
+ *
+ * Idempotent tại DB level (lần 2+: findUnique('RAVAGE') → null → no-op).
+ * An toàn chạy song song với AGENT_RENAMES của code-team seed (cả hai đều
+ * check + rename theo DB state, hội tụ cùng kết quả — updateMany satellite
+ * idempotent). Edge CẢ HAI tồn tại (user tự tạo "Linh Sickyx" trước): tắt
+ * (enabled=false) row RAVAGE cũ + warn — không xóa (giữ history references).
+ */
+let ravageMigrated = false
+
+async function _migrateRavageToLinhSickyx(): Promise<void> {
+  if (ravageMigrated) return
+  ravageMigrated = true // chạy 1 lần/process — idempotent tại DB level
+  try {
+    const oldRow = await db.agentProfile.findUnique({ where: { name: 'RAVAGE' } })
+    if (!oldRow) return // không có row cũ (fresh install) → def-loop tự create
+    const newRow = await db.agentProfile.findUnique({ where: { name: 'Linh Sickyx' } })
+    if (newRow) {
+      // Edge: cả 2 tồn tại — giữ row "Linh Sickyx", TẮT row RAVAGE cũ
+      // (enabled=false — không hiện UI/roster, không xóa để giữ history).
+      await db.agentProfile.update({ where: { id: oldRow.id }, data: { enabled: false } })
+      console.warn('[Standalone] RAVAGE→Linh Sickyx SKIP rename: cả 2 đều tồn tại — đã TẮT row RAVAGE cũ (enabled=false), giữ row "Linh Sickyx" hiện có')
+      return
+    }
+    const linhDef = STANDALONE_AGENTS.find(a => a.name === 'Linh Sickyx')
+    if (!linhDef) return // def không còn (tương lai xóa) — không migrate mù
+    // 1. AgentProfile — rename + normalize vai trò standalone (1 update)
+    await db.agentProfile.update({
+      where: { id: oldRow.id },
+      data: {
+        name: 'Linh Sickyx',
+        team: null,
+        position: null,
+        instruction: linhDef.instruction,
+        description: linhDef.description,
+        capable: linhDef.capable,
+        domain: linhDef.domain,
+        avatar: linhDef.avatar,
+        isSystem: true, // standalone = core system agent (không xóa được từ UI)
+        tools: JSON.stringify(linhDef.tools), // Agent Factory pattern — dispatch_agent resolve đúng toolset
+      },
+    })
+    // 2-5. Satellite tables keyed theo tên agent (fail-open từng bảng)
+    try {
+      await db.toolAssignment.updateMany({ where: { agentKey: 'RAVAGE' }, data: { agentKey: 'Linh Sickyx' } })
+    } catch (e) {
+      console.warn('[Standalone] ToolAssignment migration RAVAGE→Linh Sickyx lỗi (không chặn):', e instanceof Error ? e.message : String(e))
+    }
+    try {
+      await db.$executeRaw`UPDATE SkillAssignment SET agentKey = 'Linh Sickyx' WHERE agentKey = 'RAVAGE'`
+    } catch (e) {
+      console.warn('[Standalone] SkillAssignment migration RAVAGE→Linh Sickyx lỗi (không chặn — table có thể chưa tồn tại):', e instanceof Error ? e.message : String(e))
+    }
+    try {
+      await db.agentModelOverride.updateMany({ where: { agentName: 'RAVAGE' }, data: { agentName: 'Linh Sickyx' } })
+    } catch (e) {
+      console.warn('[Standalone] AgentModelOverride migration RAVAGE→Linh Sickyx lỗi (không chặn):', e instanceof Error ? e.message : String(e))
+    }
+    try {
+      await db.cronJob.updateMany({ where: { executor: 'RAVAGE' }, data: { executor: 'Linh Sickyx' } })
+    } catch (e) {
+      console.warn('[Standalone] CronJob executor migration RAVAGE→Linh Sickyx lỗi (không chặn):', e instanceof Error ? e.message : String(e))
+    }
+    console.log('[Standalone] Rename migration ✓ RAVAGE → Linh Sickyx (standalone: team=null + instruction mới + 4 satellite tables)')
+  } catch (err) {
+    ravageMigrated = false // lỗi → cho phép retry lần ensure sau
+    console.warn('[Standalone] Rename migration RAVAGE → Linh Sickyx lỗi (sẽ retry):', err instanceof Error ? err.message : String(err))
+  }
+}
+
 async function _doStandaloneSeed(): Promise<boolean> {
   console.log('[Standalone] Checking standalone agents...')
+  // TASK 48 — rename migration TRƯỚC def-loop: RAVAGE cũ (nếu có) phải thành
+  // "Linh Sickyx" trước khi findUnique-by-name chạy (không thì seed tạo row
+  // MỚI trùng tên trong khi row cũ còn nằm đó).
+  await _migrateRavageToLinhSickyx()
   let created = 0
   let skipped = 0
   let failedAgents = 0
@@ -768,6 +971,51 @@ async function _doStandaloneSeed(): Promise<boolean> {
           }
         }
 
+        // TASK 48 (rename RAVAGE → Linh Sickyx + tách đội) — NORMALIZE SAFETY-NET:
+        // row có tên mới nhưng còn dấu vết vai trò CŨ (instruction nhắc
+        // "RAVAGE" / team='code' / position='SEC' — vd AGENT_RENAMES của
+        // code-team seed chạy TRƯỚC đổi tên nhưng chưa kịp normalize field,
+        // hoặc migration Task 48 bị gián đoạn) → đồng bộ về def standalone:
+        // instruction/description/capable/domain/avatar + team:null +
+        // position:null + isSystem:true + tools JSON. provider/model/
+        // temperature/maxTokens giữ nguyên (customization preserved).
+        if (def.name === 'Linh Sickyx' && existing.instruction && existing.instruction.includes('RAVAGE')) {
+          try {
+            await db.agentProfile.update({
+              where: { id: existing.id },
+              data: {
+                instruction: def.instruction,
+                description: def.description,
+                capable: def.capable,
+                domain: def.domain,
+                avatar: def.avatar,
+                team: null,
+                position: null,
+                isSystem: true,
+                tools: JSON.stringify(def.tools),
+              },
+            })
+            console.log('[Standalone] Migrated Linh Sickyx → standalone role (dọn dấu vết RAVAGE/code-team + instruction mới — Task 48)')
+          } catch (migErr) {
+            console.warn(`[Standalone] Role migration Linh Sickyx thất bại (không chặn):`, migErr)
+          }
+        }
+        // TASK 48 — tools JSON normalize cho row rename-bởi-code-team-path
+        // (AGENT_RENAMES chỉ đổi name — row có thể thiếu tools JSON →
+        // dispatch_agent rơi vào DEFAULT_SUBAGENT_TOOLS). Chỉ SET khi thiếu
+        // (null/rỗng) — KHÔNG đè whitelist user đã chỉnh trong DB.
+        if (def.name === 'Linh Sickyx' && def.tools.length > 0 && !existing.tools) {
+          try {
+            await db.agentProfile.update({
+              where: { id: existing.id },
+              data: { tools: JSON.stringify(def.tools) },
+            })
+            console.log('[Standalone] Linh Sickyx tools JSON đã bổ sung (dispatch_agent resolve đúng toolset — Task 48)')
+          } catch (syncErr) {
+            console.warn('[Standalone] Linh Sickyx tools sync thất bại (không chặn):', syncErr)
+          }
+        }
+
         skipped++
         console.log(`[Standalone] Agent already exists: ${def.name} — skipping, user customizations preserved`)
       } else {
@@ -790,6 +1038,10 @@ async function _doStandaloneSeed(): Promise<boolean> {
             avatar: def.avatar,
             isSystem: true, // ← User CANNOT delete — core system agent
             enabled: true,
+            // TASK 48 — Linh Sickyx: persist toolset JSON (pattern Agent
+            // Factory) để dispatch_agent resolve đúng toolset. Omega/ALISTA
+            // giữ hành vi cũ (tools=null → def-fallback + default khi dispatch).
+            ...(def.name === 'Linh Sickyx' && def.tools.length > 0 ? { tools: JSON.stringify(def.tools) } : {}),
           },
         })
         created++
@@ -842,6 +1094,9 @@ export async function forceReseedStandaloneAgents(): Promise<{ updated: number; 
             avatar: def.avatar,
             isSystem: true,
             enabled: true,
+            // TASK 48 — Linh Sickyx: reset cả toolset JSON về def (giữ nhất
+            // quán với create/migration; Omega/ALISTA giữ hành vi cũ).
+            ...(def.name === 'Linh Sickyx' && def.tools.length > 0 ? { tools: JSON.stringify(def.tools) } : {}),
           },
         })
         updated++
@@ -863,6 +1118,7 @@ export async function forceReseedStandaloneAgents(): Promise<{ updated: number; 
             avatar: def.avatar,
             isSystem: true,
             enabled: true,
+            ...(def.name === 'Linh Sickyx' && def.tools.length > 0 ? { tools: JSON.stringify(def.tools) } : {}),
           },
         })
         created++

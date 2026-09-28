@@ -77,7 +77,11 @@ const SUBAGENT_TOOL_RESULT_CHARS = 4000
 const REPORT_MAX_CHARS = 3500
 
 /** Map tên agent → position trong Code Team (resolveAgent nhận position).
- * TASK 43 — export cho eval/agent-harness (resolve profile theo tên Code Team). */
+ * TASK 43 — export cho eval/agent-harness (resolve profile theo tên Code Team).
+ * TASK 48 — RAVAGE ('SEC') đã GỠ: agent đổi tên "Linh Sickyx" + tách thành
+ * standalone ĐỘC LẬP (team=null) → KHÔNG còn là đích delegate_task của Code
+ * Team. Gọi nó qua dispatch_agent của Omega (resolve by-name, team-agnostic)
+ * hoặc chat trực tiếp Single Agent mode. */
 export const POSITION_BY_NAME: Record<string, string> = {
   MEGATRON: 'TL',
   SHOCWAVE: 'G1',
@@ -87,9 +91,6 @@ export const POSITION_BY_NAME: Record<string, string> = {
   // TASK 43 — FORGE: full-stack-developer subagent (builder tổng lực
   // end-to-end UI+API+DB). Vị trí 'FS' ngoài pipeline SOP — chỉ delegate.
   FORGE: 'FS',
-  // TASK 47 — RAVAGE: security-engineer subagent (pentest/red team +
-  // hardening/DFIR). Vị trí 'SEC' ngoài pipeline SOP — chỉ delegate.
-  RAVAGE: 'SEC',
 }
 
 /**
@@ -116,7 +117,9 @@ export const DEFAULT_SUBAGENT_TOOLS = [
   'create_custom_tool', 'list_custom_tools', 'escalate_problem',
 ]
 
-/** Danh sách agent có thể delegate (cho tool description + validate) */
+/** Danh sách agent có thể delegate (cho tool description + validate)
+ * TASK 48 — RAVAGE gỡ khỏi danh sách (agent thành "Linh Sickyx" standalone —
+ * dùng dispatch_agent của Omega hoặc chat trực tiếp). */
 export const DELEGATABLE_AGENTS: Array<{ name: string; role: string; bestFor: string }> = [
   { name: 'MEGATRON', role: 'TL — Nhìn & Điều hướng', bestFor: 'phân tích yêu cầu phức tạp, routing, code UI fast-track, verify kết quả tổng thể' },
   { name: 'SHOCWAVE', role: 'G1 — Thiết kế', bestFor: 'thiết kế kiến trúc, DB schema, API design, component tree' },
@@ -124,18 +127,19 @@ export const DELEGATABLE_AGENTS: Array<{ name: string; role: string; bestFor: st
   { name: 'SENTINEL', role: 'G2-B — Review & Fix', bestFor: 'code review, tìm bug, security check, fix lỗi, iterative refinement' },
   { name: 'CATALYST', role: 'G3 — Tối ưu', bestFor: 'performance optimization, refactor, scalability, best practices' },
   { name: 'FORGE', role: 'FS — Full-Stack Developer', bestFor: 'tính năng full-stack END-TO-END tự chủ theo spec trọn gói: UI + API + DB + tự kiểm định (lint/type_check/run_tests) + preview verify' },
-  { name: 'RAVAGE', role: 'SEC — Security Engineer', bestFor: 'pentest/red team (trong scope ủy quyền), security code review (OWASP/CVE), hardening + fix lỗ hổng có verify, DFIR phân tích sự cố, thiết kế security architecture, cryptography' },
 ]
 
 /**
  * Chuẩn hoá input (chấp nhận tên 'RAMPAGE'/'bolt' hoặc position 'G2-A')
  * → position để resolveAgent, hoặc null nếu không hợp lệ.
+ * TASK 48 — 'SEC' gỡ: Linh Sickyx (đổi tên từ RAVAGE) là agent ĐỘC LẬP —
+ * không resolve qua position của Code Team nữa.
  */
 export function resolveDelegationTarget(input: unknown): string | null {
   const key = String(input ?? '').trim().toUpperCase()
   if (!key) return null
   if (POSITION_BY_NAME[key]) return POSITION_BY_NAME[key]
-  if (['TL', 'G1', 'G2-A', 'G2-B', 'G3', 'FS', 'SEC'].includes(key)) return key
+  if (['TL', 'G1', 'G2-A', 'G2-B', 'G3', 'FS'].includes(key)) return key
   return null
 }
 

@@ -62,6 +62,9 @@ export interface GoalLoopVerdictSnapshot {
    * (resume giữa run vẫn giữ phán quyết readiness của trọng tài). */
   debtReadiness?: 'ready' | 'blocked'
   debtBlockedReason?: string
+  /** TASK 48 — needs-input: mục tiêu bị chặn bởi thông tin CHỈ user cung cấp
+   * được (resume giữa run vẫn giữ phán quyết — không mất trạng thái chờ input). */
+  needsInput?: boolean
 }
 
 /**

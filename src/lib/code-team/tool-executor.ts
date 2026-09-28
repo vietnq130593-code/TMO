@@ -1514,14 +1514,14 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
         'sub-agent đọc nhiều file mà context của bạn KHÔNG phình, (3) cần góc nhìn chuyên trách (security review, arch design). ' +
         'KHÔNG dùng cho task 1-2 bước đơn giản — tự làm nhanh hơn. Chọn đúng agent: MEGATRON=phân tích/verify tổng thể, ' +
         'SHOCWAVE=thiết kế kiến trúc/DB/API, RAMPAGE=implement code, SENTINEL=review/bug/security, CATALYST=tối ưu/refactor, ' +
-        'FORGE=full-stack builder END-TO-END (UI + API + DB + tự kiểm định + preview verify — tính năng trọn gói tự chứa), ' +
-        'RAVAGE=security engineer (pentest/red team trong scope ủy quyền, security code review OWASP/CVE, hardening + fix lỗ hổng có verify, DFIR, cryptography).',
+        'FORGE=full-stack builder END-TO-END (UI + API + DB + tự kiểm định + preview verify — tính năng trọn gói tự chứa). ' +
+        '(TASK 48: agent security "Linh Sickyx" giờ là standalone ĐỘC LẬP — KHÔNG delegate_task được; gọi qua dispatch_agent.)',
       parameters: {
         type: 'object',
         properties: {
           agent: {
             type: 'string',
-            enum: ['MEGATRON', 'SHOCWAVE', 'RAMPAGE', 'SENTINEL', 'CATALYST', 'FORGE', 'RAVAGE'],
+            enum: ['MEGATRON', 'SHOCWAVE', 'RAMPAGE', 'SENTINEL', 'CATALYST', 'FORGE'],
             description: 'Agent chuyên trách sẽ nhận task',
           },
           task: {

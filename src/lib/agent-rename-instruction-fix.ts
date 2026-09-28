@@ -25,6 +25,12 @@ const AGENT_RENAME_PAIRS: ReadonlyArray<readonly [string, string]> = [
   ['APEX', 'MEGATRON'],
   ['CORTEX', 'SHOCWAVE'],
   ['BOLT', 'RAMPAGE'],
+  // TASK 48 — RAVAGE → "Linh Sickyx" (rename + tách thành standalone độc lập).
+  // Safety-net: dọn text "RAVAGE" còn sót trong instruction/description của
+  // MỌI profile (persona chính của Linh Sickyx đã được replace trọn bởi
+  // migration _migrateRavageToLinhSickyx — cặp này phủ các profile khác +
+  // self-heal nếu row cũ quay lại).
+  ['RAVAGE', 'Linh Sickyx'],
 ]
 
 export async function fixStaleAgentNamesInInstructions(): Promise<void> {
