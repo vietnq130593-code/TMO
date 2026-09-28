@@ -33,7 +33,7 @@
  * (parent agent thấy được lỗi và tự quyết định làm trực tiếp).
  */
 
-import { callLLMForAgent } from '@/lib/llm'
+import { callLLMForAgent, getZenKeyCount, runWithZenKeyBinding } from '@/lib/llm'
 import { executeTool, buildCompactToolSchemasSection, getToolDefinitions } from '@/lib/code-team/tool-executor'
 import type { LLMTool } from '@/lib/llm'
 import { parseToolCallsFromOutput, detectBrokenToolCallHint } from '@/lib/tool-calls'
@@ -212,64 +212,104 @@ function compactArgs(args: Record<string, unknown>, maxLen = 100): string {
   }
 }
 
-// ==================== GLOBAL SUB-AGENT SLOT (user directive 2026-10-29) ====================
-// "Tối đa chỉ được phép gọi 1 sub-agent trong 1 thời điểm" — MỌI đường delegate
-// (delegate_task / dispatch_agent / dispatch_agents_parallel / escalate
-// auto-apply / eval harness) đều đi qua runSubAgentForProfile → 1 slot toàn
-// cục đảm bảo KHÔNG BAO GIỜ 2 sub-agent chạy chồng nhau, kể cả khi 2 goal-loop
-// job chạy song song (worker cho phép 2 job đồng thời) hay parent fan-out nhiều
-// delegation trong 1 batch.
+// ==================== SUB-AGENT SLOT POOL — TỐI ĐA 3, MỖI SLOT 1 KEY (user 2026-10-29b) ====================
+// USER DIRECTIVE (bản 2, ghi đè bản 1 "tối đa 1"): "có 3 API key Opencode
+// Zen → thiết lập 3 là số subagents tối đa, và nếu gọi subagents thì KHÔNG
+// được sử dụng cùng API [key]". Thiết kế:
+//   · SUBAGENT_MAX_CONCURRENT slot (mặc định = min(3, số key Zen cấu hình;
+//     env SUBAGENT_MAX_CONCURRENT override) — mọi đường delegate đều đi qua
+//     đây (delegate_task / dispatch_agent / dispatch_agents_parallel /
+//     eval harness...), kể cả 2 goal-loop job song song của worker.
+//   · Slot i GHIM key Zen #i (runWithZenKeyBinding — AsyncLocalStorage trong
+//     llm.ts): MỌI LLM call của run (ReAct + wrap-up + trọng tài độc lập)
+//     dùng đúng key đó → 3 sub-agent song song KHÔNG BAO GIỜ dùng chung key.
+//     Caller thường (parent goal-loop / utility) bị getZenKey() tự NÉ key
+//     đang ghim (xem llm.ts).
+//   · Thời gian chờ hàng đợi KHÔNG đếm vào SUBAGENT_TIMEOUT_MS (acquire trước
+//     startedAt — timeout tính từ khi sub-agent THỰC SỰ chạy).
 //
-// Chống deadlock:
-//   - Sub-agent KHÔNG có tool điều phối (DEPTH_GUARD strip) → không thể tự
-//     acquire slot lồng bên trong slot mình đang giữ.
-//   - escalate_problem auto-apply (có thể dispatch sub-agent mới) bị TẮT khi
-//     gọi từ context sub-agent (xem tool-executor) → không tự chờ chính mình.
-//
-// Thứ tự chờ KHÔNG đếm vào SUBAGENT_TIMEOUT_MS: slot acquire TRƯỚC khi
-// startedAt khởi động (timeout tính từ khi sub-agent THỰC SỰ chạy).
+// Chống deadlock (giữ nguyên từ bản 1):
+//   - Sub-agent KHÔNG có tool điều phối (DEPTH_GUARD) → 1 run giữ tối đa 1
+//     slot, không acquire lồng.
+//   - escalate_problem auto-apply bị TẮT khi gọi từ sub-agent (tool-executor)
+//     → không xảy ra kịch bản 3 sub-agent đồng thời giữ hết 3 slot rồi mỗi
+//     cái lại chờ slot thứ 4 qua auto-dispatch.
 const SUBAGENT_SLOT_QUEUE_LOG_MS = 1_000
-let subAgentSlotTail: Promise<void> = Promise.resolve()
-let subAgentSlotHolder = ''
+const zenKeyCountForSlots = getZenKeyCount()
+const rawSubagentMaxConcurrent = Number(process.env.SUBAGENT_MAX_CONCURRENT)
+const SUBAGENT_MAX_CONCURRENT = Number.isFinite(rawSubagentMaxConcurrent) && rawSubagentMaxConcurrent >= 1
+  ? Math.floor(rawSubagentMaxConcurrent)
+  : Math.min(3, Math.max(1, zenKeyCountForSlots))
 
-/**
- * Chạy fn trong slot toàn cục duy nhất (xếp hàng FIFO qua promise-chain).
- * Fail-safe: fn throw → slot vẫn được release (finally) — hàng đợi không kẹt.
- */
-async function withSubAgentSlot<T>(
-  profileName: string,
-  parentAgentName: string,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const prevTail = subAgentSlotTail
-  let release!: () => void
-  subAgentSlotTail = new Promise<void>(resolve => { release = resolve })
-  const waitStart = Date.now()
-  if (subAgentSlotHolder) {
-    console.log(`[SubAgentSlot] ${profileName} (từ ${parentAgentName}) xếp hàng — slot đang bận bởi: ${subAgentSlotHolder}`)
+interface SubAgentSlot {
+  id: number
+  /** Index key Zen (0-based) ghim cho slot này; -1 = không ghim (slot thừa hơn số key) */
+  keyIndex: number
+}
+const subAgentSlots: SubAgentSlot[] = Array.from(
+  { length: SUBAGENT_MAX_CONCURRENT },
+  (_, i) => ({ id: i + 1, keyIndex: i < zenKeyCountForSlots ? i : -1 }),
+)
+/** Chuỗi hiển thị agent đang giữ từng slot (rỗng = slot tự do) */
+const subAgentSlotHolders: string[] = subAgentSlots.map(() => '')
+interface SubAgentSlotWaiter {
+  holder: string
+  startedAt: number
+  resolve: (slot: SubAgentSlot) => void
+}
+const subAgentSlotWaiters: SubAgentSlotWaiter[] = []
+
+function assignSubAgentSlot(idx: number, holder: string): SubAgentSlot {
+  subAgentSlotHolders[idx] = holder
+  return subAgentSlots[idx]
+}
+
+/** Nhận slot: FIFO công bằng — slot tự do chỉ trao thẳng khi KHÔNG có người chờ. */
+function acquireSubAgentSlot(profileName: string, parentAgentName: string): Promise<SubAgentSlot> {
+  const holder = `${profileName} ← ${parentAgentName}`
+  if (subAgentSlotWaiters.length === 0) {
+    const freeIdx = subAgentSlotHolders.findIndex(h => h === '')
+    if (freeIdx >= 0) return Promise.resolve(assignSubAgentSlot(freeIdx, holder))
   }
-  await prevTail
-  const waitedMs = Date.now() - waitStart
-  if (waitedMs >= SUBAGENT_SLOT_QUEUE_LOG_MS) {
-    console.log(`[SubAgentSlot] ${profileName} chờ ${Math.round(waitedMs / 1000)}s mới đến lượt (user directive: tối đa 1 sub-agent chạy cùng lúc)`)
-  }
-  subAgentSlotHolder = `${profileName} ← ${parentAgentName}`
-  try {
-    return await fn()
-  } finally {
-    subAgentSlotHolder = ''
-    release()
+  const busy = subAgentSlotHolders.filter(Boolean)
+  console.log(`[SubAgentSlot] ${profileName} (từ ${parentAgentName}) xếp hàng — ${busy.length}/${SUBAGENT_MAX_CONCURRENT} slot bận${busy.length > 0 ? `: ${busy.join(' · ')}` : ''}${subAgentSlotWaiters.length > 0 ? ` (+${subAgentSlotWaiters.length} đang chờ trước)` : ''}`)
+  return new Promise<SubAgentSlot>(resolve => {
+    const startedAt = Date.now()
+    subAgentSlotWaiters.push({
+      holder,
+      startedAt,
+      resolve: slot => {
+        const waitedMs = Date.now() - startedAt
+        if (waitedMs >= SUBAGENT_SLOT_QUEUE_LOG_MS) {
+          console.log(`[SubAgentSlot] ${profileName} chờ ${Math.round(waitedMs / 1000)}s → nhận slot ${slot.id}${slot.keyIndex >= 0 ? ` (ghim Zen key #${slot.keyIndex + 1})` : ''}`)
+        }
+        resolve(slot)
+      },
+    })
+  })
+}
+
+/** Nhả slot — trao thẳng cho người chờ đầu hàng (FIFO, không ai nhảy hàng). */
+function releaseSubAgentSlot(slot: SubAgentSlot): void {
+  const idx = slot.id - 1
+  const next = subAgentSlotWaiters.shift()
+  if (next) {
+    next.resolve(assignSubAgentSlot(idx, next.holder))
+  } else {
+    subAgentSlotHolders[idx] = ''
   }
 }
 
 // ==================== GENERIC SUB-AGENT RUNNER ====================
 
 /**
- * USER DIRECTIVE 2026-10-29 — ĐIỂM ĐI QUAN TRỌNG DUY NHẤT cho правило
- * "tối đa 1 sub-agent cùng lúc": wrapper này bọc MỌI lần chạy sub-agent qua
- * slot toàn cục (withSubAgentSlot). Mọi đường gọi (runSubAgent legacy,
- * dispatchAgentByOmega, dispatchAgentsParallel, eval harness...) đều đi qua
- * đây → đảm bảo serialized toàn hệ thống, bất kể caller có chạy song song.
+ * USER DIRECTIVE 2026-10-29b — ĐIỂM ĐI QUA DUY NHẤT cho quy tắc concurrency:
+ * "tối đa 3 sub-agent cùng lúc, mỗi sub-agent 1 API key Zen riêng". Wrapper
+ * này acquire 1 slot trong pool (FIFO) rồi GHIM key của slot đó vào toàn bộ
+ * run qua runWithZenKeyBinding (AsyncLocalStorage — mọi LLM call con: ReAct
+ * loop, wrap-up, trọng tài độc lập... tự kế thừa đúng key). Mọi đường gọi
+ * (runSubAgent legacy, dispatchAgentByOmega, dispatchAgentsParallel, eval
+ * harness...) đều đi qua đây. Fail-safe: throw → finally release slot.
  */
 export async function runSubAgentForProfile(params: {
   profile: SubAgentProfile
@@ -283,7 +323,17 @@ export async function runSubAgentForProfile(params: {
 }): Promise<SubAgentOutcome> {
   const profileName = params.profile?.name || 'unknown-agent'
   const parentName = params.parentAgentName || 'parent-agent'
-  return withSubAgentSlot(profileName, parentName, () => runSubAgentForProfileInner(params))
+  const slot = await acquireSubAgentSlot(profileName, parentName)
+  if (slot.keyIndex >= 0) {
+    console.log(`[SubAgentSlot] ${profileName} nhận slot ${slot.id}/${SUBAGENT_MAX_CONCURRENT} — ghim Zen key #${slot.keyIndex + 1} riêng cho toàn bộ run (user directive: sub-agent không dùng chung key)`)
+  }
+  try {
+    return slot.keyIndex >= 0
+      ? await runWithZenKeyBinding(slot.keyIndex, () => runSubAgentForProfileInner(params))
+      : await runSubAgentForProfileInner(params)
+  } finally {
+    releaseSubAgentSlot(slot)
+  }
 }
 
 /**
@@ -821,26 +871,6 @@ async function runSubAgentForProfileInner(params: {
       state.endedBy === 'cancelled' ? 'cancelled' : state.endedBy === 'error' ? 'error' : 'done',
       `[Delegation] ${state.endedBy} · ${iterations} vòng · ${toolCallCount} tool calls · ${tokensUsed} tokens`,
     )
-    // USER DIRECTIVE 2026-10-29 — đóng todo dang dở TRUNG THỰC khi run sub-agent
-    // kết thúc (parity goal-loop finalize / chat-route crash-path — trước đây
-    // đường delegation KHÔNG gọi closeRunTodosAtEnd → todo sub-agent nằm
-    // pending/in_progress vĩnh viễn trong DB): in_progress/blocked →
-    // completed|failed theo verdict, pending → completed (đạt) | archivedAt
-    // (chưa đạt). Fail-open.
-    if (sessionId && delegationRunId && closeRunTodosAtEndFn) {
-      try {
-        const closed = await closeRunTodosAtEndFn({
-          sessionId,
-          runId: delegationRunId,
-          goalComplete: outcome.success,
-          crash: state.endedBy === 'error',
-        })
-        const closedTotal = closed.inProgressClosed + closed.pendingCompleted + closed.pendingArchived
-        if (closedTotal > 0) {
-          console.log(`[SubAgent] ${profile.name} đóng ${closedTotal} todo dang dở (verdict ${outcome.success ? 'đạt' : 'chưa đạt'}: ${closed.inProgressClosed} in_progress/blocked, ${closed.pendingCompleted} pending→completed, ${closed.pendingArchived} pending→archived)`)
-        }
-      } catch { /* fail-open — không được phép làm hỏng delegation */ }
-    }
     if (sessionId && report.trim()) {
       try {
         void import('@/lib/context-store')
@@ -891,6 +921,29 @@ async function runSubAgentForProfileInner(params: {
           }
         }
       } catch { /* fail-open — evaluator không được phá delegation */ }
+    }
+
+    // USER DIRECTIVE 2026-10-29 (re-audit fix: DỜI SAU trọng tài) — đóng todo
+    // dang dở TRUNG THỰC khi run sub-agent kết thúc (parity goal-loop finalize
+    // / chat-route crash-path — trước đây đường delegation KHÔNG gọi
+    // closeRunTodosAtEnd → todo sub-agent nằm pending/in_progress vĩnh viễn
+    // trong DB). PHẢI chạy SAU evaluator: verdict trọng tài có thể HẠ
+    // outcome.success (CHƯA ĐẠT) — đóng todo trước đó sẽ ghi nhầm 'đạt' cho
+    // todo của run thất bại. in_progress/blocked → completed|failed theo
+    // verdict CHỐT, pending → completed (đạt) | archivedAt (chưa đạt). Fail-open.
+    if (sessionId && delegationRunId && closeRunTodosAtEndFn) {
+      try {
+        const closed = await closeRunTodosAtEndFn({
+          sessionId,
+          runId: delegationRunId,
+          goalComplete: outcome.success,
+          crash: state.endedBy === 'error',
+        })
+        const closedTotal = closed.inProgressClosed + closed.pendingCompleted + closed.pendingArchived
+        if (closedTotal > 0) {
+          console.log(`[SubAgent] ${profile.name} đóng ${closedTotal} todo dang dở (verdict ${outcome.success ? 'đạt' : 'chưa đạt'}: ${closed.inProgressClosed} in_progress/blocked, ${closed.pendingCompleted} pending→completed, ${closed.pendingArchived} pending→archived)`)
+        }
+      } catch { /* fail-open — không được phép làm hỏng delegation */ }
     }
 
     console.log(`[SubAgent] ${profile.name} xong: ${state.endedBy} — ${iterations} vòng, ${toolCallCount} tool calls, ${tokensUsed} tokens, ${Math.round((Date.now() - startedAt) / 1000)}s`)

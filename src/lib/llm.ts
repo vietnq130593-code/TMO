@@ -3837,7 +3837,9 @@ async function callLLMWithSpecificProvider(
 // ==================== OPENCODE ZEN PROVIDER (2026-09-24) ====================
 // OpenCode Zen — curated free coding models (OpenAI-compatible API).
 // Base URL: https://opencode.ai/zen/v1 (chat/completions)
-// Auth: Bearer token (ZEN_API_KEY_1, ZEN_API_KEY_2 — 2-key rotation pool)
+// Auth: Bearer token (ZEN_API_KEY_1..4 — multi-key rotation pool; user bổ sung
+// key thứ 3 ngày 2026-10-29: "3 API key Zen → tối đa 3 sub-agent song song,
+// mỗi sub-agent 1 key riêng — không dùng chung API key")
 //
 // Free models used by TMO agents (PHIÊN 7 — user directive 2026-10-28, Task 37):
 //   - space-bunny-free  (stealth reasoning, ctx 1M / out 512k, effort max)
@@ -3860,21 +3862,79 @@ const ZEN_BASE_URL = process.env.ZEN_BASE_URL?.trim() || 'https://opencode.ai/ze
 const ZEN_API_KEYS: string[] = [
   process.env.ZEN_API_KEY_1?.trim() || '',
   process.env.ZEN_API_KEY_2?.trim() || '',
+  process.env.ZEN_API_KEY_3?.trim() || '',
+  process.env.ZEN_API_KEY_4?.trim() || '',
 ].filter(k => k.length > 0)
 
 let zenKeyIndex = 0
 // Per-key 429 cooldown timestamp (0 = not rate-limited)
 const zenKey429Until: number[] = ZEN_API_KEYS.map(() => 0)
 
+// ==================== ZEN KEY BINDING — SUB-AGENT 1 KEY/AGENT (user 2026-10-29b) ====================
+// USER DIRECTIVE: "tối đa 3 subagents, nếu gọi subagents thì KHÔNG được sử
+// dụng cùng API [key]". Mỗi sub-agent chạy bên trong runWithZenKeyBinding(i)
+// → MỌI LLM call trong cây async của nó (loop ReAct + wrap-up + trọng tài
+// đánh giá độc lập + consult Omega...) đều GHIM key #i qua AsyncLocalStorage
+// (không cần xuyên mảng options qua từng tầng call). Key đang bị ghim bởi
+// sub-agent nào đó sẽ bị getZenKey() BỎ QUA khi chọn key cho caller thường
+// (parent goal-loop / utility) — hết key sạch mới fail-open round-robin.
+import { AsyncLocalStorage } from 'node:async_hooks'
+
+const zenKeyBindingStorage = new AsyncLocalStorage<{ keyIndex: number }>()
+/** Các key index đang bị sub-agent ghim (0-based) */
+const activeZenKeyBindings = new Set<number>()
+
+/** Số key Zen đã cấu hình (1..4) — subagent-delegate dùng để tính số slot. */
+export function getZenKeyCount(): number {
+  return ZEN_API_KEYS.length
+}
+
+/**
+ * Chạy fn trong binding ghim key #keyIndex (0-based). Mọi callZenProvider /
+ * callOpenCodeCLIProvider bên trong dùng key này thay vì round-robin. Register
+ * vào activeZenKeyBindings để getZenKey() của caller thường né key đang bận.
+ * Fail-safe: fn throw → finally unregister (binding không rò rỉ).
+ */
+export async function runWithZenKeyBinding<T>(keyIndex: number, fn: () => Promise<T>): Promise<T> {
+  activeZenKeyBindings.add(keyIndex)
+  try {
+    return await zenKeyBindingStorage.run({ keyIndex }, fn)
+  } finally {
+    activeZenKeyBindings.delete(keyIndex)
+  }
+}
+
+/** Lấy key đang ghim bởi async context hiện tại (nếu có) — nội bộ llm.ts. */
+function getBoundZenKey(): { key: string; index: number } | null {
+  const b = zenKeyBindingStorage.getStore()
+  if (!b || b.keyIndex < 0 || b.keyIndex >= ZEN_API_KEYS.length) return null
+  return { key: ZEN_API_KEYS[b.keyIndex], index: b.keyIndex }
+}
+
 /** Zen is ready to serve calls (at least 1 key configured). */
 function isZenConfigured(): boolean {
   return ZEN_API_KEYS.length > 0
 }
 
-/** Pick next available Zen key (skip rate-limited; round-robin otherwise). */
+/**
+ * Pick next available Zen key: round-robin, bỏ qua key bị 429-cooldown VÀ key
+ * đang bị sub-agent ghim (user directive: sub-agent không dùng chung key với
+ * ai khác). Hết lựa chọn sạch → fail-open: chọn key reset sớm nhất (không bao
+ * giờ block caller thường — parent/utility vẫn chạy dù mọi key đang ghim).
+ */
 function getZenKey(): { key: string; index: number } | null {
   if (ZEN_API_KEYS.length === 0) return null
   const now = Date.now()
+  // Lượt 1 — key sạch hoàn toàn (không 429, không bị ghim)
+  for (let i = 0; i < ZEN_API_KEYS.length; i++) {
+    const idx = (zenKeyIndex + i) % ZEN_API_KEYS.length
+    if (zenKey429Until[idx] <= now && !activeZenKeyBindings.has(idx)) {
+      zenKeyIndex = (idx + 1) % ZEN_API_KEYS.length
+      return { key: ZEN_API_KEYS[idx], index: idx }
+    }
+  }
+  // Lượt 2 — key chỉ bị ghim (chưa 429): tạm dùng chung còn hơn chết chờ
+  // (chỉ xảy ra khi SỐ key < số sub-agent đang chạy)
   for (let i = 0; i < ZEN_API_KEYS.length; i++) {
     const idx = (zenKeyIndex + i) % ZEN_API_KEYS.length
     if (zenKey429Until[idx] <= now) {
@@ -3983,9 +4043,13 @@ async function callZenProvider(
   options: LLMCallOptions | undefined,
   taskLabel: string,
 ): Promise<LLMResult | null> {
-  const keyInfo = getZenKey()
+  // USER DIRECTIVE 2026-10-29b — key GHIM riêng cho sub-agent: nếu async
+  // context hiện tại đang chạy trong runWithZenKeyBinding(i) → dùng đúng key
+  // #i (concurrent sub-agent không bao giờ dùng chung key). Caller thường
+  // (parent/utility) → getZenKey() round-robin tự NÉ key đang bị ghim.
+  const keyInfo = getBoundZenKey() ?? getZenKey()
   if (!keyInfo) {
-    console.warn('[ZEN] No API keys configured (set ZEN_API_KEY_1 / ZEN_API_KEY_2 in .env)')
+    console.warn('[ZEN] No API keys configured (set ZEN_API_KEY_1 / ZEN_API_KEY_2 / ZEN_API_KEY_3 in .env)')
     return null
   }
 
@@ -4136,7 +4200,7 @@ async function callZenProvider(
       )
     }
 
-    console.log(`[ZEN] ${taskLabel} OK — ${content.length} chars, model ${actualModel}${totalTokens ? `, ${totalTokens} tokens` : ''}${reasoningTokens !== undefined ? ` (reasoning: ${reasoningTokens} tokens)` : ''}`)
+    console.log(`[ZEN] ${taskLabel} [key #${keyInfo.index + 1}] OK — ${content.length} chars, model ${actualModel}${totalTokens ? `, ${totalTokens} tokens` : ''}${reasoningTokens !== undefined ? ` (reasoning: ${reasoningTokens} tokens)` : ''}`)
     return {
       content,
       provider: 'zen',
@@ -4399,17 +4463,20 @@ async function callOpenCodeCLIProvider(
   // Top-level import (sync) để dùng trong child.on('close') callback — không dùng await trong callback.
   const { extractToolCallsWithDiagnostics } = await import('@/lib/tool-calls')
   const fullPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt
-  // MULTI-KEY ROTATION (fix 2026-09-25): opencode.json định nghĩa 3 provider
+  // MULTI-KEY ROTATION (fix 2026-09-25): opencode.json định nghĩa các provider
   // alias trùng baseURL https://opencode.ai/zen/v1, khác API key:
   //   - opencode    → key repo (mặc định, quota riêng)
   //   - opencode-k1 → ZEN_API_KEY_1   ┐ pool round-robin DÙNG CHUNG với
-  //   - opencode-k2 → ZEN_API_KEY_2   ┘ Zen HTTP path (getZenKey)
+  //   - opencode-k2 → ZEN_API_KEY_2   │ Zen HTTP path (getZenKey)
+  //   - opencode-k3 → ZEN_API_KEY_3   ┘ (user thêm key 3 — 2026-10-29b)
   // Chọn prefix theo pool state → CLI không còn phụ thuộc 1 key duy nhất;
   // key nào bị HTTP path đánh dấu 429-cooldown sẽ tự bị bỏ qua ở lần spawn sau.
+  // USER DIRECTIVE 2026-10-29b: context đang ghim key (sub-agent) → CLI cũng
+  // dùng đúng alias key đó (opencode-k{i}) — đồng bộ với HTTP path.
   // Không có env key → dùng alias mặc định `opencode` (auth.json/opencode.json).
   let cliProviderPrefix = 'opencode'
   try {
-    const keyInfo = getZenKey()
+    const keyInfo = getBoundZenKey() ?? getZenKey()
     if (keyInfo) cliProviderPrefix = `opencode-k${keyInfo.index + 1}`
   } catch { /* giữ prefix mặc định */ }
   const cliModel = `${cliProviderPrefix}/${model}`

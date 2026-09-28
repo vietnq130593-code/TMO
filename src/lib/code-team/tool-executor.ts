@@ -1580,7 +1580,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           auto_apply: {
             type: 'boolean',
             description:
-              'Mặc định true — nếu Omega đề xuất điều agent xử lý, hệ thống TỰ ĐỘNG dispatch agent đó NGAY trong tool call này (kết quả kèm trong "autoApplied": report + evaluation của trọng tài độc lập). Đặt false nếu bạn muốn tự quyết định / tự gọi dispatch_agent ở vòng sau. LƯU Ý: gọi từ sub-agent → auto-apply luôn TẮT (tối đa 1 sub-agent chạy cùng lúc).',
+              'Mặc định true — nếu Omega đề xuất điều agent xử lý, hệ thống TỰ ĐỘNG dispatch agent đó NGAY trong tool call này (kết quả kèm trong "autoApplied": report + evaluation của trọng tài độc lập). Đặt false nếu bạn muốn tự quyết định / tự gọi dispatch_agent ở vòng sau. LƯU Ý: gọi từ sub-agent → auto-apply luôn TẮT (chống deadlock slot pool sub-agent).',
           },
         },
         required: ['problem'],
@@ -1669,9 +1669,9 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     function: {
       name: 'dispatch_agents_parallel',
       description:
-        'FAN-OUT: dispatch 2-4 sub-agent theo HÀNG ĐỢI TUẦN TỰ (mỗi thời điểm chỉ 1 sub-agent chạy — user directive 2026-10-29) rồi HỢP NHẤT (fan-in) kết quả về 1 báo cáo. ' +
+        'FAN-OUT: dispatch 2-4 sub-agent chạy ĐỒNG THỜI (slot pool điều tiết tối đa 3 sub-agent — mỗi sub-agent tự động ghim 1 API key riêng, user directive 2026-10-29b) rồi HỢP NHẤT (fan-in) kết quả về 1 báo cáo. ' +
         'Mỗi sub-agent độc lập — 1 agent fail KHÔNG kéo sập cả lô; xung đột (2+ agent cùng đụng 1 file) được LIỆT KÊ trong "conflicts" thay vì báo lỗi. ' +
-        'Dùng khi tác vụ tách được thành các nhánh ĐỘC LẬP (vd: review 3 module khác nhau, phân tích nhiều phần). ' +
+        'Dùng khi tác vụ tách được thành các nhánh ĐỘC LẬP (vd: review 3 module khác nhau, phân tích song song nhiều phần). ' +
         'Tác vụ có phụ thuộc tuần tự (B cần kết quả A) thì dùng dispatch_agent từng cái.',
       parameters: {
         type: 'object',
@@ -3437,7 +3437,7 @@ export async function executeTool(
           } else if (suggestedAgent && (!autoApply || calledFromSubAgent)) {
             out.autoApplied = null
             out.note = calledFromSubAgent
-              ? `auto-apply TẮT khi gọi từ sub-agent (tối đa 1 sub-agent chạy cùng lúc — chống deadlock). Tự làm theo tư vấn của Omega; nếu cần agent [${suggestedAgent}] xử lý, báo parent gọi dispatch_agent giúp.`
+              ? `auto-apply TẮT khi gọi từ sub-agent (chống deadlock slot pool — sub-agent đang giữ slot, dispatch lồng sẽ tự chờ chính mình). Tự làm theo tư vấn của Omega; nếu cần agent [${suggestedAgent}] xử lý, báo parent gọi dispatch_agent giúp.`
               : `auto_apply=false — tự gọi dispatch_agent({"agent": "${suggestedAgent}", ...}) nếu muốn theo gợi ý.`
           }
           result = out

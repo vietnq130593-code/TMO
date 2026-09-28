@@ -48,6 +48,20 @@
         "mimo-v2.6-flash-free": {"name": "MiMo v2.6 Flash Free"},
         "space-bunny-free": {"name": "Space Bunny Free"}
       }
+    },
+    "opencode-k3": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "OpenCode Zen K3",
+      "options": {
+        "baseURL": "https://opencode.ai/zen/v1",
+        "apiKey": "oc_sk_2d7a0ef8b8dc_ruupJGTRjB2CCDTJxIp-eKIGj2nNqAKk"
+      },
+      "models": {
+        "nemotron-3-ultra-free": {"name": "Nemotron 3 Ultra Free"},
+        "nemotron-3.5-lightning-free": {"name": "Nemotron 3.5 Lightning Free"},
+        "mimo-v2.6-flash-free": {"name": "MiMo v2.6 Flash Free"},
+        "space-bunny-free": {"name": "Space Bunny Free"}
+      }
     }
   }
 }
