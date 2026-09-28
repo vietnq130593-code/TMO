@@ -5,7 +5,7 @@
  * "Có thể xây dựng kiến trúc thuật toán truy vấn dữ liệu cho lõi embed không?")
  *
  * ┌────────────────────────── OFFLINE (detect) ───────────────────────────┐
- * │ Neo4j entity graph (18k nodes / 25k rels)                            │
+ * │ Neo4j entity graph (TASK 52: 175k nodes / 204k rels — domain layer   │
  * │   → fetch nodes + edges                                               │
  * │   → Leiden community detection (src/lib/leiden.ts — pure TS,          │
  * │     local moving + refine + aggregate, best-of-3 restarts)            │
@@ -45,10 +45,15 @@ import { createHash } from 'crypto'
 
 export const COLLECTION_COMMUNITIES = 'theopus_communities'
 
-/** Số node tối đa fetch từ Neo4j cho 1 lần detect (đồ thị KB hiện tại ~18.8k nodes) */
-const MAX_GRAPH_NODES = 50000
-/** Số cạnh tối đa fetch */
-const MAX_GRAPH_EDGES = 100000
+/** Số node tối đa fetch từ Neo4j cho 1 lần detect.
+ *  TASK 52: 50k → 250k — graph KB hiện 175,823 entity nodes (domain layer
+ *  đầy đủ, audit Task 50b); limit cũ 50k cắt cụt đồ thị → Leiden chạy trên
+ *  ~28% graph đầu tiên (thứ tự tùy Cypher) → community layer lệch chuẩn.
+ *  250k chừa dư room cho tăng trưởng. */
+const MAX_GRAPH_NODES = 250000
+/** Số cạnh tối đa fetch. TASK 52: 100k → 300k — graph hiện 204,629 rels;
+ *  limit cũ cắt mất ~50% cạnh. */
+const MAX_GRAPH_EDGES = 300000
 /** Số member hiển thị trong community summary */
 const SUMMARY_TOP_MEMBERS = 12
 /** Community tối thiểu để tạo summary (đơn chiếc lẻ không có giá trị retrieval) */
@@ -81,6 +86,10 @@ export interface CommunityInfo {
 export interface CommunityDetectStats {
   nodesProcessed: number
   edgesProcessed: number
+  /** TASK 52 — số node degree-0 bị compact bỏ khỏi input Leiden (không tham
+   *  gia community nào — singleton < MIN_COMMUNITY_SIZE bị skip ở bước build
+   *  dù có đưa vào Leiden) → tiết kiệm ~50% CPU/RAM trên graph lớn. */
+  isolatedNodesSkipped: number
   communitiesFound: number
   communitiesStored: number
   modularity: number
@@ -108,7 +117,15 @@ const globalForCommunities = globalThis as unknown as {
 export async function detectAndStoreCommunities(): Promise<CommunityDetectStats> {
   const startedAt = Date.now()
   if (globalForCommunities.__communityDetectionRunning) {
-    throw new Error('Community detection đang chạy (bắt đầu lúc ' + new Date(globalForCommunities.__communityDetectionStartedAt || 0).toISOString() + ') — thử lại sau')
+    // TASK 52b STALE GUARD: flag kẹt do transaction Neo4j treo không timeout
+    // (đã xảy ra 2026-09-28: batch write khổng lồ trên AuraDB 0.5-CPU kẹt
+    // 'Running' >10 phút, flag kẹt theo — detection mới nào cũng bị chặn).
+    // Sau 30 phút không xong → coi là stale: reset flag, cho phép chạy lại.
+    const prevStartedAt = globalForCommunities.__communityDetectionStartedAt || 0
+    if (Date.now() - prevStartedAt < 30 * 60_000) {
+      throw new Error('Community detection đang chạy (bắt đầu lúc ' + new Date(prevStartedAt || 0).toISOString() + ') — thử lại sau')
+    }
+    console.warn(`[Communities] STALE GUARD: flag detection kẹt >30 phút (bắt đầu ${new Date(prevStartedAt).toISOString()}) — reset và chạy lại`)
   }
   globalForCommunities.__communityDetectionRunning = true
   globalForCommunities.__communityDetectionStartedAt = Date.now()
@@ -135,10 +152,43 @@ export async function detectAndStoreCommunities(): Promise<CommunityDetectStats>
       degree[s]++
       degree[t]++
     }
-    console.log(`[Communities] Graph: ${nodes.length} nodes, ${edges.length} edges (từ ${rels.length} rels)`)
+
+    // ===== 1b. TASK 52 — COMPACT: bỏ isolated nodes (degree 0) khỏi input Leiden =====
+    // Audit Task 50b (dry-run read-only toàn graph 175,823 nodes): ~90k node
+    // KHÔNG có cạnh nào (entity trích xuất standalone / relationship chưa
+    // ghép). Chúng tạo singleton community < MIN_COMMUNITY_SIZE (bị loại ở
+    // bước build) nhưng Leiden vẫn quét full — dry-run 143s phàn lớn là xử lý
+    // các node rỗng này. Compact bỏ trước: kết quả community ≥3 members
+    // KHÔNG ĐỔI (Q=0.8321, ~346 phân vùng) nhưng CPU/RAM giảm ~50%.
+    let graphNodes = nodes
+    let graphEdges = edges
+    let graphDegree = degree
+    let isolatedNodesSkipped = 0
+    {
+      let isolated = 0
+      for (let i = 0; i < degree.length; i++) if (degree[i] === 0) isolated++
+      if (isolated > 0 && isolated < nodes.length) {
+        isolatedNodesSkipped = isolated
+        const remap = new Int32Array(nodes.length).fill(-1)
+        const activeNodes: EntityNodeInfo[] = []
+        const activeDegree: number[] = []
+        for (let i = 0; i < nodes.length; i++) {
+          if (degree[i] > 0) {
+            remap[i] = activeNodes.length
+            activeNodes.push(nodes[i])
+            activeDegree.push(degree[i])
+          }
+        }
+        graphNodes = activeNodes
+        graphDegree = activeDegree
+        graphEdges = edges.map(e => ({ source: remap[e.source], target: remap[e.target], weight: e.weight }))
+        console.log(`[Communities] TASK 52 compact: bỏ ${isolated} isolated nodes (degree 0) — input Leiden còn ${activeNodes.length} nodes / ${graphEdges.length} edges`)
+      }
+    }
+    console.log(`[Communities] Graph: ${graphNodes.length} nodes (+${isolatedNodesSkipped} isolated skipped), ${graphEdges.length} edges (từ ${rels.length} rels)`)
 
     // ===== 2. Leiden community detection (best-of-3) =====
-    const leidenResult = leidenCommunityDetection(nodes.length, edges, {
+    const leidenResult = leidenCommunityDetection(graphNodes.length, graphEdges, {
       restarts: LEIDEN_RESTARTS,
       resolution: 1.0,
     })
@@ -146,7 +196,7 @@ export async function detectAndStoreCommunities(): Promise<CommunityDetectStats>
 
     // ===== 3. Build community objects =====
     const membersByCommunity = new Map<number, number[]>()
-    for (let v = 0; v < nodes.length; v++) {
+    for (let v = 0; v < graphNodes.length; v++) {
       const c = leidenResult.nodeCommunity[v]
       if (!membersByCommunity.has(c)) membersByCommunity.set(c, [])
       membersByCommunity.get(c)!.push(v)
@@ -159,24 +209,27 @@ export async function detectAndStoreCommunities(): Promise<CommunityDetectStats>
       topEntities: Array<{ name: string; type: string; description: string }>
       domains: string[]
       nodeIds: string[]
+      /** TASK 52b — elementId nội bộ Neo4j của members (write communityId theo
+       *  đường này — match property id label-less KHÔNG ăn index trên AuraDB) */
+      nodeElementIds: string[]
     }> = []
 
     for (const [c, memberIdxs] of membersByCommunity) {
       if (memberIdxs.length < MIN_COMMUNITY_SIZE) continue
 
       // Top members theo degree (đại diện tốt nhất cho community)
-      const sorted = [...memberIdxs].sort((a, b) => degree[b] - degree[a])
+      const sorted = [...memberIdxs].sort((a, b) => graphDegree[b] - graphDegree[a])
       const topIdxs = sorted.slice(0, SUMMARY_TOP_MEMBERS)
       const topEntities = topIdxs.map(i => ({
-        name: nodes[i].name,
-        type: nodes[i].entityType || 'Concept',
-        description: (nodes[i].description || '').slice(0, 200),
+        name: graphNodes[i].name,
+        type: graphNodes[i].entityType || 'Concept',
+        description: (graphNodes[i].description || '').slice(0, 200),
       }))
 
       // Domains (unique, top 3)
       const domainCounts = new Map<string, number>()
       for (const i of memberIdxs) {
-        const d = nodes[i].domain || 'mixed'
+        const d = graphNodes[i].domain || 'mixed'
         domainCounts.set(d, (domainCounts.get(d) || 0) + 1)
       }
       const domains = [...domainCounts.entries()]
@@ -196,20 +249,22 @@ export async function detectAndStoreCommunities(): Promise<CommunityDetectStats>
         memberCount: memberIdxs.length,
         topEntities,
         domains,
-        nodeIds: memberIdxs.map(i => nodes[i].id).filter(Boolean),
+        nodeIds: memberIdxs.map(i => graphNodes[i].id).filter(Boolean),
+        nodeElementIds: memberIdxs.map(i => graphNodes[i].elementId).filter(Boolean),
       })
     }
     console.log(`[Communities] ${communities.length} communities đạt ngưỡng ≥${MIN_COMMUNITY_SIZE} members (trong ${leidenResult.communityCount} tổng)`)
 
-    // ===== 4. Write communityId về Neo4j (batch theo community) =====
+    // ===== 4. Write communityId về Neo4j (bulk chunked theo elementId — TASK 52b) =====
     await writeCommunityIdsToNeo4j(communities)
 
     // ===== 5. Embed summaries + upsert Qdrant =====
     const stored = await storeCommunityEmbeddings(communities)
 
     return {
-      nodesProcessed: nodes.length,
-      edgesProcessed: edges.length,
+      nodesProcessed: graphNodes.length,
+      edgesProcessed: graphEdges.length,
+      isolatedNodesSkipped,
       communitiesFound: leidenResult.communityCount,
       communitiesStored: stored,
       modularity: leidenResult.modularity,
@@ -226,6 +281,11 @@ export async function detectAndStoreCommunities(): Promise<CommunityDetectStats>
 
 interface EntityNodeInfo {
   id: string
+  /** TASK 52b — elementId nội bộ Neo4j (vd "4:abc:12") — O(1) lookup qua
+   *  NodeByIdSeek khi match, KHÔNG cần index. Dùng cho write communityId
+   *  (benchmark 2026-09-28: property-id match 126ms/node vs elementId
+   *  1.6ms/node — nhanh hơn ~80 lần trên AuraDB). */
+  elementId: string
   name: string
   entityType: string
   domain: string
@@ -238,7 +298,8 @@ async function fetchEntityNodes(): Promise<EntityNodeInfo[]> {
     const result = await session.executeRead((tx) =>
       tx.run(
         `MATCH (n) WHERE n.entity_type IS NOT NULL AND n.name IS NOT NULL
-         RETURN n.id AS id, n.name AS name, n.entity_type AS entityType,
+         RETURN n.id AS id, elementId(n) AS elementId, n.name AS name,
+                n.entity_type AS entityType,
                 n.domain AS domain, n.description AS description
          LIMIT toInteger($limit)`,
         { limit: MAX_GRAPH_NODES }
@@ -246,6 +307,7 @@ async function fetchEntityNodes(): Promise<EntityNodeInfo[]> {
     )
     return result.records.map(r => ({
       id: String(toNative(r.get('id')) ?? ''),
+      elementId: String(toNative(r.get('elementId')) ?? ''),
       name: String(toNative(r.get('name')) ?? ''),
       entityType: String(toNative(r.get('entityType')) ?? ''),
       domain: String(toNative(r.get('domain')) ?? ''),
@@ -278,45 +340,80 @@ async function fetchEntityEdges(): Promise<Array<{ source: string; target: strin
   }
 }
 
-/** SET n.communityId cho mọi node thuộc community (batch UNWIND).
+/** SET n.communityId cho mọi node thuộc community.
  *  CLEAR toàn bộ communityId cũ TRƯỚC — node không còn thuộc community nào
- *  sau lần detect này không giữ id thừa. */
+ *  sau lần detect này không giữ id thừa.
+ *
+ *  TASK 52b — FIX SAU TREO THẬT (2026-09-28): bản cũ viết THEO TỪNG COMMUNITY
+ *  — 345 transaction tuần tự, mỗi cái UNWIND TOÀN BỘ nodeIds của community
+ *  đó. Trên graph 84k nodes, community lớn nhất có HÀNG CHỤC NGHÌN nodes →
+ *  1 transaction khổng lồ trên AuraDB 0.5-CPU chạy >10 phút không xong (bắt
+ *  quả tang qua SHOW TRANSACTIONS: transaction "UNWIND ... SET communityId"
+ *  kẹt 'Running' vô hạn, flag __communityDetectionRunning kẹt theo).
+ *
+ *  Bản mới:
+ *    (1) BULK — gom toàn bộ cặp rồi UNWIND theo CHUNK 2000 nodes/transaction
+ *        (~42 chunk cho 84k nodes — mỗi chunk bounded);
+ *    (2) MATCH THEO elementId(n) — benchmark 2026-09-28 trên AuraDB: match
+ *        property id label-less `MATCH (n {id: $id})` KHÔNG dùng được 8 index
+ *        unique theo label (planner quét) = 126ms/node → chunk 2000 nodes
+ *        timeout 60s; match `WHERE elementId(n) = $eid` = NodeByIdSeek O(1)
+ *        = 1.6ms/node (~80x nhanh hơn) → chunk 2000 nodes ≈ 3s;
+ *    (3) transaction TIMEOUT 60s (TransactionConfig) — chunk kẹt bị server
+ *        hủy và BỎ QUA (đếm skipped) thay vì treo cả detection;
+ *    (4) progress log mỗi 10 chunk để theo dõi qua dev.log. */
 async function writeCommunityIdsToNeo4j(
-  communities: Array<{ communityId: string; nodeIds: string[] }>
+  communities: Array<{ communityId: string; nodeElementIds: string[] }>
 ): Promise<number> {
-  let written = 0
   const session = await safeSession()
   try {
-    // Clear communityId cũ (REPLACE semantics)
+    // Clear communityId cũ (REPLACE semantics) — cũng có timeout 60s
     try {
-      await session.executeWrite((tx) =>
-        tx.run(`MATCH (n) WHERE n.communityId IS NOT NULL REMOVE n.communityId`)
+      await session.executeWrite(
+        (tx) => tx.run(`MATCH (n) WHERE n.communityId IS NOT NULL REMOVE n.communityId`),
+        { timeout: 60_000 }
       )
     } catch (err) {
       console.warn('[Communities] Clear old communityId failed (tiếp tục):', err instanceof Error ? err.message : String(err))
     }
 
+    // Bulk pairs — 1 dòng / 1 node: {eid (elementId), communityId}
+    const pairs: Array<{ eid: string; communityId: string }> = []
     for (const c of communities) {
-      if (c.nodeIds.length === 0) continue
+      for (const eid of c.nodeElementIds) pairs.push({ eid, communityId: c.communityId })
+    }
+    if (pairs.length === 0) return 0
+
+    const CHUNK = 2000
+    let written = 0
+    let skipped = 0
+    for (let i = 0; i < pairs.length; i += CHUNK) {
+      const chunk = pairs.slice(i, i + CHUNK)
       try {
-        await session.executeWrite((tx) =>
-          tx.run(
-            `UNWIND $ids AS nid
-             MATCH (n {id: nid})
-             SET n.communityId = $communityId`,
-            { ids: c.nodeIds, communityId: c.communityId }
-          )
+        await session.executeWrite(
+          (tx) =>
+            tx.run(
+              `UNWIND $pairs AS p
+               MATCH (n) WHERE elementId(n) = p.eid
+               SET n.communityId = p.communityId`,
+              { pairs: chunk }
+            ),
+          { timeout: 60_000 }
         )
-        written += c.nodeIds.length
+        written += chunk.length
       } catch (err) {
-        console.warn(`[Communities] Neo4j write communityId ${c.communityId} failed (batch ${c.nodeIds.length} nodes):`, err instanceof Error ? err.message : String(err))
+        skipped += chunk.length
+        console.warn(`[Communities] Chunk ${Math.floor(i / CHUNK)} (${chunk.length} nodes) write thất bại (timeout/lỗi) — bỏ qua:`, err instanceof Error ? err.message : String(err))
+      }
+      if ((i / CHUNK) % 10 === 0) {
+        console.log(`[Communities] Neo4j write progress: ${written}/${pairs.length} nodes (skipped ${skipped})`)
       }
     }
+    console.log(`[Communities] Neo4j: communityId written cho ${written}/${pairs.length} nodes${skipped > 0 ? ` (skipped ${skipped})` : ''}`)
+    return written
   } finally {
     await session.close()
   }
-  console.log(`[Communities] Neo4j: communityId written cho ${written} nodes`)
-  return written
 }
 
 // ==================== QDRANT COMMUNITY COLLECTION ====================
