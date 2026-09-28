@@ -63,6 +63,30 @@ export async function POST(request: NextRequest) {
       runId: context?.runId ?? null,
     })
 
+    // ===== TODO AUTO-COMPLETE THEO BẰNG CHỨNG (USER DIRECTIVE 2026-09-28 —
+    // "không bỏ sót đánh dấu hoàn thành") =====
+    // Trước đây CHỈ đường ReAct TMO (agent-goal-loop) thu evidence sau mỗi
+    // batch tool → auto-complete todo. Đường CLI inner-loop (opencode bridge
+    // tmo_* tools gọi endpoint này) làm việc THẬT (file_edit/shell thành công)
+    // nhưng không ai feed evidence → todo của run không bao giờ được đánh dấu
+    // xong dù việc đã làm → bỏ sót. Giờ: tool SỬA FILE/LỆNH SHELL THÀNH CÔNG
+    // có context sessionId+runId → trích evidence (bộ dùng chung dev-tools —
+    // chỉ tool thay đổi thật) → auto-complete pending/in_progress/blocked todo
+    // khớp bằng chứng. Fire-and-forget + fail-open — không block response.
+    if (result.success && context?.sessionId && context?.runId) {
+      try {
+        const { extractTodoEvidence, autoCompleteRunTodosByEvidence } = await import('@/lib/code-team/dev-tools')
+        const ev = extractTodoEvidence(effectiveTool, effectiveArgs)
+        if (ev) {
+          void autoCompleteRunTodosByEvidence({
+            sessionId: context.sessionId,
+            runId: context.runId,
+            evidence: [ev],
+          }).catch(() => { /* fail-open — evidence auto-complete không được phép lỗi */ })
+        }
+      } catch { /* fail-open */ }
+    }
+
     return NextResponse.json({
       success: result.success,
       result: result.result,

@@ -3941,17 +3941,95 @@ export async function closeRunTodosAtEnd(params: {
 }
 
 /**
+ * USER DIRECTIVE 2026-09-28 ("không bỏ sót đánh dấu hoàn thành") — bộ evidence
+ * dùng CHUNG cho 2 đường thu bằng chứng:
+ *   - Đường ReAct TMO (agent-goal-loop — sau mỗi batch tool call thành công)
+ *   - Đường CLI inner-loop (/api/tools/execute — opencode bridge tmo_* tools)
+ * Chỉ tool THAY ĐỔI thật mới sinh evidence (FIX review GĐ2 #1: read-only
+ * KHÔNG tính — đọc xong chưa nghĩa là làm xong):
+ *   - shell/run_bg → lệnh shell (≥6 ký tự)
+ *   - tool sửa file → đường dẫn chính (args.path/file_path, chứa '/' hoặc '.')
+ *   - gateway_edit/write/apply_patch → path (bổ sung 2026-09-28 — gateway
+ *     tools sửa file qua bridge cũng là bằng chứng hoàn thành hợp lệ)
+ */
+export const TODO_EVIDENCE_MODIFY_TOOLS = new Set([
+  'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'opencode',
+  'gateway_edit', 'gateway_write', 'gateway_apply_patch',
+])
+export function extractTodoEvidence(toolName: string, args: Record<string, unknown> | undefined): string | null {
+  try {
+    if (!args || typeof args !== 'object') return null
+    if (toolName === 'shell' || toolName === 'run_bg') {
+      const cmd = (args as { command?: unknown }).command
+      if (typeof cmd === 'string' && cmd.trim().length >= 6) return cmd.trim()
+      return null
+    }
+    if (!TODO_EVIDENCE_MODIFY_TOOLS.has(toolName)) return null
+    const p = (args as { path?: unknown }).path ?? (args as { file_path?: unknown }).file_path
+    if (typeof p === 'string' && p.length >= 3 && (p.includes('/') || p.includes('.'))) return p
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * USER DIRECTIVE 2026-09-28 — matcher bằng chứng ↔ nội dung todo mạnh hơn
+ * substring chính xác cũ (bỏ sót thực tế: todo ghi path tương đối
+ * "src/lib/llm.ts" nhưng evidence là path tuyệt đối "/home/z/tmo-app/src/
+ * lib/llm.ts" → includes() 2 chiều đều fail; todo "chạy db:push" vs lệnh
+ * "cd /home/z/tmo-app && bun run db:push"). Vẫn bảo thủ chống khớp giả:
+ * mọi rule đều khớp chuỗi CỤ THỂ (path/basename/segment lệnh/span code) —
+ * văn tự tiếng Việt của todo không thể khớp giả với evidence ASCII.
+ */
+function evidenceMatchesTodo(ev: string, todoContent: string): boolean {
+  const e = ev.toLowerCase().replace(/\\/g, '/').trim()
+  const t = todoContent.toLowerCase().replace(/\\/g, '/').replace(/\s+/g, ' ').trim()
+  if (e.length < 3 || t.length < 3) return false
+
+  // (1) Substring chính xác — hành vi cũ, giữ nguyên
+  if (t.includes(e)) return true
+
+  // (2) Evidence là đường dẫn (có '/' hoặc đuôi file): khớp BASENAME trong
+  // todo (todo hay ghi tên file ngắn "sửa schema.prisma") hoặc path-full
+  const looksLikePath = e.includes('/') || /\.[a-z0-9]{1,8}$/.test(e)
+  if (looksLikePath) {
+    const base = e.split('/').pop() || ''
+    if (base.length >= 5 && t.includes(base)) return true
+    // Path token của todo ("prisma/schema.prisma", ".env", "llm.ts") xuất
+    // hiện trong evidence (todo tương đối ↔ evidence tuyệt đối và ngược lại)
+    const todoPaths = todoContent.match(/[\w.@-]+(?:\/[\w.@-]+)+|\b[\w-]+\.(?:ts|tsx|js|jsx|json|md|prisma|py|yaml|yml|toml|sql|cjs|mjs)\b|\.env(?:\.[\w.]+)?/gi) || []
+    if (todoPaths.some(p => p.length >= 5 && e.includes(p.toLowerCase()))) return true
+  }
+
+  // (3) Evidence là lệnh shell: tách segment theo && ; | — segment đủ dài
+  // xuất hiện trong todo ("bun run db:push" trong "cd /app && bun run db:push")
+  const segments = ev.split(/&&|\|\||;|\|/).map(s => s.trim()).filter(s => s.length >= 8)
+  if (segments.some(seg => t.includes(seg.toLowerCase()))) return true
+
+  // (4) Todo chứa span code/backtick (`bun run db:push`, `schema.prisma`)
+  // hoặc command colon-style (db:push, db:generate) — xuất hiện trong evidence
+  const todoSpans = todoContent.match(/`[^`]{6,}`/g) || []
+  if (todoSpans.some(sp => e.includes(sp.slice(1, -1).toLowerCase().trim()))) return true
+  const todoColonCmds = todoContent.match(/\b[a-z][a-z0-9_-]*(?::[a-z0-9_.-]+){1,}\b/g) || []
+  if (todoColonCmds.some(c => c.length >= 6 && e.includes(c.toLowerCase()))) return true
+
+  return false
+}
+
+/**
  * CI-2 — Auto-complete todo THEO BẰNG CHỨNG giữa chừng run (sau mỗi batch tool
- * call): todo đang 'in_progress' của run hiện tại, nếu nội dung todo CHỨA
- * đúng (substring) đường dẫn file hoặc lệnh shell của một tool call THÀNH
- * CÔNG → đánh dấu 'completed' ngay (LLM thường quên gọi todo_write lần cuối —
- * đây là lưới an toàn dựa trên bằng chứng thật, không tin lời tuyên bố).
+ * call): todo của run hiện tại, nếu nội dung todo khớp bằng chứng của một
+ * tool call THÀNH CÔNG (file sửa thật / lệnh shell chạy thật) → đánh dấu
+ * 'completed' ngay (LLM thường quên gọi todo_write lần cuối — đây là lưới
+ * an toàn dựa trên bằng chứng thật, không tin lời tuyên bố).
  *
- * Bảo thủ (chống false-positive):
- *   - Chỉ khớp Chuỗi-CON CHÍNH XÁC (evidence là substring của todo content)
- *   - Evidence chỉ là: đường dẫn file (chứa '/' hoặc '.') hoặc lệnh shell
- *     (≥6 ký tự) — do caller trích từ args của tool THÀNH CÔNG
- *   - Chỉ todo 'in_progress' (đã bắt tay làm) của ĐÚNG run hiện tại
+ * USER DIRECTIVE 2026-09-28 ("không bỏ sót"): mở rộng PHẠM VI từ chỉ
+ * 'in_progress' → CẢ 'pending' + 'blocked'. LLM agent hay làm việc khi todo
+ * vẫn còn pending (quên đánh dấu in_progress trước khi làm) → việc ĐÃ xong
+ * nhưng không bao giờ được đánh dấu → bỏ sót. Evidence vẫn bảo thủ như cũ
+ * (chỉ tool THAY ĐỔI thành công — xem extractTodoEvidence), matcher mạnh hơn
+ * (xem evidenceMatchesTodo) nhưng mọi rule đều khớp chuỗi cụ thể.
  *
  * @returns { completed, todos } — todos = danh sách todo hiện tại của run
  * (orderBy position) để caller snapshot qua recordAgentRunTodos
@@ -3974,12 +4052,12 @@ export async function autoCompleteRunTodosByEvidence(params: {
     if (evs.length === 0) return { completed: 0, todos: [] }
 
     const open = await db.todo.findMany({
-      where: { sessionId, runId, status: 'in_progress' },
+      where: { sessionId, runId, status: { in: ['in_progress', 'pending', 'blocked'] } },
       orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
     })
     let completed = 0
     for (const t of open) {
-      const hit = evs.some(ev => t.content.includes(ev))
+      const hit = evs.some(ev => evidenceMatchesTodo(ev, t.content))
       if (!hit) continue
       await db.todo
         .update({ where: { id: t.id }, data: { status: 'completed' } })
@@ -3994,7 +4072,7 @@ export async function autoCompleteRunTodosByEvidence(params: {
       select: { id: true, content: true, status: true, priority: true, position: true, parentId: true },
     })
     if (completed > 0) {
-      console.log(`[Todo CI-2] Auto-completed ${completed} in_progress todo(s) theo bằng chứng tool trong run ${runId}`)
+      console.log(`[Todo CI-2] Auto-completed ${completed} todo (pending/in_progress/blocked) theo bằng chứng tool trong run ${runId}`)
     }
     return { completed, todos }
   } catch (err) {

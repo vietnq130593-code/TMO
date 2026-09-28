@@ -71,7 +71,7 @@ import {
 } from '@/lib/agent-run-tracker'
 // CI-2 (Task 11-a) — auto-complete todo theo bằng chứng tool giữa chừng run
 // (helper DB-backed trong TODO section của dev-tools — không đụng git section)
-import { autoCompleteRunTodosByEvidence } from '@/lib/code-team/dev-tools'
+import { autoCompleteRunTodosByEvidence, extractTodoEvidence } from '@/lib/code-team/dev-tools'
 // Task 20-c (self-evaluation) — persist lifecycle AgentRunRecord (start row +
 // end update, dedup với tracker qua dbPersistBy:'caller') + ArbiterVerdict mỗi
 // chu kỳ EVALUATE + resolve outcome khi run kết thúc. Mọi write fire-and-forget
@@ -139,38 +139,12 @@ function recordWorkMemory(agentId: string, sessionId: string | null, content: st
 }
 
 /**
- * CI-2 (Task 11-a) — Trích "bằng chứng" từ args của 1 tool call THÀNH CÔNG để
- * khớp với nội dung todo (auto-complete theo bằng chứng, không tin lời tuyên bố):
- *   - shell/run_bg → lệnh shell (≥6 ký tự, trim)
- *   - tool file_*  → đường dẫn file chính (args.path theo quy ước dev-tools;
- *                    chỉ nhận chuỗi chứa '/' hoặc '.' — chống khớp giả)
- * Trả null nếu không có bằng chứng hợp lệ. Bảo thủ chủ đích: chỉ chuỗi-con
- * CHÍNH XÁC mới được tính (xem autoCompleteRunTodosByEvidence trong dev-tools).
+ * CI-2 (Task 11-a) — Bằng chứng auto-complete todo ĐÃ CHUYỂN sang module dùng
+ * chung dev-tools.ts (extractTodoEvidence + TODO_EVIDENCE_MODIFY_TOOLS —
+ * USER DIRECTIVE 2026-09-28 "không bỏ sót đánh dấu hoàn thành"): đường ReAct
+ * TMO (đây) và đường CLI inner-loop (/api/tools/execute) cùng 1 bộ evidence,
+ * bổ sung gateway_edit/write/apply_patch. Xem dev-tools.ts để biết chi tiết.
  */
-/**
- * FIX review GĐ2 #1 (MEDIUM): evidence auto-complete chỉ tính tool THAY ĐỔI
- * thật — file_read/liệt kê (read-only) KHÔNG đánh dấu todo hoàn thành (đọc
- * xong chưa nghĩa là làm xong; trước đây mọi tool có args.path đều tính).
- */
-const TODO_EVIDENCE_MODIFY_TOOLS = new Set([
-  'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'opencode',
-])
-function extractTodoEvidence(toolName: string, args: Record<string, unknown> | undefined): string | null {
-  try {
-    if (!args || typeof args !== 'object') return null
-    if (toolName === 'shell' || toolName === 'run_bg') {
-      const cmd = (args as { command?: unknown }).command
-      if (typeof cmd === 'string' && cmd.trim().length >= 6) return cmd.trim()
-      return null
-    }
-    if (!TODO_EVIDENCE_MODIFY_TOOLS.has(toolName)) return null
-    const p = (args as { path?: unknown }).path ?? (args as { file_path?: unknown }).file_path
-    if (typeof p === 'string' && p.length >= 3 && (p.includes('/') || p.includes('.'))) return p
-    return null
-  } catch {
-    return null
-  }
-}
 
 // ==================== CONFIG (env override) ====================
 

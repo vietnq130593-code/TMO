@@ -109,6 +109,12 @@ export interface LLMResult {
   model: string
   error?: string
   tokensUsed?: number /// Total tokens (prompt + completion) from API response
+  /** Số reasoning tokens của lượt call (Zen reasoning models — space-bunny
+   *  effort max, muse-spark xhigh). Trích từ usage.completion_tokens_details.
+   *  reasoning_tokens TRỪ vào max_tokens (cùng pool completion) — caller truyền
+   *  budget nhỏ cần chú ý (user directive 2026-09-28: LUÔN max effort + token
+   *  không giới hạn → callZenProvider tự bỏ max_tokens khi effort max/xhigh). */
+  reasoningTokens?: number
   /** Native function-calling tool_calls from the API response.
    *  Populated only when the caller passes `tools` in LLMCallOptions
    *  AND the model emits a tool_calls array. Empty/undefined otherwise. */
@@ -3596,11 +3602,13 @@ export async function callUtilityLLM(
   // Override qua env UTILITY_ZEN_MODEL (đặt model khác nếu policy Zen đổi).
   if (isZenConfigured() && !options?.skipZenUtility) {
     const utilModel = process.env.UTILITY_ZEN_MODEL || 'space-bunny-free'
-    // TASK 55: utility = tác vụ cơ khí (digest/JSON/phân loại) — effort low;
-    // tôn trọng reasoningEffort caller truyền (nếu có), KHÔNG đè lên 'none'.
+    // USER DIRECTIVE 2026-09-28 (phiên sau Task 55): space-bunny LUÔN effort
+    // MAX ở MỌI đường (agents + utility) — bỏ ép 'low' của Task 55. Chống
+    // reasoning starvation giờ do callZenProvider tự lo (anti-starvation
+    // guard: effort max/xhigh + max_tokens nhỏ → bỏ giới hạn output). Caller
+    // truyền reasoningEffort rõ ràng ('none'/'low'...) vẫn được tôn trọng.
     const utilOptions: LLMCallOptions = {
       ...options,
-      reasoningEffort: options?.reasoningEffort || 'low',
     }
     const zen = await callZenProvider(prompt, systemPrompt, utilModel, utilOptions, `utility-core:${taskLabel}`)
     if (zen && zen.content) {
@@ -3699,10 +3707,12 @@ export async function callLLM(
   // Override qua env UTILITY_ZEN_MODEL. skipZenUtility: caller đã thử zen xong.
   if (isZenConfigured() && !options?.skipZenUtility) {
     const utilModel = process.env.UTILITY_ZEN_MODEL || 'space-bunny-free'
-    // TASK 55: effort low cho tác vụ cơ khí (tôn trọng caller nếu đã set)
+    // USER DIRECTIVE 2026-09-28: bỏ ép effort 'low' của Task 55 — space-bunny
+    // LUÔN max effort; chống reasoning starvation do callZenProvider đảm nhiệm
+    // (bỏ max_tokens khi effort max/xhigh). Override qua env UTILITY_ZEN_MODEL.
+    // skipZenUtility: caller đã thử zen xong.
     const utilOptions: LLMCallOptions = {
       ...options,
-      reasoningEffort: options?.reasoningEffort || 'low',
     }
     const zen = await callZenProvider(prompt, systemPrompt, utilModel, utilOptions, `utility:${taskLabel}`)
     if (zen && zen.content) {
@@ -3985,7 +3995,7 @@ async function callZenProvider(
     return { content: '', provider: 'zen', model, error: 'Zen HTTP free-tier blocked (cached — model bị Zen chặn với API key, policy ~2026-09-25)' }
   }
 
-  const timeoutMs = parseInt(process.env.ZEN_TIMEOUT_MS || '120000', 10)
+  const timeoutMs = parseInt(process.env.ZEN_TIMEOUT_MS || '300000', 10)
   // Task 39 — UNLIMITED TOKEN MODE: maxTokens <= 0 (vd -1 từ AgentProfile
   // "tùy ý") → KHÔNG gửi max_tokens → provider dùng giới hạn output tối đa
   // của model (space-bunny-free: 512k out). Verified 2026-09-28: Zen API chấp
@@ -3998,20 +4008,39 @@ async function callZenProvider(
     { role: 'user', content: sanitizeLoneSurrogates(prompt) },
   ]
 
-  const body: Record<string, unknown> = {
-    model,
-    messages,
-    ...(maxTokens > 0 ? { max_tokens: maxTokens } : {}),
-    temperature,
-  }
   // TASK 33 — chế độ reasoning CAO NHẤT theo model (muse-spark=xhigh,
   // space-bunny=max; nemotron không có knob). Xem zenReasoningEffortForModel.
-  // TASK 55: options.reasoningEffort override (caller utility truyền 'low' —
-  // tác vụ cơ khí; 'none' = tắt hẳn) — chống reasoning nuốt maxTokens nhỏ.
+  // TASK 55: options.reasoningEffort override ('none' = tắt hẳn).
   const effortOverride = options?.reasoningEffort?.trim().toLowerCase()
   const effort = effortOverride === 'none'
     ? undefined
     : (effortOverride || zenReasoningEffortForModel(model))
+
+  // ===== ANTI-STARVATION (USER DIRECTIVE 2026-09-28: space-bunny LUÔN LUÔN
+  // effort MAX + token KHÔNG GIỚI HẠN — "agents tự dùng bao nhiêu cũng được",
+  // "chỉnh lên thật lớn") =====
+  // reasoning_tokens TRỪ vào max_tokens (cùng pool completion tokens). Bằng
+  // chứng dev.log 28/09: agent:space-bunny-free EMPTY RESPONSE —
+  // max_tokens=1100, reasoning_tokens=1100, 0 chars, finish=length (reasoning
+  // nuốt HẾT budget — 200 OK ÂM THẦM). Task 55 chỉ chữa đường utility (ép
+  // effort low); đường agent/gọi trực tiếp với maxTokens nhỏ (delegation-
+  // evaluator 700, subagent-delegate 900, tl-bridge 1024, king/engine 800,
+  // tournament 200-800, intent-parser 10...) vẫn starvation. Giờ: effort ở
+  // mức CAO NHẤT (max/xhigh) → KHÔNG gửi max_tokens — provider dùng output
+  // tối đa của model (space-bunny 512k), reasoning mở rộng tự do, content
+  // luôn còn budget. Caller THẬT SỰ muốn ép budget nhỏ phải truyền
+  // reasoningEffort thấp ('low'/'none') — khi đó max_tokens được tôn trọng.
+  const effectiveMaxTokens = (effort === 'max' || effort === 'xhigh') && maxTokens > 0 ? -1 : maxTokens
+  if (effectiveMaxTokens !== maxTokens) {
+    console.log(`[ZEN] ${taskLabel} effort=${effort} → bỏ max_tokens=${maxTokens} (unlimited output — chống reasoning starvation, user directive 2026-09-28: luôn max effort + token không giới hạn)`)
+  }
+
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    ...(effectiveMaxTokens > 0 ? { max_tokens: effectiveMaxTokens } : {}),
+    temperature,
+  }
   if (effort) body.reasoning_effort = effort
   if (options?.tools && options.tools.length > 0) {
     try {
@@ -4067,7 +4096,12 @@ async function callZenProvider(
         finish_reason?: string | null
       }>
       model?: string
-      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+      usage?: {
+        prompt_tokens?: number
+        completion_tokens?: number
+        total_tokens?: number
+        completion_tokens_details?: { reasoning_tokens?: number }
+      }
     }
 
     const choice = data.choices?.[0]
@@ -4088,6 +4122,7 @@ async function callZenProvider(
     }
 
     // Token tracking — per-provider + per-agent (mirror NIM pattern)
+    const reasoningTokens = data.usage?.completion_tokens_details?.reasoning_tokens ?? undefined
     if (totalTokens > 0) addTokensUsed(totalTokens, 'zen', keyInfo.index, actualModel)
     if (totalTokens > 0 && options?.agentId && options?.agentName) {
       addTokensUsedByAgent(
@@ -4101,12 +4136,13 @@ async function callZenProvider(
       )
     }
 
-    console.log(`[ZEN] ${taskLabel} OK — ${content.length} chars, model ${actualModel}${totalTokens ? `, ${totalTokens} tokens` : ''}`)
+    console.log(`[ZEN] ${taskLabel} OK — ${content.length} chars, model ${actualModel}${totalTokens ? `, ${totalTokens} tokens` : ''}${reasoningTokens !== undefined ? ` (reasoning: ${reasoningTokens} tokens)` : ''}`)
     return {
       content,
       provider: 'zen',
       model: actualModel,
       tokensUsed: totalTokens || undefined,
+      reasoningTokens,
       tool_calls: nativeToolCalls && nativeToolCalls.length > 0 ? nativeToolCalls : undefined,
       finish_reason: finishReason,
     }
