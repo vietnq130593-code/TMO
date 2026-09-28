@@ -1,0 +1,16 @@
+# ============================================
+# Bun runtime config
+# ============================================
+# [test] CHỈ áp dụng cho `bun test` (không ảnh hưởng `bun run dev`/`next build`).
+#
+# preload: chạy TRƯỚC mọi test file → tests/db-isolation-preload.ts copy DB ra
+# bản riêng trong /tmp và trỏ DATABASE_URL vào đó. Nhờ vậy `bun test` chạy
+# trực tiếp (đường tool `run_tests` của agents dùng) KHÔNG BAO GIỜ ghi vào
+# db/custom.db của app đang chạy.
+#
+# BUG ĐÃ GHI NHẬN (Task 54): thiếu lớp này, test workspace-manager tạo
+# Workspace /tmp trong DB production và cướp cờ isActive → hỏng toàn bộ file tool.
+# Xem tests/db-isolation-preload.ts để đọc chi tiết.
+# ============================================
+[test]
+preload = ["./tests/db-isolation-preload.ts"]

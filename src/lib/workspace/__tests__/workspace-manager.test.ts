@@ -12,9 +12,17 @@ import { WorkspaceManager, getWorkspaceManager } from "../workspace-manager";
 let wm: WorkspaceManager;
 let tempDir: string;
 let testWorkspaceId: string;
+/** Workspace đang active TRƯỚC khi test chạy — phải trả lại sau khi test xong
+ *  (Task 54: nếu không, workspace /tmp của test chiếm cờ isActive và làm hỏng
+ *  toàn bộ file tool của hệ thống đang chạy). */
+let prevActiveId: string | null = null;
 
-beforeAll(() => {
+beforeAll(async () => {
   wm = getWorkspaceManager();
+
+  // Ghi nhớ workspace active hiện tại để khôi phục lại ở afterAll
+  const prev = await wm.getActiveWorkspace();
+  prevActiveId = prev?.id ?? null;
 
   // Tạo temp workspace directory
   tempDir = path.join(os.tmpdir(), `theopus-test-workspace-${Date.now()}`);
@@ -24,7 +32,19 @@ beforeAll(() => {
   fs.writeFileSync(path.join(tempDir, "test.ts"), 'export const hello = "world";\n', "utf-8");
 });
 
-afterAll(() => {
+afterAll(async () => {
+  // Cleanup DB: trả cờ isActive về workspace gốc + xoá record test tạo ra.
+  // (Lớp cô lập DB ở tests/db-isolation-preload.ts đã chắn 10 phần 11 — dòng
+  //  này là lớp phòng thủ thứ 2, để test vẫn sạch dù chạy với DB thật.)
+  try {
+    if (prevActiveId) {
+      await wm.setActiveWorkspace(prevActiveId);
+      if (testWorkspaceId) await wm.deleteWorkspace(testWorkspaceId);
+    }
+  } catch {
+    // Ignore cleanup errors — không được làm fail cả suite vì cleanup
+  }
+
   // Cleanup: xóa temp directory
   try {
     fs.rmSync(tempDir, { recursive: true, force: true });

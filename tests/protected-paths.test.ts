@@ -18,7 +18,13 @@
 // Test ghi file tạm prisma/test-guard-*.tmp rồi tự dọn — KHÔNG đụng file thật.
 // ============================================================================
 
-process.env.DATABASE_URL = 'file:/home/z/tmo-app/db/custom.db'
+// Ép DB đúng của tmo-app — chống shell DATABASE_URL nhiễm path my-project.
+// NHƯNG khi đang ở chế độ test cô lập (tests/db-isolation-preload.ts đã trỏ
+// DATABASE_URL vào bản copy trong /tmp) thì PHẢI GIỮ NGUYÊN. Ghi đè ở đây
+// sẽ đưa test về ghi thẳng DB production của app đang chạy (bug Task 54).
+if (process.env.TMO_TEST_DB_ISOLATED !== '1') {
+  process.env.DATABASE_URL = 'file:/home/z/tmo-app/db/custom.db'
+}
 
 import { createHash } from 'crypto'
 import { readFileSync } from 'fs'

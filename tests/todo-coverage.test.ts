@@ -10,8 +10,13 @@
 // (prefix test-cov-<ts>) → dọn sạch cuối test. Không phù hợp CI/Jest.
 // ============================================================================
 
-// Ép DB đúng của tmo-app — chống shell DATABASE_URL nhiễm path my-project
-process.env.DATABASE_URL = 'file:/home/z/tmo-app/db/custom.db'
+// Ép DB đúng của tmo-app — chống shell DATABASE_URL nhiễm path my-project.
+// Giữ nguyên khi đang ở chế độ test cô lập (tests/db-isolation-preload.ts) —
+// nếu ghi đè ở đây thì test chạy trên DB production của app đang hoạt động
+// và rò rỉ row vào đó (bug Task 54).
+if (process.env.TMO_TEST_DB_ISOLATED !== '1') {
+  process.env.DATABASE_URL = 'file:/home/z/tmo-app/db/custom.db'
+}
 
 import {
   parseDataScopeNeedItems,

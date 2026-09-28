@@ -183,6 +183,13 @@ export class WorkspaceManager {
       },
     });
 
+    // BUG (Task 54): createWorkspace đổi chủ active workspace nhưng KHÔNG
+    // invalidate _activeCache. getActiveWorkspace() có TTL 10s nên sau khi
+    // tạo workspace mới, mọi lời gọi trong 10s tiếp vẫn trả về workspace CŨ
+    // đã bị set isActive=false → lệch DB, hỏng resolveInWorkspace.
+    // setActiveWorkspace/deleteWorkspace đã gọi _invalidateCache; thiếu ở đây.
+    this._invalidateCache();
+
     return this._mapWorkspace(record);
   }
 

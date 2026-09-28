@@ -10,8 +10,13 @@
 // Không phù hợp CI/Jest — đây là integration test sandbox theo yêu cầu user.
 // ============================================================================
 
-// Ép DB đúng của tmo-app — chống shell DATABASE_URL nhiễm path my-project
-process.env.DATABASE_URL = 'file:/home/z/tmo-app/db/custom.db'
+// Ép DB đúng của tmo-app — chống shell DATABASE_URL nhiễm path my-project.
+// Giữ nguyên khi đang ở chế độ test cô lập (tests/db-isolation-preload.ts) —
+// nếu ghi đè ở đây thì test chạy trên DB production của app đang hoạt động
+// và rò rỉ row vào đó (bug Task 54).
+if (process.env.TMO_TEST_DB_ISOLATED !== '1') {
+  process.env.DATABASE_URL = 'file:/home/z/tmo-app/db/custom.db'
+}
 
 import {
   proposeHypothesis, recordJudgment, verifyPendingJudgments,
@@ -340,9 +345,38 @@ const g4result = g4res?.result as { success?: boolean; todos?: Array<{ id: strin
 ok('G4 todo_write qua HTTP với parentId → lưu đúng cha (context stamping sessionId+runId)',
   g4res?.success === true && g4result?.todos?.[0]?.parentId === parentId, JSON.stringify(g4res?.result))
 
-const viaHttp = await db.todo.findFirst({ where: { sessionId: SID, runId: RUN, content: `Việc qua HTTP bridge ${TS}` } })
+// G5 — phải đọc ĐÚNG DB mà HTTP vừa ghi vào, không dùng `db` (prisma).
+// LÝ DO: tests/db-isolation-preload.ts trỏ DATABASE_URL của PROCESS TEST vào một
+// BẢN COPY trong /tmp, còn request HTTP do SERVER THẬT (process khác, db/custom.db
+// thật) xử lý. Đọc bằng prisma trong lúc đó LUÔN ra null → check G5 fail dù bridge
+// context-merge hoạt động hoàn hảo. Bằng chứng: row "Việc qua HTTP bridge <TS>"
+// có thật trong db/custom.db với đúng sessionId + runId + parentId.
+// → Đọc thẳng file DB thật bằng connection READONLY (không ghi → không lock ghi).
+const { Database: BunSqlite } = await import('bun:sqlite')
+const PROD_DB_FILE = '/home/z/tmo-app/db/custom.db'
+const prodConn = new BunSqlite(PROD_DB_FILE, { readonly: true })
+const viaHttp = prodConn
+  .query('SELECT sessionId, runId, parentId, content FROM Todo WHERE sessionId = ? AND runId = ? AND content = ? LIMIT 1')
+  .get(SID, RUN, `Việc qua HTTP bridge ${TS}`) as
+  | { sessionId: string; runId: string; parentId: string | null }
+  | null
 ok('G5 todo qua HTTP gắn ĐÚNG sessionId + runId từ context (context-merge)',
-  !!viaHttp && viaHttp.runId === RUN && viaHttp.parentId === parentId)
+  !!viaHttp && viaHttp.runId === RUN && viaHttp.parentId === parentId,
+  `found=${!!viaHttp} runId=${viaHttp?.runId ?? 'null'} parentId=${viaHttp?.parentId?.slice(-6) ?? 'null'}`)
+
+// Dọn các row do HTTP ghi vào DB THẬT (cleanup() chỉ xoá trong bản copy cô lập).
+// Không có bước này thì mỗi lần chạy suite lọt thêm Todo/Hypothesis test-* vào
+// db/custom.db của app đang chạy (đã đo: 35 Todo + 10 StructuredHypothesis test-*).
+try {
+  prodConn.close()
+  const cleaner = new BunSqlite(PROD_DB_FILE)
+  for (const table of ['Todo', 'StructuredHypothesis', 'CotSample', 'RunContext']) {
+    cleaner.query(`DELETE FROM ${table} WHERE sessionId = ?`).run(SID)
+  }
+  cleaner.close()
+} catch (e) {
+  console.log(`  ⚠️ không dọn được row test trong DB thật: ${(e as Error).message}`)
+}
 
 // ==================== TỔNG KẾT ====================
 console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
