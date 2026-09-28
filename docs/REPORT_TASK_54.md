@@ -1,6 +1,6 @@
 # BÁO CÁO CUỐI — TMO: phân tích lỗi vận hành, khắc phục, nâng cấp
 
-Ngày cập nhật: chu kỳ 5 / Goal-Loop. Workspace: /home/z/tmo-app. HEAD: 178ae53.
+Ngày cập nhật: chu kỳ 6 / Goal-Loop. Workspace: /home/z/tmo-app. Commit phụ lục lần trước: 4760526; bản sửa số liệu log và bổ sung phát hiện cache build nằm ngay sau đó.
 
 ---
 
@@ -22,10 +22,11 @@ Phân tích toàn diện hệ thống TMO trong quá trình thực thi của age
 | 6 | Test isolation (CRITICAL) | `run_tests` gọi `bun test` trực tiếp → bun nạp .env → test ghi vào db/custom.db của app đang chạy; test workspace-manager cướp cờ isActive → mọi file tool của agent trả "path escapes workspace root" | CRITICAL | ĐÃ SỬA (bunfig.toml [test].preload → copy DB ra /tmp; + _invalidateCache trong createWorkspace; + afterAll trả cờ isActive) |
 | 7 | Rò /tmp | Mỗi process test tạo 1 thư mục /tmp/tmo-test-db-*; hook process.on("exit") không chạy khi bun kết thúc worker | Thấp | ĐÃ SỬA (sweepOrphanDirs: dọn theo PID chủ sở hữu + quét dir cũ mỗi lần preload — đo 11 dir → giữ 1 dir, không tăng qua 3 lần chạy) |
 | 8 | DB thật | 4 bản ghi Workspace "Test Workspace" trỏ /tmp (isActive=0) còn sót từ các lần chạy trước khi có lớp cô lập | Thấp | CHƯA XÓA — nằm trong dữ liệu được bảo vệ, cần phê duyệt |
-| 9 | Log | Opus auto-review SKIP lặp 336 dòng trong dev.log | Thấp | CHƯA SỬA |
+| 9 | Log | Opus auto-review SKIP lặp 336 dòng trong log hệ thống | Thấp | CHƯA SỬA |
 | 10 | Memory | LearningLog, AgentInsight, AgentCorrection, JobQueue đều 0 bản ghi dù code đã wire | Trung bình | CHƯA SỬA (chưa chẩn đoán) |
 | 11 | Utility LLM | callUtilityLLM gọi model trả 403 FreeTier vĩnh viễn 15/15 lần, nhánh failover kế thừa reasoning effort max nuốt hết maxTokens 700 → content rỗng, finish_reason length, HTTP vẫn 200 — đường fail âm thầm không ghi log | Cao | ĐÃ SỬA (thêm reasoningEffort override + đổi mặc định utility path sang space-bunny-free effort low + log EMPTY RESPONSE; maxTokens 700→2000) |
 | 12 | DB | DATABASE_URL bị env leak từ project khác, cộng đường dẫn file: tương đối resolve lệch (Prisma CLI theo schema, client runtime theo cwd) → watch-agents.ts lỗi CANTOPEN | Cao | ĐÃ SỬA (guard env leak trong db.ts + chuẩn hóa đường dẫn tuyệt đối theo schema; watch-agents.ts nhân bản logic) |
+| 13 | Dung lượng | Thư mục .next của clone chiếm 1,1 GB, riêng cache turbopack là 13 file .sst tổng 599,9 MB; ổ đĩa / còn trống 5,0 GB | Thấp | CHƯA XỬA (đề xuất ưu tiên 7) |
 
 ---
 
@@ -69,11 +70,13 @@ Xác nhận độc lập bằng kênh audit HTTP của app (ALISTA gọi trực 
 
 Ưu tiên 3 — Chẩn đoán memory pipeline rỗng: thêm log chẩn đoán tại điểm ghi LearningLog và AgentInsight để xác định nhánh nào không chạy. Nghiệm thu: sau một phiên agent hoàn tất, LearningLog có ít nhất 1 bản ghi.
 
-Ưu tiên 4 — Dồn log Opus SKIP: chống lặp theo cửa sổ thời gian hoặc hạ xuống mức debug. Nghiệm thu: 10 phút vận hành bình thường không sinh quá 5 dòng SKIP. Kèm log rotation: dev.log đang 3,6 MB và .next/dev/logs/next-development.log 564K, cả hai đều chưa có cơ chế cắt — nên gộp thêm bước rotation theo kích thước. Nghiệm thu phần rotation: file log không vượt 10 MB sau một ngày vận hành liên tục.
+Ưu tiên 4 — Dồn log Opus SKIP: chống lặp theo cửa sổ thời gian hoặc hạ xuống mức debug. Nghiệm thu: 10 phút vận hành bình thường không sinh quá 5 dòng SKIP. Kèm log rotation: log đang chạy thật hiện là ~/.pm2/logs/qdrant-out.log 1,7 MB (qdrant-error.log 0 byte) và .next/dev/logs/next-development.log 593.003 byte trong clone, cả hai đều chưa có cơ chế cắt — nên gộp thêm bước rotation theo kích thước. Lưu ý đính chính: dev.log 3,6 MB nằm ở /home/z/my-project/dev.log, tức dự án khác, không phải log của hệ thống TMO nên không được tính vào số liệu nâng cấp. Nghiệm thu phần rotation: file log không vượt 10 MB sau một ngày vận hành liên tục.
 
 Ưu tiên 5 — Bổ sung kiểm thử hồi quy cho ensureBridgeRunning: test trạng thái đang spawn (dedup) và test khi spawn thất bại. Nghiệm thu: thêm 2 test, suite vẫn 0 fail.
 
 Ưu tiên 6 — Định tuyến log pm2 đúng chỗ để rà lỗi runtime của app không cần đoán đường dẫn.
+
+Ưu tiên 7 — Dọn cache build: thư mục .next trong clone chiếm 1,1 GB, riêng 13 file .sst của turbopack đã 599,9 MB, trong khi ổ đĩa chỉ còn trống 5,0 GB. Cache này sinh lại mỗi lần chạy dev và không thuộc mã nguồn. Nghiệm thu: sau khi dọn .next/dev/cache, dung lượng .next giảm từ 1,1 GB xuống dưới 600 MB và app vẫn build lại được bình thường. Phạm vi xóa chỉ nằm trong thư mục build sinh tự động, không đụng dữ liệu hay mã nguồn.
 
 ---
 
@@ -92,6 +95,9 @@ Xác nhận độc lập bằng kênh audit HTTP của app (ALISTA gọi trực 
 - shell đếm bảng vận hành: AgentRunRecord completed 4 / failed 1 / running 1; AgentCorrection 0; JobQueue 0; TaskExecution completed 1.
 - Chu kỳ 5 — đối chiếu độc lập bằng kênh audit HTTP của app đang chạy (không đọc .env, không dùng bun eval): /api/health-check trả ok version 2.0.0; /api/openclaw/learning/stats trả totalInsights 0, totalCorrections 0, totalPreferences 0; /api/auto-learn trả totalRecords 0. Ba bảng learning rỗng xác nhận là trạng thái thật của app, không phải hệ quả test ghi nhầm DB.
 - Chu kỳ 5 — đo quy mô log bằng du -h: dev.log 3,6 MB (3.720.330 byte), .next/dev/logs/next-development.log 564K. Cơ sở định lượng cho đề xuất log rotation ở mục 5.
+- Chu kỳ 6 — đính chính số liệu log trên: quét lại toàn hệ thống cho thấy dev.log 3,6 MB nằm ở /home/z/my-project/dev.log, tức dự án khác, không phải log TMO; trong clone không có file .log nào ở gốc. Log thật của hệ thống đang chạy là ~/.pm2/logs với qdrant-out.log 1.671.035 byte và qdrant-error.log 0 byte, cộng next-development.log 593.829 byte trong .next/dev/logs. Mục 5 và dòng 9 của bảng mục 2 đã sửa theo số liệu này.
+- Chu kỳ 6 — đo dung lượng bằng lệnh máy: du -h /home/z/tmo-app cho 3,0 G tổng; .next 1,1 G, .next/dev 1,1 G, .next/dev/cache 609 M; đếm file .sst trên 5 MB cho 13 file tổng 599,9 MB; df -h cho ổ / 9,9 G dung lượng, đã dùng 4,4 G, còn trống 5,0 G. Nguồn số liệu cho dòng 13 và ưu tiên 7.
+- Chu kỳ 6 — health-check app đang chạy bằng HTTP chỉ đọc: /api/health-check trả http 200 với ok=true, version 2.0.0; bridge 18791 trả http 000 tại thời điểm đo, đúng trạng thái on-demand nằm ngoài tiến trình chính.
 
 ---
 
