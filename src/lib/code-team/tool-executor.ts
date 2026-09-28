@@ -1580,7 +1580,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           auto_apply: {
             type: 'boolean',
             description:
-              'Mặc định true — nếu Omega đề xuất điều agent xử lý, hệ thống TỰ ĐỘNG dispatch agent đó NGAY trong tool call này (kết quả kèm trong "autoApplied": report + evaluation của trọng tài độc lập). Đặt false nếu bạn muốn tự quyết định / tự gọi dispatch_agent ở vòng sau.',
+              'Mặc định true — nếu Omega đề xuất điều agent xử lý, hệ thống TỰ ĐỘNG dispatch agent đó NGAY trong tool call này (kết quả kèm trong "autoApplied": report + evaluation của trọng tài độc lập). Đặt false nếu bạn muốn tự quyết định / tự gọi dispatch_agent ở vòng sau. LƯU Ý: gọi từ sub-agent → auto-apply luôn TẮT (tối đa 1 sub-agent chạy cùng lúc).',
           },
         },
         required: ['problem'],
@@ -1669,10 +1669,10 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     function: {
       name: 'dispatch_agents_parallel',
       description:
-        'FAN-OUT: dispatch 2-4 sub-agent chạy ĐỒNG THỜI (song song) rồi HỢP NHẤT (fan-in) kết quả về 1 báo cáo. ' +
+        'FAN-OUT: dispatch 2-4 sub-agent theo HÀNG ĐỢI TUẦN TỰ (mỗi thời điểm chỉ 1 sub-agent chạy — user directive 2026-10-29) rồi HỢP NHẤT (fan-in) kết quả về 1 báo cáo. ' +
         'Mỗi sub-agent độc lập — 1 agent fail KHÔNG kéo sập cả lô; xung đột (2+ agent cùng đụng 1 file) được LIỆT KÊ trong "conflicts" thay vì báo lỗi. ' +
-        'Dùng khi tác vụ tách được thành các nhánh ĐỘC LẬP (vd: review 3 module khác nhau, phân tích song song nhiều phần). ' +
-        'Tác vụ có phụ thuộc tuần tự (B cần kết quả A) thì KHÔNG dùng tool này — gọi tuần tự từng dispatch_agent.',
+        'Dùng khi tác vụ tách được thành các nhánh ĐỘC LẬP (vd: review 3 module khác nhau, phân tích nhiều phần). ' +
+        'Tác vụ có phụ thuộc tuần tự (B cần kết quả A) thì dùng dispatch_agent từng cái.',
       parameters: {
         type: 'object',
         properties: {
@@ -3396,7 +3396,14 @@ export async function executeTool(
           // báo cáo sub-agent trong CÙNG tool result, không phải tự gọi
           // tool ở vòng sau. Fail-open: auto-apply lỗi → vẫn trả advisory
           // như cũ (kèm autoApplyError để caller biết).
-          const autoApply = args.auto_apply !== false && args.auto_apply !== 'false'
+          //
+          // USER DIRECTIVE 2026-10-29 (tối đa 1 sub-agent cùng lúc) — TẮT
+          // auto-apply khi gọi TỪ SUB-AGENT (context.delegationRunId): sub-agent
+          // đang giữ slot toàn cục của runSubAgentForProfile → dispatch lồng
+          // sẽ xếp hàng chờ CHÍNH NÓ → deadlock. Advisory vẫn trả đủ; sub-agent
+          // làm theo tư vấn hoặc báo parent dispatch giúp ở vòng sau.
+          const calledFromSubAgent = Boolean(context?.delegationRunId)
+          const autoApply = args.auto_apply !== false && args.auto_apply !== 'false' && !calledFromSubAgent
           const suggestedAgent = consult.advisory?.dispatchAgent?.trim()
           if (autoApply && suggestedAgent && isFlagEnabled('ENABLE_SUBAGENT_DELEGATE')) {
             try {
@@ -3427,9 +3434,11 @@ export async function executeTool(
             } catch (applyErr) {
               out.autoApplied = { agent: suggestedAgent, success: false, error: applyErr instanceof Error ? applyErr.message : String(applyErr) }
             }
-          } else if (suggestedAgent && !autoApply) {
+          } else if (suggestedAgent && (!autoApply || calledFromSubAgent)) {
             out.autoApplied = null
-            out.note = `auto_apply=false — tự gọi dispatch_agent({"agent": "${suggestedAgent}", ...}) nếu muốn theo gợi ý.`
+            out.note = calledFromSubAgent
+              ? `auto-apply TẮT khi gọi từ sub-agent (tối đa 1 sub-agent chạy cùng lúc — chống deadlock). Tự làm theo tư vấn của Omega; nếu cần agent [${suggestedAgent}] xử lý, báo parent gọi dispatch_agent giúp.`
+              : `auto_apply=false — tự gọi dispatch_agent({"agent": "${suggestedAgent}", ...}) nếu muốn theo gợi ý.`
           }
           result = out
         } catch (err) {

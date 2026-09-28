@@ -212,7 +212,79 @@ function compactArgs(args: Record<string, unknown>, maxLen = 100): string {
   }
 }
 
+// ==================== GLOBAL SUB-AGENT SLOT (user directive 2026-10-29) ====================
+// "Tối đa chỉ được phép gọi 1 sub-agent trong 1 thời điểm" — MỌI đường delegate
+// (delegate_task / dispatch_agent / dispatch_agents_parallel / escalate
+// auto-apply / eval harness) đều đi qua runSubAgentForProfile → 1 slot toàn
+// cục đảm bảo KHÔNG BAO GIỜ 2 sub-agent chạy chồng nhau, kể cả khi 2 goal-loop
+// job chạy song song (worker cho phép 2 job đồng thời) hay parent fan-out nhiều
+// delegation trong 1 batch.
+//
+// Chống deadlock:
+//   - Sub-agent KHÔNG có tool điều phối (DEPTH_GUARD strip) → không thể tự
+//     acquire slot lồng bên trong slot mình đang giữ.
+//   - escalate_problem auto-apply (có thể dispatch sub-agent mới) bị TẮT khi
+//     gọi từ context sub-agent (xem tool-executor) → không tự chờ chính mình.
+//
+// Thứ tự chờ KHÔNG đếm vào SUBAGENT_TIMEOUT_MS: slot acquire TRƯỚC khi
+// startedAt khởi động (timeout tính từ khi sub-agent THỰC SỰ chạy).
+const SUBAGENT_SLOT_QUEUE_LOG_MS = 1_000
+let subAgentSlotTail: Promise<void> = Promise.resolve()
+let subAgentSlotHolder = ''
+
+/**
+ * Chạy fn trong slot toàn cục duy nhất (xếp hàng FIFO qua promise-chain).
+ * Fail-safe: fn throw → slot vẫn được release (finally) — hàng đợi không kẹt.
+ */
+async function withSubAgentSlot<T>(
+  profileName: string,
+  parentAgentName: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prevTail = subAgentSlotTail
+  let release!: () => void
+  subAgentSlotTail = new Promise<void>(resolve => { release = resolve })
+  const waitStart = Date.now()
+  if (subAgentSlotHolder) {
+    console.log(`[SubAgentSlot] ${profileName} (từ ${parentAgentName}) xếp hàng — slot đang bận bởi: ${subAgentSlotHolder}`)
+  }
+  await prevTail
+  const waitedMs = Date.now() - waitStart
+  if (waitedMs >= SUBAGENT_SLOT_QUEUE_LOG_MS) {
+    console.log(`[SubAgentSlot] ${profileName} chờ ${Math.round(waitedMs / 1000)}s mới đến lượt (user directive: tối đa 1 sub-agent chạy cùng lúc)`)
+  }
+  subAgentSlotHolder = `${profileName} ← ${parentAgentName}`
+  try {
+    return await fn()
+  } finally {
+    subAgentSlotHolder = ''
+    release()
+  }
+}
+
 // ==================== GENERIC SUB-AGENT RUNNER ====================
+
+/**
+ * USER DIRECTIVE 2026-10-29 — ĐIỂM ĐI QUAN TRỌNG DUY NHẤT cho правило
+ * "tối đa 1 sub-agent cùng lúc": wrapper này bọc MỌI lần chạy sub-agent qua
+ * slot toàn cục (withSubAgentSlot). Mọi đường gọi (runSubAgent legacy,
+ * dispatchAgentByOmega, dispatchAgentsParallel, eval harness...) đều đi qua
+ * đây → đảm bảo serialized toàn hệ thống, bất kể caller có chạy song song.
+ */
+export async function runSubAgentForProfile(params: {
+  profile: SubAgentProfile
+  task: string
+  context?: string
+  acceptanceCriteria?: string
+  parentRunId?: string | null
+  parentAgentName?: string
+  sessionId?: string | null
+  onTokens?: (tokens: number) => void
+}): Promise<SubAgentOutcome> {
+  const profileName = params.profile?.name || 'unknown-agent'
+  const parentName = params.parentAgentName || 'parent-agent'
+  return withSubAgentSlot(profileName, parentName, () => runSubAgentForProfileInner(params))
+}
 
 /**
  * Chạy 1 sub-agent THEO PROFILE (generic — Code Team, custom, hoặc agent do
@@ -240,7 +312,7 @@ function compactArgs(args: Record<string, unknown>, maxLen = 100): string {
  * @param params.parentRunId  runId của parent (goal-loop / pipeline step) — hiển thị nguồn giao việc
  * @param params.onTokens  callback báo token tiêu thụ về PARENT budget
  */
-export async function runSubAgentForProfile(params: {
+async function runSubAgentForProfileInner(params: {
   profile: SubAgentProfile
   task: string
   context?: string
@@ -303,6 +375,15 @@ export async function runSubAgentForProfile(params: {
   let tokensUsed = 0
   let iterations = 0
   let toolCallCount = 0
+  // USER DIRECTIVE 2026-10-29 — TODO COMPLETION GUARD: sub-agent có kế hoạch
+  // todo mà còn mục chưa xong → KHÔNG chấp nhận conclude ngay (trước đây loop
+  // conclude ngay khi sub-agent ngừng gọi tool → "agents được gọi không thực
+  // hiện hết tác vụ trong Todos của mình"). Snapshot cập nhật từ:
+  //   (a) args todo_write đi qua loop (local — hoạt động cả khi DB fail-open)
+  //   (b) autoCompleteRunTodosByEvidence trả về (DB — nguồn sự thật)
+  const MAX_TODO_COMPLETION_NUDGES = 2
+  let todoCompletionNudges = 0
+  let lastTodoSnapshot: Array<{ id?: string; content: string; status: string }> = []
   // DELEGATION CONTRACT — khai báo NGOÀI try để catch-path kết thúc được run
   // hiển thị khi exception văng ra giữa chừng (TS scope — mirror jobInputCrashContext pattern)
   let delegationRunId: string | null = null
@@ -391,6 +472,22 @@ export async function runSubAgentForProfile(params: {
       console.warn(`[SubAgent] Tool schema injection fail-open:`, schemaErr instanceof Error ? schemaErr.message : String(schemaErr))
     }
 
+    // USER DIRECTIVE 2026-10-29 — lazy-load bộ CI-2 todo (dev-tools) 1 lần/run:
+    // extractTodoEvidence (thu bằng chứng tool thành công) +
+    // autoCompleteRunTodosByEvidence (đường sub-agent trước đây KHÔNG có lưới
+    // an toàn này — chỉ goal-loop + /api/tools/execute có) + closeRunTodosAtEnd
+    // (đóng todo dang dở trung thực khi run kết thúc). Dynamic import chống
+    // circular; fail-open → guard vẫn chạy với snapshot local.
+    let extractTodoEvidenceFn: ((toolName: string, args: Record<string, unknown>) => string | null) | null = null
+    let autoCompleteRunTodosByEvidenceFn: ((p: { sessionId: string; runId: string | null; evidence: string[] }) => Promise<{ completed: number; todos: Array<{ id: string; content: string; status: string }> }>) | null = null
+    let closeRunTodosAtEndFn: ((p: { sessionId: string; runId: string | null; goalComplete: boolean; crash?: boolean }) => Promise<{ inProgressClosed: number; pendingCompleted: number; pendingArchived: number }>) | null = null
+    try {
+      const dt = await import('@/lib/code-team/dev-tools')
+      extractTodoEvidenceFn = dt.extractTodoEvidence
+      autoCompleteRunTodosByEvidenceFn = dt.autoCompleteRunTodosByEvidence
+      closeRunTodosAtEndFn = dt.closeRunTodosAtEnd
+    } catch { /* fail-open — todo guard dùng snapshot local */ }
+
     const loopPromise = (async () => {
       // CI-1 (0 = UNLIMITED): cap = 0 → KHÔNG trần tương ứng (vòng / token /
       // thời gian). Check timeout/token chỉ áp dụng khi cap đó > 0.
@@ -407,6 +504,8 @@ export async function runSubAgentForProfile(params: {
         }
 
         iterations++
+        // USER DIRECTIVE 2026-10-29 — bằng chứng CI-2 của batch này (reset mỗi vòng)
+        let batchEvidence: string[] = []
         const formatted = transcript
           .map(m => `\n\n[${m.role === 'user' ? 'USER' : m.role === 'assistant' ? 'ASSISTANT' : 'TOOL RESULT'}]: ${m.content}`)
           .join('')
@@ -489,6 +588,26 @@ export async function runSubAgentForProfile(params: {
             })
             continue
           }
+          // TODO COMPLETION GUARD (user directive 2026-10-29 — "agents được gọi
+          // không thực hiện hết tác vụ trong Todos của mình"): sub-agent ĐÃ có
+          // kế hoạch todo mà còn mục CHƯA hoàn thành → KHÔNG chấp nhận kết luận
+          // — nudge (tối đa 2 lần) yêu cầu làm nốt hoặc đánh dấu failed kèm lý
+          // do thật. Hết lượt nudge → chấp nhận conclude (chống loop vô hạn) —
+          // closeRunTodosAtEnd sẽ đóng phần còn lại theo verdict.
+          const openTodos = lastTodoSnapshot.filter(t => t.status === 'pending' || t.status === 'in_progress' || t.status === 'blocked')
+          if (
+            openTodos.length > 0 && sawTodoWrite && todoCompletionNudges < MAX_TODO_COMPLETION_NUDGES &&
+            (SUBAGENT_EFFECTIVE_MAX_ITERATIONS === 0 || iterations < SUBAGENT_EFFECTIVE_MAX_ITERATIONS) &&
+            !timedOut && !isCancelled()
+          ) {
+            todoCompletionNudges++
+            transcript.push({ role: 'assistant', content: result.content })
+            transcript.push({
+              role: 'user',
+              content: `⚠️ Bạn vừa KẾT LUẬN nhưng kế hoạch todo của bạn còn ${openTodos.length} mục CHƯA hoàn thành:\n${openTodos.map((t, i) => `${i + 1}. [${t.status}] ${t.content}`).join('\n')}\n\nHãy HOÀN THÀNH các mục này bằng tools (làm từng mục, cập nhật trạng thái qua todo_write) — hoặc nếu mục nào THẬT SỰ không làm được, đánh dấu status "failed" kèm lý do cụ thể. KHÔNG được bỏ dở không lý do. (Lần nhắc ${todoCompletionNudges}/${MAX_TODO_COMPLETION_NUDGES} — sau đó hệ thống tự đóng todo theo verdict cuối.)`,
+            })
+            continue
+          }
           state.lastContent = result.content
           state.endedBy = 'concluded'
           return
@@ -517,6 +636,23 @@ export async function runSubAgentForProfile(params: {
               toolArgs.sessionId = toolArgs.sessionId || sessionId
               if (delegationRunId && !toolArgs.runId) toolArgs.runId = delegationRunId
             }
+            // USER DIRECTIVE 2026-10-29 — snapshot MERGE (không thay thế): lần
+            // update todo_write thường chỉ chứa MỤC THAY ĐỔI → thay thế cả snapshot
+            // sẽ mất các mục còn lại. Merge theo (id || content): item đến thay
+            // item trùng, item mới thêm vào, item vắng vẫn giữ trạng thái cũ.
+            if (Array.isArray(toolArgs.todos)) {
+              const incoming = (toolArgs.todos as Array<Record<string, unknown>>)
+                .map(t => ({
+                  id: typeof t?.id === 'string' ? t.id : undefined,
+                  content: String(t?.content ?? ''),
+                  status: String(t?.status ?? 'pending'),
+                }))
+                .filter(t => t.content)
+              lastTodoSnapshot = [
+                ...lastTodoSnapshot.filter(prev => !incoming.some(t => (t.id && t.id === prev.id) || t.content === prev.content)),
+                ...incoming,
+              ]
+            }
           }
           let toolResult: { success: boolean; result: unknown }
           try {
@@ -531,6 +667,12 @@ export async function runSubAgentForProfile(params: {
           if (resObj && typeof resObj === 'object' && typeof resObj.tokensUsed === 'number' && resObj.tokensUsed > 0) {
             addTokens(resObj.tokensUsed)
           }
+          // USER DIRECTIVE 2026-10-29 — thu bằng chứng CI-2 từ tool THÀNH CÔNG
+          // (mirror processToolResult của goal-loop)
+          if (toolResult.success && extractTodoEvidenceFn) {
+            const ev = extractTodoEvidenceFn(tc.name, toolArgs)
+            if (ev) batchEvidence.push(ev)
+          }
           let preview = ''
           try {
             const r = toolResult.result
@@ -543,6 +685,19 @@ export async function runSubAgentForProfile(params: {
             role: 'tool',
             content: truncateResult(safeStringify({ tool: tc.name, success: toolResult.success, result: toolResult.result }), SUBAGENT_TOOL_RESULT_CHARS),
           })
+        }
+
+        // USER DIRECTIVE 2026-10-29 — CI-2 CHO ĐƯỜNG SUB-AGENT (parity goal-loop
+        // + /api/tools/execute): todo của run delegation khớp bằng chứng tool
+        // THÀNH CÔNG trong batch → tự đánh completed (LLM hay quên todo_write
+        // lần cuối). Snapshot DB trả về là NGUỒN SỰ THẬT cho completion guard.
+        if (sessionId && delegationRunId && batchEvidence.length > 0 && autoCompleteRunTodosByEvidenceFn) {
+          try {
+            const res = await autoCompleteRunTodosByEvidenceFn({ sessionId, runId: delegationRunId, evidence: batchEvidence })
+            if (res.todos.length > 0) {
+              lastTodoSnapshot = res.todos.map(t => ({ id: t.id, content: t.content, status: t.status }))
+            }
+          } catch { /* fail-open — không được phép làm hỏng delegation */ }
         }
 
         // DELEGATION CONTRACT — plan-nudge (1 lần): ≥3 tool calls mà chưa từng
@@ -666,6 +821,26 @@ export async function runSubAgentForProfile(params: {
       state.endedBy === 'cancelled' ? 'cancelled' : state.endedBy === 'error' ? 'error' : 'done',
       `[Delegation] ${state.endedBy} · ${iterations} vòng · ${toolCallCount} tool calls · ${tokensUsed} tokens`,
     )
+    // USER DIRECTIVE 2026-10-29 — đóng todo dang dở TRUNG THỰC khi run sub-agent
+    // kết thúc (parity goal-loop finalize / chat-route crash-path — trước đây
+    // đường delegation KHÔNG gọi closeRunTodosAtEnd → todo sub-agent nằm
+    // pending/in_progress vĩnh viễn trong DB): in_progress/blocked →
+    // completed|failed theo verdict, pending → completed (đạt) | archivedAt
+    // (chưa đạt). Fail-open.
+    if (sessionId && delegationRunId && closeRunTodosAtEndFn) {
+      try {
+        const closed = await closeRunTodosAtEndFn({
+          sessionId,
+          runId: delegationRunId,
+          goalComplete: outcome.success,
+          crash: state.endedBy === 'error',
+        })
+        const closedTotal = closed.inProgressClosed + closed.pendingCompleted + closed.pendingArchived
+        if (closedTotal > 0) {
+          console.log(`[SubAgent] ${profile.name} đóng ${closedTotal} todo dang dở (verdict ${outcome.success ? 'đạt' : 'chưa đạt'}: ${closed.inProgressClosed} in_progress/blocked, ${closed.pendingCompleted} pending→completed, ${closed.pendingArchived} pending→archived)`)
+        }
+      } catch { /* fail-open — không được phép làm hỏng delegation */ }
+    }
     if (sessionId && report.trim()) {
       try {
         void import('@/lib/context-store')

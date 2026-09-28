@@ -596,7 +596,7 @@ function buildOrchestrationProtocol(hasDispatch: boolean, hasCreate: boolean): s
   lines.push('- Escalate xong: LÀM THEO tư vấn của Omega (đổi cách tiếp cận / điều agent khác / dùng tool theo hướng dẫn mới) — không lặp lại cách cũ đã fail.')
   if (hasDispatch) {
     lines.push('- Điều động agent BẤT KỲ trong Agent Roster: tool_call: dispatch_agent({"agent": "TÊN", "task": "nhiệm vụ cụ thể", "context": "..."}) — agent chạy tự chủ, trả báo cáo nén (context của bạn không phình). Điều LÂU DÀI vào team: thêm {"duration": "long_term", "team": "code", "position": "G4"}.')
-    lines.push('- FAN-OUT nhiều agent SONG SONG (task ĐỘC LẬP): tool_call: dispatch_agents_parallel({"tasks": [{"agent": "MEGATRON", "task": "..."}, {"agent": "SENTINEL", "task": "..."}]}) — tối đa 4 task/lần, chạy đồng thời, kết quả hợp nhất về 1 báo cáo; xung đột (cùng đụng 1 file) được liệt kê trong "conflicts" — tự phân xử.')
+    lines.push('- NHIỀU việc ĐỘC LẬP: tool_call: dispatch_agents_parallel({"tasks": [{"agent": "MEGATRON", "task": "..."}, {"agent": "SENTINEL", "task": "..."}]}) — tối đa 4 task/lần, chạy THEO LƯỢT TUẦN TỰ (mỗi thời điểm chỉ 1 sub-agent — user directive 2026-10-29), kết quả hợp nhất về 1 báo cáo; xung đột (cùng đụng 1 file) được liệt kê trong "conflicts" — tự phân xử.')
   }
   if (hasCreate) {
     lines.push('- Hệ thống THIẾU agent có kỹ năng phù hợp (đã kiểm tra Agent Roster): tool_call: create_agent({"name": "...", "description": "mô tả vai trò", "instruction": "system prompt chi tiết", "model": "minimaxai/minimax-m3", "avatar": "🤖", "temperature": 0.7, "maxTokens": 4096, "tools": ["file_read", "..."]}) — agent mới hiện trong module Agents, giao việc NGAY qua dispatch_agent.')
@@ -2775,12 +2775,17 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         pushToolMessage(messages, { tool: tc.name, success: toolResult.success, result: toolResult.result })
       }
 
-      // ===== FIX 2026-09-14 #1 — FAN-OUT/FAN-IN: batch chứa ≥2 delegation
-      // (delegate_task/dispatch_agent) → chạy ĐỒNG THỜI (mỗi sub-agent chậm
-      // 1-10 phút — tuần tự là lãng phí lớn). Wrapper tự check pre-flight +
-      // permission + executeTool; kết quả consumer ở đúng vị trí tcIdx trong
-      // vòng lặp tuần tự bên dưới (thứ tự message giữ nguyên cho LLM). Lỗi của
-      // sub-agent nào báo riêng kết quả sub-agent đó — KHÔNG kéo sập batch. =====
+      // ===== DELEGATION QUEUE (FIX 2026-09-14 #1, sửa 2026-10-29 — USER
+      // DIRECTIVE "tối đa 1 sub-agent trong 1 thời điểm"): batch chứa ≥2
+      // delegation (delegate_task/dispatch_agent) → TRƯỚC ĐÂY chạy ĐỒNG THỜI;
+      // giờ XẾP HÀNG TUẦN TỰ qua launch-chain — delegation sau chỉ bắt đầu khi
+      // delegation trước hoàn tất. Wrapper tự check pre-flight + permission +
+      // executeTool (pre-flight giờ chạy ĐÚNG LÚC đến lượt — budget chính xác
+      // hơn); kết quả consumer ở đúng vị trí tcIdx trong vòng lặp tuần tự bên
+      // dưới (thứ tự message giữ nguyên cho LLM). Lỗi của sub-agent nào báo
+      // riêng kết quả sub-agent đó — KHÔNG kéo sập batch. Lớp slot toàn cục
+      // trong subagent-delegate là bảo vệ cuối cùng (2 job song song cũng
+      // serialize). =====
       const delegationPromises = new Map<number, Promise<{
         tcIdx: number
         preFlightFail?: string
@@ -2792,36 +2797,44 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           .map((tc, i) => ({ tc, i }))
           .filter(({ tc }) => tc.name === 'delegate_task' || tc.name === 'dispatch_agent')
         if (delegationIdxs.length >= 2) {
-          // REVIEW 9-fix (2026-08-30) #1 — BUDGET CAP cho fan-out: nhánh tuần tự
-          // check budget SAU MỖI delegation (token đã trừ), còn fan-out launch
-          // hết một lúc → N sub-agent × ~40k token có thể vượt budget cha.
-          // Cap số delegation launch song song theo budget khả dụng, đúng
-          // semantics nhánh tuần tự: delegation thứ K chỉ được phép khi sau khi
-          // K-1 delegation trước tiêu ~40k mỗi cái vẫn còn > reserve + 10k.
-          // Budget unlimited (TOKEN_BUDGET=0 → Infinity) → không cap.
+          // REVIEW 9-fix (2026-08-30) #1 — BUDGET CAP cho hàng đợi delegation:
+          // delegation thứ K chỉ được phép khi sau khi K-1 delegation trước
+          // tiêu ~40k mỗi cái vẫn còn > reserve + 10k (đúng semantics nhánh
+          // tuần tự). Budget unlimited (TOKEN_BUDGET=0 → Infinity) → không cap.
           const SUBAGENT_TOKEN_ESTIMATE = 40_000
           const budgetForDelegation = tokenLeft() - REPORT_RESERVE_TOKENS - 10_000
           const maxLaunch = budgetForDelegation <= 0
             ? 0
             : Math.floor(budgetForDelegation / SUBAGENT_TOKEN_ESTIMATE) + 1
-          console.log(`[GoalLoop] ${agentName} FAN-OUT: ${delegationIdxs.length} delegation trong 1 batch → chạy SONG SONG (${delegationIdxs.map(d => String(d.tc.args?.agent || d.tc.name)).join(', ')}) — cap ${maxLaunch} theo budget`)
+          console.log(`[GoalLoop] ${agentName} DELEGATION QUEUE: ${delegationIdxs.length} delegation trong 1 batch → chạy THEO LƯỢT TUẦN TỰ (${delegationIdxs.map(d => String(d.tc.args?.agent || d.tc.name)).join(', ')}) — tối đa 1 sub-agent cùng lúc (user directive), cap ${maxLaunch} theo budget`)
+          // USER DIRECTIVE 2026-10-29 — LAUNCH CHAIN: promise delegation sau
+          // .then() trên promise delegation trước → KHÔNG BAO GIỜ 2 sub-agent
+          // trong cùng batch chạy chồng nhau. Chuỗi không đứt khi 1 cái lỗi
+          // (.then(_, noop) — lỗi đã được nuốt bên trong closure no-throw).
+          let launchChain: Promise<void> = Promise.resolve()
           for (const [delegationRank, { tc, i }] of delegationIdxs.entries()) {
             if (delegationRank >= maxLaunch) {
               // Vượt cap budget → pre-flight fail cho delegation này (kết quả
               // vẫn về đúng vị trí message — KHÔNG sập batch).
               if (agentSessionId) {
                 // 2026-10-27 (user directive phiên 3) — DELEGATION LOG ⛔
-                const t = buildDelegationRefusedThought(cycle, agentName, tc, `vượt cap budget launch song song (chỉ đủ ${maxLaunch} delegation)`)
+                const t = buildDelegationRefusedThought(cycle, agentName, tc, `vượt cap budget hàng đợi tuần tự (chỉ đủ ${maxLaunch} delegation)`)
                 if (t) recordAgentThought(agentSessionId, t, totalIterations)
               }
               delegationPromises.set(i, Promise.resolve({
                 tcIdx: i,
-                preFlightFail: `Từ chối delegate (thứ ${delegationRank + 1} trong batch song song) — budget token của vòng lặp chỉ đủ chạy ${maxLaunch} delegation đồng thời (mỗi sub-agent tiêu ~${SUBAGENT_TOKEN_ESTIMATE / 1000}k). Hãy TỰ LÀM phần việc này ngắn gọn, hoặc delegate lại lẻ ở vòng sau khi budget cho phép.`,
+                preFlightFail: `Từ chối delegate (thứ ${delegationRank + 1} trong hàng đợi) — budget token của vòng lặp chỉ đủ chạy ${maxLaunch} delegation (mỗi sub-agent tiêu ~${SUBAGENT_TOKEN_ESTIMATE / 1000}k). Hãy TỰ LÀM phần việc này ngắn gọn, hoặc delegate lại lẻ ở vòng sau khi budget cho phép.`,
               }))
               continue
             }
-            delegationPromises.set(i, (async () => {
-              // DELEGATE PRE-FLIGHT (mirror nhánh tuần tự — check TRƯỚC khi launch)
+            const run = async (): Promise<{
+              tcIdx: number
+              preFlightFail?: string
+              permissionFail?: string
+              toolResult?: { success: boolean; result: unknown }
+            }> => {
+              // DELEGATE PRE-FLIGHT (mirror nhánh tuần tự — chạy ĐÚNG LÚC đến
+              // lượt trong hàng đợi — token của delegation trước đã trừ đúng)
               if (tokenLeft() <= REPORT_RESERVE_TOKENS + 10_000) {
                 if (agentSessionId) {
                   // 2026-10-27 (user directive phiên 3) — DELEGATION LOG ⛔
@@ -2853,7 +2866,10 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
                 // No-throwError: exception của 1 delegation → kết quả fail riêng
                 return { tcIdx: i, toolResult: { success: false, result: { error: err instanceof Error ? err.message : String(err) } } }
               }
-            })())
+            }
+            const p = launchChain.then(run)
+            delegationPromises.set(i, p)
+            launchChain = p.then(() => undefined, () => undefined)
           }
         }
       }
@@ -2977,10 +2993,10 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         processToolResult(tc, toolResult)
       }
 
-      // FAN-IN log — ghi dấu hợp nhất cho ops theo dõi
+      // DELEGATION-QUEUE log — ghi dấu hợp nhất cho ops theo dõi
       if (delegationPromises.size >= 2) {
-        evidence.push({ cycle, kind: 'directive', text: `FAN-IN: ${delegationPromises.size} delegation song song đã hợp nhất kết quả về 1 batch` })
-        recordAgentThought(agentSessionId, `🔀 FAN-OUT/FAN-IN: ${delegationPromises.size} sub-agent chạy song song trong batch này — kết quả đã hợp nhất (xung đột tự phân xử qua báo cáo từng agent)`, totalIterations)
+        evidence.push({ cycle, kind: 'directive', text: `DELEGATION QUEUE: ${delegationPromises.size} delegation đã chạy THEO LƯỢT TUẦN TỰ (tối đa 1 sub-agent cùng lúc) và hợp nhất kết quả về 1 batch` })
+        recordAgentThought(agentSessionId, `🔀 HÀNG ĐỢI DELEGATION: ${delegationPromises.size} sub-agent trong batch này đã chạy THEO LƯỢT TUẦN TỰ (user directive: tối đa 1 sub-agent cùng lúc) — kết quả đã hợp nhất theo thứ tự`, totalIterations)
       }
 
       // ===== FIX (R2-b #1) — IN-CYCLE STALL BRAKE (ITER_PER_CYCLE=0 + TOKEN=∞) =====

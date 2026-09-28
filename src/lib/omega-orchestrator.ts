@@ -779,15 +779,20 @@ export async function dispatchAgentsParallel(params: {
     }
   }
 
-  console.log(`[OmegaOrchestrator] FAN-OUT: ${valid.length} sub-agent chạy song song (${valid.map(t => t.agent).join(', ')}) theo yêu cầu của ${parentAgentName}`)
+  console.log(`[OmegaOrchestrator] FAN-OUT (TUẦN TỰ — tối đa 1 sub-agent chạy cùng lúc, user directive 2026-10-29): ${valid.length} sub-agent xếp hàng (${valid.map(t => t.agent).join(', ')}) theo yêu cầu của ${parentAgentName}`)
 
-  // FAN-OUT — mọi dispatch chạy đồng thời; allSettled đảm bảo không cái nào
-  // throw ra ngoài (reject → đổi thành outcome fail của chính nó).
+  // USER DIRECTIVE 2026-10-29 — SERIALIZE: mỗi thời điểm chỉ 1 sub-agent được
+  // phép chạy. Fan-out semantics giữ nguyên (N task → 1 báo cáo hợp nhất) nhưng
+  // thực thi TUẦN TỰ từng cái (thay Promise.allSettled cũ). Lỗi agent nào báo
+  // riêng agent đó (mirror allSettled — KHÔNG throw ra ngoài). Slot toàn cục
+  // trong subagent-delegate là lớp bảo vệ cuối cùng (2 goal-loop job song song
+  // cũng bị serialize); code này đảm bảo log + thứ tự hiển thị trung thực.
   // (Token KHÔNG đếm qua callback — tổng tokensUsed trả về trong result để
   // caller đếm đúng 1 lần, tránh double-count ở goal-loop processToolResult.)
-  const settled = await Promise.allSettled(
-    valid.map(t =>
-      dispatchAgentByOmega({
+  const settled: Array<{ agent: string; r?: Awaited<ReturnType<typeof dispatchAgentByOmega>>; errorMsg?: string }> = []
+  for (const t of valid) {
+    try {
+      const r = await dispatchAgentByOmega({
         agent: t.agent,
         task: t.task,
         context: t.context,
@@ -795,9 +800,14 @@ export async function dispatchAgentsParallel(params: {
         parentAgentName,
         sessionId,
         parentRunId,
-      }).then(r => ({ agent: t.agent, r })),
-    ),
-  )
+      })
+      settled.push({ agent: t.agent, r })
+    } catch (err) {
+      // Exception văng từ dispatch (đã hiếm — dispatchAgentByOmega fail-open)
+      // → coi là 1 kết quả fail của agent đó, KHÔNG sập batch.
+      settled.push({ agent: t.agent, errorMsg: err instanceof Error ? err.message : String(err) })
+    }
+  }
 
   // FAN-IN — hợp nhất kết quả, KHÔNG throwError xung đột:
   let tokensUsed = 0
@@ -815,14 +825,14 @@ export async function dispatchAgentsParallel(params: {
   const fileTouch = new Map<string, string[]>() // filePath → [agentName...]
 
   for (const s of settled) {
-    if (s.status === 'rejected') {
+    if (!s.r) {
       // Exception văng từ dispatch (đã hiếm — dispatchAgentByOmega fail-open)
       // → coi là 1 kết quả fail của agent đó, KHÔNG sập batch.
-      const msg = s.reason instanceof Error ? s.reason.message : String(s.reason)
-      results.push({ agent: '?', success: false, report: '', tokensUsed: 0, toolCalls: 0, endedBy: 'error', error: msg })
+      results.push({ agent: s.agent, success: false, report: '', tokensUsed: 0, toolCalls: 0, endedBy: 'error', error: s.errorMsg ?? 'unknown dispatch error' })
       continue
     }
-    const { agent, r } = s.value
+    const agent = s.agent
+    const r = s.r
     tokensUsed += r.tokensUsed ?? 0
     if (r.success) succeeded++
     results.push({
