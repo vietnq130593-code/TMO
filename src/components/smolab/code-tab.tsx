@@ -954,6 +954,16 @@ export function CodeTabContent() {
   // lệnh chạy giả/kết quả giả.
   const agentActivityTsRef = useRef<number>(0)
   const seenAgentActRef = useRef<Set<string>>(new Set())
+  // TASK 45 FIX ([FileSelect] read failed ".tmo-harness/task-41-*.txt"):
+  // poll ĐẦU sau mount dùng since=0 → server trả ≤30 entry GẦN NHẤT trong
+  // ring buffer = HISTORY (seenAgentActRef reset mỗi mount nên dedup không
+  // giúp được). Echo history vào Terminal là UX có chủ đích, nhưng history
+  // replay CŨNG phát fileEvents → auto-open editor cho file agents ghi
+  // TRƯỚC ĐÓ — gồm cả file test đã bị dọn (task-41-verify.txt /
+  // task-41-e2e.txt) → read 404 → console.error + toast đỏ "Không đọc được
+  // file" MỖI LẦN reload/switch tab. Chỉ phát fileEvents từ poll thứ hai
+  // trở đi = entry sinh ra KHI user đang thực sự nhìn tab.
+  const agentActivityFirstPollRef = useRef(true)
   // FILE TREE REALTIME (fix 2026-09-10): loadFileTree đổi theo workspaceRoot —
   // giữ ref luôn trỏ bản mới nhất để poll effect (deps []) gọi được.
   const loadFileTreeRef = useRef(loadFileTree)
@@ -979,7 +989,13 @@ export function CodeTabContent() {
           ok?: boolean
           entries?: Array<{ id: string; ts: number; agentName?: string; tool: string; detail?: string; success?: boolean; durationMs?: number; resultPreview?: string; path?: string }>
         } | null
-        if (!d?.ok || !Array.isArray(d.entries) || d.entries.length === 0 || cancelled) return
+        if (!d?.ok || !Array.isArray(d.entries) || cancelled) return
+        // TASK 45 FIX: đây là response HỢP LỆ đầu tiên sau mount (kể cả rỗng) →
+        // mọi entry của các poll SAU là entry mới sinh. Bắt cờ TRƯỚC khi reset
+        // (loop phía dưới cần biết đây có phải history replay không).
+        const isHistoryReplay = agentActivityFirstPollRef.current
+        agentActivityFirstPollRef.current = false
+        if (d.entries.length === 0 || cancelled) return
 
         const lines: string[] = []
         // LIVE FILE TAB REFRESH — path các file agents vừa sửa/xóa (lấy từ detail)
@@ -1027,8 +1043,11 @@ export function CodeTabContent() {
             // task-1.txt" → đoán bằng workspaceRoot localStorage có thể SAI root
             // → auto-open toast đỏ "Không đọc được file"). cmd (detail RAW) chỉ
             // là fallback cho entry cũ do server trước Task 41 ghi (không có path).
+            // TASK 45 FIX: poll đầu = HISTORY replay → KHÔNG auto-open (file
+            // có thể đã bị dọn → read 404 → console.error + toast đỏ). Echo
+            // history vào Terminal phía trên vẫn chạy (UX có chủ đích).
             const evPath = (typeof e.path === 'string' && e.path) ? e.path : cmd
-            if (evPath) fileEvents.push({ tool: e.tool, path: evPath })
+            if (evPath && !isHistoryReplay) fileEvents.push({ tool: e.tool, path: evPath })
           }
         }
         agentActivityTsRef.current = maxTs
@@ -1180,7 +1199,7 @@ export function CodeTabContent() {
     }
   }, [])
 
-  const handleFileSelect = useCallback(async (path: string, opts?: { refresh?: boolean }) => {
+  const handleFileSelect = useCallback(async (path: string, opts?: { refresh?: boolean; fromAgent?: boolean }) => {
     // Phase 8: multi-tab aware. Name + signature preserved (Phase 7 AI-tool
     // bridge + file tree click depend on it).
     // Phase 7: opts.refresh — force a fresh fetch (the AI edited the file on
@@ -1251,12 +1270,21 @@ export function CodeTabContent() {
         // FIX 2026-08-28: read fail (404/413/...) — trước đây im lặng hoàn toàn,
         // user bấm file không thấy gì (không editor, không lỗi). Giờ hiện toast
         // với error từ server để chẩn đoán được (VD Windows path bug, file >1MB...).
-        console.error('[FileSelect] read failed:', path, data)
-        toast({
-          title: 'Không đọc được file',
-          description: `${data?.error || `HTTP ${res.status}`} — ${path.split(/[\\/]/).pop()}`,
-          variant: 'destructive',
-        })
+        // TASK 45 FIX: RIÊNG 404 từ auto-open agent event (fromAgent) = file
+        // vừa ghi xong đã bị agent xóa giữa 2 lần poll (cleanup/dọn file test)
+        // — KHÔNG console.error/toast đỏ (noise user báo), chỉ console.warn +
+        // refresh tree. User click trực tiếp (ghost entry trong tree) hoặc lỗi
+        // khác (500/413...) vẫn toast đầy đủ để chẩn đoán.
+        if (opts?.fromAgent && res.status === 404) {
+          console.warn('[FileSelect] auto-open 404 — file đã bị xóa sau khi agent ghi:', path)
+        } else {
+          console.error('[FileSelect] read failed:', path, data)
+          toast({
+            title: 'Không đọc được file',
+            description: `${data?.error || `HTTP ${res.status}`} — ${path.split(/[\\/]/).pop()}`,
+            variant: 'destructive',
+          })
+        }
         // FIX 2026-09-26: 404 = file KHÔNG TỒN TẠI trên đĩa nhưng vẫn nằm trong
         // file tree (tree cache stale — VD file test E2E đã bị dọn dẹp, hoặc
         // AI/tiến trình ngoài đã xóa file sau lần load tree cuối). Refresh tree
@@ -1904,8 +1932,8 @@ export function CodeTabContent() {
       const fileName = pathFileName(absPath || pathFromDetail)
       if (ev.type === 'tool_call') {
         switch (tool) {
-          case 'file_read': if (absPath) { void handleFileSelect(absPath); toast({ title: `📖 AI đang đọc ${fileName}` }) } break
-          case 'file_edit': case 'file_multi_edit': if (absPath) { void handleFileSelect(absPath); toast({ title: `✏️ AI đang sửa ${fileName}` }) } break
+          case 'file_read': if (absPath) { void handleFileSelect(absPath, { fromAgent: true }); toast({ title: `📖 AI đang đọc ${fileName}` }) } break
+          case 'file_edit': case 'file_multi_edit': if (absPath) { void handleFileSelect(absPath, { fromAgent: true }); toast({ title: `✏️ AI đang sửa ${fileName}` }) } break
           case 'shell': {
             const cmd = (typeof detail?.command === 'string' ? detail.command : null) || extractJsonStringField(rawDetail, 'command') || rawDetail
             appendTermLines(AGENT_FEED_TAB_ID, [`$ [AI] ${String(cmd).slice(0, 120)}`])
@@ -1915,7 +1943,7 @@ export function CodeTabContent() {
           case 'opencode': {
             const action = (typeof detail?.action === 'string' ? detail.action : null) || extractJsonStringField(rawDetail, 'action')
             if ((action === 'read' || action === 'write') && absPath) {
-              void handleFileSelect(absPath)
+              void handleFileSelect(absPath, { fromAgent: true })
               toast({ title: action === 'read' ? `📖 AI đang đọc ${fileName}` : `✏️ AI đang sửa ${fileName}` })
             } else if (action === 'bash') {
               const cmd = (typeof detail?.command === 'string' ? detail.command : null) || extractJsonStringField(rawDetail, 'command') || rawDetail
@@ -1930,7 +1958,7 @@ export function CodeTabContent() {
           case 'file_edit': case 'file_multi_edit': {
             void loadFileTree()
             void loadPendingEdits()
-            if (absPath) { void handleFileSelect(absPath, { refresh: true }); toast({ title: `✅ AI đã sửa ${fileName}` }) }
+            if (absPath) { void handleFileSelect(absPath, { refresh: true, fromAgent: true }); toast({ title: `✅ AI đã sửa ${fileName}` }) }
             break
           }
           case 'file_delete': { void loadFileTree(); toast({ title: `🗑️ AI đã xóa ${fileName || 'file'}` }); break }
@@ -2002,13 +2030,13 @@ export function CodeTabContent() {
                 toast({ title: `🤖 AI đã sửa ${baseNameOf(abs)}`, description: 'Tab có chỉnh sửa chưa lưu — không tự làm mới (Revert/đóng tab để xem bản mới)' })
               }
             } else {
-              void handleFileSelect(abs, { refresh: true })
+              void handleFileSelect(abs, { refresh: true, fromAgent: true })
             }
           } else if (autoOpened < 3) {
             autoOpened++
             // refresh:true → cache-bust URL (file vừa được agent ghi, không
             // bao giờ đọc bản cache của trình duyệt)
-            void handleFileSelect(abs, { refresh: true })
+            void handleFileSelect(abs, { refresh: true, fromAgent: true })
           }
         }
       } catch { /* fail-open */ }
