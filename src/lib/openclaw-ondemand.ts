@@ -46,6 +46,10 @@ const IDLE_SHUTDOWN_MS = intEnv('OPENCLAW_IDLE_SHUTDOWN_MS', 600_000)
 const IDLE_CHECK_INTERVAL_MS = 30_000
 /** TTL cache "đang chạy" — tránh probe health mỗi call */
 const RUNNING_CACHE_TTL_MS = 20_000
+/** Poll bridge mỗi 500ms khi chờ bridge boot (bridge ~1-3s) */
+const BRIDGE_POLL_INTERVAL_MS = 500
+/** Tổng thời gian chờ bridge boot — 12s */
+const BRIDGE_STARTUP_TIMEOUT_MS = 12_000
 
 function intEnv(name: string, fallback: number): number {
   const v = Number(process.env[name])
@@ -68,6 +72,10 @@ interface OnDemandState {
   lastProbeOk: number
   lastSpawnFailed: number
   spawnPromise: Promise<{ online: boolean; started?: boolean; error?: string }> | null
+  /** Dedup ensureBridgeRunning — 2 request cùng lúc chỉ spawn MỘT bridge */
+  bridgePromise: Promise<{ online: boolean; started?: boolean; error?: string }> | null
+  /** Số tầng ensureBridgeRunning đang chạy (chống đệ quy vòng gateway↔bridge) */
+  bridgeEnsureDepth: number
   timerRegistered: boolean
   shuttingDown: boolean
 }
@@ -84,6 +92,8 @@ function getState(): OnDemandState {
       lastProbeOk: 0,
       lastSpawnFailed: 0,
       spawnPromise: null,
+      bridgePromise: null,
+      bridgeEnsureDepth: 0,
       timerRegistered: false,
       shuttingDown: false,
     }
@@ -238,6 +248,26 @@ export async function shutdownIdleGateway(reason = 'idle shutdown'): Promise<voi
 // ==================== ENSURE RUNNING ====================
 
 /**
+ * Probe boolean gateway-bridge (18791) — true = có process bridge phản hồi
+ * /health. Dùng cho call site "gateway OK nhưng bridge có thể chết" (không
+ * cần phân biệt connected/disconnected như probeBridgeState()).
+ * URL CỐ ĐỊNH theo BRIDGE_PORT — KHÔNG dùng OPENCLAW_GATEWAY_URL (đó là 18789).
+ */
+async function probeBridge(timeoutMs = 1500): Promise<boolean> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/health`, { signal: controller.signal })
+    const data = await res.json().catch(() => null)
+    return res.ok && data?.ok === true
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
  * Probe health gateway-bridge (18791) — phân biệt 3 trạng thái:
  *  - 'connected':    bridge chạy VÀ đã kết nối WS gateway (tool dùng được)
  *  - 'disconnected': bridge process sống nhưng mất kết nối gateway (tool 500
@@ -273,57 +303,101 @@ async function probeBridgeState(timeoutMs = 2000): Promise<'connected' | 'discon
  *      bridge vẫn DOWN → tool "unreachable"; giờ: spawn bridge.
  *  (c) Cả hai down (idle-shutdown 10' / app restart) → đi qua
  *      ensureGatewayRunning() đầy đủ (spawn gateway rồi bridge).
+ *
+ * DEDUP: bridgePromise (pattern giống s.spawnPromise) — nhiều request/agent
+ * gọi song song chỉ spawn MỘT bridge, các caller sau await cùng một promise.
+ * CHỐNG ĐỆ QUY: ensureBridgeRunning → ensureGatewayRunning(ensureBridge:false)
+ * và ngược lại; bridgeEnsureDepth chặn vòng await lẫn nhau (deadlock) khi
+ * spawnAndWait của gateway đang chờ bridge trong lúc ensureBridgeRunning đang
+ * chờ chính spawnPromise đó.
  */
 export async function ensureBridgeRunning(opts?: { timeoutMs?: number }): Promise<{ online: boolean; started?: boolean; error?: string }> {
   const s = getState()
-  s.lastUsed = Date.now() // caller có ý định dùng bridge → reset đồng hồ idle
-
-  // 1. Bridge đã usable?
-  if ((await probeBridgeState(2000)) === 'connected') {
-    s.lastProbeOk = Date.now()
-    return { online: true }
+  // Đang Ở TRONG chuỗi ensureBridgeRunning (tầng trên đang chờ chính
+  // ensureGatewayRunning này) → bỏ qua, tránh await vòng = deadlock.
+  if (s.bridgeEnsureDepth > 0) {
+    return { online: false, error: 'đang trong chuỗi ensureBridgeRunning (bỏ qua — chống đệ quy)' }
   }
-
-  // 2. Gateway phải chạy trước (bridge là ws client của gateway)
-  if (!(await probeGateway(2500))) {
-    const g = await ensureGatewayRunning(opts)
-    if (!g.online) return { online: false, error: `gateway (18789) down: ${g.error || 'spawn thất bại'}` }
-    // spawnAndWait đã spawn bridge kèm gateway
-  } else {
-    // Gateway lên (có thể orphan do spawn thủ công) → adopt cho idle-watchdog
-    // quản dọn cả hai khi hết dùng
-    s.running = true
-    s.lastProbeOk = Date.now()
-  }
-
-  // 3. Bridge process sống nhưng mất kết nối → force reconnect; bridge down → spawn
-  const st = await probeBridgeState(1500)
-  if (st === 'disconnected') {
-    try {
-      await fetch(`http://127.0.0.1:${BRIDGE_PORT}/reconnect`, { method: 'POST', signal: AbortSignal.timeout(10_000) })
-      console.log('[openclaw-ondemand] Bridge mất WS gateway → đã POST /reconnect')
-    } catch { /* bridge chết giữa chừng — poll bên dưới sẽ không lên → fail rõ ràng */ }
-  } else if (st === 'down') {
-    s.bridgeChild = spawnService('mini-services/gateway-bridge', {})
-    if (!s.bridgeChild) {
-      return { online: false, error: 'spawn gateway-bridge (18791) thất bại' }
-    }
-  }
-
-  // 4. Poll đến khi bridge CONNECTED (không chỉ /health OK)
-  const deadline = Date.now() + (opts?.timeoutMs ?? 20_000)
-  while (Date.now() < deadline) {
-    if ((await probeBridgeState(1500)) === 'connected') {
-      console.log('[openclaw-ondemand] Bridge (18791) CONNECTED (ensureBridgeRunning)')
-      return { online: true, started: true }
-    }
-    await new Promise(r => setTimeout(r, 1000))
-  }
-  return { online: false, error: 'bridge (18791) không connect-OK sau timeout' }
+  if (s.bridgePromise) return s.bridgePromise // đang ensure → dùng chung kết quả
+  s.bridgeEnsureDepth++
+  const task = ensureBridgeRunningOnce(opts).finally(() => {
+    const st = getState()
+    st.bridgeEnsureDepth--
+    st.bridgePromise = null
+  })
+  s.bridgePromise = task
+  return task
 }
 
-async function spawnAndWait(timeoutMs: number): Promise<{ online: boolean; started?: boolean; error?: string }> {
+/** Thân ensureBridgeRunning thật (bọc ngoài bởi bridgePromise chống spawn trùng) */
+async function ensureBridgeRunningOnce(opts?: { timeoutMs?: number }): Promise<{ online: boolean; started?: boolean; error?: string }> {
   const s = getState()
+  s.lastUsed = Date.now() // caller có ý định dùng bridge → reset đồng hồ idle
+  {
+
+    // 1. Bridge đã usable?
+    if ((await probeBridgeState(2000)) === 'connected') {
+      s.lastProbeOk = Date.now()
+      return { online: true }
+    }
+
+    // 2. Gateway phải chạy trước (bridge là ws client của gateway).
+    //    ensureBridge=false để KHÔNG đệ quy: các nhánh online của
+    //    ensureGatewayRunning sẽ gọi lại ensureBridgeRunning.
+    if (!(await probeGateway(2500))) {
+      const g = await ensureGatewayRunning({ timeoutMs: opts?.timeoutMs, ensureBridge: false })
+      if (!g.online) return { online: false, error: `gateway (18789) down: ${g.error || 'spawn thất bại'}` }
+      // spawnAndWait đã spawn bridge kèm gateway — poll health bên dưới xác nhận
+    } else {
+      // Gateway lên (có thể orphan do spawn thủ công) → adopt cho idle-watchdog
+      // quản dọn cả hai khi hết dùng
+      s.running = true
+      s.lastProbeOk = Date.now()
+    }
+
+    // 3. Bridge process sống nhưng mất kết nối → force reconnect; bridge down → spawn
+    const st = await probeBridgeState(1500)
+    if (st === 'disconnected') {
+      try {
+        await fetch(`http://127.0.0.1:${BRIDGE_PORT}/reconnect`, { method: 'POST', signal: AbortSignal.timeout(10_000) })
+        console.log('[openclaw-ondemand] Bridge mất WS gateway → đã POST /reconnect')
+      } catch { /* bridge chết giữa chừng — poll bên dưới sẽ không lên → fail rõ ràng */ }
+    } else if (st === 'down') {
+      s.bridgeChild = spawnService('mini-services/gateway-bridge', {})
+      if (!s.bridgeChild) {
+        return { online: false, error: 'spawn gateway-bridge (18791) thất bại' }
+      }
+    }
+
+    // 4. Poll đến khi bridge CONNECTED (không chỉ /health OK) — 500ms/lần, tối đa 12s
+    const budget = opts?.timeoutMs ?? BRIDGE_STARTUP_TIMEOUT_MS
+    const deadline = Date.now() + budget
+    while (Date.now() < deadline) {
+      if ((await probeBridgeState(1500)) === 'connected') {
+        console.log('[openclaw-ondemand] Bridge (18791) CONNECTED (ensureBridgeRunning)')
+        return { online: true, started: true }
+      }
+      await new Promise(r => setTimeout(r, BRIDGE_POLL_INTERVAL_MS))
+    }
+    return { online: false, error: `bridge (18791) không connect-OK sau ${Math.round(budget / 1000)}s` }
+  }
+}
+
+/**
+ * Báo lỗi bridge mà KHÔNG ném exception ra caller — gateway vẫn trả
+ * online:true (app dùng được fallback paths), chỉ mất 36 gateway tools.
+ * Dùng probeBridge() để nêu rõ bridge chết hẳn hay chỉ chưa connect-OK.
+ */
+async function warnBridgeFail(reason: string, detail: string): Promise<void> {
+  const listening = await probeBridge(1500)
+  console.warn(`[openclaw-ondemand] Gateway OK nhưng BRIDGE (18791) không lên [${reason}] → 36 gateway tools không dùng được: ${detail}${listening ? ' (bridge process sống, chưa connect-OK)' : ' (không có process nào lắng nghe 18791)'}`)
+}
+
+async function spawnAndWait(timeoutMs: number, ensureBridge = true): Promise<{ online: boolean; started?: boolean; error?: string }> {
+  const s = getState()
+  // ensureBridge=false: đang được gọi từ chuỗi ensureBridgeRunning → KHÔNG
+  // gọi lại ensureBridgeRunning (tránh đệ quy / deadlock vòng await)
+  const wantBridge = ensureBridge !== false
 
   // WINDOWS FAST-FAIL (fix review 2026-09-08): binary openclaw là symlink POSIX
   // (node_modules/.bin/openclaw — không có .cmd) → trên Windows KHÔNG chạy
@@ -361,10 +435,19 @@ async function spawnAndWait(timeoutMs: number): Promise<{ online: boolean; start
       s.running = true
       s.lastProbeOk = Date.now()
       s.lastUsed = Date.now()
-      // Bridge theo sau (ws client — kết nối ngay khi gateway sẵn sàng)
-      s.bridgeChild = spawnService('mini-services/gateway-bridge', {})
+      // Bridge theo sau (ws client — kết nối ngay khi gateway sẵn sàng).
+      // ensureBridge=false khi chính ensureBridgeRunning đang gọi vào đây →
+      // không gọi lại (tránh tự await chính bridgePromise của nó).
+      if (wantBridge) {
+        try {
+          const b = await ensureBridgeRunning()
+          if (!b.online) await warnBridgeFail('spawnAndWait gateway health-OK', b.error || 'unknown reason')
+        } catch (err) {
+          await warnBridgeFail('spawnAndWait gateway health-OK', err instanceof Error ? err.message : String(err))
+        }
+      }
       const elapsed = Math.round((Date.now() - start) / 1000)
-      console.log(`[openclaw-ondemand] Gateway ONLINE sau ${elapsed}s (on-demand) + bridge spawned`)
+      console.log(`[openclaw-ondemand] Gateway ONLINE sau ${elapsed}s (on-demand) + bridge đã đảm bảo`)
       return { online: true, started: true }
     }
     await new Promise(r => setTimeout(r, 1000))
@@ -389,8 +472,11 @@ async function spawnAndWait(timeoutMs: number): Promise<{ online: boolean; start
  *   chỉ gọi từ các tính năng THẬT SỰ cần gateway (chat fallback, channels,
  *   skills, sessions...).
  */
-export async function ensureGatewayRunning(opts?: { timeoutMs?: number }): Promise<{ online: boolean; started?: boolean; error?: string }> {
+export async function ensureGatewayRunning(opts?: { timeoutMs?: number; ensureBridge?: boolean }): Promise<{ online: boolean; started?: boolean; error?: string }> {
   const s = getState()
+  // ensureBridge=false: đang được gọi từ ensureBridgeRunning → tuyệt đối
+  // không spawn bridge ở đây (tránh đệ quy / deadlock vòng).
+  const wantBridge = opts?.ensureBridge !== false
   gatewayInUse() // caller có ý định dùng → reset đồng hồ idle
 
   if (!isOnDemandEnabled()) {
@@ -399,12 +485,31 @@ export async function ensureGatewayRunning(opts?: { timeoutMs?: number }): Promi
     if (online) {
       s.running = true
       s.lastProbeOk = Date.now()
+      if (wantBridge) {
+        try {
+          const b = await ensureBridgeRunning()
+          if (!b.online) await warnBridgeFail('legacy mode (on-demand off)', b.error || 'unknown reason')
+        } catch (err) {
+          await warnBridgeFail('legacy mode (on-demand off)', err instanceof Error ? err.message : String(err))
+        }
+      }
     }
     return { online }
   }
 
   // Cache ngắn: đang chạy + probe gần đây → trả ngay (không fetch mỗi call)
   if (s.running && Date.now() - s.lastProbeOk < RUNNING_CACHE_TTL_MS) {
+    // ĐƯỜNG THOÁT SỚM #1: gateway OK nhưng bridge có thể chết/crash → trước đây
+    // nhánh này trả online:true mà KHÔNG spawn bridge → 36 tools chết
+    // "gateway-bridge unreachable (port 18791)".
+      if (wantBridge) {
+        try {
+          const b = await ensureBridgeRunning()
+          if (!b.online) await warnBridgeFail('cache-hit (gateway OK, bridge chưa kệm chạy)', b.error || 'unknown reason')
+        } catch (err) {
+          await warnBridgeFail('cache-hit (gateway OK, bridge chưa kệm chạy)', err instanceof Error ? err.message : String(err))
+        }
+      }
     return { online: true }
   }
 
@@ -413,6 +518,16 @@ export async function ensureGatewayRunning(opts?: { timeoutMs?: number }): Promi
     s.running = true
     s.lastProbeOk = Date.now()
     s.lastUsed = Date.now()
+    // ĐƯỜNG THOÁT SỚM #2: adopt gateway orphan (có thể bridge chưa từng
+    // được spawn) → phải đảm bảo bridge trước khi trả online.
+      if (wantBridge) {
+        try {
+          const b = await ensureBridgeRunning()
+          if (!b.online) await warnBridgeFail('adopt orphan gateway', b.error || 'unknown reason')
+        } catch (err) {
+          await warnBridgeFail('adopt orphan gateway', err instanceof Error ? err.message : String(err))
+        }
+      }
     return { online: true } // adopt — không spawn trùng
   }
 
@@ -424,7 +539,7 @@ export async function ensureGatewayRunning(opts?: { timeoutMs?: number }): Promi
     return { online: false, error: 'spawn gần đây thất bại — đang trong cooldown' }
   }
 
-  s.spawnPromise = spawnAndWait(opts?.timeoutMs ?? SPAWN_TIMEOUT_MS).finally(() => {
+  s.spawnPromise = spawnAndWait(opts?.timeoutMs ?? SPAWN_TIMEOUT_MS, wantBridge).finally(() => {
     s.spawnPromise = null
   })
   return s.spawnPromise

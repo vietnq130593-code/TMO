@@ -220,6 +220,36 @@ import('@/lib/smolab/background-task-worker')
   })
 
 // ============================================================================
+// Task 54 — STALE AgentRunRecord CLEANUP (boot)
+// ============================================================================
+// Goal loop chat-inline chạy IN-PROCESS — server restart/crash giữa chừng để
+// lại AgentRunRecord status='running' VĨNH VIỄN trong DB (lệnh update
+// completed/failed nằm trong process đã chết — quan sát thật: sub-agent chạy
+// `pm2 restart` giữa run của Omega → run "running" mãi mãi trong UI/ops).
+// Boot này đánh dấu mọi run 'running' khởi động TRƯỚC process này (dùng lề
+// 15s) là crashed. Job-based runs đã có GoalLoopWorker recoverPending riêng —
+// cleanup này chỉ đụng AgentRunRecord (bảng hiển thị + metrics).
+import('@/lib/db')
+  .then(async ({ db }) => {
+    const res = await db.agentRunRecord.updateMany({
+      where: { status: 'running', startedAt: { lt: new Date(Date.now() - 15_000) } },
+      data: { status: 'failed', stopReason: 'crashed', completedAt: new Date() },
+    })
+    if (res.count > 0) {
+      console.log(
+        `[instrumentation] Stale AgentRunRecord cleanup: ${res.count} run 'running' mồ côi từ process trước → đánh dấu failed/crashed (server restart giữa chừng)`
+      )
+    }
+  })
+  .catch((err) => {
+    console.error(
+      '[instrumentation] Stale AgentRunRecord cleanup failed:',
+      err instanceof Error ? err.message : String(err)
+    )
+    // Don't block startup — cosmetic cleanup only
+  })
+
+// ============================================================================
 // GĐ4 CI-5 (Task 14-a) — DURABLE GOAL LOOP WORKER
 // ============================================================================
 // Job queue nền chạy goal-loop tác vụ nhiều giờ sống sót qua restart (DB là
