@@ -494,8 +494,43 @@ export async function getCommunityStatus(): Promise<{
 }
 
 /**
- * Lazy auto-detect: gọi từ searchUserKB khi collection chưa tồn tại —
- * fire-and-forget (không block query), chạy đúng 1 lần mỗi process.
+ * TASK 50b — check NHẸ (chỉ Qdrant, không đụng Neo4j): community embeddings
+ * đã được build chưa? Phân biệt 3 trạng thái:
+ *   'ready'       — collection tồn tại + ≥1 point → KHÔNG cần detect lại
+ *   'missing'     — collection chưa có / rỗng (chưa từng build hoặc build dở) → detect
+ *   'unreachable' — Qdrant không mở/không kết nối được → HOÃN (detection cuối
+ *                   chuỗi cũng fail ở bước embed — chạy chỉ tốn CPU/Neo4j read)
+ */
+async function communityEmbeddingsReady(): Promise<'ready' | 'missing' | 'unreachable'> {
+  try {
+    const collections = await qdrant.getCollections()
+    const exists = collections.collections.some(c => c.name === COLLECTION_COMMUNITIES)
+    if (!exists) return 'missing'
+    try {
+      const info = await qdrant.getCollection(COLLECTION_COMMUNITIES)
+      return (info.points_count ?? 0) > 0 ? 'ready' : 'missing'
+    } catch {
+      // Có collection nhưng không đọc được count (hiếm) — coi như chưa build;
+      // detection idempotent nên chạy lại vô hại
+      return 'missing'
+    }
+  } catch {
+    return 'unreachable'
+  }
+}
+
+/**
+ * Lazy auto-detect: gọi từ searchUserKB — fire-and-forget (không block query),
+ * đúng 1 lần mỗi process.
+ *
+ * TASK 50b FIX: TRƯỚC ĐÂY hàm này bắn detectAndStoreCommunities() VÔ ĐIỀU
+ * KIỆN (comment ghi "khi collection chưa tồn tại" nhưng KHÔNG hề check) →
+ * mỗi restart app + query KB đầu tiên đều tự động chạy FULL detection
+ * (fetch graph + Leiden CPU nặng + write Neo4j + embed — 6-12 phút trên
+ * graph lớn) kể cả khi user đã build xong bằng tay qua
+ * /api/query?action=community-detect (sandbox log: 22× auto-trigger lãng phí).
+ * Giờ: check Qdrant TRƯỚC — đã có embeddings → skip; Qdrant unreachable →
+ * hoãn + reset flag để query sau retry; chỉ chạy detection khi THẬT SỰ thiếu.
  */
 export function ensureCommunitiesLazy(): void {
   if (!isFlagEnabled('ENABLE_COMMUNITY_SEARCH')) return
@@ -503,10 +538,26 @@ export function ensureCommunitiesLazy(): void {
   const g = globalThis as unknown as { __communityAutoDetectTriggered?: boolean }
   if (g.__communityAutoDetectTriggered) return
   g.__communityAutoDetectTriggered = true
-  console.log('[Communities] Chưa có community embeddings — tự động chạy detection nền (một lần duy nhất)')
-  detectAndStoreCommunities().catch((err) => {
-    console.warn('[Communities] Auto-detect failed:', err instanceof Error ? err.message : String(err))
-    // Cho phép retry lần query kế tiếp nếu fail
-    ;(globalThis as unknown as { __communityAutoDetectTriggered?: boolean }).__communityAutoDetectTriggered = false
-  })
+  void (async () => {
+    try {
+      const ready = await communityEmbeddingsReady()
+      if (ready === 'ready') {
+        console.log('[Communities] Collection theopus_communities đã có embeddings — bỏ qua auto-detect (Task 50b: trước đây chạy lại vô điều kiện mỗi restart)')
+        return
+      }
+      if (ready === 'unreachable') {
+        // Qdrant không mở — detection sẽ fail ở bước embed cuối anyway; hoãn
+        // lượt này, reset flag để query kế tiếp (sau khi Qdrant mở) thử lại.
+        console.warn('[Communities] Không kiểm tra được Qdrant — hoãn auto-detect (thử lại ở query sau)')
+        g.__communityAutoDetectTriggered = false
+        return
+      }
+      console.log('[Communities] Chưa có community embeddings — tự động chạy detection nền (một lần duy nhất)')
+      await detectAndStoreCommunities()
+    } catch (err) {
+      console.warn('[Communities] Auto-detect failed:', err instanceof Error ? err.message : String(err))
+      // Cho phép retry lần query kế tiếp nếu fail
+      g.__communityAutoDetectTriggered = false
+    }
+  })()
 }

@@ -249,6 +249,9 @@ export async function searchUserKB(
   // Leiden community layer (user request 2026-09-05): nếu collection chưa tồn
   // tại → lazy auto-detect nền (fire-and-forget, đúng 1 lần/process) — query
   // hiện tại vẫn chạy bình thường (communities=[]), query sau hưởng kết quả.
+  // TASK 50b: ensureCommunitiesLazy giờ CHECK Qdrant trước khi bắn detection —
+  // đã có embeddings (user build tay / lần trước thành công) → skip, KHÔNG
+  // chạy lại full detection 6-12 phút mỗi restart như trước.
   ensureCommunitiesLazy()
 
   // Query embedding dùng chung cho chunks + communities (1 lần embed —
