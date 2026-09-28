@@ -559,7 +559,7 @@ function buildDelegationProtocol(): string {
   return `
 
 📦 PHÂN CÔNG SUB-AGENT (delegate_task — Code Team chuyên trách):
-- RAMPAGE: implement code · SENTINEL: review/bug/security · CATALYST: tối ưu/refactor · SHOCWAVE: thiết kế kiến trúc/DB/API · MEGATRON: phân tích + verify tổng thể · FORGE: full-stack builder END-TO-END (UI + API + DB + tự kiểm định + preview verify) — tính năng trọn gói tự chứa.
+- RAMPAGE: implement code · SENTINEL: review/bug/security · CATALYST: tối ưu/refactor · SHOCWAVE: thiết kế kiến trúc/DB/API · MEGATRON: phân tích + verify tổng thể · FORGE: full-stack builder END-TO-END (UI + API + DB + tự kiểm định + preview verify) — tính năng trọn gói tự chứa · RAVAGE: security engineer (pentest/red team trong scope ủy quyền, security code review, hardening/fix lỗ hổng, DFIR, crypto).
 - Cú pháp: tool_call: delegate_task({"agent": "RAMPAGE", "task": "Nhiệm vụ cụ thể...", "context": "file liên quan, ràng buộc...", "acceptance_criteria": "điều kiện hoàn thành kiểm định được"})
 - NÊN delegate khi: task cần đọc/sửa NHIỀU file (làm trực tiếp sẽ phình context của bạn), cần chuyên môn sâu, hoặc task giao trọn được cho 1 agent.
 - KHÔNG delegate việc 1-2 bước đơn giản — tự làm nhanh hơn.

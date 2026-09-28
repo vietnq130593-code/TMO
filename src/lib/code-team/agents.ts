@@ -219,6 +219,38 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     // (clone-first workflow), git đầy đủ. KHÔNG có delegate/dispatch (depth guard).
     tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'git_status', 'git_diff', 'git_log', 'git_branch', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'browser_screenshot', 'mcp_call', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'open_workspace', 'verify_and_push', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem', 'context_recall', 'list_skills', 'read_skill', 'propose_automation'],
   },
+  {
+    // TASK 47 (user request "dựng 1 agent kỹ sư An ninh ATTT/an ninh mạng")
+    // — RAVAGE là SECURITY ENGINEER tổng lực: offense (pentest, red team,
+    // exploit research, malware analysis) + defense (hardening, DFIR,
+    // secure SDLC, crypto). Vị trí 'SEC' ngoài pipeline SOP (giống FORGE
+    // 'FS') — KHÔNG nằm trong getPositionsInOrder()/tier-mode pipeline;
+    // RAVAGE được gọi qua delegate_task/dispatch_agent (sub-agent mini-loop)
+    // hoặc chat trực tiếp Single Agent mode.
+    name: 'RAVAGE',
+    description: 'SEC — Security Engineer. Kỹ sư An ninh mạng tổng lực: pentest/red team (offense) + hardening/DFIR/DevSecOps (defense) — 4 level từ sơ nhập đến chuyên gia tối thượng.',
+    instruction: '', // Loaded dynamically from getAgentPrompt('SEC')
+    domain: 'security',
+    capable: 'Pentest & vulnerability assessment, web/network/AD/cloud pentesting, red teaming, malware analysis, reverse engineering, cryptography, DFIR, security code review, hardening, DevSecOps, ML threat detection, HCI',
+    provider: 'zen',
+    // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note MEGATRON).
+    model: 'space-bunny-free',
+    // Security yêu cầu CHÍNH XÁC — temperature thấp nhất team (khai thác/
+    // phân tích forensic không được "sáng tác" chi tiết).
+    temperature: 0.2,
+    // TASK 39 (phiên 8) — -1 = unlimited (xem note MEGATRON).
+    maxTokens: -1,
+    team: 'code',
+    position: 'SEC',
+    avatar: '🕵️',
+    // Toolset kiểu FORGE (builder tự chủ) + thiên về security: shell (nmap/
+    // sqlmap/nikto/hashcat... nếu máy có — check bằng which trước), run_bg
+    // (scan dài), web_search/web_fetch (CVE/advisory lookup), browser_screenshot
+    // (verify web app), git read tools (audit diff), file tools (review/fix
+    // lỗ hổng), lint/type_check/run_tests (verify fix không phá code),
+    // db_query (audit dữ liệu). KHÔNG có delegate/dispatch (depth guard).
+    tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_status', 'git_diff', 'git_log', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'browser_screenshot', 'mcp_call', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem', 'context_recall', 'list_skills', 'read_skill', 'propose_automation'],
+  },
 ]
 
 // ===== AGENT RENAME MIGRATION (2026-10-16 — user directive) =====

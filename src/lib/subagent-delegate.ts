@@ -87,6 +87,9 @@ export const POSITION_BY_NAME: Record<string, string> = {
   // TASK 43 — FORGE: full-stack-developer subagent (builder tổng lực
   // end-to-end UI+API+DB). Vị trí 'FS' ngoài pipeline SOP — chỉ delegate.
   FORGE: 'FS',
+  // TASK 47 — RAVAGE: security-engineer subagent (pentest/red team +
+  // hardening/DFIR). Vị trí 'SEC' ngoài pipeline SOP — chỉ delegate.
+  RAVAGE: 'SEC',
 }
 
 /**
@@ -121,6 +124,7 @@ export const DELEGATABLE_AGENTS: Array<{ name: string; role: string; bestFor: st
   { name: 'SENTINEL', role: 'G2-B — Review & Fix', bestFor: 'code review, tìm bug, security check, fix lỗi, iterative refinement' },
   { name: 'CATALYST', role: 'G3 — Tối ưu', bestFor: 'performance optimization, refactor, scalability, best practices' },
   { name: 'FORGE', role: 'FS — Full-Stack Developer', bestFor: 'tính năng full-stack END-TO-END tự chủ theo spec trọn gói: UI + API + DB + tự kiểm định (lint/type_check/run_tests) + preview verify' },
+  { name: 'RAVAGE', role: 'SEC — Security Engineer', bestFor: 'pentest/red team (trong scope ủy quyền), security code review (OWASP/CVE), hardening + fix lỗ hổng có verify, DFIR phân tích sự cố, thiết kế security architecture, cryptography' },
 ]
 
 /**
@@ -131,7 +135,7 @@ export function resolveDelegationTarget(input: unknown): string | null {
   const key = String(input ?? '').trim().toUpperCase()
   if (!key) return null
   if (POSITION_BY_NAME[key]) return POSITION_BY_NAME[key]
-  if (['TL', 'G1', 'G2-A', 'G2-B', 'G3', 'FS'].includes(key)) return key
+  if (['TL', 'G1', 'G2-A', 'G2-B', 'G3', 'FS', 'SEC'].includes(key)) return key
   return null
 }
 
