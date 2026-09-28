@@ -440,9 +440,12 @@ if (!globalForResearchSeed.__tmoResearchTeamSeeded) {
 // CODE TEAM SEED + AGENT RENAME MIGRATION (2026-10-16)
 // ============================================================================
 // Boot-seed Code Team 5 agents (giống Research Team phía trên) + chạy rename
-// migration APEX→MEGATRON / CORTEX→SHOCWAVE / BOLT→RAMPAGE NGAY khi app khởi
-// động — không đợi user mở module Agents. Fire-and-forget, fail-open tuyệt
-// đối (lỗi không chặn boot); GET /api/agents vẫn retry lazy như cũ.
+// migration APEX→MEGATRON / CORTEX→SHOCWAVE / BOLT→RAMPAGE / RAVAGE→Linh Sickyx
+// NGAY khi app khởi động — không đợi user mở module Agents. Fire-and-forget,
+// fail-open tuyệt đối (lỗi không chặn boot); GET /api/agents vẫn retry lazy
+// như cũ. TASK 48-review: chain thêm boot-seed STANDALONE AGENTS sau CodeTeam
+// (rename chạy trước → role-normalize chạy sau — không còn cửa sổ agent nửa
+// vời sau restart).
 const globalForCodeTeamSeed = globalThis as unknown as { __tmoCodeTeamSeeded?: boolean }
 if (!globalForCodeTeamSeed.__tmoCodeTeamSeeded) {
   globalForCodeTeamSeed.__tmoCodeTeamSeeded = true
@@ -455,6 +458,27 @@ if (!globalForCodeTeamSeed.__tmoCodeTeamSeeded) {
     .catch((err) => {
       console.warn(
         '[CodeTeam] boot seed/rename lỗi (không chặn boot — GET /api/agents sẽ retry lazy):',
+        err instanceof Error ? err.message : String(err),
+      )
+    })
+    // TASK 48-review — BOOT-SEED STANDALONE AGENTS (Linh Sickyx/Omega/ALISTA/Opus).
+    // Trước đây chỉ lazy qua GET /api/agents → sau restart, AGENT_RENAMES của
+    // CodeTeam boot-seed đã rename RAVAGE → "Linh Sickyx" nhưng role-normalize
+    // (team=null, position=null, instruction standalone mới) chưa chạy → cửa
+    // sổ thời gian cron/automation/dispatch_agent gọi "Linh Sickyx" nhận agent
+    // team='code' + position='SEC' → getAgentPrompt('SEC') = '' (case đã xóa
+    // Task 48) → persona rỗng. Chain SAU CodeTeam (không song song) để đúng
+    // thứ tự migration tối ưu: rename (CodeTeam) → normalize (Standalone);
+    // 2 đường idempotent nên chạy song song vẫn hội tụ, nhưng chain loại bỏ
+    // race window. Fire-and-forget + fail-open như mọi boot-seed khác.
+    .then(() => import('@/lib/standalone-agents'))
+    .then(({ ensureStandaloneAgents }) => ensureStandaloneAgents())
+    .then(() => {
+      console.log('[Standalone] seed 4 agents ensured (Linh Sickyx/Omega/ALISTA/Opus) — role migration RAVAGE→standalone đã chạy ở boot')
+    })
+    .catch((err) => {
+      console.warn(
+        '[Standalone] boot seed/migration lỗi (không chặn boot — GET /api/agents sẽ retry lazy):',
         err instanceof Error ? err.message : String(err),
       )
     })

@@ -114,6 +114,10 @@ function stopReasonBadge(reason: string | null): { label: string; className: str
     case 'time_budget':
     case 'token_budget':
       return { label: reason, className: 'bg-orange-950/60 text-orange-400 border-orange-500/50' }
+    // TASK 48 — needs_input: kết thúc CÓ MỤC ĐÍCH chờ user trả lời (không phải
+    // lỗi/xám trung tính) — teal phân biệt với budget (orange) và fail (rose).
+    case 'needs_input':
+      return { label: 'needs_input', className: 'bg-teal-950/60 text-teal-400 border-teal-500/50' }
     default:
       return { label: reason || '—', className: 'bg-stone-900/60 text-stone-400 border-stone-600/50' }
   }

@@ -62,6 +62,12 @@ export function mapOutcome(stopReason: string, toolFailures: number): EpisodeOut
     case 'max_cycles': return toolFailures > 0 ? 'FAILURE' : 'PARTIAL'
     case 'time_budget':
     case 'token_budget': return 'PARTIAL'
+    // TASK 48 — needs_input: kết thúc CÓ MỤC ĐÍCH (trọng tài xác định phần còn
+    // thiếu CHỈ user trả lời được — không phải lỗi hay dở dang vì agent bế tắc).
+    // Map PARTIAL tường minh: goal chưa đạt (không SUCCESS), không có lỗi
+    // (không FAILURE), không bị hủy (không ABANDONED). Tường minh thay vì để
+    // rơi default để semantics rõ ràng cho các rule học bài học episodic.
+    case 'needs_input': return 'PARTIAL'
     default: return 'PARTIAL'
   }
 }
