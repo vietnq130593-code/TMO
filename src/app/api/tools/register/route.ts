@@ -19,7 +19,6 @@ import {
   isToolNameTaken,
   type CustomToolEntry,
 } from '@/lib/custom-tool-registry'
-import type { Prisma } from '@prisma/client'
 
 export const dynamic = 'force-dynamic'
 
@@ -123,9 +122,12 @@ export async function POST(request: NextRequest) {
     const skillSlug = typeof body.skillSlug === 'string' ? body.skillSlug : null
 
     // ===== Save to DB =====
-    // authorId chưa có trong model CustomTool (schema.prisma) — runtime Prisma sẽ
-    // reject unknown arg (bắt ở catch → 500, giữ nguyên behavior hiện tại).
-    // Cast để tsc hiểu, chờ schema thêm field này thì bỏ cast.
+    // Cố ý KHÔNG cast sang Prisma.CustomToolUncheckedCreateInput: mọi field gửi
+    // vào `data` phải có thật trong model CustomTool (schema.prisma). Trước đây
+    // route gửi thêm `authorId` — không tồn tại — kèm cast để tsc im lặng, nên
+    // Prisma runtime ném "Unknown argument `authorId`" và MỌI body hợp lệ rơi
+    // vào catch 500 (endpoint không tạo được tool nào). Bỏ cast để loại field
+    // sai lộ ra ngay ở typecheck. Regression: tests/tools-register-route.test.ts
     const customTool = await db.customTool.create({
       data: {
         name,
@@ -138,8 +140,7 @@ export async function POST(request: NextRequest) {
         source: 'custom',
         enabled: true,
         isPublic: false,
-        authorId: 'default',
-      } as Prisma.CustomToolUncheckedCreateInput,
+      },
     })
 
     // ===== Register in memory + Gateway =====
