@@ -858,6 +858,32 @@ async function runAutoReviewInner(
   try {
     let { review, verdict } = await runOpusReview(sessionId, ctx?.messageId ?? null, 'auto')
 
+    // ===== MODE-SWITCH GUARD (user report 2026-09-29 — "chuyển Opus review
+    // từ auto về manual có dừng tự động không?") =====
+    // Gate chỉ chặn review MỚI (lúc trigger + lúc dequeue). User có thể đổi
+    // chế độ sang manual NGAY GIỮA lúc auto review đang chạy (LLM 30-120s) —
+    // ý định đó phải được tôn trọng NGAY LẬP TỨC: KHÔNG STOP-GUARD retry
+    // (tiết kiệm 1 LLM call), KHÔNG ban hành directive, KHÔNG auto-dispatch
+    // job. OpusReview row vẫn đã lưu (persist trong runOpusReview) — user xem
+    // kết quả trong panel Opus và tự bấm "Ban hành chỉ đạo" nếu muốn.
+    // Thực nghiệm xác nhận gap (session test đổi manual 18:01:21 nhưng
+    // directive vẫn chèn 18:01:57 + auto-dispatch queued).
+    try {
+      const sNow = await db.agentSession.findUnique({
+        where: { sessionId },
+        select: { opusReviewMode: true },
+      })
+      if (sNow && sNow.opusReviewMode !== 'auto') {
+        console.log(
+          `[Opus][auto] session=${sessionId} MODE-SWITCH GUARD: user đã chuyển chế độ review sang '${sNow.opusReviewMode ?? 'manual'}' trong lúc review đang chạy — dừng toàn bộ hành động tự động (review vẫn lưu, KHÔNG ban hành directive, KHÔNG auto-dispatch)`
+        )
+        return
+      }
+    } catch (modeErr) {
+      // fail-open: lỗi query không được chặn verdict (review đã trả lời đúng lúc mode còn auto)
+      console.warn('[Opus][auto] MODE-SWITCH GUARD query lỗi (fail-open):', modeErr instanceof Error ? modeErr.message : String(modeErr))
+    }
+
     // ===== TASK 21 — STOP GUARD (harness, user report 2026-09-30) =====
     // Trọng tài phán STOP nhưng predicate 4 điều kiện §VII CHƯA thỏa
     // (stopAssessment.allMet=false) → verdict TỰ MÂU THUẪN: instruction §VII
