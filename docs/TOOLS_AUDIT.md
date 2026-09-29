@@ -138,7 +138,7 @@ Cả hai lỗi đều là lỗi ĐỒNG BỘ TRẠNG THÁI: một nơi ghi, mộ
 ### RC-2 — tạo được custom tool trùng tên với built-in đang thực thi
 
 - Nguyên nhân: `isToolNameTaken()` chỉ tra registry + `ALL_KNOWN_TOOLS` (43 tên), còn executor có 76 built-in thực sự chạy được. 66 tên thiếu khỏi tập known, trong đó `file_read` — tức tạo được một custom tool mang tên `file_read`, gây mơ hồ khi dispatch.
-- Sửa: `isToolNameTaken()` thành async, thứ tự tra registry → `ALL_KNOWN_TOOLS` → dynamic import `isBuiltinTool()`. Dynamic import là chủ ý để tránh vòng import (`tool-executor` nặng và đã import ngược registry). Nếu import lỗi thì fail-closed trên nhánh built-in.
+- Sửa: `isToolNameTaken()` thành async, thứ tự tra registry → `ALL_KNOWN_TOOLS` → dynamic import `isBuiltinTool()`. Dynamic import là chủ ý để tránh vòng import (`tool-executor` nặng và đã import ngược registry). Nhánh import lỗi cố ý FAIL-OPEN (chỉ console.warn, không chặn tạo): tool-executor là cửa ngõ duy nhất để THỰC THI custom tool, nên nếu module này hỏng thì tool vừa tạo cũng không chạy được — chặn tạo chỉ biến lỗi import thành lỗi tạo tool. Đánh đổi chấp nhận: lúc import lỗi, tên trùng built-in có thể lọt, nên dòng console.warn là tín hiệu bắt buộc phải theo dõi.
 - Hệ quả phụ cần biết: `createCustomTool()` và `POST /api/tools/register` đều phải `await` hàm async.
 - Bằng chứng: ô `create/duplicate-builtin` — tạo tên `file_read` bị từ chối với lý do trùng built-in (PASS).
 
@@ -165,7 +165,8 @@ Script `audit-out/lifecycle-matrix.ts` (bun, DB cô lập trong `/tmp/tmo-lifecy
 | 4 | Tổng hợp verify chạy nền không có kết quả | quy trình | Lệnh gom nhiều bước quá nặng (OOM) + `/bin/sh` không hiểu cú pháp bash | ĐÃ SỬA — tách từng kiểm định chạy foreground, mỗi lệnh một exit code rõ ràng |
 | 5 | `db-query E2E` exit 1 ở lần đầu | lỗi kịch bản probe | Probe gọi tool khi cờ đang tắt | ĐÃ PHÂN LOẠI — trùng #3, không phải lỗi hệ thống |
 | 6 | Tiến trình nền còn treo sau khi chạy | vệ sinh môi trường | Không poll `read_output` | ĐÃ DỌN — `read_output` list trả `total=0` tiến trình |
-| 7 | `register/route.ts` đổi mode 755 → 644 | vệ sinh git | Ghi file khi sửa làm mất bit executable | GHI NHẬN — mức thấp, Next.js không cần bit thực thi cho route |
+| 7 | `register/route.ts` + `custom-tool-registry.ts` đổi mode 755 → 644 (2 file, đối chiếu output commit) | vệ sinh git | Ghi file khi sửa làm mất bit executable | GHI NHẬN — mức thấp, Next.js không cần bit thực thi cho route |
+| 8 | Báo cáo + doc mô tả nhánh import lỗi là fail-closed, code thật là fail-open | không khớp doc↔code | `custom-tool-registry.ts:192-197` ghi rõ "Fail-open ... KHÔNG chặn tạo tool" | ĐÃ SỬA — doc mô tả đúng hành vi code kèm lý do; code giữ nguyên |
 
 Còn 1 nợ CÓ ĐIỀU KIỆN (không phụ thuộc code): `bun run build` OOM `exit 137` — xem §4b, cần quyết định của Mr. Architect về RAM/CI.
 
