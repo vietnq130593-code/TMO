@@ -111,15 +111,42 @@ else
       if [ "$M" -gt "$SRC_NEWEST" ]; then SRC_NEWEST=$M; SRC_FILE="$f"; fi
     fi
   done
+  # SENTINEL-FIX (audit chu ky 64): gate-final.txt duoc APPEND nhieu lan (full-gate
+  # moi truncate, --validate-only noi them), nen doc `tail -1` tren TOAN file co
+  # FAIL-OPEN theo 2 duong, ca 2 duoc chong o day:
+  #   1) doc lot SO CU cua run truoc khi run moi ghi gia tri KHONG PHAI SO
+  #      (`validator_exit=NOT_RUN`, `negative_suite=DEFERRED_...`): regex cu
+  #      `-?[0-9]+` bo qua cac dong do, tail -1 tra ve 0 cua run da ket thuc;
+  #   2) doc nham sang block GATE RUN cu khi file da bi append nhieu lan.
+  # Cach sua: cat ve BLOCK GATE RUN CUOI CUNG, va chi chap nhan gia tri LAN CUOI
+  # cung xuat hien — neu khong phai SO thi tra "NONNUM(...)" de fail-closed.
+  # awk exit 3 = khong co marker GATE RUN nao trong file. Truong hop nay PHAI
+  # fail-closed: neu de awk quy toan file, ta se quay ve doc SO CU cua block da
+  # ket thuc — dung fail-open dang can chong.
+  GATE_LAST_BLOCK=$(awk '/^===== GATE RUN \(TMO audit\) =====/{buf=""; seen=1} {buf=buf $0 "\n"} END{if(!seen) exit 3; printf "%s", buf}' "$GATE") || GATE_BLOCK_MISSING=1
+  if [ -z "${GATE_LAST_BLOCK//[[:space:]]/}" ] || [ -n "${GATE_BLOCK_MISSING:-}" ]; then
+    GATE_BLOCK_MISSING=1
+    GATE_LAST_BLOCK=""
+    emit "STALE_VIOLATION=GATE_RUN_BLOCK_MISSING — gate khong co marker '===== GATE RUN (TMO audit) ====='"
+  fi
+  gate_last_exit() { # $1=ten khoa -> gia tri lan cuoi, hoac NONNUM(...) neu khong phai so
+    local _rk="$1" _rv
+    if [ -n "${GATE_BLOCK_MISSING:-}" ]; then printf 'NONNUM(GATE_RUN_BLOCK_MISSING)'; return 0; fi
+    _rv=$(printf '%s\n' "$GATE_LAST_BLOCK" | grep -oE "^${_rk}=.*" 2>/dev/null | tail -1 | cut -d= -f2-)
+    case "$_rv" in
+      ''|*[!0-9]*) [ -z "$_rv" ] || printf 'NONNUM(%s)' "$_rv" ;;
+      *) printf '%s' "$_rv" ;;
+    esac
+  }
   # uu tien nhanh typecheck_v2 neu co (nhanh chay lai tren trang thai file hien tai)
-  TC_KEY="typecheck_exit"
-  TC_VAL=$(grep -oE '^typecheck_v2_exit=-?[0-9]+' "$GATE" | tail -1 | cut -d= -f2)
-  if [ -n "${TC_VAL:-}" ]; then TC_KEY="typecheck_v2_exit"; else TC_VAL=$(grep -oE '^typecheck_exit=-?[0-9]+' "$GATE" | tail -1 | cut -d= -f2); fi
-  LINT_VAL=$(grep -oE '^lint_exit=-?[0-9]+' "$GATE" | tail -1 | cut -d= -f2)
-  TEST_VAL=$(grep -oE '^test_exit=-?[0-9]+' "$GATE" | tail -1 | cut -d= -f2)
-  DBQ_VAL=$(grep -oE '^dbq_test_exit=-?[0-9]+' "$GATE" | tail -1 | cut -d= -f2)
-  VAL_VAL=$(grep -oE '^validator_exit=-?[0-9]+' "$GATE" | tail -1 | cut -d= -f2)
-  NEG_VAL=$(grep -oE '^negative_exit=-?[0-9]+' "$GATE" | tail -1 | cut -d= -f2)
+  TC_RAW=$(gate_last_exit typecheck_v2_exit)
+  if [ -n "$TC_RAW" ]; then TC_KEY="typecheck_v2_exit"; TC_VAL="$TC_RAW";
+  else TC_KEY="typecheck_exit"; TC_VAL=$(gate_last_exit typecheck_exit); fi
+  LINT_VAL=$(gate_last_exit lint_exit)
+  TEST_VAL=$(gate_last_exit test_exit)
+  DBQ_VAL=$(gate_last_exit dbq_test_exit)
+  VAL_VAL=$(gate_last_exit validator_exit)
+  NEG_VAL=$(gate_last_exit negative_exit)
   emit "gate_final_mtime: $(date -r "$GATE" -Is 2>/dev/null || echo unknown)"
   emit "gate_final_epoch: $GATE_MTIME"
   emit "newest_source_file: $SRC_FILE"
@@ -127,6 +154,7 @@ else
   emit "$TC_KEY=$TC_VAL lint_exit=$LINT_VAL test_exit=$TEST_VAL dbq_test_exit=$DBQ_VAL validator_exit=$VAL_VAL negative_exit=$NEG_VAL"
   GATE_FRESH=1
   STALE_REASONS=""
+  if [ -n "${GATE_BLOCK_MISSING:-}" ]; then GATE_FRESH=0; STALE_REASONS="$STALE_REASONS GATE_RUN_BLOCK_MISSING"; fi
   if [ "$GATE_MTIME" -lt "$SRC_NEWEST" ]; then GATE_FRESH=0; STALE_REASONS="$STALE_REASONS GATE_OLDER_THAN_SOURCE"; fi
   for kv in "$TC_KEY=${TC_VAL:-}" "lint_exit=${LINT_VAL:-}" "test_exit=${TEST_VAL:-}" "dbq_test_exit=${DBQ_VAL:-}" "validator_exit=${VAL_VAL:-}" "negative_exit=${NEG_VAL:-}"; do
     k=${kv%%=*}; v=${kv#*=}

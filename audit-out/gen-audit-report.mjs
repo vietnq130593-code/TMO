@@ -114,6 +114,21 @@ if (dbq) {
   if (dbq.fail !== 0) warn(`DBQ_FAIL ${dbq.fail}`);
 }
 
+// --- anchor: bằng chứng report gắn với cây source nào ---
+// SENTINEL-FIX: artifact JSON có fingerprint nhưng AUDIT-REPORT.md (thứ người đọc
+// thực sự mở) thì KHÔNG — chuỗi fail-closed đứt ở mắt xích cuối. Nay đọc anchor
+// TỪ matrix artifact (không gõ tay) và fail-closed khi thiếu/lệch.
+const sourceAnchors = (matrix?.perSource ?? []).map((p) => p?.anchor).filter((a) => typeof a === 'string' && a.length > 0);
+const distinctAnchors = [...new Set(sourceAnchors)];
+const reportAnchor = typeof matrix?.liveFingerprint === 'string' ? matrix.liveFingerprint : null;
+if (!reportAnchor) warn('ANCHOR_MISSING_LIVE_FINGERPRINT');
+if (sourceAnchors.length === 0) warn('ANCHOR_MISSING_ALL_SOURCES');
+if (distinctAnchors.length > 1) warn(`ANCHOR_MISMATCH_REPORT ${distinctAnchors.join(', ')}`);
+if (reportAnchor && sourceAnchors.length > 0 && !sourceAnchors.includes(reportAnchor)) {
+  warn(`ANCHOR_STALE_REPORT live=${reportAnchor} sources=${distinctAnchors.join(', ')}`);
+}
+if (matrix && matrix.anchorConsistent !== true) warn(`ANCHOR_INCONSISTENT ${matrix.anchorConsistent}`);
+
 const md = [];
 const P = (s) => md.push(s);
 
@@ -126,7 +141,12 @@ const qg = (() => {
     return {
       // ten field CU giu nguyen de validator hien hanh so sanh duoc
       tscExit: num('typecheck_exit'), eslintExit: num('lint_exit'),
-      lintFiles: null, errorCount: num('lint_problem_lines'), warningCount: num('lint_problem_lines'),
+      // SENTINEL-FIX: tach 3 khoa doc lap tu gate-final.txt. Truoc day generator gan
+      // lint_problem_lines cho ca errorCount VA warningCount, con lintFiles hardcode null
+      // => validator (validate-report.mjs) doi chieu errorCount voi lint_errors,
+      // warningCount voi lint_warnings, lintFiles voi lint_files nen LUON MISMATCH
+      // expected=<so that> actual=null. Fail-closed dang chong mot truong hop khong ton tai.
+      lintFiles: num('lint_files'), errorCount: num('lint_errors'), warningCount: num('lint_warnings'),
       testExit: num('test_exit'),
       // nguon that bi gate-final.txt bo sung
       typecheckV2Exit: num('typecheck_v2_exit'), typecheckV2Errors: num('typecheck_v2_errors'),
@@ -135,6 +155,15 @@ const qg = (() => {
       testsFail: (t.match(/^\s*(\d+) fail$/m) || [])[1] ?? null,
       expectCalls: (t.match(/^\s*(\d+) expect\(\) calls$/m) || [])[1] ?? null,
       testFiles: (t.match(/Ran \d+ tests across (\d+) files/) || [])[1] ?? null,
+      // SENTINEL-FIX: gate PHAI ghim them 2 khoa nay. head_sha/head_short
+      // trong gate-final.txt cho biet evidence do chay tren commit nao;
+      // scope_fingerprint cho biet CAY SOURCE tai thoi diem do. Commit khong
+      // doi <-> file trong SCOPE khong doi, nen head_sha GION het khi sua
+      // src/ ma chua commit => gate cu "xanh" tren cay da doi. Validator se
+      // fail-closed khi 2 khoa nay lech voi cay source live.
+      headSha: (t.match(/^head_sha=([0-9a-f]{7,40})\s*$/m) || [])[1] ?? null,
+      headShort: (t.match(/^head_short=([0-9a-f]+)\s*$/m) || [])[1] ?? null,
+      fingerprint: (t.match(/^scope_fingerprint=(\S+)\s*$/m) || [])[1] ?? null,
       raw: t,
     };
   } catch (e) { warn(`QGFILE ${e.message}`); return null; }
@@ -150,6 +179,10 @@ if (qg) {
   if (qg.eslintExit !== 0) warn(`ESLINT_EXIT ${qg.eslintExit}`);
   if (qg.testExit !== 0) warn(`TEST_EXIT ${qg.testExit}`);
   if (qg.errorCount !== 0) warn(`LINT_ERRORS ${qg.errorCount}`);
+  // SENTINEL-FIX: warningCount truoc day == errorCount nen warning bao gio cung
+  // bi gan sai so; tach rieng o day de 2 khoa khong the che nhau.
+  if (qg.warningCount !== 0) warn(`LINT_WARNINGS ${qg.warningCount}`);
+  if (qg.lintFiles !== 0) warn(`LINT_FILES ${qg.lintFiles}`);
   if (qg.testsFail !== '0') warn(`TEST_FAIL ${qg.testsFail}`);
 } else warn('NO_QUALITY_GATE');
 
@@ -163,6 +196,7 @@ P('# BÁO CÁO AUDIT HỆ THỐNG TMO');
 P('');
 P(`Sinh tự động bởi \`audit-out/gen-audit-report.mjs\` — mọi con số dưới đây được ĐỌC TỪ artifact JSON, không gõ tay.`);
 P(`Phạm vi phân tích: từ \`${rf?.scopeSince ?? 'n/a'}\` đến lúc sinh báo cáo.`);
+P(`Anchor cây source (bằng chứng máy, đọc từ artifact — không gõ tay): \`${reportAnchor}\` · ${sourceAnchors.length}/${(matrix?.sources ?? []).length} artifact nguồn cùng anchor · anchorConsistent=${matrix?.anchorConsistent}.`);
 P('');
 
 // ---------- §1 ----------
@@ -289,7 +323,7 @@ if (ledgerStats.openP0P1P2.length) {
 const qgPass = qg?.testsPass == null ? null : Number(qg.testsPass);
 const qgFail = qg?.testsFail == null ? null : Number(qg.testsFail);
 const qgTotal = qgPass == null ? 'n/a' : String((qgPass || 0) + (qgFail || 0));
-const sec4Line = `Ledger: ${ledgerStats.rows} dòng — ${ledgerStats.open} MỞ (${ledgerStats.openIds.join(', ') || 'không có'}), ${ledgerStats.closed} ĐÓNG, P0/P1/P2 còn mở: ${ledgerStats.openP0P1P2.join(', ') || 'không có'} · quality gate: lint=${qg?.eslintExit ?? 'n/a'} · test=${qg?.testExit ?? 'n/a'} (${qgPass ?? 'n/a'}/${qgTotal}) · typecheck=${qg?.typecheckV2Exit ?? qg?.tscExit ?? 'n/a'} · build=${qg?.buildExit ?? 'n/a'} · E2E ok=${matrix?.ok} · generator problems=${problems.length}${problems.length ? ` (${problems.slice(0, 3).join('; ')})` : ''}.`;
+const sec4Line = `Ledger: ${ledgerStats.rows} dòng — ${ledgerStats.open} MỞ (${ledgerStats.openIds.join(', ') || 'không có'}), ${ledgerStats.closed} ĐÓNG, P0/P1/P2 còn mở: ${ledgerStats.openP0P1P2.join(', ') || 'không có'} · quality gate: lint=${qg?.eslintExit ?? 'n/a'} · test=${qg?.testExit ?? 'n/a'} (${qgPass ?? 'n/a'}/${qgTotal}) · typecheck=${qg?.typecheckV2Exit ?? qg?.tscExit ?? 'n/a'} · build=${qg?.buildExit ?? 'n/a'} · anchor=${reportAnchor} · E2E ok=${matrix?.ok} · generator problems=${problems.length}${problems.length ? ` (${problems.slice(0, 3).join('; ')})` : ''}.`;
 P('## §4. Kết thúc');
 P('');
 P(sec4Line);
@@ -300,6 +334,7 @@ P('## §5. Machine-check — số liệu thô từ artifact');
 P('');
 P('```json');
 P(JSON.stringify({
+  anchor: { liveFingerprint: reportAnchor, anchorConsistent: matrix?.anchorConsistent ?? null, sourceAnchors, distinctAnchorCount: distinctAnchors.length, sourcesTotal: (matrix?.sources ?? []).length, anchoredSources: sourceAnchors.length },
   matrix: matrix ? { ok: matrix.ok, rows: matrix.rows, passed: matrix.passed, failed: matrix.failed, pct: matrix.pct, expectedRows: matrix.expectedRows, problems: (matrix.problems ?? []).length } : null,
   toolLifecycle: el ? { totalSteps: el.totalSteps, passedSteps: el.passedSteps, failedSteps: el.failedSteps, ok: el.ok, assertions: elA.n, assertionFail: elA.bad } : null,
   skillLifecycle: es ? { stepsTotal: es.stepsTotal, stepsPassed: es.stepsPassed, assertions: es.assertions, assertionsPassed: es.assertionsPassed, ok: es.ok } : null,
@@ -309,7 +344,7 @@ P(JSON.stringify({
   dbQuery: { enableDbQueryDefault: flagDefault, flagLine, cases: dbq?.total, pass: dbq?.pass, fail: dbq?.fail, selectReturnedRealData: dbq?.selectReturnedRealData },
   ledger: ledgerStats,
   reportMeta: { sec4Line, sec4IsSingleLine: true },
-  qualityGate: qg ? { tscExit: qg.tscExit, eslintExit: qg.eslintExit, lintFiles: qg.lintFiles, errorCount: qg.errorCount, warningCount: qg.warningCount, testExit: qg.testExit, testsPass: qg.testsPass, testsFail: qg.testsFail, expectCalls: qg.expectCalls, testFiles: qg.testFiles, typecheckV2Exit: qg.typecheckV2Exit, typecheckV2Errors: qg.typecheckV2Errors, buildExit: qg.buildExit, dbqTestExit: qg.dbqTestExit } : null,
+  qualityGate: qg ? { tscExit: qg.tscExit, eslintExit: qg.eslintExit, lintFiles: qg.lintFiles, errorCount: qg.errorCount, warningCount: qg.warningCount, testExit: qg.testExit, testsPass: qg.testsPass, testsFail: qg.testsFail, expectCalls: qg.expectCalls, testFiles: qg.testFiles, typecheckV2Exit: qg.typecheckV2Exit, typecheckV2Errors: qg.typecheckV2Errors, buildExit: qg.buildExit, dbqTestExit: qg.dbqTestExit, headSha: qg.headSha, headShort: qg.headShort, fingerprint: qg.fingerprint } : null,
 }, null, 2));
 P('```');
 P('');

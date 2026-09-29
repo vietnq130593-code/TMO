@@ -207,4 +207,25 @@ docs/TMO_WEEKLY_REPORT.md
 
 # Aider chat history (Task 46 — không track chat history cá nhân vào repo)
 .aider*
-audit-out/
+# Audit workspace: dùng wildcard (không phải audit-out/) để vẫn re-include được
+# toolchain — git bỏ qua re-include nếu chính thư mục cha bị exclude (giống /scripts/*).
+audit-out/*
+# NGOẠI LỆ (round-6): 6 file TOOLCHAIN audit — evidence (JSON/PNG/log) KHÔNG track,
+# nhưng tool sinh evidence THÌ PHẢI đi kèm repo, thiếu 1 file là chuỗi fail-closed đứt:
+# collect-evidence.sh gọi negative-tests.mjs + validate-report.mjs;
+# validate-report.mjs import artifact-meta.mjs (lõi anchor fingerprint);
+# run-gate.sh là bộ chạy quality-gate sinh gate-final.txt (head_sha/scope_fingerprint/
+# lint_errors/lint_warnings/lint_files) mà cả 3 script còn lại parse.
+!audit-out/artifact-meta.mjs
+!audit-out/negative-tests.mjs
+!audit-out/run-gate.sh
+!audit-out/collect-evidence.sh
+!audit-out/gen-audit-report.mjs
+!audit-out/validate-report.mjs
+
+# Round-5 self-destruct recipe: flag runtime của timed keepalive-off
+# (chứa epoch timestamp hết hạn — tạm thời, không phải cấu hình)
+.keepalive-off
+
+# Audit work-product cache (tsc --showConfig/diagnostics cache — runtime, sinh lại)
+.next-audit-wp/

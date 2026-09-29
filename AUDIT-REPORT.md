@@ -2,6 +2,7 @@
 
 Sinh tự động bởi `audit-out/gen-audit-report.mjs` — mọi con số dưới đây được ĐỌC TỪ artifact JSON, không gõ tay.
 Phạm vi phân tích: từ `2026-09-29T04:25:23.706Z` đến lúc sinh báo cáo.
+Anchor cây source (bằng chứng máy, đọc từ artifact — không gõ tay): `6937c4a+sc:5aad1411d744` · 5/5 artifact nguồn cùng anchor · anchorConsistent=true.
 
 ## §1. Ma trận E2E hợp nhất
 
@@ -118,12 +119,26 @@ Nguồn: `reconcile-final.json`. Trong 10 run, có **3** run `complete=false` ho
 
 ## §4. Kết thúc
 
-Ledger: 10 dòng — 1 MỞ (9), 9 ĐÓNG, P0/P1/P2 còn mở: không có · quality gate: lint=0 · test=0 (238/238) · typecheck=0 · build=137 · E2E ok=true · generator problems=0.
+Ledger: 10 dòng — 1 MỞ (9), 9 ĐÓNG, P0/P1/P2 còn mở: không có · quality gate: lint=0 · test=0 (238/238) · typecheck=0 · build=137 · anchor=6937c4a+sc:5aad1411d744 · E2E ok=true · generator problems=0.
 
 ## §5. Machine-check — số liệu thô từ artifact
 
 ```json
 {
+  "anchor": {
+    "liveFingerprint": "6937c4a+sc:5aad1411d744",
+    "anchorConsistent": true,
+    "sourceAnchors": [
+      "6937c4a+sc:5aad1411d744",
+      "6937c4a+sc:5aad1411d744",
+      "6937c4a+sc:5aad1411d744",
+      "6937c4a+sc:5aad1411d744",
+      "6937c4a+sc:5aad1411d744"
+    ],
+    "distinctAnchorCount": 1,
+    "sourcesTotal": 5,
+    "anchoredSources": 5
+  },
   "matrix": {
     "ok": true,
     "rows": 33,
@@ -232,24 +247,27 @@ Ledger: 10 dòng — 1 MỞ (9), 9 ĐÓNG, P0/P1/P2 còn mở: không có · qua
     "openP0P1P2": []
   },
   "reportMeta": {
-    "sec4Line": "Ledger: 10 dòng — 1 MỞ (9), 9 ĐÓNG, P0/P1/P2 còn mở: không có · quality gate: lint=0 · test=0 (238/238) · typecheck=0 · build=137 · E2E ok=true · generator problems=0.",
+    "sec4Line": "Ledger: 10 dòng — 1 MỞ (9), 9 ĐÓNG, P0/P1/P2 còn mở: không có · quality gate: lint=0 · test=0 (238/238) · typecheck=0 · build=137 · anchor=6937c4a+sc:5aad1411d744 · E2E ok=true · generator problems=0.",
     "sec4IsSingleLine": true
   },
   "qualityGate": {
     "tscExit": 0,
     "eslintExit": 0,
-    "lintFiles": null,
+    "lintFiles": 0,
     "errorCount": 0,
     "warningCount": 0,
     "testExit": 0,
     "testsPass": "238",
     "testsFail": "0",
-    "expectCalls": "584",
+    "expectCalls": null,
     "testFiles": "17",
     "typecheckV2Exit": 0,
     "typecheckV2Errors": 0,
     "buildExit": 137,
-    "dbqTestExit": 0
+    "dbqTestExit": 0,
+    "headSha": "6937c4a1a2c98c458c1a3712271fcebc7eb2178b",
+    "headShort": "6937c4a",
+    "fingerprint": "6937c4a+sc:5aad1411d744"
   }
 }
 ```

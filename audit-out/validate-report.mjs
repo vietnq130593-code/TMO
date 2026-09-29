@@ -9,6 +9,7 @@
 // ============================================================================
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { sourceFingerprint } from './artifact-meta.mjs';
 
 const OUT = new URL('.', import.meta.url).pathname;
 const REPO = join(OUT, '..');
@@ -90,6 +91,44 @@ eq('matrix.passed', matrix?.passed, mc.matrix?.passed);
 eq('matrix.failed', matrix?.failed, mc.matrix?.failed);
 eq('matrix.problems', (matrix?.problems ?? []).length, mc.matrix?.problems);
 
+// --- anchor: report phải mang đúng cây source (fail-closed) ---
+// SENTINEL-FIX: trước đây validator KHÔNG hề kiểm anchor ⇒ AUDIT-REPORT.md có thể
+// "xanh" trong khi evidence đã cũ. Nay kiểm 3 tầng: (1) anchor in trong
+// MACHINE-CHECK khớp artifact nguồn, (2) khớp cây source LIVE, (3) anchor phải xuất
+// hiện trong phần văn xuôi đầu báo cáo chứ không chỉ nấp trong JSON block.
+const reportAnchor = typeof matrix?.liveFingerprint === 'string' ? matrix.liveFingerprint : null;
+let treeAnchor = null;
+try { const s = sourceFingerprint(); if (s?.head && s.head !== 'unknown') treeAnchor = s.fingerprint; } catch { treeAnchor = null; }
+const mcAnchors = Array.isArray(mc.anchor?.sourceAnchors) ? mc.anchor.sourceAnchors : null;
+eq('anchor.liveFingerprint', reportAnchor, mc.anchor?.liveFingerprint);
+eq('anchor.anchorConsistent', matrix?.anchorConsistent, mc.anchor?.anchorConsistent);
+eq('anchor.anchoredSources', mcAnchors?.length ?? null, mc.anchor?.anchoredSources);
+if (!reportAnchor) problems.push('ANCHOR_MISSING_LIVE_FINGERPRINT');
+if (!mcAnchors || mcAnchors.length === 0) problems.push('ANCHOR_MISSING_IN_MC');
+else {
+  if (new Set(mcAnchors).size > 1) problems.push(`ANCHOR_MISMATCH_IN_MC ${[...new Set(mcAnchors)].join(', ')}`);
+  if (reportAnchor && !mcAnchors.includes(reportAnchor)) problems.push(`ANCHOR_STALE_IN_MC report=${reportAnchor} mc=${mcAnchors.join(', ')}`);
+}
+if (treeAnchor && reportAnchor && treeAnchor !== reportAnchor) problems.push(`ANCHOR_STALE_VS_TREE report=${reportAnchor} tree=${treeAnchor}`);
+// --- GATE-LEVEL ANCHOR: gate-final.txt phai cung cay source voi report (fail-closed)
+// SENTINEL-FIX: kiem anchor o tren chi bat anchor cua matrix/artifact, CHUA bat
+// anchor cua chinh gate-final.txt — noi evidence typecheck/lint/test/build that su
+// chay. Gate chi ghi head_sha nen sua 1 file trong SCOPE ma CHUA COMMIT thi
+// head giong het => gate van "xanh" tren cay da doi. Nay doi chieu ca head va
+// scope_fingerprint cua gate voi cay source LIVE.
+const gateHead = (qgTxt.match(/^head_sha=([0-9a-f]{7,40})\s*$/m) || [])[1] ?? null;
+const gateFp = (qgTxt.match(/^scope_fingerprint=(\S+)\s*$/m) || [])[1] ?? null;
+let liveHead = null;
+try { liveHead = sourceFingerprint()?.head ?? null; } catch { liveHead = null; }
+eq('gate.headSha', gateHead, mc.qualityGate?.headSha ?? null);
+eq('gate.fingerprint', gateFp, mc.qualityGate?.fingerprint ?? null);
+if (!gateHead) problems.push('GATE_HEAD_MISSING');
+if (!gateFp) problems.push('GATE_FINGERPRINT_MISSING');
+if (gateHead && liveHead && gateHead !== liveHead) problems.push(`GATE_HEAD_STALE gate=${gateHead} live=${liveHead}`);
+if (treeAnchor && gateFp && gateFp !== treeAnchor) problems.push(`GATE_STALE_VS_TREE gate=${gateFp} tree=${treeAnchor}`);
+const mdProse = md.split('```json')[0];
+if (!reportAnchor || !mdProse.includes(reportAnchor)) problems.push(`ANCHOR_NOT_IN_REPORT_HEADER ${reportAnchor}`);
+
 // toolLifecycle — tự đếm assertion từ semantics/steps
 // SENTINEL-FIX-1: trước đây assertions/assertionFail chỉ được in ra report mà KHÔNG
 // có ai đối chiếu lại (lỗ hổng kiểm định). Nay tự đếm độc lập từ
@@ -170,14 +209,22 @@ P(`DBQ_CASES ${caseArr.length} bad=${badCase.length}`);
 if (badCase.length) problems.push(`DBQ_BAD_CASE ${badCase.length}`);
 
 // qualityGate — TU PARSE gate-final.txt (key THAT: typecheck_exit, typecheck_v2_exit,
-// lint_exit, lint_problem_lines, test_exit, build_exit, dbq_test_exit). KHONG tinh lai tu generator.
-const qgLint = num(qgTxt, 'lint_problem_lines');
+// lint_exit, lint_errors, lint_warnings, lint_files, test_exit, build_exit, dbq_test_exit).
+// KHONG tinh lai tu generator.
+// SENTINEL-FIX: truoc day qgLint (lint_problem_lines) duoc gan cho CA errorCount
+// VA warningCount -> validator KHONG BAO GIO bat loi ca 2 so do bang nhau, va
+// lint_files (so file co van de) hoan toan khong duoc kiem. Nay tach 3 key rieng,
+// moi key thieu -> fail-closed (eq() bao loi expected=null actual=<so>).
+const qgLintErrors = num(qgTxt, 'lint_errors');
+const qgLintWarnings = num(qgTxt, 'lint_warnings');
+const qgLintFiles = num(qgTxt, 'lint_files');
 eq('qg.tscExit', num(qgTxt, 'typecheck_exit'), mc.qualityGate?.tscExit);
 eq('qg.typecheckV2Exit', num(qgTxt, 'typecheck_v2_exit'), mc.qualityGate?.typecheckV2Exit);
 eq('qg.typecheckV2Errors', num(qgTxt, 'typecheck_v2_errors'), mc.qualityGate?.typecheckV2Errors);
 eq('qg.eslintExit', num(qgTxt, 'lint_exit'), mc.qualityGate?.eslintExit);
-eq('qg.errorCount', qgLint, mc.qualityGate?.errorCount);
-eq('qg.warningCount', qgLint, mc.qualityGate?.warningCount);
+eq('qg.errorCount', qgLintErrors, mc.qualityGate?.errorCount);
+eq('qg.warningCount', qgLintWarnings, mc.qualityGate?.warningCount);
+eq('qg.lintFiles', qgLintFiles, mc.qualityGate?.lintFiles);
 eq('qg.testExit', num(qgTxt, 'test_exit'), mc.qualityGate?.testExit);
 eq('qg.dbqTestExit', num(qgTxt, 'dbq_test_exit'), mc.qualityGate?.dbqTestExit);
 eq('qg.buildExit', num(qgTxt, 'build_exit'), mc.qualityGate?.buildExit);
