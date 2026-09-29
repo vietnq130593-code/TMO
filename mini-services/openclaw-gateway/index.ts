@@ -136,7 +136,81 @@ function killExistingGateway(): void {
   }
 }
 
+// ==================== AGENT MODEL CONFIG (self-healing) ====================
+// FIX 2026-09-29 (vòng 3 quan sát): gateway binary mặc định dùng model
+// openai/gpt-5.5 với auth store trống → mọi chat turn (bridge tools, chat
+// fallback) chết với ProviderAuthError "No API key found for provider openai".
+// TMO có sẵn ZEN_API_KEY_1..3 (env) cho endpoint OpenAI-compatible
+// https://opencode.ai/zen/v1 — chỉ space-bunny-free còn mở qua HTTP API với
+// oc_sk key (các model *-free khác bị FreeTierError policy ~2026-09-25).
+// Nếu ~/.openclaw/openclaw.json CHƯA tồn tại → tôn trọng config của user,
+// KHÔNG đụng đến. Thiếu → ghi config mặc định (zen provider + model
+// space-bunny-free + tools.profile full) trước khi spawn binary.
+const OPENCLAW_CONFIG_DIR = resolve(process.env.HOME || "/home/z", ".openclaw");
+const OPENCLAW_CONFIG_FILE = resolve(OPENCLAW_CONFIG_DIR, "openclaw.json");
+
+const TMO_DEFAULT_OPENCLAW_CONFIG = `{
+  // TMO auto-generated (mini-services/openclaw-gateway/index.ts) — gateway
+  // embedded-agent cần provider + model chạy được; mặc định openai/gpt-5.5
+  // không có key sẽ fail mọi chat turn. Đổi model: sửa agents.defaults.model.
+  "tools": { "profile": "full" },
+  "models": {
+    "providers": {
+      "zen": {
+        "baseUrl": "https://opencode.ai/zen/v1",
+        "apiKey": "\${ZEN_API_KEY_1}",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "space-bunny-free",
+            "name": "Space Bunny Free (zen HTTP)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 128000,
+            "maxTokens": 16384,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "compat": { "requiresReasoningContentOnAssistantMessages": true }
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "models": { "zen/space-bunny-free": { "alias": "bunny" } },
+      "model": { "primary": "zen/space-bunny-free" },
+      "utilityModel": "zen/space-bunny-free"
+    }
+  }
+}
+`;
+
+function ensureOpenClawConfig(): void {
+  try {
+    if (existsSync(OPENCLAW_CONFIG_FILE)) {
+      // Config đã có (user tùy biến hoặc lần chạy trước) — không ghi đè.
+      return;
+    }
+    if (!existsSync(OPENCLAW_CONFIG_DIR)) {
+      fs.mkdirSync(OPENCLAW_CONFIG_DIR, { recursive: true });
+    }
+    writeFileSync(OPENCLAW_CONFIG_FILE, TMO_DEFAULT_OPENCLAW_CONFIG, "utf-8");
+    console.log(
+      `[openclaw-gateway] Đã ghi config mặc định ${OPENCLAW_CONFIG_FILE} (zen/space-bunny-free + tools.profile full) — model gateway-agent chạy được ngay không cần openai key`
+    );
+  } catch (err) {
+    // Best-effort: thiếu config thì gateway vẫn chạy (chỉ agent model fail
+    // như trước) — không được phép chặn toàn bộ gateway vì lỗi phụ.
+    console.warn(
+      `[openclaw-gateway] Không ghi được openclaw.json mặc định: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
 function startGateway(): void {
+  // Self-healing: đảm bảo agent model config tồn tại TRƯỚC khi spawn binary
+  // (binary watch file này nhưng tạo sẵn khỏi reliance vào hot-reload).
+  ensureOpenClawConfig();
   // Root-cause fix: kill the previous MANAGER first (prevents respawn ping-pong)
   killExistingManager();
   // Kill any existing gateway from a previous run/hot-reload
@@ -172,6 +246,17 @@ function startGateway(): void {
       env: {
         ...process.env,
         OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR || undefined,
+        // FIX 2026-09-29 (vòng 3 quan sát — tools-invoke GatewayExplicitAuthRequiredError):
+        // App process export OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789 (biến của APP
+        // để tự gọi gateway). Gateway binary inherit biến này → mọi child CLI call bên
+        // trong gateway (tools-invoke cho session tools như sessions_list) coi đó là
+        // "gateway url override từ env" → theo URL-override safety rule của openclaw,
+        // override từ env CHỈ được phép dùng credential từ env (OPENCLAW_GATEWAY_TOKEN/
+        // PASSWORD) — auth mode "none" không có cả hai → mọi tools-invoke chết với
+        // "gateway url override requires explicit credentials". Gateway này chạy đúng
+        // port default 18789 + có lock discovery (/tmp/openclaw-*/gateway.*.lock) →
+        // strip biến để child calls dùng LOCAL MODE discovery, không cần credential.
+        OPENCLAW_GATEWAY_URL: undefined,
       },
     }
   );
