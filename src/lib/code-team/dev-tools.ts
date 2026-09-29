@@ -2572,12 +2572,58 @@ interface DevTask {
   updatedAt: string
 }
 
-const globalForTasks = globalThis as unknown as { __devTasks?: Map<string, DevTask>; __devTaskCounter?: number }
+const globalForTasks = globalThis as unknown as {
+  __devTasks?: Map<string, DevTask>
+  __devTaskCounter?: number
+  /** R7-M2 (S5): mốc sweep gần nhất — rate-limit 60s chống quét lại vô ích */
+  __devTasksSweptAt?: number
+}
+
+/**
+ * R7-M2 (S5, audit R7-M1): __devTasks là globalThis Map mọc vô hạn (per
+ * decompose_task subtask, ~1-3KB mỗi entry, không TTL/không cap). DB Todo mới
+ * là store bền vững (FIX 2026-09-14 #4) — in-memory chỉ còn legacy fallback
+ * → dọn an toàn: TTL 24h theo updatedAt + cap 500 (FIFO xóa cũ nhất).
+ * Fail-open tuyệt đối: lỗi sweep không được phép ảnh hưởng flow task.
+ */
+const DEV_TASK_TTL_MS = 24 * 3600_000
+const DEV_TASK_MAX_ENTRIES = 500
+const DEV_TASK_SWEEP_MIN_INTERVAL_MS = 60_000
+
+function sweepDevTaskStore(store: Map<string, DevTask>): void {
+  try {
+    const now = Date.now()
+    // Vừa sweep gần đây + chưa vượt cap → khỏi quét lại (đỡ quét trên read path)
+    if (
+      store.size <= DEV_TASK_MAX_ENTRIES &&
+      globalForTasks.__devTasksSweptAt != null &&
+      now - globalForTasks.__devTasksSweptAt < DEV_TASK_SWEEP_MIN_INTERVAL_MS
+    ) {
+      return
+    }
+    globalForTasks.__devTasksSweptAt = now
+    // TTL: task không đụng đến quá 24h → dọn (updatedAt hỏng → giữ nguyên)
+    for (const [id, task] of store) {
+      const ts = Date.parse(task.updatedAt)
+      if (!Number.isNaN(ts) && now - ts > DEV_TASK_TTL_MS) store.delete(id)
+    }
+    // Cap: còn vượt → xóa cũ nhất theo insertion order của Map (FIFO)
+    while (store.size > DEV_TASK_MAX_ENTRIES) {
+      const oldest = store.keys().next().value
+      if (oldest === undefined) break
+      store.delete(oldest)
+    }
+  } catch {
+    // fail-open — store giữ nguyên
+  }
+}
+
 function getTaskStore(): Map<string, DevTask> {
   if (!globalForTasks.__devTasks) {
     globalForTasks.__devTasks = new Map()
     globalForTasks.__devTaskCounter = 0
   }
+  sweepDevTaskStore(globalForTasks.__devTasks)
   return globalForTasks.__devTasks
 }
 function nextTaskId(): string {

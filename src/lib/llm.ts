@@ -3626,9 +3626,16 @@ export async function callUtilityLLM(
     // chờ thêm 1 chuỗi; 5xx fail nhanh nên retry rẻ). Bằng chứng
     // cùng cửa sổ vận hành: chu kỳ 14 SENTINEL chết sau 1 lần HTTP 503.
     if (zen && !zen.content
-        && /HTTP 5\d\d/i.test(zen.error ?? '')) {
-      console.warn(`[LLM] Utility-core Zen ${utilModel} HTTP 5xx (lần 1) — retry 1 lần với key kế — task: ${taskLabel}: ${String(zen.error).slice(0, 100)}`)
-      zen = await callZenProvider(prompt, systemPrompt, utilModel, utilOptions, `utility-core-retry:${taskLabel}`)
+        && /HTTP 5\d\d|Zen empty response/i.test(zen.error ?? '')) {
+      // ROUND-7: thêm empty-response (reasoning starvation) — mirror fix agent
+      // path; utility (compression/evaluator) starvation từng làm compression
+      // LLM fail 15/15 lần (TASK 55 evidence).
+      const isEmptyResponse = /Zen empty response/i.test(zen.error ?? '')
+      const retryOpts = isEmptyResponse && !utilOptions?.reasoningEffort
+        ? { ...utilOptions, reasoningEffort: 'high' }
+        : utilOptions
+      console.warn(`[LLM] Utility-core Zen ${utilModel} ${isEmptyResponse ? 'reasoning starvation (0 content)' : 'HTTP 5xx'} (lần 1) — retry 1 lần${isEmptyResponse ? ' effort→high' : ' key kế'} — task: ${taskLabel}: ${String(zen.error).slice(0, 100)}`)
+      zen = await callZenProvider(prompt, systemPrompt, utilModel, retryOpts, `utility-core-retry:${taskLabel}`)
     }
     if (zen && zen.content) {
       console.log(`[LLM] Utility-core dùng Zen ${utilModel} ✓ (${zen.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
@@ -3733,7 +3740,18 @@ export async function callLLM(
     const utilOptions: LLMCallOptions = {
       ...options,
     }
-    const zen = await callZenProvider(prompt, systemPrompt, utilModel, utilOptions, `utility:${taskLabel}`)
+    let zen = await callZenProvider(prompt, systemPrompt, utilModel, utilOptions, `utility:${taskLabel}`)
+    // ROUND-7: retry empty-response/5xx 1 lần — mirror utility-core + agent path
+    // (reasoning starvation từng giết 15/15 compression call — TASK 55).
+    if (zen && !zen.content
+        && /HTTP 5\d\d|Zen empty response/i.test(zen.error ?? '')) {
+      const isEmptyResponse = /Zen empty response/i.test(zen.error ?? '')
+      const retryOpts = isEmptyResponse && !utilOptions?.reasoningEffort
+        ? { ...utilOptions, reasoningEffort: 'high' }
+        : utilOptions
+      console.warn(`[LLM] Utility Zen ${utilModel} ${isEmptyResponse ? 'reasoning starvation (0 content)' : 'HTTP 5xx'} (lần 1) — retry 1 lần${isEmptyResponse ? ' effort→high' : ' key kế'} — task: ${taskLabel}: ${String(zen.error).slice(0, 100)}`)
+      zen = await callZenProvider(prompt, systemPrompt, utilModel, retryOpts, `utility-retry:${taskLabel}`)
+    }
     if (zen && zen.content) {
       console.log(`[LLM] Utility dùng Zen ${utilModel} ✓ (${zen.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
       return zen
@@ -4952,10 +4970,24 @@ export async function callLLMForAgent(
   // 3 key hoàn toàn khỏe (key bị 503 đã được mark cooldown 10s — getZenKey
   // round-robin tự né, retry sẽ sang key khác). 503 = quá tải tạm thời của
   // server; 1 retry trên key kế là thuốc đúng bệnh.
+  // ROUND-7 FIX (2026-09-29 — item tồn đọng Nhiệm vụ 2 "reasoning starvation"):
+  // Zen trả 200 nhưng 0 content (reasoning nuốt hết output — thực tế chu kỳ 21
+  // SENTINEL: reasoning_tokens=1264, 0 chars) KHÔNG khớp regex thời gian/5xx
+  // phía trên → KHÔNG retry → CLI (hồi đó thiếu binary) → failover model TRÙNG
+  // space-bunny-free (bỏ qua nhánh :4984) → TOÀN CHUỖI CHẾT sau 1 attempt, mất
+  // nguyên chu kỳ dù chỉ là starvation thoáng qua. Giờ: empty-response được
+  // retry 1 lần — reasoning starvation thường thoáng qua (non-deterministic),
+  // key round-robin tự xoay key kế; lần retry hạ effort 1 nấc (max→high) nếu
+  // caller không chỉ định rõ — phá vỡ pattern "reasoning nuốt sạch budget"
+  // trong khi vẫn giữ chất lượng suy luận cao.
   if (zen && !zen.content && !(zen.tool_calls && zen.tool_calls.length > 0)
-      && /abort|timeout|etimedout|econnreset|socket hang up|HTTP 5\d\d/i.test(zen.error ?? '')) {
-    console.warn(`[LLM] Agent Zen ${zenModel} lỗi tạm thời (thời gian/5xx — lần 1) — retry 1 lần với key kế: ${String(zen.error).slice(0, 120)}`)
-    zen = await callZenProvider(prompt, systemPrompt, zenModel, options, `agent-retry:${zenModel}`)
+      && /abort|timeout|etimedout|econnreset|socket hang up|HTTP 5\d\d|Zen empty response/i.test(zen.error ?? '')) {
+    const isEmptyResponse = /Zen empty response/i.test(zen.error ?? '')
+    const retryOpts = isEmptyResponse && !options?.reasoningEffort
+      ? { ...options, reasoningEffort: 'high' }
+      : options
+    console.warn(`[LLM] Agent Zen ${zenModel} lỗi tạm thời (${isEmptyResponse ? 'reasoning starvation — 0 content' : 'thời gian/5xx'} — lần 1) — retry 1 lần${isEmptyResponse ? ' effort→high' : ' key kế'}: ${String(zen.error).slice(0, 120)}`)
+    zen = await callZenProvider(prompt, systemPrompt, zenModel, retryOpts, `agent-retry:${zenModel}`)
   }
   if (zen && (zen.content || (zen.tool_calls && zen.tool_calls.length > 0))) {
     const tcCount = zen.tool_calls?.length ?? 0

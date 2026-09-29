@@ -757,6 +757,15 @@ async function detectAndPersistFailurePattern(
     history.push({ type: errorType, message: errorMessage.slice(0, 300) })
     sessionStepErrorHistory.set(key, history.slice(-30))
 
+    // R7-M2 (S3, audit R7-M1): cap số KEY (session::step) 200 — value đã cap
+    // 30 entry sẵn nhưng KEY không bao giờ bị delete → Map mọc vô hạn theo số
+    // session+step. FIFO xóa key cũ nhất (insertion order của Map). Fail-open.
+    while (sessionStepErrorHistory.size > 200) {
+      const oldestKey = sessionStepErrorHistory.keys().next().value
+      if (oldestKey === undefined) break
+      sessionStepErrorHistory.delete(oldestKey)
+    }
+
     // Pattern detection trên CHÍNH session+step này (đúng scoping P1.2: lỗi
     // giữa các step khác nhau không bị tính "repeated" — previousErrors là
     // history trừ lỗi hiện tại vì detect tự cộng currentError vào)

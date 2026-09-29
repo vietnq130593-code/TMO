@@ -157,6 +157,15 @@ export async function notifyAlistaProposalCompleted(
 
     // (5) Notify + khởi động verify (fire-and-forget)
     notified.set(proposalId, Date.now())
+    // R7-M2 (S7, audit R7-M1): sweep entry dedupe cũ hơn NOTIFIED_MEM_MS —
+    // entry quá hạn không còn tác dụng chặn (check :146 đã bỏ qua) nhưng vẫn
+    // nằm trong Map globalThis mãi mãi. Chỉ quệt khi Map đủ lớn (chi phí vặt).
+    if (notified.size > 16) {
+      const cutoff = Date.now() - NOTIFIED_MEM_MS
+      for (const [oldId, ts] of notified) {
+        if (ts < cutoff) notified.delete(oldId)
+      }
+    }
     console.log(
       `[ALISTA][verify] Nhận thông tin: đề xuất #${proposalId} "${proposal.title.slice(0, 100)}" ` +
       `đã HOÀN TẤT (${trigger}) — bắt đầu xác minh lại vấn đề đã được xử lý triệt để chưa`,

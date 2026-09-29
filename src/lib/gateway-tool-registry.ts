@@ -52,6 +52,13 @@ export async function registerToolWithGateway(tool: {
     registeredAt: new Date(),
     source: tool.skillSlug ? 'clawhub' : 'custom',
   })
+
+  // R7-M2 (S6, audit R7-M1): cap 100 — registrationLog push mỗi CALL (không
+  // phải unique tool) nên mọc vô hạn theo tải; giữ 100 mới nhất bằng splice
+  // in-place (giữ reference cho reader đang giữ array).
+  if (registrationLog.length > 100) {
+    registrationLog.splice(0, registrationLog.length - 100)
+  }
   
   // Try Gateway registration (may not be supported)
   try {

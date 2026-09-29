@@ -21,7 +21,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, RefreshCw, Activity, Wrench, ListChecks, AlertTriangle, Flame, Gauge, History } from 'lucide-react'
+import { Loader2, RefreshCw, Activity, Wrench, ListChecks, AlertTriangle, Flame, Gauge, History, Scale, TrendingDown, TrendingUp, Minus } from 'lucide-react'
 
 // ==================== Types (mirror /api/metrics/overview) ====================
 
@@ -121,6 +121,209 @@ function stopReasonBadge(reason: string | null): { label: string; className: str
     default:
       return { label: reason || '—', className: 'bg-stone-900/60 text-stone-400 border-stone-600/50' }
   }
+}
+
+// ==================== R7-M3 — Tool Balance Window (24h/48h) ====================
+// Quan sát tool usage imbalance: so sánh cửa sổ hiện tại vs cửa sổ liền trước,
+// group theo CATEGORY (đọc/sửa/kiểm định/phân công...) — đánh giá hiệu quả các
+// fix tool-economy qua từng cửa sổ (round-7 observation). Poll chậm 30s.
+
+interface WindowCategoryStat {
+  category: string
+  label: string
+  calls: number
+  share: number
+  successRate: number
+}
+
+interface WindowStats {
+  from: string
+  to: string
+  totalCalls: number
+  successRate: number
+  byCategory: WindowCategoryStat[]
+  byTool: Array<{ toolName: string; category: string; calls: number; successRate: number }>
+  balance: { readShare: number; workShare: number; readToWorkRatio: number }
+}
+
+interface WindowData {
+  mode: 'window'
+  windowHours: number
+  generatedAt: string
+  current: WindowStats
+  previous: WindowStats
+}
+
+const CATEGORY_TONE: Record<string, { text: string; bar: string }> = {
+  read: { text: 'text-amber-300', bar: 'bg-amber-500/70' },
+  modify: { text: 'text-emerald-300', bar: 'bg-emerald-500/70' },
+  execute: { text: 'text-orange-300', bar: 'bg-orange-500/70' },
+  verify: { text: 'text-teal-300', bar: 'bg-teal-500/70' },
+  plan: { text: 'text-stone-200', bar: 'bg-stone-400/70' },
+  delegate: { text: 'text-fuchsia-300', bar: 'bg-fuchsia-500/70' },
+  other: { text: 'text-stone-400', bar: 'bg-stone-600/70' },
+}
+
+function fmtRatio(r: number): string {
+  if (r === 0) return '0'
+  if (r === -1) return '∞'
+  return `${r}:1`
+}
+
+function ToolBalanceCard() {
+  const [win, setWin] = useState<'24h' | '48h'>('24h')
+  const [data, setData] = useState<WindowData | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  const fetchWindow = useCallback(async (w: '24h' | '48h') => {
+    try {
+      const res = await fetch(`/api/tools/analytics?window=${w}`, { cache: 'no-store' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setData((await res.json()) as WindowData)
+    } catch {
+      // fail-open — giữ dữ liệu cũ
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      if (cancelled) return
+      await fetchWindow(win)
+    }
+    void poll()
+    const interval = setInterval(() => void poll(), 30_000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [win, fetchWindow])
+
+  const current = data?.current
+  const previous = data?.previous
+  const totalDelta =
+    current && previous ? current.totalCalls - previous.totalCalls : null
+  const ratioNow = current?.balance.readToWorkRatio
+  const ratioPrev = previous?.balance.readToWorkRatio
+  // Cân bằng cải thiện = ratio đọc:việc giảm (dần về vùng ≤3:1)
+  const ratioImproved =
+    ratioNow !== undefined && ratioPrev !== undefined && ratioNow > 0 && ratioPrev > 0
+      ? ratioNow < ratioPrev
+      : null
+
+  return (
+    <Card className="nc-panel nc-sm nc-border-fuchsia p-4">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <div className="p-1.5 rounded-lg bg-fuchsia-950/50">
+            <Scale className="h-4 w-4 text-fuchsia-400" />
+          </div>
+          <span className="text-xs font-semibold tracking-tight text-stone-100">Cân bằng tool usage</span>
+          <span className="text-[10px] text-stone-500">ToolMetric · group theo nhóm hành động</span>
+        </div>
+        {/* Toggle 24h / 48h */}
+        <div className="flex items-center rounded-lg border border-stone-700/70 overflow-hidden">
+          {(['24h', '48h'] as const).map(w => (
+            <button
+              key={w}
+              type="button"
+              onClick={() => {
+                if (win === w) return
+                setLoading(true)
+                setWin(w)
+              }}
+              className={`px-2.5 py-1 text-[10px] font-semibold transition-colors ${
+                win === w
+                  ? 'bg-fuchsia-950/70 text-fuchsia-200'
+                  : 'bg-transparent text-stone-400 hover:text-stone-200'
+              }`}
+              aria-pressed={win === w}
+            >
+              {w} vs {w === '24h' ? '24h trước' : '48h trước'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading && !current ? (
+        <SkeletonBlock />
+      ) : !current ? (
+        <ErrorText />
+      ) : (
+        <>
+          {/* Tổng quan + chỉ số cân bằng */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+            <MiniStat label={`Calls (${win})`} value={fmtNum(current.totalCalls)} tone="fuchsia" />
+            <MiniStat
+              label="Delta vs trước"
+              value={totalDelta === null ? '—' : `${totalDelta > 0 ? '+' : ''}${fmtNum(totalDelta)}`}
+              tone={totalDelta === null ? 'stone' : totalDelta > 0 ? 'emerald' : totalDelta < 0 ? 'amber' : 'stone'}
+            />
+            <div className="rounded-lg bg-stone-950/60 border border-stone-800/80 px-2 py-1.5">
+              <p className="text-[9px] uppercase tracking-wide text-stone-500">Đọc : Sửa+Kiểm định</p>
+              <p className={`text-sm font-bold tabular-nums flex items-center gap-1 ${
+                ratioImproved === null ? 'text-stone-200' : ratioImproved ? 'text-emerald-300' : 'text-amber-300'
+              }`}>
+                {fmtRatio(ratioNow ?? 0)}
+                {ratioImproved !== null && (
+                  ratioImproved
+                    ? <TrendingDown className="h-3 w-3" aria-label="cải thiện" />
+                    : <TrendingUp className="h-3 w-3" aria-label="xấu đi" />
+                )}
+              </p>
+              <p className="text-[9px] text-stone-500">trước: {fmtRatio(ratioPrev ?? 0)} · mục tiêu ≤3:1</p>
+            </div>
+            <MiniStat label="Success" value={fmtPct(current.successRate)} tone={current.successRate >= 0.8 ? 'emerald' : 'amber'} />
+          </div>
+
+          {/* Category bars — current window, mỗi dòng kèm delta vs previous */}
+          <div className="space-y-1.5">
+            {current.byCategory.map(cat => {
+              const prevCalls = previous?.byCategory.find(p => p.category === cat.category)?.calls ?? 0
+              const delta = cat.calls - prevCalls
+              const tone = CATEGORY_TONE[cat.category] || CATEGORY_TONE.other
+              return (
+                <div key={cat.category} className="flex items-center gap-2 text-xs">
+                  <span className={`w-24 flex-shrink-0 truncate ${tone.text}`} title={cat.label}>{cat.label}</span>
+                  <div className="flex-1 h-1.5 rounded-full bg-stone-800 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${tone.bar}`}
+                      style={{ width: `${Math.max(cat.share > 0 ? 3 : 0, Math.round(cat.share * 100))}%` }}
+                    />
+                  </div>
+                  <span className="w-12 text-right text-stone-100 font-mono tabular-nums">{fmtNum(cat.calls)}</span>
+                  <span className="w-10 text-right text-stone-500 font-mono tabular-nums">{fmtPct(cat.share)}</span>
+                  <span
+                    className={`w-14 text-right font-mono tabular-nums flex items-center justify-end gap-0.5 ${
+                      delta > 0 ? 'text-emerald-400' : delta < 0 ? 'text-amber-400' : 'text-stone-600'
+                    }`}
+                    title={`kỳ trước: ${fmtNum(prevCalls)} calls`}
+                  >
+                    {delta === 0 ? (
+                      <Minus className="h-3 w-3" />
+                    ) : delta > 0 ? (
+                      <TrendingUp className="h-3 w-3" />
+                    ) : (
+                      <TrendingDown className="h-3 w-3" />
+                    )}
+                    {delta > 0 ? '+' : ''}{fmtNum(delta)}
+                  </span>
+                </div>
+              )
+            })}
+            {current.byCategory.length === 0 && (
+              <p className="text-xs text-stone-500">Không có tool call nào trong {win} qua</p>
+            )}
+          </div>
+          <p className="mt-2 text-[10px] text-stone-500">
+            Nguồn: /api/tools/analytics?window={win} — {current.from.slice(0, 16).replace('T', ' ')} → {current.to.slice(0, 16).replace('T', ' ')} · poll 30s
+          </p>
+        </>
+      )}
+    </Card>
+  )
 }
 
 // ==================== Component ====================
@@ -355,6 +558,9 @@ export function RuntimeMetricsPanel({ analyticsRange }: RuntimeMetricsPanelProps
         </Card>
       </div>
 
+      {/* ===== R7-M3 — Cân bằng tool usage (24h/48h window so sánh) ===== */}
+      <ToolBalanceCard />
+
       {/* Footer — poll status */}
       <div className="flex items-center justify-between text-[10px] text-stone-500 px-1">
         <span className="flex items-center gap-1">
@@ -387,7 +593,7 @@ export function RuntimeMetricsPanel({ analyticsRange }: RuntimeMetricsPanelProps
 
 // ==================== Small sub-components ====================
 
-function MiniStat({ label, value, tone }: { label: string; value: string; tone: 'amber' | 'teal' | 'rose' | 'emerald' | 'stone' }) {
+function MiniStat({ label, value, tone }: { label: string; value: string; tone: 'amber' | 'teal' | 'rose' | 'emerald' | 'stone' | 'fuchsia' }) {
   const toneClass =
     tone === 'amber'
       ? 'text-amber-300'
@@ -397,7 +603,9 @@ function MiniStat({ label, value, tone }: { label: string; value: string; tone: 
           ? 'text-rose-300'
           : tone === 'emerald'
             ? 'text-emerald-300'
-            : 'text-stone-200'
+            : tone === 'fuchsia'
+              ? 'text-fuchsia-300'
+              : 'text-stone-200'
   return (
     <div className="rounded-lg bg-stone-950/60 border border-stone-800/80 px-2 py-1.5">
       <p className="text-[9px] uppercase tracking-wide text-stone-500">{label}</p>

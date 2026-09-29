@@ -5,6 +5,15 @@
  * Thay thế execSync — mọi command đều chạy async, có timeout, RingBuffer output.
  * Cross-platform: Windows (powershell.exe) / Unix (bash).
  *
+ * VÒNG ĐỜI ENTRY (R7-M2 — memory leak fix, tham chiếu audit Task R7-M1 [S1]):
+ *   spawn → ghi entry vào registry+buffers+processes (kiểm cap cứng
+ *   MAX_TRACKED_PROCESSES=50: vượt → sweep NGAY các entry đã exit cũ nhất,
+ *   running không bao giờ bị evict) → child exit/error → ghi exitedAt + hẹn
+ *   reap sau REAP_DELAY_MS (5 phút — read_output vẫn đọc được trong cửa sổ
+ *   này, lý do delay-reap thay vì delete ngay) → entry bị xóa khỏi CẢ 3 Map
+ *   kèm hủy timer hẹn. Mọi đường reap/sweep fail-open — không được phép
+ *   làm hỏng flow chạy shell của agents.
+ *
  * @module ProcessManager
  */
 
@@ -50,6 +59,9 @@ export interface ProcessInfo {
   startedAt: number
   exitCode: number | null
   tags: string[]
+  /** R7-M2 (S1): mốc child exit/error — dùng cho delay-reap + FIFO sweep.
+ * JSON-safe (number) để listProcesses serialize ra API không lộ handle. */
+  exitedAt?: number
 }
 
 export interface ProcessOutput {
@@ -180,10 +192,101 @@ function buildShellCmd(command: string): { shell: string; args: string[] } {
 
 // ==================== PROCESS MANAGER SINGLETON ====================
 
+/**
+ * R7-M2 (S1, audit R7-M1): delay dọn entry sau exit — read_output vẫn đọc
+ * được trong cửa sổ này (agent poll kết quả process vừa xong). Tham số hóa
+ * qua env TMO_PROC_REAP_DELAY_MS cho test; fail-open khi giá trị không hợp lệ.
+ */
+const REAP_DELAY_MS = (() => {
+  const v = Number(process.env.TMO_PROC_REAP_DELAY_MS)
+  return Number.isFinite(v) && v > 0 ? v : 5 * 60_000
+})()
+
+/**
+ * R7-M2 (S1, audit R7-M1): cap cứng số entry được track (running + đã exit
+ * chờ reap). Vượt → sweep ngay các entry đã exit cũ nhất. Tham số hóa qua
+ * env TMO_PROC_MAX_TRACKED cho test; fail-open khi giá trị không hợp lệ.
+ */
+const MAX_TRACKED_PROCESSES = (() => {
+  const v = Number(process.env.TMO_PROC_MAX_TRACKED)
+  return Number.isFinite(v) && v > 0 ? v : 50
+})()
+
 class ProcessManagerImpl {
   private registry = new Map<string, ProcessInfo>()
   private buffers = new Map<string, RingBuffer>()
   private processes = new Map<string, ChildProcess>()
+  /** R7-M2 (S1): timer dọn trễ per processId — tách Map riêng (không nhét
+   *  handle timer vào ProcessInfo để tránh serialize ra API JSON). */
+  private pendingReaps = new Map<string, ReturnType<typeof setTimeout>>()
+
+  // ==================== R7-M2 (S1): ENTRY REAPER (fail-open) ====================
+
+  /** Đánh dấu entry đã chết + hẹn dọn sau REAP_DELAY_MS (idempotent — exit
+   *  handler + error handler + killProcess đều gọi được an toàn). */
+  private scheduleReap(processId: string): void {
+    try {
+      if (this.pendingReaps.has(processId)) return
+      const info = this.registry.get(processId)
+      if (!info || info.status === 'running') return // chỉ dọn entry đã chết
+      info.exitedAt = info.exitedAt ?? Date.now()
+      const timer = setTimeout(() => {
+        this.pendingReaps.delete(processId)
+        this.reapEntry(processId)
+      }, REAP_DELAY_MS)
+      timer.unref?.() // không giữ event loop chặn shutdown
+      this.pendingReaps.set(processId, timer)
+    } catch {
+      // fail-open: lỗi hẹn dọn không được phép ảnh hưởng exit flow
+    }
+  }
+
+  /** Xóa 1 entry khỏi cả 3 Map + hủy timer dọn đang hẹn (nếu có). */
+  private reapEntry(processId: string): void {
+    try {
+      const timer = this.pendingReaps.get(processId)
+      if (timer) {
+        clearTimeout(timer)
+        this.pendingReaps.delete(processId)
+      }
+      this.registry.delete(processId)
+      this.buffers.delete(processId)
+      this.processes.delete(processId)
+    } catch {
+      // fail-open
+    }
+  }
+
+  /** Cap cứng: vượt MAX_TRACKED_PROCESSES → dọn ngay các entry ĐÃ EXIT cũ nhất
+   *  (Map giữ insertion order = thứ tự spawn). Running KHÔNG bao giờ bị evict. */
+  private sweepExited(): void {
+    try {
+      if (this.registry.size <= MAX_TRACKED_PROCESSES) return
+      let excess = this.registry.size - MAX_TRACKED_PROCESSES
+      let swept = 0
+      for (const [id, info] of this.registry) {
+        if (excess <= 0) break
+        if (info.status === 'running') continue
+        this.reapEntry(id)
+        excess--
+        swept++
+      }
+      if (swept > 0) {
+        console.log(
+          `[ProcessManager] R7-M2 sweep: dọn ${swept} entry đã exit (vượt cap ${MAX_TRACKED_PROCESSES}, còn ${this.registry.size} entry)`
+        )
+      }
+    } catch {
+      // fail-open
+    }
+  }
+
+  /** INSERT entry mới vào registry + chạy cap sweep (mọi điểm insert đều
+   *  qua helper này để cap được kiểm nhất quán). */
+  private registerEntry(id: string, info: ProcessInfo): void {
+    this.registry.set(id, info)
+    this.sweepExited()
+  }
 
   // ==================== runCommand ====================
 
@@ -212,17 +315,35 @@ class ProcessManagerImpl {
         detached: false,
       })
 
+      // R7-M2 (S1d, audit R7-M1): bỏ tích lũy Buffer thô vô hạn — giữ tối đa
+      // 8 chunk cuối mỗi stream (tổng ≤256KB/stream), đủ error message cho
+      // fallback `output` khi ring rỗng; ringBuffer vẫn là nguồn hiển thị chính
+      // nên hành vi output KHÔNG đổi (fallback chỉ reachable khi không có bytes).
+      const MAX_ACCUM_CHUNKS = 8
+      const MAX_ACCUM_BYTES = 256 * 1024
       const stdout: Buffer[] = []
       const stderr: Buffer[] = []
+      let stdoutBytes = 0
+      let stderrBytes = 0
 
       child.stdout?.on('data', (chunk: Buffer) => {
         stdout.push(chunk)
+        stdoutBytes += chunk.length
+        while (stdout.length > 0 && (stdout.length > MAX_ACCUM_CHUNKS || stdoutBytes > MAX_ACCUM_BYTES)) {
+          const dropped = stdout.shift()
+          stdoutBytes -= dropped?.length ?? 0
+        }
         ringBuffer.write(chunk)
         opts.onChunk?.(chunk.toString('utf-8'))
       })
 
       child.stderr?.on('data', (chunk: Buffer) => {
         stderr.push(chunk)
+        stderrBytes += chunk.length
+        while (stderr.length > 0 && (stderr.length > MAX_ACCUM_CHUNKS || stderrBytes > MAX_ACCUM_BYTES)) {
+          const dropped = stderr.shift()
+          stderrBytes -= dropped?.length ?? 0
+        }
         ringBuffer.write(chunk)
         opts.onChunk?.(chunk.toString('utf-8'))
       })
@@ -240,13 +361,14 @@ class ProcessManagerImpl {
         exitCode = code
         ringBuffer.markEnded()
 
-        const combined = Buffer.concat([...stdout, ...stderr]).toString('utf-8')
+        // R7-M2 (S1d): lazy concat — chỉ build fallback khi ring rỗng (không
+        // còn nhân đôi peak RSS bằng Buffer.concat toàn bộ output lúc exit).
         const durationMs = Date.now() - startTime
 
         resolve({
           success: !killed && code === 0,
           exitCode: killed ? null : code,
-          output: ringBuffer.toString() || combined,
+          output: ringBuffer.toString() || Buffer.concat([...stdout, ...stderr]).toString('utf-8'),
           error: killed
             ? `Command timed out after ${timeoutMs}ms`
             : code !== 0 && signal
@@ -322,40 +444,52 @@ class ProcessManagerImpl {
         opts.onChunk?.(chunk.toString('utf-8'))
       })
 
+      // Timeout 2s for spawn confirmation (chỉ còn tác dụng khi 'spawn' event
+      // không bao giờ fire và child vẫn sống). R7-M2 (S1): phải clearTimeout
+      // ở spawn/exit/error — nếu entry bị reap/sweep trước 2s (exit nhanh +
+      // cap overflow), điều kiện has(id) quay về false → fallback TÁI CHÈN
+      // zombie status='running' không bao giờ bị dọn (sim R7-M2 bắt được).
+      const spawnConfirmTimer = setTimeout(() => {
+        if (!this.registry.has(id)) {
+          info.status = 'running'
+          info.pid = child.pid ?? null
+          this.registerEntry(id, info)
+          resolve(info)
+        }
+      }, 2000)
+
       child.on('spawn', () => {
         // update pid
+        clearTimeout(spawnConfirmTimer) // R7-M2: spawn đã confirm — bỏ fallback
         info.pid = child.pid ?? null
-        this.registry.set(id, info)
+        this.registerEntry(id, info)
         resolve(info)
       })
 
       child.on('exit', (code: number | null) => {
+        clearTimeout(spawnConfirmTimer) // R7-M2: child chết — fallback vô nghĩa
         ringBuffer.markEnded()
         info.status = code === 0 ? 'exited' : 'exited'
         info.exitCode = code
         this.registry.set(id, { ...info, status: 'exited' })
+        // R7-M2 (S1): entry đã chết → hẹn dọn sau REAP_DELAY_MS (read_output
+        // vẫn đọc được trong cửa sổ grace — đây là lý do không delete ngay).
+        this.scheduleReap(id)
       })
 
       child.on('error', (err: Error) => {
+        clearTimeout(spawnConfirmTimer) // R7-M2: spawn error — fallback vô nghĩa
         ringBuffer.markEnded()
         info.status = 'exited'
         info.exitCode = -1
-        this.registry.set(id, info)
+        this.registerEntry(id, info)
+        // R7-M2 (S1): spawn error → child đã chết, hẹn dọn như exit.
+        this.scheduleReap(id)
         // If spawn not yet fired, reject
         if (!this.registry.has(id)) {
           reject(new Error(`Failed to start process ${name}: ${err.message}`))
         }
       })
-
-      // Timeout 2s for spawn confirmation
-      setTimeout(() => {
-        if (!this.registry.has(id)) {
-          info.status = 'running'
-          info.pid = child.pid ?? null
-          this.registry.set(id, info)
-          resolve(info)
-        }
-      }, 2000)
     })
   }
 
@@ -371,6 +505,9 @@ class ProcessManagerImpl {
       info.status = 'killed'
       this.registry.set(processId, info)
       this.buffers.get(processId)?.markEnded()
+      // R7-M2 (S1): kill xong coi như đã chết — hẹn dọn (exit handler cũng sẽ
+      // gọi nhưng scheduleReap idempotent; đường này đề phòng exit event lạc).
+      this.scheduleReap(processId)
       return true
     }
 

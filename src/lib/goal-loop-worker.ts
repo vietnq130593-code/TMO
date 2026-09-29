@@ -461,6 +461,11 @@ class GoalLoopWorker {
           },
         })
         if (claimed.count === 1) {
+          // R7-M2 (S4, audit R7-M1): session hết bị mutex-block — job này được
+          // claim thành công → dọn tracker blockage của session (fail-open,
+          // noteSessionMutexBlocked tự set lại nếu session bị block lần nữa).
+          this.mutexBlockedSince.delete(job.sessionId)
+          this.mutexSkipLogAt.delete(job.sessionId)
           console.log(
             `[GoalLoopWorker] claim job ${job.id} — session ${job.sessionId} (slot ${this.running.size + 1}/${this.adaptiveCap}${this.adaptiveCap < GOAL_LOOP_MAX_CONCURRENT ? ` của trần ${GOAL_LOOP_MAX_CONCURRENT}` : ''}, attempts ${job.attempts})`
           )
@@ -927,6 +932,9 @@ class GoalLoopWorker {
       await this.markFailed(job.id, msg, jobInputCrashContext)
     } finally {
       this.running.delete(job.id)
+      // R7-M2 (S4, audit R7-M1): job terminal → dọn counter preempt của job
+      // (Map keyed jobId không bao giờ bị delete trước đây — mọc chậm).
+      this.preemptCounts.delete(job.id)
     }
   }
 
