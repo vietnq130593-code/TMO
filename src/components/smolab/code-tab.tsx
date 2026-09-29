@@ -1031,11 +1031,14 @@ export function CodeTabContent() {
             lines.push(...resultBlock)
           } else if (e.tool === 'read_output' || e.tool === 'kill_process' || e.tool === 'run_tests' || e.tool === 'git_commit') {
             const icon = e.tool === 'run_tests' ? '🧪' : e.tool === 'git_commit' ? '📦' : e.tool === 'kill_process' ? '⛔' : '📄'
-            lines.push(`[AI] ${icon} ${e.tool} ${cmd.slice(0, 110)}`.trim())
+            // Q4 fix (user report 2026-09-29): mọi dòng feed đều hiện TÊN agent
+            // — trước đây chỉ shell có [AI·Name], file/test tools hiện [AI] chung
+            // chung khiến user không biết agent nào đang làm gì khi nhiều agent chạy.
+            lines.push(`[${who}] ${icon} ${e.tool} ${cmd.slice(0, 110)}`.trim())
             lines.push(...resultBlock)
           } else if (e.tool === 'file_edit' || e.tool === 'file_multi_edit' || e.tool === 'file_delete' || e.tool === 'file_write') {
             const icon = e.tool === 'file_delete' ? '🗑️' : e.tool === 'file_write' ? '📝' : '✏️'
-            lines.push(`[AI] ${icon} ${e.tool === 'file_multi_edit' ? 'file_multi_edit' : e.tool} ${cmd.slice(0, 110)}`)
+            lines.push(`[${who}] ${icon} ${e.tool === 'file_multi_edit' ? 'file_multi_edit' : e.tool} ${cmd.slice(0, 110)}`)
             lines.push(...resultBlock)
             // LIVE FILE TAB REFRESH: detail của các tool này chính là path file.
             // TASK 41: ưu tiên `path` — abs path SERVER-RESOLVED theo workspace
