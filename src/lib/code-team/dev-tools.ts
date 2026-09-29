@@ -36,6 +36,7 @@ import {
   guardShellCommand,
   isProtectedInfraPathSync,
   buildFileOpBlockedMessage,
+  guardBridgeToolInvocation,
 } from '@/lib/protected-paths'
 // Phase 6/7 (rebuild) — workspace root now follows the USER's ACTIVE workspace
 // (SQLite Workspace table) instead of process.cwd(); 5s cache.
@@ -3256,6 +3257,24 @@ export async function managePackages(args: {
 export async function gatewayTool(args: { name: string; args?: Record<string, unknown> }): Promise<unknown> {
   if (!args.name) return { error: 'name is required (one of the 36 gateway tools)' }
   const bridgeUrl = process.env.OPENCLAW_BRIDGE_URL || 'http://127.0.0.1:18791'
+
+  // ROUND-6 (infra-guard lớp 2): bridge tools ghi file/chạy lệnh (exec/write/
+  // edit/apply_patch/code_execution/process) phải qua guard NHƯ LỚP 1 — trước
+  // đây proxy chuyển tiếp thẳng tới bridge 18791, agent bypass guard hoàn toàn
+  // bằng `gateway_tool {name:"write", args:{path:".env"}}` (user directive
+  // 2026-10-28: "Ghi đè file bảo vệ qua shell → chặn như lớp 1").
+  try {
+    const root = await resolveWorkspaceRoot()
+    const guard = guardBridgeToolInvocation({ name: args.name, args: args.args || {}, root })
+    if (guard.blocked) {
+      console.warn(`[INFRA-GUARD] bridge tool blocked: ${guard.reason}`)
+      return { success: false, error: guard.message || 'TỪ CHỐI (infra-guard lớp 2)' }
+    }
+  } catch (guardErr) {
+    // Guard lỗi (vd workspace root không resolve được) — ghi log, tool không-
+    // mutating vẫn đi tiếp; bridge-side guard (round-6) vẫn chắn ở đích.
+    console.warn(`[INFRA-GUARD] bridge guard error: ${guardErr instanceof Error ? guardErr.message : String(guardErr)}`)
+  }
 
   const invoke = (): Promise<Response> => fetch(`${bridgeUrl}/tools/invoke`, {
     method: 'POST',

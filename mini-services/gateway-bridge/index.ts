@@ -18,6 +18,16 @@
 
 import { WebSocket } from 'ws'
 import { execSync } from 'child_process'
+import { fileURLToPath } from 'url'
+import pathModule from 'path'
+// ROUND-6 (infra-guard lớp 2, 2026-10-28): bridge KHÔNG auth và là đích cuối
+// của MỌI tool ghi/lệnh (exec/write/edit/apply_patch/code_execution/process)
+// — trước đây agent curl trực tiếp 18791 là bypass hoàn toàn guard của app.
+// Giờ guard tại chính bridge — choke point cuối, phủ mọi đường gọi.
+import { guardBridgeToolInvocation } from '../../src/lib/protected-paths'
+
+/** Workspace root của TMO (mini-services/gateway-bridge → lên 2 cấp). */
+const TMO_ROOT = pathModule.resolve(pathModule.dirname(fileURLToPath(import.meta.url)), '../..')
 
 // Bun global — tsconfig chính chưa include bun-types; khai báo interface
 // tối thiểu cho đúng shape API đang dùng (runtime vẫn dùng global Bun thật).
@@ -535,6 +545,26 @@ const server = Bun.serve({
         const toolDef = ALL_GATEWAY_TOOLS.find(t => t.name === name)
         if (!toolDef) {
           return Response.json({ ok: false, error: `Unknown tool: ${name}` }, { status: 404, headers: corsHeaders })
+        }
+
+        // ROUND-6 (infra-guard lớp 2): tool ghi/lệnh phải qua guard như lớp 1
+        // — chặn tại bridge phủ MỌI đường gọi (app proxy, API route, curl trực
+        // tiếp). User directive 2026-10-28: "Ghi đè file bảo vệ qua shell →
+        // chặn như lớp 1".
+        try {
+          const guard = guardBridgeToolInvocation({ name, args: args || {}, root: TMO_ROOT })
+          if (guard.blocked) {
+            console.warn(`[INFRA-GUARD] bridge invoke blocked: ${guard.reason}`)
+            return Response.json({
+              ok: false,
+              error: `BLOCKED (infra-guard): ${guard.reason}`,
+              detail: guard.message || '',
+            }, { status: 403, headers: corsHeaders })
+          }
+        } catch (guardErr) {
+          // Guard lỗi hệ thống → fail-closed cho tool mutating (an toàn hơn)
+          console.warn(`[INFRA-GUARD] bridge guard error: ${guardErr instanceof Error ? guardErr.message : String(guardErr)}`)
+          return Response.json({ ok: false, error: 'infra-guard unavailable' }, { status: 503, headers: corsHeaders })
         }
 
         // Try HTTP first for HTTP-accessible tools

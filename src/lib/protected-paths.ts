@@ -34,6 +34,22 @@
  *      → agent buộc dùng bridge tmo_shell/tmo_file_write/tmo_file_edit
  *      → mọi thao tác ghi đều đi qua lớp 1.
  *
+ * ROUND-6 (2026-10-28, user directive): "Ghi đè file bảo vệ qua shell
+ * (echo >, tee, sed -i...) → chặn như lớp 1" — bịt toàn bộ bypass thực nghiệm:
+ *   • Lớp 1 shell: redirect có quote (`> ".env"`), biến $F làm target, perl -pi,
+ *     awk -i inplace, ed/ex -s, install, patch, git apply/checkout/restore/stash,
+ *     rsync, scp, sponge, shred, ln, curl -o, wget (-O lẫn basename-URL),
+ *     sqlite3 write, `npm pkg set`, code inline python/node/bun -c/-e có
+ *     write-hint. Token khớp giờ được VERIFY bằng path-resolve (giết
+ *     false-positive /tmp/db/x, src/package.json; bắt ~/tmo-app/.env).
+ *   • Lớp 1 opencode: executeFileWrite (action='write') giờ qua guard.
+ *   • Lớp 2 bridge: gatewayTool proxy + API /api/openclaw/bridge + chính
+ *     mini-service gateway-bridge (18791) đều gọi guardBridgeToolInvocation
+ *     trước khi forward — agent không còn đường ghi đè file bảo vệ qua
+ *     exec/write/edit/apply_patch/code_execution/process của bridge.
+ *   Kiểm định: 42/42 vector tấn công chặn, 44/44 lệnh hợp lệ cho qua
+ *   (bun/audit/recipe/git/prisma/curl health-check...), tsc sạch.
+ *
  * Tắt guard (operator only): env TMO_INFRA_GUARD=off.
  */
 
@@ -133,8 +149,43 @@ const PKG_MGR_RE = /\b(?:bun|npm|pnpm|yarn)\s+(?:add|remove|rm|uninstall|install
 /** Regex các lệnh mutate schema/DB — AUDIT LOG (không chặn từ 2026-10-27). */
 const PRISMA_MUTATE_RE = /\b(?:prisma\s+(?:db\s+push|db\s+seed|migrate|studio)|bun\s+run\s+db:push)\b/
 
-/** Các lệnh ghi/xoá file nguy hiểm — kết hợp với token protected phía dưới. */
-const FILE_WRITE_CMD_RE = /\b(?:rm|mv|cp|dd|truncate|chmod|chown|tee)\b|\bsed\b[^;|&]*-i/
+/** Các lệnh ghi/xoá file nguy hiểm — kết hợp với token protected phía dưới.
+ * ROUND-6 (2026-10-28, user directive): mở rộng bịt các bypass thực nghiệm —
+ * perl -pi, awk/gawk -i inplace, ed/ex -s, install, patch, git apply/checkout/
+ * restore/stash, rsync, scp, sponge, shred, ln, curl -o, wget -O. Loại
+ * trừ `install` đứng sau package-manager (bun/npm/pnpm/yarn install...) theo
+ * chính sách 2026-10-27 cho phép tự cài package. */
+const FILE_WRITE_CMD_RE = new RegExp(
+  [
+    '\\b(?:rm|mv|cp|dd|truncate|chmod|chown|tee|shred|sponge|rsync|scp|ln)\\b',
+    '(?<!\\b(?:bun|npm|pnpm|yarn|apt|apt-get|brew|pip3?|pipx|gem|cargo|go|dpkg)\\s+)install\\b',
+    '\\bsed\\b[^;|&]*-i',
+    '\\bperl\\b[^;|&]*\\s-\\w*i\\b',
+    '\\b(?:g?awk|mawk)\\b[^;|&]*\\s-i\\b',
+    '\\b(?:ed|ex)\\s+-s\\b',
+    '\\bpatch\\b',
+    '\\bgit\\s+(?:apply|checkout|restore|stash)\\b',
+    '\\bcurl\\b[^;|&]*\\s(?:-o|--output)\\b',
+    '\\bwget\\b[^;|&]*\\s(?:-O|--output-document)\\b',
+  ].join('|'),
+)
+
+/** Sửa package.json qua `npm pkg set` — sửa tay config hệ thống không qua lệnh
+ * cài/gỡ package chính thống (bun add/remove) → chặn thẳng (ROUND-6). */
+const PKG_JSON_MUTATE_RE = /\b(?:npm|pnpm|yarn)\s+pkg\s+(?:set|unset|delete)\b/
+
+/** sqlite3 CLI ghi thẳng file DB — kết hợp keyword ghi (ROUND-6). */
+const SQLITE3_RE = /\bsqlite3?\b/
+const SQL_WRITE_KW_RE = /\b(?:insert|update|delete|drop|create|alter|replace|attach|detach|pragma|vacuum)\b/i
+
+/** Interpreter chạy code inline — python/node/bun/deno/perl/ruby/php -c/-e/-r.
+ * Code inline có thể ghi file qua open()/writeFileSync/Bun.write... — kết hợp
+ * với CODE_WRITE_HINT_RE + token protected để chặn (ROUND-6). */
+const INLINE_INTERPRETER_RE = /\b(?:python3?|node|bun|deno|perl|ruby|php)\b[^;|&]*\s(?:--eval|-c|-e|-r)\b/
+
+/** Dấu hiệu GHI file trong code inline (python/node/bun...). */
+const CODE_WRITE_HINT_RE =
+  /open\s*\([^)]*["']?>|open\s*\([^)]*["'][wa]b?["']\s*[,)]|writeFileSync|appendFileSync|copyFileSync|renameSync|rmSync|unlinkSync|truncateSync|writeFile\s*\(|Bun\.write|writeTextFile|write_text|write_bytes|os\.(?:remove|unlink|rename|truncate)|shutil\.|fs\.(?:rename|unlink|rm|truncate)\s*\(|new\s+Database\s*\(|--outfile/
 
 /**
  * Token trỏ tới file/thư mục protected: khớp cả dạng relative (prisma/schema.prisma)
@@ -142,7 +193,7 @@ const FILE_WRITE_CMD_RE = /\b(?:rm|mv|cp|dd|truncate|chmod|chown|tee)\b|\bsed\b[
  * false-positive với dự án khác có cấu trúc tương tự.
  */
 const PROTECTED_TOKEN_RE = new RegExp(
-  '(?:^|[\\s"\'=(])(?:\\.?/)?(?:' +
+  '(?:^|[\\s"\'=(/])(?:\\.?/)?(?:' +
     [
       'package\\.json',
       'package-lock\\.json',
@@ -169,8 +220,10 @@ const PROTECTED_TOKEN_RE = new RegExp(
   'i',
 )
 
-/** Redirect ghi file: `> target` / `>> target`. */
-const REDIRECT_RE = />{1,2}\s*([^\s|;&)]+)/g
+/** Redirect ghi file: `> target` / `>> target` / `>| target` (clobber).
+ * ROUND-6: thêm `\|?` sau redirect (bash noclobber bypass) — target sẽ được
+ * strip quote phía dưới (bug cũ: `> ".env"` / `>package.json'` bypass). */
+const REDIRECT_RE = />{1,2}\|?\s*([^\s|;&)]+)/g
 
 /** Message chung cho agent khi bị chặn (2026-10-27 — cập nhật chính sách:
  *  cài package + sửa schema giờ ĐÃ ĐƯỢC PHÉP tự làm; phần còn bảo vệ phải
@@ -318,6 +371,42 @@ function guardSelfDestruct(command: string): ShellGuardVerdict | null {
   return null
 }
 
+/** Bản /g của token regex — dùng cho vòng lặp exec (bản gốc không /g chỉ
+ * trả mãi match đầu → vòng lặp không tiến + tốn guard-limit). */
+const PROTECTED_TOKEN_G_RE = new RegExp(PROTECTED_TOKEN_RE.source, 'gi')
+
+/** Trích path chứa segment protected từ chuỗi lệnh/code, VERIFY bằng resolve.
+ * Token khớp (PROTECTED_TOKEN_RE) chỉ là trigger — mở rộng 2 phía để lấy
+ * FULL path quanh token (src/package.json, /tmp/db/x, ~/tmo-app/.env),
+ * resolve rồi mới quyết định. Tránh cả false-positive lẫn false-negative. */
+function findProtectedPathTarget(
+  text: string,
+  resolveFromCwd: (tok: string) => string,
+  absRoot: string,
+): string | null {
+  PROTECTED_TOKEN_G_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  let guard = 0
+  while ((m = PROTECTED_TOKEN_G_RE.exec(text)) !== null && guard++ < 50) {
+    // m[0] chứa 1 ký tự boundary phía trước (space/quote/=(/) — bỏ để lấy token
+    const token = m[0].replace(/^[\s"'=(/]/, '')
+    if (!token) continue
+    const tokenStart = m.index + (m[0].length - token.length)
+    const tokenEnd = tokenStart + token.length
+    // Mở rộng trái qua ký tự path (chữ số, chữ, @ . ~ - _ , /)
+    let start = tokenStart
+    while (start > 0 && /[\w@.~,-]|\//.test(text[start - 1])) start--
+    // Mở rộng phải qua ký tự path
+    let end = tokenEnd
+    while (end < text.length && /[\w@.~,-]|\//.test(text[end])) end++
+    const candidate = text.slice(start, end).replace(/^["']+|["']+$/g, '')
+    if (!candidate) continue
+    const verdict = isProtectedInfraPathSync(resolveFromCwd(candidate), absRoot)
+    if (verdict.protected) return verdict.matched || candidate
+  }
+  return null
+}
+
 /**
  * Guard lệnh shell trước khi spawn.
  *
@@ -368,11 +457,33 @@ export function guardShellCommand(command: string, cwd: string, root: string): S
     return path.resolve(cwdInRoot ? absCwd : absRoot, tok)
   }
 
+  // ROUND-6: track biến được gán giá trị protected path (`F=.env; echo x > $F`
+  // — bug cũ: redirect target là biến thì resolve không ra path protected).
+  const protectedVars = new Set<string>()
+  const ASSIGN_RE = /(?:^|[\s;])([A-Za-z_]\w*)=([^\s;&|)'"]+)/g
+  let am: RegExpExecArray | null
+  while ((am = ASSIGN_RE.exec(command)) !== null) {
+    const val = am[2]
+    if (isProtectedInfraPathSync(resolveFromCwd(val), absRoot).protected) {
+      protectedVars.add(am[1])
+    }
+  }
+
   REDIRECT_RE.lastIndex = 0
   let rm: RegExpExecArray | null
   while ((rm = REDIRECT_RE.exec(command)) !== null) {
-    const target = rm[1]
+    // ROUND-6: strip quote bao quanh target (bug cũ: `> ".env"` / `>file'` bypass)
+    const target = (rm[1] || '').replace(/^["']+|["']+$/g, '')
     if (!target) continue
+    // ROUND-6: redirect vào biến $F đã gán protected path
+    if (target.startsWith('$')) {
+      const varName = target.replace(/^\$\{?/, '').replace(/\}$/, '')
+      if (protectedVars.has(varName)) {
+        redirectTarget = `$${varName} (biến gán protected path)`
+        break
+      }
+      continue // biến lạ — không resolve tĩnh được, bỏ qua
+    }
     const verdict = isProtectedInfraPathSync(resolveFromCwd(target), absRoot)
     if (verdict.protected) {
       redirectTarget = verdict.matched || target
@@ -387,13 +498,67 @@ export function guardShellCommand(command: string, cwd: string, root: string): S
     }
   }
 
-  // 4) Lệnh ghi/xoá file (rm/mv/cp/dd/truncate/chmod/chown/tee/sed -i) có token protected.
-  if (FILE_WRITE_CMD_RE.test(command) && PROTECTED_TOKEN_RE.test(command)) {
-    const tokenMatch = command.match(PROTECTED_TOKEN_RE)
+  // 4) Lệnh ghi/xoá file (danh sách FILE_WRITE_CMD_RE) có token protected.
+  // ROUND-6: token khớp chỉ là TRIGGER — sau đó VERIFY bằng resolve path thật
+  // (giết false-positive `/tmp/db/x`, `src/package.json`, URL `x/package.json`;
+  // bắt thêm false-negative `~/tmo-app/.env`, `/home/z/tmo-app/db/x`).
+  if (FILE_WRITE_CMD_RE.test(command)) {
+    const hit = findProtectedPathTarget(command, resolveFromCwd, absRoot)
+    if (hit) {
+      return {
+        blocked: true,
+        reason: `file-mutation command on protected path: ${hit}`,
+        message: buildBlockedMessage(hit),
+      }
+    }
+    // wget KHÔNG -O ghi file theo BASENAME URL vào cwd — URL chứa basename
+    // protected (vd `wget https://x/package.json`) → nguy hiểm dù path-trigger
+    // không resolve về root. Chặn khi wget + protected basename xuất hiện.
+    if (/\bwget\b/.test(command)) {
+      PROTECTED_TOKEN_RE.lastIndex = 0
+      if (PROTECTED_TOKEN_RE.test(command)) {
+        return {
+          blocked: true,
+          reason: 'wget (output = basename URL vào cwd) nhắm protected file',
+          message: buildBlockedMessage('wget tải về đè file protected theo basename'),
+        }
+      }
+    }
+  }
+
+  // 4b) ROUND-6: `npm pkg set/unset` — sửa package.json không qua lệnh cài
+  // package chính thống (bun add/remove) → chặn như file_edit package.json.
+  if (PKG_JSON_MUTATE_RE.test(command)) {
     return {
       blocked: true,
-      reason: `file-mutation command on protected path: ${tokenMatch?.[0]?.trim()}`,
-      message: buildBlockedMessage(tokenMatch?.[0]?.trim() || 'protected path'),
+      reason: 'npm/pnpm/yarn pkg set — mutate package.json trực tiếp',
+      message: buildBlockedMessage('package.json (qua npm pkg set)'),
+    }
+  }
+
+  // 4c) ROUND-6: sqlite3 CLI ghi thẳng file DB (INSERT/UPDATE/DROP...) —
+  // thay đổi dữ liệu DB phải qua prisma chính thống, không ghi tay file DB.
+  if (SQLITE3_RE.test(command) && SQL_WRITE_KW_RE.test(command)) {
+    const hit = findProtectedPathTarget(command, resolveFromCwd, absRoot)
+    if (hit) {
+      return {
+        blocked: true,
+        reason: `sqlite3 write trên protected DB file: ${hit}`,
+        message: buildBlockedMessage(hit),
+      }
+    }
+  }
+
+  // 4d) ROUND-6: interpreter chạy code inline (python/node/bun -c/-e...) có
+  // dấu hiệu GHI file + token protected — echo/tee/sed -i nhưng qua code.
+  if (INLINE_INTERPRETER_RE.test(command) && CODE_WRITE_HINT_RE.test(command)) {
+    const hit = findProtectedPathTarget(command, resolveFromCwd, absRoot)
+    if (hit) {
+      return {
+        blocked: true,
+        reason: `inline-code write (python/node/bun -c/-e) → protected path: ${hit}`,
+        message: buildBlockedMessage(hit),
+      }
     }
   }
 
@@ -403,4 +568,97 @@ export function guardShellCommand(command: string, cwd: string, root: string): S
 /** Wrapper tiện dụng cho các file-op (đã resolve xong path). */
 export function buildFileOpBlockedMessage(relPath: string): string {
   return buildBlockedMessage(relPath)
+}
+
+// ============================================================================
+// ROUND-6 (2026-10-28): GUARD LỚP 2 — GATEWAY-BRIDGE TOOLS
+// ============================================================================
+// Lỗ hổng: gateway_tool proxy (dev-tools.ts) + API /api/openclaw/bridge +
+// mini-service gateway-bridge (18791, KHÔNG auth) chuyển tiếp 36 bridge tools
+// thẳng tới gateway — trong đó `exec`, `write`, `edit`, `apply_patch`,
+// `code_execution`, `process` ghi file/chạy lệnh KHÔNG qua guardShellCommand.
+// Agent có thể bypass lớp 1 hoàn toàn: `gateway_tool {name:"write", args:{
+// path:".env"}}` hoặc `curl -XPOST 127.0.0.1:18791/tools/invoke`.
+// Fix: guardBridgeToolInvocation đặt tại MỌI choke point (app proxy, API route,
+// và bản thân bridge mini-service) — mọi invocation tool ghi/lệnh phải qua
+// đúng guard như lớp 1 (user directive: "chặn như lớp 1").
+// ============================================================================
+
+/** Code chạy inline (python/node/bun -c/-e hoặc tool code_execution) có dấu
+ * hiệu ghi file + protected token → chặn như lớp 1. */
+export function guardInlineCode(code: string, root: string): ShellGuardVerdict {
+  if (process.env.TMO_INFRA_GUARD === 'off') return { blocked: false }
+  if (!code || !CODE_WRITE_HINT_RE.test(code)) return { blocked: false }
+  const absRoot = path.resolve(root)
+  const resolveFromRoot = (tok: string): string => {
+    if (tok.startsWith('/') || tok.startsWith('~')) return path.resolve(tok.replace(/^~/, process.env.HOME || '~'))
+    return path.resolve(absRoot, tok)
+  }
+  const hit = findProtectedPathTarget(code, resolveFromRoot, absRoot)
+  if (hit) {
+    return {
+      blocked: true,
+      reason: `inline-code write → protected path: ${hit}`,
+      message: buildBlockedMessage(hit),
+    }
+  }
+  return { blocked: false }
+}
+
+/** Các bridge tool có khả năng GHI file / chạy lệnh — phải qua guard. */
+export const BRIDGE_MUTATING_TOOLS: readonly string[] = [
+  'exec',
+  'write',
+  'edit',
+  'apply_patch',
+  'code_execution',
+  'process',
+]
+
+/** Guard invocation bridge tool (gọi tại MỌI choke point trước khi forward):
+ *  - exec/process: command → guardShellCommand (đủ self-destruct + infra)
+ *  - code_execution: code → guardInlineCode
+ *  - write/edit/apply_patch: path → isProtectedInfraPathSync
+ * Trả verdict — blocked: true thì choke point PHẢI từ chối invocation. */
+export function guardBridgeToolInvocation(input: {
+  name: string
+  args: Record<string, unknown>
+  root: string
+  cwd?: string
+}): ShellGuardVerdict {
+  if (process.env.TMO_INFRA_GUARD === 'off') return { blocked: false }
+  const { name } = input
+  if (!BRIDGE_MUTATING_TOOLS.includes(name)) return { blocked: false }
+  const a = input.args || {}
+  const s = (v: unknown): string => (typeof v === 'string' ? v : '')
+  const absRoot = path.resolve(input.root)
+  const absCwd = path.resolve(input.cwd || input.root)
+
+  if (name === 'write' || name === 'edit' || name === 'apply_patch') {
+    const p = s(a.path) || s(a.file) || s(a.filename) || s(a.target)
+    if (!p) return { blocked: false }
+    const resolved = p.startsWith('/') || p.startsWith('~')
+      ? path.resolve(p.replace(/^~/, process.env.HOME || '~'))
+      : path.resolve(absCwd, p)
+    const verdict = isProtectedInfraPathSync(resolved, absRoot)
+    if (verdict.protected) {
+      return {
+        blocked: true,
+        reason: `bridge ${name} → protected path: ${verdict.matched || p}`,
+        message: buildBlockedMessage(verdict.matched || p),
+      }
+    }
+    return { blocked: false }
+  }
+
+  if (name === 'code_execution') {
+    const code = s(a.code) || s(a.script) || s(a.source) || s(a.input)
+    if (!code) return { blocked: false }
+    return guardInlineCode(code, absRoot)
+  }
+
+  // exec / process: chạy shell → guard đầy đủ như lớp 1
+  const command = s(a.command) || s(a.cmd) || s(a.script) || s(a.code)
+  if (!command) return { blocked: false }
+  return guardShellCommand(command, absCwd, absRoot)
 }

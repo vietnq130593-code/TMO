@@ -11,6 +11,8 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { validateArgs } from '@/lib/security/command-validator'
+// ROUND-6 (infra-guard lớp 2): bridge tools ghi/lệnh phải qua guard như lớp 1
+import { guardBridgeToolInvocation } from '@/lib/protected-paths'
 
 export const dynamic = 'force-dynamic'
 
@@ -234,6 +236,29 @@ export async function POST(request: NextRequest) {
         ok: false,
         error: argsValidation.error || 'Invalid args',
       }, { status: 400 })
+    }
+
+    // ROUND-6 (infra-guard lớp 2, 2026-10-28): route này trước đây chỉ chặn
+    // prototype-pollution — agent có thể POST {name:'write', args:{path:'.env'}}
+    // ghi đè file bảo vệ qua bridge, bypass lớp 1. Giờ mọi tool ghi/lệnh
+    // (exec/write/edit/apply_patch/code_execution/process) phải qua guard
+    // như lớp 1 (user directive: "chặn như lớp 1").
+    try {
+      const guard = guardBridgeToolInvocation({
+        name: name as string,
+        args: (args as Record<string, unknown>) || {},
+        root: process.cwd(), // app luôn chạy từ tmo-app root
+      })
+      if (guard.blocked) {
+        console.warn(`[INFRA-GUARD] bridge route blocked: ${guard.reason}`)
+        return NextResponse.json({
+          ok: false,
+          error: guard.message || 'TỪ CHỐI (infra-guard lớp 2)',
+        }, { status: 403 })
+      }
+    } catch {
+      // guard lỗi hệ thống → fail-closed cho mutating tools (an toàn hơn)
+      return NextResponse.json({ ok: false, error: 'infra-guard unavailable' }, { status: 503 })
     }
 
     // Step 4: Invoke the bridge

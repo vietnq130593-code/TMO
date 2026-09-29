@@ -73,6 +73,9 @@ import {
 } from './dev-tools'
 // v2.1 Phase 3.6 — MCP bridge (separate module)
 import { mcpCall as executeMcpCallFn } from '@/lib/mcp/mcp-bridge'
+// ROUND-6 (infra-guard): executeFileWrite (opencode action='write') thiếu
+// guard protected-path — bypass lớp 1 qua tool opencode.
+import { isProtectedInfraPathSync, buildFileOpBlockedMessage } from '@/lib/protected-paths'
 // CI-6.4 (Task 10-b) — pipeline kiểm định 5 lớp trước push (lint→typecheck→tests→
 // smoke→secret scan→commit→push→pull verify; TỪ CHỐI push khi có bước fail)
 import { runPrePushVerification } from './pre-push-verify'
@@ -4925,6 +4928,20 @@ async function executeFileWrite(filePath: string, content: string): Promise<{ su
     // Security: Prevent path traversal — resolved path must be within project root
     if (!resolvedPath.startsWith(projectRoot + pathModule.sep) && resolvedPath !== projectRoot) {
       return { success: false, message: '', error: 'Access denied: path escapes project root' }
+    }
+
+    // ROUND-6 (infra-guard 2026-10-28): opencode action='write' trước đây
+    // KHÔNG qua guard protected-path — agent bypass lớp 1 bằng
+    // `opencode {action:'write', path:'.env', content:...}`. Giờ chặn như
+    // file_write chính thống (user directive: "chặn như lớp 1").
+    const infraVerdict = isProtectedInfraPathSync(resolvedPath, projectRoot)
+    if (infraVerdict.protected) {
+      console.warn(`[INFRA-GUARD] opencode write blocked: ${infraVerdict.matched}`)
+      return {
+        success: false,
+        message: '',
+        error: buildFileOpBlockedMessage(infraVerdict.matched || filePath),
+      }
     }
 
     const fs = await import('fs/promises')
