@@ -3741,7 +3741,14 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
   /** [B] Final report tổng hợp được dùng thay lastContent dở? */
   let usedFinalReport = false
   if (stopReason === 'cancelled') {
-    content = '⏹ Đã dừng tác vụ theo yêu cầu của bạn.'
+    // FIX 2026-09-29 (quan sát vận hành thật — mission 6.6 giờ bị Dừng giữa
+    // chừng trả về đúng 1 dòng "⏹ Đã dừng...", toàn bộ partial work 44 chu
+    // kỳ/1274 tool calls bị VỨT): cancel path phải mirror error path (giữ
+    // partial work — xem nhánh dưới "không vứt partial work"). User bấm Dừng
+    // vẫn muốn biết agent đã làm được gì tới lúc đó.
+    content = lastContent
+      ? `⏹ Đã dừng tác vụ theo yêu cầu của bạn. Phần dưới là báo cáo tiến độ mới nhất trước khi dừng:\n\n---\n\n${lastContent}`
+      : '⏹ Đã dừng tác vụ theo yêu cầu của bạn.'
   } else if (stopReason === 'error' && !lastContent) {
     // Surface lỗi LLM gốc (vd: NVIDIA cạn key) — không nuốt lỗi
     content = `Error: Goal loop LLM failed — ${lastLlmError || lastContent || 'không có nội dung trả về'}`
