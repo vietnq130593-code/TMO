@@ -3371,6 +3371,10 @@ export async function shell(args: {
       blocked: true,
     }
   }
+  // Self-destruct guard rewrite (2026-09-29): `pm2 restart theopusflashlite`
+  // đơn giản → tự đổi sang detach-safe recipe (nohup) — lệnh đến pm2 phải đi
+  // từ NGOÀI process tree app, nếu không pha start của restart chết theo app.
+  const effectiveCommand = guard.rewrite ?? command
 
   // Timeout: 5min default, 10min max
   const timeoutMs = Math.min(Math.max(args.timeout_ms ?? 300_000, 1_000), 600_000)
@@ -3389,7 +3393,7 @@ export async function shell(args: {
     // Use spawn with shell:true to allow metacharacters (|, &&, ;, >)
     // (Windows: shell:true tự dùng cmd.exe; windowsHide chặn cửa sổ console
     // bật lên riêng mỗi lần agent chạy lệnh — bug fix 2026-09-06)
-    const child = spawn(command, {
+    const child = spawn(effectiveCommand, {
       cwd,
       shell: true,
       env: { ...process.env, ...(args.env || {}) },

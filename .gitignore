@@ -89,6 +89,11 @@ worklog.md
 # chạy được `pm2 start ecosystem.config.cjs` (wrapper tự dọn orphan process giữ
 # port 3000 trước khi start, chống EADDRINUSE crash-loop).
 !/scripts/pm2-start.sh
+# NGOẠI LỆ: PM2 keepalive watchdog là script DEPLOYMENT (được start bằng
+# `pm2 start scripts/tmo-keepalive.sh --name tmo-keepalive`) — lớp phòng thủ
+# 2 đảm bảo "PM2 duy trì hiển thị giao diện app": phát hiện app không phục vụ
+# (stopped/wedge kéo dài) → tự pm2 restart từ NGOÀI process tree app.
+!/scripts/tmo-keepalive.sh
 # NGOẠI LỆ: script test model NIM (user-facing — bun scripts/test-llm-model.ts)
 !/scripts/test-llm-model.ts
 # NGOẠI LỆ: script test agent/chat/utility qua Z-AI SDK (bun scripts/test-agent-zai.ts)

@@ -117,6 +117,10 @@ export interface ShellGuardVerdict {
   reason?: string
   /** Message đầy đủ trả về cho agent (tiếng Việt + hướng dẫn escalate). */
   message?: string
+  /** Lệnh AN TOÀN thay thế lệnh gốc (self-destruct guard: pm2 restart đơn
+   * giản → tự đổi sang detach-safe recipe thay vì chặn). Executor dùng
+   * lệnh này thay cho lệnh gốc khi có. */
+  rewrite?: string
 }
 
 // 2026-10-27 (user directive): PKG_MGR_RE + PRISMA_MUTATE_RE ĐÃ BỎ CHẶN —
@@ -183,6 +187,105 @@ function buildBlockedMessage(detail: string): string {
   )
 }
 
+// ============================================================================
+// SELF-DESTRUCT GUARD (2026-09-29 — sự cố thực chiến 15:13:22 UTC)
+// ============================================================================
+// Goal-loop agent (SENTINEL, job zmdh0r4q) chạy `pm2 stop/restart
+// theopusflashlite` qua tool shell của chính app → PM2 giết process tree của
+// app (kể cả pm2 CLI — process CON của app đang phát lệnh) → pha "start"
+// của restart KHÔNG BAO GIỜ chạy → app nằm im ở trạng thái stopped, mission
+// chết giữa chừng, UI mất hoàn toàn (PM2 log: "Stopping app" + exit [0]).
+//
+// Chính sách: process app KHÔNG THỂ tự dừng/tự giết qua shell của chính nó —
+// lệnh đến pm2 phải ĐI TỪ NGOÀI process tree (nohup detach) mới an toàn.
+//   • `pm2 restart theopusflashlite` (form đơn giản, không nohup)
+//     → TỰ ĐỔI sang detach-safe recipe (giữ nguyên tác vụ của agent).
+//   • `pm2 stop/delete/kill` nhắm app/daemon → BLOCK kèm recipe detach +
+//     giải thích (dừng vĩnh viễn là quyền operator, không phải của agent).
+//   • Lệnh phức tạp chứa `pm2 restart <app>` (vd `build && pm2 restart ...`)
+//     → BLOCK kèm recipe (không tự rewrite chuỗi lệnh — dễ sai semantics).
+//   • Đã có `nohup` phía trước lệnh pm2 → CHO QUA (agent đã làm đúng).
+// ============================================================================
+
+/** pm2 stop/delete/rm nhắm process app (theo tên / id 0 / all / ecosystem). */
+const PM2_STOP_APP_RE =
+  /\bpm2\s+(?:stop|delete|del|rm)\s+(?:-{2}[\w-]+\s+)*(?:theopusflashlite|ecosystem[\w./-]*|all|0)\b/i
+
+/** `pm2 kill` — giết cả PM2 daemon (cùng số phận tự hủy). */
+const PM2_KILL_RE = /\bpm2\s+kill\b/i
+
+/** `pm2 restart <app>` xuất hiện ở ĐÂU ĐÓ trong lệnh (kể cả chain `&&`). */
+const PM2_RESTART_ANY_RE =
+  /\bpm2\s+(?:restart|reload|startOrReload)\s+(?:-{2}[\w-]+\s+)*(?:theopusflashlite|ecosystem[\w./-]*|all|0)\b/i
+
+/** Form ĐƠN GIẢN: toàn bộ lệnh chỉ là `pm2 restart/reload <app> [flags]` → tự rewrite. */
+const PM2_RESTART_SIMPLE_RE =
+  /^\s*pm2\s+(?:restart|reload|startOrReload)\s+(?:theopusflashlite|ecosystem[\w./-]*|all|0)\b[\s\w.\/-]*$/i
+
+/** Lệnh đã có nohup bọc phía trước (agent đã biết recipe an toàn) → cho qua. */
+const DETACHED_HINT_RE = /\bnohup\b|\bsetsid\b/i
+
+/** Recipe khởi động lại app AN TOÀN — pm2 CLI chạy trong process detached,
+ * sống sót khi process tree app bị PM2 giết, đảm bảo pha start được thực thi. */
+const SAFE_DETACHED_RESTART =
+  `nohup sh -c 'sleep 2; pm2 restart theopusflashlite' >/tmp/tmo-detached-restart.log 2>&1 & ` +
+  `echo "DETACHED-RESTART-ISSUED — app restart sau ~2s (boot 10-15s); goal-loop job sẽ RESUME từ checkpoint. ` +
+  `Log: /tmp/tmo-detached-restart.log"`
+
+function buildSelfDestructBlockedMessage(kind: string): string {
+  return (
+    `TỪ CHỐI (self-destruct-guard): ${kind} nhắm process app (theopusflashlite) chạy TỪ tool shell của chính app. ` +
+    `Lý do: pm2 CLI là process CON của process tree app — khi app bị dừng, pm2 CLI chết theo → pha start KHÔNG BAO GIỜ chạy → ` +
+    `app nằm im stopped, mission chết giữa chừng (đã xảy ra thật 2026-09-29 15:13 UTC, job zmdh0r4q). ` +
+    `NẾU CẦN KHỞI ĐỘNG LẠI APP, chạy đúng recipe sau (pm2 CLI detach qua nohup — sống sót khi app chết):\n` +
+    `  ${SAFE_DETACHED_RESTART}\n` +
+    `LƯU Ý: (1) 'bun run build' chạy song song với dev server được — KHÔNG cần stop app để build/E2E; ` +
+    `(2) muốn dừng app VĨNH VIỄN là quyền operator (shell riêng của người vận hành) — agent trong app không dừng app của chính mình.`
+  )
+}
+
+/** Guard tự-hủy: chạy TRƯỚC mọi guard khác (áp dụng mọi cwd — giết app là
+ * tự hủy bất kể cwd đặt ở đâu). Trả verdict block/rewrite hoặc null. */
+function guardSelfDestruct(command: string): ShellGuardVerdict | null {
+  // Đã có nohup/setsid phía trước → agent đã làm đúng detach → cho qua.
+  if (DETACHED_HINT_RE.test(command)) return null
+
+  if (PM2_STOP_APP_RE.test(command)) {
+    const m = command.match(PM2_STOP_APP_RE)
+    return {
+      blocked: true,
+      reason: `self-destruct: ${m?.[0]}`,
+      message: buildSelfDestructBlockedMessage(`lệnh \`${m?.[0]}\``),
+    }
+  }
+  if (PM2_KILL_RE.test(command)) {
+    return {
+      blocked: true,
+      reason: 'self-destruct: pm2 kill',
+      message: buildSelfDestructBlockedMessage('`pm2 kill`'),
+    }
+  }
+  if (PM2_RESTART_ANY_RE.test(command)) {
+    if (PM2_RESTART_SIMPLE_RE.test(command)) {
+      // Form đơn giản → tự đổi sang detach-safe (giữ nguyên tác vụ agent).
+      const m = command.match(PM2_RESTART_ANY_RE)
+      return {
+        blocked: false,
+        reason: `self-destruct rewrite: ${m?.[0]} → detach-safe`,
+        rewrite: SAFE_DETACHED_RESTART,
+      }
+    }
+    // Chuỗi phức tạp (build && pm2 restart ...) → block kèm recipe.
+    const m = command.match(PM2_RESTART_ANY_RE)
+    return {
+      blocked: true,
+      reason: `self-destruct: ${m?.[0]} trong chuỗi lệnh phức tạp`,
+      message: buildSelfDestructBlockedMessage(`\`${m?.[0]}\` lồng trong chuỗi lệnh`),
+    }
+  }
+  return null
+}
+
 /**
  * Guard lệnh shell trước khi spawn.
  *
@@ -192,6 +295,18 @@ function buildBlockedMessage(detail: string): string {
  */
 export function guardShellCommand(command: string, cwd: string, root: string): ShellGuardVerdict {
   if (process.env.TMO_INFRA_GUARD === 'off') return { blocked: false }
+
+  // Self-destruct guard — ưu tiên cao nhất, áp dụng ở MỌI cwd (lệnh giết app
+  // là tự hủy bất kể cwd ở đâu; guard path bên dưới chỉ áp TMO context).
+  const selfDestruct = guardSelfDestruct(command)
+  if (selfDestruct) {
+    if (selfDestruct.blocked) {
+      console.warn(`[InfraGuard] SELF-DESTRUCT blocked: ${selfDestruct.reason}`)
+    } else {
+      console.log(`[InfraGuard] SELF-DESTRUCT rewrite: ${selfDestruct.reason}`)
+    }
+    return selfDestruct
+  }
 
   const absRoot = path.resolve(root)
   const absCwd = path.resolve(cwd)
