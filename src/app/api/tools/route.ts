@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getAllCustomTools } from '@/lib/custom-tool-registry'
 import { isOnDemandEnabled } from '@/lib/openclaw-ondemand'
+import { resolveBridgeState, bridgeStateNote } from '@/lib/bridge-state'
 import { tavilyKeyPool, jinaKeyPool, serperKeyPool } from '@/lib/service-key-pool'
 import type { CustomTool } from '@prisma/client'
 
@@ -240,8 +241,10 @@ export async function GET(request: NextRequest) {
     // Sửa: phân biệt "đang ngủ on-demand" với "thật sự hỏng". Route KHÔNG gọi
     // ensure* (sẽ phá idle-shutdown và gây spawn loop — xem openclaw-ondemand.ts).
     const onDemand = isOnDemandEnabled()
-    const bridgeAsleep = !bridgeOnline && onDemand
-    const bridgeUsable = bridgeOnline || bridgeAsleep
+    // Logic thuần nằm ở src/lib/bridge-state.ts → có unit regression test
+    // (tests/bridge-state.test.ts) khóa hành vi online/asleep/down.
+    const bridgeAccess = resolveBridgeState({ bridgeOnline, onDemand })
+    const bridgeAsleep = bridgeAccess.bridgeAsleep
 
     // ===== Build local tools list =====
     const localTools = LOCAL_TOOLS.map(t => ({
@@ -261,14 +264,10 @@ export async function GET(request: NextRequest) {
     const gatewayTools = GATEWAY_TOOL_REGISTRY.map(t => {
       const isSessionContext = SESSION_CONTEXT_TOOLS.has(t.name)
       const isHttpAccessible = HTTP_ACCESSIBLE_TOOLS.has(t.name)
-      const accessMode = isSessionContext
-        ? (bridgeUsable ? 'bridge' : 'unavailable')
-        : 'http'
+      const accessMode = isSessionContext ? bridgeAccess.accessMode : 'http'
       // Trạng thái bridge thật sự lúc gọi: online / asleep (sẽ tự spawn khi
       // dùng) / down (hỏng thật — on-demand tắt hoặc spawn thất bại).
-      const bridgeState = isSessionContext
-        ? (bridgeOnline ? 'online' : bridgeAsleep ? 'asleep' : 'down')
-        : 'n/a'
+      const bridgeState = isSessionContext ? bridgeAccess.bridgeState : 'n/a'
 
       return {
         name: t.name,
@@ -447,7 +446,7 @@ export async function GET(request: NextRequest) {
         asleep: bridgeAsleep,
         // Ngủ on-demand KHÔNG phải lỗi — tool tự chạy khi agent gọi.
         note: bridgeAsleep
-          ? 'gateway-bridge đang ngủ (on-demand) — sẽ tự spawn khi agent gọi tool đầu tiên'
+          ? bridgeStateNote(bridgeOnline, bridgeAsleep, onDemand)
           : undefined,
       },
       stats: {

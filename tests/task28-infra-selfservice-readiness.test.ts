@@ -143,6 +143,8 @@ describe('Task 28 — buildPendingDebtBlock nhắc đường tự phục vụ tr
     expect(block).toContain('ĐIỀU KIỆN CẦN')
     // Dọn
     await db.todo.deleteMany({ where: { sessionId: SESSION } })
-    await db.$disconnect()
+    // KHÔNG gọi db.$disconnect() ở đây — xem ghi chú giải thích trong
+    // tests/task26-prompt-budget-debt.test.ts: db là singleton Prisma dùng
+    // chung cho mọi test file trong cùng process bun test.
   })
 })

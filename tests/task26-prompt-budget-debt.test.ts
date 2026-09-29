@@ -133,6 +133,10 @@ describe('Task 26 — buildPendingDebtBlock (thời điểm xử lý nợ = đ�
       await db.todo.deleteMany({ where: { sessionId: { startsWith: `test-task26-` } } })
       console.log('🧹 Đã dọn dữ liệu test task26')
     } catch { /* best-effort */ }
-    try { const { db } = await import('../src/lib/db'); await db.$disconnect() } catch { /* ignore */ }
+    // KHÔNG gọi db.$disconnect() ở đây: db là singleton Prisma DÙNG CHUNG cho MỌI
+    // test file trong cùng process bun test (src/lib/db.ts gắn vào
+    // globalThis.prisma khi NODE_ENV khác production). Ngắt connection ở file
+    // này khiến các file chạy SAU đó nhận lỗi "Engine is not yet connected"
+    // → quality gate FAIL ngẫu nhiên (flake 2/10 lần chạy).
   })
 })
