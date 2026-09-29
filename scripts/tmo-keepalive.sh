@@ -23,8 +23,12 @@
 #         từ ngoài nếu vẫn chưa phục hồi.
 #   - curl 200 → bình thường, xoá state first-fail.
 #
-# ESCAPE HATCH (operator bảo trì): touch /home/z/tmo-app/.keepalive-off
-#   → watchdog nhàn rỗi vĩnh viễn cho tới khi xoá file. Nhớ xoá sau bảo trì!
+# ESCAPE HATCH (operator bảo trì / agent maintenance chain — round-5):
+#   · File flag RỖNG (touch) → watchdog nghỉ VÔ HẠN — operator xoá file sau bảo trì.
+#   · File flag CHỨA epoch hết hạn (vd `date -d '+30 minutes' +%s > .keepalive-off`)
+#     → watchdog nghỉ ĐẾN hết hạn rồi TỰ HỒI NHIỆM VỤ (gỡ flag, kéo app dậy nếu
+#     cần) — bảo hiểm khi chuỗi bảo trì detached chết giữa chừng, app không bị
+#     bỏ mặc quá lâu (UI mất tối đa = thời hạn ghi trong flag).
 # =============================================================================
 
 APP="theopusflashlite"
@@ -39,10 +43,16 @@ log() { echo "$TAG $(date -u '+%F %T') UTC — $*"; }
 log "watchdog khởi động (chu kỳ 30s, URL=$URL, wedge-patience=${WEDGE_PATIENCE}s)"
 
 while true; do
-  # Escape hatch: operator đang bảo trì — không đụng vào
+  # Escape hatch: operator/agent đang bảo trì — kiểm tra flag + expiry
   if [ -f "$FLAG" ]; then
-    sleep 30
-    continue
+    EXPIRY=$(tr -dc '0-9' < "$FLAG" 2>/dev/null)
+    if [ -n "$EXPIRY" ] && [ "$(date +%s)" -ge "$EXPIRY" ]; then
+      log "keepalive-off flag HẾT HẠN (epoch $EXPIRY đã qua) — gỡ flag, HỒI NHIỆM VỤ"
+      rm -f "$FLAG"
+    else
+      sleep 30
+      continue
+    fi
   fi
 
   CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "$URL" 2>/dev/null)

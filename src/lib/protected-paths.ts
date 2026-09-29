@@ -226,21 +226,37 @@ const PM2_RESTART_SIMPLE_RE =
 const DETACHED_HINT_RE = /\bnohup\b|\bsetsid\b/i
 
 /** Recipe khởi động lại app AN TOÀN — pm2 CLI chạy trong process detached,
- * sống sót khi process tree app bị PM2 giết, đảm bảo pha start được thực thi. */
+ * sống sót khi process tree app bị PM2 giết, đảm bảo pha start được thực thi.
+ * ROUND-5: kèm timed keepalive-off flag (3 phút) để watchdog ngoài không đua
+ * restart trong cửa sổ bảo trì ngắn. */
 const SAFE_DETACHED_RESTART =
-  `nohup sh -c 'sleep 2; pm2 restart theopusflashlite' >/tmp/tmo-detached-restart.log 2>&1 & ` +
+  `nohup sh -c 'date -d "+3 minutes" +%s > /home/z/tmo-app/.keepalive-off; sleep 2; pm2 restart theopusflashlite; sleep 20; rm -f /home/z/tmo-app/.keepalive-off' >/tmp/tmo-detached-restart.log 2>&1 & ` +
   `echo "DETACHED-RESTART-ISSUED — app restart sau ~2s (boot 10-15s); goal-loop job sẽ RESUME từ checkpoint. ` +
   `Log: /tmp/tmo-detached-restart.log"`
+
+/** ROUND-5 — recipe CHUỖI BẢO TRÌ (build/gate nặng): sandbox 4GB không đủ
+ * cho dev-server (~1.5G) + next build (~3G) cùng lúc (bằng chứng: build
+ * exit 137 hai lần có dev-server chạy). Chuỗi: tạm tắt watchdog (flag hết
+ * hạn 30 phút — watchdog tự hồi nhiệm vụ nếu chuỗi chết) → stop app → build
+ * → start app → verify health → dọn flag. Toàn bộ chạy DETACHED nên sống
+ * sót khi app chết; app LUÔN quay lại cuối chuỗi (kể cả khi build fail). */
+const SAFE_DETACHED_BUILD_CHAIN =
+  `nohup sh -c 'date -d "+30 minutes" +%s > /home/z/tmo-app/.keepalive-off; ` +
+  `pm2 stop theopusflashlite; sleep 3; ` +
+  `timeout 1500 bun run build > /tmp/tmo-build.log 2>&1; echo "BUILD_EXIT=$?" >> /tmp/tmo-build.log; ` +
+  `pm2 start theopusflashlite; sleep 15; curl -s -m 10 http://127.0.0.1:3000/api/health >> /tmp/tmo-build.log; ` +
+  `rm -f /home/z/tmo-app/.keepalive-off' >/tmp/tmo-build-chain.log 2>&1 & ` +
+  `echo "DETACHED BUILD CHAIN ISSUED — app OFF trong lúc build (~3-8 phút), TỰ ĐỘNG bật lại cuối chuỗi kể cả khi build fail; UI mất tối đa 30 phút (flag hết hạn watchdog tự kéo lên). Log: /tmp/tmo-build.log"`
 
 function buildSelfDestructBlockedMessage(kind: string): string {
   return (
     `TỪ CHỐI (self-destruct-guard): ${kind} nhắm process app (theopusflashlite) chạy TỪ tool shell của chính app. ` +
     `Lý do: pm2 CLI là process CON của process tree app — khi app bị dừng, pm2 CLI chết theo → pha start KHÔNG BAO GIỜ chạy → ` +
-    `app nằm im stopped, mission chết giữa chừng (đã xảy ra thật 2026-09-29 15:13 UTC, job zmdh0r4q). ` +
-    `NẾU CẦN KHỞI ĐỘNG LẠI APP, chạy đúng recipe sau (pm2 CLI detach qua nohup — sống sót khi app chết):\n` +
-    `  ${SAFE_DETACHED_RESTART}\n` +
-    `LƯU Ý: (1) 'bun run build' chạy song song với dev server được — KHÔNG cần stop app để build/E2E; ` +
-    `(2) muốn dừng app VĨNH VIỄN là quyền operator (shell riêng của người vận hành) — agent trong app không dừng app của chính mình.`
+    `app nằm im stopped, mission chết giữa chừng (đã xảy ra thật 2026-09-29 15:13 UTC, job zmdh0r4q).\n` +
+    `RECIPE KHỞI ĐỘNG LẠI APP (pm2 CLI detach qua nohup — sống sót khi app chết):\n  ${SAFE_DETACHED_RESTART}\n` +
+    `RECIPE BUILD/GATE NẶNG (app đang giữ ~1.5G, build cần ~3G — sandbox 4G KHÔNG đủ chạy song song; ` +
+    `bằng chứng thực chiến: build exit 137 × 2 lần khi dev-server chạy) — chuỗi bảo trì detached, app TỰ ĐỘNG bật lại cuối chuỗi:\n  ${SAFE_DETACHED_BUILD_CHAIN}\n` +
+    `LƯU Ý: muốn dừng app VĨNH VIỄN là quyền operator (shell riêng của người vận hành) — agent trong app không dừng app của chính mình.`
   )
 }
 
