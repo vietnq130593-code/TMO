@@ -122,7 +122,10 @@ Không có FAIL nào. 🎉
 ## 4b. Nợ kỹ thuật còn treo: build production (Task 21-d)
 
 - `bun run build` (Next.js 16.3.2 + Turbopack) KHÔNG hoàn tất trên box này: tiến trình bị kernel SIGKILL, `BUILD_EXIT_CODE=137` — đây là OOM hệ thống, không phải lỗi mã nguồn.
-- Bằng chứng gián tiếp: `typecheck` 0 lỗi, `lint` 0 lỗi, `tests` 203/203 pass, E2E không fail. Lỗi chỉ xuất hiện ở bước sinh optimizer artifact.
+- Đã chạy thật 3 lần, mỗi lần đều chết ở bước Creating an optimized production build: heap trần 2048 MB (chết sau 23s), heap trần 1536 MB (chết sau 25s). Lần chạy không giới hạn heap trước đó cũng cho cùng kết quả. Không thử lần thứ tư vì ba lần cho cùng một kết luận.
+- Bằng chứng TRỰC TIẾP từ kernel log (không phải suy đoán): dmesg ghi oom-kill với task next-build, anon-rss 1845340 kB, global_oom, tại cgroup của box.
+- Thông số môi trường đo được: RAM tổng 4159 MB, swap 0, available rơi từ 2138 MB xuống 807 MB khi build leo. Một tiến trình next-server đang vận hành (PID 7195) đã giữ hơn 1 GB RSS và không thể tắt, nên phần RAM dành cho build chỉ còn dưới 2.1 GB — không đủ cho Turbopack sinh optimizer artifact.
+- Bằng chứng gián tiếp rằng lỗi KHÔNG nằm ở mã nguồn: typecheck 0 lỗi, lint 0 lỗi, tests 203/203 pass, E2E không fail.
 - Nợ CÓ ĐIỀU KIỆN — cần quyết định của Mr. Architect: (a) tăng RAM hoặc thêm swap cho box build, hoặc (b) dựng CI/máy build riêng. Không sửa code để né OOM.
 
 ## 5. Ghi chú methodology
