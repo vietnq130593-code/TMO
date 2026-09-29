@@ -24,6 +24,14 @@
  * fail-open — worker KHÔNG BAO GIỜ throw làm chết interval. Job đang chạy
  * trong process này KHÔNG bị stall-kill (LLM call hợp lệ tối đa 8' + tool
  * time) — stale heartbeat chỉ cảnh báo UI (GOAL_LOOP_STALL_WARN_MS).
+ *
+ * NGOẠI LỆ TASK C (starvation preemption): stale heartbeat ≥
+ * GOAL_LOOP_STALL_PREEMPT_MS (30' — xa hơn trần LLM 8') VÀ follower queued
+ * cùng session đói mutex ≥ GOAL_LOOP_MUTEX_STARVE_WARN_MS → worker XIN PAUSE
+ * job wedged: loop thoát ở RANH GIỚI vòng an toàn (không cắt giữa tool),
+ * requeue GIỮ checkpoint nhường mutex cho follower — KHÔNG phải kill, KHÔNG
+ * phải cancel của user (xem noteSessionMutexBlocked + nhánh preempt-pause
+ * trong executeJob).
  */
 
 import type { GoalLoopJob } from '@prisma/client'
@@ -38,6 +46,9 @@ import {
   GOAL_LOOP_WORKER_TICK_MS,
   GOAL_LOOP_ADAPTIVE_CONCURRENCY,
   GOAL_LOOP_QUEUE_WARN_THRESHOLD,
+  GOAL_LOOP_MUTEX_STARVE_WARN_MS,
+  GOAL_LOOP_STALL_PREEMPT_MS,
+  GOAL_LOOP_MUTEX_MAX_PREEMPTS,
   type GoalLoopCheckpoint,
   type GoalLoopDurableHooks,
   type GoalLoopJobInput,
@@ -45,7 +56,7 @@ import {
 } from '@/lib/goal-loop-durable-types'
 // TASK 43 — Agent Event Bus: sự kiện vòng đời job phát lên bus hợp nhất
 // (GET /api/agent-events). Fail-open tuyệt đối bên trong emit.
-import { emitAgentEvent } from '@/lib/agent-event-bus'
+import { emitAgentEvent, type AgentEventType } from '@/lib/agent-event-bus'
 
 // ==================== TYPES ====================
 
@@ -61,6 +72,12 @@ interface RunningJobMeta {
   lastWrittenCyclesDone: number
   /** Flag cancel set bởi cancel()/cancelSessionJobs() — cancelCheck() đọc */
   cancelRequested: boolean
+  /** TASK C — flag preempt-pause set bởi noteSessionMutexBlocked() khi job này
+   *  giữ mutex session mà follower starvation + heartbeat của job này stale
+   *  ≥ GOAL_LOOP_STALL_PREEMPT_MS (wedged). cancelCheck() đọc → loop thoát ở
+   *  ranh giới vòng an toàn → terminal block REQUEUE giữ checkpoint (nhường
+   *  mutex cho follower) thay vì cancel — KHÔNG phải ý user. */
+  pauseRequested: boolean
   /** REVIEW 14-g M2 — sessionId của job đang chạy: mutual-exclusion per-session
    *  (chatHistory snapshot của job sau phải chứa kết quả job trước — 2 job
    *  cùng session chạy song song sẽ đan xen ChatMessage + resolve sai). */
@@ -140,6 +157,22 @@ class GoalLoopWorker {
   private lastQueuedCount = 0
   /** Throttle cảnh báo backpressure (≥60s/lần) */
   private lastBackpressureWarnAt = 0
+
+  // -------------------- TASK C — STARVATION PREEMPTION (per-session mutex) --------------------
+
+  /** session → mốc bị chờ mutex ĐẦU TIÊN của episode blockage hiện tại
+   *  (blockerKey = jobId:lúcClaim — blocker đổi = episode mới → tự reset mốc
+   *  sau mọi lần claim lại). In-memory, reset khi worker restart. */
+  private mutexBlockedSince: Map<string, { since: number; blockerKey: string }> = new Map()
+
+  /** Throttle log mutex-skip 60s/session — chống spam (sự cố 2026-10-27:
+   *  3.258 dòng "giữ queued" khi blocker wedged giữ mutex 9.5h, tick 5s/lần). */
+  private mutexSkipLogAt: Map<string, number> = new Map()
+
+  /** Anti-thrash: jobId → số lần preempt-requeue đã thực hiện. Vượt
+   *  GOAL_LOOP_MUTEX_MAX_PREEMPTS → mark failed thay vì requeue. In-memory
+   *  (reset khi restart — bảo hiểm: attempts vẫn chặn requeue vô hạn sau crash). */
+  private preemptCounts: Map<string, number> = new Map()
 
   /**
    * TASK 43 — điều chỉnh capacity mỗi tick (fail-open — lỗi thì giữ nguyên):
@@ -241,7 +274,7 @@ class GoalLoopWorker {
       return
     }
     console.log(
-      `[GoalLoopWorker] start — tick mỗi ${GOAL_LOOP_WORKER_TICK_MS}ms, tối đa ${GOAL_LOOP_MAX_CONCURRENT} job song song (${GOAL_LOOP_ADAPTIVE_CONCURRENCY ? 'adaptive auto-scale BẬT' : 'cố định'}), stall-warn ${GOAL_LOOP_STALL_WARN_MS}ms, max-attempts ${GOAL_LOOP_MAX_ATTEMPTS}`
+      `[GoalLoopWorker] start — tick mỗi ${GOAL_LOOP_WORKER_TICK_MS}ms, tối đa ${GOAL_LOOP_MAX_CONCURRENT} job song song (${GOAL_LOOP_ADAPTIVE_CONCURRENCY ? 'adaptive auto-scale BẬT' : 'cố định'}), stall-warn ${GOAL_LOOP_STALL_WARN_MS}ms, max-attempts ${GOAL_LOOP_MAX_ATTEMPTS}, starve-warn ${GOAL_LOOP_MUTEX_STARVE_WARN_MS}ms, preempt ${GOAL_LOOP_STALL_PREEMPT_MS}ms ×${GOAL_LOOP_MUTEX_MAX_PREEMPTS}`
     )
     // Tick handler KHÔNG throw (tick wrap try/catch toàn bộ bên trong) —
     // interval không bao giờ chết vì lỗi 1 tick.
@@ -394,11 +427,11 @@ class GoalLoopWorker {
         // session → ChatMessage đan xen + AgentRunRecord updateMany đụng row
         // nhau. KHÔNG tính vào take ở query vì kiểm tra sau findMany an toàn
         // hơn (slot có thể thay đổi giữa query và claim).
-        const sessionRunning = Array.from(this.running.values()).some(m => m.sessionId === job.sessionId)
-        if (sessionRunning) {
-          console.log(
-            `[GoalLoopWorker] job ${job.id}: session ${job.sessionId} đang có job khác chạy — giữ queued (mutual-exclusion per-session, tick sau claim lại)`
-          )
+        const blockerEntry = Array.from(this.running.entries()).find(([, m]) => m.sessionId === job.sessionId)
+        if (blockerEntry) {
+          // TASK C — starvation tracking + quyết định preempt-pause (log
+          // throttle 60s/session, preempt chỉ khi blocker wedged — xem helper)
+          this.noteSessionMutexBlocked(job.id, job.sessionId, blockerEntry[0], blockerEntry[1])
           continue
         }
         // Job requeue sau crash mà user đã bấm Dừng (cancelRequestedAt còn
@@ -459,6 +492,95 @@ class GoalLoopWorker {
   }
 
   /**
+   * TASK C — STARVATION DETECTION + PREEMPT cho nhánh mutex-skip của claimQueued
+   * (follower queued bị job cùng session đang chạy giữ mutex — mutual-exclusion
+   * 14-g M2 theo thiết kế KHÔNG có max-wait → sự cố 2026-10-27: 2 job đói mutex
+   * 4.5h + 3.258 dòng spam log trong khi blocker wedged giữ mutex 9.5h):
+   *   1. Track mốc bị chờ đầu tiên mỗi episode (blocker đổi = episode mới).
+   *   2. Log throttle 60s/session (chống spam); ≥ GOAL_LOOP_MUTEX_STARVE_WARN_MS
+   *      → warn ⚠ + event 'session_mutex_starvation' lên agent-event-bus.
+   *   3. Follower starvation VÀ blocker heartbeat stale ≥
+   *      GOAL_LOOP_STALL_PREEMPT_MS (xa hơn trần LLM 8' — chỉ wedged mới chạm)
+   *      → set flag pauseRequested trên meta in-Map của blocker (mirror pattern
+   *      cancelRequested): cancelCheck() của blocker trả true → loop thoát ở
+   *      RANH GIỚI vòng an toàn (giữa các vòng / trước tool call — không bao
+   *      giờ cắt giữa tool đang chạy) → terminal block requeue giữ checkpoint.
+   * Blocker đang có yêu cầu cancel của user → không đề phòng (user tự xử).
+   */
+  private noteSessionMutexBlocked(
+    jobId: string,
+    sessionId: string,
+    blockerJobId: string,
+    blockerMeta: RunningJobMeta
+  ): void {
+    const now = Date.now()
+    // Heartbeat ref: lần onSignal ghi DB cuối; chưa từng ghi (=0) thì tính từ
+    // lúc claim — job mới claim không bị oan là stale (guard giống adjustCapacity)
+    const heartbeatRef = blockerMeta.lastHeartbeatWrite > 0 ? blockerMeta.lastHeartbeatWrite : blockerMeta.startedAt
+    const heartbeatAgeMs = now - heartbeatRef
+    // Episode: blockerKey đổi (job khác / re-claim sau preempt) → mốc mới
+    const blockerKey = `${blockerJobId}:${blockerMeta.startedAt}`
+    const prev = this.mutexBlockedSince.get(sessionId)
+    const since = prev && prev.blockerKey === blockerKey ? prev.since : now
+    this.mutexBlockedSince.set(sessionId, { since, blockerKey })
+    const blockedMs = now - since
+    const starving = GOAL_LOOP_MUTEX_STARVE_WARN_MS > 0 && blockedMs >= GOAL_LOOP_MUTEX_STARVE_WARN_MS
+
+    // 1+2. Log throttle 60s/session — starving thì warn thay thế log thường
+    const lastLogAt = this.mutexSkipLogAt.get(sessionId) ?? 0
+    if (now - lastLogAt >= 60_000) {
+      this.mutexSkipLogAt.set(sessionId, now)
+      if (starving) {
+        console.warn(
+          `[GoalLoopWorker] ⚠ session ${sessionId}: job ${jobId} bị chờ mutex ≥ ${Math.round(GOAL_LOOP_MUTEX_STARVE_WARN_MS / 60000)} phút (đã chờ ${Math.round(blockedMs / 1000)}s — blocker=${blockerJobId}, heartbeat blocker cách ${Math.round(heartbeatAgeMs / 1000)}s)`
+        )
+        // Task C nối tiếp: 'session_mutex_starvation' ĐÃ được khai báo chính thức
+        // trong union AgentEventType (agent-event-bus.ts) — không cần cast nữa.
+        emitAgentEvent('session_mutex_starvation', {
+          sessionId,
+          jobId,
+          data: {
+            blockerJobId,
+            blockedMs,
+            blockerHeartbeatAgeMs: heartbeatAgeMs,
+            starveWarnMs: GOAL_LOOP_MUTEX_STARVE_WARN_MS,
+          },
+        })
+      } else {
+        console.log(
+          `[GoalLoopWorker] job ${jobId}: session ${sessionId} đang có job khác chạy — giữ queued (mutual-exclusion per-session, tick sau claim lại)`
+        )
+      }
+    }
+
+    // 3. Preempt an toàn (kiểm MỖI tick, không phụ thuộc cửa sổ log 60s)
+    if (
+      starving &&
+      GOAL_LOOP_STALL_PREEMPT_MS > 0 &&
+      heartbeatAgeMs >= GOAL_LOOP_STALL_PREEMPT_MS &&
+      !blockerMeta.pauseRequested &&
+      !blockerMeta.cancelRequested
+    ) {
+      blockerMeta.pauseRequested = true
+      console.warn(
+        `[GoalLoopWorker] 🛑 session ${sessionId}: PREEMPT — blocker ${blockerJobId} giữ mutex với heartbeat stale ${Math.round(heartbeatAgeMs / 60000)} phút (≥ ${Math.round(GOAL_LOOP_STALL_PREEMPT_MS / 60000)} phút) trong khi follower ${jobId} bị chờ ${Math.round(blockedMs / 60000)} phút → xin PAUSE blocker: loop thoát ở ranh giới vòng an toàn, requeue giữ checkpoint nhường mutex cho follower`
+      )
+      emitAgentEvent('session_mutex_starvation', {
+        sessionId,
+        jobId,
+        data: {
+          blockerJobId,
+          blockedMs,
+          blockerHeartbeatAgeMs: heartbeatAgeMs,
+          starveWarnMs: GOAL_LOOP_MUTEX_STARVE_WARN_MS,
+          preemptRequested: true,
+          stallPreemptMs: GOAL_LOOP_STALL_PREEMPT_MS,
+        },
+      })
+    }
+  }
+
+  /**
    * Chạy 1 job đã claim: parse input/checkpoint → gọi runGoalDrivenLoop với
    * durable hooks (Task 14-b) → mark terminal → finalize seam (Task 14-c).
    * Mọi DB write trong heartbeat/checkpoint path đều fail-open.
@@ -470,6 +592,7 @@ class GoalLoopWorker {
       lastCheckpointWrite: 0,
       lastWrittenCyclesDone: job.cyclesDone ?? 0,
       cancelRequested: false,
+      pauseRequested: false,
       sessionId: job.sessionId,
     }
     // Set Map NGAY (phần đồng bộ — trước mọi await) để cancel()/sweep thấy job
@@ -595,7 +718,10 @@ class GoalLoopWorker {
       //    Jobs() qua Map). KHÔNG query DB mỗi vòng (đắt) — cancel() đã update
       //    DB flag + set flag Map; job requeue sau crash đọc cancelRequestedAt
       //    ngay lúc claim (bước claimQueued phía trên).
-      const cancelCheck = (): boolean => meta.cancelRequested
+      //    TASK C — pauseRequested (blocker wedged giữ mutex, follower đói)
+      //    cũng thoát loop qua ĐÚNG các điểm check an toàn này (giữa các vòng /
+      //    trước tool call) — nhánh preempt-pause ở bước 9 phân biệt với cancel.
+      const cancelCheck = (): boolean => meta.cancelRequested || meta.pauseRequested
 
       // 7. Chạy goal loop với durable hooks (param `durable` do Task 14-b thêm
       //    vào runGoalDrivenLoop — chạy song song với 14-a). Nếu tsc complain
@@ -633,6 +759,71 @@ class GoalLoopWorker {
 
       // 9. Terminal mark — conditional (status vẫn 'running') để không đè
       //    trạng thái nếu có ai đó đổi giữa chừng (vd cancel/failed)
+      //
+      // TASK C — PREEMPT-PAUSE (trước nhánh cancel): pauseRequested do
+      // noteSessionMutexBlocked() set (job này giữ mutex session mà follower
+      // starvation + heartbeat của job này stale ≥ STALL_PREEMPT — wedged).
+      // Loop đã thoát qua cancelCheck ở ranh giới vòng an toàn → REQUEUE giữ
+      // checkpoint (bước 8 vừa force-flush xong — KHÔNG set completedAt,
+      // KHÔNG set result, error=null): follower claim tick sau, job này
+      // RESUME từ checkpoint khi session rảnh. User cancel (cancelRequested)
+      // vẫn THẮNG pause; loop tự kết thúc tự nhiên (stopReason ≠ 'cancelled')
+      // thì pause vô hiệu — không vứt work đã xong.
+      const pausedForPreempt =
+        meta.pauseRequested && !meta.cancelRequested && result.goalLoop?.stopReason === 'cancelled'
+      if (pausedForPreempt) {
+        // Anti-thrash: đếm in-memory mỗi job — vượt trần thì job này "thối"
+        // (heartbeat stale ngay cả sau khi đã preempt + chạy lại) → mark
+        // failed dứt điểm thay vì requeue tiếp (chống lặp preempt↔requeue).
+        const preemptCount = (this.preemptCounts.get(job.id) ?? 0) + 1
+        this.preemptCounts.set(job.id, preemptCount)
+        if (preemptCount > GOAL_LOOP_MUTEX_MAX_PREEMPTS) {
+          console.error(
+            `[GoalLoopWorker] job ${job.id}: preempt lần ${preemptCount} vượt trần ${GOAL_LOOP_MUTEX_MAX_PREEMPTS} (anti-thrash — heartbeat vẫn stale sau mỗi lần chạy lại) → mark FAILED`
+          )
+          await this.markFailed(
+            job.id,
+            `stale-heartbeat preempt limit — đã preempt ${GOAL_LOOP_MUTEX_MAX_PREEMPTS} lần mà heartbeat vẫn stale mỗi lần chạy lại (job wedged)`,
+            jobInputCrashContext
+          )
+          return
+        }
+        const requeued = await db.goalLoopJob.updateMany({
+          where: { id: job.id, status: 'running' },
+          data: {
+            status: 'queued',
+            error: null,
+            workerPid: null,
+            // Đẩy về CUỐI hàng đợi FIFO (claimQueued orderBy createdAt asc):
+            // follower đang đói mutex được claim tick sau; job này xếp lại chờ
+            // session rảnh. KHÔNG đụng attempts (preempt là pause có chủ đích,
+            // không phải crash) — checkpoint/cyclesDone giữ nguyên (bước 8).
+            createdAt: new Date(),
+          },
+        })
+        if (requeued.count === 1) {
+          console.log(
+            `[GoalLoopWorker] job ${job.id} PREEMPT-PAUSE → requeue giữ checkpoint (chu kỳ ${result.goalLoop?.cycles ?? job.cyclesDone}, ${result.iterations} vòng đã chạy, preempt ${preemptCount}/${GOAL_LOOP_MUTEX_MAX_PREEMPTS}) — nhường mutex session ${job.sessionId} cho follower đang chờ; tick sau claim lại + RESUME từ checkpoint khi rảnh`
+          )
+          emitAgentEvent('job_terminal', {
+            jobId: job.id,
+            sessionId: job.sessionId,
+            data: {
+              status: 'preempted_requeued',
+              preemptCount,
+              cycles: result.goalLoop?.cycles ?? job.cyclesDone,
+              iterations: result.iterations,
+            },
+          })
+        } else {
+          // Status đã bị đổi giữa chừng (vd user cancel / đường khác đánh dấu)
+          // — để nguyên trạng thái hiện tại, không đè
+          console.warn(
+            `[GoalLoopWorker] job ${job.id}: preempt-requeue không khớp (status đã đổi giữa chừng — giữ nguyên trạng thái hiện tại)`
+          )
+        }
+        return
+      }
       const cancelled = meta.cancelRequested || result.goalLoop?.stopReason === 'cancelled'
       if (cancelled) {
         await db.goalLoopJob

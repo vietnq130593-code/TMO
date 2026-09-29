@@ -208,6 +208,14 @@ export interface LLMCallOptions {
   /** 'auto' (default when tools provided) | 'none' | 'required' | specific function selector.
    *  Ignored when `tools` is undefined. */
   tool_choice?: 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } }
+  /** TASK D (token efficiency 2026-10-30): true = KHÔNG đính kèm options.tools
+   *  vào body.tools của call Zen HTTP dù caller có truyền schemas — dành cho
+   *  call path mà model HIỆN TẠI bỏ qua native FC (vd space-bunny-free trả 0
+   *  tool_calls, hành động chạy qua text protocol trong system prompt) → bớt
+   *  ~7k tokens/vòng schema JSON chết. Undefined/false = hành vi cũ (đính kèm
+   *  khi có tools) — MỌI caller khác không đặt cờ này nên không đổi hành vi.
+   *  Caller kiểm soát bằng env TMO_GOAL_LOOP_NATIVE_TOOLS. */
+  skipNativeTools?: boolean
   /** Phase 4 SMOLAB Prop 11' — explicit model override (e.g. 'openai/gpt-oss-120b').
    *  When provided, callLLM() calls ONLY this NVIDIA NIM model (round-robin across
    *  all 4 keys) instead of the rotating chat pool. No rotation fallback — if the
@@ -4135,7 +4143,10 @@ async function callZenProvider(
     temperature,
   }
   if (effort) body.reasoning_effort = effort
-  if (options?.tools && options.tools.length > 0) {
+  // TASK D (token efficiency 2026-10-30) — skipNativeTools: caller xin KHÔNG
+  // đính kèm body.tools (model hiện tại bỏ qua native FC — schema JSON ~7k
+  // tokens/vòng là dead weight). Caller khác không đặt cờ → giữ nguyên hành vi.
+  if (options?.tools && options.tools.length > 0 && options.skipNativeTools !== true) {
     try {
       body.tools = sanitizeToolSchemasDeep(options.tools)
     } catch {
@@ -4229,7 +4240,10 @@ async function callZenProvider(
       )
     }
 
-    console.log(`[ZEN] ${taskLabel} [key #${keyInfo.index + 1}] OK — ${content.length} chars, model ${actualModel}${totalTokens ? `, ${totalTokens} tokens` : ''}${reasoningTokens !== undefined ? ` (reasoning: ${reasoningTokens} tokens)` : ''}`)
+    // TASK D (telemetry 2026-10-30) — tách prompt/completion ngay trong log
+    // [ZEN] để đo bloat theo call (Task B: system+schemas ~45% vs transcript
+    // — không có split thì phải đoán từ TokenTracker DB sau khi flush).
+    console.log(`[ZEN] ${taskLabel} [key #${keyInfo.index + 1}] OK — ${content.length} chars, model ${actualModel}${totalTokens ? `, ${totalTokens} tokens (prompt: ${data.usage?.prompt_tokens ?? 0} / completion: ${data.usage?.completion_tokens ?? 0})` : ''}${reasoningTokens !== undefined ? ` (reasoning: ${reasoningTokens} tokens)` : ''}`)
     return {
       content,
       provider: 'zen',

@@ -225,6 +225,33 @@ export const GOAL_LOOP_CHECKPOINT_MIN_INTERVAL_MS = Math.max(0, intEnvWithDefaul
 /** Throttle ghi heartbeat (ms) */
 export const GOAL_LOOP_HEARTBEAT_MIN_INTERVAL_MS = Math.max(0, intEnvWithDefault('GOAL_LOOP_HEARTBEAT_MIN_INTERVAL_MS', 15000))
 
+// ==================== TASK C — STARVATION PREEMPTION (per-session mutex) ====================
+
+/**
+ * TASK C — ngưỡng cảnh báo starvation mutex per-session: job queued bị chờ
+ * (session có job khác đang chạy giữ mutex — claimQueued skip mỗi tick) ≥
+ * ngưỡng này → warn ⚠ (throttle 60s/session) + event 'session_mutex_starvation'
+ * + cho phép preempt blocker khi đủ điều kiện STALL_PREEMPT. 0 = tắt
+ * starvation tracking (cả warn lẫn preempt). Sự cố 2026-10-27: 2 job đói
+ * mutex 4.5h (3.258 dòng spam log) — trước đây KHÔNG có max-wait/preemption.
+ */
+export const GOAL_LOOP_MUTEX_STARVE_WARN_MS = Math.max(0, intEnvWithDefault('GOAL_LOOP_MUTEX_STARVE_WARN_MS', 600000))
+/**
+ * TASK C — điều kiện preempt: blocker trong Map running có heartbeat /
+ * last-activity stale ≥ ngưỡng này (mặc định 30' — XA hơn trần LLM call 8' +
+ * tool time, chỉ job wedged mới chạm) VÀ follower queued cùng session starvation
+ * ≥ GOAL_LOOP_MUTEX_STARVE_WARN_MS → worker xin PAUSE blocker (mirror pattern
+ * cancelRequested): loop thoát ở ranh giới vòng an toàn → requeue GIỮ
+ * checkpoint, nhường mutex cho follower. 0 = tắt preempt (warn vẫn chạy).
+ */
+export const GOAL_LOOP_STALL_PREEMPT_MS = Math.max(0, intEnvWithDefault('GOAL_LOOP_STALL_PREEMPT_MS', 1800000))
+/**
+ * TASK C — anti-thrash: mỗi job được preempt-requeue tối đa ngưỡng này lần
+ * (đếm in-memory theo jobId, reset khi worker restart) — preempt tiếp khi đã
+ * vượt ngưỡng → mark failed ('stale-heartbeat preempt limit') thay vì requeue.
+ */
+export const GOAL_LOOP_MUTEX_MAX_PREEMPTS = Math.max(1, intEnvWithDefault('GOAL_LOOP_MUTEX_MAX_PREEMPTS', 3))
+
 // ==================== TASK 43 — ADAPTIVE CONCURRENCY (AUTO-SCALING) ====================
 
 /**

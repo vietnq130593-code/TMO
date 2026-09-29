@@ -29,6 +29,15 @@
 #     → watchdog nghỉ ĐẾN hết hạn rồi TỰ HỒI NHIỆM VỤ (gỡ flag, kéo app dậy nếu
 #     cần) — bảo hiểm khi chuỗi bảo trì detached chết giữa chừng, app không bị
 #     bỏ mặc quá lâu (UI mất tối đa = thời hạn ghi trong flag).
+#
+# SMART-RESUME (fix 2026-09-30, sau sự cố preview mất 31 phút):
+#   · Flag CÒN hạn nhưng pm2 != online VÀ không còn process build nào sống
+#     (pgrep next.build) → lý do tạm dừng đã biến mất (chuỗi build detached
+#     chết giữa chừng — thực chiến: gate 21:01 stop app + flag 45 phút, next
+#     build bị OOM-kill sau 20 giây, app nằm im tới khi operator phát hiện).
+#     → gỡ flag + kéo app dậy NGAY, không đợi hết hạn.
+#   · Chỉ áp dụng cho flag CÓ epoch (chuỗi tự động có failsafe); flag rỗng =
+#     operator bảo trì thủ công → tuyệt đối tôn trọng, không tự ý kéo app.
 # =============================================================================
 
 APP="theopusflashlite"
@@ -49,7 +58,19 @@ while true; do
     if [ -n "$EXPIRY" ] && [ "$(date +%s)" -ge "$EXPIRY" ]; then
       log "keepalive-off flag HẾT HẠN (epoch $EXPIRY đã qua) — gỡ flag, HỒI NHIỆM VỤ"
       rm -f "$FLAG"
+    elif [ -n "$EXPIRY" ]; then
+      # SMART-RESUME: flag còn hạn — nhưng nếu app đã chết và chuỗi build đã
+      # không còn process nào sống thì chờ thêm là vô nghĩa (xem header).
+      PAUSE_STATUS=$(pm2 describe "$APP" 2>/dev/null | grep -m1 'status' | grep -oE 'online|stopped|errored|launching|stopping' | head -1)
+      if [ "$PAUSE_STATUS" != "online" ] && ! pgrep -f 'next.build' >/dev/null 2>&1; then
+        log "flag còn hạn nhưng pm2=$PAUSE_STATUS và KHÔNG còn process build sống — chuỗi build đã chết giữa chừng → gỡ flag, HỒI NHIỆM VỤ ngay"
+        rm -f "$FLAG"
+        pm2 restart "$APP" >/dev/null 2>&1
+      fi
+      sleep 30
+      continue
     else
+      # flag RỖNG (không epoch) = operator bảo trì thủ công — nghỉ vô hạn
       sleep 30
       continue
     fi

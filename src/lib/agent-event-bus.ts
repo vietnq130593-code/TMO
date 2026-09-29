@@ -42,6 +42,9 @@ export type AgentEventType =
   | 'job_claimed'
   | 'job_terminal'
   | 'job_heartbeat_stale'
+  // Task C (round-7): job queued bị chờ mutex per-session quá lâu (head-of-line
+  // blocking) — emit kèm blocker/follower trong payload để UI + ops theo dõi.
+  | 'session_mutex_starvation'
   // Auto-scaling / backpressure
   | 'capacity_changed'
   | 'queue_backpressure'

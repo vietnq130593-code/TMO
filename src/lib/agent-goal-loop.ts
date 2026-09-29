@@ -539,6 +539,7 @@ function buildInfraSelfServiceProtocol(): string {
   return `
 
 🔧 XỬ LÝ LỖI HẠ TẦNG & THIẾU TOOL/AGENT (chính sách 2026-10-27 — TỰ PHỤC VỤ theo thứ tự):
+💡 Nếu API hỗ trợ native tool_calls (function calling) → ƯU TIÊN dùng native tool_calls thay vì viết văn bản "tool_call: ..." (văn bản protocol dưới đây chỉ dành cho API không có native tool_calls).
 Khi vướng lỗi hạ tầng / thiếu thư viện / thiếu tool / việc ngoài chức trách của bạn — xử lý THEO THỨ TỰ sau (KHÔNG dừng ở bước đầu):
 1. THIẾU PACKAGE (module not found, dependency lỗi) → TỰ CÀI: tool_call: manage_packages({"action":"add","packages":["tên-package"]}) hoặc shell "bun add tên-package" — ĐÃ ĐƯỢC PHÉP tự làm (chính sách 2026-10-27).
 2. CẦN SỬA DB SCHEMA (thiếu bảng/cột cho việc đang làm) → TỰ SỬA: file_edit/file_write prisma/schema.prisma → shell "bun run db:push" → shell "bun run db:generate" (regenerate client). KHÔNG ghi tay file trong db/ (data) — chỉ qua prisma.
@@ -1604,6 +1605,18 @@ export async function runGoalDrivenLoop(params: {
   // khai báo whitelist ([] = mọi tool đều được phép) → truyền HẾT builtin
   // (76 tools ~15k tokens — space-bunny ctx 1M + prompt caching chấp nhận
   // được). Fail-open: lỗi build → [] (giữ text-protocol như cũ).
+  // ━━━ TASK D — TOKEN EFFICIENCY (2026-10-30, theo điều tra Task B) ━━━
+  // body.tools (full JSON schemas của 34 tools ~7k tokens) hiện là DEAD WEIGHT:
+  // model space-bunny-free trả 0 native tool_calls qua HTTP (bỏ qua body.tools)
+  // — đường hành động ĐANG HOẠT ĐỘNG là text protocol parseToolCallsFromOutput
+  // dùng compact schema block trong system prompt (bên dưới, KHÔNG đụng).
+  // Env knob TMO_GOAL_LOOP_NATIVE_TOOLS: '0' (mặc định) = KHÔNG gửi body.tools
+  // cho call agent goal-loop (tiết kiệm ~7k tokens/vòng); '1' = bật lại native
+  // FC khi model thật sự hỗ trợ (hybrid bridge native-first vẫn giữ nguyên).
+  const goalLoopNativeToolsEnabled = process.env.TMO_GOAL_LOOP_NATIVE_TOOLS?.trim() === '1'
+  if (!goalLoopNativeToolsEnabled) {
+    console.log(`[GoalLoop] ${agentName} native tools OFF (TMO_GOAL_LOOP_NATIVE_TOOLS=0) — bỏ body.tools khỏi call LLM (~7k tok/vòng tiết kiệm), hành động vẫn chạy qua text protocol trong prompt`)
+  }
   const nativeToolSchemas: LLMTool[] = (() => {
     try {
       const names = agentTools.length > 0 ? agentTools : getAllBuiltinToolNames()
@@ -2342,7 +2355,15 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             // tool_calls chuẩn (không phải đoán text protocol). Goal-loop xử
             // lý result.tool_calls ở hybrid bridge bên dưới (ưu tiên native,
             // fallback parseToolCallsFromOutput cho provider không FC).
-            ...(nativeToolSchemas.length > 0 ? { tools: nativeToolSchemas, tool_choice: 'auto' as const } : {}),
+            // TASK D (2026-10-30): skipNativeTools theo env
+            // TMO_GOAL_LOOP_NATIVE_TOOLS — '0' (mặc định) → callZenProvider
+            // KHÔNG đính kèm body.tools (dead weight với model bỏ qua native
+            // FC — tiết kiệm ~7k tok/vòng); '1' → hành vi TASK 39 như cũ.
+            ...(nativeToolSchemas.length > 0 ? {
+              tools: nativeToolSchemas,
+              tool_choice: 'auto' as const,
+              skipNativeTools: !goalLoopNativeToolsEnabled,
+            } : {}),
             abortCheck: isCancelled,
           }),
           LLM_TIMEOUT_MS,

@@ -219,6 +219,7 @@ audit-out/*
 !audit-out/artifact-meta.mjs
 !audit-out/negative-tests.mjs
 !audit-out/run-gate.sh
+!audit-out/gate-atomic.sh
 !audit-out/collect-evidence.sh
 !audit-out/gen-audit-report.mjs
 !audit-out/validate-report.mjs

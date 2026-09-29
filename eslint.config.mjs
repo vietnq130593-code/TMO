@@ -47,7 +47,12 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
   // .next-qa = distDir cô lập của quality gate (scripts/quality-gate.mjs) —
   // build FAIL giữa chừng (vd OOM exit 137) có thể để lại chunks sinh lỗi lint
   // ở lần gate sau; ignore vĩnh viễn.
-  ignores: ["node_modules/**", ".next/**", ".next-qa/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills", "public/**"]
+  // .next-audit-wp = work-product cache tsc của chuỗi audit (sinh .d.ts routes
+  // generated — 183 lỗi no-empty-object-type khi `bun run lint` trần quét phải);
+  // .next-audit-gate = distDir của run-gate.sh (cùng tính chất .next-qa).
+  // Fix sau sự cố 2026-09-30: `bun run lint` (không có --ignore-pattern như
+  // gate) fail 183 lỗi từ file generated — 2 dòng dưới đưa lint trần về sạch.
+  ignores: ["node_modules/**", ".next/**", ".next-qa/**", ".next-audit-wp/**", ".next-audit-gate/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills", "public/**"]
 }];
 
 export default eslintConfig;

@@ -63,11 +63,26 @@ afterAll(async () => {
 
 // ---------------------------------------------------------------------------
 // Chặn an toàn: nếu preload không chạy, test sẽ ghi vào DB production.
+// SENTINEL-FIX (round-7, sau gate 21:01 fail test_exit=1): assertion cũ chỉ
+// chấp nhận '/tmp/' — mâu thuẫn với CẢ 2 runner chính thức đều dùng DB test
+// repo-local (scripts/quality-gate.mjs → db/.quality-gate-test.db,
+// audit-out/run-gate.sh → db/.audit-gate-test.db) ⇒ test fail mọi lần chạy
+// gate dù DB đã cô lập đúng. Assertion mới: chấp nhận mọi DB test cô lập đã
+// biết (whitelist), vẫn cứng tay chặn mọi URL đụng DB production custom.db.
 // ---------------------------------------------------------------------------
 describe('môi trường test — DB phải được cô lập', () => {
-  test('DATABASE_URL trỏ vào bản copy trong /tmp', () => {
+  test('DATABASE_URL trỏ vào DB test cô lập (không đụng custom.db)', () => {
     const url = process.env.DATABASE_URL || ''
-    expect(url).toContain('/tmp/')
+    // Whitelist DB test hợp lệ:
+    //   - '/tmp/...' — harness copy cũ
+    //   - '.../db/.quality-gate-test.db' — scripts/quality-gate.mjs --stage=tests
+    //   - '.../db/.audit-gate-test.db' — audit-out/run-gate.sh
+    const isolated =
+      url.includes('/tmp/') ||
+      url.includes('.quality-gate-test.db') ||
+      url.includes('.audit-gate-test.db')
+    expect(isolated).toBe(true)
+    expect(url).not.toContain('custom.db')
   })
 })
 
