@@ -94,6 +94,11 @@ worklog.md
 # 2 đảm bảo "PM2 duy trì hiển thị giao diện app": phát hiện app không phục vụ
 # (stopped/wedge kéo dài) → tự pm2 restart từ NGOÀI process tree app.
 !/scripts/tmo-keepalive.sh
+# NGOẠI LỆ: round7-monitor.sh — trạm quan sát VÒNG 7 (ops): snapshot 10 tiêu
+# chí hiệu quả agents (delegation rate, read:work ratio, todo reconcile,
+# starvation recovery, memory RSS...) từ ToolMetric window API + dev.log.
+# Dùng: bash scripts/round7-monitor.sh [--watch]
+!/scripts/round7-monitor.sh
 # NGOẠI LỆ: script test model NIM (user-facing — bun scripts/test-llm-model.ts)
 !/scripts/test-llm-model.ts
 # NGOẠI LỆ: script test agent/chat/utility qua Z-AI SDK (bun scripts/test-agent-zai.ts)
