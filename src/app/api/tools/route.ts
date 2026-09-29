@@ -19,7 +19,29 @@ import { tavilyKeyPool, jinaKeyPool, serperKeyPool } from '@/lib/service-key-poo
 // Nguồn đơn của danh mục builtin: executor (ALL_TOOL_DEFINITIONS) xác định tool
 // THẬT SỰ có thể gọi. LOCAL_TOOLS bên dưới chỉ giữ metadata bổ sung.
 import { getAllBuiltinToolSummaries } from '@/lib/code-team/tool-executor'
+import { isFlagEnabled } from '@/lib/feature-flags'
 import type { CustomTool } from '@prisma/client'
+
+/**
+ * Trạng thái bật/tắt THẬT của một local tool.
+ *
+ * BUG CŨ (audit 2026-11): route gán `enabled: true` cứng cho MỌI local tool, trong
+ * khi executor (src/lib/code-team/tool-executor.ts) chặn runtime bằng feature
+ * flag `isFlagEnabled(...)`. Hệ quả: /api/tools báo db_query (và 21 tool khác)
+ * "đang bật" dù gọi thực tế bị từ chối → UI/Operators tin sai trạng thái.
+ *
+ * Sửa: CHỈ khi apiKeyEnv là feature flag (tiền tố ENABLE_) — tức executor thật sự
+ * chặn runtime — `enabled` mới phản ánh giá trị flag. Với api key thật
+ * (TAVILY_API_KEY, SERPER_API_KEY, ...) executor KHÔNG chặn (thiếu key chỉ khiến
+ * tool fail lúc gọi), nên `enabled` giữ nguyên `true` như hành vi cũ để không
+ * đổi metadata ngoài phạm vi bug. `flagGated` cho biết tool có bị gate hay
+ * không để UI hiển thị lý do.
+ */
+function resolveLocalToolAvailability(apiKeyEnv: string | undefined) {
+  const flagGated = Boolean(apiKeyEnv && apiKeyEnv.startsWith('ENABLE_'))
+  const enabled = flagGated ? isFlagEnabled(apiKeyEnv as string) : true
+  return { enabled, flagGated }
+}
 
 // FIX (P2 broken import): the route previously imported GATEWAY_TOOL_REGISTRY,
 // SESSION_CONTEXT_TOOLS, HTTP_ACCESSIBLE_TOOLS from '@/lib/openclaw' — but those
@@ -283,7 +305,8 @@ export async function GET(request: NextRequest) {
         implemented: meta?.implemented ?? true,
         apiKeyEnv: meta?.apiKeyEnv ?? '',
         hasApiKey: meta ? meta.hasApiKey : true,
-        enabled: true, // Local tools are always enabled
+        // Phản ánh feature flag thật (xem resolveLocalToolAvailability).
+        ...resolveLocalToolAvailability(meta?.apiKeyEnv),
       }
     })
 
@@ -302,7 +325,7 @@ export async function GET(request: NextRequest) {
         implemented: t.implemented,
         apiKeyEnv: t.apiKeyEnv,
         hasApiKey: t.hasApiKey,
-        enabled: true,
+        ...resolveLocalToolAvailability(t.apiKeyEnv),
       })
     }
 

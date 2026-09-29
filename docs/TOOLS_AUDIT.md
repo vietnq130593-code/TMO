@@ -1,6 +1,6 @@
 # TMO TOOLS AUDIT — Runtime Reality-Test (Task 21-d)
 
-> Ngày chạy: 2026-09-29 06:12:45 · Script: `scripts/audit-tools.ts` (bun in-process, import `executeTool` thật) · Temp workspace cô lập `/tmp/tmo-audit-<ts>/` + SQLite test riêng (không đụng DB app).
+> Ngày chạy: 2026-09-29 06:13:50 · Script: `scripts/audit-tools.ts` (bun in-process, import `executeTool` thật) · Temp workspace cô lập `/tmp/tmo-audit-<ts>/` + SQLite test riêng (không đụng DB app).
 
 ## 1. Tổng quan
 
@@ -15,83 +15,83 @@ Không có FAIL nào. 🎉
 
 | # | Tool | Origin | Flag | Runtime | Thời gian | Agents | Ghi chú |
 |---|------|--------|------|---------|-----------|--------|---------|
-| 1 | `knowledge_search` | native | — | ✅ OK | 455ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | Qdrant + Neo4j thật (read-only) |
-| 2 | `knowledge_graph` | native | — | ✅ OK | 692ms | G1, G3, Omega, new-agent | Neo4j Aura thật (read-only) |
+| 1 | `knowledge_search` | native | — | ✅ OK | 469ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | Qdrant + Neo4j thật (read-only) |
+| 2 | `knowledge_graph` | native | — | ✅ OK | 622ms | G1, G3, Omega, new-agent | Neo4j Aura thật (read-only) |
 | 3 | `knowledge_write` | native | — | ✅ OK | 2ms | G3, Omega | SQLite buffer DB test |
-| 4 | `tavily` | native | — | ✅ OK | 2703ms | TL, G1, Omega, new-agent | Tavily API — API key thật hoạt động |
-| 5 | `serper` | native | — | ✅ OK | 597ms | TL, G1, Omega, new-agent | Serper API (0 key cấu hình) → chạy qua z-ai-sdk FALLBACK (API keys .env bị 401 — SDK chỉ chạy trong sandbox z.ai; ngoài sandbox cần thay key) |
-| 6 | `jina` | native | — | ✅ OK | 918ms | TL, G1, Omega, new-agent | Jina API — API key thật hoạt động |
-| 7 | `web_search` | native | ENABLE_WEB_UNIFIED | ✅ OK | 3875ms | TL, G1, G2-A, G2-B, G3, Omega | Tavily→Serper→z-ai-sdk chain — API key thật hoạt động |
-| 8 | `web_fetch` | native | ENABLE_WEB_UNIFIED | ✅ OK | 897ms | TL, G1, G2-A, G2-B, G3, Omega | Jina→z-ai-sdk chain — API key thật hoạt động |
-| 9 | `file_read` | native | ENABLE_FILE_READ | ✅ OK | 3ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent |  |
-| 10 | `file_edit` | native | ENABLE_FILE_EDIT | ✅ OK | 1ms | TL, G2-A, G2-B, G3, Omega, new-agent |  |
-| 11 | `file_multi_edit` | native | ENABLE_FILE_MULTI_EDIT | ✅ OK | 1ms | TL, G2-A, G3, Omega, new-agent |  |
-| 12 | `file_write` | native | ENABLE_FILE_WRITE | ✅ OK | 4ms | TL, G2-A, G2-B, G3, Omega, new-agent | 21-d MỚI — overwrite-tao-moi:OK · append:OK · path-guard:OK (từ chối đúng) · disk-verify:OK |
-| 13 | `file_list` | native | ENABLE_FILE_LIST | ✅ OK | 2ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent |  |
-| 14 | `grep` | native | ENABLE_FILE_GREP | ✅ OK | 8ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent |  |
-| 15 | `file_delete` | native | ENABLE_FILE_DELETE | ✅ OK | 1ms | TL, G2-A, G3, Omega |  |
-| 16 | `shell` | native | ENABLE_SHELL_TOOL | ✅ OK | 5ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent |  |
-| 17 | `opencode` | native | — | ✅ OK | 3ms | TL, G2-A, G2-B, G3, Omega | thử opencode-server 18790, fallback local shell |
-| 18 | `run_tests` | native | ENABLE_RUN_TESTS | ✅ OK | 16ms | TL, G2-A, G2-B, G3, Omega, new-agent | bun test thật trong temp ws (audit 21-d fix bug argv) |
-| 19 | `git_commit` | native | ENABLE_GIT_COMMIT | ✅ OK | 17ms | TL, G2-A, G3, Omega | commit thật trong git repo temp |
-| 20 | `git_pull` | native | ENABLE_GIT_COMMIT | ✅ OK | 34ms | TL, G2-A, G3, Omega | dry_run với bare remote nội bộ (không pull thật) |
+| 4 | `tavily` | native | — | ✅ OK | 6047ms | TL, G1, Omega, new-agent | Tavily API — API key thật hoạt động |
+| 5 | `serper` | native | — | ✅ OK | 516ms | TL, G1, Omega, new-agent | Serper API (0 key cấu hình) → chạy qua z-ai-sdk FALLBACK (API keys .env bị 401 — SDK chỉ chạy trong sandbox z.ai; ngoài sandbox cần thay key) |
+| 6 | `jina` | native | — | ✅ OK | 295ms | TL, G1, Omega, new-agent | Jina API — API key thật hoạt động |
+| 7 | `web_search` | native | ENABLE_WEB_UNIFIED | ✅ OK | 3089ms | TL, G1, G2-A, G2-B, G3, Omega | Tavily→Serper→z-ai-sdk chain — API key thật hoạt động |
+| 8 | `web_fetch` | native | ENABLE_WEB_UNIFIED | ✅ OK | 300ms | TL, G1, G2-A, G2-B, G3, Omega | Jina→z-ai-sdk chain — API key thật hoạt động |
+| 9 | `file_read` | native | ENABLE_FILE_READ | ✅ OK | 7ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent |  |
+| 10 | `file_edit` | native | ENABLE_FILE_EDIT | ✅ OK | 3ms | TL, G2-A, G2-B, G3, Omega, new-agent |  |
+| 11 | `file_multi_edit` | native | ENABLE_FILE_MULTI_EDIT | ✅ OK | 5ms | TL, G2-A, G3, Omega, new-agent |  |
+| 12 | `file_write` | native | ENABLE_FILE_WRITE | ✅ OK | 7ms | TL, G2-A, G2-B, G3, Omega, new-agent | 21-d MỚI — overwrite-tao-moi:OK · append:OK · path-guard:OK (từ chối đúng) · disk-verify:OK |
+| 13 | `file_list` | native | ENABLE_FILE_LIST | ✅ OK | 3ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent |  |
+| 14 | `grep` | native | ENABLE_FILE_GREP | ✅ OK | 16ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent |  |
+| 15 | `file_delete` | native | ENABLE_FILE_DELETE | ✅ OK | 10ms | TL, G2-A, G3, Omega |  |
+| 16 | `shell` | native | ENABLE_SHELL_TOOL | ✅ OK | 45ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent |  |
+| 17 | `opencode` | native | — | ✅ OK | 10ms | TL, G2-A, G2-B, G3, Omega | thử opencode-server 18790, fallback local shell |
+| 18 | `run_tests` | native | ENABLE_RUN_TESTS | ✅ OK | 28ms | TL, G2-A, G2-B, G3, Omega, new-agent | bun test thật trong temp ws (audit 21-d fix bug argv) |
+| 19 | `git_commit` | native | ENABLE_GIT_COMMIT | ✅ OK | 103ms | TL, G2-A, G3, Omega | commit thật trong git repo temp |
+| 20 | `git_pull` | native | ENABLE_GIT_COMMIT | ✅ OK | 98ms | TL, G2-A, G3, Omega | dry_run với bare remote nội bộ (không pull thật) |
 | 21 | `git_push` | native | ENABLE_GIT_COMMIT | ⏭️ SKIP | 0ms | TL, G2-A, G3, Omega | không push remote thật (chỉ dry_run an toàn — pattern endpoint đã 200 ở task cũ) |
-| 22 | `manage_packages` | native | — | ✅ OK | 61ms | TL, G2-A, Omega | bun add thật (package nhỏ) trong temp ws — remove sau |
-| 23 | `run_bg` | native | — | ✅ OK | 3ms | TL, G2-A, G3, Omega | spawn sleep 120 thật |
+| 22 | `manage_packages` | native | — | ✅ OK | 13ms | TL, G2-A, Omega | bun add thật (package nhỏ) trong temp ws — remove sau |
+| 23 | `run_bg` | native | — | ✅ OK | 10ms | TL, G2-A, G3, Omega | spawn sleep 120 thật |
 | 24 | `read_output` | native | — | ✅ OK | 1ms | TL, G2-A, G3, Omega | poll process do run_bg spawn |
 | 25 | `kill_process` | native | — | ✅ OK | 201ms | TL, G2-A, G3, Omega | kill process do run_bg spawn |
-| 26 | `get_diagnostics` | native | — | ✅ OK | 628ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | opencode-server /lsp/diagnostics → fallback tsc |
-| 27 | `decompose_task` | native | — | ✅ OK | 6837ms | TL, G1, Omega | LLM call thật (callUtilityLLM) |
+| 26 | `get_diagnostics` | native | — | ✅ OK | 1797ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | opencode-server /lsp/diagnostics → fallback tsc |
+| 27 | `decompose_task` | native | — | ✅ OK | 6121ms | TL, G1, Omega | LLM call thật (callUtilityLLM) |
 | 28 | `create_task` | native | — | ✅ OK | 2ms | TL, G1, Omega |  |
-| 29 | `update_task` | native | — | ✅ OK | 2ms | TL, G1, Omega | task store in-memory (globalThis) |
-| 30 | `get_plan` | native | — | ✅ OK | 2ms | TL, G1, Omega |  |
-| 31 | `summarize` | native | — | ✅ OK | 6064ms | TL, G1, G3, Omega | LLM call thật |
-| 32 | `synthesize` | native | — | ✅ OK | 23195ms | TL, G1, G3, Omega | LLM call thật |
-| 33 | `todo_write` | native | ENABLE_TODO_TOOL | ✅ OK | 7ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | DB test cô lập |
-| 34 | `todo_read` | native | ENABLE_TODO_TOOL | ✅ OK | 1ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent |  |
-| 35 | `list_skills` | native | — | ✅ OK | 6ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | DB test (0 bundled) + filesystem skills/ thật |
-| 36 | `read_skill` | native | — | ✅ OK | 2ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | filesystem skills/pdf/SKILL.md |
-| 37 | `mcp_list_servers` | native | ENABLE_MCP_CALL | ✅ OK | 4ms | Omega | enum built-in + bridge (semi-mock) |
-| 38 | `mcp_call` | native | ENABLE_MCP_CALL | ⏭️ SKIP | 1ms | G2-A, G3, Omega | OK (đúng thiết kế D10 — lần đầu trả requiresPermission:true, user approve qua /api/openclaw/permissions rồi chạy tiếp; exec Phase 3 là mock) |
+| 29 | `update_task` | native | — | ✅ OK | 3ms | TL, G1, Omega | task store in-memory (globalThis) |
+| 30 | `get_plan` | native | — | ✅ OK | 3ms | TL, G1, Omega |  |
+| 31 | `summarize` | native | — | ✅ OK | 5661ms | TL, G1, G3, Omega | LLM call thật |
+| 32 | `synthesize` | native | — | ✅ OK | 24287ms | TL, G1, G3, Omega | LLM call thật |
+| 33 | `todo_write` | native | ENABLE_TODO_TOOL | ✅ OK | 32ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | DB test cô lập |
+| 34 | `todo_read` | native | ENABLE_TODO_TOOL | ✅ OK | 2ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent |  |
+| 35 | `list_skills` | native | — | ✅ OK | 80ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | DB test (0 bundled) + filesystem skills/ thật |
+| 36 | `read_skill` | native | — | ✅ OK | 3ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | filesystem skills/pdf/SKILL.md |
+| 37 | `mcp_list_servers` | native | ENABLE_MCP_CALL | ✅ OK | 13ms | Omega | enum built-in + bridge (semi-mock) |
+| 38 | `mcp_call` | native | ENABLE_MCP_CALL | ⏭️ SKIP | 0ms | G2-A, G3, Omega | OK (đúng thiết kế D10 — lần đầu trả requiresPermission:true, user approve qua /api/openclaw/permissions rồi chạy tiếp; exec Phase 3 là mock) |
 | 39 | `get_app_runtime_status` | native | — | ✅ OK | 0ms | TL, G2-A, G3, Omega, new-agent | empty-case (không preview nào chạy) — pattern 19-b |
-| 40 | `stop_preview` | native | — | ✅ OK | 64ms | TL, G2-A, G3, Omega | empty-case idempotent — không preview nào chạy |
+| 40 | `stop_preview` | native | — | ✅ OK | 59ms | TL, G2-A, G3, Omega | empty-case idempotent — không preview nào chạy |
 | 41 | `start_preview` | native | — | ⏭️ SKIP | 0ms | TL, G2-A, G3, Omega | không spawn dev server thật trong audit (tốn ~1GB RAM box 4GB) — pattern đã E2E verify ở Task 19-b (port 3005, startedBy agent) |
-| 42 | `gateway_tool` | openclaw-routed | — | ✅ OK | 6702ms | TL, G1, G2-A, G2-B, G3, Omega | bridge down (on-demand — OPENCLAW_ON_DEMAND=true, 18791 không chạy) |
-| 43 | `gateway_exec` | openclaw-routed | ENABLE_GATEWAY_TOOLS=off | ⏭️ SKIP | 0ms | G2-A, G2-B, G3, Omega | flag OFF (ENABLE_GATEWAY_TOOLS) + bridge down (on-demand) |
+| 42 | `gateway_tool` | openclaw-routed | — | ✅ OK | 29ms | TL, G1, G2-A, G2-B, G3, Omega | bridge down (on-demand — OPENCLAW_ON_DEMAND=true, 18791 không chạy) |
+| 43 | `gateway_exec` | openclaw-routed | ENABLE_GATEWAY_TOOLS=off | ⏭️ SKIP | 1ms | G2-A, G2-B, G3, Omega | flag OFF (ENABLE_GATEWAY_TOOLS) + bridge down (on-demand) |
 | 44 | `gateway_read` | openclaw-routed | ENABLE_GATEWAY_TOOLS=off | ⏭️ SKIP | 1ms | G2-A, G2-B, G3, Omega | flag OFF (ENABLE_GATEWAY_TOOLS) + bridge down (on-demand) |
 | 45 | `gateway_write` | openclaw-routed | ENABLE_GATEWAY_TOOLS=off | ⏭️ SKIP | 0ms | G2-A, G3, Omega | flag OFF (ENABLE_GATEWAY_TOOLS) + bridge down (on-demand) |
 | 46 | `gateway_edit` | openclaw-routed | ENABLE_GATEWAY_TOOLS=off | ⏭️ SKIP | 0ms | G2-A, G2-B, G3, Omega | flag OFF (ENABLE_GATEWAY_TOOLS) + bridge down (on-demand) |
-| 47 | `gateway_apply_patch` | openclaw-routed | ENABLE_GATEWAY_TOOLS=off | ⏭️ SKIP | 0ms | G2-A, G3, Omega | flag OFF (ENABLE_GATEWAY_TOOLS) + bridge down (on-demand) |
-| 48 | `create_custom_tool` | native | — | ✅ OK | 183ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | DB test + SKILL.md companion (tự dọn sau delete) |
-| 49 | `list_custom_tools` | native | — | ✅ OK | 8ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent |  |
-| 50 | `audit_hello` | native | — | ✅ OK | 2ms | — | custom tool vừa tạo — hot-register dispatch |
-| 51 | `delete_custom_tool` | native | — | ✅ OK | 8ms | TL, G1, G2-A, G2-B, G3, Omega | dọn custom tool + skill companion |
+| 47 | `gateway_apply_patch` | openclaw-routed | ENABLE_GATEWAY_TOOLS=off | ⏭️ SKIP | 1ms | G2-A, G3, Omega | flag OFF (ENABLE_GATEWAY_TOOLS) + bridge down (on-demand) |
+| 48 | `create_custom_tool` | native | — | ✅ OK | 18ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | DB test + SKILL.md companion (tự dọn sau delete) |
+| 49 | `list_custom_tools` | native | — | ✅ OK | 5ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent |  |
+| 50 | `audit_hello` | native | — | ✅ OK | 3ms | — | custom tool vừa tạo — hot-register dispatch |
+| 51 | `delete_custom_tool` | native | — | ✅ OK | 6ms | TL, G1, G2-A, G2-B, G3, Omega | dọn custom tool + skill companion |
 | 52 | `delegate_task` | native | ENABLE_SUBAGENT_DELEGATE | ⏭️ SKIP | 0ms | TL, Omega | tốn LLM call thật (sub-agent mini ReAct loop) — đã E2E nhiều lần trong worklog 20-b/c |
 | 53 | `escalate_problem` | native | — | ⏭️ SKIP | 0ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | tốn LLM call thật (Omega consult) — đã E2E task 20-b |
 | 54 | `create_agent` | native | — | ⏭️ SKIP | 0ms | Omega | tạo agent thật (LLM/KIMI call + DB write) — đã E2E task 20-b |
 | 55 | `dispatch_agent` | native | — | ⏭️ SKIP | 0ms | Omega | chạy agent loop thật (nhiều LLM call) — đã E2E task 20-b |
-| 56 | `lsp_diagnostics` | native | ENABLE_LSP_DIAGNOSTICS=on | ✅ OK | 1138ms | TL, G1, G2-A, G2-B, G3, Omega | flag ON — tsc thật (workspace audit: file không có → empty diagnostics vẫn OK) |
-| 57 | `browser_screenshot` | native | ENABLE_BROWSER_SCREENSHOT=on | ✅ OK | 1152ms | TL, G2-A, G2-B, Omega | flag ON — Playwright chromium chụp app đang chạy (cần binary: bunx playwright install chromium) |
-| 58 | `lint` | native | ENABLE_LINT=on | ✅ OK | 236ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | flag ON — ESLint thật trong workspace audit (repo thật đã live-verify qua /api/tools/execute) |
-| 59 | `type_check` | native | ENABLE_TYPE_CHECK=on | ✅ OK | 100ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | flag ON — tsc thật trong workspace audit |
-| 60 | `test_coverage` | native | ENABLE_TEST_COVERAGE=on | ✅ OK | 14ms | G1, G2-A, G3, Omega | flag ON — bun test thật trong workspace audit |
+| 56 | `lsp_diagnostics` | native | ENABLE_LSP_DIAGNOSTICS=on | ✅ OK | 1641ms | TL, G1, G2-A, G2-B, G3, Omega | flag ON — tsc thật (workspace audit: file không có → empty diagnostics vẫn OK) |
+| 57 | `browser_screenshot` | native | ENABLE_BROWSER_SCREENSHOT=on | ✅ OK | 3051ms | TL, G2-A, G2-B, Omega | flag ON — Playwright chromium chụp app đang chạy (cần binary: bunx playwright install chromium) |
+| 58 | `lint` | native | ENABLE_LINT=on | ✅ OK | 463ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | flag ON — ESLint thật trong workspace audit (repo thật đã live-verify qua /api/tools/execute) |
+| 59 | `type_check` | native | ENABLE_TYPE_CHECK=on | ✅ OK | 143ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | flag ON — tsc thật trong workspace audit |
+| 60 | `test_coverage` | native | ENABLE_TEST_COVERAGE=on | ✅ OK | 97ms | G1, G2-A, G3, Omega | flag ON — bun test thật trong workspace audit |
 | 61 | `db_query` | native | ENABLE_DB_QUERY=off | ⏭️ SKIP | 0ms | TL, G1, G3, Omega | flag OFF (mặc định .env — chủ đích an toàn) — read-only Prisma $queryRawUnsafe guard sẵn sàng |
-| 62 | `git_status` | native | — | ✅ OK | 9ms | TL, G2-A, G2-B, G3, Omega | trạng thái repo temp audit (read-only) |
-| 63 | `git_log` | native | — | ✅ OK | 6ms | TL, G2-A, G2-B, G3, Omega | 3 commit gần nhất repo temp audit |
+| 62 | `git_status` | native | — | ✅ OK | 47ms | TL, G2-A, G2-B, G3, Omega | trạng thái repo temp audit (read-only) |
+| 63 | `git_log` | native | — | ✅ OK | 4ms | TL, G2-A, G2-B, G3, Omega | 3 commit gần nhất repo temp audit |
 | 64 | `git_diff` | native | — | ✅ OK | 7ms | TL, G2-A, G2-B, G3, Omega | diff vs HEAD repo temp audit |
-| 65 | `git_branch` | native | — | ✅ OK | 9ms | TL, G2-A, G3, Omega | liệt kê branch repo temp audit |
+| 65 | `git_branch` | native | — | ✅ OK | 16ms | TL, G2-A, G3, Omega | liệt kê branch repo temp audit |
 | 66 | `git_push` | native | — | ⏭️ SKIP | 0ms | TL, G2-A, G3, Omega | không push thật trong audit — chỉ dry_run git_pull an toàn hơn; đã live-verify qua /api/tools/execute ở task trước |
 | 67 | `git_commit` | native | — | ⏭️ SKIP | 0ms | TL, G2-A, G3, Omega | ghi commit vào repo temp đã E2E verify ở task trước; audit này ưu tiên case chưa từng chạy |
 | 68 | `git_clone` | native | — | ⏭️ SKIP | 0ms | TL, Omega | clone ra /tmp tốn disk + chậm; đã E2E verify qua /api/tools/execute ở task trước |
 | 69 | `verify_and_push` | native | — | ⏭️ SKIP | 0ms | TL, G3, Omega | pipeline 7 bước (lint→typecheck→test→smoke→quét secret→commit→push) — chạy trong audit sẽ tốn hàng chục phút + cần git push thật; E2E verify ở task khác |
-| 70 | `context_recall` | native | — | ✅ OK | 353ms | TL, G2-A, G2-B, G3, Omega | truy hồi digest — trả về n/a kết quả |
-| 71 | `hypothesis_write` | native | — | ✅ OK | 4ms | — | op=list — chỉ đọc, không propose/judge |
-| 72 | `manage_tools` | native | — | ✅ OK | 3ms | Omega | list_tools — chỉ đọc matrix tool/agent, KHÔNG set_tool_access |
-| 73 | `manage_automation` | native | — | ✅ OK | 7ms | Omega | list_cron — chỉ đọc, không create/toggle/delete |
+| 70 | `context_recall` | native | — | ✅ OK | 379ms | TL, G2-A, G2-B, G3, Omega | truy hồi digest — trả về n/a kết quả |
+| 71 | `hypothesis_write` | native | — | ✅ OK | 14ms | — | op=list — chỉ đọc, không propose/judge |
+| 72 | `manage_tools` | native | — | ✅ OK | 10ms | Omega | list_tools — chỉ đọc matrix tool/agent, KHÔNG set_tool_access |
+| 73 | `manage_automation` | native | — | ✅ OK | 17ms | Omega | list_cron — chỉ đọc, không create/toggle/delete |
 | 74 | `request_code_team` | native | — | ⏭️ SKIP | 0ms | Omega | đã verify qua log chạy 21-d: khởi động workflow thật ct-req-1790643741111 (TL MEGATRON routing Mode A/Tier 1) nhưng timeout 60000ms; gọi lại sẽ spawn team + tốn LLM call thật nên SKIP ở audit idempotent |
 | 75 | `dispatch_agents_parallel` | native | — | ⏭️ SKIP | 0ms | Omega | fan-out 2-4 sub-agent — tốn LLM token thật + slot pool; đã xác minh tồn tại trong catalog (getAllBuiltinToolNames) và route qua executeTool như mọi tool khác; chạy thật sẽ spawn agent nên SKIP ở audit |
 | 76 | `propose_automation` | native | — | ⏭️ SKIP | 0ms | TL, G1, G2-A, G2-B, G3, Omega, new-agent | đề xuất tài nguyên automation cần user duyệt qua module Self-direction — không tự test được độc lập (ghi DB thật ngoài temp scope) |
-| 77 | `open_workspace` | native | — | ✅ OK | 3ms | TL, Omega | mở File Explorer — GUI side-effect, xem docs nếu fail |
+| 77 | `open_workspace` | native | — | ✅ OK | 34ms | TL, Omega | mở File Explorer — GUI side-effect, xem docs nếu fail |
 | 78 | `exit_plan_mode` | native | ENABLE_PLAN_MODE=off | ⏭️ SKIP | 0ms | TL, G3, Omega | cần UI plan-mode approve flow — không test độc lập được |
 | 79 | `cron` | native | ENABLE_CRON_TOOL=off | ⏭️ SKIP | 0ms | TL, G3, Omega | cron-scheduler mini-service riêng (port 3004) — tool chỉ flip .env khi cần |
 
@@ -124,6 +124,50 @@ Không có FAIL nào. 🎉
 - `bun run build` (Next.js 16.3.2 + Turbopack) KHÔNG hoàn tất trên box này: tiến trình bị kernel SIGKILL, `BUILD_EXIT_CODE=137` — đây là OOM hệ thống, không phải lỗi mã nguồn.
 - Bằng chứng gián tiếp: `typecheck` 0 lỗi, `lint` 0 lỗi, `tests` 203/203 pass, E2E không fail. Lỗi chỉ xuất hiện ở bước sinh optimizer artifact.
 - Nợ CÓ ĐIỀU KIỆN — cần quyết định của Mr. Architect: (a) tăng RAM hoặc thêm swap cho box build, hoặc (b) dựng CI/máy build riêng. Không sửa code để né OOM.
+
+## 4c. Sửa 2 root cause phát hiện ở audit vòng đời custom tool
+
+Cả hai lỗi đều là lỗi ĐỒNG BỘ TRẠNG THÁI: một nơi ghi, một nơi khác đọc, hai nguồn lệch nhau và không ai tự lộ.
+
+### RC-1 — `callCount` cache lệch DB sau khi custom tool chạy
+
+- Nguyên nhân: `RegistryEntry` mang thêm field `callCount` trùng tên với `CustomToolEntry.callCount`. DB tăng theo `entry.tool.id`, nhưng bộ nhớ tăng `entry.callCount`. Mọi bề mặt đọc đều đi qua `getAllCustomTools()` — hàm trả về `entry.tool` — nên `list_custom_tools` và `tool-executor` vẫn đọc giá trị 0 trong khi DB đã tăng.
+- Sửa: bỏ field trùng khỏi `RegistryEntry`; `CustomToolEntry.callCount` là nguồn DUY NHẤT; `executeCustomTool()` ghi `entry.tool.callCount`.
+- Bằng chứng: ô `execute/callcount-sync` — db=4 mem=4 (PASS).
+
+### RC-2 — tạo được custom tool trùng tên với built-in đang thực thi
+
+- Nguyên nhân: `isToolNameTaken()` chỉ tra registry + `ALL_KNOWN_TOOLS` (43 tên), còn executor có 76 built-in thực sự chạy được. 66 tên thiếu khỏi tập known, trong đó `file_read` — tức tạo được một custom tool mang tên `file_read`, gây mơ hồ khi dispatch.
+- Sửa: `isToolNameTaken()` thành async, thứ tự tra registry → `ALL_KNOWN_TOOLS` → dynamic import `isBuiltinTool()`. Dynamic import là chủ ý để tránh vòng import (`tool-executor` nặng và đã import ngược registry). Nếu import lỗi thì fail-closed trên nhánh built-in.
+- Hệ quả phụ cần biết: `createCustomTool()` và `POST /api/tools/register` đều phải `await` hàm async.
+- Bằng chứng: ô `create/duplicate-builtin` — tạo tên `file_read` bị từ chối với lý do trùng built-in (PASS).
+
+### Ma trận kiểm định vòng đời — 22/22 PASS
+
+Script `audit-out/lifecycle-matrix.ts` (bun, DB cô lập trong `/tmp/tmo-lifecycle-<ts>/`), log `audit-out/lc-run.log`:
+
+- CREATE 9/9 · LIST 3/3 · EXECUTE 5/5 · RELOAD 1/1 · DELETE 3/3 · LIFECYCLE 1/1 → `LC_EXIT=0`, tổng `22/22 PASS, 0 FAIL`.
+- Phủ: tạo hợp lệ, tạo trùng tên custom, tạo trùng built-in, tên sai định dạng, handle nguy hiểm, row DB + giữ `required`, skill companion, shape field của list, đồng bộ callCount, hiệu lực code, xóa, xóa lần 2, gọi tool đã xóa, list sau khi xóa, không tồn tại đường update.
+
+### Hồi quy toàn dự án
+
+- `bunx tsc --noEmit` → TSC_EXIT=0, log 0 dòng.
+- `npx eslint .` → LINT_EXIT=0.
+- `bun test` → 204 pass / 0 fail / 0 skip.
+
+## 4d. Issue Ledger — phân loại toàn bộ tool failure đã gặp
+
+| # | Triệu chứng | Phân loại | Nguyên nhân | Trạng thái |
+|---|---|---|---|---|
+| 1 | `bun audit-out/lifecycle-matrix.ts` exit 2 | lỗi mã nguồn (script audit) | Assertion viết lại dở tạo `d1`/dấu phẩy tồn đọng → TS1009 | ĐÃ SỬA — `bunx tsc --noEmit` exit 0, script chạy exit 0 |
+| 2 | Exit code 0 giả khi pipe qua `head` | lỗi dòng lệnh | `$?` lấy exit của `head` chứ không phải của lệnh gốc | ĐÃ SỬA — bỏ pipe, ghi log ra file rồi grep, tách `LC_EXIT`/`TSC_EXIT`/`LINT_EXIT` |
+| 3 | `db_query` trả lỗi khi probe | KHÔNG phải lỗi — hành vi có chủ đích | `ENABLE_DB_QUERY=false` tại `.env:435`, mặc định `'false'` ở `feature-flags.ts:79`, executor chặn ở `tool-executor.ts:2540` | GIỮ NGUYÊN — guard read-only chỉ mở khi cần |
+| 4 | Tổng hợp verify chạy nền không có kết quả | quy trình | Lệnh gom nhiều bước quá nặng (OOM) + `/bin/sh` không hiểu cú pháp bash | ĐÃ SỬA — tách từng kiểm định chạy foreground, mỗi lệnh một exit code rõ ràng |
+| 5 | `db-query E2E` exit 1 ở lần đầu | lỗi kịch bản probe | Probe gọi tool khi cờ đang tắt | ĐÃ PHÂN LOẠI — trùng #3, không phải lỗi hệ thống |
+| 6 | Tiến trình nền còn treo sau khi chạy | vệ sinh môi trường | Không poll `read_output` | ĐÃ DỌN — `read_output` list trả `total=0` tiến trình |
+| 7 | `register/route.ts` đổi mode 755 → 644 | vệ sinh git | Ghi file khi sửa làm mất bit executable | GHI NHẬN — mức thấp, Next.js không cần bit thực thi cho route |
+
+Còn 1 nợ CÓ ĐIỀU KIỆN (không phụ thuộc code): `bun run build` OOM `exit 137` — xem §4b, cần quyết định của Mr. Architect về RAM/CI.
 
 ## 5. Ghi chú methodology
 

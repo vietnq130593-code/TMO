@@ -47,9 +47,11 @@ interface RegistryEntry {
   tool: CustomToolEntry
   registeredAt: Date
   gatewayRegistered: boolean
-  /** Bản sao callCount trong bộ nhớ — đồng bộ sau mỗi lần execute để
-   *  list_custom_tools khớp với DB (chu kỳ 39: DB=1 nhưng list báo 0). */
-  callCount?: number
+  // KHÔNG thêm field callCount riêng ở đây. Nguồn đọc DUY NHẤT là
+  // getAllCustomTools() trả về entry.tool (tool-executor list_custom_tools
+  // dòng 3283, /api/tools dòng 418). Bản sao thứ hai chỉ gây lệch âm thầm:
+  // execute tăng field này còn list vẫn đọc entry.tool → DB=1, list báo 0
+  // (chu kỳ 39). callCount sống trên CustomToolEntry là bản duy nhất.
 }
 
 export interface ExecutionResult {
@@ -165,14 +167,34 @@ export function getAllCustomTools(): CustomToolEntry[] {
 }
 
 /**
- * Check if a tool name is already taken (custom, local, or gateway)
+ * Check if a tool name is already taken (custom, built-in, local, or gateway).
+ *
+ * Async vì phải tra danh sách built-in THẬT — nguồn chuẩn nằm ở
+ * ALL_TOOL_DEFINITIONS (private) trong code-team/tool-executor, export qua
+ * isBuiltinTool(). ALL_KNOWN_TOOLS (skill-tool-schema) chỉ hợp nhất gateway
+ * HTTP/bridge + LOCAL_TOOLS nên THIẾU hẳn các built-in thực thi (vd file_read).
+ *
+ * Import ĐỘNG có chủ ý: tool-executor là module rất nặng (agents.ts, db,
+ * preview-registry...) và bản thân nó lại import ngược module này bằng
+ * `await import` ở 4 chỗ — import tĩnh ở đây dễ tạo vòng import.
  */
-export function isToolNameTaken(name: string): boolean {
+export async function isToolNameTaken(name: string): Promise<boolean> {
   // Check custom registry
   if (registry.has(name)) return true
 
-  // Check known built-in/gateway tools
+  // Check known gateway/local tools
   if (ALL_KNOWN_TOOLS.has(name)) return true
+
+  // Check built-in tools thật (file_read, shell, git_commit, ...)
+  try {
+    const { isBuiltinTool } = await import('@/lib/code-team/tool-executor')
+    if (isBuiltinTool(name)) return true
+  } catch (err) {
+    // Fail-open: không tra được danh sách built-in thì KHÔNG chặn tạo tool
+    // (giữ hành vi cũ, chỉ log để debug) — chặn cả thì hỏng chức năng tạo
+    // custom tool khi tool-executor lỗi.
+    console.warn(`[CustomToolRegistry] Không kiểm tra được built-in tools cho "${name}":`, err)
+  }
 
   return false
 }
@@ -307,7 +329,9 @@ export async function executeCustomTool(
   }).catch(() => { /* ignore */ })
   // Đồng bộ bộ nhớ: nếu không, list_custom_tools đọc bản cache cũ và báo callCount=0
   // trong khi DB đã tăng → hai nguồn đọc lệch nhau (đã quan sát ở chu kỳ 39).
-  entry.callCount = (entry.callCount || 0) + 1
+  // Ghi vào entry.tool — KHÔNG phải entry.callCount: mọi bề mặt đọc đều đi qua
+  // getAllCustomTools() nên chỉ entry.tool.callCount mới được nhìn thấy.
+  entry.tool.callCount = (entry.tool.callCount || 0) + 1
 
   try {
     const sandbox = createSandbox(name)
@@ -593,7 +617,7 @@ export async function createCustomTool(input: {
   if (!name || typeof name !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
     return { success: false, error: 'Invalid tool name — phải bắt đầu bằng chữ/c underscore, chỉ chứa [a-zA-Z0-9_]' }
   }
-  if (isToolNameTaken(name)) {
+  if (await isToolNameTaken(name)) {
     return { success: false, error: `Tool name "${name}" bị trùng với built-in/gateway tool hoặc custom tool đã có` }
   }
   const existing = await db.customTool.findUnique({ where: { name } })

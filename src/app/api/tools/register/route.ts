@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
 
     // ===== Validate name uniqueness =====
     // Check against known built-in/gateway tools first (fast, in-memory)
-    if (isToolNameTaken(name)) {
+    if (await isToolNameTaken(name)) {
       return NextResponse.json(
         { error: `Tool name "${name}" conflicts with an existing built-in or gateway tool` },
         { status: 409 }
