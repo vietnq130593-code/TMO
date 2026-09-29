@@ -33,6 +33,12 @@ import { qdrant } from '@/lib/qdrant'
 import { generateEmbedding } from '@/lib/embeddings'
 import { storeMemory } from '@/lib/agent-memory'
 import { summarizeMemories } from './memory-summarization'
+// PROMOTE_PAGE_SIZE / PROMOTE_MAX_PAGES + buildPromotionPlan (audit 2026-11 D2/D3):
+// quy tắc "bản ghi nào được xóa" nằm ở module PURE LOGIC để test được không cần DB.
+import {
+  PROMOTE_MAX_PAGES,
+  PROMOTE_PAGE_SIZE,
+} from './memory-promotion-plan'
 
 // ==================== CONFIG ====================
 
@@ -86,80 +92,103 @@ export interface TierTransitionResult {
  */
 export async function promoteWorkingMemoryToWarm(
   agentId: string,
-  sessionId?: string
-): Promise<{ promoted: number; errors: string[] }> {
+  sessionId?: string,
+  maxPages: number = PROMOTE_MAX_PAGES
+): Promise<{ promoted: number; deleted: number; pages: number; errors: string[] }> {
   const errors: string[] = []
   let promoted = 0
+  let deleted = 0
+  let pages = 0
   const now = new Date()
+  const handledIds = new Set<string>()
 
   try {
-    // Find expired working memory records
-    const where: { agentId: string; sessionId?: string; expiresAt?: { lt: Date } } = { agentId }
-    if (sessionId) {
-      where.sessionId = sessionId
-    } else {
-      where.expiresAt = { lt: now }
-    }
-
-    const workingMemories = await db.workingMemory.findMany({
-      where,
-      orderBy: { createdAt: 'asc' },
-      take: 100, // cap per call
-    })
-
-    if (workingMemories.length === 0) {
-      return { promoted: 0, errors: [] }
-    }
-
-    console.log(`[MemoryTiers] Promoting ${workingMemories.length} working memories to WARM for agent ${agentId}`)
-
-    // Group by session for LLM extraction (1 LLM call per session)
-    const bySession = new Map<string, typeof workingMemories>()
-    for (const wm of workingMemories) {
-      const arr = bySession.get(wm.sessionId) || []
-      arr.push(wm)
-      bySession.set(wm.sessionId, arr)
-    }
-
-    // Lazy import to avoid circular deps
+    // Lazy import để tránh circular deps
     const { extractMemoriesFromConversation } = await import('@/lib/agent-memory')
+    const { buildPromotionPlan } = await import('./memory-promotion-plan')
 
-    for (const [sessId, memories] of bySession) {
-      try {
-        // Find user + assistant messages to extract from
-        const userMsgs = memories.filter(m => m.role === 'user').map(m => m.content).join('\n')
-        const assistantMsgs = memories.filter(m => m.role === 'assistant').map(m => m.content).join('\n')
+    console.log(`[MemoryTiers] Promoting HOT→WARM for agent ${agentId} (session=${sessionId ?? 'all'}, maxPages=${maxPages})`)
 
-        if (userMsgs && assistantMsgs) {
-          // Use existing extraction logic
-          const result = await extractMemoriesFromConversation({
-            agentId,
-            agentName: memories[0]?.agentId || 'unknown',
-            sessionId: sessId,
-            userMessage: userMsgs,
-            assistantMessage: assistantMsgs,
-          })
-          promoted += result.memoriesCreated
-        }
-
-        // Delete working memory records (regardless of extraction success)
-        await db.workingMemory.deleteMany({
-          where: { agentId, sessionId: sessId },
-        })
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        console.warn(`[MemoryTiers] Failed to promote session ${sessId}:`, msg)
-        errors.push(`Session ${sessId}: ${msg}`)
+    while (pages < maxPages) {
+      const where: {
+        agentId: string
+        sessionId?: string
+        expiresAt?: { lt: Date }
+        id?: { notIn: string[] }
+      } = { agentId }
+      if (sessionId) {
+        where.sessionId = sessionId
+      } else {
+        where.expiresAt = { lt: now }
       }
+      // Loại bản ghi đã xử lý ở lượt trước → mỗi lượt tiến được, không kẹt vòng lặp
+      if (handledIds.size > 0) where.id = { notIn: [...handledIds] }
+
+      const workingMemories = await db.workingMemory.findMany({
+        where,
+        orderBy: { createdAt: 'asc' },
+        take: PROMOTE_PAGE_SIZE,
+      })
+      pages += 1
+      if (workingMemories.length === 0) break
+
+      // Quy tắc thuần (test được không cần DB) quyết định cái gì xóa / cái gì trích
+      const plan = buildPromotionPlan(
+        workingMemories.map(m => ({
+          id: m.id,
+          agentId: m.agentId,
+          sessionId: m.sessionId,
+          content: m.content,
+          role: m.role,
+          expiresAt: m.expiresAt,
+        })),
+        { agentId, now, sessionId }
+      )
+
+      for (const group of plan.groups) {
+        try {
+          if (group.needsExtraction) {
+            const result = await extractMemoriesFromConversation({
+              agentId,
+              agentName: agentId,
+              sessionId: group.sessionId,
+              userMessage: group.userMsgs,
+              assistantMessage: group.assistantMsgs,
+            })
+            promoted += result.memoriesCreated
+          }
+
+          // SAFETY (audit 2026-11): xóa ĐÚNG id đã đọc + đã hết hạn.
+          // Trước đây deleteMany({agentId, sessionId}) xóa cả bản ghi chưa hết hạn.
+          const del = await db.workingMemory.deleteMany({
+            where: { id: { in: group.deletableIds } },
+          })
+          deleted += del.count
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          console.warn(`[MemoryTiers] Failed to promote session ${group.sessionId}:`, msg)
+          errors.push(`Session ${group.sessionId}: ${msg}`)
+        } finally {
+          // kể cả lỗi cũng đánh dấu đã xử lý để không đọc lại vô hạn
+          for (const id of group.deletableIds) handledIds.add(id)
+        }
+      }
+
+      if (workingMemories.length < PROMOTE_PAGE_SIZE) break
+    }
+
+    if (pages >= maxPages) {
+      console.warn(
+        `[MemoryTiers] promote page cap reached (${maxPages}×${PROMOTE_PAGE_SIZE}) cho agent ${agentId} — phần HOT còn lại để lượt gọi sau xử lý`
+      )
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     errors.push(`promoteWorkingMemoryToWarm: ${msg}`)
   }
 
-  return { promoted, errors }
+  return { promoted, deleted, pages, errors }
 }
-
 /**
  * Add a new entry to WorkingMemory (HOT tier).
  * Called by chat route for each message in a session.

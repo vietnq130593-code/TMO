@@ -22,6 +22,9 @@ import { db } from '@/lib/db'
 import { qdrant } from '@/lib/qdrant'
 import { generateEmbedding, generateQueryEmbedding, getEmbeddingDimension, generateEmbeddingBatch } from '@/lib/embeddings'
 import { callUtilityLLM } from '@/lib/llm'
+// D1 (audit 2026-11): quy tắc "có chạy tier transitions không" nằm ở module PURE LOGIC
+// để test được không cần DB. Trả true luôn → HOT→WARM không còn bị gate bởi WARM deactive.
+import { shouldRunTierTransitions } from './memory-promotion-plan'
 
 // ==================== CONSTANTS ====================
 
@@ -909,9 +912,10 @@ export async function decayMemories(agentId: string): Promise<DecayResult> {
       console.log(`[AgentMemory] Decay for agent ${agentId}: ${decayed} decayed, ${deactivated} deactivated`)
     }
 
-    // Phase 4: Run tier transitions (archive decayed + cleanup expired archives)
-    // Only run if there were any decayed/deactivated memories (avoid wasted work)
-    if (deactivated > 0) {
+    // Phase 4: Run tier transitions (HOT promote + WARM archive + COLD cleanup)
+    // D1 (audit 2026-11): trước đây gate `deactivated > 0` chặn cả HOT→WARM
+    // khi không có memory WARM nào hết hạn → backlog HOT không bao giờ được dọn.
+    if (shouldRunTierTransitions({ decayed, deactivated })) {
       try {
         const { runTierTransitions } = await import('@/lib/memory-tiers')
         const tierResult = await runTierTransitions(agentId)
