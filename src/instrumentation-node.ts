@@ -38,6 +38,47 @@ try {
   console.error('[instrumentation] ensureTmoApiToken failed:', err)
 }
 
+// ============================================================================
+// MEM WATCHDOG (2026-09-28 — quan sát vận hành thật: 2 lần kernel OOM-killer
+// SIGKILL next-server giữa chừng agent run, 23:08 RSS 2.46GB + 23:23 RSS
+// 1.44GB, memcg 4GB cạn tổng thể — nhiệm vụ agent 15 phút chết sạch, user
+// message không có câu trả lời). PM2 max_memory_restart đo pid wrapper nên
+// KHÔNG thấy heap của child next-server → guard ấy bất lực. Watchdog này
+// chạy NGAY TRONG next-server (instrumentation load ở đó): RSS vượt ngưỡng
+// MEM_WATCHDOG_MB (mặc định 1700) trong 2 lần kiểm tra liên tiếp (60s) →
+// log rõ + process.exit(1) — PM2 restart sạch trong ~5s (SQLite WAL bền,
+// mini-services được service-manager dọn + respawn, durable goal-loop jobs
+// RESUME từ checkpoint). Đổi tự sát có kiểm soát còn hơn kernel SIGKILL cả
+// cây tiến trình không báo trước (có thể chọn nhầm nạn nhân khác).
+// Tắt hẳn: MEM_WATCHDOG_MB=0.
+// ============================================================================
+const globalForMemWatchdog = globalThis as unknown as { __tmoMemWatchdogStarted?: boolean }
+if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
+  globalForMemWatchdog.__tmoMemWatchdogStarted = true
+  const MEM_WATCHDOG_MB = Number(process.env.MEM_WATCHDOG_MB ?? 1700)
+  if (MEM_WATCHDOG_MB > 0) {
+    let memOverCount = 0
+    const memWatchdogTimer = setInterval(() => {
+      try {
+        const rssMb = process.memoryUsage().rss / 1048576
+        if (rssMb > MEM_WATCHDOG_MB) {
+          memOverCount++
+          console.warn(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB > ${MEM_WATCHDOG_MB}MB (lần ${memOverCount}/2)`)
+        } else {
+          if (memOverCount > 0) console.log(`[MemWatchdog] RSS hồi về ${rssMb.toFixed(0)}MB — reset đếm`)
+          memOverCount = 0
+        }
+        if (memOverCount >= 2) {
+          console.error(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB vượt ${MEM_WATCHDOG_MB}MB suốt 2 phút — self-exit sạch để kernel OOM không SIGKILL cả cây (PM2 sẽ restart trong ~5s; durable goal jobs RESUME từ checkpoint)`)
+          process.exit(1)
+        }
+      } catch { /* fail-open — watchdog lỗi không được phép tự giết app */ }
+    }, 60_000)
+    memWatchdogTimer.unref?.()
+    console.log(`[MemWatchdog] bật — ngưỡng RSS ${MEM_WATCHDOG_MB}MB × 2 lần kiểm tra (60s/lần)`)
+  }
+}
+
 function buildServices(resolveFn: (...paths: string[]) => string) {
   const ROOT = resolveFn(process.cwd())
   const services: ServiceConfig[] = [

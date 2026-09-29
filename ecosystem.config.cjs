@@ -53,18 +53,27 @@ module.exports = {
         // database (separate from the sandbox's own project DB), regardless
         // of the shell environment that launched PM2.
         DATABASE_URL: 'file:/home/z/tmo-app/db/custom.db',
+        // Memory bound (2026-09-28 quan sát vận hành thật — 2 lần kernel OOM
+        // giết next-server giữa chừng ở RSS 2.46GB (23:08) và 1.44GB (23:23),
+        // memcg 4GB cạn tổng thể): PM2 max_memory_restart không bắt được vì
+        // nó đo pid wrapper chứ không phải child next-server. Giới hạn V8
+        // heap 1024MB để GC chủ động sớm + RSS ổn định ~1.3-1.6GB. Cặp với
+        // in-app MemWatchdog (instrumentation — RSS >1.7GB 2 phút liên tiếp
+        // → self-exit sạch, PM2 kéo dậy trong ~5s) + durable goal loop
+        // (ENABLE_DURABLE_GOAL_LOOP=true — job RESUME từ checkpoint sau
+        // restart → nhiệm vụ không mất).
+        NODE_OPTIONS: '--max-old-space-size=1024',
       },
       watch: false,
       autorestart: true,
       max_restarts: 50,
       restart_delay: 4000,
-      // Memory guard: dev-mode Next.js (Turbopack + 18k-line page.tsx + SQLite
-      // + embedding pipelines) grows past 1GB RSS on this 4.1GB box and the
-      // kernel OOM-killer SIGKILLs it (verified in dmesg — restarts with no
-      // log trace, in-flight background agent tasks die). PM2 restarts
-      // CLEANLY at 1GB instead: SQLite is durable (WAL), agent-run tracker
-      // re-enqueues on boot (instrumentation crash recovery), mini-services
-      // are orphan-killed + respawned by service-manager.
+      // Memory guard: max_memory_restart đo pid wrapper (pm2-start.sh exec →
+      // node next dev) — RSS wrapper luôn thấp nên KHÔNG bao giờ tự kích hoạt
+      // cho heap của child next-server (đã kiểm chứng 2026-09-28: OOM-kill ở
+      // 2.46GB mà PM2 không kịp phát hiện). Vệ sinh thực sự nằm ở
+      // NODE_OPTIONS heap cap phía trên + durable goal loop (job RESUME từ
+      // checkpoint sau restart). Giữ 1G làm lưới an toàn cấp wrapper.
       max_memory_restart: '1G',
       // Route both stdout + stderr into the single monitored dev.log,
       // appending (merge_logs) on every restart so history is preserved.

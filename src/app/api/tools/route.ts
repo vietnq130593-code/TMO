@@ -16,6 +16,9 @@ import { getAllCustomTools } from '@/lib/custom-tool-registry'
 import { isOnDemandEnabled } from '@/lib/openclaw-ondemand'
 import { resolveBridgeState, bridgeStateNote } from '@/lib/bridge-state'
 import { tavilyKeyPool, jinaKeyPool, serperKeyPool } from '@/lib/service-key-pool'
+// Nguồn đơn của danh mục builtin: executor (ALL_TOOL_DEFINITIONS) xác định tool
+// THẬT SỰ có thể gọi. LOCAL_TOOLS bên dưới chỉ giữ metadata bổ sung.
+import { getAllBuiltinToolSummaries } from '@/lib/code-team/tool-executor'
 import type { CustomTool } from '@prisma/client'
 
 // FIX (P2 broken import): the route previously imported GATEWAY_TOOL_REGISTRY,
@@ -247,18 +250,61 @@ export async function GET(request: NextRequest) {
     const bridgeAsleep = bridgeAccess.bridgeAsleep
 
     // ===== Build local tools list =====
-    const localTools = LOCAL_TOOLS.map(t => ({
-      name: t.name,
-      category: t.category,
-      description: t.description,
-      source: 'local' as const,
-      accessMode: 'local' as const,
-      dangerous: t.dangerous,
-      implemented: t.implemented,
-      apiKeyEnv: t.apiKeyEnv,
-      hasApiKey: t.hasApiKey,
-      enabled: true, // Local tools are always enabled
-    }))
+    // Danh mục lấy từ EXECUTOR (nguồn đơn) thay vì mảng hardcode: trước đây
+    // LOCAL_TOOLS chỉ liệt kê 51/76 builtin nên /api/tools stale, thiếu 25 tool
+    // (file_read, file_multi_edit, git_*, list_skills, read_skill, ...).
+    // LOCAL_TOOLS được giữ làm bảng metadata (dangerous/apiKeyEnv/description)
+    // cho tool đã biết; tool còn lại lấy description/category từ executor.
+    const localToolMeta = new Map(LOCAL_TOOLS.map(t => [t.name, t]))
+    const BUILTIN_CATEGORY_LABEL: Record<string, string> = {
+      gateway: 'Gateway',
+      knowledge: 'Knowledge',
+      code: 'Code',
+      other: 'Other',
+    }
+    // Builtin có side-effect lên repo/hạ tầng → permission mặc định 'ask'.
+    const DANGEROUS_BUILTIN = new Set([
+      'create_agent', 'create_custom_tool', 'delete_custom_tool',
+      'delegate_task', 'dispatch_agent', 'dispatch_agents_parallel',
+      'escalate_problem', 'request_code_team', 'open_workspace',
+      'git_clone', 'git_pull', 'git_push', 'verify_and_push',
+    ])
+
+    const builtinSummaries = getAllBuiltinToolSummaries()
+    const localTools = builtinSummaries.map(summary => {
+      const meta = localToolMeta.get(summary.name)
+      return {
+        name: summary.name,
+        category: meta?.category ?? BUILTIN_CATEGORY_LABEL[summary.category] ?? 'Other',
+        description: meta?.description ?? summary.description,
+        source: 'local' as const,
+        accessMode: 'local' as const,
+        dangerous: meta ? meta.dangerous : DANGEROUS_BUILTIN.has(summary.name),
+        implemented: meta?.implemented ?? true,
+        apiKeyEnv: meta?.apiKeyEnv ?? '',
+        hasApiKey: meta ? meta.hasApiKey : true,
+        enabled: true, // Local tools are always enabled
+      }
+    })
+
+    // An toàn (lossless): nếu LOCAL_TOOLS khai báo tool mà executor không có
+    // (VD tool đang bị gate khỏi ALL_TOOL_DEFINITIONS) thì vẫn phải hiện.
+    const builtinNames = new Set(builtinSummaries.map(s => s.name))
+    for (const t of LOCAL_TOOLS) {
+      if (builtinNames.has(t.name)) continue
+      localTools.push({
+        name: t.name,
+        category: t.category,
+        description: t.description,
+        source: 'local' as const,
+        accessMode: 'local' as const,
+        dangerous: t.dangerous,
+        implemented: t.implemented,
+        apiKeyEnv: t.apiKeyEnv,
+        hasApiKey: t.hasApiKey,
+        enabled: true,
+      })
+    }
 
     // ===== Build gateway tools list =====
     const gatewayTools = GATEWAY_TOOL_REGISTRY.map(t => {

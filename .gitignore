@@ -105,6 +105,16 @@ worklog.md
 # "check:imports" gọi (Task 42 — cross-import gate: boundary src↔mini-services
 # + circular import tĩnh; thiếu thì pre-push hook FAIL "Cannot find module").
 !/scripts/check-imports.mjs
+# NGOẠI LỆ: UI evidence probe E2E (chạy `node scripts/ui-evidence-probe.cjs` —
+# nghiệm thu tab Tools/Skills của Smolab bằng assertion cứng trên DOM + API,
+# 16 PASS_ASSERT / 0 FAIL_ASSERT; không có nó thì không tái kiểm chứng được UI).
+!/scripts/ui-evidence-probe.cjs
+# NGOẠI LỆ: UI agents probe E2E (chạy `node scripts/ui-agents-probe.cjs` —
+# nghiệm thu module Agents → tab Tools & Skills bằng assertion cứng trên DOM +
+# API + registry, 21 PASS_ASSERT / 0 FAIL_ASSERT; khác probe v5 ở chỗ đi qua
+# đường Agents thay vì Smolab, nên không có nó thì không tái kiểm chứng được
+# số liệu tools·skills·agents hiển thị trên UI Agents).
+!/scripts/ui-agents-probe.cjs
 
 # Tool results (dev artifacts)
 /tool-results/

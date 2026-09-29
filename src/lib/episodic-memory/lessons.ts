@@ -26,6 +26,7 @@ import {
   getPlaybook,
 } from './taxonomy'
 import {
+  getAllLessonNodes,
   linkErrorTaughtLesson,
   upsertLessonNode,
 } from './episodic-neo4j'
@@ -87,9 +88,48 @@ export async function consolidateLesson(input: ConsolidateLessonInput): Promise<
     })
 
     // Check trùng: (a) SQLite fragment match, (b) Jaccard similarity
-    const candidates = await findLessonsByStatementFragment(
+    // Kiểu khai báo hẹp {id, statement} để CẢ 2 nhánh (SQLite mirror và
+    // Neo4j fallback) gán được — trước đây suy luận LessonRecordRow[]
+    // khiến nhánh fallback Neo4j báo TS2322 (type_check fail = chặn CI).
+    let candidates: Array<{ id: string; statement: string }> = await findLessonsByStatementFragment(
       input.triggerCondition.slice(0, 60), 10
     ).catch(() => [])
+    // FIX 2026-09-28 (quan sát vận hành thật): mirror SQLite có thể TRỐNG
+    // trong khi graph Neo4j đã có lessons (deploy mới giữ graph cũ — E2E:
+    // Neo4j 44 lessons vs SQLite 0 rows). Dedup chỉ đọc mirror → mọi lỗi
+    // resolve đều sinh lesson MỚI trùng lặp trong Neo4j (merge chết).
+    // Fallback: mirror trống → đọc lessons từ Neo4j + BACKFILL mirror
+    // (lần đầu gọi tự chữa drift — các lần sau SQLite tự phục vụ).
+    if (candidates.length === 0) {
+      const neoLessons = await getAllLessonNodes(100).catch(() => [])
+      for (const nl of neoLessons) {
+        if (!nl?.id || typeof nl.statement !== 'string') continue
+        // Backfill mirror row cho lesson Neo4j đang thiếu (best-effort —
+        // fail 1 row không chặn vòng: fail-open như toàn bộ episodic).
+        await upsertLessonRecord({
+          id: nl.id,
+          statement: nl.statement,
+          triggerCondition: nl.triggerCondition ?? null,
+          rootCause: nl.rootCause ?? null,
+          appliesTo: Array.isArray(nl.appliesTo) ? nl.appliesTo : [],
+          source: (nl.source as LessonNode['source']) ?? 'SELF_DERIVED',
+          confidence: typeof nl.confidence === 'number' ? nl.confidence : 0.6,
+          timesApplied: nl.timesApplied ?? 0,
+          timesValidated: nl.timesValidated ?? 0,
+          timesFailed: nl.timesFailed ?? 0,
+          needsReview: !!nl.needsReview,
+          createdAt: new Date(),
+        } as LessonNode).catch(() => { /* mirror heal fail-open */ })
+      }
+      // Chỉ tính candidates từ Neo4j KHỎE (có statement) — cùng shape
+      // {id, statement} như SQLite path để Jaccard dùng chung.
+      candidates = neoLessons
+        .filter(nl => nl?.id && typeof nl.statement === 'string')
+        .map(nl => ({ id: nl.id, statement: nl.statement }))
+      if (candidates.length > 0) {
+        console.log(`[Episodic] Lesson dedup: mirror SQLite trống → fallback ${candidates.length} lessons từ Neo4j (+backfill mirror)`)
+      }
+    }
     let bestMatch: { id: string; statement: string } | null = null
     let bestScore = 0
     for (const c of candidates) {

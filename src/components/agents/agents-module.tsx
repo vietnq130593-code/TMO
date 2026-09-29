@@ -18,6 +18,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { toast } from '@/hooks/use-toast'
 import { AVATAR_OPTIONS, PROVIDER_OPTIONS, TEAM_OPTIONS, POSITION_LABELS, TEAM_POSITIONS, CODE_POSITIONS, RESEARCH_POSITIONS, PROVIDER_BADGE_COLORS } from '@/lib/agent-constants'
+import { SkillsTabContent } from '@/components/smolab/skills-tab'
 
 
 // ==================== AGENTS MODULE ====================
@@ -30,6 +31,8 @@ export function AgentsModule() {
   const [availableModels, setAvailableModels] = useState<any[]>([])
   const [formError, setFormError] = useState('')
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Tab: 'agents' = danh sách agent · 'skills' = Tools & Skills (tái dùng SkillsTabContent của Smolab)
+  const [activeAgentsTab, setActiveAgentsTab] = useState<'agents' | 'skills'>('agents')
 
   // Form state
   const [formName, setFormName] = useState('')
@@ -440,6 +443,34 @@ export function AgentsModule() {
       {/* ==================== AGENTS MODULE ==================== */}
       <Card className="nc-panel nc-md nc-border-magenta">
         <CardContent className="pt-5 pb-5">
+          {/* ==================== TABS: AGENTS / SKILLS ==================== */}
+          <div className="flex items-center gap-1.5 p-1 rounded-lg bg-slate-950/60 border border-stone-700/50 mb-5 w-fit" role="tablist" aria-label="Agents module tabs" data-testid="agents-tabs">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeAgentsTab === 'agents'}
+              data-testid="agents-tab-agents"
+              onClick={() => setActiveAgentsTab('agents')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${activeAgentsTab === 'agents' ? 'bg-fuchsia-600/85 text-white' : 'text-stone-400 hover:text-stone-200'}`}
+            >
+              Agents
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeAgentsTab === 'skills'}
+              data-testid="agents-tab-skills"
+              onClick={() => setActiveAgentsTab('skills')}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${activeAgentsTab === 'skills' ? 'bg-fuchsia-600/85 text-white' : 'text-stone-400 hover:text-stone-200'}`}
+            >
+              Tools &amp; Skills
+            </button>
+          </div>
+
+          {activeAgentsTab === 'skills' ? (
+            <SkillsTabContent />
+          ) : (
+          <>
           {/* Module Header */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-2.5">
@@ -567,6 +598,8 @@ export function AgentsModule() {
                 </>
               )}
             </div>
+          )}
+          </>
           )}
         </CardContent>
       </Card>
