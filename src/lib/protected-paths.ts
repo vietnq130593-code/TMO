@@ -214,6 +214,14 @@ const PM2_STOP_APP_RE =
 /** `pm2 kill` — giết cả PM2 daemon (cùng số phận tự hủy). */
 const PM2_KILL_RE = /\bpm2\s+kill\b/i
 
+/** ROUND-5 bổ sung: pkill/killall thô nhắm process Next của app — bypass pm2
+ * nhưng cùng số phận tự hủy (app chết giữa chu kỳ; PM2 kéo dậy làm gián đoạn
+ * mission + build đang chạy). Chỉ bắt pattern có tên rõ ràng (next dev /
+ * next-server / theopusflashlite) — kill pid trần (không map được pid→app
+ * bằng regex) do PM2 autorestart gánh hậu quả. */
+const RAW_KILL_APP_RE =
+  /\b(?:pkill|killall)\s+(?:-\S+\s+)*(?:-\w*\s+)?[^\n]*\b(?:next[- ]?(?:server|dev)|theopusflashlite)\b/i
+
 /** `pm2 restart <app>` xuất hiện ở ĐÂU ĐÓ trong lệnh (kể cả chain `&&`). */
 const PM2_RESTART_ANY_RE =
   /\bpm2\s+(?:restart|reload|startOrReload)\s+(?:-{2}[\w-]+\s+)*(?:theopusflashlite|ecosystem[\w./-]*|all|0)\b/i
@@ -279,6 +287,14 @@ function guardSelfDestruct(command: string): ShellGuardVerdict | null {
       blocked: true,
       reason: 'self-destruct: pm2 kill',
       message: buildSelfDestructBlockedMessage('`pm2 kill`'),
+    }
+  }
+  if (RAW_KILL_APP_RE.test(command)) {
+    const m = command.match(RAW_KILL_APP_RE)
+    return {
+      blocked: true,
+      reason: `self-destruct (raw kill): ${m?.[0]?.slice(0, 60)}`,
+      message: buildSelfDestructBlockedMessage(`lệnh kill thô nhắm process app (\`${m?.[0]?.slice(0, 60)}\`)`),
     }
   }
   if (PM2_RESTART_ANY_RE.test(command)) {
