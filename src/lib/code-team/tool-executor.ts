@@ -1150,7 +1150,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'todo_write',
-      description: 'Claude Code-style in-flight task list (batch upsert, DB-backed). Truyền mảng todos (có id=update, không id=create, có idempotencyKey=idempotent). Trả về danh sách đầy đủ sau khi write. Dùng cho agent tự track multi-step work. Persisted trong SQLite — sống sót qua server restart.',
+      description: 'Claude Code-style in-flight task list (batch upsert, DB-backed). Truyền mảng todos (có id=update, không id=create, có idempotencyKey=idempotent). Khi UPDATE theo id: chỉ cần {id, status} — KHÔNG cần lặp lại content. Trả về danh sách đầy đủ sau khi write. Dùng cho agent tự track multi-step work. Persisted trong SQLite — sống sót qua server restart.',
       parameters: {
         type: 'object',
         properties: {
@@ -1163,13 +1163,13 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
               type: 'object',
               properties: {
                 id: { type: 'string', description: 'ID nếu update existing; bỏ trống nếu create mới' },
-                content: { type: 'string', description: 'Nội dung task (string)' },
+                content: { type: 'string', description: 'Nội dung task (string). BẮT BUỘC khi tạo mới; BỎ ĐƯỢC khi update theo id/idempotencyKey (chỉ đổi status/priority)' },
                 status: { type: 'string', enum: ['pending', 'in_progress', 'blocked', 'completed', 'failed'] },
                 priority: { type: 'string', enum: ['low', 'medium', 'high'] },
                 parentId: { type: 'string', description: 'Parent task ID (cho subtask / DAG)' },
                 idempotencyKey: { type: 'string', description: 'Optional — khi set, repeat calls với cùng key trả về existing todo (no duplicate)' },
               },
-              required: ['content'],
+              // round-4: content KHÔNG còn bắt buộc — update-by-id chỉ cần {id, status}
             },
           },
         },

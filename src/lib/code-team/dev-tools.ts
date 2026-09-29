@@ -3509,7 +3509,11 @@ export async function todoWrite(args: {
   runId?: string
   todos: Array<{
     id?: string
-    content: string
+    /** BẮT BUỘC khi tạo mới; BỎ ĐƯỢC khi update theo id/idempotencyKey
+     * (fix round-4 2026-09-29: trước đây validation đòi content cho TẤT CẢ
+     * item → batch {id, status:'completed'} bị từ chối cả call → agent
+     * không đóng được todo → 27 in_progress tồn đọng mid-run). */
+    content?: string
     status?: 'pending' | 'in_progress' | 'blocked' | 'completed' | 'failed'
     priority?: 'low' | 'medium' | 'high'
     parentId?: string
@@ -3602,8 +3606,18 @@ export async function todoWrite(args: {
   const healNotes: string[] = []
 
   for (const t of args.todos) {
-    if (!t.content || typeof t.content !== 'string') {
-      return { success: false, error: 'Each todo needs a `content` string' }
+    // FIX round-4 (2026-09-29, observes from goal-loop run thật): content chỉ
+    // BẮT BUỘC cho todo MỚI (không id, không idempotencyKey). Update-by-id
+    // chỉ cần {id, status} để đóng/mở todo — validation cũ từ chối CẢ BATCH
+    // khi 1 item thiếu content (bằng chứng: checkpoint job FIX chứa
+    // todo_write fail "Each todo needs a `content` string" → todo in_progress
+    // không bao giờ được agent tự đóng, dồn 27 row mid-run).
+    const hasContent = typeof t.content === 'string' && t.content.trim() !== ''
+    if (!hasContent && !t.id && !t.idempotencyKey) {
+      return { success: false, error: 'Each NEW todo needs a `content` string (todo update theo id/idempotencyKey được phép bỏ content — chỉ đổi status/priority/parentId)' }
+    }
+    if (t.content !== undefined && t.content !== null && typeof t.content !== 'string') {
+      return { success: false, error: '`content` must be a string (nếu bỏ trống thì được — xem mô tả update-by-id)' }
     }
     if (t.status && !VALID_STATUS.has(t.status)) {
       return { success: false, error: `Invalid status: ${t.status}. Allowed: ${[...VALID_STATUS].join('|')}` }
@@ -3630,7 +3644,9 @@ export async function todoWrite(args: {
         const updated = await db.todo.update({
           where: { id: t.id },
           data: {
-            content: t.content,
+            // round-4: content-less update (chỉ {id, status}) → KHÔNG đè
+            // nội dung cũ bằng undefined; Prisma bỏ qua field undefined.
+            ...(hasContent ? { content: t.content } : {}),
             status: t.status || undefined,
             priority: t.priority || undefined,
             parentId: t.parentId || undefined,
@@ -3665,12 +3681,27 @@ export async function todoWrite(args: {
         where: { sessionId, idempotencyKey: t.idempotencyKey },
       })
       if (existing) {
+        // round-4: repeat-call cùng key nhưng KÈM status/priority mới (vd
+        // {idempotencyKey, status:'completed'} không content) → ÁP DỤNG luôn
+        // thay vì chỉ trả existing (trước đây status update bị bỏ âm thầm).
+        let row = existing
+        if (t.status || t.priority || t.parentId || (hasContent && t.content !== existing.content)) {
+          row = (await db.todo.update({
+            where: { id: existing.id },
+            data: {
+              ...(hasContent ? { content: t.content } : {}),
+              status: t.status || undefined,
+              priority: t.priority || undefined,
+              parentId: t.parentId || undefined,
+            },
+          }).catch(() => existing)) || existing
+        }
         upserted.push({
-          id: existing.id,
-          content: existing.content,
-          status: existing.status,
-          priority: existing.priority,
-          parentId: existing.parentId,
+          id: row.id,
+          content: row.content,
+          status: row.status,
+          priority: row.priority,
+          parentId: row.parentId,
         })
         if (healNotes.length > 0 && healNotes[healNotes.length - 1].startsWith(`id '${t.id}'`)) {
           healNotes[healNotes.length - 1] = `id '${t.id}' không tồn tại → khớp idempotencyKey, dùng lại row thật ${existing.id} (dùng id này cho lần sau)`
@@ -3688,6 +3719,13 @@ export async function todoWrite(args: {
     // CI-2 (Task 11-a): scope dedup THÊM theo runId — cùng nội dung nhưng khác
     // run (tác vụ khác) thì tạo row riêng cho run mới, không đụng todo run cũ
     // (chống trộn task — bug "todo của task trước dồn vào task mới").
+    // round-4: content-less update (id không tồn tại, không idempotencyKey)
+    // → KHÔNG vào dedup theo content (không có gì để khớp) — healNote + bỏ qua,
+    // không tạo row rỗng.
+    if (!hasContent) {
+      healNotes.push(`todo id '${t.id || t.idempotencyKey}' không tồn tại và không có content — bỏ qua (không tạo mới; gửi kèm content nếu muốn tạo)`)
+      continue
+    }
     const existingByContent = await db.todo.findFirst({
       where: { sessionId, content: t.content, runId },
       orderBy: { createdAt: 'asc' },
@@ -3717,12 +3755,12 @@ export async function todoWrite(args: {
       }
     }
 
-    // Create new
+    // Create new (hasContent đã được đảm bảo bởi guard round-4 phía trên)
     const created = await db.todo.create({
       data: {
         sessionId,
         agentRole,
-        content: t.content,
+        content: t.content as string,
         status: t.status || 'pending',
         priority: t.priority || 'medium',
         parentId: t.parentId || null,
