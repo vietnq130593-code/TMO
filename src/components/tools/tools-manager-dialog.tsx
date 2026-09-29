@@ -52,9 +52,24 @@ interface RegistryBuiltinTool {
 }
 interface RegistryFsSkill { slug: string; hasSkillMd: boolean; description: string }
 interface RegistryDbSkill { slug: string; name: string; source: string; enabled: boolean; version: string }
+// (AUDIT-47) customTools: tools do agent/user Từ viết (CustomTool DB).
+// API /api/tools/registry đã trả field này nhưng interface thiếu → UI không hiển thị.
+interface RegistryCustomTool {
+  name: string
+  description: string
+  parameters: unknown
+  version: string
+  source: string
+  enabled: boolean
+  callCount: number
+  skillSlug: string | null
+  createdAt: string
+}
 interface RegistryData {
   summary: { builtinToolCount: number; customToolCount: number; filesystemSkillCount: number; dbSkillCount: number }
   builtinTools: RegistryBuiltinTool[]
+  // optional: server cũ chưa trả field → undefined, không crash render
+  customTools?: RegistryCustomTool[]
   filesystemSkills: RegistryFsSkill[]
   dbSkills: RegistryDbSkill[]
 }
@@ -150,10 +165,14 @@ export function ToolsManagerDialog() {
   const [skillAssignments, setSkillAssignments] = useState<SkillAssignmentRow[] | null>(null)
   const [skillAssignmentBusy, setSkillAssignmentBusy] = useState<string | null>(null)
 
-  // ── Load registry + assignments khi mở dialog ──
+  // ── Load registry + assignments MỖI LẦN mở dialog ──
   // (queueMicrotask — tránh sync setState trong effect, pattern page.tsx:2755)
+  // FIX: trước đây guard `if (!open || registry) return` → registry giữ trong state
+  // → đóng/mở lại KHÔNG refetch → dữ liệu tự đóng băng (custom tool agent vừa tạo
+  // không xuất hiện, số tool sai). Đã bỏ guard `registry` VÀ bỏ `registry` khỏi deps:
+  // nếu còn `registry` trong deps thì setRegistry() kích hoạt lại effect → fetch vô hạn.
   useEffect(() => {
-    if (!open || registry) return
+    if (!open) return
     let cancelled = false
     queueMicrotask(() => {
       if (cancelled) return
@@ -173,7 +192,7 @@ export function ToolsManagerDialog() {
       }).finally(() => { if (!cancelled) setRegistryLoading(false) })
     })
     return () => { cancelled = true }
-  }, [open, registry])
+  }, [open])
 
   const reloadAssignments = useCallback(async () => {
     try {
@@ -361,6 +380,17 @@ export function ToolsManagerDialog() {
     return list
   }, [registry, toolSearch])
 
+  // Custom tools cũng phải chịu cùng bộ lọc tìm kiếm — nếu không, gõ tên 1 custom tool
+  // vẫn thấy "Không tìm thấy tool nào" trong khi khối custom tools vẫn hiện đầy đủ (mâu thuẫn UI).
+  const filteredCustomTools = useMemo(() => {
+    const all = registry?.customTools ?? []
+    const q = toolSearch.trim().toLowerCase()
+    if (!q) return all
+    return all.filter(
+      t => t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q)
+    )
+  }, [registry, toolSearch])
+
   const filteredSkills = useMemo(() => {
     if (!registry) return { fs: [] as RegistryFsSkill[], db: [] as RegistryDbSkill[] }
     const q = skillSearch.trim().toLowerCase()
@@ -499,7 +529,9 @@ export function ToolsManagerDialog() {
               onClick={() => setActiveTab('tools')}
             >
               <Wrench className="w-3.5 h-3.5 inline mr-1.5" />
-              Tools {registry ? `(${registry.summary.builtinToolCount})` : ''}
+              {/* Nguồn thực tế: customTools.length (server luôn trả mảng — route.ts:353).
+                  Fallback summary.customToolCount chỉ dùng khi server cũ chưa trả field. */}
+              Tools {registry ? `(${registry.summary.builtinToolCount + (registry.customTools?.length ?? registry.summary.customToolCount)})` : ''}
             </button>
             <button
               className={`flex-1 px-4 py-2.5 text-xs font-semibold transition-colors ${activeTab === 'skills' ? 'text-amber-300 border-b-2 border-amber-400 bg-stone-900/50' : 'text-stone-400 hover:text-stone-200'}`}
@@ -539,6 +571,38 @@ export function ToolsManagerDialog() {
                     </button>
                   )}
                 </div>
+
+                {/* Custom tools (agent/user tự viết — read-only, không gán agent).
+                    Đặt NGOÀI grid 2 cột: nếu nằm trong grid với lg:col-span-2 thì nó
+                    đẩy panel "Chi tiết 1 tool" xuống hàng mới và bị bóp còn 300px. */}
+                {filteredCustomTools.length > 0 && (
+                  <div className="mb-4 space-y-1.5">
+                    <p className="text-[10px] uppercase tracking-wide text-stone-500">
+                      Custom tools ({filteredCustomTools.length}) — do agent/user tự viết
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-1">
+                      {filteredCustomTools.map(t => (
+                        <div
+                          key={t.name}
+                          className="px-2.5 py-2 rounded-md border border-stone-800 bg-stone-900/40"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-mono text-amber-200 truncate flex-1">{t.name}</span>
+                            <span className={`text-[9px] ${t.enabled ? 'text-emerald-400' : 'text-stone-500'}`}>
+                              {t.enabled ? 'ON' : 'OFF'}
+                            </span>
+                            {(t.callCount ?? 0) > 0 && (
+                              <span className="text-[9px] text-stone-500">×{t.callCount}</span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-stone-500 truncate mt-0.5">
+                            {(t.description || '').split('\n')[0]}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-4">
                   {/* Danh sách tools */}
@@ -581,7 +645,7 @@ export function ToolsManagerDialog() {
                         </button>
                       )
                     })}
-                    {filteredTools.length === 0 && (
+                    {filteredTools.length === 0 && filteredCustomTools.length === 0 && (
                       <p className="text-xs text-stone-500 py-4 text-center">Không tìm thấy tool nào.</p>
                     )}
                   </div>

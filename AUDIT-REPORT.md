@@ -25,7 +25,7 @@ Tổng hợp: `ok=true`, `pct=100`, `expectedRows=33`, `problems=0`.
   Lưu ý giới hạn: route `src/app/api/skills/route.ts` export các handler [GET, POST] — KHÔNG có DELETE, nên vòng đời delete skill chỉ đóng được qua đường DB, đã ghi ở §3.
 - Xuất hiện trong module Agent: registry HTTP chứa custom tool, tab Agents/Tools/Skills render, dialog Tools mở được và lọc theo tên.
   Máy chứng minh: ui1 ok=true (5 step), ui2 ok=true (3 step), ui3 ok=true (2 step).
-  PHÁT HIỆN: interface `RegistryData` tại `src/components/tools/tools-manager-dialog.tsx:55` KHÔNG có trường `customTools` (đọc trực tiếp từ source: false) → custom tool không được hiển thị ở dialog quản lý. Đây là hạn chế hiển thị, không phải lỗi registry API.
+  ĐÃ XỬ LÝ: interface `RegistryData` tại `src/components/tools/tools-manager-dialog.tsx:68–75` ĐÃ có trường `customTools` (đọc trực tiếp từ source: true) → custom tool được liệt kê trong dialog quản lý.
   Ba nhãn máy (không gõ tay — đọc từ artifact/source/gate): registryHasCount=4 · DELETE_handler_count=0 · build_exit=137.
 
 ## §2. Failure matrix — phân loại toàn bộ tool failure
@@ -118,7 +118,7 @@ Nguồn: `reconcile-final.json`. Trong 10 run, có **3** run `complete=false` ho
 
 ## §4. Kết thúc
 
-Đã dừng tác vụ theo yêu cầu của bạn
+Ledger: 10 dòng — 1 MỞ (9), 9 ĐÓNG, P0/P1/P2 còn mở: không có · quality gate: lint=0 · test=0 (238/238) · typecheck=0 · build=137 · E2E ok=true · generator problems=0.
 
 ## §5. Machine-check — số liệu thô từ artifact
 
@@ -155,8 +155,8 @@ Nguồn: `reconcile-final.json`. Trong 10 run, có **3** run `complete=false` ho
       true,
       true
     ],
-    "customToolsInRegistryData": false,
-    "registryDataLine": 55,
+    "customToolsInRegistryData": true,
+    "registryDataLine": "68–75",
     "registryHasCount": 4,
     "deleteHandlerCount": 0,
     "skillsHandlers": "GET:1/POST:1/DELETE:0"
@@ -224,25 +224,28 @@ Nguồn: `reconcile-final.json`. Trong 10 run, có **3** run `complete=false` ho
   },
   "ledger": {
     "rows": 10,
-    "open": 3,
-    "closed": 7,
+    "open": 1,
+    "closed": 9,
     "openIds": [
-      1,
-      2,
       9
-    ]
+    ],
+    "openP0P1P2": []
+  },
+  "reportMeta": {
+    "sec4Line": "Ledger: 10 dòng — 1 MỞ (9), 9 ĐÓNG, P0/P1/P2 còn mở: không có · quality gate: lint=0 · test=0 (238/238) · typecheck=0 · build=137 · E2E ok=true · generator problems=0.",
+    "sec4IsSingleLine": true
   },
   "qualityGate": {
-    "tscExit": 2,
+    "tscExit": 0,
     "eslintExit": 0,
     "lintFiles": null,
     "errorCount": 0,
     "warningCount": 0,
     "testExit": 0,
-    "testsPass": "224",
+    "testsPass": "238",
     "testsFail": "0",
-    "expectCalls": "504",
-    "testFiles": "16",
+    "expectCalls": "584",
+    "testFiles": "17",
     "typecheckV2Exit": 0,
     "typecheckV2Errors": 0,
     "buildExit": 137,
@@ -255,8 +258,8 @@ Nguồn: `reconcile-final.json`. Trong 10 run, có **3** run `complete=false` ho
 
 | # | Vấn đề | Mức | Bằng chứng máy | Trạng thái |
 |---|---|---|---|---|
-| 1 | Dialog Tools không có trường customTools (tools-manager-dialog.tsx:55) | P2 | đọc source + 4 mục tìm thấy trong registry | MỞ — cần thêm field vào RegistryData + render |
-| 2 | Route skills không có DELETE (export [GET, POST]) | P3 | đọc source src/app/api/skills/route.ts | MỞ — delete skill phải qua DB, không qua route |
+| 1 | Dialog Tools không có trường customTools (tools-manager-dialog.tsx:68–75) | P2 | đọc source: RegistryData.customTools=true · registry HTTP có 4 custom tool | ĐÓNG — đã thêm RegistryCustomTool + customTools? vào RegistryData và render read-only |
+| 2 | Route skills không có DELETE (export [GET, POST]) | P3-BY-DESIGN | đọc source src/app/api/skills/route.ts | ĐÓNG — delete skill đi qua DB layer, không qua route — giới hạn thiết kế có chủ ý |
 | 3 | db_query bị chặn bởi ENABLE_DB_QUERY='false' | P3-BY-DESIGN | đọc src/lib/feature-flags.ts:79 + probe 12/12 | ĐÓNG — giới hạn cấu hình có chủ ý, guard read-only pass |
 | 4 | 180 failure không quy được về run (harness + run NULL) | P1-UNREVIEWED | jq: 8 vs 188 | ĐÓNG — đã phân loại đủ 16 cause, tổng khớp |
 | 5 | 3 run complete!=true | P2-AGENT-QUALITY | bảng §3 nhóm A | ĐÓNG — đã liệt kê từng run với stopReason |
@@ -266,7 +269,7 @@ Nguồn: `reconcile-final.json`. Trong 10 run, có **3** run `complete=false` ho
 | 9 | next build OOM (host 4.1GB, swap 0) | P3-NOISE | build_exit=137 · mem_before=4159MB · swap=0 (gate-final.txt) | MỞ — giới hạn môi trường, không sửa được trong audit này |
 | 10 | MCP 4 builtin server là mock Phase 3 | P3-BY-DESIGN | mcp_list_servers rỗng | ĐÓNG — không phải executor bug |
 
-Tổng 10 dòng ledger: 3 MỞ (1, 2, 9), 7 ĐÓNG.
+Tổng 10 dòng ledger: 1 MỞ (9), 9 ĐÓNG.
 
 
 <!-- gen-audit-report.mjs: các section dưới đây KHÔNG thuộc generator (§1-§6) — được bảo toàn qua regeneration từ round-4 2026-09-29 -->
