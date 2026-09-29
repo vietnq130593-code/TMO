@@ -3610,7 +3610,18 @@ export async function callUtilityLLM(
     const utilOptions: LLMCallOptions = {
       ...options,
     }
-    const zen = await callZenProvider(prompt, systemPrompt, utilModel, utilOptions, `utility-core:${taskLabel}`)
+    let zen = await callZenProvider(prompt, systemPrompt, utilModel, utilOptions, `utility-core:${taskLabel}`)
+    // ROUND-5 FIX (2026-09-29 — quan sát vận hành vòng 5, mirror agent path):
+    // HTTP 5xx là lỗi TẠM THỜI (provider quá tải thoáng qua) — retry 1 lần
+    // với key kế trước khi chuyển chuỗi. KHÔNG retry lỗi thời gian ở đường
+    // utility (timeout đã dài theo input — caller fail-open nhanh hơn là
+    // chờ thêm 1 chuỗi; 5xx fail nhanh nên retry rẻ). Bằng chứng
+    // cùng cửa sổ vận hành: chu kỳ 14 SENTINEL chết sau 1 lần HTTP 503.
+    if (zen && !zen.content
+        && /HTTP 5\d\d/i.test(zen.error ?? '')) {
+      console.warn(`[LLM] Utility-core Zen ${utilModel} HTTP 5xx (lần 1) — retry 1 lần với key kế — task: ${taskLabel}: ${String(zen.error).slice(0, 100)}`)
+      zen = await callZenProvider(prompt, systemPrompt, utilModel, utilOptions, `utility-core-retry:${taskLabel}`)
+    }
     if (zen && zen.content) {
       console.log(`[LLM] Utility-core dùng Zen ${utilModel} ✓ (${zen.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
       return zen
@@ -4917,9 +4928,19 @@ export async function callLLMForAgent(
   // xoay key kế; sub-agent ghim key thì retry cùng key vẫn là 1 attempt mới).
   // Chỉ retry với lỗi thời gian (abort/timeout/ETIMEDOUT/ECONNRESET) — 429 đã
   // mark cooldown + 403/402 đã cache chặn, các lỗi đó chuỗi đằng sau xử lý.
+  //
+  // ROUND-5 FIX (2026-09-29 15:5x UTC — quan sát vận hành vòng 5): HTTP 5xx
+  // (502/503/504...) cũng là lỗi TẠM THỜI — thêm vào điều kiện retry. Bằng
+  // chứng dev.log 16:0x: "[ZEN] agent:space-bunny-free HTTP 503" (provider
+  // quá tải thoáng qua) → KHÔNG khớp regex thời gian → không retry → CLI
+  // thiếu binary → failover model trùng model chính (space-bunny-free) →
+  // "thất bại toàn chuỗi" → chu kỳ 14 SENTINEL chết MẤT 26 tool calls dù cả
+  // 3 key hoàn toàn khỏe (key bị 503 đã được mark cooldown 10s — getZenKey
+  // round-robin tự né, retry sẽ sang key khác). 503 = quá tải tạm thời của
+  // server; 1 retry trên key kế là thuốc đúng bệnh.
   if (zen && !zen.content && !(zen.tool_calls && zen.tool_calls.length > 0)
-      && /abort|timeout|etimedout|econnreset|socket hang up/i.test(zen.error ?? '')) {
-    console.warn(`[LLM] Agent Zen ${zenModel} lỗi thời gian (lần 1) — retry 1 lần với key kế: ${String(zen.error).slice(0, 120)}`)
+      && /abort|timeout|etimedout|econnreset|socket hang up|HTTP 5\d\d/i.test(zen.error ?? '')) {
+    console.warn(`[LLM] Agent Zen ${zenModel} lỗi tạm thời (thời gian/5xx — lần 1) — retry 1 lần với key kế: ${String(zen.error).slice(0, 120)}`)
     zen = await callZenProvider(prompt, systemPrompt, zenModel, options, `agent-retry:${zenModel}`)
   }
   if (zen && (zen.content || (zen.tool_calls && zen.tool_calls.length > 0))) {
