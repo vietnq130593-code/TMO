@@ -202,9 +202,24 @@ function activeRun(sessionId: string | null | undefined): AgentRun | null {
   if (!sessionId) return null
   const reg = registry()
   const runId = reg.activeRunBySession.get(sessionId)
-  if (!runId) return null
-  const run = runsOf(sessionId).find(r => r.runId === runId)
-  return run && run.status === 'running' ? run : null
+  if (runId) {
+    const run = runsOf(sessionId).find(r => r.runId === runId)
+    if (run && run.status === 'running') return run
+  }
+  // FALLBACK (user report 2026-09-29: "session đang vận hành không hiện dấu
+  // đang chạy"): con trỏ activeRunBySession là SINGLE-SLOT — khi run thứ 2
+  // gọi startAgentRun cho cùng session (vd OPUS review chạy giữa chừng
+  // goal-loop job), nó ĐÈ LÊN con trỏ; khi run đó endAgentRun thì con trỏ bị
+  // XÓA trong khi run thứ nhất (goal-loop) vẫn 'running' (vẫn hiện ở
+  // /api/agent-run nhưng hasActiveRun → false → chấm xanh tắt + UI ngừng
+  // poll). Quét run list của session, trả về run 'running' MỚI NHẤT.
+  const runs = reg.runsBySession.get(sessionId)
+  if (runs && runs.length > 0) {
+    for (let i = runs.length - 1; i >= 0; i--) {
+      if (runs[i].status === 'running') return runs[i]
+    }
+  }
+  return null
 }
 
 function pushEvent(run: AgentRun, event: AgentRunEvent) {
@@ -370,6 +385,13 @@ export function endAgentRun(
     })
     if (reg.activeRunBySession.get(sessionId) === run.runId) {
       reg.activeRunBySession.delete(sessionId)
+      // FIX 2026-09-29 (cùng bản vá với activeRun fallback): run này kết thúc
+      // nhưng session còn run KHÁC 'running' (vd goal-loop job dài hơi trong
+      // khi OPUS review ngắn chạy đè con trỏ rồi kết thúc trước) → trỏ lại
+      // run đang chạy mới nhất thay vì để con trỏ trống (hasActiveRun sai).
+      const remaining = runsOf(sessionId).filter(r => r.status === 'running')
+      const next = remaining[remaining.length - 1]
+      if (next) reg.activeRunBySession.set(sessionId, next.runId)
     }
     if (wasRunning && run.dbPersistBy !== 'caller') persistAgentRunRecord(run)
   } catch { /* fail-open */ }
@@ -669,6 +691,24 @@ export function getAgentRuns(sessionId: string, limit = 12): AgentRun[] {
 /** Có run nào đang chạy cho session không (frontend dùng để quyết định poll) */
 export function hasActiveRun(sessionId: string): boolean {
   return activeRun(sessionId) !== null
+}
+
+/** USER REPORT 2026-09-29 ("session đang vận hành không hiện ra"): danh sách
+ *  MỌI sessionId đang có ít nhất 1 run 'running' trong tracker in-memory.
+ *  /api/openclaw/sessions dùng để trả `activeSessions` (không lọc theo
+ *  agent/team) — session đang vận hành bởi agent KHÁC (goal-loop job tự
+ *  dispatch, OPUS chỉ đạo…) luôn xuất hiện ở dropdown mọi ngữ cảnh. */
+export function getActiveRunSessionIds(): string[] {
+  try {
+    const reg = registry()
+    const out: string[] = []
+    for (const [sid, runs] of reg.runsBySession) {
+      if (runs.some(r => r.status === 'running')) out.push(sid)
+    }
+    return out
+  } catch {
+    return []
+  }
 }
 
 /**

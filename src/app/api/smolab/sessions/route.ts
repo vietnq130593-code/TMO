@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSessionsForAgent, getSessionsForTeam, createIsolatedSession, deleteIsolatedSession } from '@/lib/smolab/session-manager'
 import { hasActiveRun } from '@/lib/agent-run-tracker'
+// FIX 2026-09-29 — cùng nguồn sự thật hoạt động với /api/openclaw/sessions
+// (GoalLoopJob DB queued/running + run tracker) — 2 endpoint phải trả cùng
+// một truth nếu không dropdown nhấp nháy sai lệch nhau.
+import { getActiveSessionsContext } from '@/lib/active-sessions'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,14 +16,32 @@ export async function GET(req: NextRequest) {
   const teamName = searchParams.get('teamName')
 
   try {
+    // FIX 2026-09-29: tính song song với session list — flag hasActiveRun giờ
+    // tính cả durable GoalLoopJob (queued/running), trả kèm activeSessions
+    // (cross agent/team) cho section ghim "Đang vận hành" của dropdown.
+    const activeCtx = await getActiveSessionsContext()
     if (mode === 'single' && agentProfileId) {
       const sessions = await getSessionsForAgent(agentProfileId)
       // USER REQUEST 2026-09-01: flag "agents đang chạy dở" cho dropdown session
-      return NextResponse.json({ sessions: sessions.map(s => ({ ...s, hasActiveRun: hasActiveRun(s.sessionId) })) })
+      return NextResponse.json({
+        sessions: sessions.map(s => ({
+          ...s,
+          hasActiveRun: activeCtx.isSessionActive(s.sessionId) || hasActiveRun(s.sessionId),
+          activeJobCount: activeCtx.activeJobCount(s.sessionId),
+        })),
+        activeSessions: activeCtx.activeSessions,
+      })
     }
     if (mode === 'multi' && teamName) {
       const sessions = await getSessionsForTeam(teamName)
-      return NextResponse.json({ sessions: sessions.map(s => ({ ...s, hasActiveRun: hasActiveRun(s.sessionId) })) })
+      return NextResponse.json({
+        sessions: sessions.map(s => ({
+          ...s,
+          hasActiveRun: activeCtx.isSessionActive(s.sessionId) || hasActiveRun(s.sessionId),
+          activeJobCount: activeCtx.activeJobCount(s.sessionId),
+        })),
+        activeSessions: activeCtx.activeSessions,
+      })
     }
     return NextResponse.json({ error: 'Thiếu mode + agentProfileId hoặc teamName' }, { status: 400 })
   } catch (err) {

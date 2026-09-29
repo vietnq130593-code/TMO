@@ -113,6 +113,11 @@ export interface SmolabSession {
   tasks?: Array<{ id: string; type: string; status: string; progress: number; inputSummary?: string | null }>
   /** USER REQUEST 2026-09-01 — agent/team đang chạy dở ở session này (chấm xanh live) */
   hasActiveRun?: boolean
+  /** FIX 2026-09-29 ("session đang vận hành không hiện ra") — tên agent sở
+   *  hữu session (chỉ có trong activeSessions cross-agent) + số goal-loop job
+   * đang chạy/đợi trong session — badge section "Đang vận hành". */
+  agentName?: string | null
+  activeJobCount?: number
 }
 
 
@@ -931,6 +936,10 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   const [activeSmolabTab, setActiveSmolabTab] = useState('knowledge')
   const [gatewayOnline, setGatewayOnline] = useState(false)
   const [sessions, setSessions] = useState<SmolabSession[]>([])
+  // FIX 2026-09-29 — sessions đang vận hành (cross agent/team, có goal-loop
+  // job queued/running hoặc run tracker 'running'): ghim section riêng trong
+  // dropdown MỌI ngữ cảnh để user luôn thấy/thảnh-thoại được phiên đang chạy.
+  const [activeSessions, setActiveSessions] = useState<SmolabSession[]>([])
   const [currentSessionId, setCurrentSessionId] = useState(restoredCtx.currentSessionId || '')
   const [showSessionSelect, setShowSessionSelect] = useState(false)
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
@@ -1134,6 +1143,12 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   // currentSessionId restore bị effect đổi-agent wipe mất ngay.
   // true = lần chạy đầu tiên (mount) chưa được tiêu thụ
   const contextMountRef = useRef(true)
+  // FIX 2026-09-29 — click session ở section "Đang vận hành" (thuộc agent/team
+  // KHÁC ngữ cảnh đang xem): đổi agent/team context nhưng KHÔNG để effect
+  // đổi-context wipe currentSessionId (user đang chủ động NHẢY TỚI phiên đó,
+  // không phải đổi agent để tạo phiên mới). Effect tiêu thụ flag rồi mới nạp
+  // session list cho context mới — giữ nguyên phiên đang mở.
+  const skipContextResetRef = useRef(false)
 
   // Sync spinner + stop-button controller theo phiên đang mở
   const syncSpinnerToSession = useCallback((sid: string) => {
@@ -1382,6 +1397,9 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         if (res.ok) {
           const data = await res.json()
           setSessions(data.sessions || [])
+          // FIX 2026-09-29 — kèm cả phiên ĐANG VẬN HÀNH (server trả không lọc
+          // agent/team: GoalLoopJob queued/running + run tracker running).
+          setActiveSessions(data.activeSessions || [])
         }
       } catch {}
     }
@@ -2253,6 +2271,29 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     syncSpinnerToSession(sid)
   }, [currentSessionId, syncSpinnerToSession])
 
+  // FIX 2026-09-29 — chuyển tới session ĐANG VẬN HÀNH (section ghim trong
+  // dropdown). Session này thường thuộc agent/team khác ngữ cảnh đang xem
+  // (goal-loop job / OPUS tự dispatch) → đồng bộ agent/team selection THEO
+  // session rồi mới mở phiên: user nhìn đúng agent, gửi tin nhắn tiếp đúng
+  // agent sở hữu phiên. skipContextResetRef giữ currentSessionId khỏi bị
+  // effect đổi-context wipe (xem effect [selectedAgentId, selectedTeam,
+  // chatMode]).
+  const switchToOperatingSession = useCallback((s: SmolabSession) => {
+    const needCtxSwitch = (s.teamMode === 'multi' && s.teamName)
+      ? (chatMode !== 'multi' || selectedTeam !== s.teamName)
+      : !!(s.agentProfileId && (chatMode !== 'single' || selectedAgentId !== s.agentProfileId))
+    if (needCtxSwitch) skipContextResetRef.current = true
+    if (s.teamMode === 'multi' && s.teamName) {
+      if (chatMode !== 'multi') setChatMode('multi')
+      if (selectedTeam !== s.teamName) setSelectedTeam(s.teamName)
+    } else if (s.agentProfileId) {
+      if (chatMode !== 'single') setChatMode('single')
+      if (selectedAgentId !== s.agentProfileId) setSelectedAgentId(s.agentProfileId)
+    }
+    setShowSessionSelect(false)
+    switchToSession(s.sessionId)
+  }, [chatMode, selectedTeam, selectedAgentId, switchToSession])
+
   // Close dropdown menus on click outside
   // Use mousedown (not click) so the handler fires BEFORE React's onClick + stopPropagation
   useEffect(() => {
@@ -2718,6 +2759,8 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       if (res.ok) {
         const data = await res.json()
         setSessions(data.sessions || [])
+        // FIX 2026-09-29 — kèm activeSessions (cross agent/team) cho section ghim
+        setActiveSessions(data.activeSessions || [])
       }
     } catch {}
   }, [])
@@ -2725,10 +2768,12 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   // Fetch sessions filtered by team — using isolated API (Phase 7)
   const fetchSessionsForTeam = useCallback(async (teamName: string) => {
     try {
-      const res = await fetch(`/api/smolab/sessions?mode=multi&teamName=${teamName}`)
+      const res = await fetch(`/api/smolab/sessions?mode=multi&teamName=${encodeURIComponent(teamName)}`)
       if (res.ok) {
         const data = await res.json()
         setSessions(data.sessions || [])
+        // FIX 2026-09-29 — kèm activeSessions (cross agent/team) cho section ghim
+        setActiveSessions(data.activeSessions || [])
       }
     } catch {}
   }, [])
@@ -2752,6 +2797,19 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
 
     // Đổi agent/team/mode THẬT SỰ: reset view (messages/session), tắt spinner
     // nhưng task cũ vẫn chạy nền (controller giữ trong inFlightChatsRef)
+    //
+    // FIX 2026-09-29: đổi context do click session "Đang vận hành"
+    // (switchToOperatingSession) → KHÔNG reset phiên đang mở — chỉ nạp lại
+    // session list cho context mới (phiên đích loadSessionTail tự lo).
+    if (skipContextResetRef.current) {
+      skipContextResetRef.current = false
+      if (chatMode === 'single' && selectedAgentId) {
+        fetchSessionsForAgent(selectedAgentId)
+      } else if (chatMode === 'multi' && selectedTeam) {
+        fetchSessionsForTeam(selectedTeam)
+      }
+      return
+    }
     detachFromInFlightChat()
     setMessages([])
     setCurrentSessionId('')
@@ -4371,6 +4429,43 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                         >
                           <Plus className="h-3 w-3" /> Tạo phiên mới
                         </button>
+                        {/* FIX 2026-09-29 — GHIM: phiên ĐANG VẬN HÀNH (cross agent/team).
+                            Session có goal-loop job queued/running hoặc run tracker
+                            'running' nhưng thuộc agent KHÁC đang chọn (vd OPUS tự
+                            dispatch cho SENTINEL) — trước đây bị filter agent ẩn
+                            hoàn toàn (user report: "session đang vận hành không
+                            hiện ra, chỉ hiện session đứng im"). */}
+                        {(() => {
+                          const pinned = activeSessions
+                            .filter((s: SmolabSession) => !sessions.some((x: SmolabSession) => x.sessionId === s.sessionId))
+                            .filter((s: SmolabSession) => !sessionSearchQuery || s.title.toLowerCase().includes(sessionSearchQuery.toLowerCase()))
+                          if (pinned.length === 0) return null
+                          return (
+                            <>
+                              <div className="px-2 pt-1.5 pb-0.5 text-[9px] font-semibold uppercase tracking-wider text-emerald-400/90">⚡ Đang vận hành</div>
+                              {pinned.map((s: SmolabSession) => (
+                                <div key={s.sessionId}
+                                  className={`flex items-center gap-1 px-2 py-1 text-xs hover:bg-emerald-500/10 transition-colors ${currentSessionId === s.sessionId ? 'bg-emerald-500/5' : ''}`}
+                                >
+                                  <button
+                                    onClick={() => switchToOperatingSession(s)}
+                                    className="flex-1 min-w-0 text-left truncate text-stone-300"
+                                    title={`Phiên đang có agent chạy tác vụ${s.agentName ? ` (${s.agentName})` : ''} — nhấn để theo dõi trực tiếp`}
+                                  >
+                                    <span className="inline-flex items-center gap-1 mr-1 text-emerald-400">
+                                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                      <span className="text-[9px] font-medium">đang chạy</span>
+                                    </span>
+                                    {s.title}
+                                    {s.agentName && <span className="ml-1 text-[9px] text-cyan-400/80">[{s.agentName}]</span>}
+                                    {!!s.activeJobCount && s.activeJobCount > 0 && <span className="ml-1 text-[9px] text-amber-400/90">⚡{s.activeJobCount}</span>}
+                                  </button>
+                                </div>
+                              ))}
+                              <div className="mx-2 my-1 border-t border-cyan-400/20" />
+                            </>
+                          )
+                        })()}
                         {sessions
                           .filter((s: SmolabSession) => !sessionSearchQuery || s.title.toLowerCase().includes(sessionSearchQuery.toLowerCase()))
                           .length === 0 && sessionSearchQuery && (
@@ -4531,6 +4626,40 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                         >
                           <Plus className="h-3 w-3" /> Tạo phiên mới
                         </button>
+                        {/* FIX 2026-09-29 — GHIM: phiên ĐANG VẬN HÀNH (cross agent/team)
+                            — mirror dropdown single mode (đặt tên biến pinned riêng,
+                            2 IIFE độc lập không chia sẻ scope). */}
+                        {(() => {
+                          const pinned = activeSessions
+                            .filter((s: SmolabSession) => !sessions.some((x: SmolabSession) => x.sessionId === s.sessionId))
+                            .filter((s: SmolabSession) => !sessionSearchQuery || s.title.toLowerCase().includes(sessionSearchQuery.toLowerCase()))
+                          if (pinned.length === 0) return null
+                          return (
+                            <>
+                              <div className="px-2 pt-1.5 pb-0.5 text-[9px] font-semibold uppercase tracking-wider text-emerald-400/90">⚡ Đang vận hành</div>
+                              {pinned.map((s: SmolabSession) => (
+                                <div key={s.sessionId}
+                                  className={`flex items-center gap-1 px-2 py-1 text-xs hover:bg-emerald-500/10 transition-colors ${currentSessionId === s.sessionId ? 'bg-emerald-500/5' : ''}`}
+                                >
+                                  <button
+                                    onClick={() => switchToOperatingSession(s)}
+                                    className="flex-1 min-w-0 text-left truncate text-stone-300"
+                                    title={`Phiên đang có agent chạy tác vụ${s.agentName ? ` (${s.agentName})` : ''} — nhấn để theo dõi trực tiếp`}
+                                  >
+                                    <span className="inline-flex items-center gap-1 mr-1 text-emerald-400">
+                                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                      <span className="text-[9px] font-medium">đang chạy</span>
+                                    </span>
+                                    {s.title}
+                                    {s.agentName && <span className="ml-1 text-[9px] text-amber-300/80">[{s.agentName}]</span>}
+                                    {!!s.activeJobCount && s.activeJobCount > 0 && <span className="ml-1 text-[9px] text-amber-400/90">⚡{s.activeJobCount}</span>}
+                                  </button>
+                                </div>
+                              ))}
+                              <div className="mx-2 my-1 border-t border-amber-400/20" />
+                            </>
+                          )
+                        })()}
                         {sessions
                           .filter((s: SmolabSession) => !sessionSearchQuery || s.title.toLowerCase().includes(sessionSearchQuery.toLowerCase()))
                           .length === 0 && sessionSearchQuery && (

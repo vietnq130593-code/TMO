@@ -10,6 +10,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { hasActiveRun, cancelSessionRuns } from '@/lib/agent-run-tracker'
+// FIX 2026-09-29 — nguồn sự thật hoạt động dùng chung (GoalLoopJob DB +
+// run tracker) cho hasActiveRun + activeSessions (xem lib/active-sessions.ts)
+import { getActiveSessionsContext } from '@/lib/active-sessions'
 // SESSION TOMBSTONE (user request 2026-09-08): đánh dấu session đã xóa để chat
 // route KHÔNG upsert/persist lại (chống "hồi sinh" phiên đã xóa).
 import { markSessionDeleted, clearSessionTombstone, isSessionDeletedDeep } from '@/lib/session-tombstone'
@@ -34,13 +37,18 @@ export async function GET(request: NextRequest) {
       if (agentProfileId) where.agentProfileId = agentProfileId
       if (teamName) where.teamName = teamName
 
-      // Get sessions from SQLite
-      const sessions = await db.agentSession.findMany({
-        where,
-        orderBy: { updatedAt: 'desc' },
-        take: 50,
-      })
+      // ============================================================
+      // USER REPORT 2026-09-29 ("session đang vận hành không hiển thị
+      // ra, chỉ hiện những session đang đứng im"): đọc kèm nguồn sự thật
+      // hoạt động (GoalLoopJob queued/running + run tracker) — chi tiết
+      // trong src/lib/active-sessions.ts.
+      // ============================================================
+      const [sessions, activeCtx] = await Promise.all([
+        db.agentSession.findMany({ where, orderBy: { updatedAt: 'desc' }, take: 50 }),
+        getActiveSessionsContext(),
+      ])
 
+      // Get sessions from SQLite
       // FIX SLOW AGENT/SESSION LIST (user report 2026-09-08: "mỗi khi khởi
       // động lại, load danh sách agents khá lâu"):
       // Trước đây route gọi gatewayListSessions() — hàm này ensureGatewayRunning()
@@ -67,8 +75,14 @@ export async function GET(request: NextRequest) {
           updatedAt: s.updatedAt,
           // USER REQUEST 2026-09-01: agent/team vẫn đang chạy dở ở session này?
           // (in-memory run tracker — hiển thị chấm xanh nhấp nháy ở dropdown)
-          hasActiveRun: hasActiveRun(s.sessionId),
+          // FIX 2026-09-29: cộng thêm nguồn sự thật durable (GoalLoopJob DB
+          // queued/running) — tracker in-memory single-slot có thể bị run
+          // ngắn (OPUS review) tắt nhầm sau khi đè con trỏ.
+          hasActiveRun: activeCtx.isSessionActive(s.sessionId) || hasActiveRun(s.sessionId),
+          activeJobCount: activeCtx.activeJobCount(s.sessionId),
         })),
+        // Sessions đang vận hành (cross agent/team) — UI ghim section riêng
+        activeSessions: activeCtx.activeSessions,
         gatewaySessions,
         total: sessions.length,
       })
