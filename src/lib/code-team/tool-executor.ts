@@ -3523,7 +3523,7 @@ export async function executeTool(
             error: dispatched.error,
             hint: dispatched.success
               ? undefined
-              : 'Điều động thất bại — kiểm tra tên agent trong Agent Roster, hoặc tự làm trực tiếp bằng tools của mình.',
+              : 'Điều động thất bại — kiểm tra tên agent trong Agent Roster; giao lại kèm gaps cụ thể (re-delegate) hoặc đổi agent phù hợp hơn.',
           }
         } catch (err) {
           result = { success: false, error: `dispatch_agent lỗi: ${err instanceof Error ? err.message : String(err)}` }

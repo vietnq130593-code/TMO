@@ -4068,6 +4068,20 @@ export const TODO_EVIDENCE_MODIFY_TOOLS = new Set([
   'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'opencode',
   'gateway_edit', 'gateway_write', 'gateway_apply_patch',
 ])
+/**
+ * IMP-2 (F3 — điều tra Task F "todo drift"): bộ evidence YẾU cho tool KIỂM ĐỊNH /
+ * PROBE. Todo dạng kiểm thử/tổng hợp ("Test custom tools: list_custom_tools + gọi
+ * thử", "chạy lint src/x.ts", "run_tests tests/y.test.ts"...) trước đây KHÔNG BAO
+ * GIỜ khớp evidence (bộ cũ chỉ tool THAY ĐỔI sinh evidence) → kẹt in_progress /
+ * pending đến tận cuối run mới bị honest-close. Evidence yếu mang tiền tố
+ * "weak:" — evidenceMatchesTodo chỉ chấp nhận khi todo TỰ NHẮC tên tool đó
+ * (chạy lint file X ≠ đã sửa file X — chống khớp giả todo "sửa file X").
+ * (http_probe không tồn tại trong tool registry TMO — web_fetch với args.url là
+ * probe HTTP tương đương.)
+ */
+export const TODO_EVIDENCE_VERIFY_TOOLS = new Set([
+  'run_tests', 'lint', 'type_check', 'list_custom_tools', 'web_fetch',
+])
 export function extractTodoEvidence(toolName: string, args: Record<string, unknown> | undefined): string | null {
   try {
     if (!args || typeof args !== 'object') return null
@@ -4075,6 +4089,19 @@ export function extractTodoEvidence(toolName: string, args: Record<string, unkno
       const cmd = (args as { command?: unknown }).command
       if (typeof cmd === 'string' && cmd.trim().length >= 6) return cmd.trim()
       return null
+    }
+    // IMP-2 (F3) — tool kiểm định/probe: target arg làm bằng chứng YẾU. Không có
+    // target (vd list_custom_tools {}, lint không path) → chính tên tool là
+    // evidence (todo phải nhắc tên tool để khớp — xem matcher).
+    if (TODO_EVIDENCE_VERIFY_TOOLS.has(toolName)) {
+      const target = (args as { target?: unknown }).target
+        ?? (args as { path?: unknown }).path
+        ?? (args as { file_path?: unknown }).file_path
+        ?? (args as { url?: unknown }).url
+      if (typeof target === 'string' && target.trim().length >= 3) {
+        return `weak:${toolName} ${target.trim()}`
+      }
+      return `weak:${toolName}`
     }
     if (!TODO_EVIDENCE_MODIFY_TOOLS.has(toolName)) return null
     const p = (args as { path?: unknown }).path ?? (args as { file_path?: unknown }).file_path
@@ -4093,11 +4120,30 @@ export function extractTodoEvidence(toolName: string, args: Record<string, unkno
  * "cd /home/z/tmo-app && bun run db:push"). Vẫn bảo thủ chống khớp giả:
  * mọi rule đều khớp chuỗi CỤ THỂ (path/basename/segment lệnh/span code) —
  * văn tự tiếng Việt của todo không thể khớp giả với evidence ASCII.
+ *
+ * IMP-2 (F3): xuất khẩu để goal-loop reconcile ranh giới chu kỳ dùng chung 1
+ * bộ luật khớp (đếm todo in_progress "có bằng chứng chu kỳ này hay không").
  */
-function evidenceMatchesTodo(ev: string, todoContent: string): boolean {
+const WEAK_EVIDENCE_PREFIX = 'weak:'
+
+export function evidenceMatchesTodo(ev: string, todoContent: string): boolean {
   const e = ev.toLowerCase().replace(/\\/g, '/').trim()
   const t = todoContent.toLowerCase().replace(/\\/g, '/').replace(/\s+/g, ' ').trim()
   if (e.length < 3 || t.length < 3) return false
+
+  // IMP-2 (F3) — evidence YẾU ("weak:<tool> [target]" — tool kiểm định/probe):
+  // todo phải TỰ NHẮC TÊN TOOL (chạy lint X ≠ đã sửa X — todo "sửa file X"
+  // không nhắc lint → không khớp); target (nếu có) phải khớp bằng rule mạnh
+  // phía dưới (đệ quy 1 tầng — target thô không mang tiền tố weak:).
+  if (e.startsWith(WEAK_EVIDENCE_PREFIX)) {
+    const body = e.slice(WEAK_EVIDENCE_PREFIX.length).trim()
+    const sp = body.indexOf(' ')
+    const toolName = (sp >= 0 ? body.slice(0, sp) : body).trim()
+    const target = sp >= 0 ? body.slice(sp + 1).trim() : ''
+    if (!toolName || !t.includes(toolName)) return false
+    if (!target) return true
+    return evidenceMatchesTodo(target, todoContent)
+  }
 
   // (1) Substring chính xác — hành vi cũ, giữ nguyên
   if (t.includes(e)) return true
@@ -4139,9 +4185,10 @@ function evidenceMatchesTodo(ev: string, todoContent: string): boolean {
  * USER DIRECTIVE 2026-09-28 ("không bỏ sót"): mở rộng PHẠM VI từ chỉ
  * 'in_progress' → CẢ 'pending' + 'blocked'. LLM agent hay làm việc khi todo
  * vẫn còn pending (quên đánh dấu in_progress trước khi làm) → việc ĐÃ xong
- * nhưng không bao giờ được đánh dấu → bỏ sót. Evidence vẫn bảo thủ như cũ
- * (chỉ tool THAY ĐỔI thành công — xem extractTodoEvidence), matcher mạnh hơn
- * (xem evidenceMatchesTodo) nhưng mọi rule đều khớp chuỗi cụ thể.
+ * nhưng không bao giờ được đánh dấu → bỏ sót. Evidence vẫn bảo thủ (tool THAY
+ * ĐỔI thành công + IMP-2 F3: tool kiểm định/probe thành công dưới dạng evidence
+ * YẾU "weak:" — xem extractTodoEvidence), matcher mạnh hơn (xem
+ * evidenceMatchesTodo) nhưng mọi rule đều khớp chuỗi cụ thể.
  *
  * @returns { completed, todos } — todos = danh sách todo hiện tại của run
  * (orderBy position) để caller snapshot qua recordAgentRunTodos

@@ -71,7 +71,7 @@ import {
 } from '@/lib/agent-run-tracker'
 // CI-2 (Task 11-a) — auto-complete todo theo bằng chứng tool giữa chừng run
 // (helper DB-backed trong TODO section của dev-tools — không đụng git section)
-import { autoCompleteRunTodosByEvidence, extractTodoEvidence } from '@/lib/code-team/dev-tools'
+import { autoCompleteRunTodosByEvidence, evidenceMatchesTodo, extractTodoEvidence } from '@/lib/code-team/dev-tools'
 // Task 20-c (self-evaluation) — persist lifecycle AgentRunRecord (start row +
 // end update, dedup với tracker qua dbPersistBy:'caller') + ArbiterVerdict mỗi
 // chu kỳ EVALUATE + resolve outcome khi run kết thúc. Mọi write fire-and-forget
@@ -284,6 +284,14 @@ const MAX_EVIDENCE_ENTRIES = 60
 const VERIFY_TOOLS = new Set(['run_tests', 'lint', 'type_check', 'test_coverage', 'get_diagnostics', 'lsp_diagnostics'])
 /** [C] Đọc lại kết quả (file_read/grep sau khi sửa) cũng là kiểm định */
 const READBACK_TOOLS = new Set(['file_read', 'grep'])
+/**
+ * IMP-2 (F4 — điều tra Task F "read-repeat 2-3× trong 4 phút"): bộ tool CHỈ ĐỌC —
+ * lặp y hệt args là tín hiệu đọc lại vô ích rõ nhất (kết quả đã nằm trong
+ * transcript, context compression làm tăng xác suất re-read). Ngưỡng riêng 3
+ * lần (chặt hơn cảnh báo chung 4 / cắt cứng 8): breach → nhắc agent DÙNG kết quả
+ * có sẵn thay vì đọc lại (KHÔNG cắt — cắt cứng giữ nguyên ở 8 cho mọi tool).
+ */
+const READ_REPEAT_TOOLS = new Set(['file_read', 'file_list', 'grep', 'knowledge_search', 'list_custom_tools'])
 /** [C] Tool sửa đổi — sau những tool này PHẢI có kiểm định lại trước khi kết luận */
 const MODIFY_TOOLS = new Set(['file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'mkdir', 'shell', 'run_bg', 'git_commit', 'delegate_task', 'dispatch_agent', 'dispatch_agents_parallel', 'request_code_team'])
 /** FIX 2026-09-14 #7 — tool kiểm định MẠNH (đối lập READBACK chỉ-đọc-again: với
@@ -478,6 +486,7 @@ GIAI ĐOẠN 1 — XÁC ĐỊNH VẤN ĐỀ & LẬP KẾ HOẠCH:
 - BƯỚC ĐẦU TIÊN của mọi task từ 2 bước trở lên (gần như MỌI task làm việc): gọi todo_write (trên đường CLI là tool tmo_todo) chia nhỏ kế hoạch TRƯỚC KHI hành động — mỗi tiêu chí nghiệm thu ít nhất 1 todo tương ứng (ghi "[Nghiệm thu n]" trong nội dung) + các todo THU THẬP DỮ LIỆU từ bước biên độ dữ liệu. Mỗi todo viết dạng KIỂM ĐỊNH ĐƯỢC (xong = kiểm tra/chạy gì để biết đạt) — đừng viết todo mơ hồ kiểu "xử lý phần X". Bỏ qua todo_write chỉ khi task ĐÚNG 1 bước (một câu hỏi đơn lẻ trả lời ngay).
 - KỶ LUẬT TODO (bắt buộc): todo làm XONG phải được đánh dấu completed NGAY trong lần todo_write kế tiếp TRƯỚC KHI thêm todo mới (đóng việc cũ rồi mới mở việc mới — danh sách luôn phản ánh trạng thái thật). Việc phức tạp cần phân rã tiếp → tạo TODO CON: gọi todo_write với "id" của todo cha trong trường "parentId" của todo con (hiển thị lồng nhau trong panel — KHÔNG viết phẳng trùng nội dung). Cập nhật todo cũ — KHÔNG viết lại từ đầu.
 - 🧩 PHÂN LOẠI THEO CHỨC TRÁCH (user directive 2026-10-27): khi lập/kết nạp todo, đối chiếu TỪNG việc với chức trách được thiết kế cho bạn (vai trò của chính mình): việc THUỘC chức trách mình → tự làm bằng tools của mình; việc NGOÀI chức trách (chuyên môn của agents khác: code/review/research/tối ưu/thiết kế... — đối chiếu Agent Roster) → KHÔNG tự làm thay: giao đúng người (Code Team qua delegate_task, agent phù hợp qua dispatch_agent) kèm mô tả nhiệm vụ + tiêu chí nghiệm thu rõ ràng, rồi tổng hợp báo cáo của họ. Bạn là người ĐIỀU PHỐI kết quả đúng chuyên môn — không phải người ôm hết mọi việc.
+- Sau khi chốt Todos, ưu tiên delegate từng todo/nhóm todo cho agent phù hợp ngay (đây là việc chính của orchestrator).
 - 🔍 KIỂM TRA PHỦ KẾ HOẠCH (harness — determinstic, chạy tự động trong mọi todo_write): hệ thống đối chiếu kế hoạch của bạn với (a) từng tiêu chí NGHIỆM THU của directive — mỗi "[Nghiệm thu n]" phải có ≥1 todo nhắm tới, (b) từng mục "cần đọc" trong khối 📐 — mỗi mục phải có ≥1 todo thu thập dữ liệu. Kết quả nằm trong trường "coverage" của kết quả todo_write: thiếu mục nào sẽ liệt kê CỤ THỂ kèm yêu cầu bổ sung → gọi todo_write BỔ SUNG đúng các mục thiếu ngay (KHÔNG viết lại danh sách); phủ đủ sẽ có dòng ✅. Đây là kiểm tra máy (không tin tự khai) — bỏ qua cảnh báo này khiến evaluator chấm thiếu tiêu chí ở cuối chu kỳ.
 
 GIAI ĐOẠN 2 — TRIỂN KHAI (mỗi hành động đều có suy nghĩ):
@@ -556,17 +565,26 @@ CHỈ escalate chờ phê duyệt đối với phần VẪN ĐƯỢC BẢO VỆ:
  * delegate_task nằm trong MODIFY_TOOLS).
  */
 function buildDelegationProtocol(): string {
+  // IMP-2 (G — điều tra Task G "Omega 0.29% delegation / 30 ngày"): 2 nudge
+  // chống delegate được nới lại — (a) ngưỡng "KHÔNG delegate việc 1-2 bước" chặn
+  // mất phần lớn việc thật (mọi việc ≥3 bước / ≥2 file giờ NÊN delegate);
+  // (b) cảnh báo token-budget chỉ có nghĩa khi budget HỮU HẠN (GOAL_LOOP_TOKEN_
+  // BUDGET>0) — agent ∞ budget (mặc định CI-1) đọc cảnh báo thành lý do KHÔNG
+  // delegate (noise vô nghĩa với nó).
+  const tokenNote = TOKEN_BUDGET > 0
+    ? '- Token sub-agent tiêu thụ cộng vào budget của bạn — scope task rõ ràng, không delegate task mờ hồ to đùng.'
+    : '- Budget token của bạn hiện KHÔNG giới hạn — mạnh dạn delegate đúng người; scope task vẫn phải rõ ràng (task mờ hồ to đùng khó đạt tiêu chí nghiệm thu).'
   return `
 
 📦 PHÂN CÔNG SUB-AGENT (delegate_task — Code Team chuyên trách):
 - RAMPAGE: implement code · SENTINEL: review/bug/security · CATALYST: tối ưu/refactor · SHOCWAVE: thiết kế kiến trúc/DB/API · MEGATRON: phân tích + verify tổng thể · FORGE: full-stack builder END-TO-END (UI + API + DB + tự kiểm định + preview verify) — tính năng trọn gói tự chứa. (TASK 48: agent security "Linh Sickyx" giờ là standalone ĐỘC LẬP — KHÔNG nằm trong delegate_task; cần security work → dispatch_agent.)
 - Cú pháp: tool_call: delegate_task({"agent": "RAMPAGE", "task": "Nhiệm vụ cụ thể...", "context": "file liên quan, ràng buộc...", "acceptance_criteria": "điều kiện hoàn thành kiểm định được"})
 - NÊN delegate khi: task cần đọc/sửa NHIỀU file (làm trực tiếp sẽ phình context của bạn), cần chuyên môn sâu, hoặc task giao trọn được cho 1 agent.
-- KHÔNG delegate việc 1-2 bước đơn giản — tự làm nhanh hơn.
+- NÊN delegate khi việc ≥3 bước hoặc đụng ≥2 file; chỉ tự làm việc 1 bước trivial.
 - 🔄 FAN-OUT: nhiều delegation ĐỘC LẬP trong 1 message → hệ thống tự chạy SONG SONG + hợp nhất kết quả (không cần đợi tuần tự).
 - ⚖️ TRỌNG TÀI ĐỘC LẬP chấm từng delegation (field "evaluation" trong kết quả): pass=false + gaps[] = sub-agent CHƯA đạt theo tiêu chí — đọc gaps và khắc phục phần còn thiếu (tự làm hoặc delegate lại), KHÔNG tin report tự chấm của sub-agent.
 - Báo cáo sub-agent quay về dạng NÉN (đã làm · bằng chứng · còn thiếu) — ĐỌC kỹ "còn thiếu". Với kết quả QUAN TRỌNG, tự KIỂM ĐỊNH LẠI bằng tool của bạn (file_read/lint/type_check) trước khi kết luận.
-- Token sub-agent tiêu thụ cộng vào budget của bạn — scope task rõ ràng, không delegate task mờ hồ to đùng.`
+${tokenNote}`
 }
 
 /**
@@ -1106,10 +1124,21 @@ export function parseEvalVerdict(raw: string): EvalVerdict | null {
   }
 }
 
-/** Fingerprint "có tiến triển không" — hash nội dung 6 messages cuối */
+/**
+ * Fingerprint "có tiến triển không" — hash nội dung 6 messages cuối.
+ * IMP-2 (G5 — audit Task H): LOẠI directive/hệ thống khỏi hash — continuation
+ * directive luôn chứa "Chu kỳ N/M" đổi mỗi chu kỳ → fingerprint 6-message cuối
+ * gần như KHÔNG BAO GIỜ trùng (thực tế 36 chu kỳ noProgressCount=0 dù evaluator
+ * tự kết luận looping — phanh no-progress gần chết). Giờ chỉ hash nội dung THẬT
+ * (assistant + tool result) — 2 chu kỳ lặp lại cùng hành động/kết luận sẽ trùng
+ * đúng. Không còn message thực nào → trả '' (phanh in-cycle có guard fp !== '';
+ * chu kỳ toàn-text liên tiếp cũng là không tiến triển đúng nghĩa).
+ */
 function progressFingerprint(messages: GoalMessage[]): string {
+  const substantive = messages.filter(m => m.role === 'assistant' || m.role === 'tool')
+  if (substantive.length === 0) return ''
   let h = 5381
-  for (const m of messages.slice(-6)) {
+  for (const m of substantive.slice(-6)) {
     const s = `${m.role}|${m.content.slice(-150)}`
     for (let i = 0; i < s.length; i++) {
       h = ((h << 5) + h + s.charCodeAt(i)) | 0
@@ -1300,7 +1329,10 @@ ${evidenceBlock}
         agentId,
         agentName: `${agentName} (evaluator)`,
         temperature: 0.2,
-        maxTokens: 1200,
+        // IMP-2 (H G3 — audit Task H): 1200 sát nút vs worst-case verdict tiếng
+        // Việt ~3900 chars → truncate → JSON hỏng → null → rơi nhánh heuristic
+        // (false-done G1). 2000 cho evaluator đủ chỗ trả verdict trọn vẹn.
+        maxTokens: 2000,
         abortCheck,
       }),
       LLM_TIMEOUT_MS,
@@ -1843,6 +1875,11 @@ export async function runGoalDrivenLoop(params: {
   let lastVerifyOrdinal = 0
   let lastModifyOrdinal = 0
   let cycleVerifyEvidence: string[] = []
+  /** IMP-2 (F2) — bằng chứng todo (extractTodoEvidence, kể cả evidence yếu
+   *  "weak:" của tool kiểm định/probe) TÍCH LŨY TOÀN CHU KỲ — reconcile ranh
+   *  giới chu kỳ đối chiếu todo mở với bằng chứng của CẢ chu kỳ (không chỉ từng
+   *  batch riêng lẻ như CI-2). */
+  let cycleTodoEvidence: string[] = []
   // FIX 2026-09-14 #7 — E2E verification: chu kỳ có SỬA CODE + có kiểm định MẠNH?
   // cycleCodeModified = file_edit/file_multi_edit/file_write/shell chạy trong chu kỳ;
   // cycleStrongVerify = run_tests/lint/type_check/test_coverage có bằng chứng.
@@ -1938,6 +1975,16 @@ export async function runGoalDrivenLoop(params: {
   let stallCycles = resumeState?.stallCycles ?? 0
   /** Chu kỳ trước có bị cắt giữa chừng (hết vòng / hết budget) không */
   let cutMidWorkPrev = resumeState?.cutMidWorkPrev ?? false
+  /**
+   * IMP-2 (F2 — điều tra Task F "todo drift") — reconcile todo ở RANH GIỚI CHU KỲ:
+   * đếm số chu kỳ LIÊN TIẾP mỗi todo in_progress KHÔNG có bằng chứng tool khớp
+   * (≥2 → cảnh báo cứng đính continuation directive chu kỳ kế — xem khối
+   * reconcile sau inner loop). In-memory — resume từ checkpoint reset về 0
+   * (chấp nhận được: đếm lại sau 2 chu kỳ tiếp theo).
+   */
+  const todoStaleCycles = new Map<string, number>()
+  /** Cảnh báo todo kẹt đang chờ đính vào directive chu kỳ kế (tiêu thụ khi build) */
+  let pendingTodoWarnings: string[] = []
 
   // ==================== 2026-10 PROCESS INTEGRITY — REPETITION DETECTION ====================
   // User report: "các chu kỳ bị lặp lại y hệt một việc, không có tiến triển".
@@ -1971,7 +2018,16 @@ export async function runGoalDrivenLoop(params: {
       const n = (toolSignatureCounts.get(sig) || 0) + 1
       toolSignatureCounts.set(sig, n)
       if (n === 1 && ok) cycleNewSuccessSignatures++ // hành động THÀNH CÔNG chưa từng làm trong run này
-      if (n === 4) {
+      if (n === 3 && READ_REPEAT_TOOLS.has(name)) {
+        // IMP-2 (F4) — READ-REPEAT NUDGE: tool chỉ-đọc lặp y hệt args từ lần thứ 3
+        // → kết quả ĐÃ nằm trong transcript (context compression dễ làm re-read) —
+        // nhắc agent DÙNG lại kết quả đó thay vì đọc lại. KHÔNG cắt — cắt cứng vẫn
+        // ở ngưỡng 8 như cũ cho mọi tool.
+        const readNote = `📖 ĐỌC LẶP: ${name} với args này bạn đã gọi ${n} lần — kết quả ĐÃ NẰM trong transcript phía trên, DÙNG lại kết quả đó, đừng đọc lại.`
+        pushToolMessage(messages, { tool: 'harness_warning', success: true, result: readNote })
+        evidence.push({ cycle: cycleNum, kind: 'directive', text: `nhắc đọc lặp: ${name}×${n} — dùng kết quả trong transcript` })
+        recordAgentThought(agentSessionId, `📖 Phát hiện đọc lặp: ${name} × ${n} lần args y hệt — đã nhắc agent dùng kết quả sẵn trong transcript, đừng đọc lại`, totalIterations)
+      } else if (n === 4) {
         // 2026-10 SELF-REFLECTION AUDIT (Task 19) — A4 anti-habituation: cảnh
         // báo câu CỐ ĐỊNH lặp lại nhiều run → model học cách bỏ đọc (entropy
         // collapse của guidance — SELF_REFLECTION_DESIGN §4c). Đảo ngẫu nhiên
@@ -2169,6 +2225,13 @@ export async function runGoalDrivenLoop(params: {
     if (cycle > 1 && lastVerdict) {
       const advisoryBlock = omegaAdvisory ? `\n\n${omegaAdvisory}\n(Theo tư vấn trên — ĐỔI CÁCH TIẾP CẬN, không lặp lại hành động đã fail.)` : ''
       omegaAdvisory = ''
+      // IMP-2 (F2) — cảnh báo todo kẹt do reconcile cuối chu kỳ trước tính: đính
+      // CỨNG vào directive — agent phải đóng/chia nhỏ/hủy ngay chu kỳ này (todo
+      // in_progress treo ≥2 chu kỳ không bằng chứng là drift thật theo điều tra F).
+      const todoStaleWarnBlock = pendingTodoWarnings.length > 0
+        ? `\n\n⚠️ TODO KẸT — reconcile ranh giới chu kỳ phát hiện các mục in_progress treo ≥2 chu kỳ KHÔNG có bằng chứng tool (PHẢI xử lý chu kỳ này: đánh done nếu xong, chia nhỏ việc lớn, hoặc hủy nếu không còn cần — gọi todo_write với id):\n${pendingTodoWarnings.join('\n')}`
+        : ''
+      pendingTodoWarnings = []
 
       // ===== FIX 2026-09-14 #9 — DEBT CYCLE DIRECTIVE =====
       // Chu kỳ trước trọng tài chấm complete NHƯNG quyết định 'continue' cho
@@ -2185,7 +2248,7 @@ Chu kỳ này quay về GĐ0 (quan sát & phân tích) với thứ tự ưu tiê
 ${debtList}
 
 Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý (nợ trước, việc khác sau), (2) khắc phục từng lỗi, (3) KIỂM ĐỊNH bằng tool thật (run_tests/lint/type_check), (4) KHÔNG mở việc mới ngoài danh sách trên khi còn nợ chưa xử lý. Xong hết → báo cáo ngắn từng lỗi đã xử lý + bằng chứng.
-LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PHỤC VỤ HẠ TẦNG): bạn ĐÃ ĐƯỢC PHÉP (1) tự cài package — manage_packages hoặc shell "bun add <pkg>"; (2) tự sửa DB schema — file_edit/file_write prisma/schema.prisma → shell "bun run db:push" → shell "bun run db:generate"; (3) tự xây tool còn thiếu — list_custom_tools kiểm tra → create_custom_tool đăng ký vào hệ thống (tab Tools/Skills module Smolab) rồi GỌI NGAY tool mới; (4) việc thuộc chức trách agent khác → delegate_task/dispatch_agent; (5) chưa có agent chức trách đó → escalate_problem (Omega tạo agent mới — agent mới tự cập nhật vào module Agents). Hai hạng mục (1)+(2) KHÔNG còn bị chặn — ĐỪNG kết luận "ngoài quyền sửa" khi chưa thử. Chỉ phần VẪN ĐƯỢC BẢO VỆ mới phải chờ phê duyệt: .env/keys, file data trong db/, opencode.json, .opencode/, mini-services/, config hệ thống — với các lỗi này: KHÔNG lặp thử sửa, ghi rõ trạng thái "chờ phê duyệt" + ĐIỀU KIỆN CẦN vào báo cáo rồi chuyển sang lỗi kế — đó là "đã xử lý phần của agent". Hết debt cycles mà còn lỗi treo ngoài quyền → hệ thống ghi nợ Todo follow-up kèm điều kiện, KHÔNG khởi động chu kỳ debt mới.${debtTodosBlock}`
+LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PHỤC VỤ HẠ TẦNG): bạn ĐÃ ĐƯỢC PHÉP (1) tự cài package — manage_packages hoặc shell "bun add <pkg>"; (2) tự sửa DB schema — file_edit/file_write prisma/schema.prisma → shell "bun run db:push" → shell "bun run db:generate"; (3) tự xây tool còn thiếu — list_custom_tools kiểm tra → create_custom_tool đăng ký vào hệ thống (tab Tools/Skills module Smolab) rồi GỌI NGAY tool mới; (4) việc thuộc chức trách agent khác → delegate_task/dispatch_agent; (5) chưa có agent chức trách đó → escalate_problem (Omega tạo agent mới — agent mới tự cập nhật vào module Agents). Hai hạng mục (1)+(2) KHÔNG còn bị chặn — ĐỪNG kết luận "ngoài quyền sửa" khi chưa thử. Chỉ phần VẪN ĐƯỢC BẢO VỆ mới phải chờ phê duyệt: .env/keys, file data trong db/, opencode.json, .opencode/, mini-services/, config hệ thống — với các lỗi này: KHÔNG lặp thử sửa, ghi rõ trạng thái "chờ phê duyệt" + ĐIỀU KIỆN CẦN vào báo cáo rồi chuyển sang lỗi kế — đó là "đã xử lý phần của agent". Hết debt cycles mà còn lỗi treo ngoài quyền → hệ thống ghi nợ Todo follow-up kèm điều kiện, KHÔNG khởi động chu kỳ debt mới.${debtTodosBlock}${todoStaleWarnBlock}`
         messages.push({ role: 'user', content: debtDirective })
         evidence.push({ cycle, kind: 'directive', text: `DEBT CYCLE ${cycle}: xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã xong)` })
         recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ0 QUAN SÁT & PHÂN TÍCH (CHU KỲ DEBT — quay lại GĐ0): trọng tài tái khởi động chu kỳ để xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã hoàn thành) — TOÀN BỘ nợ kỹ thuật ƯU TIÊN triển khai TRƯỚC, sau đó mới tới việc khác`, totalIterations)
@@ -2237,7 +2300,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         let uncertainBlock = ''
         try {
           const shr = await import('@/lib/structured-hypothesis')
-          shrBeliefBlock = agentSessionId ? await shr.renderBeliefState(agentSessionId) : ''
+          shrBeliefBlock = agentSessionId ? await shr.renderBeliefState(agentSessionId, runId) : ''
           const runCtx = runId ? await shr.getRunContext(runId) : null
           if (runCtx?.dataScope) {
             dataScopeBlock = `\n\n📐 BIÊN ĐỘ DỮ LIỆU đã xác định (chu kỳ trước — giữ nguyên nếu còn đúng, KHÔNG tự mở rộng phạm vi): ${runCtx.dataScope}`
@@ -2259,7 +2322,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} SHR directive: belief=${shrBeliefBlock ? 'yes' : 'no'} dataScope=${dataScopeBlock ? 'yes' : 'no'} uncertain=${uncertainBlock ? 'yes' : 'no'} priorCoT=${prior.matchedCount} mẩu khớp`)
           }
         } catch { /* fail-open — SHR không được phép làm hỏng directive */ }
-        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles, doneSummary) + similarErrorsBlock + advisoryBlock + runTodosBlock + dataScopeBlock + uncertainBlock + shrBeliefBlock + priorCotBlock
+        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles, doneSummary) + similarErrorsBlock + advisoryBlock + runTodosBlock + todoStaleWarnBlock + dataScopeBlock + uncertainBlock + shrBeliefBlock + priorCotBlock
         messages.push({ role: 'user', content: directive })
         evidence.push({ cycle, kind: 'directive', text: `Chu kỳ ${cycle}: chẩn đoán "${lastVerdict.rootCause.slice(0, 120)}" → kế hoạch mới${similarErrorsBlock ? ' + lỗi tương tự đã gặp (episodic memory)' : ''}${advisoryBlock ? ' + tư vấn Omega orchestrator' : ''}` })
         recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ0 QUAN SÁT & PHÂN TÍCH: đọc kết quả tích lũy + chẩn đoán trọng tài: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${similarErrorsBlock ? ' (kèm lỗi tương tự đã gặp)' : ''}${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}`, totalIterations)
@@ -2271,6 +2334,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     let cycleToolCalls = 0
     cycleNewSuccessSignatures = 0 // 2026-10 — đếm lại mỗi chu kỳ (điều kiện renewal)
     cycleVerifyEvidence = [] // [C] bằng chứng kiểm định tính lại mỗi chu kỳ
+    cycleTodoEvidence = [] // IMP-2 (F2) — bằng chứng todo của chu kỳ, tính lại mỗi chu kỳ
     cycleCodeModified = false // FIX #7 — tính lại mỗi chu kỳ
     cycleStrongVerify = false // FIX #7 — tính lại mỗi chu kỳ
     let endedBy: 'no_tool_calls' | 'iteration_limit' | 'error' | 'budget' | 'cancelled' = 'no_tool_calls'
@@ -2673,6 +2737,32 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             }
           } catch { /* fail-open */ }
         }
+
+        // IMP-2 (F1 — điều tra Task F "hypothesis lặp 4× qua 4 session spawn"):
+        // MIRROR hypothesis_write từ inner loop CLI về session goal-loop — giống
+        // gap TASK 20 đã fix cho todo nhưng hypothesis CHƯA có mirror. Trên đường
+        // CLI, hypothesis_write có thể ghi vào session CỦA SPAWN (env
+        // TMO_SESSION_ID của spawn / agent tự khai sessionId) → dedup SHR scoped
+        // per-session của spawn sau KHÔNG thấy → propose lại NGUYÊN VĂN; đồng thời
+        // belief-state render theo session goal-loop nên KHÔNG bao giờ thấy các
+        // hypothesis đó. Mirror (idempotent — đã có thì dedup trả 'duplicate'):
+        // propose → tạo bản sao keyed session goal-loop; judge → ghi phán quyết
+        // lên bản sao khớp cơ chế (xem mirrorSpawnHypothesis). Fail-open tuyệt đối.
+        if (etc.name === 'hypothesis_write' && ok && agentSessionId) {
+          try {
+            const shrMirror = await import('@/lib/structured-hypothesis')
+            const m = await shrMirror.mirrorSpawnHypothesis({
+              goalSessionId: agentSessionId,
+              runId: runId ?? null,
+              agentName,
+              op: String(etc.args?.op ?? ''),
+              args: etc.args ?? {},
+            })
+            if (m.mirrored) {
+              console.log(`[GoalLoop] ${agentName} SHR mirror chu kỳ ${cycle}: hypothesis_write (op=${String(etc.args?.op ?? '?')}) của spawn được re-key về session goal-loop — belief-state chu kỳ sau sẽ thấy`)
+            }
+          } catch { /* fail-open — mirror hypothesis không được phép lỗi ra ngoài */ }
+        }
       }
       // (b) QUAN SÁT — đẩy kết quả batch về transcript (bounded 400 chars/call,
       // cap bởi MAX_TOOL_RESULT_CHARS trong pushToolMessage). Đây là bước quan
@@ -3072,6 +3162,9 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       // LLM thường quên gọi todo_write đóng bước → đây là lưới an toàn dựa trên
       // bằng chứng THẬT (substring match chặt, chỉ todo đúng runId). Fail-open.
       if (agentSessionId && runId && batchEvidence.length > 0) {
+        // IMP-2 (F2) — tích lũy bằng chứng TOÀN CHU KỲ cho reconcile ranh giới chu kỳ
+        // (CI-2 dưới chạy theo TỪNG batch; reconcile cuối chu kỳ đối chiếu tổng)
+        cycleTodoEvidence.push(...batchEvidence)
         try {
           const res = await autoCompleteRunTodosByEvidence({
             sessionId: agentSessionId,
@@ -3116,6 +3209,74 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     }
 
     cutMidWorkPrev = endedBy === 'iteration_limit' || endedBy === 'budget'
+
+    // ===== IMP-2 (F2 — điều tra Task F "todo drift") — CYCLE-BOUNDARY TODO RECONCILE =====
+    // Trước đây cập nhật todo là TÌNH NGUYỆN (protocol + CI-2 per-batch chỉ khớp
+    // bằng chứng MODIFY) → todo kiểm thử/tổng hợp KHÔNG bao giờ khớp → kẹt
+    // in_progress đến tận cuối run mới bị honest-close (bằng chứng thực tế: 3
+    // in_progress kẹt 13-23 phút trong khi agent chạy tool liên tục). Giờ ở MỖI
+    // ranh giới chu kỳ (ngay sau inner loop): (a) chạy lại auto-complete với
+    // bằng chứng TOÀN chu kỳ (đã mở rộng bộ evidence — tool kiểm định/probe sinh
+    // evidence yếu "weak:", xem dev-tools), (b) đếm số chu kỳ LIÊN TIẾP mỗi todo
+    // in_progress KHÔNG có bằng chứng khớp → ≥2 chu kỳ đính cảnh báo CỨNG vào
+    // continuation directive chu kỳ kế (todoStaleWarnBlock). Deterministic — 0
+    // LLM call, chỉ string matching (evidenceMatchesTodo dùng chung CI-2).
+    // Fail-open tuyệt đối — reconcile KHÔNG được phép làm hỏng chu kỳ.
+    if (agentSessionId && runId && endedBy !== 'cancelled') {
+      try {
+        // (a) todo provable-by-evidence của cả chu kỳ → auto-done + log
+        if (cycleTodoEvidence.length > 0) {
+          const res = await autoCompleteRunTodosByEvidence({
+            sessionId: agentSessionId,
+            runId,
+            evidence: cycleTodoEvidence,
+          })
+          if (res.completed > 0) {
+            recordAgentRunTodos(agentSessionId, res.todos.map(t => ({
+              id: t.id,
+              content: t.content,
+              status: t.status,
+              priority: t.priority,
+              parentId: t.parentId ?? null,
+            })))
+            recordAgentThought(
+              agentSessionId,
+              `✅ RECONCILE chu kỳ ${cycle}: tự hoàn thành ${res.completed} todo theo bằng chứng tool của cả chu kỳ (kể cả bằng chứng kiểm định/probe)`,
+              totalIterations,
+            )
+          }
+        }
+        // (b) stale in_progress — cảnh báo cứng khi treo ≥2 chu kỳ không bằng chứng
+        const { db } = await import('@/lib/db')
+        const openNow = await db.todo.findMany({
+          where: { sessionId: agentSessionId, runId, status: { in: ['pending', 'in_progress', 'blocked'] } },
+          select: { id: true, content: true, status: true },
+          orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+          take: 30,
+        })
+        const openIds = new Set(openNow.map(t => t.id))
+        for (const id of [...todoStaleCycles.keys()]) {
+          if (!openIds.has(id)) todoStaleCycles.delete(id) // đã đóng/chuyển trạng thái → reset đếm
+        }
+        for (const t of openNow) {
+          if (t.status !== 'in_progress') continue // pending = chưa bắt đầu, blocked = agent tự khai — không cảnh báo
+          const hadEvidence = cycleTodoEvidence.some(ev => evidenceMatchesTodo(ev, t.content))
+          if (hadEvidence) {
+            todoStaleCycles.delete(t.id)
+            continue
+          }
+          const n = (todoStaleCycles.get(t.id) ?? 0) + 1
+          todoStaleCycles.set(t.id, n)
+          if (n >= 2) {
+            pendingTodoWarnings.push(`⚠ Todo [id ${t.id}] "${t.content.slice(0, 100)}" in_progress ${n} chu kỳ không có bằng chứng — đánh giá lại: đánh done nếu xong, chia nhỏ, hoặc hủy.`)
+          }
+        }
+        if (pendingTodoWarnings.length > 0) {
+          pendingTodoWarnings = [...new Set(pendingTodoWarnings)].slice(-5) // cap 5 cảnh báo — chống phình directive
+          console.warn(`[GoalLoop] ${agentName} RECONCILE chu kỳ ${cycle}: ${pendingTodoWarnings.length} todo in_progress kẹt ≥2 chu kỳ không bằng chứng → cảnh báo đính directive chu kỳ ${cycle + 1}`)
+        }
+      } catch { /* fail-open — reconcile không được phép làm hỏng chu kỳ */ }
+    }
 
     if (endedBy === 'cancelled') { stopReason = 'cancelled'; break }
     // [A]+[B] Budget cạn giữa chu kỳ: KHÔNG break ngay — vẫn chạy evaluator
@@ -3180,8 +3341,43 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     //  - chu kỳ KHÔNG có tool call nào (Q&A thuần) → coi như hoàn thành
     //  - có tool call nhưng không đánh giá được → chưa hoàn thành (đánh giá lại chu kỳ sau)
     if (!verdict) {
-      if (cycleToolCalls === 0 && pendingDebtIssues.length === 0) {
+      // IMP-2 (H G1 — audit Task H "false-done"): nhánh complete=true cứng
+      // (confidence 0.6) trước đây KHÔNG phân biệt Q&A thuần vs mục tiêu hành
+      // động — mục tiêu CÓ tiêu chí nghiệm thu/todo + evaluator LLM fail/timeout/
+      // truncate = FALSE-DONE (todos pending bị auto-complete theo complete, run
+      // kết thúc oan). Chỉ chấp nhận complete mặc định khi mục tiêu THUẦN Q&A:
+      // KHÔNG có tiêu chí nghiệm thu VÀ run chưa từng tạo todo nào. Ngược lại →
+      // complete=false (fail-safe — incomplete-churn an toàn hơn false-done),
+      // confidence thấp + continuation directive yêu cầu bằng chứng tool.
+      let runHasTodos = false
+      if (agentSessionId && runId) {
+        try {
+          const { db } = await import('@/lib/db')
+          const n = await db.todo.count({ where: { sessionId: agentSessionId, runId } })
+          runHasTodos = n > 0
+        } catch { runHasTodos = true /* fail-safe: không kiểm tra được → không phán complete */ }
+      }
+      if (cycleToolCalls === 0 && pendingDebtIssues.length === 0
+        && directiveSpec.acceptance.length === 0 && !runHasTodos) {
         verdict = { complete: true, confidence: 0.6, verified: false, missing: [], rootCause: '', nextPlan: [], sideIssues: [], debtDecision: 'none', debtReadiness: 'ready', debtBlockedReason: '', needsInput: false, raw: '(evaluator unavailable — pure answer accepted)' }
+      } else if (cycleToolCalls === 0 && pendingDebtIssues.length === 0) {
+        // IMP-2 (H G1): mục tiêu HÀNH ĐỘNG (có nghiệm thu/todo) + 0 tool call +
+        // evaluator hỏng → KHÔNG complete — directive chu kỳ sau (kèm dòng ⚠️
+        // CHƯA kiểm định của buildContinuationDirective) yêu cầu bằng chứng tool.
+        verdict = {
+          complete: false,
+          confidence: 0.3,
+          verified: false,
+          missing: ['(evaluator lỗi — kết luận thuần text KHÔNG đủ: chạy tool thật (file_read/run_tests/lint/type_check/shell...) và trích kết quả cụ thể làm bằng chứng)'],
+          rootCause: '(evaluator LLM lỗi — mục tiêu có tiêu chí nghiệm thu/todo nên không thể chấp nhận hoàn thành khi chưa có bằng chứng tool)',
+          nextPlan: [],
+          sideIssues: [],
+          debtDecision: 'none',
+          debtReadiness: 'ready',
+          debtBlockedReason: '',
+          needsInput: false, // TASK 48 — heuristic fallback: không tin needsInput khi evaluator hỏng
+          raw: '(evaluator unavailable — action-goal không chấp nhận complete mặc định)',
+        }
       } else {
         // FIX (R2-b #4): evaluator hỏng mà debt issues còn TREO → KHÔNG phán
         // complete (nhánh complete sẽ xóa pendingDebtIssues chìm). Giữ
@@ -3433,7 +3629,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         const cycleToolEvidence = evidence
           .filter(e => e.kind === 'tool')
           .map(e => ({ tool: e.tool ?? '', success: e.success !== false, text: e.text ?? '' }))
-        const verifyRes = await shr.verifyPendingJudgments(agentSessionId, cycleToolEvidence)
+        const verifyRes = await shr.verifyPendingJudgments(agentSessionId, cycleToolEvidence, runId)
         if (verifyRes.applied.length > 0 || verifyRes.rejected.length > 0) {
           const promotedNote = verifyRes.promoted.length > 0 ? `, ${verifyRes.promoted.length} PROMOTE (posterior ≥0.80 — vào belief-state chu kỳ sau)` : ''
           const demotedNote = verifyRes.demoted.length > 0 ? `, ${verifyRes.demoted.length} demote` : ''
@@ -3572,9 +3768,15 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           if (suggested && tokenLeft() > REPORT_RESERVE_TOKENS + 15_000 && !isCancelled()) {
             try {
               const { dispatchAgentByOmega } = await import('@/lib/omega-orchestrator')
+              // IMP-2 (G — điều tra Task G): template rescue mở-ended ("Xử lý giúp
+              // agent đang bế tắc") + SUBAGENT_MAX_ITERATIONS 12 → mọi delegation
+              // rescue thật lớn đều chết vì iteration_limit (52% runs) → arbitor
+              // fail → vòng lặp reinforcement chống-delegate. Giỏ task scope chẩn
+              // đoán BOUNDED ≤5 bước (đọc trạng thái → 2-3 giả thuyết → đề xuất
+              // hướng đi) — làm được trọn vẹn trong tầm vòng.
               const dispatched = await dispatchAgentByOmega({
                 agent: suggested,
-                task: `Xử lý giúp agent "${agentName}" đang bế tắc (chu kỳ ${cycle}, verified=false).\nVấn đề: ${(verdict.rootCause || userMessage).slice(0, 500)}\nKhuyến nghị của Omega: ${consult.advisory?.recommendation?.slice(0, 500) || '(theo phân tích của bạn)'}`,
+                task: `Chẩn đoán nguyên nhân bế tắc của agent "${agentName}" (chu kỳ ${cycle}, verified=false) trong ≤5 bước: đọc trạng thái hiện tại, liệt kê 2-3 giả thuyết nguyên nhân, đề xuất hướng đi cụ thể.\nVấn đề: ${(verdict.rootCause || userMessage).slice(0, 500)}\nKhuyến nghị của Omega: ${consult.advisory?.recommendation?.slice(0, 500) || '(theo phân tích của bạn)'}`,
                 context: `Mục tiêu gốc: ${userMessage.slice(0, 400)}`,
                 duration: 'task',
                 parentAgentName: agentName,
@@ -3976,13 +4178,18 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
   if (agentSessionId) {
     try {
       const runComplete = stopReason === 'complete'
+      // IMP-2 (H G6 — audit Task H "miscategorization"): run KHÔNG hoàn thành
+      // (no_progress/max_cycles/time_budget/token_budget/needs_input) trước đây
+      // rơi nhánh else ghi status='completed' → metrics đếm run bế tắc/hết
+      // budget là "thành công". Giá trị mới 'incomplete'; cancelled + error giữ
+      // giá trị riêng như cũ ('cancelled'/'failed').
       const runStatus = runComplete
         ? 'completed'
         : stopReason === 'error'
           ? 'failed'
           : stopReason === 'cancelled'
             ? 'cancelled'
-            : 'completed'
+            : 'incomplete'
       const toolFailures = evidence.filter(e => e.kind === 'tool' && e.success === false).length
       const endCompletedAt = new Date()
       void (async () => {

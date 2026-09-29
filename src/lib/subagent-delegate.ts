@@ -31,6 +31,26 @@
  *
  * Fail-open: mọi lỗi resolve/LLM → trả result success=false + error message
  * (parent agent thấy được lỗi và tự quyết định làm trực tiếp).
+ *
+ * IMP-1 (2026-09-30, Task G+H — delegation reinforcement-loop fix):
+ *   Trước đây vòng lặp reinforcement CHỐNG delegate: cap vòng thấp → 52%
+ *   runs chết iteration_limit → trọng tài chấm CHƯA ĐẠT 71% → outcome.success
+ *   bị ép false theo evaluation.pass (:918-921 cũ) → hint parent "tự làm trực
+ *   tiếp" → Omega học rằng tự làm đáng tin hơn delegate → delegation chiếm
+ *   0.29% tool calls. Giờ:
+ *   · outcome.success = "usable results DELIVERED" (delivery semantics) —
+ *     TÁCH BẠCH khỏi evaluation.pass (verdict CHẤT LƯỢNG nằm trong
+ *     outcome.evaluation: pass/gaps — parent đọc để RE-DELEGATE phần còn
+ *     thiếu, không phải tín hiệu tự làm thay).
+ *   · iteration_limit → success GIỮ true (partial work IS delivered — kèm
+ *     report wrap-up + evidence); evaluation.pass=false + gaps chỉ thị phần
+ *     chưa xong để parent giao lại.
+ *   · W2 (fail-open transparency): evaluator null (lỗi/timeout/JSON hỏng) →
+ *     outcome.evaluationMissing=true + ghi chú ⚠ trong report — parent biết
+ *     kết quả CHƯA được trọng tài xác nhận (fail-open giữ nguyên design).
+ *   · W1 (evidence đói): evidence cho trọng tài là TOOL-RESULT TRANSCRIPT
+ *     đầy đủ (entry cap 4000 chars — SUBAGENT_TOOL_RESULT_CHARS) thay vì
+ *     preview 160 chars; delegation-evaluator tự tier 600/entry, 12k tổng.
  */
 
 import { callLLMForAgent, getZenKeyCount, runWithZenKeyBinding } from '@/lib/llm'
@@ -166,6 +186,14 @@ export interface SubAgentOutcome {
     gaps: string[]
     note: string
   }
+  /**
+   * IMP-1 (W2 — fail-open transparency): true = trọng tài độc lập KHÔNG chạy
+   * được (evaluator lỗi/timeout/JSON hỏng) → kết quả CHƯA được xác nhận độc
+   * lập — parent tự verify hoặc giao lại. Thiết kế fail-open GIỮ NGUYÊN
+   * (delegation vẫn trả kết quả), chỉ thêm marker minh bạch + ghi chú ⚠
+   * trong report để parent không tưởng đã có xác nhận độc lập.
+   */
+  evaluationMissing?: boolean
 }
 
 /** Profile agent chạy như sub-agent — do caller resolve (Code Team hoặc DB) */
@@ -385,6 +413,14 @@ async function runSubAgentForProfileInner(params: {
 
   const startedAt = Date.now()
   const evidence: string[] = []
+  // IMP-1 (W1) — tool-result transcript ĐẦY ĐỦ (entry JSON {tool, success,
+  // result} đã cap SUBAGENT_TOOL_RESULT_CHARS=4000) để trọng tài độc lập ĐỌC
+  // ĐƯỢC nội dung result thật khi verify. Khác với `evidence` (preview 160
+  // chars — dành cho hiển thị parent + wrap-up prompt gọn).
+  const toolResultLog: string[] = []
+  // IMP-1 (Task G) — đếm tool call THÀNH CÔNG (phân biệt attempted): cơ sở
+  // cho "usable results delivered" trong công thức outcome.success.
+  let successfulToolCalls = 0
   // Mutable state object — TS không track được phép gán `let` bên trong closure
   // async (narrowing sai → TS2367), nên đóng gói vào object.
   // FIX (review 2026-09-08): endedBy khởi tạo 'iteration_limit' thay vì 'error'
@@ -669,7 +705,9 @@ async function runSubAgentForProfileInner(params: {
           if (isCancelled() || timedOut) break // zombie guard — dừng tool batch
           // Sub-agent bị giới hạn trong whitelist CỦA NÓ (đã strip depth-guard tools)
           if (!allowedTools.includes(tc.name)) {
-            transcript.push({ role: 'tool', content: JSON.stringify({ tool: tc.name, success: false, result: `Tool "${tc.name}" not available for sub-agent ${profile.name}.` }) })
+            const rejection = JSON.stringify({ tool: tc.name, success: false, result: `Tool "${tc.name}" not available for sub-agent ${profile.name}.` })
+            transcript.push({ role: 'tool', content: rejection })
+            toolResultLog.push(rejection) // IMP-1 (W1) — trọng tài thấy cả lần bị từ chối
             evidence.push(`${tc.name}: bị từ chối (ngoài whitelist)`)
             continue
           }
@@ -731,10 +769,12 @@ async function runSubAgentForProfileInner(params: {
               : String(r ?? '').slice(0, 160)
           } catch { preview = '(?)' }
           evidence.push(`${tc.name}(${compactArgs(tc.args)}) → ${toolResult.success ? '✓' : '✗'} ${preview}`)
-          transcript.push({
-            role: 'tool',
-            content: truncateResult(safeStringify({ tool: tc.name, success: toolResult.success, result: toolResult.result }), SUBAGENT_TOOL_RESULT_CHARS),
-          })
+          if (toolResult.success) successfulToolCalls++
+          // IMP-1 (W1): entry transcript (cap 4000 chars) vào log riêng cho
+          // trọng tài độc lập — cùng chuỗi với transcript của sub-agent.
+          const toolEntry = truncateResult(safeStringify({ tool: tc.name, success: toolResult.success, result: toolResult.result }), SUBAGENT_TOOL_RESULT_CHARS)
+          toolResultLog.push(toolEntry)
+          transcript.push({ role: 'tool', content: toolEntry })
         }
 
         // USER DIRECTIVE 2026-10-29 — CI-2 CHO ĐƯỜNG SUB-AGENT (parity goal-loop
@@ -848,8 +888,20 @@ async function runSubAgentForProfileInner(params: {
       report = report.slice(0, REPORT_MAX_CHARS) + '\n…(báo cáo sub-agent đã nén — hỏi lại sub-agent nếu cần chi tiết)'
     }
 
+    // IMP-1 (Task G — decouple success khỏi evaluation.pass): success =
+    // "usable results DELIVERED to parent" (delivery semantics):
+    //   · concluded       → có kết luận (report + evidence) = true
+    //   · iteration_limit → PARTIAL WORK IS DELIVERED (report wrap-up +
+    //     evidence tool kèm theo) = true — evaluation.pass=false + gaps chỉ
+    //     thị phần chưa xong để parent RE-DELEGATE remainder (không còn bị
+    //     ép false như bản cũ :918-921 — chính là vòng lặp reinforcement
+    //     chống-delegate mà Task G phát hiện).
+    //   · timeout/token_budget/error/cancelled → false (run không trọn vẹn —
+    //     parent nhận report/evidence + hint giao lại kèm gaps).
+    // Chất lượng kết quả nằm ở outcome.evaluation (pass/gaps) — tách bạch.
+    const deliveredUsableResults = successfulToolCalls > 0 || report.trim().length > 0
     const outcome: SubAgentOutcome = {
-      success: state.endedBy === 'concluded' || (state.endedBy !== 'error' && evidence.length > 0),
+      success: (state.endedBy === 'concluded' || state.endedBy === 'iteration_limit') && deliveredUsableResults,
       agent: profile.name,
       position: '-',
       report,
@@ -894,54 +946,71 @@ async function runSubAgentForProfileInner(params: {
     // Fail-open: evaluator lỗi → evaluation undefined → hành vi cũ. Bỏ qua
     // khi cancelled (user chủ động dừng — không tốn thêm 1 call).
     if (state.endedBy !== 'cancelled' && task.trim()) {
+      let evaluation: import('@/lib/delegation-evaluator').DelegationEvaluation | null = null
       try {
         const { evaluateDelegationOutcome } = await import('@/lib/delegation-evaluator')
-        const evaluation = await evaluateDelegationOutcome({
+        evaluation = await evaluateDelegationOutcome({
           agentName: profile.name,
           agentId: profile.id,
           task,
           acceptanceCriteria,
           report,
-          evidence,
+          // IMP-1 (W1): evidence cho trọng tài là TOOL-RESULT TRANSCRIPT đầy đủ
+          // (entry cap 4000 chars) — KHÔNG còn preview 160 chars; evaluator
+          // tự tier ~600 chars/entry, ~12k chars tổng khi dựng prompt.
+          evidence: toolResultLog,
           endedBy: state.endedBy,
           provider: profile.provider,
           model: profile.model,
           abortCheck: isCancelled,
           onTokens: addTokens,
         })
-        if (evaluation) {
-          outcome.evaluation = evaluation
-          console.log(`[SubAgent] ${profile.name} trọng tài độc lập: ${evaluation.pass ? 'ĐẠT' : 'CHƯA ĐẠT'} (tin cậy ${Math.round(evaluation.confidence * 100)}%)${evaluation.gaps.length > 0 ? ` — thiếu: ${evaluation.gaps[0].slice(0, 80)}` : ''}`)
-          // Đánh giá CHƯA ĐẠT nhưng outcome đang success → hạ success để
-          // parent không tin kết quả delegation theo lời tự chấm (vẫn kèm
-          // đầy đủ report/evidence — parent tự cân nhắc khắc phục gaps).
-          if (!evaluation.pass && outcome.success) {
-            outcome.success = false
-            outcome.error = `Trọng tài độc lập: CHƯA ĐẠT — ${evaluation.gaps.join('; ') || evaluation.note}`
-          }
-        }
       } catch { /* fail-open — evaluator không được phá delegation */ }
+      if (evaluation) {
+        outcome.evaluation = evaluation
+        console.log(`[SubAgent] ${profile.name} trọng tài độc lập: ${evaluation.pass ? 'ĐẠT' : 'CHƯA ĐẠT'} (tin cậy ${Math.round(evaluation.confidence * 100)}%)${evaluation.gaps.length > 0 ? ` — thiếu: ${evaluation.gaps[0].slice(0, 80)}` : ''}`)
+        // IMP-1 (Task G): KHÔNG còn hạ outcome.success theo evaluation.pass —
+        // success = delivery ("kết quả dùng được đã trả về"), evaluation =
+        // verdict CHẤT LƯỢNG. Parent đọc evaluation.pass/gaps để quyết giao
+        // lại phần còn thiếu. Chỉ nhấn mạnh verdict CHƯA ĐẠT trong report để
+        // parent (LLM) không bỏ qua khi phần việc chỉ làm dở.
+        if (!evaluation.pass) {
+          outcome.report += `\n\n⚠ Trọng tài độc lập: CHƯA ĐẠT — ${(evaluation.gaps.join('; ') || evaluation.note).slice(0, 300)} — hãy giao lại phần còn thiếu (re-delegate kèm gaps cụ thể) hoặc đổi agent phù hợp hơn.`
+        }
+      } else {
+        // IMP-1 (W2 — fail-open transparency): evaluator KHÔNG chạy được
+        // (lỗi/timeout/JSON hỏng) → đánh dấu minh bạch. Thiết kế fail-open
+        // GIỮ NGUYÊN (delegation vẫn trả kết quả) — parent biết kết quả
+        // CHƯA được trọng tài xác nhận để tự cân nhắc/verify thêm.
+        outcome.evaluationMissing = true
+        outcome.report += '\n\n⚠ Chưa có đánh giá độc lập (evaluator lỗi/timeout) — kết quả CHƯA được trọng tài xác nhận.'
+        console.log(`[SubAgent] ${profile.name} trọng tài độc lập KHÔNG chạy được (evaluationMissing=true — kết quả chưa được xác nhận)`)
+      }
     }
 
     // USER DIRECTIVE 2026-10-29 (re-audit fix: DỜI SAU trọng tài) — đóng todo
     // dang dở TRUNG THỰC khi run sub-agent kết thúc (parity goal-loop finalize
     // / chat-route crash-path — trước đây đường delegation KHÔNG gọi
     // closeRunTodosAtEnd → todo sub-agent nằm pending/in_progress vĩnh viễn
-    // trong DB). PHẢI chạy SAU evaluator: verdict trọng tài có thể HẠ
-    // outcome.success (CHƯA ĐẠT) — đóng todo trước đó sẽ ghi nhầm 'đạt' cho
-    // todo của run thất bại. in_progress/blocked → completed|failed theo
-    // verdict CHỐT, pending → completed (đạt) | archivedAt (chưa đạt). Fail-open.
+    // trong DB). PHẢI chạy SAU evaluator: goalComplete lấy verdict CHẤT LƯỢNG
+    // của trọng tài (evaluation.pass) khi có — IMP-1 đã tách outcome.success
+    // (delivery) khỏi chất lượng, nên run iteration_limit delivery-success=true
+    // nhưng CHƯA ĐẠT vẫn đóng todo "chưa đạt" trung thực; evaluation missing
+    // (fail-open) → fallback delivery semantics như cũ.
+    // in_progress/blocked → completed|failed theo verdict CHỐT, pending →
+    // completed (đạt) | archivedAt (chưa đạt). Fail-open.
     if (sessionId && delegationRunId && closeRunTodosAtEndFn) {
       try {
         const closed = await closeRunTodosAtEndFn({
           sessionId,
           runId: delegationRunId,
-          goalComplete: outcome.success,
+          goalComplete: outcome.evaluation ? outcome.evaluation.pass : outcome.success,
           crash: state.endedBy === 'error',
         })
         const closedTotal = closed.inProgressClosed + closed.pendingCompleted + closed.pendingArchived
         if (closedTotal > 0) {
-          console.log(`[SubAgent] ${profile.name} đóng ${closedTotal} todo dang dở (verdict ${outcome.success ? 'đạt' : 'chưa đạt'}: ${closed.inProgressClosed} in_progress/blocked, ${closed.pendingCompleted} pending→completed, ${closed.pendingArchived} pending→archived)`)
+          const todoVerdict = outcome.evaluation ? outcome.evaluation.pass : outcome.success
+          console.log(`[SubAgent] ${profile.name} đóng ${closedTotal} todo dang dở (verdict ${todoVerdict ? 'đạt' : 'chưa đạt'}: ${closed.inProgressClosed} in_progress/blocked, ${closed.pendingCompleted} pending→completed, ${closed.pendingArchived} pending→archived)`)
         }
       } catch { /* fail-open — không được phép làm hỏng delegation */ }
     }

@@ -175,7 +175,20 @@ export async function proposeHypothesis(args: ProposeHypothesisArgs): Promise<Pr
       return { ok: false, error: 'mechanicsClaim + contextSig bắt buộc (mechanicsClaim ≤ 12 từ — MỘT quan hệ nhân quả)' }
     }
     const alive = await db.structuredHypothesis.findMany({
-      where: { sessionId: args.sessionId, status: { in: ['candidate', 'promoted', 'parrot_suspect'] } },
+      where: {
+        // IMP-2 (F1 — điều tra Task F "hypothesis lặp 4× qua các spawn session"):
+        // dedup mở rộng khỏi phạm vi 1 session — hypothesis_write thực thi trong
+        // inner loop CLI có thể ghi vào session CỦA SPAWN (env TMO_SESSION_ID của
+        // spawn / agent tự khai sessionId) nhưng vẫn mang sourceRunId của run
+        // goal-loop → match chéo session CÙNG run: spawn sau propose lại nguyên
+        // văn hypothesis spawn trước sẽ bị chặn ở đây. runId null (legacy/đường
+        // không truyền) → giữ hành vi cũ (chỉ theo session).
+        OR: [
+          { sessionId: args.sessionId },
+          ...(args.runId ? [{ sourceRunId: args.runId }] : []),
+        ],
+        status: { in: ['candidate', 'promoted', 'parrot_suspect'] },
+      },
       select: { id: true, contextSig: true, mechanicsClaim: true, status: true },
     })
     for (const h of alive) {
@@ -304,12 +317,28 @@ export interface VerifyJudgmentsResult {
  * khớp (fuzzy) text kết quả. Khớp → α+=1/β+=1 + kiểm promote/demote. Không
  * khớp → TỪ CHỐI (xóa pending — chống agent tự xác nhận không bằng chứng).
  */
-export async function verifyPendingJudgments(sessionId: string, cycleEvidence: CycleEvidenceEntry[]): Promise<VerifyJudgmentsResult> {
+export async function verifyPendingJudgments(
+  sessionId: string,
+  cycleEvidence: CycleEvidenceEntry[],
+  /**
+   * IMP-2 (F1): runId của run goal-loop — kèm cả hypothesis của run này từ
+   * session SPAWN (sourceRunId khớp) để phán quyết pending không bị bỏ sót chỉ
+   * vì được ghi từ session khác. Không truyền → hành vi cũ (chỉ theo session).
+   */
+  runId?: string | null,
+): Promise<VerifyJudgmentsResult> {
   const result: VerifyJudgmentsResult = { applied: [], rejected: [], promoted: [], demoted: [] }
   try {
     if (!sessionId) return result
     const pending = await db.structuredHypothesis.findMany({
-      where: { sessionId, pendingJudgment: { not: null }, status: { in: ['candidate', 'promoted', 'parrot_suspect'] } },
+      where: {
+        OR: [
+          { sessionId },
+          ...(runId ? [{ sourceRunId: runId }] : []),
+        ],
+        pendingJudgment: { not: null },
+        status: { in: ['candidate', 'promoted', 'parrot_suspect'] },
+      },
     })
     const okEvidence = cycleEvidence.filter(e => e.success)
     for (const h of pending) {
@@ -362,6 +391,90 @@ export async function verifyPendingJudgments(sessionId: string, cycleEvidence: C
   }
 }
 
+// ==================== IMP-2 (F1) — MIRROR hypothesis_write TỪ SPAWN CLI ====================
+
+/**
+ * IMP-2 (F1 — điều tra Task F "hypothesis lặp 4× qua 4 session spawn"): goal-loop
+ * CLI mỗi vòng spawn process riêng — hypothesis_write thực thi trong inner loop
+ * CLI có thể ghi vào session CỦA SPAWN (env TMO_SESSION_ID của spawn / agent tự
+ * khai sessionId) thay vì session goal-loop → (a) dedup per-session của spawn
+ * sau KHÔNG thấy hypothesis spawn trước (propose lại NGUYÊN VĂN), (b)
+ * renderBeliefState(session goal-loop) KHÔNG bao giờ thấy → belief-state trống.
+ * Giải pháp mirror theo pattern TASK 20 của todo (goal-loop đã làm cho todo ở
+ * block mirror executedCalls — giờ hypothesis được mirror tương tự):
+ *   - op=propose → gọi proposeHypothesis với session goal-loop (idempotent:
+ *     dedup — đã mở rộng match chéo sourceRunId — trả 'duplicate' khi spawn ghi
+ *     đúng session sẵn; 'created' = bản sao goal-loop thật sự được tạo).
+ *   - op=judge → hypothesisId nhắm row của session SPAWN (id globally unique —
+ *     findUnique được): tìm "anh sinh đôi" trong session goal-loop theo
+ *     mechanicsClaim (Jaccard ≥ PARROT_MECH_JACCARD, khớp TỐT NHẤT) rồi ghi
+ *     phán quyết pending lên bản sao (verifyPendingJudgments cuối chu kỳ đối
+ *     chiếu bằng chứng như thường).
+ * Toàn bộ fail-open — mirror KHÔNG BAO GIỜ làm hỏng vòng lặp.
+ */
+export async function mirrorSpawnHypothesis(params: {
+  goalSessionId: string
+  runId: string | null
+  agentName?: string | null
+  op: string
+  args: Record<string, unknown>
+}): Promise<{ mirrored: boolean; note?: string }> {
+  try {
+    if (!params.goalSessionId) return { mirrored: false }
+    if (params.op === 'propose') {
+      const mechanicsClaim = typeof params.args.mechanicsClaim === 'string' ? params.args.mechanicsClaim : ''
+      const contextSig = typeof params.args.contextSig === 'string' ? params.args.contextSig : ''
+      if (!mechanicsClaim.trim() || !contextSig.trim()) return { mirrored: false }
+      const res = await proposeHypothesis({
+        sessionId: params.goalSessionId,
+        agentName: params.agentName ?? null,
+        runId: params.runId,
+        contextSig,
+        intervention: typeof params.args.intervention === 'string' ? params.args.intervention : '',
+        predictedDelta: typeof params.args.predictedDelta === 'string' ? params.args.predictedDelta : '',
+        mechanicsClaim,
+        sourceCycle: typeof params.args.sourceCycle === 'number' ? params.args.sourceCycle : null,
+      })
+      // mirrored=true CHỈ khi thật sự tạo bản sao trong session goal-loop
+      // ('created'); 'duplicate'/'parrot' = đã có / đã xử lý ở dedup — im lặng.
+      return { mirrored: res.ok && res.kind === 'created', note: res.note }
+    }
+    if (params.op === 'judge') {
+      const hypothesisId = typeof params.args.hypothesisId === 'string' ? params.args.hypothesisId : ''
+      const evidenceTool = typeof params.args.evidenceTool === 'string' ? params.args.evidenceTool : ''
+      const evidenceQuote = typeof params.args.evidenceQuote === 'string' ? params.args.evidenceQuote : ''
+      if (!hypothesisId || !evidenceTool || !evidenceQuote) return { mirrored: false }
+      const src = await db.structuredHypothesis.findUnique({ where: { id: hypothesisId } }).catch(() => null)
+      // id đã thuộc session goal-loop (đường phổ biến — spawn ghi đúng session)
+      // → không cần mirror.
+      if (!src || src.sessionId === params.goalSessionId) return { mirrored: false }
+      const twins = await db.structuredHypothesis.findMany({
+        where: { sessionId: params.goalSessionId, status: { in: ['candidate', 'promoted', 'parrot_suspect'] } },
+        select: { id: true, mechanicsClaim: true },
+        take: 60,
+      })
+      let bestId: string | null = null
+      let bestSim = 0
+      for (const tw of twins) {
+        const sim = jaccard(src.mechanicsClaim, tw.mechanicsClaim)
+        if (sim > bestSim) { bestSim = sim; bestId = tw.id }
+      }
+      if (!bestId || bestSim < SHR_CONSTANTS.PARROT_MECH_JACCARD) return { mirrored: false }
+      const res = await recordJudgment({
+        sessionId: params.goalSessionId,
+        hypothesisId: bestId,
+        verdict: params.args.verdict === 'refuted' ? 'refuted' : 'confirmed',
+        evidenceTool,
+        evidenceQuote,
+      })
+      return { mirrored: res.ok, note: res.note }
+    }
+    return { mirrored: false } // op=list / op lạ — không có gì để mirror
+  } catch {
+    return { mirrored: false } // fail-open — mirror không được phép crash loop
+  }
+}
+
 // ==================== BELIEF-STATE RENDER (R2 nén xuống R1 — π-channel) ====================
 
 /**
@@ -369,11 +482,23 @@ export async function verifyPendingJudgments(sessionId: string, cycleEvidence: C
  * trước khi hành động, agent thấy hypothesis sống + đã bác). Promoted đứng
  * đầu (bài học đã trả tiền), candidate posterior cao kế tiếp, demoted nêu tên.
  */
-export async function renderBeliefState(sessionId: string): Promise<string> {
+export async function renderBeliefState(sessionId: string, runId?: string | null): Promise<string> {
   try {
     if (!sessionId) return ''
     const all = await db.structuredHypothesis.findMany({
-      where: { sessionId, status: { in: ['candidate', 'promoted', 'demoted'] } },
+      where: {
+        // IMP-2 (F1 — điều tra Task F): kèm hypothesis của run hiện hành từ MỌI
+        // session — goal-loop CLI mỗi vòng spawn process riêng, hypothesis có
+        // thể ghi theo session spawn (sourceRunId vẫn trỏ về run goal-loop).
+        // Trước đây query chỉ theo sessionId goal-loop → hypothesis của spawn
+        // KHÔNG bao giờ được render → belief-state trống, spawn sau đề xuất lại
+        // từ đầu (đúng gap TASK 20 đã fix cho todo nhưng hypothesis chưa có).
+        OR: [
+          { sessionId },
+          ...(runId ? [{ sourceRunId: runId }] : []),
+        ],
+        status: { in: ['candidate', 'promoted', 'demoted'] },
+      },
       orderBy: { updatedAt: 'desc' },
       take: 120,
     })
