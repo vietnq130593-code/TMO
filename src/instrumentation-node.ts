@@ -12,6 +12,7 @@
 
 import { startAllServices, type ServiceConfig } from './lib/service-manager'
 import { resolve } from 'path'
+import { readFileSync } from 'fs'
 import { ensureTmoApiToken } from './lib/tmo-token'
 import { isOnDemandEnabled, initOnDemandWatchdog } from './lib/openclaw-ondemand'
 // DB SELF-HEALING (fix user report 2026-09-09 "local không load agents"):
@@ -56,11 +57,40 @@ const globalForMemWatchdog = globalThis as unknown as { __tmoMemWatchdogStarted?
 if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
   globalForMemWatchdog.__tmoMemWatchdogStarted = true
   const MEM_WATCHDOG_MB = Number(process.env.MEM_WATCHDOG_MB ?? 1700)
+  // ROUND-3 FIX (2026-09-29 — quan sát vận hành vòng 3): kernel OOM-killer còn
+  // xuống tay TRƯỚC khi RSS chạm ngưỡng — bằng chứng dmesg 07:2x: next-server
+  // bị kill ở RSS ~1.1GB (dưới ngưỡng 1700) vì V8Worker/turbopack invoke
+  // oom-killer khi MEM TOÀN CỤC cạn (box 4GB: goal-loop + embed + turbopack +
+  // mini-services cùng chạy). Chỉ đo RSS bản thân là không đủ — theo dõi thêm
+  // MemAvailable toàn cục (/proc/meminfo): cạn THẬT (dưới
+  // MEM_WATCHDOG_GLOBAL_MIN_MB, mặc định 450MB) VÀ next-server đang là consumer
+  // lớn (RSS > MEM_WATCHDOG_GLOBAL_RSS_MB, mặc định 900MB) → self-exit NGAY ở
+  // lần kiểm tra đầu (không chờ 2 phút — kernel SIGKILL không báo trước và có
+  // thể chọn nhầm nạn nhân khác trong cây). RSS nhỏ mà MemAvailable thấp →
+  // thủ phạm là process khác, next-server chết cũng không giải phóng đủ —
+  // KHÔNG tự sát (tránh PM2 restart-loop oan).
+  const MEM_WATCHDOG_GLOBAL_MIN_MB = Number(process.env.MEM_WATCHDOG_GLOBAL_MIN_MB ?? 450)
+  const MEM_WATCHDOG_GLOBAL_RSS_MB = Number(process.env.MEM_WATCHDOG_GLOBAL_RSS_MB ?? 900)
   if (MEM_WATCHDOG_MB > 0) {
+    const readMemAvailableMb = (): number | null => {
+      try {
+        const s = readFileSync('/proc/meminfo', 'utf8')
+        const m = /MemAvailable:\s+(\d+)\s*kB/.exec(s)
+        return m ? Math.round(parseInt(m[1], 10) / 1024) : null
+      } catch { return null }
+    }
     let memOverCount = 0
     const memWatchdogTimer = setInterval(() => {
       try {
         const rssMb = process.memoryUsage().rss / 1048576
+        // Global-memory guard — ROUND-3 FIX
+        if (MEM_WATCHDOG_GLOBAL_MIN_MB > 0 && rssMb > MEM_WATCHDOG_GLOBAL_RSS_MB) {
+          const availMb = readMemAvailableMb()
+          if (availMb !== null && availMb < MEM_WATCHDOG_GLOBAL_MIN_MB) {
+            console.error(`[MemWatchdog] MemAvailable toàn cục ${availMb}MB < ${MEM_WATCHDOG_GLOBAL_MIN_MB}MB (RSS mình ${rssMb.toFixed(0)}MB > ${MEM_WATCHDOG_GLOBAL_RSS_MB}MB) — bộ nhớ HỆ THỐNG cạn, kernel OOM sắp xuống tay — self-exit NGAY để chết có kiểm soát (PM2 restart ~5s; durable goal jobs RESUME từ checkpoint)`)
+            process.exit(1)
+          }
+        }
         if (rssMb > MEM_WATCHDOG_MB) {
           memOverCount++
           console.warn(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB > ${MEM_WATCHDOG_MB}MB (lần ${memOverCount}/2)`)
@@ -75,7 +105,7 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
       } catch { /* fail-open — watchdog lỗi không được phép tự giết app */ }
     }, 60_000)
     memWatchdogTimer.unref?.()
-    console.log(`[MemWatchdog] bật — ngưỡng RSS ${MEM_WATCHDOG_MB}MB × 2 lần kiểm tra (60s/lần)`)
+    console.log(`[MemWatchdog] bật — ngưỡng RSS ${MEM_WATCHDOG_MB}MB × 2 lần kiểm tra (60s/lần) + global guard MemAvailable<${MEM_WATCHDOG_GLOBAL_MIN_MB}MB khi RSS>${MEM_WATCHDOG_GLOBAL_RSS_MB}MB`)
   }
 }
 

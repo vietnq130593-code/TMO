@@ -1875,7 +1875,17 @@ export async function runGoalDrivenLoop(params: {
   let subagentTokens = resumeState?.counters.subagentTokens ?? 0
   /** [G] Số lần auto-escalate hỏi Omega + advisory đang chờ inject */
   let escalations = resumeState?.counters.escalations ?? 0
-  let omegaConsulted = false
+  // ROUND-3 FIX (2026-09-29 — quan sát vận hành vòng 3): flag omegaConsulted
+  // sống trong process-memory — mỗi lần crash/watchdog self-exit + RESUME lại
+  // reset về false → chính sách "hỏi Omega 1 lần/run" (comment thiết kế ở cả
+  // 2 site auto-escalate) thực tế trở thành "1 lần MỖI RESTART". Bằng chứng
+  // vòng 3: chu kỳ 17 auto-escalate → dispatch ALISTA 333s/33K tokens (trọng
+  // tài CHƯA ĐẠT — vô ích), restart 08:00 (attempts 16→17), chu kỳ 21 auto-
+  // escalate LẠI + ALISTA lần 2 — mỗi lần chặn main-loop ~5.5 phút. Với box
+  // 4GB hay restart (17 attempts), bão escalate là có thật. Hạ capital từ
+  // counter ĐÃ PERSIST: run đã từng escalate → hết quota auto (đúng thiết kế;
+  // agent vẫn còn đường thủ công tool escalate_problem khi THẬT SỰ cần).
+  let omegaConsulted = escalations > 0
   let omegaAdvisory = ''
   let lastContent = resumeState?.lastContent ?? ''
   /** Lỗi LLM gần nhất (result.error) — surface lên báo cáo cuối thay vì nuốt lỗi */

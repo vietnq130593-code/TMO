@@ -4059,7 +4059,25 @@ async function callZenProvider(
     return { content: '', provider: 'zen', model, error: 'Zen HTTP free-tier blocked (cached — model bị Zen chặn với API key, policy ~2026-09-25)' }
   }
 
-  const timeoutMs = parseInt(process.env.ZEN_TIMEOUT_MS || '300000', 10)
+  // ROUND-3 FIX (2026-09-29 — quan sát vận hành vòng 3): timeout co giãn theo
+  // kích thước INPUT. Bằng chứng dev.log ~07:2x: evaluator chu kỳ 17 MEGATRON
+  // (context ~60K tokens, effort=max + unlimited output theo user directive
+  // 2026-09-28) bị abort đúng 300s (ZEN_TIMEOUT_MS) → SHR verify từ chối chu
+  // kỳ → auto-escalate → delegation ALISTA vô ích 33K tokens/333s (nguyên nhân
+  // gốc là infra-timeout, không phải agent bế tắc). Prefill + queue + reasoning
+  // max của context lớn cần nhiều hơn 5 phút tĩnh: timeout hiệu dụng =
+  // max(base, estInputTokens × ZEN_TIMEOUT_MS_PER_INPUT_TOKEN, default 8ms).
+  // 60K tokens → 480s; call nhỏ giữ sàn 300s. Tắt scaling: set =0.
+  const zenBaseTimeoutMs = parseInt(process.env.ZEN_TIMEOUT_MS || '300000', 10)
+  const zenTimeoutPerInputTokenMs = Math.max(0, parseInt(process.env.ZEN_TIMEOUT_MS_PER_INPUT_TOKEN || '8', 10) || 8)
+  const estInputTokens = Math.ceil((prompt.length + (systemPrompt?.length ?? 0)) / 4)
+  const timeoutMs = Math.max(
+    zenBaseTimeoutMs,
+    zenTimeoutPerInputTokenMs > 0 ? estInputTokens * zenTimeoutPerInputTokenMs : 0,
+  )
+  if (timeoutMs > zenBaseTimeoutMs) {
+    console.log(`[ZEN] ${taskLabel} timeout co giãn theo input: ${zenBaseTimeoutMs}ms → ${timeoutMs}ms (est ~${estInputTokens} input tokens × ${zenTimeoutPerInputTokenMs}ms)`)
+  }
   // Task 39 — UNLIMITED TOKEN MODE: maxTokens <= 0 (vd -1 từ AgentProfile
   // "tùy ý") → KHÔNG gửi max_tokens → provider dùng giới hạn output tối đa
   // của model (space-bunny-free: 512k out). Verified 2026-09-28: Zen API chấp
@@ -4890,7 +4908,20 @@ export async function callLLMForAgent(
   }
 
   // Zen HTTP (kèm reasoning_effort chế độ cao nhất — Task 33)
-  const zen = await callZenProvider(prompt, systemPrompt, zenModel, options, `agent:${zenModel}`)
+  let zen = await callZenProvider(prompt, systemPrompt, zenModel, options, `agent:${zenModel}`)
+  // ROUND-3 FIX (2026-09-29 — quan sát vận hành vòng 3): timeout/abort → RETRY
+  // 1 lần trước khi chuyển chuỗi. Bằng chứng dev.log ~07:2x: evaluator MEGATRON
+  // abort 300s → NHẢY thẳng sang CLI (thiếu binary — Zen chặn CLI free-model
+  // từ ~25-26/09) → failover model trùng model chính → toàn chuỗi chết sau
+  // ĐÚNG 1 attempt, dù các key khác hoàn toàn khỏe (getZenKey round-robin tự
+  // xoay key kế; sub-agent ghim key thì retry cùng key vẫn là 1 attempt mới).
+  // Chỉ retry với lỗi thời gian (abort/timeout/ETIMEDOUT/ECONNRESET) — 429 đã
+  // mark cooldown + 403/402 đã cache chặn, các lỗi đó chuỗi đằng sau xử lý.
+  if (zen && !zen.content && !(zen.tool_calls && zen.tool_calls.length > 0)
+      && /abort|timeout|etimedout|econnreset|socket hang up/i.test(zen.error ?? '')) {
+    console.warn(`[LLM] Agent Zen ${zenModel} lỗi thời gian (lần 1) — retry 1 lần với key kế: ${String(zen.error).slice(0, 120)}`)
+    zen = await callZenProvider(prompt, systemPrompt, zenModel, options, `agent-retry:${zenModel}`)
+  }
   if (zen && (zen.content || (zen.tool_calls && zen.tool_calls.length > 0))) {
     const tcCount = zen.tool_calls?.length ?? 0
     console.log(`[LLM] Agent dùng Zen ${zenModel} ✓ (${tcCount} tool_calls, ${zen.tokensUsed ?? 0} tokens)`)
