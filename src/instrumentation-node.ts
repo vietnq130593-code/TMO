@@ -109,6 +109,57 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
   }
 }
 
+// ============================================================================
+// HTTP WEDGE WATCHDOG (round-4 2026-09-29 — quan sát vận hành vòng 4): dev
+// server (Turbopack) bị WEDGE HTTP intake: accept backlog 23 connection chờ
+// KHÔNG được accept, event loop vẫn chạy (goal-loop LLM hoạt động), RSS bình
+// thường (MemWatchdog không phát hiện) — mọi request ngoài (kể cả trang chủ
+// "/" — bề mặt duy nhất user thấy) treo vĩnh viễn. Chỉ PM2 restart mới giải
+// phóng. Watchdog này tự probe loopback mỗi 60s: timeout/lỗi kết nối 3 LẦN
+// LIÊN TIẾP (sau khi đã từng thành công ít nhất 1 lần — bỏ qua cửa sổ boot
+// ~3 phút đầu) → self-exit(1) để PM2 restart sạch, durable goal jobs RESUME
+// từ checkpoint. CHỈ đếm lỗi transport (timeout/ECONNRESET/abort) — HTTP
+// 4xx/5xx nghĩa là intake VẪN SỐNG (lỗi app khác, không restart-loop oan).
+// Tắt hẳn: HTTP_WATCHDOG=0.
+// ============================================================================
+const globalForHttpWatchdog = globalThis as unknown as { __tmoHttpWatchdogStarted?: boolean }
+if (!globalForHttpWatchdog.__tmoHttpWatchdogStarted) {
+  globalForHttpWatchdog.__tmoHttpWatchdogStarted = true
+  const HTTP_WATCHDOG = (process.env.HTTP_WATCHDOG ?? '1') !== '0'
+  const HTTP_PROBE_URL = `http://127.0.0.1:${process.env.PORT ?? '3000'}/api/goal-loop-jobs`
+  if (HTTP_WATCHDOG) {
+    let httpFailCount = 0
+    let httpEverSucceeded = false
+    const httpWatchdogTimer = setInterval(async () => {
+      try {
+        // Cửa sổ boot: 150s đầu dev server đang compile — bỏ qua
+        if (process.uptime() < 150) return
+        // fetch tự thanh công? timeout 15s — request nhẹ (~10ms) nhưng
+        // qualify 15s để không tính oan lúc compile burst route lần đầu.
+        const res = await fetch(HTTP_PROBE_URL, { signal: AbortSignal.timeout(15_000) })
+        // Được response (bất kể status) → intake sống
+        httpFailCount = 0
+        if (!httpEverSucceeded) {
+          httpEverSucceeded = true
+          console.log(`[HttpWatchdog] probe đầu tiên OK (status ${res.status}) — đã bật lưng canh wedge`)
+        }
+      } catch {
+        // Chỉ đếm khi ĐÃ TỪNG thành công (chống giết oan lúc boot chậm/compile
+        // burst chưa từng xong) — lỗi transport = timeout/abort/reset.
+        if (!httpEverSucceeded) return
+        httpFailCount++
+        console.warn(`[HttpWatchdog] probe loopback thất bại (lần ${httpFailCount}/3) — HTTP intake nghi wedge: ${HTTP_PROBE_URL}`)
+        if (httpFailCount >= 3) {
+          console.error(`[HttpWatchdog] HTTP intake WEDGE xác nhận — 3 probe liên tiếp không response trong khi process sống. Self-exit để PM2 restart sạch (durable goal jobs RESUME từ checkpoint).`)
+          process.exit(1)
+        }
+      }
+    }, 60_000)
+    httpWatchdogTimer.unref?.()
+    console.log(`[HttpWatchdog] bật — probe ${HTTP_PROBE_URL} mỗi 60s, 3 fail liên tiếp (sau lần đầu OK) → self-exit`)
+  }
+}
+
 function buildServices(resolveFn: (...paths: string[]) => string) {
   const ROOT = resolveFn(process.cwd())
   const services: ServiceConfig[] = [
