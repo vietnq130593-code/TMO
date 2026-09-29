@@ -3531,14 +3531,65 @@ export async function todoWrite(args: {
     return { success: false, error: 'Phiên chat đã bị xóa — không thể ghi todo cho phiên này.' }
   }
 
-  // Guard against runaway agents trying to create thousands of todos
+  // Guard against runaway agents trying to create thousands of todos.
+  //
+  // FIX 2026-10-30 (chu kỳ goal-loop 29): cap cũ đếm `count({ sessionId })` —
+  // TẤT CẢ status kể cả completed/failed. Hệ quả: session đã chạy nhiều chu kỳ
+  // tích luỹ 200+ todo đã HOÀN TẤT vẫn bị chặn vĩnh viễn, mọi todo_write
+  // sau đó fail → agent mất công cụ lập kế hoạch giữa chừng (bằng chứng thực:
+  // session 'sess_1790637110029_w1x31q' có 202 todo → "Todo list cap
+  // exceeded: 202 existing + 0 new > 200 max per session").
+  //
+  // Cơ chế mới (2 tầng, TÁCH BIỆT mục đích):
+  //  1) NGÂN SÁCH LẬP KẾ HOẠCH = todo CHƯA XONG (pending/in_progress/blocked).
+  //     completed/failed/archived là lịch sử, KHÔNG chặn agent viết todo mới.
+  //  2) HARD_MAX_TOTAL_ROWS chặn runaway DB thật sự (cao gấp 4×): chỉ archive,
+  //     và chỉ purge row đã archive từ >30 ngày.
   const MAX_TODOS_PER_SESSION = 200
-  const existingCount = await db.todo.count({ where: { sessionId } })
+  // HARD_MAX_TOTAL_ROWS — trần tổng ROW/session (kể cả todo đã đóng).
+  // Đặt CAO HƠN NHIỀU lần ngân sách lập kế hoạch vì mục đích chỉ là chặn
+  // runaway thật sự, KHÔNG phải dọn dẹp định kỳ. KHÔNG hạ ngưỡng này xuống
+  // bằng MAX_TODOS_PER_SESSION — ngưỡng lập kế hoạch bị chạm trong điều
+  // kiện thường trực, dùng làm ngưỡng janitor sẽ xoá lịch sử mỗi lần ghi todo.
+  const HARD_MAX_TOTAL_ROWS = MAX_TODOS_PER_SESSION * 4
+  const OPEN_STATUSES = ['pending', 'in_progress', 'blocked'] as const
+  const openCount = await db.todo.count({
+    where: { sessionId, status: { in: [...OPEN_STATUSES] } },
+  })
   const newCount = args.todos.filter(t => !t.id && !t.idempotencyKey).length
-  if (existingCount + newCount > MAX_TODOS_PER_SESSION) {
+  if (openCount + newCount > MAX_TODOS_PER_SESSION) {
     return {
       success: false,
-      error: `Todo list cap exceeded: ${existingCount} existing + ${newCount} new > ${MAX_TODOS_PER_SESSION} max per session. Mark some todos as completed or remove stale ones first.`,
+      error: `Todo list cap exceeded: ${openCount} open + ${newCount} new > ${MAX_TODOS_PER_SESSION} max per session. Mark some todos as completed or remove stale ones first.`,
+    }
+  }
+  // JANITOR — CHẠY SÂU, chỉ khi tổng row vượt HARD_MAX_TOTAL_ROWS (800):
+  // dấu hiệu runaway THẬT, KHÔNG phải dọn dẹp định kỳ.
+  // Bước 1 PURGE: xoá row ĐÃ ARCHIVE từ >30 ngày (giữ 30 ngày để phục hồi).
+  // Bước 2 ARCHIVE: đánh dấu todo đã đóng cũ nhất để nhường chỗ cho run mới.
+  // KHÔNG xoá trực tiếp todo chưa archive — lịch sử phải còn phục hồi được.
+  let evicted = 0
+  const totalRows = await db.todo.count({ where: { sessionId } })
+  if (totalRows + newCount > HARD_MAX_TOTAL_ROWS) {
+    const purgeBefore = new Date(Date.now() - 30 * 86_400_000)
+    await db.todo
+      .deleteMany({ where: { sessionId, archivedAt: { not: null, lt: purgeBefore } } })
+      .catch(() => null)
+    const overflow = totalRows + newCount - HARD_MAX_TOTAL_ROWS
+    const stale = await db.todo.findMany({
+      where: { sessionId, status: { notIn: [...OPEN_STATUSES] }, archivedAt: null },
+      orderBy: { updatedAt: 'asc' },
+      select: { id: true },
+      take: Math.min(overflow, 200),
+    })
+    if (stale.length > 0) {
+      const res = await db.todo
+        .updateMany({
+          where: { id: { in: stale.map(s => s.id) } },
+          data: { archivedAt: new Date() },
+        })
+        .catch(() => null)
+      evicted = res?.count ?? 0
     }
   }
 
