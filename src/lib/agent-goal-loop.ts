@@ -3775,7 +3775,17 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     // lastContent đang dở. Dùng token reserve → không bao giờ bị cắt ngang.
     // TASK 48 — NGOẠI LỆ needs_input: KHÔNG wrap-up — lastContent chính là CÂU
     // HỎI agent hỏi user (wrap-up tổng hợp sẽ làm loãng/chôn câu hỏi).
-    if (stopReason !== 'complete' && stopReason !== 'needs_input' && lastContent) {
+    // ROUND-4 (2026-09-29, quan sát vòng 4): NGOẠI LỆ đường complete — khi
+    // evaluator chốt đạt dựa trên BẰNG CHỨNG (artifact/validator pass) ngay
+    // sau chu kỳ bị cắt giữa chừng (iteration_limit), agent không kịp viết
+    // thông điệp kết luận → lastContent là thinking THÔ. Bằng chứng: job FIX
+    // t4jw6m8s kết thúc complete=true/verified=true nhưng result.content là
+    // mảnh dở chứa raw "tool_call: shell(...)" + "Tôi sẽ không kết luận cho
+    // tới khi lệnh trên trả về" — user nhận thinking thay vì báo cáo. Heuristic
+    // phát hiện: lastContent chứa marker tool_call raw chưa parse.
+    const lastContentIsRawMidWork = !!lastContent && /\btool_call:\s*[a-z_]+\s*\(/i.test(lastContent)
+    if ((stopReason !== 'complete' && stopReason !== 'needs_input' && lastContent)
+        || (stopReason === 'complete' && lastContentIsRawMidWork)) {
       const wrapUp = await generateFinalReport({
         goal: directiveSpec.acceptance.length > 0
           ? `${directiveSpec.goal}\n\nTIÊU CHÍ NGHIỆM THU:\n${directiveSpec.acceptance.map(a => `- [ ] ${a}`).join('\n')}`
