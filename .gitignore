@@ -163,6 +163,13 @@ tsc-output.txt
 docker-compose.yml~
 .env
 
+# File MẪU cấu hình chỉ chứa TÊN biến (giá trị rỗng) — PHẢI commit được.
+# Dòng `.env*` ở trên khớp luôn .env.example, nên cần dòng phủ định sau nó.
+!.env.example
+
+# Thư mục probe tạm của agent (script kiểm chứng ad-hoc) — KHÔNG commit.
+.probe/
+
 # Auto-generated screenshots (from agent-browser verification)
 preview-*.png
 

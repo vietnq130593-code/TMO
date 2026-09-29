@@ -1,3 +1,8 @@
+---
+name: Knowledge Graph
+description: Query the Neo4j Knowledge Graph for entity relationships and graph traversal.
+---
+
 # Knowledge Graph
 
 ## Description

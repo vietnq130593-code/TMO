@@ -1,3 +1,8 @@
+---
+name: Knowledge Search
+description: Search the local Knowledge Base using semantic search and graph expansion.
+---
+
 # Knowledge Search
 
 ## Description

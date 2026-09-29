@@ -1,3 +1,8 @@
+---
+name: Knowledge Write
+description: Write new entities and relationships to the Knowledge Base.
+---
+
 # Knowledge Write
 
 ## Description

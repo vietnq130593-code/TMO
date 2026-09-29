@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { writeFileSync, mkdirSync, unlinkSync, existsSync, readdirSync, rmdirSync } from 'fs'
+import { writeFileSync, mkdirSync, unlinkSync, existsSync, readdirSync, readFileSync, rmdirSync } from 'fs'
 import { join } from 'path'
 
 export const dynamic = 'force-dynamic'
@@ -22,7 +22,12 @@ const BUNDLED_SKILLS = [
   {
     slug: 'knowledge-search',
     name: 'Knowledge Search',
-    content: `# Knowledge Search
+    content: `---
+name: Knowledge Search
+description: Search the local Knowledge Base using semantic search and graph expansion.
+---
+
+# Knowledge Search
 
 ## Description
 Search the local Knowledge Base using semantic search and graph expansion.
@@ -50,7 +55,12 @@ Search the local Knowledge Base using semantic search and graph expansion.
   {
     slug: 'knowledge-graph',
     name: 'Knowledge Graph',
-    content: `# Knowledge Graph
+    content: `---
+name: Knowledge Graph
+description: Query the Neo4j Knowledge Graph for entity relationships and graph traversal.
+---
+
+# Knowledge Graph
 
 ## Description
 Query the Neo4j Knowledge Graph for entity relationships and graph traversal.
@@ -77,7 +87,12 @@ Query the Neo4j Knowledge Graph for entity relationships and graph traversal.
   {
     slug: 'knowledge-write',
     name: 'Knowledge Write',
-    content: `# Knowledge Write
+    content: `---
+name: Knowledge Write
+description: Write new entities and relationships to the Knowledge Base.
+---
+
+# Knowledge Write
 
 ## Description
 Write new entities and relationships to the Knowledge Base.
@@ -134,7 +149,91 @@ async function ensureBundledSkills() {
       } catch (fsErr) {
         console.warn(`[Skills] Failed to write bundled SKILL.md to filesystem:`, fsErr instanceof Error ? fsErr.message : String(fsErr))
       }
+    } else if (existing.content !== skill.content) {
+      // Backfill: row đã tạo từ bản BUNDLED_SKILLS cũ (thiếu front matter) → cập nhật
+      // nội dung. readSkill() đọc DB TRƯỚC filesystem nên nếu không backfill thì
+      // sửa file trên đĩa không bao giờ tới được người dùng (chu kỳ 40).
+      await db.agentSkill.update({
+        where: { id: existing.id },
+        data: { content: skill.content, name: skill.name, enabled: skill.enabled },
+      })
+      try {
+        const skillsDir = join(process.cwd(), 'skills', skill.slug)
+        mkdirSync(skillsDir, { recursive: true })
+        writeFileSync(join(skillsDir, 'SKILL.md'), skill.content, 'utf-8')
+        console.log(`[Skills] Backfilled bundled SKILL.md: skills/${skill.slug}/SKILL.md`)
+      } catch (fsErr) {
+        console.warn(`[Skills] Failed to backfill bundled SKILL.md:`, fsErr instanceof Error ? fsErr.message : String(fsErr))
+      }
     }
+  }
+
+  // Nguồn 2: skills/tool-*/SKILL.md trên đĩa → DB.
+  // createCustomTool ghi CẢ AgentSkill companion (DB) LẪN skills/<slug>/SKILL.md, nhưng các
+  // row tạo TRƯỚC khi generator bắt đầu sinh front matter vẫn giữ nội dung cũ trong DB.
+  // readSkill() đọc DB TRƯỚC filesystem nên nếu không đồng bộ ngược thì sửa file trên đĩa
+  // không bao giờ tới được runtime (chu kỳ 40).
+  await syncAgentToolSkillsFromFilesystem()
+}
+
+// Đồng bộ nội dung SKILL.md trên đĩa cho các row AgentSkill nguồn 'agent-tool'.
+// Quy tắc an toàn: KHÔNG bao giờ ghi đè một DB row đang có front matter bằng nội dung
+// file không có front matter (tránh làm mất metadata đã parse được).
+function extractFrontMatterName(content: string): string | null {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+  if (!match) return null
+  const nameMatch = match[1].match(/^name:\s*(.+)$/m)
+  return nameMatch ? nameMatch[1].trim() : null
+}
+
+async function syncAgentToolSkillsFromFilesystem() {
+  const skillsDir = join(process.cwd(), 'skills')
+  if (!existsSync(skillsDir)) return
+
+  let entries: string[]
+  try {
+    entries = readdirSync(skillsDir)
+  } catch (err) {
+    console.warn('[Skills] Failed to read skills dir:', err instanceof Error ? err.message : String(err))
+    return
+  }
+
+  for (const slug of entries) {
+    if (!slug.startsWith('tool-')) continue
+    const skillFile = join(skillsDir, slug, 'SKILL.md')
+    if (!existsSync(skillFile)) continue
+
+    let content: string
+    try {
+      content = readFileSync(skillFile, 'utf-8')
+    } catch (err) {
+      console.warn(`[Skills] Failed to read ${skillFile}:`, err instanceof Error ? err.message : String(err))
+      continue
+    }
+
+    const existing = await db.agentSkill.findUnique({
+      where: { agentId_slug: { agentId: 'default', slug } },
+    })
+    // Chưa đăng ký tool trong DB → không tự sinh row (tránh rác).
+    if (!existing) continue
+    // Chỉ bỏ qua khi CẢ nội dung lẫn tên đã khớp. Nếu chỉ so nội dung thì một
+    // row có content đúng nhưng name stale (vd "🔧 forge_lifecycle_probe") sẽ
+    // không bao giờ được hòa hợp lại từ front matter trên đĩa.
+    const fmName = extractFrontMatterName(content)
+    if (existing.content === content && (!fmName || existing.name === fmName)) continue
+
+    const dbHasFm = (existing.content || '').trimStart().startsWith('---')
+    const fsHasFm = content.trimStart().startsWith('---')
+    if (dbHasFm && !fsHasFm) {
+      console.warn(`[Skills] Skip backfill ${slug}: DB có front matter nhưng file trên đĩa không có`)
+      continue
+    }
+
+    await db.agentSkill.update({
+      where: { id: existing.id },
+      data: { content, ...(fmName ? { name: fmName } : {}) },
+    })
+    console.log(`[Skills] Backfilled agent-tool skill from filesystem: ${slug}`)
   }
 }
 

@@ -47,6 +47,9 @@ interface RegistryEntry {
   tool: CustomToolEntry
   registeredAt: Date
   gatewayRegistered: boolean
+  /** Bản sao callCount trong bộ nhớ — đồng bộ sau mỗi lần execute để
+   *  list_custom_tools khớp với DB (chu kỳ 39: DB=1 nhưng list báo 0). */
+  callCount?: number
 }
 
 export interface ExecutionResult {
@@ -302,6 +305,9 @@ export async function executeCustomTool(
     where: { id: entry.tool.id },
     data: { callCount: { increment: 1 } },
   }).catch(() => { /* ignore */ })
+  // Đồng bộ bộ nhớ: nếu không, list_custom_tools đọc bản cache cũ và báo callCount=0
+  // trong khi DB đã tăng → hai nguồn đọc lệch nhau (đã quan sát ở chu kỳ 39).
+  entry.callCount = (entry.callCount || 0) + 1
 
   try {
     const sandbox = createSandbox(name)
@@ -667,7 +673,12 @@ export async function createCustomTool(input: {
   const skillMdContent =
     input.skillMd && input.skillMd.trim()
       ? input.skillMd
-      : `# Tool: ${name}
+      : `---
+name: ${name}
+description: ${description.replace(/\n/g, ' ').replace(/:/g, ' -')}
+---
+
+# Tool: ${name}
 
 ## Description
 ${description}

@@ -282,9 +282,26 @@ export async function GET() {
             if (hasSkillMd) {
               try {
                 const content = readFileSync(skillMdPath, 'utf-8')
-                // Lấy mô tả ngắn: dòng đầu không phải heading
-                const line = content.split('\n').find(l => l.trim() && !l.trim().startsWith('#'))
-                description = (line || '').trim().slice(0, 150)
+                // Ưu tiên description trong YAML front matter; nếu không có thì
+                // lấy dòng đầu tiên KHÔNG nằm trong front matter và không phải
+                // heading (trước đây dòng `---` mở front matter bị chọn → hiển thị sai)
+                const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+                if (fm) {
+                  const fmDesc = fm[1]
+                    .split('\n')
+                    .find(l => /^description\s*:/.test(l.trim()))
+                    ?.replace(/^description\s*:\s*/, '')
+                    .replace(/^["']|["']$/g, '')
+                    .trim()
+                  if (fmDesc) description = fmDesc.slice(0, 150)
+                }
+                if (!description) {
+                  const body = fm ? content.slice(fm[0].length) : content
+                  const line = body
+                    .split('\n')
+                    .find(l => l.trim() && !l.trim().startsWith('#') && l.trim() !== '---')
+                  description = (line || '').trim().slice(0, 150)
+                }
               } catch { /* ignore */ }
             }
             filesystemSkills.push({ slug: slug.name, hasSkillMd, description })
