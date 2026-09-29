@@ -4230,7 +4230,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                     </span>
                     <div className="flex items-center gap-1.5 mt-0.5">
                       <div className={`w-2 h-2 ${gatewayOnline ? 'bg-emerald-400' : 'bg-stone-500'} animate-pulse`} />
-                      <span className="text-[9px] text-stone-400">{gatewayOnline ? 'Online' : 'Offline'}</span>
+                      <span className="text-[9px] text-stone-400">{gatewayOnline ? 'Online' : 'on-demand'}</span>
                       <span className="text-[9px] text-stone-500 ml-1">• {chatMode === 'single' ? 'Single' : 'Multi'}</span>
                     </div>
                   </div>
@@ -4813,8 +4813,14 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                       : 'Chọn một Team để các Agents phối hợp làm việc.'}
                   </p>
                   <div className="flex items-center gap-1.5 mb-4">
-                    <div className={`w-2 h-2 ${gatewayOnline ? 'bg-emerald-400' : 'bg-red-400'}`} />
-                    <span className="text-[12px] text-stone-300">Gateway {gatewayOnline ? 'Online' : 'Offline — Mock Mode'}</span>
+                    {/* Gateway on-demand (Task 9): idle-shutdown 10 phút theo thiết kế —
+                        KHÔNG phải lỗi; chat goal-loop không cần gateway (hybrid bridge
+                        local). Trước đây badge đỏ "Offline — Mock Mode" gây hiểu lầm
+                        "gateway hỏng / chat giả" trong khi mọi thứ vận hành thật. */}
+                    <div className={`w-2 h-2 ${gatewayOnline ? 'bg-emerald-400' : 'bg-stone-400'}`} />
+                    <span className="text-[12px] text-stone-300">
+                      Gateway {gatewayOnline ? 'Online' : 'on-demand (sẵn sàng — tự khởi động khi cần)'}
+                    </span>
                   </div>
                   <div className="flex flex-col gap-2 w-full">
                     {SMOLAB_SUGGESTIONS.map(q => (
