@@ -1,0 +1,96 @@
+// ============================================================================
+// TEST SUITE — db_query READ-ONLY GUARD + FEATURE FLAG (Phase 3.5)
+// ============================================================================
+//
+// Mục đích: db_query là công cụ NGUY HIỂNG — cho phép agent đọc SQLite buffer
+// layer. Chốt chặn write/DDL là thuộc tính BẢO MẬT, không phải tiện ích.
+// Test này khoá hành vi đó lại bằng bằng chứng máy, tránh một lần refactor
+// nới lỏng guard mà không ai nhận ra.
+//
+// Cần đọc trước khi sửa:
+//   - src/lib/code-team/dev-tools.ts:4903 (dbQuery + READ-ONLY GUARD)
+//   - src/lib/code-team/tool-executor.ts:2540 (guard cờ ENABLE_DB_QUERY)
+//   - src/lib/feature-flags.ts:79 (ENABLE_DB_QUERY default 'false')
+//
+// Chạy: cd /home/z/tmo-app && bun test tests/db-query-readonly-guard.test.ts
+// ============================================================================
+
+// Ép DB đúng của tmo-app — chống shell DATABASE_URL nhiễm path my-project.
+// KHI test cô lập (tests/db-isolation-preload.ts) thì PHẢI GIỮ NGUYÊN.
+if (process.env.TMO_TEST_DB_ISOLATED !== '1') {
+  process.env.DATABASE_URL = 'file:/home/z/tmo-app/db/custom.db'
+}
+
+import { describe, expect, test } from 'bun:test'
+import { dbQuery } from '../src/lib/code-team/dev-tools'
+
+// ---------- helper ----------
+const errOf = (r: any): string => String(r?.error ?? '')
+
+describe('db_query — read-only guard', () => {
+  test('reject multi-statement (chèn ; phía sau)', async () => {
+    const r: any = await dbQuery({ sql: 'SELECT 1; DROP TABLE sqlite_master' })
+    expect(r.success).toBe(false)
+    expect(errOf(r)).toContain('multi-statement')
+  })
+
+  test('reject mọi write/DDL keyword', async () => {
+    const banned = [
+      'INSERT',
+      'UPDATE',
+      'DELETE',
+      'DROP',
+      'ALTER',
+      'TRUNCATE',
+      'CREATE',
+      'GRANT',
+      'REVOKE',
+      'ATTACH',
+      'DETACH',
+    ]
+    for (const kw of banned) {
+      const r: any = await dbQuery({ sql: `${kw} something` })
+      expect(r.success).toBe(false)
+      expect(errOf(r)).toContain(`write keyword "${kw}"`)
+    }
+  })
+
+  test('reject PRAGMA trừ query_plan', async () => {
+    const blocked: any = await dbQuery({ sql: 'PRAGMA table_info(users)' })
+    expect(blocked.success).toBe(false)
+    expect(errOf(blocked)).toContain('PRAGMA statements are not allowed')
+
+    // query_plan là ngoại lệ read-only được chủ đích cho phép
+    const allowed: any = await dbQuery({ sql: 'PRAGMA query_plan' })
+    expect(errOf(allowed)).not.toContain('PRAGMA statements are not allowed')
+  })
+
+  test('strip comment trước khi check — comment không lừa được guard', async () => {
+    const withLineComment: any = await dbQuery({ sql: '-- DROP\nSELECT 1' })
+    expect(errOf(withLineComment)).not.toContain('write keyword')
+
+    // keyword giấu sau comment block phải bị reject
+    const hidden: any = await dbQuery({ sql: 'SELECT 1 /* x */; /* y */ DROP TABLE t' })
+    expect(hidden.success).toBe(false)
+  })
+
+  test('reject sql rỗng / không phải string', async () => {
+    const empty: any = await dbQuery({ sql: '' })
+    expect(empty.success).toBe(false)
+    expect(errOf(empty)).toContain('sql (string) is required')
+  })
+
+  test('SELECT hợp lệ KHÔNG bị guard chặn', async () => {
+    const r: any = await dbQuery({ sql: 'SELECT 1 AS one' })
+    // Chỉ assert guard không chặn — không phụ thuộc DB có bảng nào
+    expect(errOf(r)).not.toContain('rejected by read-only guard')
+  })
+})
+
+describe('db_query — read-only guard chặn tiêm chú thích', () => {
+  test('comment dạng -- che keyword phải vẫn bị nhận diện keyword thật phía sau', async () => {
+    // `-- DROP` chỉ là comment (bị strip) nên SELECT 1 hợp lệ
+    const r: any = await dbQuery({ sql: '-- DROP\nSELECT 1 AS one' })
+    expect(r.success).not.toBe(false)
+  })
+})
