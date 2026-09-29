@@ -74,6 +74,12 @@ import { rewriteQuery } from '@/lib/kb-routing/query-rewriter'
 import { isFlagEnabled } from '@/lib/feature-flags'
 import { writebackToKBTransactionally } from '@/lib/kb-routing/transactional-writeback'
 import { buildWorkspaceContext } from '@/lib/workspace/workspace-context'
+// FILESYSTEM SKILLS INDEX (fix 2026-09-29): liệt kê skills/<slug>/SKILL.md cho
+// system prompt — 54+ filesystem skills (fullstack-dev, interview-prep, pptx,
+// docx...) trước đây KHÔNG xuất hiện ở prompt nào nên agents không biết tồn tại
+// (ToolMetric 24h: 0 lượt dùng) — chỉ 7 DB skills được inject.
+import { promises as fsp } from 'fs'
+import { join as pathJoin } from 'path'
 // Task 20-c (self-evaluation) — link AgentRunRecord với ChatMessage id sau khi
 // message persist (fire-and-forget, fail-open — qua raw-SQL bridge metrics-db)
 import { updateLatestAgentRunRecord } from '@/lib/metrics-db'
@@ -745,6 +751,41 @@ export async function POST(request: NextRequest) {
       }
     } catch (skillErr) {
       console.warn('[OpenClaw Chat] Failed to load enabled skills:', skillErr instanceof Error ? skillErr.message : String(skillErr))
+    }
+
+    // ━━━ FILESYSTEM SKILLS INDEX (fix 2026-09-29 — user observation) ━━━
+    // 54+ skills cài sẵn ở skills/<slug>/SKILL.md (fullstack-dev, interview-prep,
+    // pptx, docx, xlsx, charts, web, finance...) trước đây KHÔNG được liệt kê ở
+    // bất kỳ prompt nào — agents không biết chúng tồn tại (ToolMetric 24h: 0
+    // lượt dùng dù list_skills/read_skill có sẵn trong whitelist). Index gọn
+    // (slug + mô tả ngắn) để model thấy TỒN TẠI; chi tiết qua read_skill.
+    // Budget-guard: index ≤ 3500 chars (nếu vượt → chỉ liệt kê slug, tiết kiệm
+    // thêm ~2k) — SYSTEM_PROMPT_BUDGET_CHARS (24k) cắt block base từ ĐUÔI nên
+    // block này phải GỌN để không bị cắt mất.
+    try {
+      const skillsDir = pathJoin(process.cwd(), 'skills')
+      const dirs = await fsp.readdir(skillsDir).catch(() => [] as string[])
+      const lines: string[] = []
+      for (const d of dirs.sort()) {
+        try {
+          const md = await fsp.readFile(pathJoin(skillsDir, d, 'SKILL.md'), 'utf-8')
+          const fmMatch = md.match(/^---\n([\s\S]*?)\n---/)
+          const fm = fmMatch ? fmMatch[1] : ''
+          const name = fm.match(/^name:\s*(.+)$/m)?.[1]?.trim() || d
+          const desc = (fm.match(/^description:\s*(.+)$/m)?.[1]?.trim() || '').slice(0, 60)
+          lines.push(desc ? `- ${d} (${name}): ${desc}` : `- ${d} (${name})`)
+        } catch { /* không phải skill dir — bỏ qua */ }
+      }
+      if (lines.length > 0) {
+        let indexText = lines.join('\n')
+        if (indexText.length > 3500) {
+          // Fallback siêu gọn: chỉ slug (mọi thứ vẫn discoverable qua list_skills)
+          indexText = lines.map(l => l.split(' (')[0].replace(/^- /, '')).join(', ')
+        }
+        systemPrompt += `\n\n--- Filesystem Skills (${lines.length} skills có sẵn — đọc hướng dẫn dùng: tool_call read_skill({"slug":"<slug>"}); liệt kê đầy đủ: list_skills({})) ---\n${indexText}\nKhi nhiệm vụ khớp một skill trong danh sách (vd build web app → fullstack-dev, làm slide → ppt/pptx, bảng tính → xlsx, phỏng vấn → interview-prep, tra cứu KB → knowledge-search) → HÃY ĐỌC skill đó bằng read_skill TRƯỚC KHI làm, rồi theo hướng dẫn của nó.`
+      }
+    } catch (fsSkillErr) {
+      console.warn('[OpenClaw Chat] Filesystem skills index failed (fail-open):', fsSkillErr instanceof Error ? fsSkillErr.message : String(fsSkillErr))
     }
 
     // CUSTOM TOOLS (user request 2026-08-30): agents TỰ VIẾT tools khi thiếu.

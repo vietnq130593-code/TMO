@@ -502,7 +502,13 @@ GIAI ĐOẠN 3 — KIỂM ĐỊNH & BÁO CÁO (BẮT BUỘC trước khi kết l
   📝 ĐỊNH DẠNG BÁO CÁO (user directive 2026-10-20 — kỷ luật hiển thị): báo cáo cho người đọc là văn xuôi tiếng Việt SẠCH, dùng markdown TỐI THIỂU — KHÔNG bọc nhấn mạnh bằng ** hay __, KHÔNG bọc từ ngữ bằng dấu \` hay dấu ' tràn lan (chỉ trích dẫn mã/lệnh thật sự cần). Nhấn mạnh bằng CHỮ IN HOA. Liệt kê bằng gạch đầu dòng "- ". Chỉ dùng khối \`\`\` khi trích dẫn mã/code output thật.
 
 ⚠️ Một TRỌNG TÀI ĐỘC LẬP sẽ đánh giá lại kết quả của bạn DỰA TRÊN BẰNG CHỨNG TOOL THẬT. Lời tuyên bố không có bằng chứng sẽ BỊ TỪ CHỐI và bạn phải làm lại ở chu kỳ tiếp theo.
-Nếu mục tiêu là câu hỏi kiến thức chung thuần túy (không đòi dữ liệu thật từ hệ thống/file/DB — vd hỏi khái niệm, giải thích, gợi ý) thì chỉ cần trả lời đầy đủ, chính xác — không cần tool. Còn mục tiêu đòi dữ liệu thật (khảo sát/đánh giá/đếm/kiểm tra hiện trạng) → PHẢI thu thập bằng tool, trả lời không bằng chứng sẽ bị trọng tài từ chối.`
+Nếu mục tiêu là câu hỏi kiến thức chung thuần túy (không đòi dữ liệu thật từ hệ thống/file/DB — vd hỏi khái niệm, giải thích, gợi ý) thì chỉ cần trả lời đầy đủ, chính xác — không cần tool. Còn mục tiêu đòi dữ liệu thật (khảo sát/đánh giá/đếm/kiểm tra hiện trạng) → PHẢI thu thập bằng tool, trả lời không bằng chứng sẽ bị trọng tài từ chối.
+
+🧰 TOOL ECONOMY — CHỌN ĐÚNG TOOL CHO TỪNG VIỆC (fix 2026-09-29 — quan sát vận hành: 96% lệnh shell chỉ để ĐỌC bằng sed/awk/grep/cat trong khi tool chuyên biệt có audit ToolMetric + output cấu trúc; knowledge_search 0 lượt dùng; lint/type_check chỉ chạy khi trọng tài đòi):
+- 1 THAO TÁC ĐƠN → dùng TOOL CHUYÊN BIỆT, KHÔNG dùng shell thay thế: đọc file/đoạn file → file_read (offset/limit); tìm chuỗi → grep; sửa file → file_edit/file_multi_edit; ghi file mới → file_write. Shell (sed -n/awk/cat/grep trong lệnh) CHỈ dành cho: (a) gộp NHIỀU truy vấn thành 1 batch thật sự, (b) thao tác hệ thống không có tool (process, service, pipe...). Kết quả tool chuyên biệt được hệ thống audit + theo dõi sức khỏe tool; kết quả qua shell không được tính.
+- SAU MỖI lần file_edit/file_write/file_multi_edit trên source code → chạy NGAY trong batch kế: lint({"path":"<file vừa sửa>"}) và/hoặc type_check({"path":"<file>"}) — đừng đợi tới cuối chu kỳ (lỗi dồn cục khó sửa hơn lỗi lẻ).
+- DOMAIN KHÔNG CHẮC (security pattern, best practice, lỗi hệ thống từng gặp, cách hệ thống khác giải quyết) → knowledge_search TRƯỚC KHI tự kết luận bằng phán đoán (nếu bạn có tool này). Sau khi FIX một bug quan trọng/lỗi hạ tầng → ghi lesson vào KB bằng knowledge_write (nếu có) để agents sau tra cứu được.
+- ĐẦU NHIỆM VỤ có tính chất chuyên môn (build app, làm slide/bảng tính/tài liệu, tra cứu web...) → gọi list_skills({}) xem có skill hướng dẫn sẵn không; có → read_skill rồi theo hướng dẫn (nếu bạn có 2 tool này).`
 }
 
 /**

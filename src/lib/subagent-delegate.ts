@@ -1048,6 +1048,8 @@ ${acceptanceCriteria ? `ĐIỀU KIỆN HOÀN THÀNH (parent đối chiếu báo 
 ${acceptanceCriteria.slice(0, 1200)}
 ` : ''}
 TOOLS BẠN ĐƯỢC DÙNG: ${allowedTools.join(', ') || '(none — trả lời bằng kiến thức)'} (SCHEMA ĐẦY ĐỦ từng tool — tên param bắt buộc — ở message kế tiếp: ĐỌC kỹ trước khi gọi, KHÔNG đoán tên param)
+${allowedTools.includes('list_skills') ? `- 56+ SKILLS HƯỚNG DẪN có sẵn trên hệ thống (fullstack-dev build app, ppt/pptx slide, xlsx bảng tính, docx/pdf tài liệu, charts, interview-prep, knowledge-search...): nhiệm vụ khớp skill nào → gọi list_skills({}) tìm đúng tên rồi read_skill({"slug":"..."}) đọc hướng dẫn TRƯỚC KHI làm.
+` : ''}
 
 QUY TRÌNH LÀM VIỆC (bắt buộc):
 ${canTodo ? `- BƯỚC 0 — LẬP KẾ HOẠCH: đánh giá nhiệm vụ. Nếu cần NHIỀU BƯỚC (đọc/sửa nhiều file, research rồi code, cài đặt rồi kiểm định...) → gọi todo_write NGAY ĐẦU TIÊN, chia nhiệm vụ thành các bước có thứ tự (mỗi bước 1 mục, mô tả đo đếm được) → làm TỪNG BƯỚC, cập nhật trạng thái qua todo_write (pending → in_progress → completed/failed). Nhiệm vụ đơn giản (1-2 tool call) → làm thẳng, không cần todo.
