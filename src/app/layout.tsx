@@ -4,6 +4,7 @@ import { ThemeProvider } from "next-themes";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
+import { ChunkErrorRecovery } from "@/components/chunk-error-recovery";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -61,6 +62,8 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           {children}
+          {/* [chunk-retry] L2 — lưới an toàn toàn cục cho ChunkLoadError (trace 1a0f3586be589739) */}
+          <ChunkErrorRecovery />
           <Toaster />
           <SonnerToaster position="bottom-right" richColors closeButton duration={5000} />
         </ThemeProvider>

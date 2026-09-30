@@ -13,6 +13,7 @@ import { Tooltip as StatusTooltip, TooltipTrigger as StatusTooltipTrigger, Toolt
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { toast } from '@/hooks/use-toast'
 import { setApiToken } from '@/lib/api-auth'
+import { withChunkRetry } from '@/lib/dynamic-retry'
 // [perf-split] SelfDirectionModule → next/dynamic (xem dưới)
 import { toast as sonnerToast } from 'sonner'
 // [perf-split] RuntimeMetricsPanel → next/dynamic (xem dưới)
@@ -31,14 +32,17 @@ const ModuleLoading = () => (
     <Loader2 className="h-6 w-6 animate-spin text-cyan-400" />
   </div>
 )
-const SmolabModule = dynamic(() => import('@/components/smolab/smolab-module').then(m => m.default), { loading: ModuleLoading })
-const AgentsModule = dynamic(() => import('@/components/agents/agents-module').then(m => m.AgentsModule), { loading: ModuleLoading })
-const SelfDirectionModule = dynamic(() => import('@/components/self-direction/self-direction-module').then(m => m.default), { loading: ModuleLoading })
-const AnalyticsSection = dynamic(() => import('@/components/database/analytics-section').then(m => m.AnalyticsSection), { loading: ModuleLoading })
-const TokenUsageSection = dynamic(() => import('@/components/database/token-usage-section').then(m => m.TokenUsageSection), { loading: ModuleLoading })
-const AutoLearnSection = dynamic(() => import('@/components/database/auto-learn-section').then(m => m.AutoLearnSection), { loading: ModuleLoading })
-const RuntimeMetricsPanel = dynamic(() => import('@/components/analytics/runtime-metrics-panel').then(m => m.RuntimeMetricsPanel), { loading: ModuleLoading })
-const EpisodicMemoryPanel = dynamic(() => import('@/components/analytics/episodic-memory-panel').then(m => m.EpisodicMemoryPanel), { loading: ModuleLoading })
+// [chunk-retry] (2026-09-30, trace 1a0f3586be589739): app tự restart ~5-10s/lần khi mission nặng
+// (MemWatchdog RSS self-exit đúng thiết kế) — fetch chunk trúng cửa sổ đó fail → ChunkLoadError.
+// withChunkRetry: backoff 1/3/6/10s cưỡi qua restart, không mất state; cuối cùng guarded reload.
+const SmolabModule = dynamic(withChunkRetry(() => import('@/components/smolab/smolab-module').then(m => m.default)), { loading: ModuleLoading })
+const AgentsModule = dynamic(withChunkRetry(() => import('@/components/agents/agents-module').then(m => m.AgentsModule)), { loading: ModuleLoading })
+const SelfDirectionModule = dynamic(withChunkRetry(() => import('@/components/self-direction/self-direction-module').then(m => m.default)), { loading: ModuleLoading })
+const AnalyticsSection = dynamic(withChunkRetry(() => import('@/components/database/analytics-section').then(m => m.AnalyticsSection)), { loading: ModuleLoading })
+const TokenUsageSection = dynamic(withChunkRetry(() => import('@/components/database/token-usage-section').then(m => m.TokenUsageSection)), { loading: ModuleLoading })
+const AutoLearnSection = dynamic(withChunkRetry(() => import('@/components/database/auto-learn-section').then(m => m.AutoLearnSection)), { loading: ModuleLoading })
+const RuntimeMetricsPanel = dynamic(withChunkRetry(() => import('@/components/analytics/runtime-metrics-panel').then(m => m.RuntimeMetricsPanel)), { loading: ModuleLoading })
+const EpisodicMemoryPanel = dynamic(withChunkRetry(() => import('@/components/analytics/episodic-memory-panel').then(m => m.EpisodicMemoryPanel)), { loading: ModuleLoading })
 
 
 // ==================== STATUS HELPERS ====================
