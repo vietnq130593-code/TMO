@@ -16,6 +16,7 @@ import { useVoiceLive, type VoiceLiveStatus } from '@/hooks/use-voice-live'
 import OpusReviewCard, { opusDecisionBadgeClass, type OpusReviewSerialized } from '@/components/opus/opus-review-card'
 import { toast as sonnerToast } from 'sonner'
 import { AGENT_COLORS, POSITION_COLORS } from '@/lib/agent-constants'
+import { fetchWithTransientRetry } from '@/lib/fetch-retry'
 import { CodeTabContent } from '@/components/smolab/code-tab'
 import { AI_TOOL_EVENT_NAME, extractJsonStringField, extractJsonNumberField, pathFileName } from '@/components/smolab/smolab-shared'
 import { KnowledgeTabContent } from '@/components/smolab/knowledge-tab'
@@ -1017,6 +1018,12 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   // loadSessionTail đang fetch/replace state — heartbeat NGHỈ trong lúc đó
   // để không đua append-delta với replace-tail (mất message vừa append).
   const sessionTailLoadingRef = useRef(false)
+  // [fetch-retry] (trace 1a0f37bbc9c7e965): session mà messages state HIỆN TẠI
+  // đang hiển thị tail từ DB. loadSessionTail lỗi sau retry (server down kéo
+  // dài): chỉ reset state khi đang thuộc PHIÊN KHÁC (switch phiên fail — không
+  // thể giữ tin của phiên cũ dưới header phiên mới); nếu đúng phiên này
+  // (heartbeat/refresh) → GIỮ NGUYÊN nội dung, không xóa trắng màn hình chat.
+  const loadedTailSessionIdRef = useRef<string | null>(null)
   // Thời điểm user vừa bấm đổi mode/kill Opus ở client — heartbeat không đè
   // optimistic update trong cửa sổ 5s này (PATCH đang bay)
   const lastOpusModeActionRef = useRef(0)
@@ -1551,13 +1558,16 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       setHasMoreMessages(false)
       oldestLoadedIdRef.current = null
       latestDbMessageRef.current = null
+      loadedTailSessionIdRef.current = null
       return
     }
     sessionTailLoadingRef.current = true // TASK 53 — heartbeat nghỉ trong lúc replace tail
     if (!opts?.silent) setLoadingMessages(true)
     try {
       const [msgRes, fbRes] = await Promise.all([
-        fetch(`/api/chat-messages?sessionId=${encodeURIComponent(sid)}&exchanges=3`),
+        // [fetch-retry] 502/503/504 + mạng đứt (cửa sổ app restart) → backoff
+        // 1/3/6/10s tự chữa — không còn `HTTP 502` console error + mất chat.
+        fetchWithTransientRetry(`/api/chat-messages?sessionId=${encodeURIComponent(sid)}&exchanges=3`, undefined, { label: 'chat-messages' }),
         fetch(`/api/openclaw/feedback?sessionId=${encodeURIComponent(sid)}`).catch(() => null),
       ])
       if (!msgRes.ok) throw new Error(`HTTP ${msgRes.status}`)
@@ -1621,6 +1631,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         })
         setMessages(loaded)
         setHasMoreMessages(!!data.hasMore)
+        loadedTailSessionIdRef.current = sid // [fetch-retry] tail phiên này đã vào state
         oldestLoadedIdRef.current = data.oldestId || loaded[0]?.id || null
         // TASK 53 — cursor delta cho heartbeat realtime (message DB mới nhất)
         latestDbMessageRef.current = loaded.length > 0 ? { id: loaded[loaded.length - 1].id } : null
@@ -1631,7 +1642,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         // Run đang chạy (resume tác vụ nền) cũng được merge — panel hiện đúng
         // chỗ ngay khi mở lại session.
         try {
-          const runRes = await fetch(`/api/agent-run?sessionId=${encodeURIComponent(sid)}&limit=10`)
+          const runRes = await fetchWithTransientRetry(`/api/agent-run?sessionId=${encodeURIComponent(sid)}&limit=10`, undefined, { label: 'agent-run' })
           if (runRes.ok) {
             const runData = await runRes.json() as { ok?: boolean; runs?: AgentRunData[] } | null
             if (runData?.ok && Array.isArray(runData.runs) && runData.runs.length > 0) {
@@ -1648,17 +1659,25 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       } else {
         setMessages([])
         setHasMoreMessages(false)
+        loadedTailSessionIdRef.current = sid // [fetch-retry] tail rỗng cũng là trạng thái đúng của phiên này
         oldestLoadedIdRef.current = null
         latestDbMessageRef.current = null
       }
       isNearBottomRef.current = true // mở session → đứng ở cuối
       lastScrollTopRef.current = 0 // chống false-trigger load-older khi scrollTop bị clamp về 0 (nội dung mới ngắn hơn)
     } catch (err) {
-      console.error('[Smolab] Failed to load session messages:', err)
-      setMessages([])
-      setHasMoreMessages(false)
-      oldestLoadedIdRef.current = null
-      latestDbMessageRef.current = null
+      // [fetch-retry] Chỉ reset khi state thuộc phiên KHÁC (switch fail);
+      // đúng phiên này (heartbeat/refresh trùng server down kéo dài) → giữ
+      // nguyên nội dung đang xem — không xóa trắng chat giữa buổi.
+      if (loadedTailSessionIdRef.current !== sid) {
+        console.error('[Smolab] Failed to load session messages:', err)
+        setMessages([])
+        setHasMoreMessages(false)
+        oldestLoadedIdRef.current = null
+        latestDbMessageRef.current = null
+      } else {
+        console.warn('[Smolab] Session refresh lỗi sau retry — giữ nguyên messages hiện tại:', err)
+      }
     } finally {
       sessionTailLoadingRef.current = false // TASK 53 — heartbeat hoạt động lại
       if (!opts?.silent) setLoadingMessages(false)
@@ -1670,7 +1689,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       // đã đúng trạng thái rồi).
       // 2026-09-06: runs đã fetch ở trên cho merge — chỉ cần hasActive check.
       try {
-        const runRes = await fetch(`/api/agent-run?sessionId=${encodeURIComponent(sid)}&limit=5`)
+        const runRes = await fetchWithTransientRetry(`/api/agent-run?sessionId=${encodeURIComponent(sid)}&limit=5`, undefined, { label: 'agent-run' })
         if (runRes.ok) {
           const runData = await runRes.json()
           if (runData?.hasActive && !inFlightChatsRef.current.has(sid)) {
@@ -1696,8 +1715,10 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       const prevScrollHeight = el?.scrollHeight ?? 0
       const prevScrollTop = el?.scrollTop ?? 0
 
-      const res = await fetch(
-        `/api/chat-messages?sessionId=${encodeURIComponent(sid)}&exchanges=3&beforeId=${encodeURIComponent(oldestLoadedIdRef.current)}`
+      const res = await fetchWithTransientRetry(
+        `/api/chat-messages?sessionId=${encodeURIComponent(sid)}&exchanges=3&beforeId=${encodeURIComponent(oldestLoadedIdRef.current)}`,
+        undefined,
+        { label: 'chat-messages' },
       )
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
@@ -2644,11 +2665,12 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   const handleOpusResume = useCallback(async () => {
     setShowOpusModeMenu(false)
     try {
-      const killRes = await fetch('/api/opus/kill', {
+      // [fetch-retry] 502 trong cửa sổ restart = request chưa tới app → retry an toàn (action idempotent)
+      const killRes = await fetchWithTransientRetry('/api/opus/kill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'reset' }),
-      })
+      }, { label: 'opus-kill' })
       if (!killRes.ok) throw new Error(`HTTP ${killRes.status}`)
       setOpusKilled(false)
     } catch (err) {
