@@ -1062,7 +1062,7 @@ Nguyên tắc SẮT:
 4. Agent KHÔNG kiểm định (không có tool nào xác nhận kết quả) → "verified": false → với mục tiêu hành động thì "complete": false.
 5. "missing" = những gì còn thiếu so với mục tiêu. "rootCause" = vấn đề nằm chính xác ở đâu (bước nào fail / thiếu gì / sai chỗ nào). "nextPlan" = các bước khắc phục cụ thể cho chu kỳ kế tiếp.
 6. Công cụ kiểm định FAIL (type_check/lint/run_tests lỗi) KHÔNG tự động là "bằng chứng đã kiểm định": chỉ tin khi kết quả chứa errorCount/thông báo lỗi CỤ THỂ; nếu agent không trích được lỗi cụ thể (output bị cắt / nguyên nhân mơ hồ như "tsc fail") → "verified": false và ghi rõ vào "missing".
-7. "confidence" phải CALIBRATED trung thực — đây là XÁC SUẤT dự đoán của bạn, không phải mức độ mong muốn: đa số trường hợp "tự tin nhưng sai" nằm ở 0.6-0.8 chứ KHÔNG phải 0.95. Chỉ ≥0.9 khi bằng chứng tool trực tiếp khớp hoàn toàn mục tiêu; thiếu bằng chứng → ≤0.5.
+7. "confidence" = XÁC SUẤT MỤC TIÊU ĐÃ HOÀN THÀNH ĐÚNG (P(complete=true)) — KHÔNG PHẢI độ chắc chắn của bạn về bản thân verdict. Đây là lỗi semantics phổ biến nhất: mô hình cũ Output 0.99 khi complete=false (nghĩ "tôi 99% chắc là CHƯA xong") → hệ thống ghi KB + hiển thị người dùng độ tin 99% cho run THẤT BẠI (đo đạc thực tế: 66/78 verdict sai cách này, Brier 0.88/ECE 0.91). Thang quy đổi BẮT BUỘC: complete=true + verified=true + bằng chứng tool trực tiếp khớp hoàn toàn mục tiêu → 0.85-0.98; complete=true + verified=false → 0.4-0.7; complete=false → 0.0-0.3 (bằng chứng rõ ràng chưa đạt) hoặc 0.3-0.5 (chưa chắc chắn). NGHIÊM CẤM confidence ≥0.5 khi "complete": false — hệ thống sẽ tự clamp về 0.3 nếu vi phạm.
 8. E2E VERIFICATION (sửa code nhưng chỉ đọc lại file): mục tiêu có SỬA CODE mà bằng chứng kiểm định chỉ là file_read/grep (KHÔNG run_tests/lint/type_check dù thông báo hệ thống nói tool có sẵn) → chỉ chấp nhận "complete": true khi thay đổi là thuần hiển thị/nội dung tĩnh; thay đổi LOGIC → "complete": false và thêm vào "missing": "chạy run_tests/lint/type_check để kiểm định thay đổi logic".
 9. SIDE ISSUES (lỗi phát sinh trong quá trình làm — tool fail, lint/test lỗi ở file run đã đụng, lỗi logic do thay đổi của run tạo ra, config/hành vi hỏng...): liệt kê vào "sideIssues" (tối đa 4, ngắn gọn). Mục tiêu chính ĐẠT nhưng CÓ side issues còn tồn tại → "complete": true vẫn đúng cho MỤC TIÊU GỐC (đừng hạ complete vì lỗi ngoài mục tiêu), NHƯNG run chưa thể kết thúc khi các lỗi liên quan còn treo — chọn "debtDecision" theo mức độ LIÊN QUAN:
    - "continue": MẶC ĐỊNH cho mọi side issue LIÊN QUAN đến công việc của run này (lint/test fail ở file đã đụng, lỗi phát sinh từ thay đổi của run, tool fail chưa xử lý được, hành vi hỏng do run tạo...) → hệ thống TÁI LẬP chu kỳ debt xử lý NGAY trong run này (nhiều đợt liên tiếp nếu cần). Tác vụ chỉ thực sự trọn vẹn khi các vấn đề phát sinh liên quan đã được giải quyết — ĐỪNG vội phán kết thúc khi còn lỗi treo.
@@ -1104,7 +1104,14 @@ export function parseEvalVerdict(raw: string): EvalVerdict | null {
     if (!jsonStr) return null
     const obj = JSON.parse(jsonStr) as Record<string, unknown>
     const complete = obj.complete === true
-    const confidence = typeof obj.confidence === 'number' ? Math.min(1, Math.max(0, obj.confidence)) : (complete ? 0.8 : 0.5)
+    let confidence = typeof obj.confidence === 'number' ? Math.min(1, Math.max(0, obj.confidence)) : (complete ? 0.8 : 0.5)
+    // ROUND-8 AUDIT (2026-09-30) — CALIBRATION GUARD: đo thực tế 66/78 verdict
+    // cũ có confidence ≥0.9 khi complete=false (LLM hiểu nhầm confidence =
+    // "độ chắc chắn về verdict" thay vì P(complete); Brier 0.88, ECE 0.91) →
+    // AutoLearn (ngưỡng 0.5) học nhám run THẤT BẠI vào KB + ChatMessage
+    // metadata hiển thị người dùng độ tin 99% cho báo cáo chưa hoàn thành.
+    // Clamp phòng thủ: complete=false → tối đa 0.3 (dưới ngưỡng auto-learn).
+    if (!complete && confidence > 0.3) confidence = 0.3
     const verified = obj.verified === true
     const missing = Array.isArray(obj.missing) ? obj.missing.map(m => String(m).slice(0, 200)).filter(Boolean).slice(0, 6) : []
     const rootCause = typeof obj.rootCause === 'string' ? obj.rootCause.slice(0, 400) : ''

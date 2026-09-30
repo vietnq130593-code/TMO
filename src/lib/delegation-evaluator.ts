@@ -77,7 +77,7 @@ Nguyên tắc SẮT:
 2. Nhiệm vụ yêu cầu hành động (đọc/sửa/tạo/chạy) mà evidence KHÔNG có tool call tương ứng → "pass": false, gaps nêu thiếu bằng chứng gì.
 3. GRACE CHO VIỆC DỞ: sub-agent kết thúc bởi "iteration_limit" (hết vòng lặp) mà phần CỐT LÕI nhiệm vụ ĐÃ có bằng chứng tool đầy đủ → hãy pass=true theo PHẦN ĐÃ LÀM ĐƯỢC — KHÔNG fail chỉ vì phần còn lại chưa xong; liệt kê phần chưa xong vào "gaps" để agent cha giao lại (re-delegate). Timeout/hết token: cùng nguyên tắc — đánh giá phần đã làm được, đừng trừng phạt việc dở nếu phần cốt lõi đã có bằng chứng. Chỉ khi phần CỐT LÕI thiếu bằng chứng → pass=false.
 4. "gaps" = từng mục cụ thể còn thiếu so với task + acceptance criteria (tối đa 5). "note" = 1 câu tổng kết cho agent cha.
-5. "confidence" calibrated trung thực: chỉ ≥0.9 khi bằng chứng tool trực tiếp khớp hoàn toàn; thiếu bằng chứng → ≤0.5.
+5. "confidence" = XÁC SUẤT NHIỆM VỤ ĐÃ ĐẠT ĐÚNG (P(pass=true)) — KHÔNG PHẢI độ chắc chắn của bạn về bản thân verdict (lỗi semantics: output 0.99 khi pass=false nghĩa là "tôi 99% chắc CHƯA đạt" — SAI semantics, hệ thống ghi KB học nhám run thất bại). Thang quy đổi BẮT BUỘC: pass=true + bằng chứng tool trực tiếp khớp hoàn toàn acceptance criteria → 0.85-0.98; pass=true + bằng chứng một phần → 0.5-0.75; pass=false → 0.0-0.3 (bằng chứng rõ chưa đạt) hoặc 0.3-0.5 (chưa chắc). NGHIÊM CẤM ≥0.5 khi "pass": false — hệ thống tự clamp về 0.3 nếu vi phạm.
 6. Nếu sub-agent KHÔNG chạy tool nào (evidence rỗng + report thuần text) → pass chỉ khi nhiệm vụ là Q&A/thông tin thuần.
 
 Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích thêm):
@@ -96,7 +96,11 @@ function parseEvaluation(raw: string): DelegationEvaluation | null {
     // mâu thuẫn rule "thiếu bằng chứng → confidence ≤0.5"). JSON rác hoàn
     // toàn → null ở caller (fail-open giữ nguyên).
     const pass = obj.pass === true
-    const confidence = typeof obj.confidence === 'number' ? Math.min(1, Math.max(0, obj.confidence)) : 0.5
+    let confidence = typeof obj.confidence === 'number' ? Math.min(1, Math.max(0, obj.confidence)) : 0.5
+    // ROUND-8 AUDIT (2026-09-30) — CALIBRATION GUARD (mirror parseEvalVerdict
+    // của goal-loop): pass=false + confidence cao = LLM hiểu nhầm semantics
+    // ("độ chắc chắn về verdict" thay vì P(pass)) → clamp 0.3 phòng thủ.
+    if (!pass && confidence > 0.3) confidence = 0.3
     const gaps = Array.isArray(obj.gaps) ? obj.gaps.map(g => String(g).slice(0, 200)).filter(Boolean).slice(0, 5) : []
     const note = typeof obj.note === 'string' ? obj.note.slice(0, 300) : ''
     return { pass, confidence, gaps, note }

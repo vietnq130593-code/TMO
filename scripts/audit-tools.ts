@@ -184,6 +184,24 @@ async function main() {
   const rows: AuditRow[] = []
   const CTX = { agentName: 'AUDIT', sessionId: 'audit-tools' } as const
 
+  /**
+   * BUG FIX (audit 2026-09-30) - FALSE PASS khi tool tra error nghiep vu.
+   *
+   * `res.success === true` cua wrapper chi nghia la "tool DA CHAY", KHONG phai
+   * "tool THANH CONG". Executor tra `{ success: true, result: { error, ... } }` khi
+   * nghiep vu that bai - vi du serper: key 401 -> `{ error: 'Serper search failed',
+   * hint: 'All 1 keys failed (0 available)', poolStatus: '...' }`.
+   *
+   * Truoc fix: quy tac OK la `res.success === true || okIf(...)` nen serper bi ghi
+   * "OK" du thuc te hong hoan toan. Sau fix: result co field `error` la chuoi
+   * khac rong -> KHONG BAO GIO tinh la OK (ke ca khi okIf tra true).
+   */
+  function hasErrorPayload(r: unknown): boolean {
+    if (r == null || typeof r !== 'object' || Array.isArray(r)) return false
+    const e = (r as Record<string, unknown>).error
+    return typeof e === 'string' && e.trim().length > 0
+  }
+
   /** Gọi executeTool thật, tự tính duration + errorTag. Trả về result để caller
    * tái dùng (vd lấy task_id từ create_task). */
   async function call(
@@ -201,7 +219,8 @@ async function main() {
         `${tool}`,
       )
       const durationMs = Date.now() - t0
-      const ok = res.success === true || (opts.okIf ? opts.okIf(res.result) : false)
+      // BUG FIX (audit 2026-09-30): error payload trong result = FAIL du wrapper success:true.
+      const ok = !hasErrorPayload(res.result) && (res.success === true || (opts.okIf ? opts.okIf(res.result) : false))
       const errorTag = ok ? '' : firstErrLine(res.result, 100)
       // XFAIL = FAIL do CẤU HÌNH/THIẾT KẾT (flag OFF, server mock, on-demand down)
       // chứ không phải bug executor. Tách riêng để báo cáo không báo động sai.
@@ -249,7 +268,15 @@ async function main() {
   const webNote = (label: string) => (r: unknown) => {
     try {
       const s = JSON.stringify(r)
-      if (s.includes('z-ai-sdk')) return `${label} → chạy qua z-ai-sdk FALLBACK (API keys .env bị 401 — SDK chỉ chạy trong sandbox z.ai; ngoài sandbox cần thay key)`
+      // BUG FIX (audit 2026-09-30): chuoi "z-ai-sdk" xuat hien TRONG THONG BAO LOI
+      // ("...z-ai-sdk removed 2026-10-15") -> match chuoi tung gan nhan "chay qua
+      // z-ai-sdk FALLBACK" cho mot tool dang FAIL. Gio suy ra tu payload that.
+      if (hasErrorPayload(r)) {
+        const rr = r as Record<string, unknown>
+        const hint = typeof rr.hint === 'string' ? ` (${rr.hint})` : ''
+        const pool = typeof rr.poolStatus === 'string' ? ` — ${rr.poolStatus}` : ''
+        return `${label} — LOI provider${hint}${pool}`
+      }
       if (/"source":"(tavily|serper|jina)-key\d/.test(s)) return `${label} — API key thật hoạt động`
       return label
     } catch { return label }
@@ -258,7 +285,7 @@ async function main() {
   await call('knowledge_graph', 'native', '', { query: 'MATCH (n) RETURN labels(n) AS labels LIMIT 3' }, { timeoutMs: 60_000, note: 'Neo4j Aura thật (read-only)' })
   await call('knowledge_write', 'native', '', { entityName: 'AuditTestEntity', entityType: 'Concept', description: 'Entity test từ audit 21-d (ghi vào DB test cô lập)', category: 'testing' }, { note: 'SQLite buffer DB test' })
   await call('tavily', 'native', '', { query: 'bun javascript runtime' }, { timeoutMs: 45_000, noteFromResult: webNote('Tavily API') })
-  await call('serper', 'native', '', { query: 'bun javascript runtime' }, { timeoutMs: 45_000, noteFromResult: webNote('Serper API (0 key cấu hình)') })
+  await call('serper', 'native', '', { query: 'bun javascript runtime' }, { timeoutMs: 45_000, noteFromResult: webNote('Serper API') })
   await call('jina', 'native', '', { url: 'https://example.com' }, { timeoutMs: 45_000, noteFromResult: webNote('Jina API') })
   await call('web_search', 'native', 'ENABLE_WEB_UNIFIED', { query: 'bun javascript runtime' }, { timeoutMs: 45_000, noteFromResult: webNote('Tavily→Serper→z-ai-sdk chain') })
   await call('web_fetch', 'native', 'ENABLE_WEB_UNIFIED', { url: 'https://example.com' }, { timeoutMs: 45_000, noteFromResult: webNote('Jina→z-ai-sdk chain') })
