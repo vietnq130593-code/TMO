@@ -74,7 +74,12 @@ function intEnv(name: string, fallback: number): number {
   return Number.isFinite(v) && v >= 0 ? Math.floor(v) : fallback
 }
 
-/** Số vòng LLM tối đa cho sub-agent (mặc định 5 — task delegate phải gọn; 0 = ∞ — CI-1) */
+/**
+ * Số vòng LLM tối đa cho sub-agent (mặc định 5; 0 = ∞ — CI-1).
+ * USER DIRECTIVE (2026-10, lần 3): "subagent bị giới hạn 12 chu kỳ không thể
+ * triển khai khối công việc lớn — sửa lại thành vô hạn" → cấu hình .env hiện
+ * tại = 0 (KHÔNG GIỚI HẠN vòng, mirror GOAL_LOOP_MAX_CYCLES=0 của loop cha).
+ */
 const SUBAGENT_MAX_ITERATIONS = intEnv('SUBAGENT_MAX_ITERATIONS', 5)
 /** Token budget riêng của MỖI lần delegate (mặc định 40k; 0 = ∞ — CI-1) */
 const SUBAGENT_TOKEN_BUDGET = intEnv('SUBAGENT_TOKEN_BUDGET', 40_000)
@@ -83,9 +88,14 @@ const SUBAGENT_TIMEOUT_MS = intEnv('SUBAGENT_TIMEOUT_MS', 8 * 60_000)
 /**
  * FIX 2026-09-11 (review #7 MEDIUM): khi CẢ 3 cap đều = 0 (unlimited) sub-agent
  * không còn phanh nào → parent kẹt vĩnh viễn trong executeTool. Trần cứng dự
- * phòng: KHÔNG thể tắt qua env — chỉ kích hoạt khi cả 3 cap đều 0.
+ * phòng chỉ kích hoạt khi cả 3 cap đều 0.
+ * USER DIRECTIVE (2026-10 — "vô hạn"): trần cứng giờ CẤU HÌNH ĐƯỢC qua env
+ * SUBAGENT_HARD_CEILING_ITERATIONS (mặc định 200; 0 = TẮT hẳn — sub-agent chạy
+ * VÔ HẠN thật, chỉ dừng bởi conclude (tự nhận hoàn thành) / cancel / error;
+ * mỗi call LLM vẫn có per-call timeout 21' — mirror pattern SAFE_CAP_* của
+ * goal-loop, nơi user cũng đã đặt 0 = ∞ thật).
  */
-const SUBAGENT_HARD_CEILING_ITERATIONS = 200
+const SUBAGENT_HARD_CEILING_ITERATIONS = intEnv('SUBAGENT_HARD_CEILING_ITERATIONS', 200)
 const ALL_SUBAGENT_CAPS_UNLIMITED =
   SUBAGENT_MAX_ITERATIONS === 0 && SUBAGENT_TOKEN_BUDGET === 0 && SUBAGENT_TIMEOUT_MS === 0
 const SUBAGENT_EFFECTIVE_MAX_ITERATIONS = ALL_SUBAGENT_CAPS_UNLIMITED
@@ -528,7 +538,12 @@ async function runSubAgentForProfileInner(params: {
       try { endAgentRun(sessionId, delegationRunId, status, summary) } catch { /* fail-open */ }
     }
 
-    console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${ALL_SUBAGENT_CAPS_UNLIMITED ? SUBAGENT_HARD_CEILING_ITERATIONS + ' (trần cứng — cả 3 cap = 0)' : SUBAGENT_MAX_ITERATIONS === 0 ? '∞' : SUBAGENT_MAX_ITERATIONS} vòng, budget ${SUBAGENT_TOKEN_BUDGET === 0 ? '∞' : SUBAGENT_TOKEN_BUDGET} tokens${SUBAGENT_TIMEOUT_MS === 0 ? ', timeout ∞' : ''}, ${allowedTools.length} tools${delegationRunId ? `, run ${delegationRunId.slice(0, 22)}…` : ''})`)
+    const maxIterDisplay = ALL_SUBAGENT_CAPS_UNLIMITED
+      ? (SUBAGENT_HARD_CEILING_ITERATIONS > 0
+          ? `${SUBAGENT_HARD_CEILING_ITERATIONS} (trần cứng dự phòng — cả 3 cap = 0)`
+          : '∞ (KHÔNG GIỚI HẠN — user directive)')
+      : SUBAGENT_MAX_ITERATIONS === 0 ? '∞' : String(SUBAGENT_MAX_ITERATIONS)
+    console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${maxIterDisplay} vòng, budget ${SUBAGENT_TOKEN_BUDGET === 0 ? '∞' : SUBAGENT_TOKEN_BUDGET} tokens${SUBAGENT_TIMEOUT_MS === 0 ? ', timeout ∞' : ''}, ${allowedTools.length} tools${delegationRunId ? `, run ${delegationRunId.slice(0, 22)}…` : ''})`)
 
     // Mini ReAct loop
     const systemPrompt = profile.instruction || `Bạn là ${profile.name} — agent chuyên trách. Hoàn thành nhiệm vụ được delegate một cách tự chủ, ngắn gọn.`
@@ -811,7 +826,7 @@ async function runSubAgentForProfileInner(params: {
       // timeout — trước đây dead-code vì endedBy khởi tạo 'error' (fix ở trên).
       if (state.endedBy !== 'concluded' && state.endedBy !== 'cancelled' && state.endedBy !== 'error' && state.endedBy !== 'timeout') {
         state.forceWrapUp = true
-        if (!state.wrapUpReason) state.wrapUpReason = `hết ${SUBAGENT_EFFECTIVE_MAX_ITERATIONS} vòng${ALL_SUBAGENT_CAPS_UNLIMITED ? ' (trần cứng dự phòng — cả 3 cap = 0)' : ''}`
+        if (!state.wrapUpReason) state.wrapUpReason = `hết ${SUBAGENT_EFFECTIVE_MAX_ITERATIONS === 0 ? '∞' : SUBAGENT_EFFECTIVE_MAX_ITERATIONS} vòng${ALL_SUBAGENT_CAPS_UNLIMITED && SUBAGENT_HARD_CEILING_ITERATIONS > 0 ? ' (trần cứng dự phòng — cả 3 cap = 0)' : ''}`
         state.endedBy = state.wrapUpReason.includes('token')
           ? 'token_budget'
           : state.wrapUpReason.includes('thời gian') ? 'timeout' : 'iteration_limit'

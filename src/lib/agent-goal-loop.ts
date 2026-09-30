@@ -3780,7 +3780,10 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
               // rescue thật lớn đều chết vì iteration_limit (52% runs) → arbitor
               // fail → vòng lặp reinforcement chống-delegate. Giỏ task scope chẩn
               // đoán BOUNDED ≤5 bước (đọc trạng thái → 2-3 giả thuyết → đề xuất
-              // hướng đi) — làm được trọn vẹn trong tầm vòng.
+              // hướng đi) — làm được trọn vẹn trong tầm vòng. (Cập nhật 2026-10:
+              // user directive bỏ trần — SUBAGENT_MAX_ITERATIONS=0, vòng sub-agent
+              // giờ ∞; scope chẩn đoán BOUNDED vẫn giữ vì nhiệm vụ này là CHẨN
+              // ĐOÁN, không phải triển khai.)
               const dispatched = await dispatchAgentByOmega({
                 agent: suggested,
                 task: `Chẩn đoán nguyên nhân bế tắc của agent "${agentName}" (chu kỳ ${cycle}, verified=false) trong ≤5 bước: đọc trạng thái hiện tại, liệt kê 2-3 giả thuyết nguyên nhân, đề xuất hướng đi cụ thể.\nVấn đề: ${(verdict.rootCause || userMessage).slice(0, 500)}\nKhuyến nghị của Omega: ${consult.advisory?.recommendation?.slice(0, 500) || '(theo phân tích của bạn)'}`,
