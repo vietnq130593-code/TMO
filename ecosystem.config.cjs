@@ -68,24 +68,25 @@ module.exports = {
       autorestart: true,
       max_restarts: 50,
       restart_delay: 4000,
-      // Memory guard (CẬP NHẬT 2026-09-30 — quan sát vòng 9, sửa nhận thức
-      // LỖI THỜI): pm2-start.sh dùng `exec node next dev` → PM2 đo TRỰC TIẾP
-      // RSS process Next.js (nhận thức cũ "PM2 chỉ đo wrapper, không bao giờ
-      // tự kích hoạt" đã sai từ khi thêm exec). Bằng chứng 08:20:10 hôm nay:
-      // PM2 max_memory_restart=1G kích hoạt SIGINT IM LẶNG (không log, không
-      // graceful flush) khi RSS vượt 1GB sau 62 phút load nặng — cắt ngang
-      // TRƯỚC in-app MemWatchdog 1400MB (đường đua lưu tử: giới hạn hẹp hơn
-      // thắng) → subagent đang bay mất trắng (45 tool calls + ~700k tokens,
-      // không kịp ghi AgentRunRecord).
+      // Memory guard (CẬP NHẬT 2026-09-30 vòng 11 — tiếp nối vòng 9, sửa lại
+      // NHẬN THỨC LẦN 2): vòng 9 nâng 1G→1800M với giả định RSS app sẽ giữ
+      // dưới ~1.4GB (watchdog 1400MB thắng cuộc đua). Bằng chứng vòng 11
+      // (11:24-11:41): mission audit SENTINEL + subagent ALISTA + delegations
+      // đẩy RSS lên 2110-2408MB CHỈ SAU ~20 phút mission — PM2 1800M giết
+      // IM LẶNG TRƯỚC khi MemWatchdog 1400 kịp check 2/2 (restart #93-98,
+      // 5 lần/17 phút, 1 subagent + 1 E2E request mất trắng). Mission nặng
+      // trong dev mode (turbopack + transcript lớn + Zen buffers) dùng
+      // 1.5-2.4GB là BÌNH THƯỜNG — box 4GB vẫn còn ~2.3GB available.
       //
-      // THIẾT KẾ MỚI — thứ tự đúng: 1400MB (MemWatchdog trong app, self-exit
-      // SẠCH: log + checkpoint flush + durable RESUME) → 1800MB (PM2 backstop
-      // im lặng, chỉ kích hoạt khi watchdog bất lực vd event-loop kẹt).
-      // 1800M cho watchdog cửa sổ biên độ dư (2 lần kiểm tra × 60s + biên độ tăng
-      // RSS ~400MB) để đường graceful LUÔN thắng cuộc đua. Cặp với global
-      // guard MemAvailable<450MB (khi RSS>900MB) tự thoát sớm khi memcg 4GB
-      // cạn tổng thể — lớp chống kernel OOM-killer thật (2026-09-28).
-      max_memory_restart: '1800M',
+      // THIẾT KẾ MỚI (vòng 11): MEM_WATCHDOG_MB 1400→2400 (chống churn giữa
+      // mission: app tự self-exit SẠCH khi RSS vượt 2400MB × 2 checks — log +
+      // checkpoint flush + durable RESUME) → PM2 backstop 3200M (chỉ kích
+      // hoạt khi watchdog bất lực vd event-loop kẹt — 800MB cửa sổ cho watchdog
+      // thắng cuộc đua). Lớp chống kernel OOM THẬT vẫn là global guard
+      // MemAvailable<450MB (khi RSS>900MB) — tự thoát NGAY lần check đầu bất
+      // kể ngưỡng RSS, bảo vệ box 4GB khi memcg cạn tổng thể (giữ nguyên từ
+      // 2026-09-28).
+      max_memory_restart: '3200M',
       // Route both stdout + stderr into the single monitored dev.log,
       // appending (merge_logs) on every restart so history is preserved.
       out_file: '/home/z/my-project/dev.log',

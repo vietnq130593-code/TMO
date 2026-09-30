@@ -162,6 +162,99 @@ function matchesSchemaType(value: unknown, schemaType: unknown): boolean {
 }
 
 /**
+ * ROUND-11 (vòng quan sát 9 — tiếp nối, mission cmunz426n) — ARG SHAPE-HEALING.
+ *
+ * Bằng chứng root-cause (probe scripts/probe-todowrite-shape.ts + ToolMetric
+ * Omega 11:00-11:11): model space-bunny-free phát native tool_call todo_write
+ * với `todos` = {"item": [...]} — bọc mảng trong object (mirror trường "items"
+ * của JSON schema) — 3/3 call fail "cần array, nhận object", evaluator unverified,
+ * auto-escalate đốt 979k tokens sub-agent chẩn đoán, rồi run chết no_progress
+ * chu kỳ 4 (tổng ~2.24M tokens, 0 tiến triển nhiệm vụ). Nội dung bên trong
+ * wrapper HOÀN TOÀN đúng shape — chỉ lớp bọc sai.
+ *
+ * Heal NGAY TRƯỚC validate (mọi cửa vào executeTool: goal-loop TMO path,
+ * subagent, API /api/tools/execute, bridge CLI tmo_*): biến các shape sai
+ * PHỔ BIẾN của LLM yếu về đúng schema, kèm note dạy model cho lần sau.
+ * Chỉ heal các trường hợp XÁC ĐỊNH được (không đoán mò) — còn lại validator
+ * báo lỗi chuẩn với ví dụ đúng (FIX kèm theo).
+ *
+ * Returns: danh sách note mô tả phép heal (rỗng = không đụng args). Args được
+ * heal IN-PLACE (đã là bản sao của caller — toolArgs spread tại mọi cửa vào).
+ */
+export function healToolArgs(
+  def: ToolDefinition,
+  args: Record<string, unknown>,
+): string[] {
+  const notes: string[] = []
+  try {
+    const params = def.function.parameters
+    if (!params || typeof params !== 'object') return notes
+    const props = (params.properties ?? {}) as Record<string, Record<string, unknown>>
+    for (const [key, schema] of Object.entries(props)) {
+      if (!schema || typeof schema !== 'object') continue
+      const expected = schema.type
+      const value = args[key]
+      if (value === undefined || value === null) continue
+
+      if (expected === 'array' && !Array.isArray(value)) {
+        // Rule 1 — chuỗi JSON chứa mảng: "[{...}]" → parse
+        if (typeof value === 'string') {
+          try {
+            const parsed = JSON.parse(value)
+            if (Array.isArray(parsed)) {
+              args[key] = parsed
+              notes.push(`tham số "${key}" gửi vào là chuỗi JSON — hệ thống đã parse thành mảng (${parsed.length} phần tử). Lần sau gửi thẳng mảng JSON.`)
+              continue
+            }
+          } catch { /* không phải JSON — để validator báo lỗi chuẩn */ }
+        }
+        // Rule 2 — object bọc đúng 1 mảng: {"item": [...]}, {"todos": [...]},
+        // {"list": [...]} → unwrap (trường hợp probe tái hiện — phổ biến nhất)
+        if (typeof value === 'object') {
+          const entries = Object.entries(value as Record<string, unknown>)
+          const arrayEntries = entries.filter(([, v]) => Array.isArray(v))
+          if (arrayEntries.length === 1 && entries.length === 1) {
+            const [wrapKey, arr] = arrayEntries[0]
+            args[key] = arr
+            notes.push(`tham số "${key}" gửi vào bị bọc trong object {"${wrapKey}": [...]} — hệ thống đã unwrap thành mảng (${(arr as unknown[]).length} phần tử). Lần sau gửi THẲNG mảng: {"${key}": [{...}, ...]}.`)
+            continue
+          }
+          // Rule 3 — object đơn trông như 1 phần tử của mảng (mọi key ⊆ item
+          // props) → wrap [value] (model gửi 1 todo thay vì mảng todo)
+          const items = schema.items as Record<string, unknown> | undefined
+          const itemProps = items && typeof items === 'object' && items.properties && typeof items.properties === 'object'
+            ? Object.keys(items.properties as Record<string, unknown>)
+            : []
+          if (itemProps.length > 0) {
+            const keys = Object.keys(value as Record<string, unknown>)
+            const isSubset = keys.length > 0 && keys.every(k => itemProps.includes(k))
+            if (isSubset) {
+              args[key] = [value]
+              notes.push(`tham số "${key}" gửi vào là 1 object đơn — hệ thống đã wrap thành mảng 1 phần tử. Lần sau gửi mảng: {"${key}": [{...}]}.`)
+              continue
+            }
+          }
+        }
+      }
+
+      // Rule 4 — tham số object nhưng nhận chuỗi JSON parse được → parse
+      if (expected === 'object' && typeof value === 'string') {
+        try {
+          const parsed = JSON.parse(value)
+          if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            args[key] = parsed
+            notes.push(`tham số "${key}" gửi vào là chuỗi JSON — hệ thống đã parse thành object. Lần sau gửi object JSON.`)
+          }
+        } catch { /* để validator báo lỗi chuẩn */ }
+      }
+    }
+  } catch {
+    // fail-open — heal lỗi KHÔNG được phép chặn tool
+  }
+  return notes
+}
+
+/**
  * Validate args theo ToolDefinition.parameters. Trả về chuỗi lỗi (không null =
  * sai) — message tiếng Việt kèm schema prop vi phạm để LLM phát lại đúng.
  */
@@ -189,7 +282,21 @@ export function validateToolArgsStrict(
       if (!schema) continue // extra prop — lenient
       const t = schema.type
       if (t && !matchesSchemaType(value, t)) {
-        problems.push(`tham số "${key}" sai kiểu — cần ${t}, nhận ${Array.isArray(value) ? 'array' : typeof value}${schema.description ? ` (${String(schema.description).slice(0, 120)})` : ''}`)
+        // ROUND-11 — kèm VÍ DỤ CỤ THỂ đúng shape cho param sai kiểu (bằng
+        // chứng: model đọc "cần array, nhận object" + schema description vẫn
+        // lặp sai y hệt 3 lần — LLM yếu cần ví dụ, không phải mô tả).
+        let exampleHint = ''
+        if (t === 'array') {
+          const items = schema.items as Record<string, unknown> | undefined
+          const itemProps = items && typeof items === 'object' && items.properties && typeof items.properties === 'object'
+            ? Object.keys(items.properties as Record<string, unknown>)
+            : []
+          const itemShape = itemProps.length > 0
+            ? `{${itemProps.slice(0, 3).map(p => `"${p}": "..."`).join(', ')}}`
+            : '...'
+          exampleHint = ` — gửi THẲNG mảng: {"${key}": [${itemShape}, ...]} (KHÔNG bọc mảng trong object)`
+        }
+        problems.push(`tham số "${key}" sai kiểu — cần ${t}, nhận ${Array.isArray(value) ? 'array' : typeof value}${exampleHint}${schema.description ? ` (mô tả tham số: ${String(schema.description).slice(0, 100)})` : ''}`)
         continue
       }
       if (Array.isArray(schema.enum) && !schema.enum.some(e => String(e) === String(value))) {
@@ -1965,7 +2072,12 @@ export function buildCompactToolSchemasSection(toolNames: string[]): string {
     return cut
   }
   const lines: string[] = []
-  lines.push('━━━ TOOL SCHEMAS — các tool này ĐÃ ĐƯỢC TRUYỀN QUA API native function calling: ƯU TIÊN emit tool_calls qua API (chuẩn OpenAI). Chỉ khi API không hỗ trợ mới viết text: tool_call: <tên>({...}) với ĐÚNG tên param (* = bắt buộc) ━━━')
+  // ROUND-11 — header cũ ghi sai "các tool này ĐÃ ĐƯỢC TRUYỀN QUA API native
+  // function calling" (native tools thường OFF — TMO_GOAL_LOOP_NATIVE_TOOLS=0
+  // — body.tools KHÔNG được gửi) → model tin tools đã đăng ký native, tự chế
+  // shape args theo schema 1 dòng (bằng chứng probe: todos = {"item": [...]}).
+  // Header mới: nói đúng thực tế + quy tắc vàng cho tham số mảng.
+  lines.push('━━━ TOOL SCHEMAS — gọi tool với ĐÚNG tên param (* = bắt buộc). Nếu API native function calling hoạt động thì emit tool_calls chuẩn OpenAI; nếu không thì viết text: tool_call: <tên>({...JSON...}). QUY TẮC VÀNG: tham số kiểu array → truyền THẲNG mảng JSON — ĐÚNG: {"todos": [...]} — SAI: {"todos": {"item": [...]}} (bọc mảng trong object) hay {"todos": "chuỗi"} ━━━')
   for (const d of defs) {
     const f = d.function
     const props = (f.parameters?.properties ?? {}) as Record<string, { type?: string; description?: string }>
@@ -1976,6 +2088,12 @@ export function buildCompactToolSchemasSection(toolNames: string[]): string {
     })
     const desc = safeSlice(String(f.description ?? '').replace(/\s+/g, ' '), 90)
     lines.push(`- ${f.name}(${paramParts.join(', ') || 'không params'}) — ${desc}`)
+  }
+  // ROUND-11 — ví dụ chuẩn todo_write (protocol ép gọi ở BƯỚC ĐẦU TIÊN của mọi
+  // task ≥2 bước — nhưng schema 1 dòng không cho thấy item shape → model đoán
+  // mò sai). Chỉ thêm khi agent CÓ todo_write trong whitelist.
+  if (toolNames.includes('todo_write')) {
+    lines.push('- VÍ DỤ CHUẨN todo_write: tool_call: todo_write({"todos": [{"content": "mô tả việc [Nghiệm thu 1]", "status": "pending", "priority": "high"}]}) — todos là MẢNG các object todo; cập nhật chỉ cần {"todos": [{"id": "id-đã-có", "status": "completed"}]}')
   }
   return lines.join('\n')
 }
@@ -2107,6 +2225,16 @@ export async function executeTool(
       // bridge/goal-loop không truyền sessionId thì plan rơi 'default' vô hình
       toolName === 'exit_plan_mode') {
     if (context?.sessionId && !args.sessionId) args.sessionId = context.sessionId
+    // ROUND-11 — 'default' là placeholder hallucinated phổ biến (bằng chứng
+    // probe round-11: model phát {"sessionId": "default", "agentRole": "TL"}),
+    // KHÔNG phải khai báo chủ đích → override về session thật của context để
+    // todo không rơi bucket "default" vô hình (buildRunTodosBlock + coverage
+    // truy vấn theo session thật). SessionId KHÁC thật (≠ 'default', ≠ context)
+    // vẫn được tôn trọng — dành cho cross-session write có chủ đích.
+    if (context?.sessionId && args.sessionId === 'default') {
+      console.log(`[ToolExecutor] sessionId "default" → override về session thật của context (${toolName})`)
+      args.sessionId = context.sessionId
+    }
     if (context?.runId && !args.runId) args.runId = context.runId
   }
 
@@ -2210,10 +2338,21 @@ export async function executeTool(
     // schema để LLM phát lại đúng ở lượt kế (không để tool fail mơ hồ bên trong).
     // Lenient: KHÔNG chặn extra props (context stamping chèn sessionId/runId).
     // Kill-switch: DISABLE_TOOL_ARG_VALIDATION=on. Custom tool (không def) tự do.
+    //
+    // ━━━ ROUND-11 — SHAPE-HEALING TRƯỚC validate ━━━
+    // Bằng chứng mission cmunz426n: todo_write 3/3 fail "cần array, nhận object"
+    // → mission chết no_progress, ~2.24M tokens cháy. Heal các shape sai phổ
+    // biến ({"item": [...]}, chuỗi JSON, object đơn) về đúng schema TRƯỚC khi
+    // validate — chạy KỂ CẢ khi validation bị kill-switch (heal là phục hồi,
+    // không phải chặn). Notes gắn vào result để model học cho lần sau.
+    const builtinDef = ALL_TOOL_DEFINITIONS[toolName]
+    const argHealNotes = builtinDef ? healToolArgs(builtinDef, args) : []
+    if (argHealNotes.length > 0) {
+      console.log(`[ToolExecutor] arg-heal ${toolName}: ${argHealNotes.join(' | ').slice(0, 240)}`)
+    }
     if (process.env.DISABLE_TOOL_ARG_VALIDATION !== 'on') {
-      const def = ALL_TOOL_DEFINITIONS[toolName]
-      if (def) {
-        const argErr = validateToolArgsStrict(def, args)
+      if (builtinDef) {
+        const argErr = validateToolArgsStrict(builtinDef, args)
         if (argErr) {
           recordActivity(false, argErr)
           return {
@@ -3695,6 +3834,14 @@ export async function executeTool(
     // outer luôn success:true → goal-loop evidence ghi "✓" cho tool THẤT BẠI
     // bên trong (tín hiệu mâu thuẫn cho evaluator + AUTO-ESCALATE không thấy
     // được dispatch fail).
+    // ROUND-11 — gắn heal notes vào result object (chỉ khi result là object:
+    // không đổi type kết quả của tool trả string) để transcript vòng LLM kế
+    // thấy phép chuẩn hóa → học shape đúng.
+    if (argHealNotes.length > 0 && result !== null && typeof result === 'object' && !Array.isArray(result)) {
+      try {
+        ;(result as Record<string, unknown>).argHeal = argHealNotes
+      } catch { /* fail-open — note là best-effort */ }
+    }
     const innerSuccess = result !== null && typeof result === 'object'
       && typeof (result as Record<string, unknown>).success === 'boolean'
       ? (result as Record<string, unknown>).success === true

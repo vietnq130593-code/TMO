@@ -541,6 +541,30 @@ async function runSubAgentForProfileInner(params: {
         task,
       })
     } catch { /* fail-open */ }
+    // ROUND-11 (vòng quan sát 9 — FIX subagent vô hình khi bị restart giết):
+    // trước đây row AgentRunRecord của delegation CHỈ được ghi lúc kết thúc
+    // (persistAgentRunRecord trong endAgentRun) → server restart giữa chừng
+    // (bằng chứng: sub_1790767073236_5 bị MemWatchdog restart #93 giết lúc
+    // 11:27 — không kịp ghi row, ~phút làm việc mất trắng KHÔNG dấu vết,
+    // parent resume không biết delegation từng bay). Giờ insert row 'running'
+    // NGAY lúc start (mirror Task 20-c của goal-loop parent) — restart để lại
+    // row mồ côi mà boot stale-cleanup (instrumentation Task 54) lật thành
+    // failed/crashed → mất mát hiển thị được trong UI/metrics + parent resume
+    // dò được (agent-goal-loop resume notice). Fire-and-forget, fail-open.
+    if (delegationRunId && sessionId) {
+      void (async () => {
+        try {
+          const { insertAgentRunRecordRunning } = await import('@/lib/metrics-db')
+          await insertAgentRunRecordRunning({
+            sessionId,
+            runId: delegationRunId,
+            parentRunId: parentRunId ?? null,
+            agentName: profile.name,
+            startedAt: new Date(),
+          })
+        } catch { /* fail-open — hiển thị thôi, không được phép lỗi delegation */ }
+      })()
+    }
     finishDelegationRun = (status: 'done' | 'error' | 'cancelled', summary: string) => {
       if (!delegationRunId || !sessionId) return
       try { endAgentRun(sessionId, delegationRunId, status, summary) } catch { /* fail-open */ }
@@ -738,14 +762,26 @@ async function runSubAgentForProfileInner(params: {
           // DELEGATION CONTRACT — todo_write: inject sessionId của parent +
           // runId delegation (mirror agent-goal-loop CI-2): todos của sub-agent
           // gắn đúng phiên chat + run riêng → hiển thị trong panel Thought
-          // Process thay vì rơi scope 'default' vô hình. Agent tự khai sessionId
-          // khác → tôn trọng, không đụng.
+          // Process thay vì rơi scope 'default' vô hình.
+          //
+          // ROUND-11 (vòng quan sát 9 — FIX 'default' hallucination): model
+          // hay tự chế {"sessionId": "default", "agentRole": "TL"} (bằng chứng
+          // probe round-11) → chính sách cũ "tôn trọng sessionId khác" tôn
+          // trọng ảo giác → todo rơi bucket "default" mất dấu. Sub-agent loop
+          // LÀ chủ sở hữu scope → LUÔN ép sessionId/runId/agentRole đúng
+          // (khai báo trùng = no-op).
           const toolArgs: Record<string, unknown> = { ...tc.args }
           if (tc.name === 'todo_write') {
             sawTodoWrite = true
-            if (sessionId && (!toolArgs.sessionId || toolArgs.sessionId === sessionId)) {
-              toolArgs.sessionId = toolArgs.sessionId || sessionId
-              if (delegationRunId && !toolArgs.runId) toolArgs.runId = delegationRunId
+            if (sessionId) {
+              if (toolArgs.sessionId !== sessionId) {
+                if (toolArgs.sessionId) {
+                  console.log(`[SubAgent] ${profile.name} todo_write: sessionId khai báo "${String(toolArgs.sessionId).slice(0, 60)}" ≠ session thật → ép lại (chống todo rơi scope sai)`)
+                }
+                toolArgs.sessionId = sessionId
+              }
+              if (delegationRunId && toolArgs.runId !== delegationRunId) toolArgs.runId = delegationRunId
+              if (toolArgs.agentRole !== profile.name) toolArgs.agentRole = profile.name
             }
             // USER DIRECTIVE 2026-10-29 — snapshot MERGE (không thay thế): lần
             // update todo_write thường chỉ chứa MỤC THAY ĐỔI → thay thế cả snapshot

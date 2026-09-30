@@ -39,7 +39,8 @@
  * tracker insert 1 row đầy đủ khi run kết thúc.
  */
 
-import { insertAgentRunRecord } from '@/lib/metrics-db'
+// ROUND-11: insertAgentRunRecord/updateLatestAgentRunRecord giờ dynamic
+// import trong persistAgentRunRecord (update-first) — bỏ static import.
 
 // ==================== Types ====================
 
@@ -250,34 +251,58 @@ function persistAgentRunRecord(run: AgentRun): void {
     const toolFailures = run.events.filter(
       e => e.type === 'tool' && e.success === false,
     ).length
-    // insertAgentRunRecord: delegate path nếu Prisma instance fresh, raw-SQL
-    // bridge nếu stale (dev server chạy trước db:push) — Task 20-b
-    void insertAgentRunRecord({
-      sessionId: run.sessionId,
-      // FIX 2026-09-14 #5 — wire runId + parentRunId: delegation rows
-      // (sub_xxx) giờ truy vấn được theo run (runId) + theo run cha
-      // (parentRunId) từ AgentRunRecord.
-      runId: run.runId,
-      parentRunId: run.parentRunId ?? null,
-      messageId: null, // 20-c: wire ChatMessage id từ goal-loop
-      agentId: null, // 20-c: wire agentId (tracker chỉ có agentName)
+    // ROUND-11 — UPDATE-FIRST rồi mới INSERT-fallback: delegation giờ insert
+    // row 'running' NGAY lúc start (subagent-delegate — chống mất trắng khi
+    // restart giết subagent giữa chừng). Blind insert ở đây sẽ tạo DOUBLE ROW
+    // cho mọi delegation kết thúc bình thường. Update row start (khớp
+    // sessionId+runId) với metadata đầy đủ; update khớp 0 dòng (đường cũ
+    // không có row start / db bị wipe) → fallback insert như trước.
+    const endData: import('@/lib/metrics-db').AgentRunRecordUpdate = {
       agentName: run.agentName,
       status: runStatusToRecordStatus(run.status),
       // v1 heuristic — stopReason budget thật (max_cycles/time_budget/
       // token_budget/no_progress) nằm trong goal-loop, task 20-c wire
       stopReason: run.status === 'done' ? 'complete' : run.status === 'error' ? 'error' : 'cancelled',
-      cycles: null, // 20-c: wire số chu kỳ goal-loop
-      tokensUsed: run.tokensUsed ?? null, // FIX 2026-09-15 #6: token thật từ caller (trước đây null cứng)
+      ...(run.tokensUsed != null ? { tokensUsed: run.tokensUsed } : {}), // FIX 2026-09-15 #6: token thật từ caller
       toolCalls: run.counters.toolCalls,
       toolFailures,
       durationMs: Math.max(0, endedAt - run.startedAt),
-      evaluatorConfidence: null, // 20-c: wire evaluator verdict confidence
       complete: run.status === 'done',
-      startedAt: new Date(run.startedAt),
       completedAt: new Date(endedAt),
-    }).catch(() => {
-      /* fail-open — không crash run vì lỗi metrics */
-    })
+    }
+    void (async () => {
+      try {
+        const { updateLatestAgentRunRecord } = await import('@/lib/metrics-db')
+        const updated = await updateLatestAgentRunRecord(run.sessionId, endData, run.runId)
+        if (updated > 0) return // row start đã có — update xong, không insert
+        // Fallback — đường cũ (row start chưa tồn tại): insert full
+        const { insertAgentRunRecord } = await import('@/lib/metrics-db')
+        await insertAgentRunRecord({
+          sessionId: run.sessionId,
+          // FIX 2026-09-14 #5 — wire runId + parentRunId: delegation rows
+          // (sub_xxx) giờ truy vấn được theo run (runId) + theo run cha
+          // (parentRunId) từ AgentRunRecord.
+          runId: run.runId,
+          parentRunId: run.parentRunId ?? null,
+          messageId: null, // 20-c: wire ChatMessage id từ goal-loop
+          agentId: null, // 20-c: wire agentId (tracker chỉ có agentName)
+          agentName: run.agentName,
+          status: runStatusToRecordStatus(run.status),
+          stopReason: run.status === 'done' ? 'complete' : run.status === 'error' ? 'error' : 'cancelled',
+          cycles: null, // 20-c: wire số chu kỳ goal-loop
+          tokensUsed: run.tokensUsed ?? null,
+          toolCalls: run.counters.toolCalls,
+          toolFailures,
+          durationMs: Math.max(0, endedAt - run.startedAt),
+          evaluatorConfidence: null, // 20-c: wire evaluator verdict confidence
+          complete: run.status === 'done',
+          startedAt: new Date(run.startedAt),
+          completedAt: new Date(endedAt),
+        })
+      } catch {
+        /* fail-open — không crash run vì lỗi metrics */
+      }
+    })()
   } catch { /* fail-open */ }
 }
 

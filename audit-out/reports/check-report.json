@@ -1,6 +1,6 @@
 {
   "schema": "tmo-audit-check-report/2.0",
-  "generatedAt": "2026-09-30T09:25:50.272Z",
+  "generatedAt": "2026-09-30T11:58:32.114Z",
   "gitHead": "fb1f2a890ab1c9ef8b1bde5c082c4652cc035f0a",
   "manifestGeneratedAt": "2026-09-30T09:25:41.756Z",
   "totals": {
@@ -12,7 +12,7 @@
       "BLOCKED_CONFIG": 17
     },
     "violations": 0,
-    "warnings": 0
+    "warnings": 1
   },
   "evidenceHashes": {
     "audit-out/tool-probes/opencode.json": "47fd6f7b0763300f",

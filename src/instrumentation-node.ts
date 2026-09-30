@@ -60,6 +60,13 @@ const globalForMemWatchdog = globalThis as unknown as { __tmoMemWatchdogStarted?
 if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
   globalForMemWatchdog.__tmoMemWatchdogStarted = true
   const MEM_WATCHDOG_MB = Number(process.env.MEM_WATCHDOG_MB ?? 1700)
+  // ROUND-11 (11:46:31 kernel GLOBAL OOM giết next-server RSS 1.96GB): cadence
+  // kiểm tra 60s cũ cho kernel cửa sổ đua trống giữa 2 lần check khi RSS tăng
+  // nhanh (~1GB/phút lúc cold-boot recompile + mission resume). Interval giờ
+  // env-tunable (MEM_WATCHDOG_INTERVAL_MS, mặc định 60s giữ hành vi cũ) — cấu
+  // hình production hiện 30s: phát hiện vượt ngưỡng sớm gấp đôi, global guard
+  // MemAvailable cũng đập mỗi 30s thay vì 60s.
+  const MEM_WATCHDOG_INTERVAL_MS = Math.max(10_000, Number(process.env.MEM_WATCHDOG_INTERVAL_MS ?? 60_000))
   // ROUND-3 FIX (2026-09-29 — quan sát vận hành vòng 3): kernel OOM-killer còn
   // xuống tay TRƯỚC khi RSS chạm ngưỡng — bằng chứng dmesg 07:2x: next-server
   // bị kill ở RSS ~1.1GB (dưới ngưỡng 1700) vì V8Worker/turbopack invoke
@@ -93,7 +100,7 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
         const rssMb = process.memoryUsage().rss / 1048576
         if (!memNearWarned && rssMb > MEM_WATCHDOG_MB - 200) {
           memNearWarned = true
-          console.warn(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB tiệm cận ngưỡng ${MEM_WATCHDOG_MB}MB (còn ${Math.max(0, Math.round(MEM_WATCHDOG_MB - rssMb))}MB) — vượt ngưỡng 2 lần kiểm tra liên tiếp sẽ self-exit graceful; PM2 max_memory_restart (1800M) là backstop phía sau`)
+          console.warn(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB tiệm cận ngưỡng ${MEM_WATCHDOG_MB}MB (còn ${Math.max(0, Math.round(MEM_WATCHDOG_MB - rssMb))}MB) — vượt ngưỡng 2 lần kiểm tra liên tiếp sẽ self-exit graceful; PM2 max_memory_restart (3200M — vòng 11) là backstop phía sau`)
         }
         // Global-memory guard — ROUND-3 FIX
         if (MEM_WATCHDOG_GLOBAL_MIN_MB > 0 && rssMb > MEM_WATCHDOG_GLOBAL_RSS_MB) {
@@ -111,13 +118,13 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
           memOverCount = 0
         }
         if (memOverCount >= 2) {
-          console.error(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB vượt ${MEM_WATCHDOG_MB}MB suốt 2 phút — self-exit sạch để kernel OOM không SIGKILL cả cây (PM2 sẽ restart trong ~5s; durable goal jobs RESUME từ checkpoint)`)
+          console.error(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB vượt ${MEM_WATCHDOG_MB}MB suốt 2 lần kiểm tra (${Math.round(MEM_WATCHDOG_INTERVAL_MS / 1000)}s × 2) — self-exit sạch để kernel OOM không SIGKILL cả cây (PM2 sẽ restart trong ~5s; durable goal jobs RESUME từ checkpoint)`)
           process.exit(1)
         }
       } catch { /* fail-open — watchdog lỗi không được phép tự giết app */ }
-    }, 60_000)
+    }, MEM_WATCHDOG_INTERVAL_MS)
     memWatchdogTimer.unref?.()
-    console.log(`[MemWatchdog] bật — ngưỡng RSS ${MEM_WATCHDOG_MB}MB × 2 lần kiểm tra (60s/lần) + global guard MemAvailable<${MEM_WATCHDOG_GLOBAL_MIN_MB}MB khi RSS>${MEM_WATCHDOG_GLOBAL_RSS_MB}MB`)
+    console.log(`[MemWatchdog] bật — ngưỡng RSS ${MEM_WATCHDOG_MB}MB × 2 lần kiểm tra (${Math.round(MEM_WATCHDOG_INTERVAL_MS / 1000)}s/lần) + global guard MemAvailable<${MEM_WATCHDOG_GLOBAL_MIN_MB}MB khi RSS>${MEM_WATCHDOG_GLOBAL_RSS_MB}MB`)
   }
 }
 

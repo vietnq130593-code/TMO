@@ -2192,6 +2192,44 @@ export async function runGoalDrivenLoop(params: {
   const resumeStartCycle = resumeState ? resumeState.counters.cyclesAttempted + 1 : 1
   if (resumeState) {
     console.log(`[GoalLoop] ${agentName} RESUME từ checkpoint — chu kỳ ${resumeStartCycle}, ${totalIterations} vòng đã chạy, ${messages.length} messages, runId ${runId}`)
+    // ROUND-11 (vòng quan sát 9 — FIX delegation mất trắng vô hình): restart
+    // giết sub-agent đang bay (bằng chứng: sub_1790767073236_5 của SENTINEL bị
+    // MemWatchdog restart #93 giết 11:27 — parent resume KHÔNG BIẾT delegation
+    // từng được phát, transcript cũng không có kết quả). Delegation giờ insert
+    // row 'running' lúc start (subagent-delegate fix kèm theo) + boot
+    // stale-cleanup lật thành failed/crashed → query ở đây các row crashed của
+    // ĐÚNG run này (cửa sổ 15' quanh lúc resume) → inject notice để agent cân
+    // nhắc RE-DISPATCH thay vì tin việc đã làm. Fail-open tuyệt đối.
+    if (agentSessionId && runId) {
+      try {
+        const { db } = await import('@/lib/db')
+        const crashed = await db.agentRunRecord.findMany({
+          where: {
+            parentRunId: runId,
+            status: 'failed',
+            stopReason: 'crashed',
+            completedAt: { gte: new Date(Date.now() - 15 * 60_000) },
+          },
+          select: { runId: true, agentName: true, startedAt: true, completedAt: true },
+          take: 5,
+        })
+        if (crashed.length > 0) {
+          const list = crashed
+            .map(c => {
+              const startMs = c.startedAt ? c.startedAt.getTime() : Date.now()
+              const endMs = c.completedAt ? c.completedAt.getTime() : Date.now()
+              return `- ${c.agentName ?? '?'} (run ${String(c.runId ?? '').slice(0, 22)}…, đã chạy ${Math.max(0, Math.round((endMs - startMs) / 1000))}s trước khi bị giết)`
+            })
+            .join('\n')
+          messages.push({
+            role: 'user',
+            content: `[RESUME NOTICE — GIÁN ĐOẠN DO RESTART] ${crashed.length} sub-agent delegation(s) dưới đây bị server restart giết GIỮA CHỪNG — kết quả của chúng KHÔNG TỒN TẠI (không tin rằng việc đã xong). Cân nhắc dispatch lại những phần còn cần cho mục tiêu:\n${list}`,
+          })
+          recordAgentThought(agentSessionId, `⚠️ RESUME: phát hiện ${crashed.length} delegation bị restart giết giữa chừng (kết quả mất trắng) — đã inject notice để agent cân nhắc re-dispatch`, totalIterations)
+          console.log(`[GoalLoop] ${agentName} RESUME: ${crashed.length} delegation crashed do restart → inject re-dispatch notice`)
+        }
+      } catch { /* fail-open — notice là best-effort */ }
+    }
   }
 
   // 2026-10 PROCESS INTEGRITY — userMessage là CHỈ ĐẠO Opus → trích mục tiêu
@@ -3120,18 +3158,28 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         // todo_write → inject sessionId (todos theo phiên chat, không đổ dồn "default")
         // CI-2 (Task 11-a): inject THÊM runId của run hiện tại — todo được scope
         // theo TỪNG RUN (per-task isolation: run mới không thấy todo run cũ).
-        // Điều kiện inject: sessionId trống hoặc trùng session của loop (agent
-        // tự khai sessionId khác → tôn trọng, không đụng).
-        // FIX 2026-09-14 #4: decompose_task/create_task/update_task/get_plan
-        // cũng được inject (DAG map DB Todo theo session + run).
+        //
+        // ROUND-11 (vòng quan sát 9 — FIX 'default' hallucination): chính sách cũ
+        // "agent tự khai sessionId khác → tôn trọng" vô tình tôn trọng ẢO GIÁC
+        // của model (probe round-11: space-bunny-free phát
+        // {"sessionId": "default", "agentRole": "TL"} — todo rơi bucket "default"
+        // → buildRunTodosBlock + TodoCoverage theo session thật KHÔNG THẤY →
+        // kế hoạch mất liên tục giữa các chu kỳ). Goal-loop LÀ chủ sở hữu scope
+        // của run này → LUÔN ép sessionId/runId ĐÚNG (khai báo trùng = no-op),
+        // agentRole ép về tên agent để panel Todos + todo_read filter đúng nhãn.
         const toolArgs: Record<string, unknown> = { ...tc.args }
         if (
-          (tc.name === 'todo_write' || TASK_DAG_TOOLS.has(tc.name)) &&
-          agentSessionId &&
-          (!toolArgs.sessionId || toolArgs.sessionId === agentSessionId)
+          (tc.name === 'todo_write' || tc.name === 'todo_read' || TASK_DAG_TOOLS.has(tc.name)) &&
+          agentSessionId
         ) {
-          toolArgs.sessionId = toolArgs.sessionId || agentSessionId
-          if (runId && !toolArgs.runId) toolArgs.runId = runId
+          if (toolArgs.sessionId !== agentSessionId) {
+            if (toolArgs.sessionId) {
+              console.log(`[GoalLoop] ${agentName} ${tc.name}: sessionId khai báo "${String(toolArgs.sessionId).slice(0, 60)}" ≠ session run → ép về session thật (chống todo rơi scope sai)`)
+            }
+            toolArgs.sessionId = agentSessionId
+          }
+          if (runId && toolArgs.runId !== runId) toolArgs.runId = runId
+          if (tc.name === 'todo_write' && toolArgs.agentRole !== agentName) toolArgs.agentRole = agentName
         }
 
         // DELEGATION CONTRACT (fix 2026-09-12): truyền runId vào context —
