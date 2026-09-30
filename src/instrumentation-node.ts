@@ -43,9 +43,12 @@ try {
 // MEM WATCHDOG (2026-09-28 — quan sát vận hành thật: 2 lần kernel OOM-killer
 // SIGKILL next-server giữa chừng agent run, 23:08 RSS 2.46GB + 23:23 RSS
 // 1.44GB, memcg 4GB cạn tổng thể — nhiệm vụ agent 15 phút chết sạch, user
-// message không có câu trả lời). PM2 max_memory_restart đo pid wrapper nên
-// KHÔNG thấy heap của child next-server → guard ấy bất lực. Watchdog này
-// chạy NGAY TRONG next-server (instrumentation load ở đó): RSS vượt ngưỡng
+// message không có câu trả lời). [Cập nhật 2026-09-30 vòng 9: nhận thức cũ
+// "PM2 max_memory_restart đo pid wrapper nên bất lực" đã LỖI THỜI từ khi
+// pm2-start.sh dùng exec — PM2 giờ đo TRỰC TIẾP RSS node; cấu hình mới đặt
+// PM2 1800M CAO hơn ngưỡng watchdog bên dưới để đường graceful self-exit
+// LUÔN thắng cuộc đua — xem ecosystem.config.cjs.] Watchdog này chạy NGAY
+// TRONG next-server (instrumentation load ở đó): RSS vượt ngưỡng
 // MEM_WATCHDOG_MB (mặc định 1700) trong 2 lần kiểm tra liên tiếp (60s) →
 // log rõ + process.exit(1) — PM2 restart sạch trong ~5s (SQLite WAL bền,
 // mini-services được service-manager dọn + respawn, durable goal-loop jobs
@@ -80,9 +83,18 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
       } catch { return null }
     }
     let memOverCount = 0
+    // ROUND-9 (2026-09-30): cảnh báo tiệm cận 1 lần/lần-chạy — quan sát vòng 9
+    // thấy các lần restart RSS đều KHÔNG có dấu hiệu báo trước trong log (PM2
+    // giết im lặng). Log 1 dòng khi RSS vào vùng 200MB dưới ngưỡng để lượt
+    // quan sát sau biết đường graceful sắp kích hoạt.
+    let memNearWarned = false
     const memWatchdogTimer = setInterval(() => {
       try {
         const rssMb = process.memoryUsage().rss / 1048576
+        if (!memNearWarned && rssMb > MEM_WATCHDOG_MB - 200) {
+          memNearWarned = true
+          console.warn(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB tiệm cận ngưỡng ${MEM_WATCHDOG_MB}MB (còn ${Math.max(0, Math.round(MEM_WATCHDOG_MB - rssMb))}MB) — vượt ngưỡng 2 lần kiểm tra liên tiếp sẽ self-exit graceful; PM2 max_memory_restart (1800M) là backstop phía sau`)
+        }
         // Global-memory guard — ROUND-3 FIX
         if (MEM_WATCHDOG_GLOBAL_MIN_MB > 0 && rssMb > MEM_WATCHDOG_GLOBAL_RSS_MB) {
           const availMb = readMemAvailableMb()

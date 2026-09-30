@@ -1759,9 +1759,32 @@ export async function runGoalDrivenLoop(params: {
           // FIX 2026-09-14 #5: row giờ CÓ cột runId → target ĐÚNG row của run
           // này (không còn phải Assumes "mọi row running trong session là run
           // này" — delegation rows sub_xxx có thể chen giữa).
+          //
+          // FIX 2026-09-30 (quan sát vòng 9 — crash-resume hiển thị SAI trạng
+          // thái): boot stale-cleanup (instrumentation-node Task 54) đã lật row
+          // này thành failed/crashed TRƯỚC khi GoalLoopWorker claim + RESUME
+          // (thứ tự boot: cleanup chạy trước requeue). UpdateMany cũ lọc
+          // status='running' → khớp 0 dòng → row kẹt 'failed/crashed' suốt lúc
+          // run đang sống lại (UI/metrics sai — quan sát thật: run
+          // run_1790755954444_1 failed/crashed 08:20:21 trong khi job RESUME
+          // chạy mạnh chu kỳ 3→5). Khôi phục luôn chữ ký failed+crashed của
+          // boot-cleanup về 'running'; row fail THẬT (stopReason ≠ 'crashed')
+          // không bao giờ bị chạm.
           await db.agentRunRecord.updateMany({
-            where: { sessionId: agentSessionId, runId: runId ?? undefined, status: 'running' },
-            data: { startedAt: new Date(startedAt) },
+            where: {
+              sessionId: agentSessionId,
+              runId: runId ?? undefined,
+              OR: [
+                { status: 'running' },
+                { status: 'failed', stopReason: 'crashed' },
+              ],
+            },
+            data: {
+              status: 'running',
+              stopReason: null,
+              completedAt: null,
+              startedAt: new Date(startedAt),
+            },
           })
         })().catch(() => { /* fail-open — resume không được phép fail vì metrics */ })
       } catch { /* fail-open */ }

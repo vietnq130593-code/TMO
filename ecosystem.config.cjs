@@ -55,11 +55,11 @@ module.exports = {
         DATABASE_URL: 'file:/home/z/tmo-app/db/custom.db',
         // Memory bound (2026-09-28 quan sát vận hành thật — 2 lần kernel OOM
         // giết next-server giữa chừng ở RSS 2.46GB (23:08) và 1.44GB (23:23),
-        // memcg 4GB cạn tổng thể): PM2 max_memory_restart không bắt được vì
-        // nó đo pid wrapper chứ không phải child next-server. Giới hạn V8
-        // heap 1024MB để GC chủ động sớm + RSS ổn định ~1.3-1.6GB. Cặp với
-        // in-app MemWatchdog (instrumentation — RSS >1.7GB 2 phút liên tiếp
-        // → self-exit sạch, PM2 kéo dậy trong ~5s) + durable goal loop
+        // memcg 4GB cạn tổng thể): giới hạn V8 heap 1024MB để GC chủ động sớm
+        // + RSS ổn định ~1.3-1.6GB. Cặp với in-app MemWatchdog
+        // (instrumentation — .env MEM_WATCHDOG_MB=1400: RSS vượt 1400MB 2 lần
+        // kiểm tra liên tiếp (60s) → self-exit SẠCH có log + checkpoint
+        // flush, PM2 kéo dậy trong ~5s) + durable goal loop
         // (ENABLE_DURABLE_GOAL_LOOP=true — job RESUME từ checkpoint sau
         // restart → nhiệm vụ không mất).
         NODE_OPTIONS: '--max-old-space-size=1024',
@@ -68,13 +68,24 @@ module.exports = {
       autorestart: true,
       max_restarts: 50,
       restart_delay: 4000,
-      // Memory guard: max_memory_restart đo pid wrapper (pm2-start.sh exec →
-      // node next dev) — RSS wrapper luôn thấp nên KHÔNG bao giờ tự kích hoạt
-      // cho heap của child next-server (đã kiểm chứng 2026-09-28: OOM-kill ở
-      // 2.46GB mà PM2 không kịp phát hiện). Vệ sinh thực sự nằm ở
-      // NODE_OPTIONS heap cap phía trên + durable goal loop (job RESUME từ
-      // checkpoint sau restart). Giữ 1G làm lưới an toàn cấp wrapper.
-      max_memory_restart: '1G',
+      // Memory guard (CẬP NHẬT 2026-09-30 — quan sát vòng 9, sửa nhận thức
+      // LỖI THỜI): pm2-start.sh dùng `exec node next dev` → PM2 đo TRỰC TIẾP
+      // RSS process Next.js (nhận thức cũ "PM2 chỉ đo wrapper, không bao giờ
+      // tự kích hoạt" đã sai từ khi thêm exec). Bằng chứng 08:20:10 hôm nay:
+      // PM2 max_memory_restart=1G kích hoạt SIGINT IM LẶNG (không log, không
+      // graceful flush) khi RSS vượt 1GB sau 62 phút load nặng — cắt ngang
+      // TRƯỚC in-app MemWatchdog 1400MB (đường đua lưu tử: giới hạn hẹp hơn
+      // thắng) → subagent đang bay mất trắng (45 tool calls + ~700k tokens,
+      // không kịp ghi AgentRunRecord).
+      //
+      // THIẾT KẾ MỚI — thứ tự đúng: 1400MB (MemWatchdog trong app, self-exit
+      // SẠCH: log + checkpoint flush + durable RESUME) → 1800MB (PM2 backstop
+      // im lặng, chỉ kích hoạt khi watchdog bất lực vd event-loop kẹt).
+      // 1800M cho watchdog cửa sổ biên độ dư (2 lần kiểm tra × 60s + biên độ tăng
+      // RSS ~400MB) để đường graceful LUÔN thắng cuộc đua. Cặp với global
+      // guard MemAvailable<450MB (khi RSS>900MB) tự thoát sớm khi memcg 4GB
+      // cạn tổng thể — lớp chống kernel OOM-killer thật (2026-09-28).
+      max_memory_restart: '1800M',
       // Route both stdout + stderr into the single monitored dev.log,
       // appending (merge_logs) on every restart so history is preserved.
       out_file: '/home/z/my-project/dev.log',
