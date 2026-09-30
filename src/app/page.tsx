@@ -1405,8 +1405,9 @@ export default function Home() {
   const [gitPullDryRunResult, setGitPullDryRunResult] = useState<{files: string[], schemaChanged: boolean, depsChanged?: boolean} | null>(null)
   const [gitPullDefaultConfig, setGitPullDefaultConfig] = useState<{currentRemote: string | null, currentBranch: string | null, currentCommit: string | null, repoUrl: string | null, hasToken: boolean, isGitRepo?: boolean, savedToken?: string | null, savedTokenPreview?: string | null, hasSavedToken?: boolean, savedAt?: string | null} | null>(null)
   // Default repo khi không có git remote (user request 2026-08-29)
-  // 2026-09-30: kho dời sang vietnq130593-code/TMO (kho cũ nguyenquocviety2c-code/TMO đã bị xóa — PAT mới của Mr. Architect push được kho mới)
-  const GIT_PULL_DEFAULT_REPO = 'https://github.com/vietnq130593-code/TMO'
+  // 2026-09-30 round-12: user xác nhận kho ĐÚNG là nguyenquocviety2c-code/TMO
+  // (vietnq130593-code/TMO là SAI kho; account nguyenquocviety2c không tồn tại)
+  const GIT_PULL_DEFAULT_REPO = 'https://github.com/nguyenquocviety2c-code/TMO'
 
   /** Validate repo URL format on the client side */
   const validateGitPullUrl = useCallback((url: string): string | null => {

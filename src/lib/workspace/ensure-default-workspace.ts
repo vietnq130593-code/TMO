@@ -9,7 +9,7 @@
  *                              (vd E:\APP\TMO-clone — chính là thư mục app
  *                              TMO chạy local, nơi Omega thực hiện code changes)
  *   - TMO_REPO_URL:            remote origin workspace trỏ tới (vd
- *                              https://github.com/vietnq130593-code/TMO).
+ *                              https://github.com/nguyenquocviety2c-code/TMO).
  *                              KHÔNG BAO GIỜ nhúng token vào URL này — token
  *                              sống trong GitHub Token Store riêng.
  *   - TMO_AUTO_OPEN_WORKSPACE: 'true' → mở File Explorer tại workspace khi
