@@ -86,6 +86,15 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
   // KHÔNG tự sát (tránh PM2 restart-loop oan).
   const MEM_WATCHDOG_GLOBAL_MIN_MB = Number(process.env.MEM_WATCHDOG_GLOBAL_MIN_MB ?? 450)
   const MEM_WATCHDOG_GLOBAL_RSS_MB = Number(process.env.MEM_WATCHDOG_GLOBAL_RSS_MB ?? 900)
+  // ROUND-11c — HARD-RSS tier: bằng chứng thực chiến có REAPER NGOÀI HỆ THỐNG
+  // (sandbox) SIGINT next-server khi RSS ~2.1-2.2GB BẤT KỂ MemAvailable còn dư
+  // (14:57:37 kill tại RSS≥1935MB, 15:00:52 kill tại RSS≥2133MB với avail
+  // 1102MB; pm2.log KHÔNG có "Stopping app" → không phải PM2; keepalive im;
+  // watchdog không log → không phải self-exit của mình; kernel OOM dùng
+  // SIGKILL không phải SIGINT). Tự exit TRƯỚC reaper ở ngưỡng thấp hơn → cái
+  // chết trở thành CÓ LOG + CÓ KIỂM SOÁT (checkpoint per-iteration giữ nguyên,
+  // PM2 restart sạch ~5s, goal jobs RESUME). 0 = tắt tầng này.
+  const MEM_WATCHDOG_RSS_HARD_MB = Number(process.env.MEM_WATCHDOG_RSS_HARD_MB ?? 2100)
   if (MEM_WATCHDOG_MB > 0) {
     const readMemAvailableMb = (): number | null => {
       try {
@@ -106,6 +115,14 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
         if (!memNearWarned && rssMb > MEM_WATCHDOG_MB - 200) {
           memNearWarned = true
           console.warn(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB tiệm cận ngưỡng ${MEM_WATCHDOG_MB}MB (còn ${Math.max(0, Math.round(MEM_WATCHDOG_MB - rssMb))}MB) — vượt ngưỡng 2 lần kiểm tra liên tiếp sẽ self-exit graceful; PM2 max_memory_restart (3200M — vòng 11) là backstop phía sau`)
+        }
+        // HARD-RSS tier — ROUND-11c: reaper sandbox giết ở ~2.1-2.2GB bất kể
+        // avail → self-exit sạch TRƯỚC KHI bị SIGINT ngoài ý muốn (xem comment
+        // khai báo MEM_WATCHDOG_RSS_HARD_MB). Không cần chờ 2 check — reaper
+        // có thể xuống tay bất kỳ lúc nào sau khi RSS vượt vùng này.
+        if (MEM_WATCHDOG_RSS_HARD_MB > 0 && rssMb >= MEM_WATCHDOG_RSS_HARD_MB) {
+          console.error(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB ≥ HARD ngưỡng ${MEM_WATCHDOG_RSS_HARD_MB}MB — reaper sandbox thực chiến SIGINT ở ~2.1-2.2GB (vòng 11c) → self-exit sạch TRƯỚC khi bị giết âm thầm (PM2 restart ~5s; durable goal jobs RESUME từ checkpoint)`)
+          process.exit(1)
         }
         // Global-memory guard — ROUND-3 FIX
         if (MEM_WATCHDOG_GLOBAL_MIN_MB > 0 && rssMb > MEM_WATCHDOG_GLOBAL_RSS_MB) {
@@ -143,7 +160,7 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
       } catch { /* fail-open — watchdog lỗi không được phép tự giết app */ }
     }, MEM_WATCHDOG_INTERVAL_MS)
     memWatchdogTimer.unref?.()
-    console.log(`[MemWatchdog] bật — ngưỡng RSS ${MEM_WATCHDOG_MB}MB × 2 lần kiểm tra (${Math.round(MEM_WATCHDOG_INTERVAL_MS / 1000)}s/lần, avail-aware: chỉ exit khi MemAvailable<${MEM_WATCHDOG_RSS_EXIT_AVAIL_MB}MB) + global guard MemAvailable<${MEM_WATCHDOG_GLOBAL_MIN_MB}MB khi RSS>${MEM_WATCHDOG_GLOBAL_RSS_MB}MB (exit ngay)`)
+    console.log(`[MemWatchdog] bật — ngưỡng RSS ${MEM_WATCHDOG_MB}MB × 2 lần kiểm tra (${Math.round(MEM_WATCHDOG_INTERVAL_MS / 1000)}s/lần, avail-aware: chỉ exit khi MemAvailable<${MEM_WATCHDOG_RSS_EXIT_AVAIL_MB}MB) + global guard MemAvailable<${MEM_WATCHDOG_GLOBAL_MIN_MB}MB khi RSS>${MEM_WATCHDOG_GLOBAL_RSS_MB}MB (exit ngay) + HARD-RSS ${MEM_WATCHDOG_RSS_HARD_MB}MB (exit ngay bất kể avail — chống reaper sandbox SIGINT ~2.1-2.2GB)`)
   }
 }
 
