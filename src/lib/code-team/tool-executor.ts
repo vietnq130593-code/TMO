@@ -181,6 +181,29 @@ function matchesSchemaType(value: unknown, schemaType: unknown): boolean {
  * Returns: danh sách note mô tả phép heal (rỗng = không đụng args). Args được
  * heal IN-PLACE (đã là bản sao của caller — toolArgs spread tại mọi cửa vào).
  */
+/**
+ * ROUND-12 — ALIAS MAP (bổ sung Rule 0 cho healToolArgs): model quen
+ * convention của tool cùng chức năng ở hệ thống khác (Claude Code:
+ * old_string/new_string/file_path · OpenCode: search/replace) → gọi TMO
+ * tool với param-name sai. Bằng chứng ToolMetric session SENTINEL
+ * (sess_1790717636620): 3× file_edit fail "Either (old_str + new_str) or
+ * edits[] is required" — nội dung edit hợp lệ, chỉ TÊN tham số sai. Chỉ áp
+ * alias khi tên đó KHÔNG phải param thật của tool VÀ param chuẩn còn trống.
+ */
+const TOOL_ARG_ALIASES: Record<string, Record<string, string>> = {
+  file_edit: {
+    file_path: 'path', filepath: 'path', abs_path: 'path',
+    old_string: 'old_str', new_string: 'new_str',
+    oldStr: 'old_str', newStr: 'new_str',
+    search: 'old_str', replace: 'new_str',
+    search_text: 'old_str', replace_text: 'new_str',
+  },
+  file_multi_edit: { file_path: 'path', filepath: 'path', abs_path: 'path' },
+  file_read: { file_path: 'path', filepath: 'path', abs_path: 'path' },
+  file_write: { file_path: 'path', filepath: 'path', abs_path: 'path' },
+  file_list: { dir: 'path', dir_path: 'path', directory: 'path', folder: 'path' },
+}
+
 export function healToolArgs(
   def: ToolDefinition,
   args: Record<string, unknown>,
@@ -190,6 +213,38 @@ export function healToolArgs(
     const params = def.function.parameters
     if (!params || typeof params !== 'object') return notes
     const props = (params.properties ?? {}) as Record<string, Record<string, unknown>>
+
+    // Rule 0 — ALIAS param name (round-12): tên convention khác → tên chuẩn TMO
+    const aliases = TOOL_ARG_ALIASES[def.function.name]
+    if (aliases) {
+      for (const [alias, canonical] of Object.entries(aliases)) {
+        if (alias in props) continue // là param thật của tool — không đụng
+        if (!(alias in args)) continue
+        if (args[canonical] !== undefined && args[canonical] !== null) {
+          delete args[alias] // param chuẩn đã có giá trị — bỏ key thừa
+          continue
+        }
+        args[canonical] = args[alias]
+        delete args[alias]
+        notes.push(`tham số "${alias}" không có trong schema — hệ thống đã hiểu là "${canonical}" (alias từ convention tool khác). Lần sau dùng đúng tên "${canonical}".`)
+      }
+    }
+    // Rule 0b — alias BÊN TRONG edits[] items (old_string/new_string → old_str/new_str)
+    if (Array.isArray(args.edits)) {
+      let healedItems = 0
+      for (const it of args.edits) {
+        if (!it || typeof it !== 'object' || Array.isArray(it)) continue
+        const o = it as Record<string, unknown>
+        let healed = false
+        if (o.old_string !== undefined && o.old_str === undefined) { o.old_str = o.old_string; delete o.old_string; healed = true }
+        if (o.new_string !== undefined && o.new_str === undefined) { o.new_str = o.new_string; delete o.new_string; healed = true }
+        if (healed) healedItems++
+      }
+      if (healedItems > 0) {
+        notes.push(`${healedItems}/${(args.edits as unknown[]).length} item trong edits[] dùng old_string/new_string — hệ thống đã đổi thành old_str/new_str. Lần sau dùng đúng tên chuẩn.`)
+      }
+    }
+
     for (const [key, schema] of Object.entries(props)) {
       if (!schema || typeof schema !== 'object') continue
       const expected = schema.type
@@ -1242,7 +1297,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'shell',
-      description: 'Bash với timeout 5min (max 10min). Cho phép metacharacters (|, &&, ;, >). cwd mặc định = workspace root, có thể truyền cwd absolute ở bất kỳ đâu. Trả về D2 structured receipt {success, exit_code, stdout, stderr, duration_ms, truncated, cursor, cwd}. Thay thế 5 v1 tools (install_package, read_logs, lint, type_check, db_query).',
+      description: 'Bash với timeout 5min (max 10min). Cho phép metacharacters (|, &&, ;, >). cwd mặc định = workspace root, có thể truyền cwd absolute ở bất kỳ đâu. Trả về D2 structured receipt {success, exit_code, stdout, stderr, duration_ms, truncated, cursor, cwd}. Thay thế 5 v1 tools (install_package, read_logs, lint, type_check, db_query). sqlite3 CLI 3.53+ đã cài sẵn (/usr/local/bin/sqlite3) — tra cứu DB: sqlite3 \'file:db/custom.db?mode=ro\' \'SELECT ...\' (dùng db_query tool khi chỉ cần SELECT có read-only guard).',
       parameters: {
         type: 'object',
         properties: {

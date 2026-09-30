@@ -136,3 +136,20 @@
 - Web/knowledge tools gọi **API thật** (Tavily 3 keys, Jina 3 keys, NVIDIA 4 keys, Neo4j Aura, Qdrant local) — read-only.
 - SKIP không phải "tool chết" — mỗi SKIP có note lý do (flag OFF chỉ cần flip .env / tốn LLM call thật đã E2E ở task trước / phá hoại không thể test độc lập).
 - Script idempotent + tự dọn temp workspace sau mỗi lần chạy.
+
+## 6. SOP harness cho agent kiểm toán tools (bắt buộc — tránh drift tự-viết-checker)
+
+> Học từ mission r10 (round-10): agent tự viết checker riêng `checker-r10.mjs` → drift
+> so chuẩn → kết luận sai. Từ nay mission audit tools/skills PHẢI dùng chuỗi harness chuẩn:
+
+1. **Probe từng tool**: `bun run audit:tools` (probe 1:1 toàn bộ builtin tools qua đúng choke-point `executeTool`; args đúng schema trong `getBuiltinToolDefinition`).
+2. **Manifest**: `bun run audit:manifest` (sinh canonical-manifest — mọi tool + skill phải có entry, không chỉ khai báo).
+3. **Baseline quanh tác vụ**: `bun run audit:baseline before` → làm việc → `bun run audit:baseline after` → `bun run audit:baseline check` (chứng minh không side-effect trên protected files).
+4. **Chuỗi nghiệm thu**: `bun run audit:check` (exit 0 = XANH; C1-C7).
+5. **Toàn bộ một lệnh**: `bun run audit:all`.
+6. **Báo cáo phải truy vết đúng run**: ghi rõ `runId` của chính mission (lấy từ context goal-loop), không trích run khác.
+
+### Ghi chú môi trường (round-12, 2026-09-30)
+
+- **sqlite3 CLI 3.53+ đã cài** tại `/usr/local/bin/sqlite3` (agents từng báo "command not found" nhiều lần — đã khắc phục). Đọc DB: `sqlite3 'file:db/custom.db?mode=ro' 'SELECT ...'`; ưu tiên tool `db_query` cho SELECT thuần (có read-only guard + bind params).
+- **Kho git chuẩn**: `https://github.com/nguyenquocviety2c-code/TMO` (user-confirmed round-12 — `vietnq130593-code/TMO` là SAI kho). PAT sống trong GitHub Token Store `db/.github-token.json` — `git_push`/`git_pull` tự dùng, không cần nhúng token vào URL.
