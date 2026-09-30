@@ -280,6 +280,17 @@ const MAX_TOOL_RESULT_CHARS = TOOL_RESULT_MAX_CHARS
 const MAX_MESSAGES = 48
 /** Cap số dòng evidence log giữ lại cho evaluator */
 const MAX_EVIDENCE_ENTRIES = 60
+/**
+ * FIX (mission #15 evidence 2026-09-30) — cap preview bằng chứng cho evaluator.
+ * Trước đây 250 ký tự làm mất nội dung rows/todos (db_query/todo_read chỉ còn
+ * "PASS …| đuôi: <80 ký tự>") → trọng tài KHÔNG BAO GIỜ xác minh được
+ * id/status/content từng dòng dù output đầy đủ đã nằm trong transcript —
+ * root cause chuỗi run needs_input không thoát được (run_1790803610471_1,
+ * run_1790806753214_2, run_1790807918140_4). 900 giữ evidence log gọn
+ * (≤60 entry × ~900 ≈ tối đa 54k chars, thực tế thấp hơn nhiều) mà các truy vấn
+ * nhỏ (vài row) hiện đủ nội dung để đối chiếu.
+ */
+const EVIDENCE_PREVIEW_MAX_CHARS = 900
 /** [C] Tool kiểm định — bằng chứng verify chỉ tính khi tool THÀNH CÔNG */
 const VERIFY_TOOLS = new Set(['run_tests', 'lint', 'type_check', 'test_coverage', 'get_diagnostics', 'lsp_diagnostics'])
 /** [C] Đọc lại kết quả (file_read/grep sau khi sửa) cũng là kiểm định */
@@ -1258,6 +1269,35 @@ function summarizeToolResult(result: unknown): string {
       })
       parts.push(`match: ${previews.join(' | ')}`)
     }
+    // FIX (mission #15 evidence 2026-09-30): kết quả truy vấn có `rows`
+    // (db_query...) cần NỘI DUNG DÒNG — trước đây evaluator chỉ thấy
+    // "PASS …| đuôi: <80 ký tự cuối>" → không thể xác minh id/status/content
+    // từng dòng (cùng lớp bug với fix grep/shell 2026-09-08 ở trên).
+    if (Array.isArray(r.rows) && r.rows.length > 0) {
+      const rows = r.rows as Array<Record<string, unknown>>
+      const rowPreviews = rows.slice(0, 5).map(row =>
+        Object.keys(row)
+          .slice(0, 6)
+          .map(k => `${k}=${String(row[k]).replace(/\s+/g, ' ').slice(0, 90)}`)
+          .join(' '),
+      )
+      const total = typeof r.rowCount === 'number' ? r.rowCount : rows.length
+      parts.push(`rows ${rows.length}/${total}${r.truncated === true ? ' (bị cắt)' : ''}: ${rowPreviews.join(' || ')}`)
+    }
+    // FIX (cùng đợt): todo_read trả `todos` + `byStatus` — preview 5 dòng đầu
+    // (id/status/content) để evaluator đối chiếu closure TODO không cần
+    // đọc lại toàn bộ danh sách.
+    if (Array.isArray(r.todos) && r.todos.length > 0) {
+      const todos = r.todos as Array<Record<string, unknown>>
+      const todoPreviews = todos.slice(0, 5).map(t =>
+        `${String(t.id ?? '').slice(0, 16)} [${String(t.status ?? '?')}] ${String(t.content ?? '').replace(/\s+/g, ' ').slice(0, 70)}`,
+      )
+      const stat = r.byStatus && typeof r.byStatus === 'object' ? ` ${JSON.stringify(r.byStatus)}` : ''
+      parts.push(`todos ${typeof r.total === 'number' ? r.total : todos.length}${stat}: ${todoPreviews.join(' | ')}`)
+    }
+    // FIX (cùng đợt): todo_write trả `upserted` — đếm ghi máy, bằng chứng
+    // exactly-once (đúng một lần ghi, N dòng) cho trọng tài.
+    if (typeof r.upserted === 'number') parts.push(`upserted=${r.upserted}`)
     if (typeof r.stdout === 'string' && r.stdout.trim()) {
       const so = r.stdout.trim()
       parts.push(`output: ${so.slice(0, 120)}${so.length > 200 ? ' …' + so.slice(-50) : ''}`)
@@ -2965,7 +3005,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
 
         // ===== WORKING MEMORY (HOT) — ghi nhận tool đã chạy + kết quả =====
         // [D] Preview thông minh (errorCount + lỗi cụ thể) thay vì cắt 200 ký tự đầu
-        const resultPreview = summarizeToolResult(toolResult.result).slice(0, 250)
+        const resultPreview = summarizeToolResult(toolResult.result).slice(0, EVIDENCE_PREVIEW_MAX_CHARS)
 
         // 2026-10-27 (user directive — Thought Progress ghi rõ TỪNG GĐ): GĐ1/GĐ2
         // marker cho đường TMO executeTool (đôi của hook CLI inner loop bên trên
