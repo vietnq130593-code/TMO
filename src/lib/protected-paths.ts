@@ -50,7 +50,9 @@
  *   Kiểm định: 42/42 vector tấn công chặn, 44/44 lệnh hợp lệ cho qua
  *   (bun/audit/recipe/git/prisma/curl health-check...), tsc sạch.
  *
- * Tắt guard (operator only): env TMO_INFRA_GUARD=off.
+ * Tắt guard (operator only): env TMO_INFRA_GUARD=off — tắt TOÀN BỘ guard kể
+ * từ 2026-09-30 (gap fix): cả isProtectedInfraPathSync (file_write/edit/delete,
+ * opencode write) lẫn 3 hàm guard command/inline/bridge đều tôn trọng env này.
  */
 
 import path from 'path'
@@ -103,8 +105,15 @@ export interface InfraPathVerdict {
  * Kiểm tra 1 đường dẫn tuyệt đối có nằm trong danh sách bảo vệ hay không.
  * CHỈ khớp khi path nằm TRONG workspace root — file cùng tên ở workspace
  * khác (vd /tmp/task-x/package.json) KHÔNG bị chặn.
+ *
+ * TMO_INFRA_GUARD=off (operator directive 2026-09-30 "tắt hoàn toàn"):
+ * trả về không-bảo-vệ cho MỌI path — phủ toàn bộ guard (shell, inline code,
+ * bridge, file_write/edit/delete, opencode write). Trước đây chỉ 3 hàm guard
+ * (guardShellCommand/guardInlineCode/guardBridgeToolInvocation) check env —
+ * file-op gọi trực tiếp hàm này nên guard tắt không trọn vẹn (gap fix).
  */
 export function isProtectedInfraPathSync(absPath: string, root: string): InfraPathVerdict {
+  if (process.env.TMO_INFRA_GUARD === 'off') return { protected: false }
   const absRoot = path.resolve(root)
   const resolved = path.resolve(absPath)
   if (resolved !== absRoot && !resolved.startsWith(absRoot + path.sep)) {
