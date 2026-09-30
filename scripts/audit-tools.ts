@@ -557,9 +557,12 @@ async function main() {
     skip('test_coverage', 'native', 'ENABLE_TEST_COVERAGE=off', 'flag OFF — executor bun test --coverage sẵn sàng')
   }
   if (flagOn('ENABLE_DB_QUERY')) {
-    await call('db_query', 'native', 'ENABLE_DB_QUERY=on', { query: 'SELECT 1 AS audit_ok' }, { timeoutMs: 30_000, note: 'flag ON — read-only SELECT trên DB audit cô lập' })
+    // 2026-09-30 (round-10 fix): flag giờ ON mặc định — probe args phải là SELECT
+    // hợp lệ (tham số `sql`, KHÔNG phải `query` — sai tên trước đây → FAIL
+    // "thiếu tham số bắt buộc sql" ngay khi flag mở). Read-only guard vẫn chặn write.
+    await call('db_query', 'native', 'ENABLE_DB_QUERY=on', { sql: 'SELECT 1 AS audit_ok' }, { timeoutMs: 30_000, note: 'flag ON — read-only SELECT trên DB audit cô lập' })
   } else {
-    skip('db_query', 'native', 'ENABLE_DB_QUERY=off', 'flag OFF (mặc định .env — chủ đích an toàn) — read-only Prisma $queryRawUnsafe guard sẵn sàng')
+    skip('db_query', 'native', 'ENABLE_DB_QUERY=off', 'flag OFF — read-only Prisma $queryRawUnsafe guard sẵn sàng')
   }
   // ==================== 2b. NHÓM BỔ SUNG: 14 tool builtin chưa có case ====================
   // 21-d gap-fill: catalog builtin đã đủ 76 nhưng bảng case viết tay chỉ phủ 63.

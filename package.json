@@ -20,7 +20,12 @@
     "test": "bun scripts/quality-gate.mjs --stage=tests",
     "quality-gate": "bun scripts/quality-gate.mjs",
     "setup:hooks": "bun scripts/setup-hooks.mjs",
-    "repair:neo4j": "bun scripts/repair-neo4j-documents.ts"
+    "repair:neo4j": "bun scripts/repair-neo4j-documents.ts",
+    "audit:tools": "bun scripts/audit-tools.ts",
+    "audit:manifest": "bun scripts/audit-manifest.ts",
+    "audit:check": "bun scripts/audit-check.ts",
+    "audit:baseline": "bun scripts/audit-baseline.ts",
+    "audit:all": "bun scripts/audit-baseline.ts before && bun scripts/audit-tools.ts && bun scripts/audit-manifest.ts && bun scripts/audit-baseline.ts after && bun scripts/audit-check.ts"
   },
   "dependencies": {
     "3d-force-graph": "^1.80.0",

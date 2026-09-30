@@ -305,6 +305,19 @@ const TASK_DAG_TOOLS = new Set(['decompose_task', 'create_task', 'update_task', 
 /** [D] Tool verify được cap context lớn hơn (cần thấy đủ kết quả test/lint/tsc) */
 const VERIFY_RESULT_CHARS = 6000
 /**
+ * 2026-09-30 (round-10 audit root-cause) — HAI PHANH no_progress/stall của goal
+ * loop giờ env-tunable. Mission audit r10 (run_1790755954444_1) chết ở chu kỳ 10
+ * vì: (a) chu kỳ chứa tool call THẤT BẠI NHƯNG CÓ THÔNG TIN (chạy checker exit 1
+ * → học được file thiếu) bị tính là "không tiến triển" bởi stall brake chỉ đếm
+ * call THÀNH CÔNG; (b) fingerprint lặp 2 lần + quota Omega consult đã tiêu →
+ * stop. Với nhiệm vụ audit dài, cần cửa sổ rộng hơn — nhưng vẫn bounded (chống
+ * chạy vô hạn thật). Điều chỉnh qua env, không cần sửa code:
+ *   GOAL_LOOP_STALL_CYCLES        — số chu kỳ stall liên tiếp tối đa (mặc định 3)
+ *   GOAL_LOOP_NO_PROGRESS_GRACE   — số lần fingerprint-repeat tối đa (mặc định 2)
+ */
+const STALL_CYCLE_LIMIT = intEnvPositive('GOAL_LOOP_STALL_CYCLES', 3)
+const NO_PROGRESS_GRACE = intEnvPositive('GOAL_LOOP_NO_PROGRESS_GRACE', 2)
+/**
  * [E] CONTEXT COMPRESSION (user request 2026-09-08: "lượng dữ liệu phải đọc có
  * thể nhiều nhưng có cần nhớ toàn bộ không hay có thể tóm tắt... tổng hợp lại
  * rồi tiến hành tóm tắt thành nội dung đủ để hiểu và triển khai")
@@ -2003,6 +2016,9 @@ export async function runGoalDrivenLoop(params: {
   /** [B4] CI-1 — số chu kỳ LIÊN TIẾP không có tool call THÀNH CÔNG nào
    *  (stall brake). Khi budget unlimited đây là phanh an toàn chính thay budget. */
   let stallCycles = resumeState?.stallCycles ?? 0
+  /** 2026-09-30 (round-10) — bộ chữ ký thất bại của chu kỳ trước, cho stall brake
+   *  "thất bại có chữ ký MỚI" (thất bại lặp nguyên văn chu kỳ trước = không tiến triển). */
+  let prevCycleFailureSigs = new Set<string>()
   /** Chu kỳ trước có bị cắt giữa chừng (hết vòng / hết budget) không */
   let cutMidWorkPrev = resumeState?.cutMidWorkPrev ?? false
   /**
@@ -3878,7 +3894,10 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           // GRACE (fix review 2026-09-08): quota consult đã tiêu (auto-escalate
           // #1 trước đó) — vẫn cho 1 chu kỳ grace cuối trước khi bỏ cuộc;
           // chỉ break khi lặp THẬT SỰ lần 2 (bounded bởi MAX_CYCLES).
-          if (noProgressCount >= 2) {
+          // 2026-09-30 (round-10): ngưỡng grace env-tunable GOAL_LOOP_NO_PROGRESS_GRACE
+          // (mặc định 2) — nhiệm vụ audit dài cần cửa sổ rộng hơn khi đang khai thác
+          // tác vụ lớn; vẫn bounded để chống chạy vô hạn thật.
+          if (noProgressCount >= NO_PROGRESS_GRACE) {
             stopReason = 'no_progress'
             break
           }
@@ -3898,14 +3917,31 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     // không có tool call thành công nào mới tính là stall. 3 chu kỳ stall
     // liên tiếp → dừng 'no_progress' + final report tổng kết (kế thừa reserve
     // = 0 khi unlimited nên báo cáo cuối vẫn đủ chỗ viết trọn vẹn).
-    const cycleSuccessfulTools = evidence.filter(e => e.cycle === cycle && e.kind === 'tool' && e.success === true).length
-    if (cycleSuccessfulTools > 0) {
+    //
+    // 2026-09-30 (round-10 audit root-cause FIX): "thành công" giờ bao gồm CẢ
+    // thất bại có CHỮ KÝ MỚI (tool + text kết quả khác nhau) trong chu kỳ —
+    // mission r10 chết vì chu kỳ 10 toàn tool call exit≠0 (chạy checker thiếu
+    // file → MODULE_NOT_FOUND là THÔNG TIN, không phải bế tắc) → bị tính stall
+    // sai. Chu kỳ chỉ stall khi: 0 call thành công VÀ mọi thất bại lặp đúng
+    // chữ ký đã gặp trong chu kỳ (không học gì mới). Ngưỡng số chu kỳ stall:
+    // env GOAL_LOOP_STALL_CYCLES (mặc định 3).
+    const cycleToolEvents = evidence.filter(e => e.cycle === cycle && e.kind === 'tool')
+    const cycleSuccessfulTools = cycleToolEvents.filter(e => e.success === true).length
+    const cycleFailureSigs = new Set(
+      cycleToolEvents.filter(e => e.success !== true).map(e => `${e.tool}|${(e.text || '').slice(0, 120)}`)
+    )
+    // Chữ ký thất bại chỉ tính "mới" nếu KHÔNG lặp đúng nguyên văn chữ ký của
+    // chu kỳ trước — thất bại lặp y hệt qua nhiều chu kỳ vẫn là bế tắc thật.
+    const newFailureSigs = [...cycleFailureSigs].filter(s => !prevCycleFailureSigs.has(s))
+    const cycleProductiveSignals = cycleSuccessfulTools + (newFailureSigs.length > 0 ? 1 : 0)
+    prevCycleFailureSigs = cycleFailureSigs
+    if (cycleProductiveSignals > 0) {
       if (stallCycles > 0) stallCycles = 0
     } else {
       stallCycles++
-      console.warn(`[GoalLoop] ${agentName} STALL: chu kỳ ${cycle} không có tool call thành công nào (${stallCycles}/3 chu kỳ liên tiếp)`)
-      recordAgentThought(agentSessionId, `⚠️ Chu kỳ ${cycle} kết thúc mà không có tool call thành công nào — tín hiệu bế tắc ${stallCycles}/3 (quá 3 chu kỳ liên tiếp loop sẽ dừng để tránh chạy vô hạn)`, totalIterations)
-      if (stallCycles >= 3) {
+      console.warn(`[GoalLoop] ${agentName} STALL: chu kỳ ${cycle} không có tín hiệu tiến triển nào — 0 call thành công + 0 chữ ký thất bại mới (${stallCycles}/${STALL_CYCLE_LIMIT} chu kỳ liên tiếp, ngưỡng GOAL_LOOP_STALL_CYCLES)`)
+      recordAgentThought(agentSessionId, `⚠️ Chu kỳ ${cycle} kết thúc mà không có tín hiệu tiến triển nào (0 tool call thành công + 0 thất bại mới) — tín hiệu bế tắc ${stallCycles}/${STALL_CYCLE_LIMIT} (quá ${STALL_CYCLE_LIMIT} chu kỳ liên tiếp loop sẽ dừng để tránh chạy vô hạn)`, totalIterations)
+      if (stallCycles >= STALL_CYCLE_LIMIT) {
         stopReason = 'no_progress'
         break
       }

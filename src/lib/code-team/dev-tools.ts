@@ -3455,12 +3455,24 @@ export async function shell(args: {
     let timer: ReturnType<typeof setTimeout> | null = null
     let killTimer: ReturnType<typeof setTimeout> | null = null
 
-    // Use spawn with shell:true to allow metacharacters (|, &&, ;, >)
-    // (Windows: shell:true tự dùng cmd.exe; windowsHide chặn cửa sổ console
+    // Use spawn with shell to allow metacharacters (|, &&, ;, >)
+    // (Windows: shell tự dùng cmd.exe; windowsHide chặn cửa sổ console
     // bật lên riêng mỗi lần agent chạy lệnh — bug fix 2026-09-06)
+    //
+    // 2026-09-30 (round-10 audit root-cause FIX): shell:true trên Linux dùng
+    // /bin/sh — thường là DASH, KHÔNG hỗ trợ brace expansion → lệnh hợp lệ
+    // `mkdir -p {scripts,logs,probes}` tạo ra thư mục TÊN LITERAL "{scripts,logs,
+    // probes}" (mission r10 để lại 2 thư mục rác) + agent mất vòng sửa sai.
+    // Ưu tiên bash (hỗ trợ đầy đủ cú pháp POSIX + bashism); nếu bash không tồn
+    // tại thì fallback shell:true như cũ. Override qua TMO_SHELL_BIN.
+    let shellOpt: boolean | string = true
+    const preferredShell = process.env.TMO_SHELL_BIN || '/bin/bash'
+    try {
+      if (existsSync(preferredShell)) shellOpt = preferredShell
+    } catch { /* fail-open: giữ shell:true */ }
     const child = spawn(effectiveCommand, {
       cwd,
-      shell: true,
+      shell: shellOpt,
       env: { ...process.env, ...(args.env || {}) },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,

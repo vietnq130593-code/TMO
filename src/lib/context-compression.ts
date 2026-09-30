@@ -53,8 +53,18 @@ export const DIGEST_MAX_CHARS = intEnvPositive('GOAL_LOOP_DIGEST_MAX_CHARS', 250
 export const COMPRESS_INPUT_CHARS = 30_000
 /** Ngưỡng tối thiểu số message nén được (dưới đây thì không đáng nén) — goal-loop cũ: 4 */
 export const MIN_COMPRESSIBLE_MESSAGES = 4
-/** Cap ký tự tool result khi đẩy vào messages (goal-loop cũ: MAX_TOOL_RESULT_CHARS = 4000) */
-export const TOOL_RESULT_MAX_CHARS = 4000
+/**
+ * Cap ký tự tool result khi đẩy vào messages (goal-loop cũ: MAX_TOOL_RESULT_CHARS = 4000).
+ *
+ * 2026-09-30 (round-10 audit root-cause): 4000 ký tự làm agent audit KHÔNG THỂ
+ * đọc trọn output shell baseline / file_list / protected-hash của chính mình →
+ * báo cáo cuối thành "chưa kiểm định được" dù artifact tồn tại (mission
+ * run_1790755954444_1 — 100% các mục "KHÔNG KIỂM ĐỊNH ĐƯỢC" đều do cắt giữa).
+ * Nâng mặc định 4000 → 12000 + env-configurable (TOOL_RESULT_MAX_CHARS) để
+ * điều chỉnh theo loại nhiệm vụ mà không cần sửa code. smartTruncate ở
+ * pushToolMessage (giữ đầu+cuối) vẫn bảo vệ context tổng.
+ */
+export const TOOL_RESULT_MAX_CHARS = intEnvPositive('TOOL_RESULT_MAX_CHARS', 12_000)
 
 /** Timeout LLM digest (goal-loop cũ: 90s — utility prompt nhỏ, không cần dài hơn) */
 const DIGEST_LLM_TIMEOUT_MS = 90_000

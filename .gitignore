@@ -236,6 +236,13 @@ audit-out/*
 !audit-out/collect-evidence.sh
 !audit-out/gen-audit-report.mjs
 !audit-out/validate-report.mjs
+# Round-10 audit fix: EVIDENCE BUNDLE BỀN VỮNG — report nghiệm thu (check-report.json
+# chứa sha256 mọi file evidence + phân loại + verdict; baseline-report.json chứa
+# bằng chứng không side-effect) được git-track để sống sót qua git clean + restart.
+# Evidence thô (tool-probes/*.json, baseline/*.json, *.png) vẫn không track —
+# hash của chúng nằm trong report là đủ cho tính bền vững.
+!audit-out/reports/
+!audit-out/reports/**
 
 # Round-5 self-destruct recipe: flag runtime của timed keepalive-off
 # (chứa epoch timestamp hết hạn — tạm thời, không phải cấu hình)

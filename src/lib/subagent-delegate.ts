@@ -101,10 +101,18 @@ const ALL_SUBAGENT_CAPS_UNLIMITED =
 const SUBAGENT_EFFECTIVE_MAX_ITERATIONS = ALL_SUBAGENT_CAPS_UNLIMITED
   ? SUBAGENT_HARD_CEILING_ITERATIONS
   : SUBAGENT_MAX_ITERATIONS
-/** Cap ký tự tool result trong context CỦA SUB-AGENT */
-const SUBAGENT_TOOL_RESULT_CHARS = 4000
-/** Cap ký tự báo cáo trả về PARENT */
-const REPORT_MAX_CHARS = 3500
+/** Cap ký tự tool result trong context CỦA SUB-AGENT
+ * 2026-09-30 (round-10 audit): 4000 → 8000 + env (SUBAGENT_TOOL_RESULT_CHARS)
+ * — sub-agent audit đọc evidence/output dài cần trọn vẹn hơn (cùng root-cause
+ * với TOOL_RESULT_MAX_CHARS của goal-loop). */
+const SUBAGENT_TOOL_RESULT_CHARS = intEnv('SUBAGENT_TOOL_RESULT_CHARS', 8_000)
+/** Cap ký tự báo cáo trả về PARENT
+ * 2026-09-30 (round-10 audit): 3500 → 9000 + env (SUBAGENT_REPORT_MAX_CHARS)
+ * + cắt ĐẦU+CUỐI (smartTruncate) thay vì head-only — phần cuối báo cáo sub-agent
+ * (danh sách artifact path + kết luận verification) là phần parent cần nhất;
+ * head-only cắt mất đúng phần đó (mission r10: parent không thấy artifact path
+ * → kết luận "không thể xác nhận manifest/probe tồn tại"). */
+const REPORT_MAX_CHARS = intEnv('SUBAGENT_REPORT_MAX_CHARS', 9_000)
 
 /** Map tên agent → position trong Code Team (resolveAgent nhận position).
  * TASK 43 — export cho eval/agent-harness (resolve profile theo tên Code Team).
@@ -900,7 +908,9 @@ async function runSubAgentForProfileInner(params: {
     }
 
     if (report.length > REPORT_MAX_CHARS) {
-      report = report.slice(0, REPORT_MAX_CHARS) + '\n…(báo cáo sub-agent đã nén — hỏi lại sub-agent nếu cần chi tiết)'
+      // 2026-09-30: head-only → truncateResult (giữ đầu 60% + cuối) — kết luận
+      // + artifact path của sub-agent nằm CUỐI báo cáo, không được cắt mất.
+      report = truncateResult(report, REPORT_MAX_CHARS) + '\n…(báo cáo sub-agent đã nén — hỏi lại sub-agent nếu cần chi tiết)'
     }
 
     // IMP-1 (Task G — decouple success khỏi evaluation.pass): success =

@@ -11,14 +11,26 @@
  *       (PASS|FAIL|BLOCKED_CONFIG|BLOCKED_EXTERNAL|NOT_APPLICABLE) + reason
  *       khác rỗng, và KHÔNG entry lạ ngoài registry
  *   C4. Evidence tồn tại — mọi builtin PASS có file bằng chứng
- *       audit-out/tool-probes/<tool>.json (probe 1:1 thật)
+ *       audit-out/tool-probes/<tool>.json (probe 1:1 thật) + MỌI probe có đủ
+ *       exitStatus + timestamp + rawResponse (full coverage, không sample —
+ *       round-10 fix: trước đây chỉ sample 3 file đầu)
+ *   C5. PASS ⟺ exitStatus=success — ĐỦ MỌI probe file (không chỉ entry PASS;
+ *       phân loại phải nhất quán với raw evidence ở mọi entry)
+ *   C6. Skill four-part — mọi fs-skill/db-skill có part1..part4 = true
+ *       (mapping + SKILL.md + front-matter + dry-run) trong skillValidation
+ *   C7. Baseline side-effect — nếu audit-out/baseline/{before,after}.json tồn
+ *       tại (sinh bởi `bun run audit:baseline`): protected files + package.json
+ *       phải IDENTICAL before/after (chứng minh không side effect + khả năng
+ *       khôi phục package.json từ bản copy trong baseline)
  *
  * Kèm: đối chiếu baseline (package.json + .env hash, git HEAD) — cảnh báo nếu
  * repo đã di chuyển sau khi manifest sinh (không fail cứng).
+ * Report bền vững: audit-out/reports/check-report.json (git re-include —
+ * sống sót qua git clean; chứa sha256 của MỖI file evidence = evidence bundle).
  *
  * Exit code: 0 = toàn bộ bất biến ĐẠT (chuỗi nghiệm thu XANH) · 1 = có vi phạm.
  *
- * Usage: cd /home/z/tmo-app && bun scripts/audit-check.ts
+ * Usage: bun run audit:check   (alias trong package.json)
  */
 
 import * as fs from 'node:fs'
@@ -33,6 +45,11 @@ const VALID_LABELS = ['PASS', 'FAIL', 'BLOCKED_CONFIG', 'BLOCKED_EXTERNAL', 'NOT
 type Label = typeof VALID_LABELS[number]
 
 interface Entry { id: string; kind: string; classification: string; reason: string }
+
+interface ProbeFile { tool?: string; probes?: Array<{ exitStatus?: string; timestamp?: string; rawResponse?: string; rawError?: string; durationMs?: number }> }
+
+/** Bảng sha256 mỗi file evidence — đưa vào report bền vững (evidence bundle) */
+const evidenceHashes: Record<string, string> = {}
 
 let violations = 0
 let warnings = 0
@@ -145,26 +162,92 @@ async function main() {
   else vpass('không có entry lạ ngoài registry (mcp-tool khai báo minh bạch mock Phase 3)')
   if (bad.length === 0) console.log(`  ➜ C3 ĐẠT`)
 
-  // ==================== C4. EVIDENCE TỒN TẠI ====================
-  console.log('\n━━━ C4. Evidence 1:1 tồn tại cho mọi builtin PASS ━━━')
+  // ==================== C4. EVIDENCE TỒN TẠI + SHA-256 (FULL, không sample) ====================
+  console.log('\n━━━ C4. Evidence 1:1 cho mọi builtin PASS — full coverage + SHA-256 ━━━')
   const passBuiltin = entries.filter(e => e.kind === 'builtin-tool' && e.classification === 'PASS')
-  if (!fs.existsSync(PROBES_DIR)) vfail(`thiếu thư mục ${PROBES_DIR} — chạy \`bun scripts/audit-tools.ts\` trước`)
+  if (!fs.existsSync(PROBES_DIR)) vfail(`thiếu thư mục ${PROBES_DIR} — chạy \`bun run audit:tools\` trước`)
   else {
-    let missing = 0
+    let missing = 0, badShape = 0
     for (const e of passBuiltin) {
       const evPath = path.join(PROBES_DIR, `${e.id}.json`)
-      if (!fs.existsSync(evPath)) { missing++; vfail(`builtin PASS \`${e.id}\`: không có ${path.relative(ROOT, evPath)}`) }
-    }
-    if (missing === 0) vpass(`${passBuiltin.length}/${passBuiltin.length} builtin PASS có file bằng chứng tool-probes/<id>.json`)
-    //抽 check 3 file đầu: exitStatus + timestamp + rawResponse có thật
-    const sampled = passBuiltin.slice(0, 3)
-    for (const e of sampled) {
+      if (!fs.existsSync(evPath)) { missing++; vfail(`builtin PASS \`${e.id}\`: không có ${path.relative(ROOT, evPath)}`); continue }
       try {
-        const ev = JSON.parse(fs.readFileSync(path.join(PROBES_DIR, `${e.id}.json`), 'utf-8')) as { probes?: Array<{ exitStatus?: string; timestamp?: string; rawResponse?: string }> }
-        const okShape = (ev.probes?.length ?? 0) > 0 && ev.probes!.every(p => p.exitStatus && p.timestamp && typeof p.rawResponse === 'string')
-        if (okShape) vpass(`sample \`${e.id}\`: ${ev.probes!.length} probe có exitStatus+timestamp+rawResponse`)
-        else vfail(`sample \`${e.id}\`: bằng chứng thiếu trường exitStatus/timestamp/rawResponse`)
-      } catch (err) { vfail(`sample \`${e.id}\`: đọc evidence lỗi — ${err instanceof Error ? err.message : String(err)}`) }
+        const ev = JSON.parse(fs.readFileSync(evPath, 'utf-8')) as ProbeFile
+        const okShape = (ev.probes?.length ?? 0) > 0 && ev.probes!.every(p => p.exitStatus && p.timestamp && (typeof p.rawResponse === 'string' || typeof p.rawError === 'string'))
+        if (!okShape) { badShape++; vfail(`builtin PASS \`${e.id}\`: bằng chứng thiếu exitStatus/timestamp/rawResponse|rawError`) }
+        evidenceHashes[path.relative(ROOT, evPath)] = createHash('sha256').update(fs.readFileSync(evPath)).digest('hex').slice(0, 16)
+      } catch (err) { badShape++; vfail(`builtin PASS \`${e.id}\`: đọc evidence lỗi — ${err instanceof Error ? err.message : String(err)}`) }
+    }
+    if (missing === 0 && badShape === 0) vpass(`${passBuiltin.length}/${passBuiltin.length} builtin PASS có file bằng chứng ĐỦ exitStatus+timestamp+rawResponse|rawError (full coverage)`)
+  }
+
+  // ==================== C5. PASS ⟺ exitStatus=success (MỌI probe file) ====================
+  console.log('\n━━━ C5. Phân loại ⟺ evidence — PASS ⟺ exitStatus=success ở MỌI entry ━━━')
+  {
+    const manifestById = new Map(entries.filter(e => e.kind === 'builtin-tool').map(e => [e.id, e]))
+    let mismatches = 0, checked = 0
+    if (fs.existsSync(PROBES_DIR)) {
+      for (const f of fs.readdirSync(PROBES_DIR).filter(f => f.endsWith('.json'))) {
+        const id = f.replace(/\.json$/, '')
+        const entry = manifestById.get(id)
+        let ev: ProbeFile
+        try { ev = JSON.parse(fs.readFileSync(path.join(PROBES_DIR, f), 'utf-8')) as ProbeFile } catch { continue }
+        const last = ev.probes?.[ev.probes.length - 1]
+        if (!last?.exitStatus) continue
+        checked++
+        // PASS phải có probe cuối success; KHÔNG-PASS (FAIL/BLOCKED_*) thì probe cuối
+        // phải skipped/error — nếu classification ≠ PASS mà exitStatus=success → mâu thuẫn
+        if (entry && entry.classification === 'PASS' && last.exitStatus !== 'success') {
+          mismatches++; vfail(`\`${id}\`: phân loại PASS nhưng probe cuối exitStatus="${last.exitStatus}"`)
+        } else if (entry && entry.classification !== 'PASS' && entry.classification !== 'NOT_APPLICABLE' && last.exitStatus === 'success') {
+          mismatches++; vfail(`\`${id}\`: phân loại ${entry.classification} nhưng probe cuối exitStatus="success" — mâu thuẫn evidence`)
+        }
+      }
+    }
+    if (mismatches === 0) vpass(`${checked} probe file nhất quán phân loại ⟺ exitStatus (0 mâu thuẫn)`)
+    else violations += mismatches
+  }
+
+  // ==================== C6. SKILL FOUR-PART (mapping + SKILL.md + front-matter + dry-run) ====================
+  console.log('\n━━━ C6. Skill four-part — toàn bộ fs-skill + db-skill đủ 4 phần ━━━')
+  {
+    const sv = (manifest as { skillValidation?: { fourPartChecks?: Array<{ slug: string; registry: string; part1?: boolean; part2?: boolean; part3?: boolean; part4?: boolean; reason?: string }> } }).skillValidation
+    const checks = sv?.fourPartChecks ?? []
+    const expectedSkillCount = (live['fs-skill']?.length ?? 0) + (live['db-skill']?.length ?? 0)
+    if (checks.length === 0) vfail('manifest thiếu skillValidation.fourPartChecks — chạy lại `bun run audit:manifest`')
+    else {
+      const incomplete = checks.filter(c => !(c.part1 && c.part2 && c.part3 && c.part4))
+      if (incomplete.length > 0) {
+        for (const c of incomplete.slice(0, 10)) vfail(`skill \`${c.slug}\` (${c.registry}): part1=${c.part1} part2=${c.part2} part3=${c.part3} part4=${c.part4}`)
+        if (incomplete.length > 10) vfail(`… và ${incomplete.length - 10} skill khác thiếu phần`)
+      } else vpass(`${checks.length}/${checks.length} skill đủ 4 phần (mapping + SKILL.md + front-matter + dry-run)`)
+      if (checks.length !== expectedSkillCount) vfail(`số skill trong fourPartChecks (${checks.length}) ≠ số skill registry sống (${expectedSkillCount} = ${live['fs-skill']?.length ?? 0} fs + ${live['db-skill']?.length ?? 0} db)`)
+      else vpass(`đủ số lượng: ${checks.length} = fs-skill(${live['fs-skill']?.length ?? 0}) + db-skill(${live['db-skill']?.length ?? 0})`)
+    }
+  }
+
+  // ==================== C7. BASELINE SIDE-EFFECT (before/after của audit:baseline) ====================
+  console.log('\n━━━ C7. Baseline side-effect — protected files + package.json trước/sau ━━━')
+  {
+    const baselineDir = path.join(ROOT, 'audit-out', 'baseline')
+    const beforePath = path.join(baselineDir, 'before.json')
+    const afterPath = path.join(baselineDir, 'after.json')
+    if (!fs.existsSync(beforePath) || !fs.existsSync(afterPath)) {
+      vwarn('chưa có audit-out/baseline/{before,after}.json — chạy `bun run audit:baseline before` TRƯỚC tác vụ và `bun run audit:baseline after` SAU tác vụ để chứng minh không side effect')
+    } else {
+      try {
+        const before = JSON.parse(fs.readFileSync(beforePath, 'utf-8')) as { protected?: Record<string, string>; packageJsonSha?: string }
+        const after = JSON.parse(fs.readFileSync(afterPath, 'utf-8')) as { protected?: Record<string, string>; packageJsonSha?: string }
+        let diff = 0
+        const protBefore = before.protected ?? {}
+        for (const [file, hash] of Object.entries(protBefore)) {
+          const afterHash = (after.protected ?? {})[file]
+          if (afterHash === undefined) { diff++; vfail(`baseline: ${file} có trong before nhưng thiếu trong after`) }
+          else if (afterHash !== hash) { diff++; vfail(`baseline: ${file} THAY ĐỔI trước/sau (${String(hash).slice(0, 8)} → ${String(afterHash).slice(0, 8)}) — side effect chưa dọn`) }
+        }
+        if (before.packageJsonSha !== after.packageJsonSha) { diff++; vfail(`baseline: package.json thay đổi trước/sau — dùng bản khôi phục trong audit-out/baseline/package.json.restore`) }
+        if (diff === 0) vpass(`${Object.keys(protBefore).length} protected files + package.json IDENTICAL trước/sau — không side effect`)
+      } catch (err) { vfail(`đọc baseline lỗi — ${err instanceof Error ? err.message : String(err)}`) }
     }
   }
 
@@ -186,17 +269,36 @@ async function main() {
     } catch { vwarn('không đọc được git HEAD hiện tại') }
   }
 
-  // ==================== TỔNG KẾT ====================
+  // ==================== TỔNG KẾT + REPORT BỀN VỮNG ====================
   const cls = new Map<string, number>()
   for (const e of entries) cls.set(e.classification, (cls.get(e.classification) || 0) + 1)
   console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
   console.log('TỔNG KẾT CHECKER:')
   console.log(`  Phân loại: ${VALID_LABELS.map(l => `${l}=${cls.get(l) ?? 0}`).join(' · ')}`)
-  console.log(`  Bất biến: C1(${violations === 0 ? 'ĐẠT' : 'VI PHẠM'}) · C2 · C3 · C4 — vi phạm: ${violations} · cảnh báo: ${warnings}`)
+  console.log(`  Bất biến: C1(${violations === 0 ? 'ĐẠT' : 'VI PHẠM'}) · C2 · C3 · C4 · C5 · C6 · C7 — vi phạm: ${violations} · cảnh báo: ${warnings}`)
   console.log(violations === 0
-    ? '  ✅ CHUỖI KIỂM ĐỊNH XANH — không thiếu ID, không trùng, không entry chưa phân loại, evidence đủ'
+    ? '  ✅ CHUỖI KIỂM ĐỊNH XANH — đủ 7 bất biến: không thiếu ID, không trùng, phân loại đủ, evidence 1:1 + hash, PASS⟺success, skill 4 phần, baseline không side effect'
     : '  ❌ CHUỖI KIỂM ĐỊNH CHƯA ĐẠT — xem vi phạm trên')
   console.log(`  KẾT QUẢ: ${entries.length} entry · violations=${violations}\n`)
+
+  // Evidence bundle bền vững — audit-out/reports/ được git re-include (sống qua
+  // git clean), chứa sha256 MỖI file evidence + phân loại + verdict + git HEAD.
+  try {
+    const reportsDir = path.join(ROOT, 'audit-out', 'reports')
+    fs.mkdirSync(reportsDir, { recursive: true })
+    const report = {
+      schema: 'tmo-audit-check-report/2.0',
+      generatedAt: new Date().toISOString(),
+      gitHead: manifest.gitHead,
+      manifestGeneratedAt: manifest.generatedAt,
+      totals: { entries: entries.length, byClassification: Object.fromEntries(cls), violations, warnings },
+      evidenceHashes,
+      exitCode: violations === 0 ? 0 : 1,
+    }
+    fs.writeFileSync(path.join(reportsDir, 'check-report.json'), JSON.stringify(report, null, 2))
+    console.log(`[checker] Report bền vững: audit-out/reports/check-report.json (${Object.keys(evidenceHashes).length} evidence hash)`)
+  } catch (err) { console.warn('[checker] ⚠️ không ghi được report bền vững:', err instanceof Error ? err.message : String(err)) }
+
   process.exit(violations === 0 ? 0 : 1)
 }
 
