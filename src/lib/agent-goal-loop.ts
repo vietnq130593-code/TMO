@@ -291,7 +291,12 @@ const READBACK_TOOLS = new Set(['file_read', 'grep'])
  * lần (chặt hơn cảnh báo chung 4 / cắt cứng 8): breach → nhắc agent DÙNG kết quả
  * có sẵn thay vì đọc lại (KHÔNG cắt — cắt cứng giữ nguyên ở 8 cho mọi tool).
  */
-const READ_REPEAT_TOOLS = new Set(['file_read', 'file_list', 'grep', 'knowledge_search', 'list_custom_tools'])
+const READ_REPEAT_TOOLS = new Set(['file_read', 'file_list', 'grep', 'knowledge_search', 'list_custom_tools', 'list_skills', 'mcp_list_servers', 'read_skill', 'read_tool', 'manage_tools', 'get_app_runtime_status', 'todo_read', 'context_recall'])
+/** ROUND-12c — tool THUẦN quan sát/lập kế hoạch (không tạo/mutate artifact).
+ * Chu kỳ mà MỌI tool call thuộc set này = "planning-only" — streak ≥2 chu kỳ
+ * → ép chuyển GĐ2 triển khai (bằng chứng mission audit: chu kỳ 54-67 lặp
+ * todo_write + list registry, không file_write/shell/probe nào). */
+const PLANNING_LOOP_TOOLS = new Set([...READ_REPEAT_TOOLS, 'todo_write', 'knowledge_graph', 'list_builtin_tools', 'http_get', 'http_read_webpage'])
 /** [C] Tool sửa đổi — sau những tool này PHẢI có kiểm định lại trước khi kết luận */
 const MODIFY_TOOLS = new Set(['file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'mkdir', 'shell', 'run_bg', 'git_commit', 'delegate_task', 'dispatch_agent', 'dispatch_agents_parallel', 'request_code_team'])
 /** FIX 2026-09-14 #7 — tool kiểm định MẠNH (đối lập READBACK chỉ-đọc-again: với
@@ -496,7 +501,7 @@ GIAI ĐOẠN 0 — QUAN SÁT & PHÂN TÍCH (BẮT BUỘC trước mọi hành đ
 - XÁC ĐỊNH việc chu kỳ này: PHẢI là việc MỚI có tiến triển — không lặp lại việc đã THÀNH CÔNG, không lặp y hệt việc đã THẤT BẠI (đổi tool / đổi args / đổi cách tiếp cận).
 
 GIAI ĐOẠN 1 — XÁC ĐỊNH VẤN ĐỀ & LẬP KẾ HOẠCH:
-- BƯỚC ĐẦU TIÊN của mọi task từ 2 bước trở lên (gần như MỌI task làm việc): gọi todo_write (trên đường CLI là tool tmo_todo) chia nhỏ kế hoạch TRƯỚC KHI hành động — mỗi tiêu chí nghiệm thu ít nhất 1 todo tương ứng (ghi "[Nghiệm thu n]" trong nội dung) + các todo THU THẬP DỮ LIỆU từ bước biên độ dữ liệu. Mỗi todo viết dạng KIỂM ĐỊNH ĐƯỢC (xong = kiểm tra/chạy gì để biết đạt) — đừng viết todo mơ hồ kiểu "xử lý phần X". Bỏ qua todo_write chỉ khi task ĐÚNG 1 bước (một câu hỏi đơn lẻ trả lời ngay).
+- BƯỚC ĐẦU TIÊN của mọi task từ 2 bước trở lên (gần như MỌI task làm việc): gọi todo_write (trên đường CLI là tool tmo_todo) chia nhỏ kế hoạch TRƯỚC KHI hành động — mỗi tiêu chí nghiệm thu ít nhất 1 todo tương ứng (ghi "[Nghiệm thu n]" trong nội dung) + các todo THU THẬP DỮ LIỆU từ bước biên độ dữ liệu. Mỗi todo viết dạng KIỂM ĐỊNH ĐƯỢC (xong = kiểm tra/chạy gì để biết đạt) — đừng viết todo mơ hồ kiểu "xử lý phần X". Bỏ qua todo_write chỉ khi task ĐÚNG 1 bước (một câu hỏi đơn lẻ trả lời ngay). NGOẠI LỆ ƯU TIÊN CAO NHẤT (round-12c): nếu directive chu kỳ có khối "🚨 VÒNG LẶP LẬP KẾ HOẠCH" hoặc "🚨 ÉP TRIỂN KHAI" → kế hoạch ĐÃ ĐỦ — BỎ QUA quan sát/todo_write, tool call ĐẦU TIÊN phải là TRIỂN KHAI (file_write/shell/probe) theo todo in_progress; todo_write chỉ dùng SAU khi có tool triển khai thành công (đóng todo kèm bằng chứng).
 - KỶ LUẬT TODO (bắt buộc): todo làm XONG phải được đánh dấu completed NGAY trong lần todo_write kế tiếp TRƯỚC KHI thêm todo mới (đóng việc cũ rồi mới mở việc mới — danh sách luôn phản ánh trạng thái thật). Việc phức tạp cần phân rã tiếp → tạo TODO CON: gọi todo_write với "id" của todo cha trong trường "parentId" của todo con (hiển thị lồng nhau trong panel — KHÔNG viết phẳng trùng nội dung). Cập nhật todo cũ — KHÔNG viết lại từ đầu.
 - 🧩 PHÂN LOẠI THEO CHỨC TRÁCH (user directive 2026-10-27): khi lập/kết nạp todo, đối chiếu TỪNG việc với chức trách được thiết kế cho bạn (vai trò của chính mình): việc THUỘC chức trách mình → tự làm bằng tools của mình; việc NGOÀI chức trách (chuyên môn của agents khác: code/review/research/tối ưu/thiết kế... — đối chiếu Agent Roster) → KHÔNG tự làm thay: giao đúng người (Code Team qua delegate_task, agent phù hợp qua dispatch_agent) kèm mô tả nhiệm vụ + tiêu chí nghiệm thu rõ ràng, rồi tổng hợp báo cáo của họ. Bạn là người ĐIỀU PHỐI kết quả đúng chuyên môn — không phải người ôm hết mọi việc.
 - Sau khi chốt Todos, ưu tiên delegate từng todo/nhóm todo cho agent phù hợp ngay (đây là việc chính của orchestrator).
@@ -993,7 +998,7 @@ function buildDelegationOutcomeThought(cycle: number, tc: { name: string; args: 
 }
 
 /** Directive nối tiếp chu kỳ — chẩn đoán + kế hoạch mới từ evaluator */
-function buildContinuationDirective(v: EvalVerdict, cycle: number, cutMidWork: boolean, maxCyclesDisplay: number = EFFECTIVE_MAX_CYCLES, doneSummary?: string): string {
+function buildContinuationDirective(v: EvalVerdict, cycle: number, cutMidWork: boolean, maxCyclesDisplay: number = EFFECTIVE_MAX_CYCLES, doneSummary?: string, planningLoopStreak?: number): string {
   const missing = v.missing.length > 0 ? v.missing.map(m => `- ${m}`).join('\n') : '- (trọng tài không liệt kê cụ thể — tự rà soát lại mục tiêu)'
   // TASK 43 — COUNTERFACTUAL: dòng nextPlan bắt đầu "CF:" là hướng PHẢN THỰC
   // do trọng tài đề xuất (nếu làm lại từ đầu — làm gì KHÁC thay vì cách đã
@@ -1005,6 +1010,17 @@ function buildContinuationDirective(v: EvalVerdict, cycle: number, cutMidWork: b
     ? `\n🔄 HƯỚNG PHẢN THỰC (COUNTERFACTUAL — cân nhắc TRƯỚC khi bám kế hoạch cũ):\n${cfItems.map(p => `- ${p.replace(/^CF\s*:/i, '').trim()}`).join('\n')}\n`
     : ''
   const cut = cutMidWork ? '\n⚠️ Chu kỳ trước bị cắt giữa chừng do hết vòng lặp — công việc có thể đang dở.' : ''
+  // ROUND-12c (2026-09-30 — user report "kẹt lặp todo_write + tra cứu registry
+  // chu kỳ 54-67"): N chu kỳ liên tiếp CHỈ có tool quan sát/lập kế hoạch —
+  // vòng lặp GĐ0→GĐ1 không bao giờ sang GĐ2. Nguyên nhân amplifer: app RSS
+  // self-exit mỗi ~2 phút (mỗi đời sống 1-2 vòng), directive cũ luôn mở đầu
+  // "(1) cập nhật todo_write" → vòng đầu tiên BỊ TIÊU vào lập kế hoạch rồi
+  // chết. Khi streak ≥2: ép mệnh lệnh triển khai ĐỨNG ĐẦU + cấm list_*/
+  // todo_write trước tool triển khai đầu tiên thành công.
+  const inPlanningLoop = (planningLoopStreak ?? 0) >= 2
+  const plBlock = inPlanningLoop
+    ? `\n🚨 VÒNG LẶP LẬP KẾ HOẠCH — ${planningLoopStreak} chu kỳ liên tiếp CHỈ có quan sát registry + todo_write, KHÔNG có tool TRIỂN KHAI nào (file_write/file_edit/shell/probe). Kế hoạch ĐÃ ĐỦ, thông tin registry ĐÃ CÓ trong transcript (KHÔNG tra lại list_*/read lần nữa). Chu kỳ này: tool call ĐẦU TIÊN phải là TRIỂN KHAI theo todo in_progress đầu tiên — tạo artifact (file_write), chạy lệnh (shell), hoặc chạy probe. TUYỆT ĐỐI KHÔNG gọi list_*/todo_write/todo_read/file_read trước khi có ≥1 tool triển khai HOÀN TẤT.\n`
+    : ''
   // 2026-10 PROCESS INTEGRITY — khối "việc ĐÃ làm" (quan sát): agent chu kỳ
   // kế NHÌN THẤY những gì chu kỳ trước đã làm thành công → không làm lại y hệt
   // (nguồn lặp phổ biến: CLI spawn mới không nhớ việc cũ → verify lại từ đầu).
@@ -1017,7 +1033,13 @@ function buildContinuationDirective(v: EvalVerdict, cycle: number, cutMidWork: b
   const debtPriority = v.sideIssues.length > 0
     ? `\n📌 NỢ KỸ THUẬT chu kỳ trước còn tồn tại (ƯU TIÊN xử lý TRƯỚC khi làm phần việc còn thiếu):\n${v.sideIssues.map(s => `- ${s}`).join('\n')}\n`
     : ''
-  return `[GOAL-LOOP: Chu kỳ ${cycle}/${fmtCap(maxCyclesDisplay)}] Mục tiêu CHƯA hoàn thành theo đánh giá độc lập (độ tin cậy ${Math.round(v.confidence * 100)}%).${cut}${done}
+  // ROUND-12c — khi kẹt vòng lặp lập kế hoạch: ĐẢO thứ tự chỉ thị — triển khai
+  // TRƯỚC (bỏ bước "cập nhật todo_write" mở đầu; todo_write chỉ dùng sau khi
+  // có tool triển khai thành công, để đóng todo đúng bằng chứng CI-2).
+  const actionItems = inPlanningLoop
+    ? `(1) TRIỂN KHAI NGAY tool call đầu tiên theo todo in_progress (KHÔNG cập nhật todo_write trước — kế hoạch trên + todo list ĐÃ ĐỦ), (2) tiếp tục lần lượt các todo còn lại MỖI chu kỳ ít nhất 1 tool triển khai, (3) sau khi triển khai mới dùng todo_write đóng todo kèm bằng chứng + KIỂM ĐỊNH bằng tool thật`
+    : `(1) cập nhật todo_write với kế hoạch trên (nợ kỹ thuật xếp TRƯỚC, điều chỉnh nếu thấy hợp lý hơn), (2) khắc phục vấn đề, (3) KIỂM ĐỊNH LẠI bằng tools để có bằng chứng`
+  return `[GOAL-LOOP: Chu kỳ ${cycle}/${fmtCap(maxCyclesDisplay)}] Mục tiêu CHƯA hoàn thành theo đánh giá độc lập (độ tin cậy ${Math.round(v.confidence * 100)}%).${plBlock}${cut}${done}
 
 ❌ Còn thiếu:
 ${missing}
@@ -1027,7 +1049,7 @@ ${debtPriority}
 📋 Kế hoạch tiếp theo:
 ${plan}
 ${cfBlock}
-Hãy: (1) cập nhật todo_write với kế hoạch trên (nợ kỹ thuật xếp TRƯỚC, điều chỉnh nếu thấy hợp lý hơn), (2) khắc phục vấn đề, (3) KIỂM ĐỊNH LẠI bằng tools để có bằng chứng. KHÔNG lặp lại đúng hành động đã thất bại — nếu cách cũ fail, đổi cách tiếp cận.`
+Hãy: ${actionItems}. KHÔNG lặp lại đúng hành động đã thất bại — nếu cách cũ fail, đổi cách tiếp cận.`
 }
 
 /**
@@ -2041,8 +2063,24 @@ export async function runGoalDrivenLoop(params: {
   // chuyển evaluator đánh giá lại hướng đi. Không loại trừ tool nào — chính
   // các tool verify (file_read/grep) là thủ phạm lặp phổ biến nhất (18 vòng
   // xác minh của e2eb); verify hợp lệ hiếm khi cần ≥4 lần y hệt args.
-  const toolSignatureCounts = new Map<string, number>()
+  //
+  // ROUND-12c (2026-09-30): map này TRƯỚC ĐÂY in-memory — process chết bởi RSS
+  // self-exit mỗi ~2 phút (mission audit nặng) → map reset → ngưỡng 3/4/8 không
+  // bao giờ đạt trong 1 đời sống (bằng chứng: chu kỳ 54-67 lặp list_skills/
+  // todo_write vô hạn, "Phát hiện đọc lặp" 0 lần trong dev.log). Giờ: KHÔI
+  // PHỤC từ checkpoint (worker persist toolSignatures — chỉ entry ≥2) + tính
+  // streak planning-only để ép chuyển GĐ2 khi chuỗi chu kỳ không có tool triển khai.
+  const toolSignatureCounts = new Map<string, number>(resumeState?.toolSignatures ?? [])
+  if (resumeState?.toolSignatures?.length) {
+    console.log(`[GoalLoop] ${agentName} RESUME: khôi phục ${resumeState.toolSignatures.length} tool-signature counter (chống lặp tích lũy qua restart)`)
+  }
   let signatureOverrun = false
+  /** ROUND-12c — số chu kỳ LIÊN TIẾP chỉ toàn tool quan sát/lập kế hoạch
+   * (todo_write, list registry, read...) không có tool triển khai nào.
+   * Streak ≥2 → directive chu kỳ kế ép triển khai ngay (xem buildContinuationDirective). */
+  let planningOnlyStreak = resumeState?.planningOnlyStreak ?? 0
+  /** ROUND-12c — chu kỳ hiện tại có tool TRIỂN KHAI (ngoài PLANNING_LOOP_TOOLS) chưa */
+  let cycleHadExecutionTool = false
   /** 2026-10 — số tool call THÀNH CÔNG với signature MỚI (lần đầu xuất hiện)
    *  trong chu kỳ hiện hành — dùng làm điều kiện RENEWAL: chu kỳ chỉ lặp lại
    * các hành động cũ (verify đi verify lại) → KHÔNG được tái lập cửa sổ chu kỳ
@@ -2060,6 +2098,9 @@ export async function runGoalDrivenLoop(params: {
   let lastStashedDataScope = ''
   const noteToolSignature = (cycleNum: number, name: string, args: Record<string, unknown>, ok: boolean): void => {
     try {
+      // ROUND-12c — đánh dấu chu kỳ có tool TRIỂN KHAI (đếm cả fail: ý định
+      // triển khai vẫn là triển khai, không phải planning-only)
+      if (!PLANNING_LOOP_TOOLS.has(name)) cycleHadExecutionTool = true
       const sig = `${name}:${JSON.stringify(args).slice(0, 300)}`
       const n = (toolSignatureCounts.get(sig) || 0) + 1
       toolSignatureCounts.set(sig, n)
@@ -2137,6 +2178,13 @@ export async function runGoalDrivenLoop(params: {
     // FIX (R2-b #2): persist danh sách debt issues còn treo — resume giữa debt
     // cycle không mất ngữ cảnh (cap 20 issue × 300 chars — chống phình checkpoint).
     pendingDebtIssues: pendingDebtIssues.slice(-20).map(s => s.slice(0, 300)),
+    // ROUND-12c — persist repetition-detection + planning-loop state: process
+    // chết RSS mỗi ~2 phút → không persist thì counter reset (bằng chứng chu kỳ
+    // 54-67). Chỉ giữ entry count ≥2 (entry 1 chưa gần ngưỡng), cap 200 entry.
+    toolSignatures: Array.from(toolSignatureCounts.entries())
+      .filter(([, n]) => n >= 2)
+      .slice(-200) as Array<[string, number]>,
+    planningOnlyStreak,
     savedAt: Date.now(),
   })
   /** Fire onCheckpoint (sync/async) — fail-open */
@@ -2406,10 +2454,10 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} SHR directive: belief=${shrBeliefBlock ? 'yes' : 'no'} dataScope=${dataScopeBlock ? 'yes' : 'no'} uncertain=${uncertainBlock ? 'yes' : 'no'} priorCoT=${prior.matchedCount} mẩu khớp`)
           }
         } catch { /* fail-open — SHR không được phép làm hỏng directive */ }
-        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles, doneSummary) + similarErrorsBlock + advisoryBlock + runTodosBlock + todoStaleWarnBlock + dataScopeBlock + uncertainBlock + shrBeliefBlock + priorCotBlock
+        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles, doneSummary, planningOnlyStreak) + similarErrorsBlock + advisoryBlock + runTodosBlock + todoStaleWarnBlock + dataScopeBlock + uncertainBlock + shrBeliefBlock + priorCotBlock
         messages.push({ role: 'user', content: directive })
-        evidence.push({ cycle, kind: 'directive', text: `Chu kỳ ${cycle}: chẩn đoán "${lastVerdict.rootCause.slice(0, 120)}" → kế hoạch mới${similarErrorsBlock ? ' + lỗi tương tự đã gặp (episodic memory)' : ''}${advisoryBlock ? ' + tư vấn Omega orchestrator' : ''}` })
-        recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ0 QUAN SÁT & PHÂN TÍCH: đọc kết quả tích lũy + chẩn đoán trọng tài: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${similarErrorsBlock ? ' (kèm lỗi tương tự đã gặp)' : ''}${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}`, totalIterations)
+        evidence.push({ cycle, kind: 'directive', text: `Chu kỳ ${cycle}: chẩn đoán "${lastVerdict.rootCause.slice(0, 120)}" → kế hoạch mới${similarErrorsBlock ? ' + lỗi tương tự đã gặp (episodic memory)' : ''}${advisoryBlock ? ' + tư vấn Omega orchestrator' : ''}${planningOnlyStreak >= 2 ? ` + 🚨 ÉP TRIỂN KHAI (streak ${planningOnlyStreak} chu kỳ planning-only)` : ''}` })
+        recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ0 QUAN SÁT & PHÂN TÍCH: đọc kết quả tích lũy + chẩn đoán trọng tài: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${similarErrorsBlock ? ' (kèm lỗi tương tự đã gặp)' : ''}${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}${planningOnlyStreak >= 2 ? ` — 🚨 PHÁ VÒNG LẶP: ${planningOnlyStreak} chu kỳ liên tiếp chỉ lập kế hoạch, chu kỳ này BẮT BUỘC triển khai tool trước` : ''}`, totalIterations)
       }
     }
 
@@ -2417,6 +2465,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     let cycleIterations = 0
     let cycleToolCalls = 0
     cycleNewSuccessSignatures = 0 // 2026-10 — đếm lại mỗi chu kỳ (điều kiện renewal)
+    cycleHadExecutionTool = false // ROUND-12c — đếm lại mỗi chu kỳ (điều kiện planning-only streak)
     cycleVerifyEvidence = [] // [C] bằng chứng kiểm định tính lại mỗi chu kỳ
     cycleTodoEvidence = [] // IMP-2 (F2) — bằng chứng todo của chu kỳ, tính lại mỗi chu kỳ
     cycleCodeModified = false // FIX #7 — tính lại mỗi chu kỳ
@@ -3400,6 +3449,14 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
 
     // ===== EVALUATE — trọng tài độc lập =====
     console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} kết thúc (${endedBy}, ${cycleToolCalls} tool calls) — gọi evaluator`)
+    // ROUND-12c — cập nhật planning-only streak: chu kỳ KHÔNG có tool triển khai
+    // nào (chỉ todo_write/list registry/hoặc 0 tool) → streak+1; có ≥1 tool
+    // triển khai (kể cả fail) → reset. Streak ≥2 → chu kỳ kế bị ép triển khai.
+    planningOnlyStreak = cycleHadExecutionTool ? 0 : planningOnlyStreak + 1
+    if (planningOnlyStreak >= 2) {
+      console.log(`[GoalLoop] ${agentName} ⚠️ PLANNING-ONLY STREAK ${planningOnlyStreak} chu kỳ (không tool triển khai) — chu kỳ ${cycle + 1} sẽ ép GĐ2 triển khai`)
+      recordAgentThought(agentSessionId, `🚨 Phát hiện vòng lặp lập kế hoạch: ${planningOnlyStreak} chu kỳ liên tiếp không có tool triển khai nào — chu kỳ kế bị ép chuyển sang GĐ2 (triển khai) ngay`, totalIterations)
+    }
     const strongVerifyToolsAvailable = effectiveTools.some(t => STRONG_VERIFY_TOOLS.has(t))
     // 2026-10 — directive Opus: evaluator thấy MỤC TIÊU sạch + TỪNG tiêu chí
     // nghiệm thu (trước đây slice 2000 chars đầu của directive 16k làm mất

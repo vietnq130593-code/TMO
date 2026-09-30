@@ -129,6 +129,18 @@ export interface GoalLoopCheckpoint {
    *  DEBT CHECK kích hoạt đúng, nợ không bị phán complete xóa chìm.
    *  (Optional — checkpoint cũ không có → hiểu là [].) */
   pendingDebtIssues?: string[]
+  /** ROUND-12c (2026-09-30 — user report "kẹt lặp todo_write + tra cứu
+   *  registry chu kỳ 54-67, không chuyển sang triển khai"): toolSignatureCounts
+   *  là in-memory run-scoped — process chết bởi RSS self-exit mỗi ~2 phút →
+   *  map reset → ngưỡng đọc-lặp 3/4/8 KHÔNG BAO GIỜ đạt trong 1 đời sống.
+   *  Persist signature counter (chỉ entry count ≥2, cap 200) qua checkpoint
+   *  để phát hiện lặp tích lũy QUA restart. (Optional — cũ → hiểu [].) */
+  toolSignatures?: Array<[string, number]>
+  /** ROUND-12c — số chu kỳ LIÊN TIẾP chỉ có tool quan sát/lập kế hoạch
+   *  (todo_write, list registry, read) KHÔNG có tool triển khai nào.
+   *  Streak ≥2 → chu kỳ kế bị ép chuyển sang GĐ2 (triển khai) ngay.
+   *  (Optional → 0.) */
+  planningOnlyStreak?: number
   /** Epoch ms lúc checkpoint được ghi */
   savedAt: number
 }
