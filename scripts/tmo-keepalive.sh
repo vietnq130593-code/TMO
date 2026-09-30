@@ -76,6 +76,32 @@ while true; do
     fi
   fi
 
+  # ===== CORRUPTION SELF-HEAL (fix 2026-09-30 vòng 9 — sự cố thực chiến 06:43) =====
+  # package.json/.env bị ghi đè rác (vd "hacked" 7B — agent probe khi guard off)
+  # → turbopack không compile nổi route nào → MỌI API 500 (18× thực chiến) →
+  # restart PM2 VÔ NGHĨA vì file vẫn hỏng. Watchdog khôi phục TỰ ĐỘNG từ git
+  # HEAD khi file degenerate:
+  #   package.json: JSON parse FAIL   ·   .env: < 20 dòng (bình thường 600+)
+  # Điều kiện KÉP (degenerate + git-modified-vs-HEAD) → file hợp lệ chỉnh có
+  # chủ địch KHÔNG bao giờ bị đụng. Sau restore: Next.js dev tự "Reload env" +
+  # recompile — health hồi phục không cần restart.
+  if ! node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))" >/dev/null 2>&1; then
+    if [ -n "$(git status --porcelain -- package.json 2>/dev/null)" ]; then
+      log "SELF-HEAL: package.json corrupted (JSON parse FAIL + modified vs HEAD) → git checkout -- package.json"
+      git checkout -- package.json 2>/dev/null
+      rm -f "$STATE" 2>/dev/null
+    fi
+  fi
+  ENV_LINES=9999
+  [ -f .env ] && ENV_LINES=$(wc -l < .env 2>/dev/null | tr -d ' ')
+  if [ "$ENV_LINES" -lt 20 ] 2>/dev/null; then
+    if [ -n "$(git status --porcelain -- .env 2>/dev/null)" ]; then
+      log "SELF-HEAL: .env degenerate (${ENV_LINES} dòng + modified vs HEAD) → git checkout -- .env"
+      git checkout -- .env 2>/dev/null
+      rm -f "$STATE" 2>/dev/null
+    fi
+  fi
+
   CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "$URL" 2>/dev/null)
 
   if [ "$CODE" = "200" ]; then

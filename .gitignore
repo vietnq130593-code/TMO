@@ -99,6 +99,14 @@ worklog.md
 # starvation recovery, memory RSS...) từ ToolMetric window API + dev.log.
 # Dùng: bash scripts/round7-monitor.sh [--watch]
 !/scripts/round7-monitor.sh
+# NGOẠI LỆ (VÒNG 9): cặp script audit hạ tầng — audit-manifest.ts sinh manifest
+# máy-đọc hợp nhất 4+1 registry (builtin/custom/db-skill/fs-skill/mcp) +
+# uniqueness + skill 4 phần + baseline trước/sau + verification exit-code;
+# audit-check.ts là checker độc lập chứng minh bất biến (không thiếu ID, không
+# trùng, không entry chưa phân loại, evidence 1:1 tồn tại) — exit 0 = nghiệm thu.
+# Dùng: bun scripts/audit-manifest.ts && bun scripts/audit-check.ts
+!/scripts/audit-manifest.ts
+!/scripts/audit-check.ts
 # NGOẠI LỆ: script test model NIM (user-facing — bun scripts/test-llm-model.ts)
 !/scripts/test-llm-model.ts
 # NGOẠI LỆ: script test agent/chat/utility qua Z-AI SDK (bun scripts/test-agent-zai.ts)

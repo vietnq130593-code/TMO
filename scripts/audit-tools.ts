@@ -184,6 +184,42 @@ async function main() {
   const rows: AuditRow[] = []
   const CTX = { agentName: 'AUDIT', sessionId: 'audit-tools' } as const
 
+  // ==== VÒNG 9 (2026-09-30) — EVIDENCE 1:1 CHO MỖI PROBE (machine-readable) ====
+  // Yêu cầu audit chưa nghiệm thu: mỗi probe phải lưu args (đã redact), raw
+  // response, exit status, timestamp → audit-out/tools-audit.json +
+  // audit-out/tool-probes/<tool>.json. Trọng tài/checker đọc bằng chứng này
+  // thay vì tin bảng console đã rút gọn.
+  type ProbeExit = 'success' | 'error' | 'timeout' | 'skipped'
+  interface ProbeEvidence {
+    tool: string
+    timestamp: string
+    argsRedacted: Record<string, unknown>
+    rawResponse: string
+    exitStatus: ProbeExit
+    durationMs: number
+    errorTag: string
+    origin: 'native' | 'openclaw-routed'
+    flag: string
+  }
+  const evidenceLog: ProbeEvidence[] = []
+  const REDACT_KEY = /key|token|secret|password|auth|credential/i
+  const redactArgs = (args: Record<string, unknown>): Record<string, unknown> => {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(args)) {
+      out[k] = REDACT_KEY.test(k) ? '<redacted>' : v
+    }
+    return out
+  }
+  const safeJson = (v: unknown): string => {
+    try { return JSON.stringify(v, null, 1) ?? String(v) } catch { return String(v) }
+  }
+  const capStr = (s: string, n = 8000) => (s.length > n ? s.slice(0, n) + `…(+${s.length - n} chars — file tool-probes đầy đủ?)` : s)
+
+  // ==== VÒNG 9 — GIT BASELINE (trước audit — đối chiếu sau) ====
+  const gitHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf-8' }).stdout.trim()
+  const gitStatusBefore = spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf-8' }).stdout.trim()
+  console.log(`[audit] Git baseline: HEAD=${gitHead.slice(0, 12)} · dirty=${gitStatusBefore ? gitStatusBefore.split('\n').length + ' file' : '0'}`)
+
   /**
    * BUG FIX (audit 2026-09-30) - FALSE PASS khi tool tra error nghiep vu.
    *
@@ -239,20 +275,43 @@ async function main() {
         note,
         agents: agentsOf(tool),
       })
+      evidenceLog.push({
+        tool,
+        timestamp: new Date().toISOString(),
+        argsRedacted: redactArgs(args),
+        rawResponse: capStr(safeJson(res.result)),
+        exitStatus: ok ? 'success' : 'error',
+        durationMs,
+        errorTag,
+        origin,
+        flag,
+      })
       const icon = ok ? GREEN('OK  ') : (xfail ? YELLOW('XFAIL') : RED('FAIL'))
       console.log(`  ${icon} ${tool.padEnd(22)} ${durationMs}ms${errorTag ? RED(`  ${errorTag}`) : ''}`)
       return res.result
     } catch (err) {
       const durationMs = Date.now() - t0
+      const errMsg = (err instanceof Error ? err.message : String(err))
       rows.push({
         tool,
         origin,
         flag,
         status: 'FAIL',
         durationMs,
-        errorTag: (err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 100),
+        errorTag: errMsg.split('\n')[0].slice(0, 100),
         note: opts.note || '',
         agents: agentsOf(tool),
+      })
+      evidenceLog.push({
+        tool,
+        timestamp: new Date().toISOString(),
+        argsRedacted: redactArgs(args),
+        rawResponse: capStr(String(err)),
+        exitStatus: /timeout|timed out/i.test(errMsg) ? 'timeout' : 'error',
+        durationMs,
+        errorTag: errMsg.split('\n')[0].slice(0, 100),
+        origin,
+        flag,
       })
       console.log(`  ${RED('FAIL')} ${tool.padEnd(22)} ${durationMs}ms  ${RED((err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 80))}`)
       return null
@@ -261,7 +320,45 @@ async function main() {
 
   function skip(tool: string, origin: 'native' | 'openclaw-routed', flag: string, note: string): void {
     rows.push({ tool, origin, flag, status: 'SKIP', durationMs: 0, errorTag: '', note, agents: agentsOf(tool) })
+    evidenceLog.push({
+      tool,
+      timestamp: new Date().toISOString(),
+      argsRedacted: {},
+      rawResponse: `(SKIP — probe không chạy: ${note})`,
+      exitStatus: 'skipped',
+      durationMs: 0,
+      errorTag: '',
+      origin,
+      flag,
+    })
     console.log(`  ${YELLOW('SKIP')} ${tool.padEnd(22)} ${note}`)
+  }
+
+  /** VÒNG 9 — push row + evidence ĐỒNG THỜI cho probe tự viết (không qua
+   * call()) — bảo đảm MỌI probe đều có file bằng chứng 1:1 (checker C4). */
+  function record(
+    tool: string,
+    origin: 'native' | 'openclaw-routed',
+    flag: string,
+    status: 'OK' | 'FAIL' | 'SKIP' | 'XFAIL',
+    durationMs: number,
+    errorTag: string,
+    note: string,
+    raw: unknown,
+    args?: Record<string, unknown>,
+  ): void {
+    rows.push({ tool, origin, flag, status, durationMs, errorTag, note, agents: agentsOf(tool) })
+    evidenceLog.push({
+      tool,
+      timestamp: new Date().toISOString(),
+      argsRedacted: redactArgs(args ?? {}),
+      rawResponse: capStr(safeJson(raw)),
+      exitStatus: status === 'OK' ? 'success' : status === 'SKIP' ? 'skipped' : 'error',
+      durationMs,
+      errorTag,
+      origin,
+      flag,
+    })
   }
 
   console.log(BOLD('\n── Nhóm web/knowledge (gọi API thật — read-only) ──'))
@@ -310,10 +407,10 @@ async function main() {
       const onDisk = fs.readFileSync(path.join(TEMP_WS, 'audit-out/nested/large-file.ts'), 'utf-8')
       sub.push(`disk-verify:${onDisk.includes('phan 1') && onDisk.includes('phan 2') ? 'OK' : 'FAIL'}`)
       const allOk = r1.success === true && r2.success === true && r3.success === false && onDisk.includes('phan 1') && onDisk.includes('phan 2')
-      rows.push({ tool: t, origin: 'native', flag: 'ENABLE_FILE_WRITE', status: allOk ? 'OK' : 'FAIL', durationMs: Date.now() - t0, errorTag: allOk ? '' : sub.join(' | ').slice(0, 100), note: `21-d MỚI — ${sub.join(' · ')}`, agents: agentsOf(t) })
+      record(t, 'native', 'ENABLE_FILE_WRITE', allOk ? 'OK' : 'FAIL', Date.now() - t0, allOk ? '' : sub.join(' | ').slice(0, 100), `21-d MỚI — ${sub.join(' · ')}`, { sub, onDisk: onDisk.slice(0, 200), r1, r2, r3 }, { probe: '4 sub-probe: overwrite + append + path-guard + disk-verify' })
       console.log(`  ${allOk ? GREEN('OK  ') : RED('FAIL')} ${t.padEnd(22)} ${Date.now() - t0}ms  21-d mới — ${sub.join(' · ')}`)
     } catch (err) {
-      rows.push({ tool: t, origin: 'native', flag: 'ENABLE_FILE_WRITE', status: 'FAIL', durationMs: Date.now() - t0, errorTag: String(err).split('\n')[0].slice(0, 100), note: '21-d MỚI', agents: agentsOf(t) })
+      record(t, 'native', 'ENABLE_FILE_WRITE', 'FAIL', Date.now() - t0, String(err).split('\n')[0].slice(0, 100), '21-d MỚI', { error: String(err) })
       console.log(`  ${RED('FAIL')} ${t.padEnd(22)} ${String(err).split('\n')[0].slice(0, 80)}`)
     }
   }
@@ -341,23 +438,23 @@ async function main() {
     try {
       const res = await withTimeout(executeTool(t, { command: 'sleep 120 && echo done' }, CTX), 30_000, t)
       const procId = (res.result as { processId?: string })?.processId
-      rows.push({ tool: t, origin: 'native', flag: '', status: res.success ? 'OK' : 'FAIL', durationMs: Date.now() - t0, errorTag: res.success ? '' : firstErrLine(res.result, 100), note: 'spawn sleep 120 thật', agents: agentsOf(t) })
+      record(t, 'native', '', res.success ? 'OK' : 'FAIL', Date.now() - t0, res.success ? '' : firstErrLine(res.result, 100), 'spawn sleep 120 thật', res.result, { command: 'sleep 120 && echo done' })
       console.log(`  ${res.success ? GREEN('OK  ') : RED('FAIL')} ${t.padEnd(22)} ${Date.now() - t0}ms  pid=${procId}`)
 
       // read_output trên chính process vừa spawn
       const t1 = Date.now()
       const ro = await withTimeout(executeTool('read_output', { process_id: procId }, CTX), 30_000, 'read_output')
-      rows.push({ tool: 'read_output', origin: 'native', flag: '', status: ro.success ? 'OK' : 'FAIL', durationMs: Date.now() - t1, errorTag: ro.success ? '' : firstErrLine(ro.result, 100), note: 'poll process do run_bg spawn', agents: agentsOf('read_output') })
+      record('read_output', 'native', '', ro.success ? 'OK' : 'FAIL', Date.now() - t1, ro.success ? '' : firstErrLine(ro.result, 100), 'poll process do run_bg spawn', ro.result, { process_id: procId })
       console.log(`  ${ro.success ? GREEN('OK  ') : RED('FAIL')} read_output            ${Date.now() - t1}ms`)
 
       // kill_process chính process đó (an toàn — process của audit)
       const t2 = Date.now()
       const kp = await withTimeout(executeTool('kill_process', { process_id: procId }, CTX), 30_000, 'kill_process')
-      rows.push({ tool: 'kill_process', origin: 'native', flag: '', status: kp.success ? 'OK' : 'FAIL', durationMs: Date.now() - t2, errorTag: kp.success ? '' : firstErrLine(kp.result, 100), note: 'kill process do run_bg spawn', agents: agentsOf('kill_process') })
+      record('kill_process', 'native', '', kp.success ? 'OK' : 'FAIL', Date.now() - t2, kp.success ? '' : firstErrLine(kp.result, 100), 'kill process do run_bg spawn', kp.result, { process_id: procId })
       console.log(`  ${kp.success ? GREEN('OK  ') : RED('FAIL')} kill_process           ${Date.now() - t2}ms`)
     } catch (err) {
       for (const t of ['run_bg', 'read_output', 'kill_process']) {
-        rows.push({ tool: t, origin: 'native', flag: '', status: 'FAIL', durationMs: 0, errorTag: String(err).split('\n')[0].slice(0, 100), note: '', agents: agentsOf(t) })
+        record(t, 'native', '', 'FAIL', 0, String(err).split('\n')[0].slice(0, 100), '', { error: String(err) })
       }
       console.log(`  ${RED('FAIL')} run_bg/read_output/kill_process — ${String(err).split('\n')[0].slice(0, 80)}`)
     }
@@ -549,6 +646,43 @@ async function main() {
   fs.mkdirSync(path.join(ROOT, 'docs'), { recursive: true })
   fs.writeFileSync(docPath, md, 'utf-8')
   console.log(`\n[audit] Đã ghi báo cáo: ${docPath}`)
+
+  // ==== VÒNG 9 — MACHINE-READABLE OUTPUT + EVIDENCE FILES + GIT SAU ====
+  // audit-out/tools-audit.json (manifest tool-probe) + audit-out/tool-probes/<tool>.json
+  // (bằng chứng 1:1 từng probe — args redact, raw response, exit, timestamp).
+  const gitStatusAfter = spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf-8' }).stdout.trim()
+  const auditOutDir = path.join(ROOT, 'audit-out')
+  const probesDir = path.join(auditOutDir, 'tool-probes')
+  fs.mkdirSync(probesDir, { recursive: true })
+  for (const f of fs.readdirSync(probesDir)) {
+    const fp = path.join(probesDir, f)
+    try { if (fs.statSync(fp).isFile()) fs.rmSync(fp, { force: true }) } catch { /* best-effort */ }
+  }
+  const perTool = new Map<string, ProbeEvidence[]>()
+  for (const e of evidenceLog) {
+    const arr = perTool.get(e.tool) || []
+    arr.push(e)
+    perTool.set(e.tool, arr)
+  }
+  for (const [tool, evs] of perTool) {
+    fs.writeFileSync(path.join(probesDir, `${tool}.json`), JSON.stringify({ tool, probeCount: evs.length, probes: evs }, null, 1), 'utf-8')
+  }
+  const payload = {
+    schema: 'tmo-tools-audit/1.0',
+    generatedAt: new Date().toISOString(),
+    git: { head: gitHead, statusBefore: gitStatusBefore, statusAfter: gitStatusAfter },
+    summary: { ok, fail, xfail: xfailN, skip: skipN, total: rows.length, builtinCatalog: builtinAll.length, miss: miss.length, missList: miss, extra: extra.length, extraList: extra },
+    classificationMap: {
+      OK: 'PASS — tool chạy thật, success:true, không error payload',
+      FAIL: 'FAIL — tool chạy thật nhưng lỗi (bug executor hoặc lỗi nghiệp vụ)',
+      XFAIL: 'BLOCKED_CONFIG — FAIL do cấu hình/thiết kế có chủ đích (flag off, mock Phase 3, on-demand down)',
+      SKIP: 'NOT_APPLICABLE — không probe an toàn độc lập được (LLM tốn kém / phá hoại / phụ thuộc runtime ngoài)',
+    },
+    rows,
+    evidence: evidenceLog,
+  }
+  fs.writeFileSync(path.join(auditOutDir, 'tools-audit.json'), JSON.stringify(payload, null, 1), 'utf-8')
+  console.log(`[audit] Machine-readable: ${path.join(auditOutDir, 'tools-audit.json')} + ${perTool.size} file bằng chứng trong tool-probes/`)
 
   // ==================== 4. CLEANUP ====================
   try {
