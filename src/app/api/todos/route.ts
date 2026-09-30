@@ -25,6 +25,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ensureDbReady } from '@/lib/db-setup'
+import { withPollCache } from '@/lib/poll-microcache'
 
 export const dynamic = 'force-dynamic'
 
@@ -78,7 +79,14 @@ function isDriftDbError(err: unknown): boolean {
 }
 
 export async function GET(request: NextRequest) {
-  return getTodosHandler(request, 0)
+  // VÒNG 10 — micro-cache + in-flight dedup: UI poll mỗi ~3s nhưng response có
+  // thể 131KB; khi DB bận (mission checkpoint ghi WAL) query chậm → request
+  // chồng đống giữ buffer → góp phần RSS ratchet cạn MemAvailable. TTL 2.5s
+  // đủ tươi cho progress UI, cắt ~50% tải serialize + query.
+  const sessionId = request.nextUrl.searchParams.get('sessionId')
+  const runId = request.nextUrl.searchParams.get('runId')
+  const cacheKey = `td|${sessionId ?? ''}|${runId ?? ''}`
+  return withPollCache(cacheKey, 2500, () => getTodosHandler(request, 0))
 }
 
 /** Handler nội bộ với attempt-count: gặp drift → tự heal rồi retry 1 lần. */

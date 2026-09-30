@@ -69,7 +69,16 @@ interface StatsCacheEntry {
   data: Record<string, unknown>
   timestamp: number
 }
-const STATS_CACHE_TTL = 30 * 1000 // 30 seconds — FIX: was 5s while the frontend polls every 10s, so every other poll re-ran the FULL recompute (~8 Aura cloud round trips + 3 full-table SQLite scans). 30s keeps the UI fresh enough while cutting Aura/SQLite load ~3x.
+const STATS_CACHE_TTL = (() => {
+  // VÒNG 10 FIX (restart-loop RAM): graph 176k entities / 205k rels ổn định suốt mission,
+  // nhưng dashboard poll mỗi 10s + TTL 30s → full recompute 2 lần/phút, mỗi lần materialize
+  // ~40-60MB vào JS heap → GC churn → RSS ratchet 2.3GB trên box 4GB → watchdog self-exit →
+  // mission RESUME lặp vô hạn (39 lần ở chu kỳ 7). Mặc định 5 phút; env STATS_CACHE_TTL_MS
+  // override được; force=true vẫn recompute ngay khi cần.
+  const raw = Number(process.env.STATS_CACHE_TTL_MS)
+  if (Number.isFinite(raw) && raw > 0) return raw
+  return 300 * 1000
+})()
 
 function getStatsCache(): StatsCacheEntry | null {
   const cache = globalThis.__statsCache as StatsCacheEntry | undefined
@@ -1211,18 +1220,24 @@ export async function GET(request: NextRequest) {
           entitiesInRelationships = totalEntities - orphanEntityCount
         } catch {
           // Fallback: estimate from SQLite
+          // VÒNG 10 FIX: trước đây findMany ALL 205k rows rồi đếm distinct bằng JS Set —
+          // materialize toàn bảng vào heap mỗi lần recompute. Giờ aggregate hoàn toàn
+          // trong SQLite (CTE + COUNT, index trên source/target sẵn có) — JS chỉ nhận 2 scalar.
           try {
-            const localRels = await db.localRelationship.findMany({
-              select: { sourceEntityId: true, targetEntityId: true },
-            })
-            const entityIdsInRels = new Set<string>()
-            for (const r of localRels) {
-              if (r.sourceEntityId) entityIdsInRels.add(r.sourceEntityId)
-              if (r.targetEntityId) entityIdsInRels.add(r.targetEntityId)
-            }
-            const localEntityCount = await db.localEntity.count()
-            orphanEntityCount = Math.max(0, localEntityCount - entityIdsInRels.size)
-            entitiesInRelationships = entityIdsInRels.size
+            const rows = await db.$queryRaw<{ entitiesInRels: number | bigint; totalEntities: number | bigint }[]>`
+              WITH rel_ids AS (
+                SELECT sourceEntityId AS id FROM LocalRelationship WHERE sourceEntityId IS NOT NULL
+                UNION
+                SELECT targetEntityId FROM LocalRelationship WHERE targetEntityId IS NOT NULL
+              )
+              SELECT
+                (SELECT COUNT(*) FROM rel_ids) AS entitiesInRels,
+                (SELECT COUNT(*) FROM LocalEntity) AS totalEntities
+            `
+            const entitiesInRels = Number(rows[0]?.entitiesInRels ?? 0)
+            const localEntityCount = Number(rows[0]?.totalEntities ?? 0)
+            orphanEntityCount = Math.max(0, localEntityCount - entitiesInRels)
+            entitiesInRelationships = entitiesInRels
           } catch { /* use defaults */ }
         }
 

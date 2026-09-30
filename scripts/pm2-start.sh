@@ -69,6 +69,20 @@ fi
 find /tmp -maxdepth 1 -name '.bcd9*.so' -mmin +60 -delete 2>/dev/null
 find /tmp -maxdepth 1 -type d -name '.*.node-gyp' -mmin +60 -exec rm -rf {} + 2>/dev/null
 
+# =============================================================================
+# VÒNG 10 (2026-09-30) — HARD-SET NODE_OPTIONS chống restart-loop:
+# ① next dev (Turbopack) để V8 GC lười → RSS ratchet 2.3GB → MemAvailable toàn
+#   cục <650MB → MemWatchdog self-exit → mission goal-loop chết giữa LLM call
+#   (RESUME lặp 39+ lần kẹt "chu kỳ 7, 12 vòng"; attempts leo 62/200).
+# ② PM2 env bị nhiễm "--enable-source-maps" từ một lần --update-env trước (không
+#   có trong ecosystem — khai 1024): source-map giữ map toàn bộ module graph
+#   trong RAM → boot nổ 2.2GB CHỈ TRONG 30s, crash-loop nhanh dần. HARD-SET
+#   (không append) để mọi nguồn nhiễm (shell --update-env, ecosystem cũ 1024,
+#   flag append trùng) đều bị ghi đè deterministic.
+# Nếu log xuất hiện "JavaScript heap out of memory" → nâng 1792 → 2048.
+# =============================================================================
+export NODE_OPTIONS="--max-old-space-size=1664"
+
 # Khởi động Next.js — exec để PM2 sở hữu trực tiếp process node next
 cd "$(dirname "$0")/.."
 exec node node_modules/next/dist/bin/next dev -p "$PORT"

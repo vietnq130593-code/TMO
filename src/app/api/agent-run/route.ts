@@ -35,18 +35,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAgentRuns, hasActiveRun, cancelSessionRuns } from '@/lib/agent-run-tracker'
 import { db } from '@/lib/db'
+import { withPollCache } from '@/lib/poll-microcache'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest) {
-  try {
-    const sessionId = request.nextUrl.searchParams.get('sessionId')
-    const limitRaw = request.nextUrl.searchParams.get('limit')
-    const limit = limitRaw ? Math.min(Math.max(1, Number(limitRaw) || 12), 30) : 12
+  const sessionId = request.nextUrl.searchParams.get('sessionId')
+  const limitRaw = request.nextUrl.searchParams.get('limit')
+  const limit = limitRaw ? Math.min(Math.max(1, Number(limitRaw) || 12), 30) : 12
 
-    if (!sessionId) {
-      return NextResponse.json({ ok: false, error: 'missing `sessionId`' }, { status: 400 })
-    }
+  if (!sessionId) {
+    return NextResponse.json({ ok: false, error: 'missing `sessionId`' }, { status: 400 })
+  }
+
+  // VÒNG 10 — micro-cache + in-flight dedup: UI poll mỗi ~1.2s; khi DB bận
+  // (mission checkpoint) query có khi 7.5s → request chồng đống → RSS ratchet.
+  return withPollCache(`ar|${sessionId}|${limit}`, 2500, () => getAgentRunData(sessionId, limit))
+}
+
+async function getAgentRunData(sessionId: string, limit: number): Promise<Response> {
+  try {
 
     const runs = getAgentRuns(sessionId, limit)
 
