@@ -67,6 +67,11 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
   // hình production hiện 30s: phát hiện vượt ngưỡng sớm gấp đôi, global guard
   // MemAvailable cũng đập mỗi 30s thay vì 60s.
   const MEM_WATCHDOG_INTERVAL_MS = Math.max(10_000, Number(process.env.MEM_WATCHDOG_INTERVAL_MS ?? 60_000))
+  // ROUND-11b — RSS trigger avail-aware: ngưỡng available mà DƯỚI đó box bị
+  // coi là chật (khi đó RSS vượt ngưỡng MỚI tính là vượt thật). Mặc định 900MB
+  // = trên global-guard 650MB (tier sớm) — kernel chỉ OOM khi available cạn,
+  // không phải khi RSS to.
+  const MEM_WATCHDOG_RSS_EXIT_AVAIL_MB = Number(process.env.MEM_WATCHDOG_RSS_EXIT_AVAIL_MB ?? 900)
   // ROUND-3 FIX (2026-09-29 — quan sát vận hành vòng 3): kernel OOM-killer còn
   // xuống tay TRƯỚC khi RSS chạm ngưỡng — bằng chứng dmesg 07:2x: next-server
   // bị kill ở RSS ~1.1GB (dưới ngưỡng 1700) vì V8Worker/turbopack invoke
@@ -112,19 +117,33 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
         }
         if (rssMb > MEM_WATCHDOG_MB) {
           memOverCount++
-          console.warn(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB > ${MEM_WATCHDOG_MB}MB (lần ${memOverCount}/2)`)
+          // ROUND-11b (12:0x — sửa restart-loop do chính round-11 gây ra):
+          // app cold-boot + mission resume ổn định ở 2.1-2.2GB với box 4GB vẫn
+          // còn ~2.3GB available — RSS cao MỘT MÌNH chưa nguy hiểm (kernel chỉ
+          // OOM khi MemAvailable cạn). RSS trigger giờ AVAIL-AWARE: chỉ tính
+          // là "vượt ngưỡng thật sự" khi BOX cũng chật (MemAvailable <
+          // MEM_WATCHDOG_RSS_EXIT_AVAIL_MB); box còn dư → log theo dõi, GIỮ
+          // đếm (không reset — nếu avail cạn về sau sẽ exit ngay check kế).
+          const availMb = readMemAvailableMb()
+          const boxTight = availMb !== null && availMb < MEM_WATCHDOG_RSS_EXIT_AVAIL_MB
+          if (boxTight) {
+            console.warn(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB > ${MEM_WATCHDOG_MB}MB (lần ${memOverCount}/2) VÀ MemAvailable ${availMb}MB < ${MEM_WATCHDOG_RSS_EXIT_AVAIL_MB}MB — box chật thật`)
+          } else {
+            console.warn(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB > ${MEM_WATCHDOG_MB}MB (lần ${memOverCount}/2) NHƯNG MemAvailable ${availMb ?? '?'}MB còn dư — RSS cao một mình chưa nguy hiểm, theo dõi tiếp (không self-exit)`)
+            memOverCount = 1 // giữ 1 nhịp "đã thấy vượt" — exit cần box chật ở check kế
+          }
         } else {
           if (memOverCount > 0) console.log(`[MemWatchdog] RSS hồi về ${rssMb.toFixed(0)}MB — reset đếm`)
           memOverCount = 0
         }
         if (memOverCount >= 2) {
-          console.error(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB vượt ${MEM_WATCHDOG_MB}MB suốt 2 lần kiểm tra (${Math.round(MEM_WATCHDOG_INTERVAL_MS / 1000)}s × 2) — self-exit sạch để kernel OOM không SIGKILL cả cây (PM2 sẽ restart trong ~5s; durable goal jobs RESUME từ checkpoint)`)
+          console.error(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB vượt ${MEM_WATCHDOG_MB}MB suốt 2 lần kiểm tra (${Math.round(MEM_WATCHDOG_INTERVAL_MS / 1000)}s × 2) VÀ box chật (MemAvailable < ${MEM_WATCHDOG_RSS_EXIT_AVAIL_MB}MB) — self-exit sạch để kernel OOM không SIGKILL cả cây (PM2 sẽ restart trong ~5s; durable goal jobs RESUME từ checkpoint)`)
           process.exit(1)
         }
       } catch { /* fail-open — watchdog lỗi không được phép tự giết app */ }
     }, MEM_WATCHDOG_INTERVAL_MS)
     memWatchdogTimer.unref?.()
-    console.log(`[MemWatchdog] bật — ngưỡng RSS ${MEM_WATCHDOG_MB}MB × 2 lần kiểm tra (${Math.round(MEM_WATCHDOG_INTERVAL_MS / 1000)}s/lần) + global guard MemAvailable<${MEM_WATCHDOG_GLOBAL_MIN_MB}MB khi RSS>${MEM_WATCHDOG_GLOBAL_RSS_MB}MB`)
+    console.log(`[MemWatchdog] bật — ngưỡng RSS ${MEM_WATCHDOG_MB}MB × 2 lần kiểm tra (${Math.round(MEM_WATCHDOG_INTERVAL_MS / 1000)}s/lần, avail-aware: chỉ exit khi MemAvailable<${MEM_WATCHDOG_RSS_EXIT_AVAIL_MB}MB) + global guard MemAvailable<${MEM_WATCHDOG_GLOBAL_MIN_MB}MB khi RSS>${MEM_WATCHDOG_GLOBAL_RSS_MB}MB (exit ngay)`)
   }
 }
 
