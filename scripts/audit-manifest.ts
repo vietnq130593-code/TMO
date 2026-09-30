@@ -34,6 +34,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { createHash } from 'node:crypto'
 import { Database as SqliteDatabase } from 'bun:sqlite'
+import { mirrorToRunDir, resolveAuditProvenance } from './audit-provenance'
 
 const ROOT = path.resolve(import.meta.dir, '..')
 const OUT_DIR = path.join(ROOT, 'audit-out', 'manifest')
@@ -395,10 +396,14 @@ async function main() {
   // ==================== 6. GHI MANIFEST ====================
   fs.mkdirSync(OUT_DIR, { recursive: true })
   const byClass = (c: Class) => entries.filter(e => e.classification === c).length
+  // PROVENANCE — truy vết manifest này sinh từ run nào (docs/TOOLS_AUDIT.md §6 mục 6).
+  // Thiếu AUDIT_RUN_ID → mode='unscoped' (null + warn), KHÔNG làm hỏng audit.
+  const provenance = resolveAuditProvenance()
   const manifest = {
     schema: 'tmo-audit-manifest/1.0',
     generatedAt: new Date().toISOString(),
     gitHead,
+    provenance,
     registries: {
       'builtin-tool': { count: builtinNames.length, source: 'tool-executor getAllBuiltinToolNames()' },
       'custom-tool': { count: customTools.length, source: 'custom-tool-registry getAllCustomTools() + DB CustomTool' },
@@ -430,6 +435,8 @@ async function main() {
   }
   const manifestPath = path.join(OUT_DIR, 'manifest.json')
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 1), 'utf-8')
+  // Bundle theo run: tmp/audit/<runId>/manifest.json (no-op khi unscoped)
+  mirrorToRunDir(provenance.runId, manifestPath, 'manifest.json')
 
   // MANIFEST.md — bản người đọc
   const lines: string[] = []

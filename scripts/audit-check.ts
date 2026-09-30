@@ -36,6 +36,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { createHash } from 'node:crypto'
+import { mirrorToRunDir, resolveAuditProvenance } from './audit-provenance'
 
 const ROOT = path.resolve(import.meta.dir, '..')
 const MANIFEST_PATH = path.join(ROOT, 'audit-out', 'manifest', 'manifest.json')
@@ -281,22 +282,42 @@ async function main() {
     : '  ❌ CHUỖI KIỂM ĐỊNH CHƯA ĐẠT — xem vi phạm trên')
   console.log(`  KẾT QUẢ: ${entries.length} entry · violations=${violations}\n`)
 
+  // ==================== PROVENANCE (VÒNG 15 — docs/TOOLS_AUDIT.md §6 mục 6) ====================
+  // Báo cáo phải truy vết đúng run sinh ra nó: AUDIT_RUN_ID → stamp vào
+  // check-report.json + mirror tmp/audit/<runId>/. Thiếu env → unscoped (warn).
+  const provenance = resolveAuditProvenance()
+  // Chống lệch thời gian (bài học 09:25/16:39): manifest phải sinh TRONG thời
+  // gian sống của run — manifest cũ hơn run → không phải bằng chứng của run này.
+  if (provenance.mode === 'scoped' && provenance.runStartedAt) {
+    const runStart = Date.parse(provenance.runStartedAt)
+    const manifestGen = Date.parse(manifest.generatedAt)
+    if (Number.isFinite(runStart) && Number.isFinite(manifestGen) && manifestGen < runStart) {
+      vwarn(
+        `manifest sinh TRƯỚC run (manifest ${manifest.generatedAt} < run bắt đầu ${provenance.runStartedAt}) — manifest KHÔNG phải bằng chứng của run này, chạy lại \`AUDIT_RUN_ID=${provenance.runId} bun run audit:manifest\` trước khi check`
+      )
+    }
+  }
+
   // Evidence bundle bền vững — audit-out/reports/ được git re-include (sống qua
   // git clean), chứa sha256 MỖI file evidence + phân loại + verdict + git HEAD.
   try {
     const reportsDir = path.join(ROOT, 'audit-out', 'reports')
     fs.mkdirSync(reportsDir, { recursive: true })
     const report = {
-      schema: 'tmo-audit-check-report/2.0',
+      schema: 'tmo-audit-check-report/2.1',
       generatedAt: new Date().toISOString(),
       gitHead: manifest.gitHead,
       manifestGeneratedAt: manifest.generatedAt,
+      provenance,
       totals: { entries: entries.length, byClassification: Object.fromEntries(cls), violations, warnings },
       evidenceHashes,
       exitCode: violations === 0 ? 0 : 1,
     }
-    fs.writeFileSync(path.join(reportsDir, 'check-report.json'), JSON.stringify(report, null, 2))
-    console.log(`[checker] Report bền vững: audit-out/reports/check-report.json (${Object.keys(evidenceHashes).length} evidence hash)`)
+    const reportPath = path.join(reportsDir, 'check-report.json')
+    fs.writeFileSync(reportPath, JSON.stringify(report, null, 2))
+    // Bundle theo run: tmp/audit/<runId>/check-report.json (no-op khi unscoped)
+    mirrorToRunDir(provenance.runId, reportPath, 'check-report.json')
+    console.log(`[checker] Report bền vững: audit-out/reports/check-report.json (${Object.keys(evidenceHashes).length} evidence hash · provenance=${provenance.mode}${provenance.runId ? ` runId=${provenance.runId}` : ''})`)
   } catch (err) { console.warn('[checker] ⚠️ không ghi được report bền vững:', err instanceof Error ? err.message : String(err)) }
 
   process.exit(violations === 0 ? 0 : 1)

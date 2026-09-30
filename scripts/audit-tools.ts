@@ -31,6 +31,7 @@
 import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { mirrorToRunDir, resolveAuditProvenance } from './audit-provenance'
 
 const ROOT = path.resolve(import.meta.dir, '..')
 const TS = Date.now()
@@ -670,10 +671,14 @@ async function main() {
   for (const [tool, evs] of perTool) {
     fs.writeFileSync(path.join(probesDir, `${tool}.json`), JSON.stringify({ tool, probeCount: evs.length, probes: evs }, null, 1), 'utf-8')
   }
+  // PROVENANCE — truy vết artifact này thuộc run nào (docs/TOOLS_AUDIT.md §6 mục 6).
+  // Thiếu AUDIT_RUN_ID → mode='unscoped', chỉ ghi null + warn, KHÔNG làm hỏng audit.
+  const provenance = resolveAuditProvenance()
   const payload = {
     schema: 'tmo-tools-audit/1.0',
     generatedAt: new Date().toISOString(),
     git: { head: gitHead, statusBefore: gitStatusBefore, statusAfter: gitStatusAfter },
+    provenance,
     summary: { ok, fail, xfail: xfailN, skip: skipN, total: rows.length, builtinCatalog: builtinAll.length, miss: miss.length, missList: miss, extra: extra.length, extraList: extra },
     classificationMap: {
       OK: 'PASS — tool chạy thật, success:true, không error payload',
@@ -684,8 +689,11 @@ async function main() {
     rows,
     evidence: evidenceLog,
   }
-  fs.writeFileSync(path.join(auditOutDir, 'tools-audit.json'), JSON.stringify(payload, null, 1), 'utf-8')
-  console.log(`[audit] Machine-readable: ${path.join(auditOutDir, 'tools-audit.json')} + ${perTool.size} file bằng chứng trong tool-probes/`)
+  const toolsAuditPath = path.join(auditOutDir, 'tools-audit.json')
+  fs.writeFileSync(toolsAuditPath, JSON.stringify(payload, null, 1), 'utf-8')
+  console.log(`[audit] Machine-readable: ${toolsAuditPath} + ${perTool.size} file bằng chứng trong tool-probes/`)
+  // Bundle theo run: tmp/audit/<runId>/tools-audit.json (no-op khi unscoped)
+  mirrorToRunDir(provenance.runId, toolsAuditPath, 'tools-audit.json')
 
   // ==================== 4. CLEANUP ====================
   try {
