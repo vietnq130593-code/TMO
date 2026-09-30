@@ -79,9 +79,18 @@ find /tmp -maxdepth 1 -type d -name '.*.node-gyp' -mmin +60 -exec rm -rf {} + 2>
 #   trong RAM → boot nổ 2.2GB CHỈ TRONG 30s, crash-loop nhanh dần. HARD-SET
 #   (không append) để mọi nguồn nhiễm (shell --update-env, ecosystem cũ 1024,
 #   flag append trùng) đều bị ghi đè deterministic.
-# Nếu log xuất hiện "JavaScript heap out of memory" → nâng 1792 → 2048.
+# Nếu log xuất hiện "JavaScript heap out of memory" → nâng 1408 → 1536 → 1664.
 # =============================================================================
-export NODE_OPTIONS="--max-old-space-size=1664"
+# VÒNG 15 (2026-09-30 18:45) — HẠ 1664 → 1280 chống reaper SIGINT ~38s/lần:
+# Đo thực: next-server child RSS boot-ramp 840MB → 2216MB trong ~36s khi browser
+# user poll ~15 route (turbopack cold-compile mỗi lần restart). Reaper sandbox
+# SIGINT cả tree khi RSS child ~2.1-2.2GB (kể cả MemAvailable dư 2GB — round-11c).
+# Cap 1664 chỉ chặn old-space, external (turbopack native + buffer) vẫn đẩy RSS
+# lên vùng chết. Hạ cap 384MB → V8 GC gấp đứng đỉnh ~1.8-1.9GB < 2.1GB reaper
+# → đời sống app dài hơn (cần ≥2-3' liên tục cho request_code_team workflow
+# in-process 10-30' của round-15 directive). Tối quan sát 5': OOM >1 lần → nâng
+# bậc thang trên; RSS đỉnh vẫn >2.05GB → hạ tiếp 1152.
+export NODE_OPTIONS="--max-old-space-size=1280"
 
 # Khởi động Next.js — exec để PM2 sở hữu trực tiếp process node next
 cd "$(dirname "$0")/.."

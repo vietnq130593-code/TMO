@@ -107,6 +107,11 @@ worklog.md
 # Dùng: bun scripts/audit-manifest.ts && bun scripts/audit-check.ts
 !/scripts/audit-manifest.ts
 !/scripts/audit-check.ts
+# NGOẠI LỆ (VÒNG 15 — 2026-09-30): module provenance dùng chung của cặp script
+# audit trên — audit-manifest.ts/audit-tools.ts import './audit-provenance'
+# (AUDIT_RUN_ID → đóng dấu runId + mirror tmp/audit/<runId>/). KHÔNG re-include
+# → git add bỏ qua im lặng → fresh clone thiếu module → audit:manifest gãy import.
+!/scripts/audit-provenance.ts
 # NGOẠI LỆ: script test model NIM (user-facing — bun scripts/test-llm-model.ts)
 !/scripts/test-llm-model.ts
 # NGOẠI LỆ: script test agent/chat/utility qua Z-AI SDK (bun scripts/test-agent-zai.ts)
