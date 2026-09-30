@@ -126,7 +126,7 @@ const BUILTIN_SERVERS: McpServerEntry[] = [
         inputSchema: {
           type: 'object',
           properties: {
-            repo: { type: 'string', description: 'owner/name (e.g. nguyenquocviety2c-code/TMO)' },
+            repo: { type: 'string', description: 'owner/name (e.g. vietnq130593-code/TMO)' },
             title: { type: 'string' },
             head: { type: 'string', description: 'Branch to merge FROM' },
             base: { type: 'string', description: 'Branch to merge INTO (default main)' },

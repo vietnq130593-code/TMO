@@ -102,7 +102,11 @@ while true; do
     fi
   fi
 
-  CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "$URL" 2>/dev/null)
+  # FIX round-11c (2026-09-30): -m 5 quá ngắn — health cold-boot turbopack
+  # compile mất 5.7-8.9s thực chiến (CPU bận 90%+ khi mission resume) → curl
+  # timeout = 000 → keepalive tưởng wedge → pm2 restart giết mission giữa
+  # LLM call → vòng lặp tử thần (235+ restart). 20s = đầu gấp đôi worst-case.
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 20 "$URL" 2>/dev/null)
 
   if [ "$CODE" = "200" ]; then
     rm -f "$STATE" 2>/dev/null
@@ -115,12 +119,21 @@ while true; do
   NOW=$(date +%s)
   FIRST=$(cat "$STATE" 2>/dev/null || echo 0)
 
-  if [ "$STATUS" != "online" ]; then
-    # stopped/errored/launching-stuck → KHÔNG gì khác có thể kéo dậy từ trong
-    # app (process đã chết) → restart từ NGOÀI ngay.
+  # FIX round-11c: STATUS RỖNG (pm2 describe fail/daemon bận) hoặc 'launching'
+  # (app đang boot) → KHÔNG restart — chờ tick sau kiểm tra lại. Trước đây
+  # empty status rơi vào nhánh "!= online" → restart NGAY gây giết app giữa
+  # pha compile (log thực chiến: "health=000 pm2= → pm2 restart" lặp nhiều
+  # lần/giờ). Chỉ tin trạng thái TƯỜNG MINH dừng hẳn mới can thiệp ngay.
+  if [ "$STATUS" = "stopped" ] || [ "$STATUS" = "errored" ]; then
+    # stopped/errored → KHÔNG gì khác có thể kéo dậy từ trong app (process đã
+    # chết) → restart từ NGOÀI ngay.
     log "health=$CODE pm2=$STATUS → pm2 restart $APP"
     pm2 restart "$APP" >/dev/null 2>&1
     rm -f "$STATE" 2>/dev/null
+  elif [ -z "$STATUS" ]; then
+    log "health=$CODE nhưng pm2 status KHÔNG ĐỌC ĐƯỢC (daemon bận?) — hoãn, tick sau kiểm tra lại"
+  elif [ "$STATUS" = "launching" ] || [ "$STATUS" = "stopping" ]; then
+    log "health=$CODE pm2=$STATUS (đang khởi động/dừng) — chờ, không can thiệp"
   elif [ "$FIRST" = "0" ]; then
     # online nhưng không phản hồi — khả năng HTTP-wedge; cho in-app HTTP
     # Watchdog (Task 6-b) ~4 phút tự xử (self-exit → PM2 kéo dậy).

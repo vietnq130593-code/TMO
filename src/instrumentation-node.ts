@@ -12,7 +12,7 @@
 
 import { startAllServices, type ServiceConfig } from './lib/service-manager'
 import { resolve } from 'path'
-import { readFileSync } from 'fs'
+import { readFileSync, readdirSync } from 'fs'
 import { ensureTmoApiToken } from './lib/tmo-token'
 import { isOnDemandEnabled, initOnDemandWatchdog } from './lib/openclaw-ondemand'
 // DB SELF-HEALING (fix user report 2026-09-09 "local không load agents"):
@@ -309,6 +309,44 @@ if (isOnDemandEnabled()) {
     console.warn('[instrumentation] openclaw-ondemand watchdog init failed:', err)
   }
 }
+
+// ==================== OC-CLI ORPHAN SWEEP (fix round-11c) ====================
+// Thực chiến 2026-09-30: app spawn `opencode run` (LLM fallback path, llm.ts)
+// nhưng khi app chết (SIGINT/watchdog/PM2) child KHÔNG bị giết → mồ côi PPID=1
+// mỗi con ~400-520MB RSS. Bắt quả tang 1 con 14h44m/516MB sau 235 lần restart.
+// Sweep: quét /proc tìm process `.opencode/bin/opencode` + ` run` có PPID=1
+// (cha đã chết — output không bao giờ được đọc) → SIGKILL. An toàn race:
+// con của process HIỆN TẠI luôn có PPID=pid mình, không bao giờ bị chạm.
+// Chạy lúc boot (+10s) + lặp mỗi 5 phút (bắt leak giữa vòng đời không đợi restart).
+function sweepOcCliOrphans(): void {
+  try {
+    let killed = 0
+    for (const entry of readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) continue
+      const pid = parseInt(entry, 10)
+      if (pid === process.pid) continue
+      let stat: string
+      try { stat = readFileSync(`/proc/${pid}/stat`, 'utf-8') } catch { continue }
+      // Field 4 (ppid) — tên process có thể chứa space, cắt sau ') '
+      const closeIdx = stat.indexOf(') ')
+      if (closeIdx < 0) continue
+      const fields = stat.slice(closeIdx + 2).split(' ')
+      const ppid = parseInt(fields[1], 10) // fields[0]=state, fields[1]=ppid
+      if (ppid !== 1) continue
+      let cmdline = ''
+      try { cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf-8') } catch { continue }
+      if (!cmdline.includes('.opencode/bin/opencode') || !cmdline.includes('run')) continue
+      try {
+        process.kill(pid, 'SIGKILL')
+        killed++
+        console.warn(`[OC-CLI-Sweep] SIGKILL opencode run mồ côi PID ${pid} (PPID=1, cha đã chết — leak RAM ~400-520MB)`)
+      } catch { /* đã chết */ }
+    }
+    if (killed > 0) console.warn(`[OC-CLI-Sweep] dọn ${killed} opencode run mồ côi`)
+  } catch { /* /proc không có (Windows) — bỏ qua */ }
+}
+setTimeout(() => sweepOcCliOrphans(), 10_000).unref?.()
+setInterval(() => sweepOcCliOrphans(), 5 * 60_000).unref?.()
 
 // WARM-UP ROUTES (fix "load danh sách agents lâu sau khi khởi động lại" —
 // user report 2026-09-08): trong next dev, route đầu tiên được gọi phải chịu

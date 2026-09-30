@@ -30,7 +30,7 @@
 
 import { spawn, ChildProcess, execSync } from 'child_process'
 import { resolve } from 'path'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, statSync } from 'fs'
 
 const GATEWAY_PORT = 18789
 const BRIDGE_PORT = 18791
@@ -121,6 +121,43 @@ async function probeGateway(timeoutMs = 2500): Promise<boolean> {
 export function gatewayInUse(): void {
   const s = getState()
   s.lastUsed = Date.now()
+  // PERSIST LAST-USE (fix round-11c): app restart trước đây reset đồng hồ idle
+  // mỗi lần adopt → gateway orphan 248MB+ không bao giờ bị idle-shutdown trong
+  // khi app restart liên tục (death-loop 40-90s/lần). Ghi mtime file (throttle
+  // 30s) để lần adopt sau tính idle từ lần DÙNG THẬT cuối, không phải từ boot.
+  try {
+    const f = lastUseFile()
+    if (!existsSync(f) || Date.now() - statSync(f).mtimeMs > 30_000) {
+      writeFileSync(f, String(Date.now()), { flag: 'w' })
+    }
+  } catch { /* best-effort — không làm hỏng call path */ }
+}
+
+/** File ghi lại lần dùng gateway CUỐI (mtime = last-use) — sống sót qua restart */
+function lastUseFile(): string {
+  return resolve(process.cwd(), 'db', '.gateway-lastuse')
+}
+
+/**
+ * Lần dùng cuối THẬT của gateway (kể cả process app trước): mtime file
+ * last-use; fallback mtime PID file gateway (thời điểm spawn) — conservative.
+ */
+function persistedLastUse(): number {
+  try {
+    const f = lastUseFile()
+    if (existsSync(f)) {
+      const t = statSync(f).mtimeMs
+      if (Number.isFinite(t) && t > 0) return t
+    }
+  } catch { /* bỏ qua */ }
+  try {
+    const pidFile = resolve(process.cwd(), 'mini-services/openclaw-gateway', '.gateway.pid')
+    if (existsSync(pidFile)) {
+      const t = statSync(pidFile).mtimeMs
+      if (Number.isFinite(t) && t > 0) return t
+    }
+  } catch { /* bỏ qua */ }
+  return 0
 }
 
 // ==================== SPAWN / SHUTDOWN ====================
@@ -564,8 +601,15 @@ export function initOnDemandWatchdog(): void {
       if (await probeGateway(2500)) {
         s.running = true
         s.lastProbeOk = Date.now()
-        s.lastUsed = Date.now()
-        console.log('[openclaw-ondemand] Phát hiện gateway đang chạy (orphan/legacy) → adopt; sẽ tự tắt sau idle nếu không dùng')
+        // FIX round-11c: KHÔNG reset lastUsed = Date.now() khi adopt — mỗi lần
+        // app restart đồng hồ idle lại về 0 → gateway orphan không bao giờ bị
+        // tắt trong khi app restart liên tục. Dùng lần-dùng-thật cuối (persist
+        // qua file) → nếu gateway đã idle quá IDLE_SHUTDOWN_MS, tick 30s kế
+        // sẽ shutdownIdleGateway() đúng thiết kế on-demand.
+        const persisted = persistedLastUse()
+        s.lastUsed = persisted > 0 ? persisted : Date.now()
+        const idleMin = persisted > 0 ? Math.round((Date.now() - persisted) / 60000) : 0
+        console.log(`[openclaw-ondemand] Phát hiện gateway đang chạy (orphan/legacy) → adopt (last-use ${idleMin}′ trước — sẽ tự tắt sau idle nếu không dùng)`)
       }
     } catch { /* bỏ qua */ }
   }, 8000).unref?.()
