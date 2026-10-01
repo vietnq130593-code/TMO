@@ -120,6 +120,14 @@ import { budgetPromptWith } from '@/lib/prompt-budget'
 // runGoalDrivenLoop → mọi hooks inert → hành vi inline cũ GIỮ NGUYÊN 100%
 // (đường chat route + tests hiện có không hề hay biết hooks tồn tại).
 import type { GoalLoopCheckpoint, GoalLoopDurableHooks } from '@/lib/goal-loop-durable-types'
+// ROUND-28 W1 — OBSERVABILITY: revision marker của module này. goal-loop-worker
+// dynamic-import runGoalDrivenLoop MỖI JOB và log giá trị này — trong môi
+// trường dev (app chạy `next dev` vĩnh viễn + agents tự sửa code), marker cho
+// phép đối chiếu trực tiếp trên log rằng job đang chạy code MỚI NHẤT (chống
+// "verify giả" khi singleton worker giữ module cũ sau HMR — bằng chứng sống
+// job r28v2proof: checkpoint chứa omegaAdvisory nhưng code cũ bỏ qua restore).
+// Bump mỗi lần sửa module này một cách có ý nghĩa.
+export const GOAL_LOOP_CODE_REV = 'r28w4'
 
 /** Gọn args để nhét vào working memory (chống phình) */
 function compactToolArgs(args: Record<string, unknown>, maxLen = 120): string {

@@ -36,7 +36,21 @@
 
 import type { GoalLoopJob } from '@prisma/client'
 import { db } from '@/lib/db'
-import { runGoalDrivenLoop, type GoalLoopResult } from '@/lib/agent-goal-loop'
+// ROUND-28 W1 — TYPE-ONLY import (erased lúc build): giá trị runGoalDrivenLoop
+// chuyển sang DYNAMIC IMPORT tại chỗ chạy job (xem bước 7) — singleton worker
+// sống sót qua HMR (globalThis pattern dòng dưới) giữ binding tĩnh MÃI MÃI
+// pointing về module SINH LÚC BOOT: mọi sửa agent-goal-loop sau đó (HMR) KHÔNG
+// bao giờ tới được job đang chạy → "verify giả" khi agent tự sửa code rồi chạy
+// mission kiểm chứng (bằng chứng sống job r28v2proof: checkpoint có
+// omegaAdvisory nhưng code cũ bỏ qua restore + checkpoint live không có key).
+// ⚠️ KIỂM CHỨNG LIVE ROUND-28 (job r28w1hmr): dynamic import từ closure cũ
+// vẫn resolve module graph CŨ (bump rev r28w1→r28w2 không restart → job kế
+// vẫn nạp r28w1) — HMR không tới được worker KỂ CẢ qua dynamic import. Vì
+// vậy W1b bổ sung đối chiếu rev TRÊN ĐĨA (readGoalLoopDiskRev) để PHÁT HIỆN
+// stale code thay vì im lặng — cảnh báo hiện thị trên log mỗi job claim.
+import type { GoalLoopResult } from '@/lib/agent-goal-loop'
+// ROUND-28 W1b — đọc rev TRÊN ĐĨA để đối chiếu stale code (helper bên dưới)
+import { readFile } from 'node:fs/promises'
 import {
   GOAL_LOOP_CHECKPOINT_MIN_INTERVAL_MS,
   GOAL_LOOP_HEARTBEAT_MIN_INTERVAL_MS,
@@ -57,6 +71,26 @@ import {
 // TASK 43 — Agent Event Bus: sự kiện vòng đời job phát lên bus hợp nhất
 // (GET /api/agent-events). Fail-open tuyệt đối bên trong emit.
 import { emitAgentEvent, type AgentEventType } from '@/lib/agent-event-bus'
+
+// ==================== ROUND-28 W1b — STALE CODE DETECTION ====================
+
+/**
+ * Đọc GOAL_LOOP_CODE_REV ghi TRÊN ĐĨA (regex src/lib/agent-goal-loop.ts).
+ * Không phụ thuộc module resolution — đã kiểm chứng live round-28 (job
+ * r28w1hmr): dynamic import từ closure của worker singleton vẫn resolve
+ * module graph CŨ, nên cách duy nhất biết code trên đĩa đã đổi là đọc file.
+ * Dùng async readFile (không chặn event loop — bài học G1 round-25).
+ * Fail-open: mọi lỗi (thiếu file trong prod build, quyền đọc...) → null.
+ */
+export async function readGoalLoopDiskRev(): Promise<string | null> {
+  try {
+    const src = await readFile('src/lib/agent-goal-loop.ts', 'utf8')
+    const m = src.match(/GOAL_LOOP_CODE_REV = '([^']+)'/)
+    return m ? m[1] : null
+  } catch {
+    return null
+  }
+}
 
 // ==================== TYPES ====================
 
@@ -733,6 +767,22 @@ class GoalLoopWorker {
       //    param này chưa tồn tại → transient race giữa 2 wave, KHÔNG tự sửa
       //    agent-goal-loop.ts — parent verify tổng sau khi cả 2 land. Flag off
       //    (inline cũ) thì worker này không chạy nên call-site vô hại.
+      // ROUND-28 W1 — DYNAMIC IMPORT mỗi job (không dùng binding tĩnh đã import
+      //    lúc boot): worker singleton sống qua HMR sẽ KHÔNG BAO GIỜ thấy code
+      // mới nếu giữ binding cũ. Log GOAL_LOOP_CODE_REV ngay tại đây để đối
+      // chiếu trên dev.log rằng job chạy đúng revision mong muốn.
+      const { runGoalDrivenLoop, GOAL_LOOP_CODE_REV } = await import('@/lib/agent-goal-loop')
+      console.log(`[GoalLoopWorker] job ${job.id}: agent-goal-loop rev=${GOAL_LOOP_CODE_REV} (dynamic import)`)
+      // ROUND-28 W1b — STALE CODE GUARD: so module-đã-nạp vs rev trên đĩa.
+      // Lệch = code đã sửa nhưng HMR không tới được worker → cảnh báo to +
+      // hành động rõ (job này vẫn chạy tiếp code cũ — trung thực, không giết).
+      // Fail-open tuyệt đối: đọc đĩa lỗi (vd prod build không có source) → bỏ qua.
+      try {
+        const diskRev = await readGoalLoopDiskRev()
+        if (diskRev && diskRev !== GOAL_LOOP_CODE_REV) {
+          console.warn(`[GoalLoopWorker] ⚠️ job ${job.id}: STALE CODE — src/lib/agent-goal-loop.ts trên đĩa rev=${diskRev} ≠ module đã nạp rev=${GOAL_LOOP_CODE_REV} (HMR không thay được module trong singleton worker — đã kiểm chứng live round-28). Job này tiếp tục chạy CODE CŨ; RESTART app (pm2 restart theopusflashlite) để các job sau chạy code mới.`)
+        }
+      } catch { /* fail-open — guard không được phép làm hỏng claim */ }
       const result: GoalLoopResult = await runGoalDrivenLoop({
         systemPrompt: jobInput.systemPrompt,
         userMessage: jobInput.userMessage,

@@ -242,6 +242,48 @@ function smartTruncate(s: string, maxChars: number): string {
 }
 
 /**
+ * ROUND-28 W2 — CORE envelope builder dùng chung 2 tầng (tool-message của
+ * truncateToolMessageJson + tool-output của truncateToolOutputObject):
+ * trả về OBJECT {_truncated, _originalChars, _note, head, tail} khớp ngân sách
+ * `budget` (length của envelope JSON ≤ budget), hoặc null khi budget quá nhỏ
+ * cho skeleton — caller tự fallback (smartTruncate / substring text cũ).
+ * head/tail là string field escape chuẩn từ `serialized` (payload gốc) →
+ * tầng nào truyền payload tầng đó được mô tả đúng (_originalChars = đúng
+ * payload, KHÔNG lẫn wrapper nội bộ).
+ */
+function buildEnvelopeObject(
+  serialized: string,
+  budget: number,
+): { _truncated: true; _originalChars: number; _note: string; head: string; tail: string } | null {
+  if (budget < 300) return null // skeleton + head/tail tối thiểu không vừa — fallback
+  let head = Math.floor(budget * 0.55)
+  let tail = Math.max(200, Math.floor(budget * 0.3))
+  const build = (): string =>
+    JSON.stringify({
+      _truncated: true,
+      _originalChars: serialized.length,
+      _note: `Kết quả thật ${serialized.length} ký tự — giữ ~55% đầu + ~30% đuôi (lỗi/tổng kết thường nằm cuối). Cần phần giữa → gọi lại tool với phạm vi hẹp hơn (path/depth/pattern/glob/head_limit/ignore...).`,
+      head: serialized.slice(0, head),
+      tail: serialized.slice(-tail),
+    })
+  let out = build()
+  // envelope vẫn vượt budget (edge: budget rất nhỏ) → co head/tail theo tỉ lệ
+  // rồi thử đúng 1 lần
+  if (out.length > budget) {
+    const overflow = out.length - budget
+    head = Math.max(200, head - Math.ceil(overflow * 0.65))
+    tail = Math.max(120, tail - Math.ceil(overflow * 0.35))
+    out = build()
+  }
+  if (out.length > budget) return null
+  try {
+    return JSON.parse(out) as { _truncated: true; _originalChars: number; _note: string; head: string; tail: string }
+  } catch {
+    return null
+  }
+}
+
+/**
  * ROUND-26 FIX B (mission cmupl7uen — Omega báo cáo "file_list PASS nhưng
  * không có dữ liệu hữu ích"): splice text cũ cắt GIỮA chuỗi JSON của tool
  * message rồi chèn marker chứa \n thô → chuỗi đẩy về LLM KHÔNG còn parse được
@@ -261,6 +303,10 @@ function smartTruncate(s: string, maxChars: number): string {
  * + trọng tài delegation đọc toolResultLog), workflow-engine (code-team —
  * round-26 bỏ sót: result lớn thành STRING chứa mảnh JSON vỡ). Tại đây không
  * circular import (context-compression chỉ phụ thuộc llm + crypto).
+ *
+ * ROUND-28 W2 — sizing CHÍNH XÁC qua buildEnvelopeObject: overhead wrapper
+ * ({"tool":...,"success":...,"result": + }) tính đúng theo prefix thực tế →
+ * tổng message ≤ cap NGUYÊN VẸN (không còn co xấp xỉ + thử lại như cũ).
  */
 export function truncateToolMessageJson(
   entry: { tool: string; success: boolean; result: unknown },
@@ -271,31 +317,41 @@ export function truncateToolMessageJson(
     // Guard — payload nằm dưới cap: trả NGUYÊN VĂN (caller chỉ gọi khi vượt
     // cap, nhưng hàm public + test gọi trực tiếp cần hành vi đúng).
     if (serialized.length <= cap) return serialized
-    let head = Math.floor(cap * 0.55)
-    let tail = Math.max(200, Math.floor(cap * 0.3))
-    const build = (): string =>
-      JSON.stringify({
-        tool: entry.tool,
-        success: entry.success,
-        result: {
-          _truncated: true,
-          _originalChars: serialized.length,
-          _note: `Kết quả thật ${serialized.length} ký tự — giữ ~55% đầu + ~30% đuôi (lỗi/tổng kết thường nằm cuối). Cần phần giữa → gọi lại tool với phạm vi hẹp hơn (path/depth/pattern/glob/head_limit/ignore...).`,
-          head: serialized.slice(0, head),
-          tail: serialized.slice(-tail),
-        },
-      })
-    let out = build()
-    // envelope vẫn vượt cap (edge: cap rất nhỏ) → co head/tail theo tỉ lệ rồi thử đúng 1 lần
-    if (out.length > cap) {
-      const overflow = out.length - cap
-      head = Math.max(200, head - Math.ceil(overflow * 0.65))
-      tail = Math.max(120, tail - Math.ceil(overflow * 0.35))
-      out = build()
-    }
-    return out.length <= cap ? out : smartTruncate(serialized, cap)
+    const prefix = `{"tool":${JSON.stringify(entry.tool)},"success":${entry.success},"result":`
+    const overhead = prefix.length + 1 // + '}' đóng
+    const envelope = buildEnvelopeObject(serialized, cap - overhead)
+    if (!envelope) return smartTruncate(serialized, cap)
+    return prefix + JSON.stringify(envelope) + '}'
   } catch {
     return smartTruncate(serialized, cap) // fail-open — splice text cũ
+  }
+}
+
+/**
+ * ROUND-28 W2 — envelope cho TOOL OUTPUT OBJECT (tầng tool-output, khác tầng
+ * tool-message của truncateToolMessageJson): custom tool (agent tự tạo qua
+ * create_custom_tool) trả OBJECT quá lớn thì custom-tool-registry trước đây
+ * `serialized.substring(0, maxOutputLength)` — cắt giữa chuỗi JSON + append
+ * marker text → result value là JSON VỠ không parse được (cùng lớp bug FIX B
+ * round-26, site thứ 3 tìm thấy round-28). Giờ: result value là OBJECT envelope
+ * {_truncated, _originalChars, _note, head, tail} — parse được, thấy đầu+cuối;
+ * _originalChars/_note mô tả ĐÚNG payload (value), head/tail là mảnh value
+ * thuần (không lẫn wrapper nội bộ). Value nằm dưới cap → trả NGUYÊN reference.
+ * Fail-open: mọi lỗi / budget quá nhỏ → substring + marker text cũ.
+ */
+export function truncateToolOutputObject(value: unknown, maxChars: number): unknown {
+  try {
+    const valueSerialized = JSON.stringify(value)
+    if (valueSerialized === undefined) {
+      // value là function/undefined — JSON.stringify trả undefined
+      return String(value).slice(0, maxChars) + '... [truncated]'
+    }
+    if (valueSerialized.length <= maxChars) return value
+    const envelope = buildEnvelopeObject(valueSerialized, maxChars)
+    if (envelope) return envelope
+    return String(value).slice(0, maxChars) + '... [truncated]'
+  } catch {
+    return String(value).slice(0, maxChars) + '... [truncated]'
   }
 }
 

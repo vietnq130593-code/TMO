@@ -14,6 +14,9 @@
 import { db } from '@/lib/db'
 import { registerToolWithGateway, unregisterToolFromGateway } from '@/lib/gateway-tool-registry'
 import { ALL_KNOWN_TOOLS } from '@/lib/skill-tool-schema'
+// ROUND-28 W2 — envelope JSON hợp lệ cho custom-tool output object quá lớn
+// (dùng chung logic với 3 vòng lặp — context-compression là single source).
+import { truncateToolOutputObject } from '@/lib/context-compression'
 
 // ==================== TYPES ====================
 
@@ -288,7 +291,7 @@ function createSandbox(toolName: string): Record<string, unknown> {
 /**
  * Execute custom tool handler code in a sandbox
  * Timeout: 10s max (safe for testing)
- * Result truncation: 2000 chars for safety
+ * Result truncation: 2000 chars — ROUND-28 W2: object quá lớn trả envelope JSON hợp lệ (head/tail), chuỗi giữ substring
  */
 export async function executeCustomTool(
   name: string,
@@ -345,13 +348,16 @@ export async function executeCustomTool(
     ])
 
     // Truncate output if too long
+    // ROUND-28 W2 — object quá lớn: envelope OBJECT JSON hợp lệ thay vì
+    // substring làm vỡ JSON giữa chừng (chuỗi giữ nguyên substring + marker
+    // vì là văn bản thuần).
     let finalResult = result
     if (typeof result === 'string' && result.length > maxOutputLength) {
       finalResult = result.substring(0, maxOutputLength) + '... [truncated]'
     } else if (typeof result === 'object' && result !== null) {
       const serialized = JSON.stringify(result)
       if (serialized.length > maxOutputLength) {
-        finalResult = serialized.substring(0, maxOutputLength) + '... [truncated]'
+        finalResult = truncateToolOutputObject(result, maxOutputLength)
       }
     }
 
@@ -407,13 +413,15 @@ export async function executeHandlerCode(
     ])
 
     // Truncate output
+    // ROUND-28 W2 — object quá lớn: envelope OBJECT JSON hợp lệ (mirror site
+    // executeCustomTool ở trên — cùng lớp bug, cùng fix).
     let finalResult = result
     if (typeof result === 'string' && result.length > maxOutputLength) {
       finalResult = result.substring(0, maxOutputLength) + '... [truncated]'
     } else if (typeof result === 'object' && result !== null) {
       const serialized = JSON.stringify(result)
       if (serialized.length > maxOutputLength) {
-        finalResult = serialized.substring(0, maxOutputLength) + '... [truncated]'
+        finalResult = truncateToolOutputObject(result, maxOutputLength)
       }
     }
 
