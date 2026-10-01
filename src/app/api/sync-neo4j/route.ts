@@ -532,8 +532,20 @@ async function syncOrphanEntities(): Promise<{
   const driver = await getNeo4jDriver()
   if (!driver) throw new Error('Neo4j not connected')
 
-  const orphanEntities = await db.localEntity.findMany({ where: { documentId: null, synced: false } })
-  const orphanRels = await db.localRelationship.findMany({ where: { documentId: null, synced: false } })
+  // ROUND-23 P4 — phân trang bảo vệ RAM: trước đây findMany TOÀN BỘ orphan chưa
+  // sync (có lúc ~90k row full-field) một lần. Giới hạn 5k entity + 10k rel mỗi
+  // lần chạy — hàm đánh dấu synced:true cho phần đã xử lý nên các lần gọi sau
+  // tự drain phần còn lại (orderBy id để duy trình tự ổn định).
+  const orphanEntities = await db.localEntity.findMany({
+    where: { documentId: null, synced: false },
+    take: 5000,
+    orderBy: { id: 'asc' },
+  })
+  const orphanRels = await db.localRelationship.findMany({
+    where: { documentId: null, synced: false },
+    take: 10000,
+    orderBy: { id: 'asc' },
+  })
 
   if (orphanEntities.length === 0 && orphanRels.length === 0) {
     return { synced: 0, relsSynced: 0 }

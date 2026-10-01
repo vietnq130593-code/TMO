@@ -276,8 +276,10 @@ const REPORT_RESERVE_TOKENS = TOKEN_BUDGET === 0
 const LLM_TIMEOUT_MS = intEnvPositive('GOAL_LOOP_LLM_TIMEOUT_MS', 21 * 60_000)
 /** Cap ký tự của tool result khi đẩy vào messages (chống context nén) — CI-3 B1: nguồn duy nhất từ module dùng chung */
 const MAX_TOOL_RESULT_CHARS = TOOL_RESULT_MAX_CHARS
-/** Cap số messages giữa các chu kỳ (trim giữ system + goal + đuôi gần nhất) */
-const MAX_MESSAGES = 48
+/** Cap số messages giữa các chu kỳ (trim giữ system + goal + đuôi gần nhất)
+ * ROUND-23 P7 — env-tunable (mặc định 48 như cũ): vặn nhỏ GOAL_LOOP_MAX_MESSAGES
+ * khi cần ép context mà không cần sửa code. */
+const MAX_MESSAGES = intEnvPositive('GOAL_LOOP_MAX_MESSAGES', 48)
 /** Cap số dòng evidence log giữ lại cho evaluator */
 const MAX_EVIDENCE_ENTRIES = 60
 /**
@@ -2309,9 +2311,14 @@ export async function runGoalDrivenLoop(params: {
               return `- ${c.agentName ?? '?'} (run ${String(c.runId ?? '').slice(0, 22)}…, đã chạy ${Math.max(0, Math.round((endMs - startMs) / 1000))}s trước khi bị giết)`
             })
             .join('\n')
+          // ROUND-23 P3 — dấu vết sự kiện của sub-run giờ BỀN VỮNG trên đĩa
+          // (agent-runs/<subRunId>.jsonl): agent đọc được sub-run đã làm GÌ
+          // trước khi chết (qua tool web_fetch URL /api/agent-run?runId=…)
+          // thay vì làm lại mù. Phần dở dang vẫn phải dispatch lại — sub-run
+          // không có checkpoint — nhưng KHÔNG còn "mất trắng không dấu vết".
           messages.push({
             role: 'user',
-            content: `[RESUME NOTICE — GIÁN ĐOẠN DO RESTART] ${crashed.length} sub-agent delegation(s) dưới đây bị server restart giết GIỮA CHỪNG — kết quả của chúng KHÔNG TỒN TẠI (không tin rằng việc đã xong). Cân nhắc dispatch lại những phần còn cần cho mục tiêu:\n${list}`,
+            content: `[RESUME NOTICE — GIÁN ĐOẠN DO RESTART] ${crashed.length} sub-agent delegation(s) dưới đây bị server restart giết GIỮA CHỪNG — chúng KHÔNG hoàn thành và kết quả cuối KHÔNG TỒN TẠI (không tin rằng việc đã xong). TUY NHIÊN dấu vết sự kiện (thought + tool calls + kết quả từng bước) của mỗi sub-run đã lưu bền vững — đọc lại bằng web_fetch với URL tương đối "/api/agent-run?runId=<subRunId>" (kèm query XTransformPort nếu qua gateway) để biết chính xác sub-run đã làm được tới đâu, rồi dispatch lại CHỈ phần còn thiếu:\n${list}`,
           })
           recordAgentThought(agentSessionId, `⚠️ RESUME: phát hiện ${crashed.length} delegation bị restart giết giữa chừng (kết quả mất trắng) — đã inject notice để agent cân nhắc re-dispatch`, totalIterations)
           console.log(`[GoalLoop] ${agentName} RESUME: ${crashed.length} delegation crashed do restart → inject re-dispatch notice`)

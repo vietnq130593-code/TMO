@@ -90,6 +90,7 @@ export const INFRA_PROTECTED_DIRS: readonly string[] = [
   'db', // SQLite data files — KHÔNG ghi tay; chỉ qua prisma db push
   '.opencode', // CLI auth + tool bridges (agent sửa bridge = tự hack quyền)
   'mini-services', // dịch vụ phụ chạy port riêng
+  'agent-runs', // ROUND-23 P1 — bằng chứng chạy agent (JSONL trail): chống agent tự sửa/chèn bằng chứng của chính mình; ĐỌC vẫn tự do
 ]
 
 /** Prefix file (relative root) — mọi file khớp prefix đều bảo vệ. */
@@ -221,6 +222,7 @@ const PROTECTED_TOKEN_RE = new RegExp(
       // 2026-10-27: bỏ 'prisma/\S*' — agent được phép sửa schema qua
       // file_write/file_edit + lệnh prisma chính thống.
       'db/\\S*',
+      'agent-runs/\\S*',
       '\\.opencode/\\S*',
       'mini-services/\\S*',
       '\\.env\\S*',
@@ -237,6 +239,40 @@ const REDIRECT_RE = />{1,2}\|?\s*([^\s|;&)]+)/g
 /** Message chung cho agent khi bị chặn (2026-10-27 — cập nhật chính sách:
  *  cài package + sửa schema giờ ĐÃ ĐƯỢC PHÉP tự làm; phần còn bảo vệ phải
  *  escalate. Kèm hướng dẫn đường tự phục vụ để agent không kẹt oan). */
+/** ROUND-23 P6 — hint cụ thể theo loại đích bị chặn (trích từ detail): cho
+ * agent biết ĐƯỜNG HỢP LỆ làm cùng việc thay vì chỉ biết "bị chặn" — giảm call
+ * lãng phí vì agent đoán mò đường khác (bài học round-22: MEGATRON mất 2 call). */
+function buildTargetedHint(detail: string): string {
+  const d = detail.toLowerCase()
+  if (/package\.json|lock/.test(d)) {
+    return (
+      `\n💡 package.json/lockfile: ĐỌC thoải mái (file_read / cat / grep). THÊM/XOÁ dependency: lệnh chính thống \`bun add <pkg>\` / \`bun remove <pkg>\` (được phép). ` +
+      `KHÔNG sửa tay manifest (tiền lệ: agent từng đè package.json làm app chết toàn bộ route).`
+    )
+  }
+  if (/(^|[^a-z])db(\/|:|\s|$)|sqlite|database/.test(d)) {
+    return (
+      `\n💡 db/: KHÔNG ghi tay file DB (nguy cơ hỏng dữ liệu + lock). ` +
+      `TRUY VẤN: tool db_query (SELECT read-only — tra cứu ToolMetric/AgentRunRecord/GoalLoopJob… thoải mái). ` +
+      `GHI DỮ LIỆU CÔNG VIỆC (có vòng đời + tự dọn dẹp): tool work_data. ` +
+      `ĐỔI CẤU TRÚC DB: sửa prisma/schema.prisma → \`bun run db:push\` (được phép).`
+    )
+  }
+  if (/\.env/.test(d)) {
+    return `\n💡 .env chứa keys vận hành — agent không tự sửa. Cần giá trị mới → escalate_problem kèm lý do + giá trị cụ thể.`
+  }
+  if (/agent-runs/.test(d)) {
+    return `\n💡 agent-runs/ là BẰNG CHỨNG chạy agent (JSONL chống sửa đổi) — chỉ ĐỌC (file_read/jq) hoặc xem qua /api/agent-run?runId=…; không ghi/đè/xoá.`
+  }
+  if (/\.opencode|bridge/.test(d)) {
+    return `\n💡 .opencode/ là lớp xác thực bridge — thay đổi phải được phê duyệt (escalate_problem).`
+  }
+  if (/mini-services/.test(d)) {
+    return `\n💡 mini-services/ chạy port riêng — thay đổi phải được phê duyệt (escalate_problem).`
+  }
+  return ''
+}
+
 function buildBlockedMessage(detail: string): string {
   return (
     `TỪ CHỐI (infra-guard): thao tác này chạm phần hạ tầng VẪN ĐƯỢC BẢO VỆ (${detail}) — ` +
@@ -245,7 +281,8 @@ function buildBlockedMessage(detail: string): string {
     `và tự sửa schema (file_write/file_edit prisma/schema.prisma → shell "bun run db:push") — hai hạng mục này KHÔNG bị chặn. ` +
     `Thiếu tool → tự xây qua create_custom_tool. Việc thuộc chức trách agent khác → dispatch_agent/delegate_task. ` +
 `Chưa có agent phù hợp → escalate_problem (Omega sẽ tạo agent mới). ` +
-    `Phần còn bảo vệ (keys/.env, data DB, bridges): dùng escalate_problem để TRÌNH BÀY lý do + thay đổi cụ thể chờ phê duyệt — KHÔNG tự sửa. `
+    `Phần còn bảo vệ (keys/.env, data DB, bridges): dùng escalate_problem để TRÌNH BÀY lý do + thay đổi cụ thể chờ phê duyệt — KHÔNG tự sửa.` +
+    buildTargetedHint(detail)
   )
 }
 
@@ -419,11 +456,91 @@ function findProtectedPathTarget(
 /**
  * Guard lệnh shell trước khi spawn.
  *
+ * ROUND-23 P6 — wrapper phân tích LỆNH GHÉP: khi lệnh bị chặn mà là chuỗi
+ * nhiều đoạn (a; b && c…), chỉ rõ đoạn nào VI PHẠM + đoạn nào AN TOÀN để
+ * agent tách lệnh chạy phần hợp lệ thay vì mất trắng cả cụm (bài học
+ * round-22: MEGATRON mất 2 call vì guard chặn nguyên khối lệnh ghép trong
+ * đó chỉ 1 đoạn chạm vùng bảo vệ).
+ *
  * @param command lệnh shell đầy đủ
  * @param cwd     working directory ĐÃ resolve (mặc định = workspace root)
  * @param root    workspace root ĐÃ resolve
  */
 export function guardShellCommand(command: string, cwd: string, root: string): ShellGuardVerdict {
+  const verdict = guardShellCommandInner(command, cwd, root)
+  if (!verdict.blocked || !verdict.message) return verdict
+  const segHint = buildSegmentHint(command, cwd, root)
+  if (!segHint) return verdict
+  return { ...verdict, message: verdict.message + segHint }
+}
+
+/** Tách lệnh ghép thành các đoạn top-level theo `;` `&&` `||` — tôn trọng
+ * quote/escape; gặp heredoc (<<) → trả null (không phân tích, dễ sai semantics). */
+function splitTopLevelSegments(command: string): string[] | null {
+  if (/<<-?\s*['"]?[A-Za-z_]/.test(command)) return null
+  const segs: string[] = []
+  let cur = ''
+  let quote: '"' | "'" | null = null
+  let i = 0
+  while (i < command.length) {
+    const ch = command[i]
+    if (quote) {
+      if (ch === '\\' && quote === '"') { cur += command.slice(i, i + 2); i += 2; continue }
+      if (ch === quote) quote = null
+      cur += ch
+      i++
+      continue
+    }
+    if (ch === '"' || ch === "'") { quote = ch; cur += ch; i++; continue }
+    if (ch === '\\' && i + 1 < command.length) { cur += command.slice(i, i + 2); i += 2; continue }
+    if (ch === ';' || (ch === '&' && command[i + 1] === '&') || (ch === '|' && command[i + 1] === '|')) {
+      if (cur.trim()) segs.push(cur.trim())
+      i += ch === ';' ? 1 : 2
+      cur = ''
+      continue
+    }
+    cur += ch
+    i++
+  }
+  if (cur.trim()) segs.push(cur.trim())
+  return segs.length > 1 ? segs : null
+}
+
+/** Guard từng đoạn của lệnh ghép (dùng bản INNER — chống đệ quy); trả hint
+ * text rỗng nếu không phải lệnh ghép / không tách được. */
+function buildSegmentHint(command: string, cwd: string, root: string): string {
+  let segs: string[] | null
+  try {
+    segs = splitTopLevelSegments(command)
+  } catch {
+    return ''
+  }
+  if (!segs) return ''
+  const segList = segs
+  const blockedIdx: number[] = []
+  segList.forEach((seg, idx) => {
+    try {
+      if (guardShellCommandInner(seg, cwd, root).blocked) blockedIdx.push(idx + 1)
+    } catch { /* đoạn lỗi cú pháp — không xác định được, không liệt kê */ }
+  })
+  if (blockedIdx.length === 0) return ''
+  const bad = blockedIdx
+    .map(i => `  #${i} ✗ ${String(segList[i - 1] ?? '').slice(0, 90)}`)
+    .join('\n')
+  const good = segList
+    .map((sg, i) => (blockedIdx.includes(i + 1) ? null : `  #${i + 1} ✓ ${sg.slice(0, 90)}`))
+    .filter(Boolean)
+    .join('\n')
+  let hint = `\n📌 PHÂN TÍCH LỆNH GHÉP (${segList.length} đoạn) — đoạn VI PHẠM:\n${bad}`
+  if (good) {
+    hint += `\nĐoạn AN TOÀN (chạy riêng vẫn được):\n${good}\n→ TÁCH LỆNH: chạy các đoạn ✓ thành lệnh riêng, bỏ/đổi đoạn ✗ theo hướng dẫn 💡 trên.`
+  } else {
+    hint += `\n→ Mọi đoạn đều vi phạm — cần đổi cách làm theo hướng dẫn 💡 trên.`
+  }
+  return hint
+}
+
+function guardShellCommandInner(command: string, cwd: string, root: string): ShellGuardVerdict {
   if (process.env.TMO_INFRA_GUARD === 'off') return { blocked: false }
 
   // Self-destruct guard — ưu tiên cao nhất, áp dụng ở MỌI cwd (lệnh giết app

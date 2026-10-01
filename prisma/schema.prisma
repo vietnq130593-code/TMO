@@ -1011,6 +1011,41 @@ model Todo {
   @@index([idempotencyKey])
 }
 
+/// P8 (2026-11 — user directive: agents phải có "cơ chế tạo dữ liệu công việc
+/// vào DB để theo dõi rồi tự dọn dẹp" thay vì ghi file rải rác). Bảng lưu trữ
+/// dữ liệu công việc CÓ VÒNG ĐỜI của agents — CRUD qua tool work_data
+/// (src/lib/code-team/dev-tools.ts). Ownership: CHỈ agent tạo row (agentName)
+/// mới sửa/xoá được; đọc get/list giới hạn trong sessionId. Bộ dọn tự động
+/// (instrumentation-node.ts sweepAgentWorkData) xoá bản ghi completed/obsolete
+/// quá 7 ngày không đụng tới hoặc đã quá expiresAt.
+model AgentWorkData {
+  id          String   @id @default(cuid())
+  /// Session scope — bản ghi thuộc về 1 phiên chat; get/list chỉ thấy trong phiên
+  sessionId   String
+  /// runId của run tạo bản ghi (goal-loop / delegation sub-run) — null khi caller không có run
+  runId       String?
+  /// Agent tạo bản ghi (ownership — chỉ agent này được put-with-id/set_status/delete)
+  agentName   String
+  /// Phân loại dữ liệu do agent tự khai (vd evidence | plan | note | scratch)
+  kind        String
+  /// Khóa tra cứu tùy chọn (get theo key trong session; list tìm contains)
+  key         String?
+  /// Nội dung dữ liệu công việc (cap 131072 ký tự tại tool layer)
+  content     String
+  /// allowed: active | completed | obsolete (set_status — cho phép hồi sinh về active)
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  /// Thời điểm bản ghi đạt trạng thái completed (set_status → now; hồi sinh → null)
+  completedAt DateTime?
+  /// Hạn dọn dẹp tùy chọn — bộ dọn tự động xoá khi quá hạn bất kể status
+  expiresAt   DateTime?
+
+  @@index([sessionId, status])
+  @@index([status, expiresAt])
+  @@index([runId])
+}
+
 /// Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Part 11.1 (Phase 3 — observability)
 /// Logs every executeTool() call: success/exitCode/durationMs/errorTag for
 /// per-tool error budget tracking + P50/P95/P99 latency monitoring.

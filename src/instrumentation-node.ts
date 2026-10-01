@@ -465,6 +465,60 @@ import('@/lib/db')
   })
 
 // ============================================================================
+// P8 (2026-11) — AGENT WORK DATA SWEEP (bộ dọn dữ liệu công việc hết hạn)
+// ============================================================================
+// Bảng AgentWorkData (tool work_data) là nơi agents ghi dữ liệu công việc CÓ
+// VÒNG ĐỜI (thay vì rải rác file rồi bỏ quên — user directive). Bộ dọn này xoá:
+//   (a) bản ghi completed/obsolete quá 7 ngày không đụng tới (updatedAt cũ),
+//   (b) bản ghi đã quá expiresAt (bất kể status — agent tự đặt hạn khi put).
+// Chạy 1 lần lúc boot (sau ensureDbReady — tránh đập vào DB chưa migrate)
+// + interval 1 tiếng. Fail-open tuyệt đối: sweep KHÔNG BAO GIỜ làm hỏng boot
+// (kể cả khi bảng chưa tồn tại do operator chưa chạy `bun run db:push` sau
+// lần thêm model — catch toàn bộ, chỉ log cảnh báo). globalThis guard chống
+// double-register khi Next dev HMR reload instrumentation (pattern khối khác).
+function sweepAgentWorkData(): void {
+  void import('@/lib/db')
+    .then(async ({ db }) => {
+      const res = await db.agentWorkData.deleteMany({
+        where: {
+          OR: [
+            {
+              status: { in: ['completed', 'obsolete'] },
+              updatedAt: { lt: new Date(Date.now() - 7 * 24 * 3600 * 1000) },
+            },
+            { expiresAt: { lt: new Date() } },
+          ],
+        },
+      })
+      if (res.count > 0) {
+        console.log(`[AgentWorkData] sweep: deleted ${res.count} rows`)
+      }
+    })
+    .catch((err) => {
+      // Fail-open — bảng chưa push / DB lỗi → chỉ cảnh báo, không ảnh hưởng app
+      console.warn(
+        '[AgentWorkData] sweep failed (fail-open — có thể bảng chưa `db:push`):',
+        err instanceof Error ? err.message : String(err)
+      )
+    })
+}
+
+const globalForAwds = globalThis as unknown as { __tmoAgentWorkDataSweepStarted?: boolean }
+if (!globalForAwds.__tmoAgentWorkDataSweepStarted) {
+  globalForAwds.__tmoAgentWorkDataSweepStarted = true
+  // Đợi DB self-heal xong rồi sweep lần đầu (ensureDbReady dedup với các lời
+  // gọi phía trên); nếu warm-up lỗi thì vẫn không crash — interval bên dưới
+  // sẽ tự sweep ở chu kỳ kế.
+  void ensureDbReady()
+    .then(() => sweepAgentWorkData())
+    .catch(() => {
+      /* fail-open — không chặn boot */
+    })
+  const awdsTimer = setInterval(() => sweepAgentWorkData(), 60 * 60 * 1000)
+  awdsTimer.unref?.()
+}
+
+// ============================================================================
 // GĐ4 CI-5 (Task 14-a) — DURABLE GOAL LOOP WORKER
 // ============================================================================
 // Job queue nền chạy goal-loop tác vụ nhiều giờ sống sót qua restart (DB là

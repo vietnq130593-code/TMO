@@ -63,7 +63,9 @@ export interface AgentEvent {
 
 // ==================== SINGLETON (globalThis — sống qua HMR) ====================
 
-const RING_MAX = 300
+// ROUND-23 P4 — env-tunable (mặc định 300 như cũ): vặn nhỏ qua
+// AGENT_EVENT_RING_MAX khi cần ép RSS mà không cần sửa code.
+const RING_MAX = Math.max(50, Number(process.env.AGENT_EVENT_RING_MAX ?? 300) || 300)
 
 interface BusState {
   bus: EventEmitter

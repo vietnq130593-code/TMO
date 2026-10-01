@@ -261,3 +261,6 @@ audit-out/*
 
 # Audit work-product cache (tsc --showConfig/diagnostics cache — runtime, sinh lại)
 .next-audit-wp/
+
+# ROUND-23 P1 — durable agent-run event trails (bằng chứng chạy agent, JSONL)
+agent-runs/

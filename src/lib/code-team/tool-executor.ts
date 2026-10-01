@@ -54,6 +54,9 @@ import {
   typeCheck as executeTypeCheckFn,
   testCoverage as executeTestCoverageFn,
   dbQuery as executeDbQueryFn,
+  // P5/P8 (2026-11) — gate receipt chuẩn hoá + CRUD dữ liệu công việc DB
+  runGate as executeRunGateFn,
+  workData as executeWorkDataFn,
   // CI-6 / CI-4 (Task 10-b) — mở workspace bằng File Explorer / VS Code
   openWorkspaceInExplorer as openWorkspaceInExplorerFn,
   // CI-4 B3-B5 (Task 11-c) — structured git tools (khảo sát repo + branch/clone)
@@ -1074,7 +1077,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'db_query',
-      description: 'Read-only SQL query against SQLite buffer layer (Prisma $queryRawUnsafe). STRICT READ-ONLY GUARD: reject INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/CREATE/GRANT/REVOKE/ATTACH/DETACH + multi-statement + PRAGMA (except query_plan). Trả {rows, rowCount, truncated, sql}.',
+      description: 'Read-only SQL query against SQLite buffer layer (Prisma $queryRawUnsafe). STRICT READ-ONLY GUARD: reject INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/CREATE/GRANT/REVOKE/ATTACH/DETACH + multi-statement + PRAGMA (except query_plan). Trả {rows, rowCount, truncated, sql}. Dùng để tra cứu lịch sử ToolMetric/AgentRunRecord/GoalLoopJob cho việc đối chiếu bằng chứng (READ-ONLY).',
       parameters: {
         type: 'object',
         properties: {
@@ -1083,6 +1086,86 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           limit: { type: 'number', description: 'Max rows trả về (default 100, max 1000) — wrap query trong sub LIMIT' },
         },
         required: ['sql'],
+      },
+    },
+  },
+  // P5 (2026-11) — gate receipt chuẩn hoá: exit code THẬT + sha256 thay vì
+  // agent tự viết wrapper `cmd; echo $?` (bị che exit code).
+  run_gate: {
+    type: 'function',
+    function: {
+      name: 'run_gate',
+      description: 'Chạy 1 gate kiểm định và trả RECEIPT máy đọc được: exit code THẬT + stdout thô + stderr thô + sha256 + durationMs + pass/fail/skip. Không dùng wrapper `cmd; echo $?` (bị che exit code). Gate: targeted_test | full_test | lint | typecheck | diff_check | custom.',
+      parameters: {
+        type: 'object',
+        properties: {
+          kind: {
+            type: 'string',
+            enum: ['targeted_test', 'full_test', 'lint', 'typecheck', 'diff_check', 'custom'],
+            description: 'Loại gate cần chạy',
+          },
+          command: {
+            type: 'string',
+            description: 'Bắt buộc khi kind=custom — lệnh đơn, không pipe nhiều tầng; bị kiểm tra an toàn như shell',
+          },
+          target: {
+            type: 'string',
+            description: 'Đường dẫn test file cho targeted_test',
+          },
+          saveArtifactPath: {
+            type: 'string',
+            description: 'Path tương đối BẮT ĐẦU bằng tmp/ — nơi lưu artifact JSON đầy đủ (stdout/stderr thô + receipt); không bắt buộc',
+          },
+        },
+        required: ['kind'],
+      },
+    },
+  },
+  // P8 (2026-11) — CRUD dữ liệu công việc có vòng đời (bảng AgentWorkData)
+  work_data: {
+    type: 'function',
+    function: {
+      name: 'work_data',
+      description: 'CRUD dữ liệu công việc vào DB để theo dõi vòng đời (thay vì ghi file rải rác): put (tạo/cập nhật), get, list, set_status (active→completed/obsolete), delete. CHỈ sửa/xoá được bản ghi do chính agent tạo. Bộ dọn tự động xoá bản ghi completed/obsolete quá 7 ngày hoặc quá expiresAt.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['put', 'get', 'list', 'set_status', 'delete'],
+            description: 'Hành động CRUD',
+          },
+          id: {
+            type: 'string',
+            description: 'ID bản ghi (put có id = cập nhật bản ghi của mình; get/set_status/delete theo id)',
+          },
+          key: {
+            type: 'string',
+            description: 'Khóa tra cứu (get theo key trong session; list tìm contains)',
+          },
+          kind: {
+            type: 'string',
+            description: 'Phân loại dữ liệu (vd evidence | plan | note) — bắt buộc với put',
+          },
+          content: {
+            type: 'string',
+            description: 'Nội dung (tối đa 131072 ký tự) — bắt buộc với put',
+          },
+          status: {
+            type: 'string',
+            enum: ['active', 'completed', 'obsolete'],
+            description: 'Trạng thái đặt qua set_status (cho phép hồi sinh về active)',
+          },
+          expiresAt: {
+            type: 'string',
+            description: 'Hạn dọn dẹp ISO 8601 (optional, chỉ put) — quá hạn bộ dọn tự động xoá',
+          },
+          limit: {
+            type: 'number',
+            description: 'Số hàng tối đa của list (1-200, mặc định 50)',
+          },
+        },
+        required: ['action'],
       },
     },
   },
@@ -2777,6 +2860,38 @@ export async function executeTool(
           }
         }
         result = await executeDbQueryFn(args as any)
+        break
+      }
+      // P5 (2026-11) — run_gate: gate receipt chuẩn hoá (exit code THẬT + sha256
+      // + stdout/stderr tail) — agent không cần tự viết wrapper `cmd; echo $?`
+      // (bị che exit code) hay bịa bằng chứng nữa.
+      case 'run_gate': {
+        if (!isFlagEnabled('ENABLE_RUN_GATE')) {
+          return {
+            success: false,
+            result: 'run_gate tool is disabled (set ENABLE_RUN_GATE=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeRunGateFn(args as any)
+        break
+      }
+      // P8 (2026-11) — work_data: CRUD dữ liệu công việc vào DB (bảng
+      // AgentWorkData) có vòng đời active → completed/obsolete + ownership
+      // theo agent + bộ dọn tự động 7 ngày.
+      case 'work_data': {
+        if (!isFlagEnabled('ENABLE_WORK_DATA')) {
+          return {
+            success: false,
+            result: 'work_data tool is disabled (set ENABLE_WORK_DATA=true in .env to enable).',
+            duration: Date.now() - startTime,
+          }
+        }
+        result = await executeWorkDataFn(args as any, {
+          sessionId: context?.sessionId ?? null,
+          agentName: context?.agentName ?? null,
+          runId: context?.runId ?? null,
+        })
         break
       }
       // 3.6 mcp_call — MCP bridge (servers operator cấu hình qua env/config)

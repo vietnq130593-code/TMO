@@ -3264,7 +3264,10 @@ function parseToolCallsFromOutput(output: string): Array<{ id: string; name: str
       'git_status', 'git_diff', 'git_log', 'git_branch', 'context_recall',
       'escalate_problem', 'propose_automation', 'verify_and_push',
       'delegate_task', 'request_code_team', 'dispatch_agent', 'dispatch_agents_parallel',
-      'create_agent', 'manage_automation']
+      'create_agent', 'manage_automation',
+      // P5/P8 (2026-11) — run_gate (gate receipt sha256) + work_data (CRUD dữ
+      // liệu công việc DB) — mirror tool-calls.ts
+      'run_gate', 'work_data']
     const regex2 = new RegExp(`(${validToolNames.join('|')})\\s*\\(\\s*\\{`, 'g')
     let match2
     while ((match2 = regex2.exec(output)) !== null) {

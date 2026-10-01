@@ -1398,7 +1398,9 @@ export async function GET(request: NextRequest) {
 
       let orphansDeleted = 0
       let selfRefsDeleted = 0
-      const allEntityIdsBefore: string[] = []
+      // ROUND-23 P4 — chỉ cần SỐ LƯỢNG entity (không cần mảng id: trước đây
+      // materialize toàn bộ ~176k id vào mảng chỉ để .length 2 lần ở response)
+      let totalEntitiesBefore = 0
 
       try {
         // Step 1: Find orphan entities in Neo4j (entities with no relationships)
@@ -1447,22 +1449,20 @@ export async function GET(request: NextRequest) {
         console.log(`[Reconcile] Neo4j: deleted ${orphansDeleted} orphans, ${selfRefsDeleted} self-refs`)
 
         // Step 3: Also clean up SQLite buffer
-        // Find entities in local buffer that aren't in any relationship
-        const localRels = await db.localRelationship.findMany({
-          select: { sourceEntityId: true, targetEntityId: true },
-        })
-        const entityIdsInRels = new Set<string>()
-        for (const r of localRels) {
-          if (r.sourceEntityId) entityIdsInRels.add(r.sourceEntityId)
-          if (r.targetEntityId) entityIdsInRels.add(r.targetEntityId)
-        }
+        // ROUND-23 P4 — bỏ full-table materialization: trước đây findMany TOÀN
+        // BỘ ~206k relationship + ~176k entity id vào JS Set/Array → spike RAM
+        // hàng chục MB mỗi lần reconcile. Giờ 2 câu SQL duy nhất: đếm tổng +
+        // truy vấn thẳng id orphan (NOT EXISTS — SQLite tự xử lý trên đĩa, JS
+        // chỉ giữ kết quả orphan thường nhỏ).
+        const countRows = await db.$queryRaw<{ total: number | bigint }[]>`SELECT COUNT(*) AS total FROM LocalEntity`
+        totalEntitiesBefore = Number((countRows as { total: number | bigint }[])[0]?.total ?? 0)
 
-        const localEntities = await db.localEntity.findMany({ select: { id: true } })
-        for (const e of localEntities) allEntityIdsBefore.push(e.id)
-
-        const localOrphanIds = localEntities
-          .filter(e => !entityIdsInRels.has(e.id))
-          .map(e => e.id)
+        const orphanRows = (await db.$queryRaw`SELECT e.id FROM LocalEntity e
+           WHERE NOT EXISTS (
+             SELECT 1 FROM LocalRelationship r
+             WHERE r.sourceEntityId = e.id OR r.targetEntityId = e.id
+           )`.catch(() => [])) as { id: string }[]
+        const localOrphanIds = orphanRows.map((row: { id: string }) => row.id)
 
         if (localOrphanIds.length > 0) {
           const deleteResult = await db.localEntity.deleteMany({
@@ -1499,8 +1499,8 @@ export async function GET(request: NextRequest) {
         duration_ms: reconcileMs,
         orphans_deleted: orphansDeleted,
         selfrefs_deleted: selfRefsDeleted,
-        total_entities_before: allEntityIdsBefore.length,
-        total_entities_after: allEntityIdsBefore.length - orphansDeleted,
+        total_entities_before: totalEntitiesBefore,
+        total_entities_after: totalEntitiesBefore - orphansDeleted,
       })
     }
 

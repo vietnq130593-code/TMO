@@ -14,11 +14,13 @@
  * is rejected. Destructive operations support `dry_run`.
  */
 
-import { exec, execFile, spawn } from 'child_process'
+import { exec, execFile, spawn, spawnSync } from 'child_process'
 import { promisify } from 'util'
 import path from 'path'
 import fs from 'fs/promises'
 import { existsSync } from 'fs'
+// P5 — run_gate hash receipt (sha256 stdout/stderr) — crypto builtin, không cần package mới
+import { createHash } from 'crypto'
 import type { Dirent } from 'node:fs'
 // Phase 1a.2 — DB-backed Todo store (replaces globalThis.__devTasks)
 // Both Code Team agents AND independent agents share this table; sessionId scopes each list.
@@ -5192,6 +5194,533 @@ export async function dbQuery(args: {
 
 /** Cap ký tự content mỗi mục trong receipt context_recall */
 const CONTEXT_RECALL_ITEM_MAX_CHARS = 2000
+
+// ==================== P5 — GATE RECEIPT (tool run_gate) ====================
+//
+// (thiết kế chốt với user 2026-11: "tool chạy gate có receipt sha256 thay vì
+// agent tự viết wrapper shell hay bị che exit code"). run_gate chạy 1 gate
+// kiểm định qua spawnSync shell:false — exit code THẬT của process (0-255;
+// bị signal giết → -1), KHÔNG bị che bởi wrapper `cmd; echo $?` (exit code của
+// echo, luôn 0). Receipt máy đọc được:
+//   { schema:'gate-receipt/v1', kind, command, exitCode, durationMs, sha256,
+//     stdoutBytes, stderrBytes, truncated, pass/fail/skip/errors, generatedAt }
+// - sha256 = hash chuỗi `STDOUT:\n${stdout}\n--- STDERR ---\n${stderr}` (bản đã
+//   cap 400k) → artifact lưu ĐÚNG nội dung được hash → đối chiếu kiểm chứng được.
+// - Giá trị trả cho LLM KHÔNG kèm stdout/stderr đầy đủ — chỉ stdoutTail/
+//   stderrTail (1500 ký tự cuối mỗi stream) + sha256 + artifactPath (giữ
+//   context nhỏ; cần raw thì lưu artifact rồi file_read tmp/...).
+// - custom: CHỈ lệnh đơn — tokenize theo khoảng trắng, cấm meta-char
+//   shell (;|&><$`() quote...), binary phải nằm trong whitelist an toàn
+//   ['bun','bunx','node','npx','git'] (KHÔNG sqlite3 — đường DB hợp pháp duy
+//   nhất của agent là db_query có guard read-only).
+// - Feature flag: ENABLE_RUN_GATE (default true — feature-flags.ts).
+// Fail-open: mọi lỗi trả { success:false, error } chứ KHÔNG throw.
+
+/** Timeout chung mọi gate 5 phút — typecheck/lint trên repo lớn có thể chậm. */
+const GATE_TIMEOUT_MS = 5 * 60 * 1000
+/** Tổng cap ký tự stdout+stderr giữ trong receipt/artifact (giữ đầu+đuôi khi vượt). */
+const GATE_OUTPUT_TOTAL_CAP = 400_000
+/** Ngân sách cap từng stream khi tổng vượt cap (stdout ưu tiên lớn hơn — chứa kết quả chính). */
+const GATE_STDOUT_CAP = 240_000
+const GATE_STDERR_CAP = 160_000
+/** Số ký tự ĐUÔI mỗi stream trả cho LLM (context nhỏ; raw nằm trong artifact). */
+const GATE_TAIL_CHARS = 1500
+/** Binary whitelist cho kind=custom — shell:false + loại trừ sqlite3 (DB phải đi qua db_query có guard). */
+const GATE_CUSTOM_BIN_WHITELIST = ['bun', 'bunx', 'node', 'npx', 'git']
+/**
+ * Meta-char bị cấm trong custom command. spawnSync shell:false chỉ an toàn khi
+ * argv là các token thuần — meta-char (pipe/chuyển hướng/chuỗi con shell/quote)
+ * sẽ bị truyền LITERAL cho binary gây ngữ nghĩa sai, nên từ chối luôn cho chắc.
+ */
+const GATE_CUSTOM_FORBIDDEN = /[;|&><$`()'"\\\n\r]/
+
+interface GateTestCounts { pass: number | null; fail: number | null; skip: number | null; errors: number | null }
+
+/** Parse counts kiểu bun test ("N pass", "N fail", "N skip", "N error(s)") — null nếu không khớp. */
+function parseGateTestCounts(text: string): GateTestCounts {
+  const num = (re: RegExp): number | null => {
+    const m = text.match(re)
+    return m ? parseInt(m[1], 10) : null
+  }
+  return {
+    pass: num(/(\d+)\s+pass/i),
+    fail: num(/(\d+)\s+fail/i),
+    skip: num(/(\d+)\s+skip/i),
+    errors: num(/(\d+)\s+errors?/i),
+  }
+}
+
+/** Cap 1 stream giữ đầu (75%) + đuôi (25%) — phần giữa thay bằng marker đánh dấu. */
+function capGateStream(text: string, maxChars: number, label: string): { text: string; truncated: boolean } {
+  if (text.length <= maxChars) return { text, truncated: false }
+  const head = Math.floor(maxChars * 0.75)
+  const tail = maxChars - head
+  return {
+    text: `${text.slice(0, head)}\n…[run_gate: ${label} truncated ${text.length} → ${maxChars} chars (giữ đầu ${head} + đuôi ${tail})]…\n${text.slice(text.length - tail)}`,
+    truncated: true,
+  }
+}
+
+/**
+ * runGate — chạy 1 gate kiểm định, trả receipt chuẩn hoá (P5).
+ *
+ * Preset (spawnSync shell:false — argv thẳng, không qua shell):
+ *   targeted_test → bun test <target>  ·  full_test → bun test (CI=true)
+ *   lint → bun run lint  ·  typecheck → bunx tsc --noEmit -p tsconfig.json
+ *   diff_check → git diff --check (phát hiện conflict marker + whitespace error)
+ *   custom → lệnh đơn (meta-char bị từ chối, binary phải trong whitelist)
+ */
+export async function runGate(args: {
+  kind: 'targeted_test' | 'full_test' | 'lint' | 'typecheck' | 'diff_check' | 'custom'
+  command?: string
+  target?: string
+  saveArtifactPath?: string
+}): Promise<unknown> {
+  try {
+    const kind = typeof args.kind === 'string' ? args.kind : ''
+    const root = await resolveWorkspaceRoot()
+
+    // Map preset → (runner, argv) — KHÔNG qua shell
+    let runner: string
+    let argv: string[]
+    let commandDisplay: string
+    switch (kind) {
+      case 'targeted_test': {
+        const target = typeof args.target === 'string' ? args.target.trim() : ''
+        if (!target) {
+          return { success: false, error: 'kind=targeted_test cần target — đường dẫn test file (ví dụ tests/db-query-readonly-guard.test.ts)' }
+        }
+        runner = 'bun'
+        argv = ['test', target]
+        commandDisplay = `bun test ${target}`
+        break
+      }
+      case 'full_test':
+        runner = 'bun'
+        argv = ['test']
+        commandDisplay = 'bun test'
+        break
+      case 'lint':
+        runner = 'bun'
+        argv = ['run', 'lint']
+        commandDisplay = 'bun run lint'
+        break
+      case 'typecheck':
+        runner = 'bunx'
+        argv = ['tsc', '--noEmit', '-p', 'tsconfig.json']
+        commandDisplay = 'bunx tsc --noEmit -p tsconfig.json'
+        break
+      case 'diff_check':
+        runner = 'git'
+        argv = ['diff', '--check']
+        commandDisplay = 'git diff --check'
+        break
+      case 'custom': {
+        const raw = typeof args.command === 'string' ? args.command.trim() : ''
+        if (!raw) {
+          return { success: false, error: 'kind=custom cần command — LỆNH ĐƠN (vd "bun run smoke"), KHÔNG pipe/nối chuỗi nhiều tầng.' }
+        }
+        if (GATE_CUSTOM_FORBIDDEN.test(raw)) {
+          return {
+            success: false,
+            error: `Từ chối lệnh custom chứa meta-char shell (; | & > < $ \` ( ) " ' \\): "${raw}". run_gate chạy shell:false nên chỉ chấp nhận lệnh đơn — tách pipeline thành từng gate riêng (mỗi gate 1 receipt thật), hoặc dùng tool shell (có infra-guard) cho lệnh phức hợp.`,
+          }
+        }
+        const tokens = raw.split(/\s+/).filter(Boolean)
+        const bin = tokens[0]
+        if (!GATE_CUSTOM_BIN_WHITELIST.includes(bin)) {
+          return {
+            success: false,
+            error: `Binary "${bin}" không nằm trong whitelist [${GATE_CUSTOM_BIN_WHITELIST.join(', ')}] của run_gate custom. Truy vấn DB dùng db_query (READ-ONLY có guard); gate tiêu chuẩn dùng kind= targeted_test | full_test | lint | typecheck | diff_check.`,
+          }
+        }
+        runner = bin
+        argv = tokens.slice(1)
+        commandDisplay = raw
+        break
+      }
+      default:
+        return { success: false, error: `kind không hợp lệ "${kind}" — dùng targeted_test | full_test | lint | typecheck | diff_check | custom.` }
+    }
+
+    // Chạy gate — spawnSync shell:false: exit code THẬT không bị wrapper che
+    const startedAt = Date.now()
+    const proc = spawnSync(runner, argv, {
+      cwd: root,
+      timeout: GATE_TIMEOUT_MS,
+      maxBuffer: 10 * 1024 * 1024,
+      shell: false,
+      encoding: 'utf8',
+      env: { ...process.env, CI: 'true' }, // CI=true: tắt watch mode + colors cho mọi gate
+    })
+    const durationMs = Date.now() - startedAt
+
+    // Spawn thất bại hoàn toàn (ENOENT — binary không tồn tại...): không có
+    // exit code thật → trả lỗi rõ ràng, KHÔNG bịa receipt.
+    if (proc.error && proc.status === null && proc.signal === null) {
+      return {
+        success: false,
+        error: `Gate "${kind}" không chạy được (${commandDisplay}): ${proc.error.message}`,
+        durationMs,
+      }
+    }
+
+    // exitCode: status thật của process (0-255); bị signal giết (timeout
+    // SIGTERM...) → -1 — receipt vẫn ghi nhận trung thực
+    const exitCode = typeof proc.status === 'number' ? proc.status : -1
+    let stdoutFull = typeof proc.stdout === 'string' ? proc.stdout : ''
+    let stderrFull = typeof proc.stderr === 'string' ? proc.stderr : ''
+
+    // Cap tổng output (giữ đầu+đuôi) — artifact/receipt không phình vô hạn
+    let truncated = false
+    if (stdoutFull.length + stderrFull.length > GATE_OUTPUT_TOTAL_CAP) {
+      const cappedOut = capGateStream(stdoutFull, GATE_STDOUT_CAP, 'stdout')
+      const cappedErr = capGateStream(stderrFull, GATE_STDERR_CAP, 'stderr')
+      stdoutFull = cappedOut.text
+      stderrFull = cappedErr.text
+      truncated = cappedOut.truncated || cappedErr.truncated
+    }
+
+    // sha256 receipt — hash trên bản ĐÃ CAP (artifact lưu đúng nội dung được
+    // hash → sha đối chiếu được giữa receipt và artifact)
+    const sha256 = createHash('sha256')
+      .update(`STDOUT:\n${stdoutFull}\n--- STDERR ---\n${stderrFull}`)
+      .digest('hex')
+
+    // Parse counts bun test — ưu tiên stdout, fallback stdout+stderr (bun test
+    // in summary qua stderr trên vài phiên bản; null khi gate không phải test)
+    const countsFromStdout = parseGateTestCounts(stdoutFull)
+    const counts = (countsFromStdout.pass ?? countsFromStdout.fail ?? countsFromStdout.skip ?? countsFromStdout.errors) !== null
+      ? countsFromStdout
+      : parseGateTestCounts(`${stdoutFull}\n${stderrFull}`)
+
+    const generatedAt = new Date().toISOString()
+    // Receipt đầy đủ (máy đọc được) — artifact kèm THÊM stdout/stderr thô
+    const receipt: Record<string, unknown> = {
+      schema: 'gate-receipt/v1',
+      kind,
+      command: commandDisplay,
+      exitCode,
+      durationMs,
+      sha256,
+      stdoutBytes: Buffer.byteLength(stdoutFull, 'utf8'),
+      stderrBytes: Buffer.byteLength(stderrFull, 'utf8'),
+      truncated,
+      pass: counts.pass,
+      fail: counts.fail,
+      skip: counts.skip,
+      errors: counts.errors,
+      generatedAt,
+    }
+    if (proc.signal) receipt.signal = proc.signal
+
+    // Artifact JSON đầy đủ — path tương đối BẮT ĐẦU bằng tmp/ (không bắt buộc)
+    let artifactPath: string | undefined
+    if (typeof args.saveArtifactPath === 'string' && args.saveArtifactPath.trim()) {
+      const rel = args.saveArtifactPath.trim()
+      if (!/^tmp\//.test(rel)) {
+        return { success: false, error: `saveArtifactPath phải là path tương đối BẮT ĐẦU bằng tmp/ (nhận "${rel}") — ví dụ tmp/gates/${kind}-${Date.now()}.json` }
+      }
+      const resolved = path.resolve(root, rel)
+      if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+        return { success: false, error: `saveArtifactPath thoát khỏi workspace root: ${rel}` }
+      }
+      // INFRA GUARD — không cho ghi artifact đè lên hạ tầng được bảo vệ
+      const verdict = isProtectedInfraPathSync(resolved, root)
+      if (verdict.protected) {
+        return { success: false, error: `Từ chối ghi artifact vào đường dẫn hạ tầng được bảo vệ: ${rel} — ${buildFileOpBlockedMessage(verdict.matched ?? rel)}` }
+      }
+      try {
+        await fs.mkdir(path.dirname(resolved), { recursive: true })
+        await fs.writeFile(resolved, JSON.stringify({ ...receipt, stdout: stdoutFull, stderr: stderrFull }, null, 2), 'utf8')
+        artifactPath = rel
+      } catch (err) {
+        return {
+          success: false,
+          error: `Không ghi được artifact ${rel}: ${err instanceof Error ? err.message : String(err)}`,
+        }
+      }
+    }
+
+    // Giá trị trả cho LLM: KHÔNG kèm stdout/stderr đầy đủ (giữ context nhỏ) —
+    // chỉ 1500 ký tự cuối mỗi stream + sha256 + artifactPath (đọc lại raw bằng
+    // file_read tmp/... khi cần đối chiếu). success = exit code 0 (gate fail
+    // vẫn trả ĐẦY ĐỦ receipt để agent thấy exit code/số fail thật).
+    return {
+      success: exitCode === 0,
+      ...(exitCode !== 0
+        ? { error: `Gate "${kind}" exit ${exitCode} (≠ 0) — receipt kèm exitCode/stdoutTail/stderrTail: ${commandDisplay}` }
+        : {}),
+      ...receipt,
+      stdoutTail: stdoutFull.slice(-GATE_TAIL_CHARS),
+      stderrTail: stderrFull.slice(-GATE_TAIL_CHARS),
+      ...(artifactPath ? { artifactPath } : {}),
+    }
+  } catch (err) {
+    // Fail-open — KHÔNG throw, trả error có cấu trúc
+    return { success: false, error: `run_gate lỗi: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+// ==================== P8 — WORK DATA (tool work_data + bảng AgentWorkData) ====================
+//
+// (user directive 2026-11: agents phải "có cơ chế tạo dữ liệu công việc vào DB
+// để theo dõi rồi tự dọn dẹp" — thay vì ghi file rải rác rồi bỏ quên). Bảng
+// AgentWorkData (prisma/schema.prisma) + tool CRUD 5 action:
+//   put (tạo mới / cập nhật theo id) · get (id hoặc key trong session) ·
+//   list (lọc kind/status/key, KHÔNG trả content — chỉ bytes) ·
+//   set_status (active ↔ completed/obsolete, hồi sinh được) · delete (xóa cứng)
+// QUYỀN:
+//   (a) get/list giới hạn trong context.sessionId (đọc chéo GIỮA agents trong
+//       cùng phiên là có chủ đích — CẨN THẬN: row khác session coi như không
+//       tồn tại);
+//   (b) put-with-id / set_status / delete — CHỈ agent TẠO row (agentName)
+//       mới được đụng (được cả row cũ của chính mình từ phiên trước — phục vụ
+//       "tự dọn dẹp" dữ liệu cũ của chính agent).
+// Bộ dọn tự động (instrumentation-node.ts sweepAgentWorkData) xoá bản ghi
+// completed/obsolete quá 7 ngày không đụng tới hoặc đã quá expiresAt.
+// Feature flag: ENABLE_WORK_DATA (default true — feature-flags.ts).
+// Fail-open: mọi nhánh try/catch trả { success:false, error } chứ KHÔNG throw.
+
+/** Cap nội dung content của work_data put (131072 ký tự = 128KB). */
+const WORK_DATA_CONTENT_MAX_CHARS = 131_072
+/** Các trạng thái hợp lệ của bản ghi work_data. */
+const WORK_DATA_STATUSES = ['active', 'completed', 'obsolete'] as const
+type WorkDataStatus = (typeof WORK_DATA_STATUSES)[number]
+
+export async function workData(
+  args: {
+    action: 'put' | 'get' | 'list' | 'set_status' | 'delete'
+    id?: string
+    key?: string
+    kind?: string
+    content?: string
+    status?: string
+    expiresAt?: string
+    limit?: number
+  },
+  context?: { sessionId?: string | null; agentName?: string | null; runId?: string | null },
+): Promise<unknown> {
+  try {
+    const sessionId = context?.sessionId ?? null
+    const agentName = context?.agentName ?? null
+    const runId = context?.runId ?? null
+    if (!sessionId || !agentName) {
+      return {
+        success: false,
+        error: 'work_data cần context sessionId + agentName (runId optional) — caller (goal-loop / sub-agent / API) phải truyền context của run đang chạy.',
+      }
+    }
+    // Prisma client stale (model AgentWorkData chưa generate/push) → thông báo
+    // rõ ràng thay vì lỗi khó hiểu "Cannot read properties of undefined"
+    if (!(db as unknown as Record<string, unknown>).agentWorkData) {
+      return {
+        success: false,
+        error: 'Bảng AgentWorkData chưa sẵn sàng — Prisma client chưa có model này (operator cần chạy `bunx prisma generate` + `bun run db:push` sau khi thêm model vào prisma/schema.prisma). Thử lại sau khi DB đã migrate.',
+      }
+    }
+    const action = typeof args.action === 'string' ? args.action : ''
+
+    // ── put: tạo mới (không id) hoặc cập nhật (có id — ownership theo agentName)
+    if (action === 'put') {
+      const kind = typeof args.kind === 'string' ? args.kind.trim() : ''
+      const content = typeof args.content === 'string' ? args.content : ''
+      if (!kind) return { success: false, error: 'put cần kind — phân loại dữ liệu (vd evidence | plan | note | scratch).' }
+      if (!content) return { success: false, error: 'put cần content — nội dung dữ liệu công việc.' }
+      if (content.length > WORK_DATA_CONTENT_MAX_CHARS) {
+        return { success: false, error: `content ${content.length} ký tự vượt cap ${WORK_DATA_CONTENT_MAX_CHARS} — tách nhỏ thành nhiều bản ghi, hoặc nén (lưu file qua file_write rồi put đường dẫn vào content).` }
+      }
+      const key = typeof args.key === 'string' && args.key.trim() ? args.key.trim() : null
+      let expiresAt: Date | null = null
+      if (typeof args.expiresAt === 'string' && args.expiresAt.trim()) {
+        const parsed = new Date(args.expiresAt)
+        if (Number.isNaN(parsed.getTime())) {
+          return { success: false, error: `expiresAt không phải ISO 8601 hợp lệ: "${args.expiresAt}" (ví dụ 2026-12-01T00:00:00.000Z).` }
+        }
+        expiresAt = parsed
+      }
+
+      if (typeof args.id === 'string' && args.id.trim()) {
+        // Cập nhật bản ghi — CHỈ khi do chính agent này tạo
+        const row = await db.agentWorkData.findUnique({ where: { id: args.id.trim() } })
+        if (!row) {
+          return { success: false, error: `Không tìm thấy bản ghi work_data id=${args.id}.` }
+        }
+        if (row.agentName !== agentName) {
+          return {
+            success: false,
+            error: `PHÂN QUYỀN: bản ghi ${row.id} do agent "${row.agentName}" tạo — chỉ agent tạo mới được sửa/xoá (bạn là "${agentName}"). Nếu cần dữ liệu đó, dùng get (đọc được mọi bản ghi trong cùng session).`,
+          }
+        }
+        const updated = await db.agentWorkData.update({
+          where: { id: row.id },
+          data: { kind, key, content, ...(expiresAt !== null ? { expiresAt } : {}) },
+        })
+        return {
+          success: true,
+          action: 'put',
+          updated: true,
+          id: updated.id,
+          kind,
+          key,
+          bytes: content.length,
+          status: updated.status,
+          expiresAt: updated.expiresAt?.toISOString() ?? null,
+        }
+      }
+
+      const created = await db.agentWorkData.create({
+        data: {
+          sessionId,
+          runId: runId ?? null,
+          agentName,
+          kind,
+          key,
+          content,
+          status: 'active',
+          ...(expiresAt !== null ? { expiresAt } : {}),
+        },
+      })
+      return {
+        success: true,
+        action: 'put',
+        updated: false,
+        id: created.id,
+        kind,
+        key,
+        bytes: content.length,
+        status: created.status,
+        expiresAt: created.expiresAt?.toISOString() ?? null,
+      }
+    }
+
+    // ── get: theo id HOẶC key — đọc được MỌI row trong cùng sessionId
+    if (action === 'get') {
+      let row: Awaited<ReturnType<typeof db.agentWorkData.findUnique>> = null
+      if (typeof args.id === 'string' && args.id.trim()) {
+        row = await db.agentWorkData.findUnique({ where: { id: args.id.trim() } })
+      } else if (typeof args.key === 'string' && args.key.trim()) {
+        row = await db.agentWorkData.findFirst({
+          where: { sessionId, key: args.key.trim() },
+          orderBy: { updatedAt: 'desc' },
+        })
+      } else {
+        return { success: false, error: 'get cần id HOẶC key (get theo key tìm trong cùng sessionId).' }
+      }
+      // Row khác session coi như KHÔNG tồn tại (không lộ dữ liệu xuyên phiên)
+      if (!row || row.sessionId !== sessionId) {
+        return { success: false, error: 'Không tìm thấy bản ghi work_data khớp (get chỉ thấy bản ghi trong cùng sessionId — kiểm tra lại id/key).' }
+      }
+      return {
+        success: true,
+        action: 'get',
+        id: row.id,
+        runId: row.runId,
+        agentName: row.agentName,
+        kind: row.kind,
+        key: row.key,
+        content: row.content,
+        status: row.status,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+        completedAt: row.completedAt?.toISOString() ?? null,
+        expiresAt: row.expiresAt?.toISOString() ?? null,
+      }
+    }
+
+    // ── list: lọc kind?/status?/key? (contains) — KHÔNG trả content đầy đủ (chỉ bytes)
+    if (action === 'list') {
+      const limit = typeof args.limit === 'number' && Number.isFinite(args.limit)
+        ? Math.min(200, Math.max(1, Math.floor(args.limit)))
+        : 50
+      const where: Record<string, unknown> = { sessionId }
+      if (typeof args.kind === 'string' && args.kind.trim()) where.kind = args.kind.trim()
+      if (typeof args.status === 'string' && args.status.trim()) where.status = args.status.trim()
+      if (typeof args.key === 'string' && args.key.trim()) where.key = { contains: args.key.trim() }
+      const [total, rows] = await Promise.all([
+        db.agentWorkData.count({ where }),
+        db.agentWorkData.findMany({ where, orderBy: { updatedAt: 'desc' }, take: limit }),
+      ])
+      return {
+        success: true,
+        action: 'list',
+        total,
+        limit,
+        rows: rows.map(r => ({
+          id: r.id,
+          kind: r.kind,
+          key: r.key,
+          status: r.status,
+          agentName: r.agentName,
+          updatedAt: r.updatedAt.toISOString(),
+          bytes: r.content.length,
+        })),
+      }
+    }
+
+    // ── set_status: active ↔ completed/obsolete (cho phép hồi sinh về active)
+    if (action === 'set_status') {
+      if (typeof args.id !== 'string' || !args.id.trim()) {
+        return { success: false, error: 'set_status cần id.' }
+      }
+      const status = typeof args.status === 'string' ? args.status.trim() : ''
+      if (!(WORK_DATA_STATUSES as readonly string[]).includes(status)) {
+        return { success: false, error: `status không hợp lệ "${status}" — dùng ${WORK_DATA_STATUSES.join(' | ')}.` }
+      }
+      const row = await db.agentWorkData.findUnique({ where: { id: args.id.trim() } })
+      if (!row) {
+        return { success: false, error: `Không tìm thấy bản ghi work_data id=${args.id}.` }
+      }
+      if (row.agentName !== agentName) {
+        return {
+          success: false,
+          error: `PHÂN QUYỀN: bản ghi ${row.id} do agent "${row.agentName}" tạo — chỉ agent tạo mới được đổi trạng thái (bạn là "${agentName}").`,
+        }
+      }
+      const updated = await db.agentWorkData.update({
+        where: { id: row.id },
+        data: {
+          status,
+          // completed → chốt completedAt; hồi sinh về active → dọn completedAt;
+          // obsolete → giữ nguyên completedAt (nếu có) cho lịch sử
+          completedAt: status === 'completed' ? new Date() : status === 'active' ? null : row.completedAt,
+        },
+      })
+      return {
+        success: true,
+        action: 'set_status',
+        id: updated.id,
+        status: updated.status,
+        completedAt: updated.completedAt?.toISOString() ?? null,
+      }
+    }
+
+    // ── delete: xóa cứng (ownership theo agentName)
+    if (action === 'delete') {
+      if (typeof args.id !== 'string' || !args.id.trim()) {
+        return { success: false, error: 'delete cần id.' }
+      }
+      const row = await db.agentWorkData.findUnique({ where: { id: args.id.trim() } })
+      if (!row) {
+        return { success: false, error: `Không tìm thấy bản ghi work_data id=${args.id}.` }
+      }
+      if (row.agentName !== agentName) {
+        return {
+          success: false,
+          error: `PHÂN QUYỀN: bản ghi ${row.id} do agent "${row.agentName}" tạo — chỉ agent tạo mới được xoá (bạn là "${agentName}").`,
+        }
+      }
+      await db.agentWorkData.delete({ where: { id: row.id } })
+      return { success: true, action: 'delete', deleted: true, id: row.id }
+    }
+
+    return { success: false, error: `action không hợp lệ "${action}" — dùng put | get | list | set_status | delete.` }
+  } catch (err) {
+    // Fail-open — KHÔNG throw (kể cả khi bảng AgentWorkData chưa tồn tại do
+    // chưa chạy db push — trả error rõ ràng cho agent thấy)
+    return { success: false, error: `work_data lỗi: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
 
 /**
  * context_recall — truy hồi thông tin context đã nén/lưu trữ của các run

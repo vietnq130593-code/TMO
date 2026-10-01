@@ -64,9 +64,12 @@ function getCachedEmbedding(cacheKey: string): { vector: number[]; model: string
 
 function setCachedEmbedding(cacheKey: string, vector: number[], model: string): void {
   // Limit cache size to prevent memory bloat
-  if (embeddingCache.size > 500) {
+  // ROUND-23 P4 — hard-cap thật sự: evict cho về đúng ngưỡng (trước đây chỉ bớt
+  // 1 entry mỗi lần set → batch import dồn đột biến vẫn làm vượt tràn 500).
+  while (embeddingCache.size >= 500) {
     const oldestKey = embeddingCache.keys().next().value
-    if (oldestKey) embeddingCache.delete(oldestKey)
+    if (oldestKey === undefined) break
+    embeddingCache.delete(oldestKey)
   }
   embeddingCache.set(cacheKey, { vector, model, timestamp: Date.now() })
 }

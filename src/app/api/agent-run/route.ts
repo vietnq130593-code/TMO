@@ -33,7 +33,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getAgentRuns, hasActiveRun, cancelSessionRuns } from '@/lib/agent-run-tracker'
+import { getAgentRuns, hasActiveRun, cancelSessionRuns, readRunTrail } from '@/lib/agent-run-tracker'
 import { db } from '@/lib/db'
 import { withPollCache } from '@/lib/poll-microcache'
 
@@ -41,8 +41,17 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest) {
   const sessionId = request.nextUrl.searchParams.get('sessionId')
+  const runIdParam = request.nextUrl.searchParams.get('runId')
   const limitRaw = request.nextUrl.searchParams.get('limit')
   const limit = limitRaw ? Math.min(Math.max(1, Number(limitRaw) || 12), 30) : 12
+
+  // ROUND-23 P1 — tra cứu theo runId: đọc trail JSONL bền vững trên đĩa (sống
+  // qua restart + không trượt cửa sổ) — nguồn nhận chứng cho agent/operator
+  // đối chiếu sự kiện của run BẤT KỂ LÚC NÀO. Không cần sessionId (mỗi dòng
+  // JSONL đã đóng dấu sessionId/agentName).
+  if (runIdParam) {
+    return withPollCache(`ar|runId|${runIdParam}|${limit}`, 2500, () => getAgentRunByRunId(runIdParam, limit))
+  }
 
   if (!sessionId) {
     return NextResponse.json({ ok: false, error: 'missing `sessionId`' }, { status: 400 })
@@ -51,6 +60,83 @@ export async function GET(request: NextRequest) {
   // VÒNG 10 — micro-cache + in-flight dedup: UI poll mỗi ~1.2s; khi DB bận
   // (mission checkpoint) query có khi 7.5s → request chồng đống → RSS ratchet.
   return withPollCache(`ar|${sessionId}|${limit}`, 2500, () => getAgentRunData(sessionId, limit))
+}
+
+/** ROUND-23 P1 — GET /api/agent-run?runId=<id>&limit=N
+ *
+ * Nguồn nhận chứng theo runId: (1) trail JSONL trên đĩa (agent-runs/<runId>.jsonl
+ * — mọi event từng phát, không evict, sống qua restart); (2) metadata
+ * AgentRunRecord từ DB (status/stopReason/cycles/tokens/toolCalls/toolFailures
+ * tổng); (3) todos của run (bảng Todo keyed runId). Agent đối chiếu "6 failure
+ * của run trước" giờ chỉ cần runId — không còn cảnh registry xoá sạch giữa chừng.
+ */
+async function getAgentRunByRunId(runId: string, limit: number): Promise<Response> {
+  try {
+    const [trail, record] = await Promise.all([
+      readRunTrail(runId, Math.max(limit, 250)),
+      db.agentRunRecord.findFirst({
+        where: { runId },
+        orderBy: { createdAt: 'desc' },
+      }).catch(() => null),
+    ])
+
+    if (!trail.ok && !record) {
+      return NextResponse.json(
+        { ok: false, error: `runId '${runId}' không tìm thấy (không có trail trên đĩa lẫn AgentRunRecord)`, serverTs: Date.now() },
+        { status: 404 },
+      )
+    }
+
+    const firstEvt = trail.events[0] as unknown as (Record<string, unknown> | undefined)
+    const sessionId = (record?.sessionId as string | undefined) || (firstEvt?.sessionId as string | undefined) || ''
+    const agentName = (record?.agentName as string | undefined) || (firstEvt?.agentName as string | undefined) || 'unknown'
+
+    // Todos của run (cùng pattern CI-2 — fail-open todos=[])
+    let todos: Array<Record<string, unknown>> = []
+    try {
+      const rows = await db.todo.findMany({
+        where: { runId },
+        orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+      })
+      todos = rows.slice(0, 50).map(r => ({
+        id: r.id, sessionId: r.sessionId, runId: r.runId, agentRole: r.agentRole,
+        content: r.content, status: r.status, priority: r.priority,
+        parentId: r.parentId, position: r.position, archivedAt: r.archivedAt,
+        createdAt: r.createdAt, updatedAt: r.updatedAt,
+      }))
+    } catch { /* fail-open */ }
+
+    return NextResponse.json({
+      ok: true,
+      source: trail.ok ? 'disk-trail' : 'record-only',
+      run: {
+        runId,
+        sessionId,
+        agentName,
+        status: record?.status ?? (trail.ok ? 'done' : 'unknown'),
+        stopReason: record?.stopReason ?? null,
+        cycles: record?.cycles ?? null,
+        tokensUsed: record?.tokensUsed ?? null,
+        toolCalls: record?.toolCalls ?? null,
+        toolFailures: record?.toolFailures ?? null,
+        durationMs: record?.durationMs ?? null,
+        startedAt: record?.startedAt ?? null,
+        completedAt: record?.completedAt ?? null,
+        events: trail.events,
+        totalEventsOnDisk: trail.totalEvents,
+        truncatedToWindow: trail.truncatedToWindow,
+        todos,
+      },
+      trailNote: trail.note ?? null,
+      serverTs: Date.now(),
+      count: 1,
+    })
+  } catch (err) {
+    return NextResponse.json(
+      { ok: false, error: err instanceof Error ? err.message : 'Internal server error' },
+      { status: 500 },
+    )
+  }
 }
 
 async function getAgentRunData(sessionId: string, limit: number): Promise<Response> {

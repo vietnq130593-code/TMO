@@ -67,6 +67,18 @@ const DEFAULTS: Record<string, string> = {
   ENABLE_FILE_LIST: 'true',
   ENABLE_FILE_GREP: 'true',
   ENABLE_RUN_TESTS: 'true',
+  // P5 (2026-11 — thiết kế chốt với user): run_gate — gate receipt chuẩn hoá
+  // (exit code THẬT + sha256 + stdout/stderr tail; chạy spawnSync shell:false
+  // thay vì agent tự viết wrapper `cmd; echo $?` bị che exit code). Default
+  // true: whitelist per-agent (agents.ts) đã giới hạn ai được gọi + preset
+  // an toàn (custom bị cấm meta-char, binary phải nằm trong whitelist).
+  ENABLE_RUN_GATE: 'true',
+  // P8 (2026-11 — user directive "dữ liệu công việc vào DB để theo dõi rồi tự
+  // dọn dẹp"): work_data — CRUD bảng AgentWorkData có vòng đời active →
+  // completed/obsolete + ownership theo agent + bộ dọn tự động 7 ngày.
+  // Default true: whitelist per-agent đã giới hạn, mọi nhánh fail-open trả
+  // { success:false, error } thay vì crash.
+  ENABLE_WORK_DATA: 'true',
   ENABLE_GIT_COMMIT: 'true',
 
   // Phase 3 (NEW in Task 8 — code intelligence + MCP; all default false per spec

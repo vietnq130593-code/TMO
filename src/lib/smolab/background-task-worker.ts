@@ -65,6 +65,20 @@ class SmolabTaskWorker {
     })
 
     // 2. Thêm vào queue VỚI taskId (FIX: dùng QueuedTask thay vì TaskInput)
+    // ROUND-23 P4 — backpressure cap: queue chờ từng KHÔNG giới hạn (RAM phình
+    // khi consumer chậm/đứng). Vượt trần → mark failed ngay (task vẫn có DB
+    // record + lý do rõ ràng — caller đọc được và thử lại sau).
+    if (this.queue.length >= 100) {
+      await db.smolabTask.update({
+        where: { id: task.id },
+        data: {
+          status: 'failed',
+          error: 'Queue đầy (100 task chờ) — từ chối task mới để bảo vệ RAM. Thử lại sau khi queue thoát bớt.',
+          completedAt: new Date(),
+        },
+      }).catch(() => { /* fail-open — task DB có thể đã bị xoá */ })
+      throw new Error('Smolab background queue đầy (100 task chờ) — backpressure, thử lại sau')
+    }
     this.queue.push({ taskId: task.id, input })
 
     // 3. Thử bắt đầu processing

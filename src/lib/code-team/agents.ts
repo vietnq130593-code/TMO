@@ -66,7 +66,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'TL',
     avatar: '👑',
-    tools: ['opencode', 'knowledge_search', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'db_query', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'open_workspace', 'verify_and_push', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
+    tools: ['opencode', 'knowledge_search', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'run_gate', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'db_query', 'work_data', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'open_workspace', 'verify_and_push', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
       // Task 42 (user audit Playwright): TL cần browser_screenshot để verify UI
       // tại checkpoint (start_preview → chụp http://127.0.0.1:<port>) thay vì
       // chỉ đọc worklog — evidence trực quan cho quyết định CONTINUE/PIVOT.
@@ -111,7 +111,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'G1',
     avatar: '🧠',
-    tools: ['knowledge_search', 'knowledge_graph', 'tavily', 'serper', 'jina', 'file_read', 'file_list', 'grep', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
+    tools: ['knowledge_search', 'knowledge_graph', 'tavily', 'serper', 'jina', 'file_read', 'file_list', 'grep', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'run_gate', 'test_coverage', 'db_query', 'work_data', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
       // SKILL ACCESS (fix 2026-09-12) — xem note MEGATRON phía trên.
       'list_skills', 'read_skill',
       // AUTOMATION PROPOSAL (2026-09-13) — xem note MEGATRON phía trên.
@@ -132,7 +132,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'G2-A',
     avatar: '⚡',
-    tools: ['opencode', 'knowledge_search', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'git_status', 'git_diff', 'git_log', 'git_branch', 'get_diagnostics', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'browser_screenshot', 'mcp_call', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
+    tools: ['opencode', 'knowledge_search', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'db_query', 'work_data', 'run_tests', 'run_gate', 'git_commit', 'git_push', 'git_pull', 'git_status', 'git_diff', 'git_log', 'git_branch', 'get_diagnostics', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'browser_screenshot', 'mcp_call', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
       // CI-3 B3 (Task 13-b) — Kho Context: truy hồi digest đã nén của run trước.
       'context_recall',
       // SKILL ACCESS (fix 2026-09-12) — xem note MEGATRON phía trên.
@@ -157,7 +157,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'G2-B',
     avatar: '🛡️',
-    tools: ['opencode', 'knowledge_search', 'file_read', 'file_edit', 'file_write', 'file_list', 'grep', 'get_diagnostics', 'run_tests',
+    tools: ['opencode', 'knowledge_search', 'file_read', 'file_edit', 'file_write', 'file_list', 'grep', 'db_query', 'work_data', 'get_diagnostics', 'run_tests', 'run_gate',
       // CI-4 B3-B5 (Task 11-c) — SENTINEL (review) chỉ cần read-only git tools
       // để khảo sát repo trước khi review/fix — KHÔNG có branch/clone/commit.
       'git_status', 'git_diff', 'git_log',
@@ -184,7 +184,7 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'G3',
     avatar: '🔧',
-    tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'git_status', 'git_diff', 'git_log', 'git_branch', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'verify_and_push', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
+    tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'git_status', 'git_diff', 'git_log', 'git_branch', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'run_gate', 'test_coverage', 'db_query', 'work_data', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'verify_and_push', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
       // CI-3 B3 (Task 13-b) — Kho Context: truy hồi digest đã nén của run trước.
       'context_recall',
       // SKILL ACCESS (fix 2026-09-12) — xem note MEGATRON phía trên.

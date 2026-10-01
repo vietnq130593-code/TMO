@@ -42,6 +42,10 @@
 // ROUND-11: insertAgentRunRecord/updateLatestAgentRunRecord giờ dynamic
 // import trong persistAgentRunRecord (update-first) — bỏ static import.
 
+// ROUND-23 P1 — durable event trail: fs/path cho append JSONL (fail-open).
+import fs from 'node:fs'
+import path from 'node:path'
+
 // ==================== Types ====================
 
 export interface AgentRunTodo {
@@ -119,15 +123,126 @@ export interface AgentRun {
    * (workflow-engine đã đếm stepTokensUsed), persist lên AgentRunRecord.
    * Trước đây tracker luôn ghi null → mất số liệu phân tích hiệu năng. */
   tokensUsed?: number
+  /** ROUND-23 P1 — tổng số tool failure THẬT của run (không phụ thuộc cửa
+   *  sổ event in-memory — trước đây persistAgentRunRecord đếm trong cửa sổ
+   *  250-event nên run dài bị đếm thiếu: 3 nguồn cho 3 số khác nhau). */
+  toolFailuresTotal?: number
 }
 
 // ==================== Storage (globalThis — shared across module instances) ====================
 
 const MAX_RUNS_PER_SESSION = 10
-const MAX_EVENTS_PER_RUN = 250
-const MAX_SESSIONS = 60
+// ROUND-23 P4: 250 → 120 — registry in-memory giờ chỉ còn là lớp HIỂN THỊ;
+// bằng chứng đầy đủ đã append ra đĩa (appendEventTrail) nên giảm cap để bớt
+// ăn RAM (worst case cũ 60×10×250 event × ~3.3KB ≈ hàng trăm MB → 30×10×120).
+const MAX_EVENTS_PER_RUN = 120
+const MAX_SESSIONS = 30
 const THOUGHT_MAX_CHARS = 2400
 const RESULT_PREVIEW_MAX_CHARS = 900
+
+// ==================== ROUND-23 P1 — Durable event trail (JSONL trên đĩa) ====================
+//
+// BÀI HỌC ROUND-22 (mission MEGATRON audit memory 01-10): registry in-memory
+// (250 event/run, trượt cửa sổ, XOÁ SẠCH khi restart) làm mất bằng chứng giữa
+// chừng — 3 lần MemWatchdog self-exit xóa registry, agent phải chạy lại gate
+// 4-5 lần chỉ để "cite" được việc đã làm, và 6 tool failure của run trước
+// KHÔNG THỂ đối chiếu vì sự kiện đã bị evict.
+//
+// Giải pháp: MỌI event được append thêm ra agent-runs/<runId>.jsonl — bền vững
+// qua restart + không bao giờ evict. Agent/operator đọc lại qua
+// GET /api/agent-run?runId=<id>. Fail-open tuyệt đối như toàn bộ tracker:
+// lỗi đĩa KHÔNG bao giờ làm hỏng agent execution.
+//
+// Thư mục agent-runs/ nằm trong danh sách infra-guard bảo vệ (chống agent tự
+// sửa bằng chứng của mình) — đọc được, ghi đè thì không.
+
+const RUN_TRAILS_DIR = path.join(process.cwd(), 'agent-runs')
+/** Chống path traversal qua runId (runId do hệ sinh, nhưng phòng xa) */
+const RUN_ID_SAFE_RE = /^[A-Za-z0-9_-]{1,80}$/
+
+/** Chuỗi hoá append THEO TỪNG RUN (smoke round-23 phát hiện fs.appendFile
+ * fire-and-forget chạy ĐUA nhau → run_end có thể nhảy lên trước tool event
+ * cuối — log bằng chứng đọc sai trình tự. Mỗi run 1 promise-chain → giữ
+ * thứ tự; map tự dọn entry khi chain rỗng.) */
+const trailWriteChains = new Map<string, Promise<void>>()
+
+let runTrailsDirReady = false
+
+function appendEventTrail(run: AgentRun, event: AgentRunEvent): void {
+  try {
+    if (!RUN_ID_SAFE_RE.test(run.runId)) return
+    if (!runTrailsDirReady) {
+      fs.mkdirSync(RUN_TRAILS_DIR, { recursive: true })
+      runTrailsDirReady = true
+    }
+    const file = path.join(RUN_TRAILS_DIR, `${run.runId}.jsonl`)
+    const line =
+      JSON.stringify({
+        ...event,
+        runId: run.runId,
+        sessionId: run.sessionId,
+        agentName: run.agentName,
+      }) + '\n'
+    const prev = trailWriteChains.get(run.runId) ?? Promise.resolve()
+    const p = prev
+      .then(() => new Promise<void>(resolve => { fs.appendFile(file, line, () => resolve()) }))
+      .catch(() => { /* fail-open — trail là lớp phụ */ })
+      .then(() => {
+        if (trailWriteChains.get(run.runId) === p) trailWriteChains.delete(run.runId)
+      })
+    trailWriteChains.set(run.runId, p)
+  } catch { /* fail-open — trail là lớp phụ, registry chính vẫn chạy */ }
+}
+
+/** Kết quả đọc trail từ đĩa (ROUND-23 P1). */
+export interface RunTrail {
+  ok: boolean
+  runId: string
+  events: AgentRunEvent[]
+  /** Tổng event THẬT của run trên đĩa (kể cả phần trượt cửa sổ) */
+  totalEvents: number
+  /** true nếu events đã cắt về `limit` event gần nhất (file đầy đủ trên đĩa) */
+  truncatedToWindow: boolean
+  note?: string
+}
+
+/**
+ * Đọc lại toàn bộ/lượt cuối event của 1 run BẤT KỂ LÚC NÀO (sau restart, sau
+ * eviction) — nguồn nhận chứng cho agent + operator. Mỗi dòng JSONL đã đóng
+ * dấu runId/sessionId/agentName nên đối chiếu được identity.
+ */
+export async function readRunTrail(runId: string, limit = 250): Promise<RunTrail> {
+  const base: RunTrail = { ok: false, runId, events: [], totalEvents: 0, truncatedToWindow: false }
+  try {
+    if (!RUN_ID_SAFE_RE.test(runId)) return { ...base, note: 'runId không hợp lệ' }
+    const file = path.join(RUN_TRAILS_DIR, `${runId}.jsonl`)
+    const raw = await fs.promises.readFile(file, 'utf-8')
+    const events: AgentRunEvent[] = []
+    for (const line of raw.split('\n')) {
+      const l = line.trim()
+      if (!l) continue
+      try { events.push(JSON.parse(l) as AgentRunEvent) } catch { /* dòng hỏng — bỏ qua */ }
+    }
+    const totalEvents = events.length
+    const window = limit > 0 ? events.slice(-limit) : events
+    return {
+      ok: true,
+      runId,
+      events: window,
+      totalEvents,
+      truncatedToWindow: totalEvents > window.length,
+      note:
+        totalEvents > window.length
+          ? `trượt cửa sổ: trả ${window.length}/${totalEvents} event gần nhất — tăng limit hoặc đọc file để có toàn bộ`
+          : undefined,
+    }
+  } catch {
+    return {
+      ...base,
+      note: 'không tìm thấy trail trên đĩa (run trước round-23, run chưa ghi, hoặc runId sai)',
+    }
+  }
+}
 
 interface RunRegistry {
   runsBySession: Map<string, AgentRun[]>
@@ -228,6 +343,8 @@ function pushEvent(run: AgentRun, event: AgentRunEvent) {
   if (run.events.length > MAX_EVENTS_PER_RUN) {
     run.events.splice(0, run.events.length - MAX_EVENTS_PER_RUN)
   }
+  // ROUND-23 P1 — ghi bền vững ra đĩa (append-only, fail-open)
+  appendEventTrail(run, event)
 }
 
 // ==================== AgentRunRecord persistence (Task 20-b) ====================
@@ -248,9 +365,12 @@ function runStatusToRecordStatus(status: AgentRun['status']): string {
 function persistAgentRunRecord(run: AgentRun): void {
   try {
     const endedAt = run.endedAt ?? Date.now()
-    const toolFailures = run.events.filter(
-      e => e.type === 'tool' && e.success === false,
-    ).length
+    // ROUND-23 P1 — đếm tổng THẬT (run.toolFailuresTotal) thay vì đếm trong
+    // cửa sổ event in-memory (run dài trước đây chỉ đếm được phần còn lại:
+    // ToolMetric=6, registry=3, AgentRunRecord=2 — 3 nguồn 3 số).
+    const toolFailures =
+      run.toolFailuresTotal ??
+      run.events.filter(e => e.type === 'tool' && e.success === false).length
     // ROUND-11 — UPDATE-FIRST rồi mới INSERT-fallback: delegation giờ insert
     // row 'running' NGAY lúc start (subagent-delegate — chống mất trắng khi
     // restart giết subagent giữa chừng). Blind insert ở đây sẽ tạo DOUBLE ROW
@@ -572,6 +692,10 @@ export function recordAgentRunTool(
       : activeRun(sessionId)
     if (!run) return
     run.counters.toolCalls++
+    // ROUND-23 P1 — đếm tổng failure THẬT của run (thoát khỏi cửa sổ event)
+    if (entry.success === false) {
+      run.toolFailuresTotal = (run.toolFailuresTotal || 0) + 1
+    }
     const counter = counterFor(entry.tool)
     if (counter) run.counters[counter]++
     pushEvent(run, {
