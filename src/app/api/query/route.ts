@@ -1401,6 +1401,11 @@ export async function GET(request: NextRequest) {
       // ROUND-23 P4 — chỉ cần SỐ LƯỢNG entity (không cần mảng id: trước đây
       // materialize toàn bộ ~176k id vào mảng chỉ để .length 2 lần ở response)
       let totalEntitiesBefore = 0
+      // ROUND-24 review fix — orphan SQLite xoá ở Step 3 phải đếm RIÊNG: trước
+      // đây orphansDeleted gộp cả Neo4j + SQLite rồi trừ thẳng vào
+      // totalEntitiesBefore (chỉ đếm LocalEntity) → total_entities_after sai
+      // sem khi 2 domain có số orphan lệch nhau.
+      let localOrphansDeleted = 0
 
       try {
         // Step 1: Find orphan entities in Neo4j (entities with no relationships)
@@ -1457,28 +1462,36 @@ export async function GET(request: NextRequest) {
         const countRows = await db.$queryRaw<{ total: number | bigint }[]>`SELECT COUNT(*) AS total FROM LocalEntity`
         totalEntitiesBefore = Number((countRows as { total: number | bigint }[])[0]?.total ?? 0)
 
+        // ROUND-24 review fix — LIMIT 50k: phòng kịch bản tồn đống orphan (sau
+        // đợt sync lỗi) query trả về bảng hàng trăm nghìn id làm spike RAM đúng
+        // kiểu P4 cố tránh; phần dư sẽ drain ở lần reconcile kế (mirror cách
+        // sync-neo4j phân trang).
         const orphanRows = (await db.$queryRaw`SELECT e.id FROM LocalEntity e
            WHERE NOT EXISTS (
              SELECT 1 FROM LocalRelationship r
              WHERE r.sourceEntityId = e.id OR r.targetEntityId = e.id
-           )`.catch(() => [])) as { id: string }[]
+           )
+           LIMIT 50000`.catch(() => [])) as { id: string }[]
         const localOrphanIds = orphanRows.map((row: { id: string }) => row.id)
 
         if (localOrphanIds.length > 0) {
           const deleteResult = await db.localEntity.deleteMany({
             where: { id: { in: localOrphanIds } },
           })
+          localOrphansDeleted = deleteResult.count
           orphansDeleted += deleteResult.count
           console.log(`[Reconcile] SQLite: deleted ${deleteResult.count} local orphan entities`)
         }
 
         // Delete self-referencing relationships in SQLite
-        const selfRefRels = await db.localRelationship.findMany({
-          select: { id: true, sourceEntityId: true, targetEntityId: true },
-        })
-        const selfRefIds = selfRefRels
-          .filter(r => r.sourceEntityId && r.targetEntityId && r.sourceEntityId === r.targetEntityId)
-          .map(r => r.id)
+        // ROUND-24 review fix — trước đây findMany TOÀN BỘ LocalRelationship
+        // (~206k row × 3 cột) rồi lọc self-ref bằng JS — đúng kiểu materialize
+        // full-table mà P4 muốn bỏ nhưng bỏ sót. Giờ 1 câu SQL duy nhất chỉ trả
+        // id self-ref (thường số ít).
+        const selfRefRows = (await db.$queryRaw`SELECT id FROM LocalRelationship
+           WHERE sourceEntityId IS NOT NULL AND targetEntityId IS NOT NULL
+             AND sourceEntityId = targetEntityId`.catch(() => [])) as { id: string }[]
+        const selfRefIds = selfRefRows.map((row: { id: string }) => row.id)
 
         if (selfRefIds.length > 0) {
           const deleteResult = await db.localRelationship.deleteMany({
@@ -1500,7 +1513,9 @@ export async function GET(request: NextRequest) {
         orphans_deleted: orphansDeleted,
         selfrefs_deleted: selfRefsDeleted,
         total_entities_before: totalEntitiesBefore,
-        total_entities_after: totalEntitiesBefore - orphansDeleted,
+        // ROUND-24 review fix — chỉ trừ số orphan xoá KHỎI SQLite (cùng domain
+        // với totalEntitiesBefore); orphansDeleted gộp cả Neo4j không dùng ở đây.
+        total_entities_after: totalEntitiesBefore - localOrphansDeleted,
       })
     }
 

@@ -1164,6 +1164,11 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
             type: 'number',
             description: 'Số hàng tối đa của list (1-200, mặc định 50)',
           },
+          scope: {
+            type: 'string',
+            enum: ['session', 'mine'],
+            description: "Phạm vi list (mặc định 'session' — trong phiên hiện tại). 'mine' = MỌI bản ghi do chính agent tạo XUYÊN PHIÊN — dùng để rà dữ liệu cũ của mình rồi set_status/delete (tự dọn dẹp).",
+          },
         },
         required: ['action'],
       },
@@ -2890,7 +2895,11 @@ export async function executeTool(
         result = await executeWorkDataFn(args as any, {
           sessionId: context?.sessionId ?? null,
           agentName: context?.agentName ?? null,
-          runId: context?.runId ?? null,
+          // ROUND-24 review fix: sub-agent delegation truyền runId của run CON
+          // qua context.delegationRunId (DELEGATION CONTRACT — subagent-delegate
+          // không truyền context.runId) → trước fix này mọi bản ghi work_data
+          // do sub-agent tạo đều rơi runId=null, mất liên kết run.
+          runId: context?.delegationRunId ?? context?.runId ?? null,
         })
         break
       }

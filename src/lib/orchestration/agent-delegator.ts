@@ -512,7 +512,14 @@ async function executeSubAgent(
     }
     if (toolName) {
       console.log(`[Delegator] Sub-agent ${task.assignedAgent} calling tool ${toolName}`)
-      const toolResult = await executeTool(toolName, toolArgs)
+      // ROUND-24 review fix: truyền context (agentName + parentSessionId) cho
+      // executeTool — trước đây đường delegator gọi executeTool KHÔNG context
+      // → work_data luôn lỗi "cần context sessionId + agentName", tool events
+      // không ghi được vào Agent Activity/Run Tracker, ToolMetric mất attribution.
+      const toolResult = await executeTool(toolName, toolArgs, {
+        agentName: String(task.assignedAgent),
+        sessionId: task.parentSessionId,
+      })
       tokensUsed += 0 // executeTool doesn't return tokensUsed; we don't have a clean per-tool token metric
 
       // Best-effort file extraction from the tool receipt

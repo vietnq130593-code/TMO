@@ -5498,6 +5498,8 @@ export async function workData(
     status?: string
     expiresAt?: string
     limit?: number
+    /** ROUND-24 — list scope:'mine' = mọi bản ghi do chính agent tạo xuyên phiên */
+    scope?: string
   },
   context?: { sessionId?: string | null; agentName?: string | null; runId?: string | null },
 ): Promise<unknown> {
@@ -5594,22 +5596,27 @@ export async function workData(
       }
     }
 
-    // ── get: theo id HOẶC key — đọc được MỌI row trong cùng sessionId
+    // ── get: theo id HOẶC key — đọc được MỌI row trong cùng sessionId;
+    // ROUND-24 review fix — get theo id MỞ THÊM cho owner (row.agentName ===
+    // agentName): ownership đã cho agent set_status/delete bản ghi cũ của
+    // mình xuyên phiên (phục vụ tự dọn dẹp) nhưng trước đây KHÔNG đọc lại được
+    // → việc dọn dẹp xuyên phiên bị MÙ. get theo key vẫn khoá chặt sessionId
+    // (key là tra cứu phi ownership — không mở).
     if (action === 'get') {
       let row: Awaited<ReturnType<typeof db.agentWorkData.findUnique>> = null
       if (typeof args.id === 'string' && args.id.trim()) {
         row = await db.agentWorkData.findUnique({ where: { id: args.id.trim() } })
+        if (row && row.sessionId !== sessionId && row.agentName !== agentName) row = null // khác session VÀ không phải của mình → coi như không tồn tại
       } else if (typeof args.key === 'string' && args.key.trim()) {
         row = await db.agentWorkData.findFirst({
           where: { sessionId, key: args.key.trim() },
           orderBy: { updatedAt: 'desc' },
         })
       } else {
-        return { success: false, error: 'get cần id HOẶC key (get theo key tìm trong cùng sessionId).' }
+        return { success: false, error: 'get cần id HOẶC key (get theo key tìm trong cùng sessionId; get theo id đọc được cả bản ghi cũ của chính agent tạo).' }
       }
-      // Row khác session coi như KHÔNG tồn tại (không lộ dữ liệu xuyên phiên)
-      if (!row || row.sessionId !== sessionId) {
-        return { success: false, error: 'Không tìm thấy bản ghi work_data khớp (get chỉ thấy bản ghi trong cùng sessionId — kiểm tra lại id/key).' }
+      if (!row) {
+        return { success: false, error: 'Không tìm thấy bản ghi work_data khớp (get theo key giới hạn trong sessionId; get theo id phải trong session hoặc do chính agent tạo — kiểm tra lại id/key).' }
       }
       return {
         success: true,
@@ -5628,12 +5635,17 @@ export async function workData(
       }
     }
 
-    // ── list: lọc kind?/status?/key? (contains) — KHÔNG trả content đầy đủ (chỉ bytes)
+    // ── list: lọc kind?/status?/key? (contains) — KHÔNG trả content đầy đủ (chỉ bytes).
+    // ROUND-24 review fix — scope:'mine' liệt kê MỌI bản ghi do chính agent tạo
+    // XUYÊN PHIÊN (kèm sessionId cột để phân biệt): phục vụ "tự dọn dữ liệu cũ" —
+    // trước đây list khoá cứng sessionId nên agent không có cách nào LIỆT KÊ
+    // dữ liệu cũ của mình để biết cái gì cần set_status/delete.
     if (action === 'list') {
       const limit = typeof args.limit === 'number' && Number.isFinite(args.limit)
         ? Math.min(200, Math.max(1, Math.floor(args.limit)))
         : 50
-      const where: Record<string, unknown> = { sessionId }
+      const scopeMine = args.scope === 'mine'
+      const where: Record<string, unknown> = scopeMine ? { agentName } : { sessionId }
       if (typeof args.kind === 'string' && args.kind.trim()) where.kind = args.kind.trim()
       if (typeof args.status === 'string' && args.status.trim()) where.status = args.status.trim()
       if (typeof args.key === 'string' && args.key.trim()) where.key = { contains: args.key.trim() }
@@ -5644,10 +5656,12 @@ export async function workData(
       return {
         success: true,
         action: 'list',
+        scope: scopeMine ? 'mine' : 'session',
         total,
         limit,
         rows: rows.map(r => ({
           id: r.id,
+          sessionId: r.sessionId,
           kind: r.kind,
           key: r.key,
           status: r.status,

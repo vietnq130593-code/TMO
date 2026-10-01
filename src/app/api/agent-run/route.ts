@@ -44,13 +44,21 @@ export async function GET(request: NextRequest) {
   const runIdParam = request.nextUrl.searchParams.get('runId')
   const limitRaw = request.nextUrl.searchParams.get('limit')
   const limit = limitRaw ? Math.min(Math.max(1, Number(limitRaw) || 12), 30) : 12
+  // ROUND-24 review fix — nhánh runId dùng limit RIÊNG (1..2000): trước đây
+  // dùng limit kẹp 30 rồi Math.max(…, 250) trong getAgentRunByRunId → API
+  // không bao giờ trả quá 250 event, mâu thuẫn với trailNote "tăng limit để
+  // có toàn bộ". Run dài (MEGATRON round-22: ~191 tool calls) cần cửa sổ lớn
+  // hơn hẳn nhánh sessionId (danh sách run cho UI).
+  const runLimit = runIdParam
+    ? (limitRaw ? Math.min(Math.max(1, Number(limitRaw) || 250), 2000) : 250)
+    : 0
 
   // ROUND-23 P1 — tra cứu theo runId: đọc trail JSONL bền vững trên đĩa (sống
   // qua restart + không trượt cửa sổ) — nguồn nhận chứng cho agent/operator
   // đối chiếu sự kiện của run BẤT KỂ LÚC NÀO. Không cần sessionId (mỗi dòng
   // JSONL đã đóng dấu sessionId/agentName).
   if (runIdParam) {
-    return withPollCache(`ar|runId|${runIdParam}|${limit}`, 2500, () => getAgentRunByRunId(runIdParam, limit))
+    return withPollCache(`ar|runId|${runIdParam}|${runLimit}`, 2500, () => getAgentRunByRunId(runIdParam, runLimit))
   }
 
   if (!sessionId) {

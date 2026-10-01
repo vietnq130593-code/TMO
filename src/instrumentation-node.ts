@@ -11,8 +11,8 @@
  */
 
 import { startAllServices, type ServiceConfig } from './lib/service-manager'
-import { resolve } from 'path'
-import { readFileSync, readdirSync } from 'fs'
+import { resolve, join } from 'path'
+import { readFileSync, readdirSync, statSync, rmSync } from 'fs'
 import { ensureTmoApiToken } from './lib/tmo-token'
 import { isOnDemandEnabled, initOnDemandWatchdog } from './lib/openclaw-ondemand'
 // DB SELF-HEALING (fix user report 2026-09-09 "local không load agents"):
@@ -516,6 +516,47 @@ if (!globalForAwds.__tmoAgentWorkDataSweepStarted) {
     })
   const awdsTimer = setInterval(() => sweepAgentWorkData(), 60 * 60 * 1000)
   awdsTimer.unref?.()
+}
+
+// ============================================================================
+// ROUND-24 review fix — AGENT RUN TRAIL RETENTION (giới hạn đĩa cho P1)
+// ============================================================================
+// P1 append mọi event ra agent-runs/<runId>.jsonl (bằng chứng bền vững) nhưng
+// KHÔNG có cơ chế dọn → đĩa phình vô hạn theo tuần (mỗi mission dài có thể
+// hàng MB JSONL). Trail là lớp NHẬN CHỨNG — chỉ cần giữ đủ dài cho đối chiếu
+// sau khi run kết thúc; 14 ngày mặc định là dư dả so với chu kỳ mission (giờ
+// đến chục tiếng). Env AGENT_RUN_TRAIL_RETENTION_DAYS: 0 = tắt hẳn (giữ mãi).
+// Fail-open: lỗi đĩa không ảnh hưởng app; KHÔNG đụng file đang được ghi của
+// run đang chạy (chỉ xoá file idle quá hạn theo mtime).
+function sweepAgentRunTrails(): void {
+  try {
+    const retentionDays = Number(process.env.AGENT_RUN_TRAIL_RETENTION_DAYS ?? 14)
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return // 0/invalid = off
+    const cutoff = Date.now() - retentionDays * 24 * 3600 * 1000
+    const dir = join(process.cwd(), 'agent-runs')
+    let deleted = 0
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith('.jsonl')) continue
+      const file = join(dir, name)
+      try {
+        if (statSync(file).mtimeMs < cutoff) {
+          rmSync(file)
+          deleted++
+        }
+      } catch { /* file biến mất giữa chừng — bỏ qua */ }
+    }
+    if (deleted > 0) console.log(`[AgentRunTrails] retention: deleted ${deleted} trail(s) > ${retentionDays} ngày`)
+  } catch {
+    // fail-open — thư mục chưa tồn tại / lỗi đĩa: im lặng bỏ qua
+  }
+}
+
+const globalForArtr = globalThis as unknown as { __tmoAgentRunTrailRetentionStarted?: boolean }
+if (!globalForArtr.__tmoAgentRunTrailRetentionStarted) {
+  globalForArtr.__tmoAgentRunTrailRetentionStarted = true
+  sweepAgentRunTrails() // boot — chạy ngay (file IO rẻ, không cần đợi DB)
+  const artrTimer = setInterval(() => sweepAgentRunTrails(), 6 * 60 * 60 * 1000) // 6 giờ/lần
+  artrTimer.unref?.()
 }
 
 // ============================================================================
