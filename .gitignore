@@ -112,6 +112,12 @@ worklog.md
 # (AUDIT_RUN_ID → đóng dấu runId + mirror tmp/audit/<runId>/). KHÔNG re-include
 # → git add bỏ qua im lặng → fresh clone thiếu module → audit:manifest gãy import.
 !/scripts/audit-provenance.ts
+# NGOẠI LỆ (VÒNG 17 — 2026-10-01): close-issue-ledger.ts — script disposition
+# SỔ ISSUE của operator (vòng cuối đóng 20 issue open 3 session theo Opus FIX
+# directive review cmuoxzvje002). Là bằng chứng vận hành kèm ghi chú disposition
+# từng issue + receipt (audit-out/issue-ledger-closure/). Dùng (LƯU Ý env leak):
+#   env -u DATABASE_URL bun run scripts/close-issue-ledger.ts [--apply]
+!/scripts/close-issue-ledger.ts
 # NGOẠI LỆ: script test model NIM (user-facing — bun scripts/test-llm-model.ts)
 !/scripts/test-llm-model.ts
 # NGOẠI LỆ: script test agent/chat/utility qua Z-AI SDK (bun scripts/test-agent-zai.ts)
