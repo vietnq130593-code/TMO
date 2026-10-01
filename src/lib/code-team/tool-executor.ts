@@ -261,7 +261,7 @@ export function healToolArgs(
             const parsed = JSON.parse(value)
             if (Array.isArray(parsed)) {
               args[key] = parsed
-              notes.push(`tham số "${key}" gửi vào là chuỗi JSON — hệ thống đã parse thành mảng (${parsed.length} phần tử). Lần sau gửi thẳng mảng JSON.`)
+              notes.push(`[argHeal — ĐÃ tự chữa, KHÔNG phải lỗi, tool vẫn chạy với args đã chữa] tham số "${key}" gửi vào là chuỗi JSON — hệ thống đã parse thành mảng (${parsed.length} phần tử). Lần sau gửi thẳng mảng JSON.`)
               continue
             }
           } catch { /* không phải JSON — để validator báo lỗi chuẩn */ }
@@ -274,7 +274,7 @@ export function healToolArgs(
           if (arrayEntries.length === 1 && entries.length === 1) {
             const [wrapKey, arr] = arrayEntries[0]
             args[key] = arr
-            notes.push(`tham số "${key}" gửi vào bị bọc trong object {"${wrapKey}": [...]} — hệ thống đã unwrap thành mảng (${(arr as unknown[]).length} phần tử). Lần sau gửi THẲNG mảng: {"${key}": [{...}, ...]}.`)
+            notes.push(`[argHeal — ĐÃ tự chữa, KHÔNG phải lỗi, tool vẫn chạy với args đã chữa] tham số "${key}" gửi vào bị bọc trong object {"${wrapKey}": [...]} — hệ thống đã unwrap thành mảng (${(arr as unknown[]).length} phần tử). Lần sau gửi THẲNG mảng: {"${key}": [{...}, ...]}.`)
             continue
           }
           // Rule 3 — object đơn trông như 1 phần tử của mảng (mọi key ⊆ item
@@ -288,7 +288,7 @@ export function healToolArgs(
             const isSubset = keys.length > 0 && keys.every(k => itemProps.includes(k))
             if (isSubset) {
               args[key] = [value]
-              notes.push(`tham số "${key}" gửi vào là 1 object đơn — hệ thống đã wrap thành mảng 1 phần tử. Lần sau gửi mảng: {"${key}": [{...}]}.`)
+              notes.push(`[argHeal — ĐÃ tự chữa, KHÔNG phải lỗi, tool vẫn chạy với args đã chữa] tham số "${key}" gửi vào là 1 object đơn — hệ thống đã wrap thành mảng 1 phần tử. Lần sau gửi mảng: {"${key}": [{...}]}.`)
               continue
             }
           }
@@ -321,7 +321,7 @@ export function healToolArgs(
           if (Number.isFinite(num)) {
             const asInt = expected === 'integer' ? Math.trunc(num) : num
             args[key] = asInt
-            notes.push(`tham số "${key}" gửi vào là chuỗi số — hệ thống đã đổi thành số (${asInt}). Lần sau gửi số trực tiếp: {"${key}": ${asInt}}.`)
+            notes.push(`[argHeal — ĐÃ tự chữa, KHÔNG phải lỗi, tool vẫn chạy với args đã chữa] tham số "${key}" gửi vào là chuỗi số — hệ thống đã đổi thành số (${asInt}). Lần sau gửi số trực tiếp: {"${key}": ${asInt}}.`)
             continue
           }
         }
@@ -329,14 +329,14 @@ export function healToolArgs(
         const lv = typeof value === 'string' ? value.trim().toLowerCase() : ''
         if (lv === 'true' || lv === 'false') {
           args[key] = lv === 'true'
-          notes.push(`tham số "${key}" gửi vào là chuỗi "${lv}" — hệ thống đã đổi thành boolean. Lần sau gửi ${lv} trực tiếp (không có dấu ngoặc kép).`)
+          notes.push(`[argHeal — ĐÃ tự chữa, KHÔNG phải lỗi, tool vẫn chạy với args đã chữa] tham số "${key}" gửi vào là chuỗi "${lv}" — hệ thống đã đổi thành boolean. Lần sau gửi ${lv} trực tiếp (không có dấu ngoặc kép).`)
           continue
         }
       } else if (expected === 'string') {
         if (typeof value === 'number' && Number.isFinite(value)) {
           const str = String(value)
           args[key] = str
-          notes.push(`tham số "${key}" gửi vào là số — hệ thống đã đổi thành chuỗi. Lần sau gửi chuỗi: {"${key}": "${str}"}.`)
+          notes.push(`[argHeal — ĐÃ tự chữa, KHÔNG phải lỗi, tool vẫn chạy với args đã chữa] tham số "${key}" gửi vào là số — hệ thống đã đổi thành chuỗi. Lần sau gửi chuỗi: {"${key}": "${str}"}.`)
           continue
         }
       }
@@ -742,13 +742,14 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'file_list',
-      description: 'Liệt kê nội dung thư mục (shallow hoặc tree). Tự bỏ node_modules/.next/.git/dist/build. Trả về name/type/size/mtime.',
+      description: 'Liệt kê nội dung thư mục (shallow hoặc tree). Tự bỏ node_modules/.next/.git/dist/build + rác phổ biến (.aider.tags.cache.v4/.cache/coverage/__pycache__...); ignore của caller ĐƯỢC CỘNG THÊM vào default (không thay thế). Sắp xếp theo độ sâu (level 1 trước, A-Z trong từng level). Tối đa 60 entries — vượt trả truncated:true + total thật: thu hẹp path/depth hoặc dùng pattern để xem tiếp. Trả name/type/size/mtime + total/entriesShown.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'Thư mục cần list (mặc định workspace root)' },
           depth: { type: 'number', description: 'Độ sâu tối đa (1-5, mặc định 1)' },
-          ignore: { type: 'array', items: { type: 'string' }, description: 'Tên thư mục/file bỏ qua' },
+          ignore: { type: 'array', items: { type: 'string' }, description: 'Tên thư mục/file BỔ SUNG bỏ qua (cộng vào danh sách mặc định)' },
+          pattern: { type: 'string', description: 'Chỉ hiện file khớp glob (vd "*.ts", "*.json") — thư mục vẫn đi qua để tìm file bên trong' },
         },
       },
     },

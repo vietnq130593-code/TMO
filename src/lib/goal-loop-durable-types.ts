@@ -101,6 +101,8 @@ export interface GoalLoopCheckpoint {
     subagentTokens: number
     escalations: number
     parseFailNudges: number
+    /** ROUND-26 FIX A — nudge prose-only đã dùng (max 2/run). Optional: checkpoint cũ không có → hiểu 0. */
+    proseNudges?: number
   }
   /** Verdict chu kỳ gần nhất (null nếu chưa có evaluate nào) */
   verdict: GoalLoopVerdictSnapshot | null

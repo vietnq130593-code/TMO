@@ -554,7 +554,25 @@ async function countFilesRecursive(dirPath: string): Promise<number> {
  * file_list — shallow directory listing / tree.
  * Returns typed entries with size + mtime. depth controls recursion.
  * Phase 2.5 enhancements: `pattern` glob filter + `lstat` (don't follow symlinks).
+ *
+ * ROUND-26 FIX C (bằng chứng mission cmupl7uen — Omega gọi file_list(".") depth=3
+ * thu 1220 entries nhưng ~toàn bộ là rác .aider.tags.cache.v4/8d/9e... → 165KB
+ * result bị cap 12000 chars cắt giữa → agent "không có dữ liệu hữu ích về tên
+ * file"). 4 thay đổi:
+ *  (1) ignore của caller được UNION với default junk (trước đây caller truyền
+ *      ignore riêng là MẤT toàn bộ default → node_modules/.next/.git lọt vào);
+ *  (2) default ignore mở rộng thêm thư mục rác phổ biến (.aider.tags.cache.v4,
+ *      .cache, coverage...);
+ *  (3) sắp xếp THEO ĐỘ SÂU (BFS: hết level 1 mới level 2, trong level theo tên
+ *      A-Z) thay vì readdir thứ tự tùy hệ thống + DFS lồng con ngay sau cha —
+ *      khảo sát cấu trúc tổng thể đọc được từ đầu danh sách;
+ *  (4) cap FILE_LIST_MAX_ENTRIES entries + cờ truncated + total thật + note
+ *      dẫn hướng thu hẹp → result LUÔN nằm dưới cap message của goal-loop
+ *      (không còn bị cắt giữa làm mất summary nằm cuối).
  */
+const FILE_LIST_DEFAULT_IGNORE = ['node_modules', '.next', '.git', 'dist', 'build', '.aider.tags.cache.v4', '.cache', 'coverage', '__pycache__', '.venv', 'venv']
+const FILE_LIST_MAX_ENTRIES = 60
+
 export async function fileList(args: {
   path?: string
   depth?: number
@@ -564,16 +582,18 @@ export async function fileList(args: {
   const target = args.path || '.'
   const resolvedPath = await resolveWithinWorkspace(target)
   const maxDepth = Math.min(args.depth || 1, 5)
-  const ignoreSet = new Set(args.ignore || ['node_modules', '.next', '.git', 'dist', 'build'])
+  // ROUND-26 FIX C — UNION: ignore caller + default junk (không còn mất default khi caller truyền ignore riêng)
+  const ignoreSet = new Set([...FILE_LIST_DEFAULT_IGNORE, ...(args.ignore || [])])
   // Compile glob pattern once (simple * support, same convention as grep)
   const globRe = args.pattern
     ? new RegExp('^' + args.pattern.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$')
     : null
 
-  async function walk(dir: string, depth: number): Promise<Array<{ name: string; type: string; size: number; mtime: string; symlink?: boolean }>> {
+  type FlatEntry = { name: string; type: string; size: number; mtime: string; symlink?: boolean; depth: number }
+  async function walk(dir: string, depth: number, prefix: string): Promise<FlatEntry[]> {
     if (depth > maxDepth) return []
     const entries = await fs.readdir(dir, { withFileTypes: true })
-    const result: Array<{ name: string; type: string; size: number; mtime: string; symlink?: boolean }> = []
+    const result: FlatEntry[] = []
     for (const entry of entries) {
       if (ignoreSet.has(entry.name)) continue
       // Phase 2.5 — glob filter (skip directories that don't match — let directory walk
@@ -589,17 +609,16 @@ export async function fileList(args: {
         // Apply pattern filter ONLY to file entries (dirs recurse to find files inside)
         if (!isDir && globRe && !globRe.test(entry.name)) continue
         result.push({
-          name: entry.name,
+          name: prefix ? `${prefix}/${entry.name}` : entry.name,
           type: isDir ? 'dir' : 'file',
           size: stat.size,
           mtime: stat.mtime.toISOString(),
           symlink: isSymlink || undefined,
+          depth,
         })
         if (isDir && depth < maxDepth) {
-          const nested = await walk(full, depth + 1)
-          for (const n of nested) {
-            result.push({ ...n, name: `${entry.name}/${n.name}` })
-          }
+          const nested = await walk(full, depth + 1, prefix ? `${prefix}/${entry.name}` : entry.name)
+          for (const n of nested) result.push(n)
         }
       } catch { /* skip unreadable */ }
     }
@@ -612,9 +631,9 @@ export async function fileList(args: {
   // ([ToolExecutor] Error executing file_list: ENOENT...) cháy cả tool call.
   // Giờ trả kết quả THÀNH CÔNG với danh sách rỗng + note rõ lý do — agent
   // đọc note và tự điều hướng (tạo dir / list thư mục cha) thay vì nhận lỗi.
-  let entries: Array<{ name: string; type: string; size: number; mtime: string; symlink?: boolean }>
+  let flat: FlatEntry[]
   try {
-    entries = await walk(resolvedPath, 1)
+    flat = await walk(resolvedPath, 1, '')
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code || ''
     const msg = err instanceof Error ? err.message : String(err)
@@ -638,7 +657,27 @@ export async function fileList(args: {
     }
     throw new Error(`file_list "${target}" lỗi: ${msg}`)
   }
-  return { success: true, path: target, entries, total: entries.length }
+  // ROUND-26 FIX C (3) — BFS theo độ sâu, trong mỗi level theo tên (case-insensitive)
+  flat.sort((a, b) => a.depth - b.depth || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  const total = flat.length
+  const truncated = total > FILE_LIST_MAX_ENTRIES
+  const shown = truncated ? flat.slice(0, FILE_LIST_MAX_ENTRIES) : flat
+  // (4) cap + truncated flag — summary fields (total/note/argHeal) LUÔN nằm cuối
+  // kết quả, không bao giờ bị cắt mất.
+  const { entries } = { entries: shown.map(({ depth: _depth, ...rest }) => rest) }
+  return {
+    success: true,
+    path: target,
+    entries,
+    total,
+    entriesShown: entries.length,
+    ...(truncated
+      ? {
+          truncated: true as const,
+          note: `Danh sách bị cắt từ ${total} → ${FILE_LIST_MAX_ENTRIES} mục (đã sắp xếp theo độ sâu: level 1 trước, level 2 sau...). Muốn xem tiếp: thu hẹp "path" vào thư mục con, giảm "depth", dùng "pattern" lọc tên file, hoặc truyền "ignore" thêm thư mục rác.`,
+        }
+      : {}),
+  }
 }
 
 /**

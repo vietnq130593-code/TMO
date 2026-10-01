@@ -1219,6 +1219,56 @@ function smartTruncate(s: string, maxChars: number): string {
   )
 }
 
+/**
+ * ROUND-26 FIX B (bằng chứng mission cmupl7uen — Omega báo cáo "file_list PASS
+ * nhưng không có dữ liệu hữu ích"): smartTruncate cắt GIỮA chuỗi JSON của tool
+ * message rồi chèn marker chứa \n thô → chuỗi đẩy về LLM KHÔNG còn parse được
+ * được (JSON syntax error — thực tế 13:53: file_list trả 125k chars → message
+ * 11999 chars VỠ, agent đọc được mảnh rời nhưng không trích xuất cấu trúc,
+ * kết luận "không có dữ liệu hữu ích về tên file" → chu kỳ sau mất định hướng).
+ * Giờ: vượt cap → đóng envelope JSON HỢP LỆ {tool, success, result:
+ * {_truncated, _originalChars, head, tail}} — head/tail là string field được
+ * escape chuẩn → LLM LUÔN nhận JSON parse được, thấy rõ ~55% đầu + ~30% đuôi
+ * (lỗi/tổng kết thường nằm cuối) + biết kích thước thật để gọi lại hẹp hơn.
+ * Fallback (serialize lỗi / cap quá nhỏ) → giữ splice text cũ (smartTruncate).
+ */
+export function truncateToolMessageJson(
+  entry: { tool: string; success: boolean; result: unknown },
+  serialized: string,
+  cap: number,
+): string {
+  try {
+    // Guard — payload nằm dưới cap: trả NGUYÊN VĂN (pushToolMessage chỉ gọi
+    // khi vượt cap, nhưng hàm public + test gọi trực tiếp cần hành vi đúng).
+    if (serialized.length <= cap) return serialized
+    let head = Math.floor(cap * 0.55)
+    let tail = Math.max(200, Math.floor(cap * 0.3))
+    const build = (): string =>
+      JSON.stringify({
+        tool: entry.tool,
+        success: entry.success,
+        result: {
+          _truncated: true,
+          _originalChars: serialized.length,
+          _note: `Kết quả thật ${serialized.length} ký tự — giữ ~55% đầu + ~30% đuôi (lỗi/tổng kết thường nằm cuối). Cần phần giữa → gọi lại tool với phạm vi hẹp hơn (path/depth/pattern/glob/head_limit/ignore...).`,
+          head: serialized.slice(0, head),
+          tail: serialized.slice(-tail),
+        },
+      })
+    let out = build()
+    // envelope vẫn vượt cap (edge: cap rất nhỏ) → co head/tail theo tỉ lệ rồi thử đúng 1 lần
+    if (out.length > cap) {
+      const overflow = out.length - cap
+      head = Math.max(200, head - Math.ceil(overflow * 0.65))
+      tail = Math.max(120, tail - Math.ceil(overflow * 0.35))
+      out = build()
+    }
+    return out.length <= cap ? out : smartTruncate(serialized, cap)
+  } catch {
+    return smartTruncate(serialized, cap) // fail-open — splice text cũ
+  }
+}
+
 /** Đẩy tool result vào messages với cap ký tự (chống context nổ).
  *  Tool kiểm định (lint/type_check/run_tests...) được cap cao hơn — agent và
  *  evaluator cần thấy đủ thông tin lỗi để diễn giải chính xác. */
@@ -1231,7 +1281,8 @@ function pushToolMessage(messages: GoalMessage[], entry: { tool: string; success
     content = JSON.stringify({ tool: entry.tool, success: entry.success, result: String(entry.result).slice(0, cap) })
   }
   if (content.length > cap) {
-    content = smartTruncate(content, cap)
+    // ROUND-26 FIX B — envelope JSON hợp lệ thay vì splice cắt giữa làm vỡ JSON
+    content = truncateToolMessageJson(entry, content, cap)
   }
   messages.push({ role: 'tool', content })
 }
@@ -1241,7 +1292,7 @@ function pushToolMessage(messages: GoalMessage[], entry: { tool: string; success
  * các trường structured (success/errorCount/warningCount/exitCode...) + THÔNG
  * BÁO LỖI CỤ THỂ đầu tiên để evaluator thấy đúng bằng chứng, không phải đoán.
  */
-function summarizeToolResult(result: unknown): string {
+export function summarizeToolResult(result: unknown): string {
   let s: string
   try {
     s = JSON.stringify(result)
@@ -1300,6 +1351,16 @@ function summarizeToolResult(result: unknown): string {
     // FIX (cùng đợt): todo_write trả `upserted` — đếm ghi máy, bằng chứng
     // exactly-once (đúng một lần ghi, N dòng) cho trọng tài.
     if (typeof r.upserted === 'number') parts.push(`upserted=${r.upserted}`)
+    // ROUND-26 FIX D (mission cmupl7uen — evidence "file_list: PASS …| đuôi:
+    // <argHeal note>" khiến trọng tài + chu kỳ sau tưởng file_list KHÔNG trả
+    // dữ liệu hữu ích): kết quả có `entries` (file_list...) cần preview số
+    // lượng + vài tên đầu — kèm tổng + cờ truncated để nhận diện cắt.
+    if (Array.isArray(r.entries) && r.entries.length > 0) {
+      const ents = r.entries as Array<Record<string, unknown>>
+      const names = ents.slice(0, 4).map(e => String(e.name ?? '')).filter(Boolean)
+      const totalEnts = typeof r.total === 'number' ? r.total : ents.length
+      parts.push(`entries ${ents.length}/${totalEnts}${r.truncated === true ? ' (bị cắt)' : ''}${names.length > 0 ? `: ${names.join(', ')}` : ''}`)
+    }
     if (typeof r.stdout === 'string' && r.stdout.trim()) {
       const so = r.stdout.trim()
       parts.push(`output: ${so.slice(0, 120)}${so.length > 200 ? ' …' + so.slice(-50) : ''}`)
@@ -1312,7 +1373,16 @@ function summarizeToolResult(result: unknown): string {
       if (file || msg) parts.push(`lỗi đầu: ${file.split('/').pop()}${loc} ${msg}`)
     }
     if (parts.length > 0) {
-      const tail = s.length > 400 ? ` …| đuôi: ${s.slice(-80)}` : ''
+      // ROUND-26 FIX D — nguồn chuỗi đuôi preview BỎ argHeal (note chữa args là
+      // noise với bằng chứng — trước đây đuôi 80 ký tự rơi trúng argHeal làm
+      // che mất total/note thật ở cuối kết quả, đúng lỗi mission cmupl7uen).
+      let tailSrc = s
+      if (Array.isArray(r.argHeal)) {
+        try {
+          tailSrc = JSON.stringify({ ...r, argHeal: undefined })
+        } catch { tailSrc = s }
+      }
+      const tail = tailSrc.length > 400 ? ` …| đuôi: ${tailSrc.slice(-80)}` : ''
       return parts.join(' · ') + tail
     }
     if (r.error) return `error: ${String(r.error).slice(0, 150)}`
@@ -2056,6 +2126,10 @@ export async function runGoalDrivenLoop(params: {
   /** 21-d: số lần đẩy feedback parse-fail (tool call bị cắt cụt giữa JSON khi
    *  output đạt maxTokens) — chống loop vô hạn nếu LLM liên tục phát JSON lỗi. */
   let parseFailNudges = resumeState?.counters.parseFailNudges ?? 0
+  // ROUND-26 FIX A — counter nudge prose-only (LLM trả thuần văn bản 0 tool
+  // call): mirror parseFailNudges — run-scoped, tối đa 2 lần, persist qua
+  // checkpoint chống restart reset rồi nudge vô hạn.
+  let proseNudges = resumeState?.counters.proseNudges ?? 0
   // CI-5 (14-b) — resume khôi phục verdict từ snapshot (bỏ field `raw` lớn —
   // snapshot không lưu; raw chỉ dùng debug/fallback heuristic, '' an toàn).
   let lastVerdict: EvalVerdict | null = resumeState?.verdict
@@ -2189,7 +2263,7 @@ export async function runGoalDrivenLoop(params: {
     runId,
     messages: messages.map(m => ({ role: m.role, content: m.content, tool_call_id: m.tool_call_id })),
     evidence: evidence.slice(-120).map(e => ({ cycle: e.cycle, kind: e.kind, tool: e.tool, success: e.success, text: e.text })),
-    counters: { cyclesDone, cyclesAttempted, totalIterations, totalToolCalls, tokensUsed, compressions, delegations, subagentTokens, escalations, parseFailNudges },
+    counters: { cyclesDone, cyclesAttempted, totalIterations, totalToolCalls, tokensUsed, compressions, delegations, subagentTokens, escalations, parseFailNudges, proseNudges },
     verdict: lastVerdict
       ? {
           complete: lastVerdict.complete,
@@ -2402,7 +2476,14 @@ export async function runGoalDrivenLoop(params: {
     // Cycle > 1 → inject continuation directive (chẩn đoán + kế hoạch mới)
     // [G] + advisory của Omega (nếu auto-escalate đã chạy ở cuối chu kỳ trước)
     if (cycle > 1 && lastVerdict) {
-      const advisoryBlock = omegaAdvisory ? `\n\n${omegaAdvisory}\n(Theo tư vấn trên — ĐỔI CÁCH TIẾP CẬN, không lặp lại hành động đã fail.)` : ''
+      // ROUND-26 FIX E (mission cmupl7uen — Omega báo cáo "directive điều phối
+      // Omega/MEGATRON nhưng nhật ký không cung cấp kết quả thực thi"): tư vấn
+      // Omega orchestrator + báo cáo AUTO-APPLY sub-agent trước đây bị NỐI VÀO
+      // GIỮA chuỗi khối phụ của directive (10k+ chars) → chìm, chu kỳ sau khó
+      // nhận diện kết quả sub-agent. Giờ thành MESSAGE RIÊNG đẩy TRƯỚC directive
+      // → cấu trúc rõ: [báo cáo điều phối + tư vấn] → [chỉ thị chu kỳ] (recency
+      // vẫn thuộc directive — action items nằm cuối cùng).
+      const advisoryBlock = omegaAdvisory ? `${omegaAdvisory}\n(Theo tư vấn trên — ĐỔI CÁCH TIẾP CẬN, không lặp lại hành động đã fail.)` : ''
       omegaAdvisory = ''
       // IMP-2 (F2) — cảnh báo todo kẹt do reconcile cuối chu kỳ trước tính: đính
       // CỨNG vào directive — agent phải đóng/chia nhỏ/hủy ngay chu kỳ này (todo
@@ -2428,6 +2509,12 @@ ${debtList}
 
 Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý (nợ trước, việc khác sau), (2) khắc phục từng lỗi, (3) KIỂM ĐỊNH bằng tool thật (run_tests/lint/type_check), (4) KHÔNG mở việc mới ngoài danh sách trên khi còn nợ chưa xử lý. Xong hết → báo cáo ngắn từng lỗi đã xử lý + bằng chứng.
 LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PHỤC VỤ HẠ TẦNG): bạn ĐÃ ĐƯỢC PHÉP (1) tự cài package — manage_packages hoặc shell "bun add <pkg>"; (2) tự sửa DB schema — file_edit/file_write prisma/schema.prisma → shell "bun run db:push" → shell "bun run db:generate"; (3) tự xây tool còn thiếu — list_custom_tools kiểm tra → create_custom_tool đăng ký vào hệ thống (tab Tools/Skills module Smolab) rồi GỌI NGAY tool mới; (4) việc thuộc chức trách agent khác → delegate_task/dispatch_agent; (5) chưa có agent chức trách đó → escalate_problem (Omega tạo agent mới — agent mới tự cập nhật vào module Agents). Hai hạng mục (1)+(2) KHÔNG còn bị chặn — ĐỪNG kết luận "ngoài quyền sửa" khi chưa thử. Chỉ phần VẪN ĐƯỢC BẢO VỆ mới phải chờ phê duyệt: .env/keys, file data trong db/, opencode.json, .opencode/, mini-services/, config hệ thống — với các lỗi này: KHÔNG lặp thử sửa, ghi rõ trạng thái "chờ phê duyệt" + ĐIỀU KIỆN CẦN vào báo cáo rồi chuyển sang lỗi kế — đó là "đã xử lý phần của agent". Hết debt cycles mà còn lỗi treo ngoài quyền → hệ thống ghi nợ Todo follow-up kèm điều kiện, KHÔNG khởi động chu kỳ debt mới.${debtTodosBlock}${todoStaleWarnBlock}`
+        // ROUND-26 FIX E — debt mode trước đây BỎ RƠI advisory (omegaAdvisory
+        // reset ở trên nhưng không bao giờ inject) → tư vấn Omega + báo cáo
+        // sub-agent biến mất trong debt cycle. Inject message riêng như nhánh thường.
+        if (advisoryBlock) {
+          messages.push({ role: 'user', content: `📡 KẾT QUẢ ĐIỀU PHỐI TỰ ĐỘNG (chu kỳ trước — ĐỌC KỸ trước khi xử lý nợ):\n${advisoryBlock}` })
+        }
         messages.push({ role: 'user', content: debtDirective })
         evidence.push({ cycle, kind: 'directive', text: `DEBT CYCLE ${cycle}: xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã xong)` })
         recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ0 QUAN SÁT & PHÂN TÍCH (CHU KỲ DEBT — quay lại GĐ0): trọng tài tái khởi động chu kỳ để xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã hoàn thành) — TOÀN BỘ nợ kỹ thuật ƯU TIÊN triển khai TRƯỚC, sau đó mới tới việc khác`, totalIterations)
@@ -2501,7 +2588,12 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} SHR directive: belief=${shrBeliefBlock ? 'yes' : 'no'} dataScope=${dataScopeBlock ? 'yes' : 'no'} uncertain=${uncertainBlock ? 'yes' : 'no'} priorCoT=${prior.matchedCount} mẩu khớp`)
           }
         } catch { /* fail-open — SHR không được phép làm hỏng directive */ }
-        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles, doneSummary, planningOnlyStreak) + similarErrorsBlock + advisoryBlock + runTodosBlock + todoStaleWarnBlock + dataScopeBlock + uncertainBlock + shrBeliefBlock + priorCotBlock
+        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles, doneSummary, planningOnlyStreak) + similarErrorsBlock + runTodosBlock + todoStaleWarnBlock + dataScopeBlock + uncertainBlock + shrBeliefBlock + priorCotBlock
+        // ROUND-26 FIX E — advisory (tư vấn Omega + báo cáo AUTO-APPLY sub-agent)
+        // thành message RIÊNG trước directive — không còn chìm giữa các khối.
+        if (advisoryBlock) {
+          messages.push({ role: 'user', content: `📡 KẾT QUẢ ĐIỀU PHỐI TỰ ĐỘNG (chu kỳ trước — ĐỌC KỸ trước khi hành động):\n${advisoryBlock}` })
+        }
         messages.push({ role: 'user', content: directive })
         evidence.push({ cycle, kind: 'directive', text: `Chu kỳ ${cycle}: chẩn đoán "${lastVerdict.rootCause.slice(0, 120)}" → kế hoạch mới${similarErrorsBlock ? ' + lỗi tương tự đã gặp (episodic memory)' : ''}${advisoryBlock ? ' + tư vấn Omega orchestrator' : ''}${planningOnlyStreak >= 2 ? ` + 🚨 ÉP TRIỂN KHAI (streak ${planningOnlyStreak} chu kỳ planning-only)` : ''}` })
         recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ0 QUAN SÁT & PHÂN TÍCH: đọc kết quả tích lũy + chẩn đoán trọng tài: ${lastVerdict.rootCause || '(không rõ)'} → lên kế hoạch lại và khắc phục${similarErrorsBlock ? ' (kèm lỗi tương tự đã gặp)' : ''}${advisoryBlock ? ' (kèm tư vấn Omega)' : ''}${planningOnlyStreak >= 2 ? ` — 🚨 PHÁ VÒNG LẶP: ${planningOnlyStreak} chu kỳ liên tiếp chỉ lập kế hoạch, chu kỳ này BẮT BUỘC triển khai tool trước` : ''}`, totalIterations)
@@ -2742,8 +2834,9 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         // bị BỎ QUA IM LẶNG, agent kết thúc 'no_tool_calls' mà không biết file
         // vừa mất. Giờ: đẩy feedback vào conversation (pattern pushToolMessage)
         // để LLM phát lại GỌN HƠN ở lượt kế — tối đa 2 lần, sau đó conclude như cũ.
+        let brokenHint: string | null = null
         try {
-          const brokenHint = detectBrokenToolCallHint(result.content)
+          brokenHint = detectBrokenToolCallHint(result.content)
           if (brokenHint && parseFailNudges < 2 && timeLeft() > 0 && tokenLeft() > REPORT_RESERVE_TOKENS) {
             parseFailNudges++
             messages.push({ role: 'assistant', content: result.content })
@@ -2753,7 +2846,36 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             continue
           }
         } catch { /* fail-open — feedback lỗi không được phép crash loop */ }
-        // Agent tự kết luận (protocol yêu cầu đã verify + báo cáo ở đây)
+        // ROUND-26 FIX A (mission cmupl7uen — Omega báo cáo "vòng lặp kẹt ở
+        // trạng thái lập kế hoạch, chu kỳ 2/3/4 không thực hiện đầy đủ chuỗi"):
+        // LLM trả về THUẦN VĂN (kế hoạch/kết luận, không có dấu hiệu tool call)
+        // → trước đây break IM LẶNG với 2 tổn thất: (1) assistant message
+        // KHÔNG được push → kế hoạch của agent BIẾN MẤT khỏi transcript (chu kỳ
+        // sau + trọng tài không thấy agent đã nghĩ gì, LLM stateless phải lập
+        // kế hoạch lại từ đầu), (2) KHÔNG có phản hồi sửa sai → agent lặp đúng
+        // hành vi prose-only ở chu kỳ kế, mỗi lần đốt NGUYÊN CHU KỲ (bằng chứng:
+        // 4 chu kỳ chỉ 1 tool call, planningOnlyStreak=3, no_progress). Giờ:
+        // nudge in-cycle (tối đa 2 lần/run, budget-guard như parse nudge) yêu
+        // cầu phát tool_call THẬT theo todo in_progress; sau nudge limit hoặc
+        // budget cạn → push content (giữ kế hoạch cho trọng tài + chu kỳ sau)
+        // rồi break như cũ.
+        if (!brokenHint && proseNudges < 2 && timeLeft() > 0 && tokenLeft() > REPORT_RESERVE_TOKENS) {
+          proseNudges++
+          messages.push({ role: 'assistant', content: result.content })
+          pushToolMessage(messages, {
+            tool: 'harness_warning',
+            success: false,
+            result: '⚠️ Lượt trả lời của bạn là THUẦN VĂN BẢN — 0 tool call nào được thực thi, lượt này KHÔNG được ghi nhận là tiến triển (trọng tài sẽ chấm CHƯA ĐẠT). KHÔNG viết thêm kế hoạch/kết luận bằng văn bản. Việc duy nhất bây giờ: phát NGAY 1 tool_call cho việc ĐẦU TIÊN trong todo in_progress (hoặc todo_write nếu run chưa có todo). Định dạng bắt buộc — tool_call: <tên_tool>({json args}) — ví dụ: tool_call: file_read({"path": "src/lib/agent-goal-loop.ts"}). Chỉ cần 1 tool call hợp lệ là đủ để bắt đầu.',
+          })
+          evidence.push({ cycle, kind: 'tool', tool: 'harness_warning', success: false, text: 'prose-only nudge — lượt thuần văn bản 0 tool call, đã yêu cầu phát tool_call thật theo todo in_progress' })
+          recordAgentThought(agentSessionId, `⚠️ Lượt output THUẦN VĂN BẢN (0 tool call, lần ${proseNudges}/2) — đã phản hồi yêu cầu phát tool_call thật (chống vòng lặp lập kế hoạch)`, totalIterations)
+          continue
+        }
+        // Agent tự kết luận (protocol yêu cầu đã verify + báo cáo ở đây).
+        // ROUND-26 FIX A — push content TRƯỚC KHI break: kế hoạch/kết luận của
+        // agent không còn biến mất khỏi transcript (trọng tài + chu kỳ sau đọc
+        // được; final report vẫn lấy từ lastContent riêng — không đổi hành vi).
+        messages.push({ role: 'assistant', content: result.content })
         endedBy = 'no_tool_calls'
         break
       }
