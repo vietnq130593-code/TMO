@@ -163,17 +163,25 @@ const RUN_ID_SAFE_RE = /^[A-Za-z0-9_-]{1,80}$/
 /** Chuỗi hoá append THEO TỪNG RUN (smoke round-23 phát hiện fs.appendFile
  * fire-and-forget chạy ĐUA nhau → run_end có thể nhảy lên trước tool event
  * cuối — log bằng chứng đọc sai trình tự. Mỗi run 1 promise-chain → giữ
- * thứ tự; map tự dọn entry khi chain rỗng.) */
-const trailWriteChains = new Map<string, Promise<void>>()
-
-let runTrailsDirReady = false
+ * thứ tự; map tự dọn entry khi chain rỗng.)
+ * ROUND-25 fix: chuyển Map + flag dir-ready lên globalThis (mirror pattern
+ * storage của file này — xem 'Storage (globalThis)' phía dưới): Turbopack HMR
+ * swap module giữa chừng run cho ra 2 instance với 2 Map riêng → chuỗi append
+ * của cùng runId chạy đua 2 nhánh → event có thể lệch thứ tự. Trên globalThis
+ * chỉ còn MỘT chuỗi xuyên suốt vòng đời module. */
+const trailGlobal = globalThis as unknown as {
+  __tmoTrailWriteChains?: Map<string, Promise<void>>
+  __tmoRunTrailsDirReady?: boolean
+}
+const trailWriteChains: Map<string, Promise<void>> =
+  trailGlobal.__tmoTrailWriteChains ?? (trailGlobal.__tmoTrailWriteChains = new Map())
 
 function appendEventTrail(run: AgentRun, event: AgentRunEvent): void {
   try {
     if (!RUN_ID_SAFE_RE.test(run.runId)) return
-    if (!runTrailsDirReady) {
+    if (!trailGlobal.__tmoRunTrailsDirReady) {
       fs.mkdirSync(RUN_TRAILS_DIR, { recursive: true })
-      runTrailsDirReady = true
+      trailGlobal.__tmoRunTrailsDirReady = true
     }
     const file = path.join(RUN_TRAILS_DIR, `${run.runId}.jsonl`)
     const line =

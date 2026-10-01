@@ -68,7 +68,7 @@ const DEFAULTS: Record<string, string> = {
   ENABLE_FILE_GREP: 'true',
   ENABLE_RUN_TESTS: 'true',
   // P5 (2026-11 — thiết kế chốt với user): run_gate — gate receipt chuẩn hoá
-  // (exit code THẬT + sha256 + stdout/stderr tail; chạy spawnSync shell:false
+  // (exit code THẬT + sha256 + stdout/stderr tail; chạy spawn ASYNC shell:false
   // thay vì agent tự viết wrapper `cmd; echo $?` bị che exit code). Default
   // true: whitelist per-agent (agents.ts) đã giới hạn ai được gọi + preset
   // an toàn (custom bị cấm meta-char, binary phải nằm trong whitelist).

@@ -14,7 +14,7 @@
  * is rejected. Destructive operations support `dry_run`.
  */
 
-import { exec, execFile, spawn, spawnSync } from 'child_process'
+import { exec, execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import path from 'path'
 import fs from 'fs/promises'
@@ -5199,11 +5199,17 @@ const CONTEXT_RECALL_ITEM_MAX_CHARS = 2000
 //
 // (thiết kế chốt với user 2026-11: "tool chạy gate có receipt sha256 thay vì
 // agent tự viết wrapper shell hay bị che exit code"). run_gate chạy 1 gate
-// kiểm định qua spawnSync shell:false — exit code THẬT của process (0-255;
+// kiểm định qua spawn ASYNC shell:false — exit code THẬT của process (0-255;
 // bị signal giết → -1), KHÔNG bị che bởi wrapper `cmd; echo $?` (exit code của
 // echo, luôn 0). Receipt máy đọc được:
 //   { schema:'gate-receipt/v1', kind, command, exitCode, durationMs, sha256,
 //     stdoutBytes, stderrBytes, truncated, pass/fail/skip/errors, generatedAt }
+// ROUND-25 FIX QUAN TRỌNG: bỏ spawnSync (đồng bộ — CHẶN TOÀN BỘ event loop
+// trong suốt thời gian gate chạy; typecheck 60-120s = đóng băng app: UI poll
+// treo, mission đang chạy treo, keepalive tưởng app chết). Mọi tool cũ trong
+// file này đều dùng execFileAsync vì đúng lý do đó (comment L51-55). Giờ
+// spawnGate chạy async + timeout kill + cap stream — receipt giữ NGUYÊN semantics
+// (exit code thật, signal nếu bị giết, không bịa khi ENOENT).
 // - sha256 = hash chuỗi `STDOUT:\n${stdout}\n--- STDERR ---\n${stderr}` (bản đã
 //   cap 400k) → artifact lưu ĐÚNG nội dung được hash → đối chiếu kiểm chứng được.
 // - Giá trị trả cho LLM KHÔNG kèm stdout/stderr đầy đủ — chỉ stdoutTail/
@@ -5228,11 +5234,101 @@ const GATE_TAIL_CHARS = 1500
 /** Binary whitelist cho kind=custom — shell:false + loại trừ sqlite3 (DB phải đi qua db_query có guard). */
 const GATE_CUSTOM_BIN_WHITELIST = ['bun', 'bunx', 'node', 'npx', 'git']
 /**
- * Meta-char bị cấm trong custom command. spawnSync shell:false chỉ an toàn khi
+ * Meta-char bị cấm trong custom command. spawn shell:false chỉ an toàn khi
  * argv là các token thuần — meta-char (pipe/chuyển hướng/chuỗi con shell/quote)
  * sẽ bị truyền LITERAL cho binary gây ngữ nghĩa sai, nên từ chối luôn cho chắc.
  */
 const GATE_CUSTOM_FORBIDDEN = /[;|&><$`()'"\\\n\r]/
+
+/** Cap cứng MỖI STREAM thu vào bộ nhớ (8MB) — vượt thì kill process + ghi nhận
+ * outputCapped (mirror ngữ nghĩa maxBuffer của spawnSync cũ, nhưng receipt vẫn
+ * trung thực kèm phần đã thu + cờ, thay vì vứt bỏ toàn bộ). */
+const GATE_STREAM_HARD_CAP = 8 * 1024 * 1024
+
+/** Kết quả 1 gate đã chạy xong (spawnGate). */
+interface GateProcResult {
+  /** Exit code thật 0-255; -1 khi bị signal giết (timeout/cap/killed) */
+  exitCode: number
+  /** Signal giết process (timeout → SIGTERM; ghi vào receipt) */
+  signal: string | null
+  /** Lỗi spawn (ENOENT — binary không tồn tại...): KHÔNG có exit code thật,
+   *  caller phải trả lỗi rõ ràng chứ KHÔNG bịa receipt. */
+  spawnError: string | null
+  stdout: string
+  stderr: string
+  /** true khi stream vượt GATE_STREAM_HARD_CAP → process đã bị kill, output thu
+   *  tới đó (receipt đánh dấu outputCapped). */
+  outputCapped: boolean
+}
+
+/** Chạy gate ASYNC (không chặn event loop — ROUND-25 fix). shell:false, timeout
+ * GATE_TIMEOUT_MS (SIGTERM + grace SIGKILL 5s), cap stream 8MB/stream. */
+function spawnGate(runner: string, argv: string[], root: string): Promise<GateProcResult> {
+  return new Promise<GateProcResult>(resolve => {
+    let stdout = ''
+    let stderr = ''
+    let outputCapped = false
+    let settled = false
+
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(runner, argv, {
+        cwd: root,
+        shell: false,
+        env: { ...process.env, CI: 'true' }, // CI=true: tắt watch mode + colors
+      })
+    } catch (err) {
+      resolve({
+        exitCode: -1, signal: null, outputCapped: false,
+        spawnError: err instanceof Error ? err.message : String(err), stdout: '', stderr: '',
+      })
+      return
+    }
+
+    const killTimer = setTimeout(() => {
+      try { child.kill('SIGTERM') } catch { /* đã chết */ }
+      // Grace 5s rồi SIGKILL (process bắt SIGTERM không thoát)
+      const killForce = setTimeout(() => {
+        try { child.kill('SIGKILL') } catch { /* đã chết */ }
+      }, 5000)
+      killForce.unref?.()
+    }, GATE_TIMEOUT_MS)
+    killTimer.unref?.()
+
+    const finish = (exitCode: number, signal: string | null, spawnError: string | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(killTimer)
+      resolve({ exitCode, signal, spawnError, stdout, stderr, outputCapped })
+    }
+
+    // ENOENT/lỗi spawn: không có exit code thật → caller trả lỗi, không bịa receipt
+    child.on('error', err => {
+      finish(-1, null, err instanceof Error ? err.message : String(err))
+    })
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (stdout.length < GATE_STREAM_HARD_CAP) {
+        stdout += chunk.toString('utf8')
+      } else if (!outputCapped) {
+        outputCapped = true
+        try { child.kill('SIGTERM') } catch { /* đã chết */ }
+      }
+    })
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (stderr.length < GATE_STREAM_HARD_CAP) {
+        stderr += chunk.toString('utf8')
+      } else if (!outputCapped) {
+        outputCapped = true
+        try { child.kill('SIGTERM') } catch { /* đã chết */ }
+      }
+    })
+
+    child.on('close', (code, signal) => {
+      finish(typeof code === 'number' ? code : -1, signal, null)
+    })
+  })
+}
 
 interface GateTestCounts { pass: number | null; fail: number | null; skip: number | null; errors: number | null }
 
@@ -5264,7 +5360,7 @@ function capGateStream(text: string, maxChars: number, label: string): { text: s
 /**
  * runGate — chạy 1 gate kiểm định, trả receipt chuẩn hoá (P5).
  *
- * Preset (spawnSync shell:false — argv thẳng, không qua shell):
+ * Preset (spawn ASYNC shell:false — argv thẳng, không qua shell):
  *   targeted_test → bun test <target>  ·  full_test → bun test (CI=true)
  *   lint → bun run lint  ·  typecheck → bunx tsc --noEmit -p tsconfig.json
  *   diff_check → git diff --check (phát hiện conflict marker + whitespace error)
@@ -5343,33 +5439,27 @@ export async function runGate(args: {
         return { success: false, error: `kind không hợp lệ "${kind}" — dùng targeted_test | full_test | lint | typecheck | diff_check | custom.` }
     }
 
-    // Chạy gate — spawnSync shell:false: exit code THẬT không bị wrapper che
+    // Chạy gate — spawnGate ASYNC shell:false (ROUND-25: không chặn event
+    // loop): exit code THẬT không bị wrapper che; timeout SIGTERM→SIGKILL.
     const startedAt = Date.now()
-    const proc = spawnSync(runner, argv, {
-      cwd: root,
-      timeout: GATE_TIMEOUT_MS,
-      maxBuffer: 10 * 1024 * 1024,
-      shell: false,
-      encoding: 'utf8',
-      env: { ...process.env, CI: 'true' }, // CI=true: tắt watch mode + colors cho mọi gate
-    })
+    const proc = await spawnGate(runner, argv, root)
     const durationMs = Date.now() - startedAt
 
     // Spawn thất bại hoàn toàn (ENOENT — binary không tồn tại...): không có
     // exit code thật → trả lỗi rõ ràng, KHÔNG bịa receipt.
-    if (proc.error && proc.status === null && proc.signal === null) {
+    if (proc.spawnError) {
       return {
         success: false,
-        error: `Gate "${kind}" không chạy được (${commandDisplay}): ${proc.error.message}`,
+        error: `Gate "${kind}" không chạy được (${commandDisplay}): ${proc.spawnError}`,
         durationMs,
       }
     }
 
     // exitCode: status thật của process (0-255); bị signal giết (timeout
     // SIGTERM...) → -1 — receipt vẫn ghi nhận trung thực
-    const exitCode = typeof proc.status === 'number' ? proc.status : -1
-    let stdoutFull = typeof proc.stdout === 'string' ? proc.stdout : ''
-    let stderrFull = typeof proc.stderr === 'string' ? proc.stderr : ''
+    const exitCode = proc.exitCode
+    let stdoutFull = proc.stdout
+    let stderrFull = proc.stderr
 
     // Cap tổng output (giữ đầu+đuôi) — artifact/receipt không phình vô hạn
     let truncated = false
@@ -5413,6 +5503,8 @@ export async function runGate(args: {
       generatedAt,
     }
     if (proc.signal) receipt.signal = proc.signal
+    // ROUND-25 — stream vượt cap cứng 8MB (process đã bị kill): đánh dấu trung thực
+    if (proc.outputCapped) receipt.outputCapped = true
 
     // Artifact JSON đầy đủ — path tương đối BẮT ĐẦU bằng tmp/ (không bắt buộc)
     let artifactPath: string | undefined
