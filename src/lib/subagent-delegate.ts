@@ -49,12 +49,17 @@
  *     outcome.evaluationMissing=true + ghi chú ⚠ trong report — parent biết
  *     kết quả CHƯA được trọng tài xác nhận (fail-open giữ nguyên design).
  *   · W1 (evidence đói): evidence cho trọng tài là TOOL-RESULT TRANSCRIPT
- *     đầy đủ (entry cap 4000 chars — SUBAGENT_TOOL_RESULT_CHARS) thay vì
- *     preview 160 chars; delegation-evaluator tự tier 600/entry, 12k tổng.
+ *     đầy đủ (entry cap SUBAGENT_TOOL_RESULT_CHARS = 8000 chars — ROUND-27
+ *     FIX V1: result lớn là envelope JSON hợp lệ) thay vì preview 160 chars;
+ *     delegation-evaluator tự tier 600/entry, 12k tổng.
  */
 
 import { callLLMForAgent, getZenKeyCount, runWithZenKeyBinding } from '@/lib/llm'
 import { executeTool, buildCompactToolSchemasSection, getToolDefinitions } from '@/lib/code-team/tool-executor'
+// ROUND-27 FIX V1 — envelope JSON hợp lệ cho tool message của sub-agent (dùng
+// chung với goal-loop + workflow-engine; context-compression không import lại
+// module này → không circular).
+import { truncateToolMessageJson } from '@/lib/context-compression'
 import type { LLMTool } from '@/lib/llm'
 import { parseToolCallsFromOutput, detectBrokenToolCallHint } from '@/lib/tool-calls'
 import { resolveAgent } from '@/lib/code-team/agent-resolver'
@@ -242,6 +247,12 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
   }
 }
 
+/** ROUND-27 FIX V1 — CHỈ dùng cho VĂN BẢN THÔ (báo cáo wrap-up trả parent —
+ *  line ~949). Tool message JSON PHẢI dùng truncateToolMessageJson của
+ *  context-compression: splice marker chứa \n thô ở đây làm VỠ cú pháp JSON
+ *  (đúng lớp bug FIX B round-26 đã sửa cho goal-loop nhưng round-26 bỏ sót
+ *  đường sub-agent — MEGATRON/sub-agents nhận JSON vỡ với mọi tool result
+ *  > SUBAGENT_TOOL_RESULT_CHARS). */
 function truncateResult(s: string, maxChars: number): string {
   if (s.length <= maxChars) return s
   const head = Math.floor(maxChars * 0.6)
@@ -829,9 +840,21 @@ async function runSubAgentForProfileInner(params: {
           } catch { preview = '(?)' }
           evidence.push(`${tc.name}(${compactArgs(tc.args)}) → ${toolResult.success ? '✓' : '✗'} ${preview}`)
           if (toolResult.success) successfulToolCalls++
-          // IMP-1 (W1): entry transcript (cap 4000 chars) vào log riêng cho
-          // trọng tài độc lập — cùng chuỗi với transcript của sub-agent.
-          const toolEntry = truncateResult(safeStringify({ tool: tc.name, success: toolResult.success, result: toolResult.result }), SUBAGENT_TOOL_RESULT_CHARS)
+          // IMP-1 (W1): entry transcript (cap SUBAGENT_TOOL_RESULT_CHARS) vào
+          // log riêng cho trọng tài độc lập — cùng chuỗi với transcript của sub-agent.
+          // ROUND-27 FIX V1 — trước đây truncateResult SPLICE marker "\n…[truncated
+          // N]…\n" thẳng vào giữa chuỗi JSON → mọi tool result > cap (file_read file
+          // lớn, shell output dài, run_tests...) đẩy về sub-agent LÀ JSON VỠ —
+          // sub-agent không parse được cấu trúc; toolResultLog (trọng tài delegation
+          // đọc) cũng vỡ theo. Giờ dùng CHUNG envelope JSON hợp lệ của round-26
+          // {tool, success, result:{_truncated, _originalChars, _note, head, tail}}
+          // — sub-agent + trọng tài luôn nhận JSON parse được, head/tail là string
+          // field escape chuẩn (kết quả < cap giữ NGUYÊN VĂN — guard trong hàm).
+          const toolEntry = truncateToolMessageJson(
+            { tool: tc.name, success: toolResult.success, result: toolResult.result },
+            safeStringify({ tool: tc.name, success: toolResult.success, result: toolResult.result }),
+            SUBAGENT_TOOL_RESULT_CHARS,
+          )
           toolResultLog.push(toolEntry)
           transcript.push({ role: 'tool', content: toolEntry })
         }

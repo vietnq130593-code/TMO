@@ -222,6 +222,83 @@ export function capToolResult(
   return { content: output, truncated: true, totalChars }
 }
 
+/**
+ * SMART TRUNCATION — cắt giữ ĐẦU + CUỐI (60%/40%) cho VĂN BẢN THÔ (không phải
+ * JSON). Lỗi của tsc/lint/test và dòng tổng kết ("X errors, Y passed") thường
+ * nằm CUỐI output — cắt head-only làm mất đúng phần quan trọng nhất.
+ * ROUND-27: chuyển từ agent-goal-loop.ts sang module dùng chung — hiện chỉ còn
+ * là FALLBACK của truncateToolMessageJson khi cap quá nhỏ / serialize lỗi.
+ * KHÔNG dùng trực tiếp cho tool message JSON — marker chứa \n thô làm VỠ cú pháp.
+ */
+function smartTruncate(s: string, maxChars: number): string {
+  if (s.length <= maxChars) return s
+  const head = Math.floor(maxChars * 0.6)
+  const tail = Math.max(200, maxChars - head - 90)
+  return (
+    s.slice(0, head) +
+    `\n…[truncated ${s.length - head - tail} chars giữa — giữ đầu + cuối vì lỗi/tổng kết thường nằm cuối output]…\n` +
+    s.slice(-tail)
+  )
+}
+
+/**
+ * ROUND-26 FIX B (mission cmupl7uen — Omega báo cáo "file_list PASS nhưng
+ * không có dữ liệu hữu ích"): splice text cũ cắt GIỮA chuỗi JSON của tool
+ * message rồi chèn marker chứa \n thô → chuỗi đẩy về LLM KHÔNG còn parse được
+ * (thực tế 13:53: file_list 125k chars → message 11999 chars VỠ, agent đọc
+ * được mảnh rời nhưng không trích xuất cấu trúc, kết luận "không có dữ liệu
+ * hữu ích về tên file" → chu kỳ sau mất định hướng). Giờ: vượt cap → đóng
+ * envelope JSON HỢP LỆ {tool, success, result: {_truncated, _originalChars,
+ * _note, head, tail}} — head/tail là string field được escape chuẩn → LLM
+ * LUÔN nhận JSON parse được, thấy rõ ~55% đầu + ~30% đuôi (lỗi/tổng kết thường
+ * nằm cuối) + biết kích thước thật để gọi lại hẹp hơn.
+ * Fallback (serialize lỗi / cap quá nhỏ) → giữ splice text cũ (smartTruncate).
+ *
+ * ROUND-27 FIX V1 — chuyển từ agent-goal-loop.ts sang module DÙNG CHUNG để
+ * cả BA vòng lặp cùng một envelope: goal-loop (pushToolMessage — đã dùng từ
+ * round-26), SUB-AGENT (subagent-delegate — round-26 BỎ SÓT: truncateResult
+ * splice thẳng làm vỡ JSON mọi tool result > 8k chars cho MEGATRON/sub-agents
+ * + trọng tài delegation đọc toolResultLog), workflow-engine (code-team —
+ * round-26 bỏ sót: result lớn thành STRING chứa mảnh JSON vỡ). Tại đây không
+ * circular import (context-compression chỉ phụ thuộc llm + crypto).
+ */
+export function truncateToolMessageJson(
+  entry: { tool: string; success: boolean; result: unknown },
+  serialized: string,
+  cap: number,
+): string {
+  try {
+    // Guard — payload nằm dưới cap: trả NGUYÊN VĂN (caller chỉ gọi khi vượt
+    // cap, nhưng hàm public + test gọi trực tiếp cần hành vi đúng).
+    if (serialized.length <= cap) return serialized
+    let head = Math.floor(cap * 0.55)
+    let tail = Math.max(200, Math.floor(cap * 0.3))
+    const build = (): string =>
+      JSON.stringify({
+        tool: entry.tool,
+        success: entry.success,
+        result: {
+          _truncated: true,
+          _originalChars: serialized.length,
+          _note: `Kết quả thật ${serialized.length} ký tự — giữ ~55% đầu + ~30% đuôi (lỗi/tổng kết thường nằm cuối). Cần phần giữa → gọi lại tool với phạm vi hẹp hơn (path/depth/pattern/glob/head_limit/ignore...).`,
+          head: serialized.slice(0, head),
+          tail: serialized.slice(-tail),
+        },
+      })
+    let out = build()
+    // envelope vẫn vượt cap (edge: cap rất nhỏ) → co head/tail theo tỉ lệ rồi thử đúng 1 lần
+    if (out.length > cap) {
+      const overflow = out.length - cap
+      head = Math.max(200, head - Math.ceil(overflow * 0.65))
+      tail = Math.max(120, tail - Math.ceil(overflow * 0.35))
+      out = build()
+    }
+    return out.length <= cap ? out : smartTruncate(serialized, cap)
+  } catch {
+    return smartTruncate(serialized, cap) // fail-open — splice text cũ
+  }
+}
+
 // ==================== ROLLING COMPRESSION (tầng 2) ====================
 
 /**

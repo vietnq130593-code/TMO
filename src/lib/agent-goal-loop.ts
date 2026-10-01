@@ -96,7 +96,12 @@ import {
   KEEP_RECENT_MESSAGES,
   TOOL_RESULT_MAX_CHARS,
   compressConversation,
+  truncateToolMessageJson,
 } from '@/lib/context-compression'
+// ROUND-27 FIX V1 — truncateToolMessageJson chuyển sang context-compression
+// (module dùng chung — sub-agent + workflow-engine cùng envelope, chống circular
+// import). Re-export giữ compatibility cho verify scratch + caller cũ.
+export { truncateToolMessageJson }
 // CI-3 B4 (Task 13-c) — Kho Context "đọc lại khi cần" (Task 13-b): cuối mỗi
 // run lưu task_summary (kind='task_summary') vào TaskContextArchive; run mới
 // trong cùng session nạp lại các summary này TRƯỚC 6 message cuối thô —
@@ -1203,71 +1208,12 @@ function progressFingerprint(messages: GoalMessage[]): string {
 }
 
 /**
- * [D] SMART TRUNCATION — cắt giữ ĐẦU + CUỐI (60%/40%). Lỗi của tsc/lint/test
- * và dòng tổng kết ("X errors, Y passed") thường nằm CUỐI output — cắt
- * head-only như cũ làm mất đúng phần quan trọng nhất (user report 2026-09-07:
- * "lint output bị cắt nên không xác minh được lỗi cụ thể").
+ * ROUND-27 FIX V1 — smartTruncate + truncateToolMessageJson (ROUND-26 FIX B)
+ * đã chuyển sang @/lib/context-compression (module dùng chung cho cả 3 vòng
+ * lặp: goal-loop / sub-agent / workflow-engine). agent-goal-loop re-export
+ * truncateToolMessageJson phía trên (giữ compatibility scratch + caller cũ).
+ * pushToolMessage bên dưới vẫn dùng y hệt — hành vi không đổi.
  */
-function smartTruncate(s: string, maxChars: number): string {
-  if (s.length <= maxChars) return s
-  const head = Math.floor(maxChars * 0.6)
-  const tail = Math.max(200, maxChars - head - 90)
-  return (
-    s.slice(0, head) +
-    `\n…[truncated ${s.length - head - tail} chars giữa — giữ đầu + cuối vì lỗi/tổng kết thường nằm cuối output]…\n` +
-    s.slice(-tail)
-  )
-}
-
-/**
- * ROUND-26 FIX B (bằng chứng mission cmupl7uen — Omega báo cáo "file_list PASS
- * nhưng không có dữ liệu hữu ích"): smartTruncate cắt GIỮA chuỗi JSON của tool
- * message rồi chèn marker chứa \n thô → chuỗi đẩy về LLM KHÔNG còn parse được
- * được (JSON syntax error — thực tế 13:53: file_list trả 125k chars → message
- * 11999 chars VỠ, agent đọc được mảnh rời nhưng không trích xuất cấu trúc,
- * kết luận "không có dữ liệu hữu ích về tên file" → chu kỳ sau mất định hướng).
- * Giờ: vượt cap → đóng envelope JSON HỢP LỆ {tool, success, result:
- * {_truncated, _originalChars, head, tail}} — head/tail là string field được
- * escape chuẩn → LLM LUÔN nhận JSON parse được, thấy rõ ~55% đầu + ~30% đuôi
- * (lỗi/tổng kết thường nằm cuối) + biết kích thước thật để gọi lại hẹp hơn.
- * Fallback (serialize lỗi / cap quá nhỏ) → giữ splice text cũ (smartTruncate).
- */
-export function truncateToolMessageJson(
-  entry: { tool: string; success: boolean; result: unknown },
-  serialized: string,
-  cap: number,
-): string {
-  try {
-    // Guard — payload nằm dưới cap: trả NGUYÊN VĂN (pushToolMessage chỉ gọi
-    // khi vượt cap, nhưng hàm public + test gọi trực tiếp cần hành vi đúng).
-    if (serialized.length <= cap) return serialized
-    let head = Math.floor(cap * 0.55)
-    let tail = Math.max(200, Math.floor(cap * 0.3))
-    const build = (): string =>
-      JSON.stringify({
-        tool: entry.tool,
-        success: entry.success,
-        result: {
-          _truncated: true,
-          _originalChars: serialized.length,
-          _note: `Kết quả thật ${serialized.length} ký tự — giữ ~55% đầu + ~30% đuôi (lỗi/tổng kết thường nằm cuối). Cần phần giữa → gọi lại tool với phạm vi hẹp hơn (path/depth/pattern/glob/head_limit/ignore...).`,
-          head: serialized.slice(0, head),
-          tail: serialized.slice(-tail),
-        },
-      })
-    let out = build()
-    // envelope vẫn vượt cap (edge: cap rất nhỏ) → co head/tail theo tỉ lệ rồi thử đúng 1 lần
-    if (out.length > cap) {
-      const overflow = out.length - cap
-      head = Math.max(200, head - Math.ceil(overflow * 0.65))
-      tail = Math.max(120, tail - Math.ceil(overflow * 0.35))
-      out = build()
-    }
-    return out.length <= cap ? out : smartTruncate(serialized, cap)
-  } catch {
-    return smartTruncate(serialized, cap) // fail-open — splice text cũ
-  }
-}
 
 /** Đẩy tool result vào messages với cap ký tự (chống context nổ).
  *  Tool kiểm định (lint/type_check/run_tests...) được cap cao hơn — agent và
@@ -2119,7 +2065,14 @@ export async function runGoalDrivenLoop(params: {
   // counter ĐÃ PERSIST: run đã từng escalate → hết quota auto (đúng thiết kế;
   // agent vẫn còn đường thủ công tool escalate_problem khi THẬT SỰ cần).
   let omegaConsulted = escalations > 0
-  let omegaAdvisory = ''
+  // ROUND-27 FIX V2 — restore tư vấn Omega + báo cáo AUTO-APPLY từ checkpoint:
+  // trước đây biến này CHỈ sống trong bộ nhớ — app restart giữa 2 chu kỳ
+  // (MemWatchdog self-exit — đã xảy ra 6 lần trong mission cmupl7uen) làm mất
+  // TRẮNG thông tin ngay trước lúc inject (escalations>0 đã chặn consult lại
+  // → không bao giờ hồi phục). Đây chính là lớp "directive điều phối nhưng
+  // nhật ký không có kết quả thực thi" mà FIX E round-26 làm nổi bật nhưng
+  // chưa chống mất.
+  let omegaAdvisory = resumeState?.omegaAdvisory ?? ''
   let lastContent = resumeState?.lastContent ?? ''
   /** Lỗi LLM gần nhất (result.error) — surface lên báo cáo cuối thay vì nuốt lỗi */
   let lastLlmError = resumeState?.lastLlmError ?? ''
@@ -2279,6 +2232,12 @@ export async function runGoalDrivenLoop(params: {
           needsInput: lastVerdict.needsInput, // TASK 48 — snapshot giữ needs-input qua checkpoint
         }
       : null,
+    // ROUND-27 FIX V2 — persist tư vấn Omega orchestrator + báo cáo AUTO-APPLY
+    // sub-agent đang chờ inject vào chu kỳ kế (set ở cuối chu kỳ N — checkpoint
+    // này chạy SAU escalate, TRƯỚC khi chu kỳ N+1 consume). Restart giữa 2 chu kỳ
+    // giờ không còn mất trắng. Cap 8000 chars (advisory + report slice 2000 —
+    // chống phình checkpoint). Optional: checkpoint cũ không có → hiểu ''.
+    omegaAdvisory: omegaAdvisory.slice(0, 8000),
     fingerprint: prevFingerprint,
     noProgressCount,
     stallCycles,

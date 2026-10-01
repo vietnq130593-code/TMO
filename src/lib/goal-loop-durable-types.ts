@@ -106,6 +106,12 @@ export interface GoalLoopCheckpoint {
   }
   /** Verdict chu kỳ gần nhất (null nếu chưa có evaluate nào) */
   verdict: GoalLoopVerdictSnapshot | null
+  /** ROUND-27 FIX V2 — tư vấn Omega orchestrator + báo cáo AUTO-APPLY sub-agent
+   *  đang chờ inject vào continuation directive của chu kỳ kế tiếp (set ở cuối
+   *  chu kỳ N, consume đầu chu kỳ N+1). Persist qua checkpoint: restart giữa 2
+   *  chu kỳ không còn mất trắng (escalations>0 đã chặn consult lại). Optional:
+   *  checkpoint cũ không có → hiểu ''. */
+  omegaAdvisory?: string
   /** Fingerprint chống no-progress (prevFingerprint trong loop) */
   fingerprint: string
   noProgressCount: number

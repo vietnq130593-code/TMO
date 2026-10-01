@@ -119,8 +119,8 @@ import {
   COMPRESS_THRESHOLD_CHARS,
   KEEP_RECENT_MESSAGES,
   TOOL_RESULT_MAX_CHARS,
-  capToolResult,
   compressConversation,
+  truncateToolMessageJson,
   type CompressionMessage,
   type CompressionResult,
 } from '@/lib/context-compression'
@@ -2603,39 +2603,33 @@ export async function runAgentStep(params: {
       // CI-3 B1 — cap tool result ~4k chars TRƯỚC khi push (pattern goal-loop):
       // tool output lớn (file_read/shell/run_tests) làm ReAct loop phình vô hạn.
       // Result NHỎ giữ nguyên shape object như cũ (không đổi hành vi); result LỚN
-      // trở thành chuỗi JSON đã cap + { truncated, totalChars } — content luôn là
-      // JSON hợp lệ (provider chỉ cần string, không nhất thiết JSON — nhưng giữ
-      // parse được cho formatMessagesForLLM + heuristic nén phía dưới).
-      let toolResultJson: string
+      // → envelope JSON HỢP LỆ {tool, success, result: {_truncated,
+      // _originalChars, _note, head, tail}} — content LUÔN parse được cho
+      // formatMessagesForLLM + heuristic nén phía dưới.
+      // ROUND-27 FIX V3 — trước đây capToolResult splice marker vào giữa chuỗi
+      // JSON rồi nhét result thành STRING chứa mảnh JSON vỡ (message hợp lệ nhưng
+      // LLM không thể trích xuất cấu trúc result) — cùng lớp bug FIX B round-26,
+      // bỏ sót đường workflow. Giờ 3 vòng lặp (goal-loop / sub-agent /
+      // workflow) dùng CHUNG một envelope của context-compression.
+      let entrySerialized: string
       try {
-        toolResultJson = JSON.stringify(toolResult.result)
+        entrySerialized = JSON.stringify({ tool: tc.name, success: toolResult.success, result: toolResult.result })
       } catch {
-        toolResultJson = String(toolResult.result)
+        // result circular/không serialize được → String() an toàn (kết quả vẫn là
+        // JSON hợp lệ — trước đây nhánh này có thể throw lần 2 ngay trong push)
+        entrySerialized = JSON.stringify({ tool: tc.name, success: toolResult.success, result: String(toolResult.result) })
       }
-      if (toolResultJson.length <= TOOL_RESULT_MAX_CHARS) {
-        messages.push({
-          role: 'tool',
-          content: JSON.stringify({
-            tool: tc.name,
-            success: toolResult.success,
-            result: toolResult.result,
-          }),
-          tool_call_id: tc.id,
-        })
-      } else {
-        const capped = capToolResult(toolResultJson, TOOL_RESULT_MAX_CHARS)
-        messages.push({
-          role: 'tool',
-          content: JSON.stringify({
-            tool: tc.name,
-            success: toolResult.success,
-            result: capped.content,
-            truncated: true,
-            totalChars: capped.totalChars,
-          }),
-          tool_call_id: tc.id,
-        })
-      }
+      messages.push({
+        role: 'tool',
+        content: entrySerialized.length <= TOOL_RESULT_MAX_CHARS
+          ? entrySerialized
+          : truncateToolMessageJson(
+              { tool: tc.name, success: toolResult.success, result: toolResult.result },
+              entrySerialized,
+              TOOL_RESULT_MAX_CHARS,
+            ),
+        tool_call_id: tc.id,
+      })
     }
 
     // ===== CI-3 B1 — Rolling context compression (digest) =====

@@ -145,9 +145,11 @@ function buildEvidenceBlock(evidence: string[]): string {
  *  - Không có gì để đánh giá (task rỗng)
  *
  * IMP-1 (W1): `evidence` giờ nhận TOOL-RESULT TRANSCRIPT entry đầy đủ của
- * sub-agent (mỗi entry là JSON {tool, success, result} đã cap 4000 chars ở
- * caller) — KHÔNG còn là preview 160 chars. Tiering 600/entry + 12k tổng
- * diễn ra ở đây (buildEvidenceBlock).
+ * sub-agent (mỗi entry là JSON {tool, success, result} đã cap
+ * SUBAGENT_TOOL_RESULT_CHARS = 8000 chars ở caller — ROUND-27 FIX V1: result
+ * lớn giờ là envelope hợp lệ {_truncated, _originalChars, head, tail} thay vì
+ * chuỗi JSON bị splice vỡ) — KHÔNG còn là preview 160 chars. Tiering
+ * 600/entry + 12k tổng diễn ra ở đây (buildEvidenceBlock).
  */
 export async function evaluateDelegationOutcome(params: {
   agentName: string
