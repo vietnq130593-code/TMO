@@ -302,6 +302,41 @@ export function healToolArgs(
           }
         } catch { /* để validator báo lỗi chuẩn */ }
       }
+
+      // ROUND-18 — Rule 5: SCALAR COERCION (number ← chuỗi số, boolean ←
+      // "true"/"false", string ← số). Bằng chứng run_1790836301728_2 (Omega,
+      // sess #15): shell gọi timeout_ms:"60000" (CHUỖI) → validator chặn
+      // "cần number, nhận string" → duy nhất 1 lệnh đọc dữ liệu bị từ chối →
+      // run chết no_progress sau 6 chu kỳ (stall brake CI-1), ~973k token
+      // cháy, 0 tiến triển. Cùng lớp lỗi với Rule 1-4 (LLM yếu phát sai kiểu
+      // vô hại) → CHỮA thay vì chặn. Chỉ heal giá trị KHÔNG TƯỜNG (chuỗi
+      // parse được finite number / đúng "true"|"false" / số hữu hạn) — còn
+      // lại để validator báo lỗi chuẩn.
+      if (expected === 'number' || expected === 'integer') {
+        if (typeof value === 'string' && value.trim() !== '') {
+          const num = Number(value)
+          if (Number.isFinite(num)) {
+            const asInt = expected === 'integer' ? Math.trunc(num) : num
+            args[key] = asInt
+            notes.push(`tham số "${key}" gửi vào là chuỗi số — hệ thống đã đổi thành số (${asInt}). Lần sau gửi số trực tiếp: {"${key}": ${asInt}}.`)
+            continue
+          }
+        }
+      } else if (expected === 'boolean') {
+        const lv = typeof value === 'string' ? value.trim().toLowerCase() : ''
+        if (lv === 'true' || lv === 'false') {
+          args[key] = lv === 'true'
+          notes.push(`tham số "${key}" gửi vào là chuỗi "${lv}" — hệ thống đã đổi thành boolean. Lần sau gửi ${lv} trực tiếp (không có dấu ngoặc kép).`)
+          continue
+        }
+      } else if (expected === 'string') {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          const str = String(value)
+          args[key] = str
+          notes.push(`tham số "${key}" gửi vào là số — hệ thống đã đổi thành chuỗi. Lần sau gửi chuỗi: {"${key}": "${str}"}.`)
+          continue
+        }
+      }
     }
   } catch {
     // fail-open — heal lỗi KHÔNG được phép chặn tool
