@@ -544,7 +544,13 @@ async function saveChunkToQdrant(params: {
 }): Promise<string | undefined> {
   try {
     const { upsertChunks } = await import('@/lib/qdrant')
-    const pointId = `al-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const { deterministicUuid } = await import('@/lib/deterministic-uuid')
+    // ROUND-32 P0-3: Qdrant point id phải là UUID (chuỗi tự do "al-..." bị 400
+    // Bad Request MỌI upsert — auto-learned knowledge chưa bao giờ được index).
+    // Deterministic từ documentId (duy nhất mỗi batch auto-learn): re-save cùng
+    // batch → upsert đè cùng point, không nhân bản. Tiền lệ cùng lớp lỗi đã fix
+    // cho episodes: episodic-memory/episode-store.ts ("ep_..." từng bị 400).
+    const pointId = deterministicUuid(`al:${params.documentId}`)
 
     // Phase 3 SMOLAB Prop 4.1 — stamp the active embedding model version on the
     // chunk payload. Lazy-cached 5 min in embeddings.ts, so 1 DB query per batch
@@ -556,6 +562,8 @@ async function saveChunkToQdrant(params: {
       vector: params.vector,
       payload: {
         document_id: params.documentId,
+        // Định danh gốc truy vết ngược từ Qdrant về AutoLearnRecord (P0-3)
+        auto_learn_id: params.documentId,
         chunk_index: 0,
         content: params.content.slice(0, 4000),
         heading_path: `Auto-Learn: ${params.agentName}`,

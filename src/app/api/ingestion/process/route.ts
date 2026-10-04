@@ -32,7 +32,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { callLLMSlot, acquireKey, releaseKey, flushTokenCount, MAX_KEYS, MAX_DOCS_PER_KEY, MAX_TOTAL_CONCURRENT, getFreeKeyCount, getActiveDocCount, getActiveDocIds, markDocPaused, clearDocPaused, isDocPaused, recoverKeys, persistKeyAssignments, getOverallAvailability, getProviderAvailability } from '@/lib/llm'
 import { generateEmbeddingBatch, getEmbeddingDimension } from '@/lib/embeddings'
 import { getNeo4jDriver, safeSession, executeCypher, readCypher, upsertDocumentNode } from '@/lib/neo4j'
-import { upsertDocument, getDocument, listDocuments, updateDocumentStatus, deleteDocument, upsertChunks, getChunksByDocument, getChunkCount, deleteChunksByDocument } from '@/lib/qdrant'
+import { upsertDocument, getDocument, listDocuments, updateDocumentStatus, deleteDocument, upsertChunks, updateChunkVectors, getChunksByDocument, getChunkCount, deleteChunksByDocument } from '@/lib/qdrant'
 import type { DocumentPayload, ChunkPayload } from '@/lib/qdrant'
 import { db } from '@/lib/db'
 import { invalidateDocumentCache } from '@/lib/doc-cache'
@@ -1966,50 +1966,43 @@ async function writeEntitiesToNeo4j(
 
 // ==================== EMBEDDING GENERATION (batch) ====================
 
-async function generateAndSaveEmbeddings(chunks: Array<{ id: string; content: string }>, documentId: string, _skipDeletion = false): Promise<number> {
+async function generateAndSaveEmbeddings(chunks: Array<{ id: string; content: string }>, documentId: string): Promise<number> {
   if (chunks.length === 0) return 0
   try {
-    // IMPORTANT: We NO LONGER delete existing chunks before generating embeddings.
-    // Previous approach (delete → recreate) had two critical problems:
-    //   1. Race condition: delete might not complete before upsert, causing stale zero-vector data
-    //   2. Data loss: delete removes payload fields (heading_path, token_count, domain) from Step 4
-    // Instead, we simply UPSERT chunks with real vectors, overwriting only the vector field.
-    // Qdrant's upsert is atomic and preserves any payload fields not explicitly overwritten.
-    // If you need to update payload too, use qdrant.setPayload() separately.
+    // ROUND-32 P0-4 — dùng updateVectors (CHỈ cập nhật vector, payload bất biến).
+    //
+    // LỊCH SỬ (giữ làm bài học): bản cũ upsert kèm payload tối thiểu
+    // {document_id, chunk_index: i, content, created_at} dựa trên niềm tin sai
+    // "Qdrant upsert preserves payload fields not explicitly overwritten".
+    // SỰ THẬT: upsert với payload kèm theo REPLACE toàn bộ point — mọi field
+    // không nhắc (heading_path/token_count/domain ghi ở Step 4) đều bị WIPE,
+    // và chunk_index: i (index trong batch) renumber sai trên resume (batch con
+    // chạy lại từ 0). updateVectors là API đúng semantics cho việc này —
+    // Step 4 đã upsert sẵn payload đầy đủ, bước này chỉ cần bơm vector thật.
+    // (embedOnly pipeline không dính bug — nó re-upsert với payload đầy đủ gốc.)
 
     const texts = chunks.map(c => c.content)
     const embeddingResults = await generateEmbeddingBatch(texts)
-    let saved = 0
 
-    // Build Qdrant chunk points with real vectors
-    // We update ONLY the vector — Qdrant upsert will keep existing payload fields
-    const chunkPoints: Array<{ id: string; vector: number[]; payload: ChunkPayload }> = []
+    // Build các point chỉ gồm {id, vector} — KHÔNG đụng payload/chunk_index
+    const vectorPoints: Array<{ id: string; vector: number[] }> = []
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i]
       const embedding = embeddingResults[i]
       if (embedding && embedding.vector && embedding.vector.length === EMBEDDING_DIMENSION) {
-        chunkPoints.push({
-          id: chunk.id,
-          vector: embedding.vector,
-          payload: {
-            document_id: documentId,
-            chunk_index: i,
-            content: chunk.content,
-            created_at: new Date().toISOString(),
-          },
-        })
-        saved++
+        vectorPoints.push({ id: chunk.id, vector: embedding.vector })
       }
     }
 
-    // Batch upsert chunks with embeddings to Qdrant
-    if (chunkPoints.length > 0) {
-      const upsertResult = await upsertChunks(chunkPoints)
-      if (!upsertResult) {
-        console.error('[Process] upsertChunks returned false — embeddings may not have been saved')
+    if (vectorPoints.length > 0) {
+      const ok = await updateChunkVectors(vectorPoints)
+      if (!ok) {
+        // KHÔNG nuốt im lặng: guard P0-5 cuối pipeline sẽ đối chiếu và giữ doc
+        // ở 'partial' nếu còn zero-vector — đây là dấu vết để truy nguyên nhân.
+        console.error(`[Process] updateChunkVectors returned false cho doc ${documentId.slice(0, 8)}... — ${vectorPoints.length} vector chưa ghi được (guard P0-5 sẽ chặn 'indexed' nếu còn sót)`)
       }
     }
-    return saved
+    return vectorPoints.length
   } catch (error) {
     console.error('[Process] Embedding batch error:', error)
     return 0
@@ -3164,9 +3157,23 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
     }
 
     if (embeddingsCompleted && !rebuiltChunksFromPdf) {
+      // ROUND-32 P0-5: đếm chunk > 0 CHƯA đủ — chunk zero-vector placeholder
+      // (Step 4) cũng được đếm. Bản cũ tin "step completed + có chunk = đã
+      // embed" nên doc stranded từ deployed cũ (indexed ảo, zero-vector) lọt
+      // qua nhánh skip mãi mãi. Giờ đối chiếu vector thật: scroll kèm vector
+      // và yêu cầu 100% chunk có thành phần khác 0.
       const embChunkCount = await getChunkCount(documentId)
-      hasEmbeddingsData = embChunkCount > 0
-      if (!hasEmbeddingsData) console.log(`[Process] Embeddings step marked completed but no embeddings found — re-running`)
+      if (embChunkCount > 0) {
+        const verifyEmbChunks = await getChunksByDocument(documentId, { limit: 10000, withVector: true })
+        const realEmbCount = verifyEmbChunks.filter(c => (c.vector ?? []).some(x => Math.abs(x) > 1e-9)).length
+        hasEmbeddingsData = realEmbCount === verifyEmbChunks.length && verifyEmbChunks.length > 0
+        if (!hasEmbeddingsData) {
+          console.warn(`[Process] Embeddings step marked completed nhưng ${verifyEmbChunks.length - realEmbCount}/${verifyEmbChunks.length} chunk zero-vector — re-running (P0-5 bắt step 'completed' giả)`)
+        }
+      } else {
+        hasEmbeddingsData = false
+        console.log(`[Process] Embeddings step marked completed but no embeddings found — re-running`)
+      }
     } else if (rebuiltChunksFromPdf) {
       // Chunk rebuild mode: the "embeddings completed" step status is stale (from
       // reconcile/pre-reset) — the rebuilt chunks only have placeholder zero vectors.
@@ -3790,8 +3797,10 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
     }
 
     // Step 11: Generate embeddings using generateEmbeddingBatch
-    // Step 12: Save embeddings to Qdrant chunks
-    // When resuming, only generate embeddings for chunks that don't already have one
+    // Step 12: Save embeddings to Qdrant chunks — CHỈ cập nhật vector qua
+    // updateChunkVectors (P0-4): payload/chunk_index do Step 4 sở hữu, bất biến
+    // Khi resuming, only generate embeddings for chunks that don't already have one
+    // (P0-5: "đã có" = có vector THẬT, zero-vector placeholder phải được re-embed)
 
     // PAUSE CHECK: Before the embeddings step, check if the document was paused.
     // Neo4j writing can take a long time, and the user may have paused during that time.
@@ -3812,33 +3821,43 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       }
     }
 
+    // ROUND-32 P0-5: hoist ra ngoài — return cuối dùng số thật (bản cũ hardcode 0);
+    // nhánh skip (hasEmbeddingsData=true) giữ 0 vì không sinh mới ở run này.
+    let embeddingsSavedCount = 0
     if (!hasEmbeddingsData) {
       steps = markStepRunning(steps, 'embeddings')
       await updateDocProgress(documentId, { steps })
 
       let chunksNeedingEmbeddings = savedChunks
+      let realVectorCount = 0 // P0-5: số chunk có vector THẬT (đếm trung thực)
       if (isResuming && !rebuiltChunksFromPdf) {
-        // Find chunks that already have embeddings (Qdrant chunks with non-zero vectors)
+        // ROUND-32 P0-5: chỉ tin chunk có vector THẬT — KHÔNG tin "chunk tồn tại".
+        // Step 4 upsert chunk với zero-vector placeholder (embeddings đến sau ở
+        // Step 11) — bản cũ add MỌI chunk vào embeddedChunkIds nên crash/pause
+        // giữa Step 4→11 khiến doc vĩnh viễn zero-vector nhưng vẫn 'indexed'
+        // (không có đường tự chữa). Giờ scroll kèm vector (withVector) và kiểm
+        // từng chunk có thành phần khác 0 hay không (epsilon chống float noise).
         const embeddedChunkIds = new Set<string>()
-        const allChunksForEmb = await getChunksByDocument(documentId, { limit: 10000 })
-        // Check which chunks have non-zero vectors (indicating real embeddings)
+        const allChunksForEmb = await getChunksByDocument(documentId, { limit: 10000, withVector: true })
         for (const chunk of allChunksForEmb) {
-          // In Qdrant, chunks with real embeddings have vectors; we assume all existing chunks have embeddings
-          // if they were upserted with real vectors during a previous run
-          embeddedChunkIds.add(chunk.id)
+          const isRealVector = (chunk.vector ?? []).some(x => Math.abs(x) > 1e-9)
+          if (isRealVector) embeddedChunkIds.add(chunk.id)
         }
+        realVectorCount = embeddedChunkIds.size
         chunksNeedingEmbeddings = savedChunks.filter(c => !embeddedChunkIds.has(c.id))
-        console.log(`[Process] Embeddings: ${embeddedChunkIds.size} already exist, ${chunksNeedingEmbeddings.length} need generation`)
+        console.log(`[Process] Embeddings resume: ${realVectorCount}/${allChunksForEmb.length} chunk có vector thật, ${chunksNeedingEmbeddings.length} cần re-embed (zero-vector được phát hiện)`)
       }
 
-      const embeddingsSaved = chunksNeedingEmbeddings.length > 0
-        ? await generateAndSaveEmbeddings(
-            chunksNeedingEmbeddings.map(c => ({ id: c.id, content: c.content })),
-            documentId,
-            !!isResuming // skipDeletion=true when resuming — only new chunks, no need to delete
-          )
-        : savedChunks.length // All already have embeddings
-      steps = markStepCompleted(steps, 'embeddings', `${embeddingsSaved}/${savedChunks.length} embeddings`)
+      embeddingsSavedCount = await generateAndSaveEmbeddings(
+        chunksNeedingEmbeddings.map(c => ({ id: c.id, content: c.content })),
+        documentId
+      )
+      if (chunksNeedingEmbeddings.length === 0) {
+        // P0-5: mọi chunk đã có vector thật — đếm số thật thay vì gán ảo
+        // savedChunks.length như bản cũ (báo cáo ảo trong kịch bản stranded).
+        embeddingsSavedCount = realVectorCount
+      }
+      steps = markStepCompleted(steps, 'embeddings', `${embeddingsSavedCount}/${savedChunks.length} embeddings`)
       await updateDocProgress(documentId, { steps })
     } else {
       console.log(`[Process] Skipping embeddings step — already completed`)
@@ -3846,7 +3865,32 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
 
     // Step 13: Update document status — this is the final batch, so mark as 'indexed'
     // (Intermediate batches already return early with 'partial' status above)
-    await updateDocProgress(documentId, { status: 'indexed' })
+    //
+    // ROUND-32 P0-5 GUARD — "không bao giờ 'indexed' khi còn zero-vector":
+    // đối chiếu sau cùng bằng scroll kèm vector. Bắt mọi biến thể (updateVectors
+    // fail, provider trả vector rỗng, crash giữa chừng tái diễn, step status
+    // 'completed' giả từ deployed cũ) — phát hiện thì giữ 'partial' + reset step
+    // embeddings để lần chạy sau tự re-embed đúng chỗ (qua nhánh withVector ở trên).
+    let finalStatus: 'indexed' | 'partial' = 'indexed'
+    let guardWarning: string | undefined
+    try {
+      const verifyChunks = await getChunksByDocument(documentId, { limit: 10000, withVector: true })
+      const zeroVectorChunks = verifyChunks.filter(c => !(c.vector ?? []).some(x => Math.abs(x) > 1e-9))
+      if (zeroVectorChunks.length > 0) {
+        finalStatus = 'partial'
+        guardWarning = `${zeroVectorChunks.length}/${verifyChunks.length} chunk vẫn zero-vector sau bước embeddings — giữ 'partial' để chạy lại (P0-5 guard)`
+        console.error(`[Process] P0-5 GUARD: ${guardWarning} (doc ${documentId.slice(0, 8)}...)`)
+        steps = markStepPending(steps, 'embeddings', `${zeroVectorChunks.length} chunk zero-vector — cần re-embed`)
+        await updateDocProgress(documentId, { status: 'partial', steps })
+      } else {
+        await updateDocProgress(documentId, { status: 'indexed' })
+      }
+    } catch (guardErr) {
+      // Verify fail (Qdrant chết giữa chừng...) — KHÔNG chặn pipeline, giữ hành
+      // vi cũ (tin bước embeddings vừa chạy); lỗi đã được log bởi qdrant helper.
+      console.warn('[Process] P0-5 guard verify failed (non-fatal — giữ status như pipeline kết luận):', guardErr instanceof Error ? guardErr.message : String(guardErr))
+      await updateDocProgress(documentId, { status: 'indexed' })
+    }
     invalidateDocumentCache()
 
     // FIX (backup gap): auto-push extraction results to Supabase after successful
@@ -3883,8 +3927,15 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       warning = `High LLM failure rate: ${failedChunks}/${totalProcessedChunks} chunks returned empty results`
       console.warn(`[Process] ${warning}`)
     }
+    if (guardWarning) {
+      // P0-5 guard cảnh báo được surface lên response (ưu tiên hơn warning LLM —
+      // đây là lỗi dữ liệu vector, người dùng cần biết để chạy lại "Xử lý")
+      warning = guardWarning
+    }
 
     // Step 14: Return pipeline stats — use DB counts + captured pipeline variables
+    // ROUND-32 P0-5: embeddingsSaved thật (bản cũ hardcode 0 dù vừa sinh xong) +
+    // status theo guard (bản cũ hardcode 'indexed' kể cả khi zero-vector còn sót).
     return {
       documentId, totalPages: document.page_count || 0, totalChunks: savedChunks.length, totalTokens: 0,
       totalEntities: finalEntityCount || 0, totalRelationships: finalRelCount || 0,
@@ -3892,8 +3943,8 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       resolutionStats: pipelineResolutionStats,
       successfulChunks, failedChunks, wasTimedOut,
       warning,
-      embeddingsSaved: 0,
-      provider: lastProvider, model: lastModel, durationMs, status: 'indexed' as const,
+      embeddingsSaved: embeddingsSavedCount,
+      provider: lastProvider, model: lastModel, durationMs, status: finalStatus,
       neo4jNodes: pipelineNeo4jNodes, neo4jRelationships: pipelineNeo4jRelationships,
     }
   } catch (error) {

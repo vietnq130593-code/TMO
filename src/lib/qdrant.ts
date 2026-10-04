@@ -624,7 +624,49 @@ export async function upsertChunks(
     return true
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error('[Qdrant] Chunks upsert error:', msg)
+    // ROUND-32 P0-3: kèm sample point id bị reject — lớp lỗi "point id không phải
+    // UUID/unsigned int → 400" từng chết im lặng nhiều tháng ở auto-learn.
+    console.error(`[Qdrant] Chunks upsert error: ${msg} (sample id: ${chunks[0]?.id ?? 'n/a'}, count: ${chunks.length})`)
+    lastQdrantError = msg
+    return false
+  }
+}
+
+/**
+ * ROUND-32 P0-4 — Cập nhật CHỈ vector của các chunk point, payload giữ nguyên
+ * tuyệt đối.
+ *
+ * Vì sao phải có helper này: Qdrant UPSERT với payload kèm theo sẽ REPLACE toàn
+ * bộ point (mọi field payload không nhắc đến đều MẤT) — generateAndSaveEmbeddings
+ * cũ dựa trên niềm tin sai "upsert preserves payload not explicitly overwritten"
+ * nên đã wipe heading_path/token_count/domain ghi ở Step 4 + renumber chunk_index
+ * sai trên resume. updateVectors là API đúng semantics: chỉ chạm vector.
+ *
+ * Yêu cầu: point phải ĐÃ tồn tại (được upsert sẵn ở Step 4 với payload đầy đủ —
+ * mọi đường đến đây trong pipeline đều đi qua Step 4 trước). Với point chưa tồn
+ * tại, Qdrant bỏ qua ID đó (không tạo point mới, không lỗi) — P0-5 guard cuối
+ * pipeline sẽ bắt trường hợp chunk thiếu vector còn sót.
+ */
+export async function updateChunkVectors(
+  points: Array<{ id: string; vector: number[] }>
+): Promise<boolean> {
+  try {
+    // Batch 100 — cùng chuẩn batch size với upsertChunks (khuyến nghị Qdrant)
+    const BATCH_SIZE = 100
+    for (let i = 0; i < points.length; i += BATCH_SIZE) {
+      const batch = points.slice(i, i + BATCH_SIZE)
+      await withQdrantRetry(async () => {
+        await qdrant.updateVectors(COLLECTION_CHUNKS, {
+          wait: true, // áp dụng xong mới trả về — chống stale zero-vector reads
+          points: batch.map(p => ({ id: p.id, vector: p.vector })),
+        })
+      })
+    }
+    lastQdrantError = null
+    return true
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error(`[Qdrant] updateChunkVectors error: ${msg} (sample id: ${points[0]?.id ?? 'n/a'}, count: ${points.length})`)
     lastQdrantError = msg
     return false
   }
@@ -636,15 +678,21 @@ export async function upsertChunks(
  * PAGINATED: Automatically fetches ALL pages when limit > max page size.
  * Qdrant's scroll API returns at most ~1000 points per page,
  * so for documents with 1000+ chunks, we must paginate using the offset cursor.
+ *
+ * ROUND-32 P0-5: option withVector — scroll với with_vector: true để caller
+ * kiểm tra vector THẬT hay zero-vector placeholder (Step 4 upsert chunk với
+ * vector 0 rồi mới embed thật ở Step 11 — resume cũ tin "chunk tồn tại = đã
+ * embed" nên stranded zero-vector docs vĩnh viễn 'indexed'). Mặc định false
+ * (không đổi hành vi caller cũ — response nặng hơn nhiều khi kèm vector 2048d).
  */
 export async function getChunksByDocument(
   documentId: string,
-  options?: { limit?: number }
-): Promise<Array<{ id: string; payload: ChunkPayload }>> {
+  options?: { limit?: number; withVector?: boolean }
+): Promise<Array<{ id: string; payload: ChunkPayload; vector?: number[] }>> {
   try {
     const requestedLimit = options?.limit || 1000
     const PAGE_SIZE = 1000 // Qdrant scroll max per page
-    const allPoints: Array<{ id: string; payload: ChunkPayload }> = []
+    const allPoints: Array<{ id: string; payload: ChunkPayload; vector?: number[] }> = []
     let offset: string | undefined = undefined
     let hasMore = true
 
@@ -661,6 +709,7 @@ export async function getChunksByDocument(
           },
           limit: Math.min(PAGE_SIZE, requestedLimit - allPoints.length),
           with_payload: true,
+          with_vector: options?.withVector ?? false,
           offset,
         })
       )
@@ -669,6 +718,9 @@ export async function getChunksByDocument(
         allPoints.push({
           id: String(p.id),
           payload: p.payload as unknown as ChunkPayload,
+          // Chỉ có giá trị khi withVector: true (Qdrant trả theo dạng mảng cho
+          // unnamed vector) — undefined khi không yêu cầu, caller cũ không thấy.
+          vector: (p as { vector?: number[] }).vector,
         })
       }
 

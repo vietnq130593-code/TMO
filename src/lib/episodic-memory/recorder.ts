@@ -57,7 +57,11 @@ export function mapOutcome(stopReason: string, toolFailures: number): EpisodeOut
   switch (stopReason) {
     case 'complete': return 'SUCCESS'
     case 'cancelled': return 'ABANDONED'
-    case 'error': return toolFailures > 0 ? 'FAILURE' : 'FAILURE'
+    // ROUND-32 P3-a: run kết thúc bằng exception = FAILURE bất kể tool failures.
+    // (Bản cũ `toolFailures > 0 ? 'FAILURE' : 'FAILURE'` là dead-code typo từ
+    // commit gốc 4b46d20 — copy nhầm từ case 'max_cycles' bên dưới. Giữ NGUYÊN
+    // semantics đã vận hành: cả 2 nhánh cũ đều trả 'FAILURE'.)
+    case 'error': return 'FAILURE'
     case 'no_progress': return 'FAILURE'
     case 'max_cycles': return toolFailures > 0 ? 'FAILURE' : 'PARTIAL'
     case 'time_budget':

@@ -20,30 +20,15 @@ import {
   generateQueryEmbedding,
   getEmbeddingDimension,
 } from '@/lib/embeddings'
+import { deterministicUuid } from '@/lib/deterministic-uuid'
 import { EPISODIC_THRESHOLDS } from './types'
 
 const COLLECTION_EPISODES = 'theopus_episodes'
 
-/**
- * Deterministic UUID từ string (SHA-1 → format UUID v5-style) — Qdrant point
- * id phải là UUID; re-record cùng episodeId → cùng point id → upsert đè.
- */
-function deterministicUuid(seed: string): string {
-  // 4 hex đầu từ hash — đủ độ phân tán cho sandbox; KHÔNG dùng cho crypto
-  let hash = ''
-  for (let i = 0; i < 5; i++) {
-    // FNV-1a 32-bit lặp — đơn giản, không dependency
-    let h = 0x811c9dc5
-    const s = `${seed}#${i}`
-    for (let j = 0; j < s.length; j++) {
-      h ^= s.charCodeAt(j)
-      h = Math.imul(h, 0x01000193) >>> 0
-    }
-    hash += h.toString(16).padStart(8, '0')
-  }
-  const hex = hash.slice(0, 32)
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`
-}
+// ROUND-32 P0-3: deterministicUuid chuyển sang module chung src/lib/deterministic-uuid.ts
+// (cùng implementation FNV-1a — không đổi hành vi) để auto-learn và các điểm cần
+// point ID Qdrant khác dùng CÙNG một nguồn, chống tái diễn lớp lỗi "chuỗi tự do
+// làm point id → Qdrant 400" đã từng trả giá ở chính file này (ep_... bị 400).
 
 /** Đã ensure collection trong process này chưa */
 const g = globalThis as unknown as { __tmoEpisodesCollectionReady?: boolean }
