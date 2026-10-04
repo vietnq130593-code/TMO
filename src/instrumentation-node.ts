@@ -679,6 +679,71 @@ if (!globalForTmr.__tmoToolMetricRetentionStarted) {
 }
 
 // ============================================================================
+// ROUND-32 P3-c — DAILY SQLITE BACKUP (tự động, best-effort)
+// ============================================================================
+// Route /api/storage/db-backup sinh ra đúng cho việc này (header route ghi rõ
+// "Periodic safety: cron POST once a day") nhưng chưa có bộ lên lịch nào —
+// backup chỉ xảy ra khi có người chủ động gọi. Bộ lập lịch này tự POST endpoint
+// backup qua SELF-FETCH trực tiếp localhost (server tự gọi server — không qua
+// gateway/caddy, không phụ thuộc mini-service):
+//   - Boot + 5 phút (đợi app lên hẳn): kiểm tra bản cuối trên R2 (lastModified
+//     của latest pointer) — chỉ backup nếu đã > 20h (đệm 4h cho restart drift;
+//     backup mỗi lần restart sẽ spam R2 history).
+//   - Interval 1 giờ lặp lại phép đối chiếu đó → hiệu quả: 1 backup/ngày.
+//   - Best-effort toàn bộ: R2 hỏng/lỗi fetch → chỉ log cảnh báo, chu kỳ sau thử lại.
+//   - Env TMO_AUTO_BACKUP=0 để tắt hẳn (vd khi muốn chủ động điều phối tay).
+const globalForDsb = globalThis as unknown as { __tmoDailySqliteBackupStarted?: boolean }
+function maybeDailyBackup(): void {
+  if (process.env.TMO_AUTO_BACKUP === '0') return
+  void (async () => {
+    try {
+      const base = `http://localhost:${process.env.PORT || 3000}`
+      // Đối chiếu bản cuối trên R2 — tránh backup chồng khi app restart thường xuyên
+      const listRes = await fetch(`${base}/api/storage/db-backup`, {
+        signal: AbortSignal.timeout(20_000),
+      })
+      if (!listRes.ok) throw new Error(`list endpoint ${listRes.status}`)
+      const list = (await listRes.json().catch(() => ({}))) as {
+        backups?: Array<{ isLatest: boolean; lastModified: string }>
+      }
+      const latest = list.backups?.find(b => b.isLatest)
+      const lastAt = latest ? Date.parse(latest.lastModified) : 0
+      const MIN_INTERVAL_MS = 20 * 3600 * 1000
+      if (Number.isFinite(lastAt) && Date.now() - lastAt < MIN_INTERVAL_MS) {
+        return // đã có bản tươi trong 20h — không cần backup mới
+      }
+      const postRes = await fetch(`${base}/api/storage/db-backup`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(180_000),
+      })
+      const body = (await postRes.json().catch(() => ({}))) as {
+        versionedKey?: string
+        verify?: { sha256Match?: boolean; sqliteHeaderOk?: boolean }
+        error?: string
+      }
+      if (!postRes.ok) throw new Error(`backup endpoint ${postRes.status}: ${body.error ?? ''}`)
+      const verifyOk = body.verify?.sha256Match && body.verify?.sqliteHeaderOk
+      console.log(
+        `[AutoBackup] DB snapshot hằng ngày: ${body.versionedKey ?? '(không có key)'}${verifyOk ? ' (verify PASS)' : ' (⚠️ VERIFY KHÔNG PASS — xem log route)'}` 
+      )
+    } catch (err) {
+      console.warn(
+        '[AutoBackup] daily backup failed (best-effort — thử lại chu kỳ sau):',
+        err instanceof Error ? err.message : String(err)
+      )
+    }
+  })()
+}
+if (!globalForDsb.__tmoDailySqliteBackupStarted) {
+  globalForDsb.__tmoDailySqliteBackupStarted = true
+  // Đợi 5 phút sau boot cho app lên hẳn (route compile xong, schedulers khác ổn định)
+  const dsbBootTimer = setTimeout(() => maybeDailyBackup(), 5 * 60 * 1000)
+  dsbBootTimer.unref?.()
+  const dsbTimer = setInterval(() => maybeDailyBackup(), 60 * 60 * 1000) // đối chiếu mỗi giờ
+  dsbTimer.unref?.()
+}
+
+// ============================================================================
 // GĐ4 CI-5 (Task 14-a) — DURABLE GOAL LOOP WORKER
 // ============================================================================
 // Job queue nền chạy goal-loop tác vụ nhiều giờ sống sót qua restart (DB là

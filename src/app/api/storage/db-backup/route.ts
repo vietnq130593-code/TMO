@@ -51,6 +51,7 @@ import { promises as fs } from 'fs'
 import fsSync from 'fs'
 import path from 'path'
 import os from 'os'
+import { createHash } from 'crypto'
 import { uploadToR2, downloadFileFromR2, listR2Objects, isR2Configured } from '@/lib/r2-storage'
 import { db } from '@/lib/db'
 
@@ -283,6 +284,48 @@ export async function POST(request: NextRequest) {
         `[DB-Backup] Snapshot saved (${method}): ${versionedKey} (${sizeLabel}) + latest pointer`
       )
 
+      // ROUND-32 P3-c — VERIFY NỘI TUYẾN: tải lại bản VỪA upload (latest pointer)
+      // rồi so sha256 + kiểm SQLite header magic (16 byte chuẩn "SQLite format 3\0").
+      // Backup ĐÃ upload thành công nên verify fail KHÔNG làm request fail — chỉ
+      // lộ cảnh báo rõ ràng trong response để vận hành thấy ngay (tin vào backup
+      // chưa từng được kiểm chứng là con đường đã từng phí TMO cả giấc ngủ).
+      let verify: {
+        roundTripOk: boolean
+        sha256Match: boolean
+        sqliteHeaderOk: boolean
+        detail?: string
+      } = { roundTripOk: false, sha256Match: false, sqliteHeaderOk: false }
+      try {
+        const expectedSha = createHash('sha256').update(buffer).digest('hex')
+        const tmpVerify = path.join(os.tmpdir(), `tmo-backup-verify-${Date.now()}-${process.pid}.db`)
+        try {
+          const dl = await downloadFileFromR2(R2_LATEST_KEY, tmpVerify)
+          if (dl.success) {
+            const downloaded = await fs.readFile(tmpVerify)
+            const actualSha = createHash('sha256').update(downloaded).digest('hex')
+            const SQLITE_MAGIC = Buffer.from('SQLite format 3\0', 'binary')
+            verify = {
+              roundTripOk: downloaded.length === buffer.length,
+              sha256Match: actualSha === expectedSha,
+              sqliteHeaderOk: downloaded.length >= 100 && downloaded.subarray(0, 16).equals(SQLITE_MAGIC),
+              detail: `sha256=${actualSha.slice(0, 16)}…, ${downloaded.length} bytes tải về`,
+            }
+          } else {
+            verify = { roundTripOk: false, sha256Match: false, sqliteHeaderOk: false, detail: `tải về thất bại: ${dl.error ?? 'unknown'}` }
+          }
+        } finally {
+          await fs.unlink(tmpVerify).catch(() => { /* dọn file tạm best-effort */ })
+        }
+        if (verify.sha256Match && verify.sqliteHeaderOk) {
+          console.log(`[DB-Backup] Verify PASS: round-trip sha256 khớp + SQLite header hợp lệ (${verify.detail})`)
+        } else {
+          console.error(`[DB-Backup] ⚠️ VERIFY FAIL — backup có thể hỏng: ${JSON.stringify(verify)}`)
+        }
+      } catch (verifyErr) {
+        verify = { roundTripOk: false, sha256Match: false, sqliteHeaderOk: false, detail: verifyErr instanceof Error ? verifyErr.message : String(verifyErr) }
+        console.warn('[DB-Backup] Verify step error (non-fatal):', verify.detail)
+      }
+
       return NextResponse.json({
         success: true,
         action: 'backup',
@@ -294,6 +337,10 @@ export async function POST(request: NextRequest) {
         dbPath: DB_PATH,
         snapshotMethod: method,
         walCheckpointed,
+        verify,
+        ...(verify.sha256Match && verify.sqliteHeaderOk
+          ? {}
+          : { warning: `Backup verify FAILED: ${JSON.stringify(verify)} — kiểm tra R2/network trước khi tin vào bản này` }),
       })
     }
 
