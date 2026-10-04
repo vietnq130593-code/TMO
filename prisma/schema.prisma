@@ -1073,6 +1073,30 @@ model ToolMetric {
   @@index([success])
 }
 
+/// ROUND-32 P2-a — rollup hằng ngày của ToolMetric: raw chỉ giữ
+/// TOOL_METRIC_RETENTION_DAYS ngày (default 30, sweep trong
+/// instrumentation-node.ts), rollup giữ vĩnh viễn (nhỏ — 1 row/tool/agent/ngày).
+/// Trước đây bảng raw phình vô hạn (1 row/tool call, không TTL — chính ALISTA
+/// rule "archive ToolMetric >30 ngày" từng tự nhận ra nợ này chưa ai triển khai).
+/// Analytics days-mode đọc 2 tầng: raw cho cửa sổ gần + rollup cho phần range xa.
+model ToolMetricDaily {
+  id              String   @id @default(cuid())
+  /// "YYYY-MM-DD" (UTC) — CHỈ rollup ngày HOÀN CHỈNH đã qua (không đua ghi mới)
+  date            String
+  toolName        String
+  agentRole       String
+  calls           Int
+  successCount    Int
+  /// BigInt — tổng duration ms (tràn Int khi traffic lớn)
+  totalDurationMs BigInt
+  /// JSON top error tags: {"timeout":12,"parse_error":3} (top 10)
+  topErrorTags    String?
+  computedAt      DateTime @default(now())
+
+  @@unique([date, toolName, agentRole])
+  @@index([toolName, date])
+}
+
 /// Task 20-b (self-monitoring) — persist run lifecycle của mỗi agent run
 /// (chat goal-loop / team workflow). Trước đây goal-loop metadata (cycles,
 /// stopReason, evaluatorConfidence, tokensUsed...) chỉ sống trong

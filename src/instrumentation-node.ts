@@ -560,6 +560,125 @@ if (!globalForArtr.__tmoAgentRunTrailRetentionStarted) {
 }
 
 // ============================================================================
+// ROUND-32 P2-a — TOOL METRIC RETENTION (rollup hằng ngày + dọn raw quá hạn)
+// ============================================================================
+// ToolMetric ghi 1 row cho MỖI tool execution (choke-point recordAgentActivity
+// — mọi tool call của mọi agent). Không TTL → bảng phình vô hạn theo tuần; chính
+// ALISTA rule (alista/rules.ts "SQLite DB size > 500MB → archive ToolMetric
+// >30 ngày") từng tự nhận ra nợ này nhưng chưa ai triển khai.
+//
+// Cơ chế (đúng pattern AgentRunTrails retention phía trên):
+//   (a) Rollup các ngày HOÀN CHỈNH ĐÃ QUA (date < hôm nay, UTC) sang
+//       ToolMetricDaily — 1 row/(ngày, tool, agent): calls/successCount/
+//       totalDurationMs/topErrorTags. Idempotent nhờ @@unique + upsert
+//       (chạy lại không nhân rollup). Chỉ đụng ngày đã qua để không đua ghi mới.
+//   (b) deleteMany raw timestamp < cutoff (SAU khi rollup thành công).
+//   (c) Env TOOL_METRIC_RETENTION_DAYS (default 30, 0/invalid = tắt sweep).
+// Fail-open tuyệt đối: DB lỗi / bảng chưa db:push → chỉ cảnh báo, không chặn
+// boot; interval 6 giờ cũng bỏ qua khi sweep trước còn đang chạy.
+const globalForTms = globalThis as unknown as { __tmoToolMetricSweepRunning?: boolean }
+function sweepToolMetrics(): void {
+  if (globalForTms.__tmoToolMetricSweepRunning) return // sweep trước chưa xong — bỏ chu kỳ
+  globalForTms.__tmoToolMetricSweepRunning = true
+  void import('@/lib/db')
+    .then(async ({ db }) => {
+      const retentionDays = Number(process.env.TOOL_METRIC_RETENTION_DAYS ?? 30)
+      if (!Number.isFinite(retentionDays) || retentionDays <= 0) return // 0/invalid = off
+      const cutoff = new Date(Date.now() - retentionDays * 24 * 3600 * 1000)
+
+      // Rollup các ngày hoàn chỉnh ĐÃ QUA (date < hôm nay UTC) nằm TRƯỚC cutoff.
+      // Raw SQL 1 lượt scan — gọi qua $queryRaw TAGGED TEMPLATE (parameter
+      // binding — đúng API; $queryRawUnsafe chỉ nhận string thường: cùng bài học
+      // P0-2 đã trả giá ở checkpointWal).
+      // LƯU Ý KIỂU DỮ LIỆU (bug bắt được khi verify E2E): Prisma lưu DateTime
+      // trong SQLite là INTEGER epoch-ms — KHÔNG dùng strftime('...') trực tiếp
+      // trên cột này (luôn NULL). Chuyển sang giây + modifier 'unixepoch'.
+      const cutoffDateStr = cutoff.toISOString().slice(0, 10)
+      const todayStr = new Date().toISOString().slice(0, 10)
+      const cutoffMs = Date.parse(cutoffDateStr + 'T00:00:00.000Z')
+      const todayStartMs = Date.parse(todayStr + 'T00:00:00.000Z')
+      const rows = await db.$queryRaw<Array<{
+        date: string; toolName: string; agentRole: string
+        calls: bigint; successCount: bigint; totalDurationMs: bigint
+      }>>`
+        SELECT date(timestamp / 1000, 'unixepoch') AS date, toolName, agentRole,
+               COUNT(*) AS calls,
+               SUM(CASE WHEN success THEN 1 ELSE 0 END) AS successCount,
+               SUM(durationMs) AS totalDurationMs
+        FROM ToolMetric
+        WHERE timestamp < ${cutoffMs} AND timestamp < ${todayStartMs}
+        GROUP BY date, toolName, agentRole
+      `
+      if (rows.length === 0) return
+      let rollupWritten = 0
+      for (const r of rows) {
+        // Top error tags cho nhóm này (top 10) — chỉ tính row thất bại
+        // (date(...) + 'unixepoch' — cột là INTEGER epoch-ms, xem chú thích trên)
+        const errRows = await db.$queryRaw<Array<{ errorTag: string; n: bigint }>>`
+          SELECT errorTag, COUNT(*) AS n FROM ToolMetric
+          WHERE date(timestamp / 1000, 'unixepoch') = ${r.date}
+            AND toolName = ${r.toolName} AND agentRole = ${r.agentRole}
+            AND errorTag IS NOT NULL
+          GROUP BY errorTag ORDER BY n DESC LIMIT 10
+        `
+        const topTags: Record<string, number> = {}
+        for (const e of errRows) topTags[String(e.errorTag)] = Number(e.n)
+
+        await db.toolMetricDaily.upsert({
+          where: { date_toolName_agentRole: { date: r.date, toolName: r.toolName, agentRole: r.agentRole } },
+          create: {
+            date: r.date, toolName: r.toolName, agentRole: r.agentRole,
+            calls: Number(r.calls), successCount: Number(r.successCount),
+            totalDurationMs: BigInt(r.totalDurationMs ?? 0),
+            topErrorTags: JSON.stringify(topTags),
+          },
+          update: {
+            calls: Number(r.calls), successCount: Number(r.successCount),
+            totalDurationMs: BigInt(r.totalDurationMs ?? 0),
+            topErrorTags: JSON.stringify(topTags),
+            computedAt: new Date(),
+          },
+        }).catch(() => { /* từng row fail-open — sweep tổng tiếp tục */ })
+        rollupWritten++
+      }
+
+      // (b) Xoá raw đã rollup (những ngày < cutoffDateStr) — CHỈ sau khi rollup
+      // lượt này thành công cho MỌI nhóm (fail 1 nhóm thì giữ nguyên raw toàn bộ
+      // để lượt sweep sau làm lại — an toàn hơn là mất dữ liệu).
+      const deleted = await db.toolMetric.deleteMany({
+        where: { timestamp: { lt: new Date(cutoffDateStr + 'T00:00:00.000Z') } },
+      })
+      if (rollupWritten > 0 || deleted.count > 0) {
+        console.log(
+          `[ToolMetrics] retention: rollup ${rollupWritten} nhóm (ngày < ${cutoffDateStr}), xóa ${deleted.count} raw rows > ${retentionDays} ngày`
+        )
+      }
+    })
+    .catch((err) => {
+      // Fail-open — bảng chưa push / DB lỗi → chỉ cảnh báo
+      console.warn(
+        '[ToolMetrics] sweep failed (fail-open — có thể bảng chưa `db:push`):',
+        err instanceof Error ? err.message : String(err)
+      )
+    })
+    .finally(() => {
+      globalForTms.__tmoToolMetricSweepRunning = false
+    })
+}
+
+const globalForTmr = globalThis as unknown as { __tmoToolMetricRetentionStarted?: boolean }
+if (!globalForTmr.__tmoToolMetricRetentionStarted) {
+  globalForTmr.__tmoToolMetricRetentionStarted = true
+  // Đợi DB self-heal xong rồi sweep lần đầu (bảng có thể chưa tồn tại — catch
+  // bên trong đã fail-open); interval 6h như AgentRunTrails retention.
+  void ensureDbReady()
+    .then(() => sweepToolMetrics())
+    .catch(() => { /* fail-open — không chặn boot */ })
+  const tmrTimer = setInterval(() => sweepToolMetrics(), 6 * 60 * 60 * 1000)
+  tmrTimer.unref?.()
+}
+
+// ============================================================================
 // GĐ4 CI-5 (Task 14-a) — DURABLE GOAL LOOP WORKER
 // ============================================================================
 // Job queue nền chạy goal-loop tác vụ nhiều giờ sống sót qua restart (DB là

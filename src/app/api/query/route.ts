@@ -30,6 +30,7 @@ import {
   getChunksByDocument,
   upsertChunks,
   getQdrantStats,
+  setChunkPayloadByDocument,
   qdrant,
   COLLECTION_CHUNKS,
 } from '@/lib/qdrant'
@@ -1656,32 +1657,17 @@ export async function GET(request: NextRequest) {
 
 /**
  * Update the domain field in all chunks for a document.
- * Fetches chunks with vectors from Qdrant, updates the domain in the payload,
- * and re-upserts them.
+ *
+ * ROUND-32 P2-b: setPayload THEO FILTER (atomic server-side) — thay thế bản
+ * cũ scroll 1 trang limit:1000 (doc >1000 chunk bị bỏ sót im lặng) + đọc toàn
+ * vector 2048-d về RAM rồi re-upsert (read-modify-write + cửa sổ race).
+ * Server tự áp cho mọi point khớp filter document_id, không giới hạn trang,
+ * không chạm vector, merge field (các payload khác giữ nguyên).
  */
 async function updateChunkDomains(documentId: string, newDomain: string): Promise<void> {
   try {
-    // Fetch chunks with vectors so we can re-upsert them
-    const result = await qdrant.scroll(COLLECTION_CHUNKS, {
-      filter: {
-        must: [
-          { key: 'document_id', match: { value: documentId } },
-        ],
-      },
-      limit: 1000,
-      with_payload: true,
-      with_vector: true,
-    })
-
-    if (result.points.length === 0) return
-
-    const updatedChunks = result.points.map(p => ({
-      id: String(p.id),
-      vector: p.vector as number[],
-      payload: { ...(p.payload as unknown as ChunkPayload), domain: newDomain },
-    }))
-
-    await upsertChunks(updatedChunks)
+    const ok = await setChunkPayloadByDocument(documentId, { domain: newDomain })
+    if (!ok) console.error(`[UpdateChunkDomains] setChunkPayloadByDocument failed cho doc ${documentId.slice(0, 8)}...`)
   } catch (err) {
     console.error('[UpdateChunkDomains] Error:', err instanceof Error ? err.message : String(err))
   }

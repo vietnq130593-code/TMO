@@ -264,12 +264,68 @@ export async function GET(request: NextRequest) {
       orderBy: { timestamp: 'desc' },
     })
 
+    // ---- P2-a: đọc 2 tầng cho range XA (days > retention) ----
+    // Raw chỉ giữ TOOL_METRIC_RETENTION_DAYS ngày (sweep instrumentation dọn
+    // hàng ngày) — phần range xa hơn lấy từ rollup ToolMetricDaily (vĩnh viễn).
+    // Fail-open: rollup lỗi → chỉ dùng raw (analytics không bao giờ 500 vì lớp này).
+    const retentionDaysRaw = Number(process.env.TOOL_METRIC_RETENTION_DAYS ?? 30)
+    const retentionDays = Number.isFinite(retentionDaysRaw) && retentionDaysRaw > 0 ? retentionDaysRaw : 30
+    let rollup = {
+      totalCalls: 0, successCount: 0, totalDurationMs: 0,
+      uniqueTools: new Set<string>(), uniqueAgents: new Set<string>(),
+    }
+    const rollupToolMap = new Map<string, { calls: number; successCount: number; totalDuration: number; errors: number; errorTags: Map<string, number> }>()
+    const rollupAgentMap = new Map<string, { calls: number; successCount: number; totalDuration: number }>()
+    const rollupDayMap = new Map<string, { calls: number; successCount: number }>()
+    if (days > retentionDays) {
+      try {
+        const toDateStr = (d: Date) => d.toISOString().slice(0, 10)
+        const fromStr = toDateStr(from)
+        const rawFromStr = toDateStr(new Date(to.getTime() - retentionDays * 24 * 60 * 60 * 1000))
+        if (fromStr < rawFromStr) {
+          const rollupRows = await db.toolMetricDaily.findMany({
+            where: { date: { gte: fromStr, lt: rawFromStr } },
+          })
+          for (const r of rollupRows) {
+            rollup.totalCalls += r.calls
+            rollup.successCount += r.successCount
+            rollup.totalDurationMs += Number(r.totalDurationMs)
+            rollup.uniqueTools.add(r.toolName)
+            rollup.uniqueAgents.add(r.agentRole)
+            const agg = rollupToolMap.get(r.toolName) || { calls: 0, successCount: 0, totalDuration: 0, errors: 0, errorTags: new Map<string, number>() }
+            agg.calls += r.calls
+            agg.successCount += r.successCount
+            agg.totalDuration += Number(r.totalDurationMs)
+            agg.errors += r.calls - r.successCount
+            let tags: Record<string, number> = {}
+            try { tags = JSON.parse(r.topErrorTags || '{}') } catch { /* row cũ/tag hỏng — bỏ qua */ }
+            for (const [tag, c] of Object.entries(tags)) agg.errorTags.set(tag, (agg.errorTags.get(tag) || 0) + c)
+            rollupToolMap.set(r.toolName, agg)
+            const a = rollupAgentMap.get(r.agentRole) || { calls: 0, successCount: 0, totalDuration: 0 }
+            a.calls += r.calls
+            a.successCount += r.successCount
+            a.totalDuration += Number(r.totalDurationMs)
+            rollupAgentMap.set(r.agentRole, a)
+            const d = rollupDayMap.get(r.date) || { calls: 0, successCount: 0 }
+            d.calls += r.calls
+            d.successCount += r.successCount
+            rollupDayMap.set(r.date, d)
+          }
+          if (rollupRows.length > 0) {
+            console.log(`[Tools/Analytics] P2-a: cộng thêm ${rollupRows.length} rollup ngày cũ (< ${rawFromStr}) vào range ${days} ngày`) 
+          }
+        }
+      } catch (err) {
+        console.warn('[Tools/Analytics] rollup merge failed (fail-open — chỉ dùng raw):', err instanceof Error ? err.message : String(err))
+      }
+    }
+
     // ---- Summary ----
-    const totalCalls = logs.length
-    const successCount = logs.filter(l => l.success).length
-    const totalDurationMs = logs.reduce((sum, l) => sum + l.durationMs, 0)
-    const uniqueTools = new Set(logs.map(l => l.toolName)).size
-    const uniqueAgents = new Set(logs.map(l => l.agentRole)).size
+    const totalCalls = logs.length + rollup.totalCalls
+    const successCount = logs.filter(l => l.success).length + rollup.successCount
+    const totalDurationMs = logs.reduce((sum, l) => sum + l.durationMs, 0) + rollup.totalDurationMs
+    const uniqueTools = new Set([...logs.map(l => l.toolName), ...rollup.uniqueTools]).size
+    const uniqueAgents = new Set([...logs.map(l => l.agentRole), ...rollup.uniqueAgents]).size
 
     const summary = {
       totalCalls,
@@ -279,7 +335,7 @@ export async function GET(request: NextRequest) {
       uniqueAgents,
     }
 
-    // ---- By tool (calls desc, limit 50) ----
+    // ---- By tool (calls desc, limit 50) — P2-a: gộp rollup trước khi xếp hạng ----
     interface ToolAgg {
       calls: number
       successCount: number
@@ -288,6 +344,9 @@ export async function GET(request: NextRequest) {
       errorTags: Map<string, number>
     }
     const toolMap = new Map<string, ToolAgg>()
+    for (const [toolName, r] of rollupToolMap) {
+      toolMap.set(toolName, { ...r, errorTags: new Map(r.errorTags) })
+    }
     for (const l of logs) {
       const agg =
         toolMap.get(l.toolName) ||
@@ -326,8 +385,8 @@ export async function GET(request: NextRequest) {
       .sort((a, b) => b.calls - a.calls)
       .slice(0, BY_TOOL_LIMIT)
 
-    // ---- By agent (limit 20) ----
-    const agentMap = new Map<string, { calls: number; successCount: number; totalDuration: number }>()
+    // ---- By agent (limit 20) — P2-a: gộp rollup ----
+    const agentMap = new Map<string, { calls: number; successCount: number; totalDuration: number }>(rollupAgentMap)
     for (const l of logs) {
       const agg = agentMap.get(l.agentRole) || { calls: 0, successCount: 0, totalDuration: 0 }
       agg.calls++
@@ -345,8 +404,8 @@ export async function GET(request: NextRequest) {
       .sort((a, b) => b.calls - a.calls)
       .slice(0, BY_AGENT_LIMIT)
 
-    // ---- Timeline (bucket theo ngày YYYY-MM-DD, UTC) ----
-    const dayMap = new Map<string, { calls: number; successCount: number }>()
+    // ---- Timeline (bucket theo ngày YYYY-MM-DD, UTC) — P2-a: gộp rollup ngày cũ ----
+    const dayMap = new Map<string, { calls: number; successCount: number }>(rollupDayMap)
     for (const l of logs) {
       const date = l.timestamp.toISOString().slice(0, 10)
       const agg = dayMap.get(date) || { calls: 0, successCount: 0 }
@@ -376,7 +435,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       period: { days, from: from.toISOString(), to: to.toISOString() },
-      summary,
+      summary: { ...summary, includesRollup: rollup.totalCalls > 0, rollupCalls: rollup.totalCalls },
       byTool,
       byAgent,
       timeline,

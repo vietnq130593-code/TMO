@@ -20,6 +20,10 @@
  */
 
 import type { Driver, Session } from 'neo4j-driver'
+// ROUND-32 P2-c: dim vector index lấy từ đúng NGUỒN DUY NHẤT (embeddings.ts) —
+// trước đây hardcode 2048 tại đây nên đổi model embedding sẽ tạo index sai dim
+// (entity embedding upsert lỗi im lặng theo). embeddings.ts không import neo4j → không vòng.
+import { getEmbeddingDimension } from './embeddings'
 
 // ==================== TYPES ====================
 
@@ -750,12 +754,12 @@ export async function initializeNeo4jSchema(): Promise<{
   // differently on Aura — workaround is to use plain `CREATE VECTOR INDEX name`
   // and rely on the existing catch block's "already exists" substring match to
   // treat duplicate-create as success (idempotent behavior).
-  // Vector dim sourced from EMBEDDING_DIMENSION constant in qdrant.ts (2048).
+  // Vector dim sourced from EMBEDDING_DIMENSION (embeddings.ts — nguồn duy nhất, P2-c).
   for (const label of ENTITY_LABELS) {
     indexQueries.push(
       `CREATE VECTOR INDEX entity_embedding_${label.toLowerCase()}
        FOR (n:${label}) ON (n.embedding)
-       OPTIONS { indexConfig: { \`vector.dimensions\`: 2048, \`vector.similarity_function\`: 'cosine' } }`
+       OPTIONS { indexConfig: { \`vector.dimensions\`: ${getEmbeddingDimension()}, \`vector.similarity_function\`: 'cosine' } }`
     )
   }
 

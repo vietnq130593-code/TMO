@@ -158,6 +158,33 @@ export async function initializeCollections(): Promise<{
     result.documents = true
 
     // Create chunks collection (2048-dim embeddings for semantic search)
+    //
+    // ROUND-32 P2-c — DIM GUARD: collection tồn tại nhưng sai kích thước vector
+    // = lỗi cấu hình chết im lặng (đổi embed model sang dim khác → mọi upsert
+    // 400, upsertChunks nuốt lỗi → ingestion "thành công" mà không có vector
+    // nào được ghi). Không được im lặng: log FATAL + trả error (health đỏ ngay
+    // phần qdrant) + hướng dẫn remediation. Chỉ drop+recreate khi env chủ ý set.
+    if (existingNames.has(COLLECTION_CHUNKS)) {
+      try {
+        const info = await qdrant.getCollection(COLLECTION_CHUNKS)
+        const actualDim = (info.config?.params?.vectors as { size?: number } | undefined)?.size
+        if (actualDim !== undefined && actualDim !== EMBEDDING_DIMENSION) {
+          if (process.env.TMO_QDRANT_ALLOW_DIM_RECREATE === '1') {
+            console.warn(`[Qdrant] P2-c: TMO_QDRANT_ALLOW_DIM_RECREATE=1 — drop collection ${COLLECTION_CHUNKS} (${actualDim}-dim) để tạo lại ${EMBEDDING_DIMENSION}-dim. Vector local sẽ re-embed qua nút Xử lý — Neo4j/R2 không bị ảnh hưởng.`)
+            await qdrant.deleteCollection(COLLECTION_CHUNKS)
+            existingNames.delete(COLLECTION_CHUNKS) // rơi xuống nhánh create bên dưới với dim mới
+          } else {
+            const dimMsg = `[Qdrant] DIM MISMATCH: collection '${COLLECTION_CHUNKS}' đang ${actualDim}-dim nhưng embedding provider hiện tại sinh ${EMBEDDING_DIMENSION}-dim — MỌI upsert sẽ bị 400. Remediation: (1) đặt lại model cũ, hoặc (2) set TMO_QDRANT_ALLOW_DIM_RECREATE=1 rồi restart để drop+recreate collection (vector local re-embed qua nút Xử lý — Neo4j/R2 nguyên vẹn).`
+            console.error(dimMsg)
+            return { documents: result.documents, chunks: false, error: `dim-mismatch: collection ${actualDim}-dim != embedding ${EMBEDDING_DIMENSION}-dim` }
+          }
+        }
+      } catch (err) {
+        // getCollection lỗi (server bận/không trả config) — không chặn boot,
+        // để các bước sau tự cảnh báo theo đường riêng
+        console.warn('[Qdrant] P2-c dim guard: getCollection failed (non-fatal):', err instanceof Error ? err.message : String(err))
+      }
+    }
     if (!existingNames.has(COLLECTION_CHUNKS)) {
       await qdrant.createCollection(COLLECTION_CHUNKS, {
         vectors: {
@@ -266,7 +293,7 @@ export async function checkQdrantHealth(): Promise<{
   connected: boolean
   version?: string
   documentsCollection?: { exists: boolean; pointCount?: number }
-  chunksCollection?: { exists: boolean; pointCount?: number; vectorCount?: number }
+  chunksCollection?: { exists: boolean; pointCount?: number; vectorCount?: number; dimExpected?: number; dimActual?: number; dimMismatch?: boolean }
   error?: string
 }> {
   try {
@@ -304,12 +331,18 @@ export async function checkQdrantHealth(): Promise<{
 
     try {
       const chunkInfo = await qdrant.getCollection(COLLECTION_CHUNKS)
+      // ROUND-32 P2-c: lộ dim mong đợi vs dim thật trên health — đổi embedding
+      // model sai dim là lỗi cấu hình chết im lặng (mọi upsert 400) nếu không soi.
+      const actualDim = (chunkInfo.config?.params?.vectors as { size?: number } | undefined)?.size
       result.chunksCollection = {
         exists: true,
         pointCount: chunkInfo.points_count ?? undefined,
         // vectors_count đã bị bỏ khỏi type @qdrant client ≥1.19 (deprecated) —
         // đọc qua cast để giữ nguyên runtime value (server cũ vẫn trả field này)
         vectorCount: (chunkInfo as { vectors_count?: number | null }).vectors_count ?? undefined,
+        dimExpected: EMBEDDING_DIMENSION,
+        dimActual: actualDim,
+        dimMismatch: actualDim !== undefined && actualDim !== EMBEDDING_DIMENSION,
       }
     } catch {
       result.chunksCollection = { exists: false }
@@ -667,6 +700,39 @@ export async function updateChunkVectors(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error(`[Qdrant] updateChunkVectors error: ${msg} (sample id: ${points[0]?.id ?? 'n/a'}, count: ${points.length})`)
+    lastQdrantError = msg
+    return false
+  }
+}
+
+/**
+ * ROUND-32 P2-b — cập nhật payload (merge field) cho TOÀN BỘ chunk của 1 document
+ * theo filter — atomic server-side.
+ *
+ * Vì sao phải có helper này: updateChunkDomains cũ (query/route.ts) scroll 1
+ * trang limit:1000 (không phân trang → doc >1000 chunk bị bỏ sót im lặng),
+ * kéo cả vector 2048-d về RAM chỉ để đổi 1 field (read-modify-write + cửa sổ
+ * race). setPayload với filter là API đúng: server tự áp cho mọi point khớp
+ * filter, không giới hạn trang, không chạm vector. Tiền lệ setPayload đã có ở
+ * updateDocumentStatus (theo points) — bản này theo filter.
+ */
+export async function setChunkPayloadByDocument(
+  documentId: string,
+  payload: Record<string, unknown>
+): Promise<boolean> {
+  try {
+    await withQdrantRetry(() => qdrant.setPayload(COLLECTION_CHUNKS, {
+      payload,
+      filter: {
+        must: [{ key: 'document_id', match: { value: documentId } }],
+      },
+      wait: true,
+    }))
+    lastQdrantError = null
+    return true
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error(`[Qdrant] setChunkPayloadByDocument error: ${msg} (doc: ${documentId})`)
     lastQdrantError = msg
     return false
   }
