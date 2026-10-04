@@ -94,3 +94,73 @@ describe('db_query — read-only guard chặn tiêm chú thích', () => {
     expect(r.success).not.toBe(false)
   })
 })
+
+// ============================================================================
+// ROUND-32 P1-a — LỖ HỔNG BYPASS ĐÃ LIVE: deny-list cũ bỏ sót REPLACE/VACUUM/
+// ANALYZE/BEGIN/... (ENABLE_DB_QUERY=true) + thiếu allow-list first-token.
+// Khoá chặt lại bằng bằng chứng máy — không được nới lỏng mà không audit riêng.
+// ============================================================================
+describe('db_query — P1-a: deny-list mở rộng + allow-list first-token', () => {
+  test('reject các verb GHI từng bypass deny-list cũ', async () => {
+    const bypassCases: Array<[string, string]> = [
+      // [sql, keyword kỳ vọng trong thông báo lỗi]
+      ['REPLACE INTO Todo (id, title) VALUES (1, \'x\')', 'REPLACE'],
+      ['VACUUM', 'VACUUM'],
+      ['VACUUM INTO \'/tmp/steal.db\'', 'VACUUM'],
+      ['ANALYZE', 'ANALYZE'],
+      ['REINDEX', 'REINDEX'],
+      ['BEGIN IMMEDIATE', 'BEGIN'],
+      ['BEGIN TRANSACTION', 'BEGIN'],
+      ['COMMIT', 'COMMIT'],
+      ['ROLLBACK', 'ROLLBACK'],
+      ['SAVEPOINT sp1', 'SAVEPOINT'],
+      ['RELEASE sp1', 'RELEASE'],
+    ]
+    for (const [sql, kw] of bypassCases) {
+      const r: any = await dbQuery({ sql })
+      expect(r.success).toBe(false)
+      expect(errOf(r)).toContain(`write keyword "${kw}"`)
+    }
+  })
+
+  test('reject mọi câu KHÔNG bắt đầu bằng SELECT/WITH/EXPLAIN (allow-list)', async () => {
+    // Verb lạ / tương lai không nằm trong deny-list vẫn phải chết ở allow-list
+    const weird = [
+      'VALUES (1)',            // SQLite cho phép đứng đầu — không phải cửa đọc
+      'FOOBAR FROM sqlite_master', // verb không tồn tại — vẫn chặn (fail-closed)
+      'attach_test something', // không phải token cho phép
+    ]
+    for (const sql of weird) {
+      const r: any = await dbQuery({ sql })
+      expect(r.success).toBe(false)
+      expect(errOf(r)).toContain('chỉ cho phép SELECT / WITH (CTE) / EXPLAIN / PRAGMA query_plan')
+    }
+  })
+
+  test('comment prefix lừa allow-list phải bị strip trước khi check', async () => {
+    // `/* SELECT */ DELETE...` — comment bị strip, chữ thật đứng đầu là DELETE
+    const r: any = await dbQuery({ sql: '/* SELECT */ DELETE FROM Todo' })
+    expect(r.success).toBe(false)
+    // DELETE là deny-list keyword — lỗi phải nhắc đúng keyword, không phải allow-list
+    expect(errOf(r)).toContain('write keyword "DELETE"')
+  })
+
+  test('cửa đọc HỢP LỆ đi qua guard: WITH (CTE) + EXPLAIN', async () => {
+    // WITH luôn read-only trong SQLite (không có data-modifying CTE)
+    const cte: any = await dbQuery({ sql: 'WITH x AS (SELECT 1 AS v) SELECT * FROM x' })
+    expect(errOf(cte)).not.toContain('rejected by read-only guard')
+
+    // EXPLAIN + deny verb vẫn bị chặn (EXPLAIN INSERT → keyword INSERT)
+    const explainOk: any = await dbQuery({ sql: 'EXPLAIN SELECT 1 AS one' })
+    expect(errOf(explainOk)).not.toContain('rejected by read-only guard')
+    const explainBad: any = await dbQuery({ sql: 'EXPLAIN INSERT INTO Todo VALUES (1)' })
+    expect(explainBad.success).toBe(false)
+    expect(errOf(explainBad)).toContain('write keyword "INSERT"')
+  })
+
+  test('PRAGMA query_plan vẫn được phép qua cả 2 lớp (regression P1-a)', async () => {
+    const r: any = await dbQuery({ sql: 'PRAGMA query_plan' })
+    expect(errOf(r)).not.toContain('PRAGMA statements are not allowed')
+    expect(errOf(r)).not.toContain('chỉ cho phép SELECT')
+  })
+})

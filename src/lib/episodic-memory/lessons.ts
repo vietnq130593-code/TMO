@@ -199,28 +199,92 @@ export async function consolidateLesson(input: ConsolidateLessonInput): Promise<
 export interface ValidateLessonsResult {
   validated: number
   failed: number
+  /** ROUND-32 P1-c: lesson applied trong run FAILURE nhưng KHÔNG khớp ngữ cảnh
+   *  lỗi → không bị quy tội (chỉ đếm timesApplied, không đổi confidence). */
+  neutral?: number
   flaggedForReview: string[]
+}
+
+/**
+ * ROUND-32 P1-c — ngữ cảnh lỗi để gán trách nhiệm (credit assignment).
+ * "applied" ở PRE-ACT chỉ nghĩa là "được inject vào prompt" (mọi lesson
+ * confidence ≥ 0.7 được retrieve — preact.ts), KHÔNG phải "được dùng thật".
+ * Bản cũ phạt/thưởng DÀN TRẢI cả episode: FAILURE → MỌI lesson applied −0.1
+ * confidence (kể cả lesson liên quan cách xa lỗi), SUCCESS → mọi lesson +0.05
+ * (kể cả lesson sai may mắn đi cùng) → confidence lệch dần theo độ nhiễu thay
+ * vì theo chất lượng → auto-apply (≥0.7) quyết định sai.
+ */
+export interface LessonAttribution {
+  /** Tool names thất bại trong run (từ toolEvidence của goal-loop) */
+  failedTools?: string[]
+  /** Root cause code các lỗi (taxonomy B.3) */
+  errorRootCauses?: string[]
+  /** Từ khóa ngữ cảnh lỗi (token từ message lỗi) */
+  errorKeywords?: string[]
+}
+
+/**
+ * Khớp ngữ cảnh lesson với dấu vết lỗi của run (P1-c Lớp 1 — deterministic).
+ * Trả true khi: không có dữ liệu attribution (fallback hành vi cũ — không làm
+ * hệ thống NGHIÊM hơn lúc thiếu dữ liệu), run không có dấu vết lỗi nào, hoặc
+ * lesson không có ngữ cảnh để khớp. Chỉ trả false khi CÓ dấu vết lỗi rõ ràng
+ * và ngữ cảnh lesson KHÔNG chạm dấu vết đó — asymmetric có chủ đích: kệ thừa
+ * quy tội còn hơn quy oan (over-match ≈ hành vi cũ, under-match = thoát tội).
+ */
+function isLessonRelatedToFailure(
+  rec: { triggerCondition: string | null; appliesTo: string | null },
+  att?: LessonAttribution
+): boolean {
+  if (!att) return true
+  const trace: string[] = []
+  for (const t of att.failedTools ?? []) if (t) trace.push(String(t).toLowerCase())
+  for (const r of att.errorRootCauses ?? []) if (r) trace.push(String(r).toLowerCase())
+  for (const k of att.errorKeywords ?? []) if (k) trace.push(String(k).toLowerCase())
+  if (trace.length === 0) return true // FAILURE không có dấu vết lỗi → giữ hành vi cũ
+
+  const lessonText = [
+    rec.triggerCondition ?? '',
+    ...safeParseApplies(rec.appliesTo),
+  ].join(' ').toLowerCase()
+  if (!lessonText.trim()) return true // lesson không có ngữ cảnh để khớp → không loại oan
+
+  const tokens = lessonText.split(/[^\p{L}\p{N}_]+/u).filter(t => t.length > 2)
+  // Khớp 2 chiều substring: token 'query' khớp trace 'db_query'; trace
+  // 'timeout' khớp token 'timeout'/'timeouts'.
+  return tokens.some(tok => trace.some(tr => tr.includes(tok) || tok.includes(tr)))
 }
 
 /**
  * Nhịp 3 EVALUATE — cập nhật vòng đời lesson theo outcome run:
  *   SUCCESS + lesson đã áp dụng → times_validated++, confidence += 0.05
- *   FAILURE + lesson đã áp dụng → times_failed++, confidence −= 0.1
+ *   FAILURE + lesson đã áp dụng → times_failed++, confidence −0.1
  *     → confidence < 0.4 → needsReview = true (user xem lại)
+ *
+ * ROUND-32 P1-c: FAILURE chỉ quy tội lesson KHỚP ngữ cảnh lỗi (attribution);
+ * lesson không khớp → neutral (timesApplied++ nhưng KHÔNG đổi confidence,
+ * KHÔNG times_failed — không phạt oan). SUCCESS vẫn validate tất cả (bằng
+ * chứng yếu nhưng công bằng: lesson có mặt trong run thành công).
  */
 export async function validateAppliedLessons(
   appliedLessonIds: string[],
-  outcomeSuccess: boolean
+  outcomeSuccess: boolean,
+  attribution?: LessonAttribution
 ): Promise<ValidateLessonsResult> {
-  const result: ValidateLessonsResult = { validated: 0, failed: 0, flaggedForReview: [] }
+  const result: ValidateLessonsResult = { validated: 0, failed: 0, neutral: 0, flaggedForReview: [] }
   if (appliedLessonIds.length === 0) return result
   for (const id of appliedLessonIds.slice(0, 10)) {
     try {
       const rec = await findLessonRecordById(id)
       if (!rec) continue
-      const confidence = outcomeSuccess
-        ? Math.min(0.99, rec.confidence + EPISODIC_THRESHOLDS.lessonValidateBoost)
-        : Math.max(0, rec.confidence - EPISODIC_THRESHOLDS.lessonValidatePenalty)
+
+      // P1-c: FAILURE → chỉ penalize lesson LIÊN QUAN ngữ cảnh lỗi
+      const related = outcomeSuccess ? true : isLessonRelatedToFailure(rec, attribution)
+
+      const confidence = !outcomeSuccess && !related
+        ? rec.confidence // neutral — không đổi, không quy tội oan
+        : outcomeSuccess
+          ? Math.min(0.99, rec.confidence + EPISODIC_THRESHOLDS.lessonValidateBoost)
+          : Math.max(0, rec.confidence - EPISODIC_THRESHOLDS.lessonValidatePenalty)
       const needsReview = confidence < EPISODIC_THRESHOLDS.lessonNeedsReview
       const lesson: LessonNode = {
         id: rec.id,
@@ -231,7 +295,7 @@ export async function validateAppliedLessons(
         confidence,
         timesApplied: rec.timesApplied + 1,
         timesValidated: rec.timesValidated + (outcomeSuccess ? 1 : 0),
-        timesFailed: rec.timesFailed + (outcomeSuccess ? 0 : 1),
+        timesFailed: rec.timesFailed + (!outcomeSuccess && related ? 1 : 0),
         createdAt: rec.createdAt,
         source: (rec.source as LessonNode['source']) ?? 'SELF_DERIVED',
         needsReview,
@@ -240,12 +304,14 @@ export async function validateAppliedLessons(
       await upsertLessonNode(lesson).catch(() => {})
       await upsertLessonRecord(lesson).catch(() => {})
       if (outcomeSuccess) result.validated++
-      else result.failed++
-      if (needsReview) result.flaggedForReview.push(id)
+      else if (related) result.failed++
+      else result.neutral = (result.neutral ?? 0) + 1
+      if (needsReview && (!outcomeSuccess && related || outcomeSuccess)) result.flaggedForReview.push(id)
     } catch { /* fail-open từng lesson */ }
   }
-  if (result.validated + result.failed > 0) {
-    console.log(`[Episodic] Lesson validation: ${result.validated} validated, ${result.failed} failed${result.flaggedForReview.length > 0 ? `, ${result.flaggedForReview.length} cần review` : ''}`)
+  const neutralNote = (result.neutral ?? 0) > 0 ? `, ${(result.neutral ?? 0)} neutral (không quy tội — P1-c)` : ''
+  if (result.validated + result.failed > 0 || (result.neutral ?? 0) > 0) {
+    console.log(`[Episodic] Lesson validation: ${result.validated} validated, ${result.failed} failed${neutralNote}${result.flaggedForReview.length > 0 ? `, ${result.flaggedForReview.length} cần review` : ''}`)
   }
   return result
 }

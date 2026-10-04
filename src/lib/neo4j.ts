@@ -36,6 +36,17 @@ export const ENTITY_LABELS = [
 ] as const
 export type EntityLabel = (typeof ENTITY_LABELS)[number]
 
+// ==================== ROUND-32 P1-b — FULLTEXT INDEX LABEL SET ====================
+// Index entity_name_search từng hardcode chuỗi label tại chỗ tạo index và KHÔNG
+// bao giờ được đồng bộ lại sau redesign (gộp Tool+System → Technology, tách
+// Framework): `CREATE ... IF NOT EXISTS` không cập nhật index sẵn có trên Aura —
+// kết quả: 2 label LỚN NHẤT (Technology ~6.450 + Framework ~2.367 nodes) không
+// nằm trong fulltext index → resolveEntityByFuzzyName không bao giờ match chúng.
+// Từ P1-b: danh sách label dẫn xuất từ ENTITY_LABELS (nguồn duy nhất) + legacy
+// (node cũ trên cloud vẫn mang label trước redesign — giữ search được, không mất).
+export const LEGACY_ENTITY_LABELS = ['Algorithm', 'Language', 'Tool', 'System', 'Technique'] as const
+export const FULLTEXT_INDEX_LABELS = [...ENTITY_LABELS, ...LEGACY_ENTITY_LABELS] as const
+
 /** Supported relationship types
  *  Redesigned 2026-08-21: 14 → 15 rel types
  *  Removed (2): RELATED_TO (catch-all, no semantics), SUPPORTS (too vague)
@@ -719,8 +730,13 @@ export async function initializeNeo4jSchema(): Promise<{
 
   // Full-text index on entity names for CONTAINS / fuzzy search
   // This is MUCH faster than per-label CONTAINS scans
+  //
+  // ROUND-32 P1-b: index này giờ do migrateFulltextIndex() quản lý trọn đời
+  // (tạo + TỰ CHỮA khi định nghĩa lệch chuẩn — xem cuối initializeNeo4jSchema).
+  // Chỉ tạo khi CHƯA TỒN TẠI ở đây; nhánh index cũ sai label sẽ bị migration
+  // DROP+CREATE lại với FULLTEXT_INDEX_LABELS (8 label mới + 5 legacy).
   indexQueries.push(
-    `CREATE FULLTEXT INDEX entity_name_search IF NOT EXISTS FOR (n:Concept|Algorithm|Language|Tool|System|Technique|Vulnerability|Principle|Domain|Document|Person) ON EACH [n.name]`
+    `CREATE FULLTEXT INDEX entity_name_search IF NOT EXISTS FOR (n:${FULLTEXT_INDEX_LABELS.join('|')}) ON EACH [n.name]`
   )
 
   // Phase 2 SMOLAB Prop 2.5 — Vector indexes for embedding-based entity resolution.
@@ -788,8 +804,59 @@ export async function initializeNeo4jSchema(): Promise<{
     await new Promise((r) => setTimeout(r, 100))
   }
 
-  console.log(`[Neo4j] Schema initialized: ${constraints} constraints, ${indexes} indexes`)
+  // ROUND-32 P1-b — tự chữa định nghĩa fulltext index nếu đang lệch chuẩn.
+  // Chạy SAU vòng indexQueries phía trên: trường hợp index chưa tồn tại thì
+  // CREATE ở trên đã lo; trường hợp tồn tại với ĐỊNH NGHĨA CŨ (thiếu
+  // Technology/Framework, thừa label đã bỏ) thì chỉ DROP+CREATE mới sửa được.
+  await migrateFulltextIndex()
+
+  console.log(`[Neo4j] Schema initialized: ${constraints} constraints, ${indexes} indexes — fulltext labels = ${FULLTEXT_INDEX_LABELS.join('|')}`)
   return { constraints, indexes }
+}
+
+/**
+ * ROUND-32 P1-b — Migrate fulltext index entity_name_search (idempotent).
+ *
+ * SHOW INDEXES so sánh labelsOrTypes với FULLTEXT_INDEX_LABELS:
+ *   - khớp → no-op (boot hàng ngày không tốn gì thêm)
+ *   - lệch → DROP INDEX + CREATE lại với label chuẩn
+ *   - chưa có → CREATE (lớp phòng thủ 2, CREATE ở indexQueries đã phủ)
+ *
+ * Fail-open: lỗi Aura/timeout không được làm chết boot — chỉ warn (các query
+ * dùng index sẽ cảnh báo theo đường riêng của chúng).
+ */
+async function migrateFulltextIndex(): Promise<void> {
+  try {
+    const session = await getSession()
+    try {
+      const info = await session.executeRead((tx) => tx.run(
+        `SHOW INDEXES YIELD name, labelsOrTypes WHERE name = 'entity_name_search' RETURN labelsOrTypes`
+      ))
+      const current = (info.records[0]?.get('labelsOrTypes') as string[] | undefined) ?? null
+      const wanted = [...FULLTEXT_INDEX_LABELS].sort()
+      const currentSorted = current ? [...current].sort() : null
+
+      if (currentSorted && JSON.stringify(currentSorted) === JSON.stringify(wanted)) {
+        return // định nghĩa đã đúng — idempotent
+      }
+
+      if (currentSorted) {
+        // Index tồn tại với định nghĩa cũ — CREATE IF NOT EXISTS không bao giờ
+        // sửa được index sẵn có; buộc DROP rồi tạo lại đúng chuẩn.
+        await session.executeWrite((tx) => tx.run(`DROP INDEX entity_name_search IF EXISTS`))
+        console.log(`[Neo4j] P1-b migrate fulltext: DROP index cũ (labels lệch chuẩn: [${currentSorted.join(', ')}] → kỳ vọng [${wanted.join(', ')}])`)
+      }
+
+      await session.executeWrite((tx) => tx.run(
+        `CREATE FULLTEXT INDEX entity_name_search IF NOT EXISTS FOR (n:${FULLTEXT_INDEX_LABELS.join('|')}) ON EACH [n.name]`
+      ))
+      console.log(`[Neo4j] P1-b: fulltext entity_name_search tạo với ${FULLTEXT_INDEX_LABELS.length} label (8 mới + 5 legacy)`)
+    } finally {
+      await session.close()
+    }
+  } catch (err) {
+    console.warn('[Neo4j] P1-b fulltext migration failed (non-fatal):', err instanceof Error ? err.message : String(err))
+  }
 }
 
 // ==================== DRIVER CLEANUP ====================

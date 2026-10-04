@@ -87,6 +87,23 @@ function initialImportance(outcome: EpisodeOutcome, toolCalls: number, errors: n
   return Math.min(1, imp)
 }
 
+/**
+ * ROUND-32 P1-c — rút từ khóa ngữ cảnh từ text các tool thất bại (đơn giản,
+ * deterministic) cho LessonAttribution.errorKeywords. Chỉ lấy từ dài ≥ 4 ký tự
+ * (bỏ mạo từ/toán tử), cap số lượng — mục đích khớp token với trigger/appliesTo
+ * của lesson, không phải NLU.
+ */
+function extractErrorKeywords(texts: string[], limit = 20): string[] {
+  const seen = new Set<string>()
+  for (const t of texts) {
+    if (!t) continue
+    for (const w of String(t).toLowerCase().split(/[^\p{L}\p{N}_]+/u)) {
+      if (w.length >= 4 && !seen.has(w)) seen.add(w)
+    }
+  }
+  return Array.from(seen).slice(0, limit)
+}
+
 // ==================== PIPELINE A.5 ====================
 
 /**
@@ -268,9 +285,26 @@ export async function recordEpisodeFromRun(input: RecordEpisodeInput): Promise<R
     }
 
     // ── Bước 6: Validate lessons PRE-ACT đã áp dụng (EVALUATE nhịp 3) ──
+    // ROUND-32 P1-c: attribution ngữ cảnh lỗi — FAILURE chỉ quy tội lesson khớp
+    // dấu vết lỗi (tool thất bại / root cause / từ khóa message lỗi) thay vì
+    // phạt dàn trải cả episode. SUCCESS giữ nguyên semantics cũ (validate tất cả).
+    const failedToolNames = Array.from(new Set(
+      input.toolEvidence.filter(ev => !ev.success && ev.tool).map(ev => ev.tool)
+    ))
+    const errorRootCauses = Array.from(new Set(
+      errors.map(e => String(e.rootCause ?? '')).filter(Boolean)
+    ))
+    const attribution = {
+      failedTools: failedToolNames,
+      errorRootCauses,
+      errorKeywords: extractErrorKeywords(
+        input.toolEvidence.filter(ev => !ev.success).map(ev => ev.text)
+      ),
+    }
     const validation = await validateAppliedLessons(
       input.appliedLessonIds,
-      input.outcome === 'SUCCESS'
+      input.outcome === 'SUCCESS',
+      attribution
     ).catch(() => null)
     if (validation) {
       result.lessonsValidated = validation.validated

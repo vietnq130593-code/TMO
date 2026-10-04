@@ -5143,9 +5143,18 @@ export async function dbQuery(args: {
 
   // Forbidden write keywords — anywhere in the (comment-stripped) SQL.
   // Exception: `PRAGMA query_plan` (read-only EXPLAIN-style) is allowed.
+  //
+  // ROUND-32 P1-a: mở rộng danh sách — bản cũ bỏ sót một loạt verb GHI thật của
+  // SQLite khiến bypass LIVE (ENABLE_DB_QUERY=true): REPLACE INTO (ghi đầy đủ!),
+  // VACUUM (rewrite toàn bộ file DB), ANALYZE, REINDEX, BEGIN/COMMIT/ROLLBACK/
+  // SAVEPOINT/RELEASE (transaction control), MERGE, RETURNING (nhánh ghi trả row).
+  // Kèm LỚP 2 bên dưới: allow-list first-token — chống mọi verb chưa biết tên.
   const writeKeywords = [
     'INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'TRUNCATE',
     'CREATE', 'GRANT', 'REVOKE', 'ATTACH', 'DETACH',
+    'REPLACE', 'VACUUM', 'ANALYZE', 'REINDEX',
+    'BEGIN', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE',
+    'MERGE', 'RETURNING',
   ]
   for (const kw of writeKeywords) {
     // Word-boundary match to avoid false positives (e.g. column name containing "update")
@@ -5165,6 +5174,24 @@ export async function dbQuery(args: {
     return {
       success: false,
       error: 'SQL rejected by read-only guard: PRAGMA statements are not allowed (except PRAGMA query_plan)',
+      sql: rawSql.slice(0, 500),
+    }
+  }
+
+  // ---------- ROUND-32 P1-a LỚP 2: ALLOW-LIST FIRST-TOKEN ----------
+  // Deny-list (trên) chặn verb ĐÃ BIẾT TÊN; lớp này chặn MỌI thứ không thuộc
+  // 3 cửa đọc duy nhất của SQLite: SELECT / WITH (CTE) / EXPLAIN.
+  //   - WITH luôn read-only trong SQLite (SQLite KHÔNG hỗ trợ data-modifying CTE
+  //     như Postgres — CTE chỉ dùng được trong SELECT).
+  //   - EXPLAIN an toàn vì mọi verb ghi đi kèm đã bị deny-list chặn trước đó
+  //     (EXPLAIN INSERT ... → keyword INSERT bị chặn ở lớp trên).
+  //   - Ngoại lệ PRAGMA query_plan đi qua (đã pass nhánh PRAGMA phía trên —
+  //     regex dưới cho phép đúng ngoại lệ đó, không hơn).
+  // Bọc bypass kiểu `/* SELECT */ DELETE ...` (comment bị strip) cũng chết ở đây.
+  if (!/^\s*(SELECT|WITH|EXPLAIN|PRAGMA\s+QUERY_PLAN)\b/i.test(stripped)) {
+    return {
+      success: false,
+      error: 'SQL rejected by read-only guard: chỉ cho phép SELECT / WITH (CTE) / EXPLAIN / PRAGMA query_plan — câu lệnh phải BẮT ĐẦU bằng một trong các token này',
       sql: rawSql.slice(0, 500),
     }
   }
