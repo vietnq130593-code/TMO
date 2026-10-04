@@ -268,8 +268,19 @@ export async function GET(request: NextRequest) {
     // Raw chỉ giữ TOOL_METRIC_RETENTION_DAYS ngày (sweep instrumentation dọn
     // hàng ngày) — phần range xa hơn lấy từ rollup ToolMetricDaily (vĩnh viễn).
     // Fail-open: rollup lỗi → chỉ dùng raw (analytics không bao giờ 500 vì lớp này).
-    const retentionDaysRaw = Number(process.env.TOOL_METRIC_RETENTION_DAYS ?? 30)
-    const retentionDays = Number.isFinite(retentionDaysRaw) && retentionDaysRaw > 0 ? retentionDaysRaw : 30
+    //
+    // ROUND-34 (rà soát sau P2-a) — bịt 2 lỗ DOUBLE-COUNT:
+    //   (a) Sweep OFF (TOOL_METRIC_RETENTION_DAYS=0/invalid) nghĩa là raw KHÔNG
+    //       bao giờ bị dọn → raw đã phủ TOÀN BỘ range → KHÔNG merge rollup.
+    //       Bản cũ fallback retentionDays=30 khi env=0 → vẫn merge → cộng dồn
+    //       những ngày đã có trong raw (nếu sweep từng bật trước đó).
+    //   (b) Sweep ON nhưng raw của một ngày NÀO ĐÓ còn nguyên (deleteMany chưa
+    //       kịp xoá — sweep fail giữa chừng, hoặc lượt sweep chưa chạy sau khi
+    //       bật retention) → skip rollup của chính ngày đó (raw đã đếm rồi).
+    //       Bản cũ merge toàn bộ rollupRows → những ngày raw còn bị đếm 2 lần.
+    const retentionEnv = Number(process.env.TOOL_METRIC_RETENTION_DAYS ?? 30)
+    const sweepActive = Number.isFinite(retentionEnv) && retentionEnv > 0
+    const retentionDays = sweepActive ? retentionEnv : 0
     let rollup = {
       totalCalls: 0, successCount: 0, totalDurationMs: 0,
       uniqueTools: new Set<string>(), uniqueAgents: new Set<string>(),
@@ -277,16 +288,31 @@ export async function GET(request: NextRequest) {
     const rollupToolMap = new Map<string, { calls: number; successCount: number; totalDuration: number; errors: number; errorTags: Map<string, number> }>()
     const rollupAgentMap = new Map<string, { calls: number; successCount: number; totalDuration: number }>()
     const rollupDayMap = new Map<string, { calls: number; successCount: number }>()
-    if (days > retentionDays) {
+    if (sweepActive && days > retentionDays) {
       try {
         const toDateStr = (d: Date) => d.toISOString().slice(0, 10)
         const fromStr = toDateStr(from)
         const rawFromStr = toDateStr(new Date(to.getTime() - retentionDays * 24 * 60 * 60 * 1000))
         if (fromStr < rawFromStr) {
+          // (b) Tìm các ngày CÒN raw trong window rollup [fromStr, rawFromStr) —
+          // ngày còn raw đã được đếm qua `logs` ở trên, rollup của nó bị skip.
+          // (tagged-template $queryRaw + date(epoch-ms/1000,'unixepoch') — cùng
+          // chuẩn SQL sweep, KHÔNG strftime trực tiếp trên cột DateTime)
+          const fromMs = Date.parse(fromStr + 'T00:00:00.000Z')
+          const rawFromMs = Date.parse(rawFromStr + 'T00:00:00.000Z')
+          const rawDaysLeft = new Set(
+            (await db.$queryRaw<Array<{ d: string }>>`
+              SELECT DISTINCT date(timestamp / 1000, 'unixepoch') AS d
+              FROM ToolMetric
+              WHERE timestamp >= ${fromMs} AND timestamp < ${rawFromMs}
+            `).map(r => String(r.d))
+          )
           const rollupRows = await db.toolMetricDaily.findMany({
             where: { date: { gte: fromStr, lt: rawFromStr } },
           })
+          let skippedStillRaw = 0
           for (const r of rollupRows) {
+            if (rawDaysLeft.has(r.date)) { skippedStillRaw++; continue } // ngày còn raw — đã đếm, không cộng nữa
             rollup.totalCalls += r.calls
             rollup.successCount += r.successCount
             rollup.totalDurationMs += Number(r.totalDurationMs)
@@ -312,7 +338,7 @@ export async function GET(request: NextRequest) {
             rollupDayMap.set(r.date, d)
           }
           if (rollupRows.length > 0) {
-            console.log(`[Tools/Analytics] P2-a: cộng thêm ${rollupRows.length} rollup ngày cũ (< ${rawFromStr}) vào range ${days} ngày`) 
+            console.log(`[Tools/Analytics] P2-a: cộng ${rollupRows.length - skippedStillRaw}/${rollupRows.length} rollup ngày cũ (< ${rawFromStr}) vào range ${days} ngày${skippedStillRaw > 0 ? ` (skip ${skippedStillRaw} ngày còn raw — chống double-count round-34)` : ''}`) 
           }
         }
       } catch (err) {

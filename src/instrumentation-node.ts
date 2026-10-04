@@ -610,7 +610,11 @@ function sweepToolMetrics(): void {
         GROUP BY date, toolName, agentRole
       `
       if (rows.length === 0) return
+      // ROUND-34: rollupWritten chỉ đếm nhóm upsert THÀNH CÔNG + track số
+      // nhóm fail — điều kiện xoá raw bên dưới phụ thuộc 2 biến này (bản cũ
+      // đếm ++ bất kể .catch nuốt lỗi → log phóng đại + xoá raw sai điều kiện)
       let rollupWritten = 0
+      let rollupFailed = 0
       for (const r of rows) {
         // Top error tags cho nhóm này (top 10) — chỉ tính row thất bại
         // (date(...) + 'unixepoch' — cột là INTEGER epoch-ms, xem chú thích trên)
@@ -638,13 +642,28 @@ function sweepToolMetrics(): void {
             topErrorTags: JSON.stringify(topTags),
             computedAt: new Date(),
           },
-        }).catch(() => { /* từng row fail-open — sweep tổng tiếp tục */ })
-        rollupWritten++
+        }).then(() => { rollupWritten++ }).catch(() => {
+          // từng nhóm fail-open — sweep tổng tiếp tục, NHƯNG không được xoá
+          // raw của nhóm chưa rollup (xem điều kiện xoá bên dưới)
+          rollupFailed++
+        })
       }
 
       // (b) Xoá raw đã rollup (những ngày < cutoffDateStr) — CHỈ sau khi rollup
       // lượt này thành công cho MỌI nhóm (fail 1 nhóm thì giữ nguyên raw toàn bộ
       // để lượt sweep sau làm lại — an toàn hơn là mất dữ liệu).
+      // ROUND-34: bản cũ gọi deleteMany VÔ ĐIỀU KIỆN ngay sau vòng for dù comment
+      // hứa điều kiện trên — nếu upsert fail cho vài nhóm (DB locked tích tắc...)
+      // thì raw của chính những nhóm đó bị xoá trong khi rollup chưa ghi → MẤT
+      // DỮ LIỆU vĩnh viễn. Giờ chỉ xoá khi rollupFailed === 0; có fail → giữ
+      // toàn bộ raw (upsert idempotent nhờ @@unique nên lượt sweep sau 6h làm
+      // lại an toàn, không nhân đôi số).
+      if (rollupFailed > 0) {
+        console.warn(
+          `[ToolMetrics] retention: ${rollupFailed}/${rows.length} nhóm rollup FAIL — GIỮ NGUYÊN raw (không xoá) để lượt sweep sau làm lại (round-34 chống mất dữ liệu)`
+        )
+        return
+      }
       const deleted = await db.toolMetric.deleteMany({
         where: { timestamp: { lt: new Date(cutoffDateStr + 'T00:00:00.000Z') } },
       })

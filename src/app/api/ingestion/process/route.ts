@@ -2227,7 +2227,20 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
         document.processing_steps.every((s: { status: string }) => s.status === 'completed')) {
       // Double-check: verify embeddings and resolved entities actually exist
       const docChunkCount = await getChunkCount(documentId)
-      let hasEmbeddings = docChunkCount > 0
+      // ROUND-34 (lỗ hổng P0-5 sau rà soát): chunk count > 0 CHƯA chứng minh
+      // có vector thật — Step 4 upsert chunk với zero-vector placeholder cũng
+      // bị đếm. Doc "indexed giả" từ deployed cũ (steps completed giả + toàn
+      // zero-vector — kịch bản CHÍNH của P0-5) sẽ match early-exit này và
+      // return 'indexed' ngay, KHÔNG BAO GIỜ tới nhánh tự chữa verify-vector
+      // ở dưới (L31xx). Dùng cùng phép verify vector thật (withVector +
+      // epsilon 1e-9) như nhánh resume để 2 cửa ra quyết định như nhau.
+      let hasEmbeddings = false
+      if (docChunkCount > 0) {
+        const earlyEmbChunks = await getChunksByDocument(documentId, { limit: 10000, withVector: true })
+        hasEmbeddings =
+          earlyEmbChunks.length > 0 &&
+          earlyEmbChunks.every(c => (c.vector ?? []).some(x => Math.abs(x) > 1e-9))
+      }
       let hasResolved = false
       try {
         const resolvedCount = await db.localResolvedEntity.count({
@@ -3871,25 +3884,61 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
     // fail, provider trả vector rỗng, crash giữa chừng tái diễn, step status
     // 'completed' giả từ deployed cũ) — phát hiện thì giữ 'partial' + reset step
     // embeddings để lần chạy sau tự re-embed đúng chỗ (qua nhánh withVector ở trên).
+    //
+    // ROUND-34 (rà soát sau P0-5) — bịt lỗ FAIL-OPEN: getChunksByDocument NUỐT
+    // lỗi scroll và trả mảng RỖNG (qdrant.ts catch → []) — bản guard round-32
+    // thấy verifyChunks=[] → zeroVectorChunks=[] → đặt 'indexed' trong khi
+    // KHÔNG verify được gì. Kịch bản đúng lớp P0-5: Qdrant down/restart giữa
+    // Step 11→13 → updateChunkVectors fail (chỉ log) + guard mù → 'indexed' ảo
+    // vĩnh viễn. Giờ phân biệt 3 trạng thái:
+    //   (a) verify đủ + sạch vector → 'indexed'
+    //   (b) verify đủ + zero-vector / thiếu chunk → 'partial' + reset step
+    //   (c) verify MÙ (scroll [] hoặc thiếu so với số chunk pipeline đang giữ)
+    //       → retry 1 lần sau 1.5s, vẫn mù → 'partial' + reset step.
+    // 'partial' do verify mù TỰ CHỮA được (Qdrant trở lại → re-process → nhánh
+    // resume kiểm vector thật → đủ → guard sạch → 'indexed'); 'indexed' ảo thì
+    // KHÔNG bao giờ được xem lại — nên thiếu bằng chứng = không kết luận indexed.
     let finalStatus: 'indexed' | 'partial' = 'indexed'
     let guardWarning: string | undefined
     try {
-      const verifyChunks = await getChunksByDocument(documentId, { limit: 10000, withVector: true })
+      let verifyChunks = await getChunksByDocument(documentId, { limit: 10000, withVector: true })
+      const expectedCount = savedChunks.length
+      let verifyBlind = verifyChunks.length === 0 && expectedCount > 0
+      if (verifyBlind || verifyChunks.length < expectedCount) {
+        // Lượt 1 bất thường (mù hẳn hoặc thiếu point so với số chunk pipeline
+        // đang giữ) — chờ Qdrant indexer/gateway 1.5s rồi thử lại 1 lần
+        await new Promise((r) => setTimeout(r, 1500))
+        const retryChunks = await getChunksByDocument(documentId, { limit: 10000, withVector: true })
+        if (retryChunks.length > verifyChunks.length) verifyChunks = retryChunks
+        verifyBlind = verifyChunks.length === 0 && expectedCount > 0
+      }
       const zeroVectorChunks = verifyChunks.filter(c => !(c.vector ?? []).some(x => Math.abs(x) > 1e-9))
-      if (zeroVectorChunks.length > 0) {
+      const missingChunks = Math.max(0, expectedCount - verifyChunks.length)
+      if (zeroVectorChunks.length > 0 || missingChunks > 0 || verifyBlind) {
         finalStatus = 'partial'
-        guardWarning = `${zeroVectorChunks.length}/${verifyChunks.length} chunk vẫn zero-vector sau bước embeddings — giữ 'partial' để chạy lại (P0-5 guard)`
+        guardWarning = verifyBlind
+          ? `verify mù (scroll trả ${verifyChunks.length}/${expectedCount} chunk sau 2 lần — Qdrant lỗi/lag): KHÔNG có bằng chứng vector đầy đủ`
+          : missingChunks > 0
+            ? `${missingChunks} chunk mất khỏi Qdrant + ${zeroVectorChunks.length}/${verifyChunks.length} zero-vector — dữ liệu vector không đầy đủ`
+            : `${zeroVectorChunks.length}/${verifyChunks.length} chunk vẫn zero-vector sau bước embeddings — giữ 'partial' để chạy lại (P0-5 guard)`
         console.error(`[Process] P0-5 GUARD: ${guardWarning} (doc ${documentId.slice(0, 8)}...)`)
-        steps = markStepPending(steps, 'embeddings', `${zeroVectorChunks.length} chunk zero-vector — cần re-embed`)
+        steps = markStepPending(steps, 'embeddings', verifyBlind ? 'verify Qdrant lỗi — cần chạy lại' : `${zeroVectorChunks.length + missingChunks} chunk thiếu vector thật — cần re-embed`)
         await updateDocProgress(documentId, { status: 'partial', steps })
       } else {
         await updateDocProgress(documentId, { status: 'indexed' })
       }
     } catch (guardErr) {
-      // Verify fail (Qdrant chết giữa chừng...) — KHÔNG chặn pipeline, giữ hành
-      // vi cũ (tin bước embeddings vừa chạy); lỗi đã được log bởi qdrant helper.
-      console.warn('[Process] P0-5 guard verify failed (non-fatal — giữ status như pipeline kết luận):', guardErr instanceof Error ? guardErr.message : String(guardErr))
-      await updateDocProgress(documentId, { status: 'indexed' })
+      // Verify throw (exception thật từ chính guard) — KHÔNG đặt 'indexed' khi
+      // không verify được (round-34, cùng lý do trên); giữ 'partial' + reset
+      // step để lần chạy sau tự chữa. Không kẹt doc: Qdrant khỏe lại → re-process
+      // đi tiếp bình thường (nhánh resume bỏ qua đã-đủ-vector).
+      console.warn('[Process] P0-5 guard verify failed — giữ partial (round-34: không đặt indexed khi không verify được):', guardErr instanceof Error ? guardErr.message : String(guardErr))
+      finalStatus = 'partial'
+      guardWarning = 'guard verify throw — giữ partial, chạy lại "Xử lý" để xác thực vector'
+      try {
+        steps = markStepPending(steps, 'embeddings', 'guard verify lỗi — cần chạy lại')
+        await updateDocProgress(documentId, { status: 'partial', steps })
+      } catch { /* best-effort — để pipeline error handling phía ngoài */ }
     }
     invalidateDocumentCache()
 
@@ -4118,11 +4167,41 @@ async function runEmbedOnlyPipeline(documentId: string): Promise<Record<string, 
     }
     console.log(`[EmbedOnly] Saved ${embeddingsSaved}/${parseChunks.length} embeddings to Qdrant`)
 
-    // 6. Mark complete
-    const finalSteps = steps.map(s => ({ ...s, status: 'completed' as const, completedAt: s.completedAt || new Date().toISOString() }))
-    const finalPercent = 100
+    // ROUND-34 (BUG #5 — chuẩn hoá guard P0-5 cho đường phụ): embedOnly cũ mark
+    // 'indexed' + MỌI step completed bất kể upsertChunks fail hay provider trả
+    // vector rỗng/sai dim cho một phần chunk (emb.vector.length !== EMBED_DIM →
+    // bỏ lặng lẽ) → zero-vector stranded 'indexed' ảo — cùng lớp P0-5 mà đường
+    // chính đã có guard, đường này thì chưa. Verify vector thật trước khi kết
+    // luận; thiếu/verify mù → 'partial' + reset step embeddings để pipeline chính
+    // (nút "Xử lý") re-embed đúng chỗ thiếu (tự chữa — không kẹt doc).
+    let embedOnlyStatus: 'indexed' | 'partial' = 'indexed'
+    let embedOnlyWarning: string | undefined
+    try {
+      const verify = await getChunksByDocument(documentId, { limit: 10000, withVector: true })
+      const realCount = verify.filter(c => (c.vector ?? []).some(x => Math.abs(x) > 1e-9)).length
+      const expected = chunkPoints.length
+      if (verify.length < expected || realCount < expected) {
+        embedOnlyStatus = 'partial'
+        embedOnlyWarning = `${expected - realCount} chunk thiếu vector thật (scroll thấy ${verify.length}/${expected}, vector thật ${realCount}/${expected}) — giữ 'partial' để pipeline chính re-embed`
+        console.error(`[EmbedOnly] P0-5 guard: ${embedOnlyWarning}`)
+      }
+    } catch (verifyErr) {
+      // Verify mù (scroll lỗi) — không có bằng chứng thì không 'indexed'
+      // (cùng chuẩn guard chính round-34); 'partial' tự chữa qua re-process.
+      embedOnlyStatus = 'partial'
+      embedOnlyWarning = 'verify vector lỗi — giữ partial, chạy lại "Xử lý"'
+      console.warn('[EmbedOnly] P0-5 guard verify failed:', verifyErr instanceof Error ? verifyErr.message : String(verifyErr))
+    }
+
+    // 6. Mark complete — status theo guard; step embeddings phản ánh thật
+    // (partial → 'pending' để pipeline chính nhận diện chỗ cần làm lại)
+    let finalSteps: ProcessingStepRecord[] = steps.map(s => ({ ...s, status: 'completed' as const, completedAt: s.completedAt || new Date().toISOString() }))
+    if (embedOnlyStatus === 'partial') {
+      finalSteps = markStepPending(finalSteps, 'embeddings', embedOnlyWarning)
+    }
+    const finalPercent = embedOnlyStatus === 'indexed' ? 100 : 90
     await updateDocumentStatus(documentId, {
-      status: 'indexed',
+      status: embedOnlyStatus,
       processing_steps: finalSteps as DocumentPayload['processing_steps'],
       processing_percent: finalPercent,
       error_message: null,
@@ -4131,7 +4210,7 @@ async function runEmbedOnlyPipeline(documentId: string): Promise<Record<string, 
       await db.document.update({
         where: { id: documentId },
         data: {
-          status: 'indexed',
+          status: embedOnlyStatus,
           processingSteps: JSON.stringify(finalSteps),
           processingPercent: finalPercent,
           errorMessage: null,
@@ -4146,9 +4225,10 @@ async function runEmbedOnlyPipeline(documentId: string): Promise<Record<string, 
       provider: 'nvidia-embed-only',
       model: 'nvidia/nemotron-3-embed-1b',
       durationMs: Date.now() - startTime,
-      status: 'indexed' as const,
+      status: embedOnlyStatus,
       totalPages: parsedPages,
       skippedExtraction: true,
+      ...(embedOnlyWarning ? { warning: embedOnlyWarning } : {}),
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
