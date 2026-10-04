@@ -77,7 +77,7 @@ beforeEach(async () => {
 
 describe('P1-c — lesson credit assignment', () => {
   test('FAILURE + ngữ cảnh lỗi DB → lesson DB bị quy tội (−0.1), lesson LLM neutral (KHÔNG đổi)', async () => {
-    const r = await validateAppliedLessons([LESSON_DB, LESSON_LLM], false, {
+    const r = await validateAppliedLessons([LESSON_DB, LESSON_LLM], 'FAILURE', {
       failedTools: ['db_query'],
       errorRootCauses: ['RESOURCE_ERROR'],
       errorKeywords: ['database', 'sqlite', 'schema'],
@@ -101,7 +101,7 @@ describe('P1-c — lesson credit assignment', () => {
   })
 
   test('FAILURE + ngữ cảnh lỗi LLM → vai trò đảo ngược: lesson LLM bị quy tội, lesson DB neutral', async () => {
-    const r = await validateAppliedLessons([LESSON_DB, LESSON_LLM], false, {
+    const r = await validateAppliedLessons([LESSON_DB, LESSON_LLM], 'FAILURE', {
       failedTools: ['call_llm'],
       errorRootCauses: ['LLM_PARSE_ERROR'],
       errorKeywords: ['prompt', 'parse', 'json'],
@@ -117,7 +117,7 @@ describe('P1-c — lesson credit assignment', () => {
   })
 
   test('SUCCESS → validate TẤT CẢ (giữ nguyên semantics cũ — P1-c không đổi nhánh này)', async () => {
-    const r = await validateAppliedLessons([LESSON_DB, LESSON_LLM], true, {
+    const r = await validateAppliedLessons([LESSON_DB, LESSON_LLM], 'SUCCESS', {
       failedTools: [],
       errorRootCauses: [],
       errorKeywords: [],
@@ -132,7 +132,7 @@ describe('P1-c — lesson credit assignment', () => {
   })
 
   test('KHÔNG có attribution → fallback hành vi cũ: phạt tất cả (không làm hệ thống nghiêm hơn lúc thiếu dữ liệu)', async () => {
-    const r = await validateAppliedLessons([LESSON_DB, LESSON_LLM], false)
+    const r = await validateAppliedLessons([LESSON_DB, LESSON_LLM], 'FAILURE')
     expect(r.failed).toBe(2)
     expect(r.neutral ?? 0).toBe(0)
 
@@ -141,7 +141,7 @@ describe('P1-c — lesson credit assignment', () => {
   })
 
   test('FAILURE nhưng KHÔNG có dấu vết lỗi nào → vẫn giữ hành vi cũ (phạt tất cả)', async () => {
-    const r = await validateAppliedLessons([LESSON_DB], false, {
+    const r = await validateAppliedLessons([LESSON_DB], 'FAILURE', {
       failedTools: [],
       errorRootCauses: [],
       errorKeywords: [],
@@ -149,5 +149,41 @@ describe('P1-c — lesson credit assignment', () => {
     expect(r.failed).toBe(1)
     const dbLesson = await getLesson(LESSON_DB)
     expect(dbLesson.confidence).toBeCloseTo(0.7, 5)
+  })
+
+  // ROUND-35 (C-4): run ABANDONED/PARTIAL không còn bị ép vào nhánh phạt —
+  // bản cũ boolean ép mọi non-SUCCESS → FAILURE: user cancel run không lỗi
+  // nào cũng rút confidence của mọi lesson auto-applied (−0.1/lesson/cancel).
+  test('NEUTRAL (run ABANDONED/PARTIAL) → KHÔNG phạt lesson nào: confidence/timesFailed giữ nguyên, chỉ timesApplied++', async () => {
+    const r = await validateAppliedLessons([LESSON_DB, LESSON_LLM], 'NEUTRAL', {
+      failedTools: [],
+      errorRootCauses: [],
+      errorKeywords: [],
+    })
+    expect(r.validated).toBe(0)
+    expect(r.failed).toBe(0)
+    expect(r.neutral).toBe(2)
+    expect(r.flaggedForReview.length).toBe(0)
+
+    const dbLesson = await getLesson(LESSON_DB)
+    const llmLesson = await getLesson(LESSON_LLM)
+    expect(dbLesson.confidence).toBeCloseTo(0.8, 5) // KHÔNG đổi
+    expect(llmLesson.confidence).toBeCloseTo(0.8, 5) // KHÔNG đổi
+    expect(dbLesson.timesFailed).toBe(0)
+    expect(dbLesson.timesValidated).toBe(3) // KHÔNG tăng
+    expect(dbLesson.timesApplied).toBe(6) // lần áp dụng vẫn được đếm (thật)
+
+    // NEUTRAL kể cả khi CÓ dấu vết lỗi (cancel giữa chừng lúc tool đang fail —
+    // lỗi chưa kịp chứng minh lesson sai; phạt lúc này vẫn là quy oan)
+    const r2 = await validateAppliedLessons([LESSON_DB], 'NEUTRAL', {
+      failedTools: ['db_query'],
+      errorRootCauses: ['RESOURCE_ERROR'],
+      errorKeywords: ['database', 'sqlite'],
+    })
+    expect(r2.failed).toBe(0)
+    expect(r2.neutral).toBe(1)
+    const dbLesson2 = await getLesson(LESSON_DB)
+    expect(dbLesson2.confidence).toBeCloseTo(0.8, 5) // vẫn KHÔNG phạt
+    expect(dbLesson2.timesApplied).toBe(7)
   })
 })

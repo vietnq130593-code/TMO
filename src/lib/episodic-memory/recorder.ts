@@ -288,6 +288,10 @@ export async function recordEpisodeFromRun(input: RecordEpisodeInput): Promise<R
     // ROUND-32 P1-c: attribution ngữ cảnh lỗi — FAILURE chỉ quy tội lesson khớp
     // dấu vết lỗi (tool thất bại / root cause / từ khóa message lỗi) thay vì
     // phạt dàn trải cả episode. SUCCESS giữ nguyên semantics cũ (validate tất cả).
+    // ROUND-35 (C-4): outcome 3 trạng thái — ABANDONED (user cancel) và PARTIAL
+    // (budget/needs_input) KHÔNG phải bằng chứng thắng/thua → NEUTRAL: không
+    // phạt bài học nào (bản cũ ép vào nhánh phạt → cancel thường xuyên rút
+    // cạn confidence của các lesson hay dùng nhất).
     const failedToolNames = Array.from(new Set(
       input.toolEvidence.filter(ev => !ev.success && ev.tool).map(ev => ev.tool)
     ))
@@ -301,9 +305,14 @@ export async function recordEpisodeFromRun(input: RecordEpisodeInput): Promise<R
         input.toolEvidence.filter(ev => !ev.success).map(ev => ev.text)
       ),
     }
+    const lessonOutcome = input.outcome === 'SUCCESS'
+      ? 'SUCCESS' as const
+      : input.outcome === 'FAILURE'
+        ? 'FAILURE' as const
+        : 'NEUTRAL' as const
     const validation = await validateAppliedLessons(
       input.appliedLessonIds,
-      input.outcome === 'SUCCESS',
+      lessonOutcome,
       attribution
     ).catch(() => null)
     if (validation) {

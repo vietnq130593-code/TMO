@@ -977,6 +977,12 @@ function ConnectionStatus({ health, lastChecked, onRefresh, refreshing, error }:
                   {qdrant.version && <div>Version: {qdrant.version}</div>}
                   {qdrant.documentsCollection && <div>Documents: {qdrant.documentsCollection.pointCount?.toLocaleString() ?? 0} points</div>}
                   {qdrant.chunksCollection && <div>Chunks: {qdrant.chunksCollection.pointCount?.toLocaleString() ?? 0} points{qdrant.chunksCollection.vectorCount ? `, ${qdrant.chunksCollection.vectorCount.toLocaleString()} vectors` : ''}</div>}
+                  {/* ROUND-35 (B3): dim mismatch lộ ra UI — bản trước health vẫn 'healthy', UI mù hoàn toàn với lỗi cấu hình chết (mọi upsert 400) */}
+                  {qdrant.chunksCollection?.dimMismatch && (
+                    <div className="text-red-400 font-medium">
+                      ⚠ Dim mismatch: collection {qdrant.chunksCollection.dimActual}d ≠ model {qdrant.chunksCollection.dimExpected}d — mọi embedding bị từ chối. Đặt TMO_QDRANT_ALLOW_DIM_RECREATE=1 rồi restart để dựng lại collection (mất point local — cloud Neo4j/R2 nguyên vẹn).
+                    </div>
+                  )}
                 </>) : <div className="text-red-400">Error: {qdrantError || 'Không kết nối được'}</div>}
               </div>
             </StatusTooltipContent>

@@ -74,8 +74,19 @@ async function ensureQdrantInitialized() {
   if (!globalForInit.__qdrantInitialized) {
     globalForInit.__qdrantInitialized = true
     try {
-      await initializeCollections()
-      console.log('[Health] Qdrant collections initialized')
+      // ROUND-35 (B3): initializeCollections KHÔNG throw khi dim mismatch — nó
+      // trả { documents, chunks, error }. Bản cũ log "initialized" thành công
+      // cả khi result.chunks=false + error='dim-mismatch...' → thông điệp lừa
+      // vận hành. Giờ log đúng kết quả thật.
+      const res = await initializeCollections()
+      if (res && (res.chunks === false || res.documents === false)) {
+        console.warn(
+          '[Health] Qdrant initialization issue:',
+          res.error ?? `documents=${res.documents}, chunks=${res.chunks} (xem dim guard / TMO_QDRANT_ALLOW_DIM_RECREATE)`
+        )
+      } else {
+        console.log('[Health] Qdrant collections initialized')
+      }
     } catch (err) {
       console.warn('[Health] Qdrant initialization warning:', err instanceof Error ? err.message : String(err))
     }
@@ -134,7 +145,15 @@ export async function GET(request: NextRequest) {
     const responseTimeMs = Date.now() - startTime
     // Neo4j is OPTIONAL — the app works fine without it (chat, agents, skills, memory)
     // Only Qdrant + SQLite + at least 1 LLM provider are required for core functionality
-    const coreHealthy = qdrant.connected && sqlite.connected
+    // ROUND-35 (B3): dim mismatch PHẢI kéo status xuống 'degraded' — bản cũ chỉ
+    // thêm field dimMismatch vào JSON (P2-c) nhưng coreHealthy bỏ qua → đổi
+    // embedding model sai dim là lỗi cấu hình chết (mọi upsert 400) mà health
+    // vẫn xanh 'healthy' → operator không thấy đỏ đâu ngoài console FATAL.
+    // Lưu ý: tmo-keepalive chỉ check HTTP status (luôn 200) nên không tạo vòng restart.
+    const coreHealthy =
+      qdrant.connected &&
+      sqlite.connected &&
+      qdrant.chunksCollection?.dimMismatch !== true
     const anyLLMAvailable = Object.values(llm).some(v => v.available)
 
     return NextResponse.json({

@@ -44,6 +44,19 @@ const NVIDIA_EMBED_MODEL = process.env.NVIDIA_EMBED_MODEL || 'nvidia/nemotron-3-
 const NVIDIA_EMBED_DIMENSIONS = parseInt(process.env.NVIDIA_EMBED_DIMENSIONS || '2048', 10)
 const NVIDIA_EMBED_ENDPOINT = 'https://integrate.api.nvidia.com/v1/embeddings'
 
+// ROUND-35 (B7 — rà soát lượt 2): NVIDIA_EMBED_DIMENSIONS (Matryoshka request
+// param, gửi `dimensions` trong payload) phải KHỚP EMBEDDING_DIMENSION — mọi
+// validate vector trong hệ (L127/393/487/572/580...) đều so với 2048. Nếu env
+// đặt dim khác: provider trả ĐÚNG dim mới → mọi filter drop → doc kẹt
+// 'partial' mãi mãi, trong khi dim guard Qdrant thấy collection 2048 ==
+// EMBEDDING_DIMENSION 2048 → tưởng xanh (mâu thuẫn vô hình). Lộ to ngay từ
+// boot thay vì mò từng doc partial.
+if (Number.isFinite(NVIDIA_EMBED_DIMENSIONS) && NVIDIA_EMBED_DIMENSIONS !== EMBEDDING_DIMENSION) {
+  console.error(
+    `[Embedding] ⚠️ FATAL CẤU HÌNH: NVIDIA_EMBED_DIMENSIONS=${NVIDIA_EMBED_DIMENSIONS} ≠ EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION} — provider sẽ trả dim ${NVIDIA_EMBED_DIMENSIONS} nhưng mọi validate đều đòi ${EMBEDDING_DIMENSION} → TOÀN BỘ vector bị drop (doc kẹt 'partial' mãi). Đặt NVIDIA_EMBED_DIMENSIONS=${EMBEDDING_DIMENSION} hoặc bỏ env này.`
+  )
+}
+
 // OpenRouter Embedding — FALLBACK
 const OPENROUTER_EMBEDDING_MODEL = 'text-embedding-3-small'
 

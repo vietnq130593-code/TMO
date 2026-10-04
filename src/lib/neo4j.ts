@@ -812,10 +812,24 @@ export async function initializeNeo4jSchema(): Promise<{
   // Chạy SAU vòng indexQueries phía trên: trường hợp index chưa tồn tại thì
   // CREATE ở trên đã lo; trường hợp tồn tại với ĐỊNH NGHĨA CŨ (thiếu
   // Technology/Framework, thừa label đã bỏ) thì chỉ DROP+CREATE mới sửa được.
-  await migrateFulltextIndex()
+  await migrateNeo4jIndexes()
 
   console.log(`[Neo4j] Schema initialized: ${constraints} constraints, ${indexes} indexes — fulltext labels = ${FULLTEXT_INDEX_LABELS.join('|')}`)
   return { constraints, indexes }
+}
+
+/**
+ * ROUND-35 (C-3 — rà soát lượt 2): điểm vào duy nhất cho tự chữa index mỗi boot.
+ *
+ * Blueprint P1-b/P2-c thiết kế index tự phát hiện lệch + tự chữa MỖI BOOT,
+ * nhưng round-33 chỉ wire qua initializeNeo4jSchema — mà hàm đó chỉ được gọi
+ * từ POST /api/setup/neo4j (manual) và restore-neo4j → label đổi lần sau thì
+ * index lệch ÂM THẦM tới khi có người POST setup. instrumentation-node.ts giờ
+ * gọi wrapper này nền sau ensureDbReady (fail-open, không chặn boot).
+ */
+export async function migrateNeo4jIndexes(): Promise<void> {
+  await migrateFulltextIndex()
+  await migrateVectorIndexDims()
 }
 
 /**
@@ -860,6 +874,70 @@ async function migrateFulltextIndex(): Promise<void> {
     }
   } catch (err) {
     console.warn('[Neo4j] P1-b fulltext migration failed (non-fatal):', err instanceof Error ? err.message : String(err))
+  }
+}
+
+/**
+ * ROUND-35 (C-2 — rà soát lượt 2): verify DIM các vector index entity_embedding_*.
+ *
+ * Lỗ để lộ bởi rà soát lượt 2: initializeNeo4jSchema CREATE vector index với
+ * dim động (getEmbeddingDimension) nhưng khi index ĐÃ TỒN TẠI thì catch
+ * "already exists" = success — đổi embedding model (dim khác) làm index cũ
+ * sai dim KẸT VĨNH VIỄN (CREATE IF NOT EXISTS không bao giờ sửa index sẵn có
+ * — cùng bài học P1-b fulltext, nhưng pattern migrate chưa được áp cho vector).
+ * Hậu quả: semanticEntitySearch fail từng label → rơi lexical-only mãi mãi
+ * cho tới khi DROP tay. Giờ SHOW INDEXES so `options.indexConfig['vector.dimensions']`
+ * với dim chuẩn → lệch thì DROP+CREATE lại đúng dim (idempotent — khớp là no-op).
+ */
+async function migrateVectorIndexDims(): Promise<void> {
+  try {
+    const expectedDim = getEmbeddingDimension()
+    const session = await getSession()
+    try {
+      const info = await session.executeRead((tx) => tx.run(
+        `SHOW INDEXES YIELD name, type, options
+         WHERE type = 'VECTOR' AND name STARTS WITH 'entity_embedding_'
+         RETURN name, options`
+      ))
+      let fixed = 0
+      for (const record of info.records) {
+        const name = String(record.get('name'))
+        const options = record.get('options') as
+          | { indexConfig?: Record<string, unknown> }
+          | null
+          | undefined
+        const dimRaw = options?.indexConfig?.['vector.dimensions']
+        const dim = Number(dimRaw)
+        if (Number.isFinite(dim) && dim === expectedDim) continue // đúng dim — no-op
+
+        // Tìm lại label gốc từ tên index (entity_embedding_<label lowercase>)
+        const labelLower = name.replace('entity_embedding_', '')
+        const label = ENTITY_LABELS.find((l) => l.toLowerCase() === labelLower)
+        if (!label) {
+          console.warn(`[Neo4j] P2-c migrate vector: không nhận diện được label từ index "${name}" (dim ${dimRaw ?? '?'}) — bỏ qua an toàn`)
+          continue
+        }
+        // DROP + CREATE lại đúng dim (Aura không hỗ trợ IF NOT EXISTS cho
+        // CREATE VECTOR INDEX — pattern initializeNeo4jSchema: CREATE thường +
+        // DROP IF EXISTS trước đó nên an toàn chạy lại).
+        await session.executeWrite((tx) => tx.run(`DROP INDEX ${name} IF EXISTS`))
+        await session.executeWrite((tx) => tx.run(
+          `CREATE VECTOR INDEX ${name} FOR (n:${label}) ON (n.embedding)
+           OPTIONS { indexConfig: { \`vector.dimensions\`: ${expectedDim}, \`vector.similarity_function\`: 'cosine' } }`
+        ))
+        fixed++
+        console.warn(
+          `[Neo4j] P2-c migrate vector index: ${name} dim ${dimRaw ?? '?'} ≠ chuẩn ${expectedDim} — đã DROP+CREATE lại đúng dim (round-35)`
+        )
+      }
+      if (fixed > 0) {
+        console.log(`[Neo4j] P2-c: ${fixed} vector index được dựng lại đúng dim ${expectedDim}`)
+      }
+    } finally {
+      await session.close()
+    }
+  } catch (err) {
+    console.warn('[Neo4j] P2-c vector index dim migration failed (non-fatal):', err instanceof Error ? err.message : String(err))
   }
 }
 

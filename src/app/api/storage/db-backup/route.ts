@@ -85,6 +85,18 @@ async function resolveLiveDbPath(): Promise<string | null> {
 }
 
 /**
+ * ROUND-35 (A-2 — rà soát lượt 2): trích findProjectRoot dùng chung.
+ * Bản cũ lồng logic này trong fallbackDbPath nên caller khác không dùng lại được.
+ */
+function findProjectRoot(): string | null {
+  let root = process.cwd()
+  for (let i = 0; i < 6 && !fsSync.existsSync(path.join(root, 'prisma', 'schema.prisma')); i++) {
+    root = path.dirname(root)
+  }
+  return fsSync.existsSync(path.join(root, 'prisma', 'schema.prisma')) ? root : null
+}
+
+/**
  * Fallback: suy ra path theo đúng chuẩn hoá của src/lib/db.ts (schema-relative
  * `file:../db/custom.db` → <projectRoot>/db/custom.db). Chỉ chấp nhận khi file
  * TỒN TẠI và NẰM TRONG project root — chống mọi biến thể trỏ ra ngoài (scaffold
@@ -93,11 +105,8 @@ async function resolveLiveDbPath(): Promise<string | null> {
 function fallbackDbPath(): string | null {
   try {
     // findProjectRoot — cùng logic db.ts: đi lên tối đa 6 cấp tìm prisma/schema.prisma
-    let root = process.cwd()
-    for (let i = 0; i < 6 && !fsSync.existsSync(path.join(root, 'prisma', 'schema.prisma')); i++) {
-      root = path.dirname(root)
-    }
-    if (!fsSync.existsSync(path.join(root, 'prisma', 'schema.prisma'))) return null
+    const root = findProjectRoot()
+    if (!root) return null
 
     // Đọc DATABASE_URL từ .env của project (nguồn sự thật — không tin env kế thừa)
     let envUrl = ''
@@ -135,6 +144,25 @@ async function resolveAndVerifyDbPath(): Promise<
       error:
         `DB path mismatch: Prisma đang mở "${livePath}" nhưng .env của project trỏ "${fallbackPath}". ` +
         'Từ chối backup/restore để tránh thao tác trên DB sai (kịch bản env-leak DATABASE_URL — chạy app qua `pm2-start.sh` đã unset DATABASE_URL, hoặc kiểm tra env shell).',
+    }
+  }
+
+  // ROUND-35 (A-2): lỗ guard khi fallbackPath NULL — mismatch-guard bản cũ chỉ
+  // so khớp khi CẢ HAI path sống. Khi DB theo .env CHƯA tồn tại (reset sạch,
+  // chưa db:deploy) + shell trap env-leak (DATABASE_URL scaffold) → livePath =
+  // DB scaffold, fallback = null → guard im lặng, route thao tác DB ngoài project.
+  // Giờ: livePath nằm NGOÀI project root mà .env project không xác nhận được
+  // path đó → từ chối thẳng (kịch bản đúng chính là trap — DB thật luôn nằm
+  // trong <projectRoot>/db/).
+  if (livePath && !fallbackPath) {
+    const root = findProjectRoot()
+    if (root && livePath !== root && !livePath.startsWith(root + path.sep)) {
+      return {
+        ok: false,
+        error:
+          `DB path ngoài project: Prisma đang mở "${livePath}" — nằm ngoài project root "${root}" và .env của project không trỏ tới nó (fallback không xác nhận được). ` +
+          'Từ chối backup/restore: khả năng cao app đang mở nhầm DB của project khác qua env-leak DATABASE_URL (chạy qua `pm2-start.sh` đã unset DATABASE_URL).',
+      }
     }
   }
 
@@ -345,44 +373,112 @@ export async function POST(request: NextRequest) {
     }
 
     // === RESTORE ===
+    //
+    // ROUND-35 (A-1 — rà soát lượt 2): restore là thao tác DUY NHẤT phá DB chạy
+    // thật. Bản cũ có 3 khuyết điểm:
+    //   (a) tải về ghi ĐÈ thẳng DB_PATH (truncate in-place cùng inode) trong khi
+    //       Prisma vẫn giữ fd + page cache của DB cũ — writer nền (goal-loop
+    //       worker tick 5s, sweep 6h, traffic) kịp ghi stale page vào file vừa
+    //       restore → hỏng bản restore TỒN TẠI QUA restart;
+    //   (b) KHÔNG kiểm buffer là SQLite hợp lệ TRƯỚC KHI PHÁ (backup có verify
+    //       sau upload, restore thì không verify trước khi ghi — không đối xứng);
+    //   (c) KHÔNG tự backup DB hiện tại trước khi đè — bản R2 hỏng = mất trắng.
+    // Trình tự mới: (1) tải về tmp cùng thư mục → (2) verify SQLite magic + size
+    // → (3) pre-restore backup DB hiện tại lên R2 (best-effort, cảnh báo khi fail)
+    // → (4) fs.rename tmp → DB_PATH (atomic swap inode — process giữ fd cũ đọc
+    // dữ liệu cũ tới khi restart, KHÔNG ghi stale page đè bản mới) → (5) xoá
+    // WAL/SHM cũ → (6) dọn tmp nếu còn.
     if (action === 'restore') {
       const keyToRestore = versionKey || R2_LATEST_KEY
+      const tmpRestore = DB_PATH + '.restore-tmp'
+      let preRestoreBackupKey: string | undefined
+      let preRestoreWarning: string | undefined
 
-      // 1. Download from R2 → local path. downloadFileFromR2 writes to a
-      //    target path; we restore directly to the LIVE DB path so Prisma
-      //    picks up the new file on next restart.
-      const result = await downloadFileFromR2(keyToRestore, DB_PATH)
-      if (!result.success) {
-        return NextResponse.json(
-          { error: 'R2 download failed', detail: result.error, key: keyToRestore },
-          { status: 500 }
-        )
-      }
-
-      // 2. Delete the stale WAL/SHM files — they belong to the OLD database
-      //    and would corrupt the restored one if left in place.
-      for (const ext of ['-wal', '-shm']) {
-        try {
-          await fs.unlink(DB_PATH + ext)
-          console.log(`[DB-Backup] Deleted stale ${ext} file`)
-        } catch {
-          // ignore — file may not exist
+      try {
+        // (1) Tải về file tạm cùng thư mục với DB (đảm bảo cùng filesystem cho
+        // fs.rename atomic ở bước 4) — KHÔNG chạm DB_PATH nữa.
+        const result = await downloadFileFromR2(keyToRestore, tmpRestore)
+        if (!result.success) {
+          return NextResponse.json(
+            { error: 'R2 download failed', detail: result.error, key: keyToRestore },
+            { status: 500 }
+          )
         }
+
+        // (2) Verify TRƯỚC KHI PHÁ: magic 16 byte "SQLite format 3\0" + size > 0.
+        // Bản R2 hỏng/truncated/sai key → DB chạy thật NGUYÊN VẸN (chưa bị chạm).
+        const downloaded = await fs.readFile(tmpRestore)
+        const SQLITE_MAGIC = Buffer.from('SQLite format 3\0', 'binary')
+        const headerOk = downloaded.length >= 100 && downloaded.subarray(0, 16).equals(SQLITE_MAGIC)
+        if (!headerOk || downloaded.length === 0) {
+          await fs.unlink(tmpRestore).catch(() => { /* dọn best-effort */ })
+          return NextResponse.json(
+            {
+              error: 'Backup verify FAILED trước khi restore',
+              detail: `Buffer tải về không phải file SQLite hợp lệ (magic ${headerOk ? 'OK' : 'SAI'}, ${downloaded.length} bytes) — DB hiện tại NGUYÊN VẸN, chưa bị ghi đè. Kiểm tra key/integrity của bản backup này.`,
+              key: keyToRestore,
+            },
+            { status: 500 }
+          )
+        }
+
+        // (3) Pre-restore backup DB hiện tại (điểm khôi phục nếu bản restore tồi)
+        // — best-effort: DB hiện tại có thể đang hỏng (chính là lý do restore),
+        // fail thì chỉ cảnh báo, không chặn thao tác có chủ đích của operator.
+        try {
+          const pre = await snapshotDbToBuffer(DB_PATH)
+          const preTimestamp = new Date().toISOString().replace(/[:.]/g, '-')
+          preRestoreBackupKey = `${R2_PREFIX}pre-restore-${preTimestamp}.db`
+          const preResult = await uploadToR2(preRestoreBackupKey, pre.buffer, 'application/octet-stream')
+          if (!preResult.success) {
+            preRestoreBackupKey = undefined
+            preRestoreWarning = `Pre-restore backup upload failed: ${preResult.error ?? 'unknown'} — tiếp tục restore theo yêu cầu (operator chủ đích).`
+          } else {
+            console.log(`[DB-Backup] Pre-restore backup saved: ${preRestoreBackupKey} (${(pre.buffer.length / 1024 / 1024).toFixed(2)} MB, ${pre.method})`)
+          }
+        } catch (preErr) {
+          preRestoreWarning = `Pre-restore backup failed: ${preErr instanceof Error ? preErr.message : String(preErr)} — tiếp tục restore theo yêu cầu (operator chủ đích).`
+        }
+
+        // (4) Atomic swap: rename tmp → DB_PATH. POSIX rename ghi đè tên bằng
+        // inode MỚI trong 1 thao tác — process đang giữ fd của DB cũ tiếp tục
+        // đọc inode cũ (dữ liệu cũ) tới khi restart, mọi ghi của chúng bị ghi
+        // vào inode cũ đã tách tên (mất theo restart) — KHÔNG BAO GIỜ đè lên
+        // nội dung file mới như writeFile truncate-in-place từng làm.
+        await fs.rename(tmpRestore, DB_PATH)
+
+        // (5) Xoá WAL/SHM cũ — chúng thuộc DB cũ và sẽ làm hỏng file mới nếu
+        // connection sống tái tạo/lưu lại frame.
+        for (const ext of ['-wal', '-shm']) {
+          try {
+            await fs.unlink(DB_PATH + ext)
+            console.log(`[DB-Backup] Deleted stale ${ext} file`)
+          } catch {
+            // ignore — file may not exist
+          }
+        }
+
+        console.log(
+          `[DB-Backup] Restored ${keyToRestore} → ${DB_PATH} (${downloaded.length} bytes, atomic rename${preRestoreBackupKey ? `, pre-restore backup: ${preRestoreBackupKey}` : ''})`
+        )
+
+        return NextResponse.json({
+          success: true,
+          action: 'restore',
+          key: keyToRestore,
+          sizeBytes: downloaded.length,
+          dbPath: DB_PATH,
+          verifiedBeforeWrite: true,
+          preRestoreBackupKey,
+          ...(preRestoreWarning ? { preRestoreWarning } : {}),
+          warning:
+            'SQLite DB restored (verify magic + pre-restore backup + atomic rename). The Next.js dev server MUST be restarted (PM2: pm2 restart theopusflashlite) so Prisma re-opens the new database file. In-memory caches and the Qdrant/Neo4j clients are unaffected.',
+        })
+      } catch (restoreErr) {
+        // Dọn tmp best-effort rồi rethrow cho handler ngoài
+        await fs.unlink(tmpRestore).catch(() => { /* đã rename hoặc không tồn tại */ })
+        throw restoreErr
       }
-
-      console.log(
-        `[DB-Backup] Restored ${keyToRestore} → ${DB_PATH} (${result.size} bytes)`
-      )
-
-      return NextResponse.json({
-        success: true,
-        action: 'restore',
-        key: keyToRestore,
-        sizeBytes: result.size,
-        dbPath: DB_PATH,
-        warning:
-          'SQLite DB restored. The Next.js dev server MUST be restarted (PM2: pm2 restart theopusflashlite) so Prisma re-opens the new database file. In-memory caches and the Qdrant/Neo4j clients are unaffected.',
-      })
     }
 
     return NextResponse.json(

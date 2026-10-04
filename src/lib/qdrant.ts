@@ -676,9 +676,16 @@ export async function upsertChunks(
  * sai trên resume. updateVectors là API đúng semantics: chỉ chạm vector.
  *
  * Yêu cầu: point phải ĐÃ tồn tại (được upsert sẵn ở Step 4 với payload đầy đủ —
- * mọi đường đến đây trong pipeline đều đi qua Step 4 trước). Với point chưa tồn
- * tại, Qdrant bỏ qua ID đó (không tạo point mới, không lỗi) — P0-5 guard cuối
- * pipeline sẽ bắt trường hợp chunk thiếu vector còn sót.
+ * mọi đường đến đây trong pipeline đều đi qua Step 4 trước).
+ *
+ * ROUND-35 (B2 — rà soát lượt 2, sửa comment sai semantics): Qdrant 1.13 với
+ * updateVectors chứa ID KHÔNG tồn tại trả HTTP 404 và từ chối CẢ BATCH (đã
+ * probe sống: point tồn tại cùng batch KHÔNG được update, vector giữ nguyên)
+ * — KHÔNG phải "bỏ qua im lặng từng ID" như comment cũ tin. Không đổi hành vi
+ * code (throw → return false → P0-5 guard giữ 'partial' — đã an toàn), chỉ
+ * đóng khung đúng: 1 point thiếu làm đổ cả batch 100. Thực tế ID luôn đến từ
+ * scroll point đang tồn tại nên rất hiếm khi chạm; nếu batch lớn từng fail 404
+ * trong log, cân nhắc tách batch nhỏ hơn để khoanh vùng point thiếu.
  */
 export async function updateChunkVectors(
   points: Array<{ id: string; vector: number[] }>

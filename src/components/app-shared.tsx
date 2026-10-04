@@ -27,7 +27,7 @@ export interface HealthResponse {
 }
 
 
-export interface QdrantHealth { connected: boolean; version?: string; error?: string; documentsCollection?: { exists: boolean; pointCount?: number }; chunksCollection?: { exists: boolean; pointCount?: number; vectorCount?: number } }
+export interface QdrantHealth { connected: boolean; version?: string; error?: string; documentsCollection?: { exists: boolean; pointCount?: number }; chunksCollection?: { exists: boolean; pointCount?: number; vectorCount?: number; dimExpected?: number; dimActual?: number; dimMismatch?: boolean } }
 
 export interface Neo4jHealth { connected: boolean; nodeCount: number; relationshipCount: number; labels: string[]; error?: string }
 

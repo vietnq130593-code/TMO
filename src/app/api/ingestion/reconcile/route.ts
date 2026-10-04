@@ -104,6 +104,15 @@ function percentFor(steps: ProcessingStepRecord[]): number {
 
 /** Build a map docId → chunkCount by scrolling the Qdrant chunks collection. */
 async function buildChunkCountMap(): Promise<Map<string, number>> {
+  // 3. Qdrant chunk counts (detect whether embeddings survived)
+  // ROUND-35 (B4 — rà soát lượt 2): đếm chunk CÓ VECTOR THẬT thay vì mọi point.
+  // Bản cũ with_vector:false + đếm mọi point → zero-vector placeholder
+  // (upsert Step 4) cũng bị đếm là "embeddings survived" → doc stranded
+  // zero-vector từ deployed cũ bị reconcile đánh 'indexed' GIẢ + mọi step
+  // completed (đường thứ 3 cùng bẫy P0-5 — pipeline đã bịt, reconcile thì
+  // chưa). Tự chữa được (pipeline giờ verify vector thật) nhưng label sai
+  // + chunk zero nằm chờ tới khi có người bấm "Xử lý". Epsilon 1e-9 chống
+  // float noise — cùng chuẩn verify pipeline.
   const map = new Map<string, number>()
   try {
     // next_page_offset của qdrant client ≥1.19 có thể là Record (extended format) —
@@ -114,12 +123,17 @@ async function buildChunkCountMap(): Promise<Map<string, number>> {
         limit: 256,
         offset: scrollOffset,
         with_payload: true,
-        with_vector: false,
+        with_vector: true, // ROUND-35 (B4): cần vector để phân biệt thật/zero
       })
       for (const p of result.points) {
         const payload = (p.payload as Record<string, unknown>) || {}
         const docId = String(payload.document_id ?? payload.documentId ?? '')
-        if (docId) map.set(docId, (map.get(docId) ?? 0) + 1)
+        const vec = p.vector as number[] | number[][] | undefined
+        // vector unnamed → number[]; named (multi-vector) → mảng theo tên —
+        // collection này luôn unnamed nên xử lý thẳng number[]
+        const flat = Array.isArray(vec) && typeof vec[0] === 'number' ? (vec as number[]) : []
+        const hasRealVector = flat.some(x => Math.abs(x) > 1e-9)
+        if (docId && hasRealVector) map.set(docId, (map.get(docId) ?? 0) + 1)
       }
       scrollOffset = result.next_page_offset
     } while (scrollOffset)

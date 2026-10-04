@@ -264,27 +264,42 @@ function isLessonRelatedToFailure(
  * lesson không khớp → neutral (timesApplied++ nhưng KHÔNG đổi confidence,
  * KHÔNG times_failed — không phạt oan). SUCCESS vẫn validate tất cả (bằng
  * chứng yếu nhưng công bằng: lesson có mặt trong run thành công).
+ *
+ * ROUND-35 (C-4 — rà soát lượt 2): outcome 3 TRẠNG THÁI thay vì boolean —
+ * bản cũ ép mọi non-SUCCESS vào nhánh phạt: run ABANDONED (user cancel —
+ * mapOutcome) hoặc PARTIAL (budget/needs_input) mà KHÔNG có tool fail nào →
+ * attribution rỗng → isLessonRelatedToFailure trả true (theo chủ đích
+ * fail-open) → MỌI lesson auto-applied bị −0.1 + timesFailed++. Cancel thường
+ * xuyên (hành vi user bình thường) rút cạn confidence của chính các lesson
+ * hay được retrieve nhất → tụt dưới ngưỡng auto-apply 0.3/0.7 âm thầm.
+ * NEUTRAL: run không phải bằng chứng thắng hay thua — mọi lesson chỉ
+ * timesApplied++, KHÔNG đổi confidence/timesValidated/timesFailed.
  */
+export type LessonValidationOutcome = 'SUCCESS' | 'FAILURE' | 'NEUTRAL'
+
 export async function validateAppliedLessons(
   appliedLessonIds: string[],
-  outcomeSuccess: boolean,
+  outcome: LessonValidationOutcome,
   attribution?: LessonAttribution
 ): Promise<ValidateLessonsResult> {
   const result: ValidateLessonsResult = { validated: 0, failed: 0, neutral: 0, flaggedForReview: [] }
   if (appliedLessonIds.length === 0) return result
+  const outcomeSuccess = outcome === 'SUCCESS'
+  const penalize = outcome === 'FAILURE'
   for (const id of appliedLessonIds.slice(0, 10)) {
     try {
       const rec = await findLessonRecordById(id)
       if (!rec) continue
 
       // P1-c: FAILURE → chỉ penalize lesson LIÊN QUAN ngữ cảnh lỗi
-      const related = outcomeSuccess ? true : isLessonRelatedToFailure(rec, attribution)
+      // NEUTRAL → không phạt lesson nào (C-4)
+      const related = penalize && isLessonRelatedToFailure(rec, attribution)
 
-      const confidence = !outcomeSuccess && !related
-        ? rec.confidence // neutral — không đổi, không quy tội oan
-        : outcomeSuccess
-          ? Math.min(0.99, rec.confidence + EPISODIC_THRESHOLDS.lessonValidateBoost)
-          : Math.max(0, rec.confidence - EPISODIC_THRESHOLDS.lessonValidatePenalty)
+      const confidence = outcomeSuccess
+        ? Math.min(0.99, rec.confidence + EPISODIC_THRESHOLDS.lessonValidateBoost)
+        : related
+          ? Math.max(0, rec.confidence - EPISODIC_THRESHOLDS.lessonValidatePenalty)
+          : rec.confidence // neutral — không đổi (lesson không khớp lỗi HOẶC outcome NEUTRAL)
       const needsReview = confidence < EPISODIC_THRESHOLDS.lessonNeedsReview
       const lesson: LessonNode = {
         id: rec.id,
@@ -295,7 +310,7 @@ export async function validateAppliedLessons(
         confidence,
         timesApplied: rec.timesApplied + 1,
         timesValidated: rec.timesValidated + (outcomeSuccess ? 1 : 0),
-        timesFailed: rec.timesFailed + (!outcomeSuccess && related ? 1 : 0),
+        timesFailed: rec.timesFailed + (related ? 1 : 0),
         createdAt: rec.createdAt,
         source: (rec.source as LessonNode['source']) ?? 'SELF_DERIVED',
         needsReview,
@@ -306,12 +321,12 @@ export async function validateAppliedLessons(
       if (outcomeSuccess) result.validated++
       else if (related) result.failed++
       else result.neutral = (result.neutral ?? 0) + 1
-      if (needsReview && (!outcomeSuccess && related || outcomeSuccess)) result.flaggedForReview.push(id)
+      if (needsReview && (outcomeSuccess || related)) result.flaggedForReview.push(id)
     } catch { /* fail-open từng lesson */ }
   }
   const neutralNote = (result.neutral ?? 0) > 0 ? `, ${(result.neutral ?? 0)} neutral (không quy tội — P1-c)` : ''
   if (result.validated + result.failed > 0 || (result.neutral ?? 0) > 0) {
-    console.log(`[Episodic] Lesson validation: ${result.validated} validated, ${result.failed} failed${neutralNote}${result.flaggedForReview.length > 0 ? `, ${result.flaggedForReview.length} cần review` : ''}`)
+    console.log(`[Episodic] Lesson validation (outcome=${outcome}): ${result.validated} validated, ${result.failed} failed${neutralNote}${result.flaggedForReview.length > 0 ? `, ${result.flaggedForReview.length} cần review` : ''}`)
   }
   return result
 }

@@ -36,7 +36,7 @@
 
 import { qdrant } from '@/lib/qdrant'
 import { safeSession, toNative } from '@/lib/neo4j'
-import { generateEmbeddingBatch } from '@/lib/embeddings'
+import { generateEmbeddingBatch, getEmbeddingDimension } from '@/lib/embeddings'
 import { leidenCommunityDetection, type LeidenEdge } from '@/lib/leiden'
 import { isFlagEnabled } from '@/lib/feature-flags'
 import { createHash } from 'crypto'
@@ -422,8 +422,13 @@ async function ensureCommunityCollection(): Promise<void> {
   const collections = await qdrant.getCollections()
   const existing = new Set(collections.collections.map(c => c.name))
   if (!existing.has(COLLECTION_COMMUNITIES)) {
+    // ROUND-35 (B5/C-1 — rà soát lượt 2): dim động từ nguồn chung
+    // getEmbeddingDimension() — 2 chỗ này là hardcode 2048 CUỐI CÙNG còn sót
+    // (mọi collection khác đã động sau P2-c). Đổi embedding model → nếu còn
+    // hardcode, upsert community 400 mất im lặng (warn + fail-open) → routing
+    // community suy giảm mà không ai biết.
     await qdrant.createCollection(COLLECTION_COMMUNITIES, {
-      vectors: { size: 2048, distance: 'Cosine' },
+      vectors: { size: getEmbeddingDimension(), distance: 'Cosine' },
     })
     console.log(`[Communities] Created Qdrant collection: ${COLLECTION_COMMUNITIES}`)
   }
@@ -447,8 +452,9 @@ async function storeCommunityEmbeddings(
   // không đủ khi community bị xóa/sáp nhập sau lần detect sau)
   try {
     await qdrant.deleteCollection(COLLECTION_COMMUNITIES)
+    // ROUND-35 (B5/C-1): dim động — xem chú thích ensureCommunityCollection
     await qdrant.createCollection(COLLECTION_COMMUNITIES, {
-      vectors: { size: 2048, distance: 'Cosine' },
+      vectors: { size: getEmbeddingDimension(), distance: 'Cosine' },
     })
   } catch (err) {
     console.warn('[Communities] Collection recreate failed (thử upsert đè):', err instanceof Error ? err.message : String(err))

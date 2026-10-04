@@ -32,6 +32,24 @@ export async function POST() {
 
     const result = await initializeCollections()
 
+    // ROUND-35 (B3): success phải phản ánh kết quả THẬT — bản cũ trả
+    // success:true dù chunks=false + error='dim-mismatch...' (error chỉ nằm
+    // trong collections.error chôn sâu) → gọi setup xong tưởng đã fix mà
+    // collection vẫn lệch dim. Giờ fail thật → 500 + message lộ nguyên nhân.
+    if (!result.documents || !result.chunks) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            result.error ??
+            `Initialization incomplete (documents=${result.documents}, chunks=${result.chunks}) — kiểm tra dim embedding (health sẽ báo degraded khi dimMismatch)`,
+          health,
+          collections: result,
+        },
+        { status: 500 }
+      )
+    }
+
     return NextResponse.json({
       success: true,
       message: `Qdrant initialized: documents=${result.documents}, chunks=${result.chunks}`,

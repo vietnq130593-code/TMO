@@ -697,6 +697,30 @@ if (!globalForTmr.__tmoToolMetricRetentionStarted) {
   tmrTimer.unref?.()
 }
 
+// ==================== ROUND-35 (C-3): NEO4J INDEX TỰ CHỮA MỖI BOOT ====================
+// Blueprint P1-b/P2-c thiết kế fulltext labels + vector-index dim "tự phát hiện
+// lệch chuẩn → tự DROP+CREATE lại MỖI BOOT", nhưng round-33 chỉ wire qua POST
+// /api/setup/neo4j (manual) — round-34 trả lời user "Neo4j fulltext + Qdrant dim
+// guard tự chữa mỗi boot" trong khi phần Neo4j chưa hề chạy ở boot. Giờ chạy
+// nền sau ensureDbReady: idempotent (khớp chuẩn = no-op — 2 SHOW INDEXES rẻ),
+// fail-open tuyệt đối (Aura lỗi/quên env → chỉ cảnh báo, không chặn boot).
+const globalForNmi = globalThis as unknown as { __tmoNeo4jIndexMigrateStarted?: boolean }
+if (!globalForNmi.__tmoNeo4jIndexMigrateStarted) {
+  globalForNmi.__tmoNeo4jIndexMigrateStarted = true
+  void (async () => {
+    try {
+      const { migrateNeo4jIndexes } = await import('./lib/neo4j')
+      await ensureDbReady()
+      await migrateNeo4jIndexes()
+    } catch (err) {
+      console.warn(
+        '[Neo4j] Boot index migration (C-3) failed (non-fatal):',
+        err instanceof Error ? err.message : String(err)
+      )
+    }
+  })()
+}
+
 // ============================================================================
 // ROUND-32 P3-c — DAILY SQLITE BACKUP (tự động, best-effort)
 // ============================================================================

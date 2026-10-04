@@ -158,9 +158,47 @@ describe('db_query — P1-a: deny-list mở rộng + allow-list first-token', ()
     expect(errOf(explainBad)).toContain('write keyword "INSERT"')
   })
 
+  // ROUND-35 (C-5): SQLite CÓ hỗ trợ data-modifying CTE (WITH ... INSERT từ
+  // 3.8.3) — comment cũ trong dev-tools tin sai "WITH luôn read-only". Phòng
+  // thủ thật = deny-list chạy TRƯỚC. Test này khoá lỗ: nếu ai nới allow-list
+  // hoặc đổi thứ tự lớp, WITH-INSERT phải chết ở deny keyword.
+  test('ROUND-35: WITH ... INSERT/UPDATE/DELETE (data-modifying CTE) vẫn bị deny-list chặn', async () => {
+    const wIns: any = await dbQuery({ sql: 'WITH x AS (SELECT 1) INSERT INTO Todo VALUES (1)' })
+    expect(wIns.success).toBe(false)
+    expect(errOf(wIns)).toContain('write keyword "INSERT"')
+
+    const wUpd: any = await dbQuery({ sql: 'WITH x AS (SELECT 1) UPDATE Todo SET id = 1' })
+    expect(wUpd.success).toBe(false)
+    expect(errOf(wUpd)).toContain('write keyword "UPDATE"')
+
+    const wDel: any = await dbQuery({ sql: 'WITH x AS (SELECT 1) DELETE FROM Todo' })
+    expect(wDel.success).toBe(false)
+    expect(errOf(wDel)).toContain('write keyword "DELETE"')
+  })
+
   test('PRAGMA query_plan vẫn được phép qua cả 2 lớp (regression P1-a)', async () => {
     const r: any = await dbQuery({ sql: 'PRAGMA query_plan' })
     expect(errOf(r)).not.toContain('PRAGMA statements are not allowed')
     expect(errOf(r)).not.toContain('chỉ cho phép SELECT')
+  })
+
+  // ROUND-35 (C-5): LIMIT-wrap giờ detect trên SQL ĐÃ STRIP comment + wrap cả
+  // WITH — bản cũ test regex trên rawSql nên `/* c */ SELECT ...` và
+  // `WITH ... SELECT ...` qua guard nhưng KHÔNG được wrap → chạy không LIMIT
+  // (fetch toàn bảng). Khoá bằng: chạy trên sqlite_master (luôn > 100 rows —
+  // 89 bảng + index hệ thống, không phụ thuộc dữ liệu app), đếm row ≤ limit.
+  test('ROUND-35: comment-prefix SELECT và WITH đều được LIMIT-wrap (không chạy unlimited)', async () => {
+    // comment prefix: allow-list thấy SELECT (sau strip) → phải wrap như SELECT thường
+    const c: any = await dbQuery({ sql: '/* lead comment */ SELECT * FROM sqlite_master' })
+    expect(errOf(c)).not.toContain('rejected by read-only guard')
+    expect(c.success).toBe(true)
+    expect(Array.isArray(c.rows)).toBe(true)
+    expect(c.rows.length).toBeLessThanOrEqual(100) // default limit phải được áp (bản cũ wrap=false → toàn bảng > 100)
+
+    // WITH: qua allow-list → cũng phải được wrap
+    const w: any = await dbQuery({ sql: 'WITH x AS (SELECT * FROM sqlite_master) SELECT * FROM x' })
+    expect(w.success).toBe(true)
+    expect(Array.isArray(w.rows)).toBe(true)
+    expect(w.rows.length).toBeLessThanOrEqual(100)
   })
 })

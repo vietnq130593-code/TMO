@@ -5181,8 +5181,12 @@ export async function dbQuery(args: {
   // ---------- ROUND-32 P1-a LỚP 2: ALLOW-LIST FIRST-TOKEN ----------
   // Deny-list (trên) chặn verb ĐÃ BIẾT TÊN; lớp này chặn MỌI thứ không thuộc
   // 3 cửa đọc duy nhất của SQLite: SELECT / WITH (CTE) / EXPLAIN.
-  //   - WITH luôn read-only trong SQLite (SQLite KHÔNG hỗ trợ data-modifying CTE
-  //     như Postgres — CTE chỉ dùng được trong SELECT).
+  //   - LƯU Ý CHÍNH XÁC (ROUND-35 sửa comment — comment cũ giải thích SAI):
+  //     SQLite CÓ hỗ trợ data-modifying CTE từ 3.8.3 (WITH ... INSERT/UPDATE/
+  //     DELETE — không phải độc quyền Postgres). Phòng thủ KHÔNG dựa vào
+  //     "WITH luôn read-only" mà dựa vào THỨ TỰ LỚP: deny-list chạy TRƯỚC
+  //     (INSERT/UPDATE/DELETE/REPLACE... keyword chết ở lớp trên kể cả nằm
+  //     sau WITH) — allow-list chỉ cho qua CTE đọc thuần còn sót.
   //   - EXPLAIN an toàn vì mọi verb ghi đi kèm đã bị deny-list chặn trước đó
   //     (EXPLAIN INSERT ... → keyword INSERT bị chặn ở lớp trên).
   //   - Ngoại lệ PRAGMA query_plan đi qua (đã pass nhánh PRAGMA phía trên —
@@ -5203,10 +5207,21 @@ export async function dbQuery(args: {
   // `SELECT * FROM (<original>) sub LIMIT N` for any SELECT, including those
   // with ORDER BY / LIMIT / OFFSET already (the inner LIMIT just gets
   // overridden by the outer one).
+  //
+  // ROUND-35 (C-5 — rà soát lượt 2): detect + wrap theo STRIPPED (đã bỏ
+  // comment) thay vì rawSql. Bản cũ test regex trên rawSql nên:
+  //   (a) `/* lead */ SELECT ...` qua allow-list (stripped bắt đầu SELECT)
+  //       nhưng regex wrap không match (rawSql bắt đầu bằng comment) →
+  //       chạy KHÔNG LIMIT → agent fetch toàn bảng (phình RAM/context);
+  //   (b) `WITH x AS (...) SELECT ...` cũng lọt → không wrap.
+  // Wrap bằng SQL đã strip comment cũng an toàn hơn cho parser (subquery
+  // bọc CTE vẫn hợp lệ — LIMIT ngoài cùng áp dụng). PRAGMA query_plan và
+  // EXPLAIN không wrap (giữ nguyên hành vi cũ — không phải SELECT/WITH).
+  const strippedSql = stripped.trim().replace(/;+\s*$/, '')
   let execSql = rawSql.trim().replace(/;+\s*$/, '')
   let wrapped = false
-  if (/^\s*SELECT\b/i.test(execSql) && requestedLimit < hardMax) {
-    execSql = `SELECT * FROM (${execSql}) sub LIMIT ${requestedLimit}`
+  if (/^(SELECT|WITH)\b/i.test(strippedSql) && requestedLimit < hardMax) {
+    execSql = `SELECT * FROM (${strippedSql}) sub LIMIT ${requestedLimit}`
     wrapped = true
   }
 

@@ -45,6 +45,13 @@ Tokens: 9.4k sent, 160 received.
 - **Path DB không bao giờ đoán**: route hỏi `PRAGMA database_list` + mismatch guard từ
   chối khi app mở nhầm DB (env-leak trap). Nếu thấy lỗi "DB path mismatch" → kiểm tra
   env shell `DATABASE_URL` (chạy qua `pm2-start.sh` đã unset đúng).
+- **Restore an toàn (round-35 A-1)**: restore giờ tải về `.restore-tmp` → verify SQLite
+  magic TRƯỚC KHI PHÁ → tự backup DB hiện tại lên R2 (`backups/sqlite/pre-restore-<ts>.db`)
+  → `fs.rename` atomic (swap inode — process giữ fd cũ không thể ghi stale page đè bản
+  mới). Bản restore hỏng → DB hiện tại nguyên vẹn; restore tồi → khôi phục từ pre-restore key.
+- **Clone instance PHẢI tắt auto-backup (round-35 A-4)**: 2 instance chia sẻ .env R2 sẽ
+  ghi đè lẫn nhau qua latest pointer `backups/sqlite/custom.db` → restore production kéo
+  nhầm DB clone. Trên bản clone đặt `TMO_AUTO_BACKUP=0`.
 - **Prisma raw API**: `$queryRawUnsafe`/`$executeRawUnsafe` chỉ nhận STRING THƯỜNG;
   tagged-template `` db.$executeRawUnsafe`...` `` throw mọi lần (đã trả giá 2 lần:
   checkpointWal + sweep). Tagged template = `$queryRaw`. PRAGMA trả result set → dùng
@@ -59,6 +66,10 @@ Tokens: 9.4k sent, 160 received.
   đổi schema nữa (chỉ dùng cho DB scratch thử nghiệm).
 - **Khôi phục sau reset** (cập nhật runbook round-30): sau khi clone xong chạy
   `env -u DATABASE_URL bun run db:deploy` (= `prisma migrate deploy`) thay cho db:push.
+- **Thứ tự deploy trên DB TRẮNG (round-35 A-3)**: `db:deploy` khi app DỪNG
+  (`pm2 stop theopusflashlite` trước). Nếu app đã boot trước và self-heal `db push` tạo
+  bảng trước → `migrate deploy` sẽ fail CREATE TABLE trùng → chữa bằng
+  `env -u DATABASE_URL bunx prisma migrate resolve --applied 0_init` rồi start app.
 - Lưu ý vận hành: lệnh prisma migrate/resolve cần app DỪNG (WAL lock — "database is
   locked"): `pm2 stop theopusflashlite` → chạy lệnh → `pm2 start theopusflashlite`.
 

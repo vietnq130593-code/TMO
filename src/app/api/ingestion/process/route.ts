@@ -208,6 +208,15 @@ async function fetchAllRelationshipsForDoc(documentId: string) {
   return db.localRelationship.findMany({ where: { documentId } })
 }
 
+/** ROUND-35 (B6 — rà soát lượt 2): chuẩn hoá limit scroll cho MỌI cửa verify
+ *  vector. Bản trước lệch chuẩn: fetchAllChunksForDoc scroll 100k nhưng các cửa
+ *  verify (early-exit / hasEmbeddingsData / resume / guard cuối / embedOnly)
+ *  chỉ scroll 10k → doc có 10k–100k chunk thì expectedCount tới 100k trong
+ *  khi verify cắt ở 10k → missingChunks > 0 MỌI lần → doc kẹt 'partial' vĩnh
+ *  viễn (fail-closed — không mất dữ liệu nhưng livelock re-process). Giờ mọi
+ *  cửa dùng CÙNG một hằng số với fetch. */
+const VERIFY_CHUNK_SCROLL_LIMIT = 100000
+
 /** Fetch ALL chunks for a document from Qdrant, ordered by chunk_index.
  *  Reads all chunks from Qdrant chunks collection, ordered by chunk_index.
  *  Includes retry logic with delays — Qdrant may need a brief moment after upsert
@@ -216,7 +225,7 @@ async function fetchAllRelationshipsForDoc(documentId: string) {
 async function fetchAllChunksForDoc(documentId: string, retryCount = 5): Promise<Array<{ id: string; chunk_index: number; content: string; domain: string | null; heading_path?: string; token_count?: number }>> {
   for (let attempt = 1; attempt <= retryCount; attempt++) {
     try {
-      const chunks = await getChunksByDocument(documentId, { limit: 100000 })
+      const chunks = await getChunksByDocument(documentId, { limit: VERIFY_CHUNK_SCROLL_LIMIT })
       if (chunks.length > 0) {
         return chunks.map(c => ({
           id: c.id,
@@ -2236,7 +2245,7 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       // epsilon 1e-9) như nhánh resume để 2 cửa ra quyết định như nhau.
       let hasEmbeddings = false
       if (docChunkCount > 0) {
-        const earlyEmbChunks = await getChunksByDocument(documentId, { limit: 10000, withVector: true })
+        const earlyEmbChunks = await getChunksByDocument(documentId, { limit: VERIFY_CHUNK_SCROLL_LIMIT, withVector: true })
         hasEmbeddings =
           earlyEmbChunks.length > 0 &&
           earlyEmbChunks.every(c => (c.vector ?? []).some(x => Math.abs(x) > 1e-9))
@@ -2382,6 +2391,18 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
         // SQLite, and embeddings/Neo4j steps run cheaply from the buffer).
         if (!hasExistingEntities) {
           throw new Error('Failed to fetch existing chunks for resume (no entities in buffer either)')
+        }
+        // ROUND-35 (B8 — rà soát lượt 2): fetchAllChunksForDoc NUỐT lỗi scroll
+        // (retry 5 lần đều exception → trả []). Phân biệt "mất chunk THẬT"
+        // (count API cũng = 0 — reset trap gốc) với "scroll đang lỗi tạm thời"
+        // (count > 0): rebuild ở kịch bản sau sẽ upsert point MỚI (randomUUID)
+        // lên đỉnh point cũ → nội dung chunk nhân đôi vĩnh viễn (cùng lớp B1).
+        // Count API (qdrant.count + filter) độc lập scroll — dùng làm trọng tài.
+        const liveChunkCount = await getChunkCount(documentId)
+        if (liveChunkCount > 0) {
+          throw new Error(
+            `Chunk scroll trả rỗng sau 5 lần retry nhưng count API thấy ${liveChunkCount} point — Qdrant scroll đang lỗi tạm thời. KHÔNG rebuild để tránh nhân đôi chunk — chạy lại "Xử lý" khi Qdrant ổn định`
+          )
         }
         console.log(`[Process] Resume: Qdrant chunks lost but SQLite entities exist — rebuilding chunks from PDF (no LLM re-extraction)`)
         rebuiltChunksFromPdf = true
@@ -3177,7 +3198,7 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       // và yêu cầu 100% chunk có thành phần khác 0.
       const embChunkCount = await getChunkCount(documentId)
       if (embChunkCount > 0) {
-        const verifyEmbChunks = await getChunksByDocument(documentId, { limit: 10000, withVector: true })
+        const verifyEmbChunks = await getChunksByDocument(documentId, { limit: VERIFY_CHUNK_SCROLL_LIMIT, withVector: true })
         const realEmbCount = verifyEmbChunks.filter(c => (c.vector ?? []).some(x => Math.abs(x) > 1e-9)).length
         hasEmbeddingsData = realEmbCount === verifyEmbChunks.length && verifyEmbChunks.length > 0
         if (!hasEmbeddingsData) {
@@ -3851,7 +3872,7 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
         // (không có đường tự chữa). Giờ scroll kèm vector (withVector) và kiểm
         // từng chunk có thành phần khác 0 hay không (epsilon chống float noise).
         const embeddedChunkIds = new Set<string>()
-        const allChunksForEmb = await getChunksByDocument(documentId, { limit: 10000, withVector: true })
+        const allChunksForEmb = await getChunksByDocument(documentId, { limit: VERIFY_CHUNK_SCROLL_LIMIT, withVector: true })
         for (const chunk of allChunksForEmb) {
           const isRealVector = (chunk.vector ?? []).some(x => Math.abs(x) > 1e-9)
           if (isRealVector) embeddedChunkIds.add(chunk.id)
@@ -3901,14 +3922,14 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
     let finalStatus: 'indexed' | 'partial' = 'indexed'
     let guardWarning: string | undefined
     try {
-      let verifyChunks = await getChunksByDocument(documentId, { limit: 10000, withVector: true })
+      let verifyChunks = await getChunksByDocument(documentId, { limit: VERIFY_CHUNK_SCROLL_LIMIT, withVector: true })
       const expectedCount = savedChunks.length
       let verifyBlind = verifyChunks.length === 0 && expectedCount > 0
       if (verifyBlind || verifyChunks.length < expectedCount) {
         // Lượt 1 bất thường (mù hẳn hoặc thiếu point so với số chunk pipeline
         // đang giữ) — chờ Qdrant indexer/gateway 1.5s rồi thử lại 1 lần
         await new Promise((r) => setTimeout(r, 1500))
-        const retryChunks = await getChunksByDocument(documentId, { limit: 10000, withVector: true })
+        const retryChunks = await getChunksByDocument(documentId, { limit: VERIFY_CHUNK_SCROLL_LIMIT, withVector: true })
         if (retryChunks.length > verifyChunks.length) verifyChunks = retryChunks
         verifyBlind = verifyChunks.length === 0 && expectedCount > 0
       }
@@ -4039,6 +4060,23 @@ async function runEmbedOnlyPipeline(documentId: string): Promise<Record<string, 
     const document = qdrantDocToRecord(docPayload, documentId)
 
     console.log(`[EmbedOnly] Starting for doc ${documentId.slice(0, 8)}... ("${document.title}", status=${document.status})`)
+
+    // ROUND-35 (B1 — rà soát lượt 2): đường này re-chunk với point ID MỚI
+    // (randomUUID) — nếu doc đã có chunk point từ lần chạy trước (embedOnly
+    // crash giữa chừng rồi chạy lại, hoặc gọi API trực tiếp 2 lần), upsert
+    // chồng sẽ để point cũ + point mới CÙNG tồn tại → nội dung chunk bị
+    // nhân đôi vĩnh viễn trong Qdrant (mọi retrieval trả 2 lần) mà guard
+    // round-34 chỉ kiểm MỘT CHIỀU (< expected) nên vẫn 'indexed'. Dọn point
+    // cũ trước khi re-chunk — đối xứng fresh path pipeline chính
+    // (deleteOldDocumentData). Thất bại xoá → dừng (không nhân đôi dữ liệu).
+    const existingChunkCount = await getChunkCount(documentId)
+    if (existingChunkCount > 0) {
+      console.warn(`[EmbedOnly] ROUND-35 B1: doc đã có ${existingChunkCount} chunk point — xoá trước khi re-chunk (chống nhân đôi point)`)
+      const cleared = await deleteChunksByDocument(documentId)
+      if (!cleared) {
+        throw new Error(`Không xoá được ${existingChunkCount} chunk point cũ trước khi re-embed (B1 guard) — dừng để không nhân đôi dữ liệu. Chạy lại khi Qdrant ổn định.`)
+      }
+    }
 
     // Build steps: download/parse/chunk/embeddings run; extract/resolve/neo4j marked completed (done in prior session)
     const steps: ProcessingStepRecord[] = [
@@ -4177,12 +4215,16 @@ async function runEmbedOnlyPipeline(documentId: string): Promise<Record<string, 
     let embedOnlyStatus: 'indexed' | 'partial' = 'indexed'
     let embedOnlyWarning: string | undefined
     try {
-      const verify = await getChunksByDocument(documentId, { limit: 10000, withVector: true })
+      const verify = await getChunksByDocument(documentId, { limit: VERIFY_CHUNK_SCROLL_LIMIT, withVector: true })
       const realCount = verify.filter(c => (c.vector ?? []).some(x => Math.abs(x) > 1e-9)).length
       const expected = chunkPoints.length
-      if (verify.length < expected || realCount < expected) {
+      // ROUND-35 (B1): kiểm HAI CHIỀU (!== thay <) — dữ liệu THỪA (point trùng
+      // lặp/rác mồ côi còn sót) cũng là trạng thái sai cần dọn, không chỉ thiếu.
+      if (verify.length !== expected || realCount < expected) {
         embedOnlyStatus = 'partial'
-        embedOnlyWarning = `${expected - realCount} chunk thiếu vector thật (scroll thấy ${verify.length}/${expected}, vector thật ${realCount}/${expected}) — giữ 'partial' để pipeline chính re-embed`
+        embedOnlyWarning = verify.length > expected
+          ? `Qdrant có ${verify.length} point ≠ ${expected} chunk vừa tạo (${verify.length - expected} thừa — trùng lặp/rác mồ côi) — giữ 'partial' để chạy lại dọn`
+          : `${expected - realCount} chunk thiếu vector thật (scroll thấy ${verify.length}/${expected}, vector thật ${realCount}/${expected}) — giữ 'partial' để pipeline chính re-embed`
         console.error(`[EmbedOnly] P0-5 guard: ${embedOnlyWarning}`)
       }
     } catch (verifyErr) {
