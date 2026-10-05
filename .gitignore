@@ -80,6 +80,11 @@ worklog.md
 # Dùng wildcard (không phải /scripts/) để vẫn re-include được file deployment:
 # git bỏ qua re-include nếu chính thư mục cha bị exclude.
 /scripts/*
+# NGOẠI LỆ: round37-e2e-probe.ts — E2E sống cho round-37 (5 vấn đề V1-V5):
+# adaptation apply/đóng vòng DB thật, ε-greedy, agent-brain 3 tầng, parity
+# stack. Chạy lại bất kỳ lúc nào để tái kiểm chứng:
+#   env -u DATABASE_URL bun scripts/round37-e2e-probe.ts
+!/scripts/round37-e2e-probe.ts
 # NGOẠI LỆ: watch-agents.ts — trạm quan sát vận hành agents (Task 54): xem
 # runs/jobs/messages/reviews mới + phát hiện stuck/failed — ops theo dõi
 # agents chạy thật: DATABASE_URL=... bun scripts/watch-agents.ts --since-min 60
