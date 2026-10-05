@@ -1,7 +1,10 @@
 /**
  * Layer 2: Thinking & Planning — Public API
  *
- * Export tất cả functions và types cho downstream consumers.
+ * ROUND-37 V4: solution-designer + token-monitor đã XÓA — dead scaffolding
+ * (0 caller ngoài barrel). Đường SỐNG còn lại: decomposeTask (dev-tools
+ * decomposeTaskViaThinkingLayer) + resolveCircularDependencies (decomposer).
+ * Types giữ nguyên trong ./types (SolutionDesign dùng bởi communication/types).
  */
 
 // Types
@@ -18,31 +21,15 @@ export type {
   SchemaDesign,
   APIDesign,
   StateDesign,
-  TokenUsageRecord,
-  TokenMonitorState,
   // Workflow thinking context
   WorkflowThinkingContext,
   SubTaskSolutionMap,
   // Options
   DecomposerOptions,
-  SolutionDesignerOptions,
-  TokenMonitorOptions,
 } from './types'
 
 // Functions
 export { decomposeTask } from './decomposer'
-export { designSolution } from './solution-designer'
-export {
-  createTokenMonitor,
-  trackUsage,
-  getRemainingBudget,
-  isOverBudget,
-  getWarnings,
-  getHistory,
-  getReport,
-  estimateBudget,
-  estimateTotalBudget,
-} from './token-monitor'
 
 // Circular resolver
 export { resolveCircularDependencies } from './circular-resolver'

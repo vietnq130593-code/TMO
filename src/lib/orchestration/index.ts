@@ -1,17 +1,15 @@
 /**
  * Layer 7: Orchestration System — Public API
  *
- * Export tất cả các hàm và types cho Layer 7: Điều Phối.
- *
- * Usage:
- *   import { createMasterOrchestrator, createToolSelector, createAgentDelegator } from '@/lib/orchestration'
- *   import type { OrchestrationConfig, ToolSelector, AgentDelegator } from '@/lib/orchestration'
+ * ROUND-37 V4: tool-selector đã XÓA — dead scaffolding (0 caller ngoài
+ * barrel). Đường SỐNG: session-resume (workflow/resume + workflow-engine,
+ * import trực tiếp), agent-delegator (delegate tool — flag ENABLE_REAL_DELEGATE),
+ * master-orchestrator (flag ENABLE_MASTER_ORCHESTRATOR — giờ gọi applyAdaptation thật).
  */
 
 // ==================== FACTORY FUNCTIONS ====================
 
 export { createMasterOrchestrator } from './master-orchestrator'
-export { createToolSelector } from './tool-selector'
 export { createAgentDelegator } from './agent-delegator'
 
 // ==================== TYPES ====================
@@ -27,12 +25,6 @@ export type {
   OrchestrationResult,
   DecisionPoint,
   DecisionContext,
-
-  // Tool Selection (7.2)
-  ToolSelectionRequest,
-  ToolSelectionResult,
-  ToolCapability,
-  ToolSelector,
 
   // Agent Delegation (7.3)
   DelegatedTask,

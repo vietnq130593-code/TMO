@@ -35,5 +35,7 @@ export type {
 
 // ==================== FACTORY FUNCTIONS ====================
 
-export { createProgressTracker } from './progress-tracker'
+// ROUND-37 V4: progress-tracker đã XÓA — dead scaffolding (0 caller ngoài
+// barrel; runPipeline build StepState trực tiếp cho progress-reporter).
+// createCheckpointManager BỘ SỐNG: workflow-engine saveCheckpoint durable.
 export { createCheckpointManager } from './checkpoint-manager'

@@ -1,12 +1,10 @@
 /**
  * Layer 8: Communication System — Public API
  *
- * Export tất cả types và factory functions cho:
- *   - Progress Reporter (8.1)
- *   - Clarification Engine (8.2)
- *
- * Usage:
- *   import { createProgressReporter, createClarificationEngine } from '@/lib/communication'
+ * ROUND-37 V4: clarification-engine đã XÓA — dead scaffolding (0 caller sản
+ * xuất; clarify flow chỉ tiêu thụ ClarificationResponse type ở phía trả lời).
+ * progress-reporter GIỜ SỐNG: workflow-engine emit SSE `progress_report` +
+ * `final_report` qua formatStepReport/formatFinalReport.
  */
 
 // ==================== TYPES ====================
@@ -17,14 +15,13 @@ export type {
   ReportFormat,
   ReportLanguage,
 
-  // Progress Reporter
+  // Progress Reporter (LIVE — workflow-engine V4)
   ProgressReporter,
   ProgressReportInput,
   StepProgressInput,
   WorklogStats,
 
-  // Clarification Engine
-  ClarificationEngine,
+  // Clarification shapes (type-only — clarify route + resumeWorkflow)
   ClarificationGap,
   clarificationGapType,
   ClarificationDecision,
@@ -51,4 +48,3 @@ export type {
 // ==================== FACTORIES ====================
 
 export { createProgressReporter } from './progress-reporter'
-export { createClarificationEngine } from './clarification-engine'
