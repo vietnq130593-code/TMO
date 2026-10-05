@@ -4,10 +4,11 @@
  * ROUND-37 V4: tool-selector đã XÓA — dead scaffolding (0 caller ngoài
  * barrel). Đường SỐNG: session-resume (workflow/resume + workflow-engine,
  * import trực tiếp), agent-delegator (delegate tool — flag ENABLE_REAL_DELEGATE),
- * master-orchestrator (flag ENABLE_MASTER_ORCHESTRATOR, mặc định TẮT — vòng
- * lặp giờ wire THẬT end-to-end: decision 'after_error' → detect pattern →
- * applyAdaptation → pendingConfig render vào prompt step kế + giảm maxIterations
- * [ROUND-38 fix F2]; bật flag để dùng).
+ * master-orchestrator (flag ENABLE_MASTER_ORCHESTRATOR, ROUND-39 mặc định
+ * BẬT — vòng lặp wire THẬT end-to-end từ round-38 fix F2: decision
+ * 'after_error' → detect pattern → applyAdaptation → pendingConfig render vào
+ * prompt step kế + giảm maxIterations; kill-switch: .env
+ * ENABLE_MASTER_ORCHESTRATOR=false).
  */
 
 // ==================== FACTORY FUNCTIONS ====================

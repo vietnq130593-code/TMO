@@ -104,7 +104,12 @@ const DEFAULTS: Record<string, string> = {
   ENABLE_CRON_TOOL: 'false',
 
   // Phase 5
-  ENABLE_MASTER_ORCHESTRATOR: 'false',
+  // ROUND-39 — mặc định BẬT (nợ vận hành round-38: wiring sau fix F2 đã
+  // sống end-to-end — decision 'after_error' → applyAdaptation → pendingConfig
+  // render vào prompt step kế; decompose_task dùng full thinking layer với
+  // try/catch fallback về legacy path). Kill-switch: đặt
+  // ENABLE_MASTER_ORCHESTRATOR=false trong .env để tắt theo máy.
+  ENABLE_MASTER_ORCHESTRATOR: 'true',
   ENABLE_REAL_DELEGATE: 'false',
   ENABLE_SESSION_RESUME: 'false',
 

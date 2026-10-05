@@ -106,7 +106,8 @@ import {
 // Phase 2 SMOLAB Proposal 7 — Layer 9 MetricsCollector.
 // Production code path (runWorkflow) hooks Layer 9 so ExecutionMetrics
 // actually persists to SQLite. Before this, master-orchestrator had Layer 9
-// wired but only runs when ENABLE_MASTER_ORCHESTRATOR=true (currently false)
+// wired but only ran when ENABLE_MASTER_ORCHESTRATOR=true (ROUND-39: flag đã
+// mặc định BẬT)
 // → metrics were "phantom wired": code called db.executionMetrics.create()
 // (added in Phase 6 Prop 2) but the production path never invoked it.
 // Fire-and-forget pattern: any flush error is caught + logged, never

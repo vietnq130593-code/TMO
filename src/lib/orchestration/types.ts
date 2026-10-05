@@ -90,8 +90,8 @@ export interface OrchestrationRequest {
 /** Kết quả từ orchestrator
  *
  *  v2.1 Phase 5.1 — added 'skipped' status: returned by startOrchestration when
- *  ENABLE_MASTER_ORCHESTRATOR is false. Callers can short-circuit without running
- *  any pipeline steps (preserves the legacy placeholder behavior).
+ *  ENABLE_MASTER_ORCHESTRATOR is false (kill-switch env — ROUND-39 mặc định
+ *  BẬT). Callers can short-circuit without running any pipeline steps.
  */
 export interface OrchestrationResult {
   status: 'completed' | 'failed' | 'escalated' | 'aborted' | 'skipped'
