@@ -1040,7 +1040,7 @@ export async function kingFullLifecycle(
 async function buildResearchBrainBlock(
   agentName: string,
   task: string,
-): Promise<{ promptBlock: string; appliedLessonIds: string[] }> {
+): Promise<{ promptBlock: string; appliedLessonIds: string[]; explorationLessonIds: string[] }> {
   try {
     const { buildAgentBrainBlock } = await import('@/lib/episodic-memory/agent-brain')
     const brain = await buildAgentBrainBlock({
@@ -1048,10 +1048,36 @@ async function buildResearchBrainBlock(
       agentName,
       task: task.slice(0, 1500),
     })
-    return { promptBlock: brain.promptBlock, appliedLessonIds: brain.appliedLessonIds }
+    // ROUND-40 fix V3-GAP: explorationLessonIds trả kèm để CONSOLIDATE truyền
+    // xuống recorder — không thì run PARTIAL của research-team KHÔNG BAO GIỜ
+    // được chấm ±confidence exploration lesson (chỉ goal-loop hưởng).
+    return {
+      promptBlock: brain.promptBlock,
+      appliedLessonIds: brain.appliedLessonIds,
+      explorationLessonIds: brain.explorationLessonIds ?? [],
+    }
   } catch {
-    return { promptBlock: '', appliedLessonIds: [] } // fail-open — research chạy như cũ
+    return { promptBlock: '', appliedLessonIds: [], explorationLessonIds: [] } // fail-open — research chạy như cũ
   }
+}
+
+/**
+ * ROUND-40 fix V1-T1 — outcome map T1 LISMA (tách ra để unit-test 4 nhánh).
+ * escalated + regression → FAILURE; escalated do LLM chết (failOpenLisma
+ * escalateReason='LLM unavailable — …'; T1 gọi round=1 nên trần vòng
+ * G2_MAX_FIX_ROUNDS không thể xảy ra) → FAILURE (thống nhất G2/G3 cùng sự
+ * kiện); escalated trần vòng thật (phòng thủ, T1 hiện không dùng) → PARTIAL;
+ * không escalated + regression tự fix → PARTIAL; fast-track sạch → SUCCESS.
+ */
+export function mapT1LismaOutcome(r: {
+  escalated: boolean
+  regressionFound: boolean
+  escalateReason?: string
+}): 'SUCCESS' | 'FAILURE' | 'PARTIAL' {
+  if (r.escalated) {
+    return r.regressionFound || r.escalateReason?.startsWith('LLM unavailable') ? 'FAILURE' : 'PARTIAL'
+  }
+  return r.regressionFound ? 'PARTIAL' : 'SUCCESS'
 }
 
 /** CONSOLIDATE — ghi episode research-team (fire-and-forget, fail-open 2 tầng). */
@@ -1062,6 +1088,8 @@ function recordResearchEpisode(params: {
   outcome: 'SUCCESS' | 'FAILURE' | 'PARTIAL'
   stopReason: string
   appliedLessonIds: string[]
+  /** ROUND-40 fix V3-GAP — lesson exploration được apply vào PRE-ACT (±confidence khi PARTIAL). */
+  explorationLessonIds?: string[]
   startedAtMs: number
   toolEvidence: Array<{ tool: string; success: boolean; text: string }>
 }): void {
@@ -1077,6 +1105,7 @@ function recordResearchEpisode(params: {
         outcome: params.outcome,
         stopReason: params.stopReason,
         appliedLessonIds: params.appliedLessonIds,
+        explorationLessonIds: params.explorationLessonIds ?? [],
         cycles: 1,
         tokensUsed: 0,
         toolEvidence: params.toolEvidence.slice(0, 60),
@@ -1175,18 +1204,21 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
           `T1 LISMA escalated: ${lismaResult.escalateReason || 'unknown'}`,
         )
       }
-      // ROUND-39 CONSOLIDATE — episode T1 (outcome mirror mapRunOutcome:
-      // escalated+regression → FAILURE; regression đã tự fix / trần vòng →
-      // PARTIAL; fast-track sạch → SUCCESS)
+      // ROUND-39 CONSOLIDATE — episode T1 (outcome mirror mapRunOutcome).
+      // ROUND-40 fix V1-T1: escalated-không-regression trước đây ghi PARTIAL,
+      // nhưng T1 gọi round=1 → trần vòng (G2_MAX_FIX_ROUNDS=3) không thể xảy ra
+      // → nhánh này CHỈ là failOpen LISMA (LLM unavailable). G2/G3 cùng sự kiện
+      // ghi FAILURE → thống nhất FAILURE (importance 0.85) để PRE-ACT similarity
+      // cho mission tương tự không under-weight lỗi hạ tầng. (map tách ra
+      // mapT1LismaOutcome để unit-test 4 nhánh.)
       recordResearchEpisode({
         agentName: t1Agent,
         goal: t1Goal,
         sessionId: missionId,
-        outcome: lismaResult.escalated
-          ? (lismaResult.regressionFound ? 'FAILURE' : 'PARTIAL')
-          : lismaResult.regressionFound ? 'PARTIAL' : 'SUCCESS',
+        outcome: mapT1LismaOutcome(lismaResult),
         stopReason: lismaResult.escalated ? 'error' : 'complete',
         appliedLessonIds: t1Brain.appliedLessonIds,
+        explorationLessonIds: t1Brain.explorationLessonIds,
         startedAtMs: t1StartedAt,
         toolEvidence: [
           ...(lismaResult.worklog.done ?? []).slice(0, 10).map(d => ({
@@ -1215,6 +1247,7 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
         outcome: 'FAILURE',
         stopReason: 'error',
         appliedLessonIds: t1Brain.appliedLessonIds,
+        explorationLessonIds: t1Brain.explorationLessonIds,
         startedAtMs: t1StartedAt,
         toolEvidence: [
           { tool: 'research:lisma', success: false, text: `T1 LISMA throw: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300) },
@@ -1392,6 +1425,7 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
       outcome: g2Outcome,
       stopReason: g2Outcome === 'FAILURE' ? 'error' : 'complete',
       appliedLessonIds: g2Brain.appliedLessonIds,
+      explorationLessonIds: g2Brain.explorationLessonIds,
       startedAtMs: g2StartedAt,
       toolEvidence: g2Evidence,
     })
@@ -1470,6 +1504,7 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
         : hanOptions > 0 ? 'SUCCESS' : 'PARTIAL',
       stopReason: hanResult.worklog.status === 'ESCALATED' ? 'error' : 'complete',
       appliedLessonIds: g3Brain.appliedLessonIds,
+      explorationLessonIds: g3Brain.explorationLessonIds,
       startedAtMs: g3StartedAt,
       toolEvidence: [
         ...(hanResult.worklog.done ?? []).slice(0, 10).map(d => ({
@@ -1495,6 +1530,7 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
       outcome: 'FAILURE',
       stopReason: 'error',
       appliedLessonIds: g3Brain.appliedLessonIds,
+      explorationLessonIds: g3Brain.explorationLessonIds,
       startedAtMs: g3StartedAt,
       toolEvidence: [
         { tool: 'research:han', success: false, text: `HAN throw: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300) },

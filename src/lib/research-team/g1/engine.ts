@@ -569,6 +569,9 @@ export async function runG1Pipeline(
   // partDescription → mọi council + SIVIL round thấy. Fail-open 4s.
   let brainBlock = ''
   let appliedLessonIds: string[] = []
+  // ROUND-40 fix V3-GAP — lesson exploration cũng được track để CONSOLIDATE
+  // truyền xuống recorder (±confidence khi run PARTIAL — hết chỉ goal-loop hưởng)
+  let explorationLessonIds: string[] = []
   try {
     const { buildAgentBrainBlock } = await import('@/lib/episodic-memory/agent-brain')
     const brain = await buildAgentBrainBlock({
@@ -582,6 +585,7 @@ export async function runG1Pipeline(
     if (brain.promptBlock) {
       brainBlock = brain.promptBlock
       appliedLessonIds = brain.appliedLessonIds
+      explorationLessonIds = brain.explorationLessonIds ?? []
       console.log(`[ResearchTeam/g1/engine] V3.2 — episodic brain PRE-ACT: ${appliedLessonIds.length} lesson applied cho task ${taskId}`)
     }
   } catch { /* fail-open — research chạy như cũ */ }
@@ -607,7 +611,7 @@ export async function runG1Pipeline(
       console.log(
         `[ResearchTeam/g1/engine] G1 pipeline round ${round} ESCALATED: ${result.escalateReason || '(unknown)'}`,
       )
-      recordG1Episode(missionId, taskId, partDescription, missionType, result, appliedLessonIds, pipelineStartedAt)
+      recordG1Episode(missionId, taskId, partDescription, missionType, result, appliedLessonIds, pipelineStartedAt, explorationLessonIds)
       return result
     }
 
@@ -623,13 +627,13 @@ export async function runG1Pipeline(
     console.log(
       `[ResearchTeam/g1/engine] G1 pipeline round ${round} PASS — BELI spec ready`,
     )
-    recordG1Episode(missionId, taskId, partDescription, missionType, result, appliedLessonIds, pipelineStartedAt)
+    recordG1Episode(missionId, taskId, partDescription, missionType, result, appliedLessonIds, pipelineStartedAt, explorationLessonIds)
     return result
   }
 
   // Exhausted rounds → return last result with escalate (council ② still REVISE)
   if (lastResult) {
-    recordG1Episode(missionId, taskId, partDescription, missionType, lastResult, appliedLessonIds, pipelineStartedAt)
+    recordG1Episode(missionId, taskId, partDescription, missionType, lastResult, appliedLessonIds, pipelineStartedAt, explorationLessonIds)
     return {
       ...lastResult,
       escalated: true,
@@ -666,6 +670,8 @@ function recordG1Episode(
   appliedLessonIds: string[],
   /** ROUND-38 fix Y3 — startedAt thật từ runG1Pipeline (ms epoch) */
   startedAtMs?: number,
+  /** ROUND-40 fix V3-GAP — lesson exploration apply vào PRE-ACT (±confidence khi PARTIAL) */
+  explorationLessonIds: string[] = [],
 ): void {
   void (async () => {
     try {
@@ -695,6 +701,7 @@ function recordG1Episode(
           : result.council2.verdict === 'PASS' ? 'SUCCESS' : 'PARTIAL',
         stopReason: result.escalated ? 'error' : 'complete',
         appliedLessonIds,
+        explorationLessonIds,
         cycles: 1,
         tokensUsed: 0,
         toolEvidence,

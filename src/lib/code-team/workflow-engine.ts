@@ -2184,6 +2184,9 @@ export async function runAgentStep(params: {
   // block bài học + lỗi tương tự cho CHÍNH step prompt này (4s timeout,
   // fail-open), appliedLessonIds track để validate sau step.
   let stepAppliedLessonIds: string[] = []
+  // ROUND-40 fix V3-GAP — exploration lessons cũng track để CONSOLIDATE truyền
+  // xuống recorder (run PARTIAL của code-team giờ được chấm ±confidence)
+  let stepExplorationLessonIds: string[] = []
   try {
     const { buildAgentBrainBlock } = await import('@/lib/episodic-memory/agent-brain')
     const brain = await buildAgentBrainBlock({
@@ -2194,6 +2197,7 @@ export async function runAgentStep(params: {
     if (brain.promptBlock) {
       systemBlocks.push({ name: 'episodicBrain', content: brain.promptBlock, priority: 34 })
       stepAppliedLessonIds = brain.appliedLessonIds
+      stepExplorationLessonIds = brain.explorationLessonIds ?? []
       ctx.episodicBrainInjected = (ctx.episodicBrainInjected ?? 0) + brain.appliedLessonIds.length
       console.log(`[Workflow] V3.1 — episodic brain PRE-ACT inject vào ${agent.name} (${position}/${step}): ${brain.appliedLessonIds.length} lesson applied`)
     }
@@ -3130,6 +3134,7 @@ export async function runAgentStep(params: {
         cycles: iterations,
         tokensUsed: stepTokensUsed,
         appliedLessonIds: stepAppliedLessonIds,
+        explorationLessonIds: stepExplorationLessonIds,
         toolEvidence: toolCallsLog.map(e => ({
           tool: e.tool,
           success: e.success,

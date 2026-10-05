@@ -600,6 +600,9 @@ async function runSubAgentForProfileInner(params: {
     // được cảnh báo. Giờ append block bài học + lỗi tương tự vào system prompt
     // (4s timeout, fail-open). appliedLessonIds track để validate sau run.
     let subAgentAppliedLessonIds: string[] = []
+    // ROUND-40 fix V3-GAP — exploration lessons track để CONSOLIDATE truyền
+    // xuống recorder (run PARTIAL của sub-agent giờ được chấm ±confidence)
+    let subAgentExplorationLessonIds: string[] = []
     let systemPrompt = baseSystemPrompt
     try {
       const { buildAgentBrainBlock } = await import('@/lib/episodic-memory/agent-brain')
@@ -611,6 +614,7 @@ async function runSubAgentForProfileInner(params: {
       if (brain.promptBlock) {
         systemPrompt = `${baseSystemPrompt}${brain.promptBlock}`
         subAgentAppliedLessonIds = brain.appliedLessonIds
+        subAgentExplorationLessonIds = brain.explorationLessonIds ?? []
         console.log(`[SubAgent] V3.3 — episodic brain PRE-ACT cho ${profile.name}: ${brain.appliedLessonIds.length} lesson applied`)
       }
     } catch { /* fail-open — sub-agent chạy như cũ */ }
@@ -1162,6 +1166,7 @@ async function runSubAgentForProfileInner(params: {
         cycles: iterations,
         tokensUsed,
         appliedLessonIds: subAgentAppliedLessonIds,
+        explorationLessonIds: subAgentExplorationLessonIds,
         toolEvidence: evidence,
       })
       episodeRecorded = true
