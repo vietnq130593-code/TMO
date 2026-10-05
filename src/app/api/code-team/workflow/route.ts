@@ -67,6 +67,21 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
           metadata: { isTeamMessage: true, agentName, agentPosition, durationMs: event.duration },
         }
       }
+    } else if (type === 'agent_start') {
+      // TEAM PROCESS PANEL (2026-10-29 — user request "đóng gói quá trình thực
+      // thi thay vì dải tin nhắn"): persist BƯỚC pipeline (step + description)
+      // để history hiển thị được "Các bước triển khai" sau reload. Frontend
+      // (groupTeamProcessMessages) gom message này vào panel qua
+      // metadata.teamStep — KHÔNG render thành bubble rời rạc.
+      const step = (event.step as string) || undefined
+      const description = (event.description as string) || undefined
+      if (step) {
+        row = {
+          role: 'assistant',
+          content: `⚙️ Bước ${step}${description ? ` — ${description}` : ''}`,
+          metadata: { isTeamMessage: true, agentName, agentPosition, teamStep: step, teamStepDescription: description },
+        }
+      }
     } else if (type === 'tool_call') {
       const tool = (event.tool as string) || 'tool'
       const detail = (event.detail as string) || ''
@@ -106,7 +121,7 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
       row = {
         role: 'assistant',
         content,
-        metadata: { isTeamMessage: true, agentName: 'SYSTEM', agentPosition: 'TL', workflowStatus: status },
+        metadata: { isTeamMessage: true, agentName: 'SYSTEM', agentPosition: 'TL', workflowStatus: status, workflowDurationMs: totalDuration },
       }
     } else if (type === 'omega_escalation') {
       // FIX 2026-09-15 #2 (P2 — audit Team Code): AUTO-ESCALATE → Omega — persist

@@ -6,7 +6,7 @@
 // ========================================================================
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
-import { Network, CheckCircle2, XCircle, Loader2, Brain, Zap, Check, ChevronDown, Activity, AlertTriangle, Play, ShieldOff, MessageSquare, Send, Trash2, Search, Sparkles, X, AlertCircle, ThumbsUp, ThumbsDown, Wrench, Radio, BookMarked, Plus, Download, Pencil, Users, User, Code2, Square, Thermometer, ClipboardList, Mic, AudioLines, Volume2, OctagonX, Scale } from 'lucide-react'
+import { Network, CheckCircle2, XCircle, Loader2, Brain, Zap, Check, ChevronDown, Activity, AlertTriangle, Play, ShieldOff, MessageSquare, Send, Trash2, Search, Sparkles, X, AlertCircle, ThumbsUp, ThumbsDown, Wrench, Radio, BookMarked, Plus, Download, Pencil, Users, User, Code2, Square, Thermometer, ClipboardList, Mic, AudioLines, Volume2, OctagonX, Scale, Cog, ArrowUpCircle } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -29,6 +29,35 @@ import MarkdownText from './markdown-text'
 
 
 // ==================== SMOLAB MODULE (Phase 1: Chat Tab) ====================
+
+/** TEAM PROCESS PANEL (user request 2026-10-29) — event gom vào khối "Quá
+ *  trình thực thi" của Team workflow: kind 'step' (bước pipeline từ
+ *  agent_start) | 'thought' (snapshot LLM output mỗi vòng ReAct — "nghĩ
+ *  gì") | 'tool' (lệnh/tool call agent dùng + kết quả thật — "làm gì") |
+ *  'checkpoint' (cổng chất lượng TL). */
+export interface TeamProcessEvent {
+  kind: 'step' | 'thought' | 'tool' | 'checkpoint'
+  id: string
+  ts: number
+  agent?: string
+  position?: string
+  /** step: tên bước pipeline (analyze / implement / verify…) */
+  step?: string
+  description?: string
+  stepDone?: boolean
+  /** thought: vòng ReAct thứ mấy */
+  iteration?: number
+  text?: string
+  /** tool */
+  tool?: string
+  argsSummary?: string
+  success?: boolean
+  durationMs?: number
+  resultPreview?: string
+  /** checkpoint */
+  decision?: string
+  reasoning?: string
+}
 
 export interface SmolabMessage {
   id: string
@@ -65,6 +94,18 @@ export interface SmolabMessage {
   isTeamMessage?: boolean
   toolCallInfo?: { tool: string; detail: string }
   iterationInfo?: string // ReAct loop iteration progress (e.g., "Vòng 2/3")
+  // ===== TEAM PROCESS PANEL (user request 2026-10-29: "đóng gói quá trình
+  // thực thi thay vì dải tin nhắn") — tool calls / checkpoints / steps của
+  // Team workflow gom vào MỘT khối "Quá trình thực thi" (bố cục mirror
+  // AgentRunPanel), thay vì từng bubble chat rời rạc. =====
+  isTeamProcess?: boolean
+  processTitle?: string
+  processStatus?: 'running' | 'done' | 'completed_with_errors' | 'escalated' | 'failed' | 'cancelled'
+  processStepIndex?: number
+  processTotalSteps?: number
+  processStartedAt?: number
+  processDurationMs?: number
+  processEvents?: TeamProcessEvent[]
   // Phase 3: Frontend Suggestion Card (C2 — Smart TL Bridge)
   isWorkflowSuggestion?: boolean // True if this message is a TL suggestion card
   suggestionText?: string // Short suggestion from TL
@@ -578,6 +619,369 @@ export function AgentRunSummaryBar({ summary }: { summary: AgentRunSummaryData }
   )
 }
 
+
+// ==================== TEAM PROCESS PANEL (user request 2026-10-29) ====================
+//
+// USER BUG REPORT: "quá trình thực thi của agents — việc agent dùng những lệnh
+// nào, chạy gì — lại hiển thị thành MỘT DẢI TIN NHẮN, thay vì như trước kia
+// tất cả đóng gói trong quá trình thực thi, rõ các bước triển khai (Todos) gồm
+// những gì, tiếp đó triển khai chu kỳ nào, nghĩ gì làm gì."
+//
+// Nguyên nhân: Code Team workflow SSE append TỪNG tool_call / checkpoint thành
+// MỖI MỘT bubble chat riêng + persistTeamEvent ghi từng cái vào ChatMessage DB
+// (bằng chứng phiên e2e-round40c: 46 bubbles rời rạc chỉ cho 1 workflow).
+//
+// Fix — MỘT panel "Quá trình thực thi" (bố cục mirror AgentRunPanel
+// single-agent):
+//   - Header: trạng thái chạy + counters (🧩 bước · 🔧 tools · 💭 vòng nghĩ ·
+//     💻 lệnh · ✏️ edits · ⏱)
+//   - "Các bước triển khai": steps pipeline (analyze → implement → verify…)
+//     với ✓ xong / ◐ đang chạy + progress bar
+//   - "Chu kỳ thực thi": timeline đúng trình tự — 💭 thought mỗi vòng ReAct
+//     ("nghĩ gì") + 🔧 tool + kết quả thật ("làm gì") + 📋 checkpoint TL.
+//
+// 3 nguồn events:
+//   (1) Runtime SSE (startWorkflow) — panel live, mặc định MỞ khi đang chạy,
+//       tự thu gọn khi workflow kết thúc (bấm mở lại xem sau).
+//   (2) Reload/hydrate: bubbles tool_call/checkpoint/teamStep persist trong
+//       ChatMessage DB được groupTeamProcessMessages() GỘP thành panel.
+//   (3) Workflow chạy nền (user rời SSE): heartbeat delta kéo bubbles DB mới
+//       về và GỘP TIẾP vào panel (id 'tp_<firstId>' ổn định — không nhấp nháy).
+
+export function TeamProcessPanel({ msg }: { msg: SmolabMessage }) {
+  const events = msg.processEvents || []
+  const status = msg.processStatus || 'running'
+  const running = status === 'running'
+  const [open, setOpen] = useState(running)
+  // Auto-collapse MỘT lần khi workflow vừa chuyển sang trạng thái cuối
+  // (giống cảm giác process-card của Claude Code — xong là gọn lại nhường
+  // chỗ cho báo cáo kết quả bên dưới).
+  const prevRunningRef = useRef(running)
+  useEffect(() => {
+    if (prevRunningRef.current && !running) setOpen(false)
+    prevRunningRef.current = running
+  }, [running])
+
+  // Đang chạy + mở → auto-follow timeline (người theo dõi không phải cuộn tay)
+  const timelineRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (running && open && timelineRef.current) {
+      timelineRef.current.scrollTop = timelineRef.current.scrollHeight
+    }
+  }, [events.length, running, open])
+
+  const steps = events.filter(e => e.kind === 'step')
+  const stepsDone = steps.filter(s => s.stepDone).length
+  const tools = events.filter(e => e.kind === 'tool')
+  const thoughts = events.filter(e => e.kind === 'thought').length
+  const commands = tools.filter(t => t.tool === 'run_command' || t.tool === 'shell' || t.tool === 'run_bg' || t.tool === 'bash').length
+  const edits = tools.filter(t => t.tool === 'file_edit' || t.tool === 'file_write' || t.tool === 'edit_file' || t.tool === 'apply_patch').length
+  const startedAt = msg.processStartedAt
+  const durationMs = msg.processDurationMs != null
+    ? msg.processDurationMs
+    : (running && startedAt ? Date.now() - startedAt : undefined)
+
+  const statusNode = running ? (
+    <span className="flex items-center gap-1 text-[11px] text-amber-300 flex-shrink-0">
+      <Loader2 className="h-3 w-3 animate-spin" />
+      Đang chạy{durationMs != null ? ` · ${fmtRunDuration(durationMs)}` : ''}
+    </span>
+  ) : status === 'done' ? (
+    <span className="flex items-center gap-1 text-[11px] text-emerald-400 flex-shrink-0">
+      <CheckCircle2 className="h-3 w-3" /> Hoàn thành{durationMs != null ? ` · ${fmtRunDuration(durationMs)}` : ''}
+    </span>
+  ) : status === 'completed_with_errors' ? (
+    <span className="flex items-center gap-1 text-[11px] text-amber-400 flex-shrink-0">
+      <AlertCircle className="h-3 w-3" /> Xong kèm cảnh báo{durationMs != null ? ` · ${fmtRunDuration(durationMs)}` : ''}
+    </span>
+  ) : status === 'escalated' ? (
+    <span className="flex items-center gap-1 text-[11px] text-orange-400 flex-shrink-0">
+      <ArrowUpCircle className="h-3 w-3" /> Escalated
+    </span>
+  ) : status === 'failed' ? (
+    <span className="flex items-center gap-1 text-[11px] text-red-400 flex-shrink-0">
+      <XCircle className="h-3 w-3" /> Lỗi
+    </span>
+  ) : (
+    <span className="flex items-center gap-1 text-[11px] text-orange-400 flex-shrink-0">
+      <Square className="h-3 w-3" /> Đã dừng
+    </span>
+  )
+
+  return (
+    <div className="max-w-[88%] w-full rounded-xl border border-stone-700/60 bg-slate-950/60 overflow-hidden">
+      {/* Header — bấm để mở/thu gọn */}
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-900/60 transition-colors text-left flex-wrap"
+        aria-expanded={open}
+        title={open ? 'Thu gọn Quá trình thực thi' : 'Mở Quá trình thực thi'}
+      >
+        <Cog className="h-3.5 w-3.5 text-cyan-400 flex-shrink-0" />
+        <span className="text-[13px] font-semibold text-stone-100">Quá trình thực thi</span>
+        {msg.processTitle && <span className="text-[11px] text-stone-400">— {msg.processTitle}</span>}
+        {statusNode}
+        <span className="ml-auto flex items-center gap-1.5 text-[11px] text-stone-400 flex-shrink-0">
+          {steps.length > 0 && <span title="Bước pipeline đã xong">🧩 {stepsDone}/{steps.length}</span>}
+          {msg.processTotalSteps != null && msg.processStepIndex != null && msg.processStepIndex > 0 && (
+            <span title="Vị trí workflow">Bước {msg.processStepIndex}/{msg.processTotalSteps}</span>
+          )}
+          {tools.length > 0 && <span title="Tool calls">🔧 {tools.length}</span>}
+          {thoughts > 0 && <span title="Vòng suy nghĩ ReAct">💭 {thoughts}</span>}
+          {commands > 0 && <span title="Lệnh đã chạy">💻 {commands}</span>}
+          {edits > 0 && <span title="File đã sửa">✏️ {edits}</span>}
+          {!running && durationMs != null && durationMs > 0 && <span>⏱ {fmtRunDuration(durationMs)}</span>}
+          <ChevronDown className={`h-3 w-3 transition-transform ${open ? '' : '-rotate-90'}`} />
+        </span>
+      </button>
+
+      {open && (
+        <div className="px-3 pb-2.5 space-y-2 border-t border-stone-700/40 pt-2">
+          {/* Các bước triển khai (Todos-style) — chỉ hiện khi có step events */}
+          {steps.length > 0 && (
+            <div>
+              <div className="flex items-center gap-1.5 mb-1">
+                <ClipboardList className="h-3 w-3 text-emerald-400" />
+                <span className="text-[12px] font-medium text-stone-200">Các bước triển khai</span>
+                <span className="text-[11px] text-stone-400">{stepsDone}/{steps.length}</span>
+                <div className="flex-1 h-1 bg-slate-800 rounded-full overflow-hidden ml-1">
+                  <div
+                    className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-500"
+                    style={{ width: `${steps.length > 0 ? Math.round((stepsDone / steps.length) * 100) : 0}%` }}
+                  />
+                </div>
+              </div>
+              <div className="max-h-40 overflow-y-auto space-y-0.5 pr-1" style={{ scrollbarWidth: 'thin' }}>
+                {steps.map(s => {
+                  const done = !!s.stepDone
+                  return (
+                    <div key={s.id} className="flex items-start gap-1.5 py-0.5">
+                      <span className={`text-[13px] leading-5 flex-shrink-0 ${done ? 'text-emerald-500' : running ? 'text-amber-300 animate-pulse' : 'text-stone-400'}`}>
+                        {done ? '✓' : '◐'}
+                      </span>
+                      <span className="text-[12px] leading-5 flex-1 break-words">
+                        <span className={done ? 'text-stone-500 line-through' : 'text-stone-200'}>
+                          {s.step || 'bước'}
+                          {s.description ? <span className="text-stone-400"> — {s.description}</span> : null}
+                        </span>
+                        {s.agent && <span className="text-[10px] text-stone-500 ml-1">({s.agent})</span>}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Chu kỳ thực thi — timeline đúng trình tự thời gian */}
+          <div>
+            <div className="flex items-center gap-1.5 mb-1">
+              <Activity className="h-3 w-3 text-cyan-400" />
+              <span className="text-[12px] font-medium text-stone-200">Chu kỳ thực thi</span>
+              <span className="text-[11px] text-stone-400">{events.filter(e => e.kind !== 'step').length} sự kiện</span>
+            </div>
+            <div ref={timelineRef} className="max-h-80 overflow-y-auto space-y-1 pr-1" style={{ scrollbarWidth: 'thin' }}>
+              {events.map(e => {
+                if (e.kind === 'thought') {
+                  return (
+                    <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/50 border-l-2 border-violet-500/50">
+                      <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                        <span className="text-[11px] text-violet-300">💭 Suy nghĩ</span>
+                        {e.agent && <span className="text-[10px] text-stone-500">{e.agent}</span>}
+                        {e.iteration != null && <span className="text-[10px] text-stone-500">Vòng {e.iteration}</span>}
+                      </div>
+                      <p className="text-[12px] leading-5 text-stone-300 italic whitespace-pre-wrap line-clamp-6">{e.text}</p>
+                    </div>
+                  )
+                }
+                if (e.kind === 'tool') {
+                  return (
+                    <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/40 border-l-2 border-cyan-500/40">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[12px] flex-shrink-0">{runToolIcon(e.tool)}</span>
+                        <span className="text-[11px] font-mono text-cyan-200 flex-shrink-0">{e.tool || 'tool'}</span>
+                        {e.agent && <span className="text-[10px] text-stone-500 flex-shrink-0">{e.agent}</span>}
+                        {e.argsSummary && <span className="text-[11px] text-stone-300 truncate max-w-[40%]">{e.argsSummary}</span>}
+                        {e.success != null && (
+                          <span className={`text-[11px] flex-shrink-0 ${e.success ? 'text-emerald-400' : 'text-red-400'}`}>{e.success ? '✓' : '✗'}</span>
+                        )}
+                        {e.durationMs != null && <span className="text-[10px] text-stone-500 ml-auto flex-shrink-0">{fmtRunDuration(e.durationMs)}</span>}
+                      </div>
+                      {e.resultPreview && (
+                        <pre className="mt-1 text-[11px] leading-4 text-stone-400 whitespace-pre-wrap max-h-20 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>{e.resultPreview}</pre>
+                      )}
+                    </div>
+                  )
+                }
+                if (e.kind === 'checkpoint') {
+                  return (
+                    <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/40 border-l-2 border-amber-500/50">
+                      <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                        <span className="text-amber-300">📋 Checkpoint</span>
+                        {e.step && <span className="text-stone-300">Bước {e.step}</span>}
+                        {e.decision && <span className="text-emerald-300 font-medium">→ {e.decision}</span>}
+                      </div>
+                      {e.reasoning && <p className="mt-0.5 text-[11px] leading-4 text-stone-400 line-clamp-3">{e.reasoning}</p>}
+                    </div>
+                  )
+                }
+                return null
+              })}
+              {running && (
+                <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-amber-300/90">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Đang thực thi…
+                </div>
+              )}
+              {!running && events.filter(e => e.kind !== 'step').length === 0 && (
+                <div className="px-2 py-1 text-[11px] text-stone-500">Không có sự kiện thực thi nào được ghi lại.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Bubble team persist rời rạc (tool_call / checkpoint / teamStep) — ứng viên
+ *  gom vào panel "Quá trình thực thi" khi hydrate từ DB. */
+function isTeamProcessBubble(m: SmolabMessage): boolean {
+  if (m.role !== 'assistant' || m.isTeamProcess) return false
+  if (!m.isTeamMessage) return false
+  return !!m.toolCallInfo || m.agentName === 'CHECKPOINT' || m.metadata?.teamStep != null
+}
+
+const TEAM_PROCESS_STATUS_MAP: Record<string, NonNullable<SmolabMessage['processStatus']>> = {
+  completed: 'done',
+  completed_with_errors: 'completed_with_errors',
+  escalated: 'escalated',
+  failed: 'failed',
+  cancelled: 'cancelled',
+}
+
+/** Gom chuỗi bubble tool/checkpoint/teamStep LIÊN TIẾP (persist bởi
+ *  persistTeamEvent của /api/code-team/workflow) thành 1 panel "Quá trình
+ *  thực thi" — history cũ (46 bubbles/phiên) lẫn phiên mới đều hiển thị đóng
+ *  gọn thay vì dải tin nhắn. Thuần + idempotent + giữ id panel ổn định
+ *  ('tp_<firstId>') để delta nối tiếp không nhấp nháy.
+ *
+ *  Bubble workflow_done (metadata.workflowStatus) / error ngay sau chuỗi →
+ *  gán trạng thái cuối cho panel vừa gom. Không thấy marker → 'running'
+ *  (workflow có thể vẫn đang chạy nền — continueOnDisconnect). */
+function groupTeamProcessMessages(msgs: SmolabMessage[]): SmolabMessage[] {
+  let changed = false
+  const out: SmolabMessage[] = []
+  let group: SmolabMessage[] = []
+  let lastPanelIdx = -1
+
+  const buildEvents = (src: SmolabMessage[]): TeamProcessEvent[] => src.map(m => {
+    const ts = m.timestamp instanceof Date ? m.timestamp.getTime() : Date.now()
+    if (m.metadata?.teamStep != null) {
+      return {
+        kind: 'step' as const,
+        id: m.id,
+        ts,
+        agent: m.agentName,
+        position: m.agentPosition,
+        step: String(m.metadata.teamStep),
+        description: typeof m.metadata.teamStepDescription === 'string' ? m.metadata.teamStepDescription : undefined,
+        stepDone: true, // history: mọi bước đã persist đều đã chạy qua
+      }
+    }
+    if (m.toolCallInfo) {
+      return {
+        kind: 'tool' as const,
+        id: m.id,
+        ts,
+        agent: m.agentName,
+        position: m.agentPosition,
+        tool: m.toolCallInfo.tool,
+        argsSummary: m.toolCallInfo.detail || m.content,
+      }
+    }
+    // CHECKPOINT — parse content "📋 Checkpoint: Step X → decision\nreasoning"
+    const mt = /^📋 Checkpoint: Step ?([^\n→]*?)(?:\s*→\s*([^\n]*))?(?:\n([\s\S]*))?$/.exec(m.content)
+    return {
+      kind: 'checkpoint' as const,
+      id: m.id,
+      ts,
+      step: (mt?.[1] || '').trim() || undefined,
+      decision: (mt?.[2] || '').trim() || undefined,
+      reasoning: mt?.[3]?.trim() || undefined,
+    }
+  })
+
+  const flush = () => {
+    if (group.length === 0) return
+    // FIX B2 (review 2026-10-29): 1 workflow = 1 PANEL — flush GỘP vào panel
+    // hiện hành khi panel còn mở ('running', chưa finalize, chưa qua user
+    // message mới) thay vì đẻ panel mới. Không có merge này thì: (a) reload
+    // history tách 1 workflow thành nhiều panel nhỏ xen kẽ báo cáo
+    // agent_complete; (b) heartbeat delta MỖI BEAT lại tạo thêm 1 panel —
+    // workflow nền 13 phút lại thành "dải panel" đúng lỗi user phàn nàn.
+    const cur = lastPanelIdx >= 0 ? out[lastPanelIdx] : undefined
+    if (cur?.isTeamProcess && (cur.processStatus || 'running') === 'running') {
+      out[lastPanelIdx] = { ...cur, processEvents: [...(cur.processEvents || []), ...buildEvents(group)] }
+      changed = true
+      group = []
+      return
+    }
+    out.push({
+      id: `tp_${group[0].id}`,
+      role: 'assistant',
+      content: '',
+      timestamp: group[0].timestamp,
+      isTeamProcess: true,
+      processTitle: 'Code Team',
+      processStatus: 'running', // chưa thấy workflow_done/error theo sau → workflow có thể vẫn đang chạy nền
+      processStartedAt: group[0].timestamp instanceof Date ? group[0].timestamp.getTime() : undefined,
+      processEvents: buildEvents(group),
+    })
+    lastPanelIdx = out.length - 1
+    changed = true
+    group = []
+  }
+
+  for (const m of msgs) {
+    if (m.isTeamProcess) {
+      // Panel đã có (runtime / group lần trước). Bubbles DB mới đến LIỀN KỀ
+      // (workflow nền chạy tiếp) → GỘP events tiếp vào panel đó.
+      if (group.length > 0) {
+        out.push({ ...m, processEvents: [...(m.processEvents || []), ...buildEvents(group)] })
+        changed = true
+        group = []
+      } else {
+        out.push(m)
+      }
+      lastPanelIdx = out.length - 1
+      continue
+    }
+    if (isTeamProcessBubble(m)) {
+      group.push(m)
+      continue
+    }
+    flush()
+    if (m.role === 'user') lastPanelIdx = -1 // ranh giới workflow mới
+    const wfStatus = typeof m.metadata?.workflowStatus === 'string' ? m.metadata.workflowStatus : null
+    if (lastPanelIdx >= 0 && out[lastPanelIdx]?.isTeamProcess) {
+      if (wfStatus) {
+        // FIX B3 (review 2026-10-29): workflow_done persist kèm
+        // metadata.workflowDurationMs → panel reload hiện ⏱ như live.
+        const dur = typeof m.metadata?.workflowDurationMs === 'number' ? m.metadata.workflowDurationMs : undefined
+        out[lastPanelIdx] = {
+          ...out[lastPanelIdx],
+          processStatus: TEAM_PROCESS_STATUS_MAP[wfStatus] || 'done',
+          ...(dur != null ? { processDurationMs: dur } : {}),
+        }
+      } else if (m.role === 'error') {
+        out[lastPanelIdx] = { ...out[lastPanelIdx], processStatus: 'failed' }
+      }
+    }
+    out.push(m)
+  }
+  flush()
+  return changed ? out : msgs
+}
 
 // ==================== GĐ4 CI-5 (Task 14-e) — DURABLE GOAL LOOP JOB MONITOR ====================
 //
@@ -1629,7 +2033,10 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
             feedback: (feedbackMap[m.id] as 'positive' | 'negative') ?? null,
           }
         })
-        setMessages(loaded)
+        // TEAM PROCESS PANEL (2026-10-29): gom chuỗi bubble tool/checkpoint/
+        // teamStep persist rời rạc thành panel "Quá trình thực thi" — hết
+        // hiện tượng "dải tin nhắn" 46 bubbles khi mở lại phiên team code.
+        setMessages(groupTeamProcessMessages(loaded))
         setHasMoreMessages(!!data.hasMore)
         loadedTailSessionIdRef.current = sid // [fetch-retry] tail phiên này đã vào state
         oldestLoadedIdRef.current = data.oldestId || loaded[0]?.id || null
@@ -1761,7 +2168,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                 metadata: parsedMeta as SmolabMessage['metadata'],
               }
             })
-          return [...older, ...prev]
+          return groupTeamProcessMessages([...older, ...prev])
         })
         // BUG FIX 2026-09-06: history cũ hơn đã load → panel Thought Process của
         // các run cũ (trước đó bị skip vì anchor chưa hiển thị) giờ tìm được
@@ -2484,7 +2891,9 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         }
         next = [...next, msg]
       }
-      return next
+      // TEAM PROCESS PANEL: bubbles DB mới (workflow nền chạy tiếp) gộp
+      // vào panel đúng chỗ — không đẻ bubble rời giữa chat.
+      return groupTeamProcessMessages(next)
     })
     latestDbMessageRef.current = { id: rows[rows.length - 1].id }
     return true
@@ -3141,18 +3550,43 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     // vào phiên khác user vừa mở
     const isActiveSession = () => currentSessionIdRef.current === sessionId
 
-    // Add workflow start indicator
+    // ===== TEAM PROCESS PANEL (user request 2026-10-29: "đóng gói quá trình
+    // thực thi thay vì dải tin nhắn") — thay indicator rời rạc bằng MỘT panel
+    // gom toàn bộ steps/tool/checkpoint của workflow (bố cục mirror
+    // AgentRunPanel single-agent: các bước triển khai → chu kỳ 💭 nghĩ / 🔧
+    // làm). Báo cáo từng agent vẫn là bubble riêng; chỉ các BƯỚC THỰC THI không
+    // còn nhằng nhịt thành từng tin nhắn rời (phiên e2e-round40c từng 46
+    // bubbles chỉ cho 1 workflow). =====
+    const processMsgId = crypto.randomUUID()
+    const processEvents: TeamProcessEvent[] = []
     const startMsg: SmolabMessage = {
-      id: crypto.randomUUID(),
+      id: processMsgId,
       role: 'assistant',
-      content: '🔄 Code Team đang khởi động workflow...',
+      content: '',
       timestamp: new Date(),
-      isTeamMessage: true,
-      agentName: 'SYSTEM',
-      agentPosition: 'TL',
-      agentAvatar: '👑',
+      isTeamProcess: true,
+      processTitle: 'Code Team',
+      processStatus: 'running',
+      processStartedAt: Date.now(),
+      processEvents: [],
     }
     setMessages(prev => [...prev, startMsg])
+
+    // Panel helpers — mọi event trung gian đẩy vào panel (KHÔNG append bubble)
+    const patchPanel = (patch: Partial<SmolabMessage>) => {
+      if (!isActiveSession()) return
+      setMessages(prev => prev.map(m => (m.id === processMsgId ? { ...m, ...patch } : m)))
+    }
+    const pushProcessEvent = (ev: TeamProcessEvent) => {
+      processEvents.push(ev)
+      patchPanel({ processEvents: [...processEvents] })
+    }
+    // Thought snapshots: agent_chunk REPLACE bubble content mỗi vòng ReAct —
+    // snapshot nội dung MỖI VÒNG vào panel ("nghĩ gì" từng chu kỳ, trước đây
+    // vòng cũ bị REPLACE mất hoàn toàn).
+    let currentAgentName: string | null = null
+    let currentIteration = 0
+    let snapshottedIteration = 0
 
     try {
       // When skipUserMsg, user message already exists in messages state (from TL Assessment flow)
@@ -3242,12 +3676,8 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
 
           switch (eventType) {
             case 'workflow_start': {
-              // Update the start indicator message
-              if (isActiveSession()) setMessages(prev => prev.map(m =>
-                m.id === startMsg.id
-                  ? { ...m, content: `🚀 Code Team workflow đã bắt đầu (Session: ${(event.sessionId as string || '').slice(0, 8)}...)` }
-                  : m
-              ))
+              // TEAM PROCESS PANEL: panel đã hiển thị "Đang chạy" từ đầu —
+              // không còn indicator text rời rạc cần cập nhật.
               break
             }
 
@@ -3267,6 +3697,19 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
               }
               currentAgentMsgId = agentMsg.id
               if (isActiveSession()) setMessages(prev => [...prev, agentMsg])
+              // Panel: bước pipeline mới bắt đầu + reset theo dõi vòng ReAct
+              currentAgentName = agentName
+              currentIteration = 0
+              snapshottedIteration = 0
+              pushProcessEvent({
+                kind: 'step',
+                id: crypto.randomUUID(),
+                ts: Date.now(),
+                agent: agentName,
+                position: agentPosition,
+                step: (event.step as string) || undefined,
+                description: (event.description as string) || undefined,
+              })
               break
             }
 
@@ -3275,6 +3718,27 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
               // REPLACE content (not append) — each ReAct iteration returns FULL LLM output,
               // not incremental deltas. Appending would duplicate text across iterations.
               const chunkContent = event.content as string
+              // Panel: snapshot "nghĩ gì" của vòng ReAct hiện tại (mỗi vòng
+              // đúng 1 thought — vòng sau REPLACE bubble nên không lưu lại
+              // được nếu không chốt tại đây).
+              // FIX B1 (review 2026-10-29): agent_chunk TỰ mang số vòng
+              // (engine emit `iteration: N`, N=1,2,…) — dùng TRỰC TIẾP thay
+              // vì currentIteration từ event 'iteration' riêng (event đó emit
+              // SAU chunk khi agent đã gọi tool → trước đây VÒNG ĐẦU bị bỏ
+              // lỡ + các vòng sau bị gán nhãn lệch 1).
+              const chunkIter = typeof event.iteration === 'number' ? event.iteration : currentIteration
+              const chunkAgent = (event.agent as string) || currentAgentName
+              if (chunkAgent && chunkIter > snapshottedIteration && chunkContent.trim()) {
+                snapshottedIteration = chunkIter
+                pushProcessEvent({
+                  kind: 'thought',
+                  id: crypto.randomUUID(),
+                  ts: Date.now(),
+                  agent: chunkAgent,
+                  iteration: chunkIter,
+                  text: chunkContent,
+                })
+              }
               if (isActiveSession()) setMessages(prev => prev.map(m =>
                 m.id === currentAgentMsgId
                   ? { ...m, content: chunkContent }
@@ -3287,12 +3751,23 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
               if (!currentAgentMsgId) break
               const completeContent = event.content as string
               const duration = event.duration as number | undefined
+              const doneAgent = (event.agent as string) || currentAgentName || ''
               if (isActiveSession()) setMessages(prev => prev.map(m =>
                 m.id === currentAgentMsgId
                   ? { ...m, content: completeContent || m.content, durationMs: duration }
                   : m
               ))
+              // Panel: đánh dấu bước của agent này HOÀN THÀNH
+              for (let i = processEvents.length - 1; i >= 0; i--) {
+                const ev = processEvents[i]
+                if (ev.kind === 'step' && ev.agent === doneAgent && !ev.stepDone) {
+                  ev.stepDone = true
+                  break
+                }
+              }
+              patchPanel({ processEvents: [...processEvents] })
               currentAgentMsgId = null
+              currentAgentName = null
               break
             }
 
@@ -3301,26 +3776,40 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
               const toolAgentPosition = event.position as string
               const toolName = event.tool as string
               const toolDetail = event.detail as string
-              const toolMsg: SmolabMessage = {
+              // TEAM PROCESS PANEL (user request 2026-10-29): KHÔNG còn append
+              // bubble riêng cho từng lệnh (nguồn gốc "dải tin nhắn" 40+
+              // bubbles/workflow) — mọi lệnh agent dùng đóng gói trong panel
+              // "Quá trình thực thi". (Window event bridge phía trên vẫn
+              // dispatch để CodeTab mở file/terminal.)
+              pushProcessEvent({
+                kind: 'tool',
                 id: crypto.randomUUID(),
-                role: 'assistant',
-                // Phase 7: rich bubble — 📖 file / ✏️ edit / ▶️ command
-                content: formatToolBubble(toolName, toolDetail),
-                timestamp: new Date(),
-                isTeamMessage: true,
-                agentName: toolAgentName,
-                agentPosition: toolAgentPosition,
-                agentAvatar: '🔧',
-                toolCallInfo: { tool: toolName, detail: toolDetail || '' },
-              }
-              if (isActiveSession()) setMessages(prev => [...prev, toolMsg])
+                ts: Date.now(),
+                agent: toolAgentName,
+                position: toolAgentPosition,
+                tool: toolName,
+                argsSummary: toolDetail || '',
+              })
               break
             }
 
             case 'tool_result': {
-              // Handled by the Phase 7 window event bridge above
-              // (AI_TOOL_EVENT_NAME) — CodeTabContent refreshes the file tree /
-              // editor / preview panel from there.
+              // Panel: cập nhật kết quả thật (✓/✗ + duration + preview) cho
+              // tool event gần nhất chưa có kết quả của agent này. (Window
+              // event bridge phía trên vẫn dispatch cho CodeTab.)
+              const trAgent = event.agent as string
+              const trOk = event.result !== 'Error'
+              for (let i = processEvents.length - 1; i >= 0; i--) {
+                const ev = processEvents[i]
+                if (ev.kind === 'tool' && ev.agent === trAgent && ev.success == null) {
+                  ev.success = trOk
+                  ev.durationMs = typeof event.duration === 'number' ? event.duration : undefined
+                  const trDetail = event.detail
+                  ev.resultPreview = typeof trDetail === 'string' ? trDetail.slice(0, 300) : undefined
+                  break
+                }
+              }
+              patchPanel({ processEvents: [...processEvents] })
               break
             }
 
@@ -3328,17 +3817,16 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
               const checkpointStep = event.step as string
               const checkpointDecision = event.decision as string | undefined
               const checkpointReasoning = event.reasoning as string | undefined
-              const checkpointMsg: SmolabMessage = {
+              // TEAM PROCESS PANEL: checkpoint (cổng chất lượng TL) đóng gói
+              // vào panel — không còn bubble riêng.
+              pushProcessEvent({
+                kind: 'checkpoint',
                 id: crypto.randomUUID(),
-                role: 'assistant',
-                content: `📋 Checkpoint: Step ${checkpointStep}${checkpointDecision ? ` → ${checkpointDecision}` : ''}${checkpointReasoning ? `\n${checkpointReasoning}` : ''}`,
-                timestamp: new Date(),
-                isTeamMessage: true,
-                agentName: 'CHECKPOINT',
-                agentPosition: 'TL',
-                agentAvatar: '📋',
-              }
-              if (isActiveSession()) setMessages(prev => [...prev, checkpointMsg])
+                ts: Date.now(),
+                step: checkpointStep,
+                decision: checkpointDecision,
+                reasoning: checkpointReasoning,
+              })
               break
             }
 
@@ -3348,6 +3836,26 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
               // THẬT event.status (mirror route.ts) — trước đây mọi kết thúc đều
               // hiển thị "✅ Workflow hoàn thành!" kể cả escalated/failed.
               const wfStatus = String(event.status || 'completed')
+              // TEAM PROCESS PANEL: chốt trạng thái cuối cho panel + hoàn tất
+              // mọi bước (✓ hết) — panel tự thu gọn (auto-collapse trong
+              // TeamProcessPanel khi running → false).
+              const panelStatus: SmolabMessage['processStatus'] = wfStatus === 'completed'
+                ? 'done'
+                : wfStatus === 'completed_with_errors'
+                ? 'completed_with_errors'
+                : wfStatus === 'escalated'
+                ? 'escalated'
+                : wfStatus === 'failed'
+                ? 'failed'
+                : 'cancelled'
+              for (const ev of processEvents) {
+                if (ev.kind === 'step') ev.stepDone = true
+              }
+              patchPanel({
+                processStatus: panelStatus,
+                processDurationMs: totalDuration,
+                processEvents: [...processEvents],
+              })
               const durSuffix = totalDuration ? ` (${(totalDuration / 1000).toFixed(1)}s)` : ''
               let doneContent: string
               let doneAvatar: string
@@ -3385,6 +3893,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
               // FIX 2026-09-15 #2 (P2 — audit Team Code): AUTO-ESCALATE → Omega
               // hiển thị trong chat (mirror route.ts persist) — user thấy được
               // Omega đã nhận vấn đề của team và tư vấn gì.
+              patchPanel({ processStatus: 'escalated' })
               const advisory = String(event.advisory || '')
               const reason = String(event.reason || 'workflow gặp sự cố')
               if (advisory) {
@@ -3405,8 +3914,9 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
 
             case 'iteration': {
               // ReAct loop iteration progress — update current agent message with iteration indicator
+              const iterNum = event.iteration as number | undefined
+              if (typeof iterNum === 'number') currentIteration = iterNum
               if (currentAgentMsgId) {
-                const iterNum = event.iteration as number | undefined
                 const maxIter = event.maxIterations as number | undefined
                 const iterText = maxIter ? ` (Vòng ${iterNum}/${maxIter})` : ` (Vòng ${iterNum})`
                 if (isActiveSession()) setMessages(prev => prev.map(m =>
@@ -3426,6 +3936,11 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
               // ROUND-38 fix B3: sau khi backend emit progress_report TRƯỚC
               // agent_complete, handler này giờ chạy thật — badge thay THẾ
               // (strip badge cũ nếu phát lại) thay vì cộng dồn "(Bước 1/6)(Bước 2/6)".
+              // TEAM PROCESS PANEL: đồng thời cập nhật "Bước N/T" lên header panel.
+              patchPanel({
+                processStepIndex: event.stepIndex as number | undefined,
+                processTotalSteps: event.totalSteps as number | undefined,
+              })
               if (currentAgentMsgId) {
                 const stepIndex = event.stepIndex as number | undefined
                 const totalSteps = event.totalSteps as number | undefined
@@ -3464,6 +3979,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
             case 'error': {
               const errorMsg = event.message as string
               const errorAgent = event.agent as string | undefined
+              patchPanel({ processStatus: 'failed' })
               const errMsg: SmolabMessage = {
                 id: crypto.randomUUID(),
                 role: 'error',
@@ -3480,6 +3996,9 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       // USER REQUEST 2026-08-31: user bấm DỪNG → không hiện "Workflow failed"
       // (stopAgentTask đã hiện thông báo ⏹ rồi)
       // 2026-09-01 GUARD: user đã đổi phiên → im lặng (không nhảy error vào phiên mới)
+      // TEAM PROCESS PANEL: chốt trạng thái panel (cancelled khi user dừng,
+      // failed khi lỗi thật) — panel không kẹt "Đang chạy" mãi.
+      patchPanel({ processStatus: stoppingRef.current ? 'cancelled' : 'failed' })
       if (stoppingRef.current || currentSessionIdRef.current !== sessionId) {
         // Đã dừng bởi user hoặc user đang ở phiên khác — im lặng
       } else {
@@ -3500,8 +4019,21 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       timedOutRef.current = false
       // 2026-09-01: spinner theo PHIÊN ĐANG MỞ (phiên khác vẫn chạy nền)
       setIsLoading(inFlightChatsRef.current.has(currentSessionIdRef.current))
+      // TEAM PROCESS PANEL: workflow kết thúc → REPLACE phiên bằng sự thật DB
+      // (persistTeamEvent đã ghi mọi event; hydrate group hiển thị panel đóng
+      // gọn). Không replace thì panel runtime + panel group-từ-DB (heartbeat
+      // delta kéo về ở beat sau, khi in-flight guard đã mở lại) sẽ NHÂN ĐÔI.
+      // Delay 600ms chờ các insert async (best-effort) ghi xong; beat delta
+      // 3s sau đó tự chữa nốt nếu còn thiếu.
+      if (currentSessionIdRef.current === sessionId) {
+        setTimeout(() => {
+          if (currentSessionIdRef.current === sessionId) {
+            loadSessionTail(sessionId, { silent: true }).catch(() => {})
+          }
+        }, 600)
+      }
     }
-  }, [messages, currentSessionId, setCurrentSessionId, setMessages, setInput, setIsLoading, selectedTeam])
+  }, [messages, currentSessionId, setCurrentSessionId, setMessages, setInput, setIsLoading, selectedTeam, loadSessionTail])
 
   // ===== RESEARCH TEAM WORKFLOW (Task 19 — user request 2026-09-03) =====
   // Chat Smolab ↔ Team Research (mirror startWorkflow của team code): MỌI
@@ -4932,8 +5464,16 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                       <AgentRunPanel run={agentRuns[msg.runId]} todos={sessionTodos} />
                     )}
 
+                    {/* TEAM PROCESS PANEL (user request 2026-10-29) — khối
+                        "Quá trình thực thi" của Team workflow: các bước triển
+                        khai + chu kỳ 💭 nghĩ / 🔧 làm đóng gọn (thay vì từng
+                        tool call một bubble rời). */}
+                    {msg.isTeamProcess && (
+                      <TeamProcessPanel msg={msg} />
+                    )}
+
                     {/* Team agent message rendering */}
-                    {msg.isTeamMessage && msg.agentName ? (
+                    {msg.isTeamProcess ? null : (msg.isTeamMessage && msg.agentName ? (
                       <div className={`max-w-[85%] p-3 rounded-xl border ${
                         AGENT_COLORS[msg.agentName]?.border || (msg.agentPosition ? POSITION_COLORS[msg.agentPosition]?.border : undefined) || 'border-cyan-400/35'
                       } ${
@@ -5208,7 +5748,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                         </div>
                       )}
                     </div>
-                    )}
+                    ))}
 
                     {/* User icon — directive message của Opus dùng ⚖️ thay MessageSquare (Task 13-c) */}
                     {msg.role === 'user' && (
@@ -5243,7 +5783,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
               )}
 
               {/* Loading indicator — ẩn khi Thought Process panel đang hiển thị trạng thái chạy */}
-              {isLoading && messages[messages.length - 1]?.role !== 'tool_call' && messages[messages.length - 1]?.role !== 'agent_run' && (
+              {isLoading && messages[messages.length - 1]?.role !== 'tool_call' && messages[messages.length - 1]?.role !== 'agent_run' && !messages[messages.length - 1]?.isTeamProcess && (
                 <div className="flex justify-start gap-2">
                   <div className="flex-shrink-0 w-6 h-6 bg-gradient-to-br from-emerald-900 to-teal-900 flex items-center justify-center">
                     <Brain className="h-3 w-3 text-emerald-400" />
