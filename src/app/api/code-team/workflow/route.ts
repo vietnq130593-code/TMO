@@ -338,10 +338,18 @@ export async function POST(request: NextRequest) {
         abortController.abort()
         console.log(`[WorkflowAPI] Client disconnected for session ${sessionId} — workflow aborted`)
       } else {
-        // New behavior: workflow continues in background
-        // The abortController.signal will be aborted, but runWorkflow's isAborted()
-        // will return false when continueOnDisconnect=true and clientDisconnected=true
-        abortController.abort()
+        // New behavior: workflow continues in background.
+        //
+        // FIX ROUND-40 (bug #40-1 — phát hiện qua test thực tế): trước đây nhánh
+        // này VẪN gọi abortController.abort() với comment cho rằng engine-side
+        // isAborted() sẽ bỏ qua abort khi clientDisconnected=true. Nhưng biến
+        // clientDisconnected của engine chỉ được set khi emit() throw — mà emit
+        // bên route có `if (isClosed) return` nuốt im lặng → engine KHÔNG BAO GIỜ
+        // biết client đã rời → mọi workflow đều abort ở step kế tiếp dù
+        // continueOnDisconnect=true (log thật: "continues in background" rồi
+        // "Aborted at step 0"). Fix: KHÔNG abort signal ở nhánh này — engine
+        // chạy tiếp, emit thành no-op (isClosed), persistTeamEvent vẫn ghi DB
+        // (nằm TRƯỚC isClosed check) → UI mở lại session vẫn thấy đủ events.
         console.log(`[WorkflowAPI] Client disconnected for session ${sessionId} — workflow continues in background (continueOnDisconnect: true)`)
       }
     },
