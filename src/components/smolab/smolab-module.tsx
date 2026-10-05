@@ -66,6 +66,12 @@ export interface TeamProcessEvent {
   reasoning?: string
   /** checkpoint ROUND-42: đang chờ TL kiểm tra (chưa có decision) */
   pending?: boolean
+  /** ROUND-43 fix B1: seq đơn điệu do route stamp (SSE + DB metadata.teamSeq)
+   * — khôi phục thứ tự emit sau DB commit race + dedupe live↔DB copy */
+  seq?: number
+  /** ROUND-43 fix B4: todo list đã resolve (update-only todo_write merge vào
+   * list trước đó của agent) — render thay JSON thô */
+  resolvedTodos?: Array<{ content: string; status?: string }>
 }
 
 export interface SmolabMessage {
@@ -687,6 +693,32 @@ export function parseTodoWriteArgs(detail?: string): Array<{ content: string; st
   }
 }
 
+/** ROUND-43 fix B4 (user: "todos gồm những gì" — todo_write dạng UPDATE-ONLY
+ * chỉ gồm {id, status} theo tool-doc của chính hệ thống render về JSON thô):
+ * parse items GỐC (kể cả entry không có content — update theo id) để caller
+ * merge vào danh sách trước đó. Full-rewrite entry: {id?, content, status}.
+ * Update-only entry: {id, status} (không content). */
+export function parseTodoWriteItems(detail?: string): Array<{ id?: string; content?: string; status?: string }> | null {
+  if (!detail) return null
+  try {
+    const parsed = JSON.parse(detail) as { todos?: unknown }
+    if (!Array.isArray(parsed.todos) || parsed.todos.length === 0) return null
+    const out: Array<{ id?: string; content?: string; status?: string }> = []
+    for (const t of parsed.todos.slice(0, 30)) {
+      if (!t || typeof t !== 'object') continue
+      const rec = t as Record<string, unknown>
+      const id = typeof rec.id === 'string' ? rec.id : undefined
+      const content = typeof rec.content === 'string' ? rec.content : undefined
+      const status = typeof rec.status === 'string' ? rec.status : undefined
+      if (!id && !content) continue
+      out.push({ ...(id ? { id } : {}), ...(content ? { content } : {}), ...(status ? { status } : {}) })
+    }
+    return out.length > 0 ? out : null
+  } catch {
+    return null
+  }
+}
+
 /** ROUND-42 — 1 agent-block = 1 agent chạy 1 bước ("agent nào đang triển khai
  *  tác vụ gì"). Block mở bởi: (a) step event (agent_start — bước pipeline mới,
  *  kể cả CÙNG agent chạy bước khác); (b) thought/tool của agent KHÁC block hiện
@@ -707,6 +739,41 @@ interface TeamAgentBlock {
 
 function buildTeamAgentBlocks(events: TeamProcessEvent[]): TeamAgentBlock[] {
   const blocks: TeamAgentBlock[] = []
+  // ROUND-43 fix B4: theo dõi todo list MỖI AGENT xuyên suốt timeline —
+  // todo_write dạng update-only ({id, status}) merge vào list trước đó (theo
+  // tool-doc của chính hệ thống: "pass only the id and status fields to update")
+  // → panel luôn hiển thị danh sách todo ĐẦY ĐỦ với trạng thái mới nhất thay
+  // vì JSON thô (trước đây update-only render fallback JSON cắt 1500 ký tự).
+  const todosByAgent = new Map<string, Array<{ id?: string; content: string; status?: string }>>()
+  const resolveTodos = (e: TeamProcessEvent): TeamProcessEvent => {
+    if (e.kind !== 'tool' || e.tool !== 'todo_write') return e
+    const items = parseTodoWriteItems(e.argsSummary)
+    if (!items) return e
+    const key = e.agent || ''
+    let list = todosByAgent.get(key) || []
+    list = [...list]
+    for (const it of items) {
+      if (it.id) {
+        const idx = list.findIndex(x => x.id === it.id)
+        if (idx >= 0) {
+          // update theo id: giữ vị trí, chỉ thay content (nếu có) + status
+          list[idx] = {
+            id: it.id,
+            content: it.content || list[idx].content,
+            status: it.status || list[idx].status,
+          }
+        } else if (it.content) {
+          list.push({ id: it.id, content: it.content, status: it.status })
+        }
+        // update-only với id lạ (chưa từng thấy full entry) → bỏ — không có gì hiển thị
+      } else if (it.content) {
+        list.push({ content: it.content, status: it.status })
+      }
+    }
+    todosByAgent.set(key, list)
+    const display = list.slice(0, 30).map(t => ({ content: t.content, status: t.status }))
+    return display.length > 0 ? { ...e, resolvedTodos: display } : e
+  }
   for (const e of events) {
     if (e.kind === 'step') {
       blocks.push({
@@ -727,10 +794,10 @@ function buildTeamAgentBlocks(events: TeamProcessEvent[]): TeamAgentBlock[] {
     const isAgentWork = e.kind === 'thought' || e.kind === 'tool'
     const agentChanged = isAgentWork && cur != null && e.agent != null && cur.agent != null && e.agent !== cur.agent
     if (!cur || agentChanged) {
-      blocks.push({ key: `ev_${e.id}`, agent: e.agent, position: e.position, firstTs: e.ts, lastTs: e.ts, events: [e] })
+      blocks.push({ key: `ev_${e.id}`, agent: e.agent, position: e.position, firstTs: e.ts, lastTs: e.ts, events: [resolveTodos(e)] })
       continue
     }
-    cur.events.push(e)
+    cur.events.push(resolveTodos(e))
     cur.lastTs = Math.max(cur.lastTs, e.ts)
   }
   return blocks
@@ -942,7 +1009,10 @@ export function TeamProcessPanel({ msg }: { msg: SmolabMessage }) {
                       }
                       if (e.kind === 'tool') {
                         // ROUND-42 — todo_write render thành TODO LIST có cấu trúc
-                        const todoItems = e.tool === 'todo_write' ? parseTodoWriteArgs(e.argsSummary) : null
+                        // ROUND-43 fix B4: ưu tiên resolvedTodos (update-only đã
+                        // merge vào list trước đó của agent); fallback parse trực
+                        // tiếp cho bản ghi cũ/full-rewrite parse được.
+                        const todoItems = e.tool === 'todo_write' ? (e.resolvedTodos ?? parseTodoWriteArgs(e.argsSummary)) : null
                         if (todoItems) {
                           const tDone = todoItems.filter(t => t.status === 'completed').length
                           return (
@@ -1053,20 +1123,48 @@ const TEAM_PROCESS_STATUS_MAP: Record<string, NonNullable<SmolabMessage['process
  *  gọn thay vì dải tin nhắn. Thuần + idempotent + giữ id panel ổn định
  *  ('tp_<firstId>') để delta nối tiếp không nhấp nháy.
  *
- *  Bubble workflow_done (metadata.workflowStatus) / error ngay sau chuỗi →
- *  gán trạng thái cuối cho panel vừa gom. Không thấy marker → 'running'
- *  (workflow có thể vẫn đang chạy nền — continueOnDisconnect). */
+ *  Bubble workflow_done (metadata.workflowStatus) / error FATAL ngay sau
+ *  chuỗi → gán trạng thái cuối cho panel vừa gom. Không thấy marker →
+ *  'running' (workflow có thể vẫn đang chạy nền — continueOnDisconnect).
+ *
+ *  ROUND-43 (review code round-42, fix B1/B2/B3/L2/L3):
+ *  - B1: tool_result patch THEO SEQ (metadata.toolResult.toolSeq) thay vì
+ *    vị trí — INSERT fire-and-forget của route khiến row commit lệch thứ tự
+ *    emit (bằng chứng DB thật: 4/70 result ghép nhầm tool sau reload).
+ *  - B2: buildEvents nhận patchBase (events hiện có của panel) — tool_result
+ *    về ở beat delta SAU tool_call vẫn patch được vào panel (trước đây mất).
+ *  - L2: dedupe theo seq — DB copy trùng event live (cửa sổ ~3s giữa SSE
+ *    khép → tail-load) không còn nhân đôi panel/event.
+ *  - L3: stepDone mở đầu là false — chỉ agent_complete row tương ứng mới
+ *    đánh dấu xong (workflow nền panel "Đang chạy" hiện đúng agent hiện hành,
+ *    không còn 🧩 N/N khi chưa xong).
+ *  - B3: error row chỉ chốt 'failed' khi metadata.errorFatal !== false
+ *    (engine đánh fatal:false cho 7 error-site non-terminal). */
 function groupTeamProcessMessages(msgs: SmolabMessage[]): SmolabMessage[] {
   let changed = false
   const out: SmolabMessage[] = []
   let group: SmolabMessage[] = []
   let lastPanelIdx = -1
+  // ROUND-43 L3: agent đã có agent_complete row đi qua — step event đến muộn
+  // (DB commit race: complete row commit trước step row) vẫn được đánh dấu xong.
+  const completedAgents = new Set<string>()
 
   // ROUND-42: buildEvents đọc THEO TỪNG ROW (không còn map() thuần) vì
   // toolResult row phải PATCH vào tool event trước đó (không đẻ event mới) —
   // mirror đúng logic tool_result của live SSE handler.
-  const buildEvents = (src: SmolabMessage[]): TeamProcessEvent[] => {
+  // ROUND-43 B2: patchBase = events hiện có của panel (bản sao nông) — result
+  // row không tìm thấy đích trong group mới sẽ patch vào panel (kết quả tool
+  // chạy lâu >3s về beat sau không còn bị mất cho tới full reload).
+  const buildEvents = (src: SmolabMessage[], patchBase?: TeamProcessEvent[], stats?: { patched: number }): TeamProcessEvent[] => {
     const out: TeamProcessEvent[] = []
+    const seqOf = (meta: Record<string, unknown>): number | undefined =>
+      typeof meta.teamSeq === 'number' ? meta.teamSeq : undefined
+    const applyResult = (ev: TeamProcessEvent, tr: { ok?: boolean; durationMs?: number; preview?: string }) => {
+      ev.success = tr.ok !== false
+      ev.durationMs = typeof tr.durationMs === 'number' ? tr.durationMs : undefined
+      ev.resultPreview = typeof tr.preview === 'string' ? tr.preview : undefined
+      if (stats) stats.patched++
+    }
     for (const m of src) {
       const ts = m.timestamp instanceof Date ? m.timestamp.getTime() : Date.now()
       const meta = (m.metadata || {}) as Record<string, unknown>
@@ -1080,7 +1178,11 @@ function groupTeamProcessMessages(msgs: SmolabMessage[]): SmolabMessage[] {
           avatar: typeof meta.teamStepAvatar === 'string' ? meta.teamStepAvatar : undefined,
           step: String(meta.teamStep),
           description: typeof meta.teamStepDescription === 'string' ? meta.teamStepDescription : undefined,
-          stepDone: true, // history: mọi bước đã persist đều đã chạy qua
+          // ROUND-43 L3: false cho tới khi agent_complete tương ứng đi qua —
+          // workflow nền hiển thị đúng bước đang chạy (trước đây mọi bước
+          // persist đều bị đánh ✓ sẵn → 🧩 N/N + agent hiện hành sai).
+          stepDone: false,
+          seq: seqOf(meta),
         })
         continue
       }
@@ -1095,20 +1197,39 @@ function groupTeamProcessMessages(msgs: SmolabMessage[]): SmolabMessage[] {
           position: m.agentPosition,
           iteration: typeof meta.iteration === 'number' ? meta.iteration : undefined,
           text: m.content,
+          seq: seqOf(meta),
         })
         continue
       }
       if (meta.toolResult != null) {
-        // ROUND-42 — kết quả thật của tool call: patch ngược vào tool event
-        // cuối CÙNG agent chưa có kết quả (mirror live handler)
-        const tr = meta.toolResult as { ok?: boolean; durationMs?: number; preview?: string }
-        for (let i = out.length - 1; i >= 0; i--) {
-          const ev = out[i]
-          if (ev.kind === 'tool' && ev.agent === m.agentName && ev.success == null) {
-            ev.success = tr.ok !== false
-            ev.durationMs = typeof tr.durationMs === 'number' ? tr.durationMs : undefined
-            ev.resultPreview = typeof tr.preview === 'string' ? tr.preview : undefined
-            break
+        // ROUND-42 — kết quả thật của tool call: patch ngược vào tool event.
+        // ROUND-43 B1 — ƯU TIÊN SEQ-MATCH: tr.toolSeq trỏ ĐÚNG tool_call tương
+        // ứng (route stamp) → bất kể row result commit ra DB trước/sau row call
+        // thế nào vẫn patch đúng tool. Fallback positional (dữ liệu cũ không
+        // seq): tool cuối cùng agent chưa có kết quả.
+        const tr = meta.toolResult as { ok?: boolean; durationMs?: number; preview?: string; toolSeq?: number }
+        const refSeq = typeof tr.toolSeq === 'number' ? tr.toolSeq : undefined
+        let patched = false
+        if (refSeq != null) {
+          for (let i = out.length - 1; i >= 0; i--) {
+            if (out[i].kind === 'tool' && out[i].seq === refSeq) { applyResult(out[i], tr); patched = true; break }
+          }
+          if (!patched && patchBase) {
+            for (let i = patchBase.length - 1; i >= 0; i--) {
+              if (patchBase[i].kind === 'tool' && patchBase[i].seq === refSeq) { applyResult(patchBase[i], tr); patched = true; break }
+            }
+          }
+        }
+        if (!patched) {
+          for (let i = out.length - 1; i >= 0; i--) {
+            const ev = out[i]
+            if (ev.kind === 'tool' && ev.agent === m.agentName && ev.success == null) { applyResult(ev, tr); patched = true; break }
+          }
+          if (!patched && patchBase) {
+            for (let i = patchBase.length - 1; i >= 0; i--) {
+              const ev = patchBase[i]
+              if (ev.kind === 'tool' && ev.agent === m.agentName && ev.success == null) { applyResult(ev, tr); patched = true; break }
+            }
           }
         }
         continue
@@ -1122,6 +1243,7 @@ function groupTeamProcessMessages(msgs: SmolabMessage[]): SmolabMessage[] {
           position: m.agentPosition,
           tool: m.toolCallInfo.tool,
           argsSummary: m.toolCallInfo.detail || m.content,
+          seq: seqOf(meta),
         })
         continue
       }
@@ -1140,24 +1262,46 @@ function groupTeamProcessMessages(msgs: SmolabMessage[]): SmolabMessage[] {
         decision: typeof cp?.decision === 'string' ? cp.decision : ((mt?.[2] || '').trim() || undefined),
         reasoning: typeof cp?.reasoning === 'string' ? cp.reasoning : (mt?.[3]?.trim() || undefined),
         pending: cp?.pending === true,
+        seq: seqOf(meta),
       })
     }
     return out
   }
 
+  // ROUND-43: gộp group vào panel hiện hành — dedupe theo seq (live↔DB copy),
+  // sort theo seq khi MỌI event có seq (phục hồi thứ tự emit sau commit race),
+  // mark stepDone cho agent đã có agent_complete đi qua trước (race ngược).
+  const mergeIntoPanel = (panel: SmolabMessage): SmolabMessage => {
+    const base = (panel.processEvents || []).map(e => ({ ...e }))
+    const existingSeqs = new Set(base.map(e => e.seq).filter((s): s is number => s != null))
+    // stats.patched: tool_result row KHÔNG đẻ event mới mà PATCH vào base —
+    // group chỉ toàn result (B2: kết quả về beat sau tool_call) thì added rỗng
+    // nhưng base đã đổi → vẫn phải trả panel ĐÃ PATCH (không bỏ mất kết quả).
+    const stats = { patched: 0 }
+    const added = buildEvents(group, base, stats)
+      .filter(e => e.seq == null || !existingSeqs.has(e.seq))
+    group = []
+    if (added.length === 0 && stats.patched === 0) return panel
+    for (const e of added) {
+      if (e.kind === 'step' && e.agent && completedAgents.has(e.agent)) e.stepDone = true
+    }
+    const merged = [...base, ...added]
+    if (merged.every(e => e.seq != null)) merged.sort((a, b) => (a.seq as number) - (b.seq as number))
+    changed = true
+    return { ...panel, processEvents: merged }
+  }
+
   const flush = () => {
     if (group.length === 0) return
     // FIX B2 (review 2026-10-29): 1 workflow = 1 PANEL — flush GỘP vào panel
-    // hiện hành khi panel còn mở ('running', chưa finalize, chưa qua user
-    // message mới) thay vì đẻ panel mới. Không có merge này thì: (a) reload
-    // history tách 1 workflow thành nhiều panel nhỏ xen kẽ báo cáo
-    // agent_complete; (b) heartbeat delta MỖI BEAT lại tạo thêm 1 panel —
-    // workflow nền 13 phút lại thành "dải panel" đúng lỗi user phàn nàn.
+    // hiện hành thay vì đẻ panel mới. ROUND-43: bỏ điều kiện panel còn
+    // 'running' — rows straggler đến SAU workflow_done (commit chậm) giờ cũng
+    // gộp vào panel đã finalize thay vì đẻ panel ma "Đang chạy" vĩnh viễn.
+    // An toàn vì user message luôn reset lastPanelIdx (ranh giới workflow mới
+    // — route luôn persist user row trước mọi event row).
     const cur = lastPanelIdx >= 0 ? out[lastPanelIdx] : undefined
-    if (cur?.isTeamProcess && (cur.processStatus || 'running') === 'running') {
-      out[lastPanelIdx] = { ...cur, processEvents: [...(cur.processEvents || []), ...buildEvents(group)] }
-      changed = true
-      group = []
+    if (cur?.isTeamProcess) {
+      out[lastPanelIdx] = mergeIntoPanel(cur)
       return
     }
     out.push({
@@ -1181,9 +1325,7 @@ function groupTeamProcessMessages(msgs: SmolabMessage[]): SmolabMessage[] {
       // Panel đã có (runtime / group lần trước). Bubbles DB mới đến LIỀN KỀ
       // (workflow nền chạy tiếp) → GỘP events tiếp vào panel đó.
       if (group.length > 0) {
-        out.push({ ...m, processEvents: [...(m.processEvents || []), ...buildEvents(group)] })
-        changed = true
-        group = []
+        out.push(mergeIntoPanel(m))
       } else {
         out.push(m)
       }
@@ -1202,13 +1344,50 @@ function groupTeamProcessMessages(msgs: SmolabMessage[]): SmolabMessage[] {
         // FIX B3 (review 2026-10-29): workflow_done persist kèm
         // metadata.workflowDurationMs → panel reload hiện ⏱ như live.
         const dur = typeof m.metadata?.workflowDurationMs === 'number' ? m.metadata.workflowDurationMs : undefined
+        const panel = out[lastPanelIdx]
+        // ROUND-43 L3: workflow khép → mọi bước còn treo đánh dấu xong
+        const evs = panel.processEvents
+        let patchedSteps = false
+        const nextEvents = evs
+          ? evs.map(e => {
+            if (e.kind === 'step' && !e.stepDone) { patchedSteps = true; return { ...e, stepDone: true } }
+            return e
+          })
+          : evs
         out[lastPanelIdx] = {
-          ...out[lastPanelIdx],
+          ...panel,
           processStatus: TEAM_PROCESS_STATUS_MAP[wfStatus] || 'done',
           ...(dur != null ? { processDurationMs: dur } : {}),
+          ...(patchedSteps ? { processEvents: nextEvents } : {}),
         }
       } else if (m.role === 'error') {
-        out[lastPanelIdx] = { ...out[lastPanelIdx], processStatus: 'failed' }
+        // ROUND-43 fix B3: CHỈ error fatal mới chốt 'Lỗi' — engine emit
+        // fatal:false cho 7 error-site non-terminal (step fail nhưng workflow
+        // chạy tiếp). Row cũ không metadata → mặc định fatal (giữ hành vi cũ).
+        if (m.metadata?.errorFatal !== false) {
+          out[lastPanelIdx] = { ...out[lastPanelIdx], processStatus: 'failed' }
+        }
+      } else if (
+        m.role === 'assistant' && m.isTeamMessage &&
+        m.agentName && m.agentName !== 'SYSTEM' &&
+        typeof m.metadata?.durationMs === 'number' && !m.metadata?.omegaEscalation
+      ) {
+        // ROUND-43 L3: agent_complete row (báo cáo agent) đi qua → đánh dấu
+        // bước cuối của agent này trong panel là xong (workflow nền hiển thị
+        // đúng agent hiện hành thay vì mọi bước ✓ sẵn).
+        const panel = out[lastPanelIdx]
+        const evs = panel.processEvents
+        if (evs) {
+          for (let i = evs.length - 1; i >= 0; i--) {
+            if (evs[i].kind === 'step' && evs[i].agent === m.agentName && !evs[i].stepDone) {
+              const nextEvents = [...evs]
+              nextEvents[i] = { ...evs[i], stepDone: true }
+              out[lastPanelIdx] = { ...panel, processEvents: nextEvents }
+              break
+            }
+          }
+        }
+        completedAgents.add(m.agentName)
       }
     }
     out.push(m)
@@ -3385,9 +3564,13 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         })
       }
       // Response có `message` (auto-dispatch khi server đang auto mode) →
-      // refresh tail để directive message hiện trong chat
+      // refresh để directive message hiện trong chat
+      // ROUND-43 fix B5: dùng appendDeltaMessages (chỉ APPEND row mới) thay vì
+      // loadSessionTail (REPLACE toàn bộ) — nếu workflow SSE đang chạy cùng
+      // phiên thì REPLACE giết panel live (processMsgId mất đích → đóng băng —
+      // cùng lớp bug round-42 đã fix cho heartbeat, còn sót 2 lối này).
       if (data?.message) {
-        void loadSessionTail(sid, { silent: true }).catch(() => {})
+        void appendDeltaMessages(sid).catch(() => {})
       }
     } catch (err) {
       toast({
@@ -3823,6 +4006,11 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       setMessages(prev => prev.map(m => (m.id === processMsgId ? { ...m, ...patch } : m)))
     }
     const pushProcessEvent = (ev: TeamProcessEvent) => {
+      // ROUND-43 fix L2/B1: dedupe theo seq — event live đã có bản DB copy
+      // trong panel (heartbeat delta kéo về trước lúc SSE khép) thì KHÔNG đẩy
+      // thêm bản trùng (trước đây nhân đôi sự kiện trong panel ~3s trước khi
+      // loadSessionTail thay thế).
+      if (ev.seq != null && processEvents.some(x => x.seq === ev.seq)) return
       processEvents.push(ev)
       patchPanel({ processEvents: [...processEvents] })
     }
@@ -3956,6 +4144,8 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                 avatar: agentAvatar,
                 step: (event.step as string) || undefined,
                 description: (event.description as string) || undefined,
+                // ROUND-43 fix B1: seq do route stamp — dedupe/sort/patch theo seq
+                seq: typeof event.seq === 'number' ? event.seq : undefined,
               })
               break
             }
@@ -3984,6 +4174,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                   agent: chunkAgent,
                   iteration: chunkIter,
                   text: chunkContent,
+                  seq: typeof event.seq === 'number' ? event.seq : undefined, // ROUND-43 fix B1
                 })
               }
               if (isActiveSession()) setMessages(prev => prev.map(m =>
@@ -4036,24 +4227,44 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                 position: toolAgentPosition,
                 tool: toolName,
                 argsSummary: toolDetail || '',
+                seq: typeof event.seq === 'number' ? event.seq : undefined, // ROUND-43 fix B1
               })
               break
             }
 
             case 'tool_result': {
-              // Panel: cập nhật kết quả thật (✓/✗ + duration + preview) cho
-              // tool event gần nhất chưa có kết quả của agent này. (Window
-              // event bridge phía trên vẫn dispatch cho CodeTab.)
+              // Panel: cập nhật kết quả thật (✓/✗ + duration + preview).
+              // ROUND-43 fix B1: Ưu tiên patch THEO SEQ (event.toolSeq do route
+              // stamp — trỏ đúng tool_call tương ứng) thay vì vị trí; fallback
+              // positional cho event cũ không seq. (Window event bridge phía
+              // trên vẫn dispatch cho CodeTab.)
               const trAgent = event.agent as string
               const trOk = event.result !== 'Error'
-              for (let i = processEvents.length - 1; i >= 0; i--) {
-                const ev = processEvents[i]
-                if (ev.kind === 'tool' && ev.agent === trAgent && ev.success == null) {
-                  ev.success = trOk
-                  ev.durationMs = typeof event.duration === 'number' ? event.duration : undefined
-                  const trDetail = event.detail
-                  ev.resultPreview = typeof trDetail === 'string' ? trDetail.slice(0, 300) : undefined
-                  break
+              const trSeq = typeof event.toolSeq === 'number' ? event.toolSeq : undefined
+              let patched = false
+              if (trSeq != null) {
+                for (let i = processEvents.length - 1; i >= 0; i--) {
+                  const ev = processEvents[i]
+                  if (ev.kind === 'tool' && ev.seq === trSeq) {
+                    ev.success = trOk
+                    ev.durationMs = typeof event.duration === 'number' ? event.duration : undefined
+                    const trDetail = event.detail
+                    ev.resultPreview = typeof trDetail === 'string' ? trDetail.slice(0, 300) : undefined
+                    patched = true
+                    break
+                  }
+                }
+              }
+              if (!patched) {
+                for (let i = processEvents.length - 1; i >= 0; i--) {
+                  const ev = processEvents[i]
+                  if (ev.kind === 'tool' && ev.agent === trAgent && ev.success == null) {
+                    ev.success = trOk
+                    ev.durationMs = typeof event.duration === 'number' ? event.duration : undefined
+                    const trDetail = event.detail
+                    ev.resultPreview = typeof trDetail === 'string' ? trDetail.slice(0, 300) : undefined
+                    break
+                  }
                 }
               }
               patchPanel({ processEvents: [...processEvents] })
@@ -4078,6 +4289,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                 decision: checkpointDecision,
                 reasoning: checkpointReasoning,
                 pending: event.pending === true,
+                seq: typeof event.seq === 'number' ? event.seq : undefined, // ROUND-43 fix B1
               })
               break
             }
@@ -4239,7 +4451,14 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
             case 'error': {
               const errorMsg = event.message as string
               const errorAgent = event.agent as string | undefined
-              patchPanel({ processStatus: 'failed' })
+              // ROUND-43 fix B3: CHỈ error fatal mới chốt panel 'Lỗi' — engine
+              // emit fatal:false cho 7 error-site non-terminal (step fail nhưng
+              // workflow vẫn chạy tiếp: thiếu agent / skip step / LLM fail /
+              // fabricated / context overflow / verify timeout / ESCALATE-reason).
+              // Trước đây MỌI error đội panel 'Lỗi' + auto-collapse giữa chừng.
+              if (event.fatal !== false) {
+                patchPanel({ processStatus: 'failed' })
+              }
               const errMsg: SmolabMessage = {
                 id: crypto.randomUUID(),
                 role: 'error',
@@ -6028,11 +6247,15 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                         review={opusRv}
                         dispatched={opusDispatched.has(opusRv.id) || opusDispatchedFromChat.has(opusRv.id)}
                         onDispatched={() => {
-                          // Đã ban hành → đánh dấu + reload tail để directive
-                          // message hiện trong chat
+                          // Đã ban hành → đánh dấu + kéo message mới về
+                          // ROUND-43 fix B5: appendDeltaMessages thay vì
+                          // loadSessionTail — không REPLACE giữa lúc workflow
+                          // SSE đang chạy (giết panel live — cùng lớp bug
+                          // heartbeat round-42, còn sót lối này).
                           setOpusDispatched(prev => new Set(prev).add(opusRv.id))
-                          if (currentSessionIdRef.current) {
-                            void loadSessionTail(currentSessionIdRef.current, { silent: true }).catch(() => {})
+                          const sidB5 = currentSessionIdRef.current
+                          if (sidB5) {
+                            void appendDeltaMessages(sidB5).catch(() => {})
                           }
                         }}
                       />

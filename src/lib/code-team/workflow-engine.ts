@@ -1427,7 +1427,9 @@ async function runPipeline(
   if (resolutionResult.missingPositions.length > 0) {
     const missingMsg = `⚠️ Không tìm thấy agents cho positions: ${resolutionResult.missingPositions.join(', ')}. Workflow có thể không hoàn thành.`
     console.warn(`[Workflow] ${missingMsg}`)
-    emit({ type: 'error', agent: 'SYSTEM', message: missingMsg })
+    // ROUND-43 fix B3: fatal:false — workflow VẪN CHẠY TIẾP với agents còn lại;
+    // panel UI không được đội 'Lỗi' giữa chừng (chỉ workflow_done/error-fatal chốt).
+    emit({ type: 'error', agent: 'SYSTEM', fatal: false, message: missingMsg })
   }
 
   // Cache resolved agents for use in runAgentStep
@@ -1442,7 +1444,10 @@ async function runPipeline(
     // cả workflow giữa các step, không chỉ step đang chạy.
     if (isSessionCancelled(sessionId)) {
       console.log(`[Workflow] 🛑 Session ${sessionId} bị user HỦY — dừng pipeline tại step ${i} (${step.position}/${step.step})`)
-      emit({ type: 'error', agent: 'SYSTEM', message: '⏹ Đã dừng workflow theo yêu cầu của bạn.' })
+      // ROUND-43 fix B3: fatal:false (user hủy ≠ lỗi) + emit workflow_done
+      // 'cancelled' — trước đây đường này KHÔNG emit workflow_done nên panel
+      // sau reload kẹt 'failed' (từ error row) thay vì 'Đã dừng'.
+      emit({ type: 'error', agent: 'SYSTEM', fatal: false, message: '⏹ Đã dừng workflow theo yêu cầu của bạn.' })
       await metricsCollector.flush().catch((mErr) => {
         console.error('[Workflow] Layer 9 flush failed (cancel path):', mErr)
       })
@@ -1451,6 +1456,7 @@ async function runPipeline(
       // KHÔNG auto-escalate Omega: đây là ý muốn người dùng, không phải sự cố.
       emitFinalReport() // ROUND-38 fix Y6 — tổng kết cả trên đường user-cancel
       await completeSession(sessionId, 'cancelled', Date.now() - workflowStartTime, completedAgents)
+      emit({ type: 'workflow_done', totalDuration: Date.now() - workflowStartTime, sessionId, status: 'cancelled' })
       return
     }
 
@@ -1465,6 +1471,10 @@ async function runPipeline(
       // 'cancelled' thay vì 'failed' (tín hiệu trung thực cho scan/SOP).
       emitFinalReport() // ROUND-38 fix Y6 — tổng kết cả trên đường client-abort
       await completeSession(sessionId, 'cancelled', Date.now() - workflowStartTime, completedAgents)
+      // ROUND-43 fix B3: emit workflow_done 'cancelled' — client đã rời nhưng
+      // persistTeamEvent vẫn ghi DB → panel sau reload có marker terminal đúng
+      // (trước đây đường này không emit workflow_done → panel 'Đang chạy' vĩnh viễn).
+      emit({ type: 'workflow_done', totalDuration: Date.now() - workflowStartTime, sessionId, status: 'cancelled' })
       return
     }
 
@@ -1489,10 +1499,12 @@ async function runPipeline(
     // Skip step if agent is missing (no provider/model) — graceful degradation
     if (agentDef.source === 'missing' || !agentDef.provider || !agentDef.model) {
       console.warn(`[Workflow] Skipping step ${step.position}/${step.step} — agent not available`)
+      // ROUND-43 fix B3: fatal:false — workflow bỏ qua step, pipeline chạy tiếp
       emit({
         type: 'error',
         agent: step.position,
         position: step.position,
+        fatal: false,
         message: `Agent ${step.position} không khả dụng. Bỏ qua bước ${step.description}.`,
       })
       continue
@@ -1762,6 +1774,7 @@ async function runPipeline(
         emit({
           type: 'error',
           agent: tlName,
+          fatal: false, // ROUND-43 fix B3: workflow_done 'escalated' theo sau sẽ chốt trạng thái
           message: `ESCALATE sau ${step.position}: ${verifyResult.reasoning}`,
         })
 
@@ -2545,6 +2558,7 @@ export async function runAgentStep(params: {
         type: 'error',
         agent: agent.name,
         position,
+        fatal: false, // ROUND-43 fix B3: step dừng nhưng workflow chạy tiếp với step kế
         message: `LLM call failed: ${errMsg}`,
       })
       break
@@ -2663,6 +2677,7 @@ export async function runAgentStep(params: {
           type: 'error',
           agent: agent.name,
           position,
+          fatal: false, // ROUND-43 fix B3: dừng step chống bằng chứng giả — pipeline chạy tiếp
           message: 'Agent bịa kết quả tool (fabricated [TOOL RESULT]) sau 2 cảnh báo — dừng step.',
         })
         endStepRun('error')
@@ -3071,6 +3086,7 @@ export async function runAgentStep(params: {
           type: 'error',
           agent: agent.name,
           position,
+          fatal: false, // ROUND-43 fix B3: session pause + auto-resume — không phải lỗi terminal
           message: `Context overflow (~${currentTokens} tokens) — session ${sessionId} paused for resume handoff${autoResumeNumber !== null ? ` — auto-resume #${autoResumeNumber} scheduled` : ''}`,
         })
         break
@@ -3283,6 +3299,7 @@ Output JSON trong markdown code block:
       agent: agentDef.name,
       position: 'TL',
       step: 'verify',
+      fatal: false, // ROUND-43 fix B3: timeout → fallback rule-based, workflow chạy tiếp
       message: timeoutMsg,
     })
     return {

@@ -62,6 +62,11 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
     if (isSessionDeleted(sessionId)) return
     const agentName = (event.agent as string) || undefined
     const agentPosition = (event.position as string) || undefined
+    // ROUND-43 fix B1: seq đơn điệu (stamp bởi emit wrapper của POST) — persist
+    // vào metadata để frontend khôi phục THỨ TỰ EMIT giữa đám INSERT fire-and-forget
+    // chạy đua nhau ở SQLite (không đảm bảo commit theo thứ tự).
+    const teamSeq = typeof event.seq === 'number' ? event.seq : undefined
+    const seqMeta = teamSeq != null ? { teamSeq } : {}
     let row: { role: string; content: string; metadata?: Record<string, unknown> } | null = null
 
     if (type === 'agent_complete') {
@@ -70,7 +75,7 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
         row = {
           role: 'assistant',
           content,
-          metadata: { isTeamMessage: true, agentName, agentPosition, durationMs: event.duration },
+          metadata: { isTeamMessage: true, agentName, agentPosition, durationMs: event.duration, ...seqMeta },
         }
       }
     } else if (type === 'agent_chunk') {
@@ -90,6 +95,7 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
             agentPosition,
             teamThought: true,
             ...(iteration != null ? { iteration } : {}),
+            ...seqMeta,
           },
         }
       }
@@ -114,6 +120,7 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
             teamStepDescription: description,
             // ROUND-42: avatar để panel vẽ divider agent sau reload y như live
             ...(avatar ? { teamStepAvatar: avatar } : {}),
+            ...seqMeta,
           },
         }
       }
@@ -123,7 +130,7 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
       row = {
         role: 'assistant',
         content: detail || `🔧 ${tool}`,
-        metadata: { isTeamMessage: true, agentName, agentPosition, toolCallInfo: { tool, detail } },
+        metadata: { isTeamMessage: true, agentName, agentPosition, toolCallInfo: { tool, detail }, ...seqMeta },
       }
     } else if (type === 'tool_result') {
       // ROUND-42: persist kết quả thật (✓/✗ + duration + preview) — trước đây
@@ -135,6 +142,11 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
       const ok = event.result !== 'Error'
       const duration = typeof event.duration === 'number' ? event.duration : undefined
       const detail = (event.detail as string) || ''
+      // ROUND-43 fix B1: toolSeq = seq của tool_call tương ứng (stamp ở emit
+      // wrapper) — frontend patch KẾT QUẢ vào ĐÚNG tool bằng seq, bất kể row
+      // result commit ra DB trước/sau row call thế nào (trước đây patch theo
+      // vị trí → 4/70 result ghép nhầm tool sau reload — bằng chứng DB thật).
+      const toolSeq = typeof event.toolSeq === 'number' ? event.toolSeq : undefined
       row = {
         role: 'assistant',
         content: `↳ ${ok ? '✓' : '✗'} ${tool}${duration != null ? ` (${duration}ms)` : ''}`,
@@ -142,7 +154,8 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
           isTeamMessage: true,
           agentName,
           agentPosition,
-          toolResult: { tool, ok, ...(duration != null ? { durationMs: duration } : {}), ...(detail ? { preview: detail.slice(0, 300) } : {}) },
+          toolResult: { tool, ok, ...(duration != null ? { durationMs: duration } : {}), ...(detail ? { preview: detail.slice(0, 300) } : {}), ...(toolSeq != null ? { toolSeq } : {}) },
+          ...seqMeta,
         },
       }
     } else if (type === 'checkpoint') {
@@ -162,6 +175,7 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
           agentName: agentName || 'CHECKPOINT',
           agentPosition: agentPosition || 'TL',
           checkpoint: { step, ...(decision != null ? { decision } : {}), ...(reasoning != null ? { reasoning } : {}), ...(pending ? { pending } : {}) },
+          ...seqMeta,
         },
       }
     } else if (type === 'workflow_done') {
@@ -186,7 +200,7 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
       row = {
         role: 'assistant',
         content,
-        metadata: { isTeamMessage: true, agentName: 'SYSTEM', agentPosition: 'TL', workflowStatus: status, workflowDurationMs: totalDuration },
+        metadata: { isTeamMessage: true, agentName: 'SYSTEM', agentPosition: 'TL', workflowStatus: status, workflowDurationMs: totalDuration, ...seqMeta },
       }
     } else if (type === 'final_report') {
       // ROUND-42: persist báo cáo tổng kết workflow — frontend REPLACE phiên bằng
@@ -197,7 +211,7 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
         row = {
           role: 'assistant',
           content: `📋 **BÁO CÁO TỔNG KẾT WORKFLOW**\n\n\`\`\`\n${formatted}\n\`\`\``,
-          metadata: { isTeamMessage: true, agentName: 'SYSTEM', agentPosition: 'TL' },
+          metadata: { isTeamMessage: true, agentName: 'SYSTEM', agentPosition: 'TL', ...seqMeta },
         }
       }
     } else if (type === 'omega_escalation') {
@@ -211,14 +225,21 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
         row = {
           role: 'assistant',
           content: `🧠 **TƯ VẤN TỪ OMEGA ORCHESTRATOR** (auto-escalate — vấn đề: ${reason || 'workflow gặp sự cố'})\n\n${advisory}`,
-          metadata: { isTeamMessage: true, agentName, agentPosition: 'OMEGA', omegaEscalation: true, reason, tokensUsed: event.tokensUsed },
+          metadata: { isTeamMessage: true, agentName, agentPosition: 'OMEGA', omegaEscalation: true, reason, tokensUsed: event.tokensUsed, ...seqMeta },
         }
       }
     } else if (type === 'error') {
       const message = (event.message as string) || 'Unknown error'
+      // ROUND-43 fix B3: engine phân biệt error FATAL (workflow dừng thật —
+      // frontend được phép chốt panel 'Lỗi') với error NON-TERMINAL (step fail
+      // nhưng workflow VẪN CHẠY TIẾP — trước đây mọi error đều đội panel thành
+      // 'Lỗi' + auto-collapse giữa chừng khi agents còn làm việc). Row cũ không
+      // có metadata → mặc định fatal (giữ hành vi cũ cho dữ liệu legacy).
+      const fatal = event.fatal !== false
       row = {
         role: 'error',
         content: `❌ Workflow Error${agentName ? ` (${agentName})` : ''}: ${message}`,
+        metadata: { errorFatal: fatal, ...seqMeta },
       }
     }
 
@@ -301,13 +322,32 @@ export async function POST(request: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       // SSE emitter — sends events to client
+      //
+      // ROUND-43 fix B1: stamp seq đơn điệu cho MỌI event (persist vào
+      // metadata.teamSeq + gửi kèm SSE event.seq) + toolSeq cho tool_result
+      // (trỏ đúng tool_call tương ứng theo agent) — frontend khôi phục thứ tự
+      // emit + patch kết quả chính xác bất kể thứ tự commit DB (INSERT
+      // fire-and-forget chạy đua nhau ở SQLite không đảm bảo thứ tự), đồng
+      // thời dedupe event live ↔ DB copy cùng seq (chống nhân đôi khi delta
+      // kéo row về giữa lúc SSE còn sống).
+      let teamEventSeq = 0
+      const lastToolSeqByAgent = new Map<string, number>()
       const emit = (event: Record<string, unknown>) => {
+        const stamped: Record<string, unknown> = { ...event, seq: teamEventSeq++ }
+        if (stamped.type === 'tool_call') {
+          const agentKey = (stamped.agent as string) || ''
+          if (agentKey) lastToolSeqByAgent.set(agentKey, stamped.seq as number)
+        } else if (stamped.type === 'tool_result') {
+          const agentKey = (stamped.agent as string) || ''
+          const toolSeqRef = agentKey ? lastToolSeqByAgent.get(agentKey) : undefined
+          if (toolSeqRef != null) stamped.toolSeq = toolSeqRef
+        }
         // USER REQUEST 2026-09-01: persist event quan trọng vào DB trước khi
         // gửi (best-effort — lỗi persist không chặn stream)
-        persistTeamEvent(sessionId, event)
+        persistTeamEvent(sessionId, stamped)
         if (isClosed) return
         try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(stamped)}\n\n`))
         } catch {
           // Client disconnected — mark as closed
           // NOTE: With continueOnDisconnect=true, workflow engine handles this gracefully
