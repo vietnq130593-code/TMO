@@ -592,6 +592,9 @@ export function AnalyticsSection({ data, onRefreshStats }: { data: AnalyticsData
       </Card>
       </div>
 
+      {/* ROUND-37 V1 — SỨC KHOẺ TỪNG COLLECTION (các collection phụ thuộc có ô riêng) */}
+      <CollectionsHealthPanel />
+
       {/* G. Gap Analysis */}
       <div className="nc-wrap nc-amber">
       <Card className="nc-panel nc-md nc-border-amber">
@@ -805,3 +808,187 @@ export function Neo4jVerification({ health }: { health?: HealthResponse | null }
   )
 }
 
+
+// ==================== ROUND-37 V1 — COLLECTIONS HEALTH PANEL ====================
+// Các collection phụ thuộc (episodes/communities/agent_memory/task_context +
+// kho episodic Neo4j + SQLite mirror) có ô health RIÊNG — desync collection
+// phụ không còn diễn ra im lặng (lesson round-36). Fetch riêng 60s/lần —
+// không đụng /api/health (poll 10s) để tránh thêm tải Neo4j.
+
+interface CollectionHealthCell {
+  name: string
+  label: string
+  exists: boolean
+  pointCount?: number
+  dimExpected?: number
+  dimActual?: number
+  dimMismatch?: boolean
+  error?: string
+}
+
+interface CollectionsHealthData {
+  qdrant: CollectionHealthCell[]
+  episodic: {
+    neo4jReachable: boolean
+    episodes: number
+    lessons: number
+    errors: number
+    sqliteEpisodes: number
+    sqliteLessons: number
+  }
+  desync: { episodesQdrantNeo4j: number; lessonsNeo4jSqlite: number }
+  durationMs?: number
+}
+
+export function CollectionsHealthPanel() {
+  const [data, setData] = useState<CollectionsHealthData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const checkCollections = useCallback(async () => {
+    try {
+      const res = await fetch('/api/storage/collections-health')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = (await res.json()) as CollectionsHealthData
+      setData(json)
+    } catch {
+      // fail-open — giữ dữ liệu cũ (nếu có)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    queueMicrotask(() => { void checkCollections() })
+    const interval = setInterval(() => { void checkCollections() }, 60_000)
+    return () => { clearInterval(interval) }
+  }, [checkCollections])
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true)
+    await checkCollections()
+    setRefreshing(false)
+  }, [checkCollections])
+
+  if (loading) {
+    return (
+      <div className="nc-wrap nc-amber">
+        <Card className="nc-panel nc-md nc-border-amber">
+          <CardContent className="py-6 flex items-center justify-center gap-2 text-xs text-stone-400">
+            <Loader2 className="h-4 w-4 animate-spin" /> Đang kiểm tra sức khoẻ các collection...
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+  if (!data) return null
+
+  const desyncEpisode = data.desync.episodesQdrantNeo4j
+  const desyncLesson = data.desync.lessonsNeo4jSqlite
+
+  return (
+    <div className="nc-wrap nc-amber">
+      <Card className="nc-panel nc-md nc-border-amber">
+        <CardHeader className="pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-600"><Database className="h-4 w-4 text-white" /></div>
+            <div className="flex-1">
+              <CardTitle className="text-sm font-semibold tracking-tight text-stone-100">Sức khoẻ Collection (từng kho — Round-37 V1)</CardTitle>
+              <CardDescription className="text-xs text-stone-400">6 collection Qdrant + kho episodic Neo4j + SQLite mirror — mỗi collection 1 ô, desync lộ ngay</CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 text-[10px] border-cyan-400/35 hover:bg-cyan-900/40 hover:text-cyan-300"
+              onClick={handleRefresh}
+              disabled={refreshing}
+            >
+              {refreshing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            {data.qdrant.map(col => {
+              const status = !col.exists ? 'missing' : col.dimMismatch ? 'dim-mismatch' : (col.pointCount ?? 0) === 0 ? 'empty' : 'ok'
+              return (
+                <div
+                  key={col.name}
+                  className={`p-3 rounded-xl border text-xs ${
+                    status === 'ok' ? 'border-emerald-500/55 bg-emerald-950/30' :
+                    status === 'dim-mismatch' ? 'border-red-500/55 bg-red-950/40' :
+                    status === 'empty' ? 'border-amber-500/55 bg-amber-950/30' :
+                    'border-stone-600/55 bg-stone-900/40'
+                  }`}
+                  title={`${col.name}${col.error ? ` — ${col.error}` : ''}`}
+                >
+                  <div className="font-semibold text-stone-200 leading-tight mb-1 truncate">{col.label}</div>
+                  <div className="text-[10px] text-muted-foreground truncate">{col.name}</div>
+                  <div className="mt-1.5 space-y-0.5 text-[10px]">
+                    {col.exists ? (
+                      <>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Điểm:</span><span className="font-medium text-stone-200">{col.pointCount?.toLocaleString('vi-VN') ?? '0'}</span></div>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Dim:</span>
+                          <span className={`font-medium ${col.dimMismatch ? 'text-red-400' : 'text-stone-200'}`}>
+                            {col.dimActual ?? '?'}{col.dimMismatch ? ` ≠ ${col.dimExpected}` : ''}
+                          </span>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex items-center gap-1 text-amber-500"><AlertTriangle className="h-3 w-3" /> {col.error ? 'Lỗi kết nối' : 'Chưa tạo'}</div>
+                    )}
+                  </div>
+                  {status === 'dim-mismatch' && (
+                    <div className="mt-1 text-[9px] text-red-400 leading-tight">Sai dim — mọi upsert sẽ 400</div>
+                  )}
+                  {status === 'ok' && (
+                    <div className="mt-1 flex items-center gap-1 text-[9px] text-emerald-400"><CheckCircle2 className="h-3 w-3" /> Sống</div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Kho episodic Neo4j + SQLite mirror + desync */}
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className={`p-3 rounded-xl border text-xs ${data.episodic.neo4jReachable ? 'border-violet-500/55 bg-violet-950/30' : 'border-red-500/55 bg-red-950/40'}`}>
+              <div className="font-semibold text-violet-400 mb-1.5">Episodic — Neo4j (Graph)</div>
+              <div className="space-y-1 text-[10px]">
+                <div className="flex justify-between"><span className="text-muted-foreground">Episodes:</span><span className="font-medium text-stone-200">{data.episodic.episodes.toLocaleString('vi-VN')}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Lessons:</span><span className="font-medium text-stone-200">{data.episodic.lessons.toLocaleString('vi-VN')}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">ErrorOccurrences:</span><span className="font-medium text-stone-200">{data.episodic.errors.toLocaleString('vi-VN')}</span></div>
+              </div>
+              {!data.episodic.neo4jReachable && <div className="mt-1 text-[9px] text-red-400">Neo4j không đạt</div>}
+            </div>
+            <div className="p-3 rounded-xl border border-cyan-500/55 bg-cyan-950/30 text-xs">
+              <div className="font-semibold text-cyan-400 mb-1.5">Episodic — SQLite mirror</div>
+              <div className="space-y-1 text-[10px]">
+                <div className="flex justify-between"><span className="text-muted-foreground">EpisodeRecord:</span><span className="font-medium text-stone-200">{data.episodic.sqliteEpisodes.toLocaleString('vi-VN')}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">LessonRecord:</span><span className="font-medium text-stone-200">{data.episodic.sqliteLessons.toLocaleString('vi-VN')}</span></div>
+              </div>
+            </div>
+            <div className={`p-3 rounded-xl border text-xs ${(desyncEpisode > 2 || desyncLesson > 2) ? 'border-amber-500/55 bg-amber-950/40' : 'border-emerald-500/55 bg-emerald-950/30'}`}>
+              <div className="font-semibold text-amber-400 mb-1.5">Desync (đối chiếu chéo)</div>
+              <div className="space-y-1 text-[10px]">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Episodes Qdrant↔Neo4j:</span>
+                  <span className={`font-medium ${desyncEpisode > 2 ? 'text-amber-400' : 'text-stone-200'}`}>{desyncEpisode.toLocaleString('vi-VN')}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Lessons Neo4j↔SQLite:</span>
+                  <span className={`font-medium ${desyncLesson > 2 ? 'text-amber-400' : 'text-stone-200'}`}>{desyncLesson.toLocaleString('vi-VN')}</span>
+                </div>
+              </div>
+              {(desyncEpisode > 2 || desyncLesson > 2) ? (
+                <div className="mt-1 flex items-center gap-1 text-[9px] text-amber-400"><AlertTriangle className="h-3 w-3" /> Lệch kho — boot-heal sẽ tự chạy</div>
+              ) : (
+                <div className="mt-1 flex items-center gap-1 text-[9px] text-emerald-400"><CheckCircle2 className="h-3 w-3" /> Các kho khớp</div>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
