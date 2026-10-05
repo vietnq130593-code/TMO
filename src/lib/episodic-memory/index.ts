@@ -72,3 +72,7 @@ export {
 export type { ConsolidateLessonInput, ConsolidateLessonResult, ValidateLessonsResult } from './lessons'
 export { mapOutcome, recordEpisodeFromRun } from './recorder'
 export { buildPreActContext } from './preact'
+export { applyEpsilonExploration } from './preact'
+// ROUND-37 V3 — adapter bộ não cho gia đình agent ngoài goal-loop
+export { buildAgentBrainBlock, recordAgentEpisode, mapRunOutcome } from './agent-brain'
+export type { AgentBrainBlock } from './agent-brain'

@@ -637,14 +637,27 @@ function calculateRawConfidence(
  *
  * The prompt explicitly tells the model NOT to use any user documents,
  * and to mark facts as coming from training knowledge.
+ *
+ * ROUND-37 V2a — tighten_refusal_threshold: khi Red Team phát hiện cùng 1
+ * vector tấn công breach ≥2 lần, adaptation-engine đặt ngưỡng này +delta (mặc
+ * định +0.1) trong 24h — KB phải TỰ TIN HƠN mới được tin, các câu trả lời
+ * yếu chuyển sang đối chiếu model-knowledge (defense in depth).
  */
 export async function searchModelKnowledge(
   query: string,
   userKBResult: UserKBResult
 ): Promise<ModelKnowledgeResult> {
+  // Effective threshold = base + adaptation delta (nếu còn hạn)
+  let kbThresholdDelta = 0
+  try {
+    const { getKbConfidenceThresholdDelta } = await import('@/lib/learning/adaptation-engine')
+    kbThresholdDelta = getKbConfidenceThresholdDelta()
+  } catch { /* fail-open — adaptation-engine không đo được → delta 0 */ }
+  const effectiveThreshold = Math.min(0.9, CONFIDENCE_THRESHOLD + kbThresholdDelta)
+
   // Skip if Step 1 already has enough info
-  if (userKBResult.confidence >= CONFIDENCE_THRESHOLD) {
-    console.log(`[KB-Access] Step 2 skipped (Step 1 confidence ${userKBResult.confidence.toFixed(2)} >= ${CONFIDENCE_THRESHOLD})`)
+  if (userKBResult.confidence >= effectiveThreshold) {
+    console.log(`[KB-Access] Step 2 skipped (Step 1 confidence ${userKBResult.confidence.toFixed(2)} >= ${effectiveThreshold.toFixed(2)}${kbThresholdDelta > 0 ? ' [ tightened +red-team-delta ]' : ''})`)
     return {
       used: false,
       content: '',
@@ -653,7 +666,7 @@ export async function searchModelKnowledge(
     }
   }
 
-  console.log(`[KB-Access] Step 2 invoked (Step 1 confidence ${userKBResult.confidence.toFixed(2)} < ${CONFIDENCE_THRESHOLD})`)
+  console.log(`[KB-Access] Step 2 invoked (Step 1 confidence ${userKBResult.confidence.toFixed(2)} < ${effectiveThreshold.toFixed(2)}${kbThresholdDelta > 0 ? ' [ tightened +red-team-delta ]' : ''})`)
 
   const userKBContext = formatUserKBForPrompt(userKBResult)
 

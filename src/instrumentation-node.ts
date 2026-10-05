@@ -831,6 +831,119 @@ if (!globalForDsb.__tmoDailySqliteBackupStarted) {
 }
 
 // ============================================================================
+// ROUND-37 V2b — PATTERN ESCALATION → SELF-DIRECTION (Q4 "tự cải tiến" nối)
+// ============================================================================
+// Rà soát lượt 3: getEscalationCandidates (C.2 — root_cause lặp ≥3 lần → đề
+// xuất cải tiến hệ thống) chỉ được ĐỌC bởi /api/episodic/overview (hiển thị)
+// + ALISTA ca đêm (LLM, chẩn đoán). KHÔNG có đường deterministic nào nối
+// "lỗi hệ thống lặp" → "đề xuất cải tiến" — vòng tự cải tiến hở giữa chừng.
+// Sweep này chạy boot (+3 phút) + mỗi 6h:
+//   getEscalationCandidates(3) → mỗi candidate (occurrences≥3, unresolved≥2)
+//   → tạo SelfDirectionProposal (category=improvement) với 4 phần chuẩn, dẫn
+//   chứng số liệu thật từ Neo4j. Dedupe: proposal cùng rootCause còn sống
+//   trong 7 ngày → skip. Fail-open tuyệt đối; env TMO_ESCALATION_SWEEP=0 tắt.
+const globalForEsc = globalThis as unknown as { __tmoEscalationSweepStarted?: boolean }
+function sweepEscalationImprovements(): void {
+  if (process.env.TMO_ESCALATION_SWEEP === '0') return
+  void (async () => {
+    try {
+      await ensureDbReady()
+      const { getEscalationCandidates } = await import('./lib/episodic-memory/episodic-neo4j')
+      const candidates = await getEscalationCandidates(3)
+      const qualifying = candidates.filter(c => c.occurrences >= 3 && (c.occurrences - c.resolved) >= 2)
+      if (qualifying.length === 0) return
+
+      const { db } = await import('./lib/db')
+      const { createSelfDirectionProposal } = await import('./lib/self-direction/orchestrator')
+
+      // Dedupe: proposal escalation cùng rootCause còn sống trong 7 ngày
+      const weekAgo = new Date(Date.now() - 7 * 24 * 3600_000)
+      const existing = await db.selfDirectionProposal.findMany({
+        where: {
+          createdBy: 'episodic-escalation-sweep',
+          OR: [{ status: 'pending' }, { createdAt: { gte: weekAgo } }],
+        },
+        select: { title: true },
+      })
+      const existingRootCauses = new Set(
+        existing.map(p => (p.title.match(/root cause "([^"]+)"/i)?.[1] ?? '').toLowerCase()).filter(Boolean),
+      )
+
+      let created = 0
+      for (const cand of qualifying) {
+        const rootCauseKey = cand.rootCause.toLowerCase()
+        if (existingRootCauses.has(rootCauseKey)) continue
+        // Cap 3 proposal/chu kỳ — ưu tiên nghiêm trọng nhất (candidates đã sort)
+        if (created >= 3) break
+
+        const unresolved = cand.occurrences - cand.resolved
+        const recentErrors = cand.recentErrors.slice(0, 3).map((e, i) => `  ${i + 1}. ${String(e).slice(0, 160)}`).join('\n')
+        await createSelfDirectionProposal({
+          title: `[Escalation] Root cause "${cand.rootCause}" lặp ${cand.occurrences} lần`,
+          category: 'improvement',
+          priority: unresolved >= 10 ? 'high' : 'medium',
+          problem: `Neo4j ErrorOccurrence ghi nhận root cause "${cand.rootCause}" lặp ${cand.occurrences} lần (chưa resolve ${unresolved}) — dấu hiệu lỗi hệ thống mang tính khuôn mẫu, không phải sự cố đơn lẻ. Các thông báo gần nhất:\n${recentErrors || '  (không có sample)'}`,
+          solution: 'Phân tích các lần xuất hiện lỗi cùng root cause → tìm nguyên nhân chung (config, dependency, flow) → khắc phục tận gốc thay vì xử lý từng lần một.',
+          implementation: `1) Query Neo4j MATCH (e:ErrorOccurrence {root_cause: '${cand.rootCause}'}) RETURN e.raw_message, e.occurred_at ORDER BY occurred_at DESC LIMIT 20; 2) Gom nhóm theo manifestation/tool; 3) Đề xuất fix tận gốc (code/config) kèm tiêu chí xác nhận: occurrences mới của root cause này = 0 sau 7 ngày.`,
+          scheduleAt: unresolved >= 10 ? new Date(Date.now() + 12 * 3600_000) : null,
+          impact: `Chặn ${(unresolved / Math.max(1, cand.occurrences) * 100).toFixed(0)}% lỗi còn tồn đọng của pattern này tái diễn.`,
+          status: 'pending',
+          source: 'scan',
+          createdBy: 'episodic-escalation-sweep',
+        })
+        existingRootCauses.add(rootCauseKey)
+        created++
+      }
+      if (created > 0) {
+        console.log(`[EscalationSweep] V2b — tạo ${created} SelfDirectionProposal cải tiến từ ${qualifying.length} pattern escalation (Q4 tự cải tiến nối)`)
+      }
+    } catch (err) {
+      console.warn('[EscalationSweep] sweep failed (fail-open — thử lại chu kỳ sau):', err instanceof Error ? err.message : String(err))
+    }
+  })()
+}
+if (!globalForEsc.__tmoEscalationSweepStarted) {
+  globalForEsc.__tmoEscalationSweepStarted = true
+  const escBootTimer = setTimeout(() => sweepEscalationImprovements(), 3 * 60 * 1000)
+  escBootTimer.unref?.()
+  const escTimer = setInterval(() => sweepEscalationImprovements(), 6 * 60 * 60 * 1000)
+  escTimer.unref?.()
+}
+
+// ============================================================================
+// ROUND-37 V2c — EPISODIC DECAY CRON (Q4 decay không còn manual-only)
+// ============================================================================
+// Rà soát lượt 3: decayEpisodes (A.4 Q4 — "quên có kiểm soát": episode không
+// được dùng 30 ngày → importance ×0.9) CHỈ chạy khi ai đó POST thủ công vào
+// /api/episodic/decay. Bộ não không bao giờ tự quên → importance cũ chồng
+// chất, retrieval ngày càng nhiễu bởi các episode thừa. Sweep này chạy boot
+// (+10 phút) + mỗi 24h: decayEpisodes({days:30, factor:0.9}) — idempotent
+// nhờ marker last_decayed (mỗi chu kỳ 30 ngày chỉ decay 1 lần, đã fix
+// compounding decay round-34). Env TMO_EPISODIC_DECAY=0 tắt.
+const globalForEdec = globalThis as unknown as { __tmoEpisodicDecayStarted?: boolean }
+function sweepEpisodicDecay(): void {
+  if (process.env.TMO_EPISODIC_DECAY === '0') return
+  void (async () => {
+    try {
+      const { decayEpisodes } = await import('./lib/episodic-memory/episodic-neo4j')
+      const decayed = await decayEpisodes({ days: 30, factor: 0.9 })
+      if (decayed > 0) {
+        console.log(`[EpisodicDecay] V2c — tự động decay ${decayed} episode không được dùng ≥30 ngày (×0.9, idempotent theo last_decayed)`)
+      }
+    } catch (err) {
+      console.warn('[EpisodicDecay] decay sweep failed (fail-open):', err instanceof Error ? err.message : String(err))
+    }
+  })()
+}
+if (!globalForEdec.__tmoEpisodicDecayStarted) {
+  globalForEdec.__tmoEpisodicDecayStarted = true
+  const edecBootTimer = setTimeout(() => sweepEpisodicDecay(), 10 * 60 * 1000)
+  edecBootTimer.unref?.()
+  const edecTimer = setInterval(() => sweepEpisodicDecay(), 24 * 60 * 60 * 1000)
+  edecTimer.unref?.()
+}
+
+// ============================================================================
 // GĐ4 CI-5 (Task 14-a) — DURABLE GOAL LOOP WORKER
 // ============================================================================
 // Job queue nền chạy goal-loop tác vụ nhiều giờ sống sót qua restart (DB là

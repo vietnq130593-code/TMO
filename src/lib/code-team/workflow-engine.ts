@@ -433,6 +433,11 @@ export interface WorkflowEvent {
     | 'workflow_done'
     | 'omega_escalation'
     | 'error'
+    /** ROUND-37 V4 — Layer 8 progress-reporter sống lại: báo cáo tiến độ
+     * mỗi step (formattedReport từ communication/progress-reporter) */
+    | 'progress_report'
+    /** ROUND-37 V4 — báo cáo tổng kết cuối workflow (formatFinalReport) */
+    | 'final_report'
   [key: string]: unknown
 }
 
@@ -648,6 +653,8 @@ export interface WorkflowContext {
   skillsRaw?: RawSkill[]
   /** Task 17-b (Layer 9): số hint "bài học từ thất bại trước" đã inject trong run — dùng cho observation log khi workflow thành công */
   layer9HintsInjected?: number
+  /** ROUND-37 V3.1: số lesson episodic đã inject qua PRE-ACT trong run */
+  episodicBrainInjected?: number
   /** 2026-10-27 (rà soát Task 27-a): trần prompt theo tác vụ từ run cha
    * (request_code_team) — -1 = unlimited; undefined = mặc định hệ thống */
   promptBudgetChars?: number
@@ -814,10 +821,19 @@ async function detectAndPersistFailurePattern(
         toStrategy: decision.recommendedStrategy,
         reason: decision.reason,
         confidence: decision.confidence,
-        successful: null, // pending — chưa auto-apply (P1.3 chỉ observe)
+        successful: null, // pending — markSessionAdaptationOutcome đóng vòng sau step kế
         createdAt: new Date().toISOString(),
       })
-      console.log(`[Workflow] Layer 9 P1.3 — pattern persisted + adaptation recommended: ${toPersist.type} count=${newCount} → ${decision.recommendedStrategy} (session ${sessionId.slice(0, 12)})`)
+      // ROUND-37 V2a — APPLY THẬT (trước đây chỉ log rồi quên): 8 chiến lược
+      // của applyAdaptation giờ tiêu thụ bởi runAgentStep của step kế tiếp —
+      // directive system prompt (preStep/fixStrategy), giảm vòng (reduce_scope),
+      // nén sớm (compress_context), escalate SSE (escalate_to_user), siết KB
+      // threshold (tighten_refusal_threshold — TTL 24h tự hoàn tác).
+      const { applyAdaptationToSession } = await import('@/lib/learning/adaptation-engine')
+      const applied = applyAdaptationToSession(sessionId, decision, stepId)
+      console.log(
+        `[Workflow] Layer 9 P1.3→V2a — pattern persisted + adaptation ${applied ? 'APPLIED' : 'recommend-only'}: ${toPersist.type} count=${newCount} → ${decision.recommendedStrategy} (session ${sessionId.slice(0, 12)})`,
+      )
     } else {
       console.log(`[Workflow] Layer 9 P1.3 — failure pattern persisted: ${toPersist.type} (count=${newCount}, errorType=${errorType}, session ${sessionId.slice(0, 12)})`)
     }
@@ -1309,6 +1325,22 @@ async function runPipeline(
   const pipeline = getPipeline(routingDecision.mode, routingDecision.tier)
   let spec = routingDecision.spec || userRequest // Spec gốc cho toàn bộ pipeline
 
+  // ━━━ ROUND-37 V4 — LAYER 8 + LAYER 6.3 SỐNG LẠI (scaffolding wire) ━━━
+  // progress-reporter (communication) + checkpoint-manager (state-management)
+  // trước đây là dead scaffolding — build xong không ai gọi; doc clarify route
+  // hứa event `progress_report`/`final_report` mà chưa từng được emit. Giờ:
+  //   • progressReporter.formatStepReport → SSE `progress_report` sau mỗi step
+  //   • progressReporter.formatFinalReport → SSE `final_report` cuối workflow
+  //   • checkpointManager.shouldCreateCheckpoint → saveCheckpoint (durable
+  //     CodeTeamCheckpoint rows — bảng đã có sẵn từ migration 20260618154653)
+  // Fail-open tuyệt đối — Layer 8/6 KHÔNG được phép làm hỏng workflow.
+  const progressReporter = (await import('@/lib/communication/progress-reporter')).createProgressReporter()
+  const checkpointManager = (await import('@/lib/state-management/checkpoint-manager')).createCheckpointManager(sessionId)
+  const stepStates: Record<string, import('@/lib/state-management/types').StepState> = {}
+  const workflowErrors: Array<import('@/lib/error-handling').ErrorRecord> = []
+  let workflowTokensUsed = 0
+  let workflowTimeSpent = 0
+
   // Get TL agent name from resolved cache (BUG 12 fix: don't hardcode 'MEGATRON')
   const tlAgent = ctx.resolvedAgentsCache.get('TL')
   const completedAgents: string[] = tlAgent ? [tlAgent.name] : ['MEGATRON'] // TL already completed in Step 1
@@ -1515,6 +1547,18 @@ async function runPipeline(
       agentResult.duration, // timeSpent (ms)
     )
 
+    // ━━━ ROUND-37 V2a — ĐÓNG VÒNG ADAPTATION ━━━
+    // Session có adaptation đang chờ → kết quả step NÀY là bằng chứng:
+    // pass → markSessionAdaptationOutcome(true) (resolve FailurePattern,
+    // xoá directives); fail tiếp → outcome(false) (giữ directives cho step sau).
+    // Fire-and-forget fail-open.
+    void (async () => {
+      try {
+        const { markSessionAdaptationOutcome } = await import('@/lib/learning/adaptation-engine')
+        await markSessionAdaptationOutcome(sessionId, !isFailedStep, stepId)
+      } catch { /* fail-open */ }
+    })()
+
     const worklogEntry: WorklogEntry = {
       sessionId,
       agentName: agentDef.name,
@@ -1551,6 +1595,79 @@ async function runPipeline(
       content: agentResult.content,
       duration: agentResult.duration,
     })
+
+    // ━━━ ROUND-37 V4 — Layer 8 progress_report + Layer 6.3 checkpoint ━━━
+    // StepState từ kết quả THẬT của step → progress-reporter format → SSE
+    // `progress_report` (event doc clarification route đã hứa từ trước).
+    // Checkpoint: step.isCheckpoint / G2-A code → saveCheckpoint durable.
+    try {
+      const stepState: import('@/lib/state-management/types').StepState = {
+        id: stepId,
+        type: step.step as import('@/lib/code-team/types').StepType,
+        status: isFailedStep ? 'failed' : 'completed',
+        agentPosition: step.position,
+        description: step.description,
+        result: {
+          success: !isFailedStep,
+          filesCreated: [],
+          filesModified: (parsedWorklog?.codeLocationMap?.filesToRead ?? []).map(f => f.path).slice(0, 10),
+          summary: (parsedWorklog?.summary || agentResult.content.slice(0, 200)),
+          outputForNext: '',
+        },
+        tokensUsed: typeof agentResult.tokensUsed === 'number' ? agentResult.tokensUsed : 0,
+        tokensBudgeted: tokenBudget,
+        timeSpent: agentResult.duration,
+        errors: isFailedStep
+          ? [{ id: `err-${stepId}`, timestamp: new Date(), errorType: 'runtime', severity: 'high', message: agentResult.content.slice(0, 200), rootCause: 'Agent step failed', fixStrategy: 'surgical', fixApplied: false, loopDetected: false, loopCount: 0 }]
+          : [],
+        startedAt: new Date(Date.now() - agentResult.duration).toISOString(),
+        completedAt: new Date().toISOString(),
+      }
+      stepStates[stepId] = stepState
+      workflowTokensUsed += stepState.tokensUsed ?? 0
+      workflowTimeSpent += stepState.timeSpent ?? 0
+      if (stepState.errors) workflowErrors.push(...stepState.errors)
+
+      const stepIndex = Object.keys(stepStates).length
+      emit({
+        type: 'progress_report',
+        formattedReport: progressReporter.formatStepReport(stepState, stepIndex, pipeline.length),
+        stepIndex,
+        totalSteps: pipeline.length,
+        status: stepState.status,
+      })
+
+      // Checkpoint durable (Layer 6.3) — fire-and-forget fail-open
+      const progressNow = {
+        planId: sessionId,
+        totalSteps: pipeline.length,
+        completedSteps: Object.values(stepStates).filter(s => s.status === 'completed').length,
+        failedSteps: Object.values(stepStates).filter(s => s.status === 'failed').length,
+        currentStep: pipeline.findIndex(p => p.position === step.position && p.step === step.step),
+        steps: { ...stepStates },
+        totalTokensUsed: workflowTokensUsed,
+        totalTokensBudgeted: tokenBudget,
+        totalTimeSpent: workflowTimeSpent,
+        errors: [...workflowErrors],
+        startedAt: new Date(workflowStartTime).toISOString(),
+        lastUpdatedAt: new Date().toISOString(),
+      }
+      if (checkpointManager.shouldCreateCheckpoint(step as unknown as import('@/lib/code-team/types').PipelineStep, progressNow)) {
+        const stepIdx = pipeline.findIndex(p => p.position === step.position && p.step === step.step)
+        void checkpointManager.saveCheckpoint({
+          progress: progressNow,
+          context: [],
+          routing: routingDecision,
+          spec,
+          pipeline: pipeline.map(p => ({ ...p, step: p.step as import('@/lib/code-team/types').StepType })) as import('@/lib/code-team/types').PipelineStep[],
+          currentStepIndex: stepIdx < 0 ? 0 : stepIdx,
+        }).then(() => {
+          console.log(`[Workflow] V4 — checkpoint durable saved sau ${stepId} (Layer 6.3 sống)`)
+        }).catch(() => { /* fail-open */ })
+      }
+    } catch (l8Err) {
+      console.warn('[Workflow] V4 progress-report/checkpoint failed (non-blocking):', l8Err instanceof Error ? l8Err.message : String(l8Err))
+    }
 
     // ===== CHECKPOINT VERIFY =====
     // Workflow doc: "READ-WRITE-VERIFY LOOP — TL là Agentic Loop Controller"
@@ -1709,6 +1826,35 @@ async function runPipeline(
   await metricsCollector.flush().catch((mErr) => {
     console.error('[Workflow] Layer 9 flush failed (success path):', mErr)
   })
+
+  // ━━━ ROUND-37 V4 — Layer 8 final_report (sự kiện doc đã hứa, giờ emit thật) ━━━
+  try {
+    const completedCount = Object.values(stepStates).filter(s => s.status === 'completed').length
+    const failedCount = Object.values(stepStates).filter(s => s.status === 'failed').length
+    emit({
+      type: 'final_report',
+      formattedReport: progressReporter.formatFinalReport({
+        planId: sessionId,
+        completedSteps: completedCount,
+        failedSteps: failedCount,
+        totalSteps: pipeline.length,
+        steps: stepStates,
+        errors: workflowErrors,
+        totalTokensUsed: workflowTokensUsed,
+        totalTokensBudgeted: tokenBudget,
+        totalTimeSpent: workflowTimeSpent || (Date.now() - workflowStartTime),
+        startedAt: new Date(workflowStartTime).toISOString(),
+        lastUpdatedAt: new Date().toISOString(),
+      }),
+      totalSteps: pipeline.length,
+      completedSteps: completedCount,
+      failedSteps: failedCount,
+      totalTokensUsed: workflowTokensUsed,
+      totalTimeSpent: workflowTimeSpent,
+    })
+  } catch (l8FinalErr) {
+    console.warn('[Workflow] V4 final_report failed (non-blocking):', l8FinalErr instanceof Error ? l8FinalErr.message : String(l8FinalErr))
+  }
 
   emit({
     type: 'workflow_done',
@@ -1884,8 +2030,26 @@ export async function runAgentStep(params: {
   maxIterations?: number
   ctx: WorkflowContext
 }): Promise<{ content: string; duration: number; tokensUsed: number }> {
-  const { position, step, prompt, sessionId, emit, maxIterations = 25, ctx } = params
+  const { position, step, prompt, sessionId, emit, ctx } = params
   const stepStartTime = Date.now()
+
+  // ROUND-37 V2a — Layer 9 adaptation APPLY THẬT: session từng bị phát hiện
+  // failure-pattern (count≥2) → chiến lược thích ứng (applyAdaptation) điều
+  // khiển step NÀY: reduce_scope giảm vòng ReAct, compress_context hạ ngưỡng
+  // nén sớm, các chiến lược khác inject directive (block dưới). Fail-open tuyệt đối.
+  let adaptedMaxIterations = params.maxIterations ?? 25
+  let stepOverflowThreshold = CONTEXT_OVERFLOW_THRESHOLD
+  let sessionEscalated = false
+  try {
+    const adaptation = await import('@/lib/learning/adaptation-engine')
+    adaptedMaxIterations = adaptation.getAdaptedMaxIterations(sessionId, params.maxIterations ?? 25)
+    if (adaptation.shouldCompressContextEarly(sessionId)) {
+      // compress_context → ngưỡng overflow của step này hạ 30% (nén sớm)
+      stepOverflowThreshold = Math.floor(CONTEXT_OVERFLOW_THRESHOLD * 0.7)
+    }
+    sessionEscalated = adaptation.hasEscalation(sessionId)
+  } catch { /* fail-open — giữ mặc định */ }
+  const maxIterations = adaptedMaxIterations
 
   // Resolve agent from per-workflow cache (populated by runPipeline) or on-demand
   const agent = ctx.resolvedAgentsCache.get(position) || await resolveAgent(position)
@@ -1960,6 +2124,29 @@ export async function runAgentStep(params: {
     console.warn('[Workflow] agent roster inject failed (non-blocking):', err instanceof Error ? err.message : String(err))
   }
 
+  // ━━━ ROUND-37 V3.1 — EPISODIC BRAIN PRE-ACT (code-team nối vào bộ não) ━━━
+  // Trước đây chỉ goal-loop có PRE-ACT; step Code Team chạy không ký ức —
+  // task từng fail theo pattern tương tự không được cảnh báo. Giờ: build
+  // block bài học + lỗi tương tự cho CHÍNH step prompt này (4s timeout,
+  // fail-open), appliedLessonIds track để validate sau step.
+  let stepAppliedLessonIds: string[] = []
+  try {
+    const { buildAgentBrainBlock } = await import('@/lib/episodic-memory/agent-brain')
+    const brain = await buildAgentBrainBlock({
+      family: 'code-team',
+      agentName: `${agent.name} (${position})`,
+      task: `${step}: ${prompt}`.slice(0, 1500),
+    })
+    if (brain.promptBlock) {
+      systemBlocks.push({ name: 'episodicBrain', content: brain.promptBlock, priority: 34 })
+      stepAppliedLessonIds = brain.appliedLessonIds
+      ctx.episodicBrainInjected = (ctx.episodicBrainInjected ?? 0) + brain.appliedLessonIds.length
+      console.log(`[Workflow] V3.1 — episodic brain PRE-ACT inject vào ${agent.name} (${position}/${step}): ${brain.appliedLessonIds.length} lesson applied`)
+    }
+  } catch (err) {
+    console.warn('[Workflow] V3.1 episodic brain inject failed (non-blocking):', err instanceof Error ? err.message : String(err))
+  }
+
   // ━━━ Task 17-b — Layer 9 auto-apply CONSERVATIVE: bài học từ thất bại trước ━━━
   // Trước 17-b, Layer 9 là observe-only (persist pattern xong không ai đọc lại)
   // → learning loop hở. Giờ inject hints từ FailurePattern vào system prompt:
@@ -1975,6 +2162,30 @@ export async function runAgentStep(params: {
     }
   } catch (err) {
     console.warn('[Workflow] Layer 9 hints inject failed (non-blocking):', err instanceof Error ? err.message : String(err))
+  }
+
+  // ━━━ ROUND-37 V2a — Layer 9 adaptation directive (APPLY THẬT) ━━━
+  // Session có adaptation đang chờ (từ detectAndPersistFailurePattern →
+  // applyAdaptationToSession) → inject chỉ thị thích ứng vào system prompt
+  // step NÀY. Đây là phần "áp dụng" mà trước đây chỉ dừng ở persistAdaptationLog.
+  try {
+    const { getAdaptationDirectiveBlock } = await import('@/lib/learning/adaptation-engine')
+    const directiveBlock = getAdaptationDirectiveBlock(sessionId)
+    if (directiveBlock) {
+      systemBlocks.push({ name: 'adaptationDirective', content: directiveBlock, priority: 65 })
+      console.log(`[Workflow] Layer 9 V2a — adaptation directive injected vào ${agent.name} (${position})`)
+    }
+  } catch (err) {
+    console.warn('[Workflow] Layer 9 V2a directive inject failed (non-blocking):', err instanceof Error ? err.message : String(err))
+  }
+
+  // escalate_to_user đã từng fire trong session → cảnh báo user NGAY đầu step
+  if (sessionEscalated) {
+    emit({
+      type: 'omega_escalation',
+      agent: agent.name,
+      message: 'Layer 9 phát hiện lỗi lặp ≥3 cách trong session — agent được chỉ thị tập trung hoàn thiện phần chắc chắn + tổng hợp câu hỏi cho bạn thay vì thử cách mới.',
+    })
   }
 
   // 2026-08-29 — AUTO-TODO TRACKING (long-running task progress): mỗi agent step
@@ -2683,7 +2894,7 @@ export async function runAgentStep(params: {
     //   auto-resume path → rơi về hành vi pause cũ.
     const currentTokens = estimateTokens(messages)
     if (
-      detectContextOverflow(currentTokens, CONTEXT_OVERFLOW_THRESHOLD) &&
+      detectContextOverflow(currentTokens, stepOverflowThreshold) &&
       isFlagEnabled('ENABLE_SESSION_RESUME')
     ) {
       let overflowOutcome: HandleOverflowResult | null = null
@@ -2691,7 +2902,7 @@ export async function runAgentStep(params: {
         overflowOutcome = await handleOverflow({
           messages,
           currentTokens,
-          threshold: CONTEXT_OVERFLOW_THRESHOLD,
+          threshold: stepOverflowThreshold,
           sessionId,
           agentName: agent.name,
           position,
@@ -2815,7 +3026,41 @@ export async function runAgentStep(params: {
 
   // Thought Process tracking (2026-08-31) — đóng run của step này
   // (idempotent: nếu đã đóng là 'cancelled' thì giữ nguyên)
-  endStepRun(finalContent.startsWith('Error:') ? 'error' : 'done')
+  const stepFinalStatus = finalContent.startsWith('Error:') ? 'error' as const : 'done' as const
+  endStepRun(stepFinalStatus)
+
+  // ━━━ ROUND-37 V3.1 — EPISODIC CONSOLIDATE: lỗi step thành bài học ━━━
+  // Trước đây chỉ goal-loop ghi episode; step Code Team fail KHÔNG bao giờ
+  // trở thành ErrorOccurrence/Lesson. Giờ mỗi step ghi 1 episode: toolCallsLog
+  // làm evidence (recorder tự classify root cause + sinh lesson từ lỗi đã
+  // resolve), appliedLessonIds từ PRE-ACT được validate theo outcome step.
+  // Skip step thuần LLM thành công (0 tool call) — noise không dữ liệu học.
+  try {
+    const toolFailures = toolCallsLog.filter(e => !e.success).length
+    if (toolCallsLog.length > 0 || stepFinalStatus === 'error') {
+      const { recordAgentEpisode, mapRunOutcome } = await import('@/lib/episodic-memory/agent-brain')
+      recordAgentEpisode({
+        family: 'code-team',
+        agentName: `${agent.name} (${position}/${step})`,
+        goal: prompt.slice(0, 500) || `Step ${position}/${step}`,
+        sessionId,
+        outcome: isCancelled()
+          ? 'ABANDONED'
+          : mapRunOutcome({ status: stepFinalStatus, toolFailures }),
+        stopReason: isCancelled() ? 'cancelled' : stepFinalStatus === 'error' ? 'error' : 'complete',
+        cycles: iterations,
+        tokensUsed: stepTokensUsed,
+        appliedLessonIds: stepAppliedLessonIds,
+        toolEvidence: toolCallsLog.map(e => ({
+          tool: e.tool,
+          success: e.success,
+          text: `${e.args ? JSON.stringify(e.args).slice(0, 150) : ''} ${e.result}`.slice(0, 600),
+        })),
+      })
+    }
+  } catch (epErr) {
+    console.warn('[Workflow] V3.1 episodic record failed (non-blocking):', epErr instanceof Error ? epErr.message : String(epErr))
+  }
 
   // Layer 9 P0.2: expose the step's real token usage to the caller
   // (runWorkflow passes it down to metricsCollector.recordStepComplete).

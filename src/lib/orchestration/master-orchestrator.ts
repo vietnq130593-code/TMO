@@ -292,12 +292,39 @@ async function startOrchestration(
       state.progress.completedSteps += stepResult.success ? 1 : 0
       state.progress.lastUpdatedAt = new Date().toISOString()
 
+      // ROUND-37 V2a — APPLY adaptation config (trước đây applyAdaptation chỉ
+      // được import mà không gọi — dead import). Khi makeDecision trả về
+      // 'adapt_strategy' (đã set state.learning.currentPattern), config thật
+      // của applyAdaptation được merge vào state.learning.pendingConfig để
+      // executeStep kế tiếp tiêu thụ (preStep/maxTokens/contextAction/escalate).
+      if (
+        state.learning.currentPattern &&
+        state.learning.adaptationCount > 0 &&
+        state.learning.pendingConfig === undefined
+      ) {
+        const decision = recommendAdaptation(state.learning.currentPattern, state.learning.historicalMetrics)
+        if (decision.shouldAdapt) {
+          const { updatedConfig } = applyAdaptation(decision)
+          state.learning.pendingConfig = updatedConfig
+          state.learning.pendingStrategy = decision.recommendedStrategy
+        }
+      }
+
       // Decision point: after step
       const afterDecision = makeDecision(
         { type: 'after_step', stepIndex: i, stepResult },
         { state, pipeline, currentStepIndex: i },
         config
       )
+
+      // Adaptation đã sinh config → áp vào context budget ngay (reduce_scope
+      // hạ maxTokens của các step sau; escalate được makeDecision xử lý ở trên)
+      if (state.learning.pendingConfig && typeof state.learning.pendingConfig['maxTokens'] === 'number') {
+        state.context.maxTokens = Math.min(
+          state.context.maxTokens,
+          state.learning.pendingConfig['maxTokens'] as number,
+        )
+      }
 
       if (afterDecision.decision === 'escalate') {
         state.phase = 'escalated'

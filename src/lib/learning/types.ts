@@ -132,6 +132,10 @@ export interface LearningState {
   lastAdaptation: string | null // ISO timestamp lần adapt cuối
   adaptationCount: number // số lần đã adapt trong run này
   isEnabled: boolean // shortcut check — mirror của config.learning.enabled
+  /** ROUND-37 V2a — config thật từ applyAdaptation chờ step kế tiêu thụ */
+  pendingConfig?: Record<string, unknown>
+  /** ROUND-37 V2a — chiến lược sinh ra pendingConfig */
+  pendingStrategy?: string
 }
 
 /** Cấu hình cho learning module */

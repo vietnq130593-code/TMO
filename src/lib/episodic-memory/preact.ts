@@ -29,6 +29,43 @@ import { searchSimilarEpisodes } from './episode-store'
 import { findAllLessonRecords, findLessonsByStatementFragment } from './episodic-db'
 import { EPISODIC_THRESHOLDS, type PreActContext } from './types'
 
+// ==================== ROUND-37 V2d — ε-GREEDY EXPLORATION ====================
+//
+// Rà soát lượt 3: selection lesson LUÔN thuần exploit (sort confidence ×
+// validated, lấy top-5) → lesson ngoài top-5 KHÔNG BAO GIỜ được dùng →
+// confidence của nó đóng băng mãi (không có bằng chứng mới để ±). Thêm
+// ε-greedy: xác suất ε (mặc định 0.15, env TMO_EPISODIC_EPSILON, 0=tắt),
+// hoán vị slot CUỐI của top-5 với ứng viên rank 6+ (đủ ngưỡng review) —
+// lesson được đánh dấu [THỬ NGHIỆM] và ĐƯA VÀO appliedLessonIds để
+// validateAppliedLessons chấm điểm sau run (thành công +0.05, fail −0.1)
+// → vòng bandit khép kín: khám phá có kiểm soát thay vì chỉ khai thác.
+const EPSILON = (() => {
+  const raw = Number.parseFloat(process.env.TMO_EPISODIC_EPSILON ?? '')
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.15
+})()
+
+/**
+ * Áp ε-greedy lên danh sách lesson ĐÃ sort (mutateなし — trả mảng mới).
+ * Với xác suất ε: slot cuối (index 4) được thay bằng ứng viên kế tiếp có
+ * confidence ≥ lessonNeedsReview — đánh dấu exploration=true.
+ * rng injectable cho test (mặc định Math.random).
+ */
+export function applyEpsilonExploration<T extends { id: string; confidence: number }>(
+  sorted: T[],
+  opts?: { rng?: () => number; epsilon?: number },
+): Array<T & { exploration?: boolean }> {
+  const epsilon = opts?.epsilon ?? EPSILON
+  const rng = opts?.rng ?? Math.random
+  if (sorted.length <= 5) return sorted.slice(0, 5)
+  // Ứng viên thay thế: rank 6+ (index ≥5) nhưng đủ ngưỡng review
+  const candidate = sorted.slice(5).find(l => l.confidence >= EPISODIC_THRESHOLDS.lessonNeedsReview)
+  if (!candidate) return sorted.slice(0, 5)
+  if (rng() >= epsilon) return sorted.slice(0, 5)
+  const out = [...sorted.slice(0, 5)]
+  out[4] = { ...candidate, exploration: true } as T & { exploration?: boolean }
+  return out
+}
+
 /**
  * Build PRE-ACT context cho 1 task sắp chạy.
  * @param params.agentName — agent sắp thực hiện (log)
@@ -82,8 +119,9 @@ export async function buildPreActContext(params: {
       seen.add(l.id)
       return l.confidence >= EPISODIC_THRESHOLDS.lessonNeedsReview
     }).sort((a, b) => b.confidence * (b.timesValidated + 1) - a.confidence * (a.timesValidated + 1))
-      .slice(0, 5)
-    lessons = allLessons
+    // ROUND-37 V2d — ε-greedy exploration: 15% slot cuối nhường chỗ cho lesson
+    // rank 6+ (khám phá có kiểm soát — validateAppliedLessons sẽ chấm điểm)
+    lessons = applyEpsilonExploration(allLessons) as typeof lessons
 
     // ── Fallback Neo4j down: lessons từ SQLite mirror ──
     if (lessons.length === 0) {
@@ -108,8 +146,9 @@ export async function buildPreActContext(params: {
       lines.push('📚 BÀI HỌC TỪ KINH NGHIỆM QUÁ KHỨ (Episodic Memory — lessons đã học):')
       for (const l of lessons) {
         const autoApply = l.confidence >= EPISODIC_THRESHOLDS.lessonAutoApply
+        const exploreTag = 'exploration' in l && (l as { exploration?: boolean }).exploration ? ' — THỬ NGHIỆM (ε-greedy)' : ''
         lines.push(
-          `- ${l.statement}${l.triggerCondition ? ` (trigger: ${l.triggerCondition})` : ''} [confidence ${Math.round(l.confidence * 100)}%, validated ${l.timesValidated} lần${autoApply ? ' — ÁP DỤNG' : ''}]`
+          `- ${l.statement}${l.triggerCondition ? ` (trigger: ${l.triggerCondition})` : ''} [confidence ${Math.round(l.confidence * 100)}%, validated ${l.timesValidated} lần${autoApply ? ' — ÁP DỤNG' : ''}${exploreTag}]`
         )
       }
       lines.push('→ Áp dụng lesson liên quan NGAY trong kế hoạch; không lặp lại sai lầm cũ cùng pattern.')
@@ -153,9 +192,12 @@ export async function buildPreActContext(params: {
       unresolvedWarnings: insights.unresolvedErrors.map(e =>
         `${e.rootCause}: ${String(e.rawMessage).slice(0, 120)}`
       ),
-      // Chỉ lesson tự tin (≥ 0.7) được tính "applied" → validate sau run
+      // Chỉ lesson tự tin (≥ 0.7) được tính "applied" → validate sau run.
+      // ROUND-37 V2d: lesson được THỬ NGHIỆM (ε-greedy) LUÔN vào diện validate
+      // — đó chính là thí nghiệm: outcome run là bằng chứng ±confidence của nó.
       appliedLessonIds: lessons
-        .filter(l => l.confidence >= EPISODIC_THRESHOLDS.lessonAutoApply)
+        .filter(l => l.confidence >= EPISODIC_THRESHOLDS.lessonAutoApply
+          || ('exploration' in l && (l as { exploration?: boolean }).exploration === true))
         .map(l => l.id),
     }
   } catch (err) {
