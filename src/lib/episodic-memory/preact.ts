@@ -37,8 +37,9 @@ import { EPISODIC_THRESHOLDS, type PreActContext } from './types'
 // ε-greedy: xác suất ε (mặc định 0.15, env TMO_EPISODIC_EPSILON, 0=tắt),
 // hoán vị slot CUỐI của top-5 với ứng viên rank 6+ (đủ ngưỡng review) —
 // lesson được đánh dấu [THỬ NGHIỆM] và ĐƯA VÀO appliedLessonIds để
-// validateAppliedLessons chấm điểm sau run (thành công +0.05, fail −0.1)
-// → vòng bandit khép kín: khám phá có kiểm soát thay vì chỉ khai thác.
+// validateAppliedLessons chấm điểm sau run (thành công +0.05, fail −0.1,
+// PARTIAL-có-dấu-vết-lỗi ±nhỏ — ROUND-39) → vòng bandit khép kín: khám
+// phá có kiểm soát thay vì chỉ khai thác.
 const EPSILON = (() => {
   const raw = Number.parseFloat(process.env.TMO_EPISODIC_EPSILON ?? '')
   return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.15
@@ -53,10 +54,11 @@ const EPSILON = (() => {
  * ROUND-38 fix F6: ứng viên được CHỌN NGẪU NHIÊN trong pool đủ điều kiện
  * (trước đây `slice(5).find(...)` luôn trả đúng rank 6 — "exploration"
  * deterministic chỉ khai thác lại 1 lesson cố định, không phải khám phá).
- * Lưu ý semantics feedback: lesson exploration nằm trong appliedLessonIds
- * nhưng chỉ được ±confidence khi outcome là SUCCESS/FAILURE — outcome PARTIAL
- * (hoàn thành kèm tool fail) là NEUTRAL theo thiết kế round-35 C-4 (không
- * phạt oan cả cụm lesson vì kết quả nửa vời).
+ * ROUND-39 — PARTIAL giờ CÓ chấm điểm exploration lesson: run giao được
+ * nhưng vướng (có tool fail) là bằng chứng yếu — khớp attribution → −0.05,
+ * không khớp → +0.02, CHỈ áp cho lesson exploration (ids trả kèm
+ * explorationLessonIds); lesson auto-apply thường + run PARTIAL vì
+ * budget/needs_input + ABANDONED vẫn NEUTRAL tuyệt đối (C-4 giữ nguyên).
  */
 export function applyEpsilonExploration<T extends { id: string; confidence: number }>(
   sorted: T[],
@@ -86,7 +88,7 @@ export async function buildPreActContext(params: {
 }): Promise<PreActContext> {
   const empty: PreActContext = {
     promptBlock: '', lessons: [], similarErrors: [],
-    unresolvedWarnings: [], appliedLessonIds: [],
+    unresolvedWarnings: [], appliedLessonIds: [], explorationLessonIds: [],
   }
   try {
     const task = params.task?.trim() ?? ''
@@ -204,9 +206,15 @@ export async function buildPreActContext(params: {
       // Chỉ lesson tự tin (≥ 0.7) được tính "applied" → validate sau run.
       // ROUND-37 V2d: lesson được THỬ NGHIỆM (ε-greedy) LUÔN vào diện validate
       // — đó chính là thí nghiệm: outcome run là bằng chứng ±confidence của nó.
+      // ROUND-39: explorationLessonIds trả kèm để recorder/validator chấm
+      // ±NHỎ cho đúng lesson khi run PARTIAL có dấu vết lỗi (flag exploration
+      // trước đây bị drop ở map lessons → không ai biết lesson nào là thí nghiệm).
       appliedLessonIds: lessons
         .filter(l => l.confidence >= EPISODIC_THRESHOLDS.lessonAutoApply
           || ('exploration' in l && (l as { exploration?: boolean }).exploration === true))
+        .map(l => l.id),
+      explorationLessonIds: lessons
+        .filter(l => 'exploration' in l && (l as { exploration?: boolean }).exploration === true)
         .map(l => l.id),
     }
   } catch (err) {

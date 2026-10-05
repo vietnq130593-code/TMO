@@ -292,6 +292,10 @@ export async function recordEpisodeFromRun(input: RecordEpisodeInput): Promise<R
     // (budget/needs_input) KHÔNG phải bằng chứng thắng/thua → NEUTRAL: không
     // phạt bài học nào (bản cũ ép vào nhánh phạt → cancel thường xuyên rút
     // cạn confidence của các lesson hay dùng nhất).
+    // ROUND-39: PARTIAL CÓ dấu vết lỗi tool → lessonOutcome 'PARTIAL' — chấm
+    // ±NHỎ cho lesson THỬ NGHIỆM (explorationLessonIds truyền xuyên qua
+    // validateAppliedLessons; lesson auto-apply thường vẫn neutral). PARTIAL
+    // budget/needs_input + ABANDONED → NEUTRAL như cũ (C-4 giữ nguyên).
     const failedToolNames = Array.from(new Set(
       input.toolEvidence.filter(ev => !ev.success && ev.tool).map(ev => ev.tool)
     ))
@@ -309,11 +313,14 @@ export async function recordEpisodeFromRun(input: RecordEpisodeInput): Promise<R
       ? 'SUCCESS' as const
       : input.outcome === 'FAILURE'
         ? 'FAILURE' as const
-        : 'NEUTRAL' as const
+        : input.outcome === 'PARTIAL' && input.toolEvidence.some(ev => !ev.success)
+          ? 'PARTIAL' as const
+          : 'NEUTRAL' as const
     const validation = await validateAppliedLessons(
       input.appliedLessonIds,
       lessonOutcome,
-      attribution
+      attribution,
+      input.explorationLessonIds,
     ).catch(() => null)
     if (validation) {
       result.lessonsValidated = validation.validated

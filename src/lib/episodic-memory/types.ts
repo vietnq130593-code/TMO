@@ -169,6 +169,15 @@ export const EPISODIC_THRESHOLDS = {
   /** Bước confidence khi validate thành công / thất bại */
   lessonValidateBoost: 0.05,
   lessonValidatePenalty: 0.1,
+  /** ROUND-39 — bước confidence NHỎ cho lesson THỬ NGHIỆM (ε-greedy) trong run
+   *  PARTIAL CÓ dấu vết lỗi tool: giao được nhưng vướng → tín hiệu yếu (bằng
+   *  ½ mức chuẩn). Khớp attribution → −0.05; vắng evidence chống → +0.02
+   *  (thiên nhẹ dương — run nửa vời mà lesson không bị quy tội là bằng
+   *  chứng ủng hộ yếu). Run PARTIAL vì budget/needs_input KHÔNG đụng cặp
+   *  này (C-4 giữ nguyên).
+   *  Chỉ áp cho exploration lesson — lesson auto-apply thường vẫn neutral. */
+  lessonPartialValidatePenalty: 0.05,
+  lessonPartialValidateBoost: 0.02,
 } as const
 
 // ==================== PRE-ACT / CONSOLIDATE SHAPES ====================
@@ -187,6 +196,10 @@ export interface PreActContext {
   unresolvedWarnings: string[]
   /** Lesson ids đã inject → goal-loop dùng để VALIDATE sau run (EVALUATE) */
   appliedLessonIds: string[]
+  /** ROUND-39 — ids lesson THỬ NGHIỆM (ε-greedy slot cuối, confidence < 0.7).
+   *  Con của appliedLessonIds — dùng để chấm ±confidence NHỎ khi run PARTIAL
+   *  CÓ dấu vết lỗi (lesson auto-apply thường giữ NEUTRAL theo C-4). */
+  explorationLessonIds: string[]
 }
 
 /** Input cho recorder pipeline A.5 — mọi field goal-loop đã có sẵn trong scope */
@@ -211,6 +224,9 @@ export interface RecordEpisodeInput {
   }>
   /** Lesson ids PRE-ACT đã áp dụng cho run này (để validate) */
   appliedLessonIds: string[]
+  /** ROUND-39 — subset exploration của appliedLessonIds (ε-greedy) — được
+   *  chấm ±confidence NHỎ khi outcome PARTIAL có dấu vết lỗi tool. */
+  explorationLessonIds?: string[]
 }
 
 /** Kết quả pipeline A.5 */

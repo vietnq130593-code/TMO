@@ -25,12 +25,15 @@ import { validateAppliedLessons } from '../src/lib/episodic-memory/lessons'
 // ---------- fixtures ----------
 const LESSON_DB = 'test-lesson-p1c-db'
 const LESSON_LLM = 'test-lesson-p1c-llm'
+// ROUND-39 — lesson conf thấp để test cờ needsReview khi PARTIAL penalty
+const LESSON_LOW = 'test-lesson-r39-low'
 
 async function seedLesson(
   id: string,
   statement: string,
   trigger: string,
-  appliesTo: string[]
+  appliesTo: string[],
+  confidence = 0.8,
 ): Promise<void> {
   const data = {
     statement,
@@ -38,7 +41,7 @@ async function seedLesson(
     appliesTo: JSON.stringify(appliesTo),
     rootCause: 'REASONING_ERROR',
     source: 'SELF_DERIVED',
-    confidence: 0.8,
+    confidence,
     timesApplied: 5,
     timesValidated: 3,
     timesFailed: 0,
@@ -52,7 +55,7 @@ async function seedLesson(
 }
 
 async function resetFixture(): Promise<void> {
-  await db.lessonRecord.deleteMany({ where: { id: { in: [LESSON_DB, LESSON_LLM] } } }).catch(() => {})
+  await db.lessonRecord.deleteMany({ where: { id: { in: [LESSON_DB, LESSON_LLM, LESSON_LOW] } } }).catch(() => {})
   await seedLesson(
     LESSON_DB,
     'Khi sửa schema database, chạy db:push trước khi restart app',
@@ -64,6 +67,13 @@ async function resetFixture(): Promise<void> {
     'Khi viết prompt dài cho LLM, tách thành các mục đánh số',
     'khi viết prompt dài cho llm',
     ['llm', 'prompt', 'writing']
+  )
+  await seedLesson(
+    LESSON_LOW,
+    'Khi gọi API ngoài, đặt retry với backoff',
+    'khi gọi api ngoài',
+    ['api', 'retry', 'backoff'],
+    0.42,
   )
 }
 
@@ -185,5 +195,113 @@ describe('P1-c — lesson credit assignment', () => {
     const dbLesson2 = await getLesson(LESSON_DB)
     expect(dbLesson2.confidence).toBeCloseTo(0.8, 5) // vẫn KHÔNG phạt
     expect(dbLesson2.timesApplied).toBe(7)
+  })
+})
+
+// ============================================================================
+// ROUND-39 — PARTIAL CHẤM ±CONFIDENCE CHO EXPLORATION LESSON (ε-greedy)
+// ============================================================================
+// Nợ vận hành round-38: "PARTIAL không chấm ±confidence exploration lesson" —
+// thí nghiệm ε trúng run nửa vời (giao được nhưng vướng tool) bị cháy không
+// tín hiệu. Giờ: exploration khớp attribution → −0.05 (nửa mức FAILURE, không
+// tăng timesFailed); exploration không khớp → +0.02; lesson THƯỜNG + run
+// PARTIAL budget + ABANDONED + attribution rỗng → vẫn NEUTRAL tuyệt đối (C-4).
+describe('ROUND-39 — PARTIAL ±confidence cho exploration lesson', () => {
+  test('PARTIAL + exploration KHỚP attribution → −0.05, KHÔNG tăng timesFailed; lesson thường kề cận vẫn neutral', async () => {
+    const r = await validateAppliedLessons(
+      [LESSON_DB, LESSON_LLM],
+      'PARTIAL',
+      {
+        failedTools: ['db_query'],
+        errorRootCauses: ['RESOURCE_ERROR'],
+        errorKeywords: ['database', 'sqlite', 'schema'],
+      },
+      [LESSON_DB], // exploration = lesson DB (ε-greedy slot cuối)
+    )
+
+    // Lesson DB: exploration + khớp dấu vết lỗi DB → −0.05 (nửa mức −0.1)
+    const dbLesson = await getLesson(LESSON_DB)
+    expect(dbLesson.confidence).toBeCloseTo(0.75, 5) // 0.8 − 0.05
+    expect(dbLesson.timesFailed).toBe(0) // KHÔNG quy tội hoàn toàn — bằng chứng nửa vời
+    expect(dbLesson.timesValidated).toBe(3) // giữ nguyên
+    expect(dbLesson.timesApplied).toBe(6)
+    expect(r.partialPenalized).toBe(1)
+
+    // Lesson LLM: KHÔNG exploration → neutral tuyệt đối (C-4)
+    const llmLesson = await getLesson(LESSON_LLM)
+    expect(llmLesson.confidence).toBeCloseTo(0.8, 5)
+    expect(llmLesson.timesFailed).toBe(0)
+    expect(r.neutral).toBe(1)
+  })
+
+  test('PARTIAL + exploration KHÔNG khớp attribution → +0.02 (thiên nhẹ dương), KHÔNG tăng timesValidated', async () => {
+    const r = await validateAppliedLessons(
+      [LESSON_DB, LESSON_LLM],
+      'PARTIAL',
+      {
+        failedTools: ['db_query'],
+        errorRootCauses: ['RESOURCE_ERROR'],
+        errorKeywords: ['database', 'sqlite'],
+      },
+      [LESSON_LLM], // exploration = lesson LLM — không đụng dấu vết DB
+    )
+
+    const llmLesson = await getLesson(LESSON_LLM)
+    expect(llmLesson.confidence).toBeCloseTo(0.82, 5) // 0.8 + 0.02
+    expect(llmLesson.timesValidated).toBe(3) // PARTIAL không tính validated đủ mạnh
+    expect(llmLesson.timesFailed).toBe(0)
+    expect(r.partialBoosted).toBe(1)
+
+    // Lesson DB thường (không exploration) → neutral
+    const dbLesson = await getLesson(LESSON_DB)
+    expect(dbLesson.confidence).toBeCloseTo(0.8, 5)
+  })
+
+  test('PARTIAL penalty đủ kéo lesson 0.42 xuống dưới ngưỡng 0.4 → flaggedForReview', async () => {
+    const r = await validateAppliedLessons(
+      [LESSON_LOW],
+      'PARTIAL',
+      {
+        failedTools: ['api_client'],
+        errorRootCauses: ['ENV_DRIFT'],
+        errorKeywords: ['api', 'retry'],
+      },
+      [LESSON_LOW],
+    )
+    const low = await getLesson(LESSON_LOW)
+    expect(low.confidence).toBeCloseTo(0.37, 5) // 0.42 − 0.05
+    expect(low.needsReview).toBe(true)
+    expect(r.flaggedForReview).toContain(LESSON_LOW)
+  })
+
+  test('PARTIAL + attribution RỖNG (không biết cái gì fail) → exploration cũng KHÔNG bị chấm — khác FAILURE over-match', async () => {
+    const r = await validateAppliedLessons(
+      [LESSON_DB],
+      'PARTIAL',
+      { failedTools: [], errorRootCauses: [], errorKeywords: [] },
+      [LESSON_DB],
+    )
+    expect(r.neutral).toBe(1)
+    expect(r.partialBoosted ?? 0).toBe(0)
+    expect(r.partialPenalized ?? 0).toBe(0)
+    const dbLesson = await getLesson(LESSON_DB)
+    expect(dbLesson.confidence).toBeCloseTo(0.8, 5) // KHÔNG đổi
+  })
+
+  test('NEUTRAL outcome (run PARTIAL vì budget — recorder không map sang PARTIAL) → exploration cũng KHÔNG bị chấm (C-4)', async () => {
+    const r = await validateAppliedLessons(
+      [LESSON_DB],
+      'NEUTRAL',
+      {
+        failedTools: ['db_query'],
+        errorRootCauses: ['RESOURCE_ERROR'],
+        errorKeywords: ['database'],
+      },
+      [LESSON_DB], // có exploration + CÓ dấu vết lỗi — nhưng outcome NEUTRAL
+    )
+    expect(r.neutral).toBe(1)
+    expect(r.partialPenalized ?? 0).toBe(0)
+    const dbLesson = await getLesson(LESSON_DB)
+    expect(dbLesson.confidence).toBeCloseTo(0.8, 5) // budget-run không phải bằng chứng
   })
 })

@@ -1780,6 +1780,9 @@ export async function runGoalDrivenLoop(params: {
   // cold-start hay làm hỏng response của agent.
   let preActBlock = ''
   let appliedLessonIds: string[] = []
+  // ROUND-39 — lesson THỬ NGHIỆM (ε-greedy) của run này — truyền xuống
+  // recordEpisodeFromRun để được chấm ±nhỏ khi outcome PARTIAL có lỗi tool.
+  let explorationLessonIds: string[] = []
   try {
     const { buildPreActContext } = await import('@/lib/episodic-memory/preact')
     const preAct = await Promise.race([
@@ -1789,6 +1792,7 @@ export async function runGoalDrivenLoop(params: {
     if (preAct && preAct.promptBlock) {
       preActBlock = preAct.promptBlock
       appliedLessonIds = preAct.appliedLessonIds
+      explorationLessonIds = preAct.explorationLessonIds ?? []
       console.log(`[GoalLoop] ${agentName} PRE-ACT episodic: ${preAct.lessons.length} lessons, ${preAct.unresolvedWarnings.length} cảnh báo lỗi chưa resolve, ${appliedLessonIds.length} lesson auto-apply`)
     }
   } catch { /* fail-open — không có ký ức thì chạy như thường */ }
@@ -4578,6 +4582,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       endedAt: new Date(),
       toolEvidence: episodeToolEvidence,
       appliedLessonIds,
+      explorationLessonIds,
     }).then(r => {
       if (r.error) {
         console.warn(`[GoalLoop] ${agentName} episodic memory ghi lỗi: ${r.error}`)

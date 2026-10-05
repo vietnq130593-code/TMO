@@ -29,6 +29,9 @@ export interface AgentBrainBlock {
   promptBlock: string
   /** Lesson được tính "applied" — validate sau run khi có outcome */
   appliedLessonIds: string[]
+  /** ROUND-39 — subset exploration (ε-greedy) của appliedLessonIds — được
+   *  chấm ±confidence NHỎ khi outcome PARTIAL có dấu vết lỗi tool. */
+  explorationLessonIds: string[]
 }
 
 const PREACT_TIMEOUT_MS = 4_000
@@ -66,7 +69,7 @@ export async function buildAgentBrainBlock(params: {
   agentName: string
   task: string
 }): Promise<AgentBrainBlock> {
-  const empty: AgentBrainBlock = { promptBlock: '', appliedLessonIds: [] }
+  const empty: AgentBrainBlock = { promptBlock: '', appliedLessonIds: [], explorationLessonIds: [] }
   try {
     const task = params.task?.trim()
     if (!task) return empty
@@ -76,7 +79,7 @@ export async function buildAgentBrainBlock(params: {
     const key = taskCacheKey(params.family, params.agentName, task)
     const cached = cache.get(key)
     if (cached && cached.expiresAt > Date.now()) {
-      return { promptBlock: cached.promptBlock, appliedLessonIds: cached.appliedLessonIds }
+      return { promptBlock: cached.promptBlock, appliedLessonIds: cached.appliedLessonIds, explorationLessonIds: cached.explorationLessonIds ?? [] }
     }
     // Timeout guard — PRE-ACT không được làm chậm agent chính
     const { buildPreActContext } = await import('./preact')
@@ -94,6 +97,7 @@ export async function buildAgentBrainBlock(params: {
     const block: AgentBrainBlock = {
       promptBlock: preact.promptBlock || '',
       appliedLessonIds: preact.appliedLessonIds ?? [],
+      explorationLessonIds: preact.explorationLessonIds ?? [],
     }
     if (block.promptBlock === '' && block.appliedLessonIds.length === 0) {
       // ROUND-38 fix Y2: cache cả kết quả RỖNG với TTL ngắn (15s) — trước đây
@@ -194,6 +198,9 @@ export function recordAgentEpisode(params: {
   stopReason: string
   toolEvidence: Array<{ tool: string; success: boolean; text: string; cycle?: number }>
   appliedLessonIds?: string[]
+  /** ROUND-39 — subset exploration (ε-greedy) của appliedLessonIds — recorder
+   *  dùng để chấm ±confidence NHỎ cho đúng lesson khi outcome PARTIAL. */
+  explorationLessonIds?: string[]
   cycles?: number
   tokensUsed?: number
   /** ROUND-38 fix Y3 — thời điểm bắt đầu THẬT của run (ms epoch hoặc Date).
@@ -237,6 +244,7 @@ export function recordAgentEpisode(params: {
           text: ev.text,
         })),
         appliedLessonIds: params.appliedLessonIds ?? [],
+        explorationLessonIds: params.explorationLessonIds ?? [],
       })
       if (result.episodeId) {
         console.log(

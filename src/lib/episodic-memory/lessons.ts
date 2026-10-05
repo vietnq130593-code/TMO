@@ -202,6 +202,12 @@ export interface ValidateLessonsResult {
   /** ROUND-32 P1-c: lesson applied trong run FAILURE nhưng KHÔNG khớp ngữ cảnh
    *  lỗi → không bị quy tội (chỉ đếm timesApplied, không đổi confidence). */
   neutral?: number
+  /** ROUND-39 — exploration lesson được chấm ±NHỎ trong run PARTIAL có dấu
+   *  vết lỗi: +0.02 khi không có evidence chống (vẫn giao được). */
+  partialBoosted?: number
+  /** ROUND-39 — exploration lesson KHỚP attribution trong run PARTIAL:
+   *  −0.05 (nửa mức FAILURE) nhưng KHÔNG tăng timesFailed. */
+  partialPenalized?: number
   flaggedForReview: string[]
 }
 
@@ -254,6 +260,18 @@ function isLessonRelatedToFailure(
   return tokens.some(tok => trace.some(tr => tr.includes(tok) || tok.includes(tr)))
 }
 
+/** ROUND-39 — attribution có dấu vết lỗi nào KHÔNG? (PARTIAL chỉ chấm
+ * exploration khi biết cụ thể cái gì fail — trace rỗng = tín hiệu mơ hồ.) */
+function attributionTraceEmpty(att?: LessonAttribution): boolean {
+  if (!att) return true
+  const trace = [
+    ...(att.failedTools ?? []),
+    ...(att.errorRootCauses ?? []),
+    ...(att.errorKeywords ?? []),
+  ]
+  return trace.filter(t => t && String(t).trim()).length === 0
+}
+
 /**
  * Nhịp 3 EVALUATE — cập nhật vòng đời lesson theo outcome run:
  *   SUCCESS + lesson đã áp dụng → times_validated++, confidence += 0.05
@@ -274,18 +292,37 @@ function isLessonRelatedToFailure(
  * hay được retrieve nhất → tụt dưới ngưỡng auto-apply 0.3/0.7 âm thầm.
  * NEUTRAL: run không phải bằng chứng thắng hay thua — mọi lesson chỉ
  * timesApplied++, KHÔNG đổi confidence/timesValidated/timesFailed.
+ *
+ * ROUND-39 (nợ vận hành round-38): PARTIAL KHÔNG còn là NEUTRAL tuyệt đối
+ * với lesson THỬ NGHIỆM (ε-greedy) — run giao được nhưng vướng (recorder chỉ
+ * map PARTIAL→PARTIAL khi CÓ tool fail) là bằng chứng yếu đáng chấm:
+ *   - exploration lesson KHỚP attribution → −0.05 (nửa mức FAILURE), KHÔNG
+ *     tăng timesFailed (chưa đủ mạnh để quy tội hoàn toàn)
+ *   - exploration lesson KHÔNG khớp → +0.02 (thiên nhẹ dương — lesson theo
+ *     run nửa vời mà không bị quy tội — vòng bandit exploration khép kín:
+ *     lesson rank-6+ 0.4-0.69 có đường "gối" dần lên 0.7 auto-apply)
+ *   - lesson auto-apply THƯỜNG + run PARTIAL vì budget/needs_input + run
+ *     ABANDONED → vẫn NEUTRAL tuyệt đối (C-4 giữ nguyên 100%)
+ *   - attribution rỗng (không biết cái gì fail) → exploration cũng KHÔNG
+ *     chấm (tín hiệu quá mơ hồ — khác FAILURE vốn over-match có chủ đích)
  */
-export type LessonValidationOutcome = 'SUCCESS' | 'FAILURE' | 'NEUTRAL'
+export type LessonValidationOutcome = 'SUCCESS' | 'FAILURE' | 'NEUTRAL' | 'PARTIAL'
 
 export async function validateAppliedLessons(
   appliedLessonIds: string[],
   outcome: LessonValidationOutcome,
-  attribution?: LessonAttribution
+  attribution?: LessonAttribution,
+  /** ROUND-39 — ids lesson THỬ NGHIỆM (ε-greedy) trong run này — thuộc con
+   *  của appliedLessonIds; chỉ chúng được ±nhỏ khi outcome PARTIAL. */
+  explorationIds?: string[],
 ): Promise<ValidateLessonsResult> {
   const result: ValidateLessonsResult = { validated: 0, failed: 0, neutral: 0, flaggedForReview: [] }
   if (appliedLessonIds.length === 0) return result
   const outcomeSuccess = outcome === 'SUCCESS'
   const penalize = outcome === 'FAILURE'
+  // ROUND-39 — PARTIAL: chỉ chấm exploration lesson (lesson thường neutral C-4)
+  const partialGrade = outcome === 'PARTIAL'
+  const explorationSet = new Set(explorationIds ?? [])
   for (const id of appliedLessonIds.slice(0, 10)) {
     try {
       const rec = await findLessonRecordById(id)
@@ -295,11 +332,22 @@ export async function validateAppliedLessons(
       // NEUTRAL → không phạt lesson nào (C-4)
       const related = penalize && isLessonRelatedToFailure(rec, attribution)
 
+      // ROUND-39 — PARTIAL ±nhỏ cho exploration lesson. Attribution rỗng →
+      // KHÔNG chấm (tín hiệu mơ hồ; khác FAILURE — over-match có chủ đích).
+      let partialDelta: 'boost' | 'penalty' | null = null
+      if (partialGrade && explorationSet.has(id) && !attributionTraceEmpty(attribution)) {
+        partialDelta = isLessonRelatedToFailure(rec, attribution) ? 'penalty' : 'boost'
+      }
+
       const confidence = outcomeSuccess
         ? Math.min(0.99, rec.confidence + EPISODIC_THRESHOLDS.lessonValidateBoost)
         : related
           ? Math.max(0, rec.confidence - EPISODIC_THRESHOLDS.lessonValidatePenalty)
-          : rec.confidence // neutral — không đổi (lesson không khớp lỗi HOẶC outcome NEUTRAL)
+          : partialDelta === 'penalty'
+            ? Math.max(0, rec.confidence - EPISODIC_THRESHOLDS.lessonPartialValidatePenalty)
+            : partialDelta === 'boost'
+              ? Math.min(0.99, rec.confidence + EPISODIC_THRESHOLDS.lessonPartialValidateBoost)
+              : rec.confidence // neutral — không đổi (lesson không khớp lỗi HOẶC outcome NEUTRAL)
       const needsReview = confidence < EPISODIC_THRESHOLDS.lessonNeedsReview
       const lesson: LessonNode = {
         id: rec.id,
@@ -310,6 +358,8 @@ export async function validateAppliedLessons(
         confidence,
         timesApplied: rec.timesApplied + 1,
         timesValidated: rec.timesValidated + (outcomeSuccess ? 1 : 0),
+        // PARTIAL penalty KHÔNG tăng timesFailed — bằng chứng nửa vời chưa đủ
+        // mạnh để quy tội hoàn toàn (timesFailed dành cho FAILURE proven).
         timesFailed: rec.timesFailed + (related ? 1 : 0),
         createdAt: rec.createdAt,
         source: (rec.source as LessonNode['source']) ?? 'SELF_DERIVED',
@@ -320,13 +370,17 @@ export async function validateAppliedLessons(
       await upsertLessonRecord(lesson).catch(() => {})
       if (outcomeSuccess) result.validated++
       else if (related) result.failed++
+      else if (partialDelta === 'penalty') result.partialPenalized = (result.partialPenalized ?? 0) + 1
+      else if (partialDelta === 'boost') result.partialBoosted = (result.partialBoosted ?? 0) + 1
       else result.neutral = (result.neutral ?? 0) + 1
-      if (needsReview && (outcomeSuccess || related)) result.flaggedForReview.push(id)
+      if (needsReview && (outcomeSuccess || related || partialDelta === 'penalty')) result.flaggedForReview.push(id)
     } catch { /* fail-open từng lesson */ }
   }
   const neutralNote = (result.neutral ?? 0) > 0 ? `, ${(result.neutral ?? 0)} neutral (không quy tội — P1-c)` : ''
-  if (result.validated + result.failed > 0 || (result.neutral ?? 0) > 0) {
-    console.log(`[Episodic] Lesson validation (outcome=${outcome}): ${result.validated} validated, ${result.failed} failed${neutralNote}${result.flaggedForReview.length > 0 ? `, ${result.flaggedForReview.length} cần review` : ''}`)
+  const partialNote = (result.partialBoosted ?? 0) + (result.partialPenalized ?? 0) > 0
+    ? `, ${(result.partialBoosted ?? 0)} partial+ / ${(result.partialPenalized ?? 0)} partial− (exploration ROUND-39)` : ''
+  if (result.validated + result.failed > 0 || (result.neutral ?? 0) > 0 || partialNote) {
+    console.log(`[Episodic] Lesson validation (outcome=${outcome}): ${result.validated} validated, ${result.failed} failed${neutralNote}${partialNote}${result.flaggedForReview.length > 0 ? `, ${result.flaggedForReview.length} cần review` : ''}`)
   }
   return result
 }
