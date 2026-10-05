@@ -1,0 +1,15 @@
+Hãy huy động TEAM CODE (dùng tool request_code_team — đây là bài test năng lực xây dựng app fullstack của team) xây dựng một ứng dụng fullstack hoàn chỉnh: app quản lý ghi chú (Notes). Thông số BẮT BUỘC:
+
+(1) Toàn bộ nằm trong thư mục /tmp/tmo-fullstack-eval (tạo mới nếu chưa có). LƯU Ý QUAN TRỌNG: các tool file_write/file_read bị giới hạn trong workspace root nên PHẢI dùng tool shell (mkdir -p ...; cat > file << 'EOF' ... EOF) để tạo/sửa file trong /tmp.
+
+(2) Backend server.ts chạy bằng Bun, lắng nghe port 8899, dùng module builtin bun:sqlite (TUYỆT ĐỐI KHÔNG cài thêm package nào — không chạy npm install hay bun add), database notes.db với bảng notes(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, content TEXT DEFAULT '', done INTEGER DEFAULT 0, created_at TEXT).
+
+(3) REST API: GET /api/notes (liệt kê tất cả), POST /api/notes nhận {title, content}, PUT /api/notes/:id (sửa title/content/done), DELETE /api/notes/:id.
+
+(4) Frontend public/index.html — HTML+CSS+JS thuần trong 1 file (không framework, không CDN) gọi API: hiện danh sách notes, thêm mới, sửa tiêu đề, toggle done, xóa.
+
+(5) Khởi động server nền (tool run_bg) rồi test API THẬT bằng curl theo đúng thứ tự: POST tạo 3 notes mẫu → GET đọc lại (phải thấy đúng 3) → PUT sửa note 1 → DELETE xóa note 2 → GET lại đối chiếu (phải còn 2, nội dung note 1 đúng như đã sửa). Ghi lại mã HTTP + body từng lệnh.
+
+(6) Cuối cùng xác nhận frontend trả HTML 200 (curl -s -o /dev/null -w "%{http_code}" http://localhost:8899/).
+
+Điều kiện hoàn thành (acceptance): server sống thật trên port 8899, cả 5 thao tác API trả kết quả đúng, file index.html tải được qua HTTP. Báo cáo về cho tôi: cấu trúc thư mục, kết quả từng bước test (mã HTTP + body rút gọn), đường dẫn file database.
