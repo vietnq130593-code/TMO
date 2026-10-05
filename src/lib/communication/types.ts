@@ -7,7 +7,7 @@
  *
  * Các types này được sử dụng bởi:
  *   - progress-reporter.ts (format báo cáo tiến độ)
- *   - clarification-engine.ts (phát hiện ambiguity, định dạng câu hỏi)
+ *   - (clarification-engine.ts đã XOÁ round-37 V4 — 0 caller phía hỏi)
  *   - workflow-engine.ts (tích hợp SSE events)
  */
 

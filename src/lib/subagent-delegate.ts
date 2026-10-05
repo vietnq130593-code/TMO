@@ -441,6 +441,9 @@ async function runSubAgentForProfileInner(params: {
   } = params
 
   const startedAt = Date.now()
+  // ROUND-38 fix Y8 — cờ chống double-record episode (outer-catch ghi bù khi
+  // record thường chưa kịp chạy — khai báo NGOÀI try để catch thấy được)
+  let episodeRecorded = false
   const evidence: string[] = []
   // IMP-1 (W1) — tool-result transcript ĐẦY ĐỦ (entry JSON {tool, success,
   // result} đã cap SUBAGENT_TOOL_RESULT_CHARS=4000) để trọng tài độc lập ĐỌC
@@ -1129,24 +1132,15 @@ async function runSubAgentForProfileInner(params: {
     // evidence, endedBy map outcome, appliedLessonIds từ PRE-ACT validate.
     // Fire-and-forget fail-open — KHÔNG đụng delegation result.
     try {
-      const { recordAgentEpisode, mapRunOutcome } = await import('@/lib/episodic-memory/agent-brain')
-      // Parse toolResultLog entries (JSON string {tool, success, result})
+      const { recordAgentEpisode, mapRunOutcome, parseToolResultLogEntry } = await import('@/lib/episodic-memory/agent-brain')
+      // Parse toolResultLog entries (JSON string {tool, success, result}) —
+      // ROUND-38 fix B2: parseToolResultLogEntry (agent-brain dùng chung):
+      // object → JSON.stringify thay '[object Object]', string giữ nguyên.
       const evidence = toolResultLog
-        .map((entry): { tool: string; success: boolean; text: string } | null => {
-          try {
-            const parsed = JSON.parse(entry) as { tool?: unknown; success?: unknown; result?: unknown }
-            return {
-              tool: typeof parsed.tool === 'string' ? parsed.tool : 'unknown',
-              success: parsed.success === true,
-              text: String(parsed.result ?? entry).slice(0, 600),
-            }
-          } catch {
-            return { tool: 'unknown', success: false, text: entry.slice(0, 600) }
-          }
-        })
+        .map(parseToolResultLogEntry)
         .filter((e): e is { tool: string; success: boolean; text: string } => e !== null)
       const toolFailures = evidence.filter(e => !e.success).length
-      // endedBy: 'conclude' | 'timeout' | 'token_budget' | 'error' | 'cancelled' | 'iteration_limit'
+      // endedBy: 'concluded' | 'timeout' | 'token_budget' | 'error' | 'cancelled' | 'iteration_limit'
       const outcomeForBrain = state.endedBy === 'cancelled'
         ? 'ABANDONED' as const
         : state.endedBy === 'error'
@@ -1160,6 +1154,9 @@ async function runSubAgentForProfileInner(params: {
         agentName: profile.name,
         goal: task.slice(0, 500),
         sessionId,
+        // ROUND-38 fix Y3 — startedAt thật của delegation (startedAt có sẵn
+        // từ đầu hàm — trước đây duration ảo 60s)
+        startedAt: new Date(startedAt),
         outcome: outcomeForBrain,
         stopReason: state.endedBy,
         cycles: iterations,
@@ -1167,6 +1164,7 @@ async function runSubAgentForProfileInner(params: {
         appliedLessonIds: subAgentAppliedLessonIds,
         toolEvidence: evidence,
       })
+      episodeRecorded = true
     } catch { /* fail-open — không được phép làm hỏng delegation */ }
 
     return outcome
@@ -1174,6 +1172,27 @@ async function runSubAgentForProfileInner(params: {
     const errorMessage = err instanceof Error ? err.message : String(err)
     console.warn(`[SubAgent] Delegate "${profile.name}" failed:`, errorMessage)
     try { finishDelegationRun('error', `[Delegation] lỗi: ${errorMessage.slice(0, 200)}`) } catch { /* fail-open */ }
+    // ━━ ROUND-38 fix Y8 — outer-catch (exception giữa delegation) trước đây
+    // KHÔNG ghi episode (record site nằm trong try) → lỗi chết nhất của sub-agent
+    // (exception xuyên thấu) lại là lỗi KHÔNG bao giờ thành bài học. Ghi minimal
+    // FAILURE episode, guard chống double-record khi record thường đã chạy.
+    if (!episodeRecorded) {
+      try {
+        const { recordAgentEpisode } = await import('@/lib/episodic-memory/agent-brain')
+        recordAgentEpisode({
+          family: 'sub-agent',
+          agentName: profile.name,
+          goal: task.slice(0, 500),
+          sessionId,
+          startedAt: new Date(startedAt),
+          outcome: 'FAILURE',
+          stopReason: 'error',
+          cycles: iterations,
+          tokensUsed,
+          toolEvidence: [{ tool: 'delegation', success: false, text: `Exception xuyên thấu delegation: ${errorMessage.slice(0, 400)}` }],
+        })
+      } catch { /* fail-open */ }
+    }
     return {
       success: false,
       agent: profile.name,

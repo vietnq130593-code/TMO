@@ -32,7 +32,7 @@ const STATUS_EMOJI: Record<StepStatus, string> = {
   in_progress: '🔄',
   completed: '✅',
   failed: '❌',
-  skipped: '⏭ Wagering',
+  skipped: '⏭ Bỏ qua', // ROUND-38 fix G2: 'Wagering' là artifact autocorrect vô nghĩa
 }
 
 /** Màu/mô tả theo severity */

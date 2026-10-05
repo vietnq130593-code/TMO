@@ -35,8 +35,12 @@ const PREACT_TIMEOUT_MS = 4_000
 
 /** Cache kết quả theo (family, task-hash) 60s — chống truy vấn lặp trong cùng workflow */
 const BRAIN_CACHE_TTL_MS = 60_000
+/** ROUND-38 fix Y2 — TTL ngắn cho kết quả RỖNG: memory trống không được đục
+ * cache lâu (bài học vừa học 5s trước nên hiện ra ở PRE-ACT lần chạy kế),
+ * nhưng vẫn chống đấm Qdrant+Neo4j mỗi step khi kho thật sự trống. */
+const BRAIN_CACHE_EMPTY_TTL_MS = 15_000
 const globalForBrain = globalThis as unknown as {
-  __tmoAgentBrainCache?: Map<string, AgentBrainBlock & { expiresAt: number }>
+  __tmoAgentBrainCache?: Map<string, AgentBrainBlock & { expiresAt: number; family?: string; agentName?: string }>
 }
 
 function taskCacheKey(family: string, agentName: string, task: string): string {
@@ -74,7 +78,6 @@ export async function buildAgentBrainBlock(params: {
     if (cached && cached.expiresAt > Date.now()) {
       return { promptBlock: cached.promptBlock, appliedLessonIds: cached.appliedLessonIds }
     }
-
     // Timeout guard — PRE-ACT không được làm chậm agent chính
     const { buildPreActContext } = await import('./preact')
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -92,9 +95,15 @@ export async function buildAgentBrainBlock(params: {
       promptBlock: preact.promptBlock || '',
       appliedLessonIds: preact.appliedLessonIds ?? [],
     }
-    if (block.promptBlock === '' && block.appliedLessonIds.length === 0) return empty
+    if (block.promptBlock === '' && block.appliedLessonIds.length === 0) {
+      // ROUND-38 fix Y2: cache cả kết quả RỖNG với TTL ngắn (15s) — trước đây
+      // empty luôn re-query Qdrant+Neo4j MỖI step (mâu thuẫn mục đích cache);
+      // nhưng TTL ngắn để lesson vừa học xuất hiện ở lần retry kế.
+      cache.set(key, { ...empty, expiresAt: Date.now() + BRAIN_CACHE_EMPTY_TTL_MS, family: params.family, agentName: params.agentName })
+      return empty
+    }
 
-    cache.set(key, { ...block, expiresAt: Date.now() + BRAIN_CACHE_TTL_MS })
+    cache.set(key, { ...block, expiresAt: Date.now() + BRAIN_CACHE_TTL_MS, family: params.family, agentName: params.agentName })
     // Cap cache 100 entry FIFO
     while (cache.size > 100) {
       const oldest = cache.keys().next().value
@@ -112,6 +121,29 @@ export async function buildAgentBrainBlock(params: {
 }
 
 // ==================== OUTCOME MAPPING ====================
+
+/**
+ * ROUND-38 fix B2 — parse 1 entry toolResultLog (JSON string {tool, success,
+ * result}) thành evidence. Trước đây nằm inline ở subagent-delegate với
+ * `String(parsed.result)` — object (file_read {content,totalLines}, file_edit
+ * lỗi {error}) → '[object Object]' → taxonomy classify nhầm + lesson rác.
+ * Extract lên đây (dùng chung + probe/test gọi được trực tiếp): string giữ
+ * nguyên, object JSON.stringify, cắt 600 chars.
+ */
+export function parseToolResultLogEntry(entry: string): { tool: string; success: boolean; text: string } {
+  try {
+    const parsed = JSON.parse(entry) as { tool?: unknown; success?: unknown; result?: unknown }
+    const rawResult = parsed.result ?? entry
+    const text = typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult)
+    return {
+      tool: typeof parsed.tool === 'string' ? parsed.tool : 'unknown',
+      success: parsed.success === true,
+      text: (text ?? '').slice(0, 600),
+    }
+  } catch {
+    return { tool: 'unknown', success: false, text: entry.slice(0, 600) }
+  }
+}
 
 /**
  * Map trạng thái kết thúc của agent ngoài goal-loop → EpisodeOutcome thống
@@ -164,7 +196,23 @@ export function recordAgentEpisode(params: {
   appliedLessonIds?: string[]
   cycles?: number
   tokensUsed?: number
+  /** ROUND-38 fix Y3 — thời điểm bắt đầu THẬT của run (ms epoch hoặc Date).
+  * Trước đây mọi gia đình ghi duration ảo 60s → metrics thời lượng học bóp méo.
+  * Mặc định: now−60s (giữ hành vi cũ cho caller chưa truyền). */
+  startedAt?: number | Date
 }): void {
+  // ━━ ROUND-38 fix Y2 — invalidate brain cache của (family, agentName) — trước
+  // đây record xong episode mà cache PRE-ACT 60s vẫn trả bộ não CŨ (không có
+  // bài học vừa ghi) cho chính agent retry lại task y hệt — pattern retry bị
+  // phục vụ stale brain. Cache ≤100 entry nên quét hết rẻ.
+  try {
+    const cache = globalForBrain.__tmoAgentBrainCache
+    if (cache && cache.size > 0) {
+      for (const [k, v] of cache) {
+        if (v.family === params.family && v.agentName === params.agentName) cache.delete(k)
+      }
+    }
+  } catch { /* fail-open */ }
   void (async () => {
     try {
       const { recordEpisodeFromRun } = await import('./recorder')
@@ -178,7 +226,9 @@ export function recordAgentEpisode(params: {
         cycles: params.cycles ?? 1,
         tokensUsed: params.tokensUsed ?? 0,
         toolCalls: params.toolEvidence.length,
-        startedAt: new Date(Date.now() - 60_000), // ước lượng — caller gia đình ngoài không track chính xác
+        startedAt: params.startedAt !== undefined
+          ? new Date(params.startedAt)
+          : new Date(Date.now() - 60_000), // fallback ước lượng — caller nên truyền startedAt thật (fix Y3)
         endedAt: new Date(),
         toolEvidence: params.toolEvidence.slice(0, 60).map((ev, i) => ({
           cycle: typeof ev.cycle === 'number' ? ev.cycle : i + 1,

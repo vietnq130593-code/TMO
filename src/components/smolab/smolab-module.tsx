@@ -3423,6 +3423,9 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
               // sau mỗi step (formattedReport từ communication/progress-reporter).
               // Nhẹ nhàng: cập nhật iteration indicator của tin agent hiện tại
               // (báo cáo đầy đủ nằm trong Thought Process + worklog).
+              // ROUND-38 fix B3: sau khi backend emit progress_report TRƯỚC
+              // agent_complete, handler này giờ chạy thật — badge thay THẾ
+              // (strip badge cũ nếu phát lại) thay vì cộng dồn "(Bước 1/6)(Bước 2/6)".
               if (currentAgentMsgId) {
                 const stepIndex = event.stepIndex as number | undefined
                 const totalSteps = event.totalSteps as number | undefined
@@ -3430,7 +3433,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                   const progText = ` (Bước ${stepIndex}/${totalSteps})`
                   if (isActiveSession()) setMessages(prev => prev.map(m =>
                     m.id === currentAgentMsgId
-                      ? { ...m, iterationInfo: (m.iterationInfo ?? '') + progText }
+                      ? { ...m, iterationInfo: (m.iterationInfo ?? '').replace(/\s*\(Bước \d+\/\d+\)$/, '') + progText }
                       : m
                   ))
                 }

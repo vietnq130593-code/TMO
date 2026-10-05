@@ -17,17 +17,36 @@ import { extractInsightsFromSessionData } from '@/lib/opencode-knowledge-context
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { sessionId, summary, filesChanged, toolsUsed } = body
+    const { sessionId, summary, filesChanged, toolsUsed, outcome } = body
 
-    if (!sessionId) {
-      return NextResponse.json({ error: 'sessionId is required' }, { status: 400 })
+    if (!sessionId || typeof sessionId !== 'string') {
+      return NextResponse.json({ error: 'sessionId is required (string)' }, { status: 400 })
     }
+
+    // ━━ ROUND-38 fix Y7 — validate + ép kiểu đầu vào ━━
+    // Trước đây `filesChanged: "src/x.ts"` (string) khiến `for (const file of
+    // ...)` duyệt TỪNG KÝ TỰ (entity rác mỗi chữ cái) và V3.4 map/slice trên
+    // string throw → episode bị skip im lặng. Giờ: chỉ nhận array, ép từng
+    // phần tử String, cap độ dài mảng.
+    const summaryText = typeof summary === 'string' ? summary : ''
+    const filesList = (Array.isArray(filesChanged) ? filesChanged : [])
+      .map((f: unknown) => String(f).slice(0, 300))
+      .slice(0, 50)
+    const toolsList = (Array.isArray(toolsUsed) ? toolsUsed : [])
+      .map((t: unknown) => String(t).slice(0, 100))
+      .slice(0, 50)
+    // Outcome từ caller (session có thể fail/abandon — trước đây hardcode
+    // SUCCESS khiến opencode KHÔNG BAO GIỜ ghi được episode thất bại).
+    const validOutcomes = new Set(['SUCCESS', 'FAILURE', 'PARTIAL', 'ABANDONED'])
+    const episodeOutcome = (
+      typeof outcome === 'string' && validOutcomes.has(outcome) ? outcome : 'SUCCESS'
+    ) as 'SUCCESS' | 'FAILURE' | 'PARTIAL' | 'ABANDONED'
 
     // 1. Extract insights from session data
     const insights = extractInsightsFromSessionData(
-      summary || '',
-      filesChanged || [],
-      toolsUsed || []
+      summaryText,
+      filesList,
+      toolsList
     )
 
     let capturedCount = 0
@@ -51,7 +70,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. Create entities in KB for code modules
-    for (const file of filesChanged || []) {
+    for (const file of filesList) {
       try {
         await db.localEntity.create({
           data: {
@@ -63,7 +82,7 @@ export async function POST(request: NextRequest) {
             properties: JSON.stringify({
               sessionId,
               modifiedAt: new Date().toISOString(),
-              summary: (summary || '').substring(0, 200),
+              summary: summaryText.substring(0, 200),
             }),
           },
         })
@@ -84,8 +103,8 @@ export async function POST(request: NextRequest) {
           where: { id: session.id },
           data: {
             status: 'completed',
-            toolsUsed: JSON.stringify([...new Set([...existingTools, ...(toolsUsed || [])])]),
-            filesTouched: JSON.stringify([...new Set([...existingFiles, ...(filesChanged || [])])]),
+            toolsUsed: JSON.stringify([...new Set([...existingTools, ...toolsList])]),
+            filesTouched: JSON.stringify([...new Set([...existingFiles, ...filesList])]),
           },
         })
       }
@@ -102,8 +121,8 @@ export async function POST(request: NextRequest) {
             type: 'opencode_knowledge_capture',
             sessionId,
             insightsCaptured: capturedCount,
-            filesChanged: filesChanged?.length || 0,
-            toolsUsed: toolsUsed?.length || 0,
+            filesChanged: filesList.length,
+            toolsUsed: toolsList.length,
           }),
         },
       })
@@ -116,29 +135,42 @@ export async function POST(request: NextRequest) {
     // (nếu có) của session không bao giờ vào bộ não. Capture endpoint là điểm
     // "session hoàn tất" duy nhất → record ở đây: filesChanged/toolsUsed làm
     // evidence thành công, summary làm context. Fire-and-forget fail-open.
+    //
+    // ROUND-38 fix Y7: (a) outcome từ body (không còn hardcode SUCCESS);
+    // (b) DEDUPE theo sessionId — double-POST (retry mạng/client gọi lại)
+    // trước đây sinh episode TRÙNG cho cùng 1 session (nhiễu bộ nhớ episodic).
     try {
       const { recordAgentEpisode } = await import('@/lib/episodic-memory/agent-brain')
       const sessionRow = await db.openCodeSession.findFirst({
         where: { sessionId },
-        select: { prompt: true },
+        select: { prompt: true, createdAt: true },
       })
-      recordAgentEpisode({
-        family: 'opencode',
-        agentName: 'OpenCode session',
-        goal: (sessionRow?.prompt || summary || `OpenCode session ${sessionId}`).slice(0, 500),
-        sessionId,
-        outcome: 'SUCCESS',
-        stopReason: 'complete',
-        toolEvidence: [
-          ...(filesChanged || []).slice(0, 15).map((f: string) => ({
-            tool: 'opencode:file', success: true, text: `Đã sửa file: ${f}`,
-          })),
-          ...(toolsUsed || []).slice(0, 15).map((t: string) => ({
-            tool: `opencode:${t}`, success: true, text: `Session dùng tool ${t}`,
-          })),
-          ...(summary ? [{ tool: 'opencode:summary', success: true, text: String(summary).slice(0, 400) }] : []),
-        ],
-      })
+      const existingEpisode = await db.episodeRecord.findFirst({
+        where: { sessionId },
+        select: { id: true },
+      }).catch(() => null)
+      if (existingEpisode) {
+        console.log(`[opencode/knowledge/capture] Episode cho session ${sessionId} đã tồn tại (${existingEpisode.id}) — skip record (dedupe, fix Y7)`)
+      } else {
+        recordAgentEpisode({
+          family: 'opencode',
+          agentName: 'OpenCode session',
+          goal: (sessionRow?.prompt || summaryText || `OpenCode session ${sessionId}`).slice(0, 500),
+          sessionId,
+          startedAt: sessionRow?.createdAt ?? undefined, // fix Y3 — startedAt thật từ OpenCodeSession row
+          outcome: episodeOutcome,
+          stopReason: 'complete',
+          toolEvidence: [
+            ...filesList.slice(0, 15).map((f: string) => ({
+              tool: 'opencode:file', success: true, text: `Đã sửa file: ${f}`,
+            })),
+            ...toolsList.slice(0, 15).map((t: string) => ({
+              tool: `opencode:${t}`, success: true, text: `Session dùng tool ${t}`,
+            })),
+            ...(summaryText ? [{ tool: 'opencode:summary', success: true, text: summaryText.slice(0, 400) }] : []),
+          ],
+        })
+      }
     } catch {
       // Episodic capture fail-open — KHÔNG làm hỏng knowledge capture
     }
@@ -150,7 +182,7 @@ export async function POST(request: NextRequest) {
         type: i.type,
         confidence: i.confidence,
       })),
-      entitiesCreated: (filesChanged || []).length,
+      entitiesCreated: filesList.length,
       sessionId,
     })
   } catch (error) {

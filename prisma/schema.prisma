@@ -1319,6 +1319,37 @@ model StrategyAdaptationLog {
   @@index([createdAt])
 }
 
+/// ROUND-38 (fix B1 rà soát lần 1 round-37): checkpoint-manager V4 gọi
+/// saveCheckpoint durable nhưng model này chưa từng được khai báo → delegate
+/// undefined → mọi lần save throw và bị `.catch(() => {})` nuốt im lặng —
+/// "CodeTeamCheckpoint rows lần đầu được ghi" là claim SAI. Model giờ thật.
+model CodeTeamCheckpoint {
+  id               String   @id @default(cuid())
+  /// Workflow session ID (code-team runPipeline)
+  sessionId        String
+  /// Checkpoint phase — determinePhase() (before_risky_change, after_g2a_code, …)
+  phase            String
+  /// JSON array các step id đã hoàn thành
+  completedSteps   String   @default("[]")
+  currentStepIndex Int      @default(0)
+  /// JSON array file đã sửa
+  filesModified    String   @default("[]")
+  /// JSON array quyết định chính
+  keyDecisions     String   @default("[]")
+  /// JSON array lỗi chưa fix
+  pendingIssues    String   @default("[]")
+  /// JSON ProgressState snapshot
+  progressSnapshot String
+  /// JSON context snapshot
+  contextSnapshot  String
+  /// JSON RoutingDecision snapshot
+  routingDecision  String
+  createdAt        DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([createdAt])
+}
+
 // Phase 2 SMOLAB Proposal 6 — Atomic writeback saga tracking.
 // Each multi-store writeback stamps a batchId; this model tracks step
 // completion across Qdrant + Neo4j + SQLite. Failed batches get retried

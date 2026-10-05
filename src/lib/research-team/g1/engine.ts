@@ -559,6 +559,8 @@ export async function runG1Pipeline(
   missionType: 'M1' | 'M2' | 'M3',
   successCriteria?: SuccessCriterion[],
 ): Promise<G1RoundResult> {
+  // ROUND-38 fix Y3 — startedAt thật cho episode (trước đây duration ảo 60s)
+  const pipelineStartedAt = Date.now()
   let lastResult: G1RoundResult | null = null
 
   // ━━━ ROUND-37 V3.2 — EPISODIC BRAIN PRE-ACT (research-team nối vào bộ não) ━━━
@@ -602,7 +604,7 @@ export async function runG1Pipeline(
       console.log(
         `[ResearchTeam/g1/engine] G1 pipeline round ${round} ESCALATED: ${result.escalateReason || '(unknown)'}`,
       )
-      recordG1Episode(missionId, taskId, partDescription, missionType, result, appliedLessonIds)
+      recordG1Episode(missionId, taskId, partDescription, missionType, result, appliedLessonIds, pipelineStartedAt)
       return result
     }
 
@@ -618,13 +620,13 @@ export async function runG1Pipeline(
     console.log(
       `[ResearchTeam/g1/engine] G1 pipeline round ${round} PASS — BELI spec ready`,
     )
-    recordG1Episode(missionId, taskId, partDescription, missionType, result, appliedLessonIds)
+    recordG1Episode(missionId, taskId, partDescription, missionType, result, appliedLessonIds, pipelineStartedAt)
     return result
   }
 
   // Exhausted rounds → return last result with escalate (council ② still REVISE)
   if (lastResult) {
-    recordG1Episode(missionId, taskId, partDescription, missionType, lastResult, appliedLessonIds)
+    recordG1Episode(missionId, taskId, partDescription, missionType, lastResult, appliedLessonIds, pipelineStartedAt)
     return {
       ...lastResult,
       escalated: true,
@@ -659,6 +661,8 @@ function recordG1Episode(
   missionType: 'M1' | 'M2' | 'M3',
   result: G1RoundResult,
   appliedLessonIds: string[],
+  /** ROUND-38 fix Y3 — startedAt thật từ runG1Pipeline (ms epoch) */
+  startedAtMs?: number,
 ): void {
   void (async () => {
     try {
@@ -682,6 +686,7 @@ function recordG1Episode(
         agentName: `G1 ${missionType} (task ${taskId.slice(0, 8)})`,
         goal: `[${missionType}] ${partDescription}`.slice(0, 500),
         sessionId: missionId,
+        startedAt: startedAtMs !== undefined ? new Date(startedAtMs) : undefined,
         outcome: result.escalated
           ? 'FAILURE'
           : result.council2.verdict === 'PASS' ? 'SUCCESS' : 'PARTIAL',
