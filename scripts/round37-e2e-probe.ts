@@ -10,6 +10,15 @@
  *          Neo4j + SQLite mirror) + verify đọc lại được.
  *   V5  — agentKnowledgeSearch: stack parity chat (hybrid+MMR+entity qua
  *          searchUserKB) + expandGraph relationship thật.
+ *   R38 — 26 check round-38 (checkpoint row thật, parseToolResultLogEntry,
+ *          ε-greedy randomize, cache invalidation, entity search, KB tighten,
+ *          stale sweeper, collections-health 3 cặp desync).
+ *   R39 — 3 nợ vận hành round-38: (1) research-team đủ não — buildAgentBrain
+ *          trả explorationLessonIds, escalateToUser ghi FAILURE episode NEMESIS,
+ *          kingMonitor PIVOT ghi PARTIAL episode qua recordResearchEpisode;
+ *          (2) PARTIAL ±confidence exploration lesson qua đường recorder thật
+ *          (0.5 → 0.45, timesFailed giữ 0); (3) flag
+ *          ENABLE_MASTER_ORCHESTRATOR mặc định BẬT.
  *
  * Usage: cd /home/z/tmo-app && bun scripts/round37-e2e-probe.ts
  */
@@ -293,6 +302,159 @@ async function main() {
       `qdrant=${json.qdrant?.length} ô, desync 3 cặp=${threePairs}, episodic Neo4j episodes=${json.episodic?.episodes} lessons=${json.episodic?.lessons}`)
   } catch (err) {
     check('R38-V1 collections-health (server phải đang chạy :3000)', false, err instanceof Error ? err.message : String(err))
+  }
+
+  // ─────────── R39 — 3 NỢ VẬN HÀNH ROUND-38 (mọi thành viên research-team có
+  // não + flag orchestrator BẬT + PARTIAL chấm ±confidence exploration) ───────────
+  console.log('\n── R39: research-team đủ não + flag ON + PARTIAL ±exploration ──')
+
+  // R39-1: buildAgentBrainBlock trả explorationLessonIds (passthrough ε-greedy)
+  try {
+    const brain = await buildAgentBrainBlock({
+      family: 'research-team',
+      agentName: 'LISMA T1 (task e2e-r39)',
+      task: 'T1 M2 research: E2E probe round-39 — LISMA T1 PRE-ACT shape check',
+    })
+    check('R39-1 AgentBrainBlock trả explorationLessonIds (T1/G2/G3/NEMESIS dùng chung)',
+      Array.isArray(brain.explorationLessonIds) && Array.isArray(brain.appliedLessonIds) && typeof brain.promptBlock === 'string',
+      `applied=${brain.appliedLessonIds.length}, exploration=${brain.explorationLessonIds.length}, block ${brain.promptBlock.length} chars`)
+  } catch (err) {
+    check('R39-1 AgentBrainBlock trả explorationLessonIds (T1/G2/G3/NEMESIS dùng chung)', false, err instanceof Error ? err.message : String(err))
+  }
+
+  // R39-2: escalateToUser (king-catch) ghi FAILURE episode NEMESIS sống
+  try {
+    const { createMission } = await import('../src/lib/research-team/mission-store')
+    const { escalateToUser } = await import('../src/lib/research-team/king/escalation')
+    const probeMission = await createMission({
+      request: 'E2E probe round-39 — NEMESIS escalation episode (tự dọn sau kiểm chứng)',
+      title: 'E2E-R39-escalation-probe',
+      missionType: 'M1',
+      tier: 'T2',
+      confidence: { signals: ['e2e-probe-r39'], conflicts: [], level: 'MEDIUM' },
+    })
+    const escBefore = await db.episodeRecord.count({ where: { agent: { contains: 'NEMESIS king' } } })
+    await escalateToUser(probeMission.id, 'E2E probe round-39 — verify ESCALATE→USER episode', { tier: 'T2', kind: 'mission' })
+    // recordAgentEpisode là fire-and-forget — đợi recorder nền
+    await new Promise(r => setTimeout(r, 6000))
+    const escAfter = await db.episodeRecord.count({ where: { agent: { contains: 'NEMESIS king' } } })
+    const escEpisode = await db.episodeRecord.findFirst({
+      where: { agent: { contains: 'NEMESIS king' }, goal: { contains: 'ESCALATE→USER' } },
+      orderBy: { startedAt: 'desc' },
+    })
+    check('R39-2 escalateToUser ghi FAILURE episode NEMESIS (king-catch)',
+      escAfter > escBefore && !!escEpisode && escEpisode.outcome === 'FAILURE',
+      escEpisode ? `episode ${escEpisode.id.slice(0, 16)} outcome=${escEpisode.outcome} agent="${escEpisode.agent.slice(0, 46)}"` : 'không thấy episode')
+    // dọn mission probe (episode giữ lại làm bằng chứng — cùng mẫu V3)
+    await db.researchMission.delete({ where: { id: probeMission.id } }).catch(() => {})
+  } catch (err) {
+    check('R39-2 escalateToUser ghi FAILURE episode NEMESIS (king-catch)', false, err instanceof Error ? err.message : String(err))
+  }
+
+  // R39-2b: kingMonitor bắt PIVOT → PARTIAL episode qua recordResearchEpisode
+  try {
+    const { createMission } = await import('../src/lib/research-team/mission-store')
+    const { kingMonitor } = await import('../src/lib/research-team/king/engine')
+    const pivotMission = await createMission({
+      request: 'E2E probe round-39 — PIVOT episode (monitor bắt fundamental issue)',
+      title: 'E2E-R39-pivot-probe',
+      missionType: 'M1',
+      tier: 'T2',
+      confidence: { signals: ['e2e-probe-r39'], conflicts: [], level: 'MEDIUM' },
+    })
+    // Cấy task + worklog có tlReadBack='PIVOT-NEEDED' + issues 'fundamental'
+    // → trigger 🔴 PIVOT (worklog.taskId có FK tới ResearchTask — phải tạo task)
+    const pivotTask = await db.researchTask.create({
+      data: {
+        missionId: pivotMission.id,
+        partIdx: 1,
+        title: 'E2E-R39 pivot probe part',
+        taskMdPath: `docs/research/${pivotMission.id}/part-1.md`,
+        successCriteriaJson: '[]',
+        status: 'ASSIGNED',
+        assignedGroup: 'G2',
+      },
+    })
+    await db.researchWorklog.create({
+      data: {
+        taskId: pivotTask.id,
+        missionId: pivotMission.id,
+        phase: 'RESEARCH',
+        entryJson: JSON.stringify({
+          mission: 'M1', status: 'IN_PROGRESS', currentPhase: 'G2', overallProgress: 40,
+          tlReadBack: 'PIVOT-NEEDED', done: ['probe step'], issuesFaced: ['fundamental architecture flaw in probe'],
+          suggestionsNextGroup: [], filesChanged: [], taskId: pivotTask.id,
+        }),
+      },
+    })
+    const pivBefore = await db.episodeRecord.count({ where: { agent: { contains: 'NEMESIS king' }, goal: { contains: 'MONITOR PIVOT' } } })
+    const monRes = await kingMonitor(pivotMission.id)
+    await new Promise(r => setTimeout(r, 6000))
+    const pivAfter = await db.episodeRecord.count({ where: { agent: { contains: 'NEMESIS king' }, goal: { contains: 'MONITOR PIVOT' } } })
+    check('R39-2b kingMonitor PIVOT → PARTIAL episode (recordResearchEpisode)',
+      monRes.pivotTriggered === true && pivAfter > pivBefore,
+      `pivotTriggered=${monRes.pivotTriggered}, episode NEMESIS-PIVOT ${pivBefore} → ${pivAfter}`)
+    // dọn: mission cascade không có — xoá thủ công worklog + task + mission
+    await db.researchWorklog.deleteMany({ where: { missionId: pivotMission.id } }).catch(() => {})
+    await db.researchTask.deleteMany({ where: { missionId: pivotMission.id } }).catch(() => {})
+    await db.researchMission.delete({ where: { id: pivotMission.id } }).catch(() => {})
+  } catch (err) {
+    check('R39-2b kingMonitor PIVOT → PARTIAL episode (recordResearchEpisode)', false, err instanceof Error ? err.message : String(err))
+  }
+
+  // R39-3: PARTIAL ±confidence exploration lesson — đường recorder THẬT
+  // (recordAgentEpisode → recordEpisodeFromRun → validateAppliedLessons)
+  try {
+    const lessonId = `lesson-e2e-r39-${Date.now()}`
+    await db.lessonRecord.deleteMany({ where: { id: lessonId } }).catch(() => {})
+    await db.lessonRecord.create({
+      data: {
+        id: lessonId,
+        statement: 'Khi chạy e2e probe r39, kiểm tra PARTIAL exploration grading qua đường recorder thật',
+        triggerCondition: 'khi chạy e2e probe r39 partial',
+        appliesTo: JSON.stringify(['e2e_probe_r39', 'partial_grading']),
+        rootCause: 'REASONING_ERROR',
+        source: 'SELF_DERIVED',
+        confidence: 0.5,
+        timesApplied: 0, timesValidated: 0, timesFailed: 0, needsReview: false,
+      },
+    })
+    recordAgentEpisode({
+      family: 'code-team',
+      agentName: 'E2E-R39-PARTIAL (exploration)',
+      goal: 'E2E probe round-39 — PARTIAL + exploration lesson grading end-to-end',
+      sessionId: 'e2e-probe-round39',
+      outcome: 'PARTIAL',
+      stopReason: 'complete',
+      appliedLessonIds: [lessonId],
+      explorationLessonIds: [lessonId],
+      toolEvidence: [
+        { tool: 'e2e_probe_r39', success: false, text: 'Error: PARTIAL probe failure — attribution match cho exploration lesson' },
+        { tool: 'e2e_probe_r39', success: true, text: 'Đã khắc phục phần còn lại — run giao được nhưng vướng tool' },
+      ],
+    })
+    console.log('    đợi recorder nền 8s...')
+    await new Promise(r => setTimeout(r, 8000))
+    const lesson = await db.lessonRecord.findUnique({ where: { id: lessonId } })
+    check('R39-3 PARTIAL chấm −0.05 exploration lesson (đường recorder thật)',
+      !!lesson && Math.abs(lesson.confidence - 0.45) < 1e-6 && lesson.timesFailed === 0 && lesson.timesApplied === 1,
+      lesson ? `confidence 0.5 → ${lesson.confidence.toFixed(2)} (−0.05), timesFailed=${lesson.timesFailed} (không quy tội hoàn toàn), timesApplied=${lesson.timesApplied}` : 'không tìm thấy lesson')
+    // dọn lesson probe
+    await db.lessonRecord.deleteMany({ where: { id: lessonId } }).catch(() => {})
+  } catch (err) {
+    check('R39-3 PARTIAL chấm −0.05 exploration lesson (đường recorder thật)', false, err instanceof Error ? err.message : String(err))
+  }
+
+  // R39-4: flag ENABLE_MASTER_ORCHESTRATOR mặc định BẬT (default + .env)
+  try {
+    const { isFlagEnabled } = await import('../src/lib/feature-flags')
+    const on = isFlagEnabled('ENABLE_MASTER_ORCHESTRATOR')
+    const envVal = process.env.ENABLE_MASTER_ORCHESTRATOR
+    check('R39-4 ENABLE_MASTER_ORCHESTRATOR BẬT (default true + .env true)',
+      on === true && envVal !== 'false',
+      on ? `flag=true${envVal ? ` (.env=${envVal}) — decompose_task dùng full thinking layer, kill-switch .env=false` : ' (default — .env không ghi đè)'}` : `flag=false${envVal ? ` — .env=${envVal} vẫn ghi đè TẮT!` : ' — default chưa lật?'}`)
+  } catch (err) {
+    check('R39-4 ENABLE_MASTER_ORCHESTRATOR BẬT (default true + .env true)', false, err instanceof Error ? err.message : String(err))
   }
 
   // ─────────── TỔNG KẾT ───────────
