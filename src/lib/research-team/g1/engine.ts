@@ -573,7 +573,10 @@ export async function runG1Pipeline(
     const { buildAgentBrainBlock } = await import('@/lib/episodic-memory/agent-brain')
     const brain = await buildAgentBrainBlock({
       family: 'research-team',
-      agentName: `G1-pipeline (mission ${missionId.slice(0, 12)})`,
+      // ROUND-39 — agentName TRÙNG recordG1Episode (CONSOLIDATE): record xong
+      // xoá brain-cache theo (family, agentName) — bản cũ 2 tên khác nhau nên
+      // bài học vừa ghi không hiện ra ở lần retry kế trong 60s (Y2 miss).
+      agentName: `G1 ${missionType} (task ${taskId.slice(0, 8)})`,
       task: `${missionType} research: ${partDescription}`.slice(0, 1500),
     })
     if (brain.promptBlock) {

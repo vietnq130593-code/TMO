@@ -228,6 +228,37 @@ export async function escalateToUser(
     return undefined
   })
 
+  // 4. ━━ ROUND-39 — ESCALATE→USER CONSOLIDATE (king-catch thành bài học) ━━
+  // Mission phải escalate là THẤT BẠI vận hành đáng nhớ: mission tương tự
+  // (cùng tier/kind/lý do) sẽ thấy episode này ngay từ NEMESIS RECEIVE qua
+  // PRE-ACT similarity search — NEMESIS biết "cái này từng phải đưa lên user
+  // vì ..." trước khi quyết định. Fail-open tuyệt đối: episode lỗi KHÔNG
+  // được phép làm hỏng flow escalation chính (API route cũng gọi hàm này).
+  try {
+    const { recordAgentEpisode } = await import('@/lib/episodic-memory/agent-brain')
+    recordAgentEpisode({
+      family: 'research-team',
+      agentName: `NEMESIS king (mission ${missionId.slice(0, 12)})`,
+      goal: `[ESCALATE→USER ${opts.kind}/${opts.tier}] ${reason}`.slice(0, 500),
+      sessionId: missionId,
+      startedAt: Date.now(), // quyết định escalate là sự kiện tức thời (duration ≈ 0)
+      outcome: 'FAILURE',
+      stopReason: 'error',
+      toolEvidence: [
+        {
+          tool: 'research:escalation',
+          success: false,
+          text: `[ESCALATE→USER] ${reason} (tier=${opts.tier}, kind=${opts.kind}, timeout=${timeoutHours}h, remind=${remindHours}h, ref=${ref})`.slice(0, 300),
+        },
+      ],
+    })
+  } catch (err) {
+    console.warn(
+      '[Escalation] episodic episode failed (non-blocking — escalation record still persisted):',
+      err instanceof Error ? err.message : String(err),
+    )
+  }
+
   return record
 }
 

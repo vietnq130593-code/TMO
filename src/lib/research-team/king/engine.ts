@@ -104,8 +104,21 @@ export async function kingReceive(missionId: string): Promise<KingReceiveResult>
   try {
     // Task 4 — route NEMESIS qua Zen khi DB provider='zen' (fail-open → NIM).
     const nemesisBrain = await resolveResearchBrain('NEMESIS')
+    // ━━ ROUND-39 — NEMESIS RECEIVE PRE-ACT (king-catch không còn chạy mù) ━━
+    // Cùng agentName với FINALIZE + các episode NEMESIS (cache + invalidation).
+    let receivePrompt = `MISSION: ${mission.code}\nREQUEST:\n${mission.request}`
+    try {
+      const brain = await buildResearchBrainBlock(
+        `NEMESIS king (mission ${missionId.slice(0, 12)})`,
+        `NEMESIS RECEIVE ${mission.missionType} mission: ${mission.request}`,
+      )
+      if (brain.promptBlock) {
+        receivePrompt += brain.promptBlock
+        console.log(`[ResearchTeam/king] ROUND-39 NEMESIS RECEIVE PRE-ACT — ${brain.appliedLessonIds.length} lesson applied`)
+      }
+    } catch { /* fail-open — RECEIVE chạy như cũ */ }
     const llm = await callLLMForAgent(
-      `MISSION: ${mission.code}\nREQUEST:\n${mission.request}`,
+      receivePrompt,
       nemesisBrain,
       KING_RECEIVE_SYSTEM_PROMPT,
       {
@@ -269,6 +282,8 @@ export async function kingMonitor(missionId: string): Promise<KingMonitorResult>
 
   const missionType = mission.missionType as 'M1' | 'M2' | 'M3'
   const tier = (mission.tier || 'T2') as 'T1' | 'T2' | 'T3'
+  // ROUND-39 — startedAt thật cho episode PIVOT (fix Y3 parity)
+  const monitorStartedAt = Date.now()
 
   // 1. Read latest worklogs cho mission
   let worklogs: Array<{ id: string; taskId: string; phase: string; entryJson: string }> = []
@@ -341,6 +356,23 @@ export async function kingMonitor(missionId: string): Promise<KingMonitorResult>
         err instanceof Error ? err.message : String(err),
       )
     }
+    // ━━ ROUND-39 — PIVOT CONSOLIDATE: monitor bắt được tín hiệu đổi hướng ━━
+    // là trải nghiệm đáng nhớ — mission tương tự sẽ thấy cảnh báo ngay từ
+    // RECEIVE/FINALIZE qua PRE-ACT (episode này vào kho similarity). Fail-open.
+    try {
+      recordResearchEpisode({
+        agentName: `NEMESIS king (mission ${missionId.slice(0, 12)})`,
+        goal: `[MONITOR PIVOT ${missionType}/${tier}] ${mission.request}`,
+        sessionId: missionId,
+        outcome: 'PARTIAL',
+        stopReason: 'no_progress',
+        appliedLessonIds: [],
+        startedAtMs: monitorStartedAt,
+        toolEvidence: [
+          { tool: 'research:monitor', success: false, text: `PIVOT ${pivotTrigger}: ${pivotReason}`.slice(0, 300) },
+        ],
+      })
+    } catch { /* fail-open — PIVOT episode không được chặn monitor */ }
   }
 
   // 4. Transition → MONITORING
@@ -513,6 +545,19 @@ export async function kingFinalize(missionId: string): Promise<KingFinalizeResul
 
     // Task 4 — route NEMESIS qua Zen khi DB provider='zen' (fail-open → NIM).
     const nemesisBrain = await resolveResearchBrain('NEMESIS')
+    // ━━ ROUND-39 — NEMESIS FINALIZE PRE-ACT (cùng agentName RECEIVE → dính
+    // cache 60s; bài học/PARTIAL-episode của mission này hiện lên ngay) ━━
+    let finalizeBrainSuffix = ''
+    try {
+      const brain = await buildResearchBrainBlock(
+        `NEMESIS king (mission ${missionId.slice(0, 12)})`,
+        `NEMESIS FINALIZE ${missionType} mission: ${mission.request}`,
+      )
+      if (brain.promptBlock) {
+        finalizeBrainSuffix = brain.promptBlock
+        console.log(`[ResearchTeam/king] ROUND-39 NEMESIS FINALIZE PRE-ACT — ${brain.appliedLessonIds.length} lesson applied`)
+      }
+    } catch { /* fail-open — FINALIZE chạy như cũ */ }
     const llm = await callLLMForAgent(
       [
         `MISSION: ${mission.code} (tier=${tier}, type=${missionType})`,
@@ -524,7 +569,8 @@ export async function kingFinalize(missionId: string): Promise<KingFinalizeResul
         worklogSummary || '(no worklogs)',
         '',
         'Tổng hợp Final Report theo system prompt. M2 mode: kèm Proposal items + Verification Plan (TB-11 §7).',
-      ].join('\n'),
+        finalizeBrainSuffix,
+      ].filter(Boolean).join('\n'),
       nemesisBrain,
       KING_FINALIZE_SYSTEM_PROMPT,
       {
@@ -978,6 +1024,68 @@ export async function kingFullLifecycle(
 }
 
 // ============================================================
+// §8b.0 ROUND-39 — EPISODIC BRAIN CHO CÁC THÀNH VIÊN CÒN LẠI
+// (T1 fast-track LISMA / G2 LISMA+RWV / G3 HAN / NEMESIS king)
+// ============================================================
+// Nợ vận hành round-38 (Y5): chỉ G1 pipeline được wire vào bộ não episodic —
+// lỗi của T1/G2/G3/NEMESIS không bao giờ thành bài học, các thành viên này
+// cũng không bao giờ được nhắc bài học cũ (PRE-ACT). 2 helper dưới dùng chung
+// (mirror mẫu g1/engine.ts V3.2), fail-open tuyệt đối: bộ não chết → trả
+// rỗng / không record — KHÔNG BAO GIỜ làm hỏng research pipeline chính.
+// Lưu ý: PRE-ACT và CONSOLIDATE của một thành phần PHẢI dùng cùng agentName
+// (recordAgentEpisode xoá brain-cache theo family+agentName — bài học vừa
+// ghi xuất hiện ngay ở lần retry kế, fix Y2 round-38).
+
+/** PRE-ACT — build block bài học/lỗi tương tự cho 1 thành viên research-team. */
+async function buildResearchBrainBlock(
+  agentName: string,
+  task: string,
+): Promise<{ promptBlock: string; appliedLessonIds: string[] }> {
+  try {
+    const { buildAgentBrainBlock } = await import('@/lib/episodic-memory/agent-brain')
+    const brain = await buildAgentBrainBlock({
+      family: 'research-team',
+      agentName,
+      task: task.slice(0, 1500),
+    })
+    return { promptBlock: brain.promptBlock, appliedLessonIds: brain.appliedLessonIds }
+  } catch {
+    return { promptBlock: '', appliedLessonIds: [] } // fail-open — research chạy như cũ
+  }
+}
+
+/** CONSOLIDATE — ghi episode research-team (fire-and-forget, fail-open 2 tầng). */
+function recordResearchEpisode(params: {
+  agentName: string
+  goal: string
+  sessionId: string
+  outcome: 'SUCCESS' | 'FAILURE' | 'PARTIAL'
+  stopReason: string
+  appliedLessonIds: string[]
+  startedAtMs: number
+  toolEvidence: Array<{ tool: string; success: boolean; text: string }>
+}): void {
+  void (async () => {
+    try {
+      const { recordAgentEpisode } = await import('@/lib/episodic-memory/agent-brain')
+      recordAgentEpisode({
+        family: 'research-team',
+        agentName: params.agentName,
+        goal: params.goal.slice(0, 500),
+        sessionId: params.sessionId,
+        startedAt: new Date(params.startedAtMs),
+        outcome: params.outcome,
+        stopReason: params.stopReason,
+        appliedLessonIds: params.appliedLessonIds,
+        cycles: 1,
+        tokensUsed: 0,
+        toolEvidence: params.toolEvidence.slice(0, 60),
+      })
+    } catch { /* fail-open — episode không được chặn pipeline */ }
+  })()
+}
+
+// ============================================================
 // §8b. PER-TIER PIPELINE — actually run G1/G2/G3 per part (TASK 3-fix WORK 3)
 // ============================================================
 
@@ -1031,12 +1139,25 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
 
   // ---------- T1: skip G1/G3 — LISMA fast track ----------
   if (tier === 'T1') {
+    // ━━━ ROUND-39 — T1 LISMA PRE-ACT + CONSOLIDATE (hết mù + hết vô bài học) ━━
+    const t1StartedAt = Date.now()
+    const t1Agent = `LISMA T1 (task ${taskId.slice(0, 8)})`
+    const t1Goal = `[T1 ${missionType}] ${params.partDescription}`
+    const t1Brain = await buildResearchBrainBlock(t1Agent, `T1 ${missionType} research: ${params.partDescription}`)
+    if (t1Brain.promptBlock) {
+      console.log(`[ResearchTeam/king] ROUND-39 T1 PRE-ACT — ${t1Brain.appliedLessonIds.length} lesson applied cho task ${taskId}`)
+    }
+    // BELI spec = part description cho T1 (+ block bài học đính sau — cùng
+    // mẫu G1: mọi round/council thấy cùng 1 spec có ký ức)
+    const t1SpecWithBrain = t1Brain.promptBlock
+      ? `${params.partDescription}${t1Brain.promptBlock}`
+      : params.partDescription
     try {
       // LISMA tự code + self-review (BELI spec = part description cho T1)
       const lismaResult = await runLismaReview(
         missionId,
         taskId,
-        params.partDescription,
+        t1SpecWithBrain,
         [], // codeDrafts empty — LISMA tự sinh từ spec
         missionType,
         1,
@@ -1054,10 +1175,51 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
           `T1 LISMA escalated: ${lismaResult.escalateReason || 'unknown'}`,
         )
       }
+      // ROUND-39 CONSOLIDATE — episode T1 (outcome mirror mapRunOutcome:
+      // escalated+regression → FAILURE; regression đã tự fix / trần vòng →
+      // PARTIAL; fast-track sạch → SUCCESS)
+      recordResearchEpisode({
+        agentName: t1Agent,
+        goal: t1Goal,
+        sessionId: missionId,
+        outcome: lismaResult.escalated
+          ? (lismaResult.regressionFound ? 'FAILURE' : 'PARTIAL')
+          : lismaResult.regressionFound ? 'PARTIAL' : 'SUCCESS',
+        stopReason: lismaResult.escalated ? 'error' : 'complete',
+        appliedLessonIds: t1Brain.appliedLessonIds,
+        startedAtMs: t1StartedAt,
+        toolEvidence: [
+          ...(lismaResult.worklog.done ?? []).slice(0, 10).map(d => ({
+            tool: 'research:worklog', success: true, text: String(d).slice(0, 300),
+          })),
+          ...(lismaResult.worklog.issuesFaced ?? []).slice(0, 10).map(i => ({
+            tool: 'research:issue', success: false, text: String(i).slice(0, 300),
+          })),
+          {
+            tool: 'research:lisma',
+            success: !lismaResult.escalated,
+            text: `T1 LISMA fast-track: ${lismaResult.evidence.length} evidence${lismaResult.rubricScore ? `, Rubric A ${lismaResult.rubricScore.score.toFixed(2)} (${lismaResult.rubricScore.grade})` : ''}${lismaResult.escalated ? ` — ESCALATED: ${lismaResult.escalateReason?.slice(0, 200) ?? ''}` : ''}`,
+          },
+        ],
+      })
     } catch (err) {
       errors.push(
         `T1 LISMA: ${err instanceof Error ? err.message : String(err)}`,
       )
+      // ROUND-39 CONSOLIDATE — crash T1 cũng thành bài học (pattern round-38
+      // outer-catch ghi FAILURE episode — lỗi nuốt im lặng là mất dữ liệu học)
+      recordResearchEpisode({
+        agentName: t1Agent,
+        goal: t1Goal,
+        sessionId: missionId,
+        outcome: 'FAILURE',
+        stopReason: 'error',
+        appliedLessonIds: t1Brain.appliedLessonIds,
+        startedAtMs: t1StartedAt,
+        toolEvidence: [
+          { tool: 'research:lisma', success: false, text: `T1 LISMA throw: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300) },
+        ],
+      })
     }
     return
   }
@@ -1116,11 +1278,24 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
 
   // G2 — LISMA review + RWV loop
   let diagnosticReport = ''
+  // ━━━ ROUND-39 — G2 PRE-ACT + CONSOLIDATE (LISMA + RWV gộp 1 episode) ━━
+  const g2StartedAt = Date.now()
+  const g2Agent = `G2 LISMA+RWV (task ${taskId.slice(0, 8)})`
+  const g2Goal = `[G2 ${missionType}] ${g1Spec || params.partDescription}`
+  const g2Brain = await buildResearchBrainBlock(g2Agent, `G2 ${missionType} review: ${g1Spec || params.partDescription}`)
+  if (g2Brain.promptBlock) {
+    console.log(`[ResearchTeam/king] ROUND-39 G2 PRE-ACT — ${g2Brain.appliedLessonIds.length} lesson applied cho task ${taskId}`)
+  }
+  let g2LismaEscalated = false
+  let g2RwvStatus: string | null = null
+  const g2Evidence: Array<{ tool: string; success: boolean; text: string }> = []
   try {
     const lisma = await runLismaReview(
       missionId,
       taskId,
-      g1Spec || params.partDescription,
+      g2Brain.promptBlock
+        ? `${g1Spec || params.partDescription}${g2Brain.promptBlock}`
+        : (g1Spec || params.partDescription),
       g1Code ? [g1Code] : [],
       missionType,
       1,
@@ -1133,6 +1308,20 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
       findingsFromEvidence: lisma.evidence,
     })
     emitLocal(`G2 LISMA review xong — ${lisma.escalated ? '⚠️ escalated' : 'OK'} · findings ${lisma.evidence.length} evidence (TC-06)${lisma.rubricScore ? ` · Rubric A ${lisma.rubricScore.score.toFixed(2)} (${lisma.rubricScore.grade})` : ''}`)
+    g2LismaEscalated = lisma.escalated === true
+    g2Evidence.push(
+      ...(lisma.worklog.done ?? []).slice(0, 10).map(d => ({
+        tool: 'research:worklog', success: true, text: String(d).slice(0, 300),
+      })),
+      ...(lisma.worklog.issuesFaced ?? []).slice(0, 10).map(i => ({
+        tool: 'research:issue', success: false, text: String(i).slice(0, 300),
+      })),
+      {
+        tool: 'research:lisma',
+        success: !lisma.escalated,
+        text: `LISMA review: ${lisma.evidence.length} evidence${lisma.rubricScore ? `, Rubric A ${lisma.rubricScore.score.toFixed(2)} (${lisma.rubricScore.grade})` : ''}${lisma.escalated ? ` — ESCALATED: ${lisma.escalateReason?.slice(0, 200) ?? ''}` : ''}`,
+      },
+    )
     if (lisma.escalated) {
       errors.push(
         `LISMA escalated: ${lisma.escalateReason || 'unknown'}`,
@@ -1158,6 +1347,12 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
           rwv.filesChanged.length > 0 ? ` · ${rwv.filesChanged.length} file(s) trong workspace (TC-10)` : ''
         }`,
       )
+      g2RwvStatus = rwv.status
+      g2Evidence.push({
+        tool: 'research:rwv',
+        success: rwv.status === 'DONE',
+        text: `RWV loop ${rwv.status} (round ${rwv.round}) — ${rwv.filesChanged.length} file(s), ${rwv.regressionEntries.length} regression(s)${rwv.status === 'ESCALATE' ? ` — ${rwv.escalateReason?.slice(0, 200) ?? ''}` : ''}`,
+      })
       if (rwv.status === 'ESCALATE') {
         errors.push(`RWV: ${rwv.escalateReason || 'escalated'}`)
       }
@@ -1165,9 +1360,41 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
       errors.push(
         `RWV: ${err instanceof Error ? err.message : String(err)}`,
       )
+      g2RwvStatus = 'ESCALATE'
+      g2Evidence.push({
+        tool: 'research:rwv',
+        success: false,
+        text: `RWV throw: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
+      })
     }
   } catch (err) {
     errors.push(`LISMA: ${err instanceof Error ? err.message : String(err)}`)
+    g2LismaEscalated = true
+    g2Evidence.push({
+      tool: 'research:lisma',
+      success: false,
+      text: `G2 LISMA throw: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
+    })
+  }
+  // ROUND-39 CONSOLIDATE — 1 episode gộp LISMA + RWV cho G2 của task này:
+  // escalated/ESCALATE → FAILURE; DONE sạch → SUCCESS; còn lại (REVISED,
+  // safety-cap thoát giữa chừng) → PARTIAL. Crash branch (outer catch) cũng
+  // được ghi — LISMA throw không còn mất bài học.
+  {
+    const g2Outcome: 'SUCCESS' | 'FAILURE' | 'PARTIAL' =
+      g2LismaEscalated || g2RwvStatus === 'ESCALATE'
+        ? 'FAILURE'
+        : g2RwvStatus === 'DONE' ? 'SUCCESS' : 'PARTIAL'
+    recordResearchEpisode({
+      agentName: g2Agent,
+      goal: g2Goal,
+      sessionId: missionId,
+      outcome: g2Outcome,
+      stopReason: g2Outcome === 'FAILURE' ? 'error' : 'complete',
+      appliedLessonIds: g2Brain.appliedLessonIds,
+      startedAtMs: g2StartedAt,
+      toolEvidence: g2Evidence,
+    })
   }
 
   // ---------- T3 only: G3 HAN optimize + Tournament ----------
@@ -1193,12 +1420,25 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
   // G3 — HAN optimize
   let hanOptions = 0
   let hanResult: HanOptimizeResult | null = null
+  // ━━━ ROUND-39 — G3 HAN PRE-ACT + CONSOLIDATE ━━
+  const g3StartedAt = Date.now()
+  const g3Agent = `HAN G3 (task ${taskId.slice(0, 8)})`
+  const g3Goal = `[G3 ${missionType}] ${params.partDescription}`
+  const g3Brain = await buildResearchBrainBlock(g3Agent, `G3 ${missionType} optimize: ${params.partDescription}`)
+  if (g3Brain.promptBlock) {
+    console.log(`[ResearchTeam/king] ROUND-39 G3 PRE-ACT — ${g3Brain.appliedLessonIds.length} lesson applied cho task ${taskId}`)
+  }
+  // Block bài học đính SAU diagnostic report (cùng mẫu G1/G2 — HAN là LLM,
+  // đọc DR kèm ký ức episodic về optimize tương tự)
+  const g3ReportWithBrain = g3Brain.promptBlock
+    ? `${diagnosticReport || '(no diagnostic report)'}${g3Brain.promptBlock}`
+    : (diagnosticReport || '(no diagnostic report)')
   try {
     hanResult = await runHanOptimize(
       missionId,
       taskId,
       g1Code || '(no code draft)',
-      diagnosticReport || '(no diagnostic report)',
+      g3ReportWithBrain,
       missionType,
       params.successCriteriaStrings,
     )
@@ -1217,8 +1457,49 @@ async function runPerTierPipeline(params: RunPerTierPipelineParams): Promise<voi
     if (hanOptions === 0) {
       errors.push(`HAN: 0 options generated (LLM unavailable or M1 no-op)`)
     }
+    // ROUND-39 CONSOLIDATE — episode HAN: worklog ESCALATED (failOpenHan —
+    // LLM chết) → FAILURE; sinh đủ options → SUCCESS (HAN làm tròn việc của
+    // nó — đề xuất A/B/C); 0 options nhưng không escalate (M1 no-op hợp lệ)
+    // → PARTIAL.
+    recordResearchEpisode({
+      agentName: g3Agent,
+      goal: g3Goal,
+      sessionId: missionId,
+      outcome: hanResult.worklog.status === 'ESCALATED'
+        ? 'FAILURE'
+        : hanOptions > 0 ? 'SUCCESS' : 'PARTIAL',
+      stopReason: hanResult.worklog.status === 'ESCALATED' ? 'error' : 'complete',
+      appliedLessonIds: g3Brain.appliedLessonIds,
+      startedAtMs: g3StartedAt,
+      toolEvidence: [
+        ...(hanResult.worklog.done ?? []).slice(0, 10).map(d => ({
+          tool: 'research:worklog', success: true, text: String(d).slice(0, 300),
+        })),
+        ...(hanResult.worklog.issuesFaced ?? []).slice(0, 10).map(i => ({
+          tool: 'research:issue', success: false, text: String(i).slice(0, 300),
+        })),
+        {
+          tool: 'research:han',
+          success: hanOptions > 0,
+          text: `HAN optimize: ${hanOptions} option(s) A/B/C, ${hanResult.kbEntries.length} KB entries, ${hanResult.proposalItems.length} proposal item(s)${hanResult.worklog.status === 'ESCALATED' ? ' — ESCALATED (LLM unavailable)' : ''}`,
+        },
+      ],
+    })
   } catch (err) {
     errors.push(`HAN: ${err instanceof Error ? err.message : String(err)}`)
+    // ROUND-39 CONSOLIDATE — HAN throw → FAILURE episode
+    recordResearchEpisode({
+      agentName: g3Agent,
+      goal: g3Goal,
+      sessionId: missionId,
+      outcome: 'FAILURE',
+      stopReason: 'error',
+      appliedLessonIds: g3Brain.appliedLessonIds,
+      startedAtMs: g3StartedAt,
+      toolEvidence: [
+        { tool: 'research:han', success: false, text: `HAN throw: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300) },
+      ],
+    })
   }
 
   // Tournament (TB-14 §3) — inject LLM-backed callbacks (DI pattern).
