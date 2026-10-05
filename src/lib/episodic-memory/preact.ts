@@ -46,9 +46,17 @@ const EPSILON = (() => {
 
 /**
  * Áp ε-greedy lên danh sách lesson ĐÃ sort (mutateなし — trả mảng mới).
- * Với xác suất ε: slot cuối (index 4) được thay bằng ứng viên kế tiếp có
- * confidence ≥ lessonNeedsReview — đánh dấu exploration=true.
+ * Với xác suất ε: slot cuối (index 4) được thay bằng một ứng viên rank 6+
+ * (đủ ngưỡng review) — đánh dấu exploration=true.
  * rng injectable cho test (mặc định Math.random).
+ *
+ * ROUND-38 fix F6: ứng viên được CHỌN NGẪU NHIÊN trong pool đủ điều kiện
+ * (trước đây `slice(5).find(...)` luôn trả đúng rank 6 — "exploration"
+ * deterministic chỉ khai thác lại 1 lesson cố định, không phải khám phá).
+ * Lưu ý semantics feedback: lesson exploration nằm trong appliedLessonIds
+ * nhưng chỉ được ±confidence khi outcome là SUCCESS/FAILURE — outcome PARTIAL
+ * (hoàn thành kèm tool fail) là NEUTRAL theo thiết kế round-35 C-4 (không
+ * phạt oan cả cụm lesson vì kết quả nửa vời).
  */
 export function applyEpsilonExploration<T extends { id: string; confidence: number }>(
   sorted: T[],
@@ -57,10 +65,11 @@ export function applyEpsilonExploration<T extends { id: string; confidence: numb
   const epsilon = opts?.epsilon ?? EPSILON
   const rng = opts?.rng ?? Math.random
   if (sorted.length <= 5) return sorted.slice(0, 5)
-  // Ứng viên thay thế: rank 6+ (index ≥5) nhưng đủ ngưỡng review
-  const candidate = sorted.slice(5).find(l => l.confidence >= EPISODIC_THRESHOLDS.lessonNeedsReview)
-  if (!candidate) return sorted.slice(0, 5)
+  // Pool ứng viên thay thế: rank 6+ (index ≥5) nhưng đủ ngưỡng review
+  const eligiblePool = sorted.slice(5).filter(l => l.confidence >= EPISODIC_THRESHOLDS.lessonNeedsReview)
+  if (eligiblePool.length === 0) return sorted.slice(0, 5)
   if (rng() >= epsilon) return sorted.slice(0, 5)
+  const candidate = eligiblePool[Math.floor(rng() * eligiblePool.length)]
   const out = [...sorted.slice(0, 5)]
   out[4] = { ...candidate, exploration: true } as T & { exploration?: boolean }
   return out

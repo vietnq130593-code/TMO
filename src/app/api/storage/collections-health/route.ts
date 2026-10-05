@@ -19,7 +19,11 @@
  */
 
 import { NextResponse } from 'next/server'
-import { qdrant, EMBEDDING_DIMENSION } from '@/lib/qdrant'
+import { qdrant, EMBEDDING_DIMENSION, COLLECTION_DOCUMENTS, COLLECTION_CHUNKS } from '@/lib/qdrant'
+import { COLLECTION_EPISODES } from '@/lib/episodic-memory/episode-store'
+import { COLLECTION_COMMUNITIES } from '@/lib/kb-routing/communities'
+import { COLLECTION_AGENT_MEMORY } from '@/lib/agent-memory'
+import { COLLECTION_TASK_CONTEXT } from '@/lib/context-store'
 import { readCypher } from '@/lib/neo4j'
 import { db } from '@/lib/db'
 
@@ -27,14 +31,17 @@ export const dynamic = 'force-dynamic'
 
 /** 6 collection Qdrant của hệ thống — tên + mô tả ngắn cho UI.
  * dimExpected=null → collection KHÔNG dùng vector semantic (documents là
- * payload-only 1-dim dummy theo thiết kế — qdrant.ts:151-155) → bỏ qua dim check. */
+ * payload-only 1-dim dummy theo thiết kế — qdrant.ts:151-155) → bỏ qua dim check.
+ * ROUND-38 fix V1-3: tên collection lấy từ CONSTANT của từng module (env
+ * QDRANT_COLLECTION_* override được) — trước đây hardcode khiến card báo
+ * "Chưa tạo" false-positive khi operator đặt env override. */
 const QDRANT_COLLECTIONS: Array<{ name: string; label: string; dimExpected?: number }> = [
-  { name: 'theopus_documents', label: 'Documents (metadata)', dimExpected: 1 },
-  { name: 'theopus_chunks', label: 'Chunks (KB semantic — lõi chat/agent)' },
-  { name: 'theopus_episodes', label: 'Episodes (bộ nhớ kinh nghiệm agent)' },
-  { name: 'theopus_communities', label: 'Communities (Leiden — bức tranh lớn)' },
-  { name: 'agent_memory', label: 'Agent Memory (ký ức hội thoại)' },
-  { name: 'task_context', label: 'Task Context (working memory)' },
+  { name: COLLECTION_DOCUMENTS, label: 'Documents (metadata)', dimExpected: 1 },
+  { name: COLLECTION_CHUNKS, label: 'Chunks (KB semantic — lõi chat/agent)' },
+  { name: COLLECTION_EPISODES, label: 'Episodes (bộ nhớ kinh nghiệm agent)' },
+  { name: COLLECTION_COMMUNITIES, label: 'Communities (Leiden — bức tranh lớn)' },
+  { name: COLLECTION_AGENT_MEMORY, label: 'Agent Memory (ký ức hội thoại)' },
+  { name: COLLECTION_TASK_CONTEXT, label: 'Task Context (working memory)' },
 ]
 
 interface CollectionHealth {
@@ -84,9 +91,16 @@ async function checkQdrantCollections(): Promise<CollectionHealth[]> {
         dimActual,
         dimMismatch: dimActual !== undefined && dimActual !== dimExpected,
       })
-    } catch {
-      // Collection chưa tồn tại → exists=false (không phải lỗi hệ thống)
-      out.push({ name: col.name, label: col.label, exists: false })
+    } catch (colErr) {
+      // ROUND-38 fix V1-6: phân biệt "chưa tạo" với "lỗi kết nối" — trước đây
+      // mọi lỗi getCollection đều hiện "Chưa tạo" (che outage transient).
+      const msg = colErr instanceof Error ? colErr.message : String(colErr)
+      const transient = /timeout|econn|fetch|network|503|429/i.test(msg)
+      out.push(
+        transient
+          ? { name: col.name, label: col.label, exists: false, error: `Lỗi kết nối: ${msg.slice(0, 120)}` }
+          : { name: col.name, label: col.label, exists: false }, // 404 = chưa tạo thật
+      )
     }
   }
   return out
@@ -130,10 +144,19 @@ export async function GET() {
     ])
 
     // Desync indicators (lesson round-36: cặp store phải có cách phát hiện lệch)
-    const episodesQdrant = qdrantCols.find(c => c.name === 'theopus_episodes')?.pointCount ?? 0
+    // ROUND-38 fix V1-1: bổ sung cặp THỨ 3 episodes Neo4j ↔ SQLite mirror —
+    // trước đây wipe chỉ SQLite (Qdrant+Neo4j nguyên vẹn) vẫn hiện "khớp".
+    // ROUND-38 fix V1-2: desync = null khi BẤT KỲ bên nào không đo được
+    // (outage) — trước đây Qdrant chết → episodesQdrant=0 → desync=96 amber
+    // "boot-heal sẽ tự chạy" (heal không chữa được outage!), và total-fail
+    // path trả desync=0 → XANH "khớp" giữa lúc sập toàn bộ. UI render "—".
+    const episodesQdrant = qdrantCols.find(c => c.name === COLLECTION_EPISODES)?.pointCount
+    const episodesQdrantReachable = qdrantCols.find(c => c.name === COLLECTION_EPISODES)?.exists === true
+    const bothEpisodesReachable = episodesQdrantReachable && neo4jCounts.neo4jReachable
     const desync = {
-      episodesQdrantNeo4j: Math.abs(episodesQdrant - neo4jCounts.episodes),
-      lessonsNeo4jSqlite: Math.abs(neo4jCounts.lessons - mirrorCounts.sqliteLessons),
+      episodesQdrantNeo4j: bothEpisodesReachable ? Math.abs((episodesQdrant ?? 0) - neo4jCounts.episodes) : null,
+      episodesNeo4jSqlite: neo4jCounts.neo4jReachable ? Math.abs(neo4jCounts.episodes - mirrorCounts.sqliteEpisodes) : null,
+      lessonsNeo4jSqlite: neo4jCounts.neo4jReachable ? Math.abs(neo4jCounts.lessons - mirrorCounts.sqliteLessons) : null,
     }
 
     return NextResponse.json({
@@ -148,7 +171,7 @@ export async function GET() {
       {
         qdrant: QDRANT_COLLECTIONS.map(c => ({ name: c.name, label: c.label, exists: false, error: 'check failed' })),
         episodic: { neo4jReachable: false, episodes: 0, lessons: 0, errors: 0, sqliteEpisodes: 0, sqliteLessons: 0 },
-        desync: { episodesQdrantNeo4j: 0, lessonsNeo4jSqlite: 0 },
+        desync: { episodesQdrantNeo4j: null, episodesNeo4jSqlite: null, lessonsNeo4jSqlite: null },
         error: err instanceof Error ? err.message : String(err),
         durationMs: Date.now() - startedAt,
       },

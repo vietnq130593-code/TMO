@@ -19,7 +19,7 @@ import {
 // ==================== KNOWLEDGE SEARCH ====================
 
 export interface KnowledgeSearchResult {
-  type: 'chunk' | 'entity' | 'relationship'
+  type: 'chunk' | 'entity' | 'relationship' | 'community'
   content: string
   source?: string
   entityName?: string
@@ -80,7 +80,14 @@ export async function agentKnowledgeSearch(query: string, options?: {
     // ── STACK CHAT (parity V5): searchUserKB = hybrid + MMR + entity + communities ──
     try {
       const { searchUserKB } = await import('@/lib/kb-routing/kb-access')
-      const kb = await searchUserKB(query, undefined, { topK })
+      // ROUND-38 fix V5-1: agentId trước đây undefined → kb-access skip ENTIRE
+      // entity semantic search (`agentId ? searchEntitiesForUser(...) : []`)
+      // → layer entity của stack parity KHÔNG BAO GIỜ chạy cho agent, và
+      // expandGraph (gate entities.length > 0) chết theo. Giờ truyền id thật —
+      // searchEntitiesForUser không dùng agentId trong thân hàm (đã verify),
+      // còn recallAgentMemories lọc theo agent_id → trả [] trung thực cho tool
+      // (tool không có ký ức hội thoại riêng — đúng ngữ nghĩa).
+      const kb = await searchUserKB(query, 'knowledge-search-agent', { topK })
 
       // Map kết quả về shape KnowledgeSearchResult (giữ nguyên contract)
       const results: KnowledgeSearchResult[] = []
@@ -99,6 +106,17 @@ export async function agentKnowledgeSearch(query: string, options?: {
           entityName: entity.name,
           entityType: entity.type,
           score: undefined,
+        })
+      }
+      // ROUND-38 fix V5-3: communities (Leiden) trước đây được searchUserKB fetch
+      // xong RỒI BỎ (chỉ map chunks + entities) — query Qdrant lãng phí + agent
+      // không thấy bức tranh lớn mà chat thấy. Giờ map thành type 'community'.
+      for (const community of kb.communities) {
+        results.push({
+          type: 'community',
+          content: community.summary || `Cộng đồng kiến thức (${community.memberCount} entities)`,
+          source: 'leiden-community',
+          score: community.score,
         })
       }
 
@@ -127,6 +145,10 @@ export async function agentKnowledgeSearch(query: string, options?: {
           results,
           diagnostics: {
             ok: true, reason: 'ok', qdrantReachable: true,
+            // LƯU Ý semantics (ROUND-38 fix V5-5): trên path thành công đây là
+            // SỐ CHUNK TRẢ VỀ cho query này (không phải tổng KB); trên path
+            // no_match bên dưới thì totalChunks = tổng point của collection —
+            // message 2 path tự giải thích khác nhau.
             totalChunks: kb.chunks.length,
             durationMs: Date.now() - startTime,
           },
@@ -139,6 +161,13 @@ export async function agentKnowledgeSearch(query: string, options?: {
     }
 
     // ── FALLBACK: dense-only cũ (defence-in-depth khi kb-routing không chạy được) ──
+    // CHÍNH SÁCH BẤT ĐỐI XỨNG CÓ CHỦ Ý (ROUND-38 fix V5-4, ghi rõ hoá): đường
+    // agent có fallback dense-only (0.2 → retry 0.1) trong khi đường chat
+    // KHÔNG — query biên giới (cosine 0.1-0.3) agent nhận kết quả còn chat thì
+    // rỗng. Lý do giữ: tool knowledge_search là hạ tầng tra cứu cho agent
+    // đang làm việc — thà kết quả yếu còn hơn trắng trơn giữa task. options.domain
+    // cũng chỉ áp trên fallback (searchUserKB không nhận domain — thread qua
+    // đây sẽ duplicate filter đã có ở hybrid layer).
     // 1. Query embedding — trực tiếp, không qua HTTP loopback
     const { vector, model } = await generateQueryEmbedding(query)
     if (!vector || vector.length === 0) {

@@ -506,7 +506,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'knowledge_search',
-      description: 'Tìm kiếm semantic trong Knowledge Base (Qdrant + Neo4j). Trả về relevant chunks, entities, relationships. Dùng khi cần tra cứu kiến thức đã học, best practices, hoặc thông tin về project.',
+      description: 'Tìm kiếm semantic trong Knowledge Base (Qdrant + Neo4j). Trả về relevant chunks, entities, relationships, communities. Dùng khi cần tra cứu kiến thức đã học, best practices, hoặc thông tin về project.',
       parameters: {
         type: 'object',
         properties: {
@@ -518,6 +518,14 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
             type: 'number',
             description: 'Số kết quả trả về (default: 5, max: 20)',
             default: 5,
+          },
+          // ROUND-38 fix V5-2: expandGraph trước đây KHÔNG có trong schema —
+          // agent không có cách nào bật → đường expand (1-hop relationship)
+          // chết trọn đời kể cả sau khi entity search được fix. Giờ lộ thật.
+          expandGraph: {
+            type: 'boolean',
+            description: 'Bật mở rộng đồ thị: thêm các quan hệ 1-hop (Neo4j) của top entities tìm được (default: false)',
+            default: false,
           },
         },
         required: ['query'],
@@ -5358,18 +5366,33 @@ async function executeBash(command: string): Promise<{ success: boolean; output?
 async function executeKnowledgeSearch(args: Record<string, unknown>): Promise<unknown> {
   const query = args.query as string
   const topK = Math.min((args.topK as number) || 5, 20)
+  // ROUND-38 fix V5-2: chuyển expandGraph từ args xuống knowledge-bridge —
+  // trước đây option chết vì schema không lộ + call không truyền.
+  const expandGraph = args.expandGraph === true
 
   if (!query) return { error: 'Query is required' }
 
   try {
     const { agentKnowledgeSearch } = await import('@/lib/knowledge-bridge')
-    const result = await agentKnowledgeSearch(query, { topK })
+    const result = await agentKnowledgeSearch(query, { topK, expandGraph })
 
     // BUG FIX 2026-09-06: truyền diagnostics (lý do 0 kết quả — Qdrant chết /
     // embedding lỗi / KB rỗng / không khớp) vào kết quả tool để AGENT báo đúng
     // nguyên nhân cho user thay vì chỉ "0 kết quả".
+    //
+    // ROUND-38 fix V5-7: slice THEO TỪNG TYPE thay vì toàn mảng — trước đây
+    // `results.slice(0, topK)` cắt entities/relationships/communities khi
+    // chunks đã chiếm đủ topK (chỉ cần entity search sống lại là bị truncate).
+    const byType = new Map<string, typeof result.results>()
+    for (const r of result.results) {
+      const list = byType.get(r.type) ?? []
+      list.push(r)
+      byType.set(r.type, list)
+    }
+    const sliced = [...byType.entries()].flatMap(([, list]) => list.slice(0, topK))
+
     return {
-      results: result.results.slice(0, topK),
+      results: sliced,
       answer: result.answer,
       totalFound: result.results.length,
       diagnostics: result.diagnostics,

@@ -52,6 +52,9 @@ export interface SessionAdaptationState {
   updatedAt: string
   /** Số lần apply trong session (giám sát spam) */
   applyCount: number
+  /** ROUND-38 fix F8 — đã từng emit omega_escalation cho user trong session
+   * này chưa? (true = các step sau KHÔNG lặp lại cảnh báo — chống spam 6 lần/pipeline) */
+  escalationEmittedAt?: string
 }
 
 /** Delta ngưỡng KB toàn process (tighten_refusal_threshold — Red Team P4) */
@@ -148,7 +151,12 @@ export function applyAdaptationToSession(
       sourceStepId: sourceStepId ?? prev?.sourceStepId,
       updatedAt: new Date().toISOString(),
       applyCount: (prev?.applyCount ?? 0) + 1,
+      escalationEmittedAt: prev?.escalationEmittedAt,
     }
+    // ROUND-38 fix F9: delete-then-set để refresh insertion order — Map.set trên
+    // key cũ GIỮ nguyên vị trí cũ → eviction FIFO cap-200 có thể tống session
+    // đang hoạt động tích cực nhất (apply nhiều nhất) ra trước.
+    store.delete(sessionId)
     store.set(sessionId, state)
 
     // tighten_refusal_threshold → global KB threshold delta (TTL theo config)
@@ -217,6 +225,28 @@ export function shouldCompressContextEarly(sessionId: string): boolean {
 export function hasEscalation(sessionId: string): boolean {
   try {
     return getStore().get(sessionId)?.config['escalate'] === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * ROUND-38 fix F8 — token emit-once cho cảnh báo omega_escalation của Layer 9.
+ * Trả về true đúng LẦN ĐẦU mỗi session (đánh dấu escalationEmittedAt trong
+ * session state); các lần gọi sau trả false → caller KHÔNG emit lại — trước đây
+ * cảnh báo bắn ở MỌI đầu step (6 lần/pipeline) làm loãng chat. Fail-open:
+ * lỗi store → trả false (thà thiếu 1 cảnh báo hơn là spam).
+ */
+export function consumeEscalationEmit(sessionId: string): boolean {
+  try {
+    const store = getStore()
+    const state = store.get(sessionId)
+    if (!state) return false
+    if (state.escalationEmittedAt) return false
+    state.escalationEmittedAt = new Date().toISOString()
+    store.delete(sessionId)
+    store.set(sessionId, state)
+    return true
   } catch {
     return false
   }

@@ -88,6 +88,12 @@ export interface FailurePattern {
     taskType: string
     routingMode: string
     stepType: string
+    // ROUND-38 fix F3 — caller (workflow-engine detectAndPersistFailurePattern)
+    // đính kèm thêm errorType từ classifyWorkflowError để rule phân hoá
+    // chiến lược preStep (read_api_docs vs check_dev_log vs read_lint_rules).
+    errorType?: string
+    // session đã ghi pattern (persistFailurePattern upsert theo cặp này)
+    sessionId?: string
   }
 }
 

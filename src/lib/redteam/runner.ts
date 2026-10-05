@@ -70,9 +70,9 @@ async function persistRedTeamBreachPattern(
   attack: AdversarialVerdict,
   defense: DefenseVerdict
 ): Promise<void> {
-  const { persistFailurePattern } = await import('@/lib/learning')
+  const { persistFailurePattern, recommendAdaptation, persistAdaptationLog } = await import('@/lib/learning')
   try {
-    await persistFailurePattern({
+    const newCount = await persistFailurePattern({
       id: `redteam-${runId}-${attackCase.id}`,
       type: 'redteam_breach',
       count: 1,
@@ -96,7 +96,55 @@ async function persistRedTeamBreachPattern(
         runId,
       } as never,
     })
-    console.log(`[RedTeam] Phase 4 — breach persisted to Layer 9 FailurePattern (vector=${attackCase.attackVector}, failureMode=${attack.failureMode}, case=${attackCase.id.slice(0, 8)})`)
+    console.log(`[RedTeam] Phase 4 — breach persisted to Layer 9 FailurePattern (vector=${attackCase.attackVector}, failureMode=${attack.failureMode}, case=${attackCase.id.slice(0, 8)}, count=${newCount})`)
+
+    // ━━━ ROUND-38 fix F1 — TRIGGER THẬT cho tighten_refusal_threshold ━━━
+    // Rà soát lần 1 round-37: rule Phase 4 ở DEFAULT_RULES chỉ được "đọc" bởi
+    // workflow-engine — nơi KHÔNG BAO GIỜ thấy pattern redteam_breach → delta
+    // KB threshold không bao giờ được đặt, consumer getKbConfidenceThresholdDelta
+    // luôn 0 (chain chết 2 đầu). Giờ breach cùng vector đạt count>=2 ngay tại
+    // NƠI PHÁT SINH: recommendAdaptation → applyAdaptationToSession (đặt delta
+    // +0.1 TTL 24h toàn process) + persistAdaptationLog để có dấu vết DB.
+    // Fail-open: learning side-channel KHÔNG được làm hỏng redteam run.
+    if (newCount >= 2) {
+      try {
+        const decision = recommendAdaptation(
+          {
+            id: `redteam-${runId}-${attackCase.id}`,
+            type: 'redteam_breach',
+            count: newCount,
+            lastOccurrence: new Date().toISOString(),
+            strategiesTried: [],
+            nextStrategy: 'tighten_refusal_threshold',
+            context: {
+              taskType: `redteam:${attackCase.attackVector}`,
+              routingMode: 'redteam',
+              stepType: `vector:${attackCase.attackVector}`,
+              sessionId: runId,
+            },
+          },
+          null,
+        )
+        if (decision.shouldAdapt) {
+          const { applyAdaptationToSession } = await import('@/lib/learning/adaptation-engine')
+          const applied = applyAdaptationToSession(runId, decision)
+          await persistAdaptationLog({
+            id: `adapt-redteam-${runId}-${Date.now()}`,
+            sessionId: runId,
+            patternId: null,
+            fromStrategy: 'default',
+            toStrategy: decision.recommendedStrategy,
+            reason: decision.reason,
+            confidence: decision.confidence,
+            successful: null,
+            createdAt: new Date().toISOString(),
+          })
+          console.log(`[RedTeam] Phase 4 — tighten_refusal_threshold ${applied ? 'APPLIED' : 'recommend-only'} (vector=${attackCase.attackVector}, count=${newCount}) — KB confidence threshold +${decision.confidence > 0 ? 0.1 : 0} TTL 24h`)
+        }
+      } catch (adaptErr) {
+        console.warn('[RedTeam] Phase 4 — adaptation apply failed (fail-open):', adaptErr instanceof Error ? adaptErr.message : String(adaptErr))
+      }
+    }
   } catch (err) {
     // persistFailurePattern catches internally; this guards the import/shape
     console.warn('[RedTeam] Phase 4 — persistFailurePattern threw:', err instanceof Error ? err.message : String(err))

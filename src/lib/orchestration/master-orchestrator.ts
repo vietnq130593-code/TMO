@@ -238,8 +238,34 @@ async function startOrchestration(
       // Record step start (Layer 9)
       metricsCollector.recordStepStart(`${step.position}-${step.step}`, step.step, step.position)
 
+      // ━━ ROUND-38 fix F2b — CONSUME pendingConfig của adaptation vào step này ━━
+      // (trước đây pendingConfig được merge vào state xong KHÔNG AI đọc —
+      // preStep/contextAction/escalate bỏ trôi, maxTokens set vào state.context
+      // mà executeStep không tiêu thụ). Giờ: render directive vào prompt + giảm
+      // maxIterations cho reduce_scope — 2 kênh executeStep thật sự dùng.
+      let stepPromptSuffix = ''
+      let adaptedMaxIterations: number | undefined
+      const pending = state.learning.pendingConfig
+      if (pending) {
+        const lines: string[] = []
+        const preStep = typeof pending['preStep'] === 'string' ? pending['preStep'] : null
+        if (preStep === 'read_lint_rules') lines.push('ĐỌC KỸ lint rules + cấu hình dự án (eslintrc, tsconfig) TRƯỚC khi sửa — lỗi trước lặp vì bỏ qua bước này.')
+        if (preStep === 'read_api_docs') lines.push('ĐỌC API docs/interface THẬT của hàm sắp dùng (KHÔNG đoán) TRƯỚC khi code.')
+        if (preStep === 'check_dev_log') lines.push('KIỂM TRA dev.log lấy error message đầy đủ TRƯỚC khi chẩn đoán.')
+        if (typeof pending['fixStrategy'] === 'string') lines.push(`ĐỔI CÁCH FIX hoàn toàn — chuyển sang: ${String(pending['fixStrategy'])} (cách cũ đã thất bại ≥2 lần).`)
+        if (pending['contextAction'] === 'summarize_old') lines.push('NÉN CONTEXT NGAY: tóm tắt tool-result dài đã đọc trước khi đọc tiếp dữ liệu mới.')
+        if (pending['escalate'] === true) lines.push('TẠM DỪNG mở rộng phạm vi — hoàn thiện phần đã chắc chắn + tổng hợp câu hỏi cho user thay vì thử cách mới.')
+        if (pending['skipOptionalSteps'] === true) adaptedMaxIterations = 12 // reduce_scope — ½ vòng mặc định 25
+        if (lines.length > 0) {
+          stepPromptSuffix = `\n\n--- CHỈ THỊ THÍCH ỨNG (Layer 9 — từ lỗi lặp trong run này, mức ưu tiên CAO) ---\n${lines.map(l => `- ${l}`).join('\n')}\n--- HẾT CHỈ THỊ ---`
+        }
+      }
+
       // Execute step (placeholder)
-      const stepResult = await executeStep(step, request.sessionId)
+      const stepResult = await executeStep(step, request.sessionId, {
+        promptSuffix: stepPromptSuffix,
+        maxIterations: adaptedMaxIterations,
+      })
 
       // Record step complete (Layer 9)
       metricsCollector.recordStepComplete(
@@ -291,6 +317,39 @@ async function startOrchestration(
 
       state.progress.completedSteps += stepResult.success ? 1 : 0
       state.progress.lastUpdatedAt = new Date().toISOString()
+
+      // ━━ ROUND-38 fix F2a — WIRE decision point 'after_error' ━━
+      // Trước đây nhánh 'after_error' của makeDecision (nơi duy nhất set
+      // state.learning.currentPattern + trả 'adapt_strategy') KHÔNG BAO GIỜ
+      // được gọi — vòng lặp chỉ gọi 'after_step' → applyAdaptation block dưới
+      // đây không bao giờ có currentPattern → round-37 claim "sửa dead-import"
+      // vẫn là dead 3 tầng. Giờ step fail → push ErrorRecord vào state.errors
+      // + gọi makeDecision('after_error') → pattern detect + adapt_strategy
+      // → apply block dưới fires THẬT.
+      if (!stepResult.success) {
+        state.errors.push({
+          id: `err-${Date.now()}`,
+          timestamp: new Date(),
+          errorType: 'runtime',
+          severity: 'high',
+          message: stepResult.error || 'Step failed',
+          rootCause: 'Execution failed',
+          fixStrategy: 'surgical',
+          fixApplied: false,
+          fixDescription: '',
+          loopDetected: false,
+          loopCount: 0,
+        })
+        const errorDecision = makeDecision(
+          { type: 'after_error', stepIndex: i },
+          { state, pipeline, currentStepIndex: i },
+          config
+        )
+        if (errorDecision.decision === 'escalate') {
+          state.phase = 'escalated'
+          return buildResult(state, 'escalated', Date.now() - startTime)
+        }
+      }
 
       // ROUND-37 V2a — APPLY adaptation config (trước đây applyAdaptation chỉ
       // được import mà không gọi — dead import). Khi makeDecision trả về
@@ -534,7 +593,8 @@ function buildPipeline(mode: string, tier: number): PipelineStep[] {
  */
 async function executeStep(
   step: PipelineStep,
-  sessionId: string
+  sessionId: string,
+  opts?: { promptSuffix?: string; maxIterations?: number }
 ): Promise<{ success: boolean; error?: string }> {
   console.log(`[Orchestrator] Executing step: ${step.position}/${step.step}`)
 
@@ -560,10 +620,13 @@ async function executeStep(
       // is intentionally lighter than the full runWorkflow context, so we feed
       // the agent just the step description. (In a future iteration, we can
       // plumb a richer prompt from the orchestration state/context.)
-      prompt: step.description || `Execute ${step.position}/${step.step}`,
+      // ROUND-38 fix F2b: promptSuffix = chỉ thị thích ứng Layer 9 (nếu có);
+      // maxIterations giảm khi reduce_scope (trước đây không kênh nào tiêu thụ).
+      prompt: `${step.description || `Execute ${step.position}/${step.step}`}${opts?.promptSuffix ?? ''}`,
       sessionId,
       emit,
       ctx,
+      ...(opts?.maxIterations ? { maxIterations: opts.maxIterations } : {}),
     })
 
     if (!result || !result.content) {

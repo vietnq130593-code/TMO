@@ -1400,6 +1400,8 @@ export async function POST(request: NextRequest) {
                     properties: {
                       query: { type: 'string', description: 'Câu hỏi cần tìm kiếm' },
                       topK: { type: 'number', description: 'Số kết quả trả về', default: 5 },
+                      // ROUND-38 fix V5-2: lộ expandGraph cho kênh chat tool-call
+                      expandGraph: { type: 'boolean', description: 'Thêm quan hệ 1-hop của top entities (Neo4j)', default: false },
                     },
                     required: ['query'],
                   },

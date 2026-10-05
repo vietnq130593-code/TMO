@@ -836,7 +836,13 @@ interface CollectionsHealthData {
     sqliteEpisodes: number
     sqliteLessons: number
   }
-  desync: { episodesQdrantNeo4j: number; lessonsNeo4jSqlite: number }
+  desync: {
+    /** ROUND-38 fix V1-1/V1-2: null = không đo được (mất kết nối 1 bên) —
+     * UI hiển thị "—" thay vì số 0 gây hiểu nhầm "khớp". */
+    episodesQdrantNeo4j: number | null
+    episodesNeo4jSqlite: number | null
+    lessonsNeo4jSqlite: number | null
+  }
   durationMs?: number
 }
 
@@ -875,7 +881,7 @@ export function CollectionsHealthPanel() {
       <div className="nc-wrap nc-amber">
         <Card className="nc-panel nc-md nc-border-amber">
           <CardContent className="py-6 flex items-center justify-center gap-2 text-xs text-stone-400">
-            <Loader2 className="h-4 w-4 animate-spin" /> Đang kiểm tra sức khoẻ các collection...
+            <Loader2 className="h-4 w-4 animate-spin" /> Đang kiểm tra sức khỏe các collection...
           </CardContent>
         </Card>
       </div>
@@ -884,7 +890,13 @@ export function CollectionsHealthPanel() {
   if (!data) return null
 
   const desyncEpisode = data.desync.episodesQdrantNeo4j
+  const desyncEpisodeMirror = data.desync.episodesNeo4jSqlite
   const desyncLesson = data.desync.lessonsNeo4jSqlite
+  // ROUND-38 fix V1-2: có bất kỳ cặp nào không đo được (outage) → không kết
+  // luận gì cả ("—"), tránh amber "boot-heal sẽ tự chạy" sai (heal không chữa
+  // outage) và tránh xanh "khớp" khi tổng sập.
+  const anyDesyncUnknown = desyncEpisode === null || desyncEpisodeMirror === null || desyncLesson === null
+  const anyDesyncHigh = (desyncEpisode ?? 0) > 2 || (desyncEpisodeMirror ?? 0) > 2 || (desyncLesson ?? 0) > 2
 
   return (
     <div className="nc-wrap nc-amber">
@@ -893,7 +905,7 @@ export function CollectionsHealthPanel() {
           <div className="flex items-center gap-2.5">
             <div className="p-1.5 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-600"><Database className="h-4 w-4 text-white" /></div>
             <div className="flex-1">
-              <CardTitle className="text-sm font-semibold tracking-tight text-stone-100">Sức khoẻ Collection (từng kho — Round-37 V1)</CardTitle>
+              <CardTitle className="text-sm font-semibold tracking-tight text-stone-100">Sức khỏe Collection (từng kho — Round-37 V1)</CardTitle>
               <CardDescription className="text-xs text-stone-400">6 collection Qdrant + kho episodic Neo4j + SQLite mirror — mỗi collection 1 ô, desync lộ ngay</CardDescription>
             </div>
             <Button
@@ -968,19 +980,25 @@ export function CollectionsHealthPanel() {
                 <div className="flex justify-between"><span className="text-muted-foreground">LessonRecord:</span><span className="font-medium text-stone-200">{data.episodic.sqliteLessons.toLocaleString('vi-VN')}</span></div>
               </div>
             </div>
-            <div className={`p-3 rounded-xl border text-xs ${(desyncEpisode > 2 || desyncLesson > 2) ? 'border-amber-500/55 bg-amber-950/40' : 'border-emerald-500/55 bg-emerald-950/30'}`}>
+            <div className={`p-3 rounded-xl border text-xs ${anyDesyncUnknown ? 'border-stone-500/55 bg-stone-900/40' : anyDesyncHigh ? 'border-amber-500/55 bg-amber-950/40' : 'border-emerald-500/55 bg-emerald-950/30'}`}>
               <div className="font-semibold text-amber-400 mb-1.5">Desync (đối chiếu chéo)</div>
               <div className="space-y-1 text-[10px]">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Episodes Qdrant↔Neo4j:</span>
-                  <span className={`font-medium ${desyncEpisode > 2 ? 'text-amber-400' : 'text-stone-200'}`}>{desyncEpisode.toLocaleString('vi-VN')}</span>
+                  <span className={`font-medium ${desyncEpisode !== null && desyncEpisode > 2 ? 'text-amber-400' : 'text-stone-200'}`}>{desyncEpisode !== null ? desyncEpisode.toLocaleString('vi-VN') : '—'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Episodes Neo4j↔SQLite:</span>
+                  <span className={`font-medium ${desyncEpisodeMirror !== null && desyncEpisodeMirror > 2 ? 'text-amber-400' : 'text-stone-200'}`}>{desyncEpisodeMirror !== null ? desyncEpisodeMirror.toLocaleString('vi-VN') : '—'}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Lessons Neo4j↔SQLite:</span>
-                  <span className={`font-medium ${desyncLesson > 2 ? 'text-amber-400' : 'text-stone-200'}`}>{desyncLesson.toLocaleString('vi-VN')}</span>
+                  <span className={`font-medium ${desyncLesson !== null && desyncLesson > 2 ? 'text-amber-400' : 'text-stone-200'}`}>{desyncLesson !== null ? desyncLesson.toLocaleString('vi-VN') : '—'}</span>
                 </div>
               </div>
-              {(desyncEpisode > 2 || desyncLesson > 2) ? (
+              {anyDesyncUnknown ? (
+                <div className="mt-1 flex items-center gap-1 text-[9px] text-stone-400"><AlertTriangle className="h-3 w-3" /> Không đo được — kho đang mất kết nối</div>
+              ) : anyDesyncHigh ? (
                 <div className="mt-1 flex items-center gap-1 text-[9px] text-amber-400"><AlertTriangle className="h-3 w-3" /> Lệch kho — boot-heal sẽ tự chạy</div>
               ) : (
                 <div className="mt-1 flex items-center gap-1 text-[9px] text-emerald-400"><CheckCircle2 className="h-3 w-3" /> Các kho khớp</div>

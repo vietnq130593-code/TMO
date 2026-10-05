@@ -21,8 +21,8 @@ import { QdrantClient } from '@qdrant/js-client-rest'
 
 const qdrantUrl = process.env.QDRANT_URL || 'http://localhost:6333'
 const qdrantApiKey = process.env.QDRANT_API_KEY || undefined
-const COLLECTION_DOCUMENTS = process.env.QDRANT_COLLECTION_DOCUMENTS || 'theopus_documents'
-const COLLECTION_CHUNKS = process.env.QDRANT_COLLECTION_CHUNKS || 'theopus_chunks'
+const COLLECTION_DOCUMENTS = process.env.QDRANT_COLLECTION_DOCUMENTS || 'theopus_documents' // (export qua khối export cuối file)
+const COLLECTION_CHUNKS = process.env.QDRANT_COLLECTION_CHUNKS || 'theopus_chunks' // (export qua khối export cuối file)
 
 /** Embedding dimension — sourced from @/lib/embeddings (single source of truth) */
 import { getEmbeddingDimension, getCurrentEmbeddingModelVersion } from './embeddings'

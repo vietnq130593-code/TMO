@@ -37,7 +37,7 @@ import { generateEmbedding, generateQueryEmbedding, getEmbeddingDimension } from
 // ==================== CONSTANTS ====================
 
 /** Tên Qdrant collection cho Kho Context (env-thay đổi được như 2 collection KB) */
-const COLLECTION_TASK_CONTEXT = process.env.QDRANT_COLLECTION_TASK_CONTEXT || 'task_context'
+export const COLLECTION_TASK_CONTEXT = process.env.QDRANT_COLLECTION_TASK_CONTEXT || 'task_context' // ROUND-38 fix V1-3: export cho collections-health route
 
 /** Digest ngắn hơn ngưỡng này thì KHÔNG embed (không đáng tốn 1 API call) */
 const ARCHIVE_EMBED_MIN_CHARS = 100

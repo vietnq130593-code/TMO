@@ -66,6 +66,37 @@ const DEFAULT_RULES: AdaptationRule[] = [
     strategy: 'compress_context',
     priority: 60,
   },
+  // ━━━ ROUND-38 fix F3 — 3 rule mới: trước đây chỉ 3/8 chiến lược productions
+  // -reachable (read_api_docs/check_dev_log không có rule nào; compress_context
+  // cần pattern.type='timeout' mà detect KHÔNG BAO GIỜ emit). Giờ phân hoá theo
+  // errorType (classifyWorkflowError taxonomy) do caller đính kèm vào context:
+  //   • systematic_parse (JSON/syntax/format sai) → đoán interface → read_api_docs
+  //   • transient_network (timeout/network — context phình làm chậm) → compress_context
+  //   • runtime (không phân loại được — chẩn đoán thiếu log đầy đủ) → check_dev_log
+  {
+    condition: (pattern) =>
+      pattern.type === 'repeated_error' &&
+      pattern.count >= 2 &&
+      pattern.context?.errorType === 'systematic_parse',
+    strategy: 'read_api_docs',
+    priority: 78,
+  },
+  {
+    condition: (pattern) =>
+      pattern.type === 'repeated_error' &&
+      pattern.count >= 2 &&
+      pattern.context?.errorType === 'transient_network',
+    strategy: 'compress_context',
+    priority: 75,
+  },
+  {
+    condition: (pattern) =>
+      pattern.type === 'repeated_error' &&
+      pattern.count >= 2 &&
+      pattern.context?.errorType === 'runtime',
+    strategy: 'check_dev_log',
+    priority: 72,
+  },
 ]
 
 // ==================== PATTERN DETECTION ====================

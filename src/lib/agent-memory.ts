@@ -28,7 +28,7 @@ import { shouldRunTierTransitions } from './memory-promotion-plan'
 
 // ==================== CONSTANTS ====================
 
-const COLLECTION_AGENT_MEMORY = 'agent_memory'
+export const COLLECTION_AGENT_MEMORY = 'agent_memory' // ROUND-38 fix V1-3: export cho collections-health route
 
 /** Default decay rate per day — 2% importance reduction for unused memories */
 const DEFAULT_DECAY_RATE = 0.02

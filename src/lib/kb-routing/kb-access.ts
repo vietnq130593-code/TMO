@@ -334,6 +334,23 @@ async function searchChunks(
       console.warn('[KB-Access] Query embedding unavailable — skipping vector search (no pseudo-hash fallback)')
       return []
     }
+
+    // ━━━ ROUND-38 fix V5-6 — tightened KB threshold ÁP VÀO ĐƯỜNG LIVE ━━━
+    // Trước đây delta (tighten_refusal_threshold, Red Team P4) chỉ được đọc ở
+    // searchModelKnowledge — một đường KHÔNG có production caller → delta không
+    // tác động lên BẤT KỲ truy vấn thật nào. searchUserKB là đường live CHUNG
+    // của chat + agent (knowledge-bridge) → áp delta vào dense score_threshold
+    // ở đây khiến cả hai đường đều "kén tính" hơn khi KB bị nghi ngờ (defense
+    // in depth). Cap 0.9 — không bao giờ siết đến mức chặn toàn bộ KB.
+    let kbThresholdDelta = 0
+    try {
+      const { getKbConfidenceThresholdDelta } = await import('@/lib/learning/adaptation-engine')
+      kbThresholdDelta = getKbConfidenceThresholdDelta()
+    } catch { /* fail-open — delta 0 */ }
+    const denseThreshold = Math.min(0.9, 0.3 + kbThresholdDelta)
+    if (kbThresholdDelta > 0) {
+      console.log(`[KB-Access] Step 1 dense threshold TIGHTENED: 0.3 → ${denseThreshold.toFixed(2)} (+${kbThresholdDelta} red-team delta)`)
+    }
     // Phase 6 SMOLAB Prop 4 — qdrant.search() removed in v1.19.0. Use qdrant.query().
     // Phase 4 SMOLAB Task B — retrieval pipeline:
     //   1. Dense over-fetch (topK×4 candidates, WITH vectors for MMR — no re-embed).
@@ -346,7 +363,7 @@ async function searchChunks(
       limit: topK * DENSE_CANDIDATE_FACTOR,
       with_payload: true,
       with_vector: true, // Prop 3.8 — MMR consumes pre-fetched vectors (avoids re-embedding every candidate)
-      score_threshold: 0.3,
+      score_threshold: denseThreshold, // ROUND-38 fix V5-6: 0.3 + red-team delta (cap 0.9)
     })
 
     let candidates: PipelineCandidate[] = results.points.map(r => {

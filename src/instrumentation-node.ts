@@ -842,21 +842,34 @@ if (!globalForDsb.__tmoDailySqliteBackupStarted) {
 //   → tạo SelfDirectionProposal (category=improvement) với 4 phần chuẩn, dẫn
 //   chứng số liệu thật từ Neo4j. Dedupe: proposal cùng rootCause còn sống
 //   trong 7 ngày → skip. Fail-open tuyệt đối; env TMO_ESCALATION_SWEEP=0 tắt.
-const globalForEsc = globalThis as unknown as { __tmoEscalationSweepStarted?: boolean }
+const globalForEsc = globalThis as unknown as {
+  __tmoEscalationSweepStarted?: boolean
+  /** ROUND-38 fix F7d — re-entrancy guard: sweep đang chạy thì timer kế
+   * (6h) KHÔNG chồng chu kỳ — tránh duplicate proposals khi sweep dài. */
+  __tmoEscalationSweepRunning?: boolean
+}
 function sweepEscalationImprovements(): void {
   if (process.env.TMO_ESCALATION_SWEEP === '0') return
+  if (globalForEsc.__tmoEscalationSweepRunning) return
+  globalForEsc.__tmoEscalationSweepRunning = true
   void (async () => {
     try {
       await ensureDbReady()
       const { getEscalationCandidates } = await import('./lib/episodic-memory/episodic-neo4j')
-      const candidates = await getEscalationCandidates(3)
+      // ROUND-38 fix F7a: lọc bỏ candidate thiếu rootCause TRƯỚC — trước đây
+      // `cand.rootCause.toLowerCase()` ở vòng lặp dưới throw trên null → CẢ
+      // sweep abort (bắt bởi catch ngoài nhưng mất nguyên chu kỳ).
+      const candidates = (await getEscalationCandidates(3)).filter(c => typeof c.rootCause === 'string' && c.rootCause.trim().length > 0)
       const qualifying = candidates.filter(c => c.occurrences >= 3 && (c.occurrences - c.resolved) >= 2)
       if (qualifying.length === 0) return
 
       const { db } = await import('./lib/db')
       const { createSelfDirectionProposal } = await import('./lib/self-direction/orchestrator')
 
-      // Dedupe: proposal escalation cùng rootCause còn sống trong 7 ngày
+      // Dedupe: proposal escalation cùng rootCause đã tồn tại (còn pending
+      // HOẶC bị xử lý trong 7 ngày gần đây — tránh re-escalate noise sau reject)
+      // ROUND-38 fix F7b: bỏ regex parse title (gãy khi rootCause chứa dấu
+      // nháy/đổi format) — match bằng includes-thường-hoá.
       const weekAgo = new Date(Date.now() - 7 * 24 * 3600_000)
       const existing = await db.selfDirectionProposal.findMany({
         where: {
@@ -865,33 +878,34 @@ function sweepEscalationImprovements(): void {
         },
         select: { title: true },
       })
-      const existingRootCauses = new Set(
-        existing.map(p => (p.title.match(/root cause "([^"]+)"/i)?.[1] ?? '').toLowerCase()).filter(Boolean),
-      )
+      const existingTitles = existing.map(p => p.title.toLowerCase())
 
       let created = 0
       for (const cand of qualifying) {
         const rootCauseKey = cand.rootCause.toLowerCase()
-        if (existingRootCauses.has(rootCauseKey)) continue
+        if (existingTitles.some(t => t.includes(rootCauseKey))) continue
         // Cap 3 proposal/chu kỳ — ưu tiên nghiêm trọng nhất (candidates đã sort)
         if (created >= 3) break
 
         const unresolved = cand.occurrences - cand.resolved
         const recentErrors = cand.recentErrors.slice(0, 3).map((e, i) => `  ${i + 1}. ${String(e).slice(0, 160)}`).join('\n')
+        // ROUND-38 fix F7c: thoát nháy đơn trong text Cypher hướng dẫn (văn
+        // bản proposal — không execute) để người đọc copy-paste không gãy query
+        const cypherSafeRootCause = cand.rootCause.replace(/'/g, "\\'")
         await createSelfDirectionProposal({
-          title: `[Escalation] Root cause "${cand.rootCause}" lặp ${cand.occurrences} lần`,
+          title: `[Escalation] Root cause "${cand.rootCause.replace(/"/g, "'")}" lặp ${cand.occurrences} lần`,
           category: 'improvement',
           priority: unresolved >= 10 ? 'high' : 'medium',
           problem: `Neo4j ErrorOccurrence ghi nhận root cause "${cand.rootCause}" lặp ${cand.occurrences} lần (chưa resolve ${unresolved}) — dấu hiệu lỗi hệ thống mang tính khuôn mẫu, không phải sự cố đơn lẻ. Các thông báo gần nhất:\n${recentErrors || '  (không có sample)'}`,
           solution: 'Phân tích các lần xuất hiện lỗi cùng root cause → tìm nguyên nhân chung (config, dependency, flow) → khắc phục tận gốc thay vì xử lý từng lần một.',
-          implementation: `1) Query Neo4j MATCH (e:ErrorOccurrence {root_cause: '${cand.rootCause}'}) RETURN e.raw_message, e.occurred_at ORDER BY occurred_at DESC LIMIT 20; 2) Gom nhóm theo manifestation/tool; 3) Đề xuất fix tận gốc (code/config) kèm tiêu chí xác nhận: occurrences mới của root cause này = 0 sau 7 ngày.`,
+          implementation: `1) Query Neo4j MATCH (e:ErrorOccurrence {root_cause: '${cypherSafeRootCause}'}) RETURN e.raw_message, e.occurred_at ORDER BY occurred_at DESC LIMIT 20; 2) Gom nhóm theo manifestation/tool; 3) Đề xuất fix tận gốc (code/config) kèm tiêu chí xác nhận: occurrences mới của root cause này = 0 sau 7 ngày.`,
           scheduleAt: unresolved >= 10 ? new Date(Date.now() + 12 * 3600_000) : null,
           impact: `Chặn ${(unresolved / Math.max(1, cand.occurrences) * 100).toFixed(0)}% lỗi còn tồn đọng của pattern này tái diễn.`,
           status: 'pending',
           source: 'scan',
           createdBy: 'episodic-escalation-sweep',
         })
-        existingRootCauses.add(rootCauseKey)
+        existingTitles.push(`[escalation] root cause "${cand.rootCause.replace(/"/g, "'")}" lặp ${cand.occurrences} lần`.toLowerCase())
         created++
       }
       if (created > 0) {
@@ -899,6 +913,10 @@ function sweepEscalationImprovements(): void {
       }
     } catch (err) {
       console.warn('[EscalationSweep] sweep failed (fail-open — thử lại chu kỳ sau):', err instanceof Error ? err.message : String(err))
+    } finally {
+      // ROUND-38 fix F7d: nhả re-entrancy guard — interval 6h không chồng
+      // chu kỳ (sweep dài + timer chạy lại → duplicate proposals)
+      globalForEsc.__tmoEscalationSweepRunning = false
     }
   })()
 }
@@ -941,6 +959,44 @@ if (!globalForEdec.__tmoEpisodicDecayStarted) {
   edecBootTimer.unref?.()
   const edecTimer = setInterval(() => sweepEpisodicDecay(), 24 * 60 * 60 * 1000)
   edecTimer.unref?.()
+}
+
+// ============================================================================
+// ROUND-38 fix F4 — STALE PENDING ADAPTATION LOG SWEEPER
+// ============================================================================
+// Rà soát lần 1 round-37: markSessionAdaptationOutcome chỉ đóng được log khi
+// step từng fail CHẠY LẠI trong cùng process còn session state sống (TTL 2h).
+// Step không bao giờ chạy lại (pipeline xong/ESCALATE/cancel/restart) →
+// StrategyAdaptationLog.successful MÃI MÃI null — thống kê adaptation không
+// bao giờ chốt. Sweeper: pending > 48h không outcome → successful=false
+// (không có bằng chứng adaptation hiệu quả = không thành công — trung thực).
+// Cùng mốc 24h với decay sweep (tách +15 phút cho lệch tải).
+const globalForStale = globalThis as unknown as { __tmoStaleAdaptationSweepStarted?: boolean }
+function sweepStaleAdaptationLogs(): void {
+  if (process.env.TMO_STALE_ADAPTATION_SWEEP === '0') return
+  void (async () => {
+    try {
+      await ensureDbReady()
+      const { db } = await import('./lib/db')
+      const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000)
+      const result = await db.strategyAdaptationLog.updateMany({
+        where: { successful: null, createdAt: { lt: cutoff } },
+        data: { successful: false },
+      })
+      if (result.count > 0) {
+        console.log(`[StaleAdaptationSweep] F4 — đóng ${result.count} StrategyAdaptationLog pending >48h không outcome (successful=false — không bằng chứng là adaptation hiệu quả)`)
+      }
+    } catch (err) {
+      console.warn('[StaleAdaptationSweep] sweep failed (fail-open):', err instanceof Error ? err.message : String(err))
+    }
+  })()
+}
+if (!globalForStale.__tmoStaleAdaptationSweepStarted) {
+  globalForStale.__tmoStaleAdaptationSweepStarted = true
+  const staleBootTimer = setTimeout(() => sweepStaleAdaptationLogs(), 25 * 60 * 1000)
+  staleBootTimer.unref?.()
+  const staleTimer = setInterval(() => sweepStaleAdaptationLogs(), 24 * 60 * 60 * 1000)
+  staleTimer.unref?.()
 }
 
 // ============================================================================
