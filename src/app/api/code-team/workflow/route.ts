@@ -20,12 +20,18 @@
  *
  * SSE Events emitted:
  *   - workflow_start: { sessionId }
- *   - agent_start: { agent, position, step, avatar }
- *   - agent_chunk: { agent, position, content }
+ *   - agent_start: { agent, position, step, avatar, description }
+ *   - agent_chunk: { agent, position, content, iteration } — ROUND-42: persist
+ *     thought snapshot vào DB (metadata.teamThought) để panel hiển thị "nghĩ
+ *     gì" của TỪNG AGENT sau reload (trước đây thoughts chỉ sống trong SSE —
+ *     reload mất trắng).
  *   - agent_complete: { agent, position, step, content, duration }
  *   - tool_call: { agent, position, tool, detail }
- *   - tool_result: { agent, position, tool, result, detail, duration }
- *   - checkpoint: { after, step, decision?, reasoning? }
+ *   - tool_result: { agent, position, tool, result, detail, duration } —
+ *     ROUND-42: persist (metadata.toolResult) để panel giữ ✓/✗ + duration +
+ *     preview sau reload.
+ *   - checkpoint: { after, step, decision?, reasoning?, agent, position } —
+ *     ROUND-42: mang tên TL (agent) + persist structured metadata.checkpoint.
  *   - workflow_done: { totalDuration, sessionId, status }
  *   - omega_escalation: { advisory, reason, tokensUsed, agent?, position? } — AUTO-ESCALATE → Omega
  *   - error: { agent?, message }
@@ -67,6 +73,26 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
           metadata: { isTeamMessage: true, agentName, agentPosition, durationMs: event.duration },
         }
       }
+    } else if (type === 'agent_chunk') {
+      // ROUND-42 (user: "không thấy rõ agent nào đang nghĩ gì"): persist thought
+      // snapshot MỖI VÒNG ReAct (content đã REPLACE mỗi vòng ở client — không
+      // snapshot là mất). Slice 2000 ký tự — đủ hiển thị line-clamp-6 + expand,
+      // giữ row nhẹ (workflow dài 25 vòng/agent vẫn chỉ ~50KB/agent).
+      const content = (event.content as string) || ''
+      const iteration = typeof event.iteration === 'number' ? event.iteration : undefined
+      if (content.trim()) {
+        row = {
+          role: 'assistant',
+          content: content.slice(0, 2000),
+          metadata: {
+            isTeamMessage: true,
+            agentName,
+            agentPosition,
+            teamThought: true,
+            ...(iteration != null ? { iteration } : {}),
+          },
+        }
+      }
     } else if (type === 'agent_start') {
       // TEAM PROCESS PANEL (2026-10-29 — user request "đóng gói quá trình thực
       // thi thay vì dải tin nhắn"): persist BƯỚC pipeline (step + description)
@@ -75,11 +101,20 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
       // metadata.teamStep — KHÔNG render thành bubble rời rạc.
       const step = (event.step as string) || undefined
       const description = (event.description as string) || undefined
+      const avatar = (event.avatar as string) || undefined
       if (step) {
         row = {
           role: 'assistant',
           content: `⚙️ Bước ${step}${description ? ` — ${description}` : ''}`,
-          metadata: { isTeamMessage: true, agentName, agentPosition, teamStep: step, teamStepDescription: description },
+          metadata: {
+            isTeamMessage: true,
+            agentName,
+            agentPosition,
+            teamStep: step,
+            teamStepDescription: description,
+            // ROUND-42: avatar để panel vẽ divider agent sau reload y như live
+            ...(avatar ? { teamStepAvatar: avatar } : {}),
+          },
         }
       }
     } else if (type === 'tool_call') {
@@ -90,14 +125,44 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
         content: detail || `🔧 ${tool}`,
         metadata: { isTeamMessage: true, agentName, agentPosition, toolCallInfo: { tool, detail } },
       }
+    } else if (type === 'tool_result') {
+      // ROUND-42: persist kết quả thật (✓/✗ + duration + preview) — trước đây
+      // tool_result KHÔNG được persist nên panel sau reload chỉ thấy tên tool
+      // mà không biết lệnh đó thành/bại hay chạy bao lâu ("chung chung").
+      // Frontend (groupTeamProcessMessages) PATCH metadata này vào tool event
+      // cuối cùng agent chưa có kết quả — không đẻ event mới.
+      const tool = (event.tool as string) || 'tool'
+      const ok = event.result !== 'Error'
+      const duration = typeof event.duration === 'number' ? event.duration : undefined
+      const detail = (event.detail as string) || ''
+      row = {
+        role: 'assistant',
+        content: `↳ ${ok ? '✓' : '✗'} ${tool}${duration != null ? ` (${duration}ms)` : ''}`,
+        metadata: {
+          isTeamMessage: true,
+          agentName,
+          agentPosition,
+          toolResult: { tool, ok, ...(duration != null ? { durationMs: duration } : {}), ...(detail ? { preview: detail.slice(0, 300) } : {}) },
+        },
+      }
     } else if (type === 'checkpoint') {
       const step = event.step as string | undefined
       const decision = event.decision as string | undefined
       const reasoning = event.reasoning as string | undefined
+      const pending = event.pending === true
       row = {
         role: 'assistant',
         content: `📋 Checkpoint: Step ${step || '?'}${decision ? ` → ${decision}` : ''}${reasoning ? `\n${reasoning}` : ''}`,
-        metadata: { isTeamMessage: true, agentName: 'CHECKPOINT', agentPosition: 'TL' },
+        // ROUND-42: agentName = tên TL THẬT (engine giờ emit kèm) + structured
+        // metadata.checkpoint (không còn regex-parse content ở frontend). Row
+        // cũ (agentName='CHECKPOINT', không metadata.checkpoint) vẫn đọc được
+        // qua fallback parse của groupTeamProcessMessages.
+        metadata: {
+          isTeamMessage: true,
+          agentName: agentName || 'CHECKPOINT',
+          agentPosition: agentPosition || 'TL',
+          checkpoint: { step, ...(decision != null ? { decision } : {}), ...(reasoning != null ? { reasoning } : {}), ...(pending ? { pending } : {}) },
+        },
       }
     } else if (type === 'workflow_done') {
       const totalDuration = event.totalDuration as number | undefined
@@ -122,6 +187,18 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
         role: 'assistant',
         content,
         metadata: { isTeamMessage: true, agentName: 'SYSTEM', agentPosition: 'TL', workflowStatus: status, workflowDurationMs: totalDuration },
+      }
+    } else if (type === 'final_report') {
+      // ROUND-42: persist báo cáo tổng kết workflow — frontend REPLACE phiên bằng
+      // sự thật DB ~600ms sau workflow_done (chống panel nhân đôi); không persist
+      // thì bubble BÁO CÁO TỔNG KẾT (client-only) bị auto-reload nuốt mất.
+      const formatted = String(event.formattedReport || '').slice(0, 3000)
+      if (formatted) {
+        row = {
+          role: 'assistant',
+          content: `📋 **BÁO CÁO TỔNG KẾT WORKFLOW**\n\n\`\`\`\n${formatted}\n\`\`\``,
+          metadata: { isTeamMessage: true, agentName: 'SYSTEM', agentPosition: 'TL' },
+        }
       }
     } else if (type === 'omega_escalation') {
       // FIX 2026-09-15 #2 (P2 — audit Team Code): AUTO-ESCALATE → Omega — persist

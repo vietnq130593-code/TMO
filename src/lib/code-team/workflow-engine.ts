@@ -1409,6 +1409,10 @@ async function runPipeline(
       type: 'checkpoint',
       after: 'TL',
       step: 'analyze',
+      // ROUND-42: checkpoint MANG TÊN TL — UI panel nhóm sự kiện theo agent,
+      // checkpoint không có agent sẽ rơi ngoài khối (trước đây chỉ "📋" mồ côi)
+      agent: tlAgent?.name,
+      position: 'TL',
       decision: 'STAGING_BRANCH_CREATED',
       reasoning: `Edits target ${stagingBranch} (will be merged back at workflow end)`,
     } as WorkflowEvent)
@@ -1750,7 +1754,7 @@ async function runPipeline(
     // ===== CHECKPOINT VERIFY =====
     // Workflow doc: "READ-WRITE-VERIFY LOOP — TL là Agentic Loop Controller"
     if (step.isCheckpoint) {
-      emit({ type: 'checkpoint', after: step.position, step: step.step, pending: true })
+      emit({ type: 'checkpoint', after: step.position, step: step.step, pending: true, agent: ctx.resolvedAgentsCache.get('TL')?.name, position: 'TL' })
 
       const verifyResult = await runTLCheckpointVerify(sessionId, spec, emit, ctx)
       if (verifyResult.decision === 'ESCALATE') {
@@ -1829,6 +1833,8 @@ async function runPipeline(
           step: step.step,
           decision: 'PIVOT',
           reasoning: verifyResult.reasoning,
+          agent: ctx.resolvedAgentsCache.get('TL')?.name,
+          position: 'TL',
         })
       } else {
         emit({
@@ -1836,6 +1842,8 @@ async function runPipeline(
           after: step.position,
           step: step.step,
           decision: 'CONTINUE',
+          agent: ctx.resolvedAgentsCache.get('TL')?.name,
+          position: 'TL',
         })
       }
     }
@@ -2717,7 +2725,11 @@ export async function runAgentStep(params: {
         agent: agent.name,
         position,
         tool: tc.name,
-        detail: JSON.stringify(tc.args).slice(0, 200),
+        // ROUND-42 (user: "agent chia todos list — phải thấy todo gồm những
+        // gì"): todo_write mang ĐỦ JSON todos cho panel parse thành todo list
+        // có cấu trúc (200 ký tự cắt mất danh sách — chỉ thấy "đang chạy lệnh"
+        // chung chung). Các tool khác giữ 200 như cũ.
+        detail: JSON.stringify(tc.args).slice(0, tc.name === 'todo_write' ? 1500 : 200),
         ...(tcAbsPath ? { absPath: tcAbsPath } : {}),
       })
 

@@ -34,7 +34,12 @@ import MarkdownText from './markdown-text'
  *  trình thực thi" của Team workflow: kind 'step' (bước pipeline từ
  *  agent_start) | 'thought' (snapshot LLM output mỗi vòng ReAct — "nghĩ
  *  gì") | 'tool' (lệnh/tool call agent dùng + kết quả thật — "làm gì") |
- *  'checkpoint' (cổng chất lượng TL). */
+ *  'checkpoint' (cổng chất lượng TL).
+ *
+ *  ROUND-42 (user: "phải thấy rõ agent nào đang làm gì, nghĩ gì, chia todos
+ *  gì, chuyển agent nào"): timeline giờ NHÓM THEO AGENT — mỗi 'step' mở 1
+ *  agent-block (divider avatar + tên màu + vị trí + bước + trạng thái);
+ *  thought/tool đổi agent cũng mở block mới (legacy rows không có step). */
 export interface TeamProcessEvent {
   kind: 'step' | 'thought' | 'tool' | 'checkpoint'
   id: string
@@ -45,6 +50,8 @@ export interface TeamProcessEvent {
   step?: string
   description?: string
   stepDone?: boolean
+  /** step ROUND-42: avatar agent (divider vẽ giống live sau reload) */
+  avatar?: string
   /** thought: vòng ReAct thứ mấy */
   iteration?: number
   text?: string
@@ -57,6 +64,8 @@ export interface TeamProcessEvent {
   /** checkpoint */
   decision?: string
   reasoning?: string
+  /** checkpoint ROUND-42: đang chờ TL kiểm tra (chưa có decision) */
+  pending?: boolean
 }
 
 export interface SmolabMessage {
@@ -648,6 +657,85 @@ export function AgentRunSummaryBar({ summary }: { summary: AgentRunSummaryData }
 //   (3) Workflow chạy nền (user rời SSE): heartbeat delta kéo bubbles DB mới
 //       về và GỘP TIẾP vào panel (id 'tp_<firstId>' ổn định — không nhấp nháy).
 
+/** ROUND-42 — màu chữ theo agent (name ưu tiên, position fallback) */
+function teamAgentTextClass(agent?: string, position?: string): string {
+  return AGENT_COLORS[agent || '']?.text
+    || (position ? POSITION_COLORS[position]?.text : undefined)
+    || 'text-stone-300'
+}
+
+/** ROUND-42 (user: "có chia todos list và todo gồm những gì") — parse args của
+ *  todo_write thành danh sách todo có cấu trúc. Engine giờ gửi detail đầy 1500
+ *  ký tự cho tool này (các tool khác 200). JSON bị cắt giữa chừng → trả null →
+ *  render fallback như tool thường (fail-open). */
+export function parseTodoWriteArgs(detail?: string): Array<{ content: string; status?: string }> | null {
+  if (!detail) return null
+  try {
+    const parsed = JSON.parse(detail) as { todos?: unknown }
+    if (!Array.isArray(parsed.todos) || parsed.todos.length === 0) return null
+    const out: Array<{ content: string; status?: string }> = []
+    for (const t of parsed.todos.slice(0, 30)) {
+      if (!t || typeof t !== 'object') continue
+      const rec = t as Record<string, unknown>
+      const content = typeof rec.content === 'string' ? rec.content : ''
+      if (!content) continue
+      out.push({ content, status: typeof rec.status === 'string' ? rec.status : undefined })
+    }
+    return out.length > 0 ? out : null
+  } catch {
+    return null
+  }
+}
+
+/** ROUND-42 — 1 agent-block = 1 agent chạy 1 bước ("agent nào đang triển khai
+ *  tác vụ gì"). Block mở bởi: (a) step event (agent_start — bước pipeline mới,
+ *  kể cả CÙNG agent chạy bước khác); (b) thought/tool của agent KHÁC block hiện
+ *  hành (legacy rows persist trước round-42 không có step marker). Checkpoint
+ *  KHÔNG bao giờ mở block — nó là cổng kiểm tra của TL gắn sau agent vừa chạy. */
+interface TeamAgentBlock {
+  key: string
+  agent?: string
+  position?: string
+  avatar?: string
+  step?: string
+  description?: string
+  stepDone?: boolean
+  firstTs: number
+  lastTs: number
+  events: TeamProcessEvent[]
+}
+
+function buildTeamAgentBlocks(events: TeamProcessEvent[]): TeamAgentBlock[] {
+  const blocks: TeamAgentBlock[] = []
+  for (const e of events) {
+    if (e.kind === 'step') {
+      blocks.push({
+        key: e.id,
+        agent: e.agent,
+        position: e.position,
+        avatar: e.avatar,
+        step: e.step,
+        description: e.description,
+        stepDone: e.stepDone,
+        firstTs: e.ts,
+        lastTs: e.ts,
+        events: [],
+      })
+      continue
+    }
+    const cur = blocks.length > 0 ? blocks[blocks.length - 1] : undefined
+    const isAgentWork = e.kind === 'thought' || e.kind === 'tool'
+    const agentChanged = isAgentWork && cur != null && e.agent != null && cur.agent != null && e.agent !== cur.agent
+    if (!cur || agentChanged) {
+      blocks.push({ key: `ev_${e.id}`, agent: e.agent, position: e.position, firstTs: e.ts, lastTs: e.ts, events: [e] })
+      continue
+    }
+    cur.events.push(e)
+    cur.lastTs = Math.max(cur.lastTs, e.ts)
+  }
+  return blocks
+}
+
 export function TeamProcessPanel({ msg }: { msg: SmolabMessage }) {
   const events = msg.processEvents || []
   const status = msg.processStatus || 'running'
@@ -680,6 +768,17 @@ export function TeamProcessPanel({ msg }: { msg: SmolabMessage }) {
   const durationMs = msg.processDurationMs != null
     ? msg.processDurationMs
     : (running && startedAt ? Date.now() - startedAt : undefined)
+
+  // ROUND-42: agent hiện hành (đang triển khai) — bước cuối CHƯA xong; nếu tất
+  // cả đã xong mà panel còn chạy (workflow nền) → bước cuối cùng.
+  const currentAgentStep = running
+    ? ([...steps].reverse().find(s => !s.stepDone) ?? steps[steps.length - 1])
+    : undefined
+  // ROUND-42: các agent đã tham gia + đang chạy (header hiển thị team gồm ai)
+  const agentNames = [...new Set(events.map(e => e.agent).filter((a): a is string => !!a))]
+
+  // ROUND-42: blocks theo agent — "chuyển agent nào, làm gì" nhìn được ngay
+  const blocks = buildTeamAgentBlocks(events)
 
   const statusNode = running ? (
     <span className="flex items-center gap-1 text-[11px] text-amber-300 flex-shrink-0">
@@ -721,7 +820,18 @@ export function TeamProcessPanel({ msg }: { msg: SmolabMessage }) {
         <span className="text-[13px] font-semibold text-stone-100">Quá trình thực thi</span>
         {msg.processTitle && <span className="text-[11px] text-stone-400">— {msg.processTitle}</span>}
         {statusNode}
+        {/* ROUND-42 — agent ĐANG triển khai ngay ở header (không phải mở panel mới biết) */}
+        {currentAgentStep && (
+          <span className="flex items-center gap-1 text-[11px] flex-shrink-0" title={`Agent đang triển khai: ${currentAgentStep.agent || ''}`}>
+            <span>{currentAgentStep.avatar || '🤖'}</span>
+            <span className={`font-medium ${teamAgentTextClass(currentAgentStep.agent, currentAgentStep.position)}`}>
+              {currentAgentStep.agent || 'Agent'}
+            </span>
+            {currentAgentStep.position && <span className="text-stone-400">({currentAgentStep.position})</span>}
+          </span>
+        )}
         <span className="ml-auto flex items-center gap-1.5 text-[11px] text-stone-400 flex-shrink-0">
+          {agentNames.length > 0 && <span title={`Agents tham gia: ${agentNames.join(', ')}`}>👥 {agentNames.length}</span>}
           {steps.length > 0 && <span title="Bước pipeline đã xong">🧩 {stepsDone}/{steps.length}</span>}
           {msg.processTotalSteps != null && msg.processStepIndex != null && msg.processStepIndex > 0 && (
             <span title="Vị trí workflow">Bước {msg.processStepIndex}/{msg.processTotalSteps}</span>
@@ -764,7 +874,12 @@ export function TeamProcessPanel({ msg }: { msg: SmolabMessage }) {
                           {s.step || 'bước'}
                           {s.description ? <span className="text-stone-400"> — {s.description}</span> : null}
                         </span>
-                        {s.agent && <span className="text-[10px] text-stone-500 ml-1">({s.agent})</span>}
+                        {/* ROUND-42 — tên agent chạy bước này nổi bật (trước đây 10px xám gần như vô hình) */}
+                        {s.agent && (
+                          <span className={`ml-1.5 font-medium ${teamAgentTextClass(s.agent, s.position)}`}>
+                            {s.avatar ? `${s.avatar} ` : ''}{s.agent}{s.position ? <span className="text-stone-500"> ({s.position})</span> : null}
+                          </span>
+                        )}
                       </span>
                     </div>
                   )
@@ -773,7 +888,9 @@ export function TeamProcessPanel({ msg }: { msg: SmolabMessage }) {
             </div>
           )}
 
-          {/* Chu kỳ thực thi — timeline đúng trình tự thời gian */}
+          {/* Chu kỳ thực thi — timeline NHÓM THEO AGENT (round-42): mỗi agent
+              1 divider (ai đang làm gì) → chuyển agent thấy ngay → toàn bộ
+              💭 nghĩ / 🔧 làm / 📋 checkpoint của agent đó nằm gọn trong khối. */}
           <div>
             <div className="flex items-center gap-1.5 mb-1">
               <Activity className="h-3 w-3 text-cyan-400" />
@@ -781,51 +898,115 @@ export function TeamProcessPanel({ msg }: { msg: SmolabMessage }) {
               <span className="text-[11px] text-stone-400">{events.filter(e => e.kind !== 'step').length} sự kiện</span>
             </div>
             <div ref={timelineRef} className="max-h-80 overflow-y-auto space-y-1 pr-1" style={{ scrollbarWidth: 'thin' }}>
-              {events.map(e => {
-                if (e.kind === 'thought') {
-                  return (
-                    <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/50 border-l-2 border-violet-500/50">
-                      <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
-                        <span className="text-[11px] text-violet-300">💭 Suy nghĩ</span>
-                        {e.agent && <span className="text-[10px] text-stone-500">{e.agent}</span>}
-                        {e.iteration != null && <span className="text-[10px] text-stone-500">Vòng {e.iteration}</span>}
-                      </div>
-                      <p className="text-[12px] leading-5 text-stone-300 italic whitespace-pre-wrap line-clamp-6">{e.text}</p>
-                    </div>
-                  )
-                }
-                if (e.kind === 'tool') {
-                  return (
-                    <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/40 border-l-2 border-cyan-500/40">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-[12px] flex-shrink-0">{runToolIcon(e.tool)}</span>
-                        <span className="text-[11px] font-mono text-cyan-200 flex-shrink-0">{e.tool || 'tool'}</span>
-                        {e.agent && <span className="text-[10px] text-stone-500 flex-shrink-0">{e.agent}</span>}
-                        {e.argsSummary && <span className="text-[11px] text-stone-300 truncate max-w-[40%]">{e.argsSummary}</span>}
-                        {e.success != null && (
-                          <span className={`text-[11px] flex-shrink-0 ${e.success ? 'text-emerald-400' : 'text-red-400'}`}>{e.success ? '✓' : '✗'}</span>
-                        )}
-                        {e.durationMs != null && <span className="text-[10px] text-stone-500 ml-auto flex-shrink-0">{fmtRunDuration(e.durationMs)}</span>}
-                      </div>
-                      {e.resultPreview && (
-                        <pre className="mt-1 text-[11px] leading-4 text-stone-400 whitespace-pre-wrap max-h-20 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>{e.resultPreview}</pre>
+              {blocks.map((b, bi) => {
+                const isLast = bi === blocks.length - 1
+                const blockRunning = running && isLast && !b.stepDone
+                const bTools = b.events.filter(e => e.kind === 'tool').length
+                const bThoughts = b.events.filter(e => e.kind === 'thought').length
+                const bDur = b.lastTs - b.firstTs
+                return (
+                  <div key={b.key} className="space-y-1">
+                    {/* Divider agent — "agent nào đang triển khai tác vụ gì" */}
+                    <div className="px-2 py-1.5 rounded-md bg-slate-900/70 border border-stone-700/50 flex items-center gap-1.5 flex-wrap">
+                      <span className="text-sm leading-none flex-shrink-0">{b.avatar || '🤖'}</span>
+                      <span className={`text-[12px] font-semibold flex-shrink-0 ${teamAgentTextClass(b.agent, b.position)}`}>
+                        {b.agent || 'Agent'}
+                      </span>
+                      {b.position && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800/80 text-stone-300 flex-shrink-0">{b.position}</span>}
+                      {b.step && (
+                        <span className="text-[11px] text-stone-300 flex-shrink-0">
+                          ⚙️ {b.step}{b.description ? <span className="text-stone-500"> — {b.description}</span> : null}
+                        </span>
                       )}
+                      <span className="ml-auto flex items-center gap-1.5 text-[10px] text-stone-500 flex-shrink-0">
+                        {bThoughts > 0 && <span title="Vòng nghĩ">💭 {bThoughts}</span>}
+                        {bTools > 0 && <span title="Tool calls">🔧 {bTools}</span>}
+                        {bDur > 0 && <span>{fmtRunDuration(bDur)}</span>}
+                        {blockRunning
+                          ? <span className="text-amber-300 animate-pulse">● Đang chạy</span>
+                          : <span className="text-emerald-500" title="Agent đã xong phần việc">✓ xong</span>}
+                      </span>
                     </div>
-                  )
-                }
-                if (e.kind === 'checkpoint') {
-                  return (
-                    <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/40 border-l-2 border-amber-500/50">
-                      <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
-                        <span className="text-amber-300">📋 Checkpoint</span>
-                        {e.step && <span className="text-stone-300">Bước {e.step}</span>}
-                        {e.decision && <span className="text-emerald-300 font-medium">→ {e.decision}</span>}
-                      </div>
-                      {e.reasoning && <p className="mt-0.5 text-[11px] leading-4 text-stone-400 line-clamp-3">{e.reasoning}</p>}
-                    </div>
-                  )
-                }
-                return null
+                    {/* Sự kiện trong khối agent */}
+                    {b.events.map(e => {
+                      if (e.kind === 'thought') {
+                        return (
+                          <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/50 border-l-2 border-violet-500/50 ml-2">
+                            <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                              <span className="text-[11px] text-violet-300">💭 Suy nghĩ</span>
+                              {e.iteration != null && <span className="text-[10px] text-stone-500">Vòng {e.iteration}</span>}
+                            </div>
+                            <p className="text-[12px] leading-5 text-stone-300 italic whitespace-pre-wrap line-clamp-6">{e.text}</p>
+                          </div>
+                        )
+                      }
+                      if (e.kind === 'tool') {
+                        // ROUND-42 — todo_write render thành TODO LIST có cấu trúc
+                        const todoItems = e.tool === 'todo_write' ? parseTodoWriteArgs(e.argsSummary) : null
+                        if (todoItems) {
+                          const tDone = todoItems.filter(t => t.status === 'completed').length
+                          return (
+                            <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/40 border-l-2 border-emerald-500/50 ml-2">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-[12px] flex-shrink-0">📋</span>
+                                <span className="text-[11px] font-medium text-emerald-300 flex-shrink-0">Todos</span>
+                                <span className="text-[11px] text-stone-400 flex-shrink-0">{tDone}/{todoItems.length}</span>
+                                {e.success != null && (
+                                  <span className={`text-[11px] flex-shrink-0 ${e.success ? 'text-emerald-400' : 'text-red-400'}`}>{e.success ? '✓' : '✗'}</span>
+                                )}
+                              </div>
+                              <div className="mt-1 max-h-28 overflow-y-auto space-y-0.5 pr-1" style={{ scrollbarWidth: 'thin' }}>
+                                {todoItems.map((t, ti) => {
+                                  const st = t.status || 'pending'
+                                  const icon = st === 'completed' ? '✓' : st === 'in_progress' ? '◐' : st === 'failed' ? '✗' : st === 'blocked' ? '⚠' : '○'
+                                  const color = st === 'completed' ? 'text-emerald-500' : st === 'in_progress' ? 'text-amber-300' : st === 'failed' ? 'text-red-400' : st === 'blocked' ? 'text-orange-400' : 'text-stone-400'
+                                  return (
+                                    <div key={ti} className="flex items-start gap-1.5">
+                                      <span className={`text-[12px] leading-5 flex-shrink-0 ${color}`}>{icon}</span>
+                                      <span className={`text-[11px] leading-5 break-words ${st === 'completed' ? 'text-stone-500 line-through' : 'text-stone-200'}`}>{t.content}</span>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )
+                        }
+                        return (
+                          <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/40 border-l-2 border-cyan-500/40 ml-2">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-[12px] flex-shrink-0">{runToolIcon(e.tool)}</span>
+                              <span className="text-[11px] font-mono text-cyan-200 flex-shrink-0">{e.tool || 'tool'}</span>
+                              {e.argsSummary && <span className="text-[11px] text-stone-300 truncate max-w-[40%]">{e.argsSummary}</span>}
+                              {e.success != null && (
+                                <span className={`text-[11px] flex-shrink-0 ${e.success ? 'text-emerald-400' : 'text-red-400'}`}>{e.success ? '✓' : '✗'}</span>
+                              )}
+                              {e.durationMs != null && <span className="text-[10px] text-stone-500 ml-auto flex-shrink-0">{fmtRunDuration(e.durationMs)}</span>}
+                            </div>
+                            {e.resultPreview && (
+                              <pre className="mt-1 text-[11px] leading-4 text-stone-400 whitespace-pre-wrap max-h-20 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>{e.resultPreview}</pre>
+                            )}
+                          </div>
+                        )
+                      }
+                      if (e.kind === 'checkpoint') {
+                        return (
+                          <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/40 border-l-2 border-amber-500/50 ml-2">
+                            <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                              <span className="text-amber-300">📋 Checkpoint</span>
+                              {e.agent && <span className={teamAgentTextClass(e.agent, e.position)}>{e.agent}</span>}
+                              {e.step && <span className="text-stone-300">sau bước {e.step}</span>}
+                              {e.pending
+                                ? <span className="text-amber-300/80 animate-pulse">⏳ đang kiểm tra…</span>
+                                : e.decision && <span className="text-emerald-300 font-medium">→ {e.decision}</span>}
+                            </div>
+                            {e.reasoning && <p className="mt-0.5 text-[11px] leading-4 text-stone-400 line-clamp-3">{e.reasoning}</p>}
+                          </div>
+                        )
+                      }
+                      return null
+                    })}
+                  </div>
+                )
               })}
               {running && (
                 <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-amber-300/90">
@@ -844,11 +1025,18 @@ export function TeamProcessPanel({ msg }: { msg: SmolabMessage }) {
 }
 
 /** Bubble team persist rời rạc (tool_call / checkpoint / teamStep) — ứng viên
- *  gom vào panel "Quá trình thực thi" khi hydrate từ DB. */
+ *  gom vào panel "Quá trình thực thi" khi hydrate từ DB.
+ *  ROUND-42: nhận thêm teamThought (💭 snapshot) + toolResult (kết quả ✓/✗
+ *  patch vào tool event) + checkpoint structured metadata. */
 function isTeamProcessBubble(m: SmolabMessage): boolean {
   if (m.role !== 'assistant' || m.isTeamProcess) return false
   if (!m.isTeamMessage) return false
-  return !!m.toolCallInfo || m.agentName === 'CHECKPOINT' || m.metadata?.teamStep != null
+  return !!m.toolCallInfo
+    || m.agentName === 'CHECKPOINT'
+    || m.metadata?.teamStep != null
+    || m.metadata?.teamThought === true
+    || m.metadata?.toolResult != null
+    || m.metadata?.checkpoint != null
 }
 
 const TEAM_PROCESS_STATUS_MAP: Record<string, NonNullable<SmolabMessage['processStatus']>> = {
@@ -874,42 +1062,88 @@ function groupTeamProcessMessages(msgs: SmolabMessage[]): SmolabMessage[] {
   let group: SmolabMessage[] = []
   let lastPanelIdx = -1
 
-  const buildEvents = (src: SmolabMessage[]): TeamProcessEvent[] => src.map(m => {
-    const ts = m.timestamp instanceof Date ? m.timestamp.getTime() : Date.now()
-    if (m.metadata?.teamStep != null) {
-      return {
-        kind: 'step' as const,
+  // ROUND-42: buildEvents đọc THEO TỪNG ROW (không còn map() thuần) vì
+  // toolResult row phải PATCH vào tool event trước đó (không đẻ event mới) —
+  // mirror đúng logic tool_result của live SSE handler.
+  const buildEvents = (src: SmolabMessage[]): TeamProcessEvent[] => {
+    const out: TeamProcessEvent[] = []
+    for (const m of src) {
+      const ts = m.timestamp instanceof Date ? m.timestamp.getTime() : Date.now()
+      const meta = (m.metadata || {}) as Record<string, unknown>
+      if (meta.teamStep != null) {
+        out.push({
+          kind: 'step',
+          id: m.id,
+          ts,
+          agent: m.agentName,
+          position: m.agentPosition,
+          avatar: typeof meta.teamStepAvatar === 'string' ? meta.teamStepAvatar : undefined,
+          step: String(meta.teamStep),
+          description: typeof meta.teamStepDescription === 'string' ? meta.teamStepDescription : undefined,
+          stepDone: true, // history: mọi bước đã persist đều đã chạy qua
+        })
+        continue
+      }
+      if (meta.teamThought === true) {
+        // ROUND-42 — thought snapshot persist từ agent_chunk: "nghĩ gì" của
+        // từng agent sống qua reload (trước đây mất trắng — chỉ tool + checkpoint)
+        out.push({
+          kind: 'thought',
+          id: m.id,
+          ts,
+          agent: m.agentName,
+          position: m.agentPosition,
+          iteration: typeof meta.iteration === 'number' ? meta.iteration : undefined,
+          text: m.content,
+        })
+        continue
+      }
+      if (meta.toolResult != null) {
+        // ROUND-42 — kết quả thật của tool call: patch ngược vào tool event
+        // cuối CÙNG agent chưa có kết quả (mirror live handler)
+        const tr = meta.toolResult as { ok?: boolean; durationMs?: number; preview?: string }
+        for (let i = out.length - 1; i >= 0; i--) {
+          const ev = out[i]
+          if (ev.kind === 'tool' && ev.agent === m.agentName && ev.success == null) {
+            ev.success = tr.ok !== false
+            ev.durationMs = typeof tr.durationMs === 'number' ? tr.durationMs : undefined
+            ev.resultPreview = typeof tr.preview === 'string' ? tr.preview : undefined
+            break
+          }
+        }
+        continue
+      }
+      if (m.toolCallInfo) {
+        out.push({
+          kind: 'tool',
+          id: m.id,
+          ts,
+          agent: m.agentName,
+          position: m.agentPosition,
+          tool: m.toolCallInfo.tool,
+          argsSummary: m.toolCallInfo.detail || m.content,
+        })
+        continue
+      }
+      // CHECKPOINT — ưu tiên structured metadata (round-42+); fallback regex
+      // parse content cho rows cũ (agentName='CHECKPOINT', không metadata)
+      const cp = meta.checkpoint as { step?: unknown; decision?: unknown; reasoning?: unknown; pending?: unknown } | undefined
+      const mt = /^📋 Checkpoint: Step ?([^\n→]*?)(?:\s*→\s*([^\n]*))?(?:\n([\s\S]*))?$/.exec(m.content)
+      const cpAgent = m.agentName && m.agentName !== 'CHECKPOINT' ? m.agentName : undefined
+      out.push({
+        kind: 'checkpoint',
         id: m.id,
         ts,
-        agent: m.agentName,
-        position: m.agentPosition,
-        step: String(m.metadata.teamStep),
-        description: typeof m.metadata.teamStepDescription === 'string' ? m.metadata.teamStepDescription : undefined,
-        stepDone: true, // history: mọi bước đã persist đều đã chạy qua
-      }
+        agent: cpAgent,
+        position: cpAgent ? (m.agentPosition || 'TL') : undefined,
+        step: (typeof cp?.step === 'string' && cp.step ? cp.step : (mt?.[1] || '').trim()) || undefined,
+        decision: typeof cp?.decision === 'string' ? cp.decision : ((mt?.[2] || '').trim() || undefined),
+        reasoning: typeof cp?.reasoning === 'string' ? cp.reasoning : (mt?.[3]?.trim() || undefined),
+        pending: cp?.pending === true,
+      })
     }
-    if (m.toolCallInfo) {
-      return {
-        kind: 'tool' as const,
-        id: m.id,
-        ts,
-        agent: m.agentName,
-        position: m.agentPosition,
-        tool: m.toolCallInfo.tool,
-        argsSummary: m.toolCallInfo.detail || m.content,
-      }
-    }
-    // CHECKPOINT — parse content "📋 Checkpoint: Step X → decision\nreasoning"
-    const mt = /^📋 Checkpoint: Step ?([^\n→]*?)(?:\s*→\s*([^\n]*))?(?:\n([\s\S]*))?$/.exec(m.content)
-    return {
-      kind: 'checkpoint' as const,
-      id: m.id,
-      ts,
-      step: (mt?.[1] || '').trim() || undefined,
-      decision: (mt?.[2] || '').trim() || undefined,
-      reasoning: mt?.[3]?.trim() || undefined,
-    }
-  })
+    return out
+  }
 
   const flush = () => {
     if (group.length === 0) return
@@ -2940,8 +3174,19 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         const cursorId = latestDbMessageRef.current?.id
         if (!cursorId || snap.mc < prev.mc) {
           // Chưa có cursor (session trống ở client) hoặc message bị XÓA → full tail
+          // ROUND-42 FIX (bug live panel đóng băng): phiên auto-created (chưa từng
+          // tail-load → cursor null) đang chạy workflow SSE — KHÔNG replace tail
+          // giữa chừng. Trước đây beat đầu có mc đổi (persistTeamEvent vừa ghi
+          // user msg + step row) rơi vào nhánh này → loadSessionTail REPLACE toàn
+          // bộ messages → panel live (processMsgId) bị thay bởi snapshot DB stale
+          // ~5s đầu → mọi pushProcessEvent sau đó im lặng mất đích → panel
+          // "Đang chạy" đóng băng nguyên workflow (đúng bug user phàn nàn "chỉ
+          // thấy chung chung"). Chờ SSE khép lại — finally-block của startWorkflow
+          // tự loadSessionTail với sự thật đầy đủ (+600ms).
           emptyDeltaStreakRef.current = 0
-          await loadSessionTail(sid, { silent: true })
+          if (!inFlightChatsRef.current.has(sid)) {
+            await loadSessionTail(sid, { silent: true })
+          }
         } else if (!inFlightChatsRef.current.has(sid)) {
           // Client đang tự gửi chat trong phiên này → bỏ lượt delta (client tự
           // append response; beat sau sẽ adopt DB copy thay client copy)
@@ -3707,6 +3952,8 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                 ts: Date.now(),
                 agent: agentName,
                 position: agentPosition,
+                // ROUND-42: avatar cho divider agent-block (nhóm theo agent)
+                avatar: agentAvatar,
                 step: (event.step as string) || undefined,
                 description: (event.description as string) || undefined,
               })
@@ -3819,13 +4066,18 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
               const checkpointReasoning = event.reasoning as string | undefined
               // TEAM PROCESS PANEL: checkpoint (cổng chất lượng TL) đóng gói
               // vào panel — không còn bubble riêng.
+              // ROUND-42: mang tên agent TL (divider không mồ côi) + trạng
+              // thái pending (⏳ đang kiểm tra) tách khỏi checkpoint có decision.
               pushProcessEvent({
                 kind: 'checkpoint',
                 id: crypto.randomUUID(),
                 ts: Date.now(),
+                agent: (event.agent as string) || undefined,
+                position: (event.position as string) || undefined,
                 step: checkpointStep,
                 decision: checkpointDecision,
                 reasoning: checkpointReasoning,
+                pending: event.pending === true,
               })
               break
             }
@@ -3893,7 +4145,15 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
               // FIX 2026-09-15 #2 (P2 — audit Team Code): AUTO-ESCALATE → Omega
               // hiển thị trong chat (mirror route.ts persist) — user thấy được
               // Omega đã nhận vấn đề của team và tư vấn gì.
-              patchPanel({ processStatus: 'escalated' })
+              //
+              // ROUND-42 FIX (omega_escalation KHÔNG phải trạng thái cuối):
+              // trước đây patch processStatus='escalated' ngay tại event này —
+              // nhưng omega_escalation có thể fire GIỮA LUỒNG (step fail → Omega
+              // tư vấn → workflow VẪN CHẠY TIẾP theo advisory) → panel nhảy
+              // "Escalated" + auto-collapse trong khi agents còn đang làm việc
+              // (user phàn nàn "không rõ agent nào đang làm gì"). Trạng thái
+              // cuối do DUY NHẤT workflow_done/error chốt (engine luôn emit khi
+              // stream khép lại). Bubble advisory vẫn hiện ngay dưới panel.
               const advisory = String(event.advisory || '')
               const reason = String(event.reason || 'workflow gặp sự cố')
               if (advisory) {
