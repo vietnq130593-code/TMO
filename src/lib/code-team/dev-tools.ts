@@ -2919,6 +2919,18 @@ async function decomposeTaskViaThinkingLayer(goal: string, context?: string, sco
   // 3. Call the full thinking/decomposer.ts implementation
   const plan = await thinkingDecomposeTask(goal, intent, mentalModel, { useLLM: true })
 
+  // GUARD (ROUND-40 fix V2-GUARD — mirror E2E 2026-09-14 guard của legacy path):
+  // LLM trả plan rỗng (0 subtask) → trước đây vòng for dưới không chạy, return
+  // success:true + tasksCreated:0 + durable:true (0===0) — agent hiểu nhầm đã
+  // phân rã xong. Đường này giờ là DEFAULT (ENABLE_MASTER_ORCHESTRATOR=true từ
+  // round-39/V2) nên phải trung thực như legacy: báo lỗi, không báo success.
+  if (!Array.isArray(plan.subTasks) || plan.subTasks.length === 0) {
+    return {
+      error: 'Thinking layer did not return any subtasks (empty plan)',
+      hint: 'Thử lại decompose_task, hoặc tự chia nhỏ task bằng todo_write.',
+    }
+  }
+
   // 4. Persist the DecompositionPlan.SubTask[] into the global DevTask store,
   //    mirroring the legacy simplified path's shape so downstream callers
   //    (create_task, update_task, get_plan) work unchanged.

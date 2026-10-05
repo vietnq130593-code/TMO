@@ -9,6 +9,14 @@
  * 'after_error' → detect pattern → applyAdaptation → pendingConfig render vào
  * prompt step kế + giảm maxIterations; kill-switch: .env
  * ENABLE_MASTER_ORCHESTRATOR=false).
+ *
+ * ROUND-40 (soát V2-SCOPE — ghi chú trung thực): flag BẬT có 2 tác động sống:
+ * (1) decompose_task chạy full thinking layer (decomposer.ts — parseIntent +
+ * mentalModel + DAG persist — consumer thật trong dev-tools); (2) các state
+ * 'skipped' của orchestrator giờ là đường chạy được. NHƯNG startOrchestration()
+ * hiện CHƯA có production caller — vòng lặp orchestrator đầy đủ (retry sau
+ * error + adaptation) vẫn là scaffolding chờ caller (nợ vận hành đã ghi
+ * worklog round-40). Đừng đọc "flag bật" = "orchestrator loop đang chạy".
  */
 
 // ==================== FACTORY FUNCTIONS ====================
