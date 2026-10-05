@@ -51,20 +51,22 @@ export interface KnowledgeSearchDiagnostics {
 }
 
 /**
- * Tìm kiếm semantic Knowledge Base — TRỰC TIẾP Qdrant + NVIDIA embedding.
+ * Tìm kiếm semantic Knowledge Base — ROUND-37 V5: PARITY STACK VỚI CHAT.
  *
- * BUG FIX 2026-09-06: trước đây hàm này fetch HTTP loopback tới
- * `${NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/query` — chạy toàn
- * bộ pipeline (classification LLM + meta-cog + answer LLM + follow-up LLM,
- * ~15s) và fragile với port/IPv6 trên Windows local; lỗi network bị catch
- * âm thầm → "0 kết quả". Giờ:
- *   1. Embed query trực tiếp (generateQueryEmbedding — có cache L1/L2)
- *   2. searchSimilar trực tiếp Qdrant (threshold 0.2, retry 0.1)
- *   3. 0 kết quả → chẩn đoán lý do THẬT (embedding fail / Qdrant chết /
- *      KB rỗng / không chunk nào khớp) trả về trong `diagnostics` để agent
- *      báo đúng nguyên nhân cho user thay vì "0 kết quả".
- * Nhanh hơn ~10x (1-2s thay vì 15s) và agent tự tổng hợp câu trả lời từ
- * `results` (agent vốn là LLM — không cần answer LLM lồng nhau).
+ * Rà soát lượt 3 (round-36): agent dùng `knowledge_search` nhận stack YẾU HƠN
+ * đường chat — dense-only (threshold 0.2, retry 0.1) trong khi chat (kb-access
+ * searchUserKB) chạy full pipeline: dense over-fetch topK×4 + hybrid BM25+RRF
+ * fusion (ENABLE_HYBRID_SEARCH) + MMR diversity rerank (ENABLE_MMR) + semantic
+ * entity search 8 label Neo4j + Leiden communities. Giờ HAI đường DÙNG CHUNG
+ * MỘT pipeline — agent thấy đúng những gì chat thấy:
+ *
+ *   1. searchUserKB(query, agentId, {topK}) — chunks (hybrid+MMR) + entities
+ *      (semantic Neo4j) + memories + communities + confidence
+ *   2. expandGraph=true → quan hệ 1-hop của top entities (Neo4j) → kết quả
+ *      type 'relationship' (trước đây option khai báo nhưng chết)
+ *   3. 0 kết quả → chẩn đoán lý do THẬT (giữ nguyên diagnostics shape —
+ *      backward-compatible với tool-executor + openclaw tools route)
+ *   4. Fallback: kb-routing lỗi thật sự → rơi về dense-only cũ (defence)
  */
 export async function agentKnowledgeSearch(query: string, options?: {
   topK?: number
@@ -75,6 +77,68 @@ export async function agentKnowledgeSearch(query: string, options?: {
   const topK = Math.min(Math.max(options?.topK ?? 5, 1), 20)
 
   try {
+    // ── STACK CHAT (parity V5): searchUserKB = hybrid + MMR + entity + communities ──
+    try {
+      const { searchUserKB } = await import('@/lib/kb-routing/kb-access')
+      const kb = await searchUserKB(query, undefined, { topK })
+
+      // Map kết quả về shape KnowledgeSearchResult (giữ nguyên contract)
+      const results: KnowledgeSearchResult[] = []
+      for (const chunk of kb.chunks) {
+        results.push({
+          type: 'chunk',
+          content: chunk.text,
+          source: chunk.source,
+          score: chunk.denseScore ?? chunk.score, // denseScore = cosine thật (score là fused rank)
+        })
+      }
+      for (const entity of kb.entities) {
+        results.push({
+          type: 'entity',
+          content: entity.description || entity.name,
+          entityName: entity.name,
+          entityType: entity.type,
+          score: undefined,
+        })
+      }
+
+      // expandGraph (V5 — sống lại): 1-hop relationships của top entities
+      if (options?.expandGraph && kb.entities.length > 0) {
+        try {
+          const topEntityNames = kb.entities.slice(0, 3).map(e => e.name)
+          const { agentGraphQuery } = await import('@/lib/knowledge-bridge')
+          const cypher = `MATCH (a)-[r]->(b) WHERE a.name IN $names RETURN type(r) AS relType, a.name AS source, b.name AS target LIMIT 15`
+          const graph = await agentGraphQuery(cypher, { names: topEntityNames })
+          for (const rec of (graph.records ?? []).slice(0, 10)) {
+            const r = rec as Record<string, unknown>
+            results.push({
+              type: 'relationship',
+              content: `${String(r.source)} —[${String(r.relType)}]→ ${String(r.target)}`,
+              relationshipType: String(r.relType ?? ''),
+              sourceEntity: String(r.source ?? ''),
+              targetEntity: String(r.target ?? ''),
+            })
+          }
+        } catch { /* fail-open — expandGraph bổ trợ, không bắt buộc */ }
+      }
+
+      if (results.length > 0) {
+        return {
+          results,
+          diagnostics: {
+            ok: true, reason: 'ok', qdrantReachable: true,
+            totalChunks: kb.chunks.length,
+            durationMs: Date.now() - startTime,
+          },
+        }
+      }
+      // searchUserKB trả rỗng → chẩn đoán tiếp phía dưới (embedding/qdrant/kb_empty)
+    } catch (kbErr) {
+      // kb-routing lỗi (Qdrant chết chưa kịp bắt...) → fallback dense-only cũ
+      console.warn('[Knowledge Bridge] searchUserKB pipeline failed — fallback dense-only:', kbErr instanceof Error ? kbErr.message : String(kbErr))
+    }
+
+    // ── FALLBACK: dense-only cũ (defence-in-depth khi kb-routing không chạy được) ──
     // 1. Query embedding — trực tiếp, không qua HTTP loopback
     const { vector, model } = await generateQueryEmbedding(query)
     if (!vector || vector.length === 0) {
@@ -90,7 +154,7 @@ export async function agentKnowledgeSearch(query: string, options?: {
       }
     }
 
-    // 2. Vector search Qdrant — threshold 0.2 (như /api/query), retry 0.1
+    // 2. Vector search Qdrant — threshold 0.2, retry 0.1
     let hits = await searchSimilar(vector, { limit: topK, minScore: 0.2, domain: options?.domain })
     let minScoreUsed = 0.2
     if (hits.length === 0) {
