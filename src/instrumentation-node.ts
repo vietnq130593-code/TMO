@@ -721,6 +721,50 @@ if (!globalForNmi.__tmoNeo4jIndexMigrateStarted) {
   })()
 }
 
+// ==================== ROUND-36: EPISODIC + DRIFT HEAL MỖI BOOT ====================
+// Rà soát lượt 3 phát hiện "bộ não mất trí nhớ sau reset": Qdrant bị xoá
+// collection (theopus_episodes) + SQLite deploy lại trắng, nhưng Neo4j Aura
+// còn nguyên 94 Episode / 64 Lesson → searchSimilarEpisodes luôn [], SQLite
+// mirror trống, embedding_id treo — KHÔNG có đường backfill. Giờ boot check
+// desync (4 count query rẻ) và heal nền 3 tầng (re-embed từ Neo4j
+// contextSummary + update embedding_id + backfill mirror). Idempotent, fail
+// mở tuyệt đối. Env TMO_EPISODIC_HEAL=0 tắt.
+// Cùng block: heal model-version tracking (B-Y-4) — seed EmbeddingModelVersion
+// + stamp chunk payload embedding_model_version còn thiếu để drift detection
+// (Prop 4.1) thật sự chạy (0 embed API call — rẻ).
+const globalForEh = globalThis as unknown as { __tmoBootHealStarted?: boolean }
+if (!globalForEh.__tmoBootHealStarted) {
+  globalForEh.__tmoBootHealStarted = true
+  void (async () => {
+    try {
+      await ensureDbReady()
+      // Episodic heal có thể re-embed hàng chục episode (API call + vài phút)
+      // — chạy nền, không chặn boot; desync check bên trong sẽ skip khi đã khớp.
+      const { maybeHealEpisodicStores } = await import('./lib/episodic-memory/backfill')
+      void maybeHealEpisodicStores().then((r) => {
+        if (!r.healed) {
+          console.log(`[Boot Heal] Episodic stores: skip — ${r.reason}`)
+        }
+      })
+    } catch (err) {
+      console.warn(
+        '[Boot Heal] Episodic heal failed (non-fatal):',
+        err instanceof Error ? err.message : String(err)
+      )
+    }
+    try {
+      await ensureDbReady()
+      const { maybeHealModelVersionTracking } = await import('./lib/kb-routing/drift-heal')
+      await maybeHealModelVersionTracking()
+    } catch (err) {
+      console.warn(
+        '[Boot Heal] Model-version tracking failed (non-fatal):',
+        err instanceof Error ? err.message : String(err)
+      )
+    }
+  })()
+}
+
 // ============================================================================
 // ROUND-32 P3-c — DAILY SQLITE BACKUP (tự động, best-effort)
 // ============================================================================

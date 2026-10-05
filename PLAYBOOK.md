@@ -80,3 +80,25 @@ Tokens: 9.4k sent, 160 received.
   upsert) — dùng `deterministicUuid` từ `src/lib/deterministic-uuid.ts`.
 - Prisma lưu DateTime trong SQLite là INTEGER epoch-ms — SQL raw trên cột này dùng
   `date(timestamp/1000, 'unixepoch')`, KHÔNG dùng `strftime('...', timestamp)` (NULL).
+
+## ROUND-36 — Heal "bộ não" sau reset + vận hành scripts
+
+- **Env trap áp dụng cho SCRIPTS luôn** (chỉ test trước giờ): mọi script bun import
+  Prisma (`scripts/*.ts`) PHẢI chạy `env -u DATABASE_URL bun scripts/...` — shell
+  sandbox xuất DATABASE_URL=/home/z/my-project/... (file TỒN TẠI nên leak-guard của
+  db.ts tôn trọng → mở nhầm DB scaffold). App pm2 an toàn (pm2-start.sh unset).
+- **Heal episodic sau reset** (mất Qdrant nhưng còn Neo4j): boot tự check desync +
+  heal nền (idempotent). Chạy tay: `env -u DATABASE_URL bun scripts/heal-episodic.ts`
+  — re-embed episodes từ Neo4j contextSummary + update embedding_id + backfill SQLite
+  mirror. Tắt bằng env `TMO_EPISODIC_HEAL=0`.
+- **Heal communities sau reset**: lazy auto-detect đã có (chạy trên factual chat đầu
+  tiên), hoặc chủ động:
+  `pm2 start scripts/one-shot-community-detect.ts --name community-heal --no-autorestart`
+  (KHÔNG quên --no-autorestart — pm2 restart process exit-0 thành vòng lặp; ~2 phút
+  cho 96k nodes nhờ compact, embed 351 community summaries dùng lại L2 cache).
+- **Model-version tracking** (drift detection Prop 4.1): boot tự seed
+  EmbeddingModelVersion + stamp `embedding_model_version` cho chunk point cũ;
+  `upsertChunks()` tự stamp mọi chunk mới. Đổi model embed → chạy lại
+  `scripts/reembed-all.ts` (drift check giờ so được).
+- **Đổi dim qua env NVIDIA_EMBED_DIMENSIONS ≠ 2048** giờ lộ ngay health degraded
+  (envDim.mismatch) — trước đây chỉ FATAL console.

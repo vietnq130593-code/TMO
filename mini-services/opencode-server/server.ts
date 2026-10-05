@@ -53,6 +53,11 @@ interface SessionInfo {
   model: string | null
   provider: string | null
   prompt: string | null
+  /** ROUND-36 (C-1): system prompt enriched (KB entities/corrections/insights
+   *  + workspace context) do chat route build nhưng TRƯỚC ĐÂY bị vứt —
+   *  createOpenCodeSession chỉ gửi {prompt, model}. Lưu đây để mọi consumer
+   *  (Code tab, executor tương lai) đọc lại được ngữ cảnh đã enrich. */
+  systemPrompt?: string | null
   status: 'active' | 'paused' | 'completed' | 'failed'
   filesTouched: string[]
   toolsUsed: string[]
@@ -160,7 +165,7 @@ app.get('/sessions', (c) => {
 
 app.post('/sessions', async (c) => {
   const body = await c.req.json()
-  const { prompt, model, provider } = body
+  const { prompt, model, provider, systemPrompt } = body
   if (!prompt) return c.json({ error: 'prompt is required' }, 400)
 
   const id = `oc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`
@@ -168,6 +173,7 @@ app.post('/sessions', async (c) => {
     id, sessionId: id,
     model: model || null, provider: provider || null,
     prompt, status: 'active',
+    systemPrompt: typeof systemPrompt === 'string' && systemPrompt.trim() ? systemPrompt : null,
     filesTouched: [], toolsUsed: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),

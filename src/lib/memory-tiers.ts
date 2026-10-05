@@ -463,16 +463,6 @@ async function archiveSingleMemory(mem: {
   }
 }
 
-/** @qdrant/js-client-rest ≥1.19 đã bỏ method `search` (deprecated, thay bằng `query`).
- *  Giữ nguyên runtime call (sẽ throw TypeError → catch → fallback prefix-clustering
- *  bên dưới) — chỉ mô tả lại type của API cũ. */
-interface LegacyQdrantSearchClient {
-  search(
-    collection: string,
-    request: Record<string, unknown>,
-  ): Promise<Array<{ payload?: Record<string, unknown> }>>
-}
-
 /**
  * Cluster memories by vector similarity.
  * Uses Qdrant search to find similar memories, groups them.
@@ -497,20 +487,25 @@ async function clusterBySimilarity<T extends { id: string; content: string; qdra
     // Find similar memories via Qdrant (if this memory has a point ID)
     if (mem.qdrantPointId) {
       try {
-        // Use the existing point's vector to search for similar
-        const similar = await (qdrant as unknown as LegacyQdrantSearchClient).search('agent_memory', {
+        // ROUND-36 (B-Y-1): qdrant.search() đã bị gỡ khỏi @qdrant/js-client-rest
+        // ≥1.19 — bản cũ địch tình giữ runtime call chết (throw → fallback
+        // prefix) nên semantic clustering KHÔNG BAO GIỜ chạy — WARM→COLD luôn
+        // nhóm theo 50-ký-tự-đầu. Giờ: query() (pattern đã migrate ở
+        // agent-memory.ts:275) + with_payload: true (bản cũ đặt false nhưng vẫn
+        // đọc result.payload.memoryId — logic chết không bao giờ match).
+        const similar = await qdrant.query('agent_memory', {
+          query: await getVectorForMemory(mem),
           filter: {
             must: [
               { key: 'memoryId', match: { any: memories.filter(m => !assigned.has(m.id)).map(m => m.id) } },
             ],
           },
-          vector: await getVectorForMemory(mem),
           limit: 10,
           score_threshold: SIMILARITY_THRESHOLD,
-          with_payload: false,
+          with_payload: true,
         })
 
-        for (const result of similar) {
+        for (const result of similar.points) {
           const matchedMem = memories.find(m => m.id === (result.payload?.memoryId as string))
           if (matchedMem && !assigned.has(matchedMem.id)) {
             cluster.push(matchedMem)

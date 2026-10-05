@@ -25,7 +25,7 @@ const COLLECTION_DOCUMENTS = process.env.QDRANT_COLLECTION_DOCUMENTS || 'theopus
 const COLLECTION_CHUNKS = process.env.QDRANT_COLLECTION_CHUNKS || 'theopus_chunks'
 
 /** Embedding dimension — sourced from @/lib/embeddings (single source of truth) */
-import { getEmbeddingDimension } from './embeddings'
+import { getEmbeddingDimension, getCurrentEmbeddingModelVersion } from './embeddings'
 const EMBEDDING_DIMENSION = getEmbeddingDimension()
 
 const globalForQdrant = globalThis as unknown as {
@@ -260,6 +260,17 @@ async function createPayloadIndexes(): Promise<void> {
     })
 
     // Chunks collection indexes
+    // ROUND-36 (B-Y-2): text index trên `content` — tăng tốc full-text match
+    // filter ({ match: { text } }) dùng bởi hybridSearch keywords. Không có
+    // index thì Qdrant vẫn chạy đúng nhưng quét full payload mỗi query.
+    try {
+      await qdrant.createPayloadIndex(COLLECTION_CHUNKS, {
+        field_name: 'content',
+        field_schema: { type: 'text', tokenizer: 'multilingual' },
+      })
+    } catch {
+      // index text đã có từ lần chạy trước — bỏ qua
+    }
     await qdrant.createPayloadIndex(COLLECTION_CHUNKS, {
       field_name: 'document_id',
       field_schema: 'keyword',
@@ -294,6 +305,9 @@ export async function checkQdrantHealth(): Promise<{
   version?: string
   documentsCollection?: { exists: boolean; pointCount?: number }
   chunksCollection?: { exists: boolean; pointCount?: number; vectorCount?: number; dimExpected?: number; dimActual?: number; dimMismatch?: boolean }
+  /** ROUND-36 (B-Y-5): env NVIDIA_EMBED_DIMENSIONS mâu thuẫn với EMBEDDING_DIMENSION
+   * — boot assert (embeddings.ts) chỉ console.error; đây là chỗ lộ ra health. */
+  envDim?: { expected: number; envValue: number; mismatch: boolean }
   error?: string
 }> {
   try {
@@ -301,6 +315,21 @@ export async function checkQdrantHealth(): Promise<{
     const collections = await qdrant.getCollections()
     if (!collections) {
       return { connected: false, error: 'Qdrant returned empty response' }
+    }
+
+    // ROUND-36 (B-Y-5): lộ mâu thuẫn env-dim lên health (bản cũ chỉ FATAL
+    // console ở embeddings.ts — phát hiện không lộ ra = bằng không với vận hành)
+    const envDimRaw = process.env.NVIDIA_EMBED_DIMENSIONS?.trim()
+    if (envDimRaw) {
+      const envDim = parseInt(envDimRaw, 10)
+      if (Number.isFinite(envDim) && envDim !== EMBEDDING_DIMENSION) {
+        const err = new Error(`NVIDIA_EMBED_DIMENSIONS=${envDim} mâu thuẫn EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION} — mọi embed sinh ${envDim}-dim sẽ bị dim guard chặn. Sửa env hoặc đổi model.`)
+        return {
+          connected: false,
+          envDim: { expected: EMBEDDING_DIMENSION, envValue: envDim, mismatch: true },
+          error: err.message,
+        }
+      }
     }
 
     // Get version info if available
@@ -638,6 +667,13 @@ export async function upsertChunks(
   }>
 ): Promise<boolean> {
   try {
+    // ROUND-36 (B-Y-4): stamp embedding_model_version cho MỌI chunk point ghi
+    // qua cửa chung này — trước đây chỉ writeback/auto-learn stamp riêng nên
+    // chunk từ pipeline chính luôn thiếu field → checkModelDrift() warn nhiễu
+    // mọi KB search và drift detection thật (đổi model embed) không phân biệt
+    // được. Caller đã stamp riêng thì tôn trọng (không đè).
+    const modelVersion = await getCurrentEmbeddingModelVersion().catch(() => null)
+
     // Batch upsert in chunks of 100 (Qdrant recommended batch size)
     const BATCH_SIZE = 100
     for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
@@ -648,7 +684,10 @@ export async function upsertChunks(
           points: batch.map(c => ({
             id: c.id,
             vector: c.vector,
-            payload: c.payload,
+            payload:
+              modelVersion && !c.payload.embedding_model_version
+                ? { ...c.payload, embedding_model_version: modelVersion }
+                : c.payload,
           })),
         })
       })
@@ -973,16 +1012,39 @@ export async function hybridSearch(
       must.push({ should })
     }
 
+    // ROUND-36 (B-Y-2): keywords TRƯỚC ĐÂY là option chết — khai báo trong
+    // signature nhưng không bao giờ được đọc → "Text Search fallback" của
+    // /api/query thực chất là lần chạy lại vector query với ngưỡng thấp hơn
+    // (provider chết = không còn đường lexical nào). Giờ: keywords thành
+    // full-text match filter ({ match: { text } }) trên payload `content`
+    // — semantics any-of (should) giống entityNames, đã verify sống trên
+    // Qdrant 1.13.2 (probe curl full-text match trả đúng chunk chứa từ khoá).
+    if (options?.keywords && options.keywords.length > 0) {
+      const should = options.keywords.map(kw => ({
+        key: 'content',
+        match: { text: kw },
+      }))
+      must.push({ should })
+    }
+
     const filter = must.length > 0 ? { must } : undefined
+
+    // ROUND-36 (B-Y-2): vector rỗng (embed provider chết) → query: null +
+    // filter — Qdrant Query API trả các point khớp filter (score 0) = lexical
+    // fallback THẢT không cần embedding. Có vector → semantic + lexical kết
+    // hợp đúng nghĩa hybrid.
+    const hasVector = Array.isArray(queryVector) && queryVector.length > 0
 
     // Phase 6 SMOLAB Prop 4 — qdrant.search() → qdrant.query() migration.
     const results = await withQdrantRetry(async () =>
       qdrant.query(COLLECTION_CHUNKS, {
-        query: queryVector,
+        query: hasVector ? queryVector : null,
         filter,
         limit: options?.limit || 20,
         with_payload: true,
-        score_threshold: options?.minScore || 0.5,
+        // score_threshold chỉ áp khi có vector — filter-only mode mọi điểm
+        // đều score 0, đặt ngưỡng sẽ lọc sạch kết quả
+        ...(hasVector ? { score_threshold: options?.minScore || 0.5 } : {}),
       })
     )
 

@@ -280,10 +280,16 @@ async function routeToOpenCode(
       ? enrichedSystemPrompt + `\n\n${workspaceCtxForOC.text}`
       : enrichedSystemPrompt
 
-    // Try to create an OpenCode session with the prompt + enriched context
+    // ROUND-36 (C-1): TRƯỚC ĐÂY enriched system prompt được build xong
+    // (KB entities + corrections + insights + workspace) nhưng createOpenCodeSession
+    // chỉ nhận {prompt, model} — toàn bộ enrichment rơi đất, response vẫn
+    // claim "Session đã được gửi với Knowledge Base context" (nói dối).
+    // Giờ: deliver thật systemPrompt vào session — consumer (Code tab /
+    // executor) đọc lại được đầy đủ ngữ cảnh.
     const session = await createOpenCodeSession({
       prompt: userMessage,
       model: model || undefined,
+      systemPrompt: workspaceAwarePrompt,
     })
 
     if (!session) return null
@@ -335,7 +341,7 @@ async function routeToOpenCode(
 
     // Return a response indicating the session was created with KB enrichment
     return NextResponse.json({
-      content: `🔧 **Đã tạo Knowledge-Aware OpenCode Session** — "${userMessage.slice(0, 80)}${userMessage.length > 80 ? '...' : ''}"${workspaceCtxForOC.root ? `\n\n📁 **Workspace root**: \`${workspaceCtxForOC.root}\`` : ''}\n\nSession đã được gửi đến OpenCode Server với Knowledge Base context. Agent sẽ:\n1. 📖 Đọc file liên quan${workspaceCtxForOC.root ? ` trong workspace \`${workspaceCtxForOC.root}\`` : ''}\n2. 🔍 Tìm kiếm Knowledge Base qua MCP Bridge\n3. 📝 Kiểm tra corrections từ sessions trước\n4. ✏️ Phân tích và thực hiện chỉnh sửa\n5. 🔧 Chạy LSP diagnostics để kiểm tra\n6. 💡 Tự động capture insights mới vào KB${enrichmentInfo}\n📋 **Session ID**: ${session.sessionId || session.id}\n💻 Xem tiến trình trong tab **Code** → Active Sessions\n\n🤖 _Agent đang xử lý... Xem real-time progress tại Code Tab_`,
+      content: `🔧 **Đã tạo Knowledge-Aware OpenCode Session** — "${userMessage.slice(0, 80)}${userMessage.length > 80 ? '...' : ''}"${workspaceCtxForOC.root ? `\n\n📁 **Workspace root**: \`${workspaceCtxForOC.root}\`` : ''}\n\nSession đã được tạo trên OpenCode Server kèm system prompt enriched từ Knowledge Base (${workspaceAwarePrompt.length.toLocaleString()} ký tự — xem Code Tab → session detail). Agent sẽ:\n1. 📖 Đọc file liên quan${workspaceCtxForOC.root ? ` trong workspace \`${workspaceCtxForOC.root}\`` : ''}\n2. 🔍 Tìm kiếm Knowledge Base qua MCP Bridge\n3. 📝 Kiểm tra corrections từ sessions trước\n4. ✏️ Phân tích và thực hiện chỉnh sửa\n5. 🔧 Chạy LSP diagnostics để kiểm tra\n6. 💡 Tự động capture insights mới vào KB${enrichmentInfo}\n📋 **Session ID**: ${session.sessionId || session.id}\n💻 Xem tiến trình trong tab **Code** → Active Sessions\n\n🤖 _Agent đang xử lý... Xem real-time progress tại Code Tab_`,
       model: model || 'opencode',
       provider: 'opencode',
       sessionId: sessionId || `session-${Date.now()}`,

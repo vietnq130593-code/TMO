@@ -98,6 +98,9 @@ export interface OpenCodeSession {
   id: string
   sessionId: string
   model: string | null
+  /** ROUND-36 (C-1): system prompt enriched đính kèm session (từ chat route
+   *  — KB entities/corrections/insights + workspace context). */
+  systemPrompt?: string | null
   provider: string | null
   prompt: string | null
   status: 'active' | 'paused' | 'completed' | 'failed'
@@ -121,6 +124,10 @@ export async function createOpenCodeSession(params: {
   prompt: string
   model?: string
   provider?: string
+  /** ROUND-36 (C-1): system prompt enriched — TRƯỚC ĐÂY chat route build
+   *  xong prompt giàu ngữ cảnh rồi chỉ gửi {prompt, model} → enrichment
+   *  rơi đất (chỉ systemPromptLength echo về). Giờ deliver thật. */
+  systemPrompt?: string
 }): Promise<OpenCodeSession | null> {
   try {
     const res = await opencodeFetch('/sessions', {

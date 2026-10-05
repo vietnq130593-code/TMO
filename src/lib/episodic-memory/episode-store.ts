@@ -23,7 +23,7 @@ import {
 import { deterministicUuid } from '@/lib/deterministic-uuid'
 import { EPISODIC_THRESHOLDS } from './types'
 
-const COLLECTION_EPISODES = 'theopus_episodes'
+export const COLLECTION_EPISODES = 'theopus_episodes'
 
 // ROUND-32 P0-3: deterministicUuid chuyển sang module chung src/lib/deterministic-uuid.ts
 // (cùng implementation FNV-1a — không đổi hành vi) để auto-learn và các điểm cần
