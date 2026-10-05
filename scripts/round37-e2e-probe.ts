@@ -168,6 +168,133 @@ async function main() {
     check('V5 knowledge-bridge', false, err instanceof Error ? err.message : String(err))
   }
 
+  // ─────────── ROUND-38 — RÀ SOÁT LƯỢT 1: 7 fix chính sống thật? ───────────
+  console.log('\n── R38-B1: CodeTeamCheckpoint durable row (model mới) ──')
+  try {
+    const { createCheckpointManager } = await import('../src/lib/state-management/checkpoint-manager')
+    const probeSess = `e2e-probe-r38-ckpt-${Date.now()}`
+    const cm = createCheckpointManager(probeSess)
+    const cp = await cm.saveCheckpoint({
+      progress: {
+        planId: probeSess, totalSteps: 6, completedSteps: 2, failedSteps: 0, currentStep: 2,
+        steps: {}, totalTokensUsed: 12345, totalTokensBudgeted: 200000, totalTimeSpent: 60000,
+        errors: [], startedAt: new Date().toISOString(), lastUpdatedAt: new Date().toISOString(),
+      },
+      context: [], routing: { mode: 'B', tier: 2, score: 5, reasoning: 'probe', parts: [] } as never,
+      spec: 'probe-spec', pipeline: [], currentStepIndex: 2,
+    })
+    const row = await db.codeTeamCheckpoint.findFirst({ where: { sessionId: probeSess } })
+    // pipeline rỗng + currentStepIndex 2 ≥ length 0 → determinePhase trả 'after_g3_optimize'
+    check('R38-B1 checkpoint row THẬT được ghi', !!row && row.id === cp.id && row.phase === 'after_g3_optimize',
+      `id=${cp.id} phase=${row?.phase} (round-37: delegate undefined → throw bị nuốt im lặng — 0 row)`)
+    const listed = await cm.listCheckpoints()
+    check('R38-B1b listCheckpoints đọc lại được', listed.length >= 1, `${listed.length} checkpoint(s)`)
+    await db.codeTeamCheckpoint.deleteMany({ where: { sessionId: probeSess } })
+  } catch (err) {
+    check('R38-B1 checkpoint', false, err instanceof Error ? err.message : String(err))
+  }
+
+  console.log('\n── R38-B2: parseToolResultLogEntry hết [object Object] ──')
+  {
+    const { parseToolResultLogEntry } = await import('../src/lib/episodic-memory/agent-brain')
+    const objEntry = parseToolResultLogEntry(JSON.stringify({ tool: 'file_read', success: false, result: { error: 'File not found: /tmp/x.ts' } }))
+    const strEntry = parseToolResultLogEntry(JSON.stringify({ tool: 'db_query', success: true, result: 'SELECT 1 → 1 row' }))
+    const badEntry = parseToolResultLogEntry('not-json{{')
+    check('R38-B2 object result → JSON thật',
+      objEntry.text.includes('File not found') && !objEntry.text.includes('[object Object]') && objEntry.success === false,
+      `text="${objEntry.text.slice(0, 50)}"`)
+    check('R38-B2b string result giữ nguyên', strEntry.text === 'SELECT 1 → 1 row' && strEntry.success === true, 'string passthrough')
+    check('R38-B2c entry hỏng JSON → fail-open', badEntry.tool === 'unknown' && badEntry.success === false, 'catch path')
+  }
+
+  console.log('\n── R38-F6: ε-greedy randomize trong pool (không còn luôn rank-6) ──')
+  {
+    const lessons8 = Array.from({ length: 8 }, (_, i) => ({ id: `l${i}`, confidence: 0.9 - i * 0.05 }))
+    // Pool eligible = l5,l6,l7 (đủ ngưỡng). rng: lần 1 = 0.01 (< ε → explore),
+    // lần 2 = 0.6 → index floor(0.6*3)=1 → l6 (bản cũ luôn trả l5)
+    let rngCalls = 0
+    const picked = applyEpsilonExploration(lessons8, { rng: () => (rngCalls++ === 0 ? 0.01 : 0.6), epsilon: 0.15 })
+    const slot = picked[4] as { id: string; exploration?: boolean }
+    check('R38-F6 exploration chọn NGẪU NHIÊN trong pool', slot.id === 'l6' && slot.exploration === true,
+      `slot cuối → ${slot.id} (bản cũ deterministic luôn l5)`)
+  }
+
+  console.log('\n── R38-Y2: brain cache invalidate sau recordAgentEpisode ──')
+  {
+    const g = globalThis as unknown as { __tmoAgentBrainCache?: Map<string, { family?: string; agentName?: string }> }
+    await buildAgentBrainBlock({ family: 'sub-agent', agentName: 'R38-CACHE-PROBE', task: 'probe task cho cache invalidation' })
+    const cache = g.__tmoAgentBrainCache
+    const hasEntry = cache ? [...cache.values()].some(v => v.family === 'sub-agent' && v.agentName === 'R38-CACHE-PROBE') : false
+    recordAgentEpisode({
+      family: 'sub-agent', agentName: 'R38-CACHE-PROBE', goal: 'probe invalidate', sessionId: 'e2e-r38-cache',
+      outcome: 'SUCCESS', stopReason: 'complete', toolEvidence: [{ tool: 'probe', success: true, text: 'ok' }],
+    })
+    const stillThere = cache ? [...cache.values()].some(v => v.family === 'sub-agent' && v.agentName === 'R38-CACHE-PROBE') : true
+    check('R38-Y2 cache bị xoá sau record', hasEntry && !stillThere,
+      hasEntry ? 'entry được populate rồi bị invalidate đúng (retry không ăn stale brain)' : 'entry không populate (memory trống → empty-cache 15s cũng phải bị xoá)')
+  }
+
+  console.log('\n── R38-V5-1/V5-6: searchUserKB dùng delta + entity search chạy ──')
+  try {
+    // V2a-7 đã đặt delta +0.1 ở trên (tighten_refusal_threshold) — giờ chứng minh
+    // consumer ĐƯỜNG LIVE (searchUserKB) thật sự đọc nó (monkey-patch console).
+    const logs: string[] = []
+    const origLog = console.log
+    console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')); origLog(...args) }
+    try {
+      const { searchUserKB } = await import('../src/lib/kb-routing/kb-access')
+      const kb = await searchUserKB('SQL injection protection', 'r38-probe-agent', { topK: 3 })
+      check('R38-V5-1 entity search CHẠY cho agent path', Array.isArray(kb.entities),
+        `${kb.entities.length} entities (bản cũ: agentId undefined → skip toàn bộ layer)`)
+    } finally {
+      console.log = origLog
+    }
+    const tightened = logs.find(l => l.includes('TIGHTENED'))
+    check('R38-V5-6 delta áp vào dense threshold (đường live)', !!tightened, tightened?.slice(0, 100) ?? 'không thấy log TIGHTENED — delta chưa tới searchChunks!')
+  } catch (err) {
+    check('R38-V5 searchUserKB live', false, err instanceof Error ? err.message : String(err))
+  }
+
+  console.log('\n── R38-F4: stale pending adaptation log sweeper predicate ──')
+  {
+    const staleId = `adapt-stale-r38-${Date.now()}`
+    await db.strategyAdaptationLog.create({
+      data: {
+        id: staleId, sessionId: 'e2e-r38-stale', patternId: null,
+        fromStrategy: 'a', toStrategy: 'b', reason: 'probe stale', confidence: 0.5,
+        successful: null, createdAt: new Date(Date.now() - 72 * 3600_000), // 3 ngày trước
+      },
+    })
+    // Cùng predicate sweeper dùng (boot+25m / 24h một lần — ở đây chạy tay)
+    const cutoff = new Date(Date.now() - 48 * 3600_000)
+    const res = await db.strategyAdaptationLog.updateMany({
+      where: { successful: null, createdAt: { lt: cutoff } },
+      data: { successful: false },
+    })
+    const closed = await db.strategyAdaptationLog.findUnique({ where: { id: staleId } })
+    check('R38-F4 stale pending >48h được đóng', res.count >= 1 && closed?.successful === false,
+      `đóng ${res.count} row — successful=${closed?.successful}`)
+    await db.strategyAdaptationLog.deleteMany({ where: { sessionId: 'e2e-r38-stale' } })
+  }
+
+  console.log('\n── R38-V1: collections-health API 3 cặp desync + null-on-outage shape ──')
+  try {
+    const res = await fetch('http://localhost:3000/api/storage/collections-health')
+    const json = (await res.json()) as {
+      qdrant: Array<{ name: string; exists: boolean; pointCount?: number }>
+      desync: { episodesQdrantNeo4j: number | null; episodesNeo4jSqlite: number | null; lessonsNeo4jSqlite: number | null }
+      episodic: { episodes: number; lessons: number }
+    }
+    const sixCells = json.qdrant?.length === 6
+    const threePairs = json.desync && 'episodesNeo4jSqlite' in json.desync && 'episodesQdrantNeo4j' in json.desync && 'lessonsNeo4jSqlite' in json.desync
+    const namesOk = ['theopus_documents', 'theopus_chunks', 'theopus_episodes', 'theopus_communities', 'agent_memory', 'task_context']
+      .every(n => json.qdrant.some(c => c.name === n))
+    check('R38-V1 6 ô + 3 cặp desync + tên collection', sixCells && !!threePairs && namesOk,
+      `qdrant=${json.qdrant?.length} ô, desync 3 cặp=${threePairs}, episodic Neo4j episodes=${json.episodic?.episodes} lessons=${json.episodic?.lessons}`)
+  } catch (err) {
+    check('R38-V1 collections-health (server phải đang chạy :3000)', false, err instanceof Error ? err.message : String(err))
+  }
+
   // ─────────── TỔNG KẾT ───────────
   console.log('\n════════════════════════════════════════════')
   console.log(`KẾT QUẢ: ${PASS.length} pass / ${FAIL.length} fail`)
