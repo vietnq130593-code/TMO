@@ -457,6 +457,146 @@ async function main() {
     check('R39-4 ENABLE_MASTER_ORCHESTRATOR BẬT (default true + .env true)', false, err instanceof Error ? err.message : String(err))
   }
 
+  // ════════ ROUND-40: 5 check — explorationIds xuyên suốt + T1 nhãn + /run background + abort-fix ════════
+
+  // R40-1: PARTIAL ±confidence exploration lesson cho family RESEARCH-TEAM
+  // (đường recorder thật — trước round-39/V3-GAP chỉ goal-loop + code-team có
+  // passthrough; research-team giờ truyền explorationLessonIds xuyên suốt)
+  try {
+    const lessonId = `lesson-e2e-r40-${Date.now()}`
+    await db.lessonRecord.deleteMany({ where: { id: lessonId } }).catch(() => {})
+    await db.lessonRecord.create({
+      data: {
+        id: lessonId,
+        statement: 'Khi chạy e2e probe r40, kiểm tra exploration grading cho family research-team',
+        triggerCondition: 'khi chạy e2e probe r40 research partial',
+        appliesTo: JSON.stringify(['e2e_probe_r40', 'research_team_grading']),
+        rootCause: 'REASONING_ERROR',
+        source: 'SELF_DERIVED',
+        confidence: 0.5,
+        timesApplied: 0, timesValidated: 0, timesFailed: 0, needsReview: false,
+      },
+    })
+    recordAgentEpisode({
+      family: 'research-team',
+      agentName: 'E2E-R40-PARTIAL-T1 (task probe40)',
+      goal: 'E2E probe round-40 — PARTIAL exploration grading cho family research-team',
+      sessionId: 'e2e-probe-round40',
+      outcome: 'PARTIAL',
+      stopReason: 'complete',
+      appliedLessonIds: [lessonId],
+      explorationLessonIds: [lessonId],
+      toolEvidence: [
+        { tool: 'e2e_probe_r40', success: false, text: 'Error: research probe failure — attribution match exploration lesson' },
+      ],
+    })
+    console.log('    đợi recorder nền 8s...')
+    await new Promise(r => setTimeout(r, 8000))
+    const lesson = await db.lessonRecord.findUnique({ where: { id: lessonId } })
+    check('R40-1 PARTIAL −0.05 exploration lesson cho family research-team (recorder thật)',
+      !!lesson && Math.abs(lesson.confidence - 0.45) < 1e-6 && lesson.timesFailed === 0,
+      lesson ? `confidence 0.5 → ${lesson.confidence.toFixed(2)}, timesFailed=${lesson.timesFailed}` : 'không thấy lesson')
+    await db.lessonRecord.deleteMany({ where: { id: lessonId } }).catch(() => {})
+  } catch (err) {
+    check('R40-1 PARTIAL −0.05 exploration lesson cho family research-team (recorder thật)', false, err instanceof Error ? err.message : String(err))
+  }
+
+  // R40-2: STATIC CONTRACT — mọi call-site CONSOLIDATE đều truyền explorationLessonIds
+  // (chặn regression "quên truyền" — dạng bug V3-GAP round-39: plumbing có sẵn
+  // ở recorder nhưng consumer drop field)
+  try {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const root = join(import.meta.dir, '..')
+    const files = [
+      { f: 'src/lib/research-team/king/engine.ts', label: 'recordResearchEpisode T1/G2/G3' },
+      { f: 'src/lib/research-team/g1/engine.ts', label: 'recordG1Episode' },
+      { f: 'src/lib/code-team/workflow-engine.ts', label: 'code-team step CONSOLIDATE' },
+      { f: 'src/lib/subagent-delegate.ts', label: 'sub-agent CONSOLIDATE' },
+    ] as const
+    const results: string[] = []
+    let allOk = true
+    for (const { f, label } of files) {
+      const src = readFileSync(join(root, f), 'utf8')
+      // Hàm record* phải có mặt field explorationLessonIds (khai báo + truyền)
+      const declares = /explorationLessonIds/.test(src)
+      results.push(`${label}: ${declares ? 'có field' : 'THIẾU'}`)
+      if (!declares) allOk = false
+    }
+    check('R40-2 explorationLessonIds truyền xuyên suốt 4 gia đình (static contract)', allOk, results.join(' | '))
+  } catch (err) {
+    check('R40-2 explorationLessonIds truyền xuyên suốt 4 gia đình (static contract)', false, err instanceof Error ? err.message : String(err))
+  }
+
+  // R40-3: mapT1LismaOutcome — LLM-death FAILURE (fix V1-T1), 4 nhánh pure
+  try {
+    const { mapT1LismaOutcome } = await import('../src/lib/research-team/king/engine')
+    const clean = mapT1LismaOutcome({ escalated: false, regressionFound: false })
+    const selfFixed = mapT1LismaOutcome({ escalated: false, regressionFound: true })
+    const llmDeath = mapT1LismaOutcome({ escalated: true, regressionFound: false, escalateReason: 'LLM unavailable — manual review needed' })
+    const regressionEsc = mapT1LismaOutcome({ escalated: true, regressionFound: true, escalateReason: 'Regression not fixed' })
+    const roundCap = mapT1LismaOutcome({ escalated: true, regressionFound: false, escalateReason: 'Regression not fixed after 3 rounds' })
+    check('R40-3 mapT1LismaOutcome — LLM-death FAILURE (thống nhất G2/G3)',
+      clean === 'SUCCESS' && selfFixed === 'PARTIAL' && llmDeath === 'FAILURE' && regressionEsc === 'FAILURE' && roundCap === 'PARTIAL',
+      `clean=${clean}, selfFix=${selfFixed}, llmDeath=${llmDeath} (FIX), regressionEsc=${regressionEsc}, roundCap=${roundCap}`)
+  } catch (err) {
+    check('R40-3 mapT1LismaOutcome — LLM-death FAILURE (thống nhất G2/G3)', false, err instanceof Error ? err.message : String(err))
+  }
+
+  // R40-4: POST /run — background 202 + in-flight 409 (fix #40-2 — HTTP thật)
+  // Cần PM2 :3000 đang chạy (môi trường chuẩn có keepalive). Mission tạo qua lib
+  // (không tốn LLM classify); lifecycle nền sẽ crash sớm khi mission bị dọn —
+  // catch trong wrapper route (log, không tác dụng phụ).
+  try {
+    const { createMission } = await import('../src/lib/research-team/mission-store')
+    const probeMission = await createMission({
+      request: 'E2E probe round-40 — /run background mode + in-flight guard',
+      title: 'E2E-R40-run-background',
+      missionType: 'M1',
+      tier: 'T1',
+      confidence: { signals: ['e2e-probe-r40'], conflicts: [], level: 'MEDIUM' },
+    })
+    const base = 'http://localhost:3000'
+    const r1 = await fetch(`${base}/api/research/missions/${probeMission.id}/run`, { method: 'POST' })
+    const j1 = await r1.json() as { status?: string }
+    const r2 = await fetch(`${base}/api/research/missions/${probeMission.id}/run`, { method: 'POST' })
+    const j2 = await r2.json() as { status?: string; error?: string }
+    check('R40-4 POST /run → 202 background + 409 in-flight guard (fix #40-2)',
+      r1.status === 202 && j1.status === 'started' && r2.status === 409 && j2.status === 'error',
+      `lần1=${r1.status}/${j1.status} (trước đây: blocking đến chết), lần2=${r2.status} (${(j2.error || '').slice(0, 60)}…)`)
+    // dọn mission — lifecycle nền getMission throw → catch trong wrapper (log CRASH, vô hại)
+    await db.researchMission.delete({ where: { id: probeMission.id } }).catch(() => {})
+  } catch (err) {
+    check('R40-4 POST /run → 202 background + 409 in-flight guard (fix #40-2)', false, `${err instanceof Error ? err.message : String(err)} — (probe này cần PM2 :3000 đang chạy)`)
+  }
+
+  // R40-5: STATIC — workflow route cancel() KHÔNG abort khi continueOnDisconnect=true
+  // (fix #40-1: trước đây cả 2 nhánh đều abortController.abort() → engine abort
+  // ở step kế tiếp vì clientDisconnected engine-side không bao giờ được set)
+  try {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const src = readFileSync(join(import.meta.dir, '..', 'src/app/api/code-team/workflow/route.ts'), 'utf8')
+    // Trích khối cancel() {...}
+    const m = src.match(/cancel\(\)\s*\{[\s\S]*?\n\s*\},/)
+    const cancelBlock = m ? m[0] : ''
+    // Bỏ comment dòng trước khi check — fix round-40 của chính probe: comment
+    // giải thích "trước đây nhánh này VẪN gọi abortController.abort()" khiến
+    // .includes() bắt nhầm chuỗi trong comment (bài học round-38 lặp lại:
+    // assertion phải đo CODE, không đo prose).
+    const stripComments = (block: string) =>
+      block.split('\n').map(l => l.replace(/\/\/.*$/, '')).join('\n')
+    // Nhánh continue phải KHÔNG abort; nhánh !continue phải abort
+    const elseBranch = cancelBlock.split('} else {')[1] || ''
+    const noAbortInElse = !stripComments(elseBranch).includes('abortController.abort()')
+    const ifBranch = cancelBlock.split('} else {')[0] || ''
+    const abortInIf = stripComments(ifBranch).includes('abortController.abort()')
+    check('R40-5 workflow cancel(): continue=true KHÔNG abort (fix #40-1)', m !== null && noAbortInElse && abortInIf,
+      noAbortInElse && abortInIf ? 'nhánh continue không abort (workflow chạy nền), nhánh old-behavior vẫn abort' : `cancel block parse: if=${abortInIf}, else=${noAbortInElse}`)
+  } catch (err) {
+    check('R40-5 workflow cancel(): continue=true KHÔNG abort (fix #40-1)', false, err instanceof Error ? err.message : String(err))
+  }
+
   // ─────────── TỔNG KẾT ───────────
   console.log('\n════════════════════════════════════════════')
   console.log(`KẾT QUẢ: ${PASS.length} pass / ${FAIL.length} fail`)
