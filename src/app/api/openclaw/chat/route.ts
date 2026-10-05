@@ -276,9 +276,27 @@ async function routeToOpenCode(
 
     // WORKSPACE CONTEXT (user request 2026-08-28): code session cũng cần biết root
     const workspaceCtxForOC = await buildWorkspaceContext()
-    const workspaceAwarePrompt = workspaceCtxForOC.text
+    let workspaceAwarePrompt = workspaceCtxForOC.text
       ? enrichedSystemPrompt + `\n\n${workspaceCtxForOC.text}`
       : enrichedSystemPrompt
+
+    // ━━━ ROUND-37 V3.4 — EPISODIC BRAIN PRE-ACT (opencode-route nối vào bộ não) ━━━
+    // Trước đây chỉ goal-loop có PRE-ACT — OpenCode session (route code-task
+    // về opencode server) chạy KHÔNG ký ức. Giờ append block bài học + lỗi
+    // tương tự từ episodic memory vào system prompt của session (deliver
+    // thật qua C-1 round-36). Fail-open 4s — không chặn routing.
+    try {
+      const { buildAgentBrainBlock } = await import('@/lib/episodic-memory/agent-brain')
+      const brain = await buildAgentBrainBlock({
+        family: 'opencode',
+        agentName: 'OpenCode session',
+        task: userMessage.slice(0, 1500),
+      })
+      if (brain.promptBlock) {
+        workspaceAwarePrompt += brain.promptBlock
+        console.log(`[OpenClaw Chat] V3.4 — episodic brain PRE-ACT vào OpenCode session: ${brain.appliedLessonIds.length} lesson applied`)
+      }
+    } catch { /* fail-open — session vẫn tạo như cũ */ }
 
     // ROUND-36 (C-1): TRƯỚC ĐÂY enriched system prompt được build xong
     // (KB entities + corrections + insights + workspace) nhưng createOpenCodeSession

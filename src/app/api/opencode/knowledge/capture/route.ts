@@ -111,6 +111,38 @@ export async function POST(request: NextRequest) {
       // Log may fail
     }
 
+    // 6. ROUND-37 V3.4 — EPISODIC CONSOLIDATE: session OpenCode thành episode
+    // Trước đây opencode-route không ghi episode — công việc/khối lượng lỗi
+    // (nếu có) của session không bao giờ vào bộ não. Capture endpoint là điểm
+    // "session hoàn tất" duy nhất → record ở đây: filesChanged/toolsUsed làm
+    // evidence thành công, summary làm context. Fire-and-forget fail-open.
+    try {
+      const { recordAgentEpisode } = await import('@/lib/episodic-memory/agent-brain')
+      const sessionRow = await db.openCodeSession.findFirst({
+        where: { sessionId },
+        select: { prompt: true },
+      })
+      recordAgentEpisode({
+        family: 'opencode',
+        agentName: 'OpenCode session',
+        goal: (sessionRow?.prompt || summary || `OpenCode session ${sessionId}`).slice(0, 500),
+        sessionId,
+        outcome: 'SUCCESS',
+        stopReason: 'complete',
+        toolEvidence: [
+          ...(filesChanged || []).slice(0, 15).map((f: string) => ({
+            tool: 'opencode:file', success: true, text: `Đã sửa file: ${f}`,
+          })),
+          ...(toolsUsed || []).slice(0, 15).map((t: string) => ({
+            tool: `opencode:${t}`, success: true, text: `Session dùng tool ${t}`,
+          })),
+          ...(summary ? [{ tool: 'opencode:summary', success: true, text: String(summary).slice(0, 400) }] : []),
+        ],
+      })
+    } catch {
+      // Episodic capture fail-open — KHÔNG làm hỏng knowledge capture
+    }
+
     return NextResponse.json({
       captured: capturedCount,
       insights: insights.map(i => ({

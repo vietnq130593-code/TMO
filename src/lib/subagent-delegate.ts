@@ -589,7 +589,29 @@ async function runSubAgentForProfileInner(params: {
     console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${maxIterDisplay} vòng, budget ${SUBAGENT_TOKEN_BUDGET === 0 ? '∞' : SUBAGENT_TOKEN_BUDGET} tokens${SUBAGENT_TIMEOUT_MS === 0 ? ', timeout ∞' : ''}, ${allowedTools.length} tools${delegationRunId ? `, run ${delegationRunId.slice(0, 22)}…` : ''})`)
 
     // Mini ReAct loop
-    const systemPrompt = profile.instruction || `Bạn là ${profile.name} — agent chuyên trách. Hoàn thành nhiệm vụ được delegate một cách tự chủ, ngắn gọn.`
+    const baseSystemPrompt = profile.instruction || `Bạn là ${profile.name} — agent chuyên trách. Hoàn thành nhiệm vụ được delegate một cách tự chủ, ngắn gọn.`
+
+    // ━━━ ROUND-37 V3.3 — EPISODIC BRAIN PRE-ACT (sub-agents nối vào bộ não) ━━━
+    // Trước đây chỉ goal-loop có PRE-ACT — sub-agent (MEGATRON/SHOCWAVE/...)
+    // chạy delegation KHÔNG ký ức: task từng fail theo pattern tương tự không
+    // được cảnh báo. Giờ append block bài học + lỗi tương tự vào system prompt
+    // (4s timeout, fail-open). appliedLessonIds track để validate sau run.
+    let subAgentAppliedLessonIds: string[] = []
+    let systemPrompt = baseSystemPrompt
+    try {
+      const { buildAgentBrainBlock } = await import('@/lib/episodic-memory/agent-brain')
+      const brain = await buildAgentBrainBlock({
+        family: 'sub-agent',
+        agentName: profile.name,
+        task: `${task}${context ? `\nContext: ${context.slice(0, 500)}` : ''}`.slice(0, 1500),
+      })
+      if (brain.promptBlock) {
+        systemPrompt = `${baseSystemPrompt}${brain.promptBlock}`
+        subAgentAppliedLessonIds = brain.appliedLessonIds
+        console.log(`[SubAgent] V3.3 — episodic brain PRE-ACT cho ${profile.name}: ${brain.appliedLessonIds.length} lesson applied`)
+      }
+    } catch { /* fail-open — sub-agent chạy như cũ */ }
+
     const transcript: Array<{ role: 'user' | 'assistant' | 'tool'; content: string }> = [
       { role: 'user', content: buildDelegationPrompt(profile.name, task, context, allowedTools, parentAgentName, acceptanceCriteria) },
     ]
@@ -1100,6 +1122,53 @@ async function runSubAgentForProfileInner(params: {
     }
 
     console.log(`[SubAgent] ${profile.name} xong: ${state.endedBy} — ${iterations} vòng, ${toolCallCount} tool calls, ${tokensUsed} tokens, ${Math.round((Date.now() - startedAt) / 1000)}s`)
+
+    // ━━━ ROUND-37 V3.3 — EPISODIC CONSOLIDATE: lỗi delegation thành bài học ━━━
+    // Trước đây sub-agent fail KHÔNG bao giờ trở thành ErrorOccurrence/Lesson.
+    // Giờ record episode: toolResultLog (JSON {tool, success, result}) làm
+    // evidence, endedBy map outcome, appliedLessonIds từ PRE-ACT validate.
+    // Fire-and-forget fail-open — KHÔNG đụng delegation result.
+    try {
+      const { recordAgentEpisode, mapRunOutcome } = await import('@/lib/episodic-memory/agent-brain')
+      // Parse toolResultLog entries (JSON string {tool, success, result})
+      const evidence = toolResultLog
+        .map((entry): { tool: string; success: boolean; text: string } | null => {
+          try {
+            const parsed = JSON.parse(entry) as { tool?: unknown; success?: unknown; result?: unknown }
+            return {
+              tool: typeof parsed.tool === 'string' ? parsed.tool : 'unknown',
+              success: parsed.success === true,
+              text: String(parsed.result ?? entry).slice(0, 600),
+            }
+          } catch {
+            return { tool: 'unknown', success: false, text: entry.slice(0, 600) }
+          }
+        })
+        .filter((e): e is { tool: string; success: boolean; text: string } => e !== null)
+      const toolFailures = evidence.filter(e => !e.success).length
+      // endedBy: 'conclude' | 'timeout' | 'token_budget' | 'error' | 'cancelled' | 'iteration_limit'
+      const outcomeForBrain = state.endedBy === 'cancelled'
+        ? 'ABANDONED' as const
+        : state.endedBy === 'error'
+          ? 'FAILURE' as const
+          : mapRunOutcome({
+              status: state.endedBy === 'concluded' ? 'done' : 'iteration_limit',
+              toolFailures,
+            })
+      recordAgentEpisode({
+        family: 'sub-agent',
+        agentName: profile.name,
+        goal: task.slice(0, 500),
+        sessionId,
+        outcome: outcomeForBrain,
+        stopReason: state.endedBy,
+        cycles: iterations,
+        tokensUsed,
+        appliedLessonIds: subAgentAppliedLessonIds,
+        toolEvidence: evidence,
+      })
+    } catch { /* fail-open — không được phép làm hỏng delegation */ }
+
     return outcome
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err)

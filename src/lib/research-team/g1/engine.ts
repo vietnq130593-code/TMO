@@ -561,11 +561,32 @@ export async function runG1Pipeline(
 ): Promise<G1RoundResult> {
   let lastResult: G1RoundResult | null = null
 
+  // ━━━ ROUND-37 V3.2 — EPISODIC BRAIN PRE-ACT (research-team nối vào bộ não) ━━━
+  // Trước đây chỉ goal-loop có PRE-ACT — research rounds chạy không ký ức.
+  // Giờ block bài học/lỗi tương tự (từ episodic memory) được đính vào
+  // partDescription → mọi council + SIVIL round thấy. Fail-open 4s.
+  let brainBlock = ''
+  let appliedLessonIds: string[] = []
+  try {
+    const { buildAgentBrainBlock } = await import('@/lib/episodic-memory/agent-brain')
+    const brain = await buildAgentBrainBlock({
+      family: 'research-team',
+      agentName: `G1-pipeline (mission ${missionId.slice(0, 12)})`,
+      task: `${missionType} research: ${partDescription}`.slice(0, 1500),
+    })
+    if (brain.promptBlock) {
+      brainBlock = brain.promptBlock
+      appliedLessonIds = brain.appliedLessonIds
+      console.log(`[ResearchTeam/g1/engine] V3.2 — episodic brain PRE-ACT: ${appliedLessonIds.length} lesson applied cho task ${taskId}`)
+    }
+  } catch { /* fail-open — research chạy như cũ */ }
+  const taskWithBrain = brainBlock ? `${partDescription}${brainBlock}` : partDescription
+
   for (let round = 1; round <= MAX_REVISE_ROUNDS; round++) {
     const result = await runG1Round(
       missionId,
       taskId,
-      partDescription,
+      taskWithBrain,
       missionType,
       round,
       successCriteria,
@@ -581,6 +602,7 @@ export async function runG1Pipeline(
       console.log(
         `[ResearchTeam/g1/engine] G1 pipeline round ${round} ESCALATED: ${result.escalateReason || '(unknown)'}`,
       )
+      recordG1Episode(missionId, taskId, partDescription, missionType, result, appliedLessonIds)
       return result
     }
 
@@ -596,11 +618,13 @@ export async function runG1Pipeline(
     console.log(
       `[ResearchTeam/g1/engine] G1 pipeline round ${round} PASS — BELI spec ready`,
     )
+    recordG1Episode(missionId, taskId, partDescription, missionType, result, appliedLessonIds)
     return result
   }
 
   // Exhausted rounds → return last result with escalate (council ② still REVISE)
   if (lastResult) {
+    recordG1Episode(missionId, taskId, partDescription, missionType, lastResult, appliedLessonIds)
     return {
       ...lastResult,
       escalated: true,
@@ -620,6 +644,55 @@ export async function runG1Pipeline(
     escalateReason: 'G1 pipeline failed to start (should not reach here)',
     artifactMap: emptyArtifactMap(missionId, taskId),
   }
+}
+
+/**
+ * ROUND-37 V3.2 — Ghi episode research-round vào bộ não episodic.
+ * Evidence: verdict council (VETO/REVISE = fail-entry), worklog
+ * done/issuesFaced (issues = ErrorOccurrence cho taxonomy phân loại).
+ * Fire-and-forget fail-open — KHÔNG block pipeline return.
+ */
+function recordG1Episode(
+  missionId: string,
+  taskId: string,
+  partDescription: string,
+  missionType: 'M1' | 'M2' | 'M3',
+  result: G1RoundResult,
+  appliedLessonIds: string[],
+): void {
+  void (async () => {
+    try {
+      const { recordAgentEpisode } = await import('@/lib/episodic-memory/agent-brain')
+      // Evidence từ worklog + verdict council — recorder tự classify root cause
+      const toolEvidence = [
+        ...(result.worklog.done ?? []).slice(0, 10).map((d): { tool: string; success: boolean; text: string } => ({
+          tool: 'research:worklog', success: true, text: String(d).slice(0, 300),
+        })),
+        ...(result.worklog.issuesFaced ?? []).slice(0, 10).map((i): { tool: string; success: boolean; text: string } => ({
+          tool: 'research:issue', success: false, text: String(i).slice(0, 300),
+        })),
+        {
+          tool: 'research:council2',
+          success: result.council2.verdict === 'PASS',
+          text: `Council ② verdict: ${result.council2.verdict}${result.escalated ? ` — ESCALATED: ${result.escalateReason?.slice(0, 200) ?? ''}` : ''}`,
+        },
+      ]
+      recordAgentEpisode({
+        family: 'research-team',
+        agentName: `G1 ${missionType} (task ${taskId.slice(0, 8)})`,
+        goal: `[${missionType}] ${partDescription}`.slice(0, 500),
+        sessionId: missionId,
+        outcome: result.escalated
+          ? 'FAILURE'
+          : result.council2.verdict === 'PASS' ? 'SUCCESS' : 'PARTIAL',
+        stopReason: result.escalated ? 'error' : 'complete',
+        appliedLessonIds,
+        cycles: 1,
+        tokensUsed: 0,
+        toolEvidence,
+      })
+    } catch { /* fail-open */ }
+  })()
 }
 
 /** Persist ResearchWorklog row (TB-13 §3) */
