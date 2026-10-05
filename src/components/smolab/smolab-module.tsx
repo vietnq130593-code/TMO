@@ -3418,6 +3418,46 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
               break
             }
 
+            case 'progress_report': {
+              // ROUND-37 V4 — Layer 8 progress-reporter sống: báo cáo tiến độ
+              // sau mỗi step (formattedReport từ communication/progress-reporter).
+              // Nhẹ nhàng: cập nhật iteration indicator của tin agent hiện tại
+              // (báo cáo đầy đủ nằm trong Thought Process + worklog).
+              if (currentAgentMsgId) {
+                const stepIndex = event.stepIndex as number | undefined
+                const totalSteps = event.totalSteps as number | undefined
+                if (stepIndex && totalSteps) {
+                  const progText = ` (Bước ${stepIndex}/${totalSteps})`
+                  if (isActiveSession()) setMessages(prev => prev.map(m =>
+                    m.id === currentAgentMsgId
+                      ? { ...m, iterationInfo: (m.iterationInfo ?? '') + progText }
+                      : m
+                  ))
+                }
+              }
+              break
+            }
+
+            case 'final_report': {
+              // ROUND-37 V4 — báo cáo tổng kết cuối workflow (formatFinalReport:
+              // tiến độ/failed/token/thời gian từng step) — hiển thị dạng gọn.
+              const formatted = String(event.formattedReport || '')
+              if (formatted) {
+                const finalReportMsg: SmolabMessage = {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content: `📋 **BÁO CÁO TỔNG KẾT WORKFLOW**\n\n\`\`\`\n${formatted.slice(0, 3000)}\n\`\`\``,
+                  timestamp: new Date(),
+                  isTeamMessage: true,
+                  agentName: 'SYSTEM',
+                  agentPosition: 'TL',
+                  agentAvatar: '📋',
+                }
+                if (isActiveSession()) setMessages(prev => [...prev, finalReportMsg])
+              }
+              break
+            }
+
             case 'error': {
               const errorMsg = event.message as string
               const errorAgent = event.agent as string | undefined
