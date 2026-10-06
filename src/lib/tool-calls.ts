@@ -22,6 +22,12 @@ export interface ParsedToolCall {
   id: string
   name: string
   args: Record<string, unknown>
+  /** ROUND-50 (P2-δ r49): native tool_call args bị cắt cụt (JSON.parse fail
+   * sau cả loose-repair) — giữ nguyên văn chuỗi args hỏng để caller PHẢN HỒI
+   * lại cho LLM (yêu cầu phát lại hoàn chỉnh) thay vì thực thi với args rỗng
+   * (bằng chứng r49: read_skill args truncated → {} → schema "thiếu slug" →
+   * agent không đọc được skill agent-browser). */
+  rawArgs?: string
 }
 
 /**
@@ -495,6 +501,18 @@ export const BROKEN_TOOL_CALL_FEEDBACK =
   '⚠️ Tool call của bạn bị cắt hoặc JSON lỗi → KHÔNG thực thi được (KHÔNG coi text này là báo cáo hoàn thành). Phát lại theo 1 trong 2 cách: (1) file_write với JSON args CHUẨN (escape \\n trong content, escape mọi dấu " trong code) HOẶC (2) KHUYÊN DÙNG format fence-block: tool_call: file_write({"path": "file.py", "mode": "overwrite"}) rồi xuống dòng mở fence ```python, viết code GỐC nhiều dòng (KHÔNG cần escape), đóng fence ```. Chia file lớn thành nhiều lần ghi (mode append) nếu cần.'
 
 /**
+ * ROUND-50 (P3-ζ r49 — bằng chứng user 2026-10-06): model nền MiniMax của
+ * space-bunny-free đoán mò cú pháp tool call dạng `<invoke>` (thiếu name attr /
+ * name sai vị trí / deliberation trong thinking: "</invoke name="? Wait
+ * interface has no explicit tool namespace...") → 0 tool call được thực thi mà
+ * KHÔNG có dấu hiệu nào bên dưới bắt được (regex invoke cần name=; không có
+ * "tool_call:"; không có ```json) → agent lặp đoán mò. Feedback dạy ĐÚNG 2 cú
+ * pháp hệ thống chấp nhận.
+ */
+export const MALFORMED_INVOKE_FEEDBACK =
+  '⚠️ Bạn vừa cố gọi tool bằng cú pháp <invoke>…</invoke> nhưng SAI ĐỊNH DẠNG (thiếu name="tên_tool" / args không chuẩn) → KHÔNG tool nào được thực thi (KHÔNG coi text này là báo cáo hoàn thành). Hệ thống chỉ chấp nhận: (1) tool_call: <tên_tool>({json args}) — vd: tool_call: todo_write({"todos": [{"content": "việc cần làm", "status": "pending"}]}) HOẶC (2) <invoke name="tên_tool">{json args}</invoke>. Phát lại NGAY theo 1 trong 2 cú pháp đúng.'
+
+/**
  * 21-d — Silent parse-drop detector.
  *
  * Trả về feedback message khi văn bản CÓ dấu hiệu tool call nhưng KHÔNG parse
@@ -503,7 +521,9 @@ export const BROKEN_TOOL_CALL_FEEDBACK =
  *   - có ≥1 vị trí parse thất bại (regex match nhưng findBalancedJson null /
  *     JSON.parse throw), HOẶC
  *   - chứa "tool_call:" nhưng 0 call parse được, HOẶC
- *   - có block ```json chứa "name" (định dạng native FC) nhưng 0 call parse được.
+ *   - có block ```json chứa "name" (định dạng native FC) nhưng 0 call parse được,
+ *   - ROUND-50: có `<invoke` nhưng 0 call parse được (invoke sai/mangled —
+ *     model MiniMax đoán mò cú pháp, bằng chứng user dán nguyên văn thought).
  *
  * Fail-open tuyệt đối: hàm chỉ đọc chuỗi + regex — không thể throw; mọi lỗi
  * nội bộ → null (caller coi như không có dấu hiệu, giữ behavior cũ).
@@ -520,6 +540,11 @@ export function detectBrokenToolCallHint(output: string): string | null {
     // Dấu hiệu phụ: block ```json chứa "name" (LLM phát tool call dạng JSON fence
     // — thường gặp khi native FC bị cắt giữa chừng)
     if (/```json[\s\S]{0,400}?"name"\s*:/.test(output)) return BROKEN_TOOL_CALL_FEEDBACK
+    // ROUND-50: <invoke> hiện diện nhưng parse không ra call nào — invoke sai
+    // định dạng (thiếu name/mangled, kể cả THẺ ĐÓNG MỒ CÔI `</invoke name="?…`
+    // — bằng chứng paste 2 của user: model deliberation cú pháp trong thinking)
+    // → dạy lại cú pháp đúng
+    if (/<\/?invoke[\s>]/i.test(output)) return MALFORMED_INVOKE_FEEDBACK
     return null
   } catch {
     return null // fail-open — không được phép crash caller

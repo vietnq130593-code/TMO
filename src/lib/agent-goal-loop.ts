@@ -56,7 +56,7 @@
 
 import { callLLMForAgent, type LLMTool } from '@/lib/llm'
 import { executeTool, buildCompactToolSchemasSection, resolveToolAlias, getToolDefinitions, getAllBuiltinToolNames } from '@/lib/code-team/tool-executor'
-import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint, countProviderGarbleMarkers } from '@/lib/tool-calls'
+import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint, countProviderGarbleMarkers, tryParseLooseJson } from '@/lib/tool-calls'
 // TASK 43 — Agent Event Bus: emit sự kiện vòng đời run lên bus hợp nhất
 // (GET /api/agent-events) — fail-open tuyệt đối bên trong emit (try/catch).
 import { emitAgentEvent } from '@/lib/agent-event-bus'
@@ -2811,20 +2811,35 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         ? result.tool_calls.map((tc, idx) => {
             // Convert LLMToolCall → ParsedToolCall shape (id, name, args object)
             let args: Record<string, unknown> = {}
+            let rawArgs: string | undefined
             try {
               args = typeof tc.function.arguments === 'string'
                 ? JSON.parse(tc.function.arguments)
                 : (tc.function.arguments as Record<string, unknown>) || {}
             } catch {
-              // TASK 43 — strict-parse: args native hỏng KHÔNG còn im lặng — log
-              // rõ (args giữ {} → executor strict-parse sẽ trả lỗi schema kèm
-              // hướng dẫn phát lại đúng cho LLM tự sửa ở lượt kế).
-              console.warn(`[GoalLoop] ${agentName} native tool_call "${tc.function.name}" — args JSON.parse FAILED (giữ args {} — executor sẽ trả lỗi schema kèm hướng dẫn) raw=${tc.function.arguments.slice(0, 120)}`)
+              // ROUND-50 FIX (P2-δ r49): args native hỏng — 2 tầng hồi phục:
+              // (1) LOOSE-REPAIR (tryParseLooseJson — newline thô/trailing comma
+              //     trong chuỗi JSON do provider escape lệch);
+              // (2) vẫn fail (args BỊ CẮT CỤT giữa chừng) → args {} + rawArgs
+              //     giữ nguyên văn → batch loop PHẢN HỒI yêu cầu phát lại hoàn
+              //     chỉnh (KHÔNG thực thi với args rỗng — chạy sai ý đồ còn tệ hơn
+              //     không chạy; bằng chứng r49: read_skill truncated → schema
+              //     "thiếu slug" mơ hồ → agent bó tay không đọc được skill).
+              const rawStr = typeof tc.function.arguments === 'string' ? tc.function.arguments : ''
+              const loose = tryParseLooseJson(rawStr)
+              if (loose) {
+                args = loose
+                console.warn(`[GoalLoop] ${agentName} native tool_call "${tc.function.name}" — args JSON.parse FAILED nhưng LOOSE-REPAIR thành công (newline/trailing comma) — dùng args đã chữa`) 
+              } else {
+                rawArgs = rawStr
+                console.warn(`[GoalLoop] ${agentName} native tool_call "${tc.function.name}" — args BỊ CẮT CỤT (loose-repair cũng fail) — sẽ phản hồi yêu cầu phát lại hoàn chỉnh) raw=${rawStr.slice(0, 120)}`)
+              }
             }
             return {
               id: tc.id || `native_${idx}`,
               name: tc.function.name,
               args,
+              ...(rawArgs !== undefined ? { rawArgs } : {}),
             }
           })
         : parseToolCallsFromOutput(result.content)
@@ -2903,16 +2918,29 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         // cầu phát tool_call THẬT theo todo in_progress; sau nudge limit hoặc
         // budget cạn → push content (giữ kế hoạch cho trọng tài + chu kỳ sau)
         // rồi break như cũ.
-        if (!brokenHint && proseNudges < 2 && timeLeft() > 0 && tokenLeft() > REPORT_RESERVE_TOKENS) {
+        //
+        // ROUND-50 FIX (P1-β r49): cap 2 nudge/run TẠI SAI THUỐC khi agent đang
+        // trong vòng lặp planning-only — bằng chứng mission r49: 3 chu kỳ liên
+        // tiếp (7-9) chỉ lập kế hoạch, "ép GĐ2" chỉ là directive cảnh báo đính
+        // prompt, prose nudge (cơ chế DUY NHẤT thực sự ép tool call trong
+        // cycle) đã cạn hạn mức ngay từ đầu run → 1.45M token sub-agent chẩn
+        // đoán mà không thoát bế tắc → stall brake kết thúc no_progress. Giờ
+        // cap ĐỘNG: đã từng planning-only (streak ≥1) → 6 lượt (1 nudge rẻ hơn
+        // nhiều so với 1 chu kỳ tổn phí), agent bình thường giữ 2.
+        const proseNudgeCap = planningOnlyStreak >= 1 ? 6 : 2
+        if (!brokenHint && proseNudges < proseNudgeCap && timeLeft() > 0 && tokenLeft() > REPORT_RESERVE_TOKENS) {
           proseNudges++
+          const streakWarn = planningOnlyStreak >= 2
+            ? ` ⛔ CẢNH BÁO NẶNG: bạn đã ${planningOnlyStreak} chu kỳ LIÊN TIẾP chỉ lập kế hoạch không triển khai — stall-brake sẽ KẾT THÚC mission của bạn nếu chu kỳ này vẫn không có tool call thực thi.`
+            : ''
           messages.push({ role: 'assistant', content: result.content })
           pushToolMessage(messages, {
             tool: 'harness_warning',
             success: false,
-            result: '⚠️ Lượt trả lời của bạn là THUẦN VĂN BẢN — 0 tool call nào được thực thi, lượt này KHÔNG được ghi nhận là tiến triển (trọng tài sẽ chấm CHƯA ĐẠT). KHÔNG viết thêm kế hoạch/kết luận bằng văn bản. Việc duy nhất bây giờ: phát NGAY 1 tool_call cho việc ĐẦU TIÊN trong todo in_progress (hoặc todo_write nếu run chưa có todo). Định dạng bắt buộc — tool_call: <tên_tool>({json args}) — ví dụ: tool_call: file_read({"path": "src/lib/agent-goal-loop.ts"}). Chỉ cần 1 tool call hợp lệ là đủ để bắt đầu.',
+            result: `⚠️ Lượt trả lời của bạn là THUẦN VĂN BẢN — 0 tool call nào được thực thi, lượt này KHÔNG được ghi nhận là tiến triển (trọng tài sẽ chấm CHƯA ĐẠT).${streakWarn} KHÔNG viết thêm kế hoạch/kết luận bằng văn bản. Việc duy nhất bây giờ: phát NGAY 1 tool_call cho việc ĐẦU TIÊN trong todo in_progress (hoặc todo_write nếu run chưa có todo). Định dạng bắt buộc — tool_call: <tên_tool>({json args}) — ví dụ: tool_call: file_read({"path": "src/lib/agent-goal-loop.ts"}). Chỉ cần 1 tool call hợp lệ là đủ để bắt đầu.`,
           })
-          evidence.push({ cycle, kind: 'tool', tool: 'harness_warning', success: false, text: 'prose-only nudge — lượt thuần văn bản 0 tool call, đã yêu cầu phát tool_call thật theo todo in_progress' })
-          recordAgentThought(agentSessionId, `⚠️ Lượt output THUẦN VĂN BẢN (0 tool call, lần ${proseNudges}/2) — đã phản hồi yêu cầu phát tool_call thật (chống vòng lặp lập kế hoạch)`, totalIterations)
+          evidence.push({ cycle, kind: 'tool', tool: 'harness_warning', success: false, text: `prose-only nudge (lần ${proseNudges}/${proseNudgeCap}${planningOnlyStreak >= 1 ? `, streak ${planningOnlyStreak}` : ''}) — lượt thuần văn bản 0 tool call, đã yêu cầu phát tool_call thật theo todo in_progress` })
+          recordAgentThought(agentSessionId, `⚠️ Lượt output THUẦN VĂN BẢN (0 tool call, lần ${proseNudges}/${proseNudgeCap}${planningOnlyStreak >= 2 ? ` — 🚨 streak planning-only ${planningOnlyStreak} chu kỳ, chu kỳ này BUỘC phải có tool thực thi` : ''}) — đã phản hồi yêu cầu phát tool_call thật (chống vòng lặp lập kế hoạch)`, totalIterations)
           continue
         }
         // Agent tự kết luận (protocol yêu cầu đã verify + báo cáo ở đây).
@@ -3332,6 +3360,17 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         }
       }
 
+      // ROUND-50 FIX (P3-ε r49) — HEARTBEAT TICKER trong tool batch: sub-agent
+      // (dispatch_agent/delegate_task) + shell dài chạy ĐỒNG BỘ trong batch —
+      // không vòng LLM nào chạy suốt quãng đó → fireSignal không được gọi →
+      // heartbeatAt của durable job đứng im (bằng chứng r49: stale 444s trong
+      // lúc ALISTA chạy — orphan sweep sau restart đòi distinguish sống/chết
+      // bằng heartbeat). Ticker 30s giữ tín hiệu sống trong SUỐT batch; tĩnh
+      // tại mọi lối thoát (break/cancel) qua try/finally. Fail-open.
+      const batchHeartbeatTimer = setInterval(() => {
+        try { fireSignal('tool_batch') } catch { /* fail-open */ }
+      }, 30_000)
+      try {
       for (const [tcIdx, tc] of toolCalls.entries()) {
         if (isCancelled()) {
           // TASK 43 FIX (bug audit) — cancel giữa batch: trước đây break NGAY
@@ -3365,6 +3404,23 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             continue
           }
           processToolResult(tc, r.toolResult!)
+          continue
+        }
+
+        // ROUND-50 FIX (P2-δ r49): native tool_call args BỊ CẮT CỤT (JSON.parse
+        // fail sau loose-repair — xem tầng parse ở trên) → KHÔNG thực thi với
+        // args rỗng (chạy sai ý đồ còn tệ hơn không chạy) — phản hồi nguyên văn
+        // phần args đến được + yêu cầu phát LẠI tool_call hoàn chỉnh. Agent tự
+        // sửa ở lượt kế (bằng chứng r49: read_skill truncated → schema "thiếu
+        // slug" mơ hồ → agent không đọc được skill agent-browser).
+        if (tc.rawArgs !== undefined) {
+          pushToolMessage(messages, {
+            tool: tc.name,
+            success: false,
+            result: `⚠️ Tool call "${tc.name}" của bạn bị CẮT CỤT ở tầng hạ tầng (args JSON không hoàn chỉnh — không thể parse, tool KHÔNG được thực thi). Nguyên văn phần args đến được: ${tc.rawArgs.slice(0, 400)} — Hãy phát LẠI tool_call HOÀN CHỈNH cho tool này (rút gọn args nếu cần để không bị cắt).`,
+          })
+          evidence.push({ cycle, kind: 'tool', tool: tc.name, success: false, text: 'args bị cắt cụt (JSON không hoàn chỉnh) — đã yêu cầu phát lại hoàn chỉnh' })
+          recordAgentThought(agentSessionId, `⚠️ Tool call "${tc.name}" bị cắt cụt args ở tầng provider — đã yêu cầu agent phát lại hoàn chỉnh`, totalIterations)
           continue
         }
 
@@ -3465,6 +3521,9 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       if (delegationPromises.size >= 2) {
         evidence.push({ cycle, kind: 'directive', text: `FAN-OUT/FAN-IN: ${delegationPromises.size} delegation đã chạy song song (slot pool điều tiết ≤3, mỗi sub-agent 1 key riêng) và hợp nhất kết quả về 1 batch` })
         recordAgentThought(agentSessionId, `🔀 FAN-OUT/FAN-IN: ${delegationPromises.size} sub-agent trong batch này chạy song song (tối đa 3 cùng lúc — mỗi sub-agent 1 API key riêng, user directive 2026-10-29b) — kết quả đã hợp nhất`, totalIterations)
+      }
+      } finally {
+        clearInterval(batchHeartbeatTimer)
       }
 
       // ===== FIX (R2-b #1) — IN-CYCLE STALL BRAKE (ITER_PER_CYCLE=0 + TOKEN=∞) =====

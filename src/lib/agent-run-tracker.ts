@@ -45,6 +45,11 @@
 // ROUND-23 P1 — durable event trail: fs/path cho append JSONL (fail-open).
 import fs from 'node:fs'
 import path from 'node:path'
+// ROUND-50 (P3-ζ r49): làm sạch thought hiển thị — strip marker corruption
+// provider (`]<]minimax[>[`) + ẩn khối tool-call dạng <invoke>…</invoke> của
+// minimax khỏi phần text Suy nghĩ (tool call đã hiển thị là event riêng).
+// tool-calls.ts chỉ import find-balanced-json — không cycle với module này.
+import { stripProviderGarbleMarkers } from '@/lib/tool-calls'
 
 // ==================== Types ====================
 
@@ -630,7 +635,16 @@ export function recordAgentThought(
     if (!run || !content) return
     run.counters.iterations = Math.max(run.counters.iterations, iteration || 0)
     // Tách reasoning khỏi khối tool_call: tool calls hiển thị là event riêng
-    let thought = String(content)
+    // ROUND-50 FIX (P3-ζ): (a) strip marker corruption provider (space-bunny
+    // leak `]<]minimax[>[` — bằng chứng user nhìn thấy nguyên văn trong panel
+    // Suy nghĩ); (b) cắt khối tool call dạng <invoke…>…</invoke> (format minimax
+    // — kể cả bản parse THÀNH CÔNG vẫn nằm lại trong content vì recordAgentThought
+    // nhận content THÔ trước tầng parse); (c) giữ nguyên split `tool_call:` cũ.
+    let thought = stripProviderGarbleMarkers(String(content))
+    thought = thought.replace(/<invoke[\s\S]*?<\/invoke>/g, ' ') // khối invoke hoàn chỉnh (kèm args)
+    thought = thought.replace(/<\/?invoke[^>\n]*>/g, ' ') // thẻ invoke rời rạc ĐÚNG ĐỊNH DẠNG (có `>` đóng); thẻ mỏng cụt không `>` (vd `</invoke name="?…`) giữ lại — text sau nó là suy nghĩ thật
+    const openInvokeIdx = thought.indexOf('<invoke')
+    if (openInvokeIdx >= 0) thought = thought.slice(0, openInvokeIdx) // invoke bị cắt cụt (không có thẻ đóng)
     const tcIdx = thought.search(/tool_call\s*:/i)
     let hadToolCalls = false
     if (tcIdx >= 0) {

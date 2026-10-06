@@ -56,6 +56,13 @@
 import { EventEmitter } from 'events'
 // Type-only import (erased lúc runtime — không tạo thêm module instance)
 import type { DocumentPayload } from '@/lib/qdrant'
+// ROUND-50 (P3-ζ r49 — bằng chứng user 2026-10-06 dán thought content nguyên văn
+// `]<]minimax[>[` từ UI): space-bunny-free (model nền MiniMax) leak chat-template
+// marker vào content. Strip TẠI NGUỒN mọi response zen để MỌI consumer (thought
+// display, final report, arbiter, evaluator, consult parse) nhận content sạch —
+// trước đây chỉ tầng parse tool_call strip (r44) nên panel Suy nghĩ + báo cáo
+// vẫn dính rác. tool-calls.ts chỉ import find-balanced-json — không cycle.
+import { stripProviderGarbleMarkers } from '@/lib/tool-calls'
 
 /** EventEmitter for real-time token updates (SSE).
  *  Emits 'token-update' event whenever addTokensUsed() or addTokensUsedByAgent() is called.
@@ -4227,7 +4234,10 @@ async function callZenProvider(
     }
 
     const choice = data.choices?.[0]
-    const content = choice?.message?.content ?? ''
+    // ROUND-50 FIX (P3-ζ): strip marker corruption `]<]xxx[>[` của provider tại
+    // nguồn — mọi consumer phía sau nhận content sạch (idempotent với tầng
+    // parse tool-calls cũ — strip 2 lần vô hại).
+    const content = stripProviderGarbleMarkers(choice?.message?.content ?? '')
     const nativeToolCalls = choice?.message?.tool_calls
     const finishReason = choice?.finish_reason ?? null
     const actualModel = data.model || model
@@ -4784,8 +4794,10 @@ async function callOpenCodeCLIProvider(
       resolved = true
       clearTimeout(finishTimer)
 
-      const content = contentParts.join('').trim()
-      const reasoning = reasoningParts.join('').trim()
+      // ROUND-50 FIX (P3-ζ): đường CLI cùng leak marker (model nền MiniMax) —
+      // strip content + reasoning tại nguồn, mirror đường HTTP.
+      const content = stripProviderGarbleMarkers(contentParts.join('')).trim()
+      const reasoning = stripProviderGarbleMarkers(reasoningParts.join('')).trim()
 
       if (!content && code !== 0) {
         // TASK 34 — các lỗi model-level dai dẳng từ CLI → mark cache để các lần
@@ -4980,14 +4992,44 @@ export async function callLLMForAgent(
   // key round-robin tự xoay key kế; lần retry hạ effort 1 nấc (max→high) nếu
   // caller không chỉ định rõ — phá vỡ pattern "reasoning nuốt sạch budget"
   // trong khi vẫn giữ chất lượng suy luận cao.
-  if (zen && !zen.content && !(zen.tool_calls && zen.tool_calls.length > 0)
-      && /abort|timeout|etimedout|econnreset|socket hang up|HTTP 5\d\d|Zen empty response/i.test(zen.error ?? '')) {
+  //
+  // ROUND-50 FIX (P1-α r49): 1 retry effort→high TẠI SAI THUỐC — bằng chứng
+  // mission Linh Sickyx r49: ALISTA #1 chết "failed" + cycle 3 error vì
+  // empty-response lặp 2 lần liên tiếp (200 OK + finish_reason=stop + 0 content,
+  // reasoning_tokens 251-457); CLI không cài (fallback chết) + failover model
+  // TRÙNG model chính (space-bunny-free) → toàn chuỗi chết. LADDER 3 nấc cho
+  // empty-response: effort high → medium → low (step-down thật sự đấm xuyên
+  // pattern "reasoning nuốt budget" — effort thấp ⇒ reasoning ngắn ⇒ còn chỗ
+  // cho content) + backoff ngắn từ nấc 2 (để provider thoáng hồi). Lỗi
+  // transient (timeout/5xx): giữ 1 retry như cũ (key round-robin đã xoay key).
+  let zenTransientRetried = false
+  let zenEmptyRetries = 0
+  while (
+    zen && !zen.content && !(zen.tool_calls && zen.tool_calls.length > 0)
+    && /abort|timeout|etimedout|econnreset|socket hang up|HTTP 5\d\d|Zen empty response/i.test(zen.error ?? '')
+  ) {
     const isEmptyResponse = /Zen empty response/i.test(zen.error ?? '')
-    const retryOpts = isEmptyResponse && !options?.reasoningEffort
-      ? { ...options, reasoningEffort: 'high' }
-      : options
-    console.warn(`[LLM] Agent Zen ${zenModel} lỗi tạm thời (${isEmptyResponse ? 'reasoning starvation — 0 content' : 'thời gian/5xx'} — lần 1) — retry 1 lần${isEmptyResponse ? ' effort→high' : ' key kế'}: ${String(zen.error).slice(0, 120)}`)
-    zen = await callZenProvider(prompt, systemPrompt, zenModel, retryOpts, `agent-retry:${zenModel}`)
+    if (!isEmptyResponse) {
+      // Transient (timeout/abort/5xx): 1 retry — hành vi cũ giữ nguyên
+      if (zenTransientRetried) break
+      zenTransientRetried = true
+      console.warn(`[LLM] Agent Zen ${zenModel} lỗi tạm thời (thời gian/5xx — lần 1) — retry 1 lần key kế: ${String(zen.error).slice(0, 120)}`)
+      zen = await callZenProvider(prompt, systemPrompt, zenModel, options, `agent-retry:${zenModel}`)
+      continue
+    }
+    // Empty response (reasoning starvation): ladder 3 nấc
+    if (zenEmptyRetries >= 3) break
+    zenEmptyRetries++
+    // Nấc 1: tôn trọng effort caller chỉ định (nếu có) — không phải thì high
+    // Nấc 2/3: step-down cưỡng bức medium → low (đấm xuyên starvation)
+    const ladderEffort = zenEmptyRetries === 1
+      ? (options?.reasoningEffort || 'high')
+      : (zenEmptyRetries === 2 ? 'medium' : 'low')
+    const retryOpts = { ...options, reasoningEffort: ladderEffort }
+    const backoffMs = zenEmptyRetries >= 2 ? zenEmptyRetries * 1500 : 0
+    if (backoffMs > 0) await new Promise(r => setTimeout(r, backoffMs))
+    console.warn(`[LLM] Agent Zen ${zenModel} EMPTY RESPONSE (reasoning starvation — 0 content, nấc ${zenEmptyRetries}/3) — retry effort→${ladderEffort}${backoffMs ? ` + backoff ${backoffMs}ms` : ''}: ${String(zen.error).slice(0, 120)}`)
+    zen = await callZenProvider(prompt, systemPrompt, zenModel, retryOpts, `agent-retry${zenEmptyRetries}:${zenModel}`)
   }
   if (zen && (zen.content || (zen.tool_calls && zen.tool_calls.length > 0))) {
     const tcCount = zen.tool_calls?.length ?? 0

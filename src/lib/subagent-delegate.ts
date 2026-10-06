@@ -61,7 +61,7 @@ import { executeTool, buildCompactToolSchemasSection, getToolDefinitions } from 
 // module này → không circular).
 import { truncateToolMessageJson } from '@/lib/context-compression'
 import type { LLMTool } from '@/lib/llm'
-import { parseToolCallsFromOutput, detectBrokenToolCallHint } from '@/lib/tool-calls'
+import { parseToolCallsFromOutput, detectBrokenToolCallHint, tryParseLooseJson } from '@/lib/tool-calls'
 import { resolveAgent } from '@/lib/code-team/agent-resolver'
 import { isSessionCancelled, registerDelegationRun, endAgentRun } from '@/lib/agent-run-tracker'
 
@@ -591,6 +591,17 @@ async function runSubAgentForProfileInner(params: {
       : SUBAGENT_MAX_ITERATIONS === 0 ? '∞' : String(SUBAGENT_MAX_ITERATIONS)
     console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${maxIterDisplay} vòng, budget ${SUBAGENT_TOKEN_BUDGET === 0 ? '∞' : SUBAGENT_TOKEN_BUDGET} tokens${SUBAGENT_TIMEOUT_MS === 0 ? ', timeout ∞' : ''}, ${allowedTools.length} tools${delegationRunId ? `, run ${delegationRunId.slice(0, 22)}…` : ''})`)
 
+    // ROUND-50 FIX (P2-γ r49) — TODO SCOPE RIÊNG CHO SUB-AGENT:
+    // trước đây todo_write bị ép sessionId = session chat CHA (để hiển thị
+    // panel) → /api/todos?sessionId=<chat> trộn todo cha + todo sub-agent
+    // (bằng chứng r49: 9 todo Linh + 10 ALISTA = 19 mục trộn lẫn, attribution
+    // chỉ phân biệt qua runId). Giờ todo của sub-agent ghi scope
+    // `delegation:<runId>` — KHÔNG trộn scope chat cha; panel Thought Process
+    // vẫn thấy ĐỦ (API /api/agent-run query theo runId — không phụ thuộc
+    // sessionId), còn /api/todos?sessionId=<chat> chỉ còn todo của chính phiên.
+    // delegationRunId null (tracker fail-open) → fallback scope cha như cũ.
+    const todoScopeSessionId = delegationRunId ? `delegation:${delegationRunId}` : (sessionId || '')
+
     // Mini ReAct loop
     const baseSystemPrompt = profile.instruction || `Bạn là ${profile.name} — agent chuyên trách. Hoàn thành nhiệm vụ được delegate một cách tự chủ, ngắn gọn.`
 
@@ -722,15 +733,29 @@ async function runSubAgentForProfileInner(params: {
 
         // TASK 39 — NATIVE FC: ưu tiên tool_calls từ API (space-bunny trả chuẩn
         // OpenAI khi body có tools); fallback text protocol như cũ.
+        // ROUND-50 FIX (P2-δ r49): args native JSON.parse fail → 2 tầng hồi phục
+        // (loose-repair → rawArgs feedback phát lại hoàn chỉnh) — mirror
+        // agent-goal-loop. Bằng chứng r49: read_skill args truncated → {}
+        // → schema "thiếu slug" mơ hồ → sub-agent không đọc được skill.
         const nativeCalls = (result.tool_calls && result.tool_calls.length > 0
           ? result.tool_calls.map((tc, idx) => {
               let args: Record<string, unknown> = {}
+              let rawArgs: string | undefined
               try {
                 args = typeof tc.function.arguments === 'string'
                   ? JSON.parse(tc.function.arguments)
                   : (tc.function.arguments as Record<string, unknown>) || {}
-              } catch { /* keep empty args */ }
-              return { id: tc.id || `native_${idx}`, name: tc.function.name, args }
+              } catch {
+                const rawStr = typeof tc.function.arguments === 'string' ? tc.function.arguments : ''
+                const loose = tryParseLooseJson(rawStr)
+                if (loose) {
+                  args = loose
+                } else {
+                  rawArgs = rawStr
+                  console.warn(`[SubAgent] ${profile.name} native tool_call "${tc.function.name}" — args BỊ CẮT CỤT (loose-repair fail) — sẽ phản hồi yêu cầu phát lại hoàn chỉnh raw=${rawStr.slice(0, 120)}`)
+                }
+              }
+              return { id: tc.id || `native_${idx}`, name: tc.function.name, args, ...(rawArgs !== undefined ? { rawArgs } : {}) }
             })
           : []
         ).filter(tc => allowedTools.includes(tc.name))
@@ -798,6 +823,20 @@ async function runSubAgentForProfileInner(params: {
             evidence.push(`${tc.name}: bị từ chối (ngoài whitelist)`)
             continue
           }
+          // ROUND-50 FIX (P2-δ r49): args native BỊ CẮT CỤT → KHÔNG thực thi với
+          // args rỗng — phản hồi nguyên văn + yêu cầu phát lại hoàn chỉnh
+          // (mirror agent-goal-loop; bằng chứng r49: read_skill truncated).
+          if (tc.rawArgs !== undefined) {
+            const rawFeedback = JSON.stringify({
+              tool: tc.name,
+              success: false,
+              result: `⚠️ Tool call "${tc.name}" bị CẮT CỤT ở tầng hạ tầng (args JSON không hoàn chỉnh — tool KHÔNG được thực thi). Nguyên văn phần args đến được: ${tc.rawArgs.slice(0, 400)} — Hãy phát LẠI tool_call HOÀN CHỈNH cho tool này (rút gọn args nếu cần).`,
+            })
+            transcript.push({ role: 'tool', content: rawFeedback })
+            toolResultLog.push(rawFeedback)
+            evidence.push(`${tc.name}: args bị cắt cụt — đã yêu cầu phát lại hoàn chỉnh`)
+            continue
+          }
           toolCallCount++
           // DELEGATION CONTRACT — todo_write: inject sessionId của parent +
           // runId delegation (mirror agent-goal-loop CI-2): todos của sub-agent
@@ -813,12 +852,14 @@ async function runSubAgentForProfileInner(params: {
           const toolArgs: Record<string, unknown> = { ...tc.args }
           if (tc.name === 'todo_write') {
             sawTodoWrite = true
-            if (sessionId) {
-              if (toolArgs.sessionId !== sessionId) {
+            // ROUND-50 (P2-γ r49): ép scope `delegation:<runId>` (không còn
+            // session chat cha — xem comment khai báo todoScopeSessionId).
+            if (todoScopeSessionId) {
+              if (toolArgs.sessionId !== todoScopeSessionId) {
                 if (toolArgs.sessionId) {
-                  console.log(`[SubAgent] ${profile.name} todo_write: sessionId khai báo "${String(toolArgs.sessionId).slice(0, 60)}" ≠ session thật → ép lại (chống todo rơi scope sai)`)
+                  console.log(`[SubAgent] ${profile.name} todo_write: sessionId khai báo "${String(toolArgs.sessionId).slice(0, 60)}" ≠ scope delegation → ép lại (chống todo rơi scope sai)`)
                 }
-                toolArgs.sessionId = sessionId
+                toolArgs.sessionId = todoScopeSessionId
               }
               if (delegationRunId && toolArgs.runId !== delegationRunId) toolArgs.runId = delegationRunId
               if (toolArgs.agentRole !== profile.name) toolArgs.agentRole = profile.name
@@ -894,7 +935,9 @@ async function runSubAgentForProfileInner(params: {
         // lần cuối). Snapshot DB trả về là NGUỒN SỰ THẬT cho completion guard.
         if (sessionId && delegationRunId && batchEvidence.length > 0 && autoCompleteRunTodosByEvidenceFn) {
           try {
-            const res = await autoCompleteRunTodosByEvidenceFn({ sessionId, runId: delegationRunId, evidence: batchEvidence })
+            // ROUND-50 (P2-γ): query theo scope delegation (đồng bộ với scope
+            // ghi ở todo_write phía trên — cùng cặp sessionId+runId mới thấy).
+            const res = await autoCompleteRunTodosByEvidenceFn({ sessionId: todoScopeSessionId, runId: delegationRunId, evidence: batchEvidence })
             if (res.todos.length > 0) {
               lastTodoSnapshot = res.todos.map(t => ({ id: t.id, content: t.content, status: t.status }))
             }
@@ -1115,7 +1158,8 @@ async function runSubAgentForProfileInner(params: {
     if (sessionId && delegationRunId && closeRunTodosAtEndFn) {
       try {
         const closed = await closeRunTodosAtEndFn({
-          sessionId,
+          // ROUND-50 (P2-γ): đóng todo theo scope delegation (đồng bộ scope ghi)
+          sessionId: todoScopeSessionId,
           runId: delegationRunId,
           goalComplete: outcome.evaluation ? outcome.evaluation.pass : outcome.success,
           crash: state.endedBy === 'error',
