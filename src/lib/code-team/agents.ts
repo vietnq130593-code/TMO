@@ -111,7 +111,14 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     team: 'code',
     position: 'G1',
     avatar: '🧠',
-    tools: ['knowledge_search', 'knowledge_graph', 'tavily', 'serper', 'jina', 'file_read', 'file_list', 'grep', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'run_gate', 'test_coverage', 'db_query', 'work_data', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
+    tools: ['knowledge_search', 'knowledge_graph', 'tavily', 'serper', 'jina', 'file_read', 'file_list', 'grep', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'gateway_tool', 'shell',
+      // ROUND-44 FIX (b) — G1 cần bộ process tools (run_bg/read_output/
+      // kill_process): task spec thường yêu cầu tự khởi động server để kiểm
+      // định thiết kế; trước đây G1 KHÔNG có run_bg (chỉ G2-A có) nên phải tự chế
+      // `nohup ... &` qua shell → dính bug pipe-hold (bằng chứng run
+      // ct-req-1791224445715: G1 kẹt 35 phút ở shell call khởi động server nền).
+      'run_bg', 'read_output', 'kill_process',
+      'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'run_gate', 'test_coverage', 'db_query', 'work_data', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
       // SKILL ACCESS (fix 2026-09-12) — xem note MEGATRON phía trên.
       'list_skills', 'read_skill',
       // AUTOMATION PROPOSAL (2026-09-13) — xem note MEGATRON phía trên.
@@ -163,7 +170,13 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
       'git_status', 'git_diff', 'git_log',
       // CI-3 B3 (Task 13-b) — Kho Context: đọc lại digest run trước khi review.
       'context_recall',
-      'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_edit', 'lsp_diagnostics', 'lint', 'type_check', 'browser_screenshot', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
+      'gateway_tool', 'shell',
+      // ROUND-44 FIX (b) — G2-B (review/fix) cần restart + quan sát server/app
+      // đang review (run_bg/read_output/kill_process) — trước đây thiếu nên
+      // đường "review có kiểm chứng thực" phải mượn shell nền dễ dính bug
+      // pipe-hold (mirror fix SHOCWAVE cùng round).
+      'run_bg', 'read_output', 'kill_process',
+      'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_edit', 'lsp_diagnostics', 'lint', 'type_check', 'browser_screenshot', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem',
       // SKILL ACCESS (fix 2026-09-12) — xem note MEGATRON phía trên.
       'list_skills', 'read_skill',
       // AUTOMATION PROPOSAL (2026-09-13) — xem note MEGATRON phía trên.

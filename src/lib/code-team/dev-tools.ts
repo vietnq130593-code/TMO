@@ -3507,6 +3507,26 @@ export async function shell(args: {
     let killed = false
     let timer: ReturnType<typeof setTimeout> | null = null
     let killTimer: ReturnType<typeof setTimeout> | null = null
+    // ━━━ ROUND-44 FIX (a) — resolve trên 'exit' + grace, KHÔNG đợi 'close' ━━━
+    // Bug gốc (bằng chứng run ct-req-1791224445715, G1 18:27:58): lệnh chứa
+    // background chain `cd ... && nohup server > log 2>&1 &` khiến bash fork
+    // SUBSHELL NỀN kế thừa stdio pipe write-ends; subshell chờ process nền
+    // (server chạy vĩnh viễn) → node không bao giờ nhận EOF trên stdout/stderr
+    // → event 'close' KHÔNG BAO GIỜ fire dù bash chính đã exit (lệnh hoàn tất
+    // ~5s, tool call treo 2114s/35 phút — 30' trong đó workflow đóng băng).
+    // Timeout SIGTERM/SIGKILL cũng vô dụng: giết child pid đã exit (ESRCH).
+    // Giờ: 'exit' fire → chờ 'close' đúng 1500ms grace (đường bình thường không
+    // đổi hành vi) → chưa settle thì resolve kèm cờ background_procs_hold_stdio.
+    let settled = false
+    let closeGraceTimer: ReturnType<typeof setTimeout> | null = null
+    const settle = (payload: Record<string, unknown>) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      if (killTimer) clearTimeout(killTimer)
+      if (closeGraceTimer) clearTimeout(closeGraceTimer)
+      resolve(payload)
+    }
 
     // Use spawn with shell to allow metacharacters (|, &&, ;, >)
     // (Windows: shell tự dùng cmd.exe; windowsHide chặn cửa sổ console
@@ -3551,8 +3571,7 @@ export async function shell(args: {
     })
 
     child.on('error', (err: Error) => {
-      if (timer) clearTimeout(timer)
-      resolve({
+      settle({
         success: false,
         exit_code: -1,
         stdout: stdoutBuf,
@@ -3563,13 +3582,36 @@ export async function shell(args: {
       })
     })
 
+    // ROUND-44 FIX (a) — đường exit+grace: bash đã exit nhưng 'close' chưa fire
+    // trong 1500ms → pipe đang bị process nền giữ (không phải lỗi của lệnh —
+    // output đã thu đủ) → resolve NGAY kèm cờ báo để agent biết process nền vẫn
+    // sống. Đồng thời khiến timeout SIGTERM/SIGKILL có tác dụng cả khi pipe bị
+    // giữ (exit fire theo sau kill → grace → settle killed:true).
+    child.on('exit', (code: number | null) => {
+      if (settled) return
+      closeGraceTimer = setTimeout(() => {
+        const stdoutTruncated = stdoutBuf.length >= MAX_OUT
+        const stderrTruncated = stderrBuf.length >= MAX_OUT
+        settle({
+          success: code === 0,
+          exit_code: code ?? -1,
+          stdout: stdoutBuf,
+          stderr: stderrBuf,
+          duration_ms: Date.now() - startedAt,
+          truncated: stdoutTruncated || stderrTruncated,
+          cursor: stdoutTruncated ? MAX_OUT : undefined,
+          cwd,
+          killed,
+          background_procs_hold_stdio: true,
+        })
+      }, 1500)
+    })
+
     child.on('close', (code: number | null) => {
-      if (timer) clearTimeout(timer)
-      if (killTimer) clearTimeout(killTimer)
       const durationMs = Date.now() - startedAt
       const stdoutTruncated = stdoutBuf.length >= MAX_OUT
       const stderrTruncated = stderrBuf.length >= MAX_OUT
-      resolve({
+      settle({
         success: code === 0,
         exit_code: code ?? -1,
         stdout: stdoutBuf,

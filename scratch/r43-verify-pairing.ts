@@ -55,7 +55,7 @@ ok(`V2 toolResult rows có toolSeq (${withToolSeq.length}/${toolResults.length})
 const events: Array<{ kind: 'tool'; id: string; seq?: number; tool: string; success?: boolean; resultTool?: string }> = []
 let mismatch = 0, orphans = 0
 for (const x of seqRows) {
-  const m = x.meta as { toolCallInfo?: { tool: string }; toolResult?: { toolSeq?: number; tool?: string; ok?: boolean } }
+  const m = x.meta as { teamSeq?: number; toolCallInfo?: { tool: string }; toolResult?: { toolSeq?: number; tool?: string; ok?: boolean } }
   if (m.toolCallInfo) {
     events.push({ kind: 'tool', id: x.id, seq: m.teamSeq as number, tool: m.toolCallInfo.tool })
     continue
@@ -95,8 +95,8 @@ console.log(`  ℹ️ DB có ${inverted} cặp result-commit-trước-call (bằ
 // ── 4. trạng thái cuối ──
 const doneRow = rows.map(r => ({ role: r.role, meta: metaOf(r) }))
   .filter(x => typeof x.meta?.workflowStatus === 'string').at(-1)
-ok('V5 có workflow_done row (marker terminal)', !!doneRow, `status=${doneRow?.meta?.workflowStatus as string}`)
-if (doneRow) console.log(`  ℹ️ workflow_done status = ${doneRow.meta.workflowStatus}`)
+ok('V5 có workflow_done row (marker terminal)', !!doneRow, `status=${(doneRow?.meta?.workflowStatus as string) ?? 'none'}`)
+if (doneRow && doneRow.meta) console.log(`  ℹ️ workflow_done status = ${doneRow.meta.workflowStatus}`)
 
 // ── 5. thought + todos persist ──
 const thoughts = seqRows.filter(x => (x.meta as { teamThought?: boolean }).teamThought === true)

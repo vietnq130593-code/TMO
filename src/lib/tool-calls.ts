@@ -171,6 +171,191 @@ function extractFencedFileWrites(output: string): { calls: ParsedToolCall[]; cle
 }
 
 /**
+ * ROUND-44 FIX (c) — DANH SÁCH tool name hợp lệ dùng chung (pattern 2 +
+ * invoke-recovery). Trước đây lặp inline 2 nơi (tool-calls.ts + workflow-engine.ts)
+ * — dễ lệch khi thêm tool mới.
+ */
+const KNOWN_TOOL_NAMES = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'hypothesis_write', 'list_skills', 'read_skill', 'mcp_list_servers', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'manage_tools',
+  // FIX 2026-09-15 #7 (P4 — audit Team Code): bổ sung tool mới thiếu trong
+  // danh sách regex (mirror workflow-engine.ts) — agent phát tên_tool({...})
+  // trực tiếp giờ được parse đúng thay vì bị bỏ lỡ → tự bịa output.
+  'git_status', 'git_diff', 'git_log', 'git_branch', 'context_recall',
+  'escalate_problem', 'propose_automation', 'verify_and_push',
+  'delegate_task', 'request_code_team', 'dispatch_agent', 'dispatch_agents_parallel',
+  'create_agent', 'manage_automation',
+  // P5/P8 (2026-11) — run_gate (gate receipt sha256) + work_data (CRUD dữ
+  // liệu công việc DB)
+  'run_gate', 'work_data']
+const KNOWN_TOOL_NAME_SET = new Set(KNOWN_TOOL_NAMES)
+
+// ==================== ROUND-44 FIX (c) — PROVIDER GARBLE + INVOKE RECOVERY ====================
+
+/**
+ * ROUND-44 FIX (c-recovery, tầng 2) — coerce giá trị XML-tag: nguyên thủy
+ * (number/bool/null) → JSON (nếu mở bằng {/[ ) → XML LỒNG (recurve — giá trị
+ * chứa tag con; toàn bộ tag con CÙNG tên vd <item>×N → ARRAY) → string.
+ * Bằng chứng v2 (job cmuw8c5pd…): `<todos><item>…</item>×N</todos>` bị ép
+ * thành string → todo_write exec fail "tham số todos sai kiểu — cần array".
+ */
+function coerceXmlValue(raw: string): unknown {
+  const t = raw.trim()
+  if (t === '') return raw
+  if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t)
+  if (t === 'true') return true
+  if (t === 'false') return false
+  if (t === 'null') return null
+  if (t.startsWith('{') || t.startsWith('[')) {
+    // Giá trị JSON thuần (OBJECT hoặc ARRAY — tryParseLooseJson chỉ nhận object)
+    // → loose-repair (newline thô/trailing comma) rồi parse
+    try {
+      return JSON.parse(t) as unknown
+    } catch { /* rơi xuống repair */ }
+    try {
+      const repaired = stripTrailingCommasStringAware(escapeRawControlCharsInStrings(t))
+      return JSON.parse(repaired) as unknown
+    } catch { /* giữ string */ }
+  }
+  if (/^<[A-Za-z_]/.test(t)) {
+    const nested = parseXmlTagArgs(t)
+    if (nested) {
+      // <todos><item>…</item><item>…</item></todos> → {item: [a, b]} →
+      // unwrap thành ARRAY [a, b] (đúng schema todo_write/… cần mảng)
+      const keys = Object.keys(nested)
+      if (keys.length === 1 && Array.isArray(nested[keys[0]])) return nested[keys[0]]
+      return nested
+    }
+  }
+  return raw
+}
+
+/**
+ * Parse chuỗi gồm các tag liên tiếp `<key>value</key>…` thành object.
+ * Key LẶP (vd `<item>`×N) → gom thành ARRAY (bằng chứng v2: todo_write
+ * `<todos><item>…</item><item>…</item></todos>` cần array các item).
+ * Trả null khi không khớp tag nào (caller giữ giá trị gốc).
+ */
+function parseXmlTagArgs(text: string): Record<string, unknown> | null {
+  const collected = new Map<string, unknown[]>()
+  let pos = 0
+  let any = false
+  while (pos < text.length) {
+    const m = /^<([A-Za-z_][\w-]*)>([\s\S]*?)<\/\1>\s*/.exec(text.slice(pos))
+    if (!m) break
+    const list = collected.get(m[1]) || []
+    list.push(coerceXmlValue(m[2]))
+    collected.set(m[1], list)
+    any = true
+    pos += m[0].length
+  }
+  if (!any) return null
+  const out: Record<string, unknown> = {}
+  for (const [k, vs] of collected.entries()) {
+    out[k] = vs.length === 1 ? vs[0] : vs
+  }
+  return out
+}
+
+/**
+ * Marker corruption của provider (chat-template leak): chuỗi dạng
+ * `]<]namespace[>[` (vd `]<]minimax[>[` lặp dày đặc — bằng chứng job
+ * cmuw7to9e… r44: toàn bộ output Omega bị bọc marker này). HTTP 200 nhưng
+ * nội dung gần như không đọc được nếu không strip. Regex ăn CẢ cặp ngoặc
+ * bao quanh `]`…`[` + tối đa 1 ký tự whitespace mỗi bên — tránh để lại mảnh
+ * `][` rời rạc kẹt giữa invoke-tag và args (bug phát hiện qua unit test C1/C2).
+ * Output SẠCH (0 marker) → regex không khớp chỗ nào → zero tác động phụ.
+ */
+const PROVIDER_GARBLE_MARKER_RE = /\]?\s?<\][^\]\s]{1,24}\[>\[?\s?/g
+
+export function countProviderGarbleMarkers(content: string): number {
+  return (content.match(PROVIDER_GARBLE_MARKER_RE) || []).length
+}
+
+export function stripProviderGarbleMarkers(content: string): string {
+  return content.replace(PROVIDER_GARBLE_MARKER_RE, '')
+}
+
+/**
+ * ROUND-44 FIX (c-recovery) — parse format `<invoke name="tool">` của minimax.
+ *
+ * Bằng chứng r44 (goal-loop job cmuw7to9e…, Omega): model phát tool call dưới
+ * dạng `<invoke name="functions.request_code_team">{"task":…}` và
+ * `<invoke name="request_code_team"><task>…</task><context>…</context>…</invoke>`
+ * — Ý ĐỊNH + ARGS ĐẦY ĐỦ nhưng format không khớp `tool_call: name({...})` →
+ * parser cũ trả 0 call → 4 chu kỳ planning-only đốt 267K tokens → stall brake
+ * cắt no_progress (đúng pattern TEST A round-43). Giờ: strip marker rác +
+ * công nhận cả 2 dạng args (JSON object ngay sau tag / XML tags <key>value</key>).
+ * Tool name phải nằm trong whitelist (chống hallucinate); prefix `functions.`
+ * (OpenAI-style namespace) được lược bỏ.
+ */
+function extractInvokeToolCalls(output: string): { calls: ParsedToolCall[]; cleaned: string; failures: number } {
+  if (output.indexOf('<invoke') === -1) return { calls: [], cleaned: output, failures: 0 }
+  const calls: ParsedToolCall[] = []
+  const ranges: Array<[number, number]> = []
+  let failures = 0
+  const re = /<invoke\s+name\s*=\s*"?([A-Za-z_][\w.-]*)"?\s*>/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(output)) !== null) {
+    let toolName = m[1]
+    if (toolName.startsWith('functions.')) toolName = toolName.slice('functions.'.length)
+    if (!KNOWN_TOOL_NAME_SET.has(toolName)) continue // tên bịa — KHÔNG execute
+    const afterTag = output.slice(m.index + m[0].length)
+    // Bỏ qua junk prefix (whitespace + mảnh ngoặc rơi `][` của marker đã strip
+    // nhưng thiếu cặp bao quanh) — tối đa 8 ký tự, chỉ brackets/whitespace.
+    const junkM = /^[\s\]\[]{0,8}/.exec(afterTag)
+    const junkLen = junkM ? junkM[0].length : 0
+    const leadingWs = junkLen
+    const trimmed = afterTag.slice(leadingWs)
+    let args: Record<string, unknown> | null = null
+    let consumed = 0
+    if (trimmed.startsWith('{')) {
+      // Form A: JSON object ngay sau tag — dùng balanced-json + loose-repair
+      const jsonStr = findBalancedJsonUtil(trimmed, '')
+      if (jsonStr) {
+        args = tryParseLooseJson(jsonStr)
+        if (!args) failures++
+        else consumed = leadingWs + jsonStr.length
+      } else {
+        failures++ // JSON bị cắt cụt giữa chừng
+      }
+    } else {
+      // Form B: XML-ish tags <key>value</key>… (value nhiều dòng + LỒNG:
+      // <todos><item>…</item>×N</todos> → array) — parseXmlTagArgs tái sử dụng
+      // lớp coerce (ROUND-44 tầng 2 — fix todo_write exec fail "cần array")
+      const argsObj = parseXmlTagArgs(trimmed)
+      if (argsObj && Object.keys(argsObj).length > 0) {
+        args = argsObj
+        // consumed = toàn bộ vùng tag đã khớp: tính lại bằng regex chạy lần 2
+        let pos = 0
+        for (;;) {
+          const tm = /^<([A-Za-z_][\w-]*)>([\s\S]*?)<\/\1>\s*/.exec(trimmed.slice(pos))
+          if (!tm) break
+          pos += tm[0].length
+        }
+        consumed = leadingWs + pos
+      } else {
+        failures++
+      }
+    }
+    if (args && Object.keys(args).length > 0) {
+      calls.push({
+        id: `tc_${Date.now()}_${calls.length}`,
+        name: toolName,
+        args,
+      })
+      ranges.push([m.index, m.index + m[0].length + consumed])
+      // Tiếp tục quét sau vùng đã dùng (một output có thể chứa nhiều invoke)
+    }
+  }
+  // Cắt các vùng đã parse (từ cuối về đầu giữ index ổn định)
+  let cleaned = output
+  for (let i = ranges.length - 1; i >= 0; i--) {
+    const [s, e] = ranges[i]
+    cleaned = cleaned.slice(0, s) + ' ' + cleaned.slice(e)
+  }
+  return { calls, cleaned, failures }
+}
+
+/**
  * Parse tool_call patterns from LLM text output (kèm đếm parse failures).
  *
  * Supported formats:
@@ -179,11 +364,20 @@ function extractFencedFileWrites(output: string): { calls: ParsedToolCall[]; cle
  * 2. Direct invocation like opencode({action: "read", path: "..."})
  * 3. file_write fence-block: tool_call: file_write({"path": ...}) + ```fence```
  *    (Task 24 — code nhiều dòng không cần escape)
+ * 4. ROUND-44 (c): `<invoke name="tool">` của minimax (JSON args hoặc XML
+ *    tags args) + strip marker corruption `<]xxx[>` của provider trước khi parse
  */
-export function extractToolCallsWithDiagnostics(output: string): ToolCallParseResult {
-  const { calls: fenceCalls, cleaned, failures: fenceFailures } = extractFencedFileWrites(output)
-  const calls: ParsedToolCall[] = [...fenceCalls]
-  let parseFailures = fenceFailures
+export function extractToolCallsWithDiagnostics(rawOutput: string): ToolCallParseResult {
+  // ROUND-44 FIX (c): strip marker rác của provider TRƯỚC mọi parse — marker
+  // chen giữa `tool_call: x({...})` cũng làm regex cũ miss.
+  const output = stripProviderGarbleMarkers(rawOutput)
+  const { calls: fenceCalls, cleaned: afterFence, failures: fenceFailures } = extractFencedFileWrites(output)
+  // ROUND-44 FIX (c): invoke-recovery chạy TRƯỚC regex (format đặc thù, không
+  // đụng pattern 1/2); vùng đã parse bị cắt khỏi chuỗi regex quét tiếp.
+  const invokeRes = extractInvokeToolCalls(afterFence)
+  const calls: ParsedToolCall[] = [...fenceCalls, ...invokeRes.calls]
+  let parseFailures = fenceFailures + invokeRes.failures
+  const cleaned = invokeRes.cleaned
 
   // Pattern 1: tool_call: function_name({...})
   // Use findBalancedJson for nested JSON args (e.g., opencode write with content containing code)
@@ -217,18 +411,9 @@ export function extractToolCallsWithDiagnostics(output: string): ToolCallParseRe
 
   // Pattern 2: Direct tool invocation like opencode({...})
   if (calls.length === 0) {
-    const validToolNames = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'hypothesis_write', 'list_skills', 'read_skill', 'mcp_list_servers', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'manage_tools',
-      // FIX 2026-09-15 #7 (P4 — audit Team Code): bổ sung tool mới thiếu trong
-      // danh sách regex (mirror workflow-engine.ts) — agent phát tên_tool({...})
-      // trực tiếp giờ được parse đúng thay vì bị bỏ lỡ → tự bịa output.
-      'git_status', 'git_diff', 'git_log', 'git_branch', 'context_recall',
-      'escalate_problem', 'propose_automation', 'verify_and_push',
-      'delegate_task', 'request_code_team', 'dispatch_agent', 'dispatch_agents_parallel',
-      'create_agent', 'manage_automation',
-      // P5/P8 (2026-11) — run_gate (gate receipt sha256) + work_data (CRUD dữ
-      // liệu công việc DB) — mirror workflow-engine.ts
-      'run_gate', 'work_data']
-    const regex2 = new RegExp(`(${validToolNames.join('|')})\\s*\\(\\s*\\{`, 'g')
+    // ROUND-44 FIX (c): dùng danh sách dùng chung KNOWN_TOOL_NAMES (trước đây
+    // lặp inline — 2 nơi dễ lệch khi thêm tool mới)
+    const regex2 = new RegExp(`(${KNOWN_TOOL_NAMES.join('|')})\\s*\\(\\s*\\{`, 'g')
     let match2
     while ((match2 = regex2.exec(cleaned)) !== null) {
       const toolName = match2[1]

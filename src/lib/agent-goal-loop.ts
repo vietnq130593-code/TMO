@@ -56,7 +56,7 @@
 
 import { callLLMForAgent, type LLMTool } from '@/lib/llm'
 import { executeTool, buildCompactToolSchemasSection, resolveToolAlias, getToolDefinitions, getAllBuiltinToolNames } from '@/lib/code-team/tool-executor'
-import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint } from '@/lib/tool-calls'
+import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint, countProviderGarbleMarkers } from '@/lib/tool-calls'
 // TASK 43 — Agent Event Bus: emit sự kiện vòng đời run lên bus hợp nhất
 // (GET /api/agent-events) — fail-open tuyệt đối bên trong emit (try/catch).
 import { emitAgentEvent } from '@/lib/agent-event-bus'
@@ -398,6 +398,42 @@ export function getGoalLoopBudgetInfo(): {
     maxDebtCycles: MAX_DEBT_CYCLES,
   }
 }
+
+// ==================== ROUND-44 FIX (c) — TEXT TOOL-CALL RECOVERY ====================
+
+/**
+ * Tool huy động thường bị agent "NÓI TỚI" bằng văn xuôi thay vì phát cú pháp
+ * tool_call (bằng chứng TEST A round-43 — Omega agent_1791223503730_yffcsa:
+ * 4 chu kỳ planning-only mô tả "sẽ dùng dispatch_agent cho ALISTA" nhưng 0
+ * tool call thật → stall brake cắt sau 1.3M tokens). Nguyên nhân vận hành:
+ * model space-bunny-free qua HTTP bỏ qua native FC (body.tools — test
+ * 2026-10-30) nên ĐƯỜNG HÀNH ĐỘNG duy nhất là text protocol; model reasoning
+ * max hay viết ý định thành văn. Giải pháp: khi chu kỳ chuẩn bị kết thúc
+ * 'no_tool_calls' mà content NHẮC đúng tên tool huy động → nudge có SẴN MẪU
+ * điền trước cho tool đó (tỷ lệ chấp nhận cao hơn hẳn nudge generic).
+ */
+const DELEGATION_INTENT_TOOLS = [
+  'dispatch_agents_parallel', 'request_code_team', 'dispatch_agent',
+  'delegate_task', 'escalate_problem', 'create_agent',
+] as const
+
+/** Mẫu cú pháp điền sẵn cho từng intent tool (agent chỉ cần thay nội dung). */
+const DELEGATION_INTENT_TEMPLATES: Record<string, string> = {
+  dispatch_agent: 'tool_call: dispatch_agent({"agent": "TÊN_AGENT_TỪ_AGENT_ROSTER", "task": "nhiệm vụ cụ thể có tiêu chí kiểm định", "context": "bối cảnh/bằng chứng liên quan"})',
+  dispatch_agents_parallel: 'tool_call: dispatch_agents_parallel({"tasks": [{"agent": "TÊN_AGENT", "task": "..."}, {"agent": "TÊN_AGENT", "task": "..."}]})',
+  delegate_task: 'tool_call: delegate_task({"agent": "RAMPAGE", "task": "nhiệm vụ cụ thể", "context": "...", "acceptance_criteria": "xong khi..."})',
+  request_code_team: 'tool_call: request_code_team({"task": "mục tiêu + phạm vi + ràng buộc", "context": "...", "acceptance_criteria": "xong khi..."})',
+  escalate_problem: 'tool_call: escalate_problem({"problem": "vấn đề cụ thể", "context": "...", "attempted": "đã thử gì", "severity": "medium"})',
+  create_agent: 'tool_call: create_agent({"name": "TÊN_AGENT", "description": "mô tả vai trò", "instruction": "system prompt chi tiết", "model": "minimaxai/minimax-m3", "tools": ["file_read", "..."]})',
+}
+
+/**
+ * Phát hiện output CORRUPT tầng provider — marker template lẫn vào content
+ * (bằng chứng TEST A round-43 chu kỳ 2 + job r44 cmuw7to9e…: `<]minimax[>[`
+ * dày đặc — HTTP 200 nhưng nội dung hỏng, đốt nguyên chu kỳ vô ích).
+ * ROUND-44: hàm đếm nằm ở tool-calls.ts DÙNG CHUNG (countProviderGarbleMarkers
+ * — import ở đầu file) — mọi parser đều strip marker này trước khi parse.
+ */
 
 // ==================== TYPES ====================
 
@@ -2817,6 +2853,43 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             continue
           }
         } catch { /* fail-open — feedback lỗi không được phép crash loop */ }
+        // ━━━ ROUND-44 FIX (c) — 2 lớp khôi phục trước nudge generic ━━━
+        // (1) GARBLED OUTPUT: marker template provider lẫn vào content (bằng
+        //     chứng TEST A round-43 chu kỳ 2: `<]minimax[>[` dày đặc) → đốt
+        //     nguyên chu kỳ vì evaluator không đọc được gì. Nudge phát lại sạch
+        //     (dùng ngân sách parseFailNudges — lỗi hạ tầng, không phải lỗi agent).
+        // (2) DELEGATION INTENT: content nhắc đúng tên tool huy động nhưng không
+        //     phát cú pháp → nudge KÈM MẪU ĐIỀN SẴN của tool đó (nudge generic
+        //     đã thất bại trong TEST A: proseNudges=2 vẫn 0 tool call cả 4 chu kỳ).
+        if (!brokenHint) {
+          const garbleCount = countProviderGarbleMarkers(result.content || '')
+          if (garbleCount >= 3 && parseFailNudges < 2 && timeLeft() > 0 && tokenLeft() > REPORT_RESERVE_TOKENS) {
+            parseFailNudges++
+            // Chỉ giữ 4000 ký tự đầu — tránh nhét cả khối rác vào transcript
+            messages.push({ role: 'assistant', content: (result.content || '').slice(0, 4000) })
+            pushToolMessage(messages, {
+              tool: 'parse_error',
+              success: false,
+              result: `⚠️ Output của bạn vừa bị CORRUPT ở tầng hạ tầng provider (${garbleCount} marker template lẫn vào nội dung — không phải lỗi của bạn). PHÁT LẠI nội dung gọn sạch. Nếu ý định của bạn là gọi tool thì phát ĐÚNG cú pháp: tool_call: <tên_tool>({json args}) — tuyệt đối không viết dạng văn bản.`,
+            })
+            evidence.push({ cycle, kind: 'tool', tool: 'parse_error', success: false, text: `garbled output (${garbleCount} provider markers) — đã yêu cầu phát lại sạch` })
+            recordAgentThought(agentSessionId, `⚠️ Output bị corrupt tầng provider (${garbleCount} marker lạ) — đã phản hồi yêu cầu phát lại sạch (lần ${parseFailNudges}/2)`, totalIterations)
+            continue
+          }
+          const intentTool = DELEGATION_INTENT_TOOLS.find(t => new RegExp(`\\b${t}\\b`).test(result.content || ''))
+          if (intentTool && proseNudges < 2 && timeLeft() > 0 && tokenLeft() > REPORT_RESERVE_TOKENS) {
+            proseNudges++
+            messages.push({ role: 'assistant', content: result.content })
+            pushToolMessage(messages, {
+              tool: 'harness_warning',
+              success: false,
+              result: `⚠️ Bạn vừa NÓI TỚI việc gọi ${intentTool} BẰNG VĂN BẢN — 0 hành động nào được thực thi (lượt này KHÔNG được ghi nhận là tiến triển, trọng tài sẽ chấm CHƯA ĐẠT). Ý định đó phải phát NGAY dưới dạng tool_call đúng cú pháp — đúng 1 dòng, điền từ chính kế hoạch bạn vừa mô tả:\n${DELEGATION_INTENT_TEMPLATES[intentTool]}\nKhông viết thêm kế hoạch — chỉ phát tool_call.`,
+            })
+            evidence.push({ cycle, kind: 'tool', tool: 'harness_warning', success: false, text: `delegation-intent nudge (${intentTool} được nhắc bằng văn bản) — đã gửi mẫu tool_call điền sẵn` })
+            recordAgentThought(agentSessionId, `⚠️ Phát hiện ý định gọi ${intentTool} dạng văn bản (0 tool call) — đã gửi lại mẫu cú pháp điền sẵn (lần ${proseNudges}/2)`, totalIterations)
+            continue
+          }
+        }
         // ROUND-26 FIX A (mission cmupl7uen — Omega báo cáo "vòng lặp kẹt ở
         // trạng thái lập kế hoạch, chu kỳ 2/3/4 không thực hiện đầy đủ chuỗi"):
         // LLM trả về THUẦN VĂN (kế hoạch/kết luận, không có dấu hiệu tool call)

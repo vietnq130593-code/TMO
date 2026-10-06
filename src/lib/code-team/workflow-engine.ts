@@ -39,13 +39,17 @@ import {
   completeSession,
   type WorklogEntry,
   type RoutingDecision,
+  type PartDefinition,
+  type ToolCallLog,
 } from './worklog'
 // FIX 2026-08-29: import pure utility trực tiếp (không qua worklog) để giảm coupling
 import { findBalancedJson as findBalancedJsonUtil } from './find-balanced-json'
 // TASK 43 — strict-parse: parser bản địa dùng chung lớp loose-repair với
 // tool-calls.ts (escape control chars trong string + strip trailing comma
 // string-aware) — trước đây JSON.parse thuần fail → tool call bị BỎ QUA im lặng.
-import { tryParseLooseJson } from '@/lib/tool-calls'
+// ROUND-44 FIX (c): thêm parseToolCallsFromOutputShared — parser DÙNG CHUNG
+// (kèm invoke-recovery `<invoke name=…>` + garble-strip `<]xxx[>` của minimax).
+import { tryParseLooseJson, parseToolCallsFromOutput as parseToolCallsFromOutputShared } from '@/lib/tool-calls'
 import {
   executeTool,
 } from './tool-executor'
@@ -1080,6 +1084,8 @@ export async function runWorkflow(
       sessionId,
       emit: safeEmit,
       ctx,
+      // ROUND-44 FIX (f) — enforce budget cho TL analyze như mọi step khác
+      stepTokenBudget: effectiveTokenBudget,
     })
 
     safeEmit({
@@ -1121,6 +1127,8 @@ export async function runWorkflow(
         nextSteps: ['G1 thiết kế kiến trúc'],
         outputForNext: tlResult.content,
         routingDecision: fallbackDecision,
+        // ROUND-44 FIX (e) — toolCallsLog thật của TL recon (không còn bỏ trống)
+        toolCallsLog: tlResult.toolCallsLog,
       }
       await writeWorklog(tlWorklogEntry, tlResult.duration)
 
@@ -1171,6 +1179,8 @@ export async function runWorkflow(
       nextSteps: routingDecision.tier === 1 ? ['G2-B review'] : ['G1 thiết kế kiến trúc'],
       outputForNext: routingDecision.spec || userRequest,
       routingDecision,
+      // ROUND-44 FIX (e) — toolCallsLog thật của TL recon (không còn bỏ trống)
+      toolCallsLog: tlResult.toolCallsLog,
     }
     await writeWorklog(tlWorklogEntry, tlResult.duration)
 
@@ -1491,7 +1501,10 @@ async function runPipeline(
 
     // Build context for this agent
     // Workflow doc: "3 Lớp thông tin" — SPEC + WORKLOG + CODE
-    const context = await buildContextForAgent(sessionId, step.position, spec)
+    // ROUND-44 FIX (d): prepend khối NHIỆM VỤ RIÊNG của step (phạm vi theo vị
+    // trí SOP) — trước đây mọi step nhận nguyên spec build+test như nhau.
+    const context = buildStepMissionBlock(step.position, step.step, step.description, routingDecision?.parts)
+      + await buildContextForAgent(sessionId, step.position, spec)
 
     // Run agent step — resolve from cache (already resolved in pipeline setup)
     const agentDef = ctx.resolvedAgentsCache.get(step.position) || await resolveAgent(step.position)
@@ -1539,6 +1552,8 @@ async function runPipeline(
       maxIterations: (step.position === 'G2-B' || (step.position === 'TL' && step.step === 'verify')) ? 5
         : (step.position === 'TL' && step.step === 'analyze') ? 15
         : 25,
+      // ROUND-44 FIX (f) — truyền budget để enforce (2× → wrap-up directive, 3× → break)
+      stepTokenBudget: tokenBudget,
     })
 
     // Parse worklog from agent output
@@ -1668,6 +1683,13 @@ async function runPipeline(
         : (parsedWorklog?.outputForNext || agentResult.content.slice(0, 2000)),
       unfixedBugs: parsedWorklog?.unfixedBugs,
       kbWrites: parsedWorklog?.kbWrites,
+      // ROUND-44 FIX (e) — persist toolCallsLog THẬT của step vào worklog.
+      // Trước đây log chỉ tích lũy BÊN TRONG runAgentStep rồi bị vứt bỏ khi
+      // return (toolCalls column luôn []) → checkpoint verify prompt nói sai
+      // "agent KHÔNG gọi tool nào — mọi tuyên bố chỉ là khai báo văn bản" →
+      // TL ESCALATE oan dù G1 có ~20 tool calls thật (bằng chứng
+      // ct-req-1791224445715) → pipeline chết sau G1, G2-A/G2-B/G3 không chạy.
+      toolCallsLog: agentResult.toolCallsLog,
     }
     await writeWorklog(worklogEntry, agentResult.duration)
 
@@ -2082,6 +2104,59 @@ function scheduleAutoResume(sessionId: string, resumeNumber: number, agentName: 
   }, AUTO_RESUME_DELAY_MS)
 }
 
+// ==================== ROUND-44 FIX (d) — SOP STEP MISSION ====================
+
+/**
+ * Khối NHIỆM VỤ RIÊNG cho từng bước pipeline, đặt TRÊN ĐẦU context của step.
+ *
+ * Bug gốc (bằng chứng run ct-req-1791224445715 — Mode C/Tier 3): mọi step nhận
+ * nguyên vẹn spec đầy đủ build+test qua buildContextForAgent, KHÔNG có chỉ dẫn
+ * phạm vi theo vị trí → G1-design (SHOCWAVE) tự triển khai + test toàn bộ app
+ * thay vì thiết kế cho G2-A (694K tokens / 40 phút), G2-A/G2-B/G3 không còn
+ * việc làm → checkpoint sau G1 ESCALATE → team không bao giờ vận hành đủ chuỗi
+ * theo SOP. Giờ mỗi step biết CHÍNH XÁC phần của mình trong pipeline.
+ */
+const STEP_MISSIONS: Record<string, string> = {
+  'TL|code': 'Triển khai PHẦN GIAO DIỆN/visual của spec (fast track). Phần backend là việc của G1 (thiết kế) → G2-A (code) → G2-B (review) → G3 (tối ưu) theo pipeline — KHÔNG làm phần backend ở bước này.',
+  'G1|design': 'THIẾT KẾ KIẾN TRÚC — KHÔNG triển khai code: khảo sát code/schema hiện có (file_read/grep/db_query), rồi xuất bản thiết kế chi tiết (DB schema, API contracts, cấu trúc file/module, luồng dữ liệu, rủi ro) vào "outputForNext" CHO G2-A IMPLEMENT. KHÔNG viết code hoàn chỉnh, KHÔNG tự build/test toàn hệ thống (việc của G2-A/G2-B).',
+  'G2-A|code': 'CODE THEO ARCH SPEC: triển khai code dựa trên thiết kế của G1 (đọc "Output cho agent tiếp" trong worklog). Tự kiểm định phần mình viết (lint/type_check/run_tests) trước khi kết thúc.',
+  'G2-B|review': 'REVIEW + FIX: rà soát code các agent trước vừa viết (security trước tiên), TỰ CHẠY kiểm định thật (run_bg/read_output cho server, run_tests, lint) — không chỉ đọc worklog; fix bug tìm thấy, ghi rõ unfixedBugs cho phần không sửa được.',
+  'G3|optimize': 'TỐI ƯU + TÍCH HỢP: tinh chỉnh performance/scalability phần đã hoàn thành và GHÉP NỐI UI (TL) ↔ Backend (G2-A) — kiểm định tích hợp thật (khởi động app, gọi API).',
+  'TL|verify': 'VERIFY TỔNG THỂ: so sánh kết quả cuối với spec GỐC, tự kiểm định bằng tool thật (file_read/run_tests/run_bg — KHÔNG chỉ tin worklog), chốt phán quyết cuối + còn thiếu gì.',
+}
+
+/** Map position → loại part chịu trách nhiệm (để trích đúng phần spec của step). */
+function partTypeForPosition(position: string): 'visual' | 'backend' | undefined {
+  if (position === 'TL') return 'visual'
+  if (position === 'G1' || position === 'G2-A' || position === 'G2-B') return 'backend'
+  return undefined // G3 (integration) + các vị trí khác: toàn spec
+}
+
+/** Ghép khối nhiệm vụ (kèm part description riêng của step nếu có). */
+function buildStepMissionBlock(position: string, step: string, description: string, parts?: PartDefinition[]): string {
+  const mission = STEP_MISSIONS[`${position}|${step}`]
+  if (!mission) return '' // step không có mission đặc thù (vd TL/analyze) — giữ context nguyên bản
+  let block = `━━━ NHIỆM VỤ BƯỚC NÀY (SOP TEAM CODE — ${position}/${step}) ━━━\n${mission}`
+  const partType = partTypeForPosition(position)
+  const ownParts = (parts || []).filter(p => p.type === partType)
+  if (ownParts.length > 0) {
+    block += `\nPHẦN (part) thuộc bước này: ${ownParts.map(p => `${p.name} — ${String(p.description || '').slice(0, 600)}`).join(' | ')}`
+  }
+  block += `\nChỉ làm đúng phạm vi bước này — các bước còn lại của pipeline lo phần khác. Spec đầy đủ nằm ở lớp dưới (tham khảo, KHÔNG tự làm toàn bộ).\n\n`
+  return block
+}
+
+/** ROUND-44 FIX (e) — args preview an toàn cho worklog/verify (giá trị dài cắt 120 ký tự, tối đa 12 key). */
+function previewArgs(args: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!args || typeof args !== 'object') return {}
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(args).slice(0, 12)) {
+    const s = typeof v === 'string' ? v : (JSON.stringify(v) ?? String(v))
+    out[k] = s.length > 120 ? s.slice(0, 120) + '…' : s
+  }
+  return out
+}
+
 // ==================== AGENT STEP RUNNER (ReAct Loop) ====================
 
 /**
@@ -2104,7 +2179,11 @@ export async function runAgentStep(params: {
   emit: SSEEmitter
   maxIterations?: number
   ctx: WorkflowContext
-}): Promise<{ content: string; duration: number; tokensUsed: number }> {
+  /** ROUND-44 FIX (f) — token budget của step (từ runPipeline) để enforce.
+   * Trước đây budget chỉ ghi sổ sách: TL-code tiêu 1,042,791 tokens vs budget
+   * 200,000 (×5.2) mà không điểm nào chặn (bằng chứng ct-req-1791224445715). */
+  stepTokenBudget?: number
+}): Promise<{ content: string; duration: number; tokensUsed: number; toolCallsLog: ToolCallLog[] }> {
   const { position, step, prompt, sessionId, emit, ctx } = params
   const stepStartTime = Date.now()
 
@@ -2414,6 +2493,8 @@ export async function runAgentStep(params: {
   let consecutiveToolFailures = 0 // tool-fail liên tiếp → auto-consult Omega
   let omegaConsultedInStep = false // max 1 consult Omega / step (chống đệ quy tư vấn)
   let hallucinationWarnings = 0 // đếm cảnh cáo kết-quả-tool giả
+  // ROUND-44 FIX (f) — cờ đã gửi wrap-up directive (chỉ gửi 1 lần/step)
+  let budgetWrapUpDirectiveSent = false
 
   console.log(`[Workflow] Running agent: ${agent.name} (${position}) — ${step} [tools: ${tools.join(', ')}] [fc: ${fcMode}${nativeTools ? ` (${nativeTools.length} schemas)` : ''}]`)
 
@@ -2425,6 +2506,27 @@ export async function runAgentStep(params: {
       break
     }
     iterations++
+
+    // ━━━ ROUND-44 FIX (f) — STEP TOKEN BUDGET ENFORCEMENT ━━━
+    // 2 nhịp: vượt 2× budget → directive HOÀN TẤT NGAY (1 lần/step, protected
+    // khỏi nén); vượt 3× budget → break với marker (giữ cấu trúc để worklog
+    // vẫn parse được — mirror đường max-iterations ở cuối loop).
+    const stepTokenBudget = params.stepTokenBudget ?? 0
+    if (stepTokenBudget > 0 && stepTokensUsed > stepTokenBudget * 3) {
+      console.warn(`[Workflow] ${agent.name} (${position}) vượt token budget ${stepTokensUsed}/${stepTokenBudget} (>3×) — kết thúc step (budget exhausted)`)
+      finalContent += `\n\n⚠️ Đạt giới hạn token step (~${stepTokensUsed.toLocaleString('en-US')} tokens = 3× budget ${stepTokenBudget.toLocaleString('en-US')}). Dừng step — phần đã làm được ghi trong worklog.`
+      break
+    }
+    if (stepTokenBudget > 0 && stepTokensUsed > stepTokenBudget * 2 && !budgetWrapUpDirectiveSent) {
+      budgetWrapUpDirectiveSent = true
+      console.warn(`[Workflow] ${agent.name} (${position}) vượt token budget ${stepTokensUsed}/${stepTokenBudget} (>2×) — inject wrap-up directive`)
+      messages.push({
+        role: 'user',
+        content: `⚠️ TOKEN BUDGET: step này đã tiêu ~${stepTokensUsed.toLocaleString('en-US')} tokens (vượt 2× phân bổ ${stepTokenBudget.toLocaleString('en-US')}). HOÀN TẤT NGAY việc đang dở bằng tool tối thiểu cần thiết, KHÔNG mở rộng phạm vi, rồi phát worklog JSON cuối (summary / completed / issues / outputForNext) để kết thúc step.`,
+      })
+      // CI-3 B1 — instruction mới là protected head của segment nén kế tiếp
+      lastInstructionIndex = messages.length - 1
+    }
 
     // Build the prompt from conversation history
     // callLLMForAgent takes a single prompt string, so we format messages into it
@@ -3176,7 +3278,23 @@ export async function runAgentStep(params: {
 
   // Layer 9 P0.2: expose the step's real token usage to the caller
   // (runWorkflow passes it down to metricsCollector.recordStepComplete).
-  return { content: finalContent, duration: Date.now() - stepStartTime, tokensUsed: stepTokensUsed }
+  // ROUND-44 FIX (e) — trả kèm toolCallsLog (compact) cho worklog persist:
+  // checkpoint verify đọc latestWorklog.toolCallsLog làm bằng chứng THẬT —
+  // trước đây KHÔNG bao giờ được trả ra (toolCalls column luôn []) → verify
+  // prompt sai sự thật "agent KHÔNG gọi tool nào" → TL ESCALATE oan.
+  // Compact: 30 call cuối, result 200 ký tự, args preview 120 ký tự/giá trị.
+  return {
+    content: finalContent,
+    duration: Date.now() - stepStartTime,
+    tokensUsed: stepTokensUsed,
+    toolCallsLog: toolCallsLog.slice(-30).map(t => ({
+      tool: t.tool,
+      args: previewArgs(t.args),
+      result: t.result.slice(0, 200),
+      duration: t.duration,
+      success: t.success,
+    })),
+  }
 }
 
 // ==================== CHECKPOINT VERIFY ====================
@@ -3572,78 +3690,20 @@ function detectFabricatedToolResult(content: string): string | null {
  * Since callLLMForAgent doesn't natively support function calling response format,
  * we parse tool calls from the text output using the format that agents are instructed to use.
  *
- * Supported formats:
+ * Supported formats (đầy đủ — xem tool-calls.ts):
  * 1. tool_call: function_name({args})
  * 2. opencode({action: "read", path: "..."})
+ * 3. file_write fence-block (code nhiều dòng)
+ * 4. ROUND-44 FIX (c): `<invoke name="tool">` (JSON args hoặc XML tags) của
+ *    minimax + strip marker corruption `<]xxx[>` — TEAM agents cũng chạy
+ *    minimax nên gặp đúng lỗi format này như Omega (bằng chứng job r44).
+ *
+ * ROUND-44: thân hàm ủy quyền sang parser DÙNG CHUNG tool-calls.ts (trước đây
+ * nhân bản logic — 2 nơi lệch nhau khi thêm format/tool mới; bản chung giờ có
+ * đầy đủ invoke-recovery + garble-strip mà bản local này không có).
  */
 function parseToolCallsFromOutput(output: string): Array<{ id: string; name: string; args: Record<string, unknown> }> {
-  const calls: Array<{ id: string; name: string; args: Record<string, unknown> }> = []
-
-  // Pattern 1: tool_call: function_name({...})
-  // Use findBalancedJson for nested JSON args (e.g., opencode write with content containing code)
-  const regex1 = /tool_call:\s*(\w+)\s*\(\s*\{/g
-  let match1
-  while ((match1 = regex1.exec(output)) !== null) {
-    const toolName = match1[1]
-    // Find the opening brace position and extract balanced JSON
-    const braceStart = output.indexOf('{', match1.index + match1[0].length - 1)
-    if (braceStart === -1) continue
-    const jsonStr = findBalancedJsonUtil(output.slice(braceStart), '')
-    if (jsonStr) {
-      // TASK 43 — loose-repair trước khi bỏ cuộc (mirror tool-calls.ts)
-      const args = tryParseLooseJson(jsonStr)
-      if (args) {
-        calls.push({
-          id: `tc_${Date.now()}_${calls.length}`,
-          name: toolName,
-          args,
-        })
-      } else {
-        console.warn(`[WorkflowEngine] tool call "${toolName}" — args JSON hỏng KỂ CẢ SAU loose-repair (bỏ qua, đếm ở parse-diagnostics nếu có) raw=${jsonStr.slice(0, 100)}`)
-      }
-    }
-  }
-
-  // Pattern 2: Direct tool invocation like opencode({...})
-  if (calls.length === 0) {
-    const validToolNames = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'list_skills', 'read_skill', 'mcp_list_servers', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'manage_tools',
-      // FIX 2026-09-15 #7 (P4 — audit Team Code): Pattern 2 thiếu tool mới —
-      // agent phát tên_tool({...}) trực tiếp (không có prefix tool_call:) thì
-      // KHÔNG được parse → hệ thống không trả kết quả, agent tưởng tool chạy
-      // rồi tự bịa output (nguồn hallucination). Bổ sung: git survey + context
-      // recall + escalation/delegation/orchestration tools (workflow depth-guard
-      // sẽ từ chối delegation lồng bằng thông báo sư phạm — đúng thiết kế).
-      'git_status', 'git_diff', 'git_log', 'git_branch', 'context_recall',
-      'escalate_problem', 'propose_automation', 'verify_and_push',
-      'delegate_task', 'request_code_team', 'dispatch_agent', 'dispatch_agents_parallel',
-      'create_agent', 'manage_automation',
-      // P5/P8 (2026-11) — run_gate (gate receipt sha256) + work_data (CRUD dữ
-      // liệu công việc DB) — mirror tool-calls.ts
-      'run_gate', 'work_data']
-    const regex2 = new RegExp(`(${validToolNames.join('|')})\\s*\\(\\s*\\{`, 'g')
-    let match2
-    while ((match2 = regex2.exec(output)) !== null) {
-      const toolName = match2[1]
-      const braceStart = output.indexOf('{', match2.index + match2[0].length - 1)
-      if (braceStart === -1) continue
-      const jsonStr = findBalancedJsonUtil(output.slice(braceStart), '')
-      if (jsonStr) {
-        // TASK 43 — loose-repair trước khi bỏ cuộc (mirror tool-calls.ts)
-        const args = tryParseLooseJson(jsonStr)
-        if (args) {
-          calls.push({
-            id: `tc_${Date.now()}_${calls.length}`,
-            name: toolName,
-            args,
-          })
-        } else {
-          console.warn(`[WorkflowEngine] tool call "${toolName}" (pattern-2) — args JSON hỏng KỂ CẢ SAU loose-repair (bỏ qua) raw=${jsonStr.slice(0, 100)}`)
-        }
-      }
-    }
-  }
-
-  return calls
+  return parseToolCallsFromOutputShared(output)
 }
 
 /**
