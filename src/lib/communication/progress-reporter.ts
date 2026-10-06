@@ -87,8 +87,14 @@ export function createProgressReporter(config?: Partial<CommunicationConfig>): I
     return `${seconds}s`
   }
 
-  /** Format token usage: "1,234 / 2,000" */
+  /** Format token usage: "1,234 / 2,000" — ROUND-45: budget ≤ 0 nghĩa là
+   *  KHÔNG GIỚI HẠN (thiết kế gốc của user) → hiển thị "2,054,446 (không
+   *  giới hạn)" thay vì "2,054,446 / 200,000" gây hiểu lầm hệ thống đang
+   *  giới hạn token trong khi step thực tế không bị cắt. */
   function formatTokenUsage(used: number, budgeted: number): string {
+    if (!Number.isFinite(budgeted) || budgeted <= 0) {
+      return `${formatNumber(used)} ${t('(unlimited)', '(không giới hạn)')}`
+    }
     return `${formatNumber(used)} / ${formatNumber(budgeted)}`
   }
 

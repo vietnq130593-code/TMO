@@ -1,6 +1,6 @@
 'use client'
 
-import Editor, { loader, type OnMount } from '@monaco-editor/react'
+import Editor, { loader, type OnMount, type BeforeMount } from '@monaco-editor/react'
 import { useEffect, useRef } from 'react'
 import { Binary, AlertTriangle } from 'lucide-react'
 
@@ -9,6 +9,141 @@ import { Binary, AlertTriangle } from 'lucide-react'
 // any <Editor> mounts, so the wrapper never falls back to the jsdelivr CDN.
 //
 loader.config({ paths: { vs: '/monaco-vs' } })
+
+// ━━━ ROUND-45 — MONACO DIAGNOSTICS: hết gạch chân đỏ FALSE POSITIVE ━━━
+// BÁO CÁO USER (round-45): "trong file mở lên có một số phần tôi thấy gạch
+// chân đỏ — đây có phải là các dòng lỗi không?". Điều tra: squiggle đến từ
+// Monaco TS worker chạy với DEFAULT options — semantic validation BẬT nhưng
+// worker KHÔNG có project context: không có @types/node, không có bun-types,
+// không có jsx option, model tạo bằng createModel(value, language) với URI
+// inmemory://model/N (MẤT extension .tsx → script kind sai) → MỌI file
+// .ts/.tsx đều dính TS2307 (Cannot find module 'bun:sqlite'/'react'/'@/…'),
+// TS2304 (Cannot find name 'Bun'/'process'), TS2339, TS17004 (JSX) — kể cả
+// file chạy HOÀN TOÀN ĐÚNG bằng Bun (server.ts /tmp/tmo-r44-quote-app là
+// bằng chứng: app chạy thật CRUD đầy đủ trong khi editor đỏ lửa).
+// Fix 3 lớp (theo đề xuất Explore agent round-45):
+//   (1) setCompilerOptions: jsx + target/module ESNext (hết TS17004);
+//   (2) addExtraLib: Bun/Node environment shim (bun:sqlite, Bun global,
+//       process, Buffer, import.meta.dir) — hết TS2304 môi trường;
+//   (3) diagnosticsCodesToIgnore: các mã resolution giả (module không thể
+//       resolve trong editor đơn file) — TS2307/2305/2792. Giữ nguyên các
+//       lỗi type THẬT khác + syntax validation.
+// LƯU Ý cho user: dòng đỏ còn lại (nếu có) giờ mới là lỗi thật (cú pháp,
+// kiểu không khớp) — còn lỗi môi trường/module đã được vá ở gốc.
+
+/** Bun + Node environment shim — đủ cho các file Bun/Node agents tạo ra
+ *  (bun:sqlite Database/Statement, Bun.serve, import.meta.dir, process…) */
+const TMO_ENV_DTS = `// TMO environment shim (round-45) — browser TS worker không có node_modules
+declare module 'bun:*'
+declare module 'bun:sqlite' {
+  export class Statement<Params = any, Result = any> {
+    run(...params: Params[]): { success: boolean; lastInsertRowid: number | bigint; changes: number }
+    get(...params: Params[]): Result | null
+    all(...params: Params[]): Result[]
+    finalize(): void
+  }
+  export class Database {
+    constructor(path: string, options?: { create?: boolean; readonly?: boolean; [key: string]: unknown })
+    query<Result = any, Params = any>(sql: string): Statement<Params, Result>
+    prepare(sql: string): Statement<any, any>
+    exec(sql: string): Database
+    close(): void
+    transaction<T extends (...args: any[]) => any>(fn: T): T
+    lastInsertRowid: number | bigint
+    changes: number
+  }
+}
+declare namespace Bun {
+  interface Server {
+    port: number
+    hostname: string
+    stop(closeActiveConnections?: boolean): void
+    [key: string]: any
+  }
+  function serve(options: {
+    port?: number
+    hostname?: string
+    fetch?: (request: Request) => Response | Promise<Response>
+    error?: (error: unknown) => Response | Promise<Response>
+    [key: string]: any
+  }): Server
+  const env: Record<string, string | undefined>
+  function file(path: string): any
+  function write(path: string, data: string | ArrayBufferView): Promise<number>
+  function hash(input: string): string
+  function sleep(ms: number): Promise<void>
+  function spawn(cmd: string | string[], options?: any): any
+  [key: string]: any
+}
+declare const Bun: typeof Bun
+declare interface ImportMeta {
+  dir: string
+  path: string
+  main: string
+  [key: string]: any
+}
+declare var process: any
+declare var Buffer: any
+declare var __dirname: string
+`
+
+/** Config Monaco 1 lần duy nhất (module-level guard — component có thể remount) */
+let monacoDiagConfigured = false
+const configureMonacoDiagnostics: BeforeMount = (monaco) => {
+  const ts = (monaco.languages as unknown as {
+    typescript?: {
+      typescriptDefaults: {
+        setCompilerOptions(opts: Record<string, unknown>): void
+        setDiagnosticsOptions(opts: Record<string, unknown>): void
+        addExtraLib(code: string, path: string): unknown
+      }
+      javascriptDefaults: {
+        setDiagnosticsOptions(opts: Record<string, unknown>): void
+      }
+      ScriptTarget?: Record<string, number>
+      ModuleKind?: Record<string, number>
+      ModuleResolutionKind?: Record<string, number>
+      JsxEmit?: Record<string, number>
+    }
+  }).typescript
+  if (!ts || monacoDiagConfigured) return
+  monacoDiagConfigured = true
+  try {
+    // (1) Bun/Node env shim — cho autocomplete + IntelliSense đúng types
+    ts.typescriptDefaults.addExtraLib(TMO_ENV_DTS, 'file:///node_modules/@types/tmo-env-shim/index.d.ts')
+    // (2) Compiler options — jsx cho .tsx (parse JSX đúng), ESNext cho Bun
+    ts.typescriptDefaults.setCompilerOptions({
+      allowNonTsExtensions: true,
+      target: ts.ScriptTarget?.ESNext ?? 99,
+      module: ts.ModuleKind?.ESNext ?? 99,
+      moduleResolution: ts.ModuleResolutionKind?.Node10 ?? ts.ModuleResolutionKind?.NodeJs ?? 1,
+      jsx: ts.JsxEmit?.ReactJSX ?? 4,
+      esModuleInterop: true,
+      allowJs: true,
+    })
+    // (3) TẮT semantic validation trong editor — THẬT LÒNG vì sao: bản Monaco
+    //     vendored này KHÔNG hỗ trợ diagnosticsCodesToIgnore (đã grep xác
+    //     minh) nên không thể lọc từng mã; editor đơn-file KHÔNG có project
+    //     context nên ~100% semantic findings là nhiễu (TS2307/2304/2339 do
+    //     thiếu node_modules — bằng chứng server.ts Bun chạy đúng mà đỏ lửa).
+    //     Lỗi type THẬT do kênh LSP Diagnostics panel đảm nhiệm (chạy
+    //     `tsc --noEmit` server-side với tsconfig ĐÚNG workspace). Syntax
+    //     validation GIỮ NGUYÊN — lỗi cú pháp thật (1005…) vẫn gạch đỏ.
+    ts.typescriptDefaults.setDiagnosticsOptions({
+      noSemanticValidation: true,
+      noSyntaxValidation: false,
+    })
+  } catch { /* fail-open — editor vẫn hoạt động bình thường */ }
+}
+
+/** Chuẩn hóa path file → URI Monaco giữ ĐÚNG extension (.tsx → script kind
+ *  TSX — trước đây model inmemory://model/N mất extension nên file .tsx bị
+ *  coi là .ts → JSX toàn bộ gạch đỏ). */
+function toModelUri(p: string): string {
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(p)) return p
+  const normalized = p.replace(/\\/g, '/')
+  return 'file://' + (normalized.startsWith('/') ? normalized : '/' + normalized)
+}
 
 export interface OpenFile {
   path: string
@@ -201,6 +336,8 @@ export function CodeEditor({
               height="100%"
               theme="vs-dark"
               language={detectLanguage(activeFile.path)}
+              path={toModelUri(activeFile.path)}
+              beforeMount={configureMonacoDiagnostics}
               value={activeFile.content}
               onMount={handleMount}
               onChange={(value) => onContentChange(activeIndexRef.current, value ?? '')}

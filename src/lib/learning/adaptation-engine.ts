@@ -201,6 +201,11 @@ export function getAdaptationDirectiveBlock(sessionId: string): string {
 /** reduce_scope → giảm maxIterations (tối thiểu 8 — không giết chết step) */
 export function getAdaptedMaxIterations(sessionId: string, defaultMax: number): number {
   try {
+    // ROUND-45: defaultMax ≤ 0 = KHÔNG GIỚI HẠN (thiết kế gốc của user —
+    // CODE_TEAM_MAX_ITERATIONS=0). reduce_scope KHÔNG được cắt vô hạn về 8 —
+    // vô nghĩa với unlimited và chống lại directive "không giới hạn vòng".
+    // Chỉ áp reduce_scope khi có trần THẬT (> 0).
+    if (defaultMax <= 0) return defaultMax
     const state = getStore().get(sessionId)
     if (!state) return defaultMax
     const adapted = state.config['skipOptionalSteps'] === true || state.config['maxTokens'] !== undefined

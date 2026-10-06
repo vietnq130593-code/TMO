@@ -312,6 +312,127 @@ Phân tích và đưa ra giải pháp tốt nhất (JSON).`
   }
 }
 
+// ==================== 1b. FINAL WORKFLOW REPORT — Omega tổng kết công việc cuối cùng ====================
+//
+// ROUND-45 (user: "khi team code hoàn thành không thấy Omega — agent được giao
+// nhiệm vụ điều phối vận hành — thực hiện báo cáo công việc cuối cùng").
+// Trước đây thông báo cuối workflow chỉ là báo cáo deterministic của SYSTEM
+// (formatFinalReport) — Omega (điều phối viên) không tổng kết gì cả. Giờ sau
+// khi Code Team khép workflow, Omega đọc toàn bộ worklog thật + quality gate
+// + duration → phát 1 báo cáo tổng kết user-facing: kết quả đạt được / bằng
+// chứng chính / tồn đọng & rủi ro / đề xuất bước kế.
+// Fail-open: lỗi bất kỳ → { success: false } — caller giữ nguyên final_report
+// deterministic của SYSTEM (không mất thông tin).
+
+export interface OmegaFinalReportResult {
+  success: boolean
+  text: string
+  tokensUsed: number
+  error?: string
+}
+
+export async function omegaFinalWorkflowReport(params: {
+  userRequest: string
+  sessionId: string
+  status: 'completed' | 'completed_with_errors'
+  routing: { mode: string; tier: number; score: number }
+  completedAgents: string[]
+  totalDurationMs: number
+  quality?: { mode: string; lintErrors: number; tscErrors: number }
+  abortCheck?: () => boolean
+}): Promise<OmegaFinalReportResult> {
+  const { userRequest, sessionId, status, routing, completedAgents, totalDurationMs, quality, abortCheck } = params
+  try {
+    // 1) Đọc worklog THẬT của session — bằng chứng thô cho Omega (fail-open:
+    // đọc lỗi → digest rỗng, Omega vẫn tổng kết được từ status/agents).
+    let worklogDigest = ''
+    try {
+      const { readWorklog } = await import('@/lib/code-team/worklog')
+      const worklogs = await readWorklog(sessionId)
+      worklogDigest = worklogs
+        .slice(-10)
+        .map(w => {
+          const parts = [
+            `• ${w.agentName} (${w.position}/${w.step}) — ${(w.summary || '').slice(0, 300)}`,
+            w.completed && w.completed.length > 0
+              ? `  ✓ Đã làm: ${w.completed.slice(0, 8).map(c => c.slice(0, 100)).join('; ')}`
+              : '',
+            w.issues && w.issues.length > 0
+              ? `  ⚠ Vấn đề: ${w.issues.slice(0, 5).map(i => `[${i.severity}] ${String(i.description).slice(0, 120)}`).join('; ')}`
+              : '',
+            w.unfixedBugs && w.unfixedBugs.length > 0
+              ? `  ✗ Chưa fix: ${w.unfixedBugs.slice(0, 5).map(b => `[${b.severity}] ${b.description.slice(0, 100)}`).join('; ')}`
+              : '',
+          ]
+          return parts.filter(Boolean).join('\n')
+        })
+        .join('\n')
+    } catch { /* fail-open — digest rỗng */ }
+
+    // 2) Persona Omega + chế độ báo cáo
+    const brain = await resolveOmegaBrain()
+    const systemPrompt = (brain.instruction ? brain.instruction + '\n\n' : '') + `
+═══════════════════════════════════════════
+ CHẾ ĐỘ BÁO CÁO CÔNG VIỆC CUỐI CÙNG (ROUND-45)
+═══════════════════════════════════════════
+Bạn là Omega — tổng chỉ huy điều phối. Code Team vừa hoàn thành một workflow theo yêu cầu của user. Nhiệm vụ: ĐỌC kết quả thật của từng agent (worklog + issues + bugs chưa fix) và viết BÁO CÁO CÔNG VIỆC CUỐI CÙNG trình bày cho USER (không phải cho agent).
+
+Yêu cầu format (tiếng Việt, markdown gọn, TỐI ĐA ~450 từ):
+1. KẾT QUẢ — việc gì đã hoàn thành, sản phẩm/tính năng gì đã ra đời
+2. BẰNG CHỨNG CHÍNH — 2-4 điểm nổi bật nhất từ worklog (file tạo/sửa, test pass, verify thật)
+3. TỒN ĐỌNG & RỦI RO — bugs chưa fix, cảnh báo chất lượng (nếu có) — TRUNG THỰC, không che giấu
+4. ĐỀ XUẤT — bước tiếp theo user nên làm
+
+KHÔNG bịa bằng chứng không có trong worklog. KHÔNG lặp lại nguyên văn worklog — tổng hợp và đánh giá.`
+
+    const userPrompt = `YÊU CẦU GỐC CỦA USER:
+${userRequest.slice(0, 1500)}
+
+KẾT QUẢ WORKFLOW:
+- Trạng thái: ${status === 'completed' ? 'HOÀN THÀNH' : 'HOÀN THÀNH KÈM CẢNH BÁO CHẤT LƯỢNG'}
+- Pipeline: Mode ${routing.mode}, Tier ${routing.tier} (score ${routing.score}/9)
+- Agents đã chạy (tuần tự): ${completedAgents.join(' → ')}
+- Thời lượng: ${Math.round(totalDurationMs / 1000)}s
+${quality ? `- Quality gate (${quality.mode}): lint ${quality.lintErrors} lỗi, tsc ${quality.tscErrors} lỗi` : ''}
+
+WORKLOG THẬT CỦA TỪNG AGENT:
+${worklogDigest.slice(0, 9000) || '(không đọc được worklog — tổng kết từ thông tin workflow)'}
+
+Viết báo cáo công việc cuối cùng cho user theo format đã yêu cầu.`
+
+    // 3) 1 LLM call — không đụng roster (không cần điều động ai thêm)
+    const result = await withTimeout(
+      callLLMForAgent(userPrompt, { provider: brain.provider, model: brain.model }, systemPrompt, {
+        agentId: brain.id || 'omega-orchestrator',
+        agentName: 'Omega (final workflow report)',
+        temperature: 0.4,
+        maxTokens: 1400,
+        abortCheck,
+      }),
+      CONSULT_TIMEOUT_MS,
+      'Omega final report',
+    )
+
+    if (!result || (!result.content && !result.tool_calls)) {
+      return { success: false, text: '', tokensUsed: 0, error: result?.error || 'Omega LLM call failed' }
+    }
+    const tokens = typeof result.tokensUsed === 'number' ? result.tokensUsed : 0
+    let text = (result.content || '').trim()
+    if (!text) {
+      return { success: false, text: '', tokensUsed: 0, error: 'Omega trả output rỗng' }
+    }
+    if (text.length > 3600) {
+      text = text.slice(0, 3600) + '\n…(báo cáo đã nén)'
+    }
+    console.log(`[OmegaOrchestrator] Final workflow report cho session ${sessionId.slice(0, 12)} (${status}): ${completedAgents.length} agents, ${Math.round(totalDurationMs / 1000)}s — ${tokens} tokens`)
+    return { success: true, text, tokensUsed: tokens }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(`[OmegaOrchestrator] Final workflow report failed: ${msg}`)
+    return { success: false, text: '', tokensUsed: 0, error: msg }
+  }
+}
+
 // ==================== 2. AGENT FACTORY — Omega tự tạo agents ====================
 
 export interface CreateAgentResult {

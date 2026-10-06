@@ -417,6 +417,34 @@ const AUTO_RESUME_DELAY_MS =
 const WF_TOOL_FAIL_ESCALATE_THRESHOLD =
   parseInt(process.env.WF_TOOL_FAIL_ESCALATE_THRESHOLD || '3', 10) || 3
 
+// ━━━ ROUND-45 — KHÔNG GIỚI HẠN TÀI NGUYÊN AGENT (user directive — thiết kế gốc) ━━━
+// User (2026-10, round-45): "theo thiết kế ban đầu KHÔNG giới hạn về token cho
+// mỗi agent và cũng KHÔNG giới hạn số vòng — cả team làm việc cần lượng tài
+// nguyên nhiều, đặt giới hạn sẽ không thể hoàn thành các công việc lớn".
+// Trước đây (round-44 và trước) hardcode: G2-B/TL-verify = 5 vòng, TL-analyze
+// = 15, còn lại 25 + step token budget 100k (2× wrap-up, 3× break) — bằng
+// chứng run thật: step bị cắt giữa chừng "⚠️ Đạt giới hạn token step
+// (~623,924 tokens = 3× budget 200,000)" và "⚠️ Đạt max 5 vòng iteration".
+// Giờ mirror pattern SUBAGENT_MAX_ITERATIONS=0 / GOAL_LOOP_MAX_CYCLES=0 của
+// .env: 0 = KHÔNG GIỚI HẠN. Ai muốn cap lại → set env dương. Các guard an
+// toàn KHÔNG phải giới hạn tài nguyên được GIỮ NGUYÊN: user-cancel, context
+// overflow (cửa sổ context model — cần thiết kỹ thuật, có digest + auto-resume),
+// tool-fail → Omega consult, fabricated-result guard, LLM per-call timeout.
+const CODE_TEAM_MAX_ITERATIONS = (() => {
+  const raw = process.env.CODE_TEAM_MAX_ITERATIONS
+  if (raw === undefined || raw.trim() === '') return 0 // 0 = ∞ (mặc định)
+  const v = Number(raw)
+  return Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0
+})()
+/** Step token budget — 0 (mặc định) = KHÔNG enforce (chỉ theo dõi metrics cho
+ * báo cáo). Muốn ép lại: set > 0 → 2× wrap-up directive, 3× break (giữ cơ chế
+ * round-44 fix f cho ai cần). */
+const CODE_TEAM_STEP_TOKEN_BUDGET = (() => {
+  const raw = process.env.CODE_TEAM_STEP_TOKEN_BUDGET
+  if (raw === undefined || raw.trim() === '') return 0
+  const v = Number(raw)
+  return Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0
+})()
 
 // ==================== TYPES ====================
 
@@ -443,6 +471,9 @@ export interface WorkflowEvent {
     | 'progress_report'
     /** ROUND-37 V4 — báo cáo tổng kết cuối workflow (formatFinalReport) */
     | 'final_report'
+    /** ROUND-45 — Omega (agent điều phối) tổng kết công việc cuối cùng sau khi
+     * team code hoàn thành — thay vì chỉ có báo cáo deterministic của SYSTEM */
+    | 'omega_final_report'
   [key: string]: unknown
 }
 
@@ -1084,8 +1115,10 @@ export async function runWorkflow(
       sessionId,
       emit: safeEmit,
       ctx,
-      // ROUND-44 FIX (f) — enforce budget cho TL analyze như mọi step khác
-      stepTokenBudget: effectiveTokenBudget,
+      // ROUND-45 — bỏ stepTokenBudget (thiết kế không giới hạn token/agent);
+      // budget metrics vẫn do metricsCollector theo dõi riêng.
+      maxIterations: CODE_TEAM_MAX_ITERATIONS,
+      stepTokenBudget: CODE_TEAM_STEP_TOKEN_BUDGET,
     })
 
     safeEmit({
@@ -1544,16 +1577,16 @@ async function runPipeline(
       sessionId,
       emit,
       ctx,
-      // G2-B max 5 vòng iteration (was 3 — too few for complex bug-fix loops)
-      // TL self-verify (Mode A) max 5 vòng iterate
-      // TL analyze (routing) max 15 — enough for recon + JSON production (was 6 — too few)
-      // Others max 25 — large tasks need many ReAct iterations (Claude Code uses 50+)
-      //   Previously 10 — agents would stop mid-task after a few tool calls.
-      maxIterations: (step.position === 'G2-B' || (step.position === 'TL' && step.step === 'verify')) ? 5
-        : (step.position === 'TL' && step.step === 'analyze') ? 15
-        : 25,
-      // ROUND-44 FIX (f) — truyền budget để enforce (2× → wrap-up directive, 3× → break)
-      stepTokenBudget: tokenBudget,
+      // ROUND-45: KHÔNG CÒN hardcode per-position (cũ: G2-B/TL-verify 5 vòng,
+      // TL-analyze 15, còn lại 25 — cắt step giữa chừng, chống lại thiết kế
+      // "không giới hạn vòng" của user). Mặc định = CODE_TEAM_MAX_ITERATIONS
+      // (0 = ∞); ai muốn cap lại → env CODE_TEAM_MAX_ITERATIONS.
+      maxIterations: CODE_TEAM_MAX_ITERATIONS,
+      // ROUND-45: KHÔNG còn step token budget mặc định (cũ: budget 100k-200k,
+      // 2× wrap-up + 3× break cắt step — bằng chứng "Token: 2.054.446 / 200.000"
+      // làm user tưởng hệ thống giới hạn token). Env CODE_TEAM_STEP_TOKEN_BUDGET
+      // > 0 sẽ bật lại cơ chế enforce cho ai cần.
+      stepTokenBudget: CODE_TEAM_STEP_TOKEN_BUDGET,
     })
 
     // Parse worklog from agent output
@@ -1953,6 +1986,45 @@ async function runPipeline(
   // ROUND-38 fix Y6: logic dồn về emitFinalReport() dùng chung mọi đường terminal.
   emitFinalReport()
 
+  // ━━━ ROUND-45 — OMEGA FINAL REPORT (báo cáo công việc cuối cùng) ━━━
+  // User: "khi team code hoàn thành không thấy Omega — agent được giao nhiệm vụ
+  // điều phối vận hành — thực hiện báo cáo công việc cuối cùng". Trước đây thông
+  // báo cuối chỉ là báo cáo deterministic của SYSTEM (formatFinalReport) — Omega
+  // (điều phối viên) không tổng kết gì cả. Giờ sau khi workflow khép (thành công
+  // hoặc kèm cảnh báo), Omega đọc toàn bộ worklog + quality + duration → phát
+  // báo cáo tổng kết user-facing (kết quả đạt được, bằng chứng chính, tồn đọng,
+  // đề xuất bước kế). Fail-open: Omega fail → giữ nguyên final_report của SYSTEM
+  // (không mất thông tin gì).
+  try {
+    const { omegaFinalWorkflowReport } = await import('@/lib/omega-orchestrator')
+    const omegaReport = await omegaFinalWorkflowReport({
+      userRequest: spec,
+      sessionId,
+      status: finalStatus,
+      routing: { mode: routingDecision.mode, tier: routingDecision.tier, score: routingDecision.score },
+      completedAgents,
+      totalDurationMs: totalDuration,
+      quality: quality.mode === 'off' ? undefined : quality,
+      abortCheck: isAborted,
+    })
+    if (omegaReport.success && omegaReport.text) {
+      emit({
+        type: 'omega_final_report',
+        sessionId,
+        agent: 'Omega',
+        position: 'OMEGA',
+        advisory: omegaReport.text,
+        reason: `workflow ${finalStatus}`,
+        tokensUsed: omegaReport.tokensUsed,
+      })
+      console.log(`[Workflow] OMEGA FINAL REPORT nhận (${omegaReport.tokensUsed} tokens) — emit cho user [session ${sessionId.slice(0, 12)}]`)
+    } else {
+      console.warn(`[Workflow] OMEGA FINAL REPORT không trả được (fail-open — báo cáo SYSTEM vẫn hiển thị): ${omegaReport.error ?? 'không rõ lý do'}`)
+    }
+  } catch (omegaErr) {
+    console.warn('[Workflow] OMEGA FINAL REPORT thất bại (fail-open):', omegaErr instanceof Error ? omegaErr.message : String(omegaErr))
+  }
+
   emit({
     type: 'workflow_done',
     totalDuration,
@@ -2191,12 +2263,15 @@ export async function runAgentStep(params: {
   // failure-pattern (count≥2) → chiến lược thích ứng (applyAdaptation) điều
   // khiển step NÀY: reduce_scope giảm vòng ReAct, compress_context hạ ngưỡng
   // nén sớm, các chiến lược khác inject directive (block dưới). Fail-open tuyệt đối.
-  let adaptedMaxIterations = params.maxIterations ?? 25
+  // ROUND-45: maxIterations mặc định = CODE_TEAM_MAX_ITERATIONS (0 = ∞ theo
+  // thiết kế không giới hạn). getAdaptedMaxIterations chỉ áp reduce_scope khi
+  // CÓ trần thật (> 0) — không cắt vô hạn về 8 (vô nghĩa với unlimited).
+  let adaptedMaxIterations = params.maxIterations ?? CODE_TEAM_MAX_ITERATIONS
   let stepOverflowThreshold = CONTEXT_OVERFLOW_THRESHOLD
   let sessionEscalated = false
   try {
     const adaptation = await import('@/lib/learning/adaptation-engine')
-    adaptedMaxIterations = adaptation.getAdaptedMaxIterations(sessionId, params.maxIterations ?? 25)
+    adaptedMaxIterations = adaptation.getAdaptedMaxIterations(sessionId, params.maxIterations ?? CODE_TEAM_MAX_ITERATIONS)
     if (adaptation.shouldCompressContextEarly(sessionId)) {
       // compress_context → ngưỡng overflow của step này hạ 30% (nén sớm)
       stepOverflowThreshold = Math.floor(CONTEXT_OVERFLOW_THRESHOLD * 0.7)
@@ -2496,9 +2571,57 @@ export async function runAgentStep(params: {
   // ROUND-44 FIX (f) — cờ đã gửi wrap-up directive (chỉ gửi 1 lần/step)
   let budgetWrapUpDirectiveSent = false
 
-  console.log(`[Workflow] Running agent: ${agent.name} (${position}) — ${step} [tools: ${tools.join(', ')}] [fc: ${fcMode}${nativeTools ? ` (${nativeTools.length} schemas)` : ''}]`)
+  // ━━━ ROUND-45 — PLAN-FIRST + TODO-ADHERENCE (harness enforcement) ━━━
+  // Trước đây cả 2 cơ chế CHỈ là lời khuyên trong prompt — agents có thể bỏ
+  // qua (bằng chứng: agents làm việc không kế hoạch, todo mở 6/7 mục dù việc
+  // đã xong). Giờ harness ép thật (mirror depth-guard pattern):
+  //   (1) PLAN-FIRST: tool GHI/SỬA file bị chặn tới khi agent có kế hoạch
+  //       (todo_write/decompose_task…) — chỉ chặn 2 lần đầu, sau đó cho qua
+  //       (chống kẹt workflow với LLM không tuân thủ). KHÔNG áp cho TL/analyze
+  //       (routing decision — không phải bước thi công).
+  //   (2) TODO-ADHERENCE: agent ngừng phát tool call nhưng còn todo mở →
+  //       nudge directive (max 2 lần) buộc hoàn thành hoặc cập nhật trạng
+  //       thái kèm lý do; vẫn còn sau 2 lần → warning trung thực vào output.
+  //   (3) AUTO-COMPLETE THEO BẰNG CHỨNG: sau mỗi batch tool, todo mở khớp
+  //       bằng chứng tool thành công → tự completed (parity goal-loop CI-2 —
+  //       đường workflow là đường duy nhất chưa có lưới an toàn này).
+  const planFirstRequired = !(position === 'TL' && step === 'analyze')
+  let planEstablished = false
+  let planFirstBlocks = 0
+  let todoNudges = 0
+  const batchTodoEvidence: string[] = []
+  const PLAN_TOOLS = new Set(['todo_write', 'decompose_task', 'create_task', 'get_plan', 'exit_plan_mode', 'todo_read'])
+  const MUTATING_FILE_TOOLS = new Set(['file_write', 'file_edit', 'file_multi_edit', 'file_delete', 'manage_packages', 'git_commit'])
+  /** Todo MỞ của run này (status pending/in_progress/blocked), KHÔNG tính
+   *  step-todo do engine tự quản qua upsertStepTodo (idempotencyKey
+   *  `${sessionId}:…` — engine tự completed/failed cuối step). */
+  const fetchOpenStepTodos = async (): Promise<string[]> => {
+    try {
+      const open = await db.todo.findMany({
+        where: {
+          sessionId,
+          runId,
+          status: { in: ['pending', 'in_progress', 'blocked'] },
+          OR: [
+            { idempotencyKey: null },
+            { idempotencyKey: { not: { startsWith: `${sessionId}:` } } },
+          ],
+        },
+        orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+        select: { content: true },
+        take: 20,
+      })
+      return open.map(t => t.content)
+    } catch { return [] } // fail-open — todo gate KHÔNG được phép làm hỏng step
+  }
 
-  while (iterations < maxIterations) {
+  console.log(`[Workflow] Running agent: ${agent.name} (${position}) — ${step} [tools: ${tools.join(', ')}] [fc: ${fcMode}${nativeTools ? ` (${nativeTools.length} schemas)` : ''}]${maxIterations === 0 ? ' [iterations: ∞ — không giới hạn]' : ` [max iterations: ${maxIterations}]`}`)
+
+  // ROUND-45: maxIterations = 0 nghĩa là KHÔNG GIỚI HẠN vòng (thiết kế gốc của
+  // user) — vòng lặp chỉ thoát bởi: agent ngừng phát tool call (hoàn thành tự
+  // nhiên), user hủy, context overflow (digest/auto-resume), hoặc cap > 0 nếu
+  // được cấu hình qua env.
+  while (maxIterations === 0 || iterations < maxIterations) {
     // USER REQUEST 2026-08-31: user bấm Dừng → kết thúc step NGAY giữa các vòng
     if (isCancelled()) {
       finalContent = '⏹ Đã dừng tác vụ theo yêu cầu của bạn.'
@@ -2507,10 +2630,10 @@ export async function runAgentStep(params: {
     }
     iterations++
 
-    // ━━━ ROUND-44 FIX (f) — STEP TOKEN BUDGET ENFORCEMENT ━━━
-    // 2 nhịp: vượt 2× budget → directive HOÀN TẤT NGAY (1 lần/step, protected
-    // khỏi nén); vượt 3× budget → break với marker (giữ cấu trúc để worklog
-    // vẫn parse được — mirror đường max-iterations ở cuối loop).
+    // ━━━ ROUND-45 FIX (f-v2) — STEP TOKEN BUDGET (chỉ khi cấu hình > 0) ━━━
+    // Mặc định CODE_TEAM_STEP_TOKEN_BUDGET = 0 (KHÔNG enforce — thiết kế không
+    // giới hạn token của user). Ai set env > 0 → giữ nguyên cơ chế round-44:
+    // 2× budget → wrap-up directive; 3× budget → break với marker.
     const stepTokenBudget = params.stepTokenBudget ?? 0
     if (stepTokenBudget > 0 && stepTokensUsed > stepTokenBudget * 3) {
       console.warn(`[Workflow] ${agent.name} (${position}) vượt token budget ${stepTokensUsed}/${stepTokenBudget} (>3×) — kết thúc step (budget exhausted)`)
@@ -2785,6 +2908,32 @@ export async function runAgentStep(params: {
         endStepRun('error')
         break
       }
+      // ━━━ ROUND-45 — TODO-ADHERENCE GATE (harness ép bám sát Todos) ━━━
+      // Bằng chứng run thật (session agent_1791266467976_zb6bij): agents LÀM
+      // việc thật (app pass full CRUD test) nhưng quên todo_write đóng mục —
+      // G2-B 6/7 todo pending, G3 5/6, TL-code 3/4 → panel Todos trông như
+      // việc bỏ dở. Gate: agent ngừng phát tool call NHƯNG còn todo mở của run
+      // → nudge directive (max 2 lần — chống kẹt vĩnh viễn với LLM không tuân
+      // thủ); sau 2 lần vẫn còn → warning trung thực vào finalContent (KHÔNG
+      // tự đánh completed — đó là dối bằng chứng). Fail-open tuyệt đối.
+      if (!isCancelled() && !finalContent.startsWith('Error:')) {
+        const openTodos = await fetchOpenStepTodos()
+        if (openTodos.length > 0 && todoNudges < 2) {
+          todoNudges++
+          console.warn(`[Workflow] TODO-GATE: ${agent.name} (${position}) kết thúc với ${openTodos.length} todo chưa hoàn thành — nudge ${todoNudges}/2`)
+          messages.push({
+            role: 'user',
+            content: `⚠️ CÒN ${openTodos.length} TODO CHƯA HOÀN THÀNH của step này:\n${openTodos.slice(0, 12).map((t, i) => `${i + 1}. ${t.slice(0, 160)}`).join('\n')}\n\nKHÔNG KẾT THÚC step khi còn todo mở. Hãy: (1) HOÀN THÀNH từng việc còn lại bằng tool thật (từng mục một), hoặc (2) nếu một mục thực sự không khả thi/không còn cần, gọi todo_write cập nhật trạng thái mục đó kèm lý do rõ ràng. Sau khi mọi todo đã khép → phát worklog JSON cuối (summary / completed / issues / outputForNext) để kết thúc step.`,
+          })
+          lastInstructionIndex = messages.length - 1 // bảo vệ khỏi nén context
+          continue
+        }
+        if (openTodos.length > 0 && todoNudges >= 2) {
+          console.warn(`[Workflow] TODO-GATE: ${agent.name} (${position}) vẫn còn ${openTodos.length} todo mở sau ${todoNudges} nudge — ghi warning trung thực`)
+          finalContent += `\n\n⚠️ ${openTodos.length} todo chưa hoàn thành (đã nhắc ${todoNudges} lần): ${openTodos.slice(0, 6).map(t => t.slice(0, 80)).join(' | ')}`
+        }
+      }
+
       // No tool calls → agent step complete
       console.log(`[Workflow] ${agent.name} step complete (no tool calls, ${iterations} iterations)`)
       break
@@ -2856,6 +3005,19 @@ export async function runAgentStep(params: {
         console.warn(`[Workflow] DEPTH-GUARD: từ chối tool "${tc.name}" của ${agent.name} (${position}) — không lồng delegation/team huy động bên trong workflow code team. Agent phải tự thực hiện bằng tools thi công.`)
       }
 
+      // ━━━ ROUND-45 — PLAN-FIRST HARNESS ENFORCEMENT ━━━
+      // Trước đây plan-first CHỈ là lời khuyên trong prompt (user hỏi "ép bằng
+      // Harness chưa hay vẫn chỉ là prompt khuyến nghị" — đáp án cũ: chỉ
+      // prompt). Giờ harness ép thật: tool GHI/SỬA/XOÁ file bị chặn tới khi
+      // agent có kế hoạch (todo_write/decompose_task). Chỉ chặn 2 lần đầu —
+      // sau đó cho qua (chống kẹt workflow với LLM không tuân thủ). Tool ĐỌC
+      // (file_read/grep/shell recon) KHÔNG bị chặn — recon vẫn tự do.
+      const planFirstHit = planFirstRequired && !planEstablished && MUTATING_FILE_TOOLS.has(tc.name) && planFirstBlocks < 2
+      if (planFirstHit) {
+        planFirstBlocks++
+        console.warn(`[Workflow] PLAN-FIRST: chặn tool "${tc.name}" của ${agent.name} (${position}) — chưa có kế hoạch todo (lần ${planFirstBlocks}/2)`)
+      }
+
       // ===== v2.1 Phase 4.1 — Auto-checkpoint BEFORE risky ops =====
       // Spec line 252: "Auto-checkpoint BEFORE risky ops (file_edit/file_delete/
       // file_multi_edit/git_commit/run_tests) in workflow-engine.ts executeTool
@@ -2925,8 +3087,31 @@ export async function runAgentStep(params: {
               error: `TỪ CHỐI (depth-guard workflow): tool "${tc.name}" không khả dụng bên trong workflow code team — không được huy động sub-agent/team lồng nhau. Hãy TỰ THỰC HIỆN step hiện tại bằng tools thi công (file_read/file_edit/shell/run_tests/lint/type_check...).`,
             },
           }
+        : planFirstHit
+        ? {
+            success: false,
+            result: {
+              error: `⛔ PLAN-FIRST (harness ép): tool "${tc.name}" bị tạm chặn — bước này yêu cầu LẬP KẾ HOẠCH TRƯỚC khi sửa/ghi file. Hãy gọi todo_write({"todos":[{"content":"<việc cần làm + tiêu chí nghiệm thu>","status":"pending","priority":"high"}]}) liệt kê TOÀN BỘ việc của step, rồi mới bắt đầu thực hiện từng mục (mỗi mục xong → cập nhật status=completed). Sau khi có kế hoạch, tool này sẽ được thực thi bình thường.`,
+            },
+          }
         : await executeTool(tc.name, wfToolArgs, { agentName: agent.name, sessionId, runId })
       const toolDuration = Date.now() - toolStartTime
+
+      // ROUND-45 — PLAN-FIRST: kế hoạch đã có (tool lập kế hoạch chạy thành
+      // công) → mở khóa mọi tool ghi/sửa về sau của step này.
+      if (PLAN_TOOLS.has(tc.name) && toolResult.success) {
+        planEstablished = true
+      }
+
+      // ROUND-45 — TODO AUTO-COMPLETE: thu bằng chứng tool thành công (đường
+      // dẫn file / lệnh shell) của batch này để đối chiếu todo ở cuối batch.
+      if (toolResult.success && !depthGuardHit && !planFirstHit) {
+        try {
+          const { extractTodoEvidence } = await import('@/lib/code-team/dev-tools')
+          const ev = extractTodoEvidence(tc.name, tc.args)
+          if (ev) batchTodoEvidence.push(ev)
+        } catch { /* fail-open */ }
+      }
 
       // TOKEN ACCOUNTING (fix review 2026-09-08): escalate_problem (Omega
       // consult) tiêu token thật — cộng vào stepTokensUsed để metrics đúng
@@ -3050,6 +3235,34 @@ export async function runAgentStep(params: {
             ),
         tool_call_id: tc.id,
       })
+    }
+
+    // ━━━ ROUND-45 — CI-2 AUTO-COMPLETE TODOS THEO BẰNG CHỨNG (parity goal-loop) ━━━
+    // Đường workflow-engine là đường DUY NHẤT chưa có lưới an toàn này
+    // (goal-loop + subagent-delegate + /api/tools/execute đều có) — nguyên
+    // nhân trực tiếp hiện tượng "agent đã LÀM việc thật (curl pass) nhưng todo
+    // không bao giờ được đánh completed" (bằng chứng: G2-B 6/7 pending). Sau
+    // mỗi batch tool: todo mở của run khớp bằng chứng tool THÀNH CÔNG (đường
+    // dẫn file / lệnh shell) → tự động completed + snapshot lại cho panel.
+    // Fail-open tuyệt đối.
+    if (batchTodoEvidence.length > 0) {
+      try {
+        const { autoCompleteRunTodosByEvidence } = await import('@/lib/code-team/dev-tools')
+        const res = await autoCompleteRunTodosByEvidence({ sessionId, runId, evidence: batchTodoEvidence })
+        if (res.completed > 0) {
+          recordAgentRunTodos(sessionId, res.todos.map(t => ({
+            id: t.id,
+            content: t.content,
+            status: t.status,
+            priority: t.priority,
+            parentId: t.parentId ?? null,
+          })))
+          console.log(`[Workflow] TODO AUTO-COMPLETE: ${res.completed} todo của ${agent.name} (${position}) tự hoàn thành theo bằng chứng tool`)
+        }
+        batchTodoEvidence.length = 0 // batch đã đối chiếu xong — không nhắc lại batch cũ
+      } catch (todoErr) {
+        console.warn('[Workflow] TODO AUTO-COMPLETE failed (fail-open):', todoErr instanceof Error ? todoErr.message : String(todoErr))
+      }
     }
 
     // ===== CI-3 B1 — Rolling context compression (digest) =====
@@ -3211,13 +3424,14 @@ export async function runAgentStep(params: {
     }
 
     // If G2-B reached max iterations, break
-    if (position === 'G2-B' && iterations >= maxIterations) {
+    // ROUND-45: chỉ break khi CÓ trần thật (> 0) — 0 = ∞ không bao giờ cắt
+    if (position === 'G2-B' && maxIterations > 0 && iterations >= maxIterations) {
       finalContent += `\n\n⚠️ Đạt max ${maxIterations} vòng iteration. Bugs còn lại ghi cho G3.`
       break
     }
 
     // If general max iterations reached, break
-    if (iterations >= maxIterations) {
+    if (maxIterations > 0 && iterations >= maxIterations) {
       console.warn(`[Workflow] ${agent.name} reached max iterations (${maxIterations})`)
       finalContent += `\n\n⚠️ Đạt max ${maxIterations} vòng iteration.`
       break

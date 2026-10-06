@@ -41,7 +41,9 @@ import MarkdownText from './markdown-text'
  *  agent-block (divider avatar + tên màu + vị trí + bước + trạng thái);
  *  thought/tool đổi agent cũng mở block mới (legacy rows không có step). */
 export interface TeamProcessEvent {
-  kind: 'step' | 'thought' | 'tool' | 'checkpoint'
+  // ROUND-45: thêm 'report' — báo cáo cuối của TỪNG agent (agent_complete)
+  // giờ nằm trong panel thay vì bubble chat 29KB (user: "đúng ra là phần thực thi")
+  kind: 'step' | 'thought' | 'tool' | 'checkpoint' | 'report'
   id: string
   ts: number
   agent?: string
@@ -829,6 +831,8 @@ export function TeamProcessPanel({ msg }: { msg: SmolabMessage }) {
   const stepsDone = steps.filter(s => s.stepDone).length
   const tools = events.filter(e => e.kind === 'tool')
   const thoughts = events.filter(e => e.kind === 'thought').length
+  // ROUND-45: đếm báo cáo agent (agent_complete) — header hiển thị 📄 N
+  const reports = events.filter(e => e.kind === 'report').length
   const commands = tools.filter(t => t.tool === 'run_command' || t.tool === 'shell' || t.tool === 'run_bg' || t.tool === 'bash').length
   const edits = tools.filter(t => t.tool === 'file_edit' || t.tool === 'file_write' || t.tool === 'edit_file' || t.tool === 'apply_patch').length
   const startedAt = msg.processStartedAt
@@ -905,6 +909,7 @@ export function TeamProcessPanel({ msg }: { msg: SmolabMessage }) {
           )}
           {tools.length > 0 && <span title="Tool calls">🔧 {tools.length}</span>}
           {thoughts > 0 && <span title="Vòng suy nghĩ ReAct">💭 {thoughts}</span>}
+          {reports > 0 && <span title="Báo cáo hoàn thành của agents">📄 {reports}</span>}
           {commands > 0 && <span title="Lệnh đã chạy">💻 {commands}</span>}
           {edits > 0 && <span title="File đã sửa">✏️ {edits}</span>}
           {!running && durationMs != null && durationMs > 0 && <span>⏱ {fmtRunDuration(durationMs)}</span>}
@@ -1073,6 +1078,25 @@ export function TeamProcessPanel({ msg }: { msg: SmolabMessage }) {
                           </div>
                         )
                       }
+                      if (e.kind === 'report') {
+                        // ROUND-45 — báo cáo cuối của agent (agent_complete):
+                        // gọn 1 dòng + <details> mở đọc full (trước đây là bubble
+                        // chat 29KB của SHOCWAVE nằm lẫn trong khung chat).
+                        return (
+                          <details key={e.id} className="px-2 py-1.5 rounded bg-slate-900/40 border-l-2 border-teal-500/50 ml-2 group">
+                            <summary className="flex items-center gap-1.5 flex-wrap text-[11px] cursor-pointer list-none">
+                              <span className="text-teal-300">📄 Báo cáo hoàn thành</span>
+                              {e.agent && <span className={teamAgentTextClass(e.agent, e.position)}>{e.agent}</span>}
+                              {e.position && <span className="text-stone-500">({e.position})</span>}
+                              {e.durationMs != null && <span className="text-stone-500">{fmtRunDuration(e.durationMs)}</span>}
+                              <span className="text-stone-600 group-open:hidden">▸ bấm xem chi tiết</span>
+                            </summary>
+                            <div className="mt-1 text-[11px] leading-5 text-stone-300 whitespace-pre-wrap max-h-64 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
+                              {(e.text || '').slice(0, 6000)}
+                            </div>
+                          </details>
+                        )
+                      }
                       return null
                     })}
                   </div>
@@ -1101,12 +1125,28 @@ export function TeamProcessPanel({ msg }: { msg: SmolabMessage }) {
 function isTeamProcessBubble(m: SmolabMessage): boolean {
   if (m.role !== 'assistant' || m.isTeamProcess) return false
   if (!m.isTeamMessage) return false
+  // ROUND-45 — default-deny: MỌI team-message row KHÔNG thuộc nhóm "thông điệp
+  // cuối cho user" đều gom vào panel "Quá trình thực thi" (bao gồm legacy
+  // agent_complete rows không có marker agentReport — trước đây chúng render
+  // thành bubble chat khổng lồ 29KB của SHOCWAVE/CATALYST). Nhóm GIỮ Ở CHAT:
+  // workflow_done (workflowStatus), final_report (workflowFinalReport +
+  // legacy prefix), omega_escalation, omega_final_report — các thông điệp
+  // tổng kết mà user cần đọc trực tiếp.
+  const meta = (m.metadata || {}) as Record<string, unknown>
+  const isChatFinalMessage = meta.workflowStatus != null
+    || meta.omegaEscalation === true
+    || meta.omegaFinalReport === true
+    || meta.workflowFinalReport === true
+    || m.content.startsWith('📋 **BÁO CÁO TỔNG KẾT WORKFLOW**')
+  if (isChatFinalMessage) return false
   return !!m.toolCallInfo
+    || meta.agentReport === true
     || m.agentName === 'CHECKPOINT'
     || m.metadata?.teamStep != null
     || m.metadata?.teamThought === true
     || m.metadata?.toolResult != null
     || m.metadata?.checkpoint != null
+    || true // default-deny — mọi team message còn lại đều thuộc panel
 }
 
 const TEAM_PROCESS_STATUS_MAP: Record<string, NonNullable<SmolabMessage['processStatus']>> = {
@@ -1247,6 +1287,24 @@ function groupTeamProcessMessages(msgs: SmolabMessage[]): SmolabMessage[] {
         })
         continue
       }
+      // ROUND-45 — AGENT REPORT (agent_complete row): báo cáo cuối của từng
+      // agent → event 'report' trong panel (trước đây render bubble chat
+      // khổng lồ 29KB). Row mới có marker meta.agentReport; legacy rows đến
+      // đây nhờ default-deny của isTeamProcessBubble — nhận diện: có
+      // agentName + durationMs, KHÔNG phải tool/checkpoint.
+      if (meta.agentReport === true || (m.agentName && typeof meta.durationMs === 'number' && meta.checkpoint == null && !m.toolCallInfo)) {
+        out.push({
+          kind: 'report',
+          id: m.id,
+          ts,
+          agent: m.agentName,
+          position: m.agentPosition,
+          text: m.content,
+          durationMs: typeof meta.durationMs === 'number' ? meta.durationMs : undefined,
+          seq: seqOf(meta),
+        })
+        continue
+      }
       // CHECKPOINT — ưu tiên structured metadata (round-42+); fallback regex
       // parse content cho rows cũ (agentName='CHECKPOINT', không metadata)
       const cp = meta.checkpoint as { step?: unknown; decision?: unknown; reasoning?: unknown; pending?: unknown } | undefined
@@ -1282,10 +1340,27 @@ function groupTeamProcessMessages(msgs: SmolabMessage[]): SmolabMessage[] {
       .filter(e => e.seq == null || !existingSeqs.has(e.seq))
     group = []
     if (added.length === 0 && stats.patched === 0) return panel
+    const merged = [...base, ...added]
+    // ROUND-45: report event (agent_complete giờ thuộc PANEL thay vì bubble
+    // chat riêng) → đánh dấu bước cuối của agent đó đã xong + track
+    // completedAgents (chuyển logic từ nhánh "row đi qua" cũ của vòng for
+    // chính — row không còn đi qua nữa vì isTeamProcessBubble default-deny).
+    for (let i = merged.length - 1; i >= 0; i--) {
+      const e = merged[i]
+      if (e.kind === 'report' && e.agent) {
+        completedAgents.add(e.agent)
+        for (let j = i - 1; j >= 0; j--) {
+          const st = merged[j]
+          if (st.kind === 'step' && st.agent === e.agent && !st.stepDone) {
+            st.stepDone = true
+            break
+          }
+        }
+      }
+    }
     for (const e of added) {
       if (e.kind === 'step' && e.agent && completedAgents.has(e.agent)) e.stepDone = true
     }
-    const merged = [...base, ...added]
     if (merged.every(e => e.seq != null)) merged.sort((a, b) => (a.seq as number) - (b.seq as number))
     changed = true
     return { ...panel, processEvents: merged }
@@ -1370,7 +1445,8 @@ function groupTeamProcessMessages(msgs: SmolabMessage[]): SmolabMessage[] {
       } else if (
         m.role === 'assistant' && m.isTeamMessage &&
         m.agentName && m.agentName !== 'SYSTEM' &&
-        typeof m.metadata?.durationMs === 'number' && !m.metadata?.omegaEscalation
+        typeof m.metadata?.durationMs === 'number' && !m.metadata?.omegaEscalation &&
+        !isTeamProcessBubble(m)
       ) {
         // ROUND-43 L3: agent_complete row (báo cáo agent) đi qua → đánh dấu
         // bước cuối của agent này trong panel là xong (workflow nền hiển thị
@@ -3982,9 +4058,10 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     // thực thi thay vì dải tin nhắn") — thay indicator rời rạc bằng MỘT panel
     // gom toàn bộ steps/tool/checkpoint của workflow (bố cục mirror
     // AgentRunPanel single-agent: các bước triển khai → chu kỳ 💭 nghĩ / 🔧
-    // làm). Báo cáo từng agent vẫn là bubble riêng; chỉ các BƯỚC THỰC THI không
-    // còn nhằng nhịt thành từng tin nhắn rời (phiên e2e-round40c từng 46
-    // bubbles chỉ cho 1 workflow). =====
+    // làm). ROUND-45: BÁO CÁO CỦA TỪNG AGENT cũng nằm trong panel (event 'report'
+    // collapsible) — chat chỉ giữ thông điệp tổng kết cuối (SYSTEM + OMEGA);
+    // trước đây bubble SHOCWAVE 29KB trôi trong khung chat như nhầm chỗ (phiên
+    // e2e-round40c từng 46 bubbles rời chỉ cho 1 workflow). =====
     const processMsgId = crypto.randomUUID()
     const processEvents: TeamProcessEvent[] = []
     const startMsg: SmolabMessage = {
@@ -4118,18 +4195,12 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
               const agentName = event.agent as string
               const agentPosition = event.position as string
               const agentAvatar = event.avatar as string
-              const agentMsg: SmolabMessage = {
-                id: crypto.randomUUID(),
-                role: 'assistant',
-                content: '',
-                timestamp: new Date(),
-                isTeamMessage: true,
-                agentName,
-                agentPosition,
-                agentAvatar,
-              }
-              currentAgentMsgId = agentMsg.id
-              if (isActiveSession()) setMessages(prev => [...prev, agentMsg])
+              // ROUND-45: KHÔNG CÒN bubble chat cho output của agent (bằng
+              // chứng: bubble SHOCWAVE phình 29KB như "báo cáo nhầm chỗ" trong
+              // khung chat). Mọi suy nghĩ/làm việc/báo cáo của agent đều nằm
+              // trong panel "Quá trình thực thi" — chat chỉ còn thông điệp
+              // tổng kết cuối (SYSTEM final report + OMEGA final report).
+              currentAgentMsgId = null
               // Panel: bước pipeline mới bắt đầu + reset theo dõi vòng ReAct
               currentAgentName = agentName
               currentIteration = 0
@@ -4151,18 +4222,14 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
             }
 
             case 'agent_chunk': {
-              if (!currentAgentMsgId) break
-              // REPLACE content (not append) — each ReAct iteration returns FULL LLM output,
-              // not incremental deltas. Appending would duplicate text across iterations.
-              const chunkContent = event.content as string
-              // Panel: snapshot "nghĩ gì" của vòng ReAct hiện tại (mỗi vòng
-              // đúng 1 thought — vòng sau REPLACE bubble nên không lưu lại
-              // được nếu không chốt tại đây).
+              // ROUND-45: KHÔNG còn bubble chat để REPLACE — agent_chunk chỉ còn
+              // nhiệm vụ snapshot "nghĩ gì" của vòng ReAct vào panel.
               // FIX B1 (review 2026-10-29): agent_chunk TỰ mang số vòng
               // (engine emit `iteration: N`, N=1,2,…) — dùng TRỰC TIẾP thay
               // vì currentIteration từ event 'iteration' riêng (event đó emit
               // SAU chunk khi agent đã gọi tool → trước đây VÒNG ĐẦU bị bỏ
               // lỡ + các vòng sau bị gán nhãn lệch 1).
+              const chunkContent = event.content as string
               const chunkIter = typeof event.iteration === 'number' ? event.iteration : currentIteration
               const chunkAgent = (event.agent as string) || currentAgentName
               if (chunkAgent && chunkIter > snapshottedIteration && chunkContent.trim()) {
@@ -4177,25 +4244,29 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                   seq: typeof event.seq === 'number' ? event.seq : undefined, // ROUND-43 fix B1
                 })
               }
-              if (isActiveSession()) setMessages(prev => prev.map(m =>
-                m.id === currentAgentMsgId
-                  ? { ...m, content: chunkContent }
-                  : m
-              ))
               break
             }
 
             case 'agent_complete': {
-              if (!currentAgentMsgId) break
+              // ROUND-45: báo cáo cuối của agent → PANEL (event 'report' — gọn
+              // tiêu đề + <details> mở đọc được), KHÔNG CÒN bubble chat 29KB.
               const completeContent = event.content as string
               const duration = event.duration as number | undefined
               const doneAgent = (event.agent as string) || currentAgentName || ''
-              if (isActiveSession()) setMessages(prev => prev.map(m =>
-                m.id === currentAgentMsgId
-                  ? { ...m, content: completeContent || m.content, durationMs: duration }
-                  : m
-              ))
-              // Panel: đánh dấu bước của agent này HOÀN THÀNH
+              const donePosition = (event.position as string) || undefined
+              // Panel: báo cáo của agent + đánh dấu bước HOÀN THÀNH
+              if (completeContent && completeContent.trim()) {
+                pushProcessEvent({
+                  kind: 'report',
+                  id: crypto.randomUUID(),
+                  ts: Date.now(),
+                  agent: doneAgent || undefined,
+                  position: donePosition,
+                  text: completeContent,
+                  durationMs: typeof duration === 'number' ? duration : undefined,
+                  seq: typeof event.seq === 'number' ? event.seq : undefined,
+                })
+              }
               for (let i = processEvents.length - 1; i >= 0; i--) {
                 const ev = processEvents[i]
                 if (ev.kind === 'step' && ev.agent === doneAgent && !ev.stepDone) {
@@ -4380,6 +4451,29 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                   agentAvatar: '🧠',
                 }
                 if (isActiveSession()) setMessages(prev => [...prev, escalationMsg])
+              }
+              break
+            }
+
+            case 'omega_final_report': {
+              // ROUND-45 — OMEGA FINAL REPORT: Omega (điều phối viên) tổng kết
+              // công việc cuối cùng sau khi team code hoàn thành (user: "khi
+              // team code hoàn thành không thấy Omega thực hiện báo cáo công
+              // việc cuối cùng"). Bubble chat của Omega — thông điệp tổng kết
+              // user cần đọc trực tiếp (KHÔNG gom vào panel).
+              const omegaFinal = String(event.advisory || '')
+              if (omegaFinal) {
+                const omegaFinalMsg: SmolabMessage = {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content: omegaFinal,
+                  timestamp: new Date(),
+                  isTeamMessage: true,
+                  agentName: (event.agent as string) || 'Omega',
+                  agentPosition: 'OMEGA',
+                  agentAvatar: '🧠',
+                }
+                if (isActiveSession()) setMessages(prev => [...prev, omegaFinalMsg])
               }
               break
             }

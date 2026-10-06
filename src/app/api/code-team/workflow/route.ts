@@ -75,7 +75,12 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
         row = {
           role: 'assistant',
           content,
-          metadata: { isTeamMessage: true, agentName, agentPosition, durationMs: event.duration, ...seqMeta },
+          // ROUND-45: metadata.agentReport — báo cáo cuối của TỪNG agent là
+          // PHẦN THỰC THI (user: "SHOCWAVE nhả nội dung rất dài trong khung chat
+          // như một báo cáo — đúng ra là phần thực thi") → UI gom vào panel
+          // "Quá trình thực thi" (isTeamProcessBubble match agentReport) thay
+          // vì bubble chat khổng lồ 29KB như trước.
+          metadata: { isTeamMessage: true, agentName, agentPosition, durationMs: event.duration, agentReport: true, ...seqMeta },
         }
       }
     } else if (type === 'agent_chunk') {
@@ -206,12 +211,27 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
       // ROUND-42: persist báo cáo tổng kết workflow — frontend REPLACE phiên bằng
       // sự thật DB ~600ms sau workflow_done (chống panel nhân đôi); không persist
       // thì bubble BÁO CÁO TỔNG KẾT (client-only) bị auto-reload nuốt mất.
+      // ROUND-45: marker workflowFinalReport — báo cáo này GIỮ Ở CHAT (thông điệp
+      // tổng kết cho user), không gom vào panel như agentReport.
       const formatted = String(event.formattedReport || '').slice(0, 3000)
       if (formatted) {
         row = {
           role: 'assistant',
           content: `📋 **BÁO CÁO TỔNG KẾT WORKFLOW**\n\n\`\`\`\n${formatted}\n\`\`\``,
-          metadata: { isTeamMessage: true, agentName: 'SYSTEM', agentPosition: 'TL', ...seqMeta },
+          metadata: { isTeamMessage: true, agentName: 'SYSTEM', agentPosition: 'TL', workflowFinalReport: true, ...seqMeta },
+        }
+      }
+    } else if (type === 'omega_final_report') {
+      // ROUND-45 — OMEGA FINAL REPORT: Omega (điều phối viên) tổng kết công việc
+      // cuối cùng sau khi team code hoàn thành — bubble chat của Omega (thông
+      // điệp cuối cho user, KHÔNG gom vào panel).
+      const advisory = String(event.advisory || '')
+      const reason = String(event.reason || '')
+      if (advisory) {
+        row = {
+          role: 'assistant',
+          content: advisory,
+          metadata: { isTeamMessage: true, agentName: (event.agent as string) || 'Omega', agentPosition: 'OMEGA', omegaFinalReport: true, reason, tokensUsed: event.tokensUsed, ...seqMeta },
         }
       }
     } else if (type === 'omega_escalation') {
