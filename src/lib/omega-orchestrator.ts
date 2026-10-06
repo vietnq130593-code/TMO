@@ -52,6 +52,9 @@ import {
   AGENT_INSTRUCTION_MAX,
 } from '@/lib/agent-constants'
 import { getAgentRoster, invalidateRosterCache } from '@/lib/agent-roster'
+// GUARD Opus (user directive 2026-10-06): dispatch_agent không điều động được
+// CTO — import hằng số tên để guard khớp đúng profile kể cả khi đổi tên display.
+import { OPUS_AGENT_NAME } from '@/lib/opus/opus-agent'
 
 // ==================== CONFIG ====================
 
@@ -686,6 +689,26 @@ export async function dispatchAgentByOmega(params: {
 
   if (!profile.provider || !profile.model) {
     return { success: false, mode: 'task', agent: profile.name, error: `Agent "${profile.name}" chưa cấu hình provider/model — không điều động được.` }
+  }
+
+  // ===== GUARD — OPUS LÀ CTO, KHÔNG ĐIỀU ĐỘNG NHƯ SUB-AGENT THI CÔNG =====
+  // (user directive 2026-10-06 — "Omega huy động được MỌI agents, chỉ trừ Opus")
+  // Opus chỉ hoạt động qua cơ chế riêng: Opus review (cuối run) + SELF-DIRECTION
+  // (phê duyệt/ủy quyền). JD của chính Opus: "KHÔNG tự thi công — PHÁN ĐOÁN và
+  // CHỈ ĐẠO", "triển khai vẫn của Omega" (AgentProfile.capable). Guard này phủ
+  // ĐỦ 3 đường dispatch đều đi qua dispatchAgentByOmega: dispatch_agent,
+  // dispatch_agents_parallel (fan-out gọi từng task), escalate_problem
+  // auto-apply (khi Omega consult đề xuất Opus).
+  if (profile.name === OPUS_AGENT_NAME) {
+    return {
+      success: false,
+      mode: duration === 'long_term' ? 'long_term' : 'task',
+      agent: profile.name,
+      error:
+        'Opus là CTO — KHÔNG điều động được qua dispatch_agent (không nhận tác vụ thi công). ' +
+        'Opus chỉ phán đoán/review qua cơ chế riêng (Opus review cuối run, SELF-DIRECTION phê duyệt). ' +
+        'Hãy giao việc thi công cho agent khác trong Agent Roster đúng chức trách.',
+    }
   }
 
   // ===== Toolset: DB tools JSON → mặc định dispatch toolset =====

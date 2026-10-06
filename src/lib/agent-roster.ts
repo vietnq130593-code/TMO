@@ -172,7 +172,13 @@ export async function buildAgentRosterPromptBlock(excludeName?: string): Promise
 
   if (standalone.length > 0) {
     parts.push('■ STANDALONE (agents độc lập — Omega là người quản trị vận hành):')
-    for (const e of standalone) parts.push(entryLine(e))
+    for (const e of standalone) {
+      const line = entryLine(e)
+      // GUARD đồng bộ (user directive 2026-10-06): Opus là CTO — KHÔNG nhận
+      // tác vụ thi công qua dispatch_agent (guard chặn ở dispatchAgentByOmega).
+      // Chú thích tại đây để agents không thử giao việc rồi mới nhận lỗi.
+      parts.push(e.name === 'Opus' ? `${line} — ⛔ KHÔNG dispatch (CTO: chỉ phán đoán/review qua cơ chế riêng, không thi công)` : line)
+    }
   }
 
   if (codeTeam.length > 0) {
