@@ -1183,7 +1183,7 @@ export async function POST(request: NextRequest) {
         // (Task 14-c: PURE MOVE khối inline này thành helper chia sẻ
         // closeGoalLoopRunTodos trong goal-loop-finalize.ts — đường durable
         // finalize dùng cùng 1 nguồn sự thật; helper tự fail-open.)
-        await closeGoalLoopRunTodos({ sessionId, runId: reactResult.runId, goalLoop: reactResult.goalLoop })
+        await closeGoalLoopRunTodos({ sessionId, runId: reactResult.runId, goalLoop: reactResult.goalLoop, agentName: agentProfileName || null, goalDigest: lastUserContent || null })
 
         // Track session (TOMBSTONE GUARD: session đã xóa → không upsert lại)
         if (sessionId && !(await isSessionDeletedDeep(sessionId))) {
@@ -1356,6 +1356,12 @@ export async function POST(request: NextRequest) {
         if (sessionId) {
           try {
             const crashRunId = getActiveRunId(sessionId)
+            // P-E (2026-10-06): crash cũng là gián đoạn — snapshot việc dở
+            // TRƯỚC khi close để run kế hồi quy tiếp.
+            try {
+              const { recordRegressionSnapshot } = await import('@/lib/goal-loop-finalize')
+              await recordRegressionSnapshot({ sessionId, runId: crashRunId, stopReason: 'crashed' })
+            } catch { /* non-blocking — không được phép che lỗi gốc */ }
             const closed = await closeRunTodosAtEnd({
               sessionId,
               runId: crashRunId,

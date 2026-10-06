@@ -85,6 +85,88 @@ export function isTrivialExchange(userMsg: string, assistantMsg: string): boolea
 }
 
 /**
+ * P-E (2026-10-06 user phê duyệt — "khi hoàn thành các công việc phát sinh
+ * mới được quay lại hồi quy tiếp tục các phần đang làm dở trước đó") —
+ * SNAPSHOT VIỆC DỞ lúc run kết thúc.
+ *
+ * Gọi NGAY TRƯỚC closeRunTodosAtEnd (trước khi pending bị ẩn archivedAt /
+ * in_progress bị đóng failed / message kế tiếp của user ép archived qua
+ * archiveStaleRunTodos) — snapshot giữ nguyên trạng thái thật lúc gián đoạn:
+ * todo nào đang in_progress (đang làm dở), todo nào mới blocked, todo nào
+ * pending (chưa kịp làm). Run kế trong cùng session đọc lại qua
+ * getRegressionQueue (agent-goal-loop.ts) → khối hồi quy đính trước user
+ * message: xong yêu cầu hiện tại → mở lại đúng todo id → làm tiếp từ chỗ dở.
+ *
+ * Lưu trữ: TaskContextArchive kind='regression' (tags='open' → hết mục mở
+ * thì getRegressionQueue tự đánh 'resolved'). Loại trừ Todo follow-up
+ * ("🔁 Follow-up...") — nợ kỹ thuật đã có cơ chế riêng buildPendingDebtBlock.
+ * Dedupe theo runId: crash-resume chạy finalize 2 lần không đẻ snapshot
+ * trùng. Fail-open tuyệt đối — không bao giờ throw lên caller.
+ *
+ * @returns số phần việc dở được ghi nhận (0 = không có gì dở / đã có snapshot)
+ */
+export async function recordRegressionSnapshot(params: {
+  sessionId: string
+  runId: string | null
+  agentName?: string | null
+  goalDigest?: string | null
+  stopReason?: string | null
+}): Promise<number> {
+  const { sessionId, runId, agentName, goalDigest, stopReason } = params
+  if (!sessionId || !runId) return 0
+  try {
+    const openTodos = await db.todo.findMany({
+      where: {
+        sessionId,
+        runId,
+        status: { in: ['pending', 'in_progress', 'blocked'] },
+        NOT: { content: { startsWith: '🔁 Follow-up' } },
+      },
+      orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+      take: 25,
+    })
+    const content = JSON.stringify({
+      goalDigest: (goalDigest ?? '').slice(0, 400) || null,
+      stopReason: stopReason ?? null,
+      interruptedAt: new Date().toISOString(),
+      todos: openTodos.map(t => ({ id: t.id, content: t.content.slice(0, 300), status: t.status })),
+    })
+    // UPSERT (không chỉ dedupe): run bị crash → PM2 resume cùng runId → chạy
+    // tiếp → kết thúc chưa đạt LẦN NỮA → todo mới tạo trong lúc resume phải
+    // được ghi nhận (snapshot cũ refresh), không bị bỏ vì "đã có snapshot".
+    const existing = await db.taskContextArchive.findFirst({
+      where: { runId, kind: 'regression' },
+      select: { id: true },
+    })
+    if (existing) {
+      if (openTodos.length === 0) return 0 // đã có snapshot + hết việc dở → giữ nguyên
+      await db.taskContextArchive.update({
+        where: { id: existing.id },
+        data: { content, tags: 'open' },
+      }).catch(() => null)
+      console.log(`[P-E Regression] Run ${runId} (resumed) kết thúc chưa đạt — refresh snapshot ${openTodos.length} phần việc dở`)
+      return openTodos.length
+    }
+    if (openTodos.length === 0) return 0
+    await db.taskContextArchive.create({
+      data: {
+        runId,
+        sessionId,
+        agentName: agentName ?? null,
+        kind: 'regression',
+        content,
+        tags: 'open',
+      },
+    })
+    console.log(`[P-E Regression] Run ${runId} kết thúc chưa đạt (${stopReason ?? 'unknown'}) — ghi snapshot ${openTodos.length} phần việc dở vào hàng hồi quy của session ${sessionId} (run kế sẽ hồi quy sau khi xong yêu cầu hiện tại)`)
+    return openTodos.length
+  } catch (err) {
+    console.warn('[P-E Regression] recordRegressionSnapshot lỗi (fail-open):', err instanceof Error ? err.message : String(err))
+    return 0
+  }
+}
+
+/**
  * Todo honest-close per-item CI-2 — PURE MOVE từ khối inline của chat route
  * (sau runGoalDrivenLoop): todo của runId = result.runId được đóng theo trạng
  * thái thật của từng item:
@@ -99,11 +181,25 @@ export async function closeGoalLoopRunTodos(params: {
   sessionId?: string | null
   runId?: string | null
   goalLoop?: GoalLoopResult['goalLoop']
+  /** P-E/P-D (2026-10-06) — tên agent + digest mục tiêu cho snapshot hồi quy */
+  agentName?: string | null
+  goalDigest?: string | null
 }): Promise<void> {
-  const { sessionId, runId, goalLoop } = params
+  const { sessionId, runId, goalLoop, agentName, goalDigest } = params
   if (!sessionId) return
   try {
     const goalIncomplete = goalLoop ? goalLoop.complete === false : false
+    // P-E — SNAPSHOT VIỆC DỞ (trước khi close đổi trạng thái todo): run kết
+    // thúc chưa đạt → phần việc dở được giữ lại cho run kế hồi quy.
+    if (goalIncomplete) {
+      await recordRegressionSnapshot({
+        sessionId,
+        runId: runId || null,
+        agentName,
+        goalDigest,
+        stopReason: goalLoop?.stopReason ?? null,
+      })
+    }
     const closed = await closeRunTodosAtEnd({
       sessionId,
       runId: runId || null,
@@ -112,6 +208,21 @@ export async function closeGoalLoopRunTodos(params: {
     const closedTotal = closed.inProgressClosed + closed.pendingCompleted + closed.pendingArchived
     if (closedTotal > 0) {
       console.log(`[Todo CI-2] Run ${runId || '(legacy)'} kết thúc (${goalIncomplete ? 'CHƯA đạt' : 'đạt'} mục tiêu): đóng ${closed.inProgressClosed} in_progress, ${closed.pendingCompleted} pending→completed, ${closed.pendingArchived} pending ẩn (archivedAt) trong session ${sessionId}`)
+    }
+    // P-D — WORK LEDGER HYGIENE: run ĐẠT mục tiêu → toàn bộ dữ liệu công việc
+    // active của run chuyển completed ("xóa dữ liệu công việc hoàn thành" —
+    // sweeper 7 ngày dọn vật lý sau). Run CHƯA đạt → giữ active: ledger là
+    // trạng thái bền vững cho việc hồi quy/soát lại của run kế.
+    if (!goalIncomplete && runId) {
+      try {
+        const wd = await db.agentWorkData.updateMany({
+          where: { sessionId, runId, status: 'active' },
+          data: { status: 'completed', completedAt: new Date() },
+        })
+        if (wd.count > 0) {
+          console.log(`[P-D WorkLedger] Run ${runId} đạt mục tiêu → ${wd.count} bản ghi work_data active → completed (dọn ledger việc đã xong)`)
+        }
+      } catch { /* fail-open — hygiene không được phép làm hỏng finalize */ }
     }
   } catch { /* non-blocking — todo hiển thị chỉ là UI progress */ }
 }
@@ -252,8 +363,16 @@ export async function finalizeGoalLoopRun(args: { job: GoalLoopJob; result: Goal
   )
 
   // ---- BƯỚC 1: Todo honest-close per-item CI-2 (helper chia sẻ với route) ----
+  // P-E/P-D (2026-10-06): truyền agentName + goalDigest cho snapshot hồi quy
+  // (việc dở) + work-ledger hygiene (dọn ledger khi run đạt mục tiêu).
   try {
-    await closeGoalLoopRunTodos({ sessionId, runId: result.runId, goalLoop: result.goalLoop })
+    await closeGoalLoopRunTodos({
+      sessionId,
+      runId: result.runId,
+      goalLoop: result.goalLoop,
+      agentName: jobInput?.agentName || null,
+      goalDigest: jobInput?.userMessage || null,
+    })
   } catch (todoErr) {
     console.warn(
       `[goal-loop-finalize] job ${job.id}: todo honest-close lỗi (fail-open — tiếp tục):`,

@@ -764,6 +764,28 @@ function buildAutomationProtocol(hasDirect: boolean, hasPropose: boolean): strin
 }
 
 /**
+ * P-D (user phê duyệt 2026-10-06 — "tận dụng database để agent tổng hợp thông
+ * tin, tra cứu, soát lại thông tin nhằm làm việc liên tục, xóa dữ liệu công
+ * việc hoàn thành và tiếp tục phần việc kế tiếp"): WORK LEDGER discipline.
+ * Bảng AgentWorkData + tool work_data (P8) đã tồn tại nhưng không được ép vào
+ * quy trình — agent chạy theo context trong đầu, context bị NÉN ×7 giữa các
+ * chu kỳ (bằng chứng r49) là mất dấu phần đã làm. Protocol dạy VÒNG LÀM VIỆC
+ * LIÊN TỤC trên DB: tra cứu → làm 1 phần → cập nhật → dọn phần xong → tiếp.
+ */
+function buildWorkLedgerProtocol(): string {
+  return `
+
+📦 WORK LEDGER — DỮ LIỆU CÔNG VIỆC BỀN VỮNG TRONG DATABASE (tool work_data + todo_write)
+Context trong đầu bị NÉN giữa các chu kỳ (rolling digest) — dữ liệu ghi vào DB thì KHÔNG mất. Nhiệm vụ dài/phức tạp PHẢI chạy theo VÒNG LÀM VIỆC LIÊN TỤC:
+1. TRA CỨU & SOÁT LẠI (đầu mỗi chu kỳ): work_data list (status=active) → work_data get (id hoặc key) các bản ghi liên quan — nắm phần ĐÃ làm/kết quả ĐÃ có, KHÔNG làm lại việc đã xong; đối chiếu todo còn mở của run (todo_write/xem khối 📋 TODO trong directive).
+2. LÀM ĐÚNG 1 PHẦN VIỆC VỪA SỨC MỘT CHU KỲ (hành động thật qua tool — không chỉ lập kế hoạch).
+3. CẬP NHẬT DỮ LIỆU: kết quả/bằng chứng/điều mới biết → work_data put (truyền id = cập nhật bản ghi cũ, KHÔNG đẻ bản ghi trùng); việc phát sinh mới → put bản ghi mới (kind: plan | note | evidence | scratch; key ngắn gọn để tra cứu lần sau).
+4. DỌN PHẦN ĐÃ XONG HẲN: work_data set_status completed (hoặc delete) cho dữ liệu của phần vừa xong — ledger chỉ giữ việc ĐANG làm + việc CHƯA làm, không tích rác.
+5. TIẾP PHẦN VIỆC KẾ (quay lại bước 1).
+Quy ước: todo_write = KẾ HOẠCH các phần việc; work_data = DỮ LIỆU + BẰNG CHỨNG của từng phần. Cả hai sống qua nén context và qua crash. Việc phát sinh xen ngang: làm xong việc phát sinh thì HỒI QUY đúng phần dở (khối 🔄 trong directive).`
+}
+
+/**
  * CI-3 B7 (Task 13-e) — ghép system prompt HOÀN CHỈNH của goal loop + áp budget
  * ký tự TỔNG (SYSTEM_PROMPT_BUDGET_CHARS — env SYSTEM_PROMPT_BUDGET_CHARS,
  * mặc định 24k chars ~ 6k tokens, 0 = không giới hạn).
@@ -795,6 +817,8 @@ export function assembleGoalLoopSystemPrompt(params: {
   hasCodeTeamRequest?: boolean
   /** TOOL SCHEMAS (2026-09-30): schema compact của whitelist tools — model gọi đúng param */
   toolSchemasBlock?: string
+  /** P-D (2026-10-06 user duyệt): agent có tool work_data → work-ledger protocol */
+  hasWorkData?: boolean
   /** nhãn context cho log 1 dòng khi có cut */
   agentName?: string
   /**
@@ -825,6 +849,10 @@ export function assembleGoalLoopSystemPrompt(params: {
         { name: 'codeTeamProtocol', content: params.hasCodeTeamRequest === true ? buildCodeTeamProtocol() : '', priority: 88 },
         { name: 'orchestrationProtocol', content: hasOrchestration ? buildOrchestrationProtocol(hasDispatch, hasCreate) : '', priority: 80 },
         { name: 'automationProtocol', content: buildAutomationProtocol(params.hasAutomationDirect === true, params.hasAutomationPropose === true), priority: 78 },
+        // P-D (2026-10-06): WORK LEDGER — vòng làm việc liên tục trên DB (tra cứu
+        // → làm → cập nhật → dọn → tiếp). priority 76: đứng trên confidence —
+        // mất discipline này là mất năng lực làm việc dài hạn liên tục.
+        { name: 'workLedgerProtocol', content: params.hasWorkData === true ? buildWorkLedgerProtocol() : '', priority: 76 },
         { name: 'confidenceProtocol', content: buildConfidenceProtocol(), priority: 70 },
         { name: 'preAct', content: preActBlock, priority: 60 },
       ],
@@ -846,6 +874,7 @@ export function assembleGoalLoopSystemPrompt(params: {
       (params.hasCodeTeamRequest === true ? buildCodeTeamProtocol() : '') +
       (hasOrchestration ? buildOrchestrationProtocol(hasDispatch, hasCreate) : '') +
       buildAutomationProtocol(params.hasAutomationDirect === true, params.hasAutomationPropose === true) +
+      (params.hasWorkData === true ? buildWorkLedgerProtocol() : '') +
       buildConfidenceProtocol() +
       preActBlock
     )
@@ -950,6 +979,164 @@ Các run trước trong phiên này còn ${debt.length} nợ kỹ thuật chưa 
 4. Hết nợ mới làm việc mới của yêu cầu hiện tại.
 ${lines.join('\n')}`
   } catch { return '' /* fail-open — nợ kỹ thuật không được phép làm hỏng run mới */ }
+}
+
+// ==================== P-D (2026-10-06 — user phê duyệt) — WORK LEDGER RENDER ====================
+// Hai khối render dữ liệu công việc từ DB vào directive:
+//   (a) buildRunWorkDataBlock — ledger ACTIVE của ĐÚNG run này, đính kèm MỖI
+//       continuation directive: sau nén context ×N (bằng chứng r49) agent vẫn
+//       THẤY sổ dữ liệu của mình — tra cứu/soát lại không phụ thuộc trí nhớ
+//       trong đầu. (b) buildCrossRunWorkDataBlock — ledger active của các run
+//       TRƯỚC trong session (chỉ đầu run): phục vụ hồi quy phần dở + soát lại
+//       kết quả cũ xuyên run. Cả hai fail-open tuyệt đối.
+export async function buildRunWorkDataBlock(sessionId: string | null | undefined, runId: string | null | undefined): Promise<string> {
+  if (!sessionId || !runId) return ''
+  try {
+    const { db } = await import('@/lib/db')
+    const rows = await db.agentWorkData.findMany({
+      where: { sessionId, runId, status: 'active' },
+      orderBy: { updatedAt: 'desc' },
+      take: 8,
+    })
+    if (rows.length === 0) return ''
+    const lines = rows.map(r => {
+      const preview = r.content.slice(0, 180).replace(/\s+/g, ' ').trim()
+      return `- [id ${r.id}${r.key ? ` | key ${r.key}` : ''}] (${r.kind}, ${r.content.length} ký tự): ${preview}`
+    })
+    return `\n\n📦 WORK LEDGER HIỆN TẠI (dữ liệu công việc active của run trong DB — sống qua nén context; soát lại trước khi làm tiếp; cập nhật bằng work_data put kèm id; phần đã xong hẳn → work_data set_status completed):\n${lines.join('\n')}`
+  } catch { return '' /* fail-open */ }
+}
+
+/** (b) Ledger active của các run TRƯỚC trong session — chỉ gọi đầu run thường. Exported cho probe/smoke test. */
+export async function buildCrossRunWorkDataBlock(sessionId: string | null | undefined, currentRunId: string | null | undefined): Promise<string> {
+  if (!sessionId) return ''
+  try {
+    const { db } = await import('@/lib/db')
+    const rows = await db.agentWorkData.findMany({
+      where: { sessionId, status: 'active', runId: currentRunId ? { not: currentRunId } : { not: null } },
+      orderBy: { updatedAt: 'desc' },
+      take: 5,
+    })
+    if (rows.length === 0) return ''
+    const lines = rows.map(r => {
+      const preview = r.content.slice(0, 140).replace(/\s+/g, ' ').trim()
+      return `- [id ${r.id}${r.key ? ` | key ${r.key}` : ''}] (${r.kind}, ${r.content.length} ký tự): ${preview}`
+    })
+    return `\n\n🗃 DỮ LIỆU CÔNG VIỆC CÒN ACTIVE TỪ CÁC RUN TRƯỚC TRONG PHIÊN (soát lại bằng work_data get id khi cần — KHÔNG làm lại phần đã xong; nếu việc tương ứng đã xong hẳn → work_data set_status completed để dọn ledger):\n${lines.join('\n')}`
+  } catch { return '' /* fail-open */ }
+}
+
+// ==================== P-E (2026-10-06 — user phê duyệt) — HỒI QUY PHẦN VIỆC DỞ ====================
+// User directive: "Việc phát sinh thêm công việc nhưng khi hoàn thành các
+// công việc phát sinh mới được quay lại hồi quy tiếp tục các phần đang làm
+// dở trước đó." Trước đây phần việc dở bị CHÔN: run cũ kết thúc chưa đạt →
+// pending +archivedAt (ẩn), in_progress → failed; message mới của user →
+// archiveStaleRunTodos chuyển hết thành 'archived' — KHÔNG cơ chế nào nhặt
+// lại. Giờ: recordRegressionSnapshot (goal-loop-finalize.ts) ghi snapshot
+// việc dở vào TaskContextArchive (kind='regression') NGAY khi run kết thúc
+// chưa đạt (trước khi trạng thái bị đóng/chôn); getRegressionQueue đọc lại
+// snapshot + đối chiếu trạng thái LIVE của từng todo → hàng hồi quy cho
+// run kế. Đóng todo (completed/cancelled) qua todo_write id = mục hồi quy
+// được xử lý xong; hết mục → snapshot tags='resolved'.
+
+export interface RegressionItem {
+  snapshotId: string
+  fromRunId: string
+  todoId: string
+  content: string
+  statusAtInterruption: string
+  stopReason: string | null
+  interruptedAt: string | null
+}
+
+/** Trạng thái "chưa xong" của todo sống (dù đã bị chôn archived/failed). */
+const REGRESSION_OPEN_LIVE = new Set(['pending', 'in_progress', 'blocked', 'failed', 'archived'])
+
+/**
+ * Đọc hàng hồi quy của session (các phần việc dở từ các run trước).
+ * Đối chiếu trạng thái LIVE từng todo: completed/cancelled → đã xử lý (bỏ);
+ * còn mở (kể cả bị chôn archived/failed do auto-close) → còn chờ hồi quy.
+ * Snapshot hết mục → đánh dấu tags='resolved' (không quét lại). Fail-open:
+ * lỗi DB → mảng rỗng (hồi quy không được phép làm hỏng run mới).
+ */
+export async function getRegressionQueue(sessionId: string | null | undefined, currentRunId: string | null | undefined): Promise<RegressionItem[]> {
+  if (!sessionId) return []
+  try {
+    const { db } = await import('@/lib/db')
+    const snapshots = await db.taskContextArchive.findMany({
+      where: { sessionId, kind: 'regression' },
+      orderBy: { createdAt: 'desc' },
+      take: 8,
+    })
+    if (snapshots.length === 0) return []
+    const items: RegressionItem[] = []
+    const resolvedIds: string[] = []
+    // Xếp snapshot CŨ NHẤT trước — việc dở lâu nhất được hồi quy trước (FIFO).
+    for (const snap of [...snapshots].reverse()) {
+      if (snap.tags === 'resolved') continue
+      if (currentRunId && snap.runId === currentRunId) continue // run hiện tại không hồi quy chính nó
+      let parsed: { goalDigest?: string; stopReason?: string | null; interruptedAt?: string | null; todos?: Array<{ id: string; content: string; status: string }> } | null = null
+      try { parsed = JSON.parse(snap.content) } catch { continue }
+      if (!parsed || !Array.isArray(parsed.todos) || parsed.todos.length === 0) continue
+      const alive = parsed.todos.filter(t => t && typeof t.id === 'string')
+      if (alive.length === 0) continue
+      const liveRows = await db.todo.findMany({
+        where: { id: { in: alive.map(t => t.id) } },
+        select: { id: true, status: true },
+      })
+      const liveById = new Map(liveRows.map(r => [r.id, r.status]))
+      let open = 0
+      for (const t of alive.slice(0, 25)) {
+        // Todo bị xóa vật lý (janitor purge >30 ngày) → coi như đã xử lý.
+        const live = liveById.get(t.id)
+        if (live === undefined) continue
+        if (!REGRESSION_OPEN_LIVE.has(live)) continue
+        open++
+        if (items.length < 10) {
+          items.push({
+            snapshotId: snap.id,
+            fromRunId: snap.runId ?? '',
+            todoId: t.id,
+            content: (t.content ?? '').slice(0, 200),
+            statusAtInterruption: t.status ?? 'pending',
+            stopReason: parsed.stopReason ?? null,
+            interruptedAt: parsed.interruptedAt ?? null,
+          })
+        }
+      }
+      if (open === 0) resolvedIds.push(snap.id)
+    }
+    if (resolvedIds.length > 0) {
+      await db.taskContextArchive.updateMany({
+        where: { id: { in: resolvedIds } },
+        data: { tags: 'resolved' },
+      }).catch(() => { /* fail-open */ })
+    }
+    return items
+  } catch { return [] /* fail-open */ }
+}
+
+/**
+ * Khối hồi quy verbose — đính TRƯỚC user message của run mới (nằm trong vùng
+ * bảo vệ nén context — compressConversation không đụng index ≤ goalMsgIndex).
+ * Thứ tự ưu tiên đúng ý user: NỢ KỸ THUẬT (debt block) xử lý TRƯỚC việc mới →
+ * việc mới (yêu cầu hiện tại) → HỒI QUY phần dở SAU KHI xong yêu cầu hiện tại.
+ */
+export function buildRegressionStartBlock(items: RegressionItem[]): string {
+  if (items.length === 0) return ''
+  const lines = items.map(it =>
+    `- [todo id ${it.todoId}] (${it.statusAtInterruption === 'in_progress' ? 'ĐANG LÀM DỞ' : it.statusAtInterruption === 'blocked' ? 'ĐANG BỊ KẸT' : 'CHƯA LÀM'} lúc gián đoạn${it.stopReason ? `, lý do dừng: ${it.stopReason}` : ''}): ${it.content}`,
+  )
+  return `🔄 PHẦN VIỆC ĐANG LÀM DỞ TỪ CÁC RUN TRƯỚC — HỒI QUY SAU KHI HOÀN THÀNH YÊU CẦU HIỆN TẠI (user directive 2026-10-06)
+Các run trước trong phiên này còn ${items.length} phần việc chưa xong. Thứ tự xử lý của run này:
+1. Hoàn thành YÊU CẦU HIỆN TẠI của user trước (đó là việc phát sinh mới).
+2. Sau đó HỒI QUY từng phần dưới đây theo thứ tự (làm lại đúng chỗ dở — KHÔNG làm lại từ đầu):
+   a. Mở lại todo: todo_write {"todos": [{"id": "<todo id>", "status": "in_progress"}]}.
+   b. SOÁT LẠI thông tin: work_data get / đọc kết quả cũ của phần đó trước khi làm tiếp.
+   c. Làm tiếp tới xong, đóng todo bằng todo_write {"todos": [{"id": "<todo id>", "status": "completed"}]}.
+3. Phần nào thực sự KHÔNG còn phù hợp (yêu cầu đã đổi hướng) → đóng "cancelled" kèm 1 câu lý do trong báo cáo — KHÔNG bỏ mặc.
+Trọng tài sẽ KHÔNG phán hoàn thành trọn vẹn khi còn mục hồi quy chưa xử lý (quy tắc 17).
+${lines.join('\n')}`
 }
 
 // ==================== 2026-10-27 (user directive phiên 3) — DELEGATION LOG ====================
@@ -1173,6 +1360,7 @@ Nguyên tắc SẮT:
 14. DEBT READINESS (user directive 2026-10-27 phiên 4 — GĐ3 xác định lại khả năng xử lý nợ ở chu kỳ kế): khi có side issues còn tồn tại, XÁC ĐỊNH LẠI xem chu kỳ kế tiếp ĐÃ CÓ THỂ TIẾN HÀNH XỬ LÝ được các nợ này chưa — đối chiếu từng nợ với năng lực tự phục vụ hiện có: tool sẵn có hoặc tự xây được (create_custom_tool), package tự cài được (manage_packages/bun add), schema tự sửa được (prisma + db push), việc thuộc chức trách agent có sẵn trong roster (dispatch được), không phụ thuộc điều kiện ngoài. TẤT CẢ nợ có đường xử lý → "debtReadiness": "ready" (chu kỳ kế quay GĐ0 xử lý được ngay). Nợ chờ phê duyệt Self-Direction / chờ vendor / chờ agent chưa tồn tại / thiếu điều kiện ngoài tầm với → "debtReadiness": "blocked" + "debtBlockedReason" nêu CỤ THỂ điều kiện còn thiếu (1 câu). KHÔNG phán "ready" khi nợ cần điều kiện chưa có — quay GĐ0 khi chưa thể xử lý chỉ đốt chu kỳ vô ích.
 15. COUNTERFACTUAL CHECK (Task 43 — chất lượng quyết định chu kỳ kế): khi "complete": false và run đã từng thất bại ít nhất 1 hướng tiếp cận (tool fail / verify fail / hướng đã thử không đạt), "nextPlan" PHẢI chứa ĐÚNG 1 dòng bắt đầu bằng "CF: " — 1 hướng làm KHÁC căn bản đáng giá nhất (nếu làm lại từ đầu sẽ thử gì thay vì cách đã fail) + vì sao hướng đó có thể thắng đúng chỗ cách cũ gục. KHÔNG để nextPlan lặp nguyên văn kế hoạch đã fail — đó là tín hiệu xoay vòng.
 16. NEEDS-INPUT CHECK (Task 48 — chống đốt chu kỳ vô ích): xác định xem mục tiêu có đang bị chặn DUY NHẤT bởi thông tin/ủy quyền/phê duyệt mà CHỈ NGƯỜI DÙNG cung cấp được không (agent đã hỏi trong lời kết luận — vd: thiếu scope/ủy quyền pentest, thiếu credentials, cần user chọn giữa các phương án, thông tin không có trong hệ thống...). ĐÚNG → "needsInput": true + "complete": false + "missing" nêu RÕ thông tin cụ thể cần user trả lời. KHÔNG dùng needsInput cho việc agent TỰ làm được bằng tool/tự phục vụ (xem rule 9a — đó là trốn tránh, không phải thiếu thông tin); cũng KHÔNG dùng khi agent chưa hề hỏi hoặc còn đường tấn công khả thi chưa thử. needsInput=true → hệ thống DỪNG vòng lặp ngay và trả câu hỏi về user (không chạy thêm chu kỳ).
+17. REGRESSION CHECK (user directive 2026-10-06 — hồi quy phần việc dở): prompt có khối "PHẦN VIỆC ĐANG LÀM DỞ TỪ CÁC RUN TRƯỚC" (các run trước trong phiên còn việc chưa xong, kèm todo id). Đối chiếu TỪNG mục với bằng chứng của run này: mục đã được hồi quy làm tiếp VÀ có bằng chứng hoàn thành (todo_write đóng đúng id + bằng chứng tool) → coi như đã xử lý. Còn mục NÀO chưa có bằng chứng hoàn thành → "complete": false và ghi vào "missing" dòng bắt đầu bằng "hồi quy: <nội dung mục>" — mục tiêu riêng của run có đạt tới đâu thì phiên vẫn còn việc dở, tác vụ chỉ trọn vẹn khi đã hồi quy xong phần dở. KHÔNG dùng needsInput cho regression (đó là việc còn tồn, không phải thiếu thông tin).
 
 Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích thêm):
 {"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."], "sideIssues": ["..."], "debtDecision": "none|record|continue", "debtReadiness": "ready|blocked", "debtBlockedReason": "...", "needsInput": true|false}"`
@@ -1418,8 +1606,16 @@ async function evaluateCompletion(params: {
    * complete → lỗi treo "chìm" (user report 2026-09-30).
    */
   debtIssues?: string[]
+  /**
+   * P-E (2026-10-06 user duyệt) — các phần việc dở từ các run trước chờ hồi
+   * quy (id todo + nội dung). Truyền vào để evaluator đối chiếu từng mục với
+   * bằng chứng run này (quy tắc 17): mục chưa có bằng chứng hoàn thành →
+   * complete=false + missing "hồi quy: ..." — run không được phán trọn vẹn
+   * khi phiên vẫn còn việc dở chưa hồi quy.
+   */
+  regressionPending?: string[]
 }): Promise<EvalVerdict | null> {
-  const { goal, lastAssistantContent, evidence, verifyEvidence, unverifiedModifications, codeModified, hasStrongVerify, strongVerifyToolsAvailable, agentProvider, agentModel, agentId, agentName, abortCheck, onTokens, debtIssues } = params
+  const { goal, lastAssistantContent, evidence, verifyEvidence, unverifiedModifications, codeModified, hasStrongVerify, strongVerifyToolsAvailable, agentProvider, agentModel, agentId, agentName, abortCheck, onTokens, debtIssues, regressionPending } = params
 
   const evidenceLines = evidence
     .slice(-MAX_EVIDENCE_ENTRIES)
@@ -1453,6 +1649,12 @@ async function evaluateCompletion(params: {
     ? `\n\nCÁC LỖI PHÁT SINH CHƯA XỬ LÝ (trọng tài đã quyết định xử lý — đối chiếu bằng chứng chu kỳ này xem TỪNG lỗi đã khắc phục chưa, quy tắc 10):\n${debtIssues.map(d => `- ${d}`).join('\n')}\n→ Lỗi nào chưa có bằng chứng máy xác nhận đã khắc phục (fix + verify pass) → PHẢI liệt kê lại vào "sideIssues" + "debtDecision": "continue".`
     : ''
 
+  // P-E — REGRESSION CHECK BLOCK: các phần việc dở từ các run trước chờ hồi
+  // quy (quy tắc 17): mục nào chưa có bằng chứng hoàn thành → complete=false.
+  const regressionCheckBlock = regressionPending && regressionPending.length > 0
+    ? `\n\nPHẦN VIỆC ĐANG LÀM DỞ TỪ CÁC RUN TRƯỚC CHỜ HỒI QUY (user directive 2026-10-06 — sau khi mục tiêu hiện tại đạt, run PHẢI hồi quy làm tiếp phần dở; đối chiếu bằng chứng run này xem mục nào đã xong — quy tắc 17):\n${regressionPending.map(r => `- ${r}`).join('\n')}\n→ Mục nào chưa có bằng chứng hoàn thành (todo_write đóng đúng id + bằng chứng tool) → "complete": false + "missing" ghi dòng bắt đầu "hồi quy: <mục>".`
+    : ''
+
   const prompt = `MỤC TIÊU CỦA AGENT:
 ${goal.slice(0, 2000)}
 
@@ -1460,7 +1662,7 @@ LỜI KẾT LUẬN CUỐI CÙNG CỦA AGENT (chỉ là tuyên bố — cần đ�
 ${lastAssistantContent.slice(0, 2500)}
 
 BẰNG CHỨNG KIỂM ĐỊNH CHU KỲ CUỐI (HARNESS kiểm đếm từ tool call thật — agent KHÔNG thể bịa):
-${verifyBlock}${weakVerifyWarning}${debtCheckBlock}${unverifiedModifications ? '\n\n⚠️ CÓ THAO TÁC SỬA (file_edit/shell/git...) SAU LẦN KIỂM ĐỊNH CUỐI — kết quả của lần sửa đó CHƯA được kiểm chứng.' : ''}
+${verifyBlock}${weakVerifyWarning}${debtCheckBlock}${regressionCheckBlock}${unverifiedModifications ? '\n\n⚠️ CÓ THAO TÁC SỬA (file_edit/shell/git...) SAU LẦN KIỂM ĐỊNH CUỐI — kết quả của lần sửa đó CHƯA được kiểm chứng.' : ''}
 
 NHẬT KÝ BẰNG CHỨNG TOOL (theo thứ tự thời gian — đây là sự thật duy nhất đáng tin):
 ${evidenceBlock}
@@ -1514,6 +1716,8 @@ async function generateFinalReport(params: {
   maxCycles: number
   /** FIX 2026-09-14 #9 — nợ kỹ thuật chưa xử lý (đã ghi Todo follow-up) */
   debtIssues?: string[]
+  /** P-E (2026-10-06) — phần việc dở chờ hồi quy còn tồn (id + nội dung) */
+  regressionPending?: string[]
   agentProvider: string
   agentModel: string
   agentId: string
@@ -1525,7 +1729,7 @@ async function generateFinalReport(params: {
   onTokens: (tokens: number) => void
 }): Promise<string | null> {
   const {
-    goal, lastContent, evidence, lastVerdict, stopReason, cyclesAttempted, maxCycles, debtIssues,
+    goal, lastContent, evidence, lastVerdict, stopReason, cyclesAttempted, maxCycles, debtIssues, regressionPending,
     agentProvider, agentModel, agentId, agentName, agentTemperature, agentMaxTokens,
     fullSystemPrompt, abortCheck, onTokens,
   } = params
@@ -1545,6 +1749,12 @@ async function generateFinalReport(params: {
     ? `\nNỢ KỸ THUẬT (lỗi phát sinh ngoài mục tiêu — trọng tài quyết định GHI NỢ thay vì chạy thêm chu kỳ; ĐÃ tạo Todo follow-up):\n${debtIssues.map(d => `- ${d}`).join('\n')}`
     : ''
 
+  // P-E — hồi quy còn tồn: báo cáo cuối PHẢI nêu rõ phần dở chưa hồi quy
+  // (trung thực — không được để mục "đã xong" che việc còn tồn của phiên).
+  const regressionBlock = regressionPending && regressionPending.length > 0
+    ? `\nPHẦN VIỆC ĐANG LÀM DỞ CHỜ HỒI QUY (các run trước trong phiên còn việc chưa xong mà run này chưa hồi quy xong):\n${regressionPending.map(r => `- ${r}`).join('\n')}`
+    : ''
+
   const prompt = `MỤC TIÊU GỐC:
 ${goal.slice(0, 1500)}
 
@@ -1555,7 +1765,7 @@ NHẬT KÝ BẰNG CHỨNG TOOL THẬT (sự thật duy nhất đáng tin — tr�
 ${evidenceLines.slice(0, 8000)}
 
 ĐÁNH GIÁ CỦA TRỌNG TÀI ĐỘC LẬP:
-${verdictBlock}${debtBlock}
+${verdictBlock}${debtBlock}${regressionBlock}
 
 TÌNH TRẠNG: vòng lặp dừng sau ${cyclesAttempted}/${maxCycles === 0 ? '∞' : maxCycles} chu kỳ — lý do: ${stopReason}.
 
@@ -1563,7 +1773,7 @@ NHIỆM VỤ: viết BÁO CÁO CUỐI trung thực + HOÀN CHỈNH cho người 
 1. ĐÃ LÀM ĐƯỢC — từng việc cụ thể, kèm bằng chứng tool (tên tool + kết quả ngắn trích từ nhật ký)
 2. CHƯA HOÀN THÀNH / CÒN THIẾU — thành thật nêu giới hạn (bị cắt vì budget/chu kỳ), KHÔNG tuyên bố hoàn thành những gì chưa có bằng chứng
 3. NHỮNG GÌ CHƯA KIỂM ĐỊNH ĐƯỢC — nêu rõ khi công cụ kiểm định fail mà không trích được lỗi cụ thể (không đoán nguyên nhân)
-4. ĐỀ XUẤT KHẮC PHỤC — các bước cụ thể, khả thi cho lần chạy tiếp theo${debtBlock ? '\n\nKèm mục NỢ KỸ THUẬT (cuối báo cáo): liệt kê rõ các lỗi phát sinh đã ghi nhận thành Todo follow-up — người dùng quyết định xử lý lúc nào.' : ''}
+4. ĐỀ XUẤT KHẮC PHỤC — các bước cụ thể, khả thi cho lần chạy tiếp theo${debtBlock ? '\n\nKèm mục NỢ KỸ THUẬT (cuối báo cáo): liệt kê rõ các lỗi phát sinh đã ghi nhận thành Todo follow-up — người dùng quyết định xử lý lúc nào.' : ''}${regressionBlock ? '\n\nKèm mục HỒI QUY CÒN TỒN (cuối báo cáo): liệt kê rõ từng phần việc dở từ các run trước chưa hồi quy được (kèm todo id) — run kế sẽ tự nhặt lại theo hàng hồi quy.' : ''}
 
 QUY TẮC: KHÔNG gọi tool. KHÔNG bắt đầu công việc mới. Chỉ tổng kết từ bằng chứng có sẵn. Báo cáo phải trọn vẹn có kết luận (không bị cắt ngang).
 ĐỊNH DẠNG (user directive 2026-10-20): văn xuôi tiếng Việt sạch, markdown TỐI THIỂU — không bọc nhấn mạnh bằng **, không bọc từ ngữ bằng dấu \` hay dấu ' (chỉ trích dẫn mã/lệnh thật). Nhấn mạnh bằng CHỮ IN HOA. Liệt kê bằng gạch đầu dòng "- ".`
@@ -1807,6 +2017,10 @@ export async function runGoalDrivenLoop(params: {
   // automation (trực tiếp = chỉ Omega / đề xuất = mọi agents).
   const hasAutomationDirect = effectiveTools.includes('manage_automation')
   const hasAutomationPropose = effectiveTools.includes('propose_automation')
+  // P-D (2026-10-06): agent có work_data (trực tiếp hoặc không khai báo
+  // whitelist = mọi builtin tool đều được phép) → work-ledger protocol.
+  const hasWorkData = agentTools.length === 0 || agentTools.includes('work_data')
+    || effectiveTools.includes('work_data')
 
   // ===== A6 · EPISODIC MEMORY — PRE-ACT RETRIEVAL (nhịp 1 learning loop) =====
   // Trước khi hành động: lessons đã học + cảnh báo lỗi chưa resolve + episodes
@@ -1845,6 +2059,7 @@ export async function runGoalDrivenLoop(params: {
     hasCreate: effectiveTools.includes('create_agent'),
     hasAutomationDirect,
     hasAutomationPropose,
+    hasWorkData,
     // CODE TEAM SOP (2026-09-30): agent có request_code_team → inject protocol
     hasCodeTeamRequest: effectiveTools.includes('request_code_team'),
     preActBlock,
@@ -1989,6 +2204,29 @@ export async function runGoalDrivenLoop(params: {
   // (nợ đã nằm trong transcript snapshot nếu run trước thấy).
   const pendingDebtBlock = resumeState ? '' : await buildPendingDebtBlock(agentSessionId, runId)
 
+  // P-E (2026-10-06 user duyệt) — HÀNG HỒI QUY: các phần việc dở từ các run
+  // trước trong phiên (snapshot TaskContextArchive kind='regression' ghi lúc
+  // run cũ kết thúc chưa đạt). Khối verbose đính TRƯỚC user message (vùng
+  // bảo vệ nén context): xong yêu cầu hiện tại → hồi quy làm tiếp phần dở.
+  // Kèm P-D: ledger active từ các run trước (soát lại xuyên run). RESUME:
+  // không inject lại (đã nằm trong snapshot nếu run trước thấy).
+  let regressionItems: RegressionItem[] = []
+  let regressionStartBlock = ''
+  let crossRunWorkDataBlock = ''
+  if (!resumeState) {
+    try {
+      regressionItems = await getRegressionQueue(agentSessionId, runId)
+      regressionStartBlock = buildRegressionStartBlock(regressionItems)
+      crossRunWorkDataBlock = await buildCrossRunWorkDataBlock(agentSessionId, runId)
+    } catch { /* fail-open — hồi quy không được phép làm hỏng run mới */ }
+  }
+  if (regressionItems.length > 0) {
+    console.log(`[GoalLoop] HỒI QUY: ${regressionItems.length} phần việc dở từ các run trước trong session ${agentSessionId} → chờ hồi quy sau yêu cầu hiện tại`)
+  }
+  // Gộp 2 khối P-D + P-E thành 1 message context (tiết kiệm message count)
+  const regressionContextMessage = [regressionStartBlock, crossRunWorkDataBlock]
+    .filter(Boolean).join('\n')
+
   // ===== Conversation state =====
   // CI-3 B4: có summary block mà tổng context (summary + 6 message cuối) vượt
   // ngưỡng nén → GIẢM 6 message cuối xuống 4 (summary đã thay phần bức tranh
@@ -2013,6 +2251,7 @@ export async function runGoalDrivenLoop(params: {
         ...(priorTaskSummariesBlock ? [{ role: 'user' as const, content: priorTaskSummariesBlock }] : []),
         ...chatHistory.slice(-historyTake).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
         ...(pendingDebtBlock ? [{ role: 'user' as const, content: pendingDebtBlock }] : []),
+        ...(regressionContextMessage ? [{ role: 'user' as const, content: regressionContextMessage }] : []),
         { role: 'user', content: userMessage },
       ]
   // goalMsgIndex: run thường = index user message cuối — compressConversation
@@ -2034,6 +2273,11 @@ export async function runGoalDrivenLoop(params: {
   // (nguồn: Todo follow-up pending từ các run trước — xem buildPendingDebtBlock)
   if (pendingDebtBlock) {
     recordAgentThought(agentSessionId, '📋 NỢ KỸ THUẬT CÒN TREO: harness nhặt Todo follow-up pending từ các run trước trong phiên — run này ƯU TIÊN xử lý nợ TRƯỚC việc mới (user directive 2026-10-27)', 0)
+  }
+  // P-E — Thought Progress ghi rõ hàng hồi quy được nạp (người quản trị thấy
+  // ngay phiên còn việc dở chờ hồi quy sau yêu cầu hiện tại)
+  if (regressionItems.length > 0) {
+    recordAgentThought(agentSessionId, `🔄 HỒI QUY: harness nạp ${regressionItems.length} phần việc dở từ các run trước trong phiên — SAU khi hoàn thành yêu cầu hiện tại, run này PHẢI hồi quy làm tiếp từng phần (user directive 2026-10-06)`, 0)
   }
 
   const evidence: EvidenceEntry[] = resumeState
@@ -2500,6 +2744,22 @@ export async function runGoalDrivenLoop(params: {
         : ''
       pendingTodoWarnings = []
 
+      // P-D + P-E (2026-10-06) — refresh mỗi chu kỳ (đứng TRƯỚC 2 nhánh
+      // directive để cả debt lẫn thường đều thấy):
+      //   (a) WORK LEDGER render: ledger active của run trong DB đính kèm
+      //       directive — sau nén context agent vẫn thấy sổ dữ liệu của mình.
+      //   (b) HỒI QUY refresh: đối chiếu trạng thái live từng todo dở → còn
+      //       mục nào chưa xử lý thì nhắc compact (tránh mục hồi quy chìm
+      //       dần sau nhiều chu kỳ — nén context không đụng directive cũ nhưng
+      //       directive mới phải tự nhắc lại cho chắc).
+      const cycleWorkDataBlock = await buildRunWorkDataBlock(agentSessionId, runId)
+      if (regressionItems.length > 0) {
+        try { regressionItems = await getRegressionQueue(agentSessionId, runId) } catch { /* fail-open */ }
+      }
+      const regressionReminderBlock = regressionItems.length > 0
+        ? `\n\n🔄 HỒI QUY CÒN TỒN — ${regressionItems.length} phần việc dở từ các run trước CHƯA xử lý xong (sau khi hoàn thành việc hiện tại PHẢI quay lại làm tiếp — chi tiết id + hướng dẫn ở đầu run; hoàn thành mục nào → todo_write đóng đúng id):\n${regressionItems.slice(0, 5).map(it => `- [todo id ${it.todoId}] ${it.content.slice(0, 120)}`).join('\n')}`
+        : ''
+
       // ===== FIX 2026-09-14 #9 — DEBT CYCLE DIRECTIVE =====
       // Chu kỳ trước trọng tài chấm complete NHƯNG quyết định 'continue' cho
       // side issues nghiêm trọng → chu kỳ này là CHU KỲ DEBT: mục tiêu chính đã
@@ -2515,7 +2775,7 @@ Chu kỳ này quay về GĐ0 (quan sát & phân tích) với thứ tự ưu tiê
 ${debtList}
 
 Quy tắc: (1) todo_write liệt kê từng lỗi cần xử lý (nợ trước, việc khác sau), (2) khắc phục từng lỗi, (3) KIỂM ĐỊNH bằng tool thật (run_tests/lint/type_check), (4) KHÔNG mở việc mới ngoài danh sách trên khi còn nợ chưa xử lý. Xong hết → báo cáo ngắn từng lỗi đã xử lý + bằng chứng.
-LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PHỤC VỤ HẠ TẦNG): bạn ĐÃ ĐƯỢC PHÉP (1) tự cài package — manage_packages hoặc shell "bun add <pkg>"; (2) tự sửa DB schema — file_edit/file_write prisma/schema.prisma → shell "bun run db:push" → shell "bun run db:generate"; (3) tự xây tool còn thiếu — list_custom_tools kiểm tra → create_custom_tool đăng ký vào hệ thống (tab Tools/Skills module Smolab) rồi GỌI NGAY tool mới; (4) việc thuộc chức trách agent khác → delegate_task/dispatch_agent; (5) chưa có agent chức trách đó → escalate_problem (Omega tạo agent mới — agent mới tự cập nhật vào module Agents). Hai hạng mục (1)+(2) KHÔNG còn bị chặn — ĐỪNG kết luận "ngoài quyền sửa" khi chưa thử. Chỉ phần VẪN ĐƯỢC BẢO VỆ mới phải chờ phê duyệt: .env/keys, file data trong db/, opencode.json, .opencode/, mini-services/, config hệ thống — với các lỗi này: KHÔNG lặp thử sửa, ghi rõ trạng thái "chờ phê duyệt" + ĐIỀU KIỆN CẦN vào báo cáo rồi chuyển sang lỗi kế — đó là "đã xử lý phần của agent". Hết debt cycles mà còn lỗi treo ngoài quyền → hệ thống ghi nợ Todo follow-up kèm điều kiện, KHÔNG khởi động chu kỳ debt mới.${debtTodosBlock}${todoStaleWarnBlock}`
+LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PHỤC VỤ HẠ TẦNG): bạn ĐÃ ĐƯỢC PHÉP (1) tự cài package — manage_packages hoặc shell "bun add <pkg>"; (2) tự sửa DB schema — file_edit/file_write prisma/schema.prisma → shell "bun run db:push" → shell "bun run db:generate"; (3) tự xây tool còn thiếu — list_custom_tools kiểm tra → create_custom_tool đăng ký vào hệ thống (tab Tools/Skills module Smolab) rồi GỌI NGAY tool mới; (4) việc thuộc chức trách agent khác → delegate_task/dispatch_agent; (5) chưa có agent chức trách đó → escalate_problem (Omega tạo agent mới — agent mới tự cập nhật vào module Agents). Hai hạng mục (1)+(2) KHÔNG còn bị chặn — ĐỪNG kết luận "ngoài quyền sửa" khi chưa thử. Chỉ phần VẪN ĐƯỢC BẢO VỆ mới phải chờ phê duyệt: .env/keys, file data trong db/, opencode.json, .opencode/, mini-services/, config hệ thống — với các lỗi này: KHÔNG lặp thử sửa, ghi rõ trạng thái "chờ phê duyệt" + ĐIỀU KIỆN CẦN vào báo cáo rồi chuyển sang lỗi kế — đó là "đã xử lý phần của agent". Hết debt cycles mà còn lỗi treo ngoài quyền → hệ thống ghi nợ Todo follow-up kèm điều kiện, KHÔNG khởi động chu kỳ debt mới.${debtTodosBlock}${cycleWorkDataBlock}${regressionReminderBlock}${todoStaleWarnBlock}`
         // ROUND-26 FIX E — debt mode trước đây BỎ RƠI advisory (omegaAdvisory
         // reset ở trên nhưng không bao giờ inject) → tư vấn Omega + báo cáo
         // sub-agent biến mất trong debt cycle. Inject message riêng như nhánh thường.
@@ -2595,7 +2855,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} SHR directive: belief=${shrBeliefBlock ? 'yes' : 'no'} dataScope=${dataScopeBlock ? 'yes' : 'no'} uncertain=${uncertainBlock ? 'yes' : 'no'} priorCoT=${prior.matchedCount} mẩu khớp`)
           }
         } catch { /* fail-open — SHR không được phép làm hỏng directive */ }
-        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles, doneSummary, planningOnlyStreak) + similarErrorsBlock + runTodosBlock + todoStaleWarnBlock + dataScopeBlock + uncertainBlock + shrBeliefBlock + priorCotBlock
+        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles, doneSummary, planningOnlyStreak) + similarErrorsBlock + runTodosBlock + cycleWorkDataBlock + regressionReminderBlock + todoStaleWarnBlock + dataScopeBlock + uncertainBlock + shrBeliefBlock + priorCotBlock
         // ROUND-26 FIX E — advisory (tư vấn Omega + báo cáo AUTO-APPLY sub-agent)
         // thành message RIÊNG trước directive — không còn chìm giữa các khối.
         if (advisoryBlock) {
@@ -3750,6 +4010,11 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       // (đang treo từ các chu kỳ trước) để evaluator đối chiếu từng lỗi với
       // bằng chứng chu kỳ này — debt cycle dở không bị phán complete sạch.
       debtIssues: pendingDebtIssues.length > 0 ? pendingDebtIssues : undefined,
+      // P-E — refresh sát lúc chấm (chính xác hơn snapshot đầu chu kỳ: mục
+      // hồi quy agent vừa đóng trong chu kỳ này không bị đếm là còn tồn).
+      regressionPending: regressionItems.length > 0
+        ? (await getRegressionQueue(agentSessionId, runId)).map(it => `[todo id ${it.todoId}] (${it.statusAtInterruption === 'in_progress' ? 'đang làm dở' : 'chưa làm xong'} lúc gián đoạn) ${it.content.slice(0, 140)}`)
+        : undefined,
       agentProvider,
       agentModel,
       agentId,
@@ -4472,6 +4737,10 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         cyclesAttempted,
         maxCycles: effectiveMaxCycles,
         debtIssues: unresolvedDebt.length > 0 ? unresolvedDebt : undefined,
+        // P-E — báo cáo cuối nêu rõ hồi quy còn tồn (trung thực với user)
+        regressionPending: regressionItems.length > 0
+          ? regressionItems.map(it => `[todo id ${it.todoId}] ${it.content.slice(0, 140)}`)
+          : undefined,
         agentProvider,
         agentModel,
         agentId,

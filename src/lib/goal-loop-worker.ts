@@ -1012,7 +1012,19 @@ class GoalLoopWorker {
       })
       .catch(() => {})
     // REVIEW 14-g H2 — crash honest-close CI-2 (mirror route catch L1230+)
+    // P-E (2026-10-06): crash cũng là gián đoạn — snapshot việc dở TRƯỚC khi
+    // close (in_progress→failed, pending→archived) để run kế hồi quy tiếp.
     if (crashContext?.sessionId) {
+      try {
+        const { recordRegressionSnapshot } = await import('@/lib/goal-loop-finalize')
+        await recordRegressionSnapshot({
+          sessionId: crashContext.sessionId,
+          runId: crashContext.runId,
+          stopReason: 'crashed',
+        })
+      } catch (snapErr) {
+        console.warn(`[GoalLoopWorker] job ${jobId}: regression snapshot lỗi (fail-open):`, snapErr instanceof Error ? snapErr.message : String(snapErr))
+      }
       try {
         const { closeRunTodosAtEnd } = await import('@/lib/code-team/dev-tools')
         const closed = await closeRunTodosAtEnd({

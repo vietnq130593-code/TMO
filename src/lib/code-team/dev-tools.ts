@@ -3854,6 +3854,11 @@ export async function todoWrite(args: {
             priority: t.priority || undefined,
             parentId: t.parentId || undefined,
             ...(runId && !existingById.runId ? { runId } : {}),
+            // P-E (2026-10-06 — hồi quy): mở lại todo đã ẩn (status về
+            // pending/in_progress/blocked) → bỏ cờ archivedAt để todo hiện
+            // lại — trước đây todo dở bị archivedAt giấu, agent hồi quy
+            // "mở lại" xong vẫn không thấy đâu để làm tiếp.
+            ...(t.status && ['pending', 'in_progress', 'blocked'].includes(t.status) ? { archivedAt: null } : {}),
           },
         }).catch(() => null) // race guard: row bị xóa giữa find & update (hiếm)
         if (updated) {
