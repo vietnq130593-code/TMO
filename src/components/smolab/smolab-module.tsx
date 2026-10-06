@@ -462,8 +462,9 @@ export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTod
                   }
                   const renderNode = (t: RunTodoData, depth: number): React.ReactNode => {
                     const st = t.status
-                    const icon = st === 'completed' ? '✓' : st === 'in_progress' ? '◐' : st === 'failed' ? '✗' : st === 'blocked' ? '⚠' : '○'
-                    const color = st === 'completed' ? 'text-emerald-500' : st === 'in_progress' ? 'text-amber-300' : st === 'failed' ? 'text-red-400' : st === 'blocked' ? 'text-orange-400' : 'text-stone-400'
+                    // ROUND-46: 'cancelled' (user dừng giữa chừng) — ⏹ cam (mirror render Todos ở panel)
+                    const icon = st === 'completed' ? '✓' : st === 'in_progress' ? '◐' : st === 'failed' ? '✗' : st === 'blocked' ? '⚠' : st === 'cancelled' ? '⏹' : '○'
+                    const color = st === 'completed' ? 'text-emerald-500' : st === 'in_progress' ? 'text-amber-300' : st === 'failed' ? 'text-red-400' : st === 'blocked' ? 'text-orange-400' : st === 'cancelled' ? 'text-orange-400' : 'text-stone-400'
                     const kids = childrenOf.get(t.id) || []
                     return (
                       <div key={t.id}>
@@ -1033,8 +1034,9 @@ export function TeamProcessPanel({ msg }: { msg: SmolabMessage }) {
                               <div className="mt-1 max-h-28 overflow-y-auto space-y-0.5 pr-1" style={{ scrollbarWidth: 'thin' }}>
                                 {todoItems.map((t, ti) => {
                                   const st = t.status || 'pending'
-                                  const icon = st === 'completed' ? '✓' : st === 'in_progress' ? '◐' : st === 'failed' ? '✗' : st === 'blocked' ? '⚠' : '○'
-                                  const color = st === 'completed' ? 'text-emerald-500' : st === 'in_progress' ? 'text-amber-300' : st === 'failed' ? 'text-red-400' : st === 'blocked' ? 'text-orange-400' : 'text-stone-400'
+                                  // ROUND-46: 'cancelled' (user dừng giữa chừng) — ⏹ cam; 'archived' — ○ mờ
+                                  const icon = st === 'completed' ? '✓' : st === 'in_progress' ? '◐' : st === 'failed' ? '✗' : st === 'blocked' ? '⚠' : st === 'cancelled' ? '⏹' : '○'
+                                  const color = st === 'completed' ? 'text-emerald-500' : st === 'in_progress' ? 'text-amber-300' : st === 'failed' ? 'text-red-400' : st === 'blocked' ? 'text-orange-400' : st === 'cancelled' ? 'text-orange-400' : 'text-stone-400'
                                   return (
                                     <div key={ti} className="flex items-start gap-1.5">
                                       <span className={`text-[12px] leading-5 flex-shrink-0 ${color}`}>{icon}</span>

@@ -3696,6 +3696,30 @@ export async function todoWrite(args: {
     idempotencyKey?: string
   }>
 }): Promise<unknown> {
+  // ROUND-46 review-fix (5b — tier-2 tại consumer): hai đường phòng thủ:
+  // (1) todos là object 1-key (bypass executor-heal — gọi trực tiếp từ
+  //     goal-loop/subagent) → unwrap mảng 1 phần tử;
+  // (2) item dạng chuỗi trần (từ <todos><item>việc cần làm</item></todos>
+  //     sau Rule 2b unwrap: ['việc cần làm']) → bọc {content} cho khớp schema.
+  // Struct nhiều field của chính args.todos (≥2 key) KHÔNG bị đổi (an toàn
+  // cho update-batch {id, status}).
+  if (!Array.isArray(args.todos) && args.todos && typeof args.todos === 'object' && !Array.isArray(args.todos)) {
+    const keys = Object.keys(args.todos as Record<string, unknown>)
+    if (keys.length === 1) {
+      const v = (args.todos as Record<string, unknown>)[keys[0]]
+      // ROUND-46 review-fix (vòng 2): v là MẢNG → unwrap thẳng (giống executor
+      // Rule 2 — {items: [t1, t2]} phải ra [t1, t2], không phải [[t1, t2]]);
+      // v là null/undefined → không bọc (tránh [null] crash t.content ở dưới).
+      if (Array.isArray(v)) {
+        args.todos = v as typeof args.todos
+      } else if (v !== null && v !== undefined) {
+        args.todos = [typeof v === 'string' ? { content: v } : v] as typeof args.todos
+      }
+    }
+  }
+  if (Array.isArray(args.todos)) {
+    args.todos = args.todos.map(t => (typeof t === 'string' ? { content: t } : t))
+  }
   if (!Array.isArray(args.todos) || args.todos.length === 0) {
     return { success: false, error: 'todos[] is required (non-empty array)' }
   }
@@ -3773,7 +3797,10 @@ export async function todoWrite(args: {
     }
   }
 
-  const VALID_STATUS = new Set(['pending', 'in_progress', 'blocked', 'completed', 'failed'])
+  // ROUND-46 review-fix: thêm 'cancelled' — engine ghi trạng thái này khi user dừng
+  // giữa chừng (workflow-engine upsertStepTodo) — tool layer phải công nhận
+  // cùng bộ từ vựng để agent có thể tự đóng todo bằng status cancelled khi cần.
+  const VALID_STATUS = new Set(['pending', 'in_progress', 'blocked', 'completed', 'failed', 'cancelled'])
   const VALID_PRIORITY = new Set(['low', 'medium', 'high'])
   // TASK 21-d — upserted có parentId: snapshot Thought Progress (lastTodos)
   // cần parentId để render CÂY (todo con lồng todo cha) trên đường fallback.

@@ -277,6 +277,30 @@ export function healToolArgs(
             notes.push(`[argHeal — ĐÃ tự chữa, KHÔNG phải lỗi, tool vẫn chạy với args đã chữa] tham số "${key}" gửi vào bị bọc trong object {"${wrapKey}": [...]} — hệ thống đã unwrap thành mảng (${(arr as unknown[]).length} phần tử). Lần sau gửi THẲNG mảng: {"${key}": [{...}, ...]}.`)
             continue
           }
+          // Rule 2b — ROUND-46 review-fix (5b): object bọc đúng 1 GIÁ TRỊ
+          // (không phải mảng) — dạng cú pháp của parser invoke-recovery XML
+          // <todos><item>X</item></todos> với ĐÚNG 1 item (≥2 item parser tự
+          // ra mảng). Unwrap [X] khi: giá trị là scalar, HOẶC key là tên bọc
+          // list quen thuộc, HOẶC các key bên trong value ⊆ itemProps (struct
+          // 1 item thật). Giá trị đã là mảng thì Rule 2 ở trên lo.
+          if (entries.length === 1) {
+            const [wrapKey, v] = entries[0]
+            const items0 = schema.items as Record<string, unknown> | undefined
+            const itemProps0 = items0 && typeof items0 === 'object' && items0.properties && typeof items0.properties === 'object'
+              ? Object.keys(items0.properties as Record<string, unknown>)
+              : []
+            // ROUND-46 review-fix (vòng 2): null KHÔNG phải scalar hợp lệ —
+            // unwrap [null] sinh item rỗng crash các consumer loop (vd t.content).
+            const vIsScalar = v !== null && v !== undefined && ['string', 'number', 'boolean'].includes(typeof v)
+            const vLooksLikeItem = !!v && typeof v === 'object' && !Array.isArray(v) && itemProps0.length > 0 &&
+              Object.keys(v as Record<string, unknown>).every(k => itemProps0.includes(k))
+            const LIST_WRAPPER_KEYS = ['item', 'items', 'entry', 'task', 'todo', 'element']
+            if (v !== null && v !== undefined && (vIsScalar || LIST_WRAPPER_KEYS.includes(wrapKey) || vLooksLikeItem)) {
+              args[key] = [v]
+              notes.push(`[argHeal — ĐÃ tự chữa, KHÔNG phải lỗi, tool vẫn chạy với args đã chữa] tham số "${key}" gửi vào bị bọc trong object {"${wrapKey}": X} (dạng list 1 phần tử) — hệ thống đã unwrap thành mảng 1 phần tử. Lần sau gửi THẲNG mảng: {"${key}": [{...}]}.`)
+              continue
+            }
+          }
           // Rule 3 — object đơn trông như 1 phần tử của mảng (mọi key ⊆ item
           // props) → wrap [value] (model gửi 1 todo thay vì mảng todo)
           const items = schema.items as Record<string, unknown> | undefined

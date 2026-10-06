@@ -1386,6 +1386,15 @@ async function runPipeline(
   const pipeline = getPipeline(routingDecision.mode, routingDecision.tier)
   let spec = routingDecision.spec || userRequest // Spec gốc cho toàn bộ pipeline
 
+  // ROUND-46 review-fix (đánh giá: final report vẫn in "Token: X / 100.000"
+  // gây hiểu nhầm có giới hạn): budget hiển thị phải TRUNG THỰC với thiết kế —
+  // khi KHÔNG ép budget step (CODE_TEAM_STEP_TOKEN_BUDGET=0 = mặc định không
+  // giới hạn) thì báo cáo in "(không giới hạn)". tokenBudget gốc (learning-layer
+  // estimate) vẫn giữ cho getAdjustedBudget bên runWorkflow — chỉ đường hiển
+  // thị + resource_limit detector (budget=0 → efficiency=0 → không sinh pattern
+  // "resource_limit" dựa trên budget ma) đổi sang giá trị trung thực.
+  const displayTokenBudget = CODE_TEAM_STEP_TOKEN_BUDGET > 0 ? tokenBudget : 0
+
   // ━━━ ROUND-37 V4 — LAYER 8 + LAYER 6.3 SỐNG LẠI (scaffolding wire) ━━━
   // progress-reporter (communication) + checkpoint-manager (state-management)
   // trước đây là dead scaffolding — build xong không ai gọi; doc clarify route
@@ -1421,7 +1430,7 @@ async function runPipeline(
           steps: stepStates,
           errors: workflowErrors,
           totalTokensUsed: workflowTokensUsed,
-          totalTokensBudgeted: tokenBudget,
+          totalTokensBudgeted: displayTokenBudget,
           totalTimeSpent: workflowTimeSpent || (Date.now() - workflowStartTime),
           startedAt: new Date(workflowStartTime).toISOString(),
           lastUpdatedAt: new Date().toISOString(),
@@ -1639,7 +1648,7 @@ async function runPipeline(
         agentResult.content,
         {
           totalTokensUsed: typeof agentResult.tokensUsed === 'number' ? agentResult.tokensUsed : 0,
-          totalTokensBudgeted: tokenBudget,
+          totalTokensBudgeted: displayTokenBudget,
           totalTimeSpent: agentResult.duration,
         }
       ).catch((pErr) => {
@@ -1747,7 +1756,7 @@ async function runPipeline(
           outputForNext: '',
         },
         tokensUsed: typeof agentResult.tokensUsed === 'number' ? agentResult.tokensUsed : 0,
-        tokensBudgeted: tokenBudget,
+        tokensBudgeted: displayTokenBudget,
         timeSpent: agentResult.duration,
         errors: isFailedStep
           ? [{ id: `err-${stepId}`, timestamp: new Date(), errorType: 'runtime', severity: 'high', message: agentResult.content.slice(0, 200), rootCause: 'Agent step failed', fixStrategy: 'surgical', fixApplied: false, loopDetected: false, loopCount: 0 }]
@@ -1778,7 +1787,7 @@ async function runPipeline(
         currentStep: pipeline.findIndex(p => p.position === step.position && p.step === step.step),
         steps: { ...stepStates },
         totalTokensUsed: workflowTokensUsed,
-        totalTokensBudgeted: tokenBudget,
+        totalTokensBudgeted: displayTokenBudget,
         totalTimeSpent: workflowTimeSpent,
         errors: [...workflowErrors],
         startedAt: new Date(workflowStartTime).toISOString(),
@@ -2443,7 +2452,9 @@ export async function runAgentStep(params: {
   // của session sẽ archive chúng qua archiveStaleRunTodos → per-task isolation.
   const stepTodoKey = `${sessionId}:${position}:${step}`
   const stepTodoContent = `[${position}] ${step} — ${agent.name}`
-  const upsertStepTodo = async (status: 'in_progress' | 'completed' | 'failed') => {
+  // ROUND-46 review-fix: thêm 'cancelled' — step bị user DỪNG giữa chừng
+  // không được đánh dấu 'completed' (bằng chứng dối: việc chưa xong ghi xong).
+  const upsertStepTodo = async (status: 'in_progress' | 'completed' | 'failed' | 'cancelled') => {
     try {
       const existing = await db.todo.findFirst({ where: { sessionId, idempotencyKey: stepTodoKey } })
       if (existing) {
@@ -2570,6 +2581,8 @@ export async function runAgentStep(params: {
   let hallucinationWarnings = 0 // đếm cảnh cáo kết-quả-tool giả
   // ROUND-44 FIX (f) — cờ đã gửi wrap-up directive (chỉ gửi 1 lần/step)
   let budgetWrapUpDirectiveSent = false
+  // ROUND-46 review-fix: recon directive của TL/analyze chỉ chèn 1 lần/step
+  let reconBudgetDirectiveSent = false
 
   // ━━━ ROUND-45 — PLAN-FIRST + TODO-ADHERENCE (harness enforcement) ━━━
   // Trước đây cả 2 cơ chế CHỈ là lời khuyên trong prompt — agents có thể bỏ
@@ -2590,7 +2603,12 @@ export async function runAgentStep(params: {
   let planFirstBlocks = 0
   let todoNudges = 0
   const batchTodoEvidence: string[] = []
-  const PLAN_TOOLS = new Set(['todo_write', 'decompose_task', 'create_task', 'get_plan', 'exit_plan_mode', 'todo_read'])
+  // ROUND-46 review-fix: bỏ 'get_plan' + 'todo_read' khỏi PLAN_TOOLS — 2 tool
+  // này là READ-ONLY; chạy thành công chúng KHÔNG đồng nghĩa agent đã lập kế
+  // hoạch (đánh giá round-46: agent mở đầu bằng "xem todo hiện có" sẽ vô hiệu
+  // hóa toàn bộ harness gate mà không hề viết kế hoạch nào). Chỉ tool WRITE
+  // (viết/định nghĩa kế hoạch) mới mở khóa tool ghi/sửa file.
+  const PLAN_TOOLS = new Set(['todo_write', 'decompose_task', 'create_task', 'exit_plan_mode'])
   const MUTATING_FILE_TOOLS = new Set(['file_write', 'file_edit', 'file_multi_edit', 'file_delete', 'manage_packages', 'git_commit'])
   /** Todo MỞ của run này (status pending/in_progress/blocked), KHÔNG tính
    *  step-todo do engine tự quản qua upsertStepTodo (idempotencyKey
@@ -3148,7 +3166,11 @@ export async function runAgentStep(params: {
       // inject vào conversation dẫn đường các vòng còn lại — đúng yêu cầu
       // "gặp lỗi gửi vấn đề tới Omega trong QUÁ TRÌNH thực thi". Max 1
       // consult/step; reset counter sau consult; fail-open tuyệt đối.
-      if (!toolResult.success && !depthGuardHit) {
+      if (!toolResult.success && !depthGuardHit && !planFirstHit) {
+        // ROUND-46 review-fix (3e): planFirstHit cũng là pedagogical rejection
+        // (giống depthGuardHit) — agent bị CHẶN vì chưa lập kế hoạch không
+        // phải "tool fail thật"; đếm vào đây có thể đẩy 2-lần-chặn + 1 fail
+        // thật lên ngưỡng 3 → consult Omega oan giữa chừng.
         consecutiveToolFailures++
       } else if (toolResult.success) {
         consecutiveToolFailures = 0
@@ -3413,11 +3435,16 @@ export async function runAgentStep(params: {
     // recon (file reading), inject a system message forcing it to produce the
     // routing JSON now. Without this, TL can spend all 10 iterations reading
     // files and never emit the routing decision — falling back to defaults.
-    if (position === 'TL' && step === 'analyze' && iterations >= 5 && toolCalls.length > 0) {
+    // ROUND-46 review-fix: thẻ once-flag (giống budgetWrapUpDirectiveSent) —
+    // trước đây lặp lại directive ~700 ký tự MỖI iteration ≥5; nay maxIterations
+    // mặc định 0 (∞, thiết kế không giới hạn) nên không chặn được việc chèn
+    // trùng lặp nữa (spam directive + "iteration N/0" đọc sai nghĩa).
+    if (position === 'TL' && step === 'analyze' && iterations >= 5 && toolCalls.length > 0 && !reconBudgetDirectiveSent) {
+      reconBudgetDirectiveSent = true
       console.log(`[Workflow] ${agent.name} recon budget: ${iterations} iterations done — injecting "produce routing now" message`)
       messages.push({
         role: 'user',
-        content: `⚠️ RECON BUDGET: Bạn đã đọc đủ code (iteration ${iterations}/${maxIterations}). NGAY BÂY GIỜ, hãy emit routing JSON với format:\n\`\`\`json\n{\n  "mode": "A|B|C",\n  "tier": 1|2|3,\n  "score": <3-9>,\n  "reasoning": "<giải thích dựa trên code đã đọc>",\n  "targetFiles": ["<files cần sửa>"],\n  "filesInspected": ["<files đã đọc>"],\n  "riskLevel": "low|medium|high",\n  "executionPlan": [{"step":1,"description":"...","targetFiles":["..."],"agent":"G1|G2-A|G2-B|G3|TL","risk":"low|medium|high"}],\n  "parts": [{"name":"...","type":"visual|backend","description":"...","dependency":[]}],\n  "spec": "<spec chi tiết>"\n}\n\`\`\`\nKHÔNG gọi tool thêm — chỉ output JSON.`,
+        content: `⚠️ RECON BUDGET: Bạn đã đọc đủ code (iteration ${iterations}${maxIterations > 0 ? `/${maxIterations}` : ' — không giới hạn vòng'}). NGAY BÂY GIỜ, hãy emit routing JSON với format:\n\`\`\`json\n{\n  "mode": "A|B|C",\n  "tier": 1|2|3,\n  "score": <3-9>,\n  "reasoning": "<giải thích dựa trên code đã đọc>",\n  "targetFiles": ["<files cần sửa>"],\n  "filesInspected": ["<files đã đọc>"],\n  "riskLevel": "low|medium|high",\n  "executionPlan": [{"step":1,"description":"...","targetFiles":["..."],"agent":"G1|G2-A|G2-B|G3|TL","risk":"low|medium|high"}],\n  "parts": [{"name":"...","type":"visual|backend","description":"...","dependency":[]}],\n  "spec": "<spec chi tiết>"\n}\n\`\`\`\nKHÔNG gọi tool thêm — chỉ output JSON.`,
       })
       // CI-3 B1 — instruction mới trở thành protected head của segment nén kế tiếp
       lastInstructionIndex = messages.length - 1
@@ -3446,7 +3473,13 @@ export async function runAgentStep(params: {
 
   // 2026-08-29 — AUTO-TODO TRACKING: đánh dấu step todo hoàn thành/thất bại.
   // finalContent bắt đầu bằng "Error:" = LLM fail hoàn toàn (branch break ở trên).
-  await upsertStepTodo(finalContent.startsWith('Error:') ? 'failed' : 'completed')
+  // ROUND-46 review-fix: "⏹" = user DỪNG tác vụ giữa chừng → 'cancelled'
+  // (trước đây rơi vào nhánh 'completed' — step chưa xong mà ghi xong).
+  await upsertStepTodo(
+    finalContent.startsWith('Error:') ? 'failed'
+      : finalContent.startsWith('⏹') ? 'cancelled'
+        : 'completed',
+  )
 
   // Thought Process tracking (2026-08-31) — đóng run của step này
   // (idempotent: nếu đã đóng là 'cancelled' thì giữ nguyên)
@@ -3562,7 +3595,7 @@ Issues: ${latestWorklog.issues.length > 0 ? latestWorklog.issues.map(i => `[${i.
 Suggestions: ${latestWorklog.suggestions.join('; ') || '(none)'}
 Concerns: ${latestWorklog.concerns.join('; ') || '(none)'}
 ${latestWorklog.unfixedBugs && latestWorklog.unfixedBugs.length > 0 ? `Unfixed bugs: ${latestWorklog.unfixedBugs.map(b => `[${b.severity}] ${b.description} (${b.reason})`).join('; ')}` : ''}
-${latestWorklog.toolCallsLog && latestWorklog.toolCallsLog.length > 0 ? `Tool calls THẬT của agent: ${latestWorklog.toolCallsLog.length} lần (${latestWorklog.toolCallsLog.filter(t => t.success).length} OK / ${latestWorklog.toolCallsLog.filter(t => !t.success).length} fail):
+${latestWorklog.toolCallsLog && latestWorklog.toolCallsLog.length > 0 ? `Tool calls THẬT của agent (đã rút gọn còn ${latestWorklog.toolCallsLog.length} lần gần nhất nếu agent gọi nhiều — ${latestWorklog.toolCallsLog.filter(t => t.success).length} OK / ${latestWorklog.toolCallsLog.filter(t => !t.success).length} fail trong phần hiển thị):
 ${latestWorklog.toolCallsLog.slice(-8).map(t => `- ${t.tool} ${t.success ? '✓' : '✗'} (${Math.round(t.duration / 1000)}s): ${t.result.slice(0, 100)}`).join('\n')}` : 'Tool calls THẬT: (agent KHÔNG gọi tool nào — mọi tuyên bố chỉ là khai báo văn bản, chưa có bằng chứng thực tế)'}
 
 ━━━ QUYẾT ĐỊNH ━━━

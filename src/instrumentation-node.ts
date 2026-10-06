@@ -56,6 +56,30 @@ try {
 // cây tiến trình không báo trước (có thể chọn nhầm nạn nhân khác).
 // Tắt hẳn: MEM_WATCHDOG_MB=0.
 // ============================================================================
+// ROUND-46 — SELF-EXIT CÓ DRAIN (cho response đang bay hoàn tất trước khi chết).
+// Bằng chứng: 5 lần "Uncaught SyntaxError: Unexpected end of input" trong dev.log
+// (vòng 46) — watchdog process.exit() ĐÚNG LÚC server đang stream chunk JS cho
+// trình duyệt → response 200 bị CẮT ĐỔI giữa chừng → V8 parse lỗi → trang gãy
+// đến khi user tự reload. Cửa sổ drain ngắn (mặc định 600ms, env-tunable
+// TMO_SELFEXIT_DRAIN_MS, 0 = tắt = hành vi cũ) cho các chunk đang ghi xong
+// (được serve từ memory — mỗi chunk chỉ cần micro-giây để flush) trong khi vẫn
+// đứng trong biên an toàn của reaper (HARD tier vẫn dưới ngưỡng reaper SIGINT
+// ~2.1-2.2GB). Idempotent: lần gọi thứ 2+ trong cùng drain window là no-op.
+// ============================================================================
+const SELF_EXIT_DRAIN_MS = Math.max(0, Number(process.env.TMO_SELFEXIT_DRAIN_MS ?? 600))
+let selfExitDrainScheduled = false
+function selfExitWithDrain(reason: string): void {
+  if (selfExitDrainScheduled) return
+  selfExitDrainScheduled = true
+  if (SELF_EXIT_DRAIN_MS <= 0) {
+    process.exit(1)
+    return
+  }
+  console.error(`[SelfExitDrain] ${reason} — chờ ${SELF_EXIT_DRAIN_MS}ms cho response đang bay flush hết rồi exit(1)`)
+  const t = setTimeout(() => process.exit(1), SELF_EXIT_DRAIN_MS)
+  t.ref?.() // đảm bảo timer chạy dù event loop rảnh
+}
+
 const globalForMemWatchdog = globalThis as unknown as { __tmoMemWatchdogStarted?: boolean }
 if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
   globalForMemWatchdog.__tmoMemWatchdogStarted = true
@@ -122,14 +146,20 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
         // có thể xuống tay bất kỳ lúc nào sau khi RSS vượt vùng này.
         if (MEM_WATCHDOG_RSS_HARD_MB > 0 && rssMb >= MEM_WATCHDOG_RSS_HARD_MB) {
           console.error(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB ≥ HARD ngưỡng ${MEM_WATCHDOG_RSS_HARD_MB}MB — reaper sandbox thực chiến SIGINT ở ~2.1-2.2GB (vòng 11c) → self-exit sạch TRƯỚC khi bị giết âm thầm (PM2 restart ~5s; durable goal jobs RESUME từ checkpoint)`)
-          process.exit(1)
+          // ROUND-46 review-fix (2a): return sau khi lên lịch exit — không rơi
+          // tiếp xuống các nhánh check khác trong cùng tick (đánh giá round-46:
+          // log "RSS cao một mình chưa nguy hiểm" in RA khi exit đã lên lịch —
+          // gây nhiễu điều tra vận hành).
+          selfExitWithDrain(`MemWatchdog HARD-RSS ${rssMb.toFixed(0)}MB ≥ ${MEM_WATCHDOG_RSS_HARD_MB}MB`)
+          return
         }
         // Global-memory guard — ROUND-3 FIX
         if (MEM_WATCHDOG_GLOBAL_MIN_MB > 0 && rssMb > MEM_WATCHDOG_GLOBAL_RSS_MB) {
           const availMb = readMemAvailableMb()
           if (availMb !== null && availMb < MEM_WATCHDOG_GLOBAL_MIN_MB) {
             console.error(`[MemWatchdog] MemAvailable toàn cục ${availMb}MB < ${MEM_WATCHDOG_GLOBAL_MIN_MB}MB (RSS mình ${rssMb.toFixed(0)}MB > ${MEM_WATCHDOG_GLOBAL_RSS_MB}MB) — bộ nhớ HỆ THỐNG cạn, kernel OOM sắp xuống tay — self-exit NGAY để chết có kiểm soát (PM2 restart ~5s; durable goal jobs RESUME từ checkpoint)`)
-            process.exit(1)
+            selfExitWithDrain(`MemWatchdog global-guard MemAvailable ${availMb}MB < ${MEM_WATCHDOG_GLOBAL_MIN_MB}MB`)
+            return
           }
         }
         if (rssMb > MEM_WATCHDOG_MB) {
@@ -155,7 +185,7 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
         }
         if (memOverCount >= 2) {
           console.error(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB vượt ${MEM_WATCHDOG_MB}MB suốt 2 lần kiểm tra (${Math.round(MEM_WATCHDOG_INTERVAL_MS / 1000)}s × 2) VÀ box chật (MemAvailable < ${MEM_WATCHDOG_RSS_EXIT_AVAIL_MB}MB) — self-exit sạch để kernel OOM không SIGKILL cả cây (PM2 sẽ restart trong ~5s; durable goal jobs RESUME từ checkpoint)`)
-          process.exit(1)
+          selfExitWithDrain(`MemWatchdog RSS ${rssMb.toFixed(0)}MB vượt ngưỡng 2 check + box chật`)
         }
       } catch { /* fail-open — watchdog lỗi không được phép tự giết app */ }
     }, MEM_WATCHDOG_INTERVAL_MS)
@@ -206,7 +236,7 @@ if (!globalForHttpWatchdog.__tmoHttpWatchdogStarted) {
         console.warn(`[HttpWatchdog] probe loopback thất bại (lần ${httpFailCount}/3) — HTTP intake nghi wedge: ${HTTP_PROBE_URL}`)
         if (httpFailCount >= 3) {
           console.error(`[HttpWatchdog] HTTP intake WEDGE xác nhận — 3 probe liên tiếp không response trong khi process sống. Self-exit để PM2 restart sạch (durable goal jobs RESUME từ checkpoint).`)
-          process.exit(1)
+          selfExitWithDrain('HttpWatchdog HTTP intake WEDGE — 3 probe liên tiếp fail')
         }
       }
     }, 60_000)

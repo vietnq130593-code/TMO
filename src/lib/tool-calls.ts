@@ -155,7 +155,7 @@ function extractFencedFileWrites(output: string): { calls: ParsedToolCall[]; cle
     let content = output.slice(contentStart, closeIdx)
     if (content.endsWith('\n')) content = content.slice(0, -1)
     calls.push({
-      id: `tc_${Date.now()}_${calls.length}`,
+      id: nextToolCallId(),
       name: 'file_write',
       args: { ...args, content },
     })
@@ -185,8 +185,24 @@ const KNOWN_TOOL_NAMES = ['opencode', 'knowledge_search', 'knowledge_graph', 'kn
   'create_agent', 'manage_automation',
   // P5/P8 (2026-11) — run_gate (gate receipt sha256) + work_data (CRUD dữ
   // liệu công việc DB)
-  'run_gate', 'work_data']
+  // ROUND-46 review-fix (5d): bổ sung 2 tool đã đăng ký ở tool-executor
+  // (open_workspace, git_clone) nhưng thiếu ở đây — đánh giá round-46 phát
+  // hiện pattern-2 + invoke-recovery bỏ lỡ 2 tool này (drift đúng dạng mà
+  // việc hợp nhất round-44 định dẹp).
+  'run_gate', 'work_data', 'open_workspace', 'git_clone']
 const KNOWN_TOOL_NAME_SET = new Set(KNOWN_TOOL_NAMES)
+
+/**
+ * ROUND-46 review-fix (5c): id tool_call duy nhất toàn tiến trình — trước đây
+ * cả 4 extractor (fence/invoke/pattern-1/pattern-2) mỗi bên tự đánh số từ 0
+ * với cùng Date.now() → 1 output chứa fence call + invoke call có THỂ trùng
+ * id trong cùng conversation (đánh giá round-46 phát hiện). Counter đơn điệu
+ * module-scope loại trừ tuyệt đối trùng lặp (kể cả parse khác nhau cùng ms).
+ */
+let toolCallIdSeq = 0
+function nextToolCallId(): string {
+  return `tc_${Date.now()}_${toolCallIdSeq++}`
+}
 
 // ==================== ROUND-44 FIX (c) — PROVIDER GARBLE + INVOKE RECOVERY ====================
 
@@ -291,10 +307,20 @@ function extractInvokeToolCalls(output: string): { calls: ParsedToolCall[]; clea
   if (output.indexOf('<invoke') === -1) return { calls: [], cleaned: output, failures: 0 }
   const calls: ParsedToolCall[] = []
   const ranges: Array<[number, number]> = []
+  // ROUND-46 vòng 2b: skip-ranges (chống parse nhúng) TÁCH khỏi ranges (cắt
+  // cleaned cho pattern-1/2) — shadow range của vùng parse-FAIL KHÔNG được
+  // cắt khỏi cleaned: bên trong có thể còn dòng `tool_call: x({...})` định
+  // dạng pattern-1 cần phục hồi (mixed-format recovery giữ nguyên hành vi cũ).
+  const skipRanges: Array<[number, number]> = []
   let failures = 0
   const re = /<invoke\s+name\s*=\s*"?([A-Za-z_][\w.-]*)"?\s*>/g
   let m: RegExpExecArray | null
   while ((m = re.exec(output)) !== null) {
+    // ROUND-46 review-fix (5a): match nổ TRONG args của invoke đã đo hệm ở
+    // trước (agent ghi file chứa VÍ DỤ `<invoke name="shell">…` — dogfooding
+    // thật của app này) KHÔNG phải tool call thật → skip. re.lastIndex không
+    // nhả qua vùng consumed nên phải tự kiểm tra từng span (regex chỉ đi tới).
+    if (skipRanges.some(([s, e]) => m!.index >= s && m!.index < e)) continue
     let toolName = m[1]
     if (toolName.startsWith('functions.')) toolName = toolName.slice('functions.'.length)
     if (!KNOWN_TOOL_NAME_SET.has(toolName)) continue // tên bịa — KHÔNG execute
@@ -338,12 +364,22 @@ function extractInvokeToolCalls(output: string): { calls: ParsedToolCall[]; clea
     }
     if (args && Object.keys(args).length > 0) {
       calls.push({
-        id: `tc_${Date.now()}_${calls.length}`,
+        id: nextToolCallId(),
         name: toolName,
         args,
       })
       ranges.push([m.index, m.index + m[0].length + consumed])
+      skipRanges.push([m.index, m.index + m[0].length + consumed])
       // Tiếp tục quét sau vùng đã dùng (một output có thể chứa nhiều invoke)
+    } else {
+      // ROUND-46 review-fix (vòng 2 — 5b mở rộng): parse args FAIL → vẫn đánh
+      // SHADOW range (tag mở → thẻ </invoke> đóng gần nhất) để invoke VÍ DỤ
+      // lồng trong vùng args hỏng KHÔNG bị parse + execute thay thế (đánh giá
+      // vòng 2: trước đây chỉ vùng parse THÀNH CÔNG mới được bảo vệ — model
+      // gửi file_write chứa ví dụ invoke với JSON hỏng → ví dụ shell vẫn chạy).
+      const closeRel = output.indexOf('</invoke>', m.index)
+      const shadowEnd = closeRel === -1 ? m.index + m[0].length : closeRel + '</invoke>'.length
+      skipRanges.push([m.index, shadowEnd])
     }
   }
   // Cắt các vùng đã parse (từ cuối về đầu giữ index ổn định)
@@ -393,7 +429,7 @@ export function extractToolCallsWithDiagnostics(rawOutput: string): ToolCallPars
       const args = tryParseLooseJson(jsonStr)
       if (args) {
         calls.push({
-          id: `tc_${Date.now()}_${calls.length}`,
+          id: nextToolCallId(),
           name: toolName,
           args,
         })
@@ -424,7 +460,7 @@ export function extractToolCallsWithDiagnostics(rawOutput: string): ToolCallPars
         const args = tryParseLooseJson(jsonStr)
         if (args) {
           calls.push({
-            id: `tc_${Date.now()}_${calls.length}`,
+            id: nextToolCallId(),
             name: toolName,
             args,
           })

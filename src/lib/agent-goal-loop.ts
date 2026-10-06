@@ -3047,7 +3047,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
               ? (er.args as Record<string, unknown>).todos
               : (Array.isArray(etc.args.todos) ? etc.args.todos : null)
             if (Array.isArray(rawTodosSrc)) {
-              const VALID_ST = new Set(['pending', 'in_progress', 'blocked', 'completed', 'failed'])
+              const VALID_ST = new Set(['pending', 'in_progress', 'blocked', 'completed', 'failed', 'cancelled']) // ROUND-46: + cancelled (mirror dev-tools)
               const VALID_PR = new Set(['low', 'medium', 'high'])
               const todos = (rawTodosSrc as Array<Record<string, unknown>>)
                 .filter(t => t && typeof t.content === 'string' && t.content.trim() !== '')

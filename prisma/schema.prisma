@@ -973,7 +973,7 @@ model Todo {
   agentRole      String?
   /// The todo item content (human-readable text the agent wants to track)
   content        String
-  /// allowed: pending | in_progress | blocked | completed | failed
+  /// allowed: pending | in_progress | blocked | completed | failed | cancelled (round-46: user dừng giữa chừng) | archived (goal-loop tự dọn todo cũ)
   status         String   @default("pending")
   /// allowed: low | medium | high
   priority       String   @default("medium")

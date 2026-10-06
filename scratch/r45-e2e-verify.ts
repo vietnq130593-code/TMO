@@ -209,8 +209,8 @@ if (todoTotal === 0) {
 
 // K6 — Plan-first evidence
 const toolRows = parsed.filter(r => r.m.toolResult?.preview || r.m.toolCallInfo)
-const firstPlanIdx = rows.findIndex(r => r.m.toolCallInfo?.tool === 'todo_write' || r.m.toolCallInfo?.tool === 'decompose_task')
-const firstMutatingIdx = rows.findIndex(r => ['file_write', 'file_edit', 'file_multi_edit'].includes(r.m.toolCallInfo?.tool || ''))
+const firstPlanIdx = parsed.findIndex(r => r.m.toolCallInfo?.tool === 'todo_write' || r.m.toolCallInfo?.tool === 'decompose_task')
+const firstMutatingIdx = parsed.findIndex(r => ['file_write', 'file_edit', 'file_multi_edit'].includes(r.m.toolCallInfo?.tool || ''))
 const planFirstBlock = parsed.find(r => (r.m.toolResult?.preview || '').includes('PLAN-FIRST'))
 if (planFirstBlock) {
   ok('K6 plan-first harness CHẶN THẬT (tool bị chặn kèm chỉ dẫn)', true, 'gate đã kích hoạt')
