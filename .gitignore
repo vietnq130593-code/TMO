@@ -224,6 +224,12 @@ qdrant-backup-latest.tar
 .quality-gate.local
 db/.quality-gate-test.db*
 
+# ROUND-52 (2026-10-07): artifact SQLite mồ côi của raw PrismaClient — khi script
+# chạy KHÔNG qua src/lib/db.ts (env -u DATABASE_URL + URL tương đối), Prisma sinh
+# file db mặc định trong prisma/ (r50 dọn prisma/custom.db, r52 dọn prisma/dev.db).
+# DB thật sống ở /db/ (đã ignore dòng 57) — mọi *.db trong prisma/ đều là rác.
+prisma/*.db
+
 # Research team runtime workspace (git repos per mission — runtime artifacts, not source)
 /workspace/
 

@@ -688,11 +688,27 @@ Quyết định duyệt hay không duyệt (JSON).`
         })
         console.log(`[SelfDirection] Opus DUYỆT "${proposal.title}" → kích hoạt triển khai NGAY${immediateDeployNote}: ${verdict.reason}`)
       }
-      // USER REQUEST (2026-10-07): duyệt là triển khai NGAY — trigger ngay tại
-      // đây (dry-run nền giữ nguyên quan sát 4: chỉ user chủ động mới push thật).
+      // USER REQUEST (2026-10-07): duyệt là triển khai NGAY — trigger ngay tại đây.
       // kickOmegaReviewsSerially sẽ chờ đề xuất này CHẠY XONG HẲN (completed/
       // failed) mới duyệt đề xuất kế.
-      void triggerOrchestration(proposalId, { dryRun: true })
+      //
+      // ROUND-52 (user directive 2026-10-07 — "kích hoạt tự động Opus để agent
+      // thực thi công việc LIÊN HOÀN, fix để agent triển khai tiếp luôn"): bỏ
+      // dry-run nền ở ĐƯỜNG OPUS DUYỆT. Hai lý do:
+      // (1) Chuỗi tự động chạy dry-run KHÔNG SHIP gì — proposal "completed" nhưng
+      //     thay đổi nằm im trong working tree; user phải tay bấm deploy từng cái
+      //     = đứt chuỗi liên hoàn.
+      // (2) Workspace active là CHUNG cho mọi proposal — dry-run để lại thay đổi
+      //     chưa commit của proposal N, proposal N+1 làm việc đè lên (git_status
+      //     trộn lẫn), và lần deploy thật sau đó commit TOÀN BỘ thay đổi tích lũy
+      //     của nhiều proposal vào 1 commit (nhiễm chéo phạm vi).
+      // Opus duyệt = đã được USER ỦY QUYỀN phê duyệt (user decision #3) → coi
+      // như deploy có chủ. Cổng chất lượng KHÔNG đổi: pipeline 9 bước
+      // (lint→typecheck→tests→smoke→secret-scan→git-preflight→commit scoped→
+      // push→pull-verify) vẫn chạy đầy đủ trước khi commit/push — fail là fail
+      // proposal, chuỗi sang đề xuất kế. Đường Mr. Architect hẹn lịch
+      // (promoteDueProposals) GIỮ dry-run như quan sát 4.
+      void triggerOrchestration(proposalId)
     } else {
       await db.selfDirectionProposal.update({
         where: { id: proposalId },
@@ -2853,10 +2869,23 @@ export async function promoteDueProposals(): Promise<string[]> {
       // origin đang trỏ repo TMO app — push nền sẽ bẩn repo app).
       if (await triggerOrchestration(p.id, { dryRun: true })) triggered.push(p.id)
     }
-    // 2) Ready nhưng chưa chạy (vd server restart ngay sau promote) → trigger lại
-    const ready = await db.selfDirectionProposal.findMany({ where: { status: 'ready' }, select: { id: true } })
+    // 2) Ready nhưng chưa chạy (vd server restart ngay sau promote) → trigger lại.
+    //    ROUND-52 (user directive 2026-10-07 — tự động liên hoàn): proposal do
+    //    OPUS DUYỆT (reviewer='opus') → deploy THẬT (nhất quán với đường
+    //    opusReviewPending — nếu không, proposal Opus duyệt xong bị restart
+    //    gián đoạn rồi sweeper nhặt lại bằng dry-run = cùng proposal lúc thì
+    //    ship thật lúc thì không, tùy timing). Đường Mr. Architect hẹn lịch
+    //    (reviewer ≠ 'opus') GIỮ dry-run theo lượt quan sát 4.
+    const ready = await db.selfDirectionProposal.findMany({
+      where: { status: 'ready' },
+      select: { id: true, reviewer: true, title: true },
+    })
     for (const p of ready) {
-      if (await triggerOrchestration(p.id, { dryRun: true })) triggered.push(p.id)
+      const opusApproved = p.reviewer === 'opus'
+      if (opusApproved) {
+        console.log(`[SelfDirection] Sweeper re-trigger đề xuất Opus duyệt "${p.title}" → deploy THẬT (nhất quán đường opusReviewPending — round-52)`)
+      }
+      if (await triggerOrchestration(p.id, opusApproved ? undefined : { dryRun: true })) triggered.push(p.id)
     }
     // 3) Orchestration gián đoạn (PM2 restart/OOM) → failed + recoverable.
     //    TÍN HIỆU SỐNG: (a) in-process lock đang giữ = chắc chắn đang chạy;

@@ -1,0 +1,221 @@
+{
+  "schemaVersion": 1,
+  "purpose": "read-only local binary capability inventory",
+  "source": "command -v equivalent via Python shutil.which; no network probing",
+  "domains": {
+    "web": {
+      "declared": 20,
+      "availableCount": 4,
+      "available": [
+        {
+          "tool": "curl",
+          "available": true,
+          "path": "/usr/bin/curl"
+        },
+        {
+          "tool": "wget",
+          "available": true,
+          "path": "/usr/bin/wget"
+        },
+        {
+          "tool": "httpx",
+          "available": true,
+          "path": "/home/z/.venv/bin/httpx"
+        },
+        {
+          "tool": "playwright",
+          "available": true,
+          "path": "/home/z/.venv/bin/playwright"
+        }
+      ],
+      "missing": [
+        "httpie",
+        "sqlmap",
+        "nikto",
+        "nmap",
+        "masscan",
+        "naabu",
+        "nuclei",
+        "ffuf",
+        "feroxbuster",
+        "gobuster",
+        "dirb",
+        "zap.sh",
+        "burpsuite",
+        "mitmproxy",
+        "chromium",
+        "google-chrome"
+      ]
+    },
+    "network": {
+      "declared": 11,
+      "availableCount": 0,
+      "available": [],
+      "missing": [
+        "nmap",
+        "masscan",
+        "naabu",
+        "tcpdump",
+        "tshark",
+        "wireshark",
+        "ettercap",
+        "aircrack-ng",
+        "netcat",
+        "socat",
+        "hping3"
+      ]
+    },
+    "cloud": {
+      "declared": 13,
+      "availableCount": 0,
+      "available": [],
+      "missing": [
+        "aws",
+        "gcloud",
+        "az",
+        "doctl",
+        "kubectl",
+        "helm",
+        "trivy",
+        "grype",
+        "checkov",
+        "tfsec",
+        "terrascan",
+        "syft",
+        "cosign"
+      ]
+    },
+    "identity_AD": {
+      "declared": 12,
+      "availableCount": 0,
+      "available": [],
+      "missing": [
+        "ldapsearch",
+        "kinit",
+        "klist",
+        "smbclient",
+        "rpcclient",
+        "netexec",
+        "crackmapexec",
+        "evil-winrm",
+        "bloodhound-python",
+        "responder",
+        "mitm6",
+        "ntlmrelayx"
+      ]
+    },
+    "mobile": {
+      "declared": 11,
+      "availableCount": 0,
+      "available": [],
+      "missing": [
+        "adb",
+        "frida",
+        "frida-ps",
+        "objection",
+        "apktool",
+        "jadx",
+        "apkleaks",
+        "mobsfscan",
+        "drozer",
+        "ideviceinstaller",
+        "iproxy"
+      ]
+    },
+    "reverse_malware": {
+      "declared": 16,
+      "availableCount": 3,
+      "available": [
+        {
+          "tool": "objdump",
+          "available": true,
+          "path": "/usr/bin/objdump"
+        },
+        {
+          "tool": "readelf",
+          "available": true,
+          "path": "/usr/bin/readelf"
+        },
+        {
+          "tool": "strings",
+          "available": true,
+          "path": "/usr/bin/strings"
+        }
+      ],
+      "missing": [
+        "ghidra",
+        "analyzeHeadless",
+        "radare2",
+        "rizin",
+        "rz-bin",
+        "gdb",
+        "binwalk",
+        "upx",
+        "yara",
+        "yara-x",
+        "capa",
+        "clamscan",
+        "maldet"
+      ]
+    },
+    "DFIR": {
+      "declared": 14,
+      "availableCount": 0,
+      "available": [],
+      "missing": [
+        "vol.py",
+        "volatility3",
+        "sleuthkit",
+        "mmls",
+        "fsstat",
+        "icat",
+        "fls",
+        "istat",
+        "bulk_extractor",
+        "foremost",
+        "photorec",
+        "testdisk",
+        "yara",
+        "clamscan"
+      ]
+    },
+    "secure_SDLC": {
+      "declared": 18,
+      "availableCount": 3,
+      "available": [
+        {
+          "tool": "npm",
+          "available": true,
+          "path": "/usr/bin/npm"
+        },
+        {
+          "tool": "bun",
+          "available": true,
+          "path": "/usr/local/bin/bun"
+        },
+        {
+          "tool": "git",
+          "available": true,
+          "path": "/usr/bin/git"
+        }
+      ],
+      "missing": [
+        "semgrep",
+        "bandit",
+        "brakeman",
+        "gosec",
+        "trivy",
+        "grype",
+        "syft",
+        "gitleaks",
+        "trufflehog",
+        "checkov",
+        "osv-scanner",
+        "eslint",
+        "tsc",
+        "pip-audit",
+        "safety"
+      ]
+    }
+  }
+}

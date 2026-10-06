@@ -1,0 +1,132 @@
+{
+  "bundle": "alista-browser-evidence",
+  "for": "Linh Sickyx (chu ky 3, verified=false)",
+  "producedBy": "ALISTA",
+  "rule": "Khong ket luan 'ton tai / hoat dong' neu khong co smoke result hop le. Moi claim duoi day kem exit code that.",
+  "layerInventory": {
+    "L1_config_opencode_json": {
+      "file": "opencode.json:1-68",
+      "toolBlock": "KHONG CO (khong khai bao tool/agent)",
+      "permission": { "edit": "deny", "bash": "deny" },
+      "models": ["nemotron-3-ultra-free", "nemotron-3.5-lightning-free", "mimo-v2.6-flash-free", "space-bunny-free"],
+      "VERDICT": "KHONG phai blocker — grep xac nhan TMO executor KHONG doc permission cua opencode.json. Day la config drift, khong phai nguyen nhan parse_error."
+    },
+    "L2_agent_def": {
+      "file": "src/lib/standalone-agents.ts:649-700",
+      "provider": "zen", "model": "space-bunny-free", "temperature": 0.2, "maxTokens": -1,
+      "toolset_count": 45,
+      "browser_web_mcp_present": ["browser_screenshot", "web_fetch", "mcp_call", "shell", "web_search"],
+      "dbRow": "AgentProfile 'Linh Sickyx' enabled=1, tools JSON 654 chars — VERIFIED ton tai trong DB"
+    },
+    "L3_registry_executor": {
+      "file": "src/lib/code-team/tool-executor.ts:2844-2963",
+      "browser_screenshot": "gate isFlagEnabled('ENABLE_BROWSER_SCREENSHOT')",
+      "impl": "src/lib/code-team/dev-tools.ts:4642-4716 (lazy import playwright, chromium.launch headless, --no-sandbox)",
+      "web_fetch": "gate ENABLE_WEB_UNIFIED -> executeWebFetch",
+      "mcp_call": "gate ENABLE_MCP_CALL + chan mock built-in servers (github create_pr -> duoc chan tai executor)"
+    },
+    "L4_feature_flags": {
+      "source": ".env:449-458",
+      "ENABLE_BROWSER_SCREENSHOT": "true",
+      "ENABLE_WEB_UNIFIED": "true",
+      "ENABLE_MCP_CALL": "true",
+      "ENABLE_SHELL_TOOL": "true",
+      "ENABLE_LINT/TYPE_CHECK/TEST_COVERAGE/DB_QUERY": "true"
+    },
+    "L5_skill_registry": {
+      "dbSkills": 3, "filesystemSkills": 52,
+      "browser_skills": ["agent-browser", "bsession(name=browser)"],
+      "services": ["tavily 3/3 keys", "serper 1/1", "jina 3/3", "web_search SDK", "page_reader SDK"]
+    }
+  },
+  "smokeTests": [
+    { "id": "SMOKE-1", "cmd": "playwright chromium -> goto http://localhost:3000", "exit_code": 0,
+      "result": { "navOk": true, "status": 200, "title": "THE MAGNUM OPUS", "screenshotBytes": 841603 },
+      "verdict": "BROWSER = VERIFIED WORKING" },
+    { "id": "SMOKE-2", "cmd": "web_fetch code path that -> external page", "exit_code": 0,
+      "result": { "status": 200, "bytes": 577, "hasTitle": true, "ms": 33 },
+      "verdict": "WEB_FETCH = VERIFIED WORKING" },
+    { "id": "SMOKE-3", "cmd": "playwright --version", "exit_code": 0, "result": "Version 1.57.0 (venv CLI) / node_modules playwright 1.62.1" },
+    { "id": "SMOKE-4", "cmd": "ls ~/.cache/ms-playwright", "exit_code": 0,
+      "result": ["chromium-1200", "chromium-1243", "chromium_headless_shell-1200/1234/1243", "ffmpeg-1011"] },
+    { "id": "SMOKE-5", "cmd": "which agent-browser bsession nmap sqlmap nikto curl dig openssl jq sqlite3", "exit_code": 0,
+      "result": { "agent-browser": "/usr/local/bin/agent-browser", "bsession": "NOT FOUND",
+                  "nmap": "NOT FOUND", "sqlmap": "NOT FOUND", "nikto": "NOT FOUND",
+                  "curl": "FOUND", "dig": "FOUND", "openssl": "FOUND", "jq": "FOUND", "sqlite3": "FOUND" } }
+  ],
+  "smokeTestsRound2": [
+    { "id": "SMOKE-6", "cmd": "agent-browser --version", "exit_code": 0, "result": "agent-browser 0.38.1 (/usr/local/bin/agent-browser)" },
+    { "id": "SMOKE-6b", "cmd": "agent-browser open https://example.com", "exit_code": 0, "result": "launched browser -> title 'Example Domain'" },
+    { "id": "SMOKE-6c", "cmd": "agent-browser get title", "exit_code": 0, "result": "Example Domain" },
+    { "id": "SMOKE-6d", "cmd": "agent-browser snapshot -i --json", "exit_code": 0, "result": "{\"success\":true,\"origin\":\"https://example.com/\",\"refs\":{\"e1\":{\"name\":\"Learn more\",\"role\":\"link\"}},\"snapshot\":\"- link ...\"}" },
+    { "id": "SMOKE-6e", "cmd": "agent-browser close", "exit_code": 0, "result": "Browser closed" }
+  ],
+  "verifiedRound2": [
+    "AGENT-BROWSER CLI = VERIFIED WORKING (open + get title + snapshot --json + close, tat ca exit 0)",
+    "MCP: MCP_SERVERS=[<empty>] va ~/.config/mcp/servers.json KHONG TON TAI -> KHONG co MCP server that nao. mcp_call chi goi duoc mock bi chan.",
+    "CUSTOM TOOLS: list_custom_tools() count=0 -> chua co tool bao mat nao do nguoi tu dinh nghia"
+  ],
+  "binaryInventory8Nhom": {
+    "web": "agent-browser(VERIFIED), playwright(VERIFIED), curl FOUND; MISSING: nmap,sqlmap,nikto,ffuf,nuclei,zap.sh,bandit",
+    "network": "MISSING toan bo: nmap, tshark, scapy(py), tcpdump-chua-kiem; chi co dig + openssl s_ping",
+    "cloud": "MISSING toan bo: aws, gcloud, az, trivy — do phu CLOUD = 0%",
+    "identity_AD": "MISSING toan bo: ldapsearch, krb5-user, crackmapexec, bloodhound-python, responder",
+    "mobile": "MISSING toan bo: adb, frida, objection, msbuild, xcodebuild",
+    "reverse_malware": "MISSING: ghidra, radare2/r2, cutter, binwalk, yara, yara_python, volatility3, foremost, clamscan",
+    "DFIR_crypto_creds": "openssl FOUND, gpg FOUND; MISSING: john, hashcat, hydra, trufflehog, gitleaks, detect-secrets",
+    "secure_SDLC": "MISSING: semgrep; co san lint/type_check/test_coverage/db_query (flags true) + 3 DB skills"
+  },
+  "unverifiedClaims": [
+    "agent-browser CLI -> DA VERIFIED o round 2 (SMOKE-6/6b/6c/6d/6e)",
+    "bsession/browser skill -> UNVERIFIED (binary thieu)",
+    "mcp_call voi server that -> UNVERIFIED (MCP_SERVERS rong + servers.json khong ton tai = KHONG co server that)",
+    "nmap/sqlmap/nikto -> KHONG TON TAI tren host (claim 'co full pentest toolset' SAI)"
+  ],
+  "rootCause_parseError": {
+    "signature": "marker '<]\\u200bminimax[>[<\\u200btool_call>' lap trong CONTENT cua model",
+    "count_minimax_in_Linh_run": 101,
+    "interpretation": "CORRUPT TANG PROVIDER/TRANSPORT, khong phai loi logic agent. Model la space-bunny-free (zen) nhung template marker la minimax -> template leakage giua cac lo trong llm.ts (NVIDIA lõi chính = minimaxai/minimax-m3, llm.ts:358).",
+    "handling": "agent-goal-loop.ts:2865-2877 countProviderGarbleMarkers>=3 -> push parse_error, nudge 'phat lai sach', budget parseFailNudges<2; het budget -> cycle chet bang no_tool_calls.",
+    "parse_error_events_in_run": 10,
+    "per_iteration": {"0":1,"1":2,"2":2,"3":2,"4":2,"5":2,"6":1,"7":3,"8":4,"9":2,"10":1,"11":2,"12":1,"13":2,"14":4,"15":9}
+  },
+  "hypotheses": [
+    {
+      "id": "H1",
+      "claim": "CORRUPT TANG PROVIDER la nguyen nhan GOC cua parse_error + output cat",
+      "evidence": "101 marker ']<]\\u200bminimax[>[<\\u200btool_call>' trong CONTENT cua Linh run (model dang chay: space-bunny-free, KHONG phai minimax). 10 parse_error events, phan bo tang dan theo iteration (iter15 = 9 lan).",
+      "confidence": "CAO",
+      "why_not_agent_logic": "Linh co toolset 45 tools + shell bat trong .env (ENABLE_SHELL_TOOL=true) + DB row enabled=1, va da goi tool thanh cong 14 lan (todo_write x5, file_read x5, list_skills, knowledge_search, file_list) -> qua khong phai thieu quyen hay thieu tool.",
+      "mitigation_in_code": "agent-goal-loop.ts:2865-2877 countProviderGarbleMarkers>=3 -> pushToolMessage(parse_error) + nudge, ngan sach parseFailNudges<2 lan roi cycle chet bang no_tool_calls."
+    },
+    {
+      "id": "H2",
+      "claim": "Output bi CAT DO KHAI BAO maxTokens=-1 (unlimited) khong duoc cap o tang provider, nen tool_call JSON bi truncate giua chung",
+      "evidence": "standalone-agents.ts:663 Linh maxTokens=-1; run log cho thay tool_call emit bi cat (duoi 1215/2044 ky tu, duoi la '...cut...'). detectBrokenToolCallHint branch (agent-goal-loop.ts:2850) dung chinh xac trieu chung nay.",
+      "confidence": "TRUNG BINH - can xac nhan them bang mot run co maxTokens gia han duoc so voi -1",
+      "mitigation_in_code": "Thay -1 bang ngan sach so (vd 16384-32768) hoac bat native function-calling de bo qua text-protocol parser."
+    },
+    {
+      "id": "H3",
+      "claim": "KHONG phai thieu cong cu - do nang luc thieu + evaluator lap lai vo han",
+      "evidence": "Runtime inventory: 29/31 binary pentest MISSING (nmap/sqlmap/nikto/ffuf/nuclei/aws/gcloud/az/trivy/semgrep/ghidra/yara/tshark/zap.sh/metasploit/john/hashcat/hydra/radare2/binwalk/volatility/clamscan/adb/frida/trufflehog/gitleaks...). MCP_SERVERS=[empty], ~/.config/mcp/servers.json khong ton tai, custom tools = 0.",
+      "confidence": "CAO",
+      "implication": "Linh PHAI noi 'network/cloud/AD/mobile/DFIR = 0%' thay vi 'da co full pentest toolset'. Evaluator phan CHUA DAT 3 chu ky voi confidence 2/5/3% - dung, vi ba bao cao cuoi deu thieu."
+    }
+  ],
+  "runProfile": {
+    "events": 61, "thought": 40, "tool": 14, "todo_update": 5, "run_start": 2,
+    "tools_used": {"todo_write":5,"file_read":5,"todo_read":1,"list_skills":1,"knowledge_search":1,"file_list":1},
+    "tools_NEVER_used_despite_being_granted": ["shell","browser_screenshot","web_fetch","mcp_call","run_tests","grep","lint"],
+    "max_iteration": 15,
+    "verdicts": ["CK1 CHUA DAT conf 2%", "CK2 CHUA DAT conf 5%", "CK3 CHUA DAT conf 3%"],
+    "debt_items": 0,
+    "evaluator_complaint": "'Chua co bao cao cuoi cung' x3 chu ky"
+  },
+  "evidenceGapsLinhmustClose": [
+    "Smoke agent-browser CLI that (lenh + exit code)",
+    "Kiem tra MCP_SERVERS env + danh sach server that (mcp-bridge.ts:241-264)",
+    "Bao cao do phu theo 3 nhom: web / network / cloud — moi nhom phai kem 'co' + bang chung smoke",
+    "Khong claim nmap/sqlmap khi binary khong ton tai"
+  ]
+}
