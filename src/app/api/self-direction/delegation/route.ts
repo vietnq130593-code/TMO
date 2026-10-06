@@ -9,10 +9,15 @@
  * (theo cột SelfDirectionSettings.opusDelegated đã db push).
  *
  * USER REQUEST (2026-09-02): khi bật ủy quyền, Opus duyệt TUẦN TỰ:
- *  - Kiểm tra có đề xuất đang tiến hành (orchestration running) không → KHÔNG duyệt thêm
+ *  - Kiểm tra có đề xuất đang active (ready/planning/executing — chạy hoặc
+ *    chờ heal sau restart) không → KHÔNG duyệt thêm
  *  - Chỉ duyệt khi tất cả đề xuất đã duyệt được xử lý xong (completed/failed)
  *  - Duyệt từng đề xuất, chờ xử lý xong mới duyệt cái tiếp
  *  - Ưu tiên đề xuất nào nên duyệt (priority desc + createdAt asc)
+ *
+ * USER REQUEST (2026-10-07 — GHI ĐÈ): đề xuất Opus duyệt được TRIỂN KHAI
+ * NGAY LẬP TỨC (không hẹn scheduleAt) — xem opusReviewPending trong
+ * orchestrator.ts.
  *
  * BẬT  → Opus phê duyệt/không duyệt các đề xuất THAY Mr. Architect (tuần tự)
  * TẮT  → Mr. Architect tự duyệt lại như bình thường

@@ -32,6 +32,16 @@
  *     and_push) VẪN CỦA OMEGA mọi lúc — việc nội tại orchestration, không
  *     phải ủy quyền.
  *
+ * USER REQUEST (2026-10-07) — HÀNH VI ỦY QUYỀN OPUS (GHI ĐÈ cơ chế 2026-09-02):
+ *   1. Opus duyệt đề xuất nào → đề xuất ĐẤY được TRIỂN KHAI NGAY LẬP TỨC
+ *      (status 'ready' + triggerOrchestration tức thì) — KHÔNG hẹn scheduleAt
+ *      một thời điểm khác nữa. (scheduleAt giờ chỉ còn tác dụng trên đường
+ *      Mr. Architect TỰ duyệt qua PATCH /api/self-direction/proposals/{id}.)
+ *   2. Chỉ SAU khi đề xuất đó được xử lý XONG HẲN — dù hoàn thành hay thất
+ *      bại — Opus mới duyệt đề xuất kế (kickOmegaReviewsSerially chờ tới
+ *      trạng thái terminal; chống kẹt: stall-kill + sweep re-trigger của
+ *      promoteDueProposals bảo đảm mọi proposal active rồi cũng về terminal).
+ *
  * BẢO VỆ TƯƠNG LAI (user decision #3 — ràng buộc kiến trúc cho developer):
  *   Opus/Omega muốn sửa CHÍNH MÌNH hoặc NHAU (instruction, quyền, định nghĩa
  *   agent) → PHẢI tạo SelfDirectionProposal đi qua module SELF-DIRECTION này
@@ -620,7 +630,15 @@ Quyết định duyệt hay không duyệt (JSON).`
     }
 
     const now = new Date()
-    const dueNow = !proposal.scheduleAt || proposal.scheduleAt.getTime() <= now.getTime()
+    // ━━ USER REQUEST (2026-10-07): Ủy quyền Opus duyệt → TRIỂN KHAI NGAY ━━
+    // Trước đây: scheduleAt tương lai → status 'approved' + hẹn promoteDueProposals
+    // chạy đúng hạn (giữ cho đường Mr. Architect tự duyệt — route PATCH [id]).
+    // User chỉ đạo mới: Opus duyệt đề xuất nào thì đề xuất ĐẤY phải được triển
+    // khai NGAY LẬP TỨC chứ không hẹn một thời điểm khác. → Đường Opus LUÔN
+    // 'ready' + trigger orchestration ngay, bỏ hẳn nhánh dueNow.
+    const immediateDeployNote = proposal.scheduleAt && proposal.scheduleAt.getTime() > now.getTime()
+      ? ` (triển khai ngay — bỏ hẹn lịch ${proposal.scheduleAt.toISOString()} theo chỉ thị ủy quyền)`
+      : ''
     if (verdict.decision === 'approve' || verdict.decision === 'approve_partial') {
       const isPartial = verdict.decision === 'approve_partial'
       // TASK 32 (mechanism 1): approve_partial → GHI ĐÈ nội dung đề xuất bằng
@@ -644,7 +662,7 @@ Quyết định duyệt hay không duyệt (JSON).`
         await db.selfDirectionProposal.update({
           where: { id: proposalId },
           data: {
-            status: dueNow ? 'ready' : 'approved',
+            status: 'ready',
             reviewer: 'opus',
             decisionReason: `Opus duyệt (đã thu hẹp phạm vi): ${verdict.reason}${verdict.scopeNote ? ` — Phạm vi: ${verdict.scopeNote}` : ''}`,
             reviewedAt: now,
@@ -656,21 +674,25 @@ Quyết định duyệt hay không duyệt (JSON).`
             reviewEdits: [...existingEdits, editRecord] as unknown as Prisma.InputJsonValue,
           },
         })
-        console.log(`[SelfDirection] Opus DUYỆT (THU HẸP PHẠM VI) "${proposal.title}" → "${after.title}"${dueNow ? ' → kích hoạt triển khai' : ` (hẹn lịch ${proposal.scheduleAt?.toISOString()})`}: ${verdict.reason}${verdict.scopeNote ? ` | Phạm vi: ${verdict.scopeNote}` : ''}`)
+        console.log(`[SelfDirection] Opus DUYỆT (THU HẸP PHẠM VI) "${proposal.title}" → "${after.title}" → kích hoạt triển khai NGAY${immediateDeployNote}: ${verdict.reason}${verdict.scopeNote ? ` | Phạm vi: ${verdict.scopeNote}` : ''}`)
       } else {
         await db.selfDirectionProposal.update({
           where: { id: proposalId },
           data: {
-            status: dueNow ? 'ready' : 'approved',
+            status: 'ready',
             // USER DECISION #3: duyệt chuyển từ Omega sang Opus — danh nghĩa Opus
             reviewer: 'opus',
             decisionReason: `Opus duyệt: ${verdict.reason}`,
             reviewedAt: now,
           },
         })
-        console.log(`[SelfDirection] Opus DUYỆT "${proposal.title}"${dueNow ? ' → kích hoạt triển khai' : ` (hẹn lịch ${proposal.scheduleAt?.toISOString()})`}: ${verdict.reason}`)
+        console.log(`[SelfDirection] Opus DUYỆT "${proposal.title}" → kích hoạt triển khai NGAY${immediateDeployNote}: ${verdict.reason}`)
       }
-      if (dueNow) void triggerOrchestration(proposalId, { dryRun: true })
+      // USER REQUEST (2026-10-07): duyệt là triển khai NGAY — trigger ngay tại
+      // đây (dry-run nền giữ nguyên quan sát 4: chỉ user chủ động mới push thật).
+      // kickOmegaReviewsSerially sẽ chờ đề xuất này CHẠY XONG HẲN (completed/
+      // failed) mới duyệt đề xuất kế.
+      void triggerOrchestration(proposalId, { dryRun: true })
     } else {
       await db.selfDirectionProposal.update({
         where: { id: proposalId },
@@ -881,13 +903,19 @@ Quyết định (JSON).`
     }
 
     // Ủy quyền đang bật → Opus PHÊ DUYỆT CHÍNH ĐỀ XUẤT CỦA MÌNH (user directive
-    // 2026-09-04 cho phép tường minh). Fire-and-forget: duyệt xong tự kích
-    // triển khai (dry-run nền — đúng pattern trigger nền hiện có).
+    // 2026-09-04 cho phép tường minh). USER REQUEST (2026-10-07): KHÔNG duyệt
+    // trực tiếp ngay tại đây nữa — gọi qua cổng autoReviewPendingIfDelegated()
+    // để tôn trọng TUẦN TỰ: chỉ duyệt khi không còn đề xuất active, duyệt xong
+    // 1 cái chờ xử lý xong hẳn mới duyệt cái kế (trước đây void opusReviewPending
+    // trực tiếp có thể duyệt phái sinh ĐỒNG THỜI với đề xuất serial-queue đang
+    // chạy — 2 orchestration chồng nhau, sai chỉ thị "xử lý xong mới duyệt cái
+    // kế"). autoReview đã phủ "mọi proposal pending kể cả của chính Opus" —
+    // phái sinh sẽ được duyệt ngay khi hàng đợi rảnh.
     if (childId) {
       const settings = await getSelfDirectionSettings()
       if (settings.opusDelegated) {
-        console.log(`[SelfDirection] OpusFollowUp: ủy quyền ĐANG BẬT → Opus phê duyệt đề xuất của chính mình (${childId.slice(0, 10)})`)
-        void opusReviewPending(childId)
+        console.log(`[SelfDirection] OpusFollowUp: ủy quyền ĐANG BẬT → xếp đề xuất của chính Opus (${childId.slice(0, 10)}) vào hàng duyệt tuần tự`)
+        void autoReviewPendingIfDelegated()
       }
     }
 
@@ -2935,19 +2963,20 @@ export async function autoReviewPendingIfDelegated(): Promise<number> {
     const settings = await getSelfDirectionSettings()
     if (!settings.opusDelegated) return 0
 
-    // ━━ USER REQUEST (2026-09-02): duyệt tuần tự, chờ orchestration xong ━━
-    // Nếu có ĐANG TỚI HẠN đang chạy orchestration (status=ready/running or
-    // in-process runningOrchestrations) → KHÔNG kick thêm, chờ hoàn thành.
-    // Lý do: workspace code-workflow dùng chung 1 git index → KHÔNG chạy song
-    // song (serializeCodeWorkflow mutex). Nếu Opus duyệt proposal B khi proposal
-    // A đang chạy → proposal B vào hàng chờ mutex, nhưng user không thấy → tưởng
-    // Opus bỏ qua. Fix: chỉ duyệt khi KHÔNG có orchestration nào đang chạy.
+    // ━━ USER REQUEST (2026-09-02 + 2026-10-07): duyệt tuần tự, chờ xử lý xong ━━
+    // Nếu có ĐỀ XUẤT ĐANG ACTIVE (status ready/planning/executing) — kể cả
+    // orchestration ĐANG CHẠY trong process này lẪN proposal mồ côi sau restart
+    // (đang chờ sweep re-trigger/stall-kill) → KHÔNG duyệt thêm, chờ hết.
+    // Bản cũ chỉ hold khi in-process (runningOrchestrations) — proposal mồ côi
+    // sau restart bị bỏ qua → Opus duyệt cái kế trong khi cái trước chưa xử lý
+    // xong, sai chỉ thị "xử lý xong (dù hoàn thành hay không) mới duyệt cái kế".
+    // Chống kẹt vĩnh viễn: mọi proposal active rồi cũng về terminal (orchestration
+    // tự chốt / stall-kill 10 phút không tín hiệu → failed / sweep re-trigger).
     const activeOrchestrations = await db.selfDirectionProposal.findMany({
       where: { status: { in: ['ready', 'planning', 'executing'] } },
       select: { id: true },
     })
-    const inProcess = activeOrchestrations.filter(p => runningOrchestrations.has(p.id))
-    if (inProcess.length > 0) {
+    if (activeOrchestrations.length > 0) {
       // Lượt quan sát 5: log dedupe — hàm này chạy trên MỌI poll UI (~4s khi
       // module Self-Direction đang mở) → spam "KHÔNG duyệt thêm" mỗi 4 giây
       // suốt thời gian orchestration chạy (quan sát 01:49-01:51UTC: ~40 dòng
@@ -2956,7 +2985,8 @@ export async function autoReviewPendingIfDelegated(): Promise<number> {
       const nowMs = Date.now()
       if (!g.__tmoSdDelegHoldLogAt || nowMs - g.__tmoSdDelegHoldLogAt > 60_000) {
         g.__tmoSdDelegHoldLogAt = nowMs
-        console.log(`[SelfDirection] Opus KHÔNG duyệt thêm — ${inProcess.length} đề xuất đang tiến hành orchestration (chờ xong mới duyệt cái kế)`)
+        const inProcessCount = activeOrchestrations.filter(p => runningOrchestrations.has(p.id)).length
+        console.log(`[SelfDirection] Opus KHÔNG duyệt thêm — ${activeOrchestrations.length} đề xuất đang active (${inProcessCount} đang chạy in-process) — chờ xử lý xong mới duyệt cái kế`)
       }
       return 0
     }
@@ -3009,26 +3039,30 @@ export function kickOmegaReviewsSerially(proposalIds: string[]): number {
         await opusReviewPending(id)
       } catch { /* đã được xử lý bên trong — fail-open giữ pending */ }
 
-      // ━━ USER REQUEST (2026-09-02): chờ orchestration HOÀN THÀNH ━━
-      // Sau khi Opus duyệt (approve → status ready → triggerOrchestration),
-      // KHÔNG duyệt đề xuất kế ngay. Chờ orchestration hoàn thành (proposal
-      // status chuyển completed/failed, hoặc runningOrchestrations nhả lock).
-      // Lý do: workspace code-workflow dùng chung 1 git index → KHÔNG chạy
-      // song song (serializeCodeWorkflow mutex). Duyệt liên tiếp sẽ xếp hàng
-      // chờ mutex, user không thấy tiến trình, dễ tưởng Opus bỏ qua/kẹt.
-      // Timeout 10 phút (orchestration code-workflow có thể dài — nhiều bước).
-      const startedAt = Date.now()
-      const TIMEOUT_MS = 10 * 60 * 1000
-      while (runningOrchestrations.has(id)) {
-        if (Date.now() - startedAt > TIMEOUT_MS) {
-          console.warn(`[SelfDirection] Opus chờ orchestration ${id} quá 10 phút — timeout, duyệt đề xuất kế`)
-          break
-        }
-        // Kiểm tra xem proposal còn ở status active không (có thể đã completed/failed)
+      // ━━ USER REQUEST (2026-10-07): chờ đề xuất được XỬ LÝ XONG HẲN ━━
+      // Sau khi Opus duyệt (approve → status ready → triggerOrchestration
+      // triển khai NGAY), KHÔNG duyệt đề xuất kế cho tới khi đề xuất này kết
+      // thúc xử lý — dù HOÀN THÀNH hay THẤT BẠI (user chỉ đạo tường minh:
+      // "sau khi đề xuất đó xử lý xong (dù hoàn thành hay không) mới tiến
+      // hành tiếp tục phê duyệt đề xuất tiếp theo").
+      // Bỏ timeout cứng 10 phút của USER REQUEST (2026-09-02): orchestration
+      // code-workflow dài hợp lệ (>10 phút) từng bị cắt đột ngột → duyệt cái
+      // kế khi cái trước chưa xong — sai chỉ thị mới. Chống kẹt vĩnh viễn
+      // KHÔNG cần timeout: mọi proposal active rồi cũng về trạng thái terminal
+      // nhờ (a) orchestration tự chốt completed/failed; (b) stall-kill của
+      // promoteDueProposals (scheduler nền chạy mỗi 60s — STALLED_AFTER_MS
+      // 10 phút không tín hiệu → failed); (c) sweep section 2 re-trigger
+      // 'ready' bị mất âm thầm sau restart. Proposal bị user xóa/từ chối giữa
+      // chừng cũng thoát vòng chờ (findUnique null / status ngoài active).
+      while (true) {
         try {
           const cur = await db.selfDirectionProposal.findUnique({ where: { id }, select: { status: true } })
-          if (!cur || !['ready', 'planning', 'executing'].includes(cur.status)) break // orchestration đã xong
-        } catch { break }
+          // Không còn row (user xóa hẳn) hoặc đã rời trạng thái active
+          // (completed/failed/rejected/...) → xử lý xong → duyệt cái kế.
+          if (!cur || !['ready', 'planning', 'executing'].includes(cur.status)) break
+        } catch {
+          break // DB lỗi đọc trạng thái — cứ tiến hành cái kế (fail-open)
+        }
         await new Promise(r => setTimeout(r, 3000)) // poll mỗi 3s
       }
     }
