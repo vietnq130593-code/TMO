@@ -121,28 +121,55 @@ export async function fileRead(args: {
   const startIdx = Math.min(offset - 1, totalLines)
   const endIdx = Math.min(startIdx + limit, totalLines)
   const visibleLines = allLines.slice(startIdx, endIdx)
+  // (line-number formatting + budget cut chuyển xuống dưới — ROUND-53 FIX B1a)
 
-  // Optional line-number prefix (cat -n style: right-justified 6-char width + tab)
-  const formatted = wantLineNumbers
-    ? visibleLines.map((line, i) => {
+  // ROUND-53 FIX B1a (bằng chứng mission r53 — báo cáo agent: file 333/568/278
+  // dòng chỉ thấy 220/220/160 dòng đầu và KHÔNG có bằng chứng đọc tiếp): kết quả
+  // tool bị tầng pushToolMessage cap 12k chars (main) / 8k (sub-agent) cắt
+  // envelope → metadata pagination (nextOffset/totalLines) nằm CUỐI JSON bị xói,
+  // note envelope chỉ dạy 'thu hẹp phạm vi' KHÔNG dạy offset. Giờ: (1) tự cắt
+  // content tại ranh giới DÒNG nằm dưới budget 9k chars — kết quả KHÔNG bao giờ
+  // chạm envelope, pagination luôn nguyên vẹn; (2) ĐẢO thứ tự trường — pagination
+  // + note đứng TRƯỚC content (kể cả khi consumer cap thấp hơn cắt envelope,
+  // head 55% vẫn giữ nguyên metadata); (3) note dạy đọc tiếp bằng offset cụ thể.
+  const FILE_READ_CONTENT_BUDGET = 9_000
+  let budgetEnd = endIdx
+  if (visibleLines.join('\n').length > FILE_READ_CONTENT_BUDGET) {
+    const avgCharsPerLine = Math.max(1, visibleLines.join('\n').length / Math.max(1, visibleLines.length))
+    let est = startIdx + Math.floor(FILE_READ_CONTENT_BUDGET / avgCharsPerLine)
+    if (est <= startIdx) est = startIdx + 1
+    budgetEnd = Math.min(endIdx, est + 4)
+    while (budgetEnd > startIdx + 1 && allLines.slice(startIdx, budgetEnd).join('\n').length > FILE_READ_CONTENT_BUDGET) {
+      budgetEnd--
+    }
+    // vẫn vượt sau khi cắt về 1 dòng = dòng đơn khổng lồ → giữ nguyên dòng đó
+    // (không cắt giữa dòng — agent dùng grep cho dòng dài)
+  }
+  const finalVisible = allLines.slice(startIdx, budgetEnd)
+  const formattedBudget = wantLineNumbers
+    ? finalVisible.map((line, i) => {
         const lineNo = startIdx + i + 1
         return `${String(lineNo).padStart(6, ' ')}\t${line}`
       })
-    : visibleLines
+    : finalVisible
 
-  const hasMore = endIdx < totalLines
+  const hasMore = budgetEnd < totalLines
   return {
     success: true,
     path: args.path,
-    content: formatted.join('\n'),
-    lines: visibleLines.length,
+    // ⬇ pagination + note TRƯỚC content — chống envelope cắt mất metadata
     totalLines,
     offset,
+    lines: finalVisible.length,
     limit,
     // Cursor for the next page — caller passes this back as `offset` to continue.
     // Undefined when file fully read in this call.
-    nextOffset: hasMore ? endIdx + 1 : undefined,
+    nextOffset: hasMore ? budgetEnd + 1 : undefined,
     truncated: hasMore,
+    note: hasMore
+      ? `Còn ${totalLines - budgetEnd} dòng chưa đọc — gọi lại file_read({"path": ${JSON.stringify(args.path)}, "offset": ${budgetEnd + 1}}) để đọc tiếp TỪ CHÍNH XÁC chỗ dừng.`
+      : undefined,
+    content: formattedBudget.join('\n'),
   }
 }
 
@@ -199,6 +226,27 @@ function truncateOutput(text: string, maxChars = 50_000): { output: string; trun
   }
 }
 
+/**
+ * ROUND-53 FIX — WRITE GUARD chống provider-corruption lọt vào source
+ * (bằng chứng r53: src/lib/agent-goal-loop.ts bị ghi đè tag '[model-prior]'
+ * → 'odel-prior]' bởi file_edit của mission trước — tool args đi qua provider
+ * KHÔNG được strip ở tầng callZenProvider như message content, ký tự hỏng lọt
+ * THẲNG vào file rồi sống âm thầm trong working tree cho tới mission sau).
+ * Marker template provider (class `]<]xxx[>[` — regex mirror tool-calls.ts,
+ * giữ self-contained tránh circular import) KHÔNG bao giờ là nội dung hợp lệ →
+ * thấy ≥1 marker trong nội dung SẮP GHI là TỪ CHỐI + yêu cầu phát lại sạch.
+ */
+function providerGarbleGuard(content: unknown, label: string): string | null {
+  try {
+    if (typeof content !== 'string' || content.length === 0) return null
+    const markers = content.match(/\]?\s?<\][^\]\s]{1,24}\[>\[?\s?/g) || []
+    if (markers.length > 0) {
+      return `${label} chứa ${markers.length} marker template provider (corruption hạ tầng — vd ${JSON.stringify(markers[0])}). Tool TỪ CHỐI ghi để bảo vệ file: phát LẠI nội dung SẠCH không marker lạ (chia nhỏ nếu dài). Nếu marker nằm trong DỮ LIỆU THẬT cần ghi, encode base64 qua shell thay vì ghi thẳng.`
+    }
+  } catch { /* fail-open */ }
+  return null
+}
+
 // ==================== P0: FILE OPS ====================
 
 /**
@@ -234,6 +282,12 @@ export async function fileEdit(args: {
 
   if (!args.edits && (!args.old_str || args.new_str === undefined)) {
     return { success: false, error: 'Either (old_str + new_str) or edits[] is required' }
+  }
+
+  // ROUND-53 WRITE GUARD — chặn provider-marker corruption vào source
+  for (const edit of (args.edits ?? [{ old_str: args.old_str, new_str: args.new_str }])) {
+    const garble = providerGarbleGuard(edit?.new_str, `file_edit new_str (path ${args.path})`)
+    if (garble) return { success: false, error: garble, blocked: true, path: args.path }
   }
 
   let content = original
@@ -360,6 +414,10 @@ export async function fileWrite(args: {
         error: 'content rỗng khi mode=overwrite sẽ XÓA sạch file — nếu muốn ghi tiếp hãy dùng mode:"append", nếu muốn xoá file hãy dùng file_delete.',
       }
     }
+
+    // ROUND-53 WRITE GUARD — chặn provider-marker corruption vào source
+    const garble = providerGarbleGuard(content, `file_write content (path ${args.path})`)
+    if (garble) return { success: false, error: garble, blocked: true, path: args.path }
 
     const resolvedPath = await resolveWithinWorkspace(args.path)
     const root = await resolveWorkspaceRoot()
@@ -5336,9 +5394,45 @@ export async function dbQuery(args: {
       sql: execSql,
     }
   } catch (err: any) {
+    const errMsg = String(err?.message || err)
+    // ROUND-53 FIX B2 (bằng chứng r53: sub-agent db_query "no such column:
+    // verified" + "no such column: createdAt" ×2 — agent đoán mò tên cột/bảng
+    // vì KHÔNG có schema reference, mỗi lần sai đốt 1 vòng LLM). Giờ: lỗi
+    // SQLite 'no such column/table' → kèm danh sách cột/bảng THẬT từ
+    // PRAGMA/sqlite_master → agent tự sửa SQL đúng 1 vòng.
+    let schemaHint = ''
+    try {
+      const colMatch = errMsg.match(/no such column:\s*([A-Za-z_][\w.]*)/i)
+      if (colMatch) {
+        const tables = [...execSql.matchAll(/(?:from|join|update|into)\s+["'`]?([A-Za-z_][\w]*)/gi)].map(m => m[1])
+        const seen = new Set<string>()
+        const parts: string[] = []
+        for (const t of tables) {
+          if (seen.has(t)) continue
+          seen.add(t)
+          try {
+            const cols = await (db as any).$queryRawUnsafe(`PRAGMA table_info("${t}")`)
+            const names = (cols as any[]).map((c: any) => c.name).filter(Boolean)
+            if (names.length) parts.push(`${t}: ${names.join(', ')}`)
+          } catch { /* bảng không tồn tại — bỏ qua */ }
+        }
+        if (parts.length) {
+          schemaHint = `\n💡 Cột "${colMatch[1]}" KHÔNG tồn tại. Cột khả dụng theo schema thật:\n${parts.join('\n')}\n→ Sửa SQL theo đúng cột trên rồi chạy lại.`
+        }
+      } else {
+        const tblMatch = errMsg.match(/no such table:\s*([A-Za-z_][\w.]*)/i)
+        if (tblMatch) {
+          const rows = await (db as any).$queryRawUnsafe(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`)
+          const names = (rows as any[]).map((r: any) => r.name).filter((n: string) => !n.startsWith('_PRISMA') && !n.startsWith('sqlite_'))
+          if (names.length) {
+            schemaHint = `\n💡 Bảng "${tblMatch[1]}" KHÔNG tồn tại. Bảng khả dụng trong DB:\n${names.join(', ')}\n→ Sửa SQL theo đúng bảng trên rồi chạy lại.`
+          }
+        }
+      }
+    } catch { /* fail-open — hint lỗi không được che error gốc */ }
     return {
       success: false,
-      error: `db_query failed: ${err?.message || String(err)}`,
+      error: `db_query failed: ${errMsg}${schemaHint}`,
       sql: rawSql.slice(0, 500),
       durationMs: Date.now() - startedAt,
     }

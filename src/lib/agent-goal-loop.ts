@@ -852,7 +852,12 @@ export function assembleGoalLoopSystemPrompt(params: {
         // P-D (2026-10-06): WORK LEDGER — vòng làm việc liên tục trên DB (tra cứu
         // → làm → cập nhật → dọn → tiếp). priority 76: đứng trên confidence —
         // mất discipline này là mất năng lực làm việc dài hạn liên tục.
-        { name: 'workLedgerProtocol', content: params.hasWorkData === true ? buildWorkLedgerProtocol() : '', priority: 76 },
+        // ROUND-53 FIX B3: LUÔN render protocol (bỏ điều kiện hasWorkData) —
+        // bằng chứng r52-r53: 2 mission LIÊN TIẾP 0 dòng work_data vì protocol
+        // chỉ hiện khi ledger đã có bản ghi (chicken-and-egg: agent không biết
+        // ledger tồn tại → không bao giờ ghi bản ghi đầu). Protocol tự điều
+        // kiện 'nhiệm vụ dài/phức tạp' — mục chat ngắn bỏ qua được.
+        { name: 'workLedgerProtocol', content: buildWorkLedgerProtocol(), priority: 76 },
         { name: 'confidenceProtocol', content: buildConfidenceProtocol(), priority: 70 },
         { name: 'preAct', content: preActBlock, priority: 60 },
       ],
@@ -874,7 +879,7 @@ export function assembleGoalLoopSystemPrompt(params: {
       (params.hasCodeTeamRequest === true ? buildCodeTeamProtocol() : '') +
       (hasOrchestration ? buildOrchestrationProtocol(hasDispatch, hasCreate) : '') +
       buildAutomationProtocol(params.hasAutomationDirect === true, params.hasAutomationPropose === true) +
-      (params.hasWorkData === true ? buildWorkLedgerProtocol() : '') +
+      buildWorkLedgerProtocol() + // ROUND-53 FIX B3 — luôn render (chống chicken-and-egg, xem note ở protocol block)
       buildConfidenceProtocol() +
       preActBlock
     )
@@ -1446,6 +1451,23 @@ function progressFingerprint(messages: GoalMessage[]): string {
  * truncateToolMessageJson phía trên (giữ compatibility scratch + caller cũ).
  * pushToolMessage bên dưới vẫn dùng y hệt — hành vi không đổi.
  */
+
+/**
+ * ROUND-53 FIX A1 (bằng chứng mission r53 Linh Sickyx: chu kỳ 3 model trả
+ * 150.305 ký tự THUẦN VĂN 0 tool call → push nguyên văn vào transcript →
+ * prompt chu kỳ 4-5 phình 60k+ tokens → completion co rút 34-441 chars,
+ * chết đói reasoning → stall brake 3/3 kết thúc mission). Cap nội dung
+ * assistant đẩy vào transcript: giữ đầu 20k + đuôi 3k (cú pháp tool_call
+ * thường nằm cuối) + ghi chú phần đã cắt. Digest chu kỳ sau vẫn nén tiếp —
+ * cap này chỉ chặn ca bệnh lý context-bomb.
+ */
+const ASSISTANT_PUSH_CAP_CHARS = 24_000
+function capAssistantContentForTranscript(content: string): string {
+  if (typeof content !== 'string' || content.length <= ASSISTANT_PUSH_CAP_CHARS) return content
+  const head = content.slice(0, 20_000)
+  const tail = content.slice(-3_000)
+  return `${head}\n\n[…⚠ Nội dung dài ${content.length} ký tự — đã cắt giữ đầu 20k + đuôi 3k để bảo vệ context. KHÔNG lặp lại phần đã viết: nếu cần phần giữa, lưu vào work_data/file rồi trích dẫn ngắn.]\n\n${tail}`
+}
 
 /** Đẩy tool result vào messages với cap ký tự (chống context nổ).
  *  Tool kiểm định (lint/type_check/run_tests...) được cap cao hơn — agent và
@@ -3117,11 +3139,16 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         // vừa mất. Giờ: đẩy feedback vào conversation (pattern pushToolMessage)
         // để LLM phát lại GỌN HƠN ở lượt kế — tối đa 2 lần, sau đó conclude như cũ.
         let brokenHint: string | null = null
+        // ROUND-53 FIX A3: cap parse-nudge ĐỘNG theo planning-only streak —
+        // bằng chứng r53: provider cắt JSON tool call LIÊN TỤC (todo_write
+        // args cut), 2 lượt phản hồi không đủ → hết đường cứu giữa run.
+        // Streak ≥1 → 4 lượt (1 nudge rẻ hơn nhiều so với 1 chu kỳ chết).
+        const parseNudgeCap = planningOnlyStreak >= 1 ? 4 : 2
         try {
           brokenHint = detectBrokenToolCallHint(result.content)
-          if (brokenHint && parseFailNudges < 2 && timeLeft() > 0 && tokenLeft() > REPORT_RESERVE_TOKENS) {
+          if (brokenHint && parseFailNudges < parseNudgeCap && timeLeft() > 0 && tokenLeft() > REPORT_RESERVE_TOKENS) {
             parseFailNudges++
-            messages.push({ role: 'assistant', content: result.content })
+            messages.push({ role: 'assistant', content: capAssistantContentForTranscript(result.content) })
             pushToolMessage(messages, { tool: 'parse_error', success: false, result: brokenHint })
             evidence.push({ cycle, kind: 'tool', tool: 'parse_error', success: false, text: 'tool call bị cắt/JSON lỗi — đã yêu cầu phát lại gọn hơn' })
             recordAgentThought(agentSessionId, `⚠️ Tool call bị cắt cụt giữa JSON (lần ${parseFailNudges}/2) — đã phản hồi lỗi để agent phát lại gọn hơn (chia file nhỏ, file_write append)`, totalIterations)
@@ -3138,7 +3165,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         //     đã thất bại trong TEST A: proseNudges=2 vẫn 0 tool call cả 4 chu kỳ).
         if (!brokenHint) {
           const garbleCount = countProviderGarbleMarkers(result.content || '')
-          if (garbleCount >= 3 && parseFailNudges < 2 && timeLeft() > 0 && tokenLeft() > REPORT_RESERVE_TOKENS) {
+          if (garbleCount >= 3 && parseFailNudges < parseNudgeCap && timeLeft() > 0 && tokenLeft() > REPORT_RESERVE_TOKENS) {
             parseFailNudges++
             // Chỉ giữ 4000 ký tự đầu — tránh nhét cả khối rác vào transcript
             messages.push({ role: 'assistant', content: (result.content || '').slice(0, 4000) })
@@ -3154,7 +3181,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           const intentTool = DELEGATION_INTENT_TOOLS.find(t => new RegExp(`\\b${t}\\b`).test(result.content || ''))
           if (intentTool && proseNudges < 2 && timeLeft() > 0 && tokenLeft() > REPORT_RESERVE_TOKENS) {
             proseNudges++
-            messages.push({ role: 'assistant', content: result.content })
+            messages.push({ role: 'assistant', content: capAssistantContentForTranscript(result.content) })
             pushToolMessage(messages, {
               tool: 'harness_warning',
               success: false,
@@ -3188,12 +3215,18 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         // cap ĐỘNG: đã từng planning-only (streak ≥1) → 6 lượt (1 nudge rẻ hơn
         // nhiều so với 1 chu kỳ tổn phí), agent bình thường giữ 2.
         const proseNudgeCap = planningOnlyStreak >= 1 ? 6 : 2
-        if (!brokenHint && proseNudges < proseNudgeCap && timeLeft() > 0 && tokenLeft() > REPORT_RESERVE_TOKENS) {
+        // ROUND-53 FIX A2 — BỎ điều kiện `!brokenHint`: bằng chứng r53 chu kỳ
+        // 4-5: brokenHint đúng (output có dấu hiệu tool call đứt) nhưng
+        // parseFailNudges đã cạn → MỌI nudge bị skip → break 'no_tool_calls'
+        // IM LẶNG dù proseNudgeCap=6 chưa dùng tới. Giờ khi parse-nudge cạn,
+        // generic prose nudge (budget riêng) vẫn dạy phát lại 1 tool call
+        // hợp lệ — hết бюджет mới break như cũ.
+        if (proseNudges < proseNudgeCap && timeLeft() > 0 && tokenLeft() > REPORT_RESERVE_TOKENS) {
           proseNudges++
           const streakWarn = planningOnlyStreak >= 2
             ? ` ⛔ CẢNH BÁO NẶNG: bạn đã ${planningOnlyStreak} chu kỳ LIÊN TIẾP chỉ lập kế hoạch không triển khai — stall-brake sẽ KẾT THÚC mission của bạn nếu chu kỳ này vẫn không có tool call thực thi.`
             : ''
-          messages.push({ role: 'assistant', content: result.content })
+          messages.push({ role: 'assistant', content: capAssistantContentForTranscript(result.content) })
           pushToolMessage(messages, {
             tool: 'harness_warning',
             success: false,
@@ -3207,13 +3240,13 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         // ROUND-26 FIX A — push content TRƯỚC KHI break: kế hoạch/kết luận của
         // agent không còn biến mất khỏi transcript (trọng tài + chu kỳ sau đọc
         // được; final report vẫn lấy từ lastContent riêng — không đổi hành vi).
-        messages.push({ role: 'assistant', content: result.content })
+        messages.push({ role: 'assistant', content: capAssistantContentForTranscript(result.content) })
         endedBy = 'no_tool_calls'
         break
       }
 
       console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} vòng ${cycleIterations}: ${toolCalls.length} tool calls cần thực thi${executedCalls.length > 0 ? ` + ${executedCalls.length} đã thực thi trong CLI inner loop (evidence-only)` : ''}`)
-      messages.push({ role: 'assistant', content: result.content })
+      messages.push({ role: 'assistant', content: capAssistantContentForTranscript(result.content) })
 
       // CI-2 (Task 11-a) — bằng chứng thu được trong batch này (đường dẫn file /
       // lệnh shell của tool call THÀNH CÔNG) → auto-complete todo in_progress
@@ -4467,7 +4500,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
               // ĐOÁN, không phải triển khai.)
               const dispatched = await dispatchAgentByOmega({
                 agent: suggested,
-                task: `Chẩn đoán nguyên nhân bế tắc của agent "${agentName}" (chu kỳ ${cycle}, verified=false) trong ≤5 bước: đọc trạng thái hiện tại, liệt kê 2-3 giả thuyết nguyên nhân, đề xuất hướng đi cụ thể.\nVấn đề: ${(verdict.rootCause || userMessage).slice(0, 500)}\nKhuyến nghị của Omega: ${consult.advisory?.recommendation?.slice(0, 500) || '(theo phân tích của bạn)'}`,
+                task: `Chẩn đoán nguyên nhân bế tắc của agent "${agentName}" (chu kỳ ${cycle}, verified=false) trong ≤5 bước: đọc trạng thái hiện tại, liệt kê 2-3 giả thuyết nguyên nhân, đề xuất hướng đi cụ thể.\n⛔ PHẠM VI CHẶN: CHỈ làm đúng nhiệm vụ chẩn đoán này — KHI CÓ KẾT LUẬN là phát báo cáo cuối và DỪNG. KHÔNG tự mở rộng sang làm thay nhiệm vụ gốc của run cha (audit/triển khai là việc của run cha sau khi nhận chẩn đoán).\nVấn đề: ${(verdict.rootCause || userMessage).slice(0, 500)}\nKhuyến nghị của Omega: ${consult.advisory?.recommendation?.slice(0, 500) || '(theo phân tích của bạn)'}`,
                 context: `Mục tiêu gốc: ${userMessage.slice(0, 400)}`,
                 duration: 'task',
                 parentAgentName: agentName,

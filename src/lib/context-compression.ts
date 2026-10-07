@@ -262,7 +262,7 @@ function buildEnvelopeObject(
     JSON.stringify({
       _truncated: true,
       _originalChars: serialized.length,
-      _note: `Kết quả thật ${serialized.length} ký tự — giữ ~55% đầu + ~30% đuôi (lỗi/tổng kết thường nằm cuối). Cần phần giữa → gọi lại tool với phạm vi hẹp hơn (path/depth/pattern/glob/head_limit/ignore...).`,
+      _note: `Kết quả thật ${serialized.length} ký tự — giữ ~55% đầu + ~30% đuôi (lỗi/tổng kết thường nằm cuối). Cần phần giữa → gọi lại tool với phạm vi hẹp hơn (path/depth/pattern/glob/head_limit/ignore/offset...). LƯU Ý: kết quả file_read có sẵn nextOffset/totalLines ở ĐẦU JSON — đọc tiếp bằng offset thay vì đọc lại từ đầu.`,
       head: serialized.slice(0, head),
       tail: serialized.slice(-tail),
     })

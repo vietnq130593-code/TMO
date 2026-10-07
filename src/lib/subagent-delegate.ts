@@ -1069,30 +1069,8 @@ async function runSubAgentForProfileInner(params: {
       error: state.endedBy === 'error' ? state.errorMessage : undefined,
     }
 
-    // DELEGATION CONTRACT — kết thúc run hiển thị + persist bài học:
-    // (a) endAgentRun: run sub-agent → terminal status trong Thought Process
-    //     panel + 1 AgentRunRecord row (lịch sử delegation tra cứu được);
-    // (b) archiveContext task_summary (fire-and-forget, fail-open): run sau
-    //     trong session recall lại được kết quả delegation — vá gap "delegation
-    //     là ngõ cụt tri thức" (so sánh quy trình orchestrator 2026-09-12).
-    finishDelegationRun(
-      state.endedBy === 'cancelled' ? 'cancelled' : state.endedBy === 'error' ? 'error' : 'done',
-      `[Delegation] ${state.endedBy} · ${iterations} vòng · ${toolCallCount} tool calls · ${tokensUsed} tokens`,
-    )
-    if (sessionId && report.trim()) {
-      try {
-        void import('@/lib/context-store')
-          .then(({ archiveContext }) => archiveContext({
-            runId: delegationRunId,
-            sessionId,
-            agentName: profile.name,
-            kind: 'task_summary',
-            content: `[Delegation từ ${parentAgentName}] Nhiệm vụ: ${task.slice(0, 400)}\n\n${report}`,
-            tags: 'delegation',
-          }))
-          .catch(() => { /* fail-open — learning không được phá delegation */ })
-      } catch { /* fail-open */ }
-    }
+    // (DELEGATION CONTRACT (a)+(b) — ĐÃ DỜI XUỐNG SAU trọng tài + closeRunTodos:
+    // ROUND-53 FIX D2 — xem block mới trước dòng '[SubAgent] … xong:' cuối hàm)
 
     // ===== FIX 2026-09-14 #2 — TRỌNG TÀI ĐỘC LẬP CHO DELEGATION =====
     // Sub-agent vừa TỰ verify theo prompt (học sinh tự chấm bài mình) — giờ
@@ -1170,6 +1148,31 @@ async function runSubAgentForProfileInner(params: {
           console.log(`[SubAgent] ${profile.name} đóng ${closedTotal} todo dang dở (verdict ${todoVerdict ? 'đạt' : 'chưa đạt'}: ${closed.inProgressClosed} in_progress/blocked, ${closed.pendingCompleted} pending→completed, ${closed.pendingArchived} pending→archived)`)
         }
       } catch { /* fail-open — không được phép làm hỏng delegation */ }
+    }
+
+    // DELEGATION CONTRACT (a)+(b) — ROUND-53 FIX D2: chạy SAU trọng tài +
+    // closeRunTodos (trước đây chạy TRƯỚC arbiter → AgentRunRecord +
+    // task_summary KHÔNG phản ánh verdict — bằng chứng r53: sub-run ghi
+    // 'done/complete' trong khi trọng tài chấm CHƯA ĐẠT 5% — kênh quan sát
+    // DB đọc sai trạng thái). Summary giờ kèm verdict; task_summary archive
+    // theo outcome.report (đã gồm phần ⚠ Trọng tài độc lập).
+    finishDelegationRun(
+      state.endedBy === 'cancelled' ? 'cancelled' : state.endedBy === 'error' ? 'error' : 'done',
+      `[Delegation] ${state.endedBy} · ${iterations} vòng · ${toolCallCount} tool calls · ${tokensUsed} tokens${outcome.evaluation ? ` · trọng tài ${outcome.evaluation.pass ? 'ĐẠT' : 'CHƯA ĐẠT'} (${Math.round(outcome.evaluation.confidence * 100)}%)` : ' · trọng tài chưa chấm'}`,
+    )
+    if (sessionId && outcome.report.trim()) {
+      try {
+        void import('@/lib/context-store')
+          .then(({ archiveContext }) => archiveContext({
+            runId: delegationRunId,
+            sessionId,
+            agentName: profile.name,
+            kind: 'task_summary',
+            content: `[Delegation từ ${parentAgentName}] Nhiệm vụ: ${task.slice(0, 400)}\n\n${outcome.report}`,
+            tags: 'delegation',
+          }))
+          .catch(() => { /* fail-open — learning không được phá delegation */ })
+      } catch { /* fail-open */ }
     }
 
     console.log(`[SubAgent] ${profile.name} xong: ${state.endedBy} — ${iterations} vòng, ${toolCallCount} tool calls, ${tokensUsed} tokens, ${Math.round((Date.now() - startedAt) / 1000)}s`)
@@ -1346,6 +1349,7 @@ ${canTodo ? `- BƯỚC 0 — LẬP KẾ HOẠCH: đánh giá nhiệm vụ. Nếu
 ` : ''}- Dùng tools thật để đọc/sửa/chạy — không đoán kết quả file/lệnh.
 - TỰ KIỂM ĐỊNH trước khi kết luận: chạy ít nhất 1 tool xác nhận kết quả cuối (file_read đọc lại / lint / type_check / run_tests...) — KHÔNG kết luận "hoàn thành" suông không bằng chứng.${acceptanceCriteria ? ' Đối chiếu TỪNG điều kiện hoàn thành phía trên — điều kiện nào chưa đạt phải nói rõ.' : ''}
 - Mỗi vòng tối đa vài tool calls; ưu tiên hành động trực tiếp.
+- ⛔ PHẠM VI (ROUND-53 — bằng chứng r53: sub-agent chẩn đoán tự mở rộng làm thay toàn bộ nhiệm vụ gốc của run cha, đốt 950k tokens rồi trọng tài chấm CHƯA ĐẠT): CHỈ làm đúng NHIỆM VỤ được delegate phía trên. Có kết luận đúng phạm vi là BÁO CÁO + DỪNG — nhiệm vụ lớn hơn là việc của parent sau khi đọc báo cáo của bạn. KHÔNG tự mở rộng phạm vi.
 ${canEscalate ? '- Nếu BẾ TẮC (tool fail lặp lại / không rõ hướng giải): tool_call: escalate_problem({"problem": "...", "context": "...", "attempted": "..."}) → Omega orchestrator sẽ tư vấn giải pháp.' : ''}
 - Khi xong (hoặc không làm tiếp được), viết BÁO CÁO ≤ 300 từ theo format:
   1. ĐÃ LÀM: từng việc + bằng chứng tool (tên tool + kết quả ngắn: file:line, pass/fail, số lỗi)${canTodo ? `
