@@ -1,6 +1,6 @@
-# QUY TRÌNH GIÁM SÁT AGENTS — HỆ THỐNG VẬN HÀNH TMO (The Magnum Opus)
+# GIAO THỨC GIÁM SÁT AGENTS — HỆ THỐNG VẬN HÀNH TMO (The Magnum Opus)
 
-> **Phiên bản:** 1.1 — 2026-10-07 (cập nhật từ vận hành round 52–55: bổ sung mục 1b — kích hoạt theo dõi đồng bộ cùng mission + kênh THINKING; v1.0 2026-10-01 vòng 18–19)
+> **Phiên bản:** 1.2 — 2026-10-07 (round 56: đổi tên "quy trình" → **giao thức** giám sát theo chỉ đạo user; bổ sung kênh quan sát thứ 5 **FINAL REPORTS** — đọc báo cáo cuối mission/sub-agent + verdict Opus. v1.1 2026-10-07 round 52–55: mục 1b kích hoạt theo dõi đồng bộ + kênh THINKING; v1.0 2026-10-01 vòng 18–19)
 > **Phạm vi:** giám sát toàn bộ agents (Omega, Opus, ALISTA, SENTINEL, NEMESIS, Code Team…) trong vòng đời mission: từ dispatch chỉ đạo → thực thi goal-loop → phán quyết → đóng sổ.
 > **Người dùng:** operator / trọng tài vận hành (người hoặc agent giám sát).
 > **Cấu trúc:** mỗi lĩnh vực gồm 4 khối — (1) Mục tiêu · (2) Công việc · (3) Nguồn bằng chứng & cách đo · (4) **Rubric chấm điểm**.
@@ -14,6 +14,7 @@
 3. **Vi phạm lịch sử giữ nguyên vẹn** — khi disposition `superseded`, mô tả vi phạm cũ KHÔNG được rửa thành compliant.
 4. **Mỗi sự cố lặp ≥ 2 lần phải sinh fix cấu trúc** — không khắc phục lẻ tẻ từng trường hợp.
 5. **Chấm điểm bằng dữ liệu đo được** — mọi tiêu chí dưới đây phải truy vấn/kiểm chứng được, không chấm theo cảm tính.
+6. **Nhìn thấy tường tận mới biết cần khắc phục gì** — mỗi blind spot phát hiện phải trở thành một kênh quan sát mới (r54: không thấy agents NGHĨ GÌ → kênh THINKING; r56: không thấy agents KẾT LUẬN GÌ → kênh FINAL REPORTS). Danh sách kênh chỉ được dài ra, không được rút ngắn.
 
 ---
 
@@ -66,12 +67,12 @@ WHERE timestamp > :windowStart GROUP BY agentRole, toolName, success;
 2. **Dispatch mission** cho agent (đúng như chỉ đạo đã duyệt).
 3. **Xác nhận kênh sống:** trong ~60s đầu phải thấy dòng `🆕 MISSION BẮT ĐẦU` + event `🚀 RUN START`. Không thấy → kiểm tra DB/job trước khi đi tiếp (mission có thể đã fail ở bước dispatch).
 4. **Trong lúc chạy:** theo dõi các kênh đầu ra (xem dưới); can thiệp theo mục 6 khi có cảnh báo.
-5. **Khi kết thúc:** tắt follow (Ctrl+C), chạy hậu kiểm:
+5. **Khi kết thúc:** tắt follow (Ctrl+C), chạy hậu kiểm (replay hiển thị cả BÁO CÁO CUỐI + OPUS VERDICT của session):
    ```bash
    bun scripts/mission-watch.ts --replay <jobId> --tail 200
    ```
 
-**Kênh theo dõi của `mission-watch.ts` (đủ 4 tầng):**
+**Kênh theo dõi của `mission-watch.ts` (đủ 5 tầng):**
 
 | Kênh | Dấu hiệu đầu ra | Bắt được loại sự cố nào |
 |---|---|---|
@@ -79,6 +80,7 @@ WHERE timestamp > :windowStart GROUP BY agentRole, toolName, success;
 | **THINKING** — thought events mọi vòng (main + sub-agent từ r55w1 FIX G) + assistant content checkpoint | `💭 [agent ·vN] suy nghĩ…` / `🤖 ASSISTANT (…): …` | Tool-call rơi vào thought (pattern-5/Mistral), vòng lặp lập kế hoạch không hành động, ngữ đạo suy luận sai |
 | **TOKEN BURN** — checkpoint counters mỗi chu kỳ | `📊 chu kỳ N · vòng M · tokens X (sub-agent: Y) · nén ×Z · stall a/b` | Cháy token (kể cả sub-agent), nén context không chạy, stall brake đếm dần |
 | **STALL-LOOP + DETECTOR** — RepeatTracker + regex cú pháp + heartbeat | `🔁 'tool' lặp N lần LIÊN TIẾP` / `⚠️ Nghi tool-call CHƯA ĐƯỢC PARSE` / `heartbeat stale` | Fixation loop (todo_read ×123 r54), tool call cụt/méo cú pháp, job treo |
+| **FINAL REPORTS** (r56) — `GoalLoopJob.result` (báo cáo finalize + taskSummary, emit khi job chuyển terminal) + poll `OpusReview.verdict` (5 trục + issues + directive + STOP predicate 4/4) + `run_end` sub-agent đủ 300 chars | `📋 FINAL REPORT [agent]: 📌 taskSummary / 📄 content` · `⚖️ OPUS VERDICT [decision]: 📝 📊 ⚠️ 📌 🛑` · `🏁 [Delegation] concluded · trọng tài CHƯA ĐẠT (10%)` | Báo cáo kết luận lệch bằng chứng máy (D2.2), verdict lỗi hệ thống ("Opus không đọc được verdict JSON"), sub-agent tự chốt KHÔNG ĐẠT mà operator không hay (SENTINEL r54: đốt 51.9M tokens, phán quyết 10% chỉ nằm trong run_end) |
 
 **Lưu ý vận hành:**
 - `mission-watch.ts` chỉ ĐỌC (SQLite read-only + tail jsonl) — không can thiệp, không sửa code TMO, an toàn chạy song song mission thật.
@@ -99,6 +101,7 @@ WHERE timestamp > :windowStart GROUP BY agentRole, toolName, success;
 - Đối chiếu từng tuyên bố "ĐÃ LÀM" với tool-log (đúng tool, đúng cửa sổ thời gian, đúng nội dung)
 - Bắt rút gọn bằng chứng (`"..."` thay output nguyên văn) trong báo cáo nghiệm thu
 - Bắt cherry-picking / false compliance (khẳng định đạt khi dữ liệu nói không đạt)
+- Dùng kênh FINAL REPORTS (mục 1b) đọc báo cáo cuối ngay trên màn hình quan sát — đối chiếu từng lời tuyên bố tại chỗ, không cần mở SQL tay cho từng báo cáo
 - Duy trì tính trung thực của disposition ledger (giữ nguyên vi phạm lịch sử)
 
 **Nguồn bằng chứng & cách đo:**

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * mission-watch.ts — Công cụ quan sát mission TMO (round-55: KÊNH THINKING)
+ * mission-watch.ts — Công cụ quan sát mission TMO (round-56: KÊNH FINAL REPORTS)
  *
  * Bối cảnh: round-54 phát hiện blind spot — quan sát trước đó chỉ thấy tool events
  * (agents LÀM GÌ) mà không thấy suy nghĩ/nội dung assistant (agents NGHĨ GÌ), khiến
@@ -10,6 +10,16 @@
  * BỔ SUNG r55w1 (FIX G): sub-agent delegation GIỜ CÓ thought events (recordAgentThought
  * nhận runId) — jsonl sub_*.jsonl hiển thị cả 💭 suy nghĩ của sub-agent, không chỉ 🔧 tool.
  *
+ * BỔ SUNG r56 (FIX H — kênh FINAL REPORTS): thấy "đang làm gì/nghĩ gì" mà không thấy
+ * KẾT LUẬN vẫn là mù (bằng chứng SENTINEL: sub-agent chốt "trọng tài CHƯA ĐẠT (10%)"
+ * chỉ nằm trong run_end 300 chars; verdict Opus "không đọc được verdict JSON từ model"
+ * không kênh nào bắt; GoalLoopJob.result 9k chars không bao giờ hiển thị). Giờ:
+ *   - LIVE: job chuyển terminal → emit 📋 FINAL REPORT (content + taskSummary +
+ *     detector cú pháp tool-call chạy trên chính báo cáo cuối); poll OpusReview →
+ *     ⚖️ OPUS VERDICT (5 trục + issues + directive + STOP predicate 4/4)
+ *   - SNAPSHOT: taskSummary của mission gần nhất + 2 verdict Opus gần nhất
+ *   - REPLAY: section BÁO CÁO CUỐI + OPUS VERDICT của session; run_end đủ 300 chars
+ *
  * Nguồn dữ liệu (đã kiểm chứng 2026-10-07):
  *   - GoalLoopJob (SQLite): status/heartbeat/cycles + checkpoint JSON
  *       → checkpoint.messages = transcript (assistant content THÔ chứa cả
@@ -18,7 +28,7 @@
  *   - agent-runs/<runId>.jsonl: event stream
  *       type = run_start | thought | tool | todo_update | run_end
  *
- * Chế độ (quy trình vận hành: xem QUY_TRINH_GIAM_SAT_AGENTS.md mục 1b):
+ * Chế độ (giao thức vận hành: xem GIAO_THUC_GIAM_SAT_AGENTS.md mục 1b):
  *   bun scripts/mission-watch.ts                    # SNAPSHOT: tình trạng mission hiện tại
  *   bun scripts/mission-watch.ts --follow           # LIVE: theo dõi realtime (Ctrl+C thoát)
  *   bun scripts/mission-watch.ts --replay <jobId|runId|file> [--tail 50]
@@ -102,13 +112,17 @@ interface JobRow {
   checkpoint: string | null
   stopReason: string | null
   input: string
+  /** FIX H r56 — JSON GoalLoopResult khi completed (content final + taskSummary) */
+  result: string | null
+  /** FIX H r56 — lỗi crash khi failed */
+  error: string | null
 }
 
 function getJobs(db: Database, onlyActive: boolean): JobRow[] {
   const where = onlyActive ? "WHERE status IN ('queued','running')" : ''
   const rows = db
     .query(
-      `SELECT id, sessionId, status, cyclesDone, heartbeatAt, updatedAt, checkpoint, stopReason, input
+      `SELECT id, sessionId, status, cyclesDone, heartbeatAt, updatedAt, checkpoint, stopReason, input, result, error
        FROM GoalLoopJob ${where} ORDER BY updatedAt DESC LIMIT 12`,
     )
     .all() as any[] as JobRow[]
@@ -120,6 +134,80 @@ function agentNameOf(job: JobRow): string {
   const inp = parseMaybeJson(job.input)
   if (!inp) return '?'
   return inp.agentName || inp.agent?.name || inp.agent || inp.agentId || '?'
+}
+
+// ─────────────────────── final reports (FIX H r56 — kênh thứ 5) ───────────────────────
+
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+
+interface FinalReport {
+  content: string
+  taskSummary?: string
+  iterations?: number
+}
+
+/** Bóc báo cáo cuối từ GoalLoopJob.result (JSON GoalLoopResult); failed → error. */
+function finalReportOf(job: JobRow): FinalReport | null {
+  if (job.result) {
+    const r = parseMaybeJson(job.result)
+    if (r && typeof r.content === 'string') {
+      return { content: r.content, taskSummary: r.taskSummary ?? undefined, iterations: r.iterations }
+    }
+    return { content: job.result } // result không đúng shape GoalLoopResult — dùng thô
+  }
+  if (job.error) return { content: `ERROR: ${job.error}` }
+  return null
+}
+
+/** Emit khi job chuyển terminal ở LIVE: báo cáo cuối + detector cú pháp tool-call. */
+function finalReportLines(job: JobRow, maxContent = 1000): string[] {
+  const out: string[] = []
+  const fin = finalReportOf(job)
+  out.push(
+    `${now()} 📋 FINAL REPORT [${agentNameOf(job)} · job${shortId(job.id)}] — ${job.status}${job.stopReason ? ' · stop=' + job.stopReason : ''}`,
+  )
+  if (!fin) {
+    out.push(`${now()}    (không có result/error — job bị dừng trước khi finalize, vd cancel)`)
+    return out
+  }
+  if (fin.taskSummary) out.push(`${now()}    📌 ${trunc(fin.taskSummary, 300)}`)
+  out.push(`${now()}    📄 ${trunc(fin.content, maxContent)}`)
+  for (const w of scanToolSyntax(fin.content)) out.push(`${now()}    ⚠️ ${w}`)
+  return out
+}
+
+/** 5 trục OpusVerdict → "specCompliance: 5/10 · processQuality: 4/10 · …". */
+function fmtAxes(axes: any): string {
+  if (!axes || typeof axes !== 'object') return ''
+  return Object.entries(axes)
+    .map(([k, v]: [string, any]) => `${k}: ${v && typeof v === 'object' && typeof v.score === 'number' ? v.score : '?'}/10`)
+    .join(' · ')
+}
+
+/** 1 OpusReview row → các dòng hiển thị. lines[0] = header, phần còn lại = body. */
+function verdictLines(
+  r: { decision: string; triggerMode?: string | null; verdict?: string | null },
+  verbose: boolean,
+): string[] {
+  const v = parseMaybeJson(r.verdict)
+  const out = [`⚖️ [${r.decision}${r.triggerMode ? '/' + r.triggerMode : ''}]`]
+  if (v?.summary) out.push(`   📝 ${trunc(String(v.summary), verbose ? 400 : 180)}`)
+  const axes = fmtAxes(v?.axes)
+  if (axes) out.push(`   📊 ${axes}`)
+  if (Array.isArray(v?.issues) && v.issues.length) {
+    out.push(`   ⚠️ ${v.issues.length} issue: ${v.issues.map((i: any) => `[${i?.severity ?? '?'}] ${trunc(String(i?.title ?? ''), 70)}`).join(' | ')}`)
+  }
+  if (v?.directive?.goal) out.push(`   📌 directive: ${trunc(String(v.directive.goal), verbose ? 300 : 160)}`)
+  if (verbose && Array.isArray(v?.directive?.acceptanceCriteria) && v.directive.acceptanceCriteria.length) {
+    out.push(`   ✅ nghiệm thu: ${v.directive.acceptanceCriteria.map((c: any) => trunc(String(c), 90)).join(' / ')}`)
+  }
+  if (verbose && v?.stopAssessment) {
+    const s = v.stopAssessment
+    out.push(
+      `   🛑 STOP predicate: ledger ${s.ledgerClean ? '✓' : '✗'} · verify ${s.verificationGreen ? '✓' : '✗'} · spec ${s.specSatisfied ? '✓' : '✗'} · noNewBlocking ${s.noNewBlocking ? '✓' : '✗'}${s.allMet ? ' → ĐỦ 4/4' : ''}`,
+    )
+  }
+  return out
 }
 
 // ─────────────────────────── jsonl tailing ───────────────────────────
@@ -211,7 +299,9 @@ function fmtEvent(e: any): string {
     case 'run_start':
       return `${t} 🚀 [${who}] RUN START ${trunc(e.text || e.label || e.title || JSON.stringify({ runId: e.runId, sessionId: e.sessionId }), 140)}`
     case 'run_end':
-      return `${t} 🏁 [${who}] ${trunc(e.text || JSON.stringify({ success: e.success }), 220)}`
+      // FIX H r56: hiển thị đủ 300 chars đã ghi — dòng "trọng tài CHƯA ĐẠT (10%)"
+      // kiểu SENTINEL phải hiện nguyên vẹn, không cắt mất phán quyết
+      return `${t} 🏁 [${who}] ${trunc(e.text || JSON.stringify({ success: e.success }), 300)}`
     default:
       return `${t} ❓ [${who}] ${e.type} ${trunc(JSON.stringify(e), 140)}`
   }
@@ -347,7 +437,25 @@ function snapshot(): void {
     console.log(
       `║    [${j.status.padEnd(9)}] ${new Date(j.updatedAt).toISOString().slice(5, 16)} [${agentNameOf(j)}] ${fmtTokens(c.tokensUsed)} tokens · ${c.totalToolCalls ?? j.cyclesDone} tools · stop=${j.stopReason ?? '-'}`,
     )
+    // FIX H r56: taskSummary = kết luận 1 dòng của báo cáo cuối
+    const fin = finalReportOf(j)
+    if (fin?.taskSummary) console.log(`║       📋 ${trunc(fin.taskSummary, 160)}`)
   }
+  // FIX H r56: 2 verdict Opus gần nhất — phán quyết không còn mù với operator
+  try {
+    const revs = db
+      .query(`SELECT decision, triggerMode, verdict, createdAt FROM OpusReview ORDER BY createdAt DESC LIMIT 2`)
+      .all() as any[]
+    if (revs.length) {
+      console.log(`║`)
+      console.log(`║ ⚖️ OPUS VERDICT GẦN NHẤT:`)
+      for (const r of revs) {
+        const v = parseMaybeJson(r.verdict)
+        const summary = v?.summary ? trunc(String(v.summary), 140) : trunc(String(r.verdict ?? ''), 140)
+        console.log(`║    [${r.decision}/${r.triggerMode}] ${new Date(r.createdAt).toISOString().slice(5, 16)} 📝 ${summary}`)
+      }
+    }
+  } catch { /* bảng chưa tồn tại — bỏ qua */ }
   console.log('╚══')
   db.close()
 }
@@ -361,6 +469,12 @@ async function follow(): Promise<void> {
   const jobSeen = new Map<string, string>() // jobId → last status
   const activeSessions = new Set<string>()
   const knownRunFiles = new Set<string>()
+  // FIX H r56 — kênh FINAL REPORTS
+  const sessionNames = new Map<string, string>() // sessionId → agentName (giữ cả sau khi job kết thúc)
+  const watchedJobIds = new Set<string>() // job từng thấy queued/running trong phiên watch này
+  const finalEmitted = new Set<string>() // jobId đã emit FINAL REPORT
+  const revSeen = new Set<string>() // OpusReview.id đã xử lý (khởi tạo = toàn bộ row hiện có)
+  let revSeenInit = false
 
   const ensureTail = (file: string) => {
     if (!tails.has(file)) {
@@ -387,6 +501,8 @@ async function follow(): Promise<void> {
     }
     for (const j of jobs) {
       activeSessions.add(j.sessionId)
+      sessionNames.set(j.sessionId, agentNameOf(j))
+      watchedJobIds.add(j.id)
       const prevStatus = jobSeen.get(j.id)
       if (prevStatus !== j.status) {
         jobSeen.set(j.id, j.status)
@@ -404,6 +520,38 @@ async function follow(): Promise<void> {
         emit(`${now()} ⚠️ [${agentNameOf(j)}] heartbeat stale ${fmtMs(hbAge)} — job treo/kẹt?`)
       }
     }
+
+    // 1b) FIX H r56: job vừa chuyển terminal (rời active query ngay khi hoàn thành)
+    //     → emit FINAL REPORT từ result/error
+    try {
+      for (const j of getJobs(db, false)) {
+        sessionNames.set(j.sessionId, agentNameOf(j))
+        if (!TERMINAL_STATUSES.has(j.status)) continue
+        if (finalEmitted.has(j.id) || !watchedJobIds.has(j.id)) continue
+        finalEmitted.add(j.id)
+        emit(`${now()} 🔄 [${agentNameOf(j)}] job${shortId(j.id)} kết thúc: → ${j.status} · stop=${j.stopReason ?? '-'}`)
+        for (const l of finalReportLines(j)) emit(l)
+      }
+    } catch { /* fail-open */ }
+
+    // 1c) FIX H r56: poll OpusReview — verdict mới của Opus (mọi session, mọi chế độ)
+    try {
+      const rows = db
+        .query(`SELECT id, sessionId, decision, triggerMode, verdict, createdAt FROM OpusReview ORDER BY createdAt DESC LIMIT 5`)
+        .all() as any[]
+      if (!revSeenInit) {
+        for (const r of rows) revSeen.add(r.id)
+        revSeenInit = true
+      } else {
+        for (const r of rows.slice().reverse()) {
+          if (revSeen.has(r.id)) continue
+          revSeen.add(r.id)
+          const who = sessionNames.get(r.sessionId) ?? '…' + r.sessionId.slice(-6)
+          emit(`${now()} ⚖️ OPUS VERDICT cho [${who}] · ${hhmmss(new Date(r.createdAt).getTime())}`)
+          for (const l of verdictLines(r, true).slice(1)) emit(`${now()} ${l}`)
+        }
+      }
+    } catch { /* fail-open */ }
 
     // 2) khám phá file jsonl mới (sub-agent delegation bỗng xuất hiện)
     try {
@@ -503,6 +651,34 @@ function replay(target: string, tailN: number): void {
   }
   console.log('╚══')
   console.log('')
+
+  // FIX H r56: BÁO CÁO CUỐI (GoalLoopJob.result) — bản finalize chính thức của mission
+  if (job) {
+    const fin = finalReportOf(job)
+    console.log('── BÁO CÁO CUỐI (GoalLoopJob.result) ──')
+    if (fin) {
+      console.log(`📄 content (${fin.content.length} chars): ${trunc(fin.content, 1500)}`)
+      for (const w of scanToolSyntax(fin.content)) console.log(`   ⚠️ ${w}`)
+      if (fin.taskSummary) console.log(`📌 taskSummary: ${trunc(fin.taskSummary, 400)}`)
+    } else {
+      console.log('(job không có result/error — bị dừng trước khi finalize)')
+    }
+    // FIX H r56: OPUS VERDICT của session — bằng chứng D3 ngay trong hậu kiểm
+    try {
+      const revs = db
+        .query(`SELECT decision, triggerMode, verdict, createdAt FROM OpusReview WHERE sessionId = ? ORDER BY createdAt DESC LIMIT 3`)
+        .all(job.sessionId) as any[]
+      console.log('')
+      console.log(`── OPUS VERDICT session này (${revs.length} review) ──`)
+      if (revs.length === 0) console.log('(chưa có review nào — soi D3.1: run chính có được review đúng chế độ?)')
+      for (const r of revs) {
+        const lines = verdictLines(r, true)
+        console.log(`${lines[0]} · ${new Date(r.createdAt).toISOString().slice(5, 16)}`)
+        for (const l of lines.slice(1)) console.log(l)
+      }
+    } catch { /* bỏ qua */ }
+    console.log('')
+  }
 
   // timeline (đuôi)
   const shown = all.slice(-tailN)
