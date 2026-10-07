@@ -90,7 +90,21 @@ find /tmp -maxdepth 1 -type d -name '.*.node-gyp' -mmin +60 -exec rm -rf {} + 2>
 # → đời sống app dài hơn (cần ≥2-3' liên tục cho request_code_team workflow
 # in-process 10-30' của round-15 directive). Tối quan sát 5': OOM >1 lần → nâng
 # bậc thang trên; RSS đỉnh vẫn >2.05GB → hạ tiếp 1152.
-export NODE_OPTIONS="--max-old-space-size=1280"
+# =============================================================================
+# VÒNG 58 (2026-10-07 15:58) — HẠ 1280 → 1024 sau đợt nâng cấp dependencies
+# (next 16.3.2→16.3.8, openclaw 2026.9.8, sharp 0.35.5 — commit 6b5787a):
+# swap node_modules làmInvalid toàn bộ turbopack dev-cache → mọi route phải
+# cold-compile lại → restart-loop SIGINT mỗi 2-4' (đo trực tiếp: next-server
+# RSS chạm 2144MB đúng ngưỡng reaper ~2.1-2.2GB dù old-space cap 1280 còn nguyên
+# —process con bị next dev append thêm `--enable-source-maps` (vòng 10 đã biết:
+# giữ map toàn bộ module graph trong RAM), external của bộ deps mới phình thêm
+# ~250-350MB so với thời vòng 15 → 1280+external ~860MB = 2.14GB lọt vùng chết).
+# Hạ theo đúng bậc thang vòng 15 (2 nấc — OOM kernel giết ở burst 2.4-2.7GB dù cap 1152:
+# external của cold-compile "/" là số thống trị). RSS đỉnh kỳ vọng ~1.9GB < 2.4GB-ceiling. Nếu log
+# xuất "JavaScript heap out of memory" → nâng lại 1280; nếu đỉnh vẫn >2.05GB →
+# hạ tiếp 1024. (Sau khi dev-cache ấm trở lại, steady-state ~450-500MB — cap
+# chỉ tác động pha compile.)
+export NODE_OPTIONS="--max-old-space-size=1024"
 
 # Khởi động Next.js — exec để PM2 sở hữu trực tiếp process node next
 cd "$(dirname "$0")/.."
