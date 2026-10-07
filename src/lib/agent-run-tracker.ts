@@ -120,6 +120,10 @@ export interface AgentRun {
   startedAt: number
   endedAt?: number
   status: 'running' | 'done' | 'error' | 'cancelled'
+  /** r60 (C7) — stopReason thật caller truyền vào endAgentRun (vd 'concluded',
+   * 'stall_brake', 'no_progress'...) — persist xuống AgentRunRecord.stopReason
+   * thay cho mapping chung chung theo status. */
+  stopReasonFinal?: string
   events: AgentRunEvent[]
   counters: AgentRunCounters
   lastTodos?: AgentRunTodo[]
@@ -160,8 +164,14 @@ const RESULT_PREVIEW_MAX_CHARS = 900
 //
 // Thư mục agent-runs/ nằm trong danh sách infra-guard bảo vệ (chống agent tự
 // sửa bằng chứng của mình) — đọc được, ghi đè thì không.
-
-const RUN_TRAILS_DIR = path.join(process.cwd(), 'agent-runs')
+// r60 (C6 — leak jsonl lặp ≥2 phiên → fix cấu trúc theo nguyên tắc 4 giao
+// thức): env TMO_AGENT_RUNS_DIR cho phép TÁCH thư mục ghi (quality-gate trỏ
+// sang /tmp khi chạy bun test — test units ghi jsonl TEST-* đã 4 lần rơi vào
+// agent-runs/ THẬT của repo: 14:46/15:29/15:41/16:34 trong các phiên 58-59;
+// mặc định KHÔNG đặt env → giữ nguyên hành vi cũ).
+const RUN_TRAILS_DIR = (process.env.TMO_AGENT_RUNS_DIR || '').trim() !== ''
+  ? path.resolve((process.env.TMO_AGENT_RUNS_DIR || '').trim())
+  : path.join(process.cwd(), 'agent-runs')
 /** Chống path traversal qua runId (runId do hệ sinh, nhưng phòng xa) */
 const RUN_ID_SAFE_RE = /^[A-Za-z0-9_-]{1,80}$/
 
@@ -395,8 +405,14 @@ function persistAgentRunRecord(run: AgentRun): void {
       status: runStatusToRecordStatus(run.status),
       // v1 heuristic — stopReason budget thật (max_cycles/time_budget/
       // token_budget/no_progress) nằm trong goal-loop, task 20-c wire
-      stopReason: run.status === 'done' ? 'complete' : run.status === 'error' ? 'error' : 'cancelled',
+      // r60 (C7): caller truyền stopReasonFinal (vd 'stall_brake'/'concluded'
+      // của delegation) → dùng nó; không có → mapping cũ.
+      stopReason: run.stopReasonFinal ?? (run.status === 'done' ? 'complete' : run.status === 'error' ? 'error' : 'cancelled'),
       ...(run.tokensUsed != null ? { tokensUsed: run.tokensUsed } : {}), // FIX 2026-09-15 #6: token thật từ caller
+      // r60 (C7) — cycles: recordAgentThought đã track counters.iterations =
+      // max vòng đã ghi; trước đây luôn null → sub-agent rows không hiện số vòng
+      // (update type là number|undefined — null chỉ hợp lệ ở nhánh insert)
+      cycles: run.counters.iterations > 0 ? run.counters.iterations : undefined,
       toolCalls: run.counters.toolCalls,
       toolFailures,
       durationMs: Math.max(0, endedAt - run.startedAt),
@@ -421,8 +437,9 @@ function persistAgentRunRecord(run: AgentRun): void {
           agentId: null, // 20-c: wire agentId (tracker chỉ có agentName)
           agentName: run.agentName,
           status: runStatusToRecordStatus(run.status),
-          stopReason: run.status === 'done' ? 'complete' : run.status === 'error' ? 'error' : 'cancelled',
-          cycles: null, // 20-c: wire số chu kỳ goal-loop
+          stopReason: run.stopReasonFinal ?? (run.status === 'done' ? 'complete' : run.status === 'error' ? 'error' : 'cancelled'),
+          // r60 (C7) — cycles thật từ counters (trước đây null cứng)
+          cycles: run.counters.iterations > 0 ? run.counters.iterations : null,
           tokensUsed: run.tokensUsed ?? null,
           toolCalls: run.counters.toolCalls,
           toolFailures,
@@ -515,6 +532,12 @@ export function endAgentRun(
   /** FIX 2026-09-15 #6 (P4): token usage thật tích lũy của run — optional,
    * mọi caller cũ không truyền giữ behavior nguyên vẹn. */
   tokensUsed?: number,
+  /** r60 (C7) — stopReason THẬT của run (vd 'concluded'/'stall_brake'/
+   * 'no_progress'/'token_budget'/'timeout' của delegation) — trước đây mọi
+   * delegation kết thúc 'done' đều ghi stopReason 'complete' chung chung,
+   * mất khả năng phân loại sự cố qua SQL (bằng chứng r59: hậu kiểm phải đọc
+   * text run_end thay vì truy vấn cột). Không truyền → giữ mapping cũ. */
+  stopReason?: string,
 ): void {
   try {
     if (!sessionId) return
@@ -532,6 +555,10 @@ export function endAgentRun(
     // FIX 2026-09-15 #6 (P4): gắn token thật trước khi persist (nếu caller truyền)
     if (typeof tokensUsed === 'number' && tokensUsed > 0) {
       run.tokensUsed = tokensUsed
+    }
+    // r60 (C7) — stopReason thật của run (nếu caller truyền)
+    if (stopReason && stopReason.trim() !== '') {
+      run.stopReasonFinal = stopReason.trim().slice(0, 40)
     }
     pushEvent(run, {
       id: nextEventId(),

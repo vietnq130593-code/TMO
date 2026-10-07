@@ -774,7 +774,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'file_list',
-      description: 'Liệt kê nội dung thư mục (shallow hoặc tree). Tự bỏ node_modules/.next/.git/dist/build + rác phổ biến (.aider.tags.cache.v4/.cache/coverage/__pycache__...); ignore của caller ĐƯỢC CỘNG THÊM vào default (không thay thế). Sắp xếp theo độ sâu (level 1 trước, A-Z trong từng level). Tối đa 60 entries — vượt trả truncated:true + total thật: thu hẹp path/depth hoặc dùng pattern để xem tiếp. Trả name/type/size/mtime + total/entriesShown.',
+      description: 'Liệt kê nội dung thư mục (shallow hoặc tree). Tự bỏ node_modules/.next/.git/dist/build + rác phổ biến; ignore của caller ĐƯỢC CỘNG THÊM vào default (không thay thế). Sắp xếp theo độ sâu (level 1 trước, A-Z trong từng level). Tối đa 60 entries — vượt trả truncated:true + total thật: thu hẹp path/depth hoặc dùng pattern để xem tiếp. Trả name/type/size/mtime + total/entriesShown. NHIỆM VỤ ĐẾM → truyền count_only:true — trả bộ số máy (total/files/dirs/byDepth) không kèm danh sách, rẻ và chính xác hơn đếm tay.',
       parameters: {
         type: 'object',
         properties: {
@@ -782,6 +782,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           depth: { type: 'number', description: 'Độ sâu tối đa (1-5, mặc định 1)' },
           ignore: { type: 'array', items: { type: 'string' }, description: 'Tên thư mục/file BỔ SUNG bỏ qua (cộng vào danh sách mặc định)' },
           pattern: { type: 'string', description: 'Chỉ hiện file khớp glob (vd "*.ts", "*.json") — thư mục vẫn đi qua để tìm file bên trong' },
+          count_only: { type: 'boolean', description: 'true = chỉ trả SỐ ĐẾM máy (total/files/dirs/byDepth), không trả danh sách — dùng cho nhiệm vụ đếm (số máy là nguồn chân lý, không cần đếm tay)' },
         },
       },
     },
@@ -790,14 +791,14 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'grep',
-      description: 'Tìm nội dung file bằng regex (JS regex, case-insensitive). mode: content/files/count. Tự bỏ node_modules/.next/.git. Dùng để tìm lỗi, tìm usage, recon trước khi sửa.',
+      description: 'Tìm nội dung file bằng regex (JS regex, case-insensitive). mode: content/files/count. Tự bỏ node_modules/.next/.git. Dùng để tìm lỗi, tìm usage, recon trước khi sửa. NHIỆM VỤ ĐẾM → mode "count" trả totalMatches (số máy — nguồn chân lý) + filesScanned + số match từng file.',
       parameters: {
         type: 'object',
         properties: {
           pattern: { type: 'string', description: 'Regex pattern (JS syntax)' },
           path: { type: 'string', description: 'Thư mục/file cần search (mặc định root)' },
           glob: { type: 'string', description: 'Filter filename glob (vd "*.test.ts")' },
-          mode: { type: 'string', enum: ['content', 'files', 'count'], description: 'content = trả matches, files = chỉ filenames, count = đếm' },
+          mode: { type: 'string', enum: ['content', 'files', 'count'], description: 'content = trả matches, files = chỉ filenames + tổng, count = đếm số match (totalMatches là số máy)' },
           context: { type: 'number', description: 'Số dòng context trước/sau match (0-5)' },
           head_limit: { type: 'number', description: 'Giới hạn số matches (mặc định 100, max 500)' },
         },
@@ -1829,21 +1830,20 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     function: {
       name: 'delegate_task',
       description:
-        'DELEGATE task cho agent chuyên trách của Code Team — sub-agent chạy tự chủ (đọc/sửa file, chạy lệnh, kiểm định) ' +
-        'và trả về BÁO CÁO NÉN (đã làm · bằng chứng tool · còn thiếu). ' +
+        'DELEGATE task cho agent chuyên trách — sub-agent chạy tự chủ (đọc/sửa file, chạy lệnh, kiểm định) ' +
+        'và trả về BÁO CÁO NÉN (đã làm · bằng chứng tool · còn thiếu) kèm verdict của trọng tài độc lập. ' +
         'Dùng khi: (1) task code lớn cần implement/review/tối ưu chuyên sâu, (2) muốn giảm tải context của bạn — ' +
-        'sub-agent đọc nhiều file mà context của bạn KHÔNG phình, (3) cần góc nhìn chuyên trách (security review, arch design). ' +
+        'sub-agent đọc nhiều file mà context của bạn KHÔNG phình, (3) cần góc nhìn chuyên trách (security review, arch design, nghiên cứu). ' +
         'KHÔNG dùng cho task 1-2 bước đơn giản — tự làm nhanh hơn. Chọn đúng agent: MEGATRON=phân tích/verify tổng thể, ' +
         'SHOCWAVE=thiết kế kiến trúc/DB/API, RAMPAGE=implement code, SENTINEL=review/bug/security, CATALYST=tối ưu/refactor, ' +
         'FORGE=full-stack builder END-TO-END (UI + API + DB + tự kiểm định + preview verify — tính năng trọn gói tự chứa). ' +
-        '(TASK 48: agent security "Linh Sickyx" giờ là standalone ĐỘC LẬP — KHÔNG delegate_task được; gọi qua dispatch_agent.)',
+        'Ngoài Code Team: TÊN agent standalone trong Agent Roster (vd ALISTA — nghiên cứu/thu thập dữ liệu) cũng ĐƯỢC — hệ thống tự resolve theo tên (r60).',
       parameters: {
         type: 'object',
         properties: {
           agent: {
             type: 'string',
-            enum: ['MEGATRON', 'SHOCWAVE', 'RAMPAGE', 'SENTINEL', 'CATALYST', 'FORGE'],
-            description: 'Agent chuyên trách sẽ nhận task',
+            description: 'Agent sẽ nhận task — Code Team (MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/CATALYST/FORGE) hoặc tên agent standalone trong Agent Roster (vd ALISTA) — resolve theo tên (r60)',
           },
           task: {
             type: 'string',
@@ -3697,32 +3697,91 @@ export async function executeTool(
           }
         }
         try {
-          const { runSubAgent, resolveDelegationTarget, DELEGATABLE_AGENTS } = await import('@/lib/subagent-delegate')
-          const target = resolveDelegationTarget(args.agent ?? args.agentName)
-          if (!target) {
-            result = {
-              success: false,
-              error: `Agent "${String(args.agent ?? '')}" không hợp lệ. Chọn một trong: ${DELEGATABLE_AGENTS.map(a => a.name).join(', ')}.`,
-            }
-            break
-          }
+          const { runSubAgent, runSubAgentForProfile, resolveDelegationTarget, DELEGATABLE_AGENTS } = await import('@/lib/subagent-delegate')
           const task = String(args.task ?? args.description ?? '').trim()
           if (!task) {
             result = { success: false, error: 'Thiếu "task" — mô tả nhiệm vụ cụ thể cho sub-agent.' }
             break
           }
-          const outcome = await runSubAgent({
-            position: target,
-            task,
-            context: args.context ? String(args.context) : undefined,
-            // DELEGATION CONTRACT (fix 2026-09-12): điều kiện hoàn thành kiểm
-            // định được — sub-agent tự verify từng điều kiện + báo cáo ĐẠT/CHƯA ĐẠT;
-            // parentRunId để hiển thị nguồn giao việc trong Thought Process panel.
-            acceptanceCriteria: args.acceptance_criteria ? String(args.acceptance_criteria) : undefined,
-            parentRunId: context?.runId ?? null,
-            parentAgentName: context?.agentName || 'parent-agent',
-            sessionId: context?.sessionId ?? null,
-          })
+          // r60 (A4 — từ bằng chứng r59 mission …9k3kp8: Omega delegate_task
+          // ALISTA bị từ chối "không hợp lệ" vì enum/POSITION_BY_NAME chỉ có Code
+          // Team → phải mò sang dispatch_agent). Giờ: tên KHÔNG khớp Code Team →
+          // resolve theo TÊN trong AgentProfile DB (mirror dispatchAgentByOmega,
+          // mọi agent kể cả standalone ALISTA/Linh Sickyx/custom) → chạy thẳng
+          // runSubAgentForProfile với đầy đủ delegation contract (acceptance +
+          // trọng tài độc lập + todo scope). Chỉ KHÔNG tìm thấy ở cả 2 nơi mới báo lỗi.
+          const target = resolveDelegationTarget(args.agent ?? args.agentName)
+          let outcome: import('@/lib/subagent-delegate').SubAgentOutcome | null = null
+          if (target) {
+            outcome = await runSubAgent({
+              position: target,
+              task,
+              context: args.context ? String(args.context) : undefined,
+              acceptanceCriteria: args.acceptance_criteria ? String(args.acceptance_criteria) : undefined,
+              parentRunId: context?.runId ?? null,
+              parentAgentName: context?.agentName || 'parent-agent',
+              sessionId: context?.sessionId ?? null,
+            })
+          } else {
+            const agentName = String(args.agent ?? args.agentName ?? '').trim()
+            if (!agentName) {
+              result = {
+                success: false,
+                error: `Thiếu "agent" — Code Team (${DELEGATABLE_AGENTS.map(a => a.name).join(', ')}) hoặc tên agent standalone trong Agent Roster.`,
+              }
+              break
+            }
+            // Resolve theo tên (DB-first) — standalone agents (ALISTA...) giờ
+            // delegate_task được (r60). Opus là CTO — không điều động thi công.
+            // (type = SubAgentProfile của subagent-delegate — id string|undefined)
+            let profile: import('@/lib/subagent-delegate').SubAgentProfile | null = null
+            try {
+              const row = await db.agentProfile.findFirst({
+                where: { name: agentName, enabled: true },
+                select: {
+                  id: true, name: true, instruction: true, provider: true, model: true,
+                  temperature: true, maxTokens: true, tools: true,
+                },
+              })
+              if (row && row.provider && row.model) {
+                profile = {
+                  // SubAgentProfile.id là string|undefined — row.id có thể null
+                  id: row.id ?? undefined, name: row.name, instruction: row.instruction ?? '',
+                  provider: row.provider, model: row.model,
+                  temperature: row.temperature ?? 0.3, maxTokens: row.maxTokens ?? -1,
+                  tools: Array.isArray(row.tools) ? (row.tools as string[]) : [],
+                }
+              }
+            } catch { /* fail-open — rơi báo lỗi dưới */ }
+            if (!profile) {
+              // r60 — OPUS_AGENT_NAME xuất từ @/lib/opus/opus-agent (không phải
+              // omega-orchestrator); dynamic import như subagent-delegate phía
+              // dưới — tránh vòng tĩnh với opus-agent (nó import tool-executor).
+              let opusName = 'OPUS'
+              try {
+                const { OPUS_AGENT_NAME } = await import('@/lib/opus/opus-agent')
+                opusName = OPUS_AGENT_NAME
+              } catch { /* fail-open — so sánh fallback 'OPUS' */ }
+              result = {
+                success: false,
+                error: `Agent "${agentName}" không resolve được (không có trong Code Team lẫn Agent Roster, hoặc đang tắt/thiếu provider-model${agentName.toUpperCase() === opusName ? ' — Opus là CTO, không điều động thi công' : ''}). Code Team: ${DELEGATABLE_AGENTS.map(a => a.name).join(', ')}. Standalone: xem Agent Roster (dispatch_agent roster / manage_tools).`,
+              }
+              break
+            }
+            outcome = await runSubAgentForProfile({
+              profile,
+              task,
+              context: args.context ? String(args.context) : undefined,
+              acceptanceCriteria: args.acceptance_criteria ? String(args.acceptance_criteria) : undefined,
+              parentRunId: context?.runId ?? null,
+              parentAgentName: context?.agentName || 'parent-agent',
+              sessionId: context?.sessionId ?? null,
+            })
+          }
+          if (!outcome) {
+            result = { success: false, error: 'delegate_task không trả kết quả (runner lỗi).' }
+            break
+          }
           result = {
             success: outcome.success,
             agent: outcome.agent,

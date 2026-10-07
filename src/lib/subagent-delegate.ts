@@ -101,6 +101,25 @@ const SUBAGENT_TIMEOUT_MS = intEnv('SUBAGENT_TIMEOUT_MS', 8 * 60_000)
  * goal-loop, nơi user cũng đã đặt 0 = ∞ thật).
  */
 const SUBAGENT_HARD_CEILING_ITERATIONS = intEnv('SUBAGENT_HARD_CEILING_ITERATIONS', 200)
+/**
+ * r60 (A1/C4 — từ quan sát mission r59): khi SUBAGENT_TIMEOUT_MS = 0 (vô hạn
+ * theo user directive 2026-10), sub-agent "productive fixation" (ALISTA#1:
+ * 27 vòng/56 calls/1.47M tokens cho tác vụ ĐẾM — xen kẽ nháp báo cáo + file_list
+ * làm chữ ký mỗi vòng khác nhau → stall brake batch-signature mãi mới cắt)
+ * không còn điểm dừng thời gian nào. User directive 2026-10-07 (phiên fix r60):
+ * "token không quan tâm — công việc phải hiệu quả" → giữ iter/token = ∞ nhưng
+ * bổ sung WALL-CLOCK hào phóng: trần thời gian dự phòng 15 phút MẶC ĐỊNH áp
+ * dụng khi timeout = 0 (đủ cho task lớn — FORGE end-to-end ~10-12'; fixation
+ * kiểu 45+ phút bị cắt). Env SUBAGENT_WALL_CLOCK_MS; 0 = TẮT (vô hạn thật).
+ */
+const SUBAGENT_WALL_CLOCK_MS = intEnv('SUBAGENT_WALL_CLOCK_MS', 15 * 60_000)
+/** r60 (A1b) — PER-CALL REPEAT BRAKE: 1 tool call (tên + args nguyên văn) xuất
+ * hiện ≥N lần trong TOÀN BỘ run (không cần liên tiếp) → wrap-up no_progress.
+ * Bắt đúng "productive fixation": ALISTA#1 gọi file_list giống hệt nhau 21 lần
+ * rải rác 27 vòng — batch-signature (chỉ bắt vòng GIỐNG HỆT liên tiếp) không bao
+ * giờ khớp vì các call khác xen kẽ làm đổi chữ ký vòng. Mirror ngưỡng 8 của
+ * signatureOverrun goal-loop. 0 = tắt. */
+const SUBAGENT_STALL_CALL_REPEATS = intEnv('SUBAGENT_STALL_CALL_REPEATS', 8)
 const ALL_SUBAGENT_CAPS_UNLIMITED =
   SUBAGENT_MAX_ITERATIONS === 0 && SUBAGENT_TOKEN_BUDGET === 0 && SUBAGENT_TIMEOUT_MS === 0
 const SUBAGENT_EFFECTIVE_MAX_ITERATIONS = ALL_SUBAGENT_CAPS_UNLIMITED
@@ -203,7 +222,7 @@ export interface SubAgentOutcome {
   tokensUsed: number
   iterations: number
   toolCalls: number
-  endedBy: 'concluded' | 'iteration_limit' | 'token_budget' | 'timeout' | 'cancelled' | 'error'
+  endedBy: 'concluded' | 'iteration_limit' | 'stall_brake' | 'token_budget' | 'timeout' | 'cancelled' | 'error'
   /** evidence lines — parent có thể nối vào nhật ký bằng chứng của mình */
   evidence: string[]
   error?: string
@@ -587,7 +606,11 @@ async function runSubAgentForProfileInner(params: {
     }
     finishDelegationRun = (status: 'done' | 'error' | 'cancelled', summary: string) => {
       if (!delegationRunId || !sessionId) return
-      try { endAgentRun(sessionId, delegationRunId, status, summary) } catch { /* fail-open */ }
+      // r60 (C7) — persist token/third metadata thật của delegation vào
+      // AgentRunRecord (trước đây endAgentRun không nhận tokensUsed/stopReason
+      // → row delegation ghi tokensUsed=null, stopReason chung chung 'complete'
+      // — bằng chứng r59: hậu kiểm phải đọc outcome từ text run_end thay vì SQL).
+      try { endAgentRun(sessionId, delegationRunId, status, summary, tokensUsed, state.endedBy) } catch { /* fail-open */ }
     }
 
     const maxIterDisplay = ALL_SUBAGENT_CAPS_UNLIMITED
@@ -595,7 +618,12 @@ async function runSubAgentForProfileInner(params: {
           ? `${SUBAGENT_HARD_CEILING_ITERATIONS} (trần cứng dự phòng — cả 3 cap = 0)`
           : '∞ (KHÔNG GIỚI HẠN — user directive)')
       : SUBAGENT_MAX_ITERATIONS === 0 ? '∞' : String(SUBAGENT_MAX_ITERATIONS)
-    console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${maxIterDisplay} vòng, budget ${SUBAGENT_TOKEN_BUDGET === 0 ? '∞' : SUBAGENT_TOKEN_BUDGET} tokens${SUBAGENT_TIMEOUT_MS === 0 ? ', timeout ∞' : ''}, ${allowedTools.length} tools${delegationRunId ? `, run ${delegationRunId.slice(0, 22)}…` : ''})`)
+    // r60 (C4) — hiển thị wall-clock khi timeout ∞: operator đọc log thấy ngay
+    // điểm dừng thời gian dự phòng đang áp dụng.
+    const timeoutDisplay = SUBAGENT_TIMEOUT_MS > 0
+      ? `${Math.round(SUBAGENT_TIMEOUT_MS / 60000)}'`
+      : (SUBAGENT_WALL_CLOCK_MS > 0 ? `∞ nhưng wall-clock an toàn ${Math.round(SUBAGENT_WALL_CLOCK_MS / 60000)}' (r60)` : '∞')
+    console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${maxIterDisplay} vòng, budget ${SUBAGENT_TOKEN_BUDGET === 0 ? '∞' : SUBAGENT_TOKEN_BUDGET} tokens, timeout ${timeoutDisplay}, ${allowedTools.length} tools${delegationRunId ? `, run ${delegationRunId.slice(0, 22)}…` : ''})`)
 
     // ROUND-50 FIX (P2-γ r49) — TODO SCOPE RIÊNG CHO SUB-AGENT:
     // trước đây todo_write bị ép sessionId = session chat CHA (để hiển thị
@@ -635,6 +663,14 @@ async function runSubAgentForProfileInner(params: {
         console.log(`[SubAgent] V3.3 — episodic brain PRE-ACT cho ${profile.name}: ${brain.appliedLessonIds.length} lesson applied`)
       }
     } catch { /* fail-open — sub-agent chạy như cũ */ }
+
+    // r60 (B1/B2/B3 — từ quan sát tư duy r59) — BLOCK KỶ LUẬT SỐ LIỆU cho
+    // sub-agent (mirror NGUYÊN TẮC SỐ LIỆU của goal-loop): 3 lỗi tư duy quan
+    // sát được: (1) tin phép tự đếm tay 96 hơn metadata total=97 của tool;
+    // (2) re-verify tuyệt đối 162k tokens cho đáp án đã có bằng chứng (ALISTA#2);
+    // (3) không dám đọc lại file 4ms để trích dẫn vì hiểu quy tắc không-lặp
+    // một cách quá câu nệ. Không sửa instruction gốc trong DB — chỉ append.
+    systemPrompt += `\n\n📊 NGUYÊN TẮC SỐ LIỆU (bắt buộc):\n- METADATA CỦA TOOL LÀ NGUỒN CHÂN LÝ: total/rowCount/totalMatches/exitCode trong kết quả tool là số MÁY ĐO — dùng thẳng, KHÔNG tự đếm tay danh sách. Mâu thuẫn → tin metadata trừ khi có bằng chứng tool trực tiếp bác. Cần đếm → file_list({"count_only":true,...}) / grep mode count.\n- KIỂM ĐỊNH MỘT LẦN ĐỦ: kết quả đã có bằng chứng độc lập → KHÔNG đo lại cùng phép đo; chỉ đo lại khi có bằng chứng MỚI mâu thuẫn.\n- ĐỌC LẠI FILE NHỎ ĐỂ TRÍCH DẪN NGUYÊN VĂN bằng chứng là HỢP PHÁP (không phải lặp việc) — cấm là lặp MỘT VIỆC y hệt không ra kết quả mới.\n- KẾT THÚC: báo cáo đủ đã làm (bằng chứng tool) + còn thiếu + đề xuất — trung thực, không khẳng định quá bằng chứng.`
 
     const transcript: Array<{ role: 'user' | 'assistant' | 'tool'; content: string }> = [
       { role: 'user', content: buildDelegationPrompt(profile.name, task, context, allowedTools, parentAgentName, acceptanceCriteria) },
@@ -681,6 +717,9 @@ async function runSubAgentForProfileInner(params: {
     // ROUND-54 FIX C — stall-brake state: signature vòng trước + chuỗi trùng
     let lastRoundSig = ''
     let sameSigStreak = 0
+    // r60 (A1b) — PER-CALL REPEAT: đếm từng call-signature XUYÊN SUỐT run (Map
+    // ngoài vòng lặp) — 1 call lặp N lần rải rác nhiều vòng cũng bị bắt.
+    const runCallSigCounts = new Map<string, number>()
 
     const loopPromise = (async () => {
       // CI-1 (0 = UNLIMITED): cap = 0 → KHÔNG trần tương ứng (vòng / token /
@@ -690,8 +729,14 @@ async function runSubAgentForProfileInner(params: {
       while (SUBAGENT_EFFECTIVE_MAX_ITERATIONS === 0 || iterations < SUBAGENT_EFFECTIVE_MAX_ITERATIONS) {
         if (isCancelled()) { state.endedBy = 'cancelled'; return }
         if (timedOut) { return } // zombie guard — parent đã nhận timeout
+        // r60 (C4) — WALL-CLOCK dự phòng khi timeout = 0 (vô hạn theo user
+        // directive): 15' mặc định — cắt "productive fixation" kiểu ALISTA#1
+        // (27 vòng 1.47M tokens) mà không bóp task lớn thật sự (đủ 10-12').
         if (SUBAGENT_TIMEOUT_MS > 0 && Date.now() - startedAt > SUBAGENT_TIMEOUT_MS - 60_000) {
           state.forceWrapUp = true; state.wrapUpReason = 'gần hết thời gian'; break
+        }
+        if (SUBAGENT_TIMEOUT_MS === 0 && SUBAGENT_WALL_CLOCK_MS > 0 && Date.now() - startedAt > SUBAGENT_WALL_CLOCK_MS - 60_000) {
+          state.forceWrapUp = true; state.wrapUpReason = `gần hết thời gian (wall-clock an toàn ${Math.round(SUBAGENT_WALL_CLOCK_MS / 60000)} phút — token/vòng vẫn vô hạn)`; break
         }
         if (SUBAGENT_TOKEN_BUDGET > 0 && tokensUsed >= SUBAGENT_TOKEN_BUDGET) {
           state.forceWrapUp = true; state.wrapUpReason = 'hết token budget của sub-agent'; break
@@ -700,10 +745,16 @@ async function runSubAgentForProfileInner(params: {
         iterations++
         // USER DIRECTIVE 2026-10-29 — bằng chứng CI-2 của batch này (reset mỗi vòng)
         let batchEvidence: string[] = []
+        // r60 (C3) — STATUS-AWARENESS cho sub-agent: dòng trạng thái bám vào
+        // prompt mỗi vòng (KHÔNG đụng transcript — chỉ thêm vào formatted) để
+        // sub-agent thấy chính số vòng/tool/token của mình (bằng chứng r59:
+        // ALISTA#1 xoay vòng 27 lần không hay biết mình đang quay vòng). Nhấn
+        // tiến-triển > tiết-kiệm (user directive: token không là ràng buộc).
+        const subStatusNote = `\n\n📊 TRẠNG THÁI (vòng ${iterations} · ${toolCallCount} tool calls, ${successfulToolCalls} thành công · ~${Math.round(tokensUsed / 1000)}k tokens): token KHÔNG giới hạn — nhưng KHÔNG lặp một phép đo đã có kết quả (dùng total/rowCount/số máy từ tool); cùng lỗi 2 lần → đổi cách; xong phần việc → kết luận trung thực phần đã làm + còn thiếu.`
         const formatted = transcript
           .map(m => `\n\n[${m.role === 'user' ? 'USER' : m.role === 'assistant' ? 'ASSISTANT' : 'TOOL RESULT'}]: ${m.content}`)
           .join('')
-          .trim()
+          .trim() + subStatusNote
 
         let result: Awaited<ReturnType<typeof callLLMForAgent>> | null = null
         try {
@@ -850,9 +901,27 @@ async function runSubAgentForProfileInner(params: {
         // model có kết quả trong tay, chỉ đang quay vòng).
         // (signature dùng stableStringify cục bộ — safeStringify của file này
         // typed hẹp cho envelope {tool,success,result} nên không dùng lại được)
+        // r60 (A1b) — PER-CALL REPEAT: cộng dồn chữ ký TỪNG call vào bộ đếm
+        // xuyên suốt run (bắt "productive fixation" rải rác nhiều vòng —
+        // ALISTA#1 r59: file_list ×21 xen kẽ nháp báo cáo nên batch-signature
+        // không bao giờ khớp; per-call thì mọi lần gọi đều được tính).
+        for (const tc of toolCalls) {
+          const cs = `${tc.name}::${stableArgsString(tc.args)}`
+          runCallSigCounts.set(cs, (runCallSigCounts.get(cs) || 0) + 1)
+        }
         const roundSig = toolCalls.map(tc => `${tc.name}::${stableArgsString(tc.args)}`).sort().join('|||')
         if (roundSig === lastRoundSig) sameSigStreak++
         else { sameSigStreak = 1; lastRoundSig = roundSig }
+        const overrunCall = SUBAGENT_STALL_CALL_REPEATS > 0
+          ? [...runCallSigCounts.entries()].find(([, n]) => n >= SUBAGENT_STALL_CALL_REPEATS)
+          : undefined
+        if (overrunCall && !timedOut && !isCancelled()) {
+          state.forceWrapUp = true
+          state.wrapUpReason = `no_progress — call "${overrunCall[0].slice(0, 100)}" lặp ${overrunCall[1]} lần trong run (rải rác các vòng — per-call brake r60)`
+          if (result.content) state.lastContent = result.content
+          console.warn(`[SubAgent] ${profile.name} PER-CALL STALL BRAKE (r60): 1 tool call lặp ${overrunCall[1]} lần — ${overrunCall[0].slice(0, 90)} → wrap-up conclude`)
+          break
+        }
         if (SUBAGENT_STALL_SIG_REPEATS > 0 && sameSigStreak >= SUBAGENT_STALL_SIG_REPEATS && !timedOut && !isCancelled()) {
           state.forceWrapUp = true
           state.wrapUpReason = `no_progress — lặp tool-signature giống hệt nhau ${sameSigStreak} vòng liên tiếp (${toolCalls.map(tc => tc.name).join(', ')})`
@@ -1044,17 +1113,29 @@ async function runSubAgentForProfileInner(params: {
 
       // Phân loại kết thúc khi loop thoát KHÔNG qua concluded/cancelled/error/
       // timeout — trước đây dead-code vì endedBy khởi tạo 'error' (fix ở trên).
+      // r60 (A3) — wrapUpReason bắt đầu 'no_progress' (stall brake) giờ gắn nhãn
+      // ĐÚNG 'stall_brake' thay vì rơi nhánh else 'iteration_limit' (bằng chứng
+      // r59: dev.log in STALL BRAKE nhưng run_end ghi "[Delegation] iteration_limit"
+      // — operator đọc sai loại sự cố khi hậu kiểm).
       if (state.endedBy !== 'concluded' && state.endedBy !== 'cancelled' && state.endedBy !== 'error' && state.endedBy !== 'timeout') {
         state.forceWrapUp = true
         if (!state.wrapUpReason) state.wrapUpReason = `hết ${SUBAGENT_EFFECTIVE_MAX_ITERATIONS === 0 ? '∞' : SUBAGENT_EFFECTIVE_MAX_ITERATIONS} vòng${ALL_SUBAGENT_CAPS_UNLIMITED && SUBAGENT_HARD_CEILING_ITERATIONS > 0 ? ' (trần cứng dự phòng — cả 3 cap = 0)' : ''}`
-        state.endedBy = state.wrapUpReason.includes('token')
-          ? 'token_budget'
-          : state.wrapUpReason.includes('thời gian') ? 'timeout' : 'iteration_limit'
+        state.endedBy = state.wrapUpReason.startsWith('no_progress')
+          ? 'stall_brake'
+          : state.wrapUpReason.includes('token')
+            ? 'token_budget'
+            : state.wrapUpReason.includes('thời gian') ? 'timeout' : 'iteration_limit'
       }
     })()
 
-    if (SUBAGENT_TIMEOUT_MS > 0) {
-      await withTimeout(loopPromise, SUBAGENT_TIMEOUT_MS, `SubAgent ${profile.name} loop`)
+    // r60 (C4) — outer bound: timeout > 0 → dùng nó; timeout = 0 nhưng wall-clock
+    // > 0 → wall-clock + 3' grace cho wrap-up LLM call cuối; cả hai = 0 → vô hạn
+    // thật (user directive cũ giữ nguyên khi đặt cả 2 env = 0).
+    const SUBAGENT_LOOP_BOUND_MS = SUBAGENT_TIMEOUT_MS > 0
+      ? SUBAGENT_TIMEOUT_MS
+      : (SUBAGENT_WALL_CLOCK_MS > 0 ? SUBAGENT_WALL_CLOCK_MS + 180_000 : 0)
+    if (SUBAGENT_LOOP_BOUND_MS > 0) {
+      await withTimeout(loopPromise, SUBAGENT_LOOP_BOUND_MS, `SubAgent ${profile.name} loop`)
         .catch(err => {
           timedOut = true // loop vẫn chạy nền — sẽ tự dừng ở checkpoint gần nhất
           if (state.endedBy === 'error' && !state.errorMessage) state.errorMessage = err instanceof Error ? err.message : String(err)
@@ -1072,7 +1153,9 @@ async function runSubAgentForProfileInner(params: {
 
     // ===== Báo cáo NÉN trả về parent =====
     let report = state.lastContent
-    const needWrapUp = state.forceWrapUp || state.endedBy === 'iteration_limit' || state.endedBy === 'token_budget' || state.endedBy === 'timeout' || (state.endedBy === 'error' && (state.lastContent || evidence.length > 0))
+    // r60 (A3) — stall_brake thêm vào needWrapUp: model có kết quả trong tay,
+    // chỉ đang quay vòng — wrap-up tổng hợp là đúng semantics (mirror iteration_limit)
+    const needWrapUp = state.forceWrapUp || state.endedBy === 'iteration_limit' || state.endedBy === 'stall_brake' || state.endedBy === 'token_budget' || state.endedBy === 'timeout' || (state.endedBy === 'error' && (state.lastContent || evidence.length > 0))
 
     // CI-1: token budget = 0 (unlimited) → luôn cho wrap-up (không so với 0 + 5k)
     if (needWrapUp && !isCancelled() && !timedOut && (SUBAGENT_TOKEN_BUDGET === 0 || tokensUsed < SUBAGENT_TOKEN_BUDGET + 5_000)) {
@@ -1138,7 +1221,9 @@ async function runSubAgentForProfileInner(params: {
     // Chất lượng kết quả nằm ở outcome.evaluation (pass/gaps) — tách bạch.
     const deliveredUsableResults = successfulToolCalls > 0 || report.trim().length > 0
     const outcome: SubAgentOutcome = {
-      success: (state.endedBy === 'concluded' || state.endedBy === 'iteration_limit') && deliveredUsableResults,
+      // r60 (A3) — stall_brake cùng semantics delivery với iteration_limit:
+      // kết quả dùng được vẫn trả về parent (evaluation.pass/gaps phản ánh phần chưa xong)
+      success: (state.endedBy === 'concluded' || state.endedBy === 'iteration_limit' || state.endedBy === 'stall_brake') && deliveredUsableResults,
       agent: profile.name,
       position: '-',
       report,
@@ -1272,13 +1357,13 @@ async function runSubAgentForProfileInner(params: {
         .map(parseToolResultLogEntry)
         .filter((e): e is { tool: string; success: boolean; text: string } => e !== null)
       const toolFailures = evidence.filter(e => !e.success).length
-      // endedBy: 'concluded' | 'timeout' | 'token_budget' | 'error' | 'cancelled' | 'iteration_limit'
+      // endedBy: 'concluded' | 'timeout' | 'token_budget' | 'error' | 'cancelled' | 'iteration_limit' | 'stall_brake' (r60)
       const outcomeForBrain = state.endedBy === 'cancelled'
         ? 'ABANDONED' as const
         : state.endedBy === 'error'
           ? 'FAILURE' as const
           : mapRunOutcome({
-              status: state.endedBy === 'concluded' ? 'done' : 'iteration_limit',
+              status: state.endedBy === 'concluded' ? 'done' : (state.endedBy === 'stall_brake' ? 'stall_brake' : 'iteration_limit'),
               toolFailures,
             })
       recordAgentEpisode({

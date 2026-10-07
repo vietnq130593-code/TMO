@@ -311,19 +311,28 @@ const MAX_TOOL_RESULT_CHARS = TOOL_RESULT_MAX_CHARS
  * ROUND-23 P7 — env-tunable (mặc định 48 như cũ): vặn nhỏ GOAL_LOOP_MAX_MESSAGES
  * khi cần ép context mà không cần sửa code. */
 const MAX_MESSAGES = intEnvPositive('GOAL_LOOP_MAX_MESSAGES', 48)
-/** Cap số dòng evidence log giữ lại cho evaluator */
-const MAX_EVIDENCE_ENTRIES = 60
+/** Cap số dòng evidence log giữ lại cho evaluator — r60: 60 → 100 (user
+ * directive 2026-10-07 "token không là ràng buộc": evidence log là bản ghi CỐ
+ * ĐỊNH lúc tool chạy — nguồn duy nhất còn nguyên vẹn sau khi context bị nén;
+ * 60 entry cũ cắt mất bằng chứng đầu run của mission dài (r59 …9k3kp8: 29 tool
+ * calls đạt vừa, nhưng mission lớn hơn sẽ tràn). */
+const MAX_EVIDENCE_ENTRIES = 100
 /**
  * FIX (mission #15 evidence 2026-09-30) — cap preview bằng chứng cho evaluator.
  * Trước đây 250 ký tự làm mất nội dung rows/todos (db_query/todo_read chỉ còn
  * "PASS …| đuôi: <80 ký tự>") → trọng tài KHÔNG BAO GIỜ xác minh được
  * id/status/content từng dòng dù output đầy đủ đã nằm trong transcript —
  * root cause chuỗi run needs_input không thoát được (run_1790803610471_1,
- * run_1790806753214_2, run_1790807918140_4). 900 giữ evidence log gọn
- * (≤60 entry × ~900 ≈ tối đa 54k chars, thực tế thấp hơn nhiều) mà các truy vấn
+ * run_1790806753214_2, run_1790807918140_4). Giữ evidence log gọn (≤100 entry
+ * × ~1600 ≈ tối đa 160k chars, thực tế thấp hơn nhiều) mà các truy vấn
  * nhỏ (vài row) hiện đủ nội dung để đối chiếu.
+ * r60: 900 → 1600 (user directive "token không là ràng buộc" — bằng chứng r59
+ * mission …9k3kp8: trọng tài đòi nguyên văn 3 dòng version package.json nhưng
+ * preview 900 chỉ chứa đầu-JSON + đuôi 80 chars, phần giữa (dependencies /
+ * resolutions) vô hình → CHƯA ĐẠT 1%/2%/3% 3 chu kỳ liền). 1600 cho preview
+ * chạm sâu hơn vào nội dung chính giữa kết quả.
  */
-const EVIDENCE_PREVIEW_MAX_CHARS = 900
+const EVIDENCE_PREVIEW_MAX_CHARS = 1600
 /** [C] Tool kiểm định — bằng chứng verify chỉ tính khi tool THÀNH CÔNG */
 const VERIFY_TOOLS = new Set(['run_tests', 'lint', 'type_check', 'test_coverage', 'get_diagnostics', 'lsp_diagnostics'])
 /** [C] Đọc lại kết quả (file_read/grep sau khi sửa) cũng là kiểm định */
@@ -615,7 +624,13 @@ Nếu mục tiêu là câu hỏi kiến thức chung thuần túy (không đòi 
 - 1 THAO TÁC ĐƠN → dùng TOOL CHUYÊN BIỆT, KHÔNG dùng shell thay thế: đọc file/đoạn file → file_read (offset/limit); tìm chuỗi → grep; sửa file → file_edit/file_multi_edit; ghi file mới → file_write. Shell (sed -n/awk/cat/grep trong lệnh) CHỈ dành cho: (a) gộp NHIỀU truy vấn thành 1 batch thật sự, (b) thao tác hệ thống không có tool (process, service, pipe...). Kết quả tool chuyên biệt được hệ thống audit + theo dõi sức khỏe tool; kết quả qua shell không được tính.
 - SAU MỖI lần file_edit/file_write/file_multi_edit trên source code → chạy NGAY trong batch kế: lint({"path":"<file vừa sửa>"}) và/hoặc type_check({"path":"<file>"}) — đừng đợi tới cuối chu kỳ (lỗi dồn cục khó sửa hơn lỗi lẻ).
 - DOMAIN KHÔNG CHẮC (security pattern, best practice, lỗi hệ thống từng gặp, cách hệ thống khác giải quyết) → knowledge_search TRƯỚC KHI tự kết luận bằng phán đoán (nếu bạn có tool này). Sau khi FIX một bug quan trọng/lỗi hạ tầng → ghi lesson vào KB bằng knowledge_write (nếu có) để agents sau tra cứu được.
-- ĐẦU NHIỆM VỤ có tính chất chuyên môn (build app, làm slide/bảng tính/tài liệu, tra cứu web...) → gọi list_skills({}) xem có skill hướng dẫn sẵn không; có → read_skill rồi theo hướng dẫn (nếu bạn có 2 tool này).`
+- ĐẦU NHIỆM VỤ có tính chất chuyên môn (build app, làm slide/bảng tính/tài liệu, tra cứu web...) → gọi list_skills({}) xem có skill hướng dẫn sẵn không; có → read_skill rồi theo hướng dẫn (nếu bạn có 2 tool này).
+
+📊 NGUYÊN TẮC SỐ LIỆU (r60 — từ quan sát mission r59: agent đếm tay 96 trong khi tool trả total=97, đo lặp 162k tokens cho đáp án đã đúng, từ chối re-read 4ms để trích bằng chứng):
+- METADATA CỦA TOOL LÀ NGUỒN CHÂN LÝ: trường total/rowCount/totalMatches/exitCode (và output COUNT của SQL) trong KẾT QUẢ TOOL là số MÁY ĐO — dùng thẳng số đó, KHÔNG tự đếm lại danh sách bằng mắt. Chỉ tự đếm khi tool không trả số. Hai nguồn mâu thuẫn → tin metadata, trừ khi có bằng chứng tool trực tiếp bác bỏ nó.
+- CẦN ĐẾM → dùng chế độ đếm của tool: file_list({"count_only":true,...}) trả số máy (total/files/dirs); grep({"mode":"count"}) trả totalMatches — KHÔNG cần đọc toàn bộ danh sách để đếm tay.
+- KIỂM ĐỊNH MỘT LẦN LÀ ĐỦ: kết quả đã có bằng chứng độc lập (số máy khớp / verify pass / trích nguyên văn đã đối chiếu) → KHÔNG đo lại cùng phép đo đó — dành vòng lặp cho phần việc CHƯA có bằng chứng. Chỉ đo lại khi có bằng chứng MỚI mâu thuẫn kết quả cũ.
+- ĐỌC LẠI FILE NHỎ ĐỂ TRÍCH DẪN BẰNG CHỨNG là HỢP PHÁP kể cả khi đã đọc (tiêu chí nghiệm thu đòi trích nguyên văn dòng cụ thể — vd version một dependency) — đó là TRÍCH DẪN, không phải lặp việc. Cấm là lặp MỘT VIỆC y hệt không ra kết quả mới. Sau khi context bị nén: các dòng bằng chứng nguyên văn ĐÃ được giữ trong digest — nếu dòng cần trích có sẵn trong digest thì dùng thẳng, không cần đọc lại.`
 }
 
 /**
@@ -674,8 +689,9 @@ function buildDelegationProtocol(): string {
     : '- Budget token của bạn hiện KHÔNG giới hạn — mạnh dạn delegate đúng người; scope task vẫn phải rõ ràng (task mờ hồ to đùng khó đạt tiêu chí nghiệm thu).'
   return `
 
-📦 PHÂN CÔNG SUB-AGENT (delegate_task — Code Team chuyên trách):
-- RAMPAGE: implement code · SENTINEL: review/bug/security · CATALYST: tối ưu/refactor · SHOCWAVE: thiết kế kiến trúc/DB/API · MEGATRON: phân tích + verify tổng thể · FORGE: full-stack builder END-TO-END (UI + API + DB + tự kiểm định + preview verify) — tính năng trọn gói tự chứa. (TASK 48: agent security "Linh Sickyx" giờ là standalone ĐỘC LẬP — KHÔNG nằm trong delegate_task; cần security work → dispatch_agent.)
+📦 PHÂN CÔNG SUB-AGENT (delegate_task — agent chuyên trách chạy tự chủ):
+- Code Team: RAMPAGE (implement code) · SENTINEL (review/bug/security) · CATALYST (tối ưu/refactor) · SHOCWAVE (thiết kế kiến trúc/DB/API) · MEGATRON (phân tích + verify tổng thể) · FORGE (full-stack builder END-TO-END: UI + API + DB + tự kiểm định + preview verify).
+- Standalone/khác (r60 — A4): ngoài Code Team, delegate_task CŨNG nhận TÊN agent bất kỳ trong Agent Roster (vd ALISTA — nghiên cứu/thu thập dữ liệu, Linh Sickyx — security... ) — hệ thống tự resolve theo tên; KHÔNG còn bị từ chối "không thuộc danh sách" như r59 (khi đó agent phải mò sang dispatch_agent). Chọn agent theo chức trách — tra Agent Roster nếu có tool roster.
 - Cú pháp: tool_call: delegate_task({"agent": "RAMPAGE", "task": "Nhiệm vụ cụ thể...", "context": "file liên quan, ràng buộc...", "acceptance_criteria": "điều kiện hoàn thành kiểm định được"})
 - NÊN delegate khi: task cần đọc/sửa NHIỀU file (làm trực tiếp sẽ phình context của bạn), cần chuyên môn sâu, hoặc task giao trọn được cho 1 agent.
 - NÊN delegate khi việc ≥3 bước hoặc đụng ≥2 file; chỉ tự làm việc 1 bước trivial.
@@ -1384,6 +1400,7 @@ Nguyên tắc SẮT:
 15. COUNTERFACTUAL CHECK (Task 43 — chất lượng quyết định chu kỳ kế): khi "complete": false và run đã từng thất bại ít nhất 1 hướng tiếp cận (tool fail / verify fail / hướng đã thử không đạt), "nextPlan" PHẢI chứa ĐÚNG 1 dòng bắt đầu bằng "CF: " — 1 hướng làm KHÁC căn bản đáng giá nhất (nếu làm lại từ đầu sẽ thử gì thay vì cách đã fail) + vì sao hướng đó có thể thắng đúng chỗ cách cũ gục. KHÔNG để nextPlan lặp nguyên văn kế hoạch đã fail — đó là tín hiệu xoay vòng.
 16. NEEDS-INPUT CHECK (Task 48 — chống đốt chu kỳ vô ích): xác định xem mục tiêu có đang bị chặn DUY NHẤT bởi thông tin/ủy quyền/phê duyệt mà CHỈ NGƯỜI DÙNG cung cấp được không (agent đã hỏi trong lời kết luận — vd: thiếu scope/ủy quyền pentest, thiếu credentials, cần user chọn giữa các phương án, thông tin không có trong hệ thống...). ĐÚNG → "needsInput": true + "complete": false + "missing" nêu RÕ thông tin cụ thể cần user trả lời. KHÔNG dùng needsInput cho việc agent TỰ làm được bằng tool/tự phục vụ (xem rule 9a — đó là trốn tránh, không phải thiếu thông tin); cũng KHÔNG dùng khi agent chưa hề hỏi hoặc còn đường tấn công khả thi chưa thử. needsInput=true → hệ thống DỪNG vòng lặp ngay và trả câu hỏi về user (không chạy thêm chu kỳ).
 17. REGRESSION CHECK (user directive 2026-10-06 — hồi quy phần việc dở): prompt có khối "PHẦN VIỆC ĐANG LÀM DỞ TỪ CÁC RUN TRƯỚC" (các run trước trong phiên còn việc chưa xong, kèm todo id). Đối chiếu TỪNG mục với bằng chứng của run này: mục đã được hồi quy làm tiếp VÀ có bằng chứng hoàn thành (todo_write đóng đúng id + bằng chứng tool) → coi như đã xử lý. Còn mục NÀO chưa có bằng chứng hoàn thành → "complete": false và ghi vào "missing" dòng bắt đầu bằng "hồi quy: <nội dung mục>" — mục tiêu riêng của run có đạt tới đâu thì phiên vẫn còn việc dở, tác vụ chỉ trọn vẹn khi đã hồi quy xong phần dở. KHÔNG dùng needsInput cho regression (đó là việc còn tồn, không phải thiếu thông tin).
+18. METADATA-TRUTH + COMPRESSION-AWARE (r60 — từ quan sát mission r59 …9k3kp8): (a) METADATA LÀ SỐ MÁY ĐO: khi tiêu chí đòi CON SỐ đếm, trường total/rowCount/totalMatches trong KẾT QUẢ TOOL là bằng chứng máy hợp lệ (mở rộng rule 11) — KHÔNG bắt agent "đếm tay lại" khi tool đã trả số; agent tự đếm tay mâu thuẫn với metadata → tin metadata. (b) NÉN CONTEXT: prompt có dòng "⚙️ GHI CHÚ CONTEXT ... đã qua nén ×N" → tool-result cũ trong transcript của agent có thể chỉ còn tóm tắt digest — NHẬT KÝ BẰNG CHỨNG TOOL dưới đây là bản ghi CỐ ĐỊNH lúc tool chạy (KHÔNG bị nén) nên đối chiếu dựa trên đó. KHÔNG đòi trích nguyên văn một phần đã bị nén khi nhật ký + digest đã xác nhận nội dung (đó là yêu cầu bất khả thi — nguyên nhân chu kỳ bế tắc 1%/2%/3% r59); khi cần nguyên văn chính xác hơn, chấp nhận lời đề xuất re-read-trích-dẫn của agent ở chu kỳ sau (đó là hành động hợp lệ, không phải lặp việc).
 
 Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích thêm):
 {"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."], "sideIssues": ["..."], "debtDecision": "none|record|continue", "debtReadiness": "ready|blocked", "debtBlockedReason": "...", "needsInput": true|false}"`
@@ -1557,6 +1574,18 @@ export function summarizeToolResult(result: unknown): string {
     // FIX (cùng đợt): todo_write trả `upserted` — đếm ghi máy, bằng chứng
     // exactly-once (đúng một lần ghi, N dòng) cho trọng tài.
     if (typeof r.upserted === 'number') parts.push(`upserted=${r.upserted}`)
+    // r60 (A2) — CONTENT EXTRACTOR cho file_read: kết quả có trường `content`
+    // (nội dung file) trước đây rơi vào nhánh generic (head 130 chars của JSON
+    // + tail 60) → phần giữa file (dependencies/resolutions — nơi version nằm)
+    // VÔ HÌNH với trọng tài (bằng chứng r59: đòi 3 dòng version mà preview chỉ
+    // có đầu-JSON + đuôi). Giờ: head 320 + tail 140 của content — kèm dấu hiệu
+    // đã cắt khi content dài.
+    if (typeof r.content === 'string' && r.content.trim()) {
+      const c = r.content
+      parts.push(c.length > 500
+        ? `content(${c.length} chars): ${c.slice(0, 320)}…[…tail:] ${c.slice(-140)}`
+        : `content(${c.length} chars): ${c}`)
+    }
     // ROUND-26 FIX D (mission cmupl7uen — evidence "file_list: PASS …| đuôi:
     // <argHeal note>" khiến trọng tài + chu kỳ sau tưởng file_list KHÔNG trả
     // dữ liệu hữu ích): kết quả có `entries` (file_list...) cần preview số
@@ -1625,6 +1654,10 @@ async function evaluateCompletion(params: {
   abortCheck: () => boolean
   /** Token của evaluator cũng phải vào kế toán budget (fix review 2026-09-08) */
   onTokens?: (tokens: number) => void
+  /** r60 — số lần context agent đã nén: >0 → inject ghi chú cho trọng tài
+   * (rule 18b) biết tool-result cũ có thể chỉ còn digest, tránh đòi nguyên văn
+   * đã bị nén (bế tắc 1%/2%/3% 3 chu kỳ r59 …9k3kp8). */
+  compressions?: number
   /**
    * TASK 21 — các lỗi phát sinh CHƯA XỬ LÝ (pendingDebtIssues: trọng tài đã
    * quyết định xử lý ở chu kỳ debt trước). Truyền vào để evaluator ĐỐI CHIỂU
@@ -1643,7 +1676,7 @@ async function evaluateCompletion(params: {
    */
   regressionPending?: string[]
 }): Promise<EvalVerdict | null> {
-  const { goal, lastAssistantContent, evidence, verifyEvidence, unverifiedModifications, codeModified, hasStrongVerify, strongVerifyToolsAvailable, agentProvider, agentModel, agentId, agentName, abortCheck, onTokens, debtIssues, regressionPending } = params
+  const { goal, lastAssistantContent, evidence, verifyEvidence, unverifiedModifications, codeModified, hasStrongVerify, strongVerifyToolsAvailable, agentProvider, agentModel, agentId, agentName, abortCheck, onTokens, debtIssues, regressionPending, compressions } = params
 
   const evidenceLines = evidence
     .slice(-MAX_EVIDENCE_ENTRIES)
@@ -1683,6 +1716,13 @@ async function evaluateCompletion(params: {
     ? `\n\nPHẦN VIỆC ĐANG LÀM DỞ TỪ CÁC RUN TRƯỚC CHỜ HỒI QUY (user directive 2026-10-06 — sau khi mục tiêu hiện tại đạt, run PHẢI hồi quy làm tiếp phần dở; đối chiếu bằng chứng run này xem mục nào đã xong — quy tắc 17):\n${regressionPending.map(r => `- ${r}`).join('\n')}\n→ Mục nào chưa có bằng chứng hoàn thành (todo_write đóng đúng id + bằng chứng tool) → "complete": false + "missing" ghi dòng bắt đầu "hồi quy: <mục>".`
     : ''
 
+  // r60 — COMPRESSION-AWARENESS: cảnh báo trọng tài rằng transcript của agent
+  // đã nén ×N → tool-result cũ có thể chỉ còn digest (rule 18b). Không có dòng
+  // này trọng tài cứ đòi nguyên văn đã bị nén → bế tắc không thể thoát.
+  const compressionNote = (compressions ?? 0) > 0
+    ? `\n\n⚙️ GHI CHÚ CONTEXT: transcript của agent đã qua nén ×${compressions} — tool-result cũ có thể chỉ còn tóm tắt digest; NHẬT KÝ BẰNG CHỨNG TOOL dưới đây là bản ghi CỐ ĐỊNH lúc tool chạy (không bị nén) — đối chiếu dựa trên nhật ký đó, KHÔNG đòi trích nguyên văn phần đã bị nén khi nhật ký + digest đã xác nhận nội dung (quy tắc 18b).`
+    : ''
+
   const prompt = `MỤC TIÊU CỦA AGENT:
 ${goal.slice(0, 2000)}
 
@@ -1690,7 +1730,7 @@ LỜI KẾT LUẬN CUỐI CÙNG CỦA AGENT (chỉ là tuyên bố — cần đ�
 ${lastAssistantContent.slice(0, 2500)}
 
 BẰNG CHỨNG KIỂM ĐỊNH CHU KỲ CUỐI (HARNESS kiểm đếm từ tool call thật — agent KHÔNG thể bịa):
-${verifyBlock}${weakVerifyWarning}${debtCheckBlock}${regressionCheckBlock}${unverifiedModifications ? '\n\n⚠️ CÓ THAO TÁC SỬA (file_edit/shell/git...) SAU LẦN KIỂM ĐỊNH CUỐI — kết quả của lần sửa đó CHƯA được kiểm chứng.' : ''}
+${verifyBlock}${weakVerifyWarning}${debtCheckBlock}${regressionCheckBlock}${compressionNote}${unverifiedModifications ? '\n\n⚠️ CÓ THAO TÁC SỬA (file_edit/shell/git...) SAU LẦN KIỂM ĐỊNH CUỐI — kết quả của lần sửa đó CHƯA được kiểm chứng.' : ''}
 
 NHẬT KÝ BẰNG CHỨNG TOOL (theo thứ tự thời gian — đây là sự thật duy nhất đáng tin):
 ${evidenceBlock}
@@ -2925,7 +2965,12 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     cycleTodoEvidence = [] // IMP-2 (F2) — bằng chứng todo của chu kỳ, tính lại mỗi chu kỳ
     cycleCodeModified = false // FIX #7 — tính lại mỗi chu kỳ
     cycleStrongVerify = false // FIX #7 — tính lại mỗi chu kỳ
-    let endedBy: 'no_tool_calls' | 'iteration_limit' | 'error' | 'budget' | 'cancelled' = 'no_tool_calls'
+    // r60 (A3) — thêm nhãn 'stall_brake': 3 phanh trong chu kỳ (stall-iter /
+    // fingerprint / signature-overrun) trước đây gắn nhầm 'iteration_limit' →
+    // run_end + episodic không phân biệt được "hết vòng thật" với "phanh cắt
+    // bế tắc" (bằng chứng r59: ALISTA#1 dev.log in STALL BRAKE nhưng run_end
+    // ghi iteration_limit — operator đọc sai loại sự cố).
+    let endedBy: 'no_tool_calls' | 'iteration_limit' | 'stall_brake' | 'error' | 'budget' | 'cancelled' = 'no_tool_calls'
     let cycleHadLlmError = false
     // FIX (R2-b #1) — IN-CYCLE BRAKE state: đếm vòng liên tiếp không tool-call
     // thành công + fingerprint transcript định kỳ (lặp = không tiến triển).
@@ -2988,12 +3033,23 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       // NHẮC XUẤT PHÁT (Task 23-c — E2E lộ agent bỏ todo + báo cáo markdown dày
       // trong chế độ CLI hybrid: protocol nằm ĐẦU system prompt dễ bị CLI prompt
       // lấn át → nhắc ngắn CUỐI prompt user để tận dụng recency, áp mọi provider)
+      // r60 — STATUS-AWARENESS (C3): dòng trạng thái run (vòng/tool/token/nén)
+      // mỗi vòng — agent thấy chính số liệu tiêu thụ của mình (bằng chứng r59:
+      // 3.04M tokens mà agent không hề hay, không thể tự điều chỉnh) + nhắc cú
+      // pháp khi context đã nén (B4 — output degradation: token rác, pseudo-syntax
+      // xuất hiện từ lần nén ×2+ trong r59).
+      const runStatusNote = `\n\n📊 TRẠNG THÁI RUN (harness ghi): chu kỳ ${cycle} · vòng ${cycleIterations} · ${totalToolCalls} tool calls · ~${Math.round(tokensUsed / 1000)}k tokens${subagentTokens > 0 ? ` (sub-agent ~${Math.round(subagentTokens / 1000)}k)` : ''}${compressions > 0 ? ` · context đã nén ×${compressions}` : ''}. Token KHÔNG là ràng buộc của bạn — TIẾN TRIỂN MỚI mỗi vòng mới là ràng buộc: phép đo đã có kết quả (số máy/total/trích dẫn) thì DÙNG, không đo lại.${compressions > 0 ? ' ✍️ Context đã nén — phát tool_call theo ĐÚNG cú pháp (JSON args 1 dòng hợp lệ, không văn xuôi quanh tool_call, không xuống dòng/comments giữa args).' : ''}`
       const formattedPrompt = formatMessagesForLLM(messages) +
+        runStatusNote +
         '\n\n📝 NHẮC TRƯỚC KHI HÀNH ĐỘNG: (1) task từ 2 bước trở lên → gọi todo_write (đường CLI: tmo_todo) lập kế hoạch TRƯỚC, xong việc nào đánh dấu completed việc đó; (2) câu trả lời/báo cáo cho người đọc: văn xuôi tiếng Việt sạch, markdown TỐI THIỂU — không bọc nhấn mạnh bằng **, không bọc từ ngữ bằng dấu ` hay dấu nháy đơn — nhấn mạnh bằng CHỮ IN HOA, liệt kê bằng gạch đầu dòng "- ".'
 
       let result: Awaited<ReturnType<typeof callLLMForAgent>> | null = null
       try {
-        result = await withTimeout(
+        // r60 (A5) — HEARTBEAT TRONG LLM CALL DÀI: callLLMForAgent có thể treo
+        // 5-21' (rate-limit xoay key) — heartbeatAt đứng im cả quãng → watcher
+        // báo stale giả (bằng chứng r59 …9k3kp8: 💤 stale dù job sống). Bọc
+        // runWithBatchHeartbeat để tín hiệu sống cứ đập 30s/lần xuyên suốt await.
+        result = await runWithBatchHeartbeat(() => withTimeout(
           callLLMForAgent(formattedPrompt, { provider: agentProvider, model: agentModel }, fullSystemPrompt, {
             agentId,
             agentName,
@@ -3020,7 +3076,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           }),
           LLM_TIMEOUT_MS,
           `Agent LLM (chu kỳ ${cycle})`,
-        )
+        ))
       } catch (llmErr) {
         console.error(`[GoalLoop] ${agentName} LLM error (chu kỳ ${cycle}, vòng ${cycleIterations}): ${llmErr instanceof Error ? llmErr.message : String(llmErr)}`)
         lastLlmError = llmErr instanceof Error ? llmErr.message : String(llmErr)
@@ -3873,7 +3929,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           if (inCycleStallIters >= IN_CYCLE_STALL_ITERATIONS) {
             console.warn(`[GoalLoop] ${agentName} IN-CYCLE STALL BRAKE: ${inCycleStallIters} vòng LIÊN TIẾP không có tool call thành công nào (chu kỳ ${cycle}) — cắt chu kỳ giữa chừng, chuyển evaluator`)
             recordAgentThought(agentSessionId, `⚠️ Phanh trong chu kỳ: ${inCycleStallIters} vòng liên tiếp toàn tool call thất bại — cắt chu kỳ ${cycle} giữa chừng để evaluator đánh giá lại hướng đi`, totalIterations)
-            endedBy = 'iteration_limit'
+            endedBy = 'stall_brake'
             break
           }
         }
@@ -3885,7 +3941,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           if (inCycleFpRepeats >= IN_CYCLE_FP_MAX_REPEATS) {
             console.warn(`[GoalLoop] ${agentName} IN-CYCLE NO-PROGRESS: fingerprint transcript lặp ${inCycleFpRepeats}× (mỗi ${IN_CYCLE_FP_CHECK_EVERY} vòng, chu kỳ ${cycle}) — agent xoay vòng lặp lại cùng hành động — cắt chu kỳ giữa chừng, chuyển evaluator`)
             recordAgentThought(agentSessionId, `⚠️ Phanh trong chu kỳ (no-progress): transcript lặp y hệt ${inCycleFpRepeats * IN_CYCLE_FP_CHECK_EVERY} vòng — agent đang xoay vòng lặp — cắt chu kỳ ${cycle} để evaluator đánh giá lại`, totalIterations)
-            endedBy = 'iteration_limit'
+            endedBy = 'stall_brake'
             break
           }
         } else {
@@ -3899,7 +3955,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       // đánh giá lại hướng đi (evaluator sẽ ra directive ĐỔI cách tiếp cận).
       if (signatureOverrun) {
         console.warn(`[GoalLoop] ${agentName} SIGNATURE-OVERRUN: tool lặp y hệt vượt ngưỡng 8 lần — cắt chu kỳ ${cycle} giữa chừng, chuyển evaluator`)
-        endedBy = 'iteration_limit'
+        endedBy = 'stall_brake'
         break
       }
 
@@ -3956,7 +4012,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       }
     }
 
-    cutMidWorkPrev = endedBy === 'iteration_limit' || endedBy === 'budget'
+    cutMidWorkPrev = endedBy === 'iteration_limit' || endedBy === 'stall_brake' || endedBy === 'budget'
 
     // ===== IMP-2 (F2 — điều tra Task F "todo drift") — CYCLE-BOUNDARY TODO RECONCILE =====
     // Trước đây cập nhật todo là TÌNH NGUYỆN (protocol + CI-2 per-batch chỉ khớp
@@ -4069,11 +4125,17 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     const evaluatorGoal = directiveSpec.acceptance.length > 0
       ? `${directiveSpec.goal}\n\nTIÊU CHÍ NGHIỆM THU (đối chiếu TỪNG điều — đủ hết mới complete=true):\n${directiveSpec.acceptance.map(a => `- [ ] ${a}`).join('\n')}`
       : directiveSpec.goal
-    let verdict = await evaluateCompletion({
+    // r60 (A5) — bọc heartbeat cho evaluator (LLM call dài); arrow PHẢI async
+    // vì regressionPending refresh (await getRegressionQueue) diễn ra bên trong
+    // callback — giữ nguyên semantics "refresh sát lúc chấm" (P-E).
+    let verdict = await runWithBatchHeartbeat(async () => evaluateCompletion({
       goal: evaluatorGoal,
       lastAssistantContent: lastContent,
       evidence,
       verifyEvidence: cycleVerifyEvidence,
+      // r60 — cho trọng tài biết context đã nén ×N (rule 18b — chống đòi nguyên
+      // văn đã bị nén, nguyên nhân bế tắc 1%/2%/3% r59)
+      compressions,
       unverifiedModifications: lastModifyOrdinal > lastVerifyOrdinal,
       // FIX 2026-09-14 #7 — E2E verification signals cho trọng tài (quy tắc 8)
       codeModified: cycleCodeModified,
@@ -4094,7 +4156,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       agentName,
       abortCheck: isCancelled,
       onTokens: (t) => { tokensUsed += t },
-    })
+    }))
 
     if (isCancelled()) { stopReason = 'cancelled'; break }
 
@@ -4799,7 +4861,9 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     const lastContentIsRawMidWork = !!lastContent && /\btool_call:\s*[a-z_]+\s*\(/i.test(lastContent)
     if ((stopReason !== 'complete' && stopReason !== 'needs_input' && lastContent)
         || (stopReason === 'complete' && lastContentIsRawMidWork)) {
-      const wrapUp = await generateFinalReport({
+      // r60 (A5) — bọc heartbeat: final report là 1 LLM call dài cuối run,
+      // heartbeat cần đập xuyên suốt (mirror LLM call chính + evaluator)
+      const wrapUp = await runWithBatchHeartbeat(() => generateFinalReport({
         goal: directiveSpec.acceptance.length > 0
           ? `${directiveSpec.goal}\n\nTIÊU CHÍ NGHIỆM THU:\n${directiveSpec.acceptance.map(a => `- [ ] ${a}`).join('\n')}`
           : directiveSpec.goal,
@@ -4823,7 +4887,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         fullSystemPrompt,
         abortCheck: isCancelled,
         onTokens: (t) => { tokensUsed += t },
-      })
+      }))
       if (wrapUp && wrapUp.length > 200) {
         content = wrapUp
         usedFinalReport = true

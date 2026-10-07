@@ -47,10 +47,17 @@ function intEnvPositive(name: string, fallback: number): number {
 export const COMPRESS_THRESHOLD_CHARS = intEnvPositive('GOAL_LOOP_COMPRESS_THRESHOLD_CHARS', 50_000)
 /** Số message gần nhất GIỮ NGUYÊN khi nén (goal-loop cũ: 8) */
 export const KEEP_RECENT_MESSAGES = intEnvPositive('GOAL_LOOP_KEEP_RECENT_MESSAGES', 8)
-/** Cap ký tự của digest message sau nén (goal-loop cũ: 2500) */
-export const DIGEST_MAX_CHARS = intEnvPositive('GOAL_LOOP_DIGEST_MAX_CHARS', 2500)
-/** Cap ký tự transcript đưa vào LLM nén (đầu vào) — goal-loop cũ: 30k, KHÔNG env */
-export const COMPRESS_INPUT_CHARS = 30_000
+/** Cap ký tự của digest message sau nén — r60: 2500 → 4000 (user directive
+ * 2026-10-07 "token không là ràng buộc": digest rộng hơn giữ được NHIỀU HƠN dòng
+ * bằng chứng nguyên văn — bằng chứng r59 mission …9k3kp8: digest 2500 nuốt mất
+ * 3 dòng version của package.json → trọng tài đòi nguyên văn không tồn tại
+ * nữa → chu kỳ 3-5 bế tắc 1%/2%/3%). Env GOAL_LOOP_DIGEST_MAX_CHARS giữ nguyên. */
+export const DIGEST_MAX_CHARS = intEnvPositive('GOAL_LOOP_DIGEST_MAX_CHARS', 4_000)
+/** Cap ký tự transcript đưa vào LLM nén (đầu vào) — r60: 30k → 40k + env
+ * GOAL_LOOP_COMPRESS_INPUT_CHARS (trước đây hard-code không env). Đầu vào rộng
+ * hơn = LLM digest thấy ĐỦ phần đầu file (nơi dependency/version nằm) để trích
+ * nguyên văn thay vì bỏ. */
+export const COMPRESS_INPUT_CHARS = intEnvPositive('GOAL_LOOP_COMPRESS_INPUT_CHARS', 40_000)
 /** Ngưỡng tối thiểu số message nén được (dưới đây thì không đáng nén) — goal-loop cũ: 4 */
 export const MIN_COMPRESSIBLE_MESSAGES = 4
 /**
@@ -167,14 +174,18 @@ GIỮ LẠI (quan trọng giảm dần):
 2. Lệnh/tool đã chạy + kết quả: pass/fail, exit code, SỐ LỖI cụ thể nếu có
 3. Kết luận + quyết định kỹ thuật đã chốt; bug đã tìm thấy + nguyên nhân
 4. Việc đang DỞ (làm đến đâu)
-BỎ: nội dung file đầy đủ, code trích dẫn dài, output lệnh chi tiết, suy nghĩ thừa.
+5. BẰNG CHỨNG NGUYÊN VĂN (r60 — TỐI QUAN TRỌNG): mọi DÒNG/GIÁ TRỊ CỤ THỂ đã được dùng làm bằng chứng đối chiếu tiêu chí nghiệm thu — dòng dependency/version trích từ file config (vd package.json), kết quả COUNT truy vấn SQL, tổng đếm file/entry, số đếm test pass/fail, đường dẫn artifact — giữ NGUYÊN VĂN từng dòng như vậy (kèm tên file/nguồn), KHÔNG diễn đạt lại, KHÔNG bỏ qua. Agent chu kỳ sau phải trích dẫn đúng nguyên văn các dòng này cho trọng tài — mất chúng là mất bằng chứng.
+BỎ: nội dung file đầy đủ (ngoài các dòng bằng chứng mục 5), code trích dẫn dài, output lệnh chi tiết, suy nghĩ thừa.
 
 Output CHỈ digest (không preamble, không markdown fence), tiếng Việt, gọn theo bullet.`
 }
 
-/** Wrapper của digest message khi chèn vào transcript (nguyên văn goal-loop cũ) */
+/** Wrapper của digest message khi chèn vào transcript (nguyên văn goal-loop cũ;
+ * r60: dòng hướng dẫn cập nhật — digest giờ BẢO TOÀN dòng bằng chứng nguyên văn
+ * (mục 5 prompt digest), phần còn lại mới được tóm tắt; re-read vẫn là đường dự
+ * phòng khi cần nguyên văn ngoài các dòng đã giữ). */
 function buildDigestMessageContent(digest: string): string {
-  return `📦 [WORKSPACE DIGEST — các bước TRƯỚC ĐÂY đã được NÉN để tiết kiệm budget token. Đây là TÓM TẮT công việc đã làm; nội dung gốc (file đã đọc, output lệnh) đã bỏ. Nếu cần chi tiết chính xác một file/lệnh cũ → gọi file_read/grep/shell LẠI.]\n\n${digest}`
+  return `📦 [WORKSPACE DIGEST — các bước TRƯỚC ĐÂY đã được NÉN để giữ context gọn. Đây là TÓM TẮT công việc đã làm; các DÒNG BẰNG CHỨNG NGUYÊN VĂN (version/dependency, kết quả COUNT/đếm, test pass/fail, artifact path) ĐÃ ĐƯỢC GIỮ NGUYÊN VĂN trong digest. Nếu cần nguyên văn chính xác một file/lệnh ngoài các dòng đã giữ → gọi file_read/grep/shell LẠI (đọc lại để TRÍCH DẪN bằng chứng là hợp pháp — không phải lặp việc).]\n\n${digest}`
 }
 
 /**

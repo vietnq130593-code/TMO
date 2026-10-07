@@ -655,6 +655,11 @@ export async function fileList(args: {
   depth?: number
   ignore?: string[]
   pattern?: string  // Phase 2.5 — glob filter on entry name (e.g. "*.ts" or "*.json")
+  /** r60 (C1 — count primitive, từ quan sát r59: ALISTA đốt 1.47M tokens/
+   * 27 vòng chỉ để ĐẾM file vì listing cắt 60 entry buộc đếm tay): true →
+   * KHÔNG trả entries — chỉ trả bộ số máy (total/files/dirs/theo độ sâu).
+   * Nhiệm vụ đếm giải quyết trong 1 call rẻ, không cần đọc danh sách. */
+  count_only?: boolean
 }): Promise<unknown> {
   const target = args.path || '.'
   const resolvedPath = await resolveWithinWorkspace(target)
@@ -737,6 +742,31 @@ export async function fileList(args: {
   // ROUND-26 FIX C (3) — BFS theo độ sâu, trong mỗi level theo tên (case-insensitive)
   flat.sort((a, b) => a.depth - b.depth || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
   const total = flat.length
+  // r60 (C1) — COUNT-ONLY: trả bộ số máy không kèm entries (nhiệm vụ đếm 1 call
+  // xong). files = entry type 'file' (đã qua pattern nếu có); dirs = thư mục đi
+  // qua (pattern không áp cho dir — khớp semantics listing ở trên); total =
+  // files + dirs (đồng bộ trường total của chế độ listing).
+  if (args.count_only) {
+    const files = flat.filter(e => e.type === 'file').length
+    const dirs = flat.filter(e => e.type === 'dir').length
+    const byDepth: Record<number, { files: number; dirs: number }> = {}
+    for (const e of flat) {
+      const d = byDepth[e.depth] ?? (byDepth[e.depth] = { files: 0, dirs: 0 })
+      if (e.type === 'dir') d.dirs++
+      else d.files++
+    }
+    return {
+      success: true,
+      path: target,
+      pattern: args.pattern || undefined,
+      depth: maxDepth,
+      total,
+      files,
+      dirs,
+      byDepth,
+      note: `COUNT-ONLY (số MÁY ĐO — dùng thẳng, không cần tự đếm tay): ${args.pattern ? `file khớp pattern "${args.pattern}"` : 'file'} = ${files}, thư mục = ${dirs}, tổng entries = ${total}. Muốn xem tên từng entry → gọi lại KHÔNG có count_only.`,
+    }
+  }
   const truncated = total > FILE_LIST_MAX_ENTRIES
   const shown = truncated ? flat.slice(0, FILE_LIST_MAX_ENTRIES) : flat
   // (4) cap + truncated flag — summary fields (total/note/argHeal) LUÔN nằm cuối
@@ -791,6 +821,9 @@ export async function grep(args: {
   const matches: Array<{ file: string; line: number; text: string; context?: string[] }> = []
   const fileMatches = new Set<string>()
   const fileMatchCounts = new Map<string, number>()
+  // r60 (C1) — đếm số file đã quét (kể cả file không match) để mode count/files
+  // xác nhận được PHẠM VI quét (agent trả lời "N/total files" thay vì chỉ N).
+  let filesScanned = 0
 
   // Phase 2.5 — binary detection helper: check first 8KB for NULL byte.
   // Reading 8KB is much cheaper than reading a multi-MB binary file fully.
@@ -823,6 +856,7 @@ export async function grep(args: {
       const globRe = new RegExp('^' + args.glob.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$')
       if (!globRe.test(path.basename(rel))) return
     }
+    filesScanned++ // r60 (C1) — mọi file đi qua filter đều được đếm là đã quét
     // Phase 2.5 — skip binary files (NULL byte in first 8KB)
     if (await isBinaryMaybe(full)) return
     try {
@@ -883,9 +917,9 @@ export async function grep(args: {
   } else {
     await scan(searchRoot, '')
   }
-  if (mode === 'files') return { success: true, files: Array.from(fileMatches), total: fileMatches.size }
-  if (mode === 'count') return { success: true, files: Array.from(fileMatches).map(f => ({ file: f, count: fileMatchCounts.get(f) || 0 })), totalMatches: Array.from(fileMatchCounts.values()).reduce((a, b) => a + b, 0) }
-  return { success: true, matches, totalMatches: matches.length, truncated: matches.length >= headLimit }
+  if (mode === 'files') return { success: true, files: Array.from(fileMatches), total: fileMatches.size, filesScanned }
+  if (mode === 'count') return { success: true, files: Array.from(fileMatches).map(f => ({ file: f, count: fileMatchCounts.get(f) || 0 })), totalMatches: Array.from(fileMatchCounts.values()).reduce((a, b) => a + b, 0), filesScanned, totalFilesWithMatches: fileMatches.size, note: 'COUNT MODE — totalMatches là số MÁY ĐO (dùng thẳng, không cần đếm tay).' }
+  return { success: true, matches, totalMatches: matches.length, filesScanned, truncated: matches.length >= headLimit }
 }
 
 // ==================== P0: RUN TESTS ====================

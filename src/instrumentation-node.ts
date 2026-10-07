@@ -563,7 +563,13 @@ function sweepAgentRunTrails(): void {
     const retentionDays = Number(process.env.AGENT_RUN_TRAIL_RETENTION_DAYS ?? 14)
     if (!Number.isFinite(retentionDays) || retentionDays <= 0) return // 0/invalid = off
     const cutoff = Date.now() - retentionDays * 24 * 3600 * 1000
-    const dir = join(process.cwd(), 'agent-runs')
+    // r60 (C6) — tôn trọng TMO_AGENT_RUNS_DIR (đồng bộ agent-run-tracker):
+    // khi quality-gate/tests trỏ thư mục ghi sang /tmp, sweep boot của app
+    // KHÔNG quét nhầm thư mục đó (và ngược lại không quét sót khi cùng dir).
+    // resolve() để env tuyệt đối (/tmp/...) dùng nguyên — không join cwd.
+    const dir = (process.env.TMO_AGENT_RUNS_DIR || '').trim() !== ''
+      ? resolve((process.env.TMO_AGENT_RUNS_DIR || '').trim())
+      : join(process.cwd(), 'agent-runs')
     let deleted = 0
     for (const name of readdirSync(dir)) {
       if (!name.endsWith('.jsonl')) continue

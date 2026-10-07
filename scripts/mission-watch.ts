@@ -322,9 +322,17 @@ function fmtEvent(e: any): string {
 
 // ─────────────────────────── phân tích ───────────────────────────
 
-/** Bộ đếm lặp cùng-dấu-vết — phát hiện stall-loop kiểu todo_read ×72. */
+/** Bộ đếm lặp cùng-dấu-vết — phát hiện stall-loop kiểu todo_read ×72.
+ * r60 — WINDOWED CUMULATIVE (từ bằng chứng r59 mission …9k3kp8: ALISTA#1 gọi
+ * file_list GIỐNG HỆT nhau ×21 rải rác 27 vòng — xen kẽ các call khác làm bộ đếm
+ * LIÊN TIẾP cũ không bao giờ khớp → 0 cảnh báo live, chỉ replay mới thấy).
+ * Giờ bổ sung tầng 2: đếm CỘNG DỒN theo tool+args (bỏ qua resultPreview — mtime
+ * có thể đổi nhẹ mỗi lần) xuyên suốt MỖI RUN → cảnh báo ở ngư�ng 8 (mirror
+ * SUBAGENT_STALL_CALL_REPEATS của harness) và lặp lại mỗi +8 lần. */
 class RepeatTracker {
   private state = new Map<string, { key: string; count: number; warned: number }>()
+  /** r60 — cửa sổ cộng dồn: runId → (tool|args → count/warned) */
+  private windowed = new Map<string, Map<string, { count: number; warned: number }>>()
   /** trả về warning nếu cần báo, khác null */
   check(e: any): string | null {
     if (e.type !== 'tool') return null
@@ -340,14 +348,29 @@ class RepeatTracker {
     } else {
       this.state.set(rid, { key, count: 1, warned: 0 })
     }
+    // r60 — tầng windowed: cùng tool + args (kể cả bị call khác xen kẽ, kết quả
+    // đổi nhẹ) vẫn cộng dồn → bắt "productive fixation" rải rác nhiều vòng.
+    const wkey = `${e.tool}|${e.argsSummary}`
+    let wmap = this.windowed.get(rid)
+    if (!wmap) this.windowed.set(rid, (wmap = new Map()))
+    const w = wmap.get(wkey) ?? { count: 0, warned: 0 }
+    w.count++
+    if (w.count >= 8 && w.count > w.warned) {
+      w.warned = w.count + 8 // cảnh báo lại mỗi +8 (8, 16, 24…)
+      wmap.set(wkey, w)
+      return `🔁🪟 [${e.agentName || rid}] WINDOWED: '${e.tool}' với args giống nhau gọi ${w.count} lần TRONG RUN (rải rác, không liên tiếp — dấu hiệu productive-fixation; harness per-call brake ngưỡng 8 sẽ cắt nếu là sub-agent)`
+    }
+    wmap.set(wkey, w)
     return null
   }
-  /** Top nhóm lặp cho replay/hậu kiểm. */
+  /** Top nhóm lặp cho replay/hậu kiểm.
+   * r60 — gộp theo tool+args (bỏ resultPreview khỏi khóa) để các lần lặp rải
+   * rác có kết quả preview hơi khác nhau vẫn nằm cùng nhóm (đúng r59). */
   static topGroups(events: any[], min = 5): string[] {
     const groups = new Map<string, { tool: string; args: string; res: string; count: number }>()
     for (const e of events) {
       if (e.type !== 'tool') continue
-      const k = `${e.tool}|${e.argsSummary}|${e.resultPreview}`
+      const k = `${e.tool}|${e.argsSummary}`
       const g = groups.get(k) || { tool: e.tool, args: String(e.argsSummary || ''), res: String(e.resultPreview || ''), count: 0 }
       g.count++
       groups.set(k, g)
@@ -356,7 +379,7 @@ class RepeatTracker {
       .filter((g) => g.count >= min)
       .sort((a, b) => b.count - a.count)
       .slice(0, 3)
-      .map((g) => `🔁 '${g.tool}' ×${g.count} — args: ${trunc(g.args, 80)} → kết quả giống hệt: ${trunc(g.res, 80)}`)
+      .map((g) => `🔁 '${g.tool}' ×${g.count} — args: ${trunc(g.args, 80)} → kết quả (lần đầu): ${trunc(g.res, 80)}`)
   }
 }
 

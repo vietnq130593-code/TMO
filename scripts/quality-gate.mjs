@@ -105,6 +105,12 @@ function runStage(name, { cmd, args: cmdArgs, env = {}, timeoutMs = 15 * 60_000 
 const TEST_DB = path.join(ROOT, 'db', '.quality-gate-test.db')
 const TEST_DB_URL = `file:${TEST_DB}`
 const BUILD_DIST_DIR = process.env.TMO_BUILD_DIST_DIR || '.next-qa'
+// r60 (C6 — chặn leak jsonl TEST-* vào agent-runs/ THẬT, lặp lại >=4 lần ở các
+// phiên 58-59: test units gọi startAgentRun/endAgentRun ghi trail jsonl vào
+// RUN_TRAILS_DIR (mặc định <repo>/agent-runs). Env TMO_AGENT_RUNS_DIR (được
+// agent-run-tracker + instrumentation-node tôn trọng) trỏ sang thư mục tạm
+// duy nhất theo pid — dọn sạch trong finally cùng DB test.
+const TEST_RUNS_DIR = `/tmp/tmo-gate-agent-runs-${process.pid}`
 
 function rmQuiet(p) {
   for (const suffix of ['', '-wal', '-shm', '-journal']) {
@@ -158,11 +164,15 @@ const stages = [
       try {
         return runStage('tests', {
           cmd: 'bun', args: ['test'],
-          env: { DATABASE_URL: TEST_DB_URL },
+          // r60 (C6): TMO_AGENT_RUNS_DIR → jsonl TEST-* ghi sang /tmp tạm,
+          // KHÔNG rơi vào agent-runs/ thật của repo (watcher mission lọc
+          // TEST-* nhưng rác vẫn xâm nhập đĩa + hậu kiểm phải dọn tay).
+          env: { DATABASE_URL: TEST_DB_URL, TMO_AGENT_RUNS_DIR: TEST_RUNS_DIR },
           timeoutMs: 10 * 60_000,
         })
       } finally {
         rmQuiet(TEST_DB) // dọn DB test sau khi chạy xong
+        try { fs.rmSync(TEST_RUNS_DIR, { recursive: true, force: true }) } catch { /* ignore */ }
       }
     },
   },
