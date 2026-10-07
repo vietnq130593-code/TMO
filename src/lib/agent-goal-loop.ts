@@ -128,7 +128,13 @@ import type { GoalLoopCheckpoint, GoalLoopDurableHooks } from '@/lib/goal-loop-d
 // "verify giả" khi singleton worker giữ module cũ sau HMR — bằng chứng sống
 // job r28v2proof: checkpoint chứa omegaAdvisory nhưng code cũ bỏ qua restore).
 // Bump mỗi lần sửa module này một cách có ý nghĩa.
-export const GOAL_LOOP_CODE_REV = 'r28w4'
+// r54w1 (ROUND-54): FIX A (todo_read scope symmetry — subagent-delegate),
+// FIX C (sub-agent stall brake), FIX E (parser <tool_name>+<parameters> —
+// tool-calls.ts), FIX D (timeout tự hiệu chuẩn — llm.ts), FIX B (detector
+// mtime family — goal-loop-worker.ts). Bump này cũng "trả nợ" cho commit
+// audit 0802a25 (F1-F5) đã đổi agent-goal-loop.ts mà KHÔNG bump rev →
+// detector stale-code mù, 5 fix audit chưa từng sống trên mission nào.
+export const GOAL_LOOP_CODE_REV = 'r54w1'
 
 /** Gọn args để nhét vào working memory (chống phình) */
 function compactToolArgs(args: Record<string, unknown>, maxLen = 120): string {

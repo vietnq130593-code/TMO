@@ -3881,6 +3881,27 @@ async function callLLMWithSpecificProvider(
 // ==================== OPENCODE ZEN PROVIDER (2026-09-24) ====================
 // OpenCode Zen — curated free coding models (OpenAI-compatible API).
 // Base URL: https://opencode.ai/zen/v1 (chat/completions)
+/**
+ * ROUND-54 FIX D — timeout heuristic TỰ HIỆU CHUẨN theo usage thật.
+ * Bằng chứng r54 (mission SENTINEL sub_1791357836734): est chars/4 đo ~147k
+ * input tokens trong khi usage thật 312k prompt_tokens (tỷ lệ thực ~2.1
+ * chars/token cho transcript JSON-dense) → timeout giãn KHÔNG ĐỦ chiều thực →
+ * call bị abort "This operation was aborted" giữa vòng (mất call, retry đắt).
+ * Sau mỗi call thành công, ghi nhận tỷ lệ chars/prompt_token THẬT (EMA
+ * α=0.25, sanity 1.5–8 — ngoài khoảng bỏ qua chống nhiễu usage thiếu/trắng);
+ * call kế ước lượng theo tỷ lệ đã hiệu chuẩn thay vì hằng số 4 (mặc định khi
+ * chưa có dữ liệu — call ĐẦU giữ hành vi cũ, từ call 2 trở đi chuẩn dần).
+ */
+let zenCharsPerTokenEma: number | null = null
+function recordZenCharsPerToken(chars: number, promptTokens?: number | null): void {
+  try {
+    if (!promptTokens || promptTokens <= 0 || chars <= 0) return
+    const ratio = chars / promptTokens
+    if (!Number.isFinite(ratio) || ratio < 1.5 || ratio > 8) return
+    zenCharsPerTokenEma = zenCharsPerTokenEma == null ? ratio : zenCharsPerTokenEma * 0.75 + ratio * 0.25
+  } catch { /* fail-open — hiệu chuẩn không được phép ảnh hưởng call */ }
+}
+
 // Auth: Bearer token (ZEN_API_KEY_1..4 — multi-key rotation pool; user bổ sung
 // key thứ 3 ngày 2026-10-29: "3 API key Zen → tối đa 3 sub-agent song song,
 // mỗi sub-agent 1 key riêng — không dùng chung API key")
@@ -4114,13 +4135,19 @@ async function callZenProvider(
   // 60K tokens → 480s; call nhỏ giữ sàn 300s. Tắt scaling: set =0.
   const zenBaseTimeoutMs = parseInt(process.env.ZEN_TIMEOUT_MS || '300000', 10)
   const zenTimeoutPerInputTokenMs = Math.max(0, parseInt(process.env.ZEN_TIMEOUT_MS_PER_INPUT_TOKEN || '8', 10) || 8)
-  const estInputTokens = Math.ceil((prompt.length + (systemPrompt?.length ?? 0)) / 4)
+  // ROUND-54 FIX D: dùng tỷ lệ chars/token ĐÃ HIỆU CHUẨN từ usage thật của các
+  // call trước (EMA) thay vì hằng số 4 — transcript JSON-dense thực tế ~2.1-2.8
+  // chars/token (bằng chứng r54: est 147k vs thật 312k = thiếu 53%). Mặc định 4
+  // giữ hành vi cũ cho call đầu tiên của process.
+  const zenInputChars = prompt.length + (systemPrompt?.length ?? 0)
+  const zenCharsPerToken = zenCharsPerTokenEma ?? 4
+  const estInputTokens = Math.ceil(zenInputChars / zenCharsPerToken)
   const timeoutMs = Math.max(
     zenBaseTimeoutMs,
     zenTimeoutPerInputTokenMs > 0 ? estInputTokens * zenTimeoutPerInputTokenMs : 0,
   )
   if (timeoutMs > zenBaseTimeoutMs) {
-    console.log(`[ZEN] ${taskLabel} timeout co giãn theo input: ${zenBaseTimeoutMs}ms → ${timeoutMs}ms (est ~${estInputTokens} input tokens × ${zenTimeoutPerInputTokenMs}ms)`)
+    console.log(`[ZEN] ${taskLabel} timeout co giãn theo input: ${zenBaseTimeoutMs}ms → ${timeoutMs}ms (est ~${estInputTokens} input tokens × ${zenTimeoutPerInputTokenMs}ms${zenCharsPerTokenEma != null ? `, calib ${zenCharsPerToken.toFixed(2)} chars/token (EMA từ usage thật — FIX D r54)` : ''})`)
   }
   // Task 39 — UNLIMITED TOKEN MODE: maxTokens <= 0 (vd -1 từ AgentProfile
   // "tùy ý") → KHÔNG gửi max_tokens → provider dùng giới hạn output tối đa
@@ -4255,6 +4282,10 @@ async function callZenProvider(
 
     // Token tracking — per-provider + per-agent (mirror NIM pattern)
     const reasoningTokens = data.usage?.completion_tokens_details?.reasoning_tokens ?? undefined
+    // ROUND-54 FIX D — ghi nhận tỷ lệ chars/prompt_token thật để hiệu chuẩn
+    // ước lượng timeout của call kế (xem recordZenCharsPerToken — bằng chứng
+    // r54: hằng số 4 thấp hơn thực tế 40-53% với transcript JSON-dense)
+    recordZenCharsPerToken(zenInputChars, data.usage?.prompt_tokens)
     if (totalTokens > 0) addTokensUsed(totalTokens, 'zen', keyInfo.index, actualModel)
     if (totalTokens > 0 && options?.agentId && options?.agentName) {
       addTokensUsedByAgent(

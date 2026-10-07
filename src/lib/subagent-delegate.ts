@@ -111,6 +111,12 @@ const SUBAGENT_EFFECTIVE_MAX_ITERATIONS = ALL_SUBAGENT_CAPS_UNLIMITED
  * — sub-agent audit đọc evidence/output dài cần trọn vẹn hơn (cùng root-cause
  * với TOOL_RESULT_MAX_CHARS của goal-loop). */
 const SUBAGENT_TOOL_RESULT_CHARS = intEnv('SUBAGENT_TOOL_RESULT_CHARS', 8_000)
+/** ROUND-54 FIX C — stall brake cho sub-agent: số vòng LIÊN TIẾP lặp tool-signature
+ *  (cùng tên tool + cùng args nguyên văn) trước khi wrap-up conclude. Mặc định 3;
+ *  0 = tắt brake (env SUBAGENT_STALL_SIG_REPEATS). Bằng chứng r54: SENTINEL
+ *  lặp 62× todo_read cùng args (đọc nhầm scope session cha — Fix A) không phanh
+ *  nào chặn được (main loop có fingerprint brake từ r46 nhưng sub-agent KHÔNG). */
+const SUBAGENT_STALL_SIG_REPEATS = intEnv('SUBAGENT_STALL_SIG_REPEATS', 3)
 /** Cap ký tự báo cáo trả về PARENT
  * 2026-09-30 (round-10 audit): 3500 → 9000 + env (SUBAGENT_REPORT_MAX_CHARS)
  * + cắt ĐẦU+CUỐI (smartTruncate) thay vì head-only — phần cuối báo cáo sub-agent
@@ -672,6 +678,10 @@ async function runSubAgentForProfileInner(params: {
       closeRunTodosAtEndFn = dt.closeRunTodosAtEnd
     } catch { /* fail-open — todo guard dùng snapshot local */ }
 
+    // ROUND-54 FIX C — stall-brake state: signature vòng trước + chuỗi trùng
+    let lastRoundSig = ''
+    let sameSigStreak = 0
+
     const loopPromise = (async () => {
       // CI-1 (0 = UNLIMITED): cap = 0 → KHÔNG trần tương ứng (vòng / token /
       // thời gian). Check timeout/token chỉ áp dụng khi cap đó > 0.
@@ -813,6 +823,27 @@ async function runSubAgentForProfileInner(params: {
 
         transcript.push({ role: 'assistant', content: capAssistantContentForTranscript(result.content) })
 
+        // ROUND-54 FIX C — STALL BRAKE cho sub-agent (bằng chứng r54: SENTINEL
+        // lặp 62× todo_read cùng args → 95+ tool events / transcript phình
+        // 24k→300k+ tokens không phanh — main loop có fingerprint brake r46
+        // nhưng sub-agent KHÔNG, và 3 cap CI-1 = ∞ nên không có điểm dừng tự
+        // nhiên nào trước trần cứng 200 vòng. Signature = tên tool + args
+        // nguyên văn của cả batch (sort ổn định); trùng liên tiếp
+        // SUBAGENT_STALL_SIG_REPEATS vòng → wrap-up conclude (KHÔNG phải error —
+        // model có kết quả trong tay, chỉ đang quay vòng).
+        // (signature dùng stableStringify cục bộ — safeStringify của file này
+        // typed hẹp cho envelope {tool,success,result} nên không dùng lại được)
+        const roundSig = toolCalls.map(tc => `${tc.name}::${stableArgsString(tc.args)}`).sort().join('|||')
+        if (roundSig === lastRoundSig) sameSigStreak++
+        else { sameSigStreak = 1; lastRoundSig = roundSig }
+        if (SUBAGENT_STALL_SIG_REPEATS > 0 && sameSigStreak >= SUBAGENT_STALL_SIG_REPEATS && !timedOut && !isCancelled()) {
+          state.forceWrapUp = true
+          state.wrapUpReason = `no_progress — lặp tool-signature giống hệt nhau ${sameSigStreak} vòng liên tiếp (${toolCalls.map(tc => tc.name).join(', ')})`
+          if (result.content) state.lastContent = result.content
+          console.warn(`[SubAgent] ${profile.name} STALL BRAKE: ${sameSigStreak} vòng liên tiếp cùng tool-signature (${toolCalls.map(tc => tc.name).join(', ').slice(0, 80)}) → wrap-up conclude`)
+          break
+        }
+
         for (const tc of toolCalls) {
           if (isCancelled() || timedOut) break // zombie guard — dừng tool batch
           // Sub-agent bị giới hạn trong whitelist CỦA NÓ (đã strip depth-guard tools)
@@ -850,6 +881,28 @@ async function runSubAgentForProfileInner(params: {
           // LÀ chủ sở hữu scope → LUÔN ép sessionId/runId/agentRole đúng
           // (khai báo trùng = no-op).
           const toolArgs: Record<string, unknown> = { ...tc.args }
+          // ROUND-54 FIX A — todo_read READ/WRITE SYMMETRY (bằng chứng r54
+          // mission SENTINEL sub_1791357836734: todo_write bị ép ghi scope
+          // delegation:sub_… (r50 P2-γ) nhưng todo_read KHÔNG ép → model đọc
+          // sessionId của session CHA 62 lần, 62 kết quả "Đọc 19 todo" giống
+          // hệt nhau, không bao giờ thấy 4 todo plan của chính mình → loop
+          // 95+ tool events / ~7M tokens / parent block 30+. Giờ: đọc scope
+          // MÌNH mặc định (hallucination guard mirror todo_write + main loop);
+          // đọc scope KHÁC (chẩn đoán run cha) vẫn CHO nhưng result kèm ghi
+          // chú chỉ đường về scope delegation của model.)
+          let crossScopeTodoRead = false
+          if (tc.name === 'todo_read' && todoScopeSessionId) {
+            const declaredSession = typeof toolArgs.sessionId === 'string' ? toolArgs.sessionId.trim() : ''
+            if (!declaredSession || declaredSession === 'default' || declaredSession === todoScopeSessionId) {
+              if (declaredSession !== todoScopeSessionId) {
+                console.log(`[SubAgent] ${profile.name} todo_read: sessionId khai báo "${declaredSession || '(trống)'}" → ép về scope delegation (chống todo mù scope — FIX A r54)`)
+              }
+              toolArgs.sessionId = todoScopeSessionId
+              toolArgs.agentRole = profile.name // todo của delegation ghi kèm role này (r50 P2-γ)
+            } else {
+              crossScopeTodoRead = true // cross-scope inspection — annotate result
+            }
+          }
           if (tc.name === 'todo_write') {
             sawTodoWrite = true
             // ROUND-50 (P2-γ r49): ép scope `delegation:<runId>` (không còn
@@ -887,6 +940,17 @@ async function runSubAgentForProfileInner(params: {
             toolResult = await executeTool(tc.name, toolArgs, { agentName: profile.name, sessionId, delegationRunId })
           } catch (err) {
             toolResult = { success: false, result: { error: err instanceof Error ? err.message : String(err) } }
+          }
+          // ROUND-54 FIX A (tiếp): cross-scope todo_read → kèm ghi chú chỉ đường
+          // về scope delegation của chính model (chống mù 62 lần như bằng chứng
+          // r54 — model đọc đi đọc lại cùng một list của session cha).
+          if (crossScopeTodoRead && toolResult && typeof toolResult.result === 'object' && toolResult.result !== null) {
+            try {
+              toolResult.result = {
+                ...(toolResult.result as Record<string, unknown>),
+                _scopeNote: `⚠️ Bạn vừa đọc todo của session KHÁC scope delegation của mình. Todo của CHÍNH BẠN (run delegation này — plan + tiến độ) nằm ở: todo_read({"sessionId":"${todoScopeSessionId}","agentRole":"${profile.name}"}) hoặc để sessionId trống. Kiểm tra xong hãy quay về kế hoạch của bạn.`,
+              }
+            } catch { /* fail-open — annotation không được phép làm hỏng delegation */ }
           }
           // TOKEN ACCOUNTING (fix review 2026-09-08): escalate_problem/
           // dispatch_agent (consult Omega) tiêu tokens — cộng vào budget của
@@ -1379,5 +1443,29 @@ function safeStringify(entry: { tool: string; success: boolean; result: unknown 
     return JSON.stringify(entry)
   } catch {
     return JSON.stringify({ tool: entry.tool, success: entry.success, result: String(entry.result).slice(0, 500) })
+  }
+}
+
+/**
+ * ROUND-54 FIX C — string hóa args ỔN ĐỊNH cho tool-signature (stall brake):
+ * key sort theo alphabet trước khi stringify (Map/JSON object cùng nội dung
+ * nhưng khác thứ tự key → signature KHÁC nhau → brake miss). Fail-open:
+ * stringify throw (circular) → trả fallback chuỗi thô đã cắt.
+ */
+function stableArgsString(args: Record<string, unknown>): string {
+  try {
+    const sortDeep = (v: unknown): unknown => {
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        const o = v as Record<string, unknown>
+        const out: Record<string, unknown> = {}
+        for (const k of Object.keys(o).sort()) out[k] = sortDeep(o[k])
+        return out
+      }
+      if (Array.isArray(v)) return v.map(sortDeep)
+      return v
+    }
+    return JSON.stringify(sortDeep(args))
+  } catch {
+    return String(args).slice(0, 400)
   }
 }

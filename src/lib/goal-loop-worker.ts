@@ -50,7 +50,7 @@ import { db } from '@/lib/db'
 // stale code thay vì im lặng — cảnh báo hiện thị trên log mỗi job claim.
 import type { GoalLoopResult } from '@/lib/agent-goal-loop'
 // ROUND-28 W1b — đọc rev TRÊN ĐĨA để đối chiếu stale code (helper bên dưới)
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import {
   GOAL_LOOP_CHECKPOINT_MIN_INTERVAL_MS,
   GOAL_LOOP_HEARTBEAT_MIN_INTERVAL_MS,
@@ -90,6 +90,47 @@ export async function readGoalLoopDiskRev(): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+/**
+ * ROUND-54 FIX B — HỌ FILE goal-loop family cho detector stale-code mtime.
+ * Bằng chứng r54: commit audit 0802a25 (06:38:51Z) đổi 4 file (agent-goal-loop,
+ * subagent-delegate, context-compression, code-team/dev-tools) sau lần restart
+ * 06:35:40Z nhưng KHÔNG bump GOAL_LOOP_CODE_REV → detector rev-string MÙ HOÀN
+ * TOÀN (module nạp r28w4, đĩa cũng r28w4 — không cảnh báo dù nội dung khác
+ * nhau), 5 fix audit chưa từng sống trên mission nào. Rev-string vẫn là tín
+ * hiệu chính, mtime là LƯỚI AN TOÀN: file nào trong họ sửa SAU lúc process
+ * boot → cảnh báo STALE (chống cả class bug "quên bump rev").
+ */
+const GOAL_LOOP_FAMILY_FILES = [
+  'agent-goal-loop.ts',
+  'subagent-delegate.ts',
+  'context-compression.ts',
+  'tool-calls.ts',
+  'llm.ts',
+  'code-team/dev-tools.ts',
+  'code-team/tool-executor.ts',
+]
+/** Mốc boot của process này (module load) — so mtime file family chống stale. */
+const WORKER_BOOT_AT = Date.now()
+
+/**
+ * ROUND-54 FIX B — quét mtime họ file goal-loop: trả về danh sách file đã bị
+ * sửa SAU lúc process boot (tức module graph singleton đang chạy bản CŨ).
+ * Fail-open tuyệt đối: lỗi stat (prod build không có src, quyền...) → [].
+ * Grace 2s chống cảnh báo giả cho file ghi cùng giây boot.
+ */
+export async function detectStaleGoalLoopFamily(): Promise<string[]> {
+  const stale: string[] = []
+  for (const f of GOAL_LOOP_FAMILY_FILES) {
+    try {
+      const st = await stat(`src/lib/${f}`)
+      if (st.mtimeMs > WORKER_BOOT_AT + 2_000) stale.push(f)
+    } catch {
+      // thiếu file (prod build) — bỏ qua
+    }
+  }
+  return stale
 }
 
 // ==================== TYPES ====================
@@ -781,6 +822,16 @@ class GoalLoopWorker {
         const diskRev = await readGoalLoopDiskRev()
         if (diskRev && diskRev !== GOAL_LOOP_CODE_REV) {
           console.warn(`[GoalLoopWorker] ⚠️ job ${job.id}: STALE CODE — src/lib/agent-goal-loop.ts trên đĩa rev=${diskRev} ≠ module đã nạp rev=${GOAL_LOOP_CODE_REV} (HMR không thay được module trong singleton worker — đã kiểm chứng live round-28). Job này tiếp tục chạy CODE CŨ; RESTART app (pm2 restart theopusflashlite) để các job sau chạy code mới.`)
+        }
+      } catch { /* fail-open — guard không được phép làm hỏng claim */ }
+      // ROUND-54 FIX B — LƯỚI AN TOÀN MTIME: rev-string khớp KHÔNG đủ (bằng
+      // chứng r54: commit audit đổi file mà quên bump rev → detector mù). Quét
+      // mtime cả HỌ goal-loop family — file nào sửa sau boot → cảnh báo STALE
+      // kèm tên file cụ thể (chống cả class "quên bump rev" triệt để).
+      try {
+        const staleFamily = await detectStaleGoalLoopFamily()
+        if (staleFamily.length > 0) {
+          console.warn(`[GoalLoopWorker] ⚠️ job ${job.id}: STALE CODE (mtime) — ${staleFamily.length} file của goal-loop family sửa SAU lúc process boot (dynamic import vẫn resolve module graph CŨ — round-28): ${staleFamily.join(', ')}. RESTART app (pm2 restart theopusflashlite) để nạp code mới.`)
         }
       } catch { /* fail-open — guard không được phép làm hỏng claim */ }
       const result: GoalLoopResult = await runGoalDrivenLoop({

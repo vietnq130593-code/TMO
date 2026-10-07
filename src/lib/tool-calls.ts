@@ -398,6 +398,111 @@ function extractInvokeToolCalls(output: string): { calls: ParsedToolCall[]; clea
 }
 
 /**
+ * ROUND-54 FIX E — parse format Anthropic-style `<tool_name>X</tool_name>`
+ * + `<parameters>…</parameters>` (kèm nhánh mangled "invoke\n<tool_name>…").
+ *
+ * Bằng chứng r54 (user dán nguyên văn thought của agent):
+ *   `lét\ninvoke\n<tool_name>todo_read</tool_name><parameters><sessionId>sess_…
+ *   </sessionId><agentRole>G2-A</agentRole></parameters>` — Ý ĐỊNH + ARGS ĐẦY ĐỦ
+ *   nhưng không khớp format nào hệ thống nhận (regex invoke cần name=; pattern-1
+ *   cần tiền tố `tool_call:`) → 0 tool call thực thi, nguyên văn markup dồn
+ *   vào thought content + agent lặp đoán mò (user: "tưởng xử lý từ trước rồi
+ *   hóa ra vẫn còn"). Giờ: công nhận format này — params JSON hoặc XML-tag,
+ *   có/không có vỏ <parameters>; name phải qua whitelist (chống hallucinate);
+ *   prefix `functions.` (OpenAI-style namespace) được lược bỏ — mirror
+ *   extractInvokeToolCalls. Params bị cắt cụt giữa chừng KHÔNG đếm failures
+ *   chung — để detector fallback `<tool_name>` bắt và trả
+ *   MALFORMED_INVOKE_FEEDBACK (dạy đúng 3 cú pháp của NHÓM này, kể cả nhắc
+ *   "cắt args ngắn nếu bị cắt cụt" — BROKEN chung chỉ dạy fence file_write,
+ *   lệch nhóm).
+ */
+function extractToolNameTagCalls(output: string): { calls: ParsedToolCall[]; cleaned: string; failures: number } {
+  if (output.indexOf('<tool_name>') === -1) return { calls: [], cleaned: output, failures: 0 }
+  const calls: ParsedToolCall[] = []
+  const ranges: Array<[number, number]> = []
+  const skipRanges: Array<[number, number]> = []
+  const re = /<tool_name>\s*([A-Za-z_][\w.-]*)\s*<\/tool_name>/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(output)) !== null) {
+    // ROUND-46 5a mirror: match nổ trong vùng invoke/tool_name đã đo hệm → skip
+    if (skipRanges.some(([s, e]) => m!.index >= s && m!.index < e)) continue
+    let toolName = m[1]
+    if (toolName.startsWith('functions.')) toolName = toolName.slice('functions.'.length)
+    if (!KNOWN_TOOL_NAME_SET.has(toolName)) continue // tên bịa — KHÔNG execute
+    const afterTag = output.slice(m.index + m[0].length)
+    // Bỏ junk prefix (whitespace + mảnh ngoặc rơi của marker đã strip) ≤ 8 ký tự
+    const junkM = /^[\s\]\[]{0,8}/.exec(afterTag)
+    const leadingWs = junkM ? junkM[0].length : 0
+    const trimmed = afterTag.slice(leadingWs)
+    let args: Record<string, unknown> | null = null
+    let consumed = 0
+    const paramsOpenM = /^<parameters>\s*/.exec(trimmed)
+    if (paramsOpenM) {
+      // Có vỏ <parameters>…</parameters>: nội dung bên trong là JSON hoặc XML
+      const innerStart = paramsOpenM[0].length
+      const closeRel = trimmed.indexOf('</parameters>', innerStart)
+      const inner = closeRel === -1 ? trimmed.slice(innerStart) : trimmed.slice(innerStart, closeRel)
+      const innerTrim = inner.trim()
+      if (innerTrim.startsWith('{')) {
+        const jsonStr = findBalancedJsonUtil(inner, '')
+        if (jsonStr) {
+          args = tryParseLooseJson(jsonStr)
+        }
+        // JSON cắt cụt / parse fail → KHÔNG đếm failures — detector fallback
+        // `<tool_name>` sẽ trả MALFORMED_INVOKE_FEEDBACK dạy lại đúng nhóm cú pháp
+      } else {
+        const argsObj = parseXmlTagArgs(inner)
+        if (argsObj && Object.keys(argsObj).length > 0) args = argsObj
+        // params rỗng/không khớp tag → KHÔNG đếm failures — fallback detector
+      }
+      // consumed: tính đến cuối vỏ parameters (hoặc hết chuỗi nếu thiếu vỏ đóng)
+      consumed = leadingWs + (closeRel === -1 ? trimmed.length : closeRel + '</parameters>'.length)
+    } else if (trimmed.startsWith('{')) {
+      // JSON trực tiếp sau </tool_name> (không có vỏ parameters)
+      const jsonStr = findBalancedJsonUtil(trimmed, '')
+      if (jsonStr) {
+        args = tryParseLooseJson(jsonStr)
+        if (args) consumed = leadingWs + jsonStr.length
+      }
+    } else {
+      // XML tags trực tiếp <key>value</key>… (không có vỏ parameters) — mirror
+      // invoke Form B; consumed = toàn bộ vùng tag khớp (tính lại lần 2)
+      const argsObj = parseXmlTagArgs(trimmed)
+      if (argsObj && Object.keys(argsObj).length > 0) {
+        args = argsObj
+        let pos = 0
+        for (;;) {
+          const tm = /^<([A-Za-z_][\w-]*)>([\s\S]*?)<\/\1>\s*/.exec(trimmed.slice(pos))
+          if (!tm) break
+          pos += tm[0].length
+        }
+        consumed = leadingWs + pos
+      }
+      // params vắng hoàn toàn (cut sớm) → KHÔNG đếm failures — fallback detector
+    }
+    if (args && Object.keys(args).length > 0) {
+      calls.push({ id: nextToolCallId(), name: toolName, args })
+      ranges.push([m.index, m.index + m[0].length + consumed])
+      skipRanges.push([m.index, m.index + m[0].length + consumed])
+    } else {
+      // ROUND-46 5b mirror: parse FAIL → shadow range (tag mở → vỏ đóng gần
+      // nhất) chống parse nhúng invoke/tool_name VÍ DỤ nồng trong vùng hỏng
+      const closeRel = output.indexOf('</parameters>', m.index)
+      const shadowEnd = closeRel === -1 ? m.index + m[0].length : closeRel + '</parameters>'.length
+      skipRanges.push([m.index, shadowEnd])
+    }
+  }
+  // Cắt vùng đã parse (từ cuối về đầu giữ index ổn định) — pattern 1/2 không
+  // quét lại vùng này
+  let cleaned = output
+  for (let i = ranges.length - 1; i >= 0; i--) {
+    const [s, e] = ranges[i]
+    cleaned = cleaned.slice(0, s) + ' ' + cleaned.slice(e)
+  }
+  return { calls, cleaned, failures: 0 }
+}
+
+/**
  * Parse tool_call patterns from LLM text output (kèm đếm parse failures).
  *
  * Supported formats:
@@ -408,6 +513,8 @@ function extractInvokeToolCalls(output: string): { calls: ParsedToolCall[]; clea
  *    (Task 24 — code nhiều dòng không cần escape)
  * 4. ROUND-44 (c): `<invoke name="tool">` của minimax (JSON args hoặc XML
  *    tags args) + strip marker corruption `<]xxx[>` của provider trước khi parse
+ * 5. ROUND-54 (E): `<tool_name>tool</tool_name><parameters>…</parameters>`
+ *    Anthropic-style (JSON hoặc XML-tag params; có/không vỏ parameters)
  */
 export function extractToolCallsWithDiagnostics(rawOutput: string): ToolCallParseResult {
   // ROUND-44 FIX (c): strip marker rác của provider TRƯỚC mọi parse — marker
@@ -417,9 +524,11 @@ export function extractToolCallsWithDiagnostics(rawOutput: string): ToolCallPars
   // ROUND-44 FIX (c): invoke-recovery chạy TRƯỚC regex (format đặc thù, không
   // đụng pattern 1/2); vùng đã parse bị cắt khỏi chuỗi regex quét tiếp.
   const invokeRes = extractInvokeToolCalls(afterFence)
-  const calls: ParsedToolCall[] = [...fenceCalls, ...invokeRes.calls]
-  let parseFailures = fenceFailures + invokeRes.failures
-  const cleaned = invokeRes.cleaned
+  // ROUND-54 FIX E: tool_name-tag recovery chạy sau invoke (cùng lớp đặc thù)
+  const tntRes = extractToolNameTagCalls(invokeRes.cleaned)
+  const calls: ParsedToolCall[] = [...fenceCalls, ...invokeRes.calls, ...tntRes.calls]
+  let parseFailures = fenceFailures + invokeRes.failures + tntRes.failures
+  const cleaned = tntRes.cleaned
 
   // Pattern 1: tool_call: function_name({...})
   // Use findBalancedJson for nested JSON args (e.g., opencode write with content containing code)
@@ -510,7 +619,7 @@ export const BROKEN_TOOL_CALL_FEEDBACK =
  * pháp hệ thống chấp nhận.
  */
 export const MALFORMED_INVOKE_FEEDBACK =
-  '⚠️ Bạn vừa cố gọi tool bằng cú pháp <invoke>…</invoke> nhưng SAI ĐỊNH DẠNG (thiếu name="tên_tool" / args không chuẩn) → KHÔNG tool nào được thực thi (KHÔNG coi text này là báo cáo hoàn thành). Hệ thống chỉ chấp nhận: (1) tool_call: <tên_tool>({json args}) — vd: tool_call: todo_write({"todos": [{"content": "việc cần làm", "status": "pending"}]}) HOẶC (2) <invoke name="tên_tool">{json args}</invoke>. Phát lại NGAY theo 1 trong 2 cú pháp đúng.'
+  '⚠️ Bạn vừa cố gọi tool bằng cú pháp <invoke>/<tool_name> nhưng SAI ĐỊNH DẠNG (thiếu name="tên_tool" / params không chuẩn / bị cắt cụt giữa chừng) → KHÔNG tool nào được thực thi (KHÔNG coi text này là báo cáo hoàn thành). Hệ thống chấp nhận: (1) tool_call: <tên_tool>({json args}) — vd: tool_call: todo_write({"todos": [{"content": "việc cần làm", "status": "pending"}]}) HOẶC (2) <invoke name="tên_tool">{json args}</invoke> HOẶC (3) <tool_name>tên_tool</tool_name><parameters>{json args}</parameters>. Phát lại NGAY theo 1 trong 3 cú pháp đúng (cắt args ngắn nếu bị cắt cụt).'
 
 /**
  * 21-d — Silent parse-drop detector.
@@ -545,6 +654,15 @@ export function detectBrokenToolCallHint(output: string): string | null {
     // — bằng chứng paste 2 của user: model deliberation cú pháp trong thinking)
     // → dạy lại cú pháp đúng
     if (/<\/?invoke[\s>]/i.test(output)) return MALFORMED_INVOKE_FEEDBACK
+    // ROUND-54 FIX E: `<tool_name>` (Anthropic-style) hiện diện nhưng parse
+    // không ra call nào — name ngoài whitelist / params vắng hoàn toàn / vỏ
+    // <parameters> mất đóng (bằng chứng user r54: "invoke\n<tool_name>todo_read
+    // </tool_name><parameters>…" rơi thẳng vào thought content) → dạy lại
+    if (/<tool_name>/i.test(output)) return MALFORMED_INVOKE_FEEDBACK
+    // ROUND-54 FIX E: dòng "invoke" trơ trụi (mất cặp `<` — dấu vết cú pháp
+    // invoke bị provider bể) đứng MỘT MÌNH trên dòng → coi là ý định tool call
+    // hỏng format chứ không phải văn xuôi thường
+    if (/(^|\n)[ \t]*invoke[ \t]*(\n|$)/i.test(output)) return MALFORMED_INVOKE_FEEDBACK
     return null
   } catch {
     return null // fail-open — không được phép crash caller
