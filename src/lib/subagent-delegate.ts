@@ -59,7 +59,7 @@ import { executeTool, buildCompactToolSchemasSection, getToolDefinitions } from 
 // ROUND-27 FIX V1 — envelope JSON hợp lệ cho tool message của sub-agent (dùng
 // chung với goal-loop + workflow-engine; context-compression không import lại
 // module này → không circular).
-import { truncateToolMessageJson } from '@/lib/context-compression'
+import { capAssistantContentForTranscript, truncateToolMessageJson } from '@/lib/context-compression'
 import type { LLMTool } from '@/lib/llm'
 import { parseToolCallsFromOutput, detectBrokenToolCallHint, tryParseLooseJson } from '@/lib/tool-calls'
 import { resolveAgent } from '@/lib/code-team/agent-resolver'
@@ -769,7 +769,7 @@ async function runSubAgentForProfileInner(params: {
           const brokenHint = detectBrokenToolCallHint(result.content)
           if (brokenHint && parseFailNudges < 2 && !timedOut && (SUBAGENT_EFFECTIVE_MAX_ITERATIONS === 0 || iterations < SUBAGENT_EFFECTIVE_MAX_ITERATIONS)) {
             parseFailNudges++
-            transcript.push({ role: 'assistant', content: result.content })
+            transcript.push({ role: 'assistant', content: capAssistantContentForTranscript(result.content) })
             transcript.push({ role: 'tool', content: brokenHint })
             continue
           }
@@ -779,7 +779,7 @@ async function runSubAgentForProfileInner(params: {
           const taskNeedsEvidence = /đọc|read|review|phân tích|analyz|kiểm tra|verify|lint|test|file|source|code|mã nguồn/i.test(task)
           if (!nudgedOnce && taskNeedsEvidence && evidence.length === 0 && (SUBAGENT_MAX_ITERATIONS === 0 || iterations < SUBAGENT_MAX_ITERATIONS) && !timedOut) {
             nudgedOnce = true
-            transcript.push({ role: 'assistant', content: result.content })
+            transcript.push({ role: 'assistant', content: capAssistantContentForTranscript(result.content) })
             transcript.push({
               role: 'user',
               content: '⚠️ Bạn vừa KẾT LUẬN mà CHƯA chạy tool nào. Nhiệm vụ yêu cầu bằng chứng THẬT (đọc file / chạy lệnh / lint...). Hãy dùng tools (file_read / grep / shell...) để thu thập thông tin chính xác RỒI mới báo cáo — KHÔNG đoán nội dung file/code. Nếu bạn đã có thông tin chính xác từ context parent cung cấp, hãy nêu rõ nguồn trong báo cáo và chạy ít nhất 1 tool xác nhận.',
@@ -799,7 +799,7 @@ async function runSubAgentForProfileInner(params: {
             !timedOut && !isCancelled()
           ) {
             todoCompletionNudges++
-            transcript.push({ role: 'assistant', content: result.content })
+            transcript.push({ role: 'assistant', content: capAssistantContentForTranscript(result.content) })
             transcript.push({
               role: 'user',
               content: `⚠️ Bạn vừa KẾT LUẬN nhưng kế hoạch todo của bạn còn ${openTodos.length} mục CHƯA hoàn thành:\n${openTodos.map((t, i) => `${i + 1}. [${t.status}] ${t.content}`).join('\n')}\n\nHãy HOÀN THÀNH các mục này bằng tools (làm từng mục, cập nhật trạng thái qua todo_write) — hoặc nếu mục nào THẬT SỰ không làm được, đánh dấu status "failed" kèm lý do cụ thể. KHÔNG được bỏ dở không lý do. (Lần nhắc ${todoCompletionNudges}/${MAX_TODO_COMPLETION_NUDGES} — sau đó hệ thống tự đóng todo theo verdict cuối.)`,
@@ -811,7 +811,7 @@ async function runSubAgentForProfileInner(params: {
           return
         }
 
-        transcript.push({ role: 'assistant', content: result.content })
+        transcript.push({ role: 'assistant', content: capAssistantContentForTranscript(result.content) })
 
         for (const tc of toolCalls) {
           if (isCancelled() || timedOut) break // zombie guard — dừng tool batch

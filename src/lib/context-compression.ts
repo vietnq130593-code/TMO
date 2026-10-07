@@ -66,6 +66,28 @@ export const MIN_COMPRESSIBLE_MESSAGES = 4
  */
 export const TOOL_RESULT_MAX_CHARS = intEnvPositive('TOOL_RESULT_MAX_CHARS', 12_000)
 
+/**
+ * ROUND-53 FIX A1 (bằng chứng mission r53 Linh Sickyx: chu kỳ 3 model trả
+ * 150.305 ký tự THUẦN VĂN 0 tool call → push nguyên văn vào transcript →
+ * prompt chu kỳ 4-5 phình 60k+ tokens → completion co rút 34-441 chars,
+ * chết đói reasoning → stall brake 3/3 kết thúc mission). Cap nội dung
+ * assistant đẩy vào transcript: giữ đầu 20k + đuôi 3k (cú pháp tool_call
+ * thường nằm cuối) + ghi chú phần đã cắt. Digest chu kỳ sau vẫn nén tiếp —
+ * cap này chỉ chặn ca bệnh lý context-bomb.
+ *
+ * AUDIT SAU r53: chuyển sang module dùng chung — vòng SUB-AGENT có 4 push
+ * site assistant raw (subagent-delegate.ts) cùng provider/model, cùng nguy
+ * cơ context-bomb (bằng chứng r53: sub-agent đốt 950k tokens) nhưng fix A1
+ * gốc chỉ phủ goal-loop. Env-configurable theo pattern module này.
+ */
+export const ASSISTANT_PUSH_CAP_CHARS = intEnvPositive('ASSISTANT_PUSH_CAP_CHARS', 24_000)
+export function capAssistantContentForTranscript(content: string): string {
+  if (typeof content !== 'string' || content.length <= ASSISTANT_PUSH_CAP_CHARS) return content
+  const head = content.slice(0, 20_000)
+  const tail = content.slice(-3_000)
+  return `${head}\n\n[…⚠ Nội dung dài ${content.length} ký tự — đã cắt giữ đầu 20k + đuôi 3k để bảo vệ context. KHÔNG lặp lại phần đã viết: nếu cần phần giữa, lưu vào work_data/file rồi trích dẫn ngắn.]\n\n${tail}`
+}
+
 /** Timeout LLM digest (goal-loop cũ: 90s — utility prompt nhỏ, không cần dài hơn) */
 const DIGEST_LLM_TIMEOUT_MS = 90_000
 

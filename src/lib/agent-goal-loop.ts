@@ -95,6 +95,7 @@ import {
   COMPRESS_THRESHOLD_CHARS,
   KEEP_RECENT_MESSAGES,
   TOOL_RESULT_MAX_CHARS,
+  capAssistantContentForTranscript,
   compressConversation,
   truncateToolMessageJson,
 } from '@/lib/context-compression'
@@ -1452,22 +1453,10 @@ function progressFingerprint(messages: GoalMessage[]): string {
  * pushToolMessage bên dưới vẫn dùng y hệt — hành vi không đổi.
  */
 
-/**
- * ROUND-53 FIX A1 (bằng chứng mission r53 Linh Sickyx: chu kỳ 3 model trả
- * 150.305 ký tự THUẦN VĂN 0 tool call → push nguyên văn vào transcript →
- * prompt chu kỳ 4-5 phình 60k+ tokens → completion co rút 34-441 chars,
- * chết đói reasoning → stall brake 3/3 kết thúc mission). Cap nội dung
- * assistant đẩy vào transcript: giữ đầu 20k + đuôi 3k (cú pháp tool_call
- * thường nằm cuối) + ghi chú phần đã cắt. Digest chu kỳ sau vẫn nén tiếp —
- * cap này chỉ chặn ca bệnh lý context-bomb.
- */
-const ASSISTANT_PUSH_CAP_CHARS = 24_000
-function capAssistantContentForTranscript(content: string): string {
-  if (typeof content !== 'string' || content.length <= ASSISTANT_PUSH_CAP_CHARS) return content
-  const head = content.slice(0, 20_000)
-  const tail = content.slice(-3_000)
-  return `${head}\n\n[…⚠ Nội dung dài ${content.length} ký tự — đã cắt giữ đầu 20k + đuôi 3k để bảo vệ context. KHÔNG lặp lại phần đã viết: nếu cần phần giữa, lưu vào work_data/file rồi trích dẫn ngắn.]\n\n${tail}`
-}
+// ROUND-53 FIX A1 — capAssistantContentForTranscript (cap assistant push
+// 24k: đầu 20k + đuôi 3k + ghi chú) chuyển sang @/lib/context-compression ở
+// trên (import) — AUDIT SAU r53: vòng sub-agent (subagent-delegate.ts) có 4
+// push site assistant raw cùng nguy cơ context-bomb → dùng chung 1 hàm.
 
 /** Đẩy tool result vào messages với cap ký tự (chống context nổ).
  *  Tool kiểm định (lint/type_check/run_tests...) được cap cao hơn — agent và
@@ -3151,7 +3140,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             messages.push({ role: 'assistant', content: capAssistantContentForTranscript(result.content) })
             pushToolMessage(messages, { tool: 'parse_error', success: false, result: brokenHint })
             evidence.push({ cycle, kind: 'tool', tool: 'parse_error', success: false, text: 'tool call bị cắt/JSON lỗi — đã yêu cầu phát lại gọn hơn' })
-            recordAgentThought(agentSessionId, `⚠️ Tool call bị cắt cụt giữa JSON (lần ${parseFailNudges}/2) — đã phản hồi lỗi để agent phát lại gọn hơn (chia file nhỏ, file_write append)`, totalIterations)
+            recordAgentThought(agentSessionId, `⚠️ Tool call bị cắt cụt giữa JSON (lần ${parseFailNudges}/${parseNudgeCap}) — đã phản hồi lỗi để agent phát lại gọn hơn (chia file nhỏ, file_write append)`, totalIterations)
             continue
           }
         } catch { /* fail-open — feedback lỗi không được phép crash loop */ }
@@ -3175,7 +3164,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
               result: `⚠️ Output của bạn vừa bị CORRUPT ở tầng hạ tầng provider (${garbleCount} marker template lẫn vào nội dung — không phải lỗi của bạn). PHÁT LẠI nội dung gọn sạch. Nếu ý định của bạn là gọi tool thì phát ĐÚNG cú pháp: tool_call: <tên_tool>({json args}) — tuyệt đối không viết dạng văn bản.`,
             })
             evidence.push({ cycle, kind: 'tool', tool: 'parse_error', success: false, text: `garbled output (${garbleCount} provider markers) — đã yêu cầu phát lại sạch` })
-            recordAgentThought(agentSessionId, `⚠️ Output bị corrupt tầng provider (${garbleCount} marker lạ) — đã phản hồi yêu cầu phát lại sạch (lần ${parseFailNudges}/2)`, totalIterations)
+            recordAgentThought(agentSessionId, `⚠️ Output bị corrupt tầng provider (${garbleCount} marker lạ) — đã phản hồi yêu cầu phát lại sạch (lần ${parseFailNudges}/${parseNudgeCap})`, totalIterations)
             continue
           }
           const intentTool = DELEGATION_INTENT_TOOLS.find(t => new RegExp(`\\b${t}\\b`).test(result.content || ''))

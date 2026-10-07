@@ -128,18 +128,32 @@ export async function fileRead(args: {
   // tool bị tầng pushToolMessage cap 12k chars (main) / 8k (sub-agent) cắt
   // envelope → metadata pagination (nextOffset/totalLines) nằm CUỐI JSON bị xói,
   // note envelope chỉ dạy 'thu hẹp phạm vi' KHÔNG dạy offset. Giờ: (1) tự cắt
-  // content tại ranh giới DÒNG nằm dưới budget 9k chars — kết quả KHÔNG bao giờ
-  // chạm envelope, pagination luôn nguyên vẹn; (2) ĐẢO thứ tự trường — pagination
-  // + note đứng TRƯỚC content (kể cả khi consumer cap thấp hơn cắt envelope,
-  // head 55% vẫn giữ nguyên metadata); (3) note dạy đọc tiếp bằng offset cụ thể.
-  const FILE_READ_CONTENT_BUDGET = 9_000
+  // content tại ranh giới DÒNG nằm dưới budget; (2) ĐẢO thứ tự trường —
+  // pagination + note đứng TRƯỚC content (kể cả khi consumer cap thấp hơn cắt
+  // envelope, head 55% vẫn giữ nguyên metadata); (3) note dạy đọc tiếp bằng
+  // offset cụ thể.
+  //
+  // AUDIT SAU r53 — sửa tiếp B1a: budget 9k gốc đo theo RAW nhưng thứ nằm trong
+  // envelope là JSON SERIALIZED — ký tự " và \n của code escape thành 2 chars
+  // đẩy 9k raw lên >9.6k serialized → VƯỢT cap sub-agent 8k (file_read của
+  // sub-agent chẩn đoán r53 vẫn dính envelope, trái tuyên bố 'không bao giờ
+  // chạm'). Giờ: budget 7k đo theo ĐỘ DÀI SERIALIZED THẬT (JSON.stringify nội
+  // dung đã format — kể cả prefix số dòng, tab escape ×2) + ~500 metadata <
+  // 8k = envelope nhỏ nhất mọi cấu hình → không chạm envelope ở CẢ HAI vòng.
+  const FILE_READ_CONTENT_BUDGET = 7_000
+  const measureContent = (lines: string[]) => JSON.stringify(
+    (wantLineNumbers
+      ? lines.map((line, i) => `${String(startIdx + i + 1).padStart(6, ' ')}\t${line}`)
+      : lines
+    ).join('\n')
+  ).length
   let budgetEnd = endIdx
-  if (visibleLines.join('\n').length > FILE_READ_CONTENT_BUDGET) {
-    const avgCharsPerLine = Math.max(1, visibleLines.join('\n').length / Math.max(1, visibleLines.length))
+  if (measureContent(visibleLines) > FILE_READ_CONTENT_BUDGET) {
+    const avgCharsPerLine = Math.max(1, measureContent(visibleLines) / Math.max(1, visibleLines.length))
     let est = startIdx + Math.floor(FILE_READ_CONTENT_BUDGET / avgCharsPerLine)
     if (est <= startIdx) est = startIdx + 1
     budgetEnd = Math.min(endIdx, est + 4)
-    while (budgetEnd > startIdx + 1 && allLines.slice(startIdx, budgetEnd).join('\n').length > FILE_READ_CONTENT_BUDGET) {
+    while (budgetEnd > startIdx + 1 && measureContent(allLines.slice(startIdx, budgetEnd)) > FILE_READ_CONTENT_BUDGET) {
       budgetEnd--
     }
     // vẫn vượt sau khi cắt về 1 dòng = dòng đơn khổng lồ → giữ nguyên dòng đó
@@ -227,14 +241,19 @@ function truncateOutput(text: string, maxChars = 50_000): { output: string; trun
 }
 
 /**
- * ROUND-53 FIX — WRITE GUARD chống provider-corruption lọt vào source
- * (bằng chứng r53: src/lib/agent-goal-loop.ts bị ghi đè tag '[model-prior]'
- * → 'odel-prior]' bởi file_edit của mission trước — tool args đi qua provider
- * KHÔNG được strip ở tầng callZenProvider như message content, ký tự hỏng lọt
- * THẲNG vào file rồi sống âm thầm trong working tree cho tới mission sau).
- * Marker template provider (class `]<]xxx[>[` — regex mirror tool-calls.ts,
- * giữ self-contained tránh circular import) KHÔNG bao giờ là nội dung hợp lệ →
- * thấy ≥1 marker trong nội dung SẮP GHI là TỪ CHỐI + yêu cầu phát lại sạch.
+ * ROUND-53 WRITE GUARD — chống provider-marker corruption lọt vào source.
+ *
+ * SỬA SAI BẰNG CHỨNG (audit sau r53, python byte-level): bằng chứng gốc r53
+ * ("tag model-prior trong agent-goal-loop.ts bị file_edit của mission trước
+ * ghi đè hỏng") hóa ra là ARTIFACT TẦNG QUAN SÁT — output hiển thị bị tầng
+ * vận chuyển ăn mất 2 ký tự đầu của tag; kiểm byte-level cho thấy file nguồn
+ * VÀ báo cáo cuối của agent đều chứa tag ĐÚNG từ đầu (chưa từng hỏng —
+ * "phục hồi tag" trong commit a75efb9 thực chất là no-op). GUARD VẪN GIỮ:
+ * marker template provider (dạng ]<]xxx[>[ — regex mirror tool-calls.ts,
+ * giữ self-contained tránh circular import) là corruption THẬT có bằng
+ * chứng độc lập r44 (TEST A marker dày đặc trong output) + r49/r50 (marker
+ * trong paste user — đã strip tại nguồn ZEN) — thấy ≥1 marker trong nội dung
+ * SẮP GHI là TỪ CHỐI + yêu cầu phát lại sạch.
  */
 function providerGarbleGuard(content: unknown, label: string): string | null {
   try {
