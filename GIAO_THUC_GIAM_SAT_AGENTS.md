@@ -1,6 +1,6 @@
 # GIAO THỨC GIÁM SÁT AGENTS — HỆ THỐNG VẬN HÀNH TMO (The Magnum Opus)
 
-> **Phiên bản:** 1.2 — 2026-10-07 (round 56: đổi tên "quy trình" → **giao thức** giám sát theo chỉ đạo user; bổ sung kênh quan sát thứ 5 **FINAL REPORTS** — đọc báo cáo cuối mission/sub-agent + verdict Opus. v1.1 2026-10-07 round 52–55: mục 1b kích hoạt theo dõi đồng bộ + kênh THINKING; v1.0 2026-10-01 vòng 18–19)
+> **Phiên bản:** 1.3 — 2026-10-07 (round 57: rà soát lượt 2 sau hậu kiểm mission …iahkk3 — tự kiểm định chính watcher: FIX C1/C2/C3 chống nhiễu + false-positive; chính sách hoãn Opus review theo quyết định user; FIX B1 agentRole symmetry + FIX B4 heartbeat pha chuyển chu kỳ + parser A1 bên TMO). v1.2 2026-10-07 round 56: đổi tên "quy trình" → **giao thức** giám sát theo chỉ đạo user; bổ sung kênh quan sát thứ 5 **FINAL REPORTS**. v1.1 2026-10-07 round 52–55: mục 1b kích hoạt theo dõi đồng bộ + kênh THINKING; v1.0 2026-10-01 vòng 18–19)
 > **Phạm vi:** giám sát toàn bộ agents (Omega, Opus, ALISTA, SENTINEL, NEMESIS, Code Team…) trong vòng đời mission: từ dispatch chỉ đạo → thực thi goal-loop → phán quyết → đóng sổ.
 > **Người dùng:** operator / trọng tài vận hành (người hoặc agent giám sát).
 > **Cấu trúc:** mỗi lĩnh vực gồm 4 khối — (1) Mục tiêu · (2) Công việc · (3) Nguồn bằng chứng & cách đo · (4) **Rubric chấm điểm**.
@@ -85,11 +85,19 @@ WHERE timestamp > :windowStart GROUP BY agentRole, toolName, success;
 **Lưu ý vận hành:**
 - `mission-watch.ts` chỉ ĐỌC (SQLite read-only + tail jsonl) — không can thiệp, không sửa code TMO, an toàn chạy song song mission thật.
 - Cảnh báo `🔁 lặp ≥5 lần cùng args + cùng kết quả` hoặc `heartbeat stale > 3 phút` → chuyển quyết định can thiệp theo mục 6 (không tự ý dừng mission — stall brake của hệ thống có thể là điểm dừng thiết kế).
-- `⚠️ Nghi tool-call CHƯA ĐƯỢC PARSE` trong assistant content → hệ thống đã tự phản hồi MALFORMED feedback dạy lại cú pháp (từ r54/r55); chỉ cần ghi nhận — nếu lặp ≥ 3 lần cùng chỗ mới can thiệp.
+- `⚠️ Nghi tool-call CHƯA ĐƯỢC PARSE` trong assistant content → hệ thống đã tự phản hồi MALFORMED feedback dạy lại cú pháp (từ r54/r55); chỉ cần ghi nhận — nếu lặp ≥ 3 lần cùng chỗ mới can thiệp. **(r57 FIX C3):** cảnh báo này giờ đã TƯƠNG QUAN với tool events thật — chỉ phát khi tool cùng tên KHÔNG chạy (bằng chứng …iahkk3: 7/7 cảnh báo cũ đều false-positive vì Form A/B r44 đã parse); nếu tool đã chạy thì im lặng.
+- **(r57 FIX C1):** `💤 heartbeat stale … sub-agent delegation đang chạy` = parent chờ delegation (bình thường, báo 1 lần rồi im); `⚠️ heartbeat stale` giờ dedupe theo phút — không còn 270 dòng/lần như …iahkk3. Hết stale/delegation tự reset.
+- **(r57 FIX C2):** `🚀 SUB-AGENT delegation khởi động` giờ phát đúng 1 lần/file (trước đây lặp mỗi poll vì bug path-vs-filename).
 - Mission không cần theo dõi liên tục (vd cron nền) → tối thiểu chạy SNAPSHOT đầu + cuối phiên:
   ```bash
   bun scripts/mission-watch.ts            # snapshot nhanh: mission đang chạy + 6 mission gần nhất
   ```
+
+**Chính sách OPUS REVIEW (quyết định chủ trì của user — round 57, 2026-10-07):**
+> Chế độ auto-review của Opus (`AgentSession.opusReviewMode`) **GIỮ OFF** cho đến khi user chủ động bật. Lý do: user muốn agents vận hành trơn tru ở một mức độ nhất định (cú pháp tool-call ổn, todo không mù scope, hết bế tắc no_progress vô ích) TRƯỚC khi đốt token cho tầng review độc lập. Hệ quả cần biết khi vận hành:
+> - Kênh `⚖️ OPUS VERDICT` sẽ KHÔNG phát sự kiện nào cho session chưa bật — section OPUS VERDICT của replay hiện `(chưa có review nào)` là ĐÚNG theo chính sách này, không phải lỗi cần sửa.
+> - Phiên vận hành nào cũng KHÔNG được tự ý bật `opusReviewMode` (kể cả để "thử") — chỉ user mới được bật (qua UI hoặc chỉ đạo trực tiếp).
+> - Khi user quyết định bật: kiểm chứng bằng một mission thật + xác nhận kênh `⚖️ OPUS VERDICT` phát đúng verdict (5 trục + STOP predicate) rồi mới coi là sống.
 
 ---
 

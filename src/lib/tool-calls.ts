@@ -66,6 +66,12 @@ export function tryParseLooseJson(raw: string): Record<string, unknown> | null {
     const cleaned = stripTrailingCommasStringAware(escaped)
     const obj = JSON.parse(cleaned)
     return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : null
+  } catch { /* rơi xuống repair tầng 2 */ }
+  // ROUND-57: tầng 2 — keys không quote (JS object literal) + ghép cả 3 pass
+  try {
+    const repaired = quoteUnquotedKeysStringAware(stripTrailingCommasStringAware(escapeRawControlCharsInStrings(raw)))
+    const obj = JSON.parse(repaired)
+    return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : null
   } catch {
     return null
   }
@@ -228,12 +234,12 @@ function coerceXmlValue(raw: string): unknown {
   if (t === 'null') return null
   if (t.startsWith('{') || t.startsWith('[')) {
     // Giá trị JSON thuần (OBJECT hoặc ARRAY — tryParseLooseJson chỉ nhận object)
-    // → loose-repair (newline thô/trailing comma) rồi parse
+    // → loose-repair (newline thô/trailing comma/keys không quote r57) rồi parse
     try {
       return JSON.parse(t) as unknown
     } catch { /* rơi xuống repair */ }
     try {
-      const repaired = stripTrailingCommasStringAware(escapeRawControlCharsInStrings(t))
+      const repaired = quoteUnquotedKeysStringAware(stripTrailingCommasStringAware(escapeRawControlCharsInStrings(t)))
       return JSON.parse(repaired) as unknown
     } catch { /* giữ string */ }
   }
@@ -294,6 +300,81 @@ export function countProviderGarbleMarkers(content: string): number {
 
 export function stripProviderGarbleMarkers(content: string): string {
   return content.replace(PROVIDER_GARBLE_MARKER_RE, '')
+}
+
+/**
+ * ROUND-57 FIX (A1 — bão cú pháp mission …iahkk3) — AUTO-REPAIR marker
+ * near-miss: model nền phát tool call với THẺ/TIỀN TỐ hỏng 1-2 ký tự trong
+ * khi Ý ĐỊNH + args đầy đủ — trước đây rơi vào thought content, 0 call thực
+ * thi, agent đoán mò lặp lại (~11/28 vòng chết vì parse trong mission
+ * …iahkk3). Bằng chứng nguyên văn (run_1791376496694_1):
+ *   R1 `cinvoke name="todo_read"> <parameter name="sessionId">…` (12:38:29)
+ *   R2 `c_todo_write({ todos: [ { } ], sessionId: … })` (12:39:22 — 2 call
+ *      mashed liền nhau, keys không quote)
+ *   R3 `<invoke_call">todo_write({"sessionId":"default",…})` (12:35:48)
+ *   R4 `��� name="todo_write" parameters={"sessionId":…}` (12:57:23 — ký tự
+ *      private-use thay thẻ + attribute-style parameters=)
+ *   R5 `n invoke name="todo_write">` (12:37:47 — mất `<`, stray 'n')
+ * Mỗi repair: regex CHẶN (chỉ hình dạng đặc thù của lỗi thật), tên tool vẫn
+ * phải qua whitelist ở tầng parse (chống hallucinate) — repair chỉ đổi MARKER,
+ * không đụng args. Output sạch → regex không khớp → zero tác động phụ.
+ */
+function repairNearMissToolMarkers(output: string): string {
+  // R2 trước R1: `c_todo_write(` — c_ + tên tool whitelist → pattern-1
+  // (`c` cuối có thể là ký tự chat-template rơi, không đoán thêm).
+  let s = output.replace(/\bc_([A-Za-z_][\w]*)\s*\(/g, (full, name: string) =>
+    KNOWN_TOOL_NAME_SET.has(name) ? `tool_call: ${name}(` : full,
+  )
+  // R1: `cinvoke` → `<invoke` (typo tiền tố c — xuất hiện lặp lại).
+  s = s.replace(/\bcinvoke\b/g, '<invoke')
+  // R3: `<invoke_call">` / `<invoke_call>` (tag mở mangled/fused) → tiền tố
+  // pattern-1; thẻ đóng `</invoke_call>` tương tự (nếu có) chỉ là text thừa.
+  s = s.replace(/<\/?invoke_call"?>/g, (m) => (m.startsWith('</') ? ' ' : 'tool_call: '))
+  // R4: attribute-style `name="X" parameters={` (kèm rác byte trước name=
+  // cũng sống — regex không yêu cầu ký tự đứng trước) → invoke Form A.
+  s = s.replace(/name\s*=\s*"([A-Za-z_][\w.-]*)"\s+parameters\s*=\s*(?=\s*\{)/g, (full, name: string) =>
+    KNOWN_TOOL_NAME_SET.has(name) ? `<invoke name="${name}">` : full,
+  )
+  // R5: `invoke name="` THIẾU `<` (kể cả stray word trước nó — 'n invoke…')
+  // → `<invoke name="`. `<invoke` chuẩn không khớp (ký tự trước là `<`).
+  s = s.replace(/(^|[\s>])invoke\s+name\s*=\s*"/g, '$1<invoke name="')
+  return s
+}
+
+/**
+ * ROUND-57 FIX (A1 — tầng loose-repair bổ sung): model phát args dạng JS
+ * OBJECT LITERAL (keys không quote — bằng chứng `c_todo_write({ todos: [ { } ],
+ * sessionId: "sess_…" })`) → JSON.parse fail dù balanced. Pass này quote key
+ * nằm NGOÀI string (string-aware — keys trong giá trị string không bị đụng),
+ * chạy trong chuỗi repair của tryParseLooseJson. Chỉ được gọi trên chuỗi
+ * JSON-candidate đã trích từ ngữ cảnh tool call (balanced braces) — không
+ * chạy trên văn xuôi tuỳ tiện.
+ */
+function quoteUnquotedKeysStringAware(raw: string): string {
+  let out = ''
+  let inString = false
+  let escape = false
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]
+    if (escape) { out += ch; escape = false; continue }
+    if (ch === '\\' && inString) { out += ch; escape = true; continue }
+    if (ch === '"') { inString = !inString; out += ch; continue }
+    if (inString) { out += ch; continue }
+    // NGOÀI string: `{` hoặc `,` theo sau là `key:` không quote → quote key
+    if (ch === '{' || ch === ',') {
+      out += ch
+      let j = i + 1
+      while (j < raw.length && /\s/.test(raw[j])) j++
+      const m = /^[A-Za-z_][\w-]*\s*:/.exec(raw.slice(j))
+      if (m) {
+        out += `"${m[0].slice(0, m[0].indexOf(':')).trim()}":`
+        i = j + m[0].length - 1
+      }
+      continue
+    }
+    out += ch
+  }
+  return out
 }
 
 /**
@@ -481,20 +562,31 @@ function extractToolNameTagCalls(output: string): { calls: ParsedToolCall[]; cle
       const closeRel = trimmed.indexOf('</parameters>', innerStart)
       const inner = closeRel === -1 ? trimmed.slice(innerStart) : trimmed.slice(innerStart, closeRel)
       const innerTrim = inner.trim()
-      if (innerTrim.startsWith('{')) {
-        const jsonStr = findBalancedJsonUtil(inner, '')
-        if (jsonStr) {
-          args = tryParseLooseJson(jsonStr)
+      // ROUND-57 (T9-probe — mirror nguyên tắc r55 "cụt thì KHÔNG execute"):
+      // vỏ <parameters> thiếu đóng + đuôi còn thẻ DỞ (dangling '<' không có
+      // '>') → output bị cắt cụt giữa chừng — args thu được chỉ là MẢNH rơi
+      // (vd mất agentRole) → execute với args thiếu sẽ cho kết quả gây nhiễu
+      // (todo_read chạy với role sai → 0 todo — đúng lớp bế tắc mission
+      // …iahkk3). Không tạo call, không đếm failures — fallback detector trả
+      // MALFORMED feedback v3 (kèm skeleton của tool định gọi) dạy phát lại.
+      const danglingTag = closeRel === -1 && innerTrim.lastIndexOf('<') > innerTrim.lastIndexOf('>')
+      if (!danglingTag) {
+        if (innerTrim.startsWith('{')) {
+          const jsonStr = findBalancedJsonUtil(inner, '')
+          if (jsonStr) {
+            args = tryParseLooseJson(jsonStr)
+          }
+          // JSON cắt cụt / parse fail → KHÔNG đếm failures — detector fallback
+          // `<tool_name>` sẽ trả MALFORMED_INVOKE_FEEDBACK dạy lại đúng nhóm cú pháp
+        } else {
+          const argsObj = parseXmlTagArgs(inner)
+          if (argsObj && Object.keys(argsObj).length > 0) args = argsObj
+          // params rỗng/không khớp tag → KHÔNG đếm failures — fallback detector
         }
-        // JSON cắt cụt / parse fail → KHÔNG đếm failures — detector fallback
-        // `<tool_name>` sẽ trả MALFORMED_INVOKE_FEEDBACK dạy lại đúng nhóm cú pháp
-      } else {
-        const argsObj = parseXmlTagArgs(inner)
-        if (argsObj && Object.keys(argsObj).length > 0) args = argsObj
-        // params rỗng/không khớp tag → KHÔNG đếm failures — fallback detector
+        // consumed: tính đến cuối vỏ parameters (hoặc hết chuỗi nếu thiếu vỏ đóng)
+        consumed = leadingWs + (closeRel === -1 ? trimmed.length : closeRel + '</parameters>'.length)
       }
-      // consumed: tính đến cuối vỏ parameters (hoặc hết chuỗi nếu thiếu vỏ đóng)
-      consumed = leadingWs + (closeRel === -1 ? trimmed.length : closeRel + '</parameters>'.length)
+      // dangling → args giữ null, KHÔNG đếm failures — fallback detector dạy lại
     } else if (trimmed.startsWith('{')) {
       // JSON trực tiếp sau </tool_name> (không có vỏ parameters)
       const jsonStr = findBalancedJsonUtil(trimmed, '')
@@ -561,7 +653,10 @@ function extractToolNameTagCalls(output: string): { calls: ParsedToolCall[]; cle
 export function extractToolCallsWithDiagnostics(rawOutput: string): ToolCallParseResult {
   // ROUND-44 FIX (c): strip marker rác của provider TRƯỚC mọi parse — marker
   // chen giữa `tool_call: x({...})` cũng làm regex cũ miss.
-  const output = stripProviderGarbleMarkers(rawOutput)
+  // ROUND-57 FIX (A1): repair marker near-miss (cinvoke/c_tool/invoke_call/
+  // parameters=//invoke thiếu `<`) — xem repairNearMissToolMarkers cho bằng
+  // chứng nguyên văn từng dạng.
+  const output = repairNearMissToolMarkers(stripProviderGarbleMarkers(rawOutput))
   const { calls: fenceCalls, cleaned: afterFence, failures: fenceFailures } = extractFencedFileWrites(output)
   // ROUND-44 FIX (c): invoke-recovery chạy TRƯỚC regex (format đặc thù, không
   // đụng pattern 1/2); vùng đã parse bị cắt khỏi chuỗi regex quét tiếp.
@@ -664,6 +759,47 @@ export const MALFORMED_INVOKE_FEEDBACK =
   '⚠️ Bạn vừa cố gọi tool bằng cú pháp <invoke>/<tool_name> nhưng SAI ĐỊNH DẠNG (thiếu name="tên_tool" / params không chuẩn / bị cắt cụt giữa chừng) → KHÔNG tool nào được thực thi (KHÔNG coi text này là báo cáo hoàn thành). Hệ thống chấp nhận: (1) tool_call: <tên_tool>({json args}) — vd: tool_call: todo_write({"todos": [{"content": "việc cần làm", "status": "pending"}]}) HOẶC (2) <invoke name="tên_tool">{json args}</invoke> (hoặc <invoke name="tên_tool"><parameter name="tên_arg">giá trị</parameter>…</invoke>) HOẶC (3) <tool_name>tên_tool</tool_name><parameters>{json args}</parameters>. Phát lại NGAY theo 1 trong 3 cú pháp đúng (cắt args ngắn nếu bị cắt cụt).'
 
 /**
+ * ROUND-57 FIX (A1 — feedback v3 "copy-paste được"): feedback chung chung bắt
+ * model phải TỰ DỊCH cú pháp → vẫn đoán mò (bằng chứng mission …iahkk3: 6/6
+ * prose-only, model phát 6 biến thể hỏng mới dù đã được dạy 3 cú pháp). Giờ
+ * trích TÊN TOOL model định gọi từ chính chuỗi hỏng (kể cả dạng mangled) rồi
+ * gắn kèm skeleton HOÀN CHỈNH của tool đó — model chỉ cần thay args. Fail-open:
+ * không trích được → trả feedback chung (giữ nguyên hành vi cũ).
+ */
+function extractIntendedToolName(output: string): string | null {
+  const patterns = [
+    /<invoke\s+name\s*=\s*"?([A-Za-z_][\w.-]*)/i,
+    /invoke\s+name\s*=\s*"?([A-Za-z_][\w.-]*)/i,
+    /<tool_name>\s*([A-Za-z_][\w.-]*)\s*<\/tool_name>/i,
+    /"name"\s*:\s*"([a-z0-9_.-]+)"/i,
+    /\bc_([A-Za-z_][\w]*)\s*\(/i,
+    /<\/?invoke_call"?>\s*([A-Za-z_][\w]*)\s*\(/i,
+    /name\s*=\s*"([A-Za-z_][\w.-]*)"\s+parameters/i,
+  ]
+  for (const re of patterns) {
+    const m = re.exec(output)
+    if (m) {
+      let name = m[1]
+      if (name.startsWith('functions.')) name = name.slice('functions.'.length)
+      if (KNOWN_TOOL_NAME_SET.has(name)) return name
+    }
+  }
+  return null
+}
+
+function malformedInvokeFeedback(intendedTool: string | null): string {
+  if (!intendedTool) return MALFORMED_INVOKE_FEEDBACK
+  return (
+    `⚠️ Bạn vừa cố gọi tool "${intendedTool}" bằng cú pháp <invoke>/<tool_name> nhưng SAI ĐỊNH DẠNG (marker hỏng/thiếu name=/bị cắt cụt) → KHÔNG tool nào được thực thi (KHÔNG coi text này là báo cáo hoàn thành).\n` +
+    `👉 COPY ĐÚNG DÒNG DƯỚI RỒI THAY args của bạn vào (giữ nguyên phần ngoài {} — KHÔNG thêm/bớt ký tự nào khác):\n` +
+    `tool_call: ${intendedTool}({ "args_cua_ban": "gia tri" })\n` +
+    `Hoặc dạng thẻ (khi args dài dễ cắt cụt — mỗi tham số 1 thẻ):\n` +
+    `<invoke name="${intendedTool}"><parameter name="ten_arg">gia tri</parameter></invoke>\n` +
+    `Args phải là JSON chuẩn (key và value đều trong ngoặc kép "…", phần tử ngăn cách bằng dấu phẩy). Nếu bị cắt cụt: rút ngắn args hoặc chia nhỏ làm nhiều lần gọi.`
+  )
+}
+
+/**
  * 21-d — Silent parse-drop detector.
  *
  * Trả về feedback message khi văn bản CÓ dấu hiệu tool call nhưng KHÔNG parse
@@ -684,27 +820,30 @@ export function detectBrokenToolCallHint(output: string): string | null {
     if (!output || typeof output !== 'string' || output.length === 0) return null
     const { calls, parseFailures } = extractToolCallsWithDiagnostics(output)
     if (calls.length > 0) return null // có tool call parse được → không phải parse-drop
-    if (parseFailures > 0) return BROKEN_TOOL_CALL_FEEDBACK
+    // ROUND-57 v3: trích tên tool định gọi từ chuỗi hỏng → feedback kèm
+    // skeleton copy-paste của CHÍNH tool đó (thay vì chỉ dạy cú pháp chung)
+    const intended = extractIntendedToolName(output)
+    if (parseFailures > 0) return intended ? malformedInvokeFeedback(intended) : BROKEN_TOOL_CALL_FEEDBACK
     // Dấu hiệu phụ: chuỗi "tool_call:" tồn tại nhưng regex không match được cặp
     // `name({` hoàn chỉnh (bị cắt trước ngoặc nhọn) hoặc parse trả 0 call
-    if (/tool_call\s*:/i.test(output)) return BROKEN_TOOL_CALL_FEEDBACK
+    if (/tool_call\s*:/i.test(output)) return intended ? malformedInvokeFeedback(intended) : BROKEN_TOOL_CALL_FEEDBACK
     // Dấu hiệu phụ: block ```json chứa "name" (LLM phát tool call dạng JSON fence
     // — thường gặp khi native FC bị cắt giữa chừng)
-    if (/```json[\s\S]{0,400}?"name"\s*:/.test(output)) return BROKEN_TOOL_CALL_FEEDBACK
+    if (/```json[\s\S]{0,400}?"name"\s*:/.test(output)) return intended ? malformedInvokeFeedback(intended) : BROKEN_TOOL_CALL_FEEDBACK
     // ROUND-50: <invoke> hiện diện nhưng parse không ra call nào — invoke sai
     // định dạng (thiếu name/mangled, kể cả THẺ ĐÓNG MỒ CÔI `</invoke name="?…`
     // — bằng chứng paste 2 của user: model deliberation cú pháp trong thinking)
     // → dạy lại cú pháp đúng
-    if (/<\/?invoke[\s>]/i.test(output)) return MALFORMED_INVOKE_FEEDBACK
+    if (/<\/?invoke[\s>]/i.test(output)) return malformedInvokeFeedback(intended)
     // ROUND-54 FIX E: `<tool_name>` (Anthropic-style) hiện diện nhưng parse
     // không ra call nào — name ngoài whitelist / params vắng hoàn toàn / vỏ
     // <parameters> mất đóng (bằng chứng user r54: "invoke\n<tool_name>todo_read
     // </tool_name><parameters>…" rơi thẳng vào thought content) → dạy lại
-    if (/<tool_name>/i.test(output)) return MALFORMED_INVOKE_FEEDBACK
+    if (/<tool_name>/i.test(output)) return malformedInvokeFeedback(intended)
     // ROUND-54 FIX E: dòng "invoke" trơ trụi (mất cặp `<` — dấu vết cú pháp
     // invoke bị provider bể) đứng MỘT MÌNH trên dòng → coi là ý định tool call
     // hỏng format chứ không phải văn xuôi thường
-    if (/(^|\n)[ \t]*invoke[ \t]*(\n|$)/i.test(output)) return MALFORMED_INVOKE_FEEDBACK
+    if (/(^|\n)[ \t]*invoke[ \t]*(\n|$)/i.test(output)) return malformedInvokeFeedback(intended)
     return null
   } catch {
     return null // fail-open — không được phép crash caller

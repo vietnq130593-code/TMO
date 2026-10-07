@@ -138,7 +138,14 @@ import type { GoalLoopCheckpoint, GoalLoopDurableHooks } from '@/lib/goal-loop-d
 // <invoke> — tool-calls.ts) + FIX G (sub-agent thought recording —
 // recordAgentThought nhận runId delegation; subagent-delegate ghi reasoning
 // + content mỗi vòng — lấp blind spot quan sát mission SENTINEL).
-export const GOAL_LOOP_CODE_REV = 'r55w1'
+// r57w1 (ROUND-57 — hậu kiểm mission …iahkk3): FIX B1 (todo_read ép
+// agentRole đối xứng todo_write — chống mù todo 28/28 vòng vì model tự chế
+// nhãn "SICKYX" ≠ agentName "Linh Sickyx") + FIX B4 (runWithBatchHeartbeat
+// giữ nhịp heartbeat trong pha chuyển chu kỳ AUTO-ESCALATE — consultOmega +
+// dispatchAgentByOmega ngoài vùng phủ ticker P3-ε r49) + parser A1 (repair
+// marker near-miss + loose-repair keys không quote + feedback v3 copy-paste
+// — tool-calls.ts).
+export const GOAL_LOOP_CODE_REV = 'r57w1'
 
 /** Gọn args để nhét vào working memory (chống phình) */
 function compactToolArgs(args: Record<string, unknown>, maxLen = 120): string {
@@ -2596,6 +2603,27 @@ export async function runGoalDrivenLoop(params: {
     } catch { /* fail-open */ }
   }
 
+  /**
+   * ROUND-57 FIX (B4 — heartbeat đóng băng trong pha chuyển chu kỳ):
+   * consultOmega + dispatchAgentByOmega (AUTO-ESCALATE #1/#2) chạy NGOÀI tool
+   * batch → batchHeartbeatTicker (P3-ε r49) KHÔNG phủ → heartbeatAt đứng im
+   * 3-7 phút trong lúc Omega tư vấn + sub-agent chẩn đoán chạy (bằng chứng
+   * mission …iahkk3: stale 3m0s→7m13s trong lúc SENTINEL delegation 4.5 phút —
+   * watcher_report loãng tín hiệu, orphan sweep có thể nhầm sống là chết).
+   * Wrapper giữ nhịp 30s mirror P3-ε — fail-open, tĩnh tại mọi lối thoát
+   * (kể cả throw) qua try/finally.
+   */
+  const runWithBatchHeartbeat = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const timer = setInterval(() => {
+      try { fireSignal('tool_batch') } catch { /* fail-open */ }
+    }, 30_000)
+    try {
+      return await fn()
+    } finally {
+      clearInterval(timer)
+    }
+  }
+
   // CI-1 (0 = UNLIMITED): cap = 0 → không trần → Infinity. Toàn bộ điểm check
   // `timeLeft() <= 0` / `tokenLeft() <= REPORT_RESERVE_TOKENS` (6 chỗ) tự động
   // vô hiệu vì so sánh với Infinity luôn false — không cần sửa từng điểm chặn.
@@ -3789,7 +3817,20 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             toolArgs.sessionId = agentSessionId
           }
           if (runId && toolArgs.runId !== runId) toolArgs.runId = runId
-          if (tc.name === 'todo_write' && toolArgs.agentRole !== agentName) toolArgs.agentRole = agentName
+          // ROUND-57 FIX (B1 — agentRole READ/WRITE SYMMETRY, mirror FIX A r54
+          // trên chiều agentRole): bằng chứng mission …iahkk3 (run_1791376496694_1)
+          // — todo_write bị ép agentRole="Linh Sickyx" (agentName) nhưng
+          // todo_read GIỮ nguyên nhãn model tự chế ("SICKYX" theo persona) →
+          // todoRead lọc where={sessionId, agentRole:"SICKYX"} → 0 todo trong
+          // CẢ 28 vòng (28/28 mù todo của chính mình); sub-agent SENTINEL đọc
+          // cross-scope với "SICKYX" cũng 0. Goal-loop LÀ chủ sở hữu scope →
+          // ép nhãn ĐỌI XỨNG cho cả đọc (khai báo trùng = no-op).
+          if ((tc.name === 'todo_write' || tc.name === 'todo_read') && toolArgs.agentRole !== agentName) {
+            if (tc.name === 'todo_read' && toolArgs.agentRole) {
+              console.log(`[GoalLoop] ${agentName} todo_read: agentRole khai báo "${String(toolArgs.agentRole).slice(0, 60)}" ≠ tên agent → ép về nhãn thật (chống mù todo khi đọc — FIX round-57)`)
+            }
+            toolArgs.agentRole = agentName
+          }
         }
 
         // DELEGATION CONTRACT (fix 2026-09-12): truyền runId vào context —
@@ -4452,7 +4493,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           .slice(-5)
           .map(e => `- ${e.tool}: ${e.text.slice(0, 120)}`)
           .join('\n')
-        const consult = await consultOmega({
+        const consult = await runWithBatchHeartbeat(() => consultOmega({
           problem: `Agent "${agentName}" đã làm ${cycle} chu kỳ nhưng trọng tài độc lập kết luận: mục tiêu CHƯA hoàn thành và kết quả CHƯA được kiểm định bằng tool (verified=false). Căn nguyên theo trọng tài: ${verdict.rootCause || '(không rõ)'}. Còn thiếu: ${verdict.missing.join('; ') || '(không liệt kê)'}. Tool fail gần nhất:\n${failedRecent || '(không có tool fail nào)'}`,
           context: `Mục tiêu: ${userMessage.slice(0, 800)}\nKế hoạch trọng tài đề xuất cho chu kỳ sau: ${verdict.nextPlan.join('; ') || '(trống)'}\nAgent này có tools: ${effectiveTools.slice(0, 30).join(', ')}`,
           attempted: `Đã làm ${totalIterations} vòng / ${totalToolCalls} tool calls qua ${cycle} chu kỳ. Bằng chứng gần nhất: ${evidence.slice(-6).map(e => (e.kind === 'tool' ? `${e.tool}(${e.success ? '✓' : '✗'})` : 'directive')).join(', ')}`,
@@ -4461,7 +4502,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           autoTriggered: true,
           abortCheck: isCancelled,
           onTokens: (t) => { tokensUsed += t },
-        })
+        }))
         if (consult.success && consult.text) {
           omegaConsulted = true
           escalations++
@@ -4497,7 +4538,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
               // user directive bỏ trần — SUBAGENT_MAX_ITERATIONS=0, vòng sub-agent
               // giờ ∞; scope chẩn đoán BOUNDED vẫn giữ vì nhiệm vụ này là CHẨN
               // ĐOÁN, không phải triển khai.)
-              const dispatched = await dispatchAgentByOmega({
+              const dispatched = await runWithBatchHeartbeat(() => dispatchAgentByOmega({
                 agent: suggested,
                 task: `Chẩn đoán nguyên nhân bế tắc của agent "${agentName}" (chu kỳ ${cycle}, verified=false) trong ≤5 bước: đọc trạng thái hiện tại, liệt kê 2-3 giả thuyết nguyên nhân, đề xuất hướng đi cụ thể.\n⛔ PHẠM VI CHẶN: CHỈ làm đúng nhiệm vụ chẩn đoán này — KHI CÓ KẾT LUẬN là phát báo cáo cuối và DỪNG. KHÔNG tự mở rộng sang làm thay nhiệm vụ gốc của run cha (audit/triển khai là việc của run cha sau khi nhận chẩn đoán).\nVấn đề: ${(verdict.rootCause || userMessage).slice(0, 500)}\nKhuyến nghị của Omega: ${consult.advisory?.recommendation?.slice(0, 500) || '(theo phân tích của bạn)'}`,
                 context: `Mục tiêu gốc: ${userMessage.slice(0, 400)}`,
@@ -4508,7 +4549,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
                 // parentRunId (đủ đường query theo run cha)
                 parentRunId: runId,
                 onTokens: (t) => { tokensUsed += t; subagentTokens += t },
-              })
+              }))
               // REVIEW 9-fix (2026-08-30) — đếm delegation 1 LẦN/lần auto-apply
               // (trước đây delegations++ nằm trong onTokens → phình theo số
               // LLM call của sub-agent)
@@ -4537,7 +4578,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         if (!omegaConsulted && tokenLeft() > REPORT_RESERVE_TOKENS + 8_000) {
           try {
             const { consultOmega } = await import('@/lib/omega-orchestrator')
-            const consult = await consultOmega({
+            const consult = await runWithBatchHeartbeat(() => consultOmega({
               problem: `Agent "${agentName}" bị phát hiện LẶP LẠI hành động không tiến triển (fingerprint chu kỳ ${cycle} trùng chu kỳ trước — dấu hiệu bế tắc kinh điển: agent đang xoay vòng cùng cách tiếp cận đã fail).`,
               context: `Mục tiêu: ${userMessage.slice(0, 800)}\nChẩn đoán trọng tài: ${lastVerdict?.rootCause || '(không rõ)'}\nCòn thiếu: ${lastVerdict?.missing.join('; ') || '(không liệt kê)'}\nAgent này có tools: ${effectiveTools.slice(0, 30).join(', ')}`,
               attempted: `Nhật ký tool gần nhất: ${evidence.slice(-8).map(e => (e.kind === 'tool' ? `${e.tool}(${e.success ? '✓' : '✗'}) ${e.text.slice(0, 60)}` : 'directive').slice(0, 100)).join(' | ')}`,
@@ -4546,7 +4587,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
               autoTriggered: true,
               abortCheck: isCancelled,
               onTokens: (t) => { tokensUsed += t },
-            })
+            }))
             if (consult.success && consult.text) {
               omegaConsulted = true
               escalations++

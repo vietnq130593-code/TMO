@@ -20,6 +20,19 @@
  *   - SNAPSHOT: taskSummary của mission gần nhất + 2 verdict Opus gần nhất
  *   - REPLAY: section BÁO CÁO CUỐI + OPUS VERDICT của session; run_end đủ 300 chars
  *
+ * BỔ SUNG r57 (FIX C1+C2+C3 — tự kiểm định chính watcher, nguyên tắc cổ lõi #6):
+ * Bằng chứng mission …iahkk3 (log 682 dòng): 477 dòng (70%) là nhiễu của watcher.
+ *   - C1: "heartbeat stale" phát MỖI poll (270 dòng cho 1 sự kiện) → dedupe theo
+ *     phút + nhận biết delegation đang sống (parent chờ sub-agent là BÌNH
+ *     THƯỜNG — báo 💤 1 lần rồi im)
+ *   - C2: "SUB-AGENT delegation khởi động" lặp 207 dòng cho CÙNG file — bug
+ *     path-vs-filename (ensureTail thêm FULL PATH vào knownRunFiles nhưng vòng
+ *     discovery kiểm tra FILENAME) → sửa compares full path
+ *   - C3: detector "Nghi tool-call CHƯA ĐƯỢC PARSE" false-positive 7/7 — dạng
+ *     `<invoke name="X">{json}` (Form A) và `<invoke name="X"><path>…` (Form B)
+ *     ĐỀU được parser r44 hỗ trợ và tool ĐÃ chạy cùng lúc → giờ tương quan với
+ *     tool events thật (cùng tên + chạy sau lần thấy nội dung trước) mới cảnh báo
+ *
  * Nguồn dữ liệu (đã kiểm chứng 2026-10-07):
  *   - GoalLoopJob (SQLite): status/heartbeat/cycles + checkpoint JSON
  *       → checkpoint.messages = transcript (assistant content THÔ chứa cả
@@ -348,51 +361,172 @@ class RepeatTracker {
 }
 
 /** Detector cú pháp tool-call nằm lọt trong text (bug pattern-5 round-54). */
-const TOOL_SYNTAX_PATTERNS: Array<{ label: string; re: RegExp }> = [
-  { label: 'pattern-5 Anthropic `invoke <tool_name>`', re: /invoke\s*<tool_name>/i },
-  { label: 'khối `<parameters>`', re: /<parameters>[\s\S]{0,300}?<\/parameters>/i },
-  { label: 'Mistral `<invoke name=` / `invoke name="`', re: /<invoke\s+name=|invoke\s+name\s*=\s*"/i },
-  { label: 'JSON function-call `{"name":…,"arguments":…}`', re: /\{\s*"name"\s*:\s*"[a-z0-9_]+"[\s\S]{0,80}?"arguments"\s*:/i },
+const TOOL_SYNTAX_PATTERNS: Array<{
+  label: string
+  re: RegExp
+  extract?: (content: string, m: RegExpMatchArray) => string | null
+  /** chỉ khớp khi guard trả true (vd thẻ đóng mồ côi chỉ tính khi KHÔNG có thẻ mở) */
+  guard?: (content: string) => boolean
+}> = [
+  {
+    label: 'pattern-5 Anthropic `invoke <tool_name>`',
+    re: /invoke\s*<tool_name>/i,
+    extract: (c) => /<tool_name>\s*([A-Za-z_][\w.-]*)\s*<\//i.exec(c)?.[1] ?? null,
+  },
+  {
+    label: 'khối `<parameters>`',
+    re: /<parameters>[\s\S]{0,300}?<\/parameters>/i,
+    // tên tool nằm ở thẻ mở đứng TRƯỚC khối parameters (invoke/tool_name)
+    extract: (c, m) => {
+      const before = c.slice(Math.max(0, (m.index ?? 0) - 200), m.index ?? 0)
+      return /<invoke\s+name\s*=\s*"?([A-Za-z_][\w.-]*)/i.exec(before)?.[1] ?? /<tool_name>\s*([A-Za-z_][\w.-]*)/i.exec(before)?.[1] ?? null
+    },
+  },
+  {
+    label: 'Mistral `<invoke name=` / `invoke name="`',
+    re: /<invoke\s+name=|invoke\s+name\s*=\s*"/i,
+    extract: (c) => {
+      const name = /(?:<)?invoke\s+name\s*=\s*"?([A-Za-z_][\w.-]*)/i.exec(c)?.[1]
+      return name ? name.replace(/^functions\./, '') : null
+    },
+  },
+  {
+    // r57 — bằng chứng 12:57:23 mission …iahkk3: 23k chars `name="todo_write"
+    // parameters={…}` KHÔNG khớp pattern nào cũ (không có chữ 'invoke' trước
+    // name=) → silently chết không cảnh báo. Giờ parser r57 ĐÃ parse được dạng
+    // này (R4) — cảnh báo chỉ đúng khi tool KHÔNG chạy (tương quan C3 lo).
+    label: 'attribute-style `name="X" parameters={…}`',
+    re: /name\s*=\s*"([A-Za-z_][\w.-]*)"\s+parameters\s*=\s*\{/i,
+    extract: (c) => {
+      const name = /name\s*=\s*"([A-Za-z_][\w.-]*)"\s+parameters/i.exec(c)?.[1] ?? null
+      return name ? name.replace(/^functions\./, '') : null
+    },
+  },
+  {
+    // r57 — bằng chứng 12:59:27: `todo_read sessionId default agentRole SICKYX</invoke>`
+    // — thẻ ĐÓNG mồ côi (mất thẻ mở). Chỉ tính khi KHÔNG có thẻ mở invoke nào
+    // trong content (guard) — tránh false-positive khi cặp thẻ hợp lệ tồn tại.
+    label: 'thẻ đóng mồ côi `</invoke>` (mất thẻ mở)',
+    re: /<\/invoke[\s>]/i,
+    guard: (c) => !/<invoke[\s>]/i.test(c),
+    extract: () => null,
+  },
+  {
+    label: 'JSON function-call `{"name":…,"arguments":…}`',
+    re: /\{\s*"name"\s*:\s*"[a-z0-9_]+"[\s\S]{0,80}?"arguments"\s*:/i,
+    extract: (c) => /"name"\s*:\s*"([a-z0-9_.-]+)"/i.exec(c)?.[1] ?? null,
+  },
 ]
 
-function scanToolSyntax(content: string): string[] {
-  const out: string[] = []
+/** Kết quả scan kèm tên tool định gọi (để tương quan tool events — FIX C3). */
+interface SyntaxSuspect {
+  label: string
+  name: string | null
+  line: string
+}
+
+function scanToolSyntaxDetailed(content: string): SyntaxSuspect[] {
+  const out: SyntaxSuspect[] = []
   if (!content) return out
   for (const p of TOOL_SYNTAX_PATTERNS) {
+    if (p.guard && !p.guard(content)) continue
     const m = content.match(p.re)
     if (m) {
       const idx = m.index ?? 0
-      out.push(`Nghi tool-call CHƯA ĐƯỢC PARSE (${p.label}) — trích: "${trunc(content.slice(Math.max(0, idx - 40), idx + 160), 200)}"`)
+      let name: string | null = null
+      try {
+        name = p.extract ? p.extract(content, m) : null
+      } catch {
+        name = null
+      }
+      out.push({
+        label: p.label,
+        name,
+        line: `Nghi tool-call CHƯA ĐƯỢC PARSE (${p.label}) — trích: "${trunc(content.slice(Math.max(0, idx - 40), idx + 160), 200)}"`,
+      })
     }
   }
   return out
 }
 
-/** Trạng thái checkpoint mỗi job — phát hiện assistant content mới/khác. */
-const ckptSeen = new Map<string, { sig: string; lastAsst: string }>()
+function scanToolSyntax(content: string): string[] {
+  return scanToolSyntaxDetailed(content).map((s) => s.line)
+}
 
-function watchCheckpoint(job: JobRow): string[] {
-  const out: string[] = []
+/**
+ * ROUND-57 FIX C3 — registry tool events gần đây (theo runId) + tương quan:
+ * cú pháp nghi vấn mà CÓ tool cùng tên chạy thành công sau mốc nội dung
+ * trước đó → đã được parser xử lý (Form A/B r44) → KHÔNG cảnh báo (trước đây
+ * false-positive 7/7 trên mission …iahkk3 — chính cảnh báo sai này khiến r56b
+ * đọc sai "biến thể lai không parse được").
+ */
+interface RecentToolEntry {
+  name: string
+  success: boolean
+  ts: number
+}
+
+type RecentToolsRegistry = Map<string, RecentToolEntry[]>
+
+function noteToolEvent(reg: RecentToolsRegistry, e: any): void {
+  if (e?.type !== 'tool' || !e.runId) return
+  const list = reg.get(e.runId) || []
+  list.push({ name: String(e.tool), success: !!e.success, ts: e.ts ?? Date.now() })
+  while (list.length > 60) list.shift()
+  reg.set(e.runId, list)
+}
+
+function toolRanSince(reg: RecentToolsRegistry, runId: string | null | undefined, name: string | null, sinceTs: number): boolean {
+  if (!runId) return false
+  const list = reg.get(runId)
+  if (!list || list.length === 0) return false
+  // không trích được tên → chỉ tin KHÔNG cảnh báo khi có tool nào đó chạy
+  if (!name) return list.some((x) => x.success && x.ts >= sinceTs - 10_000)
+  return list.some((x) => x.name === name && x.success && x.ts >= sinceTs - 10_000)
+}
+
+/** Trạng thái checkpoint mỗi job — phát hiện assistant content mới/khác.
+ * (r57: lưu ĐÚNG lastAsst + sigTs — trước đây set lastAsst:'' làm dòng ASSISTANT
+ * in lại mỗi lần sig đổi dù content không đổi; sigTs làm mốc tương quan C3.) */
+const ckptSeen = new Map<string, { sig: string; lastAsst: string; sigTs: number }>()
+
+/** Kết quả watchCheckpoint: dòng hiển thị + suspicion hoãn (đối chiếu sau bước 3 — FIX C3 vòng 2). */
+interface WatchCkptResult {
+  lines: string[]
+  suspects: Array<{ runId: string | null; sinceTs: number; s: SyntaxSuspect }>
+}
+
+function watchCheckpoint(job: JobRow, recentTools: RecentToolsRegistry | null = null): WatchCkptResult {
+  const out: WatchCkptResult = { lines: [], suspects: [] }
   const ck = parseMaybeJson(job.checkpoint)
   if (!ck) return out
   const msgs: any[] = ck.messages || []
   const c = ck.counters || {}
   const sig = msgs.map((m) => `${m.role}:${m.content.length}`).join('|') + `#${c.cyclesDone ?? 0}`
   const prev = ckptSeen.get(job.id)
-  ckptSeen.set(job.id, { sig, lastAsst: '' })
   if (prev && prev.sig === sig) return out
 
   const name = agentNameOf(job)
-  out.push(
+  out.lines.push(
     `${now()} 📊 [${name} · job${shortId(job.id)}] chu kỳ ${c.cyclesDone ?? '?'} · vòng ${c.totalIterations ?? '?'} · tools ${c.totalToolCalls ?? '?'} · tokens ${fmtTokens(c.tokensUsed)} (sub-agent: ${fmtTokens(c.subagentTokens)}) · nén context ×${c.compressions ?? 0} · stall ${c.stallCycles ?? 0}/${(c as any).noProgressCount ?? 0}`,
   )
   const asst = msgs.filter((m) => m.role === 'assistant')
   const last = asst[asst.length - 1]
   if (last && (!prev || prev.lastAsst !== last.content)) {
-    out.push(`${now()} 🤖 [${name}] ASSISTANT (${last.content.length} chars): ${trunc(last.content, 600)}`)
-    for (const w of scanToolSyntax(last.content)) out.push(`${now()} ⚠️ 🤖 ${w}`)
+    out.lines.push(`${now()} 🤖 [${name}] ASSISTANT (${last.content.length} chars): ${trunc(last.content, 600)}`)
+    // ROUND-57 FIX C3 (vòng 2 — HOÃN giải quyết): tool event của CHÍNH vòng này
+    // có thể nằm sau checkpoint trong cùng 1 poll (bước 1 chạy trước bước 3
+    // tail-read) → tương quan NGAY TẠI ĐÂY sẽ miss → để suspicion vào hàng đợi,
+    // follow() giải quyết SAU khi tail đọc xong events của poll này. Chỉ cảnh
+    // báo khi tool cùng tên KHÔNG chạy thành công từ mốc sig trước (−10s grace).
+    const sinceTs = prev?.sigTs ?? Date.now() - 120_000
+    for (const s of scanToolSyntaxDetailed(last.content)) {
+      if (recentTools && toolRanSince(recentTools, ck.runId, s.name, sinceTs)) continue
+      out.suspects.push({ runId: ck.runId ?? null, sinceTs, s })
+    }
   }
-  if (ck.lastLlmError) out.push(`${now()} ⚠️ [${name}] lastLlmError: ${trunc(ck.lastLlmError, 200)}`)
+  if (ck.lastLlmError) out.lines.push(`${now()} ⚠️ [${name}] lastLlmError: ${trunc(ck.lastLlmError, 200)}`)
+  ckptSeen.set(job.id, { sig, lastAsst: last?.content ?? '', sigTs: Date.now() })
   return out
 }
 
@@ -462,6 +596,54 @@ function snapshot(): void {
 
 // ─────────────────────────── FOLLOW (live) ───────────────────────────
 
+// ─────────────────────── LIVE follow ───────────────────────
+
+/**
+ * ROUND-57 FIX C1 — sub_*.jsonl nào đang SỐNG (mtime < 30s)? Trả về tập
+ * sessionId có delegation đang chạy — parent chờ sub-agent trong lúc này là
+ * BÌNH THƯỜNG (heartbeat stale không phải treo). SessionId dòng đầu cache theo
+ * filename (dòng đầu không đổi — file sub mỗi delegation 1 tên duy nhất).
+ */
+const subFirstSessionCache = new Map<string, string>()
+
+function scanActiveDelegations(): Set<string> {
+  const out = new Set<string>()
+  try {
+    for (const f of fs.readdirSync(RUNS_DIR)) {
+      if (!f.startsWith('sub_') || !f.endsWith('.jsonl')) continue
+      const full = path.join(RUNS_DIR, f)
+      let st: fs.Stats
+      try {
+        st = fs.statSync(full)
+      } catch {
+        continue
+      }
+      if (Date.now() - st.mtimeMs > 30_000) continue
+      let sid = subFirstSessionCache.get(f)
+      if (sid === undefined) {
+        // biến cục bộ khởi tạo '' (TS CFA với try/catch giữ nhánh "chưa gán"
+        // của biến string|undefined — dùng const-string rồi gán lại cho sid)
+        let parsedSid = ''
+        try {
+          const fd = fs.openSync(full, 'r')
+          const buf = Buffer.alloc(Math.min(8192, st.size))
+          fs.readSync(fd, buf, 0, buf.length, 0)
+          fs.closeSync(fd)
+          parsedSid = String(JSON.parse(buf.toString('utf8').split('\n')[0] ?? '{}')?.sessionId ?? '')
+        } catch {
+          /* giữ '' */
+        }
+        sid = parsedSid
+        subFirstSessionCache.set(f, sid)
+      }
+      if (sid) out.add(sid)
+    }
+  } catch {
+    /* fail-open */
+  }
+  return out
+}
+
 async function follow(): Promise<void> {
   const db = openDb()
   const tails = new Map<string, Tail>()
@@ -475,6 +657,14 @@ async function follow(): Promise<void> {
   const finalEmitted = new Set<string>() // jobId đã emit FINAL REPORT
   const revSeen = new Set<string>() // OpusReview.id đã xử lý (khởi tạo = toàn bộ row hiện có)
   let revSeenInit = false
+  // ROUND-57 FIX C1 — dedupe cảnh báo heartbeat (theo phút-ms) + ghi nhận
+  // "đã báo im vì delegation đang sống" cho từng job
+  const hbWarnedBucket = new Map<string, number>()
+  const hbDelegationNoted = new Set<string>()
+  // ROUND-57 FIX C3 — registry tool events gần đây theo runId (tương quan detector)
+  const recentTools: RecentToolsRegistry = new Map()
+  // FIX C3 vòng 2 — hàng đợi suspicion chờ đối chiếu sau tail-read của cùng poll
+  let pendingSuspects: Array<{ runId: string | null; sinceTs: number; s: SyntaxSuspect }> = []
 
   const ensureTail = (file: string) => {
     if (!tails.has(file)) {
@@ -491,6 +681,9 @@ async function follow(): Promise<void> {
       anyOutput = true
       console.log(line)
     }
+    // ROUND-57 FIX C1 — delegation nào đang sống (tính 1 lần/loop, dùng cho cả
+    // cảnh báo heartbeat lẫn ngữ cảnh quan sát)
+    const activeDelegationSessions = scanActiveDelegations()
 
     // 1) DB: mission mới / đổi trạng thái / checkpoint mới
     let jobs: JobRow[] = []
@@ -514,10 +707,35 @@ async function follow(): Promise<void> {
       }
       const ck = parseMaybeJson(j.checkpoint)
       if (ck?.runId) ensureTail(path.join(RUNS_DIR, ck.runId + '.jsonl'))
-      for (const line of watchCheckpoint(j)) emit(line)
+      const wckpt = watchCheckpoint(j, recentTools)
+      for (const line of wckpt.lines) emit(line)
+      // FIX C3 vòng 2: suspicion hoãn — giải quyết SAU bước 3 (tail-read) của
+      // poll này để tool event cùng vòng có mặt trong registry trước khi phán
+      pendingSuspects.push(...wckpt.suspects)
       const hbAge = j.heartbeatAt ? Date.now() - new Date(j.heartbeatAt).getTime() : null
-      if (hbAge != null && hbAge > 180_000 && j.status === 'running') {
-        emit(`${now()} ⚠️ [${agentNameOf(j)}] heartbeat stale ${fmtMs(hbAge)} — job treo/kẹt?`)
+      if (hbAge != null && j.status === 'running' && hbAge > 180_000) {
+        if (activeDelegationSessions.has(j.sessionId)) {
+          // ROUND-57 FIX C1: parent đang chờ sub-agent (delegation sống) — stale
+          // là KỲ VỌNG, không phải treo; báo 💤 đúng 1 lần rồi im (bằng chứng
+          // …iahkk3: 270 dòng cảnh báo lặp mỗi poll 1.5s trong lúc SENTINEL chạy)
+          if (!hbDelegationNoted.has(j.id)) {
+            hbDelegationNoted.add(j.id)
+            emit(`${now()} 💤 [${agentNameOf(j)}] heartbeat stale ${fmtMs(hbAge)} nhưng sub-agent delegation đang chạy — parent chờ là bình thường (im đến khi delegation hết)`)
+          }
+        } else {
+          hbDelegationNoted.delete(j.id)
+          // ROUND-57 FIX C1: dedupe theo phút — chỉ phát khi sang bucket phút mới
+          const bucket = Math.floor(hbAge / 60_000)
+          const lastBucket = hbWarnedBucket.get(j.id) ?? -1
+          if (bucket > lastBucket) {
+            hbWarnedBucket.set(j.id, bucket)
+            emit(`${now()} ⚠️ [${agentNameOf(j)}] heartbeat stale ${fmtMs(hbAge)} — job treo/kẹt?`)
+          }
+        }
+      } else if (hbAge != null && hbAge <= 180_000) {
+        // hồi phục nhịp → reset để lần stale kế báo ngay từ đầu
+        hbWarnedBucket.delete(j.id)
+        hbDelegationNoted.delete(j.id)
       }
     }
 
@@ -556,14 +774,26 @@ async function follow(): Promise<void> {
     // 2) khám phá file jsonl mới (sub-agent delegation bỗng xuất hiện)
     try {
       for (const f of fs.readdirSync(RUNS_DIR)) {
-        if (!f.endsWith('.jsonl') || knownRunFiles.has(f)) continue
         const full = path.join(RUNS_DIR, f)
+        // ROUND-57 FIX C2: so FULL PATH (ensureTail thêm full path vào
+        // knownRunFiles — trước đây so FILENAME nên không bao giờ khớp →
+        // re-emit "SUB-AGENT delegation khởi động" mỗi poll, 207 dòng cho 1 file)
+        if (!f.endsWith('.jsonl') || knownRunFiles.has(full)) continue
         const st = fs.statSync(full)
         // chỉ quan tâm file đang được ghi gần đây
         if (Date.now() - st.mtimeMs > 60_000) continue
         // file phải thuộc session đang active (đọc dòng đầu)
         const first = readAllEvents(full)[0]
         if (!first) continue
+        // ROUND-57 (rà soát lượt 2): test suite dùng startAgentRun THẬT → ghi
+        // file jsonl thật vào agent-runs/ lúc chạy quality-gate (bằng chứng:
+        // run_1791382254127_1.jsonl 14:10:54Z "TEST-AGENT" bị watcher bắt nhầm
+        // thành mission khi đang idle). Lọc theo dấu ấn test: agentName TEST-*
+        // hoặc sessionId test-* (mọi test suite hiện dùng dạng này — KHÔNG lọc
+        // theo text task vì mission thật có thể bắt đầu bằng chữ "test …").
+        const firstAgent = String(first.agentName ?? '')
+        const firstSession = String(first.sessionId ?? '')
+        if (/^TEST[-_]/i.test(firstAgent) || /^test[-_]/i.test(firstSession)) continue
         if (activeSessions.size > 0 && first.sessionId && !activeSessions.has(first.sessionId)) continue
         if (f.startsWith('sub_')) emit(`${now()} 🚀 SUB-AGENT delegation khởi động: ${f} [${first.agentName || '?'}]`)
         ensureTail(full)
@@ -575,9 +805,18 @@ async function follow(): Promise<void> {
     // 3) đọc event mới từ mọi file đang theo dõi
     for (const [file, tail] of tails) {
       for (const e of tail.read()) {
+        noteToolEvent(recentTools, e) // FIX C3 — nuôi registry tương quan detector
         emit(fmtEvent(e))
         const w = repeat.check(e)
         if (w) emit(`${now()} ${w}`)
+      }
+    }
+
+    // 3b) FIX C3 vòng 2 — giải quyết suspicion hoãn: ĐÚNG lúc này registry đã
+    // chứa tool events của poll hiện tại (kể cả event cùng vòng với checkpoint)
+    for (const p of pendingSuspects.splice(0)) {
+      if (!toolRanSince(recentTools, p.runId, p.s.name, p.sinceTs)) {
+        emit(`${now()} ⚠️ 🤖 ${p.s.line}`)
       }
     }
 
@@ -706,7 +945,20 @@ function replay(target: string, tailN: number): void {
     console.log(`── Assistant content trong checkpoint (${msgs.length} messages, ${asst.length} assistant — đã qua nén CI-3) ──`)
     for (const [i, m] of asst.slice(-3).entries()) {
       console.log(`[${asst.length - Math.min(3, asst.length) + i + 1}/${asst.length}] (${m.content.length} chars): ${trunc(m.content, 500)}`)
-      for (const w of scanToolSyntax(m.content)) console.log(`   ⚠️ ${w}`)
+      // ROUND-57 FIX C3 (replay): kèm ĐỐI CHIẾU thay vì cảnh báo trơ — cú pháp
+      // nghi vấn + tool cùng tên có chạy thành công trong run hay không
+      // (kèm MỐC THỜI GIAN lần cuối — tin nhắn checkpoint không có ts riêng nên
+      // người đọc tự đối chiếu: lần cuối TRƯỚC tin nhắn này ⇒ khả năng rơi thật)
+      for (const s of scanToolSyntaxDetailed(m.content)) {
+        const sameName = s.name ? all.filter((e) => e.type === 'tool' && e.success && e.tool === s.name) : all.filter((e) => e.type === 'tool' && e.success)
+        const lastRun = sameName.length ? sameName[sameName.length - 1] : null
+        const note = s.name
+          ? sameName.length > 0
+            ? ` · đối chiếu: '${s.name}' chạy ✓ ×${sameName.length} trong run, lần cuối ${lastRun ? hhmmss(lastRun.ts) : '?'} — đối chiếu mốc này với thời điểm tin nhắn để kết luận (sau ⇒ parser đã xử lý; trước ⇒ rơi THẬT)`
+            : ` · đối chiếu: '${s.name}' KHÔNG chạy lần nào trong run → rơi THẬT vào content`
+          : ` · đối chiếu: ${sameName.length} tool thành công trong run`
+        console.log(`   ⚠️ ${s.line}${note}`)
+      }
     }
     if (ck?.lastLlmError) console.log(`lastLlmError: ${trunc(ck.lastLlmError, 240)}`)
   }
