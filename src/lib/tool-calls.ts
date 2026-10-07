@@ -350,22 +350,60 @@ function extractInvokeToolCalls(output: string): { calls: ParsedToolCall[]; clea
         failures++ // JSON bị cắt cụt giữa chừng
       }
     } else {
-      // Form B: XML-ish tags <key>value</key>… (value nhiều dòng + LỒNG:
-      // <todos><item>…</item>×N</todos> → array) — parseXmlTagArgs tái sử dụng
-      // lớp coerce (ROUND-44 tầng 2 — fix todo_write exec fail "cần array")
-      const argsObj = parseXmlTagArgs(trimmed)
-      if (argsObj && Object.keys(argsObj).length > 0) {
-        args = argsObj
-        // consumed = toàn bộ vùng tag đã khớp: tính lại bằng regex chạy lần 2
-        let pos = 0
+      // Form C (ROUND-55 FIX F): MISTRAL NATIVE — chuỗi
+      // `<parameter name="k">v</parameter>` lồng trong <invoke name="…">.
+      // Bằng chứng r55: 3 tool call Mistral-style trong checkpoint mission
+      // ch0jj4 KHÔNG parse được (parseXmlTagArgs của Form B KHÔNG khớp thẻ có
+      // attribute `name=`) → rơi vào MALFORMED feedback — mất 1 round-trip
+      // mỗi lần gặp dù ĐÚNG cú pháp chuẩn của model nền. Giờ công nhận luôn.
+      let formCMatched = false
+      if (/^<parameter\s+name\s*=\s*["']/.test(trimmed)) {
+        formCMatched = true
+        const collected: Record<string, unknown> = {}
+        let ppos = 0
+        let parsedCount = 0
         for (;;) {
-          const tm = /^<([A-Za-z_][\w-]*)>([\s\S]*?)<\/\1>\s*/.exec(trimmed.slice(pos))
-          if (!tm) break
-          pos += tm[0].length
+          const pm = /^<parameter\s+name\s*=\s*["']([^"']+)["']\s*>([\s\S]*?)<\/parameter>[ \t]*\r?\n?/.exec(trimmed.slice(ppos))
+          if (!pm) break
+          collected[pm[1]] = coerceXmlValue(pm[2]) // tái dùng lớp coerce Form B (số/bool/JSON/nested-XML)
+          parsedCount++
+          ppos += pm[0].length
         }
-        consumed = leadingWs + pos
-      } else {
-        failures++
+        const restRaw = trimmed.slice(ppos)
+        const restTrim = restRaw.replace(/^[ \t\r\n]+/, '')
+        // Trọn vẹn khi: ≥1 parameter ĐÃ ĐÓNG + phần đuôi KHÔNG còn parameter hở
+        // (cụt giữa thẻ). Thiếu `</invoke>` cuối KHÔNG vô hiệu (model lược thẻ
+        // đóng vẫn cho args đầy đủ) — chỉ tiêu thụ tới hết parameter cuối + vỏ
+        // đóng nếu có (không ăn prose đuôi).
+        if (parsedCount > 0 && !restTrim.startsWith('<parameter')) {
+          let extra = restRaw.length - restTrim.length
+          const closeM = /^<\/invoke>\s*/.exec(restTrim)
+          if (closeM) extra = (restRaw.length - restTrim.length) + closeM[0].length
+          args = collected
+          consumed = leadingWs + ppos + extra
+        }
+        // Parameter cụt giữa thẻ / 0 param khớp → args giữ null, KHÔNG đếm
+        // failures — fallback detector `<invoke>` trả MALFORMED_INVOKE_FEEDBACK
+        // dạy lại đúng nhóm cú pháp (mirror triết lý FIX E r54)
+      }
+      if (!formCMatched) {
+        // Form B: XML-ish tags <key>value</key>… (value nhiều dòng + LỒNG:
+        // <todos><item>…</item>×N</todos> → array) — parseXmlTagArgs tái sử dụng
+        // lớp coerce (ROUND-44 tầng 2 — fix todo_write exec fail "cần array")
+        const argsObj = parseXmlTagArgs(trimmed)
+        if (argsObj && Object.keys(argsObj).length > 0) {
+          args = argsObj
+          // consumed = toàn bộ vùng tag đã khớp: tính lại bằng regex chạy lần 2
+          let pos = 0
+          for (;;) {
+            const tm = /^<([A-Za-z_][\w-]*)>([\s\S]*?)<\/\1>\s*/.exec(trimmed.slice(pos))
+            if (!tm) break
+            pos += tm[0].length
+          }
+          consumed = leadingWs + pos
+        } else {
+          failures++
+        }
       }
     }
     if (args && Object.keys(args).length > 0) {
@@ -513,6 +551,10 @@ function extractToolNameTagCalls(output: string): { calls: ParsedToolCall[]; cle
  *    (Task 24 — code nhiều dòng không cần escape)
  * 4. ROUND-44 (c): `<invoke name="tool">` của minimax (JSON args hoặc XML
  *    tags args) + strip marker corruption `<]xxx[>` của provider trước khi parse
+ *    4b. ROUND-55 (F): Mistral native — `<invoke name="tool">` chứa
+ *    `<parameter name="k">v</parameter>` (thẻ có attribute — Form B cũ
+ *    không khớp; bằng chứng: 3 tool call Mistral-style trong checkpoint
+ *    mission ch0jj4)
  * 5. ROUND-54 (E): `<tool_name>tool</tool_name><parameters>…</parameters>`
  *    Anthropic-style (JSON hoặc XML-tag params; có/không vỏ parameters)
  */
@@ -619,7 +661,7 @@ export const BROKEN_TOOL_CALL_FEEDBACK =
  * pháp hệ thống chấp nhận.
  */
 export const MALFORMED_INVOKE_FEEDBACK =
-  '⚠️ Bạn vừa cố gọi tool bằng cú pháp <invoke>/<tool_name> nhưng SAI ĐỊNH DẠNG (thiếu name="tên_tool" / params không chuẩn / bị cắt cụt giữa chừng) → KHÔNG tool nào được thực thi (KHÔNG coi text này là báo cáo hoàn thành). Hệ thống chấp nhận: (1) tool_call: <tên_tool>({json args}) — vd: tool_call: todo_write({"todos": [{"content": "việc cần làm", "status": "pending"}]}) HOẶC (2) <invoke name="tên_tool">{json args}</invoke> HOẶC (3) <tool_name>tên_tool</tool_name><parameters>{json args}</parameters>. Phát lại NGAY theo 1 trong 3 cú pháp đúng (cắt args ngắn nếu bị cắt cụt).'
+  '⚠️ Bạn vừa cố gọi tool bằng cú pháp <invoke>/<tool_name> nhưng SAI ĐỊNH DẠNG (thiếu name="tên_tool" / params không chuẩn / bị cắt cụt giữa chừng) → KHÔNG tool nào được thực thi (KHÔNG coi text này là báo cáo hoàn thành). Hệ thống chấp nhận: (1) tool_call: <tên_tool>({json args}) — vd: tool_call: todo_write({"todos": [{"content": "việc cần làm", "status": "pending"}]}) HOẶC (2) <invoke name="tên_tool">{json args}</invoke> (hoặc <invoke name="tên_tool"><parameter name="tên_arg">giá trị</parameter>…</invoke>) HOẶC (3) <tool_name>tên_tool</tool_name><parameters>{json args}</parameters>. Phát lại NGAY theo 1 trong 3 cú pháp đúng (cắt args ngắn nếu bị cắt cụt).'
 
 /**
  * 21-d — Silent parse-drop detector.

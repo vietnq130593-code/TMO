@@ -275,3 +275,12 @@ audit-out/*
 
 # ROUND-23 P1 — durable agent-run event trails (bằng chứng chạy agent, JSONL)
 agent-runs/
+
+# NGOẠI LỆ (ROUND-55 — 2026-10-07): mission-watch.ts — công cụ quan sát mission
+# của GIAO THỨC GIÁM SÁT (QUY_TRINH_GIAM_SAT_AGENTS.md mục 1b, bắt buộc từ r55:
+# "kích hoạt mission = kích hoạt hệ thống theo dõi"). 3 chế độ: snapshot mặc
+# định / --follow (live) / --replay <jobId> hậu kiểm. 4 kênh: tool events mọi
+# run (kể cả sub-agent delegation), THINKING (thought events + assistant
+# content checkpoint — lấp blind spot r54), token burn live, stall-loop +
+# detector cú pháp tool-call. Chạy: bun scripts/mission-watch.ts [--follow]
+!/scripts/mission-watch.ts

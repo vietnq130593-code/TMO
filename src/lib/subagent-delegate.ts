@@ -63,7 +63,7 @@ import { capAssistantContentForTranscript, truncateToolMessageJson } from '@/lib
 import type { LLMTool } from '@/lib/llm'
 import { parseToolCallsFromOutput, detectBrokenToolCallHint, tryParseLooseJson } from '@/lib/tool-calls'
 import { resolveAgent } from '@/lib/code-team/agent-resolver'
-import { isSessionCancelled, registerDelegationRun, endAgentRun } from '@/lib/agent-run-tracker'
+import { isSessionCancelled, registerDelegationRun, endAgentRun, recordAgentThought } from '@/lib/agent-run-tracker'
 
 // ==================== CONFIG (env override) ====================
 
@@ -740,6 +740,23 @@ async function runSubAgentForProfileInner(params: {
         }
         addTokens(result.tokensUsed)
         if (timedOut) { return } // LLM về nhưng timeout đã nổ — không chạy tool nữa
+
+        // ROUND-55 FIX G — THOUGHT RECORDING cho sub-agent (lấp blind spot
+        // quan sát: mission SENTINEL r54 — sub_*.jsonl 172 tool events / 0
+        // thought → operator thấy sub-agent LÀM GÌ nhưng không thấy NGHĨ GÌ).
+        // Mirror goal-loop chính (agent-goal-loop.ts: recordAgentThought với
+        // reasoning riêng + content thô — tracker tự strip khối tool-call ra
+        // event riêng). Chỉ ghi khi có delegationRunId — KHÔNG rơi về run
+        // parent (registerDelegationRun fail-open → null → bỏ qua, fail-open).
+        if (sessionId && delegationRunId) {
+          try {
+            const reasoning = result.reasoning ? String(result.reasoning).trim() : ''
+            if (reasoning) {
+              recordAgentThought(sessionId, `💭 (suy nghĩ) ${reasoning.slice(0, 800)}`, iterations, delegationRunId)
+            }
+            recordAgentThought(sessionId, result.content, iterations, delegationRunId)
+          } catch { /* fail-open — observation không được phép làm hỏng run */ }
+        }
 
         // TASK 39 — NATIVE FC: ưu tiên tool_calls từ API (space-bunny trả chuẩn
         // OpenAI khi body có tools); fallback text protocol như cũ.

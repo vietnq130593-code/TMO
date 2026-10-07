@@ -624,14 +624,25 @@ export function isSessionCancelled(sessionId: string | null | undefined): boolea
  * Ghi thought (output LLM của 1 vòng ReAct — phần reasoning TRƯỚC tool_call).
  * `content` thô: phần trước "tool_call:" được giữ làm reasoning; phần
  * tool_call syntax bị bỏ (tools hiển thị thành event riêng — giống Claude Code).
+ *
+ * ROUND-55 FIX G — DELEGATION CONTRACT (mirror recordAgentRunTool 2026-09-12):
+ * truyền `runId` để ghi thought vào run CỤ THỂ (sub-agent được delegate) thay
+ * vì run active của session (parent). Không truyền → giữ nguyên hành vi cũ.
+ * Bằng chứng blind spot: mission SENTINEL r54 — sub_*.jsonl có 172 tool events
+ * mà 0 thought event → operator thấy sub-agent LÀM GÌ nhưng KHÔNG thấy NGHĨ GÌ
+ * (user 2026-10-07: "quan sát nhưng không quan sát cả các phần suy nghĩ của
+ * agents → bỏ sót").
  */
 export function recordAgentThought(
   sessionId: string | null | undefined,
   content: string | null | undefined,
   iteration?: number,
+  runId?: string,
 ): void {
   try {
-    const run = activeRun(sessionId)
+    const run = runId
+      ? runsOf(sessionId || '').find(r => r.runId === runId && r.status === 'running') || null
+      : activeRun(sessionId)
     if (!run || !content) return
     run.counters.iterations = Math.max(run.counters.iterations, iteration || 0)
     // Tách reasoning khỏi khối tool_call: tool calls hiển thị là event riêng

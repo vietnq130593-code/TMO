@@ -1,6 +1,6 @@
 # QUY TRÌNH GIÁM SÁT AGENTS — HỆ THỐNG VẬN HÀNH TMO (The Magnum Opus)
 
-> **Phiên bản:** 1.0 — 2026-10-01 (vòng 18–19, tổng hợp từ vận hành thực chiến)
+> **Phiên bản:** 1.1 — 2026-10-07 (cập nhật từ vận hành round 52–55: bổ sung mục 1b — kích hoạt theo dõi đồng bộ cùng mission + kênh THINKING; v1.0 2026-10-01 vòng 18–19)
 > **Phạm vi:** giám sát toàn bộ agents (Omega, Opus, ALISTA, SENTINEL, NEMESIS, Code Team…) trong vòng đời mission: từ dispatch chỉ đạo → thực thi goal-loop → phán quyết → đóng sổ.
 > **Người dùng:** operator / trọng tài vận hành (người hoặc agent giám sát).
 > **Cấu trúc:** mỗi lĩnh vực gồm 4 khối — (1) Mục tiêu · (2) Công việc · (3) Nguồn bằng chứng & cách đo · (4) **Rubric chấm điểm**.
@@ -26,6 +26,7 @@
 - Phát hiện stall (`no_progress`), failed, cancelled bất thường
 - Đọc ToolMetric để biết agent thật sự làm gì (thành công/thất bại/pattern)
 - Truy vết chu kỳ ↔ tool call ↔ kết quả (phân tách theo agentRole — cẩn thận tính công cho nhầm agent)
+- **Bật công cụ theo dõi đồng bộ theo mục 1b ngay khi mission được kích hoạt**
 
 **Nguồn bằng chứng & cách đo:**
 ```sql
@@ -50,6 +51,43 @@ WHERE timestamp > :windowStart GROUP BY agentRole, toolName, success;
 | D1.4 | Run đốt > 500k token được cảnh báo & post-mortem | 3 | Có alert + bản ghi phân tích (vd: run 973k token vòng 18) |
 
 **Ngưỡng xử lý:** D1 < 6/12 → rà toàn bộ jobs ngay trong phiên làm việc.
+
+---
+
+## 1b. KÍCH HOẠT THEO DÕI ĐỒNG BỘ CÙNG MISSION (bắt buộc từ r55)
+
+**Nguyên tắc:** **KÍCH HOẠT MISSION = KÍCH HOẠT HỆ THỐNG THEO DÕI.** Không có mission nào được dispatch khi kênh theo dõi chưa chạy. Mission chạy mà không được quan sát = mất khả năng phát hiện sự cố trong lúc chạy (bằng chứng: mission SENTINEL r54 — sub-agent đốt 51.9M tokens chạy loạn 45+ phút trước khi operator đọc được dấu hiệu; r53 — stall 973k token chỉ phát hiện SAU khi cháy hết).
+
+**Thủ tục khi kích hoạt mission (đúng thứ tự):**
+1. **TRƯỚC khi dispatch:** bật chế độ LIVE trong terminal riêng (tmux pane / nohup):
+   ```bash
+   cd /home/z/tmo-app && bun scripts/mission-watch.ts --follow
+   ```
+2. **Dispatch mission** cho agent (đúng như chỉ đạo đã duyệt).
+3. **Xác nhận kênh sống:** trong ~60s đầu phải thấy dòng `🆕 MISSION BẮT ĐẦU` + event `🚀 RUN START`. Không thấy → kiểm tra DB/job trước khi đi tiếp (mission có thể đã fail ở bước dispatch).
+4. **Trong lúc chạy:** theo dõi các kênh đầu ra (xem dưới); can thiệp theo mục 6 khi có cảnh báo.
+5. **Khi kết thúc:** tắt follow (Ctrl+C), chạy hậu kiểm:
+   ```bash
+   bun scripts/mission-watch.ts --replay <jobId> --tail 200
+   ```
+
+**Kênh theo dõi của `mission-watch.ts` (đủ 4 tầng):**
+
+| Kênh | Dấu hiệu đầu ra | Bắt được loại sự cố nào |
+|---|---|---|
+| **TOOL EVENTS** — jsonl mọi run (kể cả sub-agent `sub_*.jsonl` tự phát hiện) | `🔧 [agent] tool(args) ✓/✗ → kết quả` | Tool fail, scope trôi (todo_read session cha), pattern lạ |
+| **THINKING** — thought events mọi vòng (main + sub-agent từ r55w1 FIX G) + assistant content checkpoint | `💭 [agent ·vN] suy nghĩ…` / `🤖 ASSISTANT (…): …` | Tool-call rơi vào thought (pattern-5/Mistral), vòng lặp lập kế hoạch không hành động, ngữ đạo suy luận sai |
+| **TOKEN BURN** — checkpoint counters mỗi chu kỳ | `📊 chu kỳ N · vòng M · tokens X (sub-agent: Y) · nén ×Z · stall a/b` | Cháy token (kể cả sub-agent), nén context không chạy, stall brake đếm dần |
+| **STALL-LOOP + DETECTOR** — RepeatTracker + regex cú pháp + heartbeat | `🔁 'tool' lặp N lần LIÊN TIẾP` / `⚠️ Nghi tool-call CHƯA ĐƯỢC PARSE` / `heartbeat stale` | Fixation loop (todo_read ×123 r54), tool call cụt/méo cú pháp, job treo |
+
+**Lưu ý vận hành:**
+- `mission-watch.ts` chỉ ĐỌC (SQLite read-only + tail jsonl) — không can thiệp, không sửa code TMO, an toàn chạy song song mission thật.
+- Cảnh báo `🔁 lặp ≥5 lần cùng args + cùng kết quả` hoặc `heartbeat stale > 3 phút` → chuyển quyết định can thiệp theo mục 6 (không tự ý dừng mission — stall brake của hệ thống có thể là điểm dừng thiết kế).
+- `⚠️ Nghi tool-call CHƯA ĐƯỢC PARSE` trong assistant content → hệ thống đã tự phản hồi MALFORMED feedback dạy lại cú pháp (từ r54/r55); chỉ cần ghi nhận — nếu lặp ≥ 3 lần cùng chỗ mới can thiệp.
+- Mission không cần theo dõi liên tục (vd cron nền) → tối thiểu chạy SNAPSHOT đầu + cuối phiên:
+  ```bash
+  bun scripts/mission-watch.ts            # snapshot nhanh: mission đang chạy + 6 mission gần nhất
+  ```
 
 ---
 
@@ -259,8 +297,8 @@ WHERE tokensUsed > 500000 ORDER BY createdAt DESC LIMIT 10;
 ## 10. CHU KỲ ĐÁNH GIÁ & MẪU CHẤM
 
 **Nhịp đánh giá:**
-1. **Mỗi phiên làm việc** (quick-scan ~5 phút): D1.2 (job kẹt), D2.4 (readback), D8.3 (git) — 3 truy vấn nhanh.
-2. **Mỗi khi khép mission** (full-scan): đủ 8 lĩnh vực, tính tổng điểm, ghi vào worklog.
+1. **Mỗi phiên làm việc** (quick-scan ~5 phút): D1.2 (job kẹt), D2.4 (readback), D8.3 (git), + `bun scripts/mission-watch.ts` snapshot (mục 1b — xác nhận không có mission nào đang chạy mù) — 4 truy vấn/lệnh nhanh.
+2. **Mỗi khi khép mission** (full-scan): đủ 8 lĩnh vực, tính tổng điểm, ghi vào worklog kèm `--replay` của mission vừa khép (mục 1b bước 5).
 3. **Tổng kết định kỳ** (hàng tuần hoặc sau N mission): so sánh điểm các kỳ, soi trend giảm.
 
 **Mẫu bảng chấm (ghi kèm worklog):**

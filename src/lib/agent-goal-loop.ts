@@ -134,7 +134,11 @@ import type { GoalLoopCheckpoint, GoalLoopDurableHooks } from '@/lib/goal-loop-d
 // mtime family — goal-loop-worker.ts). Bump này cũng "trả nợ" cho commit
 // audit 0802a25 (F1-F5) đã đổi agent-goal-loop.ts mà KHÔNG bump rev →
 // detector stale-code mù, 5 fix audit chưa từng sống trên mission nào.
-export const GOAL_LOOP_CODE_REV = 'r54w1'
+// r55w1 (ROUND-55): FIX F (parser Mistral native <parameter name=…> trong
+// <invoke> — tool-calls.ts) + FIX G (sub-agent thought recording —
+// recordAgentThought nhận runId delegation; subagent-delegate ghi reasoning
+// + content mỗi vòng — lấp blind spot quan sát mission SENTINEL).
+export const GOAL_LOOP_CODE_REV = 'r55w1'
 
 /** Gọn args để nhét vào working memory (chống phình) */
 function compactToolArgs(args: Record<string, unknown>, maxLen = 120): string {
