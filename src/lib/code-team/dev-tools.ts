@@ -26,6 +26,7 @@ import type { Dirent } from 'node:fs'
 // Both Code Team agents AND independent agents share this table; sessionId scopes each list.
 import { db } from '@/lib/db'
 import { isFlagEnabled } from '@/lib/feature-flags'
+import { quoteSqlIdentifier, redactSqlForLog } from '@/lib/sql-policy'
 import { getActiveRunId } from '@/lib/agent-run-tracker'
 // TOMBSTONE GUARD (fix review 2026-09-08): chặn todo_write cho session đã xóa
 import { isSessionDeleted } from '@/lib/session-tombstone'
@@ -5339,7 +5340,7 @@ export async function dbQuery(args: {
     return {
       success: false,
       error: 'SQL rejected by read-only guard: multi-statement queries are not allowed',
-      sql: rawSql.slice(0, 500),
+      sql: redactSqlForLog(rawSql, 500),
     }
   }
 
@@ -5449,7 +5450,7 @@ export async function dbQuery(args: {
       limit: requestedLimit,
       wrapped,
       durationMs: Date.now() - startedAt,
-      sql: execSql,
+      sql: redactSqlForLog(execSql, 500),
     }
   } catch (err: any) {
     const errMsg = String(err?.message || err)
@@ -5469,7 +5470,14 @@ export async function dbQuery(args: {
           if (seen.has(t)) continue
           seen.add(t)
           try {
-            const cols = await (db as any).$queryRawUnsafe(`PRAGMA table_info("${t}")`)
+            // P0-3: `t` đến từ execSql.matchAll → tức từ SQL CỦA AGENT.
+            // PRAGMA không nhận bind placeholder, nên không thể tham số hóa; cách
+            // đúng là validate identifier bằng allow-list (src/lib/sql-policy.ts)
+            // + quote kép. Trước đây chỉ chốt bằng regex nội dung sai
+            // /(?:from|join|update|into)\s+["'`]?([A-Za-z_][\w]*)/gi — regex này dừng
+            // ở \w nên `Foo"; DROP TABLE T --` bị cắt còn `Foo`, NHƯNG một tên
+            // chứa ký tự lạ vẫn lọt nguyên văn vào PRAGMA table_info("...").
+            const cols = await (db as any).$queryRawUnsafe(`PRAGMA table_info(${quoteSqlIdentifier(t)})`)
             const names = (cols as any[]).map((c: any) => c.name).filter(Boolean)
             if (names.length) parts.push(`${t}: ${names.join(', ')}`)
           } catch { /* bảng không tồn tại — bỏ qua */ }

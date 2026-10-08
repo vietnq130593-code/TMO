@@ -111,7 +111,19 @@ export function findRealpathEscape(
   if (!allow.rule.pathsOnly) return null
   let realCwd: string | null = null
   for (const arg of allow.args) {
-    if (arg.startsWith('-')) continue
+    if (arg.startsWith('-')) {
+      // r69 (audit lượt 9 — M1): path NHÚNG trong flag (`--files0-from=<p>`)
+      // cũng phải qua realpath containment — nếu không, symlink trong cwd lái
+      // được phép kiểm lexical của validatePaths.
+      const eq = arg.indexOf('=')
+      const flagValue = eq > 0 ? arg.slice(eq + 1) : ''
+      if (!flagValue) continue
+      const flagAbs = isAbsolute(flagValue) ? resolve(flagValue) : resolve(cwd, flagValue)
+      if (!existsSync(flagAbs)) continue
+      realCwd ??= realpathSync(cwd)
+      if (!isInside(realCwd, realpathSync(flagAbs))) return arg
+      continue
+    }
     if (allow.subcommand && arg === allow.subcommand) continue
     const candidates = [arg]
     if (allow.rule.revPathAware && arg.includes(':')) {

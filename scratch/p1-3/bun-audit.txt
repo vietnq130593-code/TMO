@@ -1,0 +1,11 @@
+[0.08ms] ".env"
+bun audit v1.4.2 (744846f84)
+
+braces@3.0.3
+  eslint-config-next > @next/eslint-plugin-next > fast-glob > micromatch > braces
+  high: braces vulnerable to stack-exhaustion denial of service through deeply nested patterns (<=3.0.3) - https://github.com/advisories/GHSA-vfj7-8cjw-p6xm
+
+1 vulnerability (1 high)
+
+  bun audit fix           upgrade the vulnerable packages within their ranges
+  bun audit fix --latest  also cross major versions

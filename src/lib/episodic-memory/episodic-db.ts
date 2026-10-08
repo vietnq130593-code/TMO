@@ -16,6 +16,7 @@
  */
 
 import { db } from '@/lib/db'
+import { clampSqlLimit } from '@/lib/sql-policy'
 import type { EpisodeNode, LessonNode } from './types'
 
 // ==================== DELEGATE DETECTION ====================
@@ -150,8 +151,11 @@ export async function findRecentEpisodeRecords(limit = 20): Promise<EpisodeRecor
     if (hasEpisodeRecordDelegate()) {
       return await db.episodeRecord.findMany({ orderBy: { createdAt: 'desc' }, take: limit })
     }
+    // P0-3: LIMIT bind placeholder (? thứ 1) + clamp số nguyên — không nối chuỗi
+    // vào SQL (LIMIT -1 trong SQLite = KHÔNG GIỚI HẠN → đọc cả bảng).
     return await db.$queryRawUnsafe<EpisodeRecordRow[]>(
-      `SELECT * FROM EpisodeRecord ORDER BY createdAt DESC LIMIT ${Number(limit)}`
+      `SELECT * FROM EpisodeRecord ORDER BY createdAt DESC LIMIT ?`,
+      clampSqlLimit(limit)
     )
   } catch {
     return []
@@ -266,8 +270,12 @@ export async function findAllLessonRecords(minConfidence = 0, limit = 100): Prom
         orderBy: { confidence: 'desc' }, take: limit,
       })
     }
+    // P0-3: cả confidence lẫn LIMIT đều bind placeholder — không nối chuỗi SQL.
+    const minConf = Number(minConfidence)
     return await db.$queryRawUnsafe<RawLessonRow[]>(
-      `SELECT * FROM LessonRecord WHERE confidence >= ${Number(minConfidence)} ORDER BY confidence DESC LIMIT ${Number(limit)}`
+      `SELECT * FROM LessonRecord WHERE confidence >= ? ORDER BY confidence DESC LIMIT ?`,
+      Number.isFinite(minConf) ? minConf : 0,
+      clampSqlLimit(limit)
     ).then(coerceLessonRows)
   } catch {
     return []

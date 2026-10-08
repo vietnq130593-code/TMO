@@ -16,6 +16,7 @@
  */
 
 import { db } from '@/lib/db'
+import { quoteSqlIdentifier } from '@/lib/sql-policy'
 import { findAgentRunRecordsSince, type AgentRunRecordRow } from '@/lib/metrics-db'
 import {
   getEscalationCandidates,
@@ -833,7 +834,7 @@ export async function collectDatabaseSystem(): Promise<CollectorResult<DatabaseS
       const tables = ['Document', 'LocalEntity', 'LocalRelationship', 'AgentRunRecord', 'ToolMetric', 'ChatMessage', 'AutoLearnRecord', 'PendingWriteback', 'EpisodeRecord', 'LessonRecord']
       const counts = await Promise.all(tables.map(async (t) => {
         try {
-          const rows = await db.$queryRawUnsafe<{ n: number | bigint }[]>(`SELECT COUNT(*) AS n FROM ${t}`)
+          const rows = await db.$queryRawUnsafe<{ n: number | bigint }[]>(`SELECT COUNT(*) AS n FROM ${quoteSqlIdentifier(t)}`)
           return { table: t, rows: Number(rows[0]?.n ?? 0) }
         } catch {
           return { table: t, rows: 0 } // Bảng không tồn tại hoặc lỗi khác

@@ -637,3 +637,91 @@ describe('P0-1 — cwd symlink escape (realpath containment cho cwd)', () => {
     }
   })
 })
+
+// ============================================================================
+// r69 (audit lượt 9 — M1): flag mang giá trị ĐƯỜNG DẪN không được bypass guard
+// ----------------------------------------------------------------------------
+// Arg bắt đầu bằng '-' bị `continue` trong CẢ validatePaths lẫn
+// findRealpathEscape → phần value sau '=' (path thật) thoát containment.
+// BẰng chứng máy (coreutils 9.7, exit 0):
+//   wc --files0-from=/etc/hostname  → " 1  1 33 /etc/hostname"  (đọc NGOÀI cwd)
+//   du --files0-from=/etc/hostname  → "4\t/etc/hostname"
+// Ngoài ra file-list nằm trong cwd vẫn đọc GIÁN TIẾP secret (paths.txt
+// chứa `.env`) mà denylist theo TÊN không thấy → fail-closed như `grep -f`.
+// ============================================================================
+
+describe('r69 (M1) — flag mang đường dẫn không được bypass path guard', () => {
+  test('deny: flag ĐỌC FILE danh sách (--files0-from/--exclude-from/-X/--ignore-file)', () => {
+    expect(policy('wc --files0-from=/etc/hostname')).toEqual({ ok: false, code: 'bad_flag' })
+    expect(policy('du --files0-from=/etc/hostname')).toEqual({ ok: false, code: 'bad_flag' })
+    expect(policy('du --exclude-from=/etc/hostname')).toEqual({ ok: false, code: 'bad_flag' })
+    expect(policy('du -X=/etc/hostname')).toEqual({ ok: false, code: 'bad_flag' })
+    expect(policy('grep --exclude-from=/etc/hostname foo')).toEqual({ ok: false, code: 'bad_flag' })
+    expect(policy('rg --ignore-file=/etc/hostname foo')).toEqual({ ok: false, code: 'bad_flag' })
+    // Dạng tách rời: `--files0-from=/etc/x` và `--files0-from /etc/x` đều phải chặn
+    expect(policy('wc --files0-from /etc/hostname')).toEqual({ ok: false, code: 'bad_flag' })
+  })
+
+  test('deny: --flag=<path> ngoài cwd, kể cả binary CHƯA có denyFlags riêng', () => {
+    // cat/head không khai báo denyFlags → giá trị path trong flag thoát guard.
+    expect(policy('cat --output=/tmp/tmo-probe-PWN.txt package.json')).toEqual({
+      ok: false,
+      code: 'path_not_allowed',
+    })
+    expect(policy('head --output=/etc/cron.d/x package.json')).toEqual({
+      ok: false,
+      code: 'path_not_allowed',
+    })
+  })
+
+  test('deny: giá trị path trong flag trỏ tới file SECRET trong cwd', () => {
+    expect(policy('cat --output=.env package.json')).toEqual({ ok: false, code: 'path_not_allowed' })
+    expect(policy('cat --output=db/custom.db package.json')).toEqual({
+      ok: false,
+      code: 'path_not_allowed',
+    })
+  })
+
+  test('deny qua route thật: wc --files0-from=/etc/hostname → 403, lệnh KHÔNG chạy', async () => {
+    const res = await POST(makeRequest({ command: 'wc --files0-from=/etc/hostname' }, APP_TOKEN))
+    expect(res.status).toBe(403)
+    const data = (await res.json()) as { code?: string }
+    expect(data.code).toBe('bad_flag')
+  })
+
+  test('realpath containment: giá trị path trong flag là symlink trong cwd trỏ ra ngoài → chặn', () => {
+    const root = mkdtempSync(join(tmpdir(), 'tmo-exec-flag-'))
+    const outside = mkdtempSync(join(tmpdir(), 'tmo-exec-flagout-'))
+    const link = join(root, 'link')
+    symlinkSync(outside, link)
+    try {
+      const parsed = parseCommand(`cat --zzz=${link}`)
+      expect(parsed.ok).toBe(true)
+      if (!parsed.ok) return
+      const allow = checkAllowlist(parsed.value)
+      expect(allow.ok).toBe(true)
+      if (!allow.ok) return
+      // Guard LEXICAL vẫn pass (symlink nằm trong root) → realpath containment mới bắt
+      expect(validatePaths(allow, root).ok).toBe(true)
+      expect(findRealpathEscape(allow, root)).toBe(`--zzz=${link}`)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  test('hồi quy: flag-value KHÔNG phải path (vẫn dùng hàng ngày) không bị chặn nhầm', () => {
+    expect(policy('git log --pretty=format:%h')).toEqual({ ok: true, code: undefined })
+    // git là LONG-ONLY (F7): `-5` bị chặn CỐ Ý — dùng dạng `--max-count=5`.
+    expect(policy('git log --date=iso --max-count=5')).toEqual({ ok: true, code: undefined })
+    expect(policy('git diff --stat')).toEqual({ ok: true, code: undefined })
+    expect(policy('rg --include=*.ts token')).toEqual({ ok: true, code: undefined })
+    expect(policy('grep --color=auto token')).toEqual({ ok: true, code: undefined })
+    expect(policy('ls --color=always')).toEqual({ ok: true, code: undefined })
+    // find chỉ duyệt flag dạng TÁCH RỜI (`-maxdepth 2`); `--maxdepth=2` bị policy
+    // chặn từ trước (allowlist find không khai báo dạng `=value`) — không phải hồi quy.
+    expect(policy('find -maxdepth 2 -name package.json')).toEqual({ ok: true, code: undefined })
+    expect(policy('tail -n 20 package.json')).toEqual({ ok: true, code: undefined })
+    expect(policy('ls -la')).toEqual({ ok: true, code: undefined })
+  })
+})

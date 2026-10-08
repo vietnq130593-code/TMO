@@ -201,7 +201,19 @@ const ALLOWLIST: Record<string, BinRule> = {
   pwd: { allowNoSubcommand: true, maxArgs: 0, description: 'print working directory' },
   whoami: { allowNoSubcommand: true, maxArgs: 0, description: 'print current user' },
   uname: { allowNoSubcommand: true, flags: FLAG_OK, maxArgs: 3, description: 'system information' },
-  du: { allowNoSubcommand: true, flags: FLAG_ANY, maxArgs: 6, pathsOnly: true, description: 'disk usage' },
+  du: {
+    allowNoSubcommand: true,
+    // r69 (audit lượt 9 — M1): -X/--exclude-from đọc FILE danh sách mẫu,
+    // --files0-from đọc FILE danh sách path. Ngoài cwd → thoát containment
+    // (đo thật: `du --files0-from=/etc/hostname` in kích thước file ngoài cwd);
+    // trong cwd → đọc GIÁN TIẾP file secret mà denylist theo TÊN không thấy
+    // (`paths.txt` chứa `.env`). Fail-closed như `grep -f`.
+    denyFlags: /^(--files0-from|--exclude-from|-X)$/,
+    flags: FLAG_ANY,
+    maxArgs: 6,
+    pathsOnly: true,
+    description: 'disk usage',
+  },
   df: { allowNoSubcommand: true, flags: FLAG_ANY, maxArgs: 4, description: 'filesystem usage' },
   head: { allowNoSubcommand: true, flags: FLAG_ANY, maxArgs: 4, pathsOnly: true, description: 'first lines of a file' },
   tail: {
@@ -215,7 +227,17 @@ const ALLOWLIST: Record<string, BinRule> = {
     pathsOnly: true,
     description: 'last lines of a file (không follow)',
   },
-  wc: { allowNoSubcommand: true, flags: FLAG_ANY, maxArgs: 6, pathsOnly: true, description: 'count lines/words' },
+  wc: {
+    allowNoSubcommand: true,
+    // r69 (M1): --files0-from=F đọc danh sách path rồi MỞ chúng → bypass
+    // path guard (đo thật: `wc --files0-from=/etc/hostname` trả số dòng/từ
+    // của file NGOÀI cwd, exit 0).
+    denyFlags: /^--files0-from$/,
+    flags: FLAG_ANY,
+    maxArgs: 6,
+    pathsOnly: true,
+    description: 'count lines/words',
+  },
   cat: { allowNoSubcommand: true, flags: FLAG_ANY, maxArgs: 6, pathsOnly: true, description: 'print a (non-secret) file' },
   echo: { allowNoSubcommand: true, maxArgs: 4, description: 'print literal text' },
   node: {
@@ -231,7 +253,9 @@ const ALLOWLIST: Record<string, BinRule> = {
     allowNoSubcommand: true,
     // r64.2: deny -f/--file (đọc pattern từ file — dạng attach `-f.env` và
     // `--file=.env` nhúng path vào flag token, thoát path guard).
-    denyFlags: /^(-f|--file)/,
+    // r69 (M1): --exclude-from/--exclude-file đọc file danh sách mẫu (cùng
+    // lớp với -f/--file đã chặn ở r64.2) → deny.
+    denyFlags: /^(-f|--file)|^(--exclude-from|--exclude-file)$/,
     flags: FLAG_ANY,
     maxArgs: 8,
     pathsOnly: true,
@@ -242,7 +266,8 @@ const ALLOWLIST: Record<string, BinRule> = {
     // r64.2 (F2): `--pre=<bin>` — rg CHẠY binary làm preprocessor trên nội dung
     // file (`rg --pre=bash foo pm2-start.sh` → bash thực thi script trong
     // repo!) → deny cứng cả --pre-glob; -f/--file như grep (fail-closed).
-    denyFlags: /^(-f|--file|--pre|--pre-glob)/,
+    // r69 (M1): --ignore-file/-case-insensitive đọc file danh sách ignore.
+    denyFlags: /^(-f|--file|--pre|--pre-glob)|^(--ignore-file|--ignore-file-case-insensitive)$/,
     flags: FLAG_ANY,
     maxArgs: 8,
     pathsOnly: true,
@@ -490,7 +515,24 @@ export function resolveSafeCwd(candidate: unknown): CwdResult {
 export function validatePaths(allow: Extract<AllowResult, { ok: true }>, cwd: string): AllowResult {
   if (!allow.rule.pathsOnly) return allow
   for (const arg of allow.args) {
-    if (arg.startsWith('-')) continue // flag / --flag=value đã kiểm ở checkAllowlist
+    if (arg.startsWith('-')) {
+      // r69 (audit lượt 9 — M1): token bắt đầu bằng '-' KHÔNG có nghĩa là
+      // "không phải path". `--output=/etc/cron.d/x`, `--files0-from=/etc/hostname`
+      // mang ĐƯỜNG DẪN trong phần sau '=' và trước đây thoát hoàn toàn khỏi
+      // path guard. Áp CÙNG phép kiểm (secret + containment) cho phần value:
+      // tuyệt đối / ngoài cwd / tên file secret → chặn. Value không phải path
+      // (`--color=auto`, `--maxdepth=2`, `--pretty=format:%h`) vẫn qua.
+      const eq = arg.indexOf('=')
+      const flagValue = eq > 0 ? arg.slice(eq + 1) : ''
+      if (flagValue && !isPathArgAllowed(flagValue, cwd)) {
+        return {
+          ok: false,
+          code: 'path_not_allowed',
+          message: `flag value not allowed (outside cwd or secret file): ${arg}`,
+        }
+      }
+      continue
+    }
     if (allow.subcommand && arg === allow.subcommand) continue
     if (!isPathArgAllowed(arg, cwd)) {
       return {
