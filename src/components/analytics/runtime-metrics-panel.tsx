@@ -545,7 +545,9 @@ export function RuntimeMetricsPanel({ analyticsRange }: RuntimeMetricsPanelProps
             <>
               <div className="grid grid-cols-3 gap-2 mb-3">
                 <MiniStat label="Runs" value={fmtNum(runs?.total)} tone="stone" />
-                <MiniStat label="No-progress" value={fmtNum(runs?.noProgress)} tone={(runs?.noProgress || 0) > 0 ? 'amber' : 'stone'} />
+                {/* r64 (A1) — nhãn theo semantics mới: noProgress đếm ĐỦ họ bế tắc
+                    (no_progress + stall_brake + verdict_stagnation) từ API */}
+                <MiniStat label="Stuck runs" value={fmtNum(runs?.noProgress)} tone={(runs?.noProgress || 0) > 0 ? 'amber' : 'stone'} />
                 <MiniStat label="Failed" value={fmtNum(runs?.failed)} tone={(runs?.failed || 0) > 0 ? 'rose' : 'stone'} />
               </div>
               {runs && runs.recentRuns.length > 0 ? (

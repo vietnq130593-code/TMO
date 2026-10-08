@@ -15,8 +15,8 @@
  *            failed/noProgress + byStopReason + 10 runs gần nhất
  *           (LƯU Ý v1: AgentRunRecord chỉ ghi khi run KẾT THÚC nên active luôn 0
  *            — task 20-c sẽ wire ghi row lúc run start)
- *   alerts — (a) no_progress >= 3 → high; (b) tool successRate < 50% với
- *            >= 10 calls → medium
+ *   alerts — (a) stuck-loops (no_progress/stall_brake/verdict_stagnation) >= 3
+ *            → high; (b) tool successRate < 50% với >= 10 calls → medium
  *
  * Query params: hours=24 (default 24, max 168)
  */
@@ -281,7 +281,11 @@ export async function GET(request: NextRequest) {
     const allRunRows = await findAgentRunRecordsSince(runSince)
     // Filter theo upper bound (createdAt ≤ toTzMs)
     const runRows = allRunRows.filter(r => (r.createdAt ?? new Date(0)).getTime() <= runUpperMs)
-    noProgressCount = runRows.filter(r => r.stopReason === 'no_progress').length
+    // r64 (A1 lượt 5) — đếm ĐỦ họ bế tắc: goal-loop dừng 'no_progress' (stall
+    // brake chu kỳ), delegation dừng 'stall_brake' (r60.2 C7 persist nhãn thật),
+    // goal-loop ∞ dừng 'verdict_stagnation' (r63 F1) — trước đây chỉ đếm
+    // no_progress → under-report run kẹt cho operator (2/3 họ bị bỏ sót).
+    noProgressCount = runRows.filter(r => r.stopReason === 'no_progress' || r.stopReason === 'stall_brake' || r.stopReason === 'verdict_stagnation').length
     const byStopReason: Record<string, number> = {}
     for (const r of runRows) {
       if (r.stopReason) byStopReason[r.stopReason] = (byStopReason[r.stopReason] || 0) + 1
@@ -320,13 +324,14 @@ export async function GET(request: NextRequest) {
   // ==================== alerts ====================
   const alerts: Array<{ severity: 'high' | 'medium'; type: string; message: string }> = []
   try {
-    // (a) Stuck loops: >= 3 run no_progress trong khoảng
+    // (a) Stuck loops: >= 3 run kẹt (no_progress/stall_brake/verdict_stagnation)
+    // trong khoảng — r64 (A1): cả 3 nhãn cùng họ bế tắc (amber) đều phải được đếm
     const periodLabel = range ? `khoảng ${range.from} → ${range.to}` : `${hours}h gần nhất`
     if (noProgressCount >= 3) {
       alerts.push({
         severity: 'high',
         type: 'stuck_loops',
-        message: `${noProgressCount} vòng lặp kẹt (no_progress) trong ${periodLabel}`,
+        message: `${noProgressCount} vòng lặp kẹt (no_progress/stall_brake/verdict_stagnation) trong ${periodLabel}`,
       })
     }
     // (b) Tool fail: successRate < 50% với >= 10 calls
