@@ -3379,6 +3379,11 @@ export async function readOutput(args: { process_id?: string; list?: boolean; si
     processId: args.process_id,
     ...trunc,
     ended: output.ended,
+    // r69 (BUG-007 — quan sát r68): exitCode + status từ registry — bằng chứng
+    // nghiệm thu (receipt) của lệnh nền. process CHƯA chết: exitCode=null,
+    // status='running' — đọc lại sau khi ended=true để chốt receipt.
+    status: output.status,
+    exitCode: output.exitCode ?? null,
     bytesRead: output.bytesRead,
     totalBytes: output.totalBytes,
   }

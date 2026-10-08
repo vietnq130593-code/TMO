@@ -2023,25 +2023,46 @@ NHIỆM VỤ: viết BÁO CÁO CUỐI trung thực + HOÀN CHỈNH cho người 
 QUY TẮC: KHÔNG gọi tool. KHÔNG bắt đầu công việc mới. Chỉ tổng kết từ bằng chứng có sẵn. Báo cáo phải trọn vẹn có kết luận (không bị cắt ngang).
 ĐỊNH DẠNG (user directive 2026-10-20): văn xuôi tiếng Việt sạch, markdown TỐI THIỂU — không bọc nhấn mạnh bằng **, không bọc từ ngữ bằng dấu \` hay dấu ' (chỉ trích dẫn mã/lệnh thật). Nhấn mạnh bằng CHỮ IN HOA. Liệt kê bằng gạch đầu dòng "- ".`
 
-  try {
-    const result = await withTimeout(
-      callLLMForAgent(prompt, { provider: agentProvider, model: agentModel }, fullSystemPrompt, {
-        agentId,
-        agentName: `${agentName} (final-report)`,
-        temperature: agentTemperature ?? 0.4,
-        maxTokens: Math.max(agentMaxTokens ?? 2048, 4096),
-        abortCheck,
-      }),
-      LLM_TIMEOUT_MS,
-      'Final report LLM',
-    )
-    if (!result?.content) return null
-    if (typeof result.tokensUsed === 'number' && result.tokensUsed > 0) onTokens(result.tokensUsed)
-    return result.content
-  } catch (err) {
-    console.warn(`[GoalLoop] Final report LLM failed: ${err instanceof Error ? err.message : String(err)}`)
-    return null
+  // ━━━ r69 (BUG-024 — quan sát r68): WRAP-UP RETRY ━━━
+  // Bằng chứng: provider Zen chết TOÀN CHUỖI (HTTP + CLI, fetch failed) đúng
+  // lúc wrap-up — cuộc gọi LLM QUAN TRỌNG NHẤT của run (tổng kết bằng chứng)
+  // thất bại ngay lần đầu → báo cáo cuối rơi vào đường không-LLM thô. Giờ
+  // retry tối đa 2 lần kèm backoff (12s / 30s — đủ vượt cơn nghẽn ngắn của
+  // provider), check abortCheck giữa các lần. Không đổi hành vi thành công:
+  // lần đầu OK thì return như cũ (0 chờ thêm).
+  const FINAL_REPORT_RETRY_BACKOFF_MS = [12_000, 30_000]
+  const FINAL_REPORT_MAX_ATTEMPTS = FINAL_REPORT_RETRY_BACKOFF_MS.length + 1
+  let finalReportLastErr = 'unknown'
+  for (let attempt = 1; attempt <= FINAL_REPORT_MAX_ATTEMPTS; attempt++) {
+    if (abortCheck()) return null
+    try {
+      const result = await withTimeout(
+        callLLMForAgent(prompt, { provider: agentProvider, model: agentModel }, fullSystemPrompt, {
+          agentId,
+          agentName: `${agentName} (final-report)`,
+          temperature: agentTemperature ?? 0.4,
+          maxTokens: Math.max(agentMaxTokens ?? 2048, 4096),
+          abortCheck,
+        }),
+        LLM_TIMEOUT_MS,
+        'Final report LLM',
+      )
+      if (result?.content) {
+        if (typeof result.tokensUsed === 'number' && result.tokensUsed > 0) onTokens(result.tokensUsed)
+        return result.content
+      }
+      finalReportLastErr = 'LLM trả về rỗng (no content)'
+    } catch (err) {
+      finalReportLastErr = err instanceof Error ? err.message : String(err)
+    }
+    if (attempt < FINAL_REPORT_MAX_ATTEMPTS) {
+      const waitMs = FINAL_REPORT_RETRY_BACKOFF_MS[attempt - 1]
+      console.warn(`[GoalLoop] Final report LLM thất bại lần ${attempt}/${FINAL_REPORT_MAX_ATTEMPTS}: ${finalReportLastErr} — retry sau ${Math.round(waitMs / 1000)}s (BUG-024 wrap-up là cuộc gọi quan trọng nhất run)`)
+      await new Promise(resolve => setTimeout(resolve, waitMs))
+    }
   }
+  console.warn(`[GoalLoop] Final report LLM thất bại SAU ${FINAL_REPORT_MAX_ATTEMPTS} lần thử (BUG-024) — rơi đường không-LLM: ${finalReportLastErr}`)
+  return null
 }
 
 // ==================== CI-3 B4 (Task 13-c) — TASK SUMMARY LIÊN TÁC VỤ ====================
@@ -2838,6 +2859,47 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
         evidence.push({ cycle: cycleNum, kind: 'directive', text: `🛑 lặp vượt ngưỡng: ${name}×${n} y hệt — cắt chu kỳ` })
       }
     } catch { /* fail-open — đếm signature không được phép crash loop */ }
+  }
+
+  // ━━━ r69 (BUG-022 — quan sát r68): FILE-READ DIGEST RE-INJECTION ━━━
+  // Bằng chứng mission cmuznvkl…6b136k: file_read exec-allowlist.ts ×15,
+  // execute-route-security.test.ts ×14, execute/route.ts ×10 cùng args —
+  // 39 lượt đọc cho ~4 file. Chuỗi nhân: nén context ×6 cắt mất kết quả đọc
+  // trước → verdict CHƯA ĐẠT ép đọc lại → nudge cũ "kết quả ĐÃ NẰM trong
+  // transcript" là SAI SỰ THẬT (đã bị nén mất) → agent đọc lại hoài. Giờ:
+  // giữ DIGEST (1200 ký tự đầu) của lần đọc ĐẦU mỗi file; từ lượt thứ 5 cùng
+  // file → RE-INJECT digest vào context (DATA — agent có ngay nội dung, hết
+  // nhu cầu đọc lại) + evidence cho trọng tài thấy "đã đọc đủ N lần".
+  const FILE_READ_DIGEST_HEAD_CHARS = 1200
+  const FILE_READ_REINJECT_THRESHOLD = 5
+  const fileReadDigests = new Map<string, { count: number; digest: string; firstCycle: number }>()
+  const noteFileReadResult = (cycleNum: number, name: string, args: Record<string, unknown>, ok: boolean, rawResultText: string): void => {
+    try {
+      if (name !== 'file_read' || !ok) return
+      const p = typeof args?.path === 'string' ? args.path : (typeof args?.file === 'string' ? args.file : '')
+      if (!p) return
+      const key = `file_read:${p}`
+      const cur = fileReadDigests.get(key)
+      if (!cur) {
+        fileReadDigests.set(key, { count: 1, digest: rawResultText.slice(0, FILE_READ_DIGEST_HEAD_CHARS), firstCycle: cycleNum })
+        return
+      }
+      cur.count++
+      if (cur.count === FILE_READ_REINJECT_THRESHOLD) {
+        pushToolMessage(messages, {
+          tool: 'harness_warning',
+          success: true,
+          result: `📖 PHANH ĐỌC-LẶP (máy đếm): file ${p} đã được bạn đọc ${cur.count} lần trong run — kết quả lần đầu (chu kỳ ${cur.firstCycle}) có thể ĐÃ BỊ NÉN context cắt mất. DIGEST đầu file (từ lần đọc đầu) được cấp NGAY dưới đây — DÙNG digest này, KHÔNG đọc lại file nữa (trừ khi nó vừa bị bạn sửa):\n---\n${cur.digest}\n---\nNếu phần cần nằm ngoài digest: gọi file_read với offset/line_range CHÍNH XÁC (đoạn hẹp) thay vì đọc toàn file.`,
+        })
+        evidence.push({ cycle: cycleNum, kind: 'directive', text: `phanh đọc-lặp: file_read ${p} ×${cur.count} — đã re-inject digest lần đọc đầu (${FILE_READ_DIGEST_HEAD_CHARS} ký tự)` })
+        recordAgentThought(agentSessionId, `📖 PHANH ĐỌC LẶP: ${p} đọc ${cur.count} lần — re-inject digest đầu file để agent ngừng đọc lại toàn file (BUG-022)`, totalIterations)
+      } else if (cur.count > FILE_READ_REINJECT_THRESHOLD && cur.count % 5 === 0) {
+        // Lặp tiếp dù ĐÃ có digest — ghi evidence thêm cho trọng tài (agent
+        // tự làm giảm chất lượng bằng chứng trùng lặp).
+        evidence.push({ cycle: cycleNum, kind: 'directive', text: `phanh đọc-lặp (nhắc): file_read ${p} ×${cur.count} — VẪN đọc lại dù digest đã cấp` })
+        recordAgentThought(agentSessionId, `📖 ĐỌC LẶP TIẾP DIỄN: ${p} đã ${cur.count} lần (digest cấp từ lần ${FILE_READ_REINJECT_THRESHOLD}) — evidence cho trọng tài`, totalIterations)
+      }
+    } catch { /* fail-open — digest không được phép crash loop */ }
   }
 
   // ================== CI-5 (Task 14-b) — DURABLE HOOK HELPERS ==================
@@ -3696,6 +3758,10 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         noteToolSignature(cycle, etc.name, etc.args, ok)
         if (ok) batchAnySuccess = true // CHỈ success thật mới reset stall brake
         const outPreview = er ? cliToolResultPreview(er) : ''
+        // r69 (BUG-022): digest re-inject cho file_read lặp (đường CLI inner loop)
+        try {
+          noteFileReadResult(cycle, etc.name, etc.args, ok, er ? JSON.stringify(er) : '')
+        } catch { /* fail-open */ }
         const evExec = extractTodoEvidence(etc.name, etc.args)
         if (ok && evExec) batchEvidence.push(evExec)
         // 2026-10 — mirror shellVerify của processToolResult (đường TMO): shell/
@@ -3913,6 +3979,13 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         // ===== WORKING MEMORY (HOT) — ghi nhận tool đã chạy + kết quả =====
         // [D] Preview thông minh (errorCount + lỗi cụ thể) thay vì cắt 200 ký tự đầu
         const resultPreview = summarizeToolResult(toolResult.result).slice(0, EVIDENCE_PREVIEW_MAX_CHARS)
+
+        // r69 (BUG-022): digest re-inject cho file_read lặp (đường TMO executeTool)
+        try {
+          let rawResultText = ''
+          try { rawResultText = toolResult.result !== null && typeof toolResult.result === 'object' ? JSON.stringify(toolResult.result) : String(toolResult.result ?? '') } catch { rawResultText = '' }
+          noteFileReadResult(cycle, tc.name, tc.args, toolResult.success, rawResultText)
+        } catch { /* fail-open */ }
 
         // 2026-10-27 (user directive — Thought Progress ghi rõ TỪNG GĐ): GĐ1/GĐ2
         // marker cho đường TMO executeTool (đôi của hook CLI inner loop bên trên
@@ -5353,6 +5426,22 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       : `debt cycle chưa xử lý xong — vòng lặp dừng vì ${stopReason}`
     content += `\n\n---\n📋 **NỢ KỸ THUẬT (${unresolvedDebt.length} lỗi phát sinh trong quá trình xử lý — ${debtNote}):**\n${unresolvedDebt.map(d => `- ${d}`).join('\n')}\n\n→ Đã tạo Todo follow-up tương ứng — bạn có thể yêu cầu xử lý các mục này bất cứ lúc nào.`
   }
+
+  // ━━━ r69 (BUG-025 — quan sát r68): BÀN GIAO WORKING TREE ━━━
+  // Bằng chứng: mission khép để lại 101 dòng fix THẬT (exec-allowlist +33,
+  // test +68) KHÔNG commit, KHÔNG ai nhắc — công sức suýt mồ côi, lần chạy
+  // sau có thể ghi đè. Bước bàn giao cứng: chụp git status, nếu working tree
+  // bẩn → BÁO RÕ trong final report (deterministic, 0 LLM call) — operator/
+  // lần chạy kế nhặt lên được.
+  try {
+    const { getWorkspaceGitStatus, formatUncommittedBlock } = await import('@/lib/workspace-git')
+    const gs = await getWorkspaceGitStatus()
+    const block = formatUncommittedBlock(gs, '📁 **THAY ĐỔI CHƯA COMMIT trong working tree** (bàn giao — công sức có thật chưa được git_commit chốt)')
+    if (block) {
+      content += `\n\n---\n${block}\n→ Lần chạy kế/operator nhặt: commit kèm provenance HOẶC discard tường minh — không để mất trắng.`
+      recordAgentThought(agentSessionId, `📁 Wrap-up bàn giao: ${gs.total} thay đổi chưa commit trong working tree — đã ghi danh sách vào báo cáo cuối (BUG-025)`, totalIterations)
+    }
+  } catch { /* fail-open — bàn giao không được phá response */ }
 
   const elapsedMs = Date.now() - startedAt
   console.log(`[GoalLoop] ${agentName} kết thúc: ${stopReason} — ${cyclesAttempted} chu kỳ (${cyclesDone} hoàn thành), ${totalIterations} vòng, ${totalToolCalls} tool calls, ${tokensUsed} tokens, ${Math.round(elapsedMs / 1000)}s${usedFinalReport ? ' + final-report' : ''}${compressions > 0 ? `, ${compressions} lần nén context` : ''}${delegations > 0 ? `, ${delegations} lần delegate (${subagentTokens} tokens sub-agent)` : ''}${escalations > 0 ? `, ${escalations} lần auto-escalate Omega` : ''}`)

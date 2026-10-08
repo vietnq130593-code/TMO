@@ -44,33 +44,11 @@ if (!directivePath || !profileId) {
 
 const PROMPT = readFileSync(directivePath, 'utf8').trim()
 
-// ── GUARD: nghiệm thu bắt buộc (mirror extractDirectiveSpec — giữ đồng bộ
-//    chủ đích với agent-goal-loop.ts: parser đó phục vụ runtime, guard này
-//    phục vụ operator fail-fast trước khi tốn token) ──
-function extractAcceptance(raw: string): string[] {
-  const items = new Set<string>()
-  // (a) Khối checklist "Nghiệm thu:" + các dòng "- [ ] …" (dạng chuẩn hoá).
-  const block = raw.match(
-    /(?:Tiêu chí )?[Nn]ghiệm thu[^:\n]*:\s*([\s\S]*?)(?=\n\s*\n|\n\s*[•🏁🔍💡📊🚨⚖️]|$)/
-  )
-  if (block) {
-    for (const line of block[1].split('\n')) {
-      const item = line
-        .replace(/^\s*-\s*\[[ xX]\]\s*/, '')
-        .replace(/^\s*-\s*/, '')
-        .trim()
-      if (item && item.length > 3) items.add(item)
-    }
-  }
-  // (b) Per-item "Nghiệm thu: <điều kiện>" — format mission #18 (mỗi hạng mục
-  // một dòng) đã chứng minh hiệu quả với evaluator; parser harness chỉ bắt
-  // block đầu nên guard bổ sung đường này để không từ chối nhầm format thật.
-  for (const m of raw.matchAll(/^[^\S\n]*[Nn]ghiệm thu[^:\n]*:[ \t]*(\S.*)$/gm)) {
-    const item = m[1].trim()
-    if (item.length > 3) items.add(item)
-  }
-  return [...items]
-}
+// ── GUARD: nghiệm thu bắt buộc — r69 DÙNG CHUNG LIB với tầng API
+//    (src/lib/directive-guard.ts — một nguồn sự thật cho cả script operator
+//    lẫn /api/openclaw/chat; trước đây 2 bản copy phải giữ đồng bộ tay) ──
+const { extractAcceptanceCriteria } = await import('../src/lib/directive-guard')
+const extractAcceptance = extractAcceptanceCriteria
 const acceptance = extractAcceptance(PROMPT)
 if (acceptance.length === 0) {
   console.error('✗ TỪ CHỐI DISPATCH — directive KHÔNG có khối "Nghiệm thu:" hợp lệ (≥1 mục "- [ ] …").')

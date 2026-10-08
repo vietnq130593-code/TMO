@@ -69,6 +69,14 @@ export interface ProcessOutput {
   bytesRead: number
   totalBytes: number
   ended: boolean
+  /** r69 (BUG-007 — quan sát r68): SENTINEL chạy gate bằng run_bg rồi
+   * read_output 3 lần nhưng KHÔNG BAO GIỜ lấy được exit code (bằng chứng
+   * nghiệm thu bị mất — "Gate receipt was lost (I never captured its exit
+   * code)" 15:05:50) vì ProcessOutput KHÔNG mang exitCode — agent KHÔNG THỂ
+   * lấy dù muốn. Giờ registry (đã có sẵn exitCode sau khi process chết,
+   * giữ 5' reap-delay) được trả kèm: status + exitCode. */
+  status?: 'running' | 'exited' | 'killed'
+  exitCode?: number | null
 }
 
 // ==================== RING BUFFER ====================
@@ -523,18 +531,25 @@ class ProcessManagerImpl {
   // ==================== readProcessOutput ====================
 
   async readProcessOutput(processId: string, fromByte?: number): Promise<ProcessOutput> {
+    // r69 (BUG-007): trả kèm status + exitCode từ registry để caller (tool
+    // read_output → sub-agent) chốt được receipt (exit code) của process nền
+    // — đây là bằng chứng nghiệm thu duy nhất của lệnh gate/build chạy nền.
+    const info = this.registry.get(processId)
+    const procMeta = info
+      ? { status: info.status, exitCode: info.exitCode }
+      : {}
     const buffer = this.buffers.get(processId)
     if (!buffer) {
-      const info = this.registry.get(processId)
       return {
         output: info ? `Process ${info.name}: no output buffer (status=${info.status})` : '',
         bytesRead: 0,
         totalBytes: 0,
         ended: true,
+        ...procMeta,
       }
     }
     const { data, bytesRead, totalBytes, ended } = buffer.read(fromByte ?? 0)
-    return { output: data, bytesRead, totalBytes, ended }
+    return { output: data, bytesRead, totalBytes, ended, ...procMeta }
   }
 
   // ==================== getProcess ====================

@@ -1320,7 +1320,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'run_bg',
-      description: 'Chạy command nền (long-running: dev server, watcher, build...). Trả processId để poll bằng read_output. KHÔNG block — trả về ngay. Tự kill khi cần bằng kill_process.',
+      description: 'Chạy command nền (long-running: dev server, watcher, build, quality gate...). Trả processId để poll bằng read_output. KHÔNG block — trả về ngay. Tự kill khi cần bằng kill_process. QUAN TRỌNG (gate/build receipt): sau khi process kết thúc, read_output trả exitCode + status — exitCode 0 = THÀNH CÔNG (đây là bằng chứng nghiệm thu của lệnh), khác 0 = FAIL với output để đọc.',
       parameters: {
         type: 'object',
         properties: {
@@ -1335,7 +1335,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'read_output',
-      description: 'Poll output của background process (started bằng run_bg). Trả new stdout+stderr + ended flag + bytesRead. Pass list:true để xem tất cả processes đang chạy.',
+      description: 'Poll output của background process (started bằng run_bg). Trả new stdout+stderr + ended flag + bytesRead + status + exitCode. Khi ended=true: exitCode là RECEIPT của lệnh (0 = thành công — trích dẫn làm bằng chứng nghiệm thu; process chưa kết thúc → exitCode=null, đọc lại sau). Pass list:true để xem tất cả processes đang chạy.',
       parameters: {
         type: 'object',
         properties: {
@@ -1876,6 +1876,13 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
               'DELEGATION CONTRACT — danh sách điều kiện hoàn thành KIỂM ĐỊNH ĐƯỢC (mỗi điều kiện 1 dòng, dạng "xong khi..."). ' +
               'Sub-agent tự verify từng điều kiện bằng tool thật trước khi báo cáo và nêu ĐẠT/CHƯA ĐẠT từng điều kiện trong báo cáo. ' +
               'Vd: "xong khi file src/lib/x.ts sửa hàm Y và lint pass", "xong khi test X chạy 169/169 pass".',
+          },
+          readOnly: {
+            type: 'boolean',
+            description:
+              'r69 (governance — quan sát r68 BUG-010/014): giao việc CHỈ ĐỌC/khảo sát/kiểm định — tầng tool CHẶN CỨNG mọi tool ghi (file_write/file_edit/shell/git_commit/... bị loại khỏi whitelist của sub-agent, gọi sẽ bị từ chối kèm hướng dẫn dùng tool đọc). ' +
+              'Dùng khi muốn BÁO CÁO/phân tích/audit mà KHÔNG muốn sub-agent tự sửa mã (TL giữ quyền kiểm soát thay đổi). ' +
+              'Hệ thống TỰ BẬT cờ này khi lời giao chứa ràng buộc chỉ-đọc ("chỉ đọc", "không sửa file"...) — cờ là cơ chế thật, câu chữ chỉ là tín hiệu.',
           },
         },
         required: ['agent', 'task'],
@@ -3753,6 +3760,8 @@ export async function executeTool(
               task,
               context: args.context ? String(args.context) : undefined,
               acceptanceCriteria: args.acceptance_criteria ? String(args.acceptance_criteria) : undefined,
+              // r69 (BUG-010/014): cờ readOnly — enforcement tầng whitelist tool
+              readOnly: args.readOnly === true,
               parentRunId: context?.runId ?? null,
               parentAgentName: context?.agentName || 'parent-agent',
               sessionId: context?.sessionId ?? null,
@@ -3808,6 +3817,8 @@ export async function executeTool(
               task,
               context: args.context ? String(args.context) : undefined,
               acceptanceCriteria: args.acceptance_criteria ? String(args.acceptance_criteria) : undefined,
+              // r69 (BUG-010/014): cờ readOnly — enforcement tầng whitelist tool
+              readOnly: args.readOnly === true,
               parentRunId: context?.runId ?? null,
               parentAgentName: context?.agentName || 'parent-agent',
               sessionId: context?.sessionId ?? null,

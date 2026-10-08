@@ -296,3 +296,48 @@ Directive mơ hồ (UI không qua guard — BUG-008)
 - Sổ bug.md ghi **25 vấn đề + 9 ghi nhận tích cực** theo đúng yêu cầu "ghi NGAY tại chỗ từng bước" — mọi mục đều có bằng chứng truy vấn được (evt jsonl / dev.log / checkpoint / repro).
 - Chuỗi chết mission lặp lại миссии #18 (verdict_stagnation, 4.6M tokens/39.7 phút) — nguyên nhân gốc đã ghép xong chuỗi nhân (xem "Chuỗi nhân chết mission") và 3 mắt xích chính (017/018/016) đã được fix hardcode trong chính phiên.
 - Lần chạy mission kế tiếp qua hệ thống mới sẽ là kiểm chứng sống cho toàn bộ 9 fix.
+
+---
+
+## PHẦN FIX ROUND-69 — AUDIT 9 FIX r68 + XỬ LÝ TOÀN BỘ 8 MỤC CÒN TREO
+
+> Directive user (phiên này): "rà soát lại phần fix đã triển khai có lỗi/vấn đề/thiếu sót tồn tại không thì xử lý và bổ sung; xử lý cả 8 mục còn treo trong bug.md; mọi bug phải được fix sạch sẽ trước khi tiến vào công việc tiếp theo."
+> Nguyên tắc giữ nguyên: hardcode > prompt — mọi fix ở tầng mã.
+
+### A. KẾT QUẢ AUDIT 9 FIX r68 (F1–F9)
+
+| Fix r68 | Kết quả audit | Chi tiết |
+|---|---|---|
+| F1 Mục lục tool call (017) | ✅ ĐÚNG mã | buildCallIndexBlock đánh số + cap 150 dòng minh bạch; callIndex = evidence preview đầy đủ mọi call (kể cả bị từ chối). Lưu ý nhỏ (không sửa): header nói "ĐẦY ĐỦ" nhưng cap 150 — đã có dòng "(+N call khác)" tự khai, chấp nhận. |
+| F2 Block máy đo (018) | ⚠️ **1 LỖI THẬT — đã vá r69 (AUDIT#1)** | `writtenFiles` bóc từ evidence preview 160-chars (`compactArgs` cắt 100 ký tự) bằng regex `replace(/^[a-z_]+\(/,'')` → ra BLOB JSON CỤT `{"path":"src/lib/exec-allowlist.ts","content":"…` thay vì tên file sạch. Máy đo "không thể bịa" nhưng BỊ CẮT — vi phạm chính tiêu chuẩn của nó. Vá: `writtenFilePaths` set thu từ args THẬT tại site thực thi (test AUDIT r68-F2 chứng minh cũ sai/mới đúng). |
+| F3 Data-map fallback (015) | ✅ ĐÚNG mã | priorTaskSummariesBlock khai báo TRƯỚC nơi dùng (L2443 < L2463) — không TDZ; fallback liệt kê 16 vùng + route 4000 chars nguồn userMessage+task-summaries. |
+| F4 Sàn giữ 1500 (016) | ✅ ĐÚNG mã | Cả 2 nhánh cắt (stub + threshold) có sàn; marker `[budget-cut N/M]` khớp regex console.warn; chấp nhận vượt soft-budget như comment ghi rõ. |
+| F5 maskToolCallText (003) | ✅ ĐÚNG mã | Nghi vấn "mergederged" hóa ra là lỗi hiển thị grep (od xác nhận byte thật `merged[merged.length - 1].end`) — tsc EXIT=0. |
+| F6 Protocol+detector ngôn ngữ sub (004/005) | ✅ ĐÚNG mã | Import 1 nguồn sự thật + detector mirror + đếm muộn vào máy đo. |
+| F7 Parser R7/R8 (001/023) | ✅ ĐÚNG mã | Regex chặn whitelist + lookahead đúng; 5 test r68 xanh. |
+| F8 Nhãn tách verdict (013) | ✅ ĐÚNG mã | statusLabel 3 trạng thái. |
+| F9 Detector degenerate (006/019) | ✅ ĐÚNG mã | <8 ký tự + không tool call + ≥3/run → evidence. |
+| — | ⚠️ 1 phát hiện quy trình | Kết quả audit "F5 có dấu mergederged" ban đầu là NHẬM do artifact hiển thị công cụ grep — bài học: kết luận lỗi cú pháp PHẢI đối chiếu byte gốc (od/Read) trước khi ghi bug (đã làm đúng quy trình trong phiên). |
+
+### B. 8 MỤC CÒN TREO — ĐÃ FIX TOÀN BỘ (r69)
+
+| Mục | File | Cơ chế hardcode (r69) | Test |
+|---|---|---|---|
+| **BUG-007** gate receipt exitCode | process-manager.ts + dev-tools.ts + tool-executor.ts | ProcessOutput +`status`+`exitCode` (từ registry — có sẵn sau exit, giữ 5' reap); readOutput trả kèm; mô tả run_bg/read_output dạy "exitCode 0 = receipt nghiệm thu". Agent giờ LẤY ĐƯỢC exit code — trước đó tool KHÔNG TRẢ nên agent KHÔNG THỂ lấy (xác nhận giả thuyết bug.md "nếu tool không trả thì agent KHÔNG THỂ lấy" = ĐÚNG, lỗi TOOL). | 3 test thật (echo exit 0 / exit 7 / id không tồn tại) |
+| **BUG-008** guard UI ping-pong | **directive-guard.ts MỚI** + chat route + mission-dispatch.ts | Guard tầng API (đường UI lẫn script cùng chịu — 1 nguồn sự thật): work order KHÔNG khối "Nghiệm thu:" → TỰ GẮN scaffold (backlog todo đang mở của session nếu có / baseline máy-đo) — KHÔNG chặn user, evaluator + todo-coverage luôn có tiêu chí. mission-dispatch bỏ bản copy, import chung lib. | 8 test (block/per-item/82-chars thật/backlog/baseline/casual/DB-lỗi/đã-có-tiêu-chí) — test bắt được 1 lỗi thật (block-regex nuốt dòng kế) đã vá |
+| **BUG-009** rác tmp/ + mồ côi | workspace-git.ts MỚI + subagent-delegate.ts | Git snapshot trước/sau mỗi delegation → machine block báo "Working tree để lại (delta...)" — rác `tmp/`, file mồ côi hiện hình trong tool-result mà TL + trọng tài đọc. (Mojibake (b): nguồn provider — theo dõi tần suất, không sửa được tầng hệ thống.) | 4 test (delta mới/xóa, fail-open, format, cap 30 dòng) |
+| **BUG-010/014** readOnly tầng tool | subagent-delegate.ts + tool-executor.ts | Cờ `readOnly` trong delegate_task args → strip 22 tool ghi (SUBAGENT_WRITE_TOOLS) khỏi whitelist; gọi tool ghi bị chặn kèm hướng dẫn; AUTO-DETECT ràng buộc chỉ-đọc trong lời giao ("chỉ đọc", "không sửa file"… — có guard âm chống từ "sửa" tự kích hoạt); máy đo báo số lần bị chặn + phát hiện ghi lọt đường khác. Giữ nguyên đủ bộ đọc/kiểm định (file_read/grep/run_tests/lint/type_check). | 6 test (whitelist đủ/trắng, bằng chứng evt70 thật, BUG-010 gốc không đoán mò, task hỗn hợp, guard âm, strip mô phỏng) |
+| **BUG-012** ngân sách theo phần việc | subagent-delegate.ts | DELEGATION_TOKEN_WARN_TIERS [1.2M, 2.4M, ∞-sentinel] — vượt ngưỡng → harness_warning vào transcript (xả đầu vòng kế) + recordAgentThought + máy đo "Ngân sách: Xk — vượt N ngưỡng". KHÔNG cắt cứng (user directive ∞ tổng). | 2 test (hằng số + mô phỏng 1,859,401 tokens thật → tier 1) |
+| **BUG-022** phanh đọc-lặp | agent-goal-loop.ts | FILE-READ DIGEST RE-INJECT: giữ digest 1200-ký-tự của lần đọc ĐẦU mỗi file; lượt thứ 5 cùng file → re-inject digest vào context (DATA — sửa đúng gốc nhân "nudge cũ nói kết quả nằm trong transcript là SAI sau khi nén") + evidence cho trọng tài; mỗi 5 lượt lặp thêm → nhắc evidence. Hook đủ 2 đường (CLI inner loop + TMO executeTool). | 1 test threshold (×15 bằng chứng → re-inject@5 + nhắc@10,15) |
+| **BUG-024** retry wrap-up | agent-goal-loop.ts | generateFinalReport: 3 lần thử (1 + 2 retry backoff 12s/30s — đủ vượt cơn chết provider ngắn như Zen fetch-failed r68), check abortCheck giữa các lần; thành công lần đầu = 0 chờ thêm (không đổi hành vi cũ). | (Nội bộ — quan sát console.warn ở mission kế; logic tuyến tính) |
+| **BUG-025** bàn giao uncommitted | agent-goal-loop.ts + subagent-delegate.ts | Wrap-up goal-loop chụp git status → nếu cây bẩn, final report kèm khối "📁 THAY ĐỔI CHƯA COMMIT (bàn giao)" đầy đủ danh sách + dòng chỉ dẫn nhặt (commit/discard); recordAgentThought ghi dấu. Kết hợp machine block delta của sub-agent (BUG-009) → 2 tầng phủ. | Qua 4 test workspace-git + quan sát mission kế |
+
+### C. Quy trình nghiệm thu r69
+- Quality gate: **PASS toàn bộ 49.6s — 445/445 tests** (417 r68 + **28 mới r69**), tsc 0 lỗi, eslint 0, imports ✓.
+- Mọi test bắt từ bằng chứng thật: directive 82 ký tự nguyên văn mission r68, lời giao evt70 ("chỉ đọc và kiểm định; không sửa file"), sub-task 1,859,401 tokens, ×15 đọc-lặp, preview 160-chars cũ.
+- 2 lỗi thật do test tự bắt trong lúc viết (block-regex nuốt dòng kế trong format per-item; formatUncommittedBlock thiếu cap phòng vệ) — cả hai vá tận gốc ngay trong phiên.
+
+### D. Còn treo sau r69 (trạng thái minh bạch)
+- Mojibake ký tự hỏng trong thought (BUG-009b) — nguồn provider, không sửa được tầng hệ thống; theo dõi tần suất ở mission kế.
+- Đồng bộ 2 nguồn đếm token lệch 1.7% (ghi nhận kèm BUG-012) — cosmetic, chưa đáng can thiệp cấu trúc.
+- Kiểm chứng sống: mission kế qua hệ thống mới sẽ xác nhận cả 9 fix r68 + 9 fix r69 (đặc biệt: guard UI inlog "Directive-guard", READ-ONLY strip log, digest re-inject, exitCode receipt, khối bàn giao uncommitted).

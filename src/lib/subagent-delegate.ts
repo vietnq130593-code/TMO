@@ -173,6 +173,55 @@ export const POSITION_BY_NAME: Record<string, string> = {
  */
 export const DEPTH_GUARD_TOOLS = ['delegate_task', 'dispatch_agent', 'create_agent', 'dispatch_agents_parallel', 'request_code_team']
 
+// ==================== r69 (BUG-010/014) — READ-ONLY DELEGATION CONTRACT ====================
+// Quan sát r68 mission cmuznvkl…6b136k: SENTINEL được giao "KHẢO SÁT P0-1 …
+// xác định mọi khoảng trống" (phạm vi ĐỌC + BÁO CÁO) nhưng tự SỬA mã bảo mật
+// (+33 dòng exec-allowlist.ts) + tự thêm 3 regression test (+68 dòng) + chạy
+// gate — KHÔNG có bước phê duyệt TL (BUG-010). Omega học nhanh, lần giao 2
+// kèm ràng buộc "chỉ đọc và kiểm định; không sửa file" — nhưng ràng buộc chỉ
+// là CÂU CHỮ trong lời giao (BUG-014, vi phạm doctrine "hardcode > prompt").
+// Giờ: cờ readOnly (từ delegate_task args HOẶC auto-detect từ ý định trong
+// lời giao) → strip TẤT CẢ tool có khả năng ghi khỏi whitelist — enforcement
+// tầng TOOL, gọi sẽ bị từ chối kèm hướng dẫn. Sub-agent khảo sát vẫn có đầy
+// đủ tool đọc + kiểm định (file_read/grep/file_list/run_tests/lint/type_check/
+// run_gate/git_diff...).
+export const SUBAGENT_WRITE_TOOLS = new Set([
+  'file_write', 'file_edit', 'file_multi_edit', 'file_delete', 'mkdir',
+  'shell', 'run_bg', 'gateway_write', 'gateway_edit', 'gateway_apply_patch',
+  'git_commit', 'git_push', 'git_pull', 'git_clone', 'open_workspace',
+  'manage_packages', 'create_custom_tool', 'delete_custom_tool',
+  'cron', 'start_preview', 'stop_preview', 'knowledge_write',
+])
+/** Auto-detect ý định chỉ-đọc trong lời giao (bằng chứng evt70 r68: "chỉ đọc
+ * và kiểm định; không sửa file") — CỜ mới là cơ chế, câu chữ chỉ là tín hiệu
+ * bật cờ (enforcement vẫn ở whitelist tầng tool). CHỈ dùng TÍN HIỆU MẠNH
+ * (ràng buộc tường minh) — không đoán nhiệm vụ "khảo sát" là chỉ-đọc (BUG-010
+ * gốc không có ràng buộc → TL phải chủ động truyền cờ; tránh chặn nhầm task
+ * khảo sát+xén ghép sửa). */
+export const READ_ONLY_INTENT_RE = /(chỉ\s+đọc|read[- ]?only|không\s+sửa\s+(file|mã|code|nguồn)|no\s+(file\s+)?(modif|edit|write))/i
+/** Ý định SỬA — có mặt (sau khi bỏ cụm ràng buộc chỉ-đọc) → KHÔNG auto-bật
+ * readOnly (task hỗn hợp khảo sát + sửa là hợp lệ — cờ readOnly khi đó phải
+ * do TL chủ ý truyền và sẽ chặn phần sửa, TL tự cân nhắc). */
+const MODIFY_INTENT_RE = /\b(sửa|chỉnh\s+sửa|implement|viết|tạo|thêm|refactor|deploy|commit|push|cài\s+đặt|upgrade)\b/i
+/** Detect readOnly từ lời giao: TÍN HIỆU MẠNH có mặt + KHÔNG còn ý định sửa
+ * nào sau khi bỏ cụm ràng buộc (chống "không sửa file" tự kích hoạt guard âm
+ * vì chứa từ "sửa"). */
+export function detectReadOnlyDelegation(task: string, context?: string | null): boolean {
+  const text = `${task}\n${context ?? ''}`
+  if (!READ_ONLY_INTENT_RE.test(text)) return false
+  const stripped = text.replace(new RegExp(READ_ONLY_INTENT_RE.source, 'gi'), ' ')
+  return !MODIFY_INTENT_RE.test(stripped)
+}
+
+/** r69 (BUG-012 — quan sát r68): ngưỡng cảnh báo token THEO PHẦN VIỆC (không
+ * cắt cứng — user directive là ∞ TỔNG). Bằng chứng: 1 sub-task khảo sát đốt
+ * 1.86M tokens ≈ 46% mission #18, không một cảnh báo. 2 mốc 1.2M / 2.4M:
+ * mốc 1 chốt-đi-viết-báo-cáo, mốc 2 nhắc lại mạnh (mọi cảnh báo đều là
+ * evidence trong transcript + máy đo báo về parent). */
+export const DELEGATION_TOKEN_WARN_TIERS = [1_200_000, 2_400_000, Number.POSITIVE_INFINITY]
+
+
+
 /**
  * Toolset mặc định khi profile KHÔNG khai báo tools (agent custom cũ trong DB
  * không có field tools) — generalist an toàn + escalate_problem.
@@ -398,6 +447,10 @@ export async function runSubAgentForProfile(params: {
   task: string
   context?: string
   acceptanceCriteria?: string
+  /** r69 (BUG-010/014 — quan sát r68): delegation CHỈ ĐỌC — tầng tool chặn
+   * mọi tool ghi (strip khỏi whitelist). Cờ từ delegate_task args HOẶC
+   * auto-detect từ ý định chỉ-đọc trong lời giao (xem READ_ONLY_INTENT_RE). */
+  readOnly?: boolean
   parentRunId?: string | null
   parentAgentName?: string
   sessionId?: string | null
@@ -449,6 +502,7 @@ async function runSubAgentForProfileInner(params: {
   task: string
   context?: string
   acceptanceCriteria?: string
+  readOnly?: boolean
   parentRunId?: string | null
   parentAgentName?: string
   sessionId?: string | null
@@ -459,6 +513,7 @@ async function runSubAgentForProfileInner(params: {
     task,
     context,
     acceptanceCriteria,
+    readOnly,
     parentRunId = null,
     parentAgentName = 'parent-agent',
     sessionId = null,
@@ -518,6 +573,13 @@ async function runSubAgentForProfileInner(params: {
   let tokensUsed = 0
   let iterations = 0
   let toolCallCount = 0
+  // r69 (BUG-012) — mốc ngưỡng cảnh báo token đã đi qua (index vào TIERS)
+  let tokenWarnTier = 0
+  // r69 (BUG-010/014 + audit F2) — máy đo governance: số lần sub-agent THỬ gọi
+  // tool ghi bị chặn (readOnly) + danh sách file thật nó đã ghi/sửa (từ args
+  // THẬT của tool call — không phải preview 160-chars bị cắt như bản r68).
+  let blockedWriteAttempts = 0
+  const writtenFilePaths = new Set<string>()
   // USER DIRECTIVE 2026-10-29 — TODO COMPLETION GUARD: sub-agent có kế hoạch
   // todo mà còn mục chưa xong → KHÔNG chấp nhận conclude ngay (trước đây loop
   // conclude ngay khi sub-agent ngừng gọi tool → "agents được gọi không thực
@@ -536,8 +598,28 @@ async function runSubAgentForProfileInner(params: {
     if (typeof t === 'number' && t > 0) {
       tokensUsed += t
       onTokens?.(t)
+      // r69 (BUG-012 — quan sát r68): NGƯỠNG CẢNH BÁO TOKEN THEO PHẦN VIỆC.
+      // Bằng chứng: 1 sub-task "khảo sát" đốt 1,859,401 tokens / 31 vòng
+      // (≈46% toàn bộ mission #18) không một lời cảnh báo — phanh duy nhất là
+      // wall-clock 15'. User directive là ∞ TỔNG (không cắt cứng) nhưng mỗi
+      // PHẦN VIỆC vượt ngưỡng phải được cảnh báo để sub-agent chốt bằng chứng
+      // + viết báo cáo thay vì mở hướng điều tra mới. Queue (scope ngoài try —
+      // transcript khai báo trong try) được XẢ vào transcript ở đầu vòng kế.
+      if (tokensUsed >= DELEGATION_TOKEN_WARN_TIERS[tokenWarnTier]) {
+        tokenWarnTier++
+        try {
+          pendingTokenWarnings.push(JSON.stringify({ tool: 'harness_warning', success: false, result: `⚠️ NGÂN SÁCH PHẦN VIỆC: sub-task này đã tiêu ${Math.round(tokensUsed / 1000)}k tokens (vượt ngưỡng ${Math.round(DELEGATION_TOKEN_WARN_TIERS[tokenWarnTier - 1] / 1000)}k — tầm vóc bất thường cho 1 phần việc). Hãy: (1) CHỐT bằng chứng đã thu, (2) viết báo cáo tổng hợp NGAY theo acceptance criteria, KHÔNG mở hướng điều tra mới. Token tiếp tục bị đếm và báo cáo về parent.` }))
+          if (sessionId && delegationRunId) {
+            recordAgentThought(sessionId, `⚠️ NGÂN SÁCH: sub-task vượt ngưỡng ${Math.round(DELEGATION_TOKEN_WARN_TIERS[tokenWarnTier - 1] / 1000)}k tokens (${Math.round(tokensUsed / 1000)}k tiêu thụ) — đã cảnh báo chốt bằng chứng + viết báo cáo (lần ${tokenWarnTier})`, iterations, delegationRunId)
+          }
+        } catch { /* fail-open — cảnh báo không được phá vòng */ }
+      }
     }
   }
+
+  // r69 (BUG-012): queue cảnh báo token (xả vào transcript ở đầu vòng —
+  // transcript thuộc scope trong try, addTokens ngoài try)
+  const pendingTokenWarnings: string[] = []
 
   const isCancelled = () => isSessionCancelled(sessionId)
 
@@ -567,6 +649,29 @@ async function runSubAgentForProfileInner(params: {
       effectiveBaseTools = await getEffectiveToolNames(profile.name, baseTools)
     } catch { /* fail-open — giữ whitelist mặc định */ }
     const allowedTools = effectiveBaseTools.filter(t => !DEPTH_GUARD_TOOLS.includes(t))
+
+    // ━━ r69 (BUG-010/014) — READ-ONLY DELEGATION: enforcement TẦNG TOOL ━━
+    // Cờ readOnly từ delegate_task args HOẶC auto-detect từ ràng buộc chỉ-đọc
+    // trong lời giao ("chỉ đọc…", "không sửa file"…) → strip mọi tool ghi khỏi
+    // whitelist. Sub-agent gọi tool ghi sẽ bị từ chối NGAY TẠI TẦNG TOOL với
+    // thông báo hướng dẫn — không còn dựa vào kỷ luật đọc câu chữ lời giao.
+    const readOnlyContract = readOnly === true || detectReadOnlyDelegation(task, context)
+    const effectiveAllowedTools = readOnlyContract
+      ? allowedTools.filter(t => !SUBAGENT_WRITE_TOOLS.has(t))
+      : allowedTools
+    const allowedToolsFinal = effectiveAllowedTools
+    if (readOnlyContract) {
+      const stripped = allowedTools.filter(t => SUBAGENT_WRITE_TOOLS.has(t))
+      console.log(`[SubAgent] ${profile.name} READ-ONLY delegation contract ${readOnly === true ? '(cờ từ TL)' : '(auto-detect từ lời giao)'} — strip ${stripped.length} tool ghi khỏi whitelist: ${stripped.join(', ') || '(không có)'} · giữ ${allowedToolsFinal.length} tool đọc/kiểm định`)
+    }
+
+    // ━━ r69 (BUG-009/025) — GIT SNAPSHOT ĐẦU RUN: đếm dòng working-tree bẩn ━━
+    // (delta vs snapshot cuối run → machine block báo file sub-agent để lại)
+    let gitStatusBefore: import('@/lib/workspace-git').WorkspaceGitStatus | null = null
+    try {
+      const { getWorkspaceGitStatus } = await import('@/lib/workspace-git')
+      gitStatusBefore = await getWorkspaceGitStatus()
+    } catch { /* fail-open */ }
 
     // DELEGATION CONTRACT — đăng ký run riêng cho sub-agent (Thought Process
     // panel + AgentRunRecord + todos theo runId). Fail-open: null → delegation
@@ -623,7 +728,7 @@ async function runSubAgentForProfileInner(params: {
     const timeoutDisplay = SUBAGENT_TIMEOUT_MS > 0
       ? `${Math.round(SUBAGENT_TIMEOUT_MS / 60000)}'`
       : (SUBAGENT_WALL_CLOCK_MS > 0 ? `∞ nhưng wall-clock an toàn ${Math.round(SUBAGENT_WALL_CLOCK_MS / 60000)}' (r60)` : '∞')
-    console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${maxIterDisplay} vòng, budget ${SUBAGENT_TOKEN_BUDGET === 0 ? '∞' : SUBAGENT_TOKEN_BUDGET} tokens, timeout ${timeoutDisplay}, ${allowedTools.length} tools${delegationRunId ? `, run ${delegationRunId.slice(0, 22)}…` : ''})`)
+    console.log(`[SubAgent] ${parentAgentName} → ${profile.name}: "${task.slice(0, 100)}" (max ${maxIterDisplay} vòng, budget ${SUBAGENT_TOKEN_BUDGET === 0 ? '∞' : SUBAGENT_TOKEN_BUDGET} tokens, timeout ${timeoutDisplay}, ${allowedToolsFinal.length} tools${delegationRunId ? `, run ${delegationRunId.slice(0, 22)}…` : ''})`)
 
     // ROUND-50 FIX (P2-γ r49) — TODO SCOPE RIÊNG CHO SUB-AGENT:
     // trước đây todo_write bị ép sessionId = session chat CHA (để hiển thị
@@ -693,7 +798,7 @@ async function runSubAgentForProfileInner(params: {
     } catch { /* fail-open — protocol ngôn ngữ không được phá delegation */ }
 
     const transcript: Array<{ role: 'user' | 'assistant' | 'tool'; content: string }> = [
-      { role: 'user', content: buildDelegationPrompt(profile.name, task, context, allowedTools, parentAgentName, acceptanceCriteria) },
+      { role: 'user', content: buildDelegationPrompt(profile.name, task, context, allowedToolsFinal, parentAgentName, acceptanceCriteria) },
     ]
 
     // FIX 2026-09-30 (E2E audit — "agents thường lỗi khi được Omega gọi"):
@@ -708,12 +813,12 @@ async function runSubAgentForProfileInner(params: {
     // Fail-open: lỗi build → mảng rỗng (text protocol vẫn hoạt động).
     let nativeToolSchemas: LLMTool[] = []
     try {
-      const schemaSection = buildCompactToolSchemasSection(allowedTools)
+      const schemaSection = buildCompactToolSchemasSection(allowedToolsFinal)
       if (schemaSection) {
         toolSchemaMsg = `${schemaSection}\n\n(Trên đây là schema ĐẦY ĐỦ của các tool bạn được dùng — tham chiếu mỗi khi gọi tool; KHÔNG đoán tên param. Tools cũng ĐÃ ĐƯỢC TRUYỀN QUA API native function calling — ƯU TIÊN emit tool_calls qua API, chỉ viết text tool_call: khi API không hỗ trợ.)`
         transcript.push({ role: 'user', content: toolSchemaMsg })
       }
-      nativeToolSchemas = getToolDefinitions(allowedTools) as LLMTool[]
+      nativeToolSchemas = getToolDefinitions(allowedToolsFinal) as LLMTool[]
     } catch (schemaErr) {
       console.warn(`[SubAgent] Tool schema injection fail-open:`, schemaErr instanceof Error ? schemaErr.message : String(schemaErr))
     }
@@ -768,6 +873,12 @@ async function runSubAgentForProfileInner(params: {
         }
 
         iterations++
+        // r69 (BUG-012): xả queue cảnh báo ngân sách vào transcript TRƯỚC khi
+        // build prompt vòng này — sub-agent thấy cảnh báo ở đúng lượt kế.
+        while (pendingTokenWarnings.length > 0) {
+          const w = pendingTokenWarnings.shift()
+          if (w) transcript.push({ role: 'tool', content: w })
+        }
         // USER DIRECTIVE 2026-10-29 — bằng chứng CI-2 của batch này (reset mỗi vòng)
         let batchEvidence: string[] = []
         // r60 (C3) — STATUS-AWARENESS cho sub-agent: dòng trạng thái bám vào
@@ -887,7 +998,7 @@ async function runSubAgentForProfileInner(params: {
               return { id: tc.id || `native_${idx}`, name: tc.function.name, args, ...(rawArgs !== undefined ? { rawArgs } : {}) }
             })
           : []
-        ).filter(tc => allowedTools.includes(tc.name))
+        ).filter(tc => allowedToolsFinal.includes(tc.name))
         const toolCalls = nativeCalls.length > 0 ? nativeCalls : parseToolCallsFromOutput(result.content)
         if (toolCalls.length === 0) {
           // 21-d FIX silent parse-drop: output CÓ dấu hiệu tool call ("tool_call:"
@@ -984,11 +1095,22 @@ async function runSubAgentForProfileInner(params: {
         for (const tc of toolCalls) {
           if (isCancelled() || timedOut) break // zombie guard — dừng tool batch
           // Sub-agent bị giới hạn trong whitelist CỦA NÓ (đã strip depth-guard tools)
-          if (!allowedTools.includes(tc.name)) {
-            const rejection = JSON.stringify({ tool: tc.name, success: false, result: `Tool "${tc.name}" not available for sub-agent ${profile.name}.` })
+          if (!allowedToolsFinal.includes(tc.name)) {
+            // r69 (BUG-010/014): READ-ONLY contract — chặn tại TẦNG TOOL kèm
+            // hướng dẫn dùng tool đọc (thông báo cũ chung chung "not available"
+            // khiến sub-agent tưởng thiếu tool thay vì bị chặn hợp đồng).
+            const isReadOnlyBlock = readOnlyContract && SUBAGENT_WRITE_TOOLS.has(tc.name)
+            if (isReadOnlyBlock) blockedWriteAttempts++
+            const rejection = JSON.stringify({
+              tool: tc.name,
+              success: false,
+              result: isReadOnlyBlock
+                ? `⛔ CHẶN BỞI HỢP ĐỒNG CHỈ ĐỌC: delegation này ở chế độ readOnly (TL chỉ giao khảo sát/kiểm định) — tool ghi "${tc.name}" KHÔNG có trong whitelist của bạn. Dùng tool đọc/kiểm định (file_read, file_list, grep, run_tests, lint, type_check, git_diff...) để hoàn thành nhiệm vụ và báo cáo; nếu THẬT SỰ cần sửa mã, nêu đề xuất trong báo cáo để TL quyết định.`
+                : `Tool "${tc.name}" not available for sub-agent ${profile.name}.`,
+            })
             transcript.push({ role: 'tool', content: rejection })
             toolResultLog.push(rejection) // IMP-1 (W1) — trọng tài thấy cả lần bị từ chối
-            evidence.push(`${tc.name}: bị từ chối (ngoài whitelist)`)
+            evidence.push(`${tc.name}: ${isReadOnlyBlock ? 'bị chặn bởi hợp đồng CHỈ ĐỌC (readOnly)' : 'bị từ chối (ngoài whitelist)'}`)
             continue
           }
           // ROUND-50 FIX (P2-δ r49): args native BỊ CẮT CỤT → KHÔNG thực thi với
@@ -1110,6 +1232,15 @@ async function runSubAgentForProfileInner(params: {
               : String(r ?? '').slice(0, 160)
           } catch { preview = '(?)' }
           evidence.push(`${tc.name}(${compactArgs(tc.args)}) → ${toolResult.success ? '✓' : '✗'} ${preview}`)
+          // r69 (audit F2 r68 + BUG-010): máy đo file ghi/sửa từ args THẬT của
+          // tool call (bản r68 bóc từ preview 160-chars bị cắt → ra blob JSON
+          // cụt thay vì tên file — máy đo phải chính xác tuyệt đối).
+          if (toolResult.success && SUBAGENT_WRITE_TOOLS.has(tc.name) && tc.name !== 'shell' && tc.name !== 'run_bg') {
+            const p = typeof tc.args?.path === 'string' ? tc.args.path
+              : typeof tc.args?.file === 'string' ? tc.args.file
+              : typeof tc.args?.filePath === 'string' ? tc.args.filePath : ''
+            if (p) writtenFilePaths.add(p)
+          }
           if (toolResult.success) successfulToolCalls++
           // IMP-1 (W1): entry transcript (cap SUBAGENT_TOOL_RESULT_CHARS) vào
           // log riêng cho trọng tài độc lập — cùng chuỗi với transcript của sub-agent.
@@ -1150,7 +1281,7 @@ async function runSubAgentForProfileInner(params: {
         // (1-2 calls) không bị làm phiền. Nudge là user-message trong transcript
         // của sub-agent — parent context KHÔNG phình (isolation giữ nguyên).
         if (
-          !planNudged && !sawTodoWrite && toolCallCount >= 3 && allowedTools.includes('todo_write') &&
+          !planNudged && !sawTodoWrite && toolCallCount >= 3 && allowedToolsFinal.includes('todo_write') &&
           !timedOut && !isCancelled() &&
           (SUBAGENT_EFFECTIVE_MAX_ITERATIONS === 0 || iterations < SUBAGENT_EFFECTIVE_MAX_ITERATIONS)
         ) {
@@ -1352,24 +1483,47 @@ async function runSubAgentForProfileInner(params: {
       // report (report là tool-result chính quy mà cả parent LLM lẫn trọng
       // tài chu kỳ đọc): số call, file ghi/sửa, lần chạy gate — toàn bộ thu
       // từ transcript đã chạy, KHÔNG thể bịa.
+      // r69 nâng cấp: (a) file ghi/sửa từ args THẬT (audit F2 r68 — bản cũ
+      // bóc preview 160-chars cụt ra blob JSON); (b) +readOnly blocked +token
+      // warn tiers (BUG-012); (c) +git working-tree delta (BUG-009/025 — rác
+      // tmp/ và thay đổi chưa commit không còn vô hình).
       try {
-        const writeTools = /^(file_write|file_edit|file_multi_edit)\(/
         const gateTools = /^(run_gate|run_tests)\(/
-        const writtenFiles = [...new Set(evidence.filter(e => writeTools.test(e)).map(e => e.split(' → ')[0].replace(/^[a-z_]+\(/, '').replace(/\)$/, '').trim()))]
         const gateCalls = evidence.filter(e => gateTools.test(e))
         const gateOk = gateCalls.filter(e => e.includes('→ ✓')).length
         const machineLines = [
           '📊 MÁY ĐO delegation (thu tự động từ transcript — sự thật, không thể bịa):',
           `- Tool calls đã chạy: ${toolCallCount} (${successfulToolCalls} thành công)`,
         ]
-        if (writtenFiles.length > 0) machineLines.push(`- File ghi/sửa: ${writtenFiles.join(', ').slice(0, 600)}`)
+        const writtenFiles = [...writtenFilePaths]
+        if (writtenFiles.length > 0) machineLines.push(`- File ghi/sửa (từ args thật của tool call): ${writtenFiles.join(', ').slice(0, 600)}`)
+        if (readOnlyContract) {
+          machineLines.push(`- Hợp đồng CHỈ ĐỌC (readOnly): BẬT${blockedWriteAttempts > 0 ? ` — sub-agent đã THỬ ghi ${blockedWriteAttempts} lần, TẤT CẢ bị chặn ở tầng tool (tuân thủ mandate khảo sát)` : ' — không có lần thử ghi nào bị chặn'}${writtenFiles.length > 0 ? ` — NHƯNG phát hiện ${writtenFiles.length} file ghi qua đường khác (kiểm tra governance!)` : ''}`)
+        }
         if (gateCalls.length > 0) machineLines.push(`- Gate/test đã chạy: ${gateCalls.length} lần (${gateOk} ✓${gateCalls.length - gateOk > 0 ? ` / ${gateCalls.length - gateOk} ✗` : ''}) — chi tiết output nằm trong báo cáo`)
+        if (tokenWarnTier > 0) machineLines.push(`- Ngân sách: ${Math.round(tokensUsed / 1000)}k tokens — vượt ${tokenWarnTier} ngưỡng cảnh báo theo phần việc (1.2M/2.4M — BUG-012), đã nhắc chốt bằng chứng`)
         if (outcome.evaluation) machineLines.push(`- Verdict trọng tài độc lập: ${outcome.evaluation.pass ? 'ĐẠT' : 'CHƯA ĐẠT'} (tin cậy ${Math.round(outcome.evaluation.confidence * 100)}%)`)
         // r68 FIX-6b: vi phạm ngôn ngữ tồn dư của sub-agent (sau 2 nudge) —
         // máy đếm, parent + trọng tài chu kỳ đọc được trong tool-result.
         if (subViNudges > 0 || subViLateCount > 0) {
           machineLines.push(`- Ngôn ngữ: ${subViNudges} cảnh báo tiếng Việt đã phát${subViLateCount > 0 ? ` · ${subViLateCount} lượt tiếng Anh TIẾP DIỄN sau trần cảnh báo` : ''}`)
         }
+        // r69 (BUG-009/025): working-tree delta trong khoảng thời gian sub-agent
+        // chạy — rác tmp/, file mồ côi, thay đổi chưa commit đều hiện hình. Lưu
+        // ý đọc số: sub-agent chạy song song có thể lẫn delta của agent khác.
+        try {
+          const { getWorkspaceGitStatus, diffGitStatusSnapshots, formatUncommittedBlock } = await import('@/lib/workspace-git')
+          const after = await getWorkspaceGitStatus()
+          if (after.ok && gitStatusBefore && after.lines.length > 0) {
+            const delta = diffGitStatusSnapshots(gitStatusBefore, after)
+            if (delta.length > 0) {
+              machineLines.push(`- Working tree để lại (delta trong lúc sub-agent chạy): ${delta.slice(0, 12).join(' | ').slice(0, 700)}${delta.length > 12 ? ` (+${delta.length - 12} khác)` : ''}`)
+            }
+          } else if (after.ok && !gitStatusBefore?.ok && after.lines.length > 0) {
+            const block = formatUncommittedBlock(after, '- Working tree (ảnh cuối run)')
+            if (block) machineLines.push(block.split('\n').slice(0, 12).join('\n'))
+          }
+        } catch { /* fail-open — git delta không được phá máy đo */ }
         outcome.report += `\n\n${machineLines.join('\n')}`
       } catch { /* fail-open — máy đo không được phá delegation result */ }
     }
@@ -1523,12 +1677,13 @@ export async function runSubAgent(params: {
   task: string
   context?: string
   acceptanceCriteria?: string
+  readOnly?: boolean
   parentRunId?: string | null
   parentAgentName?: string
   sessionId?: string | null
   onTokens?: (tokens: number) => void
 }): Promise<SubAgentOutcome> {
-  const { position, task, context, acceptanceCriteria, parentRunId = null, parentAgentName = 'parent-agent', sessionId = null, onTokens } = params
+  const { position, task, context, acceptanceCriteria, readOnly, parentRunId = null, parentAgentName = 'parent-agent', sessionId = null, onTokens } = params
 
   // ===== 1. Resolve agent (DB-first → hardcoded) =====
   // strictEnabled: agent bị user DISABLE → từ chối (không chạy fallback ngầm)
@@ -1563,6 +1718,7 @@ export async function runSubAgent(params: {
     task,
     context,
     acceptanceCriteria,
+    readOnly,
     parentRunId,
     parentAgentName,
     sessionId,

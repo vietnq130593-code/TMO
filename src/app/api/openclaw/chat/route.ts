@@ -52,6 +52,13 @@ import { archiveStaleRunTodos, closeRunTodosAtEnd } from '@/lib/code-team/dev-to
 // hoàn thành → (chưa: Chẩn đoán lỗi + Lập kế hoạch lại → lặp) → Hoàn thành.
 // Xem docs/DANH_GIA_REACT_LOOP_VS_CLAUDE_CODE.md + src/lib/agent-goal-loop.ts
 import { runGoalDrivenLoop } from '@/lib/agent-goal-loop'
+// r69 (BUG-008 — quan sát r68): DIRECTIVE GUARD tầng API — chống ping-pong
+// mission (directive mơ hồ "Tiếp tục phần việc chưa xong…" không khối
+// "Nghiệm thu:" → evaluator phán uẩn → verdict_stagnation → re-dispatch mơ hồ
+// tiếp). Guard KHÔNG chặn user: tự gắn tiêu chí nghiệm thu (backlog todo
+// thật của session, fallback baseline máy-đo) vào directive trước dispatch —
+// đường UI lẫn script mission-dispatch cùng chịu (một nguồn sự thật).
+import { enrichDirectiveForGoalLoop } from '@/lib/directive-guard'
 // CI-5 (GĐ4, Task 14-c — roadmap B5): DURABLE GOAL LOOP — khi flag bật, goal
 // loop chạy NỀN qua GoalLoopWorker (enqueue job → trả jobId ngay) thay vì chặn
 // request HTTP. finalize + các helper chia sẻ (isLlmErrorContent /
@@ -990,6 +997,20 @@ export async function POST(request: NextRequest) {
           console.warn('[OpenClaw Chat] ToolAccess enforce failed (fail-open):', toolAccessErr instanceof Error ? toolAccessErr.message : String(toolAccessErr))
         }
 
+        // ━━━ r69 (BUG-008) — DIRECTIVE GUARD (tầng API, áp DƯỚI dòng dispatch) ━━
+        // Work order KHÔNG có khối "Nghiệm thu:" → TỰ GẮN scaffold (backlog
+        // todo đang mở của session nếu có, ngược lại baseline máy-đo) để
+        // evaluator + todo-coverage có tiêu chí đối chiếu CƠ KHÍ. KHÔNG chặn
+        // user — enrich fail-open tuyệt đối (lỗi → directive gốc nguyên vẹn).
+        // Áp TRƯỚC cả 2 đường durable-enqueue lẫn inline chạy bên dưới.
+        const directiveGuard = await enrichDirectiveForGoalLoop(db, sessionId, lastUserContent)
+        if (directiveGuard.guardApplied) {
+          console.warn(
+            `[OpenClaw Chat] ⚠️ Directive-guard: directive là work order KHÔNG có khối "Nghiệm thu:" — đã tự gắn scaffold ${directiveGuard.scaffoldKind} (${directiveGuard.acceptanceCount} tiêu chí) — chống ping-pong verdict_stagnation`,
+          )
+        }
+        const goalLoopUserMessage = directiveGuard.directive
+
         // GOAL-DRIVEN LOOP (2026-09-01): thay ReAct loop 8 vòng — chạy nhiều chu kỳ
         // PLAN → EXECUTE → VERIFY → EVALUATE (trọng tài độc lập) → DIAGNOSE+REPLAN
         // cho đến khi mục tiêu hoàn thành hoặc hết budget. maxIterations không còn
@@ -1044,7 +1065,7 @@ export async function POST(request: NextRequest) {
               messageId: savedUserMessageId ?? undefined,
               jobInput: {
                 systemPrompt,
-                userMessage: lastUserContent,
+                userMessage: goalLoopUserMessage,
                 // ĐÚNG filter như inline — chỉ user/assistant (bỏ system ở client)
                 chatHistory: messages.filter((m: { role: string }) => m.role === 'user' || m.role === 'assistant'),
                 agentProvider,
@@ -1130,7 +1151,7 @@ export async function POST(request: NextRequest) {
 
         const reactResult = await runGoalDrivenLoop({
           systemPrompt,
-          userMessage: lastUserContent,
+          userMessage: goalLoopUserMessage,
           chatHistory: messages.filter((m: { role: string }) => m.role === 'user' || m.role === 'assistant'),
           agentProvider,
           agentModel,
