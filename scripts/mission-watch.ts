@@ -350,12 +350,14 @@ class RepeatTracker {
     }
     // r60 — tầng windowed: cùng tool + args (kể cả bị call khác xen kẽ, kết quả
     // đổi nhẹ) vẫn cộng dồn → bắt "productive fixation" rải rác nhiều vòng.
+    // r60.1 — semantics "warned = NGƯỠNG KẾ TIẾP" (8, 16, 24… đúng chu kỳ 8;
+    // bản trước w.count+8 kèm điều kiện >warned cho nhịp 8/17/26 lệch 1).
     const wkey = `${e.tool}|${e.argsSummary}`
     let wmap = this.windowed.get(rid)
     if (!wmap) this.windowed.set(rid, (wmap = new Map()))
-    const w = wmap.get(wkey) ?? { count: 0, warned: 0 }
+    const w = wmap.get(wkey) ?? { count: 0, warned: 8 }
     w.count++
-    if (w.count >= 8 && w.count > w.warned) {
+    if (w.count >= w.warned) {
       w.warned = w.count + 8 // cảnh báo lại mỗi +8 (8, 16, 24…)
       wmap.set(wkey, w)
       return `🔁🪟 [${e.agentName || rid}] WINDOWED: '${e.tool}' với args giống nhau gọi ${w.count} lần TRONG RUN (rải rác, không liên tiếp — dấu hiệu productive-fixation; harness per-call brake ngưỡng 8 sẽ cắt nếu là sub-agent)`

@@ -333,6 +333,18 @@ const MAX_EVIDENCE_ENTRIES = 100
  * chạm sâu hơn vào nội dung chính giữa kết quả.
  */
 const EVIDENCE_PREVIEW_MAX_CHARS = 1600
+/**
+ * r60.1 (rà soát hậu r60 — CAP TỔNG cho evidence block của evaluator): r60 nâng
+ * 60×900 → 100×1600 làm block có thể đạt ~165k chars (~45-80k tokens tùy bộ
+ * tokenize tiếng Việt của provider) → evaluator call có nguy cơ tràn context
+ * provider nhỏ hơn → verdict null → rơi heuristic (rủi ro false-done G1).
+ * Final report đã có cap 8k từ trước; evaluator thì KHÔNG có cap nào. Giải pháp
+ * giữ nguyên ý định r60 (trọng tài thấy nguyên văn nhiều hơn) nhưng chặn trần
+ * TỔNG: đổ entries từ MỚI NHẤT về cũ nhất đến hết ngân sách, dòng cũ nhất bị
+ * lược trước + ghi chú số dòng đã bỏ. 48k chars ≈ 12-25k tokens — an toàn cho
+ * mọi provider trong pool. Env GOAL_LOOP_EVIDENCE_BLOCK_MAX_CHARS.
+ */
+const EVIDENCE_BLOCK_MAX_CHARS = intEnvPositive('GOAL_LOOP_EVIDENCE_BLOCK_MAX_CHARS', 48_000)
 /** [C] Tool kiểm định — bằng chứng verify chỉ tính khi tool THÀNH CÔNG */
 const VERIFY_TOOLS = new Set(['run_tests', 'lint', 'type_check', 'test_coverage', 'get_diagnostics', 'lsp_diagnostics'])
 /** [C] Đọc lại kết quả (file_read/grep sau khi sửa) cũng là kiểm định */
@@ -1678,7 +1690,9 @@ async function evaluateCompletion(params: {
 }): Promise<EvalVerdict | null> {
   const { goal, lastAssistantContent, evidence, verifyEvidence, unverifiedModifications, codeModified, hasStrongVerify, strongVerifyToolsAvailable, agentProvider, agentModel, agentId, agentName, abortCheck, onTokens, debtIssues, regressionPending, compressions } = params
 
-  const evidenceLines = evidence
+  // r60.1 — TOTAL CAP: giữ entries MỚI NHẤT (đối chiếu cuối run cần nhất), lược
+  // cũ nhất trước khi vượt EVIDENCE_BLOCK_MAX_CHARS (xem const ở trên).
+  const evidenceLineArr = evidence
     .slice(-MAX_EVIDENCE_ENTRIES)
     .map(e => {
       if (e.kind === 'tool') {
@@ -1686,7 +1700,14 @@ async function evaluateCompletion(params: {
       }
       return `[directive] ${e.text}`
     })
-    .join('\n')
+  let evidenceDropped = 0
+  let evidenceTotal = evidenceLineArr.reduce((s, l) => s + l.length + 1, 0)
+  while (evidenceLineArr.length > 1 && evidenceTotal > EVIDENCE_BLOCK_MAX_CHARS) {
+    evidenceTotal -= evidenceLineArr[0].length + 1
+    evidenceLineArr.shift()
+    evidenceDropped++
+  }
+  const evidenceLines = (evidenceDropped > 0 ? `(⚙️ đã lược ${evidenceDropped} dòng bằng chứng cũ nhất để vừa cửa sổ trọng tài — dòng gần nhất giữ nguyên đầy đủ)\n` : '') + evidenceLineArr.join('\n')
 
   const evidenceBlock = evidenceLines || '(không có tool call nào — agent trả lời thuần)'
 
@@ -1802,10 +1823,21 @@ async function generateFinalReport(params: {
     fullSystemPrompt, abortCheck, onTokens,
   } = params
 
-  const evidenceLines = evidence
+  // r60.1 — mirror total-cap của evaluator: trước đây slice(0, 8000) giữ NGUYÊN
+  // 8k chars ĐẦU (bằng chứng cũ nhất) và cắt mất evidence MỚI NHẤT — phần quan
+  // trọng nhất cho báo cáo cuối (việc vừa làm ở chu kỳ cuối). Giờ lược cũ nhất
+  // trước đến khi vừa 8k, kèm ghi chú số dòng đã bỏ.
+  const frEvidenceArr = evidence
     .slice(-MAX_EVIDENCE_ENTRIES)
     .map(e => (e.kind === 'tool' ? `[tool] ${e.tool} ${e.success ? '✓' : '✗'}: ${e.text}` : `[directive] ${e.text}`))
-    .join('\n')
+  let frDropped = 0
+  let frTotal = frEvidenceArr.reduce((s, l) => s + l.length + 1, 0)
+  while (frEvidenceArr.length > 1 && frTotal > 8_000) {
+    frTotal -= frEvidenceArr[0].length + 1
+    frEvidenceArr.shift()
+    frDropped++
+  }
+  const evidenceLines = (frDropped > 0 ? `(⚙️ đã lược ${frDropped} dòng bằng chứng cũ nhất — dòng gần nhất giữ nguyên)\n` : '') + frEvidenceArr.join('\n')
 
   const verdictBlock = lastVerdict
     ? `complete=${lastVerdict.complete}, verified=${lastVerdict.verified}, confidence=${Math.round(lastVerdict.confidence * 100)}%\nCòn thiếu (theo trọng tài): ${lastVerdict.missing.join('; ') || '(không liệt kê)'}\nVấn đề gốc: ${lastVerdict.rootCause || '(không xác định)'}`
@@ -1830,7 +1862,7 @@ THÔNG ĐIỆP CUỐI CỦA AGENT (có thể đang DỞ giữa chừng):
 ${lastContent.slice(0, 3000)}
 
 NHẬT KÝ BẰNG CHỨNG TOOL THẬT (sự thật duy nhất đáng tin — trích dẫn kết quả cụ thể từ đây):
-${evidenceLines.slice(0, 8000)}
+${evidenceLines}
 
 ĐÁNH GIÁ CỦA TRỌNG TÀI ĐỘC LẬP:
 ${verdictBlock}${debtBlock}${regressionBlock}

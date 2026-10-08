@@ -3764,7 +3764,7 @@ export async function executeTool(
               } catch { /* fail-open — so sánh fallback 'OPUS' */ }
               result = {
                 success: false,
-                error: `Agent "${agentName}" không resolve được (không có trong Code Team lẫn Agent Roster, hoặc đang tắt/thiếu provider-model${agentName.toUpperCase() === opusName ? ' — Opus là CTO, không điều động thi công' : ''}). Code Team: ${DELEGATABLE_AGENTS.map(a => a.name).join(', ')}. Standalone: xem Agent Roster (dispatch_agent roster / manage_tools).`,
+                error: `Agent "${agentName}" không resolve được (không có trong Code Team lẫn Agent Roster, hoặc đang tắt/thiếu provider-model${agentName.toUpperCase() === opusName.toUpperCase() ? ' — Opus là CTO, không điều động thi công' : ''}). Code Team: ${DELEGATABLE_AGENTS.map(a => a.name).join(', ')}. Standalone: xem Agent Roster (dispatch_agent roster / manage_tools).`,
               }
               break
             }
