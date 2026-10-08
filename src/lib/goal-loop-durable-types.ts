@@ -103,6 +103,12 @@ export interface GoalLoopCheckpoint {
     parseFailNudges: number
     /** ROUND-26 FIX A — nudge prose-only đã dùng (max 2/run). Optional: checkpoint cũ không có → hiểu 0. */
     proseNudges?: number
+    /** r66 (V2b) — thống kê phân công run: thao tác tự triển khai (modify
+     * tools) / lượt delegation / nudge phân công đã dùng. Optional: checkpoint
+     * cũ không có → hiểu 0. */
+    selfModifyOps?: number
+    delegationOps?: number
+    delegationNudges?: number
   }
   /** Verdict chu kỳ gần nhất (null nếu chưa có evaluate nào) */
   verdict: GoalLoopVerdictSnapshot | null

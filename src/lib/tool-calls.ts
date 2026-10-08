@@ -632,6 +632,212 @@ function extractToolNameTagCalls(output: string): { calls: ParsedToolCall[]; cle
   return { calls, cleaned, failures: 0 }
 }
 
+// ============================================================================
+// r66 (AUDIT LƯỢT 8 — V1b, bằng chứng mission #18 chu kỳ 2 L37): dạng
+// "TÊN TOOL LÀM TAG MỞ TRỰC TIẾP" — model phát
+//   `<todo_write"><sessionId>…</sessionId><agentRole>TL</agentRole><todos>
+//    <item>…</item>…</todos>` (tag mở MANGLED kèm dấu `"` thừa) ngay trong
+// text/thought. KHÔNG khớp tầng nào trước đây: không `<invoke name=>`, không
+// `<tool_name>`, không `tool_call:` → parser 0 call + detector im lặng →
+// nguyên văn markup dồn vào thought, agent tưởng ĐÃ ghi todo, chu kỳ kết thúc
+// không tiến triển (trọng tài CHƯA ĐẠT 1%). Giờ: công nhận dạng này — tên
+// phải ∈ whitelist (chống hallucinate), args là XML tags con hoặc JSON.
+// ============================================================================
+
+/** Regex khớp tag-mở tên-tool-whitelist: `<todo_write">` / `<todo_write>` / `<todo_write >`. */
+const KNOWN_TOOL_TAG_RE = new RegExp(`<(${KNOWN_TOOL_NAMES.join('|')})\\s*\\"?>`, 'g')
+/** Dấu hiệu cho detector: tag-mở tên-tool-whitelist tồn tại trong chuỗi. */
+const KNOWN_TOOL_TAG_SIGN = new RegExp(`<(?:${KNOWN_TOOL_NAMES.join('|')})\\s*\\"?>`)
+
+function extractToolTagDirectCalls(
+  output: string,
+  /** r66: các span JSON đã được pattern-1/2 parse (args JSON của tool_call
+   * chuẩn) — tag-tool nằm TRONG span (ví dụ docs agent ghi file) không được
+   * nhúng execute. */
+  initialSpans: Array<[number, number]> = [],
+): { calls: ParsedToolCall[]; cleaned: string; failures: number } {
+  if (!KNOWN_TOOL_TAG_SIGN.test(output)) return { calls: [], cleaned: output, failures: 0 }
+  KNOWN_TOOL_TAG_SIGN.lastIndex = 0 // test() với flag g di động lastIndex — reset
+  const calls: ParsedToolCall[] = []
+  const ranges: Array<[number, number]> = []
+  const skipRanges: Array<[number, number]> = [...initialSpans]
+  // Reset lastIndex của RE dùng chung (an toàn stateless)
+  const re = new RegExp(KNOWN_TOOL_TAG_RE.source, 'g')
+  let m: RegExpExecArray | null
+  while ((m = re.exec(output)) !== null) {
+    if (skipRanges.some(([s, e]) => m!.index >= s && m!.index < e)) continue
+    const toolName = m[1]
+    const afterTag = output.slice(m.index + m[0].length)
+    // Junk prefix ≤ 8 ký tự (whitespace + mảnh ngoặc rơi) — mirror invoke path
+    const junkM = /^[\s\]\[]{0,8}/.exec(afterTag)
+    const leadingWs = junkM ? junkM[0].length : 0
+    const trimmed = afterTag.slice(leadingWs)
+    let args: Record<string, unknown> | null = null
+    let consumed = 0
+    if (trimmed.startsWith('{')) {
+      // JSON object ngay sau tag
+      const jsonStr = findBalancedJsonUtil(trimmed, '')
+      if (jsonStr) {
+        args = tryParseLooseJson(jsonStr)
+        if (args) consumed = leadingWs + jsonStr.length
+      }
+      // JSON cụt giữa chừng → KHÔNG đếm failures ở đây — detector fallback sẽ
+      // nhận diện tag-mở + MALFORMED feedback dạy lại (đúng triết lý r55)
+    } else {
+      // XML tags con <key>value</key>… (dạng bằng chứng L37: <sessionId>…<todos>…)
+      const argsObj = parseXmlTagArgs(trimmed)
+      if (argsObj && Object.keys(argsObj).length > 0) {
+        args = argsObj
+        let pos = 0
+        for (;;) {
+          const tm = /^<([A-Za-z_][\w-]*)>([\s\S]*?)<\/\1>\s*/.exec(trimmed.slice(pos))
+          if (!tm) break
+          pos += tm[0].length
+        }
+        consumed = leadingWs + pos
+      }
+      // 0 thẻ con khớp (thẻ hở hoàn toàn / prose) → không call, không failures
+    }
+    const shadowRange = (): [number, number] => {
+      const mm = m as RegExpExecArray // m non-null trong thân vòng while
+      const closeTag = `</${toolName}`
+      const closeRel = output.indexOf(closeTag, mm.index)
+      return closeRel === -1 ? [mm.index, mm.index + mm[0].length] : [mm.index, closeRel + closeTag.length]
+    }
+    // r66: PHÁT HIỆN CỤT GIỮA ARGS — sau vùng tag đã khớp còn thẻ MỞ không có
+    // cặp đóng (bằng chứng: <sessionId>x</sessionId><todos><item><content>VĂN
+    // BẢN DỞ — </content> không tồn tại). Args thu được chỉ là MẢNH rơi →
+    // KHÔNG execute (todo_write chạy với sessionId không có todos = ghi sai
+    // trạng thái) — để detector dạy phát lại (triết lý r55 "cụt thì không
+    // execute"). Ngoại lệ: thẻ mở có cặp đóng = call KẾ TIẾP hợp lệ.
+    let truncatedArgs = false
+    if (args && Object.keys(args).length > 0 && consumed > 0) {
+      const rest = afterTag.slice(consumed).trim()
+      if (rest.startsWith('<') && !rest.startsWith('</')) {
+        const om = /^<([A-Za-z_][\w-]*)[\s>]/.exec(rest)
+        if (om && !rest.includes(`</${om[1]}>`)) truncatedArgs = true
+      }
+    }
+    if (args && Object.keys(args).length > 0 && !truncatedArgs) {
+      calls.push({ id: nextToolCallId(), name: toolName, args })
+      ranges.push([m.index, m.index + m[0].length + consumed])
+      skipRanges.push([m.index, m.index + m[0].length + consumed])
+    } else {
+      // Shadow range (kể cả args cụt): tag mở → thẻ `</tên_tool>` gần nhất —
+      // chống parse nhúng các call VÍ DỤ nồng trong vùng hỏng (mirror 5b)
+      skipRanges.push(shadowRange())
+    }
+  }
+  let cleaned = output
+  for (let i = ranges.length - 1; i >= 0; i--) {
+    const [s, e] = ranges[i]
+    cleaned = cleaned.slice(0, s) + ' ' + cleaned.slice(e)
+  }
+  return { calls, cleaned, failures: 0 }
+}
+
+// ============================================================================
+// r66 (AUDIT LƯỢT 8 — V1a): SALVAGE JSON ARGS BỊ CẮT CỤT giữa chừng.
+// Nguồn gốc cắt cụt: provider upstream (space-bunny-free qua Zen) trả
+// tool-call JSON đứt giữa output — không phải maxTokens (các profile đều
+// maxTokens=-1 = unlimited; goal-loop vẫn có 3 tầng recovery: loose-repair
+// → rawArgs-feedback → parse-nudge, r64 đo recovery 100%). Tầng salvage bổ
+// sung: đối với tool AN TOÀN (đọc + todo — idempotent), JSON đứt được VÁ
+// bằng cách bỏ phần tử/string dở ở cuối + đóng đủ ngoặc → thực thi ngay
+// phần hoàn chỉnh, TIẾT KIỆM 1 round-trip nudge. KHÔNG bao giờ áp cho tool
+// ghi/modify (file_write/shell…) — args nửa vời nguy hiểm hơn phát lại.
+// ============================================================================
+
+const SALVAGE_SAFE_TOOLS = new Set([
+  'todo_write', 'todo_read', 'file_read', 'file_list', 'grep', 'db_query',
+  'web_search', 'web_fetch', 'get_diagnostics', 'lsp_diagnostics', 'lint',
+  'type_check', 'test_coverage', 'run_tests', 'get_plan', 'summarize',
+  'list_skills', 'read_skill', 'mcp_list_servers', 'list_custom_tools',
+  'get_app_runtime_status', 'knowledge_search', 'knowledge_graph',
+])
+
+/** Vá JSON object bị đứt giữa chừng: bỏ string/phần tử dở ở cuối + đóng ngoặc. */
+export function salvageTruncatedJsonArgs(raw: string): Record<string, unknown> | null {  try {
+    if (!raw || raw[0] !== '{') return null
+    // Bước 1: cắt bỏ string dở (dấu `"` mở chưa đóng)
+    let cut = raw.length
+    {
+      let inString = false
+      let escape = false
+      for (let i = 0; i < raw.length; i++) {
+        const ch = raw[i]
+        if (escape) { escape = false; continue }
+        if (inString) {
+          if (ch === '\\') { escape = true; continue }
+          if (ch === '"') inString = false
+          continue
+        }
+        if (ch === '"') { inString = true; cut = i; continue } // nhớ vị trí `"` mở cuối
+      }
+      if (inString) {
+        // đứt giữa string — cắt tại `"` mở đó (bỏ toàn bộ string dở)
+      } else {
+        cut = raw.length
+      }
+    }
+    let s = raw.slice(0, cut)
+    // Bước 2: lặp bỏ "đuôi dở" — separator/key-mồ-côi/object-mở rỗng ở cuối
+    for (let guard = 0; guard < 12; guard++) {
+      s = s.replace(/[\s,:]+$/, '')
+      if (/[{,]\s*"[^"]*"\s*$/.test(s)) {
+        // key mồ côi (vd `{"todos": [{"content"`) → bỏ key + dấu mở theo nó
+        s = s.replace(/[{,]\s*"[^"]*"\s*$/, '')
+        continue
+      }
+      if (/[{[]$/.test(s)) { s = s.slice(0, -1); continue } // object/array mở rỗng
+      break
+    }
+    // Bước 3: đóng đủ ngoặc theo stack (quét lại chuỗi đã cắt — string-aware)
+    let stack = ''
+    {
+      let inString = false
+      let escape = false
+      let ok = true
+      for (let i = 0; i < s.length; i++) {
+        const ch = s[i]
+        if (escape) { escape = false; continue }
+        if (inString) {
+          if (ch === '\\') { escape = true; continue }
+          if (ch === '"') inString = false
+          continue
+        }
+        if (ch === '"') { inString = true; continue }
+        if (ch === '{' || ch === '[') stack += ch
+        else if (ch === '}' || ch === ']') {
+          const open = ch === '}' ? '{' : '['
+          if (stack.slice(-1) !== open) { ok = false; break }
+          stack = stack.slice(0, -1)
+        }
+      }
+      if (inString || !ok) return null
+    }
+    for (let i = stack.length - 1; i >= 0; i--) s += stack[i] === '{' ? '}' : ']'
+    // Bước 4: parse + validate là object có ≥1 key
+    const obj = JSON.parse(s) as unknown
+    if (obj && typeof obj === 'object' && !Array.isArray(obj) && Object.keys(obj).length > 0) {
+      return obj as Record<string, unknown>
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * r66 (V1a) — gate salvage cho NATIVE tool_calls (goal-loop): chỉ salvage tool
+ * AN TOÀN (đọc/todo — idempotent), KHÔNG bao giờ áp cho tool ghi/modify
+ * (file_write/shell/git_commit… — args nửa vời nguy hiểm hơn phát lại).
+ */
+export function salvageNativeToolArgs(toolName: string, raw: string): Record<string, unknown> | null {
+  if (!SALVAGE_SAFE_TOOLS.has(toolName)) return null
+  return salvageTruncatedJsonArgs(raw)
+}
+
 /**
  * Parse tool_call patterns from LLM text output (kèm đếm parse failures).
  *
@@ -665,10 +871,17 @@ export function extractToolCallsWithDiagnostics(rawOutput: string): ToolCallPars
   const tntRes = extractToolNameTagCalls(invokeRes.cleaned)
   const calls: ParsedToolCall[] = [...fenceCalls, ...invokeRes.calls, ...tntRes.calls]
   let parseFailures = fenceFailures + invokeRes.failures + tntRes.failures
-  const cleaned = tntRes.cleaned
+  // r66 (V1b): tag-trực-tiếp (<todo_write">…) chạy SAU pattern-1/2 — tên tool
+  // phổ biến (file_read/grep…) dễ xuất hiện trong content JSON của tool_call
+  // khác (docs/ví dụ) → pattern-1/2 parse + CẮT vùng JSON khỏi cleaned trước,
+  // tag-direct chỉ quét phần còn lại → không nhúng nhầm.
+  let cleaned = tntRes.cleaned
 
   // Pattern 1: tool_call: function_name({...})
   // Use findBalancedJson for nested JSON args (e.g., opencode write with content containing code)
+  // r66: jsonSpans — vùng JSON pattern-1/2 đã parse thành công (che tag-direct
+  // khỏi tag-tool nằm trong content của tool_call chuẩn)
+  const jsonSpans: Array<[number, number]> = []
   const regex1 = /tool_call:\s*(\w+)\s*\(\s*\{/g
   let match1
   while ((match1 = regex1.exec(cleaned)) !== null) {
@@ -685,9 +898,31 @@ export function extractToolCallsWithDiagnostics(rawOutput: string): ToolCallPars
           name: toolName,
           args,
         })
+        jsonSpans.push([braceStart, braceStart + jsonStr.length])
+      } else if (SALVAGE_SAFE_TOOLS.has(toolName)) {
+        // r66 (V1a): JSON lệch nhưng tool AN TOÀN → salvage (bỏ đuôi dở + đóng
+        // ngoặc) — tiết kiệm 1 round-trip nudge; KHÔNG áp cho tool modify
+        const candidate = jsonStr
+        const salvaged = salvageTruncatedJsonArgs(candidate)
+        if (salvaged) {
+          calls.push({ id: nextToolCallId(), name: toolName, args: salvaged })
+        } else parseFailures++
       } else {
         // 21-d: JSON parse failed → ĐẾM thay vì skip im lặng (caller dùng
         // detectBrokenToolCallHint để nhắc LLM phát lại gọn hơn)
+        parseFailures++
+      }
+    } else if (SALVAGE_SAFE_TOOLS.has(toolName)) {
+      // r66 (V1a): JSON CẮT CỤT giữa chừng + tool an toàn → salvage phần đầu
+      // hoàn chỉnh (bỏ item/string dở ở cuối) thay vì đếm failure + nudge
+      const candidate = cleaned.slice(braceStart).replace(/\)[\s\S]*$/, '')
+      const salvaged = salvageTruncatedJsonArgs(candidate)
+      if (salvaged) {
+        calls.push({ id: nextToolCallId(), name: toolName, args: salvaged })
+        jsonSpans.push([braceStart, braceStart + candidate.length])
+      } else {
+        // 21-d: findBalancedJson null → JSON không khớp cặp ngoặc (bị cắt cụt
+        // giữa chừng vì output đạt maxTokens) → ĐẾM
         parseFailures++
       }
     } else {
@@ -716,14 +951,34 @@ export function extractToolCallsWithDiagnostics(rawOutput: string): ToolCallPars
             name: toolName,
             args,
           })
+        } else if (SALVAGE_SAFE_TOOLS.has(toolName)) {
+          // r66 (V1a) — mirror pattern-1
+          const salvaged = salvageTruncatedJsonArgs(jsonStr)
+          if (salvaged) {
+            calls.push({ id: nextToolCallId(), name: toolName, args: salvaged })
+          } else parseFailures++
         } else {
           parseFailures++
         }
+      } else if (SALVAGE_SAFE_TOOLS.has(toolName)) {
+        // r66 (V1a) — mirror pattern-1
+        const candidate = cleaned.slice(braceStart).replace(/\)[\s\S]*$/, '')
+        const salvaged = salvageTruncatedJsonArgs(candidate)
+        if (salvaged) {
+          calls.push({ id: nextToolCallId(), name: toolName, args: salvaged })
+        } else parseFailures++
       } else {
         parseFailures++
       }
     }
   }
+
+  // r66 (V1b): tầng CUỐI — tag-trực-tếp trên vùng còn lại (pattern-1/2 đã cắt
+  // các JSON args của tool_call chuẩn khỏi cleaned → ví dụ tag-tool nằm trong
+  // content không bị nhúng execute).
+  const tagRes = extractToolTagDirectCalls(cleaned, jsonSpans)
+  calls.push(...tagRes.calls)
+  parseFailures += tagRes.failures
 
   return { calls, parseFailures }
 }
@@ -775,6 +1030,8 @@ function extractIntendedToolName(output: string): string | null {
     /\bc_([A-Za-z_][\w]*)\s*\(/i,
     /<\/?invoke_call"?>\s*([A-Za-z_][\w]*)\s*\(/i,
     /name\s*=\s*"([A-Za-z_][\w.-]*)"\s+parameters/i,
+    // r66 (V1b): tên tool whitelist làm tag-mở trực tiếp (kể cả mangled quote)
+    new RegExp(`<(${KNOWN_TOOL_NAMES.join('|')})\\s*"?>`, 'i'),
   ]
   for (const re of patterns) {
     const m = re.exec(output)
@@ -840,6 +1097,11 @@ export function detectBrokenToolCallHint(output: string): string | null {
     // <parameters> mất đóng (bằng chứng user r54: "invoke\n<tool_name>todo_read
     // </tool_name><parameters>…" rơi thẳng vào thought content) → dạy lại
     if (/<tool_name>/i.test(output)) return malformedInvokeFeedback(intended)
+    // r66 (V1b — bằng chứng mission #18 L37): TÊN TOOL whitelist làm TAG MỞ
+    // trực tiếp (`<todo_write">` mangled-quote, args XML con cụt giữa chừng)
+    // nhưng tầng parse không tạo được call → KHÔNG được im lặng — dạy lại kèm
+    // skeleton của đúng tool định gọi
+    if (KNOWN_TOOL_TAG_SIGN.test(output)) return malformedInvokeFeedback(intended)
     // ROUND-54 FIX E: dòng "invoke" trơ trụi (mất cặp `<` — dấu vết cú pháp
     // invoke bị provider bể) đứng MỘT MÌNH trên dòng → coi là ý định tool call
     // hỏng format chứ không phải văn xuôi thường
