@@ -402,6 +402,42 @@ const VERIFY_RESULT_CHARS = 6000
 const STALL_CYCLE_LIMIT = intEnvPositive('GOAL_LOOP_STALL_CYCLES', 3)
 const NO_PROGRESS_GRACE = intEnvPositive('GOAL_LOOP_NO_PROGRESS_GRACE', 2)
 /**
+ * r63 (F1) — VERDICT-STAGNATION STOP: số chu kỳ LIÊN TIẾP evaluator TỰ KHAI
+ * bế tắc (rootCause chứa lời khai rõ ràng: "kẹt" / "vòng lặp" / "bế tắc"…)
+ * trước khi vòng ∞ chu kỳ dừng hẳn + wrap-up báo cáo cuối.
+ *
+ * Thiết kế này ĐI QUA 1 lần bác bỏ bằng probe (giữ hồ sơ để không ai thử lại
+ * hướng đó): bản nháp đầu dùng Jaccard word-set trên missing list — probe với
+ * 11 chu kỳ missing THẬT của mission cmuz4z2n1 (bảo mật TMO, 2026-10-08)
+ * cho phân bố ĐẢO: stuck-case J=0.19-0.45 (evaluator diễn giải lại missing
+ * mỗi chu kỳ pha loãng tập từ) trong khi progress-control (missing co dần
+ * còn nguyên văn) J=0.53-0.62 CAO HƠN — không tồn tại ngưỡng tách được 2
+ * phân bố. Kết luận: không thể đoán bế tắc bằng word-matching missing list;
+ * nguồn phán định đúng là CHÍNH EVALUATOR — LLM chuyên phán xét. Trong
+ * mission cmuz4z2n1 evaluator tự viết rootCause "Run bị kẹt trong vòng lặp
+ * kiểm kê/file_read/todo/delegate" 5 verdict liên tiếp (c8-c12) — đúng
+ * precedent E2E proc2 đã từng được ghi trong comment STAGNATION GATE
+ * ("evaluator tự kết luận 'agent is looping' nhưng renewal vẫn mở thêm cửa
+ * sổ chu kỳ"). Giờ lời khai đó được NGHE: ≥3 chu kỳ liên tiếp → dừng.
+ *
+ * Bối cảnh vận hành của phanh: MAX_CYCLES=0/SAFE_CAP=0 (∞ — cấu hình .env
+ * hiện tại theo user directive CI-1) → đường incomplete không có phanh theo
+ * chất lượng verdict (STAGNATION GATE chỉ chạy khi có trần); stall-brake
+ * 0-hoạt-động bị reset bởi tool call rải rác (bằng chứng cmuz4z2n1: shell ✓
+ * chu kỳ 6/9 reset 2/3→0/0 hai lần). Kết quả khi không có phanh này: 10
+ * chu kỳ CHƯA ĐẠT liên tiếp — 42 phút / 3.77M tokens; với phanh này mission
+ * dừng sau chu kỳ 10 (verdict khai bế tắc thứ 3).
+ */
+const VERDICT_STAGNATION_LIMIT = intEnvPositive('GOAL_LOOP_VERDICT_STAGNATION_CYCLES', 3)
+/**
+ * r63 (F1) — LỜI KHAI BẾ TẮC của evaluator trong rootCause. Chủ đích chỉ bắt
+ * KHAI BÁO RÕ RÀNG (kẹt / vòng lặp / bế tắc / không tiến triển / quay vòng /
+ * stuck / looping) — KHÔNG bắt "lặp lại" đơn lẻ (evaluator viết "cần lặp lại
+ * phép đo" là chỉ đạo hợp lệ, không phải tự khai bế tắc). Chữ nghĩa do LLM
+ * phán xét chuyên trách đảm nhiệm — regex chỉ đón nhận lời kết luận.
+ */
+const STUCK_DECLARE_RE = /kẹt|vòng lặp|bế tắc|không tiến triển|quay vòng|stuck|looping/i
+/**
  * [E] CONTEXT COMPRESSION (user request 2026-09-08: "lượng dữ liệu phải đọc có
  * thể nhiều nhưng có cần nhớ toàn bộ không hay có thể tóm tắt... tổng hợp lại
  * rồi tiến hành tóm tắt thành nội dung đủ để hiểu và triển khai")
@@ -496,6 +532,15 @@ export type GoalStopReason =
   | 'time_budget'
   | 'token_budget'
   | 'no_progress'
+  /**
+   * r63 (F1 — quan sát mission cmuz4z2n1 "đánh giá bảo mật TMO"): evaluator
+   * TỰ KHAI bế tắc (rootCause: "Run bị kẹt trong vòng lặp…") lặp lại liên tiếp
+   * ≥3 chu kỳ mà stall-brake 0-hoạt-động không cắt được (tool call rải rác
+   * reset bộ đếm) → dừng sớm + wrap-up tổng hợp báo cáo cuối. Chỉ dùng cho
+   * cấu hình ∞ chu kỳ (EFFECTIVE_MAX_CYCLES === 0) nơi STAGNATION GATE theo
+   * trần không chạy.
+   */
+  | 'verdict_stagnation'
   | 'cancelled'
   | 'error'
   /**
@@ -2574,9 +2619,18 @@ export async function runGoalDrivenLoop(params: {
    * "agent is looping" nhưng renewal vẫn mở thêm chu kỳ). */
   let cycleNewSuccessSignatures = 0
   /** 2026-10 — số chu kỳ LIÊN TIẾP evaluator ra verdict GIỐNG HỆT (incomplete
-   * + cùng rootCause/missing) = dấu hiệu bế tắc — chặn renewal khi ≥3. */
+   * + cùng rootCause/missing) = dấu hiệu bế tắc — chặn renewal khi ≥3. GIỚI HẠN
+   * đã biết (r63, hồ sơ probe): evaluator diễn giải lại missing mỗi chu kỳ
+   * làm exact-sig bỏ miss — không vá được bằng word-matching (phân bố J
+   * stuck/progress đảo ngược, xem probe r63 ở VERDICT_STAGNATION_LIMIT); đường
+   * ∞ chu kỳ xử lý bằng evaluatorStuckStreak (lời khai bế tắc) bên dưới. */
   let verdictStagnation = 0
   let lastVerdictStagnationSig = ''
+  /** r63 (F1) — số chu kỳ LIÊN TIẾP evaluator TỰ KHAI bế tắc trong rootCause
+   * (STUCK_DECLARE_RE) — nguồn phán định bế tắc đáng tin nhất vì do chính LLM
+   * phán xét kết luận (không phải word-matching missing). ≥3 → VERDICT-
+   * STAGNATION STOP khi cấu hình ∞ chu kỳ. */
+  let evaluatorStuckStreak = 0
   /** Task 21 — SHR: id mẩu CoT được truy hồi chu kỳ này (cha của mẩu chu kỳ sau — chuỗi nguồn gốc ≤3 thế hệ) */
   let cotParentSampleId: string | null = null
   /** TODO-COVERAGE (2026-10-22) — khối 📐 gần nhất đã stash vào RunContext
@@ -4322,6 +4376,19 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       }
     }
 
+    // ===== r63 (F1) — EVALUATOR-DECLARED STUCK TRACKING =====
+    // Bằng chứng cmuz4z2n1: evaluator viết rootCause "Run bị kẹt trong vòng
+    // lặp kiểm kê/file_read/todo/delegate…" 5 verdict LIÊN TIẾP (c8-c12) nhưng
+    // không cơ chế nào NGHE lời khai đó (exact-sig reset vì diễn giải lại;
+    // stall-brake reset vì tool call rải rác). Giờ: verdict incomplete +
+    // rootCause khai bế tắc (STUCK_DECLARE_RE) → streak++; hết khai hoặc
+    // complete → reset. ≥VERDICT_STAGNATION_LIMIT → STOP (khối dưới).
+    if (!verdict.complete && STUCK_DECLARE_RE.test(verdict.rootCause || '')) {
+      evaluatorStuckStreak++
+    } else {
+      evaluatorStuckStreak = 0
+    }
+
     // ===== FIX 2026-09-14 #9 + TASK 21 — SIDE ISSUES / DEBT DECISION (trọng
     // tài quyết định thay vì "chấm xong là xong"): mục tiêu hoàn thành NHƯNG có
     // lỗi phát sinh còn tồn tại → lựa chọn của trọng tài:
@@ -4784,6 +4851,29 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       }
     }
 
+    // ===== r63 (F1) — VERDICT-STAGNATION STOP (chỉ cấu hình ∞ chu kỳ) =====
+    // STAGNATION GATE phía dưới chỉ chạy khi có trần (EFFECTIVE_MAX_CYCLES !== 0)
+    // — với MAX_CYCLES=0/SAFE_CAP=0 (∞ — cấu hình .env hiện tại theo user
+    // directive CI-1), đường incomplete KHÔNG có phanh theo chất lượng verdict:
+    // stall-brake 0-hoạt-động là điểm chặn duy nhất nhưng bị reset bởi 1 tool
+    // call rải rác (bằng chứng cmuz4z2n1: shell ✓ chu kỳ 6/9 reset 2/3→0/0 hai
+    // lần). Giờ: evaluator TỰ KHAI bế tắc (rootCause) ≥ VERDICT_STAGNATION_LIMIT
+    // chu kỳ LIÊN TIẾP → dừng NGAY thay vì GĐ0 mới: phán định bế tắc đến từ
+    // chính LLM phán xét chuyên trách (không phải số đếm khô — đúng tinh thần
+    // user "dừng khi THẬT SỰ kẹt"); wrap-up tổng hợp báo cáo cuối từ bằng chứng
+    // đã thu — phần giá trị còn giữ được cho user.
+    if (
+      EFFECTIVE_MAX_CYCLES === 0 &&
+      !verdict.complete &&
+      evaluatorStuckStreak >= VERDICT_STAGNATION_LIMIT
+    ) {
+      stopReason = 'verdict_stagnation'
+      recordAgentThought(agentSessionId, `🛑 VERDICT-STAGNATION: trọng tài phán CHƯA ĐẠT và TỰ KHAI bế tắc ("${(verdict.rootCause || '').slice(0, 120)}…") ${evaluatorStuckStreak} chu kỳ liên tiếp → dừng chu kỳ mới; wrap-up sẽ tổng hợp báo cáo cuối từ bằng chứng đã thu`, totalIterations)
+      evidence.push({ cycle, kind: 'directive', text: `VERDICT-STAGNATION STOP: evaluator khai bế tắc ${evaluatorStuckStreak} chu kỳ liên tiếp (rootCause: ${(verdict.rootCause || '').slice(0, 160)}) — dừng để tổng hợp báo cáo cuối trung thực` })
+      console.warn(`[GoalLoop] ${agentName} VERDICT-STAGNATION: evaluator tự khai bế tắc ${evaluatorStuckStreak} chu kỳ liên tiếp → dừng ở chu kỳ ${cycle} + wrap-up báo cáo cuối`)
+      break
+    }
+
     // Budget check sau evaluation (đã tốn thêm 1 call)
     if (timeLeft() <= 0) { stopReason = 'time_budget'; break }
     if (tokenLeft() <= REPORT_RESERVE_TOKENS) { stopReason = 'token_budget'; break }
@@ -4960,6 +5050,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         time_budget: `hết budget thời gian (${TIME_BUDGET_MS === 0 ? '∞' : `${Math.round(TIME_BUDGET_MS / 60000)} phút`})${cyclesAttempted > cyclesDone ? ' — đang dở giữa chu kỳ ' + cyclesAttempted : ''}`,
         token_budget: `hết budget token (${TOKEN_BUDGET === 0 ? '∞' : TOKEN_BUDGET} — có thể tăng qua env GOAL_LOOP_TOKEN_BUDGET, hoặc đặt GOAL_LOOP_TOKEN_BUDGET=0 để chạy KHÔNG giới hạn)`,
         no_progress: 'phát hiện bế tắc không tiến triển (lặp lại hành động cũ theo fingerprint, hoặc 3 chu kỳ liên tiếp không có tool call thành công nào — stall brake CI-1)',
+        verdict_stagnation: `trọng tài phán CHƯA ĐẠT và TỰ KHAI bế tắc ("Run bị kẹt trong vòng lặp…") ${evaluatorStuckStreak} chu kỳ liên tiếp — dừng sớm để tổng hợp báo cáo cuối trung thực từ bằng chứng đã thu`,
         error: 'lỗi LLM',
         // TASK 48 — gap fix: chờ thông tin/ủy quyền CHỈ user cung cấp được
         needs_input: 'trọng tài xác định phần còn thiếu nằm NGOÀI hệ thống — cần thông tin/ủy quyền/phê duyệt của BẠN (người dùng) để tiếp tục',

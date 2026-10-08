@@ -110,6 +110,10 @@ function stopReasonBadge(reason: string | null): { label: string; className: str
     // kết thúc có kiểm soát (emerald như complete).
     case 'stall_brake':
       return { label: 'stall_brake', className: 'bg-amber-950/60 text-amber-400 border-amber-500/50' }
+    // r63 (F1) — verdict_stagnation: evaluator tự khai bế tắc qua nhiều chu kỳ
+    // liên tiếp (bế tắc chất lượng verdict — họ stall, amber như no_progress)
+    case 'verdict_stagnation':
+      return { label: 'verdict_stagnation', className: 'bg-amber-950/60 text-amber-400 border-amber-500/50' }
     case 'concluded':
       return { label: 'concluded', className: 'bg-emerald-950/60 text-emerald-400 border-emerald-500/50' }
     case 'error':

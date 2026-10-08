@@ -159,7 +159,7 @@ export function parseToolResultLogEntry(entry: string): { tool: string; success:
  *   - hết vòng/iteration limit  → PARTIAL
  */
 export function mapRunOutcome(params: {
-  status: 'done' | 'error' | 'cancelled' | 'completed' | 'failed' | 'timeout' | 'iteration_limit' | 'stall_brake' | 'no_progress'
+  status: 'done' | 'error' | 'cancelled' | 'completed' | 'failed' | 'timeout' | 'iteration_limit' | 'stall_brake' | 'no_progress' | 'verdict_stagnation'
   toolFailures: number
 }): EpisodeOutcome {
   switch (params.status) {
@@ -174,6 +174,10 @@ export function mapRunOutcome(params: {
     // trong tay, chỉ quay vòng) — cùng lớp "giao được một phần" với iteration_limit
     case 'stall_brake':
     case 'no_progress':
+    // r63 (F1) — verdict_stagnation: evaluator tự khai bế tắc qua nhiều chu kỳ
+    // liên tiếp (bế tắc chất lượng verdict — bằng chứng đã thu nhưng không
+    // tổng hợp được) — cùng lớp "giao được một phần" với stall_brake/no_progress
+    case 'verdict_stagnation':
       return 'PARTIAL'
     case 'done':
     case 'completed':

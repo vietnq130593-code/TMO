@@ -1035,6 +1035,20 @@ function replay(target: string, tailN: number): void {
   if (groups.length === 0) console.log('✓ Không có nhóm tool nào lặp ≥5 lần cùng kết quả')
   for (const g of groups) console.log(g)
 
+  // r63 (F4) — tổng quan degradation toàn run: 2 marker do chính harness ghi
+  // (recordAgentThought → jsonl thought events) — mission cmuz4z2n1 cho thấy
+  // mô-típ thoái hóa output (thuần văn bản + cắt cụt JSON) là tín hiệu báo
+  // trước ping-pong; trước đây chỉ thấy rải rác trong timeline, không có tổng.
+  {
+    const pureTextNudges = all.filter((e) => e.type === 'thought' && typeof e.text === 'string' && e.text.includes('THUẦN VĂN BẢN')).length
+    const cutJsonNudges = all.filter((e) => e.type === 'thought' && typeof e.text === 'string' && e.text.includes('bị cắt cụt')).length
+    if (pureTextNudges > 0 || cutJsonNudges > 0) {
+      console.log('')
+      console.log('── Degradation output (toàn run) ──')
+      console.log(`⚠️ Lượt thuần văn bản 0-tool-call: ${pureTextNudges} · Tool call bị cắt cụt giữa JSON: ${cutJsonNudges}`)
+    }
+  }
+
   // checkpoint: assistant contents + detector cú pháp
   if (job) {
     const ck = parseMaybeJson(job.checkpoint)
