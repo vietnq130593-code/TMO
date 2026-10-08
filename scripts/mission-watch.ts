@@ -785,12 +785,38 @@ async function follow(): Promise<void> {
     // watchedJobIds + finalEmitted (bước 1b cần cho emit FINAL REPORT),
     // sessionNames (giữ sau khi kết thúc theo thiết kế — FIX H r56),
     // tails/knownRunFiles/subFirstSessionCache (bounded bởi file trên đĩa).
+    //
+    // r62 (F1 vòng 4) — KHÔNG còn prune theo active-set của `jobs`: getJobs có
+    // LIMIT 12 (ORDER BY updatedAt DESC) → khi >12 job active đồng thời (worker
+    // chạy 2 + hàng đợi queued dài), job VẪN active mà rơi ngoài top-12 sẽ bị
+    // xóa nhầm state → khi updatedAt tươi lại quay vào cửa sổ, prevStatus
+    // undefined → phát 🆕 GIẢ "MISSION BẮT ĐẦU" + phát lại checkpoint cũ (noise
+    // đúng lớp C1/C3 từng đánh nhau). Giờ chỉ prune khi BẢN GHI DB xác nhận
+    // terminal (completed/failed/cancelled) HOẶC id không còn tồn tại. Query
+    // status trực tiếp theo từng id đang giữ state — set này bị chặn bởi chính
+    // vòng prune (chỉ chứa job active + 1 poll trễ) nên chi phí bỏ qua được.
     if (jobsReadOk) {
-      const activeJobIds = new Set(jobs.map((j) => j.id))
-      for (const id of [...ckptSeen.keys()]) if (!activeJobIds.has(id)) ckptSeen.delete(id)
-      for (const id of [...jobSeen.keys()]) if (!activeJobIds.has(id)) jobSeen.delete(id)
-      for (const id of [...hbWarnedBucket.keys()]) if (!activeJobIds.has(id)) hbWarnedBucket.delete(id)
-      for (const id of [...hbDelegationNoted]) if (!activeJobIds.has(id)) hbDelegationNoted.delete(id)
+      const trackedIds = new Set<string>([
+        ...ckptSeen.keys(),
+        ...jobSeen.keys(),
+        ...hbWarnedBucket.keys(),
+        ...hbDelegationNoted,
+      ])
+      for (const id of trackedIds) {
+        let st: string | undefined
+        try {
+          const row = db.query('SELECT status FROM GoalLoopJob WHERE id = ?').get(id) as { status?: string } | undefined
+          st = row?.status
+        } catch {
+          continue // lỗi tạm thời theo id — bỏ qua, poll sau xét lại
+        }
+        if (st === undefined || TERMINAL_STATUSES.has(String(st))) {
+          ckptSeen.delete(id)
+          jobSeen.delete(id)
+          hbWarnedBucket.delete(id)
+          hbDelegationNoted.delete(id)
+        }
+      }
     }
 
     // 1b) FIX H r56: job vừa chuyển terminal (rời active query ngay khi hoàn thành)
