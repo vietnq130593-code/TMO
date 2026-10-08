@@ -74,7 +74,7 @@ const DELEGATION_EVALUATOR_SYSTEM_PROMPT = `Bạn là DELEGATION EVALUATOR — t
 
 Nguyên tắc SẮT:
 1. Bạn KHÔNG tin báo cáo tự viết của sub-agent ("đã hoàn thành", "đã ĐẠT"...). Bạn CHỈ tin BẰNG CHỨNG TOOL trong evidence log: output lệnh, nội dung file đọc lại, kết quả test/lint.
-2. Nhiệm vụ yêu cầu hành động (đọc/sửa/tạo/chạy) mà evidence KHÔNG có tool call tương ứng → "pass": false, gaps nêu thiếu bằng chứng gì.
+2. Nhiệm vụ yêu cầu hành động (đọc/sửa/tạo/chạy) mà evidence KHÔNG có tool call tương ứng → "pass": false, gaps nêu thiếu bằng chứng gì. KHI KIỂM TRA "có tool call X không": đối chiếu MỤC LỤC TOOL CALL (đầy đủ mọi call, không cắt) TRƯỚC TIÊN — nhật ký chi tiết bên dưới bị giới hạn dung lượng có thể THIẾU các call ở ĐẦU run; call có trong mục lục = ĐÃ chạy thật (kết quả chi tiết nằm ở nhật ký nếu còn giữ). TUYỆT ĐỐI KHÔNG phán "thiếu tool call X" khi X hiển nhiên có trong mục lục.
 3. GRACE CHO VIỆC DỞ: sub-agent kết thúc bởi "iteration_limit" (hết vòng lặp) mà phần CỐT LÕI nhiệm vụ ĐÃ có bằng chứng tool đầy đủ → hãy pass=true theo PHẦN ĐÃ LÀM ĐƯỢC — KHÔNG fail chỉ vì phần còn lại chưa xong; liệt kê phần chưa xong vào "gaps" để agent cha giao lại (re-delegate). Timeout/hết token: cùng nguyên tắc — đánh giá phần đã làm được, đừng trừng phạt việc dở nếu phần cốt lõi đã có bằng chứng. Chỉ khi phần CỐT LÕI thiếu bằng chứng → pass=false.
 4. "gaps" = từng mục cụ thể còn thiếu so với task + acceptance criteria (tối đa 5). "note" = 1 câu tổng kết cho agent cha.
 5. "confidence" = XÁC SUẤT NHIỆM VỤ ĐÃ ĐẠT ĐÚNG (P(pass=true)) — KHÔNG PHẢI độ chắc chắn của bạn về bản thân verdict (lỗi semantics: output 0.99 khi pass=false nghĩa là "tôi 99% chắc CHƯA đạt" — SAI semantics, hệ thống ghi KB học nhám run thất bại). Thang quy đổi BẮT BUỘC: pass=true + bằng chứng tool trực tiếp khớp hoàn toàn acceptance criteria → 0.85-0.98; pass=true + bằng chứng một phần → 0.5-0.75; pass=false → 0.0-0.3 (bằng chứng rõ chưa đạt) hoặc 0.3-0.5 (chưa chắc). NGHIÊM CẤM ≥0.5 khi "pass": false — hệ thống tự clamp về 0.3 nếu vi phạm.
@@ -118,6 +118,32 @@ function tierEvidenceEntry(s: string, maxChars = EVAL_EVIDENCE_ENTRY_CHARS): str
   return s.slice(0, head) + `…[cắt ${s.length - head - tail}]…` + s.slice(-tail)
 }
 
+/** r68 (BUG-017 — giao thức quan sát mission cmuznvkl…6b136k): trọng tài
+ * delegation 2/2 lần PHẢN ÂM sai — phán "không có tool call file_read cho
+ * route.ts" trong khi call đó CÓ THẬT nhưng nằm ở ĐẦU run, bị tiering
+ * 12k (giữ đuôi) cắt mất. Giải pháp hardcode: MỤC LỤC TOOL CALL — 1 dòng/
+ * call (tool + args + ✓/✗, KHÔNG kèm result) dựng từ evidence preview của
+ * caller, luôn ĐẦY ĐỦ mọi call bất kể số lượng — trọng tài đối chiếu
+ * "có chạy X không" bằng mục lục, chi tiết result mới cần đến tiering. */
+export function buildCallIndexBlock(callIndex: string[]): string {
+  if (!callIndex || callIndex.length === 0) return '(KHÔNG có tool call nào)'
+  const MAX_LINES = 150
+  const PER_LINE = 170
+  const lines: string[] = []
+  for (let i = 0; i < Math.min(callIndex.length, MAX_LINES); i++) {
+    // Bỏ phần preview sau " → " (chỉ giữ "tool(args) → ✓/✗") cho gọn
+    const raw = callIndex[i]
+    const arrowIdx = raw.indexOf(' → ')
+    let head = arrowIdx >= 0 ? raw.slice(0, arrowIdx + 4) : raw // gồm cả ✓/✗
+    if (head.length > PER_LINE) head = head.slice(0, PER_LINE) + '…'
+    lines.push(`${i + 1}. ${head}`)
+  }
+  if (callIndex.length > MAX_LINES) {
+    lines.push(`(+${callIndex.length - MAX_LINES} call khác — danh sách trên cắt ngưỡng ${MAX_LINES} dòng)`)
+  }
+  return lines.join('\n')
+}
+
 /** IMP-1 (W1) — dựng evidence block từ TOOL-RESULT TRANSCRIPT thật của
  * sub-agent: đi từ CUỐI về đầu (entry mới nhất ưu tiên) trong ngân sách
  * ~EVAL_EVIDENCE_TOTAL_CHARS. Thay cho preview 160 chars cũ — trọng tài
@@ -158,16 +184,21 @@ export async function evaluateDelegationOutcome(params: {
   acceptanceCriteria?: string
   report: string
   evidence: string[]
+  /** r68 (BUG-017): preview 1-dòng/call "tool(args) → ✓/✗" ĐẦY ĐỦ mọi call
+   * (không cắt theo ngân sách) — làm MỤC LỤC cho trọng tài đối chiếu sự
+   * tồn tại của tool call. Truyền từ caller (subagent-delegate evidence). */
+  callIndex?: string[]
   endedBy: string
   provider: string
   model: string
   abortCheck?: () => boolean
   onTokens?: (tokens: number) => void
 }): Promise<DelegationEvaluation | null> {
-  const { agentName, task, acceptanceCriteria, report, evidence, endedBy, provider, model, abortCheck, onTokens } = params
+  const { agentName, task, acceptanceCriteria, report, evidence, callIndex, endedBy, provider, model, abortCheck, onTokens } = params
   if (!task.trim()) return null
 
   const evidenceBlock = buildEvidenceBlock(evidence)
+  const callIndexBlock = buildCallIndexBlock(callIndex ?? [])
 
   const prompt = `NHIỆM VỤ ĐƯỢC GIAO (cho sub-agent ${agentName}):
 ${task.slice(0, 1500)}
@@ -178,7 +209,10 @@ ${acceptanceCriteria ? acceptanceCriteria.slice(0, 800) : '(không khai báo —
 BÁO CÁO CỦA SUB-AGENT (chỉ là tuyên bố — cần đối chiếu bằng chứng):
 ${report.slice(0, 2500)}
 
-NHẬT KÝ BẰNG CHỨNG TOOL THẬT (sự thật duy nhất đáng tin — mỗi dòng là JSON {tool, success, result} của 1 tool call THẬT; một số dòng bị cắt giữa chừng vì giới hạn dung lượng nhưng nội dung vẫn thật):
+MỤC LỤC TOOL CALL TOÀN BỘ (${(callIndex ?? []).length} call — ĐẦY ĐỦ, KHÔNG cắt; dùng để kiểm tra "có tool call X không" — KHÔNG phán thiếu call khi nó có trong này):
+${callIndexBlock}
+
+NHẬT KÝ BẰNG CHỨNG TOOL THẬT (sự thật duy nhất đáng tin — mỗi dòng là JSON {tool, success, result} của 1 tool call THẬT; một số dòng bị cắt giữa chừng vì giới hạn dung lượng nhưng nội dung vẫn thật — call ĐẦU run có thể vắng ở đây dù CÓ trong mục lục trên):
 ${evidenceBlock}
 
 (ĐỌC KỸ nội dung "result" để đối chiếu: đếm số dòng/kết quả, khớp tên file/lệnh, pass/fail — KHÔNG chỉ nhìn tên tool + success.)

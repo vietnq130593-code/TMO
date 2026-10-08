@@ -733,6 +733,10 @@ function buildLanguageProtocol(): string {
 
 🌐 NGÔN NGỮ (user directive r66 — BẮT BUỘC): TOÀN BỘ nội dung bạn tạo — suy nghĩ, lập luận, kế hoạch, todo, mô tả tham số, báo cáo, câu trả lời cuối — PHẢI viết bằng TIẾNG VIỆT. Chỉ giữ nguyên tiếng Anh cho tên tool/tên file/tên hàm/đoạn code/lệnh/thuật ngữ kỹ thuật cụ thể trong trích dẫn (khi không có tương đương tiếng Việt). KHÔNG viết tiếng Anh rồi mới dịch — viết thẳng tiếng Việt ngay từ đầu. Người đọc của bạn là người Việt.`
 }
+// r68 (BUG-004): export cho subagent-delegate — sub-agent (đường delegation)
+// trước đây KHÔNG nhận protocol ngôn ngữ (quan sát: SENTINEL nghĩ 100% tiếng
+// Anh, 0 nudge) — giờ caller import trực tiếp, 1 nguồn sự thật.
+export { buildLanguageProtocol }
 
 /**
  * [H] INFRA SELF-SERVICE protocol (user directive 2026-10-27 phiên 4) — quy
@@ -1317,7 +1321,7 @@ function buildDelegationRefusedThought(cycle: number, parentAgent: string, tc: {
 }
 
 /** Thought 📥 — sub-agent đã triển khai tác vụ như thế nào (kết quả đầy đủ) */
-function buildDelegationOutcomeThought(cycle: number, tc: { name: string; args: Record<string, unknown> }, toolResult: { success: boolean; result: unknown }): string | null {
+export function buildDelegationOutcomeThought(cycle: number, tc: { name: string; args: Record<string, unknown> }, toolResult: { success: boolean; result: unknown }): string | null {
   const fmtTokens = (n: unknown) => (typeof n === 'number' && n > 0 ? `${Math.round(n / 100) / 10}k` : '0')
   const r = (toolResult.result !== null && typeof toolResult.result === 'object')
     ? (toolResult.result as Record<string, unknown>)
@@ -1331,14 +1335,19 @@ function buildDelegationOutcomeThought(cycle: number, tc: { name: string; args: 
     const it = typeof r.iterations === 'number' ? r.iterations : 0
     const tl = typeof r.toolCalls === 'number' ? r.toolCalls : 0
     const ended = String(r.endedBy ?? '-')
-    const evalPass = r.evaluation && typeof r.evaluation === 'object'
-      ? (typeof (r.evaluation as Record<string, unknown>).pass === 'boolean'
-          ? ` · trọng tài độc lập: ${(r.evaluation as Record<string, unknown>).pass ? 'ĐẠT' : 'CHƯA ĐẠT'}`
-          : '')
-      : ''
+    const evalObj = r.evaluation && typeof r.evaluation === 'object' ? (r.evaluation as Record<string, unknown>) : null
+    const evalPassBool = evalObj && typeof evalObj.pass === 'boolean' ? evalObj.pass : null
+    const evalPass = evalPassBool !== null ? ` · trọng tài độc lập: ${evalPassBool ? 'ĐẠT' : 'CHƯA ĐẠT'}` : ''
+    // r68 (BUG-013 — quan sát mission cmuznvkl…6b136k): "HOÀN THÀNH"
+    // (delivery) nằm cạnh verdict CHƯA ĐẠT khiến 2 tín hiệu dễ đọc nhầm là
+    // 1 — tách bạch: delivery đầy đủ NHƯNG verdict chất lượng thấp phải hiện
+    // CẢ HAI trên cùng dòng để TL không đánh dấu todo xong nhầm.
+    const statusLabel = toolResult.success
+      ? (evalPassBool === false ? 'TRẢ VỀ ĐẦY ĐỦ (trọng tài CHƯA ĐẠT)' : 'HOÀN THÀNH')
+      : 'CHƯA ĐẠT'
     const report = dlClip(r.report, 220)
     const err = toolResult.success ? '' : (dlClip(r.error, 120) ? ` · lỗi: ${dlClip(r.error, 120)}` : '')
-    return `📥 Chu kỳ ${cycle} — KẾT QUẢ PHÂN CÔNG: agent [${agent}] ${toolResult.success ? 'HOÀN THÀNH' : 'CHƯA ĐẠT'} "${taskShort}" — triển khai: ${it} vòng ReAct · ${tl} tool calls · ${fmtTokens(r.tokensUsed)} tokens · kết thúc bởi ${ended}${evalPass}${err}${report ? `; báo cáo: ${report}` : ''}`
+    return `📥 Chu kỳ ${cycle} — KẾT QUẢ PHÂN CÔNG: agent [${agent}] ${statusLabel} "${taskShort}" — triển khai: ${it} vòng ReAct · ${tl} tool calls · ${fmtTokens(r.tokensUsed)} tokens · kết thúc bởi ${ended}${evalPass}${err}${report ? `; báo cáo: ${report}` : ''}`
   }
 
   // dispatch_agents_parallel — fan-out nhiều agent
@@ -2442,11 +2451,17 @@ export async function runGoalDrivenLoop(params: {
   // registry src/lib/data-map.ts, phủ Prisma + Qdrant + Neo4J + file). Mọi
   // run mới đều THẤY vùng đọc/ghi đúng việc — code-enforced, không phụ thuộc
   // agent nhớ/hoặc bỏ qua hướng dẫn. Fail-open tuyệt đối.
+  // r68 (BUG-015 — quan sát mission cmuznvkl…6b136k): nguồn định tuyến chỉ
+  // là userMessage thì mission TIẾP NỐI ("Tiếp tục phần việc chưa xong…")
+  // score 0 toàn bộ → map rỗng. Mở nguồn: userMessage + block tóm tắt tác
+  // vụ trước của session (chứa tên route/file/việc thật) — continuation
+  // mission giờ định tuyến theo NỘI DUNG việc, không chỉ 82 ký tự lệnh.
   let dataMapBlock = ''
   if (!resumeState) {
     try {
       const { buildDataMapBlock } = await import('@/lib/data-map')
-      dataMapBlock = buildDataMapBlock(`${userMessage}`.slice(0, 2500))
+      const routingSource = `${userMessage}\n${priorTaskSummariesBlock}`.slice(0, 4000)
+      dataMapBlock = buildDataMapBlock(routingSource)
     } catch { /* fail-open — bản đồ không được phép làm hỏng run */ }
   }
 
@@ -2685,6 +2700,11 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
   // r67 (F9 — tiếng Việt hard-enforcement): số lần cảnh báo ngôn ngữ đã dùng
   // (trần 2/run — detector đo tỉ lệ ký tự có dấu tiếng Việt trong output).
   let viNudges = resumeState?.counters.viNudges ?? 0
+  // r68 (BUG-005): đếm vi phạm ngôn ngữ SAU trần nudge — ghi evidence cho trọng tài
+  let viLateCount = resumeState?.counters.viLateCount ?? 0
+  // r68 (BUG-006/019): đếm degenerate fragment — output mảnh vô nghĩa ("x echoed
+  // pieces", "<", boilerplate lệch nhiệm vụ) lặp ≥3/run → evidence cho trọng tài
+  let degenerateFragments = 0
   const noteDelegationStat = (toolName: string) => {
     if (DELEGATION_LOG_TOOLS.has(toolName)) delegationOps++
     else if (MODIFY_TOOLS.has(toolName)) selfModifyOps++
@@ -2831,7 +2851,7 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
     runId,
     messages: messages.map(m => ({ role: m.role, content: m.content, tool_call_id: m.tool_call_id })),
     evidence: evidence.slice(-120).map(e => ({ cycle: e.cycle, kind: e.kind, tool: e.tool, success: e.success, text: e.text })),
-    counters: { cyclesDone, cyclesAttempted, totalIterations, totalToolCalls, tokensUsed, compressions, delegations, subagentTokens, escalations, parseFailNudges, proseNudges, selfModifyOps, delegationOps, delegationNudges, delegationGateCuts, viNudges },
+    counters: { cyclesDone, cyclesAttempted, totalIterations, totalToolCalls, tokensUsed, compressions, delegations, subagentTokens, escalations, parseFailNudges, proseNudges, selfModifyOps, delegationOps, delegationNudges, delegationGateCuts, viNudges, viLateCount },
     verdict: lastVerdict
       ? {
           complete: lastVerdict.complete,
@@ -3392,8 +3412,31 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           })
           evidence.push({ cycle, kind: 'tool', tool: 'harness_warning', success: false, text: `ngôn ngữ: output ${Math.round(ratio * 100)}% ký tự có dấu → yêu cầu viết tiếng Việt (lần ${viNudges}/2)` })
           recordAgentThought(agentSessionId, `⚠️ NGÔN NGỮ: output tiếng Anh (ratio ${Math.round(ratio * 100)}%) — đã cảnh báo viết tiếng Việt (lần ${viNudges}/2)`, totalIterations)
+        } else if (ratio < 0.08) {
+          // r68 FIX-6c (BUG-005 — quan sát mission cmuznvkl…6b136k): cạn trần
+          // nudge 2/2 rồi mà vẫn tiếng Anh — KHÔNG nudge nữa (chống nhiễu) nhưng
+          // VẪN ĐẾM + ghi evidence: trọng tài chu kỳ + báo cáo cuối thấy rõ số
+          // lần vi phạm sau cảnh báo (trước đây im lặng = vi phạm miễn phí).
+          viLateCount++
+          evidence.push({ cycle, kind: 'tool', tool: 'harness_warning', success: false, text: `ngôn ngữ: output tiếng Anh TIẾP DIỄN sau trần cảnh báo (lần thứ ${viLateCount}) — đã ngừng nudge, ghi nhận cho trọng tài` })
+          recordAgentThought(agentSessionId, `⚠️ NGÔN NGỮ (sau trần nudge): output tiếng Anh tiếp diễn (lần thứ ${viLateCount}) — đã ghi vào bằng chứng chu kỳ`, totalIterations)
         }
       } catch { /* fail-open — kiểm tra ngôn ngữ không được phép làm hỏng vòng */ }
+
+      // r68 (BUG-006/019 — quan sát mission cmuznvkl…6b136k): degenerate
+      // fragment — output mảnh vô nghĩa (<8 ký tự, KHÔNG kèm tool call — ack
+      // ngắn + tool call là hợp lệ, không đếm) như "x echoed pieces"/"<" — lặp
+      // ≥3/run là dấu hiệu provider drift, ghi evidence cho trọng tài chu kỳ
+      // + báo cáo cuối (trước đây không detector nào nhận dạng này).
+      try {
+        const rc = (result.content || '').trim()
+        if (rc.length > 0 && rc.length < 8 && !(result.tool_calls && result.tool_calls.length > 0) && !/[(\{]/.test(rc)) {
+          degenerateFragments++
+          if (degenerateFragments >= 3) {
+            evidence.push({ cycle, kind: 'tool', tool: 'harness_warning', success: false, text: `degenerate fragment #${degenerateFragments}: ${JSON.stringify(rc)} — output mảnh vô nghĩa lặp lại (provider drift)` })
+          }
+        }
+      } catch { /* fail-open */ }
 
       // ===== TODO-COVERAGE (2026-10-22 hướng 2) — stash 📐 MID-CYCLE =====
       // Agent viết khối 📐 ở GĐ0(c) RỒI mới gọi todo_write (GĐ1) — trước đây

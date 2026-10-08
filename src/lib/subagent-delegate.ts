@@ -672,6 +672,26 @@ async function runSubAgentForProfileInner(params: {
     // một cách quá câu nệ. Không sửa instruction gốc trong DB — chỉ append.
     systemPrompt += `\n\n📊 NGUYÊN TẮC SỐ LIỆU (bắt buộc):\n- METADATA CỦA TOOL LÀ NGUỒN CHÂN LÝ: total/rowCount/totalMatches/exitCode trong kết quả tool là số MÁY ĐO — dùng thẳng, KHÔNG tự đếm tay danh sách. Mâu thuẫn → tin metadata trừ khi có bằng chứng tool trực tiếp bác. Cần đếm → file_list({"count_only":true,...}) / grep mode count.\n- KIỂM ĐỊNH MỘT LẦN ĐỦ: kết quả đã có bằng chứng độc lập → KHÔNG đo lại cùng phép đo; chỉ đo lại khi có bằng chứng MỚI mâu thuẫn.\n- ĐỌC LẠI FILE NHỎ ĐỂ TRÍCH DẪN NGUYÊN VĂN bằng chứng là HỢP PHÁP (không phải lặp việc) — cấm là lặp MỘT VIỆC y hệt không ra kết quả mới.\n- KẾT THÚC: báo cáo đủ đã làm (bằng chứng tool) + còn thiếu + đề xuất — trung thực, không khẳng định quá bằng chứng.`
 
+    // r68 FIX-3c (BUG-015 — quan sát mission cmuznvkl…6b136k): sub-agent
+    // chạy delegation KHÔNG bao giờ được cấp BẢN ĐỒ DỮ LIỆU (grep 0 kết quả
+    // buildDataMapBlock trong file này) — agent chuyên môn đọc/ghi vùng nào
+    // không có chỉ dẫn. Giờ cấp cùng block định tuyến như goal-loop chính
+    // (route theo task + context, fail-open tuyệt đối).
+    try {
+      const { buildDataMapBlock } = await import('@/lib/data-map')
+      const mapBlock = buildDataMapBlock(`${task}\n${context ?? ''}`.slice(0, 2500))
+      if (mapBlock) systemPrompt += mapBlock
+    } catch { /* fail-open — bản đồ không được phép làm hỏng delegation */ }
+
+    // r68 FIX-6a (BUG-004 — quan sát cùng mission): SENTINEL nghĩ 100%
+    // tiếng Anh suốt sub-run (6/6 thought r=0.000) — đường delegation không
+    // nhận protocol ngôn ngữ của goal-loop chính (priority 97 chỉ inject
+    // main loop). Import cùng 1 nguồn sự thật (export r68) thay vì copy text.
+    try {
+      const { buildLanguageProtocol } = await import('@/lib/agent-goal-loop')
+      systemPrompt += buildLanguageProtocol()
+    } catch { /* fail-open — protocol ngôn ngữ không được phá delegation */ }
+
     const transcript: Array<{ role: 'user' | 'assistant' | 'tool'; content: string }> = [
       { role: 'user', content: buildDelegationPrompt(profile.name, task, context, allowedTools, parentAgentName, acceptanceCriteria) },
     ]
@@ -720,6 +740,11 @@ async function runSubAgentForProfileInner(params: {
     // r60 (A1b) — PER-CALL REPEAT: đếm từng call-signature XUYÊN SUỐT run (Map
     // ngoài vòng lặp) — 1 call lặp N lần rải rác nhiều vòng cũng bị bắt.
     const runCallSigCounts = new Map<string, number>()
+    // r68 FIX-6b (BUG-004 — quan sát mission cmuznvkl…6b136k): SENTINEL nghĩ
+    // 100% tiếng Anh suốt sub-run, 0 nudge — sub loop KHÔNG có detector ngôn
+    // ngữ (chỉ main loop có). Mirror detector goal-loop: 2 nudge + đếm muộn.
+    let subViNudges = 0
+    let subViLateCount = 0
 
     const loopPromise = (async () => {
       // CI-1 (0 = UNLIMITED): cap = 0 → KHÔNG trần tương ứng (vòng / token /
@@ -810,6 +835,30 @@ async function runSubAgentForProfileInner(params: {
             recordAgentThought(sessionId, result.content, iterations, delegationRunId)
           } catch { /* fail-open — observation không được phép làm hỏng run */ }
         }
+
+        // r68 FIX-6b (BUG-004): detector ngôn ngữ cho sub-agent — mirror
+        // goal-loop r67 F9 (đo tỉ lệ ký tự có dấu bằng MÃ, không tin prompt).
+        // 2 nudge đầu; sau đó ngừng nudge nhưng vẫn đếm (ghi outcome.report)
+        // để parent + trọng tài thấy vi phạm tồn dư.
+        try {
+          const { vietnameseTextRatio } = await import('@/lib/agent-goal-loop')
+          const viRatio = vietnameseTextRatio(result.content || '')
+          if (viRatio < 0.08 && subViNudges < 2) {
+            subViNudges++
+            transcript.push({
+              role: 'tool',
+              content: JSON.stringify({ tool: 'harness_warning', success: false, result: `⚠️ NGÔN NGỮ (kiểm tra bằng mã): nội dung bạn vừa viết gần như KHÔNG có dấu tiếng Việt (tỉ lệ ${Math.round(viRatio * 100)}%). Người dùng là người Việt — TOÀN BỘ suy nghĩ/kế hoạch/báo cáo PHẢI viết TIẾNG VIỆT CÓ DẤU ngay từ lượt tiếp theo (chỉ giữ nguyên tên tool/file/hàm/lệnh/code).` }),
+            })
+            if (sessionId && delegationRunId) {
+              recordAgentThought(sessionId, `⚠️ NGÔN NGỮ: output tiếng Anh (ratio ${Math.round(viRatio * 100)}%) — đã cảnh báo viết tiếng Việt (lần ${subViNudges}/2)`, iterations, delegationRunId)
+            }
+          } else if (viRatio < 0.08) {
+            subViLateCount++
+            if (sessionId && delegationRunId) {
+              recordAgentThought(sessionId, `⚠️ NGÔN NGỮ (sau trần nudge): output tiếng Anh tiếp diễn (lần thứ ${subViLateCount}) — đã ghi vào báo cáo delegation`, iterations, delegationRunId)
+            }
+          }
+        } catch { /* fail-open — kiểm tra ngôn ngữ không được phép làm hỏng vòng */ }
 
         // TASK 39 — NATIVE FC: ưu tiên tool_calls từ API (space-bunny trả chuẩn
         // OpenAI khi body có tools); fallback text protocol như cũ.
@@ -1261,6 +1310,12 @@ async function runSubAgentForProfileInner(params: {
           // (entry cap 4000 chars) — KHÔNG còn preview 160 chars; evaluator
           // tự tier ~600 chars/entry, ~12k chars tổng khi dựng prompt.
           evidence: toolResultLog,
+          // r68 (BUG-017 — quan sát mission cmuznvkl…6b136k): MỤC LỤC tool
+          // call đầy đủ (preview "tool(args) → ✓/✗" đã có sẵn trong evidence
+          // array của run) — trọng tài đối chiếu sự TỒN TẠI của call bằng mục
+          // lục này, không phụ thuộc tiering 12k (đã 2/2 lần phán âm vì call
+          // ở ĐẦU run bị cắt khỏi cửa sổ).
+          callIndex: evidence,
           endedBy: state.endedBy,
           provider: profile.provider,
           model: profile.model,
@@ -1288,6 +1343,35 @@ async function runSubAgentForProfileInner(params: {
         outcome.report += '\n\n⚠ Chưa có đánh giá độc lập (evaluator lỗi/timeout) — kết quả CHƯA được trọng tài xác nhận.'
         console.log(`[SubAgent] ${profile.name} trọng tài độc lập KHÔNG chạy được (evaluationMissing=true — kết quả chưa được xác nhận)`)
       }
+
+      // ===== r68 FIX-2 (BUG-018 — quan sát mission cmuznvkl…6b136k) =====
+      // Trọng tài CHÍNH (evaluator chu kỳ của goal-loop) 2 lần phán "chưa có
+      // sửa code" trong khi working tree CÓ fix thật do sub-agent thực hiện
+      // — vì delegate_task result chỉ lọt vào transcript chính qua 1 dòng
+      // preview bị cắt, không có MÁY ĐO. Giờ gắn block máy đo xác định vào
+      // report (report là tool-result chính quy mà cả parent LLM lẫn trọng
+      // tài chu kỳ đọc): số call, file ghi/sửa, lần chạy gate — toàn bộ thu
+      // từ transcript đã chạy, KHÔNG thể bịa.
+      try {
+        const writeTools = /^(file_write|file_edit|file_multi_edit)\(/
+        const gateTools = /^(run_gate|run_tests)\(/
+        const writtenFiles = [...new Set(evidence.filter(e => writeTools.test(e)).map(e => e.split(' → ')[0].replace(/^[a-z_]+\(/, '').replace(/\)$/, '').trim()))]
+        const gateCalls = evidence.filter(e => gateTools.test(e))
+        const gateOk = gateCalls.filter(e => e.includes('→ ✓')).length
+        const machineLines = [
+          '📊 MÁY ĐO delegation (thu tự động từ transcript — sự thật, không thể bịa):',
+          `- Tool calls đã chạy: ${toolCallCount} (${successfulToolCalls} thành công)`,
+        ]
+        if (writtenFiles.length > 0) machineLines.push(`- File ghi/sửa: ${writtenFiles.join(', ').slice(0, 600)}`)
+        if (gateCalls.length > 0) machineLines.push(`- Gate/test đã chạy: ${gateCalls.length} lần (${gateOk} ✓${gateCalls.length - gateOk > 0 ? ` / ${gateCalls.length - gateOk} ✗` : ''}) — chi tiết output nằm trong báo cáo`)
+        if (outcome.evaluation) machineLines.push(`- Verdict trọng tài độc lập: ${outcome.evaluation.pass ? 'ĐẠT' : 'CHƯA ĐẠT'} (tin cậy ${Math.round(outcome.evaluation.confidence * 100)}%)`)
+        // r68 FIX-6b: vi phạm ngôn ngữ tồn dư của sub-agent (sau 2 nudge) —
+        // máy đếm, parent + trọng tài chu kỳ đọc được trong tool-result.
+        if (subViNudges > 0 || subViLateCount > 0) {
+          machineLines.push(`- Ngôn ngữ: ${subViNudges} cảnh báo tiếng Việt đã phát${subViLateCount > 0 ? ` · ${subViLateCount} lượt tiếng Anh TIẾP DIỄN sau trần cảnh báo` : ''}`)
+        }
+        outcome.report += `\n\n${machineLines.join('\n')}`
+      } catch { /* fail-open — máy đo không được phá delegation result */ }
     }
 
     // USER DIRECTIVE 2026-10-29 (re-audit fix: DỜI SAU trọng tài) — đóng todo

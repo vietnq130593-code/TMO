@@ -304,7 +304,23 @@ export function routeDataMap(query: string): DataMapRoute {
  */
 export function buildDataMapBlock(query: string, maxChars = 1600): string {
   const { reads, writes } = routeDataMap(query)
-  if (reads.length === 0 && writes.length === 0) return ''
+  // r68 (BUG-015 — quan sát mission cmuznvkl…6b136k): directive mơ hồ
+  // ("Tiếp tục triển khai…") score 0 trên toàn bộ 16 vùng → block RỖNG →
+  // mission thật chạy KHÔNG bản đồ (0/18 message chứa 🗺️) — đúng những
+  // mission tiếp nối khó nhất lại mất chỉ dẫn nhất. Fallback hardcode:
+  // 0-match → LIỆT KÊ SƠ LƯỢC TOÀN BỘ registry (1 dòng/vùng) thay vì im
+  // lặng — agent ít nhất biết các vùng tồn tại + gọi data_map khi cần.
+  if (reads.length === 0 && writes.length === 0) {
+    const lines = DATA_REGIONS.map(r => {
+      const storeTag = r.store === 'qdrant' ? 'Qdrant' : r.store === 'neo4j' ? 'Neo4J' : r.store === 'file' ? 'File' : 'SQLite'
+      return `- [${r.id}] (${storeTag}) ${r.purpose}`
+    })
+    return (
+      `\n\n🗺️ BẢN ĐỒ DỮ LIỆU (mục tiêu này KHÔNG khớp vùng chuyên biệt nào theo từ khoá — nên liệt kê SƠ LƯỢC toàn bộ ${DATA_REGIONS.length} vùng; dùng tool data_map({query: "mô tả việc cụ thể"}) để định tuyến đúng vùng):\n` +
+      lines.join('\n').slice(0, maxChars - 400) +
+      `\nTra bản đồ đầy đủ bất cứ lúc nào: tool data_map({query: "mô tả việc"})`
+    )
+  }
   const fmtRegion = (r: DataRegionDef) => {
     const storeTag = r.store === 'qdrant' ? 'Qdrant' : r.store === 'neo4j' ? 'Neo4J' : r.store === 'file' ? 'File/Infra' : 'SQLite'
     return `- [${r.id}] (${storeTag}) ${r.purpose}\n  · Đọc: ${r.readPath}\n  · Ghi: ${r.writePath}`

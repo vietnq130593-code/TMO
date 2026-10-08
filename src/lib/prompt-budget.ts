@@ -65,6 +65,15 @@ const DEFAULT_BUDGET_CHARS = 24_000
 /** Block nhỏ hơn ngưỡng này không cắt khi chia budget (không đáng — tối đa tiết kiệm <500 chars) */
 const MIN_BLOCK_CUT_CHARS = 500
 
+/** r68 (BUG-016 — quan sát mission cmuznvkl…6b136k): SÀN GIỮ TỐI THIỂU khi 1
+ * block bị budget-cut — KHÔNG BAO GIỜ giữ 0. Bằng chứng: block `base` (identity
+ * Omega 36,411 chars, priority 10) bị stub về marker `[budget-cut 0/36411]`
+ * — agent chạy cả mission mà KHÔNG biết mình là ai (persona/quản trị mất).
+ * Sàn 1500 chars giữ ĐẦU block (identity/cứng lẽ nằm ở đầu) — chấp nhận
+ * vượt budget một chút (budget là soft-target chống phình 30-50k+, không phải
+ * giới hạn cứng đáng đổi lấy việc mất định danh agent). */
+const BLOCK_MIN_KEEP_CHARS = 1500
+
 /** Độ dài tối đa của marker "…[budget-cut 123456/1234567 chars]" — dùng làm overhead khi tính water-fill */
 const MARKER_MAX_CHARS = 40
 
@@ -186,10 +195,13 @@ export function applyPromptBudget(
         const cap = tierTotal - remaining
 
         if (finalAt(0) > cap) {
-          // Hạ cả tier về stub (marker 0-kept) vẫn chưa đủ → stub toàn bộ tier,
-          // chuyển phần excess còn lại sang tier priority cao kế tiếp.
+          // Hạ cả tier về mức sàn BLOCK_MIN_KEEP_CHARS (r68 BUG-016 — TRƯỚC
+          // đây stub về marker 0-kept: block base/identity bị xoá trắng, agent
+          // mất định danh cả run). Vẫn chưa đủ shaving → phần excess chuyển
+          // sang tier priority cao kế tiếp (nhưng từng block đã cắt giữ ≥ sàn).
           for (const b of tier) {
-            b.content = buildMarker(0, b.content.length)
+            const keepFloor = Math.min(BLOCK_MIN_KEEP_CHARS, b.content.length)
+            b.content = cutKeepHead(b.content, keepFloor)
             b.truncated = true
           }
           remaining -= tierTotal - tier.reduce((s, b) => s + b.content.length, 0)
@@ -204,7 +216,12 @@ export function applyPromptBudget(
           if (finalAt(mid) <= cap) lo = mid
           else hi = mid - 1
         }
-        const threshold = lo
+        // r68 (BUG-016): sàn giữ tối thiểu — threshold tính ra 0/khả năng cắt
+        // về 0 KHÔNG được chấp nhận cho block ≥ 500 chars (đã từng xoá identity).
+        // Lưu ý: hi đã hội tụ về lo sau binary search — sàn phải đối chiếu
+        // BLOCK_MIN_KEEP_CHARS trực tiếp (bigger-than-tier thì tự vô hại vì
+        // block < threshold sẽ không bị cắt).
+        const threshold = Math.max(lo, BLOCK_MIN_KEEP_CHARS)
         for (const b of tier) {
           if (b.content.length > threshold + MARKER_MAX_CHARS) {
             b.content = cutKeepHead(b.content, threshold)
@@ -231,6 +248,18 @@ export function applyPromptBudget(
       console.log(
         `[PromptBudget] ${context ?? 'prompt'}: cut ${truncatedBlocks.join(',')} — total ${originalTotal}→${total} chars`,
       )
+      // r68 (BUG-016): kênh giám sát — block bị cắt sâu (>75% mất) phải sáng
+      // đèn riêng trong log (đôi khi là identity/persona bị ăn — trước đây im
+      // lặng, chỉ biết khi soi checkpoint tay).
+      for (const b of finalBlocks) {
+        if (!b.truncated) continue
+        const m = b.content.match(/\[budget-cut (\d+)\/(\d+) chars\]/)
+        if (m && Number(m[2]) > 0 && Number(m[1]) / Number(m[2]) < 0.25) {
+          console.warn(
+            `[PromptBudget] ⚠️ block '${b.name}' giữ ${m[1]}/${m[2]} chars (<25%) — nội dung gốc bị cắt sâu, kiểm tra.priority/mức budget nếu đây là block cốt lõi`,
+          )
+        }
+      }
     }
 
     return {

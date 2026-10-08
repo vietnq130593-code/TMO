@@ -311,6 +311,133 @@ export function stripProviderGarbleMarkers(content: string): string {
   return content.replace(PROVIDER_GARBLE_MARKER_RE, '')
 }
 
+// ==================== r68 (BUG-003) — MASK TOOL-CALL KHỎI KÊNH SUY NGHĨ ====================
+//
+// Quan sát mission cmuznvkl…6b136k (giao thức giám sát r68): các evt
+// type=thought chứa NGUYÊN VĂN body tool-call (evt5 `TỠI_CALL> {"name":…}`,
+// evt9 `tt>tout {…}`, evt23 `_call: todo_write({…})`, evt49 `todo_write">{…}`)
+// — đúng hiện tượng user chỉ đạo cụm 2 "tool call lọt vào phần suy nghĩ".
+// Rootcause: recordAgentThought (agent-run-tracker.ts) chỉ strip <invoke>…
+// </invoke> hoàn chỉnh + tiền tố `tool_call:` — các dạng méo (mà parser
+// r66/r67 VẪN extract + execute được từ cùng content) nằm lại nguyên văn
+// trong text thought hiển thị ở panel Suy nghĩ.
+//
+// Giải pháp hardcode (không dạy-bằng-prompt): maskToolCallText quét các HỌ
+// dạng đã quan sát bằng whitelist KNOWN_TOOL_NAMES + kết thúc cân bằng —
+// span khớp được thay bằng marker ngắn `[🔧 name(…) — đã tách]`. record-
+// AgentThought gọi hàm này TRƯỚC khi ghi — suy nghĩ hiển thị chỉ còn phần
+// NGHĨ thật, tool call hiển thị là event riêng (đã có sẵn).
+//
+// Phủ: (1) `name({json})` — pattern-2 + biến thể `_call: name({…})`;
+// (2) `name">{json|<xml}` — tag-direct r66 (kèm mangled-quote);
+// (3) `{"name": "tool", "arguments": …}` — native body r67 (kèm rác tiền
+// tố: TỠI_CALL>/tt>tout/content> — phần rác ngắn còn lại vô hại).
+// Giới hạn an toàn: (1) yêu cầu args là JSON object mở bằng `{` (chống bắt
+// văn xuôi "gọi file_read(ở trên)"); (3) yêu cầu JSON parse được + tên
+// whitelist — suy nghĩ thuần không bao giờ khớp.
+
+/** Quét dấu cân bằng string-aware từ openIdx (chỉ số ký tự MỞ). Trả index ký tự ĐÓNG hoặc -1. */
+function findBalancedEnd(text: string, openIdx: number, open: string, close: string): number {
+  let depth = 0
+  let inStr = false
+  let esc = false
+  for (let i = openIdx; i < text.length; i++) {
+    const ch = text[i]
+    if (esc) { esc = false; continue }
+    if (ch === '\\' && inStr) { esc = true; continue }
+    if (ch === '"') { inStr = !inStr; continue }
+    if (inStr) continue
+    if (ch === open) depth++
+    else if (ch === close) {
+      depth--
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
+export function maskToolCallText(content: string): string {
+  if (!content || content.length < 8) return content
+  const known = new Set(KNOWN_TOOL_NAMES)
+  type Span = { start: number; end: number; name: string }
+  const spans: Span[] = []
+
+  // (1) name( {json} ) — pattern-2 + biến thể tiền tố rác (`_call: name({…})`)
+  const nameParen = /\b([a-z_][a-z0-9_]*)\s*\(/g
+  for (const m of content.matchAll(nameParen)) {
+    const name = m[1]
+    if (!known.has(name)) continue
+    const openIdx = m.index! + m[0].length - 1
+    // args PHẢI là JSON object mở bằng '{' (sau whitespace) — chống bắt văn xuôi
+    let j = openIdx + 1
+    while (j < content.length && /\s/.test(content[j])) j++
+    if (content[j] !== '{') continue
+    const end = findBalancedEnd(content, openIdx, '(', ')')
+    if (end > openIdx) spans.push({ start: m.index!, end: end + 1, name })
+  }
+
+  // (2) name">{json}|<xml — tag-direct r66 (kèm mangled-quote `todo_write">`)
+  const nameTag = /\b([a-z_][a-z0-9_]*)\s*">/g
+  for (const m of content.matchAll(nameTag)) {
+    const name = m[1]
+    if (!known.has(name)) continue
+    const after = m.index! + m[0].length
+    if (content[after] === '{') {
+      const json = findBalancedJsonUtil(content.slice(after), '')
+      if (json) spans.push({ start: m.index!, end: after + json.length, name })
+    } else if (content[after] === '<') {
+      // XML-con: quét thẻ + TEXT GIỮA THẺ (bằng chứng evt49 mission #18:
+      // `<todo_write"><sessionId>…</sessionId><todos><item>…</todos>`) —
+      // kết thúc tại thẻ ĐÓNG cuối cùng trước khi gặp text ngoài XML.
+      let idx = after
+      let lastClose = -1
+      while (idx < content.length) {
+        while (idx < content.length && /\s/.test(content[idx])) idx++
+        if (idx >= content.length) break
+        if (content[idx] === '<') {
+          const tagm = /^<[^>]*>/.exec(content.slice(idx))
+          if (!tagm) break
+          idx += tagm[0].length
+          if (tagm[0].startsWith('</')) lastClose = idx
+          continue
+        }
+        // text thường: nếu ĐÃ có thẻ đóng → XML hết (lastClose chốt);
+        // chưa có thẻ đóng (text bên trong thẻ mở — vd giá trị <sessionId>)
+        // → nhảy tới thẻ kế tiếp
+        if (lastClose > after) break
+        const nextTag = content.indexOf('<', idx)
+        if (nextTag === -1) break
+        idx = nextTag
+      }
+      if (lastClose > after) spans.push({ start: m.index!, end: lastClose, name })
+    }
+  }
+
+  // (3) {"name": "tool", …} — native body r67 (kèm rác tiền tố đứng trước `{`)
+  const nativeRe = /\{\s*"name"\s*:\s*"([a-z_][a-z0-9_]*)"/g
+  for (const m of content.matchAll(nativeRe)) {
+    const name = m[1]
+    if (!known.has(name)) continue
+    const json = findBalancedJsonUtil(content.slice(m.index!), 'name')
+    if (json) spans.push({ start: m.index!, end: m.index! + json.length, name })
+  }
+
+  if (spans.length === 0) return content
+  // Sắp theo start + loại span chồng lấn, thay từ CUỐI về ĐẦU (giữ index)
+  spans.sort((a, b) => a.start - b.start)
+  const merged: Span[] = []
+  for (const s of spans) {
+    if (merged.length && s.start < merged[merged.length - 1].end) continue
+    merged.push(s)
+  }
+  let out = content
+  for (let i = merged.length - 1; i >= 0; i--) {
+    const s = merged[i]
+    out = out.slice(0, s.start) + `[🔧 ${s.name}(…) — tool call đã tách khỏi suy nghĩ]` + out.slice(s.end)
+  }
+  return out
+}
+
 /**
  * ROUND-57 FIX (A1 — bão cú pháp mission …iahkk3) — AUTO-REPAIR marker
  * near-miss: model nền phát tool call với THẺ/TIỀN TỐ hỏng 1-2 ký tự trong
@@ -357,6 +484,28 @@ function repairNearMissToolMarkers(output: string): string {
   s = s.replace(
     new RegExp(`(^|[^\w<])(${KNOWN_TOOL_NAMES.join('|')})\\s*"?>\\s*(?=[<{])`, 'g'),
     (full, pre: string, name: string) => (KNOWN_TOOL_NAME_SET.has(name) ? `${pre}<${name}>` : full),
+  )
+  // r68 (BUG-001 — bằng chứng mission cmuznvkl…6b136k evt3 14:58:36): dạng
+  // `…{</name> "todo_write", "arguments": {…}}` — native body bị NHIỄM tiền tố
+  // `</name>` ngay sau `{` (JSON.parse chết vì tag rác trong object) → 0 call +
+  // detector im lặng (chỉ nhận cảnh báo generic thuần-văn-bản) → mất 1 vòng.
+  // Repair CHẶN: đòi hỏi cặp `</name> "tool", "arguments":` + tên ∈ whitelist
+  // — văn xuôi thường không bao giờ có cấu trúc này. Viết lại thành native
+  // body chuẩn cho tầng 6 (extractNativeJsonBodyCalls) nhận.
+  s = s.replace(
+    /\{?\s*<\/name>\s*"([A-Za-z_][\w.-]*)"\s*,\s*"arguments"\s*:/g,
+    (full, name: string) => (KNOWN_TOOL_NAME_SET.has(name) ? `{"name": "${name}", "arguments":` : full),
+  )
+  // r68 (BUG-023 — bằng chứng checkpoint assistant 4/6): họ pseudo-XML
+  // function-call `functions.git_diff<parameter name="parameters">…` (thường
+  // cắt đầu + méo thẻ) — không có tầng parse nào nhận. Repair dạng SẠCH
+  // (tham số JSON nằm ngay sau parameter name="parameters">): `functions.X …
+  // name="parameters"> {json}` → pattern-1 `tool_call: X({json}` — Balanced JSON
+  // phía parser tự lo phần cắt. Dạng cụt giữa chừng (không JSON theo sau) rơi
+  // tiếp detector sign bên dưới (MALFORMED feedback).
+  s = s.replace(
+    /functions\.([A-Za-z_][\w.-]*)[\s\S]{0,40}?name="parameters"\s*>\s*(?=\{)/g,
+    (full, name: string) => (KNOWN_TOOL_NAME_SET.has(name) ? `tool_call: ${name}(` : full),
   )
   return s
 }
@@ -1249,6 +1398,14 @@ export function detectBrokenToolCallHint(output: string): string | null {
     // `{"name":"x","arguments":{…}` hiện diện nhưng tầng 6 không tạo được
     // call (arguments đứt + tool modify không salvage) → dạy phát lại
     if (NATIVE_JSON_BODY_SIGN.test(output)) return malformedInvokeFeedback(intended)
+    // r68 (BUG-023 — bằng chứng checkpoint assistant 4/6 mission cmuznvkl…):
+    // họ pseudo-XML function-call `functions.<tool>` / `<parameter
+    // name="parameters|recipient_name|arguments">` (cắt đầu + méo thẻ) — tầng
+    // parse chưa nhận dạng này (riêng dạng SẠCH đã có repair R8 phía extract)
+    // → KHÔNG im lặng: dạy lại bằng skeleton đúng tool định gọi.
+    if (/functions\.[A-Za-z_][\w.-]*[<{\s]/.test(output) || /<parameter\s+name="(?:parameters|recipient_name|arguments)"/.test(output)) {
+      return malformedInvokeFeedback(intended)
+    }
     // ROUND-54 FIX E: dòng "invoke" trơ trụi (mất cặp `<` — dấu vết cú pháp
     // invoke bị provider bể) đứng MỘT MÌNH trên dòng → coi là ý định tool call
     // hỏng format chứ không phải văn xuôi thường

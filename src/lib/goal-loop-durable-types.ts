@@ -113,6 +113,11 @@ export interface GoalLoopCheckpoint {
      * r67 (F9) — số lần cảnh báo ngôn ngữ tiếng Việt đã dùng (trần 2/run). */
     delegationGateCuts?: number
     viNudges?: number
+    /** r68 (BUG-005 — quan sát mission cmuznvkl…6b136k): vi phạm ngôn ngữ
+     * SAU khi cạn trần nudge 2/2 — không nudge nữa nhưng VẪN ĐẾM và ghi
+     * evidence cho trọng tài chu kỳ thấy (trước đây sau trần là im lặng
+     * tuyệt đối → vi phạm "miễn phí"). Optional: checkpoint cũ không có → 0. */
+    viLateCount?: number
   }
   /** Verdict chu kỳ gần nhất (null nếu chưa có evaluate nào) */
   verdict: GoalLoopVerdictSnapshot | null

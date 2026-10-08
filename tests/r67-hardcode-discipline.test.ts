@@ -251,8 +251,16 @@ describe('r67 (F8) — data map registry + bộ định tuyến deterministic', 
     expect(block.length).toBeLessThanOrEqual(1700)
   })
 
-  test('buildDataMapBlock: query không khớp vùng nào → chuỗi rỗng (không nhiễu context)', () => {
-    expect(buildDataMapBlock('xin chào')).toBe('')
+  test('buildDataMapBlock: query không khớp vùng nào → LIỆT KÊ SƠ LƯỢC registry (r68 BUG-015 đổi spec — rỗng làm mission thật mất bản đồ)', () => {
+    // r67 gốc: expect(...).toBe('') — 0-match im lặng. r68 (bằng chứng mission
+    // cmuznvkl…6b136k: directive "Tiếp tục triển khai…" 82 ký tự → map rỗng →
+    // 0/18 message có 🗺️) ĐỔI SPEC: 0-match phải liệt kê SƠ LƯỢC toàn registry
+    // (1 dòng/vùng) thay vì im lặng — giữ ý đồ gốc "không nhiễu context" bằng
+    // cap độ dài thay vì chuỗi rỗng.
+    const block = buildDataMapBlock('xin chào')
+    expect(block.length).toBeGreaterThan(200) // có nội dung hướng dẫn
+    expect(block.length).toBeLessThan(2200) // KHÔNG phình — cap 1600 mặc định
+    expect(block).toContain('KHÔNG khớp vùng chuyên biệt')
   })
 
   test('dataMapToolResult: đầy đủ khi không query; routed khi có query', () => {

@@ -49,7 +49,7 @@ import path from 'node:path'
 // provider (`]<]minimax[>[`) + ẩn khối tool-call dạng <invoke>…</invoke> của
 // minimax khỏi phần text Suy nghĩ (tool call đã hiển thị là event riêng).
 // tool-calls.ts chỉ import find-balanced-json — không cycle với module này.
-import { stripProviderGarbleMarkers } from '@/lib/tool-calls'
+import { stripProviderGarbleMarkers, maskToolCallText } from '@/lib/tool-calls'
 
 // ==================== Types ====================
 
@@ -679,6 +679,16 @@ export function recordAgentThought(
     // — kể cả bản parse THÀNH CÔNG vẫn nằm lại trong content vì recordAgentThought
     // nhận content THÔ trước tầng parse); (c) giữ nguyên split `tool_call:` cũ.
     let thought = stripProviderGarbleMarkers(String(content))
+    // r68 (BUG-003 — quan sát mission cmuznvkl…6b136k): các dạng tool-call méo
+    // (`TỠI_CALL> {json}`, `tt>tout {json}`, `_call: todo_write({…})`,
+    // `todo_write">{…}`, native body trần) mà parser extract + execute được
+    // vẫn NGUYÊN VĂN nằm lại trong text thought (cụm 2 user chỉ đạo) — trước
+    // khi ghi, mask span tool-call bằng chính whitelist + cân bằng của parser
+    // (maskToolCallText r68): panel Suy nghĩ chỉ còn phần NGHĨ thật, tool call
+    // hiển thị là event riêng. Fail-open: lỗi → thought gốc giữ nguyên.
+    try {
+      thought = maskToolCallText(thought)
+    } catch { /* giữ thought gốc */ }
     thought = thought.replace(/<invoke[\s\S]*?<\/invoke>/g, ' ') // khối invoke hoàn chỉnh (kèm args)
     thought = thought.replace(/<\/?invoke[^>\n]*>/g, ' ') // thẻ invoke rời rạc ĐÚNG ĐỊNH DẠNG (có `>` đóng); thẻ mỏng cụt không `>` (vd `</invoke name="?…`) giữ lại — text sau nó là suy nghĩ thật
     const openInvokeIdx = thought.indexOf('<invoke')
