@@ -568,4 +568,72 @@ describe('r65 (H5) — git con cô lập khỏi ~/.gitconfig + /etc/gitconfig', 
     const data = (await res.json()) as { success?: boolean }
     expect(data.success).toBe(true)
   })
+})// ============================================================================
+// P0-1 — cwd containment phải theo REALPATH (gap phát hiện khi khảo sát độc lập)
+// ----------------------------------------------------------------------------
+// Trước đây resolveSafeCwd() chỉ resolve LEXICAL: `cwd = <root>/escape-link`
+// với `escape-link` là symlink → /etc vẫn `isInside(root)` nên được chấp nhận,
+// và lệnh con chạy ở /etc (đọc được cây thư mụ NGOÀI allowed roots) — đúng
+// loại lỗ hổng F8 đã vá cho path-arg nhưng BỎ SÓT cho cwd.
+// Bằng chứng máy (shell probe, exit 0): allow=true, validatePaths=true,
+// findRealpathEscape=null, `ls` trong cwd đó trả về 1050 byte danh sách /etc.
+// ============================================================================
+
+describe('P0-1 — cwd symlink escape (realpath containment cho cwd)', () => {
+  function makeFixture() {
+    const root = mkdtempSync(join(tmpdir(), 'tmo-exec-cwd-'))
+    const outside = mkdtempSync(join(tmpdir(), 'tmo-exec-out-'))
+    symlinkSync(outside, join(root, 'escape-link'))
+    return { root, outside, link: join(root, 'escape-link') }
+  }
+
+  function restoreRoots(previous: string | undefined) {
+    if (previous === undefined) delete process.env.TMO_EXEC_ALLOWED_ROOTS
+    else process.env.TMO_EXEC_ALLOWED_ROOTS = previous
+  }
+
+  test('resolveSafeCwd: cwd là symlink trong allowed root trỏ ra ngoài → từ chối', () => {
+    const { root, outside, link } = makeFixture()
+    const previous = process.env.TMO_EXEC_ALLOWED_ROOTS
+    process.env.TMO_EXEC_ALLOWED_ROOTS = root
+    try {
+      const result = resolveSafeCwd(link)
+      expect(result.ok).toBe(false)
+    } finally {
+      restoreRoots(previous)
+      rmSync(root, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  test('route: cwd symlink thoát root → 403 cwd_not_allowed, lệnh KHÔNG chạy', async () => {
+    const { root, outside, link } = makeFixture()
+    const previous = process.env.TMO_EXEC_ALLOWED_ROOTS
+    process.env.TMO_EXEC_ALLOWED_ROOTS = root
+    try {
+      const res = await POST(makeRequest({ command: 'ls -la', cwd: link }, APP_TOKEN))
+      expect(res.status).toBe(403)
+      const data = (await res.json()) as { code?: string }
+      expect(data.code).toBe('cwd_not_allowed')
+    } finally {
+      restoreRoots(previous)
+      rmSync(root, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  test('hồi quy: cwd thật trong allowed root vẫn OK (symlink trỏ VỀO trong root cũng OK)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'tmo-exec-cwd-'))
+    symlinkSync(root, join(root, 'inner-link'))
+    const previous = process.env.TMO_EXEC_ALLOWED_ROOTS
+    process.env.TMO_EXEC_ALLOWED_ROOTS = root
+    try {
+      expect(resolveSafeCwd(root).ok).toBe(true)
+      expect(resolveSafeCwd(join(root, 'inner-link')).ok).toBe(true)
+      expect(resolveSafeCwd(join(root, 'khong-ton-tai')).ok).toBe(true)
+    } finally {
+      restoreRoots(previous)
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })

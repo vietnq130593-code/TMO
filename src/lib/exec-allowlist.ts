@@ -15,6 +15,7 @@
 //   4. Giới hạn cứng: độ dài lệnh, số token, timeout, dung lượng output.
 // ============================================
 
+import { existsSync, realpathSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 
 export interface PolicyLimits {
@@ -437,6 +438,38 @@ export function resolveSafeCwd(candidate: unknown): CwdResult {
     return {
       ok: false,
       message: `cwd not allowed (allowed roots: ${roots.join(', ')})`,
+    }
+  }
+  // r68 (audit lượt 8 — K1): guard trên là LEXICAL. Một symlink NẰM TRONG allowed
+  // root nhưng trỏ ra ngoài (`ln -s /etc repo/etc-link`) vượt qua `isInside`
+  // (đường dẫn gốc nằm trong root), còn execFile({ cwd }) đi theo symlink THẬT →
+  // lệnh chạy ở /etc và `ls`/`cat passwd` đọc NGOÀI containment. Bằng chứng máy:
+  // resolveSafeCwd(cwd=tmp/.../etc-link) => ok, findRealpathEscape => null,
+  // exec `ls` trả danh sách root filesystem (exit 0).
+  // FIX: với path TỒN TẠI, realpath(candidate) phải nằm trong realpath(root) tương ứng
+  // (giống hệt F8 cho path-arg nhưng áp cho cwd). Path không tồn tại → giữ hành vi cũ
+  // (lệnh con tự lỗi, không đọc được gì).
+  if (existsSync(absolute)) {
+    let realAbsolute = absolute
+    try {
+      realAbsolute = realpathSync(absolute)
+    } catch {
+      realAbsolute = absolute
+    }
+    const contained = roots.some((root) => {
+      let realRoot = root
+      try {
+        if (existsSync(root)) realRoot = realpathSync(root)
+      } catch {
+        realRoot = root
+      }
+      return isInside(realRoot, realAbsolute)
+    })
+    if (!contained) {
+      return {
+        ok: false,
+        message: 'cwd not allowed (symlink escapes allowed roots)',
+      }
     }
   }
   return { ok: true, cwd: absolute }
