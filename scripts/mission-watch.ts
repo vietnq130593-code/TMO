@@ -365,6 +365,16 @@ class RepeatTracker {
     wmap.set(wkey, w)
     return null
   }
+  /** r60.2 — dọn state của run đã kết thúc (gọi khi thấy event run_end):
+   * cả 2 map (consecutive + windowed) keyed theo runId KHÔNG bao giờ được dọn
+   * trước đây → mission-watch chạy tuần liền tích lũy vô hạn (mỗi run để lại
+   * hàng trăm key tool|args). run_end là event CUỐI của mỗi file jsonl → sau đó
+   * không còn tool event nào của rid tới nữa → dọn an toàn. */
+  cleanup(rid: string): void {
+    if (!rid) return
+    this.state.delete(rid)
+    this.windowed.delete(rid)
+  }
   /** Top nhóm lặp cho replay/hậu kiểm.
    * r60 — gộp theo tool+args (bỏ resultPreview khỏi khóa) để các lần lặp rải
    * rác có kết quả preview hơi khác nhau vẫn nằm cùng nhóm (đúng r59). */
@@ -834,6 +844,12 @@ async function follow(): Promise<void> {
         emit(fmtEvent(e))
         const w = repeat.check(e)
         if (w) emit(`${now()} ${w}`)
+        // r60.2 — run kết thúc → dọn state tracker + registry của runId đó
+        // (chống tích lũy vô hạn qua nhiều mission trong phiên watch dài hạn)
+        if (e.type === 'run_end' && e.runId) {
+          repeat.cleanup(String(e.runId))
+          recentTools.delete(String(e.runId))
+        }
       }
     }
 

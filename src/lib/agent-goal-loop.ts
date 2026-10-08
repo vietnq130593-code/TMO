@@ -345,6 +345,20 @@ const EVIDENCE_PREVIEW_MAX_CHARS = 1600
  * mọi provider trong pool. Env GOAL_LOOP_EVIDENCE_BLOCK_MAX_CHARS.
  */
 const EVIDENCE_BLOCK_MAX_CHARS = intEnvPositive('GOAL_LOOP_EVIDENCE_BLOCK_MAX_CHARS', 48_000)
+/**
+ * r60.2 (rà soát lượt 2 hậu r60.1 — CAP TỔNG cho VERIFY block của evaluator):
+ * cùng pattern lỗi r60.1 đã fix cho evidence block nhưng CÒN THẤT LẠI ở đây —
+ * verifyBlock dựng từ cycleVerifyEvidence KHÔNG có cap số dòng lẫn cap tổng:
+ * grep/file_read/shell-thành-công đều tính là bằng chứng kiểm định (READBACK_TOOLS
+ * + shellVerify), 1 chu kỳ nhiều chục vòng × preview 1600 chars/entry (r60 nâng
+ * từ 900) → verifyBlock có thể phình 80-160k chars → CÙNG rủi ro tràn context
+ * evaluator (verdict null → heuristic → false-done G1) mà r60.1 đã vá cho
+ * evidence block. Giải pháp mirror: lược dòng CŨ NHẤT trước, giữ MỚI NHẤT đầy
+ * đủ + ghi chú số dòng đã bỏ. 24k chars (ngắn hơn evidence 48k vì cùng prompt
+ * đã chứa evidence block 48k — tổng prompt vẫn ≈ 80k chars ≈ 20-40k tokens an
+ * toàn cho mọi provider). Env GOAL_LOOP_VERIFY_BLOCK_MAX_CHARS.
+ */
+const VERIFY_BLOCK_MAX_CHARS = intEnvPositive('GOAL_LOOP_VERIFY_BLOCK_MAX_CHARS', 24_000)
 /** [C] Tool kiểm định — bằng chứng verify chỉ tính khi tool THÀNH CÔNG */
 const VERIFY_TOOLS = new Set(['run_tests', 'lint', 'type_check', 'test_coverage', 'get_diagnostics', 'lsp_diagnostics'])
 /** [C] Đọc lại kết quả (file_read/grep sau khi sửa) cũng là kiểm định */
@@ -1712,9 +1726,20 @@ async function evaluateCompletion(params: {
   const evidenceBlock = evidenceLines || '(không có tool call nào — agent trả lời thuần)'
 
   // [C] Khối bằng chứng kiểm định — harness kiểm đếm, agent KHÔNG thể bịa
-  const verifyBlock = verifyEvidence.length > 0
-    ? verifyEvidence.map(l => `- ${l}`).join('\n')
-    : '⚠️ KHÔNG có tool kiểm định nào (run_tests/lint/type_check/test_coverage/file_read/grep/shell-thành-công) ở chu kỳ cuối — mọi lời tuyên bố "đã kiểm tra/đã test" đều KHÔNG có bằng chứng.'
+  // r60.2 — TOTAL CAP cho verify block (mirror r60.1 evidence block): lược dòng
+  // kiểm định CŨ NHẤT trước (giữ MỚI NHẤT đầy đủ — đối chiếu cuối chu kỳ cần
+  // phép đo gần nhất) + ghi chú số dòng đã bỏ để trọng tài biết block bị cắt.
+  const verifyLineArr = verifyEvidence.map(l => `- ${l}`)
+  let verifyDropped = 0
+  let verifyTotal = verifyLineArr.reduce((s, l) => s + l.length + 1, 0)
+  while (verifyLineArr.length > 1 && verifyTotal > VERIFY_BLOCK_MAX_CHARS) {
+    verifyTotal -= verifyLineArr[0].length + 1
+    verifyLineArr.shift()
+    verifyDropped++
+  }
+  const verifyBlock = verifyEvidence.length === 0
+    ? '⚠️ KHÔNG có tool kiểm định nào (run_tests/lint/type_check/test_coverage/file_read/grep/shell-thành-công) ở chu kỳ cuối — mọi lời tuyên bố "đã kiểm tra/đã test" đều KHÔNG có bằng chứng.'
+    : (verifyDropped > 0 ? `(⚙️ đã lược ${verifyDropped} dòng kiểm định cũ nhất để vừa cửa sổ trọng tài — dòng gần nhất giữ nguyên đầy đủ)\n` : '') + verifyLineArr.join('\n')
 
   // FIX 2026-09-14 #7 — cảnh báo E2E verification cho trọng tài: chu kỳ có SỬA
   // CODE nhưng bằng chứng kiểm định chỉ là đọc lại file (YẾU) trong khi tool
@@ -3070,7 +3095,10 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       // 3.04M tokens mà agent không hề hay, không thể tự điều chỉnh) + nhắc cú
       // pháp khi context đã nén (B4 — output degradation: token rác, pseudo-syntax
       // xuất hiện từ lần nén ×2+ trong r59).
-      const runStatusNote = `\n\n📊 TRẠNG THÁI RUN (harness ghi): chu kỳ ${cycle} · vòng ${cycleIterations} · ${totalToolCalls} tool calls · ~${Math.round(tokensUsed / 1000)}k tokens${subagentTokens > 0 ? ` (sub-agent ~${Math.round(subagentTokens / 1000)}k)` : ''}${compressions > 0 ? ` · context đã nén ×${compressions}` : ''}. Token KHÔNG là ràng buộc của bạn — TIẾN TRIỂN MỚI mỗi vòng mới là ràng buộc: phép đo đã có kết quả (số máy/total/trích dẫn) thì DÙNG, không đo lại.${compressions > 0 ? ' ✍️ Context đã nén — phát tool_call theo ĐÚNG cú pháp (JSON args 1 dòng hợp lệ, không văn xuôi quanh tool_call, không xuống dòng/comments giữa args).' : ''}`
+      // r60.2 — format token dễ đọc (3.0M thay vì 3043k — agent nắm được mức
+      // tiêu thụ khi số lớn; bằng chứng r59: 3.04M tokens mà agent không hay biết)
+      const fmtTok = (t: number) => t >= 1_000_000 ? `${(t / 1_000_000).toFixed(1)}M` : `${Math.round(t / 1000)}k`
+      const runStatusNote = `\n\n📊 TRẠNG THÁI RUN (harness ghi): chu kỳ ${cycle} · vòng ${cycleIterations} · ${totalToolCalls} tool calls · ~${fmtTok(tokensUsed)} tokens${subagentTokens > 0 ? ` (sub-agent ~${fmtTok(subagentTokens)})` : ''}${compressions > 0 ? ` · context đã nén ×${compressions}` : ''}. Token KHÔNG là ràng buộc của bạn — TIẾN TRIỂN MỚI mỗi vòng mới là ràng buộc: phép đo đã có kết quả (số máy/total/trích dẫn) thì DÙNG, không đo lại.${compressions > 0 ? ' ✍️ Context đã nén — phát tool_call theo ĐÚNG cú pháp (JSON args 1 dòng hợp lệ, không văn xuôi quanh tool_call, không xuống dòng/comments giữa args).' : ''}`
       const formattedPrompt = formatMessagesForLLM(messages) +
         runStatusNote +
         '\n\n📝 NHẮC TRƯỚC KHI HÀNH ĐỘNG: (1) task từ 2 bước trở lên → gọi todo_write (đường CLI: tmo_todo) lập kế hoạch TRƯỚC, xong việc nào đánh dấu completed việc đó; (2) câu trả lời/báo cáo cho người đọc: văn xuôi tiếng Việt sạch, markdown TỐI THIỂU — không bọc nhấn mạnh bằng **, không bọc từ ngữ bằng dấu ` hay dấu nháy đơn — nhấn mạnh bằng CHỮ IN HOA, liệt kê bằng gạch đầu dòng "- ".'

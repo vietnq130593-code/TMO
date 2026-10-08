@@ -105,6 +105,13 @@ function stopReasonBadge(reason: string | null): { label: string; className: str
       return { label: 'complete', className: 'bg-emerald-950/60 text-emerald-400 border-emerald-500/50' }
     case 'no_progress':
       return { label: 'no_progress', className: 'bg-amber-950/60 text-amber-400 border-amber-500/50' }
+    // r60.2 — delegation C7 giờ persist stopReason thật: 'stall_brake' = phanh cắt
+    // bế tắc (cùng họ stall với no_progress — amber); 'concluded' = sub-agent tự
+    // kết thúc có kiểm soát (emerald như complete).
+    case 'stall_brake':
+      return { label: 'stall_brake', className: 'bg-amber-950/60 text-amber-400 border-amber-500/50' }
+    case 'concluded':
+      return { label: 'concluded', className: 'bg-emerald-950/60 text-emerald-400 border-emerald-500/50' }
     case 'error':
     case 'failed':
       return { label: reason, className: 'bg-rose-950/60 text-rose-400 border-rose-500/50' }
@@ -113,6 +120,10 @@ function stopReasonBadge(reason: string | null): { label: string; className: str
     case 'max_cycles':
     case 'time_budget':
     case 'token_budget':
+    // r60.2 — 'timeout'/'iteration_limit' = delegation chạm trần thời gian/vòng
+    // (cùng họ budget — orange, phân biệt với stall amber và fail rose)
+    case 'timeout':
+    case 'iteration_limit':
       return { label: reason, className: 'bg-orange-950/60 text-orange-400 border-orange-500/50' }
     // TASK 48 — needs_input: kết thúc CÓ MỤC ĐÍCH chờ user trả lời (không phải
     // lỗi/xám trung tính) — teal phân biệt với budget (orange) và fail (rose).

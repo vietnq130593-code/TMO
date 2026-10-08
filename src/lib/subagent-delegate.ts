@@ -750,7 +750,9 @@ async function runSubAgentForProfileInner(params: {
         // sub-agent thấy chính số vòng/tool/token của mình (bằng chứng r59:
         // ALISTA#1 xoay vòng 27 lần không hay biết mình đang quay vòng). Nhấn
         // tiến-triển > tiết-kiệm (user directive: token không là ràng buộc).
-        const subStatusNote = `\n\n📊 TRẠNG THÁI (vòng ${iterations} · ${toolCallCount} tool calls, ${successfulToolCalls} thành công · ~${Math.round(tokensUsed / 1000)}k tokens): token KHÔNG giới hạn — nhưng KHÔNG lặp một phép đo đã có kết quả (dùng total/rowCount/số máy từ tool); cùng lỗi 2 lần → đổi cách; xong phần việc → kết luận trung thực phần đã làm + còn thiếu.`
+        // r60.2 — format token dễ đọc (≥1M hiển thị M — mirror fmtTok goal-loop)
+        const fmtTok = (t: number) => t >= 1_000_000 ? `${(t / 1_000_000).toFixed(1)}M` : `${Math.round(t / 1000)}k`
+        const subStatusNote = `\n\n📊 TRẠNG THÁI (vòng ${iterations} · ${toolCallCount} tool calls, ${successfulToolCalls} thành công · ~${fmtTok(tokensUsed)} tokens): token KHÔNG giới hạn — nhưng KHÔNG lặp một phép đo đã có kết quả (dùng total/rowCount/số máy từ tool); cùng lỗi 2 lần → đổi cách; xong phần việc → kết luận trung thực phần đã làm + còn thiếu.`
         const formatted = transcript
           .map(m => `\n\n[${m.role === 'user' ? 'USER' : m.role === 'assistant' ? 'ASSISTANT' : 'TOOL RESULT'}]: ${m.content}`)
           .join('')
