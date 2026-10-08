@@ -28,18 +28,23 @@ import { ensureTmoApiToken } from '@/lib/tmo-token'
 import {
   checkAllowlist,
   commandFingerprint,
-  isPathArgAllowed,
   LIMITS,
   parseCommand,
   resolveSafeCwd,
+  validatePaths,
 } from '@/lib/exec-allowlist'
-import { resolveTimeoutMs, runAllowedCommand } from '@/lib/exec-runner'
-import { executeBashCommand } from '@/lib/opencode'
+import { findRealpathEscape, resolveTimeoutMs, runAllowedCommand } from '@/lib/exec-runner'
 
 export const dynamic = 'force-dynamic'
 
 /** Body > 8KB là dấu hiệu lạm dụng — từ chối trước khi JSON.parse */
 const MAX_BODY_CHARS = 8 * 1024
+/**
+ * r64.2 (audit lượt 6 — F9): chặn theo Content-Length TRƯỚC request.text()
+ * để không buffer body khổng lồ vào RAM mới phát hiện vượt cap. UTF-8 tối đa
+ * 4 byte/char + slack — không bao giờ từ chối body hợp lệ theo cap ký tự.
+ */
+const MAX_BODY_BYTES = MAX_BODY_CHARS * 4 + 1024
 
 /** So sánh constant-time; chỉ lộ độ dài (không đáng kể với token cố định). */
 function safeEquals(a: string, b: string): boolean {
@@ -130,6 +135,10 @@ export async function POST(request: Request) {
     if (!authz.ok) return reject(authz.status, authz.message)
 
     // ---- 2. BODY (giới hạn kích thước trước khi parse) ----
+    const contentLength = Number(request.headers.get('content-length') ?? '0')
+    if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+      return reject(413, `request body too large (max ${MAX_BODY_CHARS} characters)`)
+    }
     const raw = await request.text()
     if (raw.length > MAX_BODY_CHARS) {
       return reject(413, `request body too large (max ${MAX_BODY_CHARS} characters)`)
@@ -163,19 +172,26 @@ export async function POST(request: Request) {
     const cwd = cwdResult.cwd
 
     // ---- 6. ARG DẠNG PATH: phải trong cwd, không đọc file secret ----
-    if (allow.rule.pathsOnly) {
-      const subcommand = allow.subcommand
-      for (const arg of allow.args) {
-        if (arg.startsWith('-')) continue
-        if (subcommand && arg === subcommand) continue
-        if (!isPathArgAllowed(arg, cwd)) {
-          console.warn(
-            `[opencode/execute] DENY path_not_allowed bin=${allow.bin} ` +
-              `fp=${commandFingerprint(parsed.value.tokens.join(' '))}`
-          )
-          return reject(403, `path not allowed: ${arg}`, { code: 'path_not_allowed' })
-        }
-      }
+    // r64.2 (F4+F6): hợp nhất về validatePaths của lib (trước đây route tự
+    // viết lại vòng kiểm — trùng lặp + thiếu nhánh rev:path `HEAD:.env`);
+    // kèm realpath containment (F8) chặn symlink thoát cwd.
+    const pathCheck = validatePaths(allow, cwd)
+    if (!pathCheck.ok) {
+      console.warn(
+        `[opencode/execute] DENY ${pathCheck.code} bin=${allow.bin} ` +
+          `fp=${commandFingerprint(parsed.value.tokens.join(' '))}`
+      )
+      return reject(403, pathCheck.message, { code: pathCheck.code })
+    }
+    const escape = findRealpathEscape(allow, cwd)
+    if (escape) {
+      console.warn(
+        `[opencode/execute] DENY symlink_escape bin=${allow.bin} ` +
+          `fp=${commandFingerprint(parsed.value.tokens.join(' '))}`
+      )
+      return reject(403, `path not allowed (symlink escapes cwd): ${escape}`, {
+        code: 'path_not_allowed',
+      })
     }
 
     const timeoutMs = resolveTimeoutMs(body.timeoutMs)
@@ -184,38 +200,15 @@ export async function POST(request: Request) {
         `timeoutMs=${timeoutMs} fp=${commandFingerprint(parsed.value.tokens.join(' '))}`
     )
 
-    // ---- 7a. ƯU TIÊN OPENCODE SERVER (chỉ với lệnh đã qua allowlist) ----
+    // ---- 7. LOCAL EXEC — execFile(shell:false), argv đã kiểm duyệt ----
+    // r64.2 (F1): ĐÃ GỞ nhánh "ưu tiên opencode-server" — server đó thực thi
+    // qua execSync (shell thật) → tilde/glob expansion (`cat ~/.*`,
+    // `cat ~/tmo-app/db/custom.db`) thoát path guard, chạy sai cwd yêu cầu
+    // (WORKSPACE thay vì body.cwd) và kế thừa env đầy của server. Một đường
+    // thực thi duy nhất = containment deterministic. Tham chiếu lịch sử:
+    // P0-2 (inventory mission #18) còn để opencode-server /execute (blocklist
+    // execSync) + /lsp/diagnostics (grep interpolation) — đề bài mission sau.
     const command = parsed.value.tokens.join(' ')
-    try {
-      const remote = await executeBashCommand({
-        command,
-        sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
-      })
-      if (remote && typeof remote.output === 'string') {
-        // opencode-server KHÔNG áp maxBuffer/timeout của ta → cắt cứng ở đây,
-        // nếu không 1 `cat file-lớn` sẽ dồn hết vào RAM + response.
-        const remoteText = remote.output
-        let capped = remoteText
-        let remoteTruncated = false
-        if (Buffer.byteLength(remoteText, 'utf8') > LIMITS.maxOutputBytes) {
-          capped = Buffer.from(remoteText, 'utf8')
-            .subarray(0, LIMITS.maxOutputBytes)
-            .toString('utf8')
-          remoteTruncated = true
-        }
-        return NextResponse.json({
-          ...remote,
-          output: capped,
-          truncated: remoteTruncated,
-          command,
-          source: 'opencode-server',
-        })
-      }
-    } catch {
-      /* server offline → rơi xuống local exec */
-    }
-
-    // ---- 7b. LOCAL EXEC — execFile(shell:false), argv đã kiểm duyệt ----
     const run = await runAllowedCommand(allow, { cwd, timeoutMs })
     const payload = {
       success: run.ok,

@@ -125,13 +125,39 @@ export interface BinRule {
   maxArgs?: number
   /** mọi arg không phải flag phải là path nằm trong cwd */
   pathsOnly?: boolean
+  /**
+   * (r64.2 — F3) Subcommand trong danh sách này KHÔNG được nhận thêm positional
+   * nào sau nó: `git branch <tên>` TẠO ref, `git remote set-url …` GHI .git/config
+   * (repoint origin = supply-chain) → chỉ cho phép dạng list.
+   */
+  noExtraPositional?: readonly string[]
+  /**
+   * (r64.2 — F4) Binary diễn giải arg dạng `<rev>:<path>` (git show/log/diff):
+   * path-part được resolve theo REPO ROOT chứ không theo cwd → `HEAD:../ngoài`
+   * thoát guard lexical 1 mức, và `HEAD:.env` đọc secret trong lịch sử commit.
+   * path-part (sau ':' đầu tiên) cũng phải qua path guard.
+   */
+  revPathAware?: boolean
   description: string
 }
 
 /** Short flag đơn, ví dụ `-r`, `-la`, `--maxdepth`. KHÔNG cho phép `-c` (git -c core.pager=…) */
 const FLAG_OK = /^--?[A-Za-z][A-Za-z0-9-]*$/
-/** Long flag có giá trị: `--include=*.ts`, `--maxdepth=3` */
-const FLAG_WITH_VALUE = /^--?[A-Za-z][A-Za-z0-9-]*=[A-Za-z0-9._/:=,@%+~*?\[\]-]+$/
+/**
+ * FLAG_ANY (r64.2 — audit lượt 6, F5): flag boolean HOẶC `flag=giá-trị`.
+ * Trước đây ls/tail/grep/rg bị buộc FLAG_WITH_VALUE → `ls -la`, `grep -rn`,
+ * `tail -n 20`… (các dạng inspect phổ biến nhất) đều rơi 403 bad_flag.
+ * Binary dùng FLAG_ANY PHẢI tự khai denyFlags cho flag nguy hiểm riêng.
+ */
+const FLAG_ANY = /^--?[A-Za-z][A-Za-z0-9-]*(=[A-Za-z0-9._/:=,@%+~*?\[\]-]+)?$/
+/**
+ * GIT_LONG_ONLY (r64.2 — F7): git CHỈ nhận flag DÀI `--…` (kèm `=giá-trị`
+ * tùy chọn). Mọi flag ngắn bị chặn tại tầng policy ⇒ `-c<config>=<giá-trị>`
+ * (config override — vector diff.external/core.fsmonitor) và `-C<path>`
+ * (đổi thư mục) chết ngay, không phụ thuộc hành vi parse từng bản git
+ * (git 2.47 tự chối `-C=/x`, nhưng không cam kết cho mọi bản).
+ */
+const GIT_LONG_ONLY = /^--[A-Za-z][A-Za-z0-9-]*(=[A-Za-z0-9._/:=,@%+~*?\[\]-]+)?$/
 
 const ALLOWLIST: Record<string, BinRule> = {
   git: {
@@ -156,15 +182,17 @@ const ALLOWLIST: Record<string, BinRule> = {
     // CẢ dạng `--flag=value` vì checkAllowlist tách flag.split('=')[0]).
     denyFlags:
       /^(--exec|--ext-diff|--textconv|--upload-pack|--upload-archive|--config-env|--output|--git-dir|--work-tree|--namespace|--super-prefix|--exec-path|-c)$/,
-    flags: FLAG_WITH_VALUE,
+    flags: GIT_LONG_ONLY,
     maxArgs: 10,
     pathsOnly: true,
+    noExtraPositional: ['branch', 'remote'],
+    revPathAware: true,
     description: 'git read-only inspection (status/log/diff/show/branch/…)',
   },
   ls: {
     // KHÔNG có subcommand list → mọi positional đều là path, phải kiểm tra cwd
     allowNoSubcommand: true,
-    flags: FLAG_WITH_VALUE,
+    flags: FLAG_ANY,
     maxArgs: 8,
     pathsOnly: true,
     description: 'list directory',
@@ -172,12 +200,22 @@ const ALLOWLIST: Record<string, BinRule> = {
   pwd: { allowNoSubcommand: true, maxArgs: 0, description: 'print working directory' },
   whoami: { allowNoSubcommand: true, maxArgs: 0, description: 'print current user' },
   uname: { allowNoSubcommand: true, flags: FLAG_OK, maxArgs: 3, description: 'system information' },
-  du: { allowNoSubcommand: true, flags: FLAG_OK, maxArgs: 6, pathsOnly: true, description: 'disk usage' },
-  df: { allowNoSubcommand: true, flags: FLAG_OK, maxArgs: 4, description: 'filesystem usage' },
-  head: { allowNoSubcommand: true, flags: FLAG_OK, maxArgs: 4, pathsOnly: true, description: 'first lines of a file' },
-  tail: { allowNoSubcommand: true, flags: FLAG_WITH_VALUE, maxArgs: 4, pathsOnly: true, description: 'last lines of a file' },
-  wc: { allowNoSubcommand: true, flags: FLAG_OK, maxArgs: 6, pathsOnly: true, description: 'count lines/words' },
-  cat: { allowNoSubcommand: true, flags: FLAG_OK, maxArgs: 6, pathsOnly: true, description: 'print a (non-secret) file' },
+  du: { allowNoSubcommand: true, flags: FLAG_ANY, maxArgs: 6, pathsOnly: true, description: 'disk usage' },
+  df: { allowNoSubcommand: true, flags: FLAG_ANY, maxArgs: 4, description: 'filesystem usage' },
+  head: { allowNoSubcommand: true, flags: FLAG_ANY, maxArgs: 4, pathsOnly: true, description: 'first lines of a file' },
+  tail: {
+    allowNoSubcommand: true,
+    // r64.2 (F5+F2): FLAG_ANY cho `-n 20`…; deny mọi biến thể follow
+    // (-f/-F/--follow/--retry — treo tới hết timeout, prefix-match để chặn
+    // cả cụm gộp `-fn20` / `--follow=name`).
+    denyFlags: /^(-[fF]|--follow|--retry)/,
+    flags: FLAG_ANY,
+    maxArgs: 4,
+    pathsOnly: true,
+    description: 'last lines of a file (không follow)',
+  },
+  wc: { allowNoSubcommand: true, flags: FLAG_ANY, maxArgs: 6, pathsOnly: true, description: 'count lines/words' },
+  cat: { allowNoSubcommand: true, flags: FLAG_ANY, maxArgs: 6, pathsOnly: true, description: 'print a (non-secret) file' },
   echo: { allowNoSubcommand: true, maxArgs: 4, description: 'print literal text' },
   node: {
     // chỉ `--version` — KHÔNG cho -e/-p/--eval (đọc code từ argv)
@@ -188,8 +226,27 @@ const ALLOWLIST: Record<string, BinRule> = {
   },
   bun: { allowNoSubcommand: true, flags: /^--?(v|version)$/, maxArgs: 0, description: 'bun --version' },
   npm: { subcommands: ['ls', 'list', 'view', 'outdated'], flags: FLAG_OK, maxArgs: 6, description: 'npm read-only' },
-  grep: { allowNoSubcommand: true, flags: FLAG_WITH_VALUE, maxArgs: 8, pathsOnly: true, description: 'text search' },
-  rg: { allowNoSubcommand: true, flags: FLAG_WITH_VALUE, maxArgs: 8, pathsOnly: true, description: 'ripgrep search' },
+  grep: {
+    allowNoSubcommand: true,
+    // r64.2: deny -f/--file (đọc pattern từ file — dạng attach `-f.env` và
+    // `--file=.env` nhúng path vào flag token, thoát path guard).
+    denyFlags: /^(-f|--file)/,
+    flags: FLAG_ANY,
+    maxArgs: 8,
+    pathsOnly: true,
+    description: 'text search',
+  },
+  rg: {
+    allowNoSubcommand: true,
+    // r64.2 (F2): `--pre=<bin>` — rg CHẠY binary làm preprocessor trên nội dung
+    // file (`rg --pre=bash foo pm2-start.sh` → bash thực thi script trong
+    // repo!) → deny cứng cả --pre-glob; -f/--file như grep (fail-closed).
+    denyFlags: /^(-f|--file|--pre|--pre-glob)/,
+    flags: FLAG_ANY,
+    maxArgs: 8,
+    pathsOnly: true,
+    description: 'ripgrep search (không --pre)',
+  },
   find: {
     allowNoSubcommand: true,
     flags: /^-{1,2}(maxdepth|mindepth|depth|type|name|iname|path|newer|mtime|size|ls|print|empty)$/,
@@ -207,6 +264,8 @@ export type AllowErrorCode =
   | 'bad_subcommand'
   | 'too_many_args'
   | 'path_not_allowed'
+  /** r64.2 (F3): subcommand read-only bị đè positional (git branch <tên>…) */
+  | 'extra_positional'
 
 export type AllowResult =
   | {
@@ -273,6 +332,20 @@ export function checkAllowlist(parsed: ParsedCommand): AllowResult {
       ok: false,
       code: 'bad_subcommand',
       message: `${parsed.bin}: subcommand not allowed: ${subcommand} (allowed: ${rule.subcommands.join(', ')})`,
+    }
+  }
+
+  // r64.2 (F3): `git branch <tên>` ghi ref, `git remote set-url …` ghi
+  // .git/config — hai subcommand này chỉ được dùng ở DẠNG LIST (0 positional thêm).
+  if (
+    subcommand &&
+    rule.noExtraPositional?.includes(subcommand) &&
+    positional.length > 1
+  ) {
+    return {
+      ok: false,
+      code: 'extra_positional',
+      message: `${parsed.bin} ${subcommand}: listing only — positional arguments not allowed for this subcommand`,
     }
   }
 
@@ -356,16 +429,34 @@ export function resolveSafeCwd(candidate: unknown): CwdResult {
  * Với binary đánh dấu `pathsOnly`, mọi positional arg phải là path an toàn.
  * Subcommand (vd `status` của git) cũng đi qua cùng phép kiểm — nó luôn
  * resolve nằm trong cwd nên không gây false-positive.
+ *
+ * r64.2 (F4): rule `revPathAware` (git) — arg dạng `<rev>:<path>` được git
+ * diễn giải theo REPO ROOT (không theo cwd) → path-part (sau ':' đầu tiên)
+ * cũng phải qua path guard: chặn `git show HEAD:.env` (secret trong lịch sử
+ * commit) và `git show HEAD:../ngoài-repo` (thoát guard lexical 1 mức).
+ * Cú pháp commit-search `:/<text>` cũng bị chặn (path-part absolute) — chấp
+ * nhận trade-off fail-closed.
  */
 export function validatePaths(allow: Extract<AllowResult, { ok: true }>, cwd: string): AllowResult {
   if (!allow.rule.pathsOnly) return allow
   for (const arg of allow.args) {
     if (arg.startsWith('-')) continue // flag / --flag=value đã kiểm ở checkAllowlist
+    if (allow.subcommand && arg === allow.subcommand) continue
     if (!isPathArgAllowed(arg, cwd)) {
       return {
         ok: false,
         code: 'path_not_allowed',
         message: `path not allowed (outside cwd or secret file): ${arg}`,
+      }
+    }
+    if (allow.rule.revPathAware && arg.includes(':')) {
+      const pathPart = arg.slice(arg.indexOf(':') + 1)
+      if (pathPart && !isPathArgAllowed(pathPart, cwd)) {
+        return {
+          ok: false,
+          code: 'path_not_allowed',
+          message: `rev-path not allowed (outside cwd or secret file): ${arg}`,
+        }
       }
     }
   }

@@ -12,7 +12,9 @@
 // ============================================
 
 import { execFile } from 'node:child_process'
-import { LIMITS, type AllowResult } from './exec-allowlist'
+import { existsSync, realpathSync } from 'node:fs'
+import { isAbsolute, resolve } from 'node:path'
+import { isInside, LIMITS, type AllowResult } from './exec-allowlist'
 
 /** Chỉ copy các key env vô hại — chủ động KHÔNG kế thừa process.env. */
 const ENV_ALLOWLIST = [
@@ -83,6 +85,38 @@ export function resolveTimeoutMs(candidate: unknown): number {
   const ms = Math.floor(candidate)
   if (ms <= 0) return LIMITS.defaultTimeoutMs
   return Math.min(ms, LIMITS.maxTimeoutMs)
+}
+
+/**
+ * r64.2 (audit lượt 6 — F8): path guard ở exec-allowlist là LEXICAL — một
+ * symlink trong cwd trỏ ra ngoài (`cat link/etc/passwd`) sẽ thoát containment
+ * vì lệnh con đi theo symlink thật. Với path TỒN TẠI, so realpath thật phải
+ * nằm trong realpath(cwd); path chưa tồn tại bỏ qua (lệnh sẽ tự lỗi — an toàn).
+ * Trả về arg vi phạm đầu tiên, hoặc null nếu sạch.
+ */
+export function findRealpathEscape(
+  allow: Extract<AllowResult, { ok: true }>,
+  cwd: string
+): string | null {
+  if (!allow.rule.pathsOnly) return null
+  let realCwd: string | null = null
+  for (const arg of allow.args) {
+    if (arg.startsWith('-')) continue
+    if (allow.subcommand && arg === allow.subcommand) continue
+    const candidates = [arg]
+    if (allow.rule.revPathAware && arg.includes(':')) {
+      const pathPart = arg.slice(arg.indexOf(':') + 1)
+      if (pathPart) candidates.push(pathPart)
+    }
+    for (const candidate of candidates) {
+      const absolute = isAbsolute(candidate) ? resolve(candidate) : resolve(cwd, candidate)
+      if (!existsSync(absolute)) continue
+      realCwd ??= realpathSync(cwd)
+      const real = realpathSync(absolute)
+      if (!isInside(realCwd, real)) return arg
+    }
+  }
+  return null
 }
 
 /**

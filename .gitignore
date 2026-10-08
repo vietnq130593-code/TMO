@@ -284,3 +284,9 @@ agent-runs/
 # content checkpoint — lấp blind spot r54), token burn live, stall-loop +
 # detector cú pháp tool-call. Chạy: bun scripts/mission-watch.ts [--follow]
 !/scripts/mission-watch.ts
+# NGOẠI LỆ: mission-dispatch.ts — dispatcher mission CHUẨN HÓA (r64.2, thể chế
+# hóa chỉ đạo user sau mission #18): BẮT BUỘC directive có khối "Nghiệm thu:"
+# ≥1 mục "- [ ]" (khớp parser extractDirectiveSpec của agent-goal-loop.ts) —
+# từ chối dispatch nếu thiếu → chống ping-pong kiểu mission. Chạy:
+#   bun run scripts/mission-dispatch.ts --directive <file> --profile <id> --title "<tên>"
+!/scripts/mission-dispatch.ts
