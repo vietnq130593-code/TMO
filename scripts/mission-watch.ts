@@ -722,8 +722,10 @@ async function follow(): Promise<void> {
 
     // 1) DB: mission mới / đổi trạng thái / checkpoint mới
     let jobs: JobRow[] = []
+    let jobsReadOk = false // r61 — chỉ prune state khi DB đọc OK (tránh đốn nhầm lúc lỗi tạm thời)
     try {
       jobs = getJobs(db, true)
+      jobsReadOk = true
     } catch (e) {
       emit(`${now()} ⚠️ DB read lỗi: ${trunc(String(e), 120)} — thử lại sau`)
     }
@@ -772,6 +774,23 @@ async function follow(): Promise<void> {
         hbWarnedBucket.delete(j.id)
         hbDelegationNoted.delete(j.id)
       }
+    }
+
+    // 1a) r61 — dọn state watcher cho job rời active-set. ckptSeen giữ lastAsst
+    // FULL-CONTENT (đến hàng chục KB) + sig cho MỖI job từng active — cùng
+    // class leak RepeatTracker/recentTools mà r60.2 đã fix nhưng thất lại ở
+    // đây (watchCheckpoint chỉ chạy cho job active → entry của job đã kết thúc
+    // là tải rác vĩnh viễn trong phiên watch dài hạn). jobSeen / hbWarnedBucket /
+    // hbDelegationNoted cũng chỉ được đọc cho job active. KHÔNG đụng:
+    // watchedJobIds + finalEmitted (bước 1b cần cho emit FINAL REPORT),
+    // sessionNames (giữ sau khi kết thúc theo thiết kế — FIX H r56),
+    // tails/knownRunFiles/subFirstSessionCache (bounded bởi file trên đĩa).
+    if (jobsReadOk) {
+      const activeJobIds = new Set(jobs.map((j) => j.id))
+      for (const id of [...ckptSeen.keys()]) if (!activeJobIds.has(id)) ckptSeen.delete(id)
+      for (const id of [...jobSeen.keys()]) if (!activeJobIds.has(id)) jobSeen.delete(id)
+      for (const id of [...hbWarnedBucket.keys()]) if (!activeJobIds.has(id)) hbWarnedBucket.delete(id)
+      for (const id of [...hbDelegationNoted]) if (!activeJobIds.has(id)) hbDelegationNoted.delete(id)
     }
 
     // 1b) FIX H r56: job vừa chuyển terminal (rời active query ngay khi hoàn thành)
@@ -838,17 +857,20 @@ async function follow(): Promise<void> {
     }
 
     // 3) đọc event mới từ mọi file đang theo dõi
+    const endedRunIds: string[] = [] // r61 — hoãn cleanup về SAU sweep 3b (xem 3c)
     for (const [file, tail] of tails) {
       for (const e of tail.read()) {
         noteToolEvent(recentTools, e) // FIX C3 — nuôi registry tương quan detector
         emit(fmtEvent(e))
         const w = repeat.check(e)
         if (w) emit(`${now()} ${w}`)
-        // r60.2 — run kết thúc → dọn state tracker + registry của runId đó
-        // (chống tích lũy vô hạn qua nhiều mission trong phiên watch dài hạn)
+        // r61 — run kết thúc → GHI LẠI runId để dọn SAU sweep 3b. Bản r60.2 dọn
+        // NGAY TẠI ĐÂY khiến sweep cùng poll mất trắng registry của run vừa
+        // kết thúc → cảnh báo GIẢ cho tool đã chạy thật (kịch bản thực tế: checkpoint
+        // thắc mắc cú pháp tool foo + foo chạy thành công + run_end cùng 1 poll —
+        // registry bị xóa trước khi toolRanSince kịp đối chiếu).
         if (e.type === 'run_end' && e.runId) {
-          repeat.cleanup(String(e.runId))
-          recentTools.delete(String(e.runId))
+          endedRunIds.push(String(e.runId))
         }
       }
     }
@@ -859,6 +881,16 @@ async function follow(): Promise<void> {
       if (!toolRanSince(recentTools, p.runId, p.s.name, p.sinceTs)) {
         emit(`${now()} ⚠️ 🤖 ${p.s.line}`)
       }
+    }
+
+    // 3c) r61 — dọn state run đã kết thúc SAU khi sweep 3b đối chiếu xong (fix
+    // thứ tự của r60.2: RepeatTracker + recentTools keyed runId vẫn được dọn
+    // mỗi run_end — chống tích lũy qua mission trong phiên watch dài hạn — nhưng
+    // đúng thời điểm: registry còn nguyên cho tương quan C3, xóa SAU đó. Sau
+    // run_end không còn tool event nào của rid nữa (event cuối file jsonl).
+    for (const rid of endedRunIds) {
+      repeat.cleanup(rid)
+      recentTools.delete(rid)
     }
 
     if (!anyOutput) process.stdout.write('.')
