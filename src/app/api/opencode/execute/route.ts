@@ -46,6 +46,46 @@ const MAX_BODY_CHARS = 8 * 1024
  */
 const MAX_BODY_BYTES = MAX_BODY_CHARS * 4 + 1024
 
+/**
+ * r65 (audit lượt 7 — H3): Content-Length guard bị bypass khi client dùng
+ * `Transfer-Encoding: chunked` (header vắng → Number('0') = 0 → pass), và
+ * Node/Next KHÔNG tự giới hạn body của Route Handler → request.text() buffer
+ * VÔ HẠN vào RAM. Bằng chứng máy: POST 200KB chunked → server trả 413 nhưng
+ * SAU khi đã buffer trọn 200KB. Ghép với token công khai từ /api/auth/setup
+ * (H1) = chuỗi DoS công khai.
+ * FIX: đọc body qua stream reader có ĐẾM BYTE — hủy stream NGAY khi vượt
+ * cap, chưa bao giờ giữ quá MAX_BODY_BYTES trong RAM. Giữ check ký tự sau
+ * decode làm belt-and-suspenders (multi-byte + decode-leniency).
+ */
+async function readBodyCapped(request: Request, maxBytes: number): Promise<string | null> {
+  if (!request.body) {
+    // Không stream (test/NextRequest dựng tay) — fallback text() + cap sau.
+    const text = await request.text()
+    return Buffer.byteLength(text, 'utf8') > maxBytes ? null : text
+  }
+  const reader = request.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let text = ''
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+      total += value.byteLength
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {})
+        return null
+      }
+      text += decoder.decode(value, { stream: true })
+    }
+    return text + decoder.decode()
+  } catch {
+    // Stream lỗi giữa chừng — trả những gì đã đọc hợp lệ để JSON.parse tự chối.
+    return text
+  }
+}
+
 /** So sánh constant-time; chỉ lộ độ dài (không đáng kể với token cố định). */
 function safeEquals(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'utf8')
@@ -134,12 +174,15 @@ export async function POST(request: Request) {
     const authz = authorize(request)
     if (!authz.ok) return reject(authz.status, authz.message)
 
-    // ---- 2. BODY (giới hạn kích thước trước khi parse) ----
+    // ---- 2. BODY (giới hạn kích thước TRƯỚC + TRONG lúc đọc — r65 H3) ----
     const contentLength = Number(request.headers.get('content-length') ?? '0')
     if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
       return reject(413, `request body too large (max ${MAX_BODY_CHARS} characters)`)
     }
-    const raw = await request.text()
+    const raw = await readBodyCapped(request, MAX_BODY_BYTES)
+    if (raw === null) {
+      return reject(413, `request body too large (max ${MAX_BODY_CHARS} characters)`)
+    }
     if (raw.length > MAX_BODY_CHARS) {
       return reject(413, `request body too large (max ${MAX_BODY_CHARS} characters)`)
     }

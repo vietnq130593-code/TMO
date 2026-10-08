@@ -425,3 +425,147 @@ describe('r64.2 — F8: realpath containment (symlink thoát cwd)', () => {
     expect(findRealpathEscape(allow, '/home/z/tmo-app')).toBe(null)
   })
 })
+
+// ============================================================================
+// r65 — AUDIT LƯỢT 7 (kỹ sư AI/kiến trúc sư): khóa H2/H3/H4/H5
+// ============================================================================
+
+describe('r65 (H2) — database file là secret: mọi đường đọc DB app bị chặn', () => {
+  test('cat db/custom.db (DB app trong cwd mặc định) → path_not_allowed', () => {
+    expect(policy('cat db/custom.db')).toEqual({ ok: false, code: 'path_not_allowed' })
+    expect(policy('cat prisma/dev.db')).toEqual({ ok: false, code: 'path_not_allowed' })
+    expect(policy('du db/custom.db')).toEqual({ ok: false, code: 'path_not_allowed' })
+    expect(policy('head -n 5 db/custom.db')).toEqual({ ok: false, code: 'path_not_allowed' })
+  })
+
+  test('SQLite sidecar (-wal/-shm/-journal — WAL tươi hơn DB chính) → chặn', () => {
+    expect(policy('cat db/custom.db-wal')).toEqual({ ok: false, code: 'path_not_allowed' })
+    expect(policy('cat db/custom.db-shm')).toEqual({ ok: false, code: 'path_not_allowed' })
+    expect(policy('cat db/custom.db-journal')).toEqual({ ok: false, code: 'path_not_allowed' })
+    expect(policy('cat data.sqlite')).toEqual({ ok: false, code: 'path_not_allowed' })
+    expect(policy('cat data.sqlite3-wal')).toEqual({ ok: false, code: 'path_not_allowed' })
+  })
+
+  test('rev:path qua git show/log cũng bị chặn (đường F4 cũ còn hở DB)', () => {
+    expect(policy('git show HEAD:db/custom.db')).toEqual({ ok: false, code: 'path_not_allowed' })
+    expect(policy('git log HEAD~5:./db/custom.db')).toEqual({
+      ok: false,
+      code: 'path_not_allowed',
+    })
+  })
+
+  test('route thật: cat db/custom.db → 403 path_not_allowed', async () => {
+    const res = await POST(makeRequest({ command: 'cat db/custom.db' }, APP_TOKEN))
+    expect(res.status).toBe(403)
+    const data = (await res.json()) as { code?: string }
+    expect(data.code).toBe('path_not_allowed')
+  })
+
+  test('hồi quy: file thường vẫn đọc được (package.json/src/...)', () => {
+    expect(policy('cat package.json')).toEqual({ ok: true, code: undefined })
+    expect(policy('tail -n 20 package.json')).toEqual({ ok: true, code: undefined })
+    expect(policy('grep -rn foo src')).toEqual({ ok: true, code: undefined })
+    expect(policy('ls -la db')).toEqual({ ok: true, code: undefined })
+  })
+})
+
+describe('r65 (H4) — .git/ internals là vùng cấm (false-positive đã cân)', () => {
+  test('cat .git/config / ls .git / git show HEAD:.git/config → chặn', () => {
+    expect(policy('cat .git/config')).toEqual({ ok: false, code: 'path_not_allowed' })
+    expect(policy('ls .git')).toEqual({ ok: false, code: 'path_not_allowed' })
+    expect(policy('cat .git/COMMIT_EDITMSG')).toEqual({ ok: false, code: 'path_not_allowed' })
+    expect(policy('git show HEAD:.git/config')).toEqual({ ok: false, code: 'path_not_allowed' })
+    // .git/config có thể chứa credential dạng https://token@host trong remote URL
+    expect(policy('cat sub/.git/config')).toEqual({ ok: false, code: 'path_not_allowed' })
+  })
+
+  test('NHẬN DIỆN: .gitignore/.gitattributes KHÔNG match pattern .git', () => {
+    expect(policy('cat .gitignore')).toEqual({ ok: true, code: undefined })
+    expect(policy('cat .gitattributes')).toEqual({ ok: true, code: undefined })
+    expect(policy('git show HEAD:.gitignore')).toEqual({ ok: true, code: undefined })
+  })
+})
+
+describe('r65 (H3) — chunked body bypass bị đóng: stream đọc có cap theo BYTE', () => {
+  test('body stream > byte-cap KHÔNG Content-Length → 413, stream bị hủy SỚM', async () => {
+    const CHUNK = 8 * 1024
+    const TOTAL_CHUNKS = 8 // 64KB > MAX_BODY_BYTES (33KB) — vượt cap giữa chừng
+    let enqueuedBytes = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (enqueuedBytes >= TOTAL_CHUNKS * CHUNK) {
+          controller.close()
+          return
+        }
+        // Nếu route đọc hết stream mới chối → enqueuedBytes = 64KB.
+        controller.enqueue(new Uint8Array(CHUNK).fill(0x61))
+        enqueuedBytes += CHUNK
+      },
+    })
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      'x-tmo-api-token': APP_TOKEN,
+      // KHÔNG set content-length — mô phỏng Transfer-Encoding: chunked
+    }
+    const req = new NextRequest(ENDPOINT, {
+      method: 'POST',
+      headers,
+      body: body as unknown as ReadableStream<Uint8Array>,
+      // duplex cần cho stream body trong undici/Node — cast qua RequestInit
+      ...({ duplex: 'half' } as object),
+    })
+    const res = await POST(req)
+    expect(res.status).toBe(413)
+    // Điểm mấu chốt: route HỦY stream khi vượt cap — không bao giờ kéo hết 64KB.
+    // Cho phép nhỏ trễ do queuing strategy, nhưng phải TƯỜNG ĐỐI dưới tổng.
+    expect(enqueuedBytes).toBeLessThan(TOTAL_CHUNKS * CHUNK)
+  })
+
+  test('body stream NHỎ hơn cap (dạng JSON hợp lệ) → vẫn parse bình thường', async () => {
+    const payload = JSON.stringify({ command: 'pwd' })
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(payload))
+        controller.close()
+      },
+    })
+    const req = new NextRequest(ENDPOINT, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-tmo-api-token': APP_TOKEN },
+      body: body as unknown as ReadableStream<Uint8Array>,
+      ...({ duplex: 'half' } as object),
+    })
+    const res = await POST(req)
+    expect([401, 403]).not.toContain(res.status)
+    const data = (await res.json()) as { source?: string }
+    expect(data.source).toBe('local-exec')
+  })
+
+  test('hồi quy: body string > 8KB ký tự (đường cũ) vẫn 413', async () => {
+    const res = await POST(makeRequest({ command: 'a'.repeat(9000) }, APP_TOKEN))
+    expect(res.status).toBe(413)
+  })
+})
+
+describe('r65 (H5) — git con cô lập khỏi ~/.gitconfig + /etc/gitconfig', () => {
+  test('buildSafeEnv chốt GIT_CONFIG_GLOBAL/SYSTEM=/dev/null + NOSYSTEM', () => {
+    const env = buildSafeEnv()
+    expect(env.GIT_CONFIG_GLOBAL).toBe('/dev/null')
+    expect(env.GIT_CONFIG_SYSTEM).toBe('/dev/null')
+    expect(env.GIT_CONFIG_NOSYSTEM).toBe('1')
+  })
+
+  test('buildSafeEnv KHÔNG lộ secret env (DATABASE_URL/TMO_API_TOKEN vắng mặt)', () => {
+    const env = buildSafeEnv()
+    expect(env.DATABASE_URL).toBeUndefined()
+    expect(env.TMO_API_TOKEN).toBeUndefined()
+    expect(env.OPENCODE_API_KEY).toBeUndefined()
+  })
+
+  test('chạy thật qua route: git status vẫn hoạt động với config bị cô lập', async () => {
+    const res = await POST(makeRequest({ command: 'git status --porcelain' }, APP_TOKEN))
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as { success?: boolean }
+    expect(data.success).toBe(true)
+  })
+})

@@ -47,6 +47,16 @@ export function buildSafeEnv(): Record<string, string> {
     TERM: 'dumb',
     GIT_TERMINAL_PROMPT: '0',
     GIT_PAGER: 'cat',
+    // r65 (audit lượt 7 — H5): HOME vẫn cần cho git tìm repo/metadata, nhưng
+    // điều đó khiến git con ĐỌC ~/.gitconfig + /etc/gitconfig — nếu (hiện tại
+    // hoặc tương lai) ai đó đặt `diff.external`/`core.fsmonitor`… thì mọi
+    // `git diff`/`git status` qua route sẽ chạy BINARY TÙY Ý ngoài allowlist.
+    // Cô lập hoàn toàn: git chỉ dùng cấu hình của repo (.git/config — nội bộ,
+    // không ghi được qua route) → hành vi deterministic, không phụ thuộc
+    // trạng thái máy. (User.name/email không cần cho subcommand read-only.)
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_SYSTEM: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
   }
   for (const key of ENV_ALLOWLIST) {
     const value = process.env[key]

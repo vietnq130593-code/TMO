@@ -356,7 +356,19 @@ export function checkAllowlist(parsed: ParsedCommand): AllowResult {
 // PATH GUARD — chặn traversal + đọc file secret
 // ------------------------------------------------------------
 
-/** Tên file chứa secret — KHÔNG BAO GIỜ được đọc qua route này. */
+/**
+ * Tên file/thư mục chứa secret — KHÔNG BAO GIỜ được đọc qua route này.
+ *
+ * r65 (audit lượt 7 — H2/H4): bổ sung họ database + .git/.
+ * - Trước đây `cat db/custom.db` PASS policy — DB app chứa toàn bộ dữ liệu
+ *   runtime (ChatMessage, AgentSession, AgentMemory, tokensUsage…) nằm ngay
+ *   trong cwd mặc định (project root) → đọc tự do qua đường local-exec
+ *   HỢP LỆ (không cần shell!). Cả đường rev:path `git show HEAD:db/custom.db`.
+ * - `.git/` internals (.git/config có thể chứa credential dạng
+ *   https://token@host trong remote URL; .git/index lộ cấu trúc tree).
+ * - False-positive đã cân: `.gitignore`/`.gitattributes` KHÔNG match
+ *   (pattern yêu cầu `.git` kết thúc hoặc theo sau bởi '/').
+ */
 const SECRET_PATTERNS: RegExp[] = [
   /(^|\/)\.env(\..*)?$/i,
   /(^|\/)\.tmo-api-token$/i,
@@ -367,6 +379,11 @@ const SECRET_PATTERNS: RegExp[] = [
   /(^|\/)\.gnupg(\/|$)/i,
   /\.(pem|key|p12|pfx|keystore)$/i,
   /(^|\/)(credentials|secrets?)\.(json|ya?ml|toml|ini)$/i,
+  // r65 (H2): database file mọi biến thể (kể cả -wal/-shm/-journal sidecar
+  // của SQLite — WAL thậm chí chứa dữ liệu tươi hơn DB chính).
+  /\.(db|db3|sqlite|sqlite3)(-(wal|shm|journal))?$/i,
+  // r65 (H4): git internals — KHÔNG match .gitignore/.gitattributes.
+  /(^|\/)\.git(\/|$)/i,
 ]
 
 export function isSecretPath(value: string): boolean {
