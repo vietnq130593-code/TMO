@@ -1,0 +1,46 @@
+🔍 NHIỆM VỤ QUẢN TRỊ #18 — KHẮC PHỤC BẢO MẬT P0/P1/P2 (triển khai đề xuất từ sổ rủi ro mission đánh giá 2026-10-08)
+
+BỐI CẢNH: Mission đánh giá bảo mật trước đó đã lập sổ rủi ro + đề xuất khắc phục kèm nghiệm thu từng mục. Nhiệm vụ này TRIỂN KHAI khắc phục THẬT trong code TMO (repo /home/z/tmo-app, agent đang chạy chính trong app này). LƯU Ý KỶ LUẬT SỐ LIỆU: các con số trong báo cáo gốc (202 route / 11 raw SQL / 17 cors_csrf / 3 form_input) là kiểm kê tĩnh CHƯA kiểm chứng — phải khảo sát lại bằng lệnh máy và dùng số liệu của chính mình.
+
+PHẠM VI:
+- ĐƯỢC: sửa file trong src/ + prisma/ (khi cần); thêm test vào bộ test hiện có; ghi artifact (ma trận, báo cáo) vào scratch/; đọc DB.
+- NGHIÊM CẤM: restart/dừng PM2 (app đang chạy, hot-reload tự nạp — sửa lỗi thì sửa ở lần sửa kế tiếp); sửa package.json / bun.lock / cài gỡ dependency (toolchain do operator quản — vừa nâng bun 1.4.2 + vá undici 7.30.0 xong); sửa .env (chỉ BÁO CÁO các thay đổi .env cần thiết); ghi/xóa dữ liệu DB nghiệp vụ.
+- SAU MỖI thay đổi quan trọng chạy `bunx tsc --noEmit`; TRƯỚC khi chốt chạy `bun scripts/quality-gate.mjs` (TUYỆT ĐỐI không chạy `bun test` trực tiếp).
+
+7 HẠNG MỤC — ưu tiên theo thứ tự; một mục ĐẠT khi nghiệm thu của mục đó thoả, ghi kèm bằng chứng file:dòng:
+
+P0-1 KHOANH VÙNG ROUTE THỰC THI SHELL (src/app/api/opencode/execute/route.ts + helper executeBashCommand):
+đọc toàn bộ route + helper; xác định mọi nguồn command/argument; bắt buộc authentication + authorization; thay command tùy ý bằng allowlist hành động + tham số được kiểm soát (không truyền chuỗi người dùng thẳng vào shell); giới hạn thời gian chạy, kích thước output, thư mục làm việc, biến môi trường; log không ghi secret.
+Nghiệm thu: request không có quyền bị từ chối; lệnh ngoài allowlist không thể thực thi; ký tự shell injection không thay đổi hành vi; timeout + giới hạn output hoạt động; có test tự động cho các trường hợp này.
+
+P0-2 MA TRẬN AUTHENTICATION/AUTHORIZATION TOÀN BỘ API:
+khảo sát thực tế mọi route (src/app/api/**), phân loại public / user / admin / internal; xác định route nằm ngoài matcher của src/proxy.ts; bổ sung guard cục bộ cho route nhạy cảm; bảo vệ đặc biệt /api/auth/setup (không để endpoint cấp cookie hoạt động như đường bootstrap không giới hạn); kiểm tra vòng đời cookie, thu hồi phiên, đăng xuất.
+Nghiệm thu: có artifact ma trận đầy đủ mọi route (ghi vào scratch/); mỗi route nhạy cảm có quyết định allow/deny rõ ràng; request không có phiên trả 401; request sai quyền trả 403; không còn route quản trị nằm ngoài lớp bảo vệ.
+
+P0-3 RÀ SOÁT TOÀN BỘ VỊ TRÍ RAW SQL:
+tìm lại bằng grep thật mọi vị trí raw SQL (không tin con số cũ); xác định file:dòng từng vị trí + có nhận input hay không; thay query không an toàn bằng query có tham số (không nối tên bảng/cột/điều kiện/giá trị từ input vào SQL); endpoint knowledge: kiểm tra whitelist chặn thật INSERT/UPDATE/DELETE/DROP; áp dụng giới hạn số dòng + logging không nhạy cảm.
+Nghiệm thu: không còn input không tin cậy đi vào câu SQL không tham số; có test âm tính SQL injection bị từ chối; endpoint knowledge chỉ trả kết quả đọc trong phạm vi cho phép.
+
+P1-1 KIỂM ĐỊNH CORS, CSRF VÀ RATE LIMITING:
+xem lại mọi dấu hiệu CORS/CSRF, xác định chính sách origin cụ thể (không wildcard cùng credential); thêm CSRF protection cho route dùng cookie + thay đổi trạng thái; giới hạn tần suất riêng cho execute shell, auth setup, query knowledge, endpoint tốn tài nguyên.
+Nghiệm thu: origin ngoài allowlist bị từ chối; request thay đổi trạng thái không có CSRF token bị từ chối; rate limit trả lỗi có kiểm soát (có test).
+
+P1-2 RÀ SOÁT UPLOAD + THAO TÁC FILESYSTEM:
+xác định mọi điểm form_input + nơi dùng path read/write; chuẩn hóa đường dẫn, chỉ cho phép truy cập trong thư mục được chỉ định; chặn .., đường dẫn tuyệt đối, symlink escape, path encoding bất thường; giới hạn kích thước file, số file, MIME type.
+Nghiệm thu: payload path traversal + symlink bị từ chối (có test); mọi file đọc/ghi nằm trong workspace được phép.
+
+P1-3 KIỂM TRA SECRET, DEPENDENCY VÀ CẤU HÌNH TRIỂN KHAI (CHỈ ĐỌC — không sửa gì):
+chạy secret scan có redact (không in giá trị secret); chạy `bun audit` xem dependency; đọc cấu hình Next.js + reverse proxy (Caddyfile nếu thấy); xác minh ignoreBuildErrors, security headers, cookie flags, debug mode, biến môi trường nhạy cảm; kiểm tra endpoint debug/không dùng.
+Nghiệm thu: báo cáo có kết quả machine-verifiable cho từng hạng mục; không còn secret trong source hoặc log (nếu phát hiện, ghi rõ vị trí + cách xử lý ĐỀ XUẤT — không tự sửa .env).
+
+P2-1 KIỂM ĐỊNH LẠI + KẾT LUẬN CÓ BẰNG CHỨNG:
+sau mọi thay đổi: `bunx tsc --noEmit` sạch, `bun scripts/quality-gate.mjs` PASS; kiểm kê lại số route/shell match/raw SQL match/auth coverage bằng lệnh máy; với mỗi phát hiện còn tồn tại ghi severity + file:dòng + điều kiện tái lập.
+Nghiệm thu: mọi tuyên bố "đã xử lý" đều có bằng chứng chạy thật; kết luận cuối chỉ xếp hạng sau khi P0 đã kiểm tra xong.
+
+NGHIỆM THU TỔNG THỂ (điều kiện ĐẠT của toàn nhiệm vụ — trọng tài đối chiếu TỪNG điều, không đòi thêm ngoài danh sách này):
+1. Cả 3 mục P0 đạt nghiệm thu từng mục (bắt buộc).
+2. P1/P2 xử lý theo thứ tự ưu tiên; mục chưa hoàn thành chỉ cần ghi rõ trạng thái + lý do + phần đã làm — khai báo trung thực KHÔNG làm nhiệm vụ bị phán chưa đạt.
+3. Báo cáo cuối có bảng 7 dòng: mục — trạng thái — bằng chứng file:dòng — test kèm theo.
+4. `bun scripts/quality-gate.mjs` PASS với code sau thay đổi.
+
+HIỆU QUẢ: kỳ vọng ≤1.5M tokens cho toàn nhiệm vụ; làm đúng-triệt để P0 quan trọng hơn chạm hết 7 mục; được phép delegate_task cho SENTINEL (khảo sát) / ALISTA (kiểm kê) khi cần diện rộng.
