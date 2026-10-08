@@ -189,6 +189,7 @@ function extractFencedFileWrites(output: string): { calls: ParsedToolCall[]; cle
  */
 const KNOWN_TOOL_NAMES = ['opencode', 'knowledge_search', 'knowledge_graph', 'knowledge_write', 'tavily', 'serper', 'jina', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'get_diagnostics', 'decompose_task', 'create_task', 'update_task', 'get_plan', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'hypothesis_write', 'list_skills', 'read_skill', 'mcp_list_servers', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'browser_screenshot', 'lint', 'type_check', 'test_coverage', 'db_query', 'mcp_call', 'exit_plan_mode', 'cron', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'manage_tools',
   'data_map', // r67 (F8): tra cứu bản đồ dữ liệu (đọc thuần — an toàn)
+  'lessons_search', // r71 (BUG2-022): tra bài học/episode/trí nhớ (đọc thuần — an toàn)
   // FIX 2026-09-15 #7 (P4 — audit Team Code): bổ sung tool mới thiếu trong
   // danh sách regex (mirror workflow-engine.ts) — agent phát tên_tool({...})
   // trực tiếp giờ được parse đúng thay vì bị bỏ lỡ → tự bịa output.
@@ -954,6 +955,7 @@ const SALVAGE_SAFE_TOOLS = new Set([
   'list_skills', 'read_skill', 'mcp_list_servers', 'list_custom_tools',
   'get_app_runtime_status', 'knowledge_search', 'knowledge_graph',
   'data_map', // r67 (F8): đọc thuần từ registry hardcode — idempotent an toàn
+  'lessons_search', // r71 (BUG2-022): đọc thuần 3 kho Prisma — idempotent an toàn
 ])
 
 /** Vá JSON object bị đứt giữa chừng: bỏ string/phần tử dở ở cuối + đóng ngoặc. */

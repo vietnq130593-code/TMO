@@ -77,7 +77,7 @@ export const DATA_REGIONS: DataRegionDef[] = [
     store: 'qdrant',
     location: 'Qdrant collection agent_memory (vector) + Prisma AgentMemory (payload gốc)',
     purpose: 'Trí nhớ dài hạn THEO TỪNG AGENT: insight/bài học/kết quả các run trước, xếp độ liên quan ngữ nghĩa',
-    readPath: 'HARNESS TỰ NẠP đầu mỗi run mới (khối 🧠 TRÍ NHỚ DÀI HẠN trong context)',
+    readPath: 'HARNESS TỰ NẠP đầu mỗi run mới (khối 🧠 TRÍ NHỚ DÀI HẠN trong context) + tool lessons_search({query}) tra cứu on-demand giữa run (r71)',
     writePath: 'HARNESS TỰ GHI cuối mỗi run (storeMemory) — agent KHÔNG cần (và không thể) ghi tay',
     readWhen: 'Tự động — dùng làm nền để không lặp việc run trước đã làm',
     writeWhen: 'Tự động cuối run',
@@ -89,7 +89,7 @@ export const DATA_REGIONS: DataRegionDef[] = [
     location: 'Qdrant: theopus_documents (payload) + theopus_chunks (vector 2048-dim embedding)',
     purpose: 'Tri thức tài liệu người dùng nạp vào hệ thống (KB): đoạn văn bản đã chia chunk + embedding cho tìm kiếm ngữ nghĩa',
     readPath: 'tool knowledge_search ({query}) — semantic + hybrid (BM25/MMR, kb-routing)',
-    writePath: 'tool knowledge_write + pipeline ingestion (upload → process → entities → reconcile)',
+    writePath: 'tool knowledge_write (MỌI agents thực thi — r71 bỏ gate chỉ-CATALYST) + pipeline ingestion (upload → process → entities → reconcile)',
     readWhen: 'Cần tra cứu nội dung tài liệu/tri thức đã nạp (khi làm việc liên quan kiến thức người dùng đã lưu)',
     writeWhen: 'Có tri thức/tài liệu mới cần đưa vào KB cho các run sau dùng lại',
     keywords: ['tri thức', 'kiến thức', 'tài liệu', 'knowledge', 'kb', 'văn bản nạp', 'tìm ngữ nghĩa', 'semantic', 'tìm kiếm tài liệu'],
@@ -100,17 +100,17 @@ export const DATA_REGIONS: DataRegionDef[] = [
     location: 'Neo4J: node Document/Concept + quan hệ CONTAINS/RELATED (mirror Prisma LocalEntity/LocalRelationship)',
     purpose: 'Đồ thị tri thức: thực thể (entity/concept) + quan hệ giữa chúng — bản đồ liên kết thay vì chỉ tìm tương đồng',
     readPath: 'tool knowledge_graph ({query}) — duyệt node + quan hệ lân cận',
-    writePath: 'tool knowledge_write + ingestion/reconcile (entity-resolver chuẩn hoá thực thể trùng)',
+    writePath: 'tool knowledge_write (MỌI agents — r71) + ingestion/reconcile (entity-resolver chuẩn hoá thực thể trùng) + harness TỰ ghi DelegationLesson cuối mỗi delegation có tín hiệu đáng học (r71)',
     readWhen: 'Cần biết các thực thể LIÊN QUAN đến nhau thế nào (quan hệ thay vì tương đồng từ khoá)',
     writeWhen: 'Có thực thể/quan hệ mới cần ghi nhận vào đồ thị tri thức',
-    keywords: ['đồ thị', 'graph', 'thực thể', 'entity', 'quan hệ', 'relationship', 'khái niệm', 'concept', 'liên kết', 'bản đồ tri thức'],
+    keywords: ['đồ thị', 'graph', 'thực thể', 'entity', 'quan hệ', 'relationship', 'khái niệm', 'concept', 'liên kết', 'bản đồ tri thức', 'bài học', 'lesson', 'ghi kb'],
   },
   {
     id: 'episodic_memory',
     store: 'neo4j',
     location: 'Neo4J: Episode/Action/ErrorOccurrence/Lesson/Session + CONTAINS (mirror Prisma EpisodeRecord/LessonRecord)',
     purpose: 'Trí nhớ sự kiện theo DÒNG THỜI GIAN: run nào làm gì, gặp lỗi gì, học được bài học gì (episodic + preact retrieval)',
-    readPath: 'HARNESS preact tự truy hồi đầu run (agent-brain); UI /api/episodic/* xem lại',
+    readPath: 'HARNESS preact tự truy hồi đầu run (agent-brain); tool lessons_search({query}) tra cứu on-demand giữa run (r71); UI /api/episodic/* xem lại',
     writePath: 'Recorder TỰ GHI theo mốc run (episode/lesson) — agent không ghi tay',
     readWhen: 'Tự động — bối cảnh "chuyện gì đã xảy ra các run trước" theo thời gian',
     writeWhen: 'Tự động theo mốc run',
@@ -335,16 +335,28 @@ export function buildDataMapBlock(query: string, maxChars = 1600): string {
   }
   block += `Tra bản đồ đầy đủ bất cứ lúc nào: tool data_map({query: "mô tả việc"})`
   if (block.length > maxChars) {
-    // Cắt dần vùng phụ (giữ vùng điểm cao nhất) đến khi vừa ngân sách
-    const keep = Math.max(1, Math.floor((maxChars - 400) / 260))
+    // Cắt dần vùng phụ (giữ vùng điểm cao nhất) đến khi vừa ngân sách.
+    // r71 (fix cap logic — test r67 bắt hồi quy): cách tính keep cũ KHÔNG
+    // tái kiểm tra sau khi ghép lại — nhiều vùng khớp (nhờ keyword mới
+    // 'bài học'/'lesson' ở knowledge_graph) vẫn vượt cap. Giờ: vòng cắt
+    // THẬT SỰ giảm dần số vùng cho tới khi tổng ≤ maxChars — đảm bảo
+    // hợp đồng "cap ~1600 chars" luôn đúng với MỌI tổ hợp khớp.
     const { reads: r2, writes: w2 } = routeDataMap(query)
-    const rTop = r2.slice(0, keep)
-    const wTop = w2.slice(0, Math.max(1, keep - 1 > 0 ? keep - 1 : 1))
-    block =
-      `\n\n🗺️ BẢN ĐỒ DỮ LIỆU liên quan mục tiêu này (harness định tuyến tự động — đọc/ghi ĐÚNG VÙNG, không đoán mò):\n` +
-      (rTop.length ? `ĐỌC khi cần:\n${rTop.map(x => fmtRegion(x.region)).join('\n')}\n` : '') +
-      (wTop.length ? `GHI kết quả đúng vùng:\n${wTop.map(x => fmtRegion(x.region)).join('\n')}\n` : '') +
-      `Tra bản đồ đầy đủ bất cứ lúc nào: tool data_map({query: "mô tả việc"})`
+    let keepR = r2.length
+    let keepW = w2.length
+    for (let guard = 0; guard < 20 && block.length > maxChars; guard++) {
+      // Ưu tiên giữ read (nền để agent tra) — cắt write trước, rồi cắt read
+      if (keepW > 1) keepW--
+      else if (keepR > 1) keepR--
+      else if (keepW > 0) keepW--
+      else if (keepR > 0) keepR--
+      else break
+      block =
+        `\n\n🗺️ BẢN ĐỒ DỮ LIỆU liên quan mục tiêu này (harness định tuyến tự động — đọc/ghi ĐÚNG VÙNG, không đoán mò):\n` +
+        (keepR > 0 ? `ĐỌC khi cần:\n${r2.slice(0, keepR).map(x => fmtRegion(x.region)).join('\n')}\n` : '') +
+        (keepW > 0 ? `GHI kết quả đúng vùng:\n${w2.slice(0, keepW).map(x => fmtRegion(x.region)).join('\n')}\n` : '') +
+        `Tra bản đồ đầy đủ bất cứ lúc nào: tool data_map({query: "mô tả việc"})`
+    }
   }
   return block
 }

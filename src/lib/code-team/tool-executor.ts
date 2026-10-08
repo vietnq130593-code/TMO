@@ -577,7 +577,7 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     type: 'function',
     function: {
       name: 'knowledge_write',
-      description: 'Ghi entity hoặc relationship mới vào Knowledge Base. Dùng bởi G3 (CATALYST) để ghi self-evolving lessons. Entity sẽ được sync lên Neo4j sau.',
+      description: 'Ghi entity hoặc relationship mới vào Knowledge Base (KB đồ thị — sync Neo4j sau). MỌI agents thực thi đều được ghi — ghi NGAY trong quá trình làm việc khi rút ra bài học/pattern/tri thức đáng nhớ (cách giải lỗi, quyết định kiến trúc) để agents sau tra cứu được.',
       parameters: {
         type: 'object',
         properties: {
@@ -1442,6 +1442,26 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
           query: { type: 'string', description: 'Mô tả việc/tác vụ đang xử lý (vd "ghi bài học run này", "tìm tài liệu tri thức đã nạp")' },
         },
         required: [],
+      },
+    },
+  },
+  // ===== r71 (BUG2-022 — user directive "agents khai thác DB triệt để"):
+  // tra cứu BÀI HỌC/EPISODE/TRÍ NHỚ on-demand giữa run — bộ não DB có sẵn
+  // (LessonRecord/EpisodeRecord/AgentMemory) nhưng trước đây không có đường
+  // truy vấn chủ động nào (chỉ preact nạp đầu run). =====
+  lessons_search: {
+    type: 'function',
+    function: {
+      name: 'lessons_search',
+      description: 'Tra cứu BÀI HỌC đã học + EPISODE quá khứ + TRÍ NHỚ agents (3 kho bộ não DB) THEO TỪ KHOÁ — dùng giữa run khi gặp vấn đề muốn đối chiếu "lỗi/bài học tương tự đã gặp chưa" trước khi tự giải quyết, hoặc cần nền tri thức từ run trước. Trả lessons (confidence × timesValidated) + episodes (outcome/stopReason) + memories (importance). Mặc định quét MỌI agent (học chéo); truyền agent để lọc 1 agent.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Từ khoá mô tả vấn đề/bài học (vd "429 rate limit", "prisma migrate", "sandbox reset mất key")' },
+          agent: { type: 'string', description: 'Lọc theo tên agent (vd "SENTINEL", "Omega") — bỏ trống để quét mọi agent' },
+          limit: { type: 'number', description: 'Số kết quả tối đa mỗi kho (default 5, max 15)' },
+        },
+        required: ['query'],
       },
     },
   },
@@ -3228,6 +3248,26 @@ export async function executeTool(
           result = {
             success: false,
             error: `data_map lỗi: ${err instanceof Error ? err.message : String(err)}`,
+          }
+        }
+        break
+      }
+      // ===== r71 (BUG2-022) — tra cứu bài học/episode/trí nhớ on-demand =====
+      case 'lessons_search': {
+        // Đọc thuần 3 kho (LessonRecord/EpisodeRecord/AgentMemory — Prisma
+        // keyword contains, deterministic). Fail-open có cấu trúc.
+        try {
+          const { lessonsSearch } = await import('@/lib/lessons-search')
+          const a = args as { query?: unknown; agent?: unknown; limit?: unknown }
+          result = await lessonsSearch({
+            query: typeof a.query === 'string' ? a.query.slice(0, 300) : '',
+            agent: typeof a.agent === 'string' ? a.agent.slice(0, 80) : undefined,
+            limit: typeof a.limit === 'number' ? a.limit : undefined,
+          })
+        } catch (err) {
+          result = {
+            success: false,
+            error: `lessons_search lỗi: ${err instanceof Error ? err.message : String(err)}`,
           }
         }
         break
@@ -5565,7 +5605,9 @@ async function executeKnowledgeGraph(args: Record<string, unknown>): Promise<unk
 /**
  * Knowledge Write — Write entity/relationship to KB
  * Uses knowledge-bridge which writes to SQLite buffer (syncs to Neo4j later).
- * Only G3 (CATALYST) has this permission.
+ * r71 (BUG2-019): mở cho MỌI agents thực thi (trước đây chỉ CATALYST+Omega —
+ * mission không gọi CATALYST thì 0 bài học ghi được trong quá trình thực thi).
+ * Whitelist từng agent (defs) + readOnly delegation vẫn strip (SUBAGENT_WRITE_TOOLS).
  */
 async function executeKnowledgeWrite(args: Record<string, unknown>): Promise<unknown> {
   const entityName = args.entityName as string

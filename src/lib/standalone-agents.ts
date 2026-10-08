@@ -559,6 +559,12 @@ LEARNING & MEMORY + ĐỊNH DẠNG BÁO CÁO
       'exit_plan_mode',
       'cron',
       'propose_automation',
+      // r71 (BUG2-021/022 — user directive "agents khai thác DB triệt để"):
+      // data_map (bản đồ vùng dữ liệu — sửa hồi quy r67: tool có nhưng không
+      // whitelist nên bị chặn) + lessons_search (tra Lesson/Episode/
+      // AgentMemory on-demand giữa run). Omega có sẵn knowledge_write.
+      'data_map',
+      'lessons_search',
     ],
   },
 
@@ -636,6 +642,12 @@ LEARNING & MEMORY + ĐỊNH DẠNG BÁO CÁO
       // Tổng hợp đề xuất:
       'summarize',
       'synthesize',
+      // r71 (BUG2-019/021/022 — user directive "agents khai thác DB triệt để"):
+      // knowledge_write (ghi tri thức bảo trì/lesson vào KB — bỏ gate CATALYST)
+      // + data_map (bản đồ vùng dữ liệu) + lessons_search (tra cứu on-demand).
+      'knowledge_write',
+      'data_map',
+      'lessons_search',
     ],
   },
   {
@@ -667,7 +679,9 @@ LEARNING & MEMORY + ĐỊNH DẠNG BÁO CÁO
     // Toolset = Task 47 RAVAGE (builder tự chủ + thiên security). ĐƯỢC PERSIST
     // vào DB (tools JSON — pattern Agent Factory) để dispatch_agent của Omega
     // resolve đúng toolset (không rơi vào DEFAULT_SUBAGENT_TOOLS).
-    tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_status', 'git_diff', 'git_log', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'browser_screenshot', 'mcp_call', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem', 'context_recall', 'list_skills', 'read_skill', 'propose_automation'],
+    tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_status', 'git_diff', 'git_log', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'browser_screenshot', 'mcp_call', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem', 'context_recall', 'list_skills', 'read_skill', 'propose_automation',
+      // r71 (BUG2-019/021/022) — xem note Omega phía trên.
+      'knowledge_write', 'data_map', 'lessons_search'],
   },
 ]
 
@@ -1013,6 +1027,27 @@ async function _doStandaloneSeed(): Promise<boolean> {
             console.log('[Standalone] Linh Sickyx tools JSON đã bổ sung (dispatch_agent resolve đúng toolset — Task 48)')
           } catch (syncErr) {
             console.warn('[Standalone] Linh Sickyx tools sync thất bại (không chặn):', syncErr)
+          }
+        }
+        // r71 (BUG2-019/021/022) — ADD-IF-MISSING cho row CÓ whitelist JSON
+        // (Linh Sickyx persist từ Task 48): def bổ sung tool mới (knowledge_write/
+        // data_map/lessons_search) mà row chưa có → UNION thêm (KHÔNG xóa tool
+        // user đã cấu hình). Mirror Task-42 browser_screenshot sync của Code Team.
+        if (def.name === 'Linh Sickyx' && def.tools.length > 0 && existing.tools) {
+          try {
+            const parsed = JSON.parse(existing.tools)
+            if (Array.isArray(parsed)) {
+              const missing = def.tools.filter(t => !parsed.includes(t))
+              if (missing.length > 0) {
+                await db.agentProfile.update({
+                  where: { id: existing.id },
+                  data: { tools: JSON.stringify([...parsed, ...missing]) },
+                })
+                console.log(`[Standalone] r71 sync: Linh Sickyx +${missing.length} tool DB (${missing.join(', ')}) — khai thác DB triệt để (BUG2-019/021/022)`)
+              }
+            }
+          } catch (syncErr) {
+            console.warn('[Standalone] r71 Linh Sickyx tool-union sync thất bại (không chặn):', syncErr)
           }
         }
 

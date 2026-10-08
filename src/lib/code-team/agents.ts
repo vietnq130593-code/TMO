@@ -94,7 +94,13 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
       // propose_automation — Omega quyết định forward vào Self-direction chờ
       // Mr. Architect / agent được ủy quyền phê duyệt. (MEGATRON có tool `cron` nhưng
       // đó là mini-service riêng flag-gated; propose_automation là luồng chuẩn.)
-      'propose_automation'],
+      'propose_automation',
+      // r71 (BUG2-019/021/022 — user directive "agents khai thác DB triệt để"):
+      // knowledge_write ghi bài học/tri thức vào KB đồ thị (bỏ gate chỉ-CATALYST
+      // — trước đây mission không gọi CATALYST thì 0 bài học ghi được) + data_map
+      // (bản đồ vùng dữ liệu — sửa hồi quy r67: tool có nhưng không whitelist)
+      // + lessons_search (tra Lesson/Episode/AgentMemory on-demand giữa run).
+      'knowledge_write', 'data_map', 'lessons_search'],
   },
   {
     name: 'SHOCWAVE',
@@ -122,7 +128,9 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
       // SKILL ACCESS (fix 2026-09-12) — xem note MEGATRON phía trên.
       'list_skills', 'read_skill',
       // AUTOMATION PROPOSAL (2026-09-13) — xem note MEGATRON phía trên.
-      'propose_automation'],
+      'propose_automation',
+      // r71 (BUG2-019/021/022) — xem note MEGATRON phía trên.
+      'knowledge_write', 'data_map', 'lessons_search'],
   },
   {
     name: 'RAMPAGE',
@@ -145,7 +153,9 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
       // SKILL ACCESS (fix 2026-09-12) — xem note MEGATRON phía trên.
       'list_skills', 'read_skill',
       // AUTOMATION PROPOSAL (2026-09-13) — xem note MEGATRON phía trên.
-      'propose_automation'],
+      'propose_automation',
+      // r71 (BUG2-019/021/022) — xem note MEGATRON phía trên.
+      'knowledge_write', 'data_map', 'lessons_search'],
   },
   {
     name: 'SENTINEL',
@@ -180,7 +190,9 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
       // SKILL ACCESS (fix 2026-09-12) — xem note MEGATRON phía trên.
       'list_skills', 'read_skill',
       // AUTOMATION PROPOSAL (2026-09-13) — xem note MEGATRON phía trên.
-      'propose_automation'],
+      'propose_automation',
+      // r71 (BUG2-019/021/022) — xem note MEGATRON phía trên.
+      'knowledge_write', 'data_map', 'lessons_search'],
   },
   {
     name: 'CATALYST',
@@ -203,7 +215,9 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
       // SKILL ACCESS (fix 2026-09-12) — xem note MEGATRON phía trên.
       'list_skills', 'read_skill',
       // AUTOMATION PROPOSAL (2026-09-13) — xem note MEGATRON phía trên.
-      'propose_automation'],
+      'propose_automation',
+      // r71 (BUG2-021/022 — xem note MEGATRON phía trên (CATALYST có sẵn knowledge_write).
+      'data_map', 'lessons_search'],
   },
   {
     // TASK 43 (user audit "launch full-stack-developer subagent") — FORGE là
@@ -230,7 +244,9 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     // Toolset = RAMPAGE (builder) + mở rộng full-stack: knowledge_graph, summarize/
     // synthesize (tổng hợp spec), db_query (Prisma), open_workspace + verify_and_push
     // (clone-first workflow), git đầy đủ. KHÔNG có delegate/dispatch (depth guard).
-    tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'git_status', 'git_diff', 'git_log', 'git_branch', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'browser_screenshot', 'mcp_call', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'open_workspace', 'verify_and_push', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem', 'context_recall', 'list_skills', 'read_skill', 'propose_automation'],
+    tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'git_status', 'git_diff', 'git_log', 'git_branch', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'browser_screenshot', 'mcp_call', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'open_workspace', 'verify_and_push', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem', 'context_recall', 'list_skills', 'read_skill', 'propose_automation',
+      // r71 (BUG2-019/021/022) — xem note MEGATRON phía trên.
+      'knowledge_write', 'data_map', 'lessons_search'],
   },
 ]
 

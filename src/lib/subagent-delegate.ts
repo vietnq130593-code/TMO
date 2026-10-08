@@ -256,6 +256,11 @@ export const DEFAULT_SUBAGENT_TOOLS = [
   'tavily', 'serper', 'jina', 'knowledge_search', 'knowledge_graph',
   'todo_write', 'todo_read', 'list_skills', 'read_skill',
   'create_custom_tool', 'list_custom_tools', 'escalate_problem',
+  // r71 (BUG2-019/021/022 — user directive "agents khai thác DB triệt để"):
+  // knowledge_write (ghi bài học KB — bỏ gate CATALYST; readOnly delegation
+  // vẫn strip đúng qua SUBAGENT_WRITE_TOOLS) + data_map (bản đồ vùng dữ liệu
+  // — sửa hồi quy r67) + lessons_search (tra bài học/episode on-demand).
+  'knowledge_write', 'data_map', 'lessons_search',
 ]
 
 /** Danh sách agent có thể delegate (cho tool description + validate)
@@ -1803,6 +1808,36 @@ async function runSubAgentForProfileInner(params: {
       episodeRecorded = true
     } catch { /* fail-open — không được phép làm hỏng delegation */ }
 
+    // ━━ r71 (BUG2-019) — HARVEST BÀI HỌC DELEGATION → KB ĐỒ THỊ (hardcode) ━━
+    // KHÔNG phụ thuộc CATALYST hay thiện chí gọi knowledge_write của agent:
+    // delegation có tín hiệu đáng học (lỗi tool / kết thúc bất thường / báo cáo
+    // có mục bài học) → harness TỰ ghi DelegationLesson entity + relationship
+    // vào KB (LocalEntity → sync Neo4j). Fail-open tuyệt đối — không đụng
+    // kết quả trả về parent. Xem harvestDelegationLessonToKB phía dưới.
+    try {
+      const { parseToolResultLogEntry } = await import('@/lib/episodic-memory/agent-brain')
+      const wrapToolFailures = toolResultLog
+        .map(parseToolResultLogEntry)
+        .filter((e): e is { tool: string; success: boolean; text: string } => e !== null && !e.success)
+        .length
+      if (delegationLessonWorthy({ toolFailures: wrapToolFailures, endedBy: state.endedBy, report: outcome.report || '' })) {
+        await harvestDelegationLessonToKB({
+          agentName: profile.name,
+          parentAgentName,
+          task,
+          endedBy: state.endedBy,
+          evaluationPass: outcome.evaluation ? outcome.evaluation.pass : null,
+          toolFailures: wrapToolFailures,
+          toolCalls: toolCallCount,
+          iterations,
+          report: outcome.report || '',
+        })
+        console.log(`[SubAgent] r71 harvest: DelegationLesson "${profile.name}" (${state.endedBy}, ${wrapToolFailures} lỗi tool) đã ghi KB đồ thị`)
+      }
+    } catch (harvestErr) {
+      console.warn(`[SubAgent] r71 harvest DelegationLesson thất bại (fail-open):`, harvestErr instanceof Error ? harvestErr.message : String(harvestErr))
+    }
+
     return outcome
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err)
@@ -1842,6 +1877,77 @@ async function runSubAgentForProfileInner(params: {
       error: errorMessage,
     }
   }
+}
+
+// ==================== r71 (BUG2-019) — HARVEST BÀI HỌC DELEGATION → KB ĐỒ THỊ ====================
+// User directive r71: "nếu không gọi CATALYST thì không agent nào ghi lại bài
+// học trong quá trình thực thi — lỗ hổng lớn liên quan database". Trước r71
+// knowledge_write bị gate chỉ CATALYST+Omega → 4 mission quan sát (r67-r70)
+// KHÔNG bao giờ dispatch CATALYST → 0 bài học ghi vào KB đồ thị trong khi
+// thực thi. Lớp episodic (Episode/Lesson từ LỖI tool) có tự ghi — nhưng tri
+// thức dạng entity/quan hệ (đã làm gì, kết cục, mối liên agent→nhiệm vụ) thì
+// KHÔNG có đường ghi nào. Giờ: tại delegation wrap-up (SAU khi sub-agent kết
+// thúc — không phụ thuộc thiện chí gọi tool của agent), harness TỰ ghi 1
+// DelegationLesson entity vào KB (LocalEntity → sync Neo4j) + relationship
+// agent -[PERFORMED]-> nhiệm vụ. Tín hiệu "đáng học" (chống spam KB):
+// (1) có lỗi tool, (2) kết thúc bất thường (timeout/error/stall/token_budget/
+// iteration_limit), hoặc (3) báo cáo có mục bài học. Fail-open tuyệt đối.
+export function delegationLessonWorthy(args: {
+  toolFailures: number
+  endedBy: string
+  report: string
+}): boolean {
+  if (args.toolFailures > 0) return true
+  if (args.endedBy !== 'concluded' && args.endedBy !== 'cancelled') return true
+  return /bài\s*học|lesson|kết\s+luận|nguyên\s+nhân/i.test(args.report || '')
+}
+
+/** Rút gọn báo cáo wrap-up thành digest cho KB — ưu tiên mục "Bài học" nếu
+ * sub-agent viết theo format, không thì lấy đầu báo cáo. Cap 700 chars. */
+export function digestDelegationReport(report: string): string {
+  const text = (report || '').trim()
+  if (!text) return '(không có báo cáo)'
+  const lessonMatch = text.match(/(?:^|\n)[^\S\n]*(?:##?\s*)?(?:bài\s*học|lessons?)[^\n]*\n([\s\S]{40,900})/i)
+  const picked = lessonMatch ? lessonMatch[1].trim() : text
+  return picked.length > 700 ? `${picked.slice(0, 660)}…[cắt — ${text.length} chars gốc]` : picked
+}
+
+async function harvestDelegationLessonToKB(args: {
+  agentName: string
+  parentAgentName: string
+  task: string
+  endedBy: string
+  evaluationPass: boolean | null
+  toolFailures: number
+  toolCalls: number
+  iterations: number
+  report: string
+}): Promise<void> {
+  const { agentWriteEntity, agentWriteRelationship } = await import('@/lib/knowledge-bridge')
+  const now = new Date()
+  const stamp = `${now.toISOString().slice(0, 10)} ${now.toISOString().slice(11, 16)}Z`
+  const slug = args.task.replace(/\s+/g, ' ').trim().slice(0, 70)
+  const entityName = `DelegationLesson ${args.agentName} ${stamp}: ${slug}`.slice(0, 140)
+  const verdictText = args.evaluationPass === null ? 'trọng tài chưa chấm' : args.evaluationPass ? 'trọng tài ĐẠT' : 'trọng tài CHƯA ĐẠT'
+  const description = [
+    `[${args.agentName} ← ${args.parentAgentName}] Kết thúc: ${args.endedBy} · ${verdictText}`,
+    `Nhiệm vụ: ${args.task.replace(/\s+/g, ' ').slice(0, 300)}`,
+    `Số liệu: ${args.iterations} vòng · ${args.toolCalls} tool calls · ${args.toolFailures} lỗi tool`,
+    `Trích báo cáo: ${digestDelegationReport(args.report)}`,
+  ].join('\n').slice(0, 1200)
+  await agentWriteEntity({
+    entityName,
+    entityType: 'DelegationLesson',
+    description,
+    domain: 'vận hành',
+    properties: { agent: args.agentName, endedBy: args.endedBy, toolFailures: args.toolFailures, harvestedBy: 'r71-delegation-wrapup' },
+  })
+  await agentWriteRelationship({
+    sourceEntityName: args.agentName,
+    targetEntityName: entityName,
+    relationshipType: 'PERFORMED',
+    description: `${args.agentName} thực hiện delegation ${stamp} (${args.endedBy})`,
+  }).catch(() => { /* relationship là phần phụ — entity đã ghi đủ giá trị */ })
 }
 
 // ==================== CODE TEAM ENTRY (legacy — delegate_task) ====================
@@ -1937,6 +2043,8 @@ ${canTodo ? `- BƯỚC 0 — LẬP KẾ HOẠCH: đánh giá nhiệm vụ. Nếu
 - Mỗi vòng tối đa vài tool calls; ưu tiên hành động trực tiếp.
 - ⛔ PHẠM VI (ROUND-53 — bằng chứng r53: sub-agent chẩn đoán tự mở rộng làm thay toàn bộ nhiệm vụ gốc của run cha, đốt 950k tokens rồi trọng tài chấm CHƯA ĐẠT): CHỈ làm đúng NHIỆM VỤ được delegate phía trên. Có kết luận đúng phạm vi là BÁO CÁO + DỪNG — nhiệm vụ lớn hơn là việc của parent sau khi đọc báo cáo của bạn. KHÔNG tự mở rộng phạm vi.
 ${canEscalate ? '- Nếu BẾ TẮC (tool fail lặp lại / không rõ hướng giải): tool_call: escalate_problem({"problem": "...", "context": "...", "attempted": "..."}) → Omega orchestrator sẽ tư vấn giải pháp.' : ''}
+${allowedTools.includes('lessons_search') ? '- TRƯỚC khi giải một vấn đề khó/lỗi lạ → lessons_search({"query":"<từ khoá vấn đề>"}) tra bài học + episode + trí nhớ agents (lỗi tương tự đã gặp, cách giải) — đừng giải lại từ đầu những gì hệ thống đã học.' : ''}
+${allowedTools.includes('knowledge_write') ? '- Rút ra BÀI HỌC trong lúc làm (cách giải lỗi, pattern hệ thống, quyết định kiến trúc) → ghi NGAY vào KB: knowledge_write({"entityName":"...","entityType":"Lesson","description":"...","category":"..."}). Bài học xứng đáng = giúp agents sau giải nhanh hơn cùng vấn đề. Báo cáo cuối nêu thêm mục "Bài học" ngắn (1-3 dòng).' : ''}
 - Khi xong (hoặc không làm tiếp được), viết BÁO CÁO ≤ 300 từ theo format:
   1. ĐÃ LÀM: từng việc + bằng chứng tool (tên tool + kết quả ngắn: file:line, pass/fail, số lỗi)${canTodo ? `
   2. KẾ HOẠCH & TIẾN ĐỘ: nếu đã tạo todo — liệt kê từng bước + trạng thái cuối (completed/failed/in_progress); task đơn giản thì ghi "(không cần kế hoạch)"` : ''}
@@ -1957,7 +2065,7 @@ ${evidence.slice(-20).map(e => `- ${e}`).join('\n') || '(không có)'}
 
 TÌNH TRẠNG: dừng vì ${reason}.
 
-NHIỆM VỤ: viết BÁO CÁO TỔNG KẾT ≤ 300 từ theo 4 phần: (1) ĐÃ LÀM + bằng chứng tool cụ thể, (2) KẾ HOẠCH & TIẾN ĐỘ từng bước nếu có todo (completed/failed/in_progress — không có thì ghi "không cần kế hoạch"), (3) CÒN THIẾU/CHƯA KIỂM ĐỊNH ĐƯỢC — không đoán, (4) ĐỀ XUẤT bước tiếp theo. Không gọi tool. Không viết dài.`
+NHIỆM VỤ: viết BÁO CÁO TỔNG KẾT ≤ 300 từ theo 5 phần: (1) ĐÃ LÀM + bằng chứng tool cụ thể, (2) KẾ HOẠCH & TIẾN ĐỘ từng bước nếu có todo (completed/failed/in_progress — không có thì ghi "không cần kế hoạch"), (3) CÒN THIẾU/CHƯA KIỂM ĐỊNH ĐƯỢC — không đoán, (4) ĐỀ XUẤT bước tiếp theo, (5) BÀI HỌC — 1-3 dòng điều đắt giá rút ra (cách giải lỗi/pattern hệ thống — nếu không có ghi "không có"). Không gọi tool. Không viết dài.`
 }
 
 function safeStringify(entry: { tool: string; success: boolean; result: unknown }): string {

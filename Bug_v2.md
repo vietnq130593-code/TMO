@@ -289,3 +289,61 @@
 5. **GHI-NHẬN-g (toolset không đồng nhất giữa các lần delegate cùng agent):** chờ case thứ 3 để lập bug điều tra whitelist nguồn.
 6. **DATA MAP (F3 r68):** chưa xác minh được trên mission r70 (không quan sát thấy dấu hiệu sử dụng) — cần probe riêng hoặc chờ mission có tương tác data rõ ràng.
 7. **F9/BUG-007 read_output exitCode + BUG-024 final-report retry (r69):** không cọ sát trên mission r70 — chờ mission kế.
+
+---
+
+# ROUND-71 — AUDIT THEO DIRECTIVE USER (knowledge_write/CATALYST · DB tools · Zen 429 xoay key)
+
+> **Ngữ cảnh:** user hỏi trực tiếp 3 vấn đề kiến trúc (không phải quan sát mission chạy): (1) knowledge_write chỉ CATALYST dùng → không gọi CATALYST thì agents có ghi bài học không; (2) có nên xây thêm tool để agents khai thác database triệt để hơn; (3) 3 key Zen — 1 key 429 sao không đổi key khác. Điều tra tầng mã + DB thật (sqlite3 db/custom.db) + .env — mọi phát hiện ghi ngay tại đây theo giao thức.
+
+## CÁC MỤC GHI NHẬN MỚI
+
+### BUG2-019 · F · P1 · Điều tra r71 — knowledge_write bị GATE CHỈ cho CATALYST: agents thực thi KHÔNG BAO GIỜ ghi được bài học vào KB đồ thị
+- **Xác nhận luận điểm user = ĐÚNG (kiểm chứng tầng mã + DB):** whitelist `knowledge_write` (tool ghi entity/relationship → LocalEntity/LocalRelationship sync Neo4j) chỉ có ở: CATALYST (agents.ts G3) + Omega (standalone-agents.ts). MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/FORGE/Linh Sickyx/ALISTA **KHÔNG có** — chỉ được Đ�C KB (knowledge_search/knowledge_graph). DB rows đối chiếu (sqlite3): Code Team + ALISTA + Omega tools=NULL→def-fallback (defs thiếu tool) · Linh Sickyx tools=JSON 44 items (thiếu tool).
+- **Mô tả tool còn dạy sai kiến trúc:** tool-executor.ts:580 "Dùng bởi G3 (CATALYST) để ghi self-evolving lessons" + comment 5568 "Only G3 (CATALYST) has this permission" — cửa ghi KB đồ thị được THIẾT KẾ là việc của 1 agent duy nhất.
+- **Hệ quả vận hành (đối chiếu 4 mission quan sát r67-r70):** CATALYST CHƯA BAO GIỜ được dispatch (delegation observed: SENTINEL/RAMPAGE/MEGATRON/Linh Sickyx/ALISTA) → **0 lần ghi KB đồ thị trong suốt quá trình thực thi của mọi mission**. Lớp episodic (Episode/ErrorOccurrence/Lesson) TỰ ghi sau run (recorder hardcode — không phụ thuộc CATALYST) nhưng chỉ gói lỗi-tool + outcome; tri thức dạng entity/quan hệ (thành hệ thống, pattern, quyết định kiến trúc, mối liên agent→công việc) KHÔNG có đường ghi nào khi CATALYST vắng mặt — đúng "lỗ hổng lớn" user gọi tên.
+- **Cơ chế ghi cứng cũng thiếu:** delegation wrap-up KHÔNG có bước harvest bài học → KB (chỉ có recordAgentEpisode episodic).
+
+### BUG2-020 · G · P0 · Điều tra r71 — Zen 429: 1 key chết GIẾT cả call dù 2 key kia hoàn toàn khỏe (3 khiếm khuyết tầng mã llm.ts)
+- **Khẳng định user = ĐÚNG — "chẳng lẽ cả 3 key đều 429": KHÔNG, chỉ key #1 429 (FreeUsageLimitError, 17:23Z r70) nhưng hệ thống vẫn chết chuỗi. 3 khiếm khuyết:**
+  - **(a) callZenProvider KHÔNG xoay key trong call:** gặp 429 → `markZenKey429` cooldown 60s → `return error` NGAY (llm.ts:4224-4229) — không thử key kế trong cùng call.
+  - **(b) callLLMForAgent bỏ qua đường retry Zen cho 429:** regex retry (llm.ts:5040) chỉ nhận abort/timeout/5xx/empty — comment "429 đã mark cooldown… chuỗi đằng sau xử lý" nhưng chuỗi đằng sau = CLI (binary thường vắng) → ZEN FAILOVER model **BỊ BỎ QUA khi trùng model chính** (`zenModel !== zenFailoverModel` — space-bunny-free == space-bunny-free → nhánh chết) → toàn chuỗi thất bại sau ĐÚNG 1 attempt.
+  - **(c) Sub-agent ghim key KHÔNG THOÁT được key 429:** `getBoundZenKey()` (llm.ts:3973) trả key ghim KHÔNG xét `zenKey429Until` → sub-agent slot #1 ghim key #1 cứ dập lại key chết mỗi retry (65s×2 backoff r70) → delegation chết nhãn error; key #2/#3 khỏe không bao giờ được dùng. Đây chính là xác尸 2 delegation r70.
+  - **(d) FreeUsageLimitError bị coi transient 60s:** body 429 "FreeUsageLimitError" là hạn mức free usage (cửa sổ dài, r70 kéo dài ≥8 phút tới khi mission đóng sổ) — cooldown 60s khiến key chết được "hồi sinh" và dập tiếp.
+
+### BUG2-021 · F · P1 · Điều tra r71 — HỒI QUY r67: tool data_map tồn tại nhưng KHÔNG agent nào GỌI ĐƯỢC (thiếu ở mọi whitelist)
+- **Bằng chứng:** data_map đăng ký TOOL_DEFINITIONS + case executor (tool-executor.ts:1434/3218) nhưng grep toàn bộ whitelist: agents.ts (5 defs) + standalone-agents.ts (Omega/ALISTA/Linh Sickyx) + DEFAULT_SUBAGENT_TOOLS (subagent-delegate.ts:253) — **0 chỗ chứa 'data_map'**. Goal-loop chặn tool ngoài whitelist (agent-goal-loop.ts:4153/4285) + sub-agent chặn (subagent-delegate.ts:1262) → mọi agent khai báo tools (tất cả agents chuẩn) gọi data_map đều bị TỪ CHỐI. Ghi chú thiết kế r67 claim "whitelist của mọi agent mặc định" — KHÔNG ĐÚNG với mã chạy. Chỉ agent tools=null (whitelist rỗng = mọi builtin) gọi được — không agent chuẩn nào ở trạng thái đó.
+- **Hệ quả:** khối 🗺️ BẢN ĐỒ in trong prompt dạy "tra bản đồ đầy đủ bất cứ lúc nào: tool data_map(...)" — agent làm theo sẽ bị chặn → mâu thuẫn prompt vs enforcement (đúng loại bug user ghét: dạy bằng prompt nhưng đường cứng không thông).
+
+### BUG2-022 · F · P2 · Điều tra r71 — Agents thiếu tool tra cứu BÀI HỌC/EPISODE on-demand giữa run
+- **Hiện trạng:** bài học episodic (LessonRecord — Prisma mirror Neo4j) + trí nhớ warm (AgentMemory + Qdrant) CHỈ được nạp tự động đầu run (preact/PRE-ACT block — 4s timeout, có khi trống). Giữa run khi agent gặp vấn đề mới muốn đối chiếu "lỗi tương tự đã gặp chưa" → KHÔNG có tool nào tra Lesson/Episode/AgentMemory theo từ khoá (context_recall chỉ là digest run cũ trong cùng session; knowledge_search chỉ quét KB tài liệu). Bộ não DB có dữ liệu nhưng không đường truy vấn chủ động — ngược triết lý "khai thác database triệt để".
+
+## BẢNG FIX ROUND-71 (hardcode > prompt — mọi fix tầng mã)
+| Mục | Cơ chế (đề xuất, thực thi phiên này) | Test |
+|---|---|---|
+| BUG2-020a | `callZenProvider` vòng xoay key: 429 → mark cooldown → **chọn key kế sạch ngay trong cùng call** (thử tối đa đủ số key) — chỉ trả lỗi khi TẤT CẢ key đều 429, kèm thông báo key reset sớm nhất | 5 test |
+| BUG2-020c | `getBoundZenKey()` thoát key ghim đang 429-cooldown → rơi `getZenKey()` (ưu tiên key khỏe chưa ghim; chia sẻ key khi key riêng chết còn hơn chết chờ) + log rõ lần rời ghim | 3 test |
+| BUG2-020d | `markZenKey429(index, cooldownMs)` param hóa: body có FreeUsageLimit → cooldown dài `ZEN_FREE_USAGE_COOLDOWN_MS` (mặc định 15'); 429 thường → 60s như cũ | 2 test |
+| BUG2-019 | (1) Mở `knowledge_write` cho MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/FORGE (agents.ts) + ALISTA/Linh Sickyx (standalone-agents.ts) + sync ADD-IF-MISSING row Linh Sickyx (JSON) — giữ trong SUBAGENT_WRITE_TOOLS để readOnly delegation vẫn strip đúng; (2) sửa mô tả tool bỏ "chỉ CATALYST"; (3) **harvest cứng tại delegation wrap-up**: tín hiệu đáng học (tool failures / kết thúc bất thường / báo cáo có mục bài học) → ghi KB entity 'DelegationLesson' + relationship agent -[PERFORMED]-> task — KHÔNG phụ thuộc CATALYST | 6 test |
+| BUG2-021 | Thêm `data_map` vào whitelist 8 defs + DEFAULT_SUBAGENT_TOOLS — hết mâu thuẫn prompt/enforcement | 2 test |
+| BUG2-022 | Tool mới `lessons_search({query, agent?, limit?})`: tra LessonRecord (keyword, sort confidence) + EpisodeRecord (title/goal) + AgentMemory (content, theo agent tùy chọn) — đọc thuần, đăng ký executor + KNOWN_TOOL_NAMES + SALVAGE_SAFE_TOOLS + whitelist mọi agents | 4 test |
+
+*(Các mục trên được thực thi và nghiệm thu trong phiên này — cập nhật trạng thái từng mục ở mục C bên dưới sau khi gate PASS.)*
+
+### C. NGHIỆM THU ROUND-71 (sau fix — mọi mục đối chiếu bằng máy)
+
+**Gate:** quality-gate PASS toàn bộ 59.3s — type_check 0 lỗi · lint 0 lỗi · imports ✓ · **541/541 test** (507 kế thừa + **34 mới** trong `tests/r71-db-tools-zen-rotation.test.ts`, mọi test bắt từ bằng chứng r70 nguyên văn). Vòng test TỰ BẮT 2 lỗi thật trong lúc triển khai fix (SENTINEL bị bỏ sót khi thêm whitelist do anchor nhầm — test phát hiện tức thì; mô tả knowledge_write còn sót chữ "CATALYST") — cả hai vá tận gốc trước khi gate.
+
+**Live probe (qua /api/tools/execute thật sau PM2 restart):**
+- `lessons_search({"query":"429 rate limit"})` → trúng trí nhớ THẬT của Omega (mission P1-1 về rate limiting, 2026-10-08) — tra cứu chéo agent hoạt động end-to-end, 74ms.
+- `knowledge_write` → entity ghi LocalEntity OK (id f9fe610a…) — đường ghi KB đồ thị cho agent thường THÔNG THẬT (probe entity đã dọn sau kiểm định).
+- `data_map({"query":"ghi bài học vào kb"})` → route đúng knowledge_graph + knowledge_kb (đã bổ keyword 'bài học'/'lesson' — trước đó query này rơi vào 0-match).
+- Boot log: `[Standalone] r71 sync: Linh Sickyx +3 tool DB (knowledge_write, data_map, lessons_search)` — ADD-IF-MISSING chạy đúng trên row JSON có sẵn; `[Opus] TASK 22 top-up: lessons_search — 79 → 80` (cơ chế top-up có sẵn tự bắt tool mới).
+- Log cũ (trước fix) xác nhận CHUỖI CHẾT đúng như phân tích BUG2-020: `429 rate-limited (key #N) → thử OpenCode CLI → thất bại toàn chuỗi` — mỗi call chết ngay tại key bị 429, KHÔNG bao giờ thử key kế. Sau fix: vòng xoay key trong cùng call + thoát ghim key chết + FreeUsageLimit cooldown 900s + thông báo "TẤT CẢ N key đều rate-limited" kèm thời điểm reset từng key khi thật sự cạn.
+
+**Đối chiếu 3 câu hỏi user:**
+1. *knowledge_write chỉ CATALYST dùng → không gọi CATALYST thì không ai ghi bài học?* — ĐÚNG (kiểm chứng whitelist + DB + 4 mission quan sát không lần nào dispatch CATALYST). Đã fix 3 lớp: mở whitelist 9 agents + harvest CỨNG tại delegation wrap-up (không phụ thuộc thiện chí agent) + mô tả tool sửa đúng kiến trúc.
+2. *Có nên xây thêm tools khai thác DB?* — CÓ, đã xây: `lessons_search` (3 kho bộ não on-demand) + mở `knowledge_write` + cứu `data_map` khỏi mồ côi (BUG2-021 — tool tồn tại từ r67 nhưng 0 whitelist chứa, gọi là bị chặn).
+3. *1 key 429 sao không đổi key?* — Đúng là hệ thống cũ KHÔNG đổi (3 khiếm khuyết a/b/c+d ở BUG2-020). Đã fix đủ 4 điểm; giờ chỉ chết khi TẤT CẢ key thật sự 429 — với thông báo rõ ràng từng key reset lúc nào.
+
+**Ghi nhận thêm (minh bạch):** vòng push đầu bị PRE-PUSH GATE CHẶN (đúng chức năng) — keyword mới 'bài học' làm query r67 test khớp thêm vùng → block bản đồ vượt cap 1600 do lối tính keep cũ KHÔNG tái kiểm tra sau ghép. Đã vá tận gốc: vòng cắt giảm dần số vùng cho tới khi tổng ≤ maxChars + 2 test khoá hợp đồng cap (tổng 543/543). Đây là lỗi cap logic tiềm ẩn từ r67 chỉ bộc lộ khi tổ hợp vùng khớp đủ nhiều — gate chặn push đúng nghĩa đen "không để bug lên main".

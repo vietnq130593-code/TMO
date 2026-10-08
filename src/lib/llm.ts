@@ -3969,11 +3969,26 @@ export async function runWithZenKeyBinding<T>(keyIndex: number, fn: () => Promis
   }
 }
 
-/** Lấy key đang ghim bởi async context hiện tại (nếu có) — nội bộ llm.ts. */
+/** Lấy key đang ghim bởi async context hiện tại (nếu có) — nội bộ llm.ts.
+ * r71 (BUG2-020c): key ghim đang 429-cooldown → trả NULL để callZenProvider
+ * rơi xuống getZenKey() (ưu tiên key khỏe chưa bị ghim). Bằng chứng r70:
+ * sub-agent slot #1 ghim key #1 — key #1 429 FreeUsageLimitError dai dẳng
+ * (17:23→17:31Z) trong khi key #2/#3 hoàn toàn khỏe — getBoundZenKey cũ
+ * trả key chết bất chấp cooldown → sub-agent dập lại key chết mỗi retry
+ * (65s×2) rồi chết nhãn error. Chia sẻ key khỏe lúc key riêng chết còn
+ * hơn chết chờ (user directive r71: "key này 429 thì đổi key khác"). */
 function getBoundZenKey(): { key: string; index: number } | null {
   const b = zenKeyBindingStorage.getStore()
   if (!b || b.keyIndex < 0 || b.keyIndex >= ZEN_API_KEYS.length) return null
+  if (!boundZenKeyUsable(b.keyIndex, zenKey429Until, Date.now())) return null // key ghim đang cooldown → thoát ghim
   return { key: ZEN_API_KEYS[b.keyIndex], index: b.keyIndex }
+}
+
+/** Async-context đang chạy trong runWithZenKeyBinding nhưng key ghim đã bị
+ * bỏ qua vì 429? (chỉ dùng cho log 1 lần mỗi call — không ảnh hưởng luồng) */
+function hasAbandonedZenBinding(): boolean {
+  const b = zenKeyBindingStorage.getStore()
+  return !!b && b.keyIndex >= 0 && b.keyIndex < ZEN_API_KEYS.length && zenKey429Until[b.keyIndex] > Date.now()
 }
 
 /** Zen is ready to serve calls (at least 1 key configured). */
@@ -4016,9 +4031,91 @@ function getZenKey(): { key: string; index: number } | null {
   return { key: ZEN_API_KEYS[soonest], index: soonest }
 }
 
-/** Mark a Zen key as rate-limited (60s cooldown). */
-function markZenKey429(index: number): void {
-  zenKey429Until[index] = Date.now() + 60000
+// ==================== r71 (BUG2-020a) — 429 KEY ROTATION TRONG CÙNG CALL ====================
+// Trước r71: callZenProvider gặp 429 → mark cooldown → return error NGAY —
+// không thử key kế. callLLMForAgent thì BỎ 429 khỏi regex retry (comment
+// "chuỗi đằng sau xử lý" — nhưng chuỗi = CLI thiếu binary → failover model
+// bị skip khi trùng model chính space-bunny-free) → 1 key 429 giết cả call
+// dù 2 key kia khỏe (bằng chứng r70: 2 delegation chết + evaluator rơi
+// fallback + mission dừng no_progress — chỉ vì key #1 FreeUsageLimitError).
+// Giờ: chọn key CỨNG (khỏi 429-cooldown, ưu tiên chưa bị ghim) — KHÔNG
+// fail-open trả key đang cooldown. Vòng xoay key bên trong callZenProvider
+// dùng hàm này; hết key sạch → trả lỗi tổng hợp trạng thái từng key.
+
+/** r71 (BUG2-020d) — phân loại body 429: FreeUsageLimit (hạn mức free usage,
+ * cửa sổ dài — r70 kéo dài ≥8 phút) vs RPM burst (cooldown ngắn). Pure —
+ * test trực tiếp không đụng network. */
+export function classifyZen429Body(errBody: string): 'free_usage' | 'rpm' {
+  return /freeusage|free[_\s-]?usage|usage[_\s-]?limit|daily[_\s-]?(limit|quota)/i.test(errBody)
+    ? 'free_usage'
+    : 'rpm'
+}
+
+/** r71 (BUG2-020a) — lõi PURE của getZenKeyStrict: từ trạng thái cooldown +
+ * binding + con trỏ round-robin, chọn index key sạch kế tiếp.
+ * Lượt 1: key khỏe + chưa bị ghim. Lượt 2: key khỏe (chia sẻ tạm khi hết
+ * key riêng). Trả index=-1 khi TẤT CẢ key đều đang cooldown. */
+export function pickHealthyZenKeyIndex(
+  cooldowns: number[],
+  now: number,
+  nextIndex: number,
+  boundIndexes: number[],
+): { index: number; next: number } {
+  const n = cooldowns.length
+  if (n === 0) return { index: -1, next: nextIndex }
+  const bound = new Set(boundIndexes)
+  // Lượt 1 — key khỏe hoàn toàn (không cooldown, không bị ghim)
+  for (let i = 0; i < n; i++) {
+    const idx = ((nextIndex % n) + i) % n
+    if (cooldowns[idx] <= now && !bound.has(idx)) return { index: idx, next: (idx + 1) % n }
+  }
+  // Lượt 2 — key khỏe nhưng đang bị ghim (chia sẻ key lúc key riêng chết)
+  for (let i = 0; i < n; i++) {
+    const idx = ((nextIndex % n) + i) % n
+    if (cooldowns[idx] <= now) return { index: idx, next: (idx + 1) % n }
+  }
+  return { index: -1, next: nextIndex }
+}
+
+/** r71 (BUG2-020c) — key ghim của sub-agent còn DÙNG ĐƯỢC không? (429-cooldown
+ * → KHÔNG — sub-agent phải tạm rời ghim xoay key khỏe). Pure. */
+export function boundZenKeyUsable(boundIndex: number | null | undefined, cooldowns: number[], now: number): boolean {
+  if (boundIndex == null || boundIndex < 0 || boundIndex >= cooldowns.length) return false
+  return cooldowns[boundIndex] <= now
+}
+
+function getZenKeyStrict(): { key: string; index: number } | null {
+  const picked = pickHealthyZenKeyIndex(zenKey429Until, Date.now(), zenKeyIndex, [...activeZenKeyBindings])
+  if (picked.index < 0) return null // TẤT CẢ key đều đang 429-cooldown — KHÔNG fail-open trả key chết
+  zenKeyIndex = picked.next
+  return { key: ZEN_API_KEYS[picked.index], index: picked.index }
+}
+
+/** Cooldown cho 429 thường (RPM burst) vs FreeUsageLimitError (hạn mức free
+ * usage — cửa sổ dài; r70 kéo dài ≥8 phút). Override qua env. */
+const ZEN_429_COOLDOWN_MS = Math.max(5_000, parseInt(process.env.ZEN_429_COOLDOWN_MS || '60000', 10) || 60_000)
+const ZEN_FREE_USAGE_COOLDOWN_MS = Math.max(60_000, parseInt(process.env.ZEN_FREE_USAGE_COOLDOWN_MS || '900000', 10) || 900_000)
+
+/** Cooldown áp dụng theo phân loại body — pure (test trực tiếp). */
+export function zen429CooldownFor(errBody: string): number {
+  return classifyZen429Body(errBody) === 'free_usage' ? ZEN_FREE_USAGE_COOLDOWN_MS : ZEN_429_COOLDOWN_MS
+}
+
+/** Mark a Zen key as rate-limited.
+ * r71 (BUG2-020d): cooldown tham số hóa — body 429 chứa FreeUsageLimit →
+ * cooldown dài (mặc định 15') vì hạn mức free usage không reset trong 60s;
+ * 429 thường (RPM) giữ 60s như cũ. */
+function markZenKey429(index: number, cooldownMs: number = ZEN_429_COOLDOWN_MS): void {
+  zenKey429Until[index] = Date.now() + cooldownMs
+}
+
+/** Chuỗi trạng thái key (log + error khi mọi key 429) — "key #N: còn Xs". */
+function zenKeyCooldownSummary(): string {
+  const now = Date.now()
+  return ZEN_API_KEYS.map((k, i) => {
+    const remain = zenKey429Until[i] - now
+    return `key#${i + 1}: ${remain > 0 ? `429 còn ${Math.ceil(remain / 1000)}s` : 'khả dụng'} (...${k.slice(-6)})`
+  }).join(' · ')
 }
 
 // ==================== ZEN FREE-TIER BLOCK CACHE (Task 34 — 2026-09-27) ====================
@@ -4112,10 +4209,15 @@ async function callZenProvider(
   // context hiện tại đang chạy trong runWithZenKeyBinding(i) → dùng đúng key
   // #i (concurrent sub-agent không bao giờ dùng chung key). Caller thường
   // (parent/utility) → getZenKey() round-robin tự NÉ key đang bị ghim.
-  const keyInfo = getBoundZenKey() ?? getZenKey()
+  // r71 (BUG2-020c): key ghim đang 429-cooldown → getBoundZenKey trả null →
+  // tạm rời ghim, xoay key khỏe (log rõ). KHÔNG bao giờ dập lại key chết.
+  let keyInfo = getBoundZenKey() ?? getZenKey()
   if (!keyInfo) {
     console.warn('[ZEN] No API keys configured (set ZEN_API_KEY_1 / ZEN_API_KEY_2 / ZEN_API_KEY_3 in .env)')
     return null
+  }
+  if (hasAbandonedZenBinding()) {
+    console.warn(`[ZEN] ${taskLabel} key ghim đang 429-cooldown — TẠM RỜI GHIM, xoay sang key khỏe #${keyInfo.index + 1} (r71 BUG2-020c: key riêng 429 thì đổi key khác — chia sẻ key còn hơn chết chờ)`)
   }
 
   // TASK 34 — free-tier block cache: model đã bị chặn ở HTTP (gặp FreeTierError
@@ -4211,22 +4313,47 @@ async function callZenProvider(
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
-    const response = await fetch(`${ZEN_BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${keyInfo.key}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    })
-
-    if (response.status === 429) {
-      markZenKey429(keyInfo.index)
+    // ━━ r71 (BUG2-020a) — VÒNG XOAY KEY KHI 429 (trong CÙNG call) ━━
+    // Bằng chứng r70: key #1 429 FreeUsageLimitError → return error ngay →
+    // CLI thiếu binary → failover model trùng model chính bị skip → chuỗi
+    // chết sau 1 attempt dù key #2/#3 khỏe. Giờ: 429 → mark cooldown (dài
+    // nếu FreeUsageLimit) → chọn key KẾ TIẾP sạch (getZenKeyStrict — không
+    // fail-open trả key cooldown) → thử tiếp, tối đa đủ số key. Chỉ trả lỗi
+    // khi TẤT CẢ key đều 429 — kèm trạng thái từng key cho operator.
+    let response: Response | null = null
+    let allKeys429 = false
+    for (let keyAttempt = 0; keyAttempt < ZEN_API_KEYS.length; keyAttempt++) {
+      response = await fetch(`${ZEN_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${keyInfo.key}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+      if (response.status !== 429) break // key này trả lời thật — thoát vòng xoay
+      // ── 429: đánh dấu cooldown (phân loại body) + xoay key kế ngay trong call ──
       let errBody = ''
       try { errBody = await response.text() } catch { /* ignore */ }
-      console.warn(`[ZEN] ${taskLabel} 429 rate-limited (key #${keyInfo.index + 1}) — cooldown 60s: ${errBody.slice(0, 120)}`)
-      return { content: '', provider: 'zen', model, error: `Zen 429 rate-limited (key #${keyInfo.index + 1})` }
+      const kind = classifyZen429Body(errBody)
+      const cooldownMs = zen429CooldownFor(errBody)
+      markZenKey429(keyInfo.index, cooldownMs)
+      console.warn(`[ZEN] ${taskLabel} 429 rate-limited (key #${keyInfo.index + 1}) — ${kind === 'free_usage' ? 'FreeUsageLimit (hạn mức free usage — cooldown dài' : 'RPM burst (cooldown ngắn'} ${Math.round(cooldownMs / 1000)}s): ${errBody.slice(0, 120)}`)
+      const next = getZenKeyStrict()
+      if (!next) {
+        allKeys429 = true
+        break
+      }
+      keyInfo = next
+      console.log(`[ZEN] ${taskLabel} XOAY KEY → #${keyInfo.index + 1} (còn key khỏe — thử ngay trong cùng call, lần ${keyAttempt + 1})`)
+    }
+    if (allKeys429) {
+      console.warn(`[ZEN] ${taskLabel} TẤT CẢ ${ZEN_API_KEYS.length} key đều 429 — ${zenKeyCooldownSummary()}`)
+      return { content: '', provider: 'zen', model, error: `Zen 429: TẤT CẢ ${ZEN_API_KEYS.length} key đều rate-limited — ${zenKeyCooldownSummary()}` }
+    }
+    if (!response) {
+      return { content: '', provider: 'zen', model, error: 'Zen call failed: vòng xoay key không trả response (unreachable)' }
     }
 
     if (!response.ok) {
