@@ -56,7 +56,7 @@
 
 import { callLLMForAgent, type LLMTool } from '@/lib/llm'
 import { executeTool, buildCompactToolSchemasSection, resolveToolAlias, getToolDefinitions, getAllBuiltinToolNames } from '@/lib/code-team/tool-executor'
-import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint, countProviderGarbleMarkers, tryParseLooseJson, salvageNativeToolArgs } from '@/lib/tool-calls'
+import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint, countProviderGarbleMarkers, tryParseLooseJson, salvageNativeToolArgs, maskToolCallText } from '@/lib/tool-calls'
 // TASK 43 — Agent Event Bus: emit sự kiện vòng đời run lên bus hợp nhất
 // (GET /api/agent-events) — fail-open tuyệt đối bên trong emit (try/catch).
 import { emitAgentEvent } from '@/lib/agent-event-bus'
@@ -68,6 +68,7 @@ import {
   recordAgentRunTodos,
   recordAgentRunTool,
   isSessionCancelled,
+  stripInvisibleThoughtNoise,
 } from '@/lib/agent-run-tracker'
 // CI-2 (Task 11-a) — auto-complete todo theo bằng chứng tool giữa chừng run
 // (helper DB-backed trong TODO section của dev-tools — không đụng git section)
@@ -3062,6 +3063,35 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
               return `- ${c.agentName ?? '?'} (run ${String(c.runId ?? '').slice(0, 22)}…, đã chạy ${Math.max(0, Math.round((endMs - startMs) / 1000))}s trước khi bị giết)`
             })
             .join('\n')
+          // r70 (BUG2-014 — bằng chứng mission cmuzscdvj…yky79t): notice cũ chỉ
+          // trỏ tới trace jsonl — Omega phải TỰ mò ra (a) trace file path, (b)
+          // artifact sub để lại trên đĩa (scratch/p1-3/*.md — 10KB kiểm kê
+          // bảo mật bị bỏ quên, trọng tài phán CHƯA ĐẠT vì không ai nối artifact
+          // → tiêu chí). Giờ hệ thống TỰ QUÉT và đính kèm "BẢNG CÒN LẠI TỪ
+          // CRASH": đường dẫn trace từng sub + working-tree delta (nếu có) —
+          // agent không còn phải đoán mò nơi tìm công sức đã làm.
+          let leftovers = ''
+          try {
+            const { existsSync, statSync } = await import('fs')
+            const traceLines = crashed
+              .filter(c => c.runId && existsSync(`agent-runs/${c.runId}.jsonl`))
+              .map(c => {
+                const st = statSync(`agent-runs/${c.runId}.jsonl`)
+                return `- agent-runs/${c.runId}.jsonl (${Math.round(st.size / 1024)}KB — trace đầy đủ thought + tool)`
+              })
+            const treeParts: string[] = []
+            try {
+              const { getWorkspaceGitStatus, formatUncommittedBlock } = await import('@/lib/workspace-git')
+              const st = await getWorkspaceGitStatus()
+              if (st && st.ok && st.lines.length > 0) {
+                const block = formatUncommittedBlock(st, 'Working tree đang có thay đổi chưa commit (có thể là công sức sub-run chết để lại — kiểm tra trước khi làm lại/làm đè)')
+                if (block) treeParts.push(block)
+              }
+            } catch { /* fail-open — delta là phần thưởng, không phải điều kiện */ }
+            if (traceLines.length > 0 || treeParts.length > 0) {
+              leftovers = `\n\n📁 BẢNG CÒN LẠI TỪ CRASH (máy quét giúp — công sức có thể hồi phục):\n${traceLines.join('\n')}${treeParts.length > 0 ? `\n${treeParts[0]}` : ''}\n→ KIỂM TRA các file trên trước khi làm lại: phần việc có thể ĐÃ xong (đối chiếu với tiêu chí nghiệm thu), chỉ phần chưa có bằng chứng mới cần làm tiếp.`
+            }
+          } catch { /* fail-open */ }
           // ROUND-23 P3 — dấu vết sự kiện của sub-run giờ BỀN VỮNG trên đĩa
           // (agent-runs/<subRunId>.jsonl): agent đọc được sub-run đã làm GÌ
           // trước khi chết (qua tool web_fetch URL /api/agent-run?runId=…)
@@ -3069,7 +3099,7 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
           // không có checkpoint — nhưng KHÔNG còn "mất trắng không dấu vết".
           messages.push({
             role: 'user',
-            content: `[RESUME NOTICE — GIÁN ĐOẠN DO RESTART] ${crashed.length} sub-agent delegation(s) dưới đây bị server restart giết GIỮA CHỪNG — chúng KHÔNG hoàn thành và kết quả cuối KHÔNG TỒN TẠI (không tin rằng việc đã xong). TUY NHIÊN dấu vết sự kiện (thought + tool calls + kết quả từng bước) của mỗi sub-run đã lưu bền vững — đọc lại bằng web_fetch với URL tương đối "/api/agent-run?runId=<subRunId>" (kèm query XTransformPort nếu qua gateway) để biết chính xác sub-run đã làm được tới đâu, rồi dispatch lại CHỈ phần còn thiếu:\n${list}`,
+            content: `[RESUME NOTICE — GIÁN ĐOẠN DO RESTART] ${crashed.length} sub-agent delegation(s) dưới đây bị server restart giết GIỮA CHỪNG — chúng KHÔNG hoàn thành và kết quả cuối KHÔNG TỒN TẠI (không tin rằng việc đã xong). TUY NHIÊN dấu vết sự kiện (thought + tool calls + kết quả từng bước) của mỗi sub-run đã lưu bền vững — đọc lại bằng web_fetch với URL tương đối "/api/agent-run?runId=<subRunId>" (kèm query XTransformPort nếu qua gateway) để biết chính xác sub-run đã làm được tới đâu, rồi dispatch lại CHỈ phần còn thiếu:\n${list}${leftovers}`,
           })
           recordAgentThought(agentSessionId, `⚠️ RESUME: phát hiện ${crashed.length} delegation bị restart giết giữa chừng (kết quả mất trắng) — đã inject notice để agent cân nhắc re-dispatch`, totalIterations)
           console.log(`[GoalLoop] ${agentName} RESUME: ${crashed.length} delegation crashed do restart → inject re-dispatch notice`)
@@ -3463,8 +3493,17 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       // cảnh báo cứng kèm yêu cầu viết lại tiếng Việt (tối đa 2/run, persist
       // qua checkpoint). KHÔNG chặn tool call của lượt này — chỉ ép kỷ luật
       // ngôn ngữ cho CÁC lượt sau (output cuối cùng nằm trong scope).
+      // r70 (BUG2-007/013 — bằng chứng mission cmuzscdvj…yky79t): đo trên
+      // prose ĐÃ MASK tool-call (cùng tầng mask như recordAgentThought).
+      // Trước đây đo result.content THÔ → lượt thuần tool-call JSON (ASCII,
+      // không dấu) bị kết tội "viết tiếng Anh" oan 11 lần (evt47-89) → ô
+      // nhiễm cả evidence chu kỳ mà trọng tài độc lập đọc. Sau fix: lượt
+      // thuần tool-call → prose rỗng → vietnameseTextRatio trả 1 (guard
+      // <60 chữ) → im lặng; vi phạm THẬT (evt68/88 "We need produce tool
+      // call…") vẫn bắn đúng.
       try {
-        const ratio = vietnameseTextRatio(result.content || '')
+        const proseForLangCheck = maskToolCallText(stripInvisibleThoughtNoise(result.content || ''))
+        const ratio = vietnameseTextRatio(proseForLangCheck)
         if (ratio < 0.08 && viNudges < 2) {
           viNudges++
           pushToolMessage(messages, {

@@ -474,15 +474,56 @@ import('@/lib/smolab/background-task-worker')
 // Boot này đánh dấu mọi run 'running' khởi động TRƯỚC process này (dùng lề
 // 15s) là crashed. Job-based runs đã có GoalLoopWorker recoverPending riêng —
 // cleanup này chỉ đụng AgentRunRecord (bảng hiển thị + metrics).
+// r70 (BUG2-005 — bằng chứng mission cmuzscdvj…yky79t): 3 sub-run bị restart
+// giết được lật thành failed/crashed nhưng metrics TOÀN NULL (tokensUsed/
+// toolCalls/cycles) → kế toán ngân sách mission (D5) mù hoàn toàn phần sub
+// đã đốt, checkpoint job hiển thị "sub 0" dù sub cháy thật. Giờ: trước khi
+// update, đếm toolCalls + iteration cuối TỪ trace jsonl trên đĩa (nguồn
+// thật, sống qua crash) — tokensUsed không thể dựng lại trung thực nên giữ
+// null (không bịa số).
 import('@/lib/db')
   .then(async ({ db }) => {
+    const stale = await db.agentRunRecord.findMany({
+      where: { status: 'running', startedAt: { lt: new Date(Date.now() - 15_000) } },
+      select: { id: true, runId: true },
+      take: 50,
+    })
+    let recoveredMetrics = 0
+    for (const row of stale) {
+      if (!row.runId) continue
+      try {
+        const { existsSync, readFileSync } = await import('fs')
+        const tracePath = `agent-runs/${row.runId}.jsonl`
+        if (!existsSync(tracePath)) continue
+        const lines = readFileSync(tracePath, 'utf-8').trim().split('\n')
+        let toolCalls = 0
+        let lastIteration = 0
+        for (const ln of lines) {
+          try {
+            const j = JSON.parse(ln) as { type?: string; tool?: string; iteration?: number }
+            if (j.type === 'tool' && j.tool) toolCalls++
+            if (typeof j.iteration === 'number' && j.iteration > lastIteration) lastIteration = j.iteration
+          } catch { /* dòng hỏng bỏ qua */ }
+        }
+        if (toolCalls > 0 || lastIteration > 0) {
+          await db.agentRunRecord.update({
+            where: { id: row.id },
+            data: {
+              toolCalls,
+              cycles: lastIteration > 0 ? Math.max(1, lastIteration) : null,
+            },
+          })
+          recoveredMetrics++
+        }
+      } catch { /* fail-open — metrics là phần thưởng */ }
+    }
     const res = await db.agentRunRecord.updateMany({
       where: { status: 'running', startedAt: { lt: new Date(Date.now() - 15_000) } },
       data: { status: 'failed', stopReason: 'crashed', completedAt: new Date() },
     })
     if (res.count > 0) {
       console.log(
-        `[instrumentation] Stale AgentRunRecord cleanup: ${res.count} run 'running' mồ côi từ process trước → đánh dấu failed/crashed (server restart giữa chừng)`
+        `[instrumentation] Stale AgentRunRecord cleanup: ${res.count} run 'running' mồ côi từ process trước → đánh dấu failed/crashed (server restart giữa chừng)${recoveredMetrics > 0 ? ` · ${recoveredMetrics} run hồi phục metrics toolCalls/cycles từ trace jsonl (r70 BUG2-005)` : ''}`
       )
     }
   })

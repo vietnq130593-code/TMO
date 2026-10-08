@@ -660,6 +660,24 @@ export function isSessionCancelled(sessionId: string | null | undefined): boolea
  * (user 2026-10-07: "quan sát nhưng không quan sát cả các phần suy nghĩ của
  * agents → bỏ sót").
  */
+/**
+ * r70 (BUG2-008): chuẩn hóa text thought trước khi kiểm tra rỗng —
+ * (a) strip ký tự vô hình/điều khiển (zero-width U+200B-200F/2028-2029/FEFF,
+ *     control chars) — model/provider hay nhả rác loại này, hiển thị "trống"
+ *     nhưng truthy trong JS nên lọt qua guard rỗng cũ;
+ * (b) strip TAG TOOL-CALL TREO LẺ (bằng chứng evt38 r70: cả content chỉ gồm
+ *     chuỗi `<tool_call>` 11 ký tự — model bắt đầu phát tool call dạng XML
+ *     rồi đứt ngay; guard cũ thấy truthy → persist event "rỗng" làm nhiễu
+ *     kênh THINKING, và detól ngôn ngữ/hiển thị đều đánh lừa).
+ * Trả '' khi chẳng còn gì — caller coi như thought rỗng (guard sẵn có).
+ */
+export function stripInvisibleThoughtNoise(text: string): string {
+  return text
+    .replace(/[\u200b-\u200f\u2028\u2029\u202a-\u202e\ufeff\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '')
+    .replace(/<\s*\/?\s*(?:tool_call|tool_use|invoke|function_calls?)\b[^>]*\/?>/gi, '')
+    .replace(/<\s*\/?\s*(?:tool_call|tool_use|invoke|function_calls?)\b[^>]*$/gi, '')
+}
+
 export function recordAgentThought(
   sessionId: string | null | undefined,
   content: string | null | undefined,
@@ -679,6 +697,9 @@ export function recordAgentThought(
     // — kể cả bản parse THÀNH CÔNG vẫn nằm lại trong content vì recordAgentThought
     // nhận content THÔ trước tầng parse); (c) giữ nguyên split `tool_call:` cũ.
     let thought = stripProviderGarbleMarkers(String(content))
+    // r70 (BUG2-008): dọn rác vô hình + tag tool-call treo lẻ TRƯỚC mọi bước
+    // (thought "gồm mỗi <tool_call>" giờ bị coi là rỗng — không persist event trống)
+    thought = stripInvisibleThoughtNoise(thought)
     // r68 (BUG-003 — quan sát mission cmuznvkl…6b136k): các dạng tool-call méo
     // (`TỠI_CALL> {json}`, `tt>tout {json}`, `_call: todo_write({…})`,
     // `todo_write">{…}`, native body trần) mà parser extract + execute được

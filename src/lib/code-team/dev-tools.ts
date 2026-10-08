@@ -19,6 +19,7 @@ import { promisify } from 'util'
 import path from 'path'
 import fs from 'fs/promises'
 import { existsSync } from 'fs'
+import os from 'os'
 // P5 — run_gate hash receipt (sha256 stdout/stderr) — crypto builtin, không cần package mới
 import { createHash } from 'crypto'
 import type { Dirent } from 'node:fs'
@@ -931,7 +932,58 @@ export async function grep(args: {
  * jest (jest in deps), pytest (Python project). Runs the matching command
  * with a 5-minute timeout and parses pass/fail counts + failure locations.
  */
+// r70 (BUG2-011): guard tài nguyên cho tool spawn tiến trình test — bằng
+// chứng mission cmuzscdvj…yky79t: 6 tiến trình `bun test` trong 5 phút (3
+// sub-agent song song, mỗi con giữ context 60-65k token) cộng dồn RSS app
+// lên 2126MB → MemWatchdog HARD-RSS self-exit → restart giết 3 delegation
+// đang chạy + kết quả test NHẢY (SENTINEL evt46/53 "Command failed" dù 4 lần
+// khác pass 59-65/65) đúng lúc hệ thống thiếu tài nguyên. Giờ: (a) SERIALIZE
+// — cùng lúc chỉ 1 tiến trình test của app được spawn; (b) pre-flight mem —
+// MemAvailable dưới sàn thì KHÔNG spawn, trả degraded kèm hướng dẫn thử lại
+// (agent không bị lừa kết quả fail giả).
+let TEST_SPAWN_INFLIGHT = 0
+const TEST_SPAWN_MIN_FREE_MB = Number(process.env.TEST_SPAWN_MIN_FREE_MB || 450)
+
+/**
+ * Guard tài nguyên cho việc spawn tiến trình test/gate (r70 BUG2-011).
+ * `override` chỉ dùng cho TEST (không truyền = đọc trạng thái thật).
+ */
+export function testSpawnGuard(
+  override?: { inflight?: number; freeMb?: number; minFreeMb?: number },
+): { ok: true } | { ok: false; error: string } {
+  const inflight = override?.inflight ?? TEST_SPAWN_INFLIGHT
+  const freeMb = override?.freeMb ?? Math.round(os.freemem() / (1024 * 1024))
+  const minFreeMb = override?.minFreeMb ?? TEST_SPAWN_MIN_FREE_MB
+  if (inflight > 0) {
+    return {
+      ok: false,
+      error: `⏳ Đã có một tiến trình test khác của app đang chạy (serialize — chống khuếch đại bộ nhớ đã giết 3 delegation r70). Chờ nó xong rồi gọi lại; KHÔNG coi đây là test FAIL.`,
+    }
+  }
+  if (freeMb < minFreeMb) {
+    return {
+      ok: false,
+      error: `🛑 Từ chối spawn tiến trình test: MemAvailable chỉ còn ${freeMb}MB (sàn ${minFreeMb}MB — hộp 4GB, mission r70 restart vì cạn mem khi 6 test spawn cùng lúc). Kết luận việc khác trước, thử lại sau khi bớt tải; KHÔNG coi đây là test FAIL.`,
+    }
+  }
+  return { ok: true }
+}
+
 export async function runTests(args: {
+  target?: string  // path to test file or test-name pattern
+  coverage?: boolean
+}): Promise<unknown> {
+  const guard = testSpawnGuard()
+  if (!guard.ok) return { success: false, framework: 'guard', output: '', truncated: false, error: guard.error }
+  TEST_SPAWN_INFLIGHT++
+  try {
+    return await runTestsInner(args)
+  } finally {
+    TEST_SPAWN_INFLIGHT--
+  }
+}
+
+async function runTestsInner(args: {
   target?: string  // path to test file or test-name pattern
   coverage?: boolean
 }): Promise<unknown> {
@@ -3795,6 +3847,22 @@ export async function shell(args: {
  * Spec: docs/FULLSTACK_CAPABILITY_PLAN_V2.md Part 4 Phase 1a.2
  * Feature flag: ENABLE_TODO_TOOL (off by default per D11)
  */
+// r70 (BUG2-001): alias chuẩn hóa priority tại TẦNG TOOL — bằng chứng
+// mission cmuzscdvj…yky79t evt4-5: Omega phát priority "critical" cho việc
+// bảo mật P0 (từ vựng tự nhiên của model) → tool reject "Invalid priority"
+// → mất 1 vòng lặp chỉ để học lại enum. Theo doctrine hardcode > prompt:
+// map alias phổ biến về giá trị chuẩn THAY VÌ reject; reject chỉ dành cho
+// giá trị lạ thật sự. (Module scope + export để test trực tiếp.)
+export const TODO_PRIORITY_ALIASES: Record<string, string> = {
+  critical: 'high', urgent: 'high', blocker: 'high', p0: 'high', highest: 'high',
+  normal: 'medium', default: 'medium', medium_priority: 'medium',
+  trivial: 'low', minor: 'low', lowest: 'low', optional: 'low',
+}
+export function normalizeTodoPriority(p: unknown): unknown {
+  if (typeof p !== 'string') return p
+  return TODO_PRIORITY_ALIASES[p.trim().toLowerCase()] ?? p
+}
+
 export async function todoWrite(args: {
   sessionId?: string
   agentRole?: string
@@ -3926,6 +3994,12 @@ export async function todoWrite(args: {
   const healNotes: string[] = []
 
   for (const t of args.todos) {
+    // r70 (BUG2-001): chuẩn hóa alias priority NGAY tại vòng lặp — mọi chỗ
+    // dùng sau này (validation + db create/update) đều thấy giá trị chuẩn.
+    if (t && typeof t.priority === 'string') {
+      const normalized = normalizeTodoPriority(t.priority)
+      if (typeof normalized === 'string') t.priority = normalized as typeof t.priority
+    }
     // FIX round-4 (2026-09-29, observes from goal-loop run thật): content chỉ
     // BẮT BUỘC cho todo MỚI (không id, không idempotencyKey). Update-by-id
     // chỉ cần {id, status} để đóng/mở todo — validation cũ từ chối CẢ BATCH
@@ -5699,6 +5773,13 @@ export async function runGate(args: {
   target?: string
   saveArtifactPath?: string
 }): Promise<unknown> {
+  // r70 (BUG2-011): run_gate spawn tiến trình nặng (cả bộ gate) — dùng chung
+  // guard serialize + mem pre-flight với run_tests (chống tái diễn chuỗi
+  // 6-test-spawn → RSS 2126MB → restart giết delegation r70).
+  const guard = testSpawnGuard()
+  if (!guard.ok) return { success: false, kind: args.kind, output: '', error: guard.error }
+  TEST_SPAWN_INFLIGHT++
+  try {
   try {
     const kind = typeof args.kind === 'string' ? args.kind : ''
     const root = await resolveWorkspaceRoot()
@@ -5878,6 +5959,9 @@ export async function runGate(args: {
   } catch (err) {
     // Fail-open — KHÔNG throw, trả error có cấu trúc
     return { success: false, error: `run_gate lỗi: ${err instanceof Error ? err.message : String(err)}` }
+  }
+  } finally {
+    TEST_SPAWN_INFLIGHT--
   }
 }
 

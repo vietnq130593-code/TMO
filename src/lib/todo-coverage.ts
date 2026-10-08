@@ -113,12 +113,41 @@ function matchesDataScopeItem(item: string, todoContent: string): boolean {
   return hit / itemTokens.length >= 0.5
 }
 
+/** Trích MÃ ĐỊNH DANH từ nhãn tiêu chí — "[Nghiệm thu P1-3] Chỉ đọc…" → "p1-3";
+ * "[Nghiệm thu tổng thể 2]…" → "tổng thể 2" (bỏ tiền tố số-thứ-tự thuần).
+ * r70 (BUG2-002): directive DẠY agent dạng nhãn "[Nghiệm thu P1-3]" nhưng
+ * matcher cũ chỉ khớp tag SỐ-THỨ-TỰ "[Nghiệm thu 3]" → Omega viết todo theo
+ * nhãn directive bị máy chấm "chưa phủ" 4/8, phải viết lại todo 3 lần chỉ để
+ * chỉnh nhãn khớp máy (bằng chứng main evt9/evt12 + todo_update evt7/11/14). */
+function criterionLabelIds(criterion: string): string[] {
+  const ids: string[] = []
+  // YÊU CẦU `]` đóng — quantifier lazy không được dừng giữa chừng ("P" của "P1-3")
+  const m = criterion.match(/\[?\s*nghiệm\s*thu\s+([^\]":]{1,42}?)\s*\]/i)
+  if (m && m[1]) {
+    let label = m[1].trim().toLowerCase().replace(/^(số|#|thứ)\s*/, '').replace(/\s+/g, ' ')
+    if (label && !/^\d+$/.test(label)) ids.push(label)
+  }
+  return ids
+}
+
 /** Match tiêu chí nghiệm thu n với nội dung 1 todo */
 function matchesAcceptanceCriterion(n: number, criterion: string, todoContent: string): boolean {
   // (1) TAG CHÍNH — protocol yêu cầu ghi "[Nghiệm thu n]" trong todo
   // (?![0-9]) chống "Nghiệm thu 1" khớp nhầm "Nghiệm thu 10"
   const tagRe = new RegExp(`\\[?\\s*nghiệm\\s*thu\\s*(?:số|#|thứ)?\\s*${n}(?![0-9])\\s*\\]?`, 'i')
   if (tagRe.test(todoContent)) return true
+
+  // (1b) r70 (BUG2-002): TAG THEO MÃ ĐỊNH DANH của chính tiêu chí — todo ghi
+  // "[Nghiệm thu P1-3]" / "nghiệm thu p1-3" khớp tiêu chí có nhãn đó (dạng
+  // nhãn mà directive gốc dạy agent dùng); normalize -, ., _ và khoảng trắng
+  // để "P1-3"/"p1.3"/"p1_3" đều gặp nhau.
+  const normLabel = (s: string) => s.replace(/[-_.]+/g, '-').replace(/\s+/g, ' ').trim()
+  for (const label of criterionLabelIds(criterion)) {
+    const want = normLabel(label)
+    if (want.length < 2) continue
+    const todoLabelRe = new RegExp(`nghiệm\\s*thu\\s*[:#]?\\s*${want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[-\s]+/g, '[-._\\s]+')}`, 'i')
+    if (todoLabelRe.test(todoContent)) return true
+  }
 
   // (2) FUZZY — agent diễn đạt lại tiêu chí (ngưỡng cao 0.7 chống khớp giả
   // tiếng Việt đơn âm tiết; cần ≥2 từ khớp)

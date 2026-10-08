@@ -203,13 +203,37 @@ export const READ_ONLY_INTENT_RE = /(chỉ\s+đọc|read[- ]?only|không\s+sửa
  * readOnly (task hỗn hợp khảo sát + sửa là hợp lệ — cờ readOnly khi đó phải
  * do TL chủ ý truyền và sẽ chặn phần sửa, TL tự cân nhắc). */
 const MODIFY_INTENT_RE = /\b(sửa|chỉnh\s+sửa|implement|viết|tạo|thêm|refactor|deploy|commit|push|cài\s+đặt|upgrade)\b/i
+/**
+ * r70 (BUG2-003): cụm PHỦ ĐỊNH + động từ sửa với TẤT TẬN NGỮ (không chỉ
+ * file|mã|code|nguồn như whitelist cũ trong READ_ONLY_INTENT_RE). Bằng chứng
+ * mission cmuzscdvj…yky79t (Linh Sickyx P1-3): lời giao chứa "hoàn toàn chỉ
+ * đọc … không sửa cấu hình bị cấm" — "sửa" trong PHỦ ĐỊNH với tân ngữ
+ * "cấu hình" (ngoài whitelist 4 đối tượng cũ) sống sót qua bước strip →
+ * MODIFY_INTENT_RE khớp từ "sửa" → auto-detect trả false → sub nhận đủ 45
+ * tool ghi và THỰC THI các lệnh ghi (mkdir + redirect tạo artifact). Strip
+ * tới 3 từ theo sau động từ (đủ nuốt "cấu hình bị cấm", "file mới nào",
+ * "code production"...).
+ */
+const NEGATED_MODIFY_RE = /\b(?:không|chưa|chẳng|never|don'?t|do\s+not)\s+(?:được\s+)?(?:sửa|chỉnh\s+sửa|viết|tạo|thêm|implement|refactor|deploy|commit|push|cài\s+đặt|upgrade|nâng\s+cấp|write|edit|modify|create|add|remove|delete|install)(?:\s+[^\s,.;:)\]]+){0,3}/gi
+/**
+ * r70 (BUG2-003b): nhiệm vụ CÓ yêu cầu ghi artifact riêng (lưu báo cáo/
+ * artifact/inventory...) → KHÔNG tự bật readOnly hờ — whitelist strip sẽ chặn
+ * luôn việc lưu artifact (nhiệm vụ bế tắc); TL muốn strict phải truyền cờ
+ * readOnly chủ đích và tự cân nhắc (bằng chứng P1-3: "chỉ đọc" + "lưu artifact
+ * báo cáo machine-verifiable" trong cùng một tiêu chí nghiệm thu).
+ */
+const ARTIFACT_WRITE_RE = /\b(?:lưu|ghi|tạo|save|write)\s+(?:artifact|báo\s+cáo|report|inventory|bằng\s+chứng)/i
 /** Detect readOnly từ lời giao: TÍN HIỆU MẠNH có mặt + KHÔNG còn ý định sửa
  * nào sau khi bỏ cụm ràng buộc (chống "không sửa file" tự kích hoạt guard âm
- * vì chứa từ "sửa"). */
+ * vì chứa từ "sửa") — r70: phủ định-sửa được strip tổng quát theo
+ * NEGATED_MODIFY_RE trước khi test; nhiệm vụ đòi lưu artifact riêng thì
+ * KHÔNG auto-bật (BUG2-003b). */
 export function detectReadOnlyDelegation(task: string, context?: string | null): boolean {
   const text = `${task}\n${context ?? ''}`
   if (!READ_ONLY_INTENT_RE.test(text)) return false
-  const stripped = text.replace(new RegExp(READ_ONLY_INTENT_RE.source, 'gi'), ' ')
+  if (ARTIFACT_WRITE_RE.test(text)) return false
+  let stripped = text.replace(new RegExp(READ_ONLY_INTENT_RE.source, 'gi'), ' ')
+  stripped = stripped.replace(NEGATED_MODIFY_RE, ' ')
   return !MODIFY_INTENT_RE.test(stripped)
 }
 
@@ -341,6 +365,78 @@ function compactArgs(args: Record<string, unknown>, maxLen = 100): string {
   } catch {
     return '(?)'
   }
+}
+
+/**
+ * r70 (BUG2-016): digest có cấu trúc cho evidence của trọng tài độc lập —
+ * tool đọc/khảo sát trả kết quả lớn (grep 72 match, file_read 500 dòng) thì
+ * preview 160-chars chỉ là mẩu cụt, trọng tài "không trình bày đủ" → phán
+ * âm oan (2 case r70: SENTINEL 18% + MEGATRON 12%). Digest kèm TỔNG SỐ +
+ * tối đa 6 mẫu path/dòng — đủ thẩm định trọn vẹn mà không phình evidence.
+ * Fail-open tuyệt đối: mọi lỗi → '' (evidence giữ nguyên như cũ).
+ */
+export function resultDigestForEvidence(toolName: string, r: unknown): string {
+  try {
+    if (r === null || r === undefined) return ''
+    const o = (typeof r === 'object' ? r : null) as Record<string, unknown> | null
+    if (!o) return ''
+    if (toolName === 'grep') {
+      const total = typeof o.totalMatches === 'number'
+        ? o.totalMatches
+        : Array.isArray(o.matches) ? (o.matches as unknown[]).length : -1
+      if (total >= 0) {
+        const paths = Array.isArray(o.matches)
+          ? [...new Set((o.matches as unknown[]).slice(0, 80).map(m => {
+              if (m && typeof m === 'object') {
+                const mm = m as Record<string, unknown>
+                return String(mm.file ?? mm.path ?? mm.filePath ?? '')
+              }
+              return String(m ?? '').split(':')[0]
+            }).filter(Boolean))].slice(0, 6)
+          : []
+        return ` ‹digest: ${total} match${paths.length ? ` · ${paths.join(' · ')}` : ''}›`
+      }
+    }
+    if (toolName === 'file_read' || toolName === 'file_list') {
+      const path = typeof o.path === 'string' ? o.path : ''
+      const content = typeof o.content === 'string' ? o.content : ''
+      if (path && toolName === 'file_read') return ` ‹digest: đọc trọn ${path} · ${content ? content.split('\n').length : '?'} dòng›`
+      if (toolName === 'file_list' && Array.isArray(o.files)) return ` ‹digest: ${o.files.length} file›`
+    }
+    if (toolName === 'shell' || toolName === 'run_tests' || toolName === 'run_gate' || toolName === 'type_check' || toolName === 'lint') {
+      const out = typeof o.output === 'string' ? o.output : typeof o.stdout === 'string' ? o.stdout : ''
+      if (out) return ` ‹digest: ${out.split('\n').length} dòng output›`
+    }
+    return ''
+  } catch {
+    return ''
+  }
+}
+
+/** r70 (BUG2-015): dấu hiệu lỗi provider TRANSIENT — 429/rate-limit/FreeUsage
+ * (bằng chứng r70: "Zen 429 rate-limited (key #1) — FreeUsageLimitError",
+ * "thất bại toàn chuỗi (HTTP + CLI)") / 5xx / mạng. Sub-agent loop dùng để
+ * quyết định ngủ-65s-tái-thử thay vì chết nhãn error. Export để test hồi quy. */
+export const TRANSIENT_LLM_ERROR_RE = /429|rate.?limit|freeusage|throttl|econnreset|econnrefused|etimedout|socket hang up|\b50[234]\b|temporarily|overloaded/i
+
+/**
+ * r70 (BUG2-017): merge snapshot todo của delegation — item incoming KHÔNG
+ * kèm status (update-theo-id chỉ đổi nội dung) → GIỮ status cũ của item trùng
+ * (id || content). Trước đây mặc định 'pending' → snapshot regress →
+ * completion-guard nudge stale oan (bằng chứng MEGATRON P0-3 r70: DB 9/9
+ * completed nhưng nudge "9 mục CHƯA hoàn thành"). Export để test hồi quy.
+ */
+export function mergeTodoSnapshot(
+  prev: Array<{ id?: string; content: string; status: string }>,
+  incoming: Array<{ id?: string; content: string; status: string | null }>,
+): Array<{ id?: string; content: string; status: string }> {
+  const kept = prev.filter(p => !incoming.some(t => (t.id && t.id === p.id) || t.content === p.content))
+  const merged = incoming.map(t => {
+    if (t.status !== null) return { id: t.id, content: t.content, status: t.status }
+    const hit = prev.find(p => (t.id && p.id === t.id) || p.content === t.content)
+    return { id: t.id, content: t.content, status: hit?.status ?? 'pending' }
+  })
+  return [...kept, ...merged]
 }
 
 // ==================== SUB-AGENT SLOT POOL — TỐI ĐA 3, MỖI SLOT 1 KEY (user 2026-10-29b) ====================
@@ -684,6 +780,16 @@ async function runSubAgentForProfileInner(params: {
         agentPosition: POSITION_BY_NAME[profile.name.toUpperCase()] || undefined,
         task,
       })
+      // r70 (BUG2-009): lưu TOÀN VĂN lời giao (task + context) vào trace jsonl
+      // NGAY lúc dispatch — trước đây mọi kênh đều cắt (run_start 240 chars,
+      // dev.log ~100) nên điều tra post-hoc không dựng lại được TL đã giao gì
+      // (vụ BUG2-003 phải đoán nguyên nhân từ tiêu chí directive). recordAgent-
+      // Thought ghi bền vững vào agent-runs/<runId>.jsonl (sống qua crash) —
+      // marker 📋 để phân biệt với suy nghĩ thật.
+      if (delegationRunId) {
+        const brief = `📋 LỜI GIAO ĐẦY ĐỦ (delegation brief — ghi tại dispatch): ${task}${context ? `\n— Context kèm theo: ${context}` : ''}${readOnly === true ? '\n— Cờ readOnly: ĐÚNG (TL truyền)' : ''}`
+        try { recordAgentThought(sessionId, brief, 0, delegationRunId) } catch { /* fail-open */ }
+      }
     } catch { /* fail-open */ }
     // ROUND-11 (vòng quan sát 9 — FIX subagent vô hình khi bị restart giết):
     // trước đây row AgentRunRecord của delegation CHỈ được ghi lúc kết thúc
@@ -895,31 +1001,58 @@ async function runSubAgentForProfileInner(params: {
           .trim() + subStatusNote
 
         let result: Awaited<ReturnType<typeof callLLMForAgent>> | null = null
-        try {
-          result = await withTimeout(
-            callLLMForAgent(formatted, { provider: profile.provider, model: profile.model }, systemPrompt, {
-              agentId: profile.id || `subagent:${profile.name}`,
-              agentName: `${profile.name} (sub-agent)`,
-              temperature: profile.temperature,
-              // TASK 39 — bỏ cap 16384: maxTokens <= 0 (-1) = KHÔNG giới hạn
-              // (callZenProvider omit max_tokens → model output max 512k);
-              // > 0 giữ nguyên giá trị profile (cap không phải target).
-              maxTokens: profile.maxTokens,
-              // TASK 39 — NATIVE FC: schema tools qua API → model emit tool_calls
-              ...(nativeToolSchemas.length > 0 ? { tools: nativeToolSchemas, tool_choice: 'auto' as const } : {}),
-              abortCheck: isCancelled,
-            }),
-            // CI-1: timeout tổng = 0 (unlimited) → per-call timeout standalone
-            // 21' (align GOAL_LOOP_LLM_TIMEOUT_MS) thay vì "thời gian còn lại"
-            SUBAGENT_TIMEOUT_MS > 0
-              ? Math.max(60_000, SUBAGENT_TIMEOUT_MS - (Date.now() - startedAt))
-              : 21 * 60_000,
-            `SubAgent ${profile.name} LLM`,
-          )
-        } catch (err) {
-          state.errorMessage = err instanceof Error ? err.message : String(err)
-          state.endedBy = 'error'
-          return
+        // r70 (BUG2-015 — bằng chứng mission cmuzscdvj…yky79t): 2 delegation
+        // chết nhãn "error" (SENTINEL 17:24:01 sau run_gate; SENTINEL 17:30:17
+        // "Zen 429 rate-limited — thất bại toàn chuỗi") chỉ vì provider
+        // FreeUsageLimitError cooldown 60s không ai chờ — delegation đang
+        // khỏe bị giết oan giữa chừng. Giờ: lỗi TRANSIENT (429/rate-limit/
+        // 5xx/mạng) → ngủ 65s (tôn trọng cooldown Zen) rồi THỬ LẠI, tối đa
+        // 2 lần; chỉ chịu thua khi hết lượt hoặc lỗi KHÔNG transient.
+        let llmAttempts = 0
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          try {
+            result = await withTimeout(
+              callLLMForAgent(formatted, { provider: profile.provider, model: profile.model }, systemPrompt, {
+                agentId: profile.id || `subagent:${profile.name}`,
+                agentName: `${profile.name} (sub-agent)`,
+                temperature: profile.temperature,
+                // TASK 39 — bỏ cap 16384: maxTokens <= 0 (-1) = KHÔNG giới hạn
+                // (callZenProvider omit max_tokens → model output max 512k);
+                // > 0 giữ nguyên giá trị profile (cap không phải target).
+                maxTokens: profile.maxTokens,
+                // TASK 39 — NATIVE FC: schema tools qua API → model emit tool_calls
+                ...(nativeToolSchemas.length > 0 ? { tools: nativeToolSchemas, tool_choice: 'auto' as const } : {}),
+                abortCheck: isCancelled,
+              }),
+              // CI-1: timeout tổng = 0 (unlimited) → per-call timeout standalone
+              // 21' (align GOAL_LOOP_LLM_TIMEOUT_MS) thay vì "thời gian còn lại"
+              SUBAGENT_TIMEOUT_MS > 0
+                ? Math.max(60_000, SUBAGENT_TIMEOUT_MS - (Date.now() - startedAt))
+                : 21 * 60_000,
+              `SubAgent ${profile.name} LLM`,
+            )
+            break
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            llmAttempts++
+            if (
+              TRANSIENT_LLM_ERROR_RE.test(msg) && llmAttempts <= 2 && !timedOut && !isCancelled() &&
+              (SUBAGENT_EFFECTIVE_MAX_ITERATIONS === 0 || iterations < SUBAGENT_EFFECTIVE_MAX_ITERATIONS)
+            ) {
+              console.warn(`[SubAgent] ${profile.name} LLM transient (lần ${llmAttempts}/2): ${msg.slice(0, 140)} → chờ 65s (cooldown provider) rồi thử lại`)
+              if (sessionId && delegationRunId) {
+                try {
+                  recordAgentThought(sessionId, `⏳ Provider nghẽn tạm thời (429/rate-limit) — delegation CHỜ 65s rồi thử lại (lần ${llmAttempts}/2), KHÔNG chết giữa chừng`, iterations, delegationRunId)
+                } catch { /* fail-open */ }
+              }
+              await new Promise(r => setTimeout(r, 65_000))
+              continue
+            }
+            state.errorMessage = msg
+            state.endedBy = 'error'
+            return
+          }
         }
 
         if (!result || (!result.content && !result.tool_calls?.length)) {
@@ -951,9 +1084,18 @@ async function runSubAgentForProfileInner(params: {
         // goal-loop r67 F9 (đo tỉ lệ ký tự có dấu bằng MÃ, không tin prompt).
         // 2 nudge đầu; sau đó ngừng nudge nhưng vẫn đếm (ghi outcome.report)
         // để parent + trọng tài thấy vi phạm tồn dư.
+        // r70 (BUG2-007/013): đo trên prose ĐÃ MASK tool-call — mirror fix
+        // goal-loop r70 (lượt thuần tool-call JSON không còn bị kết tội
+        // "viết tiếng Anh" oan — bằng chứng Linh Sickyx evt6 ratio 7% ngay
+        // sau thought tiếng Việt chuẩn).
         try {
-          const { vietnameseTextRatio } = await import('@/lib/agent-goal-loop')
-          const viRatio = vietnameseTextRatio(result.content || '')
+          const [{ vietnameseTextRatio }, { maskToolCallText }, { stripInvisibleThoughtNoise }] = await Promise.all([
+            import('@/lib/agent-goal-loop'),
+            import('@/lib/tool-calls'),
+            import('@/lib/agent-run-tracker'),
+          ])
+          const subProseForLang = maskToolCallText(stripInvisibleThoughtNoise(result.content || ''))
+          const viRatio = vietnameseTextRatio(subProseForLang)
           if (viRatio < 0.08 && subViNudges < 2) {
             subViNudges++
             transcript.push({
@@ -1032,7 +1174,29 @@ async function runSubAgentForProfileInner(params: {
           // — nudge (tối đa 2 lần) yêu cầu làm nốt hoặc đánh dấu failed kèm lý
           // do thật. Hết lượt nudge → chấp nhận conclude (chống loop vô hạn) —
           // closeRunTodosAtEnd sẽ đóng phần còn lại theo verdict.
-          const openTodos = lastTodoSnapshot.filter(t => t.status === 'pending' || t.status === 'in_progress' || t.status === 'blocked')
+          let openTodos = lastTodoSnapshot.filter(t => t.status === 'pending' || t.status === 'in_progress' || t.status === 'blocked')
+          if (openTodos.length > 0) {
+            // r70 (BUG2-017 — bằng chứng MEGATRON P0-3 r70): snapshot in-memory
+            // có thể STALE — batch cuối chỉ có todo_write (không evidence) thì
+            // nhánh autoComplete-refresh không chạy → args-merge cũ đẩy status
+            // về 'pending' dù DB đã auto-complete theo bằng chứng → nudge
+            // "9 mục CHƯA hoàn thành" oan, sub phải tốn 1 vòng todo_read xác
+            // minh "stale". Giờ: trước khi nudge, ĐỌC LẠI DB (nguồn sự thật,
+            // 1 query delegation-scope) — chỉ nudge khi DB còn xác nhận mở.
+            try {
+              const { db } = await import('@/lib/db')
+              const fresh = await db.todo.findMany({
+                where: { sessionId: todoScopeSessionId, runId: delegationRunId },
+                orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
+                select: { content: true, status: true },
+                take: 200,
+              })
+              if (fresh.length > 0) {
+                lastTodoSnapshot = fresh.map(t => ({ id: undefined, content: t.content, status: t.status }))
+                openTodos = lastTodoSnapshot.filter(t => t.status === 'pending' || t.status === 'in_progress' || t.status === 'blocked')
+              }
+            } catch { /* fail-open — giữ snapshot cũ */ }
+          }
           if (
             openTodos.length > 0 && sawTodoWrite && todoCompletionNudges < MAX_TODO_COMPLETION_NUDGES &&
             (SUBAGENT_EFFECTIVE_MAX_ITERATIONS === 0 || iterations < SUBAGENT_EFFECTIVE_MAX_ITERATIONS) &&
@@ -1180,18 +1344,19 @@ async function runSubAgentForProfileInner(params: {
             // update todo_write thường chỉ chứa MỤC THAY ĐỔI → thay thế cả snapshot
             // sẽ mất các mục còn lại. Merge theo (id || content): item đến thay
             // item trùng, item mới thêm vào, item vắng vẫn giữ trạng thái cũ.
+            // r70 (BUG2-017): item update-theo-id KHÔNG kèm status → GIỮ status
+            // cũ trong snapshot (trước đây mặc định 'pending' → snapshot regress
+            // → completion-guard nudge stale oan — bằng chứng MEGATRON P0-3).
+            // Trích thành mergeTodoSnapshot export để test hồi quy trực tiếp.
             if (Array.isArray(toolArgs.todos)) {
               const incoming = (toolArgs.todos as Array<Record<string, unknown>>)
                 .map(t => ({
                   id: typeof t?.id === 'string' ? t.id : undefined,
                   content: String(t?.content ?? ''),
-                  status: String(t?.status ?? 'pending'),
+                  status: t?.status === undefined || t?.status === null ? null : String(t.status),
                 }))
                 .filter(t => t.content)
-              lastTodoSnapshot = [
-                ...lastTodoSnapshot.filter(prev => !incoming.some(t => (t.id && t.id === prev.id) || t.content === prev.content)),
-                ...incoming,
-              ]
+              lastTodoSnapshot = mergeTodoSnapshot(lastTodoSnapshot, incoming)
             }
           }
           let toolResult: { success: boolean; result: unknown }
@@ -1231,7 +1396,20 @@ async function runSubAgentForProfileInner(params: {
               ? JSON.stringify(r).slice(0, 160)
               : String(r ?? '').slice(0, 160)
           } catch { preview = '(?)' }
-          evidence.push(`${tc.name}(${compactArgs(tc.args)}) → ${toolResult.success ? '✓' : '✗'} ${preview}`)
+          // r70 (BUG2-016 — bằng chứng r70: trọng tài phán âm SENTINEL 18%
+          // "Machine-search có 72 kết quả nhưng bằng chứng bị cắt" + MEGATRON
+          // 12% "chỉ nêu tổng 74 match… không trình bày đủ" — 2 case cùng họ:
+          // preview 160-chars cắt mất substantive result → trọng tài đòi thứ
+          // nó không được thấy (catch-22). Giờ: tool đọc/khảo sát THÀNH CÔNG
+          // kèm DIGEST có cấu trúc (tổng số + N mẫu đầu) — đủ thẩm định mà
+          // không phình evidence tier.
+          let digest = ''
+          if (toolResult.success) {
+            try {
+              digest = resultDigestForEvidence(tc.name, toolResult.result)
+            } catch { /* fail-open — digest là phần thưởng */ }
+          }
+          evidence.push(`${tc.name}(${compactArgs(tc.args)}) → ${toolResult.success ? '✓' : '✗'} ${preview}${digest}`)
           // r69 (audit F2 r68 + BUG-010): máy đo file ghi/sửa từ args THẬT của
           // tool call (bản r68 bóc từ preview 160-chars bị cắt → ra blob JSON
           // cụt thay vì tên file — máy đo phải chính xác tuyệt đối).

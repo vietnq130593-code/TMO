@@ -422,6 +422,29 @@ export function maskToolCallText(content: string): string {
     if (json) spans.push({ start: m.index!, end: m.index! + json.length, name })
   }
 
+  // (4) r70 (BUG2-012): khối Claude tool_use `{"tool_uses":[{recipient_name…
+  // parameters…}]}` — kèm rác tiền tố kết thúc bằng `>` (tool_use>/
+  // ngt_…_rewritten>/`< foothold to=…`) vẫn còn lại phía trước (ngắn, vô hại).
+  // Bằng chứng main evt55/68 r70: họ này ngoài 3 họ trên → thought lộ nguyên
+  // văn khối JSON + detector ngôn ngữ đo nhầm (BUG2-007/013).
+  const usesRe = /\{\s*"tool_uses"\s*:\s*\[/g
+  for (const m of content.matchAll(usesRe)) {
+    const outerEnd = findBalancedEnd(content, m.index!, '{', '}')
+    let firstName = 'tool_uses'
+    const nm = /"recipient_name"\s*:\s*"(?:functions\.)?([a-z_][a-z0-9_]*)"/.exec(
+      content.slice(m.index!, m.index! + 400),
+    )
+    if (nm) firstName = nm[1]
+    if (outerEnd > m.index!) {
+      spans.push({ start: m.index!, end: outerEnd + 1, name: firstName })
+    } else {
+      // Mảng đứt giữa chừng (maxTokens cắt) — phần còn lại của chuỗi là đuôi
+      // dở của cùng khối call (không có prose lành mạnh nào theo sau một JSON
+      // đứt) → che tới HẾT để thought không lộ nửa sau `recipient_name`.
+      spans.push({ start: m.index!, end: content.length, name: firstName })
+    }
+  }
+
   if (spans.length === 0) return content
   // Sắp theo start + loại span chồng lấn, thay từ CUỐI về ĐẦU (giữ index)
   spans.sort((a, b) => a.start - b.start)
@@ -1082,6 +1105,74 @@ function extractNativeJsonBodyCalls(
   return { calls, failures }
 }
 
+// ============================================================================
+// r70 (BUG2-012 — quan sát mission cmuzscdvj…yky79t): THÂN TOOL CALL DẠNG
+// CLAUDE tool_use. Bằng chứng main run evt55/evt68 (17:14-17:18Z — model rối
+// cú pháp sau restart + cảnh báo ngôn ngữ, chuyển hẳn sang định dạng Claude):
+//   tool_use>{"tool_uses":[{"recipient_name":"functions.file_read",
+//     "parameters":{"path":"agent-runs/sub_1791479109537_3.jsonl","offset":9,…}}]}
+// kèm biến thể tiền tố garble (`ngt_2b90d4cfb8c4_rewritten>`, `< foothold
+// to=todo_write`). Tầng 1-8 không khớp → prose-nudge "Lượt output THUẦN VĂN
+// BẢN (0 tool call)" bắn OAN 2/2 (evt45/70) — model ĐANG cố gọi tool mà bị
+// bảo "hãy phát tool call thật"; maskToolCallText cũng không che họ này →
+// thought lộ nguyên văn khối JSON (evt55/68). Giờ: quét body
+// `{"tool_uses":[{recipient_name, parameters}, …]}` — bóc TỪNG phần tử,
+// strip tiền tố `functions.`, whitelist tên (chống hallucinate), salvage
+// phần tử hoàn chỉnh trước điểm đứt khi cả mảng bị cắt giữa chừng.
+// ============================================================================
+
+const CLAUDE_TOOL_USE_SIGN = /"tool_uses"\s*:\s*\[/
+const CLAUDE_TOOL_USE_ELEM_RE = /\{\s*"recipient_name"\s*:\s*"([A-Za-z_][\w.-]*)"\s*,\s*"parameters"\s*:\s*/g
+
+function extractClaudeToolUseCalls(
+  output: string,
+  /** Vùng đã được tầng khác parse — không nhúng execute kép. */
+  skipSpans: Array<[number, number]>,
+): { calls: ParsedToolCall[]; failures: number } {
+  if (!CLAUDE_TOOL_USE_SIGN.test(output)) return { calls: [], failures: 0 }
+  const calls: ParsedToolCall[] = []
+  let failures = 0
+  const re = new RegExp(CLAUDE_TOOL_USE_ELEM_RE.source, 'g')
+  let m: RegExpExecArray | null
+  while ((m = re.exec(output)) !== null) {
+    if (skipSpans.some(([s, e]) => m!.index >= s && m!.index < e)) continue
+    let name = m[1]
+    if (name.startsWith('functions.')) name = name.slice('functions.'.length)
+    if (name.startsWith('fn.')) name = name.slice('fn.'.length)
+    if (!KNOWN_TOOL_NAME_SET.has(name)) continue // chống hallucimate
+    const argsStart = m.index + m[0].length
+    if (output[argsStart] !== '{') continue // parameters phải là object
+    const jsonStr = findBalancedJsonUtil(output.slice(argsStart), '')
+    if (jsonStr) {
+      const args = tryParseLooseJson(jsonStr) ?? (SALVAGE_SAFE_TOOLS.has(name) ? salvageTruncatedJsonArgs(jsonStr) : null)
+      if (args) {
+        calls.push({ id: nextToolCallId(), name, args })
+        skipSpans.push([m.index, argsStart + jsonStr.length]) // che phần tử + che tầng tag-direct
+        re.lastIndex = argsStart + jsonStr.length
+        continue
+      }
+      failures++ // parameters balanced nhưng JSON hỏng + salvage không được
+      continue
+    }
+    // Parameters đứt giữa chừng: salvage chỉ cho tool AN TOÀN — cắt candidate
+    // tại dấu `}` cấp phần tử kế (hoặc hết chuỗi).
+    if (SALVAGE_SAFE_TOOLS.has(name)) {
+      const tail = output.slice(argsStart)
+      const nextElem = tail.search(/\}\s*,\s*\{|\}\s*\]/)
+      const candidate = nextElem === -1 ? tail : tail.slice(0, nextElem + 1)
+      const salvaged = salvageTruncatedJsonArgs(candidate)
+      if (salvaged) {
+        calls.push({ id: nextToolCallId(), name, args: salvaged })
+        skipSpans.push([m.index, argsStart + candidate.length])
+        if (nextElem !== -1) re.lastIndex = argsStart + nextElem
+        continue
+      }
+    }
+    failures++ // đứt + không salvage được → detector dạy phát lại
+  }
+  return { calls, failures }
+}
+
 /**
  * Parse tool_call patterns from LLM text output (kèm đếm parse failures).
  *
@@ -1258,6 +1349,13 @@ export function extractToolCallsWithDiagnostics(rawOutput: string): ToolCallPars
   const nativeJsonRes = extractNativeJsonBodyCalls(cleaned, jsonSpans)
   calls.push(...nativeJsonRes.calls)
   parseFailures += nativeJsonRes.failures
+
+  // r70 (BUG2-012): tầng 7 — thân Claude tool_use (bằng chứng evt55/68 r70:
+  // `tool_use>{"tool_uses":[{"recipient_name":"functions.X","parameters":…}]}`)
+  // — chạy SAU native body để không đè tier 6; span đã che chống execute kép.
+  const claudeRes = extractClaudeToolUseCalls(cleaned, jsonSpans)
+  calls.push(...claudeRes.calls)
+  parseFailures += claudeRes.failures
 
   // r66 (V1b): tầng CUỐI — tag-trực-tếp trên vùng còn lại (pattern-1/2 đã cắt
   // các JSON args của tool_call chuẩn khỏi cleaned → ví dụ tag-tool nằm trong
