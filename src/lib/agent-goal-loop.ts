@@ -601,7 +601,7 @@ interface EvidenceEntry {
   text: string // preview ~200 chars
 }
 
-interface EvalVerdict {
+export interface EvalVerdict {
   complete: boolean
   confidence: number
   verified: boolean
@@ -1488,8 +1488,7 @@ Nguyên tắc SẮT:
 16. NEEDS-INPUT CHECK (Task 48 — chống đốt chu kỳ vô ích): xác định xem mục tiêu có đang bị chặn DUY NHẤT bởi thông tin/ủy quyền/phê duyệt mà CHỈ NGƯỜI DÙNG cung cấp được không (agent đã hỏi trong lời kết luận — vd: thiếu scope/ủy quyền pentest, thiếu credentials, cần user chọn giữa các phương án, thông tin không có trong hệ thống...). ĐÚNG → "needsInput": true + "complete": false + "missing" nêu RÕ thông tin cụ thể cần user trả lời. KHÔNG dùng needsInput cho việc agent TỰ làm được bằng tool/tự phục vụ (xem rule 9a — đó là trốn tránh, không phải thiếu thông tin); cũng KHÔNG dùng khi agent chưa hề hỏi hoặc còn đường tấn công khả thi chưa thử. needsInput=true → hệ thống DỪNG vòng lặp ngay và trả câu hỏi về user (không chạy thêm chu kỳ).
 17. REGRESSION CHECK (user directive 2026-10-06 — hồi quy phần việc dở): prompt có khối "PHẦN VIỆC ĐANG LÀM DỞ TỪ CÁC RUN TRƯỚC" (các run trước trong phiên còn việc chưa xong, kèm todo id). Đối chiếu TỪNG mục với bằng chứng của run này: mục đã được hồi quy làm tiếp VÀ có bằng chứng hoàn thành (todo_write đóng đúng id + bằng chứng tool) → coi như đã xử lý. Còn mục NÀO chưa có bằng chứng hoàn thành → "complete": false và ghi vào "missing" dòng bắt đầu bằng "hồi quy: <nội dung mục>" — mục tiêu riêng của run có đạt tới đâu thì phiên vẫn còn việc dở, tác vụ chỉ trọn vẹn khi đã hồi quy xong phần dở. KHÔNG dùng needsInput cho regression (đó là việc còn tồn, không phải thiếu thông tin).
 18. METADATA-TRUTH + COMPRESSION-AWARE (r60 — từ quan sát mission r59 …9k3kp8): (a) METADATA LÀ SỐ MÁY ĐO: khi tiêu chí đòi CON SỐ đếm, trường total/rowCount/totalMatches trong KẾT QUẢ TOOL là bằng chứng máy hợp lệ (mở rộng rule 11) — KHÔNG bắt agent "đếm tay lại" khi tool đã trả số; agent tự đếm tay mâu thuẫn với metadata → tin metadata. (b) NÉN CONTEXT: prompt có dòng "⚙️ GHI CHÚ CONTEXT ... đã qua nén ×N" → tool-result cũ trong transcript của agent có thể chỉ còn tóm tắt digest — NHẬT KÝ BẰNG CHỨNG TOOL dưới đây là bản ghi CỐ ĐỊNH lúc tool chạy (KHÔNG bị nén) nên đối chiếu dựa trên đó. KHÔNG đòi trích nguyên văn một phần đã bị nén khi nhật ký + digest đã xác nhận nội dung (đó là yêu cầu bất khả thi — nguyên nhân chu kỳ bế tắc 1%/2%/3% r59); khi cần nguyên văn chính xác hơn, chấp nhận lời đề xuất re-read-trích-dẫn của agent ở chu kỳ sau (đó là hành động hợp lệ, không phải lặp việc).
-
-19. DELEGATION CHECK (r66 — user chỉ đạo: TL tự ôm làm thay vì delegate): prompt có khối "THỐNG KÊ PHÂN CÔNG RUN" (harness kiểm đếm — agent KHÔNG thể bịa) cho thấy N thao tác TỰ triển khai (sửa/ghi/chạy) với 0 delegation → đối chiếu tính chất việc với chức trách: nếu mục tiêu/chu kỳ thực chất là việc chuyên môn của AGENT KHÁC (code/review/research/thiết kế/tối ưu — Code Team + roster standalone) mà agent TỰ làm toàn bộ không hề giao đúng người → KHÔNG hạ complete của MỤC TIÊU KẾT QUẢ (kết quả đúng vẫn đúng), NHƯNG thêm vào "sideIssues": "phân công: N thao tác tự làm, 0 delegation — việc chuyên môn agents khác cần delegate (đối chiếu Agent Roster)" và trong "nextPlan" yêu cầu chu kỳ kế delegate đúng người các phần việc còn lại. Nếu việc thực sự thuộc chức trách chính của agent (đối chiếu vai trò) → KHÔNG chấm sai — ghi nhận bình thường.
+   (r67 F7 — quy tắc 19 delegation check đã chuyển sang CƯỞNG CHẾ MÃ harness, không còn trong prompt này)
 
 Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích thêm):
 {"complete": true|false, "confidence": 0.0-1.0, "verified": true|false, "missing": ["..."], "rootCause": "...", "nextPlan": ["..."], "sideIssues": ["..."], "debtDecision": "none|record|continue", "debtReadiness": "ready|blocked", "debtBlockedReason": "...", "needsInput": true|false}"`
@@ -1718,6 +1717,52 @@ export function summarizeToolResult(result: unknown): string {
 // ==================== EVALUATOR ====================
 
 /**
+ * r67 (F7 — user chỉ đạo: "tôi không thích dạy agents bằng prompt... mọi thứ
+ * với hệ thống TMO đều phải là hardcode"): HẬU XỬ LÝ VERDICT BẰNG MÃ thay
+ * quy tắc 19 cũ trong prompt evaluator (r66). Khi agent CÓ tool delegation
+ * (TL đúng nghĩa) mà run có ≥8 thao tác TỰ triển khai + 0 delegation → MÃ
+ * gắn thẳng sideIssue + nextPlan vào verdict (LLM không thể bỏ qua, không
+ * phụ thuộc việc evaluator có đọc/không đọc rule trong prompt khi dữ liệu
+ * lớn). KHÔNG đổi complete/confidence — kết quả đúng vẫn đúng, chỉ nợ kỷ
+ * luật phân công bị ghi nhận (mirror ngữ nghĩa rule 19 cũ).
+ */
+export function applyDelegationVerdictGuard(
+  verdict: EvalVerdict,
+  stats: { selfModifyOps: number; delegationOps: number },
+  hasDelegation: boolean,
+): void {
+  if (!hasDelegation) return // agent không có tool delegate → không áp kỷ luật TL
+  if (stats.delegationOps > 0 || stats.selfModifyOps < 8) return // đã phân công / chưa tới ngưỡng
+  const sideIssue = `phân công: ${stats.selfModifyOps} thao tác tự triển khai, 0 delegation — việc chuyên môn agents khác (code → Code Team, review/bảo mật → SENTINEL/Linh Sickyx, nghiên cứu → ALISTA, kiến trúc → SHOCWAVE, tối ưu → CATALYST) cần delegate_task/dispatch_agent ở phần việc còn lại; nếu toàn bộ việc này thuộc chức trách chính của agent thì bỏ qua`
+  if (!verdict.sideIssues.some(s => s.includes('phân công:'))) {
+    verdict.sideIssues.push(sideIssue)
+  }
+  if (!verdict.nextPlan.some(p => p.includes('delegate'))) {
+    verdict.nextPlan.push('delegate các phần việc chuyên môn còn lại cho đúng agent (đối chiếu chức trách), chỉ tự làm phần việc thuộc chức trách của mình')
+  }
+}
+
+/**
+ * r67 (F9 — hard-enforcement ngôn ngữ tiếng Việt): đo tỉ lệ ký tự có dấu
+ * tiếng Việt trong output agent. Văn bản tiếng Việt chuẩn có ~35-45% ký tự
+ * mang dấu thanh/bảo (a→á à ả ã ạ…); tiếng Anh ~0%. Ngưỡng 0.08 + tối thiểu
+ * 60 chữ cái = phát hiện output tiếng Anh rõ ràng trong khi không phải khối
+ * code/log (code/log thường nằm trong tool args, không trong content chính).
+ * Trả về ratio (0..1); text ngắn → 1 (không chấm — tránh nhiễu).
+ */
+export function vietnameseTextRatio(text: string): number {
+  if (!text) return 1
+  // Toàn bộ chữ cái Latin (ASCII + Latin mở rộng — tiếng Việt có dấu)
+  const letters = text.match(/[A-Za-z\u00C0-\u024F\u1E00-\u1EFF]/g)
+  if (!letters || letters.length < 60) return 1
+  // Chữ cái CÓ DẤU (non-ASCII Latin): tiếng Anh ~0%, văn tiếng Việt chuẩn
+  // thường ≥30% (nguyên âm mang dấu thanh/dấu phụ)
+  const diacritics = text.match(/[\u00C0-\u024F\u1E00-\u1EFF]/g)
+  const ratio = (diacritics?.length ?? 0) / letters.length
+  return Number.isFinite(ratio) ? ratio : 1
+}
+
+/**
  * Đánh giá độc lập: mục tiêu đạt chưa, dựa trên bằng chứng tool thật.
  * Trả về null nếu LLM fail / JSON không parse được (caller tự heuristic).
  */
@@ -1747,10 +1792,9 @@ async function evaluateCompletion(params: {
    * (rule 18b) biết tool-result cũ có thể chỉ còn digest, tránh đòi nguyên văn
    * đã bị nén (bế tắc 1%/2%/3% 3 chu kỳ r59 …9k3kp8). */
   compressions?: number
-  /** r66 (V2c) — thống kê phân công run (harness kiểm đếm): selfModifyOps thao
-   * tác tự triển khai, delegationOps lượt giao sub-agent. Có dữ liệu + 0
-   * delegation + nhiều thao tác tự làm → evaluator chấm rule 19. */
-  delegationStats?: { selfModifyOps: number; delegationOps: number }
+  /** r67 (F7): delegationStats đã CHUYỂN sang hậu xử lý MÃ tại caller
+   * (applyDelegationVerdictGuard) — không còn đưa vào prompt evaluator
+   * (user chỉ đạo: hardcode thay dạy-bằng-prompt). */
   /**
    * TASK 21 — các lỗi phát sinh CHƯA XỬ LÝ (pendingDebtIssues: trọng tài đã
    * quyết định xử lý ở chu kỳ debt trước). Truyền vào để evaluator ĐỐI CHIỂU
@@ -1769,7 +1813,7 @@ async function evaluateCompletion(params: {
    */
   regressionPending?: string[]
 }): Promise<EvalVerdict | null> {
-  const { goal, lastAssistantContent, evidence, verifyEvidence, unverifiedModifications, codeModified, hasStrongVerify, strongVerifyToolsAvailable, agentProvider, agentModel, agentId, agentName, abortCheck, onTokens, debtIssues, regressionPending, compressions, delegationStats } = params
+  const { goal, lastAssistantContent, evidence, verifyEvidence, unverifiedModifications, codeModified, hasStrongVerify, strongVerifyToolsAvailable, agentProvider, agentModel, agentId, agentName, abortCheck, onTokens, debtIssues, regressionPending, compressions } = params
 
   // r60.1 — TOTAL CAP: giữ entries MỚI NHẤT (đối chiếu cuối run cần nhất), lược
   // cũ nhất trước khi vượt EVIDENCE_BLOCK_MAX_CHARS (xem const ở trên).
@@ -1836,13 +1880,6 @@ async function evaluateCompletion(params: {
     ? `\n\n⚙️ GHI CHÚ CONTEXT: transcript của agent đã qua nén ×${compressions} — tool-result cũ có thể chỉ còn tóm tắt digest; NHẬT KÝ BẰNG CHỨNG TOOL dưới đây là bản ghi CỐ ĐỊNH lúc tool chạy (không bị nén) — đối chiếu dựa trên nhật ký đó, KHÔNG đòi trích nguyên văn phần đã bị nén khi nhật ký + digest đã xác nhận nội dung (quy tắc 18b).`
     : ''
 
-  // r66 (V2c) — DELEGATION STATS block: chỉ hiện khi TL ôm làm (≥6 thao tác tự
-  // triển khai) và 0 delegation — evaluator chấm rule 19. Có delegation thì
-  // KHÔNG hiện (tránh nhiễu khi phân công đã ổn).
-  const delegationNote = delegationStats && delegationStats.delegationOps === 0 && delegationStats.selfModifyOps >= 6
-    ? `\n\nTHỐNG KÊ PHÂN CÔNG RUN (harness kiểm đếm từ tool call thật — agent KHÔNG thể bịa): ${delegationStats.selfModifyOps} thao tác TỰ triển khai (sửa/ghi/chạy), 0 delegation cho sub-agent. → Đối chiếu quy tắc 19: nếu các việc này thực chất thuộc chuyên môn agents khác (code/review/research/thiết kế/tối ưu) → sideIssue "phân công" + nextPlan yêu cầu delegate. Nếu đúng chức trách agent → ghi nhận bình thường.`
-    : ''
-
   const prompt = `MỤC TIÊU CỦA AGENT:
 ${goal.slice(0, 2000)}
 
@@ -1850,7 +1887,7 @@ LỜI KẾT LUẬN CUỐI CÙNG CỦA AGENT (chỉ là tuyên bố — cần đ�
 ${lastAssistantContent.slice(0, 2500)}
 
 BẰNG CHỨNG KIỂM ĐỊNH CHU KỲ CUỐI (HARNESS kiểm đếm từ tool call thật — agent KHÔNG thể bịa):
-${verifyBlock}${weakVerifyWarning}${debtCheckBlock}${regressionCheckBlock}${compressionNote}${delegationNote}${unverifiedModifications ? '\n\n⚠️ CÓ THAO TÁC SỬA (file_edit/shell/git...) SAU LẦN KIỂM ĐỊNH CUỐI — kết quả của lần sửa đó CHƯA được kiểm chứng.' : ''}
+${verifyBlock}${weakVerifyWarning}${debtCheckBlock}${regressionCheckBlock}${compressionNote}${unverifiedModifications ? '\n\n⚠️ CÓ THAO TÁC SỬA (file_edit/shell/git...) SAU LẦN KIỂM ĐỊNH CUỐI — kết quả của lần sửa đó CHƯA được kiểm chứng.' : ''}
 
 NHẬT KÝ BẰNG CHỨNG TOOL (theo thứ tự thời gian — đây là sự thật duy nhất đáng tin):
 ${evidenceBlock}
@@ -2400,6 +2437,19 @@ export async function runGoalDrivenLoop(params: {
   // cuối mỗi run, giờ có đường recall đầu run). Fail-open bên trong helper.
   const agentMemoryBlock = resumeState ? '' : await buildAgentMemoryBlock(agentId, agentName, userMessage)
 
+  // r67 (F8 — user chỉ đạo "lấy gì làm bản đồ..."): nạp BẢN ĐỒ DỮ LIỆU liên
+  // quan mục tiêu run (định tuyến deterministic từ user message — hardcode
+  // registry src/lib/data-map.ts, phủ Prisma + Qdrant + Neo4J + file). Mọi
+  // run mới đều THẤY vùng đọc/ghi đúng việc — code-enforced, không phụ thuộc
+  // agent nhớ/hoặc bỏ qua hướng dẫn. Fail-open tuyệt đối.
+  let dataMapBlock = ''
+  if (!resumeState) {
+    try {
+      const { buildDataMapBlock } = await import('@/lib/data-map')
+      dataMapBlock = buildDataMapBlock(`${userMessage}`.slice(0, 2500))
+    } catch { /* fail-open — bản đồ không được phép làm hỏng run */ }
+  }
+
 /**
  * r66 (V5b — user chỉ đạo: DB phải là BỘ NHỚ được truy hồi, không chỉ ghi):
  * AgentMemory WARM đã được GHI cuối mỗi run (storeMemory insight) nhưng chưa
@@ -2484,6 +2534,8 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
         { role: 'system', content: fullSystemPrompt },
         ...(priorTaskSummariesBlock ? [{ role: 'user' as const, content: priorTaskSummariesBlock }] : []),
         ...(agentMemoryBlock ? [{ role: 'user' as const, content: agentMemoryBlock }] : []),
+        // r67 (F8): BẢN ĐỒ DỮ LIỆU — định tuyến vùng đọc/ghi theo mục tiêu
+        ...(dataMapBlock ? [{ role: 'user' as const, content: dataMapBlock }] : []),
         ...chatHistory.slice(-historyTake).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
         ...(pendingDebtBlock ? [{ role: 'user' as const, content: pendingDebtBlock }] : []),
         ...(regressionContextMessage ? [{ role: 'user' as const, content: regressionContextMessage }] : []),
@@ -2503,9 +2555,14 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
   const goalMsgIndex = resumeState ? 0 : messages.length - 1
   if (priorTaskSummariesBlock) {
     console.log(`[GoalLoop] ${agentName} nạp tóm tắt các tác vụ trước trong session (${priorTaskSummariesBlock.length} chars) trước ${historyTake} message cuối — bức tranh dài hạn cho run mới`)
-  if (agentMemoryBlock) {
-    console.log(`[GoalLoop] ${agentName} nạp AgentMemory WARM (${agentMemoryBlock.length} chars) — trí nhớ các run trước liên quan` )
   }
+  // r67 (F3): sửa lỗi lồng nhầm ngoặc từ r66 — log memory-block trước đây chỉ
+  // in khi CÓ tóm tắt tác vụ trước (bị lồng trong if kia). Tách đúng từng khối.
+  if (agentMemoryBlock) {
+    console.log(`[GoalLoop] ${agentName} nạp AgentMemory WARM (${agentMemoryBlock.length} chars) — trí nhớ các run trước liên quan`)
+  }
+  if (dataMapBlock) {
+    console.log(`[GoalLoop] ${agentName} nạp BẢN ĐỒ DỮ LIỆU (${dataMapBlock.length} chars) — định tuyến vùng đọc/ghi theo mục tiêu (Prisma/Qdrant/Neo4J)`)
   }
   // 2026-10-27 — Thought Progress ghi rõ run này mở đầu bằng xử lý nợ kỹ thuật
   // (nguồn: Todo follow-up pending từ các run trước — xem buildPendingDebtBlock)
@@ -2621,6 +2678,13 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
   let selfModifyOps = resumeState?.counters.selfModifyOps ?? 0
   let delegationOps = resumeState?.counters.delegationOps ?? 0
   let delegationNudges = resumeState?.counters.delegationNudges ?? 0
+  // r67 (F7 — user chỉ đạo: HARDCODE thay dạy-bằng-prompt): số lần CỔNG
+  // PHÂN CÔNG đã cắt chu kỳ (trần 2/run — chống cắt vô hạn khi việc thực sự
+  // thuộc chức trách TL; sau trần, evaluator-side guard vẫn gắn sideIssue).
+  let delegationGateCuts = resumeState?.counters.delegationGateCuts ?? 0
+  // r67 (F9 — tiếng Việt hard-enforcement): số lần cảnh báo ngôn ngữ đã dùng
+  // (trần 2/run — detector đo tỉ lệ ký tự có dấu tiếng Việt trong output).
+  let viNudges = resumeState?.counters.viNudges ?? 0
   const noteDelegationStat = (toolName: string) => {
     if (DELEGATION_LOG_TOOLS.has(toolName)) delegationOps++
     else if (MODIFY_TOOLS.has(toolName)) selfModifyOps++
@@ -2767,7 +2831,7 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
     runId,
     messages: messages.map(m => ({ role: m.role, content: m.content, tool_call_id: m.tool_call_id })),
     evidence: evidence.slice(-120).map(e => ({ cycle: e.cycle, kind: e.kind, tool: e.tool, success: e.success, text: e.text })),
-    counters: { cyclesDone, cyclesAttempted, totalIterations, totalToolCalls, tokensUsed, compressions, delegations, subagentTokens, escalations, parseFailNudges, proseNudges, selfModifyOps, delegationOps, delegationNudges },
+    counters: { cyclesDone, cyclesAttempted, totalIterations, totalToolCalls, tokensUsed, compressions, delegations, subagentTokens, escalations, parseFailNudges, proseNudges, selfModifyOps, delegationOps, delegationNudges, delegationGateCuts, viNudges },
     verdict: lastVerdict
       ? {
           complete: lastVerdict.complete,
@@ -3161,7 +3225,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     // run_end + episodic không phân biệt được "hết vòng thật" với "phanh cắt
     // bế tắc" (bằng chứng r59: ALISTA#1 dev.log in STALL BRAKE nhưng run_end
     // ghi iteration_limit — operator đọc sai loại sự cố).
-    let endedBy: 'no_tool_calls' | 'iteration_limit' | 'stall_brake' | 'error' | 'budget' | 'cancelled' = 'no_tool_calls'
+    let endedBy: 'no_tool_calls' | 'iteration_limit' | 'stall_brake' | 'error' | 'budget' | 'cancelled' | 'delegation_gate' = 'no_tool_calls'
     let cycleHadLlmError = false
     // FIX (R2-b #1) — IN-CYCLE BRAKE state: đếm vòng liên tiếp không tool-call
     // thành công + fingerprint transcript định kỳ (lặp = không tiến triển).
@@ -3310,6 +3374,26 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         recordAgentThought(agentSessionId, `💭 (suy nghĩ) ${result.reasoning.trim().slice(0, 800)}`, totalIterations)
       }
       recordAgentThought(agentSessionId, result.content, totalIterations)
+
+      // r67 (F9 — hard-enforcement tiếng Việt, user chỉ đạo r66 V4): protocol
+      // prompt có thể bị bỏ qua khi dữ liệu lớn — detector MÃ đo tỉ lệ ký tự có
+      // dấu của output; output tiếng Anh rõ ràng (ratio < 0.08, ≥60 chữ) →
+      // cảnh báo cứng kèm yêu cầu viết lại tiếng Việt (tối đa 2/run, persist
+      // qua checkpoint). KHÔNG chặn tool call của lượt này — chỉ ép kỷ luật
+      // ngôn ngữ cho CÁC lượt sau (output cuối cùng nằm trong scope).
+      try {
+        const ratio = vietnameseTextRatio(result.content || '')
+        if (ratio < 0.08 && viNudges < 2) {
+          viNudges++
+          pushToolMessage(messages, {
+            tool: 'harness_warning',
+            success: false,
+            result: `⚠️ NGÔN NGỮ (kiểm tra bằng mã): nội dung bạn vừa viết gần như KHÔNG có dấu tiếng Việt (tỉ lệ ${Math.round(ratio * 100)}% — hệ thống đo trực tiếp trên output). Người dùng là người Việt — TOÀN BỘ suy nghĩ/kế hoạch/báo cáo/todo PHẢI viết TIẾNG VIỆT CÓ DẤU ngay từ lượt tiếp theo (chỉ giữ nguyên tên tool/file/hàm/lệnh/code). Viết lại nội dung tiếng Anh vừa rồi bằng tiếng Việt trước khi làm việc khác.`,
+          })
+          evidence.push({ cycle, kind: 'tool', tool: 'harness_warning', success: false, text: `ngôn ngữ: output ${Math.round(ratio * 100)}% ký tự có dấu → yêu cầu viết tiếng Việt (lần ${viNudges}/2)` })
+          recordAgentThought(agentSessionId, `⚠️ NGÔN NGỮ: output tiếng Anh (ratio ${Math.round(ratio * 100)}%) — đã cảnh báo viết tiếng Việt (lần ${viNudges}/2)`, totalIterations)
+        }
+      } catch { /* fail-open — kiểm tra ngôn ngữ không được phép làm hỏng vòng */ }
 
       // ===== TODO-COVERAGE (2026-10-22 hướng 2) — stash 📐 MID-CYCLE =====
       // Agent viết khối 📐 ở GĐ0(c) RỒI mới gọi todo_write (GĐ1) — trước đây
@@ -4217,11 +4301,38 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         pushToolMessage(messages, {
           tool: 'harness_warning',
           success: false,
-          result: `⚠️ CẢNH BÁO PHÂN CÔNG: bạn đã TỰ thực hiện ${selfModifyOps} thao tác triển khai (sửa/ghi/chạy) mà CHƯA delegate phần nào cho agents chuyên trách (0 delegation trong run này). Đối chiếu chức trách: việc code → Code Team (RAMPAGE/FORGE...), review/security → SENTINEL/Linh Sickyx, nghiên cứu → ALISTA, kiến trúc → SHOCWAVE, tối ưu → CATALYST... — đối chiếu Agent Roster. VIỆC THUỘC CHUYÊN MÔN AGENT KHÁC → delegate_task/dispatch_agent kèm tiêu chí nghiệm thu (bạn là người ĐIỀU PHỐI — tự làm thay làm phình context của bạn và mất chất lượng chuyên môn). Chỉ tự làm tiếp việc THUỘC chức trách của chính bạn.`,
+          result: `⚠️ CẢNH BÁO PHÂN CÔNG: bạn đã TỰ thực hiện ${selfModifyOps} thao tác triển khai (sửa/ghi/chạy) mà CHƯA delegate phần nào cho agents chuyên trách (0 delegation trong run này). Đối chiếu chức trách: việc code → Code Team (RAMPAGE/FORGE...), review/security → SENTINEL/Linh Sickyx, nghiên cứu → ALISTA, kiến trúc → SHOCWAVE, tối ưu → CATALYST... — đối chiếu Agent Roster. VIỆC THUỘC CHUYÊN MÔN AGENT KHÁC → delegate_task/dispatch_agent kèm tiêu chí nghiệm thu (bạn là người ĐIỀU PHỐI — tự làm thay làm phình context của bạn và mất chất lượng chuyên môn). Chỉ tự làm tiếp việc THUỘC chức trách của chính bạn. LƯU Ý: vượt 8 thao tác mà vẫn 0 delegation → chu kỳ sẽ bị CẮT CƯỞNG CHẾ để buộc phân công.`,
         })
         if (agentSessionId) {
           recordAgentThought(agentSessionId, `⚠️ PHÂN CÔNG: ${selfModifyOps} thao tác tự triển khai / 0 delegation — đã cảnh báo delegate việc chuyên môn agents khác (lần ${delegationNudges}/2)`, totalIterations)
         }
+      }
+
+      // r67 (F7 — user chỉ đạo: HARDCODE thay dạy-bằng-prompt): CỔNG CƯỞNG CHẾ
+      // PHÂN CÔNG. Nudge (≥6) là cảnh báo — CỔNG (≥8) là tường thật: TL có tool
+      // delegation mà vẫn TỰ làm tiếp (0 delegation) → CẮT CHU KỲ NGAY
+      // ('delegation_gate') — chặn ở BIÊN chu kỳ nên phủ CẢ 2 đường thực thi
+      // (text-parse + CLI native: thống kê noteDelegationStat đếm đủ cả hai).
+      // Trần 2 lần cắt/run: nếu việc thực sự thuộc chức trách TL thì sau 2 lần
+      // cắt agent được tự làm tiếp (verdict-side guard vẫn ghi sideIssue) —
+      // không bao giờ kẹt chết; nếu thuộc chuyên môn agents khác thì chu kỳ kế
+      // agent ĐÃ có directive phân công + nudge dạy lại từ đầu chu kỳ.
+      if (
+        hasDelegation && selfModifyOps >= 8 && delegationOps === 0 &&
+        delegationGateCuts < 2 && cycleToolCalls > 0
+      ) {
+        delegationGateCuts++
+        pushToolMessage(messages, {
+          tool: 'harness_gate',
+          success: false,
+          result: `⛔ CỔNG PHÂN CÔNG (cưỡng chế bằng mã — không phải gợi ý): bạn đã TỰ thực hiện ${selfModifyOps} thao tác triển khai (sửa/ghi/chạy) với 0 delegation sau cảnh báo — chu kỳ này bị KẾT THÚC NGAY để buộc phân công. Việc CHUYÊN MÔN agents khác PHẢI giao qua delegate_task/dispatch_agent/request_code_team (code → Code Team, review/bảo mật → SENTINEL/Linh Sickyx, nghiên cứu → ALISTA, kiến trúc → SHOCWAVE, tối ưu → CATALYST — kèm tiêu chí nghiệm thu). Việc thuộc chức trách điều phối của bạn (đối chiếu/tổng hợp/phán quyết) thì ở chu kỳ kế TỰ LÀM tiếp — cổng tự hạ sau khi run có ≥1 delegation.`,
+        })
+        if (agentSessionId) {
+          recordAgentThought(agentSessionId, `⛔ CỔNG PHÂN CÔNG: ${selfModifyOps} thao tác tự triển khai / 0 delegation — chu kỳ ${cycle} bị cắt cưỡng chế để buộc delegate (lần ${delegationGateCuts}/2)`, totalIterations)
+        }
+        evidence.push({ cycle, kind: 'directive', text: `CỔNG PHÂN CÔNG cứng: ${selfModifyOps} thao tác tự triển khai / 0 delegation — chu kỳ bị cắt để buộc delegate việc chuyên môn agents khác` })
+        endedBy = 'delegation_gate'
+        break
       }
 
       if (isCancelled()) { endedBy = 'cancelled'; break }
@@ -4234,7 +4345,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       }
     }
 
-    cutMidWorkPrev = endedBy === 'iteration_limit' || endedBy === 'stall_brake' || endedBy === 'budget'
+    cutMidWorkPrev = endedBy === 'iteration_limit' || endedBy === 'stall_brake' || endedBy === 'budget' || endedBy === 'delegation_gate'
 
     // ===== IMP-2 (F2 — điều tra Task F "todo drift") — CYCLE-BOUNDARY TODO RECONCILE =====
     // Trước đây cập nhật todo là TÌNH NGUYỆN (protocol + CI-2 per-batch chỉ khớp
@@ -4358,8 +4469,6 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       // r60 — cho trọng tài biết context đã nén ×N (rule 18b — chống đòi nguyên
       // văn đã bị nén, nguyên nhân bế tắc 1%/2%/3% r59)
       compressions,
-      // r66 (V2c) — thống kê phân công cho rule 19 (TL tự ôm làm vs delegate)
-      delegationStats: { selfModifyOps, delegationOps },
       unverifiedModifications: lastModifyOrdinal > lastVerifyOrdinal,
       // FIX 2026-09-14 #7 — E2E verification signals cho trọng tài (quy tắc 8)
       codeModified: cycleCodeModified,
@@ -4450,6 +4559,14 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           raw: '(evaluator unavailable)',
         }
       }
+    }
+
+    // r67 (F7 — HARDCODE thay quy tắc 19 prompt): hậu xử lý verdict bằng MÃ —
+    // TL ôm làm (≥8 thao tác modify, 0 delegation, có tool delegate) →
+    // sideIssue "phân công" + nextPlan "delegate" được GẮN THẲNG vào verdict
+    // (kể cả verdict heuristic khi evaluator LLM hỏng). KHÔNG đổi complete.
+    if (verdict) {
+      applyDelegationVerdictGuard(verdict, { selfModifyOps, delegationOps }, hasDelegation)
     }
 
     // [C] VERIFY GUARD — harness override: evaluator kết luận "hoàn thành"

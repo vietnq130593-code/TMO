@@ -1428,6 +1428,23 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       },
     },
   },
+  // ===== r67 (F8 — BẢN ĐỒ DỮ LIỆU): tool tra cứu bản đồ vùng dữ liệu hệ thống.
+  // Hardcode-backed (src/lib/data-map.ts) — đọc thuần, không đụng DB; trả về
+  // đúng vùng liên quan theo định tuyến keyword deterministic. =====
+  data_map: {
+    type: 'function',
+    function: {
+      name: 'data_map',
+      description: 'Tra BẢN ĐỒ DỮ LIỆU hệ thống TMO: dữ liệu nằm ở vùng nào (SQLite/Qdrant/Neo4J/file), đọc bằng tool nào, ghi kết quả vào đâu. Truyền query = mô tả việc đang làm để nhận đúng vùng liên quan; bỏ trống query để xem bản đồ đầy đủ. Dùng khi không chắc kết quả/việc này nên ghi vào đâu hoặc nên truy vấn vùng nào.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Mô tả việc/tác vụ đang xử lý (vd "ghi bài học run này", "tìm tài liệu tri thức đã nạp")' },
+        },
+        required: [],
+      },
+    },
+  },
 
   // ==================== P2: GATEWAY PROXY (36 tools) ====================
   gateway_tool: {
@@ -3186,6 +3203,24 @@ export async function executeTool(
             count: 0,
             hint: 'Không xác định được trạng thái preview (fail-open). Có thể dùng shell để kiểm tra thủ công (ps aux | grep dev).',
             error: err instanceof Error ? err.message : String(err),
+          }
+        }
+        break
+      }
+      // ===== r67 (F8 — BẢN ĐỒ DỮ LIỆU): tra cứu vùng dữ liệu đọc/ghi =====
+      case 'data_map': {
+        // Đọc thuần từ registry hardcode (src/lib/data-map.ts) — 0 DB, 0 LLM,
+        // deterministic. Fail-open tuyệt đối: lỗi import → trả lỗi có cấu trúc.
+        try {
+          const { dataMapToolResult } = await import('@/lib/data-map')
+          const q = typeof (args as { query?: unknown }).query === 'string'
+            ? String((args as { query?: string }).query).slice(0, 400)
+            : undefined
+          result = dataMapToolResult(q)
+        } catch (err) {
+          result = {
+            success: false,
+            error: `data_map lỗi: ${err instanceof Error ? err.message : String(err)}`,
           }
         }
         break

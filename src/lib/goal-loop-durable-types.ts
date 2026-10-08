@@ -109,6 +109,10 @@ export interface GoalLoopCheckpoint {
     selfModifyOps?: number
     delegationOps?: number
     delegationNudges?: number
+    /** r67 (F7) — số lần CỔNG PHÂN CÔNG cắt chu kỳ (trần 2/run).
+     * r67 (F9) — số lần cảnh báo ngôn ngữ tiếng Việt đã dùng (trần 2/run). */
+    delegationGateCuts?: number
+    viNudges?: number
   }
   /** Verdict chu kỳ gần nhất (null nếu chưa có evaluate nào) */
   verdict: GoalLoopVerdictSnapshot | null
