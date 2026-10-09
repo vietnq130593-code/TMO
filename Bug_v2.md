@@ -490,3 +490,45 @@
 ### GHI BẢNG CHỨNG CUỐI (sau khi job hoàn tất — bằng chứng end-to-end mạnh nhất của phiên)
 - GoalLoopJob `cmv0m98ym000ollum2b1yz3ah` **completed** — Omega (model chọn từ dropdown: big-pickle) trả lời với chuẩn [verified-by-tool]: agent tự dùng filePath trong manifest để phân tích ảnh THẬT bằng tool — "Tệp là ảnh PNG RGB, không xen kẽ, kích thước 320×120 pixel, 2.210 byte" · "nền xanh đậm #1E1E3C, dòng chữ màu vàng #F2D162 ở gần giữa: TMO r73 UPLOAD TEST 123 45" · "nền chiếm 37.879/38.400 pixel = 98,6432%" · "vùng chữ x=20–157, y=52–59, 521 pixel khác nền, 13 thành phần liên thông" — đối chiếu pixel KHỚP tuyệt đối với ảnh gốc Python render (RGB 30,30,60 = #1E1E3C). Assistant message lưu model=big-pickle (override dropdown chạy trọn chuỗi đến khi ghi nhận kết quả).
 - Ý nghĩa: chuỗi ĐỦ TỪNG NẤC sống trên 1 run duy nhất — dropdown chọn model (job nhận agentModel=big-pickle) → nút + upload (POST 200) → VLM chưng cất (đúng từng chữ) → manifest trong content (DB + jobInput) → agent dùng filePath tự kiểm chứng bằng tool (không chỉ đọc mô tả VLM) → failover nhiều lớp khi big-pickle 403 sandbox (ZEN FAILOVER SBF phục vụ) → kết quả bền vững qua durable job.
+
+---
+
+# ROUND-74 — REVIEW TOÀN BỘ TRIỂN KHAI (user directive: "review lại tất cả những gì triển khai trước đó... đảm bảo sandbox luôn là phiên bản mới nhất... báo cáo rồi push")
+
+## A. MỤC GHI NHẬN MỚI
+
+### BUG2-033 · F · P1 · Zen ĐÓNG LẠI cửa native CLI cho model free ngoài SBF — r73 chẩn đoán sai nguyên nhân ("sandbox app-dir quota")
+
+- **Phát hiện khi nào:** vòng review r74 09:23–09:31Z — quét PM2 log thấy chuỗi lặp `[OC-CLI] agent:big-pickle exit 1 — no content` + `Đánh dấu chặn cli:big-pickle` (07:12–07:22, đúng khung E2E r73).
+- **Bằng chứng probe trực tiếp (09:30Z — 4 phép thử tách biến):**
+  1. `opencode run --model opencode/big-pickle` từ **/tmp** (thư mục trắng) → 403 FreeTierError "free tier can only be used from within OpenCode" (cf-placement remote-ORD)
+  2. Cùng lệnh từ **app-dir** /home/z/tmo-app → 403 như nhau
+  3. `opencode/mimo-v2.6-flash-free` → 403 như nhau
+  4. HOME-override auth.json sang **key #2** (`oc_sk_5d6aea…`) → vẫn 403 → **KHÔNG phải quota key**
+  - Đối chứng: `opencode/space-bunny-free` native → **trả lời "OK" exit 0**; alias `opencode-k1/space-bunny-free` → writeback OK ngay trước đó trong log.
+- **Kết luận:** chặn **POLICY TOÀN CỤC, theo model** (SBF white-list duy nhất), không phải "sandbox app-dir quota" như r73 ghi (sai chẩn đoán — đính chính ở trên). Cửa sổ native mà r72 mở (~05:30) đã đóng lại **TRƯỚC cả lúc r73 commit** (07:15) — battery r73 (~06:00) chạy đúng lúc cửa còn mở nên PASS thật.
+- **Tác động:**
+  - Dropdown r73 quảng bá 8 model — 7 model ngoài SBF hiện cascading âm thầm về ZEN FAILOVER SBF (agent KHÔNG chết — chuỗi nhiều lớp đúng thiết kế; user không được báo trước).
+  - Last-resort pool mặc định `ling/mimo/big-pickle` (r73 BUG2-018) hiện TOÀN CHẾT — chỉ tốn thêm đúng 1 vòng re-probe/tối đa 5 phút mỗi model (block-cache TTL 300s short-circuit trước spawn — thiệt hại bị chặn tốt, không cần đổi pool vì SBF vẫn là failover đích).
+- **Fix (hardcode — r74, "dropdown nói thật"):**
+  1. `llm.ts`: free-tier block cache nâng value `{until, reason}` + export **`zenModelBlockSummary()`** (pure-read, chỉ trả entry còn hạn) — UI đọc đúng nguồn sự thật mà tầng vận hành đang dùng ra quyết định skip transport.
+  2. `/api/agents/models`: gắn **`blockedTransports`** cho từng model zen (từ summary) — cả nhánh all-providers lẫn nhánh `?provider=zen`.
+  3. `smolab-module.tsx` dropdown: **refetch mỗi lần MỞ** (trạng thái chặn TTL 60s/300s cần tươi — bản mount-cấp-lần đầu lỗi thời ngay); model bị chặn CẢ http+cli → hàng mờ + badge **⚠** + tooltip "sẽ chuyển tiếp về space-bunny-free (failover)"; bị chặn 1 transport → tooltip "hệ thống tự dùng transport còn lại"; header chú thích "⚠ bị chặn".
+  4. KHÔNG xoá 7 model khỏi catalog — policy Zen lật ngược 3 lần trong 12 ngày (09-27 chặn → r72 mở → r74 chặn): trạng thái sống/thất bại phải là **số liệu runtime** (block-cache) chứ không phải danh sách tĩnh lại lỗi thời sau 1 ngày. Caps battery r73 giữ nguyên (đúng về năng lực model khi tới được).
+- **Giữ watch:** nếu Zen mở lại native (re-probe 5 phút/lần tự phát hiện vì block-cache hết hạn → probe thật không tốn — chỉ khi agent có tác vụ) → badge ⚠ tự biến mất.
+
+## B. KIỂM TRA "SANDBOX LUÔN PHIÊN BẢN MỚI NHẤT" (user directive)
+
+- HEAD `d6ccc4c` = `origin/main`, working tree SẠCH → đĩa = bản mới nhất đã push.
+- PM2 `theopusflashlite` chạy `next dev` (Turbopack) từ chính working tree đó → hot-reload từng request, code đang phục vụ = code trên đĩa (không có bản build stale).
+- Xác minh tính năng r73 SỐNG trên server đang chạy (probe trực tiếp 09:24–09:26): `/api/agents/models` trả đủ 8 model + caps ⚡🧠🤖 · upload `/api/smolab/attachments` roundtrip text → derivedText nguyên văn (id cmv0relwu…) · DELETE 200 dọn sạch.
+- FORGE độc lập trong DB: `SELECT name,team,position FROM AgentProfile WHERE name='FORGE'` → team='' position='' isSystem=1 (r72 đúng).
+- Gate r74 chạy lại từ đầu: **PASS toàn bộ 53.2s — type_check ✓ lint ✓ imports ✓ 582/582 test** (số test r73 giữ nguyên).
+
+## C. Nghiệm thu ROUND-74
+
+- **Test:** `tests/r74-zen-policy-flip-truthful-dropdown.test.ts` MỚI 13 test — hợp đồng `zenModelBlockSummary` (pure-read, bỏ entry hết hạn, parse key "transport:model" tách tại dấu : ĐẦU) + file dùng chung cross-process (mark → file thật có entry; giả lập 2 PROCESS bằng bun spawn con — process cha memory trống vẫn đọc thấy qua file) + source-scan route/UI (refetch khi mở dropdown, badge ⚠, hàng mờ, tooltip fallback SBF) + đính chính r74 hiện diện + catalog/pool r73 GIỮ NGUYÊN (không phá contract).
+- **Gate:** PASS toàn bộ 63.2s — type_check ✓ (lần chạy nền giữa chừng FAIL đúng 2 lỗi thật: so sánh `> number` còn sót ở zenStatusSummary sau khi value map đổi shape + `http` possibly-undefined trong test — cả hai đã sửa) · lint ✓ · imports ✓ · **595/595 test** (582 + 13 mới).
+- **Lỗi tự bắt thêm lúc triển khai (đúng giao thức quan sát):** bật đầu tiên bản in-process cache chỉ → API vẫn trống ⚠ → truy ra gốc rễ **Next.js dev nạp llm.ts 2 instance** (worker instrumentation ≠ route — chính goal-loop-worker.ts:1326 đã ghi nhận) → nâng cấp fix r74b: block-state ghi **file dùng chung db/zen-block-state.json** (merge memory+file khi ghi, prune hết hạn, mtime-cache khi đọc, resolve-once đường dẫn tuyệt đối, fail-open 2 chiều). Lợi phụ: process mới khởi động đọc ngay file → không đốt lại HTTP+CLI re-probe cho model đã biết chết sau mỗi restart.
+- **E2E chéo process (bằng chứng mạnh nhất — đúng luồng sản xuất):** restart PM2 (instrumentation nhận code mới, health 200 sau 6s) → chat NEMESIS model=big-pickle (job nền cmv0s7x09…) → worker đánh dấu `http:big-pickle` + `cli:big-pickle` (reason r74 mới) vào file → **`GET /api/agents/models` (process route, memory trống) trả `big-pickle: blockedTransports ["http","cli"]`** → dropdown sẽ hiện ⚠ + hàng mờ + tooltip "sẽ tự chuyển tiếp về space-bunny-free". Job hoàn tất `completed` — trả lời qua ZEN FAILOVER SBF (stopReason=complete, 3 vòng, ChatMessage assistant 400 chars đã lưu) — agent KHÔNG chết, đúng thiết kế nhiều lớp.
+- **Sandbox = bản mới nhất:** PM2 restart tại HEAD sạch; `next dev` hot-reload từ disk → mọi request phục vụ đúng code hiện tại; session bằng chứng giữ lại: `r74-e2e-truth-test`, `r74-e2e-truth-test-2`.

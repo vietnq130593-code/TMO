@@ -2001,26 +2001,32 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   const [showAgentSelect, setShowAgentSelect] = useState(false)
   const [showTeamSelect, setShowTeamSelect] = useState(false)
   // r73 (mục 1 user): danh sách model free cho dropdown trên dòng model
-  // indicator — fetch 1 LẦN từ /api/agents/models (PROVIDER_DATA.zen — cùng
-  // nguồn dialog tạo agent, single source of truth agent-constants.ts) kèm
-  // caps phân loại ⚡coding/🧠reasoning/🤖agentic từ battery r73.
+  // indicator — fetch từ /api/agents/models (PROVIDER_DATA.zen — cùng nguồn
+  // dialog tạo agent, single source of truth agent-constants.ts) kèm caps
+  // phân loại ⚡coding/🧠reasoning/🤖agentic từ battery r73.
+  // r74 (BUG2-033 — "dropdown nói thật"): model kèm thêm blockedTransports
+  // (live từ free-tier block cache của llm.ts) — model bị chặn CẢ http LẪN cli
+  // hiển thị badge ⚠ + đổi màu (biết trước là sẽ fallback về space-bunny-free
+  // thay vì phát hiện âm thầm trong log). Refetch mỗi lần MỞ dropdown — trạng
+  // thái chặn có TTL (http 60s / cli 300s) nên cần tươi, không dùng bản mount.
   const [zenModelOptions, setZenModelOptions] = useState<Array<{
     id: string
     label?: string
     caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean }
+    blockedTransports?: string[]
   }>>([])
-  useEffect(() => {
-    let cancelled = false
+  const fetchZenModelOptions = useCallback(() => {
     fetch('/api/agents/models')
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((data: { providers?: Array<{ key?: string; models?: Array<{ id: string; label?: string; caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean } }> }> }) => {
-        if (cancelled) return
+      .then((data: { providers?: Array<{ key?: string; models?: Array<{ id: string; label?: string; caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean }; blockedTransports?: string[] }> }> }) => {
         const zen = (data?.providers || []).find(p => p.key === 'zen')
-        setZenModelOptions(zen?.models || [])
+        if (zen?.models) setZenModelOptions(zen.models)
       })
-      .catch(() => { /* im lặng — dropdown hiện câu "chưa tải được" */ })
-    return () => { cancelled = true }
+      .catch(() => { /* im lặng — giữ danh sách cũ; dropdown hiện câu "chưa tải được" nếu trống */ })
   }, [])
+  useEffect(() => {
+    fetchZenModelOptions()
+  }, [fetchZenModelOptions])
 
   // Smolab task tracking — background task polling (Phase 6)
   const [activeTaskIds, setActiveTaskIds] = useState<Map<string, string>>(new Map()) // sessionId → taskId
@@ -6140,6 +6146,9 @@ ${manifest}` : rawText
                       onClick={(e) => {
                         if (!canPick) return
                         e.stopPropagation()
+                        // r74 (BUG2-033): mở dropdown → refetch trạng thái chặn
+                        // tươi (block-cache TTL http 60s / cli 300s)
+                        fetchZenModelOptions()
                         setShowModelSelect(v => !v)
                         setShowAgentSelect(false)
                         setShowTeamSelect(false)
@@ -6178,21 +6187,37 @@ ${manifest}` : rawText
                         style={{ scrollbarWidth: 'thin' }}
                       >
                         <div className="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-cyan-500/70 border-b border-cyan-400/20 sticky top-0 bg-slate-950/95">
-                          Model free khả dụng · ⚡ coding · 🧠 reasoning · 🤖 agentic
+                          Model free khả dụng · ⚡ coding · 🧠 reasoning · 🤖 agentic · ⚠ bị chặn
                         </div>
-                        {zenModels.map((m) => (
+                        {zenModels.map((m) => {
+                          // r74 (BUG2-033): model bị Zen chặn free-tier trên CẢ
+                          // http LẪN cli → chọn model này agent sẽ tự chuyển tiếp
+                          // về space-bunny-free (failover nhiều lớp r73) — badge ⚠
+                          // + mờ + tooltip nói thật, không để user bất ngờ.
+                          const allBlocked = !!(m.blockedTransports && m.blockedTransports.includes('http') && m.blockedTransports.includes('cli'))
+                          const partialBlocked = !allBlocked && !!(m.blockedTransports && m.blockedTransports.length > 0)
+                          return (
                           <button
                             key={m.id}
                             onClick={() => { setSelectedModel(m.id); setShowModelSelect(false) }}
                             className={`w-full text-left px-3 py-1.5 text-xs hover:bg-cyan-500/10 transition-colors flex items-center gap-2 ${
-                              selectedModel === m.id ? 'text-cyan-400' : 'text-stone-300'
+                              selectedModel === m.id ? 'text-cyan-400' : allBlocked ? 'text-stone-500' : 'text-stone-300'
                             }`}
-                            title={m.label || m.id}
+                            title={
+                              allBlocked
+                                ? `${m.label || m.id} — ⚠ Hiện bị Zen chặn free-tier (HTTP + CLI). Agents vẫn nhận model này nhưng sẽ tự chuyển tiếp về space-bunny-free (failover) — chọn nếu muốn thử lại/khi policy mở lại.`
+                                : partialBlocked
+                                  ? `${m.label || m.id} — 1 transport đang bị chặn (${m.blockedTransports!.join('+')}) — hệ thống tự dùng transport còn lại.`
+                                  : (m.label || m.id)
+                            }
                           >
                             <span className="w-3.5 flex-shrink-0 inline-flex">
                               {selectedModel === m.id && <Check className="h-3 w-3" />}
                             </span>
                             <span className="truncate flex-1">{m.id}</span>
+                            {allBlocked && (
+                              <span className="text-[10px] text-amber-400/90 flex-shrink-0" title="Bị chặn free-tier — sẽ fallback về space-bunny-free">⚠</span>
+                            )}
                             {(m.caps?.coding || m.caps?.reasoning || m.caps?.agentic) && (
                               <span className="text-[10px] text-stone-500 flex-shrink-0 flex gap-1 items-center">
                                 {m.caps?.coding && <span title="coding">⚡</span>}
@@ -6201,7 +6226,8 @@ ${manifest}` : rawText
                               </span>
                             )}
                           </button>
-                        ))}
+                          )
+                        })}
                         {zenModels.length === 0 && (
                           <div className="px-3 py-2 text-xs text-stone-500">Chưa tải được danh sách model — thử lại sau.</div>
                         )}

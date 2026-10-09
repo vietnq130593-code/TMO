@@ -77,6 +77,20 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string; 
     // Vận hành: space-bunny-free chạy ĐƯỢC qua HTTP (xoay 3 key) LẪN CLI; 7
     // model còn lại CHỈ qua CLI native (HTTP = FreeTierError 403 — bằng chứng
     // 2026-10-09). llm.ts tự route 2 transport + last-resort chéo model (r73).
+    //
+    // ⚠ r74 CẬP NHẬT (2026-10-09 ~09:30Z — review phát hiện, BUG2-033): Zen
+    // ĐÃ ĐÓNG LẠI cửa native CLI cho model free ngoài SBF — probe trực tiếp
+    // `opencode run --model opencode/{big-pickle,mimo}` trả 403 FreeTierError
+    // "free tier can only be used from within OpenCode" từ CẢ /tmp LẪN app-dir
+    // với CẢ key #1 LẪN key #2 → chặn POLICY TOÀN CỤC (r73 đoán "sandbox
+    // app-dir quota" là SAI CHẨN ĐOÁN). Chỉ space-bunny-free còn mở (HTTP xoay
+    // key + native + alias CLI — bằng chứng writeback OK). Hệ quả hiện tại:
+    // chọn 7 model ngoài SBF → chuỗi failover tự chuyển tiếp về SBF (agent
+    // KHÔNG chết — thiết kế nhiều lớp r73). GIỮ NGUYÊN 8 model trong catalog
+    // (policy Zen lật ngược nhiều lần: 09-27 chặn → r72 mở → r74 chặn lại —
+    // xoá sẽ lại phải thêm) — caps từ battery r73 vẫn đúng về NĂNG LỰC model;
+    // trạng thái SỐNG/CHẾT realtime do /api/agents/models gắn blockedTransports
+    // từ zenModelBlockSummary() (llm.ts) → dropdown hiển thị badge ⚠ nói thật.
     {
       id: 'space-bunny-free',
       label: 'space-bunny-free (LÕI CHÍNH — HTTP xoay key + ZEN FAILOVER)',

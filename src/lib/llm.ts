@@ -4143,28 +4143,171 @@ function zenKeyCooldownSummary(): string {
 //   không phải credential OAuth). Chỉ HTTP trực tiếp + custom provider
 //   (@ai-sdk/openai-compatible alias) vẫn bị chặn → cache dưới đây giờ chỉ áp
 //   cho 2 transport bị chặn đó; đường CLI native route riêng (llm.ts r72).
+// → CẬP NHẬT 2026-10-09 ~09:30Z (r74 — REVIEW PHÁT HIỆN): CỬA SỔ NATIVE ĐÃ
+//   ĐÓNG LẠI — Zen chặn toàn bộ model free ngoài SBF trên MỌI transport:
+//   probe trực tiếp `opencode run --model opencode/{big-pickle,mimo}` trả
+//   403 FreeTierError "free tier can only be used from within OpenCode"
+//   (cf-placement remote-ORD) từ CẢ /tmp LẪN app-dir, với CẢ key #1 LẪN key #2
+//   (auth.json HOME-override) → CHẮN POLICY TOÀN CỤC, KHÔNG phải quota key,
+//   KHÔNG phải "sandbox app-dir quota" như r73 đoán (sai chẩn đoán — đính
+//   chính trong Bug_v2.md BUG2-033). SBF vẫn chạy OK trên cả HTTP (xoay key)
+//   LẪN native CLI LẪN alias CLI (bằng chứng: utility-core writeback OK ngay
+//   trước đó). Hệ quả: 7 model free ngoài SBF trong dropdown cascading về
+//   ZEN FAILOVER SBF — agent KHÔNG chết (chuỗi nhiều lớp r73), nhưng model
+//   user chọn không trực tiếp phục vụ → /api/agents/models gắn blockedTransports
+//   (từ zenModelBlockSummary dưới đây) để UI nói thật. Policy Zen lật ngược
+//   nhiều lần (09-27 chặn → r72 mở → r74 chặn) — KHÔNG xoá model khỏi catalog,
+//   chỉ hiển thị trạng thái sống thực.
 // → Diễn giải cũ (2026-09-27): model free chỉ chạy với credential ĐĂNG NHẬP
 //   account hoặc key có credit — ĐÃ LỖI THỜI.
 // Cache trạng thái chặn per (transport, model) TTL 15 phút: lần đầu gặp 403 đánh
 // dấu → các lần sau skip ngay (không lặp HTTP ~1s + CLI spawn ~5-10s mỗi call),
 // caller đi thẳng ZEN FAILOVER. Override: ZEN_FREE_TIER_CACHE_MS (ms; 0 = tắt).
 const ZEN_FREE_TIER_CACHE_MS = parseInt(process.env.ZEN_FREE_TIER_CACHE_MS || '900000', 10)
-const zenFreeTierBlockedUntil = new Map<string, number>() // key `${transport}:${model}`
+// r74 — value lưu kèm reason (cho zenModelBlockSummary → tooltip UI nói thật)
+const zenFreeTierBlockedUntil = new Map<string, { until: number; reason: string }>() // key `${transport}:${model}`
+
+// ==================== r74b — BLOCK-STATE DÙNG CHUNG GIỮA CÁC PROCESS ====================
+// VẤN ĐỀ (phát hiện lúc nghiệm thu r74): Next.js dev nạp llm.ts THÀNH NHIỀU
+// INSTANCE — goal-loop-worker chạy qua instrumentation (boot-time), API route
+// chạy qua registry route (xem goal-loop-worker.ts:1326 đã ghi nhận "2
+// instance khác nhau") → markZenFreeTierBlocked trong worker KHÔNG thấy được
+// bởi /api/agents/models (route instance có cache riêng trống) → dropdown ⚠
+// không bao giờ hiện dù failover thật sự xảy ra.
+// GIẢI PHÁP (hardcode tầng mã): state chặn ghi ra FILE dùng chung
+// db/zen-block-state.json (mọi process đều chạy từ app-dir):
+//   - mark() → ghi memory + merge file (best-effort, prune hết hạn khi ghi)
+//   - isZenFreeTierBlocked()/zenModelBlockSummary() → đọc memory GỘP file
+//     (file cache theo mtime — re-read chỉ khi file đổi, chi phí ~0 trên
+//     đường call LLM đã tốn hàng giây mạng)
+//   - Lợi phụ: process mới khởi động (restart PM2) đọc ngay trạng thái chặn
+//     từ file → KHÔNG đốt lại HTTP ~1s + CLI spawn ~5s cho mỗi model đã biết
+//     chết (trước đây memory trắng = re-probe toàn bộ sau mỗi restart).
+//   - Fail-open 2 chiều: lỗi đọc/ghi file → tiến hành như cũ (memory in-process).
+type ZenBlockEntry = { until: number; reason: string }
+// Đường dẫn mặc định TƯƠNG ĐỐI — resolve 1 lần theo cwd lúc dùng (mọi process
+// PM2 chạy từ app-dir; resolve trễ để bắt đúng cwd của process gọi).
+const ZEN_BLOCK_STATE_FILE_DEFAULT = 'db/zen-block-state.json'
+let zenBlockStateAbsPath: string | null = null
+function zenBlockStateFile(): string {
+  if (!zenBlockStateAbsPath) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('path') as typeof import('path')
+    zenBlockStateAbsPath = path.resolve(process.env.ZEN_BLOCK_STATE_FILE || ZEN_BLOCK_STATE_FILE_DEFAULT)
+  }
+  return zenBlockStateAbsPath
+}
+
+let zenBlockFileCache: { mtimeMs: number; state: Record<string, ZenBlockEntry> } | null = null
+
+function readZenBlockStateFile(): Record<string, ZenBlockEntry> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs') as typeof import('fs')
+    const file = zenBlockStateFile()
+    const st = fs.statSync(file)
+    if (zenBlockFileCache && zenBlockFileCache.mtimeMs === st.mtimeMs) return zenBlockFileCache.state
+    const raw = JSON.parse(fs.readFileSync(file, 'utf-8'))
+    const state = raw && typeof raw === 'object' ? raw as Record<string, ZenBlockEntry> : {}
+    zenBlockFileCache = { mtimeMs: st.mtimeMs, state }
+    return state
+  } catch {
+    return zenBlockFileCache?.state || {} // file chưa có/lỗi → dùng cache cũ nếu có (tránh giật); không có → rỗng
+  }
+}
+
+function writeZenBlockStateFile(mergeKey: string, entry: ZenBlockEntry): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs') as typeof import('fs')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('path') as typeof import('path')
+    const now = Date.now()
+    const merged: Record<string, ZenBlockEntry> = {}
+    // File là nguồn của process khác; memory là nguồn process này — gộp cả hai
+    for (const [k, v] of Object.entries(readZenBlockStateFile())) {
+      if (v && typeof v.until === 'number' && v.until > now) merged[k] = v
+    }
+    for (const [k, v] of zenFreeTierBlockedUntil) {
+      if (v.until > now) merged[k] = { until: v.until, reason: v.reason }
+    }
+    merged[mergeKey] = entry
+    const file = zenBlockStateFile()
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, JSON.stringify(merged, null, 2) + '\n')
+    zenBlockFileCache = null // invalidate — lần đọc sau lấy file mới (đồng bộ mtime cross-process)
+  } catch { /* best-effort — in-memory vẫn hoạt động trong process này */ }
+}
+
+function getZenBlockedEntry(transport: 'http' | 'cli', model: string): ZenBlockEntry | null {
+  const key = `${transport}:${model}`
+  const mem = zenFreeTierBlockedUntil.get(key)
+  if (mem && Date.now() < mem.until) return mem
+  const fileEntry = readZenBlockStateFile()[key]
+  if (fileEntry && typeof fileEntry.until === 'number' && Date.now() < fileEntry.until) {
+    // Process này chưa tự gặp lỗi — process khác (worker) đã gặp. Nạp vào memory
+    // để các call sau skip thẳng không cần đọc file lại.
+    zenFreeTierBlockedUntil.set(key, fileEntry)
+    return fileEntry
+  }
+  return null
+}
 
 function isZenFreeTierBlocked(transport: 'http' | 'cli', model: string): boolean {
   if (!(ZEN_FREE_TIER_CACHE_MS > 0)) return false
-  const until = zenFreeTierBlockedUntil.get(`${transport}:${model}`) || 0
-  return Date.now() < until
+  return getZenBlockedEntry(transport, model) !== null
 }
 
-function markZenFreeTierBlocked(transport: 'http' | 'cli', model: string, reason: string, ttlMs?: number): void {
+// r74 — export cho unit-test (cùng pattern parseZenLastResortModels r73):
+// test vá cache rồi đối chiếu zenModelBlockSummary() — xem tests/r74.
+export function markZenFreeTierBlocked(transport: 'http' | 'cli', model: string, reason: string, ttlMs?: number): void {
   const ttl = ttlMs ?? ZEN_FREE_TIER_CACHE_MS
   if (!(ttl > 0)) return
   const key = `${transport}:${model}`
-  const prev = zenFreeTierBlockedUntil.get(key) || 0
-  if (Date.now() < prev) return // đã chặn rồi — không spam log
-  zenFreeTierBlockedUntil.set(key, Date.now() + ttl)
+  const prev = zenFreeTierBlockedUntil.get(key)
+  if (prev && Date.now() < prev.until) return // đã chặn rồi — không spam log
+  const entry = { until: Date.now() + ttl, reason }
+  zenFreeTierBlockedUntil.set(key, entry)
+  writeZenBlockStateFile(key, entry) // r74b — chia sẻ cho mọi process (route API đọc được)
   console.warn(`[ZEN] 🚫 Đánh dấu chặn ${transport}:${model} đến ${new Date(Date.now() + ttl).toLocaleTimeString('vi-VN')} — ${reason}`)
+}
+
+/**
+ * r74 (BUG2-033 — dropdown model "nói thật"): snapshot trạng thái chặn
+ * free-tier ĐANG SỐNG của các model zen (mục đích: /api/agents/models gắn
+ * blockedTransports cho từng model → UI hiển thị badge ⚠ + fallback rõ ràng).
+ * r74b: nguồn = memory process HIỆN TẠI gộp file dùng chung db/zen-block-state.json
+ * (worker instrumentation và API route là 2 instance llm.ts khác nhau — xem
+ * goal-loop-worker.ts:1326 — nên bắt buộc phải qua file mới thấy nhau).
+ * Pure-read — không side-effect ngoài nạp memory từ file. Chỉ trả entry chưa
+ * hết hạn; model không có entry = chưa từng gặp lỗi (không kết luận gì).
+ * Rationale: policy Zen lật ngược liên tục (09-27 chặn → r72 mở → r74 chặn
+ * lại) — thay vì hardcode-danh-sách-chết tĩnh (lỗi thời sau 1 ngày), UI đọc
+ * trạng thái SỐNG từ chính cache mà tầng vận hành đang dùng để ra quyết định
+ * skip transport → dropdown và failover LUÔN đồng bộ một nguồn sự thật.
+ */
+export function zenModelBlockSummary(): Array<{ model: string; transport: 'http' | 'cli'; blockedUntil: number; reason: string }> {
+  const now = Date.now()
+  // Gộp nguồn: memory (process này) + file (process khác — vd worker durable job)
+  const merged = new Map<string, ZenBlockEntry>()
+  for (const [k, v] of Object.entries(readZenBlockStateFile())) {
+    if (v && typeof v.until === 'number' && v.until > now) merged.set(k, v)
+  }
+  for (const [k, v] of zenFreeTierBlockedUntil) {
+    if (v.until > now) merged.set(k, v)
+  }
+  const out: Array<{ model: string; transport: 'http' | 'cli'; blockedUntil: number; reason: string }> = []
+  for (const [key, entry] of merged) {
+    const sep = key.indexOf(':')
+    if (sep <= 0) continue
+    out.push({
+      transport: key.slice(0, sep) as 'http' | 'cli',
+      model: key.slice(sep + 1),
+      blockedUntil: entry.until,
+      reason: entry.reason,
+    })
+  }
+  return out
 }
 
 // ==================== ZEN REASONING EFFORT — CHẾ ĐỘ CAO NHẤT (Task 33) ====================
@@ -4384,7 +4527,7 @@ async function callZenProvider(
       // cache bỏ qua các lần sau: FreeTierError (model free chặn API key),
       // RegionError (geo-block), 402 (hết credit cho model trả phí)
       if (response.status === 403 && (errBody.includes('FreeTierError') || errBody.toLowerCase().includes('free tier'))) {
-        markZenFreeTierBlocked('http', model, `HTTP 403 FreeTierError — model free bị Zen chặn với API key ở transport HTTP (chỉ space-bunny-free còn mở API HTTP) — r72: đường CLI native vẫn chạy được model này (llm.ts tự route)`, 60_000)
+        markZenFreeTierBlocked('http', model, 'HTTP 403 FreeTierError — model free bị Zen chặn với API key ở transport HTTP (chỉ space-bunny-free còn mở API HTTP) — model này sẽ chuyển tiếp về ZEN FAILOVER (r74: native CLI cũng đã bị chặn lại — xem BUG2-033)', 60_000)
       } else if (response.status === 403 && (errBody.includes('RegionError') || /not available in your region/i.test(errBody))) {
         markZenFreeTierBlocked('http', model, 'HTTP 403 RegionError — model geo-block tại vùng máy chủ này')
       } else if (response.status === 402) {
@@ -5039,7 +5182,7 @@ async function callOpenCodeCLIProvider(
         //   Lỗi timeout/hang/spawn KHÔNG cache (có thể tạm thời).
         const raw = rawHead + '\n' + stderr
         if (raw.includes('FreeTierError') || raw.includes('free tier can only be used from within OpenCode')) {
-          markZenFreeTierBlocked('cli', model, 'CLI nhận FreeTierError 403 trên transport alias — model free phải đi qua native provider (r72 llm.ts đã route; nếu vẫn lỗi ở native thì cache này đúng)', 300_000)
+          markZenFreeTierBlocked('cli', model, 'CLI nhận FreeTierError 403 (r74 BUG2-033: Zen đã chặn lại native provider cho model free ngoài SBF — policy toàn cục, không phải quota key/app-dir; model chuyển tiếp về ZEN FAILOVER)', 300_000)
         } else if (raw.includes('RegionError') || /not available in your region/i.test(raw)) {
           markZenFreeTierBlocked('cli', model, 'CLI nhận RegionError — model geo-block tại vùng máy chủ này')
         } else if (/Insufficient (account )?(funds|credits?)/i.test(raw)) {
@@ -5124,8 +5267,9 @@ export function getZenStatus(): {
 } {
   const now = Date.now()
   const rateLimited = zenKey429Until.filter((t, i) => i < ZEN_API_KEYS.length && t > now).length
+  // r74 — value là { until, reason } (không còn number thuần)
   const freeTierBlocked = [...zenFreeTierBlockedUntil.entries()]
-    .filter(([, until]) => until > now)
+    .filter(([, v]) => v.until > now)
     .map(([k]) => k)
   return {
     configured: ZEN_API_KEYS.length > 0,
