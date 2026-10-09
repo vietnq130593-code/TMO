@@ -115,7 +115,7 @@ import { archiveContext, recallContext } from '@/lib/context-store'
 // (chỉ skills 16k/HOT 2k có cap riêng) + protocol của loop ghép lại vượt
 // SYSTEM_PROMPT_BUDGET_CHARS (mặc định 24k) → cắt block priority thấp nhất
 // giữ đầu. Tổng < budget → prompt GIỮ NGUYÊN 100%.
-import { budgetPromptWith } from '@/lib/prompt-budget'
+import { budgetPrompt } from '@/lib/prompt-budget'
 // CI-5 (Task 14-b) — DURABLE GOAL LOOP: contract types dùng chung với worker
 // nền (14-a, goal-loop-worker.ts) — TYPE-ONLY import (erased lúc build, 0
 // runtime dependency, không circular). Khi `durable` KHÔNG được truyền vào
@@ -944,16 +944,13 @@ export function assembleGoalLoopSystemPrompt(params: {
   hasWorkData?: boolean
   /** nhãn context cho log 1 dòng khi có cut */
   agentName?: string
-  /**
-   * 2026-10-27 (user directive — trần prompt THEO TÁC VỤ): override budget ký
-   * tự cho ĐÚNG tác vụ này. -1 (hoặc ≤0) = KHÔNG GIỚI HẠN; undefined = dùng
-   * mặc định hệ thống SYSTEM_PROMPT_BUDGET_CHARS.
-   */
-  promptBudgetChars?: number
 }): string {
   const { systemPrompt, hasDelegation, hasOrchestration, hasDispatch, hasCreate, preActBlock, agentName } = params
   try {
-    return budgetPromptWith(
+    // r73 (user directive — gỡ nút "Prompt Auto"): budgetPromptWith THEO TÁC VỤ
+    // đã bị XOÁ cùng chuỗi promptBudgetChars — giờ chỉ còn trần mặc định hệ
+    // thống SYSTEM_PROMPT_BUDGET_CHARS (env) qua budgetPrompt.
+    return budgetPrompt(
       [
         { name: 'base', content: systemPrompt, priority: 10 },
         { name: 'goalProtocol', content: buildGoalProtocol(), priority: 100 },
@@ -986,7 +983,6 @@ export function assembleGoalLoopSystemPrompt(params: {
         { name: 'confidenceProtocol', content: buildConfidenceProtocol(), priority: 70 },
         { name: 'preAct', content: preActBlock, priority: 60 },
       ],
-      params.promptBudgetChars,
       `goal-loop:${agentName || 'agent'}`,
     )
   } catch (err) {
@@ -2200,12 +2196,6 @@ export async function runGoalDrivenLoop(params: {
   agentTools?: string[]
   agentSessionId?: string | null
   /**
-   * 2026-10-27 (user directive — trần prompt THEO TÁC VỤ): override budget ký
-   * tự system prompt cho ĐÚNG run này. -1 (hoặc ≤0) = KHÔNG GIỚI HẠN;
-   * undefined = mặc định hệ thống (SYSTEM_PROMPT_BUDGET_CHARS).
-   */
-  promptBudgetChars?: number
-  /**
    * CI-5 (Task 14-b) — DURABLE HOOKS (worker nền 14-a truyền vào). HOÀN TOÀN
    * optional — không truyền = hành vi inline cũ 100% (feature flag off path):
    *   - resumeState  → khôi phục từ checkpoint sau crash/restart: messages dùng
@@ -2232,7 +2222,6 @@ export async function runGoalDrivenLoop(params: {
     agentMaxTokens,
     agentTools = [],
     agentSessionId = null,
-    promptBudgetChars,
     durable,
   } = params
 
@@ -2339,8 +2328,6 @@ export async function runGoalDrivenLoop(params: {
         return agentTools.length > 0 ? buildCompactToolSchemasSection(agentTools) : ''
       } catch { return '' }
     })(),
-    // 2026-10-27 — trần prompt theo tác vụ: -1 = không giới hạn (user directive)
-    promptBudgetChars,
   })
 
   // CI-5 (Task 14-b) — RESUME: capture 1 lần, mọi nhánh dưới guard bằng
@@ -4167,7 +4154,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
                   const t = buildDelegationDispatchThought(cycle, agentName, tc)
                   if (t) recordAgentThought(agentSessionId, t, totalIterations)
                 }
-                const r = await executeTool(tc.name, { ...tc.args }, { agentName, sessionId: agentSessionId, runId, promptBudgetChars })
+                const r = await executeTool(tc.name, { ...tc.args }, { agentName, sessionId: agentSessionId, runId })
                 return { tcIdx: i, toolResult: r }
               } catch (err) {
                 // No-throwError: exception của 1 delegation → kết quả fail riêng
@@ -4342,10 +4329,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           const t = buildDelegationDispatchThought(cycle, agentName, tc)
           if (t) recordAgentThought(agentSessionId, t, totalIterations)
         }
-        // 2026-10-27 (rà soát Task 27-a): truyền trần prompt THEO TÁC VỤ vào
-        // context — request_code_team chuyển tiếp cho workflow steps (PROMPT ∞
-        // áp đồng bộ cả chuỗi delegation của tác vụ).
-        const toolResult = await executeTool(tc.name, toolArgs, { agentName, sessionId: agentSessionId, runId, promptBudgetChars })
+        const toolResult = await executeTool(tc.name, toolArgs, { agentName, sessionId: agentSessionId, runId })
 
         processToolResult(tc, toolResult)
       }

@@ -68,7 +68,7 @@ import { buildWorkspaceContext } from '@/lib/workspace/workspace-context'
 // (SYSTEM_PROMPT_BUDGET_CHARS mặc định 24k): các block góp vào prompt của step
 // (persona/skills/workspace/capabilities/roster/layer9-hints/tool-schemas)
 // ngoài skills 16k không block nào cap → vượt budget thì cắt priority thấp nhất giữ đầu.
-import { budgetPromptWith, type PromptBlock } from '@/lib/prompt-budget'
+import { budgetPrompt, type PromptBlock } from '@/lib/prompt-budget'
 import { exec, execFile } from 'child_process'
 import { promisify } from 'util'
 
@@ -496,12 +496,6 @@ export interface WorkflowConfig {
    *  still happen. This is the recommended behavior for long-running workflows.
    *  Default: true */
   continueOnDisconnect?: boolean
-  /**
-   * 2026-10-27 (rà soát Task 27-a — trần prompt THEO TÁC VỤ cho cả chuỗi
-   * delegation): budget override từ run cha truyền qua request_code_team.
-   * -1 = KHÔNG GIỚI HẠN (PROMPT ∞); undefined = mặc định hệ thống.
-   */
-  promptBudgetChars?: number
 }
 
 /** Cached resolved agents for the current workflow run
@@ -691,9 +685,6 @@ export interface WorkflowContext {
   layer9HintsInjected?: number
   /** ROUND-37 V3.1: số lesson episodic đã inject qua PRE-ACT trong run */
   episodicBrainInjected?: number
-  /** 2026-10-27 (rà soát Task 27-a): trần prompt theo tác vụ từ run cha
-   * (request_code_team) — -1 = unlimited; undefined = mặc định hệ thống */
-  promptBudgetChars?: number
 }
 
 // ==================== LAYER 9 P1.2 + P1.3 — ERROR TAXONOMY & PATTERN PERSISTENCE ====================
@@ -909,8 +900,6 @@ export async function runWorkflow(
   // Per-workflow context — each workflow run has its own cache
   const ctx: WorkflowContext = {
     resolvedAgentsCache: new Map(),
-    // 2026-10-27 (rà soát Task 27-a): trần prompt THEO TÁC VỤ của run cha
-    promptBudgetChars: config?.promptBudgetChars,
   }
 
   // Load enabled skills once for the entire workflow run — cached in ctx.skillsContext
@@ -2538,9 +2527,9 @@ export async function runAgentStep(params: {
 
   // CI-3 B7 (Task 13-e) — áp budget TỔNG rồi ghép các block thành system
   // prompt cuối (fail-open bên trong budgetPrompt: lỗi → chuỗi ghép không cut).
-  // 2026-10-27 (rà soát Task 27-a): dùng trần prompt THEO TÁC VỤ của run cha
-  // khi có (PROMPT ∞ → không cắt; số dương → trần riêng của tác vụ).
-  const systemPrompt = budgetPromptWith(systemBlocks, ctx.promptBudgetChars, `workflow-step:${agent.name}(${position})`)
+  // r73 (user directive — gỡ nút "Prompt Auto"): chuỗi override THEO TÁC VỤ
+  // đã XOÁ — chỉ còn trần mặc định hệ thống SYSTEM_PROMPT_BUDGET_CHARS.
+  const systemPrompt = budgetPrompt(systemBlocks, `workflow-step:${agent.name}(${position})`)
 
   // Build initial messages array for multi-turn conversation with tool calls
   const messages: Array<{
@@ -3619,7 +3608,7 @@ Output JSON trong markdown code block:
   // CI-3 B7 (Task 13-e): áp budget tổng như step prompt (persona cao nhất —
   // skills thấp hơn; tổng ~21k thường dưới 24k → no-op, chỉ kích hoạt khi user
   // hạ SYSTEM_PROMPT_BUDGET_CHARS)
-  const verifySystemPrompt = budgetPromptWith(
+  const verifySystemPrompt = budgetPrompt(
     [
       { name: 'persona', content: getAgentPrompt('TL'), priority: 100 },
       ...(await (async () => {
@@ -3631,8 +3620,6 @@ Output JSON trong markdown code block:
         return ctx.skillsContext ? [{ name: 'skills', content: ctx.skillsContext, priority: 20 }] : []
       })()),
     ],
-    // 2026-10-27 (rà soát Task 27-a): trần prompt theo tác vụ của run cha
-    ctx.promptBudgetChars,
     'workflow-checkpoint-verify:TL',
   )
 

@@ -1816,6 +1816,47 @@ export function readSmolabContext(): {
   } catch { return {} }
 }
 
+// r73 (mục 2 user — nút "+" thay nút "Prompt Auto" đã gỡ): tệp đính kèm chờ
+// gửi trong khung chat. Upload xong kèm derivedText (VLM mô tả ảnh / ASR
+// transcript / tóm tắt video / văn bản trích xuất) — agent thấy nội dung ngay
+// trong ngữ cảnh mà không cần tự đọc tệp.
+export interface PendingAttachment {
+  id: string            // id server sau upload (id client tạm khi uploading)
+  fileName: string
+  kind: 'image' | 'audio' | 'video' | 'text' | 'pdf' | 'docx' | 'other'
+  sizeBytes: number
+  status: 'uploading' | 'ready' | 'error'
+  derivedText?: string | null
+  filePath?: string
+  previewUrl?: string   // object URL (chỉ ảnh) — revoke khi bỏ/gửi
+  error?: string
+}
+
+// r73 — định dạng manifest đính kèm ghép vào cuối user message. Manifest nằm
+// TRONG content (lưu DB + gửi API) → replay phiên cũ agent vẫn thấy nội dung.
+function buildAttachmentManifest(atts: PendingAttachment[]): string {
+  const ready = atts.filter(a => a.status === 'ready')
+  if (ready.length === 0) return ''
+  const parts = ready.map((a, i) => {
+    const label =
+      a.kind === 'image' ? 'Mô tả nội dung ảnh (VLM)' :
+      a.kind === 'audio' ? 'Lời thoại (ASR transcript)' :
+      a.kind === 'video' ? 'Tóm tắt nội dung video' :
+      'Nội dung trích xuất'
+    const body = (a.derivedText && a.derivedText.trim().length > 0)
+      ? `${label}:
+${a.derivedText.trim()}`
+      : '(không trích xuất được nội dung tự động — dùng tool read_file/shell đọc tệp gốc ở đường dẫn bên dưới)'
+    const path = a.filePath ? `
+Tệp gốc (đọc bằng tool): ${a.filePath}` : ''
+    return `[${i + 1}] ${a.fileName} (${a.kind}, ${Math.max(1, Math.round(a.sizeBytes / 1024))}KB)${path}
+${body}`
+  })
+  return `📎 ĐÍNH KÈM ${ready.length} TỆP (người dùng tải lên kèm yêu cầu này):
+
+${parts.join('\n\n')}`
+}
+
 
 export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) {
   // Chat state — KHỞI TẠO TỪ localStorage (restore phiên làm việc cũ)
@@ -1823,12 +1864,19 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   const [messages, setMessages] = useState<SmolabMessage[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  // 2026-10-27 (user directive — trần prompt THEO TÁC VỤ): 'auto' = trần mặc
-  // định hệ thống; 'unlimited' = -1 KHÔNG GIỚI HẠN cho đúng tác vụ sắp gửi.
-  const [promptBudgetMode, setPromptBudgetMode] = useState<'auto' | 'unlimited'>('auto')
+  // r73 (user directive — gỡ nút trần-prompt-theo-tác-vụ vốn vô dụng): trạng
+  // thái bật/tắt + chuỗi tham số trần prompt THEO TÁC VỤ đã bị XOÁ toàn hệ
+  // thống (nút + openclaw route + goal-loop + workflow-engine + tool-executor
+  // + durable types + wrapper budget tương ứng). System prompt chỉ còn trần
+  // env hệ thống SYSTEM_PROMPT_BUDGET_CHARS — xem src/lib/prompt-budget.ts.
   // MODEL POLICY 2026-10-16: minimax-m3 là mặc định (agents độc lập + chat —
   // lõi chính tạm thời, duy nhất khả dụng); kimi/ds là failover backup
   const [selectedModel, setSelectedModel] = useState(restoredCtx.selectedModel || 'minimaxai/minimax-m3')
+  // r73 (mục 1 user): dropdown chọn model free ngay trên dòng model indicator
+  const [showModelSelect, setShowModelSelect] = useState(false)
+  // r73 (mục 2 user): tệp đính kèm chờ gửi (nút "+")
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [activeSmolabTab, setActiveSmolabTab] = useState('knowledge')
   const [gatewayOnline, setGatewayOnline] = useState(false)
   const [sessions, setSessions] = useState<SmolabSession[]>([])
@@ -1952,6 +2000,27 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   ) // 'code' | 'research'
   const [showAgentSelect, setShowAgentSelect] = useState(false)
   const [showTeamSelect, setShowTeamSelect] = useState(false)
+  // r73 (mục 1 user): danh sách model free cho dropdown trên dòng model
+  // indicator — fetch 1 LẦN từ /api/agents/models (PROVIDER_DATA.zen — cùng
+  // nguồn dialog tạo agent, single source of truth agent-constants.ts) kèm
+  // caps phân loại ⚡coding/🧠reasoning/🤖agentic từ battery r73.
+  const [zenModelOptions, setZenModelOptions] = useState<Array<{
+    id: string
+    label?: string
+    caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean }
+  }>>([])
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/agents/models')
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((data: { providers?: Array<{ key?: string; models?: Array<{ id: string; label?: string; caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean } }> }> }) => {
+        if (cancelled) return
+        const zen = (data?.providers || []).find(p => p.key === 'zen')
+        setZenModelOptions(zen?.models || [])
+      })
+      .catch(() => { /* im lặng — dropdown hiện câu "chưa tải được" */ })
+    return () => { cancelled = true }
+  }, [])
 
   // Smolab task tracking — background task polling (Phase 6)
   const [activeTaskIds, setActiveTaskIds] = useState<Map<string, string>>(new Map()) // sessionId → taskId
@@ -3269,6 +3338,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       setShowTeamSelect(false)
       setShowSessionSelect(false)
       setShowOpusModeMenu(false)
+      setShowModelSelect(false)
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
@@ -4856,9 +4926,93 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     }
   }, [messages, currentSessionId, setCurrentSessionId, setMessages, setInput, setIsLoading])
 
+  // ===== r73 (mục 2 user) — UPLOAD TỆP ĐÍNH KÈM (nút "+") =====
+  // Tối đa 4 tệp/lượt chọn (hardcode client; server tự chặn size/mime).
+  // Ảnh: upload kèm VLM mô tả + thumbnail object-URL; audio: ASR transcript;
+  // video: tóm tắt; pdf/docx/text: trích văn bản. Tệp lỗi KHÔNG chặn tệp khác.
+  const handleAttachmentSelect = useCallback(async (files: FileList | null) => {
+    if (!files || files.length === 0) return
+    const list = Array.from(files).slice(0, 4)
+    for (const file of list) {
+      const clientKey = crypto.randomUUID()
+      const isImage = file.type.startsWith('image/')
+      const kindGuess: PendingAttachment['kind'] = isImage ? 'image'
+        : file.type.startsWith('audio/') ? 'audio'
+        : file.type.startsWith('video/') ? 'video'
+        : file.name.toLowerCase().endsWith('.pdf') ? 'pdf'
+        : file.name.toLowerCase().endsWith('.docx') ? 'docx' : 'other'
+      setPendingAttachments(prev => [...prev, {
+        id: clientKey,
+        fileName: file.name,
+        kind: kindGuess,
+        sizeBytes: file.size,
+        status: 'uploading',
+        previewUrl: isImage ? URL.createObjectURL(file) : undefined,
+      }])
+      try {
+        const fd = new FormData()
+        fd.append('file', file)
+        if (currentSessionId) fd.append('sessionId', currentSessionId)
+        const res = await fetch('/api/smolab/attachments', { method: 'POST', body: fd })
+        const data = await res.json().catch(() => null)
+        if (!res.ok || !data?.attachment) throw new Error(data?.error || `HTTP ${res.status}`)
+        setPendingAttachments(prev => {
+          const target = prev.find(p => p.id === clientKey)
+          if (!target) {
+            // User đã bỏ chip giữa lúc upload — dọn tệp mồ côi trên server
+            fetch(`/api/smolab/attachments?id=${encodeURIComponent(data.attachment.id)}`, { method: 'DELETE' }).catch(() => {})
+            return prev
+          }
+          return prev.map(p => p.id === clientKey ? {
+            ...p,
+            id: String(data.attachment.id),
+            kind: data.attachment.kind,
+            status: 'ready',
+            derivedText: data.attachment.derivedText ?? null,
+            filePath: data.attachment.filePath,
+          } : p)
+        })
+      } catch (err) {
+        setPendingAttachments(prev => prev.map(p => p.id === clientKey ? {
+          ...p,
+          status: 'error',
+          error: err instanceof Error ? err.message : 'Lỗi tải lên',
+        } : p))
+      }
+    }
+    // Reset input để lần sau chọn lại được cùng tệp
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }, [currentSessionId])
+
+  const removeAttachment = useCallback((id: string) => {
+    setPendingAttachments(prev => {
+      const target = prev.find(p => p.id === id)
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl)
+      // Tệp đã upload xong nhưng chưa gửi → xóa hẳn khỏi server (chưa gắn
+      // message nào — chỉ là bản nháp chờ)
+      if (target && target.status === 'ready') {
+        fetch(`/api/smolab/attachments?id=${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {})
+      }
+      return prev.filter(p => p.id !== id)
+    })
+  }, [])
+
   const sendMessage = useCallback(async (queryText?: string) => {
-    const text = queryText || input.trim()
-    if (!text || isLoading) return
+    const rawText = queryText || input.trim()
+    const readyAtts = pendingAttachments.filter(a => a.status === 'ready')
+    // r73 — cho phép gửi khi có tệp đính kèm dù ô nhập trống (yêu cầu chỉ là
+    // "phân tích tệp") — manifest là phần nội dung chính
+    if ((!rawText && readyAtts.length === 0) || isLoading) return
+    // r73 — manifest đính kèm nằm TRONG message content: mọi đường (single
+    // chat / team workflow / research) đều thấy — agent đọc được nội dung
+    // tệp, replay phiên cũ (DB) cũng nguyên vẹn.
+    const manifest = buildAttachmentManifest(pendingAttachments)
+    const text = manifest ? `${rawText}
+
+${manifest}` : rawText
+    // Dọn chip ngay khi gửi (kể cả chip lỗi — đã hiện thông báo trên chip)
+    pendingAttachments.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl) })
+    setPendingAttachments([])
 
     // === WORKFLOW TRIGGER (Critical Issues Resolution) ===
     // Cách 1: Keyword shortcut — "tiến hành triển khai" → trigger trực tiếp (backward compat)
@@ -5052,9 +5206,10 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         model: selectedModel,
         sessionId,
         stream: false,
+        // r73 — id tệp đính kèm (server liên kết row ChatAttachment về đúng
+        // phiên + tin nhắn khi early-save — truy hồi/audit về sau)
+        ...(readyAtts.length > 0 ? { attachmentIds: readyAtts.map(a => a.id) } : {}),
       }
-      // 2026-10-27 — trần prompt theo tác vụ: bật ∞ → gửi -1 (không giới hạn)
-      if (promptBudgetMode === 'unlimited') chatBody.promptBudgetChars = -1
 
       // Phase D: Inject agent instruction
       if (chatMode === 'single' && selectedAgentId) {
@@ -5066,9 +5221,12 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
           chatBody.agentProfileId = agent.id
           chatBody.agentProfileName = agent.name
           chatBody.agentProvider = agent.provider
-          chatBody.agentModel = agent.model
+          // r73 (mục 1 user): model HIỆU DỤNG = dropdown chọn (mặc định = model
+          // agent — set lúc chọn agent; user đổi qua dropdown → GHI ĐÈ cho
+          // phiên chat này, không đổi AgentProfile DB)
+          chatBody.agentModel = selectedModel
           chatBody.teamMode = 'single'
-          chatBody.model = agent.model
+          chatBody.model = selectedModel
         }
       } else if (chatMode === 'multi' && selectedTeam) {
         const tl = smolabAgents.find((a: any) => a.team === selectedTeam && a.position === 'TL' && a.enabled)
@@ -5222,7 +5380,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       // background → isLoading giữ nguyên đúng với phiên đó
       setIsLoading(inFlightChatsRef.current.has(currentSessionIdRef.current))
     }
-  }, [input, isLoading, messages, selectedModel, currentSessionId, chatMode, selectedAgentId, selectedTeam, smolabAgents, startWorkflow, refreshAgentRuns, seedGoalLoopJob])
+  }, [input, isLoading, messages, selectedModel, currentSessionId, chatMode, selectedAgentId, selectedTeam, smolabAgents, pendingAttachments, startWorkflow, refreshAgentRuns, seedGoalLoopJob])
 
   // ===== LIVE VOICE (user request 2026-08-28) — nút Live cạnh nút Gửi =====
   // Nói tiếng Việt → ASR → văn bản trong khung nhập. Tự gửi khi thỏa CẢ HAI:
@@ -5957,19 +6115,101 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                 </div>
               )}
 
-              {/* Agent/Team model indicator */}
-              {((chatMode === 'single' && selectedAgentId) || (chatMode === 'multi' && selectedTeam)) && (
-                <div className="mt-2 px-2.5 py-1.5 text-[12px] text-stone-400 bg-slate-950/30 border border-stone-700/20">
-                  {chatMode === 'single' && selectedAgentId && (() => {
-                    const a = smolabAgents.find((ag: any) => ag.id === selectedAgentId)
-                    return a ? `🤖 Model: ${a.model} (${a.provider}) • T: ${a.temperature} • 📦 ${a.maxTokens != null && a.maxTokens < 0 ? '∞ tokens' : `${a.maxTokens} tokens`}` : ''
-                  })()}
-                  {chatMode === 'multi' && selectedTeam && (() => {
-                    const tl = smolabAgents.find((ag: any) => ag.team === selectedTeam && ag.position === 'TL' && ag.enabled)
-                    return tl ? `👥 TL Model: ${tl.model} (${tl.provider}) • T: ${tl.temperature} • 📦 ${tl.maxTokens != null && tl.maxTokens < 0 ? '∞ tokens' : `${tl.maxTokens} tokens`}` : `⚠️ Team ${selectedTeam === 'code' ? 'Code' : 'Research'} chưa có Team Lead (TL)`
-                  })()}
-                </div>
-              )}
+              {/* Agent/Team model indicator — r73 (mục 1 user): bấm vào dòng
+                  model (single mode + provider zen) → dropdown TOÀN BỘ model
+                  free khả dụng để chọn cho phiên chat này. Model chọn GHI ĐÈ
+                  model mặc định của agent (không đổi AgentProfile DB). */}
+              {((chatMode === 'single' && selectedAgentId) || (chatMode === 'multi' && selectedTeam)) && (() => {
+                const agent = chatMode === 'single'
+                  ? smolabAgents.find((ag: any) => ag.id === selectedAgentId)
+                  : null
+                const tl = chatMode === 'multi'
+                  ? smolabAgents.find((ag: any) => ag.team === selectedTeam && ag.position === 'TL' && ag.enabled)
+                  : null
+                const shown = agent || tl
+                if (!shown) return null
+                const overridden = !!(agent && selectedModel && selectedModel !== agent.model)
+                const canPick = chatMode === 'single' && shown.provider === 'zen'
+                const zenModels = zenModelOptions
+                return (
+                  <div className="mt-2 relative">
+                    <button
+                      type="button"
+                      data-dropdown-toggle
+                      disabled={!canPick}
+                      onClick={(e) => {
+                        if (!canPick) return
+                        e.stopPropagation()
+                        setShowModelSelect(v => !v)
+                        setShowAgentSelect(false)
+                        setShowTeamSelect(false)
+                        setShowSessionSelect(false)
+                        setShowOpusModeMenu(false)
+                      }}
+                      className={`w-full text-left px-2.5 py-1.5 text-[12px] border transition-colors ${
+                        canPick
+                          ? 'cursor-pointer bg-slate-950/40 border-cyan-400/30 hover:border-cyan-400/60 hover:bg-slate-950/60 text-stone-300'
+                          : 'cursor-default bg-slate-950/30 border-stone-700/20 text-stone-400'
+                      }`}
+                      title={canPick ? 'Bấm để chọn model free khác cho phiên chat này' : undefined}
+                      aria-label={canPick ? 'Chọn model cho phiên chat' : undefined}
+                    >
+                      <span className="flex items-center gap-1.5 flex-wrap">
+                        <span>
+                          {chatMode === 'single' ? '🤖' : '👥'} Model:{' '}
+                          <span className="text-cyan-300">{chatMode === 'single' ? (selectedModel || shown.model) : shown.model}</span>
+                        </span>
+                        {overridden && (
+                          <span className="text-[10px] px-1 py-px bg-amber-500/15 text-amber-300 border border-amber-400/40" title={`Model mặc định của agent: ${agent!.model}`}>
+                            ⚡ ghi đè
+                          </span>
+                        )}
+                        <span className="text-stone-500">
+                          ({shown.provider}) • T: {shown.temperature} • 📦 {shown.maxTokens != null && shown.maxTokens < 0 ? '∞ tokens' : `${shown.maxTokens} tokens`}
+                        </span>
+                        {canPick && <ChevronDown className="h-3 w-3 text-stone-400 ml-auto flex-shrink-0" />}
+                      </span>
+                    </button>
+                    {showModelSelect && canPick && (
+                      <div
+                        data-dropdown-menu
+                        onClick={(e) => e.stopPropagation()}
+                        className="absolute top-full left-0 right-0 mt-1 z-50 bg-slate-950/95 border border-cyan-400/50 max-h-72 overflow-y-auto"
+                        style={{ scrollbarWidth: 'thin' }}
+                      >
+                        <div className="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-cyan-500/70 border-b border-cyan-400/20 sticky top-0 bg-slate-950/95">
+                          Model free khả dụng · ⚡ coding · 🧠 reasoning · 🤖 agentic
+                        </div>
+                        {zenModels.map((m) => (
+                          <button
+                            key={m.id}
+                            onClick={() => { setSelectedModel(m.id); setShowModelSelect(false) }}
+                            className={`w-full text-left px-3 py-1.5 text-xs hover:bg-cyan-500/10 transition-colors flex items-center gap-2 ${
+                              selectedModel === m.id ? 'text-cyan-400' : 'text-stone-300'
+                            }`}
+                            title={m.label || m.id}
+                          >
+                            <span className="w-3.5 flex-shrink-0 inline-flex">
+                              {selectedModel === m.id && <Check className="h-3 w-3" />}
+                            </span>
+                            <span className="truncate flex-1">{m.id}</span>
+                            {(m.caps?.coding || m.caps?.reasoning || m.caps?.agentic) && (
+                              <span className="text-[10px] text-stone-500 flex-shrink-0 flex gap-1 items-center">
+                                {m.caps?.coding && <span title="coding">⚡</span>}
+                                {m.caps?.reasoning && <span title="reasoning">🧠</span>}
+                                {m.caps?.agentic && <span title="agentic">🤖</span>}
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                        {zenModels.length === 0 && (
+                          <div className="px-3 py-2 text-xs text-stone-500">Chưa tải được danh sách model — thử lại sau.</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
 
             {/* ===== GĐ4 CI-5 (14-e) — Panel "Tác vụ nền" (durable goal-loop job
@@ -6463,25 +6703,74 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                   ⚠ Trình duyệt chưa có giọng đọc tiếng Việt (vi-VN) — câu trả lời sẽ chỉ hiển thị dạng chữ. Hãy dùng Chrome/Edge hoặc cài thêm giọng vi-VN cho Windows.
                 </div>
               )}
+              {/* r73 (mục 2 user) — chips tệp đính kèm chờ gửi (nút "+").
+                  Trạng thái: uploading (quay) / ready (xanh + derivedText trong
+                  title) / error (đỏ + thông báo). Bấm X bỏ tệp (xóa khỏi server
+                  nếu đã upload xong nhưng chưa gửi). */}
+              {pendingAttachments.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {pendingAttachments.map(att => (
+                    <div
+                      key={att.id}
+                      className={`chamfer-sm flex items-center gap-1.5 pl-1.5 pr-1 py-1 text-[11px] border max-w-[260px] ${
+                        att.status === 'error'
+                          ? 'border-red-400/50 bg-red-950/20 text-red-300'
+                          : att.status === 'uploading'
+                            ? 'border-cyan-400/40 bg-slate-950/60 text-stone-400'
+                            : 'border-emerald-400/40 bg-emerald-950/20 text-emerald-300'
+                      }`}
+                      title={att.error || (att.derivedText ? att.derivedText.slice(0, 400) : att.fileName)}
+                    >
+                      {att.status === 'uploading'
+                        ? <Loader2 className="h-3 w-3 animate-spin flex-shrink-0" />
+                        : att.status === 'error'
+                          ? <AlertCircle className="h-3 w-3 flex-shrink-0" />
+                          : <Check className="h-3 w-3 flex-shrink-0" />}
+                      {att.previewUrl ? (
+                        <img src={att.previewUrl} alt={att.fileName} className="h-6 w-6 object-cover border border-stone-700/50 flex-shrink-0" />
+                      ) : (
+                        <span className="flex-shrink-0" aria-hidden>
+                          {att.kind === 'image' ? '🖼️' : att.kind === 'audio' ? '🎵' : att.kind === 'video' ? '🎬' : att.kind === 'pdf' || att.kind === 'docx' ? '📄' : '📎'}
+                        </span>
+                      )}
+                      <span className="truncate max-w-[130px]">{att.fileName}</span>
+                      <span className="text-stone-500 flex-shrink-0">{Math.max(1, Math.round(att.sizeBytes / 1024))}KB</span>
+                      <button
+                        type="button"
+                        onClick={() => removeAttachment(att.id)}
+                        className="p-0.5 text-stone-500 hover:text-red-400 transition-colors flex-shrink-0"
+                        title="Bỏ tệp đính kèm"
+                        aria-label={`Bỏ tệp ${att.fileName}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="flex items-center gap-2">
-                {/* 2026-10-27 (user directive) — trần prompt THEO TÁC VỤ: nút nhỏ
-                    cạnh ô nhập. Mặc định (AUTO) = trần hệ thống; bật ∞ = KHÔNG GIỚI
-                    HẠN (-1) cho tác vụ sắp gửi — hợp task lớn cần đầy đủ context. */}
-                <button
-                  type="button"
-                  onClick={() => setPromptBudgetMode(m => (m === 'auto' ? 'unlimited' : 'auto'))}
-                  title={promptBudgetMode === 'auto'
-                    ? 'Trần prompt: MẶC ĐỊNH hệ thống — bấm để chuyển sang KHÔNG GIỚI HẠN (-1) cho tác vụ này'
-                    : 'Trần prompt: KHÔNG GIỚI HẠN (-1) — bấm để quay về MẶC ĐỊNH hệ thống'}
-                  aria-label="Chuyển trần prompt của tác vụ"
-                  className={`chamfer-sm h-8 px-2 shrink-0 text-[10px] font-semibold tracking-wide border transition-colors ${
-                    promptBudgetMode === 'unlimited'
-                      ? 'bg-amber-500/20 text-amber-300 border-amber-400/50 hover:bg-amber-500/30'
-                      : 'bg-slate-950/60 text-stone-400 border-cyan-400/30 hover:text-stone-200 hover:border-cyan-400/50'
-                  }`}
+                {/* r73 (mục 2 user — thay nút "Prompt Auto" đã gỡ toàn bộ):
+                    nút "+" mở hộp chọn tệp đính kèm cho agents — ảnh (VLM mô tả),
+                    audio (ASR transcript), video (tóm tắt), pdf/docx/text (trích
+                    văn bản). Nội dung chưng cất ghép vào message → agent thấy ngay. */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*,audio/*,video/*,.pdf,.docx,.txt,.md,.markdown,.json,.csv,.tsv,.log,.yml,.yaml,.xml,.html,.htm,.css,.js,.jsx,.ts,.tsx,.py,.sh,.bash,.sql,.toml,.ini,.cfg,.conf"
+                  className="hidden"
+                  onChange={(e) => { void handleAttachmentSelect(e.target.files) }}
+                  aria-hidden
+                  tabIndex={-1}
+                />
+                <Button
+                  onClick={() => fileInputRef.current?.click()}
+                  title="Đính kèm tệp cho agents — ảnh, audio, video, PDF, DOCX, văn bản/code (tối đa 4 tệp, 30MB/tệp)"
+                  aria-label="Đính kèm tệp"
+                  className="chamfer-sm h-8 w-8 p-0 shrink-0 bg-slate-950/60 hover:bg-slate-900 text-cyan-300 border border-cyan-400/40 hover:border-cyan-400/70"
                 >
-                  {promptBudgetMode === 'unlimited' ? 'PROMPT ∞' : 'PROMPT AUTO'}
-                </button>
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
                 <input
                   ref={chatInputRef}
                   type="text"
@@ -6523,7 +6812,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                 ) : (
                   <Button
                     onClick={() => sendMessage()}
-                    disabled={!input.trim()}
+                    disabled={!input.trim() && !pendingAttachments.some(a => a.status === 'ready')}
                     title="Gửi tin nhắn"
                     aria-label="Gửi tin nhắn"
                     className="chamfer-sm h-8 w-8 p-0 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white"

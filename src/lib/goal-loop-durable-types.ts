@@ -186,12 +186,6 @@ export interface GoalLoopJobInput {
   agentMaxTokens?: number
   agentTools: string[]
   agentSessionId: string | null
-  /**
-   * 2026-10-27 (user directive — trần prompt THEO TÁC VỤ): -1 = không giới
-   * hạn; undefined = mặc định hệ thống. Phải nằm trong job input để re-run
-   * sau restart dùng ĐÚNG trần của tác vụ gốc (closure không sống qua restart).
-   */
-  promptBudgetChars?: number
 }
 
 // ==================== HOOKS (loop ↔ worker) ====================

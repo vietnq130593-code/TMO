@@ -27,10 +27,11 @@
  * 0 = không giới hạn) — đọc 1 LẦN ở module level theo chỉ dẫn CI-3 B7.
  *
  * 2026-10-27 (user directive): -1 là sentinel KHÔNG GIỚI HẠN chính thức (giá trị
- * user dùng) — mọi giá trị âm đều được chuẩn hóa về -1. Ngoài biến môi trường
- * (mặc định toàn hệ thống), trần prompt còn là LỰA CHỌN THEO TÁC VỤ: caller
- * truyền promptBudgetChars (-1 = không giới hạn cho đúng tác vụ đó) qua
- * runGoalDrivenLoop → assembleGoalLoopSystemPrompt → applyPromptBudget.
+ * user dùng) — mọi giá trị âm đều được chuẩn hóa về -1.
+ *
+ * r73 (2026-10-09, user directive): cơ chế override THEO TÁC VỤ (caller truyền
+ * promptBudgetChars) đã bị XOÁ toàn chuỗi cùng nút "Prompt Auto" — hiện chỉ còn
+ * trần env toàn hệ thống duy nhất.
  */
 
 /** 1 block góp vào system prompt — đơn vị budget */
@@ -292,26 +293,15 @@ export function applyPromptBudget(
  * mặc định (SYSTEM_PROMPT_BUDGET_CHARS) và trả chuỗi prompt hoàn chỉnh — thứ tự
  * block giữ nguyên, separator đã nhúng sẵn trong content mỗi block. Fail-open
  * tuyệt đối: không bao giờ throw (lỗi → chuỗi ghép KHÔNG cut).
+ *
+ * r73 (user directive — gỡ nút "Prompt Auto"): biến thể budgetPromptWith
+ * (override THEO TÁC VỤ, 2026-10-27) đã bị XOÁ toàn chuỗi cùng nút — system
+ * prompt budget giờ chỉ còn MỘT trần: env SYSTEM_PROMPT_BUDGET_CHARS (mặc định
+ * 24k; giá trị âm = không giới hạn toàn hệ thống).
  */
 export function budgetPrompt(blocks: PromptBlock[], context?: string): string {
-  return budgetPromptWith(blocks, undefined, context)
-}
-
-/**
- * 2026-10-27 (user directive — trần prompt THEO TÁC VỤ): budgetPrompt nhận
- * override theo tác vụ. budgetOverride <= 0 (-1 = unlimited) → KHÔNG cắt;
- * undefined/NaN → dùng mặc định hệ thống (SYSTEM_PROMPT_BUDGET_CHARS).
- */
-export function budgetPromptWith(
-  blocks: PromptBlock[],
-  budgetOverride?: number,
-  context?: string,
-): string {
   try {
-    const budget = typeof budgetOverride === 'number' && Number.isFinite(budgetOverride)
-      ? Math.floor(budgetOverride)
-      : SYSTEM_PROMPT_BUDGET_CHARS
-    return applyPromptBudget(blocks, budget, context).prompt
+    return applyPromptBudget(blocks, SYSTEM_PROMPT_BUDGET_CHARS, context).prompt
   } catch {
     return blocks.map(b => (typeof b?.content === 'string' ? b.content : '')).join('')
   }

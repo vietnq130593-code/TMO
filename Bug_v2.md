@@ -411,3 +411,78 @@
 2. *Mở phiên cũ mặc định hiện tin cuối, kéo lên mới load cũ?* — Cơ chế tail-load đã có từ 2026-09-01 nhưng auto-scroll bị gián đoạn chết ở đầu danh sách (BUG2-023) → đã fix bằng nhảy tức thời; kéo lên tải thêm (3 lượt/lần, giữ vị trí đọc) hoạt động đúng.
 3. *FORGE độc lập chứ đâu thuộc team code?* — Đúng theo thực thể hệ thống (vốn chỉ delegate qua by-name, không nằm pipeline SOP) → đã tách hoàn toàn (def + DB + UI + mọi tham chiếu), vẫn delegate được như cũ.
 4. *Dùng opencode auth login để có nhiều model free thay vì chỉ SBF?* — Đã hiện thực hóa: CLI cài xong + key oc_sk nạp (auth login chỉ là dán API key — không cần oauth account) + đường native mở khóa 5 model free mới (verified trả lời thật). Lưu ý minh bạch: trong sandbox hôm nay Zen còn 403 theo project với thư mục app (quota lịch sử) → model free chạy qua failover SBF; trên môi trường project mới/quota hồi thì chạy thẳng native.
+
+---
+
+# ROUND-73 (phiên 2026-10-09 — 4 yêu cầu user: dropdown model / gỡ nút Prompt Auto + nút "+" đính kèm / audit Bug_v2 / đánh giá phân loại model free mới)
+
+> **Ngữ cảnh:** HEAD xuất phát `03019ae` (r72, = origin/main). User sau khi thấy UI + catalog opencode 84 model đưa 4 yêu cầu mới. Điều tra + triển khai + nghiệm thu trong cùng phiên này.
+
+## A. CÁC MỤC GHI NHẬN MỚI
+
+### BUG2-028 · E · P2 · Dòng model indicator không bấm được — user muốn đổi model free ngay trong khung chat (user report mục 1)
+- **Hiện tượng:** dòng `🤖 Model: …` dưới selector agent là div tĩnh; `selectedModel` state có sẵn nhưng bị `chatBody.model = agent.model` (dòng 5071 cũ) ĐÈ mỗi lần gửi — user không có đường đổi model cho phiên chat.
+- **Fix (hardcode 3 lớp):** (1) dòng indicator → nút bấm (chỉ single mode + provider zen — team TL/nvidia giữ tĩnh); dropdown render từ `/api/agents/models` (PROVIDER_DATA.zen) kèm icon caps ⚡coding/🧠reasoning/🤖agentic từ bằng chứng battery r73; (2) chọn model → `setSelectedModel` → indicator hiện badge "⚡ ghi đè" khi ≠ model agent; (3) sendMessage: `chatBody.model = selectedModel` + `chatBody.agentModel = selectedModel` (model hiệu dụng chạy ReAct loop + durable job đều theo dropdown — KHÔNG đổi AgentProfile DB). Chọn agent khác → reset về model agent (giữ hành vi mặc định). Restore context (localStorage) giữ nguyên model override của phiên làm việc trước.
+
+### BUG2-029 · E · P2 · Nút "Prompt Auto" cạnh ô nhập vô dụng (user report mục 2 — user xác nhận thấy KHÔNG có tác dụng gì)
+- **Gốc rễ "vô dụng":** nút chỉ gửi `promptBudgetChars: -1` khi bật ∞ — chuỗi này CHỈ ảnh hưởng trần system prompt của đúng tác vụ; user không thấy khác biệt thực tế → đúng là tính năng thừa. Hơn nữa 2 e2e script (t28/t29) luôn cứng `promptBudgetChars: -1` — nút với runtime thật không còn ý nghĩa phân biệt.
+- **Fix (gỡ SẠCH toàn chuỗi — 8 file):** smolab-module (nút + state + gửi) · openclaw/chat route (đọc body + effectivePromptBudget + 2 pass-through) · agent-goal-loop (param assemble + runGoalDrivenLoop + 2 executeTool context + import) · goal-loop-durable-types (field job input) · goal-loop-worker (pass-through) · code-team/workflow-engine (2 interface + ctx + 2 call) · code-team/tool-executor (2 context + pass-through) · prompt-budget.ts (XOÁ export budgetPromptWith — chỉ còn budgetPrompt trần env SYSTEM_PROMPT_BUDGET_CHARS). Lõi budget (applyPromptBudget + tier water-filling + sàn giữ identity r68 BUG-016) GIỮ NGUYÊN — đó là hạ tầng chống phình system prompt 30-50k, không phải phần của nút.
+- **Test khoá:** task26 viết lại A2 (budgetPromptWith phải undefined ở module) + r73 test source-scan 8 file sạch identifier (cho phép comment giải thích việc đã gỡ).
+
+### BUG2-030 · F · P1 — Agents không có đường nhận TỆP user tải lên (thay nút đã gỡ bằng năng lực thật)
+- **Triển khai nút "+" (mục 2 user):**
+  - **Prisma `ChatAttachment`** (sessionId/messageId nullable — link về đúng tin nhắn lúc early-save; kind/sizeBytes/filePath/derivedText/status) + `db push` (lưu ý vận hành: push từ thư mục prisma/ hoặc DATABASE_URL tuyệt đối — chạy từ root với env tương đối `file:../db/custom.db` lần đầu không tạo bảng).
+  - **Route `/api/smolab/attachments`** (POST multipart/GET/DELETE): cap 30MB (env SMOLAB_UPLOAD_MAX_MB) · sanitize tên (strip path-traversal + control chars + 120 chars) · phân loại hardcode ĐUÔI thắng MIME client bịa (`report.pdf` + MIME "text/html" → vẫn pdf) · lưu file tên cuid · **chưng cất derivedText ngay lúc upload bằng z-ai-web-dev-sdk v0.0.18** (backend-only, singleton, config /etc/.z-ai-config tự đọc): image → VLM createVision mô tả tiếng Việt (cap 4k) · audio → ASR transcript (cap 20k) · video → createVision video_url tóm tắt (cap 4k) · text → UTF-8 (40k) · pdf → pdf-parse (40k) · docx → mammoth (40k). FAIL-OPEN: chưng cất lỗi KHÔNG làm upload chết — agent còn filePath đọc bản gốc bằng tool.
+  - **UI:** nút + (accept ảnh/audio/video/pdf/docx/text, tối đa 4 tệp/lượt) · chips trạng thái uploading/ready/error kèm thumbnail ảnh (object URL, revoke đúng) · X bỏ tệp (DELETE khỏi server nếu đã upload nhưng chưa gửi; user bỏ chip giữa lúc upload → khi response về tự dọn tệp mồ côi) · gửi được khi ô nhập trống nếu có tệp sẵn sàng.
+  - **Manifest trong content (không phải metadata riêng):** `📎 ĐÍNH KÈM N TỆP … [i] tên (kind, KB) — Tệp gốc: <filePath> — <derivedText>` ghép CUỐI user message → MỌI đường tiêu thụ (single chat/ReAct, team workflow, research mission) đều thấy nội dung + replay phiên cũ từ DB nguyên vẹn. `attachmentIds` kèm body → route early-save link row ChatAttachment về sessionId + messageId (fail-open).
+
+### BUG2-031 · G · P1 · Audit "toàn bộ bug đã ghi nhận đã fix chưa" (user report mục 3) — 1 mục kiến trúc lớn còn thiếu đã đóng trong phiên này
+- **Tổng đối chiếu 27 mục BUG2-001→027:** r70 fix 13 hạng (001,002,003,005,007,008,009,011,012,013,014,015,016,017 + đính chính 010) · r71 fix 4 (019,020,021,022 — live probe 74ms) · r72 fix 5 (023,024,025,026,027 — browser + E2E thật). **Còn thiếu đúng 1 mục kiến trúc: BUG2-018 phần "failover chéo provider"** (r70 ghi "cần quyết định user: provider/mô hình thay thế") — r72 đã mở kho model free CLI-native nhưng chuỗi failover khi model chính == space-bunny-free == failover thì rung failover BỊ SKIP → SBF chết toàn phần = agent chết (chỉ 3 key 429 + CLI 403 là đủ).
+- **Fix BUG2-018 (đóng nốt):** nấc LAST-RESORT chéo model trong free tier — `parseZenLastResortModels(env, main, failover)` (pool mặc định 3 model battery-verified ling/mimo/big-pickle, loại model đã thử, cap 3/lần) + vòng thử ĐƯỜNG CLI native (HTTP đã biết 403 với model ngoài SBF — bằng chứng curl 2026-10-09). Agent giờ chỉ chết khi TOÀN BỘ pool free chết. Override env `ZEN_LAST_RESORT_MODELS`.
+- **Các mục "còn treo" còn lại — đánh giá lại từng mục:**
+  - DATA MAP (F3 r68, mục D6 r70 "chưa xác minh"): **ĐÓNG** — r71 đã live-probe `data_map({"query":"ghi bài học vào kb"})` route đúng (ghi nhận ở ROUND-71 nghiệm thu); whitelist mọi agents từ r71.
+  - BUG2-006 (tool-call đứt ×2/run): GIỮ WATCH đúng giao thức D7.1 (ngưỡng fix cấu trúc ≥3/run chưa đạt; self-heal hoạt động).
+  - GHI-NHẬN-d (bịa tool-result): watch theo tần suất. GHI-NHẬN-e (mojibake): blocked-upstream. GHI-NHẬN-g (toolset lệch): chờ case thứ 3.
+  - F9/BUG-007 read_output exitCode + BUG-024 final-report retry: KHÔNG THỂ cọ sát không có mission — chờ mission kế (bản thân các fix đã có test đơn vị từ r69).
+  - BUG2-004 (wedge + restart giết delegation): giảm thiểu bằng SUBAGENT_MAX_CONCURRENT (min(3, số key)) + testSpawnGuard serialize + MemWatchdog + durable resume (LIVE-✅-6 r70) — gốc rễ là hộp 4GB RAM với 3 sub song song × context 60k+, giữ theo dõi hạ tầng.
+
+### BUG2-032 · G · P2 · Matrix r73 phát hiện 2 model nemotron SỐNG LẠI + 6 model free mới xuất hiện đều CHẾT
+- **Matrix 14 ứng viên (catalog 84 model lọc free + model lạ mới):** ✅ 8 sống (trả lời "OK" thật): space-bunny-free, big-pickle, ling-3.1-flash-free, longcat-2.5-preview-free, mimo-v2.6-flash-free, **nemotron-3-ultra-free (sống lại — r72 ghi 404)**, **nemotron-3.5-lightning-free (sống lại — r72 ghi treo 5/5)**, step-5-preview-free. ❌ 6 chết: exo-free (deprecated), ling-3.0-flash-fin-free (không phản hồi), muse-spark-1.3-contributor-free (geo-block), claude-fable-5 (Model access disabled), claude-fable-5-1 (Insufficient account funds), grok-build-0.1 (không phản hồi).
+- **Đối chiếu HTTP vs CLI:** SBF chạy được cả HTTP (xoay key) LẪN CLI; 7 model kia HTTP = FreeTierError 403 "free tier can only be used from within OpenCode" — chỉ CLI native (curl bằng chứng trong ROUND-73 fix BUG2-018).
+- **Fix:** PROVIDER_MODELS.zen = 8 model (thêm 2 nemotron sống lại + caps phân loại + label đường vận hành) + cập nhật test r72 (bỏ 2 model nemotron khỏi danh sách chết — bằng chứng mới nhất thắng).
+
+## B. BATTERY ĐÁNH GIÁ 2 TẦNG — PHÂN LOẠI CODING/AGENTIC/REASONING (mục 4 user)
+
+**Battery 1 (cơ bản — 8 model sống):** TẤT CẢ PASS 3/3 (hàm JS chạy bun thật 4/4 case; câu đố 3 máy in = 6 phút; JSON plan 3 bước chuẩn).
+
+**Battery 2 (khó — phân hóa thật):**
+
+| Model | Coding-hard (romanToInt 6 case: MCMXCIV=1994, XLII=42…) | Reasoning-hard (vòi hồ bơi = 140 phút, chỉ 1 số) | Agentic-hard (JSON lồng: enum risk + 3 actions + depends_on ["a1","a2"] + rollback) | ms c/r/a |
+|---|---|---|---|---|
+| space-bunny-free | ✅ | ⚠️ ĐÚNG 140 nhưng nhào dàn trải 12+ con số (vi phạm "chỉ 1 số") | ❌ json-parse-fail | 8.7/5.7/34.4k |
+| big-pickle | ✅ | ✅ | ✅ | **5.7**/12.6/9.8k |
+| ling-3.1-flash-free | ✅ | ✅ | ✅ | 28.7/7.8/10.8k |
+| longcat-2.5-preview-free | ✅ | ✅ | ❌ json-parse-fail | 11.9/11.9/15.8k |
+| mimo-v2.6-flash-free | ✅ | ✅ | ✅ | 6.8/**6.9**/8.9k |
+| nemotron-3-ultra-free | ✅ | ✅ | ✅ | 10.7/33.5/19.9k |
+| nemotron-3.5-lightning-free | ✅ | ✅ | ✅ | 15.9/18.0/22.6k |
+| step-5-preview-free | ✅ | ✅ | ✅ | 38.6/11.1/22.3k |
+
+**Phân loại (caps encode vào PROVIDER_MODELS — dropdown hiển thị ⚡🧠🤖):**
+- **coding: 8/8 ✅** — toàn bộ pool viết code đúng cả bài khó.
+- **reasoning: 8/8 ✅** — SBF ra đáp số đúng nhưng kiteenws lệnh "chỉ 1 số" kém (nhiều chữ — đặc tính phù hợp quan sát r70: SBF là model phát tool-call đứt nhiều nhất, parser salvage r70 F1-F7 bù đúng chỗ này).
+- **agentic (structured output): 6/8 ✅** — big-pickle/mimo/ling/nemotron×2/step-5 giữ JSON schema lồng nhau CHÍNH XÁC; **space-bunny + longcat lỗi format JSON phức tạp**.
+- **Tốc độ:** nhanh nhất — big-pickle (coding 5.7s) + mimo (tổng thể nhanh nhất, 3 test đều < 9s); chậm nhất — step-5 (coding 38.6s) + nemotron-ultra (reasoning 33.5s — "sâu nhưng chậm").
+- **Khuyến nghị theo vai:** chat nhẹ/utility → mimo; đa dụng + nhanh → big-pickle; phân tích nặng → nemotron-3-ultra-free; lõi chính + HTTP ổn định → space-bunny-free (giữ — có xoay key 3 key + failover + last-resort).
+
+## C. NGHIỆM THU ROUND-73
+
+- **Test:** `tests/r73-model-dropdown-attachments.test.ts` MỚI 25 test (dropdown hợp đồng nguồn + gỡ nút source-scan 8 file + attachment classify/sanitize/cap/DB roundtrip + last-resort parse + battery phân loại) + task26 viết lại + r72 cập nhật theo bằng chứng mới — chạy cục bộ 47/47 PASS.
+- **Battery/matrix bằng chứng thật:** /tmp/oc-matrix-r73.txt (14 model) + /tmp/oc-battery-r73.md (8×3) + /tmp/oc-battery2-r73.md (8×3 khó) — script tái lập /home/z/my-project/oc-{matrix,battery,battery2}-r73.*.
+- **Gate:** quality-gate PASS toàn bộ 59.0s — type_check ✓ (lần chạy đầu exit 137 = OOM tạm do next-server giữ ~1GB + battery chạy song song; lần 2 bắt 1 lỗi thật: availableModels vốn là state của module Agents — smolab có state riêng zenModelOptions) · lint ✓ · imports ✓ · **582/582 test** (555 kế thừa + **27 mới** r73).
+- **Browser (agent-browser) + DB + log thật:**
+  - Dropdown: mở từ dòng model indicator → đủ 8 model với icon caps đúng battery (SBF + longcat KHÔNG có 🤖 — 6 model kia có); chọn big-pickle → indicator "🤖 Model: big-pickle ⚡ ghi đè (zen)"; durable GoalLoopJob nhận `agentModel: big-pickle` (sqlite đối chiếu jobInput) — override chảy tới server đúng.
+  - Nút Prompt Auto: BIẾN MẤT (snapshot chỉ còn "Xem System Prompt" — tính năng khác). Nút "Đính kèm tệp" hiện diện cạnh ô nhập.
+  - Upload PNG 2.2KB qua nút + → chip (thumbnail + tên + KB + nút bỏ) → POST /api/smolab/attachments 200 → **VLM mô tả ĐÚNG TỪNG CHỮ trong ảnh** ("nền navy, dòng chữ vàng TMO r73 UPLOAD TEST 12345"); gửi "Tệp này chứa gì?" → bubble hiển thị manifest đầy đủ (tên + kind + KB + filePath + mô tả VLM); DB: user message lưu manifest + ChatAttachment link sessionId+messageId ✓; job nhận userMessage chứa manifest ✓.
+  - Chuỗi failover sống động trên chính run này: `[LLM] Agent Zen big-pickle thất bại cả HTTP + CLI — thử ZEN FAILOVER space-bunny-free` → `[ZEN] agent-failover:space-bunny-free [key #3] OK — 1843 chars, 25866 tokens` — override model chết không giết agent (đúng thiết kế; sandbox app-dir quota native 403 — ghi nhận r72, môi trường quota sạch thì big-pickle phục vụ trực tiếp).
+  - Lộ 1 bug thật trong lúc nghiệm thu (đã vá + test khoá): curl/API client gửi MIME `application/octet-stream` → phân loại rơi `other` mất đường ASR → GENERIC_CLIENT_MIMES coi octet-stream như không-MIME, fallback đuôi (.wav → audio/wav) — nghiệm thu lại live: kind=audio ✓.

@@ -398,15 +398,19 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { messages: clientMessages, model, sessionId, stream, systemPromptAdditions,
             agentInstruction, agentTemperature, agentMaxTokens, agentProfileId, agentProfileName,
-            agentProvider, agentModel, teamMode, teamName, promptBudgetChars } = body
+            agentProvider, agentModel, teamMode, teamName, attachmentIds } = body
 
-    // 2026-10-27 (user directive — trần prompt THEO TÁC VỤ): request có thể ghi
-    // đè trần ký tự system prompt cho đúng tác vụ này. -1 (hoặc ≤0) = KHÔNG
-    // GIỚI HẠN; số dương = trần cụ thể; thiếu/NaN = mặc định hệ thống.
-    const effectivePromptBudget: number | undefined =
-      typeof promptBudgetChars === 'number' && Number.isFinite(promptBudgetChars)
-        ? Math.floor(promptBudgetChars)
-        : undefined
+    // r73 (user directive — gỡ nút "Prompt Auto" vô dụng): tham số
+    // promptBudgetChars THEO TÁC VỤ đã bị XOÁ toàn chuỗi (button + route +
+    // goal-loop + workflow-engine + tool-executor + durable types). System
+    // prompt budget giờ CHỈ còn trần mặc định hệ thống SYSTEM_PROMPT_BUDGET_CHARS
+    // (env) — xem src/lib/prompt-budget.ts.
+    // r73: attachmentIds — id các tệp user tải lên qua nút "+" (manifest đã
+    // nằm sẵn trong content). Liên kết sessionId + messageId vào row để truy
+    // hồi về sau (audit/agent đọc lại filePath).
+    const attachmentIdList: string[] = Array.isArray(attachmentIds)
+      ? attachmentIds.filter((v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length < 64).slice(0, 8)
+      : []
 
     if (!clientMessages || !Array.isArray(clientMessages) || clientMessages.length === 0) {
       return NextResponse.json(
@@ -460,6 +464,14 @@ export async function POST(request: NextRequest) {
               data: { messageCount: { increment: 1 }, updatedAt: new Date() },
             })
             .catch(() => {})
+          // r73 — liên kết tệp đính kèm về đúng phiên + tin nhắn (fail-open:
+          // lỗi link KHÔNG ảnh hưởng flow chat — manifest đã nằm trong content)
+          if (attachmentIdList.length > 0) {
+            db.chatAttachment.updateMany({
+              where: { id: { in: attachmentIdList }, messageId: null },
+              data: { sessionId, messageId: savedUserMsg.id },
+            }).catch(() => {})
+          }
         }
       } catch (err) {
         console.warn('[OpenClaw Chat] Early user-message save failed:', err instanceof Error ? err.message : String(err))
@@ -1076,8 +1088,6 @@ export async function POST(request: NextRequest) {
                 agentMaxTokens,
                 agentTools,
                 agentSessionId: sessionId,
-                // 2026-10-27 — trần prompt theo tác vụ (user directive): -1 = unlimited
-                promptBudgetChars: effectivePromptBudget,
               },
             })
           } catch (enqueueErr) {
@@ -1161,8 +1171,6 @@ export async function POST(request: NextRequest) {
           agentMaxTokens,
           agentTools,
           agentSessionId: sessionId || null,
-          // 2026-10-27 — trần prompt theo tác vụ (user directive): -1 = unlimited
-          promptBudgetChars: effectivePromptBudget,
         })
 
         const content = reactResult.content

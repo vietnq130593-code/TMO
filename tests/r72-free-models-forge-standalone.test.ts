@@ -97,8 +97,8 @@ describe('r72 — opencode.json gỡ shadow provider native (chìa khóa mở mo
   })
 })
 
-describe('r72 — danh sách model zen = đúng thực nghiệm matrix 2026-10-09', () => {
-  test('6 model free VERIFIED có mặt (trả lời "OK" thật qua CLI native)', () => {
+describe('r72/r73 — danh sách model zen = đúng thực nghiệm matrix 2026-10-09 (r73 cập nhật)', () => {
+  test('6 model free VERIFIED r72 có mặt (trả lời "OK" thật qua CLI native)', () => {
     const ids = PROVIDER_MODELS.zen.map(m => m.id)
     expect(ids).toContain('space-bunny-free')
     expect(ids).toContain('ling-3.1-flash-free')
@@ -108,17 +108,32 @@ describe('r72 — danh sách model zen = đúng thực nghiệm matrix 2026-10-0
     expect(ids).toContain('big-pickle')
   })
 
-  test('4 model CHẾT bị loại — không cho agent chọn rồi treo/lỗi', () => {
+  test('r73 — nemotron-3-ultra-free + nemotron-3.5-lightning-free SỐNG LẠI (matrix r73 trả lời thật 2/2) → có mặt trong list', () => {
     const ids = PROVIDER_MODELS.zen.map(m => m.id)
-    expect(ids).not.toContain('nemotron-3.5-lightning-free') // treo 5/5 lần (0 byte sau 40-50s)
-    expect(ids).not.toContain('jev-1.13-free') // UnknownError "Unexpected server error"
-    expect(ids).not.toContain('muse-spark-1.3-contributor-free') // geo-block "not available in your country"
-    expect(ids).not.toContain('nemotron-3-ultra-free') // Zen gỡ khỏi catalog — 404
+    // Bằng chứng r73 (2026-10-09 sau r72): cả 2 model nemotron đã quay lại
+    // catalog + trả lời OK qua CLI native; battery 2 tầng PASS đủ 3 năng lực.
+    expect(ids).toContain('nemotron-3-ultra-free')
+    expect(ids).toContain('nemotron-3.5-lightning-free')
   })
 
-  test('label model free mới ghi rõ đường vận hành (CLI native)', () => {
-    const ling = PROVIDER_MODELS.zen.find(m => m.id === 'ling-3.1-flash-free')
-    expect(ling?.label).toContain('CLI native')
+  test('model CHẾT (matrix r73) bị loại — không cho agent chọn rồi treo/lỗi', () => {
+    const ids = PROVIDER_MODELS.zen.map(m => m.id)
+    expect(ids).not.toContain('jev-1.13-free') // r72: UnknownError — đã rời catalog
+    expect(ids).not.toContain('muse-spark-1.3-contributor-free') // geo-block "not available in your country"
+    expect(ids).not.toContain('exo-free') // r73: deprecated
+    expect(ids).not.toContain('ling-3.0-flash-fin-free') // r73: không phản hồi
+    expect(ids).not.toContain('claude-fable-5') // r73: Model access disabled
+    expect(ids).not.toContain('claude-fable-5-1') // r73: Insufficient account funds
+    expect(ids).not.toContain('grok-build-0.1') // r73: không phản hồi
+  })
+
+  test('r73 — mỗi model free có caps phân loại (coding/reasoning/agentic từ battery thật)', () => {
+    for (const m of PROVIDER_MODELS.zen) {
+      expect(m.caps).toBeDefined()
+      expect(typeof m.caps?.coding).toBe('boolean')
+      expect(typeof m.caps?.reasoning).toBe('boolean')
+      expect(typeof m.caps?.agentic).toBe('boolean')
+    }
   })
 
   test('extraction model danh sách = space-bunny-free (default llm.ts đồng bộ)', () => {

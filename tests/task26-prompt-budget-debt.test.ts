@@ -1,7 +1,8 @@
 /**
  * TASK 26 (user directive 2026-10-27) — test các thay đổi:
- *   (1) Trần prompt THEO TÁC VỤ: -1 = KHÔNG GIỚI HẠN (env + per-task override
- *       xuyên suốt budgetPromptWith → assembleGoalLoopSystemPrompt)
+ *   (1) r73 GỠ NÚT "Prompt Auto": budgetPromptWith THEO TÁC VỤ đã bị XOÁ —
+ *       khoá hợp đồng MỚI: budgetPrompt chỉ còn trần env hệ thống,
+ *       applyPromptBudget giữ hành vi -1 = unlimited (lõi KHÔNG đổi)
  *   (2) CƠ CHẾ XỬ LÝ NỢ Todo follow-up TẠI THỜI ĐIỂM RÕ RÀNG: buildPendingDebtBlock
  *       nhặt Todo follow-up pending từ các run TRƯỚC trong cùng session, loại
  *       run hiện tại, mỗi mục kèm id để agent đóng đúng row.
@@ -12,7 +13,6 @@ import { describe, expect, test, afterAll } from 'bun:test'
 import {
   applyPromptBudget,
   budgetPrompt,
-  budgetPromptWith,
   type PromptBlock,
 } from '../src/lib/prompt-budget'
 import { assembleGoalLoopSystemPrompt, buildPendingDebtBlock } from '../src/lib/agent-goal-loop'
@@ -26,7 +26,7 @@ function bigBlocks(totalChars: number): PromptBlock[] {
   ]
 }
 
-describe('Task 26 — trần prompt theo tác vụ (-1 = không giới hạn)', () => {
+describe('Task 26 — budget prompt (r73: chỉ còn trần env hệ thống)', () => {
   test('A1. applyPromptBudget -1 → KHÔNG cắt dù tổng rất lớn', () => {
     const blocks = bigBlocks(200_000)
     const res = applyPromptBudget(blocks, -1, 'test')
@@ -34,25 +34,15 @@ describe('Task 26 — trần prompt theo tác vụ (-1 = không giới hạn)', 
     expect(res.totalChars).toBe(blocks[0].content.length + blocks[1].content.length)
   })
 
-  test('A2. budgetPromptWith -1 → prompt nguyên vẹn (không marker budget-cut)', () => {
-    const prompt = budgetPromptWith(bigBlocks(150_000), -1, 'test')
-    expect(prompt).not.toContain('budget-cut')
-    expect(prompt.length).toBeGreaterThan(140_000)
+  test('A2. r73 — budgetPromptWith ĐÃ BỊ XOÁ (không export nữa)', async () => {
+    // Khoá hợp đồng gỡ nút: module không còn export budgetPromptWith — dùng
+    // dynamic import để test tồn tại export mà không làm type-check hỏng.
+    const mod: Record<string, unknown> = await import('../src/lib/prompt-budget')
+    expect(mod.budgetPromptWith).toBeUndefined()
+    expect(typeof mod.budgetPrompt).toBe('function')
   })
 
-  test('A3. budgetPromptWith số dương nhỏ → cắt (hành vi cũ giữ nguyên)', () => {
-    const prompt = budgetPromptWith(bigBlocks(100_000), 5_000, 'test')
-    expect(prompt).toContain('budget-cut')
-    expect(prompt.length).toBeLessThanOrEqual(5_000 + 2_000) // dư lượng marker các block
-  })
-
-  test('A4. budgetPromptWith undefined → mặc định hệ thống (không đổi hành vi cũ)', () => {
-    // budgetPrompt (wrapper cũ) phải cho kết quả y hệt budgetPromptWith(undefined)
-    const blocks = bigBlocks(30_000) // nhỏ hơn budget mặc định 72k của máy này
-    expect(budgetPrompt(blocks, 'test')).toBe(budgetPromptWith(blocks, undefined, 'test'))
-  })
-
-  test('A5. assembleGoalLoopSystemPrompt nhận promptBudgetChars=-1 → base KHÔNG bị cắt', () => {
+  test('A5. assembleGoalLoopSystemPrompt — base lớn vẫn qua budget hệ thống (toolSchemas luôn giữ)', () => {
     const bigBase = 'B'.repeat(200_000)
     const prompt = assembleGoalLoopSystemPrompt({
       systemPrompt: bigBase,
@@ -62,16 +52,13 @@ describe('Task 26 — trần prompt theo tác vụ (-1 = không giới hạn)', 
       hasCreate: true,
       preActBlock: '',
       toolSchemasBlock: 'TOOLSCHEMAS-CANARY',
-      promptBudgetChars: -1,
       agentName: 'TEST26',
     })
-    // base nguyên vẹn + toolSchemas hiện diện (không bị stub)
+    // toolSchemas (priority 100) luôn hiện diện dù base 200k bị budget-cut
     expect(prompt).toContain('TOOLSCHEMAS-CANARY')
-    expect(prompt).not.toContain('budget-cut')
-    expect(prompt.length).toBeGreaterThan(200_000)
   })
 
-  test('A6. assembleGoalLoopSystemPrompt KHÔNG truyền → mặc định 72k cắt base (hành vi cũ)', () => {
+  test('A6. assembleGoalLoopSystemPrompt KHÔNG truyền → mặc định env cắt base (hành vi cũ)', () => {
     const bigBase = 'B'.repeat(200_000)
     const prompt = assembleGoalLoopSystemPrompt({
       systemPrompt: bigBase,

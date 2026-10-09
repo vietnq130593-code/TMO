@@ -5297,19 +5297,54 @@ export async function callLLMForAgent(
       console.log(`[LLM] Agent dùng ZEN FAILOVER (CLI) ${zenFailoverModel} ✓ (model chính ${zenModel} không khả dụng ở vùng này) — ${foCli.tool_calls?.length ?? 0} tool_calls`)
       return foCli
     }
-    console.warn(`[LLM] ZEN FAILOVER ${zenFailoverModel} cũng thất bại — TRẢ LỖI (fallback NIM đã gỡ bỏ theo user directive Task 33)`)
+    console.warn(`[LLM] ZEN FAILOVER ${zenFailoverModel} cũng thất bại — sang LAST RESORT (r73 BUG2-018)`)
   }
-  // TASK 33: hết chuỗi Zen (HTTP → CLI → failover) → trả lỗi rõ ràng cho
-  // caller nhìn thấy nguyên nhân thật. KHÔNG còn fallback NIM kimi-k3 chain —
-  // NIM chỉ còn vai trò lõi embed (embeddings.ts).
+  // r73 (BUG2-018 — kiến trúc failover chéo model trong free tier): model
+  // chính + failover đều chết (đặc biệt khi model chính == space-bunny-free ==
+  // failover → rung failover bị skip) → thử lần lượt các model free KHÁC qua
+  // CLI native (HTTP bị Zen chặn free-tier với mọi model ngoài SBF — bằng
+  // chứng 2026-10-09: nemotron/ling/mimo HTTP = FreeTierError 403, CLI OK).
+  // Pool mặc định = các model ĐÃ VERIFY battery r73 (coding/reasoning/agentic).
+  // Chỉ thử ĐƯỜNG CLI (HTTP đã biết chết — không đốt timeout mạng lại). Agent
+  // chỉ chết khi TOÀN BỘ pool free chết. Override bằng env ZEN_LAST_RESORT_MODELS.
+  for (const lrModel of parseZenLastResortModels(process.env.ZEN_LAST_RESORT_MODELS, zenModel, zenFailoverModel)) {
+    console.warn(`[LLM] LAST RESORT (r73 BUG2-018): model chính ${zenModel} + failover ${zenFailoverModel} đều thất bại — thử model free CLI-native ${lrModel}...`)
+    const lrCli = await callOpenCodeCLIProvider(prompt, systemPrompt, lrModel, options, `agent-last-resort:${lrModel}`)
+    if (lrCli && (lrCli.content || (lrCli.tool_calls && lrCli.tool_calls.length > 0))) {
+      console.log(`[LLM] Agent dùng LAST RESORT ${lrModel} ✓ (${lrCli.tool_calls?.length ?? 0} tool_calls — model chính ${zenModel} chết, agent vẫn sống)`)
+      return lrCli
+    }
+  }
+  // TASK 33: hết chuỗi Zen (HTTP → CLI → failover → last-resort) → trả lỗi rõ
+  // ràng cho caller nhìn thấy nguyên nhân thật. KHÔNG còn fallback NIM kimi-k3
+  // chain — NIM chỉ còn vai trò lõi embed (embeddings.ts).
+  const lastResortList = parseZenLastResortModels(process.env.ZEN_LAST_RESORT_MODELS, zenModel, zenFailoverModel).join('/')
   const lastError = zen?.error || cliResult?.error || 'unknown'
-  console.warn(`[LLM] Agent Zen ${zenModel} thất bại toàn chuỗi (HTTP + CLI${zenModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''}) — trả lỗi (NIM removed): ${String(lastError).slice(0, 200)}`)
+  console.warn(`[LLM] Agent Zen ${zenModel} thất bại toàn chuỗi (HTTP + CLI${zenModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''} + last-resort ${lastResortList}) — trả lỗi (NIM removed): ${String(lastError).slice(0, 200)}`)
   return {
     content: '',
     provider: 'zen',
     model: zenModel,
-    error: `Zen model "${zenModel}" thất bại toàn chuỗi (HTTP + CLI${zenModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''}): ${String(lastError).slice(0, 300)} — NIM đã ngừng dùng cho agents (Task 33)`,
+    error: `Zen model "${zenModel}" thất bại toàn chuỗi (HTTP + CLI${zenModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''} + last-resort): ${String(lastError).slice(0, 300)} — NIM đã ngừng dùng cho agents (Task 33)`,
   }
+}
+
+/**
+ * r73 (BUG2-018) — parse danh sách model LAST-RESORT (pure — export cho test).
+ *  - env ZEN_LAST_RESORT_MODELS = "model-a, model-b,..." (override); thiếu/rỗng
+ *    → pool mặc định đã verify battery r73.
+ *  - LOẠI model chính + model failover (đã thử ở rung trên — không lặp lại).
+ *  - Cap 3 model/lần (mỗi model 1 đường CLI ≤ OPENCODE_CLI_TIMEOUT_MS — chống
+ *    đốt 15+ phút khi cả pool chết).
+ */
+export function parseZenLastResortModels(envRaw: string | undefined, ...exclude: string[]): string[] {
+  const defaults = ['ling-3.1-flash-free', 'mimo-v2.6-flash-free', 'big-pickle']
+  const excluded = new Set(exclude.map(m => (m || '').trim()).filter(m => m.length > 0))
+  const raw = (envRaw || '').trim()
+  const pool = (raw ? raw.split(',') : defaults)
+    .map(m => m.trim())
+    .filter(m => m.length > 0 && !excluded.has(m))
+  return pool.slice(0, 3)
 }
 
 // ==================== UTILITY EXPORTS ====================

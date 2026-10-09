@@ -777,6 +777,29 @@ model ChatMessage {
   @@index([createdAt])
 }
 
+/// Chat attachments — tệp user tải lên trong khung chat Smolab (r73 — user
+/// request: nút "+" thay nút Prompt Auto). Hỗ trợ ảnh/audio/video/tài liệu.
+/// VLM/ASR/video-understanding (z-ai-web-dev-sdk) chưng cất thành derivedText
+/// ngay lúc upload → agent thấy nội dung tệp trong ngữ cảnh mà không cần đọc
+/// tay; filePath cho agent dùng tool (read_file/shell) khi cần bản gốc đầy đủ.
+model ChatAttachment {
+  id          String   @id @default(cuid())
+  sessionId   String?  /// AgentSession.sessionId — liên kết khi tin nhắn được lưu (chat route gắn sau)
+  messageId   String?  /// ChatMessage.id — tin nhắn user đầu tiên nhắc tới tệp
+  fileName    String   /// Tên hiển thị (nguyên bản từ user)
+  mimeType    String   /// MIME type
+  kind        String   /// image | audio | video | text | pdf | docx | other
+  sizeBytes   Int
+  filePath    String   /// Đường dẫn tuyệt đối tệp đã lưu
+  derivedText String?  /// Mô tả (VLM) / transcript (ASR) / tóm tắt video / văn bản trích xuất
+  status      String   @default("ready") /// pending | ready | error
+  error       String?
+  createdAt   DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([createdAt])
+}
+
 // ============================================
 // SMOLAB BACKGROUND TASK SYSTEM
 // Chat session isolation + background task continuation

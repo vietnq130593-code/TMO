@@ -63,7 +63,6 @@ try {
       agentProvider: omega.provider,
       agentModel: omega.model,
       teamMode: 'single',
-      promptBudgetChars: -1,
     }),
   })
   const data = await chatRes.json().catch(() => null)

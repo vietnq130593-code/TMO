@@ -55,30 +55,68 @@ export const EXTRACTION_MODELS: Record<string, Array<{ id: string; label: string
  *  Deprecated (404): llama-3.1-nemotron-ultra-253b-v1, nemotron-4-340b-instruct
  *  Deprecated (410): z-ai/glm-5.2 | glm-5.3: không tồn tại (verified 2026-08-27)
  */
-export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string }>> = {
+export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string; caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean } }>> = {
   // ===== OPENCODE ZEN (FIX 2026-09-25 — E2E tool audit) =====
   // 13/13 agents thực tế đang chạy provider='zen' (Task 8 migration) nhưng
   // VALID_PROVIDERS trước đây chỉ có 'nvidia' → create_agent (Omega Agent
   // Factory) KHÔNG tạo được agent zen — mọi agent mới sinh ra đều dính provider
   // nvidia với key chết. Thêm zen + 4 model free ĐÃ VERIFY chạy được (Task 5-7).
   zen: [
-    // 2026-10-09 (r72 — user request "nhiều model free thay vì chỉ SBF"): matrix
-    // test thực nghiệm opencode CLI v1.18.35 + native provider (auth.json key
-    // oc_sk) — policy Zen chỉ chặn HTTP/custom transport, không chặn native:
-    //   ✅ ĐẠT (trả lời thật): space-bunny-free (lõi chính — HTTP xoay key),
-    //      ling-3.1-flash-free, mimo-v2.6-flash-free, step-5-preview-free,
-    //      longcat-2.5-preview-free, big-pickle (5 model mới qua CLI native —
-    //      llm.ts tự route)
-    //   ❌ ĐÃ LOẠI sau test: nemotron-3.5-lightning-free (treo 5/5 lần — dead
-    //      endpoint), jev-1.13-free (UnknownError server), muse-spark-1.3
-    //      (geo-block "not available in your country"), nemotron-3-ultra-free
-    //      (Zen gỡ khỏi catalog — 404)
-    { id: 'space-bunny-free', label: 'space-bunny-free (LÕI CHÍNH — phiên 7 + ZEN FAILOVER, HTTP xoay key)' },
-    { id: 'ling-3.1-flash-free', label: 'ling-3.1-flash-free (free — verified qua CLI native)' },
-    { id: 'mimo-v2.6-flash-free', label: 'mimo-v2.6-flash-free (free, nhẹ — verified qua CLI native)' },
-    { id: 'step-5-preview-free', label: 'step-5-preview-free (free — verified qua CLI native)' },
-    { id: 'longcat-2.5-preview-free', label: 'longcat-2.5-preview-free (free — verified qua CLI native)' },
-    { id: 'big-pickle', label: 'big-pickle (free — verified qua CLI native)' },
+    // r73 (2026-10-09 — user request "đánh giá + phân loại model free mới"):
+    // matrix test 14 ứng viên + battery 2 tầng (cơ bản + khó) qua opencode CLI
+    // v1.18.35 native. KẾT QUẢ: 8 model SỐNG, tất cả PASS coding (romanToInt
+    // 6/6 case), reasoning (bài vòi hồ bơi = 140 phút), agentic cơ bản (JSON
+    // 3 bước). Battery KHÓ phân hóa: big-pickle/mimo/ling/nemotron×2/step-5
+    // giữ JSON schema lồng nhau ĐÚNG; space-bunny + longcat lỗi format JSON
+    // phức tạp (hợp quan sát r70: SBF là model phát tool-call đứt nhiều nhất —
+    // parser salvage r70 F1-F7 chính là bù cho đặc tính này).
+    // ĐÃ LOẠI sau matrix r73: exo-free (deprecated), ling-3.0-flash-fin-free
+    // (không phản hồi), muse-spark-1.3-contributor-free (geo-block), claude-
+    // fable-5 (access disabled), claude-fable-5-1 (insufficient funds),
+    // grok-build-0.1 (không phản hồi).
+    // Vận hành: space-bunny-free chạy ĐƯỢC qua HTTP (xoay 3 key) LẪN CLI; 7
+    // model còn lại CHỈ qua CLI native (HTTP = FreeTierError 403 — bằng chứng
+    // 2026-10-09). llm.ts tự route 2 transport + last-resort chéo model (r73).
+    {
+      id: 'space-bunny-free',
+      label: 'space-bunny-free (LÕI CHÍNH — HTTP xoay key + ZEN FAILOVER)',
+      caps: { coding: true, reasoning: true, agentic: false },
+    },
+    {
+      id: 'big-pickle',
+      label: 'big-pickle (⚡ nhanh nhất coding · JSON schema chuẩn — toàn diện)',
+      caps: { coding: true, reasoning: true, agentic: true },
+    },
+    {
+      id: 'mimo-v2.6-flash-free',
+      label: 'mimo-v2.6-flash-free (⚡ NHANH NHẤT tổng thể · đủ 3 năng lực — hợp tác vụ nhẹ)',
+      caps: { coding: true, reasoning: true, agentic: true },
+    },
+    {
+      id: 'ling-3.1-flash-free',
+      label: 'ling-3.1-flash-free (đủ 3 năng lực · coding chậm hơn trung bình)',
+      caps: { coding: true, reasoning: true, agentic: true },
+    },
+    {
+      id: 'longcat-2.5-preview-free',
+      label: 'longcat-2.5-preview-free (coding ✓ reasoning ✓ · JSON phức tạp hay lỗi format)',
+      caps: { coding: true, reasoning: true, agentic: false },
+    },
+    {
+      id: 'nemotron-3-ultra-free',
+      label: 'nemotron-3-ultra-free (reasoning SÂU nhất — chậm · đủ 3 năng lực; từng là lõi extraction)',
+      caps: { coding: true, reasoning: true, agentic: true },
+    },
+    {
+      id: 'nemotron-3.5-lightning-free',
+      label: 'nemotron-3.5-lightning-free (đủ 3 năng lực · tốc độ trung bình)',
+      caps: { coding: true, reasoning: true, agentic: true },
+    },
+    {
+      id: 'step-5-preview-free',
+      label: 'step-5-preview-free (đủ 3 năng lực · coding chậm nhất)',
+      caps: { coding: true, reasoning: true, agentic: true },
+    },
   ],
   nvidia: [
     // TASK 33 (2026-09-27): NIM ĐÃ GỠ khỏi tác vụ agents — provider này giữ lại

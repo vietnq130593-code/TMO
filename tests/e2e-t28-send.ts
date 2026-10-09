@@ -51,7 +51,6 @@ async function runAgent(agent: Record<string, unknown>, sessionId: string, promp
         agentProvider: agent.provider,
         agentModel: agent.model,
         teamMode: 'single',
-        promptBudgetChars: -1,
       }),
     })
     const data = await chatRes.json().catch(() => null)
