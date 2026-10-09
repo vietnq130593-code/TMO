@@ -26,7 +26,7 @@ if (process.env.TMO_TEST_DB_ISOLATED !== '1') {
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 
 import { classifyZen429Body, pickHealthyZenKeyIndex, boundZenKeyUsable, zen429CooldownFor } from '../src/lib/llm'
-import { delegationLessonWorthy, digestDelegationReport, DEFAULT_SUBAGENT_TOOLS } from '../src/lib/subagent-delegate'
+import { delegationLessonWorthy, digestDelegationReport, DEFAULT_SUBAGENT_TOOLS, POSITION_BY_NAME, resolveDelegationTarget, DELEGATABLE_AGENTS } from '../src/lib/subagent-delegate'
 import { CODE_TEAM_AGENTS } from '../src/lib/code-team/agents'
 import { STANDALONE_AGENTS } from '../src/lib/standalone-agents'
 import { lessonsSearch } from '../src/lib/lessons-search'
@@ -107,11 +107,21 @@ describe('r71 BUG2-019 — knowledge_write có trong whitelist MỌI agents th�
       expect(def.tools).toContain('knowledge_write')
     }
   })
-  test('CATALYST vẫn có (không mất quyền cũ) + FORGE full-stack có', () => {
+  test('CATALYST vẫn có (không mất quyền cũ) + FORGE full-stack có (standalone — user directive 2026-10-09)', () => {
     const catalyst = CODE_TEAM_AGENTS.find(a => a.name === 'CATALYST')
-    const forge = CODE_TEAM_AGENTS.find(a => a.name === 'FORGE')
     expect(catalyst?.tools).toContain('knowledge_write')
+    // FORGE đã tách khỏi Code Team → def sống ở STANDALONE_AGENTS (team=null,
+    // position=null) — KHÔNG còn trong CODE_TEAM_AGENTS.
+    expect(CODE_TEAM_AGENTS.find(a => a.name === 'FORGE')).toBeUndefined()
+    const forge = STANDALONE_AGENTS.find(a => a.name === 'FORGE')
     expect(forge?.tools).toContain('knowledge_write')
+    expect(forge?.team).toBeNull()
+    expect(forge?.position).toBeNull()
+    // FORGE không rơi POSITION_BY_NAME của Code Team nữa (resolve by-name DB-first)
+    expect(POSITION_BY_NAME['FORGE']).toBeUndefined()
+    expect(resolveDelegationTarget('FORGE')).toBeNull()
+    // Nhưng vẫn là đích delegate hợp lệ trong DELEGATABLE_AGENTS (guidance)
+    expect(DELEGATABLE_AGENTS.some(a => a.name === 'FORGE')).toBe(true)
   })
   test('ALISTA + Linh Sickyx (standalone) có knowledge_write', () => {
     const alista = STANDALONE_AGENTS.find(a => a.name === 'ALISTA')
@@ -129,11 +139,14 @@ describe('r71 BUG2-019 — knowledge_write có trong whitelist MỌI agents th�
 // ==================== BUG2-021 — data_map vào whitelist (hết hồi quy r67) ====================
 
 describe('r71 BUG2-021 — data_map + lessons_search có trong whitelist mọi agents (tool hết bị chặn oan)', () => {
-  test('cả 6 Code Team agents có data_map + lessons_search', () => {
+  test('mọi Code Team agents (5 — FORGE đã tách 2026-10-09) có data_map + lessons_search + FORGE standalone vẫn có', () => {
     for (const def of CODE_TEAM_AGENTS) {
       expect(def.tools).toContain('data_map')
       expect(def.tools).toContain('lessons_search')
     }
+    const forge = STANDALONE_AGENTS.find(a => a.name === 'FORGE')
+    expect(forge?.tools).toContain('data_map')
+    expect(forge?.tools).toContain('lessons_search')
   })
   test('Omega (mission TL) có data_map + lessons_search — prompt dạy "gọi data_map bất cứ lúc nào" giờ THÔNG THẬT', () => {
     const omega = STANDALONE_AGENTS.find(a => a.name === 'Omega')

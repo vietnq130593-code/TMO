@@ -347,3 +347,67 @@
 3. *1 key 429 sao không đổi key?* — Đúng là hệ thống cũ KHÔNG đổi (3 khiếm khuyết a/b/c+d ở BUG2-020). Đã fix đủ 4 điểm; giờ chỉ chết khi TẤT CẢ key thật sự 429 — với thông báo rõ ràng từng key reset lúc nào.
 
 **Ghi nhận thêm (minh bạch):** vòng push đầu bị PRE-PUSH GATE CHẶN (đúng chức năng) — keyword mới 'bài học' làm query r67 test khớp thêm vùng → block bản đồ vượt cap 1600 do lối tính keep cũ KHÔNG tái kiểm tra sau ghép. Đã vá tận gốc: vòng cắt giảm dần số vùng cho tới khi tổng ≤ maxChars + 2 test khoá hợp đồng cap (tổng 543/543). Đây là lỗi cap logic tiềm ẩn từ r67 chỉ bộc lộ khi tổ hợp vùng khớp đủ nhiều — gate chặn push đúng nghĩa đen "không để bug lên main".
+
+---
+
+# ROUND-72 (phiên 2026-10-09 — 4 yêu cầu user: kiểm tra phiên bản / mở phiên cũ đứng cuối / FORGE độc lập / nhiều model free)
+
+> **Ngữ cảnh:** HEAD xuất phát `a4f2c55` (r71, = origin/main — kiểm chứng mục 1: sandbox đang chạy bản mới nhất; PM2 created_at 19:16:51 trùng giờ commit, tree sạch 0 uncommitted, fetch origin không có gì mới hơn).
+
+## A. CÁC MỤC GHI NHẬN MỚI
+
+### BUG2-023 · P1 · E — Mở phiên cũ KHÔNG đứng cuối chat (user report mục 2)
+- **Bằng chứng (browser agent, phiên "R18 obs" 6 tin mission dài):** container chat `scrollHeight=15562, clientHeight=291` nhưng **`scrollTop=60`** — user nhìn thấy TIN CŨ NHẤT của khung tail (3 lượt cuối), phải tự kéo xuống 15k px mới thấy phản hồi cuối.
+- **Gốc rễ 2 lớp:** (a) suốt `loadingMessages=true` message list KHÔNG mount → `messagesEndRef` null → effect auto-scroll `[messages, isLoading]` no-op; (b) khi list mount, `scrollIntoView({behavior:'smooth'})` phải lướt 15k px và bị GIÁN ĐOAN giữa chừng bởi re-render (merge Thought-Process panel fetch agent-run về sau + markdown/code-block tăng chiều cao sau paint) → animation chết ở ~60px đầu danh sách.
+- **Fix (hardcode, không animate):** state `sessionOpenScrollTick` bump trong `finally` loadSessionTail (CHỈ đường non-silent — mở/đổi phiên; 4 đường silent giữ nguyên để không giật vị trí user đang đọc cũ) → effect nhảy TỨC THỜI `el.scrollTop = el.scrollHeight` (không scrollIntoView — cái đó cuộn kèm ancestor scrollbar) + settle 2 nhịp 150ms/450ms cho panel/markdown settle; đồng bộ `isNearBottomRef=true` sau cú nhảy.
+- **Bonus dead-zone:** trigger load-older `prevTop > 60` bỏ sót vị trí xuất phát 1-60px (đậu ở 60 → kéo lên 0 KHÔNG load) → đổi `prevTop > el.scrollTop + 40` (vẫn an toàn với clamp đổi phiên vì `lastScrollTopRef` đã reset 0).
+- **Nghiệm thu browser:** mở phiên qua restore reload → `scrollTop=15271` (= 15562-291, chính xác đáy) ✓; đổi phiên qua dropdown → `scrollTop=6736` (= 7027-291, đáy) ✓; kéo lên đầu → older messages prepend + giữ vị trí đọc + nút "↑ Xem tin nhắn cũ hơn" biến mất khi cạn ✓.
+
+### BUG2-024 · P1 · F — FORGE hiển thị thuộc Team Code (user report mục 3)
+- **Bằng chứng:** def FORGE nằm trong `CODE_TEAM_AGENTS` với `team='code', position='FS'` (TASK 43) → UI Agents nhóm "💻 Team Code" + Smolab agent selector bucket "Team Code — chat 1-1" đều xếp FORGE vào team code. User: "FORGE là agents độc lập chứ có phải thuộc team code đâu".
+- **Fix (mirror TASK 48 RAVAGE→Linh Sickyx, không đổi tên):** def rời `CODE_TEAM_AGENTS` → `STANDALONE_AGENTS` (team=null, position=null, persona `FORGE_INSTRUCTION` bỏ căn thân "của Code Team"); migration `_normalizeForgeToStandalone` chạy trước def-loop của standalone seed (normalize AgentProfile: team:null + position:null + isSystem:true + instruction/description mới + tools JSON 866B — row code-team để trống tools, delegate by-name cần whitelist đầy đủ) + safety-net trong def-loop; `POSITION_BY_NAME` bỏ FORGE + `resolveDelegationTarget` bỏ 'FS' → delegate_task('FORGE') rơi nhánh by-name DB-first (giống ALISTA/Linh Sickyx — r60); 4 bảng satellite keyed 'FORGE' (ToolAssignment/SkillAssignment/AgentModelOverride/CronJob) tự còn đúng vì tên giữ nguyên; DELEGATABLE_AGENTS giữ FORGE (đích delegate hợp lệ, role "độc lập").
+- **Nghiệm thu:** DB sau restart: `FORGE|team=|position=|isSystem=1|enabled=1|tools_len=866|instruction="…ĐỘC LẬP…"` ✓; UI Agents: FORGE trong section "Độc lập" (badge SYS, hết badge FS) ✓; Smolab selector: FORGE cuối bucket Độc lập, MEGATRON mở đầu Team Code ✓; pipeline SOP `getPositionsInOrder()` nguyên vẹn 5 vị trí (FS vốn không nằm trong từ TASK 43) ✓.
+
+### BUG2-025 · P1 · G — opencode CLI chưa cài + launcher npm treo + toàn bộ ghi chú "auth oauth" lỗi thời (user report mục 4)
+- **Bằng chứng:** `which opencode` = command not found (app chạy không có CLI từ trước — resolver chỉ warn 5 phút/lần); sau khi `npm i -g opencode-ai` (v1.18.35): **launcher JS** `/home/z/.npm-global/bin/opencode` spawn treo vĩnh viễn 0 byte (4/4 lần, kể cả `--pure`/DEBUG) trong khi **binary nền tảng** `…/opencode-linux-x64/bin/opencode` (185MB) chạy hoàn hảo.
+- **Fix:** symlink `~/.opencode/bin/opencode` → binary nền tảng (đúng candidates[0] của `resolveOpenCodeCliBin` — app tự phát hiện, không cần restart).
+- **Phát hiện đảo ngược chính sách (đối chứng ghi chú r71 trong llm.ts):** matrix test 2026-10-09 CLI v1.18.35 + `auth.json` type:api (key oc_sk) + provider **native** `opencode/<model>` → model free TRẢ LỜI THẬT (ling-3.1-flash-free ×5, mimo ×2, step-5, longcat, big-pickle — đều "OK"). Chỉ HTTP trực tiếp + custom provider (`@ai-sdk/openai-compatible`) nhận 403 "OpenCode's free tier can only be used from within OpenCode". → Ghi chú cũ "cần `opencode auth login` (account oauth)" SAI — chính `opencode auth login -p opencode` chỉ là DÁN API KEY (probe PTY xác nhận TUI chỉ có ô "Enter your API key"), và key oc_sk chạy được qua native ngay.
+- **Fix code:** `ensureOpenCodeAuth()` self-heal ghi auth.json từ ZEN_API_KEY_1 khi thiếu (không bao giờ đè file có sẵn); `callOpenCodeCLIProvider` route 2 transport: SBF → alias k1/k2/k3 (giữ xoay key), model free khác → native `opencode/<model>`; cập nhật toàn bộ ghi chú lỗi thời + TTL cache cli:FreeTierError 60s→300s (đỡ retry mọi 60s khi 403 thật ở native).
+
+### BUG2-026 · P2 · G — repo opencode.json ĐỊNH NGHĨA ĐÈ provider native "opencode"
+- **Bằng chứng:** `opencode.json` khai provider `opencode` = custom `@ai-sdk/openai-compatible` (baseURL zen + apiKey nhúng) → spawn `--model opencode/<model-free>` trong thư mục app resolve về custom HTTP → 403 (log 05:23Z: `providerID=opencode` native runtime nhưng vẫn 403 khi chạy từ app-dir do config shadow; từ /tmp không shadow → "OK").
+- **Fix:** gỡ hoàn toàn def "opencode" khỏi repo opencode.json (native sống); giữ k1/k2/k3 (SBF xoay key); default `model` đổi từ `nemotron-3-ultra-free` (đã chết) sang `space-bunny-free`; `small_model=opencode/mimo-v2.6-flash-free` giờ resolve native → khỏi "Insufficient account funds" khi sinh title.
+
+### BUG2-027 · P2 · F — danh sách model chứa model ĐÃ CHẾT (chọn là treo/lỗi)
+- **Bằng chứng matrix 2026-10-09:** nemotron-3-ultra-free (extraction CHÍNH!) đã rời catalog Zen (GET /v1/models không còn → 404); nemotron-3.5-lightning-free treo CLI 5/5 lần 0 byte (dead endpoint — spawn treo = tốn 240s timeout mỗi call, KHÔNG cache được vì hang không đánh dấu); jev-1.13-free UnknownError "Unexpected server error"; muse-spark-1.3-contributor-free geo-block "not available in your country" (muse-1.2 cũng vậy).
+- **Fix:** `PROVIDER_MODELS.zen` = đúng 6 model VERIFIED (SBF + ling + mimo + step-5 + longcat + big-pickle — label ghi rõ đường vận hành); `EXTRACTION_ZEN_MODEL` default nemotron-3-ultra-free → space-bunny-free (HTTP xoay key — ổn định nhất cho pipeline document); health route note cập nhật; `ZEN_KNOWN_MODELS` mở rộng (normalize DB cũ) + giữ model chết cho tham chiếu row cũ.
+
+### GHI NHẬN MỞ (không fix được từ bên trong — minh bạch cho user)
+- **Zen free-tier quota THEO PROJECT:** cùng key oc_sk, cùng thời điểm — `/tmp` (projectID=global) trả lời OK, thư mục `/home/z/tmo-app` (projectID=250903ec…) nhận 403 FreeTierError trên native. Dự đoán: allowance free của project tmo-app bị cạn sau các mission chạy opencode CLI lịch sử. Hệ quả trong sandbox hôm nay: agent đặt model free khác sẽ chạy qua failover SBF (E2E xác nhận: ling → HTTP 403 (cache 60s) → CLI 403 (cache 5p) → **ZEN FAILOVER SBF trả "OK"** — agent KHÔNG bao giờ chết). Trên máy local của user / clone mới / khi quota reset — model free chạy thẳng native không cần đổi gì.
+- **CLI boot treo ngẫu nhiên:** ~30% lần spawn treo 0 byte vĩnh viễn (không phụ thuộc model — kể cả model chạy tốt); bị chặn bởi `timeout` bên ngoài. App có sẵn `OPENCODE_CLI_TIMEOUT_MS=240s` + failover nên không ảnh hưởng tính sẵn sàng, nhưng làm chậm trung bình đường CLI.
+- Lint warning pre-existing (unused eslint-disable subagent-delegate:1024) — dọn sạch trong round này.
+
+## B. FIX TỔNG HỢP ROUND-72
+
+| Mã | Fix | Test khoá |
+|---|---|---|
+| BUG2-023 | `sessionOpenScrollTick` nhảy tức thời xuống cuối khi mở/đổi phiên (bump trong finally non-silent) + settle 150ms/450ms + dead-zone trigger `prevTop > scrollTop+40` | Nghiệm thu browser (2 đường: restore + dropdown; đo scrollTop=đáy chính xác) |
+| BUG2-024 | FORGE tách Code Team → standalone (def + migration DB + POSITION_BY_NAME/'FS' gỡ + delegate by-name DB-first + UI tự nhóm "Độc lập") | 6 test (r72) + browser 2 module |
+| BUG2-025 | Cài opencode CLI v1.18.35 + symlink binary nền tảng + `ensureOpenCodeAuth()` self-heal + route 2 transport theo model + cập nhật ghi chú lỗi thời | E2E qua chính `callLLMForAgent` (ling → failover SBF "OK" 8.9s) |
+| BUG2-026 | Gỡ shadow provider "opencode" khỏi repo opencode.json + default model SBF + small_model native | 2 test đọc file config khoá hợp đồng |
+| BUG2-027 | Model list = 6 model VERIFIED; extraction default SBF; loại 4 model chết | 4 test |
+
+## C. NGHIỆM THU ROUND-72
+
+**Gate:** quality-gate PASS toàn bộ — type_check 0 · lint 0 (dọn cả warning pre-existing) · imports ✓ · **555/555 test** (543 kế thừa + **12 mới** trong `tests/r72-free-models-forge-standalone.test.ts`).
+
+**Live (browser + E2E thật):**
+- Mở phiên cũ 2 đường (reload restore + dropdown) → `at_bottom=true` chính xác tuyệt đối (scrollTop = scrollHeight − clientHeight); kéo lên → prepend cũ + giữ vị trí; nút load-older hiện/ẩn đúng hasMore.
+- Agents module + Smolab selector: FORGE nhóm "Độc lập" (SYS, không badge vị trí); Team Code còn đúng 5; model dropdown hiển thị đủ 6 model free mới.
+- E2E `callLLMForAgent(zen/ling-3.1-flash-free)` qua code app thật: HTTP 403 → cache 60s → CLI native spawn đúng binary → (app-dir đang 403 quota) → failover SBF trả **"OK"** 8.9s — chuỗi sống sót toàn vẹn, đúng thiết kế many-layer failover.
+
+**Đối chiếu 4 câu hỏi user:**
+1. *Phiên bản sandbox có mới nhất không?* — CÓ: `a4f2c55` = origin/main (fetch 04:13Z không có commit mới hơn), PM2 restart đúng giờ commit 19:16:51, working tree sạch, `next dev` hot-reload — bản đang chạy là mới nhất tính đến thời điểm kiểm tra.
+2. *Mở phiên cũ mặc định hiện tin cuối, kéo lên mới load cũ?* — Cơ chế tail-load đã có từ 2026-09-01 nhưng auto-scroll bị gián đoạn chết ở đầu danh sách (BUG2-023) → đã fix bằng nhảy tức thời; kéo lên tải thêm (3 lượt/lần, giữ vị trí đọc) hoạt động đúng.
+3. *FORGE độc lập chứ đâu thuộc team code?* — Đúng theo thực thể hệ thống (vốn chỉ delegate qua by-name, không nằm pipeline SOP) → đã tách hoàn toàn (def + DB + UI + mọi tham chiếu), vẫn delegate được như cũ.
+4. *Dùng opencode auth login để có nhiều model free thay vì chỉ SBF?* — Đã hiện thực hóa: CLI cài xong + key oc_sk nạp (auth login chỉ là dán API key — không cần oauth account) + đường native mở khóa 5 model free mới (verified trả lời thật). Lưu ý minh bạch: trong sandbox hôm nay Zen còn 403 theo project với thư mục app (quota lịch sử) → model free chạy qua failover SBF; trên môi trường project mới/quota hồi thì chạy thẳng native.

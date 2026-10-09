@@ -258,6 +258,61 @@ tool_call: web_search({"query": "CVE-2024-3094 xz backdoor"})
 Có thể gọi nhiều tools trong 1 response. Sau khi tool trả kết quả, đọc kỹ output rồi chọn hành động kế.
 Nếu KHÔNG cần dùng tool → chỉ cần trả lời text bình thường.`
 
+/*
+ * USER DIRECTIVE 2026-10-09 — FORGE TÁCH KHỎI CODE TEAM (mirror TASK 48
+ * RAVAGE→Linh Sickyx): FORGE là agent ĐỘC LẬP (team=null, position=null),
+ * KHÔNG thuộc Team Code. Persona chuyển nguyên vẹn từ FS_PROMPT
+ * (code-team/prompts.ts — đã xóa), chỉ đổi căn thân "FS của Code Team" →
+ * "Full-Stack Developer độc lập của TMO". Đường nhận task KHÔNG đổi:
+ * delegate_task/dispatch_agent (giờ resolve by-name qua AgentProfile —
+ * POSITION_BY_NAME đã bỏ FORGE) + chat trực tiếp Single Agent mode.
+ * Toolset giữ nguyên builder tổng lực (persist tools JSON vào DB để
+ * dispatch resolve đúng whitelist — không rơi DEFAULT_SUBAGENT_TOOLS).
+ */
+const FORGE_INSTRUCTION = `Bạn là FORGE — Full-Stack Developer (agent ĐỘC LẬP — không thuộc team nào) của hệ thống đa agent The Magnum Opus (TMO).
+
+━━━ NGUYÊN TẮC CỐT LÕI ━━━
+- "Nhận spec trọn gói → XÂY END-TO-END → Tự kiểm định → Báo cáo"
+- Bạn là builder TỔNG LỰC: UI + API + DB trong 1 luồng tự chủ — KHÔNG chờ agent khác làm phần giữa
+- Mỗi tầng làm xong PHẢI kiểm định ngay (lint/type_check/run_tests) trước khi sang tầng kế
+- Clone-first: làm việc trên workspace clone (TMO_CLONE_DIR) — an toàn sửa + commit
+- Dynamic: "FORGE XÂY FULL-STACK"
+
+━━━ 5 BƯỚC LÀM VIỆC ━━━
+1. ĐỌC SPEC + QUÉT MÔI TRƯỜNG — Trích mục tiêu + tiêu chí nghiệm thu; file_list/grep khảo sát cấu trúc hiện có TRƯỚC khi code (không đoán đường dẫn)
+2. LẬP KẾ HOẠCH TODO — todo_write chia việc theo tầng: DB (schema/prisma) → API (routes/services) → UI (components/pages) → Kiểm định → Verify preview. Mỗi tiêu chí nghiệm thu ≥1 todo
+3. TRIỂN KHAI TỪNG TẦNG — DB trước (nếu cần schema), API kế, UI cuối. File mới dùng file_write từng phần (~200-400 dòng/lần); file cũ file_read trước khi file_edit/file_multi_edit
+4. TỰ KIỂM ĐỊNH — Sau mỗi tầng: lint + type_check (+ run_tests nếu có test). Lỗi đọc kỹ error CỤ THỂ từng file rồi sửa — không đoán. Đổi logic bắt buộc chạy kiểm định máy
+5. VERIFY + BÁO CÁO — Tính năng có UI → start_preview + browser_screenshot chụp xác nhận hiển thị. Báo cáo nén: đã làm (kèm bằng chứng tool) · còn thiếu · đề xuất
+
+━━━ INPUT FORMAT ━━━
+Bạn nhận task từ 2 đường:
+- AGENT ĐIỀU PHỐI (delegate_task/dispatch_agent) — kèm spec, context, tiêu chí nghiệm thu
+- USER chat trực tiếp (Single Agent mode) — yêu cầu tính năng full-stack
+Nội dung: task (mục tiêu, phạm vi, ràng buộc) + context (file liên quan, kiến trúc hiện có) + acceptance_criteria (tự verify TỪNG điều kiện bằng tool thật trước khi báo cáo — nêu ĐẠT/CHƯA ĐẠT từng điều kiện)
+
+━━━ OUTPUT FORMAT ━━━
+Báo cáo văn xuôi tiếng Việt sạch (markdown tối thiểu, nhấn mạnh CHỮ IN HOA, liệt kê "- "):
+1. ĐÃ LÀM GÌ — từng tầng (DB/API/UI) kèm file đụng tới
+2. BẰNG CHỨNG TOOL — tên tool + kết quả ngắn (lint/type_check/test/screenshot)
+3. CÒN THIẾU GÌ — trung thực từng mục (nếu có)
+4. ĐỀ XUẤT KHẮC PHỤC — cho agent cha/user
+
+━━━ TOOLS ━━━
+Bạn có quyền đầy đủ builder: file_read/file_edit/file_multi_edit/file_write/file_delete, grep/file_list, shell + run_bg/read_output, manage_packages, run_tests/lint/type_check/test_coverage, git (status/diff/log/branch/commit/push/pull), db_query (read-only Prisma), start_preview/stop_preview + browser_screenshot (verify UI), open_workspace + verify_and_push (clone-first), knowledge_search/knowledge_graph (KB), todo_write/todo_read (kế hoạch), summarize/synthesize, create_custom_tool (tự xây tool thiếu), escalate_problem (vấn đề ngoài tầm).
+
+━━━ CÁCH GỌI TOOL ━━━
+ƯU TIÊN native function calling (tools đã truyền qua API kèm schema — emit tool_calls trực tiếp). Fallback text format:
+tool_call: tool_name({"param1": "value1"})
+
+Ví dụ:
+tool_call: file_read({"path": "src/app/page.tsx"})
+tool_call: shell({"command": "bun run lint"})
+tool_call: start_preview({})
+
+Có thể gọi nhiều tools trong 1 response. Sau khi tool trả kết quả, đọc kỹ output rồi chọn hành động kế.
+Nếu KHÔNG cần dùng tool → chỉ cần trả lời text bình thường.`
+
 export const STANDALONE_AGENTS: StandaloneAgentDef[] = [
   {
     name: 'Omega',
@@ -683,6 +738,40 @@ LEARNING & MEMORY + ĐỊNH DẠNG BÁO CÁO
       // r71 (BUG2-019/021/022) — xem note Omega phía trên.
       'knowledge_write', 'data_map', 'lessons_search'],
   },
+  {
+    // USER DIRECTIVE 2026-10-09 — FORGE tách khỏi Code Team (từ TASK 43 def
+    // CODE_TEAM_AGENTS với team='code', position='FS'): giờ là agent ĐỘC LẬP —
+    // mirror TASK 48 (RAVAGE→Linh Sickyx). KHÔNG đổi tên nên các bảng satellite
+    // keyed theo tên (ToolAssignment/SkillAssignment/AgentModelOverride/
+    // CronJob) tự động còn đúng — migration chỉ normalize vai trò trên
+    // AgentProfile (team:null, position:null, isSystem:true, instruction mới,
+    // tools JSON). Vị trí 'FS' vốn KHÔNG nằm trong pipeline SOP
+    // (getPositionsInOrder) từ TASK 43 — workflow team không đổi. Đường nhận
+    // task: delegate_task/dispatch_agent (resolve by-name DB-first) + chat
+    // trực tiếp Single Agent mode + bucket standalone trong Agent Roster.
+    name: 'FORGE',
+    description:
+      'Full-Stack Developer ĐỘC LẬP (không thuộc team nào): builder tổng lực nhận spec trọn gói → tự chủ triển khai end-to-end (UI + API + DB + kiểm định + preview verify).',
+    instruction: FORGE_INSTRUCTION,
+    domain: 'programming',
+    capable:
+      'Full-stack Next.js/React/UI components, API routes, Prisma database schema, end-to-end feature delivery, tự kiểm định (lint/type_check/run_tests), chạy preview + browser verify',
+    provider: 'zen',
+    // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note Omega).
+    model: 'space-bunny-free',
+    temperature: 0.3,
+    // TASK 39 (phiên 8) — -1 = unlimited (xem note Omega).
+    maxTokens: -1,
+    team: null, // standalone — KHÔNG thuộc team code (user directive 2026-10-09: tách khỏi Code Team)
+    position: null,
+    avatar: '🦾',
+    // Toolset giữ nguyên 100% từ def code-team cũ (TASK 43) + r71 union —
+    // PERSIST vào DB (tools JSON) để delegate_task by-name + dispatch_agent
+    // resolve đúng whitelist (không rơi DEFAULT_SUBAGENT_TOOLS).
+    tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'git_status', 'git_diff', 'git_log', 'git_branch', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'browser_screenshot', 'mcp_call', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'open_workspace', 'verify_and_push', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem', 'context_recall', 'list_skills', 'read_skill', 'propose_automation',
+      // r71 (BUG2-019/021/022) — xem note Omega phía trên.
+      'knowledge_write', 'data_map', 'lessons_search'],
+  },
 ]
 
 // ===== SEED LOGIC =====
@@ -812,12 +901,75 @@ async function _migrateRavageToLinhSickyx(): Promise<void> {
   }
 }
 
+/**
+ * USER DIRECTIVE 2026-10-09 — FORGE ROLE MIGRATION (không đổi tên, chỉ tách đội).
+ *
+ * FORGE (TASK 43) từng là code-team agent (team='code', position='FS'). User
+ * directive: FORGE là agent ĐỘC LẬP — KHÔNG thuộc team code. Vì TÊN giữ nguyên:
+ *   - 4 bảng satellite keyed theo tên (ToolAssignment/SkillAssignment/
+ *     AgentModelOverride/CronJob với key 'FORGE') tự động còn đúng — KHÔNG
+ *     cần kéo theo như _migrateRavageToLinhSickyx.
+ *   - Chỉ cần normalize AgentProfile: team:null + position:null + isSystem:true
+ *     (standalone = core system agent) + instruction/description mới (bỏ căn
+ *     thân "của Code Team") + tools JSON (row code-team để tools trống —
+ *     delegate by-name cần whitelist đầy đủ, không rơi DEFAULT_SUBAGENT_TOOLS).
+ *     provider/model/temperature/maxTokens GIỮ NGUYÊN (customization preserved).
+ *
+ * Idempotent tại DB level: lần 2 trở đi mọi điều kiện đã thỏa → không update.
+ * An toàn chạy song song với code-team seed (đó là lý def FORGE đã rời
+ * CODE_TEAM_AGENTS — code-team seed không còn đụng row này).
+ */
+let forgeNormalized = false
+
+async function _normalizeForgeToStandalone(): Promise<void> {
+  if (forgeNormalized) return
+  forgeNormalized = true // chạy 1 lần/process — idempotent tại DB level
+  try {
+    const forgeDef = STANDALONE_AGENTS.find(a => a.name === 'FORGE')
+    if (!forgeDef) return // def không còn (tương lai xóa) — không migrate mù
+    const row = await db.agentProfile.findUnique({ where: { name: 'FORGE' } })
+    if (!row) return // fresh install — def-loop tự create đúng vai trò standalone
+    // Chỉ update khi còn dấu vết code-team (idempotent — không đập customization)
+    const needsNormalize =
+      row.team !== null ||
+      row.position !== null ||
+      row.isSystem !== true ||
+      (row.instruction ?? '').includes('của Code Team') ||
+      !row.tools
+    if (!needsNormalize) return
+    await db.agentProfile.update({
+      where: { id: row.id },
+      data: {
+        team: null,
+        position: null,
+        isSystem: true,
+        instruction: forgeDef.instruction,
+        description: forgeDef.description,
+        avatar: forgeDef.avatar,
+        domain: forgeDef.domain,
+        capable: forgeDef.capable,
+        // Row code-team để tools trống → persist whitelist builder đầy đủ
+        ...(forgeDef.tools.length > 0 ? { tools: JSON.stringify(forgeDef.tools) } : {}),
+      },
+    })
+    console.log('[Standalone] Role migration ✓ FORGE → standalone (team=null + position=null + isSystem=true + instruction mới + tools JSON — user directive 2026-10-09)')
+  } catch (err) {
+    forgeNormalized = false // lỗi → cho phép retry lần ensure sau
+    console.warn('[Standalone] Role migration FORGE → standalone lỗi (sẽ retry):', err instanceof Error ? err.message : String(err))
+  }
+}
+
 async function _doStandaloneSeed(): Promise<boolean> {
   console.log('[Standalone] Checking standalone agents...')
   // TASK 48 — rename migration TRƯỚC def-loop: RAVAGE cũ (nếu có) phải thành
   // "Linh Sickyx" trước khi findUnique-by-name chạy (không thì seed tạo row
   // MỚI trùng tên trong khi row cũ còn nằm đó).
   await _migrateRavageToLinhSickyx()
+  // USER DIRECTIVE 2026-10-09 — FORGE role migration TRƯỚC def-loop: row FORGE
+  // do code-team seed tạo (team='code', position='FS', tools trống) phải được
+  // normalize về vai trò standalone TRƯỚC khi findUnique-by-name — nếu không
+  // def-loop sẽ SKIP row (đã tồn tại) mà không dọn dấu vết Code Team.
+  await _normalizeForgeToStandalone()
   let created = 0
   let skipped = 0
   let failedAgents = 0
@@ -1029,11 +1181,36 @@ async function _doStandaloneSeed(): Promise<boolean> {
             console.warn('[Standalone] Linh Sickyx tools sync thất bại (không chặn):', syncErr)
           }
         }
-        // r71 (BUG2-019/021/022) — ADD-IF-MISSING cho row CÓ whitelist JSON
-        // (Linh Sickyx persist từ Task 48): def bổ sung tool mới (knowledge_write/
-        // data_map/lessons_search) mà row chưa có → UNION thêm (KHÔNG xóa tool
-        // user đã cấu hình). Mirror Task-42 browser_screenshot sync của Code Team.
-        if (def.name === 'Linh Sickyx' && def.tools.length > 0 && existing.tools) {
+        // USER DIRECTIVE 2026-10-09 — FORGE SAFETY-NET (mirror Linh Sickyx
+        // Task 48): row tên FORGE còn dấu vết code-team (team/position khác
+        // null, isSystem=false, instruction nhắc "của Code Team", hoặc thiếu
+        // tools JSON — vd _normalizeForgeToStandalone bị gián đoạn) → đồng bộ
+        // về def standalone. provider/model/temperature/maxTokens giữ nguyên.
+        if (def.name === 'FORGE' && (existing.team !== null || existing.position !== null || existing.isSystem !== true || (existing.instruction ?? '').includes('của Code Team') || !existing.tools)) {
+          try {
+            await db.agentProfile.update({
+              where: { id: existing.id },
+              data: {
+                instruction: def.instruction,
+                description: def.description,
+                capable: def.capable,
+                domain: def.domain,
+                avatar: def.avatar,
+                team: null,
+                position: null,
+                isSystem: true,
+                ...(def.tools.length > 0 ? { tools: JSON.stringify(def.tools) } : {}),
+              },
+            })
+            console.log('[Standalone] Migrated FORGE → standalone role (dọn dấu vết code-team — user directive 2026-10-09)')
+          } catch (migErr) {
+            console.warn(`[Standalone] Role migration FORGE thất bại (không chặn):`, migErr)
+          }
+        }
+        // r71 — tools UNION cho row CÓ whitelist JSON (FORGE/Linh Sickyx persist
+        // từ migration): def bổ sung tool mới mà row chưa có → ADD-IF-MISSING
+        // (KHÔNG xóa tool user đã cấu hình).
+        if ((def.name === 'FORGE' || def.name === 'Linh Sickyx') && def.tools.length > 0 && existing.tools) {
           try {
             const parsed = JSON.parse(existing.tools)
             if (Array.isArray(parsed)) {
@@ -1073,10 +1250,11 @@ async function _doStandaloneSeed(): Promise<boolean> {
             avatar: def.avatar,
             isSystem: true, // ← User CANNOT delete — core system agent
             enabled: true,
-            // TASK 48 — Linh Sickyx: persist toolset JSON (pattern Agent
-            // Factory) để dispatch_agent resolve đúng toolset. Omega/ALISTA
-            // giữ hành vi cũ (tools=null → def-fallback + default khi dispatch).
-            ...(def.name === 'Linh Sickyx' && def.tools.length > 0 ? { tools: JSON.stringify(def.tools) } : {}),
+            // TASK 48 — Linh Sickyx + (2026-10-09) FORGE: persist toolset JSON
+            // (pattern Agent Factory) để dispatch_agent resolve đúng toolset.
+            // Omega/ALISTA giữ hành vi cũ (tools=null → def-fallback + default
+            // khi dispatch).
+            ...((def.name === 'Linh Sickyx' || def.name === 'FORGE') && def.tools.length > 0 ? { tools: JSON.stringify(def.tools) } : {}),
           },
         })
         created++

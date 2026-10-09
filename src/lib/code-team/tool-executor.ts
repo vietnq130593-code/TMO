@@ -1872,15 +1872,15 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
         'Dùng khi: (1) task code lớn cần implement/review/tối ưu chuyên sâu, (2) muốn giảm tải context của bạn — ' +
         'sub-agent đọc nhiều file mà context của bạn KHÔNG phình, (3) cần góc nhìn chuyên trách (security review, arch design, nghiên cứu). ' +
         'KHÔNG dùng cho task 1-2 bước đơn giản — tự làm nhanh hơn. Chọn đúng agent: MEGATRON=phân tích/verify tổng thể, ' +
-        'SHOCWAVE=thiết kế kiến trúc/DB/API, RAMPAGE=implement code, SENTINEL=review/bug/security, CATALYST=tối ưu/refactor, ' +
-        'FORGE=full-stack builder END-TO-END (UI + API + DB + tự kiểm định + preview verify — tính năng trọn gói tự chứa). ' +
-        'Ngoài Code Team: TÊN agent standalone trong Agent Roster (vd ALISTA — nghiên cứu/thu thập dữ liệu) cũng ĐƯỢC — hệ thống tự resolve theo tên (r60).',
+        'SHOCWAVE=thiết kế kiến trúc/DB/API, RAMPAGE=implement code, SENTINEL=review/bug/security, CATALYST=tối ưu/refactor. ' +
+        'FORGE=full-stack builder END-TO-END (UI + API + DB + tự kiểm định + preview verify — tính năng trọn gói tự chứa — agent ĐỘC LẬP theo user directive 2026-10-09). ' +
+        'Ngoài Code Team: TÊN agent standalone trong Agent Roster (vd ALISTA — nghiên cứu/thu thập dữ liệu, Linh Sickyx — security, FORGE — full-stack) cũng ĐƯỢC — hệ thống tự resolve theo tên (r60).',
       parameters: {
         type: 'object',
         properties: {
           agent: {
             type: 'string',
-            description: 'Agent sẽ nhận task — Code Team (MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/CATALYST/FORGE) hoặc tên agent standalone trong Agent Roster (vd ALISTA) — resolve theo tên (r60)',
+            description: 'Agent sẽ nhận task — Code Team (MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/CATALYST) , FORGE (full-stack — agent độc lập), hoặc tên agent standalone trong Agent Roster (vd ALISTA, Linh Sickyx) — resolve theo tên (r60)',
           },
           task: {
             type: 'string',

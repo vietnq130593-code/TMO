@@ -1,26 +1,12 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "opencode/nemotron-3-ultra-free",
+  "model": "opencode/space-bunny-free",
   "small_model": "opencode/mimo-v2.6-flash-free",
   "permission": {
     "edit": "deny",
     "bash": "deny"
   },
   "provider": {
-    "opencode": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "OpenCode Zen K3",
-      "options": {
-        "baseURL": "https://opencode.ai/zen/v1",
-        "apiKey": "oc_sk_23fff4183898_Ve6SLnZbsL49b1te2b-EfMepDxhKHSru"
-      },
-      "models": {
-        "nemotron-3-ultra-free": {"name": "Nemotron 3 Ultra Free"},
-        "nemotron-3.5-lightning-free": {"name": "Nemotron 3.5 Lightning Free"},
-        "mimo-v2.6-flash-free": {"name": "MiMo v2.6 Flash Free"},
-        "space-bunny-free": {"name": "Space Bunny Free"}
-      }
-    },
     "opencode-k1": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "OpenCode Zen K1",
@@ -29,9 +15,6 @@
         "apiKey": "oc_sk_847f48eb9e3b_8xobh9CNHdRHh-_s6dSJGSUxDFrf8V-L"
       },
       "models": {
-        "nemotron-3-ultra-free": {"name": "Nemotron 3 Ultra Free"},
-        "nemotron-3.5-lightning-free": {"name": "Nemotron 3.5 Lightning Free"},
-        "mimo-v2.6-flash-free": {"name": "MiMo v2.6 Flash Free"},
         "space-bunny-free": {"name": "Space Bunny Free"}
       }
     },
@@ -43,9 +26,6 @@
         "apiKey": "oc_sk_5d6aea657d36_OvLaJZmsixNdwS7nOpzq1FUiiPxB8RZd"
       },
       "models": {
-        "nemotron-3-ultra-free": {"name": "Nemotron 3 Ultra Free"},
-        "nemotron-3.5-lightning-free": {"name": "Nemotron 3.5 Lightning Free"},
-        "mimo-v2.6-flash-free": {"name": "MiMo v2.6 Flash Free"},
         "space-bunny-free": {"name": "Space Bunny Free"}
       }
     },
@@ -57,9 +37,6 @@
         "apiKey": "oc_sk_2d7a0ef8b8dc_ruupJGTRjB2CCDTJxIp-eKIGj2nNqAKk"
       },
       "models": {
-        "nemotron-3-ultra-free": {"name": "Nemotron 3 Ultra Free"},
-        "nemotron-3.5-lightning-free": {"name": "Nemotron 3.5 Lightning Free"},
-        "mimo-v2.6-flash-free": {"name": "MiMo v2.6 Flash Free"},
         "space-bunny-free": {"name": "Space Bunny Free"}
       }
     }

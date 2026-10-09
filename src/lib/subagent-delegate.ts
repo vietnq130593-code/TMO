@@ -156,9 +156,11 @@ export const POSITION_BY_NAME: Record<string, string> = {
   RAMPAGE: 'G2-A',
   SENTINEL: 'G2-B',
   CATALYST: 'G3',
-  // TASK 43 — FORGE: full-stack-developer subagent (builder tổng lực
-  // end-to-end UI+API+DB). Vị trí 'FS' ngoài pipeline SOP — chỉ delegate.
-  FORGE: 'FS',
+  // USER DIRECTIVE 2026-10-09 — FORGE ĐÃ GỠ: FORGE là agent ĐỘC LẬP (không
+  // thuộc team code) → KHÔNG resolve qua position của Code Team nữa mà qua
+  // nhánh by-name DB-first của delegate_task (giống ALISTA/Linh Sickyx —
+  // AgentProfile FORGE có tools JSON đầy đủ từ standalone seed). Vị trí 'FS'
+  // cũng đã rời danh sách hợp lệ ở resolveDelegationTarget.
 }
 
 /**
@@ -272,7 +274,10 @@ export const DELEGATABLE_AGENTS: Array<{ name: string; role: string; bestFor: st
   { name: 'RAMPAGE', role: 'G2-A — Code Execution', bestFor: 'implement code TypeScript/React/Next.js, viết API, database operations' },
   { name: 'SENTINEL', role: 'G2-B — Review & Fix', bestFor: 'code review, tìm bug, security check, fix lỗi, iterative refinement' },
   { name: 'CATALYST', role: 'G3 — Tối ưu', bestFor: 'performance optimization, refactor, scalability, best practices' },
-  { name: 'FORGE', role: 'FS — Full-Stack Developer', bestFor: 'tính năng full-stack END-TO-END tự chủ theo spec trọn gói: UI + API + DB + tự kiểm định (lint/type_check/run_tests) + preview verify' },
+  // USER DIRECTIVE 2026-10-09 — FORGE giữ nguyên là đích delegate hợp lệ
+  // (builder tổng lực) nhưng là agent ĐỘC LẬP — resolve by-name DB-first
+  // (không còn qua POSITION_BY_NAME/position 'FS').
+  { name: 'FORGE', role: 'Full-Stack Developer (độc lập)', bestFor: 'tính năng full-stack END-TO-END tự chủ theo spec trọn gói: UI + API + DB + tự kiểm định (lint/type_check/run_tests) + preview verify' },
 ]
 
 /**
@@ -285,7 +290,9 @@ export function resolveDelegationTarget(input: unknown): string | null {
   const key = String(input ?? '').trim().toUpperCase()
   if (!key) return null
   if (POSITION_BY_NAME[key]) return POSITION_BY_NAME[key]
-  if (['TL', 'G1', 'G2-A', 'G2-B', 'G3', 'FS'].includes(key)) return key
+  // USER DIRECTIVE 2026-10-09 — 'FS' đã GỠ (FORGE tách khỏi Code Team → resolve
+  // by-name DB-first ở caller). TASK 48 — 'SEC' cũng đã gỡ trước đó.
+  if (['TL', 'G1', 'G2-A', 'G2-B', 'G3'].includes(key)) return key
   return null
 }
 
@@ -1014,7 +1021,6 @@ async function runSubAgentForProfileInner(params: {
         // 5xx/mạng) → ngủ 65s (tôn trọng cooldown Zen) rồi THỬ LẠI, tối đa
         // 2 lần; chỉ chịu thua khi hết lượt hoặc lỗi KHÔNG transient.
         let llmAttempts = 0
-        // eslint-disable-next-line no-constant-condition
         while (true) {
           try {
             result = await withTimeout(

@@ -1950,7 +1950,9 @@ if (!process.env.LLM_QUIET_INIT) {
  *  space-bunny-free trả 200; nemotron-3-ultra-free/muse-spark/lightning
  *  đều 403 FreeTierError ở cả 2 key). Toàn bộ 13 agents chạy space-bunny-free
  *  (stealth reasoning, ctx 1M / out 512k, effort max — cao nhất toàn Zen).
- *  Muốn dùng lại model free khác: 'opencode auth login' (account oauth) trên
+ *  Muốn dùng lại model free khác: giờ CHẠY ĐƯỢC qua đường CLI native (r72 —
+ *  verified 2026-10-09: auth.json key oc_sk + provider native `opencode`;
+ *  llm.ts tự route, KHÔNG cần thao tác gì thêm).
  *  máy chạy app + đường OpenCode CLI — xem callOpenCodeCLIProvider.
  *    - ZEN FAILOVER (model dự phòng khi model chính fail cả HTTP + CLI) = space-bunny-free
  *
@@ -3508,13 +3510,16 @@ export async function callLLMSlot(
   // USER DIRECTIVE: NIM bỏ hoàn toàn khỏi LLM (chỉ giữ lõi embed). Chuỗi trích
   // xuất tài liệu cũ (nemotron-3-ultra-550b → gpt-oss-120b trên NIM key) đã gỡ —
   // giờ: Zen HTTP → OpenCode CLI → ZEN FAILOVER space-bunny → error.
-  // Model trích xuất mặc định: nemotron-3-ultra-free (550B MoE — reasoning mạnh,
-  // ctx 1M, output 128k đủ JSON trích xuất dài) — override qua EXTRACTION_ZEN_MODEL.
+  // r72 (2026-10-09): nemotron-3-ultra-free đã BỎ khỏi catalog Zen (GET
+  // /zen/v1/models không còn — HTTP 404) → mặc định chuyển sang space-bunny-free
+  // (HTTP xoay key — đường ổn định nhất, không tốn CLI spawn mỗi call document).
+  // Override EXTRACTION_ZEN_MODEL để đổi (vd ling-3.1-flash-free — sẽ tự route
+  // qua CLI native).
   // slotIndex giữ tương thích signature (document key assignment NIM cũ) — không
   // còn ý nghĩa với zen (2 key round-robin pool dùng chung).
   void slotIndex
   if (isZenConfigured()) {
-    const extractModel = process.env.EXTRACTION_ZEN_MODEL?.trim() || 'nemotron-3-ultra-free'
+    const extractModel = process.env.EXTRACTION_ZEN_MODEL?.trim() || 'space-bunny-free'
     const zen = await callZenProvider(
       prompt,
       systemPrompt,
@@ -3912,7 +3917,8 @@ function recordZenCharsPerToken(chars: number, promptTokens?: number | null): vo
 //     — model free DUY NHẤT còn mở cho oc_sk API key sau policy Zen ~25-26/09
 //     (verified 28/10: nemotron-ultra/muse-spark/lightning → 403 FreeTierError)
 //   - Muốn dùng lại nemotron-3-ultra-free / muse-spark-1.3-contributor-free:
-//     'opencode auth login' (account oauth) + đường OpenCode CLI dưới.
+//     đường OpenCode CLI native dưới (r72 — verified 2026-10-09 chạy được với
+//     chính key oc_sk, không cần oauth).
 //
 // Routing: callLLMForAgent checks provider==='zen' BEFORE model-first policy
 // → zen-routed agents use their configured model. Chuỗi failover runtime:
@@ -4129,8 +4135,16 @@ function zenKeyCooldownSummary(): string {
 //       x-opencode-client: cli; x-opencode-session/request/project — bắt từ capture
 //       request CLI thật) qua curl + bun fetch — VẪN 403 → check ở TẦNG CREDENTIAL
 //       (account OAuth / key có credit), không spoof được bằng header.
-// → Model free giờ chỉ chạy với credential ĐĂNG NHẬP account (opencode auth login
-//   → type oauth) hoặc key đã nạp credit; oc_sk type:api bị chặn ở mọi transport.
+// → CẬP NHẬT 2026-10-09 (r72 — user request "nhiều model free thay vì chỉ SBF"):
+//   thí nghiệm lại với opencode CLI v1.18.35 cho thấy (b) CHẾ TẮT — CLI với
+//   auth type:api (key oc_sk) qua provider NATIVE "opencode" (auth.json) chạy
+//   ĐƯỢC model free (ling-3.1-flash-free + mimo-v2.6-flash-free trả lời thật;
+//   policy "from within OpenCode" = phải đi qua transport native của client,
+//   không phải credential OAuth). Chỉ HTTP trực tiếp + custom provider
+//   (@ai-sdk/openai-compatible alias) vẫn bị chặn → cache dưới đây giờ chỉ áp
+//   cho 2 transport bị chặn đó; đường CLI native route riêng (llm.ts r72).
+// → Diễn giải cũ (2026-09-27): model free chỉ chạy với credential ĐĂNG NHẬP
+//   account hoặc key có credit — ĐÃ LỖI THỜI.
 // Cache trạng thái chặn per (transport, model) TTL 15 phút: lần đầu gặp 403 đánh
 // dấu → các lần sau skip ngay (không lặp HTTP ~1s + CLI spawn ~5-10s mỗi call),
 // caller đi thẳng ZEN FAILOVER. Override: ZEN_FREE_TIER_CACHE_MS (ms; 0 = tắt).
@@ -4179,14 +4193,21 @@ export function zenReasoningEffortForModel(model: string): string | undefined {
   return undefined // nemotron/lightning/mimo: không có effort knob
 }
 
-/** Danh sách model zen hợp lệ (dùng normalize agent DB cũ NIM → zen). */
+/** Danh sách model zen hợp lệ (dùng normalize agent DB cũ NIM → zen).
+ * r72 (2026-10-09): bổ sung các model free mới từ GET /zen/v1/models — dùng
+ * được qua đường CLI native (llm.ts tự route; verified ling + mimo trả lời thật). */
 const ZEN_KNOWN_MODELS = new Set([
-  'nemotron-3-ultra-free',
+  'space-bunny-free',
+  'ling-3.1-flash-free',
+  'mimo-v2.6-flash-free',
+  'nemotron-3.5-lightning-free',
+  'nemotron-3-ultra-free', // đã rời catalog Zen (2026-10-09) — giữ để normalize row cũ
   'muse-spark-1.3-contributor-free',
   'muse-spark-1.2-contributor-free',
-  'nemotron-3.5-lightning-free',
-  'mimo-v2.6-flash-free',
-  'space-bunny-free',
+  'jev-1.13-free',
+  'step-5-preview-free',
+  'longcat-2.5-preview-free',
+  'big-pickle',
 ])
 
 function isZenModelId(model: string): boolean {
@@ -4363,7 +4384,7 @@ async function callZenProvider(
       // cache bỏ qua các lần sau: FreeTierError (model free chặn API key),
       // RegionError (geo-block), 402 (hết credit cho model trả phí)
       if (response.status === 403 && (errBody.includes('FreeTierError') || errBody.toLowerCase().includes('free tier'))) {
-        markZenFreeTierBlocked('http', model, `HTTP 403 FreeTierError — model free bị Zen chặn với API key (policy ~2026-09-25; chỉ space-bunny-free còn mở API) — dùng failover / opencode auth login / nạp credit`)
+        markZenFreeTierBlocked('http', model, `HTTP 403 FreeTierError — model free bị Zen chặn với API key ở transport HTTP (chỉ space-bunny-free còn mở API HTTP) — r72: đường CLI native vẫn chạy được model này (llm.ts tự route)`, 60_000)
       } else if (response.status === 403 && (errBody.includes('RegionError') || /not available in your region/i.test(errBody))) {
         markZenFreeTierBlocked('http', model, 'HTTP 403 RegionError — model geo-block tại vùng máy chủ này')
       } else if (response.status === 402) {
@@ -4452,15 +4473,18 @@ async function callZenProvider(
 // OpenCode Zen free models (suffix -free) bị chặn "from within OpenCode" với
 // oc_sk API key. Ngày 24-25/09 CLI còn chạy được free models; TỪ ~25-26/09/2026
 // Zen chặn CẢ CLI với auth type:api (verified 2026-09-27 — opencode v1.18.32
-// mới nhất nhận FreeTierError 403). Đường CLI giờ cần auth oauth (opencode
-// auth login đăng nhập account) hoặc key đã nạp credit.
+// mới nhất nhận FreeTierError 403). r72 (2026-10-09): vault thực nghiệm đảo
+// ngược — CLI v1.18.35 + auth type:api qua provider NATIVE chạy được model
+// free; chỉ custom provider (alias HTTP) vẫn bị chặn. callOpenCodeCLIProvider
+// giờ route SBF qua alias xoay key, model free khác qua native.
 //
 // Output format: `--format json` stream events (step_start, text, step_finish).
 // Parse text events → accumulate content + reasoning + tokens.
 // Fallback: CLI fail → caller (callLLMForAgent) chuyển ZEN FAILOVER (Task 33+).
 // TASK 34 (2026-09-27): free models qua CLI với auth type:api cũng bị Zen chặn
-// (policy mới ~25-26/09) — CLI chỉ còn hiệu lực với auth oauth (opencode auth
-// login) hoặc key có credit; kết quả FreeTierError được cache để skip nhanh.
+// (policy mới ~25-26/09) — r72 (2026-10-09): đã LỖI THỜI cho provider native
+// (auth.json type:api chạy được — xem callOpenCodeCLIProvider); cache chỉ còn
+// áp cho custom alias transport.
 
 // ==================== OPENCODE CLI BINARY RESOLVER (Task 34 — đa nền tảng) ====================
 // Trước đây: const OPENCODE_CLI_BIN = env || '/home/z/.opencode/bin/opencode'
@@ -4521,7 +4545,7 @@ function resolveOpenCodeCliBin(): string | null {
   // MỖI call, log user lo lắng không cần thiết)
   if (now - lastCliMissingWarnAt > 300_000) {
     lastCliMissingWarnAt = now
-    console.warn(`[OC-CLI] Không tìm thấy opencode CLI (đã thử: ${tried.join(' ; ')} ; PATH). Cài: npm i -g opencode-ai (Windows: irm https://opencode.ai/install.ps1 | iex — Linux/mac: curl -fsSL https://opencode.ai/install | bash), hoặc set OPENCODE_CLI_BIN trỏ đúng binary. LƯU Ý: thiếu CLI KHÔNG làm hỏng agent stack — mọi call vẫn chạy qua Zen HTTP + ZEN FAILOVER (space-bunny-free). CLI chỉ cần khi muốn dùng model free bị chặn API key (cần 'opencode auth login' đăng nhập account OpenCode).`)
+    console.warn(`[OC-CLI] Không tìm thấy opencode CLI (đã thử: ${tried.join(' ; ')} ; PATH). Cài: npm i -g opencode-ai (Windows: irm https://opencode.ai/install.ps1 | iex — Linux/mac: curl -fsSL https://opencode.ai/install | bash), hoặc set OPENCODE_CLI_BIN trỏ đúng binary. LƯU Ý: thiếu CLI KHÔNG làm hỏng agent stack — mọi call vẫn chạy qua Zen HTTP + ZEN FAILOVER (space-bunny-free). CLI cần khi muốn dùng model free bị chặn HTTP (r72: native provider + auth.json key oc_sk — app tự nạp key, không cần oauth account).`)
   }
   return null
 }
@@ -4662,12 +4686,55 @@ const OC_CLI_TOOL_MAP: Record<string, string> = {
   ls: 'file_list',
 }
 
+// ==================== NATIVE ZEN AUTH SELF-HEAL (user request 2026-10-09) ====================
+// Provider native "opencode" của CLI đọc credential từ auth store toàn cục
+// ~/.local/share/opencode/auth.json. Sandbox reset / máy mới → file mất →
+// native path chết âm thầm. Self-heal: thiếu → ghi từ ZEN_API_KEY_1 (format
+// verified 2026-10-09 với opencode v1.18.35 — `opencode auth list` nhận diện
+// "OpenCode Zen api"). KHÔNG BAO GIỜ đè file có sẵn (tôn trọng credential
+// user tự cấu hình qua `opencode auth login`).
+let ocAuthEnsured = false
+function ensureOpenCodeAuth(): void {
+  if (ocAuthEnsured) return
+  ocAuthEnsured = true // chạy 1 lần/process — idempotent tại FS level
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs') as typeof import('fs')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('path') as typeof import('path')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const os = require('os') as typeof import('os')
+    const authPath = path.join(os.homedir(), '.local', 'share', 'opencode', 'auth.json')
+    if (fs.existsSync(authPath)) return // đã có credential (user/phiên trước) — không đè
+    const key = ZEN_API_KEYS[0]
+    if (!key) return // không có key cấu hình → bỏ qua (HTTP path vẫn chạy)
+    fs.mkdirSync(path.dirname(authPath), { recursive: true })
+    fs.writeFileSync(authPath, JSON.stringify({ opencode: { type: 'api', key } }, null, 2) + '\n', { mode: 0o600 })
+    console.log('[OC-CLI] auth.json tự tạo cho native Zen provider (ZEN_API_KEY_1 — user request 2026-10-09)')
+  } catch (err) {
+    ocAuthEnsured = false // lỗi → cho phép retry lần call sau
+    console.warn('[OC-CLI] ensureOpenCodeAuth lỗi (không chặn):', err instanceof Error ? err.message : String(err))
+  }
+}
+
 /**
  * Call OpenCode Zen model via CLI subprocess (prompt truyền qua STDIN — Task 34).
- * Spawns `opencode run --model opencode/<model> --format json` + stdin prompt.
+ * Spawns `opencode run --model <prefix>/<model> --format json` + stdin prompt.
  * Returns LLMResult with content + tokens. On failure → null (caller falls back
- * to ZEN FAILOVER). Lưu ý: với auth type:api, model free nhận FreeTierError từ
- * ~2026-09-25 — cần `opencode auth login` (account) để CLI chạy được free models.
+ * to ZEN FAILOVER).
+ * USER REQUEST 2026-10-09 ("nhiều model free thay vì chỉ SBF") — 2 transport:
+ *   - space-bunny-free → alias opencode-k1/k2/k3 (custom HTTP, xoay key pool —
+ *     SBF là model DUY NHẤT Zen mở cho HTTP API key nên alias đa key giữ nguyên)
+ *   - model free KHÁC → native provider `opencode/<model>` (auth.json key#1).
+ *     Verified 2026-10-09 (matrix test opencode CLI v1.18.35): policy Zen chặn
+ *     HTTP + custom provider (@ai-sdk/openai-compatible) với 403 "free tier can
+ *     only be used from within OpenCode" nhưng CHO PHÉP native provider với
+ *     chính key oc_sk. TRẢ LỜI THẬT: ling-3.1-flash-free, mimo-v2.6-flash-free,
+ *     step-5-preview-free, longcat-2.5-preview-free, big-pickle. CHẾT (loại khỏi
+ *     danh sách agent-constants): nemotron-3.5-lightning-free (treo 5/5),
+ *     jev-1.13-free (UnknownError), muse-spark-1.3 (geo-block). Ghi chú cũ "cần
+ *     opencode auth login account (oauth)" ĐÃ LỖI THỜI — `opencode auth login
+ *     -p opencode` chỉ là dán API key.
  */
 async function callOpenCodeCLIProvider(
   prompt: string,
@@ -4692,22 +4759,27 @@ async function callOpenCodeCLIProvider(
   // Top-level import (sync) để dùng trong child.on('close') callback — không dùng await trong callback.
   const { extractToolCallsWithDiagnostics } = await import('@/lib/tool-calls')
   const fullPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt
-  // MULTI-KEY ROTATION (fix 2026-09-25): opencode.json định nghĩa các provider
-  // alias trùng baseURL https://opencode.ai/zen/v1, khác API key:
-  //   - opencode    → key repo (mặc định, quota riêng)
-  //   - opencode-k1 → ZEN_API_KEY_1   ┐ pool round-robin DÙNG CHUNG với
-  //   - opencode-k2 → ZEN_API_KEY_2   │ Zen HTTP path (getZenKey)
-  //   - opencode-k3 → ZEN_API_KEY_3   ┘ (user thêm key 3 — 2026-10-29b)
-  // Chọn prefix theo pool state → CLI không còn phụ thuộc 1 key duy nhất;
-  // key nào bị HTTP path đánh dấu 429-cooldown sẽ tự bị bỏ qua ở lần spawn sau.
-  // USER DIRECTIVE 2026-10-29b: context đang ghim key (sub-agent) → CLI cũng
-  // dùng đúng alias key đó (opencode-k{i}) — đồng bộ với HTTP path.
-  // Không có env key → dùng alias mặc định `opencode` (auth.json/opencode.json).
-  let cliProviderPrefix = 'opencode'
-  try {
-    const keyInfo = getBoundZenKey() ?? getZenKey()
-    if (keyInfo) cliProviderPrefix = `opencode-k${keyInfo.index + 1}`
-  } catch { /* giữ prefix mặc định */ }
+  // USER REQUEST 2026-10-09 — CHỌN TRANSPORT THEO MODEL (xem docblock trên):
+  //   - space-bunny-free: alias opencode-k1/k2/k3 (custom HTTP xoay key pool —
+  //     MULTI-KEY ROTATION fix 2026-09-25 giữ nguyên: opencode.json định nghĩa
+  //     alias trùng baseURL zen, khác API key; key ghim sub-agent (2026-10-29b)
+  //     → CLI dùng đúng alias key đó, đồng bộ HTTP path; key 429-cooldown tự
+  //     bị bỏ qua lần spawn sau).
+  //   - model free KHÁC (bị Zen chặn HTTP 403 "free tier...from within
+  //     OpenCode"): native provider `opencode/<model>` + auth.json (self-heal
+  //     ensureOpenCodeAuth). Đa key KHÔNG áp dụng được cho native (auth store
+  //     1 credential/provider) — chấp nhận: đây là model phụ trợ, SBF vẫn là
+  //     lõi xoay key chính.
+  const isSbf = model === 'space-bunny-free'
+  let cliProviderPrefix = 'opencode' // native (auth.json) — KHÔNG còn shadow custom ở repo opencode.json
+  if (isSbf) {
+    try {
+      const keyInfo = getBoundZenKey() ?? getZenKey()
+      if (keyInfo) cliProviderPrefix = `opencode-k${keyInfo.index + 1}`
+    } catch { /* giữ native — SBF cũng chạy được qua native nếu không có key pool */ }
+  } else {
+    ensureOpenCodeAuth()
+  }
   const cliModel = `${cliProviderPrefix}/${model}`
 
   console.log(`[OC-CLI] ${taskLabel} — spawn opencode run --model ${cliModel} (bin: ${cliBin})`)
@@ -4967,7 +5039,7 @@ async function callOpenCodeCLIProvider(
         //   Lỗi timeout/hang/spawn KHÔNG cache (có thể tạm thời).
         const raw = rawHead + '\n' + stderr
         if (raw.includes('FreeTierError') || raw.includes('free tier can only be used from within OpenCode')) {
-          markZenFreeTierBlocked('cli', model, 'CLI nhận FreeTierError 403 — model free bị Zen chặn với API key type:api (policy ~2026-09-25; cần `opencode auth login` account hoặc key có credit)')
+          markZenFreeTierBlocked('cli', model, 'CLI nhận FreeTierError 403 trên transport alias — model free phải đi qua native provider (r72 llm.ts đã route; nếu vẫn lỗi ở native thì cache này đúng)', 300_000)
         } else if (raw.includes('RegionError') || /not available in your region/i.test(raw)) {
           markZenFreeTierBlocked('cli', model, 'CLI nhận RegionError — model geo-block tại vùng máy chủ này')
         } else if (/Insufficient (account )?(funds|credits?)/i.test(raw)) {

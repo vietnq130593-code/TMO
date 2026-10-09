@@ -52,7 +52,7 @@ function checkLLMHealthSync(): Record<string, { available: boolean; model: strin
     active: zenStatus.configured,
     error: !zenStatus.configured ? 'No ZEN_API_KEY configured' : undefined,
     note: zenStatus.configured
-      ? `${zenStatus.keyCount} key(s) · ${zenStatus.availableKeys} available · ${zenStatus.rateLimitedKeys} rate-limited · nemotron-3-ultra-free (Omega/Opus/TL) + muse-spark-1.3-contributor-free (generators) + space-bunny-free (SENTINEL/LISMA debug + failover)${blockedNote}`
+      ? `${zenStatus.keyCount} key(s) · ${zenStatus.availableKeys} available · ${zenStatus.rateLimitedKeys} rate-limited · space-bunny-free (lõi chính — HTTP xoay key) + ling-3.1-flash-free / mimo-v2.6-flash-free / step-5-preview-free / longcat-2.5-preview-free / big-pickle (model free khác — qua CLI native, r72)${blockedNote}`
       : undefined,
   }
 

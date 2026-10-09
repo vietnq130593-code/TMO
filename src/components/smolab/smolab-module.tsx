@@ -2034,6 +2034,14 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   const chatScrollRef = useRef<HTMLDivElement | null>(null)
   const isNearBottomRef = useRef(true) // user đang ở cuối chat? → auto-scroll
   const lastScrollTopRef = useRef(0) // chống trigger load-older bởi auto-scroll animation
+  // USER REQUEST 2026-10-09 ("mở phiên cũ → mặc định đứng CUỐI") — tick nhảy
+  // tức thời xuống cuối sau khi loadSessionTail render xong. Smooth-scroll cũ
+  // bị gián đoạn giữa chừng khi DOM thay đổi (merge Thought-Process panel,
+  // markdown render tăng chiều cao) → rơi về ~60px đầu danh sách = user thấy
+  // tin CŨ nhất thay vì tin cuối (bằng chứng browser: scrollHeight 15562px,
+  // scrollTop đậu 60px). Nhảy thẳng (behavior auto) + settle 2 nhịp là cách
+  // xác định vị trí duy nhất không phụ thuộc animation.
+  const [sessionOpenScrollTick, setSessionOpenScrollTick] = useState(0)
 
   // Per-session background tasks: sessionId → AbortController của fetch đang
   // chờ (single chat JSON + team workflow SSE). ĐỔI PHIÊN KHÔNG ABORT — task
@@ -2346,6 +2354,31 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     }
   }, [messages, isLoading])
 
+  // ===== USER REQUEST 2026-10-09 — NHẢY TỨC THỜI XUỐNG CUỐI KHI VỪA MỞ PHIÊN =====
+  // Chỉ kích hoạt bởi đường MỞ/ĐỔI PHIÊN (loadSessionTail non-silent — xem
+  // bump tick trong finally). Các đường silent (heartbeat, refreshAgentRuns,
+  // reload sau khi run nền kết thúc) KHÔNG nhảy — tôn trọng vị trí user đang
+  // đọc; đường run-kết-thúc vẫn dùng smooth ở effect trên (đã ở cuối thì
+  // isNearBottomRef=true, đang đọc cũ thì giữ nguyên).
+  useEffect(() => {
+    if (sessionOpenScrollTick === 0) return
+    const jump = () => {
+      const el = chatScrollRef.current
+      if (!el) return
+      // Instant (không animation) — gán trực tiếp scrollTop của container chat,
+      // không scrollIntoView (cái đó cuộn KÈM các ancestor scrollbar khác).
+      el.scrollTop = el.scrollHeight
+      isNearBottomRef.current = true // đồng bộ cờ stick-to-bottom sau cú nhảy
+    }
+    jump()
+    // Settle 2 nhịp: markdown/code-block/Thought-Process panel render tăng
+    // chiều cao SAU paint + attachSessionGoalLoopJobs chèn panel ~100-400ms
+    // — nhảy lại để chắc chắn đứng đúng cuối cùng.
+    const t1 = setTimeout(jump, 150)
+    const t2 = setTimeout(jump, 450)
+    return () => { clearTimeout(t1); clearTimeout(t2) }
+  }, [sessionOpenScrollTick])
+
   // ===== V1 + 2026-09-01: Load TAIL of messages when switching sessions =====
   // LAZY-LOAD (user request 2026-09-01): chỉ load 3 lượt trao đổi CUỐI. Lượt
   // cũ hơn phải kéo lên đầu khung chat mới load (loadOlderMessages). Phiên dài
@@ -2578,7 +2611,14 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       }
     } finally {
       sessionTailLoadingRef.current = false // TASK 53 — heartbeat hoạt động lại
-      if (!opts?.silent) setLoadingMessages(false)
+      if (!opts?.silent) {
+        setLoadingMessages(false)
+        // USER REQUEST 2026-10-09 — bump tick nhảy xuống cuối (effect kề trên);
+        // cùng batch render với setLoadingMessages(false) → list đã mount khi
+        // effect chạy (trước đây messagesEndRef=null suốt lúc loading →
+        // auto-scroll no-op, sau đó smooth bị gián đoạn → đậu đầu danh sách).
+        setSessionOpenScrollTick(t => t + 1)
+      }
 
       // ===== RESUME TÁC VỤ NỀN (user request 2026-09-01) =====
       // Session này có run đang chạy trên server (agent làm dở lúc user rời
@@ -2699,7 +2739,12 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     isNearBottomRef.current = nearBottom
     const prevTop = lastScrollTopRef.current
     lastScrollTopRef.current = el.scrollTop
-    if (!nearBottom && prevTop > 60 && el.scrollTop <= 60) {
+    // Ngưỡng trigger: user di chuyển LÊN một khoảng thật (prevTop > vị trí hiện
+    // + 40px) và đang ở ≤60px đầu container. Trước đây `prevTop > 60` để lỡ
+    // dead-zone vị trí xuất phát 1-60px (vd đậu ở 60 → kéo lên 0 KHÔNG load).
+    // Trường hợp clamp về 0 khi đổi phiên vẫn an toàn: lastScrollTopRef đã bị
+    // reset 0 bởi effect đổi phiên → 0 > 40 = false → không tự load.
+    if (!nearBottom && prevTop > el.scrollTop + 40 && el.scrollTop <= 60) {
       loadOlderMessages()
     }
   }, [loadOlderMessages])

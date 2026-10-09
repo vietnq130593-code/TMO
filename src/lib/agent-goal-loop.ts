@@ -779,8 +779,8 @@ function buildDelegationProtocol(): string {
   return `
 
 📦 PHÂN CÔNG SUB-AGENT (delegate_task — agent chuyên trách chạy tự chủ):
-- Code Team: RAMPAGE (implement code) · SENTINEL (review/bug/security) · CATALYST (tối ưu/refactor) · SHOCWAVE (thiết kế kiến trúc/DB/API) · MEGATRON (phân tích + verify tổng thể) · FORGE (full-stack builder END-TO-END: UI + API + DB + tự kiểm định + preview verify).
-- Standalone/khác (r60 — A4): ngoài Code Team, delegate_task CŨNG nhận TÊN agent bất kỳ trong Agent Roster (vd ALISTA — nghiên cứu/thu thập dữ liệu, Linh Sickyx — security... ) — hệ thống tự resolve theo tên; KHÔNG còn bị từ chối "không thuộc danh sách" như r59 (khi đó agent phải mò sang dispatch_agent). Chọn agent theo chức trách — tra Agent Roster nếu có tool roster.
+- Code Team: RAMPAGE (implement code) · SENTINEL (review/bug/security) · CATALYST (tối ưu/refactor) · SHOCWAVE (thiết kế kiến trúc/DB/API) · MEGATRON (phân tích + verify tổng thể).
+- Standalone/khác (r60 — A4): ngoài Code Team, delegate_task CŨNG nhận TÊN agent bất kỳ trong Agent Roster (vd ALISTA — nghiên cứu/thu thập dữ liệu, Linh Sickyx — security, FORGE — full-stack builder END-TO-END: UI + API + DB + tự kiểm định + preview verify — agent ĐỘC LẬP theo user directive 2026-10-09) — hệ thống tự resolve theo tên; KHÔNG còn bị từ chối "không thuộc danh sách" như r59 (khi đó agent phải mò sang dispatch_agent). Chọn agent theo chức trách — tra Agent Roster nếu có tool roster.
 - Cú pháp: tool_call: delegate_task({"agent": "RAMPAGE", "task": "Nhiệm vụ cụ thể...", "context": "file liên quan, ràng buộc...", "acceptance_criteria": "điều kiện hoàn thành kiểm định được"})
 - NÊN delegate khi: task cần đọc/sửa NHIỀU file (làm trực tiếp sẽ phình context của bạn), cần chuyên môn sâu, hoặc task giao trọn được cho 1 agent.
 - NÊN delegate khi việc ≥3 bước hoặc đụng ≥2 file; chỉ tự làm việc 1 bước trivial.

@@ -219,35 +219,18 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
       // r71 (BUG2-021/022 — xem note MEGATRON phía trên (CATALYST có sẵn knowledge_write).
       'data_map', 'lessons_search'],
   },
-  {
-    // TASK 43 (user audit "launch full-stack-developer subagent") — FORGE là
-    // builder tổng lực FULL-STACK: nhận spec trọn gói → tự chủ triển khai
-    // END-TO-END (UI + API + DB + kiểm định + preview), khác RAMPAGE (G2-A
-    // thuần implement theo arch spec của G1). Vị trí 'FS' KHÔNG nằm trong
-    // getPositionsInOrder()/pipeline tier-mode → workflow SOP giữ nguyên 5
-    // vị trí cũ; FORGE chỉ được gọi qua delegate_task/dispatch_agent (sub-agent
-    // mini-loop) — đúng semantics "launch full-stack-developer subagent".
-    name: 'FORGE',
-    description: 'FS — Full-Stack Developer. Builder tổng lực: nhận spec trọn gói → tự chủ triển khai end-to-end (UI + API + DB + kiểm định + preview verify).',
-    instruction: '', // Loaded dynamically from getAgentPrompt('FS')
-    domain: 'programming',
-    capable: 'Full-stack Next.js/React/UI components, API routes, Prisma database schema, end-to-end feature delivery, tự kiểm định (lint/type_check/run_tests), chạy preview + browser verify',
-    provider: 'zen',
-    // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note MEGATRON).
-    model: 'space-bunny-free',
-    temperature: 0.3,
-    // TASK 39 (phiên 8) — -1 = unlimited (xem note MEGATRON).
-    maxTokens: -1,
-    team: 'code',
-    position: 'FS',
-    avatar: '🦾',
-    // Toolset = RAMPAGE (builder) + mở rộng full-stack: knowledge_graph, summarize/
-    // synthesize (tổng hợp spec), db_query (Prisma), open_workspace + verify_and_push
-    // (clone-first workflow), git đầy đủ. KHÔNG có delegate/dispatch (depth guard).
-    tools: ['opencode', 'knowledge_search', 'knowledge_graph', 'file_read', 'file_edit', 'file_multi_edit', 'file_write', 'file_delete', 'file_list', 'grep', 'run_tests', 'git_commit', 'git_push', 'git_pull', 'git_status', 'git_diff', 'git_log', 'git_branch', 'get_diagnostics', 'summarize', 'synthesize', 'run_bg', 'read_output', 'kill_process', 'manage_packages', 'gateway_tool', 'shell', 'todo_write', 'todo_read', 'web_search', 'web_fetch', 'gateway_exec', 'gateway_read', 'gateway_write', 'gateway_edit', 'gateway_apply_patch', 'lsp_diagnostics', 'lint', 'type_check', 'test_coverage', 'db_query', 'browser_screenshot', 'mcp_call', 'start_preview', 'stop_preview', 'get_app_runtime_status', 'open_workspace', 'verify_and_push', 'create_custom_tool', 'delete_custom_tool', 'list_custom_tools', 'escalate_problem', 'context_recall', 'list_skills', 'read_skill', 'propose_automation',
-      // r71 (BUG2-019/021/022) — xem note MEGATRON phía trên.
-      'knowledge_write', 'data_map', 'lessons_search'],
-  },
+  // ===== USER DIRECTIVE 2026-10-09 — FORGE ĐÃ TÁCH KHỎI CODE TEAM =====
+  // FORGE là agent ĐỘC LẬP (user: "FORGE là agents độc lập chứ có phải thuộc
+  // team code đâu") — def đã chuyển sang STANDALONE_AGENTS
+  // (src/lib/standalone-agents.ts: team=null, position=null, isSystem=true,
+  // persona FORGE_INSTRUCTION — mirror TASK 48 RAVAGE→Linh Sickyx). Tên giữ
+  // nguyên nên ToolAssignment/SkillAssignment/AgentModelOverride/CronJob keyed
+  // 'FORGE' tự còn đúng; _normalizeForgeToStandalone trong standalone seed dọn
+  // dấu vết team='code'/position='FS' trên AgentProfile DB. Đường giao việc
+  // KHÔNG đổi: delegate_task/dispatch_agent resolve by-name (POSITION_BY_NAME
+  // đã bỏ FORGE — rơi vào nhánh DB-first like ALISTA/Linh Sickyx).
+  // Vị trí 'FS' vốn không nằm trong getPositionsInOrder()/pipeline tier-mode
+  // (TASK 43) — workflow SOP 5 vị trí không đổi.
 ]
 
 // ===== AGENT RENAME MIGRATION (2026-10-16 — user directive) =====

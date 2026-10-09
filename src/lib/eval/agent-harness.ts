@@ -116,10 +116,11 @@ export function getLastHarnessReport(): HarnessReport | null {
 
 /**
  * Resolve agent bất kỳ → SubAgentProfile:
- *   - Code Team (MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/CATALYST/FORGE) →
+ *   - Code Team (MEGATRON/SHOCWAVE/RAMPAGE/SENTINEL/CATALYST) →
  *     resolveAgent(position) (DB-first + fallback hardcoded)
- *   - Agent khác trong DB (Omega/Opus/research/custom) → row AgentProfile
- *     (mirror dispatch_agent của Omega)
+ *   - Agent khác trong DB (Omega/Opus/research/custom/FORGE — user directive
+ *     2026-10-09: FORGE tách khỏi Code Team, resolve by-name như standalone
+ *     khác) → row AgentProfile (mirror dispatch_agent của Omega)
  */
 async function resolveHarnessProfile(agentName: string): Promise<SubAgentProfile> {
   const name = agentName.trim()

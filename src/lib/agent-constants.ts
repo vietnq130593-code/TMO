@@ -37,7 +37,10 @@ export const EXTRACTION_MODELS: Record<string, Array<{ id: string; label: string
   // ZEN (callLLMSlot → nemotron-3-ultra-free, override EXTRACTION_ZEN_MODEL).
   // 2 lõi NIM cũ (nemotron-550b + gpt-oss-120b) đã gỡ — NIM chỉ còn lõi embed.
   zen: [
-    { id: 'nemotron-3-ultra-free', label: 'nemotron-3-ultra-free (extraction chính — zen)' },
+    // r72 (2026-10-09): nemotron-3-ultra-free đã BỎ khỏi catalog Zen (404) →
+    // extraction mặc định space-bunny-free (HTTP xoay key — llm.ts callLLMSlot;
+    // override EXTRACTION_ZEN_MODEL để đổi sang model free khác).
+    { id: 'space-bunny-free', label: 'space-bunny-free (extraction chính — zen)' },
   ],
 }
 
@@ -59,20 +62,23 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string }
   // Factory) KHÔNG tạo được agent zen — mọi agent mới sinh ra đều dính provider
   // nvidia với key chết. Thêm zen + 4 model free ĐÃ VERIFY chạy được (Task 5-7).
   zen: [
-    // 2026-10-28 (user directive PHIÊN 7 — TASK 37, chốt chính sách model zen):
-    //   - TẤT CẢ 13 agents = space-bunny-free (stealth reasoning, ctx 1M /
-    //     out 512k, effort max CAO NHẤT toàn Zen) — model free DUY NHẤT còn mở
-    //     cho oc_sk API key sau policy Zen ~25-26/09 (verified 28/10: mọi model
-    //     free khác → 403 FreeTierError ở cả 2 key, cả HTTP lẫn CLI type:api).
-    //   - Muốn dùng lại nemotron-3-ultra-free / muse-spark / lightning:
-    //     'opencode auth login' (account oauth) trên máy chạy app + đường CLI.
-    //   - NIM đã GỠ khỏi tác vụ agents (Task 33) — NVIDIA_API_KEY chỉ còn dùng cho
-    //     LÕI EMBED (embeddings.ts nemotron-3-embed-1b)
-    { id: 'space-bunny-free', label: 'space-bunny-free (TẤT CẢ agents — phiên 7 + ZEN FAILOVER)' },
-    { id: 'nemotron-3-ultra-free', label: 'nemotron-3-ultra-free (550B MoE — cần opencode auth login)' },
-    { id: 'muse-spark-1.3-contributor-free', label: 'muse-spark-1.3-contributor-free (cần opencode auth login)' },
-    { id: 'nemotron-3.5-lightning-free', label: 'nemotron-3.5-lightning-free (30B MoE — utility; cần auth login)' },
-    { id: 'mimo-v2.6-flash-free', label: 'mimo-v2.6-flash-free (nhẹ; cần auth login)' },
+    // 2026-10-09 (r72 — user request "nhiều model free thay vì chỉ SBF"): matrix
+    // test thực nghiệm opencode CLI v1.18.35 + native provider (auth.json key
+    // oc_sk) — policy Zen chỉ chặn HTTP/custom transport, không chặn native:
+    //   ✅ ĐẠT (trả lời thật): space-bunny-free (lõi chính — HTTP xoay key),
+    //      ling-3.1-flash-free, mimo-v2.6-flash-free, step-5-preview-free,
+    //      longcat-2.5-preview-free, big-pickle (5 model mới qua CLI native —
+    //      llm.ts tự route)
+    //   ❌ ĐÃ LOẠI sau test: nemotron-3.5-lightning-free (treo 5/5 lần — dead
+    //      endpoint), jev-1.13-free (UnknownError server), muse-spark-1.3
+    //      (geo-block "not available in your country"), nemotron-3-ultra-free
+    //      (Zen gỡ khỏi catalog — 404)
+    { id: 'space-bunny-free', label: 'space-bunny-free (LÕI CHÍNH — phiên 7 + ZEN FAILOVER, HTTP xoay key)' },
+    { id: 'ling-3.1-flash-free', label: 'ling-3.1-flash-free (free — verified qua CLI native)' },
+    { id: 'mimo-v2.6-flash-free', label: 'mimo-v2.6-flash-free (free, nhẹ — verified qua CLI native)' },
+    { id: 'step-5-preview-free', label: 'step-5-preview-free (free — verified qua CLI native)' },
+    { id: 'longcat-2.5-preview-free', label: 'longcat-2.5-preview-free (free — verified qua CLI native)' },
+    { id: 'big-pickle', label: 'big-pickle (free — verified qua CLI native)' },
   ],
   nvidia: [
     // TASK 33 (2026-09-27): NIM ĐÃ GỠ khỏi tác vụ agents — provider này giữ lại
