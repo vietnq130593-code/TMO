@@ -532,3 +532,99 @@
 - **Lỗi tự bắt thêm lúc triển khai (đúng giao thức quan sát):** bật đầu tiên bản in-process cache chỉ → API vẫn trống ⚠ → truy ra gốc rễ **Next.js dev nạp llm.ts 2 instance** (worker instrumentation ≠ route — chính goal-loop-worker.ts:1326 đã ghi nhận) → nâng cấp fix r74b: block-state ghi **file dùng chung db/zen-block-state.json** (merge memory+file khi ghi, prune hết hạn, mtime-cache khi đọc, resolve-once đường dẫn tuyệt đối, fail-open 2 chiều). Lợi phụ: process mới khởi động đọc ngay file → không đốt lại HTTP+CLI re-probe cho model đã biết chết sau mỗi restart.
 - **E2E chéo process (bằng chứng mạnh nhất — đúng luồng sản xuất):** restart PM2 (instrumentation nhận code mới, health 200 sau 6s) → chat NEMESIS model=big-pickle (job nền cmv0s7x09…) → worker đánh dấu `http:big-pickle` + `cli:big-pickle` (reason r74 mới) vào file → **`GET /api/agents/models` (process route, memory trống) trả `big-pickle: blockedTransports ["http","cli"]`** → dropdown sẽ hiện ⚠ + hàng mờ + tooltip "sẽ tự chuyển tiếp về space-bunny-free". Job hoàn tất `completed` — trả lời qua ZEN FAILOVER SBF (stopReason=complete, 3 vòng, ChatMessage assistant 400 chars đã lưu) — agent KHÔNG chết, đúng thiết kế nhiều lớp.
 - **Sandbox = bản mới nhất:** PM2 restart tại HEAD sạch; `next dev` hot-reload từ disk → mọi request phục vụ đúng code hiện tại; session bằng chứng giữ lại: `r74-e2e-truth-test`, `r74-e2e-truth-test-2`.
+
+---
+
+# ROUND-75 (phiên 2026-10-09 ~12:00–13:05Z — user: "xác định phiên bản sandbox có mới nhất không + đánh giá so sánh model về CODING và GỌI TOOLS")
+
+> **Ngữ cảnh:** HEAD xuất phát `f25a3c7` (r74) = origin/main. Phiên này là nâng cấp battery đánh giá theo 2 trục user hỏi, phát hiện 1 bug kiến trúc mới + 4 ghi nhận vận hành.
+
+## A. MỤC GHI NHẬN MỚI
+
+### BUG2-034 · F · P1 — Đường CLI native GHÉP 2 BỘ TOOL: model bị nhầm/mừ/tự làm thay — gồm cả side-effect thật vào cây production (bằng chứng battery r75)
+
+- **Cơ chế:** `callOpenCodeCLIProvider` spawn `opencode run --model opencode/X '<sysTMO + prompt>'` với cwd = thư mục app → model nhận system prompt TMO (bộ tool TMO + protocol văn bản `tool_call:`) NHƯNG đồng thời nằm trong harness opencode với bộ tool THẬT của nó (native bash/read/write/glob/grep/task/skill + plugin tmo_* bridge gọi ngược /api/tools/execute). 2 bộ tool song song tồn tại → 4 hành vi lệch chuẩn quan sát được:
+  1. **TỪ CHỐI** (không phát `tool_call:` text vì "tool không có thật"): SBF, ling, step-5, mimo (t2), longcat (t1 v3) — kể cả khi system prompt TMO khai báo tool hợp lệ. SBF trả thẳng: "đó không phải bộ tool thực sự của tôi, nên tôi không thể phát lệnh gọi chúng".
+  2. **GỌI NATIVE BỊ CHẶN**: nemotron-3-ultra phát native tool_call `dispatch_agents_parallel` → opencode chặn "Invalid Tool — tried to call unavailable tool" (nó chỉ chấp nhận registry của chính nó).
+  3. **HIJACK sang tool opencode**: step-5 gọi `task` (subagent của opencode) thay vì dispatch TMO; SBF chạy `which data_map`/`ls` bằng bash khi ở context không-cấu-hình.
+  4. **TỰ LÀM THAY + SIDE-EFFECT THẬT (mạnh nhất)**: SBF nhận nhiệm vụ "giao 2 việc song song (MEGATRON viết unit test hàm đăng nhập, SHOCWAVE kiểm tra hiệu năng)" → KHÔNG phát `dispatch_agents_parallel` — tự dò codebase bằng tmo_grep/tmo_file_read (8+ lượt tool thật: tìm handler login, đọc src/lib/api-auth.ts, src/app/api/auth/setup…) rồi **TỰ VIẾT 553 dòng test thật vào cây production** (`tests/login-auth-handler.test.ts` 325 dòng + `tests/login-auth-token.test.ts` 228 dòng — nội dung đúng pattern repo, mô tả chính xác cơ chế token 2 tầng thật). Đã dọn 2 file (rác battery) nhưng cùng cơ chế này, agent production override model qua dropdown hoàn toàn có thể ghi file trực tiếp ngoài tầng audit ToolMetric của TMO.
+- **Ngữ cảnh quyết định hành vi:** (a) /tmp trống config → 5/8 model từ chối tool TMO; (b) cwd=tmo-app (sản xuất — permission edit/bash deny + plugin tmo_*) → model bơi vào tmo_*/native làm thật; (c) `--agent tmo` (config agents.tmo với tools: false hết) → SBF ĐỔI NGAY sang phát protocol văn bản `tool_call: data_map(...)` PASS clean (26.4s) — fix hợp lệ.
+- **Fix đề xuất (chưa triển khai — cần thiết kế cẩn thận):** định nghĩa agent chuyên vận chuyển trong repo opencode.json (ví dụ `agents.tmo`) với **chỉ** bộ tool cần thiết của inner-loop (tmo_* bridge + native write/read/bash mà inner-loop dùng — xem llm.ts:133 "native write/bash/read + tmo_* bridge") tắt phần còn lại (task/skill/webfetch/websearch/glob/grep…), rồi `callOpenCodeCLIProvider` thêm `--agent tmo`. CẢNH BÁO: KHÔNG tắt sạch mọi tool như bản thử nghiệm (battery đã chứng minh tắt sạch thì SBF phát văn bản PASS, nhưng inner-loop CLI của goal-loop đang dựa native write/bash/read để THỰC THI công việc — tắt sai sẽ giết chu kỳ thực thi). Cần rà _tmo-common.ts + inner-loop để chốt danh sách tool giữ lại. Bỏ ngỏ chờ phiến kế tiếp (lộ trong review r75 — ưu tiên trước khi cho agent override model free qua dropdown chạy mission thật).
+- **Bảng chứng:** /tmp/oc-r75b-*.log, /tmp/oc-r75c-*.log, /tmp/oc-r75d-*.log (raw từng phép); /tmp/oc-battery-r75{b,c,d}.{json,md}; script tái lập /home/z/my-project/oc-battery-r75{,b,c,d}.ts + /tmp/oc-matrix-now.sh.
+
+### GHI-NHẬN-r75-a · Policy flap Zen LẦN THỨ 5 (mở ~12:15–12:33Z → đóng ~12:35Z)
+- Matrix 12:19Z: **7/8 model free ALIVE qua CLI native** (SBF, big-pickle, ling, longcat, mimo, nemotron-ultra, step-5 trả lời OK; chỉ nemotron-3.5-lightning treo boot) — đối chiếu r74 09:30Z toàn 403 → cửa ĐÃ MỞ LẠI trong khung 12:15-12:33Z.
+- Battery r75d ~12:35Z: mọi phép CLI từ app-dir + agent-dir → 403 FreeTierError trở lại → cửa ĐÓNG chỉ ~18 phút sau.
+- **Không cần hành động:** thiết kế r74 (block-cache TTL 60s/300s + dropdown refetch khi mở + badge ⚠ runtime) tự thích ứng đúng — flap nhanh ở mức phút cũng chỉ là 1 vòng re-probe. Xác nhận thêm tính đúng đắn của quyết định r74 "trạng thái sống phải là số liệu runtime, không hardcode".
+
+### GHI-NHẬN-r75-b · ENOSPC — ổ đĩa sandbox 100% ĐẦY (0 byte trống) giữa battery
+- Hiện tượng: CLI thoát exit-1 trong ~8ms với log 0 byte hàng loạt + bun crash "ENOSPC: no space left on device" khi ghi /tmp — df: 9.4G/9.9G used.
+- Gốc rễ: **~/.bun/install/cache chiếm 4.2GB** (cache cài đặt tích luỹ) + .next 2.0GB + scaffold my-project 1.5GB + rác probe /tmp ~450MB (r74-home 164M, oc-home-test 163M — probe HOME-cô-lập sinh ra bản sao state opencode đầy đủ).
+- Đã xử lý: `bun pm cache rm` + dọn /tmp probe cũ → **giải phóng 1.4GB (86% used)**.
+- Rủi ro treo: app đang chạy với đĩa sát ngưỡng có thể chết NGẦM khi ghi ChatMessage/attachment/session (SQLite WAL) — tmo-keepalive chỉ ping HTTP, KHÔNG theo dõi đĩa. Đề xuất (bỏ ngỏ): thêm disk-guard vào keepalive/MemWatchdog (cảnh báo + tự dọn bun cache khi >95%).
+
+### GHI-NHẬN-r75-c · `opencode run` treo 0 byte khi stdin là pipe không có EOF
+- Probe chạy foreground thừa kế stdin pipe từ harness → CLI chờ TTY mãi mãi (8/8 treo rc=137 dù door đang mở). Chạy `... < /dev/null` (hoặc spawnSync không stdin) → hoàn tất bình thường. Ghi chú phương pháp luận cho mọi probe CLI tương lai (r73/r74 matrix từng chạy foreground ổn — hành vi stdin của harness khác nhau từng phiên; luôn chốt stdin explicitly).
+
+### GHI-NHẬN-r75-d · nemotron-3.5-lightning-free: chậm + boot flaky hôm nay
+- Matrix 12:19Z treo boot (2/2 lần); battery t2 cần >90s (đang phát ĐÚNG `tool_call: dispatch_agents_parallel` khi bị kill ở 90s — output một nửa); t3 coding mất 72.8s. Đối lập r73 (matrix OK). Khuyến nghị: giữ trong catalog nhưng không đưa vào pool failover/last-resort (hiện pool = ling/mimo/big-pickle — đã đúng).
+
+## B. ĐÁNH GIÁ SO SÁNH MODEL — CODING & GỌI TOOLS (mục 2 user)
+
+**Nguồn:** battery r73 2 tầng (khi cửa mở 06:00Z) + battery r75 b/c/d hôm nay (matrix 12:19Z + drill format + context sản xuất + --agent fix test + HTTP). Tất cả output thô giữ ở /tmp.
+
+### Trục CODING (2 nguồn độc lập)
+| Model | r73 basic (bun chạy thật 4 case) | r73 hard (romanToInt 6 case) | r75 LRU-146 (LeetCode, 6 assert bun chạy thật) | Tốc độ coding |
+|---|---|---|---|---|
+| space-bunny-free | ✅ 12/12 case | ✅ | ✅ 4.9s | ⚡ nhanh nhất |
+| big-pickle | ✅ | ✅ | ✅ 6.0s | ⚡⚡ |
+| mimo-v2.6-flash-free | ✅ | ✅ | ✅ 9.9s | ⚡ |
+| longcat-2.5-preview-free | ✅ | ✅ | ✅ 9.1s | ⚡ |
+| nemotron-3-ultra-free | ✅ | ✅ | ✅ 8.6s | ⚡ |
+| ling-3.1-flash-free | ✅ | ✅ | ✅ 17.3s | trung bình |
+| step-5-preview-free | ✅ | ✅ | ✅ 25.0s | chậm |
+| nemotron-3.5-lightning-free | ✅ | ✅ | ✅ 72.8s | chậm nhất |
+
+→ **Coding: 8/8 đạt cả 2 tầng khó** — khác biệt nằm ở TỐC ĐỘ (4.9s ↔ 72.8s, chênh 15 lần) và độ tin cậy boot (nemotron-3.5 flaky).
+
+### Trục GỌI TOOLS (phân theo transport — quyết định hành vi)
+| Model | HTTP text-protocol (đường sản xuất) | CLI context trần (/tmp) | CLI + sysprompt TMO | CLI --agent tmo (tools tắt) |
+|---|---|---|---|---|
+| space-bunny-free | ✅✅ T1+T2 PASS clean 2.7-3.3s (+ track record r67-r74) | ❌ từ chối + chạy bash dò môi trường | ❌ từ chối ("tool không thật") | ✅ T1 PASS clean 26.4s (đổi hành vi!) · T2 vẫn từ chối |
+| big-pickle | (403) | ❌ từ chối | ✅ T2 PASS clean 7.2s | (403 door đóng) |
+| mimo-v2.6-flash-free | (403) | ❌ từ chối | ✅ T1 PASS clean 5.9s · T2 ❌ | (403) |
+| longcat-2.5-preview-free | (403) | ✅✅ PASS clean (drill thẳng) | ❌ T1 (đổi chiều khi có sysprompt!) | (403) |
+| nemotron-3-ultra-free | (403) | ✅✅ PASS clean (drill thẳng) | ⚙️ phát NATIVE bị opencode chặn | (403) |
+| nemotron-3.5-lightning-free | (403) | ✅ (chậm, >90s) | (chậm — đúngformat khi đủ giờ) | (403) |
+| ling-3.1-flash-free | (403) | ❌ từ chối | ❌ từ chối | (403) |
+| step-5-preview-free | (403) | ❌ từ chối | ❌ hijack sang tool `task` | (403) |
+
+**Đọc bảng:**
+- **Tool-calling ỔN ĐỊNH NHẤT = space-bunny-free trên đường HTTP** (đường sản xuất của nó): PASS cả 2 phép clean + hàng trăm tool call thật qua 8 round mission — đó là lý do nó là lõi chính. Trên đường CLI nó bị context opencode kéo lệch hoàn toàn (từ chối hoặc tự làm thay).
+- **big-pickle = ứng viên mạnh nhất cho vai agent tool-user khi cửa CLI mở**: duy nhất phát protocol văn bản chuẩn ngay trong context hỗn hợp (T2 PASS clean 7.2s) + coding nhanh nhất nhì + battery r73 JSON schema lồng chuẩn nhất.
+- **mimo**: đúng format khi sysprompt rõ (T1 PASS 5.9s) nhưng không nhất quán (T2 từ chối) — hợp vai tiện/hợp tác vụ nhẹ.
+- **nemotron-ultra + longcat**: tuân theo mệnh lệnh trực tiếp tốt (drill thẳng → PASS clean ngay) nhưng dễ bị context kéo lệch (native blocked / đổi chiều với sysprompt) — hợp vai phân tích khi prompt điều khiển chặt.
+- **ling + step-5**: coding đạt nhưng gọi tool cần ngữ cảnh sạch (đường HTTP hoặc --agent tách tool) — hiện không có đường HTTP (403).
+- **Bằng chứng agentic thật đặc biệt (SBF, cwd app):** nhận nhiệm vụ giao việc → tự dò codebase 8+ lượt tool thật (tmo_grep/tmo_file_read) → tự viết 553 dòng test khớp cơ chế auth thật của repo (token 2 tầng, không bcrypt) — năng lực agent thật rất cao nhưng **trên kênh sai** (vi phạm giao thức phân quyền TMO, ngoài audit ToolMetric) — chính là nội dung BUG2-034.
+
+### Khuyến nghị tổng hợp theo vai (điểm nhấn mới so với r73)
+1. **Lõi chính mọimission**: giữ space-bunny-free (HTTP xoay key + failover nhiều lớp — không thay đổi).
+2. **Override đa dụng khi cửa CLI mở**: big-pickle (duy nhất giữ protocol văn bản chuẩn trong context hỗn hợp).
+3. **Tiện ích nhẹ nhanh**: mimo-v2.6-flash-free.
+4. **Phân tích sâu/khối lượng lớn**: nemotron-3-ultra-free (chấp nhận chậm reasoning 33.5s).
+5. **Hạ cảnh giác**: nemotron-3.5-lightning (chậm + flaky boot hôm nay); ling/step-5 chỉ dùng khi có đường ngữ cảnh sạch.
+6. **TRƯỚC KHI mở override model free cho mission thật**: cần chốt fix BUG2-034 (agent chuyên vận chuyển với bộ tool được tuyển) — nếu không, agent override có thể tự làm thay việc của agent khác + ghi file ngoài audit.
+
+## C. KIỂM TRA PHIÊN BẢN (mục 1 user)
+- `git fetch origin` 12:05Z: HEAD `f25a3c7` = origin/main, working tree sạch, 0 stash → **sandbox ĐANG CHẠY BẢN MỚI NHẤT** (không cần pull — r74 đã push đúng bản này).
+- PM2 theopusflashlite uptime khớp restart sau commit r74 (09:47:11Z); `next dev` hot-reload từ đĩa; health 200; mini-services opencode-server 18790 (401 đúng thiết kế) + cron-scheduler 3004 + gateway on-demand — đúng thiết kế service-manager.
+- Gate r74 lần gần nhất PASS 63.2s (595/595) — không đổi code lõi trong phiên này (chỉ Bug_v2.md + dọn rác probe).
+
+## D. Nghiệm thu ROUND-75
+- Battery 4 đợt (v1 bỏ — lỗi runner nuốt chẩn đoán; v2/v3/v4 giữ): 60+ lượt gọi model thật qua 3 context (/tmp trần, cwd app sản xuất, --agent tmo cô lập) + 2 phép HTTP SBF — mọi kết quả có log raw + JSON/MD tổng hợp tại /tmp/oc-*.
+- Side-effect battery đã dọn sạch (2 file test SBF tự viết — xem BUG2-034) — working tree về sạch trước commit.
+- ENOSPC xử lý xong (1.4GB tự do) — app chạy liên tục qua toàn bộ phiển (health 200, không lỗi SQLIte/ghi file trong log).
+- Không đổi code lõi → không cần chạy gate toàn phần; commit phiên này chỉ Bug_v2.md.
+
+### GHI-NHẬN-r75-e · [Episodic] upsertEpisodeEmbedding failed: Internal Server Error (2 lần duy nhất, đúng phiên này)
+- Chuỗi: NVIDIA embed passage ✓ (2048d sinh vector OK) → upsert Qdrant trả 500 "Internal Server Error" → episode VẪN được ghi (fail-open đúng thiết kế). 2/2 lần quanh cửa sổ sub-agent SHOCWAVE episode + r71-harvest DelegationLesson. Tần suất thấp (2 lần toàn bộ dev.log) — giữ watch; nếu lặp lại ở mission kế → điều tra collection Qdrant (có thể dính ảnh hưởng từ gián đoạn dưới tải khi battery chạy song song + ENOSPC giai đoạn 100% đầy).
