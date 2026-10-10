@@ -136,9 +136,22 @@
 - Sai kì vọng phía người rà: 1 đợt (3 phép tay — lần 8).
 - Live: PM2 restart sạch ×2, /api/health healthy, /api/eval/calibration modelV2 đúng hành vi, KPI 10 mục có digest_gate_fallback_rate, probe 3-judge kimi-k3 thật 767s → scores [0.6, 0.7, 0.6] median 0.6 ≥ 0.5 KHÔNG downgrade (đúng kỳ vọng), browser 0 lỗi.
 
-### TỔNG KẾT LŨY KẾ 5 ĐỢT (FB-P0 → FB-ĐỢT5)
+### ĐỢT FB-ĐỢT6 — scope P4-M2 + P4-M1 đợt 6 (commits b454377 + 0348c8c: AgentRunRecord.model + metrics-db 3 hàm + goal-loop/subagent call-sites + model-comparison.ts + route /api/eval/model-comparison + adaptation-stats.ts + applyAdaptationToSession gate + workflow wiring + 2 test r77 38 test) — 2026-10-11 — KHÉP KẾT SAU 3 VÒNG
 
-- **23 phát hiện** thu nhận qua giao thức — 22 fix ngay trong đợt + 1 (BUG2-043) chốt bằng user decision; **100% có entry Bug_v2.md** sau tái cơ cấu (BUG2-039..043 tạo/sự-kiện khi chạy + BUG2-044..061 bổ sung đủ).
+| Vòng | Phát hiện mới | Xác minh |
+|---|---|---|
+| R1 | **1** (D·P4 — comment nhánh defensive-NaN mô tả sai cơ nhân) — harness độc lập 169 phép (Φ A&S 26.2.17 rational / Fisher BigInt tổ hợp chính xác / Welch + F-density Simpson + Lanczos Γ / Wilson viết lại) + fuzz 30 bảng adaptation + 10 fuzz model-table + đối chiếu spec 3 kịch bản | Fix comment (A7 pin sẵn hành vi) → gate PASS |
+| R2 | **1** (C·P3 — row SAL bị gate chặn vẫn đóng successful → ô nhiễm evidence các lần gate sau) + rà đối xứng + nghịch lý luồng | Fix statsJson.applied + evidence lọc applied=false + 2 regression test → gate PASS |
+| R3 | **0** → KHÉP KẾT | Harness 169/169 + test 40/40 r77 + gate **842/842** (802→842, +40 đợt 6) |
+
+- Phát hiện: FB-Đợt6-R1-01 + FB-Đợt6-R2-01 → **BUG2-062, BUG2-063**.
+- Sai kì vọng phía người rà (lần 9): 3 bug chính harness (Φ nhân thừa t; BigInt chia cắt nguyên từng phép; Simpson tính CDF rồi so đuôi p) + 4 kì vọng test ban đầu (đếm rows, F>100 tay ra 90.05, tolerance 1e-15, seed hằng làm welch degenerate) — code đúng cả, chấm chéo bằng giá trị tay + phương pháp thứ ba TRƯỚC khi kết luận.
+- Live: PM2 restart sạch; E2E run thật qua durable goal-loop (Omega/space-bunny-free) ghi model='space-bunny-free' ngay từ row running + giữ qua update cuối; route /api/eval/model-comparison 200 (nWithModel=1); probe gate trên production DB 0 tiền sử → insufficient fail-open đúng spec; ADAPTATION_STATS_GATE mặc định OFF (log-only); browser 0 lỗi page/console (Agents tab click OK).
+- Điểm chờ user (đúng điểm dừng quyết định #3 blueprint): bật ADAPTATION_STATS_GATE=on sau 2 đợt quan sát log — KHÔNG tự ý bật.
+
+### TỔNG KẾT LŨY KẾ 6 ĐỢT (FB-P0 → FB-ĐỢT6)
+
+- **25 phát hiện** thu nhận qua giao thức — 24 fix ngay trong đợt + 1 (BUG2-043) chốt bằng user decision; **100% có entry Bug_v2.md** (BUG2-039..043 tạo/sự-kiện khi chạy + BUG2-044..061 bổ sung theo tái cơ cấu 1.1 + BUG2-062..063 đợt 6).
 - Mọi đợt khép đúng nhịp **3 vòng** (R3 luôn 0 phát hiện mới) — chưa đợt nào chạm trần 5 vòng của ràng buộc an toàn.
-- **22 phép sai-kỳ-vọng-phía-người-rà** ghi nhận qua 5 đợt (FB-P0: 11 · FB-P1: 1 · Đợt3: 1 · Đợt4: 6 · Đợt5: 3) — chuỗi tái bản dài tới "lần 8" (đợt 5), xác nhận giá trị quy tắc chấm chéo 3 phía (C2).
-- Gate kiểm thử tăng đều: **644 → 671 → 683 → 722 → 802** test (mỗi fix kèm regression — không nợ xác minh).
+- **29 phép sai-kỳ-vọng-phía-người-rà** ghi nhận qua 6 đợt (FB-P0: 11 · FB-P1: 1 · Đợt3: 1 · Đợt4: 6 · Đợt5: 3 · Đợt6: 7) — chuỗi tái bản tới "lần 9" (đợt 6), xác nhận giá trị quy tắc chấm chéo 3 phía (C2).
+- Gate kiểm thử tăng đều: **644 → 671 → 683 → 722 → 802 → 842** test (mỗi fix kèm regression — không nợ xác minh).
