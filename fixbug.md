@@ -144,4 +144,18 @@ Sai kì vọng phía người rà (ghi nhận): 1/11 nhóm kiểm chứng FAIL l
 
 **Baseline P1-M2 ghi nhận sau fix (run cmv29vh180001na7dkz82772i, 3 case = 2 security + 1 negative trên KB 1 document đã reconcile + embed lại):** avgRecall@5=0.667 · **avgNdcg@5=0.626** · **avgMrr=0.667** (per-case: 0.877/1.000/0.000 — case negative 0 đúng thiết kế). Faithfulness=0.333 KHÔNG đáng tin (1/3 judge sống — BUG2-043). Thỏa kiểm chứng blueprint: eval run mới có avgNdcg/avgMrr ≠ 0; nDCG ∈ [0,1].
 
-**Vòng R2 — rà lại toàn bộ scope (kể cả 7 file vừa fix):** xem mục dưới (cập nhật sau vòng).
+**Vòng R2 — rà lại toàn bộ scope (kể cả 7 file vừa fix):**
+- Chạy lại harness 11 nhóm trên code đã fix (relevance precompute đổi code): **11/11 PASS**.
+- Quét tham số đối xứng toàn bộ hàm mới (windowDays 2 tầng route/lib, lookbackDays 2 tầng, clamp kẹp đúng; agentName null → 'unknown'; byAgent phân vùng đầy đủ) — 0 phát hiện mới.
+- Nghiệm thu live sau restart: scorecard n=0 + note đúng · KPI no_data đúng ngữ nghĩa (5 KPI n=0 → no_data; eval_ndcg 0.626 n=3 baseline hiện diện; kb_fallback_rate 0.667 n=3 đo thật) · scan trên DB sạch scanned=0.
+- Dọn nốt 13 MetricAnomaly ARTIFACT (sinh từ test data đã bị xoá ở R1 — dữ liệu nguồn không còn thì anomaly không còn nghĩa) → scan lại 0/0. Ghi nhận bài học vận hành: xoá dữ liệu nguồn phải kèm xoá anomaly dẫn xuất.
+- Kiểm tra import cũ tham chiếu runner/normalize — nhất quán (runner tự import relevance; không chỗ nào khác import hàm đã chuyển).
+- Cấu trúc file guard shr (RUN_HTTP_E2E) + cleanup protected-paths chạy qua gate PASS — không vỡ.
+
+**Vòng R3 — xác nhận cuối:**
+- Đọc lại full diff đợt 2 (efefb80..ebea23d + biên bản: 22 file, ~2240 dòng thêm) — mọi fix đúng vị trí, không đổi chữ kí công khai, hành vi hợp lệ giữ nguyên.
+- Gate cuối: **PASS toàn bộ 51.7s — 671/671 test / 38 file** (đếm độc lập: DATABASE_URL đúng TMO + bun test 671 pass 0 fail; lưu ý `bun test` trực tiếp từ shell với DATABASE_URL scaffold cho 3 fail giả — đúng nguyên tắc 'KHÔNG bun test trực tiếp', gate là nguồn sự thật).
+- Checklist C1-C8: C1 khớp spec blueprint P1-M1..M4 từng dòng · C2 toán chấm chéo 11 nhóm độc lập + comparator thứ ba · C3 edge-case (zero-state/clamp/n<20/idempotent/prune/n=0) có test · C4 gate 4 tầng PASS · C5 mỗi module có test r76 riêng + mỗi fix R1 có kiểm chứng (live hoặc test) · C6 Bug_v2 041-043 + biên bản đầy đủ · C7 import/runner/overview không vỡ (671 test + live) · C8 0 CJK, 0 console.log mới, git status sạch.
+- **KẾT LUẬN R3: 0 phát hiện mới → đạt cả 3 tiêu chí dừng → ĐỢT FB-P1 KHÉP KẾT sau 3 vòng.**
+
+**Nghiệm thu đợt FB-P1:** 6 phát hiện R1 (2 G·P2/P1 + 1 G·P1 chờ-user + 2 C·P3 + 1 H·P3) — 5 fix ngay + 1 (BUG2-043 model matrix) chuyển điểm dừng quyết định user theo giao thức; 1 false-alarm comparator ghi nhận (lần 5); gate PASS 4 tầng 51.7s (671 test); 3 entry Bug_v2 mới (041, 042, 043); baseline P1-M2 thật được ghi (avgNdcg@5=0.626 / avgMrr=0.667 / avgRecall@5=0.667, n=3) sau khi tháo nghẽn 410; không để lại việc hoãn nào trong scope.
