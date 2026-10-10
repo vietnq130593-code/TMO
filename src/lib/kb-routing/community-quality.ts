@@ -99,6 +99,11 @@ export interface GammaSweepResult {
  * hoạch, chọn γ maximizing silhouette (tie-break: modularity cao hơn; tiếp
  * theo γ nhỏ hơn — ít community hơn ổn định hơn).
  *
+ * Cơ chế tie-break "γ nhỏ hơn" (FB-Đợt3 R1-02 làm tường minh): với cùng một
+ * phân hoạch, Q giảm nghiêm ngặt theo γ (Q = Σ[2e_c/2m − γ·d_c²/(2m)²]) nên
+ * bậc modularity tự chọn γ nhỏ trong đám same-silhouette; bậc 3 so γ trực
+ * tiếp cho trường hợp tie tuyệt đối (grid có γ trùng lặp / trùng số ngẫu nhiên).
+ *
  * THUẦN: không I/O — trả đủ nodeCommunity của best để caller khỏi chạy lại.
  */
 export function sweepGamma(
@@ -118,6 +123,9 @@ export function sweepGamma(
       best === null
       || silhouette > best.silhouette
       || (silhouette === best.silhouette && result.modularity > best.modularity)
+      // FB-Đợt3 R1-02: bậc 3 — γ nhỏ hơn thắng tie tuyệt đối (đúng JSDoc cho
+      // MỌI thứ tự grid, kể cả descending / trùng lặp)
+      || (silhouette === best.silhouette && result.modularity === best.modularity && gamma < best.gamma)
     ) {
       best = {
         gamma,

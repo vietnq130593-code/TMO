@@ -109,7 +109,7 @@ function buildHierarchicalGraph(): { n: number; edges: LeidenEdge[] } {
 // ==================== SILHOUETTE (ĐỒ THỊ) ====================
 
 describe('P1-M5 evaluateCommunityQuality (silhouette đồ thị)', () => {
-  test('3 clique rõ → silhouette ≈ 0.879 (tính tay)', () => {
+  test('3 clique rõ → silhouette ≈ 0.9697 (tính tay — 9 node s=1.0 + 3 node cầu s=0.8788)', () => {
     const { n, edges } = buildThreeCliques()
     const result = leidenCommunityDetection(n, edges, { restarts: 3, resolution: 1.0 })
     // Leiden phải tìm đúng 3 planted communities
@@ -160,11 +160,36 @@ describe('P1-M5 sweepGamma (auto-tune γ)', () => {
     // best.silhouette = max trên candidates (tính nhất quán)
     const maxSil = Math.max(...sweep.candidates.map(c => c.silhouette))
     expect(sweep.best.silhouette).toBe(maxSil)
-    // Trên planted 3-clique, phân hoạch 3 cụm cho silhouette ~0.879 —
+    // Trên planted 3-clique, phân hoạch 3 cụm cho silhouette ~0.9697 —
     // γ chọn phải đạt mức đó (γ sai có thể xé nhỏ clique → silhouette tụt)
     expect(sweep.best.silhouette).toBeGreaterThan(0.75)
     // nodeCommunity của best dùng lại được (đúng độ dài, id liên tục)
     expect(sweep.best.nodeCommunity.length).toBe(n)
+  })
+
+  test('FB-Đợt3 R1-02: grid DESCENDING — γ nhỏ nhất trong đám max-sil thắng (đúng JSDoc mọi thứ tự grid)', () => {
+    // Graph đối xứng 2 clique K4: mọi γ cho cùng phân hoạch → cùng silhouette.
+    // Cùng phân hoạch ⇒ Q giảm nghiêm ngặt theo γ (Q = Σ[2e_c/2m − γ·d_c²/(2m)²])
+    // → tie-break modularity chọn γ NHỎ NHẤT — kể cả khi grid duyệt theo thứ tự
+    // descending (bậc 3 so γ trực tiếp của FB-Đợt3 R1-02 bắt tie tuyệt đối
+    // trùng số). Khẳng định JSDoc "rồi γ nhỏ hơn cho ổn định" cho MỌI grid.
+    const edges: LeidenEdge[] = []
+    for (let c = 0; c < 2; c++) {
+      const base = c * 4
+      for (let i = 0; i < 4; i++) {
+        for (let j = i + 1; j < 4; j++) edges.push({ source: base + i, target: base + j, weight: 2 })
+      }
+    }
+    const sweep = sweepGamma(8, edges, { restarts: 2, grid: [1.5, 1.2, 1.0, 0.8, 0.5] })
+    const maxSil = Math.max(...sweep.candidates.map(c => c.silhouette))
+    const amongMax = sweep.candidates.filter(c => c.silhouette === maxSil)
+    expect(sweep.best.gamma).toBe(Math.min(...amongMax.map(c => c.gamma)))
+    // Grid trùng lặp γ: tie tuyệt đối (cùng sil + cùng Q) — γ vẫn chọn được
+    // xác định (giá trị γ duy nhất, không phụ thuộc thứ tự)
+    const dup = sweepGamma(8, edges, { restarts: 2, grid: [1.0, 1.0, 0.5] })
+    expect(dup.candidates.length).toBe(3)
+    expect(LEIDEN_GAMMA_GRID).toContain(dup.best.gamma) // giá trị hợp lệ
+    expect(dup.best.gamma).toBeLessThanOrEqual(1.0) // không lớn hơn mọi γ hợp lệ trong đám thắng
   })
 
   test('hierarchical graph: sweep hoạt động (γ thuộc grid, best ≥ mọi candidate, k thay đổi theo γ)', () => {
