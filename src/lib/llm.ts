@@ -355,6 +355,28 @@ const NVIDIA_AGENT_MODELS = [
 export const KIMI_K3_NIM_ID = 'moonshotai/kimi-k3'
 
 /**
+ * KIMI-K3 TIMEOUT RIÊNG (user directive 2026-12-01: "kimi-k3 là siêu model
+ * nên chậm là bình thường, dù sao hệ thống được xây dựng để các agents vận
+ * hành liên tục hàng tiếng đồng hồ... nên có chậm vài phút tôi chẳng quan
+ * tâm").
+ *
+ * Live 2026-11-30 (task-85 E2E): kimi-k3 ~120s cho prompt tối giản, ~2-6 phút
+ * cho agent cycle context lớn (42k token) — call chậm-hợp-lệ bị base timeout
+ * 240s (LLM_TIMEOUT_MS) giết giữa chừng → đếm TIMEOUT-STRIKE → breaker trip
+ * oan → ép fallback space-bunny-free dù model đang sống. Base timeout riêng
+ * cho ĐÚNG KIMI_K3_NIM_ID: 600s (10 phút — dư dả cho 2-6 phút quan sát được;
+ * env KIMI_K3_TIMEOUT_MS, floor 60s). Model NIM khác (nemotron-550b
+ * extraction ~5s live) giữ LLM_TIMEOUT_MS. Áp dụng tập trung tại
+ * callModelWithKeyRotation (mọi đường kimi-k3 — agent callLLMForAgent, judge
+ * callLLM override — đều qua đây). Budget xoay key 15' (KEY_ROTATION_BUDGET_MS)
+ * giữ nguyên: hang thật vẫn bị cắt trong 15' rồi fallback Zen.
+ */
+const KIMI_K3_TIMEOUT_MS = Math.max(
+  parseInt(process.env.KIMI_K3_TIMEOUT_MS || '600000', 10) || 600_000,
+  60_000,
+)
+
+/**
  * NVIDIA_MODELS (updated 2026-11-30): = NVIDIA_AGENT_MODELS (1 lõi chat —
  * kimi-k3, lựa chọn NIM tạm thời). nemotron-3-ultra-550b KHÔNG thuộc danh
  * sách này — lõi extraction duy nhất (NVIDIA_EXTRACTION_MODELS).
@@ -2537,7 +2559,10 @@ export function getModelBlockBreakers(): Array<{ model: string; blockedUntil: nu
 // TASK 33 (2026-09-27): default OFF. 2026-11-30 UPDATE: NIM mở lại 2 vai trò
 // (extraction nemotron-550b + agent kimi-k3 tạm thời) → prober giờ probe ĐÚNG
 // các lõi NIM đang dùng (probeTargets bên dưới). Bật bằng LLM_MODEL_PROBER=true
-// để trip breaker nền cho lõi hang (kimi-k3 hay hang kéo dài ~120s/call).
+// để trip breaker nền cho lõi hang thật (0-byte). Lưu ý 2026-12-01: kimi-k3
+// chậm ~120s/call là trạng thái BÌNH THƯỜNG (siêu model — user directive
+// "chậm là bình thường... có chậm vài phút tôi chẳng quan tâm"), KHÔNG phải
+// hang → probe kimi-k3 dùng floor 300s (probeTimeoutFor) để không trip oan.
 const PROBER_ENABLED = (process.env.LLM_MODEL_PROBER ?? '0').trim().toLowerCase() === 'true'
 const PROBE_INTERVAL_MS = Math.max(60_000, parseInt(process.env.LLM_PROBE_INTERVAL_MS || '300000', 10) || 300_000)
 const PROBE_TIMEOUT_MS = Math.max(10_000, parseInt(process.env.LLM_PROBE_TIMEOUT_MS || '90000', 10) || 90_000)
@@ -2554,6 +2579,17 @@ function probeTargets(): string[] {
   return [...new Set(targets)]
 }
 
+/** Probe timeout theo model — kimi-k3 chậm-hợp-lệ ~120s/call (live
+ *  2026-11-30; directive 2026-12-01 "chậm là bình thường") nên probe 90s
+ *  mặc định sẽ trip breaker oan model đang sống. Floor riêng 300s cho đúng
+ *  KIMI_K3_NIM_ID (env KIMI_K3_PROBE_TIMEOUT_MS); model khác giữ
+ *  PROBE_TIMEOUT_MS (nemotron-550b ~5s live — 90s dư dả). */
+function probeTimeoutFor(model: string): number {
+  return model === KIMI_K3_NIM_ID
+    ? Math.max(PROBE_TIMEOUT_MS, parseInt(process.env.KIMI_K3_PROBE_TIMEOUT_MS || '300000', 10) || 300_000)
+    : PROBE_TIMEOUT_MS
+}
+
 /** Probe 1 model bằng request nhỏ. Trả về 'ok' | 'hang' | 'skip' (transient). */
 async function probeModelOnce(model: string, slot: number): Promise<'ok' | 'hang' | 'skip'> {
   const pool = nvidiaPool
@@ -2562,6 +2598,7 @@ async function probeModelOnce(model: string, slot: number): Promise<'ok' | 'hang
   const keyInfo = pool.getKeyByIndex(slot % MAX_KEYS)
   if (!keyInfo || !keyInfo.key) return 'skip'
   const startedAt = Date.now()
+  const probeTimeoutMs = probeTimeoutFor(model)
   let attempt: Awaited<ReturnType<typeof attemptNvidiaOnce>>
   try {
     attempt = await attemptNvidiaOnce({
@@ -2571,7 +2608,7 @@ async function probeModelOnce(model: string, slot: number): Promise<'ok' | 'hang
       systemPrompt: undefined,
       temperature: 0,
       maxTokens: 16,
-      timeoutMs: PROBE_TIMEOUT_MS,
+      timeoutMs: probeTimeoutMs,
     })
   } catch {
     return 'skip' // network throw ngoài dự kiến — không kết luận model
@@ -2593,7 +2630,7 @@ async function probeModelOnce(model: string, slot: number): Promise<'ok' | 'hang
     // (call thật skip model này trong ~ms; probe kế (5') sẽ tự mở lại nếu hồi)
     tripModelBreaker(
       model,
-      `PROBE HANG: request nhỏ (16 token) chờ ${Math.round(PROBE_TIMEOUT_MS / 1000)}s vẫn 0 bytes — model HANG phía NVIDIA NIM (model khác cùng key vẫn chạy = sự cố model-level, không phải key/network). Prober sẽ tự mở lại khi model hồi phục (probe mỗi ${Math.round(PROBE_INTERVAL_MS / 60000)} phút).`,
+      `PROBE HANG: request nhỏ (16 token) chờ ${Math.round(probeTimeoutMs / 1000)}s vẫn 0 bytes — model HANG phía NVIDIA NIM (model khác cùng key vẫn chạy = sự cố model-level, không phải key/network). Prober sẽ tự mở lại khi model hồi phục (probe mỗi ${Math.round(PROBE_INTERVAL_MS / 60000)} phút).`,
       'timeout-hang',
     )
     return 'hang'
@@ -2680,8 +2717,14 @@ async function callModelWithKeyRotation(
   const maxTokens = rotationOpts?.maxTokens ?? options?.maxTokens ?? 4096
   // FIX (R2-a #2): timeout co giãn theo maxTokens — chống breaker đánh sập
   // model healthy khi sinh output dài hợp lệ.
+  // USER DIRECTIVE 2026-12-01: kimi-k3 chậm-hợp-lệ (2-6 phút/call) là bình
+  // thường — base timeout riêng 600s cho đúng KIMI_K3_NIM_ID thay vì 240s
+  // chung (đ anti trip-breaker oan; xem KIMI_K3_TIMEOUT_MS phía trên).
   const timeoutMs = scaleTimeoutByMaxTokens(
-    rotationOpts?.timeoutMs ?? parseInt(process.env.LLM_TIMEOUT_MS || '240000', 10),
+    rotationOpts?.timeoutMs
+      ?? (model === KIMI_K3_NIM_ID
+        ? KIMI_K3_TIMEOUT_MS
+        : parseInt(process.env.LLM_TIMEOUT_MS || '240000', 10)),
     maxTokens,
   )
   const temperature = rotationOpts?.temperature ?? options?.temperature ?? 0.1
