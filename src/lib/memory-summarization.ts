@@ -79,7 +79,7 @@ Summary:`
 
   try {
     // UTILITY CORE (user report 2026-09-05): summarization/merge là tác vụ chưng cất
-    // nền — dùng lõi utility (nemotron→gpt-oss), không đụng kimi-k3.
+    // nền — dùng lõi utility (zen space-bunny-free), không đụng lõi agent.
     const result = await callUtilityLLM(prompt, undefined, 'memory-summarization', {
       temperature: 0.2, // low temperature for faithful summary
       maxTokens: 300,    // summary is short

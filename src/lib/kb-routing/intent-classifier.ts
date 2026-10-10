@@ -99,7 +99,7 @@ function classifyByRule(message: string): IntentResult | null {
 async function classifyByLLM(message: string): Promise<IntentResult> {
   // Lazy import to avoid Edge bundler issues
   // UTILITY CORE (user report 2026-09-05): intent classification là tiền xử lý
-  // phân loại — dùng lõi utility (nemotron→gpt-oss), không đụng kimi-k3
+  // phân loại — dùng lõi utility (zen space-bunny-free), không đụng lõi agent
   // (tránh query module treo 15' xoay vòng khi NVIDIA block kimi).
   const { callUtilityLLM } = await import('@/lib/llm')
 

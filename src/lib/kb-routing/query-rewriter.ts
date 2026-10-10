@@ -216,7 +216,7 @@ export async function rewriteQuery(
     ].join('\n')
 
     // UTILITY CORE (user report 2026-09-05): rewrite/HyDE/expansion là tiền xử lý
-    // retrieval — dùng lõi utility (nemotron→gpt-oss), không đụng kimi-k3.
+    // retrieval — dùng lõi utility (zen space-bunny-free), không đụng lõi agent.
     const [hydeRes, expansionRes, queryEmb] = await Promise.all([
       callUtilityLLM(hydePrompt, undefined, 'query-hyde', { temperature: 0.5, maxTokens: 400 }),
       callUtilityLLM(expansionPrompt, undefined, 'query-expansion', { temperature: 0.7, maxTokens: 250 }),

@@ -342,12 +342,15 @@ export function AgentsModule() {
         <Badge variant="outline" className="text-[9px] h-4.5 px-1.5 bg-slate-950/50 text-stone-300 border-stone-500/55 truncate max-w-[140px]">
           {agent.model}
         </Badge>
-        {/* Đề xuất 3 (2026-08-25): badge "mặc định/backup" trực quan hóa MODEL POLICY —
-            minimax-m3 = lõi chính tạm thời 2026-10-16 (emerald), lõi khác = backup (slate). */}
-        {agent.model === 'minimaxai/minimax-m3' ? (
+        {/* Đề xuất 3 (2026-08-25): badge "mặc định/lựa chọn" trực quan hóa MODEL
+            POLICY 2026-11-30 — space-bunny-free = lõi chính (emerald); kimi-k3 =
+            lựa chọn NIM tạm thời (amber); model khác = tùy chỉnh (slate). */}
+        {agent.model === 'space-bunny-free' ? (
           <Badge variant="outline" className="text-[8px] h-4 px-1.5 bg-emerald-950/50 text-emerald-300 border-emerald-500/55 font-semibold">⭐ mặc định</Badge>
+        ) : agent.model === 'moonshotai/kimi-k3' ? (
+          <Badge variant="outline" className="text-[8px] h-4 px-1.5 bg-amber-950/50 text-amber-300 border-amber-500/55 font-semibold">🎮 NIM tạm thời</Badge>
         ) : (
-          <Badge variant="outline" className="text-[8px] h-4 px-1.5 bg-slate-950/50 text-stone-500 border-stone-600/55">↩️ backup</Badge>
+          <Badge variant="outline" className="text-[8px] h-4 px-1.5 bg-slate-950/50 text-stone-500 border-stone-600/55">↩️ tùy chỉnh</Badge>
         )}
       </div>
 

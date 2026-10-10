@@ -36,15 +36,13 @@ export interface CodeTeamAgentDef {
 // ===== 5 AGENTS HARDCODED =====
 
 export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
-  // ===== MODEL POLICY (updated 2026-10-16 — USER DIRECTIVE: minimax-m3 tạm
-  // làm lõi chính cho TẤT CẢ agents — duy nhất khả dụng) =====
-  // Matrix test 09:11 UTC 2026-10-16 (HTTP trực tiếp NIM, 4 key): kimi-k3 +
-  // ds-v4-pro + ds-v4-flash đều HANG (60s, 0 bytes) — 0/4 key; minimax-m3
-  // 4/4 key OK (6-44s). Toàn bộ agents (MEGATRON, SHOCWAVE, RAMPAGE, SENTINEL,
-  // CATALYST) mặc định minimax-m3; 3 lõi cũ xuống chuỗi fallback
-  // (kimi-k3 → ds-pro → ds-flash) — NIM hồi thì fallback tự dùng lại.
-  // Runtime callLLMForAgent enforce AGENT_PRIMARY_MODEL (llm.ts) — model ở
-  // đây giữ đồng bộ hiển thị UI + legacy path.
+  // ===== MODEL POLICY (updated 2026-11-30 — USER DIRECTIVE model matrix mới) =====
+  // Toàn bộ agents (MEGATRON, SHOCWAVE, RAMPAGE, SENTINEL, CATALYST) mặc định
+  // zen/space-bunny-free (lõi chính). NVIDIA NIM chỉ còn kimi-k3 như lựa chọn
+  // agent tạm thời (chọn → route NIM thật, fail → fallback SBF). minimax-m3 +
+  // cả dòng deepseek đã EOL 410 (2026-09) — LOẠI BỎ TOÀN BỘ (live-probe
+  // 2026-11-30). Runtime callLLMForAgent tôn trọng model từng agent — model
+  // ở đây giữ đồng bộ hiển thị UI + legacy path.
   // gpt-oss-120b đã bị bỏ khỏi Agent/Chat (user directive 2026-08-27); GLM
   // 5.2/5.3 không dùng được trên NIM (410/404).
   {
@@ -379,13 +377,16 @@ async function _doSeed(): Promise<boolean> {
 
       if (existing) {
         // TASK 33 (2026-09-27) — NIM→ZEN MIGRATION (chạy mỗi boot, idempotent):
-        // rows còn sót provider NIM hoặc model NIM (kimi-k3/minimax-m3/deepseek/
+        // rows còn sót provider NIM hoặc model NIM đã EOL (minimax-m3/deepseek/
         // nemotron-550b/gpt-oss — id NIM luôn chứa '/') là giá trị do CODE sync
-        // hoặc DB cũ từ thời NIM, KHÔNG phải lựa chọn của user (user directive
-        // 2026-09-27: NIM bỏ hoàn toàn khỏi tác vụ agents) → normalize về def
+        // hoặc DB cũ từ thời NIM, KHÔNG phải lựa chọn của user → normalize về def
         // (provider zen + model zen theo vai trò). Model zen KHÁC user tự chọn →
         // GIỮ NGUYÊN (tôn trọng customization — chỉ sửa giá trị NIM sót).
-        const isNimModelId = (m: string) => m.includes('/')
+        // 2026-11-30 — KIMI-K3 EXEMPTION (user directive: kimi-k3 là lựa chọn
+        // model agent NIM tạm thời): id NIM kimi-k3 do USER chọn phải được TÔN
+        // TRỌNG — KHÔNG normalize về def. Các id NIM khác (minimax/deepseek/
+        // gpt-oss... đều đã EOL 410) vẫn normalize về def (zen).
+        const isNimModelId = (m: string) => m.includes('/') && m !== 'moonshotai/kimi-k3'
         if ((existing.provider !== 'zen' || isNimModelId(existing.model)) && (existing.provider !== def.provider || existing.model !== def.model)) {
           try {
             await db.agentProfile.update({

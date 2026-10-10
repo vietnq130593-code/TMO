@@ -303,7 +303,7 @@ export async function deleteTaskFlow(id: string): Promise<boolean> {
 /** Não dùng cho các bước flow: callLLMForAgent (kimi-k3 + fallback chain +
  * z-ai-sdk self-heal cuối chuỗi — callLLM thuần thiếu lớp fallback này khi
  * NVIDIA keys 401/cooldown, flow sẽ chết oan — phát hiện E2E 2026-09-13). */
-const FLOW_BRAIN = { provider: 'nvidia', model: 'minimaxai/minimax-m3' } // 2026-10-16: lõi chính tạm thời
+const FLOW_BRAIN = { provider: 'zen', model: 'space-bunny-free' } // 2026-11-30: minimax-m3 EOL 410 → production core zen
 
 /** LLM gate cho bước condition — trả true nếu flow được phép chạy tiếp */
 async function evaluateCondition(description: string, contextSoFar: string): Promise<{ proceed: boolean; reason: string }> {

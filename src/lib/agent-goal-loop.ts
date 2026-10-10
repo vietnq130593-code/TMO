@@ -514,7 +514,7 @@ const DELEGATION_INTENT_TEMPLATES: Record<string, string> = {
   delegate_task: 'tool_call: delegate_task({"agent": "RAMPAGE", "task": "nhiệm vụ cụ thể", "context": "...", "acceptance_criteria": "xong khi..."})',
   request_code_team: 'tool_call: request_code_team({"task": "mục tiêu + phạm vi + ràng buộc", "context": "...", "acceptance_criteria": "xong khi..."})',
   escalate_problem: 'tool_call: escalate_problem({"problem": "vấn đề cụ thể", "context": "...", "attempted": "đã thử gì", "severity": "medium"})',
-  create_agent: 'tool_call: create_agent({"name": "TÊN_AGENT", "description": "mô tả vai trò", "instruction": "system prompt chi tiết", "model": "minimaxai/minimax-m3", "tools": ["file_read", "..."]})',
+  create_agent: 'tool_call: create_agent({"name": "TÊN_AGENT", "description": "mô tả vai trò", "instruction": "system prompt chi tiết", "model": "space-bunny-free", "tools": ["file_read", "..."]})',
 }
 
 /**
@@ -827,7 +827,7 @@ function buildOrchestrationProtocol(hasDispatch: boolean, hasCreate: boolean): s
     lines.push('- NHIỀU việc ĐỘC LẬP: tool_call: dispatch_agents_parallel({"tasks": [{"agent": "MEGATRON", "task": "..."}, {"agent": "SENTINEL", "task": "..."}]}) — tối đa 4 task/lần, chạy song song tối đa 3 sub-agent cùng lúc (mỗi sub-agent tự động ghim 1 API key riêng — user directive 2026-10-29b), kết quả hợp nhất về 1 báo cáo; xung đột (cùng đụng 1 file) được liệt kê trong "conflicts" — tự phân xử.')
   }
   if (hasCreate) {
-    lines.push('- Hệ thống THIẾU agent có kỹ năng phù hợp (đã kiểm tra Agent Roster): tool_call: create_agent({"name": "...", "description": "mô tả vai trò", "instruction": "system prompt chi tiết", "model": "minimaxai/minimax-m3", "avatar": "🤖", "temperature": 0.7, "maxTokens": 4096, "tools": ["file_read", "..."]}) — agent mới hiện trong module Agents, giao việc NGAY qua dispatch_agent.')
+    lines.push('- Hệ thống THIẾU agent có kỹ năng phù hợp (đã kiểm tra Agent Roster): tool_call: create_agent({"name": "...", "description": "mô tả vai trò", "instruction": "system prompt chi tiết", "model": "space-bunny-free", "avatar": "🤖", "temperature": 0.7, "maxTokens": 4096, "tools": ["file_read", "..."]}) — agent mới hiện trong module Agents, giao việc NGAY qua dispatch_agent.')
   }
   lines.push('- Token sub-agent (delegate_task/dispatch_agent) + consult Omega đều cộng vào budget của bạn — dùng có kỷ luật.')
   return lines.join('\n')

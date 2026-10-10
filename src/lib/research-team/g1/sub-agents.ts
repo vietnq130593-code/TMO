@@ -17,7 +17,7 @@
  * NOTE: Sub-agent là instance model stack chung (AGENT_PRIMARY_MODEL + fallback
  * chain — TB-01 §2). SA dùng callLLM (agent core + fallback chain) vì là agent
  * logic; nếu cần deep reasoning sẽ qua callLLM (sivil.ts SYNTHESIZE + council engine.ts).
- * callUtilityLLM (extraction cores nemotron/gpt-oss) CHỈ dùng cho trích xuất tài liệu — KHÔNG cho agent logic.
+ * callUtilityLLM (lõi utility zen space-bunny-free; extraction NIM nemotron-550b riêng) CHỈ dùng cho tác vụ nền — KHÔNG cho agent logic.
  */
 
 import { callLLMForAgent, AGENT_PRIMARY_MODEL } from '@/lib/llm'

@@ -609,7 +609,7 @@ async function extractWithConfidence(
     // UTILITY CORE (user report 2026-09-05): writeback chạy fire-and-forget SAU khi
     // agent trả lời xong — KHÔNG được dùng kimi-k3 (lõi agent) vì khi NVIDIA block
     // kimi, call này cháy 15' xoay vòng key → spam 429 "gọi kimi khi idle".
-    // Dùng lõi utility nemotron-550b → gpt-oss-120b (giống extraction).
+    // Dùng lõi utility zen space-bunny-free (extraction NIM nemotron-550b riêng).
     const result = await callUtilityLLM(prompt, undefined, 'writeback-extraction', {
       temperature: 0.1,
       maxTokens: 2000,

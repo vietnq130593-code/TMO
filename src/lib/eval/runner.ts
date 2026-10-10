@@ -4,9 +4,10 @@
 //   Step 1 — retrieval via searchUserKB() (the REAL production retrieval path,
 //            Qdrant chunks + Neo4j entities + memories + confidence score).
 //   Step 2 — answer generation via the system-under-test model
-//            (deepseek-ai/deepseek-v4-flash-0731 — a chat-core model that is
-//            DIFFERENT from all judges; nemotron-550b is extraction-ONLY per
-//            user directive 2026-08-25 and must not be used for eval answers).
+//            (space-bunny-free — Zen production chat core, user directive
+//            2026-11-30 model matrix; DIFFERENT from judge primary kimi-k3.
+//            deepseek-v4-flash cũ đã EOL 410 2026-09-21. nemotron-550b is
+//            extraction-ONLY per user directive and must not be used here.)
 //   Step 3 — scoring: recall@5 + entity extraction F1 + hallucination check +
 //            faithfulness via 3 cross-family judges (judges.ts).
 //
@@ -28,15 +29,15 @@ import { trainCalibrationModel } from '@/lib/calibration-train'
 import { ndcgAtK, mrr } from '@/lib/stats'
 import { type ExpectedEntity, normalizeForEntityMatch, buildRelevanceVector } from './relevance'
 
-/** System-under-test answer generator — a dedicated Agent/Chat core.
- *  MUST be different from all judge models (see judges.ts) to avoid circular
- *  bias. deepseek-v4-flash is the only chat core not used by any judge
- *  (judges: gpt-oss-120b + kimi-k3 + minimax-m3).
- *  User directive 2026-08-25: nemotron-3-ultra-550b is extraction-ONLY —
- *  it must NOT be used for eval answers or any non-extraction task.
- *  NOTE: deepseek-v4-flash is the slowest core (~27s/call) — eval runs take
- *  longer but run in background so it doesn't matter. */
-const ANSWER_MODEL = 'deepseek-ai/deepseek-v4-flash-0731'
+/** System-under-test answer generator — the PRODUCTION chat core
+ *  (Zen space-bunny-free — model thật mà agents dùng hằng ngày, user
+ *  directive 2026-11-30 matrix). Judge primary = kimi-k3 (NIM) ≠ answer
+ *  model → cross-model scoring giữ được. Khi kimi-k3 chết, judges fallback
+ *  space-bunny-free trùng answer model (circular bias — đánh đổi được chấp
+ *  nhận theo directive "space-bunny-free cũng được").
+ *  User directive (giữ nguyên): nemotron-3-ultra-550b là extraction-ONLY —
+ *  KHÔNG dùng cho eval answers. deepseek-v4-flash cũ đã EOL 410 (2026-09-21). */
+const ANSWER_MODEL = 'space-bunny-free'
 
 /** Pace-limit between cases (ms) — gentle on the shared 4-key NVIDIA budget. */
 const CASE_PACE_MS = 300
@@ -228,8 +229,8 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
       }
 
       // ---- Step 2: answer generation (system-under-test model) ----
-      // One retry: nemotron-550b occasionally returns HTTP 503 (transient
-      // rate-limit) — a second attempt usually lands on a healthy key.
+      // One retry: transient 5xx/empty từ Zen (key round-robin tự xoay key
+      // kế) — a second attempt usually lands on a healthy key.
       let answer = ''
       try {
         for (let attempt = 0; attempt < 2 && !answer; attempt++) {

@@ -881,10 +881,11 @@ Output ONLY the domain name in lowercase. For example: programming`
   }
 
   // Try LLM classification with retries
-  // EXTRACTION-ONLY (user directive 2026-09-05): phân loại domain của TÀI LIỆU là
-  // tác vụ trích xuất — luôn dùng callLLMSlot (nemotron-550b chính + gpt-oss-120b
-  // fallback, slotIndex=-1 → round-robin key). KHÔNG fallback sang callLLM()
-  // vì callLLM giờ là kimi-k3 (lõi agent) — bị CẤM cho tác vụ trích xuất.
+  // EXTRACTION-ONLY (user directive 2026-09-05, cập nhật 2026-11-30): phân loại
+  // domain của TÀI LIỆU là tác vụ trích xuất — luôn dùng callLLMSlot (NIM
+  // nemotron-550b chính → fallback chuỗi Zen space-bunny-free, slotIndex=-1 →
+  // round-robin key). KHÔNG fallback sang callLLM() — lõi agent bị CẤM cho
+  // tác vụ trích xuất.
   const MAX_RETRIES = 2
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {

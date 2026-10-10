@@ -154,8 +154,8 @@ Output format:
   "reasoning": "Brief explanation"
 }`
 
-  // UTILITY CORE (user report 2026-09-05): classification là tiền xử lý — dùng lõi
-  // utility (nemotron→gpt-oss) để query module không bị treo khi kimi-k3 bị block.
+  // UTILITY CORE: classification là tiền xử lý — dùng lõi utility (zen
+  // space-bunny-free) để query module không bị treo khi lõi agent bận/block.
   const result = await callUtilityLLM(query, systemPrompt, 'classification', llmOptions)
 
   try {

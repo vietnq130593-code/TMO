@@ -495,7 +495,10 @@ async function _doSeed(): Promise<boolean> {
         // NIM (id chứa '/') là giá trị cũ từ thời NIM, KHÔNG phải lựa chọn user
         // → normalize về def. Model zen khác user tự chọn → GIỮ NGUYÊN.
         // LISMA (agent chuyên debug) còn muse-spark mặc định cũ → sync space-bunny.
-        const isNimModelId = (m: string) => m.includes('/')
+        // 2026-11-30 — KIMI-K3 EXEMPTION (user directive: kimi-k3 là lựa chọn model
+        // agent NIM tạm thời): id NIM kimi-k3 do USER chọn phải được TÔN TRỌNG —
+        // KHÔNG normalize về def. Các id NIM khác (đã EOL 410) vẫn normalize.
+        const isNimModelId = (m: string) => m.includes('/') && m !== 'moonshotai/kimi-k3'
         if ((existing.provider !== 'zen' || isNimModelId(existing.model)) && (existing.provider !== def.provider || existing.model !== def.model)) {
           try {
             await db.agentProfile.update({
@@ -687,20 +690,21 @@ export function getResearchPositionsInOrder(): string[] {
 }
 
 // ===== RUNTIME BRAIN RESOLVER (Task 4 — Zen routing) =====
-// Mirror pattern `resolveOmegaBrain` (omega-orchestrator.ts:121-137): fetch DB
-// AgentProfile by name → return { provider, model }. Fallback NIM minimax-m3
-// khi DB lookup fail (placeholder key, schema drift, agent disabled...).
+// Mirror pattern `resolveOmegaBrain` (omega-orchestrator.ts): fetch DB
+// AgentProfile by name → return { provider, model }. Fallback zen
+// space-bunny-free khi DB lookup fail (placeholder key, schema drift, agent
+// disabled...) — minimax-m3 fallback cũ đã EOL 410 (loại bỏ 2026-11-30).
 //
 // 23+ callsites trong src/lib/research-team/ (king/g1/g2/g3/scoring/classify)
 // đã refactor từ callLLM() sang callLLMForAgent(prompt, brain, ...) — giờ 5
 // research agents (NEMESIS/SIVIL/BELI/LISMA/HAN) route qua đúng provider DB
-// (zen) thay vì legacy NIM global pool. Fail-open: DB error → fallback NIM
-// minimax-m3 (kimi-k3 chain safety net trong callLLMForAgent).
+// (zen) thay vì legacy NIM global pool. Fail-open: DB error → fallback zen
+// space-bunny-free (production core — matrix 2026-11-30).
 
 /** Fallback brain khi DB lookup fail — mirror OMEGA_FALLBACK pattern. */
 export const RESEARCH_FALLBACK_BRAIN = {
-  provider: 'nvidia',
-  model: 'minimaxai/minimax-m3',
+  provider: 'zen',
+  model: 'space-bunny-free',
 } as const
 
 /**
@@ -710,7 +714,7 @@ export const RESEARCH_FALLBACK_BRAIN = {
  * @returns { provider, model } — dùng cho callLLMForAgent(prompt, brain, ...)
  *
  * Fail-open: DB error / agent not found / disabled / missing fields → fallback
- * NIM minimax-m3. KHÔNG throw — caller dùng brain trực tiếp.
+ * zen space-bunny-free. KHÔNG throw — caller dùng brain trực tiếp.
  */
 export async function resolveResearchBrain(
   name: string,

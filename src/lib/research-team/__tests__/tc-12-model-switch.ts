@@ -28,13 +28,13 @@ async function run(): Promise<TestResult> {
     // ---------- 1. formatModelSwitchLine — DR-C7 format ----------
     const line = formatModelSwitchLine({
       fromModel: 'kimi-k3',
-      toModel: 'deepseek-v4-pro',
+      toModel: 'space-bunny-free',
       trigger: '429 rate limit at 14:32 UTC',
       nextCheck: '2026-09-02T15:00:00Z',
     })
-    // Expected: `model switched: kimi-k3 → deepseek-v4-pro | trigger: 429 rate limit at 14:32 UTC | next check: 2026-09-02T15:00:00Z`
+    // Expected: `model switched: kimi-k3 → space-bunny-free | trigger: 429 rate limit at 14:32 UTC | next check: 2026-09-02T15:00:00Z`
     const formatOk =
-      line.startsWith('model switched: kimi-k3 → deepseek-v4-pro') &&
+      line.startsWith('model switched: kimi-k3 → space-bunny-free') &&
       line.includes('| trigger:') &&
       line.includes('| next check:') &&
       line.includes('429 rate limit at 14:32 UTC')
@@ -46,13 +46,13 @@ async function run(): Promise<TestResult> {
     const entry = await recordModelSwitch({
       agentId: 'LISMA',
       fromModel: 'kimi-k3',
-      toModel: 'deepseek-v4-pro',
+      toModel: 'space-bunny-free',
       trigger: '429 rate limit (TC-12)',
       nextCheck: '2026-09-02T15:00:00Z',
     })
     const entryOk =
       entry.fromModel === 'kimi-k3' &&
-      entry.toModel === 'deepseek-v4-pro' &&
+      entry.toModel === 'space-bunny-free' &&
       typeof entry.worklogLine === 'string' &&
       entry.worklogLine.includes('model switched:') &&
       typeof entry.at === 'string'
@@ -69,7 +69,7 @@ async function run(): Promise<TestResult> {
     const persistedOk =
       !!persisted &&
       persisted.fromModel === 'kimi-k3' &&
-      persisted.toModel === 'deepseek-v4-pro' &&
+      persisted.toModel === 'space-bunny-free' &&
       persisted.agentId === 'LISMA'
     if (persisted) createdEventId = persisted.id
     details.push(

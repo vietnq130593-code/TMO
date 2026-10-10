@@ -457,7 +457,7 @@ Rules:
 
   try {
     // UTILITY CORE (user report 2026-09-05): auto-learn extraction chạy nền sau
-    // response — dùng lõi utility (nemotron→gpt-oss), không đụng kimi-k3.
+    // response — dùng lõi utility (zen space-bunny-free), không đụng lõi agent.
     const result = await callUtilityLLM(extractionPrompt, undefined, 'auto-learn-extraction', {
       temperature: 0.1,
       maxTokens: 2048,

@@ -9,7 +9,7 @@
  *      như mọi agent run ( trung thực: Opus không giấu hoạt động của mình).
  *   2. buildOpusDossier() → 1 prompt dossier (6 section có giám sát cap).
  *   3. callLLMForAgent(dossierPrompt, {provider, model}, OPUS_INSTRUCTION) —
- *      model chain kimi-k3→deepseek v4 pro/flash→minimax-m3 + z-ai-sdk
+ *      model chain cũ kimi-k3→deepseek→minimax-m3 đã EOL — giờ zen/space-bunny
  *      fallback ĐÃ enforce bên trong llm.ts (user decision #6) — KHÔNG tự
  *      implement fallback ở đây.
  *   4. Parse + validate JSON verdict (strip markdown fence, lấy block {...}
@@ -341,9 +341,9 @@ export async function runOpusReview(
     const profile = await getOpusProfile()
     const agentConfig = profile
       ? { provider: profile.provider, model: profile.model }
-      : // getOpusProfile chỉ null khi DB lỗi — fallback cấu hình khai báo của Opus
-        // (llm.ts vẫn override về AGENT_PRIMARY_MODEL toàn hệ thống nên vô hại)
-        { provider: 'nvidia', model: 'minimaxai/minimax-m3' }
+      : // getOpusProfile chỉ null khi DB lỗi — fallback production core zen
+        // (minimax-m3 cũ đã EOL 410 — loại bỏ 2026-11-30)
+        { provider: 'zen', model: 'space-bunny-free' }
 
     const dossier = await buildOpusDossier(sessionId, messageId)
     const dossierPrompt =

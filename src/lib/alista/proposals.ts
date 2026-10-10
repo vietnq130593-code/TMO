@@ -27,13 +27,14 @@ import { STEP_LABELS, baseKeyOf } from './types'
 
 const ALISTA_AGENT_NAME = 'ALISTA'
 // 2026-09-24 (USER DIRECTIVE): ALISTA → zen/muse-spark-1.3-contributor-free.
-// Fail-open: DB error → fallback NIM minimax-m3 (giá trị cũ).
-const ALISTA_FALLBACK_BRAIN = { provider: 'nvidia', model: 'minimaxai/minimax-m3' }
+// Fail-open: DB error → fallback zen space-bunny-free (minimax-m3 cũ đã EOL 410
+// — loại bỏ 2026-11-30).
+const ALISTA_FALLBACK_BRAIN = { provider: 'zen', model: 'space-bunny-free' }
 
 /**
  * Resolve ALISTA brain from DB AgentProfile (mirror resolveOmegaBrain pattern).
  * Reads provider/model từ DB (set = zen/muse-spark-1.3-contributor-free).
- * Fail-open: DB error → fallback NIM minimax-m3.
+ * Fail-open: DB error → fallback zen space-bunny-free.
  */
 async function resolveAlistaBrain(): Promise<{ provider: string; model: string }> {
   try {
@@ -48,7 +49,7 @@ async function resolveAlistaBrain(): Promise<{ provider: string; model: string }
   return ALISTA_FALLBACK_BRAIN
 }
 // Task 20 (2026-09-03): 60s cũ giết chuỗi fallback trước khi tới lượt
-// minimax-m3 khi 3 lõi đầu hang NIM — nâng 600s ≥ worst-case chuỗi (~460s);
+// (lịch sử: chuỗi NIM cần ~460s — giữ trần 600s);
 // prober (llm.ts) trip breaker cho lõi hang nên call thường trở lại ~giây.
 const LLM_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.ALISTA_LLM_TIMEOUT_MS || '600000', 10) || 600_000)
 const MAX_PROPOSALS_PER_CHECK = 3

@@ -19,7 +19,8 @@
  *   - auto:   Opus tự review + tự hành động sau mỗi run — chỉ dừng khi
  *             predicate 4 điều kiện thỏa (xem §VII)
  *
- * Model chain: kimi-k3 → deepseek v4 pro → deepseek v4 flash → minimax-m3
+ * Model (2026-11-30): zen/space-bunny-free (lõi chính) — chuỗi fallback NIM
+ * cũ (kimi-k3 → deepseek → minimax-m3) đã EOL toàn bộ, loại bỏ.
  * (user decision #6 — đã được enforce toàn hệ thống trong llm.ts, Opus dùng
  * callLLMForAgent như mọi agent khác).
  */
@@ -290,13 +291,15 @@ export async function ensureOpusAgent(): Promise<void> {
     }
 
     // MODEL SYNC (PHIÊN 7 — Task 37, user directive "TẤT CẢ agent dùng
-    // space-bunny-free"): Row Opus seed từ default cũ (kimi-k3 / minimax-m3
-    // thời NIM, hoặc nemotron-3-ultra-free phiên 6 — giá trị do CODE sync,
-    // không phải user chọn) → sync về zen/space-bunny-free; model+provider
-    // user tự chọn giữ nguyên. (Update-block của upsert KHÔNG đụng model.)
+    // space-bunny-free"): Row Opus seed từ default cũ (minimax-m3 thời NIM,
+    // hoặc nemotron-3-ultra-free phiên 6 — giá trị do CODE sync, không phải
+    // user chọn) → sync về zen/space-bunny-free; model+provider user tự chọn
+    // giữ nguyên. 2026-11-30: kimi-k3 ĐƯỢC RÁ KHỎI sync — giờ là lựa chọn
+    // model agent NIM tạm thời hợp lệ (user directive 2026-11-30), KHÔNG đè.
+    // (Update-block của upsert KHÔNG đụng model.)
     try {
       const opusRow = await db.agentProfile.findUnique({ where: { name: OPUS_AGENT_NAME } })
-      if (opusRow && (opusRow.model === 'moonshotai/kimi-k3' || opusRow.model === 'minimaxai/minimax-m3' || opusRow.model === 'nemotron-3-ultra-free')) {
+      if (opusRow && (opusRow.model === 'minimaxai/minimax-m3' || opusRow.model === 'nemotron-3-ultra-free')) {
         await db.agentProfile.update({
           where: { name: OPUS_AGENT_NAME },
           data: { provider: 'zen', model: 'space-bunny-free' },

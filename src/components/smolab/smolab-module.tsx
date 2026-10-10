@@ -1713,18 +1713,23 @@ export function GoalLoopJobsPanel({
 
 export const SMOLAB_MODEL_GROUPS = [
   {
+    provider: 'ZEN',
+    icon: '⚡',
+    models: [
+      { id: 'space-bunny-free', label: 'space-bunny-free (lõi chính — Zen)' },
+    ],
+  },
+  {
     provider: 'NVIDIA',
     icon: '🎮',
     models: [
-      // 2 extraction cores (user directive 2026-09-05 — kimi-k3 bị cấm cho extraction)
+      // USER DIRECTIVE 2026-11-30 — kimi-k3 giữ lại như 1 LỰA CHỌN model agent
+      // tạm thời (chọn → route NIM thật; NIM chết → tự fallback space-bunny-free).
+      { id: 'moonshotai/kimi-k3', label: 'Kimi K3 (NVIDIA NIM — tạm thời, chậm ~2 phút/call)' },
+      // Lõi extraction (triết tách) — nemotron-550b (kimi-k3 bị cấm cho extraction)
       { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction chính)' },
-      { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (extraction fallback)' },
-      // FIX 2026-09-30 → 2026-10-16 (USER DIRECTIVE): minimax-m3 = lõi chính
-      // TẠM THỜI (duy nhất khả dụng) — kimi-k3 + deepseek-v4 xuống fallback.
-      { id: 'minimaxai/minimax-m3', label: 'MiniMax M3 (lõi chính — tạm thời)' },
-      { id: 'moonshotai/kimi-k3', label: 'Kimi K3 (fallback #1)' },
-      { id: 'deepseek-ai/deepseek-v4-pro-0813', label: 'DeepSeek V4 Pro (fallback #2)' },
-      { id: 'deepseek-ai/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash (fallback #3)' },
+      // ĐÃ LOẠI BỎ (410 EOL 2026-11-30): gpt-oss-120b, minimax-m3,
+      // deepseek-v4-pro-0813, deepseek-v4-flash-0731.
     ],
   },
 ]
@@ -1869,9 +1874,10 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   // thống (nút + openclaw route + goal-loop + workflow-engine + tool-executor
   // + durable types + wrapper budget tương ứng). System prompt chỉ còn trần
   // env hệ thống SYSTEM_PROMPT_BUDGET_CHARS — xem src/lib/prompt-budget.ts.
-  // MODEL POLICY 2026-10-16: minimax-m3 là mặc định (agents độc lập + chat —
-  // lõi chính tạm thời, duy nhất khả dụng); kimi/ds là failover backup
-  const [selectedModel, setSelectedModel] = useState(restoredCtx.selectedModel || 'minimaxai/minimax-m3')
+  // MODEL POLICY 2026-11-30: space-bunny-free (Zen) là mặc định agents + chat;
+  // kimi-k3 (NVIDIA NIM) là lựa chọn tạm thời trong dropdown (minimax/deepseek
+  // đã EOL 410 — loại bỏ toàn bộ theo user directive).
+  const [selectedModel, setSelectedModel] = useState(restoredCtx.selectedModel || 'space-bunny-free')
   // r73 (mục 1 user): dropdown chọn model free ngay trên dòng model indicator
   const [showModelSelect, setShowModelSelect] = useState(false)
   // r73 (mục 2 user): tệp đính kèm chờ gửi (nút "+")
@@ -2015,12 +2021,19 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean }
     blockedTransports?: string[]
   }>>([])
+  // 2026-11-30 (user directive): dropdown model agent = các model ZEN (như cũ)
+  // + kimi-k3 (NVIDIA NIM — lựa chọn tạm thời "bấm chọn k3 sẽ chuyển qua dùng
+  // k3"). Lõi embed (id chứa '/embed-') bị lọc ra — không phải LLM chat.
   const fetchZenModelOptions = useCallback(() => {
     fetch('/api/agents/models')
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: { providers?: Array<{ key?: string; models?: Array<{ id: string; label?: string; caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean }; blockedTransports?: string[] }> }> }) => {
-        const zen = (data?.providers || []).find(p => p.key === 'zen')
-        if (zen?.models) setZenModelOptions(zen.models)
+        const providers = data?.providers || []
+        const zen = providers.find(p => p.key === 'zen')?.models || []
+        const nvidiaChat = (providers.find(p => p.key === 'nvidia')?.models || [])
+          .filter(m => !/embed/i.test(m.id))
+        const merged = [...zen, ...nvidiaChat]
+        if (merged.length > 0) setZenModelOptions(merged)
       })
       .catch(() => { /* im lặng — giữ danh sách cũ; dropdown hiện câu "chưa tải được" nếu trống */ })
   }, [])
@@ -6187,7 +6200,7 @@ ${manifest}` : rawText
                         style={{ scrollbarWidth: 'thin' }}
                       >
                         <div className="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-cyan-500/70 border-b border-cyan-400/20 sticky top-0 bg-slate-950/95">
-                          Model free khả dụng · ⚡ coding · 🧠 reasoning · 🤖 agentic · ⚠ bị chặn
+                          Model agent (Zen + Kimi K3 NVIDIA tạm thời) · ⚡ coding · 🧠 reasoning · 🤖 agentic · ⚠ bị chặn
                         </div>
                         {zenModels.map((m) => {
                           // r74 (BUG2-033): model bị Zen chặn free-tier trên CẢ

@@ -5,7 +5,7 @@ import { generateRedTeamCases, ATTACK_VECTORS } from '@/lib/redteam/generator'
 // RED TEAM ENGINE — Phase 3.2: weapon-factory endpoint (blueprint §3.4).
 //
 // POST { vectors?: string[] } → generate new attack cases via the generator
-//   (gpt-oss-120b per-vector prompts + quality gate). Synchronous — one
+//   (space-bunny-free per-vector prompts + quality gate — 2026-11-30). Synchronous — one
 //   generator LLM call per vector + one gate call per candidate (~10-60s).
 //   Returns { inserted, skipped, byVector }.
 //

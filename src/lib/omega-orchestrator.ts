@@ -63,9 +63,9 @@ const ADVISORY_MAX_CHARS = 2600
 /** maxTokens cho 1 lần consult Omega */
 const CONSULT_MAX_TOKENS = 1100
 /** Timeout 1 consult LLM call
- *  Task 20 (2026-09-03): 180s cũ giết chuỗi fallback TRƯỚC khi tới lượt
- *  minimax-m3 khi 3 lõi đầu hang NIM (chuỗi cần ~460s). 600s ≥ worst-case;
- *  prober (llm.ts) trip breaker cho lõi hang nên consult thường ~giây. */
+ *  600s ≥ worst-case (lịch sử: chuỗi fallback NIM cũ cần ~460s khi 3 lõi đầu
+ *  hang — giờ chuỗi Zen + kimi-k3 NIM chậm ~120s/call nên giữ trần cao);
+ *  breaker (llm.ts) trip cho lõi hang nên consult thường ~giây. */
 const CONSULT_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.OMEGA_CONSULT_TIMEOUT_MS || '600000', 10) || 600_000)
 
 /** Omega fallback khi DB không có profile (fail-open, vẫn tư vấn được)
@@ -74,13 +74,14 @@ const CONSULT_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.OMEGA_CONSULT_T
 const OMEGA_FALLBACK = { provider: 'zen', model: 'space-bunny-free' }
 
 /**
- * FIX (review 2026-09-08 — directive 2026-09-05): 2 model dưới là lõi extraction
- * NIM cũ — CẤM dùng làm model chat cho agent do Omega tạo (agent chat bằng
- * extraction core = chất lượng tệ + sai directive). Task 33: NIM đã gỡ khỏi
- * agents — giữ Set này để chặn cả giá trị sót từ DB/instruction cũ.
+ * FIX (review 2026-09-08 — directive 2026-09-05, cập nhật 2026-11-30): lõi
+ * extraction NIM — CẤM dùng làm model chat cho agent do Omega tạo (agent chat
+ * bằng extraction core = chất lượng tệ + sai directive). Giữ Set để chặn cả
+ * giá trị sót từ DB/instruction cũ. (gpt-oss-120b đã EOL 410 — bỏ khỏi Set;
+ * nemotron-550b vẫn là lõi extraction chính.)
  */
-const EXTRACTION_ONLY_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b', 'openai/gpt-oss-120b'])
-const CHAT_MODEL_HINT = 'space-bunny-free (TẤT CẢ agents — phiên 7, Task 37; model free duy nhất mở cho oc_sk key) — provider zen'
+const EXTRACTION_ONLY_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b'])
+const CHAT_MODEL_HINT = 'space-bunny-free (provider zen — lõi chính TẤT CẢ agents) hoặc moonshotai/kimi-k3 (provider nvidia — lựa chọn tạm thời 2026-11-30, chậm ~2 phút/call, NIM chết tự fallback space-bunny-free)'
 
 /** Toolset mặc định cho agent mới nếu Omega không chỉ định — luôn kèm
  *  escalate_problem (agent mới được hỏi Omega khi kẹt — đúng cơ chế
@@ -161,7 +162,7 @@ async function rosterTextForConsult(): Promise<string> {
   // FIX 2026-09-02 (Omega audit #6): cap cũ 4000 ký tự cắt roster lớn giữa
   // chừng — Omega consult không thấy agent phù hợp tồn tại → khuyến nghị tạo
   // agent TRÙNG năng lực. Tăng lên 12000 (consult prompt rất gọn ~1-2k, các
-  // brain kimi-k3/deepseek/minimax chịu 16k+ context thoải mái) + nếu vượt
+  // brain (space-bunny ctx 1M / kimi-k3 16k+) chịu thoải mái) + nếu vượt
   // cap thì cắt từng MỖI dòng cuối (giữ nguyên 4 nhóm đầu đủ nhận diện).
   const full = lines.join('\n')
   if (full.length <= 12_000) return full || '(roster trống)'
@@ -497,14 +498,13 @@ export async function createAgentByOmega(params: {
   }
 
   // FIX 2026-09-25 (E2E tool audit): default provider → zen (13/13 agents đang chạy
-  // zen; nvidia keys chết — agent mới tạo với nvidia sẽ không gọi được LLM).
-  // Default model theo provider (PHIÊN 7 — Task 37): zen → space-bunny-free
-  // (model free duy nhất mở cho oc_sk key; nvidia legacy → minimax-m3).
+  // zen). Default model theo provider: zen → space-bunny-free (lõi chính);
+  // nvidia → kimi-k3 (lựa chọn tạm thời 2026-11-30 — minimax-m3 đã EOL 410).
   const providerValue = provider || 'zen'
   if (!VALID_PROVIDERS.includes(providerValue)) {
     return { success: false, error: `Provider "${providerValue}" không hợp lệ. Chọn: ${VALID_PROVIDERS.join(', ')}` }
   }
-  const modelValue = model || (providerValue === 'zen' ? 'space-bunny-free' : 'minimaxai/minimax-m3')
+  const modelValue = model || (providerValue === 'zen' ? 'space-bunny-free' : 'moonshotai/kimi-k3')
   const models = PROVIDER_MODELS[providerValue] || []
   if (!models.some(m => m.id === modelValue)) {
     return { success: false, error: `Model "${modelValue}" không thuộc provider "${providerValue}". Models khả dụng: ${models.map(m => m.id).join(', ')}` }

@@ -1,19 +1,14 @@
 /**
  * Agent Constants — Shared provider/model data and validation constants
  *
- * Architecture: NVIDIA NIM ONLY (single provider)
- *   - 2 extraction cores: nemotron-3-ultra-550b (chính) + gpt-oss-120b (fallback)
- *     (user directive 2026-09-05 — kimi-k3 bị CẤM cho tác vụ trích xuất tài liệu)
- *   - 4 agent/chat cores (fallback chain — user directive 2026-08-28:
- *     kimi-k3 chính → deepseek-v4-pro-0813 → deepseek-v4-flash-0731 → minimax-m3)
- *     (user directive 2026-08-27: bỏ gpt-oss-120b khỏi Agent/Chat)
- *   - glm-5.2 removed 2026-08-25 (NIM end-of-life — HTTP 410)
- *   - glm-5.3 KHÔNG tồn tại trên NIM (verified 2026-08-27 — 404, catalog không có GLM)
- *   - NOT using: kimi-k2.6 (đã quay lại catalog, không dùng), glm-5.1 (deprecated),
- *     minimax-m2.7 (deprecated), qwen3.5-397b (not on NIM),
- *     deepseek-v4-pro bản cũ không suffix (404 — bản mới: deepseek-v4-pro-0813,
- *     verified live 2026-08-28 qua GET /v1/models)
- *   - NOT using: Mistral, Cerebras, OpenRouter (removed)
+ * ⚠ MODEL MATRIX (USER DIRECTIVE 2026-11-30 — single source of truth):
+ *   - NVIDIA NIM chỉ giữ: LÕI EMBED (embeddings.ts, nemotron-3-embed-1b) +
+ *     LÕI EXTRACTION nemotron-3-ultra-550b (llm.ts callLLMSlot NIM-first) +
+ *     KIMI-K3 như 1 LỰA CHỌN model agent TẠM THỜI (chọn → route NIM thật,
+ *     fail → tự fallback Zen space-bunny-free).
+ *   - ĐÃ LOẠI BỎ TOÀN BỘ (410 EOL — live-probe 2026-11-30): minimax-m3,
+ *     deepseek-v4-pro-0813, deepseek-v4-flash-0731, gpt-oss-120b.
+ *   - Lõi LLM mặc định của agents: OpenCode Zen space-bunny-free.
  *
  * Used by:
  * - /api/agents/route.ts (CRUD validation)
@@ -25,35 +20,31 @@
 
 // ==================== PROVIDER + MODEL DATA ====================
 
-/** EXTRACTION models — chuỗi 2 lõi dùng cho trích xuất tài liệu (callLLMSlot)
- *  (user directive 2026-09-05: nemotron-3-ultra-550b làm LÕI CHÍNH +
- *   openai/gpt-oss-120b ("chatgpt-os-120b") làm FALL BACK — kimi-k3 TUYỆT ĐỐI
- *   không dùng cho trích xuất tài liệu)
- *  Đã bỏ llama-3.1-nemotron-ultra-253b-v1 (404 NOT FOUND — deprecated)
- *  Đã bỏ nemotron-4-340b-instruct (404 NOT FOUND — deprecated)
+/** EXTRACTION models — lõi trích xuất (triết tách) tài liệu (callLLMSlot)
+ *  (user directive 2026-11-30: NIM nemotron-3-ultra-550b LÕI CHÍNH — fail toàn
+ *   chuỗi key → fallback chuỗi Zen space-bunny-free; kimi-k3 TUYỆT ĐỐI không
+ *   dùng cho trích xuất tài liệu — directive 2026-09-05 giữ nguyên)
+ *  Đã bỏ (404/410): llama-3.1-nemotron-ultra-253b-v1, nemotron-4-340b-instruct,
+ *  gpt-oss-120b (EOL 2026-09-03)
  */
 export const EXTRACTION_MODELS: Record<string, Array<{ id: string; label: string }>> = {
-  // TASK 33 (2026-09-27): extraction (trích xuất tài liệu KB) đã chuyển sang
-  // ZEN (callLLMSlot → nemotron-3-ultra-free, override EXTRACTION_ZEN_MODEL).
-  // 2 lõi NIM cũ (nemotron-550b + gpt-oss-120b) đã gỡ — NIM chỉ còn lõi embed.
+  // USER DIRECTIVE 2026-11-30: extraction (triết tách) NIM-FIRST — lõi chính
+  // nvidia/nemotron-3-ultra-550b (llm.ts callLLMSlot gọi NIM xoay 4 key trước),
+  // fail toàn chuỗi → fallback chuỗi Zen space-bunny-free (override
+  // EXTRACTION_ZEN_MODEL). gpt-oss-120b (lõi fallback NIM cũ) đã EOL 410 — gỡ.
+  nvidia: [
+    { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction chính — NIM)' },
+  ],
   zen: [
-    // r72 (2026-10-09): nemotron-3-ultra-free đã BỎ khỏi catalog Zen (404) →
-    // extraction mặc định space-bunny-free (HTTP xoay key — llm.ts callLLMSlot;
-    // override EXTRACTION_ZEN_MODEL để đổi sang model free khác).
-    { id: 'space-bunny-free', label: 'space-bunny-free (extraction chính — zen)' },
+    { id: 'space-bunny-free', label: 'space-bunny-free (extraction fallback — zen)' },
   ],
 }
 
-/** ALL models — NVIDIA NIM ONLY
- *  2 lõi trích xuất + 4 lõi Agent/Chat (user directive 2026-08-28:
- *  kimi-k3 làm lõi CHÍNH + fallback chain deepseek-v4-pro-0813 →
- *  deepseek-v4-flash-0731 → minimax-m3; extraction vẫn nemotron-550b chính +
- *  gpt-oss-120b fallback — kimi-k3 bị cấm ở pipeline trích xuất tài liệu)
- *  Verified 2026-08-25 via actual completion calls against integrate.api.nvidia.com
- *  deepseek-v4-pro-0813 verified live 2026-08-28 qua GET /v1/models
- *  Deprecated (404): glm-5.1, minimax-m2.7, qwen3.5-397b, deepseek-v4-pro (bản cũ)
- *  Deprecated (404): llama-3.1-nemotron-ultra-253b-v1, nemotron-4-340b-instruct
- *  Deprecated (410): z-ai/glm-5.2 | glm-5.3: không tồn tại (verified 2026-08-27)
+/** Lõi agents — mặc định OpenCode Zen (space-bunny-free); NVIDIA NIM chỉ giữ
+ *  kimi-k3 (lựa chọn tạm thời 2026-11-30) + lõi embed. Toàn bộ minimax-m3 /
+ *  deepseek-v4-pro-0813 / deepseek-v4-flash-0731 / gpt-oss-120b ĐÃ LOẠI BỎ
+ *  (410 EOL — live-probe 2026-11-30). kimi-k3 bị cấm ở pipeline trích xuất
+ *  tài liệu (directive 2026-09-05 giữ nguyên).
  */
 export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string; caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean } }>> = {
   // ===== OPENCODE ZEN (FIX 2026-09-25 — E2E tool audit) =====
@@ -133,9 +124,19 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string; 
     },
   ],
   nvidia: [
-    // TASK 33 (2026-09-27): NIM ĐÃ GỠ khỏi tác vụ agents — provider này giữ lại
-    // CHỈ để tương thích UI/DB cũ; không còn lõi LLM nào chạy trên NIM. Lõi embed
-    // (nemotron-3-embed-1b) là cấu hình env riêng (embeddings.ts), không nằm đây.
+    // 2026-11-30 — KIMI-K3 là lựa chọn model agent NIM TẠM THỜI (user
+    // directive: "nếu kimi k3 sống được thì giữ lại như 1 lựa chọn"; "đảm bảo
+    // tôi bấm chọn k3 sẽ chuyển qua dùng k3 được"). Live-probe 2026-11-30:
+    // ALIVE nhưng chậm (~120s/call tối giản). Chọn kimi-k3 → callLLMForAgent
+    // route NIM thật; NIM 429 kéo dài/EOL → tự fallback chuỗi Zen
+    // space-bunny-free (agent không chết).
+    {
+      id: 'moonshotai/kimi-k3',
+      label: 'Kimi K3 (NVIDIA NIM — tạm thời; chậm ~2 phút/call; NIM chết → tự fallback space-bunny-free)',
+      caps: { coding: true, reasoning: true, agentic: true },
+    },
+    // Lõi embed KHÔNG phải LLM agent — giữ để hiển thị/đối chiếu (UI chat
+    // dropdown lọc mục này ra).
     { id: 'nvidia/nemotron-3-embed-1b', label: 'nemotron-3-embed-1b (CHỈ lõi embed — không phải LLM agent)' },
   ],
 }
@@ -143,13 +144,13 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string; 
 export const PROVIDER_DATA = [
   {
     key: 'zen',
-    label: 'OpenCode Zen (lõi agents — Task 33)',
+    label: 'OpenCode Zen (lõi agents — mặc định)',
     icon: '⚡',
     models: PROVIDER_MODELS.zen,
   },
   {
     key: 'nvidia',
-    label: 'NVIDIA NIM (CHỈ lõi embed — Task 33)',
+    label: 'NVIDIA NIM (kimi-k3 tạm thời + embed + extraction)',
     icon: '🎮',
     models: PROVIDER_MODELS.nvidia,
   },

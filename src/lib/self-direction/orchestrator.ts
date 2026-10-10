@@ -147,7 +147,7 @@ export interface SdStepEvaluation {
 
 // ==================== CONSTANTS ====================
 
-const OMEGA_FALLBACK_BRAIN = { provider: 'nvidia', model: 'minimaxai/minimax-m3' } // 2026-10-16: lõi chính tạm thời
+const OMEGA_FALLBACK_BRAIN = { provider: 'zen', model: 'space-bunny-free' } // 2026-11-30: minimax-m3 EOL 410 → production core zen
 // 2026-09-24 (USER DIRECTIVE): Self-Direction review/eval/report path dùng Opus
 // (CTO) brain từ DB → zen/nemotron-3-ultra-free. Fail-open: DB error → NIM fallback.
 async function resolveOpusBrainForSelfDirection(): Promise<{ provider: string; model: string }> {
@@ -163,8 +163,8 @@ async function resolveOpusBrainForSelfDirection(): Promise<{ provider: string; m
   return OMEGA_FALLBACK_BRAIN
 }
 // Task 20 (2026-09-03): 120s cũ giết chuỗi fallback TRƯỚC khi tới lượt
-// minimax-m3 khi 3 lõi đầu hang phía NIM (mỗi lõi đốt 150s timeout — cần
-// ~460s mới tới minimax). 600s ≥ worst-case chuỗi; LLM Prober (llm.ts) đã tự
+// (lịch sử: chuỗi fallback NIM cần ~460s khi 3 lõi đầu hang — giờ kimi-k3
+// NIM chậm ~120s/call nên trần cao vẫn hợp lý). 600s ≥ worst-case chuỗi;
 // trip breaker cho lõi hang nên phần lớn call trở lại tốc độ ~giây.
 const LLM_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.SD_LLM_TIMEOUT_MS || '600000', 10) || 600_000)
 const MAX_PLAN_STEPS = 12
@@ -284,7 +284,7 @@ const reviewingProposals: Set<string> = (globalForSd.__tmoSdReviewingProposals ?
 // (2) 2026-10-15 (user directive): gỡ NỐT cả fallback z-ai-sdk bên trong
 //     llm.ts (callLLMForAgent + callLLM) — SDK chỉ tồn tại trong sandbox
 //     triển khai, KHÔNG có trên máy local của user. Chuỗi LLM giờ thuần
-//     NVIDIA NIM (kimi-k3 → deepseek-v4-pro → v4-flash → minimax-m3, xoay
+//     OpenCode Zen space-bunny-free (chuỗi fallback NIM cũ đã EOL, xoay
 //     4 key + timeout-breaker) — lỗi hiện diện thẳng trong LLMResult.error.
 
 // ==================== CORE LLM HELPER ====================
@@ -433,7 +433,7 @@ async function agentPersona(name: string): Promise<{ systemPrompt: string; brain
     })
     if (p) {
       const base = p.instruction || `Bạn là ${name}${p.position ? ` (${p.position})` : ''}. ${p.description || ''}`
-      return { systemPrompt: base, brain: { provider: p.provider || 'nvidia', model: p.model || 'minimaxai/minimax-m3' } }
+      return { systemPrompt: base, brain: { provider: p.provider || 'zen', model: p.model || 'space-bunny-free' } }
     }
   } catch { /* fail-open */ }
   return {

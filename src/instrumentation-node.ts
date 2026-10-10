@@ -1344,8 +1344,8 @@ if (!globalForCodeTeamSeed.__tmoCodeTeamSeeded) {
 // ============================================================================
 // LLM MODEL HEALTH PROBER (Task 20 — 2026-09-03)
 // ============================================================================
-// Root-cause "Agents không tạo được output do LLM call thất bại": 3 lõi đầu
-// chuỗi HANG phía NIM → chuỗi đốt ~450s trước khi tới minimax-m3, trong khi
+// Root-cause (lịch sử 2026-09-03, giữ làm ghi chú): chuỗi fallback NIM cũ
+// HANG ~450s trước khi tới lõi cuối, trong khi
 // caller timeout ngoài (60-180s) giết chuỗi giữa chừng. Prober (llm.ts) probe
 // nền 6 lõi mỗi 5 phút: lõi hang → trip breaker NGAY (call thật skip trong ms,
 // đi thẳng lõi khỏe); lõi hồi phục → xóa breaker NGAY. Fire-and-forget —

@@ -77,7 +77,7 @@ model DailyTokenByProviderModel {
   id        String   @id @default(cuid())
   date      String   /// ISO date string "YYYY-MM-DD"
   provider  String   /// Provider name: "nvidia" (NVIDIA NIM only)
-  model     String   /// Model name (e.g. "deepseek-ai/deepseek-v4-pro", "nvidia/nemotron-3-super-120b-a12b")
+  model     String   /// Model name (e.g. "space-bunny-free", "moonshotai/kimi-k3")
   tokens    Int      @default(0) /// Tokens used by this provider's model on this date
   updatedAt DateTime @updatedAt
 

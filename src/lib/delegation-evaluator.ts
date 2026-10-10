@@ -234,7 +234,7 @@ SUB-AGENT KẾT THÚC BỞI: ${endedBy}
         abortCheck,
       }),
       new Promise<never>((_, reject) =>
-        // Task 20 (2026-09-03): 90s cũ giết chuỗi fallback trước khi tới minimax —
+        // Task 20 (lịch sử): 90s cũ giết chuỗi fallback NIM (đã EOL toàn bộ) —
         // nâng 600s ≥ worst-case (~460s khi 3 lõi đầu hang NIM); prober trip
         // breaker cho lõi hang nên evaluation thường trở lại ~giây. Fail-open
         // giữ nguyên (timeout → null).

@@ -146,9 +146,9 @@ export function CodeTabContent() {
   }>>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [newSessionPrompt, setNewSessionPrompt] = useState('')
-  // MODEL POLICY 2026-10-16: minimax-m3 mặc định (lõi chính tạm thời — duy nhất
-  // khả dụng; kimi/ds HANG phía NIM theo matrix test 4 lõi × 4 key)
-  const [newSessionModel, setNewSessionModel] = useState('minimaxai/minimax-m3')
+  // MODEL POLICY 2026-11-30: space-bunny-free (Zen) mặc định; kimi-k3 (NVIDIA
+  // NIM) là lựa chọn tạm thời — minimax/deepseek đã EOL 410, loại bỏ toàn bộ.
+  const [newSessionModel, setNewSessionModel] = useState('space-bunny-free')
   const [creatingSession, setCreatingSession] = useState(false)
 
   // MCP Bridge
@@ -2260,13 +2260,13 @@ export function CodeTabContent() {
     { label: 'Optimize', icon: Zap, prompt: 'Optimize this code for better performance' },
   ]
 
-  // Model options — NVIDIA NIM only (user directive 2026-10-16: minimax-m3 là
-  // lõi CHÍNH TẠM THỜI — duy nhất khả dụng sau matrix test; kimi-k3 /
-  // ds-v4-pro / ds-v4-flash là fallback chain TỰ ĐỘNG phía server — selector
-  // vẫn 1 lựa chọn vì server override mọi agent về minimax-m3 rồi tự chuyển
-  // lõi khi minimax cạn key/429)
+  // Model options (user directive 2026-11-30): space-bunny-free (Zen — lõi
+  // chính) + kimi-k3 (NVIDIA NIM — lựa chọn tạm thời, chọn là chạy thật
+  // kimi-k3; NIM 429 kéo dài → tự fallback space-bunny-free phía server).
+  // minimax-m3 + dòng deepseek đã EOL 410 — loại bỏ toàn bộ.
   const MODEL_OPTIONS = [
-    { value: 'minimaxai/minimax-m3', label: 'MiniMax M3 (lõi chính tạm thời + fallback tự động)' },
+    { value: 'space-bunny-free', label: 'space-bunny-free (Zen — lõi chính)' },
+    { value: 'moonshotai/kimi-k3', label: 'Kimi K3 (NVIDIA NIM — tạm thời)' },
   ]
 
   return (

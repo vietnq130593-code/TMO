@@ -383,8 +383,8 @@ Bạn là ORCHESTRATOR (người điều phối trung tâm) của toàn bộ h�
    - Khi tư vấn: nhìn AGENT ROSTER (danh bạ kỹ năng) để đề xuất đúng người — kèm lý do + bước cụ thể.
 
 2. TẠO AGENT MỚI (create_agent) — khi hệ thống THIẾU agent có kỹ năng phù hợp (đã kiểm tra Agent Roster):
-   tool_call: create_agent({"name": "TÊN", "description": "Mô tả vai trò", "instruction": "Hướng dẫn chi tiết — system prompt đầy đủ", "avatar": "🤖", "model": "minimaxai/minimax-m3", "team": null, "position": null, "temperature": 0.7, "maxTokens": 4096, "capable": "kỹ năng chính", "tools": ["file_read", "shell", ...]})
-   - Model: minimaxai/minimax-m3 (mặc định — lõi chính tạm thời 2026-10-16) | moonshotai/kimi-k3 (fallback #1) | deepseek-ai/deepseek-v4-pro-0813 (fallback #2) | deepseek-ai/deepseek-v4-flash-0731 (fallback #3)
+   tool_call: create_agent({"name": "TÊN", "description": "Mô tả vai trò", "instruction": "Hướng dẫn chi tiết — system prompt đầy đủ", "avatar": "🤖", "model": "space-bunny-free", "team": null, "position": null, "temperature": 0.7, "maxTokens": 4096, "capable": "kỹ năng chính", "tools": ["file_read", "shell", ...]})
+   - Model: space-bunny-free (mặc định — provider zen, lõi chính) | moonshotai/kimi-k3 (provider nvidia — lựa chọn tạm thời 2026-11-30, chậm ~2 phút/call)
    - Team/vị trí: null (standalone) hoặc "code"/"research" + position (code: G4/G5 cho agent mới — TL/G1/G2-A/G2-B/G3 đã có hệ thống giữ; research: TL/G1/G2/G3/G4/G5)
    - Temperature: 0.3 (kỹ thuật chặt) → 0.7 (cân bằng) → 1.0+ (sáng tạo)
    - Lương token (maxTokens): 256-32768
@@ -1088,10 +1088,14 @@ async function _doStandaloneSeed(): Promise<boolean> {
         }
 
         // TASK 33 (2026-09-27) — NIM→ZEN MIGRATION (mirror Code/Research team):
-        // rows còn sót provider NIM hoặc model NIM (id chứa '/') là giá trị cũ
-        // từ thời NIM (kimi-k3/minimax-m3/deepseek...), KHÔNG phải lựa chọn user
+        // rows còn sót provider NIM hoặc model NIM đã EOL (id chứa '/') là giá
+        // trị cũ từ thời NIM (minimax-m3/deepseek...), KHÔNG phải lựa chọn user
         // → normalize về def (zen). Model zen khác user tự chọn → GIỮ NGUYÊN.
-        const isNimModelId = (m: string) => m.includes('/')
+        // 2026-11-30 — KIMI-K3 EXEMPTION (user directive: kimi-k3 là lựa chọn
+        // model agent NIM tạm thời): id NIM kimi-k3 do USER chọn phải được TÔN
+        // TRỌNG — KHÔNG normalize về def. Các id NIM khác (minimax/deepseek/
+        // gpt-oss... đều đã EOL 410) vẫn normalize về def (zen).
+        const isNimModelId = (m: string) => m.includes('/') && m !== 'moonshotai/kimi-k3'
         if ((existing.provider !== 'zen' || isNimModelId(existing.model)) && (existing.provider !== def.provider || existing.model !== def.model)) {
           try {
             await db.agentProfile.update({

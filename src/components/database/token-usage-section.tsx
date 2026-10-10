@@ -16,12 +16,11 @@ import { toast } from '@/hooks/use-toast'
 import { HealthResponse, useTokenStream, TokenUsageData } from '@/components/app-shared'
 
 
-/** NVIDIA NIM model configuration — Single Provider Architecture
- *  2 extraction cores (nemotron-550b chính + gpt-oss-120b fallback — user
- *  directive 2026-09-05: kimi-k3 KHÔNG dùng cho trích xuất tài liệu)
- *  + 3 agent/chat cores (user directive 2026-08-27: bỏ gpt-oss-120b;
- *  GLM 5.2 đã chết HTTP 410, GLM 5.3 không tồn tại trên NIM)
- *  Verified 2026-08-25 via actual completion calls against integrate.api.nvidia.com */
+/** NVIDIA NIM model configuration (user directive 2026-11-30):
+ *  NIM chỉ giữ: embed (hiển thị ở section khác) + extraction nemotron-550b
+ *  (chính — fallback qua chuỗi Zen space-bunny-free) + kimi-k3 (lựa chọn
+ *  model agent tạm thời). minimax-m3 + dòng deepseek + gpt-oss-120b đã EOL
+ *  410 — LOẠI BỎ TOÀN BỘ (live-probe 2026-11-30). */
 export const NVIDIA_CORE_CONFIG = {
   extraction: {
     label: 'Trích xuất',
@@ -31,7 +30,6 @@ export const NVIDIA_CORE_CONFIG = {
     barColor: '#22d3ee',
     models: [
       { key: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (chính)' },
-      { key: 'openai/gpt-oss-120b', label: 'gpt-oss-120b (fallback)' },
     ],
   },
   agent: {
@@ -41,10 +39,7 @@ export const NVIDIA_CORE_CONFIG = {
     headerBg: 'bg-amber-950/60',
     barColor: '#f59e0b',
     models: [
-      { key: 'minimaxai/minimax-m3', label: 'minimax-m3 (lõi chính — tạm thời)' },
-      { key: 'moonshotai/kimi-k3', label: 'kimi-k3 (fallback #1)' },
-      { key: 'deepseek-ai/deepseek-v4-pro-0813', label: 'deepseek-v4-pro (fallback #2)' },
-      { key: 'deepseek-ai/deepseek-v4-flash-0731', label: 'deepseek-v4-flash (fallback #3)' },
+      { key: 'moonshotai/kimi-k3', label: 'kimi-k3 (lựa chọn tạm thời — NVIDIA NIM)' },
     ],
   },
 } as const

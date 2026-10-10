@@ -9,14 +9,8 @@
       "baseURL": "https://integrate.api.nvidia.com/v1",
       "apiKey": "${NVIDIA_API_KEY_1}",
       "models": [
-        "nvidia/nemotron-3-super-120b-a12b",
-        "meta/llama-3.3-70b-instruct",
-        "openai/gpt-oss-120b",
-        "deepseek-ai/deepseek-v4-pro",
-        "moonshotai/kimi-k2.6",
-        "z-ai/glm-5.1",
-        "minimaxai/minimax-m2.7",
-        "qwen/qwen3.5-397b-a17b"
+        "moonshotai/kimi-k3",
+        "nvidia/nemotron-3-ultra-550b-a55b"
       ]
     }
   },

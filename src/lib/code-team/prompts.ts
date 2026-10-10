@@ -40,8 +40,9 @@ export function getAgentPrompt(position: string): string {
 //   2. Receives tool schemas via OpenAI-style `tools` API param
 //   3. Emits `tool_calls` array in the API response (parsed by tryProviderWithSlotKey)
 //
-// Why both? Some models (notably minimax-m3) need explicit text instructions
-// to call tools reliably; others (kimi-k3) work fine via the API param alone.
+// Why both? Some models (notably space-bunny-free — model nền MiniMax) need
+// explicit text instructions to call tools reliably; others work via the API
+// param alone.
 // Defense in depth = higher success rate during dual-mode validation.
 //
 // Format: OpenAI-compatible JSON. The LLM is told to prefer native tool_calls

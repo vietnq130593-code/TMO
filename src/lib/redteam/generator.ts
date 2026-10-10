@@ -2,16 +2,11 @@
 // Per docs/REDTEAM_TECHNICAL_BLUEPRINT.md §3.1.
 //
 // Generates adversarial questions across 6 attack vectors against the
-// network-science/ML KB, using a DEDICATED generator model (gpt-oss-120b —
-// NOT nemotron-550b which is extraction-only per user directive 2026-08-25).
-// Model role separation (blueprint anti-bias decision):
-//   generator = gpt-oss-120b ≠ answer model (deepseek) ≠ judges (kimi/minimax).
-//
-// NOTE 2026-08-27 (model policy update): gpt-oss-120b bị bỏ khỏi danh sách
-// Agent/Chat theo user directive, NHƯNG vẫn giữ nguyên vai trò generator nội
-// bộ ở đây (model còn sống trên NIM ~0.4s/call; role separation theo blueprint
-// là yêu cầu kiến trúc — generator ≠ SUT ≠ judges). Danh sách Agent/Chat giờ
-// là [kimi-k3, deepseek-v4-flash, minimax-m3] — xem llm.ts NVIDIA_AGENT_MODELS.
+// network-science/ML KB, using a DEDICATED generator model (space-bunny-free —
+// 2026-11-30: gpt-oss-120b đã EOL 410; nemotron-550b vẫn extraction-only per
+// user directive). Model role separation (blueprint anti-bias decision, tốt
+// nhất có thể với matrix hiện tại):
+//   generator = space-bunny-free (Zen) ≠ attacker judge (kimi-k3 NIM).
 //
 // Quality gate (blueprint §Phase 2.3): every generated candidate runs through
 // a quick LLM adversarial-ness check ("Is this genuinely adversarial for a
@@ -19,18 +14,19 @@
 // itself fails, the case is inserted ANYWAY (fail-open) with a note — a flaky
 // gate must not silently kill the whole weapon factory.
 //
-// Insert rules: origin='generated', generatedBy='openai/gpt-oss-120b',
+// Insert rules: origin='generated', generatedBy=<GENERATOR_MODEL>,
 // dedupe against existing RedTeamCase questions (any origin) + within-batch.
 
 import { db } from '@/lib/db'
 import { callLLM } from '@/lib/llm'
 
-/** Generator model — per blueprint role assignment table. */
-const GENERATOR_MODEL = 'openai/gpt-oss-120b'
+/** Generator model — 2026-11-30: gpt-oss-120b EOL 410 (2026-09-03) →
+ *  space-bunny-free (Zen). Giữ khác judge attack kimi-k3 (NIM). */
+const GENERATOR_MODEL = 'space-bunny-free'
 
 /** Quality-gate model — same generator core (gate is cheap + non-scoring,
  *  so it does not taint the judge role separation). */
-const GATE_MODEL = 'openai/gpt-oss-120b'
+const GATE_MODEL = 'space-bunny-free'
 
 /** Max chars for a generated question — attacks must be short & natural. */
 const MAX_QUESTION_CHARS = 300

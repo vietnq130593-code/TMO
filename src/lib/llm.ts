@@ -1,54 +1,43 @@
 /**
  * Shared LLM Calling Module for GraphRAG
  *
- * SINGLE PROVIDER architecture — NVIDIA NIM ONLY:
- *   NVIDIA NIM (4 keys × 4 docs = 16 max concurrent, auto mode)
+ * ⚠ MODEL MATRIX (USER DIRECTIVE 2026-11-30 — thay thế toàn bộ chính sách cũ):
+ *   NVIDIA NIM dễ 429 kéo dài với tác vụ phức tạp/dài hạn → NIM CHỈ giữ 2 vai trò:
+ *     1. LÕI EMBED (src/lib/embeddings.ts — nvidia/nemotron-3-embed-1b)
+ *     2. LÕI TRÍCH XUẤT (triết tách) — nvidia/nemotron-3-ultra-550b-a55b là lõi
+ *        extraction CHÍNH (callLLMSlot: NIM nemotron-550b trước, fail toàn chuỗi
+ *        key → fallback chuỗi Zen space-bunny-free cho pipeline không chết)
+ *   - kimi-k3 (moonshotai/kimi-k3) GIỮ LẠI như 1 LỰA CHỌN model agent TẠM THỜI
+ *     (dropdown Smolab/Agents chọn kimi-k3 → callLLMForAgent route THẬT qua NIM
+ *     kimi-k3; NIM chết/429 kéo dài → tự fallback chuỗi Zen space-bunny-free)
+ *   - ĐÃ LOẠI BỎ TOÀN BỘ (user directive 2026-11-30 "toàn bộ loại bỏ luôn" —
+ *     xác nhận 410 EOL live-probe 2026-11-30):
+ *     minimaxai/minimax-m3 (EOL 2026-09-09), deepseek-ai/deepseek-v4-pro-0813
+ *     (EOL 2026-09-14), deepseek-ai/deepseek-v4-flash-0731 (EOL 2026-09-21),
+ *     openai/gpt-oss-120b (EOL 2026-09-03 — lõi extraction fallback cũ).
+ *   - Mọi lõi LLM khác (agents + chat + utility + judges fallback) route qua
+ *     OPENCODE ZEN (HTTP → CLI → ZEN FAILOVER space-bunny-free → last-resort).
  *
- * Architecture: NVIDIA NIM ONLY (no Mistral, Cerebras, OpenRouter)
- *   - 1 extraction core: nemotron-3-ultra-550b (primary) + openai/gpt-oss-120b
- *     (fallback — user directive 2026-09-05: "trích xuất chỉ dùng nemotron-3-ultra-550b
- *     và chatgpt-os-120b làm fall back, KHÔNG được gọi kimi-k3"). Lõi extraction
- *     KHÔNG dùng cho chat/agent — ngược lại kimi-k3 (lõi agent) KHÔNG dùng cho extraction.
- *   - 4 agent/chat cores (FALLBACK CHAIN RESTORED — user directive 2026-08-28:
- *     "thiết lập deepseek v4 pro, deepseek v4 flash, minimax lần lượt làm fall
- *     back cho k3"; kết thúc giai đoạn Kimi-only "không fallback model khác"):
- *       kimi-k3 (chính) → deepseek-v4-pro-0813 → deepseek-v4-flash-0731 → minimax-m3
- *     (MODEL-FIRST từ 2026-09-06 — chạy đủ chuỗi lõi trên 1 key trước khi chuyển key)
- *     (user directive 2026-08-27: bỏ gpt-oss-120b khỏi Agent/Chat — model này
- *     CHỈ còn dùng làm generator/judge nội bộ cho RedTeam + Eval)
- *   - glm-5.2 REMOVED 2026-08-25: NVIDIA NIM end-of-life 2026-08-21 (HTTP 410)
- *   - glm-5.3 KHÔNG tồn tại trên NIM (verified 2026-08-27: 404 mọi biến thể ID,
- *     catalog 95 models không có GLM nào — NIM đã bỏ GLM hoàn toàn)
- *   - deepseek-v4-pro: bản cũ không suffix đã 404 (2026-08-27); bản MỚI
- *     deepseek-ai/deepseek-v4-pro-0813 VERIFIED LIVE 2026-08-28 qua GET /v1/models
- *     (84 models trong catalog — user đã kiểm tra trên build.nvidia.com)
- *   - Deprecated (404): kimi-k2.6(đã quay lại catalog nhưng không dùng), glm-5.1,
- *     minimax-m2.7, qwen3.5-397b
+ * Lịch sử đã hồi phục/EOL (giữ làm ghi chú): glm-5.2 (410 2026-08-21),
+ *   glm-5.3 (không tồn tại), kimi-k2.6, glm-5.1, minimax-m2.7, qwen3.5-397b
  *
- * FAILOVER ORDER (USER DIRECTIVE 2026-09-06 — MODEL TRƯỚC, KEY SAU):
- *   "gọi lõi chính không được thì chuyển lõi fallback NGAY (cùng key), chuyển
- *    tới lõi cuối cùng mới chuyển key" — áp cho cả extraction (nemotron-550b →
- *   gpt-oss-120b) lẫn agent/chat (kimi-k3 → v4-pro → v4-flash → minimax-m3).
- *   Triển khai: callModelChainModelFirst() — mỗi sweep chạy chuỗi model trên
- *   từng key, tối đa 3 sweep, cooldown-wait giữa sweep, circuit breaker/model.
+ * FAILOVER ORDER (MODEL TRƯỚC, KEY SAU — giữ từ 2026-09-06 cho các lõi NIM còn sống):
+ *   extraction: NIM nemotron-550b xoay vòng 4 key × 3 lần → (fail toàn chuỗi) → chuỗi Zen
+ *   agent chọn kimi-k3: NIM kimi-k3 xoay vòng 4 key × 3 lần → (fail toàn chuỗi) → chuỗi Zen
+ *   Circuit breaker/model + timeout-strike giúp lõi NIM hang/429 fail NGAY (ms).
  *
  * Key assignment (AUTO mode, least-loaded-first):
  *   - Each document gets a key (0-3, auto-assigned to least-loaded key)
  *   - Key N uses NVIDIA Key N (strict binding for rate limit isolation)
  *   - If Key N is rate-limited/exhausted → fallback to next available key
  *
- * Model rotation: chuỗi model cố định thứ tự (lõi chính trước, fallback sau) —
- *   không round-robin (single-core + failover directives).
+ * Token tracking: NVIDIA NIM + OpenCode Zen (theo provider của call)
  *
- * Token tracking: NVIDIA NIM (single provider)
- *
- * (2026-09-27 TASK 33 — USER DIRECTIVE) Z-AI SDK PROVIDER GỠ BỎ TOÀN BỘN
- * ("bỏ luôn cả z-ai" — z-ai-web-dev-sdk chỉ tồn tại trong sandbox, không có
- * trên máy local). NIM không còn dùng cho TÁC VỤ AGENTS / utility / extraction
- * — NVIDIA NIM giờ CHỈ giữ đúng 1 vai trò: LÕI EMBED (src/lib/embeddings.ts,
- * nemotron-3-embed-1b). Mọi lõi LLM của hệ thống (agents + chat + utility +
- * extraction) đều route qua OPENCODE ZEN (HTTP → CLI → ZEN FAILOVER
- * space-bunny → error, KHÔNG còn fallback NIM).
+ * (2026-09-27 TASK 33) Z-AI SDK provider gỡ bỏ toàn bộ + (2026-11-30 UPDATE:
+ * NIM mở lại 2 NGOẠI LỆ theo user directive — lõi extraction nemotron-550b +
+ * lựa chọn agent tạm thời kimi-k3; mô tả đầy đủ ở đầu file). Mọi lõi LLM khác
+ * (agents + chat + utility + judges fallback) route qua OPENCODE ZEN
+ * (HTTP → CLI → ZEN FAILOVER space-bunny → error, KHÔNG fallback NIM khác).
  */
 
 // ==================== TOKEN EVENT EMITTER (SSE REALTIME) ====================
@@ -223,7 +212,7 @@ export interface LLMCallOptions {
    *  khi có tools) — MỌI caller khác không đặt cờ này nên không đổi hành vi.
    *  Caller kiểm soát bằng env TMO_GOAL_LOOP_NATIVE_TOOLS. */
   skipNativeTools?: boolean
-  /** Phase 4 SMOLAB Prop 11' — explicit model override (e.g. 'openai/gpt-oss-120b').
+  /** Phase 4 SMOLAB Prop 11' — explicit model override (e.g. 'moonshotai/kimi-k3').
    *  When provided, callLLM() calls ONLY this NVIDIA NIM model (round-robin across
    *  all 4 keys) instead of the rotating chat pool. No rotation fallback — if the
    *  model fails, the error result is returned (callers decide how to fail-open).
@@ -310,13 +299,12 @@ function getRotatedModels(provider: string, models: string[]): string[] {
   // EXTRACTION models: no rotation — the single nemotron-550b core
   // Compare by reference — if it's the extraction list, skip rotation
   if (models === NVIDIA_EXTRACTION_MODELS) {
-    return models // Fixed order: [nemotron-550b (primary), gpt-oss-120b (fallback)]
+    return models // Fixed order: [nemotron-550b] — lõi extraction duy nhất (2026-11-30)
   }
-  // AGENT/CHAT models (MODEL POLICY 2026-08-25, fallback chain 2026-08-28):
-  // no rotation — kimi-k3 is the DEFAULT for every agent; the others are
-  // sequential failover backups (not load-balanced), so the order must stay fixed.
+  // AGENT/CHAT models (2026-11-30: chỉ còn kimi-k3 — lựa chọn NIM tạm thời):
+  // no rotation — thứ tự cố định, không load-balance.
   if (models === NVIDIA_AGENT_MODELS) {
-    return models // Always [kimi-k3, v4-pro, v4-flash, minimax]
+    return models // Always [kimi-k3] — lựa chọn agent NIM tạm thời (2026-11-30)
   }
   // Legacy lists: rotate as before
   const offset = modelRotationCounters[provider] % models.length
@@ -325,57 +313,55 @@ function getRotatedModels(provider: string, models: string[]): string[] {
   return [...models.slice(offset), ...models.slice(0, offset)]
 }
 
-/** NVIDIA NIM EXTRACTION models (user directive 2026-09-05):
- *  CHÍNH SÁCH: trích xuất tài liệu dùng nemotron-3-ultra-550b làm LÕI CHÍNH,
- *  openai/gpt-oss-120b ("chatgpt-os-120b") làm LÕI FALL BACK — KHÔNG BAO GIỜ
- *  dùng kimi-k3 cho bất kỳ tác vụ trích xuất tài liệu nào.
- *  Thứ tự cố định: primary trước, fallback sau (không rotation).
+/** NVIDIA NIM EXTRACTION models (user directive 2026-11-30 — cập nhật từ 2026-09-05):
+ *  CHÍNH SÁCH: trích xuất (triết tách) tài liệu dùng nemotron-3-ultra-550b làm
+ *  LÕI CHÍNH DUY NHẤT — KHÔNG BAO GIỜ dùng kimi-k3 cho trích xuất tài liệu.
+ *  Khi lõi NIM fail toàn chuỗi xoay key (429 kéo dài — đặc tính NIM với tác vụ
+ *  phức tạp/dài) → callLLMSlot fallback chuỗi Zen (EXTRACTION_ZEN_MODEL, mặc
+ *  định space-bunny-free) để pipeline trích xuất không chết.
  *
- *  nvidia/nemotron-3-ultra-550b-a55b: 550B MoE (55B active), mạnh nhất ✓ VERIFIED 2026-08-21
- *  openai/gpt-oss-120b: fallback ✓ CÒN TỒN TẠI trên NIM (verified 2026-09-05 qua
- *  GET /v1/models — đã từng bị bỏ khỏi Agent/Chat theo directive cũ 2026-08-27,
- *  giờ quay lại làm lõi extraction fallback theo directive mới 2026-09-05)
+ *  nvidia/nemotron-3-ultra-550b-a55b: 550B MoE (55B active) ✓ ALIVE —
+ *    live-probe 2026-11-30 HTTP 200 (4/4 key OK từ matrix 2026-10-16).
+ *  openai/gpt-oss-120b (lõi fallback cũ) → ĐÃ LOẠI (HTTP 410 GONE — EOL
+ *    2026-09-03, xác nhận live-probe 2026-11-30).
  *
- *  Đã bỏ: llama-3.1-nemotron-ultra-253b-v1 (404 NOT FOUND — deprecated 2026-08-21)
- *  Đã bỏ: nemotron-4-340b-instruct (404 NOT FOUND — deprecated 2026-08-21)
- *  Đã bỏ: meta/llama-3.3-70b-instruct (chất lượng trích xuất kém hơn 550b)
+ *  Đã bỏ cũ: llama-3.1-nemotron-ultra-253b-v1, nemotron-4-340b-instruct (404),
+ *  meta/llama-3.3-70b-instruct (chất lượng kém hơn 550b), gpt-oss-120b (410).
  */
 const NVIDIA_EXTRACTION_MODELS = [
   'nvidia/nemotron-3-ultra-550b-a55b',
-  // ⚠️ 2026-10-16: openai/gpt-oss-120b → HTTP 410 GONE trên cả 4 key (matrix
-  // test) — NIM đã EOL model này. Giữ trong mảng theo user directive 2026-09-05
-  // (extraction chỉ dùng nemotron + gpt-oss); fallback fail-fast 410 ~0.1s,
-  // sweep vẫn hoàn tất qua nemotron (4/4 key OK). Chờ user chỉ đạo thay lõi.
-  'openai/gpt-oss-120b',
 ]
 
-/** NVIDIA NIM AGENT/CHAT models — MINIMAX-M3 CHÍNH (user directive 2026-10-16:
- *  minimax-m3 tạm làm lõi chính — duy nhất khả dụng sau matrix test 4 lõi × 4
- *  key 09:11 UTC: kimi/ds-pro/ds-flash đều HANG 0 bytes sau 60s). Thứ tự cố
- *  định (không rotation): minimax-m3 chính, fallback tuần tự kimi-k3 → ds-pro
- *  → ds-flash (directive gốc 2026-08-28 về fallback được bảo toàn).
+/** NVIDIA NIM AGENT/CHAT models (user directive 2026-11-30):
+ *  CHỈ CÒN kimi-k3 — giữ lại như 1 LỰA CHỌN model agent TẠM THỜI ("nếu kimi
+ *  k3 sống được thì giữ lại như 1 lựa chọn"). Chọn kimi-k3 trong UI → agent
+ *  route THẬT qua NIM kimi-k3; NIM 429 kéo dài/hang → callLLMForAgent tự
+ *  fallback chuỗi Zen space-bunny-free (agent không chết).
  *
- *  Verified LIVE 2026-08-28 qua GET /v1/models (84 models):
- *    moonshotai/kimi-k3 ✓ | deepseek-ai/deepseek-v4-pro-0813 ✓ (BẢN MỚI —
- *    bản cũ không suffix đã 404 từ 2026-08-27) | deepseek-ai/deepseek-v4-flash-0731 ✓
- *    | minimaxai/minimax-m3 ✓
- *  Verified 2026-08-25: kimi-k3 ~16s | deepseek ~27s | minimax ~0.3s
- *  Matrix 2026-10-16: minimax-m3 4/4 key OK (6-44s) · 3 lõi kia HANG */
+ *  Live-probe 2026-11-30: kimi-k3 ALIVE nhưng CHẬM (~120s cho prompt tối giản
+ *  — verified curl 200 sau 2p0s). Toàn bộ lõi khác ĐÃ LOẠI BỎ theo user
+ *  directive ("toàn bộ loại bỏ luôn" — xác nhận 410 EOL live-probe 2026-11-30):
+ *    minimaxai/minimax-m3 (EOL 2026-09-09) · deepseek-ai/deepseek-v4-pro-0813
+ *    (EOL 2026-09-14) · deepseek-ai/deepseek-v4-flash-0731 (EOL 2026-09-21).
+ *  (Lịch sử: minimax-m3 từng là lõi chính tạm thời 2026-10-16 — đã EOL.)
+ */
 const NVIDIA_AGENT_MODELS = [
-  'minimaxai/minimax-m3',
   'moonshotai/kimi-k3',
-  'deepseek-ai/deepseek-v4-pro-0813',
-  'deepseek-ai/deepseek-v4-flash-0731',
 ]
+
+/** Kimi K3 NIM id — lựa chọn model agent NIM tạm thời (user directive
+ *  2026-11-30). Dùng bởi callLLMForAgent (route NIM thật) + UI/agents
+ *  (validation + boot migration phải TÔN TRỌNG giá trị này, không normalize). */
+export const KIMI_K3_NIM_ID = 'moonshotai/kimi-k3'
 
 /**
- * NVIDIA_MODELS (updated 2026-10-16): = NVIDIA_AGENT_MODELS (4 lõi chat —
- * minimax-m3 chính + 3 lõi fallback kimi-k3/ds-pro/ds-flash).
- * nemotron-3-ultra-550b KHÔNG thuộc danh sách này — lõi extraction duy nhất.
- * Deprecated (404): kimi-k2.6 (đã quay lại catalog, không dùng), glm-5.1,
- * minimax-m2.7, qwen3.5-397b; deepseek-v4-pro bản cũ (bản mới: -0813)
+ * NVIDIA_MODELS (updated 2026-11-30): = NVIDIA_AGENT_MODELS (1 lõi chat —
+ * kimi-k3, lựa chọn NIM tạm thời). nemotron-3-ultra-550b KHÔNG thuộc danh
+ * sách này — lõi extraction duy nhất (NVIDIA_EXTRACTION_MODELS).
+ * Deprecated (404/410): kimi-k2.6, glm-5.1, minimax-m2.7, qwen3.5-397b,
+ * minimax-m3 + cả dòng deepseek (đã loại bỏ toàn bộ 2026-11-30).
  */
-// Alias of NVIDIA_AGENT_MODELS — same 4 chat cores, same failover order.
+// Alias of NVIDIA_AGENT_MODELS — same chat core(s), same failover order.
 // (Kept as a separate export because getNvidiaModels() + the pool log line
 // reference NVIDIA_MODELS.)
 const NVIDIA_MODELS = [...NVIDIA_AGENT_MODELS]
@@ -1908,38 +1894,33 @@ if (!process.env.LLM_QUIET_INIT) {
   // dev.log strip ANSI ăn mất chuỗi "[m" (SGR reset rỗng) → "[moonshotai/..."
   // thành "oonshotai/..." (đã từng gây hiểu lầm cấu hình sai trong rà soát
   // 2026-09-04). Dùng ": model1 → model2" không bracket.
-  console.log(`[LLM] NVIDIA: agent/chat minimax-m3 (chính — TẠM THỜI, user directive 2026-10-16: duy nhất khả dụng) + FALLBACK CHAIN: ${NVIDIA_AGENT_MODELS.slice(1).join(' → ')} + 2 extraction cores (nemotron-550b chính → gpt-oss-120b fallback [410 GONE từ 2026-10-16] — lõi agent KHÔNG dùng cho extraction, user directive 2026-09-05)`)
+  console.log(`[LLM] NVIDIA (user directive 2026-11-30): embed (embeddings.ts) + extraction nemotron-550b (callLLMSlot NIM-first, fallback Zen) + agent/chat ${NVIDIA_AGENT_MODELS.join(' / ')} (lựa chọn tạm thời — chọn kimi-k3 route NIM thật, fail → Zen space-bunny-free). ĐÃ LOẠI: minimax-m3 + dòng deepseek (410 EOL) + gpt-oss-120b (410 EOL)`)
 }
 
-// ==================== KIMI K3 MODEL POLICY + NVIDIA KEY ROTATION ====================
-// USER DIRECTIVE 2026-08-31: "mọi Agents, mọi tác vụ từ giờ sẽ sử dụng lõi Kimi k3,
-// nếu gặp vấn đề thì chuyển API key của NVIDIA NIM, xoay vòng mỗi key 3 đủ 3 lần thì
-// mới dừng lại... tới khi chuyển qua cả 4 key lại về key đầu tiên, đến khi mỗi key
-// đều đủ 3 lần thì mới dừng lại"
+// ==================== NVIDIA KEY ROTATION (giữ từ KIMI K3 POLICY 2026-08-31) ====================
+// USER DIRECTIVE 2026-08-31 (còn hiệu lực cho CÁC LÕI NIM ĐANG DÙNG): "mọi
+// Agents, mọi tác vụ từ giờ sẽ sử dụng lõi Kimi k3, nếu gặp vấn đề thì chuyển
+// API key của NVIDIA NIM, xoay vòng mỗi key 3 đủ 3 lần thì mới dừng lại... tới
+// khi chuyển qua cả 4 key lại về key đầu tiên, đến khi mỗi key đều đủ 3 lần
+// thì mới dừng lại" — cơ chế xoay key áp cho kimi-k3 (agent) lẫn nemotron-550b
+// (extraction).
 //
-// USER DIRECTIVE 2026-08-28 (MỚI NHẤT — thay thế Kimi-only): "tôi nhớ khi còn
-// thiết lập fall back thì việc gọi K3 vẫn ổn định, hiện tại hãy thử thiết lập
-// deepseek v4 pro (đã kiểm tra trên build.nvidia.com), deepseek v4 flash,
-// minimax lần lượt làm fall back cho k3" — khôi phục FALLBACK CHAIN.
+// USER DIRECTIVE 2026-11-30 (MODEL MATRIX MỚI — thay thế chuỗi fallback NIM):
+//   - NIM chỉ giữ: embed + nemotron-550b (extraction) + kimi-k3 (lựa chọn agent
+//     tạm thời). minimax-m3 + cả dòng deepseek ĐÃ LOẠI BỎ toàn bộ (410 EOL).
+//   - Không còn FALLBACK CHAIN NIM (kimi → ds → minimax): khi lõi NIM cạn chuỗi
+//     xoay key → fallback sang chuỗi Zen space-bunny-free.
 //
-// Chính sách:
-//   1. MỌI agents + MỌI tác vụ (chat/ReAct/team/cron...) dùng lõi kimi-k3 làm
-//      lõi CHÍNH — cấu hình model riêng của từng agent bị override.
-//      (Tắt bằng ENFORCE_KIMI_K3=false để quay về cấu hình per-agent.)
+// Chính sách xoay key:
+//   1. Lõi NIM được gọi (kimi-k3 khi agent chọn / nemotron-550b cho extraction)
+//      theo cấu hình — KHÔNG override mọi agent về 1 lõi.
 //   2. Khi 1 attempt gặp vấn đề (429 rate-limit, 5xx, 401/403, timeout, network...)
 //      → CHUYỂN NGAY sang key kế tiếp: key1→key2→key3→key4→key1→key2→...
 //   3. MỖI key được thử tối đa KEY_FAILURES_PER_KEY (3) lần trong 1 chuỗi xoay vòng.
 //      Chỉ khi MỌI key đều đã fail đủ 3 lần (4 key × 3 = 12 attempts) mới dừng.
-//   4. FALLBACK CHAIN (user directive 2026-08-28): khi kimi-k3 cạn chuỗi xoay vòng
-//      key → chuyển TUẦN TỰ sang deepseek-v4-pro-0813 → deepseek-v4-flash-0731 →
-//      minimax-m3 (mỗi lõi lại xoay vòng đủ 4 key × 3 lần). Lý do: khi còn
-//      fallback, kimi-k3 ổn định vì traffic được giảm tải khi 429; chính sách
-//      Kimi-only trước đó khiến mọi call dồn vào kimi-k3 → 4 key cháy đồng loạt
-//      (NIM chặn kimi-k3 dễ hơn các model khác — 40 RPM + RPD thấp hơn mặt bằng).
-//   5. Extraction pipeline dùng 2 lõi riêng (user directive 2026-09-05):
-//      nemotron-3-ultra-550b (chính) + openai/gpt-oss-120b (fallback) — qua
-//      callLLMSlot, TUYỆT ĐỐI không dùng kimi-k3; override bằng env
-//      EXTRACTION_MODEL / EXTRACTION_FALLBACK_MODEL nếu muốn.
+//   4. Extraction pipeline dùng lõi riêng (user directive 2026-09-05 + 2026-11-30):
+//      nemotron-3-ultra-550b qua callLLMSlot (NIM-first, fallback chuỗi Zen),
+//      TUYỆT ĐỐI không dùng kimi-k3; override bằng env EXTRACTION_MODEL.
 
 /** Lõi model CHÍNH của AGENT STACK (mặc định ZEN — user directive Task 33
  *  2026-09-27: NIM bỏ hoàn toàn khỏi tác vụ agents).
@@ -2000,15 +1981,15 @@ const EXTRACTION_MODEL_OVERRIDE = process.env.EXTRACTION_MODEL || ''
  *  về 1 lõi NIM chung không còn tồn tại — agents dùng đúng model zen cấu hình
  *  riêng (DB AgentProfile), runtime chỉ còn đường Zen (HTTP → CLI → failover). */
 
-/** (KHÔI PHỤC 2026-08-28) Chuỗi backup cores deepseek/minimax ĐƯỢC DÙNG ở
- *  enforced path qua callAgentModelWithFallbackChain() — xem AGENT_FALLBACK_CHAIN
- *  ở trên. Giai đoạn Kimi-only "không fallback model khác" đã kết thúc. */
+/** (2026-11-30) Chuỗi backup cores NIM deepseek/minimax đã EOL TOÀN BỘ — loại
+ *  bỏ khỏi matrix. callAgentModelWithFallbackChain() giờ là legacy không-caller
+ *  (chain zen bên trong); runtime thật = callLLMForAgent (Zen + nhánh kimi-k3 NIM). */
 
 /**
- * Gọi lõi agent theo chuỗi MODEL-FIRST (USER DIRECTIVE 2026-09-06):
- *   kimi-k3 (chính) → deepseek-v4-pro-0813 → deepseek-v4-flash-0731 → minimax-m3
- * Lõi chính fail → chuyển NGAY lõi fallback kế (CÙNG key); chỉ khi TOÀN BỘ chuỗi
- * lõi fail trên 1 key mới CHUYỂN KEY (chain khởi động lại từ lõi chính).
+ * [LEGACY — KHÔNG còn caller từ Task 33 (giữ làm tư liệu]: gọi lõi agent theo
+ * chuỗi MODEL-FIRST (directive 2026-09-06 — chuỗi kimi-k3 → ds-pro → ds-flash
+ * → minimax-m3 đã EOL toàn bộ 2026-11-30). Chain hiện tại = AGENT_PRIMARY_MODEL
+ * (space-bunny-free) + AGENT_FALLBACK_CHAIN (zen) — mô tả ở section phía trên.
  * Circuit breaker hard-block giúp lõi bị NIM chặn cứng 429-instant fail NGAY (ms).
  * abortCheck được kiểm tra TRƯỚC MỖI attempt — người dùng bấm Dừng cắt ngang ngay.
  */
@@ -2553,21 +2534,22 @@ export function getModelBlockBreakers(): Array<{ model: string; blockedUntil: nu
 // Fail-open tuyệt đối; timer unref'd (không giữ process); globalThis guard
 // chống double-register khi Next dev HMR reload.
 
-// TASK 33 (2026-09-27): default OFF — prober chỉ probe lõi NIM (kimi/deepseek/
-// minimax/nemotron-550b/gpt-oss) mà agents không còn dùng nữa. Bật lại bằng
-// LLM_MODEL_PROBER=true nếu quay về dùng NIM cho LLM.
+// TASK 33 (2026-09-27): default OFF. 2026-11-30 UPDATE: NIM mở lại 2 vai trò
+// (extraction nemotron-550b + agent kimi-k3 tạm thời) → prober giờ probe ĐÚNG
+// các lõi NIM đang dùng (probeTargets bên dưới). Bật bằng LLM_MODEL_PROBER=true
+// để trip breaker nền cho lõi hang (kimi-k3 hay hang kéo dài ~120s/call).
 const PROBER_ENABLED = (process.env.LLM_MODEL_PROBER ?? '0').trim().toLowerCase() === 'true'
 const PROBE_INTERVAL_MS = Math.max(60_000, parseInt(process.env.LLM_PROBE_INTERVAL_MS || '300000', 10) || 300_000)
 const PROBE_TIMEOUT_MS = Math.max(10_000, parseInt(process.env.LLM_PROBE_TIMEOUT_MS || '90000', 10) || 90_000)
 const PROBER_BOOT_DELAY_MS = Math.max(0, parseInt(process.env.LLM_PROBER_BOOT_DELAY_MS || '30000', 10) || 30_000)
 
-/** 6 lõi được probe: lõi chính + chuỗi fallback (agent) + 2 lõi extraction */
+/** Các lõi NIM được probe (2026-11-30): kimi-k3 (lựa chọn agent tạm thời) +
+ *  nemotron-550b (extraction). Các lõi zen trong AGENT_FALLBACK_CHAIN không
+ *  probe được qua NIM pool — bỏ khỏi danh sách (chúng có block-cache riêng). */
 function probeTargets(): string[] {
   const targets = [
-    KIMI_K3_MODEL,
-    ...AGENT_FALLBACK_CHAIN,
+    KIMI_K3_NIM_ID,
     EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0],
-    NVIDIA_EXTRACTION_MODELS[1],
   ]
   return [...new Set(targets)]
 }
@@ -3480,25 +3462,16 @@ export function getProviderDiagnostics(): Record<string, {
 // (EXTRACTION_MODEL_OVERRIDE khai báo ở section KIMI K3 MODEL POLICY phía trên)
 
 /**
- * Model trích xuất FALLBACK (user directive 2026-09-05): khi lõi chính
- * (nemotron-3-ultra-550b) thất bại ĐẦY ĐỦ chuỗi xoay vòng key (4 key × 3 lần),
- * chuyển sang lõi fallback openai/gpt-oss-120b ("chatgpt-os-120b") — cũng xoay
- * vòng đủ key. Đặt EXTRACTION_FALLBACK_MODEL=none để tắt fallback.
- */
-const EXTRACTION_FALLBACK_MODEL_OVERRIDE = process.env.EXTRACTION_FALLBACK_MODEL || ''
-
-/**
- * Key-based LLM call for document processing — EXTRACTION CORES ONLY.
- *
- * NVIDIA NIM với chuỗi 2 lõi trích xuất MODEL-FIRST (user directive 2026-09-06):
- *   1. PRIMARY:   nvidia/nemotron-3-ultra-550b-a55b — gọi trước trên mỗi key
- *   2. FALLBACK:  openai/gpt-oss-120b — gọi NGAY khi primary fail (CÙNG key);
- *                 chỉ khi cả 2 lõi fail trên key đó mới chuyển key kế tiếp
- *                 (chain khởi động lại từ lõi chính trên key mới)
+ * Key-based LLM call for document processing — EXTRACTION CORE ONLY
+ * (user directive 2026-11-30):
+ *   1. PRIMARY:  NIM nvidia/nemotron-3-ultra-550b-a55b — xoay vòng 4 key × 3 lần
+ *   2. FALLBACK: chuỗi Zen (EXTRACTION_ZEN_MODEL — HTTP → CLI → ZEN FAILOVER)
+ *                khi NIM fail toàn chuỗi (429 kéo dài — đặc tính NIM với tác vụ
+ *                phức tạp/dài hạn theo user).
  *
  * KHÔNG BAO GIỜ gọi kimi-k3 (lõi agent/chat) cho extraction — đây là ràng
- * buộc cứng theo directive user. Callers không còn phải fallback sang callLLM()
- * khi không có slot: truyền slotIndex=-1 để dùng round-robin key.
+ * buộc cứng theo directive user (2026-09-05, giữ nguyên 2026-11-30).
+ * (Lõi fallback NIM cũ gpt-oss-120b đã EOL 410 — loại bỏ.)
  *
  * @param slotIndex - The key index (0-3) assigned to this document; -1 = round-robin
  * @param prompt - The user prompt
@@ -3514,18 +3487,39 @@ export async function callLLMSlot(
 ): Promise<LLMResult> {
   const taskLabel = task || 'general'
 
-  // ===== TASK 33 (2026-09-27) — EXTRACTION QUA OPENCODE ZEN =====
-  // USER DIRECTIVE: NIM bỏ hoàn toàn khỏi LLM (chỉ giữ lõi embed). Chuỗi trích
-  // xuất tài liệu cũ (nemotron-3-ultra-550b → gpt-oss-120b trên NIM key) đã gỡ —
-  // giờ: Zen HTTP → OpenCode CLI → ZEN FAILOVER space-bunny → error.
-  // r72 (2026-10-09): nemotron-3-ultra-free đã BỎ khỏi catalog Zen (GET
-  // /zen/v1/models không còn — HTTP 404) → mặc định chuyển sang space-bunny-free
-  // (HTTP xoay key — đường ổn định nhất, không tốn CLI spawn mỗi call document).
-  // Override EXTRACTION_ZEN_MODEL để đổi (vd ling-3.1-flash-free — sẽ tự route
-  // qua CLI native).
-  // slotIndex giữ tương thích signature (document key assignment NIM cũ) — không
-  // còn ý nghĩa với zen (2 key round-robin pool dùng chung).
-  void slotIndex
+  // ===== USER DIRECTIVE 2026-11-30 — EXTRACTION NIM-FIRST =====
+  // "Tôi chỉ sử dụng lõi embed từ Nvidia Nim và nemotron-3-ultra-550b cho công
+  // việc triết tách" — nemotron-3-ultra-550b quay lại làm lõi extraction CHÍNH
+  // (NIM 4 key xoay vòng, circuit breaker + timeout-strike tự trip khi NIM
+  // hang/429). NIM dễ 429 kéo dài với tác vụ phức tạp/dài → khi lõi NIM fail
+  // toàn chuỗi xoay key, fallback chuỗi Zen (EXTRACTION_ZEN_MODEL, mặc định
+  // space-bunny-free) để pipeline trích xuất không chết.
+  // kimi-k3 TUYỆT ĐỐI không dùng cho extraction (directive 2026-09-05 giữ nguyên).
+  // slotIndex (document key assignment cũ) giữ làm startKeyIndex gợi ý xoay key.
+  const nimExtractionModel = EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0]
+  if (nvidiaPool.keyCount > 0 && nimExtractionModel && !isModelHardBlocked(nimExtractionModel).blocked) {
+    const nimResult = await callModelWithKeyRotation(
+      nimExtractionModel,
+      prompt,
+      systemPrompt,
+      options,
+      {
+        taskLabel: `extraction-nim:${taskLabel}`,
+        startKeyIndex: slotIndex >= 0 ? slotIndex : undefined,
+        temperature: options?.temperature ?? 0.1,
+        maxTokens: options?.maxTokens ?? 16384,
+      },
+    )
+    if (nimResult && nimResult.content) {
+      console.log(`[LLM] Extraction dùng NIM ${nimExtractionModel} ✓ (${nimResult.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
+      return nimResult
+    }
+    console.warn(`[LLM] Extraction NIM ${nimExtractionModel} thất bại toàn chuỗi xoay key — fallback chuỗi Zen — task: ${taskLabel}: ${String(nimResult?.error || 'null result').slice(0, 120)}`)
+  }
+
+  // ===== EXTRACTION FALLBACK — OPENCODE ZEN (giữ từ Task 33) =====
+  // NIM 429 kéo dài / hết key / breaker mở → chuỗi Zen: HTTP → CLI → ZEN
+  // FAILOVER space-bunny. Override EXTRACTION_ZEN_MODEL để đổi model zen.
   if (isZenConfigured()) {
     const extractModel = process.env.EXTRACTION_ZEN_MODEL?.trim() || 'space-bunny-free'
     const zen = await callZenProvider(
@@ -3560,21 +3554,21 @@ export async function callLLMSlot(
         return foHttp
       }
     }
-    console.warn(`[LLM] Extraction "${taskLabel}": Zen thất bại toàn chuỗi — document sẽ retry sau`)
+    console.warn(`[LLM] Extraction "${taskLabel}": cả NIM ${nimExtractionModel} lẫn chuỗi Zen đều thất bại — document sẽ retry sau`)
     return {
       content: '',
       provider: 'zen',
       model: extractModel,
-      error: `Extraction "${taskLabel}" thất bại toàn chuỗi Zen (${extractModel} HTTP + CLI${extractModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''}) — NIM đã ngừng dùng cho LLM (Task 33)`,
+      error: `Extraction "${taskLabel}" thất bại toàn bộ (NIM ${nimExtractionModel} + Zen ${extractModel} HTTP + CLI${extractModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''})`,
     }
   }
 
-  console.warn(`[LLM] Extraction "${taskLabel}": Zen chưa cấu hình — NIM đã gỡ (Task 33)`)
+  console.warn(`[LLM] Extraction "${taskLabel}": NIM thất bại và Zen chưa cấu hình (set ZEN_API_KEY_1/2 trong .env)`)
   return {
     content: '',
     provider: 'none',
     model: 'none',
-    error: 'OpenCode Zen chưa cấu hình (set ZEN_API_KEY_1/2 trong .env) — extraction không còn đường NIM (Task 33)',
+    error: `Extraction "${taskLabel}": NIM ${nimExtractionModel} thất bại và OpenCode Zen chưa cấu hình (set ZEN_API_KEY_1/2 trong .env)`,
   }
 }
 
@@ -3595,13 +3589,11 @@ export async function callLLMSlot(
  * lặp lại suốt budget 15 phút → terminal spam 429 "ngay cả khi không làm
  * việc với các agent" (agents đã trả lời xong từ lâu).
  *
- * CHÍNH SÁCH: kimi-k3 là lõi LÀM VIỆC của agents (chat / goal-loop / team) —
- * KHÔNG dành cho utility nền. Utility về bản chất là tác vụ trích xuất /
- * phân loại / chưng cất → dùng chuỗi lõi extraction MODEL-FIRST (directive
- * 2026-09-06: nemotron-3-ultra-550b fail → gpt-oss-120b NGAY cùng key, hết chuỗi
- * mới chuyển key), round-robin start key, KHÔNG BAO GIỜ chạm kimi-k3.
- * Override qua env EXTRACTION_MODEL / EXTRACTION_FALLBACK_MODEL (đi theo lõi
- * extraction) — đặt EXTRACTION_FALLBACK_MODEL=none để tắt tầng fallback.
+ * CHÍNH SÁCH (2026-11-30): utility nền KHÔNG dùng lõi NIM (NIM dễ 429 kéo dài
+ * với tác vụ nền dài — chỉ dành embed + extraction + kimi-k3 agent tạm thời).
+ * Utility route qua chuỗi Zen (UTILITY_ZEN_MODEL, mặc định space-bunny-free).
+ * Lịch sử: trước đây dùng chuỗi extraction NIM nemotron→gpt-oss (directive
+ * 2026-09-06) — gpt-oss đã EOL 410, NIM giờ ưu tiên cho extraction chính.
  */
 export async function callUtilityLLM(
   prompt: string,
@@ -5336,12 +5328,40 @@ export async function callLLMForAgent(
     }
   }
 
+  // ===== USER DIRECTIVE 2026-11-30 — KIMI-K3 (NIM) LÀ LỰA CHỌN AGENT TẠM THỜI =====
+  // Chọn kimi-k3 (dropdown Smolab / AgentProfile / Omega factory) → route
+  // THẬT qua NIM kimi-k3 (xoay vòng 4 key × 3 lần, circuit breaker tự trip
+  // khi hang/429 — không normalize về space-bunny-free như các id NIM chết).
+  // NIM 429 kéo dài / EOL kimi-k3 → fallback chuỗi Zen space-bunny-free phía
+  // dưới (agent không chết — đúng tinh thần "tạm thời nếu kimi k3 sống được
+  // thì giữ lại như 1 lựa chọn").
+  if (model === KIMI_K3_NIM_ID) {
+    const nimResult = await callModelWithKeyRotation(
+      KIMI_K3_NIM_ID,
+      prompt,
+      systemPrompt,
+      options,
+      { taskLabel: `agent-nim:${KIMI_K3_NIM_ID}` },
+    )
+    if (nimResult && (nimResult.content || (nimResult.tool_calls && nimResult.tool_calls.length > 0))) {
+      const tcCount = nimResult.tool_calls?.length ?? 0
+      console.log(`[LLM] Agent dùng NIM ${KIMI_K3_NIM_ID} ✓ (${tcCount} tool_calls, ${nimResult.tokensUsed ?? 0} tokens)${options?.agentName ? ` — agent: ${options.agentName}` : ''}`)
+      return nimResult
+    }
+    console.warn(`[LLM] Agent NIM ${KIMI_K3_NIM_ID} thất bại toàn chuỗi xoay key (429 kéo dài/EOL — user directive 2026-11-30: kimi-k3 tạm thời) → fallback chuỗi Zen space-bunny-free${options?.agentName ? ` — agent: ${options.agentName}` : ''}: ${String(nimResult?.error || 'null result').slice(0, 120)}`)
+  }
+
   let zenModel = model
-  if (provider !== 'zen') {
+  if (provider !== 'zen' && model !== KIMI_K3_NIM_ID) {
     // Model NIM cũ (chứa '/') hoặc id lạ → map về model zen PHIÊN 7: space-bunny-free
     // cho TẤT CẢ agent (Task 37 — model free duy nhất mở cho oc_sk API key).
+    // (kimi-k3 đã xử lý ở nhánh riêng phía trên — không rơi vào normalize này.)
     zenModel = isZenModelId(model) ? model : 'space-bunny-free'
-    console.warn(`[LLM] Agent cấu hình provider "${provider}/${model}" không còn dùng cho agents (NIM removed — Task 33) → route Zen ${zenModel}${options?.agentName ? ` (agent: ${options.agentName})` : ''}`)
+    console.warn(`[LLM] Agent cấu hình provider "${provider}/${model}" không còn dùng cho agents (NIM matrix 2026-11-30 — chỉ kimi-k3 còn mở) → route Zen ${zenModel}${options?.agentName ? ` (agent: ${options.agentName})` : ''}`)
+  }
+  if (model === KIMI_K3_NIM_ID) {
+    // kimi-k3 fail NIM → chạy chuỗi Zen với model chính space-bunny-free
+    zenModel = isZenModelId(zenModel) ? zenModel : 'space-bunny-free'
   }
 
   // Zen HTTP (kèm reasoning_effort chế độ cao nhất — Task 33)

@@ -114,7 +114,7 @@ export interface SubmitAutomationResult {
 const VALID_KINDS: AutomationProposalKind[] = ['cron', 'webhook', 'standing_order', 'task_flow']
 const DECISION_TIMEOUT_MS = 3 * 60_000
 const DECISION_MAX_TOKENS = 700
-const OMEGA_FALLBACK_BRAIN = { provider: 'nvidia', model: 'minimaxai/minimax-m3' } // 2026-10-16: lõi chính tạm thời
+const OMEGA_FALLBACK_BRAIN = { provider: 'zen', model: 'space-bunny-free' } // 2026-11-30: minimax-m3 EOL 410 → production core zen
 
 /** Validate + chuẩn hóa đề xuất automation (từ tool args — dữ liệu LLM, KHÔNG tin) */
 export function validateAutomationRequest(

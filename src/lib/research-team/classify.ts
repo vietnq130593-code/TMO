@@ -164,7 +164,7 @@ export async function classifyMission(
   let llmResult: LLMResult
   try {
     // Task 4 — route qua Zen provider khi AgentProfile NEMESIS có provider='zen'.
-    // resolveResearchBrain fail-open → fallback NIM minimax-m3.
+    // resolveResearchBrain fail-open → fallback zen space-bunny-free.
     const brain = await resolveResearchBrain('NEMESIS')
     llmResult = await callLLMForAgent(userPrompt, brain, CLASSIFY_SYSTEM_PROMPT, {
       temperature: 0.1,
