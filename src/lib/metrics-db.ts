@@ -315,6 +315,84 @@ export async function findArbiterVerdictsForCalibration(limit = 2000): Promise<A
   }))
 }
 
+/** Shape 1 ArbiterVerdict ĐÃ resolve cho Verdict Scorecard (P1-M1) — đủ cột
+ *  cho confusion matrix (complete × runComplete) + phân tầng agentName +
+ *  forcedDowngrade + confidence (AUC-PR/Brier/ECE). */
+export interface ArbiterVerdictScorecardRow {
+  id: string
+  sessionId: string
+  agentName: string | null
+  cycle: number
+  complete: boolean
+  confidence: number
+  verified: boolean
+  forcedDowngrade: boolean
+  outcome: string
+  runComplete: boolean | null
+  runStopReason: string | null
+  createdAt: Date
+}
+
+/**
+ * SELECT các ArbiterVerdict ĐÃ resolve trong `windowDays` gần nhất, mới nhất
+ * trước, cap 5000 — cho P1-M1 Verdict Scorecard (confusion matrix của lời
+ * tuyên bố "complete" của trọng tài). Delegate path nếu Prisma instance fresh,
+ * raw SQL bridge nếu stale (pattern findArbiterVerdictsForCalibration).
+ */
+export async function findResolvedVerdictsForScorecard(windowDays = 30): Promise<ArbiterVerdictScorecardRow[]> {
+  const days = Math.max(1, Math.min(windowDays, 365))
+  const cap = 5000
+  const since = new Date(Date.now() - days * 24 * 3600 * 1000)
+  if (hasArbiterVerdictDelegate()) {
+    const rows = await db.arbiterVerdict.findMany({
+      where: { outcome: { not: null }, createdAt: { gte: since } },
+      orderBy: { createdAt: 'desc' },
+      take: cap,
+    })
+    return rows
+      .filter(r => r.outcome !== null)
+      .map(r => ({ ...r, outcome: r.outcome as string }))
+  }
+
+  const raw = await db.$queryRaw<
+    Array<{
+      id: string
+      sessionId: string
+      agentName: string | null
+      cycle: number
+      complete: number
+      confidence: number
+      verified: number
+      forcedDowngrade: number
+      outcome: string
+      runComplete: number | null
+      runStopReason: string | null
+      createdAt: Date
+    }>
+  >`
+    SELECT id, sessionId, agentName, cycle, complete, confidence, verified, forcedDowngrade,
+      outcome, runComplete, runStopReason, createdAt
+    FROM ArbiterVerdict
+    WHERE outcome IS NOT NULL AND createdAt >= ${since}
+    ORDER BY createdAt DESC
+    LIMIT ${cap}
+  `
+  return raw.map(r => ({
+    id: r.id,
+    sessionId: r.sessionId,
+    agentName: r.agentName,
+    cycle: r.cycle,
+    complete: !!r.complete,
+    confidence: r.confidence,
+    verified: !!r.verified,
+    forcedDowngrade: !!r.forcedDowngrade,
+    outcome: r.outcome,
+    runComplete: r.runComplete === null || r.runComplete === undefined ? null : !!r.runComplete,
+    runStopReason: r.runStopReason,
+    createdAt: r.createdAt,
+  }))
+}
+
 /**
  * RESOLVE các verdict CHƯA resolve của session khi run kết thúc:
  *   outcome = (verdict.complete === runComplete) ? 'confirmed' : 'refuted'
