@@ -30,6 +30,7 @@
 import { createHash } from 'node:crypto'
 
 import { callUtilityLLM } from '@/lib/llm'
+import { recordDigestGateEvent } from '@/lib/digest-gate-events'
 
 // ==================== CONSTANTS (giá trị exact như goal-loop trước tách) ====================
 
@@ -220,6 +221,124 @@ function deriveEvidenceFromMessages(msgs: CompressionMessage[]): CompressEvidenc
     }
   }
   return out.slice(-40)
+}
+
+// ==================== P3-M4 — DIGEST QUALITY GATE (thuần toán, 0 LLM) ====================
+
+/**
+ * Ngưỡng evidence-coverage tối thiểu của digest LLM (BLUEPRINT §P3-M4).
+ * Rollback = set 0 (gate tắt hiệu quả — mọi digest LLM được chấp nhận).
+ * Env DIGEST_EVIDENCE_COVERAGE_MIN cho phép điều chỉnh không deploy lại.
+ */
+export const DIGEST_EVIDENCE_COVERAGE_MIN = (() => {
+  const v = Number(process.env.DIGEST_EVIDENCE_COVERAGE_MIN)
+  return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 0.7
+})()
+
+/** Số token dẫn chứng tối đa trích để tính coverage — chặn chi phí cho evidence dài */
+const GATE_TOKEN_CAP = 60
+
+/** Cạo dấu câu dính hai đầu token ("src/lib/db," → "src/lib/db") — giữ [A-Za-z0-9_./-] */
+function stripEdgePunctuation(tok: string): string {
+  return tok.replace(/^[^\w./-]+|[^\w./-]+$/g, '')
+}
+
+/**
+ * Trích "danh từ kỹ thuật + số dẫn chứng" từ evidence log (ML.pdf §ROUGE —
+ * kiểm tra mất thông tin khi nén ngữ cảnh bằng độ đo rẻ, không LLM):
+ *   - camelCase/PascalCase ≥2 hump (parseEvalVerdict, WilsonCI — bao cả đuôi
+ *     acronym hoa như ...CI/...JSON; từ 1 hump kiểu Monday/Tên riêng bị loại)
+ *   - snake_case/kebab-case (raw_confidence, goal-loop)
+ *   - đường dẫn (chứa '/')
+ *   - SỐ dẫn chứng ≥2 chữ số hoặc thập phân (722, 0.55, 4000) — số 1 chữ số
+ *     (0/1/2...) quá phổ biến ở mọi output, không mang tín hiệu "bằng chứng"
+ *     riêng nên loại khỏi gate (chọn có chủ đích, ghi rõ ở đây).
+ * Token ngắn <3 ký tự bỏ. Khử trùng theo key lowercase. Cap GATE_TOKEN_CAP
+ * (check TRƯỚC khi push — vòng quét dừng sớm khi chạm cap).
+ */
+export function extractEvidenceTokens(evidence: CompressEvidenceEntry[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  const push = (tok: string) => {
+    if (out.length >= GATE_TOKEN_CAP) return
+    const t = stripEdgePunctuation(tok.trim())
+    if (t.length < 3) return
+    const key = t.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push(t)
+  }
+
+  const text = evidence.map(e => e.text ?? '').join('\n')
+  if (!text.trim()) return []
+
+  // camelCase ≥2 hump: BẮT ĐẦU bằng chữ thường + (Hoa + chữ thường/số)* — rawConfidence
+  const camelLower = text.match(/\b[a-z]+(?:[A-Z][a-z0-9]*)+\b/g) ?? []
+  for (const t of camelLower) push(t)
+
+  // PascalCase ≥2 hump: Hoa+thường/số + (Hoa + thường/số/đuôi hoa)* —
+  // WilsonCI, ParseEvalVerdict (1 hump Monday bị loại — không phải định danh kỹ thuật)
+  const pascal = text.match(/\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b/g) ?? []
+  for (const t of pascal) push(t)
+
+  // snake_case / kebab-case: có ÍT NHẤT 1 dấu _ hoặc - nối hai cụm chữ/số
+  const snake = text.match(/\b[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+\b/g) ?? []
+  for (const t of snake) push(t)
+
+  // đường dẫn: chứa '/' (cạo dấu câu hai đầu sau match)
+  const paths = text.match(/\S*\/\S+/g) ?? []
+  for (const t of paths) push(t)
+
+  // số dẫn chứng: ≥2 chữ số hoặc thập phân
+  const numbers = text.match(/\b\d+(?:\.\d+)+\b|\b\d{2,}\b/g) ?? []
+  for (const t of numbers) push(t)
+
+  return out
+}
+
+export interface DigestGateResult {
+  /** true khi digest đủ giữ evidence (coverage ≥ ngưỡng) */
+  passed: boolean
+  /** Tỉ lệ token dẫn chứng còn sót trong digest (0-1); không token nào → 1 */
+  coverage: number
+  /** Tổng token trích được từ evidence */
+  tokens: number
+  /** Số token TÌM THẤY trong digest */
+  found: number
+  /** Token bị mất (tối đa 5 — chỉ để log diễn giải) */
+  missing: string[]
+}
+
+/**
+ * P3-M4 GATE (chính, cho compression): digest LLM có giữ lại "danh từ kỹ
+ * thuật + số dẫn chứng" của evidence log không? Coverage = tỉ lệ token xuất
+ * hiện (substring, case-insensitive) trong digest. Rớt ngưỡng → caller fallback
+ * heuristic deterministic (evidence-preserving — đường an toàn có sẵn).
+ * Export cho test (đúng precedent parseEvalVerdict export-for-test).
+ */
+export function checkDigestGate(digest: string, evidence: CompressEvidenceEntry[]): DigestGateResult {
+  const tokens = extractEvidenceTokens(evidence)
+  if (tokens.length === 0) {
+    // Không có gì ĐO ĐẾN được để mất → gate tự qua (không có bằng chứng nào cả)
+    return { passed: true, coverage: 1, tokens: 0, found: 0, missing: [] }
+  }
+  const lower = digest.toLowerCase()
+  let found = 0
+  const missing: string[] = []
+  for (const tok of tokens) {
+    if (lower.includes(tok.toLowerCase())) found++
+    else if (missing.length < 5) missing.push(tok)
+  }
+  const coverage = found / tokens.length
+  return { passed: coverage >= DIGEST_EVIDENCE_COVERAGE_MIN, coverage, tokens: tokens.length, found, missing }
+}
+
+/** Dựng digest heuristic từ evidence log (tách ra dùng chung 2 nhánh fallback) */
+function buildHeuristicDigest(evidenceSource: CompressEvidenceEntry[]): string {
+  return evidenceSource
+    .map(e => (e.kind === 'tool' ? `- [${e.tool}] ${e.success ? '✓' : '✗'} ${e.text}` : `- ${e.text}`))
+    .join('\n')
+    .slice(0, DIGEST_MAX_CHARS)
 }
 
 // ==================== CAP TOOL RESULT (tầng 1) ====================
@@ -517,19 +636,35 @@ export async function compressConversation(params: {
     /* fall-through heuristic */
   }
 
-  // ===== Lớp 2: heuristic fallback từ evidence log (deterministic, 0 LLM) =====
-  // Caller truyền evidence (kể cả rỗng — goal-loop giữ nguyên hành vi cũ:
-  // evidence rỗng → digest rỗng → return null); KHÔNG truyền → suy xuất từ
+  // Evidence cho heuristic fallback VÀ digest gate (P3-M4) — tính 1 lần:
+  // caller truyền evidence (kể cả rỗng) → dùng nguyên; thiếu → suy xuất từ
   // chính transcript (workflow-engine không giữ evidence log).
+  const evidenceSource = evidence ? evidence.slice(-40) : deriveEvidenceFromMessages(compressible)
+
   if (!digest) {
     method = 'heuristic'
-    const evidenceSource = evidence ? evidence.slice(-40) : deriveEvidenceFromMessages(compressible)
-    digest = evidenceSource
-      .map(e => (e.kind === 'tool' ? `- [${e.tool}] ${e.success ? '✓' : '✗'} ${e.text}` : `- ${e.text}`))
-      .join('\n')
-      .slice(0, DIGEST_MAX_CHARS)
-  } else if (digest.length > DIGEST_MAX_CHARS) {
-    digest = digest.slice(0, DIGEST_MAX_CHARS) + '…'
+    digest = buildHeuristicDigest(evidenceSource)
+  } else {
+    // ===== P3-M4 — DIGEST QUALITY GATE: LLM digest phải GIỮ dẫn chứng =====
+    // ML.pdf §ROUGE: đo mất thông tin khi nén bằng độ rẻ (thuần toán, 0 LLM).
+    // Digest bỏ mất danh từ kỹ thuật + số dẫn chứng → fallback heuristic
+    // deterministic (evidence-preserving — đường an toàn thiết kế sẵn).
+    const gate = checkDigestGate(digest, evidenceSource)
+    if (!gate.passed) {
+      console.warn(
+        `[Compression] digest-gate-fallback: evidence coverage=${gate.coverage.toFixed(2)} < ${DIGEST_EVIDENCE_COVERAGE_MIN} ` +
+        `(mất ${gate.tokens - gate.found}/${gate.tokens} token dẫn chứng` +
+        `${gate.missing.length > 0 ? `: ${gate.missing.slice(0, 5).join(', ')}` : ''}) → fallback heuristic evidence-preserving`,
+      )
+      recordDigestGateEvent({ kind: 'compression', outcome: 'fallback', coverage: gate.coverage, method: 'heuristic' })
+      method = 'heuristic'
+      digest = buildHeuristicDigest(evidenceSource)
+    } else {
+      recordDigestGateEvent({ kind: 'compression', outcome: 'pass', coverage: gate.coverage, method: 'llm' })
+      if (digest.length > DIGEST_MAX_CHARS) {
+        digest = digest.slice(0, DIGEST_MAX_CHARS) + '…'
+      }
+    }
   }
 
   if (!digest) return null

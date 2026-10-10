@@ -2,7 +2,7 @@
  * ROUND-76 TESTS — P1-M4 KPI LAYER (BLUEPRINT-STATS-LEARNING-P0-P6 §P1-M4,
  * mục #5 — DA.pdf §KPIs and Metrics)
  *
- * Đo lường: KPI_REGISTRY (9 KPI, single source) + computeAllKpis (upsert
+ * Đo lường: KPI_REGISTRY (10 KPI — 9 gốc + P3-M4 digest_gate_fallback_rate, single source) + computeAllKpis (upsert
  * KpiSnapshot hôm nay idempotent theo unique date+kpi, fail-open per KPI)
  * + statusForKpi (dải ±10%).
  *
@@ -68,6 +68,7 @@ describe('r76 · P1-M4 KPI layer', () => {
     await db.arbiterVerdict.deleteMany({})
     await db.toolMetric.deleteMany({})
     await db.agentRunRecord.deleteMany({})
+    await db.digestGateEvent.deleteMany({}) // P3-M4 — digest_gate_fallback_rate deterministic theo seed
 
     // AgentRunRecord — 4 run 24h
     for (const [status, parentRunId] of [
@@ -157,10 +158,10 @@ describe('r76 · P1-M4 KPI layer', () => {
     }
   })
 
-  test('registry: 9 KPI, key duy nhất, label/goal hợp lệ', () => {
-    expect(KPI_REGISTRY.length).toBe(9)
+  test('registry: 10 KPI (9 gốc + P3-M4 digest_gate_fallback_rate), key duy nhất, label/goal hợp lệ', () => {
+    expect(KPI_REGISTRY.length).toBe(10)
     const keys = new Set(KPI_REGISTRY.map((d) => d.key))
-    expect(keys.size).toBe(9)
+    expect(keys.size).toBe(10)
     for (const d of KPI_REGISTRY) {
       expect(d.label.length).toBeGreaterThan(0)
       expect(['higher', 'lower']).toContain(d.goal)
@@ -170,14 +171,15 @@ describe('r76 · P1-M4 KPI layer', () => {
     for (const key of [
       'mission_success_rate', 'verdict_precision', 'verdict_f1', 'tool_success_rate',
       'anomaly_count_24h', 'eval_ndcg', 'eval_recall', 'kb_fallback_rate', 'delegation_ratio',
+      'digest_gate_fallback_rate',
     ]) {
       expect(keys.has(key)).toBe(true)
     }
   })
 
-  test('computeAllKpis: đủ 9 KPI ok, giá trị khớp seed tính tay', async () => {
+  test('computeAllKpis: đủ 10 KPI ok, giá trị khớp seed tính tay', async () => {
     const results = await computeAllKpis()
-    expect(results.length).toBe(9)
+    expect(results.length).toBe(10)
     const byKey = new Map(results.map((r) => [r.key, r]))
 
     for (const r of results) {
@@ -207,14 +209,17 @@ describe('r76 · P1-M4 KPI layer', () => {
     // delegation_ratio = 1/4 (r2 có parentRunId)
     expect(byKey.get('delegation_ratio')!.value).toBe(0.25)
     expect(byKey.get('delegation_ratio')!.sampleSize).toBe(4)
+    // digest_gate_fallback_rate = 0/0 → 0 (seed không có DigestGateEvent — P3-M4)
+    expect(byKey.get('digest_gate_fallback_rate')!.value).toBe(0)
+    expect(byKey.get('digest_gate_fallback_rate')!.sampleSize).toBe(0)
   })
 
-  test('snapshot upsert idempotent: compute 2 lần vẫn 9 row hôm nay', async () => {
+  test('snapshot upsert idempotent: compute 2 lần vẫn 10 row hôm nay', async () => {
     await computeAllKpis()
     await computeAllKpis() // lần 2 — unique date+kpi chặn nhân bản
     const today = todayUtcDate()
     const count = await db.kpiSnapshot.count({ where: { date: today } })
-    expect(count).toBe(9)
+    expect(count).toBe(10)
     // Giá trị snapshot khớp compute (verdict_precision = 0.6667)
     const snap = await db.kpiSnapshot.findUnique({
       where: { date_kpi: { date: today, kpi: 'verdict_precision' } },
@@ -266,7 +271,7 @@ describe('r76 · P1-M4 KPI layer', () => {
     // Snapshot được update với giá trị mới (value=0, sampleSize=0) — vẫn idempotent
     const today = todayUtcDate()
     const count = await db.kpiSnapshot.count({ where: { date: today } })
-    expect(count).toBe(9)
+    expect(count).toBe(10)
     const snap = await db.kpiSnapshot.findUnique({ where: { date_kpi: { date: today, kpi: 'eval_ndcg' } } })
     expect(snap!.sampleSize).toBe(0)
   })

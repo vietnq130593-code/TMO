@@ -20,6 +20,8 @@
  */
 
 import { callUtilityLLM } from '@/lib/llm'
+import { rougeL } from '@/lib/stats'
+import { recordDigestGateEvent } from '@/lib/digest-gate-events'
 
 // ==================== CONFIG ====================
 
@@ -34,6 +36,19 @@ const MAX_CHARS_PER_MEMORY = 300
 
 /** Target summary length (chars) */
 const TARGET_SUMMARY_LENGTH = 200
+
+/**
+ * P3-M4 (BLUEPRINT §P3-M4) — ROUGE-L recall gate cho summary nén bộ nhớ.
+ * Summary nén ~90% kích thước nên KHÔNG đòi coverage cao như digest (0.7) —
+ * ngưỡng 0.3 đo "còn giữ được CHỦ ĐỀ chung của nhóm mẫu tương tự không".
+ * Rớt gate → fallback batch[0] (đường an toàn sẵn có — giữ nguyên 1 mẫu
+ * nguồn, mất thông tin ĐẢM BẢO bằng 0). Rollback = set 0.
+ * Env SUMMARY_ROUGE_RECALL_MIN điều chỉnh không cần deploy lại.
+ */
+export const SUMMARY_ROUGE_RECALL_MIN = (() => {
+  const v = Number(process.env.SUMMARY_ROUGE_RECALL_MIN)
+  return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 0.3
+})()
 
 // ==================== MAIN ENTRY ====================
 
@@ -102,6 +117,27 @@ Summary:`
     if (summary.length < 10 || !/[a-zA-ZÀ-ÿ\u4e00-\u9fff]/.test(summary)) {
       return null
     }
+
+    // ===== P3-M4 — ROUGE-L RECALL GATE (ML.pdf §ROUGE — độ đo rẻ, 0 LLM) =====
+    // Đo phủ nội dung nguồn qua UNION MẪU ĐẠI DIỆN (spec §P3-M4: "union mẫu
+    // đại diện"): batch[0] + batch[CUỐI] — 2 mốc neo chủ đề đầu/cuối nhóm.
+    // KHÔNG dùng join TOÀN BỘ mẫu: nhóm n mẫu tương tự → union ~n× chiều dài
+    // → recall bị chặn cấu trúc ≤ 1/n (đo thực tế: summary NGUYÊN VĂN con của
+    // mẫu 1 trong nhóm 3 chỉ đạt 0.27 — gate sẽ fallback oan mọi batch ≥3).
+    // Với 2 mốc: summary giữ chủ đề đạt recall ~0.4-0.9; summary chệch chủ đề
+    // (hallucinate/đổi hướng) rớt ngưỡng 0.3 → fallback batch[0] (đường sẵn có
+    // — precedent sanity-check "longer than input") + log + KPI.
+    const unionContent = batch.length >= 2 ? `${batch[0]} ${batch[batch.length - 1]}` : batch[0]
+    const recall = rougeL(unionContent, summary).recall
+    if (recall < SUMMARY_ROUGE_RECALL_MIN) {
+      console.warn(
+        `[Summarization] digest-gate-fallback: ROUGE-L recall=${recall.toFixed(2)} < ${SUMMARY_ROUGE_RECALL_MIN} ` +
+        `(union ${batch.length} mẫu ${unionContent.length} chars → summary ${summary.length} chars) — summary mất chủ đề nguồn → giữ mẫu đầu`,
+      )
+      recordDigestGateEvent({ kind: 'summarization', outcome: 'fallback', rougeRecall: recall, method: 'fallback-first' })
+      return batch[0] // return first memory as fallback (đường sẵn có)
+    }
+    recordDigestGateEvent({ kind: 'summarization', outcome: 'pass', rougeRecall: recall, method: 'llm' })
 
     return summary
   } catch (err) {

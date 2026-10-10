@@ -25,6 +25,9 @@
  *   delegation_ratio     — AgentRunRecord có parentRunId / tổng 24h (chống
  *                          vượt trần 2 delegation/run — tỉ lệ sub-run cao
  *                          bất thường là tín hiệu)
+ *   digest_gate_fallback_rate — P3-M4: DigestGateEvent 7 ngày (fallback/tổng
+ *                          — digest LLM rớt evidence-coverage 0.7 hoặc summary
+ *                          rớt ROUGE-L recall 0.3 → chuyển đường an toàn)
  */
 
 import { db } from '@/lib/db'
@@ -247,6 +250,36 @@ export const KPI_REGISTRY: KpiDef[] = [
         value: ratio(delegated, total),
         n: total,
         meta: { delegated, total, guard: 'chống vượt trần 2 delegation/run' },
+      }
+    },
+  },
+  {
+    key: 'digest_gate_fallback_rate',
+    label: 'Digest gate fallback rate (7 ngày — P3-M4)',
+    goal: 'lower',
+    // Fallback là đường AN TOÀN (evidence-preserving) nên hệ thống không hỏng
+    // khi tỉ lệ cao — nhưng fallback cao = digest/summary LLM hay mất dẫn
+    // chứng, đáng khảo sát prompt/model utility. 0.3 đặt ban đầu, chỉnh theo
+    // dữ liệu (cùng quy ước mọi target KPI).
+    target: 0.3,
+    compute: async () => {
+      const since = new Date(Date.now() - 7 * 24 * 3600 * 1000)
+      const [total, fallback, compression, summarization] = await Promise.all([
+        db.digestGateEvent.count({ where: { createdAt: { gte: since } } }),
+        db.digestGateEvent.count({ where: { createdAt: { gte: since }, outcome: 'fallback' } }),
+        db.digestGateEvent.count({ where: { createdAt: { gte: since }, kind: 'compression' } }),
+        db.digestGateEvent.count({ where: { createdAt: { gte: since }, kind: 'summarization' } }),
+      ])
+      return {
+        value: ratio(fallback, total),
+        n: total,
+        meta: {
+          fallback,
+          total,
+          compression,
+          summarization,
+          source: 'DigestGateEvent (P3-M4 — gate coverage 0.7 / ROUGE-L 0.3)',
+        },
       }
     },
   },
