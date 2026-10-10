@@ -671,3 +671,99 @@
 - **Tác động:** faithfulness của eval run baseline ghi 0.333 không đáng tin (chỉ 1/3 judge sống); agent latency tăng do failover-chain; ANTI-pattern nếu không nhận ra: mọi chỉ số đo từ NVIDIA sẽ âm thầm suy yếu.
 - **Xử lý:** KHÔNG tự ý đổi model matrix trong đợt 2 — chọn model là điểm dừng quyết định user (tiền lệ user directive 2026-10-16 minimax-m3). Ghi nhận: eval baseline P1-M2 vẫn hợp lệ cho metrics retrieval (ndcg/mrr/recall không phụ thuộc LLM — bằng chứng 3/3 case giá trị thật); faithfulness chờ matrix mới. Đề xuất chờ user: battery lại model matrix NVIDIA (kimi-k3 là ứng viên primary) hoặc chuyển hẳn judges sang Zen transport.
 - **ĐÓNG (2026-11-30 — USER DECISION "model matrix mới" triển khai đầy đủ):** NIM chỉ giữ embed + nemotron-3-ultra-550b (extraction NIM-first, fallback chuỗi Zen) + kimi-k3 như LỰA CHỌN agent tạm thời (dropdown chọn → callLLMForAgent route NIM thật — E2E: agent tự xưng "Tôi đang chạy trên model Kimi", model=moonshotai/kimi-k3, 42489 tokens; NIM hang/429 → breaker trip → tự fallback Zen space-bunny-free). minimax-m3 + cả dòng deepseek + gpt-oss-120b LOẠI BỎ TOÀN BỘ (410 EOL live-probe). Judges mặc định: kimi-k3 (nếu sống) → fallback space-bunny-free (user directive nguyên văn). ANSWER_MODEL eval/redteam: deepseek-v4-flash (chết) → space-bunny-free (production core, khác judge primary). E2E eval 1 case: 3/3 judge scores hợp lệ (kimi-k3 ✓ 323 tokens + SBF fallback khi breaker trip giữa chừng — đúng thiết kế). Live-probe 2026-11-30: kimi-k3 ALIVE ~120s/call tối giản (chậm), nemotron-550b ALIVE 4.7s, SBF ALIVE 1.2s.
+
+---
+
+## PHÁT HIỆN GIAO THỨC FIXBUG — BỔ SUNG ĐẦY ĐỦ THEO CHỈ THỊ USER 2026-10-11
+
+> **Bối cảnh bổ sung:** theo chỉ thị user (fixbug.md = file giao thức + biên bản tóm tắt, KHÔNG phải nơi ghi chi tiết bug/fix), toàn bộ phát hiện các đợt FB-P0 → FB-ĐỢT5 vốn chưa có entry sổ này (quy tắc ghi nhận cũ chỉ bắt P0/P1/P2-có-tác-động-consumer lên sổ, P3/P4 nằm trong biên bản fixbug.md) được chuyển về đây đủ, đánh số tiếp BUG2-044 trở đi. Mức **P4** = mở rộng dưới P3 (vệ sinh nhẹ/hi sinh chấp nhận được) — dùng từ đợt FB-ĐỢT5; R2-01 đợt 5 được phân loại C khi bổ sung (hành vi khác spec). Nội dung từng phát hiện giữ nguyên thông tin biên bản gốc (hiện tượng / tác động / fix + kiểm chứng + nguồn vòng rà).
+
+### BUG2-044 · C · P3 — zScore σ âm trả điểm z ĐẢO DẤU vô nghĩa, σ NaN lệch convention fail-open — FB-P0-R1-03
+- **Hiện tượng:** `zScore(x, −0.5)` trả −z (đảo dấu — trông như đo được) trong khi σ âm vô nghĩa toán học; `zScore(x, NaN)` trả NaN trong khi các hàm descriptive cùng lớp fail-open trả 0 — không nhất quán convention.
+- **Tác động consumer:** Layer-9 kiểm định ăn giá trị đảo dấu trông hợp lệ — sai âm thầm.
+- **Fix:** guard `σ ≤ 0` → 0 (fail-open thống nhất); NaN → NaN theo convention đã ghi JSDoc. File đụng: src/lib/stats/descriptive.ts. Kiểm chứng: 1 test regression mỗi guard; giá trị sạch không đổi. Phát hiện qua giao thức fixbug.md đợt FB-P0 vòng R1.
+
+### BUG2-045 · C · P3 — iqrBounds k âm → low/high ĐẢO CHIỀU (low 3.25 > high 1.75); k NaN → low/high NaN nhưng q1/q3 vẫn số — FB-P0-R1-04
+- **Hiện tượng:** hệ số k âm đảo bất đẳng thức khoảng (low > high); k NaN cho nửa-kết-quả NaN nửa số — trạng thái lai không nhất quán cho caller.
+- **Tác động consumer:** khoảng loại ngoại lệ (IQR fence) với k âm tự cho low > high — mọi phép so nằm-ngoài-fence cho kết quả rác.
+- **Fix:** `k` không hữu hạn hoặc âm → NaN cả 4 trường (nhất quán toàn bộ). File đụng: src/lib/stats/descriptive.ts. Kiểm chứng: 1 test regression; hành vi hợp lệ giữ nguyên (iqrBounds([7]) = 7/7/7/7). Phát hiện qua giao thức fixbug.md đợt FB-P0 vòng R1.
+
+### BUG2-046 · C · P3 — meanCI z âm → CI đảo chiều (low 2.48 > high 0.52); z=0 vô nghĩa không chặn — FB-P0-R1-05
+- **Hiện tượng:** tham số z (điểm chuẩn chính tắc) âm trả cặp low/high đảo chiều trông vẫn "hợp lệ"; z=0 cho CI rỗng vô nghĩa không được chặn.
+- **Tác động consumer:** mọi lời gọi meanCI với z từ nguồn ngoài (env/config) lỗi dấu sẽ nhận CI đảo chiều mà không có dấu hiệu nào.
+- **Fix:** guard `z ≤ 0` → NaN + JSDoc. File đụng: src/lib/stats/inference.ts. Kiểm chứng: 1 test regression. Phát hiện qua giao thức fixbug.md đợt FB-P0 vòng R1.
+
+### BUG2-047 · C · P3 — wilsonCI p ngoài [0,1] "vi phạm nhỏ" + n lớn lọt guard sqrt tự nhiên cho cặp trông hợp lệ — FB-P0-R1-06
+- **Hiện tượng:** p=1.05 với n=10: `sqrt(p(1−p)/n)` vẫn dương (p(1−p)=−0.0525 âm dưới căn… sqrt trả NaN — nhưng tổ hợp (p−p²+z²/2n) có thể vẫn dương) — kết cục tùy tổ hợp số có thể lọt qua dưới dạng cặp số trông hợp lệ thay vì bị chặn đầu vào.
+- **Tác động consumer:** xác suất ngoài [0,1] là đầu vào phạm phép — CI "tính được" trên dữ liệu vô nghĩa là sai âm thầm.
+- **Fix:** guard `p` ngoài [0,1] → NaN + JSDoc. File đụng: src/lib/stats/inference.ts. Kiểm chứng: 1 test regression. Phát hiện qua giao thức fixbug.md đợt FB-P0 vòng R1.
+
+### BUG2-048 · C · P3 — chiSquare2x2 cell âm: chi2 tính số rác hữu hạn trong khi p=NaN — FB-P0-R1-07
+- **Hiện tượng:** bảng 2×2 chứa ô âm (không hợp lệ) → chi2 vẫn ra số hữu hạn nhưng p=NaN — nửa-kết-quản rác nửa NaN, không nhất quán.
+- **Tác động consumer:** caller chỉ đọc chi2 (bỏ qua p) sẽ dùng số thống kê rác trên bảng không hợp lệ.
+- **Fix:** ô âm → NaN cả hai (bảng không hợp lệ → kết quả không tồn tại). File đụng: src/lib/stats/inference.ts. Kiểm chứng: 1 test regression. Phát hiện qua giao thức fixbug.md đợt FB-P0 vòng R1.
+
+### BUG2-049 · D · P3 — JSDoc silhouetteFromGraph không ghi hành vi trọng số w không hữu hạn (w=∞ → w'=NaN → node âm thầm đóng góp s=0) — FB-P0-R1-08
+- **Hiện tượng:** trọng số không hữu hạn biến w'=max(w,0) thành NaN → node đó âm thầm đóng góp silhouette 0 mà JSDoc không ghi quy ước. Leiden thực tế không sinh w ngoài [−1,1] nhưng consumer khác (đồ thị tuỳ ý) có thể.
+- **Tác động consumer:** người dùng hàm ngoài hệ sinh Leiden tưởng NaN được lan toả — nhận 0 âm thầm.
+- **Fix:** JSDoc bổ sung quy ước w không hữu hạn (không đổi code — hành vi giữ, chỉ doc khớp). File đụng: src/lib/stats/cluster-quality.ts JSDoc. Kiểm chứng: rà đối chiếu doc-code; fuzz 300 graph đợt FB-ĐỢT3 xác nhận quy ước "NaN-lan-toả-0" hoạt động nhất quán. Phát hiện qua giao thức fixbug.md đợt FB-P0 vòng R1.
+
+### BUG2-050 · C · P3 — wilsonCI nhận tham số z nhưng KHÔNG guard z âm/0 (đối xứng meanCI đã guard cùng lớp lỗi FB-P0-R1-05) — FB-P0-R2-01
+- **Hiện tượng:** quét tính đối xứng tham số toàn bộ 30 hàm export ở vòng R2 phát hiện: wilsonCI z âm trả CI đảo chiều trông hợp lệ — cùng lớp lỗi FB-P0-R1-05 nhưng thoát vòng R1 vì vòng đó chỉ rà hàm theo phát hiện, chưa quét đối xứng toàn bộ.
+- **Tác động consumer:** CI đảo chiều trênWilson — sai âm thầm như meanCI.
+- **Fix:** thêm `!(z > 0)` vào guard + test regression + JSDoc. File đụng: src/lib/stats/inference.ts. Kiểm chứng: gate PASS sau fix (644/644). Phát hiện qua giao thức fixbug.md đợt FB-P0 vòng R2 (bằng chứng giá trị của vòng rà-lại toàn scope kể cả phần đã "đạt").
+
+### BUG2-051 · C · P3 — KPI status hiện on_target/off khi sampleSize=0 — đọc nhầm "đạt mục tiêu" cho phép đo CHƯA TỒN TẠI — FB-P1-R1-02
+- **Hiện tượng:** statusForKpi với n=0 hiện "on_target" (value=0 chỉ vì chưa có dữ liệu) — người đọc hiểu là đạt mục tiêu trong khi phép đo chưa tồn tại.
+- **Tác động consumer:** dashboard/KPI layer đọc status trực tiếp — kết luận sai hướng trên KPI chưa có dữ liệu (5 KPI n=0 ở thời điểm fix).
+- **Fix:** status = 'no_data' khi n===0 (thêm type + ưu tiên trước mọi so target; áp cả nhánh compute lỗi). File đụng: src/lib/kpi/compute.ts. Kiểm chứng: test mới (xoá EvalRun → eval_ndcg/eval_recall n=0 → no_data; KPI còn dữ liệu vẫn tính bình thường). Phát hiện qua giao thức fixbug.md đợt FB-P1 vòng R1.
+
+### BUG2-052 · C · P3 — anomaly-detector group key + dedupeKey dùng separator space/'|' — toolName chứa space gộp nhầm 2 nhóm — FB-P1-R1-03
+- **Hiện tượng:** group key nối toolName + agentRole bằng space rồi dedupeKey bằng '|' — toolName chứa space (`"a b"`+role `"c"` ≡ tool `"a"`+role `"b c"`) gộp nhầm 2 nhóm khác bounds; khoá trùng sai.
+- **Tác động consumer:** anomaly scan Layer P1-M3 gộp nhóm sai → bounds tính trên populations lẫn nhau → cảnh báo nhầm/bỏ sót.
+- **Fix:** chuyển cả group key + dedupeKey sang NUL separator `\u0000` (không thể xuất hiện trong tên đã trim). File đụng: src/lib/eval/anomaly-detector.ts. Sự cố quá trình: lần perl đầu chèn NUL BYTE THẬT vào file (grep báo binary) — phát hiện qua file(1), thay bằng escape sequence. Kiểm chứng: gate PASS; scan DB sạch scanned=0. Phát hiện qua giao thức fixbug.md đợt FB-P1 vòng R1.
+
+### BUG2-053 · H · P3 — Vận hành FB-P1: eval run treo 18+ phút cần đánh dấu failed + 156 row ToolMetric test cần dọn khỏi production — FB-P1-R1-05
+- **Hiện tượng:** sau khi BUG2-042 (410 vô hạn) tháo nghẽn, hậu quả vận hành còn lại: (a) eval run cmv29082p… treo ở 0/3 cần đóng trạng thái; (b) 156 row ToolMetric test (xem BUG2-041) còn trong DB production.
+- **Tác động:** kế toán vận hành (KPI tool_success_rate, anomaly scan) đo trên dữ liệu bẩn đến khi dọn.
+- **Xử lý:** run treo → status failed + errorMessage ghi nguyên nhân; dọn 156 row khỏi production (kèm 13 MetricAnomaly artifact sinh từ test data đã xoá — dữ liệu nguồn không còn thì anomaly dẫn xuất phải xoá theo). Kiểm chứng: ToolMetric count = 0 sau dọn; scan lại 0/0. Ghi nhận bài học vận hành: xoá dữ liệu nguồn phải kèm xoá anomaly dẫn xuất. Phát hiện qua giao thức fixbug.md đợt FB-P1 vòng R1.
+
+### BUG2-054 · D · P3 — Test title + comment sót lại silhouette "≈0.879" từ lần tính tay SAI đầu tiên (body test đã sửa 0.9697) — FB-P1M5-R1-01
+- **Hiện tượng:** tests/r76-leiden-quality.test.ts title `3 clique rõ → silhouette ≈ 0.879` + comment `phân hoạch 3 cụm cho silhouette ~0.879` — sót lại từ lần tính tay SAI đầu tiên của chính đợt triển khai (worklog task-86 ghi rõ "lần đầu tính 0.879 SAI — quên 9 node không cầu"; body assertion đã sửa sang 0.9697 nhưng title/comment quên).
+- **Tác động consumer:** người đọc sau hiểu nhầm giá trị chuẩn là 0.879 — phát tán lỗi tính tay đã bị bác bỏ.
+- **Fix:** title + comment đổi đúng 0.9697 kèm phân tích nguồn gốc (9 node rời rạc s=1.0 + 3 node clique 0.8788 → mean 0.9697). File đụng: tests/r76-leiden-quality.test.ts. Kiểm chứng: chạy test PASS; đối chiếu harness độc lập 332 phép đợt FB-ĐỢT3 (3-clique tay 0.969697 khớp tuyệt đối). Phát hiện qua giao thức fixbug.md đợt FB-ĐỢT3 vòng R1.
+
+### BUG2-055 · C · P3 — sweepGamma JSDoc hứa tie-break "γ nhỏ hơn cho ổn định" nhưng cơ chế thật "candidate ĐẦU TIÊN trong grid thắng tie tuyệt đối" — FB-P1M5-R1-02
+- **Hiện tượng:** `GammaSweepResult.best` + JSDoc sweepGamma hứa bậc ưu tiên tie-break theo γ nhỏ; code thật giữ candidate đầu tiên gặp khi duyệt grid. Đúng cho grid mặc định tăng dần (γ nhỏ đến trước), KHÔNG đúng cơ học cho grid custom descending/trùng lặp. Hành vi quan sát được gần như luôn khớp doc (bậc modularity tự chọn γ nhỏ cho cùng phân hoạch) nhưng doc-code không khớp TUYỆT ĐỐI.
+- **Tác động consumer:** caller truyền grid custom sẽ nhận best không theo doc hứa — hành vi không thể suy ra từ tài liệu.
+- **Fix:** thêm bậc 3 so γ trực tiếp `gamma < best.gamma` (0 đổi hành vi grid mặc định) + JSDoc giải thích cơ chế + regression test grid descending + grid trùng lặp. File đụng: src/lib/stats/community-quality.ts sweepGamma. Kiểm chứng: harness 332/332 sau fix; invariant best.silhouette=max(candidates) bảo toàn; gate 683/683. Phát hiện qua giao thức fixbug.md đợt FB-ĐỢT3 vòng R1.
+
+### BUG2-056 · C · P3 — buildSweepReport không guard score không hữu hạn: NaN đi qua → dòng ngưỡng NaN + mẫu đếm vào n mà không bao giờ dự đoán dương — FB-Đợt4-R1-01
+- **Hiện tượng:** probe thật [0.9, NaN, 0.4] → hasNaNThreshold=true: bảng điểm chứa dòng ngưỡng NaN, mẫu NaN không bao giờ được dự đoán dương nhưng vẫn đếm vào n. Cả 2 DB caller đã lọc Number.isFinite nhưng hàm thuần xuất khẩu công khai mời gọi nhầm.
+- **Tác động consumer:** caller thứ ba (tương lai) truyền score bẩn sẽ nhận bảng sweep rác âm thầm thay vì lỗi tường minh.
+- **Fix:** throw tường minh score không-hữu-hạn (cùng convention length-mismatch của stats layer) — guard đứng SAU length-check, TRƯỚC zero-state (mảng rỗng vẫn zero-state không throw). File đụng: src/lib/eval/threshold-sweep.ts. Kiểm chứng: 3 expect-throw test; 38/38 test cũ không đổi; harness 3750/3750. Phát hiện qua giao thức fixbug.md đợt FB-ĐỢT4 vòng R1.
+
+### BUG2-057 · C · P3 — 3 khuyến nghị sweep (max_f1 / precision_gte / recall_gte) chọn/lọc trên giá trị ĐÃ round4 thay vì thô — FB-Đợt4-R1-02
+- **Hiện tượng:** recommended chọn max_f1 argmax trên giá trị round4 (display) — có thể lệch tới 5e-5 so với f1 thật; lọc precision_gte_0.9/recall_gte_0.9 nạp ứng viên có giá trị thô < 0.9 (chênh ≤ 5e-5). AUC đã đúng dùng rawPoints — recommended thì chưa.
+- **Tác động consumer:** bảng duyệt ngưỡng nộp user có thể trình nhầm ứng viên biên (thô 0.89999… hiển thị 0.9).
+- **Fix:** chọn/lọc trên raw + tie-break f1 với ε=1e-12 (2 f1 bằng nhau toán học nhưng lệch 1 ULP float phải là TIE để bậc precision quyết — không để noise ULP thắng), chỉ round khi xuất. File đụng: src/lib/eval/threshold-sweep.ts recommended. Kiểm chứng: test biên ≥ 0.9 phân biệt ≥/> ở cả 2 tiêu chí; khoá ULP bằng chính dữ liệu fuzz#65 thật; 3750/3750 sau khi harness comparator áp cùng ngữ nghĩa ε. Phát hiện qua giao thức fixbug.md đợt FB-ĐỢT4 vòng R1.
+
+### BUG2-058 · C · P3 — aucRoc hiển thị 0 khi một lớp vắng mặt (thiếu cặp T/F để xếp hạng thì AUC không định nghĩa được) — FB-Đợt4-R2-01
+- **Hiện tượng:** live evaluator n=2 toàn positive trả AUC-ROC=0 — bị đọc nhầm "đường cong tệ nhất" trong khi không có cặp positive-negative nào để xếp hạng (không định nghĩa). Đối xứng precedent P1-M1 (aucPr trả null khi hết positive) nhưng aucRoc còn thiếu nhánh đó.
+- **Tác động consumer:** mọi consumer đọc AUC-ROC trên tập không đủ 2 lớp (dữ liệu sống nhỏ — đúng tình huống n=2 lúc bộc lộ) nhận 0 thay vì "không đo được".
+- **Fix:** null khi positives=0 HOẶC negatives=0 + regression 2 test (toàn dương → null nhưng aucPr vẫn 1; 0 positive → null cả hai). File đụng: src/lib/stats/classification.ts aucRoc. Sự cố quá trình: lần sửa đầu khai báo trùng totalNeg — phát hiện bằng grep trước khi tsc chạy. Kiểm chứng: gate 722/722; live route sau fix evaluator n=2 recommended 0.85 hoạt động đúng. Phát hiện qua giao thức fixbug.md đợt FB-ĐỢT4 vòng R2.
+
+### BUG2-059 · C · P4 — extractEvidenceTokens KHÔNG trích chuỗi hex dạng git hash — bằng chứng đối chiếu TRUNG TÂM của quy trình rơi khỏi digest gate — FB-Đợt5-R1-01
+- **Hiện tượng:** "839d494" không match `\b\d{2,}\b` (không có \b giữa 839-d494 — 'd' là ký tự word), không match camel/Pascal/snake/kebab/path — mọi chuỗi hex git hash đều bị bỏ qua khi trích evidence. Digest LLM bỏ hết hash vẫn qua gate (gate không đòi hash nên không phát hiện mất).
+- **Tác động consumer:** commit hash được trích dẫn liên tục trong worklog/báo cáo/ArbiterVerdict làm bằng chứng đối chiếu — nếu bản nén bỏ hash, người đọc mất khả năng truy vết về commit gốc mà gate vẫn xanh.
+- **Fix:** pattern hex thuần `[0-9a-f]{7,40}` (độ dài git short-hash; từ tiếng Anh ≥7 chữ chỉ gồm a-f cực hiếm — worst case "defaced", hi sinh chấp nhận hướng bảo thủ: bắt buộc digest GIỮ token) + regression test (839d494/6b0b7e9 trích được; abc123 <7 không trích). File đụng: src/lib/context/context-compression.ts. Kiểm chứng: đối xứng — pattern chỉ THÊM token, không đổi tập token cũ (fuzz 50 bộ + 8-token fixture + BIÊN 10-token rep_000 không hex → counts giữ nguyên tuyệt đối, 27/27 test cũ + 1 mới pass); không lan path ('/' không match), không lan snake ('_' không match), không trùng key lowercase với số thuần ('722' dài 3 < 7). Phát hiện qua giao thức fixbug.md đợt FB-ĐỢT5 vòng R1.
+
+### BUG2-060 · C · P4 — env gate đặt NHƯNG RỖNG (KEY= không giá trị) → Number('')=0 → ngưỡng 0 = GATE TẮT NGẦM không chủ đích — FB-Đợt5-R2-01
+- **Hiện tượng:** `.env` có dòng `DIGEST_EVIDENCE_COVERAGE_MIN=` (rỗng) → `Number('')=0` → `0>=0 && 0<=1` TRUE → ngưỡng thành 0. Rollback chủ đích phải là đặt "0" TƯỜNG MINH — đặt rỗng vô tình (dòng mẫu/copy template) tắt gate ngầm. Áp cả 2 gate DIGEST_EVIDENCE_COVERAGE_MIN + SUMMARY_ROUGE_RECALL_MIN; RUNTIME_JUDGES_TIMEOUT_MS vốn an toàn nhờ floor 5000 nhưng cùng quy ước.
+- **Tác động consumer:** vận hành sửa .env theo template (bỏ giá trị để "tạm tắt") vô tình hạ gate về 0 — quality gate im lặng hoàn toàn.
+- **Fix:** trim + rỗng coi như KHÔNG đặt → default (áp 2 gate; parseRuntimeJudgesMode vốn đã có trim cùng quy ước). Kiểm chứng: hành vi mặc định (env không đặt) giữ nguyên tuyệt đối — đọc diff R2 xác nhận 0 chữ kí đổi; test r77 80/80. Phát hiện qua giao thức fixbug.md đợt FB-ĐỢT5 vòng R2.
+
+### BUG2-061 · D · P4 — withTimeout judges.ts có try/catch CHẾT quanh Promise.race + trả promise không await — cú pháp lừa người đọc rằng có bảo vệ — FB-Đợt5-R2-02
+- **Hiện tượng:** khối try/catch bọc `Promise.race(...)` đồng bộ — promise rejection KHÔNG BAO GIỜ vào được catch đồng bộ (chỉ throw đồng bộ mới bắt được); hàm trả promise không await. Hai lớp lừa: đọc như có xử lý lỗi (không có) + đọc như đã đợi (chưa).
+- **Tác động consumer:** code đường 3-judge runtime (P3-M3) — may mắn hành vi thực tế vẫn đúng nhờ caller await ở tầng trên, nhưng mẫu code sai chuẩn này sẽ bị copy sang nơi khác như pattern chuẩn (pattern lan — lỗi loại này đã xảy ra trong codebase).
+- **Fix:** dọn về đúng pattern context-compression/goal-loop (await + finally clearTimeout) — hành vi không đổi, chỉ đúng chuẩn. File đụng: src/lib/eval/judges.ts. Kiểm chứng: đọc diff R2 mắt tươi + gate 802/802; test r77-runtime-judges 20/20 (timeout 600s đúng directive kimi-k3). Phát hiện qua giao thức fixbug.md đợt FB-ĐỢT5 vòng R2.
