@@ -1120,6 +1120,33 @@ model ToolMetricDaily {
   @@index([toolName, date])
 }
 
+/// P1-M3 (blueprint stats, mục #4 — DA.pdf §Outlier Detection IQR/boxplot) —
+/// điểm bất thường phát hiện bởi anomaly-detector trên ToolMetric: tool chạy
+/// bất thường (thời lượng/output) mà errorTag không bắt được. Bounds tính
+/// theo cửa sổ 7 ngày per (toolName, agentRole), chỉ điểm TRONG 24h qua được
+/// ghi (bất thường MỚI). Idempotent theo (kind, toolName, agentRole, value,
+/// observedAt truncate giờ) — scan 2 lần không nhân bản. Sweep xóa >30 ngày
+/// chạy ngay từ đầu (tránh bảng phình — bài học ToolMetric ROUND-32).
+model MetricAnomaly {
+  id        String   @id @default(cuid())
+  /// tool_duration_high (v1) | tool_error_burst (dự phòng tương lai)
+  kind      String
+  toolName  String
+  agentRole String
+  /// durationMs (hoặc error-rate cho kind burst) của điểm bất thường
+  value     Float
+  /// rìa Tukey: q3 + 1.5·iqr của cửa sổ — bất thường ⇔ value > bound
+  bound     Float
+  /// (value − q3)/iqr (iqr=0 → phần vượt tuyệt đối value−q3, xem detector)
+  score     Float
+  sessionId String?
+  observedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  @@index([kind, observedAt])
+  @@index([toolName, observedAt])
+}
+
 /// Task 20-b (self-monitoring) — persist run lifecycle của mỗi agent run
 /// (chat goal-loop / team workflow). Trước đây goal-loop metadata (cycles,
 /// stopReason, evaluatorConfidence, tokensUsed...) chỉ sống trong

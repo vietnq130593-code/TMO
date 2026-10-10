@@ -17,14 +17,19 @@
  *            — task 20-c sẽ wire ghi row lúc run start)
  *   alerts — (a) stuck-loops (no_progress/stall_brake/verdict_stagnation) >= 3
  *            → high; (b) tool successRate < 50% với >= 10 calls → medium
+ *   anomalyScan (P1-M3) — CHỈ khi ?scan=1: IQR anomaly scan (cache 10 phút
+ *            TmoCache) — { scanned, anomalies, byTool, pruned }
  *
- * Query params: hours=24 (default 24, max 168)
+ * Query params: hours=24 (default 24, max 168) · scan=1 (P1-M3)
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { findAgentRunRecordsSince } from '@/lib/metrics-db'
 import { getDailyTokensByAgent } from '@/lib/llm'
+// P1-M3 — IQR anomaly scan theo yêu cầu (?scan=1, cache 10 phút)
+import { scanToolMetricAnomalies, type AnomalyScanResult } from '@/lib/learning/anomaly-detector'
+import { TmoCache } from '@/lib/cache-store'
 
 export const dynamic = 'force-dynamic'
 
@@ -139,6 +144,10 @@ function zeroRuns() {
     recentRuns: [] as Array<Record<string, unknown>>,
   }
 }
+
+/** Cache 10 phút cho anomaly scan kích hoạt từ overview (P1-M3 — tránh quét
+ *  lặp khi UI poll overview; scan là query cửa sổ 7 ngày + ghi điểm mới). */
+const anomalyScanCache = new TmoCache<AnomalyScanResult>('metrics-anomaly-scan', 10 * 60 * 1000)
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
@@ -359,6 +368,22 @@ export async function GET(request: NextRequest) {
     console.error('[Metrics/Overview] alerts section error (fail-open):', error)
   }
 
+  // ==================== P1-M3: anomaly scan (?scan=1, cache 10 phút) ====================
+  // Blueprint §P1-M3 hook ② — KHÔNG đổi 4 section cũ khi param vắng mặt.
+  let anomalyScan: AnomalyScanResult | null = null
+  if (searchParams.get('scan') === '1') {
+    try {
+      anomalyScan = anomalyScanCache.get()
+      if (!anomalyScan) {
+        anomalyScan = await scanToolMetricAnomalies()
+        anomalyScanCache.set(anomalyScan)
+      }
+    } catch (error) {
+      console.error('[Metrics/Overview] anomalyScan section error (fail-open):', error)
+      anomalyScan = null
+    }
+  }
+
   return NextResponse.json({
     generatedAt: new Date().toISOString(),
     // v1.1: range mode trả {from, to}; live mode trả {hours} như cũ
@@ -367,5 +392,6 @@ export async function GET(request: NextRequest) {
     tools,
     runs,
     alerts,
+    ...(anomalyScan ? { anomalyScan } : {}),
   })
 }
