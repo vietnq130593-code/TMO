@@ -174,11 +174,14 @@ describe('HistoricalFeedback', () => {
           avgTimeSpent: 10000,
           successRate: 0.8,
           sampleSize: 10,
+          // P2-M2 — CI hẹp (width 0.3 ≤ 0.5) → nhóm TIN CẬY ĐƯỢC → giữ hành vi cũ
+          successCI: { low: 0.6, high: 0.9 },
         },
       },
       byRoutingMode: {},
       byErrorType: {},
       overallSuccessRate: 0.8,
+      overallSuccessCI: { low: 0.6, high: 0.9 },
       totalRuns: 10,
     }
     const budget = getAdjustedBudget('task-1', 1, historicalMetrics, 10000)
@@ -199,11 +202,13 @@ describe('HistoricalFeedback', () => {
           avgTimeSpent: 10000,
           successRate: 0.8,
           sampleSize: 10,
+          successCI: { low: 0.6, high: 0.9 },
         },
       },
       byRoutingMode: {},
       byErrorType: {},
       overallSuccessRate: 0.8,
+      overallSuccessCI: { low: 0.6, high: 0.9 },
       totalRuns: 10,
     }
     const probability = getSuccessProbability('task-1', 'B', historicalMetrics)

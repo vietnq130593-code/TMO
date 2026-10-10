@@ -30,6 +30,7 @@
 import { db } from '@/lib/db'
 import { CONFIDENCE_THRESHOLD } from '@/lib/kb-routing/kb-access'
 import { computeVerdictScorecard } from '@/lib/eval/verdict-scorecard'
+import { meanCI } from '@/lib/stats'
 
 export interface KpiComputeResult {
   /** Giá trị KPI ∈ [0, ∞) hoặc tỉ lệ ∈ [0,1] */
@@ -58,6 +59,35 @@ function sinceHours(h: number): Date {
 
 function ratio(part: number, total: number): number {
   return total > 0 ? part / total : 0
+}
+
+/**
+ * P2-M2 — meanCI 95% (x̄ ± 1.96·s/√n) cho một metric per-case của một eval
+ * run (nguồn EvalResult — thay cột meta EvalRun không có, quyết định §P2-M2:
+ * "ghi CI vào log + KPI meta (P1-M4) thay thế"). Trả undefined khi không đủ
+ * (n < 2 không có độ lệch chuẩn / run không có per-case row) — meta sạch,
+ * không nhét NaN vô JSON.
+ */
+async function evalMetricCI(
+  runId: string,
+  field: 'ndcgAt5' | 'recallAt5',
+): Promise<{ low: number; high: number; n: number } | undefined> {
+  try {
+    const rows = await db.evalResult.findMany({
+      where: { runId },
+      select: { [field]: true },
+    })
+    const xs = rows.map((r) => r[field]).filter((v) => typeof v === 'number' && Number.isFinite(v))
+    const ci = meanCI(xs)
+    if (ci.n < 2 || !Number.isFinite(ci.low) || !Number.isFinite(ci.high)) return undefined
+    return {
+      low: Math.round(ci.low * 1000) / 1000,
+      high: Math.round(ci.high * 1000) / 1000,
+      n: ci.n,
+    }
+  } catch {
+    return undefined // fail-open — KPI vẫn hiển thị value/n như cũ
+  }
 }
 
 /**
@@ -152,7 +182,9 @@ export const KPI_REGISTRY: KpiDef[] = [
       if (!run) {
         return { value: 0, n: 0, meta: { note: 'chưa có eval run completed — baseline P1-M2' } }
       }
-      return { value: run.avgNdcg, n: run.caseCount, meta: { runId: run.id } }
+      // P2-M2 — meanCI 95% từ per-case EvalResult (thay cột meta EvalRun không có)
+      const ci = await evalMetricCI(run.id, 'ndcgAt5')
+      return { value: run.avgNdcg, n: run.caseCount, meta: { runId: run.id, ...(ci ? { ci } : {}) } }
     },
   },
   {
@@ -169,7 +201,9 @@ export const KPI_REGISTRY: KpiDef[] = [
       if (!run) {
         return { value: 0, n: 0, meta: { note: 'chưa có eval run completed — baseline P1-M2' } }
       }
-      return { value: run.avgRecallAt5, n: run.caseCount, meta: { runId: run.id } }
+      // P2-M2 — meanCI 95% từ per-case EvalResult (thay cột meta EvalRun không có)
+      const ci = await evalMetricCI(run.id, 'recallAt5')
+      return { value: run.avgRecallAt5, n: run.caseCount, meta: { runId: run.id, ...(ci ? { ci } : {}) } }
     },
   },
   {

@@ -27,6 +27,12 @@ export {
   analyzeHistoricalFeedback,
   getAdjustedBudget,
   getSuccessProbability,
+  // P2-M2 — Wilson CI cho mọi xác suất rút từ mẫu
+  getSuccessProbabilityWithCI,
+  isTrustworthySuccessCI,
+  TRUST_MIN_N,
+  TRUST_MAX_CI_WIDTH,
+  type SuccessProbabilityWithCI,
 } from './historical-feedback'
 
 // Strategy Adapter

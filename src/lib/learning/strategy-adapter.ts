@@ -11,6 +11,7 @@
  */
 
 import { db } from '@/lib/db'
+import { isTrustworthySuccessCI } from './historical-feedback'
 import type {
   AdaptationDecision,
   AdaptationRule,
@@ -49,10 +50,18 @@ const DEFAULT_RULES: AdaptationRule[] = [
     priority: 90,
   },
   {
+    // P2-M2 — guard bằng chứng Wilson CI: overallSuccessRate < 0.3 chỉ được
+    // tin khi overall đủ mẫu (n ≥ 5) ∧ CI hẹp (width ≤ 0.5); thiếu bằng
+    // chứng → KHÔNG reduce_scope trên số mỏng (rơi qua rule khác/escalate).
     condition: (pattern, metrics) =>
       pattern.type === 'resource_limit' &&
       metrics !== null &&
-      metrics.overallSuccessRate < 0.3,
+      metrics.overallSuccessRate < 0.3 &&
+      isTrustworthySuccessCI(
+        metrics.totalRuns,
+        metrics.overallSuccessCI?.low ?? Number.NaN,
+        metrics.overallSuccessCI?.high ?? Number.NaN,
+      ),
     strategy: 'reduce_scope',
     priority: 80,
   },

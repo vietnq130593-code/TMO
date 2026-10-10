@@ -116,7 +116,7 @@ import {
 // (added in Phase 6 Prop 2) but the production path never invoked it.
 // Fire-and-forget pattern: any flush error is caught + logged, never
 // crashes the workflow (metrics are best-effort side-effects).
-import { createMetricsCollector, analyzeHistoricalFeedback, getAdjustedBudget, getSuccessProbability, type MetricsCollector } from '@/lib/learning'
+import { createMetricsCollector, analyzeHistoricalFeedback, getAdjustedBudget, getSuccessProbabilityWithCI, type MetricsCollector } from '@/lib/learning'
 // CI-3 B1 (Task 13-a) — nén context dùng chung với goal-loop: cap tool result
 // 4k chars + rolling digest 50k chars (roadmap CI-3 "Lỗ hổng 1": workflow push
 // tool result THÔ không giới hạn → task code dài phình đến 80k tokens rồi pause).
@@ -986,12 +986,18 @@ export async function runWorkflow(
       effectiveTokenBudget = Math.round(
         Math.min(BASE_TOKEN_BUDGET * 2, Math.max(BASE_TOKEN_BUDGET * 0.5, adjusted))
       )
-      const successProb = getSuccessProbability(
+      // P2-M2 — log bản kèm Wilson CI + nguồn chuỗi fallback (chỉ hiển thị;
+      // guard bằng chứng nằm trong getAdjustedBudget/WithCI — n < 5 hay CI
+      // rộng > 0.5 tự rơi về bậc tổng quát, không act trên mẫu mỏng).
+      const successProbCI = getSuccessProbabilityWithCI(
         `mode-${routingMode}-tier-${tier}`,
         routingMode,
         historicalMetrics
       )
-      console.log(`[Workflow] Layer 9 P1.1 — historical feedback: ${historicalMetrics.totalRuns} prior runs, budget ${BASE_TOKEN_BUDGET} → ${effectiveTokenBudget} (clamped), successProb=${successProb.toFixed(2)} for mode-${routingMode}-tier-${tier}`)
+      const ciStr = Number.isFinite(successProbCI.low)
+        ? ` [${successProbCI.low.toFixed(2)},${successProbCI.high.toFixed(2)}]`
+        : ' (CI n/a — chưa đủ bằng chứng)'
+      console.log(`[Workflow] Layer 9 P1.1 — historical feedback: ${historicalMetrics.totalRuns} prior runs, budget ${BASE_TOKEN_BUDGET} → ${effectiveTokenBudget} (clamped), successProb=${successProbCI.p.toFixed(2)}${ciStr} source=${successProbCI.source} n=${successProbCI.n} for mode-${routingMode}-tier-${tier}`)
     } else {
       console.log(`[Workflow] Layer 9 P1.1 — no prior workflow history (first runs) → base budget ${BASE_TOKEN_BUDGET}`)
     }

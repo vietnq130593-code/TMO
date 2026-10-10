@@ -26,7 +26,7 @@ import { judgeAnswer } from './judges'
 // Task 20-c — auto-retrain calibration model sau eval run (fail-open)
 import { trainCalibrationModel } from '@/lib/calibration-train'
 // P1-M2 — ranking metrics (nDCG@5/MRR) trên thứ tự trả về của hybrid search
-import { ndcgAtK, mrr } from '@/lib/stats'
+import { ndcgAtK, mrr, meanCI } from '@/lib/stats'
 import { type ExpectedEntity, normalizeForEntityMatch, buildRelevanceVector } from './relevance'
 
 /** System-under-test answer generator — the PRODUCTION chat core
@@ -41,6 +41,13 @@ const ANSWER_MODEL = 'space-bunny-free'
 
 /** Pace-limit between cases (ms) — gentle on the shared 4-key NVIDIA budget. */
 const CASE_PACE_MS = 300
+
+/** P2-M2 — format CI 95% cho log: "CI95=[0.612,0.814]" / "CI95=n/a(n<2)" khi
+ *  meanCI trả NaN (n<2 — 1 case duy nhất không có độ lệch chuẩn). */
+function fmtCI(ci: { low: number; high: number; n: number }): string {
+  if (!Number.isFinite(ci.low) || !Number.isFinite(ci.high)) return 'CI95=n/a(n<2)'
+  return `CI95=[${ci.low.toFixed(3)},${ci.high.toFixed(3)}]`
+}
 
 /** Max chars of each retrieved chunk embedded into the answer prompt.
  *  Task 13B (2026-08-25): raised 500 → 2000. At 500 the answer model saw
@@ -206,6 +213,11 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
     // P1-M2 — ranking aggregates (nDCG@5 / MRR trên thứ tự trả về).
     let sumNdcg = 0
     let sumMrr = 0
+    // P2-M2 — per-case arrays cho meanCI (CLT x̄ ± 1.96·s/√n) của
+    // avgRecallAt5/avgNdcg — ghi vào log dòng kết quả + KPI meta (P1-M4)
+    // thay vì thêm cột schema (EvalRun không có cột meta — quyết định §P2-M2).
+    const recallAt5Samples: number[] = []
+    const ndcgAt5Samples: number[] = []
     // Task 4: coverage + conditional faithfulness trackers.
     let answeredCount = 0
     let refusalCount = 0
@@ -328,6 +340,8 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
       sumLatency += latencyMs
       sumNdcg += ndcgAt5
       sumMrr += mrrScore
+      recallAt5Samples.push(recallAt5)
+      ndcgAt5Samples.push(ndcgAt5)
       if (hallucinationDetected) hallucinationCount++
       if (answered) {
         answeredCount++
@@ -371,8 +385,8 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
     })
     console.log(
       `[EvalRunner] Run ${runId} completed: ${processed} cases, coverage=${answeredCount}/${processed}, ` +
-      `avgRecall@5=${(processed > 0 ? sumRecall / processed : 0).toFixed(3)}, ` +
-      `avgNdcg@5=${(processed > 0 ? sumNdcg / processed : 0).toFixed(3)}, ` +
+      `avgRecall@5=${(processed > 0 ? sumRecall / processed : 0).toFixed(3)} ${fmtCI(meanCI(recallAt5Samples))}, ` +
+      `avgNdcg@5=${(processed > 0 ? sumNdcg / processed : 0).toFixed(3)} ${fmtCI(meanCI(ndcgAt5Samples))}, ` +
       `avgMrr=${(processed > 0 ? sumMrr / processed : 0).toFixed(3)}, ` +
       `avgFaithfulness=${(processed > 0 ? sumFaithfulness / processed : 0).toFixed(3)}, ` +
       `condFaithfulness(answered)=${(answeredCount > 0 ? sumAnsweredFaithfulness / answeredCount : 0).toFixed(3)}, ` +

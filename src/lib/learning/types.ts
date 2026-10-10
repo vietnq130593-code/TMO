@@ -45,6 +45,10 @@ export interface AggregatedMetrics {
       avgTimeSpent: number
       successRate: number
       sampleSize: number
+      /** P2-M2 — Wilson 95% CI cho successRate (n = sampleSize, z=1.96).
+       * Consumer quyết định CHỈ tin khi n ≥ 5 ∧ (high−low) ≤ 0.5 — xem
+       * isTrustworthySuccessCI (historical-feedback.ts). NaN khi nhóm rỗng. */
+      successCI: { low: number; high: number }
     }
   >
   byRoutingMode: Record<
@@ -55,10 +59,15 @@ export interface AggregatedMetrics {
       avgTimeSpent: number
       successRate: number
       sampleSize: number
+      /** P2-M2 — Wilson 95% CI cho successRate (n = sampleSize) */
+      successCI: { low: number; high: number }
     }
   >
   byErrorType: Record<string, number> // global error frequency
   overallSuccessRate: number
+  /** P2-M2 — Wilson 95% CI cho overallSuccessRate (n = totalRuns — đơn vị
+   * quan sát là RUN, nhất quán với sampleSize của nhóm theo blueprint §P2-M2). */
+  overallSuccessCI: { low: number; high: number }
   totalRuns: number
 }
 
