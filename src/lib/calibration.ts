@@ -6,21 +6,52 @@
 // kb-access.ts calculateConfidence in a LATER task — until that wiring lands,
 // this module is consumed by future retrieval-pipeline code.
 //
-// Fail-open semantics: no CalibrationModel row / not enough training samples /
-// DB error → return the raw confidence unchanged (calibration must never make
-// the system worse than its raw signal).
+// P3-M1 (blueprint stats §P3-M1) — V2 ĐA BIẾN dẫn đường: khi có
+// CalibrationModelV2 active (V2 đã thắng V1 qua 5-fold CV — P3-M2) thì
+// getCalibratedConfidence áp V2 với rawConfidence làm đặc trưng duy nhất có
+// (9 đặc trưng còn lại impute mean train = chuẩn hóa 0). KHÔNG đổi chữ ký —
+// caller kb-access.ts không cần sửa; caller có context đầy đủ dùng
+// getCalibratedConfidenceV2 (calibration-multifeature.ts) để hưởng đủ 10 đặc
+// trưng.
+//
+// Fail-open semantics: no model row / not enough training samples /
+// V2 parse lỗi / DB error → return the raw confidence unchanged (calibration
+// must never make the system worse than its raw signal).
 
 import { db } from '@/lib/db'
+import { applyV2Model, parseV2ModelJson } from '@/lib/calibration-multifeature'
 
 /** Minimum training samples before the calibration model is trusted. */
 const MIN_CALIBRATION_SAMPLES = 20
 
 /**
  * Get the calibrated confidence for a raw Step-1 KB confidence score.
- * Falls back to the raw confidence when no CalibrationModel row exists or the
- * model was trained on too few samples.
+ * V2-active (đa biến, thắng CV) được thử TRƯỚC; fallback V1 (1 biến);
+ * fallback raw khi không có model nào tin được.
  */
 export async function getCalibratedConfidence(rawConfidence: number): Promise<number> {
+  try {
+    // P3-M1 — V2 active dẫn đường (không có features caller → mọi đặc trưng
+    // trừ rawConfidence lấy mean tập train — chuẩn hóa = 0)
+    const v2 = await db.calibrationModelV2.findUnique({ where: { id: 'default' } })
+    if (v2?.active && v2.sampleSize >= MIN_CALIBRATION_SAMPLES) {
+      const parsed = parseV2ModelJson(v2)
+      if (parsed) return applyV2Model(parsed, { rawConfidence })
+      // parse lỗi (JSON rách/model cũ) → rơi xuống V1 — fail-open
+    }
+    return await getCalibratedConfidenceV1(rawConfidence)
+  } catch {
+    return rawConfidence // fail-open
+  }
+}
+
+/**
+ * Đường V1 THUẦN (1 biến) — KHÔNG đụng V2. Export để calibration-multifeature
+ * fallback theo spec P3-M1 ("getCalibratedConfidenceV2 thiếu features → fallback
+ * v1" — gọi thẳng V1 chứ không quay lại getCalibratedConfidence vốn ưu tiên
+ * V2-active, tránh đệ quy vòng).
+ */
+export async function getCalibratedConfidenceV1(rawConfidence: number): Promise<number> {
   try {
     const model = await db.calibrationModel.findUnique({ where: { id: 'default' } })
     if (!model || model.sampleSize < MIN_CALIBRATION_SAMPLES) return rawConfidence // not enough training data

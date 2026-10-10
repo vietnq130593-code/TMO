@@ -4,6 +4,8 @@
  * GET  /api/eval/calibration — trạng thái calibration HIỆN TẠI (mỗi section
  *        độc lập try/catch fail-open — lỗi section → zero-state, response 200):
  *   model     — CalibrationModel row (id='default') | null (chưa train)
+ *   modelV2   — CalibrationModelV2 row (P3-M1: đa biến + odds ratio + CV
+ *               Brier; active=true chỉ khi V2 thắng V1 qua 5-fold CV)
  *   retrieval — Brier/ECE của KB retrieval confidence trên EvalResult:
  *               score = rawConfidence (giá trị TRƯỚC calibration — 20-c fix),
  *               outcome = faithfulnessMedian > 0.7 ? 1 : 0 (chỉ rows đủ cả 2 số)
@@ -11,9 +13,11 @@
  *               score = confidence, outcome = complete ? 1 : 0, kèm avgConfidence
  *               + baseRate (đối chiếu trực quan độ over/under-confident)
  *
- * POST /api/eval/calibration — retrain CalibrationModel từ EvalResult
- *   (logistic regression — src/lib/calibration-train.ts). Usable < 10 → 400
- *   {error, usable, need: 10} (đúng behavior scripts/train-calibration.ts).
+ * POST /api/eval/calibration — retrain CalibrationModel (V1 — 1 biến) VÀ
+ *        CalibrationModelV2 (đa biến + 5-fold CV so V1) từ EvalResult. V1
+ *        usable < 10 → 400 {error, usable, need: 10} (đúng behavior cũ — kèm
+ *        payload v2 độc lập: V2 cần ≥30 usable nên thường skipped ở giai đoạn
+ *        đầu). V2 active=true chỉ khi cvBrier < brierV1 (P3-M2).
  *
  * Lưu ý vận hành: DB hiện 0 EvalResult rows → GET trả zero-state, POST 400
  * "insufficient data". Chạy `bun scripts/seed-eval.ts` + POST /api/eval/run
@@ -24,6 +28,7 @@ import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { brierScore, ece, type CalibrationBin } from '@/lib/calibration-metrics'
 import { trainCalibrationModel, MIN_TRAIN_SAMPLES } from '@/lib/calibration-train'
+import { trainCalibrationModelV2, MIN_TRAIN_SAMPLES_V2, type MultiFeatureTrainResult } from '@/lib/calibration-multifeature'
 import { findArbiterVerdictsForCalibration } from '@/lib/metrics-db'
 
 export const dynamic = 'force-dynamic'
@@ -37,6 +42,24 @@ interface CalibrationSection {
 
 function zeroSection(): CalibrationSection {
   return { n: 0, brier: 0, ece: null, bins: [] }
+}
+
+/** Đọc CalibrationModelV2 row — fail-open null (P3-M1: V2 đa biến, active chỉ khi thắng CV) */
+async function getModelV2() {
+  try {
+    const row = await db.calibrationModelV2.findUnique({ where: { id: 'default' } })
+    if (!row) return null
+    return {
+      ...row,
+      featureNames: JSON.parse(row.featureNames) as string[],
+      oddsRatios: JSON.parse(row.oddsRatios) as Record<string, number>,
+      coefficients: JSON.parse(row.coefficients) as number[],
+      cvBrierCi: row.cvBrierCi ? (JSON.parse(row.cvBrierCi) as number[]) : null,
+    }
+  } catch (err) {
+    console.warn('[EvalCalibration] getModelV2 failed (fail-open):', err instanceof Error ? err.message : String(err))
+    return null
+  }
 }
 
 /** Section metrics cho arbiter — thêm avgConfidence + baseRate (đối chiếu trực quan) */
@@ -129,23 +152,52 @@ async function getArbiterMetrics(): Promise<ReturnType<typeof arbiterMetrics>> {
 }
 
 export async function GET() {
-  const [model, retrieval, arbiter] = await Promise.all([
+  const [model, modelV2, retrieval, arbiter] = await Promise.all([
     getModel(),
+    getModelV2(),
     getRetrievalMetrics(),
     getArbiterMetrics(),
   ])
 
   return NextResponse.json({
     model,
+    modelV2,
     retrieval,
     arbiter,
     generatedAt: new Date().toISOString(),
   })
 }
 
+/** Viết gọn kết quả V2 cho response (bỏ phần lặp) */
+function v2Payload(v2: MultiFeatureTrainResult) {
+  return {
+    trained: v2.trained,
+    sampleSize: v2.sampleSize,
+    cvBrier: v2.cvBrier,
+    brierV1: v2.brierV1,
+    improved: v2.improved,
+    active: v2.trained ? v2.improved : false,
+    oddsRatios: v2.oddsRatios,
+    ...(v2.error ? { error: v2.error } : {}),
+  }
+}
+
 export async function POST() {
   try {
     const result = await trainCalibrationModel()
+
+    // P3-M1/M2 — train V2 đa biến độc lập với V1 (V2 cần ≥30 usable + đủ 2
+    // lớp cho 5-fold stratified; V1 có thể đủ trong khi V2 chưa và ngược lại).
+    let v2: MultiFeatureTrainResult
+    try {
+      v2 = await trainCalibrationModelV2()
+    } catch (v2Err) {
+      console.warn('[EvalCalibration] V2 retrain failed (fail-open):', v2Err instanceof Error ? v2Err.message : String(v2Err))
+      v2 = {
+        trained: false, sampleSize: 0, cvBrier: null, brierV1: null, improved: false,
+        oddsRatios: {}, usable: 0, total: 0, error: 'internal error',
+      }
+    }
 
     if (!result.trained) {
       // Đúng behavior scripts/train-calibration.ts: dưới 10 usable rows → abort
@@ -154,14 +206,17 @@ export async function POST() {
           error: result.error || 'insufficient data to train calibration model',
           usable: result.usable,
           need: MIN_TRAIN_SAMPLES,
+          v2: v2Payload(v2),
+          v2Need: MIN_TRAIN_SAMPLES_V2,
         },
         { status: 400 },
       )
     }
 
     // Train xong → trả model mới + metrics tươi (GET shape + trained flag)
-    const [model, retrieval, arbiter] = await Promise.all([
+    const [model, modelV2, retrieval, arbiter] = await Promise.all([
       getModel(),
+      getModelV2(),
       getRetrievalMetrics(),
       getArbiterMetrics(),
     ])
@@ -170,6 +225,8 @@ export async function POST() {
       usable: result.usable,
       total: result.total,
       model,
+      modelV2,
+      v2: v2Payload(v2),
       retrieval,
       arbiter,
       generatedAt: new Date().toISOString(),

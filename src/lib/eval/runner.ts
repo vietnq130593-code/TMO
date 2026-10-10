@@ -25,6 +25,7 @@ import { searchUserKB } from '@/lib/kb-routing/kb-access'
 import { judgeAnswer } from './judges'
 // Task 20-c — auto-retrain calibration model sau eval run (fail-open)
 import { trainCalibrationModel } from '@/lib/calibration-train'
+import { trainCalibrationModelV2 } from '@/lib/calibration-multifeature'
 // P1-M2 — ranking metrics (nDCG@5/MRR) trên thứ tự trả về của hybrid search
 import { ndcgAtK, mrr, meanCI } from '@/lib/stats'
 import { type ExpectedEntity, normalizeForEntityMatch, buildRelevanceVector } from './relevance'
@@ -408,6 +409,24 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
         })
         .catch(trainErr => {
           console.warn('[EvalRunner] Auto-retrain calibration failed (fail-open):', trainErr instanceof Error ? trainErr.message : String(trainErr))
+        })
+      // P3-M1/M2 — auto-retrain V2 đa biến kèm 5-fold CV ngay sau V1 (cùng
+      // nguồn EvalResult; active chỉ bật khi CV thắng V1 — fail-open như trên).
+      void trainCalibrationModelV2()
+        .then(v2 => {
+          if (v2.trained) {
+            const topOdds = Object.entries(v2.oddsRatios)
+              .sort((a, b) => Math.abs(Math.log(b[1])) - Math.abs(Math.log(a[1])))
+              .slice(0, 3)
+              .map(([k, v]) => `${k}=${v.toFixed(2)}`)
+              .join(', ')
+            console.log(`[EvalRunner] Auto-retrain calibration V2 (đa biến): cvBrier=${(v2.cvBrier ?? Number.NaN).toFixed(4)} vs brierV1=${(v2.brierV1 ?? Number.NaN).toFixed(4)} → ${v2.improved ? 'ACTIVE (V2 thắng CV)' : 'inactive (CV chưa thắng — giữ V1)'} · sampleSize=${v2.sampleSize} · odds top: ${topOdds}`)
+          } else {
+            console.log(`[EvalRunner] Auto-retrain calibration V2 skipped: ${v2.error} (usable=${v2.usable}/${v2.total})`)
+          }
+        })
+        .catch(v2Err => {
+          console.warn('[EvalRunner] Auto-retrain calibration V2 failed (fail-open):', v2Err instanceof Error ? v2Err.message : String(v2Err))
         })
     } catch { /* fail-open */ }
   } catch (err) {

@@ -1557,6 +1557,61 @@ model CalibrationModel {
   sampleSize Int      @default(0)
 }
 
+// P3-M1 (blueprint stats §P3-M1, mục #9 — MATH.pdf §Logistic đa biến) —
+// calibration model THỨC HAI: logistic đa biến (10 đặc trưng chuẩn hóa) +
+// điều chuẩn L2, kèm odds ratio diễn giải. Chỉ được runtime tin dùng khi
+// active=true — chính là kết luận "V2 thắng V1 qua k-fold CV" (P3-M2: 5-fold
+// stratified, cvBrier < brierV1 trên cùng hold-out). V1 (CalibrationModel)
+// giữ nguyên làm fallback — rollback = set active=false.
+model CalibrationModelV2 {
+  id           String   @id @default("default")
+  /// JSON: thứ tự đặc trưng (khớp coefficients/means/stds/oddsRatios)
+  featureNames String
+  /// JSON: mean chuẩn hóa theo đặc trưng (tập train)
+  means        String
+  /// JSON: std chuẩn hóa (std < 1e-12 → lưu 1 chống chia 0)
+  stds         String
+  /// JSON: β theo đặc trưng (trên đặc trưng ĐÃ chuẩn hóa)
+  coefficients String
+  intercept    Float
+  /// JSON: e^β — Y=1 là FAITHFUL nên "đặc trưng +1σ → odds FAITHFUL ×OR";
+  /// OR < 1 là đặc trưng đẩy nguy cơ SAI (vd hallucinationDetected)
+  oddsRatios   String
+  sampleSize   Int
+  /// P3-M2 — Brier trung bình 5-fold (hold-out) của V2
+  cvBrier      Float?
+  /// P3-M2 — JSON [lo, hi] 95% CI của fold Brier (meanCI — P0 stats)
+  cvBrierCi    String?
+  /// P3-M2 — Brier của V1 (1 biến, train lại cùng dữ liệu từng fold) trên cùng hold-out
+  brierV1      Float?
+  /// CHỈ bật khi CV thắng (cvBrier < brierV1) — runtime ưu tiên V2-active trước V1
+  active       Boolean  @default(false)
+  trainedAt    DateTime @updatedAt
+}
+
+/// P3-M4 (blueprint stats §P3-M4, mục #7 — ML.pdf §ROUGE) — nhật ký sự kiện
+/// digest/summary quality gate: mỗi lần gate chạy (compression hoặc
+/// summarization) ghi 1 row pass/fallback. Nguồn cho KPI
+/// digest_gate_fallback_rate. Ghi fire-and-forget fail-open — KHÔNG bao giờ
+/// làm hỏng flow nén/tóm tắt vì lỗi ghi log.
+model DigestGateEvent {
+  id        String   @id @default(cuid())
+  /// compression (evidence-coverage gate) | summarization (ROUGE-L recall gate)
+  kind      String
+  /// pass | fallback
+  outcome   String
+  /// Giá trị gate compression (coverage 0-1) — null cho summarization
+  coverage  Float?
+  /// Giá trị gate summarization (ROUGE-L recall 0-1) — null cho compression
+  rougeRecall Float?
+  /// digest method sau gate: llm | heuristic
+  method    String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([kind, outcome])
+}
+
 // ===== RED TEAM ENGINE (Blueprint 2026-08-25) =====
 
 /// RedTeamCase: một "vũ khí" trong kho tấn công. Khác EvalCase ở 2 điểm:
