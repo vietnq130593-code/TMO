@@ -24,6 +24,9 @@ import { searchUserKB } from '@/lib/kb-routing/kb-access'
 import { judgeAnswer } from './judges'
 // Task 20-c — auto-retrain calibration model sau eval run (fail-open)
 import { trainCalibrationModel } from '@/lib/calibration-train'
+// P1-M2 — ranking metrics (nDCG@5/MRR) trên thứ tự trả về của hybrid search
+import { ndcgAtK, mrr } from '@/lib/stats'
+import { type ExpectedEntity, normalizeForEntityMatch, buildRelevanceVector } from './relevance'
 
 /** System-under-test answer generator — a dedicated Agent/Chat core.
  *  MUST be different from all judge models (see judges.ts) to avoid circular
@@ -61,10 +64,8 @@ const DEFAULT_CASE_LIMIT = 10
  *  system agent id used across the codebase. */
 const EVAL_AGENT_ID = 'default'
 
-interface ExpectedEntity {
-  name: string
-  type?: string
-}
+// Task 13E — ExpectedEntity + normalizeForEntityMatch đã chuyển sang
+// ./relevance.ts (P1-M2) để dùng chung recall@5 + ranking metrics.
 
 function parseExpectedEntities(json: string): ExpectedEntity[] {
   try {
@@ -76,17 +77,6 @@ function parseExpectedEntities(json: string): ExpectedEntity[] {
   } catch {
     return []
   }
-}
-
-/** Task 13E: normalize text for entity matching — curly quotes (U+2018/2019)
- *  and dashes from PDF extraction break exact substring matches against
- *  LLM-generated straight-quote expected entities. */
-function normalizeForEntityMatch(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[\u2018\u2019\u02BC]/g, "'")
-    .replace(/[\u201C\u201D]/g, '"')
-    .replace(/[\u2013\u2014]/g, '-')
 }
 
 /**
@@ -212,6 +202,9 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
     let sumLatency = 0
     let hallucinationCount = 0
     let processed = 0
+    // P1-M2 — ranking aggregates (nDCG@5 / MRR trên thứ tự trả về).
+    let sumNdcg = 0
+    let sumMrr = 0
     // Task 4: coverage + conditional faithfulness trackers.
     let answeredCount = 0
     let refusalCount = 0
@@ -260,13 +253,16 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
       // ---- Step 3: scoring ----
       const expectedEntities = parseExpectedEntities(evalCase.expectedEntities)
 
-      // Entity hit in top-5 retrieved chunks (normalized substring — Task 13E:
+      // Entity hit trong top-5 chunks (normalized substring — Task 13E:
       // PDF-extracted chunk text uses curly quotes/dashes that must be
       // normalized before matching straight-quote expected entities).
+      // P1-M2: MỘT vòng duy nhất dựng cả vector relevance nhị phân
+      // (first-occurrence per entity — cùng bộ khớp recall@5) cho
+      // nDCG@5/MRR — không gọi thêm phép match nào (nguyên tắc blueprint).
       const top5 = kb.chunks.slice(0, 5)
-      const expectedEntitiesRetrieved = expectedEntities.filter((e) =>
-        top5.some((c) => normalizeForEntityMatch(c.text).includes(normalizeForEntityMatch(e.name)))
-      ).length
+      const { rel, retrievedCount: expectedEntitiesRetrieved } = buildRelevanceVector(expectedEntities, top5)
+      const ndcgAt5 = ndcgAtK(rel, 5)
+      const mrrScore = mrr(rel)
 
       // Entity hit in the generated answer (same normalization).
       const expectedEntitiesInAnswer = expectedEntities.filter((e) =>
@@ -317,6 +313,9 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
           answered,
           rawConfidence: kb.rawConfidence ?? kb.confidence, // Prop 3.5 — calibration training X (20-c fix: giá trị TRƯỚC calibration, hết feedback-loop)
           latencyMs,
+          // P1-M2 — ranking metrics per case
+          ndcgAt5,
+          mrr: mrrScore,
         },
       })
       processed++
@@ -326,6 +325,8 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
       sumFaithfulness += verdict.median
       sumF1 += extractionF1
       sumLatency += latencyMs
+      sumNdcg += ndcgAt5
+      sumMrr += mrrScore
       if (hallucinationDetected) hallucinationCount++
       if (answered) {
         answeredCount++
@@ -336,7 +337,7 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
 
       console.log(
         `[EvalRunner] Case ${processed}/${cases.length} (${evalCase.category}): coverage=${answered ? 'ANSWERED' : 'refused'}, ` +
-        `recall@5=${recallAt5.toFixed(2)}, ` +
+        `recall@5=${recallAt5.toFixed(2)}, ndcg@5=${ndcgAt5.toFixed(2)}, mrr=${mrrScore.toFixed(2)}, ` +
         `faithfulness=${verdict.median.toFixed(2)} [${verdict.scores.map((s) => (s < 0 ? 'fail' : s.toFixed(2))).join(', ')}], ` +
         `f1=${extractionF1.toFixed(2)}, hallucination=${hallucinationDetected}, ${latencyMs}ms — "${evalCase.question.slice(0, 60)}"`
       )
@@ -362,11 +363,16 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
         avgF1: processed > 0 ? sumF1 / processed : 0,
         avgLatencyMs: processed > 0 ? Math.round(sumLatency / processed) : 0,
         hallucinationCount,
+        // P1-M2 — ranking aggregates
+        avgNdcg: processed > 0 ? sumNdcg / processed : 0,
+        avgMrr: processed > 0 ? sumMrr / processed : 0,
       },
     })
     console.log(
       `[EvalRunner] Run ${runId} completed: ${processed} cases, coverage=${answeredCount}/${processed}, ` +
       `avgRecall@5=${(processed > 0 ? sumRecall / processed : 0).toFixed(3)}, ` +
+      `avgNdcg@5=${(processed > 0 ? sumNdcg / processed : 0).toFixed(3)}, ` +
+      `avgMrr=${(processed > 0 ? sumMrr / processed : 0).toFixed(3)}, ` +
       `avgFaithfulness=${(processed > 0 ? sumFaithfulness / processed : 0).toFixed(3)}, ` +
       `condFaithfulness(answered)=${(answeredCount > 0 ? sumAnsweredFaithfulness / answeredCount : 0).toFixed(3)}, ` +
       `avgF1=${(processed > 0 ? sumF1 / processed : 0).toFixed(3)}, ` +

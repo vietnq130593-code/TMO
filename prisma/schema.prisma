@@ -1457,6 +1457,11 @@ model EvalResult {
   answered                  Boolean  @default(false)
   rawConfidence             Float    @default(0)  // Prop 3.5 — Step-1 KB confidence (calibration training X)
   latencyMs                 Int      @default(0)
+  // P1-M2 (blueprint stats) — ranking metrics: thứ tự trả về của hybrid search
+  // mà recall@5 không thấy được. Relevance nhị phân per chunk (chunk chứa
+  // entity kì vọng chưa khớp — cùng bộ khớp recall@5, first-occurrence).
+  ndcgAt5                   Float    @default(0)
+  mrr                       Float    @default(0)
   createdAt                 DateTime @default(now())
 
   @@index([runId])
@@ -1481,6 +1486,10 @@ model EvalRun {
   avgF1           Float     @default(0)
   avgLatencyMs    Int       @default(0)
   hallucinationCount Int   @default(0)
+  // P1-M2 (blueprint stats) — aggregate ranking metrics trên cả run (baseline
+  // bắt buộc trước khi quyết định host reranker bge-reranker-v2-m3 560MB)
+  avgNdcg         Float    @default(0)
+  avgMrr          Float    @default(0)
   errorMessage    String?
   startedAt       DateTime  @default(now())
   completedAt     DateTime?
