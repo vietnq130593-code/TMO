@@ -1719,7 +1719,21 @@ async function runPipeline(
       void (async () => {
         try {
           const { markSessionAdaptationOutcome } = await import('@/lib/learning/adaptation-engine')
-          await markSessionAdaptationOutcome(sessionId, maxedOutStep ? false : !isFailedStep, stepId)
+          const outcome = await markSessionAdaptationOutcome(sessionId, maxedOutStep ? false : !isFailedStep, stepId)
+          // ━━━ P6-M1 (BLUEPRINT-STATS-LEARNING §P6-M1, mục #15) — W1: CREDIT
+          // ASSIGNMENT. SAL được THẬT SỰ đóng (outcome.recorded — stepId lệch
+          // → adaptation-engine bỏ qua âm thầm, không ghi bằng chứng rác) →
+          // updateQ cho action chiến lược: stateKey = mode-tier của routing
+          // workflow này (quy ước key historical-feedback), actionKey =
+          // toStrategy, reward = successful ? +1 : −1 (quy ước §P6-M2).
+          // Fire-and-forget fail-open — learning side-channel không chặn step.
+          if (outcome.recorded && outcome.toStrategy) {
+            const { updateQ, qStateKey } = await import('@/lib/learning/q-table')
+            const stateKey = qStateKey(routingDecision.mode, routingDecision.tier)
+            const reward = outcome.successful ? 1 : -1
+            void updateQ(stateKey, outcome.toStrategy, reward, stateKey)
+            console.log(`[Workflow] P6-M1 Q-learn (SAL close): ${stateKey} × ${outcome.toStrategy} reward=${reward}`)
+          }
         } catch { /* fail-open */ }
       })()
     }

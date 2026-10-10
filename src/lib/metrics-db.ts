@@ -407,6 +407,22 @@ export async function resolveArbiterVerdicts(
   runComplete: boolean,
   runStopReason: string,
 ): Promise<number> {
+  const { total } = await resolveArbiterVerdictsDetailed(sessionId, runComplete, runStopReason)
+  return total
+}
+
+/**
+ * P6-M1 (BLUEPRINT-STATS-LEARNING §P6-M1, mục #15): bản đầy đủ của
+ * resolveArbiterVerdicts — trả kèm breakdown confirmed/refuted để goal-loop
+ * TÍNH REWARD cho credit assignment (+1 confirmed ∧ runComplete / −1 refuted /
+ * 0 pending-bỏ — quy ước reward §P6-M2). resolveArbiterVerdicts (cũ) ủy nhiệm
+ * và giữ return number — không đụng caller/test hiện có.
+ */
+export async function resolveArbiterVerdictsDetailed(
+  sessionId: string,
+  runComplete: boolean,
+  runStopReason: string,
+): Promise<{ total: number; confirmed: number; refuted: number }> {
   const now = new Date()
   if (hasArbiterVerdictDelegate()) {
     // updateMany không set giá trị per-row được → 2 nhóm confirmed/refuted
@@ -418,18 +434,22 @@ export async function resolveArbiterVerdicts(
       where: { sessionId, outcome: null, complete: !runComplete },
       data: { outcome: 'refuted', outcomeAt: now, runStopReason, runComplete },
     })
-    return confirmed.count + refuted.count
+    return { total: confirmed.count + refuted.count, confirmed: confirmed.count, refuted: refuted.count }
   }
 
-  const n = await db.$executeRaw`
+  const confirmedN = await db.$executeRaw`
     UPDATE ArbiterVerdict
-    SET outcome = CASE WHEN complete = ${runComplete ? 1 : 0} THEN 'confirmed' ELSE 'refuted' END,
-        outcomeAt = ${now},
-        runStopReason = ${runStopReason},
-        runComplete = ${runComplete ? 1 : 0}
-    WHERE sessionId = ${sessionId} AND outcome IS NULL
+    SET outcome = 'confirmed', outcomeAt = ${now},
+        runStopReason = ${runStopReason}, runComplete = ${runComplete ? 1 : 0}
+    WHERE sessionId = ${sessionId} AND outcome IS NULL AND complete = ${runComplete ? 1 : 0}
   `
-  return n
+  const refutedN = await db.$executeRaw`
+    UPDATE ArbiterVerdict
+    SET outcome = 'refuted', outcomeAt = ${now},
+        runStopReason = ${runStopReason}, runComplete = ${runComplete ? 1 : 0}
+    WHERE sessionId = ${sessionId} AND outcome IS NULL AND complete = ${runComplete ? 0 : 1}
+  `
+  return { total: Number(confirmedN) + Number(refutedN), confirmed: Number(confirmedN), refuted: Number(refutedN) }
 }
 
 // ==================== AgentRunRecord — start/end lifecycle (Task 20-c) ====================

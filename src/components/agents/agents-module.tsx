@@ -75,6 +75,10 @@ export function AgentsModule() {
     }
   }, [])
 
+  // P6-M4 (BLUEPRINT-STATS-LEARNING §P6-M4): lời khuyên Q học được — top model
+  // theo Q-value (advisory, chỉ khi đã có dữ liệu học visits>0)
+  const [qAdvice, setQAdvice] = useState<{ stateKey: string; top: Array<{ model: string; q: number; visits: number }> } | null>(null)
+
   // Fetch available models
   const fetchModels = useCallback(async () => {
     try {
@@ -82,6 +86,7 @@ export function AgentsModule() {
       if (!res.ok) throw new Error('Failed to fetch models')
       const data = await res.json()
       setAvailableModels(data.providers || [])
+      setQAdvice(data?.advice ?? null)
     } catch {
       // Silently fail for models — not critical
     }
@@ -734,11 +739,22 @@ export function AgentsModule() {
                   <SelectValue placeholder="Model" />
                 </SelectTrigger>
                 <SelectContent className="bg-slate-950/95 border-fuchsia-400/35">
-                  {currentProviderModels.map((m: any) => (
-                    <SelectItem key={m.id} value={m.id} className="text-stone-200 focus:text-white focus:bg-stone-800/80 text-xs">
-                      {m.label || m.id}
+                  {currentProviderModels.map((m: any) => {
+                    // P6-M4 — badge "Q đề xuất" trên model top-Q (SelectItem không
+                    // chứa được span trang trí nhiều — dùng marker text + title)
+                    const qTop = qAdvice?.top?.[0]
+                    const isQRecommended = qTop && qTop.model === m.id && qTop.visits > 0
+                    return (
+                    <SelectItem
+                      key={m.id}
+                      value={m.id}
+                      className="text-stone-200 focus:text-white focus:bg-stone-800/80 text-xs"
+                      title={isQRecommended ? `Q học được đề xuất (P6): phần thưởng trung bình cao nhất (${qTop!.q.toFixed(2)}, ${qTop!.visits} runs) — tham khảo, không bắt buộc.` : undefined}
+                    >
+                      {m.label || m.id}{isQRecommended ? ' · ★ Q đề xuất' : ''}
                     </SelectItem>
-                  ))}
+                    )
+                  })}
                   {currentProviderModels.length === 0 && (
                     <div className="px-3 py-2 text-xs text-stone-500">Chọn provider trước</div>
                   )}

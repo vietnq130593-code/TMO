@@ -312,19 +312,19 @@ export async function markSessionAdaptationOutcome(
   sessionId: string,
   successful: boolean,
   stepId?: string,
-): Promise<void> {
+): Promise<{ recorded: boolean; toStrategy?: string; successful?: boolean }> {
   try {
     const state = getStore().get(sessionId)
-    if (!state) return
+    if (!state) return { recorded: false }
     // Step khác với step từng fail → kết quả này không phải bằng chứng
-    if (stepId && state.sourceStepId && stepId !== state.sourceStepId) return
+    if (stepId && state.sourceStepId && stepId !== state.sourceStepId) return { recorded: false }
 
     // Persist outcome vào StrategyAdaptationLog (lấy log pending mới nhất của session)
     const { db } = await import('@/lib/db')
     const pending = await db.strategyAdaptationLog.findFirst({
       where: { sessionId, successful: null },
       orderBy: { createdAt: 'desc' },
-      select: { id: true },
+      select: { id: true, toStrategy: true },
     }).catch(() => null)
     if (pending) {
       await db.strategyAdaptationLog.update({
@@ -332,6 +332,13 @@ export async function markSessionAdaptationOutcome(
         data: { successful },
       }).catch(() => { /* fail-open */ })
     }
+
+    // P6-M1 (BLUEPRINT-STATS-LEARNING §P6-M1, mục #15): trả đủ bộ cho caller
+    // wiring credit assignment — (toStrategy, successful) là actionKey + reward
+    // của updateQ phía workflow-engine (stateKey mode-tier caller biết routing).
+    // Trước đây trả void nên caller KHÔNG thể biết SAL có thật sự được đóng hay
+    // không (stepId lệnh → bỏ qua âm thầm) — Q bảng sẽ ghi nhầm bằng chứng rác.
+    const recorded = pending !== null
 
     // Thành công → resolve FailurePattern của session (hint không lặp lại)
     if (successful) {
@@ -345,8 +352,10 @@ export async function markSessionAdaptationOutcome(
     } else {
       console.log(`[Adaptation] Session ${sessionId.slice(0, 12)} — adaptation chưa khỏi (lần ${state.applyCount}): giữ directives cho step sau`)
     }
+    return recorded ? { recorded: true, toStrategy: pending.toStrategy, successful } : { recorded: false }
   } catch (err) {
     console.warn('[Adaptation] markSessionAdaptationOutcome failed (fail-open):', err instanceof Error ? err.message : String(err))
+    return { recorded: false }
   }
 }
 

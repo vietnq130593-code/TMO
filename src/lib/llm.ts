@@ -227,6 +227,11 @@ export interface LLMCallOptions {
    *  rồi mới fallback callLLM('agent-fallback') — set cờ này để KHÔNG spawn thêm
    *  CLI lần 2 trong utility zen path (tiết kiệm ~40-60s + RAM). */
   skipZenUtility?: boolean
+  /** P6-M3 (BLUEPRINT-STATS-LEARNING §P6-M3): số thứ tự chu kỳ ReAct của
+   *  call — thành phần seed xác suất softmax "hash(sessionId, cycle)" (cùng
+   *  sessionId + cùng chu kỳ → cùng lựa chọn — chạy lại được). Undefined
+   *  = 0 (call ngoài chu kỳ — seed theo sessionId). */
+  qPolicyCycle?: number
   /** 2026-09-26 FIX (Tool health audit): sessionId của agent run đang chạy —
    *  truyền qua env TMO_SESSION_ID cho OpenCode CLI bridge (.opencode/tools/
    *  _tmo-common.ts) để tool tmo_* thực thi trong inner loop CLI ghi ToolMetric
@@ -4353,6 +4358,110 @@ export function zenModelBlockSummary(): Array<{ model: string; transport: 'http'
   return out
 }
 
+// ==================== P6-M3 — SOFTMAX(τ) STOCHASTIC MODEL-SELECTION ====================
+// (BLUEPRINT-STATS-LEARNING-P0-P6 §P6-M3, mục #15 — DL.pdf §Stochastic Policy)
+//
+// Chống 429-cascade: hôm nay chuỗi model là strictly-one-primary (model từ
+// AgentProfile.model) — khi model chính 429, TOÀN hệ thống dồn theo chuỗi
+// failover đồng loạt. Softmax phân tán điểm khởi đầu:
+//   score(a) = Q(s,a) (§P6-M2 — chưa có → uniform prior theo caps)
+//   π(a) = softmax(score/τ)  — τ env RUNTIME_MODEL_TAU (mặc định 0.5)
+//   health: model bị chặn (zenModelBlockSummary — free-tier 403) → loại khỏi
+//   ứng viên (weight 0). Key 429-cooldown KHÔNG lọc ở đây: key Zen dùng
+//   CHUNG cho mọi model (không phân biệt được ứng viên ở tầng này —
+//   cooldown áp dụng đều, tầng xoay key bên dưới tự xử lý).
+//   Seed tất định hash(sessionId, cycle) — chạy lại được.
+//
+// Cờ RUNTIME_MODEL_POLICY=softmax (MẶC ĐỊNH OFF — điểm dừng quyết định
+// #5 của user: KHÔNG tự ý bật trên đường chạy nóng). Agent CÓ override
+// tườ minh (AgentModelOverride — dropdown user chọn) → tôn trọng lựa chọn,
+// không softmax. Failover chuỗi cũ GIỮ NGUYÊN TOÀN BỘ (softmax chỉ đổi điểm
+// khởi đầu zenModel — spec: "Failover chuỗi cũ giữ nguyên toàn bộ").
+const RUNTIME_MODEL_POLICY = (process.env.RUNTIME_MODEL_POLICY || 'off').trim().toLowerCase()
+const RUNTIME_MODEL_TAU = Math.max(0.05, parseFloat(process.env.RUNTIME_MODEL_TAU || '0.5') || 0.5)
+
+/** Cache AgentModelOverride (bảng nhỏ, 60s — đường call nóng không đập DB mỗi lần). */
+let agentModelOverrideCache: { at: number; names: Set<string> } | null = null
+
+/**
+ * Agent có override model TƯỜNG MINH từ user không (AgentModelOverride —
+ * dropdown)? DB lỗi → true (bảo thủ: giữ model cấu hình — đúng hành vi cũ,
+ * không đổi model khi không chắc). Tên agent con ("X (final-report)")
+ * được chuẩn hoá về tên gốc trước khi tra.
+ */
+async function hasExplicitModelOverride(agentName?: string): Promise<boolean> {
+  if (!agentName) return false
+  const base = agentName.split(' (')[0]
+  try {
+    if (!agentModelOverrideCache || Date.now() - agentModelOverrideCache.at > 60_000) {
+      const { db } = await import('@/lib/db')
+      const rows = await db.agentModelOverride.findMany({ select: { agentName: true } })
+      agentModelOverrideCache = { at: Date.now(), names: new Set(rows.map(r => r.agentName)) }
+    }
+    return agentModelOverrideCache.names.has(base)
+  } catch {
+    return true // DB lỗi → coi như có override (bảo thủ giữ model cũ)
+  }
+}
+
+/**
+ * Áp dụng softmax policy cho zenModel (P6-M3) — trả về model được chọn làm
+ * điểm khởi đầu chuỗi Zen. Mọi nhánh fail-open về model cấu hình (policy
+ * là lớp học — không được làm chết call). Log mỗi lần chọn theo
+ * đúng format spec: `softmax-pick model=X q=0.42 p=0.31 reason=…`.
+ */
+async function maybeApplySoftmaxModelPolicy(configuredZenModel: string, options?: LLMCallOptions): Promise<string> {
+  if (RUNTIME_MODEL_POLICY !== 'softmax') return configuredZenModel
+  // Override tườ minh của user → tôn trọng (spec: "Chọn primary khi agent
+  // KHÔNG có override tườ minh")
+  if (await hasExplicitModelOverride(options?.agentName)) {
+    console.log(`[LLM] softmax-pick model=${configuredZenModel} p=1.00 reason=agent-có-override-tường-minh — giữ nguyên`)
+    return configuredZenModel
+  }
+  try {
+    const [{ PROVIDER_MODELS }, { getQAdvice, softmaxPolicy, deterministicSeed, pickIndexBySeed, agentRuntimeStateKey }] = await Promise.all([
+      import('@/lib/agent-constants'),
+      import('@/lib/learning/q-table'),
+    ])
+    // Ứng viên: model zen có caps phù hợp vai agent (coding ∧ reasoning —
+    // mọi model catalog đỡu battery r73; KHÔNG lọc agentic: SBF lõi chính chỉ
+    // đạt agentic:false vì goal-loop chạy tool qua TEXT PROTOCOL không cần
+    // native FC — lọc agentic sẽ loại sai lòi chính) ∧ KHÔNG bị chặn
+    // health (zenModelBlockSummary — spec: "KHÔNG nằm trong blocked").
+    const blockedModels = new Set(zenModelBlockSummary().map(b => b.model))
+    const candidates = (PROVIDER_MODELS.zen ?? [])
+      .filter(m => m.caps?.coding !== false && m.caps?.reasoning !== false && !blockedModels.has(m.id))
+      .map(m => m.id)
+    if (candidates.length === 0) {
+      console.log(`[LLM] softmax-pick model=${configuredZenModel} p=1.00 reason=0-ứng-viên-sống — giữ nguyên (failover chuỗi cũ xử lý)`)
+      return configuredZenModel
+    }
+    if (candidates.length === 1) {
+      console.log(`[LLM] softmax-pick model=${candidates[0]} p=1.00 reason=1-ứng-viên-sống`)
+      return candidates[0]
+    }
+    // Q(s,a) — chưa có dữ liệu → toàn 0 → uniform prior theo caps (spec)
+    const stateKey = agentRuntimeStateKey()
+    const advice = await getQAdvice(stateKey, candidates)
+    const qByAction = new Map(advice.map(a => [a.action, a.q]))
+    const scores = candidates.map(c => qByAction.get(c) ?? 0)
+    const probs = softmaxPolicy(scores, RUNTIME_MODEL_TAU)
+    // Seed tất định hash(sessionId, cycle) — chạy lại được (spec §P6-M3)
+    const seed = deterministicSeed(
+      String(options?.sessionId ?? options?.agentName ?? 'anon'),
+      String(options?.qPolicyCycle ?? 0),
+    )
+    const idx = pickIndexBySeed(probs, seed)
+    if (idx < 0) return configuredZenModel
+    const picked = candidates[idx]
+    console.log(`[LLM] softmax-pick model=${picked} q=${scores[idx].toFixed(2)} p=${probs[idx].toFixed(2)} reason=τ=${RUNTIME_MODEL_TAU} ${candidates.length}-ứng-viên seed=${seed}${picked !== configuredZenModel ? ` (thay ${configuredZenModel})` : ''}`)
+    return picked
+  } catch (err) {
+    console.warn('[LLM] softmax policy failed (fail-open → model cấu hình):', err instanceof Error ? err.message : String(err))
+    return configuredZenModel
+  }
+}
+
 // ==================== ZEN REASONING EFFORT — CHẾ ĐỘ CAO NHẤT (Task 33) ====================
 // USER DIRECTIVE 2026-09-27: "2 model của zen là Nemotron 3 Ultra và Muse-Spark
 // 1.3 Contributor — chế độ cao nhất cho tôi (tôi chỉ biết model có Max nhưng
@@ -5406,6 +5515,12 @@ export async function callLLMForAgent(
     // kimi-k3 fail NIM → chạy chuỗi Zen với model chính space-bunny-free
     zenModel = isZenModelId(zenModel) ? zenModel : 'space-bunny-free'
   }
+
+  // P6-M3 (§P6-M3, mục #15): softmax(τ) chọn điểm khởi đầu khi
+  // RUNTIME_MODEL_POLICY=softmax (mặc định OFF — điểm dừng #5) — agent có
+  // override tườ minh ← giữ model cấu hình. Failover chuỗi cũ bên dưới
+  // GIỮ NGUYÊN TOÀN BỘ — softmax chỉ đổi điểm khởi đầu (zenModel).
+  zenModel = await maybeApplySoftmaxModelPolicy(zenModel, options)
 
   // Zen HTTP (kèm reasoning_effort chế độ cao nhất — Task 33)
   let zen = await callZenProvider(prompt, systemPrompt, zenModel, options, `agent:${zenModel}`)

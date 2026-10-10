@@ -82,7 +82,7 @@ import {
   insertAgentRunRecordRunning,
   updateLatestAgentRunRecord,
   insertArbiterVerdict,
-  resolveArbiterVerdicts,
+  resolveArbiterVerdictsDetailed,
 } from '@/lib/metrics-db'
 // P3-M3 — 3-judge runtime cho phán quyết critical (RUNTIME_JUDGES env-gated,
 // default off). judges.ts không import gì từ goal-loop → không vòng import.
@@ -945,6 +945,10 @@ export function assembleGoalLoopSystemPrompt(params: {
   toolSchemasBlock?: string
   /** P-D (2026-10-06 user duyệt): agent có tool work_data → work-ledger protocol */
   hasWorkData?: boolean
+  /** P6-M4 (BLUEPRINT-STATS-LEARNING §P6-M4): 1 dòng hint Q học được
+   *  (advisory, không ép) — chỉ được gắn khi top-Q có visits ≥ 10;
+   *  rỗng/undefined = không có dữ liệu học (chuẩn mặc định). */
+  qAdviceHint?: string
   /** nhãn context cho log 1 dòng khi có cut */
   agentName?: string
 }): string {
@@ -972,6 +976,9 @@ export function assembleGoalLoopSystemPrompt(params: {
         // lý lỗi hạ tầng/thiếu tool/thiếu agent cho MỌI agent goal-loop.
         { name: 'infraSelfService', content: buildInfraSelfServiceProtocol(), priority: 89 },
         { name: 'codeTeamProtocol', content: params.hasCodeTeamRequest === true ? buildCodeTeamProtocol() : '', priority: 88 },
+        // P6-M4 — Q advisory hint (1 dòng, priority thấp: làm vệt tham khảo
+        // — bị cắt đầu tiên khi prompt chật)
+        { name: 'qAdvice', content: params.qAdviceHint ?? '', priority: 60 },
         { name: 'orchestrationProtocol', content: hasOrchestration ? buildOrchestrationProtocol(hasDispatch, hasCreate) : '', priority: 80 },
         { name: 'automationProtocol', content: buildAutomationProtocol(params.hasAutomationDirect === true, params.hasAutomationPropose === true), priority: 78 },
         // P-D (2026-10-06): WORK LEDGER — vòng làm việc liên tục trên DB (tra cứu
@@ -2477,6 +2484,19 @@ export async function runGoalDrivenLoop(params: {
   // (base từ chat route + goal/delegation/orchestration/confidence protocol +
   // preAct episodic) trước đây ghép không cap ngoài skills 16k/HOT 2k — giờ
   // vượt SYSTEM_PROMPT_BUDGET_CHARS thì cắt block priority thấp nhất giữ đầu.
+  // P6-M4 (BLUEPRINT-STATS-LEARNING §P6-M4): PLAN-phase hint từ bảng Q —
+  // chỉ khi đủ dữ liệu (top-Q visits ≥ 10) — advisory 1 dòng, không ép.
+  // Fail-open tuyệt đối: lỗi đọc Q → hint rỗng (prompt cũ).
+  let qAdviceHint: string | undefined
+  try {
+    const { getTopQAdvice, agentRuntimeStateKey } = await import('@/lib/learning/q-table')
+    const topQ = await getTopQAdvice(agentRuntimeStateKey(), 3)
+    const best = topQ[0]
+    if (best && best.visits >= 10) {
+      qAdviceHint = `\ud83d\udcca Q-HINT (P6 \u2014 h\u1ecdc t\u1eeb ${best.visits} runs): model ${best.action} c\u00f3 ph\u1ea7n th\u01b0\u1edfng h\u1ecdc \u0111\u01b0\u1ee3c cao nh\u1ea5t (Q=${best.q.toFixed(2)}) cho t\u00e1c v\u1ee5 runtime n\u00e0y \u2014 c\u00e2n nh\u1eafc khi t\u1ef1 ch\u1ecdn ho\u1eb7c giao sub-agent; ch\u1ec9 l\u00e0 tham kh\u1ea3o, kh\u00f4ng b\u1eaft bu\u1ed9c.`
+      console.log(`[GoalLoop] P6-M4 Q-hint g\u1eafn v\u00e0o PLAN prompt: ${best.action} Q=${best.q.toFixed(2)} visits=${best.visits}`)
+    }
+  } catch { /* fail-open \u2014 hint r\u1ed7ng */ }
   const fullSystemPrompt = assembleGoalLoopSystemPrompt({
     systemPrompt,
     hasDelegation,
@@ -2488,6 +2508,8 @@ export async function runGoalDrivenLoop(params: {
     hasWorkData,
     // CODE TEAM SOP (2026-09-30): agent có request_code_team → inject protocol
     hasCodeTeamRequest: effectiveTools.includes('request_code_team'),
+    // P6-M4: Q advisory hint (1 dòng — chỉ khi visits ≥ 10)
+    qAdviceHint,
     preActBlock,
     agentName,
     // FIX 2026-09-30 (E2E audit "agents đoán mò param tool"): schema compact
@@ -2837,6 +2859,11 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
   /** Chu kỳ đã BẮT ĐẦU (kể cả đang dở) — dùng cho report/metadata trung thực:
    *  budget cắt giữa chu kỳ 1 → "1 chu kỳ (dở)", không phải 0 hay 1 hoàn thành */
   let cyclesAttempted = resumeState?.counters.cyclesAttempted ?? 0
+  /** P6-M1 (§P6-M1, mục #15): model THỰC TẾ chạy nhiều nhất trong run — đếm
+   *  theo result.model của MỖI call chính (chuẩn xác hơn agentModel cấu hình:
+   *  khi RUNTIME_MODEL_POLICY=softmax bật, model thực mới là thứ đáng nhận
+   *  reward — credit assignment trung thực). Map model → số call. */
+  const modelsUsedThisRun = new Map<string, number>()
   /** [E] Số lần nén context đã thực hiện */
   let compressions = resumeState?.counters.compressions ?? 0
   /** [F] Số lần delegate + token sub-agent tiêu thụ (báo cáo lên metadata) */
@@ -3590,6 +3617,9 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             agentId,
             agentName,
             sessionId: agentSessionId,
+            // P6-M3: seed softmax "hash(sessionId, cycle)" — chu kỳ nào chọn
+            // model nấy, retry cùng chu kỳ ra cùng lựa chọn (chạy lại được)
+            qPolicyCycle: cyclesAttempted,
             // 2026-10-20 TASK 20: truyền runId → env TMO_RUN_ID cho CLI spawn
             // → bridge tmo_todo gắn todo ĐÚNG run (TODO block chu kỳ sau)
             runId: runId ?? null,
@@ -3622,6 +3652,10 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       }
 
       if (isCancelled()) { endedBy = 'cancelled'; break }
+      // P6-M1: đếm model THỰC TẾ của call chính (credit assignment — xem
+      // modelsUsedThisRun; result.model là model callLLMForAgent THỰC dùng
+      // sau softmax/failover, không phải model cấu hình ban đầu)
+      if (result?.model) modelsUsedThisRun.set(result.model, (modelsUsedThisRun.get(result.model) ?? 0) + 1)
       // FIX 2026-10-20 TASK 20 (E2E t20d lộ bug): PARTIAL-ON-TIMEOUT của CLI
       // spawn (content='' + error='timeout...' + executed_tool_calls≠rỗng)
       // bị coi là LLM fatal error → run abort ở chu kỳ 1 + VỨT toàn bộ bằng
@@ -5836,9 +5870,23 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           })
         }
       })().catch(() => { /* fail-open — metrics không được phép làm hỏng response */ })
-      void resolveArbiterVerdicts(agentSessionId, runComplete, stopReason)
-        .then(n => {
-          if (n > 0) console.log(`[GoalLoop] ${agentName} resolved ${n} arbiter verdict(s) → outcome theo run ${stopReason} (${runComplete ? 'complete' : 'incomplete'})`)
+      // P6-M1 (§P6-M1, mục #15) — W2: bản detailed (confirmed/refuted breakdown)
+      // để TÍNH REWARD credit assignment (quy ước §P6-M2: +1 confirmed ∧
+      // runComplete / −1 refuted / 0 pending-bỏ). refuted ưu tiên: verdict nói
+      // công việc bị bác thì không cộng cho model dù run khớp khác chiều.
+      void resolveArbiterVerdictsDetailed(agentSessionId, runComplete, stopReason)
+        .then(async ({ total, confirmed, refuted }) => {
+          if (total > 0) console.log(`[GoalLoop] ${agentName} resolved ${total} arbiter verdict(s) → ${confirmed} confirmed / ${refuted} refuted theo run ${stopReason} (${runComplete ? 'complete' : 'incomplete'})`)
+          const reward = refuted > 0 ? -1 : (confirmed > 0 && runComplete ? 1 : 0)
+          if (reward !== 0) {
+            // P6-M2: updateQ cho model THỰC TẾ chiếm đa số call chính của run
+            // (softmax bật → model thực ≠ model cấu hình — credit đúng người)
+            const dominantModel = [...modelsUsedThisRun.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? agentModel
+            const { updateQ, agentRuntimeStateKey } = await import('@/lib/learning/q-table')
+            const stateKey = agentRuntimeStateKey()
+            await updateQ(stateKey, dominantModel, reward, stateKey)
+            console.log(`[GoalLoop] P6 Q-learn (verdict close): ${stateKey} × ${dominantModel} reward=${reward} (${confirmed}✓/${refuted}✗, ${JSON.stringify([...modelsUsedThisRun.entries()])})`)
+          }
         })
         .catch(() => { /* fail-open */ })
     } catch { /* fail-open */ }

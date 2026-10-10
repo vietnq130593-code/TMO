@@ -2454,3 +2454,31 @@ model RunContext {
 
   @@index([sessionId])
 }
+
+// ============================================
+// PHASE P6 (BLUEPRINT-STATS-LEARNING-P0-P6 §P6-M2, mục #15 — DL.pdf §Q-Table
+// + §Common RL Algorithms): tabular Q-learning cho model-selection chống
+// 429-cascade. KHÔNG cần DQN/PPO — không gian trạng thái nhỏ (mode × tier ×
+// model). P6-M1: KHÔNG tạo bảng attribution riêng — StrategyAdaptationLog +
+// AgentRunRecord vẫn là ledger; QEntry chỉ giữ giá trị Q hội tụ + visits.
+// ============================================
+
+/// Q-value bảng cho (stateKey, actionKey) — cập nhật cuối mỗi run goal-loop
+/// (P6-M1/M2 wiring) và cuối mỗi vòng adaptation SAL (workflow side).
+/// stateKey quy ước `mode-${routingMode}-tier-${tier}` (tái dùng format key
+/// historical-feedback); actionKey = model id (goal-loop side) HOẶC strategy
+/// id (workflow side — cùng bảng, không gian action phân biệt qua candidate
+/// list lúc đọc getQAdvice).
+model QEntry {
+  id        String   @id @default(cuid())
+  stateKey  String
+  actionKey String
+  /// Q(s,a) — khởi điểm 0, cập nhật Q ← Q + α[r + γ·max Q(s',·) − Q] (α=0.1, γ=0.9)
+  qValue    Float    @default(0)
+  /// Số lần update — softmin dữ liệu (advisory chỉ tin visits ≥ 10, §P6-M4)
+  visits    Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([stateKey, actionKey])
+  @@index([stateKey])
+}

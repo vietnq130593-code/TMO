@@ -2024,16 +2024,22 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   // 2026-11-30 (user directive): dropdown model agent = các model ZEN (như cũ)
   // + kimi-k3 (NVIDIA NIM — lựa chọn tạm thời "bấm chọn k3 sẽ chuyển qua dùng
   // k3"). Lõi embed (id chứa '/embed-') bị lọc ra — không phải LLM chat.
+  // P6-M4 (BLUEPRINT-STATS-LEARNING §P6-M4): lời khuyên Q học được (advice từ
+  // /api/agents/models — top model theo Q-value của state runtime agent).
+  // Badge "Q đề xuất" trên model đứng đầu — chỉ khi đã CÓ dữ liệu học
+  // (visits > 0); lỗi/rỗng → không hiện gì (advisory, không ép).
+  const [qAdvice, setQAdvice] = useState<{ stateKey: string; top: Array<{ model: string; q: number; visits: number }> } | null>(null)
   const fetchZenModelOptions = useCallback(() => {
     fetch('/api/agents/models')
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((data: { providers?: Array<{ key?: string; models?: Array<{ id: string; label?: string; caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean }; blockedTransports?: string[] }> }> }) => {
+      .then((data: { providers?: Array<{ key?: string; models?: Array<{ id: string; label?: string; caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean }; blockedTransports?: string[] }> }>; advice?: { stateKey: string; top: Array<{ model: string; q: number; visits: number }> } }) => {
         const providers = data?.providers || []
         const zen = providers.find(p => p.key === 'zen')?.models || []
         const nvidiaChat = (providers.find(p => p.key === 'nvidia')?.models || [])
           .filter(m => !/embed/i.test(m.id))
         const merged = [...zen, ...nvidiaChat]
         if (merged.length > 0) setZenModelOptions(merged)
+        setQAdvice(data?.advice ?? null)
       })
       .catch(() => { /* im lặng — giữ danh sách cũ; dropdown hiện câu "chưa tải được" nếu trống */ })
   }, [])
@@ -6230,6 +6236,14 @@ ${manifest}` : rawText
                             <span className="truncate flex-1">{m.id}</span>
                             {allBlocked && (
                               <span className="text-[10px] text-amber-400/90 flex-shrink-0" title="Bị chặn free-tier — sẽ fallback về space-bunny-free">⚠</span>
+                            )}
+                            {/* P6-M4 — badge "Q học được đề xuất" trên model top-Q
+                                (tương tự badge blockedTransports r74 — advisory) */}
+                            {qAdvice?.top?.[0] && qAdvice.top[0].model === m.id && qAdvice.top[0].visits > 0 && (
+                              <span
+                                className="text-[9px] text-cyan-400 border border-cyan-400/40 rounded px-1 flex-shrink-0"
+                                title={`Q học được đề xuất (P6): model này có phần thưởng trung bình cao nhất (${qAdvice.top[0].q.toFixed(2)}, ${qAdvice.top[0].visits} runs) cho tác vụ agent runtime — tham khảo, không bắt buộc.`}
+                              >Q</span>
                             )}
                             {(m.caps?.coding || m.caps?.reasoning || m.caps?.agentic) && (
                               <span className="text-[10px] text-stone-500 flex-shrink-0 flex gap-1 items-center">
