@@ -40,6 +40,15 @@ import { generateEmbeddingBatch, getEmbeddingDimension } from '@/lib/embeddings'
 import { leidenCommunityDetection, type LeidenEdge } from '@/lib/leiden'
 import { isFlagEnabled } from '@/lib/feature-flags'
 import { createHash } from 'crypto'
+// P1-M5 (blueprint §P1-M5): Silhouette/DBI/CH đo chất lượng cụm Leiden +
+// auto-tune γ (env LEIDEN_AUTO_TUNE, default OFF — KHÔNG đổi hành vi γ=1.0)
+import {
+  evaluateCommunityQuality,
+  sweepGamma,
+  computeVectorQualityIndices,
+  isLeidenAutoTuneEnabled,
+  LEIDEN_DEFAULT_GAMMA,
+} from '@/lib/kb-routing/community-quality'
 
 // ==================== CONFIG ====================
 
@@ -95,6 +104,18 @@ export interface CommunityDetectStats {
   modularity: number
   leidenMs: number
   totalMs: number
+  /** P1-M5 — Silhouette biến thể đồ thị của phân hoạch Leiden (−1..1, dương =
+   *  gán đúng cụm; 0 = degenerate 1 cụm). Luôn đo (auto-tune OFF vẫn đo). */
+  silhouette: number | null
+  /** P1-M5 — γ được sweep CHỌN khi LEIDEN_AUTO_TUNE=on; null khi auto-tune
+   *  OFF (γ = LEIDEN_DEFAULT_GAMMA 1.0 — hành vi cũ). */
+  gammaSwept: number | null
+  /** P1-M5 (phụ, informative) — Davies–Bouldin trên embedding summary các
+   *  cụm theo domain chính (càng thấp càng tốt; null = không đủ cấu trúc). */
+  dbi: number | null
+  /** P1-M5 (phụ, informative) — Calinski–Harabasz (càng cao càng tốt;
+   *  null = không đủ cấu trúc). */
+  calinskiHarabasz: number | null
 }
 
 // ==================== CONCURRENCY GUARD (globalThis — survive hot reload) ====================
@@ -188,11 +209,43 @@ export async function detectAndStoreCommunities(): Promise<CommunityDetectStats>
     console.log(`[Communities] Graph: ${graphNodes.length} nodes (+${isolatedNodesSkipped} isolated skipped), ${graphEdges.length} edges (từ ${rels.length} rels)`)
 
     // ===== 2. Leiden community detection (best-of-3) =====
-    const leidenResult = leidenCommunityDetection(graphNodes.length, graphEdges, {
-      restarts: LEIDEN_RESTARTS,
-      resolution: 1.0,
-    })
+    // P1-M5 — AUTO-TUNE γ (env LEIDEN_AUTO_TUNE, default OFF): sweep grid
+    // γ ∈ {0.5, 0.8, 1.0, 1.2, 1.5} × restarts, chọn γ maximizing silhouette
+    // (tie-break modularity). OFF → γ=1.0 đúng hành vi cũ (KHÔNG đổi write-back).
+    let leidenResult: ReturnType<typeof leidenCommunityDetection>
+    let gammaSwept: number | null = null
+    let silhouette: number | null = null
+    if (isLeidenAutoTuneEnabled()) {
+      const sweepStartedAt = Date.now()
+      const sweep = sweepGamma(graphNodes.length, graphEdges, { restarts: LEIDEN_RESTARTS })
+      gammaSwept = sweep.best.gamma
+      leidenResult = {
+        nodeCommunity: sweep.best.nodeCommunity,
+        communityCount: sweep.best.communityCount,
+        modularity: sweep.best.modularity,
+        // Sweep tự chạy Leiden riêng — durationMs tổng hợp từ best-không-có:
+        // dùng thời gian sweep thực tế cho log, duration cộng dồn cho stats.
+        iterations: 0,
+        durationMs: Date.now() - sweepStartedAt,
+        communitySizes: [],
+      }
+      silhouette = sweep.best.silhouette
+      const candStr = sweep.candidates
+        .map(c => `γ=${c.gamma} sil=${c.silhouette.toFixed(4)} Q=${c.modularity.toFixed(4)} k=${c.communityCount}`)
+        .join(' | ')
+      console.log(`[Communities] P1-M5 γ-sweep (${Date.now() - sweepStartedAt}ms): ${candStr} → CHỌN γ=${sweep.best.gamma}`)
+    } else {
+      leidenResult = leidenCommunityDetection(graphNodes.length, graphEdges, {
+        restarts: LEIDEN_RESTARTS,
+        resolution: LEIDEN_DEFAULT_GAMMA,
+      })
+      // P1-M5 — luôn đo silhouette (auto-tune OFF vẫn đo — chỉ số observation)
+      silhouette = evaluateCommunityQuality(graphNodes.length, graphEdges, leidenResult.nodeCommunity)
+    }
     console.log(`[Communities] Leiden: ${leidenResult.communityCount} communities, Q=${leidenResult.modularity.toFixed(4)}, ${leidenResult.durationMs}ms`)
+    // P1-M5 — log dòng chất lượng chuẩn (blueprint kiểm chứng: "1 lần chạy
+    // detectAndStoreCommunities thật log silhouette=X modularity=Y")
+    console.log(`[Communities] P1-M5 quality: silhouette=${silhouette.toFixed(4)} modularity=${leidenResult.modularity.toFixed(4)} γ=${gammaSwept ?? LEIDEN_DEFAULT_GAMMA}${gammaSwept != null ? ' (swept)' : ' (default)'}`)
 
     // ===== 3. Build community objects =====
     const membersByCommunity = new Map<number, number[]>()
@@ -259,9 +312,20 @@ export async function detectAndStoreCommunities(): Promise<CommunityDetectStats>
     await writeCommunityIdsToNeo4j(communities)
 
     // ===== 5. Embed summaries + upsert Qdrant =====
-    const stored = await storeCommunityEmbeddings(communities)
+    const { stored, summaryVectors } = await storeCommunityEmbeddings(communities)
 
-    return {
+    // ===== 5b. P1-M5 — DBI/CH (PHỤ, informative) trên embedding summary =====
+    // Điểm = vector summary từng community; nhãn = domain chính (domains[0]).
+    // Cách đọc: community cùng domain cô đọng gần nhau + tách khỏi community
+    // khác domain trong không gian embedding. Null-guard bên trong (thiếu
+    // cấu trúc → null, không bịa số).
+    const domainByCommunityId = new Map(communities.map(c => [c.communityId, c.domains[0] || 'mixed']))
+    const vectorQuality = computeVectorQualityIndices(
+      summaryVectors.map(v => ({ vector: v.vector, label: domainByCommunityId.get(v.communityId) || 'mixed' })),
+    )
+    console.log(`[Communities] P1-M5 vector quality (phụ): DBI=${vectorQuality.dbi != null ? vectorQuality.dbi.toFixed(4) : 'null'} CH=${vectorQuality.calinskiHarabasz != null ? vectorQuality.calinskiHarabasz.toFixed(2) : 'null'} (${vectorQuality.n} points / ${vectorQuality.labels} domain labels)`)
+
+    const finalStats: CommunityDetectStats = {
       nodesProcessed: graphNodes.length,
       edgesProcessed: graphEdges.length,
       isolatedNodesSkipped,
@@ -270,10 +334,37 @@ export async function detectAndStoreCommunities(): Promise<CommunityDetectStats>
       modularity: leidenResult.modularity,
       leidenMs: leidenResult.durationMs,
       totalMs: Date.now() - startedAt,
+      silhouette,
+      gammaSwept,
+      dbi: vectorQuality.dbi,
+      calinskiHarabasz: vectorQuality.calinskiHarabasz,
     }
+
+    // ===== 5c. P1-M5 — persist quality vào Neo4j meta node (getCommunityStatus đọc lại sau restart)
+    await persistCommunityQuality(finalStats)
+
+    return finalStats
   } finally {
     globalForCommunities.__communityDetectionRunning = false
     globalForCommunities.__communityDetectionStartedAt = undefined
+  }
+}
+
+/**
+ * P1-M5 — detect + γ-sweep BẮT BUỘC (bất chấp env LEIDEN_AUTO_TUNE).
+ * Bọc detectAndStoreCommunities: set env quanh call rồi restore (flow phát hiện
+ * dùng chung — không nhân đôi logic graph/write-back). Dùng khi quan sát so sánh
+ * (blueprint: "bật sau khi quan sát 2-3 lần chạy so sánh") hoặc gọi tường minh
+ * qua /api/query?action=community-detect&sweep=1.
+ */
+export async function detectAndStoreCommunitiesWithSweep(): Promise<CommunityDetectStats> {
+  const prev = process.env.LEIDEN_AUTO_TUNE
+  process.env.LEIDEN_AUTO_TUNE = 'on'
+  try {
+    return await detectAndStoreCommunities()
+  } finally {
+    if (prev === undefined) delete process.env.LEIDEN_AUTO_TUNE
+    else process.env.LEIDEN_AUTO_TUNE = prev
   }
 }
 
@@ -442,8 +533,8 @@ async function storeCommunityEmbeddings(
     topEntities: Array<{ name: string; type: string; description: string }>
     domains: string[]
   }>
-): Promise<number> {
-  if (communities.length === 0) return 0
+): Promise<{ stored: number; summaryVectors: Array<{ communityId: string; vector: number[] }> }> {
+  if (communities.length === 0) return { stored: 0, summaryVectors: [] }
 
   await ensureCommunityCollection()
 
@@ -462,12 +553,18 @@ async function storeCommunityEmbeddings(
   }
 
   // Embed summaries theo batch (generateEmbeddingBatch đã xoay vòng key NVIDIA)
+  // P1-M5: thu thập vector summary từng community để tính DBI/CH (chỉ số phụ)
   const BATCH = 16
   let stored = 0
+  const summaryVectors: Array<{ communityId: string; vector: number[] }> = []
   for (let i = 0; i < communities.length; i += BATCH) {
     const batch = communities.slice(i, i + BATCH)
     try {
       const embeddings = await generateEmbeddingBatch(batch.map(c => c.summary))
+      for (let j = 0; j < batch.length; j++) {
+        const v = embeddings[j]?.vector
+        if (v && v.length > 0) summaryVectors.push({ communityId: batch[j].communityId, vector: v })
+      }
       const points = batch.map((c, j) => ({
         id: uuidFromSeed(c.communityId),
         vector: embeddings[j]?.vector ?? [],
@@ -490,7 +587,7 @@ async function storeCommunityEmbeddings(
     }
   }
   console.log(`[Communities] Qdrant: ${stored}/${communities.length} community summaries embedded`)
-  return stored
+  return { stored, summaryVectors }
 }
 
 /** Deterministic UUID từ seed string (Qdrant point id cần UUID format) */
@@ -550,6 +647,95 @@ export async function searchCommunities(
   }
 }
 
+// ==================== P1-M5 QUALITY PERSISTENCE (Neo4j meta node) ====================
+
+/** Key của meta node lưu chất lượng detection cuối cùng (getCommunityStatus
+ *  đọc lại — sống sót qua restart, không cần bảng Prisma mới). */
+const COMMUNITY_QUALITY_META_KEY = 'community_quality'
+
+export interface CommunityQualitySnapshot {
+  silhouette: number | null
+  gammaSwept: number | null
+  gammaUsed: number
+  modularity: number
+  dbi: number | null
+  calinskiHarabasz: number | null
+  communitiesStored: number
+  communitiesFound: number
+  detectedAt: string
+}
+
+/** Ghi quality snapshot lần detect cuối vào Neo4j (:TmoMeta {key}). Fail-open —
+ *  metric là observation, KHÔNG được phép làm hỏng detect (write-back chính đã
+ *  xong trước khi hàm này chạy). */
+async function persistCommunityQuality(stats: CommunityDetectStats): Promise<void> {
+  try {
+    const session = await safeSession()
+    try {
+      await session.executeWrite((tx) =>
+        tx.run(
+          `MERGE (m:TmoMeta {key: $key})
+           SET m.silhouette = $silhouette,
+               m.gammaSwept = $gammaSwept,
+               m.gammaUsed = $gammaUsed,
+               m.modularity = $modularity,
+               m.dbi = $dbi,
+               m.calinskiHarabasz = $ch,
+               m.communitiesStored = $stored,
+               m.communitiesFound = $found,
+               m.detectedAt = $detectedAt`,
+          {
+            key: COMMUNITY_QUALITY_META_KEY,
+            silhouette: stats.silhouette,
+            gammaSwept: stats.gammaSwept,
+            gammaUsed: stats.gammaSwept ?? LEIDEN_DEFAULT_GAMMA,
+            modularity: stats.modularity,
+            dbi: stats.dbi,
+            ch: stats.calinskiHarabasz,
+            stored: stats.communitiesStored,
+            found: stats.communitiesFound,
+            detectedAt: new Date().toISOString(),
+          },
+        ),
+      )
+    } finally {
+      await session.close()
+    }
+  } catch (err) {
+    console.warn('[Communities] P1-M5 quality persist failed (fail-open):', err instanceof Error ? err.message : String(err))
+  }
+}
+
+/** Đọc quality snapshot cuối (null khi chưa từng detect / Neo4j lỗi — fail-open). */
+export async function getLastCommunityQuality(): Promise<CommunityQualitySnapshot | null> {
+  try {
+    const session = await safeSession()
+    try {
+      const result = await session.executeRead((tx) =>
+        tx.run(`MATCH (m:TmoMeta {key: $key}) RETURN m`, { key: COMMUNITY_QUALITY_META_KEY }),
+      )
+      const node = result.records[0]?.get('m')
+      if (!node) return null
+      const props = node.properties ?? {}
+      return {
+        silhouette: props.silhouette != null ? Number(props.silhouette) : null,
+        gammaSwept: props.gammaSwept != null ? Number(props.gammaSwept) : null,
+        gammaUsed: props.gammaUsed != null ? Number(props.gammaUsed) : LEIDEN_DEFAULT_GAMMA,
+        modularity: props.modularity != null ? Number(props.modularity) : 0,
+        dbi: props.dbi != null ? Number(props.dbi) : null,
+        calinskiHarabasz: props.calinskiHarabasz != null ? Number(props.calinskiHarabasz) : null,
+        communitiesStored: props.communitiesStored != null ? Number(props.communitiesStored) : 0,
+        communitiesFound: props.communitiesFound != null ? Number(props.communitiesFound) : 0,
+        detectedAt: typeof props.detectedAt === 'string' ? props.detectedAt : '',
+      }
+    } finally {
+      await session.close()
+    }
+  } catch {
+    return null // fail-open — status không được chết vì Neo4j read lỗi
+  }
+}
+
 // ==================== STATUS ====================
 
 export async function getCommunityStatus(): Promise<{
@@ -558,6 +744,8 @@ export async function getCommunityStatus(): Promise<{
   communityCount: number
   detectionRunning: boolean
   neo4jNodesWithCommunity: number
+  /** P1-M5 — chất lượng lần detect cuối (null khi chưa từng detect). */
+  lastQuality: CommunityQualitySnapshot | null
 }> {
   let collectionExists = false
   let communityCount = 0
@@ -587,12 +775,16 @@ export async function getCommunityStatus(): Promise<{
     // fail-open
   }
 
+  // P1-M5 — chất lượng lần detect cuối (đọc từ Neo4j meta node; fail-open null)
+  const lastQuality = await getLastCommunityQuality()
+
   return {
     enabled: isFlagEnabled('ENABLE_COMMUNITY_SEARCH'),
     collectionExists,
     communityCount,
     detectionRunning: Boolean(globalForCommunities.__communityDetectionRunning),
     neo4jNodesWithCommunity,
+    lastQuality,
   }
 }
 

@@ -1357,15 +1357,21 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(status)
     }
 
-    // GET /api/query?action=community-detect — chạy Leiden detection NGAY
+    // GET /api/query?action=community-detect[&sweep=1] — chạy Leiden detection NGAY
     // (fetch entity graph Neo4j → Leiden → write communityId → embed summaries
     //  → upsert Qdrant theopus_communities). Chạy ~10-60s tùy cỡ graph.
     // Sau khi xong, mọi query Agent tự động có community context (flag
     // ENABLE_COMMUNITY_SEARCH, default true).
+    // P1-M5: stats giờ kèm silhouette/gammaSwept/dbi/ch; ?sweep=1 ép γ-sweep
+    // {0.5, 0.8, 1.0, 1.2, 1.5} chọn theo silhouette (bất chấp env
+    // LEIDEN_AUTO_TUNE — dùng để quan sát so sánh; mặc định vẫn γ=1.0).
     if (action === 'community-detect') {
-      const { detectAndStoreCommunities } = await import('@/lib/kb-routing/communities')
+      const { detectAndStoreCommunities, detectAndStoreCommunitiesWithSweep } = await import('@/lib/kb-routing/communities')
+      const forceSweep = searchParams.get('sweep') === '1'
       try {
-        const stats = await detectAndStoreCommunities()
+        const stats = forceSweep
+          ? await detectAndStoreCommunitiesWithSweep()
+          : await detectAndStoreCommunities()
         return NextResponse.json({ ok: true, ...stats })
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
