@@ -4,6 +4,13 @@
  * Step 1: Exact match (case-insensitive, trim whitespace) → merge immediately
  * Step 2: Fuzzy match using Levenshtein distance (threshold: similarity > 0.85) → merge
  * Step 3: LLM-based match for ambiguous cases (optional, high cost)
+ *
+ * P5-M3 (BLUEPRINT-STATS-LEARNING §P5-M3, mục #16 — MATH.pdf §Bayes +
+ * §Naive Bayes): lớp NAIVE BAYES học từ lịch sử resolve, cắm SAU exact-match
+ * TRƯỚC fuzzy — fuzzy trở thành fallback cho vùng xám |LLR| < 0.5. Chỉ bật khi
+ * có ≥ ENTITY_NB_MIN_PAIRS cặp resolved tích lũy (LocalEntity.resolvedEntityId
+ * → LocalResolvedEntity là ground truth sẵn có); dưới ngưỡng → nguyên trạng
+ * thái cũ. Kill-switch env ENTITY_NB=off (mặc định on-khi-đủ-dữ-liệu).
  * 
  * Merge strategy: combine properties (union), max confidence score, increment occurrence_count
  *
@@ -25,6 +32,7 @@
 import type { DocumentDomain } from './pdf-parser'
 import { generateEmbedding } from '@/lib/embeddings'
 import { readCypher, ENTITY_LABELS, type EntityLabel } from '@/lib/neo4j'
+import { db } from '@/lib/db'
 
 // ==================== INPUT TYPE ====================
 
@@ -57,7 +65,7 @@ export interface ResolvedEntity {
 export interface DuplicatePair {
   merged: string
   into: string
-  method: 'exact' | 'fuzzy' | 'llm'
+  method: 'exact' | 'fuzzy' | 'llm' | 'nb' // 'nb' — P5-M3 Naive Bayes quyết
   similarity: number
 }
 
@@ -185,21 +193,332 @@ function exactMatchResolution(entities: ExtractedEntity[]): {
   return { resolved, duplicates }
 }
 
-// ==================== FUZZY MATCH ====================
+// ==================== P5-M3 — NAIVE BAYES ENTITY RESOLUTION (mục #16) ====================
+//
+// MATH.pdf §Bayes + §Naive Bayes: thay quyết định fuzzy thuần (một ngưỡng
+// Levenshtein cứng) bằng xác suất CÓ HỌC từ lịch sử resolve. Đặc trưng cặp
+// (entity, ứng viên canonical):
+//   f1 = similarity tên (Levenshtein ratio 0-1)  — rời rạc hóa 10 bin [0,1]
+//   f2 = cùng entityType? 1:0
+//   f3 = Jaccard token description (0-1)          — rời rạc hóa 10 bin [0,1]
+//   f4 = cùng domain? 1:0
+// NB nhị phân (match/not-match), Laplace smoothing λ=1 (MATH.pdf §Bayes):
+//   LLR = Σ_k log P(f_k|match) − Σ_k log P(f_k|not)   (không hệ số prior —
+//   cặp train lấy cân bằng 1:1 nên prior ~1, theo công thức spec §P5-M3)
+// Match khi LLR > τ (τ=0 khởi điểm — cân bằng, hiệu chỉnh bằng sweep sau).
+// Vùng xám |LLR| < 0.5 → giao về fuzzy cũ (fallback).
+
+/** Ngưỡng cặp resolved tối thiểu để NB bật (spec §P5-M3: "≥100 cặp mới bật") */
+export const ENTITY_NB_MIN_PAIRS = 100
+/** Vùng xám |LLR| < 0.5 → fuzzy cũ quyết (spec §P5-M3) */
+export const ENTITY_NB_GRAY_ZONE = 0.5
+/** τ khởi điểm 0 — cân bằng (spec §P5-M3, hiệu chỉnh bằng sweep sau) */
+export const ENTITY_NB_TAU = 0
+/** Số bin rời rạc hóa cho f1/f3 (MATH.pdf §Naive Bayes — continuous → binned) */
+const ENTITY_NB_FEATURE_BINS = 10
+/** Model cache 10 phút (spec §P5-M3: "cache 10 phút, train trong RAM") */
+const ENTITY_NB_CACHE_MS = 10 * 60 * 1000
+/** Cap số row đọc để train — chống phình trên DB lớn (đủ 100+ là dùng được) */
+const ENTITY_NB_MAX_ROWS = 5000
+
+export interface EntityPairFeatures {
+  /** f1 — Levenshtein ratio tên (0-1) */
+  f1: number
+  /** f2 — cùng entityType (1/0) */
+  f2: 0 | 1
+  /** f3 — Jaccard token description (0-1) */
+  f3: number
+  /** f4 — cùng domain (1/0) */
+  f4: 0 | 1
+}
+
+/** Đầu vào đặc trưng — đủ trường tính f1-f4 */
+export interface EntityFeatureInput {
+  name: string
+  type: string
+  description: string
+  domains: string[]
+}
+
+/** Token hóa description cho Jaccard (lowercase, tách phi ký tự, bỏ token rỗng) */
+function tokenize(text: string): Set<string> {
+  return new Set(
+    (text || '')
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter(t => t.length > 0)
+  )
+}
+
+/** Jaccard |A∩B|/|A∪B| — 2 mô tả rỗng = 1 (giống nhau trivia), 1 rỗng = 0 */
+function jaccardTokenSimilarity(a: string, b: string): number {
+  const ta = tokenize(a)
+  const tb = tokenize(b)
+  if (ta.size === 0 && tb.size === 0) return 1
+  if (ta.size === 0 || tb.size === 0) return 0
+  let inter = 0
+  for (const t of ta) if (tb.has(t)) inter++
+  return inter / (ta.size + tb.size - inter)
+}
+
+/** Tính 4 đặc trưng cặp (entity, ứng viên) — thuần. */
+export function computeEntityPairFeatures(a: EntityFeatureInput, b: EntityFeatureInput): EntityPairFeatures {
+  const f1 = stringSimilarity(a.name.toLowerCase().trim(), b.name.toLowerCase().trim())
+  const f2: 0 | 1 = a.type.trim().toLowerCase() === b.type.trim().toLowerCase() ? 1 : 0
+  const f3 = jaccardTokenSimilarity(a.description, b.description)
+  const f4: 0 | 1 = a.domains.some(d => b.domains.includes(d)) ? 1 : 0
+  return { f1, f2, f3, f4 }
+}
+
+/** Model NB sau train — bảng log P(bin | class) cho từng đặc trưng. */
+export interface NaiveBayesEntityModel {
+  trainedAt: number
+  /** Số cặp match (positive) dùng train — usable yêu cầu ≥ ENTITY_NB_MIN_PAIRS */
+  pairCount: number
+  /** Số cặp not-match (negative) dùng train */
+  negativeCount: number
+  /** ≥100 cặp match ∧ kill-switch không tắt */
+  usable: boolean
+  /** log P(feature-bin | class) — mảng dài ENTITY_NB_FEATURE_BINS (f1/f3) hoặc 2 (f2/f4) */
+  match: { f1: number[]; f2: number[]; f3: number[]; f4: number[] }
+  notMatch: { f1: number[]; f2: number[]; f3: number[]; f4: number[] }
+}
+
+/** Bin index cho giá trị [0,1] — clamp đầu cuối. */
+function binIndex(v: number, bins: number): number {
+  if (!Number.isFinite(v)) return 0
+  const idx = Math.floor(Math.min(Math.max(v, 0), 0.999999) * bins)
+  return Math.min(idx, bins - 1)
+}
 
 /**
- * Step 2: Fuzzy match using Levenshtein distance (threshold: similarity > 0.85)
+ * Train NB từ cặp (features, isMatch) — Laplace smoothing λ=1 trên MỌI bin
+ * (MATH.pdf §Bayes): P(bin|c) = (count[bin] + 1) / (total + K) với K = số bin.
+ * Thuần, không I/O.
  */
-function fuzzyMatchResolution(
+export function trainNaiveBayesEntityModel(
+  pairs: Array<{ features: EntityPairFeatures; isMatch: boolean }>
+): NaiveBayesEntityModel {
+  const matchCount = pairs.filter(p => p.isMatch).length
+  const negCount = pairs.length - matchCount
+  const usable = matchCount >= ENTITY_NB_MIN_PAIRS && negCount > 0 && isEntityNbEnabled()
+
+  const bins = { f1: ENTITY_NB_FEATURE_BINS, f2: 2, f3: ENTITY_NB_FEATURE_BINS, f4: 2 }
+  const empty = (k: number) => Array.from({ length: k }, () => 0)
+
+  const counts = {
+    match: { f1: empty(bins.f1), f2: empty(bins.f2), f3: empty(bins.f3), f4: empty(bins.f4) },
+    notMatch: { f1: empty(bins.f1), f2: empty(bins.f2), f3: empty(bins.f3), f4: empty(bins.f4) },
+  }
+  for (const p of pairs) {
+    const cls = p.isMatch ? counts.match : counts.notMatch
+    cls.f1[binIndex(p.features.f1, bins.f1)]++
+    cls.f2[p.features.f2]++
+    cls.f3[binIndex(p.features.f3, bins.f3)]++
+    cls.f4[p.features.f4]++
+  }
+
+  const logTable = (countsArr: number[], k: number): number[] => {
+    const total = countsArr.reduce((s, v) => s + v, 0)
+    // total=0 (class rỗng) → uniform 1/K — chống log(0), giữ neutral
+    return countsArr.map(c => Math.log((c + 1) / (total + k)))
+  }
+
+  return {
+    trainedAt: Date.now(),
+    pairCount: matchCount,
+    negativeCount: negCount,
+    usable,
+    match: {
+      f1: logTable(counts.match.f1, bins.f1),
+      f2: logTable(counts.match.f2, bins.f2),
+      f3: logTable(counts.match.f3, bins.f3),
+      f4: logTable(counts.match.f4, bins.f4),
+    },
+    notMatch: {
+      f1: logTable(counts.notMatch.f1, bins.f1),
+      f2: logTable(counts.notMatch.f2, bins.f2),
+      f3: logTable(counts.notMatch.f3, bins.f3),
+      f4: logTable(counts.notMatch.f4, bins.f4),
+    },
+  }
+}
+
+/**
+ * LLR = log P(f|match) − log P(f|not) trên 4 đặc trưng (thuần).
+ * Model chưa usable → trả 0 (neo vùng xám → fuzzy luôn quyết — an toàn).
+ */
+export function classifyEntityPair(model: NaiveBayesEntityModel, f: EntityPairFeatures): number {
+  if (!model.usable) return 0
+  const m = model.match
+  const n = model.notMatch
+  return (
+    m.f1[binIndex(f.f1, ENTITY_NB_FEATURE_BINS)] - n.f1[binIndex(f.f1, ENTITY_NB_FEATURE_BINS)]
+    + m.f2[f.f2] - n.f2[f.f2]
+    + m.f3[binIndex(f.f3, ENTITY_NB_FEATURE_BINS)] - n.f3[binIndex(f.f3, ENTITY_NB_FEATURE_BINS)]
+    + m.f4[f.f4] - n.f4[f.f4]
+  )
+}
+
+/**
+ * Kill-switch env ENTITY_NB — 'off' tắt (rollback tức thời, spec §P5-M3);
+ * mọi giá trị khác (kể cả unset/rỗng) = BẬT khi đủ dữ liệu. (Quy ước ngược
+ * với ADAPTATION_STATS_GATE — mặc định đây là on-khi-đủ-dữ-liệu vì NB chỉ
+ * tự kích hoạt sau ngưỡng 100 cặp — chính ngưỡng đó là lớp an toàn chính.)
+ */
+export function isEntityNbEnabled(): boolean {
+  const s = (process.env.ENTITY_NB ?? '').trim().toLowerCase()
+  return s !== 'off'
+}
+
+/** Cache model trong RAM 10 phút (spec §P5-M3). */
+let entityNbCache: { model: NaiveBayesEntityModel | null; expiresAt: number } | null = null
+
+/** Reset cache (test dùng). */
+export function resetEntityNbCache(): void {
+  entityNbCache = null
+}
+
+export interface NbTrainingRow {
+  /** entity thô (LocalEntity) */
+  entity: EntityFeatureInput
+  /** canonical đã ghép đúng (LocalResolvedEntity) — null = chưa resolve */
+  matchedCanonical: EntityFeatureInput | null
+}
+
+/**
+ * Lắp ráp cặp train từ DB rows: positive = (entity, canonical resolved của nó);
+ * negative = (entity, canonical KHÁC cùng entityType, tên KHÔNG quá giống
+ * (f1 < 0.85 — dưới ngưỡng fuzzy: chắc chắn không phải bản sao bị miss) và
+ * không dễ quá khác (f1 ≥ 0.3 — bỏ negative hiển nhiên vô bổ), chọn
+ * DETERMINISTIC theo thứ tự canonicalName — không RNG, chạy lại cho cùng kết
+ * quả (nguyên tắc reproducibility của dự án).
+ */
+export function buildNbTrainingPairs(
+  rows: NbTrainingRow[],
+  allCanonicals: EntityFeatureInput[]
+): Array<{ features: EntityPairFeatures; isMatch: boolean }> {
+  const pairs: Array<{ features: EntityPairFeatures; isMatch: boolean }> = []
+  const sortedCanonicals = [...allCanonicals].sort((a, b) => a.name.localeCompare(b.name))
+
+  for (const row of rows) {
+    if (row.matchedCanonical) {
+      pairs.push({ features: computeEntityPairFeatures(row.entity, row.matchedCanonical), isMatch: true })
+    }
+    // Negative: cùng type, f1 ∈ [0.3, 0.85) — deterministic first-match
+    const neg = sortedCanonicals.find(c => {
+      if (row.matchedCanonical && c.name === row.matchedCanonical.name) return false
+      if (c.type.trim().toLowerCase() !== row.entity.type.trim().toLowerCase()) return false
+      const f1 = stringSimilarity(row.entity.name.toLowerCase().trim(), c.name.toLowerCase().trim())
+      return f1 >= 0.3 && f1 < 0.85
+    })
+    if (neg) {
+      pairs.push({ features: computeEntityPairFeatures(row.entity, neg), isMatch: false })
+    }
+  }
+  return pairs
+}
+
+/**
+ * Train NB model từ LocalEntity/LocalResolvedEntity (ground truth sẵn có) —
+ * cache 10 phút. Trả null khi: kill-switch off / DB lỗi / chưa đủ cặp match
+ * (caller giữ nguyên hành vi fuzzy cũ). Fail-open tuyệt đối: lỗi train không
+ * được phép làm hỏng pipeline resolve.
+ */
+export async function loadNaiveBayesModel(): Promise<NaiveBayesEntityModel | null> {
+  if (!isEntityNbEnabled()) return null
+  if (entityNbCache && Date.now() < entityNbCache.expiresAt) return entityNbCache.model
+
+  let model: NaiveBayesEntityModel | null = null
+  try {
+    const [entityRows, canonicalRows] = await Promise.all([
+      db.localEntity.findMany({
+        where: { resolvedEntityId: { not: null } },
+        select: { entityName: true, entityType: true, description: true, domain: true, resolvedEntityId: true },
+        take: ENTITY_NB_MAX_ROWS,
+      }),
+      db.localResolvedEntity.findMany({
+        select: { id: true, canonicalName: true, entityType: true, description: true, domains: true },
+        take: ENTITY_NB_MAX_ROWS,
+      }),
+    ])
+
+    const parseDomains = (s: string | null): string[] => {
+      if (!s) return []
+      try {
+        const v = JSON.parse(s)
+        return Array.isArray(v) ? v.map(String) : []
+      } catch {
+        return []
+      }
+    }
+
+    const canonicalById = new Map(
+      canonicalRows.map(c => [
+        c.id,
+        { name: c.canonicalName, type: c.entityType, description: c.description ?? '', domains: parseDomains(c.domains) },
+      ])
+    )
+
+    const trainingRows: NbTrainingRow[] = entityRows
+      .map(e => ({
+        entity: {
+          name: e.entityName,
+          type: e.entityType,
+          description: e.description ?? '',
+          domains: e.domain ? [e.domain] : [],
+        },
+        matchedCanonical: e.resolvedEntityId ? canonicalById.get(e.resolvedEntityId) ?? null : null,
+      }))
+      .filter(r => r.matchedCanonical !== null)
+
+    const allCanonicals: EntityFeatureInput[] = [...canonicalById.values()]
+    const pairs = buildNbTrainingPairs(trainingRows, allCanonicals)
+    model = trainNaiveBayesEntityModel(pairs)
+    if (!model.usable) model = null // chưa đủ 100 cặp → null = fuzzy cũ
+
+    console.log(
+      `[EntityResolver] P5-M3 NB model: ${model ? `TRAINED (pairs=${model.pairCount}, negatives=${model.negativeCount})` : 'chưa đủ dữ liệu — giữ fuzzy cũ'} từ ${entityRows.length} entity resolved / ${canonicalRows.length} canonical`
+    )
+  } catch (err) {
+    // Fail-open: DB lỗi → null → fuzzy cũ
+    console.warn('[EntityResolver] loadNaiveBayesModel failed (fail-open → fuzzy cũ):', err instanceof Error ? err.message : String(err))
+    model = null
+  }
+
+  entityNbCache = { model, expiresAt: Date.now() + ENTITY_NB_CACHE_MS }
+  return model
+}
+
+
+/** Tùy chọn P5-M3 cho resolveEntities — nbModel null/undefined = fuzzy cũ thuần. */
+export interface ResolveOptions {
+  /** Mô hình NB đã train (loadNaiveBayesModel — cache 10 phút); chỉ dùng khi usable */
+  nbModel?: NaiveBayesEntityModel | null
+}
+
+/**
+ * Bước 2 của resolve flow — P5-M3: NB quyết trong vùng tin cậy, fuzzy fallback
+ * vùng xám. Khi nbModel null/không usable → NGUYÊN trạng thái fuzzy cũ (đối
+ * chiếu bằng test — dưới 100 cặp kết quả phải y hệt bản cũ).
+ *
+ * Luật quyết với NB usable (τ = ENTITY_NB_TAU, vùng xám = ENTITY_NB_GRAY_ZONE):
+ *   LLR > τ ∧ LLR ≥ +GRAY  → merge (method 'nb', similarity = f1)
+ *   LLR ≤ τ ∧ LLR ≤ −GRAY  → KHÔNG merge (NB chặn — fuzzy cũng không được phép)
+ *   |LLR| < GRAY (vùng xám) → luật fuzzy cũ quyết (cùng type + similarity > 0.85)
+ */
+function nbThenFuzzyMatchResolution(
   resolved: Map<string, ResolvedEntity>,
   duplicates: DuplicatePair[],
+  nbModel: NaiveBayesEntityModel | null,
   threshold = 0.85
 ): {
   resolved: Map<string, ResolvedEntity>
   duplicates: DuplicatePair[]
 } {
+  const nbUsable = nbModel !== null && nbModel.usable && isEntityNbEnabled()
   const entries = Array.from(resolved.entries())
-  const toMerge: Array<{ source: string; target: string; similarity: number }> = []
+  const toMerge: Array<{ source: string; target: string; similarity: number; method: 'fuzzy' | 'nb' }> = []
   const processed = new Set<string>()
 
   // Compare all pairs
@@ -208,11 +527,34 @@ function fuzzyMatchResolution(
       const [nameA, entityA] = entries[i]
       const [nameB, entityB] = entries[j]
 
-      // Skip if different entity types (except RELATED_TO situations)
-      if (entityA.entityType !== entityB.entityType) continue
-
       // Skip already processed
       if (processed.has(nameA) || processed.has(nameB)) continue
+
+      if (nbUsable) {
+        // NB nhìn cặp bằng đặc trưng đầy đủ (f2 type-hợp-khác học từ dữ liệu —
+        // không lọc trước cùng type như fuzzy); quyết vùng tin cậy thì chốt,
+        // vùng xám rơi xuống luật fuzzy bên dưới (kèm điều kiện cùng type gốc)
+        const features = computeEntityPairFeatures(
+          { name: entityA.canonicalName, type: entityA.entityType, description: entityA.description, domains: entityA.domains },
+          { name: entityB.canonicalName, type: entityB.entityType, description: entityB.description, domains: entityB.domains }
+        )
+        const llr = classifyEntityPair(nbModel!, features)
+        if (llr > ENTITY_NB_TAU && llr >= ENTITY_NB_GRAY_ZONE) {
+          // NB match — merge (giữ quy ước fuzzy: tên ngắn hòa vào tên dài)
+          const [source, target] = nameA.length >= nameB.length ? [nameB, nameA] : [nameA, nameB]
+          toMerge.push({ source, target, similarity: features.f1, method: 'nb' })
+          processed.add(source)
+          continue
+        }
+        if (llr <= ENTITY_NB_TAU && llr <= -ENTITY_NB_GRAY_ZONE) {
+          // NB chặn — cặp này KHÔNG được merge dù fuzzy muốn (llr ngoài vùng xám)
+          continue
+        }
+        // vùng xám → fuzzy fallback (không continue — rơi xuống dưới)
+      }
+
+      // Fuzzy fallback (luật cũ) — same entity type + similarity > threshold
+      if (entityA.entityType !== entityB.entityType) continue
 
       const normalizedA = nameA.toLowerCase().trim()
       const normalizedB = nameB.toLowerCase().trim()
@@ -221,14 +563,14 @@ function fuzzyMatchResolution(
       if (similarity > threshold) {
         // Merge shorter name into longer name (prefer more descriptive)
         const [source, target] = nameA.length >= nameB.length ? [nameB, nameA] : [nameA, nameB]
-        toMerge.push({ source, target, similarity })
+        toMerge.push({ source, target, similarity, method: 'fuzzy' })
         processed.add(source)
       }
     }
   }
 
-  // Perform merges
-  for (const { source, target, similarity } of toMerge) {
+  // Perform merges (giữ nguyên cơ chế merge của fuzzyMatchResolution gốc)
+  for (const { source, target, similarity, method } of toMerge) {
     const sourceEntity = resolved.get(source)
     const targetEntity = resolved.get(target)
 
@@ -263,7 +605,7 @@ function fuzzyMatchResolution(
       duplicates.push({
         merged: source,
         into: target,
-        method: 'fuzzy',
+        method,
         similarity,
       })
     }
@@ -272,20 +614,23 @@ function fuzzyMatchResolution(
   return { resolved, duplicates }
 }
 
-// ==================== MAIN RESOLUTION ====================
-
 /**
  * Resolve and deduplicate entities
  */
-export function resolveEntities(entities: ExtractedEntity[]): ResolutionResult {
+export function resolveEntities(entities: ExtractedEntity[], options?: ResolveOptions): ResolutionResult {
   const totalInput = entities.length
 
   // Step 1: Exact match
   const { resolved, duplicates: exactDuplicates } = exactMatchResolution(entities)
   const afterExactMatch = resolved.size
 
-  // Step 2: Fuzzy match
-  const { resolved: finalResolved, duplicates: fuzzyDuplicates } = fuzzyMatchResolution(resolved, exactDuplicates)
+  // Step 2: P5-M3 — NB (khi model usable) quyết vùng tin cậy, fuzzy fallback
+  // vùng xám; không model → đúng hành vi fuzzy cũ tuyệt đối
+  const { resolved: finalResolved, duplicates: fuzzyDuplicates } = nbThenFuzzyMatchResolution(
+    resolved,
+    exactDuplicates,
+    options?.nbModel ?? null
+  )
   const afterFuzzyMatch = finalResolved.size
 
   // Step 3: LLM-based match (skipped for now - high cost)

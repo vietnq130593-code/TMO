@@ -113,9 +113,17 @@ model Document {
   filePath          String   @default("") /// Local filesystem path in UPLOAD_DIR
   domain            String   @default("mixed") /// Document domain
   pageCount         Int?     /// Number of pages in the PDF
-  status            String   @default("uploaded") /// uploaded | parsing | chunked | extracting | extracted | partial | indexed | error
+  status            String   @default("uploaded") /// uploaded | parsing | chunked | extracting | extracted | partial | indexed | error | duplicate (P5-M2)
   errorMessage      String?  /// Error message if status = 'error'
   userPaused        Boolean  @default(false) /// Whether the user explicitly paused this document — prevents auto-continue/auto-recovery
+  // P5-M2 (blueprint stats §P5-M2, mục #17 — DA.pdf §Duplicate Rows): sha256
+  // hex của bytes PDF gốc, tính tại upload — cổng exact-dup (trả 409 khi trùng
+  // hash). KHÔNG unique cứng: PDF tái xuất khác byte nhưng cùng nội dung là
+  // việc của near-dup 0.98 ở process step ④.
+  contentHash       String?  /// sha256(bytes) — exact duplicate gate
+  // P5-M2 — id Document gốc khi bản này bị đánh dấu trùng lặp (exact-hash tại
+  // upload KHÔNG tạo row mới nên trường này chỉ do near-dup process gate ghi)
+  duplicateOfId     String?  /// Reference to the original document this duplicates
   processingSteps   String   @default("[]") /// JSON: array of ProcessingStep objects
   processingPercent Int      @default(0) /// 0-100 progress percentage
   createdAt         DateTime @default(now())
@@ -125,6 +133,8 @@ model Document {
   @@index([domain])
   @@index([createdAt])
   @@index([userPaused])
+  // P5-M2 — tra cứu hash khi upload (find-first theo hash, không unique)
+  @@index([contentHash])
 }
 
 // ============================================

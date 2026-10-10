@@ -359,11 +359,20 @@ async function graphSearch(queryTerms: string[], maxHops = 2, limit = 20): Promi
   }
 }
 
-async function exploreEntity(entityName: string): Promise<{
+async function exploreEntity(entityName: string, opts?: {
+  /** P5-M1 — tăng số láng giềng cho bản đồ tri thức (default 30 — giữ hành vi cũ) */
+  maxNeighbors?: number
+  /** P5-M1 — trả kèm embedding Neo4j của node (nếu có) để vẽ bản đồ PCA */
+  withEmbeddings?: boolean
+}): Promise<{
   entity: GraphSearchResult['entities'][0] | null
   neighbors: GraphSearchResult['entities']
   relationships: GraphSearchResult['relationships']
+  /** P5-M1 — embedding node theo tên (chỉ khi withEmbeddings; thiếu = node không có) */
+  embeddingsByName?: Map<string, number[]>
 }> {
+  const maxNeighbors = opts?.maxNeighbors ?? 30
+  const withEmbeddings = opts?.withEmbeddings ?? false
   let session: import('neo4j-driver').Session | null = null
   try {
     session = await safeSession()
@@ -372,10 +381,11 @@ async function exploreEntity(entityName: string): Promise<{
   }
   try {
     let entity: GraphSearchResult['entities'][0] | null = null
+    let entityEmbedding: number[] | null = null
     try {
       const entityResult = await session.executeRead(tx =>
         tx.run(
-          `MATCH (n {name: $name}) RETURN n.name AS name, labels(n) AS types, n.domain AS domain, n.description AS description LIMIT 1`,
+          `MATCH (n {name: $name}) RETURN n.name AS name, labels(n) AS types, n.domain AS domain, n.description AS description${withEmbeddings ? ', n.embedding AS embedding' : ''} LIMIT 1`,
           { name: entityName }
         )
       )
@@ -388,11 +398,16 @@ async function exploreEntity(entityName: string): Promise<{
           domain: record.get('domain') || '',
           description: record.get('description') || '',
         }
+        if (withEmbeddings) {
+          const emb = record.get('embedding') as number[] | null | undefined
+          if (Array.isArray(emb) && emb.length >= 2) entityEmbedding = emb
+        }
       }
     } catch (err) { console.error('[GraphSearch] Entity lookup failed:', err instanceof Error ? err.message : String(err)) }
 
     const neighbors: GraphSearchResult['entities'] = []
     const relationships: GraphSearchResult['relationships'] = []
+    const embeddingsByName = new Map<string, number[]>()
 
     try {
       const neighborResult = await session.executeRead(tx =>
@@ -402,9 +417,9 @@ async function exploreEntity(entityName: string): Promise<{
                   CASE WHEN startNode(r).name = $name THEN 'outgoing' ELSE 'incoming' END AS direction,
                   type(r) AS relType,
                   CASE WHEN startNode(r).name = $name THEN neighbor.name ELSE $name END AS relTarget,
-                  CASE WHEN startNode(r).name = $name THEN $name ELSE startNode(r).name END AS relSource
-           LIMIT 30`,
-          { name: entityName }
+                  CASE WHEN startNode(r).name = $name THEN $name ELSE startNode(r).name END AS relSource${withEmbeddings ? ', neighbor.embedding AS embedding' : ''}
+           LIMIT toInteger($limit)`,
+          { name: entityName, limit: maxNeighbors }
         )
       )
 
@@ -420,6 +435,10 @@ async function exploreEntity(entityName: string): Promise<{
             domain: record.get('domain') || '',
             description: '',
           })
+          if (withEmbeddings) {
+            const emb = record.get('embedding') as number[] | null | undefined
+            if (Array.isArray(emb) && emb.length >= 2) embeddingsByName.set(nName, emb)
+          }
         }
         const direction = record.get('direction') as string
         const relType = record.get('relType') as string
@@ -431,10 +450,109 @@ async function exploreEntity(entityName: string): Promise<{
       }
     } catch (err) { console.error('[GraphSearch] Neighbor search failed:', err instanceof Error ? err.message : String(err)) }
 
-    return { entity, neighbors, relationships }
+    if (withEmbeddings && entity && entityEmbedding) {
+      embeddingsByName.set(entity.name, entityEmbedding)
+    }
+
+    return withEmbeddings
+      ? { entity, neighbors, relationships, embeddingsByName }
+      : { entity, neighbors, relationships }
   } finally {
     await session.close()
   }
+}
+
+// ==================== P5-M1 — GRAPH-EXPLORE + PCA BẢN ĐỒ TRI THỨC ====================
+//
+// Cache 1h theo tên entity (spec §P5-M1: "cap 500 node, cache 1h") — đồ hình
+// chỉ đổi khi ingestion/resolve chạy tiếp, còn PCA top-2 trên ≤500 vector
+// 2048-dim có chi phí đáng kể (power iteration trên ma trận hiệp phương sai
+// d×d). Cap số entry cache 64 — nội dung nhỏ (xy + metadata), LRU thô: đầy
+// thì xoá sạch (đơn giản, đủ cho traffic thăm dò đồ thị).
+
+const GRAPH_MAP_MAX_NODES = 500
+const GRAPH_MAP_CACHE_MS = 60 * 60 * 1000 // 1h
+const GRAPH_MAP_CACHE_MAX_ENTRIES = 64
+
+interface GraphExploreMapResult {
+  entity: Awaited<ReturnType<typeof exploreEntity>>['entity']
+  neighbors: Awaited<ReturnType<typeof exploreEntity>>['neighbors']
+  relationships: Awaited<ReturnType<typeof exploreEntity>>['relationships']
+  map: {
+    /** tên node → toạ độ 2D [x, y] trên 2 thành phần chính (PC1/PC2) */
+    xy: Record<string, [number, number]>
+    /** tỉ lệ phương sai PC1/PC2 giải thích được [r1, r2] */
+    explainedVariances: [number, number] | null
+    /** số node có embedding (tham gia PCA) / tổng node */
+    nWithEmbedding: number
+    nNodes: number
+    /** false khi không đủ node có embedding (PCA không tính được) */
+    pcaAvailable: boolean
+  }
+  fromCache: boolean
+}
+
+const graphExploreCache = new Map<string, { result: Omit<GraphExploreMapResult, 'fromCache'>; expiresAt: number }>()
+
+/** exploreEntity + PCA map — có cache 1h. Fail-open: Neo4j/PCA lỗi vẫn trả đồ thị. */
+async function exploreEntityWithMap(entityName: string): Promise<GraphExploreMapResult> {
+  const cacheKey = entityName.toLowerCase().trim()
+  const cached = graphExploreCache.get(cacheKey)
+  if (cached && Date.now() < cached.expiresAt) {
+    return { ...cached.result, fromCache: true }
+  }
+
+  const explored = await exploreEntity(entityName, {
+    maxNeighbors: GRAPH_MAP_MAX_NODES - 1, // cap 500 node tính cả entity (spec §P5-M1)
+    withEmbeddings: true,
+  })
+
+  // PCA top-2 trên các node CÓ embedding (node không có → xy null, UI tự xử)
+  const namesWithEmbedding: string[] = []
+  const vectors: number[][] = []
+  if (explored.embeddingsByName) {
+    for (const [name, emb] of explored.embeddingsByName) {
+      if (vectors.length >= GRAPH_MAP_MAX_NODES) break
+      namesWithEmbedding.push(name)
+      vectors.push(emb)
+    }
+  }
+
+  let xy: Record<string, [number, number]> = {}
+  let explainedVariances: [number, number] | null = null
+  let pcaAvailable = false
+  if (vectors.length >= 2) {
+    try {
+      const { pcaTop2 } = await import('@/lib/stats/pca')
+      const pca = pcaTop2(vectors)
+      if (pca) {
+        xy = Object.fromEntries(namesWithEmbedding.map((name, i) => [name, pca.xy[i]]))
+        explainedVariances = pca.explainedVariances
+        pcaAvailable = true
+      }
+    } catch (err) {
+      console.warn('[GraphExplore] P5-M1 PCA failed (non-fatal — trả không map):', err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const nNodes = (explored.entity ? 1 : 0) + explored.neighbors.length
+  const result: Omit<GraphExploreMapResult, 'fromCache'> = {
+    entity: explored.entity,
+    neighbors: explored.neighbors,
+    relationships: explored.relationships,
+    map: {
+      xy,
+      explainedVariances,
+      nWithEmbedding: vectors.length,
+      nNodes,
+      pcaAvailable,
+    },
+  }
+
+  if (graphExploreCache.size >= GRAPH_MAP_CACHE_MAX_ENTRIES) graphExploreCache.clear()
+  graphExploreCache.set(cacheKey, { result, expiresAt: Date.now() + GRAPH_MAP_CACHE_MS })
+
+  return { ...result, fromCache: false }
 }
 
 async function findPath(fromName: string, toName: string, maxHops = 4): Promise<GraphSearchResult['paths']> {
@@ -1337,7 +1455,11 @@ export async function GET(request: NextRequest) {
     if (action === 'graph-explore') {
       const entity = searchParams.get('entity')
       if (!entity) return NextResponse.json({ error: 'Missing entity' }, { status: 400 })
-      const result = await exploreEntity(entity)
+      // P5-M1 (blueprint stats §P5-M1, mục #14 — MATH.pdf §PCA/§SVD): bản đồ
+      // tri thức 2D — PCA top-2 (power iteration) trên embedding Neo4j của
+      // entity + láng giềng (cap 500 node), cache 1h (đồ hình đổi chậm, PCA
+      // trên 2048-dim × 500 node không rẻ).
+      const result = await exploreEntityWithMap(entity)
       return NextResponse.json(result)
     }
 

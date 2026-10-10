@@ -19,8 +19,8 @@
  */
 
 import { db } from '@/lib/db'
-import { qdrant } from '@/lib/qdrant'
-import { generateEmbedding, generateQueryEmbedding, getEmbeddingDimension, generateEmbeddingBatch } from '@/lib/embeddings'
+import { qdrant, ensurePilotCollection, COLLECTION_AGENT_MEMORY_PILOT } from '@/lib/qdrant'
+import { generateEmbedding, generateQueryEmbedding, getEmbeddingDimension, generateEmbeddingBatch, truncateMatryoshka, isMatryoshkaPilotEnabled, MATRYOSHKA_PILOT_DIMS } from '@/lib/embeddings'
 import { callUtilityLLM } from '@/lib/llm'
 // D1 (audit 2026-11): quy tắc "có chạy tier transitions không" nằm ở module PURE LOGIC
 // để test được không cần DB. Trả true luôn → HOT→WARM không còn bị gate bởi WARM deactive.
@@ -404,6 +404,34 @@ export async function recallMemories(params: RecallParams): Promise<RecalledMemo
 // ==================== STORE MEMORY ====================
 
 /**
+ * P5-M1 (blueprint stats §P5-M1) — dual-write bản Matryoshka 512 vào collection
+ * pilot CÔ LẬP (agent_memory_512) khi env MATRYOSHKA_PILOT=on. Fire-and-forget:
+ * lỗi pilot KHÔNG BAO GIỜ làm hỏng flow lưu memory chính (pilot là đo lường,
+ * mọi đường đọc vẫn 2048). Gọi ở 2 điểm: memory mới + memory merge (cùng
+ * pointId — pilot mirror theo đúng bản cập nhật).
+ */
+function upsertPilotMemoryFireAndForget(pointId: string, vector: number[], payload: Record<string, unknown>): void {
+  if (!isMatryoshkaPilotEnabled()) return
+  ;(async () => {
+    try {
+      const ok = await ensurePilotCollection(COLLECTION_AGENT_MEMORY_PILOT, MATRYOSHKA_PILOT_DIMS)
+      if (!ok) return
+      await qdrant.upsert(COLLECTION_AGENT_MEMORY_PILOT, {
+        points: [
+          {
+            id: pointId,
+            vector: truncateMatryoshka(vector, MATRYOSHKA_PILOT_DIMS),
+            payload: { ...payload, pilot_dims: MATRYOSHKA_PILOT_DIMS },
+          },
+        ],
+      })
+    } catch (err) {
+      console.warn('[AgentMemory] P5-M1 pilot dual-write failed (non-fatal):', err instanceof Error ? err.message : String(err))
+    }
+  })()
+}
+
+/**
  * Store a new episodic memory.
  *
  * Flow:
@@ -512,6 +540,12 @@ export async function storeMemory(params: StoreMemoryParams): Promise<StoreMemor
                     } catch {
                       // non-critical
                     }
+                    // P5-M1 — pilot mirror theo bản merge (cùng pointId)
+                    upsertPilotMemoryFireAndForget(
+                      existingMem.qdrantPointId,
+                      mergedVector,
+                      { ...existingPayload, content: merged, importance: newImportance } as unknown as Record<string, unknown>
+                    )
                   }
 
                   console.log(`[AgentMemory] Merged similar memory for ${agentName}: "${merged.slice(0, 50)}..."`)
@@ -614,6 +648,10 @@ export async function storeMemory(params: StoreMemoryParams): Promise<StoreMemor
           console.error('[AgentMemory] Qdrant upsert error:', qdrantErr instanceof Error ? qdrantErr.message : String(qdrantErr))
           // Still return the memory — it's in SQLite even if Qdrant fails
         }
+
+        // P5-M1 — dual-write bản 512 vào pilot collection (fire-and-forget,
+        // mặc định OFF — chỉ chạy khi env MATRYOSHKA_PILOT=on)
+        upsertPilotMemoryFireAndForget(qdrantPointId, vector, payload as unknown as Record<string, unknown>)
 
         // Step 4: Update the SQLite record with qdrantPointId
         await db.agentMemory.update({

@@ -53,6 +53,17 @@ module.exports = {
         // database (separate from the sandbox's own project DB), regardless
         // of the shell environment that launched PM2.
         DATABASE_URL: 'file:/home/z/tmo-app/db/custom.db',
+        // P4-M1 (blueprint stats §P4-M1, điểm dừng quyết định #3): bật cổng
+        // kiểm định χ²-Yates/Fisher one-sided cho Layer 9 adaptation sau
+        // giai đoạn log-only. Quyết định user-ủy-quyền 2026-10-10 theo đề
+        // xuất sau khi rà dữ liệu: StrategyAdaptationLog = 0 row → mọi cặp
+        // đánh giá rơi vào nhánh insufficient FAIL-OPEN (gate ON ≡ OFF về
+        // hành vi hôm nay, 0 rủi ro đổi); probe đợt 6 đã xác minh đường
+        // fail-open trên production DB; BUG2-063 (ô nhiễm evidence nhóm
+        // after) đã fix kèm regression + evidence chỉ đếm row applied=true.
+        // Cổng tự chuyển sang chặn thật khi một cặp chiến lược tích lũy
+        // n≥10/nhóm — đúng chủ đích blueprint. Rollback: đặt lại 'off'.
+        ADAPTATION_STATS_GATE: 'on',
         // Memory bound (2026-09-28 quan sát vận hành thật — 2 lần kernel OOM
         // giết next-server giữa chừng ở RSS 2.46GB (23:08) và 1.44GB (23:23),
         // memcg 4GB cạn tổng thể): giới hạn V8 heap 1024MB để GC chủ động sớm

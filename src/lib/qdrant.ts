@@ -23,6 +23,11 @@ const qdrantUrl = process.env.QDRANT_URL || 'http://localhost:6333'
 const qdrantApiKey = process.env.QDRANT_API_KEY || undefined
 const COLLECTION_DOCUMENTS = process.env.QDRANT_COLLECTION_DOCUMENTS || 'theopus_documents' // (export qua khối export cuối file)
 const COLLECTION_CHUNKS = process.env.QDRANT_COLLECTION_CHUNKS || 'theopus_chunks' // (export qua khối export cuối file)
+// P5-M1 (blueprint stats §P5-M1) — collection pilot Matryoshka 512-dim CÔ LẬP.
+// QUY ƯỚC TÊN: collection pilot LUÔN có hậu tố `_512` (hoặc `_pilot`) — mọi
+// dim-guard (initializeCollections P2-c, collections-health) GẶP hậu tố này
+// thì bỏ qua kiểm dim (cố ý khác 2048, không phải lỗi cấu hình).
+const COLLECTION_AGENT_MEMORY_PILOT = 'agent_memory_512' // (export cuối file)
 
 /** Embedding dimension — sourced from @/lib/embeddings (single source of truth) */
 import { getEmbeddingDimension, getCurrentEmbeddingModelVersion } from './embeddings'
@@ -396,7 +401,10 @@ export interface DocumentPayload {
   file_path?: string
   domain: string
   page_count?: number
-  status: 'uploaded' | 'parsing' | 'chunked' | 'extracted' | 'indexed' | 'error' | 'partial' | 'extracting'
+  // P5-M2 thêm 'duplicate' — tài liệu bị near-dup gate đánh dấu trùng nội dung
+  // (không index lại; duplicateOfId chỉ nằm ở SQLite Document — Qdrant payload
+  // không cần thêm field, status đủ cho route list phân loại)
+  status: 'uploaded' | 'parsing' | 'chunked' | 'extracted' | 'indexed' | 'error' | 'partial' | 'extracting' | 'duplicate'
   // (2026-09-09) `| null`: pipeline dùng error_message: null để XÓA lỗi trong Qdrant
   // payload (nhiều call site updateDocumentStatus) — null là giá trị thật của dữ liệu.
   error_message?: string | null
@@ -1111,4 +1119,58 @@ export async function getQdrantStats(): Promise<{
 }
 
 // Export collection names for use in other modules
-export { COLLECTION_DOCUMENTS, COLLECTION_CHUNKS, EMBEDDING_DIMENSION }
+export { COLLECTION_DOCUMENTS, COLLECTION_CHUNKS, EMBEDDING_DIMENSION, COLLECTION_AGENT_MEMORY_PILOT }
+
+// ==================== P5-M1 — PILOT COLLECTION (Matryoshka 512) ====================
+
+/**
+ * Collection có phải pilot (cố ý khác dim 2048) không — theo quy ước tên
+ * hậu tố `_pilot` / `_<số chiều khác>` (spec §P5-M1: guard bỏ qua các collection
+ * này khi kiểm dim). Dùng ở: collections-health route + mọi dim-guard tương lai.
+ */
+export function isPilotCollection(name: string): boolean {
+  return /(_pilot|_\d+)$/.test(name)
+}
+
+/**
+ * P5-M1 — đảm bảo collection pilot (dims tùy ý, mặc định 512) tồn tại.
+ * CÔ LẬP HOÀN TOÀN với guard 2048: không đụng COLLECTION_CHUNKS, không scalar
+ * quantization (đối chứng recall phải đo chất lượng truncation thuần, không
+ * trộn thêm sai số lượng tử hóa). Tồn tại sai dim → drop+recreate (dữ liệu
+ * pilot là metadata tái sinh được từ bản 2048 — không mất mát thật).
+ *
+ * @returns true nếu collection sẵn sàng để upsert; false khi Qdrant lỗi
+ *          (caller fire-and-forget — pilot không được phép làm hỏng flow chính)
+ */
+export async function ensurePilotCollection(name: string, dims: number): Promise<boolean> {
+  try {
+    const result = await withQdrantRetry(async () => {
+      const collections = await qdrant.getCollections()
+      const existingNames = new Set(collections.collections.map(c => c.name))
+
+      if (existingNames.has(name)) {
+        // Ki dim: sai dims → drop recreate (pilot disposable)
+        const info = await qdrant.getCollection(name)
+        const actualDim = (info.config?.params?.vectors as { size?: number } | undefined)?.size
+        if (actualDim !== undefined && actualDim !== dims) {
+          console.warn(`[Qdrant] P5-M1 pilot: collection ${name} đang ${actualDim}-dim ≠ ${dims} — drop recreate (dữ liệu pilot tái sinh được)`)
+          await qdrant.deleteCollection(name)
+          existingNames.delete(name)
+        } else {
+          return true
+        }
+      }
+
+      await qdrant.createCollection(name, {
+        vectors: { size: dims, distance: 'Cosine' },
+        // KHÔNG quantization — xem ghi chú hàm
+      })
+      console.log(`[Qdrant] P5-M1 pilot: created collection ${name} (${dims}-dim, no quantization)`)
+      return true
+    })
+    return result
+  } catch (err) {
+    console.warn(`[Qdrant] P5-M1 ensurePilotCollection(${name}) failed (non-fatal):`, err instanceof Error ? err.message : String(err))
+    return false
+  }
+}

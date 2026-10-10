@@ -26,8 +26,21 @@
 //     khiến hook không chạy → rò 11 thư mục sau vài lần chạy (đã đo: 11 dir).
 //   - VÁ: quét dọn các thư mục CŨ (>10 phút) mỗi lần preload chạy → rò bị chặn ở
 //     mức ≤1 lần chạy, không tích luỹ vô hạn.
-//   - Copy thêm cả -wal và -shm (SQLite WAL mode) — nếu không, bản copy có thể
-//     thiếu schema mới nhất vì phần đó nằm trong WAL.
+//   - Copy thêm -wal (SQLite WAL mode) — nếu không, bản copy có thể thiếu
+//     schema mới nhất vì phần đó nằm trong WAL.
+//   - KHÔNG copy -shm: đó là WAL-index tạm (SQLite tự dựng lại từ -wal khi mở
+//     DB). Copy -shm từ hệ thống ĐANG CHẠY đem theo index trạng-thái-sống có
+//     thể khiến SQLite ở bản copy bỏ qua việc recover WAL → schema/dữ liệu
+//     mới push thiếu cột thật (P2022 — phát hiện đợt 7: push schema xong chạy
+//     test ngay thì cột mới nằm gọn trong WAL, bản copy không thấy).
+//   - ENV-LEAK GUARD (phát hiện đợt 7, cùng họ lỗi với guard của src/lib/db.ts
+//     nhưng ánh xạ khác): shell sandbox xuất DATABASE_URL=file:/home/z/my-project/
+//     db/custom.db — DB của project SCAFFOLD KHÁC (schema cũ, 0 dữ liệu TMO).
+//     Bun không đè env đã set bằng .env → preload copy NHẦM DB ngoại lai →
+//     test chạy trên schema lạ (P2022 "column does not exist" với cột mới
+//     push). Chính sách: env trỏ file NGOÀI project root → BỎ (dùng .env của
+//     project); env trỏ file TRONG project (vd db/.quality-gate-test.db của
+//     quality-gate) → GIỮ NGUYÊN (ý định chủ đích, cùng tinh thần db.ts).
 //   - Nếu không parse được DATABASE_URL dạng file: → không làm gì (để nguyên).
 // ============================================
 
@@ -37,6 +50,73 @@ import * as path from "node:path";
 
 const TMP_PREFIX = "tmo-test-db-";
 const STALE_MS = 10 * 60 * 1000; // 10 phút
+
+/** Tìm project root (thư mục chứa prisma/schema.prisma) — cùng cách src/lib/db.ts. */
+function findProjectRoot(): string {
+  let root = process.cwd();
+  for (let i = 0; i < 6 && !fs.existsSync(path.join(root, "prisma", "schema.prisma")); i++) {
+    root = path.dirname(root);
+  }
+  return root;
+}
+
+/** Đọc DATABASE_URL= từ .env của project ('' = không khai báo). */
+function readProjectEnvDatabaseUrl(): string {
+  const envPath = path.join(findProjectRoot(), ".env");
+  if (!fs.existsSync(envPath)) return "";
+  try {
+    const lines = fs.readFileSync(envPath, "utf-8").split(/\r?\n/);
+    for (const line of lines) {
+      const m = line.match(/^\s*(?:export\s+)?DATABASE_URL\s*=\s*(.*)$/);
+      if (m) {
+        let value = m[1].trim();
+        // strip comment cuối dòng + quote bao quanh
+        const hashIdx = value.indexOf(" #");
+        if (hashIdx >= 0) value = value.slice(0, hashIdx).trim();
+        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+          value = value.slice(1, -1);
+        }
+        return value;
+      }
+    }
+  } catch {
+    // đọc .env lỗi → coi như không khai báo
+  }
+  return "";
+}
+
+/**
+ * Nguồn copy cho DB test: chuẩn hóa env hiện tại chống leak DB ngoại lai.
+ * Trả về URL dạng file: TUYỆT ĐỐI trỏ file TỒN TẠI, hoặc '' khi không xác định
+ * được (caller bỏ qua việc copy — giữ hành vi cũ).
+ */
+function resolveCopySourceUrl(rawEnvUrl: string): string {
+  const projectRoot = findProjectRoot();
+
+  // Quy ước resolve của prisma: file: tương đối tính từ prisma/ (schema-relative)
+  const toAbsolute = (fileUrl: string): string | null => {
+    const m = fileUrl.match(/^file:(.*)$/);
+    if (!m || !m[1]) return null;
+    return path.isAbsolute(m[1]) ? m[1] : path.resolve(projectRoot, "prisma", m[1]);
+  };
+
+  const envAbs = toAbsolute(rawEnvUrl);
+  // Env trỏ file TỒN TẠI và NẰM TRONG project → tin (vd gate: db/.quality-gate-test.db)
+  if (envAbs && fs.existsSync(envAbs) && envAbs.startsWith(projectRoot + path.sep)) {
+    return `file:${envAbs}`;
+  }
+
+  // Env bị leak ra ngoài project (hoặc trỏ file không tồn tại) → .env của project là nguồn sự thật
+  const projectUrl = readProjectEnvDatabaseUrl();
+  const projectAbs = toAbsolute(projectUrl);
+  if (projectAbs && fs.existsSync(projectAbs)) {
+    return `file:${projectAbs}`;
+  }
+
+  // .env không có file hợp lệ → giữ env cũ nếu nó tồn tại (hành vi cũ), ngược lại bỏ
+  if (envAbs && fs.existsSync(envAbs)) return `file:${envAbs}`;
+  return "";
+}
 
 /** pid còn sống hay không. EPERM = tồn tại nhưng thuộc user khác → coi như sống. */
 function isProcessAlive(pid: number): boolean {
@@ -86,12 +166,12 @@ function sweepOrphanDirs(now: number): void {
   }
 }
 
-const raw = process.env.DATABASE_URL || "";
-const m = raw.match(/^file:(.*)$/);
+const rawLeaked = process.env.DATABASE_URL || "";
+const resolvedUrl = resolveCopySourceUrl(rawLeaked);
+const m = resolvedUrl.match(/^file:(.*)$/);
 
 if (m && m[1]) {
-  // URL trong .env là đường dẫn TƯƠNG ĐỐI so với thư mục chứa schema.prisma
-  const srcPath = path.resolve(process.cwd(), "prisma", m[1]);
+  const srcPath = m[1]; // đã tuyệt đối + tồn tại (resolveCopySourceUrl chuẩn hóa)
 
   if (fs.existsSync(srcPath)) {
     sweepOrphanDirs(Date.now());
@@ -100,11 +180,13 @@ if (m && m[1]) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}${process.pid}-`));
     const dest = path.join(dir, "test.db");
 
-    for (const suffix of ["", "-wal", "-shm"]) {
+    // Chỉ copy db + -wal (xem ghi chú đầu file: -shm là index tạm, KHÔNG copy —
+    // SQLite recover WAL từ đầu khi mở bản copy, an toàn với mọi trạng thái sống)
+    for (const suffix of ["", "-wal"]) {
       try {
         fs.copyFileSync(srcPath + suffix, dest + suffix);
       } catch {
-        // thiếu -wal/-shm là bình thường — bỏ qua
+        // thiếu -wal là bình thường (đã checkpoint sạch) — bỏ qua
       }
     }
 

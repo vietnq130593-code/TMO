@@ -24,6 +24,7 @@ import crypto from 'crypto'
 import { qdrant, COLLECTION_DOCUMENTS, COLLECTION_CHUNKS, deleteChunksByDocument, deleteDocument } from '@/lib/qdrant'
 import { db } from '@/lib/db'
 import { uploadPdfToR2, deleteFromR2, r2KeyForPdf, isR2Configured, listR2Objects } from '@/lib/r2-storage'
+import { sha256Hex, findExactDuplicate, exactDupResponseStatus } from '@/lib/ingestion/doc-dedup'
 
 export const dynamic = 'force-dynamic'
 
@@ -55,7 +56,9 @@ async function overlaySqliteStatuses(
 ): Promise<{ documents: Array<Record<string, unknown>>; statusBreakdown: Record<string, number> }> {
   const statusBreakdown: Record<string, number> = {}
   try {
-    const rows = await db.document.findMany({ select: { id: true, title: true, status: true, processingPercent: true, errorMessage: true } })
+    // P5-M2 — thêm duplicateOfId để UI gắn badge "trùng với …" (đối chiếu tiêu đề
+    // gốc qua 1 query findMany riêng — ánh xạ id→title cho mọi bản trùng)
+    const rows = await db.document.findMany({ select: { id: true, title: true, status: true, processingPercent: true, errorMessage: true, duplicateOfId: true } })
     const byId = new Map(rows.map(r => [r.id, r]))
     const byTitle = new Map(rows.filter(r => r.title).map(r => [r.title as string, r]))
     for (const doc of docs) {
@@ -64,6 +67,13 @@ async function overlaySqliteStatuses(
         doc.status = row.status
         doc.processing_percent = row.processingPercent
         doc.error_message = row.errorMessage
+        // P5-M2 — badge trùng lặp: duplicate_of = id gốc, duplicate_of_title =
+        // tiêu đề gốc (undefined khi không phải bản trùng — UI check status='duplicate')
+        if (row.duplicateOfId) {
+          doc.duplicate_of = row.duplicateOfId
+          const origin = byId.get(row.duplicateOfId)
+          doc.duplicate_of_title = origin ? origin.title : null
+        }
       }
       const s = String(doc.status || 'uploaded')
       statusBreakdown[s] = (statusBreakdown[s] || 0) + 1
@@ -107,6 +117,12 @@ export async function POST(request: NextRequest) {
 
     const uploadedDocs: Array<Record<string, unknown>> = []
     const errors: Array<{ file: string; error: string }> = []
+    // P5-M2 (blueprint stats §P5-M2, mục #17 — DA.pdf §Duplicate Rows): bản ghi
+    // exact-dup theo content-hash. Nếu MỌI file trong request đều trùng hash (không
+    // có file mới nào được lưu) → trả 409 Conflict kèm existingDocumentId + tiêu
+    // đề; request hỗn hợp → 200 kèm mảng duplicates cho từng file (tiền lệ per-file
+    // error của route này).
+    const duplicates: Array<{ file: string; existingDocumentId: string; existingTitle: string }> = []
 
     for (const file of files) {
       if (!(file instanceof File)) {
@@ -128,6 +144,19 @@ export async function POST(request: NextRequest) {
       }
 
       try {
+        // P5-M2 — exact-dup gate: sha256(bytes) TRƯỚC khi đụng đĩa/R2/Qdrant/SQLite
+        // (không lưu bản mới — DA.pdf §Duplicate Rows). Lưu ý: check qua SQLite
+        // Document (contentHash có index); Document xóa rồi thì hash "hết hiệu lực"
+        // theo đúng nghĩa muốn — tái tải lại sau khi xóa là hợp lệ.
+        const buffer = Buffer.from(await file.arrayBuffer())
+        const contentHash = sha256Hex(buffer)
+        const existing = await findExactDuplicate(contentHash)
+        if (existing) {
+          console.log(`[Upload] Exact-dup (P5-M2): ${file.name} trùng hash với "${existing.title}" (id=${existing.id.slice(0, 8)}..., status=${existing.status}) — KHÔNG lưu bản mới`)
+          duplicates.push({ file: file.name, existingDocumentId: existing.id, existingTitle: existing.title })
+          continue
+        }
+
         // Generate document ID (UUID)
         const documentId = crypto.randomUUID()
 
@@ -137,8 +166,6 @@ export async function POST(request: NextRequest) {
         const filePath = path.join(UPLOAD_DIR, filename)
 
         // Save PDF to filesystem
-        const arrayBuffer = await file.arrayBuffer()
-        const buffer = Buffer.from(arrayBuffer)
         await fs.writeFile(filePath, buffer)
 
         // Phase 6: Upload to Cloudflare R2 (cloud backup — survives sandbox reset)
@@ -210,6 +237,8 @@ export async function POST(request: NextRequest) {
               domain,
               status: 'uploaded',
               pageCount: null,
+              // P5-M2 — ghi hash để lần upload sau trúng cổng 409
+              contentHash,
             },
           })
         } catch (dbErr) {
@@ -243,11 +272,30 @@ export async function POST(request: NextRequest) {
     // appears immediately (perf 2026-08-25).
     invalidateDocListCache()
 
+    // P5-M2 — mọi file đều exact-dup (không file nào được lưu) → 409 Conflict
+    // kèm chi tiết; hỗn hợp → 200 như cũ + mảng duplicates. (Quyết định qua
+    // exactDupResponseStatus — test được ở lib.)
+    if (exactDupResponseStatus(duplicates.length, uploadedDocs.length) === 409) {
+      return NextResponse.json(
+        {
+          error: `Duplicate upload: ${duplicates.map(d => d.file).join(', ')} đã tồn tại (trùng nội dung, sha256)`,
+          duplicates,
+          documents: [],
+          totalUploaded: 0,
+          totalErrors: errors.length,
+          totalDuplicates: duplicates.length,
+        },
+        { status: 409 }
+      )
+    }
+
     return NextResponse.json({
       documents: uploadedDocs,
       errors: errors.length > 0 ? errors : undefined,
+      duplicates: duplicates.length > 0 ? duplicates : undefined,
       totalUploaded: uploadedDocs.length,
       totalErrors: errors.length,
+      totalDuplicates: duplicates.length,
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)

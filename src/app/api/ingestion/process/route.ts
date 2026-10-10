@@ -35,9 +35,11 @@ import { getNeo4jDriver, safeSession, executeCypher, readCypher, upsertDocumentN
 import { upsertDocument, getDocument, listDocuments, updateDocumentStatus, deleteDocument, upsertChunks, updateChunkVectors, getChunksByDocument, getChunkCount, deleteChunksByDocument } from '@/lib/qdrant'
 import type { DocumentPayload, ChunkPayload } from '@/lib/qdrant'
 import { db } from '@/lib/db'
+import { detectNearDuplicate, NEAR_DUP_THRESHOLD } from '@/lib/ingestion/doc-dedup'
+import { evaluateExpectations, summarizeExpectationResults, stripExpectationMarker } from '@/lib/ingestion/pipeline-expectations'
 import { invalidateDocumentCache } from '@/lib/doc-cache'
 import { downloadFileFromR2, isR2Configured, listR2Objects } from '@/lib/r2-storage'
-import { resolveEntities as resolveEntitiesLib, type ResolvedEntity as ResolvedEntityLib, type DuplicatePair as DuplicatePairLib } from '@/lib/ingestion/entity-resolver'
+import { resolveEntities as resolveEntitiesLib, loadNaiveBayesModel, type ResolvedEntity as ResolvedEntityLib, type DuplicatePair as DuplicatePairLib } from '@/lib/ingestion/entity-resolver'
 import { randomUUID } from 'crypto'
 import { readFile } from 'fs/promises'
 import { existsSync } from 'fs'
@@ -1229,11 +1231,15 @@ async function extractFromChunk(chunkContent: string, domain: DocumentDomain, ch
 
 /** Resolve and deduplicate entities using the shared entity-resolver module.
  *  Wraps the lib's resolveEntities to accept the local ExtractedEntity type
- *  (which has EntityType instead of string for the type field). */
-function resolveEntities(entities: ExtractedEntity[]): { resolved: ResolvedEntity[]; duplicates: DuplicatePair[]; stats: { totalInput: number; afterExactMatch: number; afterFuzzyMatch: number; finalCount: number } } {
+ *  (which has EntityType instead of string for the type field).
+ *  P5-M3: async — tải NB model (loadNaiveBayesModel, cache 10 phút) trước khi
+ *  resolve; model null (chưa đủ 100 cặp / kill-switch ENTITY_NB=off / DB lỗi)
+ *  → resolver giữ nguyên hành vi fuzzy cũ. */
+async function resolveEntities(entities: ExtractedEntity[]): Promise<{ resolved: ResolvedEntity[]; duplicates: DuplicatePair[]; stats: { totalInput: number; afterExactMatch: number; afterFuzzyMatch: number; finalCount: number } }> {
   // The lib's ExtractedEntity uses `type: string`, our local one uses `type: EntityType`.
   // They are structurally identical, so a simple cast works.
-  return resolveEntitiesLib(entities as any)
+  const nbModel = await loadNaiveBayesModel()
+  return resolveEntitiesLib(entities as any, { nbModel })
 }
 
 // ==================== DOCUMENT PROGRESS HELPERS ====================
@@ -2019,6 +2025,9 @@ async function generateAndSaveEmbeddings(chunks: Array<{ id: string; content: st
   }
 }
 
+// ==================== P5-M2 NEAR-DUP GATE — xem src/lib/ingestion/doc-dedup.ts ====================
+// (Lõi logic + hằng số nằm ở lib để test được; đường đây chỉ là call-site)
+
 // ==================== MAIN PIPELINE ====================
 
 /**
@@ -2549,6 +2558,41 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       // Save page count + mark parse step completed
       steps = markStepCompleted(steps, 'parse', `${parsedPages} trang, ${parseTotalTokens} tokens, domain: ${domain}`)
       await updateDocProgress(documentId, { steps, pageCount: parsedPages })
+
+      // P5-M2 — NEAR-DUP GATE: embed 3 chunk đầu, searchSimilar top-1 ≥ 0.98
+      // TRƯỚC khi upsert chunk vào Qdrant (chunk trùng không bao giờ chạm index —
+      // đúng spec "sau chunk, trước upsert Qdrant"). Chỉ đường FRESH.
+      const nearDup = await detectNearDuplicate(documentId, parseChunks)
+      if (nearDup) {
+        const dupLabel = nearDup.duplicateOfTitle ?? nearDup.duplicateOfId.slice(0, 8)
+        console.log(`[Process] Near-dup (P5-M2): doc ${documentId.slice(0, 8)}... trùng "${dupLabel}" (cosine ${nearDup.scores.map(s => s.toFixed(4)).join(', ')} ≥ ${NEAR_DUP_THRESHOLD}) — đánh dấu duplicate, bỏ qua pipeline`)
+        steps = markStepCompleted(steps, 'chunk', `Trùng nội dung với "${dupLabel}" — bỏ qua pipeline (P5-M2, similarity ≥ ${NEAR_DUP_THRESHOLD})`)
+        steps = steps.map(s => ['extract', 'resolve', 'neo4j', 'embeddings'].includes(s.name)
+          ? { ...s, status: 'pending' as const, startedAt: null, completedAt: null, detail: 'Bỏ qua — tài liệu trùng lặp (P5-M2)' }
+          : s)
+        try {
+          await updateDocProgress(documentId, { status: 'duplicate', steps })
+        } catch (progressErr) {
+          console.warn('[Process] updateDocProgress(duplicate) failed (non-fatal):', progressErr instanceof Error ? progressErr.message : String(progressErr))
+          try { await updateDocumentStatus(documentId, { status: 'duplicate' }) } catch { /* give up */ }
+        }
+        try {
+          await db.document.update({ where: { id: documentId }, data: { duplicateOfId: nearDup.duplicateOfId } })
+        } catch (dbErr) {
+          console.warn('[Process] duplicateOfId update failed (non-fatal):', dbErr instanceof Error ? dbErr.message : String(dbErr))
+        }
+        const durationMs = Date.now() - startTime
+        return {
+          documentId, totalPages: parsedPages, totalChunks: 0, totalTokens: parseTotalTokens,
+          totalEntities: 0, totalRelationships: 0, resolvedEntities: 0, duplicatesFound: 0,
+          resolutionStats: { exactMatches: 0, fuzzyMatches: 0, llmResolutions: 0 },
+          successfulChunks: 0, failedChunks: 0, wasTimedOut: false,
+          warning: `Tài liệu trùng nội dung với "${dupLabel}" — đã đánh dấu duplicate, không index lại (P5-M2)`,
+          embeddingsSaved: 0, provider: 'none', model: 'none', durationMs,
+          status: 'duplicate', neo4jNodes: 0, neo4jRelationships: 0,
+          duplicateOf: nearDup.duplicateOfId,
+        }
+      }
 
       // Step 4: Chunk text and save to Qdrant chunks collection
       steps = markStepRunning(steps, 'chunk')
@@ -3276,7 +3320,7 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
         console.warn(`[Process] Failed to clean stale resolved_entities:`, err instanceof Error ? err.message : String(err))
       }
 
-      const resolutionResult = resolveEntities(loadedEntities)
+      const resolutionResult = await resolveEntities(loadedEntities)
 
       // Capture resolution stats for the final pipeline return value.
       pipelineResolvedCount = resolutionResult.resolved.length
@@ -3858,13 +3902,16 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
 
     // ROUND-32 P0-5: hoist ra ngoài — return cuối dùng số thật (bản cũ hardcode 0);
     // nhánh skip (hasEmbeddingsData=true) giữ 0 vì không sinh mới ở run này.
+    // FB-Đợt7-R3-01: realVectorCount cũng hoist — P5-M4 expectation embedding_
+    // success_rate cần "vector thật TRƯỚC run + mới lưu run này" (đường resume
+    // 30/33-đã-thật + 3-mới không bị tính 3/33 = FAIL giả — anh em của R2-01).
     let embeddingsSavedCount = 0
+    let realVectorCount = 0 // P0-5: số chunk có vector THẬT (đếm trung thực)
     if (!hasEmbeddingsData) {
       steps = markStepRunning(steps, 'embeddings')
       await updateDocProgress(documentId, { steps })
 
       let chunksNeedingEmbeddings = savedChunks
-      let realVectorCount = 0 // P0-5: số chunk có vector THẬT (đếm trung thực)
       if (isResuming && !rebuiltChunksFromPdf) {
         // ROUND-32 P0-5: chỉ tin chunk có vector THẬT — KHÔNG tin "chunk tồn tại".
         // Step 4 upsert chunk với zero-vector placeholder (embeddings đến sau ở
@@ -3897,6 +3944,50 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
     } else {
       console.log(`[Process] Skipping embeddings step — already completed`)
     }
+
+    // P5-M4 — DATA-QUALITY EXPECTATIONS (spec §P5-M4): đo từ stats sẵn có trong
+    // scope TRƯỚC guard cuối; zero_vector_rate chỉ đo được khi guard verify sạch
+    // (nhánh mù/thiếu vector ở dưới không có số trung thực). Metric thiếu →
+    // expectation evaluated=false (không tính vi phạm — thiếu đo ≠ hỏng).
+    const expectationMeasurements: Record<string, number> = {}
+    {
+      // page_count được ghi từ bước parse (updateDocProgress) — có ở cả đường
+      // resume; null (doc chưa từng parse hết) → metric không đo
+      const pageCountForExpect = document.page_count ?? 0
+      if (savedChunks.length > 0 && pageCountForExpect > 0) {
+        expectationMeasurements.chunks_per_page = savedChunks.length / pageCountForExpect
+      }
+      // FB-Đợt7-R2-01 + R3-01: CHỈ đo embedding_success_rate khi bước embeddings
+      // CHẠY trong lần pipeline này (!hasEmbeddingsData) VÀ tính đúng tử số =
+      // vector-thật-trước-run (realVectorCount) + mới-lưu-run-này — đường
+      // resume-partial không bị FAIL giả, đường skip (đã đủ vector thật từ lần
+      // trước) không đo (embeddingsSavedCount=0 → 0/n sai nghĩa).
+      if (savedChunks.length > 0 && !hasEmbeddingsData) {
+        expectationMeasurements.embedding_success_rate = Math.min(
+          1,
+          (realVectorCount + embeddingsSavedCount) / savedChunks.length
+        )
+      }
+    }
+    try {
+      const [entityCountForExpect, relCountForExpect] = await Promise.all([
+        db.localEntity.count({ where: { documentId } }),
+        db.localRelationship.count({ where: { documentId } }),
+      ])
+      if (savedChunks.length > 0 && entityCountForExpect > 0) {
+        expectationMeasurements.entity_rate = entityCountForExpect / savedChunks.length
+      }
+      if (entityCountForExpect > 0) {
+        expectationMeasurements.relationship_per_entity = relCountForExpect / entityCountForExpect
+      }
+    } catch {
+      // SQLite lỗi — expectation thực thể bỏ qua (evaluated=false), pipeline tiếp tục
+    }
+    /** Gắn kết quả expectation vào detail bước embeddings (strip marker cũ — idempotent) */
+    const attachExpectationDetail = (stepsArr: ProcessingStepRecord[], line: string): ProcessingStepRecord[] =>
+      stepsArr.map(s => s.name === 'embeddings'
+        ? { ...s, detail: `${stripExpectationMarker(s.detail)}${stripExpectationMarker(s.detail) ? ' · ' : ''}${line}` }
+        : s)
 
     // Step 13: Update document status — this is the final batch, so mark as 'indexed'
     // (Intermediate batches already return early with 'partial' status above)
@@ -3945,9 +4036,40 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
             : `${zeroVectorChunks.length}/${verifyChunks.length} chunk vẫn zero-vector sau bước embeddings — giữ 'partial' để chạy lại (P0-5 guard)`
         console.error(`[Process] P0-5 GUARD: ${guardWarning} (doc ${documentId.slice(0, 8)}...)`)
         steps = markStepPending(steps, 'embeddings', verifyBlind ? 'verify Qdrant lỗi — cần chạy lại' : `${zeroVectorChunks.length + missingChunks} chunk thiếu vector thật — cần re-embed`)
+        // P5-M4 — nhánh guard đã giữ 'partial': vẫn đánh giá expectation (metric
+        // còn đo được) để warn/fail ghi vào processingSteps + KPI nhìn thấy đủ
+        // bức tranh (doc có thể vừa thiếu vector VỪA hallucinate entity).
+        {
+          const expectationResults = evaluateExpectations(expectationMeasurements)
+          const expectationSummary = summarizeExpectationResults(expectationResults)
+          if (expectationSummary.failCount > 0 || expectationSummary.warnCount > 0) {
+            steps = attachExpectationDetail(steps, expectationSummary.line)
+            console.warn(`[Process] P5-M4 expectations (doc ${documentId.slice(0, 8)}..., kèm guard partial): ${expectationSummary.line}`)
+          }
+        }
         await updateDocProgress(documentId, { status: 'partial', steps })
       } else {
-        await updateDocProgress(documentId, { status: 'indexed' })
+        // P5-M4 — verify sạch: đo thêm zero_vector_rate (số trung thực từ guard)
+        // rồi đánh giá TOÀN BỘ expectation. fail → giữ 'partial' (đúng cơ chế
+        // P0-5 — pipeline chạy lại tự chữa); warn → chỉ ghi detail + KPI đếm.
+        const measurements = {
+          ...expectationMeasurements,
+          zero_vector_rate: verifyChunks.length > 0 ? zeroVectorChunks.length / verifyChunks.length : 0,
+        }
+        const expectationResults = evaluateExpectations(measurements)
+        const expectationSummary = summarizeExpectationResults(expectationResults)
+        if (expectationSummary.failCount > 0 || expectationSummary.warnCount > 0 || expectationSummary.notMeasured > 0) {
+          steps = attachExpectationDetail(steps, expectationSummary.line)
+          console.log(`[Process] P5-M4 expectations (doc ${documentId.slice(0, 8)}...): ${expectationSummary.line}`)
+        }
+        if (expectationSummary.failCount > 0) {
+          finalStatus = 'partial'
+          guardWarning = `expectation FAIL (P5-M4): ${expectationResults.filter(r => r.evaluated && !r.passed && r.severity === 'fail').map(r => r.detail).join(' · ')}`
+          console.error(`[Process] P5-M4: ${guardWarning} — giữ 'partial' (doc ${documentId.slice(0, 8)}...)`)
+          await updateDocProgress(documentId, { status: 'partial', steps })
+        } else {
+          await updateDocProgress(documentId, { status: 'indexed', steps })
+        }
       }
     } catch (guardErr) {
       // Verify throw (exception thật từ chính guard) — KHÔNG đặt 'indexed' khi

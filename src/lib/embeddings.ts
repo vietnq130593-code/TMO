@@ -725,6 +725,47 @@ export function getEmbeddingDimension(): number {
   return EMBEDDING_DIMENSION
 }
 
+// ==================== P5-M1 — MATRYOSHKA (MRL) 512-DIM PILOT ====================
+//
+// BLUEPRINT-STATS-LEARNING §P5-M1 (mục #14 — MATH.pdf §PCA/§SVD/§Eigenvalues):
+// nemotron hỗ trợ Matryoshka Representation Learning — header file này ghi từ
+// đầu ("input_type query/passage via Matryoshka") nhưng guard EMBEDDING_DIMENSION
+// 2048 khiến chưa bao giờ dùng. Pilot CÔ LẬP: dual-write bản 512 vào collection
+// riêng (agent_memory_512) khi env bật; MỌI đường đọc giữ nguyên 2048 tới khi có
+// bảng recall đối chứng (drop <2%) và user duyệt chuyển đọc (điểm dừng #4).
+
+/** Số chiều bản rút gọn MRL (spec §P5-M1: pilot 512) */
+export const MATRYOSHKA_PILOT_DIMS = 512
+
+/**
+ * Env MATRYOSHKA_PILOT — bật dual-write bản 512 vào pilot collection.
+ * Mặc định OFF ('on' | '1' | 'true' = bật). Đây là cờ đo lường, KHÔNG phải
+ * đường đọc: đọc luôn 2048 cho tới khi recall đối chứng đạt + user duyệt.
+ */
+export function isMatryoshkaPilotEnabled(): boolean {
+  const s = (process.env.MATRYOSHKA_PILOT ?? '').trim().toLowerCase()
+  return s === 'on' || s === '1' || s === 'true'
+}
+
+/**
+ * MRL truncation — giữ đúng `dims` PHẦN TỬ ĐẦU của vector (Matryoshka:
+ * các chiều đầu mang phần lớn thông tin; thiết kế gốc của MRL).
+ *
+ * KHÔNG chuẩn hóa lại norm: khoảng cách Qdrant là Cosine (bất biến theo
+ * scale) nên cắt đuôi không làm lệch thứ tự hàng xóm — và giữ nguyên giá trị
+ * giúp đối chứng recall 2048-vs-512 đo đúng "chất lượng của truncation"
+ * thay vì "truncation + renormalize".
+ *
+ * Vector ngắn hơn dims → trả BẢN SAO nguyên vẹn (không có gì để cắt);
+ * vector rỗng/thưa chiều lệch → trả bản sao (caller tự quyết).
+ */
+export function truncateMatryoshka(v: number[], dims: number = MATRYOSHKA_PILOT_DIMS): number[] {
+  if (!Array.isArray(v) || v.length === 0) return []
+  if (!Number.isFinite(dims) || dims <= 0) return v.slice()
+  if (v.length <= dims) return v.slice()
+  return v.slice(0, dims)
+}
+
 // ==================== PHASE 3 SMOLAB PROP 4.1 — MODEL VERSION TRACKING ====================
 
 /**

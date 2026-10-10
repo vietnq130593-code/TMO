@@ -158,10 +158,10 @@ describe('r76 · P1-M4 KPI layer', () => {
     }
   })
 
-  test('registry: 10 KPI (9 gốc + P3-M4 digest_gate_fallback_rate), key duy nhất, label/goal hợp lệ', () => {
-    expect(KPI_REGISTRY.length).toBe(10)
+  test('registry: 11 KPI (9 gốc + P3-M4 digest + P5-M4 ingestion_expectation_fails), key duy nhất, label/goal hợp lệ', () => {
+    expect(KPI_REGISTRY.length).toBe(11)
     const keys = new Set(KPI_REGISTRY.map((d) => d.key))
-    expect(keys.size).toBe(10)
+    expect(keys.size).toBe(11)
     for (const d of KPI_REGISTRY) {
       expect(d.label.length).toBeGreaterThan(0)
       expect(['higher', 'lower']).toContain(d.goal)
@@ -172,14 +172,15 @@ describe('r76 · P1-M4 KPI layer', () => {
       'mission_success_rate', 'verdict_precision', 'verdict_f1', 'tool_success_rate',
       'anomaly_count_24h', 'eval_ndcg', 'eval_recall', 'kb_fallback_rate', 'delegation_ratio',
       'digest_gate_fallback_rate',
+      'ingestion_expectation_fails', // P5-M4 — đợt 7
     ]) {
       expect(keys.has(key)).toBe(true)
     }
   })
 
-  test('computeAllKpis: đủ 10 KPI ok, giá trị khớp seed tính tay', async () => {
+  test('computeAllKpis: đủ 11 KPI ok, giá trị khớp seed tính tay', async () => {
     const results = await computeAllKpis()
-    expect(results.length).toBe(10)
+    expect(results.length).toBe(11)
     const byKey = new Map(results.map((r) => [r.key, r]))
 
     for (const r of results) {
@@ -214,12 +215,12 @@ describe('r76 · P1-M4 KPI layer', () => {
     expect(byKey.get('digest_gate_fallback_rate')!.sampleSize).toBe(0)
   })
 
-  test('snapshot upsert idempotent: compute 2 lần vẫn 10 row hôm nay', async () => {
+  test('snapshot upsert idempotent: compute 2 lần vẫn 11 row hôm nay', async () => {
     await computeAllKpis()
     await computeAllKpis() // lần 2 — unique date+kpi chặn nhân bản
     const today = todayUtcDate()
     const count = await db.kpiSnapshot.count({ where: { date: today } })
-    expect(count).toBe(10)
+    expect(count).toBe(11)
     // Giá trị snapshot khớp compute (verdict_precision = 0.6667)
     const snap = await db.kpiSnapshot.findUnique({
       where: { date_kpi: { date: today, kpi: 'verdict_precision' } },
@@ -271,7 +272,7 @@ describe('r76 · P1-M4 KPI layer', () => {
     // Snapshot được update với giá trị mới (value=0, sampleSize=0) — vẫn idempotent
     const today = todayUtcDate()
     const count = await db.kpiSnapshot.count({ where: { date: today } })
-    expect(count).toBe(10)
+    expect(count).toBe(11)
     const snap = await db.kpiSnapshot.findUnique({ where: { date_kpi: { date: today, kpi: 'eval_ndcg' } } })
     expect(snap!.sampleSize).toBe(0)
   })

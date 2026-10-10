@@ -149,9 +149,21 @@
 - Live: PM2 restart sạch; E2E run thật qua durable goal-loop (Omega/space-bunny-free) ghi model='space-bunny-free' ngay từ row running + giữ qua update cuối; route /api/eval/model-comparison 200 (nWithModel=1); probe gate trên production DB 0 tiền sử → insufficient fail-open đúng spec; ADAPTATION_STATS_GATE mặc định OFF (log-only); browser 0 lỗi page/console (Agents tab click OK).
 - Điểm chờ user (đúng điểm dừng quyết định #3 blueprint): bật ADAPTATION_STATS_GATE=on sau 2 đợt quan sát log — KHÔNG tự ý bật.
 
-### TỔNG KẾT LŨY KẾ 6 ĐỢT (FB-P0 → FB-ĐỢT6)
+### ĐỢT FB-ĐỢT7 — scope P5-M2 + P5-M4 + P5-M3 + P5-M1 đợt 7 (đợt code chưa tách commit — fix inline trong commit feat đợt) — 2026-10-10 — KHÉP KẾT SAU 3 VÒNG
 
-- **25 phát hiện** thu nhận qua giao thức — 24 fix ngay trong đợt + 1 (BUG2-043) chốt bằng user decision; **100% có entry Bug_v2.md** (BUG2-039..043 tạo/sự-kiện khi chạy + BUG2-044..061 bổ sung theo tái cơ cấu 1.1 + BUG2-062..063 đợt 6).
+| Vòng | Phát hiện mới | Xác minh |
+|---|---|---|
+| R1 | **2 phát hiện triển khai** (D·P3 scroll-pagination benchmark nhân đôi dữ liệu 50× + C·P3 double-cause test-infra P2022 — tách thành BUG2-066 WAL -shm + BUG2-067 env-leak khi điều tra) — harness độc lập 32 phép (sha256 chuẩn + near-dup 5 kịch bản + NB chấm tay ln(101) từng thành phần + Laplace hữu hạn + PCA ellipse moment độc lập + MRL ellipse recall độc lập 3 seed + biên between/lt/gt) | Fix toàn bộ → r78 25/25 → gate PASS |
+| R2 | **1 (C·P2)** — rà 30 kịch bản luồng: embedding_success_rate FAIL giả đường skip-embeddings (0/n) → doc kẹt partial vĩnh viễn | Fix (chỉ đo khi bước embeddings chạy) → tsc + gate PASS |
+| R3 | **1 (C·P2)** — checklist C1-C8: anh em R2-01 trên đường resume-partial (3/33 tử số sai nghĩa) — hoist realVectorCount + (real+saved)/total | Fix → gate **931/931** → KHÉP KẾT |
+
+- Phát hiện: FB-Đợt7-R1 ×2 (triển khai: BUG2-066, BUG2-067 + BUG2-068 scroll) + R2-01 (BUG2-064) + R3-01 (BUG2-065).
+- Sai kì vọng phía người rà (lần 11): 3 phép (bộ synthetic MRL đầu đặt tín hiệu cả 2048 chiều — ngược tính chất Matryoshka, 2 lần chỉnh tỉ lệ SNR; kì vọng spec "MRL thật ≥98%" bại trên dữ liệu thật 0.73-0.89 — ghi nhận là sai-kỳ-vọng PHÍA SPEC, test tách 2 lớp trung thực: cơ chế ≥98% synthetic + sàn 0.7 thật + báo cáo NO-GO chuyển đọc).
+- Live: PM2 restart ×2 sạch; /api/health healthy; upload E2E cùng bytes lần 2 → **409 + existingDocumentId** đúng spec; near-dup E2E (PDF tái xuất khác byte cùng nội dung) → **status='duplicate' + duplicateOf trỏ bản gốc + getChunkCount=0 (không sinh chunk)**; reExtract doc thật chạy hết pipeline → **marker P5-M4 ghi processingSteps** (`entity_rate = 14.5 NGOÀI [0.2,6]` — cảnh báo chất lượng dữ liệu THẬT đầu tiên của lớp expectation) + KPI ingestion_expectation_fails live value=1 n=1; graph-explore trả map.xy PCA thật (16/54 node, variance [0.15,0.12]) + cache 1h xác nhận; collections-health hiện pilot entry (exists=false đúng — pilot OFF); ADAPTATION_STATS_GATE=on giữ qua restart; browser THE MAGNUM OPUS 0 lỗi console, doc list hiện badge "duplicate".
+
+### TỔNG KẾT LŨY KẾ 7 ĐỢT (FB-P0 → FB-ĐỢT7)
+
+- **30 phát hiện** thu nhận qua giao thức — 29 fix ngay trong đợt + 1 (BUG2-043) chốt bằng user decision; **100% có entry Bug_v2.md** (BUG2-039..043 tạo/sự-kiện khi chạy + BUG2-044..061 bổ sung theo tái cơ cấu 1.1 + BUG2-062..063 đợt 6 + BUG2-064..068 đợt 7).
 - Mọi đợt khép đúng nhịp **3 vòng** (R3 luôn 0 phát hiện mới) — chưa đợt nào chạm trần 5 vòng của ràng buộc an toàn.
-- **29 phép sai-kỳ-vọng-phía-người-rà** ghi nhận qua 6 đợt (FB-P0: 11 · FB-P1: 1 · Đợt3: 1 · Đợt4: 6 · Đợt5: 3 · Đợt6: 7) — chuỗi tái bản tới "lần 9" (đợt 6), xác nhận giá trị quy tắc chấm chéo 3 phía (C2).
-- Gate kiểm thử tăng đều: **644 → 671 → 683 → 722 → 802 → 842** test (mỗi fix kèm regression — không nợ xác minh).
+- **32 phép sai-kỳ-vọng-phía-người-rà** ghi nhận qua 7 đợt (FB-P0: 11 · FB-P1: 1 · Đợt3: 1 · Đợt4: 6 · Đợt5: 3 · Đợt6: 7 · Đợt7: 3 + 1 sai-kỳ-vọng phía SPEC lần đầu ghi nhận dạng chính thức: giả định MRL ≥98% của §P5-M1) — chuỗi tái bản tới "lần 11", xác nhận giá trị quy tắc chấm chéo 3 phía (C2).
+- Gate kiểm thử tăng đều: **644 → 671 → 683 → 722 → 802 → 842 → 931** test (mỗi fix kèm regression — không nợ xác minh).

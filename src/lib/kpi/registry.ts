@@ -283,6 +283,63 @@ export const KPI_REGISTRY: KpiDef[] = [
       }
     },
   },
+  {
+    key: 'ingestion_expectation_fails',
+    label: 'Ingestion expectation vi phạm (7 ngày — P5-M4)',
+    goal: 'lower',
+    // P5-M4 (blueprint stats §P5-M4, mục #12 — DA.pdf §Data Quality): đếm số
+    // expectation vi phạm (fail + warn) ghi trong Document.processingSteps của
+    // các document được đánh giá 7 ngày qua. KHÔNG đặt target — KPI informative
+    // tới khi có baseline dữ liệu thật (tiền lệ KPI không target).
+    compute: async () => {
+      const since = new Date(Date.now() - 7 * 24 * 3600 * 1000)
+      try {
+        const docs = await db.document.findMany({
+          where: { updatedAt: { gte: since } },
+          select: { processingSteps: true },
+        })
+        // Marker do pipeline-expectations ghi: "expectations[P5-M4]: fail=N warn=M · …"
+        // (mỗi doc chỉ có 1 marker — pipeline strip marker cũ trước khi ghi mới)
+        const markerRe = /expectations\[P5-M4\]: fail=(\d+) warn=(\d+)/
+        let evaluated = 0
+        let failTotal = 0
+        let warnTotal = 0
+        const perExpectation: Record<string, number> = {}
+        for (const doc of docs) {
+          let steps: Array<{ name?: string; detail?: string | null }> = []
+          try {
+            steps = JSON.parse(doc.processingSteps || '[]')
+          } catch {
+            continue // steps JSON hỏng — không phải document được đánh giá
+          }
+          const emb = steps.find(s => s.name === 'embeddings')
+          const m = emb?.detail ? emb.detail.match(markerRe) : null
+          if (!m) continue // chưa qua đánh giá expectation (doc cũ / pipeline chưa chạm cuối)
+          evaluated += 1
+          failTotal += Number(m[1])
+          warnTotal += Number(m[2])
+          for (const part of (emb!.detail as string).split(' · ')) {
+            const idMatch = part.match(/^([a-z_]+) = (-?[\d.]+) NGOÀI/)
+            if (idMatch) perExpectation[idMatch[1]] = (perExpectation[idMatch[1]] || 0) + 1
+          }
+        }
+        return {
+          value: failTotal + warnTotal,
+          n: evaluated,
+          meta: {
+            fail: failTotal,
+            warn: warnTotal,
+            docsEvaluated: evaluated,
+            perExpectation,
+            source: 'Document.processingSteps marker P5-M4 (pipeline-expectations.ts)',
+            note: evaluated === 0 ? 'chưa có document nào qua đánh giá expectation' : undefined,
+          },
+        }
+      } catch {
+        return { value: 0, n: 0, meta: { note: 'đọc Document thất bại — fail-open' } }
+      }
+    },
+  },
 ]
 
 export type KpiStatus = 'on_target' | 'near' | 'off' | 'no_target' | 'no_data'

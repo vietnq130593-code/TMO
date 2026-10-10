@@ -1560,6 +1560,13 @@ export function parseEvalVerdict(raw: string): EvalVerdict | null {
 // quyết tốn nhất. Cắm tại EVALUATE phase SAU verify-guard (xuống dưới). Mặc
 // định OFF — bật: RUNTIME_JUDGES=critical (chỉ run complete đắt) | all (mọi
 // verdict, quan sát). Rollback = unset env.
+//
+// QUYẾT ĐỊNH 2026-10-10 (user ủy quyền theo đề xuất cho quyết định treo đợt 5):
+// TIẾP TỤC OFF. Căn cứ: (1) probe đợt 5 3-judge đồng thuận cao (0.6/0.7/0.6 —
+// chưa có tranh chấp thực tế đòi ensemble); (2) kimi-k3 judge ~767s/run → bật
+// critical nghĩa là ×3 chi phí + độ trễ trên đường nóng; (3) verdict 1-judge là
+// phân phối mà calibration V1/V2 (P3-M1/M2) đang huấn luyện — trộn mode sẽ làm
+// bẩn dữ liệu train. Bật lại khi có nhu cầu thực (verdict disputes lặp lại).
 
 /** Bộ tiêu chí rút gọn từ 18 rules hiện hành — 5 tiêu chí lõi (spec §P3-M3) */
 export const RUNTIME_JUDGE_CRITERIA: readonly string[] = [

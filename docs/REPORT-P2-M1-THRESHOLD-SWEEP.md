@@ -1,11 +1,18 @@
 # BÁO CÁO P2-M1 · ROC/PR THRESHOLD SWEEP — BẢNG NGƯỠNG NỘP USER DUYỆT
 
-> **Trạng thái: CHỜ PHÊ DUYỆT** — sinh 2026-10-10 bởi `GET /api/eval/threshold-sweep`
+> **Trạng thái: CHỜ DỮ LIỆU n ≥ 30 (quyết định user-ủy-quyền 2026-10-10)** — sinh
+> 2026-10-10 bởi `GET /api/eval/threshold-sweep`, làm mới tự động mỗi lần gọi
 > (blueprint `BLUEPRINT-STATS-LEARNING-P0-P6.md` §P2-M1, mục #6 — ML.pdf §Evaluation Curves)
 >
 > **NGUYÊN TẮC:** KHÔNG hằng số nào bị đổi cho tới khi user duyệt từng dòng.
 > Khi duyệt: hằng số được đổi kèm comment `swept 2026-10-10, n=…, precision/recall đạt`
 > (tiền lệ option-b của `CONFIDENCE_THRESHOLD`).
+>
+> **QUYẾT ĐỊNH 2026-10-10 (user ủy quyền theo đề xuất cho các quyết định treo):**
+> mọi hằng số **GIỮ NGUYÊN tới khi n ≥ 30** — đúng khuyến nghị kỹ thuật của chính
+> báo cáo này (hiện n=2 evaluator / n=4 KB, chưa có negative nào để đo precision
+> thật). Bảng này không còn là điểm dừng chờ user: khi điều kiện n ≥ 30 đạt, báo
+> cáo tự sinh số đề xuất cụ thể và LÚC ĐÓ nộp duyệt từng dòng.
 
 ---
 
