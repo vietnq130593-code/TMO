@@ -802,3 +802,85 @@
 - **Hiện tượng:** benchmark đầu tiên báo theopus_chunks n=1650 vector (= 33 × 50 trang) và recall@5 = 1.0000. Điều tra: `next_page_offset` của Qdrant là `null` khi hết dữ liệu (không phải undefined) → điều kiện dừng không bao giờ khớp → mỗi trang lặp lại trang đầu. Vector trùng nhau 50 bản → top-k của query chứa chính các bản sao của cùng point → recall trùng nhau giả.
 - **Tác động consumer:** bảng recall đối chứng (căn cứ quyết định điểm dừng #4 — chuyển đường đọc 512 hay không) sẽ kết luận SAI 1.0 thay vì 0.88 → user duyệt chuyển đường đọc trên số ảo.
 - **Fix:** dừng khi next_page_offset là null HOẶC undefined + dedup theo point id + cap 5000 phòng thủ + nhận diện vector nested (client with_vector). File đụng: scripts/matryoshka-benchmark.ts. Kiểm chứng: benchmark lại n=33 thật → recall@5 0.8848 / recall@10 0.9152 (khớp đo tay độc lập bằng fetch REST phân trang đúng); báo cáo REPORT-P5-M1 sinh từ bản đúng. Phát hiện đợt FB-ĐỢT7 khi đối chiếu số benchmark với điểm-count API (33 ≠ 1650).
+
+---
+
+## PHÁT HIỆN GIAO THỨC FIXBUG — ĐỢT FB-ĐỢT7-R4/R5 (kích hoạt lại theo chỉ thị user 2026-10-10: "Kích hoạt giao thức Fixbug cho những gì triển khai trong đợt 7")
+
+> Bối cảnh: FB-ĐỢT7 đã khép 3 vòng inline trong commit b3d8638. User chỉ thị kích hoạt lại giao thức → chạy tiếp R4 (audit độc lập 3 subagent + chấm chéo người điều phối) + R5 (audit diff R4) + vòng fix toàn bộ. 20 phát hiện đề xuất → 18 nhận sau chấm chéo (2 nghi vấn của auditor R1-a chuyển thành 2 fix bổ sung có chủ đích: probe sanitize + embedOnly marker). Toàn bộ fix kèm regression test trong tests/r78-fb7-regression.test.ts (32 test).
+
+### BUG2-069 · C · P3 — chunks_per_page KHÔNG BAO GIỜ đo được ở lần index đầu tiên (doc chạy hết trong 1 batch): snapshot `document` lấy 1 lần đầu pipeline giữ page_count=null của lúc upload — FB-Đợt7-R4-A1 (auditor R1-a #1, chấm chéo điều phối: truy vết 4 mắt xích 2230→2560→3956)
+- **Hiện tượng:** upload ghi pageCount=null; bước parse ghi pageCount vào Qdrant/SQLite qua updateDocProgress nhưng biến cục bộ `document` không được refresh; khối P5-M4 dùng `document.page_count ?? 0` → 0 → metric "chưa đo". Chỉ đo được khi doc ≥2 batch (fetch lại snapshot) hoặc reprocess.
+- **Tác động consumer:** cảnh báo warn "parse hỏng/chunking lỗi" vắng trên đường phổ biến nhất (doc nhỏ index 1 lần); KPI chunks_per_page mù với doc mới.
+- **Fix:** hoist `freshPageCount` (gán sau parse đường fresh; đường resume fallback snapshot từ run trước — đúng nghĩa). File: process/route.ts. Kiểm chứng: suy luận 2 đường (fresh run này có số; resume có số từ run trước) + gate 963/963.
+
+### BUG2-070 · C·P3 — 5 fix inline BUG2-064..068 KHÔNG có test regression nào pin (C5 vi phạm 5/5) — FB-Đợt7-R4 (auditor R1-a #2 + R1-b #7 + R1-c F1, hội tụ)
+- **Hiện tượng:** grep toàn bộ tests/ — 0 hit cho hasEmbeddingsData/realVectorCount/next_page_offset/resolveCopySourceUrl; logic đo nằm inline trong route 6000 dòng, r78 chỉ test lib generic. Revert bất kỳ fix nào → không test nào fail.
+- **Tác động consumer:** BUG2-064/065 từng là P2 (doc kẹt 'partial' vĩnh viễn) — có thể hồi quy lặng lẽ.
+- **Fix:** tách logic ra thuần + 32 test regression (tests/r78-fb7-regression.test.ts): computeEmbeddingSuccessRate pin 4 đường đo (skip→null/fresh n/n/resume 30+3/alias kẹp 1); savedVectorCount pin F2; hasEnoughValidProbes pin A5; isQdrantScrollExhausted pin BUG2-068 (null+undefined); resolveCopySourceUrl + copySqliteFiles + DB_COPY_SUFFIXES pin BUG2-066/067 + F4 (dựng cây /tmp giả lập project). Kiểm chứng: gate 963/963 (931→963, +32).
+
+### BUG2-071 · C·P3 — expectation zero_vector_rate CHẾT về cấu trúc: không bao giờ vi phạm (nhánh guard không đo, nhánh sạch luôn 0) — FB-Đợt7-R4-A3 (auditor R1-a #3 + R1-c F2(ii), chấm chéo điều phối đọc 2 nhánh 4030-4073)
+- **Hiện tượng:** nhánh sạch vào được chỉ khi zeroVectorChunks=0 → rate=0 → PASS luôn; nhánh guard (zero-vector thật >0) dùng expectationMeasurements không chứa metric → evaluated=false. Comment cũ "chỉ đo được khi guard verify sạch" khái quát hóa sai 2/3 sub-case (F5).
+- **Tác động consumer:** KPI ingestion_expectation_fails mù hoàn toàn với sự cố zero-vector — trái mục đích khai báo "nâng thành expectation thống kê để bắt xu hướng hỏng một phần".
+- **Fix:** guard-branch đo zero_vector_rate = zeroVectorChunks/verifyChunks khi !verifyBlind (mù giữ evaluated=false — thiếu đo ≠ hỏng) + comment viết lại trung thực + đồng bộ điều kiện gắn marker (thêm notMeasured>0 như nhánh sạch). Kiểm chứng: test pin 0.03→fail / 0.0099→pass / 0.01→fail (lt ngặt) + gate.
+
+### BUG2-072 · C·P3 — entity_rate = 0 (extract miss hoàn toàn) KHÔNG được đo: guard entityCount>0 loại mất cận dưới warn [0.2,6] ở đúng mức 0 tuyệt đối — FB-Đợt7-R4-A4 (auditor R1-a #4)
+- **Hiện tượng:** LLM chạy mà 0 entity → localEntity.count=0 → guard chặn không đo → warn "miss" không bao giờ fires ở mức nặng nhất.
+- **Tác động consumer:** doc extract trắng tinh không bị cảnh báo.
+- **Fix:** entity_rate đo khi savedChunks>0 (đếm từ DB — có sẵn mọi đường); relationship_per_entity giữ guard mẫu số >0. Kiểm chứng: test pin entity_rate=0 → evaluated=true + passed=false (warn) + gate.
+
+### BUG2-073 · C·P3 — near-dup quyết định trùng trên 1 probe duy nhất khi provider embed hỏng một phần (3 thử/1 sống) — khe chặn-nhầm — FB-Đợt7-R4-A5 (auditor R1-a #5, chấm chéo: embeddings.ts:604 trả {vector:[]} không throw → partial-failure reachable)
+- **Hiện tượng:** generateEmbedding trả vector rỗng thay vì throw khi cả NVIDIA+OpenRouter chết từng text → probeVectors lọc bỏ → có thể còn 1 probe → "MỌI probe cùng doc" tầm thường → duplicate=TRUE trên 1 bằng chứng (ngược triết lý spec "an toàn theo hướng không chặn nhầm").
+- **Tác động consumer:** doc hợp lệ có 1 chunk khớp boilerplate doc khác ≥0.98 có thể bị đánh dấu duplicate nhầm, không index.
+- **Fix:** hasEnoughValidProbes(valid, attempted) = valid ≥ min(2, attempted) — 3/1 sống → fail-open; doc 1-chunk (1/1) vẫn quyết được (probe là toàn bộ nội dung). File: doc-dedup.ts. Kiểm chứng: 5 test pin ma trận valid/attempted + gate.
+
+### BUG2-074 · C·P3 — UI badge "trùng với …" thực tế KHÔNG tồn tại: 0 consumer của duplicate_of/duplicate_of_title, STATUS_COLORS/LABELS thiếu key 'duplicate' (hiển thị fallback chữ thô), đường GET fresh không phát 2 trường (chỉ đường cache 10s có → badge nhấp nháy) — FB-Đợt7-R4-A6 (auditor R1-a #6)
+- **Hiện tượng:** worklog đợt 7 ghi "doc list hiển thị badge duplicate" — thực ra là fallback text thô; overlay sinh 2 trường chết không ai đọc.
+- **Tác động consumer:** spec §P5-M2 "hiển thị badge trùng với…" không đạt trên UI thật.
+- **Fix:** STATUS_LABELS duplicate='Bản trùng' + màu riêng; render span "trùng với …" khi status=duplicate; đường fresh (R2-map + SQLite-append) phát duplicate_of/duplicate_of_title cùng dạng overlay; overlay thêm nhánh delete chống stale (R5-P4#6). Kiểm chứng: browser live — badge + nhãn hiển thị đúng, mobile 390px không tràn, 0 lỗi console.
+
+### BUG2-075 · C·P4 — response 409 exact-dup NUỐT mảng errors: request hỗn hợp (1 trùng + 1 lỗi) client API không biết file lỗi gì — FB-Đợt7-R4-A7 (auditor R1-a #7)
+- **Fix:** body 409 kèm `errors` khi non-empty (body 200 vốn có). Kiểm chứng: đọc code + logic tương đương 200-path.
+
+### BUG2-076 · D·P4 — JSDoc exactDupResponseStatus nói "MỌI file đều trùng hash" nhưng hành vi thật là "không file mới nào được lưu" (1 trùng + 1 lỗi cũng 409) — FB-Đợt7-R4-A8 (auditor R1-a #8)
+- **Fix:** JSDoc viết lại đúng điều kiện duplicates>0 ∧ uploaded=0; hành vi giữ nguyên. (Cùng lớp bài học FB-Đợt6-R1-01 doc-fidelity.)
+
+### BUG2-077 · C·P3 — pcaTop2 kẹt ở trục PHỤ khi diag(C) trùng vector riêng phụ (dữ liệu đối xứng hoán-trục bit-perfect): trả hướng SAI var 0.056 thay vì trục trội 0.944, KHÔNG null như comment tuyên bố — FB-Đợt7-R4-B1 (auditor R1-b #1; chấm chéo điều phối TỰ TÁI LẬP bằng script riêng: 8 điểm nguyên đối xứng → component1=trục phụ |cos|=1.000000, var=[0.0559,0] vs tính tay [0.9441,0.0559])
+- **Hiện tượng:** C=[[a,b],[b,a]] với b<0 (cụm y=−x trội + y=x phụ, var_x=var_y) → diag(C) ∝ (1,1) = eigenvector PHỤ → power iteration đứng yên ở đó mãi → component1 sai hướng hoàn toàn, component2=0 (deflation để lại eigenvector-0). Xác suất embedding thật ~0 nhưng synthetic/test có thể dính.
+- **Tác động consumer:** bản đồ tri thức graph-explore vẽ sai hướng trên dữ liệu đối xứng; comment lừa dối người bảo trì ("λ hội tụ 0 → null").
+- **Fix:** phát hiện "v₀ là vector riêng chính xác" bằng residual phép nhân đầu (w₀−(v₀ᵀw₀)v₀ ≤ 1e-12·‖w₀‖, hoặc w₀=0) → bứt bằng nhiễu tất định 1e-4 (pattern xen kẽ ±1 + dự phòng) — trục trội thì iteration tự kéo về đúng nó, trục phụ thì thoát ra. Hạn chế ghi trung thực: cặp eigen gần suy biến (λ1/λ2→1) hội tụ chậm — mọi hướng trong mặt phẳng suy biến đều hợp lệ về phương sai. Kiểm chứng: regression test B1 pin component1=trục trội + var khớp tính tay + component2 sống lại; harness auditor R5 38 phép độc lập khớp.
+
+### BUG2-078 · C·P3 — resolveEntities trả duplicates NHÂN ĐÔI: nbThenFuzzyMatchResolution push vào CHÍNH mảng exactDuplicates truyền vào rồi resolveEntities spread 2 lần cùng reference → duplicatesFound phình 2× (pattern di truyền từ fuzzyMatchResolution gốc trước đợt 7) — FB-Đợt7-R4-B2 (auditor R1-b #2 với script chứng minh; pre-existing nhưng hàm được đợt 7 viết lại nên thuộc scope)
+- **Fix:** bỏ param duplicates đầu vào, hàm tự trả mảng riêng; mergeMap/updateRelationshipReferences vô hại (idempotent). Kiểm chứng: test pin 2 exact + 1 fuzzy → 3 entry (không phải 6), mỗi cặp đúng 1 lần.
+
+### BUG2-079 · C·P3 — pcaTop2 chặn event-loop ~4.4-5.8s trên 500×2048 (build C d×d = n·d² chiếm phần lớn) — FB-Đợt7-R4-B3 (auditor R1-b #3 đo 5790ms; điều phối tự đo 4431ms cùng quy mô)
+- **Fix:** implicit products khi 2n<d: C·v = Xᵀ(X·v)/(n−1) — O(n·d)/lần, không build C, không cấp phát d×d (33MB). Kiểm chứng: đo trực tiếp 168×2048: cũ 1512ms (build C riêng 1286ms) vs mới 174ms = 8.7×; live graph-explore 168-node 1.54s cả request; harness R5: 4 bộ (n,d) implicit khớp tham chiếu explicit độc lập sai số ≤2e-11 + test pin implicit vs eigen đóng dạng.
+
+### BUG2-080 · C·P3 — graph-explore cacheKey lowercase nhưng Neo4j MATCH phân biệt hoa/thường → "neural network" ăn nhầm đồ thị của "Neural Network" (tái lập live: fromCache=true nhận graph bản hoa) — FB-Đợt7-R4-B4 (auditor R1-b #4)
+- **Fix:** cacheKey = entityName.trim() (giữ hoa/thường). Kiểm chứng: suy luận trực tiếp + live "Bun" cache riêng biệt.
+
+### BUG2-081 · D·P4 — ensurePilotCollection KHÔNG mutex: 2 dual-write fire-and-forget song song → create đụng nhau (409 không-retry-được) hoặc drop-recreate đan nhau mất vài điểm pilot — FB-Đợt7-R4-B5 (auditor R1-b #5; hậu quả nhẹ — pilot disposable)
+- **Fix:** promise-chain mutex trong-process (5 dòng). Kiểm chứng: đọc code + R5-audit (n) xác nhận không unhandled rejection.
+
+### BUG2-082 · C·P4 — collections-health ép dimMismatch=false cho MỌI collection pilot kể cả sai dim THẬT so với khai báo 512 (ai tạo tay 256-dim → health XANH) + ternary dimExpected dư + comment tự mâu thuẫn — FB-Đợt7-R4-B6 (auditor R1-b #6)
+- **Fix:** so sánh trung thực với dimExpected khai báo (512) — pilot đúng dim vẫn XANH (spec "không làm health đỏ" chỉ áp cho legit 512), sai dim ĐỎ rồi ensurePilotCollection drop-recreate tự chữa; bỏ ternary dư; comment viết lại (R5 dọn comment stale dòng 46). Kiểm chứng: live pilot exists=false không đỏ; đọc code 2 nhánh.
+
+### BUG2-083 · C·P3 — embeddingsSavedCount đếm vector CHUẨN BỊ ghi kể cả khi updateChunkVectors=false (Qdrant lỗi) → embedding_success_rate PASS giả 1.0 đúng lúc mass-embed-fail (tín hiệu đo sai chiều đúng lúc cần) — FB-Đợt7-R4-F2(i) (auditor R1-c F2; semantics trả-về tiền tồn tại ROUND-32, fix đợt 7 tiêu thụ)
+- **Fix:** generateAndSaveEmbeddings trả savedVectorCount(ok, vectorPoints.length) — chỉ đếm batch ghi thành công; detail step "0/33" giờ trung thực hơn "33/33" giả; không consumer nào phụ thuộc semantics cũ (grep toàn repo). Kiểm chứng: test pin savedVectorCount + gate.
+
+### BUG2-084 · C·P4 — preload resolveCopySourceUrl kiểm "trong project" bằng startsWith nguyên văn: đường TUYỆT ĐỐI chứa ".." (file:/…/proj/../evil.db) lọt kiểm → copy DB ngoại lai (đường tương đối vốn tự chuẩn hoá qua path.resolve) — FB-Đợt7-R4-F4 (auditor R1-c F4)
+- **Fix:** path.resolve cho cả đường tuyệt đối. Kiểm chứng: test pin F4 dựng cây /tmp: sneaky URL → resolves về .env project, không trả bản ngoài.
+
+### BUG2-085 · C·P4 — đường embedOnly reset steps KHÔNG đánh giá P5-M4 → marker + KPI ingestion_expectation_fails biến mất tới lần full-pipeline sau — FB-Đợt7-R4 (từ "nghi vấn chưa chắc" R1-a, điều phối quyết định là finding thật)
+- **Fix:** khối expectations cho embedOnly (đúng bộ helper đường chính: chunks_per_page từ parsedPages, embedding_success_rate từ embeddingsSavedOk, entity/rel từ DB, zero_vector_rate từ số verify hoisted — R5-P4#5 bổ sung) + gắn marker SAU markStepPending (cùng thứ tự đường chính) + fail→partial. Kiểm chứng: đọc luồng + gate.
+
+### BUG2-086 · D·P3 — scripts/matryoshka-benchmark.ts (nơi fix BUG2-068) KHÔNG được git track (/scripts/* bị gitignore, không có exception) → fix không sống sót qua clone, benchmark (bằng chứng nghiệm thu P5-M1) chỉ tồn tại trên đĩa sandbox — FB-Đợt7-R5 (điều phối phát hiện khi xác minh phát hiện R5-a; git ls-files + check-ignore xác nhận)
+- **Fix:** thêm exception !/scripts/matryoshka-benchmark.ts vào .gitignore + git add. Kiểm chứng: git status hiện file A (staged).
+
+### BUG2-087 · C·P4 — lô hygiene R5 (auditor R5 #1/#3 + live probe điều phối, mỗi mục fix riêng): (a) test buildFakeProject rò 10 thư mục /tmp/lần chạy (đo thật 20 dir sau 2 run) → try/finally + _cleanup; (b) pcaTop2 PC2 khởi tạo từ diag(C) thay vì diag(C₂) (thay đổi ngữ nghĩa ngoài ý đồ khi viết lại — harness chứng minh lành nhưng khôi phục về bản gốc cho đúng); (c) λ/trace vượt 1 cỡ epsilon (đo thật 1.0000000000000027 khi 2 điểm thẳng hàng) → clamp [0,1]; (d) guard-branch gắn marker thiếu điều kiện notMeasured>0 (không đồng bộ nhánh sạch) → thêm; (e) near-dup probe embed nội dung RAW trong khi Step 11 embed bản sanitizeForDB → lệch L1/L2 cache + so khớp sai nghĩa → probe embed sanitizeForDB(content) (auditor R1-a nghi vấn, xác minh idempotent + fuzz 5000 bởi R5) — FB-Đợt7-R4/R5
+- **Kiểm chứng:** từng mục nêu trong fix; gate 963/963 sau toàn bộ.
+
+### GHI NHẬN ĐẶC BIỆT R4/R5
+- **Sai-kỳ-vọng phía người-rà (lần 12-13):** (1) kì vọng test biên zero_vector_rate viết NGƯỢC — spec "lt 0.01" là ngặt: 0.01 VI PHẠM (người điều phối tự bắt khi chạy test); (2) kì vọng tay implicit-PCA quên số hạng hiệp phương sai cov(a,b) khi "giả sử 2 trục là trục chính" — code đúng, test sửa theo eigen đầy đủ. Auditor R5 cũng tự bắt 2 "FAIL" hóa ra là giới hạn tol dùng chung bản cũ (không phải lỗi mới).
+- **Phát hiện bị bác bỏ sau chấm chéo:** 0/20 — toàn bộ phát hiện auditor đều xác minh đúng (lần đầu tiên 7+ đợt không bác cái nào; chất lượng auditor tăng theo chất lượng giao thức).
+- **Giới hạn tiền tồn tại ghi nhận (không phải lỗi đợt 7):** pcaTop2 maxIter=100 chưa đủ hội tụ trên phổ gần-suy-biến λ2/λ1≈0.98 (cũ=mới cho kết quả trùng khớp tuyệt đối — thay maxIter là đánh đổi độ trễ, để nguyên + đã ghi trong header pca.ts).

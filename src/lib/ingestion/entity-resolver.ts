@@ -509,7 +509,6 @@ export interface ResolveOptions {
  */
 function nbThenFuzzyMatchResolution(
   resolved: Map<string, ResolvedEntity>,
-  duplicates: DuplicatePair[],
   nbModel: NaiveBayesEntityModel | null,
   threshold = 0.85
 ): {
@@ -520,6 +519,13 @@ function nbThenFuzzyMatchResolution(
   const entries = Array.from(resolved.entries())
   const toMerge: Array<{ source: string; target: string; similarity: number; method: 'fuzzy' | 'nb' }> = []
   const processed = new Set<string>()
+  // FB-Đợt7-R4 (B2): mảng duplicates RIÊNG — bản cũ push vào CHÍNH mảng
+  // exactDuplicates truyền vào rồi resolveEntities spread 2 lần cùng một
+  // reference ([...exactDuplicates, ...fuzzyDuplicates] với 2 tên cùng mảng)
+  // → mỗi entry xuất hiện 2 LẦN → resolutionResult.duplicates.length và
+  // duplicatesFound của response pipeline phình 2× (pattern di truyền từ
+  // fuzzyMatchResolution gốc — hàm này được đợt 7 viết lại nên fix tại đây).
+  const duplicates: DuplicatePair[] = []
 
   // Compare all pairs
   for (let i = 0; i < entries.length; i++) {
@@ -625,10 +631,11 @@ export function resolveEntities(entities: ExtractedEntity[], options?: ResolveOp
   const afterExactMatch = resolved.size
 
   // Step 2: P5-M3 — NB (khi model usable) quyết vùng tin cậy, fuzzy fallback
-  // vùng xám; không model → đúng hành vi fuzzy cũ tuyệt đối
+  // vùng xám; không model → đúng hành vi fuzzy cũ tuyệt đối.
+  // FB-Đợt7-R4 (B2): mảng exact KHÔNG còn truyền vào để push chung — hàm bước
+  // 2 tự trả mảng riêng (bản cũ 2 reference trùng → duplicates nhân đôi).
   const { resolved: finalResolved, duplicates: fuzzyDuplicates } = nbThenFuzzyMatchResolution(
     resolved,
-    exactDuplicates,
     options?.nbModel ?? null
   )
   const afterFuzzyMatch = finalResolved.size

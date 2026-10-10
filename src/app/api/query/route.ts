@@ -496,7 +496,12 @@ const graphExploreCache = new Map<string, { result: Omit<GraphExploreMapResult, 
 
 /** exploreEntity + PCA map — có cache 1h. Fail-open: Neo4j/PCA lỗi vẫn trả đồ thị. */
 async function exploreEntityWithMap(entityName: string): Promise<GraphExploreMapResult> {
-  const cacheKey = entityName.toLowerCase().trim()
+  // FB-Đợt7-R4 (B4): cache key GIỮ nguyên hoa/thường — Neo4j `MATCH {name:$name}`
+  // phân biệt hoa/thường nên "neural network" và "Neural Network" là 2 truy vấn
+  // KHÁC nhau (bản cũ lowercased key → truy vấn thường ăn nhầm đồ thị của bản
+  // hoa — đã tái lập live: "neural network" nhận fromCache=true của "Neural
+  // Network"). Trim vẫn giữ (khoảng trắng thừa là cùng một ý định truy vấn).
+  const cacheKey = entityName.trim()
   const cached = graphExploreCache.get(cacheKey)
   if (cached && Date.now() < cached.expiresAt) {
     return { ...cached.result, fromCache: true }

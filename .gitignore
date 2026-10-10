@@ -85,6 +85,11 @@ worklog.md
 # stack. Chạy lại bất kỳ lúc nào để tái kiểm chứng:
 #   env -u DATABASE_URL bun scripts/round37-e2e-probe.ts
 !/scripts/round37-e2e-probe.ts
+# NGOẠI LỆ: matryoshka-benchmark.ts — script đo recall đối chứng 2048-vs-512
+# (P5-M1, REPORT-P5-M1-MATRYOSHKA.md + BUG2-068 fix scroll next_page_offset
+# null) — FB-Đợt7-R5 phát hiện file từng KHÔNG được track → fix BUG2-068
+# không sống sót qua clone; benchmark là bằng chứng nghiệm thu P5-M1 nên track.
+!/scripts/matryoshka-benchmark.ts
 # NGOẠI LỆ: watch-agents.ts — trạm quan sát vận hành agents (Task 54): xem
 # runs/jobs/messages/reviews mới + phát hiện stuck/failed — ops theo dõi
 # agents chạy thật: DATABASE_URL=... bun scripts/watch-agents.ts --since-min 60

@@ -1139,10 +1139,25 @@ export function isPilotCollection(name: string): boolean {
  * trộn thêm sai số lượng tử hóa). Tồn tại sai dim → drop+recreate (dữ liệu
  * pilot là metadata tái sinh được từ bản 2048 — không mất mát thật).
  *
+ * FB-Đợt7-R4 (B5): serialize các lời gọi trong-process (promise-chain mutex) —
+ * dual-write fire-and-forget từ 2 storeMemory song song có thể cùng chạy
+ * ensure → create đụng nhau (409 không-retry-được — isQdrantRetryableError
+ * không coi 409 là retryable) hoặc drop-recreate đan nhau mất vài điểm pilot.
+ * Pilot là disposable nên hậu quả nhẹ, nhưng 1 chuỗi promise là 5 dòng — bỏ
+ * luôn cả lớp rủi ro.
+ *
  * @returns true nếu collection sẵn sàng để upsert; false khi Qdrant lỗi
  *          (caller fire-and-forget — pilot không được phép làm hỏng flow chính)
  */
+let pilotEnsureChain: Promise<unknown> = Promise.resolve()
 export async function ensurePilotCollection(name: string, dims: number): Promise<boolean> {
+  const run = pilotEnsureChain.then(() => doEnsurePilotCollection(name, dims))
+  // Không để lỗi của lần trước kẹt chuỗi (catch nuốt để lần sau vẫn chạy)
+  pilotEnsureChain = run.catch(() => undefined)
+  return run
+}
+
+async function doEnsurePilotCollection(name: string, dims: number): Promise<boolean> {
   try {
     const result = await withQdrantRetry(async () => {
       const collections = await qdrant.getCollections()
@@ -1173,4 +1188,15 @@ export async function ensurePilotCollection(name: string, dims: number): Promise
     console.warn(`[Qdrant] P5-M1 ensurePilotCollection(${name}) failed (non-fatal):`, err instanceof Error ? err.message : String(err))
     return false
   }
+}
+
+/**
+ * Scroll Qdrant đã hết trang chưa — FB-Đợt7-R4 (BUG2-068/C5): client @qdrant
+ * trả `next_page_offset: null` khi hết nhưng cũng có thể `undefined` tùy phiên
+ * bản/serializer — dừng khi BẤT KỲ dạng "không có offset" nào. Bản cũ của
+ * script benchmark chỉ kiểm `=== undefined` → Qdrant trả null → cuộn lại
+ * trang đầu 50 lần nhân đôi dữ liệu (BUG2-068). Xuất ra đây để test pin.
+ */
+export function isQdrantScrollExhausted(nextPageOffset: unknown): boolean {
+  return nextPageOffset === null || nextPageOffset === undefined
 }

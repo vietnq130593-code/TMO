@@ -202,3 +202,47 @@ export function stripExpectationMarker(detail: string | null | undefined): strin
   if (!detail) return ''
   return detail.replace(MARKER_RE, '').replace(/\s*·\s*$/, '').trim()
 }
+
+// ==================== HELPER ĐO (dùng chung pipeline chính + embedOnly) ====================
+// FB-Đợt7-R4 (C5): logic đo embedding_success_rate từng sống inline trong route
+// 6000 dòng — không test nào pin được hành vi fix BUG2-064/065. Tách ra thuần
+// để regression test chứng minh 4 đường đo (skip/fresh/resume-partial/alias).
+
+export interface EmbeddingSuccessRateArgs {
+  /** Bước embeddings CÓ chạy trong lần pipeline này không (đường skip = không đo) */
+  embeddingsStepRan: boolean
+  /** Tổng số chunk của document (mẫu số) */
+  chunkCount: number
+  /** Số chunk đã có vector THẬT TRƯỚC run này (đường resume-partial) */
+  realVectorsBefore: number
+  /** Số vector mới lưu THÀNH CÔNG trong run này */
+  vectorsSaved: number
+}
+
+/**
+ * embedding_success_rate — trả null khi KHÔNG đo được (bước embeddings không
+ * chạy / không có chunk → evaluated=false, "thiếu đo ≠ hỏng"), ngược lại
+ * min(1, (vector-thật-trước + mới-lưu-thành-công)/tổng-chunk).
+ *
+ * Pin 4 đường (BUG2-064 + BUG2-065 + FB-Đợt7-R4 F2):
+ *   - SKIP (resume đã đủ vector): embeddingsStepRan=false → null (bản cũ đo
+ *     0/n → FAIL giả → doc kẹt 'partial' vĩnh viễn).
+ *   - FRESH: (0 + n)/n = 1.
+ *   - RESUME-PARTIAL (30/33 thật + 3 mới): (30+3)/33 = 1 (bản cũ 3/33 FAIL giả).
+ *   - ALIAS needing=0 (embeddingsSavedCount được gán = realVectorCount): tử
+ *     số 2n/n → kẹp 1 bởi min.
+ */
+export function computeEmbeddingSuccessRate(args: EmbeddingSuccessRateArgs): number | null {
+  if (args.chunkCount <= 0 || !args.embeddingsStepRan) return null
+  return Math.min(1, (args.realVectorsBefore + args.vectorsSaved) / args.chunkCount)
+}
+
+/**
+ * Số vector thực sự GHI thành công vào Qdrant từ một batch — FB-Đợt7-R4 (F2):
+ * generateAndSaveEmbeddings bản cũ trả `vectorPoints.length` (số vector CHUẨN
+ * BỊ ghi) kể cả khi updateChunkVectors trả false (Qdrant lỗi) → success-rate
+ * PASS giả 1.0 đúng lúc mass-embed-fail. Chỉ đếm khi lệnh ghi thành công.
+ */
+export function savedVectorCount(updateOk: boolean, preparedCount: number): number {
+  return updateOk ? preparedCount : 0
+}

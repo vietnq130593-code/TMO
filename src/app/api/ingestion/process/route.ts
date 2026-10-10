@@ -36,7 +36,7 @@ import { upsertDocument, getDocument, listDocuments, updateDocumentStatus, delet
 import type { DocumentPayload, ChunkPayload } from '@/lib/qdrant'
 import { db } from '@/lib/db'
 import { detectNearDuplicate, NEAR_DUP_THRESHOLD } from '@/lib/ingestion/doc-dedup'
-import { evaluateExpectations, summarizeExpectationResults, stripExpectationMarker } from '@/lib/ingestion/pipeline-expectations'
+import { evaluateExpectations, summarizeExpectationResults, stripExpectationMarker, computeEmbeddingSuccessRate, savedVectorCount } from '@/lib/ingestion/pipeline-expectations'
 import { invalidateDocumentCache } from '@/lib/doc-cache'
 import { downloadFileFromR2, isR2Configured, listR2Objects } from '@/lib/r2-storage'
 import { resolveEntities as resolveEntitiesLib, loadNaiveBayesModel, type ResolvedEntity as ResolvedEntityLib, type DuplicatePair as DuplicatePairLib } from '@/lib/ingestion/entity-resolver'
@@ -2010,6 +2010,7 @@ async function generateAndSaveEmbeddings(chunks: Array<{ id: string; content: st
       }
     }
 
+    let savedCount = 0
     if (vectorPoints.length > 0) {
       const ok = await updateChunkVectors(vectorPoints)
       if (!ok) {
@@ -2017,8 +2018,12 @@ async function generateAndSaveEmbeddings(chunks: Array<{ id: string; content: st
         // ở 'partial' nếu còn zero-vector — đây là dấu vết để truy nguyên nhân.
         console.error(`[Process] updateChunkVectors returned false cho doc ${documentId.slice(0, 8)}... — ${vectorPoints.length} vector chưa ghi được (guard P0-5 sẽ chặn 'indexed' nếu còn sót)`)
       }
+      // FB-Đợt7-R4 (F2): chỉ đếm vector GHI thành công — bản cũ trả
+      // vectorPoints.length (số CHUẨN BỊ ghi) kể cả khi Qdrant lỗi →
+      // embedding_success_rate PASS giả 1.0 đúng lúc mass-embed-fail.
+      savedCount = savedVectorCount(ok, vectorPoints.length)
     }
-    return vectorPoints.length
+    return savedCount
   } catch (error) {
     console.error('[Process] Embedding batch error:', error)
     return 0
@@ -2177,6 +2182,12 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
   let pipelineResolvedCount = 0
   let pipelineDuplicatesFound = 0
   let pipelineResolutionStats = { totalInput: 0, afterExactMatch: 0, afterFuzzyMatch: 0, finalCount: 0 }
+  // FB-Đợt7-R4 (A1): số trang parse được trong CHÍNH run này — snapshot
+  // `document` (lấy 1 lần đầu pipeline) giữ page_count=null của lúc upload;
+  // bước parse ghi pageCount vào store nhưng không đụng biến cục bộ, khiến
+  // chunks_per_page KHÔNG BAO GIỜ đo được ở lần index đầu (doc 1 batch).
+  // Đường resume giữ null → fallback về snapshot (page_count từ run trước).
+  let freshPageCount: number | null = null
 
   try {
     // PAUSE GUARD: Check if the document was paused BEFORE starting the pipeline.
@@ -2558,11 +2569,20 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       // Save page count + mark parse step completed
       steps = markStepCompleted(steps, 'parse', `${parsedPages} trang, ${parseTotalTokens} tokens, domain: ${domain}`)
       await updateDocProgress(documentId, { steps, pageCount: parsedPages })
+      // FB-Đợt7-R4 (A1): giữ số trang run này cho P5-M4 chunks_per_page
+      freshPageCount = parsedPages
 
       // P5-M2 — NEAR-DUP GATE: embed 3 chunk đầu, searchSimilar top-1 ≥ 0.98
       // TRƯỚC khi upsert chunk vào Qdrant (chunk trùng không bao giờ chạm index —
       // đúng spec "sau chunk, trước upsert Qdrant"). Chỉ đường FRESH.
-      const nearDup = await detectNearDuplicate(documentId, parseChunks)
+      // FB-Đợt7-R4: probe embed nội dung ĐÃ sanitizeForDB — cùng nội dung với
+      // chunk được lưu + được embed ở Step 11 (đúng nghĩa so khớp, và L1/L2
+      // cache embed khớp đường chính — bản cũ embed raw nên tốn thêm ≤3 call
+      // khi chunk có ký tự bị sanitize).
+      const nearDup = await detectNearDuplicate(
+        documentId,
+        parseChunks.map(c => ({ content: sanitizeForDB(c.content) }))
+      )
       if (nearDup) {
         const dupLabel = nearDup.duplicateOfTitle ?? nearDup.duplicateOfId.slice(0, 8)
         console.log(`[Process] Near-dup (P5-M2): doc ${documentId.slice(0, 8)}... trùng "${dupLabel}" (cosine ${nearDup.scores.map(s => s.toFixed(4)).join(', ')} ≥ ${NEAR_DUP_THRESHOLD}) — đánh dấu duplicate, bỏ qua pipeline`)
@@ -3946,27 +3966,31 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
     }
 
     // P5-M4 — DATA-QUALITY EXPECTATIONS (spec §P5-M4): đo từ stats sẵn có trong
-    // scope TRƯỚC guard cuối; zero_vector_rate chỉ đo được khi guard verify sạch
-    // (nhánh mù/thiếu vector ở dưới không có số trung thực). Metric thiếu →
-    // expectation evaluated=false (không tính vi phạm — thiếu đo ≠ hỏng).
+    // scope TRƯỚC guard cuối. Metric thiếu → expectation evaluated=false
+    // (không tính vi phạm — thiếu đo ≠ hỏng); zero_vector_rate được đo bởi
+    // chính guard cuối (cả 2 nhánh — xem khối guard dưới).
     const expectationMeasurements: Record<string, number> = {}
     {
-      // page_count được ghi từ bước parse (updateDocProgress) — có ở cả đường
-      // resume; null (doc chưa từng parse hết) → metric không đo
-      const pageCountForExpect = document.page_count ?? 0
+      // FB-Đợt7-R4 (A1): page_count ưu tiên số FRESH của run này (snapshot
+      // `document` bị stale cho doc index lần đầu — upload ghi null); đường
+      // resume (không parse lại) fallback về snapshot từ run trước.
+      const pageCountForExpect = freshPageCount ?? document.page_count ?? 0
       if (savedChunks.length > 0 && pageCountForExpect > 0) {
         expectationMeasurements.chunks_per_page = savedChunks.length / pageCountForExpect
       }
-      // FB-Đợt7-R2-01 + R3-01: CHỈ đo embedding_success_rate khi bước embeddings
-      // CHẠY trong lần pipeline này (!hasEmbeddingsData) VÀ tính đúng tử số =
-      // vector-thật-trước-run (realVectorCount) + mới-lưu-run-này — đường
-      // resume-partial không bị FAIL giả, đường skip (đã đủ vector thật từ lần
-      // trước) không đo (embeddingsSavedCount=0 → 0/n sai nghĩa).
-      if (savedChunks.length > 0 && !hasEmbeddingsData) {
-        expectationMeasurements.embedding_success_rate = Math.min(
-          1,
-          (realVectorCount + embeddingsSavedCount) / savedChunks.length
-        )
+      // FB-Đợt7-R2-01 + R3-01 (pin qua computeEmbeddingSuccessRate — test
+      // regression 4 đường đo skip/fresh/resume-partial/alias):
+      // CHỈ đo khi bước embeddings CHẠY run này; tử số = vector-thật-trước
+      // (realVectorCount) + mới-lưu-thành-công (embeddingsSavedCount — từ
+      // FB-R4 chỉ đếm batch ghi Qdrant thành công).
+      const embSuccessRate = computeEmbeddingSuccessRate({
+        embeddingsStepRan: !hasEmbeddingsData,
+        chunkCount: savedChunks.length,
+        realVectorsBefore: realVectorCount,
+        vectorsSaved: embeddingsSavedCount,
+      })
+      if (embSuccessRate !== null) {
+        expectationMeasurements.embedding_success_rate = embSuccessRate
       }
     }
     try {
@@ -3974,7 +3998,11 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
         db.localEntity.count({ where: { documentId } }),
         db.localRelationship.count({ where: { documentId } }),
       ])
-      if (savedChunks.length > 0 && entityCountForExpect > 0) {
+      // FB-Đợt7-R4 (A4): entity_rate đo CẢ khi 0 entity — extract miss hoàn
+      // toàn (LLM chạy mà trắng tinh) là tín hiệu warn "miss" quan trọng nhất
+      // của cận dưới [0.2, 6]; bản cũ guard entityCount>0 khiến cận dưới mù
+      // ở đúng mức 0 tuyệt đối. relationship_per_entity vẫn cần mẫu số > 0.
+      if (savedChunks.length > 0) {
         expectationMeasurements.entity_rate = entityCountForExpect / savedChunks.length
       }
       if (entityCountForExpect > 0) {
@@ -4036,13 +4064,26 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
             : `${zeroVectorChunks.length}/${verifyChunks.length} chunk vẫn zero-vector sau bước embeddings — giữ 'partial' để chạy lại (P0-5 guard)`
         console.error(`[Process] P0-5 GUARD: ${guardWarning} (doc ${documentId.slice(0, 8)}...)`)
         steps = markStepPending(steps, 'embeddings', verifyBlind ? 'verify Qdrant lỗi — cần chạy lại' : `${zeroVectorChunks.length + missingChunks} chunk thiếu vector thật — cần re-embed`)
-        // P5-M4 — nhánh guard đã giữ 'partial': vẫn đánh giá expectation (metric
-        // còn đo được) để warn/fail ghi vào processingSteps + KPI nhìn thấy đủ
-        // bức tranh (doc có thể vừa thiếu vector VỪA hallucinate entity).
+        // P5-M4 — nhánh guard đã giữ 'partial': vẫn đánh giá expectation để
+        // warn/fail ghi vào processingSteps + KPI nhìn thấy đủ bức tranh (doc
+        // có thể vừa thiếu vector VỪA hallucinate entity).
+        // FB-Đợt7-R4 (A3): đo CẢ zero_vector_rate trên nhánh guard (số trung
+        // thực từ verify — đếm zero-vector thật đang có) — bản cũ chỉ đo ở
+        // nhánh sạch (luôn 0 theo cấu trúc) khiến expectation này chết: không
+        // bao giờ vi phạm, KPI mù với sự cố zero-vector. Nhánh verifyBlind
+        // (scroll mù) không có số trung thực → giữ evaluated=false.
         {
-          const expectationResults = evaluateExpectations(expectationMeasurements)
+          const guardMeasurements = verifyBlind
+            ? expectationMeasurements
+            : {
+                ...expectationMeasurements,
+                zero_vector_rate: verifyChunks.length > 0 ? zeroVectorChunks.length / verifyChunks.length : 0,
+              }
+          const expectationResults = evaluateExpectations(guardMeasurements)
           const expectationSummary = summarizeExpectationResults(expectationResults)
-          if (expectationSummary.failCount > 0 || expectationSummary.warnCount > 0) {
+          // R5: thêm notMeasured>0 — đồng bộ điều kiện gắn marker với nhánh sạch
+          // phía dưới (marker "all pass · chưa đo: N" cũng mang thông tin)
+          if (expectationSummary.failCount > 0 || expectationSummary.warnCount > 0 || expectationSummary.notMeasured > 0) {
             steps = attachExpectationDetail(steps, expectationSummary.line)
             console.warn(`[Process] P5-M4 expectations (doc ${documentId.slice(0, 8)}..., kèm guard partial): ${expectationSummary.line}`)
           }
@@ -4322,11 +4363,16 @@ async function runEmbedOnlyPipeline(documentId: string): Promise<Record<string, 
         embeddingsSaved++
       }
     }
+    let upsertOk = true
     if (realVectorPoints.length > 0) {
       const ok = await upsertChunks(realVectorPoints)
       if (!ok) console.error('[EmbedOnly] upsertChunks returned false — embeddings may not have saved')
+      upsertOk = ok
     }
-    console.log(`[EmbedOnly] Saved ${embeddingsSaved}/${parseChunks.length} embeddings to Qdrant`)
+    // FB-Đợt7-R4 (F2 — cùng fix đường chính): embeddingsSaved chỉ đếm batch ghi
+    // thành công (bản cũ đếm số chuẩn-bị-ghi → success-rate PASS giả khi Qdrant lỗi)
+    const embeddingsSavedOk = savedVectorCount(upsertOk, embeddingsSaved)
+    console.log(`[EmbedOnly] Saved ${embeddingsSavedOk}/${parseChunks.length} embeddings to Qdrant`)
 
     // ROUND-34 (BUG #5 — chuẩn hoá guard P0-5 cho đường phụ): embedOnly cũ mark
     // 'indexed' + MỌI step completed bất kể upsertChunks fail hay provider trả
@@ -4337,9 +4383,16 @@ async function runEmbedOnlyPipeline(documentId: string): Promise<Record<string, 
     // (nút "Xử lý") re-embed đúng chỗ thiếu (tự chữa — không kẹt doc).
     let embedOnlyStatus: 'indexed' | 'partial' = 'indexed'
     let embedOnlyWarning: string | undefined
+    // R5 (P4 #5): hoist ra ngoài để khối P5-M4 dưới đo được zero_vector_rate
+    // từ chính số verify (bản đầu khối này nằm trong try → số không reachable,
+    // marker embedOnly luôn kèm "chưa đo: 1" không cần thiết).
+    let embedOnlyVerifyCount = 0
+    let embedOnlyRealCount = 0
     try {
       const verify = await getChunksByDocument(documentId, { limit: VERIFY_CHUNK_SCROLL_LIMIT, withVector: true })
       const realCount = verify.filter(c => (c.vector ?? []).some(x => Math.abs(x) > 1e-9)).length
+      embedOnlyVerifyCount = verify.length
+      embedOnlyRealCount = realCount
       const expected = chunkPoints.length
       // ROUND-35 (B1): kiểm HAI CHIỀU (!== thay <) — dữ liệu THỪA (point trùng
       // lặp/rác mồ côi còn sót) cũng là trạng thái sai cần dọn, không chỉ thiếu.
@@ -4355,7 +4408,56 @@ async function runEmbedOnlyPipeline(documentId: string): Promise<Record<string, 
       // (cùng chuẩn guard chính round-34); 'partial' tự chữa qua re-process.
       embedOnlyStatus = 'partial'
       embedOnlyWarning = 'verify vector lỗi — giữ partial, chạy lại "Xử lý"'
+      embedOnlyVerifyCount = 0 // mù — không đo zero_vector_rate (evaluated=false)
       console.warn('[EmbedOnly] P0-5 guard verify failed:', verifyErr instanceof Error ? verifyErr.message : String(verifyErr))
+    }
+
+    // FB-Đợt7-R4 (marker mất trên đường phụ): embedOnly reset steps nhưng
+    // KHÔNG đánh giá P5-M4 — marker + KPI ingestion_expectation_fails biến mất
+    // tới lần full-pipeline sau. Đánh giá tại đây bằng đúng bộ helper của
+    // đường chính (thiếu số đo → evaluated=false — đường này không có số đo
+    // entity/rel khi SQLite lỗi, vẫn bỏ qua an toàn).
+    let embedOnlyExpectLine: string | undefined
+    {
+      const embedOnlyMeasurements: Record<string, number> = {}
+      if (parsedPages > 0) {
+        embedOnlyMeasurements.chunks_per_page = parseChunks.length / parsedPages
+      }
+      const embRate = computeEmbeddingSuccessRate({
+        embeddingsStepRan: true,
+        chunkCount: parseChunks.length,
+        realVectorsBefore: 0,
+        vectorsSaved: embeddingsSavedOk,
+      })
+      if (embRate !== null) embedOnlyMeasurements.embedding_success_rate = embRate
+      // R5 (P4 #5): đo zero_vector_rate từ số verify của guard phía trên —
+      // đồng bộ với đường chính (nhánh mù verifyCount=0 → không đo, đúng nghĩa)
+      if (embedOnlyVerifyCount > 0) {
+        embedOnlyMeasurements.zero_vector_rate = (embedOnlyVerifyCount - embedOnlyRealCount) / embedOnlyVerifyCount
+      }
+      try {
+        const [entityCount, relCount] = await Promise.all([
+          db.localEntity.count({ where: { documentId } }),
+          db.localRelationship.count({ where: { documentId } }),
+        ])
+        if (parseChunks.length > 0) {
+          embedOnlyMeasurements.entity_rate = entityCount / parseChunks.length
+        }
+        if (entityCount > 0) {
+          embedOnlyMeasurements.relationship_per_entity = relCount / entityCount
+        }
+      } catch { /* SQLite lỗi — evaluated=false, bỏ qua */ }
+      const embedOnlyResults = evaluateExpectations(embedOnlyMeasurements)
+      const embedOnlySummary = summarizeExpectationResults(embedOnlyResults)
+      if (embedOnlySummary.failCount > 0 || embedOnlySummary.warnCount > 0 || embedOnlySummary.notMeasured > 0) {
+        embedOnlyExpectLine = embedOnlySummary.line
+        console.log(`[EmbedOnly] P5-M4 expectations: ${embedOnlySummary.line}`)
+        if (embedOnlySummary.failCount > 0 && embedOnlyStatus === 'indexed') {
+          embedOnlyStatus = 'partial'
+          embedOnlyWarning = `expectation FAIL (P5-M4): ${embedOnlyResults.filter(r => r.evaluated && !r.passed && r.severity === 'fail').map(r => r.detail).join(' · ')}`
+          console.error(`[EmbedOnly] P5-M4: ${embedOnlyWarning} — giữ 'partial'`)
+        }
+      }
     }
 
     // 6. Mark complete — status theo guard; step embeddings phản ánh thật
@@ -4363,6 +4465,13 @@ async function runEmbedOnlyPipeline(documentId: string): Promise<Record<string, 
     let finalSteps: ProcessingStepRecord[] = steps.map(s => ({ ...s, status: 'completed' as const, completedAt: s.completedAt || new Date().toISOString() }))
     if (embedOnlyStatus === 'partial') {
       finalSteps = markStepPending(finalSteps, 'embeddings', embedOnlyWarning)
+    }
+    // FB-Đợt7-R4: gắn marker P5-M4 vào detail bước embeddings SAU markStepPending
+    // (cùng thứ tự đường chính — markStepPending thay detail nên phải gắn sau)
+    if (embedOnlyExpectLine) {
+      finalSteps = finalSteps.map(s => s.name === 'embeddings'
+        ? { ...s, detail: `${stripExpectationMarker(s.detail)}${stripExpectationMarker(s.detail) ? ' · ' : ''}${embedOnlyExpectLine}` }
+        : s)
     }
     const finalPercent = embedOnlyStatus === 'indexed' ? 100 : 90
     await updateDocumentStatus(documentId, {
@@ -4386,7 +4495,7 @@ async function runEmbedOnlyPipeline(documentId: string): Promise<Record<string, 
     return {
       documentId,
       totalChunks: parseChunks.length,
-      embeddingsSaved,
+      embeddingsSaved: embeddingsSavedOk,
       provider: 'nvidia-embed-only',
       model: 'nvidia/nemotron-3-embed-1b',
       durationMs: Date.now() - startTime,

@@ -52,7 +52,7 @@ const TMP_PREFIX = "tmo-test-db-";
 const STALE_MS = 10 * 60 * 1000; // 10 phút
 
 /** Tìm project root (thư mục chứa prisma/schema.prisma) — cùng cách src/lib/db.ts. */
-function findProjectRoot(): string {
+export function findProjectRoot(): string {
   let root = process.cwd();
   for (let i = 0; i < 6 && !fs.existsSync(path.join(root, "prisma", "schema.prisma")); i++) {
     root = path.dirname(root);
@@ -61,8 +61,8 @@ function findProjectRoot(): string {
 }
 
 /** Đọc DATABASE_URL= từ .env của project ('' = không khai báo). */
-function readProjectEnvDatabaseUrl(): string {
-  const envPath = path.join(findProjectRoot(), ".env");
+export function readProjectEnvDatabaseUrl(projectRoot: string = findProjectRoot()): string {
+  const envPath = path.join(projectRoot, ".env");
   if (!fs.existsSync(envPath)) return "";
   try {
     const lines = fs.readFileSync(envPath, "utf-8").split(/\r?\n/);
@@ -89,15 +89,22 @@ function readProjectEnvDatabaseUrl(): string {
  * Nguồn copy cho DB test: chuẩn hóa env hiện tại chống leak DB ngoại lai.
  * Trả về URL dạng file: TUYỆT ĐỐI trỏ file TỒN TẠI, hoặc '' khi không xác định
  * được (caller bỏ qua việc copy — giữ hành vi cũ).
+ *
+ * FB-Đợt7-R4 (F4): path.resolve cho CẢ đường tuyệt đối — bản cũ trả nguyên văn
+ * m[1] khi isAbsolute nên `file:/home/z/tmo-app/../evil.db` giữ nguyên ".."
+ * rồi qua startsWith(projectRoot + sep) → lọt kiểm "trong project" dù resolve
+ * thật trỏ ra NGOÀI. (Đường tương đối vốn đã qua path.resolve — tự chuẩn hoá.)
+ *
+ * Xuất ra (export) để r78-fb7-regression pin hành vi BUG2-067 — hàm thuần,
+ * root tiêm được (projectRoot param) nên test dựng cây thư mục giả được.
  */
-function resolveCopySourceUrl(rawEnvUrl: string): string {
-  const projectRoot = findProjectRoot();
-
+export function resolveCopySourceUrl(rawEnvUrl: string, projectRoot: string = findProjectRoot()): string {
   // Quy ước resolve của prisma: file: tương đối tính từ prisma/ (schema-relative)
   const toAbsolute = (fileUrl: string): string | null => {
     const m = fileUrl.match(/^file:(.*)$/);
     if (!m || !m[1]) return null;
-    return path.isAbsolute(m[1]) ? m[1] : path.resolve(projectRoot, "prisma", m[1]);
+    // path.resolve chuẩn hoá ".."/"." cho cả đường tuyệt đối lẫn tương đối (F4)
+    return path.isAbsolute(m[1]) ? path.resolve(m[1]) : path.resolve(projectRoot, "prisma", m[1]);
   };
 
   const envAbs = toAbsolute(rawEnvUrl);
@@ -107,7 +114,7 @@ function resolveCopySourceUrl(rawEnvUrl: string): string {
   }
 
   // Env bị leak ra ngoài project (hoặc trỏ file không tồn tại) → .env của project là nguồn sự thật
-  const projectUrl = readProjectEnvDatabaseUrl();
+  const projectUrl = readProjectEnvDatabaseUrl(projectRoot);
   const projectAbs = toAbsolute(projectUrl);
   if (projectAbs && fs.existsSync(projectAbs)) {
     return `file:${projectAbs}`;
@@ -116,6 +123,25 @@ function resolveCopySourceUrl(rawEnvUrl: string): string {
   // .env không có file hợp lệ → giữ env cũ nếu nó tồn tại (hành vi cũ), ngược lại bỏ
   if (envAbs && fs.existsSync(envAbs)) return `file:${envAbs}`;
   return "";
+}
+
+/**
+ * Hậu tố file SQLite được copy cho bản test — FB-Đợt7-R4 (BUG2-066/C5):
+ * KHÔNG chứa "-shm" (WAL-index sống — copy nó khiến SQLite bản copy bỏ qua
+ * recover WAL → schema mới-push nằm trong WAL không thấy, P2022). Xuất const
+ * để test pin: ai thêm "-shm" trở lại → r78-fb7-regression fail ngay.
+ */
+export const DB_COPY_SUFFIXES: readonly string[] = ["", "-wal"];
+
+/** Copy DB nguồn (+ -wal nếu có) sang bản test — đơn giản hoá để test được. */
+export function copySqliteFiles(srcPath: string, destPath: string): void {
+  for (const suffix of DB_COPY_SUFFIXES) {
+    try {
+      fs.copyFileSync(srcPath + suffix, destPath + suffix);
+    } catch {
+      // thiếu -wal là bình thường (đã checkpoint sạch) — bỏ qua
+    }
+  }
 }
 
 /** pid còn sống hay không. EPERM = tồn tại nhưng thuộc user khác → coi như sống. */
@@ -180,15 +206,9 @@ if (m && m[1]) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}${process.pid}-`));
     const dest = path.join(dir, "test.db");
 
-    // Chỉ copy db + -wal (xem ghi chú đầu file: -shm là index tạm, KHÔNG copy —
-    // SQLite recover WAL từ đầu khi mở bản copy, an toàn với mọi trạng thái sống)
-    for (const suffix of ["", "-wal"]) {
-      try {
-        fs.copyFileSync(srcPath + suffix, dest + suffix);
-      } catch {
-        // thiếu -wal là bình thường (đã checkpoint sạch) — bỏ qua
-      }
-    }
+    // Chỉ copy db + -wal (xem ghi chú đầu file + DB_COPY_SUFFIXES: -shm là
+    // index tạm, KHÔNG copy — SQLite recover WAL từ đầu khi mở bản copy)
+    copySqliteFiles(srcPath, dest);
 
     process.env.DATABASE_URL = `file:${dest}`;
     process.env.TMO_TEST_DB_ISOLATED = "1";

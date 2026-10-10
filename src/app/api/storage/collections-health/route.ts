@@ -19,7 +19,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { qdrant, EMBEDDING_DIMENSION, COLLECTION_DOCUMENTS, COLLECTION_CHUNKS, isPilotCollection, COLLECTION_AGENT_MEMORY_PILOT } from '@/lib/qdrant'
+import { qdrant, EMBEDDING_DIMENSION, COLLECTION_DOCUMENTS, COLLECTION_CHUNKS, COLLECTION_AGENT_MEMORY_PILOT } from '@/lib/qdrant'
 import { MATRYOSHKA_PILOT_DIMS } from '@/lib/embeddings'
 import { COLLECTION_EPISODES } from '@/lib/episodic-memory/episode-store'
 import { COLLECTION_COMMUNITIES } from '@/lib/kb-routing/communities'
@@ -44,7 +44,9 @@ const QDRANT_COLLECTIONS: Array<{ name: string; label: string; dimExpected?: num
   { name: COLLECTION_AGENT_MEMORY, label: 'Agent Memory (ký ức hội thoại)' },
   { name: COLLECTION_TASK_CONTEXT, label: 'Task Context (working memory)' },
   // P5-M1 — pilot Matryoshka 512: hiện diện khi env bật dual-write; dim cố ý
-  // khác 2048 (isPilotCollection → không báo đỏ dim-mismatch)
+  // khác 2048 nhưng vẫn SO SÁNH TRUNG THỰC với dimExpected khai báo (512) —
+  // sai dim thật so với khai báo vẫn ĐỎ (FB-Đợt7-R4 B6 bỏ ép false cũ);
+  // ensurePilotCollection sẽ drop-recreate tự chữa khi dual-write chạy.
   { name: COLLECTION_AGENT_MEMORY_PILOT, label: `Agent Memory Pilot (Matryoshka ${MATRYOSHKA_PILOT_DIMS}-dim — P5-M1 đo lường)`, dimExpected: MATRYOSHKA_PILOT_DIMS },
 ]
 
@@ -85,12 +87,15 @@ async function checkQdrantCollections(): Promise<CollectionHealth[]> {
     try {
       const info = await qdrant.getCollection(col.name)
       const dimActual = extractDim(info)
-      // P5-M1: pilot collection cố ý khác dim chính — không phải lỗi cấu hình.
-      // dimExpected đặt đúng theo khai báo (512) nên dimMismatch tự đúng;
-      // isPilotCollection là lớp phòng thủ cho mọi guard tương lai quét wildcard.
-      const dimExpected = isPilotCollection(col.name) && col.dimExpected
-        ? col.dimExpected
-        : col.dimExpected ?? EMBEDDING_DIMENSION
+      // P5-M1: pilot collection có dimExpected khai báo riêng (512) — so sánh
+      // trung thực với chính khai báo đó. FB-Đợt7-R4 (B6): bản cũ ép
+      // dimMismatch=false cho MỌI collection pilot kể cả khi sai dim thật so
+      // với 512 đã khai báo (ai tạo tay agent_memory_512 256-dim → health XANH
+      // im lặng) — mâu thuẫn với chính comment "dimMismatch tự đúng" phía trên
+      // (ternary dimExpected cũng dư: cả 2 nhánh ra cùng giá trị). Bỏ cả 2:
+      // pilot sai dim giờ ĐỎ đúng như mọi collection, ensurePilotCollection
+      // (dual-write) sẽ drop-recreate tự chữa.
+      const dimExpected = col.dimExpected ?? EMBEDDING_DIMENSION
       out.push({
         name: col.name,
         label: col.label,
@@ -98,7 +103,7 @@ async function checkQdrantCollections(): Promise<CollectionHealth[]> {
         pointCount: info.points_count ?? 0,
         dimExpected,
         dimActual,
-        dimMismatch: dimActual !== undefined && dimActual !== dimExpected && !isPilotCollection(col.name),
+        dimMismatch: dimActual !== undefined && dimActual !== dimExpected,
       })
     } catch (colErr) {
       // ROUND-38 fix V1-6: phân biệt "chưa tạo" với "lỗi kết nối" — trước đây

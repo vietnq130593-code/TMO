@@ -59,12 +59,16 @@ const STATUS_COLORS: Record<string, string> = {
   indexed: 'bg-emerald-950/50 text-emerald-400 border-emerald-500/55',
   partial: 'bg-amber-950/50 text-amber-400 border-amber-500/55',
   error: 'bg-red-950/50 text-red-400 border-red-500/55',
+  // P5-M2 (FB-Đợt7-R4 A6): status 'duplicate' có nhãn tiếng Việt + màu riêng
+  // (bản cũ rơi fallback hiển thị chữ thô 'duplicate' màu stone)
+  duplicate: 'bg-fuchsia-950/50 text-fuchsia-400 border-fuchsia-500/55',
 }
 const STATUS_LABELS: Record<string, string> = {
   uploaded: 'Đã tải lên', parsing: 'Đang phân tích', chunking: 'Đang chia chunks', chunked: 'Đã chia chunks',
   extracting: 'Đang trích xuất', embedding: 'Đang tạo embedding', indexing: 'Đang đánh chỉ mục',
   extracted: 'Đã trích xuất', indexed: 'Đã đánh chỉ mục',
   partial: 'Tạm dừng', error: 'Lỗi',
+  duplicate: 'Bản trùng',
 }
 const DOMAIN_COLORS: Record<string, string> = {
   programming: 'bg-teal-950/50 text-teal-400 border-teal-500/55', algorithm: 'bg-violet-950/50 text-violet-400 border-violet-500/55',
@@ -520,6 +524,11 @@ function DocumentsList({ documents, onProcessDoc, onDeleteDoc, onPauseDoc, onReE
                         </div>
                         <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                           <Badge className={`text-[9px] h-4 px-1.5 ${userPausedDocIds.has(doc.id) && doc.status === 'partial' ? 'bg-orange-900/60 text-orange-300' : pausedDocIds.has(doc.id) || (['extracting', 'parsing', 'chunked'].includes(doc.status) && !extractingDocIds.has(doc.id)) ? STATUS_COLORS['partial'] : (extractingDocIds.has(doc.id) && doc.status === 'partial' ? STATUS_COLORS['extracting'] : (STATUS_COLORS[doc.status] || 'bg-stone-950/50 text-stone-400'))}`}>{userPausedDocIds.has(doc.id) && doc.status === 'partial' ? 'Tạm dừng' : pausedDocIds.has(doc.id) || (['extracting', 'parsing', 'chunked'].includes(doc.status) && !extractingDocIds.has(doc.id)) ? STATUS_LABELS['partial'] : (extractingDocIds.has(doc.id) && doc.status === 'partial' ? STATUS_LABELS['extracting'] : (STATUS_LABELS[doc.status] || doc.status))}</Badge>
+                          {doc.status === 'duplicate' && doc.duplicate_of && (
+                            <span className="text-[10px] text-fuchsia-400 truncate max-w-[180px] sm:max-w-[280px]" title={`Bản trùng nội dung với tài liệu: ${doc.duplicate_of_title ?? doc.duplicate_of} (P5-M2 — không index lại)`}>
+                              trùng với “{doc.duplicate_of_title ?? doc.duplicate_of.slice(0, 8)}”
+                            </span>
+                          )}
                           <Badge className={`text-[9px] h-4 px-1.5 ${DOMAIN_COLORS[doc.domain] || 'bg-stone-950/50 text-stone-400'}`}>{DOMAIN_LABELS[doc.domain] || doc.domain}</Badge>
                           {doc.page_count && <span className="text-[10px] text-stone-300">{doc.page_count} trang</span>}
                           {doc.chunk_coverage && ['indexed', 'extracted', 'partial', 'extracting'].includes(doc.status) && (

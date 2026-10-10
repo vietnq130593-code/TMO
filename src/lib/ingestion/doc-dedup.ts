@@ -34,6 +34,14 @@ import type { ChunkPayload } from '@/lib/qdrant'
 export const NEAR_DUP_THRESHOLD = 0.98
 /** Số chunk đầu dùng làm probe near-dup (spec: "embed 3 chunk đầu") */
 export const NEAR_DUP_PROBE_CHUNKS = 3
+/**
+ * Số probe hợp lệ tối thiểu để KẾT LUẬN trùng — FB-Đợt7-R4 (A5): khi provider
+ * embed hỏng một phần (3 thử / 1 sống), "mọi probe cùng doc" trở nên tầm
+ * thường trên 1 bằng chứng duy nhất → khe chặn-nhầm (ngược triết lý spec
+ * "an toàn theo hướng không chặn nhầm"). Doc 1-chunk vẫn quyết được (toàn
+ * bộ nội dung doc nằm gọn trong probe đó — min(2, attempted) tự hạ xuống 1).
+ */
+export const NEAR_DUP_MIN_PROBES = 2
 /** HTTP status khi MỌI file trong request upload đều trùng hash (không lưu bản mới) */
 export const EXACT_DUP_HTTP_STATUS = 409 as const
 
@@ -71,9 +79,15 @@ export async function findExactDuplicate(
 }
 
 /**
- * Quyết định HTTP status cho POST upload khi có exact-dup:
- * MỌI file đều trùng (không file mới nào được lưu) → 409; hỗn hợp → 200
- * (per-file thông báo, tiền lệ mảng errors của route).
+ * Quyết định HTTP status cho POST upload khi có exact-dup: KHÔNG file mới nào
+ * được lưu (mọi file hoặc trùng hash hoặc lỗi — duplicates>0 ∧ uploaded=0)
+ * → 409; hỗn hợp có file mới (uploaded>0) hoặc không trùng gì (duplicates=0)
+ * → 200 với mảng duplicates per-file (tiền lệ mảng errors của route).
+ *
+ * FB-Đợt7-R4 (A8 — doc fidelity): JSDoc bản cũ nói "MỌI file đều trùng hash"
+ * — không khớp hành vi thật (request 1 file trùng + 1 file LỖI cũng trả 409
+ * dù không phải mọi file đều trùng; điều kiện đúng nghĩa là "không lưu được
+ * file mới nào"). Hành vi giữ nguyên, chữ nghĩa sửa cho khớp.
  */
 export function exactDupResponseStatus(duplicatesCount: number, uploadedCount: number): 200 | 409 {
   return duplicatesCount > 0 && uploadedCount === 0 ? EXACT_DUP_HTTP_STATUS : 200
@@ -151,12 +165,30 @@ export interface NearDupMatch {
 }
 
 /**
+ * Đủ probe hợp lệ để kết luận trùng không? (thuần — FB-Đợt7-R4 A5)
+ *
+ * Quy tắc: validCount >= min(NEAR_DUP_MIN_PROBES, attemptedCount) —
+ *   - 3 thử / 3 sống → đủ (≥2 corroborated)
+ *   - 3 thử / 2 sống → đủ (vẫn ≥2 corroborated)
+ *   - 3 thử / 1 sống → KHÔNG đủ (bằng chứng đơn lẻ — fail-open, A5)
+ *   - 2 thử / 2 sống → đủ; 2 thử / 1 sống → KHÔNG đủ
+ *   - 1 thử / 1 sống → đủ (doc 1-chunk: probe là toàn bộ nội dung)
+ */
+export function hasEnoughValidProbes(validCount: number, attemptedCount: number): boolean {
+  if (attemptedCount <= 0) return false
+  return validCount >= Math.min(NEAR_DUP_MIN_PROBES, attemptedCount)
+}
+
+/**
  * Phát hiện near-dup cho document đang xử lý FRESH: embed N chunk đầu →
  * searchSimilar top-k ≥ NEAR_DUP_THRESHOLD → decideNearDuplicate. Trả null
  * khi KHÔNG trùng HOẶC lỗi (fail-open — caller cứ chạy pipeline tiếp).
  *
  * Giải chuỗi 1 mức: doc bị khớp nếu chính nó là duplicate của doc khác thì
  * trỏ về gốc đó (A trùng B, B trùng C → A.duplicateOf = C).
+ *
+ * FB-Đợt7-R4 (A5): probe hỏng một phần (provider trả vector rỗng cho vài
+ * text) → xuống dưới ngưỡng corroborated → KHÔNG kết luận (fail-open).
  */
 export async function detectNearDuplicate(
   documentId: string,
@@ -184,7 +216,9 @@ export async function detectNearDuplicate(
     // vector toàn 0 = placeholder/lỗi provider — không dùng làm probe
     if (v && v.length === dim && v.some(x => x !== 0)) probeVectors.push(v)
   }
-  if (probeVectors.length === 0) return null
+  // FB-Đợt7-R4 (A5): đủ probe hợp lệ mới kết luận — thiếu (provider hỏng
+  // một phần) → fail-open, KHÔNG quyết trên 1 bằng chứng đơn lẻ.
+  if (!hasEnoughValidProbes(probeVectors.length, probeCount)) return null
 
   const probeHits: Array<Array<ProbeHit>> = []
   for (const vector of probeVectors) {

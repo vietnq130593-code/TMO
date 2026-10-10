@@ -68,11 +68,17 @@ async function overlaySqliteStatuses(
         doc.processing_percent = row.processingPercent
         doc.error_message = row.errorMessage
         // P5-M2 — badge trùng lặp: duplicate_of = id gốc, duplicate_of_title =
-        // tiêu đề gốc (undefined khi không phải bản trùng — UI check status='duplicate')
+        // tiêu đề gốc (undefined khi không phải bản trùng — UI check status='duplicate').
+        // R5 (P4 #6): xoá trường cũ khi row hết duplicateOfId — chống badge stale
+        // nếu tương lai có đường un-duplicate (hôm nay bất biến "không bao giờ
+        // clear" đang chặn, nhưng overlay từng SET thì phải biết UN-SET đối xứng).
         if (row.duplicateOfId) {
           doc.duplicate_of = row.duplicateOfId
           const origin = byId.get(row.duplicateOfId)
           doc.duplicate_of_title = origin ? origin.title : null
+        } else {
+          delete doc.duplicate_of
+          delete doc.duplicate_of_title
         }
       }
       const s = String(doc.status || 'uploaded')
@@ -276,12 +282,16 @@ export async function POST(request: NextRequest) {
     // kèm chi tiết; hỗn hợp → 200 như cũ + mảng duplicates. (Quyết định qua
     // exactDupResponseStatus — test được ở lib.)
     if (exactDupResponseStatus(duplicates.length, uploadedDocs.length) === 409) {
+      // FB-Đợt7-R4 (A7): kèm mảng errors khi có — request hỗn hợp (file trùng
+      // + file lỗi) bản cũ chỉ trả totalErrors số học, client API trực tiếp
+      // không biết file kia lỗi gì (body 200 có errors, body 409 thì không).
       return NextResponse.json(
         {
           error: `Duplicate upload: ${duplicates.map(d => d.file).join(', ')} đã tồn tại (trùng nội dung, sha256)`,
           duplicates,
           documents: [],
           totalUploaded: 0,
+          ...(errors.length > 0 ? { errors } : {}),
           totalErrors: errors.length,
           totalDuplicates: duplicates.length,
         },
@@ -366,6 +376,10 @@ export async function GET(request: NextRequest) {
         filePath: string
         createdAt: Date
         updatedAt: Date
+        // FB-Đợt7-R4 (A6): duplicateOfId cho badge "trùng với …" trên đường
+        // FRESH (không qua cache) — trước đây chỉ đường cache 10s (overlay)
+        // phát được 2 trường duplicate_of → badge nhấp nháy mỗi lần cache hết hạn
+        duplicateOfId: string | null
       }>()
       const sqliteByTitle = new Map<string, string>() // title → id (for R2 filename matching)
       try {
@@ -381,6 +395,7 @@ export async function GET(request: NextRequest) {
             filePath: r.filePath,
             createdAt: r.createdAt,
             updatedAt: r.updatedAt,
+            duplicateOfId: r.duplicateOfId,
           })
           if (r.title) sqliteByTitle.set(r.title, r.id)
         }
@@ -476,6 +491,13 @@ export async function GET(request: NextRequest) {
               updated_at: sqlDoc?.updatedAt?.toISOString() || (qMeta.updated_at as string) || obj.lastModified.toISOString(),
               r2_key: r2Key as string | null,
               r2_size: (obj.size ?? null) as number | null,
+              // FB-Đợt7-R4 (A6): phát duplicate_of trên đường fresh — cùng
+              // dạng trường với overlaySqliteStatuses (đường cache) để UI badge
+              // không nhấp nháy theo hạn cache
+              ...(sqlDoc?.duplicateOfId ? {
+                duplicate_of: sqlDoc.duplicateOfId,
+                duplicate_of_title: sqliteDocs.get(sqlDoc.duplicateOfId)?.title ?? null,
+              } : {}),
               // chunk_coverage intentionally omitted (lite mode)
             }
           })
@@ -498,6 +520,11 @@ export async function GET(request: NextRequest) {
               updated_at: d.updatedAt.toISOString(),
               r2_key: null as string | null,
               r2_size: null as number | null,
+              // FB-Đợt7-R4 (A6): đường fresh — cùng trường duplicate_of như 2 đường kia
+              ...(d.duplicateOfId ? {
+                duplicate_of: d.duplicateOfId,
+                duplicate_of_title: sqliteDocs.get(d.duplicateOfId)?.title ?? null,
+              } : {}),
             })
           }
 

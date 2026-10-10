@@ -69,6 +69,10 @@ export interface DocumentRecord {
   processing_steps: ProcessingStep[]; processing_percent: number
   created_at: string; updated_at: string
   chunk_coverage?: ChunkCoverage
+  // P5-M2 (FB-Đợt7-R4 A6): badge "trùng với …" — phát bởi cả 3 đường GET
+  // list (cache overlay + fresh R2 + fresh SQLite-append)
+  duplicate_of?: string
+  duplicate_of_title?: string | null
 }
 
 
