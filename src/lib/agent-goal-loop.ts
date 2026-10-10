@@ -84,6 +84,9 @@ import {
   insertArbiterVerdict,
   resolveArbiterVerdicts,
 } from '@/lib/metrics-db'
+// P3-M3 — 3-judge runtime cho phán quyết critical (RUNTIME_JUDGES env-gated,
+// default off). judges.ts không import gì từ goal-loop → không vòng import.
+import { runtimeJudgeVerdict } from '@/lib/eval/judges'
 // WORKING MEMORY (HOT) — user request 2026-08-28: ghi nhận quá trình làm việc
 // (tool đã chạy, kết quả ra sao) vào WorkingMemory để (a) request sau trong cùng
 // session KHÔNG phải đọc/làm lại — tiết kiệm token, (b) hết phiên promote lên
@@ -1550,6 +1553,166 @@ export function parseEvalVerdict(raw: string): EvalVerdict | null {
   }
 }
 
+// ==================== P3-M3 — 3-JUDGE RUNTIME GATE (RUNTIME_JUDGES env-gated) ====================
+//
+// BLUEPRINT-STATS-LEARNING §P3-M3 (mục #11): đưa trọng tài median 3-judge từ
+// eval-only vào RUNTIME cho phán quyết critical — lớp run đắt tiền, sai phán
+// quyết tốn nhất. Cắm tại EVALUATE phase SAU verify-guard (xuống dưới). Mặc
+// định OFF — bật: RUNTIME_JUDGES=critical (chỉ run complete đắt) | all (mọi
+// verdict, quan sát). Rollback = unset env.
+
+/** Bộ tiêu chí rút gọn từ 18 rules hiện hành — 5 tiêu chí lõi (spec §P3-M3) */
+export const RUNTIME_JUDGE_CRITERIA: readonly string[] = [
+  'evidence-verified: mọi tiêu chí nghiệm thu của mục tiêu có bằng chứng tool trực tiếp khớp trong nhật ký (không chỉ lời khai của agent)',
+  'E2E-passed: nếu run có thay đổi logic, bằng chứng kiểm định là tool chạy thật (run_tests/lint/type_check) — không phải chỉ đọc lại file',
+  'todo-closed: mọi todo của run đã được đóng với bằng chứng hoàn thành tương ứng',
+  'no-derived-number: các con số tổng hợp trong kết luận do LỆNH MÁY trả về (wc/grep -c/COUNT/metadata), không phải agent tự đếm tay',
+  'debt-ready: không còn side issue liên quan chưa xử lý, hoặc đã được phân loại nợ đúng (debtDecision record/continue hợp lệ)',
+] as const
+
+/** Chế độ 3-judge runtime từ env RUNTIME_JUDGES (default off). 'on' đọc là
+ *  critical (bảo thủ — ít tốn nhất khi bật mù). Giá trị lạ → off + không
+ *  throw (env do người vận hành đặt). */
+export function parseRuntimeJudgesMode(v: string | undefined): 'off' | 'critical' | 'all' {
+  const s = (v ?? '').trim().toLowerCase()
+  if (s === 'critical' || s === 'on') return 'critical'
+  if (s === 'all' || s === '1' || s === 'true') return 'all'
+  return 'off'
+}
+
+/**
+ * Run có thuộc lớp CRITICAL không (spec: "stopReason dự kiến === 'complete' ∧
+ * (toolCalls ≥ 20 ∨ cycles ≥ 0.8·max_cycles)"). effectiveMaxCycles = 0 (∞) →
+ * chuẩn vô nghĩa → chỉ trục toolCalls còn hiệu lực.
+ */
+export function isCriticalRuntimeJudgeRun(input: {
+  verdictComplete: boolean
+  runToolCalls: number
+  cycle: number
+  effectiveMaxCycles: number
+}): boolean {
+  if (!input.verdictComplete) return false
+  if (input.runToolCalls >= 20) return true
+  if (input.effectiveMaxCycles > 0 && input.cycle >= 0.8 * input.effectiveMaxCycles) return true
+  return false
+}
+
+/** Preview bằng chứng tool cho prompt judge — 20 entry cuối, cap ~4000 chars */
+function buildRuntimeJudgeContext(params: {
+  goal: string
+  verdict: EvalVerdict
+  evidence: Array<{ kind: string; tool?: string; success?: boolean; text: string }>
+}): string {
+  const lines: string[] = []
+  lines.push(`GOAL:\n${params.goal.slice(0, 2000)}`)
+  lines.push(
+    `PRIMARY EVALUATOR VERDICT: complete=${params.verdict.complete}, verified=${params.verdict.verified}, ` +
+    `confidence=${params.verdict.confidence.toFixed(2)}` +
+    (params.verdict.missing.length > 0 ? `, missing: ${params.verdict.missing.join(' | ').slice(0, 300)}` : ''),
+  )
+  const evLines = params.evidence.slice(-20).map(e =>
+    e.kind === 'tool' || e.tool
+      ? `- [${e.tool ?? 'tool'} ${e.success ? 'OK' : 'FAIL'}] ${e.text.slice(0, 160)}`
+      : `- ${e.text.slice(0, 160)}`,
+  )
+  let ev = evLines.join('\n')
+  if (ev.length > 4000) ev = ev.slice(0, 4000) + '\n… (cắt bớt)'
+  lines.push(`TOOL EVIDENCE LOG (mục mới nhất cuối):\n${ev || '(không có)'}`)
+  return lines.join('\n\n')
+}
+
+export interface RuntimeJudgeGateInput {
+  mode: 'off' | 'critical' | 'all'
+  /** Verdict EFFECTIVE sau verify-guard (gate chạy sau guard này) */
+  verdict: EvalVerdict
+  runToolCalls: number
+  cycle: number
+  effectiveMaxCycles: number
+  /** Flag per-run — đã chạy 3-judge trong run này chưa (chi phí guard) */
+  alreadyFired: boolean
+  goal: string
+  evidence: Array<{ kind: string; tool?: string; success?: boolean; text: string }>
+  criteria?: readonly string[]
+  /** Inject judge cho test — mặc định runtimeJudgeVerdict thật */
+  judgeFn?: (contextSummary: string, criteria: string[]) => Promise<{ median: number; scores: number[] }>
+}
+
+export interface RuntimeJudgeGateResult {
+  /** 3-judge ĐÃ chạy trong lần gọi này (caller set per-run flag) */
+  fired: boolean
+  /** Verdict sau gate (có thể đã hạ cấp complete→false) */
+  verdict: EvalVerdict
+  /** true khi median < 0.5 ép hạ verdict.complete true→false */
+  downgraded: boolean
+  median: number | null
+  scores: number[] | null
+}
+
+/**
+ * P3-M3 GATE — orchestration hoàn chỉnh (export cho test): mode + điều kiện
+ * critical + flag per-run + gọi 3-judge + hạ cấp khi median < 0.5 ∧ complete.
+ * Fail-open TUYỆT ĐỐI: judgeFn throw → giữ nguyên verdict, fired=true (đã
+ * thử — không đốt thêm lượt), median null ( KHÔNG phán hạ trên lỗi).
+ * All-fail judge → median 0.5 neutral → KHÔNG hạ ("judge lỗi hết → verdict
+ * gốc giữ nguyên" — spec §P3-M3).
+ */
+export async function evaluateRuntimeJudgeGate(input: RuntimeJudgeGateInput): Promise<RuntimeJudgeGateResult> {
+  const unchanged: RuntimeJudgeGateResult = {
+    fired: false,
+    verdict: input.verdict,
+    downgraded: false,
+    median: null,
+    scores: null,
+  }
+  if (input.mode === 'off') return unchanged
+  if (input.alreadyFired) return unchanged
+  if (
+    input.mode === 'critical' &&
+    !isCriticalRuntimeJudgeRun({
+      verdictComplete: input.verdict.complete,
+      runToolCalls: input.runToolCalls,
+      cycle: input.cycle,
+      effectiveMaxCycles: input.effectiveMaxCycles,
+    })
+  ) {
+    return unchanged
+  }
+
+  const criteria = input.criteria ?? RUNTIME_JUDGE_CRITERIA
+  const contextSummary = buildRuntimeJudgeContext({
+    goal: input.goal,
+    verdict: input.verdict,
+    evidence: input.evidence,
+  })
+  const judgeFn = input.judgeFn ?? runtimeJudgeVerdict
+  try {
+    const res = await judgeFn(contextSummary, [...criteria])
+    // Hạ cấp: median < 0.5 (đa số judge chấm fail) ∧ evaluator phán complete
+    if (res.median < 0.5 && input.verdict.complete) {
+      const tag = ` [3judge-downgrade: median=${res.median.toFixed(2)}, scores=[${res.scores.join(', ')}] — trọng tài đa số chưa thấy đủ bằng chứng theo 5 tiêu chí lõi]`
+      // rootCause gốc quá dài → cắt PHẦN GỐC để tag (dấu vết downgade đối
+      // chiếu) luôn nguyên vẹn trong cap 400 ký tự của ArbiterVerdict.rootCause
+      const base = input.verdict.rootCause || '(evaluator không nêu)'
+      const rootCause = (base.length + tag.length <= 400 ? base : base.slice(0, Math.max(0, 400 - tag.length))) + tag
+      const downgraded: EvalVerdict = {
+        ...input.verdict,
+        complete: false,
+        verified: false,
+        rootCause,
+        missing: Array.from(new Set([
+          ...input.verdict.missing,
+          '3-judge runtime gate hạ cấp: đối chiếu lại 5 tiêu chí lõi (evidence-verified/E2E-passed/todo-closed/no-derived-number/debt-ready) bằng bằng chứng tool cụ thể',
+        ])).slice(0, 6),
+      }
+      return { fired: true, verdict: downgraded, downgraded: true, median: res.median, scores: res.scores }
+    }
+    return { fired: true, verdict: input.verdict, downgraded: false, median: res.median, scores: res.scores }
+  } catch {
+    // fail-open — lỗi judge KHÔNG chặn verdict gốc (spec §P3-M3)
+    return { fired: true, verdict: input.verdict, downgraded: false, median: null, scores: null }
+  }
+}
+
 /**
  * Fingerprint "có tiến triển không" — hash nội dung 6 messages cuối.
  * IMP-2 (G5 — audit Task H): LOẠI directive/hệ thống khỏi hash — continuation
@@ -2654,6 +2817,11 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
   let totalIterations = resumeState?.counters.totalIterations ?? 0
   let totalToolCalls = resumeState?.counters.totalToolCalls ?? 0
   let tokensUsed = resumeState?.counters.tokensUsed ?? 0
+  /** P3-M3 — 3-judge runtime gate đã chạy trong run-segment này chưa (chi phí
+   *  guard: tối đa 1 lần/run — spec §P3-M3). Không persist qua resume: mỗi
+   *  segment được cấp phát lại 1 lần (kích hoạt hiếm — chỉ khi RUNTIME_JUDGES
+   *  bật + run critical). */
+  let runtimeJudgesFired = false
   let cyclesDone = resumeState?.counters.cyclesDone ?? 0
   /** Chu kỳ đã BẮT ĐẦU (kể cả đang dở) — dùng cho report/metadata trung thực:
    *  budget cắt giữa chu kỳ 1 → "1 chu kỳ (dở)", không phải 0 hay 1 hoàn thành */
@@ -4727,6 +4895,41 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       recordAgentThought(agentSessionId, `🛡 Harness verify-guard: hạ "hoàn thành" → "chưa đạt" — có sửa sau lần kiểm định cuối mà chưa kiểm định lại`, totalIterations)
     }
 
+    // ===== P3-M3 — 3-JUDGE RUNTIME GATE (RUNTIME_JUDGES=off|critical|all, default OFF) =====
+    // Trọng tài median 3-judge đánh lại verdict trên 5 tiêu chí lõi cho lớp
+    // run critical (spec §P3-M3). median < 0.5 ∧ complete → hạ cấp + tag
+    // '[3judge-downgrade]' vào rootCause (persist qua ArbiterVerdict với
+    // forcedDowngrade=true — tái dùng field sẵn, không schema mới). Chi phí
+    // guard: ≤1 lần/run (runtimeJudgesFired). Fail-open mọi tầng — flag OFF
+    // mặc định → hành vi cũ 100%.
+    let threeJudgeDowngrade = false
+    if (!isCancelled()) {
+      const rjMode = parseRuntimeJudgesMode(process.env.RUNTIME_JUDGES)
+      if (rjMode !== 'off' && !runtimeJudgesFired) {
+        const gate = await evaluateRuntimeJudgeGate({
+          mode: rjMode,
+          verdict,
+          runToolCalls: totalToolCalls,
+          cycle,
+          effectiveMaxCycles,
+          alreadyFired: runtimeJudgesFired,
+          goal: evaluatorGoal,
+          evidence: evidence.map(e => ({ kind: e.kind, tool: e.tool, success: e.success, text: e.text })),
+        })
+        if (gate.fired) {
+          runtimeJudgesFired = true // tối đa 1 lần 3-judge/run
+          console.log(`[GoalLoop] ${agentName} 3-judge runtime gate (chu kỳ ${cycle}, mode=${rjMode}): median=${gate.median ?? 'n/a'} scores=${gate.scores ? `[${gate.scores.join(', ')}]` : 'n/a'} → ${gate.downgraded ? 'DOWNGRADE complete→false [3judge-downgrade]' : 'giữ nguyên verdict'}`)
+          if (gate.downgraded) {
+            verdict = gate.verdict
+            forcedDowngrade = true
+            threeJudgeDowngrade = true
+            recordAgentThought(agentSessionId, `⚖️ 3-judge runtime gate: trọng tài đa số (median ${(gate.median ?? 0).toFixed(2)} < 0.5) chưa thấy đủ bằng chứng theo 5 tiêu chí lõi → hạ "hoàn thành" → "chưa đạt" [3judge-downgrade]`, totalIterations)
+            evidence.push({ cycle, kind: 'directive', text: `3-judge runtime gate hạ cấp verdict (median ${(gate.median ?? 0).toFixed(2)}) — chu kỳ kế phải đối chiếu 5 tiêu chí lõi bằng bằng chứng tool cụ thể` })
+          }
+        }
+      }
+    }
+
     // ===== 2026-10 — VERDICT STAGNATION TRACKING (điều kiện renewal) =====
     // Evaluator ra verdict GIỐNG HỆT chu kỳ trước (incomplete + cùng rootCause +
     // cùng missing) = bế tắc: agent đã thử mà không đổi được tình thế. ≥3 chu kỳ
@@ -4889,7 +5092,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           verified: verdict.verified,
           missing: JSON.stringify(verdict.missing),
           rootCause: forcedDowngrade && verdict.rootCause
-            ? `${verdict.rootCause} (harness downgrade)`
+            ? `${verdict.rootCause}${threeJudgeDowngrade ? '' : ' (harness downgrade)'}`
             : verdict.rootCause || null,
           forcedDowngrade,
         }).catch(() => { /* fail-open — verdict persist không được phép làm hỏng loop */ })

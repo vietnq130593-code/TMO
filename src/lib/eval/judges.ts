@@ -130,16 +130,23 @@ function parseFreeFormScore(content: string): number {
   return Math.max(0, Math.min(1, score))
 }
 
-/** Parse the 3 Y/N lines from a binary-rubric judge reply. Throws when
- *  fewer than 1 Y/N token is found. Score = yesCount / 3. */
-function parseBinaryRubricScore(content: string): number {
+/** Parse N Y/N lines từ binary-rubric judge reply. Throws khi không tìm thấy
+ *  Y/N token nào. Score = yesCount/N (trên N check ĐẦU TIÊN — reasoning model
+ *  có thể nhắc lại tiêu chí kèm chữ cái, chỉ đếm hoá đơn đầu). */
+function parseBinaryRubricScoreN(content: string, checks: number): number {
   const tokens = content.toUpperCase().match(/\b[YN]\b/g)
   if (!tokens || tokens.length === 0) {
     throw new Error(`no Y/N tokens in judge reply: "${content.slice(0, 80)}"`)
   }
-  const first3 = tokens.slice(0, 3)
-  const yesCount = first3.filter((t) => t === 'Y').length
-  return yesCount / 3
+  const firstN = tokens.slice(0, checks)
+  const yesCount = firstN.filter((t) => t === 'Y').length
+  return yesCount / checks
+}
+
+/** Parse the 3 Y/N lines from a binary-rubric judge reply. Throws when
+ *  fewer than 1 Y/N token is found. Score = yesCount / 3. */
+function parseBinaryRubricScore(content: string): number {
+  return parseBinaryRubricScoreN(content, 3)
 }
 
 // ==================== PROVIDER CALLS ====================
@@ -217,6 +224,21 @@ async function runSingleJudge(
   }
 }
 
+// ==================== MEDIAN HELPER (dùng chung eval + runtime) ====================
+
+/**
+ * Median các điểm hợp lệ (≥0). Judge fail = -1 sentinel bị loại. Toàn bộ fail
+ * → 0.5 (neutral). Chẵn số judge sống → trung bình 2 giá trị giữa.
+ */
+function medianOfScores(scores: number[]): number {
+  const valid = scores.filter((s) => s >= 0).sort((a, b) => a - b)
+  if (valid.length === 0) return 0.5 // all judges failed — neutral
+  if (valid.length % 2 === 1) return valid[(valid.length - 1) / 2]
+  // Even count (a judge failed) — mean of the two middle values.
+  const hi = valid.length / 2
+  return (valid[hi - 1] + valid[hi]) / 2
+}
+
 // ==================== PUBLIC API ====================
 
 /**
@@ -247,21 +269,141 @@ export async function judgeAnswer(
   }
 
   const scores = results.map((r) => r.score)
-  const valid = scores.filter((s) => s >= 0).sort((a, b) => a - b)
+  return {
+    median: medianOfScores(scores),
+    scores,
+    judges: results.map((r) => r.judgeName),
+    reasoning: results.map((r) => r.reasoning),
+  }
+}
 
-  let median: number
-  if (valid.length === 0) {
-    median = 0.5 // all judges failed — neutral
-  } else if (valid.length % 2 === 1) {
-    median = valid[(valid.length - 1) / 2]
-  } else {
-    // Even count (a judge failed) — mean of the two middle values.
-    const hi = valid.length / 2
-    median = (valid[hi - 1] + valid[hi]) / 2
+// ==================== P3-M3 — RUNTIME 3-JUDGE CHO PHÁN QUYẾT CRITICAL ====================
+//
+// BLUEPRINT-STATS-LEARNING §P3-M3 (mục #11 — ML.pdf §Random Forest: ensemble
+// giảm phương sai + §GPT-4 as Judge). Đưa trọng tài đa số (median 3 judge)
+// từ eval-only vào RUNTIME cho các phán quyết đắt giá — cắm tại EVALUATE
+// phase của agent-goal-loop SAU khi evaluator chính ra verdict (điểm cắm +
+// cờ RUNTIME_JUDGES=off|critical|all ở agent-goal-loop.ts — mặc định OFF).
+//
+// Dùng đúng 3 slot model hiện có (kimi-k3 primary → space-bunny-free fallback,
+// slot 3 binary rubric) — KHÔNG thêm model mới.
+
+/**
+ * Timeout guard mỗi judge runtime. Blueprint ghi 30s/judge NHƯNG user
+ * directive 2026-12-01 override: kimi-k3 là model chậm-hợp-lệ (call thường
+ * ~120s, chu kỳ agent 2-6 phút) và KHÔNG được giết call chậm-hợp-lệ —
+ * timeout 30s sẽ giết SAI toàn bộ judge kimi-k3 (trung bình ~120s). Default
+ * 600s bám KIMI_K3_TIMEOUT_MS của llm.ts (task-87): guard chống HANG thật,
+ * không chống chậm. Env RUNTIME_JUDGES_TIMEOUT_MS override (floor 5s).
+ */
+export const RUNTIME_JUDGE_TIMEOUT_MS = (() => {
+  const v = Number(process.env.RUNTIME_JUDGES_TIMEOUT_MS)
+  return Number.isFinite(v) && v >= 5000 ? Math.floor(v) : 600_000
+})()
+
+/** Timeout wrapper (Promise.race — pattern context-compression/goal-loop) */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+  })
+  try {
+    return Promise.race([promise, timeoutPromise]).finally(() => {
+      if (timeoutId) clearTimeout(timeoutId)
+    })
+  } catch {
+    if (timeoutId) clearTimeout(timeoutId)
+    throw new Error(`${label} failed`)
+  }
+}
+
+/** Prompt free-form cho runtime verdict — P(run TRULY met goal | criteria) */
+function runtimeFreeFormPrompt(contextSummary: string, criteria: string[]): string {
+  return (
+    `You are an impartial runtime arbitration panel. An autonomous agent's run has been judged by its primary evaluator. ` +
+    `Your job: independently decide whether the run TRULY met its goal according to ALL criteria below, based ONLY on the evidence shown.\n\n` +
+    `=== RUN CONTEXT (goal, evaluator verdict, tool evidence) ===\n${contextSummary}\n\n` +
+    `=== CRITERIA — a truly complete run must satisfy ALL of them ===\n` +
+    criteria.map((c, i) => `${i + 1}. ${c}`).join('\n') +
+    `\n\nScore 0.0-1.0 = P(the run truly met its goal per ALL criteria given the evidence shown). ` +
+    `1.0 = every criterion confirmed by tool evidence, 0.0 = clearly not met, 0.5 = uncertain. ` +
+    `Reply with ONLY the number.`
+  )
+}
+
+/** Prompt binary rubric cho runtime verdict — N tiêu chí, N dòng Y/N */
+function runtimeBinaryRubricPrompt(contextSummary: string, criteria: string[]): string {
+  return (
+    `You are an impartial runtime arbitration panel. An autonomous agent's run has been judged by its primary evaluator. ` +
+    `Your job: independently check the run against EACH criterion below, using ONLY the evidence shown.\n\n` +
+    `=== RUN CONTEXT (goal, evaluator verdict, tool evidence) ===\n${contextSummary}\n\n` +
+    `=== CRITERIA — check EACH one against the evidence ===\n` +
+    criteria.map((c, i) => `${i + 1}. ${c}`).join('\n') +
+    `\n\nFor EACH criterion reply Y (the run context's tool evidence confirms it) or N (not confirmed / no evidence).\n` +
+    `Reply with exactly ${criteria.length} lines, each containing ONLY the letter 'Y' or 'N' (line i = criterion i).`
+  )
+}
+
+/** Chạy 1 slot judge runtime (timeout guard + parse theo loại slot) */
+async function runRuntimeJudgeSlot(
+  config: JudgeConfig,
+  contextSummary: string,
+  criteria: string[]
+): Promise<JudgeResult> {
+  const prompt = config.binaryRubric
+    ? runtimeBinaryRubricPrompt(contextSummary, criteria)
+    : runtimeFreeFormPrompt(contextSummary, criteria)
+  // 512 tokens như eval judge — kimi-k3 reasoning model cần headroom (live-probe
+  // 2026-11-30: 32/64 để lại content rỗng).
+  const maxTokens = 512
+  try {
+    const { content, judgeName } = await withTimeout(
+      callJudgeModel(prompt, maxTokens),
+      RUNTIME_JUDGE_TIMEOUT_MS,
+      'Runtime judge',
+    )
+    const score = config.binaryRubric
+      ? parseBinaryRubricScoreN(content, criteria.length)
+      : parseFreeFormScore(content)
+    return { score, reasoning: content.trim().slice(0, 300), judgeName }
+  } catch (err) {
+    // Timeout / lỗi call / parse fail → -1 sentinel, loại khỏi median (fail-open
+    // — KHÔNG chặn verdict gốc của evaluator theo spec §P3-M3).
+    return {
+      score: -1,
+      reasoning: `runtime judge failed: ${err instanceof Error ? err.message : String(err)}`,
+      judgeName: `${JUDGE_PRIMARY_MODEL}→${JUDGE_FALLBACK_MODEL}`,
+    }
+  }
+}
+
+/**
+ * P3-M3 — 3-judge median cho RUNTIME verdict phán quyết. Cùng 3 slot +
+ * cung chuỗi fallback của eval judgeAnswer (kimi-k3 → space-bunny-free, slot
+ * 3 binary rubric trên bộ tiêu chí truyền vào). Toàn bộ judge fail → median
+ * 0.5 neutral (KHÔNG hạ verdict — "judge lỗi hết → verdict gốc giữ nguyên").
+ *
+ * @param contextSummary tóm tắt run: goal + tiêu chí nghiệm thu + verdict của
+ *        evaluator chính + preview bằng chứng tool (caller dựng)
+ * @param criteria bộ tiêu chí rút gọn (5 tiêu chí lõi từ 18 rules —
+ *        RUNTIME_JUDGE_CRITERIA ở agent-goal-loop)
+ */
+export async function runtimeJudgeVerdict(
+  contextSummary: string,
+  criteria: string[]
+): Promise<JudgeVerdict> {
+  const configs = [judge1Config(), judge2Config(), judge3Config()]
+
+  // Tuần tự như judgeAnswer — chống dồn 429 kéo dài phía NIM (đặc tính user
+  // 2026-11-30); runtime chỉ chạy ≤1 lần/run nên tổng thời gian có kiểm soát.
+  const results: JudgeResult[] = []
+  for (const config of configs) {
+    results.push(await runRuntimeJudgeSlot(config, contextSummary, criteria))
   }
 
+  const scores = results.map((r) => r.score)
   return {
-    median,
+    median: medianOfScores(scores),
     scores,
     judges: results.map((r) => r.judgeName),
     reasoning: results.map((r) => r.reasoning),
