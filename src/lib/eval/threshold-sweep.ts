@@ -129,13 +129,23 @@ function zeroState(target: SweepTarget, note: string): SweepReport {
 /**
  * PHẦN THUẦN — dựng toàn bộ báo cáo sweep từ cặp (scores, actuals).
  * Length mismatch → throw (lỗi lời gọi, không phải dữ liệu — cùng quy ước
- * stats/classification). Rỗng → zero-state + note.
+ * stats/classification). Score không hữu hạn (NaN/±Infinity) → throw tường
+ * minh (FB-Đợt4-R1-01: không throw sẽ âm thầm tạo dòng ngưỡng NaN trong bảng
+ * + mẫu đó không bao giờ được dự đoán dương mà vẫn đếm vào n — cả 2 DB
+ * caller đã lọc Number.isFinite trước khi gọi). Rỗng → zero-state + note.
  */
 export function buildSweepReport(target: SweepTarget, scores: number[], actuals: boolean[]): SweepReport {
   if (scores.length !== actuals.length) {
     throw new Error(
       `buildSweepReport: scores (${scores.length}) và actuals (${actuals.length}) khác độ dài`,
     )
+  }
+  for (let i = 0; i < scores.length; i++) {
+    if (!Number.isFinite(scores[i])) {
+      throw new Error(
+        `buildSweepReport: scores[${i}] = ${scores[i]} không hữu hạn — lọc Number.isFinite trước khi sweep (caller DB đã lọc)`,
+      )
+    }
   }
   const n = scores.length
   if (n === 0) {
@@ -190,54 +200,71 @@ export function buildSweepReport(target: SweepTarget, scores: number[], actuals:
   }
 
   // ── 3 khuyến nghị theo tiêu chí (chỉ xuất hiện khi thỏa mãn được) ──
+  // FB-Đợt4-R1-02: chọn/lọc trên giá trị THÔ (rawPoints + f1Of) — KHÔNG dùng
+  // points đã round4 (làm tròn có thể nạp ứng viên có precision thô < 0.9
+  // chênh ≤ 5e-5, hoặc ghi tie giả giữa 2 f1 lệch < 5e-5). Chỉ round khi xuất.
+  // Tie f1 so với epsilon 1e-12: 2 f1 bằng nhau toán học nhưng lệch nhau 1
+  // ULP float (vd cùng 2/3 tính qua tử/mẫu khác nhau) vẫn phải được coi là
+  // TIE để bậc tie-break (precision) quyết định — không để noise ULP thắng.
+  const raw: Array<{ threshold: number; precision: number; recall: number; f1: number }> =
+    rawPoints.map((p) => ({
+      threshold: p.threshold,
+      precision: p.precision,
+      recall: p.recall,
+      f1: f1Of(p.precision, p.recall),
+    }))
   const recommended: SweepRecommendation[] = []
+  const F1_EPS = 1e-12
 
-  // max_f1: điểm f1 cao nhất; đồng điểm → precision cao hơn; vẫn đồng →
-  // ngưỡng CAO hơn (kén chọn hơn — an toàn cho precision).
-  let best: SweepPoint | null = null
-  for (const p of points) {
-    if (
-      best === null ||
-      p.f1 > best.f1 ||
-      (p.f1 === best.f1 && p.precision > best.precision) ||
-      (p.f1 === best.f1 && p.precision === best.precision && p.threshold > best.threshold)
-    ) {
+  // max_f1: điểm f1 cao nhất; đồng điểm (≤ ε) → precision cao hơn; vẫn đồng
+  // → ngưỡng CAO hơn (kén chọn hơn — an toàn cho precision).
+  let best: (typeof raw)[number] | null = null
+  for (const p of raw) {
+    if (best === null) {
       best = p
+      continue
+    }
+    if (p.f1 > best.f1 + F1_EPS) {
+      best = p
+    } else if (Math.abs(p.f1 - best.f1) <= F1_EPS) {
+      if (p.precision > best.precision || (p.precision === best.precision && p.threshold > best.threshold)) {
+        best = p
+      }
     }
   }
   if (best) {
     recommended.push({
       criterion: 'max_f1',
       threshold: best.threshold,
-      precision: best.precision,
-      recall: best.recall,
-      f1: best.f1,
+      precision: round4(best.precision),
+      recall: round4(best.recall),
+      f1: round4(best.f1),
     })
   }
 
   // precision ≥ 0.9: ngưỡng THẤP NHẤT đạt precision (max recall trong ràng buộc)
-  const precOk = points.filter((p) => p.precision >= 0.9)
+  const precOk = raw.filter((p) => p.precision >= 0.9)
   if (precOk.length > 0) {
     const pick = precOk.reduce((a, b) => (b.threshold < a.threshold ? b : a))
     recommended.push({
       criterion: 'precision_gte_0.9',
       threshold: pick.threshold,
-      precision: pick.precision,
-      recall: pick.recall,
-      f1: pick.f1,
+      precision: round4(pick.precision),
+      recall: round4(pick.recall),
+      f1: round4(pick.f1),
     })
   }
 
   // recall ≥ 0.9: ngưỡng CAO NHẤT còn đạt recall (max precision trong ràng buộc)
-  const recOk = points.filter((p) => p.recall >= 0.9)
+  const recOk = raw.filter((p) => p.recall >= 0.9)
   if (recOk.length > 0) {
     const pick = recOk.reduce((a, b) => (b.threshold > a.threshold ? b : a))
     recommended.push({
       criterion: 'recall_gte_0.9',
       threshold: pick.threshold,
-      precision: pick.precision,
-      recall: pick.recall,
-      f1: pick.f1,
+      precision: round4(pick.precision),
+      recall: round4(pick.recall),
+      f1: round4(pick.f1),
     })
   }
 

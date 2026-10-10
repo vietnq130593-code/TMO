@@ -155,6 +155,52 @@ describe('r77 · P2-M1 buildSweepReport (thuần)', () => {
     expect(() => buildSweepReport('kb_confidence', [0.5], [true, false])).toThrow()
   })
 
+  test('FB-Đợt4-R1-01: score NaN/Infinity → throw tường minh (không sinh dòng ngưỡng NaN âm thầm)', () => {
+    expect(() => buildSweepReport('kb_confidence', [0.9, Number.NaN, 0.4], [true, false, true])).toThrow(
+      /không hữu hạn/,
+    )
+    expect(() => buildSweepReport('kb_confidence', [0.9, Infinity], [true, false])).toThrow(
+      /không hữu hạn/,
+    )
+    expect(() => buildSweepReport('kb_confidence', [0.9, -Infinity], [true, false])).toThrow(
+      /không hữu hạn/,
+    )
+  })
+
+  test('FB-Đợt4-R1-02 + biên: precision/recall ĐÚNG 0.9 được tính là đạt (≥, không phải >)', () => {
+    // 9 T @0.95 + 1 F @0.9 + 2 F @0.7 + 1 T @0.4 → positives=10, negatives=3
+    //   t=0.95: tp=9  fp=0 → P=1,     R=0.9 (biên) → F1=0.9474
+    //   t=0.90: tp=9  fp=1 → P=0.9 (biên), R=0.9     → F1=0.9
+    //   t=0.70: tp=9  fp=3 → P=0.75,  R=0.9          → F1=0.8182
+    //   t=0.40: tp=10 fp=3 → P=10/13, R=1            → F1=0.8696
+    // (bộ này thiết kế để DÒNG BIÊN chính là lựa chọn: nếu lọc > 0.9 thay vì
+    // ≥ 0.9 thì precision_gte_0.9 nhảy 0.9→0.95 và recall_gte_0.9 nhảy 0.95→0.4)
+    const r = buildSweepReport(
+      'kb_confidence',
+      [0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.9, 0.7, 0.7, 0.4],
+      [true, true, true, true, true, true, true, true, true, false, false, false, true],
+    )
+    expect(r.positives).toBe(10)
+    const byC = new Map(r.recommended.map((x) => [x.criterion, x]))
+    // precision ≥ 0.9: nhỏ nhất đạt là chính dòng biên P=0.9 tại t=0.9
+    expect(byC.get('precision_gte_0.9')).toMatchObject({ threshold: 0.9, precision: 0.9, recall: 0.9 })
+    // recall ≥ 0.9: lớn nhất đạt là 0.95 với R đúng 0.9 (biên)
+    expect(byC.get('recall_gte_0.9')).toMatchObject({ threshold: 0.95, precision: 1, recall: 0.9 })
+    expect(byC.get('max_f1')).toMatchObject({ threshold: 0.95, f1: 0.9474 })
+  })
+
+  test('FB-Đợt4-R1-02: tie f1 toán học lệch 1 ULP → tie-break precision quyết (khoá bằng dữ liệu fuzz thật)', () => {
+    // Bộ fuzz#65 của harness độc lập: t=0.5 (P=6/11≈0.5455, R=6/7) và
+    // t=0.18 (P=0.5, R=1) đều f1 = 2/3, khác nhau 1 ULP float (…652 vs …663).
+    // So sánh thô không-epsilon sẽ để noise ULP chọn 0.18 — sai: phải TIE
+    // rồi precision cao hơn thắng → 0.5.
+    const scores = [0.5, 0.41, 0.5, 0.94, 0.5, 0.5, 0.64, 0.18, 0.5, 0.85, 0.5, 0.74, 0.38, 0.67]
+    const actuals = [false, false, true, false, false, false, true, true, true, true, true, false, false, true]
+    const r = buildSweepReport('evaluator_confidence', scores, actuals)
+    const byC = new Map(r.recommended.map((x) => [x.criterion, x]))
+    expect(byC.get('max_f1')).toMatchObject({ threshold: 0.5, precision: 0.5455, recall: 0.8571, f1: 0.6667 })
+  })
+
   test('không mutate đầu vào (scores/actuals giữ nguyên)', () => {
     const scores = [0.9, 0.5, 0.5]
     const actuals = [true, false, true]
