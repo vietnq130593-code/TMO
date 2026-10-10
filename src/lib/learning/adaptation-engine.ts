@@ -33,6 +33,8 @@
  */
 
 import type { AdaptationDecision } from './types'
+import type { AdaptationStatsDecision } from './adaptation-stats'
+import { isAdaptationStatsGateBlocking } from './adaptation-stats'
 import { applyAdaptation, persistAdaptationLog } from './strategy-adapter'
 
 // ==================== TYPES ====================
@@ -114,15 +116,37 @@ const STRATEGY_DIRECTIVES: Record<string, string> = {
  * khi fail-open). KHÔNG throw — mọi lỗi nuốt + log.
  *
  * `escalate` trong config được caller dùng để emit SSE warning cho user.
- * `sourceStepId` — stepId từng fail (out come chỉ chốt khi step này chạy lại).
+ * `sourceStepId` — stepId từng fail (outcome chỉ chốt khi step này chạy lại).
+ * `statsGate` (P4-M1, tùy chọn) — kết luận cổng kiểm định thống kê từ
+ * evaluateAdaptationGateForPair: pass=false + ADAPTATION_STATS_GATE=on →
+ * KHÔNG merge directives (log adaptation-blocked-by-stats — điểm đổi hành
+ * vi duy nhất của phase). Gate OFF (mặc định) → log-only, apply như cũ;
+ * không truyền → hành vi cũ nguyên vẹn tuyệt đối.
  */
 export function applyAdaptationToSession(
   sessionId: string,
   decision: AdaptationDecision,
   sourceStepId?: string,
+  statsGate?: AdaptationStatsDecision | null,
 ): SessionAdaptationState | null {
   try {
     if (!sessionId || !decision?.shouldAdapt) return null
+
+    // P4-M1 — cổng kiểm định thống kê (mục #8): bằng chứng tiền sử nói chiến
+    // lược này KHÔNG cải thiện kết quả → chặn (chỉ khi gate ON — default OFF
+    // là log-only 2 đợt quan sát trước khi user duyệt chặn thật, điểm dừng
+    // quyết định #3 blueprint).
+    if (statsGate && !statsGate.pass && isAdaptationStatsGateBlocking()) {
+      console.log(
+        `[Adaptation] adaptation-blocked-by-stats — session ${sessionId.slice(0, 12)} strategy='${decision.recommendedStrategy}' ${statsGate.reason} (nA=${statsGate.nA}, nB=${statsGate.nB}, p=${statsGate.p ?? 'n/a'}) [ADAPTATION_STATS_GATE=on]`,
+      )
+      return null
+    }
+    if (statsGate) {
+      console.log(
+        `[Adaptation] stats-gate ${statsGate.pass ? 'PASS' : 'would-block'} (log-only${isAdaptationStatsGateBlocking() ? '' : ' — ADAPTATION_STATS_GATE off'}) — strategy='${decision.recommendedStrategy}' ${statsGate.test} p=${statsGate.p ?? 'n/a'} nA=${statsGate.nA} nB=${statsGate.nB}`,
+      )
+    }
 
     const { updatedConfig } = applyAdaptation(decision)
     if (!updatedConfig || Object.keys(updatedConfig).length === 0) return null

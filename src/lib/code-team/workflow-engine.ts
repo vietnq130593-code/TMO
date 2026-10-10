@@ -857,11 +857,13 @@ async function detectAndPersistFailurePattern(
         context: { ...toPersist.context, errorType } as typeof toPersist.context,
       }
       const decision = recommendAdaptation(patternForRecommend, historicalMetrics)
+      const adaptationLogId = `adapt-${sessionId}-${Date.now()}`
+      const fromStrategyForGate = toPersist.nextStrategy
       await persistAdaptationLog({
-        id: `adapt-${sessionId}-${Date.now()}`,
+        id: adaptationLogId,
         sessionId,
         patternId: null, // upsert-increment: không track pattern id riêng
-        fromStrategy: toPersist.nextStrategy,
+        fromStrategy: fromStrategyForGate,
         toStrategy: decision.recommendedStrategy,
         reason: decision.reason,
         confidence: decision.confidence,
@@ -873,10 +875,29 @@ async function detectAndPersistFailurePattern(
       // directive system prompt (preStep/fixStrategy), giảm vòng (reduce_scope),
       // nén sớm (compress_context), escalate SSE (escalate_to_user), siết KB
       // threshold (tighten_refusal_threshold — TTL 24h tự hoàn tác).
+      //
+      // P4-M1 (mục #8) — CỔNG KIỂM ĐỊNH THỐNG KÊ trước khi apply: đánh giá
+      // bằng chứng tiền sử StrategyAdaptationLog của cặp (from → to) bằng
+      // χ² Yates / Fisher exact (one-sided hướng cải thiện) + Welch-t bổ trợ
+      // trên cycles; kết luận lưu statsJson của row vừa tạo. Mặc định
+      // LOG-ONLY (ADAPTATION_STATS_GATE off — 2 đợt quan sát trước khi user
+      // duyệt chặn thật, điểm dừng quyết định #3 blueprint). Toàn bộ
+      // fail-open: gate lỗi = không có gate = hành vi cũ.
       const { applyAdaptationToSession } = await import('@/lib/learning/adaptation-engine')
-      const applied = applyAdaptationToSession(sessionId, decision, stepId)
+      const { evaluateAdaptationGateForPair, persistAdaptationStatsJson } = await import(
+        '@/lib/learning/adaptation-stats'
+      )
+      let statsGate: import('@/lib/learning/adaptation-stats').AdaptationStatsDecision | null = null
+      try {
+        const gateResult = await evaluateAdaptationGateForPair(fromStrategyForGate, decision.recommendedStrategy)
+        if (gateResult) {
+          statsGate = gateResult.decision
+          await persistAdaptationStatsJson(adaptationLogId, gateResult)
+        }
+      } catch { /* fail-open — gate lỗi/không có tiền sử → áp dụng như cũ */ }
+      const applied = applyAdaptationToSession(sessionId, decision, stepId, statsGate)
       console.log(
-        `[Workflow] Layer 9 P1.3→V2a — pattern persisted + adaptation ${applied ? 'APPLIED' : 'recommend-only'}: ${toPersist.type} count=${newCount} → ${decision.recommendedStrategy} (session ${sessionId.slice(0, 12)})`,
+        `[Workflow] Layer 9 P1.3→V2a — pattern persisted + adaptation ${applied ? 'APPLIED' : 'recommend-only'}: ${toPersist.type} count=${newCount} → ${decision.recommendedStrategy} (session ${sessionId.slice(0, 12)})${statsGate ? ` · stats-gate ${statsGate.test} p=${statsGate.p ?? 'n/a'} nA=${statsGate.nA} nB=${statsGate.nB} → ${statsGate.pass ? 'pass' : 'block'}` : ''}`,
       )
     } else {
       console.log(`[Workflow] Layer 9 P1.3 — failure pattern persisted: ${toPersist.type} (count=${newCount}, errorType=${errorType}, session ${sessionId.slice(0, 12)})`)
