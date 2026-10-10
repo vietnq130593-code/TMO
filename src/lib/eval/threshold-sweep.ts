@@ -167,8 +167,13 @@ export function buildSweepReport(target: SweepTarget, scores: number[], actuals:
     f1: round4(f1Of(p.precision, p.recall)),
   }))
 
-  // AUC trên điểm GỐC của stats (chưa round — giữ chính xác diện tích)
-  const aucRocValue = round4(aucRoc(rawPoints))
+  // AUC trên điểm GỐC của stats (chưa round — giữ chính xác diện tích).
+  // FB-Đợt4-R2-01: thiếu MỘT TRONG HAI LỚP (positives=0 hoặc negatives=0) thì
+  // AUC-ROC KHÔNG định nghĩa được (không có cặp T/F để xếp hạng) → null —
+  // đối xứng với precedent P1-M1 (aucPr null khi không có positive thật).
+  // Trả 0 đằng ấy sẽ bị đọc nhầm "đường cong tệ nhất".
+  const aucRocValue =
+    positives > 0 && totalNeg > 0 ? round4(aucRoc(rawPoints)) : null
   const aucPrValue = positives > 0 ? round4(aucPr(rawPoints)) : null
 
   // Mốc cố định 0.05..0.95 — đọc nhanh không cần nội suy

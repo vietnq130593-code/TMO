@@ -129,15 +129,24 @@ describe('r77 · P2-M1 buildSweepReport (thuần)', () => {
     expect(byC.get('recall_gte_0.9')).toMatchObject({ threshold: 0.3, precision: 0.5, f1: 0.6667 })
   })
 
-  test('0 positive thật → aucPr null + recommended rỗng + note (precision/f1 vô nghĩa)', () => {
+  test('0 positive thật → aucPr null + aucRoc null + recommended rỗng + note', () => {
     const r = buildSweepReport('kb_confidence', [0.9, 0.5], [false, false])
     expect(r.n).toBe(2)
     expect(r.positives).toBe(0)
     expect(r.aucPr).toBeNull()
+    expect(r.aucRoc).toBeNull() // FB-Đợt4-R2-01: thiếu 1 lớp → AUC-ROC không định nghĩa
     expect(r.recommended).toEqual([])
     expect(r.note).toContain('0/2')
-    // AUC-ROC vẫn định nghĩa (đường cong dưới đường chéo)
-    expect(typeof r.aucRoc).toBe('number')
+  })
+
+  test('FB-Đợt4-R2-01: toàn positive (0 negative) → aucRoc null (không bị đọc nhầm 0 = tệ nhất), aucPr vẫn định nghĩa', () => {
+    // 2 mẫu đều T: không có cặp T/F nào để xếp hạng — AUC-ROC vô nghĩa;
+    // trước fix trả 0 (trông như đường cong tệ nhất có thể)
+    const r = buildSweepReport('evaluator_confidence', [0.85, 0.9], [true, true])
+    expect(r.positives).toBe(2)
+    expect(r.aucRoc).toBeNull()
+    expect(r.aucPr).toBe(1) // precision = 1 tại mọi ngưỡng có dự đoán → bước đủ 1.0
+    expect(r.recommended.length).toBeGreaterThan(0)
   })
 
   test('rỗng → zero-state n=0 + note, KHÔNG throw', () => {
