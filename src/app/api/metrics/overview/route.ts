@@ -19,8 +19,9 @@
  *            → high; (b) tool successRate < 50% với >= 10 calls → medium
  *   anomalyScan (P1-M3) — CHỈ khi ?scan=1: IQR anomaly scan (cache 10 phút
  *            TmoCache) — { scanned, anomalies, byTool, pruned }
+ *   kpis (P1-M4)     — CHỈ khi ?kpi=1: KPI layer (cache 10 phút TmoCache)
  *
- * Query params: hours=24 (default 24, max 168) · scan=1 (P1-M3)
+ * Query params: hours=24 (default 24, max 168) · scan=1 (P1-M3) · kpi=1 (P1-M4)
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -29,6 +30,8 @@ import { findAgentRunRecordsSince } from '@/lib/metrics-db'
 import { getDailyTokensByAgent } from '@/lib/llm'
 // P1-M3 — IQR anomaly scan theo yêu cầu (?scan=1, cache 10 phút)
 import { scanToolMetricAnomalies, type AnomalyScanResult } from '@/lib/learning/anomaly-detector'
+// P1-M4 — KPI layer theo yêu cầu (?kpi=1, cache 10 phút)
+import { computeAllKpis, type KpiComputed } from '@/lib/kpi/compute'
 import { TmoCache } from '@/lib/cache-store'
 
 export const dynamic = 'force-dynamic'
@@ -148,6 +151,10 @@ function zeroRuns() {
 /** Cache 10 phút cho anomaly scan kích hoạt từ overview (P1-M3 — tránh quét
  *  lặp khi UI poll overview; scan là query cửa sổ 7 ngày + ghi điểm mới). */
 const anomalyScanCache = new TmoCache<AnomalyScanResult>('metrics-anomaly-scan', 10 * 60 * 1000)
+
+/** Cache 10 phút cho KPI compute kích hoạt từ overview (P1-M4 — query rẻ
+ *  nhưng tránh tính lặp khi UI poll; route /api/metrics/kpi luôn tính tươi). */
+const kpiComputeCache = new TmoCache<KpiComputed[]>('metrics-kpi-compute', 10 * 60 * 1000)
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
@@ -384,6 +391,22 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // ==================== P1-M4: KPI layer (?kpi=1, cache 10 phút) ====================
+  // Blueprint §P1-M4 hook ⑤ — KHÔNG đổi các section cũ khi param vắng mặt.
+  let kpis: KpiComputed[] | null = null
+  if (searchParams.get('kpi') === '1') {
+    try {
+      kpis = kpiComputeCache.get()
+      if (!kpis) {
+        kpis = await computeAllKpis()
+        kpiComputeCache.set(kpis)
+      }
+    } catch (error) {
+      console.error('[Metrics/Overview] kpis section error (fail-open):', error)
+      kpis = null
+    }
+  }
+
   return NextResponse.json({
     generatedAt: new Date().toISOString(),
     // v1.1: range mode trả {from, to}; live mode trả {hours} như cũ
@@ -393,5 +416,6 @@ export async function GET(request: NextRequest) {
     runs,
     alerts,
     ...(anomalyScan ? { anomalyScan } : {}),
+    ...(kpis ? { kpis } : {}),
   })
 }

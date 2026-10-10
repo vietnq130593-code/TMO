@@ -1147,6 +1147,27 @@ model MetricAnomaly {
   @@index([toolName, observedAt])
 }
 
+/// P1-M4 (blueprint stats, mục #5 — DA.pdf §KPIs and Metrics) — lớp chỉ số
+/// có TÊN, có MỤC TIÊU, có TRẠNG THÁI thay cho số liệu rời rạc. 1 snapshot/
+/// ngày/KPI (unique date+kpi — compute idempotent). Định nghĩa KPI là
+/// SINGLE SOURCE trong src/lib/kpi/registry.ts (KPI_REGISTRY) — bảng này chỉ
+/// lưu giá trị đã tính + meta JSON breakdown.
+model KpiSnapshot {
+  id         String   @id @default(cuid())
+  /// YYYY-MM-DD (UTC) — 1 snapshot/ngày/KPI
+  date       String
+  /// khóa registry (vd mission_success_rate, verdict_precision...)
+  kpi        String
+  value      Float
+  sampleSize Int      @default(0)
+  /// JSON: breakdown/ghi chú nguồn dữ liệu
+  meta       String   @default("{}")
+  createdAt  DateTime @default(now())
+
+  @@unique([date, kpi])
+  @@index([kpi, date])
+}
+
 /// Task 20-b (self-monitoring) — persist run lifecycle của mỗi agent run
 /// (chat goal-loop / team workflow). Trước đây goal-loop metadata (cycles,
 /// stopReason, evaluatorConfidence, tokensUsed...) chỉ sống trong
