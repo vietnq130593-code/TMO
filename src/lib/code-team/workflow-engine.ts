@@ -888,14 +888,20 @@ async function detectAndPersistFailurePattern(
         '@/lib/learning/adaptation-stats'
       )
       let statsGate: import('@/lib/learning/adaptation-stats').AdaptationStatsDecision | null = null
+      let gateResult: import('@/lib/learning/adaptation-stats').AdaptationGateResult | null = null
       try {
-        const gateResult = await evaluateAdaptationGateForPair(fromStrategyForGate, decision.recommendedStrategy)
-        if (gateResult) {
-          statsGate = gateResult.decision
-          await persistAdaptationStatsJson(adaptationLogId, gateResult)
-        }
+        gateResult = await evaluateAdaptationGateForPair(fromStrategyForGate, decision.recommendedStrategy)
+        if (gateResult) statsGate = gateResult.decision
       } catch { /* fail-open — gate lỗi/không có tiền sử → áp dụng như cũ */ }
       const applied = applyAdaptationToSession(sessionId, decision, stepId, statsGate)
+      // statsJson ghi SAU apply để `applied` phản ánh đúng việc có merge thật
+      // không (FB-Đợt6-R2-01: row bị chặn phải đánh dấu applied=false để không
+      // ô nhiễm evidence của các lần gate sau)
+      if (gateResult) {
+        try {
+          await persistAdaptationStatsJson(adaptationLogId, gateResult, applied !== null)
+        } catch { /* fail-open — statsJson nullable */ }
+      }
       console.log(
         `[Workflow] Layer 9 P1.3→V2a — pattern persisted + adaptation ${applied ? 'APPLIED' : 'recommend-only'}: ${toPersist.type} count=${newCount} → ${decision.recommendedStrategy} (session ${sessionId.slice(0, 12)})${statsGate ? ` · stats-gate ${statsGate.test} p=${statsGate.p ?? 'n/a'} nA=${statsGate.nA} nB=${statsGate.nB} → ${statsGate.pass ? 'pass' : 'block'}` : ''}`,
       )

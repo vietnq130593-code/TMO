@@ -326,7 +326,7 @@ describe('D. evaluateAdaptationGateForPair — DB wiring (fail-open)', () => {
     expect(Number.isFinite(r!.continuous!.t)).toBe(true)
     expect(r!.continuous!.t).toBeGreaterThan(0) // before > after → t dương
 
-    // persist statsJson round-trip
+    // persist statsJson round-trip (applied=true — chiến lược được áp thật)
     const row = await db.strategyAdaptationLog.create({
       data: {
         sessionId: 'asg-statsjson',
@@ -337,22 +337,72 @@ describe('D. evaluateAdaptationGateForPair — DB wiring (fail-open)', () => {
         successful: null,
       },
     })
-    await persistAdaptationStatsJson(row.id, r!)
+    await persistAdaptationStatsJson(row.id, r!, true)
     const reloaded = await db.strategyAdaptationLog.findUnique({ where: { id: row.id } })
     expect(reloaded?.statsJson).not.toBeNull()
     const parsed = JSON.parse(reloaded!.statsJson!) as {
-      test: string; p: number; nA: number; nB: number; decision: string
+      test: string; p: number; nA: number; nB: number; decision: string; applied?: boolean
       continuous?: { test: string; nA: number; nB: number }
     }
     expect(parsed.test).toBe('chi2')
     expect(parsed.nA).toBe(12)
     expect(parsed.nB).toBe(12)
     expect(parsed.decision).toBe('pass')
+    expect(parsed.applied).toBe(true)
     expect(parsed.continuous?.test).toBe('welch_t')
 
     // Dọn seed của test này (giữ sạch cho file khác trong cùng process)
     await db.strategyAdaptationLog.deleteMany({ where: { sessionId: { startsWith: 'asg-' } } })
     await db.agentRunRecord.deleteMany({ where: { sessionId: { startsWith: 'asg-' } } })
+  })
+
+  test('FB-Đợt6-R2-01: row applied=false (bị gate chặn) KHÔNG đếm vào evidence', async () => {
+    // 12 row thường toStrategy='reduce_scope' (before) + 11 row toStrategy='compress_context'
+    // (after, hợp lệ) + 1 row toStrategy='compress_context' CÓ statsJson applied=false
+    // (bị chặn — không được đếm, nếu đếm nhầm nB=12 thay vì 11)
+    for (let i = 0; i < 12; i++) {
+      await db.strategyAdaptationLog.create({
+        data: { sessionId: `asg-r2-b-${i}`, fromStrategy: 'x', toStrategy: 'reduce_scope', reason: 'seed', confidence: 0.8, successful: i < 3 },
+      })
+    }
+    for (let i = 0; i < 11; i++) {
+      await db.strategyAdaptationLog.create({
+        data: { sessionId: `asg-r2-a-${i}`, fromStrategy: 'x', toStrategy: 'compress_context', reason: 'seed', confidence: 0.8, successful: true },
+      })
+    }
+    await db.strategyAdaptationLog.create({
+      data: {
+        sessionId: 'asg-r2-blocked', fromStrategy: 'x', toStrategy: 'compress_context',
+        reason: 'bị chặn', confidence: 0.8, successful: true,
+        statsJson: JSON.stringify({ test: 'chi2', p: 0.9, nA: 30, nB: 30, decision: 'block', applied: false }),
+      },
+    })
+    const r = await evaluateAdaptationGateForPair('reduce_scope', 'compress_context')
+    expect(r!.decision.nB).toBe(11) // row applied=false bị loại
+    expect(r!.decision.nA).toBe(12)
+    await db.strategyAdaptationLog.deleteMany({ where: { sessionId: { startsWith: 'asg-r2-' } } })
+  })
+
+  test('log-only would-block VẪN là evidence hợp lệ (applied=true)', async () => {
+    // decision='block' nhưng applied=true (gate OFF log-only — chiến lược vẫn
+    // được áp) → PHẢI đếm (chỉ applied=false mới bị loại)
+    for (let i = 0; i < 12; i++) {
+      await db.strategyAdaptationLog.create({
+        data: { sessionId: `asg-r2c-b-${i}`, fromStrategy: 'x', toStrategy: 'escalate_to_user', reason: 'seed', confidence: 0.8, successful: i < 3 },
+      })
+    }
+    for (let i = 0; i < 12; i++) {
+      await db.strategyAdaptationLog.create({
+        data: {
+          sessionId: `asg-r2c-a-${i}`, fromStrategy: 'x', toStrategy: 'compress_context',
+          reason: 'log-only would-block vẫn áp', confidence: 0.8, successful: true,
+          statsJson: JSON.stringify({ test: 'chi2', p: 0.9, nA: 30, nB: 30, decision: 'block', applied: true }),
+        },
+      })
+    }
+    const r = await evaluateAdaptationGateForPair('escalate_to_user', 'compress_context')
+    expect(r!.decision.nB).toBe(12) // decision=block nhưng applied=true → VẪN đếm
+    await db.strategyAdaptationLog.deleteMany({ where: { sessionId: { startsWith: 'asg-r2c-' } } })
   })
 
   test('cycles MỚI NHẤT mỗi session được dùng (row cũ không đè — bẫy bằng dấu t)', async () => {

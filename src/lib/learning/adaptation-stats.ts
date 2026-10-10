@@ -121,8 +121,10 @@ export function evaluateAdaptationEvidence(before: boolean[], after: boolean[]):
 
   const { p: pRaw } = chiSquare2x2(a, b, c, d)
 
-  // Bảng suy biến (biên 0 — vd cả 2 nhóm 100% success) → p không hữu hạn:
-  // fail-open GIỮ HÀNH VI CŨ (không chặn khi không kiểm định được).
+  // Defensive: p không hữu hạn (nếu lib sau này đổi contract — đầu vào boolean
+  // hiện tại KHÔNG thể sinh NaN: mọi bảng không-âm cho p hữu hạn, kể cả suy
+  // biến biên-0 như "cả 2 nhóm 100% success" → fisher trả đúng 1 → p=1 block,
+  // đã pin ở test A7). Fail-open: không kiểm định được → GIỮ HÀNH VI CŨ.
   if (!Number.isFinite(pRaw)) {
     return {
       pass: true,
@@ -130,7 +132,7 @@ export function evaluateAdaptationEvidence(before: boolean[], after: boolean[]):
       p: null,
       nA,
       nB,
-      reason: `bảng suy biến (biên 0: a=${a} b=${b} c=${c} d=${d}) — p không hữu hạn, fail-open giữ hành vi cũ`,
+      reason: `p không hữu hạn từ phép thử (${usedFisher ? 'fisher' : 'chi2'}: a=${a} b=${b} c=${c} d=${d}) — fail-open giữ hành vi cũ`,
     }
   }
 
@@ -199,6 +201,24 @@ export interface AdaptationGateResult {
 const SAL_TAKE = 1000
 
 /**
+ * Row SAL có phải adaptation KHÔNG ĐƯỢC ÁP DỤNG THẬT không (statsJson.applied
+ * === false)? Hai trường hợp: (a) gate ON chặn (decision block + không
+ * merge); row này CHƯA từng áp dụng — successful của nó đo lường "không
+ * chuyển chiến lược", KHÔNG phải hiệu quả của toStrategy → phải loại khỏi
+ * evidence (FB-Đợt6-R2-01). Row KHÔNG có trường `applied` (cũ / schema
+ * trước fix) mặc định ĐÃ áp dụng — mọi row trước đây đều được apply thật.
+ */
+function isNotAppliedStatsJson(statsJson: string | null): boolean {
+  if (!statsJson) return false
+  try {
+    const parsed = JSON.parse(statsJson) as { applied?: unknown }
+    return parsed?.applied === false
+  } catch {
+    return false // JSON hỏng (row cũ) — coi như đã áp dụng (fail-open evidence đầy đủ)
+  }
+}
+
+/**
  * Đánh giá gate cho cặp (fromStrategy → toStrategy) từ tiền sử
  * StrategyAdaptationLog (successful != null):
  *   - after  = outcome các row toStrategy = toStrategy  (session đã chạy chiến lược MỚI)
@@ -208,6 +228,10 @@ const SAL_TAKE = 1000
  *
  * Fail-open: DB lỗi / không có gì → null (caller coi như KHÔNG có gate —
  * hành vi cũ nguyên vẹn). Read-only — chỉ đọc, mọi ghi do caller chủ động.
+ *
+ * Loại khỏi evidence: row successful=null (chưa chốt) và row KHÔNG được áp
+ * dụng thật (statsJson.applied=false — gate ON chặn, FB-Đợt6-R2-01; riêng
+ * log-only decision='block' VẪN áp dụng thật → vẫn là evidence hợp lệ).
  */
 export async function evaluateAdaptationGateForPair(
   fromStrategy: string,
@@ -216,7 +240,7 @@ export async function evaluateAdaptationGateForPair(
   try {
     const rows = await db.strategyAdaptationLog.findMany({
       where: { successful: { not: null } },
-      select: { toStrategy: true, successful: true, sessionId: true },
+      select: { toStrategy: true, successful: true, sessionId: true, statsJson: true },
       orderBy: { createdAt: 'asc' },
       take: SAL_TAKE,
     })
@@ -227,6 +251,7 @@ export async function evaluateAdaptationGateForPair(
     const beforeSessions = new Set<string>()
     for (const row of rows) {
       if (row.successful === null) continue // defensible với type — where đã lọc
+      if (isNotAppliedStatsJson(row.statsJson)) continue // FB-Đợt6-R2-01 — chưa từng áp dụng thật
       if (row.toStrategy === toStrategy) {
         after.push(row.successful)
         afterSessions.add(row.sessionId)
@@ -270,12 +295,16 @@ export async function evaluateAdaptationGateForPair(
 
 /**
  * Lưu kết luận gate vào StrategyAdaptationLog.statsJson của row vừa tạo
- * (spec §P4-M1: statsJson = { test, p, nA, nB, decision }). Fail-open:
- * lỗi DB nuốt im lặng (row vẫn hợp lệ — statsJson nullable).
+ * (spec §P4-M1: statsJson = { test, p, nA, nB, decision } + `applied` ghi
+ * thêm việc chiến lược CÓ được áp dụng thật không — log-only would-block vẫn
+ * applied=true; gate ON chặn → applied=false, loại khỏi evidence sau này
+ * FB-Đợt6-R2-01). Fail-open: lỗi DB nuốt im lặng (row vẫn hợp lệ — statsJson
+ * nullable).
  */
 export async function persistAdaptationStatsJson(
   logId: string,
   result: AdaptationGateResult,
+  applied: boolean,
 ): Promise<void> {
   try {
     const payload = {
@@ -284,6 +313,7 @@ export async function persistAdaptationStatsJson(
       nA: result.decision.nA,
       nB: result.decision.nB,
       decision: result.decision.pass ? 'pass' : 'block',
+      applied,
       continuous: result.continuous ?? undefined,
     }
     await db.strategyAdaptationLog.update({
