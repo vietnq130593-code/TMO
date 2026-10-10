@@ -46,7 +46,10 @@ const TARGET_SUMMARY_LENGTH = 200
  * Env SUMMARY_ROUGE_RECALL_MIN điều chỉnh không cần deploy lại.
  */
 export const SUMMARY_ROUGE_RECALL_MIN = (() => {
-  const v = Number(process.env.SUMMARY_ROUGE_RECALL_MIN)
+  // FB-Đợt5-R2-01: env rỗng ≠ unset — trim + rỗng → default (không tắt ngầm)
+  const raw = (process.env.SUMMARY_ROUGE_RECALL_MIN ?? '').trim()
+  if (raw === '') return 0.3
+  const v = Number(raw)
   return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 0.3
 })()
 

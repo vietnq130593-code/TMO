@@ -231,7 +231,12 @@ function deriveEvidenceFromMessages(msgs: CompressionMessage[]): CompressEvidenc
  * Env DIGEST_EVIDENCE_COVERAGE_MIN cho phép điều chỉnh không deploy lại.
  */
 export const DIGEST_EVIDENCE_COVERAGE_MIN = (() => {
-  const v = Number(process.env.DIGEST_EVIDENCE_COVERAGE_MIN)
+  // FB-Đợt5-R2-01: env đặt nhưng RỖNG ('') → Number('')=0 → gate tắt ngầm.
+  // Chuẩn hoá: trim + rỗng coi như KHÔNG đặt → default. Chỉ số 0 hợp lệ
+  // (rollback chủ đích) khi env được đặt bằng "0".
+  const raw = (process.env.DIGEST_EVIDENCE_COVERAGE_MIN ?? '').trim()
+  if (raw === '') return 0.7
+  const v = Number(raw)
   return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 0.7
 })()
 
@@ -253,6 +258,7 @@ function stripEdgePunctuation(tok: string): string {
  *   - SỐ dẫn chứng ≥2 chữ số hoặc thập phân (722, 0.55, 4000) — số 1 chữ số
  *     (0/1/2...) quá phổ biến ở mọi output, không mang tín hiệu "bằng chứng"
  *     riêng nên loại khỏi gate (chọn có chủ đích, ghi rõ ở đây).
+ *   - Chuỗi hex dạng git hash ≥7 ký tự (839d494 — FB-Đợt5-R1-01).
  * Token ngắn <3 ký tự bỏ. Khử trùng theo key lowercase. Cap GATE_TOKEN_CAP
  * (check TRƯỚC khi push — vòng quét dừng sớm khi chạm cap).
  */
@@ -292,6 +298,15 @@ export function extractEvidenceTokens(evidence: CompressEvidenceEntry[]): string
   // số dẫn chứng: ≥2 chữ số hoặc thập phân
   const numbers = text.match(/\b\d+(?:\.\d+)+\b|\b\d{2,}\b/g) ?? []
   for (const t of numbers) push(t)
+
+  // FB-Đợt5-R1-01: chuỗi hex dạng hash git (839d494, 6b0b7e9) — commit hash
+  // là bằng chứng đối chiếu QUAN TRỌNG trong quy trình dự án (worklog/báo cáo
+  // trích dẫn liên tục) nhưng không match số (không có \b giữa 839-d494) hay
+  // camel/snake. Pattern hex thuần ≥7 ký tự (độ dài git short-hash) — từ tiếng
+  // Anh thuần ≥7 chữ chỉ gồm a-f rất hiếm (worst case "defaced" — hi sinh chấp
+  // nhận, hướng bảo thủ: bắt buộc digest giữ).
+  const hashes = text.match(/\b[0-9a-f]{7,40}\b/g) ?? []
+  for (const t of hashes) push(t)
 
   return out
 }

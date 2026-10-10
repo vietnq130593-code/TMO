@@ -87,6 +87,20 @@ describe('r77 · P3-M4 extractEvidenceTokens — trích dẫn chứng kỹ thu�
     expect(toks.some(t => t === '1' || t === '0' || t === '5')).toBe(false)
   })
 
+  test('FB-Đợt5-R1-01 REGRESSION: chuỗi hex dạng git hash (839d494, 6b0b7e9) ĐƯỢC trích', () => {
+    const ev = [{
+      kind: 'tool', tool: 'shell', success: true,
+      text: 'git log: commit 839d494 (P3-M3) và 6b0b7e9 (P3-M1/M2) — push lên main',
+    }]
+    const toks = extractEvidenceTokens(ev)
+    // hash chữ-số trộn KHÔNG match \\d{2,} (không \\b giữa 839-d494) — cần pattern hex riêng
+    expect(toks).toContain('839d494')
+    expect(toks).toContain('6b0b7e9')
+    // từ thuần ngắn hơn 7 hex không bắt
+    const no = extractEvidenceTokens([{ kind: 'tool', tool: 't', text: 'mã cũ abc123 còn sống' }])
+    expect(no).not.toContain('abc123')
+  })
+
   test('khử trùng case-insensitive (WilsonCI ≡ wilsonci)', () => {
     const ev = [
       { kind: 'tool', tool: 't', success: true, text: 'WilsonCI xuất hiện' },

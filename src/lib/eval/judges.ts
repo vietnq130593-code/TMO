@@ -301,19 +301,17 @@ export const RUNTIME_JUDGE_TIMEOUT_MS = (() => {
   return Number.isFinite(v) && v >= 5000 ? Math.floor(v) : 600_000
 })()
 
-/** Timeout wrapper (Promise.race — pattern context-compression/goal-loop) */
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+/** Timeout wrapper (Promise.race — pattern context-compression/goal-loop;
+ *  FB-Đợt5-R2-02 dọn về đúng pattern — không try/catch chết quanh promise) */
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined
   const timeoutPromise = new Promise<never>((_resolve, reject) => {
     timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
   })
   try {
-    return Promise.race([promise, timeoutPromise]).finally(() => {
-      if (timeoutId) clearTimeout(timeoutId)
-    })
-  } catch {
+    return await Promise.race([promise, timeoutPromise])
+  } finally {
     if (timeoutId) clearTimeout(timeoutId)
-    throw new Error(`${label} failed`)
   }
 }
 
