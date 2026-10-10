@@ -114,3 +114,34 @@ Sai kì vọng phía người rà (ghi nhận, không tính phát hiện): 11/12
 
 **Nghiệm thu đợt FB-P0:** 9 phát hiện (R1: 1 P1 + 1 P2 + 6 P3; R2: 1 P3) — tất cả đã fix + regression test; 11 sai-kì-vọng-phía-người-rà ghi nhận; gate PASS 4 tầng 51.6s (644 test, 2620 expect); 2 entry Bug_v2 mới (039, 040); không để lại việc hoãn nào trong scope.
 
+
+### ĐỢT FB-P1 — scope: P1-M1→M4 đợt 2 (commits 78a1e7d + 5ab5555 + 3758b01 + e6f2433: verdict-scorecard + relevance/runner nDCG-MRR + anomaly-detector + KPI layer + 4 test r76 + schema EvalResult/EvalRun/MetricAnomaly/KpiSnapshot + nghiệm thu live) — 2026-10-10
+
+**Vòng R1 — rà soát (đọc full diff 16 file/1680 dòng bằng mắt tươi + 11 nhóm kiểm chứng độc lập trên scratch/fb-p1-verify.ts — thuật toán thay thế: AP chuẩn sklearn threshold-based, brute-force DCG/IDCG, quantile sort-index nội suy, bảng status if-else viết lại, 2000 case random relevance + 200 case random confusion + 300 trial IQR/AUC-PR/nDCG + nghiệm thu live 4 endpoint):**
+
+Phát hiện (đã chấm chéo đủ 3 phía — code / kì vọng độc lập / phương pháp thứ ba):
+
+| ID | Loại·mức | Phát hiện | Vị trí |
+|---|---|---|---|
+| FB-P1-R1-01 | G·P2 | Quality gate để lại ToolMetric TEST trong DB production: shr-cot-todo mục G + protected-paths gọi HTTP thật vào app sống (/api/tools/execute) — app ghi ToolMetric vào DB thật (156/156 row đều test: 39 test-shr + 117 test-infra-guard, trải 08:22→10:15 đúng các lần gate). DB-cô-lập KHÔNG phủ side-effect HTTP xuyên process. Làm bẩn CHÍNH lớp đo P1-M3 (13 "anomaly" toàn test data) + P1-M4 (tool_success_rate n=156 test rows). → **BUG2-041** | tests/shr-cot-todo.test.ts, tests/protected-paths.test.ts |
+| FB-P1-R1-02 | C·P3 | KPI status hiện on_target/off khi sampleSize=0 — kb_fallback_rate n=0 hiện "on_target": đọc nhầm "đạt mục tiêu" cho phép đo CHƯA TỒN TẠI (value=0 chỉ vì chưa có dữ liệu). | kpi/compute.ts statusForKpi |
+| FB-P1-R1-03 | C·P3 | anomaly-detector group key + dedupeKey dùng separator space/`\|` — toolName chứa space (`"a b"`+role `"c"` ≡ tool `"a"`+role `"b c"`) gộp nhầm 2 nhóm khác bounds / khoá trùng sai. | anomaly-detector.ts |
+| FB-P1-R1-04 | G·P1 | callLLM HTTP 410 Gone (model decommission) rơi 'server_error' → sweep 12 attempts nhanh (~0.1s) không cạn budget thiết kế cho timeout 240s → vòng cooldown 15s LẶP VÔ HẠN — eval run treo 0/3 suốt 18+ phút (bằng chứng live cmv29082p…). Tiền lệ 404 cùng dòng cùng lý do. → **BUG2-042** | llm.ts attemptNvidiaOnce |
+| FB-P1-R1-05 | H·P3 | Vận hành: eval run treo trên cần đánh dấu failed + re-run; 156 row test cần dọn khỏi production. | db/custom.db |
+| FB-P1-R1-06 | G·P1 | NVIDIA model matrix RÁC TOÀN PHẦN (bộc lộ sau R1-04 fix): deepseek-v4-flash (eval answer) + gpt-oss-120b (judge 1) + minimax-m3 (judge 3 VÀ agent primary) đều 410 EOL; chỉ kimi-k3 sống. Faithfulness eval = rác; agent chat phụ thuộc failover. → **BUG2-043 — CHỜ USER quyết định matrix mới (điểm dừng quyết định), không tự ý đổi trong đợt 2** | llm.ts, eval/judges.ts, eval/runner.ts |
+
+Sai kì vọng phía người rà (ghi nhận): 1/11 nhóm kiểm chứng FAIL là SAI PHÍA COMPARATOR — altAP sort tie "positive trước" (optimistic ordering) thay vì threshold-based chuẩn sklearn; code ĐÚNG. Bài học FB-P0 lặp lại lần 5: chấm chéo bằng phương pháp thứ ba TRƯỚC khi kết luận.
+
+ĐẠT không phát hiện: 11/11 nhóm kiểm chứng độc lập sau khi sửa comparator (AUC-PR 300 trial tie < 1e-12; nDCG brute-force 300 trial; MRR 200 trial; IQR sort-index 300 trial; status 2×6×16 nhánh; relevance 2000 case random — retrievedCount === cách đếm cũ 2000/2000 + first-occurrence 2000/2000; confusion/prf1 200 trial; round4) · verdict-scorecard zero-state + windowDays + byAgent + forcedDowngrade đúng · anomaly n<20 skip + idempotent + prune >30 ngày đúng (test) · KPI 9 giá trị khớp seed tính tay + upsert idempotent · runner rel wiring không đổi semantics recall · 0 ký tự CJK (grep) · smoke import barrel.
+
+**Fix R1 + xác minh (gate PASS 51.6s sau fix, 672 test):**
+- FB-P1-R1-01: guard mục G shr-test bằng env `TMO_SHR_HTTP_E2E=1` (gate hermetic; E2E thủ công giữ nguyên đường) + protected-paths TỰ DỌN ToolMetric test-infra-guard bằng BunSqlite (750ms đợi fire-and-forget land, busy_timeout, pattern cleanup sẵn có) + dọn 1 lần 156 row khỏi production. Kiểm chứng: gate chạy lại xong ToolMetric count = 0.
+- FB-P1-R1-02: KpiComputed status = 'no_data' khi n===0 (thêm type + ưu tiên trước mọi so target; cả nhánh compute lỗi). Test mới: xoá EvalRun → eval_ndcg/eval_recall n=0 → no_data; KPI còn dữ liệu vẫn tính status bình thường.
+- FB-P1-R1-03: group key + dedupeKey chuyển sang NUL separator `\u0000` (không thể xuất hiện trong tên đã trim). Sự cố quá trình: lần perl đầu chèn NUL BYTE THẬT vào file (grep báo binary) — phát hiện qua file(1), thay bằng escape sequence + file trở lại UTF-8 text sạch.
+- FB-P1-R1-04: thêm 410 vào isDeterministic4xx (đúng vị trí tiền lệ 404). Kiểm chứng LIVE: re-run baseline eval hoàn tất 3/3 trong ~7 phút (trước fix: ∞) — log "bad_request (HTTP 410) — dừng xoay vòng" ngay sau key đầu.
+- FB-P1-R1-05: run treo → status failed + errorMessage ghi nguyên nhân; production DB sạch.
+- relevance.ts: precompute normalize entity 1 lần (bỏ O(chunks×entities) phép gọi thỡ) — hygiene kèm, không đổi hành vi (2000 case random xác minh lại sau fix).
+
+**Baseline P1-M2 ghi nhận sau fix (run cmv29vh180001na7dkz82772i, 3 case = 2 security + 1 negative trên KB 1 document đã reconcile + embed lại):** avgRecall@5=0.667 · **avgNdcg@5=0.626** · **avgMrr=0.667** (per-case: 0.877/1.000/0.000 — case negative 0 đúng thiết kế). Faithfulness=0.333 KHÔNG đáng tin (1/3 judge sống — BUG2-043). Thỏa kiểm chứng blueprint: eval run mới có avgNdcg/avgMrr ≠ 0; nDCG ∈ [0,1].
+
+**Vòng R2 — rà lại toàn bộ scope (kể cả 7 file vừa fix):** xem mục dưới (cập nhật sau vòng).

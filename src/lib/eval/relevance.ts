@@ -60,13 +60,16 @@ export function buildRelevanceVector(
 ): RelevanceResult {
   const rel = new Array<number>(chunks.length).fill(0)
   const matched = new Set<number>()
+  // Precompute normalize 1 lần mỗi phía (FB-P1 hygiene — trước đây entity name
+  // bị normalize lại trong từng vòng chunk: O(chunks×entities) phép gọi thừa)
   const normalizedChunks = chunks.map((c) => normalizeForEntityMatch(c.text))
+  const normalizedEntities = expectedEntities.map((e) => normalizeForEntityMatch(e.name))
 
   for (let ci = 0; ci < chunks.length; ci++) {
     let chunkRelevant = false
     for (let ei = 0; ei < expectedEntities.length; ei++) {
       if (matched.has(ei)) continue
-      if (normalizedChunks[ci].includes(normalizeForEntityMatch(expectedEntities[ei].name))) {
+      if (normalizedChunks[ci].includes(normalizedEntities[ei])) {
         matched.add(ei)
         chunkRelevant = true
       }

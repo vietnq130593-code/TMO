@@ -43,13 +43,16 @@ async function computeOne(def: KpiDef): Promise<KpiComputed> {
     const { value, n, meta } = await def.compute()
     if (!Number.isFinite(value)) {
       // Defensive: KPI không được mang NaN/Infinity vào snapshot (REAL column)
-      return { ...base, value: 0, sampleSize: n, status: 'no_target', meta, ok: false, error: 'compute trả giá trị không hữu hạn — ghi 0' }
+      return { ...base, value: 0, sampleSize: n, status: 'no_data', meta, ok: false, error: 'compute trả giá trị không hữu hạn — ghi 0' }
     }
+    // FB-P1-R1-02: n=0 = CHƯA đo được gì → 'no_data' (ưu tiên trước mọi so
+    // target) — value=0 khi chưa có dữ liệu không được hiện on_target/off
+    // kẻo operator đọc nhầm "đạt/kém mục tiêu" cho một phép đo chưa tồn tại.
     const computed: KpiComputed = {
       ...base,
       value,
       sampleSize: n,
-      status: statusForKpi(def, value),
+      status: n === 0 ? 'no_data' : statusForKpi(def, value),
       meta,
     }
     // Upsert snapshot hôm nay — idempotent theo @@unique([date, kpi])
@@ -76,7 +79,7 @@ async function computeOne(def: KpiDef): Promise<KpiComputed> {
       ...base,
       value: 0,
       sampleSize: 0,
-      status: 'no_target',
+      status: 'no_data',
       ok: false,
       error: message,
     }

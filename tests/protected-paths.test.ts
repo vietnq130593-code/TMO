@@ -272,6 +272,28 @@ ok('D7. Checksum package.json + schema.prisma + opencode.json + .env KHÔNG đ�
 // dọn thư mục backup
 try { fs.rmSync(BK, { recursive: true, force: true }) } catch { /* best-effort */ }
 
+// ==================== FB-P1-R1-01: DỌN ToolMetric test khỏi DB THẬT ====================
+// Các callTool() ở trên đánh HTTP vào app sống → APP (process khác) ghi
+// ToolMetric vào db/custom.db THẬT với agentRole='test-infra-guard' (không có
+// sessionId trong context → 'unknown'). Trước đây bị BỎ SÓT → mỗi lần gate
+// chạy để lại ~13-15 row test, làm bẩn số đo P1-M3 (anomaly scan) + P1-M4
+// (tool_success_rate) — bằng chứng 117 row role test-infra-guard tích luỹ
+// 08:22→10:15 ngày 2026-10-10. Dọn bằng marker agentRole (an toàn: role này
+// chỉ tồn tại từ chính test này). Ghi app-side là async fire-and-forget →
+// đợi 750ms cho lượt cuối land trước khi xoá; đồng thời dọn cả phần mồ côi
+// từ lần chạy trước (crash giữa chừng) ở ĐẦU file không cần — dọn cuối đủ.
+try {
+  const { Database: BunSqlite } = await import('bun:sqlite')
+  await new Promise((r) => setTimeout(r, 750))
+  const cleaner = new BunSqlite('/home/z/tmo-app/db/custom.db')
+  cleaner.exec('PRAGMA busy_timeout=5000')
+  const info = cleaner.query("DELETE FROM ToolMetric WHERE agentRole = 'test-infra-guard'").run()
+  cleaner.close()
+  if (info.changes > 0) console.log(`  🧹 FB-P1-R1-01: dọn ${info.changes} ToolMetric test-infra-guard khỏi DB thật`)
+} catch (e) {
+  console.log(`  ⚠️ không dọn được ToolMetric test (FB-P1-R1-01): ${(e as Error).message}`)
+}
+
 // ==================== KẾT QUẢ ====================
 console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 console.log(`KẾT QUẢ: ${pass} PASS · ${fail} FAIL · ${skip} SKIP / ${pass + fail + skip} test`)

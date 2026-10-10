@@ -2253,7 +2253,15 @@ async function attemptNvidiaOnce(params: {
     // MODEL (NIM đã 404 glm-5.3, deepseek-v4-pro bản cũ 2026-08-27): key khác
     // retry cùng model-name cũng 404 y hệt. Trước đây 404 rơi vào 'server_error'
     // → đốt tới 12 attempts + soft-mark cooldown oan 4 key trước khi fail.
-    const isDeterministic4xx = response.status === 400 || response.status === 404 || response.status === 413 || response.status === 414 || response.status === 422 || response.status === 431
+    // FIX (FB-P1-R1-04, 2026-10-10): thêm 410 — NIM decommission model VĨNH
+    // VIỄN (glm-5.2 EOL 2026-08-21, gpt-oss-120b GONE 2026-10-16, deepseek-v4-
+    // flash GONE 2026-10-10 — eval runner quan sát live): 410 rơi vào
+    // 'server_error' → sweep 12 attempts NHANH (~0.1s/attempt) không bao giờ
+    // cạn budget thiết kế cho timeout 240s → vòng cooldown 15s lặp VÔ HẠN,
+    // eval run treo vĩnh viễn ở case đầu (18+ phút 0/3, bằng chứng
+    // cmv29082p0012navrlnwlec1v). 410 deterministic theo model — key khác
+    // retry cùng model-name cũng 410 y hệt như 404.
+    const isDeterministic4xx = response.status === 400 || response.status === 404 || response.status === 410 || response.status === 413 || response.status === 414 || response.status === 422 || response.status === 431
     return {
       status: isDeterministic4xx ? 'bad_request' : 'server_error',
       httpStatus: response.status,

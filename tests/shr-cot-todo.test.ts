@@ -303,79 +303,21 @@ ok('F7 autoComplete hoàn thành todo in_progress theo bằng chứng + TRẢ pa
   ac.completed === 1 && acChild?.status === 'completed' && acChild?.parentId === parentId,
   `completed=${ac.completed} parentId=${acChild?.parentId?.slice(-6) ?? 'MISSING'}`)
 
-// ==================== G. HTTP API — đường OpenCode CLI bridge ====================
-console.log('\n━━━ G. HTTP /api/tools/execute (đường CLI bridge thật) ━━━')
 
-// Lấy token auth (proxy yêu cầu)
-const setupRes = await fetch('http://localhost:3000/api/auth/setup', { credentials: 'same-origin' })
-const setupData = await setupRes.json().catch(() => null) as { token?: string } | null
-const token = setupData?.token
-ok('G1 /api/auth/setup trả token', !!token)
 
-const apiCall = async (tool: string, args: Record<string, unknown>) => {
-  const res = await fetch('http://localhost:3000/api/tools/execute', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-tmo-api-token': token || '' },
-    body: JSON.stringify({ tool, args, context: { agentName: 'opencode-bridge', sessionId: SID, runId: RUN } }),
-  })
-  return res.json().catch(() => null) as { success?: boolean; result?: unknown } | null
-}
-
-// hypothesis_write qua HTTP (đúng đường tmo_hypothesis bridge)
-const g2res = await apiCall('hypothesis_write', {
-  op: 'propose',
-  mechanicsClaim: 'bun run script khai báo trong package.json',
-  contextSig: 'bun package.json script runner',
-  intervention: 'chạy bun run dev',
-  predictedDelta: 'next dev khởi động port 3000',
-})
-const g2result = g2res?.result as { success?: boolean; kind?: string; id?: string } | undefined
-ok('G2 hypothesis_write op=propose qua HTTP → created', g2res?.success === true && g2result?.kind === 'created', JSON.stringify(g2res?.result))
-
-const g3res = await apiCall('hypothesis_write', { op: 'list' })
-const g3result = g3res?.result as { total?: number; hypotheses?: Array<{ id: string; mechanicsClaim: string }> } | undefined
-ok('G3 hypothesis_write op=list qua HTTP → thấy hypothesis vừa tạo',
-  g3res?.success === true && (g3result?.total ?? 0) >= 1, `total=${g3result?.total}`)
-
-// todo_write qua HTTP với parentId (đúng đường tmo_todo bridge)
-const g4res = await apiCall('todo_write', {
-  todos: [{ content: `Việc qua HTTP bridge ${TS}`, status: 'pending', parentId }],
-})
-const g4result = g4res?.result as { success?: boolean; todos?: Array<{ id: string; parentId?: string | null }> } | undefined
-ok('G4 todo_write qua HTTP với parentId → lưu đúng cha (context stamping sessionId+runId)',
-  g4res?.success === true && g4result?.todos?.[0]?.parentId === parentId, JSON.stringify(g4res?.result))
-
-// G5 — phải đọc ĐÚNG DB mà HTTP vừa ghi vào, không dùng `db` (prisma).
-// LÝ DO: tests/db-isolation-preload.ts trỏ DATABASE_URL của PROCESS TEST vào một
-// BẢN COPY trong /tmp, còn request HTTP do SERVER THẬT (process khác, db/custom.db
-// thật) xử lý. Đọc bằng prisma trong lúc đó LUÔN ra null → check G5 fail dù bridge
-// context-merge hoạt động hoàn hảo. Bằng chứng: row "Việc qua HTTP bridge <TS>"
-// có thật trong db/custom.db với đúng sessionId + runId + parentId.
-// → Đọc thẳng file DB thật bằng connection READONLY (không ghi → không lock ghi).
-const { Database: BunSqlite } = await import('bun:sqlite')
-const PROD_DB_FILE = '/home/z/tmo-app/db/custom.db'
-const prodConn = new BunSqlite(PROD_DB_FILE, { readonly: true })
-const viaHttp = prodConn
-  .query('SELECT sessionId, runId, parentId, content FROM Todo WHERE sessionId = ? AND runId = ? AND content = ? LIMIT 1')
-  .get(SID, RUN, `Việc qua HTTP bridge ${TS}`) as
-  | { sessionId: string; runId: string; parentId: string | null }
-  | null
-ok('G5 todo qua HTTP gắn ĐÚNG sessionId + runId từ context (context-merge)',
-  !!viaHttp && viaHttp.runId === RUN && viaHttp.parentId === parentId,
-  `found=${!!viaHttp} runId=${viaHttp?.runId ?? 'null'} parentId=${viaHttp?.parentId?.slice(-6) ?? 'null'}`)
-
-// Dọn các row do HTTP ghi vào DB THẬT (cleanup() chỉ xoá trong bản copy cô lập).
-// Không có bước này thì mỗi lần chạy suite lọt thêm Todo/Hypothesis test-* vào
-// db/custom.db của app đang chạy (đã đo: 35 Todo + 10 StructuredHypothesis test-*).
-try {
-  prodConn.close()
-  const cleaner = new BunSqlite(PROD_DB_FILE)
-  for (const table of ['Todo', 'StructuredHypothesis', 'CotSample', 'RunContext']) {
-    cleaner.query(`DELETE FROM ${table} WHERE sessionId = ?`).run(SID)
-  }
-  cleaner.close()
-} catch (e) {
-  console.log(`  ⚠️ không dọn được row test trong DB thật: ${(e as Error).message}`)
+// FB-P1-R1-01 (fixbug.md đợt FB-P1): section G gọi HTTP THẬT vào app đang chạy
+// (localhost:3000) — mọi request /api/tools/execute khiến APP ghi ToolMetric
+// vào DB THẤT của nó (recordToolMetric với sessionId test-shr-*). Cleanup dưới
+// đây chỉ dọn Todo/Hypothesis — ToolMetric BỊ BỎ SÓT → mỗi lần quality gate
+// chạy lại để lại ~13-15 row test trong db/custom.db, làm bẩn số đo của chính
+// P1-M3 (anomaly scan bắt anomaly từ test data) + P1-M4 (tool_success_rate
+// tính trên test rows). Gate giờ chạy HERMETIC: G chỉ chạy khi chủ đích bật
+// TMO_SHR_HTTP_E2E=1 (integration test thủ công theo thiết kế gốc — header
+// file; khi bật flag PHẢI chạy kèm app sống và sẽ ghi vào DB thật tạm thời).
+const RUN_HTTP_E2E = process.env.TMO_SHR_HTTP_E2E === '1'
+if (RUN_HTTP_E2E) {
+console.log('\n━━━ G. HTTP /api/tools/execute (đường CLI bridge thật) ━━━')  // Lấy token auth (proxy yêu cầu)  const setupRes = await fetch('http://localhost:3000/api/auth/setup', { credentials: 'same-origin' })  const setupData = await setupRes.json().catch(() => null) as { token?: string } | null  const token = setupData?.token  ok('G1 /api/auth/setup trả token', !!token)  const apiCall = async (tool: string, args: Record<string, unknown>) => {    const res = await fetch('http://localhost:3000/api/tools/execute', {      method: 'POST',      headers: { 'Content-Type': 'application/json', 'x-tmo-api-token': token || '' },      body: JSON.stringify({ tool, args, context: { agentName: 'opencode-bridge', sessionId: SID, runId: RUN } }),    })    return res.json().catch(() => null) as { success?: boolean; result?: unknown } | null  }  // hypothesis_write qua HTTP (đúng đường tmo_hypothesis bridge)  const g2res = await apiCall('hypothesis_write', {    op: 'propose',    mechanicsClaim: 'bun run script khai báo trong package.json',    contextSig: 'bun package.json script runner',    intervention: 'chạy bun run dev',    predictedDelta: 'next dev khởi động port 3000',  })  const g2result = g2res?.result as { success?: boolean; kind?: string; id?: string } | undefined  ok('G2 hypothesis_write op=propose qua HTTP → created', g2res?.success === true && g2result?.kind === 'created', JSON.stringify(g2res?.result))  const g3res = await apiCall('hypothesis_write', { op: 'list' })  const g3result = g3res?.result as { total?: number; hypotheses?: Array<{ id: string; mechanicsClaim: string }> } | undefined  ok('G3 hypothesis_write op=list qua HTTP → thấy hypothesis vừa tạo',    g3res?.success === true && (g3result?.total ?? 0) >= 1, `total=${g3result?.total}`)  // todo_write qua HTTP với parentId (đúng đường tmo_todo bridge)  const g4res = await apiCall('todo_write', {    todos: [{ content: `Việc qua HTTP bridge ${TS}`, status: 'pending', parentId }],  })  const g4result = g4res?.result as { success?: boolean; todos?: Array<{ id: string; parentId?: string | null }> } | undefined  ok('G4 todo_write qua HTTP với parentId → lưu đúng cha (context stamping sessionId+runId)',    g4res?.success === true && g4result?.todos?.[0]?.parentId === parentId, JSON.stringify(g4res?.result))  // G5 — phải đọc ĐÚNG DB mà HTTP vừa ghi vào, không dùng `db` (prisma).  // LÝ DO: tests/db-isolation-preload.ts trỏ DATABASE_URL của PROCESS TEST vào một  // BẢN COPY trong /tmp, còn request HTTP do SERVER THẬT (process khác, db/custom.db  // thật) xử lý. Đọc bằng prisma trong lúc đó LUÔN ra null → check G5 fail dù bridge  // context-merge hoạt động hoàn hảo. Bằng chứng: row "Việc qua HTTP bridge <TS>"  // có thật trong db/custom.db với đúng sessionId + runId + parentId.  // → Đọc thẳng file DB thật bằng connection READONLY (không ghi → không lock ghi).  const { Database: BunSqlite } = await import('bun:sqlite')  const PROD_DB_FILE = '/home/z/tmo-app/db/custom.db'  const prodConn = new BunSqlite(PROD_DB_FILE, { readonly: true })  const viaHttp = prodConn    .query('SELECT sessionId, runId, parentId, content FROM Todo WHERE sessionId = ? AND runId = ? AND content = ? LIMIT 1')    .get(SID, RUN, `Việc qua HTTP bridge ${TS}`) as    | { sessionId: string; runId: string; parentId: string | null }    | null  ok('G5 todo qua HTTP gắn ĐÚNG sessionId + runId từ context (context-merge)',    !!viaHttp && viaHttp.runId === RUN && viaHttp.parentId === parentId,    `found=${!!viaHttp} runId=${viaHttp?.runId ?? 'null'} parentId=${viaHttp?.parentId?.slice(-6) ?? 'null'}`)  // Dọn các row do HTTP ghi vào DB THẬT (cleanup() chỉ xoá trong bản copy cô lập).  // Không có bước này thì mỗi lần chạy suite lọt thêm Todo/Hypothesis test-* vào  // db/custom.db của app đang chạy (đã đo: 35 Todo + 10 StructuredHypothesis test-*).  try {    prodConn.close()    const cleaner = new BunSqlite(PROD_DB_FILE)    for (const table of ['Todo', 'StructuredHypothesis', 'CotSample', 'RunContext']) {      cleaner.query(`DELETE FROM ${table} WHERE sessionId = ?`).run(SID)    }    cleaner.close()  } catch (e) {    console.log(`  ⚠️ không dọn được row test trong DB thật: ${(e as Error).message}`)  }} else {
+  console.log('\n━━━ G. HTTP /api/tools/execute — SKIP (mặc định; bật TMO_SHR_HTTP_E2E=1 để chạy E2E bridge thật — cần app sống, sẽ ghi tạm vào DB thật) ━━━')
 }
 
 // ==================== TỔNG KẾT ====================

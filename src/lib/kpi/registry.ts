@@ -218,7 +218,7 @@ export const KPI_REGISTRY: KpiDef[] = [
   },
 ]
 
-export type KpiStatus = 'on_target' | 'near' | 'off' | 'no_target'
+export type KpiStatus = 'on_target' | 'near' | 'off' | 'no_target' | 'no_data'
 
 /**
  * Trạng thái hiển thị so target theo dải ±10% (blueprint §P1-M4):
@@ -227,6 +227,9 @@ export type KpiStatus = 'on_target' | 'near' | 'off' | 'no_target'
  * target 0 tự suy ra đúng (dải near suy biến — mọi giá trị > 0 là off với
  * goal lower — đúng ngữ nghĩa cảnh báo anomaly_count).
  * Không có target → 'no_target' (KPI informative).
+ * LƯU Ý: hàm này KHÔNG biết cỡ mẫu — trạng thái n=0 (chưa đo được gì) do
+ * computeOne gán 'no_data' TRƯỚC khi gọi hàm này (tránh đọc nhầm on_target
+ * khi value=0 chỉ vì chưa có dữ liệu — FB-P1-R1-02).
  */
 export function statusForKpi(def: KpiDef, value: number): KpiStatus {
   if (typeof def.target !== 'number' || !Number.isFinite(def.target)) return 'no_target'

@@ -245,4 +245,29 @@ describe('r76 · P1-M4 KPI layer', () => {
     const noTarget: KpiDef = { key: 't', label: 't', goal: 'higher', compute: async () => ({ value: 0, n: 0 }) }
     expect(statusForKpi(noTarget, 1)).toBe('no_target')
   })
+
+  test('FB-P1-R1-02: n=0 → status no_data (KHÔNG on_target/off khi chưa đo được)', async () => {
+    // Xoá EvalRun → eval_ndcg/eval_recall mất nguồn → n=0, value=0
+    await db.evalRun.deleteMany({})
+    const results = await computeAllKpis()
+    const byKey = new Map(results.map((r) => [r.key, r]))
+    for (const key of ['eval_ndcg', 'eval_recall']) {
+      const kpi = byKey.get(key)!
+      expect(kpi.ok).toBe(true) // không lỗi — chỉ chưa có dữ liệu
+      expect(kpi.sampleSize).toBe(0)
+      expect(kpi.value).toBe(0)
+      // TRƯỚC fix: statusForKpi(0.7-target, value=0) → 'off' — đọc nhầm
+      // "kém mục tiêu" cho một phép đo chưa tồn tại. SAU fix: no_data.
+      expect(kpi.status).toBe('no_data')
+    }
+    // KPI còn dữ liệu vẫn tính status bình thường (anomaly_count n=2)
+    expect(byKey.get('anomaly_count_24h')!.status).toBe('off')
+    expect(byKey.get('anomaly_count_24h')!.sampleSize).toBe(2)
+    // Snapshot được update với giá trị mới (value=0, sampleSize=0) — vẫn idempotent
+    const today = todayUtcDate()
+    const count = await db.kpiSnapshot.count({ where: { date: today } })
+    expect(count).toBe(9)
+    const snap = await db.kpiSnapshot.findUnique({ where: { date_kpi: { date: today, kpi: 'eval_ndcg' } } })
+    expect(snap!.sampleSize).toBe(0)
+  })
 })
