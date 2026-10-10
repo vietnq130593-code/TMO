@@ -823,6 +823,10 @@ async function runSubAgentForProfileInner(params: {
             parentRunId: parentRunId ?? null,
             agentName: profile.name,
             startedAt: new Date(),
+            // P4-M2 (mục #8b) — model cấu hình của sub-agent (profile.model,
+            // cùng id mà callLLMForAgent dưới dùng) → bảng model-comparison
+            // phủ cả delegation rows.
+            model: profile.model,
           })
         } catch { /* fail-open — hiển thị thôi, không được phép lỗi delegation */ }
       })()

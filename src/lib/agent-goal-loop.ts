@@ -2571,6 +2571,10 @@ export async function runGoalDrivenLoop(params: {
           // FIX 2026-09-14 #5 — row 'running' gắn runId: updateLatestAgentRunRecord
           // lúc end khớp ĐÚNG row theo runId (delegation rows không cướp chỗ).
           runId,
+          // P4-M2 (mục #8b) — ghi model thực chạy chính lên AgentRunRecord
+          // (agentModel của run — tiền đề credit assignment P6 + bảng so
+          // sánh model /api/eval/model-comparison).
+          model: agentModel,
         }).catch(() => { /* fail-open */ })
       } catch { /* fail-open */ }
     }
@@ -5795,6 +5799,9 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             complete: runComplete,
             startedAt: new Date(startedAt),
             completedAt: endCompletedAt,
+            // P4-M2 (mục #8b) — chốt model khi end (bảo toàn nếu row running
+            // lúc start đã ghi; row cũ không có cột sẽ được set lần đầu).
+            model: agentModel,
           },
           // FIX 2026-09-14 #5 — target ĐÚNG row theo runId (fallback latest bên trong)
           runId,
@@ -5807,6 +5814,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             runId,
             agentId,
             agentName,
+            model: agentModel,
             status: runStatus,
             stopReason,
             toolCalls: totalToolCalls,

@@ -1192,7 +1192,13 @@ model AgentRunRecord {
   parentRunId   String?
   agentId       String?
   agentName     String?
-  /// running | completed | failed | cancelled
+  /// P4-M2 (BLUEPRINT-STATS-LEARNING §P4-M2, mục #8b): id model thực chạy
+  /// chính của run (goal-loop truyền agentModel khi insert/update) — tiền đề
+  /// cho P6 credit assignment (biết run nào chạy bằng model nào) + bảng so
+  /// sánh model GET /api/eval/model-comparison (success-rate Wilson CI +
+  /// ANOVA cycles/tokens). Nullable-additive: row cũ null hoàn toàn hợp lệ.
+  model         String?
+  /// running | completed | failed | cancelled | incomplete
   status        String?
   /// complete | max_cycles | time_budget | token_budget | no_progress | cancelled | error
   stopReason    String?
@@ -1382,12 +1388,18 @@ model StrategyAdaptationLog {
   confidence      Float
   /// null = pending, true = succeeded, false = failed
   successful      Boolean?
+  /// P4-M1 (BLUEPRINT-STATS-LEARNING §P4-M1, mục #8): kết luận cổng kiểm định
+  /// thống kê khi apply — JSON { test, p, nA, nB, decision, continuous? } với
+  /// test = chi2|fisher|welch_t|insufficient (evaluateAdaptationEvidence).
+  /// Nullable-additive: row cũ / lỗi DB fail-open → null (không có gate data).
+  statsJson       String?
   /// ISO timestamp
   createdAt       DateTime @default(now())
 
   @@index([sessionId])
   @@index([patternId])
   @@index([createdAt])
+  @@index([toStrategy])
 }
 
 /// ROUND-38 (fix B1 rà soát lần 1 round-37): checkpoint-manager V4 gọi

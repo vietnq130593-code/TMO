@@ -79,6 +79,9 @@ export async function insertAgentRunRecord(params: {
   cycles?: number | null
   tokensUsed?: number | null
   evaluatorConfidence?: number | null
+  /** P4-M2 (mục #8b): id model thực chạy chính — fallback insert lúc end khi
+   * row 'running' lúc start thất bại (DB lỗi tạm thời) vẫn giữ đủ metadata. */
+  model?: string | null
 }): Promise<void> {
   if (hasAgentRunRecordDelegate()) {
     // Fresh client — delegate path (Prisma tự sinh id cuid + createdAt)
@@ -90,6 +93,7 @@ export async function insertAgentRunRecord(params: {
         messageId: params.messageId ?? null,
         agentId: params.agentId ?? null,
         agentName: params.agentName,
+        model: params.model ?? null,
         status: params.status,
         stopReason: params.stopReason,
         cycles: params.cycles ?? null,
@@ -112,13 +116,13 @@ export async function insertAgentRunRecord(params: {
   const createdAt = new Date()
   await db.$executeRaw`
     INSERT INTO AgentRunRecord (
-      id, sessionId, runId, parentRunId, messageId, agentId, agentName, status, stopReason,
+      id, sessionId, runId, parentRunId, messageId, agentId, agentName, model, status, stopReason,
       cycles, tokensUsed, toolCalls, toolFailures, durationMs,
       evaluatorConfidence, complete, startedAt, completedAt, createdAt
     ) VALUES (
       ${id}, ${params.sessionId}, ${params.runId ?? null}, ${params.parentRunId ?? null},
       ${params.messageId ?? null}, ${params.agentId ?? null},
-      ${params.agentName}, ${params.status}, ${params.stopReason},
+      ${params.agentName}, ${params.model ?? null}, ${params.status}, ${params.stopReason},
       ${params.cycles ?? null}, ${params.tokensUsed ?? null}, ${params.toolCalls},
       ${params.toolFailures}, ${params.durationMs},
       ${params.evaluatorConfidence ?? null}, ${params.complete ? 1 : 0},
@@ -444,6 +448,9 @@ export async function insertAgentRunRecordRunning(params: {
   /** FIX 2026-09-14 #5: runId — row 'running' khớp ĐÚNG run khi update lúc end */
   runId?: string | null
   parentRunId?: string | null
+  /** P4-M2 (mục #8b): id model thực chạy chính của run — truyền từ goal-loop
+   * (agentModel) lúc insert; nullable-additive, row cũ không có → null. */
+  model?: string | null
 }): Promise<void> {
   const startedAt = params.startedAt ?? new Date()
   if (hasAgentRunRecordDelegate()) {
@@ -454,6 +461,7 @@ export async function insertAgentRunRecordRunning(params: {
         parentRunId: params.parentRunId ?? null,
         agentId: params.agentId ?? null,
         agentName: params.agentName ?? null,
+        model: params.model ?? null,
         status: 'running',
         startedAt,
       },
@@ -465,12 +473,12 @@ export async function insertAgentRunRecordRunning(params: {
   const createdAt = new Date()
   await db.$executeRaw`
     INSERT INTO AgentRunRecord (
-      id, sessionId, runId, parentRunId, messageId, agentId, agentName, status, stopReason,
+      id, sessionId, runId, parentRunId, messageId, agentId, agentName, model, status, stopReason,
       cycles, tokensUsed, toolCalls, toolFailures, durationMs,
       evaluatorConfidence, complete, startedAt, completedAt, createdAt
     ) VALUES (
       ${id}, ${params.sessionId}, ${params.runId ?? null}, ${params.parentRunId ?? null},
-      NULL, ${params.agentId ?? null}, ${params.agentName ?? null},
+      NULL, ${params.agentId ?? null}, ${params.agentName ?? null}, ${params.model ?? null},
       'running', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
       ${startedAt}, NULL, ${createdAt}
     )
@@ -482,6 +490,8 @@ export interface AgentRunRecordUpdate {
   messageId?: string | null
   agentId?: string | null
   agentName?: string | null
+  /** P4-M2 (mục #8b): id model thực chạy chính của run */
+  model?: string | null
   status?: string
   stopReason?: string
   cycles?: number
@@ -502,6 +512,7 @@ function buildAgentRunSetClauses(data: AgentRunRecordUpdate): { sets: string[]; 
   if ('messageId' in data) { sets.push('messageId = ?'); args.push(data.messageId ?? null) }
   if ('agentId' in data) { sets.push('agentId = ?'); args.push(data.agentId ?? null) }
   if ('agentName' in data) { sets.push('agentName = ?'); args.push(data.agentName ?? null) }
+  if ('model' in data) { sets.push('model = ?'); args.push(data.model ?? null) }
   if ('status' in data) { sets.push('status = ?'); args.push(data.status ?? null) }
   if ('stopReason' in data) { sets.push('stopReason = ?'); args.push(data.stopReason ?? null) }
   if ('cycles' in data) { sets.push('cycles = ?'); args.push(data.cycles ?? null) }
