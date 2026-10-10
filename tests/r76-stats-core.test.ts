@@ -3,10 +3,13 @@
  *
  * Bối cảnh: blueprint P0-1 (đợt triển khai 1) tạo src/lib/stats/ — 7 module
  * thuần toán (descriptive · classification · ranking · text · cluster-quality
- · inference + barrel index) làm nền cho 21 hạng mục P1-P6 (scorecard, nDCG/
+ * · inference + barrel index) làm nền cho 21 hạng mục P1-P6 (scorecard, nDCG/
  * MRR, IQR anomaly, KPI, silhouette Leiden, threshold sweep, Wilson CI,
  * logistic V2, 3-judge, ROUGE-L gate, Welch-t/χ², ANOVA, Matryoshka, dedup,
- * Naive Bayes, Q-table, softmax).
+ * Naive Bayes, Q-table, softmax). Đợt FB-P0 (giao thức fixbug.md) bổ sung
+ * 7 test regression cho fix vòng R1: aucRoc neo gốc (0,0) — tie đỉnh không
+ * mất diện tích; zScore σ âm; iqrBounds k âm; meanCI z âm; wilsonCI p ngoài
+ * [0,1] (kể cả vi phạm bé lọt sqrt); chiSquare2x2 ô âm; mannWhitneyU NaN.
  *
  * Nguyên tắc test:
  * - MỖI hàm >= 2 case, mọi expected value DẪN NGUỒN ĐƯỢC (comment công thức
@@ -92,6 +95,17 @@ describe('r76 · stats/descriptive', () => {
     expectNaN(b3.high)
   })
 
+  test('iqrBounds: k âm/NaN -> NaN cả 4 trường, không đảo chiều fence (FB-P0-R1-04)', () => {
+    const bad = iqrBounds([1, 2, 3, 4], -1)
+    expectNaN(bad.low)
+    expectNaN(bad.high)
+    expectNaN(bad.q1)
+    expectNaN(bad.q3)
+    const nanK = iqrBounds([1, 2, 3, 4], Number.NaN)
+    expectNaN(nanK.low)
+    expectNaN(nanK.q1)
+  })
+
   test('stddev: mẫu n-1 + hằng + n<2', () => {
     expectClose(stddev([1, 2, 3, 4, 5]), Math.sqrt(2.5), 1e-12) // ss=10, /4
     expectClose(stddev([5, 5, 5]), 0, 1e-12)
@@ -99,10 +113,12 @@ describe('r76 · stats/descriptive', () => {
     expectNaN(stddev([]))
   })
 
-  test('zScore: cơ bản + sigma=0 defensive', () => {
+  test('zScore: cơ bản + sigma=0/âm/NaN defensive (FB-P0-R1-03)', () => {
     expectClose(zScore(2, 0, 1), 2, 1e-12)
     expectClose(zScore(0, 0, 1), 0, 1e-12)
     expectClose(zScore(7.75, 7.75, 0), 0, 1e-12) // sigma=0 -> 0 (JSDoc)
+    expect(zScore(1, 0, -2)).toBe(0) // sigma âm không đảo dấu
+    expect(zScore(1, 0, Number.NaN)).toBe(0)
   })
 })
 
@@ -175,6 +191,20 @@ describe('r76 · stats/classification', () => {
     // đoạn fpr 0->1 co giãn tpr 2/3 -> 2/3; 2 đoạn dọc fpr=0/fpr=1 diện tích 0
     expectClose(aucRoc(pts), 2 / 3, 1e-12)
     expect(aucRoc([])).toBe(0)
+  })
+
+  test('aucRoc neo gốc (0,0) — tie ở đỉnh không mất diện tích tam giác (FB-P0-R1-01, đối chứng định nghĩa P(T>F)+½P(T=F))', () => {
+    // tie đỉnh T/F: cặp (T=0.9, F=0.9) + (T? không) — cặp duy nhất T-F là tie
+    // -> AUC = 0.5 + 0.5·(cặp còn lại T=0.9 > F=0.2)/... = (0.5 + 1)/2 = 0.75
+    expectClose(aucRoc(sweepThresholds([0.9, 0.9, 0.2], [true, false, false])), 0.75, 1e-12)
+    // toàn tie 1 ngưỡng: mọi cặp T-F đều tie -> 0.5
+    expectClose(aucRoc(sweepThresholds([0.5, 0.5], [true, false])), 0.5, 1e-12)
+    // toàn tie 4 phần tử (2T 2F): 4/4 cặp tie -> 0.5
+    expectClose(aucRoc(sweepThresholds([0.5, 0.5, 0.5, 0.5], [true, true, false, false])), 0.5, 1e-12)
+    // nhiều tầng tie: 3 T × 2 F = 6 cặp: (0.9T,0.9F)=tie 0.5; (0.9T,0.5F)=1;
+    // (0.5T,0.9F)=0; (0.5T,0.5F)=tie 0.5; (0.1T,0.9F)=0; (0.1T,0.5F)=0
+    // -> AUC = 2/6 = 1/3 (kì vọng đầu ghi 0.625 là tính thiếu cặp — gate bắt)
+    expectClose(aucRoc(sweepThresholds([0.9, 0.9, 0.5, 0.5, 0.1], [true, false, true, false, true])), 1 / 3, 1e-12)
   })
 
   test('aucPr: step-wise = 11/12 (KHÔNG trapz)', () => {
@@ -356,6 +386,29 @@ describe('r76 · stats/inference', () => {
     expectNaN(wilsonCI(0.5, 0).low)
   })
 
+  test('wilsonCI: p ngoài [0,1] -> NaN cả hai, kể cả vi phạm bé lọt sqrt (FB-P0-R1-06)', () => {
+    // p=1.05, n=10: p(1-p)/n = -0.00525 nhỏ hơn (về dấu) z^2/4n^2 = 0.0096
+    // -> sqrt vẫn dương: TRƯỚC fix trả cặp trông hợp lệ; SAU fix NaN
+    expectNaN(wilsonCI(1.05, 10).low)
+    expectNaN(wilsonCI(1.05, 10).high)
+    expectNaN(wilsonCI(-0.2, 10).low)
+    expectNaN(wilsonCI(Number.NaN, 10).high)
+  })
+
+  test('wilsonCI: z âm/0 -> NaN, không đảo chiều CI (FB-P0-R2-01, đối xứng meanCI)', () => {
+    expectNaN(wilsonCI(0.5, 100, -1.96).low)
+    expectNaN(wilsonCI(0.5, 100, -1.96).high)
+    expectNaN(wilsonCI(0.5, 100, 0).low)
+    expectNaN(wilsonCI(0.5, 100, Number.NaN).high)
+  })
+
+  test('meanCI: z âm -> low/high NaN, không đảo chiều (FB-P0-R1-05)', () => {
+    const ci = meanCI([1, 2], -1.96)
+    expectNaN(ci.low)
+    expectNaN(ci.high)
+    expect(ci.n).toBe(2)
+  })
+
   test('meanCI: [1..5] -> 3 ± 1.96*sqrt(2.5/5) = [1.614070, 4.385930] (CLT z thuần)', () => {
     const ci = meanCI([1, 2, 3, 4, 5])
     expectClose(ci.mean, 3, 1e-12)
@@ -395,6 +448,16 @@ describe('r76 · stats/inference', () => {
     expectClose(r.p, 1, 1e-8)
   })
 
+  test('mannWhitneyU: dữ liệu NaN/Infinity -> NaN cả 3, không kết luận sai âm thầm (FB-P0-R1-02)', () => {
+    const r = mannWhitneyU([Number.NaN, 1], [1, 2]) // trước fix: z=-1.22, p=0.22 (rác)
+    expectNaN(r.u)
+    expectNaN(r.z)
+    expectNaN(r.p)
+    const r2 = mannWhitneyU([1, 2], [Number.POSITIVE_INFINITY])
+    expectNaN(r2.z)
+    expectNaN(r2.p)
+  })
+
   test('chiSquare2x2(20,10,10,20): Yates chi2 = 5.4, p ~ 0.020136 (expected 15 >= 5, duong chi-square)', () => {
     const r = chiSquare2x2(20, 10, 10, 20)
     expectClose(r.chi2, 5.4, 1e-9)
@@ -407,6 +470,13 @@ describe('r76 · stats/inference', () => {
     expectClose(r.chi2, 7.272727, 1e-6) // 20*(70-10)^2/(10*10*9*11)
     // Fisher: P(X>=8), X~Hypergeom(N=20, row1=10, col1=9) = (9*C(11,2)+11)/C(20,10)
     expectClose(r.p, 0.0027386, 1e-5)
+  })
+
+  test('chiSquare2x2: ô âm -> NaN CẢ HAI, không còn nửa vời chi2-số-rác (FB-P0-R1-07)', () => {
+    const r = chiSquare2x2(-1, 5, 5, 5)
+    expectNaN(r.chi2)
+    expectNaN(r.p)
+    expectNaN(chiSquare2x2(1, -5, 5, 5).chi2)
   })
 
   test('fisherExact2x2(3,1,1,3) = 17/70 (bai toan tra Fisher kinh dien, mot phia)', () => {

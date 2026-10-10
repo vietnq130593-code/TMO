@@ -136,11 +136,24 @@ export function sweepThresholds(scores: number[], actuals: boolean[]): CurvePoin
 
 /**
  * AUC-ROC: tích phân hình thang theo trục FPR (sort điểm theo fpr tăng dần,
- * phụ tpr tăng dần để đoạn fpr trùng không tạo bậc giả). < 2 điểm → 0.
+ * phụ tpr tăng dần để đoạn fpr trùng không tạo bậc giả). Rỗng → 0.
+ *
+ * NEO GỐC (0,0) — FB-P0-R1-01: đường cong ROC luôn bắt đầu từ "không dự đoán
+ * gì" (threshold = +∞) nhưng sweepThresholds chỉ phát điểm tại score quan sát
+ * được nên gốc có thể vắng. Thiếu gốc, bước nhảy chéo đầu tiên (nhóm score
+ * cao nhất chứa LẪN cả 2 lớp — tie ở đỉnh) bị co thành đường dọc → mất diện
+ * tích tam giác gốc → AUC thấp hơn định nghĩa chuẩn P(T>F) + ½P(T=F)
+ * (đối chứng FB-P0: tie đỉnh 0.75→0.5, toàn-tie 0.5→0). Neo (0,0) được chèn
+ * nếu điểm fpr nhỏ nhất chưa nằm ở gốc; đã có sẵn thì không chèn trùng.
  */
 export function aucRoc(points: CurvePoint[]): number {
-  if (points.length < 2) return 0;
+  if (points.length === 0) return 0;
   const sorted = [...points].sort((a, b) => a.fpr - b.fpr || a.tpr - b.tpr);
+  const first = sorted[0];
+  if (first.fpr > 0 || first.tpr > 0) {
+    sorted.unshift({ threshold: Number.POSITIVE_INFINITY, tpr: 0, fpr: 0, precision: 0, recall: 0 });
+  }
+  if (sorted.length < 2) return 0;
   let area = 0;
   for (let i = 1; i < sorted.length; i++) {
     const width = sorted[i].fpr - sorted[i - 1].fpr;

@@ -231,13 +231,22 @@ export function normalCdf(z: number): number {
  * Wilson score interval cho tỷ lệ:
  *   (p̂ + z²/2n ± z·√(p̂(1−p̂)/n + z²/4n²)) / (1 + z²/n)
  * Không đảo chiều khi p̂ gần 0/1 (tốt hơn Wald). z mặc định 1.96 (95%).
- * n ≤ 0 → NaN cả hai (fail-open).
+ * n ≤ 0, p ngoài [0,1], hoặc z ≤ 0/không hữu hạn → NaN cả hai (fail-open;
+ * guard tường minh chống vi phạm bé lọt sqrt — FB-P0-R1-06; z âm đảo chiều
+ * CI đối xứng với meanCI — FB-P0-R2-01).
  *
  * Lưu ý erratum BUG2-035: ví dụ blueprint ghi wilsonCI(0.8, 25) → [0.616, 0.910]
  * ứng với z ≈ 1.9; giá trị đúng với z = 1.96 mặc định là [0.6087, 0.9114].
  */
 export function wilsonCI(p: number, n: number, z = 1.96): { low: number; high: number } {
-  if (n <= 0) return { low: Number.NaN, high: Number.NaN };
+  if (n <= 0 || !Number.isFinite(p) || p < 0 || p > 1 || !(z > 0)) {
+    // p ngoài [0,1] phải NaN tường minh (FB-P0-R1-06): vi phạm nhỏ + n lớn
+    // có thể vượt qua guard sqrt tự nhiên (p(1−p) âm nhỏ hơn z²/4n²) và trả
+    // cặp giá trị TRÔNG HỢP LỆ — tệ hơn NaN vì khó phát hiện.
+    // z ≤ 0: CI đảo chiều/zero-width vô nghĩa — nhất quán với meanCI
+    // (FB-P0-R2-01, phát hiện vòng R2 khi rà lại tính đối xứng tham số).
+    return { low: Number.NaN, high: Number.NaN };
+  }
   const z2 = z * z;
   const denom = 1 + z2 / n;
   const center = (p + z2 / (2 * n)) / denom;
@@ -248,7 +257,8 @@ export function wilsonCI(p: number, n: number, z = 1.96): { low: number; high: n
 /**
  * CI cho kỳ vọng theo CLT thuần: x̄ ± z·s/√n (z mặc định 1.96, s là độ lệch
  * mẫu n−1). KHÔNG dùng t-distribution cho n nhỏ (quyết định spec P0-1 — khác
- * scaffold cũ). n < 2 → low/high NaN (mean vẫn trả x̄ khi n = 1; n = 0 → NaN).
+ * scaffold cũ). n < 2 hoặc z ≤ 0/không hữu hạn → low/high NaN (mean vẫn trả
+ * x̄ khi n = 1; n = 0 → NaN; z âm đảo chiều CI là vô nghĩa — FB-P0-R1-05).
  */
 export function meanCI(xs: number[], z = 1.96): {
   mean: number;
@@ -258,7 +268,8 @@ export function meanCI(xs: number[], z = 1.96): {
 } {
   const n = xs.length;
   const m = mean(xs);
-  if (n < 2) return { mean: m, low: Number.NaN, high: Number.NaN, n };
+  // z ≤ 0 / không hữu hạn → CI vô nghĩa (z âm đảo chiều low/high — FB-P0-R1-05)
+  if (n < 2 || !(z > 0)) return { mean: m, low: Number.NaN, high: Number.NaN, n };
   const se = stddev(xs) / Math.sqrt(n);
   return { mean: m, low: m - z * se, high: m + z * se, n };
 }
@@ -311,11 +322,20 @@ export function welchTTest(a: number[], b: number[]): { t: number; df: number; p
  *   z = (U − nA·nB/2)/σU (z ≤ 0 theo quy ước min);
  *   p hai phía = 2·normalCdf(z).
  * σU = 0 (nhóm rỗng / mọi giá trị bằng nhau) → z = 0, p = 1.
+ * Dữ liệu chứa NaN/Infinity → NaN cả 3 trường (sort nuốt NaN sẽ cho kết quả
+ * sai âm thầm — FB-P0-R1-02); nhóm rỗng → {u: 0, z: 0, p: 1}.
  */
 export function mannWhitneyU(a: number[], b: number[]): { u: number; z: number; p: number } {
   const nA = a.length;
   const nB = b.length;
   if (nA === 0 || nB === 0) return { u: 0, z: 0, p: 1 };
+  // NaN/Infinity trong dữ liệu phải lan toả thành NaN (FB-P0-R1-02): sort
+  // nuốt NaN (comparator trả NaN → thứ tự rác) cho z/p SAI ÂM THẦM — kiểm
+  // định vẫn "chạy" và trả kết luận sai, tệ hơn crash đối với consumer cổng
+  // kiểm định ăn dữ liệu DB có thể bẩn. Đây là điểm khác các hàm khác (mean/
+  // stddev/welch đã lan toả NaN tự nhiên qua số học).
+  for (const v of a) if (!Number.isFinite(v)) return { u: Number.NaN, z: Number.NaN, p: Number.NaN };
+  for (const v of b) if (!Number.isFinite(v)) return { u: Number.NaN, z: Number.NaN, p: Number.NaN };
   // Gộp + xếp hạng (hạng trung bình khi tie) — dựng mảng MỚI, không mutate đầu vào
   const combined: Array<{ value: number; inA: boolean }> = [
     ...a.map((v) => ({ value: v, inA: true })),
@@ -378,15 +398,20 @@ export function fisherExact2x2(a: number, b: number, c: number, d: number): numb
  * Kiểm định χ² cho bảng 2×2 — Yates LUÔN LUÔN áp dụng (không phân biệt cỡ mẫu):
  *   χ² = N·max(0, |ad−bc| − N/2)² / [(a+b)(c+d)(a+c)(b+d)].
  * Expected nhỏ nhất < 5 (hoặc biên bằng 0) → p lấy từ fisherExact2x2 chính xác
- * thay vì xấp xỉ χ² (quy tắc Cochran; cf. DA.pdf §Hypothesis Testing). N ≤ 0 →
- * NaN cả hai.
+ * thay vì xấp xỉ χ² (quy tắc Cochran; cf. DA.pdf §Hypothesis Testing).
+ * N ≤ 0 hoặc ô âm (bảng không hợp lệ) → NaN cả hai (FB-P0-R1-07).
  */
 export function chiSquare2x2(a: number, b: number, c: number, d: number): {
   chi2: number;
   p: number;
 } {
   const N = a + b + c + d;
-  if (N <= 0) return { chi2: Number.NaN, p: Number.NaN };
+  // Ô âm = bảng không hợp lệ → NaN CẢ HAI (FB-P0-R1-07): để công thức chạy
+  // tiếp sẽ cho chi2 hữu hạn trông có vẻ dùng được trong khi p từ Fisher đã
+  // NaN — nửa kuk nửa na về mặt nhất quán.
+  if (N <= 0 || a < 0 || b < 0 || c < 0 || d < 0) {
+    return { chi2: Number.NaN, p: Number.NaN };
+  }
   const row1 = a + b;
   const row2 = c + d;
   const col1 = a + c;

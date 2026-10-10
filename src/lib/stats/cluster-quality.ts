@@ -120,6 +120,11 @@ export function silhouetteScore(
  *   (cụm "gần nhất" = tương tự nhất = mean w' cao nhất; không có cạnh liên
  *   cụm nào → b = 0).
  * - Cụm singleton → s(i) = 0; max(a, b) = 0 → 0; kết quả = mean toàn bộ.
+ * - Trọng số không hữu hạn (±∞/NaN): w' = w/(1+w) thành NaN → mọi so sánh
+ *   `> 0`/false → node đó âm thầm đóng góp s = 0 (coi như không có thông tin
+ *   cấu trúc) — FB-P0-R1-08. Leiden thực tế chỉ sinh trọng số cosine
+ *   ∈ [−1, 1] nên nhánh này không xuất hiện trên đường sản xuất; consumer
+ *   dùng đồ thị ngoài Leiden cần biết trước quy ước này.
  * Cạnh ngoài phạm vi node [0, n), tự-cạnh (source = target) bị bỏ qua;
  * cạnh được xử lý VÔ HƯỚNG (cộng cho cả 2 đầu mút).
  */

@@ -47,7 +47,8 @@ export function median(xs: number[]): number {
 /**
  * Rìa phát hiện outlier theo IQR (DA.pdf §Outlier IQR — Tukey fence):
  *   low  = q1 − k·(q3 − q1),  high = q3 + k·(q3 − q1)  (k mặc định 1.5).
- * Mảng rỗng → cả 4 trường NaN.
+ * Mảng rỗng HOẶC k không hữu hạn/khiêm (k < 0) → cả 4 trường NaN
+ * (k âm sẽ làm low/high đảo chiều — fence vô nghĩa; FB-P0-R1-04).
  */
 export function iqrBounds(xs: number[], k = 1.5): {
   low: number;
@@ -55,9 +56,11 @@ export function iqrBounds(xs: number[], k = 1.5): {
   q1: number;
   q3: number;
 } {
+  if (xs.length === 0 || !Number.isFinite(k) || k < 0) {
+    return { low: Number.NaN, high: Number.NaN, q1: Number.NaN, q3: Number.NaN };
+  }
   const q1 = quantile(xs, 0.25);
   const q3 = quantile(xs, 0.75);
-  if (xs.length === 0) return { low: Number.NaN, high: Number.NaN, q1: Number.NaN, q3: Number.NaN };
   const iqr = q3 - q1;
   return { low: q1 - k * iqr, high: q3 + k * iqr, q1, q3 };
 }
@@ -76,11 +79,13 @@ export function stddev(xs: number[]): number {
 }
 
 /**
- * Chuẩn hoá z = (x − μ)/σ. Defensive: σ === 0 → 0 (không có độ phân tán thì
- * không phân biệt được độ lệch thường — trả 0 thay vì ±Infinity/NaN để đường
- * anomaly-detector P1-M3 không bị một điểm dữ liệu hằng giết cả cụm).
+ * Chuẩn hoá z = (x − μ)/σ. Defensive: σ ≤ 0 hoặc σ không hữu hạn → 0
+ * (không có độ phân tán hữu ích thì không phân biệt được độ lệch thường —
+ * trả 0 thay vì ±Infinity/NaN/đảo dấu để đường anomaly-detector P1-M3
+ * không bị một điểm dữ liệu hằng giết cả cụm; σ âm thuần tuý là lỗi lời
+ * gọi — đảo dấu kết quả còn nguy hơn NaN — FB-P0-R1-03).
  */
 export function zScore(x: number, mu: number, sigma: number): number {
-  if (sigma === 0) return 0;
+  if (!(sigma > 0)) return 0;
   return (x - mu) / sigma;
 }
