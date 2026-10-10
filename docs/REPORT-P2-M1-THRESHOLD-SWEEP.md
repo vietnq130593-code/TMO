@@ -29,20 +29,21 @@
 
 ## 1 · EVALUATOR CONFIDENCE (cửa sổ 60 ngày)
 
-**Dữ liệu thật hiện có: n = 1** (1 ArbiterVerdict resolved: conf=0.90, runComplete=true).
+**Dữ liệu thật hiện có: n = 2** (2 ArbiterVerdict resolved: conf=0.90 + conf=0.85, cả hai runComplete=true; làm mới 15:53 UTC sau vòng fixbug R2).
 
 | Ngưỡng | Precision | Recall | F1 | TPR | FPR |
 |---|---|---|---|---|---|
-| 0.90 | 1.000 | 1.000 | 1.000 | 1.000 | 0.000 |
-| 0.95 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| 0.90 | 1.000 | 0.500 | 0.6667 | 0.500 | 0.000 |
+| 0.85 | 1.000 | 1.000 | 1.000 | 1.000 | 0.000 |
 
-AUC-PR = 1.0000 · AUC-ROC = 0.0000 (1 mẫu, không negative)
+AUC-PR = 1.0000 · AUC-ROC = *null* (0 negative thật — không có cặp T/F nào để xếp hạng)
 
-Khuyến nghị (kỹ thuật): max_f1 → **0.90** · precision≥0.9 → **0.90** · recall≥0.9 → **0.90**
+Khuyến nghị (kỹ thuật): max_f1 → **0.85** · precision≥0.9 → **0.85** · recall≥0.9 → **0.85**
 
-> **KẾT LUẬN: KHÔNG ĐỦ DỮ LIỆU ĐỀ NGHỊ ĐỔI.** n=1 không có giá trị thống kê
-> (mọi tiêu chí đều "đạt" trên 1 mẫu dương duy nhất). Hằng số liên quan giữ
-> nguyên cho tới khi ≥ 30 verdict resolved (ước lượng Wilson: n=30, p=0.8 →
+> **KẾT LUẬN: KHÔNG ĐỦ DỮ LIỆU ĐỀ NGHỊ ĐỔI.** n=2 toàn positive — mọi tiêu chí
+> đều "đạt" trên 2 mẫu dương, chưa có một negative (FP) nào để đo độ tin của
+> lời tuyên bố complete. Hằng số liên quan giữ nguyên cho tới khi ≥ 30 verdict
+> resolved có CẢ hoàn thành lẫn thất bại (ước lượng Wilson: n=30, p=0.8 →
 > CI width ≈ 0.28 — đủ hẹp để so ngưỡng).
 
 Hằng số đang chờ dữ liệu (KHÔNG đổi bây giờ):
