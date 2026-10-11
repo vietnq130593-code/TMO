@@ -1,7 +1,9 @@
 # BLUEPRINT TRIỂN KHAI BRAIN P1 → P5 — "NÃO VẬN HÀNH" MLP-CPU CHO TMO
 
-> **Phiên bản:** 0.3 — **DRAFT, ĐANG THẢO LUẬN.** Nền toán MLP (§4.1) và Brain-A/B/C (§4.2–4.4) **CHƯA triển khai** — riêng **phần UI của P1 đã áp dụng sớm theo chỉ thị user (P/S, 2026-10-12)**: panel "Não vận hành" trên tab Database > Kiến trúc + model `BrainModel` + `/api/brain` + `src/lib/brain/registry.ts` (chỉ hiển thị trạng thái theo số liệu thật, chưa có train).
+> **Phiên bản:** 0.4 — **DRAFT, ĐANG THẢO LUẬN.** Nền toán MLP (§4.1) **ĐÃ triển khai (2026-10-12 — src/lib/brain/ + test r84 41/41 PASS)**; Brain-A/B/C (§4.2–4.4) **CHƯA triển khai** (chưa brain nào train thật) — riêng **phần UI của P1 đã áp dụng sớm theo chỉ thị user (P/S, 2026-10-12)**: panel "Não vận hành" trên tab Database > Kiến trúc + model `BrainModel` + `/api/brain` + `src/lib/brain/registry.ts` (chỉ hiển thị trạng thái theo số liệu thật, chưa có train).
 > Được tạo theo chỉ thị user (2026-10-11): *"tạo một file .md lộ trình triển khai, cần triển khai những gì và triển khai như thế nào. Tuy nhiên chưa triển khai ngay mà vẫn cần thảo luận thêm."*
+>
+> **Nhật ký hiệu đính 0.3 → 0.4 (chỉ thị user 2026-10-12 — trước khi triển khai):** §9.2 bổ sung yêu cầu **tổng nhãn vận hành tích lũy** hiển thị cạnh phải dòng tiêu đề panel Não vận hành (luôn hiện, cộng theo nguồn không trùng, fail-open — áp dụng sớm cùng ngày); §4.5 ghi nhận xác nhận user: **P5 để xa về sau, chỉ cần khi tự huấn luyện model riêng** — hiện chưa cần; user duyệt triển khai **BRAIN-P1** (§8 mục 1) — nền toán `mlp.ts` + `activations/losses/init/optimizers` + test `r84` (đã triển khai cùng ngày — 41/41 PASS).
 >
 > **Nhật ký hiệu đính 0.2 → 0.3 (góp ý UI/UX của user, 2026-10-12):** bổ sung **§9 BRAIN-UX — phase UI/UX cuối cùng** (đặt sau khi hoàn thành P1→P4 theo chỉ thị): UX-1 Brain Studio (nút chọn bộ não + chỉnh sửa kiến trúc: thêm/bớt lớp, số nơ-ron/lớp, menu activation mở rộng đủ 9 hàm sigmoid/linear/tanh/ReLU/Leaky ReLU/ELU/Swish/GELU/softmax) · UX-2 Training Console (chỉnh trọng số loss từng đầu ra + siêu tham số khối train + override composite reward qua tuning-store) · UX-3 "đường dây ánh sáng" bezier động hiển thị hướng lan truyền, click sửa được lớp/nơ-ron/cạnh · UX-4 tái bố cục tab Kiến trúc (giữ nguyên đồ thị hệ thống 6 lớp — phần user đánh giá tốt) · UX-5 theme dark-hi-tech toàn app (viền sáng chuyển động, nút nhô bóng, cờ `UI_HITECH`) · bảng mới `BrainSpecDraft` (additive — model 100) · test r88–r91 · §8 thêm mục chờ duyệt 7–9 · ghi chú chéo menu activation mở rộng vào §4.1.
 >
@@ -21,7 +23,7 @@
 
 | Phase | Việc | File chính | Effort | Cờ/Điểm dừng |
 |---|---|---|---|---|
-| **BRAIN-P1** | Nền toán MLP (lan truyền tiến/ngược, activation, loss, optimizer) + kho trọng số `BrainModel` + hiển thị **ANN thật** trên tab Kiến trúc | mới `src/lib/brain/{mlp,activations,losses,optimizers,init}.ts` · `prisma/schema.prisma` (+1 model) · `src/components/database/neural-architecture-section.tsx` (panel mới) | M | Không đổi hành vi runtime nào — thuần nền tảng + hiển thị. **Phần UI + `BrainModel` + `/api/brain` + `registry.ts` đã áp dụng sớm (2026-10-12) — chỉ hiển thị, chưa train** |
+| **BRAIN-P1** | Nền toán MLP (lan truyền tiến/ngược, activation, loss, optimizer) + kho trọng số `BrainModel` + hiển thị **ANN thật** trên tab Kiến trúc | mới `src/lib/brain/{mlp,activations,losses,optimizers,init}.ts` · `prisma/schema.prisma` (+1 model) · `src/components/database/neural-architecture-section.tsx` (panel mới) | M | Không đổi hành vi runtime nào — thuần nền tảng + hiển thị. **HOÀN TẤT (2026-10-12): UI + `BrainModel` + `/api/brain` + `registry.ts` áp dụng sớm + nền toán 9 activation/4 loss/2 optimizer + test r84 41/41 PASS** |
 | **BRAIN-P2** | **Brain-A** — Calibration V3: MLP 2 lớp thay logistic V2 khi thắng đối chứng CV | mới `src/lib/brain/brains/calibration-v3.ts` · sửa `src/lib/calibration.ts` (điểm cắm runtime) | M | `CALIBRATION_V3=off` |
 | **BRAIN-P3** | **Brain-B** — Surrogate Predictor (dự đoán kết quả cấu hình KHÔNG chạy thật) + chế độ replay-eval | mới `src/lib/brain/brains/surrogate.ts` + `src/app/api/brain/replay/route.ts` | L | `REPLAY_EVAL=off` (chỉ đo/báo cáo) |
 | **BRAIN-P4** | **Brain-C** — Policy head theo đặc trưng nhiệm vụ + **composite reward** + chuyển dần cơ quan lái (directives / model routing / tuning) sang nghe brain | mới `src/lib/brain/brains/policy.ts` + reward ledger thống nhất · sửa `adaptation-engine.ts` / `llm.ts` (từng cơ quan một) | L | `RUNTIME_POLICY=off` · từng cơ quan có kill-switch về hành vi cũ |
@@ -242,6 +244,7 @@ model BrainModel {
 - **Chỉ chốt contract trong P1** (weights format numpy-đọc-được) để sidecar tương lai (Keras/PyTorch, mini-service Python — platform có runtime build sẵn) cắm vào mà không sửa não TMO.
 - Các ứng viên khi có GPU: GCN encoder trên Neo4J (95.587 nodes) → đặc trưng đồ thị dùng chung; hypernetwork sinh trọng số (Level 3 thật); LoRA thật khi có model tự host.
 - **Không triển khai, không hẹn thời điểm.**
+- **Xác nhận user (2026-10-12):** P5 giữ xa về sau — chỉ cần khi tiến hành huấn luyện tạo **model riêng** cần GPU; giai đoạn hiện tại KHÔNG cần.**
 
 ---
 
@@ -313,7 +316,7 @@ Mỗi `BrainModel.trainMetaJson.dataLineage` lưu: khoảng thời gian dữ li�
 
 | # | Quyết định | Khuyến nghị blueprint | Trạng thái |
 |---|---|---|---|
-| 1 | Duyệt BRAIN-P1 (nền toán + kho + UI — không đổi hành vi) | Triển khai trước, an toàn tuyệt đối | ☑ **phần UI + `BrainModel` + `/api/brain` đã áp dụng sớm theo chỉ thị P/S 2026-10-12 — còn lại: nền toán `mlp.ts` + train pipeline + test r84** |
+| 1 | Duyệt BRAIN-P1 (nền toán + kho + UI — không đổi hành vi) | Triển khai trước, an toàn tuyệt đối | ☑ **HOÀN TẤT (2026-10-12): UI + `BrainModel` + `/api/brain` áp dụng sớm theo chỉ thị P/S · nền toán `mlp/activations/losses/init/optimizers` + test r84 41/41 PASS — không còn phần dở** |
 | 2 | Q1 — composite reward (P4) có đúng ý muốn? | log-only 2 đợt trước khi tác động | ☐ |
 | 3 | Q2 — inputMode mặc định | `pca-128` tạm, `mrl-512` sau đối chứng pilot; ablation cả 3 bắt buộc | ☐ |
 | 4 | Q3 — không tích hợp LangChain/LangGraph/Keras, mở biên P5 | Chấp nhận rủi ro trùng lặp → không tích hợp | ☐ |
@@ -350,6 +353,8 @@ Mỗi `BrainModel.trainMetaJson.dataLineage` lưu: khoảng thời gian dữ li�
 ### 9.2 UX-1 — BRAIN STUDIO: chọn bộ não + chỉnh sửa kiến trúc
 
 **Chọn não (thay grid 3 thẻ ngang hiện tại):** nút **"Chọn não"** mở danh sách 3 brain (A "V3" · B "Vọng" · C "Lệnh") — mỗi dòng hiện trạng thái NGỦ / THỨC TỈNH / ACTIVE + số mẫu hiện/tại-ngưỡng + inputMode; **chọn não nào sân khấu giữa hiển thị não đó** (đồ thị lớn UX-3 + editor). Danh sách thu gọn giữ vai trò tổng quan trạng thái (không mất thông tin so với 3 thẻ cũ).
+
+**Dòng tiêu đề panel — tổng nhãn tích lũy (chỉ thị user 2026-10-12, áp dụng sớm):** cạnh phải dòng tiêu đề *"Não vận hành — MLP-CPU (BRAIN)"* **luôn hiển thị badge tổng số nhãn vận hành tích lũy** — cộng theo NGUỒN (khóa signal duy nhất, không đếm trùng khi nhiều brain cùng đọc một bảng) từ các nguồn nhãn: EvalResult + AgentRunRecord + QEntry + ArbiterVerdict — đúng định nghĩa "nguyên liệu dạy não" (§2 + Q&A kiến trúc não). Số liệu đã có sẵn trong `/api/brain` (`signals[].current`) — không thêm API. Fail-open: mất `/api/brain` → ẩn badge, không chặn panel.
 
 **Editor kiến trúc — mỗi lớp 1 hàng:**
 
@@ -501,4 +506,4 @@ model BrainSpecDraft {
 
 ---
 
-> **Ghi chú phiên bản 0.3:** tài liệu này là DRAFT để thảo luận — mọi con số effort/ngưỡng là ước lượng ban đầu, sẽ chốt lại theo từng phase. Nền toán MLP & pipeline train **chưa viết**; đã áp dụng sớm theo chỉ thị user: (2026-10-12, P/S) phần UI hiển thị + kho `BrainModel` + `/api/brain` + `registry.ts`; (2026-10-12, góp ý UI/UX) **§9 BRAIN-UX** — cũng CHƯA triển khai, chờ hoàn thành P1→P4 hoặc chỉ thị kéo sớm riêng cho UX-3/4/5.
+> **Ghi chú phiên bản 0.4:** tài liệu này là DRAFT để thảo luận — mọi con số effort/ngưỡng là ước lượng ban đầu, sẽ chốt lại theo từng phase. **Nền toán MLP + test r84 ĐÃ triển khai (2026-10-12, 41/41 PASS — không đổi hành vi runtime)**; Brain-A/B/C (P2–P4) chưa train thật. Đã áp dụng sớm theo chỉ thị user: (2026-10-12, P/S) phần UI hiển thị + kho `BrainModel` + `/api/brain` + `registry.ts`; (2026-10-12, góp ý UI/UX) **§9 BRAIN-UX** + badge tổng nhãn ở tiêu đề panel Não vận hành (§9.2).
