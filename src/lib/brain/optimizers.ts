@@ -103,5 +103,9 @@ export function createOptimizer(name: OptimizerName, lr: number): Optimizer {
       return new SgdMomentum(lr)
     case 'adam':
       return new Adam(lr)
+    default:
+      // Runtime JS caller có thể vượt type (FB-BRAIN-P1-R1-10): trước đây
+      // rơi khỏi switch trả undefined → crash TypeError trễ ở .step.
+      throw new Error(`createOptimizer: optimizer '${String(name)}' không hợp lệ (sgd|adam)`)
   }
 }

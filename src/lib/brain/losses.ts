@@ -8,6 +8,9 @@
  *  - BCE kẹp ŷ vào [ε, 1−ε] với ε = 1e−7 hai đầu TRƯỚC khi log.
  *  - Cross-entropy kẹp p ≥ ε trước log (softmax đã log-sum-exp ở
  *    activations.ts nhưng kẹp thêm một lớp ở biên).
+ *  - Chính sách NaN (FB-BRAIN-P1-R1-13): NaN LAN TIẾP (prediction NaN phải
+ *    hiện thành loss NaN — không thể "loss đẹp" che mất); ±∞ kẹp về biên
+ *    an toàn (bão hoà là trạng thái hợp lệ).
  *
  * Cặp gộp đạo hàm sạch (numerically-stable shortcut — cùng tư duy
  * BCEWithLogitsLoss của thư viện chuẩn):
@@ -47,7 +50,10 @@ function resolveDelta(p?: LossParams): number {
 }
 
 function clipProb(v: number): number {
-  // Kẹp ε hai đầu (audit B3) — NaN/∞ rơi về biên an toàn.
+  // Kẹp ε hai đầu (audit B3). NaN LAN TIẾP — không che mất (prediction
+  // NaN mà bce trả loss ~0 là "dự đoán hoàn hảo" giả — nguy hiểm hơn crash;
+  // FB-BRAIN-P1-R1-13); ±∞ rơi về biên an toàn.
+  if (Number.isNaN(v)) return NaN
   if (!Number.isFinite(v)) return v < 0 ? BCE_EPSILON : 1 - BCE_EPSILON
   return Math.min(1 - BCE_EPSILON, Math.max(BCE_EPSILON, v))
 }

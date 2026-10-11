@@ -221,3 +221,40 @@ export const BRAIN_VERSIONS_KEEP = 5
  * (P2) triển khai.
  */
 export const BRAIN_TRAINING_IMPLEMENTED = false
+
+// ==================== BADGE TỔNG NHÃN (blueprint §9.2 v0.4) ====================
+
+/** Hình dạng tối thiểu của signal cần cho phép tính tổng nhãn. */
+export interface LabelSignalLike {
+  key: string
+  current: number | null
+}
+
+/**
+ * Tổng nhãn vận hành tích lũy — "nguyên liệu dạy não" (blueprint §9.2 v0.4):
+ * cộng theo KHÓA signal duy nhất (nhiều brain cùng đọc 1 bảng không đếm
+ * trùng); current null (đếm lỗi) bị bỏ — fail-open.
+ *
+ * Khi KHÔNG còn nguồn nào đếm được (mọi current null, hoặc không có brain
+ * nào) → trả NULL để UI ẩn badge (FB-BRAIN-P1-R1-12): hiển thị "0 nhãn"
+ * lúc đó là nói sai — 0 nghĩa là "đếm được và bằng 0", còn mọi-null nghĩa
+ * là "đếm lỗi/không dữ liệu". Thuần dữ liệu — client/server dùng chung.
+ */
+export function computeLabelTotal(
+  brains: readonly { signals: readonly LabelSignalLike[] }[] | null | undefined,
+): number | null {
+  if (!brains || brains.length === 0) return null
+  const bySource = new Map<string, number>()
+  let anyCounted = false
+  for (const b of brains) {
+    for (const s of b.signals) {
+      if (s.current === null) continue
+      bySource.set(s.key, s.current)
+      anyCounted = true
+    }
+  }
+  if (!anyCounted) return null
+  let total = 0
+  for (const v of bySource.values()) total += v
+  return total
+}

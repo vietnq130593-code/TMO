@@ -154,11 +154,22 @@ export const ACTIVATIONS: Readonly<Record<ActivationName, ActivationFn>> = {
   },
 
   softmax: {
-    // Điểm danh trong menu cho VALIDATION; tính trên vector xem
-    // `softmaxVector`. backward của softmax KHÔNG phải từng phần tử —
-    // mlp.ts dùng cặp gộp softmax + cross-entropy: δ = p − y (audit B1).
-    forward: z => sigmoidStable(z),
-    backward: () => 0,
+    // Điểm danh trong menu cho VALIDATION (validateSpec); tính trên vector
+    // xem `softmaxVector`. forward/backward TỰ NÉM LỖI (FB-BRAIN-P1-R1-09):
+    // softmax là hàm vector — trả giá trị từng phần tử (σ giả dạng trước
+    // đây) là rác âm thầm cho consumer đi loop qua menu. mlp.ts tự xử lý
+    // softmax qua softmaxVector + cặp gộp CE δ = p − y (audit B1), không
+    // đụng 2 hàm này.
+    forward: () => {
+      throw new Error(
+        'softmax là hàm vector — dùng softmaxVector(activations.ts); key này chỉ để validateSpec điểm danh menu',
+      )
+    },
+    backward: () => {
+      throw new Error(
+        'softmax không có đạo hàm từng phần tử — mlp.ts dùng cặp gộp softmax+CE: δ = p − y (audit B1)',
+      )
+    },
     init: 'xavier',
   },
 }

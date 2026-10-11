@@ -67,15 +67,20 @@ export interface MlpSpec {
 }
 
 export interface FitOptions {
-  /** Số epoch tối đa. Mặc định 1000. */
+  /** Số epoch tối đa — nguyên ≥ 1. Mặc định 1000. */
   epochs?: number
-  /** Cỡ mini-batch. Mặc định 32. */
+  /** Cỡ mini-batch — nguyên ≥ 1, tự kẹp ≤ n (cỡ batch lớn hơn tập dữ liệu vẫn chạy trọn vẹn 1 batch). Mặc định 32. */
   batchSize?: number
-  /** Số epoch hết cải thiện → dừng (đo trên hold-out nếu có). Mặc định 100. */
+  /** Số epoch hết cải thiện → dừng (đo trên hold-out nếu có) — nguyên ≥ 0. Mặc định 100. */
   patience?: number
-  /** Tỉ lệ hold-out tách từ tập train (audit B2). Mặc định 0.15. */
+  /**
+   * Tỉ lệ hold-out tách từ tập train (audit B2) — phạm vi [0, 0.5], NGOÀI
+   * PHẠM VI NÉM LỖI (FB-BRAIN-P1-R2-01 — không kẹp im lặng: 0.99 gần
+   * chắc chắn là bug caller). CHỈ tách hold-out khi n ≥ 4 mẫu (ít hơn:
+   * không hold-out, early-stop đo trên train). Mặc định 0.15.
+   */
   holdOutRatio?: number
-  /** Chuẩn clip gradient toàn cục. Mặc định 5 (blueprint §4.1). 0 = tắt. */
+  /** Chuẩn clip gradient toàn cục — ≥ 0; 0 = tắt. Mặc định 5 (blueprint §4.1). */
   clipNorm?: number
 }
 
@@ -166,9 +171,17 @@ export class MLP {
   /**
    * Lan truyền tiến, trả về activations từng lớp a[0..L−1]
    * (a[0] = input). Không đổi state — thuần.
+   *
+   * Hợp đồng input (FB-BRAIN-P1-R1-01): ném lỗi khi x sai chiều dài —
+   * mọi đường inference công khai (predict/predictProba/lossOf/backward)
+   * đều đi qua đây, rác im lặng không còn lối chui.
    */
   private forwardAll(x: readonly number[]): Float64Array[] {
     const L = this.spec.layers.length
+    const inDim = this.spec.layers[0].units
+    if (x.length !== inDim) {
+      throw new Error(`forwardAll: input ${x.length} ≠ ${inDim} unit lớp input (spec.layers[0])`)
+    }
     const acts: Float64Array[] = []
     const a0 = Float64Array.from(x)
     acts.push(a0)
@@ -200,7 +213,10 @@ export class MLP {
     return acts
   }
 
-  /** Đầu ra mạng cho 1 mẫu (vector activation lớp cuối). */
+  /**
+   * Đầu ra mạng cho 1 mẫu (vector activation lớp cuối). Ném lỗi nếu
+   * x.length ≠ units lớp input (không rác im lặng — FB-BRAIN-P1-R1-01).
+   */
   predict(x: readonly number[]): number[] {
     const acts = this.forwardAll(x)
     return Array.from(acts[acts.length - 1])
@@ -218,8 +234,15 @@ export class MLP {
     return out[0]
   }
 
-  /** Loss dữ liệu (không L2) của 1 mẫu — tiện gradient-check & logging. */
+  /**
+   * Loss dữ liệu (không L2) của 1 mẫu — tiện gradient-check & logging.
+   * Ném lỗi nếu x/y sai chiều dài (FB-BRAIN-P1-R1-01).
+   */
   lossOf(x: readonly number[], y: readonly number[]): number {
+    const outDim = this.spec.layers[this.spec.layers.length - 1].units
+    if (y.length !== outDim) {
+      throw new Error(`lossOf: y ${y.length} ≠ output ${outDim}`)
+    }
     return sampleLoss(this.spec.loss, this.predict(x), y, this.lossParams)
   }
 
@@ -339,12 +362,32 @@ export class MLP {
       if (y[i].length !== outDim) throw new Error(`fit: y[${i}] có ${y[i].length} ≠ output ${outDim}`)
     }
 
+    // Hợp đồng options (FB-BRAIN-P1-R1-02): NaN trước đây rơi im lặng qua
+    // mọi nhánh so sánh (batchSize NaN → batch rỗng → 1/0 = ∞ → NaN lan vào
+    // weights; epochs/patience NaN → vòng lặp tắt ngóm; clipNorm NaN → tắt
+    // clip). Rác vào phải NÉM to, không nuốt.
     const epochs = opts?.epochs ?? DEFAULT_EPOCHS
-    const batchSize = Math.max(1, Math.min(opts?.batchSize ?? DEFAULT_BATCH_SIZE, n))
+    const rawBatchSize = opts?.batchSize ?? DEFAULT_BATCH_SIZE
     const patience = opts?.patience ?? DEFAULT_PATIENCE
-    const holdOutRatio = Math.max(0, Math.min(opts?.holdOutRatio ?? DEFAULT_HOLDOUT_RATIO, 0.5))
+    const rawHoldOut = opts?.holdOutRatio ?? DEFAULT_HOLDOUT_RATIO
     const clipNorm = opts?.clipNorm ?? DEFAULT_CLIP_NORM
-    if (epochs < 1) throw new Error(`fit: epochs ${epochs} không hợp lệ`)
+    if (!Number.isFinite(epochs) || !Number.isInteger(epochs) || epochs < 1) {
+      throw new Error(`fit: epochs ${epochs} không hợp lệ (nguyên ≥ 1)`)
+    }
+    if (!Number.isFinite(rawBatchSize) || !Number.isInteger(rawBatchSize) || rawBatchSize < 1) {
+      throw new Error(`fit: batchSize ${rawBatchSize} không hợp lệ (nguyên ≥ 1, tự kẹp ≤ n)`)
+    }
+    if (!Number.isFinite(patience) || !Number.isInteger(patience) || patience < 0) {
+      throw new Error(`fit: patience ${patience} không hợp lệ (nguyên ≥ 0)`)
+    }
+    if (!Number.isFinite(rawHoldOut) || rawHoldOut < 0 || rawHoldOut > 0.5) {
+      throw new Error(`fit: holdOutRatio ${rawHoldOut} không hợp lệ (phạm vi [0, 0.5])`)
+    }
+    if (!Number.isFinite(clipNorm) || clipNorm < 0) {
+      throw new Error(`fit: clipNorm ${clipNorm} không hợp lệ (≥ 0; 0 = tắt)`)
+    }
+    const batchSize = Math.min(rawBatchSize, n) // rawBatchSize đã validate ≥ 1 — chỉ kẹp ≤ n
+    const holdOutRatio = rawHoldOut // đã validate ∈ [0, 0.5] — không còn kẹp (FB-BRAIN-P1-R2-01 dọn mã chết)
 
     // Luồng seed riêng cho fit — tạo lại mỗi lần (tất định, xem init.ts)
     const rng = makeRng((this.spec.seed ^ FIT_SEED_XOR) >>> 0)
@@ -474,14 +517,24 @@ export class MLP {
       throw new Error('deserialize: dữ liệu không đúng shape MlpSerialized')
     }
     const mlp = new MLP(data.spec)
-    if (data.tensors.length !== 2 * (data.spec.layers.length - 1)) {
-      throw new Error(
-        `deserialize: cần ${2 * (data.spec.layers.length - 1)} tensor, nhận ${data.tensors.length}`,
-      )
-    }
+    // Hợp đồng tensor (FB-BRAIN-P1-R1-03): trước đây (a) kind lạ rơi nhánh
+    // else bị coi là bias, (b) tensor trùng khi đủ số lượng làm tensor thật
+    // mất trắng — mạng "load được" mà sai âm thầm. Chặn 4 lớp thay cho
+    // count-check đơn thuần: kind hợp lệ + layer nguyên trong phạm vi +
+    // không trùng cặp (kind, layer) + đủ MỌI cặp W/b của mọi lớp (nhánh
+    // thiếu thay cho count — mọi đường sai đều chạm 1 trong 4).
+    const seen = new Set<string>()
     for (const t of data.tensors) {
+      if (t.kind !== 'W' && t.kind !== 'b') {
+        throw new Error(`deserialize: kind '${String(t.kind)}' không hợp lệ (W|b)`)
+      }
       const l = t.layer
-      if (l < 1 || l >= data.spec.layers.length) throw new Error(`deserialize: layer ${l} ngoài phạm vi`)
+      if (!Number.isInteger(l) || l < 1 || l >= data.spec.layers.length) {
+        throw new Error(`deserialize: layer ${String(l)} ngoài phạm vi`)
+      }
+      const sig = `${t.kind}${l}`
+      if (seen.has(sig)) throw new Error(`deserialize: tensor trùng lặp ${sig}`)
+      seen.add(sig)
       const fanIn = data.spec.layers[l - 1].units
       const fanOut = data.spec.layers[l].units
       const expectLen = t.kind === 'W' ? fanOut * fanIn : fanOut
@@ -496,6 +549,10 @@ export class MLP {
       const target = t.kind === 'W' ? mlp.W[l - 1] : mlp.b[l - 1]
       target.set(Float64Array.from(t.envelope.data))
     }
+    for (let l = 1; l < data.spec.layers.length; l++) {
+      if (!seen.has(`W${l}`)) throw new Error(`deserialize: thiếu tensor W${l}`)
+      if (!seen.has(`b${l}`)) throw new Error(`deserialize: thiếu tensor b${l}`)
+    }
     return mlp
   }
 }
@@ -505,6 +562,13 @@ export class MLP {
 const OUTPUT_OK_REGRESSION: readonly ActivationName[] = [
   'linear', 'tanh', 'relu', 'leakyRelu', 'elu', 'swish', 'gelu',
 ]
+
+/**
+ * Trần tổng tham số (nguyên tắc §9.1-3 blueprint: cảnh báo > 100K, CHẶN
+ * > 250K — ngân sách CPU của brain MLP). Thực thi tại validateSpec — mọi
+ * lối xây MLP (constructor lẫn deserialize) đều qua đây.
+ */
+export const BRAIN_MAX_PARAMS = 250_000
 
 export function validateSpec(spec: MlpSpec): void {
   if (!spec || !Array.isArray(spec.layers) || spec.layers.length < 2) {
@@ -517,6 +581,33 @@ export function validateSpec(spec: MlpSpec): void {
     if (!ACTIVATIONS[l.activation]) {
       throw new Error(`validateSpec: activation '${l.activation}' không có trong menu`)
     }
+    // Tham số activation (FB-BRAIN-P1-R1-04): trước đây rác (α = −5, β = 0)
+    // được constructor nhận nhưng runtime thay bằng fallback im lặng —
+    // bất đối xứng với lossParams.delta vốn có kiểm. Hợp lệ = hữu hạn > 0
+    // (khớp resolveAlpha/resolveBeta trong activations.ts).
+    if (l.activationParams?.alpha !== undefined) {
+      const a = l.activationParams.alpha
+      if (!Number.isFinite(a) || a <= 0) {
+        throw new Error(`validateSpec: activationParams.alpha ${a} không hợp lệ (> 0)`)
+      }
+    }
+    if (l.activationParams?.beta !== undefined) {
+      const b = l.activationParams.beta
+      if (!Number.isFinite(b) || b <= 0) {
+        throw new Error(`validateSpec: activationParams.beta ${b} không hợp lệ (> 0)`)
+      }
+    }
+  }
+  // Trần tổng tham số (FB-BRAIN-P1-R1-08 — §9.1-3): 2048→300→2 (615K)
+  // trước đây ĐẠT validateSpec vì chỉ cản units ≤ 4096/lớp.
+  let totalParams = 0
+  for (let l = 1; l < spec.layers.length; l++) {
+    totalParams += spec.layers[l].units * spec.layers[l - 1].units + spec.layers[l].units
+  }
+  if (totalParams > BRAIN_MAX_PARAMS) {
+    throw new Error(
+      `validateSpec: tổng tham số ${totalParams} vượt trần ${BRAIN_MAX_PARAMS} (nguyên tắc §9.1-3 — ngân sách CPU)`,
+    )
   }
   const hidden = spec.layers.slice(1, -1)
   for (const h of hidden) {

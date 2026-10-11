@@ -13,9 +13,11 @@
  *  - Trộn dữ liệu fit():  makeRng(spec.seed ^ 0x5bd1e995) — tạo lại MỖI
  *    lần fit() → train lại bao nhiêu lần cũng ra cùng kết quả.
  *
- * Sơ đồ khởi tạo:
+ * Sơ đồ khởi tạo (quy ước N(μ, σ) — tham số 2 là ĐỘ LỆCH CHUẨN):
  *  - He     (relu/leakyRelu/elu/swish/gelu): W ~ N(0, √(2/fanIn))
+ *    — tức var = 2/fanIn
  *  - Xavier (tanh/sigmoid/linear):          W ~ N(0, √(2/(fanIn+fanOut)))
+ *    — tức var = 2/(fanIn+fanOut)  (Glorot)
  *  - Bias khởi tạo 0 (chuẩn).
  */
 

@@ -52,6 +52,7 @@ import {
 // registry single-source cho panel "Não vận hành"; API + UI cùng import.
 import {
   BRAIN_REGISTRY,
+  computeLabelTotal,
   type BrainApiResponse, type BrainStatusEntry, type BrainLifecycle,
 } from '@/lib/brain/registry'
 
@@ -484,22 +485,12 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
 
   // UX-1 áp dụng sớm (chỉ thị user 2026-10-12 — blueprint §9.2 v0.4): tổng
   // số NHÃN VẬN HÀNH TÍCH LŨY — "nguyên liệu dạy não" (EvalResult +
-  // AgentRunRecord + QEntry + ArbiterVerdict). Cộng theo NGUỒN (khóa
-  // signal duy nhất) để không đếm trùng khi nhiều brain cùng đọc một bảng;
-  // null (đếm lỗi) bị bỏ — fail-open. Chỉ hiện khi có brainData thật.
-  const labelTotal = useMemo<number | null>(() => {
-    if (!brainData) return null
-    const bySource = new Map<string, number>()
-    for (const b of brainData.brains) {
-      for (const s of b.signals) {
-        if (s.current === null) continue
-        bySource.set(s.key, s.current)
-      }
-    }
-    let total = 0
-    for (const v of bySource.values()) total += v
-    return total
-  }, [brainData])
+  // AgentRunRecord + QEntry + ArbiterVerdict). Logic thuần tách xuống
+  // registry.computeLabelTotal (pin được bằng test r84): cộng theo NGUỒN
+  // (khóa signal duy nhất — không đếm trùng khi nhiều brain cùng đọc 1
+  // bảng); null (đếm lỗi) bị bỏ; MỌI nguồn null → ẩn badge (không phải
+  // "0 nhãn" — FB-BRAIN-P1-R1-12).
+  const labelTotal = useMemo<number | null>(() => computeLabelTotal(brainData?.brains), [brainData])
 
   // P2-M3: mobile (viewport < lg) → chọn node mở bottom-sheet inspector
   // (thay cuộn xuống inspector dưới đồ thị — below-the-fold); desktop giữ
@@ -842,7 +833,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
               <BrainCircuit className="h-3.5 w-3.5 shrink-0 text-amber-400" />
               <h4 className="text-xs font-semibold text-stone-100">Não vận hành — MLP-CPU (BRAIN)</h4>
               <span className="text-[10px] text-stone-500">
-                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · BLUEPRINT-BRAIN-P1-P5 v0.4
+                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · BLUEPRINT-BRAIN-P1-P5 v0.5
               </span>
               {brainData && (
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">

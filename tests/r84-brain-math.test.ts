@@ -13,6 +13,11 @@
  *   5. Serialize → deserialize → predict GIỐNG HỆT (+ envelope A6).
  * Cộng nhóm 6: validation spec (audit B1 + cặp loss/activation) và
  * ổn định số (audit B3).
+ * Cộng nhóm 7-8 (đợt FB-BRAIN-P1 2026-10-12 — giao thức fixbug sau triển
+ * khai): nhóm 7 regression hợp đồng API (13 phát hiện R1 — mỗi test pin
+ * 1 lỗi cũ đã hết); nhóm 8 pin giá trị tay lấp 11 khoảng trống C5 (L2,
+ * init họ sơ đồ/variance, optimizer bước đầu = tay, hợp đồng instance,
+ * hằng mặc định, computeLabelTotal).
  */
 
 import { describe, test, expect } from 'bun:test'
@@ -22,10 +27,27 @@ import {
   softmaxVector,
   type ActivationName,
 } from '@/lib/brain/activations'
-import { LOSSES, LOSS_NAMES, BCE_EPSILON, sampleLoss } from '@/lib/brain/losses'
-import { makeRng, randn } from '@/lib/brain/init'
-import { createOptimizer, SGD_MOMENTUM, ADAM_BETA1, ADAM_BETA2 } from '@/lib/brain/optimizers'
-import { MLP, type MlpSpec } from '@/lib/brain/mlp'
+import { LOSSES, LOSS_NAMES, BCE_EPSILON, sampleLoss, l2Penalty, l2WeightGrad } from '@/lib/brain/losses'
+import { makeRng, randn, initWeights, initBias, initFamilyFor } from '@/lib/brain/init'
+import {
+  createOptimizer,
+  SGD_MOMENTUM,
+  ADAM_BETA1,
+  ADAM_BETA2,
+  ADAM_EPSILON,
+} from '@/lib/brain/optimizers'
+import {
+  MLP,
+  validateSpec,
+  BRAIN_MAX_PARAMS,
+  DEFAULT_EPOCHS,
+  DEFAULT_BATCH_SIZE,
+  DEFAULT_PATIENCE,
+  DEFAULT_HOLDOUT_RATIO,
+  DEFAULT_CLIP_NORM,
+  type MlpSpec,
+} from '@/lib/brain/mlp'
+import { computeLabelTotal } from '@/lib/brain/registry'
 
 // ==================== DỮ LIỆU XOR KINH ĐIỂN ====================
 
@@ -531,5 +553,366 @@ describe('r84 · BRAIN-P1 (6c) ổn định loss (audit B3) + hằng số optimi
     expect(res.epochsRun).toBeLessThan(800)
     expect(res.bestEpoch).toBeLessThanOrEqual(res.epochsRun)
     expect(res.bestLoss).toBeLessThanOrEqual(res.finalValLoss ?? res.finalTrainLoss)
+  })
+})
+
+// ==================== 7. FB-BRAIN-P1 REGRESSION — HỢP ĐỒNG API (đợt fixbug 2026-10-12) ====================
+// Mỗi test pin 1 phát hiện R1 của auditor độc lập — chứng minh lỗi cũ đã hết.
+
+describe('r84 · FB-BRAIN-P1 (7a) inference chặn input sai chiều — R1-01', () => {
+  const mlp = new MLP({
+    layers: [
+      { units: 2, activation: 'linear' },
+      { units: 1, activation: 'sigmoid' },
+    ],
+    loss: 'bce',
+    optimizer: 'adam',
+    lr: 0.01,
+    l2: 0,
+    seed: 1,
+  })
+
+  test('predict sai chiều (thiếu/thừa) NÉM — trước đây trả rác hữu hạn/NaN im lặng', () => {
+    expect(() => mlp.predict([0.5])).toThrow(/input 1 ≠ 2/)
+    expect(() => mlp.predict([0.5, -0.5, 999])).toThrow(/input 3 ≠ 2/)
+    expect(() => mlp.predict([])).toThrow(/input 0 ≠ 2/)
+  })
+
+  test('lossOf chặn cả y sai chiều; đúng chiều vẫn chạy', () => {
+    expect(() => mlp.lossOf([1, 2], [0, 1])).toThrow(/y 2 ≠ output 1/)
+    expect(Number.isFinite(mlp.lossOf([1, 2], [0]))).toBe(true)
+  })
+})
+
+describe('r84 · FB-BRAIN-P1 (7b) fit chặn options rác — R1-02', () => {
+  const mlp = () =>
+    new MLP({
+      layers: [
+        { units: 2, activation: 'linear' },
+        { units: 1, activation: 'sigmoid' },
+      ],
+      loss: 'bce',
+      optimizer: 'adam',
+      lr: 0.01,
+      l2: 0,
+      seed: 1,
+    })
+  const X = [[0, 0], [0, 1], [1, 0], [1, 1]] as const
+  const y = [[0], [1], [1], [0]] as const
+
+  test('NaN mọi tham số NÉM — trước đây: batchSize NaN nuốt ∞ vào weights, epochs/patience NaN tắt vòng lặp, clipNorm NaN tắt clip', () => {
+    expect(() => mlp().fit(X, y, { epochs: Number.NaN })).toThrow(/epochs/)
+    expect(() => mlp().fit(X, y, { epochs: 3, batchSize: Number.NaN })).toThrow(/batchSize/)
+    expect(() => mlp().fit(X, y, { epochs: 3, patience: Number.NaN })).toThrow(/patience/)
+    expect(() => mlp().fit(X, y, { epochs: 3, holdOutRatio: Number.NaN })).toThrow(/holdOutRatio/)
+    expect(() => mlp().fit(X, y, { epochs: 3, clipNorm: Number.NaN })).toThrow(/clipNorm/)
+  })
+
+  test('không nguyên / ngoài phạm vi NÉM; biên hợp lệ vẫn chạy (0, 0.5, clip 0)', () => {
+    expect(() => mlp().fit(X, y, { epochs: 2.5 })).toThrow(/epochs/)
+    expect(() => mlp().fit(X, y, { epochs: 3, batchSize: 0 })).toThrow(/batchSize/)
+    expect(() => mlp().fit(X, y, { epochs: 3, patience: -1 })).toThrow(/patience/)
+    expect(() => mlp().fit(X, y, { epochs: 3, holdOutRatio: 0.7 })).toThrow(/holdOutRatio/)
+    expect(() => mlp().fit(X, y, { epochs: 3, clipNorm: -1 })).toThrow(/clipNorm/)
+    expect(mlp().fit(X, y, { epochs: 1, holdOutRatio: 0, clipNorm: 0, patience: 0 }).epochsRun).toBe(1)
+    expect(mlp().fit(X, y, { epochs: 1, holdOutRatio: 0.5 }).epochsRun).toBe(1)
+  })
+})
+
+describe('r84 · FB-BRAIN-P1 (7c) deserialize chặn trùng/kind-lạ/thiếu cặp — R1-03', () => {
+  const build = () =>
+    new MLP({
+      layers: [
+        { units: 3, activation: 'linear' },
+        { units: 2, activation: 'tanh' },
+        { units: 1, activation: 'sigmoid' },
+      ],
+      loss: 'bce',
+      optimizer: 'adam',
+      lr: 0.01,
+      l2: 0,
+      seed: 5,
+    })
+
+  test('tensor TRÙNG lặp NÉM — trước đây b1 mất trắng giữ khởi tạo 0', () => {
+    const s = JSON.parse(JSON.stringify(build().serialize()))
+    s.tensors = [s.tensors[0], JSON.parse(JSON.stringify(s.tensors[0])), s.tensors[2], s.tensors[3]]
+    expect(() => MLP.deserialize(s)).toThrow(/trùng lặp W1/)
+  })
+
+  test('kind LẠ bị coi là bias NÉM; layer không nguyên NÉM', () => {
+    const s1 = JSON.parse(JSON.stringify(build().serialize()))
+    s1.tensors[1].kind = 'xyz'
+    expect(() => MLP.deserialize(s1)).toThrow(/kind 'xyz' không hợp lệ/)
+    const s2 = JSON.parse(JSON.stringify(build().serialize()))
+    s2.tensors[1].layer = 1.5
+    expect(() => MLP.deserialize(s2)).toThrow(/ngoài phạm vi/)
+  })
+
+  test('THIẾU cặp tensor NÉM (nhánh thay count-check) — thông báo chỉ đúng tensor thiếu', () => {
+    const s = JSON.parse(JSON.stringify(build().serialize()))
+    s.tensors = [s.tensors[0], s.tensors[1], s.tensors[2]] // bỏ b2
+    expect(() => MLP.deserialize(s)).toThrow(/thiếu tensor b2/)
+  })
+
+  test('roundtrip đầy đủ vẫn tải hoàn hảo (4 guard không cản đường tốt)', () => {
+    const src = build()
+    const restored = MLP.deserialize(JSON.parse(JSON.stringify(src.serialize())))
+    expect(restored.predict([1, 0.5, -1])[0]).toBe(src.predict([1, 0.5, -1])[0])
+  })
+})
+
+describe('r84 · FB-BRAIN-P1 (7d) validateSpec chặn activationParams rác — R1-04', () => {
+  const base = { loss: 'mse' as const, optimizer: 'adam' as const, lr: 0.01, l2: 0, seed: 1 }
+
+  test('alpha/beta ≤ 0 hoặc NaN NÉM — trước đây runtime thay fallback im lặng', () => {
+    expect(() =>
+      new MLP({
+        ...base,
+        layers: [
+          { units: 2, activation: 'linear' },
+          { units: 1, activation: 'leakyRelu', activationParams: { alpha: -5 } },
+          { units: 1, activation: 'linear' },
+        ],
+      }),
+    ).toThrow(/alpha -5 không hợp lệ/)
+    expect(() =>
+      new MLP({
+        ...base,
+        layers: [
+          { units: 2, activation: 'linear' },
+          { units: 1, activation: 'swish', activationParams: { beta: 0 } },
+          { units: 1, activation: 'linear' },
+        ],
+      }),
+    ).toThrow(/beta 0 không hợp lệ/)
+  })
+
+  test('giá trị hợp lệ vẫn qua (alpha 0.2, beta 2)', () => {
+    expect(() =>
+      new MLP({
+        ...base,
+        layers: [
+          { units: 2, activation: 'linear' },
+          { units: 1, activation: 'leakyRelu', activationParams: { alpha: 0.2 } },
+          { units: 1, activation: 'linear' },
+        ],
+      }),
+    ).not.toThrow()
+    expect(() =>
+      new MLP({
+        ...base,
+        layers: [
+          { units: 2, activation: 'linear' },
+          { units: 1, activation: 'swish', activationParams: { beta: 2 } },
+          { units: 1, activation: 'linear' },
+        ],
+      }),
+    ).not.toThrow()
+  })
+})
+
+describe('r84 · FB-BRAIN-P1 (7e) trần tổng tham số 250K tại validateSpec — R1-08', () => {
+  const base = { loss: 'mse' as const, optimizer: 'adam' as const, lr: 0.01, l2: 0, seed: 1 }
+
+  test('BRAIN_MAX_PARAMS = 250.000 (nguyên tắc §9.1-3)', () => {
+    expect(BRAIN_MAX_PARAMS).toBe(250_000)
+  })
+
+  test('mạng 2048→300→2 (615.302 tham số) NÉM — trước đây ĐẠT vì chỉ cản units ≤ 4096/lớp', () => {
+    expect(() =>
+      new MLP({
+        ...base,
+        layers: [
+          { units: 2048, activation: 'linear' },
+          { units: 300, activation: 'tanh' },
+          { units: 2, activation: 'linear' },
+        ],
+      }),
+    ).toThrow(/vượt trần 250000/)
+  })
+
+  test('biên: đúng 250.000 tham số VẪN ĐẠT (chỉ chặn >); 250.500 chặn', () => {
+    // 499×500 + 500 = 250.000 — chính xác trần (pin trực tiếp export validateSpec)
+    expect(() =>
+      validateSpec({
+        ...base,
+        layers: [
+          { units: 499, activation: 'linear' },
+          { units: 500, activation: 'tanh' },
+        ],
+      } satisfies MlpSpec),
+    ).not.toThrow()
+    // 500×500 + 500 = 250.500 — vượt trần
+    expect(() =>
+      new MLP({
+        ...base,
+        layers: [
+          { units: 500, activation: 'linear' },
+          { units: 500, activation: 'tanh' },
+        ],
+      }),
+    ).toThrow(/vượt trần/)
+  })
+})
+
+describe('r84 · FB-BRAIN-P1 (7f) hợp đồng softmax từng-phần-tử + optimizer lạ — R1-09/R1-10', () => {
+  test('ACTIVATIONS.softmax.forward/backward NÉM (hàm vector) — trước đây giả dạng σ trả rác', () => {
+    expect(() => ACTIVATIONS.softmax.forward(0.5)).toThrow(/softmaxVector/)
+    expect(() => ACTIVATIONS.softmax.backward(0.5)).toThrow(/p − y/)
+  })
+
+  test('createOptimizer tên lạ NÉM — trước đây trả undefined crash trễ tại .step', () => {
+    expect(() => createOptimizer('rmsprop' as never, 0.1)).toThrow(/không hợp lệ/)
+  })
+})
+
+describe('r84 · FB-BRAIN-P1 (7g) chính sách NaN/∞ loss — R1-13', () => {
+  test('NaN LAN TIẾP trong bce/crossEntropy — trước đây clip ép NaN→1−ε cho "loss hoàn hảo" giả', () => {
+    expect(Number.isNaN(LOSSES.bce.fn(Number.NaN, 1))).toBe(true)
+    expect(Number.isNaN(LOSSES.bce.deriv(Number.NaN, 1))).toBe(true)
+    expect(Number.isNaN(LOSSES.crossEntropy.fn(Number.NaN, 1))).toBe(true)
+  })
+
+  test('±∞ vẫn kẹp biên an toàn (bão hoà hợp lệ — giữ hành vi B3)', () => {
+    expect(LOSSES.bce.fn(Number.POSITIVE_INFINITY, 1)).toBeCloseTo(-Math.log(1 - BCE_EPSILON), 15)
+    expect(LOSSES.bce.fn(Number.NEGATIVE_INFINITY, 0)).toBeCloseTo(-Math.log(1 - BCE_EPSILON), 15)
+  })
+})
+
+// ==================== 8. FB-BRAIN-P1 PIN — GIÁ TRỊ TAY (R1-11: lấp khoảng trống pin) ====================
+
+describe('r84 · FB-BRAIN-P1 (8a) L2 penalty/grad giá trị tay + init họ sơ đồ', () => {
+  test('l2Penalty (λ/2)·Σw² và l2WeightGrad λ·w — tính tay', () => {
+    // (0.01/2)·(1² + 2² + 0.5²) = 0.005 · 5.25 = 0.02625
+    expect(l2Penalty(0.01, [Float64Array.of(1, 2), Float64Array.of(0.5)])).toBeCloseTo(0.02625, 15)
+    expect(l2Penalty(0, [Float64Array.of(1, 2)])).toBe(0)
+    expect(l2WeightGrad(0.01, 3)).toBeCloseTo(0.03, 15)
+    expect(l2WeightGrad(0, 3)).toBe(0)
+  })
+
+  test('initWeights He: var ≈ 2/fanIn; Xavier: var ≈ 2/(fanIn+fanOut) — chặn đổi std trượt gate', () => {
+    const he = initWeights(64, 32, 'he', makeRng(7))
+    const xv = initWeights(64, 32, 'xavier', makeRng(7))
+    const variance = (a: Float64Array) => {
+      let m = 0
+      for (const v of a) m += v
+      m /= a.length
+      let s = 0
+      for (const v of a) s += (v - m) * (v - m)
+      return s / a.length
+    }
+    // Tất định (mulberry32) — 2048 mẫu, sai số lấy mẫu ~3%; biên 20% an toàn
+    expect(Math.abs(variance(he) - 2 / 64)).toBeLessThan((2 / 64) * 0.2)
+    expect(Math.abs(variance(xv) - 2 / (64 + 32))).toBeLessThan((2 / 96) * 0.2)
+    // Tất định bit: cùng seed → cùng mảng
+    const a = initWeights(8, 4, 'he', makeRng(42))
+    const b = initWeights(8, 4, 'he', makeRng(42))
+    expect(Array.from(a)).toEqual(Array.from(b))
+    // Bias 0
+    expect(Array.from(initBias(5))).toEqual([0, 0, 0, 0, 0])
+  })
+
+  test('initFamilyFor mapping đủ 9 hàm (relu-family → he, còn lại → xavier)', () => {
+    for (const n of ['relu', 'leakyRelu', 'elu', 'swish', 'gelu'] as const) {
+      expect(initFamilyFor(n)).toBe('he')
+    }
+    for (const n of ['sigmoid', 'linear', 'tanh', 'softmax'] as const) {
+      expect(initFamilyFor(n)).toBe('xavier')
+    }
+  })
+})
+
+describe('r84 · FB-BRAIN-P1 (8b) optimizer bước đầu = công thức tay', () => {
+  test('Adam 2 bước đầu (g=1, lr=0.1): mỗi bước m̂=v̂=1 → p −= lr/(1+ε)', () => {
+    const p = new Float64Array(1)
+    const g = new Float64Array(1).fill(1)
+    const opt = createOptimizer('adam', 0.1)
+    opt.step(p, g)
+    expect(p[0]).toBeCloseTo(-0.1 / (1 + 1e-8), 9)
+    opt.step(p, g)
+    expect(p[0]).toBeCloseTo((-2 * 0.1) / (1 + 1e-8), 9)
+  })
+
+  test('SGD momentum 3 bước (g=1, lr=0.1, β=0.9): −0.1 → −0.29 → −0.561', () => {
+    const p = new Float64Array(1)
+    const g = new Float64Array(1).fill(1)
+    const opt = createOptimizer('sgd', 0.1)
+    opt.step(p, g)
+    expect(p[0]).toBeCloseTo(-0.1, 12)
+    opt.step(p, g)
+    expect(p[0]).toBeCloseTo(-0.29, 12)
+    opt.step(p, g)
+    expect(p[0]).toBeCloseTo(-0.561, 12)
+  })
+
+  test('hằng số bias-correction đúng bài báo Adam', () => {
+    expect(ADAM_EPSILON).toBe(1e-8)
+    expect(1 - ADAM_BETA1).toBeCloseTo(0.1, 15)
+    expect(1 - ADAM_BETA2).toBeCloseTo(0.001, 15)
+    expect(SGD_MOMENTUM).toBe(0.9)
+  })
+})
+
+describe('r84 · FB-BRAIN-P1 (8c) hợp đồng instance + hằng mặc định + badge tổng nhãn', () => {
+  test('getSpec deep-copy: đổi bản trả về KHÔNG đụng model; spec gốc đổi sau build cũng vậy', () => {
+    const spec: MlpSpec = {
+      layers: [
+        { units: 2, activation: 'linear' },
+        { units: 1, activation: 'sigmoid' },
+      ],
+      loss: 'bce',
+      optimizer: 'adam',
+      lr: 0.01,
+      l2: 0,
+      seed: 3,
+    }
+    const mlp = new MLP(spec)
+    spec.layers[0].units = 999 // caller đột biến spec gốc sau build
+    const s = mlp.getSpec()
+    s.layers[0].units = 555 // đột biến bản getSpec
+    expect(mlp.getSpec().layers[0].units).toBe(2)
+  })
+
+  test('predictProba đa unit NÉM — chỉ hợp lệ output 1 unit', () => {
+    const mlp = new MLP({
+      layers: [
+        { units: 2, activation: 'linear' },
+        { units: 2, activation: 'softmax' },
+      ],
+      loss: 'crossEntropy',
+      optimizer: 'adam',
+      lr: 0.01,
+      l2: 0,
+      seed: 3,
+    })
+    expect(() => mlp.predictProba([0.5, -0.5])).toThrow(/dùng predict\(\)/)
+  })
+
+  test('hằng mặc định FitOptions đúng blueprint (r84 gốc chưa fit nào dùng mặc định)', () => {
+    expect(DEFAULT_EPOCHS).toBe(1000)
+    expect(DEFAULT_BATCH_SIZE).toBe(32)
+    expect(DEFAULT_PATIENCE).toBe(100)
+    expect(DEFAULT_HOLDOUT_RATIO).toBe(0.15)
+    expect(DEFAULT_CLIP_NORM).toBe(5)
+  })
+
+  test('computeLabelTotal (registry): 5 kịch bản — null/đếm-trùng/theo-nguồn/mọi-null-ẩn/giá-trị-0', () => {
+    expect(computeLabelTotal(null)).toBeNull()
+    expect(computeLabelTotal(undefined)).toBeNull()
+    expect(computeLabelTotal([])).toBeNull()
+    // Mọi nguồn null (đếm lỗi hết) → NULL để UI ẩn badge — không phải "0 nhãn" (R1-12)
+    expect(computeLabelTotal([{ signals: [{ key: 'a', current: null }, { key: 'b', current: null }] }])).toBeNull()
+    // Cộng theo nguồn không trùng: 2 brain cùng đọc 'a' tính 1 lần
+    expect(
+      computeLabelTotal([
+        { signals: [{ key: 'a', current: 4 }, { key: 'b', current: 5 }] },
+        { signals: [{ key: 'a', current: 4 }] },
+      ]),
+    ).toBe(9)
+    // Nguồn null bị bỏ (fail-open), nguồn tốt vẫn tính
+    expect(computeLabelTotal([{ signals: [{ key: 'a', current: null }, { key: 'b', current: 3 }] }])).toBe(3)
+    // Đếm được và bằng 0 → 0 (khác hẳn null — "chưa có nhãn" là trạng thái hợp lệ)
+    expect(computeLabelTotal([{ signals: [{ key: 'a', current: 0 }] }])).toBe(0)
   })
 })
