@@ -31,6 +31,10 @@
 
 import { db } from '@/lib/db'
 import { iqrBounds } from '@/lib/stats'
+// NEURAL-ARCH (2026-10-11): k (Tukey fence) + n tối thiểu nhóm đọc runtime
+// (anomaly_iqr_k / anomaly_min_group_size — STORE > ENV > hằng số) —
+// tinh chỉnh trên tab Kiến trúc Neural; hằng số export giữ làm default + test.
+import { getTuningNumber } from '@/lib/learning/tuning-store'
 
 export interface AnomalyScanResult {
   /** Tổng số ToolMetric rows đã soát trong cửa sổ */
@@ -134,11 +138,13 @@ export async function scanToolMetricAnomalies(lookbackDays = 7): Promise<Anomaly
       toolAgg.n += group.length
       byTool.set(toolName, toolAgg)
 
-      // Nhóm nhỏ bỏ qua — n < 20 thì quantile chỉ là nhiễu (LLN/CLT)
-      if (group.length < ANOMALY_MIN_GROUP_SIZE) continue
+      // Nhóm nhỏ bỏ qua — n < ngưỡng thì quantile chỉ là nhiễu (LLN/CLT).
+      // NEURAL-ARCH: ngưỡng đọc runtime (anomaly_min_group_size).
+      if (group.length < getTuningNumber('anomaly_min_group_size')) continue
 
       const durations = group.map((r) => r.durationMs)
-      const { low, high, q1, q3 } = iqrBounds(durations, ANOMALY_IQR_K)
+      // NEURAL-ARCH: k đọc runtime (anomaly_iqr_k) — rìa Tukey co giãn theo tuning.
+      const { low, high, q1, q3 } = iqrBounds(durations, getTuningNumber('anomaly_iqr_k'))
       if (!Number.isFinite(high) || !Number.isFinite(q3)) continue // defensive — không xảy ra với n≥20
 
       const iqr = q3 - q1

@@ -41,6 +41,8 @@ const SelfDirectionModule = dynamic(withChunkRetry(() => import('@/components/se
 const AnalyticsSection = dynamic(withChunkRetry(() => import('@/components/database/analytics-section').then(m => m.AnalyticsSection)), { loading: ModuleLoading })
 const TokenUsageSection = dynamic(withChunkRetry(() => import('@/components/database/token-usage-section').then(m => m.TokenUsageSection)), { loading: ModuleLoading })
 const AutoLearnSection = dynamic(withChunkRetry(() => import('@/components/database/auto-learn-section').then(m => m.AutoLearnSection)), { loading: ModuleLoading })
+// NEURAL-ARCH (2026-10-11): tab "Kiến trúc Neural" — đồ thị 6 lớp + tinh chỉnh runtime
+const NeuralArchitectureSection = dynamic(withChunkRetry(() => import('@/components/database/neural-architecture-section').then(m => m.NeuralArchitectureSection)), { loading: ModuleLoading })
 const RuntimeMetricsPanel = dynamic(withChunkRetry(() => import('@/components/analytics/runtime-metrics-panel').then(m => m.RuntimeMetricsPanel)), { loading: ModuleLoading })
 const EpisodicMemoryPanel = dynamic(withChunkRetry(() => import('@/components/analytics/episodic-memory-panel').then(m => m.EpisodicMemoryPanel)), { loading: ModuleLoading })
 
@@ -2580,9 +2582,9 @@ export default function Home() {
         try {
           const saved = localStorage.getItem('graphrag-active-tab')
           if (saved && saved !== 'documents') {
-            // v1.1 — whitelist chỉ còn 4 tab: documents, analytics, token, autolearn.
+            // v1.1+NEURAL-ARCH — whitelist 5 tab: documents, analytics, token, autolearn, neural.
             // Saved cũ 'chat'/'explorer' → redirect sang 'documents' + persist lại.
-            const validTab = ['documents', 'analytics', 'token', 'autolearn'].includes(saved) ? saved : 'documents'
+            const validTab = ['documents', 'analytics', 'token', 'autolearn', 'neural'].includes(saved) ? saved : 'documents'
             setActiveTab(validTab)
             if (validTab !== saved) localStorage.setItem('graphrag-active-tab', validTab)
             // Trigger data loading for the restored tab
@@ -2850,6 +2852,8 @@ export default function Home() {
                     <TabsTrigger value="analytics" className="chamfer-sm flex-1 text-xs rounded-lg text-stone-300 bg-slate-950/40 border border-transparent tab-glow-analytics data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500/80 data-[state=active]:to-fuchsia-600/80 data-[state=active]:backdrop-blur-md data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:border-cyan-400/40"><BarChart3 className="h-3 w-3 mr-1" /> Analytics</TabsTrigger>
                     <TabsTrigger value="token" className="chamfer-sm flex-1 text-xs rounded-lg text-stone-300 bg-slate-950/40 border border-transparent tab-glow-token data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500/80 data-[state=active]:to-violet-600/80 data-[state=active]:backdrop-blur-md data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:border-cyan-400/40"><Activity className="h-3 w-3 mr-1" /> Token</TabsTrigger>
                     <TabsTrigger value="autolearn" className="chamfer-sm flex-1 text-xs rounded-lg text-stone-300 bg-slate-950/40 border border-transparent tab-glow-autolearn data-[state=active]:bg-gradient-to-r data-[state=active]:from-rose-500/80 data-[state=active]:to-pink-600/80 data-[state=active]:backdrop-blur-md data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:border-cyan-400/40"><Brain className="h-3 w-3 mr-1" /> Auto-Learn</TabsTrigger>
+                    {/* NEURAL-ARCH (2026-10-11): tab Kiến trúc Neural — sơ đồ 6 lớp + dòng chảy + ô tinh chỉnh runtime */}
+                    <TabsTrigger value="neural" className="chamfer-sm flex-1 text-xs rounded-lg text-stone-300 bg-slate-950/40 border border-transparent tab-glow-neural data-[state=active]:bg-gradient-to-r data-[state=active]:from-emerald-500/80 data-[state=active]:to-lime-600/80 data-[state=active]:backdrop-blur-md data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:border-cyan-400/40"><Network className="h-3 w-3 mr-1" /> Kiến trúc</TabsTrigger>
                   </TabsList>
 
                   <TabsContent value="documents" className="mt-4">
@@ -2902,6 +2906,12 @@ export default function Home() {
 
                   <TabsContent value="autolearn" className="mt-4">
                     <AutoLearnSection />
+                  </TabsContent>
+
+                  <TabsContent value="neural" className="mt-4">
+                    {/* NEURAL-ARCH (2026-10-11): tự poll /api/neural-architecture 15s;
+                        health prop tái dùng poll 10s sẵn của parent (qdrant/neo4j/r2). */}
+                    <NeuralArchitectureSection health={health} />
                   </TabsContent>
                 </Tabs>
               </div>

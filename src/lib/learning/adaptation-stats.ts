@@ -29,6 +29,7 @@
 
 import { chiSquare2x2, welchTTest } from '@/lib/stats'
 import { db } from '@/lib/db'
+import { getTuningEnum } from '@/lib/learning/tuning-store'
 
 /**
  * Số mẫu tối thiểu MỖI nhóm để phép thử có hiệu lực (spec §P4-M1: "n<10 mỗi
@@ -182,10 +183,13 @@ export function evaluateContinuousEvidence(before: number[], after: number[]): C
  * Quy ước parse giống parseRuntimeJudgesMode (P3-M3): trim + lowercase;
  * chuỗi rỗng/không đặt = KHÔNG bật (FB-Đợt5-R2-01: env rỗng phải là unset,
  * không được lọt qua thành giá trị 0/false giả).
+ *
+ * NEURAL-ARCH (2026-10-11): đọc RUNTIME qua tuning-store
+ * (adaptation_stats_gate — STORE > ENV > 'off'; env '1'/'true' map 'on'
+ * giữ nguyên ngữ nghĩa bản cũ). Tinh chỉnh được trên tab Kiến trúc Neural.
  */
 export function isAdaptationStatsGateBlocking(): boolean {
-  const s = (process.env.ADAPTATION_STATS_GATE ?? '').trim().toLowerCase()
-  return s === 'on' || s === '1' || s === 'true'
+  return getTuningEnum('adaptation_stats_gate') === 'on'
 }
 
 // ==================== DB WIRING (fail-open) ====================

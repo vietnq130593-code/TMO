@@ -28,22 +28,23 @@ import {
 import { searchSimilarEpisodes } from './episode-store'
 import { findAllLessonRecords, findLessonsByStatementFragment } from './episodic-db'
 import { EPISODIC_THRESHOLDS, type PreActContext } from './types'
+import { getTuningNumber } from '@/lib/learning/tuning-store'
 
 // ==================== ROUND-37 V2d — ε-GREEDY EXPLORATION ====================
 //
 // Rà soát lượt 3: selection lesson LUÔN thuần exploit (sort confidence ×
 // validated, lấy top-5) → lesson ngoài top-5 KHÔNG BAO GIỜ được dùng →
 // confidence của nó đóng băng mãi (không có bằng chứng mới để ±). Thêm
-// ε-greedy: xác suất ε (mặc định 0.15, env TMO_EPISODIC_EPSILON, 0=tắt),
-// hoán vị slot CUỐI của top-5 với ứng viên rank 6+ (đủ ngưỡng review) —
-// lesson được đánh dấu [THỬ NGHIỆM] và ĐƯA VÀO appliedLessonIds để
-// validateAppliedLessons chấm điểm sau run (thành công +0.05, fail −0.1,
-// PARTIAL-có-dấu-vết-lỗi ±nhỏ — ROUND-39) → vòng bandit khép kín: khám
-// phá có kiểm soát thay vì chỉ khai thác.
-const EPSILON = (() => {
-  const raw = Number.parseFloat(process.env.TMO_EPISODIC_EPSILON ?? '')
-  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.15
-})()
+// ε-greedy: xác suất ε (mặc định 0.15), hoán vị slot CUỐI của top-5 với
+// ứng viên rank 6+ (đủ ngưỡng review) — lesson được đánh dấu [THỬ NGHIỆM]
+// và ĐƯA VÀO appliedLessonIds để validateAppliedLessons chấm điểm sau run
+// (thành công +0.05, fail −0.1, PARTIAL-có-dấu-vết-lỗi ±nhỏ — ROUND-39)
+// → vòng bandit khép kín: khám phá có kiểm soát thay vì chỉ khai thác.
+//
+// NEURAL-ARCH (2026-10-11): ε đọc RUNTIME mỗi lần áp qua tuning-store
+// (episodic_epsilon — STORE > ENV TMO_EPISODIC_EPSILON > 0.15) — chỉnh
+// được trên tab Kiến trúc Neural mà không restart pm2 (bản cũ parse env
+// một lần lúc module-load).
 
 /**
  * Áp ε-greedy lên danh sách lesson ĐÃ sort (mutateなし — trả mảng mới).
@@ -64,7 +65,7 @@ export function applyEpsilonExploration<T extends { id: string; confidence: numb
   sorted: T[],
   opts?: { rng?: () => number; epsilon?: number },
 ): Array<T & { exploration?: boolean }> {
-  const epsilon = opts?.epsilon ?? EPSILON
+  const epsilon = opts?.epsilon ?? getTuningNumber('episodic_epsilon')
   const rng = opts?.rng ?? Math.random
   if (sorted.length <= 5) return sorted.slice(0, 5)
   // Pool ứng viên thay thế: rank 6+ (index ≥5) nhưng đủ ngưỡng review

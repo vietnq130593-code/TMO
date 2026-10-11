@@ -21,6 +21,9 @@
  */
 
 import { createHash } from 'crypto'
+// NEURAL-ARCH (2026-10-11): isMatryoshkaPilotEnabled đọc runtime qua
+// tuning-store (lá — chỉ phụ thuộc @/lib/db, không vòng import).
+import { getTuningEnum } from '@/lib/learning/tuning-store'
 
 // ==================== TYPES ====================
 
@@ -741,10 +744,13 @@ export const MATRYOSHKA_PILOT_DIMS = 512
  * Env MATRYOSHKA_PILOT — bật dual-write bản 512 vào pilot collection.
  * Mặc định OFF ('on' | '1' | 'true' = bật). Đây là cờ đo lường, KHÔNG phải
  * đường đọc: đọc luôn 2048 cho tới khi recall đối chứng đạt + user duyệt.
+ *
+ * NEURAL-ARCH (2026-10-11): đọc RUNTIME qua tuning-store (matryoshka_pilot
+ * — STORE > ENV > 'off'; env '1'/'true' map 'on' giữ nguyên ngữ nghĩa) —
+ * bật/tắt được trên tab Kiến trúc Neural mà không restart pm2.
  */
 export function isMatryoshkaPilotEnabled(): boolean {
-  const s = (process.env.MATRYOSHKA_PILOT ?? '').trim().toLowerCase()
-  return s === 'on' || s === '1' || s === 'true'
+  return getTuningEnum('matryoshka_pilot') === 'on'
 }
 
 /**

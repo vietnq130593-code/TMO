@@ -32,6 +32,7 @@
  */
 
 import { db } from '@/lib/db'
+import { getTuningNumber } from './tuning-store'
 
 // ==================== HẰNG SỐ (nguồn: spec §P6-M2) ====================
 
@@ -242,15 +243,16 @@ export function updateQ(
   return run
 }
 
-/** Timeout tầng app cho 1 bước update (FB-P6-R2-04) — ms. */
-const UPDATEQ_STEP_TIMEOUT_MS = 20_000
-
 /**
  * Một bước đọc-tính-ghi (chỉ chạy trong chuỗi tuần tự của updateQ).
  * FB-P6-R2-04: bọc timeout tầng app — nếu Prisma socket-timeout không kick
  * (kịch bản hi hữu), link treo vĩnh viễn sẽ đóng băng cả chuỗi learning;
  * timeout reject → fail-open log → chuỗi tiếp tục. Prisma socket-timeout
  * (~5s) vẫn là hàng rào đầu tiên; đây là belt-and-suspenders.
+ *
+ * NEURAL-ARCH (2026-10-11): timeout đọc runtime từ tuning-store
+ * (updateq_step_timeout_ms — STORE > ENV > 20s mặc định) — tinh chỉnh được
+ * trên tab Kiến trúc Neural mà không restart pm2.
  */
 async function updateQStep(
   stateKey: string,
@@ -258,10 +260,11 @@ async function updateQStep(
   reward: number,
   nextStateKey: string,
 ): Promise<void> {
+  const timeoutMs = getTuningNumber('updateq_step_timeout_ms')
   const work = updateQStepInner(stateKey, actionKey, reward, nextStateKey)
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`updateQ step timeout ${UPDATEQ_STEP_TIMEOUT_MS}ms`)), UPDATEQ_STEP_TIMEOUT_MS)
+    timer = setTimeout(() => reject(new Error(`updateQ step timeout ${timeoutMs}ms`)), timeoutMs)
   })
   try {
     await Promise.race([work, timeout])
@@ -270,7 +273,7 @@ async function updateQStep(
     // không có log nào — work không bao giờ reject vì updateQStepInner tự
     // catch, nên nhánh này chỉ là timeout). Work nền có thể hoàn tất trễ.
     console.warn(
-      `[QTable] updateQ(${stateKey}, ${actionKey}) step timeout ${UPDATEQ_STEP_TIMEOUT_MS}ms (fail-open — chuỗi tiếp tục, work nền có thể hoàn tất trễ):`,
+      `[QTable] updateQ(${stateKey}, ${actionKey}) step timeout ${timeoutMs}ms (fail-open — chuỗi tiếp tục, work nền có thể hoàn tất trễ):`,
       err instanceof Error ? err.message : String(err),
     )
   } finally {
@@ -301,7 +304,18 @@ async function updateQStepInner(
     })
     const maxNextQ = nextEntries.length > 0 ? Math.max(...nextEntries.map(e => e.qValue)) : 0
 
-    const newQ = qLearningUpdate(currentQ, reward, maxNextQ)
+    // NEURAL-ARCH (2026-10-11): α/γ đọc runtime từ tuning-store
+    // (q_learning_alpha / q_learning_gamma — STORE > ENV > hằng số spec
+    // 0.1/0.9). getTuningNumber là tra Map in-process (rẻ) + fail-open về
+    // default khi DB chết — không làm chậm/gãy chuỗi learning. Hằng số
+    // export Q_LEARNING_ALPHA/GAMMA giữ nguyên làm default + cho test r79.
+    const newQ = qLearningUpdate(
+      currentQ,
+      reward,
+      maxNextQ,
+      getTuningNumber('q_learning_alpha'),
+      getTuningNumber('q_learning_gamma'),
+    )
     await db.qEntry.upsert({
       where: { stateKey_actionKey: { stateKey, actionKey } },
       create: { stateKey, actionKey, qValue: newQ, visits: visits + 1 },

@@ -44,7 +44,7 @@
 
 import { EventEmitter } from 'events'
 // FB-P6-R1-B-07 (q-table là lá — chỉ phụ thuộc @/lib/db, không vòng import)
-import { parseRuntimeModelTau } from '@/lib/learning/q-table'
+import { getTuningEnum, getTuningNumber } from '@/lib/learning/tuning-store'
 // Type-only import (erased lúc runtime — không tạo thêm module instance)
 import type { DocumentPayload } from '@/lib/qdrant'
 // ROUND-50 (P3-ζ r49 — bằng chứng user 2026-10-06 dán thought content nguyên văn
@@ -4379,11 +4379,12 @@ export function zenModelBlockSummary(): Array<{ model: string; transport: 'http'
 // tườ minh (AgentModelOverride — dropdown user chọn) → tôn trọng lựa chọn,
 // không softmax. Failover chuỗi cũ GIỮ NGUYÊN TOÀN BỘ (softmax chỉ đổi điểm
 // khởi đầu zenModel — spec: "Failover chuỗi cũ giữ nguyên toàn bộ").
-const RUNTIME_MODEL_POLICY = (process.env.RUNTIME_MODEL_POLICY || 'off').trim().toLowerCase()
-// FB-P6-R1-B-07: parse qua helper single-source parseRuntimeModelTau
-// (q-table.ts) — "0" là giá trị HỢP LỆ (user chủ ý τ=0) → floor 0.05; bản
-// trước `|| '0.5'` coi '0' là falsy → nhảy về default 0.5, sai ngữ nghĩa floor.
-const RUNTIME_MODEL_TAU = parseRuntimeModelTau(process.env.RUNTIME_MODEL_TAU)
+//
+// NEURAL-ARCH (2026-10-11): policy + τ đọc RUNTIME MỖI LẦN GỌI qua
+// tuning-store (runtime_model_policy / runtime_model_tau — chuỗi hiệu lực
+// STORE > ENV > DEFAULT) — tinh chỉnh được trên tab Kiến trúc Neural mà
+// không restart pm2. parseRuntimeModelTau vẫn ở import cho consumer khác
+// tham chiếu chuẩn parse (floor 0.05).
 
 /** Cache AgentModelOverride (bảng nhỏ, 60s — đường call nóng không đập DB mỗi lần). */
 let agentModelOverrideCache: { at: number; names: Set<string> } | null = null
@@ -4416,7 +4417,10 @@ async function hasExplicitModelOverride(agentName?: string): Promise<boolean> {
  * đúng format spec: `softmax-pick model=X q=0.42 p=0.31 reason=…`.
  */
 async function maybeApplySoftmaxModelPolicy(configuredZenModel: string, options?: LLMCallOptions): Promise<string> {
-  if (RUNTIME_MODEL_POLICY !== 'softmax') return configuredZenModel
+  // NEURAL-ARCH: resolve runtime (STORE > ENV > 'off') — mặc định vẫn OFF
+  // đúng điểm dừng #5; env fallback giữ nguyên ngữ nghĩa bản FB-P6 (env
+  // 'softmax' → bật, giá trị khác → off).
+  if (getTuningEnum('runtime_model_policy') !== 'softmax') return configuredZenModel
   // Override tườ minh của user → tôn trọng (spec: "Chọn primary khi agent
   // KHÔNG có override tườ minh")
   if (await hasExplicitModelOverride(options?.agentName)) {
@@ -4453,7 +4457,7 @@ async function maybeApplySoftmaxModelPolicy(configuredZenModel: string, options?
     const advice = await getQAdvice(stateKey, candidates)
     const qByAction = new Map(advice.map(a => [a.action, a.q]))
     const scores = candidates.map(c => qByAction.get(c) ?? 0)
-    const probs = softmaxPolicy(scores, RUNTIME_MODEL_TAU)
+    const probs = softmaxPolicy(scores, getTuningNumber('runtime_model_tau'))
     // Seed tất định hash(sessionId, cycle) — chạy lại được (spec §P6-M3).
     // FB-P6-R1-B-06 (ghi nhận, chấp nhận): call thiếu cả sessionId lẫn agentName
     // → seed 'anon' cố định (mọi call như vậy cùng chọn 1 model) — mọi call-site
@@ -4466,7 +4470,7 @@ async function maybeApplySoftmaxModelPolicy(configuredZenModel: string, options?
     const idx = pickIndexBySeed(probs, seed)
     if (idx < 0) return configuredZenModel
     const picked = candidates[idx]
-    console.log(`[LLM] softmax-pick model=${picked} q=${scores[idx].toFixed(2)} p=${probs[idx].toFixed(2)} reason=τ=${RUNTIME_MODEL_TAU} ${candidates.length}-ứng-viên seed=${seed}${picked !== configuredZenModel ? ` (thay ${configuredZenModel})` : ''}`)
+    console.log(`[LLM] softmax-pick model=${picked} q=${scores[idx].toFixed(2)} p=${probs[idx].toFixed(2)} reason=τ=${getTuningNumber('runtime_model_tau')} ${candidates.length}-ứng-viên seed=${seed}${picked !== configuredZenModel ? ` (thay ${configuredZenModel})` : ''}`)
     return picked
   } catch (err) {
     console.warn('[LLM] softmax policy failed (fail-open → model cấu hình):', err instanceof Error ? err.message : String(err))

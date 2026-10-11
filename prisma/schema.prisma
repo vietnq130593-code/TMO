@@ -2482,3 +2482,25 @@ model QEntry {
   @@unique([stateKey, actionKey])
   @@index([stateKey])
 }
+
+// ============================================
+// NEURAL-ARCHITECTURE TAB (2026-10-11) — runtime tuning store
+// cho tab "Kiến trúc Neural" của module Database: mọi hyperparameter
+// vận hành (α/γ/τ/ε/ngưỡng dedup/IQR-k...) có thể tinh chỉnh NGAY TRÊN
+// UI mà KHÔNG restart pm2. Chuỗi hiệu lực: STORE (bảng này) > ENV
+// (fallback theo spec key) > DEFAULT (hằng số trong code).
+// Giá trị lưu dạng chuỗi đã chuẩn hoá (number đã clamp theo spec).
+// ============================================
+
+/// Một tham số tinh chỉnh runtime — key là định danh ổn định (không đổi
+/// một khi đã ship; đổi key = mất giá trị người dùng đã đặt).
+model TuningParam {
+  id        String   @id @default(cuid())
+  /// Định danh tham số — trùng key trong TUNING_SPECS (tuning-store.ts)
+  key       String   @unique
+  /// Giá trị đã chuẩn hoá (number → chuỗi số đã clamp; enum → giá trị hợp lệ)
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@index([key])
+}

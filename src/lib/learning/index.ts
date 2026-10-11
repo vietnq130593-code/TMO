@@ -65,3 +65,33 @@ export {
   parseRuntimeModelTau,
   type QAdviceEntry,
 } from './q-table'
+
+// Tuning Store (NEURAL-ARCH 2026-10-11 — runtime tuning cho tab Kiến trúc
+// Neural; tuning-store là lá — chỉ phụ thuộc @/lib/db + neural-types thuần,
+// không vòng import)
+export {
+  getTuningNumber,
+  getTuningEnum,
+  getTuningStoredValue,
+  resolveTuning,
+  validateTuningInput,
+  setTuningValue,
+  resetTuningValue,
+  getTuningState,
+  refreshTuningSnapshot,
+  TuningValidationError,
+  type TuningResolution,
+  type ValidateResult,
+} from './tuning-store'
+export type {
+  TuningSpec,
+  TuningSource,
+  TuningStateEntry,
+  TuningType,
+  NeuralLayer,
+  NeuralNode,
+  NeuralNodeFn,
+  NeuralEdge,
+  NeuralGraph,
+} from './neural-types'
+export { TUNING_SPECS, NEURAL_GRAPH, NEURAL_LAYERS, NEURAL_NODES, NEURAL_EDGES, getTuningSpec } from './neural-types'

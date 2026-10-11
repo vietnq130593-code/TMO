@@ -2495,10 +2495,15 @@ export async function runGoalDrivenLoop(params: {
   // Fail-open tuyệt đối: lỗi đọc Q → hint rỗng (prompt cũ).
   let qAdviceHint: string | undefined
   try {
-    const { getTopQAdvice, agentRuntimeStateKey } = await import('@/lib/learning/q-table')
+    const [{ getTopQAdvice, agentRuntimeStateKey }, { getTuningNumber }] = await Promise.all([
+      import('@/lib/learning/q-table'),
+      import('@/lib/learning/tuning-store'),
+    ])
     const topQ = await getTopQAdvice(agentRuntimeStateKey(), 3)
     const best = topQ[0]
-    if (best && best.visits >= 10) {
+    // NEURAL-ARCH (2026-10-11): ngưỡng visits đọc runtime (q_advice_min_visits
+    // — STORE > ENV > 10) — tinh chỉnh trên tab Kiến trúc Neural.
+    if (best && best.visits >= getTuningNumber('q_advice_min_visits')) {
       qAdviceHint = `\ud83d\udcca Q-HINT (P6 \u2014 h\u1ecdc t\u1eeb ${best.visits} runs): model ${best.action} c\u00f3 ph\u1ea7n th\u01b0\u1edfng h\u1ecdc \u0111\u01b0\u1ee3c cao nh\u1ea5t (Q=${best.q.toFixed(2)}) cho t\u00e1c v\u1ee5 runtime n\u00e0y \u2014 c\u00e2n nh\u1eafc khi t\u1ef1 ch\u1ecdn ho\u1eb7c giao sub-agent; ch\u1ec9 l\u00e0 tham kh\u1ea3o, kh\u00f4ng b\u1eaft bu\u1ed9c.`
       console.log(`[GoalLoop] P6-M4 Q-hint g\u1eafn v\u00e0o PLAN prompt: ${best.action} Q=${best.q.toFixed(2)} visits=${best.visits}`)
     }

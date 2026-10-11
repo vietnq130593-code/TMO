@@ -27,6 +27,9 @@ import { db } from '@/lib/db'
 import { generateEmbeddingBatch, getEmbeddingDimension } from '@/lib/embeddings'
 import { searchSimilar } from '@/lib/qdrant'
 import type { ChunkPayload } from '@/lib/qdrant'
+// NEURAL-ARCH (2026-10-11): ngưỡng near-dup đọc runtime (tuning-store là lá —
+// chỉ phụ thuộc @/lib/db + neural-types, không vòng import)
+import { getTuningNumber } from '@/lib/learning/tuning-store'
 
 // ==================== HẰNG SỐ (nguồn: spec §P5-M2) ====================
 
@@ -119,16 +122,22 @@ export interface NearDupDecision {
  * các probe trỏ về ≥2 Document khác nhau → chỉ trùng boilerplate (bìa/mục
  * lục) → không trùng.
  */
-export function decideNearDuplicate(documentId: string, probes: Array<Array<ProbeHit>>): NearDupDecision {
+export function decideNearDuplicate(
+  documentId: string,
+  probes: Array<Array<ProbeHit>>,
+  threshold: number = getTuningNumber('doc_dedup_near_dup_threshold'),
+): NearDupDecision {
   if (probes.length === 0) return { duplicate: false, scores: [], reason: 'no-probe' }
 
   const scores: number[] = []
   const matchedDocIds = new Set<string>()
   for (const probe of probes) {
     // Phòng thủ chiều sâu: searchSimilar đã lọc score_threshold, nhưng lõi
-    // quyết định tự kiểm ngưỡng nữa (đúng "hit ≥ NEAR_DUP_THRESHOLD")
+    // quyết định tự kiểm ngưỡng nữa (đúng "hit ≥ ngưỡng") — NEURAL-ARCH:
+    // ngưỡng param hoá (default runtime từ tuning-store, test r78 tiêm
+    // trực tiếp không đổi hành vi khi store rỗng)
     const eligible = probe.filter(
-      h => h.documentId && h.documentId !== documentId && h.score >= NEAR_DUP_THRESHOLD
+      h => h.documentId && h.documentId !== documentId && h.score >= threshold
     )
     if (eligible.length === 0) {
       return { duplicate: false, scores, reason: `probe-no-external-hit (đã khớp ${scores.length} probe đầu tiên)` }
@@ -221,8 +230,11 @@ export async function detectNearDuplicate(
   if (!hasEnoughValidProbes(probeVectors.length, probeCount)) return null
 
   const probeHits: Array<Array<ProbeHit>> = []
+  // NEURAL-ARCH: đọc ngưỡng MỘT LẦN cho cả minScore searchSimilar lẫn lõi
+  // quyết định — 2 lớp luôn cùng ngưỡng.
+  const nearDupThreshold = getTuningNumber('doc_dedup_near_dup_threshold')
   for (const vector of probeVectors) {
-    const hits = await searchSimilar(vector, { limit: 5, minScore: NEAR_DUP_THRESHOLD })
+    const hits = await searchSimilar(vector, { limit: 5, minScore: nearDupThreshold })
     probeHits.push(
       hits.map(h => ({
         documentId: String((h.payload as ChunkPayload | undefined)?.document_id ?? ''),
@@ -231,7 +243,7 @@ export async function detectNearDuplicate(
     )
   }
 
-  const decision = decideNearDuplicate(documentId, probeHits)
+  const decision = decideNearDuplicate(documentId, probeHits, nearDupThreshold)
   if (!decision.duplicate || !decision.duplicateOfId) return null
   const matchedDocId = decision.duplicateOfId
 

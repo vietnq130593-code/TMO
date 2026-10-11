@@ -40,6 +40,9 @@ import {
   type LessonNode,
   type RootCauseCode,
 } from './types'
+// NEURAL-ARCH (2026-10-11): ngưỡng Jaccard gộp lesson đọc runtime
+// (tuning-store là lá — chỉ phụ thuộc @/lib/db, không vòng import)
+import { getTuningNumber } from '@/lib/learning/tuning-store'
 
 // ==================== CONSOLIDATE — SINH / MERGE LESSON ====================
 
@@ -137,7 +140,9 @@ export async function consolidateLesson(input: ConsolidateLessonInput): Promise<
       if (sim > bestScore) { bestScore = sim; bestMatch = c }
     }
 
-    if (bestMatch && bestScore >= 0.55) {
+    // NEURAL-ARCH (2026-10-11): ngưỡng đọc runtime (lesson_dedup_jaccard —
+    // STORE > ENV > 0.55) — chỉnh được trên tab Kiến trúc Neural.
+    if (bestMatch && bestScore >= getTuningNumber('lesson_dedup_jaccard')) {
       // MERGE — pattern lặp lại → củng cố lesson cũ
       const existing = await findLessonRecordById(bestMatch.id)
       if (existing) {

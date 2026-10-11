@@ -613,3 +613,26 @@
 .tab-glow-analytics:hover {}
 
 .tab-glow-token:hover {}
+
+.tab-glow-autolearn:hover {}
+
+.tab-glow-neural:hover {}
+
+/* ==================== NEURAL-ARCH TAB (2026-10-11) — dòng chảy cạnh đồ thị ==================== */
+/* Hạt chạy trên cạnh SVG: dashoffset âm dịch theo chiều vẽ path (data đi
+   tới); reward chạy ngược (dấu dương) — trực quan hoá vòng học W1/W2. */
+@keyframes naDashFlow {
+  to { stroke-dashoffset: -20; }
+}
+@keyframes naDashFlowRev {
+  to { stroke-dashoffset: 20; }
+}
+.na-edge-data {
+  animation: naDashFlow 1.1s linear infinite;
+}
+.na-edge-reward {
+  animation: naDashFlowRev 1.5s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .na-edge-data, .na-edge-reward { animation: none; }
+}
