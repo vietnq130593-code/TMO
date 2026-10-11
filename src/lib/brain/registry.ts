@@ -213,8 +213,11 @@ export const BRAIN_REGISTRY: readonly BrainSpec[] = [
 export const BRAIN_VERSIONS_KEEP = 5
 
 /**
- * Nền toán BRAIN-P1 (mlp.ts + train pipeline + test r84) chưa được duyệt —
- * API/UI dựa vào cờ này để tắt nút "Huấn luyện lại" (kèm lý do hiển thị).
- * Đặt true khi triển khai §4.1 phần toán.
+ * Nền toán BRAIN-P1 ĐÃ triển khai (2026-10-12 — src/lib/brain/{mlp,
+ * activations,losses,init,optimizers}.ts + test r84 41/41 PASS) nhưng
+ * pipeline train TỪNG BRAIN (P2 calibration-v3 / P3 surrogate / P4 policy)
+ * chưa có → cờ vẫn false: nút "Huấn luyện lại" chỉ bật khi brain tương ứng
+ * có job train thật + đủ mẫu ngưỡng. Đặt true khi pipeline brain đầu tiên
+ * (P2) triển khai.
  */
 export const BRAIN_TRAINING_IMPLEMENTED = false
