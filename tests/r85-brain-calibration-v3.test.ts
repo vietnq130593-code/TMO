@@ -10,8 +10,12 @@
  *      faithful; rawConfidence thuần nhiễm; answered độc lập — không rò rỉ
  *      nhãn) → MLP bắt được tương tác phi tuyến → improved=true trong khi
  *      brierV2 kẹt gần base-rate (logistic tuyến tính KHÔNG biểu diễn được
- *      XOR); dữ liệu TOÀN NOISE → improved=false (chống tự huyễn hoặc);
- *      lệch lớp (một lớp < 5) → null (không fallback CV thường).
+ *      XOR); dữ liệu TOÀN NOISE: gate V3<V2 là so-sánh-đối-chứng, KHÔNG
+ *      phải bất biến "tự chối noise" — trên noise cả 2 kẹt quanh base-rate
+ *      p̄(1−p̄) nên thắng/thua theo seed (đo 12 seed auditor: 5 thắng; 10
+ *      seed điều phối: 4 thắng) — test pin seed 99 cụ thể + chốt KHOẢNG
+ *      dẫn nguồn được quanh base-rate (FB-BRAIN-P2-R1-02); lệch lớp (một
+ *      lớp < 5) → null (không fallback CV thường).
  *   C. trainBrainCalibrationV3 (DB cô lập) — thiếu mẫu < 30 → trained=false
  *      (ngủ an toàn); inputMode vector 'mrl-512' → từ chối rõ (chờ Q2);
  *      XOR 150 mẫu → trained=true, active=true v1, BrainModel đầy đủ
@@ -34,6 +38,13 @@
  *      cờ on → đúng giá trị tryCalibrationV3; V3 deactive + V2-active
  *      (seed tay, hệ số biết trước → σ(2) = 0.880797…) → rơi đúng V2;
  *      không model nào → trả raw nguyên vẹn.
+ *   G. Regression đợt FB-BRAIN-P2 (fixbug R1 — mỗi phát hiện 1 test
+ *      chứng minh lỗi cũ đã hết): stds=0 corrupt → null thay NaN (R1-01) ·
+ *      cột near-constant → stds full precision (R1-01) · length mismatch
+ *      throw hợp đồng (R1-03) · folds degenerate → null (R1-04) ·
+ *      applyV3Model stats hỏng throw (R1-05) · dataLineage EvalCase đếm
+ *      đúng + evalRunIds danh sách §5.3 (R1-06) · POST mode sai telemetry
+ *      trung thực (R1-08).
  *
  * Nguyên tắc test:
  * - DB-cô-lập (bunfig preload copy DB) — WIPE các bảng ảnh hưởng trước seed;
@@ -69,6 +80,7 @@ import {
   type FeatureCtx,
 } from '@/lib/calibration-multifeature'
 import { getCalibratedConfidence } from '@/lib/calibration'
+import { POST as trainRoutePOST } from '@/app/api/brain/train/route'
 import {
   TUNING_SPECS,
 } from '@/lib/learning/neural-types'
@@ -174,6 +186,12 @@ async function seedEvalResults(ctxs: FeatureCtx[], y: number[]): Promise<void> {
     data: { question: 'r85 q2', expectedAnswer: 'r85 a2', category: 'security', difficulty: 'hard' },
   })
   const flip = lcg(777)
+  // createdAt PHÂN TÁN (mỗi row +1s) — orderBy createdAt desc của pipeline
+  // train có tie-break DUY NHẤT: 150 row insert cùng lúc có cùng timestamp
+  // → thứ tự query không đảm bảo → mảng X đổi thứ tự giữa các lần chạy →
+  // kết quả CV trên dữ liệu biên (noise) lật thắng/thua (FB-BRAIN-P2-R2-02:
+  // C6 từng flaky full-gate). Phân tán = test tất định tuyệt đối mọi môi trường.
+  const base = Date.now() - ctxs.length * 1000
   for (let i = 0; i < ctxs.length; i++) {
     const c = ctxs[i]
     await db.evalResult.create({
@@ -188,6 +206,7 @@ async function seedEvalResults(ctxs: FeatureCtx[], y: number[]): Promise<void> {
         retrievedChunks: c.retrievedChunks,
         extractionF1: c.extractionF1 ?? 0.5,
         hallucinationDetected: c.hallucinationDetected,
+        createdAt: new Date(base + i * 1000),
       },
     })
   }
@@ -245,12 +264,25 @@ describe('r85 · B crossValidateV3 — kỷ luật thăng cấp 5-fold (kế th�
     expect(cv!.improved).toBe(true)
   })
 
-  test('TOÀN NOISE n=150: improved=false — không tự huyễn hoặc (pattern r77-D)', () => {
+  test('TOÀN NOISE n=150 seed 99: cả 2 kẹt quanh base-rate — pin seed cụ thể (KHÔNG phải bất biến, xem header B)', () => {
     const { ctxs, y } = noiseCtxs(150, 99)
     const cv = crossValidateV3(ctxs.map(buildFeatureVector), y)
     expect(cv).not.toBeNull()
-    // Smoke chấm trước: cả 2 kẹt ~0.25-0.27, V3 KHÔNG thắng ngặt
+    // Pin seed 99 cụ thể (kết quả tất định theo seed — không tổng quát hoá):
+    // Smoke chấm trước: V3 0.254 > V2 0.252 → không thắng ngặt ở seed này.
+    // LƯU Ý (FB-BRAIN-P2-R1-02): trên noise, V3 thắng V2 theo seed (auditor
+    // đo 5/12 seed; điều phối 4/10 seed xorshift khác) — KHÔNG có thuộc
+    // tính "tự chối noise"; thuộc tính dẫn nguồn được là KHOẢNG quanh
+    // base-rate: kỳ vọng Brier model tốt nhất trên noise thuần = p̄(1−p̄)
+    // (p̄ ≈ 0.49 ở seed này) ± nhiễ mẫu — chặt sàn [0.15, 0.35] cho cả 2.
     expect(cv!.improved).toBe(false)
+    const pBar = y.reduce((s, v) => s + v, 0) / y.length
+    const baseRate = pBar * (1 - pBar) // kỳ vọng Brier dự đoó hằng p̄
+    expect(baseRate).toBeGreaterThan(0.15)
+    expect(cv!.cvBrier).toBeGreaterThan(0.15)
+    expect(cv!.cvBrier).toBeLessThan(0.35)
+    expect(cv!.brierV2).toBeGreaterThan(0.15)
+    expect(cv!.brierV2).toBeLessThan(0.35)
   })
 
   test('lệch lớp (một lớp 4 mẫu < 5 fold) → null — KHÔNG fallback CV thường', () => {
@@ -614,5 +646,159 @@ describe('r85 · F getCalibratedConfidence — chuỗi đầy đủ fail-open', 
     await db.calibrationModel.update({ where: { id: 'default' }, data: { sampleSize: 5 } })
     expect(await getCalibratedConfidence(0.5)).toBe(0.5)
     await db.calibrationModel.deleteMany({})
+  })
+})
+
+// ==================== G. REGRESSION FB-BRAIN-P2 (fixbug R1) ====================
+
+describe('r85 · G regression FB-BRAIN-P2 — mỗi phát hiện R1 một test chứng minh lỗi cũ hết', () => {
+  beforeAll(async () => {
+    await wipeCalibrationTables()
+    delete process.env.CALIBRATION_V3
+    await refreshTuningSnapshot()
+  })
+  afterAll(async () => {
+    await resetTuningValue('calibration_v3').catch(() => {})
+    delete process.env.CALIBRATION_V3
+    await refreshTuningSnapshot()
+    await wipeCalibrationTables()
+  })
+
+  // ---- G1 (R1-01): stds=0 corrupt → NULL thay NaN ----
+  test('G1 stds[0]=0 + raw==mean → loadActiveV3 null + tryCalibrationV3 null — KHÔNG còn NaN lan runtime', async () => {
+    const { ctxs, y } = xorCtxs(150, 31)
+    await seedEvalResults(ctxs, y)
+    const res = await trainBrainCalibrationV3()
+    expect(res.trained).toBe(true)
+    expect(res.active).toBe(true) // XOR thật — thắng CV
+    await setTuningValue('calibration_v3', 'on')
+    // Mô phỏng corrupt round5 cũ: stds[0]=0, means[0]=0.5 → (0.5−0.5)/0 = 0/0
+    const row = await db.brainModel.findFirstOrThrow({ where: { brain: 'calibration_v3', active: true } })
+    const meta = JSON.parse(row.trainMetaJson)
+    meta.standardization.stds[0] = 0
+    meta.standardization.means[0] = 0.5
+    await db.brainModel.update({ where: { id: row.id }, data: { trainMetaJson: JSON.stringify(meta) } })
+    // TRƯỚC FIX: loadActiveV3 trả model stds=0 → tryCalibrationV3(0.5) = NaN
+    // (chấm chéo CC-H tái lập); SAU FIX: null — rơi chuỗi V2→V1→raw
+    expect(await loadActiveV3()).toBeNull()
+    expect(await tryCalibrationV3(0.5)).toBeNull()
+    expect(await getCalibratedConfidence(0.5)).toBe(0.5) // raw nguyên vẹn — NaN chưa từng lọt
+    await resetTuningValue('calibration_v3')
+  })
+
+  // ---- G2 (R1-01): cột near-constant → stds lưu full precision ----
+  test('G2 cột near-constant (std≈4.2e-6) → stds full precision KHÔNG bị round5 về 0 → runtime hữu hạn', async () => {
+    // 200 mẫu: coverage 199×0.75 + 1×0.75006 (Δ=6e-5) → std ≈ Δ/√n =
+    // 6e-5/√200 ≈ 4.2e-6 ∈ (1e-12, 5e-6) → round5() = 0 (lỗi cũ CC-A);
+    // nhãn tuyến tính từ rawConfidence (đủ 2 lớp ≥ 5 cho stratified —
+    // không cần thắng CV). n=200 để test nhanh (bản 2000 mẫu từng timeout
+    // 5s khi chạy full gate).
+    const rand = lcg(1234)
+    const ctxs: FeatureCtx[] = []
+    const y: number[] = []
+    for (let i = 0; i < 200; i++) {
+      const raw = 0.2 + 0.6 * rand()
+      ctxs.push({
+        rawConfidence: raw, coverage: i === 0 ? 0.75006 : 0.75, answered: true,
+        retrievedChunks: 5, extractionF1: 0.5, hallucinationDetected: false,
+        difficulty: 'medium', category: 'ml',
+      })
+      y.push(raw > 0.5 ? 1 : 0)
+    }
+    await seedEvalResults(ctxs, y)
+    const res = await trainBrainCalibrationV3()
+    expect(res.trained).toBe(true)
+    const row = await db.brainModel.findFirstOrThrow({
+      where: { brain: 'calibration_v3' }, orderBy: { version: 'desc' },
+    })
+    const meta = JSON.parse(row.trainMetaJson)
+    const stds = meta.standardization.stds as number[]
+    // TRƯỚC FIX: round5(4.5e-6) = 0; SAU FIX: full precision > 0
+    expect(stds[1]).toBeGreaterThan(0)
+    expect(stds[1]).toBeLessThan(1e-5) // vẫn near-constant đúng nature
+    // Runtime dùng được chính bản này: active tay + cờ on → dự đoán hữu hạn
+    await db.brainModel.updateMany({ where: { brain: 'calibration_v3' }, data: { active: false } })
+    await db.brainModel.update({ where: { id: row.id }, data: { active: true } })
+    await setTuningValue('calibration_v3', 'on')
+    const v3 = await tryCalibrationV3(0.6)
+    expect(v3).not.toBeNull()
+    expect(v3!).toBeGreaterThanOrEqual(0)
+    expect(v3!).toBeLessThanOrEqual(1)
+    await resetTuningValue('calibration_v3')
+  })
+
+  // ---- G3 (R1-03): length mismatch → throw hợp đồng ----
+  test('G3 crossValidateV3 X/y lệch chiều → throw Error rõ — không còn cắt âm thầm/TypeError mù', () => {
+    const { ctxs } = xorCtxs(60, 21)
+    const X = ctxs.map(buildFeatureVector)
+    const y60 = Array.from({ length: 60 }, (_, i) => (i % 2 === 0 ? 1 : 0))
+    // TRƯỚC FIX: X dài hơn → 10 hàng bị bỏ âm thầm ra outcome; ngắn hơn →
+    // TypeError 'X[i][j]'; SAU FIX: throw hợp đồng cả 2 chiều
+    expect(() => crossValidateV3(X, y60.slice(0, 50))).toThrow(/X\.length \(60\) phải bằng y\.length \(50\)/)
+    expect(() => crossValidateV3(X.slice(0, 50), y60)).toThrow(/X\.length \(50\) phải bằng y\.length \(60\)/)
+  })
+
+  // ---- G4 (R1-04): folds degenerate → null ----
+  test('G4 folds 5.5/NaN/1/0 → null — không còn 6 fold lệch/outcome NaN', () => {
+    const { ctxs, y } = xorCtxs(60, 22)
+    const X = ctxs.map(buildFeatureVector)
+    // TRƯỚC FIX: 5.5 → 6 fold; NaN → {cvBrier: NaN, improved: false}
+    expect(crossValidateV3(X, y, { folds: 5.5 })).toBeNull()
+    expect(crossValidateV3(X, y, { folds: Number.NaN })).toBeNull()
+    expect(crossValidateV3(X, y, { folds: 1 })).toBeNull()
+    expect(crossValidateV3(X, y, { folds: 0 })).toBeNull()
+    expect(crossValidateV3(X, y, { folds: 5 })).not.toBeNull() // nguyên hợp lệ vẫn chạy
+  })
+
+  // ---- G5 (R1-05): applyV3Model stats hỏng → throw ----
+  test('G5 applyV3Model means/stds sai chiều hoặc std=0 → throw hợp đồng — không còn NaN âm thầm', () => {
+    const mlp = new MLP(buildV3Spec())
+    // TRƯỚC FIX: stats 3 chiều + ctx đủ 10 đặc trưng → p = NaN âm thầm
+    // (clamp nuốt NaN — CC-E tái lập); SAU FIX: throw rõ
+    const badDims = { mlp, means: [0.5, 0.5, 0.5], stds: [1, 1, 1], nSamples: 100, version: 1 }
+    expect(() => applyV3Model(badDims, { rawConfidence: 0.6 })).toThrow(/phải đúng 10 chiều/)
+    const zeroStd = { mlp, means: new Array(10).fill(0.5), stds: [0, 1, 1, 1, 1, 1, 1, 1, 1, 1], nSamples: 100, version: 1 }
+    expect(() => applyV3Model(zeroStd, { rawConfidence: 0.5 })).toThrow(/stds phải > 0/)
+  })
+
+  // ---- G6 (R1-06): dataLineage đầy đủ §5.3 ----
+  test('G6 dataLineage: EvalCase đếm ĐÚNG case góp mẫu + evalRunIds danh sách (§5.3)', async () => {
+    const { ctxs, y } = xorCtxs(150, 55)
+    await seedEvalResults(ctxs, y) // 2 case, flip dùng cả 2
+    for (let i = 0; i < 5; i++) {
+      await db.evalCase.create({ data: { question: `rác ${i}`, expectedAnswer: 'x', category: 'security', difficulty: 'hard' } })
+    }
+    const res = await trainBrainCalibrationV3()
+    expect(res.trained).toBe(true)
+    const row = await db.brainModel.findFirstOrThrow({
+      where: { brain: 'calibration_v3' }, orderBy: { version: 'desc' },
+    })
+    const meta = JSON.parse(row.trainMetaJson)
+    // TRƯỚC FIX: caseMap.size = 7 (đếm cả 5 case rác không góp mẫu)
+    expect(meta.dataLineage.tables.EvalCase).toBe(2)
+    expect(meta.dataLineage.tables.EvalResult).toBe(150)
+    // §5.3 "danh sách … evalId …" — trước đây chỉ có SỐ LƯỢNG (evalRuns)
+    expect(Array.isArray(meta.dataLineage.evalRunIds)).toBe(true)
+    const run = await db.evalRun.findFirstOrThrow()
+    expect(meta.dataLineage.evalRunIds).toEqual([run.id])
+    expect(meta.dataLineage.evalRuns).toBe(1)
+  })
+
+  // ---- G8 (R1-08): POST mode sai → telemetry trung thực ----
+  test('G8 POST inputMode chưa hỗ trợ → 400 nhưng usable/total là SỐ THẬT (không còn 0 cứng)', async () => {
+    const { ctxs, y } = xorCtxs(40, 66)
+    await seedEvalResults(ctxs, y)
+    const req = new Request('http://localhost/api/brain/train', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ brain: 'calibration_v3', inputMode: 'pca-128' }),
+    })
+    const res = await trainRoutePOST(req)
+    expect(res.status).toBe(400)
+    const json = (await res.json()) as { error?: string; usable?: number; need?: number }
+    expect(json.error).toContain('chưa hỗ trợ')
+    // TRƯỚC FIX: early-return usable=0 cứng dù DB có 40 usable; SAU FIX: số thật
+    expect(json.usable).toBe(40)
+    expect(json.need).toBe(MIN_TRAIN_SAMPLES_V3)
   })
 })

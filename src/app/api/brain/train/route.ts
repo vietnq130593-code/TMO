@@ -11,8 +11,10 @@
  *
  * Hành vi (kế thừa nguyên vẹn pattern POST /api/eval/calibration):
  *   - brain lạ/chưa có pipeline → 400 (liệt kê các brain đã hỗ trợ)
- *   - thiếu mẫu (< 30 usable) / lệch lớp → 400 { error, usable, need } —
- *     KHÔNG ghi DB gì cả (ngủ an toàn)
+ *   - thiếu mẫu (< 30 usable) / lệch lớp / mode chưa hỗ trợ → 400
+ *     { error, usable, need } — KHÔNG ghi DB gì cả (ngủ an toàn);
+ *     usable/total phản ánh SỐ THẬT trong DB (FB-BRAIN-P2-R1-08 —
+ *     trước đây nhánh mode-sai trả usable=0 cứng)
  *   - train xong → 200 { trained, version, active, cvBrier vs brierV2,
  *     improved, sampleSize } — active=true CHỈ khi thắng V2 qua 5-fold CV
  *     Brier (ngặt); thua vẫn ghi bản vết audit active=false.

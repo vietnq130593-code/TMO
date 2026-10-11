@@ -28,8 +28,9 @@
  *
  * Ghi DB: bảng BrainModel (P1-UI, model 99 — không migration mới):
  *   brain='calibration_v3' · version tăng dần · inputMode='features-10'
- *   · specJson = MlpSpec (parse trực tiếp bởi MLP.deserialize)
- *   · weightsJson = envelope numpy-đọc-được (audit A6)
+ *   · specJson = MlpSpec (nạp lại bằng `new MLP(spec)`)
+ *   · weightsJson = envelope serialize numpy-đọc-được (nạp lại bằng
+ *     MLP.deserialize — audit A6)
  *   · trainMetaJson = {nSamples, cvScore+CI, brierV2, improved,
  *     standardization{means,stds}, fit, dataLineage} (blueprint §5.3)
  * Bất biến A1 (chỉ 1 bản active mỗi brain) giữ ở tầng ứng dụng: trước khi
@@ -44,6 +45,7 @@
  * theo seed → cùng dữ liệu luôn ra cùng model (test r85 pin).
  */
 
+import { createHash } from 'node:crypto'
 import { db } from '@/lib/db'
 import { MLP, type MlpSerialized, type MlpSpec, type FitResult } from './mlp'
 import {
@@ -148,14 +150,27 @@ export interface V3CvOutcome {
  *   - V2 đối chứng: crossValidateMultifeature(X, y) — đúng hyperparam
  *     production V2 (train lại từng fold), single-source không copy công
  *     thức (doctrine #9).
- * Trả null khi không gán fold được (lệch lớp) — caller abort, KHÔNG fallback.
+ * Trả null khi không gán fold được (lệch lớp HOẶC folds không hợp lệ —
+ * phải là số nguyên ≥ 2) — caller abort, KHÔNG fallback.
+ *
+ * Hợp đồng ném lỗi (FB-BRAIN-P2-R1-03): X.length ≠ y.length là lỗi lập
+ * trình caller → throw Error rõ ràng (trước đây: X dài hơn bị cắt âm
+ * thầm / X ngắn hơn TypeError mù 'X[i][j]').
  */
 export function crossValidateV3(
   X: (number | null)[][],
   y: number[],
   opts: { folds?: number } = {},
 ): V3CvOutcome | null {
+  if (X.length !== y.length) {
+    throw new Error(
+      `crossValidateV3: X.length (${X.length}) phải bằng y.length (${y.length}) — lỗi lập trình caller`,
+    )
+  }
   const folds = opts.folds ?? CV_FOLDS
+  // folds phải nguyên ≥ 2 — 5.5 từng chạy 6 fold, NaN từng trả outcome NaN
+  // (FB-BRAIN-P2-R1-04)
+  if (!Number.isInteger(folds) || folds < 2) return null
   const assign = stratifiedFoldAssignments(y, folds)
   if (!assign) return null
 
@@ -233,15 +248,6 @@ function round5(v: number): number {
  * trainCalibrationModelV2 (cùng nguồn, cùng bộ lọc usable).
  */
 export async function trainBrainCalibrationV3(inputMode: string = V3_INPUT_MODE): Promise<V3TrainResult> {
-  if (!isSupportedV3InputMode(inputMode)) {
-    return {
-      trained: false, version: null, active: false, sampleSize: 0,
-      cvBrier: null, cvBrierCi: null, brierV2: null, improved: false,
-      usable: 0, total: 0,
-      error: `inputMode '${inputMode}' chưa hỗ trợ phase BRAIN-P2 (chỉ '${V3_INPUT_MODE}' — mode vector pca-128/mrl-512 chờ quyết định Q2 blueprint §3.2)`,
-    }
-  }
-
   const [results, cases] = await Promise.all([
     db.evalResult.findMany({
       select: {
@@ -273,6 +279,14 @@ export async function trainBrainCalibrationV3(inputMode: string = V3_INPUT_MODE)
     cvBrier: null, cvBrierCi: null, brierV2: null, improved: false,
     usable: usable.length, total: results.length, error,
   })
+
+  // Từ chối mode chưa hỗ trợ — kiểm SAU khi đếm usable/total để telemetry
+  // trung thực (FB-BRAIN-P2-R1-08: trước đây early-return usable=0 cứng)
+  if (!isSupportedV3InputMode(inputMode)) {
+    return notTrained(
+      `inputMode '${inputMode}' chưa hỗ trợ phase BRAIN-P2 (chỉ '${V3_INPUT_MODE}' — mode vector pca-128/mrl-512 chờ quyết định Q2 blueprint §3.2)`,
+    )
+  }
 
   if (usable.length < MIN_TRAIN_SAMPLES_V3) {
     return notTrained(
@@ -340,6 +354,16 @@ export async function trainBrainCalibrationV3(inputMode: string = V3_INPUT_MODE)
     ? usable.reduce((m, r) => (r.createdAt > m ? r.createdAt : m), usable[0].createdAt)
     : null
   const runIds = new Set(usable.map(r => r.runId).filter((v): v is string => typeof v === 'string'))
+  // §5.3 "danh sách episodeId/evalId/verdictId (hash tổng nếu quá dài)" —
+  // FB-BRAIN-P2-R1-06: trước đây chỉ lưu SỐ LƯỢNG run; giờ lưu danh sách
+  // (≤ EVAL_RUN_IDS_MAX) hoặc hash sha256 khi quá dài. EvalCase đếm đúng
+  // case thật sự góp mẫu (không đếm cả case rác trong DB).
+  const caseIdsUsed = new Set(usable.map(r => r.caseId))
+  const runIdList = Array.from(runIds).sort()
+  const EVAL_RUN_IDS_MAX = 50
+  const evalRunIds: string[] | string = runIdList.length <= EVAL_RUN_IDS_MAX
+    ? runIdList
+    : `sha256:${createHash('sha256').update(runIdList.join('\n')).digest('hex').slice(0, 16)} (${runIdList.length} runs)`
 
   const trainMeta = {
     nSamples: y.length,
@@ -350,7 +374,10 @@ export async function trainBrainCalibrationV3(inputMode: string = V3_INPUT_MODE)
     brierV2: round5(cv.brierV2),
     improved: cv.improved,
     featureNames: FEATURE_NAMES,
-    standardization: { means: means.map(round5), stds: stds.map(round5) },
+    // stds GIỮ full precision — KHÔNG round5: cột near-constant (std ∈
+    // (1e-12, 5e-6)) bị round5 về 0 → (v−mean)/0 = ±∞/NaN tại runtime
+    // (FB-BRAIN-P2-R1-01). means vô hại với round5 (giá trị cấp 0.1–1).
+    standardization: { means: means.map(round5), stds: stds.slice() },
     fit: {
       epochsRun: fit.epochsRun,
       bestEpoch: fit.bestEpoch,
@@ -358,8 +385,9 @@ export async function trainBrainCalibrationV3(inputMode: string = V3_INPUT_MODE)
       finalTrainLoss: Number.isFinite(fit.finalTrainLoss) ? round5(fit.finalTrainLoss) : null,
     },
     dataLineage: {
-      tables: { EvalResult: usable.length, EvalCase: caseMap.size },
+      tables: { EvalResult: usable.length, EvalCase: caseIdsUsed.size },
       evalRuns: runIds.size,
+      evalRunIds,
       dateRange: dateFrom && dateTo ? [dateFrom.toISOString(), dateTo.toISOString()] : null,
       labelRule: `faithfulnessMedian > ${FAITHFULNESS_THRESHOLD}`,
       inputMode: V3_INPUT_MODE,
@@ -444,7 +472,8 @@ export interface ActiveV3Model {
  * (không có bản active / trainMeta rách / standardization sai chiều /
  * weightsJson rách / nSamples dưới ngưỡng runtime): caller rơi đúng chuỗi
  * V2→V1 cũ. Không cache (tiền lệ V2: calibration.ts đọc DB mỗi call —
- * 1 row index [brain, active], deserialize ~177 tham số là rẻ).
+ * 1 row index [brain, active], deserialize 193 tham số là rẻ — r85-A pin).
+ * stds=0 (corrupt/rác) → null: chia 0 tạo ±∞/NaN (FB-BRAIN-P2-R1-01).
  */
 export async function loadActiveV3(): Promise<ActiveV3Model | null> {
   try {
@@ -461,12 +490,17 @@ export async function loadActiveV3(): Promise<ActiveV3Model | null> {
       : null
     if (nSamples === null || nSamples < MIN_RUNTIME_SAMPLES_V3) return null
 
-    // Standardization stats — đúng 10 chiều, mọi giá trị hữu hạn
+    // Standardization stats — đúng 10 chiều, mọi giá trị hữu hạn, stds > 0
+    // (stds=0 → (v−mean)/0 = ±∞/NaN lan ra runtime — FB-BRAIN-P2-R1-01;
+    // trước đây chỉ kiểm finite, 0 là finite nên lọt cửa)
     const std = meta.standardization as { means?: unknown; stds?: unknown } | undefined
     const d = FEATURE_NAMES.length
     const okArr = (v: unknown): v is number[] =>
       Array.isArray(v) && v.length === d && v.every(x => typeof x === 'number' && Number.isFinite(x))
-    if (!std || !okArr(std.means) || !okArr(std.stds)) return null
+    const okStds =
+      Array.isArray(std?.stds) && (std.stds as unknown[]).length === d
+      && (std.stds as unknown[]).every(x => typeof x === 'number' && Number.isFinite(x) && x > 0)
+    if (!std || !okArr(std.means) || !okArr(std.stds) || !okStds) return null
 
     const serialized = JSON.parse(row.weightsJson) as MlpSerialized
     const mlp = MLP.deserialize(serialized) // throw → catch → null (fail-open)
@@ -480,13 +514,31 @@ export async function loadActiveV3(): Promise<ActiveV3Model | null> {
  * Áp V3 cho 1 context: xây vector đặc trưng (thiếu → 0 = mean train —
  * impute đúng semantics V2) → chuẩn hóa → predictProba → clamp [0,1].
  * Thuần — không đụng DB (test trực tiếp được).
+ *
+ * Hợp đồng ném lỗi (FB-BRAIN-P2-R1-05): means/stds phải đúng 10 chiều VÀ
+ * stds > 0 mọi chiều VÀ kết quả hữu hạn — vi phạm nào → throw Error rõ
+ * (trước đây: stats sai chiều → NaN âm thầm — clamp nuốt NaN, KHÔNG báo).
+ * Caller (tryCalibrationV3) bọc try/catch → null → rơi chuỗi V2 cũ nên
+ * tinh thần fail-open tuyệt đối KHÔNG đổi.
  */
 export function applyV3Model(model: ActiveV3Model, ctx: Partial<FeatureCtx>): number {
+  const d = FEATURE_NAMES.length
+  if (model.means.length !== d || model.stds.length !== d) {
+    throw new Error(
+      `applyV3Model: means/stds phải đúng ${d} chiều (nhận ${model.means.length}/${model.stds.length}) — ActiveV3Model hỏng`,
+    )
+  }
+  if (!model.stds.every(v => v > 0)) {
+    throw new Error('applyV3Model: stds phải > 0 mọi chiều — chia 0 tạo ±∞/NaN (FB-BRAIN-P2-R1-01)')
+  }
   const raw = buildFeatureVector(ctx)
   const x = raw.map((v, j) =>
     typeof v === 'number' && Number.isFinite(v) ? (v - model.means[j]) / model.stds[j] : 0,
   )
   const p = model.mlp.predictProba(x)
+  if (!Number.isFinite(p)) {
+    throw new Error('applyV3Model: V3 dự đoán NaN/Infinity — từ chối áp (caller fail-open về V2)')
+  }
   return Math.min(1, Math.max(0, p))
 }
 
