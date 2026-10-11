@@ -44,6 +44,19 @@ export const Q_LEARNING_GAMMA = 0.9
  * (floor 0.05: τ→0 tiệm cận argmax cứng — mất tính ngẫu nhiên chống cascade).
  */
 export const RUNTIME_MODEL_TAU_DEFAULT = 0.5
+/** Floor τ — τ→0 mất tính ngẫu nhiên chống cascade (spec §P6-M3 τ vừa). */
+export const RUNTIME_MODEL_TAU_FLOOR = 0.05
+
+/**
+ * Parse τ từ env (RUNTIME_MODEL_TAU) — FB-P6-R1-B-07: parse tường minh để
+ * "0" (giá trị hợp lệ — user chủ ý τ=0) qua floor 0.05 chứ KHÔNG rơi nhầm
+ * về default (bản trước `parseFloat(x || '0.5') || 0.5` coi '0' là falsy);
+ * NaN/∞/rỗng → default 0.5. Thuần — test trực tiếp (r79).
+ */
+export function parseRuntimeModelTau(value: string | undefined): number {
+  const parsed = parseFloat(value ?? '')
+  return Math.max(RUNTIME_MODEL_TAU_FLOOR, Number.isFinite(parsed) ? parsed : RUNTIME_MODEL_TAU_DEFAULT)
+}
 
 // ==================== STATE KEY (P6-M1 quy ước) ====================
 
@@ -92,11 +105,19 @@ export function qLearningUpdate(
 /**
  * Phân phối softmax(τ) (thuần) — §P6-M3: π(a) = exp(score/τ) / Σ exp(score/τ).
  *
- * weights[i] = 0 → π(i) = 0 (model bị chặn health — "weight 0" theo spec);
- * weight mặc định 1. Mảng rỗng / toàn weight-0 / τ không hợp lệ → trả mảng 0
- * (caller tự xử fallback — KHÔNG đoán mò ở tầng thuần).
+ * weights[i] = 0 → π(i) = 0 (model bị chặn health — "weight 0" theo spec;
+ * LƯU Ý FB-P6-R1-A-12: weights là CỔNG (0 = chặn) chứ KHÔNG phải multiplier
+ * "score × health" theo chữ spec — production dùng binary-health tương đương
+ * vì llm.ts lọc blocked khỏi candidates và không truyền weights);
+ * weight mặc định 1. Mảng rỗng / toàn weight-0 → trả mảng 0
+ * (caller tự xử fallback — KHÔNG đoán mò ở tầng thuần). τ vô hiệu
+ * (NaN/≤0/∞ — vd env parse hỏng) → sanitize về RUNTIME_MODEL_TAU_DEFAULT
+ * (0.5) và VẪN trả phân bố hợp lệ (FB-P6-R1-A-04: JSDoc cũ ghi "trả mảng 0"
+ * — sai hành vi thực; policy là lớp học, τ hỏng không được giết phân phối).
  *
- * Ổn định số trị: trừ max(score/τ) trước khi exp (score lớn → exp tràn ∞ → NaN).
+ * Ổn định số trị: trừ max(score/τ) — chỉ trên ứng viên CÒN SỐNG (w>0,
+ * FB-P6-R1-A-08: argmax bị chặn phải không kéo max xuống gây underflow toàn
+ * mảng) — trước khi exp (score lớn → exp tràn ∞ → NaN).
  */
 export function softmaxPolicy(scores: number[], tau: number, weights?: number[]): number[] {
   const n = scores.length
@@ -106,18 +127,33 @@ export function softmaxPolicy(scores: number[], tau: number, weights?: number[])
   if (w.length !== n || w.some(x => x < 0)) return scores.map(() => 0)
 
   const scaled = scores.map(s => (Number.isFinite(s) ? s / t : -Infinity))
-  const max = Math.max(...scaled.filter(x => Number.isFinite(x)))
+  const alive = scaled.map((x, i) => (w[i] > 0 && Number.isFinite(x) ? x : -Infinity))
+  const max = Math.max(...alive)
   if (!Number.isFinite(max)) return scores.map(() => 0) // toàn -∞ (không có ứng viên trọng số > 0)
 
-  const exps = scaled.map((x, i) => (w[i] > 0 && Number.isFinite(x) ? Math.exp(x - max) : 0))
+  const exps = alive.map(x => (Number.isFinite(x) ? Math.exp(x - max) : 0))
   const sum = exps.reduce((s, v) => s + v, 0)
   if (!(sum > 0)) return scores.map(() => 0)
   return exps.map(e => e / sum)
 }
 
 /**
- * Hash FNV-1a 32-bit tất định từ chuỗi — nguồn seed "hash(sessionId, cycle)
- * chạy lại được" (spec §P6-M3). Cùng input → cùng seed → cùng lựa chọn.
+ * Hash FNV-1a 32-bit tất định từ chuỗi + PHÂN TÁN CUỐI (murmur3 fmix32).
+ * Nguồn seed "hash(sessionId, cycle) chạy lại được" (spec §P6-M3). Cùng
+ * input → cùng seed → cùng lựa chọn.
+ *
+ * FB-P6-R1-A-02: FNV-1a trần (không finalizer) với chuỗi cycle tuần tự
+ * ('…|0', '…|1', '…|2' — chỉ ký tự cuối đổi, '0'→'1' xor đúng 1 bit 0)
+ * tạo seed lệch nhau CHÍNH XÁC ±FNV-prime (0x01000193) → r = seed/2³²
+ * đi cấp số cộng bước 1/256 → 20 chu kỳ của 1 session rơi cố định 1-2
+ * bucket xác suất (đo 500 session ngẫu nhiên: mean distinct model ≈1.99/4,
+ * 16-19% session chỉ đụng 1 model — phá mục tiêu chống 429-cascade).
+ * fmix32 (avalanche) phá cấu trúc cấp số cộng này, giữ nguyên tính tất
+ * định. Chuẩn hoá: FNV-1a thuần chạy trên code-unit UTF-16 (không phải
+ * byte UTF-8) — đúng vector chuẩn cho ASCII, lệch canonical cho non-ASCII;
+ * hệ thống chỉ cần tất định nội bộ (không cần khớp thư viện ngoài).
+ * Lưu ý join('|'): seed('a|b','c') ≡ seed('a','b|c') — sessionId là
+ * uuid/cuid không chứa '|' nên vô hại thực tế (ghi nhận FB-P6-R1-A-10).
  */
 export function deterministicSeed(...parts: string[]): number {
   const str = parts.join('|')
@@ -127,15 +163,27 @@ export function deterministicSeed(...parts: string[]): number {
     h ^= str.charCodeAt(i)
     h = Math.imul(h, 0x01000193)
   }
+  // Avalanche finalizer (murmur3 fmix32) — FB-P6-R1-A-02: phá cấu trúc số
+  // học tuyến tính của FNV-trần trên input tuần tự, phân bố seed đều trên
+  // toàn vùng uint32 (bảo toàn tính tất định — cùng input vẫn cùng output).
+  h ^= h >>> 16
+  h = Math.imul(h, 0x85ebca6b)
+  h ^= h >>> 13
+  h = Math.imul(h, 0xc2b2ae35)
+  h ^= h >>> 16
   return h >>> 0
 }
 
 /**
  * Chọn index từ phân phối xác suất bằng seed tất định (thuần) — walk danh sách
- * tích luỹ [prob[0], prob[0]+prob[1], …] rồi lấy theo seed/2^32 (đều khắp
- * [0,1)). Xác suất toàn 0 → trả -1 (caller fallback ứng viên đầu/đường cũ).
+ * tích luỹ [prob[0], prob[0]+prob[1], …] rồi lấy theo seed/(2³²−1) (đều khắp
+ * [0,1); cặp (0, 2³²−1) cùng r=0 với xác suất 2/2³² — không đáng kể, ghi nhận
+ * FB-P6-R1-A-07). Xác suất toàn 0 hoặc seed suy biến (âm/NaN/∞ — không thể
+ * đến từ deterministicSeed >>> 0, chỉ qua caller trực tiếp) → trả -1
+ * (caller fallback ứng viên đầu/đường cũ).
  */
 export function pickIndexBySeed(probs: number[], seed: number): number {
+  if (!Number.isFinite(seed) || seed < 0) return -1
   const sum = probs.reduce((s, v) => s + v, 0)
   if (!(sum > 0)) return -1
   const r = (seed % 0xffffffff) / 0xffffffff
@@ -160,9 +208,77 @@ export interface QAdviceEntry {
  * Đọc Q hiện tại (không có → 0, visits 0) → max_a' Q(s',·) → upsert.
  * Episodic goal-loop: nextStateKey thường = stateKey (run sau bắt đầu cùng
  * trạng thái runtime) — γ·max Q(s,·) vẫn đúng nghĩa continuing task.
+ *
+ * max_a' Q(s',·) là MAX THUẦN trên các entry có sẵn của s' (state rỗng → 0
+ * — uniform prior khởi điểm; FB-P6-R1-A-01: bản trước reduce khởi điểm 0
+ * khiến max bị FLOOR tại 0 kể cả khi mọi entry s' âm — lệch công thức spec
+ * §P6-M2 "γ·max_a' Q(s',a')" và lệch chính claim "max đầy đủ", khiến state
+ * toàn-model-xấu học chậm ~10× và attractor lệch).
+ *
+ * NGUYÊN TỬ (FB-P6-R1-A-03): chuỗi đọc-tính-ghi được TUẦN TỰ HOÁ IN-PROCESS
+ * qua chuỗi promise dùng chung (mọi updateQ gọi tới đều xếp hàng — 2 run
+ * goal-loop đóng cùng lúc trên cùng (stateKey,actionKey) không còn
+ * lost-update qValue; đo thật bản cũ: 10 update song song chỉ 1 ăn nhập).
+ * KHÔNG dùng $transaction tương tác: Prisma + SQLite giữ lock suốt
+ * transaction (đo thật FB-P6: 10 tx song song → Socket timeout nhiễm lan cả
+ * hook của test file khác). Triển khai 1 process pm2 duy nhất + QEntry chỉ
+ * được ghi qua updateQ → tuần tự hoá in-process kín mọi writer thật.
  * Fail-open: lỗi DB → log + return (KHÔNG throw — learning side-channel).
  */
-export async function updateQ(
+let updateQChain: Promise<void> = Promise.resolve()
+export function updateQ(
+  stateKey: string,
+  actionKey: string,
+  reward: number,
+  nextStateKey: string,
+): Promise<void> {
+  const run = updateQChain.then(() => updateQStep(stateKey, actionKey, reward, nextStateKey))
+  // Chuỗi không bao giờ chết vì một link lỗi (updateQStep đã nuốt lỗi nội bộ —
+  // belt-and-suspenders cho tương lai ai sửa làm nó throw được)
+  updateQChain = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
+
+/** Timeout tầng app cho 1 bước update (FB-P6-R2-04) — ms. */
+const UPDATEQ_STEP_TIMEOUT_MS = 20_000
+
+/**
+ * Một bước đọc-tính-ghi (chỉ chạy trong chuỗi tuần tự của updateQ).
+ * FB-P6-R2-04: bọc timeout tầng app — nếu Prisma socket-timeout không kick
+ * (kịch bản hi hữu), link treo vĩnh viễn sẽ đóng băng cả chuỗi learning;
+ * timeout reject → fail-open log → chuỗi tiếp tục. Prisma socket-timeout
+ * (~5s) vẫn là hàng rào đầu tiên; đây là belt-and-suspenders.
+ */
+async function updateQStep(
+  stateKey: string,
+  actionKey: string,
+  reward: number,
+  nextStateKey: string,
+): Promise<void> {
+  const work = updateQStepInner(stateKey, actionKey, reward, nextStateKey)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`updateQ step timeout ${UPDATEQ_STEP_TIMEOUT_MS}ms`)), UPDATEQ_STEP_TIMEOUT_MS)
+  })
+  try {
+    await Promise.race([work, timeout])
+  } catch (err) {
+    // FB-P6-R3-02: đường timeout PHẢI log (JSDoc cũ nói "fail-open log" nhưng
+    // không có log nào — work không bao giờ reject vì updateQStepInner tự
+    // catch, nên nhánh này chỉ là timeout). Work nền có thể hoàn tất trễ.
+    console.warn(
+      `[QTable] updateQ(${stateKey}, ${actionKey}) step timeout ${UPDATEQ_STEP_TIMEOUT_MS}ms (fail-open — chuỗi tiếp tục, work nền có thể hoàn tất trễ):`,
+      err instanceof Error ? err.message : String(err),
+    )
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+async function updateQStepInner(
   stateKey: string,
   actionKey: string,
   reward: number,
@@ -176,12 +292,14 @@ export async function updateQ(
     const currentQ = existing?.qValue ?? 0
     const visits = existing?.visits ?? 0
 
-    // max_a' Q(s',·) — chưa có entry nào ở state kế → 0 (uniform prior khởi điểm)
+    // max_a' Q(s',·) THUẦN trên entry có sẵn (FB-P6-R1-A-01) — state kế rỗng
+    // → 0 (uniform prior). SQLite REAL không lưu NaN (hóa NULL) nên max không
+    // bao giờ NaN từ DB; qLearningUpdate vẫn NaN-guard cho tầng thuần.
     const nextEntries = await db.qEntry.findMany({
       where: { stateKey: nextStateKey },
       select: { qValue: true },
     })
-    const maxNextQ = nextEntries.reduce((m, e) => Math.max(m, e.qValue), 0)
+    const maxNextQ = nextEntries.length > 0 ? Math.max(...nextEntries.map(e => e.qValue)) : 0
 
     const newQ = qLearningUpdate(currentQ, reward, maxNextQ)
     await db.qEntry.upsert({
@@ -227,15 +345,18 @@ export async function getQAdvice(stateKey: string, candidateActions: string[]): 
 
 /**
  * Top-N hành động đã học của một state (§P6-M4 advisory dropdown / PLAN hint)
- * — chỉ trả action CÓ dữ liệu (visits > 0), sắp xếp q giảm dần.
+ * — chỉ trả action CÓ dữ liệu (visits > 0), sắp xếp q giảm dần. limit bị
+ * kẹp [1,20]; limit vô hiệu (NaN/∞) → default 5 (FB-P6-R1-A-11: NaN làm
+ * Prisma take throw — vẫn fail-open nhưng gây log noise).
  */
 export async function getTopQAdvice(stateKey: string, limit = 5): Promise<QAdviceEntry[]> {
   try {
+    const lim = Number.isFinite(limit) ? Math.max(1, Math.min(20, Math.floor(limit))) : 5
     const rows = await db.qEntry.findMany({
       where: { stateKey, visits: { gt: 0 } },
       select: { actionKey: true, qValue: true, visits: true },
       orderBy: [{ qValue: 'desc' }, { visits: 'desc' }],
-      take: Math.max(1, Math.min(20, limit)),
+      take: lim,
     })
     return rows.map(r => ({ action: r.actionKey, q: r.qValue, visits: r.visits }))
   } catch (err) {

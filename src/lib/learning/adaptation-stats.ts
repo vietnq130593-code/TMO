@@ -208,7 +208,7 @@ const SAL_TAKE = 1000
  * evidence (FB-Đợt6-R2-01). Row KHÔNG có trường `applied` (cũ / schema
  * trước fix) mặc định ĐÃ áp dụng — mọi row trước đây đều được apply thật.
  */
-function isNotAppliedStatsJson(statsJson: string | null): boolean {
+export function isNotAppliedStatsJson(statsJson: string | null): boolean {
   if (!statsJson) return false
   try {
     const parsed = JSON.parse(statsJson) as { applied?: unknown }

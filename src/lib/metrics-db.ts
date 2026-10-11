@@ -191,9 +191,9 @@ function randomId(): string {
 // ==================== ArbiterVerdict — Task 20-c ====================
 
 /** Instance chính đã có delegate arbiterVerdict chưa? (fresh sau restart) */
-function hasArbiterVerdictDelegate(): boolean {
+function hasArbiterVerdictDelegate(client: PrismaClientLike = db): boolean {
   try {
-    return typeof (db as unknown as Record<string, unknown>).arbiterVerdict !== 'undefined'
+    return typeof (client as unknown as Record<string, unknown>).arbiterVerdict !== 'undefined'
   } catch {
     return false
   }
@@ -416,39 +416,53 @@ export async function resolveArbiterVerdicts(
  * resolveArbiterVerdicts — trả kèm breakdown confirmed/refuted để goal-loop
  * TÍNH REWARD cho credit assignment (+1 confirmed ∧ runComplete / −1 refuted /
  * 0 pending-bỏ — quy ước reward §P6-M2). resolveArbiterVerdicts (cũ) ủy nhiệm
- * và giữ return number — không đụng caller/test hiện có.
+ * và giữ return number — giữ làm API ổn định (additive-only theo nguyên tắc
+ * 5 blueprint; FB-P6-R1-C-01: hiện KHÔNG còn caller nội bộ nào — caller duy
+ * nhất goal-loop đã chuyển sang Detailed từ chính commit P6).
  */
+/** Kiểu client tối thiểu resolveArbiterVerdictsDetailed cần (FB-P6-R3-01 DI). */
+type PrismaClientLike = typeof db
+
 export async function resolveArbiterVerdictsDetailed(
   sessionId: string,
   runComplete: boolean,
   runStopReason: string,
+  /** FB-P6-R3-01: dependency-injection cho test pin raw-path (client stale =
+   *  không có delegate arbiterVerdict). Mặc định db dùng chung — không đổi
+   *  hành vi caller nào. */
+  client: PrismaClientLike = db,
 ): Promise<{ total: number; confirmed: number; refuted: number }> {
   const now = new Date()
-  if (hasArbiterVerdictDelegate()) {
+  if (hasArbiterVerdictDelegate(client)) {
     // updateMany không set giá trị per-row được → 2 nhóm confirmed/refuted
-    const confirmed = await db.arbiterVerdict.updateMany({
+    const confirmed = await client.arbiterVerdict.updateMany({
       where: { sessionId, outcome: null, complete: runComplete },
       data: { outcome: 'confirmed', outcomeAt: now, runStopReason, runComplete },
     })
-    const refuted = await db.arbiterVerdict.updateMany({
+    const refuted = await client.arbiterVerdict.updateMany({
       where: { sessionId, outcome: null, complete: !runComplete },
       data: { outcome: 'refuted', outcomeAt: now, runStopReason, runComplete },
     })
     return { total: confirmed.count + refuted.count, confirmed: confirmed.count, refuted: refuted.count }
   }
 
-  const confirmedN = await db.$executeRaw`
-    UPDATE ArbiterVerdict
-    SET outcome = 'confirmed', outcomeAt = ${now},
-        runStopReason = ${runStopReason}, runComplete = ${runComplete ? 1 : 0}
-    WHERE sessionId = ${sessionId} AND outcome IS NULL AND complete = ${runComplete ? 1 : 0}
-  `
-  const refutedN = await db.$executeRaw`
-    UPDATE ArbiterVerdict
-    SET outcome = 'refuted', outcomeAt = ${now},
-        runStopReason = ${runStopReason}, runComplete = ${runComplete ? 1 : 0}
-    WHERE sessionId = ${sessionId} AND outcome IS NULL AND complete = ${runComplete ? 0 : 1}
-  `
+  // FB-P6-R1-C-02: 2 lệnh raw gộp trong MỘT $transaction — bản trước tách rời
+  // nên crash/giẽ giữa 2 lệnh để lại resolve nửa vời (confirmed đã đóng,
+  // refuted kẹt pending); transaction array-form chạy tuần tự cùng commit/rollback.
+  const [confirmedN, refutedN] = await client.$transaction([
+    client.$executeRaw`
+      UPDATE ArbiterVerdict
+      SET outcome = 'confirmed', outcomeAt = ${now},
+          runStopReason = ${runStopReason}, runComplete = ${runComplete ? 1 : 0}
+      WHERE sessionId = ${sessionId} AND outcome IS NULL AND complete = ${runComplete ? 1 : 0}
+    `,
+    client.$executeRaw`
+      UPDATE ArbiterVerdict
+      SET outcome = 'refuted', outcomeAt = ${now},
+          runStopReason = ${runStopReason}, runComplete = ${runComplete ? 1 : 0}
+      WHERE sessionId = ${sessionId} AND outcome IS NULL AND complete = ${runComplete ? 0 : 1}
+    `,
+  ])
   return { total: Number(confirmedN) + Number(refutedN), confirmed: Number(confirmedN), refuted: Number(refutedN) }
 }
 

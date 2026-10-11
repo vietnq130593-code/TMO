@@ -6238,11 +6238,16 @@ ${manifest}` : rawText
                               <span className="text-[10px] text-amber-400/90 flex-shrink-0" title="Bị chặn free-tier — sẽ fallback về space-bunny-free">⚠</span>
                             )}
                             {/* P6-M4 — badge "Q học được đề xuất" trên model top-Q
-                                (tương tự badge blockedTransports r74 — advisory) */}
-                            {qAdvice?.top?.[0] && qAdvice.top[0].model === m.id && qAdvice.top[0].visits > 0 && (
+                                (tương tự badge blockedTransports r74 — advisory).
+                                FB-P6-R1-C-05: chỉ hiện khi Q DƯƠNG — "phần thưởng cao
+                                nhất" trong nhóm toàn âm gây hiểu nhầm; FB-P6 ghi chú ③:
+                                aria-label cho screen reader (title chỉ tới được bằng hover). */}
+                            {qAdvice?.top?.[0] && qAdvice.top[0].model === m.id && qAdvice.top[0].visits > 0 && qAdvice.top[0].q > 0 && (
                               <span
                                 className="text-[9px] text-cyan-400 border border-cyan-400/40 rounded px-1 flex-shrink-0"
-                                title={`Q học được đề xuất (P6): model này có phần thưởng trung bình cao nhất (${qAdvice.top[0].q.toFixed(2)}, ${qAdvice.top[0].visits} runs) cho tác vụ agent runtime — tham khảo, không bắt buộc.`}
+                                role="img"
+                                aria-label={`Q học được đề xuất (P6): model này có phần thưởng trung bình cao nhất (${qAdvice.top[0].q.toFixed(2)}, ${qAdvice.top[0].visits} runs) — tham khảo, không bắt buộc.`}
+                                title={`Q học được đề xuất (P6): model này có phần thưởng trung bình cao nhất (${qAdvice.top[0].q.toFixed(2)}, ${qAdvice.top[0].visits} runs) — tham khảo, không bắt buộc.`}
                               >Q</span>
                             )}
                             {(m.caps?.coding || m.caps?.reasoning || m.caps?.agentic) && (

@@ -43,6 +43,8 @@
 // ==================== TOKEN EVENT EMITTER (SSE REALTIME) ====================
 
 import { EventEmitter } from 'events'
+// FB-P6-R1-B-07 (q-table là lá — chỉ phụ thuộc @/lib/db, không vòng import)
+import { parseRuntimeModelTau } from '@/lib/learning/q-table'
 // Type-only import (erased lúc runtime — không tạo thêm module instance)
 import type { DocumentPayload } from '@/lib/qdrant'
 // ROUND-50 (P3-ζ r49 — bằng chứng user 2026-10-06 dán thought content nguyên văn
@@ -4378,7 +4380,10 @@ export function zenModelBlockSummary(): Array<{ model: string; transport: 'http'
 // không softmax. Failover chuỗi cũ GIỮ NGUYÊN TOÀN BỘ (softmax chỉ đổi điểm
 // khởi đầu zenModel — spec: "Failover chuỗi cũ giữ nguyên toàn bộ").
 const RUNTIME_MODEL_POLICY = (process.env.RUNTIME_MODEL_POLICY || 'off').trim().toLowerCase()
-const RUNTIME_MODEL_TAU = Math.max(0.05, parseFloat(process.env.RUNTIME_MODEL_TAU || '0.5') || 0.5)
+// FB-P6-R1-B-07: parse qua helper single-source parseRuntimeModelTau
+// (q-table.ts) — "0" là giá trị HỢP LỆ (user chủ ý τ=0) → floor 0.05; bản
+// trước `|| '0.5'` coi '0' là falsy → nhảy về default 0.5, sai ngữ nghĩa floor.
+const RUNTIME_MODEL_TAU = parseRuntimeModelTau(process.env.RUNTIME_MODEL_TAU)
 
 /** Cache AgentModelOverride (bảng nhỏ, 60s — đường call nóng không đập DB mỗi lần). */
 let agentModelOverrideCache: { at: number; names: Set<string> } | null = null
@@ -4430,7 +4435,10 @@ async function maybeApplySoftmaxModelPolicy(configuredZenModel: string, options?
     // health (zenModelBlockSummary — spec: "KHÔNG nằm trong blocked").
     const blockedModels = new Set(zenModelBlockSummary().map(b => b.model))
     const candidates = (PROVIDER_MODELS.zen ?? [])
-      .filter(m => m.caps?.coding !== false && m.caps?.reasoning !== false && !blockedModels.has(m.id))
+      // FB-P6-R1-B-05: whitelist === true — model KHÔNG khai báo caps (undefined
+      // / gõ nhầm key) không được mặc nhiên thành ứng viên (bản trước !== false
+      // cho undefined lọt qua — lỗ hổng tiềm ẩn khi catalog thêm model thiếu caps)
+      .filter(m => m.caps?.coding === true && m.caps?.reasoning === true && !blockedModels.has(m.id))
       .map(m => m.id)
     if (candidates.length === 0) {
       console.log(`[LLM] softmax-pick model=${configuredZenModel} p=1.00 reason=0-ứng-viên-sống — giữ nguyên (failover chuỗi cũ xử lý)`)
@@ -4446,7 +4454,11 @@ async function maybeApplySoftmaxModelPolicy(configuredZenModel: string, options?
     const qByAction = new Map(advice.map(a => [a.action, a.q]))
     const scores = candidates.map(c => qByAction.get(c) ?? 0)
     const probs = softmaxPolicy(scores, RUNTIME_MODEL_TAU)
-    // Seed tất định hash(sessionId, cycle) — chạy lại được (spec §P6-M3)
+    // Seed tất định hash(sessionId, cycle) — chạy lại được (spec §P6-M3).
+    // FB-P6-R1-B-06 (ghi nhận, chấp nhận): call thiếu cả sessionId lẫn agentName
+    // → seed 'anon' cố định (mọi call như vậy cùng chọn 1 model) — mọi call-site
+    // lớn hiện truyền agentName nên nhánh này hiếm; giữ tất định theo spec
+    // (thêm nhiễu thời gian sẽ phá "chạy lại được" — không đổi).
     const seed = deterministicSeed(
       String(options?.sessionId ?? options?.agentName ?? 'anon'),
       String(options?.qPolicyCycle ?? 0),

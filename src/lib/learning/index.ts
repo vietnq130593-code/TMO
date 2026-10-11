@@ -43,3 +43,25 @@ export {
   persistFailurePattern,
   persistAdaptationLog,
 } from './strategy-adapter'
+
+// Q-Table (P6-M2 — FB-P6-R1-B-08: đưa vào barrel cho C7 "barrel đủ"; các
+// call-site hiện import trực tiếp '@/lib/learning/q-table' — re-export thuần,
+// không vòng import: q-table chỉ phụ thuộc @/lib/db)
+export {
+  qLearningUpdate,
+  softmaxPolicy,
+  deterministicSeed,
+  pickIndexBySeed,
+  qStateKey,
+  agentRuntimeStateKey,
+  updateQ,
+  getQAdvice,
+  getTopQAdvice,
+  qEntryCount,
+  Q_LEARNING_ALPHA,
+  Q_LEARNING_GAMMA,
+  RUNTIME_MODEL_TAU_DEFAULT,
+  RUNTIME_MODEL_TAU_FLOOR,
+  parseRuntimeModelTau,
+  type QAdviceEntry,
+} from './q-table'

@@ -149,7 +149,11 @@ import type { GoalLoopCheckpoint, GoalLoopDurableHooks } from '@/lib/goal-loop-d
 // dispatchAgentByOmega ngoài vùng phủ ticker P3-ε r49) + parser A1 (repair
 // marker near-miss + loose-repair keys không quote + feedback v3 copy-paste
 // — tool-calls.ts).
-export const GOAL_LOOP_CODE_REV = 'r57w1'
+// fbp6w1 (FB-P6 — fixbug đợt 8/P6): B-02 comment cơ chế cắt qAdvice hint +
+// B-03 modelsUsedThisRun persist qua checkpoint (dominantModel đủ chu kỳ sau
+// resume) — thấy nhau với goal-loop-durable-types.modelsUsed (optional field,
+// checkpoint cũ không có → Map rỗng như cũ).
+export const GOAL_LOOP_CODE_REV = 'fbp6w1'
 
 /** Gọn args để nhét vào working memory (chống phình) */
 function compactToolArgs(args: Record<string, unknown>, maxLen = 120): string {
@@ -976,8 +980,10 @@ export function assembleGoalLoopSystemPrompt(params: {
         // lý lỗi hạ tầng/thiếu tool/thiếu agent cho MỌI agent goal-loop.
         { name: 'infraSelfService', content: buildInfraSelfServiceProtocol(), priority: 89 },
         { name: 'codeTeamProtocol', content: params.hasCodeTeamRequest === true ? buildCodeTeamProtocol() : '', priority: 88 },
-        // P6-M4 — Q advisory hint (1 dòng, priority thấp: làm vệt tham khảo
-        // — bị cắt đầu tiên khi prompt chật)
+        // P6-M4 — Q advisory hint (1 dòng, priority thấp: làm vệt tham khảo.
+        // FB-P6-R1-B-02 (sửa comment sai): hint ~200 chars DƯỚI MIN_BLOCK_CUT_CHARS
+        // (500) nên KHÔNG bao giờ bị budget-shave cắt — comment cũ "bị cắt đầu
+        // tiên" sai cơ chế prompt-budget (block <500 chars miễn nhiễm tuyệt đối).
         { name: 'qAdvice', content: params.qAdviceHint ?? '', priority: 60 },
         { name: 'orchestrationProtocol', content: hasOrchestration ? buildOrchestrationProtocol(hasDispatch, hasCreate) : '', priority: 80 },
         { name: 'automationProtocol', content: buildAutomationProtocol(params.hasAutomationDirect === true, params.hasAutomationPropose === true), priority: 78 },
@@ -2863,7 +2869,9 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
    *  theo result.model của MỖI call chính (chuẩn xác hơn agentModel cấu hình:
    *  khi RUNTIME_MODEL_POLICY=softmax bật, model thực mới là thứ đáng nhận
    *  reward — credit assignment trung thực). Map model → số call. */
-  const modelsUsedThisRun = new Map<string, number>()
+  // FB-P6-R1-B-03: khôi phục từ checkpoint — run resumed tính dominantModel
+  // trên đủ chu kỳ pre-crash (bản trước Map mới → reward chỉ theo đoạn cuối)
+  const modelsUsedThisRun = new Map<string, number>(resumeState?.modelsUsed ?? [])
   /** [E] Số lần nén context đã thực hiện */
   let compressions = resumeState?.counters.compressions ?? 0
   /** [F] Số lần delegate + token sub-agent tiêu thụ (báo cáo lên metadata) */
@@ -3150,6 +3158,8 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
     toolSignatures: Array.from(toolSignatureCounts.entries())
       .filter(([, n]) => n >= 2)
       .slice(-200) as Array<[string, number]>,
+    // P6-M1 W2 (FB-P6-R1-B-03): model usage của CẢ run — resume không mất
+    modelsUsed: Array.from(modelsUsedThisRun.entries()),
     planningOnlyStreak,
     savedAt: Date.now(),
   })

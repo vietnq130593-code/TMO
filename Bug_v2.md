@@ -884,3 +884,116 @@
 - **Sai-kỳ-vọng phía người-rà (lần 12-13):** (1) kì vọng test biên zero_vector_rate viết NGƯỢC — spec "lt 0.01" là ngặt: 0.01 VI PHẠM (người điều phối tự bắt khi chạy test); (2) kì vọng tay implicit-PCA quên số hạng hiệp phương sai cov(a,b) khi "giả sử 2 trục là trục chính" — code đúng, test sửa theo eigen đầy đủ. Auditor R5 cũng tự bắt 2 "FAIL" hóa ra là giới hạn tol dùng chung bản cũ (không phải lỗi mới).
 - **Phát hiện bị bác bỏ sau chấm chéo:** 0/20 — toàn bộ phát hiện auditor đều xác minh đúng (lần đầu tiên 7+ đợt không bác cái nào; chất lượng auditor tăng theo chất lượng giao thức).
 - **Giới hạn tiền tồn tại ghi nhận (không phải lỗi đợt 7):** pcaTop2 maxIter=100 chưa đủ hội tụ trên phổ gần-suy-biến λ2/λ1≈0.98 (cũ=mới cho kết quả trùng khớp tuyệt đối — thay maxIter là đánh đổi độ trễ, để nguyên + đã ghi trong header pca.ts).
+
+---
+
+## PHẦN FB-P6 — FIXBUG ĐỢT 8/P6 (RL-LEARNING) — 4 VÒNG R1→R4, 2026-10-11
+
+> Scope: commit b139706 (P6-M1..M4, 11 file +851) + fix đợt FB. 3 auditor độc lập R1 (A: q-table/schema/r79 · B: llm/goal-loop/workflow/adaptation · C: metrics-db/route/UI) → chấm chéo điều phối → R2 mắt tươi trên diff fix → R3 kiểm chứng + quét C1-C8 → R4 vòng đóng (0 phát hiện mới → KHÉP). Gate 990 → 1007 (+17 test). Chi tiết bằng chứng: worklog FB-P6-R1-A/B/C, FB-P6-R2, FB-P6-R3, FB-P6-R4 + harness /tmp/fb-p6-*/.
+
+### BUG2-088 · C·P2 — updateQ maxNextQ bị FLOOR tại 0 (reduce khởi điểm 0) kể cả khi mọi Q(s\') âm — lệch công thức spec §P6-M2 "γ·max_a\' Q(s\',a\')" và lệch chính claim commit "max đầy đủ" — FB-P6-R1-A-01 (auditor A, DB-throwaway đo 2 update −1 → −0.19 thay vì −0.199; 15 lượt → −0.794 thay vì −1.0; quỹ đạo học chậm ~10×, state toàn-model-xấu trông "lạc quan" giả)
+- **Fix:** `Math.max(...nextEntries.map(e => e.qValue))` thuần, state rỗng → 0 (uniform prior giữ cho trường hợp lệ). Kiểm chứng: test H1 pin −0.199/−0.99 + chuỗi 15 lượt khớp mô phỏng độc lập; gate.
+
+### BUG2-089 · C·P2 — deterministicSeed FNV-1a trần trên chuỗi cycle tuần tự (chỉ ký tự cuối đổi, \'0\'→\'1\' XOR đúng 1 bit 0) tạo seed lệch nhau CHÍNH XÁC ±FNV-prime (0x01000193) → r cấp số cộng bước 1/256 → softmax cluster 1-2 model trong session (đo 500 session: mean distinct ≈1.99/4, 16-19% session chỉ 1 model — phá mục tiêu chống 429-cascade §P6-M3; điều phối chứng minh giải tích ±prime + auditor đo độc lập) — FB-P6-R1-A-02
+- **Fix:** thêm avalanche finalizer murmur3 fmix32 sau FNV-1a (giữ tất định). Kiểm chứng: test H2 — 500 session × 20 chu kỳ mean distinct ≥3.5 (đo 3.99), session-1-model ≤1/500, cấu trúc ±prime bị phá; auditor R2/R3 chấm chéo vector fmix32(1)=0x514e28b7 + chi² 24.36<30.58.
+
+### BUG2-090 · C·P3 — updateQ không nguyên tử: 2 lệnh đọc + 1 upsert rời nhau → 2 run đóng cùng lúc trên cùng (stateKey,actionKey) (mode-agent-tier-1 DÙNG CHUNG mọi run goal-loop) bị lost-update qValue (đo thật 10 update song song chỉ 1 ăn nhập, visits=10 nhưng q=0.1 thay vì 0.956) — FB-P6-R1-A-03 (auditor A đề nghị P2, điều phối chấm P3 — fire-and-forget side-channel tự chữa dần)
+- **Fix:** lần 1 thử $transaction tương tác — SAI CHO SQLITE (10 tx song song giữ lock → Socket timeout nhiễm lan cả hook test file khác — đo thật gate run 1: 19 fail lan); lần cuối: TUẦN TỰ HOÁ IN-PROCESS chuỗi promise updateQChain (mọi updateQ xếp hàng; app 1 process pm2 duy nhất + QEntry chỉ ghi qua updateQ → kín mọi writer thật). Kiểm chứng: test H3 — 10 update // → tuần tự đúng toán 0.956179 khớp độc lập; chuỗi poison-immune (R2 replica Bun); gate 1007.
+
+### BUG2-091 · D·P3 — JSDoc softmaxPolicy nói "τ không hợp lệ → trả mảng 0" nhưng code sanitize τ vô hiệu về default 0.5 và vẫn trả phân bố hợp lệ (ngược chiều fail-safe — ai đọc doc sẽ viết fallback nhầm) — FB-P6-R1-A-04 (nguồn gốc: sai-kỳ-vọng lần 14 đợt triển khai chỉ sửa test, quên doc)
+- **Fix:** JSDoc viết lại trung thực (sanitize → phân bố hợp lệ). Kiểm chứng: test E6 pin hành vi + đọc doc.
+
+### BUG2-092 · D·P3 — comment test r79 B2 "→ −0.1" sai giá trị (thực tế maxNext gồm model-x Q=0.199 → −0.08209) — dẫn người sửa test sau này sai kỳ vọng — FB-P6-R1-A-05 (auditor tự bắt lỗi tính của chính mình lần đầu rồi chấm tay lại)
+- **Fix:** comment đúng −0.08209 + ghi chú nguồn sai. Kiểm chứng: chấm tay 0+0.1×(−1+0.9×0.199)=−0.08209.
+
+### BUG2-093 · D·P3 — test phủ mỏng: getTopQAdvice 1 test (không pin limit-clamp 0→1/100→20/NaN, không pin filter visits>0), qEntryCount 0 test + 0 consumer — FB-P6-R1-A-06 (vi phạm C5 "mỗi hàm ≥ 2 case")
+- **Fix:** test H5 pin clamp + NaN-limit về default 5 + qEntryCount; audit R3 phán qEntryCount giữ telemetry (0 consumer src). Kiểm chứng: gate.
+
+### BUG2-094 · D·P4 — JSDoc pickIndexBySeed ghi "seed/2^32" nhưng code là (seed % 0xffffffff)/0xffffffff — khác quan sát được duy nhất tại seed=2³²−1 (r=0 đếm đôi 2/2³², vô hại — 5M mẫu maxDev 5.18%<5σ) — FB-P6-R1-A-07
+- **Fix:** JSDoc mô tả đúng phép modulo + ghi nhận cặp đụng độ (0, 2³²−1). Kiểm chứng: phân tích auditor A + ghi chú code.
+
+### BUG2-095 · C·P4 — softmaxPolicy trừ-max tính trên TOÀN BỘ score (kể cả weight-0): argmax bị chặn + gap lớn → exp underflow toàn mảng ([1000,0,0] w=[0,1,1] → [0,0,0] thay vì [0,0.5,0.5]) — không với tới production (Q kẹp [−1,1] + τ floor 0.05 → gap tối đa 40, exp(−40)=4.2e−18>0) nhưng sai tầng thuần — FB-P6-R1-A-08
+- **Fix:** max trên tập alive (w>0 ∧ finite). Kiểm chứng: test H4 pin [0,0.5,0.5] + fuzz 20000 maxDiff 6.9e−15 (auditor R2).
+
+### BUG2-096 · C·P4 — pickIndexBySeed degenerate seed (âm/NaN/∞ từ caller trực tiếp — không thể đến từ deterministicSeed >>>0): seed âm → r âm → trả index 0 kể cả π(0)=0; NaN → fall-through index cuối — FB-P6-R1-A-09
+- **Fix:** guard !Number.isFinite(seed) || seed < 0 → trả −1 (caller fallback đường cũ). Kiểm chứng: test H6-1.
+
+### BUG2-097 · D·P4 — nhãn "FNV-1a" của deterministicSeed chỉ đúng cho ASCII (code-unit UTF-16 ≠ byte UTF-8 chuẩn — \'ü\' lệch canonical 0x790b80bb vs 0x119dd44a) + join(\'|\') không tách phần (seed(\'a|b\',\'c\') ≡ seed(\'a\',\'b|c\')) — FB-P6-R1-A-10 (hệ chỉ cần tất định nội bộ — ghi nhận)
+- **Fix:** JSDoc ghi rõ chuẩn-hoá UTF-16 + rủi ro join; sessionId uuid không chứa \'|\'. Kiểm chứng: đối chiếu 3 vector chuẩn ASCII + 4 chuỗi non-ASCII của auditor A.
+
+### BUG2-098 · D·P4 — hygiene lô P4: (a) r79 import beforeAll không dùng; (b) schema comment "softmin dữ liệu" mơ hồ; (c) getTopQAdvice NaN limit làm Prisma take throw gây log noise (fail-open vẫn đúng) — FB-P6-R1-A-11
+- **Fix:** (a) bỏ import; (b) comment "tín hiệu độ tin của dữ liệu"; (c) sanitize Number.isFinite → default 5 + Math.floor. Kiểm chứng: test H5 NaN-case + gate lint.
+
+### BUG2-099 · D·P4 — GHI NHẬN C1: weights softmaxPolicy là CỔNG (0=chặn) không phải multiplier "score × health" theo chữ spec — production tương đương vì llm.ts lọc blocked khỏi candidates và không truyền weights — FB-P6-R1-A-12
+- **Fix:** JSDoc ghi rõ ngữ nghĩa gate vs multiplier + lý do tương đương production. Kiểm chứng: đọc code call-site llm.ts:4431-4434.
+
+### BUG2-100 · C·P3 — markSessionAdaptationOutcome recorded=true khi SAL update THẤT BẠI (update .catch nuốt → ledger row giữ successful=null nhưng hàm vẫn báo đã đóng) → W1 updateQ học trên bằng chứng không tồn tại trong ledger (Q↔SAL divergence, không truy lại được) — FB-P6-R1-B-01 (auditor B)
+- **Fix:** updated = update().then(()=>true).catch(()=>false); recorded = updated && pending !== null. Kiểm chứng: test adaptation-engine pin findMany-có-pending + update-reject → recorded=false; gate.
+
+### BUG2-101 · D·P4 — comment goal-loop "qAdvice bị cắt đầu tiên khi prompt chật" SAI cơ chế: hint 198 chars < MIN_BLOCK_CUT_CHARS (500) nên miễn nhiễm tuyệt đối budget-shave (đánh lừa maintainer về cơ chế ưu tiên) — FB-P6-R1-B-02 (auditor B dùng chính prompt-budget.ts thật để chứng minh)
+- **Fix:** comment viết lại đúng (block <500 chars không bao giờ bị cắt). Kiểm chứng: harness S7a-c ép tier-60 phải cắt — qAdvice vẫn nguyên vẹn.
+
+### BUG2-102 · C·P4 — modelsUsedThisRun (bảng đếm model cho dominantModel W2) khai báo Map mới không nằm trong resumeState → run resumed sau crash chỉ tính model của ĐOẠN CUỐI — reward credit assignment lệch cho run hiếm — FB-P6-R1-B-03
+- **Fix:** persist vào checkpoint (`modelsUsed: Array.from(entries)`) + restore `new Map(resumeState?.modelsUsed ?? [])` (checkpoint cũ không field → Map rỗng = hành vi cũ); goal-loop-durable-types thêm optional field; REV bump fbp6w1. Kiểm chứng: test H6-3 pin round-trip JSON; auditor R2 đọc worker load — không whitelist field nào bỏ mất.
+
+### BUG2-103 · C·P4 — W1 stateKey lấy routingDecision LÚC ĐÓNG (close-time): SAL pending từ run có thể được đóng ở run khác routing (resume/request mới → TL analyze lại) → reward ±1 ghi nhầm bucket mode-tier (đo bằng grep: stepId trùng tên giữa pipeline B/2, B/3, C/2, C/3) — FB-P6-R1-B-04
+- **Fix:** lưu routingStateKey vào SessionAdaptationState lúc APPLY (param 5 tùy chọn applyAdaptationToSession; detectAndPersistFailurePattern truyền qStateKey(routing)); markSessionAdaptationOutcome trả routingStateKey; workflow-engine dùng outcome.routingStateKey ?? close-time fallback. Kiểm chứng: test adaptation pin outcome.routingStateKey=mode-B-tier-2; tsc + gate.
+
+### BUG2-104 · C·P4 — filter caps softmax dùng `!== false` → model KHÔNG khai báo caps (undefined/gõ nhầm key) mặc nhiên thành ứng viên (hiện trạng 8/8 model đủ caps — lỗ hổng tiềm ẩn khi catalog thêm model) — FB-P6-R1-B-05
+- **Fix:** whitelist `=== true` cho coding ∧ reasoning. Kiểm chứng: test H6-2 pin catalog invariant (mọi model zen phải có caps — model thiếu caps bị test chặn trước khi đổi âm thầm tập ứng viên).
+
+### BUG2-105 · C·P4 — seed \'anon\' (call thiếu cả sessionId lẫn agentName): mọi call như vậy cùng chọn 1 model cố định (ngược nhẹ mục tiêu phân tán) — mọi call-site lớn hiện truyền agentName → hiếm; giữ tất định theo spec — FB-P6-R1-B-06 (ghi nhận, không đổi hành vi)
+- **Fix:** JSDoc ghi nhận lý do giữ tất định (thêm nhiễu thời gian phá "chạy lại được"). Kiểm chứng: grep call-site của auditor B + harness S3d.
+
+### BUG2-106 · D·P4 — RUNTIME_MODEL_TAU="0" bị `parseFloat(x || \'0.5\') || 0.5` coi là falsy → nhảy default 0.5 thay vì qua floor 0.05 (ngữ nghĩa floor sai: "0" là giá trị chủ ý hợp lệ) — FB-P6-R1-B-07
+- **Fix:** helper single-source parseRuntimeModelTau (q-table.ts — testable) dùng cho llm.ts: parse tường minh, NaN/rỗng → 0.5, "0"/âm/nhỏ → floor 0.05. Kiểm chứng: test H6-4 pin 8 tổ hợp env; barrel export đủ.
+
+### BUG2-107 · D·P4 — q-table không nằm trong barrel src/lib/learning/index.ts (4 call-site import trực tiếp) — FB-P6-R1-B-08 (có tiền lệ adaptation-engine ngoài barrel — hygiene C7)
+- **Fix:** re-export đủ 15 tên + type. Kiểm chứng: tsc + import-smoke R2/R3.
+
+### BUG2-108 · C·P4 (quan sát gated) — pending SAL chọn theo createdAt-desc có thể là row bị stats-gate chặn (statsJson.applied=false — row "đề xuất KHÔNG được áp" vẫn pending) → markSessionAdaptationOutcome đóng + updateQ reward cho strategy CHƯA TỪNG ÁP (chỉ khi ADAPTATION_STATS_GATE=on) — FB-P6-R1-B-10 (auditor B; hiện thân thành fix-chết BUG2-119)
+- **Fix:** findMany take-10 + lọc row applied=false khi chọn pending (đóng row áp thật cũ hơn nếu có). Kiểm chứng: test adaptation 2 case (blocked-mới-nhất → chọn row áp thật; toàn blocked → recorded=false) — sau khi BUG2-119 sửa predicate chết.
+
+### BUG2-109 · D·P4 — comment metrics-db "resolveArbiterVerdicts (cũ)… không đụng caller/test hiện có" ngụ ý còn caller — thực tế 0 caller nội bộ (caller duy nhất goal-loop đã chuyển sang Detailed từ chính commit P6) — FB-P6-R1-C-01
+- **Fix:** comment viết đúng ("giữ làm API ổn định additive-only"). Kiểm chứng: grep toàn repo của auditor C.
+
+### BUG2-110 · C·P4 — raw-path resolveArbiterVerdictsDetailed tách 2 lệnh $executeRaw rời: crash/giẽ giữa 2 lệnh để lại resolve nửa vời (confirmed đóng, refuted kẹt pending); row insert giữa 2 lệnh bỏ lại pending (lý thuyết — resolve chạy cuối run sau khi verdict-insert được await) — FB-P6-R1-C-02
+- **Fix:** gộp `db.$transaction([tx1, tx2])` array-form (tuần tự cùng commit/rollback). Kiểm chứng: test r80 pin (spy $transaction — đúng 1 lời gọi array-2, counts đúng, idempotent; bản 2-lệnh-rời → txCalls=0 FAIL) — qua DI client riêng tư sau 2 lần thiết kế sai (xem BUG2-120).
+
+### BUG2-111 · C·P4 — GHI NHẬN KHÔNG-FIX: complete ∉ {0,1} (NULL/số lạ) cũ CASE ELSE → \'refuted\', bản 2-nhánh WHERE mới để row KẸT PENDING — phân kỳ thật nhưng bất khả thi qua app (schema Boolean NOT NULL + mọi writer ghi 0/1 + Prisma validate; chỉ xảy ra sửa DB tay) — hành vi mới an toàn hơn (không bịa verdict từ dữ liệu rác) — FB-P6-R1-C-03
+- **Fix:** không cần — ghi nhận sổ. Kiểm chứng: harness bảng chân trị 12 phép của auditor C + đọc schema/writer.
+
+### BUG2-112 · D·P4 — comment agents-module "SelectItem không chứa được span trang trí nhiều" SAI SỰ THẬT (Radix SelectItem chấp nhận span con — CSS select.tsx:110 còn styled cho span) — FB-P6-R1-C-04 (cùng loại FB-Đợt6-R1-01)
+- **Fix:** comment viết đúng (text-marker là lựa chọn thiết kế giữ markup 1 dòng). Kiểm chứng: đọc ui/select.tsx:101-113.
+
+### BUG2-113 · C·P4 — badge Q UI: (a) q âm nhỏ → toFixed(2) hiển thị "-0.00"; (b) khi TOÀN BỘ model đã học có q âm, badge vẫn "Q đề xuất" cho model kém nhất — dễ hiểu nhầm "đề xuất" khi không có gì đáng đề xuất — FB-P6-R1-C-05
+- **Fix:** badge chỉ hiện khi q > 0 (cả agents-module + smolab); smolab thêm role="img" + aria-label (title chỉ tới được bằng hover — keyboard/screen reader không thấy). Kiểm chứng: đọc render + điều kiện; browser (bước live).
+
+### BUG2-114 · C·P4 — agents-module fetch models 1 lần lúc mount → badge Q stale suốt đời module khi fetch sau đó fail im lặng (smolab đã refetch mỗi lần mở dropdown) — FB-P6-R1-C-06
+- **Fix:** Select onOpenChange(open) → refetch (mirror pattern smolab; không mất scroll/focus — auditor R2 kiểm chứng). Kiểm chứng: đọc code + browser.
+
+### BUG2-115 · C·P2 — FIX B-10 VÒNG R1 LÀ PREDICATE CHẾT: statsJson là cột String? (JSON.stringify text) nên `typeof p.statsJson === \'object\'` KHÔNG BAO GIỜ true → filter không tác dụng, hành vi y hệt bản trước fix — B-10 vẫn sống trên đường gated thật (ADAPTATION_STATS_GATE=on trong pm2 env) — FB-P6-R2-01 (auditor R2 tái lập LIVE trên throwaway DB: 2 row blocked-mới + applied-cũ → hàm vẫn chọn row blocked, trả toStrategy=reduce_scope)
+- **Fix:** dùng lại isNotAppliedStatsJson (single-source với reader evidence gate đợt 6 — JSON.parse chuỗi, null/hỏng = "đã áp" fail-open đầy đủ) — export từ adaptation-stats + dynamic import. Kiểm chứng: test adaptation pin 2 case (đúng 1 lỗi của cả 2 lần viết sai — predicate chết + findFirst-cũ); live-đường gated sẽ thấy sau restart.
+
+### BUG2-116 · D·P3 — 7 fix R1 ngoài q-table KHÔNG test regression nào pin (B-01/B-10/B-04/B-03/B-07/A-09/C-02 — C5 5/5 tiền lệ FB-Đợt7-R4; chính lỗ hổng này để predicate chết BUG2-115 sống sót vòng R1) — FB-P6-R2-02
+- **Fix:** +16 test (adaptation-engine 4 + r79 H1-H6 12; vòng R3/R4 bổ sung r80 + sửa H3/H4 sai-kỳ-vọng). Kiểm chứng: gate 990 → 1007; bảng fix→pin của R3/R4 (pin mạnh 15, ◐ gián tiếp 3 được phán duyệt: B-05 catalog-invariant, B-03 contract round-trip, B-07 wiring-const; comment-only không cần pin).
+
+### BUG2-117 · D·P4 — JSDoc applyAdaptationToSession thiếu tham số 5 routingStateKey (đã thêm hàm + interface nhưng doc bỏ quên) — FB-P6-R2-03
+- **Fix:** JSDoc đủ param 5 + ngữ nghĩa trả lại trong outcome. Kiểm chứng: đọc doc vs signature.
+
+### BUG2-118 · C·P4 — chuỗi updateQ không timeout tầng app: 1 link treo vĩnh viễn (nếu Prisma socket-timeout không kick) → toàn bộ learning side-channel đóng băng + hàng đợi tích luỹ — FB-P6-R2-04 (hàng rào thật: Prisma socket ~5s — chính là lỗi quan sát được vòng R1; đây là belt-and-suspenders)
+- **Fix:** updateQStep bọc Promise.race timeout 20s + clearTimeout finally + console.warn đường timeout (R3-02 bổ sung log — JSDoc nói "fail-open log" nhưng bản đầu không có log nào). Kiểm chứng: auditor R3 replica Bun (reject ✓ chuỗi tiếp tục ✓ 0 unhandledRejection ✓ timer clear 2/2).
+
+### BUG2-119 · D·P3 — fix C-02 ($transaction gộp) KHÔNG test pin nào — revert về 2 lệnh rời vẫn PASS 100% gate (mục thứ 8 trong danh sách R2-02 nhưng bị bỏ qua khi fix) — FB-P6-R3-01
+- **Fix:** DI param client (additive — mọi caller giữ 3 tham số) + file r80 PrismaClient riêng tư bọc Proxy test-local (arbiterVerdict→undefined ép raw-path; $transaction→spy). Kiểm chứng: r80 PASS (txCalls=1 array-2; idempotent); R4 phân tích revert → FAIL. Hai lần thiết kế sai trước đó (H7-v1: mutate db-dùng-chung → nhiễm lan r76/r77 vì bun test 1 process + mock.module cho r79 cầm Proxy chung; H7-v2/r80-v1: defineProperty trên PrismaClient-thật-là-Proxy có descriptor own-data GIẢ value=undefined — probe: desc truthy nhưng value undefined, đọc trực tiếp mới ra function) — ghi làm bài học hạ tầng test.
+
+### BUG2-120 · D·P4 — JSDoc updateQStep (vòng R2-04 fix) ghi "timeout reject → fail-open log" nhưng đường timeout KHÔNG có log nào (chỉ đường DB-error trong lớp trong có warn) — FB-P6-R3-02
+- **Fix:** catch race → console.warn đủ ngữ cảnh (stateKey/actionKey + "chuỗi tiếp tục, work nền có thể hoàn tất trễ"). Kiểm chứng: đọc code + R4 xác nhận.
+
+### BUG2-121 · D·P4 — barrel learning/index.ts thiếu 2 tên mới cùng vòng fix: parseRuntimeModelTau + RUNTIME_MODEL_TAU_FLOOR (13/15 tên) — FB-P6-R3-03
+- **Fix:** export đủ 15 tên + type. Kiểm chứng: R4 đối chiếu 16/16 export thật + tsc EXIT 0.
+
+### GHI NHẬN ĐẶC BIỆT FB-P6 (R1→R4)
+- **Sai-kỳ-vọng phía người-rà (+20 — chuỗi tới lần 16):** điều phối tự bắt 2 khi viết regression (H4: 0.5 KHÔNG > 0.5; H3: kỳ vọng maxNext=0 nhưng chuỗi tuần tự cho mỗi update đọc Q vừa ghi — giá trị đúng 0.956179 khớp số đo độc lập của auditor) · auditor A 6 (modulo bias, underflow blocked-argmax, fall-through float, τ-JSDoc, comment B2, create-race) · auditor B 2 (chấm tay S4e quên γ·maxNext; cấu hình probe tier sai) · auditor C 4 (nhánh cũ delegate, đường provider=zen, cache heuristic, degenerate NULL) · auditor R2 3 (softmax NaN, assertion wraparound, giả định Prisma Json object) · auditor R3 3 (export runPipeline, barrel cam kết tên, đọc predicate đảo) · R4 0.
+- **Phát hiện bị bác sau chấm chéo: 0/40 đề xuất** (12+9+6 R1 + 4 R2 + 3 R3 + trọng số phán quyết) — 34 nhận + 6 residual phán ghi-nhận/◐-chấp-thuận (findFirstMock dead — R2 #3, 3 pin ◐ R3, qEntryCount telemetry, C-03 bất khả thi).
+- **Bài học hạ tầng test mới:** (1) bun test 1 process dùng chung — mock.module '@/lib/db' khiến file import sau cầm Proxy mock; KHÔNG mutate property trên db dùng chung; (2) PrismaClient là Proxy với getOwnPropertyDescriptor own-data GIẢ (value undefined) — defineProperty/spy property trên client KHÔNG ổn định; pin bằng client riêng + Proxy-wrap test-local; (3) $transaction tương tác trên SQLite giữ lock — truyền nhiễm timeout sang test khác; tuần tự hoá in-process là giải pháp đúng cho deployment 1-process.

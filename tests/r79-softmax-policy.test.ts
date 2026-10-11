@@ -22,7 +22,7 @@
  * trong B.
  */
 
-import { beforeAll, describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { randomUUID } from 'crypto'
 
 import {
@@ -35,8 +35,10 @@ import {
   updateQ,
   getQAdvice,
   getTopQAdvice,
+  qEntryCount,
   Q_LEARNING_ALPHA,
   Q_LEARNING_GAMMA,
+  parseRuntimeModelTau,
 } from '@/lib/learning/q-table'
 import { resolveArbiterVerdictsDetailed } from '@/lib/metrics-db'
 import { markSessionAdaptationOutcome } from '@/lib/learning/adaptation-engine'
@@ -109,10 +111,13 @@ describe('B. QEntry DB — updateQ/getQAdvice/getTopQAdvice', () => {
   })
 
   test('reward −1 kéo Q xuống; getTopQAdvice sắp theo Q giảm dần chỉ visits>0', async () => {
-    await updateQ(stateKey, 'model-bad', -1, stateKey) // → −0.1
+    // FB-P6-R1-A-05 (sửa comment sai): maxNext gồm model-x Q=0.199 (đã học ở test
+    // trên) → Q(model-bad) = 0 + 0.1×(−1 + 0.9×0.199 − 0) = −0.08209 (KHÔNG phải
+    // −0.1 như comment cũ) — comment cũ sai sẽ dẫn người sửa test sau này nhầm.
+    await updateQ(stateKey, 'model-bad', -1, stateKey) // → −0.08209 (maxNext=0.199)
     const top = await getTopQAdvice(stateKey, 5)
     expect(top.length).toBeGreaterThanOrEqual(2)
-    expect(top[0].action).toBe('model-x') // Q≈0.199 > model-bad −0.1
+    expect(top[0].action).toBe('model-x') // Q≈0.199 > model-bad −0.08209
     expect(top[top.length - 1].action).toBe('model-bad')
     // sắp giảm dần
     for (let i = 1; i < top.length; i++) expect(top[i - 1].q).toBeGreaterThanOrEqual(top[i].q)
@@ -286,5 +291,180 @@ describe('G. qStateKey — quy ước mode-${routingMode}-tier-${tier}', () => {
   test('agentRuntimeStateKey ổn định qua lời gọi (goal-loop đọc/ghi cùng key)', () => {
     expect(agentRuntimeStateKey()).toBe('mode-agent-tier-1')
     expect(agentRuntimeStateKey()).toBe(agentRuntimeStateKey())
+  })
+})
+
+// ==================== H. REGRESSION FB-P6-R1 (fixbug đợt 8/P6 — vòng R1) ====================
+// Mỗi test pin MỘT phát hiện đã fix: lỗi cũ phải HẾT, hành vi mới phải đúng.
+
+describe('H1. FB-P6-R1-A-01 — maxNextQ là MAX THUẦN (không floor tại 0)', () => {
+  test('state kế TOÀN entry âm → maxNext âm (bản trước floor 0 → học chậm ~10×)', async () => {
+    const s = `test-fbp6-a01-${randomUUID().slice(0, 8)}`
+    // Gieo state kế toàn âm: model-bad r=−1 ×2 → bản PURE: −0.1 → −0.199
+    await updateQ(s, 'bad', -1, s)
+    let advice = await getQAdvice(s, ['bad'])
+    expect(advice[0].q).toBeCloseTo(-0.1, 10) // 0 + 0.1×(−1 + 0.9×0 − 0)
+    await updateQ(s, 'bad', -1, s)
+    advice = await getQAdvice(s, ['bad'])
+    // PURE max: maxNext = −0.1 → −0.1 + 0.1×(−1 + 0.9×(−0.1) + 0.1) = −0.199
+    // (bản floor-0 cũ: maxNext=0 → −0.19 — sai công thức spec §P6-M2)
+    expect(advice[0].q).toBeCloseTo(-0.199, 10)
+    // 15 lần −1 liên tiếp → chuẩn thuần tiến về −1 (đã chạm clamp ~lần 10)
+    for (let i = 0; i < 13; i++) await updateQ(s, 'bad', -1, s)
+    advice = await getQAdvice(s, ['bad'])
+    expect(advice[0].q).toBeLessThanOrEqual(-0.99) // floor-0 cũ dừng −0.794
+  })
+
+  test('chuỗi 15 update −1 khớp mô phỏng công thức thuần độc lập', async () => {
+    const s = `test-fbp6-a01b-${randomUUID().slice(0, 8)}`
+    let q = 0
+    for (let i = 0; i < 15; i++) {
+      // mô phỏng độc lập: max_a' Q(s,·) = q hiện tại (entry duy nhất của s)
+      q = qLearningUpdate(q, -1, q)
+      await updateQ(s, 'm', -1, s)
+    }
+    const advice = await getQAdvice(s, ['m'])
+    expect(advice[0].q).toBeCloseTo(q, 10) // DB khớp mô phỏng thuần 100%
+  })
+})
+
+describe('H2. FB-P6-R1-A-02 — seed phân bố đều sau avalanche (chống cluster chu kỳ)', () => {
+  test('500 session ngẫu nhiên × 20 chu kỳ uniform-4 → mean distinct model ≥ 3.5 (bản cũ ≈1.99)', async () => {
+    const models = ['space-bunny-free', 'big-pickle', 'mimo-v2.6-flash-free', 'ling-3.1-flash-free']
+    const probs = softmaxPolicy(models.map(() => 0), 0.5)
+    let sumDistinct = 0
+    let sessions1Model = 0
+    const N = 500
+    for (let sess = 0; sess < N; sess++) {
+      const sid = `fbp6-sess-${sess}-${randomUUID().slice(0, 8)}`
+      const picks = new Set<string>()
+      for (let cycle = 0; cycle < 20; cycle++) {
+        const idx = pickIndexBySeed(probs, deterministicSeed(sid, String(cycle)))
+        picks.add(models[idx])
+      }
+      sumDistinct += picks.size
+      if (picks.size === 1) sessions1Model++
+    }
+    const mean = sumDistinct / N
+    // Uniform thật kỳ vọng ~3.99; FNV-trần cũ đo được ≈1.99. Ngưỡng 3.5 chặt
+    // nhưng an toàn với avalanche (xác suất rơi dưới ~0 với 500 mẫu).
+    expect(mean).toBeGreaterThanOrEqual(3.5)
+    // Bản cũ 16-19% session chỉ đụng 1 model — avalanche phải gần 0 (cho phép
+    // tối đa 1/500 ~ nhiễu thống luận của xác suất 4×(1/4)^20≈3.7e-12)
+    expect(sessions1Model).toBeLessThanOrEqual(1)
+  })
+
+  test('avalanche giữ tính tất định — cùng input vẫn cùng seed/khác input khác seed', () => {
+    expect(deterministicSeed('s', '0')).toBe(deterministicSeed('s', '0'))
+    expect(deterministicSeed('s', '0')).not.toBe(deterministicSeed('s', '1'))
+    // Cấu trúc cấp số cộng ±FNV-prime của bản cũ đã phá vỡ: 2 seed liền kề
+    // không còn chênh nhau đúng 16777619
+    const d0 = deterministicSeed('s', '0')
+    const d1 = deterministicSeed('s', '1')
+    const diff = Math.abs(d0 - d1)
+    expect(diff).not.toBe(16777619)
+  })
+})
+
+describe('H3. FB-P6-R1-A-03 — updateQ nguyên atom (10 update song song không mất)', () => {
+  test('10 updateQ // cung (state,action) → qValue theo tuần tự (bản cũ chỉ 1/10 ăn nhập)', async () => {
+    // Sai-kỳ-vọng người-rà lần 16 (FB-P6): kỳ vọng cũ mô phỏng maxNext=0 —
+    // sai, vì chuỗi tuần tự cho mỗi update ĐỌC Q vừa ghi (state có 1 entry
+    // → maxNext = Q hiện tại). Công thức đúng: q ← qLearningUpdate(q, 1, q)
+    // — giá trị khớp số đo độc lập của auditor (10 lượt = 0.956179).
+    const s2 = `test-fbp6-a03b-${randomUUID().slice(0, 8)}`
+    await Promise.all(Array.from({ length: 10 }, () => updateQ(s2, 'race-model', 1, s2)))
+    const advice = await getQAdvice(s2, ['race-model'])
+    expect(advice[0].visits).toBe(10) // KHÔNG mất update nào (bản cũ 10 lượt chỉ 1 ăn nhập qValue)
+    let seqQ = 0
+    for (let i = 0; i < 10; i++) seqQ = qLearningUpdate(seqQ, 1, seqQ)
+    expect(advice[0].q).toBeCloseTo(seqQ, 6) // ≈0.9562 — 10/10 update ăn nhập
+  })
+})
+
+describe('H4. FB-P6-R1-A-08 — softmax argmax bị chặn không kéo max xuống', () => {
+  test('blocked-argmax gap lớn: xác suất sống không underflow về 0', () => {
+    // argmax bị chặn (w=0), 2 ứng viên sống cách xa — bản trước max tính trên
+    // TOÀN BỘ score (kể cả bị chặn) → exp(0−maxToànBộ) underflow → [0,0,0]
+    const probs = softmaxPolicy([1000, 0, 0], 0.5, [0, 1, 1])
+    expect(probs[0]).toBe(0) // bị chặn
+    // Sai-kỳ-vọng người-rà lần 15 (FB-P6): kỳ vọng cũ ">0.5" — thực tế 2 ứng
+    // viên sống đồng điểm nên chính xác 0.5/0.5 (0.5 KHÔNG > 0.5). Chấm tay:
+    // scaled [2000,0,0] → alive [-∞,0,0] → max 0 → exps [0,1,1] → [0, .5, .5]
+    expect(probs[1]).toBeCloseTo(0.5, 12)
+    expect(probs[2]).toBeCloseTo(0.5, 12)
+    expect(probs.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 12)
+  })
+})
+
+describe('H5. FB-P6-R1-A-06 — getTopQAdvice clamp limit + filter visits + qEntryCount', () => {
+  test('limit 0 → 1 entry; limit 100 → 20; NaN limit → default 5 không throw', async () => {
+    const s = `test-fbp6-a06-${randomUUID().slice(0, 8)}`
+    // gieo 25 entry visits>0
+    for (let i = 0; i < 25; i++) await updateQ(s, `m-${String(i).padStart(2, '0')}`, 1, s)
+    const one = await getTopQAdvice(s, 0)
+    expect(one.length).toBe(1)
+    const twenty = await getTopQAdvice(s, 100)
+    expect(twenty.length).toBe(20)
+    const nan = await getTopQAdvice(s, Number.NaN)
+    expect(nan.length).toBe(5) // default — không Prisma throw (fail-open giữ nguyên)
+  })
+
+  test('qEntryCount đếm đúng entries + tổng visits', async () => {
+    const s = `test-fbp6-a06b-${randomUUID().slice(0, 8)}`
+    await updateQ(s, 'a', 1, s)
+    await updateQ(s, 'a', 1, s)
+    await updateQ(s, 'b', 1, s)
+    const before = await qEntryCount()
+    expect(before.entries).toBeGreaterThanOrEqual(2) // toàn bảng (có thể dính test khác)
+    // kiểm tra tỉ lệ: state này có đúng 2 entry / 3 visits
+    const advice = await getQAdvice(s, ['a', 'b'])
+    expect(advice.find(x => x.action === 'a')!.visits).toBe(2)
+    expect(advice.find(x => x.action === 'b')!.visits).toBe(1)
+  })
+})
+
+describe('H6. FB-P6-R2 — regression vòng R2 (fix R1 sinh lỗi mới đã sửa)', () => {
+  test('FB-P6-R1-A-09: seed âm/NaN/∞ → -1 (caller fallback đường cũ)', () => {
+    const probs = [0.5, 0.5]
+    expect(pickIndexBySeed(probs, -1)).toBe(-1)
+    expect(pickIndexBySeed(probs, Number.NaN)).toBe(-1)
+    expect(pickIndexBySeed(probs, Number.POSITIVE_INFINITY)).toBe(-1)
+    expect(pickIndexBySeed(probs, 12345)).toBeGreaterThanOrEqual(0) // seed hợp lệ vẫn chạy
+  })
+
+  test('FB-P6-R1-B-05 (catalog invariant): mọi model zen khai báo caps coding=true ∧ reasoning=true — model thiếu caps sẽ bị whitelist loại (không lọt âm thầm)', async () => {
+    const { PROVIDER_MODELS } = await import('@/lib/agent-constants')
+    const zen = PROVIDER_MODELS.zen ?? []
+    expect(zen.length).toBeGreaterThanOrEqual(5) // catalog hiện có đủ model để softmax có nghĩa
+    // Invariant whitelist llm.ts dựa vào: thiếu caps = LOẠI — test chặn catalog
+    // thêm model thiếu caps mà không ai nhận ra (đổi âm thầm tập ứng viên softmax)
+    const withCaps = zen.filter(m => m.caps?.coding === true && m.caps?.reasoning === true)
+    expect(withCaps.length).toBe(zen.length)
+  })
+
+  test('FB-P6-R1-B-03 (contract checkpoint): Map modelsUsed ↔ Array<[string, number>] round-trip qua JSON', () => {
+    // Hình dạng persist của buildCheckpoint + restore `new Map(resumeState?.modelsUsed ?? [])`
+    const m = new Map<string, number>([['space-bunny-free', 5], ['big-pickle', 2]])
+    const serialized = JSON.parse(JSON.stringify(Array.from(m.entries()))) // qua JSON như checkpoint DB
+    const restored = new Map<string, number>(serialized as Array<[string, number]>)
+    expect(restored.get('space-bunny-free')).toBe(5)
+    expect(restored.get('big-pickle')).toBe(2)
+    expect(restored.size).toBe(2)
+    // Checkpoint cũ không có field (optional) → Map rỗng (hành vi cũ nguyên vẹn)
+    const oldCheckpoint: { modelsUsed?: Array<[string, number]> } = {}
+    const fromOld = new Map<string, number>(oldCheckpoint.modelsUsed ?? [])
+    expect(fromOld.size).toBe(0)
+  })
+
+  test('FB-P6-R1-B-07: parseRuntimeModelTau — "0" là giá trị hợp lệ qua floor 0.05 (bản cũ rơi default 0.5)', () => {
+    expect(parseRuntimeModelTau('0')).toBeCloseTo(0.05, 12) // τ=0 chủ ý → floor
+    expect(parseRuntimeModelTau('0.01')).toBeCloseTo(0.05, 12)
+    expect(parseRuntimeModelTau('0.5')).toBeCloseTo(0.5, 12)
+    expect(parseRuntimeModelTau('2')).toBeCloseTo(2, 12)
+    expect(parseRuntimeModelTau('')).toBeCloseTo(0.5, 12) // rỗng → default
+    expect(parseRuntimeModelTau(undefined)).toBeCloseTo(0.5, 12)
+    expect(parseRuntimeModelTau('abc')).toBeCloseTo(0.5, 12) // NaN → default
+    expect(parseRuntimeModelTau('-3')).toBeCloseTo(0.05, 12) // âm → floor
   })
 })

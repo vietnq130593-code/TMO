@@ -20,6 +20,7 @@
 
 import { callLLMForAgent, type LLMResult, type LLMTool } from '@/lib/llm'
 import { db } from '@/lib/db'
+import { qStateKey } from '@/lib/learning/q-table'
 import { getAgentTools } from './agents'
 import { getAgentPrompt, buildToolSchemasSection } from './prompts'
 import { getToolDefinitions } from './tool-executor'
@@ -779,7 +780,8 @@ async function detectAndPersistFailurePattern(
   sessionId: string,
   stepId: string,
   errorMessage: string,
-  metrics?: { totalTokensUsed: number; totalTokensBudgeted: number; totalTimeSpent: number }
+  metrics?: { totalTokensUsed: number; totalTokensBudgeted: number; totalTimeSpent: number },
+  routingStateKey?: string,
 ): Promise<void> {
   const { detectFailurePattern, recommendAdaptation, persistFailurePattern, persistAdaptationLog } = await import('@/lib/learning')
   try {
@@ -893,7 +895,7 @@ async function detectAndPersistFailurePattern(
         gateResult = await evaluateAdaptationGateForPair(fromStrategyForGate, decision.recommendedStrategy)
         if (gateResult) statsGate = gateResult.decision
       } catch { /* fail-open — gate lỗi/không có tiền sử → áp dụng như cũ */ }
-      const applied = applyAdaptationToSession(sessionId, decision, stepId, statsGate)
+      const applied = applyAdaptationToSession(sessionId, decision, stepId, statsGate, routingStateKey)
       // statsJson ghi SAU apply để `applied` phản ánh đúng việc có merge thật
       // không (FB-Đợt6-R2-01: row bị chặn phải đánh dấu applied=false để không
       // ô nhiễm evidence của các lần gate sau)
@@ -1672,7 +1674,10 @@ async function runPipeline(
           totalTokensUsed: typeof agentResult.tokensUsed === 'number' ? agentResult.tokensUsed : 0,
           totalTokensBudgeted: displayTokenBudget,
           totalTimeSpent: agentResult.duration,
-        }
+        },
+        // FB-P6-R1-B-04: routing context lúc APPLY — SAL đóng ở run khác routing
+        // (resume/request mới) thì reward W1 vẫn ghi đúng bucket mode-tier này
+        qStateKey(routingDecision.mode, routingDecision.tier),
       ).catch((pErr) => {
         console.warn('[Workflow] Layer 9 P1.3 pattern persistence failed (non-fatal):', pErr instanceof Error ? pErr.message : String(pErr))
       })
@@ -1729,7 +1734,10 @@ async function runPipeline(
           // Fire-and-forget fail-open — learning side-channel không chặn step.
           if (outcome.recorded && outcome.toStrategy) {
             const { updateQ, qStateKey } = await import('@/lib/learning/q-table')
-            const stateKey = qStateKey(routingDecision.mode, routingDecision.tier)
+            // FB-P6-R1-B-04: bucket mode-tier lúc APPLY (outcome.routingStateKey)
+            // — SAL đóng ở run khác routing vẫn ghi đúng context từng chọn strategy;
+            // fallback routing hiện tại cho state cũ chưa có field.
+            const stateKey = outcome.routingStateKey ?? qStateKey(routingDecision.mode, routingDecision.tier)
             const reward = outcome.successful ? 1 : -1
             void updateQ(stateKey, outcome.toStrategy, reward, stateKey)
             console.log(`[Workflow] P6-M1 Q-learn (SAL close): ${stateKey} × ${outcome.toStrategy} reward=${reward}`)

@@ -734,16 +734,21 @@ export function AgentsModule() {
               <label className="text-[10px] font-medium text-stone-300">
                 Model <span className="text-red-400">*</span>
               </label>
-              <Select value={formModel} onValueChange={setFormModel}>
+              {/* FB-P6-R1-C-06: refetch khi mở dropdown — badge Q không stale
+                  suốt đời module (mirror pattern refetch-on-open của smolab) */}
+              <Select value={formModel} onValueChange={setFormModel} onOpenChange={(open) => { if (open) void fetchModels() }}>
                 <SelectTrigger className="w-full h-8 text-[10px] rounded-lg border-fuchsia-400/35 text-stone-200 bg-slate-950/50 focus:border-fuchsia-500/50">
                   <SelectValue placeholder="Model" />
                 </SelectTrigger>
                 <SelectContent className="bg-slate-950/95 border-fuchsia-400/35">
                   {currentProviderModels.map((m: any) => {
-                    // P6-M4 — badge "Q đề xuất" trên model top-Q (SelectItem không
-                    // chứa được span trang trí nhiều — dùng marker text + title)
+                    // P6-M4 — badge "Q đề xuất" trên model top-Q (FB-P6-R1-C-04 sửa
+                    // comment: SelectItem CHẤP NHẬN span con — text-marker là lựa chọn
+                    // thiết kế giữ markup 1 dòng, không phải giới hạn Radix).
+                    // FB-P6-R1-C-05: chỉ đề xuất khi Q thực sự DƯƠNG (q>0) —
+                    // "phần thưởng trung bình cao nhất" trong nhóm toàn âm là gây hiểu nhầm.
                     const qTop = qAdvice?.top?.[0]
-                    const isQRecommended = qTop && qTop.model === m.id && qTop.visits > 0
+                    const isQRecommended = qTop && qTop.model === m.id && qTop.visits > 0 && qTop.q > 0
                     return (
                     <SelectItem
                       key={m.id}

@@ -57,6 +57,12 @@ export interface SessionAdaptationState {
   /** ROUND-38 fix F8 — đã từng emit omega_escalation cho user trong session
    * này chưa? (true = các step sau KHÔNG lặp lại cảnh báo — chống spam 6 lần/pipeline) */
   escalationEmittedAt?: string
+  /** P6-M1 W1 (FB-P6-R1-B-04): stateKey `mode-${mode}-tier-${tier}` lúc
+   *  APPLY — SAL có thể được đóng ở run khác routing (resume/request mới
+   *  → routing mới); reward phải ghi đúng bucket context từng CHỌN strategy,
+   *  không phải bucket context lúc đóng. Undefined (caller cũ không truyền)
+   *  → caller đóng dùng routing hiện tại như trước. */
+  routingStateKey?: string
 }
 
 /** Delta ngưỡng KB toàn process (tighten_refusal_threshold — Red Team P4) */
@@ -122,12 +128,17 @@ const STRATEGY_DIRECTIVES: Record<string, string> = {
  * KHÔNG merge directives (log adaptation-blocked-by-stats — điểm đổi hành
  * vi duy nhất của phase). Gate OFF (mặc định) → log-only, apply như cũ;
  * không truyền → hành vi cũ nguyên vẹn tuyệt đối.
+ * `routingStateKey` (P6-M1 W1, tùy chọn — FB-P6-R1-B-04): stateKey
+ * mode-tier của routing workflow lúc apply; markSessionAdaptationOutcome
+ * trả lại trong outcome để updateQ ghi đúng bucket context từng chọn
+ * strategy (SAL đóng ở run khác routing vẫn credit đúng).
  */
 export function applyAdaptationToSession(
   sessionId: string,
   decision: AdaptationDecision,
   sourceStepId?: string,
   statsGate?: AdaptationStatsDecision | null,
+  routingStateKey?: string,
 ): SessionAdaptationState | null {
   try {
     if (!sessionId || !decision?.shouldAdapt) return null
@@ -176,6 +187,8 @@ export function applyAdaptationToSession(
       updatedAt: new Date().toISOString(),
       applyCount: (prev?.applyCount ?? 0) + 1,
       escalationEmittedAt: prev?.escalationEmittedAt,
+      // FB-P6-R1-B-04: giữ bucket routing context lúc APPLY cho W1 close
+      routingStateKey: routingStateKey ?? prev?.routingStateKey,
     }
     // ROUND-38 fix F9: delete-then-set để refresh insertion order — Map.set trên
     // key cũ GIỮ nguyên vị trí cũ → eviction FIFO cap-200 có thể tống session
@@ -312,33 +325,54 @@ export async function markSessionAdaptationOutcome(
   sessionId: string,
   successful: boolean,
   stepId?: string,
-): Promise<{ recorded: boolean; toStrategy?: string; successful?: boolean }> {
+): Promise<{ recorded: boolean; toStrategy?: string; successful?: boolean; routingStateKey?: string }> {
   try {
     const state = getStore().get(sessionId)
     if (!state) return { recorded: false }
     // Step khác với step từng fail → kết quả này không phải bằng chứng
     if (stepId && state.sourceStepId && stepId !== state.sourceStepId) return { recorded: false }
 
-    // Persist outcome vào StrategyAdaptationLog (lấy log pending mới nhất của session)
+    // Persist outcome vào StrategyAdaptationLog (pending mới nhất KHÔNG bị
+    // gate chặn của session). FB-P6-R1-B-10: bỏ row statsJson.applied=false —
+    // row đó là "đề xuất KHÔNG được áp" (ADAPTATION_STATS_GATE=on), outcome
+    // của step kế không phải bằng chứng cho nó (mirror FB-Đợt6-R2-01);
+    // Prisma SQLite không filter được JSON path → lấy 10 pending mới nhất
+    // rồi lọc tại JS (store chỉ giữ 1 apply cho session nên >10 pending
+    // bị chặn liên tiếp là bất thường).
     const { db } = await import('@/lib/db')
-    const pending = await db.strategyAdaptationLog.findFirst({
+    const { isNotAppliedStatsJson } = await import('@/lib/learning/adaptation-stats')
+    const pendings = await db.strategyAdaptationLog.findMany({
       where: { sessionId, successful: null },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, toStrategy: true },
-    }).catch(() => null)
+      take: 10,
+      select: { id: true, toStrategy: true, statsJson: true },
+    }).catch(() => [])
+    // FB-P6-R2-01: statsJson là cột String? (JSON.stringify text) — bản R1
+    // dùng typeof === 'object' là predicate CHẾT (không bao giờ true) → fix
+    // B-10 không tác dụng. Dùng lại isNotAppliedStatsJson (single-source với
+    // reader evidence gate đợt 6): null/JSON-hỏng = ĐÃ áp (fail-open đầy đủ).
+    const pending = pendings.find(p => !isNotAppliedStatsJson(p.statsJson)) ?? null
+    // FB-P6-R1-B-01: recorded=true CHỈ khi SAL row được đóng THẬT SỰ — bản
+    // trước `recorded = pending !== null` nên update fail (SQLite busy tạm)
+    // vẫn báo recorded=true → updateQ học trên bằng chứng không tồn tại ledger.
+    let updated = false
     if (pending) {
-      await db.strategyAdaptationLog.update({
-        where: { id: pending.id },
-        data: { successful },
-      }).catch(() => { /* fail-open */ })
+      updated = await db.strategyAdaptationLog
+        .update({
+          where: { id: pending.id },
+          data: { successful },
+        })
+        .then(() => true)
+        .catch(() => false) // fail-open — nhưng KHÔNG báo recorded
     }
 
     // P6-M1 (BLUEPRINT-STATS-LEARNING §P6-M1, mục #15): trả đủ bộ cho caller
     // wiring credit assignment — (toStrategy, successful) là actionKey + reward
-    // của updateQ phía workflow-engine (stateKey mode-tier caller biết routing).
+    // của updateQ phía workflow-engine; routingStateKey là bucket mode-tier
+    // lúc APPLY (FB-P6-R1-B-04 — cross-run close ghi đúng context chọn strategy).
     // Trước đây trả void nên caller KHÔNG thể biết SAL có thật sự được đóng hay
     // không (stepId lệnh → bỏ qua âm thầm) — Q bảng sẽ ghi nhầm bằng chứng rác.
-    const recorded = pending !== null
+    const recorded = updated && pending !== null
 
     // Thành công → resolve FailurePattern của session (hint không lặp lại)
     if (successful) {
@@ -352,7 +386,9 @@ export async function markSessionAdaptationOutcome(
     } else {
       console.log(`[Adaptation] Session ${sessionId.slice(0, 12)} — adaptation chưa khỏi (lần ${state.applyCount}): giữ directives cho step sau`)
     }
-    return recorded ? { recorded: true, toStrategy: pending.toStrategy, successful } : { recorded: false }
+    return recorded && pending
+      ? { recorded: true, toStrategy: pending.toStrategy, successful, routingStateKey: state.routingStateKey }
+      : { recorded: false }
   } catch (err) {
     console.warn('[Adaptation] markSessionAdaptationOutcome failed (fail-open):', err instanceof Error ? err.message : String(err))
     return { recorded: false }

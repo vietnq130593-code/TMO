@@ -2475,7 +2475,7 @@ model QEntry {
   actionKey String
   /// Q(s,a) — khởi điểm 0, cập nhật Q ← Q + α[r + γ·max Q(s',·) − Q] (α=0.1, γ=0.9)
   qValue    Float    @default(0)
-  /// Số lần update — softmin dữ liệu (advisory chỉ tin visits ≥ 10, §P6-M4)
+  /// Số lần update — tín hiệu độ tin của dữ liệu (advisory chỉ tin visits ≥ 10, §P6-M4; FB-P6-R1-A-11 sửa comment mơ hồ "softmin")
   visits    Int      @default(0)
   updatedAt DateTime @updatedAt
 

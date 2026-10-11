@@ -164,6 +164,11 @@ export interface GoalLoopCheckpoint {
    *  Streak ≥2 → chu kỳ kế bị ép chuyển sang GĐ2 (triển khai) ngay.
    *  (Optional → 0.) */
   planningOnlyStreak?: number
+  /** P6-M1 W2 (FB-P6-R1-B-03): bảng đếm model THỰC TẾ của CẢ run (model → số
+   *  call chính) — persist qua checkpoint để run resumed tính dominantModel
+   *  trên đủ chu kỳ (bản trước Map mới sau restart → reward chỉ theo đoạn cuối).
+   *  (Optional → Map rỗng như cũ.) */
+  modelsUsed?: Array<[string, number]>
   /** Epoch ms lúc checkpoint được ghi */
   savedAt: number
 }

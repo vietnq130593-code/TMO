@@ -18,10 +18,14 @@ import { PrismaClient } from '@prisma/client'
 const updateMock = mock(() => Promise.resolve({}))
 const updateManyMock = mock(() => Promise.resolve({ count: 0 }))
 const findFirstMock = mock(() => Promise.resolve(null))
+// FB-P6-R1-B-01/B-10: markSessionAdaptationOutcome giờ chọn pending qua
+// findMany (lọc statsJson.applied=false tại JS) — mock phải theo kịp interface
+const findManyMock = mock(() => Promise.resolve([] as Array<{ id: string; toStrategy: string; statsJson: string | null }>))
 mock.module('@/lib/db', () => {
   const mockedModels: Record<string, unknown> = {
     strategyAdaptationLog: {
       findFirst: findFirstMock,
+      findMany: findManyMock,
       update: updateMock,
     },
     failurePattern: {
@@ -151,6 +155,58 @@ describe('AdaptationEngine (V2a)', () => {
       expect(__peekSessionAdaptation('sess-k')).toBeNull()
       expect(getAdaptationDirectiveBlock('sess-k')).toBe('')
       expect(updateManyMock).toHaveBeenCalled() // failurePattern resolved
+    })
+
+    // ==================== FB-P6 (fixbug P6) — regression R1/R2 ====================
+
+    it('FB-P6-R1-B-01: SAL update THẤT BẠI → recorded=false (không updateQ bằng chứng rác)', async () => {
+      applyAdaptationToSession('sess-fb6-b01', decision('change_fix_approach'), 'G2-A-code')
+      // findMany trả pending thật + update ném lỗi (SQLite busy mô phỏng)
+      findManyMock.mockImplementationOnce(() =>
+        Promise.resolve([{ id: 'sal-1', toStrategy: 'change_fix_approach', statsJson: null }]),
+      )
+      updateMock.mockImplementationOnce(() => Promise.reject(new Error('mock SQLITE_BUSY')))
+      const outcome = await markSessionAdaptationOutcome('sess-fb6-b01', true, 'G2-A-code')
+      expect(outcome.recorded).toBe(false) // bản cũ: recorded=true trên ledger chưa ghi
+      expect(outcome.toStrategy).toBeUndefined()
+    })
+
+    it('FB-P6-R2-01: pending MỚI NHẤT bị gate chặn (statsJson.applied=false dạng CHUỖI) → chọn row áp thật cũ hơn', async () => {
+      applyAdaptationToSession('sess-fb6-b10', decision('compress_context'), 'G2-A-code')
+      // statsJson là cột String? — JSON.stringify text (bản R1 dùng typeof==='object' là predicate CHẾT)
+      findManyMock.mockImplementationOnce(() =>
+        Promise.resolve([
+          { id: 'sal-blocked', toStrategy: 'reduce_scope', statsJson: JSON.stringify({ applied: false }) },
+          { id: 'sal-applied', toStrategy: 'compress_context', statsJson: null },
+        ]),
+      )
+      updateMock.mockImplementationOnce(() => Promise.resolve({}))
+      const outcome = await markSessionAdaptationOutcome('sess-fb6-b10', true, 'G2-A-code')
+      expect(outcome.recorded).toBe(true)
+      expect(outcome.toStrategy).toBe('compress_context') // KHÔNG phải 'reduce_scope' (chưa từng áp)
+      expect(updateMock).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'sal-applied' } }))
+    })
+
+    it('FB-P6-R2-01b: TOÀN BỘ pending bị chặn → recorded=false, KHÔNG update SAL nào', async () => {
+      applyAdaptationToSession('sess-fb6-b10b', decision('read_lint_rules_first'), 'G2-A-code')
+      updateMock.mockClear()
+      findManyMock.mockImplementationOnce(() =>
+        Promise.resolve([{ id: 'sal-x', toStrategy: 'reduce_scope', statsJson: '{"applied":false}' }]),
+      )
+      const outcome = await markSessionAdaptationOutcome('sess-fb6-b10b', false, 'G2-A-code')
+      expect(outcome.recorded).toBe(false)
+      expect(updateMock).not.toHaveBeenCalled()
+    })
+
+    it('FB-P6-R1-B-04: outcome.routingStateKey = bucket mode-tier lúc APPLY (không phải lúc đóng)', async () => {
+      applyAdaptationToSession('sess-fb6-b04', decision('change_fix_approach'), 'G2-A-code', undefined, 'mode-B-tier-2')
+      findManyMock.mockImplementationOnce(() =>
+        Promise.resolve([{ id: 'sal-rt', toStrategy: 'change_fix_approach', statsJson: null }]),
+      )
+      updateMock.mockImplementationOnce(() => Promise.resolve({}))
+      const outcome = await markSessionAdaptationOutcome('sess-fb6-b04', true, 'G2-A-code')
+      expect(outcome.recorded).toBe(true)
+      expect(outcome.routingStateKey).toBe('mode-B-tier-2') // bucket context CHỌN strategy
     })
 
     it('step KHÁC với sourceStepId → bỏ qua (chống resolve nhầm)', async () => {

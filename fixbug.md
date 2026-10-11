@@ -174,9 +174,26 @@
 - Sai kì vọng phía người rà (lần 12-13): 2 (kì vọng biên lt 0.01 viết NGƯỢC — spec là so sánh ngặt: 0.01 VI PHẠM; tính tay implicit-PCA quên số hạng cov khi giả sử trục chính) — cả hai tự bắt bằng test/harness TRƯỚC khi kết luận; auditor R5 tự bắt thêm 2 "FAIL" hóa ra là giới hạn tol dùng chung bản cũ (không phải lỗi mới). **Phát hiện bị bác sau chấm chéo: 0/20 — lần đầu tiên trong 7+ đợt FB toàn bộ phát hiện auditor đều đứng vững.**
 - Live sau fix: PM2 restart sạch; health healthy; graph-explore PCA đường implicit sống (Bun 2-node var [1,0] đúng + hub MacKay 168-node pcaAvailable=true xy đủ 168 entry); collections-health pilot exists=false không đỏ đúng; docs list đường fresh phát duplicate_of; browser badge "trùng với …" + nhãn "Bản trùng" hiển thị (mobile 390px không tràn), 0 lỗi console/page.
 
-### TỔNG KẾT LŨY KẾ 7 ĐỢT + 1 MỞ LẠI (FB-P0 → FB-ĐỢT7 + FB-ĐỢT7-R4/R5)
+### ĐỢT FB-P6 — scope P6-đợt8 RL-lite (commit b139706: 11 file +851 — q-table.ts MỚI, llm.ts softmax, goal-loop W2/PLAN-hint, workflow-engine W1, adaptation-engine contract, metrics-db detailed, route advice, 2 UI badge, schema QEntry, r79 27 test) — 2026-10-11 — KHÉP KẾT SAU 4 VÒNG
 
-- **49 phát hiện** thu nhận qua giao thức (30 vòng 1-3 các đợt + 19 vòng R4/R5 đợt 7 mở lại) — 48 fix ngay + 1 (BUG2-043) chốt bằng user decision; **100% có entry Bug_v2.md** (BUG2-039..087).
-- Mọi đợt khép đúng nhịp (vòng hậu-fix luôn 0 phát hiện mới) — đợt 7 mở lại dùng 3 vòng gốc + 2 vòng bổ sung = 5, chạm đúng trần §5.1 của ràng buộc an toàn và dừng đúng điểm (0 phát hiện mới ở vòng cuối).
-- **35+2 phép sai-kỳ-vọng-phía-người-rà** ghi nhận (FB-P0: 11 · FB-P1: 1 · Đợt3: 1 · Đợt4: 6 · Đợt5: 3 · Đợt6: 7 · Đợt7: 3 + 1 sai-kỳ-vọng SPEC (MRL ≥98%) · R4/R5: 2 + 2 tự-bắt của auditor R5) — chuỗi tái bản tới "lần 13", xác nhận giá trị quy tắc chấm chéo 3 phía (C2).
-- Gate kiểm thử tăng đều: **644 → 671 → 683 → 722 → 802 → 842 → 931 → 963** test (mỗi fix kèm regression — không nợ xác minh; từ R4 không còn khoảng trống C5: cả 5 fix inline lẫn 18 fix mới đều có pin).
+| Vòng | Phát hiện mới | Xác minh |
+|---|---|---|
+| R1 | **27** (3 auditor độc lập song song A/B/C: 12+9+6 — đỉnh: maxNextQ floor-0 lệch công thức spec · seed FNV tuần tự cấp-số-cộng phá spread chống-cascade · updateQ lost-update · recorded trên ledger chưa ghi) — chấm chéo điều phối: 26 nhận + C-03 ghi nhận không-fix (bất khả thi qua app) | Fix toàn bộ + 8 regression (r79 H1-H5) → gate 998/998 |
+| R2 | **4** (mắt tươi toàn diff fix: **fix B-10 vòng R1 là PREDICATE CHẾT** — statsJson String? khiến typeof==='object' không bao giờ true, tái lập live throwaway DB → fix không tác dụng; C5: 7 fix không pin; JSDoc param 5; chuỗi không timeout) | Fix toàn bộ + 16 test (adaptation 4 + r79 H6 12) → gate 1006/1006 |
+| R3 | **3** (kiểm chứng fix R2 + quét C1-C8: C-02 vẫn thiếu pin · timeout path im lặng trái JSDoc · barrel thiếu 2 export) | Fix + r80 (2 lần thiết kế test sai — mutate db-dùng-chung nhiễm lan r76/r77; defineProperty trên PrismaClient-là-Proxy có descriptor giả → cuối cùng DI client riêng + Proxy-wrap test-local) → gate **1007/1007** |
+| R4 | **0** → KHÉP KẾT | Kiểm chứng 3 fix R3 đạt + quét trọn vẹn C1-C8 → 0 phát hiện mới |
+
+- Phát hiện: **BUG2-088..121 (34 entry — 0 P0/P1 · 3 P2 · 7 P3 · 24 P4)** — mọi mức có entry đầy đủ.
+- Sai-kỳ-vọng phía người rà (lần 14→16): **+20** (điều phối 2 · A 6 · B 2 · C 4 · R2 3 · R3 3 · R4 0) — đỉnh: kỳ vọng test H4 "0.5 > 0.5", kỳ vọng H3 quên chuỗi tuần tự đọc Q vừa ghi (giá trị đúng 0.956179 khớp số đo độc lập của auditor).
+- Phát hiện bị bác sau chấm chéo: **0** — 2 chuỗi liên tiếp (đợt 7 R4/R5 + đợt 8/P6) toàn bộ phát hiện auditor đứng vững.
+- Gate: **990 → 1007** (+17: r79 H1-H6 12 + adaptation 4 + r80 1); tsc + lint + imports PASS mọi vòng.
+- Điểm nóng auditor B giải definitively: `result.model` callLLMForAgent = model THỰC sau softmax/failover trên mọi nhánh thành công (server-echo HTTP / actualModel CLI / failover chain) — credit assignment W2 ghi đúng người.
+- Bài học hạ tầng test mới (ghi BUG2-119): bun-test 1 process dùng chung mock.module → không mutate db dùng chung; PrismaClient là Proxy với descriptor own-data GIẢ → pin bằng client riêng + Proxy-wrap; $transaction tương tác SQLite giữ lock nhiễm lan → tuần tự hoá in-process cho deployment 1-process.
+- Live sau khép: xem biên bản commit (pm2 restart nạp code mới + gỡ RUNTIME_MODEL_POLICY=softmax về OFF đúng điểm dừng #5 — phát hiện drift trạng thái pm2 env của auditor R3, process cũ chạy code trước-fix với flag ON trái cam kết worklog đợt 8).
+
+### TỔNG KẾT LŨY KẾ 8 ĐỢT + 1 MỞ LẠI (FB-P0 → FB-ĐỢT7 + FB-ĐỢT7-R4/R5 + FB-P6)
+
+- **83 phát hiện** thu nhận qua giao thức (49 các đợt trước + 34 FB-P6: R1 3-auditor 27 → chấm chéo 26 nhận + 1 không-fix · R2 4 · R3 3 · R4 0) — 82 fix ngay + 1 (BUG2-043) chốt bằng user decision + 1 ghi-nhận-không-fix (BUG2-111 bất khả thi qua app); **100% có entry Bug_v2.md** (BUG2-039..121).
+- Mọi đợt khép đúng nhịp (vòng hậu-fix luôn 0 phát hiện mới) — FB-P6 khép ở vòng R4 (4 vòng, dưới trần §5.1).
+- **Sai-kỳ-vọng-phía-người-rà lũy ≈57** (35+2 các đợt trước · FB-P6 +20: điều phối 2 · auditor A 6 · B 2 · C 4 · R2 3 · R3 3 · R4 0) — chuỗi tái bản tới "lần 16", xác nhận giá trị quy tắc chấm chéo 3 phía (C2).
+- Gate kiểm thử tăng đều: **644 → 671 → 683 → 722 → 802 → 842 → 931 → 963 → 1007** test (mỗi fix kèm regression — không nợ xác minh; FB-P6 lấp nốt C5 trên 7 fix vòng R1 từng trống pin nhờ vòng R2 bắt predicate chết sống sót chính vì thế).
