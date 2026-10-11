@@ -197,3 +197,16 @@
 - Mọi đợt khép đúng nhịp (vòng hậu-fix luôn 0 phát hiện mới) — FB-P6 khép ở vòng R4 (4 vòng, dưới trần §5.1).
 - **Sai-kỳ-vọng-phía-người-rà lũy ≈57** (35+2 các đợt trước · FB-P6 +20: điều phối 2 · auditor A 6 · B 2 · C 4 · R2 3 · R3 3 · R4 0) — chuỗi tái bản tới "lần 16", xác nhận giá trị quy tắc chấm chéo 3 phía (C2).
 - Gate kiểm thử tăng đều: **644 → 671 → 683 → 722 → 802 → 842 → 931 → 963 → 1007** test (mỗi fix kèm regression — không nợ xác minh; FB-P6 lấp nốt C5 trên 7 fix vòng R1 từng trống pin nhờ vòng R2 bắt predicate chết sống sót chính vì thế).
+
+### ĐỢT FB-P1 (NEURAL-ARCH) — scope 4 file P1 review task-98 (neural-layout.ts MỚI thuần + neural-architecture-section.tsx sửa [zoom toolbar + cỡ chữ + edge highlight + focus ring] + learning/index.ts barrel + tests/r82 MỚI) — 2026-10-11 — KHÉP KẾT SAU 2 VÒNG
+
+| Vòng | Phát hiện mới | Xác minh |
+|---|---|---|
+| R1 | **5** (0 P0-P3 · 5 P4 — auditor độc lập subagent: harness 191 phép tự dựng + probe pixel browser + sampler bezier hằng số mới/cũ; 11 nghi vấn tự bác bằng phương pháp thứ ba) — đỉnh: nút "Thu nhỏ" từ fit PHÓNG TO (neo 1 thay vì tỉ lệ render thật) · 5 cạnh bezier đâm xuyên viewBox (pre-existing được P1 khuếch nhẹ) · 3 nhánh phòng thủ + biên clamp không pin | Fix toàn bộ 5 (BUG2-122..126) + 10 test regression r82 (nhóm 6: zoomStepFrom 4 + phòng thủ 4 + sampler bezier độc lập 2) → gate 1062 → **1072 PASS** |
+| R2 | **0** (mắt tươi toàn scope kể cả fix R1: C1 spec khớp 100% · C2 sampler/zoom/layout literal 1732×568 · C3 degenerate đã pin đủ · C4-C7 gate PASS · C8 git status 4 file sạch) → KHÉP KẾT | LIVE browser: fit 1180px → Thu nhỏ → **1039px (0.6) thu nhỏ thật** (trước-fix 1558.8px phóng to); 100% = 1732px 1:1 (font nhỏ nhất 8.5px, title 12.5px); edge highlight 4 active/33 dim bám node chọn; focus ring dashed amber; persist localStorage qua reload; mobile lần đầu fit; 0 lỗi console/page |
+
+- Phát hiện: FB-P1-R1-01..05 → **BUG2-122..126** (2 doc/hygiene D·P4+G·P4 · 3 C·P4 chức năng). Chi tiết tại Bug_v2.md.
+- Sai-kỳ-vọng phía người-rà (lần 17): +2 (chính người viết test r82 bản đầu — margin HEADER_H tùy ý + kỳ vọng clamp ∞=MAX; code đúng cả 2, ghi rõ trong test).
+- Phát hiện bị bác sau chấm chéo: 0/5 (chuỗi thứ 3 liên tiếp toàn bộ phát hiện đứng vững).
+- Gate: **1041 → 1072** (+31: r82 21 gốc + 10 regression FB-P1-R1); tsc + lint + imports PASS mọi vòng.
+- Ngoài phạm vi bàn đợt sau: svg role="img" mâu thuẫn node tương tác (ARIA) · SMIL reduced-motion (backlog P2/P3 task-98).

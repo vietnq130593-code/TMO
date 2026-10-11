@@ -15,7 +15,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   Network, RefreshCw, RotateCcw, Loader2, Settings2, ArrowRight,
-  TriangleAlert, Wrench, Database, Zap,
+  TriangleAlert, Wrench, Database, Zap, ZoomIn, ZoomOut, Maximize2,
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -28,7 +28,13 @@ import {
 } from '@/components/ui/alert-dialog'
 import { toast } from 'sonner'
 import type { HealthResponse } from '@/components/app-shared'
-import type { NeuralGraph, NeuralNode, TuningStateEntry } from '@/lib/learning/neural-types'
+import type { NeuralGraph, TuningStateEntry } from '@/lib/learning/neural-types'
+import {
+  NEURAL_GEO, NEURAL_FONTS, NEURAL_ZOOM,
+  computeNeuralLayout, edgeVisual, edgeIsActive,
+  clampNeuralZoom, neuralSvgWidth, neuralZoomLabel, zoomStepFrom,
+  type NeuralZoom,
+} from '@/lib/learning/neural-layout'
 
 // ==================== API CONTRACT ====================
 
@@ -46,15 +52,10 @@ interface NeuralApiResponse {
 
 const POLL_NEURAL_MS = 15_000
 
-// ==================== LAYOUT CONSTANTS (auto-layout từ graph spec) ====================
-
-const LAYER_W = 200
-const NODE_W = 196
-const NODE_H = 64
-const NODE_GAP = 18
-const LAYER_GAP = 92
-const PAD = 26
-const HEADER_H = 46
+// ==================== MÀU NHẤN (accent theo lớp) ====================
+// P1 (2026-10-11): hình học (NEURAL_GEO) + cỡ chữ (NEURAL_FONTS) + style cạnh
+// (NEURAL_EDGE_KINDS/edgeVisual) + thu phóng (NEURAL_ZOOM) tách sang
+// neural-layout.ts (module thuần — pin test r82).
 
 const ACCENTS: Record<string, { stroke: string; bright: string; text: string; badge: string }> = {
   cyan:    { stroke: 'rgba(34,211,238,0.45)',  bright: 'rgba(34,211,238,0.95)',  text: 'text-cyan-400',    badge: 'bg-cyan-950/60 text-cyan-400 border-cyan-500/40' },
@@ -63,13 +64,6 @@ const ACCENTS: Record<string, { stroke: string; bright: string; text: string; ba
   violet:  { stroke: 'rgba(167,139,250,0.45)', bright: 'rgba(167,139,250,0.95)', text: 'text-violet-400',  badge: 'bg-violet-950/60 text-violet-400 border-violet-500/40' },
   fuchsia: { stroke: 'rgba(232,121,249,0.45)', bright: 'rgba(232,121,249,0.95)', text: 'text-fuchsia-400', badge: 'bg-fuchsia-950/60 text-fuchsia-400 border-fuchsia-500/40' },
   emerald: { stroke: 'rgba(52,211,153,0.45)',  bright: 'rgba(52,211,153,0.95)',  text: 'text-emerald-400', badge: 'bg-emerald-950/60 text-emerald-400 border-emerald-500/40' },
-}
-
-const EDGE_KINDS: Record<string, { stroke: string; width: number; dash: string; className?: string; dot?: string; marker: string }> = {
-  data:     { stroke: 'rgba(34,211,238,0.55)', width: 1.6, dash: '6 4', className: 'na-edge-data', dot: 'rgba(34,211,238,0.95)', marker: 'na-arrow-cyan' },
-  reward:   { stroke: 'rgba(251,191,36,0.7)',  width: 1.8, dash: '3 4', className: 'na-edge-reward', dot: 'rgba(251,191,36,0.95)', marker: 'na-arrow-amber' },
-  feedback: { stroke: 'rgba(232,121,249,0.55)', width: 1.4, dash: '7 5', marker: 'na-arrow-fuchsia' },
-  read:     { stroke: 'rgba(168,162,158,0.35)', width: 1,   dash: '2 4', marker: 'na-arrow-stone' },
 }
 
 // ==================== HELPERS ====================
@@ -125,6 +119,16 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>('q-table')
   const [savingKeys, setSavingKeys] = useState<Set<string>>(new Set())
   const inspectorRef = useRef<HTMLDivElement | null>(null)
+  // FB-P1-R1-03: cần đo tỉ lệ render thật của chế độ fit (renderedWidth /
+  // viewBoxWidth) để nút ± bước từ tỉ lệ HIỆN TẠI — "Thu nhỏ" thu nhỏ thật.
+  const svgRef = useRef<SVGSVGElement | null>(null)
+  // P1-1: thu phóng đồ thị ('fit' | 0.6..1.6) — mặc định 1 (= 100%: cỡ chữ
+  // thiết kế 1:1, đọc được ngay; mobile lần đầu vào mặc định 'fit').
+  const [zoom, setZoom] = useState<NeuralZoom>(1)
+  const [zoomRestored, setZoomRestored] = useState(false)
+  // P1-3: node đang nhận focus bàn phím — vẽ ring đứt nét thay cho outline
+  // (focus:outline-none trên <g> SVG không có chỉ báo mặc định tin được).
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null)
 
   // Không setState đồng bộ ở đầu hàm (react-hooks/set-state-in-effect):
   // mọi setState đều nằm SAU await — an toàn gọi từ effect. Cờ loading bật
@@ -160,6 +164,44 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
     }, POLL_NEURAL_MS)
     return () => clearInterval(t)
   }, [fetchData])
+
+  // P1-1: restore zoom 1 lần SAU mount (localStorage > mobile-fit > 100%)
+  // rồi mới bật persist — tránh ghi đè lựa chọn user bằng mặc định khởi tạo.
+  // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect —
+  // cùng pattern fetch phía trên)
+  useEffect(() => {
+    queueMicrotask(() => {
+      try {
+        const saved = localStorage.getItem('graphrag-neural-zoom')
+        if (saved === 'fit') setZoom('fit')
+        else if (saved !== null) {
+          const n = Number.parseFloat(saved)
+          if (Number.isFinite(n)) setZoom(clampNeuralZoom(n))
+        } else if (window.innerWidth < 1024) {
+          setZoom('fit') // mobile: mở đầu bằng tổng quan, chạm node để xem chi tiết
+        }
+      } catch { /* private mode — giữ mặc định */ }
+      setZoomRestored(true)
+    })
+  }, [])
+  useEffect(() => {
+    if (!zoomRestored) return
+    try { localStorage.setItem('graphrag-neural-zoom', zoom === 'fit' ? 'fit' : String(zoom)) } catch { /* bỏ qua */ }
+  }, [zoom, zoomRestored])
+
+  const zoomBy = useCallback((delta: number) => {
+    // FB-P1-R1-03: từ 'fit' neo theo tỉ lệ render thật (vd 1180/1732 ≈ 0.68)
+    // thay vì neo 1 — tránh "Thu nhỏ 10%" lại PHÓNG TO trên card hẹp
+    // (0.9 × 1732 = 1559px > 1180px fit). Svg chưa render → fallback 1.
+    let fitScale: number | null = null
+    const el = svgRef.current
+    if (el) {
+      const w = el.getBoundingClientRect().width
+      const vbW = el.viewBox?.baseVal.width ?? 0
+      if (w > 0 && vbW > 0) fitScale = w / vbW
+    }
+    setZoom(prev => zoomStepFrom(prev, fitScale, delta))
+  }, [])
 
   // ==================== TUNING ACTIONS ====================
 
@@ -216,52 +258,8 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
   const tuningByKey = useMemo(() => new Map(tuning.map(t => [t.key, t])), [tuning])
   const paramsChanged = tuning.filter(t => t.source === 'store').length
 
-  const layout = useMemo(() => {
-    if (!graph) return null
-    const nodes: Array<NeuralNode & { x: number; y: number }> = []
-    const nodeById = new Map<string, NeuralNode & { x: number; y: number }>()
-    const layerIndexOf = new Map(graph.layers.map(l => [l.id, l]))
-    const perLayerCount = new Map<string, number>()
-    for (const n of graph.nodes) {
-      const layer = layerIndexOf.get(n.layer)
-      if (!layer) continue
-      const col = layer.index - 1
-      const idx = perLayerCount.get(n.layer) ?? 0
-      perLayerCount.set(n.layer, idx + 1)
-      const x = PAD + col * (LAYER_W + LAYER_GAP)
-      const y = HEADER_H + idx * (NODE_H + NODE_GAP)
-      const placed = { ...n, x, y }
-      nodes.push(placed)
-      nodeById.set(n.id, placed)
-    }
-    const maxRows = Math.max(1, ...Array.from(perLayerCount.values()))
-    const width = PAD * 2 + 6 * LAYER_W + 5 * LAYER_GAP
-    const height = HEADER_H + maxRows * (NODE_H + NODE_GAP) + PAD
-
-    // Cạnh: bezier ngang từ mép phải source → mép trái target; cặp 2 chiều
-    // (vd llm-call ↔ softmax-policy) tự lệch dọc để không đè nhau.
-    const pairSeen = new Map<string, number>()
-    const edges = graph.edges
-      .map(e => {
-        const from = nodeById.get(e.from)
-        const to = nodeById.get(e.to)
-        if (!from || !to) return null
-        const pairKey = e.from < e.to ? `${e.from}\u0000${e.to}` : `${e.to}\u0000${e.from}`
-        const seen = pairSeen.get(pairKey) ?? 0
-        pairSeen.set(pairKey, seen + 1)
-        const yOffset = seen === 0 ? 0 : (seen % 2 === 1 ? 16 : -16)
-        const x1 = from.x + NODE_W
-        const y1 = from.y + NODE_H / 2 + yOffset
-        const x2 = to.x
-        const y2 = to.y + NODE_H / 2 + yOffset
-        // Kéo dài điểm kiểm theo hướng đi (lùi cũng được — bezier cong mượt)
-        const dx = Math.max(48, Math.abs(x2 - x1) * 0.45)
-        const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`
-        return { ...e, d, dotColor: EDGE_KINDS[e.kind].dot }
-      })
-      .filter((e): e is NonNullable<typeof e> => e !== null)
-    return { nodes, nodeById, edges, width, height }
-  }, [graph])
+  // Auto-layout (đời từ inline sang module thuần neural-layout — pin test r82)
+  const layout = useMemo(() => (graph ? computeNeuralLayout(graph) : null), [graph])
 
   const selectedNode = layout?.nodeById.get(selectedNodeId ?? '') ?? null
   const selectedLive = useMemo(() => {
@@ -329,10 +327,59 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                 </div>
               ) : layout ? (
                 <>
+                  {/* Thanh thu phóng (P1-1): 100% = cỡ chữ thiết kế 1:1 (đọc được
+                      ngay); Fit = ôm vừa khung (tổng quan nhanh, chữ nhỏ). */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2" role="group" aria-label="Thu phóng đồ thị">
+                    <p className="text-[10px] text-stone-500" aria-live="polite">
+                      {zoom === 'fit'
+                        ? 'Vừa khung — tổng quan nhanh (chữ nhỏ; chọn 100% để đọc chi tiết)'
+                        : `${neuralZoomLabel(zoom)} — cỡ chữ thiết kế; kéo ngang để xem hết 6 lớp`}
+                    </p>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="outline" size="sm"
+                        className="h-6 w-6 p-0 border-slate-700 text-stone-300"
+                        aria-label="Thu nhỏ 10%"
+                        disabled={zoom !== 'fit' && zoom <= NEURAL_ZOOM.MIN}
+                        onClick={() => zoomBy(-NEURAL_ZOOM.STEP)}
+                      >
+                        <ZoomOut className="h-3 w-3" />
+                      </Button>
+                      <Button
+                        variant="outline" size="sm"
+                        className={`h-6 px-2 text-[10px] tabular-nums border-slate-700 ${zoom === 1 ? 'text-emerald-300 border-emerald-500/60' : 'text-stone-300'}`}
+                        aria-pressed={zoom === 1}
+                        onClick={() => setZoom(1)}
+                      >
+                        100%
+                      </Button>
+                      <Button
+                        variant="outline" size="sm"
+                        className="h-6 w-6 p-0 border-slate-700 text-stone-300"
+                        aria-label="Phóng to 10%"
+                        disabled={zoom !== 'fit' && zoom >= NEURAL_ZOOM.MAX}
+                        onClick={() => zoomBy(NEURAL_ZOOM.STEP)}
+                      >
+                        <ZoomIn className="h-3 w-3" />
+                      </Button>
+                      <Button
+                        variant={zoom === 'fit' ? 'default' : 'outline'}
+                        size="sm"
+                        className={`h-6 px-2 text-[10px] ${zoom === 'fit' ? 'bg-emerald-600/80 hover:bg-emerald-600 text-white' : 'border-slate-700 text-stone-300'}`}
+                        aria-pressed={zoom === 'fit'}
+                        onClick={() => setZoom('fit')}
+                      >
+                        <Maximize2 className="h-3 w-3 mr-1" /> Vừa khung
+                      </Button>
+                    </div>
+                  </div>
                   <div className="overflow-x-auto pb-2">
                     <svg
+                      ref={svgRef}
                       viewBox={`0 0 ${layout.width} ${layout.height}`}
-                      style={{ minWidth: 1180, width: '100%', height: 'auto' }}
+                      style={zoom === 'fit'
+                        ? { minWidth: NEURAL_ZOOM.FIT_FLOOR_PX, width: '100%', height: 'auto' }
+                        : { width: neuralSvgWidth(layout.width, zoom), height: 'auto' }}
                       role="img"
                       aria-label="Sơ đồ kiến trúc 6 lớp của hệ thống TMO — chọn một nút để xem chi tiết và tinh chỉnh"
                     >
@@ -354,13 +401,13 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                       {/* Tiêu đề lớp */}
                       {graph!.layers.map(layer => {
                         const acc = ACCENTS[layer.accent] ?? ACCENTS.cyan
-                        const x = PAD + (layer.index - 1) * (LAYER_W + LAYER_GAP)
+                        const x = NEURAL_GEO.PAD + (layer.index - 1) * (NEURAL_GEO.LAYER_W + NEURAL_GEO.LAYER_GAP)
                         return (
                           <g key={layer.id}>
-                            <text x={x} y={PAD + 4} fontSize="10" fontWeight="700" className={acc.text} style={{ fontFamily: 'inherit' }}>
+                            <text x={x} y={NEURAL_GEO.PAD + 6} fontSize={NEURAL_FONTS.layerTitle} fontWeight="700" className={acc.text} style={{ fontFamily: 'inherit' }}>
                               LỚP {layer.index} · {layer.title.toUpperCase()}
                             </text>
-                            <text x={x} y={PAD + 16} fontSize="7.5" className="fill-stone-500" style={{ fontFamily: 'inherit' }}>
+                            <text x={x} y={NEURAL_GEO.PAD + 19} fontSize={NEURAL_FONTS.layerSub} className="fill-stone-500" style={{ fontFamily: 'inherit' }}>
                               {layer.subtitle}
                             </text>
                           </g>
@@ -369,19 +416,24 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
 
                       {/* Cạnh (dưới node) */}
                       {layout.edges.map(e => {
-                        const k = EDGE_KINDS[e.kind] ?? EDGE_KINDS.read
+                        // P1-2: cạnh nối với node đang chọn → sáng + dày + hạt
+                        // to; còn lại mờ NEURAL_EDGE_DIM_OPACITY để dòng chảy
+                        // của node đang xem nổi bật hẳn (opacity trên <g> kéo
+                        // theo cả marker arrowhead).
+                        const active = edgeIsActive(e, selectedNodeId)
+                        const k = edgeVisual(e.kind, active)
                         return (
-                          <g key={e.id}>
+                          <g key={e.id} opacity={k.opacity}>
                             <title>{`${e.label} (${e.kind})`}</title>
                             <path
                               d={e.d} fill="none"
-                              stroke={k.stroke} strokeWidth={k.width}
+                              stroke={k.stroke} strokeWidth={k.strokeWidth}
                               strokeDasharray={k.dash}
                               className={k.className}
                               markerEnd={`url(#${k.marker})`}
                             />
                             {k.dot && (
-                              <circle r="2.6" fill={k.dot}>
+                              <circle r={k.dotRadius} fill={k.dot}>
                                 <animateMotion dur="3s" repeatCount="indefinite" path={e.d} />
                               </circle>
                             )}
@@ -394,6 +446,9 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                         const layer = graph!.layers.find(l => l.id === node.layer)
                         const acc = ACCENTS[layer?.accent ?? 'cyan'] ?? ACCENTS.cyan
                         const isSel = node.id === selectedNodeId
+                        // P1-3: focus ring riêng (đứt nét amber) — ẩn khi đã chọn
+                        // (selection ring màu accent đã hiện sẵn)
+                        const isFocused = node.id === focusedNodeId && !isSel
                         const params = tuningByNode.get(node.id) ?? []
                         const live = [...(data?.live?.[node.id] ?? []), ...healthLiveFor(health ?? null, node.id)]
                         const liveText = live[0] ? `${live[0].label}: ${live[0].value}` : ''
@@ -403,33 +458,39 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                             transform={`translate(${node.x}, ${node.y})`}
                             onClick={() => selectNode(node.id)}
                             onKeyDown={ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); selectNode(node.id) } }}
+                            onFocus={() => setFocusedNodeId(node.id)}
+                            onBlur={() => setFocusedNodeId(prev => (prev === node.id ? null : prev))}
                             tabIndex={0}
                             role="button"
                             aria-label={`${node.title} — ${node.subtitle}${params.length > 0 ? `, ${params.length} tham số tinh chỉnh` : ''}`}
                             className="cursor-pointer transition-opacity hover:opacity-85 focus:outline-none"
                           >
                             <title>{`${node.title} — ${node.subtitle}`}</title>
+                            {isFocused && (
+                              <rect x="-4" y="-4" width={NEURAL_GEO.NODE_W + 8} height={NEURAL_GEO.NODE_H + 8} rx="12"
+                                fill="none" stroke="rgba(251,191,36,0.9)" strokeWidth="1.5" strokeDasharray="5 4" />
+                            )}
                             {isSel && (
-                              <rect x="-3" y="-3" width={NODE_W + 6} height={NODE_H + 6} rx="12"
+                              <rect x="-3" y="-3" width={NEURAL_GEO.NODE_W + 6} height={NEURAL_GEO.NODE_H + 6} rx="12"
                                 fill="none" stroke={acc.bright} strokeOpacity="0.25" strokeWidth="6" />
                             )}
                             <rect
-                              width={NODE_W} height={NODE_H} rx="10"
-                              fill="rgba(2,6,23,0.88)"
+                              width={NEURAL_GEO.NODE_W} height={NEURAL_GEO.NODE_H} rx="10"
+                              fill="rgba(2,6,23,0.92)"
                               stroke={isSel ? acc.bright : acc.stroke}
                               strokeWidth={isSel ? 2 : 1.2}
                             />
-                            <text x="10" y="21" fontSize="11" fontWeight="600" className="fill-stone-100" style={{ fontFamily: 'inherit' }}>
-                              {node.title.length > 24 ? `${node.title.slice(0, 23)}…` : node.title}
+                            <text x="10" y="26" fontSize={NEURAL_FONTS.title} fontWeight="600" className="fill-stone-100" style={{ fontFamily: 'inherit' }}>
+                              {node.title.length > 25 ? `${node.title.slice(0, 24)}…` : node.title}
                             </text>
-                            <text x="10" y="35" fontSize="8" className="fill-stone-400" style={{ fontFamily: 'inherit' }}>
+                            <text x="10" y="42" fontSize={NEURAL_FONTS.subtitle} className="fill-stone-400" style={{ fontFamily: 'inherit' }}>
                               {node.subtitle.length > 40 ? `${node.subtitle.slice(0, 39)}…` : node.subtitle}
                             </text>
-                            <text x="10" y="52" fontSize="7.5" className={acc.text} style={{ fontFamily: 'inherit' }}>
-                              {liveText.length > 34 ? `${liveText.slice(0, 33)}…` : liveText}
+                            <text x="10" y="66" fontSize={NEURAL_FONTS.live} className={acc.text} style={{ fontFamily: 'inherit' }}>
+                              {liveText.length > 38 ? `${liveText.slice(0, 37)}…` : liveText}
                             </text>
                             {params.length > 0 && (
-                              <text x={NODE_W - 10} y="52" fontSize="7.5" textAnchor="end" className="fill-amber-400" style={{ fontFamily: 'inherit' }}>
+                              <text x={NEURAL_GEO.NODE_W - 10} y="66" fontSize={NEURAL_FONTS.gear} textAnchor="end" className="fill-amber-400" style={{ fontFamily: 'inherit' }}>
                                 ⚙ {params.length}
                               </text>
                             )}
@@ -458,6 +519,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                       truy vấn đọc
                     </span>
                     <span className="text-amber-400">⚙ = có ô nhập tinh chỉnh</span>
+                    <span>cạnh sáng = dòng chảy qua nút đang chọn</span>
                   </div>
                 </>
               ) : null}

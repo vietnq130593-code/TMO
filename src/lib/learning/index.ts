@@ -95,3 +95,29 @@ export type {
   NeuralGraph,
 } from './neural-types'
 export { TUNING_SPECS, NEURAL_GRAPH, NEURAL_LAYERS, NEURAL_NODES, NEURAL_EDGES, getTuningSpec } from './neural-types'
+
+// Neural-layout (P1 review 2026-10-11 — hình học + cỡ chữ + style cạnh +
+// thu phóng đồ thị tab Kiến trúc Neural; module thuần chỉ phụ thuộc type
+// neural-types — client bundle + bun:test an toàn)
+export {
+  NEURAL_GEO,
+  NEURAL_FONTS,
+  NEURAL_FONT_FLOOR,
+  NEURAL_EDGE_KINDS,
+  NEURAL_EDGE_DIM_OPACITY,
+  NEURAL_EDGE_DOT_R,
+  NEURAL_ZOOM,
+  computeNeuralLayout,
+  edgeVisual,
+  edgeIsActive,
+  clampNeuralZoom,
+  neuralSvgWidth,
+  neuralZoomLabel,
+  zoomStepFrom,
+  type NeuralZoom,
+  type PlacedNode,
+  type LaidOutEdge,
+  type NeuralLayout,
+  type EdgeKindStyle,
+  type EdgeRenderStyle,
+} from './neural-layout'
