@@ -45,20 +45,23 @@ export const NEURAL_GEO = {
 /**
  * Cỡ chữ thiết kế (đơn vị viewBox). Quy ước: giá trị chính là px hiển thị
  * khi zoom 100% (render width = viewBox width). SÀN 8.5 — pin test r82.
+ * P3 (2026-10-11, chỉ thị user "chữ trong nhiều ô quá bé — tăng thêm 1px"):
+ * toàn bộ 6 mục +1px so với P1. Hình học NEURAL_GEO giữ nguyên (chữ vẫn
+ * nằm gọn NODE_H 80 — tính lại khoảng cách dòng ở component).
  */
 export const NEURAL_FONTS = {
-  /** Tiêu đề node (11 → 12.5) */
-  title: 12.5,
-  /** Dòng phụ đề node (8 → 9) */
-  subtitle: 9,
-  /** Dòng số liệu sống trong node (7.5 → 8.5) */
-  live: 8.5,
-  /** Con đếm ⚙ tham số góc phải node (7.5 → 8.5) */
-  gear: 8.5,
-  /** Tiêu đề cột lớp (10 → 11.5) */
-  layerTitle: 11.5,
-  /** Phụ đề cột lớp (7.5 → 8.5) */
-  layerSub: 8.5,
+  /** Tiêu đề node (P1 12.5 → P3 13.5) */
+  title: 13.5,
+  /** Dòng phụ đề node (P1 9 → P3 10) */
+  subtitle: 10,
+  /** Dòng số liệu sống trong node (P1 8.5 → P3 9.5) */
+  live: 9.5,
+  /** Con đếm ⚙ tham số góc phải node (P1 8.5 → P3 9.5) */
+  gear: 9.5,
+  /** Tiêu đề cột lớp (P1 11.5 → P3 12.5) */
+  layerTitle: 12.5,
+  /** Phụ đề cột lớp (P1 8.5 → P3 9.5) */
+  layerSub: 9.5,
 } as const
 
 /** Sàn cỡ chữ thiết kế — mọi mục NEURAL_FONTS phải ≥ sàn này (test pin). */

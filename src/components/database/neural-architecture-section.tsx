@@ -8,6 +8,14 @@
 // thuật toán + hàm số từng node (file:line) và Ô NHẬP TINH CHỈNH runtime
 // thật cho 13 hyperparameter (STORE > ENV > DEFAULT qua /api/neural-architecture).
 //
+// P3 (2026-10-11, chỉ thị user):
+//   B1. PAN — bấm giữ chuột + kéo nền đồ thị để di chuyển nội dung (vùng
+//       cuộn ngang vốn đã có, thêm drag-pan cho chuột; touch giữ cuộn native).
+//   B2. Cỡ chữ +1px toàn bộ ô/bảng (NEURAL_FONTS + mọi text-[Npx] trong tab)
+//       — "phần chữ trong nhiều ô và bảng quá bé".
+//   B3. ARIA — svg role="img" → role="group" (con node là role="button" tương
+//       tác — role=img biến con thành presentational, mâu thuẫn đã backlog từ P1).
+//
 // Tự poll 15s (fail-open giữ dữ liệu cũ); health (qdrant/neo4j/r2) nhận
 // qua prop từ parent (page.tsx poll 10s sẵn).
 // ========================================================================
@@ -190,6 +198,68 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
   // (focus:outline-none trên <g> SVG không có chỉ báo mặc định tin được).
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null)
 
+  // ==================== P3-B1: PAN (giữ chuột + kéo) ====================
+  // Vùng đồ thị vốn cuộn ngang được (overflow-x-auto) nhưng chỉ bằng thanh
+  // cuộn / touch — chuột không có affordance kéo. Thiết kế:
+  //   - pointerdown (chuột/pen, không phải touch) trên vùng cuộn → ghi điểm
+  //     xuất phát; window-listener pointermove kéo scrollLeft theo delta
+  //     (không dùng setPointerCapture — capture đổi đích click, dễ nuốt
+  //     click chọn node; window listener kéo được cả khi ra ngoài khung).
+  //   - Kéo >3px = "đã pan" → nuốt click ngay sau đó (setTimeout 0 dọn cờ
+  //     sau khi click nổ) — phân biệt kéo vs chọn node.
+  //   - Không tràn ngang → không khởi pan (kéo vô nghĩa, tránh nuốt selection).
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const justPannedRef = useRef(false)
+  const [panning, setPanning] = useState(false)
+  // FB-P3-R1-02: chỉ hiện affordance kéo (cursor-grab + chú giải) khi vùng
+  // cuộn THẬT SỰ tràn ngang — fit trên card rộng / zoom thấp không tràn thì
+  // kéo vô tác dụng, đừng cho cursor nói dối. Đo lại khi: layout đổi (svg
+  // width), zoom đổi, container đổi (viewport) — ResizeObserver theo dõi
+  // cả container lẫn <svg> con (width svg đổi theo zoom).
+  const [canPan, setCanPan] = useState(false)
+  // FB-P3-R1-01: dọn pan đang sống khi component unmount giữa lúc kéo.
+  const panTeardownRef = useRef<(() => void) | null>(null)
+  const onPanPointerDown = useCallback((ev: React.PointerEvent<HTMLDivElement>) => {
+    if (ev.pointerType === 'touch' || ev.button !== 0) return // touch: cuộn native
+    const el = scrollRef.current
+    if (!el || el.scrollWidth <= el.clientWidth + 1) return
+    const startX = ev.clientX
+    const startScrollLeft = el.scrollLeft
+    let moved = false
+    const onMove = (mv: PointerEvent) => {
+      // FB-P3-R1-01: chuột đã nhả mà pointerup không bao giờ tới (cửa sổ mất
+      // focus giữa lúc kéo — Alt+Tab, dialog OS) → buttons=0: tự dọn ngay,
+      // không để đồ thị bám theo chuột không bấm giữ.
+      if (mv.buttons === 0) { onUp(); return }
+      const dx = mv.clientX - startX
+      // FB-P3-R1-03a: chỉ bật trạng thái panning khi VƯỢT ngưỡng 3px —
+      // nhấn giữ chưa kéo chưa là "đang kéo" (cursor grabbing).
+      if (!moved && Math.abs(dx) > 3) { moved = true; setPanning(true) }
+      el.scrollLeft = startScrollLeft - dx
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      window.removeEventListener('blur', onUp)
+      panTeardownRef.current = null
+      setPanning(false)
+      if (moved) {
+        justPannedRef.current = true
+        setTimeout(() => { justPannedRef.current = false }, 0)
+      }
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    // FB-P3-R1-01: cửa sổ mất focus giữa lúc kéo → chốt pan (pointerup
+    // có thể không bao giờ tới trong tab nền).
+    window.addEventListener('blur', onUp)
+    panTeardownRef.current = onUp
+  }, [])
+  // FB-P3-R1-01: unmount giữa lúc kéo (đổi tab app) → dọn listener sống.
+  useEffect(() => () => { panTeardownRef.current?.() }, [])
+
   // Không setState đồng bộ ở đầu hàm (react-hooks/set-state-in-effect):
   // mọi setState đều nằm SAU await — an toàn gọi từ effect. Cờ loading bật
   // bởi event handler (nút Làm mới), không bật trong hàm.
@@ -347,6 +417,22 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
   // Auto-layout (đời từ inline sang module thuần neural-layout — pin test r82)
   const layout = useMemo(() => (graph ? computeNeuralLayout(graph) : null), [graph])
 
+  // FB-P3-R1-02: đo canPan SAU layout (dep layout?.width — phải nằm dưới
+  // useMemo layout để không TDZ). ResizeObserver theo dõi cả container
+  // (viewport đổi) lẫn <svg> con (width đổi theo zoom) → cursor-grab và
+  // chú giải kéo chỉ hiện khi thật sự tràn ngang.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const measure = () => { setCanPan(el.scrollWidth > el.clientWidth + 1) }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    const svg = el.firstElementChild
+    if (svg) ro.observe(svg)
+    return () => ro.disconnect()
+  }, [layout?.width, zoom])
+
   const selectedNode = layout?.nodeById.get(selectedNodeId ?? '') ?? null
   const selectedLive = useMemo(() => {
     if (!selectedNodeId) return []
@@ -357,7 +443,9 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
   // P2-M3: mobile (viewport < lg) → chọn node mở bottom-sheet inspector
   // (thay cuộn xuống inspector dưới đồ thị — below-the-fold); desktop giữ
   // inspector cột phải hiển thị thường trực, không cuộn.
+  // P3-B1: vừa pan xong (giữ+kéo >3px) → nuốt click này, không chọn node.
   const selectNode = useCallback((nodeId: string) => {
+    if (justPannedRef.current) return
     setSelectedNodeId(nodeId)
     if (!isDesktop) setSheetOpen(true)
   }, [isDesktop])
@@ -375,19 +463,19 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
           <h3 className="text-sm font-semibold tracking-tight text-stone-100 flex flex-wrap items-center gap-2">
             🧬 Kiến trúc Neural — toàn bộ mạng học của TMO
             {data && (
-              <Badge variant="outline" className="text-[9px] h-4 px-1.5 bg-emerald-950/60 text-emerald-400 border-emerald-500/40">
+              <Badge variant="outline" className="text-[10px] h-4 px-1.5 bg-emerald-950/60 text-emerald-400 border-emerald-500/40">
                 ● sống · {new Date(data.generatedAt).toLocaleTimeString('vi-VN')}
               </Badge>
             )}
           </h3>
-          <p className="text-[11px] text-stone-400">
+          <p className="text-[12px] text-stone-400">
             6 lớp × {graph?.nodes.length ?? '…'} nút × {graph?.edges.length ?? '…'} dòng chảy · {tuning.length} tham số tinh chỉnh runtime
             {paramsChanged > 0 && <span className="text-amber-400"> · {paramsChanged} đã bị chỉnh</span>}
           </p>
         </div>
         <Button
           variant="outline" size="sm"
-          className="h-7 text-[11px] border-emerald-500/40 text-emerald-300 hover:bg-emerald-950/40 hover:text-emerald-200"
+          className="h-7 text-[12px] border-emerald-500/40 text-emerald-300 hover:bg-emerald-950/40 hover:text-emerald-200"
           onClick={() => { setLoading(true); void fetchData() }} disabled={loading}
         >
           {loading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />} Làm mới
@@ -416,10 +504,10 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                   {/* Thanh thu phóng (P1-1): 100% = cỡ chữ thiết kế 1:1 (đọc được
                       ngay); Fit = ôm vừa khung (tổng quan nhanh, chữ nhỏ). */}
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-2" role="group" aria-label="Thu phóng đồ thị">
-                    <p className="text-[10px] text-stone-500" aria-live="polite">
+                    <p className="text-[11px] text-stone-500" aria-live="polite">
                       {zoom === 'fit'
                         ? 'Vừa khung — tổng quan nhanh (chữ nhỏ; chọn 100% để đọc chi tiết)'
-                        : `${neuralZoomLabel(zoom)} — cỡ chữ thiết kế; kéo ngang để xem hết 6 lớp`}
+                        : `${neuralZoomLabel(zoom)} — cỡ chữ thiết kế${canPan ? ' · giữ chuột + kéo để di chuyển / cuộn ngang xem hết 6 lớp' : ''}`}
                     </p>
                     <div className="flex items-center gap-1">
                       <Button
@@ -433,7 +521,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                       </Button>
                       <Button
                         variant="outline" size="sm"
-                        className={`h-6 px-2 text-[10px] tabular-nums border-slate-700 ${zoom === 1 ? 'text-emerald-300 border-emerald-500/60' : 'text-stone-300'}`}
+                        className={`h-6 px-2 text-[11px] tabular-nums border-slate-700 ${zoom === 1 ? 'text-emerald-300 border-emerald-500/60' : 'text-stone-300'}`}
                         aria-pressed={zoom === 1}
                         onClick={() => setZoom(1)}
                       >
@@ -451,7 +539,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                       <Button
                         variant={zoom === 'fit' ? 'default' : 'outline'}
                         size="sm"
-                        className={`h-6 px-2 text-[10px] ${zoom === 'fit' ? 'bg-emerald-600/80 hover:bg-emerald-600 text-white' : 'border-slate-700 text-stone-300'}`}
+                        className={`h-6 px-2 text-[11px] ${zoom === 'fit' ? 'bg-emerald-600/80 hover:bg-emerald-600 text-white' : 'border-slate-700 text-stone-300'}`}
                         aria-pressed={zoom === 'fit'}
                         onClick={() => setZoom('fit')}
                       >
@@ -459,14 +547,24 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                       </Button>
                     </div>
                   </div>
-                  <div className="overflow-x-auto pb-2">
+                  {/* P3-B1: vùng cuộn ngang + drag-pan chuột (tabIndex cho
+                      cuộn bằng bàn phím; select-none chống bôi đen chữ SVG
+                      khi kéo; cursor grab/grabbing theo trạng thái panning). */}
+                  <div
+                    ref={scrollRef}
+                    onPointerDown={onPanPointerDown}
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Vùng đồ thị kiến trúc — giữ chuột và kéo để di chuyển; phím mũi tên trái/phải để cuộn"
+                    className={`overflow-x-auto pb-2 select-none${canPan ? ' cursor-grab' : ''}${panning ? ' cursor-grabbing [&_*]:cursor-grabbing!' : ''}`}
+                  >
                     <svg
                       ref={svgRef}
                       viewBox={`0 0 ${layout.width} ${layout.height}`}
                       style={zoom === 'fit'
                         ? { minWidth: NEURAL_ZOOM.FIT_FLOOR_PX, width: '100%', height: 'auto' }
                         : { width: neuralSvgWidth(layout.width, zoom), height: 'auto' }}
-                      role="img"
+                      role="group"
                       aria-label="Sơ đồ kiến trúc 6 lớp của hệ thống TMO — chọn một nút để xem chi tiết và tinh chỉnh"
                     >
                       <defs>
@@ -570,10 +668,10 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                               {node.title.length > 25 ? `${node.title.slice(0, 24)}…` : node.title}
                             </text>
                             <text x="10" y="42" fontSize={NEURAL_FONTS.subtitle} className="fill-stone-400" style={{ fontFamily: 'inherit' }}>
-                              {node.subtitle.length > 40 ? `${node.subtitle.slice(0, 39)}…` : node.subtitle}
+                              {node.subtitle.length > 36 ? `${node.subtitle.slice(0, 35)}…` : node.subtitle}
                             </text>
                             <text x="10" y="66" fontSize={NEURAL_FONTS.live} className={acc.text} style={{ fontFamily: 'inherit' }}>
-                              {liveText.length > 38 ? `${liveText.slice(0, 37)}…` : liveText}
+                              {liveText.length > 33 ? `${liveText.slice(0, 32)}…` : liveText}
                             </text>
                             {params.length > 0 && (
                               <text x={NEURAL_GEO.NODE_W - 10} y="66" fontSize={NEURAL_FONTS.gear} textAnchor="end" className="fill-amber-400" style={{ fontFamily: 'inherit' }}>
@@ -587,7 +685,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                   </div>
 
                   {/* Chú giải dòng chảy */}
-                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[9px] text-stone-400">
+                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[10px] text-stone-400">
                     <span className="flex items-center gap-1.5">
                       <svg width="26" height="6"><line x1="0" y1="3" x2="26" y2="3" stroke="rgba(34,211,238,0.8)" strokeWidth="1.6" strokeDasharray="6 4" className="na-edge-data" /></svg>
                       dòng dữ liệu
@@ -606,6 +704,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                     </span>
                     <span className="text-amber-400">⚙ = có ô nhập tinh chỉnh</span>
                     <span>cạnh sáng = dòng chảy qua nút đang chọn</span>
+                    {canPan && <span>✋ giữ + kéo nền = di chuyển sơ đồ</span>}
                   </div>
                 </>
               ) : null}
@@ -677,10 +776,10 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
             <div className="flex items-center gap-2 mb-3">
               <Zap className="h-3.5 w-3.5 text-violet-400" />
               <h4 className="text-xs font-semibold text-stone-100">Bảng điều khiển tham số — toàn bộ mạng</h4>
-              <span className="text-[9px] text-stone-500">chuỗi hiệu lực: STORE › ENV › DEFAULT · áp dụng tức thì (không restart)</span>
+              <span className="text-[10px] text-stone-500">chuỗi hiệu lực: STORE › ENV › DEFAULT · áp dụng tức thì (không restart)</span>
             </div>
             <div className="overflow-x-auto max-h-96 overflow-y-auto">
-              <table className="w-full text-[10px]">
+              <table className="w-full text-[11px]">
                 <thead>
                   <tr className="text-stone-500 border-b border-slate-800">
                     <th className="text-left py-1.5 pr-2 font-medium">Tham số</th>
@@ -701,7 +800,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                       <tr key={t.key} className="border-b border-slate-900/80 hover:bg-slate-950/40">
                         <td className="py-1.5 pr-2">
                           <p className="text-stone-200 font-medium">{t.label}</p>
-                          <p className="font-mono text-[8px] text-stone-600">{t.key}</p>
+                          <p className="font-mono text-[9px] text-stone-600">{t.key}</p>
                         </td>
                         <td className="py-1.5 pr-2">
                           <button
@@ -716,7 +815,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                             <span className="text-stone-100 font-mono">
                               {String(t.effectiveValue)}{t.unit ? ` ${t.unit}` : ''}
                             </span>
-                            <Badge variant="outline" className={`text-[8px] h-3.5 px-1 ${src.cls}`}>{src.label}</Badge>
+                            <Badge variant="outline" className={`text-[9px] h-3.5 px-1 ${src.cls}`}>{src.label}</Badge>
                           </span>
                         </td>
                         <td className="py-1.5 pr-2 text-stone-500 font-mono">
@@ -762,10 +861,10 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <History className="h-3.5 w-3.5 text-teal-400" />
               <h4 className="text-xs font-semibold text-stone-100">Nhật ký tinh chỉnh runtime</h4>
-              <span className="text-[9px] text-stone-500">mọi đặt / trả-mặc-định được ghi audit · giữ tối đa {TUNING_CHANGE_LOG_CAP} dòng mới nhất</span>
+              <span className="text-[10px] text-stone-500">mọi đặt / trả-mặc-định được ghi audit · giữ tối đa {TUNING_CHANGE_LOG_CAP} dòng mới nhất</span>
             </div>
             {(data?.changeLog?.length ?? 0) === 0 ? (
-              <p className="text-[10px] text-stone-500 italic">Chưa có thay đổi nào được ghi (phát sinh khi đặt hoặc trả mặc định một tham số).</p>
+              <p className="text-[11px] text-stone-500 italic">Chưa có thay đổi nào được ghi (phát sinh khi đặt hoặc trả mặc định một tham số).</p>
             ) : (
               <div className="dialog-scrollbar max-h-44 space-y-1.5 overflow-y-auto">
                 {data!.changeLog!.map(c => {
@@ -773,14 +872,14 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                   return (
                     <div
                       key={c.id}
-                      className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px]"
+                      className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]"
                       title={`${c.key} · store: ${c.fromStoreValue ?? '—'} → ${c.toStoreValue ?? '—'}`}
                     >
                       <span className="shrink-0 tabular-nums text-stone-600">{new Date(c.createdAt).toLocaleString('vi-VN')}</span>
                       <span className="font-mono text-stone-300">{label}</span>
                       {c.action === 'set'
-                        ? <Badge variant="outline" className="h-3.5 px-1 border-amber-500/45 bg-amber-950/70 text-[8px] text-amber-400">đặt</Badge>
-                        : <Badge variant="outline" className="h-3.5 px-1 border-stone-600/50 bg-slate-950/70 text-[8px] text-stone-400">về mặc định</Badge>}
+                        ? <Badge variant="outline" className="h-3.5 px-1 border-amber-500/45 bg-amber-950/70 text-[9px] text-amber-400">đặt</Badge>
+                        : <Badge variant="outline" className="h-3.5 px-1 border-stone-600/50 bg-slate-950/70 text-[9px] text-stone-400">về mặc định</Badge>}
                       <span className="font-mono text-stone-500">{c.fromEffectiveValue}</span>
                       <ArrowRight className="h-2.5 w-2.5 shrink-0 text-stone-600" />
                       <span className="font-mono font-medium text-stone-100">{c.toEffectiveValue}</span>
@@ -798,13 +897,13 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
         <div className="nc-wrap nc-amber">
           <Card className="nc-panel nc-md nc-border-amber">
             <CardContent className="p-4">
-              <p className="text-[9px] uppercase tracking-wide text-amber-500 mb-2">Bảng Q — top model đã học (mode-agent-tier-1)</p>
+              <p className="text-[10px] uppercase tracking-wide text-amber-500 mb-2">Bảng Q — top model đã học (mode-agent-tier-1)</p>
               {(data?.qTop?.length ?? 0) === 0 ? (
-                <p className="text-[10px] text-stone-500 italic">Chưa có Q-entry nào (Q học sau mỗi run goal-loop / workflow).</p>
+                <p className="text-[11px] text-stone-500 italic">Chưa có Q-entry nào (Q học sau mỗi run goal-loop / workflow).</p>
               ) : (
                 <div className="space-y-1.5">
                   {data!.qTop.map((q, i) => (
-                    <div key={q.action} className="flex items-center gap-2 text-[10px]">
+                    <div key={q.action} className="flex items-center gap-2 text-[11px]">
                       <span className="w-4 text-stone-600 tabular-nums">#{i + 1}</span>
                       <span className="font-mono text-stone-200 truncate flex-1" title={q.action}>{q.action}</span>
                       <div className="w-20 h-1.5 rounded-full bg-slate-900 overflow-hidden" aria-hidden="true">
@@ -825,21 +924,21 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
         <div className="nc-wrap nc-rose">
           <Card className="nc-panel nc-md nc-border-rose">
             <CardContent className="p-4">
-              <p className="text-[9px] uppercase tracking-wide text-rose-400 mb-2">Strategy Adaptation Log — gần nhất</p>
+              <p className="text-[10px] uppercase tracking-wide text-rose-400 mb-2">Strategy Adaptation Log — gần nhất</p>
               {(data?.salRecent?.length ?? 0) === 0 ? (
-                <p className="text-[10px] text-stone-500 italic">Chưa có SAL nào (phát sinh khi workflow gặp failure-pattern và đổi chiến lược).</p>
+                <p className="text-[11px] text-stone-500 italic">Chưa có SAL nào (phát sinh khi workflow gặp failure-pattern và đổi chiến lược).</p>
               ) : (
                 <div className="space-y-1.5 max-h-44 overflow-y-auto">
                   {data!.salRecent.map(sal => (
-                    <div key={sal.id} className="text-[10px] flex items-center gap-2">
+                    <div key={sal.id} className="text-[11px] flex items-center gap-2">
                       <span className="font-mono text-stone-400">{sal.fromStrategy}</span>
                       <ArrowRight className="h-2.5 w-2.5 text-stone-600" />
                       <span className="font-mono text-stone-200">{sal.toStrategy}</span>
                       {sal.successful === null
-                        ? <Badge variant="outline" className="text-[8px] h-3.5 px-1 bg-slate-950/70 text-stone-400 border-stone-600/50">chưa chốt</Badge>
+                        ? <Badge variant="outline" className="text-[9px] h-3.5 px-1 bg-slate-950/70 text-stone-400 border-stone-600/50">chưa chốt</Badge>
                         : sal.successful
-                          ? <Badge variant="outline" className="text-[8px] h-3.5 px-1 bg-emerald-950/70 text-emerald-400 border-emerald-500/45">thành công</Badge>
-                          : <Badge variant="outline" className="text-[8px] h-3.5 px-1 bg-rose-950/70 text-rose-400 border-rose-500/45">thất bại</Badge>}
+                          ? <Badge variant="outline" className="text-[9px] h-3.5 px-1 bg-emerald-950/70 text-emerald-400 border-emerald-500/45">thành công</Badge>
+                          : <Badge variant="outline" className="text-[9px] h-3.5 px-1 bg-rose-950/70 text-rose-400 border-rose-500/45">thất bại</Badge>}
                       <span className="text-stone-600 ml-auto shrink-0">{new Date(sal.createdAt).toLocaleString('vi-VN')}</span>
                     </div>
                   ))}
@@ -883,32 +982,32 @@ function NodeInspectorContent({
       <div>
         <div className="flex items-center gap-2 flex-wrap">
           <h4 className="text-sm font-semibold text-stone-100">{selectedNode.title}</h4>
-          <Badge variant="outline" className={`text-[9px] h-4 px-1.5 ${acc.badge}`}>
+          <Badge variant="outline" className={`text-[10px] h-4 px-1.5 ${acc.badge}`}>
             Lớp {layer?.index} · {layer?.title}
           </Badge>
         </div>
-        <p className="text-[10px] text-stone-500 font-mono">{selectedNode.subtitle}</p>
+        <p className="text-[11px] text-stone-500 font-mono">{selectedNode.subtitle}</p>
       </div>
 
-      <p className="text-[11px] leading-relaxed text-stone-300">{selectedNode.description}</p>
+      <p className="text-[12px] leading-relaxed text-stone-300">{selectedNode.description}</p>
 
       {selectedNode.algorithm && (
         <div className="rounded-md border border-cyan-500/30 bg-slate-950/70 p-2">
-          <p className="text-[9px] uppercase tracking-wide text-cyan-500 mb-1">Thuật toán</p>
-          <p className="font-mono text-[10px] text-cyan-300 leading-relaxed break-words">{selectedNode.algorithm}</p>
+          <p className="text-[10px] uppercase tracking-wide text-cyan-500 mb-1">Thuật toán</p>
+          <p className="font-mono text-[11px] text-cyan-300 leading-relaxed break-words">{selectedNode.algorithm}</p>
           {selectedNode.algorithmNote && (
-            <p className="text-[9px] text-stone-500 italic mt-1">{selectedNode.algorithmNote}</p>
+            <p className="text-[10px] text-stone-500 italic mt-1">{selectedNode.algorithmNote}</p>
           )}
         </div>
       )}
 
       {selectedNode.functions.length > 0 && (
         <div>
-          <p className="text-[9px] uppercase tracking-wide text-stone-500 mb-1.5 flex items-center gap-1"><Wrench className="h-2.5 w-2.5" /> Hàm số</p>
+          <p className="text-[10px] uppercase tracking-wide text-stone-500 mb-1.5 flex items-center gap-1"><Wrench className="h-2.5 w-2.5" /> Hàm số</p>
           <div className="flex flex-wrap gap-1.5">
             {selectedNode.functions.map(fn => (
               <span key={`${fn.name}-${fn.file}-${fn.line ?? ''}`}
-                className="font-mono text-[9px] rounded border border-slate-700/60 bg-slate-950/60 px-1.5 py-0.5 text-stone-300">
+                className="font-mono text-[10px] rounded border border-slate-700/60 bg-slate-950/60 px-1.5 py-0.5 text-stone-300">
                 {fn.name} <span className="text-stone-500">{fn.file.split('/').slice(-1)[0]}{fn.line ? `:${fn.line}` : ''}</span>
               </span>
             ))}
@@ -918,12 +1017,12 @@ function NodeInspectorContent({
 
       {selectedLive.length > 0 && (
         <div>
-          <p className="text-[9px] uppercase tracking-wide text-stone-500 mb-1.5 flex items-center gap-1"><Database className="h-2.5 w-2.5" /> Số liệu trực tiếp</p>
+          <p className="text-[10px] uppercase tracking-wide text-stone-500 mb-1.5 flex items-center gap-1"><Database className="h-2.5 w-2.5" /> Số liệu trực tiếp</p>
           <div className="grid grid-cols-2 gap-1.5">
             {selectedLive.map(lv => (
               <div key={lv.label} className="rounded border border-slate-700/50 bg-slate-950/50 px-2 py-1">
-                <p className="text-[8px] text-stone-500 truncate">{lv.label}</p>
-                <p className="text-[11px] text-stone-100 font-medium truncate" title={lv.value}>{lv.value}</p>
+                <p className="text-[9px] text-stone-500 truncate">{lv.label}</p>
+                <p className="text-[12px] text-stone-100 font-medium truncate" title={lv.value}>{lv.value}</p>
               </div>
             ))}
           </div>
@@ -932,7 +1031,7 @@ function NodeInspectorContent({
 
       {tuningEntries.length > 0 ? (
         <div className="space-y-3 pt-1 border-t border-slate-800">
-          <p className="text-[9px] uppercase tracking-wide text-amber-500 flex items-center gap-1 pt-2">
+          <p className="text-[10px] uppercase tracking-wide text-amber-500 flex items-center gap-1 pt-2">
             <Settings2 className="h-2.5 w-2.5" /> Tinh chỉnh vận hành ({tuningEntries.length})
           </p>
           {tuningEntries.map(entry => (
@@ -947,7 +1046,7 @@ function NodeInspectorContent({
           ))}
         </div>
       ) : (
-        <p className="text-[10px] text-stone-600 italic pt-2 border-t border-slate-800">
+        <p className="text-[11px] text-stone-600 italic pt-2 border-t border-slate-800">
           Node này không có tham số runtime (giá trị cố định theo spec — xem mô tả thuật toán).
         </p>
       )}
@@ -999,9 +1098,9 @@ function TuningControl({
     <div className="rounded-md border border-slate-800 bg-slate-950/50 p-2.5 space-y-2">
       {/* Header: label + source badge */}
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-[11px] font-medium text-stone-200">{entry.label}</span>
-        <Badge variant="outline" className={`text-[8px] h-3.5 px-1 ${src.cls}`}>{src.label}</Badge>
-        <span className="text-[8px] text-stone-600 font-mono truncate">{entry.key}</span>
+        <span className="text-[12px] font-medium text-stone-200">{entry.label}</span>
+        <Badge variant="outline" className={`text-[9px] h-3.5 px-1 ${src.cls}`}>{src.label}</Badge>
+        <span className="text-[9px] text-stone-600 font-mono truncate">{entry.key}</span>
         <span className="ml-auto flex items-center gap-1">
           {saving && <Loader2 className="h-3 w-3 animate-spin text-emerald-400" />}
           {entry.storeValue !== null && (
@@ -1021,7 +1120,7 @@ function TuningControl({
         </span>
       </div>
 
-      <p className="text-[9px] text-stone-500 leading-relaxed">{entry.description}</p>
+      <p className="text-[10px] text-stone-500 leading-relaxed">{entry.description}</p>
 
       {isNumber ? (
         <div className="space-y-1.5">
@@ -1040,7 +1139,7 @@ function TuningControl({
             <Input
               type="number"
               inputMode="decimal"
-              className="h-6 text-[10px] font-mono w-24 bg-slate-950/70 border-slate-700"
+              className="h-6 text-[11px] font-mono w-24 bg-slate-950/70 border-slate-700"
               value={localRaw}
               min={entry.min}
               max={entry.max}
@@ -1057,8 +1156,8 @@ function TuningControl({
                 if (e.key === 'Enter') { e.currentTarget.blur() }
               }}
             />
-            {entry.unit && <span className="text-[9px] text-stone-500">{entry.unit}</span>}
-            <span className="text-[8px] text-stone-600 ml-auto">
+            {entry.unit && <span className="text-[10px] text-stone-500">{entry.unit}</span>}
+            <span className="text-[9px] text-stone-600 ml-auto">
               [{entry.min ?? '−∞'} … {entry.max ?? '∞'}] · mặc định {String(entry.default)}
             </span>
           </div>
@@ -1075,7 +1174,7 @@ function TuningControl({
                 size="sm"
                 disabled={saving}
                 aria-pressed={active}
-                className={`h-6 px-2.5 text-[10px] font-mono rounded-md border transition-colors ${
+                className={`h-6 px-2.5 text-[11px] font-mono rounded-md border transition-colors ${
                   active
                     ? 'bg-emerald-600/25 border-emerald-500/60 text-emerald-200'
                     : 'bg-slate-950/60 border-slate-700 text-stone-400 hover:text-stone-200 hover:border-slate-500'
@@ -1086,17 +1185,17 @@ function TuningControl({
               </Button>
             )
           })}
-          <span className="text-[8px] text-stone-600 ml-auto">mặc định {String(entry.default)}</span>
+          <span className="text-[9px] text-stone-600 ml-auto">mặc định {String(entry.default)}</span>
         </div>
       )}
 
-      <p className="text-[8px] text-stone-600 font-mono truncate" title={entry.appliesTo}>
+      <p className="text-[9px] text-stone-600 font-mono truncate" title={entry.appliesTo}>
         ⟶ áp dụng: {entry.appliesTo}
       </p>
 
       {/* Cảnh báo hiệu lực (vd policy=softmax đang bật) */}
       {entry.warning && String(entry.effectiveValue) !== String(entry.default) && (
-        <p className="text-[9px] text-amber-400 flex items-start gap-1.5 leading-relaxed">
+        <p className="text-[10px] text-amber-400 flex items-start gap-1.5 leading-relaxed">
           <TriangleAlert className="h-3 w-3 shrink-0 mt-0.5" /> {entry.warning}
         </p>
       )}

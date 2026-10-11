@@ -1,3 +1,10 @@
+-- 0_init (REBASELINE 2026-10-11 — theo chỉ thị user quay lại luồng migration chuẩn)
+-- Tái sinh toàn bộ từ prisma/schema.prisma bằng: prisma migrate diff --from-empty --to-schema-datamodel
+-- Lý do: lịch sử drift — mọi model post-round-32 (QEntry/TuningParam/TuningChangeLog/KpiSnapshot/...
+-- + 9 bảng và các index/row mới) từng vào DB bằng db push, 0_init cũ (89 bảng) bị stale.
+-- DB vận hành khớp schema 100% (migrate diff --from-url: No difference) nên baseline
+-- này khớp cả 2 phía. Đánh dấu applied bằng: prisma migrate resolve --applied 0_init.
+
 -- CreateTable
 CREATE TABLE "JobQueue" (
     "id" TEXT NOT NULL PRIMARY KEY,
@@ -78,6 +85,8 @@ CREATE TABLE "Document" (
     "status" TEXT NOT NULL DEFAULT 'uploaded',
     "errorMessage" TEXT,
     "userPaused" BOOLEAN NOT NULL DEFAULT false,
+    "contentHash" TEXT,
+    "duplicateOfId" TEXT,
     "processingSteps" TEXT NOT NULL DEFAULT '[]',
     "processingPercent" INTEGER NOT NULL DEFAULT 0,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -515,6 +524,22 @@ CREATE TABLE "ChatMessage" (
 );
 
 -- CreateTable
+CREATE TABLE "ChatAttachment" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "sessionId" TEXT,
+    "messageId" TEXT,
+    "fileName" TEXT NOT NULL,
+    "mimeType" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "sizeBytes" INTEGER NOT NULL,
+    "filePath" TEXT NOT NULL,
+    "derivedText" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'ready',
+    "error" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
 CREATE TABLE "SmolabTask" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "type" TEXT NOT NULL,
@@ -672,6 +697,31 @@ CREATE TABLE "ToolMetricDaily" (
 );
 
 -- CreateTable
+CREATE TABLE "MetricAnomaly" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "kind" TEXT NOT NULL,
+    "toolName" TEXT NOT NULL,
+    "agentRole" TEXT NOT NULL,
+    "value" REAL NOT NULL,
+    "bound" REAL NOT NULL,
+    "score" REAL NOT NULL,
+    "sessionId" TEXT,
+    "observedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "KpiSnapshot" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "date" TEXT NOT NULL,
+    "kpi" TEXT NOT NULL,
+    "value" REAL NOT NULL,
+    "sampleSize" INTEGER NOT NULL DEFAULT 0,
+    "meta" TEXT NOT NULL DEFAULT '{}',
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
 CREATE TABLE "AgentRunRecord" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "sessionId" TEXT NOT NULL,
@@ -680,6 +730,7 @@ CREATE TABLE "AgentRunRecord" (
     "parentRunId" TEXT,
     "agentId" TEXT,
     "agentName" TEXT,
+    "model" TEXT,
     "status" TEXT,
     "stopReason" TEXT,
     "cycles" INTEGER,
@@ -767,6 +818,23 @@ CREATE TABLE "StrategyAdaptationLog" (
     "reason" TEXT NOT NULL,
     "confidence" REAL NOT NULL,
     "successful" BOOLEAN,
+    "statsJson" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "CodeTeamCheckpoint" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "sessionId" TEXT NOT NULL,
+    "phase" TEXT NOT NULL,
+    "completedSteps" TEXT NOT NULL DEFAULT '[]',
+    "currentStepIndex" INTEGER NOT NULL DEFAULT 0,
+    "filesModified" TEXT NOT NULL DEFAULT '[]',
+    "keyDecisions" TEXT NOT NULL DEFAULT '[]',
+    "pendingIssues" TEXT NOT NULL DEFAULT '[]',
+    "progressSnapshot" TEXT NOT NULL,
+    "contextSnapshot" TEXT NOT NULL,
+    "routingDecision" TEXT NOT NULL,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -828,6 +896,8 @@ CREATE TABLE "EvalResult" (
     "answered" BOOLEAN NOT NULL DEFAULT false,
     "rawConfidence" REAL NOT NULL DEFAULT 0,
     "latencyMs" INTEGER NOT NULL DEFAULT 0,
+    "ndcgAt5" REAL NOT NULL DEFAULT 0,
+    "mrr" REAL NOT NULL DEFAULT 0,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -846,6 +916,8 @@ CREATE TABLE "EvalRun" (
     "avgF1" REAL NOT NULL DEFAULT 0,
     "avgLatencyMs" INTEGER NOT NULL DEFAULT 0,
     "hallucinationCount" INTEGER NOT NULL DEFAULT 0,
+    "avgNdcg" REAL NOT NULL DEFAULT 0,
+    "avgMrr" REAL NOT NULL DEFAULT 0,
     "errorMessage" TEXT,
     "startedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "completedAt" DATETIME
@@ -858,6 +930,34 @@ CREATE TABLE "CalibrationModel" (
     "coef" REAL NOT NULL DEFAULT 1,
     "trainedAt" DATETIME NOT NULL,
     "sampleSize" INTEGER NOT NULL DEFAULT 0
+);
+
+-- CreateTable
+CREATE TABLE "CalibrationModelV2" (
+    "id" TEXT NOT NULL PRIMARY KEY DEFAULT 'default',
+    "featureNames" TEXT NOT NULL,
+    "means" TEXT NOT NULL,
+    "stds" TEXT NOT NULL,
+    "coefficients" TEXT NOT NULL,
+    "intercept" REAL NOT NULL,
+    "oddsRatios" TEXT NOT NULL,
+    "sampleSize" INTEGER NOT NULL,
+    "cvBrier" REAL,
+    "cvBrierCi" TEXT,
+    "brierV1" REAL,
+    "active" BOOLEAN NOT NULL DEFAULT false,
+    "trainedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "DigestGateEvent" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "kind" TEXT NOT NULL,
+    "outcome" TEXT NOT NULL,
+    "coverage" REAL,
+    "rougeRecall" REAL,
+    "method" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- CreateTable
@@ -1306,6 +1406,36 @@ CREATE TABLE "RunContext" (
     "updatedAt" DATETIME NOT NULL
 );
 
+-- CreateTable
+CREATE TABLE "QEntry" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "stateKey" TEXT NOT NULL,
+    "actionKey" TEXT NOT NULL,
+    "qValue" REAL NOT NULL DEFAULT 0,
+    "visits" INTEGER NOT NULL DEFAULT 0,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "TuningParam" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "key" TEXT NOT NULL,
+    "value" TEXT NOT NULL,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "TuningChangeLog" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "key" TEXT NOT NULL,
+    "action" TEXT NOT NULL,
+    "fromStoreValue" TEXT,
+    "toStoreValue" TEXT,
+    "fromEffectiveValue" TEXT NOT NULL,
+    "toEffectiveValue" TEXT NOT NULL,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- CreateIndex
 CREATE INDEX "JobQueue_status_priority_idx" ON "JobQueue"("status", "priority");
 
@@ -1365,6 +1495,9 @@ CREATE INDEX "Document_createdAt_idx" ON "Document"("createdAt");
 
 -- CreateIndex
 CREATE INDEX "Document_userPaused_idx" ON "Document"("userPaused");
+
+-- CreateIndex
+CREATE INDEX "Document_contentHash_idx" ON "Document"("contentHash");
 
 -- CreateIndex
 CREATE INDEX "LocalEntity_documentId_idx" ON "LocalEntity"("documentId");
@@ -1610,6 +1743,12 @@ CREATE INDEX "ChatMessage_role_idx" ON "ChatMessage"("role");
 CREATE INDEX "ChatMessage_createdAt_idx" ON "ChatMessage"("createdAt");
 
 -- CreateIndex
+CREATE INDEX "ChatAttachment_sessionId_idx" ON "ChatAttachment"("sessionId");
+
+-- CreateIndex
+CREATE INDEX "ChatAttachment_createdAt_idx" ON "ChatAttachment"("createdAt");
+
+-- CreateIndex
 CREATE INDEX "SmolabTask_sessionId_idx" ON "SmolabTask"("sessionId");
 
 -- CreateIndex
@@ -1736,6 +1875,18 @@ CREATE INDEX "ToolMetricDaily_toolName_date_idx" ON "ToolMetricDaily"("toolName"
 CREATE UNIQUE INDEX "ToolMetricDaily_date_toolName_agentRole_key" ON "ToolMetricDaily"("date", "toolName", "agentRole");
 
 -- CreateIndex
+CREATE INDEX "MetricAnomaly_kind_observedAt_idx" ON "MetricAnomaly"("kind", "observedAt");
+
+-- CreateIndex
+CREATE INDEX "MetricAnomaly_toolName_observedAt_idx" ON "MetricAnomaly"("toolName", "observedAt");
+
+-- CreateIndex
+CREATE INDEX "KpiSnapshot_kpi_date_idx" ON "KpiSnapshot"("kpi", "date");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "KpiSnapshot_date_kpi_key" ON "KpiSnapshot"("date", "kpi");
+
+-- CreateIndex
 CREATE INDEX "AgentRunRecord_sessionId_createdAt_idx" ON "AgentRunRecord"("sessionId", "createdAt");
 
 -- CreateIndex
@@ -1790,6 +1941,15 @@ CREATE INDEX "StrategyAdaptationLog_patternId_idx" ON "StrategyAdaptationLog"("p
 CREATE INDEX "StrategyAdaptationLog_createdAt_idx" ON "StrategyAdaptationLog"("createdAt");
 
 -- CreateIndex
+CREATE INDEX "StrategyAdaptationLog_toStrategy_idx" ON "StrategyAdaptationLog"("toStrategy");
+
+-- CreateIndex
+CREATE INDEX "CodeTeamCheckpoint_sessionId_idx" ON "CodeTeamCheckpoint"("sessionId");
+
+-- CreateIndex
+CREATE INDEX "CodeTeamCheckpoint_createdAt_idx" ON "CodeTeamCheckpoint"("createdAt");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "PendingWriteback_batchId_key" ON "PendingWriteback"("batchId");
 
 -- CreateIndex
@@ -1815,6 +1975,12 @@ CREATE INDEX "EvalResult_caseId_idx" ON "EvalResult"("caseId");
 
 -- CreateIndex
 CREATE INDEX "EvalRun_startedAt_idx" ON "EvalRun"("startedAt");
+
+-- CreateIndex
+CREATE INDEX "DigestGateEvent_createdAt_idx" ON "DigestGateEvent"("createdAt");
+
+-- CreateIndex
+CREATE INDEX "DigestGateEvent_kind_outcome_idx" ON "DigestGateEvent"("kind", "outcome");
 
 -- CreateIndex
 CREATE INDEX "RedTeamCase_attackVector_status_idx" ON "RedTeamCase"("attackVector", "status");
@@ -1986,4 +2152,22 @@ CREATE UNIQUE INDEX "RunContext_runId_key" ON "RunContext"("runId");
 
 -- CreateIndex
 CREATE INDEX "RunContext_sessionId_idx" ON "RunContext"("sessionId");
+
+-- CreateIndex
+CREATE INDEX "QEntry_stateKey_idx" ON "QEntry"("stateKey");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "QEntry_stateKey_actionKey_key" ON "QEntry"("stateKey", "actionKey");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TuningParam_key_key" ON "TuningParam"("key");
+
+-- CreateIndex
+CREATE INDEX "TuningParam_key_idx" ON "TuningParam"("key");
+
+-- CreateIndex
+CREATE INDEX "TuningChangeLog_createdAt_idx" ON "TuningChangeLog"("createdAt");
+
+-- CreateIndex
+CREATE INDEX "TuningChangeLog_key_createdAt_idx" ON "TuningChangeLog"("key", "createdAt");
 

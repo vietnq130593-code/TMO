@@ -224,3 +224,15 @@
 - Gate: **1072 → 1089** (+17: r83 13 gốc + 4 regression R1); tsc + lint + imports PASS mọi vòng.
 - Ghi chú hạ tầng: `prisma migrate dev` đòi RESET DB (drift lịch sử migration từ trước P2 — 0_init chưa mark applied + mọi model post-round-32 vào bằng db push) → TỪ CHỐI reset, dùng `db push` thuần bổ sung (đúng thực hành thực tế repo) — vấn đề drift bàn riêng với user.
 - Live sau khép: xem biên bản commit (bottom-sheet mobile chạm node + audit card + pause poll verify qua performance entries + reduced-motion gate qua emulateMedia).
+
+### ĐỢT FB-P3 (NEURAL-ARCH) — scope P3 review task-98 (3 hạng mục chỉ thị user: drag-pan đồ thị "bấm giữ chuột di chuyển nội dung theo" + cỡ chữ +1px toàn ô/bảng module Database > Kiến trúc + ARIA role group; kèm HẠ TẦNG: rebaseline migration 0_init theo chỉ thị quay lại luồng migration chuẩn) — 2026-10-11 — KHÉP KẾT SAU 2 VÒNG
+
+| Vòng | Phát hiện mới | Xác minh |
+|---|---|---|
+| R1 | **3** (0 P0-P2 · 1 C·P3 + 2 P4 — auditor độc lập subagent mắt tươi: đo font PIL/DejaVuSans proxy rộng-hơn-Geist + chạy lại r82 31/31 + tsc độc lập + truy vết thứ tự pointerup→click→setTimeout) — đỉnh: pan mất listener khi cửa sổ blur giữa lúc kéo → đồ thị bám theo chuột không bấm giữ · cursor-grab/legend/hint mời kéo cả khi vùng KHÔNG tràn · cursor grabbing chỉ trên container, sượt node nhảy pointer | Fix toàn bộ 3 (BUG2-135..137); điều phối tự bắt 1 sai-kỳ-vọng của chính mình (effect canPan trên layout TRƯỚC khai báo — TDZ, dời xuống sau useMemo) → gate 1089 giữ PASS + tsc + lint sạch |
+| R2 | **0** (điều phối rà lại toàn diff fix R1: guard buttons===0/blur/teardown 3 lớp · deps + thứ tự effect canPan · biến thể className panning · 3 vị trí điều kiện canPan nhất quán) → KHÉP KẾT | Live browser agent-browser: drag pan scrollLeft 0→100 (node KHÔNG chọn nhầm) · click Neo4j node → inspector + live stats · font 1:1 pin (13.5/10/12.5/11px) · zoom 60% overflow 0 → cursor auto + legend ẩn + hint rút gọn · fit/100% có tràn → grab + legend + hint đủ · mobile 390px trang cuộn native (grid đơn cột giãn — hành vi P1/P2 giữ nguyên, pan trong vùng tắt đúng) · 0 lỗi console/page |
+
+- Phát hiện: FB-P3-R1-01..03 → **BUG2-135..137** (chi tiết đầy đủ tại Bug_v2.md).
+- Phát hiện bị bác sau chấm chéo: 0/3 — chuỗi thứ 5 liên tiếp phát hiện auditor đứng vững.
+- Gate: **1089 → 1089 giữ** (P3 thuần UI/a11y — không logic thuần nào tách được ra module pin; xác minh bằng browser live thay test mới); tsc + lint PASS mọi vòng.
+- HẠ TẦNG kèm đợt (ngoài phạm vi FB — chỉ thị user "quay lại luồng migration chuẩn"): 0_init REBASELINE (89 → 98 bảng — regenerate bằng `prisma migrate diff --from-empty --to-schema-datamodel` vì DB thật khớp schema 100% trong khi 0_init cũ stale) + `migrate resolve --applied 0_init` trên DB thật (app stop 10s tránh SQLite lock) → `migrate status`: "Database schema is up to date!" — KHÔNG mất dữ liệu (90 Document / 87 LocalEntity / learning history nguyên vẹn; Neo4J cloud dính gì đâu). `migrate deploy` trên DB trắng: sạch 98/98 — luồng chuẩn trọn vẹn cho máy local (git pull → `bun run db:deploy`). Đóng ghi chú drift từ FB-P2.
