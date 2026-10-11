@@ -1,7 +1,9 @@
 # BLUEPRINT TRIỂN KHAI BRAIN P1 → P5 — "NÃO VẬN HÀNH" MLP-CPU CHO TMO
 
-> **Phiên bản:** 0.2 — **DRAFT, ĐANG THẢO LUẬN.** Nền toán MLP (§4.1) và Brain-A/B/C (§4.2–4.4) **CHƯA triển khai** — riêng **phần UI của P1 đã áp dụng sớm theo chỉ thị user (P/S, 2026-10-12)**: panel "Não vận hành" trên tab Database > Kiến trúc + model `BrainModel` + `/api/brain` + `src/lib/brain/registry.ts` (chỉ hiển thị trạng thái theo số liệu thật, chưa có train).
+> **Phiên bản:** 0.3 — **DRAFT, ĐANG THẢO LUẬN.** Nền toán MLP (§4.1) và Brain-A/B/C (§4.2–4.4) **CHƯA triển khai** — riêng **phần UI của P1 đã áp dụng sớm theo chỉ thị user (P/S, 2026-10-12)**: panel "Não vận hành" trên tab Database > Kiến trúc + model `BrainModel` + `/api/brain` + `src/lib/brain/registry.ts` (chỉ hiển thị trạng thái theo số liệu thật, chưa có train).
 > Được tạo theo chỉ thị user (2026-10-11): *"tạo một file .md lộ trình triển khai, cần triển khai những gì và triển khai như thế nào. Tuy nhiên chưa triển khai ngay mà vẫn cần thảo luận thêm."*
+>
+> **Nhật ký hiệu đính 0.2 → 0.3 (góp ý UI/UX của user, 2026-10-12):** bổ sung **§9 BRAIN-UX — phase UI/UX cuối cùng** (đặt sau khi hoàn thành P1→P4 theo chỉ thị): UX-1 Brain Studio (nút chọn bộ não + chỉnh sửa kiến trúc: thêm/bớt lớp, số nơ-ron/lớp, menu activation mở rộng đủ 9 hàm sigmoid/linear/tanh/ReLU/Leaky ReLU/ELU/Swish/GELU/softmax) · UX-2 Training Console (chỉnh trọng số loss từng đầu ra + siêu tham số khối train + override composite reward qua tuning-store) · UX-3 "đường dây ánh sáng" bezier động hiển thị hướng lan truyền, click sửa được lớp/nơ-ron/cạnh · UX-4 tái bố cục tab Kiến trúc (giữ nguyên đồ thị hệ thống 6 lớp — phần user đánh giá tốt) · UX-5 theme dark-hi-tech toàn app (viền sáng chuyển động, nút nhô bóng, cờ `UI_HITECH`) · bảng mới `BrainSpecDraft` (additive — model 100) · test r88–r91 · §8 thêm mục chờ duyệt 7–9 · ghi chú chéo menu activation mở rộng vào §4.1.
 >
 > **Nhật ký hiệu đính 0.1 → 0.2 (audit 2 lượt — vai System & AI Architecture Auditor, 2026-10-12):** lượt 1 xác thực toàn bộ claim file:line / hằng số / đếm bảng — **khớp 100%** (đo lại live cùng ngày: AgentRunRecord=20, ArbiterVerdict=10, EvalResult=4, EvalCase=9, LessonRecord=25, EpisodeRecord=56, QEntry=1, StrategyAdaptationLog=0, KpiSnapshot=11, TuningParam=0; `stats/pca.ts` có sẵn; test kế tiếp đúng r84; đúng 98 model; đúng 9 nguyên tắc doctrine; `src/lib/embeddings.ts:46` đúng từng dòng). Lượt 2 bổ 12 điểm còn thiếu: A1 bất biến "1 bản active mỗi brain", A2 chính sách prune + ước lượng size weights, A3 kỷ luật migration (không db-push trần), A4 index `[brain, active]`, A5 cột `trainedAt`, A6 envelope weights numpy-đọc-được, A7 single-flight train lock, B1 softmax chỉ dùng lớp output, B2 early-stopping hold-out 15%, B3 ổn định số BCE/log-sum-exp, C1 chuẩn hóa thành phần composite reward, C2 công thức mixture policy — đã vá thẳng vào các mục tương ứng.
 >
@@ -24,8 +26,9 @@
 | **BRAIN-P3** | **Brain-B** — Surrogate Predictor (dự đoán kết quả cấu hình KHÔNG chạy thật) + chế độ replay-eval | mới `src/lib/brain/brains/surrogate.ts` + `src/app/api/brain/replay/route.ts` | L | `REPLAY_EVAL=off` (chỉ đo/báo cáo) |
 | **BRAIN-P4** | **Brain-C** — Policy head theo đặc trưng nhiệm vụ + **composite reward** + chuyển dần cơ quan lái (directives / model routing / tuning) sang nghe brain | mới `src/lib/brain/brains/policy.ts` + reward ledger thống nhất · sửa `adaptation-engine.ts` / `llm.ts` (từng cơ quan một) | L | `RUNTIME_POLICY=off` · từng cơ quan có kill-switch về hành vi cũ |
 | **BRAIN-P5** | Biên giao tiếp GPU/Python (Keras/PyTorch sidecar, GCN trên Neo4J — đường lên Level 3) | mini-service python (dài hạn, **chỉ khi có GPU**) | XL | Ngoài phạm vi lộ trình này — chỉ chốt contract |
+| **BRAIN-UX** (§9) | **Phase UI/UX cuối cùng** — Brain Studio (nút chọn não + sửa kiến trúc: thêm/bớt lớp, số nơ-ron, menu 9 activation) · Training Console (trọng số loss từng đầu ra + siêu tham số train) · đường dây ánh sáng động có hướng, click sửa được lớp/nơ-ron/cạnh · tái bố cục tab Kiến trúc · theme dark-hi-tech toàn app (viền sáng chuyển động, nút nhô bóng) | `neural-architecture-section.tsx` + mới `src/lib/brain/spec-schema.ts` · `BrainSpecDraft` (+1 model) · `globals.css` tokens | L (UX-1→UX-5) | `UI_BRAIN_EDIT` / `UI_SYNAPSE_FX` / `UI_HITECH` = off · **đặt SAU P1→P4 theo chỉ thị user (2026-10-12)** — UX-3/4/5 thuần trình bày, kéo sớm được theo chỉ thị |
 
-**Thứ tự bắt buộc:** P1 → P2 → P3 → P4. P5 độc lập (chỉ chốt giao tiếp trong P1–P4 để không làm lại).
+**Thứ tự bắt buộc:** P1 → P2 → P3 → P4 → **BRAIN-UX (§9 — phase cuối cùng theo chỉ thị user 2026-10-12)**. P5 độc lập (chỉ chốt giao tiếp trong P1–P4 để không làm lại). UX-3/UX-4/UX-5 thuần trình bày (không phụ thuộc nền toán) — có thể kéo sớm theo chỉ thị riêng, tiền lệ P1-UI đã áp dụng sớm.
 
 ---
 
@@ -171,7 +174,7 @@ P2 bắt buộc chạy ablation cả 3 (cùng dữ liệu, cùng seed) — chọ
 
 | File | Nội dung |
 |---|---|
-| `activations.ts` | relu, tanh, sigmoid, softmax + đạo hàm từng hàm (cho backward). **Ghi chú (audit B1): softmax chỉ dùng cho lớp output đa lớp — không đặt làm activation lớp ẩn** (không giữ tổng xác suất, gradient dễ lệch) |
+| `activations.ts` | relu, tanh, sigmoid, softmax + đạo hàm từng hàm (cho backward). **Ghi chú (audit B1): softmax chỉ dùng cho lớp output đa lớp — không đặt làm activation lớp ẩn** (không giữ tổng xác suất, gradient dễ lệch). **Mở rộng cho BRAIN-UX §9.2 (chỉ thị user 2026-10-12): thêm linear, Leaky ReLU (α=0.01 chỉnh được), ELU (α=1.0), Swish (β=1.0), GELU (xấp xỉ tanh) — đủ 9 hàm cho menu editor UX-1; spec mặc định các brain KHÔNG đổi** |
 | `losses.ts` | BCE (log-loss), MSE, Huber + đạo hàm; tổng hợp `L2 regularizer`. **Ổn định số (audit B3):** sigmoid kẹp ε=1e–7 hai đầu trước log; softmax dùng log-sum-exp |
 | `init.ts` | He (cho relu) / Xavier (tanh/sigmoid); seed tất định tái dùng pattern `deterministicSeed` của q-table |
 | `optimizers.ts` | SGD+momentum (β=0.9), Adam (β₁=0.9, β₂=0.999, ε=1e-8) — interface thống nhất `step(grads, params)` |
@@ -316,5 +319,186 @@ Mỗi `BrainModel.trainMetaJson.dataLineage` lưu: khoảng thời gian dữ li�
 | 4 | Q3 — không tích hợp LangChain/LangGraph/Keras, mở biên P5 | Chấp nhận rủi ro trùng lặp → không tích hợp | ☐ |
 | 5 | Q4 — nguyên tắc 2 tốc độ + dataLineage | Duyệt | ☐ |
 | 6 | Thứ tự P2→P3→P4 cố định, P5 treo | Đồng ý | ☐ |
+| 7 | Duyệt §9 BRAIN-UX — phase UI/UX đặt CUỐI CÙNG (sau P1→P4) theo chỉ thị 2026-10-12 | Đồng ý vị trí; UX-3/4/5 có thể kéo sớm theo chỉ thị riêng | ☐ |
+| 8 | Mở rộng menu activation 4 → 9 hàm (bổ sung §4.1 — cần cho UX-1) | Duyệt — thuần thêm hàm + đạo hàm, không đổi spec mặc định | ☐ |
+| 9 | Theme dark-hi-tech toàn app (UX-5) — tokens + rollout theo mô-đun + cờ `UI_HITECH` | Duyệt | ☐ |
 
-> **Ghi chú phiên bản 0.2:** tài liệu này là DRAFT để thảo luận — mọi con số effort/ngưỡng là ước lượng ban đầu, sẽ chốt lại theo từng phase. Nền toán MLP & pipeline train **chưa viết**; duy nhất phần UI hiển thị + kho `BrainModel` + `/api/brain` + `registry.ts` đã áp dụng sớm theo chỉ thị user (P/S 2026-10-12).
+---
+
+## 9. BRAIN-UX — PHASE UI/UX CUỐI CÙNG: "GIAO DIỆN NÃO" & THEME HI-TECH TOÀN APP
+
+> Bổ sung theo góp ý UI/UX của user (2026-10-12). **Vị trí lộ trình: SAU khi hoàn thành P1→P4** — đúng chỉ thị *"riêng một phần UI/UX cuối cùng sau khi hoàn thành các Phase trước đó"*. UX-3/UX-4/UX-5 thuần trình bày (không đụng nền toán/runtime) nên có thể kéo sớm theo chỉ thị riêng — tiền lệ P1-UI đã áp dụng sớm 2026-10-12. Mục tiêu tổng: đưa panel "Não vận hành" + "Bảng điều khiển tham số" từ **read-only** (chỉ xem trạng thái) lên **interactive studio** (chọn − chỉnh − chạy − nhìn thấy dòng chảy).
+
+### 9.0 Góp ý nguồn (2026-10-12) — 5 điểm, map thẳng vào giải pháp
+
+| # | Góp ý user (nguyên ý) | Giải pháp |
+|---|---|---|
+| 1 | Não vận hành cần **nút bấm ra danh sách các bộ não để chọn**, chọn não nào hiển thị não đó; từng não phải **tinh chỉnh được**: thêm/bớt lớp, chọn thuật toán activation (sigmoid, linear, tanh, ReLU, Leaky ReLU, ELU, Swish, GELU) — *"hiện tại tôi thậm chí không thể chỉnh sửa số nơ-ron của một lớp"* | UX-1 (§9.2) |
+| 2 | Bảng điều khiển tham số: **không chỉnh được trọng số loss từng đầu ra**, **không chỉnh được siêu tham số khối train** | UX-2 (§9.3) |
+| 3 | Các lớp nối bằng **"đường dây ánh sáng uyển chuyển, thấy được hướng di chuyển"**; **lớp / nơ-ron / đường kết nối bấm vào chỉnh sửa được**; phong cách **hi-tech, nhiều ánh sáng, chuyển động, sinh động** | UX-3 (§9.4) |
+| 4 | Tab Kiến trúc: kích thước / sắp xếp vị trí / bố cục **cần thiết kế lại** — TRỪ đồ thị kiến trúc neural (giữ nguyên, phần đang tốt) | UX-4 (§9.5) |
+| 5 | Toàn app: **"màn hình gương công nghệ cao với viền sáng chuyển động"**, nút có **độ nổi độ bóng**, nhìn như **màn hình dark-hacker công nghệ cao cấp sang trọng** | UX-5 (§9.6) |
+
+### 9.1 Nguyên tắc chắn (áp dụng cho toàn §9)
+
+1. **Draft ≠ runtime:** mọi chỉnh sửa kiến trúc / loss / siêu tham số ghi vào **bản nháp** (`BrainSpecDraft`) — bản `active` chỉ đổi qua đường đã có: train → thắng đối chứng CV → thăng cấp (bất biến A1 + §5.2 giữ nguyên). Không có đường tắt "vẽ xong chạy ngay".
+2. **Lớp đầu vào / đầu ra khoá theo vai trò:** input khoá theo `inputMode` (features-10=10 · pca-128=128 · mrl-512=512 · full-2048=2048), output khoá theo brain (A=1 · B=3 đầu ra · C=×\|A\|) — tránh chỉnh làm vỡ contract dữ liệu.
+3. **Bộ đếm tham số hiển thị trực tiếp khi chỉnh sửa:** `params = Σ (unitsₗ × unitsₗ₋₁ + unitsₗ)` chạy realtime; cảnh báo > 100K (dễ overfit khi chỉ có 20–56 mẫu), **chặn > 250K** (ngân sách CPU).
+4. **Không framework mới:** mọi hiệu ứng (kính, viền sáng chạy, ánh sáng, bóng nút) = CSS thuần + Tailwind tokens + keyframes — không thêm dependency nào (doctrine).
+5. **Hiệu ứng luôn có chốt giảm tải:** `prefers-reduced-motion` → bản tĩnh (tiền lệ P2 neural-arch) · tab ẩn → dừng (tiền lệ poll 15s) · giới hạn số phần tử vẽ (LOD).
+
+### 9.2 UX-1 — BRAIN STUDIO: chọn bộ não + chỉnh sửa kiến trúc
+
+**Chọn não (thay grid 3 thẻ ngang hiện tại):** nút **"Chọn não"** mở danh sách 3 brain (A "V3" · B "Vọng" · C "Lệnh") — mỗi dòng hiện trạng thái NGỦ / THỨC TỈNH / ACTIVE + số mẫu hiện/tại-ngưỡng + inputMode; **chọn não nào sân khấu giữa hiển thị não đó** (đồ thị lớn UX-3 + editor). Danh sách thu gọn giữ vai trò tổng quan trạng thái (không mất thông tin so với 3 thẻ cũ).
+
+**Editor kiến trúc — mỗi lớp 1 hàng:**
+
+| Thành phần | Điều khiển | Ràng buộc |
+|---|---|---|
+| Số nơ-ron mỗi lớp ẩn | stepper −/N/+ + nhập trực tiếp | 1–256/lớp · bộ đếm tham số chạy realtime (§9.1-3) |
+| Activation mỗi lớp | dropdown 9 hàm (bảng dưới) | softmax chỉ hiện với lớp output đa lớp (audit B1) |
+| Thêm / bớt lớp ẩn | nút "+ Thêm lớp ẩn" + thùng rác từng hàng | 0–6 lớp ẩn; ≥ 3 lớp → cảnh báo overfit kèm n mẫu hiện có |
+| Lớp input / output | hiển thị + khoá (tooltip giải thích lý do) | §9.1-2 |
+
+**Menu activation — mở rộng §4.1 từ 4 lên 9 hàm (đúng danh sách user yêu cầu):**
+
+| Hàm | Công thức | Đạo hàm | Init | Ghi chú dùng |
+|---|---|---|---|---|
+| sigmoid | σ(x)=1/(1+e⁻ˣ) | σ(1−σ) | Xavier | đầu ra xác suất 0–1 (Brain-A output) |
+| linear | f(x)=x | 1 | — | hồi quy giá trị thô (E[tokens], E[latency] của Brain-B) |
+| tanh | (eˣ−e⁻ˣ)/(eˣ+e⁻ˣ) | 1−f² | Xavier | mặc định lớp ẩn các spec hiện tại |
+| ReLU | max(0, x) | x>0 ? 1 : 0 | He | nhanh, chống bão hoà gradient; có thể chết đơn vị khi lr lớn |
+| Leaky ReLU | max(αx, x) · α=0.01 chỉnh được | x>0 ? 1 : α | He | chống "chết đơn vị" của ReLU |
+| ELU | x>0 ? x : α(eˣ−1) · α=1.0 chỉnh được | x>0 ? 1 : f+α | He | nhánh âm trơn, trung bình đầu ra ≈ 0 |
+| Swish | x·σ(βx) · β=1.0 chỉnh được | σ(βx)·(1+βx·(1−σ(βx))) | He | mượt, mạnh trên mạng sâu |
+| GELU | x·Φ(x) (xấp xỉ tanh) | x·φ(x)+Φ(x) | He | chuẩn transformer |
+| softmax | eˣⁱ/Σⱼeˣʲ | dùng kèm cross-entropy | — | **CHỈ lớp output đa lớp** (audit B1 — không đặt lớp ẩn) |
+
+**Lưu trữ & đối chiếu:** nháp lưu vào `BrainSpecDraft` (§9.7) — 1 nháp mỗi brain. Nút **"Lưu nháp"** · **"Phục hồi spec chuẩn"** (về mặc định `registry.ts`) · **"So sánh với bản active"** (diff lớp / activation / tham số / n mẫu / CV score từng bên). Rule validation viết **single-source tại `src/lib/brain/spec-schema.ts`**, client và server cùng import (doctrine #9).
+
+**Cờ:** `UI_BRAIN_EDIT=off` mặc định — OFF: chỉ xem như hôm nay; ON: mở toàn bộ editor.
+
+### 9.3 UX-2 — TRAINING CONSOLE: trọng số loss từng đầu ra + siêu tham số khối train
+
+Thay bảng read-only hiện tại bằng bảng **chỉnh trực tiếp** — thêm cột "Giá trị" với editor inline đúng kiểu dữ liệu (số · enum · boolean), giữ nguyên cột nguồn STORE/ENV/DEFAULT, audit trail, nút reset. 3 nhóm:
+
+- **Nhóm A — siêu tham số khối train** (ghi vào draft spec UX-1): optimizer {SGD+momentum, Adam} · lr (thang log 1e-4 → 1) · epochs 50–5000 · batch 8–256 · L2 λ 0–0.1 · patience 10–200 · hold-out 10–30% (mặc định 15 — audit B2) · grad-clip 1–10 (mặc định 5) · seed (mặc định tất định).
+- **Nhóm B — trọng số loss TỪNG ĐẦU RA** (Brain-B đa đầu ra): λ_success · λ_tokens · λ_latency ∈ [0,1], chuẩn hoá Σλ=1 tự động (hiển thị %), mỗi đầu ra chọn loại loss {BCE, MSE, Huber}; công thức tổng hiển thị trực tiếp: `L = λ₁·BCE(success) + λ₂·Huber(tokens) + λ₃·Huber(latency)`. Brain đơn đầu ra (A) / softmax (C): chỉ chọn loại loss.
+- **Nhóm C — composite reward (P4):** w₁ Outcome* · w₂ Efficiency* · w₃ Quality* — DEFAULT từ sweep kèm chú thích nguồn bắt buộc (doctrine #1); user override → **tuning-store STORE›ENV›DEFAULT + TuningChangeLog audit** (tiền lệ 13 tham số runtime); quy tắc log-only 2 đợt quan sát KHÔNG đổi.
+
+**Nút "Huấn luyện"** (chỉ bật khi `trainingImplemented` + đủ mẫu ngưỡng): chạy batch ngoài request path (A7), hiển thị tiến trình từng epoch (loss train/hold-out) → kết quả CV + CI → thắng/thua đối chứng; mỗi lần chạy sinh `BrainModel` version+1 — thua đối chứng = bỏ, `active` giữ nguyên (fail-open).
+
+### 9.4 UX-3 — ĐƯỜNG DÂY ÁNH SÁNG: kết nối động có hướng, bấm sửa được
+
+- **Hình dáng "uyển chuyển":** cạnh = đường cong bezier (điểm điều khiển lệch vuông góc trung điểm giữa 2 nơ-ron), nét gradient sáng dần theo chiều đi — thay đường thẳng tĩnh hiện tại.
+- **Thấy được hướng di chuyển:** animation nét đứt chạy dọc cạnh (`stroke-dasharray` + `stroke-dashoffset`, 2.4s linear infinite, **lệch pha theo từng cạnh** cho cảm giác dòng chảy chứ không nhấp nháy đồng loạt) + đầu mũi tên → chiều **lan truyền tiến** rõ ràng. Chế độ xem thứ hai khi có trainMeta: **lan truyền ngược** (đảo chiều + đổi tông hổ phách, độ dày theo |gradient| trung bình từng lớp — dữ liệu thật từ train, không trang trí suông).
+- **Bấm để sửa (đúng góp ý: lớp, nơ-ron, đường kết nối đều bấm được):**
+  - Bấm **nhãn cột lớp** → editor lớp đó (units + activation — UX-1).
+  - Bấm **nơ-ron** → inspector: bias · |w| trung bình vào/ra (sau train) · activation; kèm stepper nhanh ±1 nơ-ron của lớp.
+  - Bấm **cạnh** → inspector: 2 đầu nối · |w| (sau train) · tô sáng riêng đường đó; nút nhanh "Sửa 2 lớp hai đầu". *(Ghi chú trung thực: trọng số W do train sinh ra — không "vẽ tay" từng weight; chỉnh kiến trúc = chỉnh lớp / units / activation.)*
+- **Hiệu năng & a11y:** LOD tối đa ~300 cạnh (quá thì sampling đại diện — tiền lệ mini-map); gộp frame bằng rAF; `IntersectionObserver` dừng animation ngoài viewport; `prefers-reduced-motion` → bản tĩnh có mũi tên; touch target ≥ 44px.
+- **Sinh động nền (có nghĩa):** não ACTIVE có hào quang "thở" (pulse 4s ease-in-out); NGỦ = ánh sáng rất yếu, tĩnh — trạng thái thật chi phối trực quan, ánh sáng mang thông tin chứ không phải hiệu ứng vô nghĩa.
+
+### 9.5 UX-4 — TÁI BỐ CỤC TAB KIẾN TRÚC (giữ nguyên đồ thị hệ thống 6 lớp)
+
+Bố cục hiện tại xếp dọc toàn bộ card theo chiều rộng → trang dài, tỷ lệ khối chưa hợp lý. Chuyển sang **dashboard 3 vùng** (desktop ≥ 1280px):
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ ĐỒ THỊ HỆ THỐNG 6 LỚP — GIỮ NGUYÊN (hero, pan/zoom P3)        │
+├───────────┬──────────────────────────────────┬───────────────┤
+│ THANH TRÁI │ SÂN KHẤU GIỮA (UX-3)             │ THANH PHẢI    │
+│ Chọn não   │ Não đang chọn: đường dây ánh     │ Training      │
+│ A / B / C  │ sáng + trạng thái + bộ đếm       │ Console (UX-2)│
+│ + ngưỡng   │ tham số + nút Huấn luyện         │ + tab: Tham   │
+│ thức tỉnh  │                                  │ số runtime ·  │
+│ + phiên    │                                  │ Nhật ký       │
+│ bản        │                                  │ (gộp từ dưới) │
+└───────────┴──────────────────────────────────┴───────────────┘
+<1024px: xếp dọc — đồ thị hệ thống → Não studio → console thành bottom-sheet (tiền lệ P2)
+```
+
+- Bảng 13 tham số runtime + nhật ký tinh chỉnh rời khỏi dòng chảy chính → thành 2 tab trong thanh phải (rút ngắn rõ rệt chiều dài trang).
+- Kích thước chữ giữ chuẩn P3 (+1px đã duyệt — không quay lại); khoảng cách chuẩn hoá `gap-4` / `p-4`; card cùng độ cao theo hàng; mọi nút chạm ≥ 44px mobile.
+
+### 9.6 UX-5 — THEME DARK HI-TECH TOÀN APP: "màn hình kính viền sáng"
+
+Ngôn ngữ thiết kế: **"màn hình kính công nghệ cao trong phòng tối"** — nền sâu gần đen, bề mặt kính mờ, vành sáng chạy quanh panel, nút nhô có bóng — dark-hacker sang trọng, ánh sáng phục vụ thông tin.
+
+- **Tokens (CSS custom properties + Tailwind — không đổi tông hiện tại, tăng độ "sống"):** nền sâu `#05070D` · bề mặt kính 2 mức (trong suốt 4–8% + blur 8px, tối đa 1 lớp chồng) · điểm nhấn giữ bảng màu sẵn có (cy · hổ phách · ngọc · tím · hồng đá).
+- **Viền sáng chuyển động:** vành sáng conic-gradient quay quanh viền panel (`@property --angle`, 6s linear infinite) — trình duyệt không hỗ trợ thì fallback viền tĩnh sáng.
+- **Nút độ nổi độ bóng:** gradient dọc sáng→tối + inset highlight 1px mép trên + đổ bóng dưới; hover nhô 1px, active lún 1px, focus ring sáng rõ.
+- **Chỉ animate transform / opacity / --angle** (GPU-composited, không reflow); không JS chạy vòng lặp cho trang trí.
+- **Cờ `UI_HITECH=off` mặc định (doctrine #8):** bật/tắt bằng 1 nút trong UI (localStorage + tuning-store) — OFF trả về giao diện hiện tại nguyên vẹn (fail-open trình bày).
+- **Khả năng tiếp cận:** chữ luôn nằm trên nền chắn đặc (không để glow xuyên qua chữ) · contrast ≥ 4.5:1 (quét tự động r91) · `prefers-reduced-motion` tắt mọi vòng lặp vô hạn · dark là mặc định (không làm theme sáng).
+- **Rollout theo mô-đun, mỗi mô-đun 1 commit:** shell (header/nav/footer) → dashboard → Database (4 tab) → các mô-đun còn lại. Sticky-footer + bố cục flex dọc chuẩn giữ nguyên.
+
+```css
+/* Minh hoạ tokens — globals.css, KHÔNG thêm thư viện (doctrine #4) */
+:root[data-hitech='on'] { --ht-bg: #05070d; --ht-glass: rgb(255 255 255 / .04); --ht-angle: 0deg; }
+@property --ht-angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
+.glass-panel { background: var(--ht-glass); backdrop-filter: blur(8px); }
+.glow-border::before { /* vành sáng chạy quanh viền panel */
+  content: ''; position: absolute; inset: -1px; padding: 1px; border-radius: inherit; pointer-events: none;
+  background: conic-gradient(from var(--ht-angle), transparent 0 72%, var(--ht-accent) 86%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  animation: ht-spin 6s linear infinite;
+}
+@keyframes ht-spin { to { --ht-angle: 360deg; } }
+@media (prefers-reduced-motion: reduce) { .glow-border::before { animation: none; } }
+```
+
+### 9.7 SCHEMA & MIGRATION (additive — model thứ 100)
+
+```prisma
+model BrainSpecDraft {
+  id        String   @id @default(cuid())
+  brain     String   @unique  // 1 bản nháp mỗi brain ('calibration_v3' | 'surrogate' | 'policy')
+  specJson  String   // layers[{units,activation}] · lossPerHead[{type,weight}] · optimizer · hyper{lr,epochs,batch,l2,patience,holdout,clip,seed}
+  note      String?  // lý do chỉnh sửa — hiển thị trong diff
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+```
+
+- Migration: `bun run db:migrate -- --name add_brain_spec_draft` (kỷ luật A3 — không `db push` trần; 99 → 100 model).
+- **KHÔNG bảng mới cho override runtime** — tái dùng `TuningParam` (STORE›ENV›DEFAULT) + `TuningChangeLog` (audit + prune sẵn có).
+- Luồng nháp → runtime giữ nguyên bất biến A1: draft → train (ngoài request path) → thắng CV → `BrainModel` version+1 `active` (giao dịch 2 bước hiện hữu).
+- API mới: `GET/PUT /api/brain/spec-draft` — validate bằng `spec-schema.ts` (cùng rule client, single-source).
+
+### 9.8 TEST (pattern round, DB-cô-lập)
+
+| Round | Phạm vi |
+|---|---|
+| `r88` | spec validation (biên units 1–256 · chặn > 250K tham số · menu 9 activation đủ công thức + đạo hàm) · draft lưu / phục hồi / diff · KHÔNG bao giờ ghi đè bản active |
+| `r89` | chuẩn hoá Σλ=1 tự động · chuỗi hiệu lực STORE›ENV›DEFAULT · mọi set/reset có audit trail |
+| `r90` | reduced-motion → render tĩnh có mũi tên · tab ẩn → dừng rAF · LOD cắt cạnh đúng · hit-target cạnh/nơ-ron (point-to-bezier) chính xác |
+| `r91` | quét contrast mọi cặp chữ/nền ≥ 4.5:1 · `UI_HITECH=off` → DOM không còn class hiệu ứng · no-regression snapshot các trang chính |
+
+### 9.9 RỦI RO RIÊNG PHẦN UX & GIẢI PHÁP
+
+| Rủi ro | Giải pháp |
+|---|---|
+| Hiệu ứng nặng làm tụt máy yếu / mobile | Budget 60fps (đo rAF counter); tụt < 45fps liền 2s → tự hạ cấp (tắt glow/blur); mobile giảm hiệu ứng (`pointer: coarse`) |
+| Chỉnh spec tự do làm não xấu đi | Draft không chạm runtime; `active` chỉ qua CV; bộ đếm tham số + cảnh báo overfit (n mẫu vs params) ngay tại editor |
+| Glow / kính làm mất khả năng đọc | Chữ luôn trên nền chắn đặc; quét contrast tự động r91 |
+| `backdrop-filter` tốn GPU | Tối đa 1 lớp chồng; mobile dùng gradient đậm thay blur |
+| Theme toàn app phình phạm vi | Rollout từng mô-đun — mỗi mô-đun 1 commit nhỏ; cờ tắt toàn cục 1 nút |
+| Trạng thái chọn não / bảng gây rối | Mọi panel có "Về mặc định"; lựa chọn lưu localStorage |
+
+### 9.10 THỨ TỰ, CỜ, EFFORT
+
+| Giai đoạn | Việc | Phụ thuộc | Effort | Cờ (mặc định OFF) |
+|---|---|---|---|---|
+| UX-1 | Brain Studio — chọn não + sửa kiến trúc | P1 (nền toán để validate) | M | `UI_BRAIN_EDIT` |
+| UX-2 | Training Console — loss từng đầu ra + siêu tham số | P1 + P3 (đa đầu ra Brain-B) | M | `UI_BRAIN_EDIT` |
+| UX-3 | Đường dây ánh sáng động + bấm sửa được | P1-UI (đã có) | L | `UI_SYNAPSE_FX` |
+| UX-4 | Tái bố cục tab Kiến trúc | — (thuần trình bày) | M | — |
+| UX-5 | Theme hi-tech toàn app | — (thuần trình bày) | L | `UI_HITECH` |
+
+**Thứ tự mặc định: sau khi hoàn thành P1→P4** (chỉ thị user 2026-10-12). UX-3 / UX-4 / UX-5 không phụ thuộc nền toán — có thể kéo sớm theo chỉ thị riêng (tiền lệ P1-UI). Mỗi giai đoạn = 1 commit `feat(BRAIN-UX{n})` + quality-gate PASS trước push.
+
+---
+
+> **Ghi chú phiên bản 0.3:** tài liệu này là DRAFT để thảo luận — mọi con số effort/ngưỡng là ước lượng ban đầu, sẽ chốt lại theo từng phase. Nền toán MLP & pipeline train **chưa viết**; đã áp dụng sớm theo chỉ thị user: (2026-10-12, P/S) phần UI hiển thị + kho `BrainModel` + `/api/brain` + `registry.ts`; (2026-10-12, góp ý UI/UX) **§9 BRAIN-UX** — cũng CHƯA triển khai, chờ hoàn thành P1→P4 hoặc chỉ thị kéo sớm riêng cho UX-3/4/5.
