@@ -1,7 +1,9 @@
 # BLUEPRINT TRIỂN KHAI BRAIN P1 → P5 — "NÃO VẬN HÀNH" MLP-CPU CHO TMO
 
-> **Phiên bản:** 0.5 — **DRAFT, ĐANG THẢO LUẬN.** Nền toán MLP (§4.1) **ĐÃ triển khai (2026-10-12 — src/lib/brain/ + test r84 41/41 PASS; hiệu đính hợp đồng API qua đợt FB-BRAIN-P1 cùng ngày)**; Brain-A/B/C (§4.2–4.4) **CHƯA triển khai** (chưa brain nào train thật) — riêng **phần UI của P1 đã áp dụng sớm theo chỉ thị user (P/S, 2026-10-12)**: panel "Não vận hành" trên tab Database > Kiến trúc + model `BrainModel` + `/api/brain` + `src/lib/brain/registry.ts` (chỉ hiển thị trạng thái theo số liệu thật, chưa có train).
+> **Phiên bản:** 0.6 — **DRAFT, ĐANG THẢO LUẬN.** Nền toán MLP (§4.1) **ĐÃ triển khai (2026-10-12 — src/lib/brain/ + test r84; hiệu đính hợp đồng API qua đợt FB-BRAIN-P1 cùng ngày)**; **BRAIN-P2 (§4.2) ĐÃ triển khai (2026-10-12 — `src/lib/brain/calibration-v3.ts` + `POST /api/brain/train` + cờ `calibration_v3` + test r85 28/28 PASS)**: pipeline train Brain-A "V3" (MLP thay logistic, kế thừa nguyên vẹn pattern thăng cấp V2) + nút "Huấn luyện lại" sống trên panel Não vận hành + auto-train sau eval run; runtime vẫn mặc định OFF (cờ STORE > ENV > DEFAULT=off). Brain-B/C (§4.3–4.4) **CHƯA triển khai**. Riêng **phần UI của P1 đã áp dụng sớm theo chỉ thị user (P/S, 2026-10-12)**: panel "Não vận hành" trên tab Database > Kiến trúc + model `BrainModel` + `/api/brain` + `src/lib/brain/registry.ts`.
 > Được tạo theo chỉ thị user (2026-10-11): *"tạo một file .md lộ trình triển khai, cần triển khai những gì và triển khai như thế nào. Tuy nhiên chưa triển khai ngay mà vẫn cần thảo luận thêm."*
+>
+> **Nhật ký hiệu đính 0.5 → 0.6 (triển khai BRAIN-P2, 2026-10-12):** §4.2 HOÀN TẤT — `src/lib/brain/calibration-v3.ts` (train pipeline + 5-fold CV so V2 đối chứng train-lại-từng-fold + runtime apply fail-open) · cờ `calibration_v3` thêm vào TUNING_SPECS (tham số thứ 14 — chuỗi STORE > ENV > DEFAULT=off, gắn node Goal Loop) · chuỗi runtime `getCalibratedConfidence` V3→V2→V1→raw · `POST /api/brain/train` + `BRAIN_TRAINABLE_KEYS` (nút Huấn luyện lại chỉ sống cho brain có pipeline) · auto-train sau eval run (eval/runner.ts) · test r85 28 test (XOR quan hệ thật → V3 thắng CV rõ 0.11–0.14 vs 0.26; noise → không thắng; rollback/prune/fail-open mọi nhánh). Ghi chú phạm vi: phase này inputMode `features-10` (so sánh sạch cùng 10 đặc trưng V2) — mode vector `pca-128`/`mrl-512` vẫn chờ Q2 (§8 mục 3); V3 thua CV vẫn ghi bản vết audit `active=false` (không đụng bản active cũ).
 >
 > **Nhật ký hiệu đính 0.4 → 0.5 (đợt FB-BRAIN-P1 — giao thức fixbug sau triển khai P1, 2026-10-12):** đợt 13 phát hiện R1 (auditor độc lập) fix toàn bộ trong đó 3 mục đụng doc: (1) §4.1 ký hiệu interface optimizer `step(grads, params)` → **`step(params, grads)`** cho khớp code (FB-BRAIN-P1-R1-07); (2) nguyên tắc "chặn > 250K tham số" (§9.1-3) ghi rõ điểm thực thi tại **`validateSpec` — hằng `BRAIN_MAX_PARAMS = 250.000`** trong mlp.ts, mọi lối xây MLP đều bị chặn từ lớp toán (FB-BRAIN-P1-R1-08); (3) §9.2 badge tổng nhãn: làm rõ khi **MỌI nguồn đếm lỗi (current null hết) → ẨN badge**, không hiển thị "0 nhãn" — 0 chỉ có nghĩa khi đếm được và bằng 0 (FB-BRAIN-P1-R1-12).
 >
@@ -26,7 +28,7 @@
 | Phase | Việc | File chính | Effort | Cờ/Điểm dừng |
 |---|---|---|---|---|
 | **BRAIN-P1** | Nền toán MLP (lan truyền tiến/ngược, activation, loss, optimizer) + kho trọng số `BrainModel` + hiển thị **ANN thật** trên tab Kiến trúc | mới `src/lib/brain/{mlp,activations,losses,optimizers,init}.ts` · `prisma/schema.prisma` (+1 model) · `src/components/database/neural-architecture-section.tsx` (panel mới) | M | Không đổi hành vi runtime nào — thuần nền tảng + hiển thị. **HOÀN TẤT (2026-10-12): UI + `BrainModel` + `/api/brain` + `registry.ts` áp dụng sớm + nền toán 9 activation/4 loss/2 optimizer + test r84 41/41 PASS** |
-| **BRAIN-P2** | **Brain-A** — Calibration V3: MLP 2 lớp thay logistic V2 khi thắng đối chứng CV | mới `src/lib/brain/brains/calibration-v3.ts` · sửa `src/lib/calibration.ts` (điểm cắm runtime) | M | `CALIBRATION_V3=off` |
+| **BRAIN-P2** | **Brain-A** — Calibration V3: MLP 2 lớp thay logistic V2 khi thắng đối chứng CV | mới `src/lib/brain/calibration-v3.ts` · sửa `src/lib/calibration.ts` (điểm cắm runtime) | M | `CALIBRATION_V3=off`. **HOÀN TẤT (2026-10-12): train pipeline + 5-fold CV ngặt + cờ `calibration_v3` (TUNING_SPECS thứ 14) + `POST /api/brain/train` + auto-train sau eval run + test r85 28/28 PASS** |
 | **BRAIN-P3** | **Brain-B** — Surrogate Predictor (dự đoán kết quả cấu hình KHÔNG chạy thật) + chế độ replay-eval | mới `src/lib/brain/brains/surrogate.ts` + `src/app/api/brain/replay/route.ts` | L | `REPLAY_EVAL=off` (chỉ đo/báo cáo) |
 | **BRAIN-P4** | **Brain-C** — Policy head theo đặc trưng nhiệm vụ + **composite reward** + chuyển dần cơ quan lái (directives / model routing / tuning) sang nghe brain | mới `src/lib/brain/brains/policy.ts` + reward ledger thống nhất · sửa `adaptation-engine.ts` / `llm.ts` (từng cơ quan một) | L | `RUNTIME_POLICY=off` · từng cơ quan có kill-switch về hành vi cũ |
 | **BRAIN-P5** | Biên giao tiếp GPU/Python (Keras/PyTorch sidecar, GCN trên Neo4J — đường lên Level 3) | mini-service python (dài hạn, **chỉ khi có GPU**) | XL | Ngoài phạm vi lộ trình này — chỉ chốt contract |
@@ -215,7 +217,9 @@ model BrainModel {
 
 **Điểm dừng an toàn:** không một dòng runtime nào đổi hành vi. Merge an toàn bất kỳ lúc nào.
 
-### 4.2 BRAIN-P2 — BRAIN-A: CALIBRATION V3 (MLP thay logistic)
+### 4.2 BRAIN-P2 — BRAIN-A: CALIBRATION V3 (MLP thay logistic) — ☑ HOÀN TẤT 2026-10-12
+
+> **Trạng thái triển khai:** `src/lib/brain/calibration-v3.ts` (train + CV + runtime) · cờ `calibration_v3` trong TUNING_SPECS · `POST /api/brain/train` · auto-train sau eval run (`src/lib/eval/runner.ts`) · nút "Huấn luyện lại" sống trên UI · test `tests/r85-brain-calibration-v3.test.ts` 28/28 PASS. Ghi chú: (1) inputMode phase này `features-10` — mode vector chờ Q2; (2) V3 thua CV vẫn ghi BrainModel `active=false` làm vết audit (prune A2 giữ active + 5 mới nhất); (3) A7 single-flight lock chưa cần — train chỉ từ nút UI + hook sau eval run (không concurrent theo thiết kế); vào P3 khi thêm nguồn trigger.
 
 - **Đầu vào:** 2 chế độ đối chứng: (a) `features-10` — đúng 10 đặc trưng của V2 (so sánh sạch cùng input); (b) `pca-128`/`mrl-512` — đầu vào vector (§3.2).
 - **Kiến trúc khởi điểm:** `features-10: 10→16(tanh)→1(sigmoid)+BCE`; `pca/mrl: N→32(tanh)→1(sigmoid)+BCE`. Chọn bằng CV, không bằng cảm tính.
@@ -319,6 +323,7 @@ Mỗi `BrainModel.trainMetaJson.dataLineage` lưu: khoảng thời gian dữ li�
 | # | Quyết định | Khuyến nghị blueprint | Trạng thái |
 |---|---|---|---|
 | 1 | Duyệt BRAIN-P1 (nền toán + kho + UI — không đổi hành vi) | Triển khai trước, an toàn tuyệt đối | ☑ **HOÀN TẤT (2026-10-12): UI + `BrainModel` + `/api/brain` áp dụng sớm theo chỉ thị P/S · nền toán `mlp/activations/losses/init/optimizers` + test r84 41/41 PASS — không còn phần dở** |
+| 1b | Duyệt BRAIN-P2 (Brain-A V3 — đã triển khai 2026-10-12) | Đã chạy đúng spec §4.2; runtime mặc định OFF chờ user bật cờ `calibration_v3` khi muốn | ☑ **HOÀN TẤT (2026-10-12): r85 28/28 PASS — cờ `calibration_v3` mặc định off, chỉ user bật** |
 | 2 | Q1 — composite reward (P4) có đúng ý muốn? | log-only 2 đợt trước khi tác động | ☐ |
 | 3 | Q2 — inputMode mặc định | `pca-128` tạm, `mrl-512` sau đối chứng pilot; ablation cả 3 bắt buộc | ☐ |
 | 4 | Q3 — không tích hợp LangChain/LangGraph/Keras, mở biên P5 | Chấp nhận rủi ro trùng lặp → không tích hợp | ☐ |

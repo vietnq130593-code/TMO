@@ -23,7 +23,7 @@
  *
  * Ghi chú phân kỳ: Prisma + SQLite $transaction tương tác giữ lock
  * (bài học BUG2-119) — module này chỉ dùng upsert/deleteMany/findMany
- * đơn lẻ trên bảng nhỏ (13 row tối đa), không cần transaction.
+ * đơn lẻ trên bảng nhỏ (14 row tối đa), không cần transaction.
  */
 
 import { db } from '@/lib/db'
@@ -408,7 +408,7 @@ function getTuningStateEntry(key: string): TuningStateEntry {
 }
 
 /**
- * Trạng thái đầy đủ 13 tham số cho UI (force-refresh DB trước để số liệu
+ * Trạng thái đầy đủ 14 tham số cho UI (force-refresh DB trước để số liệu
  * chính xác — API gọi không thường xuyên nên chi phí chấp nhận được).
  */
 export async function getTuningState(): Promise<TuningStateEntry[]> {

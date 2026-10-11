@@ -6,7 +6,7 @@
 // 6 lớp (Đầu vào → Xử lý → Lưu trữ → Học → Quyết định → Đầu ra), 23 node,
 // 37 cạnh dòng chảy dữ liệu (data/reward/feedback/read — có hạt chạy động),
 // thuật toán + hàm số từng node (file:line) và Ô NHẬP TINH CHỈNH runtime
-// thật cho 13 hyperparameter (STORE > ENV > DEFAULT qua /api/neural-architecture).
+// thật cho 14 hyperparameter (STORE > ENV > DEFAULT qua /api/neural-architecture).
 //
 // P3 (2026-10-11, chỉ thị user):
 //   B1. PAN — bấm giữ chuột + kéo nền đồ thị để di chuyển nội dung (vùng
@@ -52,8 +52,9 @@ import {
 // registry single-source cho panel "Não vận hành"; API + UI cùng import.
 import {
   BRAIN_REGISTRY,
+  BRAIN_TRAINABLE_KEYS,
   computeLabelTotal,
-  type BrainApiResponse, type BrainStatusEntry, type BrainLifecycle,
+  type BrainApiResponse, type BrainStatusEntry, type BrainLifecycle, type BrainKey,
 } from '@/lib/brain/registry'
 
 // ==================== API CONTRACT ====================
@@ -317,6 +318,42 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
   // tiếp tục nhịp 15s. Tab load ngầm (visibilityState=hidden ngay từ đầu)
   // → lần fetch đầu hoãn tới khi user mở tab.
   // BRAIN-P1 UI: cùng nhịp poll này cũng kéo /api/brain (panel Não vận hành).
+  // BRAIN-P2: train xong (nút Huấn luyện lại) cũng fetchBrainData tươi.
+  const [trainingBrains, setTrainingBrains] = useState<Set<string>>(new Set())
+  const trainBrain = useCallback(async (key: BrainKey) => {
+    setTrainingBrains(prev => new Set(prev).add(key))
+    try {
+      const res = await fetch('/api/brain/train', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brain: key }),
+      })
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string; version?: number; active?: boolean
+        cvBrier?: number; brierV2?: number; sampleSize?: number; improved?: boolean
+      }
+      if (!res.ok) {
+        toast.error('Huấn luyện Brain không chạy', { description: json.error ?? `HTTP ${res.status}` })
+        return
+      }
+      const verdict = json.active
+        ? `v${json.version} ACTIVE — thắng CV (cờ CALIBRATION_V3 mới có tác dụng khi bật)`
+        : `v${json.version} không thắng CV — giữ nguyên chuỗi V2/V1 (bản vết audit đã ghi)`
+      toast.success(
+        `Brain-A "V3" huấn luyện xong · ${(json.cvBrier ?? Number.NaN).toFixed(4)} vs V2 ${(json.brierV2 ?? Number.NaN).toFixed(4)}`,
+        { description: `${verdict} · ${json.sampleSize ?? '?'} mẫu` },
+      )
+      void fetchBrainData() // kéo trạng thái mới ngay không chờ nhịp 15s
+    } catch (err) {
+      toast.error('Huấn luyện Brain thất bại', { description: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setTrainingBrains(prev => {
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
+    }
+  }, [fetchBrainData])
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null
     const start = () => {
@@ -480,6 +517,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
       lifecycle: 'dormant' as const,
       signals: spec.signals.map(s => ({ ...s, current: null, ok: false })),
       models: [],
+      trainable: BRAIN_TRAINABLE_KEYS.includes(spec.key),
     }))
   }, [brainData])
 
@@ -833,7 +871,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
               <BrainCircuit className="h-3.5 w-3.5 shrink-0 text-amber-400" />
               <h4 className="text-xs font-semibold text-stone-100">Não vận hành — MLP-CPU (BRAIN)</h4>
               <span className="text-[10px] text-stone-500">
-                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · BLUEPRINT-BRAIN-P1-P5 v0.5
+                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · BLUEPRINT-BRAIN-P1-P5 v0.6
               </span>
               {brainData && (
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -860,13 +898,24 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
             )}
             <div className="grid gap-3 md:grid-cols-3">
               {brainEntries.map(spec => (
-                <BrainCard key={spec.key} spec={spec} trainingImplemented={brainData?.trainingImplemented ?? false} />
+                <BrainCard
+                  key={spec.key}
+                  spec={spec}
+                  trainingImplemented={brainData?.trainingImplemented ?? false}
+                  onTrain={trainBrain}
+                  training={trainingBrains.has(spec.key)}
+                  flagValue={
+                    spec.flagTuningKey !== undefined
+                      ? String(tuningByKey.get(spec.flagTuningKey)?.effectiveValue ?? 'off')
+                      : undefined
+                  }
+                />
               ))}
             </div>
             <p className="mt-2.5 text-[9.5px] leading-relaxed text-stone-500">
-              ⚠ Huấn luyện offline chưa mở — chờ user duyệt nền toán BRAIN-P1 (mlp.ts + train pipeline + test r84;
-              blueprint §4.1). Panel hiện chỉ hiển thị trạng thái theo dữ liệu thật: khi đủ mẫu ngưỡng, brain đủ điều kiện
-              thức tỉnh; mọi thay đổi runtime luôn qua cờ phase (mặc định OFF).
+              ⚠ Brain-A "V3" đã có pipeline train (BRAIN-P2): nút Huấn luyện chỉ ghi bản mới — bản active chỉ
+              xuất hiện khi thắng V2 qua 5-fold CV Brier (ngặt, V2 train lại từng fold). Runtime chỉ đổi khi cờ
+              CALIBRATION_V3 bật (STORE › ENV › DEFAULT=off — bảng tinh chỉnh phía dưới). Brain-B/C chờ P3/P4.
             </p>
           </CardContent>
         </Card>
@@ -1408,19 +1457,33 @@ function BrainArchDiagram({ spec }: { spec: BrainStatusEntry }) {
   )
 }
 
-/** Thẻ 1 brain trong panel "Não vận hành". */
-function BrainCard({ spec, trainingImplemented }: { spec: BrainStatusEntry; trainingImplemented: boolean }) {
+/** Thẻ 1 brain trong panel "Não vận hành" (BRAIN-P2: nút train sống cho brain có pipeline). */
+function BrainCard({
+  spec, trainingImplemented, onTrain, training, flagValue,
+}: {
+  spec: BrainStatusEntry
+  trainingImplemented: boolean
+  /** BRAIN-P2 — gọi POST /api/brain/train (chỉ brain trainable mới có) */
+  onTrain?: (key: BrainKey) => void
+  training?: boolean
+  /** Giá trị hiệu lực thật của cờ (từ tuning state) — undefined = chưa có cờ */
+  flagValue?: string
+}) {
   const lc = BRAIN_LIFECYCLE_BADGE[spec.lifecycle]
   // Lý do nút huấn luyện bị tắt (hiển thị trong title — không để nút chết không giải thích)
   const missing = spec.signals
     .filter(s => !s.ok)
     .map(s => `${s.current === null ? '—' : s.current}/${s.min}`)
     .join(', ')
-  const retrainTitle = !trainingImplemented
-    ? `Chờ duyệt nền toán BRAIN-P1 (mlp.ts + train pipeline)${missing ? ` · chưa đủ mẫu: ${missing}` : ''}`
-    : spec.lifecycle === 'dormant'
-      ? `Chưa đủ mẫu thức tỉnh (${missing})`
-      : 'Chạy huấn luyện batch (offline, fail-open)'
+  // BRAIN-P2 — nút chỉ sống cho brain có pipeline (trainable) VÀ đủ mẫu
+  const canTrain = Boolean(onTrain) && spec.trainable && trainingImplemented && spec.lifecycle !== 'dormant'
+  const retrainTitle = !spec.trainable
+    ? `Chờ pipeline phase ${spec.phase} (nền toán BRAIN-P1 đã có — chưa có job train cho brain này)`
+    : !trainingImplemented
+      ? `Chờ hạ tầng train bật (BRAIN_TRAINING_IMPLEMENTED)${missing ? ` · chưa đủ mẫu: ${missing}` : ''}`
+      : spec.lifecycle === 'dormant'
+        ? `Chưa đủ mẫu thức tỉnh (${missing}) — ngủ an toàn`
+        : 'Chạy huấn luyện batch (offline, fail-open) — bản active chỉ xuất hiện khi thắng V2 qua 5-fold CV Brier (ngặt)'
   return (
     <div className="space-y-2.5 rounded-xl border border-slate-800/80 bg-slate-950/50 p-3" role="group" aria-label={spec.title}>
       <div className="flex items-center gap-2">
@@ -1457,7 +1520,10 @@ function BrainCard({ spec, trainingImplemented }: { spec: BrainStatusEntry; trai
       {spec.models.length > 0 ? (
         <div className="space-y-1">
           {spec.models.slice(0, 2).map(m => (
-            <p key={m.id} className="truncate text-[10px] text-stone-400" title={`v${m.version} · ${m.inputMode}`}>
+            <p
+              key={m.id} className="truncate text-[10px] text-stone-400"
+              title={`v${m.version} · ${m.inputMode}${m.meta.brierBaseline !== undefined ? ` · Brier V2 đối chứng ${m.meta.brierBaseline.toFixed(3)}` : ''}`}
+            >
               {m.active ? '★' : '·'} v{m.version} · {m.inputMode}
               {m.meta.cvScore !== undefined
                 ? ` · ${m.meta.metric ?? 'CV'} ${m.meta.cvScore.toFixed(3)}${
@@ -1465,6 +1531,9 @@ function BrainCard({ spec, trainingImplemented }: { spec: BrainStatusEntry; trai
                       ? ` [${m.meta.ciLow.toFixed(3)}–${m.meta.ciHigh.toFixed(3)}]`
                       : ''
                   }`
+                : ''}
+              {m.meta.brierBaseline !== undefined && m.meta.improved !== undefined
+                ? ` · ${m.meta.improved ? 'thắng' : 'thua'} V2 (${m.meta.brierBaseline.toFixed(3)})`
                 : ''}
               {m.meta.nSamples !== undefined ? ` · ${viNum(m.meta.nSamples)} mẫu` : ''}
             </p>
@@ -1475,14 +1544,22 @@ function BrainCard({ spec, trainingImplemented }: { spec: BrainStatusEntry; trai
       )}
       <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
         <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-500 border-stone-600/50">{spec.phase}</Badge>
-        <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-500 border-stone-600/50">{spec.flag}=off</Badge>
+        <Badge
+          variant="outline"
+          className={`h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] border-stone-600/50 ${flagValue === 'on' ? 'text-emerald-400' : 'text-stone-500'}`}
+          title={flagValue !== undefined ? 'Giá trị hiệu lực thật (STORE › ENV › DEFAULT) — đổi ở bảng tinh chỉnh phía dưới' : 'Cờ phase chưa có trong tuning store (mặc định OFF)'}
+        >
+          {spec.flag}={flagValue ?? 'off'}
+        </Badge>
         <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-400 border-stone-600/50">in: {spec.defaultInputMode}</Badge>
         <Button
-          variant="outline" size="sm" disabled
-          className="ml-auto h-6 px-2 text-[10px] border-stone-700 text-stone-500"
+          variant="outline" size="sm"
+          disabled={!canTrain || training}
+          onClick={() => onTrain?.(spec.key)}
+          className="ml-auto h-6 px-2 text-[10px] border-stone-700 text-stone-300"
           title={retrainTitle}
         >
-          Huấn luyện lại
+          {training ? 'Đang huấn luyện…' : 'Huấn luyện lại'}
         </Button>
       </div>
     </div>

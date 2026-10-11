@@ -26,6 +26,9 @@ import { judgeAnswer } from './judges'
 // Task 20-c — auto-retrain calibration model sau eval run (fail-open)
 import { trainCalibrationModel } from '@/lib/calibration-train'
 import { trainCalibrationModelV2 } from '@/lib/calibration-multifeature'
+// BRAIN-P2 (blueprint §4.2) — auto-train Brain-A V3 (MLP) ngay sau V2:
+// cùng nguồn EvalResult, kỷ luật thăng cấp 5-fold CV ngặt giữ nguyên.
+import { trainBrainCalibrationV3 } from '@/lib/brain/calibration-v3'
 // P1-M2 — ranking metrics (nDCG@5/MRR) trên thứ tự trả về của hybrid search
 import { ndcgAtK, mrr, meanCI } from '@/lib/stats'
 import { type ExpectedEntity, normalizeForEntityMatch, buildRelevanceVector } from './relevance'
@@ -427,6 +430,23 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
         })
         .catch(v2Err => {
           console.warn('[EvalRunner] Auto-retrain calibration V2 failed (fail-open):', v2Err instanceof Error ? v2Err.message : String(v2Err))
+        })
+      // BRAIN-P2 — auto-train Brain-A "V3" (MLP 10→16→1) sau V2: đủ ≥30
+      // usable + đủ 2 lớp là chạy 5-fold CV so V2 đối chứng; bản ghi
+      // active=true CHỈ khi cvBrier(V3) < cvBrier(V2) ngặt (fail-open như
+      // V1/V2 — retrain fail KHÔNG được làm fail eval run đã completed).
+      // KHÔNG tự train trong request path — đây là hook sau run hoàn tất
+      // (fire-and-forget), đúng trigger "nút UI + định kỳ" của §4.2.
+      void trainBrainCalibrationV3()
+        .then(v3 => {
+          if (v3.trained) {
+            console.log(`[EvalRunner] Auto-train Brain-A V3 (MLP): cvBrier=${(v3.cvBrier ?? Number.NaN).toFixed(4)} vs brierV2=${(v3.brierV2 ?? Number.NaN).toFixed(4)} → ${v3.active ? `ACTIVE v${v3.version} (thắng CV — cờ CALIBRATION_V3 mới có tác dụng)` : `v${v3.version} không thắng CV — giữ chuỗi V2/V1`} · sampleSize=${v3.sampleSize}`)
+          } else {
+            console.log(`[EvalRunner] Auto-train Brain-A V3 skipped: ${v3.error} (usable=${v3.usable}/${v3.total})`)
+          }
+        })
+        .catch(v3Err => {
+          console.warn('[EvalRunner] Auto-train Brain-A V3 failed (fail-open):', v3Err instanceof Error ? v3Err.message : String(v3Err))
         })
     } catch { /* fail-open */ }
   } catch (err) {

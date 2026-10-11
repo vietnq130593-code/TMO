@@ -2,7 +2,7 @@
  * NEURAL-ARCHITECTURE API — phục tab "Kiến trúc Neural" (module Database)
  * ======================================================================
  *
- * GET  → đồ thị 6 lớp + trạng thái 13 tham số runtime + số liệu sống từng
+ * GET  → đồ thị 6 lớp + trạng thái 14 tham số runtime + số liệu sống từng
  *        node (mỗi phép đếm fail-open độc lập — 1 lỗi không làm sập cả map)
  *        + top-Q advice + SAL gần nhất.
  * POST → action=set (body {key, value}) | action=reset (body {key}) —

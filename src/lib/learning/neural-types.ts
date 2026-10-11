@@ -8,7 +8,7 @@
  * THẬT cho: đồ thị lớp (layer graph), inspector panel, bảng tinh chỉnh.
  *
  * Hai khối:
- *   1. TUNING_SPECS — 13 hyperparameter vận hành thực (đọc/ghi runtime qua
+ *   1. TUNING_SPECS — 14 hyperparameter vận hành thực (đọc/ghi runtime qua
  *      tuning-store: STORE > ENV > DEFAULT) gắn với từng node.
  *   2. NEURAL_GRAPH — 6 lớp × 23 node × 37 cạnh: toàn bộ "mạng thần kinh"
  *      của TMO từ đầu vào (tài liệu/chat/workflow) qua xử lý (dedup/embed/
@@ -149,7 +149,7 @@ export interface NeuralGraph {
   edges: NeuralEdge[]
 }
 
-// ==================== 1. TUNING SPECS (13 tham số vận hành thực) ====================
+// ==================== 1. TUNING SPECS (14 tham số vận hành thực) ====================
 
 export const TUNING_SPECS: readonly TuningSpec[] = [
   {
@@ -325,6 +325,28 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
     default: 20,
     appliesTo: 'scanToolMetricAnomalies — lọc nhóm nhỏ',
   },
+  {
+    // BRAIN-P2 (blueprint §4.2) — cờ runtime của Brain-A "V3": chỉ bật khi
+    // muốn MLP dẫn đường chuỗi calibration (V3 active = đã thắng V2 qua
+    // 5-fold CV Brier). Chuỗi hiệu lực STORE > ENV > DEFAULT=off đúng
+    // runtime_model_policy — tinh chỉnh trên tab Kiến trúc không restart.
+    key: 'calibration_v3',
+    label: 'CALIBRATION_V3',
+    description:
+      'off = chuỗi calibration V1→V2 giữ nguyên. on = Brain-A MLP 10→16→1 dẫn đường khi có bản active (chỉ set sau khi thắng V2 qua 5-fold CV Brier ngặt); mọi lỗi → fail-open về V2/V1/raw.',
+    nodeId: 'goal-loop',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'CALIBRATION_V3',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' ? 'on' : 'off'
+    },
+    warning:
+      'Bật = runtime KB confidence đi qua MLP Brain-A khi bản active tồn tại (thắng CV rồi mới active). Không có bản active → flag on cũng vô hiệu (fail-open về V2). Rollback = set lại off hoặc deactive bản BrainModel.',
+    appliesTo: 'tryCalibrationV3 — dẫn đường getCalibratedConfidence (kb-access) khi active',
+  },
 ] as readonly TuningSpec[]
 
 /** Tra spec theo key (O(1) qua Map dựng sẵn). */
@@ -419,7 +441,7 @@ export const NEURAL_NODES: readonly NeuralNode[] = [
       { name: 'runGoalLoop (PLAN hint)', file: 'src/lib/agent-goal-loop.ts', line: 2499 },
       { name: 'W2 verdict reward', file: 'src/lib/agent-goal-loop.ts', line: 5887 },
     ],
-    paramKeys: ['q_advice_min_visits'],
+    paramKeys: ['q_advice_min_visits', 'calibration_v3'],
   },
   {
     id: 'workflow',

@@ -11,9 +11,9 @@
  *     → active (có bản BrainModel active)
  *   - các phiên bản BrainModel đã train (nếu có) — KHÔNG kéo weightsJson
  *
- * Chỉ đọc (read-only) — không POST train: nền toán BRAIN-P1 chưa được duyệt
- * (BRAIN_TRAINING_IMPLEMENTED = false); khi triển khai §4.1 phần toán thì
- * nút "Huấn luyện lại" ở UI sẽ gọi POST /api/brain/train (API riêng).
+ * Chỉ đọc (read-only) — train qua POST /api/brain/train (BRAIN-P2:
+ * pipeline Brain-A calibration-v3 đã sống — src/lib/brain/calibration-v3.ts;
+ * chỉ brain trong BRAIN_TRAINABLE_KEYS nhận train, còn lại 400).
  *
  * Nhẹ cho SQLite: toàn bộ count/findMany take nhỏ trên bảng có index
  * ([brain, active] — migration add_brain_model); KHÔNG $transaction
@@ -24,6 +24,7 @@ import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import {
   BRAIN_REGISTRY,
+  BRAIN_TRAINABLE_KEYS,
   BRAIN_TRAINING_IMPLEMENTED,
   type BrainApiResponse,
   type BrainModelSummary,
@@ -54,6 +55,9 @@ function parseTrainMeta(raw: string): BrainModelSummary['meta'] {
       ciLow: num(obj.cvScoreCiLow),
       ciHigh: num(obj.cvScoreCiHigh),
       metric: typeof obj.metric === 'string' ? obj.metric : undefined,
+      // BRAIN-P2 — baseline đối chứng + kết luận CV (hiển thị "thắng/thua V2")
+      brierBaseline: num(obj.brierV2),
+      improved: typeof obj.improved === 'boolean' ? obj.improved : undefined,
     }
   } catch {
     return {}
@@ -130,7 +134,13 @@ export async function GET() {
       const hasActive = specModels.some(m => m.active)
       const allOk = signals.length > 0 && signals.every(s => s.ok)
       const lifecycle: BrainLifecycle = hasActive ? 'active' : allOk ? 'awake' : 'dormant'
-      return { ...spec, lifecycle, signals, models: specModels }
+      return {
+        ...spec,
+        lifecycle,
+        signals,
+        models: specModels,
+        trainable: BRAIN_TRAINABLE_KEYS.includes(spec.key),
+      }
     })
 
     const payload: BrainApiResponse = {

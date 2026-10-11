@@ -18,19 +18,32 @@
 // V2 parse lỗi / DB error → return the raw confidence unchanged (calibration
 // must never make the system worse than its raw signal).
 
+// BRAIN-P2 (blueprint §4.2) — V3 (Brain-A MLP) dẫn đường khi cờ
+// CALIBRATION_V3 (STORE > ENV > DEFAULT=off — tuning store, key
+// 'calibration_v3') bật VÀ có bản BrainModel active (thắng V2 qua 5-fold
+// CV Brier). Mọi nhánh không áp được → rơi đúng chuỗi V2 → V1 → raw cũ.
+
 import { db } from '@/lib/db'
 import { applyV2Model, parseV2ModelJson } from '@/lib/calibration-multifeature'
+import { tryCalibrationV3 } from '@/lib/brain/calibration-v3'
 
 /** Minimum training samples before the calibration model is trusted. */
 const MIN_CALIBRATION_SAMPLES = 20
 
 /**
  * Get the calibrated confidence for a raw Step-1 KB confidence score.
- * V2-active (đa biến, thắng CV) được thử TRƯỚC; fallback V1 (1 biến);
- * fallback raw khi không có model nào tin được.
+ * Chuỗi hiệu lực: V3 (Brain-A MLP — cờ CALIBRATION_V3 + active) → V2-active
+ * (đa biến, thắng CV V1) → V1 (1 biến) → fallback raw khi không có model
+ * nào tin được. Từng tầng fail-open độc lập — V3 lỗi/không áp được thì V2
+ * vẫn chạy đúng như trước khi V3 tồn tại.
  */
 export async function getCalibratedConfidence(rawConfidence: number): Promise<number> {
   try {
+    // BRAIN-P2 — V3 (Brain-A MLP) được thử TRƯỚC khi cờ bật; trả null ở
+    // MỌI nhánh không áp được (cờ off / chưa active / parse lỗi / thiếu
+    // mẫu) → rơi tiếp V2. V3 KHÔNG bao giờ làm runtime tệ hơn chuỗi cũ.
+    const v3 = await tryCalibrationV3(rawConfidence)
+    if (v3 !== null) return v3
     // P3-M1 — V2 active dẫn đường (không có features caller → mọi đặc trưng
     // trừ rawConfidence lấy mean tập train — chuẩn hóa = 0)
     const v2 = await db.calibrationModelV2.findUnique({ where: { id: 'default' } })

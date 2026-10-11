@@ -4,10 +4,9 @@
  * ======================================================================
  *
  * Áp dụng sớm PHẦN UI của BRAIN-P1 theo chỉ thị user (P/S, 2026-10-12) —
- * xem `docs/BLUEPRINT-BRAIN-P1-P5.md` §4.1 (v0.2). Nền toán MLP + pipeline
- * train (mlp.ts / activations.ts / losses.ts / optimizers.ts / init.ts)
- * CHƯA triển khai — chờ user duyệt; API/UI chỉ HIỂN THỊ trạng thái theo
- * số liệu thật, không thay đổi hành vi runtime nào (điểm dừng an toàn P1).
+ * xem `docs/BLUEPRINT-BRAIN-P1-P5.md` §4.1. Từ BRAIN-P2 (2026-10-12):
+ * pipeline train Brain-A "V3" đã sống ở src/lib/brain/calibration-v3.ts
+ * (kế thừa pattern thăng cấp V2 — 5-fold CV ngặt, fail-open tuyệt đối).
  *
  * Module THUẦN HẰNG SỐ — không import db (an toàn cả client bundle lẫn
  * bun:test). Mọi ngưỡng hardcode kèm chú thích nguồn (doctrine #1):
@@ -62,6 +61,8 @@ export interface BrainSpec {
   phase: string
   /** Cờ runtime sẽ bật khi brain tham gia (mặc định OFF) */
   flag: string
+  /** Key tuning-store của cờ (chỉ brain đã có cờ thật trong TUNING_SPECS) */
+  flagTuningKey?: string
   /** Các chế độ đầu vào ablation (blueprint §3.2) */
   inputModes: string[]
   defaultInputMode: string
@@ -95,6 +96,10 @@ export interface BrainModelSummary {
     ciLow?: number
     ciHigh?: number
     metric?: string
+    /** BRAIN-P2 — Brier CV của baseline đối chứng (V2 với Brain-A) */
+    brierBaseline?: number
+    /** true khi bản này thắng đối chứng CV (chính là active) */
+    improved?: boolean
   }
 }
 
@@ -104,6 +109,8 @@ export interface BrainStatusEntry extends BrainSpec {
   signals: BrainSignalStatus[]
   /** Các phiên bản đã train (mới nhất trước) — ban đầu rỗng */
   models: BrainModelSummary[]
+  /** BRAIN-P2 — đã có pipeline train thật (nút Huấn luyện lại bật khi đủ mẫu) */
+  trainable: boolean
 }
 
 export interface BrainApiResponse {
@@ -123,6 +130,7 @@ export const BRAIN_REGISTRY: readonly BrainSpec[] = [
     role: 'Chuẩn hoá độ tin cậy kiến thức KB — MLP 2 lớp thay logistic V2 khi thắng đối chứng 5-fold CV (Brier).',
     phase: 'BRAIN-P2',
     flag: 'CALIBRATION_V3',
+    flagTuningKey: 'calibration_v3',
     inputModes: ['features-10', 'pca-128', 'mrl-512'],
     defaultInputMode: 'features-10',
     planned: {
@@ -213,14 +221,21 @@ export const BRAIN_REGISTRY: readonly BrainSpec[] = [
 export const BRAIN_VERSIONS_KEEP = 5
 
 /**
- * Nền toán BRAIN-P1 ĐÃ triển khai (2026-10-12 — src/lib/brain/{mlp,
- * activations,losses,init,optimizers}.ts + test r84 41/41 PASS) nhưng
- * pipeline train TỪNG BRAIN (P2 calibration-v3 / P3 surrogate / P4 policy)
- * chưa có → cờ vẫn false: nút "Huấn luyện lại" chỉ bật khi brain tương ứng
- * có job train thật + đủ mẫu ngưỡng. Đặt true khi pipeline brain đầu tiên
- * (P2) triển khai.
+ * Brain đã có pipeline train THẬT (BRAIN-P2 trở đi — Brain-A là đứa đầu
+ * tiên). Nút "Huấn luyện lại" chỉ bật cho brain nằm trong danh sách này VÀ
+ * đủ mẫu ngưỡng; brain khác vẫn ngủ chờ phase tương ứng (P3/P4).
  */
-export const BRAIN_TRAINING_IMPLEMENTED = false
+export const BRAIN_TRAINABLE_KEYS: readonly BrainKey[] = ['calibration_v3']
+
+/**
+ * Nền toán BRAIN-P1 đã triển khai (2026-10-12 — src/lib/brain/{mlp,
+ * activations,losses,init,optimizers}.ts + test r84 68/68 PASS sau đợt
+ * FB-BRAIN-P1) VÀ pipeline train brain đầu tiên đã có từ BRAIN-P2
+ * (2026-10-12 — src/lib/brain/calibration-v3.ts + POST /api/brain/train
+ * + test r85): true kể từ đây. Brain-B/C (surrogate/policy) vẫn chờ
+ * P3/P4 — xem BRAIN_TRAINABLE_KEYS cho biết nút nào đã sống.
+ */
+export const BRAIN_TRAINING_IMPLEMENTED = true
 
 // ==================== BADGE TỔNG NHÃN (blueprint §9.2 v0.4) ====================
 
