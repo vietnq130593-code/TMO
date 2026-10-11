@@ -23,7 +23,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import {
   Network, RefreshCw, RotateCcw, Loader2, Settings2, ArrowRight,
-  TriangleAlert, Wrench, Database, Zap, ZoomIn, ZoomOut, Maximize2, History,
+  TriangleAlert, Wrench, Database, Zap, ZoomIn, ZoomOut, Maximize2, History, BrainCircuit,
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -48,6 +48,12 @@ import {
   clampNeuralZoom, neuralSvgWidth, neuralZoomLabel, zoomStepFrom,
   type NeuralZoom, type PlacedNode,
 } from '@/lib/learning/neural-layout'
+// BRAIN-P1 phần UI (áp dụng sớm 2026-10-12 — BLUEPRINT-BRAIN §4.1 v0.2):
+// registry single-source cho panel "Não vận hành"; API + UI cùng import.
+import {
+  BRAIN_REGISTRY,
+  type BrainApiResponse, type BrainStatusEntry, type BrainLifecycle,
+} from '@/lib/brain/registry'
 
 // ==================== API CONTRACT ====================
 
@@ -282,6 +288,26 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
     }
   }, [])
 
+  // BRAIN-P1 UI (2026-10-12): trạng thái 3 brain cho panel "Não vận hành"
+  // — fail-open tuyệt đối: lỗi fetch giữ dữ liệu cũ, chưa từng load thành
+  // công thì UI vẫn render được từ registry tĩnh (đếm hiển thị "—").
+  const [brainData, setBrainData] = useState<BrainApiResponse | null>(null)
+  const [brainError, setBrainError] = useState<string | null>(null)
+  const hasBrainDataRef = useRef(false)
+  const fetchBrainData = useCallback(async () => {
+    try {
+      const res = await fetch('/api/brain')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = (await res.json()) as BrainApiResponse
+      setBrainData(json)
+      hasBrainDataRef.current = true
+      setBrainError(null)
+    } catch (err) {
+      console.error('[Brain] fetch error:', err)
+      if (!hasBrainDataRef.current) setBrainError(err instanceof Error ? err.message : String(err))
+    }
+  }, [])
+
   // Mount + poll nền 15s giữ số liệu sống (fail-open giữ dữ liệu cũ).
   // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect —
   // cùng pattern auto-learn-section)
@@ -289,10 +315,11 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
   // (không fetch vô nghĩa vào tab nền); hiện lại → fetch ngay một lần rồi
   // tiếp tục nhịp 15s. Tab load ngầm (visibilityState=hidden ngay từ đầu)
   // → lần fetch đầu hoãn tới khi user mở tab.
+  // BRAIN-P1 UI: cùng nhịp poll này cũng kéo /api/brain (panel Não vận hành).
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null
     const start = () => {
-      if (timer === null) timer = setInterval(() => { void fetchData() }, POLL_NEURAL_MS)
+      if (timer === null) timer = setInterval(() => { void fetchData(); void fetchBrainData() }, POLL_NEURAL_MS)
     }
     const stop = () => {
       if (timer !== null) {
@@ -303,6 +330,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
     if (document.visibilityState !== 'hidden') {
       queueMicrotask(() => {
         void fetchData()
+        void fetchBrainData()
       })
       start()
     }
@@ -311,6 +339,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
         stop()
       } else {
         void fetchData()
+        void fetchBrainData()
         start()
       }
     }
@@ -319,7 +348,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
       stop()
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [fetchData])
+  }, [fetchData, fetchBrainData])
 
   // P1-1: restore zoom 1 lần SAU mount (localStorage > mobile-fit > 100%)
   // rồi mới bật persist — tránh ghi đè lựa chọn user bằng mặc định khởi tạo.
@@ -439,6 +468,19 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
     const fromApi = data?.live?.[selectedNodeId] ?? []
     return [...fromApi, ...healthLiveFor(health ?? null, selectedNodeId)]
   }, [selectedNodeId, data, health])
+
+  // BRAIN-P1 UI: danh sách brain để render — dữ liệu thật nếu đã load,
+  // còn chưa load/lỗi thì fallback registry tĩnh (đếm null → hiển thị "—",
+  // fail-open không để panel trắng). useMemo chống tạo lại mỗi nhịp poll.
+  const brainEntries = useMemo<BrainStatusEntry[]>(() => {
+    if (brainData) return brainData.brains
+    return BRAIN_REGISTRY.map(spec => ({
+      ...spec,
+      lifecycle: 'dormant' as const,
+      signals: spec.signals.map(s => ({ ...s, current: null, ok: false })),
+      models: [],
+    }))
+  }, [brainData])
 
   // P2-M3: mobile (viewport < lg) → chọn node mở bottom-sheet inspector
   // (thay cuộn xuống inspector dưới đồ thị — below-the-fold); desktop giữ
@@ -768,6 +810,45 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* ── PANEL "NÃO VẬN HÀNH" (BRAIN-P1 phần UI — áp dụng sớm 2026-10-12
+          theo chỉ thị P/S user; blueprint §4.1 v0.2. 3 bộ não MLP-CPU nhỏ:
+          hiện trạng thái thức tỉnh theo số liệu THẬT từ DB — chưa train,
+          không đổi hành vi runtime nào — nút huấn luyện tắt chờ duyệt
+          nền toán §4.1.) ── */}
+      <div className="nc-wrap nc-amber">
+        <Card className="nc-panel nc-md nc-border-amber">
+          <CardContent className="p-4">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <BrainCircuit className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+              <h4 className="text-xs font-semibold text-stone-100">Não vận hành — MLP-CPU (BRAIN)</h4>
+              <span className="text-[10px] text-stone-500">
+                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · BLUEPRINT-BRAIN-P1-P5 v0.2
+              </span>
+              {brainData && (
+                <Badge variant="outline" className="ml-auto text-[9px] h-3.5 px-1 bg-amber-950/60 text-amber-400 border-amber-500/40">
+                  ● sống · {new Date(brainData.generatedAt).toLocaleTimeString('vi-VN')}
+                </Badge>
+              )}
+            </div>
+            {brainError && !brainData && (
+              <p className="mb-2 text-[11px] text-amber-500/90">
+                Không tải được số liệu mẫu ({brainError}) — hiển thị spec kế hoạch, thử Làm mới ở trên (fail-open).
+              </p>
+            )}
+            <div className="grid gap-3 md:grid-cols-3">
+              {brainEntries.map(spec => (
+                <BrainCard key={spec.key} spec={spec} trainingImplemented={brainData?.trainingImplemented ?? false} />
+              ))}
+            </div>
+            <p className="mt-2.5 text-[9.5px] leading-relaxed text-stone-500">
+              ⚠ Huấn luyện offline chưa mở — chờ user duyệt nền toán BRAIN-P1 (mlp.ts + train pipeline + test r84;
+              blueprint §4.1). Panel hiện chỉ hiển thị trạng thái theo dữ liệu thật: khi đủ mẫu ngưỡng, brain đủ điều kiện
+              thức tỉnh; mọi thay đổi runtime luôn qua cờ phase (mặc định OFF).
+            </p>
+          </CardContent>
+        </Card>
+      </div>
 
       {/* ── BẢNG TINH CHỈNH TOÀN BỘ ── */}
       <div className="nc-wrap nc-violet">
@@ -1232,6 +1313,156 @@ function TuningControl({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  )
+}
+
+// ==================== BRAIN CARD (panel "Não vận hành" — BRAIN-P1 UI) ====================
+// (2026-10-12, áp dụng sớm theo chỉ thị P/S user — BLUEPRINT-BRAIN §4.1 v0.2)
+// Mỗi thẻ = 1 brain: đồ thị lớp MLP theo spec khởi điểm + trạng thái thức
+// tỉnh theo số liệu ĐẾM THẬT từ /api/brain + các phiên bản đã train (nếu
+// có) + nút huấn luyện (tắt — nền toán P1 chờ duyệt). Không state riêng —
+// nhận dữ liệu qua props, mọi fallback xử lý ở panel cha.
+
+const BRAIN_LIFECYCLE_BADGE: Record<BrainLifecycle, { label: string; cls: string; dot: string }> = {
+  dormant: { label: 'NGỦ', cls: 'bg-slate-950/70 text-stone-400 border-stone-600/50', dot: 'bg-stone-500' },
+  awake:   { label: 'THỨC TỈNH', cls: 'bg-amber-950/70 text-amber-400 border-amber-500/45', dot: 'bg-amber-400' },
+  active:  { label: 'ACTIVE', cls: 'bg-emerald-950/70 text-emerald-400 border-emerald-500/45', dot: 'bg-emerald-400' },
+}
+
+/** Vẽ nhẹ đồ thị lớp MLP khởi điểm (input → hidden → output + nhãn). */
+function BrainArchDiagram({ spec }: { spec: BrainStatusEntry }) {
+  const layers = spec.planned.layers
+  // Cột x: đều nhau trong viewBox 300 — đồ thị brain nhỏ, không cần pan/zoom
+  // (hạ tầng pan/zoom P3 dành cho đồ thị 6 lớp lớn phía trên).
+  const R = 6.5
+  const cols = layers.map((l, i) => ({
+    x: 42 + i * 108, // 42 · 150 · 258
+    count: l.units === 0 ? 1 : Math.min(Math.max(l.units, 1), 4),
+    label: l.unitsLabel ?? `×${l.units}`,
+    sub: l.activation || 'input',
+  }))
+  const yFor = (colIdx: number, i: number) => 30 + (i - (cols[colIdx].count - 1) / 2) * 16
+  // Cạnh: nối đủ từng cặp vòng tròn giữa 2 cột liền kề (đủ nhẹ để đọc dòng chảy)
+  const edges: Array<{ x1: number; y1: number; x2: number; y2: number }> = []
+  for (let ci = 0; ci < cols.length - 1; ci++) {
+    for (let i = 0; i < cols[ci].count; i++) {
+      for (let j = 0; j < cols[ci + 1].count; j++) {
+        edges.push({ x1: cols[ci].x + R, y1: yFor(ci, i), x2: cols[ci + 1].x - R, y2: yFor(ci + 1, j) })
+      }
+    }
+  }
+  const ariaLayers = layers.map(l => `${l.unitsLabel ?? l.units} ${l.activation || 'in'}`).join(' → ')
+  return (
+    <svg
+      viewBox="0 0 300 92" className="h-auto w-full" role="img"
+      aria-label={`Kiến trúc khởi điểm ${spec.title}: ${ariaLayers} — loss ${spec.planned.loss}`}
+    >
+      {edges.map((e, i) => (
+        <line key={`e-${i}`} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} stroke="rgba(168,162,158,0.22)" strokeWidth="0.8" />
+      ))}
+      {cols.map((c, ci) =>
+        Array.from({ length: c.count }).map((_, i) => (
+          <circle
+            key={`n-${ci}-${i}`} cx={c.x} cy={yFor(ci, i)} r={R}
+            fill="rgba(2,6,23,0.95)" stroke="rgba(251,191,36,0.55)" strokeWidth="1.1"
+          />
+        )),
+      )}
+      {cols.map((c, ci) => (
+        <g key={`l-${ci}`}>
+          <text x={c.x} y="72" textAnchor="middle" fontSize={NEURAL_FONTS.subtitle} className="fill-stone-300" style={{ fontFamily: 'inherit' }}>
+            {c.label}
+          </text>
+          <text x={c.x} y="82" textAnchor="middle" fontSize={NEURAL_FONTS.gear} className="fill-stone-500" style={{ fontFamily: 'inherit' }}>
+            {c.sub}
+          </text>
+        </g>
+      ))}
+      <text x="150" y="90.5" textAnchor="middle" fontSize={NEURAL_FONTS.gear} className="fill-amber-500/80" style={{ fontFamily: 'inherit' }}>
+        loss: {spec.planned.loss}
+      </text>
+    </svg>
+  )
+}
+
+/** Thẻ 1 brain trong panel "Não vận hành". */
+function BrainCard({ spec, trainingImplemented }: { spec: BrainStatusEntry; trainingImplemented: boolean }) {
+  const lc = BRAIN_LIFECYCLE_BADGE[spec.lifecycle]
+  // Lý do nút huấn luyện bị tắt (hiển thị trong title — không để nút chết không giải thích)
+  const missing = spec.signals
+    .filter(s => !s.ok)
+    .map(s => `${s.current === null ? '—' : s.current}/${s.min}`)
+    .join(', ')
+  const retrainTitle = !trainingImplemented
+    ? `Chờ duyệt nền toán BRAIN-P1 (mlp.ts + train pipeline)${missing ? ` · chưa đủ mẫu: ${missing}` : ''}`
+    : spec.lifecycle === 'dormant'
+      ? `Chưa đủ mẫu thức tỉnh (${missing})`
+      : 'Chạy huấn luyện batch (offline, fail-open)'
+  return (
+    <div className="space-y-2.5 rounded-xl border border-slate-800/80 bg-slate-950/50 p-3" role="group" aria-label={spec.title}>
+      <div className="flex items-center gap-2">
+        <p className="min-w-0 flex-1 truncate text-[12px] font-semibold text-stone-100">
+          {spec.title} <span className="text-amber-400">&quot;{spec.name}&quot;</span>
+        </p>
+        <Badge variant="outline" className={`h-4 px-1.5 text-[9px] ${lc.cls}`} role="status" aria-label={`Trạng thái ${lc.label}`}>
+          <span className={`mr-1 inline-block h-1.5 w-1.5 rounded-full ${lc.dot}`} aria-hidden="true" />
+          {lc.label}
+        </Badge>
+      </div>
+      <p className="text-[11px] leading-snug text-stone-400">{spec.role}</p>
+      <BrainArchDiagram spec={spec} />
+      <div className="space-y-1.5">
+        <p className="text-[10px] uppercase tracking-wide text-stone-500">Thức tỉnh khi đủ mẫu</p>
+        {spec.signals.map(sig => {
+          const pct = sig.current === null ? 0 : Math.min(100, Math.round((sig.current / sig.min) * 100))
+          return (
+            <div
+              key={sig.key} className="flex items-center gap-2 text-[11px]"
+              title={`${sig.label} — bảng ${sig.table} · ngưỡng ${sig.min} (${sig.source})`}
+            >
+              <span className="min-w-0 flex-1 truncate text-stone-300">{sig.label}</span>
+              <div className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-slate-900" aria-hidden="true">
+                <div className={`h-full rounded-full ${sig.ok ? 'bg-emerald-500/80' : 'bg-amber-500/70'}`} style={{ width: `${pct}%` }} />
+              </div>
+              <span className="w-16 shrink-0 text-right font-mono tabular-nums text-stone-200">
+                {sig.current === null ? '—' : viNum(sig.current)}/{sig.min}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+      {spec.models.length > 0 ? (
+        <div className="space-y-1">
+          {spec.models.slice(0, 2).map(m => (
+            <p key={m.id} className="truncate text-[10px] text-stone-400" title={`v${m.version} · ${m.inputMode}`}>
+              {m.active ? '★' : '·'} v{m.version} · {m.inputMode}
+              {m.meta.cvScore !== undefined
+                ? ` · ${m.meta.metric ?? 'CV'} ${m.meta.cvScore.toFixed(3)}${
+                    m.meta.ciLow !== undefined && m.meta.ciHigh !== undefined
+                      ? ` [${m.meta.ciLow.toFixed(3)}–${m.meta.ciHigh.toFixed(3)}]`
+                      : ''
+                  }`
+                : ''}
+              {m.meta.nSamples !== undefined ? ` · ${viNum(m.meta.nSamples)} mẫu` : ''}
+            </p>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[10px] italic text-stone-600">Chưa có phiên bản nào được huấn luyện — ngủ an toàn, không đổi hành vi runtime.</p>
+      )}
+      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+        <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-500 border-stone-600/50">{spec.phase}</Badge>
+        <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-500 border-stone-600/50">{spec.flag}=off</Badge>
+        <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-400 border-stone-600/50">in: {spec.defaultInputMode}</Badge>
+        <Button
+          variant="outline" size="sm" disabled
+          className="ml-auto h-6 px-2 text-[10px] border-stone-700 text-stone-500"
+          title={retrainTitle}
+        >
+          Huấn luyện lại
+        </Button>
+      </div>
     </div>
   )
 }

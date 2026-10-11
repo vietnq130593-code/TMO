@@ -1,7 +1,9 @@
 # BLUEPRINT TRIỂN KHAI BRAIN P1 → P5 — "NÃO VẬN HÀNH" MLP-CPU CHO TMO
 
-> **Phiên bản:** 0.1 — **DRAFT, ĐANG THẢO LUẬN. CHƯA TRIỂN KHAI DÒNG CODE NÀO.**
+> **Phiên bản:** 0.2 — **DRAFT, ĐANG THẢO LUẬN.** Nền toán MLP (§4.1) và Brain-A/B/C (§4.2–4.4) **CHƯA triển khai** — riêng **phần UI của P1 đã áp dụng sớm theo chỉ thị user (P/S, 2026-10-12)**: panel "Não vận hành" trên tab Database > Kiến trúc + model `BrainModel` + `/api/brain` + `src/lib/brain/registry.ts` (chỉ hiển thị trạng thái theo số liệu thật, chưa có train).
 > Được tạo theo chỉ thị user (2026-10-11): *"tạo một file .md lộ trình triển khai, cần triển khai những gì và triển khai như thế nào. Tuy nhiên chưa triển khai ngay mà vẫn cần thảo luận thêm."*
+>
+> **Nhật ký hiệu đính 0.1 → 0.2 (audit 2 lượt — vai System & AI Architecture Auditor, 2026-10-12):** lượt 1 xác thực toàn bộ claim file:line / hằng số / đếm bảng — **khớp 100%** (đo lại live cùng ngày: AgentRunRecord=20, ArbiterVerdict=10, EvalResult=4, EvalCase=9, LessonRecord=25, EpisodeRecord=56, QEntry=1, StrategyAdaptationLog=0, KpiSnapshot=11, TuningParam=0; `stats/pca.ts` có sẵn; test kế tiếp đúng r84; đúng 98 model; đúng 9 nguyên tắc doctrine; `src/lib/embeddings.ts:46` đúng từng dòng). Lượt 2 bổ 12 điểm còn thiếu: A1 bất biến "1 bản active mỗi brain", A2 chính sách prune + ước lượng size weights, A3 kỷ luật migration (không db-push trần), A4 index `[brain, active]`, A5 cột `trainedAt`, A6 envelope weights numpy-đọc-được, A7 single-flight train lock, B1 softmax chỉ dùng lớp output, B2 early-stopping hold-out 15%, B3 ổn định số BCE/log-sum-exp, C1 chuẩn hóa thành phần composite reward, C2 công thức mixture policy — đã vá thẳng vào các mục tương ứng.
 >
 > **Nguồn gốc chuỗi thảo luận:**
 > 1. Thẩm định cấp độ kiến trúc Level 0–3 (kết luận: **Level 1 — RL-Based Tuning**, không có ANN thật) — tab Database > Kiến trúc hiện hiển thị đồ thị hệ thống ẩn dụ, chưa có mạng nơ-ron vận hành.
@@ -17,7 +19,7 @@
 
 | Phase | Việc | File chính | Effort | Cờ/Điểm dừng |
 |---|---|---|---|---|
-| **BRAIN-P1** | Nền toán MLP (lan truyền tiến/ngược, activation, loss, optimizer) + kho trọng số `BrainModel` + hiển thị **ANN thật** trên tab Kiến trúc | mới `src/lib/brain/{mlp,activations,losses,optimizers,init}.ts` · `prisma/schema.prisma` (+1 model) · `src/components/database/neural-architecture-section.tsx` (panel mới) | M | Không đổi hành vi runtime nào — thuần nền tảng + hiển thị |
+| **BRAIN-P1** | Nền toán MLP (lan truyền tiến/ngược, activation, loss, optimizer) + kho trọng số `BrainModel` + hiển thị **ANN thật** trên tab Kiến trúc | mới `src/lib/brain/{mlp,activations,losses,optimizers,init}.ts` · `prisma/schema.prisma` (+1 model) · `src/components/database/neural-architecture-section.tsx` (panel mới) | M | Không đổi hành vi runtime nào — thuần nền tảng + hiển thị. **Phần UI + `BrainModel` + `/api/brain` + `registry.ts` đã áp dụng sớm (2026-10-12) — chỉ hiển thị, chưa train** |
 | **BRAIN-P2** | **Brain-A** — Calibration V3: MLP 2 lớp thay logistic V2 khi thắng đối chứng CV | mới `src/lib/brain/brains/calibration-v3.ts` · sửa `src/lib/calibration.ts` (điểm cắm runtime) | M | `CALIBRATION_V3=off` |
 | **BRAIN-P3** | **Brain-B** — Surrogate Predictor (dự đoán kết quả cấu hình KHÔNG chạy thật) + chế độ replay-eval | mới `src/lib/brain/brains/surrogate.ts` + `src/app/api/brain/replay/route.ts` | L | `REPLAY_EVAL=off` (chỉ đo/báo cáo) |
 | **BRAIN-P4** | **Brain-C** — Policy head theo đặc trưng nhiệm vụ + **composite reward** + chuyển dần cơ quan lái (directives / model routing / tuning) sang nghe brain | mới `src/lib/brain/brains/policy.ts` + reward ledger thống nhất · sửa `adaptation-engine.ts` / `llm.ts` (từng cơ quan một) | L | `RUNTIME_POLICY=off` · từng cơ quan có kill-switch về hành vi cũ |
@@ -90,7 +92,7 @@
 | Thành phần | Trạng thái | Bằng chứng |
 |---|---|---|
 | **Hàm thưởng (RL)** | ✅ CÓ — dạng thô {+1, 0, −1} | `q-table.ts` (W1 `markSessionAdaptationOutcome` + W2 `resolveArbiterVerdicts` — reward chốt từ verdict trọng tài & kết cục run thật) |
-| **Lan truyền tiến** | ✅ CÓ — 1 lớp (sigmoid logistic) | `calibration-multifeature.ts` (V2 runtime áp β qua sigmoid) + `softmaxPolicy()` |
+| **Lan truyền tiến** | ✅ CÓ — 1 lớp (sigmoid logistic) | `calibration-multifeature.ts` (V2 runtime áp β qua sigmoid) + `softmaxPolicy()` (Boltzmann chọn model — là phép softmax chính tắc, không phải forward của mạng đã train) |
 | **Lan truyền ngược** | ⚠️ CÓ — chỉ 1 lớp (đạo hàm log-loss, không phải backprop đa tầng) | `calibration-multifeature.ts` (mini-batch GD lr 0.05 × 1500 epoch) |
 | **Hàm mất mát** | ✅ CÓ — 1 (log-loss + L2) | `calibration-multifeature.ts` |
 | **Hàm tối ưu hóa** | ⚠️ CÓ — mini-batch GD thuần (không momentum, không Adam) | `calibration-train.ts` (lr 0.01 × 1000) / `calibration-multifeature.ts` (lr 0.05 × 1500) |
@@ -99,13 +101,13 @@
 
 **Về "hàm thưởng" cho kiến trúc brain:** cần tách 2 chế độ học —
 - **Supervised brain (A, B):** mục tiêu là *loss* trên nhãn (verdict/eval/kết cục) — không cần reward riêng.
-- **RL brain (C):** reward có sẵn W1/W2 nhưng đang nhị phân thô. **BRAIN-P4 định nghĩa composite reward liền mạch:** `R = w₁·Outcome (verdict/run-complete) + w₂·Efficiency (tokens/latency đối chiếu baseline Wilson) + w₃·Chất lượng KB (faithfulness, coverage)` — trọng số w khởi điểm từ sweep dữ liệu rồi hardcode kèm chú thích nguồn (doctrine #1). Reward mới chỉ ghi song song (log-only) ít nhất 2 đợt quan sát trước khi tham gia quyết định — đúng tiền lệ P6-M3.
+- **RL brain (C):** reward có sẵn W1/W2 nhưng đang nhị phân thô. **BRAIN-P4 định nghĩa composite reward liền mạch:** `R = w₁·Outcome* + w₂·Efficiency* + w₃·Quality*` — **mỗi thành phần PHẢI chuẩn hóa trước khi nhân trọng số** (audit C1: tokens ~10³–10⁵ trong khi faithfulness 0–1 — nhân thẳng thì w vô nghĩa): `Outcome* ∈ {0,1}` (verdict/run-complete), `Efficiency* = (baseline − thực tế)/baseline` kẹp [−1,1] với baseline là trung vị theo model (hạ tầng Wilson/ANOVA P4-M2 đã có), `Quality* = faithfulness ∈ [0,1]`. Trọng số w khởi điểm từ sweep dữ liệu rồi hardcode kèm chú thích nguồn (doctrine #1). Reward mới chỉ ghi song song (log-only) ít nhất 2 đợt quan sát trước khi tham gia quyết định — đúng tiền lệ P6-M3.
 
 **Trạng thái: CHỜ USER CHỐT** — khuyến nghị: duyệt P1 (thuần nền tảng, không đổi hành vi).
 
 ### 3.2 — Q2: NIM 2048-dim — đầu vào 512-dim pilot có phù hợp?
 
-**Sự thật kỹ thuật:** model đang chạy là `nvidia/nemotron-3-embed-1b` (NIM, 2048-dim — `embeddings.ts:46`). Model này **hỗ trợ Matryoshka Representation Learning** (tham số `dimensions` trong payload; `input_type` query/passage — `embeddings.ts:10,50`). Pilot P5-M1 (stats blueprint) đã dựng sẵn: dual-write bản truncate 512-dim vào collection pilot, **đường đọc vẫn 2048 cho tới khi recall đối chứng đạt** — hiện pilot mặc định OFF (`MATRYOSHKA_PILOT` off, `TuningParam` = 0 dòng).
+**Sự thật kỹ thuật:** model đang chạy là `nvidia/nemotron-3-embed-1b` (NIM, 2048-dim — `src/lib/embeddings.ts:46`). Model này **hỗ trợ Matryoshka Representation Learning** (tham số `dimensions` trong payload — `src/lib/embeddings.ts:48`; `input_type` query/passage — dòng 10–11; pilot đọc runtime qua `getTuningEnum` — dòng 25 & 50). Pilot P5-M1 (stats blueprint) đã dựng sẵn: dual-write bản truncate 512-dim vào collection pilot, **đường đọc vẫn 2048 cho tới khi recall đối chứng đạt** — hiện pilot mặc định OFF (`MATRYOSHKA_PILOT` off, `TuningParam` = 0 dòng).
 
 **Đánh giá phù hợp cho BRAIN input:**
 - ✅ **Phù hợp về kỹ thuật MRL**: 512 chiều đầu của vector MRL giữ phần lớn ngữ nghĩa — NVIDIA thiết kế đúng để truncate.
@@ -169,13 +171,13 @@ P2 bắt buộc chạy ablation cả 3 (cùng dữ liệu, cùng seed) — chọ
 
 | File | Nội dung |
 |---|---|
-| `activations.ts` | relu, tanh, sigmoid, softmax + đạo hàm từng hàm (cho backward) |
-| `losses.ts` | BCE (log-loss), MSE, Huber + đạo hàm; tổng hợp `L2 regularizer` |
+| `activations.ts` | relu, tanh, sigmoid, softmax + đạo hàm từng hàm (cho backward). **Ghi chú (audit B1): softmax chỉ dùng cho lớp output đa lớp — không đặt làm activation lớp ẩn** (không giữ tổng xác suất, gradient dễ lệch) |
+| `losses.ts` | BCE (log-loss), MSE, Huber + đạo hàm; tổng hợp `L2 regularizer`. **Ổn định số (audit B3):** sigmoid kẹp ε=1e–7 hai đầu trước log; softmax dùng log-sum-exp |
 | `init.ts` | He (cho relu) / Xavier (tanh/sigmoid); seed tất định tái dùng pattern `deterministicSeed` của q-table |
 | `optimizers.ts` | SGD+momentum (β=0.9), Adam (β₁=0.9, β₂=0.999, ε=1e-8) — interface thống nhất `step(grads, params)` |
-| `mlp.ts` | Lớp `MLP`: spec `{layers:[{units,activation}], loss, optimizer, lr, l2, seed}` · **forward** `aₗ = φ(Wₗ·aₗ₋₁ + bₗ)` · **backward** `δ_L = ∇_a L`, `δₗ = (Wₗ₊₁ᵀ δₗ₊₁) ⊙ φ′(zₗ)` · mini-batch shuffle theo seed · gradient clip (norm 5) · early stopping (patience) · `fit() / predict() / predictProba()` · serialize/deserialize weights (mảng phẳng Float64 + shape — numpy-đọc-được cho P5) |
+| `mlp.ts` | Lớp `MLP`: spec `{layers:[{units,activation}], loss, optimizer, lr, l2, seed}` · **forward** `aₗ = φ(Wₗ·aₗ₋₁ + bₗ)` · **backward** `δ_L = ∇_a L`, `δₗ = (Wₗ₊₁ᵀ δₗ₊₁) ⊙ φ′(zₗ)` · mini-batch shuffle theo seed (**Fisher–Yates tất định**) · gradient clip (norm 5) · early stopping (patience, **đo trên hold-out 15% tách từ tập train — không đụng fold CV — audit B2**) · `fit() / predict() / predictProba()` · serialize/deserialize weights theo **envelope `{dtype:'float64', shape:number[], data:number[]}` — numpy-đọc-được cho P5 (audit A6)** |
 
-**Prisma (additive, +1 model — KHÔNG đụng 98 model cũ):**
+**Prisma (additive, +1 model — KHÔNG đụng 98 model cũ; schema ĐÃ áp dụng 2026-10-12 kèm UI sớm):**
 ```prisma
 model BrainModel {
   id            String   @id @default(cuid())
@@ -183,15 +185,24 @@ model BrainModel {
   version       Int
   inputMode     String   // 'mrl-512' | 'pca-128' | 'full-2048' | 'features-10'
   specJson      String   // layers/activation/loss/optimizer/lr/l2/seed + pcaMatrix nếu inputMode=pca-128
-  weightsJson   String   // mảng phẳng + shape (JSON)
+  weightsJson   String   // envelope {dtype:'float64', shape, data} — numpy-đọc-được (P5)
   trainMetaJson String   // n mẫu, khoảng thời gian dữ liệu, CV score + CI, Brier/MAE, trainedAt, dataLineage (§5.3)
+  trainedAt     DateTime @default(now())  // audit A5 — cột hạng nhất cho liệt kê/sắp xếp
   active        Boolean  @default(false)   // chỉ 1 bản active mỗi brain
   createdAt     DateTime @default(now())
+
   @@unique([brain, version])
+  @@index([brain, active])   // audit A4 — đúng pattern truy vấn panel /api/brain
 }
 ```
 
-**UI — tab Kiến trúc thêm panel "Não vận hành":** đọc `/api/brain` (GET liệt kê BrainModel) → vẽ đồ thị lớp THẬT của từng brain: input (số units = dim inputMode) → hidden (units + tên activation) → output (units + loss) + thanh trạng thái **NGỦ / THỨC TỈNH / ACTIVE** (theo ngưỡng mẫu §2) + nút "Huấn luyện lại" (chạy batch, fail-open). Panel dùng đúng hạ tầng pan/zoom/font P3 đã có.
+**Ghi chú DB internals (audit lượt 2):**
+- **A1 — bất biến "1 active mỗi brain":** Prisma/SQLite không khai báo được partial unique index → giữ ở tầng ứng dụng: transaction ngắn `updateMany({where:{brain}, data:{active:false}})` → `update({where:{id}, data:{active:true}})`; `@@unique([brain, version])` chặn phiên bản trùng ở tầng schema. Không `$transaction` dài (bài học BUG2-119).
+- **A2 — size & prune:** ước lượng weightsJson ~200–400KB/bản (features-10/mrl-512) tới ~1.5MB (full-2048) — SQLite TEXT chịu được nhưng phải có chính sách prune sau mỗi lần train thành công: **giữ bản active + 5 bản mới nhất mỗi brain** (tiền lệ prune 500 của TuningChangeLog).
+- **A3 — kỷ luật migration:** repo đã chuẩn hóa chuỗi migration (baseline `0_init`) — thêm model bằng **`prisma migrate dev --name add_brain_model`** tạo thư mục migration mới + apply, KHÔNG `db push` trần (làm lệch `_prisma_migrations`).
+- **A7 — single-flight train lock:** nút UI + cron có thể trùng nhịp → giữ in-process mutex (cờ module) + ràng `@@unique([brain, version])` bắt đua ở DB; train luôn chạy NGOÀI request path (cron/nút bấm → job nền).
+
+**UI — tab Kiến trúc thêm panel "Não vận hành" (ĐÃ ÁP DỤNG 2026-10-12 theo chỉ thị P/S user):** đọc `/api/brain` (GET) → 3 thẻ brain (A "V3" · B "Vọng" · C "Lệnh"), mỗi thẻ: đồ thị lớp theo spec (`inputMode → hidden + activation → output + loss`), thanh trạng thái **NGỦ / THỨC TỈNH / ACTIVE** theo ngưỡng mẫu §2 (đếm thật từ DB: EvalResult / AgentRunRecord / QEntry / ArbiterVerdict), inputMode kế hoạch, cờ phase, nút "Huấn luyện lại" (hiện tạm **tắt** kèm lý do — nền toán P1 chưa được duyệt; khi đủ mẫu + đã duyệt thì chạy batch, fail-open). Panel dùng đúng hạ tầng pan/zoom/font P3 đã có (đồ thị brain nhỏ — không cần pan). Registry single-source tại `src/lib/brain/registry.ts` (doctrine #9) — API và UI cùng import.
 
 **Test:** `tests/r84-brain-math.test.ts` — thuần, DB-cô-lập theo pattern gate: (1) đạo hàm backward khớp **sai phân hữu hạn** (numerical gradient check, ngẫu nhiên 20 spec); (2) MLP học được bài toán tổng hợp đã biết đáp án (vd: XOR 2-2-1 — bài toán logistic 1 lớp KHÔNG giải được — chứng minh đa lớp có giá trị thật); (3) tất định: cùng seed + cùng dữ liệu → cùng weights bit-đối-bit; (4) optimizer: Adam hội tụ nhanh hơn GD thuần trên cùng bài; (5) serialize → deserialize → predict giống hệt.
 
@@ -218,7 +229,7 @@ model BrainModel {
 ### 4.4 BRAIN-P4 — BRAIN-C: POLICY HEAD + COMPOSITE REWARD + STEERING
 
 - **Composite reward (§3.1):** ledger tái dùng `StrategyAdaptationLog` + `ArbiterVerdict` + `AgentRunRecord` (không bảng trừ `RewardWeight` sweep nếu cần); **log-only 2 đợt quan sát** trước khi tham gia quyết định (tiền lệ P6-M3).
-- **Policy head:** `π(a | đặc trưng nhiệm vụ)` — khởi điểm là **mixture an toàn**: prior = softmax(Q/τ) hiện có, network học residual; cold-start/thiếu dữ liệu → nghe Q nguyên vẹn (fail-open). Tận dụng cờ `RUNTIME_POLICY` (off mặc định) song song `RUNTIME_MODEL_POLICY` cũ — không đụng đường chạy nóng khi chưa duyệt.
+- **Policy head:** `π(a | đặc trưng nhiệm vụ)` — khởi điểm là **mixture an toàn** với công thức tường minh (audit C2): `π(a) = λ·π_Q(a) + (1−λ)·π_net(a)` trong đó `π_Q = softmax(Q/τ)` hiện có, `λ = clamp(n samples/K, 0, 1)` giảm dần khi dữ liệu lớn lên (kèm chặn dưới Wilson CI) — thiếu dữ liệu → λ→1 = nghe Q nguyên vẹn (fail-open). Tận dụng cờ `RUNTIME_POLICY` (off mặc định) song song `RUNTIME_MODEL_POLICY` cũ — không đụng đường chạy nóng khi chưa duyệt.
 - **Chuyển cơ quan lái (từng cái một, mỗi cái kill-switch độc lập):** (1) model routing `llm.ts`; (2) adaptation directives `adaptation-engine.ts`; (3) 13 tham số tuning-store — brain chỉ **đề xuất** giá trị vào change-log (P2 đã có audit trail), người duyệt vẫn là user qua UI cho tới khi có dữ liệu đối chứng đủ mạnh để tự động từng tham số.
 - **Ghi ngược tri thức:** brain chốt "cấu hình X tốt cho loại nhiệm vụ Y" (đủ CI) → sinh `LessonRecord` kèm provenance đầy đủ (§5.3) — bài học do não sinh ra nằm cùng kho bài học do vận hành sinh ra, cùng cơ chế confidence/decay hiện có.
 - **Test:** `tests/r87-brain-policy.test.ts` — mixture fallback, kill-switch từng cơ quan, reward log-only không tác động quyết định khi cờ off.
@@ -244,7 +255,7 @@ TÁC VỤ THẬT
    ├─(3) ĐÁNH GIÁ: arbiter verdict + eval (faithfulness, nDCG, coverage) ── đã có
    ├─(4) REWARD: W1/W2 (+ composite sau P4) ── đã có (P4 mở rộng)
    │
-   ├─(5) ONLINE NHẹ (tức thì, fail-open — đã có): Q-update · episodes · lessons
+   ├─(5) ONLINE NHẸ (tức thì, fail-open — đã có): Q-update · episodes · lessons
    │
    └─(6) OFFLINE BATCH (cron — P2+): retrain Brain-A/B/C từ SQLite log
             └─ CV gate → thăng cấp BrainModel(active) → dataLineage ghi nguồn
@@ -275,6 +286,8 @@ Mỗi `BrainModel.trainMetaJson.dataLineage` lưu: khoảng thời gian dữ li�
 | Brain quyết định sai gây cascade | Kill-switch từng cơ quan (P4), Wilson CI dưới ngưỡng → não ngủ lại, mọi fallback về hành vi hiện tại |
 | Chi phí CPU train | Chỉ offline qua cron + nút thủ công; forward mili-giây (16–100K tham số) chèn đường nóng không đáng kể |
 | "Ảo giác hiệu năng" trên benchmark nhỏ | Bài toán tổng hợp P1 chỉ dùng test toán; mọi claim hiệu năng runtime phải kèm CI + n mẫu |
+| weightsJson phình to / rác phiên bản cũ (audit A2) | Prune sau train: giữ active + 5 bản mới nhất mỗi brain; envelope dtype/shape cho sidecar P5 đọc trực tiếp |
+| Train trùng nhịp (cron + nút UI cùng lúc — audit A7) | Single-flight in-process mutex + `@@unique([brain, version])` bắt đua; train luôn ngoài request path |
 | Phụ thuộc Python/GPU lỡ hẹn | P1–P4 thuần TS độc lập hoàn toàn; P5 chỉ là biên mở |
 
 ---
@@ -297,11 +310,11 @@ Mỗi `BrainModel.trainMetaJson.dataLineage` lưu: khoảng thời gian dữ li�
 
 | # | Quyết định | Khuyến nghị blueprint | Trạng thái |
 |---|---|---|---|
-| 1 | Duyệt BRAIN-P1 (nền toán + kho + UI — không đổi hành vi) | Triển khai trước, an toàn tuyệt đối | ☐ |
+| 1 | Duyệt BRAIN-P1 (nền toán + kho + UI — không đổi hành vi) | Triển khai trước, an toàn tuyệt đối | ☑ **phần UI + `BrainModel` + `/api/brain` đã áp dụng sớm theo chỉ thị P/S 2026-10-12 — còn lại: nền toán `mlp.ts` + train pipeline + test r84** |
 | 2 | Q1 — composite reward (P4) có đúng ý muốn? | log-only 2 đợt trước khi tác động | ☐ |
 | 3 | Q2 — inputMode mặc định | `pca-128` tạm, `mrl-512` sau đối chứng pilot; ablation cả 3 bắt buộc | ☐ |
 | 4 | Q3 — không tích hợp LangChain/LangGraph/Keras, mở biên P5 | Chấp nhận rủi ro trùng lặp → không tích hợp | ☐ |
 | 5 | Q4 — nguyên tắc 2 tốc độ + dataLineage | Duyệt | ☐ |
 | 6 | Thứ tự P2→P3→P4 cố định, P5 treo | Đồng ý | ☐ |
 
-> **Ghi chú phiên bản 0.1:** tài liệu này là DRAFT để thảo luận — mọi con số effort/ngưỡng là ước lượng ban đầu, sẽ chốt lại theo từng phase. CHƯA có dòng code nào được viết cho BRAIN.
+> **Ghi chú phiên bản 0.2:** tài liệu này là DRAFT để thảo luận — mọi con số effort/ngưỡng là ước lượng ban đầu, sẽ chốt lại theo từng phase. Nền toán MLP & pipeline train **chưa viết**; duy nhất phần UI hiển thị + kho `BrainModel` + `/api/brain` + `registry.ts` đã áp dụng sớm theo chỉ thị user (P/S 2026-10-12).

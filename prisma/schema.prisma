@@ -2530,3 +2530,42 @@ model TuningChangeLog {
   @@index([createdAt])
   @@index([key, createdAt])
 }
+
+// ==========================================================================
+// BRAIN-P1 (BLUEPRINT-BRAIN-P1-P5 §4.1) — kho trọng số "não vận hành"
+// MLP-CPU. Mỗi dòng = 1 phiên bản train của 1 brain
+// ('calibration_v3' | 'surrogate' | 'policy'). Additive — model thứ 99,
+// không đụng 98 model cũ.
+//
+// Ghi chú DB internals (audit blueprint v0.2):
+//  - Bất biến "chỉ 1 bản active mỗi brain" giữ ở TẦNG ỨNG DỤNG (transaction
+//    ngắn updateMany deactivate → update activate) — Prisma/SQLite không
+//    khai báo được partial unique index (blueprint A1).
+//  - weightsJson dùng envelope {dtype:'float64', shape, data} —
+//    numpy-đọc-được cho sidecar Python P5 (blueprint A6). Size ước tính
+//    200KB–1.5MB/bản → tầng train có trách nhiệm prune: giữ active + 5 bản
+//    mới nhất mỗi brain (blueprint A2, tiền lệ prune TuningChangeLog).
+//  - @@index([brain, active]) đúng pattern truy vấn GET /api/brain (A4).
+// ==========================================================================
+model BrainModel {
+  id            String   @id @default(cuid())
+  /// 'calibration_v3' | 'surrogate' | 'policy' — khớp BRAIN_REGISTRY (src/lib/brain/registry.ts)
+  brain         String
+  version       Int
+  /// 'mrl-512' | 'pca-128' | 'full-2048' | 'features-10'
+  inputMode     String
+  /// {layers, activation, loss, optimizer, lr, l2, seed} + pcaMatrix khi inputMode=pca-128
+  specJson      String
+  /// Envelope {dtype:'float64', shape:number[], data:number[]} — numpy-đọc-được (P5)
+  weightsJson   String
+  /// n mẫu, khoảng dữ liệu, CV score + CI, Brier/MAE, dataLineage (blueprint §5.3)
+  trainMetaJson String
+  /// Thời điểm train xong (cột hạng nhất — blueprint A5; createdAt = lúc insert row)
+  trainedAt     DateTime @default(now())
+  /// Chỉ 1 bản active mỗi brain — bất biến giữ ở tầng ứng dụng (A1)
+  active        Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@unique([brain, version])
+  @@index([brain, active])
+}
