@@ -23,7 +23,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import {
   Network, RefreshCw, RotateCcw, Loader2, Settings2, ArrowRight,
-  TriangleAlert, Wrench, Database, Zap, ZoomIn, ZoomOut, Maximize2, History, BrainCircuit,
+  TriangleAlert, Wrench, Database, Zap, ZoomIn, ZoomOut, Maximize2, History, BrainCircuit, Tags,
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -482,6 +482,25 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
     }))
   }, [brainData])
 
+  // UX-1 áp dụng sớm (chỉ thị user 2026-10-12 — blueprint §9.2 v0.4): tổng
+  // số NHÃN VẬN HÀNH TÍCH LŨY — "nguyên liệu dạy não" (EvalResult +
+  // AgentRunRecord + QEntry + ArbiterVerdict). Cộng theo NGUỒN (khóa
+  // signal duy nhất) để không đếm trùng khi nhiều brain cùng đọc một bảng;
+  // null (đếm lỗi) bị bỏ — fail-open. Chỉ hiện khi có brainData thật.
+  const labelTotal = useMemo<number | null>(() => {
+    if (!brainData) return null
+    const bySource = new Map<string, number>()
+    for (const b of brainData.brains) {
+      for (const s of b.signals) {
+        if (s.current === null) continue
+        bySource.set(s.key, s.current)
+      }
+    }
+    let total = 0
+    for (const v of bySource.values()) total += v
+    return total
+  }, [brainData])
+
   // P2-M3: mobile (viewport < lg) → chọn node mở bottom-sheet inspector
   // (thay cuộn xuống inspector dưới đồ thị — below-the-fold); desktop giữ
   // inspector cột phải hiển thị thường trực, không cuộn.
@@ -823,12 +842,24 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
               <BrainCircuit className="h-3.5 w-3.5 shrink-0 text-amber-400" />
               <h4 className="text-xs font-semibold text-stone-100">Não vận hành — MLP-CPU (BRAIN)</h4>
               <span className="text-[10px] text-stone-500">
-                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · BLUEPRINT-BRAIN-P1-P5 v0.2
+                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · BLUEPRINT-BRAIN-P1-P5 v0.4
               </span>
               {brainData && (
-                <Badge variant="outline" className="ml-auto text-[9px] h-3.5 px-1 bg-amber-950/60 text-amber-400 border-amber-500/40">
-                  ● sống · {new Date(brainData.generatedAt).toLocaleTimeString('vi-VN')}
-                </Badge>
+                <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                  {labelTotal !== null && (
+                    <Badge
+                      variant="outline"
+                      className="h-3.5 px-1 bg-slate-950/60 text-[9px] text-stone-300 border-stone-600/50"
+                      title="Tổng nhãn vận hành tích lũy — nguyên liệu dạy não (EvalResult + AgentRunRecord + QEntry + ArbiterVerdict, cộng theo nguồn không trùng — blueprint §2/§9.2)"
+                    >
+                      <Tags className="mr-0.5 h-2.5 w-2.5" aria-hidden="true" />
+                      {viNum(labelTotal)} nhãn
+                    </Badge>
+                  )}
+                  <Badge variant="outline" className="text-[9px] h-3.5 px-1 bg-amber-950/60 text-amber-400 border-amber-500/40">
+                    ● sống · {new Date(brainData.generatedAt).toLocaleTimeString('vi-VN')}
+                  </Badge>
+                </div>
               )}
             </div>
             {brainError && !brainData && (
