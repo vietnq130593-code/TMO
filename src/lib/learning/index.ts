@@ -78,6 +78,7 @@ export {
   setTuningValue,
   resetTuningValue,
   getTuningState,
+  getTuningChangeLog,
   refreshTuningSnapshot,
   TuningValidationError,
   type TuningResolution,
@@ -87,6 +88,7 @@ export type {
   TuningSpec,
   TuningSource,
   TuningStateEntry,
+  TuningChangeLogEntry,
   TuningType,
   NeuralLayer,
   NeuralNode,
@@ -94,7 +96,7 @@ export type {
   NeuralEdge,
   NeuralGraph,
 } from './neural-types'
-export { TUNING_SPECS, NEURAL_GRAPH, NEURAL_LAYERS, NEURAL_NODES, NEURAL_EDGES, getTuningSpec } from './neural-types'
+export { TUNING_SPECS, NEURAL_GRAPH, NEURAL_LAYERS, NEURAL_NODES, NEURAL_EDGES, getTuningSpec, TUNING_CHANGE_LOG_CAP } from './neural-types'
 
 // Neural-layout (P1 review 2026-10-11 — hình học + cỡ chữ + style cạnh +
 // thu phóng đồ thị tab Kiến trúc Neural; module thuần chỉ phụ thuộc type
@@ -110,6 +112,8 @@ export {
   computeNeuralLayout,
   edgeVisual,
   edgeIsActive,
+  edgeDotVisible,
+  NEURAL_DESKTOP_BREAKPOINT,
   clampNeuralZoom,
   neuralSvgWidth,
   neuralZoomLabel,

@@ -21,6 +21,7 @@ import {
   getTuningState,
   setTuningValue,
   resetTuningValue,
+  getTuningChangeLog,
   TuningValidationError,
 } from '@/lib/learning/tuning-store'
 import {
@@ -181,6 +182,7 @@ export async function GET() {
       live,
       qTop,
       salRecent,
+      changeLog: await getTuningChangeLog(10),
       generatedAt: new Date().toISOString(),
     })
   } catch (err) {
@@ -210,6 +212,7 @@ export async function POST(request: Request) {
         ok: true,
         entry,
         tuning: await getTuningState(),
+        changeLog: await getTuningChangeLog(10),
       })
     }
     if (action === 'reset') {
@@ -218,6 +221,7 @@ export async function POST(request: Request) {
         ok: true,
         entry,
         tuning: await getTuningState(),
+        changeLog: await getTuningChangeLog(10),
       })
     }
     return NextResponse.json({ error: `action không hỗ trợ: ${String(action)} (set | reset)` }, { status: 400 })

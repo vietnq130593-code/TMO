@@ -2504,3 +2504,29 @@ model TuningParam {
 
   @@index([key])
 }
+
+/// Nhật ký audit mọi thay đổi tuning runtime (P2-M2 — review task-98): mỗi
+/// set/reset qua API ghi 1 dòng (giá trị trước/sau + hiệu lực tại thời điểm
+/// ghi — env có thể đổi sau này nên chụp lại). Store tự prune giữ đúng
+/// TUNING_CHANGE_LOG_CAP (500) dòng mới nhất. id dùng autoincrement (KHÔNG
+/// cuid như 88 model khác — có chủ đích FB-P2-R1-02: tiebreak tất định cho
+/// prune cap tuyệt đối + thứ tự "mới nhất trước" khi nhiều dòng cùng ms).
+model TuningChangeLog {
+  id        Int    @id @default(autoincrement())
+  /// Tham số bị đổi — trùng key trong TUNING_SPECS
+  key       String
+  /// 'set' (đặt override) | 'reset' (bỏ override về env/default)
+  action    String
+  /// Giá trị STORE trước khi đổi (null = chưa có override)
+  fromStoreValue String?
+  /// Giá trị STORE sau khi đổi (null = override đã bỏ)
+  toStoreValue   String?
+  /// Giá trị HIỆU LỰC trước đổi (chụp tại thời điểm ghi — snapshot tin cậy cho audit)
+  fromEffectiveValue String
+  /// Giá trị HIỆU LỰC sau đổi
+  toEffectiveValue   String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([key, createdAt])
+}

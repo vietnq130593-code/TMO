@@ -257,6 +257,23 @@ export function edgeIsActive(e: Pick<NeuralEdge, 'from' | 'to'>, selectedNodeId:
   return e.from === selectedNodeId || e.to === selectedNodeId
 }
 
+/**
+ * Có render hạt animateMotion trên cạnh này không (P2-M1 — review task-98):
+ * SMIL <animateMotion> KHÔNG tuân media query CSS prefers-reduced-motion
+ * (chỉ keyframe CSS bị tắt) → component phải gate bằng JS. Trả về false khi
+ * user bật giảm chuyển động — cạnh vẫn còn nét đứt + arrowhead chỉ hướng.
+ */
+export function edgeDotVisible(dot: string | null | undefined, prefersReducedMotion: boolean): boolean {
+  return dot !== null && dot !== undefined && !prefersReducedMotion
+}
+
+/**
+ * Điểm ngắt desktop của tab (P2-M3): ≥ lg của Tailwind. Component dùng cho
+ * media query chọn layout: desktop = inspector cột phải, mobile = bottom
+ * sheet. Hằng số để breakpoint luôn khớp `hidden lg:block` ở 1 nơi duy nhất.
+ */
+export const NEURAL_DESKTOP_BREAKPOINT = 1024
+
 // ==================== 4. THU PHÓNG (P1-1) ====================
 
 /**

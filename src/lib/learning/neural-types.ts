@@ -67,6 +67,38 @@ export interface TuningStateEntry extends TuningSpec {
   source: TuningSource
 }
 
+/**
+ * Một dòng audit nhật ký tinh chỉnh (P2-M2 — review task-98). Mỗi set/reset
+ * qua API sinh 1 dòng: giá trị STORE trước/sau + giá trị HIỆU LỰC chụp tại
+ * thời điểm ghi (env có thể đổi sau này — snapshot là nguồn tin của audit).
+ * Transport API → UI (createdAt ISO string).
+ */
+export interface TuningChangeLogEntry {
+  /** id autoincrement (tiebreak tất định FB-P2-R1-02 — không phải cuid) */
+  id: number
+  /** Tham số bị đổi — trùng key trong TUNING_SPECS */
+  key: string
+  /** 'set' (đặt override) | 'reset' (bỏ override) */
+  action: 'set' | 'reset'
+  /** Giá trị STORE trước đổi (null = chưa có override) */
+  fromStoreValue: string | null
+  /** Giá trị STORE sau đổi (null = override đã bỏ) */
+  toStoreValue: string | null
+  /** Giá trị hiệu lực trước đổi (chuỗi hoá — số giữ nguyên chuỗi chuẩn hoá) */
+  fromEffectiveValue: string
+  /** Giá trị hiệu lực sau đổi */
+  toEffectiveValue: string
+  /** Thời điểm ghi (ISO 8601) */
+  createdAt: string
+}
+
+/**
+ * Số dòng audit giữ lại tối đa (prune sau mỗi lần ghi — bảng nhỏ, quét rẻ).
+ * Đặt ở neural-types (client-safe) để UI hiển thị mà KHÔNG kéo tuning-store
+ * (server — phụ thuộc Prisma) vào bundle client.
+ */
+export const TUNING_CHANGE_LOG_CAP = 500
+
 export interface NeuralNodeFn {
   name: string
   file: string

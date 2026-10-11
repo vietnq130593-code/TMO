@@ -210,3 +210,17 @@
 - Phát hiện bị bác sau chấm chéo: 0/5 (chuỗi thứ 3 liên tiếp toàn bộ phát hiện đứng vững).
 - Gate: **1041 → 1072** (+31: r82 21 gốc + 10 regression FB-P1-R1); tsc + lint + imports PASS mọi vòng.
 - Ngoài phạm vi bàn đợt sau: svg role="img" mâu thuẫn node tương tác (ARIA) · SMIL reduced-motion (backlog P2/P3 task-98).
+
+### ĐỢT FB-P2 (NEURAL-ARCH) — scope P2 review task-98 (4 hạng mục: gate SMIL reduced-motion + TuningChangeLog audit + mobile bottom-sheet inspector + pause poll khi hidden; 7 file sửa + r83 MỚI) — 2026-10-11 — KHÉP KẾT SAU 2 VÒNG
+
+| Vòng | Phát hiện mới | Xác minh |
+|---|---|---|
+| R1 | **7** (0 P0-P2 · 2 C·P3 + 1 D·P4 + 1 F·P4 + 2 E/D·P4 + 1 C·P4) + 1 nghi vấn N1 chưa tái lập — auditor độc lập subagent (mắt chưa từng xem code P2): throwaway DB script (capture-restart tái lập + prune-verify 12 phép + snapshot-race ×3) + đọc full 8 file + git show HEAD + chạy lại tsc/lint/r81-r83 độc lập | Fix 6/7 + N1 fix phòng thủ có chủ đích + BUG2-133 ghi-nhận-không-fix (trade-off SSR có chủ đích) + 4 regression test → gate 1085 → **1089 PASS** + tsc + lint sạch |
+| R2 | **0** (điều phối rà mắt tươi toàn diff fix R1: derive-path vs resolveTuning · prune id-in bound · skip-condition 3 tam ca · sheet↔desktop chuyển viewport · effect cleanup · merge changeLog · C1-C8 quét trọn) → KHÉP KẾT | Live browser E2E + VLM xem biên bản commit |
+
+- Phát hiện: FB-P2-R1-01..07 + N1 → **BUG2-127..134** (8 entry — chi tiết đầy đủ tại Bug_v2.md).
+- Sai-kỳ-vọng phía người-rà: **0** (lần đầu sau 17 lần liên tiếp).
+- Phát hiện bị bác sau chấm chéo: 0/7 — chuỗi thứ 4 liên tiếp toàn bộ phát hiện auditor đứng vững.
+- Gate: **1072 → 1089** (+17: r83 13 gốc + 4 regression R1); tsc + lint + imports PASS mọi vòng.
+- Ghi chú hạ tầng: `prisma migrate dev` đòi RESET DB (drift lịch sử migration từ trước P2 — 0_init chưa mark applied + mọi model post-round-32 vào bằng db push) → TỪ CHỐI reset, dùng `db push` thuần bổ sung (đúng thực hành thực tế repo) — vấn đề drift bàn riêng với user.
+- Live sau khép: xem biên bản commit (bottom-sheet mobile chạm node + audit card + pause poll verify qua performance entries + reduced-motion gate qua emulateMedia).

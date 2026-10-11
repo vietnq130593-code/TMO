@@ -12,10 +12,10 @@
 // qua prop từ parent (page.tsx poll 10s sẵn).
 // ========================================================================
 
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import {
   Network, RefreshCw, RotateCcw, Loader2, Settings2, ArrowRight,
-  TriangleAlert, Wrench, Database, Zap, ZoomIn, ZoomOut, Maximize2,
+  TriangleAlert, Wrench, Database, Zap, ZoomIn, ZoomOut, Maximize2, History,
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -26,14 +26,19 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {
+  Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
+} from '@/components/ui/sheet'
 import { toast } from 'sonner'
 import type { HealthResponse } from '@/components/app-shared'
-import type { NeuralGraph, TuningStateEntry } from '@/lib/learning/neural-types'
+import type { NeuralGraph, TuningStateEntry, TuningChangeLogEntry } from '@/lib/learning/neural-types'
+import { TUNING_CHANGE_LOG_CAP } from '@/lib/learning/neural-types'
 import {
   NEURAL_GEO, NEURAL_FONTS, NEURAL_ZOOM,
-  computeNeuralLayout, edgeVisual, edgeIsActive,
+  computeNeuralLayout, edgeVisual, edgeIsActive, edgeDotVisible,
+  NEURAL_DESKTOP_BREAKPOINT,
   clampNeuralZoom, neuralSvgWidth, neuralZoomLabel, zoomStepFrom,
-  type NeuralZoom,
+  type NeuralZoom, type PlacedNode,
 } from '@/lib/learning/neural-layout'
 
 // ==================== API CONTRACT ====================
@@ -47,10 +52,58 @@ interface NeuralApiResponse {
     id: string; fromStrategy: string; toStrategy: string; reason: string
     confidence: number | null; successful: boolean | null; createdAt: string
   }>
+  /** P2-M2: audit mọi set/reset (mới → cũ, tối đa 10 dòng) */
+  changeLog?: TuningChangeLogEntry[]
   generatedAt: string
 }
 
 const POLL_NEURAL_MS = 15_000
+
+// ==================== MEDIA QUERY HOOKS (P2) ====================
+
+/** Đăng ký theo dõi một media query — trả hàm dọn (unsubscribe). */
+function subscribeMediaQuery(query: string, onChange: () => void): () => void {
+  const mq = window.matchMedia(query)
+  mq.addEventListener('change', onChange)
+  return () => mq.removeEventListener('change', onChange)
+}
+
+/**
+ * P2-M1: SMIL <animateMotion> KHÔNG tuân media query CSS
+ * prefers-reduced-motion (chỉ keyframe CSS bị tắt ở globals.css) → component
+ * phải gate hạt chạy bằng JS. useSyncExternalStore: theo dõi đổi cấu hình
+ * lúc runtime (user bật/tắt giảm chuyển động không cần reload).
+ * (FB-P2-R1-03: subscribe hoisted module-scope — closure mới mỗi render sẽ
+ * khiến React unsubscribe+resubscribe媒 query mỗi lần poll setData 15s.)
+ */
+const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
+const subscribeReducedMotion = (onChange: () => void): (() => void) =>
+  subscribeMediaQuery(REDUCED_MOTION_QUERY, onChange)
+
+function usePrefersReducedMotion(): boolean {
+  return useSyncExternalStore(
+    subscribeReducedMotion,
+    () => window.matchMedia(REDUCED_MOTION_QUERY).matches,
+    () => false,
+  )
+}
+
+const DESKTOP_MEDIA_QUERY = `(min-width: ${NEURAL_DESKTOP_BREAKPOINT}px)`
+const subscribeDesktop = (onChange: () => void): (() => void) =>
+  subscribeMediaQuery(DESKTOP_MEDIA_QUERY, onChange)
+
+/**
+ * P2-M3: viewport ≥ lg (1024px) = desktop (inspector cột phải); hẹp hơn =
+ * mobile (bottom-sheet). Server snapshot = desktop — khớp render mặc định
+ * của cột `hidden lg:block` (tránh nhảy layout khi hydrate).
+ */
+function useIsDesktopViewport(): boolean {
+  return useSyncExternalStore(
+    subscribeDesktop,
+    () => window.matchMedia(DESKTOP_MEDIA_QUERY).matches,
+    () => true,
+  )
+}
 
 // ==================== MÀU NHẤN (accent theo lớp) ====================
 // P1 (2026-10-11): hình học (NEURAL_GEO) + cỡ chữ (NEURAL_FONTS) + style cạnh
@@ -118,7 +171,14 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
   const [error, setError] = useState<string | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>('q-table')
   const [savingKeys, setSavingKeys] = useState<Set<string>>(new Set())
-  const inspectorRef = useRef<HTMLDivElement | null>(null)
+  // P2-M3: bottom-sheet inspector trên mobile — mở khi user chạm node;
+  // đóng bằng nút X / chạm nền / Esc (chọn node khác mở lại). Desktop không
+  // dùng sheet (inspector cột phải hiển thị thường trực).
+  const [sheetOpen, setSheetOpen] = useState(false)
+  // P2-M1: tắt hạt animateMotion khi user bật giảm chuyển động (SMIL không
+  // tuân media query CSS); P2-M3: chọn layout inspector theo viewport.
+  const reducedMotion = usePrefersReducedMotion()
+  const isDesktop = useIsDesktopViewport()
   // FB-P1-R1-03: cần đo tỉ lệ render thật của chế độ fit (renderedWidth /
   // viewBoxWidth) để nút ± bước từ tỉ lệ HIỆN TẠI — "Thu nhỏ" thu nhỏ thật.
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -155,14 +215,40 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
   // Mount + poll nền 15s giữ số liệu sống (fail-open giữ dữ liệu cũ).
   // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect —
   // cùng pattern auto-learn-section)
+  // P2-M4: poll chỉ chạy khi tab ĐANG HIỆN — ẩn thì dừng hẳn interval
+  // (không fetch vô nghĩa vào tab nền); hiện lại → fetch ngay một lần rồi
+  // tiếp tục nhịp 15s. Tab load ngầm (visibilityState=hidden ngay từ đầu)
+  // → lần fetch đầu hoãn tới khi user mở tab.
   useEffect(() => {
-    queueMicrotask(() => {
-      fetchData()
-    })
-    const t = setInterval(() => {
-      fetchData()
-    }, POLL_NEURAL_MS)
-    return () => clearInterval(t)
+    let timer: ReturnType<typeof setInterval> | null = null
+    const start = () => {
+      if (timer === null) timer = setInterval(() => { void fetchData() }, POLL_NEURAL_MS)
+    }
+    const stop = () => {
+      if (timer !== null) {
+        clearInterval(timer)
+        timer = null
+      }
+    }
+    if (document.visibilityState !== 'hidden') {
+      queueMicrotask(() => {
+        void fetchData()
+      })
+      start()
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        stop()
+      } else {
+        void fetchData()
+        start()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      stop()
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [fetchData])
 
   // P1-1: restore zoom 1 lần SAU mount (localStorage > mobile-fit > 100%)
@@ -177,7 +263,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
         else if (saved !== null) {
           const n = Number.parseFloat(saved)
           if (Number.isFinite(n)) setZoom(clampNeuralZoom(n))
-        } else if (window.innerWidth < 1024) {
+        } else if (window.innerWidth < NEURAL_DESKTOP_BREAKPOINT) {
           setZoom('fit') // mobile: mở đầu bằng tổng quan, chạm node để xem chi tiết
         }
       } catch { /* private mode — giữ mặc định */ }
@@ -214,7 +300,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
         toast.error('Tinh chỉnh thất bại', { description: json.error ?? `HTTP ${res.status}` })
         return false
       }
-      if (json.tuning) setData(prev => (prev ? { ...prev, tuning: json.tuning } : prev))
+      if (json.tuning) setData(prev => (prev ? { ...prev, tuning: json.tuning, changeLog: json.changeLog ?? prev.changeLog } : prev))
       return true
     } catch (err) {
       toast.error('Tinh chỉnh thất bại', { description: err instanceof Error ? err.message : String(err) })
@@ -268,13 +354,13 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
     return [...fromApi, ...healthLiveFor(health ?? null, selectedNodeId)]
   }, [selectedNodeId, data, health])
 
+  // P2-M3: mobile (viewport < lg) → chọn node mở bottom-sheet inspector
+  // (thay cuộn xuống inspector dưới đồ thị — below-the-fold); desktop giữ
+  // inspector cột phải hiển thị thường trực, không cuộn.
   const selectNode = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId)
-    if (typeof window !== 'undefined' && window.innerWidth < 1024) {
-      // Mobile: cuộn tới inspector ngay dưới đồ thị
-      requestAnimationFrame(() => inspectorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }))
-    }
-  }, [])
+    if (!isDesktop) setSheetOpen(true)
+  }, [isDesktop])
 
   // ==================== RENDER ====================
 
@@ -432,8 +518,8 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
                               className={k.className}
                               markerEnd={`url(#${k.marker})`}
                             />
-                            {k.dot && (
-                              <circle r={k.dotRadius} fill={k.dot}>
+                            {edgeDotVisible(k.dot, reducedMotion) && (
+                              <circle r={k.dotRadius} fill={k.dot!}>
                                 <animateMotion dur="3s" repeatCount="indefinite" path={e.d} />
                               </circle>
                             )}
@@ -527,94 +613,62 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
           </Card>
         </div>
 
-        {/* ── INSPECTOR ── */}
-        <div ref={inspectorRef} className="nc-wrap nc-emerald">
-          <Card className="nc-panel nc-md nc-border-emerald h-full">
-            <CardContent className="p-4 space-y-3">
-              {selectedNode ? (
-                <>
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h4 className="text-sm font-semibold text-stone-100">{selectedNode.title}</h4>
-                      <Badge variant="outline" className={`text-[9px] h-4 px-1.5 ${ACCENTS[graph!.layers.find(l => l.id === selectedNode.layer)?.accent ?? 'cyan']?.badge ?? ''}`}>
-                        Lớp {graph!.layers.find(l => l.id === selectedNode.layer)?.index} · {graph!.layers.find(l => l.id === selectedNode.layer)?.title}
-                      </Badge>
-                    </div>
-                    <p className="text-[10px] text-stone-500 font-mono">{selectedNode.subtitle}</p>
-                  </div>
-
-                  <p className="text-[11px] leading-relaxed text-stone-300">{selectedNode.description}</p>
-
-                  {selectedNode.algorithm && (
-                    <div className="rounded-md border border-cyan-500/30 bg-slate-950/70 p-2">
-                      <p className="text-[9px] uppercase tracking-wide text-cyan-500 mb-1">Thuật toán</p>
-                      <p className="font-mono text-[10px] text-cyan-300 leading-relaxed break-words">{selectedNode.algorithm}</p>
-                      {selectedNode.algorithmNote && (
-                        <p className="text-[9px] text-stone-500 italic mt-1">{selectedNode.algorithmNote}</p>
-                      )}
-                    </div>
-                  )}
-
-                  {selectedNode.functions.length > 0 && (
-                    <div>
-                      <p className="text-[9px] uppercase tracking-wide text-stone-500 mb-1.5 flex items-center gap-1"><Wrench className="h-2.5 w-2.5" /> Hàm số</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {selectedNode.functions.map(fn => (
-                          <span key={`${fn.name}-${fn.file}-${fn.line ?? ''}`}
-                            className="font-mono text-[9px] rounded border border-slate-700/60 bg-slate-950/60 px-1.5 py-0.5 text-stone-300">
-                            {fn.name} <span className="text-stone-500">{fn.file.split('/').slice(-1)[0]}{fn.line ? `:${fn.line}` : ''}</span>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {selectedLive.length > 0 && (
-                    <div>
-                      <p className="text-[9px] uppercase tracking-wide text-stone-500 mb-1.5 flex items-center gap-1"><Database className="h-2.5 w-2.5" /> Số liệu trực tiếp</p>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        {selectedLive.map(lv => (
-                          <div key={lv.label} className="rounded border border-slate-700/50 bg-slate-950/50 px-2 py-1">
-                            <p className="text-[8px] text-stone-500 truncate">{lv.label}</p>
-                            <p className="text-[11px] text-stone-100 font-medium truncate" title={lv.value}>{lv.value}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {(tuningByNode.get(selectedNode.id) ?? []).length > 0 ? (
-                    <div className="space-y-3 pt-1 border-t border-slate-800">
-                      <p className="text-[9px] uppercase tracking-wide text-amber-500 flex items-center gap-1 pt-2">
-                        <Settings2 className="h-2.5 w-2.5" /> Tinh chỉnh vận hành ({(tuningByNode.get(selectedNode.id) ?? []).length})
-                      </p>
-                      {(tuningByNode.get(selectedNode.id) ?? []).map(entry => (
-                        <TuningControl
-                          key={entry.key}
-                          entry={entry}
-                          nodeTitle={selectedNode.title}
-                          saving={savingKeys.has(entry.key)}
-                          onSet={handleSet}
-                          onReset={handleReset}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-[10px] text-stone-600 italic pt-2 border-t border-slate-800">
-                      Node này không có tham số runtime (giá trị cố định theo spec — xem mô tả thuật toán).
-                    </p>
-                  )}
-                </>
-              ) : (
-                <div className="py-10 text-center space-y-2">
-                  <Network className="h-8 w-8 text-stone-600 mx-auto" />
-                  <p className="text-xs text-stone-400">Chọn một nút trên sơ đồ để xem thuật toán, hàm số và ô tinh chỉnh.</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+        {/* ── INSPECTOR (desktop — cột phải; mobile dùng bottom-sheet P2-M3).
+            FB-P2-R1-04: render điều kiện theo isDesktop — mobile không mount
+            bản ẩn (trước-fix sheet mở vẫn render NodeInspectorContent 2 lần
+            vì cột chỉ ẩn bằng CSS `hidden lg:block`). Hydrate an toàn: server
+            snapshot = desktop (true) → SSR/hydrate đầu render cột, client
+            snapshot thật hiệu chỉnh ngay sau đó mà KHÔNG mismatch. ── */}
+        {isDesktop && (
+          <div className="nc-wrap nc-emerald hidden lg:block">
+            <Card className="nc-panel nc-md nc-border-emerald h-full">
+              <CardContent className="p-4 space-y-3">
+                <NodeInspectorContent
+                  selectedNode={selectedNode}
+                  graph={graph}
+                  selectedLive={selectedLive}
+                  tuningEntries={selectedNode ? (tuningByNode.get(selectedNode.id) ?? []) : []}
+                  savingKeys={savingKeys}
+                  onSet={handleSet}
+                  onReset={handleReset}
+                />
+              </CardContent>
+            </Card>
+          </div>
+        )}
       </div>
+
+      {/* ── INSPECTOR MOBILE (P2-M3: bottom-sheet — chạm node mở panel trượt
+          lên thay cuộn xuống inspector dưới đồ thị below-the-fold; đóng bằng
+          nút X / chạm nền / Esc; chọn node khác mở lại) ── */}
+      <Sheet open={sheetOpen && !isDesktop} onOpenChange={setSheetOpen}>
+        <SheetContent
+          side="bottom"
+          aria-label="Chi tiết nút đang chọn"
+          className="top-auto mx-auto flex h-auto max-h-[85dvh] w-full max-w-2xl flex-col rounded-t-xl border-emerald-500/30 bg-slate-950/95 p-0"
+        >
+          <div className="mx-auto mt-2 h-1.5 w-10 shrink-0 rounded-full bg-stone-700" aria-hidden="true" />
+          <SheetHeader className="px-4 pb-0 pt-2 text-left">
+            <SheetTitle className="text-sm font-semibold text-stone-100">
+              {selectedNode ? selectedNode.title : 'Chi tiết nút'}
+            </SheetTitle>
+            <SheetDescription className="sr-only">
+              Thuật toán, hàm số và ô tinh chỉnh runtime của nút đang chọn trên sơ đồ
+            </SheetDescription>
+          </SheetHeader>
+          <div className="dialog-scrollbar min-h-0 flex-1 overscroll-contain overflow-y-auto px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-2">
+            <NodeInspectorContent
+              selectedNode={selectedNode}
+              graph={graph}
+              selectedLive={selectedLive}
+              tuningEntries={selectedNode ? (tuningByNode.get(selectedNode.id) ?? []) : []}
+              savingKeys={savingKeys}
+              onSet={handleSet}
+              onReset={handleReset}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {/* ── BẢNG TINH CHỈNH TOÀN BỘ ── */}
       <div className="nc-wrap nc-violet">
@@ -701,6 +755,44 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
         </Card>
       </div>
 
+      {/* ── NHẬT KÝ TINH CHỈNH (P2-M2 — audit mọi set/reset) ── */}
+      <div className="nc-wrap nc-teal">
+        <Card className="nc-panel nc-md nc-border-teal">
+          <CardContent className="p-4">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <History className="h-3.5 w-3.5 text-teal-400" />
+              <h4 className="text-xs font-semibold text-stone-100">Nhật ký tinh chỉnh runtime</h4>
+              <span className="text-[9px] text-stone-500">mọi đặt / trả-mặc-định được ghi audit · giữ tối đa {TUNING_CHANGE_LOG_CAP} dòng mới nhất</span>
+            </div>
+            {(data?.changeLog?.length ?? 0) === 0 ? (
+              <p className="text-[10px] text-stone-500 italic">Chưa có thay đổi nào được ghi (phát sinh khi đặt hoặc trả mặc định một tham số).</p>
+            ) : (
+              <div className="dialog-scrollbar max-h-44 space-y-1.5 overflow-y-auto">
+                {data!.changeLog!.map(c => {
+                  const label = tuningByKey.get(c.key)?.label ?? c.key
+                  return (
+                    <div
+                      key={c.id}
+                      className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px]"
+                      title={`${c.key} · store: ${c.fromStoreValue ?? '—'} → ${c.toStoreValue ?? '—'}`}
+                    >
+                      <span className="shrink-0 tabular-nums text-stone-600">{new Date(c.createdAt).toLocaleString('vi-VN')}</span>
+                      <span className="font-mono text-stone-300">{label}</span>
+                      {c.action === 'set'
+                        ? <Badge variant="outline" className="h-3.5 px-1 border-amber-500/45 bg-amber-950/70 text-[8px] text-amber-400">đặt</Badge>
+                        : <Badge variant="outline" className="h-3.5 px-1 border-stone-600/50 bg-slate-950/70 text-[8px] text-stone-400">về mặc định</Badge>}
+                      <span className="font-mono text-stone-500">{c.fromEffectiveValue}</span>
+                      <ArrowRight className="h-2.5 w-2.5 shrink-0 text-stone-600" />
+                      <span className="font-mono font-medium text-stone-100">{c.toEffectiveValue}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
       {/* ── HỒ SƠ HỌC GẦN ĐÂY (Q + SAL) ── */}
       <div className="grid gap-4 md:grid-cols-2">
         <div className="nc-wrap nc-amber">
@@ -758,6 +850,108 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
         </div>
       </div>
     </div>
+  )
+}
+
+// ==================== NODE INSPECTOR (nội dung dùng chung — P2-M3) ====================
+// Render ở 2 nơi: cột phải desktop (lg+) và bottom-sheet mobile — cùng một
+// nguồn JSX nên không lệch nội dung giữa hai chế độ.
+
+function NodeInspectorContent({
+  selectedNode, graph, selectedLive, tuningEntries, savingKeys, onSet, onReset,
+}: {
+  selectedNode: PlacedNode | null
+  graph: NeuralGraph | null
+  selectedLive: Array<{ label: string; value: string }>
+  tuningEntries: TuningStateEntry[]
+  savingKeys: Set<string>
+  onSet: (key: string, value: string | number) => Promise<boolean>
+  onReset: (key: string) => Promise<boolean>
+}) {
+  if (!selectedNode || !graph) {
+    return (
+      <div className="py-10 text-center space-y-2">
+        <Network className="h-8 w-8 text-stone-600 mx-auto" />
+        <p className="text-xs text-stone-400">Chọn một nút trên sơ đồ để xem thuật toán, hàm số và ô tinh chỉnh.</p>
+      </div>
+    )
+  }
+  const layer = graph.layers.find(l => l.id === selectedNode.layer)
+  const acc = ACCENTS[layer?.accent ?? 'cyan'] ?? ACCENTS.cyan
+  return (
+    <>
+      <div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <h4 className="text-sm font-semibold text-stone-100">{selectedNode.title}</h4>
+          <Badge variant="outline" className={`text-[9px] h-4 px-1.5 ${acc.badge}`}>
+            Lớp {layer?.index} · {layer?.title}
+          </Badge>
+        </div>
+        <p className="text-[10px] text-stone-500 font-mono">{selectedNode.subtitle}</p>
+      </div>
+
+      <p className="text-[11px] leading-relaxed text-stone-300">{selectedNode.description}</p>
+
+      {selectedNode.algorithm && (
+        <div className="rounded-md border border-cyan-500/30 bg-slate-950/70 p-2">
+          <p className="text-[9px] uppercase tracking-wide text-cyan-500 mb-1">Thuật toán</p>
+          <p className="font-mono text-[10px] text-cyan-300 leading-relaxed break-words">{selectedNode.algorithm}</p>
+          {selectedNode.algorithmNote && (
+            <p className="text-[9px] text-stone-500 italic mt-1">{selectedNode.algorithmNote}</p>
+          )}
+        </div>
+      )}
+
+      {selectedNode.functions.length > 0 && (
+        <div>
+          <p className="text-[9px] uppercase tracking-wide text-stone-500 mb-1.5 flex items-center gap-1"><Wrench className="h-2.5 w-2.5" /> Hàm số</p>
+          <div className="flex flex-wrap gap-1.5">
+            {selectedNode.functions.map(fn => (
+              <span key={`${fn.name}-${fn.file}-${fn.line ?? ''}`}
+                className="font-mono text-[9px] rounded border border-slate-700/60 bg-slate-950/60 px-1.5 py-0.5 text-stone-300">
+                {fn.name} <span className="text-stone-500">{fn.file.split('/').slice(-1)[0]}{fn.line ? `:${fn.line}` : ''}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {selectedLive.length > 0 && (
+        <div>
+          <p className="text-[9px] uppercase tracking-wide text-stone-500 mb-1.5 flex items-center gap-1"><Database className="h-2.5 w-2.5" /> Số liệu trực tiếp</p>
+          <div className="grid grid-cols-2 gap-1.5">
+            {selectedLive.map(lv => (
+              <div key={lv.label} className="rounded border border-slate-700/50 bg-slate-950/50 px-2 py-1">
+                <p className="text-[8px] text-stone-500 truncate">{lv.label}</p>
+                <p className="text-[11px] text-stone-100 font-medium truncate" title={lv.value}>{lv.value}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tuningEntries.length > 0 ? (
+        <div className="space-y-3 pt-1 border-t border-slate-800">
+          <p className="text-[9px] uppercase tracking-wide text-amber-500 flex items-center gap-1 pt-2">
+            <Settings2 className="h-2.5 w-2.5" /> Tinh chỉnh vận hành ({tuningEntries.length})
+          </p>
+          {tuningEntries.map(entry => (
+            <TuningControl
+              key={entry.key}
+              entry={entry}
+              nodeTitle={selectedNode.title}
+              saving={savingKeys.has(entry.key)}
+              onSet={onSet}
+              onReset={onReset}
+            />
+          ))}
+        </div>
+      ) : (
+        <p className="text-[10px] text-stone-600 italic pt-2 border-t border-slate-800">
+          Node này không có tham số runtime (giá trị cố định theo spec — xem mô tả thuật toán).
+        </p>
+      )}
+    </>
   )
 }
 
