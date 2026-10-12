@@ -48,9 +48,10 @@
  *      weights tổng 1, correlation > 0.5, tất định 2 lần deep-equal);
  *      spearmanRank pin tay (perfect → 1, đảo → −1, tie average-rank →
  *      1.5/√3 ≈ 0.866).
- *   H. Cờ + kill-switch organs — TUNING_SPECS 19 mục, 4 cờ mới pin đủ
+ *   H. Cờ + kill-switch organs — TUNING_SPECS 25 mục (PIN UPDATE Task 11:
+ *      BRAIN-UX §9 +6 key), 4 cờ mới pin đủ
  *      (enum off/on, default off, envKey, node softmax-policy); NEURAL_NODES
- *      softmax-policy paramKeys đủ 7; ENV 'on' thắng default; STORE thắng
+ *      softmax-policy paramKeys đủ 13 (PIN UPDATE Task 11); ENV 'on' thắng default; STORE thắng
  *      ENV; reset về default; BRAIN_TRAINABLE_KEYS đủ 3; GET /api/brain →
  *      policy trainable; maybeMixModelProbs/buildPolicyAdvisoryBlock/
  *      buildTuningProposals kill-switch off → null/''/[] (hành vi y hệt P3).
@@ -989,8 +990,12 @@ describe('r87 · G composite reward — chuẩn hóa + renormalize + log-only + 
 // ==================== H. Cờ + kill-switch organs ====================
 
 describe('r87 · H cờ P4 + kill-switch — TUNING_SPECS/NEURAL_NODES/route/registry', () => {
-  test('H1 TUNING_SPECS 19 mục; 4 cờ P4 pin đủ trường', () => {
-    expect(TUNING_SPECS).toHaveLength(19)
+  test('H1 TUNING_SPECS 25 mục; 4 cờ P4 pin đủ trường', () => {
+    // PIN UPDATE (r88-r91 task, Task 11 worklog): 19 → 25 — BRAIN-UX §9
+    // (UX-1/2) thêm 6 key: ui_brain_edit/ui_synapse_fx/ui_hitech (cờ trình
+    // bày) + reward_w_outcome/efficiency/quality (UX-2 nhóm C — blueprinted
+    // §9.3, neural-types.ts 'BRAIN-UX §9' block).
+    expect(TUNING_SPECS).toHaveLength(25)
     const keys = TUNING_SPECS.map(s => s.key)
     for (const k of P4_FLAG_KEYS) expect(keys).toContain(k)
     for (const key of P4_FLAG_KEYS) {
@@ -1011,9 +1016,13 @@ describe('r87 · H cờ P4 + kill-switch — TUNING_SPECS/NEURAL_NODES/route/reg
     }
   })
 
-  test('H2 NEURAL_NODES softmax-policy paramKeys đủ 7 cờ', () => {
+  test('H2 NEURAL_NODES softmax-policy paramKeys đủ 13 tham số', () => {
     const node = NEURAL_NODES.find(n => n.id === 'softmax-policy')
     expect(node).not.toBeNull()
+    // PIN UPDATE (r88-r91 task, Task 11 worklog): 7 → 13 — BRAIN-UX §9 thêm
+    // 6 key TUNING_SPECS đều gắn node softmax-policy (3 cờ UI + 3 trọng số
+    // reward_w_*). Đếm thật tại neural-types.ts paramKeys node softmax-policy
+    // (worklog Task 9 ghi "14" — đếm lại là 13, pin theo số đo).
     expect(node!.paramKeys).toEqual([
       'runtime_model_policy',
       'runtime_model_tau',
@@ -1022,6 +1031,12 @@ describe('r87 · H cờ P4 + kill-switch — TUNING_SPECS/NEURAL_NODES/route/reg
       'policy_organ_routing',
       'policy_organ_adaptation',
       'policy_organ_tuning',
+      'reward_w_outcome',
+      'reward_w_efficiency',
+      'reward_w_quality',
+      'ui_brain_edit',
+      'ui_synapse_fx',
+      'ui_hitech',
     ])
   })
 

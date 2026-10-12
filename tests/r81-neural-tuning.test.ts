@@ -10,7 +10,7 @@
  *   4. WIRING PIN: updateQ đọc α/γ runtime (revert về hằng số → Q lệch →
  *      fail), ε-greedy episodic đọc runtime, stats-gate + matryoshka
  *      STORE đè ENV, near-dup threshold param hoá
- *   5. API route GET/POST trực tiếp (graph 6 lớp/23 node/19 tuning; set
+ *   5. API route GET/POST trực tiếp (graph 6 lớp/23 node/25 tuning; set
  *      hợp lệ 200 + đổi state; giá trị rác 400; action lạ 400)
  */
 
@@ -44,10 +44,13 @@ import { GET, POST } from '@/app/api/neural-architecture/route'
 // ==================== 1. SPEC + GRAPH INTEGRITY (thuần) ====================
 
 describe('r81 · TUNING_SPECS integrity', () => {
-  test('19 key duy nhất, mỗi key có spec (P2 +calibration_v3 · P3 +replay_eval · P4 +runtime_policy & 3 cờ organ)', () => {
+  test('25 key duy nhất, mỗi key có spec (P2 +calibration_v3 · P3 +replay_eval · P4 +runtime_policy & 3 cờ organ · UX +6 cờ BRAIN-UX §9)', () => {
+    // PIN UPDATE (r88-r91 task, Task 11 worklog): 19 → 25 — BRAIN-UX §9 (UX-1/2)
+    // thêm 6 key (ui_brain_edit/ui_synapse_fx/ui_hitech + reward_w_outcome/
+    // efficiency/quality) vào neural-types.ts TUNING_SPECS.
     const keys = TUNING_SPECS.map(s => s.key)
-    expect(keys.length).toBe(19)
-    expect(new Set(keys).size).toBe(19)
+    expect(keys.length).toBe(25)
+    expect(new Set(keys).size).toBe(25)
     for (const k of keys) expect(getTuningSpec(k)?.key).toBe(k)
     expect(getTuningSpec('khong-ton-tai')).toBeUndefined()
   })
@@ -259,10 +262,11 @@ describe('r81 · resolve STORE > ENV > DEFAULT', () => {
     expect(getTuningNumber('q_learning_alpha')).toBe(0.1)
   })
 
-  test('getTuningState: đủ 19 entry, effectiveValue/source/storeValue khớp', async () => {
+  test('getTuningState: đủ 25 entry, effectiveValue/source/storeValue khớp', async () => {
+    // PIN UPDATE (r88-r91 task, Task 11 worklog): 19 → 25 (BRAIN-UX §9 +6 key)
     await setTuningValue('anomaly_iqr_k', '2.5')
     const state = await getTuningState()
-    expect(state.length).toBe(19)
+    expect(state.length).toBe(25)
     const iqr = state.find(s => s.key === 'anomaly_iqr_k')!
     expect(iqr.source).toBe('store')
     expect(iqr.storeValue).toBe('2.5')
@@ -426,14 +430,15 @@ describe('r81 · API /api/neural-architecture', () => {
     await resetTuningValue('runtime_model_policy')
   })
 
-  test('GET: graph 6 lớp · 23 node · 37 cạnh · 19 tuning · live là map', async () => {
+  test('GET: graph 6 lớp · 23 node · 37 cạnh · 25 tuning · live là map', async () => {
     const res = await GET()
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json.graph.layers.length).toBe(6)
     expect(json.graph.nodes.length).toBe(23)
     expect(json.graph.edges.length).toBe(37)
-    expect(json.tuning.length).toBe(19)
+    // PIN UPDATE (r88-r91 task, Task 11 worklog): 19 → 25 (BRAIN-UX §9 +6 key)
+    expect(json.tuning.length).toBe(25)
     expect(typeof json.live).toBe('object')
     expect(json.live['q-table'][0].label).toBe('Q entries')
     expect(json.generatedAt).toBeTruthy()

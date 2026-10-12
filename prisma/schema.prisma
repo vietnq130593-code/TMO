@@ -2569,3 +2569,20 @@ model BrainModel {
   @@unique([brain, version])
   @@index([brain, active])
 }
+
+/// BRAIN-UX §9.7 (blueprint §9 — user chốt 2026-10-12) — bản nháp kiến trúc
+/// brain cho editor UX-1/UX-2. Draft ≠ runtime (§9.1-1): bảng này KHÔNG BAO
+/// GIỜ chạm BrainModel.active — đường lên runtime vẫn là train → thắng CV →
+/// thăng cấp. 1 nháp mỗi brain (@unique brain). Model thứ 100 (additive).
+model BrainSpecDraft {
+  id        String   @id @default(cuid())
+  /// 'calibration_v3' | 'surrogate' | 'policy' — khớp BRAIN_REGISTRY
+  brain     String   @unique
+  /// BrainDraftSpec (src/lib/brain/spec-schema.ts): hidden[{units,activation}]
+  /// · lossPerHead[{type,weight}] · hyper{optimizer,lr,epochs,batch,l2,patience,holdout,clip,seed}
+  specJson  String
+  /// Lý do chỉnh sửa — hiển thị trong diff (§9.7)
+  note      String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}

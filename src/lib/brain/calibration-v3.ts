@@ -47,7 +47,8 @@
 
 import { createHash } from 'node:crypto'
 import { db } from '@/lib/db'
-import { MLP, type MlpSerialized, type MlpSpec, type FitResult } from './mlp'
+import { MLP, type MlpSerialized, type MlpSpec, type FitResult, type FitOptions, type EpochStat } from './mlp'
+import type { BrainDraftSpec } from './spec-schema'
 import {
   BRAIN_VERSIONS_KEEP,
 } from './registry'
@@ -96,8 +97,30 @@ const V3_EPOCHS = 500
 const V3_PATIENCE = 50
 const V3_BATCH = 32
 
-/** Xây MlpSpec V3 — thuần, xuất cho test pin kiến trúc (r85-A). */
-export function buildV3Spec(): MlpSpec {
+/**
+ * Xây MlpSpec V3 — thuần, xuất cho test pin kiến trúc (r85-A).
+ * BRAIN-UX §9.2 — override (tùy chọn, từ BrainSpecDraft qua useDraft): thay
+ * LỚP ẨN + optimizer/lr/l2/seed; input/output + loss KHÓA theo hợp đồng
+ * pipeline (§9.1-2). Không truyền = ĐÚNG spec gốc (hồi quy r88/r89 pin).
+ */
+export function buildV3Spec(override?: BrainDraftSpec): MlpSpec {
+  const base = buildV3SpecDefault()
+  if (!override) return base
+  return {
+    ...base,
+    layers: [
+      base.layers[0], // input khóa features-10
+      ...override.hidden.map(h => ({ units: h.units, activation: h.activation })),
+      base.layers[base.layers.length - 1], // output khóa 1·sigmoid (hợp đồng BCE)
+    ],
+    optimizer: override.hyper.optimizer,
+    lr: override.hyper.lr,
+    l2: override.hyper.l2,
+    seed: override.hyper.seed,
+  }
+}
+
+function buildV3SpecDefault(): MlpSpec {
   return {
     layers: [
       // Lớp input: activation bị bỏ qua ở forward (hợp đồng dữ liệu — UX-1
@@ -161,7 +184,7 @@ export interface V3CvOutcome {
 export function crossValidateV3(
   X: (number | null)[][],
   y: number[],
-  opts: { folds?: number } = {},
+  opts: { folds?: number; override?: BrainDraftSpec } = {},
 ): V3CvOutcome | null {
   if (X.length !== y.length) {
     throw new Error(
@@ -186,11 +209,12 @@ export function crossValidateV3(
     const trainStd = trainIdx.map(i => standardizeRow(X[i], means, stds))
     const holdStd = holdIdx.map(i => standardizeRow(X[i], means, stds))
 
-    const mlp = new MLP(buildV3Spec())
+    // BRAIN-UX §9.2 — CV đánh giá ĐÚNG kiến trúc draft (không phải spec gốc)
+    const mlp = new MLP(buildV3Spec(opts.override))
     mlp.fit(
       trainStd,
       trainIdx.map(i => [y[i]]), // output 1 unit — y bao [[0]] / [[1]]
-      { epochs: V3_EPOCHS, batchSize: V3_BATCH, patience: V3_PATIENCE },
+      draftFitOptions(opts.override, { epochs: V3_EPOCHS, batchSize: V3_BATCH, patience: V3_PATIENCE }),
     )
     const preds = holdStd.map(row => mlp.predictProba(row))
     let s = 0
@@ -233,11 +257,37 @@ export interface V3TrainResult {
   usable: number
   total: number
   error?: string
+  /** BRAIN-UX §9.3 — quỹ đạo epoch (hiển thị sau khi train xong). */
+  history?: EpochStat[]
+  /** BRAIN-UX §9.4 — |gradient| trung bình từng lớp. */
+  gradAbsMean?: number[]
+  /** BRAIN-UX — train từ bản nháp UX-2 (provenance). */
+  draftUsed?: boolean
 }
 
 /** Làm tròn 5 chữ số lẻ cho JSON lưu DB (đủ đọc, gọn — cùng V2) */
 function round5(v: number): number {
   return Math.round(v * 100000) / 100000
+}
+
+/**
+ * BRAIN-UX §9.3 nhóm A — FitOptions từ draft (override) hoặc hằng số gốc.
+ * Không override → ĐÚNG options cũ {epochs, batchSize, patience} (holdout/
+ * clip rơi mặc định mlp.ts 0.15/5) — pin hồi quy r88. Có override → đủ 5
+ * trường từ hyper draft (đã validate phạm vi §9.3 tại PUT spec-draft).
+ */
+function draftFitOptions(
+  override: BrainDraftSpec | undefined,
+  defaults: { epochs: number; batchSize: number; patience: number },
+): FitOptions {
+  if (!override) return { ...defaults }
+  return {
+    epochs: override.hyper.epochs,
+    batchSize: override.hyper.batch,
+    patience: override.hyper.patience,
+    holdOutRatio: override.hyper.holdout,
+    clipNorm: override.hyper.clip,
+  }
 }
 
 /**
@@ -252,7 +302,10 @@ function round5(v: number): number {
  * nhân lên (nút UI + auto-train sau eval run) → lệnh train trùng nhịp của
  * CÙNG brain trả trained=false (không xếp hàng, không đua version).
  */
-export async function trainBrainCalibrationV3(inputMode: string = V3_INPUT_MODE): Promise<V3TrainResult> {
+export async function trainBrainCalibrationV3(
+  inputMode: string = V3_INPUT_MODE,
+  override?: BrainDraftSpec,
+): Promise<V3TrainResult> {
   if (!acquireTrainLock('calibration_v3')) {
     return {
       trained: false, version: null, active: false, sampleSize: 0,
@@ -262,13 +315,16 @@ export async function trainBrainCalibrationV3(inputMode: string = V3_INPUT_MODE)
     }
   }
   try {
-    return await trainBrainCalibrationV3Locked(inputMode)
+    return await trainBrainCalibrationV3Locked(inputMode, override)
   } finally {
     releaseTrainLock('calibration_v3')
   }
 }
 
-async function trainBrainCalibrationV3Locked(inputMode: string): Promise<V3TrainResult> {
+async function trainBrainCalibrationV3Locked(
+  inputMode: string,
+  override?: BrainDraftSpec,
+): Promise<V3TrainResult> {
   const [results, cases] = await Promise.all([
     db.evalResult.findMany({
       select: {
@@ -332,7 +388,8 @@ async function trainBrainCalibrationV3Locked(inputMode: string): Promise<V3Train
   const y = usable.map(r => ((r.faithfulnessMedian as number) > FAITHFULNESS_THRESHOLD ? 1 : 0))
 
   // CV TRƯỚC khi tin model (kỷ luật V2): lệch lớp → abort
-  const cv = crossValidateV3(X, y)
+  // BRAIN-UX §9.2 — CV đánh giá kiến trúc draft khi có override
+  const cv = crossValidateV3(X, y, override ? { override } : {})
   if (!cv) {
     return notTrained(
       `class imbalance: cần ≥${CV_FOLDS} mẫu MỖI lớp cho ${CV_FOLDS}-fold stratified CV — Positive=${y.filter(v => v === 1).length}/Negative=${y.filter(v => v === 0).length}`,
@@ -342,11 +399,11 @@ async function trainBrainCalibrationV3Locked(inputMode: string): Promise<V3Train
   // Model cuối trên TOÀN BỘ dữ liệu (stats chuẩn hóa full-data — đúng V2)
   const { means, stds } = computeColumnStats(X)
   const Xstd = X.map(row => standardizeRow(row, means, stds))
-  const mlp = new MLP(buildV3Spec())
+  const mlp = new MLP(buildV3Spec(override))
   const fit: FitResult = mlp.fit(
     Xstd,
     y.map(v => [v]),
-    { epochs: V3_EPOCHS, batchSize: V3_BATCH, patience: V3_PATIENCE },
+    draftFitOptions(override, { epochs: V3_EPOCHS, batchSize: V3_BATCH, patience: V3_PATIENCE }),
   )
   const serialized: MlpSerialized = mlp.serialize()
 
@@ -405,6 +462,10 @@ async function trainBrainCalibrationV3Locked(inputMode: string): Promise<V3Train
       stoppedEarly: fit.stoppedEarly,
       finalTrainLoss: Number.isFinite(fit.finalTrainLoss) ? round5(fit.finalTrainLoss) : null,
     },
+    // BRAIN-UX §9.4 — |gradient| trung bình từng lớp (chế độ lan truyền
+    // ngược UX-3 — dữ liệu thật, không trang trí) + provenance draft UX-2
+    gradAbsMean: fit.gradAbsMean.map(round5),
+    draftUsed: Boolean(override),
     dataLineage: {
       tables: { EvalResult: usable.length, EvalCase: caseIdsUsed.size },
       evalRuns: runIds.size,
@@ -449,6 +510,12 @@ async function trainBrainCalibrationV3Locked(inputMode: string): Promise<V3Train
     improved: cv.improved,
     usable: usable.length,
     total: results.length,
+    // BRAIN-UX §9.3 — quỹ đạo epoch (loss train/hold-out) hiển thị sau khi
+    // train xong (MLP nhỏ chạy ~giây — stream realtime từng epoch là
+    // over-engineering; ghi nhận quyết định blueprint v0.10)
+    history: fit.history,
+    gradAbsMean: fit.gradAbsMean.map(round5),
+    draftUsed: Boolean(override),
   }
 }
 

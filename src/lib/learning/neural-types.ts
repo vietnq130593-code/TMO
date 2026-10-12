@@ -149,12 +149,13 @@ export interface NeuralGraph {
   edges: NeuralEdge[]
 }
 
-// ==================== 1. TUNING SPECS (19 tham số vận hành thực) ====================
+// ==================== 1. TUNING SPECS (25 tham số vận hành thực) ====================
 // 13 gốc (neural-arch 2026-10-11) + thứ 14 calibration_v3 (BRAIN-P2) + thứ 15
 // replay_eval (BRAIN-P3) + thứ 16–19 runtime_policy + 3 cờ organ kill-switch
-// policy_organ_routing/adaptation/tuning (BRAIN-P4 — hiệu đính FB-BRAIN-P4-
-// R1-06: comment trước đếm "14 gốc + thứ 14 + 15 + 16–19" = 20 ≠ 19 thật;
-// header cũ nhất "14" cũng không cập nhật kịp từ P3 — ghi nhận Bug_v2).
+// policy_organ_routing/adaptation/tuning (BRAIN-P4) + thứ 20–22 cờ trình
+// bày BRAIN-UX (ui_brain_edit/ui_synapse_fx/ui_hitech — blueprint §9, user
+// chốt 2026-10-12) + thứ 23–25 trọng số composite reward w₁w₂w₃ (UX-2 nhóm
+// C — override qua STORE›ENV›DEFAULT, log-only KHÔNG đổi).
 
 export const TUNING_SPECS: readonly TuningSpec[] = [
   {
@@ -456,6 +457,108 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
     },
     warning: 'Bật = Brain-C liệt kê đề xuất tham số trong report (không tự áp dụng — KHÔNG ghi TuningParam/TuningChangeLog). Tắt về off = danh sách rỗng — kill-switch độc lập với 2 organ kia.',
     appliesTo: 'buildTuningProposals — report GET /api/brain/policy (src/lib/brain/brains/policy.ts)',
+  },
+  {
+    // BRAIN-UX §9.2 (UX-1) — cờ mở editor kiến trúc trong Brain Studio.
+    // Off = chỉ xem (read-only y hệt trước UX-1); on = editor lớp ẩn +
+    // lưu nháp BrainSpecDraft. Draft KHÔNG chạm runtime (§9.1-1).
+    key: 'ui_brain_edit',
+    label: 'UI_BRAIN_EDIT',
+    description:
+      'Bật/tắt editor kiến trúc não (Brain Studio UX-1): off = panel chỉ xem (an toàn — mặc định); on = chỉnh lớp ẩn/nơ-ron/activation + lưu bản nháp BrainSpecDraft + console train UX-2. Bản nháp KHÔNG bao giờ chạm bản active — đường lên runtime vẫn là train → thắng CV → thăng cấp.',
+    nodeId: 'softmax-policy',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'UI_BRAIN_EDIT',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' ? 'on' : 'off'
+    },
+    appliesTo: 'BrainStudio + TrainingConsole (src/components/database/*) — cờ trình bày, không đụng pipeline',
+  },
+  {
+    // BRAIN-UX §9.4 (UX-3) — cờ hiệu ứng đường dây ánh sáng trên sân khấu não.
+    key: 'ui_synapse_fx',
+    label: 'UI_SYNAPSE_FX',
+    description:
+      'Hiệu ứng synapse trên đồ thị não đang chọn (UX-3): off = đường thẳng tĩnh như cũ; on = cạnh bezier gradient + nét đứt chạy theo hướng lan truyền (tiến/ngược) + inspector nơ-ron/cạnh. Luôn tôn trọng prefers-reduced-motion (bản tĩnh có mũi tên).',
+    nodeId: 'softmax-policy',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'UI_SYNAPSE_FX',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' ? 'on' : 'off'
+    },
+    appliesTo: 'BrainStage (src/components/database/brain-stage.tsx) — cờ trình bày, không đụng pipeline',
+  },
+  {
+    // BRAIN-UX §9.6 (UX-5) — cờ theme dark-hi-tech toàn app.
+    key: 'ui_hitech',
+    label: 'UI_HITECH',
+    description:
+      'Theme "màn hình kính viền sáng" toàn app (UX-5): off = giao diện hiện tại nguyên vẹn; on = nền sâu #05070D + bề mặt kính mờ + viền sáng chuyển động + nút nhô bóng. Nút bật/tắt nhanh ở thanh bên (localStorage áp dụng tức thì + sync vào đây để audit).',
+    nodeId: 'softmax-policy',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'UI_HITECH',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' ? 'on' : 'off'
+    },
+    appliesTo: 'HiTechToggle (src/components/hitech-toggle.tsx) — nút sidebar + globals.css [data-hitech=on] (CSS-driven toàn cục), không đụng pipeline',
+  },
+  {
+    // BRAIN-UX §9.3 nhóm C — override trọng số composite reward (log-only).
+    // DEFAULT = 1/3 mỗi thành phần — TRÙNG REWARD_WEIGHTS (reward.ts, khởi
+    // điểm 2026-10-12 khi sweep chưa khả thi — doctrine #1: đổi default CHỈ
+    // kèm sweepRewardWeights() đã chạy + chú thích nguồn mới).
+    key: 'reward_w_outcome',
+    label: 'REWARD_W_OUTCOME (w₁)',
+    description:
+      'Trọng số w₁ của Outcome* trong composite reward R = w₁·Outcome* + w₂·Efficiency* + w₃·Quality* (đã chuẩn hóa từng thành phần). Chuỗi hiệu lực STORE › ENV › DEFAULT=1/3. Composite reward đang LOG-ONLY (đợt quan sát 1/2) — override KHÔNG đổi quyết định runtime, chỉ đổi số ghi log/report.',
+    nodeId: 'softmax-policy',
+    type: 'number',
+    min: 0,
+    max: 1,
+    step: 0.01,
+    default: 1 / 3,
+    envKey: 'REWARD_W_OUTCOME',
+    warning: 'Override chỉ đổi trọng số GHI LOG (log-only) — không tự tham gia quyết định tới khi đủ 2 đợt quan sát (Q1 chốt 2026-10-12).',
+    appliesTo: 'resolveRewardWeightsFromTuning (src/lib/brain/reward.ts) — logCompositeRewardForRun + report policy',
+  },
+  {
+    key: 'reward_w_efficiency',
+    label: 'REWARD_W_EFFICIENCY (w₂)',
+    description:
+      'Trọng số w₂ của Efficiency* (tokens so trung vị theo model, kẹp [−1,1]) trong composite reward. Chuỗi hiệu lực STORE › ENV › DEFAULT=1/3. Log-only.',
+    nodeId: 'softmax-policy',
+    type: 'number',
+    min: 0,
+    max: 1,
+    step: 0.01,
+    default: 1 / 3,
+    envKey: 'REWARD_W_EFFICIENCY',
+    warning: 'Override chỉ đổi trọng số GHI LOG (log-only) — không tự tham gia quyết định tới khi đủ 2 đợt quan sát.',
+    appliesTo: 'resolveRewardWeightsFromTuning (src/lib/brain/reward.ts) — logCompositeRewardForRun + report policy',
+  },
+  {
+    key: 'reward_w_quality',
+    label: 'REWARD_W_QUALITY (w₃)',
+    description:
+      'Trọng số w₃ của Quality* (faithfulness ∈ [0,1]) trong composite reward. Chuỗi hiệu lực STORE › ENV › DEFAULT=1/3. Log-only. Hiện Quality* null trên agent-run (chưa nối EvalResult) — compositeReward renormalize w₁+w₂.',
+    nodeId: 'softmax-policy',
+    type: 'number',
+    min: 0,
+    max: 1,
+    step: 0.01,
+    default: 1 / 3,
+    envKey: 'REWARD_W_QUALITY',
+    warning: 'Override chỉ đổi trọng số GHI LOG (log-only) — không tự tham gia quyết định tới khi đủ 2 đợt quan sát.',
+    appliesTo: 'resolveRewardWeightsFromTuning (src/lib/brain/reward.ts) — logCompositeRewardForRun + report policy',
   },
 ] as readonly TuningSpec[]
 
@@ -779,7 +882,7 @@ export const NEURAL_NODES: readonly NeuralNode[] = [
       { name: 'getQAdvice', file: 'src/lib/learning/q-table.ts', line: 323 },
       { name: 'pickIndexBySeed', file: 'src/lib/learning/q-table.ts', line: 185 },
     ],
-    paramKeys: ['runtime_model_policy', 'runtime_model_tau', 'replay_eval', 'runtime_policy', 'policy_organ_routing', 'policy_organ_adaptation', 'policy_organ_tuning'],
+    paramKeys: ['runtime_model_policy', 'runtime_model_tau', 'replay_eval', 'runtime_policy', 'policy_organ_routing', 'policy_organ_adaptation', 'policy_organ_tuning', 'reward_w_outcome', 'reward_w_efficiency', 'reward_w_quality', 'ui_brain_edit', 'ui_synapse_fx', 'ui_hitech'],
   },
   {
     id: 'strategy-adapter',

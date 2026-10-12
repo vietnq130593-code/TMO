@@ -82,6 +82,16 @@ export interface FitOptions {
   holdOutRatio?: number
   /** Chuẩn clip gradient toàn cục — ≥ 0; 0 = tắt. Mặc định 5 (blueprint §4.1). */
   clipNorm?: number
+  /**
+   * BRAIN-UX §9.3 nhóm B — hệ số nhân loss trước backprop (= loss × scale
+   * về mặt gradient), ≥ 0. Mặc định 1 = ĐÚNG hành vi trước UX-2. Dùng cho
+   * trọng số λ từng đầu ra Brain-B (3 MLP riêng — scale λᵢ×3 để chia đều
+   * cho 1.0 mỗi đầu): tilt ưu tiên đầu ra khi train; GHI CHÚ trung thực:
+   * với Adam scale ~ trung hoà (adaptive), tác dụng rõ với SGD+momentum.
+   * 0 = đóng băng học (hợp lệ khi user muốn tắt hẳn 1 đầu — đầu đó thua
+   * CV → không thăng cấp, fail-open giữ nguyên).
+   */
+  lossScale?: number
 }
 
 export interface EpochStat {
@@ -98,6 +108,14 @@ export interface FitResult {
   finalValLoss: number | null
   stoppedEarly: boolean
   history: EpochStat[]
+  /**
+   * BRAIN-UX §9.4 — |gradient| trung bình từng lớp trọng số (sau batch-mean
+   * + L2 + lossScale, trước clip; trung bình toàn bộ các batch đã chạy) —
+   * dữ liệu THẬT cho chế độ lan truyền ngược UX-3 (độ dày cạnh theo
+   * |gradient|). Độ dài = số lớp trọng số (L−1). Thông tin trình bày —
+   * không tham gia quyết định.
+   */
+  gradAbsMean: number[]
 }
 
 /** Envelope trọng số numpy-đọc-được (audit A6). */
@@ -371,6 +389,7 @@ export class MLP {
     const patience = opts?.patience ?? DEFAULT_PATIENCE
     const rawHoldOut = opts?.holdOutRatio ?? DEFAULT_HOLDOUT_RATIO
     const clipNorm = opts?.clipNorm ?? DEFAULT_CLIP_NORM
+    const lossScale = opts?.lossScale ?? 1
     if (!Number.isFinite(epochs) || !Number.isInteger(epochs) || epochs < 1) {
       throw new Error(`fit: epochs ${epochs} không hợp lệ (nguyên ≥ 1)`)
     }
@@ -385,6 +404,9 @@ export class MLP {
     }
     if (!Number.isFinite(clipNorm) || clipNorm < 0) {
       throw new Error(`fit: clipNorm ${clipNorm} không hợp lệ (≥ 0; 0 = tắt)`)
+    }
+    if (!Number.isFinite(lossScale) || lossScale < 0) {
+      throw new Error(`fit: lossScale ${lossScale} không hợp lệ (≥ 0; 1 = không đổi)`)
     }
     const batchSize = Math.min(rawBatchSize, n) // rawBatchSize đã validate ≥ 1 — chỉ kẹp ≤ n
     const holdOutRatio = rawHoldOut // đã validate ∈ [0, 0.5] — không còn kẹp (FB-BRAIN-P1-R2-01 dọn mã chết)
@@ -418,6 +440,10 @@ export class MLP {
     let bestW: Float64Array[] | null = null
     let bestB: Float64Array[] | null = null
     let stoppedEarly = false
+    // BRAIN-UX §9.4 — cộng dồn |gradient| từng lớp (sau batch-mean + L2,
+    // trước clip) để tính gradAbsMean; đếm số batch cho trung bình.
+    const gradAbsSum = this.W.map(w => new Float64Array(w.length))
+    let batchCount = 0
 
     for (let epoch = 1; epoch <= epochs; epoch++) {
       // Trộn tập train (Fisher–Yates tất định theo luồng rng)
@@ -445,6 +471,20 @@ export class MLP {
           }
           for (let k = 0; k < accB[l].length; k++) accB[l][k] = accB[l][k] * inv
         }
+        // BRAIN-UX §9.3 nhóm B — nhân lossScale (= loss × scale về gradient;
+        // mặc định 1 không đổi gì) TRƯỚC clip — đúng nghĩa scale toàn bộ loss.
+        if (lossScale !== 1) {
+          for (let l = 0; l < accW.length; l++) {
+            for (let k = 0; k < accW[l].length; k++) accW[l][k] *= lossScale
+            for (let k = 0; k < accB[l].length; k++) accB[l][k] *= lossScale
+          }
+        }
+        // BRAIN-UX §9.4 — tích lũy |gradient| từng lớp (sau mean+L2+scale,
+        // trước clip — clip là biến đổi an toàn, không phản ánh tín hiệu)
+        for (let l = 0; l < accW.length; l++) {
+          for (let k = 0; k < accW[l].length; k++) gradAbsSum[l][k] += Math.abs(accW[l][k])
+        }
+        batchCount++
         // Clip norm toàn cục (blueprint: mặc định 5)
         if (clipNorm > 0) clipGlobalNorm(accW, accB, clipNorm)
         // Bước cập nhật từng tensor
@@ -480,6 +520,14 @@ export class MLP {
     }
 
     const last = history[history.length - 1]
+    // BRAIN-UX §9.4 — trung bình |gradient| từng lớp (trên số phần tử × số
+    // batch); batchCount = 0 chỉ khi epochs < 1 (đã chặn) → mảng toàn 0 an toàn
+    const gradAbsMean = gradAbsSum.map(w => {
+      const denom = w.length * Math.max(batchCount, 1)
+      let s = 0
+      for (let k = 0; k < w.length; k++) s += w[k]
+      return denom > 0 ? s / denom : 0
+    })
     return {
       epochsRun: last?.epoch ?? 0,
       bestEpoch,
@@ -488,6 +536,7 @@ export class MLP {
       finalValLoss: last?.valLoss ?? null,
       stoppedEarly,
       history,
+      gradAbsMean,
     }
   }
 

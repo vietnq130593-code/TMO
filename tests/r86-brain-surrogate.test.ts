@@ -970,7 +970,10 @@ describe('r86 · F cờ replay_eval + registry pins', () => {
     expect(spec!.envKey).toBe('REPLAY_EVAL')
     expect(spec!.nodeId).toBe('softmax-policy')
     expect((spec!.warning ?? '').length).toBeGreaterThan(10)
-    expect(TUNING_SPECS.length).toBe(19) // 15 (sau BRAIN-P3) + 4 cờ BRAIN-P4 (runtime_policy + 3 organ)
+    // PIN UPDATE (r88-r91 task, Task 11 worklog): 19 → 25 — BRAIN-UX §9
+    // (UX-1/2) thêm 6 key (ui_brain_edit/ui_synapse_fx/ui_hitech +
+    // reward_w_outcome/efficiency/quality) vào neural-types.ts.
+    expect(TUNING_SPECS.length).toBe(25) // 19 (sau BRAIN-P4) + 6 cờ BRAIN-UX §9
   })
 
   test('F2 NEURAL_NODES softmax-policy paramKeys gồm replay_eval (gắn đúng node)', () => {

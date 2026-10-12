@@ -26,6 +26,7 @@
  */
 
 import { NextResponse } from 'next/server'
+import { db } from '@/lib/db'
 import {
   BRAIN_TRAINABLE_KEYS,
 } from '@/lib/brain/registry'
@@ -44,13 +45,61 @@ import {
   POLICY_MIN_TRAIN_SAMPLES,
   POLICY_INPUT_MODE,
 } from '@/lib/brain/brains/policy'
+import {
+  BRAIN_DRAFT_RULES,
+  downsampleHistory,
+  validateBrainDraft,
+  type BrainDraftSpec,
+} from '@/lib/brain/spec-schema'
+import type { BrainKey } from '@/lib/brain/registry'
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(request: Request) {
-  let body: { brain?: unknown; inputMode?: unknown } = {}
+/**
+ * BRAIN-UX §9.2 — đọc bản nháp khi body có useDraft=true. Trả về
+ * { override } hợp lệ hoặc { error, status } cho route trả thẳng. Draft
+ * vẫn đi ĐẦY ĐỦ cổng train → CV → thăng cấp (bất biến A1 — §9.1-1: KHÔNG
+ * có đường tắt "vẽ xong chạy ngay").
+ */
+async function loadDraftOverride(
+  brain: string,
+  useDraft: boolean,
+): Promise<{ override?: BrainDraftSpec; error?: string; status?: number }> {
+  if (!useDraft) return {}
   try {
-    body = (await request.json()) as { brain?: unknown; inputMode?: unknown }
+    const row = await db.brainSpecDraft.findUnique({ where: { brain } })
+    if (!row) {
+      return {
+        error: `useDraft=true nhưng chưa có bản nháp cho brain '${brain}' — lưu nháp ở Brain Studio (UX-1) trước`,
+        status: 400,
+      }
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(row.specJson)
+    } catch {
+      return { error: `Bản nháp '${brain}' hỏng JSON (specJson không parse được) — lưu lại nháp để sửa`, status: 400 }
+    }
+    const rule = BRAIN_DRAFT_RULES[brain as BrainKey]
+    // inputDim cho trần tham số: dùng khóa A=10; B/C động → null (điểm
+    // chặn thật là mlp.validateSpec lúc dựng MLP trong pipeline)
+    const validation = validateBrainDraft({ ...(parsed as object), brain }, rule?.inputUnits ?? null)
+    if (!validation.ok) {
+      return { error: `Bản nháp '${brain}' không hợp lệ: ${validation.errors.join('; ')}`, status: 400 }
+    }
+    return { override: validation.normalized }
+  } catch (err) {
+    return {
+      error: `Đọc bản nháp '${brain}' thất bại: ${err instanceof Error ? err.message : String(err)}`,
+      status: 500,
+    }
+  }
+}
+
+export async function POST(request: Request) {
+  let body: { brain?: unknown; inputMode?: unknown; useDraft?: unknown } = {}
+  try {
+    body = (await request.json()) as { brain?: unknown; inputMode?: unknown; useDraft?: unknown }
   } catch {
     return NextResponse.json({ error: 'Body phải là JSON { brain }' }, { status: 400 })
   }
@@ -59,18 +108,26 @@ export async function POST(request: Request) {
   if (!BRAIN_TRAINABLE_KEYS.includes(brain as never)) {
     return NextResponse.json(
       {
-        error: `Brain '${brain || '(trống)'}' chưa có pipeline train — hỗ trợ: ${BRAIN_TRAINABLE_KEYS.join(', ')} (Brain-C chờ P4)`,
+        error: `Brain '${brain || '(trống)'}' chưa có pipeline train — hỗ trợ: ${BRAIN_TRAINABLE_KEYS.join(', ')}`,
         supported: BRAIN_TRAINABLE_KEYS,
       },
       { status: 400 },
     )
   }
 
+  // BRAIN-UX §9.3 — nút Huấn luyện của Training Console gửi useDraft=true
+  // để train theo bản nháp (đã validate lại ở server — không tin client)
+  const draftLoad = await loadDraftOverride(brain, body.useDraft === true)
+  if (draftLoad.error) {
+    return NextResponse.json({ error: draftLoad.error }, { status: draftLoad.status ?? 400 })
+  }
+  const override = draftLoad.override
+
   try {
     if (brain === 'calibration_v3') {
       // ── Brain-A "V3" (BRAIN-P2) — CV so V2 đối chứng ──
       const inputMode = typeof body.inputMode === 'string' ? body.inputMode : V3_INPUT_MODE
-      const result = await trainBrainCalibrationV3(inputMode)
+      const result = await trainBrainCalibrationV3(inputMode, override)
       if (!result.trained) {
         return NextResponse.json(
           {
@@ -94,13 +151,16 @@ export async function POST(request: Request) {
         sampleSize: result.sampleSize,
         usable: result.usable,
         total: result.total,
+        history: result.history ? downsampleHistory(result.history, 200) : undefined,
+        gradAbsMean: result.gradAbsMean,
+        draftUsed: result.draftUsed,
       })
     }
 
     // ── Brain-C "Lệnh" policy head (BRAIN-P4) — CV mixture so π_Q ──
     if (brain === 'policy') {
       const inputMode = typeof body.inputMode === 'string' ? body.inputMode : POLICY_INPUT_MODE
-      const result = await trainBrainPolicy(inputMode)
+      const result = await trainBrainPolicy(inputMode, override)
       if (!result.trained) {
         // Thiếu mẫu / thiếu Q / thiếu verdict / lệch lớp / mode chưa hỗ trợ /
         // trùng nhịp A7 — ngủ an toàn, không ghi DB
@@ -136,12 +196,15 @@ export async function POST(request: Request) {
               folds: result.cv.folds,
             }
           : null,
+        history: result.history ? downsampleHistory(result.history, 200) : undefined,
+        gradAbsMean: result.gradAbsMean,
+        draftUsed: result.draftUsed,
       })
     }
 
     // ── Brain-B "Vọng" surrogate (BRAIN-P3) — CV so baseline từng đầu ──
     const inputMode = typeof body.inputMode === 'string' ? body.inputMode : SURROGATE_INPUT_MODE
-    const result = await trainBrainSurrogate(inputMode)
+    const result = await trainBrainSurrogate(inputMode, override)
     if (!result.trained) {
       // Thiếu mẫu / lệch lớp / mode chưa hỗ trợ / trùng nhịp A7 — ngủ an
       // toàn, không ghi DB
@@ -182,6 +245,15 @@ export async function POST(request: Request) {
           improved: result.heads?.durationMs.improved,
         },
       },
+      history: result.history
+        ? {
+            success: downsampleHistory(result.history.success, 200),
+            tokens: downsampleHistory(result.history.tokens, 200),
+            durationMs: downsampleHistory(result.history.durationMs, 200),
+          }
+        : undefined,
+      gradAbsMean: result.gradAbsMean,
+      draftUsed: result.draftUsed,
     })
   } catch (err) {
     console.error('[BrainTrain] POST failed:', err instanceof Error ? err.message : String(err))

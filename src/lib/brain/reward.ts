@@ -45,6 +45,7 @@
 
 import { db } from '@/lib/db'
 import { quantile } from '@/lib/stats'
+import { getTuningNumber } from '@/lib/learning/tuning-store'
 
 // ==================== CONFIG ====================
 
@@ -64,6 +65,23 @@ export const REWARD_WEIGHTS: RewardWeights = {
   outcome: 1 / 3,
   efficiency: 1 / 3,
   quality: 1 / 3,
+}
+
+/**
+ * BRAIN-UX §9.3 nhóm C — trọng số hiệu lực qua tuning-store (STORE › ENV ›
+ * DEFAULT). DEFAULT của 3 spec reward_w_* = 1/3 — TRÙNG REWARD_WEIGHTS: khi
+ * chưa ai override, hàm này trả ĐÚNG giá trị trước UX-2 (bằng chứng hồi
+ * quy r89). Spec thiếu/rác (NaN/âm) → fallback REWARD_WEIGHTS (fail-open —
+ * không bao giờ trả trọng số vô hiệu cho compositeReward).
+ */
+export function resolveRewardWeightsFromTuning(): RewardWeights {
+  const outcome = getTuningNumber('reward_w_outcome')
+  const efficiency = getTuningNumber('reward_w_efficiency')
+  const quality = getTuningNumber('reward_w_quality')
+  const ok = [outcome, efficiency, quality].every(w => Number.isFinite(w) && w >= 0)
+    && outcome + efficiency + quality > 0
+  if (!ok) return { ...REWARD_WEIGHTS }
+  return { outcome, efficiency, quality }
 }
 
 // ==================== THUẦN — CHUẨN HÓA + HỢP THÀNH (test trực tiếp) ====================
@@ -301,10 +319,14 @@ export async function logCompositeRewardForRun(input: {
   try {
     const tally: VerdictTally = { confirmed: input.confirmed, refuted: input.refuted }
     const { baselines } = await collectRewardLedger()
+    // BRAIN-UX §9.3 nhóm C — trọng số hiệu lực (STORE › ENV › DEFAULT=1/3;
+    // override UX-2 chỉ đổi số GHI LOG — vẫn log-only, không đụng quyết định)
+    const weights = resolveRewardWeightsFromTuning()
     const result = computeRunReward(
       { complete: input.complete ? 1 : 0, tokensUsed: input.tokensUsed, model: input.model },
       tally,
       baselines,
+      weights,
     )
     if (!result) {
       console.log(

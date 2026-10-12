@@ -109,6 +109,11 @@ export interface BrainModelSummary {
     brierBaseline?: number
     /** true khi bản này thắng đối chứng CV (chính là active) */
     improved?: boolean
+    /** BRAIN-UX §9.4 — |gradient| trung bình từng lớp (từ mlp.FitResult —
+     * chế độ lan truyền ngược UX-3, độ dày cạnh theo dữ liệu thật) */
+    gradAbsMean?: number[]
+    /** BRAIN-UX — train từ bản nháp UX-2 (useDraft) — provenance */
+    draftUsed?: boolean
   }
 }
 
@@ -120,6 +125,20 @@ export interface BrainStatusEntry extends BrainSpec {
   models: BrainModelSummary[]
   /** BRAIN-P2 — đã có pipeline train thật (nút Huấn luyện lại bật khi đủ mẫu) */
   trainable: boolean
+  /**
+   * BRAIN-UX §9.1-3 (editor UX-1) — số chiều đầu vào HIỆN TẠI cho bộ đếm tham
+   * số. null = chưa đo được (brain động chưa train: hiển thị "—", kiểm tra
+   * trần tham số rơi xuống mlp.validateSpec lúc train — điểm chặn thật).
+   * inputDimExact=false: ước tính từ DB (có thể lệch filter usable lúc train).
+   */
+  inputDim?: number | null
+  inputDimExact?: boolean
+  /**
+   * FB-BRAIN-UX-R1-02 — số unit lớp output HIỆN TẠI từ bản active (đọc lớp
+   * cuối cùng specJson — vd |A| thật của policy); null khi chưa train/động.
+   * Dùng cho bộ đếm tham số editor (validateBrainDraft outputUnitsOverride).
+   */
+  outputDim?: number | null
 }
 
 export interface BrainApiResponse {

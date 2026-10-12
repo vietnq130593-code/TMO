@@ -62,7 +62,8 @@
 
 import { createHash } from 'node:crypto'
 import { db } from '@/lib/db'
-import { MLP, type MlpSerialized, type MlpSpec, type FitResult } from '../mlp'
+import { MLP, type MlpSerialized, type MlpSpec, type FitResult, type FitOptions, type EpochStat } from '../mlp'
+import { lossScalePerHead, type BrainDraftSpec } from '../spec-schema'
 import { makeRng } from '../init'
 import { acquireTrainLock, releaseTrainLock } from '../train-lock'
 import { BRAIN_VERSIONS_KEEP } from '../registry'
@@ -194,33 +195,71 @@ function targetStats(values: number[]): { mean: number; std: number } {
 /**
  * Xây 3 MlpSpec của Brain-B theo D = vocab.models + vocab.agents + 1.
  * Thuần, xuất cho test pin kiến trúc (r86-A).
+ * BRAIN-UX §9.2/§9.3 — override (tùy chọn từ BrainSpecDraft): lớp ẩn dùng
+ * chung cho cả 3 head + optimizer/lr/l2/seed + LOẠI LOSS 2 đầu hồi quy
+ * (huber⇄mse — success khóa BCE theo hợp đồng sigmoid). Không truyền =
+ * ĐÚNG spec gốc (hồi quy r88/r89 pin).
  */
-export function buildSurrogateSpecs(vocab: SurrogateVocab): {
+export function buildSurrogateSpecs(
+  vocab: SurrogateVocab,
+  override?: BrainDraftSpec,
+): {
   success: MlpSpec
   tokens: MlpSpec
   durationMs: MlpSpec
 } {
   const d = surrogateFeatureNames(vocab).length
-  const hidden: MlpSpec['layers'][number] = { units: 16, activation: 'tanh' }
-  const base = { optimizer: 'adam', lr: SURROGATE_LR, l2: SURROGATE_L2, seed: SURROGATE_SEED } as const
+  const hiddenLayers: MlpSpec['layers'] = override
+    ? override.hidden.map(h => ({ units: h.units, activation: h.activation }))
+    : [{ units: 16, activation: 'tanh' }]
+  const base = override
+    ? { optimizer: override.hyper.optimizer, lr: override.hyper.lr, l2: override.hyper.l2, seed: override.hyper.seed }
+    : { optimizer: 'adam' as const, lr: SURROGATE_LR, l2: SURROGATE_L2, seed: SURROGATE_SEED }
+  // Loại loss 2 đầu hồi quy từ draft (đã validate ∈ {huber, mse} tại PUT
+  // spec-draft); success khóa 'bce' (hợp đồng output sigmoid — §9.1-2)
+  const lossTokens = override?.lossPerHead[1]?.type === 'mse' ? 'mse' : 'huber'
+  const lossDur = override?.lossPerHead[2]?.type === 'mse' ? 'mse' : 'huber'
   return {
     // Lớp input: activation bị bỏ qua ở forward (hợp đồng dữ liệu) nhưng
     // validateSpec yêu cầu tên hợp lệ → 'linear' (tiền lệ V3/r84).
     success: {
-      layers: [{ units: d, activation: 'linear' }, hidden, { units: 1, activation: 'sigmoid' }],
+      layers: [{ units: d, activation: 'linear' }, ...hiddenLayers, { units: 1, activation: 'sigmoid' }],
       loss: 'bce',
       ...base,
     },
     tokens: {
-      layers: [{ units: d, activation: 'linear' }, hidden, { units: 1, activation: 'linear' }],
-      loss: 'huber',
+      layers: [{ units: d, activation: 'linear' }, ...hiddenLayers, { units: 1, activation: 'linear' }],
+      loss: lossTokens,
       ...base,
     },
     durationMs: {
-      layers: [{ units: d, activation: 'linear' }, hidden, { units: 1, activation: 'linear' }],
-      loss: 'huber',
+      layers: [{ units: d, activation: 'linear' }, ...hiddenLayers, { units: 1, activation: 'linear' }],
+      loss: lossDur,
       ...base,
     },
+  }
+}
+
+/**
+ * BRAIN-UX §9.3 — FitOptions từng head từ draft. headIdx: 0=success ·
+ * 1=tokens · 2=durationMs. λ chuẩn hoá Σ=1 → lossScale = λᵢ×3 (chia đều
+ * cho 1.0/head = ĐÚNG hành vi trước UX-2; xem spec-schema.lossScalePerHead).
+ * Không override → options gốc (holdout/clip/lossScale rơi mặc định mlp.ts).
+ */
+export function surrogateDraftFitOpts(
+  override: BrainDraftSpec | undefined,
+  headIdx: 0 | 1 | 2,
+): FitOptions {
+  const defaults = { epochs: SURROGATE_EPOCHS, batchSize: SURROGATE_BATCH, patience: SURROGATE_PATIENCE }
+  if (!override) return { ...defaults }
+  const scales = lossScalePerHead(override.lossPerHead.map(h => h.weight))
+  return {
+    epochs: override.hyper.epochs,
+    batchSize: override.hyper.batch,
+    patience: override.hyper.patience,
+    holdOutRatio: override.hyper.holdout,
+    clipNorm: override.hyper.clip,
+    lossScale: scales[headIdx] ?? 1,
   }
 }
 
@@ -320,7 +359,7 @@ export function crossValidateSurrogate(
   yTokens: number[],
   yDuration: number[],
   vocab: SurrogateVocab,
-  opts: { folds?: number } = {},
+  opts: { folds?: number; override?: BrainDraftSpec } = {},
 ): SurrogateCvOutcome | null {
   const n = X.length
   if (ySuccess.length !== n || yTokens.length !== n || yDuration.length !== n) {
@@ -333,8 +372,10 @@ export function crossValidateSurrogate(
   const assign = stratifiedFoldAssignments(ySuccess, folds)
   if (!assign) return null
 
-  const specs = buildSurrogateSpecs(vocab)
-  const fitOpts = { epochs: SURROGATE_EPOCHS, batchSize: SURROGATE_BATCH, patience: SURROGATE_PATIENCE }
+  const specs = buildSurrogateSpecs(vocab, opts.override)
+  const fitSuccOpts = surrogateDraftFitOpts(opts.override, 0)
+  const fitTokensOpts = surrogateDraftFitOpts(opts.override, 1)
+  const fitDurOpts = surrogateDraftFitOpts(opts.override, 2)
 
   const foldBriers: number[] = []
   const foldBriersBase: number[] = []
@@ -361,7 +402,7 @@ export function crossValidateSurrogate(
     // ── Đầu success: MLP vs base-rate ──
     const yTrSucc = trainIdx.map(i => ySuccess[i])
     const mlpSucc = new MLP(specs.success)
-    mlpSucc.fit(trainStd, yTrSucc.map(v => [v]), fitOpts)
+    mlpSucc.fit(trainStd, yTrSucc.map(v => [v]), fitSuccOpts)
     const predsSucc = holdStd.map(row => mlpSucc.predictProba(row))
     let brier = 0
     for (let k = 0; k < holdIdx.length; k++) {
@@ -385,7 +426,7 @@ export function crossValidateSurrogate(
       const yHo = holdIdx.map(i => (head === 'tokens' ? yTokens : yDuration)[i])
       const t = targetStats(yTr)
       const mlp = new MLP(head === 'tokens' ? specs.tokens : specs.durationMs)
-      mlp.fit(trainStd, yTr.map(v => [(v - t.mean) / t.std]), fitOpts)
+      mlp.fit(trainStd, yTr.map(v => [(v - t.mean) / t.std]), head === 'tokens' ? fitTokensOpts : fitDurOpts)
       // MAE tính trên log1p GỐC (de-standardize dự đoán) — đơn vị đọc được
       const preds = holdStd.map(row => mlp.predict(row)[0] * t.std + t.mean)
       let mae = 0
@@ -469,6 +510,12 @@ export interface SurrogateTrainResult {
   usable: number
   total: number
   error?: string
+  /** BRAIN-UX §9.3 — quỹ đạo epoch từng head (hiển thị sau khi train xong). */
+  history?: { success: EpochStat[]; tokens: EpochStat[]; durationMs: EpochStat[] }
+  /** BRAIN-UX §9.4 — |gradient| trung bình từng lớp từng head. */
+  gradAbsMean?: { success: number[]; tokens: number[]; durationMs: number[] }
+  /** BRAIN-UX — train từ bản nháp UX-2 (provenance). */
+  draftUsed?: boolean
 }
 
 /** Làm tròn 5 chữ số lẻ cho JSON lưu DB (đủ đọc, gọn — cùng V3) */
@@ -492,6 +539,7 @@ function standardizeRow(row: (number | null)[], means: number[], stds: number[])
  */
 export async function trainBrainSurrogate(
   inputMode: string = SURROGATE_INPUT_MODE,
+  override?: BrainDraftSpec,
 ): Promise<SurrogateTrainResult> {
   if (!acquireTrainLock('surrogate')) {
     return {
@@ -501,13 +549,16 @@ export async function trainBrainSurrogate(
     }
   }
   try {
-    return await trainBrainSurrogateLocked(inputMode)
+    return await trainBrainSurrogateLocked(inputMode, override)
   } finally {
     releaseTrainLock('surrogate')
   }
 }
 
-async function trainBrainSurrogateLocked(inputMode: string): Promise<SurrogateTrainResult> {
+async function trainBrainSurrogateLocked(
+  inputMode: string,
+  override?: BrainDraftSpec,
+): Promise<SurrogateTrainResult> {
   const rows = await db.agentRunRecord.findMany({
     select: {
       id: true, runId: true, model: true, agentName: true, parentRunId: true,
@@ -559,7 +610,8 @@ async function trainBrainSurrogateLocked(inputMode: string): Promise<SurrogateTr
   const yDuration = usable.map(r => toLogSpace(r.durationMs as number))
 
   // CV TRƯỚC khi tin model (kỷ luật V2/V3): lệch lớp → abort không fallback
-  const cv = crossValidateSurrogate(X, ySuccess, yTokens, yDuration, vocab)
+  // BRAIN-UX §9.2 — CV đánh giá kiến trúc + λ + loại loss của draft khi có
+  const cv = crossValidateSurrogate(X, ySuccess, yTokens, yDuration, vocab, override ? { override } : {})
   if (!cv) {
     return notTrained(
       `class imbalance: cần ≥${SURROGATE_FOLDS} mẫu MỖI lớp success cho ${SURROGATE_FOLDS}-fold stratified CV — complete=${ySuccess.filter(v => v === 1).length}/incomplete=${ySuccess.filter(v => v === 0).length}`,
@@ -567,22 +619,24 @@ async function trainBrainSurrogateLocked(inputMode: string): Promise<SurrogateTr
   }
 
   // ── Model cuối trên TOÀN BỘ dữ liệu (stats full-data — đúng V3) ──
-  const specs = buildSurrogateSpecs(vocab)
-  const fitOpts = { epochs: SURROGATE_EPOCHS, batchSize: SURROGATE_BATCH, patience: SURROGATE_PATIENCE }
+  const specs = buildSurrogateSpecs(vocab, override)
+  const fitSuccOpts = surrogateDraftFitOpts(override, 0)
+  const fitTokensOpts = surrogateDraftFitOpts(override, 1)
+  const fitDurOpts = surrogateDraftFitOpts(override, 2)
   const { means, stds } = computeColumnStats(X)
   const Xstd = X.map(row => standardizeRow(row, means, stds))
 
   const mlpSucc = new MLP(specs.success)
-  const fitSucc: FitResult = mlpSucc.fit(Xstd, ySuccess.map(v => [v]), fitOpts)
+  const fitSucc: FitResult = mlpSucc.fit(Xstd, ySuccess.map(v => [v]), fitSuccOpts)
   const tTokens = targetStats(yTokens)
   const mlpTokens = new MLP(specs.tokens)
   const fitTokens: FitResult = mlpTokens.fit(
-    Xstd, yTokens.map(v => [(v - tTokens.mean) / tTokens.std]), fitOpts,
+    Xstd, yTokens.map(v => [(v - tTokens.mean) / tTokens.std]), fitTokensOpts,
   )
   const tDur = targetStats(yDuration)
   const mlpDur = new MLP(specs.durationMs)
   const fitDur: FitResult = mlpDur.fit(
-    Xstd, yDuration.map(v => [(v - tDur.mean) / tDur.std]), fitOpts,
+    Xstd, yDuration.map(v => [(v - tDur.mean) / tDur.std]), fitDurOpts,
   )
 
   // Version mới = max + 1
@@ -684,6 +738,18 @@ async function trainBrainSurrogateLocked(inputMode: string): Promise<SurrogateTr
         finalTrainLoss: Number.isFinite(fitDur.finalTrainLoss) ? round5(fitDur.finalTrainLoss) : null,
       },
     },
+    // BRAIN-UX §9.3/§9.4 — λ hiệu lực từng head (sau chuẩn hoá Σ=1 — audit;
+    // null = không draft, chia đều mặc định) + |gradient| trung bình từng
+    // lớp MỖI head (chế độ lan truyền ngược UX-3 — dữ liệu thật) + draft UX-2
+    lossWeights: override
+      ? lossScalePerHead(override.lossPerHead.map(h => h.weight)).map(v => round5(v / 3))
+      : null,
+    gradAbsMean: {
+      success: fitSucc.gradAbsMean.map(round5),
+      tokens: fitTokens.gradAbsMean.map(round5),
+      durationMs: fitDur.gradAbsMean.map(round5),
+    },
+    draftUsed: Boolean(override),
     dataLineage: {
       tables: { AgentRunRecord: usable.length },
       runs: runIdList.length,
@@ -732,6 +798,14 @@ async function trainBrainSurrogateLocked(inputMode: string): Promise<SurrogateTr
     heads: cv,
     usable: usable.length,
     total: rows.length,
+    // BRAIN-UX §9.3/§9.4 — quỹ đạo epoch + |gradient| từng head + draft
+    history: { success: fitSucc.history, tokens: fitTokens.history, durationMs: fitDur.history },
+    gradAbsMean: {
+      success: fitSucc.gradAbsMean.map(round5),
+      tokens: fitTokens.gradAbsMean.map(round5),
+      durationMs: fitDur.gradAbsMean.map(round5),
+    },
+    draftUsed: Boolean(override),
   }
 }
 

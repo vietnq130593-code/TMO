@@ -61,6 +61,12 @@ function parseTrainMeta(raw: string): BrainModelSummary['meta'] {
       // của đầu success); V3 viết 'brierV2' — đọc cả 2 (fail-open từng trường)
       brierBaseline: num(obj.brierV2) ?? num(obj.brierBaseline),
       improved: typeof obj.improved === 'boolean' ? obj.improved : undefined,
+      // BRAIN-UX §9.3/§9.4 — |gradient| trung bình từng lớp (chế độ lan
+      // truyền ngược UX-3) + cờ train từ bản nháp UX-2 (provenance)
+      gradAbsMean: Array.isArray(obj.gradAbsMean) && obj.gradAbsMean.every(v => typeof v === 'number' && Number.isFinite(v))
+        ? (obj.gradAbsMean as number[])
+        : undefined,
+      draftUsed: typeof obj.draftUsed === 'boolean' ? obj.draftUsed : undefined,
     }
   } catch {
     return {}
@@ -83,6 +89,19 @@ export async function GET() {
       verdicts,
     }
 
+    // ── BRAIN-UX §9.1-3: ước tính số chiều đầu vào brain động (surrogate) ──
+    // D = distinct(model) + distinct(agent) + 1 — CÙNG công thức vocab khi
+    // train (surrogate.ts:146-147) nhưng đếm trên TOÀN BỘ AgentRunRecord
+    // (train lọc usable — có thể lệch) → exact=false; bản active có sẵn thì
+    // dùng spec thật (exact=true). Fail-open null.
+    const surrogateVocabEstimate = await safeCount(async () => {
+      const [m, a] = await Promise.all([
+        db.agentRunRecord.groupBy({ by: ['model'], _count: { _all: true } }),
+        db.agentRunRecord.findMany({ select: { agentId: true }, distinct: ['agentId'] }),
+      ])
+      return m.length + a.length + 1
+    })
+
     // ── Các phiên bản đã train (thường rỗng giai đoạn đầu) ──
     let models: Array<{
       id: string
@@ -92,6 +111,7 @@ export async function GET() {
       active: boolean
       trainedAt: Date
       trainMetaJson: string
+      specJson: string
     }> = []
     try {
       models = await db.brainModel.findMany({
@@ -105,6 +125,7 @@ export async function GET() {
           active: true,
           trainedAt: true,
           trainMetaJson: true,
+          specJson: true,
         },
       })
     } catch {
@@ -137,12 +158,56 @@ export async function GET() {
       const hasActive = specModels.some(m => m.active)
       const allOk = signals.length > 0 && signals.every(s => s.ok)
       const lifecycle: BrainLifecycle = hasActive ? 'active' : allOk ? 'awake' : 'dormant'
+
+      // BRAIN-UX §9.1-3 — inputDim cho bộ đếm tham số editor:
+      // A: khóa 10 (features-10) · B/C: từ bản active nếu có, B ước tính
+      // DB khi chưa train (exact=false), C không ước tính được (task vocab
+      // phức tạp — null trung thực, chặn thật tại mlp.validateSpec lúc train)
+      // FB-BRAIN-UX-R1-02 — outputDim: số unit lớp output HIỆN TẠI từ bản
+      // active (lớp CUỐI cùng specJson — vd |A| của policy) → bộ đếm tham số
+      // editor đủ ×|A|; null khi chưa train (fail-open).
+      let inputDim: number | null = null
+      let inputDimExact = true
+      let outputDim: number | null = null
+      const activeModel = specModels.find(m => m.active)
+      if (spec.key === 'calibration_v3') {
+        inputDim = 10
+      } else if (activeModel) {
+        const activeRaw = models.find(m => m.brain === spec.key && m.active)
+        try {
+          if (activeRaw) {
+            const specDoc = JSON.parse(activeRaw.specJson) as {
+              layers?: Array<{ units?: number }>
+              heads?: Record<string, { layers?: Array<{ units?: number }> }>
+              spec?: { layers?: Array<{ units?: number }> }
+            }
+            // Dạng specJson từng brain: A = MlpSpec (layers đầu) · B =
+            // SurrogateSpecDoc (heads.success.layers) · C = PolicySpecDoc
+            // (spec.layers — FB-BRAIN-UX-R1-02: thêm nhánh `spec` vì policy
+            // lồng MlpSpec dưới key `spec`, không phải `layers` đầu — thiếu
+            // nhánh này thì |A| của policy không bao giờ đọc được).
+            const layersArr = specDoc.layers ?? specDoc.spec?.layers ?? specDoc.heads?.success?.layers
+            const first = layersArr?.[0]?.units
+            if (typeof first === 'number' && Number.isFinite(first)) inputDim = first
+            // Lớp CUỐI cùng (layers hoặc heads.success.layers) = unit output
+            const last = layersArr?.[layersArr.length - 1]?.units
+            if (typeof last === 'number' && Number.isFinite(last)) outputDim = last
+          }
+        } catch { /* fail-open null */ }
+      } else if (spec.key === 'surrogate' && surrogateVocabEstimate !== null) {
+        inputDim = surrogateVocabEstimate
+        inputDimExact = false
+      }
+
       return {
         ...spec,
         lifecycle,
         signals,
         models: specModels,
         trainable: BRAIN_TRAINABLE_KEYS.includes(spec.key),
+        inputDim,
+        inputDimExact,
+        outputDim,
       }
     })
 

@@ -79,8 +79,9 @@
 
 import { createHash } from 'node:crypto'
 import { db } from '@/lib/db'
-import { MLP, type MlpSerialized, type MlpSpec, type FitResult } from '../mlp'
+import { MLP, type MlpSerialized, type MlpSpec, type FitResult, type FitOptions, type EpochStat } from '../mlp'
 import { acquireTrainLock, releaseTrainLock } from '../train-lock'
+import type { BrainDraftSpec } from '../spec-schema'
 import { BRAIN_VERSIONS_KEEP } from '../registry'
 import { computeColumnStats, stratifiedFoldAssignments } from '@/lib/calibration-multifeature'
 import { meanCI, wilsonCI } from '@/lib/stats'
@@ -91,6 +92,7 @@ import {
   collectRewardLedger,
   computeRunReward,
   outcomeFromEvidence,
+  resolveRewardWeightsFromTuning,
   type VerdictTally,
 } from '../reward'
 
@@ -205,14 +207,38 @@ export function buildPolicyFeatureRow(
  * kiến trúc layer ẩn 32 giữ nguyên booked planned registry (lớp input D
  * động theo vocab phase này, đúng tiền lệ surrogate). Thuần, xuất cho test
  * pin kiến trúc (r87-A).
+ * BRAIN-UX §9.2 — override (tùy chọn từ BrainSpecDraft): thay LỚP ẨN +
+ * optimizer/lr/l2/seed; input D động + output ×|A| softmax + CE KHÓA (hợp
+ * đồng pipeline §9.1-2). Không truyền = ĐÚNG spec gốc.
  */
-export function buildPolicySpec(featureDim: number, actionCount: number): MlpSpec {
+export function buildPolicySpec(
+  featureDim: number,
+  actionCount: number,
+  override?: BrainDraftSpec,
+): MlpSpec {
   if (!Number.isInteger(featureDim) || featureDim < 1) {
     throw new Error(`buildPolicySpec: featureDim phải là số nguyên ≥ 1 (nhận ${featureDim})`)
   }
   if (!Number.isInteger(actionCount) || actionCount < 2) {
     throw new Error(`buildPolicySpec: actionCount phải là số nguyên ≥ 2 (nhận ${actionCount}) — policy 1 hành động vô nghĩa`)
   }
+  const base = buildPolicySpecDefault(featureDim, actionCount)
+  if (!override) return base
+  return {
+    ...base,
+    layers: [
+      base.layers[0], // input khóa D động (vocab nhiệm vụ)
+      ...override.hidden.map(h => ({ units: h.units, activation: h.activation })),
+      base.layers[base.layers.length - 1], // output khóa ×|A| softmax + CE
+    ],
+    optimizer: override.hyper.optimizer,
+    lr: override.hyper.lr,
+    l2: override.hyper.l2,
+    seed: override.hyper.seed,
+  }
+}
+
+function buildPolicySpecDefault(featureDim: number, actionCount: number): MlpSpec {
   return {
     // Lớp input: activation bị bỏ qua ở forward (hợp đồng dữ liệu) nhưng
     // validateSpec yêu cầu tên hợp lệ → 'linear' (tiền lệ V3/r84).
@@ -226,6 +252,21 @@ export function buildPolicySpec(featureDim: number, actionCount: number): MlpSpe
     lr: POLICY_LR,
     l2: POLICY_L2,
     seed: POLICY_SEED,
+  }
+}
+
+/**
+ * BRAIN-UX §9.3 nhóm A — FitOptions từ draft hoặc hằng số gốc (đúng pattern
+ * calibration-v3.draftFitOptions; policy đơn head — không lossScale).
+ */
+function policyDraftFitOpts(override: BrainDraftSpec | undefined): FitOptions {
+  if (!override) return { epochs: POLICY_EPOCHS, batchSize: POLICY_BATCH, patience: POLICY_PATIENCE }
+  return {
+    epochs: override.hyper.epochs,
+    batchSize: override.hyper.batch,
+    patience: override.hyper.patience,
+    holdOutRatio: override.hyper.holdout,
+    clipNorm: override.hyper.clip,
   }
 }
 
@@ -315,7 +356,7 @@ export function crossValidatePolicy(
   qScores: number[],
   vocab: PolicyVocab,
   actionCount: number,
-  opts: { folds?: number; tau?: number } = {},
+  opts: { folds?: number; tau?: number; override?: BrainDraftSpec } = {},
 ): PolicyCvOutcome | null {
   const n = X.length
   if (actions.length !== n || rewards.length !== n || outcomeLabels.length !== n) {
@@ -338,8 +379,8 @@ export function crossValidatePolicy(
   if (qProbs.length !== actionCount || qProbs.reduce((s, v) => s + v, 0) <= 0) return null
 
   const d = policyFeatureNames(vocab).length
-  const spec = buildPolicySpec(d, actionCount)
-  const fitOpts = { epochs: POLICY_EPOCHS, batchSize: POLICY_BATCH, patience: POLICY_PATIENCE }
+  const spec = buildPolicySpec(d, actionCount, opts.override)
+  const fitOpts = policyDraftFitOpts(opts.override)
 
   const foldCes: number[] = []
   const foldCesQ: number[] = []
@@ -438,6 +479,12 @@ export interface PolicyTrainResult {
   qEntries: number
   verdicts: number
   error?: string
+  /** BRAIN-UX §9.3 — quỹ đạo epoch (hiển thị sau khi train xong). */
+  history?: EpochStat[]
+  /** BRAIN-UX §9.4 — |gradient| trung bình từng lớp. */
+  gradAbsMean?: number[]
+  /** BRAIN-UX — train từ bản nháp UX-2 (provenance). */
+  draftUsed?: boolean
 }
 
 /** Làm tròn 5 chữ số lẻ cho JSON lưu DB (đủ đọc, gọn — cùng V3/B). */
@@ -461,6 +508,7 @@ function standardizeRow(row: (number | null)[], means: number[], stds: number[])
  */
 export async function trainBrainPolicy(
   inputMode: string = POLICY_INPUT_MODE,
+  override?: BrainDraftSpec,
 ): Promise<PolicyTrainResult> {
   if (!acquireTrainLock('policy')) {
     return {
@@ -470,13 +518,16 @@ export async function trainBrainPolicy(
     }
   }
   try {
-    return await trainBrainPolicyLocked(inputMode)
+    return await trainBrainPolicyLocked(inputMode, override)
   } finally {
     releaseTrainLock('policy')
   }
 }
 
-async function trainBrainPolicyLocked(inputMode: string): Promise<PolicyTrainResult> {
+async function trainBrainPolicyLocked(
+  inputMode: string,
+  override?: BrainDraftSpec,
+): Promise<PolicyTrainResult> {
   // ── Đếm 2 nguồn ngưỡng §2 (telemetry trung thực — đếm TRƯỚC khi chặn) ──
   const [qEntryCount, verdictCount] = await Promise.all([
     db.qEntry.count(),
@@ -535,7 +586,7 @@ async function trainBrainPolicyLocked(inputMode: string): Promise<PolicyTrainRes
   const outcomeLabels = outcomeStars
   const rewards = rows.map(r => {
     const tally: VerdictTally | undefined = verdicts.get(r.sessionId)
-    const rr = computeRunReward(r, tally ?? null, baselines)
+    const rr = computeRunReward(r, tally ?? null, baselines, resolveRewardWeightsFromTuning())
     // Mẫu không hợp được reward (vd thiếu baseline model) → R = 0 trung tính
     // (không bỏ mẫu — kết cục vẫn là nhãn stratification; imitation weight
     // = (0+1)/2 = nửa — trung tính đúng nghĩa)
@@ -551,7 +602,8 @@ async function trainBrainPolicyLocked(inputMode: string): Promise<PolicyTrainRes
   const tau = getTuningNumber('runtime_model_tau')
 
   // ── CV TRƯỚC khi tin model (kỷ luật V2/V3/B) ──
-  const cv = crossValidatePolicy(X, actions, rewards, outcomeLabels, qScores, vocab, actionVocab.models.length, { tau })
+  // BRAIN-UX §9.2 — CV đánh giá kiến trúc draft khi có override
+  const cv = crossValidatePolicy(X, actions, rewards, outcomeLabels, qScores, vocab, actionVocab.models.length, override ? { tau, override } : { tau })
   if (!cv) {
     return notTrained(
       `class imbalance: cần ≥${POLICY_FOLDS} mẫu MỖI lớp Outcome* cho ${POLICY_FOLDS}-fold stratified CV — complete=${outcomeLabels.filter(v => v === 1).length}/incomplete=${outcomeLabels.filter(v => v === 0).length}`,
@@ -560,8 +612,8 @@ async function trainBrainPolicyLocked(inputMode: string): Promise<PolicyTrainRes
 
   // ── Model cuối trên TOÀN BỘ dữ liệu (stats full-data — đúng V3/B) ──
   const d = policyFeatureNames(vocab).length
-  const spec = buildPolicySpec(d, actionVocab.models.length)
-  const fitOpts = { epochs: POLICY_EPOCHS, batchSize: POLICY_BATCH, patience: POLICY_PATIENCE }
+  const spec = buildPolicySpec(d, actionVocab.models.length, override)
+  const fitOpts = policyDraftFitOpts(override)
   const { means, stds } = computeColumnStats(X)
   const Xstd = X.map(row => standardizeRow(row, means, stds))
 
@@ -655,6 +707,10 @@ async function trainBrainPolicyLocked(inputMode: string): Promise<PolicyTrainRes
       stoppedEarly: fit.stoppedEarly,
       finalTrainLoss: Number.isFinite(fit.finalTrainLoss) ? round5(fit.finalTrainLoss) : null,
     },
+    // BRAIN-UX §9.4 — |gradient| trung bình từng lớp (chế độ lan truyền
+    // ngược UX-3 — dữ liệu thật) + provenance draft UX-2
+    gradAbsMean: fit.gradAbsMean.map(round5),
+    draftUsed: Boolean(override),
     dataLineage: {
       tables: {
         AgentRunRecord: rows.length,
@@ -702,6 +758,10 @@ async function trainBrainPolicyLocked(inputMode: string): Promise<PolicyTrainRes
     total: rows.length,
     qEntries: qEntryCount,
     verdicts: verdictCount,
+    // BRAIN-UX §9.3/§9.4 — quỹ đạo epoch + |gradient| từng lớp + draft UX-2
+    history: fit.history,
+    gradAbsMean: fit.gradAbsMean.map(round5),
+    draftUsed: Boolean(override),
   }
 }
 

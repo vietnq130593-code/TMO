@@ -11,6 +11,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip as StatusTooltip, TooltipTrigger as StatusTooltipTrigger, TooltipContent as StatusTooltipContent } from '@/components/ui/tooltip'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+// BRAIN-UX §9.6 (UX-5): nút bật/tắt theme hi-tech toàn app — sidebar dưới cùng
+import { HiTechToggle } from '@/components/hitech-toggle'
 import { toast } from '@/hooks/use-toast'
 import { setApiToken } from '@/lib/api-auth'
 import { withChunkRetry } from '@/lib/dynamic-retry'
@@ -2820,6 +2822,8 @@ export default function Home() {
                 <span className="text-[11px] font-medium text-stone-300">Pull code</span>
               )}
             </button>
+            {/* BRAIN-UX §9.6 (UX-5) — theme hi-tech: localStorage áp dụng tức thì + sync tuning-store để audit */}
+            <HiTechToggle collapsed={!sidebarOpen} />
           </div>
 
           {/* Collapsed: golden logo at bottom */}
