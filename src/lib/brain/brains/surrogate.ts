@@ -209,8 +209,12 @@ export function buildSurrogateSpecs(
   durationMs: MlpSpec
 } {
   const d = surrogateFeatureNames(vocab).length
+  // BRAIN-TAB-3PHAN (18-d): truyền α/β + δ Huber từ draft — engine hỗ trợ sẵn
+  // từ BRAIN-P1 (activations.ts/losses.ts), giờ mới lộ UI. Conditional spread
+  // để KHÔNG tạo key undefined (pin r86-A/r88: layers[1] toEqual {units,
+  // activation} khi draft mặc định không có params).
   const hiddenLayers: MlpSpec['layers'] = override
-    ? override.hidden.map(h => ({ units: h.units, activation: h.activation }))
+    ? override.hidden.map(h => ({ units: h.units, activation: h.activation, ...(h.activationParams ? { activationParams: h.activationParams } : {}) }))
     : [{ units: 16, activation: 'tanh' }]
   const base = override
     ? { optimizer: override.hyper.optimizer, lr: override.hyper.lr, l2: override.hyper.l2, seed: override.hyper.seed }
@@ -219,6 +223,17 @@ export function buildSurrogateSpecs(
   // spec-draft); success khóa 'bce' (hợp đồng output sigmoid — §9.1-2)
   const lossTokens = override?.lossPerHead[1]?.type === 'mse' ? 'mse' : 'huber'
   const lossDur = override?.lossPerHead[2]?.type === 'mse' ? 'mse' : 'huber'
+  // BRAIN-TAB-3PHAN (18-d): δ Huber từng head (draft head 1=tokens · 2=duration)
+  // — chỉ thêm lossParams khi head loss='huber' VÀ draft có huberDelta
+  // (conditional spread — không có thì không thêm key; mse không có δ).
+  const headTokens = override?.lossPerHead[1]
+  const headDur = override?.lossPerHead[2]
+  const lossParamsTokens = lossTokens === 'huber' && typeof headTokens?.huberDelta === 'number'
+    ? { lossParams: { delta: headTokens.huberDelta } }
+    : {}
+  const lossParamsDur = lossDur === 'huber' && typeof headDur?.huberDelta === 'number'
+    ? { lossParams: { delta: headDur.huberDelta } }
+    : {}
   return {
     // Lớp input: activation bị bỏ qua ở forward (hợp đồng dữ liệu) nhưng
     // validateSpec yêu cầu tên hợp lệ → 'linear' (tiền lệ V3/r84).
@@ -231,11 +246,13 @@ export function buildSurrogateSpecs(
       layers: [{ units: d, activation: 'linear' }, ...hiddenLayers, { units: 1, activation: 'linear' }],
       loss: lossTokens,
       ...base,
+      ...lossParamsTokens,
     },
     durationMs: {
       layers: [{ units: d, activation: 'linear' }, ...hiddenLayers, { units: 1, activation: 'linear' }],
       loss: lossDur,
       ...base,
+      ...lossParamsDur,
     },
   }
 }

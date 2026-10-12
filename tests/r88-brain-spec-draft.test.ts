@@ -32,6 +32,11 @@
  *   J. BẤT BIẾN §9.1-1 (Draft ≠ runtime): PUT nháp nhiều lần (kể cả rác) →
  *      BrainModel GIỐNG HỆT (count + active + version + spec/weights) —
  *      đường lên runtime duy nhất vẫn là train → thắng CV → thăng cấp (A1).
+ *   G-3PHAN. BRAIN-TAB-3PHAN (18-d): activationParams α/β (leakyRelu/elu →
+ *      giữ alpha · swish → giữ beta · khác → DROP) + huberDelta (head huber
+ *      giữ · mse/bce/CE → DROP) + default KHÔNG thêm key (chống hồi quy r88-E)
+ *      + 3 pipeline (buildV3Spec/buildSurrogateSpecs/buildPolicySpec) truyền
+ *      α/β/δ vào MlpSpec bằng conditional spread (không key undefined).
  *
  * Nguyên tắc test:
  * - DB-cô-lập (bunfig preload copy DB) — wipe BrainSpecDraft + seed BrainModel
@@ -52,11 +57,13 @@ import {
   downsampleHistory,
   diffDraftAgainst,
   type BrainDraftSpec,
+  type DraftHiddenLayer,
   type DraftHyper,
   type DraftValidationErr,
 } from '@/lib/brain/spec-schema'
 import { buildV3Spec } from '@/lib/brain/calibration-v3'
 import { buildPolicySpec } from '@/lib/brain/brains/policy'
+import { buildSurrogateSpecs } from '@/lib/brain/brains/surrogate'
 import { GET, PUT } from '@/app/api/brain/spec-draft/route'
 
 type BrainKey = 'calibration_v3' | 'surrogate' | 'policy'
@@ -642,5 +649,205 @@ describe('r88 · I/J API spec-draft + bất biến Draft ≠ runtime (§9.1-1) �
     // DANH SÁCH GIỐNG HỆT: count + active flags + version + spec/weights
     expect(snap(after)).toBe(snap(before))
     expect(after.filter(r => r.active)).toHaveLength(before.filter(r => r.active).length)
+  })
+})
+
+// ==================== G-3PHAN. BRAIN-TAB-3PHAN (18-d) — α/β + δ Huber ====================
+
+describe('r88 · G BRAIN-TAB-3PHAN — activationParams + huberDelta (audit đầy đủ thông số)', () => {
+  test('1. leakyRelu/elu giữ alpha (drop beta); swish giữ beta (drop alpha); tanh DROP cả — không lưu rác', () => {
+    // leakyRelu + {alpha 0.2, beta 3} → CHỈ alpha (beta không dùng cho leakyRelu)
+    const dL = {
+      ...validDraft('calibration_v3'),
+      hidden: [{ units: 16, activation: 'leakyRelu' as const, activationParams: { alpha: 0.2, beta: 3 } }],
+    }
+    const rL = validateBrainDraft(dL, 10)
+    expect(rL.ok).toBe(true)
+    if (rL.ok) expect(rL.normalized.hidden[0].activationParams).toEqual({ alpha: 0.2 })
+    // elu + {alpha 0.7} → giữ nguyên
+    const dE = {
+      ...validDraft('calibration_v3'),
+      hidden: [{ units: 16, activation: 'elu' as const, activationParams: { alpha: 0.7 } }],
+    }
+    const rE = validateBrainDraft(dE, 10)
+    expect(rE.ok).toBe(true)
+    if (rE.ok) expect(rE.normalized.hidden[0].activationParams).toEqual({ alpha: 0.7 })
+    // swish + {alpha 0.5, beta 2} → CHỈ beta
+    const dS = {
+      ...validDraft('calibration_v3'),
+      hidden: [{ units: 16, activation: 'swish' as const, activationParams: { alpha: 0.5, beta: 2 } }],
+    }
+    const rS = validateBrainDraft(dS, 10)
+    expect(rS.ok).toBe(true)
+    if (rS.ok) expect(rS.normalized.hidden[0].activationParams).toEqual({ beta: 2 })
+    // tanh + {alpha 0.5} (trong phạm vi — hợp lệ) → DROP CẢ: normalized KHÔNG
+    // có key activationParams (không lưu {} rác)
+    const dT = {
+      ...validDraft('calibration_v3'),
+      hidden: [{ units: 16, activation: 'tanh' as const, activationParams: { alpha: 0.5 } }],
+    }
+    const rT = validateBrainDraft(dT, 10)
+    expect(rT.ok).toBe(true)
+    if (rT.ok) expect('activationParams' in rT.normalized.hidden[0]).toBe(false)
+  })
+
+  test('2. alpha 0/-1/100/NaN → lỗi nhắc alpha; beta 0/11 → lỗi nhắc beta (DRAFT_LIMITS)', () => {
+    for (const alpha of [0, -1, 100, NaN]) {
+      const d = {
+        ...validDraft('calibration_v3'),
+        hidden: [{ units: 16, activation: 'leakyRelu' as const, activationParams: { alpha } }],
+      }
+      expectInvalid(validateBrainDraft(d, 10), 'alpha')
+    }
+    for (const beta of [0, 11]) {
+      const d = {
+        ...validDraft('calibration_v3'),
+        hidden: [{ units: 16, activation: 'swish' as const, activationParams: { beta } }],
+      }
+      expectInvalid(validateBrainDraft(d, 10), 'beta')
+    }
+  })
+
+  test('3. head huber + huberDelta 0.5 giữ (head 1 surrogate); head mse DROP key; 0/11 lỗi nhắc huberDelta', () => {
+    const dHuber = {
+      ...validDraft('surrogate'),
+      lossPerHead: [
+        { type: 'bce' as const, weight: 1 / 3 },
+        { type: 'huber' as const, weight: 1 / 3, huberDelta: 0.5 },
+        { type: 'huber' as const, weight: 1 / 3 },
+      ],
+    }
+    const res = validateBrainDraft(dHuber, null)
+    expect(res.ok).toBe(true)
+    if (res.ok) {
+      expect(res.normalized.lossPerHead[1].huberDelta).toBe(0.5)
+      // Head 2 không đặt → KHÔNG có key (không lưu undefined)
+      expect('huberDelta' in res.normalized.lossPerHead[2]).toBe(false)
+    }
+    // mse + cùng giá trị huberDelta → DROP (mse không có δ — không lỗi)
+    const dMse = {
+      ...validDraft('surrogate'),
+      lossPerHead: [
+        { type: 'bce' as const, weight: 1 / 3 },
+        { type: 'mse' as const, weight: 1 / 3, huberDelta: 0.5 },
+        { type: 'huber' as const, weight: 1 / 3 },
+      ],
+    }
+    const resMse = validateBrainDraft(dMse, null)
+    expect(resMse.ok).toBe(true)
+    if (resMse.ok) expect('huberDelta' in resMse.normalized.lossPerHead[1]).toBe(false)
+    // Ngoài [0.01, 10] → lỗi nhắc huberDelta
+    for (const huberDelta of [0, 11]) {
+      const d = {
+        ...validDraft('surrogate'),
+        lossPerHead: [
+          { type: 'bce' as const, weight: 1 / 3 },
+          { type: 'huber' as const, weight: 1 / 3, huberDelta },
+          { type: 'huber' as const, weight: 1 / 3 },
+        ],
+      }
+      expectInvalid(validateBrainDraft(d, null), 'huberDelta')
+    }
+  })
+
+  test('4. defaultDraftFor KHÔNG thêm key mới (pin r88-E tiếp tục pass — chống hồi quy)', () => {
+    const s = defaultDraftFor('surrogate')
+    expect('activationParams' in s.hidden[0]).toBe(false)
+    for (const h of s.lossPerHead) expect('huberDelta' in h).toBe(false)
+    // Pin r88-E nguyên văn: toEqual FAIL nếu có key activationParams/huberDelta
+    expect(s.hidden).toEqual([{ units: 16, activation: 'tanh' }])
+    expect(defaultDraftFor('policy').hidden).toEqual([{ units: 32, activation: 'tanh' }])
+    // Default = engine defaults (α 0.01/1.0 · β 1.0 · δ 1.0 — activations.ts/
+    // losses.ts resolve*) → KHÔNG cần lưu key
+    expect(defaultDraftFor('calibration_v3').hidden[0]).toEqual({ units: 16, activation: 'tanh' })
+  })
+
+  test('5. buildV3Spec truyền activationParams; draft không params → KHÔNG key (pin hồi quy)', () => {
+    const withParams: BrainDraftSpec = {
+      ...defaultDraftFor('calibration_v3'),
+      hidden: [{ units: 16, activation: 'leakyRelu', activationParams: { alpha: 0.05 } }],
+    }
+    const spec = buildV3Spec(withParams)
+    expect(spec.layers[1].activationParams).toEqual({ alpha: 0.05 })
+    expect(spec.layers[1].activation).toBe('leakyRelu')
+    // Draft mặc định (không params) → layers[1] CHỈ {units, activation}
+    const plain = buildV3Spec(defaultDraftFor('calibration_v3'))
+    expect(plain.layers[1]).toEqual({ units: 16, activation: 'tanh' })
+    expect('activationParams' in plain.layers[1]).toBe(false)
+    // Loss bce → không lossParams (δ chỉ có nghĩa cho huber)
+    expect('lossParams' in spec).toBe(false)
+  })
+
+  test('6. buildSurrogateSpecs: head huber có huberDelta → lossParams {delta}; không có → KHÔNG key', () => {
+    const vocab = { models: ['alpha', 'beta'], agents: ['FORGE', 'Omega'] }
+    const d: BrainDraftSpec = {
+      ...defaultDraftFor('surrogate'),
+      lossPerHead: [
+        { type: 'bce', weight: 1 / 3 },
+        { type: 'huber', weight: 1 / 3, huberDelta: 2.5 },
+        { type: 'huber', weight: 1 / 3 },
+      ],
+    }
+    const specs = buildSurrogateSpecs(vocab, d)
+    // Head 1 (tokens) loss huber + huberDelta 2.5 → lossParams {delta: 2.5}
+    expect(specs.tokens.lossParams).toEqual({ delta: 2.5 })
+    // Head 2 (durationMs) không đặt + success bce → KHÔNG key lossParams
+    expect('lossParams' in specs.durationMs).toBe(false)
+    expect('lossParams' in specs.success).toBe(false)
+    // Draft mặc định → không head nào có lossParams (default engine δ=1.0)
+    const specsPlain = buildSurrogateSpecs(vocab, defaultDraftFor('surrogate'))
+    for (const s of Object.values(specsPlain)) expect('lossParams' in s).toBe(false)
+    // Head mse + huberDelta → KHÔNG lossParams (mse không có δ)
+    const dMse: BrainDraftSpec = {
+      ...defaultDraftFor('surrogate'),
+      lossPerHead: [
+        { type: 'bce', weight: 1 / 3 },
+        { type: 'mse', weight: 1 / 3, huberDelta: 2.5 },
+        { type: 'huber', weight: 1 / 3, huberDelta: 3 },
+      ],
+    }
+    const specsMse = buildSurrogateSpecs(vocab, dMse)
+    expect('lossParams' in specsMse.tokens).toBe(false)
+    expect(specsMse.durationMs.lossParams).toEqual({ delta: 3 })
+  })
+
+  test('7. buildPolicySpec truyền activationParams (swish beta 1.5) — CE không lossParams', () => {
+    const d: BrainDraftSpec = {
+      ...defaultDraftFor('policy'),
+      hidden: [{ units: 32, activation: 'swish', activationParams: { beta: 1.5 } }],
+    }
+    const spec = buildPolicySpec(7, 4, d)
+    expect(spec.layers[1].activationParams).toEqual({ beta: 1.5 })
+    expect(spec.layers[1].activation).toBe('swish')
+    expect('lossParams' in spec).toBe(false) // crossEntropy → không lossParams
+    // Draft không params → pin hồi quy r88-E: layers[1] chỉ {units, activation}
+    const plain = buildPolicySpec(7, 4, defaultDraftFor('policy'))
+    expect(plain.layers[1]).toEqual({ units: 32, activation: 'tanh' })
+    expect('activationParams' in plain.layers[1]).toBe(false)
+  })
+
+  test('8. FB-BRAIN-TAB-R1-04: activationParams sai shape (mảng/chuỗi/null) → LỖI validate — không còn bỏ im lặng (hợp đồng validate mọi khóa có mặt + shape như hidden/hyper/units)', () => {
+    // Trước-fix: mảng rơi qua `typeof === 'object'` (alpha/beta undefined →
+    // DROP im lặng, ok:true); chuỗi/null bị guard bỏ qua cũng im lặng — client
+    // lỗi nhận 200 giả. Sau-fix: mọi shape sai → lỗi nhắc đúng trường.
+    for (const bad of [[1, 2] as unknown, 'rác' as unknown, null as unknown]) {
+      const d = {
+        ...validDraft('calibration_v3'),
+        hidden: [{ units: 16, activation: 'leakyRelu' as const, activationParams: bad as DraftHiddenLayer['activationParams'] }],
+      }
+      expectInvalid(validateBrainDraft(d, 10), 'activationParams phải là object')
+    }
+    // Đối chứng 2 chiều: KHÔNG có key (draft cũ pre-18-d từ DB) vẫn hợp lệ —
+    // backward compat (Lớp 3e brief 18-f)
+    const oldShape = validDraft('calibration_v3')
+    expect(validateBrainDraft(oldShape, 10).ok).toBe(true)
+    // Object đúng shape (kể cả rỗng {}) vẫn ok — {} normalize → omit key
+    const emptyObj = {
+      ...validDraft('calibration_v3'),
+      hidden: [{ units: 16, activation: 'tanh' as const, activationParams: {} }],
+    }
+    const r = validateBrainDraft(emptyObj, 10)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect('activationParams' in r.normalized.hidden[0]).toBe(false)
   })
 })

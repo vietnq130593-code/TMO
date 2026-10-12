@@ -15,6 +15,13 @@
  *  - Bộ đếm tham số (§9.1-3): cảnh báo > 100K (overfit khi 20–56 mẫu), chặn
  *    > 250K — điểm chặn thật nằm tại mlp.validateSpec (BRAIN_MAX_PARAMS);
  *    hàm đếm ở đây PHẢI cùng công thức Σ(unitsₗ × unitsₗ₋₁ + unitsₗ).
+ *  - BRAIN-TAB-3PHAN (18-d): draft lộ thêm α/β activation (leakyRelu/elu/swish)
+ *    từng lớp ẩn + δ Huber từng head huber — engine hỗ trợ sẵn từ BRAIN-P1
+ *    (MlpLayerSpec.activationParams / MlpSpec.lossParams), draft trước đó
+ *    không có trường. CHUẨN HOÁ chỉ giữ khóa activation DÙNG ĐÚNG (leakyRelu/
+ *    elu→alpha · swish→beta · khác→DROP; head≠huber→DROP huberDelta) — không
+ *    lưu rác; default KHÔNG thêm key (engine defaults α 0.01/1.0 · β 1.0 ·
+ *    δ 1.0 — pin hồi quy r88-E toEqual).
  *
  * Thuần hằng số + toán — KHÔNG import db (an toàn client bundle + bun:test).
  * Import từ mlp.ts mỗi mình hằng BRAIN_MAX_PARAMS (mlp thuần toán, không phụ
@@ -28,18 +35,33 @@ import type { BrainKey } from './registry'
 
 // ==================== TYPES ====================
 
-/** Một lớp ẩn trong bản nháp — chỉnh được (UX-1 editor). */
+/**
+ * Một lớp ẩn trong bản nháp — chỉnh được (UX-1 editor).
+ * BRAIN-TAB-3PHAN (18-d): activationParams α (leakyRelu 0.01/elu 1.0) / β
+ * (swish 1.0) — engine MlpLayerSpec.activationParams có sẵn từ BRAIN-P1
+ * (activations.ts resolveAlpha/resolveBeta), giờ mới lộ draft/UI. KHÔNG có
+ * key = engine defaults (r88-E pin default hidden toEqual {units, activation}).
+ */
 export interface DraftHiddenLayer {
   units: number
   activation: ActivationName
+  /** MỚI (18-d): tham số α (leakyRelu/elu) / β (swish) — normalize DROP khi activation không dùng (không lưu rác) */
+  activationParams?: { alpha?: number; beta?: number }
 }
 
-/** Loss 1 đầu ra (UX-2 nhóm B). type khóa theo hợp đồng pipeline từng brain. */
+/**
+ * Loss 1 đầu ra (UX-2 nhóm B). type khóa theo hợp đồng pipeline từng brain.
+ * BRAIN-TAB-3PHAN (18-d): huberDelta — engine MlpSpec.lossParams có sẵn từ
+ * BRAIN-P1 (losses.ts resolveDelta default 1.0); chỉ có nghĩa khi type='huber'
+ * (normalize DROP khi khác — bce/crossEntropy/mse không có δ).
+ */
 export interface DraftLossHead {
   /** 'bce' | 'crossEntropy' | 'mse' | 'huber' — menu mlp.ts losses */
   type: 'bce' | 'crossEntropy' | 'mse' | 'huber'
   /** Trọng số thô ∈ [0,1] — chuẩn hoá Σλ=1 lúc APPLY (hiển thị %) */
   weight: number
+  /** MỚI (18-d): δ Huber (chỉ type='huber' — normalize DROP khi khác) */
+  huberDelta?: number
 }
 
 /** Siêu tham số khối train (UX-2 nhóm A) — phạm vi §9.3. */
@@ -95,6 +117,19 @@ export const DRAFT_LIMITS = {
   /** Trọng số loss từng đầu (§9.3 nhóm B) */
   weightMin: 0,
   weightMax: 1,
+  /**
+   * BRAIN-TAB-3PHAN (18-d) — tham số hàm kích hoạt + δ Huber (audit "đủ thông
+   * số" user 2026-10-12). Hàm ý: engine hỗ trợ từ BRAIN-P1, draft giờ mới lộ;
+   * [0.001, 10]/[0.01, 10] hẹp hơn engine (>0 hữu hạn — mlp.validateSpec) để
+   * editor không nhận giá trị vô nghĩa; default KHÔNG lưu key (engine defaults
+   * α 0.01/1.0, β 1.0, δ 1.0 — xem activations.ts/losses.ts).
+   */
+  alphaMin: 0.001,
+  alphaMax: 10,
+  betaMin: 0.01,
+  betaMax: 10,
+  huberDeltaMin: 0.01,
+  huberDeltaMax: 10,
 } as const
 
 // ==================== MENU 9 ACTIVATION (§9.2 bảng — metadata hiển thị) ====================
@@ -147,7 +182,12 @@ export interface BrainDraftRule {
   lossPerHead: readonly DraftLossHead[]
   /** weight chỉnh được? (B: 3 đầu — §9.3 nhóm B; A/C: đơn đầu ra, chỉ hiển thị) */
   editableWeights: boolean
-  /** Loại loss cho phép đổi mỗi vị trí head (rỗng = khóa hoàn toàn) */
+  /**
+   * Loại loss cho phép đổi mỗi vị trí head (rỗng = khóa hoàn toàn). Chỉ LOẠI
+   * loss khóa/đổi được tại đây — huberDelta (18-d) là THAM SỐ của head huber,
+   * chỉnh được riêng qua DraftLossHead.huberDelta (không phải loại loss mới —
+   * không đổi giá trị rule này).
+   */
   editableLossTypes: ReadonlyArray<readonly ('bce' | 'crossEntropy' | 'mse' | 'huber')[]>
 }
 
@@ -250,7 +290,39 @@ export function validateBrainDraft(input: unknown, inputUnits: number | null, ou
       errors.push(`Lớp ẩn ${i + 1}: softmax CHỈ dùng cho lớp output đa lớp (audit B1 — §9.2)`)
       continue
     }
-    hidden.push({ units: u, activation: a })
+    // BRAIN-TAB-3PHAN (18-d): α/β từng lớp ẩn — validate MỌI khóa có mặt
+    // (hữu hạn + trong DRAFT_LIMITS — hẹp hơn engine >0 để editor không nhận
+    // giá trị vô nghĩa), rồi CHUẨN HOÁ chỉ giữ khóa activation DÙNG ĐÚNG:
+    // leakyRelu/elu → alpha · swish → beta · activation khác → DROP cả (không
+    // lưu rác); sau lọc rỗng → omit key (KHÔNG lưu {}).
+    // FB-BRAIN-TAB-R1-04: activationParams CÓ MẶT nhưng sai shape (mảng /
+    // chuỗi / null — trước đây rơi qua guard `typeof === 'object'` của mảng
+    // hoặc bị bỏ im lặng) → BÁO LỖI như mọi shape violation khác (hidden
+    // không mảng, hyper không object, units không số) — client lỗi nhận 400
+    // đúng hợp đồng, không 200 giả.
+    const apIn = (l as { activationParams?: unknown }).activationParams
+    let activationParams: DraftHiddenLayer['activationParams'] | undefined
+    if (apIn !== undefined && (apIn === null || typeof apIn !== 'object' || Array.isArray(apIn))) {
+      errors.push(`Lớp ẩn ${i + 1}: activationParams phải là object { alpha?, beta? }`)
+    } else if (apIn) {
+      const alpha = (apIn as { alpha?: unknown }).alpha
+      const beta = (apIn as { beta?: unknown }).beta
+      if (alpha !== undefined) {
+        if (typeof alpha !== 'number' || !Number.isFinite(alpha) || alpha < DRAFT_LIMITS.alphaMin || alpha > DRAFT_LIMITS.alphaMax) {
+          errors.push(`Lớp ẩn ${i + 1}: alpha ${String(alpha)} ngoài [${DRAFT_LIMITS.alphaMin}, ${DRAFT_LIMITS.alphaMax}]`)
+        } else if (a === 'leakyRelu' || a === 'elu') {
+          activationParams = { ...activationParams, alpha }
+        }
+      }
+      if (beta !== undefined) {
+        if (typeof beta !== 'number' || !Number.isFinite(beta) || beta < DRAFT_LIMITS.betaMin || beta > DRAFT_LIMITS.betaMax) {
+          errors.push(`Lớp ẩn ${i + 1}: beta ${String(beta)} ngoài [${DRAFT_LIMITS.betaMin}, ${DRAFT_LIMITS.betaMax}]`)
+        } else if (a === 'swish') {
+          activationParams = { ...activationParams, beta }
+        }
+      }
+    }
+    hidden.push(activationParams ? { units: u, activation: a, activationParams } : { units: u, activation: a })
   }
 
   // ── lossPerHead ──
@@ -278,7 +350,20 @@ export function validateBrainDraft(input: unknown, inputUnits: number | null, ou
       errors.push(`Đầu ra ${i + 1}: trọng số ${String(w)} ngoài [0, 1]`)
       continue
     }
-    heads.push({ type: t as DraftLossHead['type'], weight: w })
+    // BRAIN-TAB-3PHAN (18-d): δ Huber — chỉ có nghĩa khi type='huber' (bce/
+    // crossEntropy/mse không có δ → normalize DROP, không lưu rác). Hữu hạn
+    // trong [0.01, 10] — hẹp hơn engine (>0 — mlp.validateSpec lossParams).
+    // Không đặt key = engine default resolveDelta 1.0 (losses.ts).
+    let huberDelta: number | undefined
+    if (t === 'huber' && h?.huberDelta !== undefined) {
+      const hd = h.huberDelta
+      if (typeof hd !== 'number' || !Number.isFinite(hd) || hd < DRAFT_LIMITS.huberDeltaMin || hd > DRAFT_LIMITS.huberDeltaMax) {
+        errors.push(`Đầu ra ${i + 1}: huberDelta ${String(hd)} ngoài [${DRAFT_LIMITS.huberDeltaMin}, ${DRAFT_LIMITS.huberDeltaMax}]`)
+      } else {
+        huberDelta = hd
+      }
+    }
+    heads.push(huberDelta !== undefined ? { type: t as DraftLossHead['type'], weight: w, huberDelta } : { type: t as DraftLossHead['type'], weight: w })
   }
 
   // ── hyper ──

@@ -110,7 +110,12 @@ export function buildV3Spec(override?: BrainDraftSpec): MlpSpec {
     ...base,
     layers: [
       base.layers[0], // input khóa features-10
-      ...override.hidden.map(h => ({ units: h.units, activation: h.activation })),
+      // BRAIN-TAB-3PHAN (18-d): truyền α/β + δ Huber từ draft — engine hỗ trợ
+      // sẵn từ BRAIN-P1 (activations.ts/losses.ts), giờ mới lộ UI. Conditional
+      // spread để KHÔNG tạo key undefined (pin r88-E: layers[1] toEqual
+      // {units, activation} khi draft mặc định không có params). Loss bce →
+      // không lossParams.
+      ...override.hidden.map(h => ({ units: h.units, activation: h.activation, ...(h.activationParams ? { activationParams: h.activationParams } : {}) })),
       base.layers[base.layers.length - 1], // output khóa 1·sigmoid (hợp đồng BCE)
     ],
     optimizer: override.hyper.optimizer,

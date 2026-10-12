@@ -24,11 +24,31 @@
  *    lớp; cạnh strokeOpacity theo |a_from × W(col+1)[to][from]| chuẩn hóa
  *    per cặp cột (0.22–0.90); dormant chỉ sáng cột input (one-hot thật) +
  *    chú thích nguồn; chip Agent đang chạy (emerald pulse) / Agent nghỉ.
- *  - ZOOM/PAN: state view {x,y,w,h} (null = fit về base 340×height+pad) —
+ *  - ZOOM/PAN: state view {x,y,w,h} (null = fit về base layout.width×height+pad) —
  *    nút overlay −/%/+ /⤢ Vừa (bước 1.25×, zoom ∈ [0.5×, 12×]) · wheel zoom
  *    1.1×/event về TÂM CON TRỎ (passive:false — vùng quan sát chuyên dụng) ·
  *    kéo chuột pan khi zoomed (nuốt click sau kéo >3px — pattern P3-B1) ·
  *    đúp chuột = vừa khung. Hit-test getScreenCTM phản ánh viewBox hiện tại.
+ *
+ * BRAIN-TAB-3PHAN v3 (chỉ thị user 2026-10-12, trích ngắn: "sau đó là đến
+ * giao diện lớp có thể chỉnh to nhỏ để xem từ tổng quan đến chi tiết được.
+ * Nếu số nơ rọn nhiều thì các điểm nơ ron chỉnh kích thước nhỏ lại, vị trí
+ * các lớp chỉnh căn giữa thay vì căn trên như hiện tại"):
+ *  - GEOMETRY v3 (stage-geometry.ts): cột CENTER-ALIGN dọc (cột ngắn lơ
+ *    lửng giữa cột cao nhất — không kéo về top); rowStep thích ứng từng
+ *    cột (cột dày đặc co còn sàn 2 — 256 nơ-ron span 510 thay 4404);
+ *    radius nơ-ron theo cột (clamp rowStep×0.36 vào [0.7, 6.5] — cột 256
+ *    chấm 0.72); width ĐỘNG clamp(n×130, 340, 900) thay hằng 340.
+ *  - Render theo geometry v3: circle r = layout.radius[col] (selected phóng
+ *    nhẹ min(neuronRMax, r×1.6+1.2)); cạnh né lõi bằng R1/R2 theo 2 cột;
+ *    hit-test nơ-ron ngưỡng max(4, r_c+3) thích ứng cột dày đặc.
+ *  - Container full-width fit-height (tab BRAIN layout 3 phần — đài quan
+ *    sát là section GIỮA): tall → stageBox cao xác định h-[440px] md:520
+ *    xl:600 + flex center; ResizeObserver đo box → setSize SVG THỦ CÔNG
+ *    giữ aspect (scale = min(boxW/viewW, boxH/viewH)) — element rect ≡
+ *    viewBox rect cho MỌI phép ratio zoom/pan/hit-test (code zoom tính theo
+ *    getBoundingClientRect của element — KHÔNG dùng preserveAspectRatio
+ *    meet để letterbox). !tall giữ h-auto w-full cũ (không đo).
  *
  * Giữ nguyên từ UX-3/§9.4: bấm nhãn cột → editor (UX-1); nơ-ron → inspector
  * bias/|w| vào-ra · cạnh → |w| đúng cặp (từ trọng số THẬT /api/brain/weights
@@ -110,8 +130,9 @@ interface StageView {
   h: number
 }
 
-/** viewBox width cố định 340 (tiền lệ UX-3); pad dưới cho thoáng khi pan. */
-const STAGE_WIDTH = 340
+/** Pad dưới cho thoáng khi pan. (BRAIN-TAB-3PHAN: width động theo layout —
+ *  clamp(n×130, 340, 900) — bỏ hằng STAGE_WIDTH 340 cứng của UX-3/BRAIN-LIVE;
+ *  zoomAt clamp theo base.w nên tự thích ứng mọi width.) */
 const VIEW_PAD = 14
 /** Mức zoom (base.w / view.w) ∈ [ZOOM_MIN, ZOOM_MAX] — clamped mọi thao tác. */
 const ZOOM_MIN = 0.5
@@ -200,6 +221,10 @@ export function BrainStage({
   const [panning, setPanning] = useState(false)
   const justPannedRef = useRef(false)
   const panTeardownRef = useRef<(() => void) | null>(null)
+  // ── BRAIN-TAB-3PHAN: client size của stageBox (ResizeObserver) — null
+  //    trước khi đo / !tall / trình duyệt không có ResizeObserver → SVG giữ
+  //    className cũ h-auto w-full (degrade đúng diện mạo BRAIN-LIVE). ──
+  const [boxSize, setBoxSize] = useState<{ w: number; h: number } | null>(null)
 
   // ── Kéo trọng số bản active (READ-ONLY, fail-open planned/draft);
   //    refreshNonce đổi → refetch (sau train, version mới) ──
@@ -308,17 +333,20 @@ export function BrainStage({
           const a = byColRow.get(`${c}:${r1}`)
           const b = byColRow.get(`${c + 1}:${r2}`)
           if (!a || !b) continue
-          const R = 6.5 // bán kính nơ-ron — cạnh né lõi (tiền lệ BrainArchDiagram)
-          const { cx1, cy1, cx2, cy2 } = bezierControls(a.x + R, a.y, b.x - R, b.y)
+          // BRAIN-TAB-3PHAN: cạnh né lõi theo radius TỪNG CỘT (cột dày đặc
+          // chấm nhỏ → cạnh loe gần lõi hơn — R1/R2 thay hằng 6.5 cứng)
+          const R1 = layout.radius[c] ?? STAGE_LIMITS.neuronRMax
+          const R2 = layout.radius[c + 1] ?? STAGE_LIMITS.neuronRMax
+          const { cx1, cy1, cx2, cy2 } = bezierControls(a.x + R1, a.y, b.x - R2, b.y)
           list.push({
             id: id++, fromCol: c, toCol: c + 1, fromRow: r1, toRow: r2,
-            x1: a.x + R, y1: a.y, x2: b.x - R, y2: b.y, cx1, cy1, cx2, cy2,
+            x1: a.x + R1, y1: a.y, x2: b.x - R2, y2: b.y, cx1, cy1, cx2, cy2,
           })
         }
       }
     }
     return list
-  }, [columns, layout.neurons])
+  }, [columns, layout.neurons, layout.radius])
 
   const edges = useMemo(() => lodEdges(edgesAll), [edgesAll])
 
@@ -486,15 +514,29 @@ export function BrainStage({
   }, [inspector, weights, layout.neurons, columns])
 
   // ── Base view + cửa sổ hiệu quả (BRAIN-LIVE zoom/pan) ──
+  // BRAIN-TAB-3PHAN: w ĐỘNG theo layout.width (clamp(n×130, 340, 900)) —
+  // zoomAt clamp theo base.w nên mọi chỗ dùng base tự thích ứng.
   const baseView = useMemo<StageView>(() => ({
     x: 0,
     y: 0,
-    w: STAGE_WIDTH,
+    w: layout.width,
     h: Math.max(layout.height, 96) + VIEW_PAD,
-  }), [layout.height])
+  }), [layout.width, layout.height])
   const effView = view ?? baseView
   const zoomed = view !== null
   const zoomPct = Math.round((baseView.w / effView.w) * 100)
+
+  // ── Kích thước SVG fit container giữ aspect (BRAIN-TAB-3PHAN): scale =
+  //    min(boxW/viewW, boxH/viewH) → SVG luôn nằm GỌN trong stageBox (flex
+  //    center căn giữa — letterbox quanh SVG, KHÔNG preserveAspectRatio).
+  //    Đơn vị px — element rect ≡ viewBox rect nên mọi phép ratio zoom/pan
+  //    (onWheel rX/rY, pan scale=startView.w/rect.width) vẫn ĐÚNG. boxSize
+  //    null (chưa đo / !tall) → null → className cũ h-auto w-full. ──
+  const fitSize = useMemo(() => {
+    if (!tall || !boxSize || boxSize.w <= 0 || boxSize.h <= 0) return null
+    const scale = Math.min(boxSize.w / effView.w, boxSize.h / effView.h)
+    return { w: effView.w * scale, h: effView.h * scale }
+  }, [tall, boxSize, effView])
 
   // Cấu trúc layout đổi (đổi brain/head/draft/train/units) → về vừa khung.
   // (queueMicrotask defer — không setState đồng bộ trong body effect.)
@@ -527,6 +569,23 @@ export function BrainStage({
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [baseView])
+
+  // ── ResizeObserver đo stageBox (BRAIN-TAB-3PHAN): chỉ chạy khi tall —
+  //    stageBox cao xác định (h-[440px] md:520 xl:600) nên cần setSize SVG
+  //    thủ công giữ aspect cho đủ cao/đủ rộng trong full-width. contentRect
+  //    = client size (stageBox không padding/border-content sai lệch 0).
+  //    Cleanup disconnect khi unmount/đổi tall. ──
+  useEffect(() => {
+    if (!tall) return
+    const el = stageBoxRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(entries => {
+      const en = entries[entries.length - 1]
+      if (en) setBoxSize({ w: en.contentRect.width, h: en.contentRect.height })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [tall])
 
   // ── Drag pan (BRAIN-LIVE): chuột chính (button 0), CHỈ khi đang zoom;
   // delta tỉ lệ view.w/clientWidth (dọc theo view.h/svgHeight). Kéo >3px =
@@ -613,8 +672,13 @@ export function BrainStage({
     pt.y = ev.clientY
     const loc = pt.matrixTransform(svg.getScreenCTM()?.inverse() ?? svg.getCTM()?.inverse())
     if (!loc) return
-    // nơ-ron trước (bán kính 6.5 + đệm)
-    const neuron = layout.neurons.find(n => Math.hypot(n.x - loc.x, n.y - loc.y) <= 9)
+    // nơ-ron trước — ngưỡng thích ứng THEO CỘT (BRAIN-TAB-3PHAN): cột dày
+    // đặc chấm 0.72 → ngưỡng sàn 4 (max(4, r_c+3)); cột thưa 6.12 → 9.12
+    // ≈ diện mạo cũ (9) — không bấm nhầm khi zoom chi tiết cột dày.
+    const neuron = layout.neurons.find(n => {
+      const rC = layout.radius[n.col] ?? STAGE_LIMITS.neuronRMax
+      return Math.hypot(n.x - loc.x, n.y - loc.y) <= Math.max(4, rC + 3)
+    })
     if (neuron) {
       setInspector({ kind: 'neuron', col: neuron.col, row: neuron.row })
       return
@@ -625,7 +689,7 @@ export function BrainStage({
       return
     }
     setInspector(null)
-  }, [edges, layout.neurons])
+  }, [edges, layout.neurons, layout.radius])
 
   const lifecycleCls = brain.lifecycle === 'active' ? 'bs-glow-active' : 'bs-glow-dormant'
   const accent = brain.lifecycle === 'active' ? 'rgba(251,191,36,0.85)' : 'rgba(251,191,36,0.38)'
@@ -637,7 +701,7 @@ export function BrainStage({
   return (
     <div
       ref={wrapRef}
-      className={`relative ${tall ? 'flex min-h-[420px] flex-col xl:min-h-[540px]' : ''}`}
+      className={`relative ${tall ? 'flex flex-col' : ''}`}
       role="group"
       aria-label={`Sân khấu não ${brain.title}`}
     >
@@ -699,12 +763,13 @@ export function BrainStage({
         ref={stageBoxRef}
         onPointerDown={onStagePointerDown}
         onDoubleClick={() => { setView(null) }}
-        className={`relative overflow-hidden rounded-xl border ${fxOn ? 'border-stone-700/60' : 'border-slate-800/80'} bg-slate-950/60 ${fxOn ? lifecycleCls : ''} ${tall ? 'min-h-0 flex-1' : ''} ${zoomed ? (panning ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
+        className={`relative overflow-hidden rounded-xl border ${fxOn ? 'border-stone-700/60' : 'border-slate-800/80'} bg-slate-950/60 ${fxOn ? lifecycleCls : ''} ${tall ? 'flex h-[440px] items-center justify-center md:h-[520px] xl:h-[600px]' : ''} ${zoomed ? (panning ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
       >
         <svg
           ref={svgRef}
           viewBox={`${effView.x} ${effView.y} ${effView.w} ${effView.h}`}
-          className={`h-auto w-full ${fxOn && !zoomed ? 'cursor-pointer' : ''}`}
+          className={`${fitSize ? 'block max-w-full' : 'h-auto w-full'} ${fxOn && !zoomed ? 'cursor-pointer' : ''}`}
+          style={fitSize ? { width: fitSize.w, height: fitSize.h } : undefined}
           role="img"
           aria-label={`Kiến trúc ${brain.title}: ${ariaLayers} — loss ${brain.planned.loss}`}
           onClick={fxOn ? onSvgClick : undefined}
@@ -776,10 +841,13 @@ export function BrainStage({
           {layout.neurons.map(n => {
             const isSel = inspector?.kind === 'neuron' && inspector.col === n.col && inspector.row === n.row
             const inten = fxOn ? neuronIntensity?.get(`${n.col}:${n.row}`) : undefined
+            // BRAIN-TAB-3PHAN: r theo TỪNG CỘT (layout.radius — cột dày đặc
+            // chấm nhỏ lại); selected phóng nhẹ nhưng không vượt neuronRMax
+            const rC = layout.radius[n.col] ?? STAGE_LIMITS.neuronRMax
             return (
               <circle
                 key={`n-${n.col}-${n.row}`}
-                cx={n.x} cy={n.y} r={isSel ? 7.4 : 6.5}
+                cx={n.x} cy={n.y} r={isSel ? Math.min(STAGE_LIMITS.neuronRMax, rC * 1.6 + 1.2) : rC}
                 fill={inten !== undefined
                   ? `rgba(16,185,129,${(0.12 + 0.75 * inten).toFixed(3)})`
                   : 'rgba(2,6,23,0.95)'}

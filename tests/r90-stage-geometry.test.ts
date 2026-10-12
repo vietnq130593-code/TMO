@@ -22,11 +22,15 @@
  *      FB-BRAIN-UX-R1-07 — nguồn đã sửa theo doc).
  *   I. bezierTangentDeg: tiếp tuyến ngang trái→phải ≈ 0° · phải→trái ≈ 180° ·
  *      dọc xuống ≈ 90° (mũi tên bản tĩnh reduced-motion).
- *   J. buildStageLayout (PIN UPDATE BRAIN-LIVE — cap 256 thay 8, chỉ thị
- *      user 2026-10-12 "hiển thị đúng số nơ-ron từng lớp"): đủ cột · vẽ
- *      ĐÚNG units (10/16/1 → 10/16/1, tổng 27, KHÔNG nén) · units ≤ 256
- *      ánh xạ thẳng realIndex = row · units > 256 (300) nén đều (đầu 0,
- *      cuối units−1, đơn điệu) · colX đều nhau.
+ *   J. buildStageLayout (PIN UPDATE BRAIN-TAB-3PHAN — center-align +
+ *      rowStep thích ứng + radius cột; chỉ thị user 2026-10-12 "vị trí các
+ *      lớp chỉnh căn giữa thay vì căn trên như hiện tại" + "nơ ron nhiều
+ *      thì các điểm nơ ron chỉnh kích thước nhỏ lại"): đủ cột · vẽ ĐÚNG
+ *      units (10/16/1 → tổng 27, KHÔNG nén) · CENTER-ALIGN [10,16,1] yStart
+ *      77/26/153.5 + height 331 · [256,8] rowStep [2,17] + height 586 (thay
+ *      4404) + cột 8 center y=221.5 + radius [0.72, 6.12] · realIndex thẳng
+ *      ≤ 256 / nén đơn điệu > 256 · rowStep/radius đơn điệu theo display ·
+ *      width động clamp(n×130, 340, 900).
  *
  * Ghi nhận nguồn (ĐÃ SỬA đợt fixbug FB-BRAIN-UX-R1-07):
  *   strokeWidthForGrad(0, [0,0]) TRƯỚC đây 1.95 (trung vị [0.7,3.2]) trái
@@ -275,9 +279,9 @@ describe('r90 · I bezierTangentDeg — góc tiếp tuyến (đầu mũi tên ch
   })
 })
 
-// ==================== J. buildStageLayout ====================
+// ==================== J. buildStageLayout (geometry v3) ====================
 
-describe('r90 · J buildStageLayout — toạ độ cột + nơ-ron (tất định)', () => {
+describe('r90 · J buildStageLayout — geometry v3 center-align + rowStep/radius thích ứng (PIN UPDATE BRAIN-TAB-3PHAN)', () => {
   // Spec thật Brain-A (registry planned 10→16→1) — BRAIN-LIVE vẽ đủ 27 nơ-ron
   const columns: StageColumn[] = [
     { units: 10, display: 0, label: '1-hot cfg', activation: 'linear', locked: true },
@@ -285,28 +289,44 @@ describe('r90 · J buildStageLayout — toạ độ cột + nơ-ron (tất đị
     { units: 1, display: 0, label: 'sigmoid', activation: 'sigmoid', locked: true },
   ]
 
-  test('đủ cột + colX đều nhau (viewBox 340, margin 34)', () => {
+  test('width ĐỘNG + colX đều nhau: 3 cột → width 390 (clamp 3×130), bước 161, margin 34', () => {
     const lay = buildStageLayout(columns)
     expect(lay.colX).toHaveLength(3)
-    // Bước đều: colX[i+1] − colX[i] hằng số (340 − 2×34) / 2 = 136
+    // Bước đều: colX[i+1] − colX[i] hằng số (390 − 2×34) / 2 = 161
     expect(lay.colX[1] - lay.colX[0]).toBeCloseTo(lay.colX[2] - lay.colX[1], 10)
-    expect(lay.colX[1] - lay.colX[0]).toBeCloseTo(136, 10)
+    expect(lay.colX[1] - lay.colX[0]).toBeCloseTo(161, 10)
+    expect(lay.colX[0]).toBeCloseTo(34, 10)
+    expect(lay.colX[2]).toBeCloseTo(356, 10)
   })
 
-  test('PIN UPDATE BRAIN-LIVE: vẽ ĐÚNG units — 10/16/1 → 10/16/1 nơ-ron (tổng 27, KHÔNG nén)', () => {
+  test('PIN UPDATE BRAIN-TAB-3PHAN: vẽ ĐÚNG units + CENTER-ALIGN + rowStep 17 + radius 6.12 + height 331', () => {
     const lay = buildStageLayout(columns)
     // Chỉ thị user 2026-10-12 "mỗi lớp có bao nhiêu nơ-ron thì hiển thị đúng
-    // số điểm nơ-ron đấy" — cap 256 thay cho 8 tượng trưng của bản UX-3
+    // số điểm nơ-ron đấy" — cap 256 giữ từ BRAIN-LIVE
     expect(lay.neurons).toHaveLength(27) // 10 + 16 + 1
     for (let c = 0; c < 3; c++) {
       const inCol = lay.neurons.filter(n => n.col === c)
-      // display = min(units, 256): 10 → 10 (không còn nén về 8), 16 → 16, 1 → 1
       expect(inCol.length).toBe(columns[c].units)
       expect(inCol.length).toBe(Math.min(columns[c].units, STAGE_LIMITS.maxDisplayNeurons))
     }
-    // Chiều cao theo cột cao nhất (16): height = 26 + 16×17 + 26 = 324
-    // (rowStep 17 giữ nguyên — cột 256 nơ-ron sẽ cao ~4404, zoom/pan lo phần xem)
-    expect(lay.height).toBe(324)
+    // rowStep cột thưa giữ diện mạo v2 (17) — mỗi cột MỘT entry (thích ứng)
+    expect(lay.rowStep).toEqual([17, 17, 17])
+    // radius = clamp(17×0.36, 0.7, 6.5) = 6.12 (cả 3 cột thưa)
+    expect(lay.radius[0]).toBeCloseTo(6.12, 10)
+    expect(lay.radius[2]).toBeCloseTo(6.12, 10)
+    // colSpan [153, 255, 0] → contentSpan 255 → CENTER yStart = 26 + (255−colSpan)/2
+    // (chỉ thị user "vị trí các lớp chỉnh căn giữa thay vì căn trên"):
+    //   c0 = 26+(255−153)/2 = 77 · c1 = 26 · c2 = 26+127.5 = 153.5
+    const yOf = (c: number, r: number) => lay.neurons.find(n => n.col === c && n.row === r)!.y
+    expect(yOf(0, 0)).toBeCloseTo(77, 10)
+    expect(yOf(0, 9)).toBeCloseTo(77 + 9 * 17, 10) // 230
+    expect(yOf(1, 0)).toBeCloseTo(26, 10)
+    expect(yOf(1, 15)).toBeCloseTo(26 + 15 * 17, 10) // 281
+    // LINH HỒN center-align: cột 1 nơ-ron y = 26 + contentSpan/2 = 153.5
+    expect(yOf(2, 0)).toBeCloseTo(153.5, 10)
+    // height = 26 + contentSpan(255) + 50 = 331 (thay 324 v2 — 50 chỗ nhãn)
+    expect(lay.height).toBe(26 + 255 + 50)
+    expect(lay.height).toBe(331)
   })
 
   test('units ≤ 256 → realIndex = row (ánh xạ thẳng 1-1 cho inspector)', () => {
@@ -321,7 +341,34 @@ describe('r90 · J buildStageLayout — toạ độ cột + nơ-ron (tất đị
     const col0 = lay2.neurons.filter(n => n.col === 0)
     expect(col0.length).toBe(256)
     expect(col0[255].realIndex).toBe(255)
-    expect(lay2.height).toBe(26 + 256 * 17 + 26) // 4404 — ĐÚNG thiết kế BRAIN-LIVE
+    // rowStep sàn 2 (dày đặc) → span 255×2 = 510 → height 586 thay 4404 cũ
+    expect(lay2.height).toBe(26 + 510 + 50) // 586 — cột 256 KHÔNG kéo stage cao absurd
+  })
+
+  test('PIN [256, 8]: rowStep [2, 17] + height 586 (thay 4404) + cột 8 CENTER y=221.5 + radius [0.72, 6.12]', () => {
+    const lay = buildStageLayout([
+      { units: 256, display: 0, label: '×256', activation: 'tanh', locked: false },
+      { units: 8, display: 0, label: '8', activation: 'tanh', locked: false },
+    ])
+    expect(lay.width).toBe(340) // clamp(2×130 = 260, 340, 900) — kẹp dưới
+    expect(lay.colX).toEqual([34, 306]) // bước (340−68)/1 = 272
+    // rowStep thích ứng: 400/255 ≈ 1.57 → SÀN 2; cột 8 thưa → 17
+    expect(lay.rowStep).toEqual([2, 17])
+    // radius: cột dày đặc chấm NHỎ lại 2×0.36 = 0.72; cột thưa 6.12
+    expect(lay.radius[0]).toBeCloseTo(0.72, 10)
+    expect(lay.radius[1]).toBeCloseTo(6.12, 10)
+    // colSpan [510, 119] → contentSpan 510 → height = 26 + 510 + 50 = 586
+    expect(lay.height).toBe(586)
+    // Cột cao nhất top tự nhiên: y = 26 + row×2
+    const c0 = lay.neurons.filter(n => n.col === 0)
+    expect(c0[0].y).toBeCloseTo(26, 10)
+    expect(c0[255].y).toBeCloseTo(26 + 255 * 2, 10) // 536
+    // CENTER-ALIGN: cột 8 (row 0) y = 26 + (510−119)/2 = 221.5 ≠ 26 (v2 top)
+    const c1 = lay.neurons.filter(n => n.col === 1)
+    expect(c1[0].y).toBeCloseTo(221.5, 10)
+    expect(c1[7].y).toBeCloseTo(221.5 + 7 * 17, 10) // 340.5
+    // Tất định — 2 lần dựng deep-equal
+    expect(buildStageLayout(columns)).toEqual(buildStageLayout(columns))
   })
 
   test('PIN UPDATE BRAIN-LIVE: units > 256 (300) → vẽ 256 + nén đều: đầu 0, cuối units−1, đơn điệu không giảm', () => {
@@ -333,7 +380,40 @@ describe('r90 · J buildStageLayout — toạ độ cột + nơ-ron (tất đị
     expect(idx[0]).toBe(0)
     expect(idx[idx.length - 1]).toBe(299) // units − 1
     expect(idx.every((v, i) => i === 0 || v >= idx[i - 1])).toBe(true)
-    // Tất định: 2 lần dựng deep-equal
-    expect(buildStageLayout(columns)).toEqual(buildStageLayout(columns))
+  })
+
+  test('rowStep + radius ĐƠN ĐIỆU theo display (nhiều nơ-ron → thưa nhỏ + chấm nhỏ)', () => {
+    // Chỉ thị user "nơ ron nhiều thì các điểm nơ ron chỉnh kích thước nhỏ lại"
+    const layOf = (units: number) => buildStageLayout([
+      { units, display: 0, label: 'x', activation: 'tanh', locked: false },
+      { units: 3, display: 0, label: 'x', activation: 'tanh', locked: false },
+    ])
+    // Pin điểm: 16 → 17 (giữ diện mạo v2); 64 → 400/63 ≈ 6.349; 256 → sàn 2
+    expect(layOf(16).rowStep[0]).toBe(17)
+    expect(layOf(64).rowStep[0]).toBeCloseTo(400 / 63, 10)
+    expect(layOf(256).rowStep[0]).toBe(2)
+    // Sweep đơn điệu KHÔNG TĂNG theo display (8/16/24 đều kẹp 17 — bằng nhau)
+    const displays = [8, 16, 24, 64, 100, 200, 256]
+    const steps = displays.map(d => layOf(d).rowStep[0])
+    for (let i = 1; i < steps.length; i++) expect(steps[i]).toBeLessThanOrEqual(steps[i - 1])
+    // radius cùng chiều: clamp(rowStep×0.36, 0.7, 6.5)
+    expect(layOf(16).radius[0]).toBeCloseTo(6.12, 10)
+    expect(layOf(64).radius[0]).toBeCloseTo((400 / 63) * 0.36, 10) // ≈ 2.286
+    expect(layOf(256).radius[0]).toBeCloseTo(0.72, 10)
+    const radii = displays.map(d => layOf(d).radius[0])
+    for (let i = 1; i < radii.length; i++) expect(radii[i]).toBeLessThanOrEqual(radii[i - 1])
+  })
+
+  test('width động clamp(n×130, 340, 900): 1→340 · 2→340 · 3→390 · 4→520 · 6→780 · 7/8→900', () => {
+    const widthOf = (n: number) => buildStageLayout(
+      Array.from({ length: n }, () => ({ units: 3, display: 0, label: 'x', activation: 'tanh', locked: false }) as StageColumn),
+    ).width
+    expect(widthOf(1)).toBe(340) // 130 → kẹp dưới
+    expect(widthOf(2)).toBe(340) // 260 → kẹp dưới
+    expect(widthOf(3)).toBe(390)
+    expect(widthOf(4)).toBe(520)
+    expect(widthOf(6)).toBe(780)
+    expect(widthOf(7)).toBe(900) // 910 → kẹp trên
+    expect(widthOf(8)).toBe(900) // 1040 → kẹp trên
   })
 })

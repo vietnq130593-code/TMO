@@ -18,6 +18,10 @@
  *    ngoài request path (A7); hiển thị quỹ đạo epoch loss train/hold-out SAU
  *    khi xong (MLP nhỏ ~giây — stream realtime từng epoch over-engineering,
  *    ghi nhận blueprint v0.10) + kết quả CV + CI + thắng/thua đối chứng.
+ *
+ * BRAIN-TAB-3PHAN (18-d): nhóm B thêm δ Huber từng head + nhóm A hiển thị hằng
+ * optimizer khóa engine (SGD_MOMENTUM/ADAM_* từ optimizers.ts — audit "đủ thông
+ * số" user 2026-10-12).
  */
 
 import { useMemo, useState } from 'react'
@@ -25,6 +29,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Play, Save } from 'lucide-react'
 import type { BrainKey, BrainStatusEntry } from '@/lib/brain/registry'
+// optimizers.ts thuần toán KHÔNG import db — an toàn client component
+import { SGD_MOMENTUM, ADAM_BETA1, ADAM_BETA2, ADAM_EPSILON } from '@/lib/brain/optimizers'
 import {
   DRAFT_LIMITS,
   normalizeLossWeights,
@@ -243,6 +249,15 @@ export function TrainingConsole({
             />
           </label>
         </div>
+        {/* BRAIN-TAB-3PHAN (18-d): hằng optimizer KHÓA ENGINE — hiển thị trung
+            thực, KHÔNG chỉnh được (optimizers.ts: SGD heavy-ball · Adam gốc bài
+            báo · mlp.ts mini-batch shuffle Fisher–Yates tất định theo seed). */}
+        <p
+          className="font-mono text-[9px] leading-relaxed text-stone-600"
+          title="Hằng số optimizer cố định trong engine (src/lib/brain/optimizers.ts) — SGD+momentum heavy-ball β=0.9; Adam β₁=0.9 · β₂=0.999 · ε=1e-8 theo bài báo gốc; mini-batch được xáo trộn Fisher–Yates TẤT ĐỊNH theo seed (cùng seed + cùng dữ liệu → cùng weights bit-đối-bit). Chỉ optimizer/lr (lưới trên) chỉnh được; α/β activation chỉnh ở Brain Studio UX-1."
+        >
+          hằng optimizer (khóa engine): sgd momentum β={SGD_MOMENTUM} · adam β₁={ADAM_BETA1} β₂={ADAM_BETA2} ε={ADAM_EPSILON.toExponential(0)} — mini-batch shuffle Fisher–Yates tất định theo seed
+        </p>
       </section>
 
       {/* ══ NHÓM B — TRỌNG SỐ LOSS TỪNG ĐẦU RA ══ */}
@@ -287,6 +302,33 @@ export function TrainingConsole({
                       >
                         {allowedTypes.map(t => <option key={t} value={t}>{t}</option>)}
                       </select>
+                    )}
+                    {/* BRAIN-TAB-3PHAN (18-d): δ Huber — chỉ head loss='huber'
+                        (mse không có δ); hiển thị default engine 1.0
+                        (losses.ts resolveDelta) khi draft chưa đặt.
+                        FB-BRAIN-TAB-R1-03: min/max dùng DRAFT_LIMITS (nhất
+                        quán input α/β Brain Studio) — không hardcode số. */}
+                    {!lockedType && h.type === 'huber' && (
+                      <label
+                        className="flex items-center gap-1"
+                        title="Bán kính chuyển tiếp Huber — |error| ≤ δ dùng ½e² (mượt gần MSE), vượt dùng δ(|e|−½δ) (bền outlier như L1); δ nhỏ = mượt gần MSE, δ lớn = bền outlier hơn. Mặc định 1.0 (engine losses.ts resolveDelta)."
+                      >
+                        <span className="font-mono text-stone-500">δ</span>
+                        <input
+                          type="number" min={DRAFT_LIMITS.huberDeltaMin} max={DRAFT_LIMITS.huberDeltaMax} step={0.1}
+                          value={h.huberDelta ?? 1}
+                          disabled={!editorOn}
+                          onChange={e => {
+                            const v = Number.parseFloat(e.target.value)
+                            if (Number.isFinite(v) && v > 0) onDraftChange({
+                              ...draft,
+                              lossPerHead: draft.lossPerHead.map((x, j) => j === i ? { ...x, huberDelta: v } : x),
+                            })
+                          }}
+                          aria-label={`δ Huber đầu ra ${names[i]}`}
+                          className="h-6 w-14 rounded border border-stone-700 bg-slate-900 px-1 text-center font-mono text-[9.5px] text-stone-100 disabled:opacity-50"
+                        />
+                      </label>
                     )}
                   </div>
                 )

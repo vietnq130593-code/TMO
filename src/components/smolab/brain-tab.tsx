@@ -1,36 +1,43 @@
 'use client'
 
 // ========================================================================
-// brain-tab — Tab "BRAIN" (module Smolab) — BRAIN-LIVE 15-d
+// brain-tab — Tab "BRAIN" (module Smolab) — BRAIN-LIVE 15-d → BRAIN-TAB-3PHAN 18-c
 // ========================================================================
 //
-// CHỈ THỊ USER (2026-10-12, nguyên văn): "hãy di chuyển toàn bộ ô Não vận
-// hành — MLP-CPU (BRAIN) về module Smolab và tạo thành 1 tab tên là BRAIN
-// cho tôi" + "phần Tham số runtime trong cột hành động khi bấm vào mũi tên
-// thì lại chỉnh ở một ô bên trên, mất công lăn chuột lên... đúng ra có thể
-// mở dialog để chỉnh và đóng lại".
+// CHỈ THỊ USER (2026-10-12, nguyên văn): "Đúng ra nên chia 3 phần, Phần
+// trên cùng là nút chọn Brain cũng như thông tin liên quan brain, Có thể
+// thêm lớp cũng như chỉnh số nơ ron mỗi lớp, sau đó là đến giao diện lớp
+// có thể chỉnh to nhỏ để xem từ tổng quan đến chi tiết được... Cuối cùng
+// là phần chứa các bản thông số có thể chỉnh sửa và thiết lập được."
 //
-// Toàn bộ state machine + UI panel "Não vận hành" DI CHUYỂN NGUYÊN VẸN từ
-// neural-architecture-section.tsx (BRAIN-UX §9.5 UX-4, blueprint v0.10) về
-// đây — KHÔNG viết lại từ trí nhớ: state draft 3 brain (controlled —
-// BrainStudio + TrainingConsole + BrainStage cùng MỘT nguồn) · poll 15s
-// fail-open · train POST /api/brain/train · spec-draft GET/PUT · mobile
-// console bottom-sheet. Tab Kiến trúc Database GIỮ đồ thị 6 lớp + node
-// inspector + Q-table + SAL (phần đó KHÔNG render ở đây).
+// LAYOUT 3 SECTION DỌC (18-c — mỗi section 1 Card riêng, space-y-4 — thay
+// grid 3 CỘT cũ [280-320px | 1fr | 340-420px] bị user chê "nhét ép"):
+//   1 · CHỌN NÃO & KIẾN TRÚC — BrainStudio (18-b rewrite thanh ngang —
+//       render nguyên, props KHÔNG đổi) + khối "Thức tỉnh khi đủ mẫu" +
+//       hàng badge phase/flag/inputMode (2 khối sau DI CHUYỂN nguyên vẹn
+//       markup từ cột trái cũ) + badge tổng nhãn + ● sống.
+//   2 · ĐÀI QUAN SÁT NÃO — thanh Live (poll 2.5s) + BrainStage tall
+//       (full-width fit-height — geometry v3 của 18-a tự lo) + chú thích
+//       bất biến A1.
+//   3 · BẢNG THÔNG SỐ — 4 tab: Training Console · Tham số runtime · Nhật
+//       ký tinh chỉnh · Hàm & công thức (BrainReference — 18-c, bảng tham
+//       chiếu activation/loss/reward/lan truyền, trả lời câu hỏi user
+//       "đã có thông tin đầy đủ chưa"). ConsolePanel render INLINE ở
+//       MỌI viewport — BỎ hẳn hộp console trượt dưới đáy mobile + nút nổi
+//       ⚙ Console + state sheet + effect Esc + toàn bộ máy breakpoint
+//       desktop (media query hook + biến nhánh viewport — không còn
+//       layout 2 nhánh).
 //
-// MỚI so với panel cũ (BRAIN-LIVE — chỉ thị user 2026-10-12):
-//  - LIVE POLL 2.5s GET /api/brain/activity (READ-ONLY, contract 15-a):
-//    điểm sáng nơ-ron/one-hot input THẬT + chip "Agent đang chạy/nghỉ"
-//    (chip render bởi BrainStage v2 — 15-c). Chỉ chạy khi liveOn (default
-//    ON) VÀ tab trình duyệt đang hiện (visibilitychange dừng/kẹp lại);
-//    response 400 → bỏ qua lặng lẽ (poll không toast spam); lỗi mạng →
-//    giữ activity cũ (fail-open). Nút bật/tắt live + chú thích poll.
-//  - BẢNG THAM SỐ RUNTIME SỬA THEO CHỈ THỊ: cột "Nút" = text thuần (không
-//    còn đồ thị ở đây để nhảy tới) · cột "Hành động" = bút chì mở
-//    TuningParamDialog (15-b) chỉnh NGAY TẠI CHỖ rồi đóng — hết cuộn lên
-//    ô phía trên; nút trả-mặc-định giữ nguyên.
-//  - BrainStage nhận props v2 (15-c): activity + tall + refreshNonce
-//    (refreshNonce tăng sau train — refetch weights bản mới).
+// Giữ nguyên từ BRAIN-LIVE (15-d): state machine draft 3 brain (controlled
+// — BrainStudio + TrainingConsole + BrainStage cùng MỘT nguồn) · poll 15s
+// fail-open · train POST /api/brain/train · spec-draft GET/PUT · LIVE POLL
+// 2.5s GET /api/brain/activity READ-ONLY (visibilitychange dừng/kẹp lại;
+// response 400 bỏ qua lặng lẽ; lỗi mạng giữ activity cũ — fail-open) ·
+// TuningParamDialog chỉnh tại chỗ (15-b). Chuỗi pin r92-E GIỮ NGUYÊN NGUYÊN
+// VĂN khi tái cấu trúc: fetch template activity · POLL_ACTIVITY_MS = 2_500
+// · setInterval poll · &head= · selectedBrainKey === 'surrogate' ·
+// &head=${activityHead} · initialHead/onHeadChange · activity/refreshNonce
+// · tall · <TuningParamDialog · 'ui_synapse_fx'.
 //
 // ĐỌC TƯƠNG THÍCH (từ 15-b): TuningStateEntry/TuningSpec import thẳng
 // '@/lib/learning/neural-types' (client-safe) — KHÔNG import barrel
@@ -38,8 +45,8 @@
 // bundle.
 // ========================================================================
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BrainCircuit, History, Pencil, Radio, RotateCcw, Tags, Zap } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Activity, BrainCircuit, History, Pencil, Radio, RotateCcw, SlidersHorizontal, Tags, Zap } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
@@ -50,6 +57,9 @@ import { BrainStage, type SurrogateHead } from '@/components/database/brain-stag
 import { TrainingConsole, type TrainOutcomeUi } from '@/components/database/training-console'
 // BRAIN-LIVE (15-b): dialog chỉnh tham số runtime tại chỗ — hết cuộn lên.
 import { TuningParamDialog, SOURCE_BADGE } from '@/components/smolab/tuning-param-dialog'
+// BRAIN-TAB-3PHAN (18-c): tab "Hàm & công thức" — bảng tham chiếu trình
+// bày thuần (client-safe: ACTIVATION_MENU spec-schema + hằng optimizers).
+import { BrainReference } from '@/components/smolab/brain-reference'
 // BRAIN-P1 registry single-source (thuần hằng số — client-safe).
 import {
   BRAIN_REGISTRY,
@@ -81,41 +91,11 @@ const POLL_NEURAL_MS = 15_000
 /** Nhịp poll live activity (BRAIN-LIVE) — đài quan sát não cần phản ánh gần tức thời. */
 const POLL_ACTIVITY_MS = 2_500
 
-/**
- * Breakpoint desktop cho layout console (mobile → bottom-sheet) — cùng giá
- * trị NEURAL_DESKTOP_BREAKPOINT = 1024 (Tailwind lg) của neural-layout;
- * định nghĩa lại tại chỗ để KHÔNG kéo cả module đồ thị vào bundle smolab.
- */
-const DESKTOP_BREAKPOINT = 1024
-
 const viNum = (n: number): string => n.toLocaleString('vi-VN')
 
-// ==================== MEDIA QUERY HOOKS (P2 — cùng pattern section) ====================
-
-function subscribeMediaQuery(query: string, onChange: () => void): () => void {
-  const mq = window.matchMedia(query)
-  mq.addEventListener('change', onChange)
-  return () => mq.removeEventListener('change', onChange)
-}
-
-const DESKTOP_MEDIA_QUERY = `(min-width: ${DESKTOP_BREAKPOINT}px)`
-const subscribeDesktop = (onChange: () => void): (() => void) =>
-  subscribeMediaQuery(DESKTOP_MEDIA_QUERY, onChange)
-
-/** P2-M3: viewport ≥ lg (1024px) = desktop (console cột phải); hẹp hơn = mobile (bottom-sheet). */
-function useIsDesktopViewport(): boolean {
-  return useSyncExternalStore(
-    subscribeDesktop,
-    () => window.matchMedia(DESKTOP_MEDIA_QUERY).matches,
-    () => true,
-  )
-}
-
-// ==================== TAB BRAIN (BRAIN-LIVE 15-d) ====================
+// ==================== TAB BRAIN (BRAIN-LIVE 15-d · 3 SECTION 18-c) ====================
 
 export function BrainTabContent() {
-  const isDesktop = useIsDesktopViewport()
-
   // ── Tuning feed (bảng Tham số runtime + cờ UI + Nhật ký tinh chỉnh) ──
   // Fail-open như panel cũ: lỗi fetch giữ dữ liệu cũ, poll 15s sẽ thử lại.
   const [feed, setFeed] = useState<TuningFeed | null>(null)
@@ -189,11 +169,13 @@ export function BrainTabContent() {
     }
   }, [fetchFeed, fetchBrainData])
 
-  // ==================== STATE DASHBOARD 3 VÙNG (UX-4 — copy panel cũ) ====================
-  // (blueprint §9.5): thanh trái = Brain Studio chọn não + ngưỡng thức tỉnh;
-  // sân khấu giữa = Brain Stage (UX-3 / v2 BRAIN-LIVE) + chú thích bất biến
-  // A1; thanh phải = tab Training Console (UX-2) / Tham số runtime / Nhật ký
-  // tinh chỉnh. Mobile <1024px: console thành bottom-sheet (tiền đề P2-M3).
+  // ==================== STATE DASHBOARD (UX-4 — copy panel cũ; 18-c tách 3 SECTION) ====================
+  // (blueprint §9.5 + chỉ thị user 2026-10-12 "chia 3 phần"): SECTION 1 =
+  // Brain Studio chọn não + ngưỡng thức tỉnh + badge + editor kiến trúc;
+  // SECTION 2 = đài quan sát Brain Stage (UX-3 / v2 BRAIN-LIVE, tall
+  // full-width) + live + chú thích bất biến A1; SECTION 3 = 4 tab console
+  // (UX-2 Training Console / Tham số runtime / Nhật ký / Hàm & công thức)
+  // — inline MỌI viewport (không còn hộp console mobile riêng).
 
   /// Não đang chọn — mặc định 'calibration_v3'; restore từ localStorage
   /// (queueMicrotask + try/catch — fail-open giữ mặc định khi private mode).
@@ -225,10 +207,8 @@ export function BrainTabContent() {
   const [trainOutcome, setTrainOutcome] = useState<TrainOutcomeUi | null>(null)
   /// Brain Stage (UX-3) bấm cột lớp ẩn → Brain Studio nháy tới hàng editor
   const [focusLayerSignal, setFocusLayerSignal] = useState<{ brain: BrainKey; layer: number; nonce: number } | null>(null)
-  /// Tab đang mở của thanh phải
-  const [consoleTab, setConsoleTab] = useState<'train' | 'tuning' | 'log'>('train')
-  /// Mobile: bottom-sheet console (mở bằng nút nổi ⚙ Console)
-  const [consoleSheetOpen, setConsoleSheetOpen] = useState(false)
+  /// Tab đang mở của SECTION 3 (18-c mở rộng 'ref' — Hàm & công thức)
+  const [consoleTab, setConsoleTab] = useState<'train' | 'tuning' | 'log' | 'ref'>('train')
 
   // ── LIVE POLL activity (BRAIN-LIVE 15-d) ──
   // activity = dữ liệu thật từ GET /api/brain/activity (contract 15-a) —
@@ -392,14 +372,6 @@ export function BrainTabContent() {
     }
   }, [draftsByBrain, brainData])
 
-  // Esc đóng console bottom-sheet (mobile) — listener dọn đúng khi đóng
-  useEffect(() => {
-    if (!consoleSheetOpen) return
-    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setConsoleSheetOpen(false) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [consoleSheetOpen])
-
   // BRAIN-P2: train xong (nút Huấn luyện) cũng fetchBrainData tươi.
   // BRAIN-UX §9.3 (UX-2): useDraft=true → POST /api/brain/train đọc bản nháp
   // ĐÃ LƯU từ DB (server validate lại — bất biến A1 §9.1-1: draft vẫn đi đủ
@@ -553,7 +525,7 @@ export function BrainTabContent() {
   }, [tuningByKey])
   // Nguồn hiệu lực của w₁ (cùng SOURCE_BADGE bảng tuning đang dùng)
   const rewardSourceLabel = SOURCE_BADGE[tuningByKey.get('reward_w_outcome')?.source ?? 'default']?.label ?? 'DEFAULT'
-  // Giá trị cờ runtime của não đang chọn (badge trái — kế thừa BrainCard cũ)
+  // Giá trị cờ runtime của não đang chọn (badge SECTION 1 — kế thừa BrainCard cũ)
   const selectedFlagValue = selectedEntry.flagTuningKey !== undefined
     ? String(tuningByKey.get(selectedEntry.flagTuningKey)?.effectiveValue ?? 'off')
     : undefined
@@ -566,17 +538,19 @@ export function BrainTabContent() {
   // giữ draft user gõ dở vì chỉ reset khi param.key đổi, contract 15-b)
   const activeDialogParam = dialogParam ? tuningByKey.get(dialogParam.key) ?? dialogParam : null
 
-  // ── UX-4: nội dung thanh phải (tab console) — dùng ở CẢ 2 nơi: cột phải
-  // desktop và bottom-sheet mobile. isDesktop loại trừ nhau nên không bao
-  // giờ mount 2 bản cùng lúc (không mất state khi đổi viewport). ──
+  // ── UX-4: nội dung SECTION 3 (tab console — 18-c render INLINE ở MỌI
+  // viewport; trước đây dùng ở 2 nơi desktop/mobile-sheet, giờ 1 nơi duy
+  // nhất nên state tab không bao giờ bị remount mất). ──
   const consolePanel = (
     <div className="space-y-2.5" role="tabpanel" aria-label="Console não vận hành">
-      {/* Thanh tab 3 nút (style giống tab head brain-stage UX-3) */}
+      {/* Thanh tab 4 nút (style giống tab head brain-stage UX-3; 18-c thêm
+          tab "Hàm & công thức" — bảng tham chiếu trình bày) */}
       <div className="flex overflow-hidden rounded-md border border-stone-700/70" role="tablist" aria-label="Bảng điều khiển não">
         {([
-          ['train', 'Training Console (UX-2)'],
+          ['train', 'Training Console'],
           ['tuning', 'Tham số runtime'],
           ['log', 'Nhật ký tinh chỉnh'],
+          ['ref', 'Hàm & công thức'],
         ] as const).map(([id, label]) => (
           <button
             key={id}
@@ -591,6 +565,8 @@ export function BrainTabContent() {
       </div>
 
       {consoleTab === 'train' && (
+        // 18-c: TrainingConsole nguyên dạng full-width 1 cột (nhóm A grid
+        // 2 cột bên trong + nhóm B/C dạng hàng — đủ rộng, KHÔNG bọc grid 3).
         <TrainingConsole
           brain={selectedEntry}
           draft={draftForSelected}
@@ -728,21 +704,35 @@ export function BrainTabContent() {
           )}
         </div>
       )}
+
+      {consoleTab === 'ref' && (
+        // BRAIN-TAB-3PHAN (18-c): bảng tham chiếu hàm kích hoạt / loss /
+        // reward / lan truyền tiến-ngược + đạo hàm — trả lời câu hỏi user
+        // "liệu đã có thông tin để lựa chọn… có đầy đủ chưa" (audit 18-KEHOACH).
+        <BrainReference />
+      )}
     </div>
   )
 
-  // ==================== RENDER ====================
+  // ==================== RENDER — 3 SECTION DỌC (BRAIN-TAB-3PHAN 18-c) ====================
+  // Chỉ thị user: phần trên = chọn não + thông tin + editor lớp/nơ-ron; phần
+  // giữa = giao diện lớp xem to nhỏ tổng quan → chi tiết; phần cuối = các
+  // bảng thông số chỉnh được. Mỗi section 1 Card riêng (nc-wrap nc-amber +
+  // nc-panel nc-md nc-border-amber như trước) + role="region" riêng.
 
   return (
-    <div className="space-y-3" role="region" aria-label="Não vận hành — MLP-CPU (BRAIN)">
-      <div className="nc-wrap nc-amber">
+    <div className="space-y-4">
+      {/* ── SECTION 1 — CHỌN NÃO & KIẾN TRÚC: Brain Studio (UX-1) + ngưỡng
+          thức tỉnh + badge phase/flag/inputMode (di chuyển nguyên khối từ
+          cột trái layout 3 cột cũ) ── */}
+      <div className="nc-wrap nc-amber" role="region" aria-label="Chọn não và kiến trúc">
         <Card className="nc-panel nc-md nc-border-amber">
           <CardContent className="p-4">
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <BrainCircuit className="h-3.5 w-3.5 shrink-0 text-amber-400" />
-              <h4 className="text-xs font-semibold text-stone-100">Não vận hành — MLP-CPU (BRAIN)</h4>
+              <h4 className="text-xs font-semibold text-stone-100">1 · Chọn não &amp; kiến trúc</h4>
               <span className="text-[10px] text-stone-500">
-                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · BLUEPRINT-BRAIN-P1-P5 v0.11 (§9 BRAIN-UX + BRAIN-LIVE · tab BRAIN — chỉ thị user 2026-10-12)
+                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · thêm lớp / chỉnh nơ-ron / activation / α-β ở Editor kiến trúc
               </span>
               {brainData && (
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -767,146 +757,136 @@ export function BrainTabContent() {
                 Không tải được số liệu mẫu ({brainError}) — hiển thị spec kế hoạch (fail-open).
               </p>
             )}
-            {/* Lưới 3 vùng (desktop ≥1280px); dưới xl xếp dọc tự nhiên;
-                mobile <1024px cột phải thay bằng nút nổi ⚙ Console + sheet */}
-            <div className="grid gap-4 xl:grid-cols-[minmax(280px,320px)_minmax(0,1fr)_minmax(340px,420px)]">
-              {/* ── TRÁI: Brain Studio (UX-1) + ngưỡng thức tỉnh + badge ── */}
-              <div className="space-y-2.5">
-                <BrainStudio
-                  brains={brainEntries}
-                  selectedKey={selectedBrainKey}
-                  onSelect={selectBrain}
-                  editorOn={uiBrainEditOn}
-                  draft={draftForSelected}
-                  onDraftChange={onDraftChange}
-                  onDraftSave={() => void saveDraft(selectedBrainKey)}
-                  savingDraft={savingDraft}
-                  draftDirty={dirtyBrains.has(selectedBrainKey)}
-                  saveErrors={saveErrors}
-                  focusLayerSignal={focusLayerSignal}
-                />
-                {/* Thức tỉnh khi đủ mẫu — di chuyển nguyên khối từ panel cũ,
-                    hiển thị signals CỦA NÃO ĐANG CHỌN (label + progress + current/min) */}
-                <div className="space-y-1.5">
-                  <p className="text-[10px] uppercase tracking-wide text-stone-500">Thức tỉnh khi đủ mẫu</p>
-                  {selectedEntry.signals.map(sig => {
-                    const pct = sig.current === null ? 0 : Math.min(100, Math.round((sig.current / sig.min) * 100))
-                    return (
-                      <div
-                        key={sig.key} className="flex items-center gap-2 text-[11px]"
-                        title={`${sig.label} — bảng ${sig.table} · ngưỡng ${sig.min} (${sig.source})`}
-                      >
-                        <span className="min-w-0 flex-1 truncate text-stone-300">{sig.label}</span>
-                        <div className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-slate-900" aria-hidden="true">
-                          <div className={`h-full rounded-full ${sig.ok ? 'bg-emerald-500/80' : 'bg-amber-500/70'}`} style={{ width: `${pct}%` }} />
-                        </div>
-                        <span className="w-16 shrink-0 text-right font-mono tabular-nums text-stone-200">
-                          {sig.current === null ? '—' : viNum(sig.current)}/{sig.min}
-                        </span>
-                      </div>
-                    )
-                  })}
-                </div>
-                {/* Hàng badge phase + cờ runtime + inputMode (kế thừa BrainCard cũ) */}
-                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                  <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-500 border-stone-600/50">{selectedEntry.phase}</Badge>
-                  <Badge
-                    variant="outline"
-                    className={`h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] border-stone-600/50 ${selectedFlagValue === 'on' ? 'text-emerald-400' : 'text-stone-500'}`}
-                    title={selectedFlagValue !== undefined
-                      ? 'Giá trị hiệu lực thật (STORE › ENV › DEFAULT) — đổi ở tab "Tham số runtime" (cột phải)'
-                      : 'Cờ phase chưa có trong tuning store (mặc định OFF)'}
+            <BrainStudio
+              brains={brainEntries}
+              selectedKey={selectedBrainKey}
+              onSelect={selectBrain}
+              editorOn={uiBrainEditOn}
+              draft={draftForSelected}
+              onDraftChange={onDraftChange}
+              onDraftSave={() => void saveDraft(selectedBrainKey)}
+              savingDraft={savingDraft}
+              draftDirty={dirtyBrains.has(selectedBrainKey)}
+              saveErrors={saveErrors}
+              focusLayerSignal={focusLayerSignal}
+            />
+            {/* Thức tỉnh khi đủ mẫu — di chuyển nguyên khối từ cột trái cũ,
+                hiển thị signals CỦA NÃO ĐANG CHỌN (label + progress + current/min) */}
+            <div className="mt-2.5 space-y-1.5">
+              <p className="text-[10px] uppercase tracking-wide text-stone-500">Thức tỉnh khi đủ mẫu</p>
+              {selectedEntry.signals.map(sig => {
+                const pct = sig.current === null ? 0 : Math.min(100, Math.round((sig.current / sig.min) * 100))
+                return (
+                  <div
+                    key={sig.key} className="flex items-center gap-2 text-[11px]"
+                    title={`${sig.label} — bảng ${sig.table} · ngưỡng ${sig.min} (${sig.source})`}
                   >
-                    {selectedEntry.flag}={selectedFlagValue ?? 'off'}
-                  </Badge>
-                  <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-400 border-stone-600/50">in: {selectedEntry.defaultInputMode}</Badge>
-                </div>
-              </div>
-
-              {/* ── GIỮA: sân khấu UX-3 v2 (đài quan sát thật) + live + chú
-                  thích bất biến — cột giữa TO hơn (minmax(0,1fr)) theo chỉ
-                  thị "không gian thể hiện của hình ảnh các lớp não quá nhỏ" ── */}
-              <div className="space-y-2.5">
-                {/* Thanh live: bật/tắt poll 2.5s + chú thích READ-ONLY —
-                    chip "Agent đang chạy/nghỉ" + tooltip nguồn/fetchedAt do
-                    BrainStage v2 tự render khi có activity (15-c) */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setLiveOn(v => !v)}
-                    aria-pressed={liveOn}
-                    title={liveOn
-                      ? 'Live ĐANG BẬT — poll /api/brain/activity mỗi 2.5s (READ-ONLY, chỉ chạy khi tab trình duyệt đang hiển thị). Bấm để tắt.'
-                      : 'Live đang TẮT — bấm để bật poll hoạt động não mỗi 2.5s (READ-ONLY).'}
-                    className={`min-h-[44px] md:min-h-[28px] inline-flex items-center gap-1 rounded-md border px-2 text-[10px] ${
-                      liveOn
-                        ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
-                        : 'border-stone-700/70 text-stone-400 hover:text-stone-200'
-                    }`}
-                  >
-                    <Radio className={`h-3 w-3 ${liveOn ? 'animate-pulse' : ''}`} aria-hidden="true" />
-                    {liveOn ? 'Live' : 'Live tắt'}
-                  </button>
-                  <span className="text-[9.5px] text-stone-500">
-                    poll 2.5s · READ-ONLY{activity ? ` · dữ liệu ${new Date(activity.fetchedAt).toLocaleTimeString('vi-VN')}` : ''}
-                  </span>
-                </div>
-                <BrainStage
-                  brain={selectedEntry}
-                  draft={draftForSelected}
-                  editorOn={uiBrainEditOn}
-                  fxOn={uiSynapseFxOn}
-                  onEditLayer={layer => setFocusLayerSignal({ brain: selectedBrainKey, layer, nonce: Date.now() })}
-                  activity={activity}
-                  tall
-                  refreshNonce={refreshNonce}
-                  initialHead={activityHead}
-                  onHeadChange={h => setActivityHead(h)}
-                />
-                <p className="text-[9.5px] leading-relaxed text-stone-500">
-                  ⚠ Bản nháp KHÔNG tự lên runtime — chỉ qua train thắng đối chứng CV (bất biến A1); runtime chỉ
-                  đổi khi cờ bật (STORE › ENV › DEFAULT=off); Brain-B có POST /api/brain/replay (replay-eval
-                  READ-ONLY); 3 organ steering của Brain-C mỗi cái kill-switch riêng.
-                </p>
-              </div>
-
-              {/* ── PHẢI: console 3 tab (desktop — mobile thay bằng bottom-sheet) ── */}
-              {isDesktop && <div>{consolePanel}</div>}
+                    <span className="min-w-0 flex-1 truncate text-stone-300">{sig.label}</span>
+                    <div className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-slate-900" aria-hidden="true">
+                      <div className={`h-full rounded-full ${sig.ok ? 'bg-emerald-500/80' : 'bg-amber-500/70'}`} style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="w-16 shrink-0 text-right font-mono tabular-nums text-stone-200">
+                      {sig.current === null ? '—' : viNum(sig.current)}/{sig.min}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+            {/* Hàng badge phase + cờ runtime + inputMode (kế thừa BrainCard cũ) */}
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-500 border-stone-600/50">{selectedEntry.phase}</Badge>
+              <Badge
+                variant="outline"
+                className={`h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] border-stone-600/50 ${selectedFlagValue === 'on' ? 'text-emerald-400' : 'text-stone-500'}`}
+                title={selectedFlagValue !== undefined
+                  ? 'Giá trị hiệu lực thật (STORE › ENV › DEFAULT) — đổi ở tab "Tham số runtime" (section Bảng thông số)'
+                  : 'Cờ phase chưa có trong tuning store (mặc định OFF)'}
+              >
+                {selectedEntry.flag}={selectedFlagValue ?? 'off'}
+              </Badge>
+              <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-400 border-stone-600/50">in: {selectedEntry.defaultInputMode}</Badge>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* ── UX-4 MOBILE (<1024px): console thành bottom-sheet — nút nổi mở,
-          Esc/✕ đóng (blueprint §9.5 "<1024px — tiền đề P2") ── */}
-      {!isDesktop && (
-        <>
-          <button
-            onClick={() => setConsoleSheetOpen(true)}
-            className="fixed bottom-4 right-4 z-40 min-h-[44px] rounded-full border border-amber-500/50 bg-slate-950/90 px-4 text-[11px] text-amber-300 hover:border-amber-400/70"
-            aria-label="Mở console não vận hành"
-          >
-            ⚙ Console
-          </button>
-          {consoleSheetOpen && (
-            <div
-              role="dialog"
-              aria-label="Console não vận hành"
-              className="fixed inset-x-0 bottom-0 z-40 max-h-[70vh] overflow-y-auto rounded-t-2xl border-t border-amber-500/40 bg-slate-950/95 p-3"
-            >
-              <div className="mb-2 flex items-center justify-between">
-                <p className="text-xs font-semibold text-stone-100">Console não vận hành</p>
-                <button
-                  onClick={() => setConsoleSheetOpen(false)}
-                  className="min-h-[44px] px-3 text-stone-400 hover:text-amber-300"
-                  aria-label="Đóng console"
-                >✕</button>
-              </div>
-              {consolePanel}
+      {/* ── SECTION 2 — ĐÀI QUAN SÁT NÃO: sân khấu UX-3 v2 (đài quan sát
+          thật) full-width fit-height (18-a geometry v3: center-align + kích
+          thước điểm thích ứng) + live + chú thích bất biến ── */}
+      <div className="nc-wrap nc-amber" role="region" aria-label="Đài quan sát não theo thời gian thực">
+        <Card className="nc-panel nc-md nc-border-amber">
+          <CardContent className="p-4">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <Activity className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+              <h4 className="text-xs font-semibold text-stone-100">2 · Đài quan sát não</h4>
+              <span className="text-[10px] text-stone-500">
+                điểm sáng nơ-ron thật (bản active) · zoom/pan xem từ tổng quan đến chi tiết · bấm cột lớp ẩn để nháy tới editor ở phần 1
+              </span>
             </div>
-          )}
-        </>
-      )}
+            <div className="space-y-2.5">
+              {/* Thanh live: bật/tắt poll 2.5s + chú thích READ-ONLY —
+                  chip "Agent đang chạy/nghỉ" + tooltip nguồn/fetchedAt do
+                  BrainStage v2 tự render khi có activity (15-c) */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setLiveOn(v => !v)}
+                  aria-pressed={liveOn}
+                  title={liveOn
+                    ? 'Live ĐANG BẬT — poll /api/brain/activity mỗi 2.5s (READ-ONLY, chỉ chạy khi tab trình duyệt đang hiển thị). Bấm để tắt.'
+                    : 'Live đang TẮT — bấm để bật poll hoạt động não mỗi 2.5s (READ-ONLY).'}
+                  className={`min-h-[44px] md:min-h-[28px] inline-flex items-center gap-1 rounded-md border px-2 text-[10px] ${
+                    liveOn
+                      ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
+                      : 'border-stone-700/70 text-stone-400 hover:text-stone-200'
+                  }`}
+                >
+                  <Radio className={`h-3 w-3 ${liveOn ? 'animate-pulse' : ''}`} aria-hidden="true" />
+                  {liveOn ? 'Live' : 'Live tắt'}
+                </button>
+                <span className="text-[9.5px] text-stone-500">
+                  poll 2.5s · READ-ONLY{activity ? ` · dữ liệu ${new Date(activity.fetchedAt).toLocaleTimeString('vi-VN')}` : ''}
+                </span>
+              </div>
+              <BrainStage
+                brain={selectedEntry}
+                draft={draftForSelected}
+                editorOn={uiBrainEditOn}
+                fxOn={uiSynapseFxOn}
+                onEditLayer={layer => setFocusLayerSignal({ brain: selectedBrainKey, layer, nonce: Date.now() })}
+                activity={activity}
+                tall
+                refreshNonce={refreshNonce}
+                initialHead={activityHead}
+                onHeadChange={h => setActivityHead(h)}
+              />
+              <p className="text-[9.5px] leading-relaxed text-stone-500">
+                ⚠ Bản nháp KHÔNG tự lên runtime — chỉ qua train thắng đối chứng CV (bất biến A1); runtime chỉ
+                đổi khi cờ bật (STORE › ENV › DEFAULT=off); Brain-B có POST /api/brain/replay (replay-eval
+                READ-ONLY); 3 organ steering của Brain-C mỗi cái kill-switch riêng.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* ── SECTION 3 — BẢNG THÔNG SỐ: 4 tab (Training Console UX-2 / Tham
+          số runtime / Nhật ký / Hàm & công thức) — render INLINE mọi
+          viewport (18-c: bỏ hộp console mobile, console là section cuối) ── */}
+      <div className="nc-wrap nc-amber" role="region" aria-label="Bảng thông số điều chỉnh">
+        <Card className="nc-panel nc-md nc-border-amber">
+          <CardContent className="p-4">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <SlidersHorizontal className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+              <h4 className="text-xs font-semibold text-stone-100">3 · Bảng thông số</h4>
+              <span className="text-[10px] text-stone-500">
+                siêu tham số + loss + reward (Training Console) · tham số runtime · nhật ký · bảng tham chiếu hàm &amp; công thức
+              </span>
+            </div>
+            {consolePanel}
+          </CardContent>
+        </Card>
+      </div>
 
       {/* ── Dialog chỉnh tham số runtime (15-b) — bút chì cột Hành động ── */}
       <TuningParamDialog

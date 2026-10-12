@@ -228,7 +228,12 @@ export function buildPolicySpec(
     ...base,
     layers: [
       base.layers[0], // input khóa D động (vocab nhiệm vụ)
-      ...override.hidden.map(h => ({ units: h.units, activation: h.activation })),
+      // BRAIN-TAB-3PHAN (18-d): truyền α/β + δ Huber từ draft — engine hỗ trợ
+      // sẵn từ BRAIN-P1 (activations.ts/losses.ts), giờ mới lộ UI. Conditional
+      // spread để KHÔNG tạo key undefined (pin r87-A/r88: layers[1] toEqual
+      // {units, activation} khi draft mặc định không có params). Loss
+      // crossEntropy → không lossParams.
+      ...override.hidden.map(h => ({ units: h.units, activation: h.activation, ...(h.activationParams ? { activationParams: h.activationParams } : {}) })),
       base.layers[base.layers.length - 1], // output khóa ×|A| softmax + CE
     ],
     optimizer: override.hyper.optimizer,
