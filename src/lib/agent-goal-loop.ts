@@ -5902,6 +5902,20 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         } catch (bErr) {
           console.warn('[GoalLoop] Auto-train Brain-B failed (fail-open):', bErr instanceof Error ? bErr.message : String(bErr))
         }
+        // BRAIN-P4 (blueprint §4.4) — auto-train Brain-C "Lệnh" (policy head)
+        // cùng IIFE với Brain-B (nguồn nhãn AgentRunRecord/QEntry/verdict đã
+        // chốt đủ). Fail-open tuyệt đối + single-flight A7 tự chặn trùng nhịp.
+        try {
+          const { trainBrainPolicy } = await import('@/lib/brain/brains/policy')
+          const c = await trainBrainPolicy()
+          if (c.trained) {
+            console.log(`[GoalLoop] Auto-train Brain-C "Lệnh" (policy): CE mixture ${(c.cv?.cvCeMixture ?? Number.NaN).toFixed(4)} vs π_Q ${(c.cv?.ceBaseline ?? Number.NaN).toFixed(4)} → ${c.active ? `ACTIVE v${c.version} (cờ RUNTIME_POLICY + organ mới có tác dụng khi bật)` : `v${c.version} không thắng CV — mixture giữ nhánh π_Q`} · sampleSize=${c.sampleSize}`)
+          } else {
+            console.log(`[GoalLoop] Auto-train Brain-C skipped: ${c.error} (usable=${c.usable}/${c.total} · Q=${c.qEntries} · verdicts=${c.verdicts})`)
+          }
+        } catch (cErr) {
+          console.warn('[GoalLoop] Auto-train Brain-C failed (fail-open):', cErr instanceof Error ? cErr.message : String(cErr))
+        }
       })().catch(() => { /* fail-open — metrics không được phép làm hỏng response */ })
       // P6-M1 (§P6-M1, mục #15) — W2: bản detailed (confirmed/refuted breakdown)
       // để TÍNH REWARD credit assignment (quy ước §P6-M2: +1 confirmed ∧
@@ -5911,15 +5925,30 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         .then(async ({ total, confirmed, refuted }) => {
           if (total > 0) console.log(`[GoalLoop] ${agentName} resolved ${total} arbiter verdict(s) → ${confirmed} confirmed / ${refuted} refuted theo run ${stopReason} (${runComplete ? 'complete' : 'incomplete'})`)
           const reward = refuted > 0 ? -1 : (confirmed > 0 && runComplete ? 1 : 0)
+          // P6-M2: updateQ cho model THỰC TẾ chiếm đa số call chính của run
+          // (softmax bật → model thực ≠ model cấu hình — credit đúng người)
+          const dominantModel = [...modelsUsedThisRun.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? agentModel
           if (reward !== 0) {
-            // P6-M2: updateQ cho model THỰC TẾ chiếm đa số call chính của run
-            // (softmax bật → model thực ≠ model cấu hình — credit đúng người)
-            const dominantModel = [...modelsUsedThisRun.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? agentModel
             const { updateQ, agentRuntimeStateKey } = await import('@/lib/learning/q-table')
             const stateKey = agentRuntimeStateKey()
             await updateQ(stateKey, dominantModel, reward, stateKey)
             console.log(`[GoalLoop] P6 Q-learn (verdict close): ${stateKey} × ${dominantModel} reward=${reward} (${confirmed}✓/${refuted}✗, ${JSON.stringify([...modelsUsedThisRun.entries()])})`)
           }
+          // BRAIN-P4 (blueprint §3.1/§4.4 — Q1 user chốt 2026-10-12):
+          // composite reward GHI SONG SONG (log-only) mỗi run close — đợt
+          // quan sát 1/2. KHÔNG đụng updateQ (W2 giữ nhị phân ±1), KHÔNG
+          // tham gia quyết định nào. READ-ONLY ledger (median theo model).
+          try {
+            const { logCompositeRewardForRun } = await import('@/lib/brain/reward')
+            await logCompositeRewardForRun({
+              model: dominantModel,
+              agentName,
+              complete: runComplete,
+              tokensUsed,
+              confirmed,
+              refuted,
+            })
+          } catch { /* fail-open — log-only không được làm hỏng path verdict */ }
         })
         .catch(() => { /* fail-open */ })
     } catch { /* fail-open */ }

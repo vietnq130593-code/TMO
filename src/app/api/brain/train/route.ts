@@ -39,6 +39,11 @@ import {
   SURROGATE_MIN_TRAIN_SAMPLES,
   SURROGATE_INPUT_MODE,
 } from '@/lib/brain/brains/surrogate'
+import {
+  trainBrainPolicy,
+  POLICY_MIN_TRAIN_SAMPLES,
+  POLICY_INPUT_MODE,
+} from '@/lib/brain/brains/policy'
 
 export const dynamic = 'force-dynamic'
 
@@ -89,6 +94,48 @@ export async function POST(request: Request) {
         sampleSize: result.sampleSize,
         usable: result.usable,
         total: result.total,
+      })
+    }
+
+    // ── Brain-C "Lệnh" policy head (BRAIN-P4) — CV mixture so π_Q ──
+    if (brain === 'policy') {
+      const inputMode = typeof body.inputMode === 'string' ? body.inputMode : POLICY_INPUT_MODE
+      const result = await trainBrainPolicy(inputMode)
+      if (!result.trained) {
+        // Thiếu mẫu / thiếu Q / thiếu verdict / lệch lớp / mode chưa hỗ trợ /
+        // trùng nhịp A7 — ngủ an toàn, không ghi DB
+        return NextResponse.json(
+          {
+            error: result.error || 'insufficient data to train Brain-C policy',
+            brain,
+            usable: result.usable,
+            need: POLICY_MIN_TRAIN_SAMPLES,
+            qEntries: result.qEntries,
+            verdicts: result.verdicts,
+          },
+          { status: 400 },
+        )
+      }
+      return NextResponse.json({
+        trained: true,
+        brain,
+        version: result.version,
+        active: result.active,
+        improved: result.improved,
+        sampleSize: result.sampleSize,
+        usable: result.usable,
+        total: result.total,
+        qEntries: result.qEntries,
+        verdicts: result.verdicts,
+        cv: result.cv
+          ? {
+              ceMixture: result.cv.cvCeMixture,
+              ceMixtureCi: [result.cv.cvCeMixtureCiLo, result.cv.cvCeMixtureCiHi],
+              ceBaselineQ: result.cv.ceBaseline,
+              improved: result.cv.improved,
+              folds: result.cv.folds,
+            }
+          : null,
       })
     }
 

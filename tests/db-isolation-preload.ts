@@ -21,7 +21,9 @@
 //     bản copy, tuyệt đối không chạm DB của app đang chạng.
 //
 // LƯU Ý QUAN TRỌNG (rò /tmp đã xảy ra thật — Task 54 follow-up):
-//   - Mỗi test file chạy trong process riêng → mỗi process tạo 1 thư mục /tmp.
+//   - ĐO LẠI (FB-BRAIN-P3-R1, xác nhận live): bun test chạy MỌI file trong
+//     CÙNG 1 process (cùng pid — thứ tự file tùy ý, không theo alphabet) →
+//     1 thư mục /tmp mỗi LẦN CHẠY, không phải mỗi file (comment cũ sai).
 //   - `process.on("exit")` KHÔNG đủ tin cậy: bun test kết thúc worker bằng đường
 //     khiến hook không chạy → rò 11 thư mục sau vài lần chạy (đã đo: 11 dir).
 //   - VÁ: quét dọn các thư mục CŨ (>10 phút) mỗi lần preload chạy → rò bị chặn ở

@@ -149,7 +149,12 @@ export interface NeuralGraph {
   edges: NeuralEdge[]
 }
 
-// ==================== 1. TUNING SPECS (14 tham số vận hành thực) ====================
+// ==================== 1. TUNING SPECS (19 tham số vận hành thực) ====================
+// 13 gốc (neural-arch 2026-10-11) + thứ 14 calibration_v3 (BRAIN-P2) + thứ 15
+// replay_eval (BRAIN-P3) + thứ 16–19 runtime_policy + 3 cờ organ kill-switch
+// policy_organ_routing/adaptation/tuning (BRAIN-P4 — hiệu đính FB-BRAIN-P4-
+// R1-06: comment trước đếm "14 gốc + thứ 14 + 15 + 16–19" = 20 ≠ 19 thật;
+// header cũ nhất "14" cũng không cập nhật kịp từ P3 — ghi nhận Bug_v2).
 
 export const TUNING_SPECS: readonly TuningSpec[] = [
   {
@@ -369,6 +374,88 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
     warning:
       'Bật = báo cáo replay /api/brain/replay kèm ước lượng MLP Brain-B khi có bản active (thắng CV rồi mới active). Replay luôn READ-ONLY (không ghi DB, không tự chạy thật). Không có bản active → flag on cũng vô hiệu (chỉ đo lường).',
     appliesTo: 'buildReplayReport — mở phần ước lượng MLP trong POST /api/brain/replay',
+  },
+  {
+    // BRAIN-P4 (blueprint §4.4) — cờ master runtime của Brain-C "Lệnh"
+    // (policy head): off = mixture π = λ·π_Q + (1−λ)·π_net không tham gia
+    // đâu (3 cơ quan steering đều ngủ); on = cho phép TỪNG cơ quan (mỗi cái
+    // vẫn cần cờ organ riêng bật thêm — kill-switch 2 lớp). Chuỗi hiệu lực
+    // STORE > ENV > DEFAULT=off đúng calibration_v3/replay_eval.
+    key: 'runtime_policy',
+    label: 'RUNTIME_POLICY',
+    description:
+      'off = Brain-C "Lệnh" policy head không tham gia runtime (mặc định — composite reward đang log-only đợt quan sát). on = cho phép từng cơ quan (model routing / adaptation advisory / tuning proposals) nghe mixture — mỗi cơ quan vẫn cần cờ policy_organ_* riêng bật thêm.',
+    nodeId: 'softmax-policy',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'RUNTIME_POLICY',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' ? 'on' : 'off'
+    },
+    warning:
+      'Bật = cho phép Brain-C tham gia runtime QUA từng cơ quan (cờ policy_organ_*). Không có bản active (thắng π_Q CV) → flag on cũng vô hiệu (fail-open nghe Q nguyên vẹn). Composite reward vẫn log-only cho tới khi đủ 2 đợt quan sát (Q1 chốt 2026-10-12).',
+    appliesTo: 'isRuntimePolicyEnabled — maybeMixModelProbs (llm.ts) · buildPolicyAdvisoryBlock (workflow-engine) · buildTuningProposals (report)',
+  },
+  {
+    // BRAIN-P4 organ-1 kill-switch — model routing (llm.ts). Master
+    // runtime_policy PHẢI on trước; organ này quyết định riêng routing có
+    // nghe mixture không. Off → maybeApplySoftmaxModelPolicy y hệt trước P4.
+    key: 'policy_organ_routing',
+    label: 'POLICY_ORGAN_ROUTING',
+    description:
+      'Kill-switch organ model routing: off = softmax chọn model bằng π_Q thuần (y hệt trước BRAIN-P4). on = khi runtime_policy on VÀ Brain-C có bản active → probs được trộn mixture π = λ·π_Q + (1−λ)·π_net (seed-pick tất định giữ nguyên).',
+    nodeId: 'softmax-policy',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'POLICY_ORGAN_ROUTING',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' ? 'on' : 'off'
+    },
+    warning: 'Bật = model routing nghe Brain-C (khi master + active). Tắt về off = rollback tức thì về π_Q thuần — kill-switch độc lập với 2 organ kia.',
+    appliesTo: 'maybeMixModelProbs — trộn mixture vào maybeApplySoftmaxModelPolicy (src/lib/llm.ts)',
+  },
+  {
+    // BRAIN-P4 organ-2 kill-switch — adaptation directives advisory text
+    // (workflow-engine systemBlocks). Chỉ TEXT đề xuất — không đổi quyết định.
+    key: 'policy_organ_adaptation',
+    label: 'POLICY_ORGAN_ADAPTATION',
+    description:
+      'Kill-switch organ adaptation directives: off = không có advisory nào của Brain-C vào system prompt. on = khi runtime_policy on VÀ có bản active → block "ĐỀ XUẤT BRAIN-C" (đề xuất model + λ + CV) vào systemBlocks — advisory TEXT, không ép quyết định.',
+    nodeId: 'softmax-policy',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'POLICY_ORGAN_ADAPTATION',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' ? 'on' : 'off'
+    },
+    warning: 'Bật = system prompt nhận thêm block đề xuất model của Brain-C (chỉ tham khảo). Tắt về off = không còn block — kill-switch độc lập với 2 organ kia.',
+    appliesTo: 'buildPolicyAdvisoryBlock — systemBlocks workflow-engine (src/lib/code-team/workflow-engine.ts)',
+  },
+  {
+    // BRAIN-P4 organ-3 kill-switch — tuning-store proposals (read-only).
+    // Brain CHỈ đề xuất giá trị qua report GET /api/brain/policy — người
+    // duyệt vẫn là user qua UI (TuningChangeLog chỉ ghi khi user áp dụng).
+    key: 'policy_organ_tuning',
+    label: 'POLICY_ORGAN_TUNING',
+    description:
+      'Kill-switch organ tuning proposals: off = GET /api/brain/policy trả danh sách đề xuất rỗng. on = Brain-C đề xuất giá trị tham số (vd runtime_model_policy=softmax khi Q ≥ 30 entry, runtime_policy=on khi có bản active thắng CV) — READ-ONLY, user tự áp dụng qua UI tuning.',
+    nodeId: 'softmax-policy',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'POLICY_ORGAN_TUNING',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' ? 'on' : 'off'
+    },
+    warning: 'Bật = Brain-C liệt kê đề xuất tham số trong report (không tự áp dụng — KHÔNG ghi TuningParam/TuningChangeLog). Tắt về off = danh sách rỗng — kill-switch độc lập với 2 organ kia.',
+    appliesTo: 'buildTuningProposals — report GET /api/brain/policy (src/lib/brain/brains/policy.ts)',
   },
 ] as readonly TuningSpec[]
 
@@ -692,7 +779,7 @@ export const NEURAL_NODES: readonly NeuralNode[] = [
       { name: 'getQAdvice', file: 'src/lib/learning/q-table.ts', line: 323 },
       { name: 'pickIndexBySeed', file: 'src/lib/learning/q-table.ts', line: 185 },
     ],
-    paramKeys: ['runtime_model_policy', 'runtime_model_tau', 'replay_eval'],
+    paramKeys: ['runtime_model_policy', 'runtime_model_tau', 'replay_eval', 'runtime_policy', 'policy_organ_routing', 'policy_organ_adaptation', 'policy_organ_tuning'],
   },
   {
     id: 'strategy-adapter',

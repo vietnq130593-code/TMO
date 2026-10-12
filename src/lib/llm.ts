@@ -4457,7 +4457,30 @@ async function maybeApplySoftmaxModelPolicy(configuredZenModel: string, options?
     const advice = await getQAdvice(stateKey, candidates)
     const qByAction = new Map(advice.map(a => [a.action, a.q]))
     const scores = candidates.map(c => qByAction.get(c) ?? 0)
-    const probs = softmaxPolicy(scores, getTuningNumber('runtime_model_tau'))
+    let probs = softmaxPolicy(scores, getTuningNumber('runtime_model_tau'))
+    // BRAIN-P4 organ-1 (blueprint §4.4 — kill-switch 2 lớp: master
+    // runtime_policy + policy_organ_routing đều on MỚI đụng đến Brain-C;
+    // mặc định off → 0 chiỗi import, hành vi y hệt trước P4). Mixture
+    // π = λ·π_Q + (1−λ)·π_net thay probs; seed-pick tất định giữ nguyên.
+    let policyMix: { lambda: number; netShare: number; version: number } | null = null
+    if (getTuningEnum('runtime_policy') === 'on' && getTuningEnum('policy_organ_routing') === 'on') {
+      try {
+        const { maybeMixModelProbs } = await import('@/lib/brain/brains/policy')
+        // GHI NHẬN (FB-BRAIN-P4-R1-03): đặc trưng `delegated` tạm impute false
+        // tại wiring organ-1 — tầng llm không biết parentRunId của run đang
+        // chạy; đặc trưng vẫn học từ dữ liệu train (AgentRunRecord.parentRunId);
+        // khi tầng gọi (goal-loop) truyền ctx delegation xuống LLMCallOptions
+        // thì wire tại đây.
+        const mixed = await maybeMixModelProbs(probs, candidates, {
+          agent: options?.agentName ?? null,
+          delegated: false,
+        })
+        if (mixed) {
+          probs = mixed.probs
+          policyMix = { lambda: mixed.lambda, netShare: mixed.netShare, version: mixed.version }
+        }
+      } catch { /* fail-open — giữ probs π_Q nguyên vẹn */ }
+    }
     // Seed tất định hash(sessionId, cycle) — chạy lại được (spec §P6-M3).
     // FB-P6-R1-B-06 (ghi nhận, chấp nhận): call thiếu cả sessionId lẫn agentName
     // → seed 'anon' cố định (mọi call như vậy cùng chọn 1 model) — mọi call-site
@@ -4470,7 +4493,10 @@ async function maybeApplySoftmaxModelPolicy(configuredZenModel: string, options?
     const idx = pickIndexBySeed(probs, seed)
     if (idx < 0) return configuredZenModel
     const picked = candidates[idx]
-    console.log(`[LLM] softmax-pick model=${picked} q=${scores[idx].toFixed(2)} p=${probs[idx].toFixed(2)} reason=τ=${getTuningNumber('runtime_model_tau')} ${candidates.length}-ứng-viên seed=${seed}${picked !== configuredZenModel ? ` (thay ${configuredZenModel})` : ''}`)
+    const mixNote = policyMix
+      ? ` +Brain-C mix λ=${policyMix.lambda.toFixed(2)} net=${policyMix.netShare.toFixed(2)} v${policyMix.version}`
+      : ''
+    console.log(`[LLM] softmax-pick model=${picked} q=${scores[idx].toFixed(2)} p=${probs[idx].toFixed(2)} reason=τ=${getTuningNumber('runtime_model_tau')} ${candidates.length}-ứng-viên seed=${seed}${mixNote}${picked !== configuredZenModel ? ` (thay ${configuredZenModel})` : ''}`)
     return picked
   } catch (err) {
     console.warn('[LLM] softmax policy failed (fail-open → model cấu hình):', err instanceof Error ? err.message : String(err))

@@ -616,17 +616,19 @@ describe('r86 · C trainBrainSurrogate — pipeline đầy đủ (DB cô lập)'
     expect(json.version).toBe(10)
   })
 
-  test('C10 POST /api/brain/train brain lạ → 400 (liệt kê supported)', async () => {
+  test('C10 POST /api/brain/train brain lạ → 400 (liệt kê supported đủ 3 sau P4)', async () => {
+    // 'policy' từ BRAIN-P4 đã HỢP LỆ — dùng tên thật sự lạ để đo nhánh 400
     const res = await trainRoutePOST(new Request('http://t/api/brain/train', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ brain: 'policy' }),
+      body: JSON.stringify({ brain: 'brain-khong-ton-tai-r86' }),
     }))
     expect(res.status).toBe(400)
     const json = await res.json()
-    expect(json.error).toContain('policy')
+    expect(json.error).toContain('brain-khong-ton-tai-r86')
     expect(json.supported).toContain('surrogate')
     expect(json.supported).toContain('calibration_v3')
+    expect(json.supported).toContain('policy') // BRAIN-P4 — đủ 3 brain
   })
 })
 
@@ -734,6 +736,58 @@ describe('r86 · D loadActiveSurrogate + applySurrogateHead — fail-open mọi 
 })
 
 // ==================== E. REPLAY REPORT + ROUTE (READ-ONLY) ====================
+
+  test('D-regression FB-BRAIN-P3-R1-08: per-head fail-open THẬT + chặn weights không-finite ở cửa nạp', async () => {
+    // Bản trước: (a) applySurrogateHead throw khi 1 đầu NaN → mất CẢ 3 đầu;
+    // (b) weights rách qua DB (JSON stringify NaN→null → Float64Array null→0)
+    // tạo weight-0 ÂM THẦM — dự đoán sai thầm lặng. Fix: per-head NaN→null
+    // độc lập + guard mọi envelope finite ở loadActiveSurrogate.
+    const good = await loadActiveSurrogate()
+    expect(good).not.toBeNull()
+
+    // ── Phần A (storage corruption — đường JSON THẬT): null weight qua DB ──
+    const row = await db.brainModel.findFirst({
+      where: { brain: 'surrogate', active: true, version: good!.version },
+      select: { id: true, weightsJson: true },
+    })
+    expect(row).not.toBeNull()
+    const doc = JSON.parse(row!.weightsJson) as {
+      heads: {
+        success: { tensors: Array<{ kind: string; envelope: { data: number[] } }> }
+        tokens: { tensors: Array<{ kind: string; envelope: { data: number[] } }> }
+        durationMs: unknown
+      }
+    }
+    const wTensor = doc.heads.tokens.tensors.find(t => t.kind === 'W')!
+    wTensor.envelope.data[0] = null as unknown as number // JSON.stringify(NaN) === null — đường thực tế
+    await db.brainModel.update({
+      where: { id: row!.id },
+      data: { weightsJson: JSON.stringify(doc) },
+    })
+    try {
+      // Guard cửa nạp: model bị reject cả khối (hướng an toàn — đo lường thuần)
+      expect(await loadActiveSurrogate()).toBeNull()
+    } finally {
+      await db.brainModel.update({
+        where: { id: row!.id },
+        data: { weightsJson: row!.weightsJson },
+      })
+    }
+    const restored = await loadActiveSurrogate()
+    expect(restored).not.toBeNull() // phục hồi nguyên vẹn
+
+    // ── Phần B (runtime prediction NaN — KHÔNG qua JSON): 1 đầu NaN → chỉ
+    // đầu đó null, các đầu lành vẫn báo cáo (per-head fail-open đúng claim) ──
+    const tokensSer = restored!.heads.tokens.serialize()
+    const wT = tokensSer.tensors.find(t => t.kind === 'W')!
+    wT.envelope.data[0] = Number.NaN // NaN sống trong bộ nhớ — deserialize được (float64 hợp lệ)
+    const nanTokens = MLP.deserialize(tokensSer)
+    const hacked: ActiveSurrogate = { ...restored!, heads: { ...restored!.heads, tokens: nanTokens } }
+    const est = applySurrogateHead(hacked, { model: 'alpha', agent: 'Omega', delegated: false })
+    expect(est.success).not.toBeNull() // đầu lành KHÔNG bị kéo sập
+    expect(est.durationMs).not.toBeNull()
+    expect(est.tokens).toBeNull() // đầu NaN → null (per-head), KHÔNG throw
+  })
 
 describe('r86 · E buildReplayReport + POST /api/brain/replay — read-only + flag gating', () => {
   beforeAll(async () => {
@@ -916,7 +970,7 @@ describe('r86 · F cờ replay_eval + registry pins', () => {
     expect(spec!.envKey).toBe('REPLAY_EVAL')
     expect(spec!.nodeId).toBe('softmax-policy')
     expect((spec!.warning ?? '').length).toBeGreaterThan(10)
-    expect(TUNING_SPECS.length).toBe(15) // 14 (sau BRAIN-P2) + replay_eval
+    expect(TUNING_SPECS.length).toBe(19) // 15 (sau BRAIN-P3) + 4 cờ BRAIN-P4 (runtime_policy + 3 organ)
   })
 
   test('F2 NEURAL_NODES softmax-policy paramKeys gồm replay_eval (gắn đúng node)', () => {
@@ -926,8 +980,8 @@ describe('r86 · F cờ replay_eval + registry pins', () => {
     expect(node!.paramKeys).toContain('runtime_model_policy')
   })
 
-  test('F3 BRAIN_TRAINABLE_KEYS = [calibration_v3, surrogate] + TRAINING_IMPLEMENTED', () => {
-    expect(BRAIN_TRAINABLE_KEYS).toEqual(['calibration_v3', 'surrogate'])
+  test('F3 BRAIN_TRAINABLE_KEYS đủ 3 brain (P4 +policy) + TRAINING_IMPLEMENTED', () => {
+    expect(BRAIN_TRAINABLE_KEYS).toEqual(['calibration_v3', 'surrogate', 'policy']) // P4 thêm policy
     expect(BRAIN_TRAINING_IMPLEMENTED).toBe(true)
   })
 

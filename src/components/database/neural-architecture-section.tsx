@@ -883,7 +883,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
               <BrainCircuit className="h-3.5 w-3.5 shrink-0 text-amber-400" />
               <h4 className="text-xs font-semibold text-stone-100">Não vận hành — MLP-CPU (BRAIN)</h4>
               <span className="text-[10px] text-stone-500">
-                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · BLUEPRINT-BRAIN-P1-P5 v0.8
+                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · BLUEPRINT-BRAIN-P1-P5 v0.9
               </span>
               {brainData && (
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">

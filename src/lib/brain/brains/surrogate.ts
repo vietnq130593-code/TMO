@@ -150,8 +150,10 @@ export function buildSurrogateVocab(ctxs: readonly SurrogateFeatureCtx[]): Surro
 
 /**
  * Dựng 1 hàng đặc trưng: model one-hot + agent one-hot + delegated.
- * Model/agent không có trong vocab (lạ) → khối one-hot toàn 0 (impute qua
- * chuẩn hóa về mean train) — hợp đồng rõ ràng, không throw.
+ * Model/agent không có trong vocab (lạ) → khối one-hot toàn 0 — giá trị 0
+ * là NUMBER nên chuẩn hóa thành (0−mean)/std, KHÔNG phải "impute về mean"
+ * (nhánh về-mean chỉ dành cho null/không-hữu-hạn — FB-BRAIN-P3-R1-10 sửa
+ * doc cũ mô tả sai cơ chế). Hợp đồng rõ ràng, không throw.
  * Thuần — không đụng DB.
  */
 export function buildSurrogateFeatureRow(
@@ -231,6 +233,10 @@ export function buildSurrogateSpecs(vocab: SurrogateVocab): {
  * A ngoài [0,1] hoặc n ≤ 0 → NaN cả hai (fail-open — cùng tinh thần wilsonCI).
  * Kẹp biên [0,1] sau khi tính: khoảng chuẩn A±z·SE với mẫu nhỏ chạm ra
  * ngoài [0,1] (AUC không thể > 1) — trình bày thô gây hiểu sai.
+ * BIÊN DEGENERATE (FB-BRAIN-P3-R1-11 — công thức vẫn chạy, người đọc cần
+ * biết): A=1 → Q₂=∞ → SE=∞ → CI toàn khoảng [0,1] (không chặt); A=0 →
+ * SE=0 → CI [0,0] zero-width (đừng đọc là "chắc chắn tuyệt đối" — AUC 0
+ * reachable khi mô hình đảo hết lớp).
  */
 export function aucHanleyMcNeilCI(
   auc: number,
@@ -860,6 +866,20 @@ export async function loadActiveSurrogate(): Promise<ActiveSurrogate | null> {
     if (!weightsDoc.heads?.success || !weightsDoc.heads.tokens || !weightsDoc.heads.durationMs) {
       return null
     }
+    // FB-BRAIN-P3-R1-08 (phần storage): JSON KHÔNG lưu được NaN (NaN → null
+    // khi stringify) — weights rách qua DB thành null, Float64Array.from
+    // ép null→0 = weight-0 ÂM THẦM (dự đoán sai thầm lặng — tệ hơn crash).
+    // Chặn ở cửa nạp: MỌI giá trị envelope phải finite — vi phạm → reject
+    // cả model (hướng an toàn: replay rơi nhánh đo lường thuần).
+    const allWeightsFinite = (m: MlpSerialized): boolean =>
+      m.tensors.every(t => Array.isArray(t.envelope?.data) && t.envelope.data.every(v => Number.isFinite(v)))
+    if (
+      !allWeightsFinite(weightsDoc.heads.success)
+      || !allWeightsFinite(weightsDoc.heads.tokens)
+      || !allWeightsFinite(weightsDoc.heads.durationMs)
+    ) {
+      return null
+    }
     const mlpSuccess = MLP.deserialize(weightsDoc.heads.success)
     const mlpTokens = MLP.deserialize(weightsDoc.heads.tokens)
     const mlpDur = MLP.deserialize(weightsDoc.heads.durationMs)
@@ -914,9 +934,10 @@ export async function loadActiveSurrogate(): Promise<ActiveSurrogate | null> {
  * caller/consumer đọc nhánh baseline lịch sử).
  *
  * Hợp đồng ném lỗi (kế thừa FB-BRAIN-P2-R1-05): means/stds phải đúng D chiều
- * VÀ stds > 0 mọi chiều VÀ kết quả hữu hạn — vi phạm → throw rõ ràng.
- * Caller (buildReplayReport) bọc try/catch → bỏ đầu đó, tinh thần fail-open
- * KHÔNG đổi.
+ * VÀ stds > 0 mọi chiều — vi phạm MODEL (ActiveSurrogate hỏng cả khối) →
+ * throw rõ ràng. Riêng 1 đầu dự đoán ra NaN/Infinity → CHỈ đầu đó null
+ * (per-head fail-open ĐÚNG NHƯ claim — FB-BRAIN-P3-R1-08: bản trước throw
+ * khiến buildReplayReport mất CẢ 3 đầu, kể cả đầu lành; giờ mỗi đầu độc lập).
  */
 export function applySurrogateHead(
   model: ActiveSurrogate,
@@ -940,32 +961,30 @@ export function applySurrogateHead(
     typeof v === 'number' && Number.isFinite(v) ? (v - model.means[j]) / model.stds[j] : 0,
   )
 
-  // Đầu success — sigmoid ∈ (0,1); NaN/Inf → throw (caller fail-open)
+  // Đầu success — sigmoid ∈ (0,1); NaN/Inf → CHỈ đầu này null
+  // (FB-BRAIN-P3-R1-08 — per-head fail-open thật, không làm sập đầu khác)
   let success: number | null = null
   if (model.headImproved.success) {
     const p = model.heads.success.predictProba(x)
-    if (!Number.isFinite(p)) {
-      throw new Error('applySurrogateHead: đầu success dự đoán NaN/Infinity — từ chối áp')
+    if (Number.isFinite(p)) {
+      success = Math.min(1, Math.max(0, p))
     }
-    success = Math.min(1, Math.max(0, p))
   }
 
   // 2 đầu hồi quy — de-standardize + back-transform expm1, kẹp ≥ 0
   let tokens: number | null = null
   if (model.headImproved.tokens) {
     const z = model.heads.tokens.predict(x)[0]
-    if (!Number.isFinite(z)) {
-      throw new Error('applySurrogateHead: đầu tokens dự đoán NaN/Infinity — từ chối áp')
+    if (Number.isFinite(z)) {
+      tokens = fromLogSpace(z * model.targetStats.tokens.std + model.targetStats.tokens.mean)
     }
-    tokens = fromLogSpace(z * model.targetStats.tokens.std + model.targetStats.tokens.mean)
   }
   let durationMs: number | null = null
   if (model.headImproved.durationMs) {
     const z = model.heads.durationMs.predict(x)[0]
-    if (!Number.isFinite(z)) {
-      throw new Error('applySurrogateHead: đầu durationMs dự đoán NaN/Infinity — từ chối áp')
+    if (Number.isFinite(z)) {
+      durationMs = fromLogSpace(z * model.targetStats.durationMs.std + model.targetStats.durationMs.mean)
     }
-    durationMs = fromLogSpace(z * model.targetStats.durationMs.std + model.targetStats.durationMs.mean)
   }
 
   return { success, tokens, durationMs }
@@ -1139,7 +1158,8 @@ export async function buildReplayReport(config: SurrogateFeatureCtx): Promise<Re
       heads: { success: null, tokens: null, durationMs: null },
     }
     if (flagOn) {
-      // Ba đầu độc lập — lỗi/missing một đầu không làm sập các đầu khác
+      // Ba đầu độc lập — per-head NaN tự null (R1-08); try/catch chỉ còn
+      // bắt model-level throw (means/stds hỏng) → mọi đầu null đúng nghĩa
       try {
         const est = applySurrogateHead(active, config)
         if (est.success !== null) {

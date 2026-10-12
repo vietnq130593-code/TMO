@@ -16,6 +16,11 @@
  * src/lib/brain/brains/surrogate.ts — 3 MLP đầu-ra-riêng (success BCE /
  * tokens Huber / duration Huber trong log1p space) + replay-eval
  * POST /api/brain/replay (READ-ONLY, bootstrap CI) + cờ replay_eval.
+ * BRAIN-P4 (2026-10-12 — blueprint v0.9, Q1 user chốt): pipeline Brain-C
+ * "Lệnh" đã sống ở src/lib/brain/brains/policy.ts — mixture
+ * π = λ·π_Q + (1−λ)·π_net (λ = 1−min(n/200, WilsonLB)) + composite
+ * reward LOG-ONLY (src/lib/brain/reward.ts — đợt quan sát 1) + steering
+ * 3 cơ quan kill-switch policy_organ_* + report GET /api/brain/policy.
  */
 
 // ==================== TYPES ====================
@@ -190,15 +195,16 @@ export const BRAIN_REGISTRY: readonly BrainSpec[] = [
     role: 'Chọn model/chiến lược theo đặc trưng nhiệm vụ — mixture π = λ·softmax(Q/τ) + (1−λ)·π_net; thiếu dữ liệu nghe Q nguyên vẹn.',
     phase: 'BRAIN-P4',
     flag: 'RUNTIME_POLICY',
-    inputModes: ['pca-128', 'mrl-512'],
-    defaultInputMode: 'pca-128',
+    flagTuningKey: 'runtime_policy',
+    inputModes: ['task-features', 'pca-128', 'mrl-512'],
+    defaultInputMode: 'task-features',
     planned: {
       layers: [
-        { units: 128, activation: '' },
+        { units: 0, activation: '', unitsLabel: '1-hot nhiệm vụ' },
         { units: 32, activation: 'tanh' },
-        { units: 0, activation: 'softmax', unitsLabel: '×|A|' },
+        { units: 0, activation: 'softmax', unitsLabel: '×|A| model' },
       ],
-      loss: 'CE (policy)',
+      loss: 'CE (policy — reward-weighted imitation)',
     },
     signals: [
       {
@@ -227,20 +233,20 @@ export const BRAIN_VERSIONS_KEEP = 5
 
 /**
  * Brain đã có pipeline train THẬT (BRAIN-P2: Brain-A — calibration-v3.ts;
- * BRAIN-P3: Brain-B — brains/surrogate.ts). Nút "Huấn luyện lại" chỉ bật
- * cho brain nằm trong danh sách này VÀ đủ mẫu ngưỡng; brain khác vẫn ngủ
- * chờ phase tương ứng (P4).
+ * BRAIN-P3: Brain-B — brains/surrogate.ts; BRAIN-P4: Brain-C —
+ * brains/policy.ts). Nút "Huấn luyện lại" chỉ bật cho brain nằm trong danh
+ * sách này VÀ đủ mẫu ngưỡng.
  */
-export const BRAIN_TRAINABLE_KEYS: readonly BrainKey[] = ['calibration_v3', 'surrogate']
+export const BRAIN_TRAINABLE_KEYS: readonly BrainKey[] = ['calibration_v3', 'surrogate', 'policy']
 
 /**
  * Nền toán BRAIN-P1 đã triển khai (2026-10-12 — src/lib/brain/{mlp,
  * activations,losses,init,optimizers}.ts + test r84 41/41 PASS) VÀ pipeline
- * train của 2 brain đầu đã có: BRAIN-P2 (2026-10-12 — Brain-A calibration-
- * v3.ts + POST /api/brain/train + test r85) · BRAIN-P3 (2026-10-12 —
- * Brain-B brains/surrogate.ts + POST /api/brain/replay + test r86):
- * true kể từ đây. Brain-C (policy) vẫn chờ P4 — xem BRAIN_TRAINABLE_KEYS
- * cho biết nút nào đã sống.
+ * train của CẢ 3 brain đã có: BRAIN-P2 (Brain-A calibration-v3.ts + POST
+ * /api/brain/train + test r85) · BRAIN-P3 (Brain-B brains/surrogate.ts +
+ * POST /api/brain/replay + test r86) · BRAIN-P4 (Brain-C brains/policy.ts
+ * + reward.ts LOG-ONLY + GET /api/brain/policy + cờ runtime_policy + 3 cờ
+ * organ kill-switch + test r87): true kể từ đây.
  */
 export const BRAIN_TRAINING_IMPLEMENTED = true
 

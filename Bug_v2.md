@@ -1151,3 +1151,63 @@
 
 ### BUG2-164 · C·P4 — test regression G2 (ghi trong chính đợt fix R1) seed 2000 mẫu → vượt timeout 5s của bun test khi chạy FULL gate (riêng file 4.4s PASS sát ngưỡng; full gate chậm hơn — 10.3s timeout) — test tự viết làm gãy gate, không phải lỗi production — FB-BRAIN-P2-R2-03 (điều phối R2 chạy gate sau fix bị CHẶN tại G2 timeout)
 - **Fix:** thu về 200 mẫu + thu nhỏ độ lệch cột giữ nguyên discrimination: Δ=6e-5 (thay 0.0002) → std ≈ Δ/√n = 6e-5/√200 ≈ 4.2e-6 ∈ (1e-12, 5e-6) — vẫn nằm đúng khoảng round5→0 (pin lỗi cũ) mà chạy 434ms. Kiểm chứng: full gate 2 lần liên tiếp PASS (G2 434ms) + kỳ vọng stds[1] ∈ (0, 1e-5) giữ nguyên.
+
+### BUG2-165 · C·P3 — quality-gate KHÔNG tái lập được trên fresh clone: 5 test fail (r81 stats-gate + r79 B×2/H1/H3) dù commit P3 claim "1237/1237 PASS" — root-cause kép: (a) r83 FB-P2-R1-06c setTuningValue('q_learning_alpha','0.4') KHÔNG reset, bun test chạy MỌI file CÙNG 1 process (đo live: cùng pid, thứ tự file tùy ý B,C,A) → file nào chạy sau r83 đọc α=0.4 từ snapshot chia sẻ → r79 updateQ ra Q=0.4 thay vì 0.1 (đúng bằng giá trị r83 set — trùng khớp forensic); (b) r81 stats-gate test tin ".env production có ADAPTATION_STATS_GATE=on" — biến này KHÔNG có trong .env.example → fresh clone fail — FB-BRAIN-P3-R1-05/06/07 (điều phối root-cause khi tái lập gate trước đợt audit; auditor 8-a xác nhận live "1 process, thứ tự tùy ý" + verdict 3 fix SẠCH nhưng phát hiện mìn γ sót → BUG2-169)
+- **Fix:** (1) r83 reset q_learning_alpha sau assert cuối; (2) r79 beforeAll file-level pin setTuningValue('q_learning_alpha','0.1')/('q_learning_gamma','0.9') — pin bằng STORE (đấm bấu ENV — reset rơi về ENV mà file khác có thể set process.env); (3) r81 stats-gate tự set process.env.ADAPTATION_STATS_GATE='on' try/finally (pattern test matryoshka cạnh bên — không phụ thuộc .env máy). Kiểm chứng: full gate PASS 2 lần liên tiếp (1289→1291/1291, 20084 expect).
+
+### BUG2-166 · A·P3 — Brain-C trainBrainPolicy stratification CV + p̂ (λ) dùng `complete` THÔ thay vì Outcome* (verdict-aware) — trái changelog 0.8→0.9 ("5-fold CV stratified theo Outcome*"), header policy.ts ("p̂ = mean Outcome*") và dataLineage.labelRule; reward-side lại dùng outcomeFromEvidence đúng → 2 NGUỒN NHÃN khác nhau trong cùng 1 lần train: DB probe 40 run + 12 refuted trên đúng session → meta.successRate=0.8 (mean complete) ≠ 0.5 (mean Outcome*) — FB-BRAIN-P4-R1-01 (auditor 8-b DB probe 2 lần ổn định)
+- **Fix:** outcomeStars = rows.map(outcomeFromEvidence(complete, verdicts[sessionId])) — DÙNG CHUNG cho stratification CV + p̂ λ + reward; dataLineage.labelRule ghi rõ "DÙNG CHUNG". Regression: r87 D9 — seed 40 runs + gắn refuted lên 5 session complete → successRate phải (nComplete−5)/40, KHÔNG PHẢI nComplete/40. Kiểm chứng: r87 53/53 + gate PASS.
+
+### BUG2-167 · D·P3 — JSDoc ActivePolicy.lambda ghi công thức SAI "λ = max(n/K, 1−wilsonLB(p̂,n))" (thiếu "1−" trước n/K) — cài đặt thực λ(200, 0.9)=0.1494, công thức JSDoc cho 1; header cùng file (dòng 13) ghi đúng → 2 chỗ doc mâu thuẫn nội tại — FB-BRAIN-P4-R1-02 (auditor 8-b probe số)
+- **Fix:** JSDoc về "λ = 1 − min(clamp(n/K,0,1), wilsonLB(p̂,n)) — tính lúc load (r87 pin công thức)". Kiểm chứng: r87 E1 pin λ qua chính hàm policyLambda (đọc implementation, không đọc doc).
+
+### BUG2-168 · C·P3 — đặc trưng `delegated` luôn false tại CẢ 2 điểm wiring runtime organ (llm.ts maybeApplySoftmaxModelPolicy + workflow-engine.ts hardcode delegated: false) dù là đặc trưng train (parentRunId≠null) — delegated run bị suy sai slice tại inference khi organ bật + active + train có delegated rows — FB-BRAIN-P4-R1-03 (auditor 8-b)
+- **Fix (phần này — documentation có chủ đích):** ghi nhận giới hạn phase TẠI CHỖ cả 2 wiring (comment "tầng llm/workflow không biết parentRunId — impute false; khi goal-loop truyền ctx delegation xuống LLMCallOptions thì wire") + đặc trưng vẫn học từ train. KHÔNG wire xuyên chuỗi call本轮 (goal-loop→llm options) — thay đổi đường nóng lớn hơn rủi ro-phase; production hiện 0 run nên không sai số thực. Kiểm chứng: đọc code 2 điểm + comment mới.
+
+### BUG2-169 · C·P3 — r83 FB-P2-R1-06b setTuningValue('q_learning_gamma','0.7') KHÔNG reset — CÙNG LỚP lỗi BUG2-165(a) sót lại trong cùng file (điều phối chỉ fix α, auditor 8-a bắt mìn γ qua live probe marker: file chạy sau r83 đọc γ=0.7); hiện benign (r79 pin α+γ, r81 beforeEach reset γ) nhưng là mìn đúng dạng từng làm gate không tái lập — FB-BRAIN-P3-R1-09 (auditor 8-a live probe)
+- **Fix:** resetTuningValue('q_learning_gamma') sau assert cuối test 06b. Kiểm chứng: gate PASS + r79/r81/r83 chạy cùng nhau 90/90.
+
+### BUG2-170 · D·P3 — surrogate.ts doc "one-hot toàn 0 (impute qua chuẩn hóa về mean train)" mô tả SAI cơ chế: giá trị 0 là NUMBER → chuẩn hóa (0−mean)/std ≠ 0; nhánh về-mean (null→0 sau chuẩn hóa) không bao giờ được pipeline chạm — hành vi thực hợp lý, doc gán nhầm cơ chế (policy.ts copy cùng wording) — FB-BRAIN-P3-R1-10 (auditor 8-a;policy do điều phối tự copy)
+- **Fix:** doc 2 file về "giá trị 0 là NUMBER nên chuẩn hóa thành (0−mean)/std, KHÔNG phải impute về mean (nhánh đó chỉ cho null/không-hữu-hạn)". Kiểm chứng: đọc doc + r86/r87 vẫn pass (hành vi không đổi).
+
+### BUG2-171 · D·P4 — JSDoc aucHanleyMcNeilCI không nêu biên degenerate: A=1 → Q₂=∞ → SE=∞ → CI toàn khoảng [0,1] (không chặt); A=0 → SE=0 → CI [0,0] zero-width (đọc là "chắc chắn tuyệt đối" sai sự thật — AUC 0 reachable khi mô hình đảo hết lớp) — công thức vẫn chạy đúng spec — FB-BRAIN-P3-R1-11 (auditor 8-a probe công thức 28/28 khớp ≤1e-12)
+- **Fix:** JSDoc thêm đoạn BIÊN DEGENERATE cảnh báo người đọc. Kiểm chứng: đọc doc; hành vi không đổi (r86 pin giữ nguyên).
+
+### BUG2-172 · H·P3 — thư mục rác untracked `E:\APP\TMO-clone/` trong repo root (partial git clone lỗi path Windows: .git 120K + prisma rỗng) — vi phạm C8 vệ sinh (git status không sạch) — FB-BRAIN-P4-R1-08 (auditor 8-b phát hiện qua git status; điều phối xóa khi commit)
+- **Fix:** rm -rf. Kiểm chứng: git status chỉ còn file P4 chủ đích.
+
+### BUG2-173 · C·P3 — applySurrogateHead all-or-nothing: 1 đầu dự đoán NaN → throw → buildReplayReport single try/catch nuốt → MẤT CẢ 3 đầu (kể cả success — đầu ra quyết định) — trái claim JSDoc "mỗi đầu độc lập, lỗi 1 đầu không làm sập các đầu khác" (surrogate.ts:1078/:1142); ĐƯỜNG TỚI HOÀN CHỈNH: weightsJson chứa giá trị không-finite vượt toàn bộ guard loadActive (deserialize không kiểm per-value; dim-check chỉ chấm head success) — FB-BRAIN-P3-R1-08 (auditor 8-a live probe)
+- **Fix (2 lớp):** (1) per-head prediction NaN/∞ → CHỈ đầu đó null (bỏ 3 nhánh throw per-head; model-level guard means/stds GIỮ throw — r86 D3 pin nguyên vẹn); (2) guard cửa nạp allWeightsFinite (mọi envelope data phải Number.isFinite) — vì JSON KHÔNG lưu được NaN (stringify NaN→null → Float64Array.from null→0 = weight-0 ÂM THẦM, dự đoán sai thầm lặng TỆ HƠN crash — phát hiện thêm khi tái lập probe của auditor: đường DB thực tế là null-weight chứ không phải NaN-weight) → reject cả model (hướng an toàn: replay rơi nhánh đo lường thuần). Cùng guard thêm cho loadActivePolicy (policy.ts — cùng lớp). Regression: r86 D-regression 2 phần — A: null-weight qua DB → loadActive null; B: NaN in-memory (deserialize envelope NaN sống — không qua JSON) → tokens null + success/durationMs KHÔNG null. Kiểm chứng: r86 46/46 + gate PASS.
+
+### BUG2-174 · C·P4 — GET /api/brain/policy tự mâu thuẫn Outcome*: sweepSamples dùng r.complete thô trong khi recent cùng response dùng computeRunReward (outcomeFromEvidence) → 1 run refuted-complete hiện 2 giá trị Outcome* khác nhau trong cùng report; result.components.outcome tính sẵn trong cùng map nhưng bị bỏ qua — FB-BRAIN-P4-R1-04 (auditor 8-b)
+- **Fix:** sweepSamples dùng outcomeFromEvidence(r.complete===1, verdicts[sessionId]) — nhất quán recent. Kiểm chứng: r87 F-group pass (report shape) + đọc code.
+
+### BUG2-175 · D·P4 — blueprint §4.4 THÂN chưa hiệu đính: dòng 253 giữ nguyên công thức literal "λ = clamp(n samples/K,0,1) giảm dần..." tự mâu thuẫn (người đọc chỉ §4.4 thấy công thức NGƯỢC code — chỉ nhật ký 0.8→0.9 + §0 ghi đúng); dòng 254 + §0 nói organ-2 là adaptation-engine.ts nhưng wiring thực ở workflow-engine.ts — FB-BRAIN-P4-R1-05 (auditor 8-b)
+- **Fix:** §4.4 chèn HIỆU ĐỈNH v0.9Inline (công thức đúng + giải thích mâu thuẫn nội tại + 2 ý định tường minh) + đính chính file organ-2. Kiểm chứng: đọc doc — 3 chỗ (nhật ký, §0, §4.4) giờ nhất quán.
+
+### BUG2-176 · D·P4 — header neural-types.ts đếm sai: "14 gốc ... + thứ 14 calibration_v3" — thực tế 13 gốc (đếm probe: calibration_v3=14th, replay_eval=15th, P4=16–19, tổng 19); "14+14+15+16-19"=20≠19 tự mâu thuẫn (và header cũ nhất "14" cũng không cập nhật kịp từ P3 — 2 lớp stale) — FB-BRAIN-P4-R1-06 (auditor 8-b probe đếm)
+- **Fix:** header "13 gốc + thứ 14 + thứ 15 + thứ 16–19 = 19" kèm ghi nhận hiệu đính. Kiểm chứng: TUNING_SPECS.length=19 (r87 H1 pin) + đọc comment.
+
+### BUG2-177 · G·P4 (ghi nhận — không fix đợt này) — action label policy dùng AgentRunRecord.model (model CẤU HÌNH, update cuối run bằng agentModel) trong khi Q-update/reward-log credit theo dominantModel (model THỰC TẾ sau softmax/failover) — P4 là consumer đầu dùng cột này làm action space + efficiency baseline → khi softmax/failover đổi model thật, nhãn gán nhầm; semantics cột có từ P6-M1 (pre-existing, production 0 run) — FB-BRAIN-P4-R1-07 (auditor 8-b)
+- **Hướng xử lý:** bàn đợt sau — hoặc goal-loop update cột model bằng dominantModel lúc end-run (sửa semantics cột — cần rà mọi consumer), hoặc policy train join dominantModel từ nguồn khác. Ngoài scope P4 (schema/semantics cột cũ).
+
+### BUG2-178 · H·P4 — 2 typo comment: policy.ts "khối量" (ký tự Trung Quốc lẫn vào "khối lượng"); llm.ts "0 chiỗi import" (đúng: "chi phí") — FB-BRAIN-P4-R1-09 (auditor 8-b grep)
+- **Fix:** sửa 2 chữ. Kiểm chứng: grep sạch.
+
+### BUG2-179 · C·P4 — dead computation trong sweepRewardWeights: perModel() tính field `r` (mean compositeReward default-weights, rebuild object) cho cả 2 nửa thời-gian nhưng KHÔNG consumer nào đọc (grid loop tự tính lại theo từng cấu hình w) — FB-BRAIN-P4-R1-10 (auditor 8-b)
+- **Fix:** perModel thu gọn chỉ trả {outcome, n}. Kiểm chứng: r87 G8 sweep pass (feasurable/tất định giữ nguyên) + gate.
+
+### BUG2-180 · D·P4 — GET /api/brain/policy field flag.envFallback luôn BẰNG flag.value (cùng biểu thức getTuningEnum — đã gộp chuỗi STORE>ENV>DEFAULT) — computation thừa + misleading ("có tách tầng ENV" nhưng không) — FB-BRAIN-P4-R1-11 (auditor 8-b)
+- **Fix:** bỏ field + comment lý do. Kiểm chứng: r87 F2 pass (không còn field).
+
+### BUG2-181 · D·P4 — replicateCount JSDoc không nêu ±∞: "R ngoài [−1,1] kẹp về biên" nhưng ±Infinity rơi nhánh !Number.isFinite → 0 BẢN (không kẹp về 8) — hành vi an toàn có chủ đích (mẫu vô nghĩa không bắt chước), chỉ doc thiếu — FB-BRAIN-P4-R1-12 (auditor 8-b probe: replicateCount(∞)=0)
+- **Fix:** JSDoc "R hữu hạn ngoài [−1,1] kẹp về biên; R NaN/±∞ → 0 bản". Kiểm chứng: r87 A6 pin replicateCount(NaN)=0 (giữ) + đọc doc.
+
+### BUG2-182 · C·P3 — r81 WIRING describe (updateQ đọc α/γ runtime) leak tuning SAU test cuối: beforeEach chỉ chạy TRƯỚC mỗi test → α=0.5 (PIN α) / γ=0 (PIN γ) của test CUỐI describe thoát ra ngoài file khi bun test chạy file khác sau (1 process, thứ tự tùy ý — cùng lớp BUG2-165/169; điều phối R2 quét hệ thống cả LỚP lỗi bằng script tìm mọi setTuningValue không reset) — FB-BRAIN-P3-R2-01 (điều phối R2)
+- **Fix:** afterAll describe reset α+γ. Kiểm chứng: gate PASS 2 lần + script quét lớp lỗi sạch (còn lại các false-positive: set bị reject không ghi store; r85 calibration_v3 tự dọn trong-file bởi D6).
+
+### BUG2-183 · D·P3 — comment stale tests/db-isolation-preload.ts: "Mỗi test file chạy trong process riêng → mỗi process tạo 1 thư mục /tmp" — đo lại live (FB-BRAIN-P3-R1): bun test chạy MỌI file CÙNG 1 process (cùng pid) → 1 thư mục /tmp mỗi LẦN CHẠY — comment sai cơ chế cách ly (quan trọng vì mọi lập luận về cross-file pollution dựa trên đây) — FB-BRAIN-P3-R1 (auditor 8-a xác nhận live; điều phối hiệu đính comment)
+- **Fix:** comment "ĐO LẠI (xác nhận live): MỌI file CÙNG 1 process...". Kiểm chứng: đọc comment + live marker probe của auditor.
+
+### BUG2-184 · C·P3 — neural-types.ts header "TUNING_SPECS — 14 hyperparameter" stale từ P3 (replay_eval là thứ 15 — P3 quên update header; P4 đếm lại thành 19 và phát hiện lớp stale kép khi auditor bắt BUG2-176) — FB-BRAIN-P3-R1 (điều phối phát hiện khi triển khai P4 — ghi nhận về đợt P3 vì lỗi stale phát sinh từ P3)
+- **Fix:** gộp vào BUG2-176 (header mới "13 gốc + ... = 19" đúng). Kiểm chứng: đọc header.

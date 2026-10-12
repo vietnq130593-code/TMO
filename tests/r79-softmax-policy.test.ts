@@ -22,7 +22,7 @@
  * trong B.
  */
 
-import { describe, expect, test } from 'bun:test'
+import { beforeAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'crypto'
 
 import {
@@ -42,9 +42,23 @@ import {
 } from '@/lib/learning/q-table'
 import { resolveArbiterVerdictsDetailed } from '@/lib/metrics-db'
 import { markSessionAdaptationOutcome } from '@/lib/learning/adaptation-engine'
+import { setTuningValue } from '@/lib/learning/tuning-store'
 import { db } from '@/lib/db'
 
 // ==================== A. qLearningUpdate (thuần) ====================
+
+// ==================== FILE-LEVEL: pin α/γ spec (FB-BRAIN-P3-R1-06) ====================
+// bun test chạy MỌI file CÙNG 1 process + thứ tự file TÙY Ý (đo thật B,C,A)
+// → snapshot tuning-store chia sẻ: file khác (vd r83 FB-P2-R1-06c từng để
+// lại q_learning_alpha=0.4 không reset) làm nhiễm updateQ của file này —
+// test công thức Q chấm tay ĐÒI HỎI α=0.1/γ=0.9 tất định bất kể thứ tự.
+// Pin bằng setTuningValue (ghi DB + snapshot tức thì) thay vì reset (reset
+// rơi về ENV — file khác có thể set process.env). Sau khi pin, mọi file
+// chạy sau đọc đúng default spec — không ô nhiễm ngược.
+beforeAll(async () => {
+  await setTuningValue('q_learning_alpha', '0.1')
+  await setTuningValue('q_learning_gamma', '0.9')
+})
 
 describe('A. qLearningUpdate — công thức Q-learning chấm tay', () => {
   test('Q=0.5, r=1, maxNext=0.3, α=0.1, γ=0.9 → 0.577 (tính tay)', () => {

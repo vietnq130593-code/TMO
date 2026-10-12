@@ -21,6 +21,7 @@
 import { callLLMForAgent, type LLMResult, type LLMTool } from '@/lib/llm'
 import { db } from '@/lib/db'
 import { qStateKey } from '@/lib/learning/q-table'
+import { getTuningEnum } from '@/lib/learning/tuning-store'
 import { getAgentTools } from './agents'
 import { getAgentPrompt, buildToolSchemasSection } from './prompts'
 import { getToolDefinitions } from './tool-executor'
@@ -2463,6 +2464,26 @@ export async function runAgentStep(params: {
     }
   } catch (err) {
     console.warn('[Workflow] Layer 9 V2a directive inject failed (non-blocking):', err instanceof Error ? err.message : String(err))
+  }
+
+  // ━━━ BRAIN-P4 organ-2 (blueprint §4.4) — Brain-C adaptation advisory ━━━
+  // Kill-switch 2 lớp: master runtime_policy + policy_organ_adaptation đều
+  // on VÀ có bản active mới inject — advisory TEXT đề xuất model (không ép
+  // quyết định). Mặc định off → 0 chi phí (không import), hành vi y hệt P3.
+  try {
+    if (getTuningEnum('runtime_policy') === 'on' && getTuningEnum('policy_organ_adaptation') === 'on') {
+      const { buildPolicyAdvisoryBlock } = await import('@/lib/brain/brains/policy')
+      // GHI NHẬN (FB-BRAIN-P4-R1-03): `delegated` impute false — tầng
+      // workflow-engine không có khái niệm delegation (steps ≠ delegation);
+      // đặc trưng chỉ học từ train. Giống wiring organ-1 (llm.ts).
+      const advisoryBlock = await buildPolicyAdvisoryBlock({ agent: agent.name, delegated: false })
+      if (advisoryBlock) {
+        systemBlocks.push({ name: 'brainPolicyAdvisory', content: advisoryBlock, priority: 60 })
+        console.log(`[Workflow] Brain-C policy advisory injected vào ${agent.name} (${position})`)
+      }
+    }
+  } catch (err) {
+    console.warn('[Workflow] Brain-C policy advisory inject failed (non-blocking):', err instanceof Error ? err.message : String(err))
   }
 
   // escalate_to_user đã từng fire trong session → cảnh báo user MỘT LẦN đầu

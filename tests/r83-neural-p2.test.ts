@@ -209,6 +209,10 @@ describe('r83 · TuningChangeLog — set/reset ghi audit đúng field', () => {
     const log = await getTuningChangeLog(1)
     expect(log[0].key).toBe('q_learning_gamma')
     expect(log[0].toEffectiveValue).toBe('0.7')
+    // FB-BRAIN-P3-R1-09: set 0.7 xong KHÔNG reset — cùng lớp lỗi với
+    // q_learning_alpha (R1-05) đã làm gate không tái lập: file nào chạy
+    // sau đọc γ=0.7 từ snapshot chia sẻ (bun test = 1 process mọi file).
+    await resetTuningValue('q_learning_gamma')
   })
 
   test('FB-P2-R1-06c regression: getTuningChangeLog tôn trọng take-limit', async () => {
@@ -221,6 +225,12 @@ describe('r83 · TuningChangeLog — set/reset ghi audit đúng field', () => {
     expect(log.length).toBe(2) // đúng take — không tràn
     expect(log[0].toEffectiveValue).toBe('0.4') // mới nhất trước
     expect(log[1].toEffectiveValue).toBe('0.3')
+    // FB-BRAIN-P3-R1-05: set 0.4 xong KHÔNG reset → bun test chạy MỌI file
+    // cùng 1 process (thứ tự file tùy ý — đo thật: B,C,A) → file nào chạy
+    // sau đọc α=0.4 từ snapshot chia sẻ → r79 updateQ ra Q=0.4 thay vì 0.1
+    // (gate không tái lập được trên fresh clone — chính là 5 fail P3 để lại).
+    // Reset về default sau khi assert xong.
+    await resetTuningValue('q_learning_alpha')
   })
 })
 
