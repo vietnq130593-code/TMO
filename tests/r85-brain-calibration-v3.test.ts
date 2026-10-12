@@ -607,8 +607,10 @@ describe('r85 · E cờ calibration_v3 — chuỗi hiệu lực + pin spec', () 
     delete process.env.CALIBRATION_V3
   })
 
-  test('registry pin: BRAIN_TRAINABLE_KEYS = [calibration_v3], TRAINING_IMPLEMENTED = true', () => {
-    expect(BRAIN_TRAINABLE_KEYS).toEqual(['calibration_v3'])
+  // BRAIN-P3 — Brain-B 'surrogate' vào danh sách trainable (r86 pin riêng
+  // đầy đủ); đây chỉ khẳng định Brain-A vẫn nằm trong danh sách + implemented
+  test('registry pin: BRAIN_TRAINABLE_KEYS chứa calibration_v3, TRAINING_IMPLEMENTED = true', () => {
+    expect(BRAIN_TRAINABLE_KEYS).toContain('calibration_v3')
     expect(BRAIN_TRAINING_IMPLEMENTED).toBe(true)
   })
 })

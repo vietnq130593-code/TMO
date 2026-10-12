@@ -12,8 +12,9 @@
  *   - các phiên bản BrainModel đã train (nếu có) — KHÔNG kéo weightsJson
  *
  * Chỉ đọc (read-only) — train qua POST /api/brain/train (BRAIN-P2:
- * pipeline Brain-A calibration-v3 đã sống — src/lib/brain/calibration-v3.ts;
- * chỉ brain trong BRAIN_TRAINABLE_KEYS nhận train, còn lại 400).
+ * pipeline Brain-A calibration-v3.ts + BRAIN-P3: Brain-B brains/surrogate.ts
+ * — chỉ brain trong BRAIN_TRAINABLE_KEYS nhận train, còn lại 400); replay-eval
+ * qua POST /api/brain/replay (BRAIN-P3 — READ-ONLY, cờ replay_eval).
  *
  * Nhẹ cho SQLite: toàn bộ count/findMany take nhỏ trên bảng có index
  * ([brain, active] — migration add_brain_model); KHÔNG $transaction
@@ -56,7 +57,9 @@ function parseTrainMeta(raw: string): BrainModelSummary['meta'] {
       ciHigh: num(obj.cvScoreCiHigh),
       metric: typeof obj.metric === 'string' ? obj.metric : undefined,
       // BRAIN-P2 — baseline đối chứng + kết luận CV (hiển thị "thắng/thua V2")
-      brierBaseline: num(obj.brierV2),
+      // BRAIN-P3 — surrogate viết thẳng 'brierBaseline' (base-rate đối chứng
+      // của đầu success); V3 viết 'brierV2' — đọc cả 2 (fail-open từng trường)
+      brierBaseline: num(obj.brierV2) ?? num(obj.brierBaseline),
       improved: typeof obj.improved === 'boolean' ? obj.improved : undefined,
     }
   } catch {

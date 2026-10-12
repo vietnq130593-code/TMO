@@ -51,6 +51,7 @@ import { MLP, type MlpSerialized, type MlpSpec, type FitResult } from './mlp'
 import {
   BRAIN_VERSIONS_KEEP,
 } from './registry'
+import { acquireTrainLock, releaseTrainLock } from './train-lock'
 import {
   FEATURE_NAMES,
   FAITHFULNESS_THRESHOLD,
@@ -246,8 +247,28 @@ function round5(v: number): number {
  * + error — caller surface); chỉ lỗi DB/ghi DB thật sự mới throw (caller
  * bọc fail-open). Kế thừa toàn bộ quy trình đọc dữ liệu của
  * trainCalibrationModelV2 (cùng nguồn, cùng bộ lọc usable).
+ *
+ * BRAIN-P3 — single-flight lock A7 (train-lock.ts): từ P3 nguồn trigger
+ * nhân lên (nút UI + auto-train sau eval run) → lệnh train trùng nhịp của
+ * CÙNG brain trả trained=false (không xếp hàng, không đua version).
  */
 export async function trainBrainCalibrationV3(inputMode: string = V3_INPUT_MODE): Promise<V3TrainResult> {
+  if (!acquireTrainLock('calibration_v3')) {
+    return {
+      trained: false, version: null, active: false, sampleSize: 0,
+      cvBrier: null, cvBrierCi: null, brierV2: null, improved: false,
+      usable: 0, total: 0,
+      error: 'single-flight (A7): train khác của brain calibration_v3 đang chạy — bỏ lệnh trùng',
+    }
+  }
+  try {
+    return await trainBrainCalibrationV3Locked(inputMode)
+  } finally {
+    releaseTrainLock('calibration_v3')
+  }
+}
+
+async function trainBrainCalibrationV3Locked(inputMode: string): Promise<V3TrainResult> {
   const [results, cases] = await Promise.all([
     db.evalResult.findMany({
       select: {

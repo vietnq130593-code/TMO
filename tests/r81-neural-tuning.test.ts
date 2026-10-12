@@ -10,7 +10,7 @@
  *   4. WIRING PIN: updateQ đọc α/γ runtime (revert về hằng số → Q lệch →
  *      fail), ε-greedy episodic đọc runtime, stats-gate + matryoshka
  *      STORE đè ENV, near-dup threshold param hoá
- *   5. API route GET/POST trực tiếp (graph 6 lớp/23 node/14 tuning; set
+ *   5. API route GET/POST trực tiếp (graph 6 lớp/23 node/15 tuning; set
  *      hợp lệ 200 + đổi state; giá trị rác 400; action lạ 400)
  */
 
@@ -44,10 +44,10 @@ import { GET, POST } from '@/app/api/neural-architecture/route'
 // ==================== 1. SPEC + GRAPH INTEGRITY (thuần) ====================
 
 describe('r81 · TUNING_SPECS integrity', () => {
-  test('14 key duy nhất, mỗi key có spec (BRAIN-P2 +calibration_v3)', () => {
+  test('15 key duy nhất, mỗi key có spec (BRAIN-P2 +calibration_v3 · BRAIN-P3 +replay_eval)', () => {
     const keys = TUNING_SPECS.map(s => s.key)
-    expect(keys.length).toBe(14)
-    expect(new Set(keys).size).toBe(14)
+    expect(keys.length).toBe(15)
+    expect(new Set(keys).size).toBe(15)
     for (const k of keys) expect(getTuningSpec(k)?.key).toBe(k)
     expect(getTuningSpec('khong-ton-tai')).toBeUndefined()
   })
@@ -259,10 +259,10 @@ describe('r81 · resolve STORE > ENV > DEFAULT', () => {
     expect(getTuningNumber('q_learning_alpha')).toBe(0.1)
   })
 
-  test('getTuningState: đủ 14 entry, effectiveValue/source/storeValue khớp', async () => {
+  test('getTuningState: đủ 15 entry, effectiveValue/source/storeValue khớp', async () => {
     await setTuningValue('anomaly_iqr_k', '2.5')
     const state = await getTuningState()
-    expect(state.length).toBe(14)
+    expect(state.length).toBe(15)
     const iqr = state.find(s => s.key === 'anomaly_iqr_k')!
     expect(iqr.source).toBe('store')
     expect(iqr.storeValue).toBe('2.5')
@@ -407,14 +407,14 @@ describe('r81 · API /api/neural-architecture', () => {
     await resetTuningValue('runtime_model_policy')
   })
 
-  test('GET: graph 6 lớp · 23 node · 37 cạnh · 14 tuning · live là map', async () => {
+  test('GET: graph 6 lớp · 23 node · 37 cạnh · 15 tuning · live là map', async () => {
     const res = await GET()
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json.graph.layers.length).toBe(6)
     expect(json.graph.nodes.length).toBe(23)
     expect(json.graph.edges.length).toBe(37)
-    expect(json.tuning.length).toBe(14)
+    expect(json.tuning.length).toBe(15)
     expect(typeof json.live).toBe('object')
     expect(json.live['q-table'][0].label).toBe('Q entries')
     expect(json.generatedAt).toBeTruthy()

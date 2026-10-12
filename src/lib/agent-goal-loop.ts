@@ -5884,6 +5884,24 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             evaluatorConfidence: lastVerdict?.confidence ?? null,
           })
         }
+        // BRAIN-P3 (blueprint §4.3) — auto-train Brain-B "Vọng" (surrogate)
+        // NGAY SAU khi row run đã chốt metadata cuối (nguồn nhãn
+        // AgentRunRecord đầy đủ nhất SAU update/insert này — hook đặt cuối
+        // IIFE để train đọc được chính run vừa xong). Fail-open tuyệt đối:
+        // train lỗi/không đủ mẫu KHÔNG được phép làm hỏng metrics path;
+        // single-flight A7 tự chặn trùng nhịp. Dynamic import theo pattern
+        // sẵn có của file (không thêm phụ thuộc load-time cho hot path).
+        try {
+          const { trainBrainSurrogate } = await import('@/lib/brain/brains/surrogate')
+          const b = await trainBrainSurrogate()
+          if (b.trained) {
+            console.log(`[GoalLoop] Auto-train Brain-B "Vọng" (surrogate): success cvBrier=${(b.heads?.success.cvBrier ?? Number.NaN).toFixed(4)} vs base-rate ${(b.heads?.success.brierBaseline ?? Number.NaN).toFixed(4)} → ${b.active ? `ACTIVE v${b.version} (cờ REPLAY_EVAL mới có tác dụng khi bật)` : `v${b.version} không thắng CV — replay giữ nhánh đo lường`} · sampleSize=${b.sampleSize}`)
+          } else {
+            console.log(`[GoalLoop] Auto-train Brain-B skipped: ${b.error} (usable=${b.usable}/${b.total})`)
+          }
+        } catch (bErr) {
+          console.warn('[GoalLoop] Auto-train Brain-B failed (fail-open):', bErr instanceof Error ? bErr.message : String(bErr))
+        }
       })().catch(() => { /* fail-open — metrics không được phép làm hỏng response */ })
       // P6-M1 (§P6-M1, mục #15) — W2: bản detailed (confirmed/refuted breakdown)
       // để TÍNH REWARD credit assignment (quy ước §P6-M2: +1 confirmed ∧

@@ -331,16 +331,28 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
       const json = (await res.json().catch(() => ({}))) as {
         error?: string; version?: number; active?: boolean
         cvBrier?: number; brierV2?: number; sampleSize?: number; improved?: boolean
+        heads?: {
+          success?: { cvBrier?: number; brierBaseline?: number; improved?: boolean }
+        }
       }
       if (!res.ok) {
         toast.error('Huấn luyện Brain không chạy', { description: json.error ?? `HTTP ${res.status}` })
         return
       }
+      // BRAIN-P3 — chỉ số hiển thị theo brain: A so V2 (brierV2), B so
+      // base-rate (heads.success.brierBaseline) — cùng bản chất "đối chứng
+      // CV ngặt" nhưng baseline mỗi brain một tên
+      const isSurrogate = key === 'surrogate'
+      const brainName = isSurrogate ? 'Brain-B "Vọng" (surrogate)' : 'Brain-A "V3"'
+      const flagName = isSurrogate ? 'REPLAY_EVAL' : 'CALIBRATION_V3'
+      const cvScore = isSurrogate ? json.heads?.success?.cvBrier : json.cvBrier
+      const baselineScore = isSurrogate ? json.heads?.success?.brierBaseline : json.brierV2
+      const baselineLabel = isSurrogate ? 'base-rate' : 'V2'
       const verdict = json.active
-        ? `v${json.version} ACTIVE — thắng CV (cờ CALIBRATION_V3 mới có tác dụng khi bật)`
-        : `v${json.version} không thắng CV — giữ nguyên chuỗi V2/V1 (bản vết audit đã ghi)`
+        ? `v${json.version} ACTIVE — thắng CV (cờ ${flagName} mới có tác dụng khi bật)`
+        : `v${json.version} không thắng CV — giữ hành vi cũ (bản vết audit đã ghi)`
       toast.success(
-        `Brain-A "V3" huấn luyện xong · ${(json.cvBrier ?? Number.NaN).toFixed(4)} vs V2 ${(json.brierV2 ?? Number.NaN).toFixed(4)}`,
+        `${brainName} huấn luyện xong · Brier ${(cvScore ?? Number.NaN).toFixed(4)} vs ${baselineLabel} ${(baselineScore ?? Number.NaN).toFixed(4)}`,
         { description: `${verdict} · ${json.sampleSize ?? '?'} mẫu` },
       )
       void fetchBrainData() // kéo trạng thái mới ngay không chờ nhịp 15s
@@ -871,7 +883,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
               <BrainCircuit className="h-3.5 w-3.5 shrink-0 text-amber-400" />
               <h4 className="text-xs font-semibold text-stone-100">Não vận hành — MLP-CPU (BRAIN)</h4>
               <span className="text-[10px] text-stone-500">
-                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · BLUEPRINT-BRAIN-P1-P5 v0.7
+                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · BLUEPRINT-BRAIN-P1-P5 v0.8
               </span>
               {brainData && (
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -913,9 +925,11 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
               ))}
             </div>
             <p className="mt-2.5 text-[9.5px] leading-relaxed text-stone-500">
-              ⚠ Brain-A "V3" đã có pipeline train (BRAIN-P2): nút Huấn luyện chỉ ghi bản mới — bản active chỉ
-              xuất hiện khi thắng V2 qua 5-fold CV Brier (ngặt, V2 train lại từng fold). Runtime chỉ đổi khi cờ
-              CALIBRATION_V3 bật (STORE › ENV › DEFAULT=off — bảng tinh chỉnh phía dưới). Brain-B/C chờ P3/P4.
+              ⚠ Brain-A "V3" + Brain-B "Vọng" đã có pipeline train (BRAIN-P2/P3): nút Huấn luyện chỉ ghi bản
+              mới — bản active chỉ xuất hiện khi thắng đối chứng 5-fold CV (ngặt, đối chứng train lại từng
+              fold). Runtime chỉ đổi khi cờ tương ứng bật (CALIBRATION_V3 / REPLAY_EVAL — STORE › ENV ›
+              DEFAULT=off, bảng tinh chỉnh phía dưới). Brain-B còn có POST /api/brain/replay (replay-eval
+              READ-ONLY kèm bootstrap CI). Brain-C chờ P4.
             </p>
           </CardContent>
         </Card>
@@ -1483,7 +1497,7 @@ function BrainCard({
       ? `Chờ hạ tầng train bật (BRAIN_TRAINING_IMPLEMENTED)${missing ? ` · chưa đủ mẫu: ${missing}` : ''}`
       : spec.lifecycle === 'dormant'
         ? `Chưa đủ mẫu thức tỉnh (${missing}) — ngủ an toàn`
-        : 'Chạy huấn luyện batch (offline, fail-open) — bản active chỉ xuất hiện khi thắng V2 qua 5-fold CV Brier (ngặt)'
+        : 'Chạy huấn luyện batch (offline, fail-open) — bản active chỉ xuất hiện khi thắng đối chứng 5-fold CV (ngặt, đối chứng train lại từng fold)'
   return (
     <div className="space-y-2.5 rounded-xl border border-slate-800/80 bg-slate-950/50 p-3" role="group" aria-label={spec.title}>
       <div className="flex items-center gap-2">

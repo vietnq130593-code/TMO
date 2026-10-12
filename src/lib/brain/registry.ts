@@ -12,6 +12,10 @@
  * bun:test). Mọi ngưỡng hardcode kèm chú thích nguồn (doctrine #1):
  * BLUEPRINT-BRAIN-P1-P5 §2 — đo live ngày 2026-10-11 (EvalResult=4,
  * AgentRunRecord=20, QEntry=1, ArbiterVerdict=10 → cả 3 brain NGỦ).
+ * BRAIN-P3 (2026-10-12): pipeline Brain-B "Vọng" đã sống ở
+ * src/lib/brain/brains/surrogate.ts — 3 MLP đầu-ra-riêng (success BCE /
+ * tokens Huber / duration Huber trong log1p space) + replay-eval
+ * POST /api/brain/replay (READ-ONLY, bootstrap CI) + cờ replay_eval.
  */
 
 // ==================== TYPES ====================
@@ -155,18 +159,19 @@ export const BRAIN_REGISTRY: readonly BrainSpec[] = [
     key: 'surrogate',
     name: 'Vọng',
     title: 'Brain-B · Surrogate Predictor',
-    role: 'Dự đoán P(success) / E[tokens] / E[latency] của một cấu hình KHÔNG chạy thật — replay-eval (bước leo Level 2).',
+    role: 'Dự đoán P(success) / E[tokens] / E[latency] của một cấu hình KHÔNG chạy thật — 3 MLP đầu-ra-riêng + replay-eval bootstrap CI (bước leo Level 2).',
     phase: 'BRAIN-P3',
     flag: 'REPLAY_EVAL',
-    inputModes: ['pca-128', 'mrl-512', 'full-2048'],
-    defaultInputMode: 'pca-128',
+    flagTuningKey: 'replay_eval',
+    inputModes: ['runs-features', 'pca-128', 'mrl-512', 'full-2048'],
+    defaultInputMode: 'runs-features',
     planned: {
       layers: [
-        { units: 128, activation: '' },
-        { units: 32, activation: 'tanh' },
-        { units: 3, activation: 'sigmoid/linear' },
+        { units: 0, activation: '', unitsLabel: '1-hot cfg' },
+        { units: 16, activation: 'tanh' },
+        { units: 1, activation: 'sigmoid/linear ×3' },
       ],
-      loss: 'BCE + Huber',
+      loss: 'BCE + Huber (3 đầu riêng)',
     },
     signals: [
       {
@@ -221,19 +226,21 @@ export const BRAIN_REGISTRY: readonly BrainSpec[] = [
 export const BRAIN_VERSIONS_KEEP = 5
 
 /**
- * Brain đã có pipeline train THẬT (BRAIN-P2 trở đi — Brain-A là đứa đầu
- * tiên). Nút "Huấn luyện lại" chỉ bật cho brain nằm trong danh sách này VÀ
- * đủ mẫu ngưỡng; brain khác vẫn ngủ chờ phase tương ứng (P3/P4).
+ * Brain đã có pipeline train THẬT (BRAIN-P2: Brain-A — calibration-v3.ts;
+ * BRAIN-P3: Brain-B — brains/surrogate.ts). Nút "Huấn luyện lại" chỉ bật
+ * cho brain nằm trong danh sách này VÀ đủ mẫu ngưỡng; brain khác vẫn ngủ
+ * chờ phase tương ứng (P4).
  */
-export const BRAIN_TRAINABLE_KEYS: readonly BrainKey[] = ['calibration_v3']
+export const BRAIN_TRAINABLE_KEYS: readonly BrainKey[] = ['calibration_v3', 'surrogate']
 
 /**
  * Nền toán BRAIN-P1 đã triển khai (2026-10-12 — src/lib/brain/{mlp,
- * activations,losses,init,optimizers}.ts + test r84 68/68 PASS sau đợt
- * FB-BRAIN-P1) VÀ pipeline train brain đầu tiên đã có từ BRAIN-P2
- * (2026-10-12 — src/lib/brain/calibration-v3.ts + POST /api/brain/train
- * + test r85): true kể từ đây. Brain-B/C (surrogate/policy) vẫn chờ
- * P3/P4 — xem BRAIN_TRAINABLE_KEYS cho biết nút nào đã sống.
+ * activations,losses,init,optimizers}.ts + test r84 41/41 PASS) VÀ pipeline
+ * train của 2 brain đầu đã có: BRAIN-P2 (2026-10-12 — Brain-A calibration-
+ * v3.ts + POST /api/brain/train + test r85) · BRAIN-P3 (2026-10-12 —
+ * Brain-B brains/surrogate.ts + POST /api/brain/replay + test r86):
+ * true kể từ đây. Brain-C (policy) vẫn chờ P4 — xem BRAIN_TRAINABLE_KEYS
+ * cho biết nút nào đã sống.
  */
 export const BRAIN_TRAINING_IMPLEMENTED = true
 

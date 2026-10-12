@@ -347,6 +347,29 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
       'Bật = runtime KB confidence đi qua MLP Brain-A khi bản active tồn tại (thắng CV rồi mới active). Không có bản active → flag on cũng vô hiệu (fail-open về V2). Rollback = set lại off hoặc deactive bản BrainModel.',
     appliesTo: 'tryCalibrationV3 — dẫn đường getCalibratedConfidence (kb-access) khi active',
   },
+  {
+    // BRAIN-P3 (blueprint §4.3) — cờ runtime của Brain-B "Vọng" (surrogate
+    // predictor): off = POST /api/brain/replay chỉ trả đo lường lịch sử
+    // (bootstrap CI); on = báo cáo thêm ước lượng MLP của bản active (đầu
+    // nào thắng baseline CV mới được nói). Chuỗi STORE > ENV > DEFAULT=off
+    // đúng runtime_model_policy/calibration_v3 — tinh chỉnh không restart.
+    key: 'replay_eval',
+    label: 'REPLAY_EVAL',
+    description:
+      'off = replay-eval chỉ đo/báo cáo lịch sử (success rate + median tokens/latency kèm bootstrap CI). on = thêm ước lượng surrogate MLP (P(success)/E[tokens]/E[latency]) cho cấu hình — chỉ đầu đã thắng baseline 5-fold CV mới hiện; mọi nhánh fail-open về đo lường thuần.',
+    nodeId: 'softmax-policy',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'REPLAY_EVAL',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' ? 'on' : 'off'
+    },
+    warning:
+      'Bật = báo cáo replay /api/brain/replay kèm ước lượng MLP Brain-B khi có bản active (thắng CV rồi mới active). Replay luôn READ-ONLY (không ghi DB, không tự chạy thật). Không có bản active → flag on cũng vô hiệu (chỉ đo lường).',
+    appliesTo: 'buildReplayReport — mở phần ước lượng MLP trong POST /api/brain/replay',
+  },
 ] as readonly TuningSpec[]
 
 /** Tra spec theo key (O(1) qua Map dựng sẵn). */
@@ -669,7 +692,7 @@ export const NEURAL_NODES: readonly NeuralNode[] = [
       { name: 'getQAdvice', file: 'src/lib/learning/q-table.ts', line: 323 },
       { name: 'pickIndexBySeed', file: 'src/lib/learning/q-table.ts', line: 185 },
     ],
-    paramKeys: ['runtime_model_policy', 'runtime_model_tau'],
+    paramKeys: ['runtime_model_policy', 'runtime_model_tau', 'replay_eval'],
   },
   {
     id: 'strategy-adapter',
